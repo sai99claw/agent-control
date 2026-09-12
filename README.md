@@ -7,7 +7,7 @@
 ## 30 秒開始
 
 ```sh
-git clone <this-repo> agent-control && cd agent-control
+git clone https://github.com/sai99claw/agent-control.git && cd agent-control
 sh scripts/new-session.sh main fable        # 站在哪個版本、最近的事、開著的票、記憶有沒有超標;發 session.start
 python3 board/board.py &                    # 控制台 http://127.0.0.1:18905(只綁本機)
 claude                                      # 開 Claude Code;CLAUDE.md 會告訴它自己是誰、先讀什麼
