@@ -11,14 +11,16 @@
 ## 1. 第一版必須有(對照 `docs/DESIGN.md` §18)
 - [x] 票契約(`tickets/SCHEMA.md`)
 - [x] 角色、流程、session 規範、派工範本、記憶、code map 的文件
-- [ ] `scripts/ticket.py`:create / list / inbox / verify / close / import
-- [ ] `scripts/event.py`:emit / tail;事件 schema
-- [ ] `scripts/land.sh`:0 commit 拒絕、`base_sha` 檢查、寫入範圍檢查、先印再做
-- [ ] `scripts/gate.sh` 介面(專案實作)+ 範例
-- [ ] `scripts/heartbeat.sh`:排程器 / land 的租約與死亡偵測
-- [ ] `board/board.py`:從 tabby_pool 抽出、去專案名、讀 `board/config.json`;新增 agent 時間線與「哪些保證還只在演練裡成立」
-- [ ] 決策收件匣填完自動發事件(主線用 cron 讀)
-- [ ] `scripts/memory.py check|consolidate`:量每份必讀記憶檔的字元數對 front matter 的 `cap_chars`(預設 2000),超過就發 `memory.over_cap` 並開整理票;提高上限要有理由(D-006)
+- [x] `scripts/ticket.py`:create / list / show / set / inbox / verify / close / import / freeze
+- [x] `scripts/event.py`:emit / tail / grep;事件種類是一張固定的表,未知的拒收
+- [x] `scripts/land.sh`:0 commit 拒絕、`base_sha` 檢查、寫入範圍檢查、先印再做
+- [x] `scripts/gate.sh` 介面(專案實作)+ 範例(`scripts/gate.example.sh`);對不到模組要出聲且非零
+- [x] `scripts/heartbeat.sh`:排程器 / land / attempt 的租約與死亡偵測、land worktree 殘骸
+- [x] `board/board.py`:抽出、去專案名、讀 `board/config.json`;agent 時間線與「哪些保證還只在演練裡成立」(`docs/REHEARSAL.md`)
+- [x] 決策收件匣填完自動發事件(`decision.answered`;主線用 `ticket.py inbox` 讀,它拿 `docs/DECISIONS.md` 判哪些還沒落成裁示)
+- [x] `scripts/memory.py check|consolidate`:量每份必讀記憶檔的字元數對 front matter 的 `cap_chars`(預設 2000),超過就發 `memory.over_cap` 並開整理票;`consolidate` 必須帶 `--discussion <path>`(D-007),提高上限要有理由(D-006)
+
+- [x] `scripts/new-session.sh`、`code-map/check-stale.py`、`docs/DISPATCH-TEMPLATE.md` 通用版、`tests/`(130 條)
 
 ## 2. 第二版
 - [ ] 排程器做成腳本(讀 `allowed_write_paths` 算衝突圖),不用模型

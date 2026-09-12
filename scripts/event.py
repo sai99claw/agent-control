@@ -40,8 +40,8 @@ KINDS = (
     "release.start", "release.pass", "release.fail",
     # 決策收件匣:問出去、答回來。
     "decision.asked", "decision.answered",
-    # 記憶整理(docs/MEMORY.md 的門檻票)。
-    "memory.consolidated",
+    # 記憶:量到超過上限、整理完成(docs/MEMORY.md「容量與整理」,D-006)。
+    "memory.over_cap", "memory.consolidated",
 )
 
 ENV_ROOT = "AC_ROOT"
@@ -98,8 +98,11 @@ def relative_cwd(root=None):
     的家目錄;二是「在哪個 worktree 跑的」才是要問的事,而 `../<repo>-wt/land-…`
     這種相對形狀直接答得出來。repo 外面跑的記成一句話,不記路徑。
     """
-    root = root or repo_root()
-    here = os.path.abspath(os.getcwd())
+    # 兩邊都 realpath:macOS 的 tempdir 是 `/var` → `/private/var` 的 symlink,
+    # 而 `getcwd()` 給的是解過的、`__file__` 給的是沒解的。不統一的話,同一個目錄
+    # 會被判成「repo 外」—— 而那是一句假話。
+    root = os.path.realpath(root or repo_root())
+    here = os.path.realpath(os.getcwd())
     try:
         if os.path.commonpath([here, root]) != root:
             return OUTSIDE

@@ -537,7 +537,9 @@ def verify(ident):
     """
     ticket = load(ident)
     branch = main_branch()
-    needles = ticket.get("verify_strings") or []
+    # 手寫的票也吃得到 `路徑:那串字` 這個形狀 —— 正規化在讀的這一側做,不是只在
+    # `create` 那一側做:票檔是人會直接編輯的東西(SCHEMA 的最小範例就是手寫的)。
+    needles = normalise_verify(ticket.get("verify_strings") or [])
     globs = ticket.get("allowed_write_paths") or []
     rows = []
     if needles:

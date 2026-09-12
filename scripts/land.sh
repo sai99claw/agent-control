@@ -116,6 +116,15 @@ PY
         STOP=1
         continue
     fi
+    # 「這顆 repo 根本沒有那個 commit」與「有、但已經不是祖先」是兩件事,下一步差
+    # 很多 —— 前者要回去查副本的 base 對不對,後者是 rebase 後重跑閘門。`merge-base`
+    # 對兩者都是非零,所以先問一句 `cat-file -e`(同 §5.7:守衛給錯下一步比沒有守衛更糟)。
+    if ! git -C "$ROOT" cat-file -e "$base^{commit}" 2>/dev/null; then
+        echo "land: $b —— 票 #$id 的 base_sha $base 這顆 repo 沒有"
+        echo "land:   不是「過期」,是**對不上** —— 回去查那份副本是拿哪個 ref 做的。"
+        STOP=1
+        continue
+    fi
     if ! git -C "$ROOT" merge-base --is-ancestor "$base" "$MAIN" 2>/dev/null; then
         echo "land: $b —— 票 #$id 的 base_sha $base 已經不是 $MAIN 的祖先"
         echo "land:   閘門的綠是對那個 base 說的,主線已經走遠。先 rebase 再重跑閘門。"
