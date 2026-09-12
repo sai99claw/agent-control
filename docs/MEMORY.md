@@ -10,7 +10,7 @@
 
 ## 容量與整理:老師帶學生(產品負責人 2026-09-12 裁示)
 
-**每個 session 開頭都會讀的記憶檔,預設上限 2K**(單位:字元,`board/config.json` 的 `memory.cap_chars`;字元是唯一不需要 tokenizer 的決定性量法)。適用於每一份 `memory/model/<model>.md`;`memory/project/*.md` 若被列進 `docs/SESSION-START.md` 的必讀清單也適用。
+**模型私有記憶(每一份 `memory/model/<model>.md`)預設上限 2K**(單位:字元,`board/config.json` 的 `memory.cap_chars`;字元是唯一不需要 tokenizer 的決定性量法)。**只適用於模型私有記憶**;專案共用層(`docs/DECISIONS.md`、`HANDOFF.md`、`memory/project/`)不受這條上限管,它們有各自的形狀(裁示一列一條、交接一天一節)。
 
 理由:這些檔是**每個新 session 的第一口空氣**,多一個字就是每一個 session 都多讀一個字。上限不是為了省,是為了逼人分辨「值得每次都讀」與「查得到就好」。
 
