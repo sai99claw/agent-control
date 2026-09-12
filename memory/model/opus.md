@@ -1,3 +1,7 @@
+---
+cap_chars: 2000
+cap_history: []
+---
 # Opus 在這個系統踩過的坑(同模型跨 session 共享)
 
 - 2026-09-10(tabby_pool #486 / #489,調度員)**套完 patch、跑完閘門、忘了 `git commit` 就 land**,兩次。第一次 land 印 0 commit 救了;第二次批次裡另一支有 commit,毫無徵兆,票被關成假的。→ land 前 `git status --short` 是固定動作;落地器現在會拒絕(實測)。

@@ -18,7 +18,7 @@
 - [ ] `scripts/heartbeat.sh`:排程器 / land 的租約與死亡偵測
 - [ ] `board/board.py`:從 tabby_pool 抽出、去專案名、讀 `board/config.json`;新增 agent 時間線與「哪些保證還只在演練裡成立」
 - [ ] 決策收件匣填完自動發事件(主線用 cron 讀)
-- [ ] `memory/model/*.md` 範本與整理票的觸發
+- [ ] `scripts/memory.py check|consolidate`:量每份必讀記憶檔的字元數對 front matter 的 `cap_chars`(預設 2000),超過就發 `memory.over_cap` 並開整理票;提高上限要有理由(D-006)
 
 ## 2. 第二版
 - [ ] 排程器做成腳本(讀 `allowed_write_paths` 算衝突圖),不用模型
