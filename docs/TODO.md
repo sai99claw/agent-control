@@ -33,3 +33,9 @@
 ## 3. 已知限制
 - Claude Code 的子 agent 無法從外部啟動、觀測、中止;協調者必須自己是 Claude Code session 或走 SDK。Codex(`codex exec`)與 agy(`-p`)有非互動模式。
 - 額度是真的會用完的:2026-09-10 一天內 Fable、Codex、Opus 三個都撞過。政策在 `docs/ROLES.md`。
+
+## 票進 git 會撞鎖(2026-09-12,tabby_pool D-G112 的教訓)
+tabby_pool 的票住看板資料庫、裁示住 code repo 的 DECISIONS.md;裁示與程式同一份歷史,
+票每天改幾十次狀態不進 git。agent-control 把 `tickets/*.json` 放進 repo,遷移時每次
+gate/review 寫回票都變成 main 寫入,會與落地鎖排隊、把歷史塞滿雜訊。遷移前二選一:
+票的寫回走同一把鎖的輕量通道(只跑 schema 檢查),或票搬到 git 之外的儲存。
