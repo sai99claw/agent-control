@@ -8,11 +8,27 @@
 
 ```sh
 git clone <this-repo> agent-control && cd agent-control
-python3 board/board.py &          # 控制台 http://127.0.0.1:18905
-claude                            # 開 Claude Code;CLAUDE.md 會告訴它自己是誰、先讀什麼
+sh scripts/new-session.sh main fable        # 站在哪個版本、最近的事、開著的票、記憶有沒有超標;發 session.start
+python3 board/board.py &                    # 控制台 http://127.0.0.1:18905(只綁本機)
+claude                                      # 開 Claude Code;CLAUDE.md 會告訴它自己是誰、先讀什麼
 ```
 
 然後對它說:「我要做 X」。它會開票、排程、派工、落地,並在需要你裁決時把問題放進控制台的收件匣。
+
+第一張票長這樣(旗標可重複的用單數,一次給一個值):
+```sh
+python3 scripts/ticket.py create \
+  --subject "…" --objective "…" \
+  --acceptance "斷言一" --acceptance "斷言二" \
+  --in-scope "scripts/" --allowed-write-path "scripts/*" --allowed-write-path "tests/*" \
+  --verify-string "只有這張票才有的字串" \
+  --role worker --model opus --tool claude-code
+python3 scripts/ticket.py list --open
+python3 scripts/event.py tail 20
+```
+`ticket.py verify <id>` 會對主線 `grep` 那些 `--verify-string`;沒給就只能弱檢查,它會明說。
+
+上面這段是在乾淨 clone 裡真的跑過一遍才寫的(2026-09-12):new-session → 開票 → 事件 → 控制台 → heartbeat → verify,全部走得通。
 
 ## 這個 repo 裡有什麼
 
