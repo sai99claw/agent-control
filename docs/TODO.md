@@ -39,3 +39,8 @@ tabby_pool 的票住看板資料庫、裁示住 code repo 的 DECISIONS.md;裁�
 票每天改幾十次狀態不進 git。agent-control 把 `tickets/*.json` 放進 repo,遷移時每次
 gate/review 寫回票都變成 main 寫入,會與落地鎖排隊、把歷史塞滿雜訊。遷移前二選一:
 票的寫回走同一把鎖的輕量通道(只跑 schema 檢查),或票搬到 git 之外的儲存。
+
+## LSP 接入(2026-09-13,使用者期待「用 LSP 讀 code」)
+目前 code-map 是文件、不是 LSP;本機 MCP 只有 Google Calendar/Drive。候選:接一個 LSP MCP(Python 用 pyright,
+JS 用 typescript-language-server),讓開題 session 有 go-to-definition / references。先在 tabby_pool 試,
+量「開題一張票的 token」有沒有比 grep 少,再決定進 SESSION-START。
