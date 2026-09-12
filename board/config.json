@@ -1,0 +1,10 @@
+{
+  "port": 18905,
+  "tickets_dir": "tickets",
+  "events_file": "board/events.jsonl",
+  "answers_file": "board/answers.jsonl",
+  "health_urls": {},
+  "routing": {"main": "fable", "design": "fable", "bug": "fable", "implement": "opus", "schedule": "sonnet", "discuss": "agy:gemini-3.8-flash-high"},
+  "memory": {"threshold_bytes": 24000, "consolidator": "fable"},
+  "lease_seconds": {"scheduler": 900, "land": 1800, "worker": 7200}
+}

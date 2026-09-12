@@ -1,0 +1,6 @@
+board/events.jsonl
+board/answers.jsonl
+wt/
+land/
+__pycache__/
+*.pyc

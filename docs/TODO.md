@@ -1,0 +1,32 @@
+# 還沒做的事
+
+## 0. 遷移計畫(從 tabby_pool 搬過來)
+1. [ ] tabby_pool 的 `CLAUDE.md` 改成:先讀本 repo 的 `CLAUDE.md`,再讀專案自己的。
+2. [ ] tabby_pool 的票(`~/.claude/tasks/<id>/*.json`)轉成本 repo 的 schema(`scripts/ticket.py import`),補 `base_sha` / `allowed_write_paths`(舊票允許空,新票必填)。
+3. [ ] tabby_pool 的 `scripts/{land,fullsuite,test-for}.sh` 改成呼叫本 repo 的 `scripts/land.sh` + 專案自己的 `scripts/gate.sh`。
+4. [ ] `docs/DISPATCH-TEMPLATE.md` 專案特有的段落(埠號、目錄、測試陷阱)搬回 tabby_pool 的 `docs/`,本 repo 留通用版。
+5. [ ] 控制台改讀本 repo 的事件檔;`board-note.py` 退役,改用 `scripts/event.py`。
+6. [ ] 兩邊並行跑一週,比較 `docs/DESIGN.md` §21 的指標。
+
+## 1. 第一版必須有(對照 `docs/DESIGN.md` §18)
+- [x] 票契約(`tickets/SCHEMA.md`)
+- [x] 角色、流程、session 規範、派工範本、記憶、code map 的文件
+- [ ] `scripts/ticket.py`:create / list / inbox / verify / close / import
+- [ ] `scripts/event.py`:emit / tail;事件 schema
+- [ ] `scripts/land.sh`:0 commit 拒絕、`base_sha` 檢查、寫入範圍檢查、先印再做
+- [ ] `scripts/gate.sh` 介面(專案實作)+ 範例
+- [ ] `scripts/heartbeat.sh`:排程器 / land 的租約與死亡偵測
+- [ ] `board/board.py`:從 tabby_pool 抽出、去專案名、讀 `board/config.json`;新增 agent 時間線與「哪些保證還只在演練裡成立」
+- [ ] 決策收件匣填完自動發事件(主線用 cron 讀)
+- [ ] `memory/model/*.md` 範本與整理票的觸發
+
+## 2. 第二版
+- [ ] 排程器做成腳本(讀 `allowed_write_paths` 算衝突圖),不用模型
+- [ ] 推測性佇列(H+A 與 H+A+B 同時驗)
+- [ ] token 歸因:Claude Code 不給資料,先顯示「未知」,不估
+- [ ] 產品功能地圖
+- [ ] 多 repo
+
+## 3. 已知限制
+- Claude Code 的子 agent 無法從外部啟動、觀測、中止;協調者必須自己是 Claude Code session 或走 SDK。Codex(`codex exec`)與 agy(`-p`)有非互動模式。
+- 額度是真的會用完的:2026-09-10 一天內 Fable、Codex、Opus 三個都撞過。政策在 `docs/ROLES.md`。
