@@ -83,6 +83,21 @@ class MemoryCheck(Sandbox):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("1990 / 2000", done.stdout)
 
+    def test_a_readme_in_the_memory_directory_is_not_a_memory(self):
+        """`memory/model/README.md` 躺在同一個目錄、副檔名也對,所以 glob 抓得到它
+        —— 但它是說明檔,不是誰的「第一口空氣」。量它量出來的數字沒有人要用,而一張
+        「整理 README」的票會真的被派出去。
+
+        **變異**:把 `os.path.basename(rel) == NOT_A_MEMORY` 那一格拿掉 → 這一條紅。
+        """
+        self.write("memory/model/README.md", "說明" * 2500)
+        self.note("opus", "短的\n")
+        done = self.memory("check")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("README", done.stdout, "README 根本不該被量")
+        self.assertEqual(self.events(), [], "不該發 memory.over_cap")
+        self.assertFalse(self.exists("tickets/1.json"), "不該開整理票")
+
     def test_the_inbox_file_is_not_capped(self):
         """整理期間的新筆記寫 `.inbox.md`,不受上限(docs/MEMORY.md 第 4 點)。"""
         self.note("opus", "短的\n")
@@ -105,6 +120,19 @@ class Consolidate(Sandbox):
             body += "\n## 結論\n- 結論:上限提高到 2600\n- 採用的證據:實測\n"
         self.write(name, body)
         return name
+
+    def test_consolidate_help_prints_its_flags_and_a_pasteable_example(self):
+        done = self.memory("consolidate", "--help")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        for flag in ("--discussion", "--new-cap", "--reason", "--by"):
+            self.assertIn(flag, done.stdout)
+        self.assertIn("python3 scripts/memory.py consolidate", done.stdout)
+
+    def test_an_unknown_flag_lists_the_ones_it_does_know(self):
+        done = self.memory("consolidate", "memory/model/opus.md", "--talk", "x.md")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("--discussion", done.stderr)
+        self.assertIn("--help", done.stderr)
 
     def test_consolidating_without_a_discussion_file_is_refused(self):
         """「討論過了」與「沒討論就刪了」在結果檔案上長得一模一樣 —— 兩者都是一份

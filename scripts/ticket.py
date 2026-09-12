@@ -158,6 +158,35 @@ CREATE_REPEATED = {
     "--depends-on": "depends_on", "--decision-ref": "decision_refs",
     "--verify-string": "verify_strings", "--shared-resource": "shared_resources",
 }
+# 旗標 → 一句話說明。**名單不在這裡** —— `--help` 要印哪幾個是從 `CREATE_FLAGS` /
+# `CREATE_REPEATED` 自己數出來的,這裡只補說明。兩份名單會分岔,一份不會。
+FLAG_NOTE = {
+    "--subject": "一句話的標題",
+    "--objective": "做完了的樣子",
+    "--acceptance": "驗收;**一條一個旗標**,每條要能寫成一條會紅的斷言",
+    "--in-scope": "範圍內的檔;一個一個給",
+    "--out-of-scope": "明說不要動的;一個一個給",
+    "--allowed-write-path": "允許寫入的路徑 glob;**一個一個給**(排程器判平行、落地器判越界,讀的都是這一格)",
+    "--depends-on": "前置票號;`7` 或 `7:閘門綠`;一個一個給",
+    "--decision-ref": "相關裁示編號(D-00x);一個一個給",
+    "--verify-string": "關票時要在主線上抓到的字;`路徑:那串字` 或只給字;一個一個給",
+    "--shared-resource": "共用的執行資源(同一顆 DB、同一個埠);一個一個給",
+    "--role": "角色:worker / reviewer / scheduler / consolidator",
+    "--model": "模型",
+    "--tool": "工具:claude-code / codex / …",
+    "--base-sha": "基準 sha;不給就自己取主線的 HEAD",
+    "--state": "初始狀態,預設 Draft(%s)" % " / ".join(STATES),
+    "--feature": "對到哪個產品功能",
+    "--outline": "高階規劃摘要(留關鍵決定,不抄整段聊天)",
+    "--test-plan": "測試計畫",
+    "--branch": "分支名,落地要 `t<票號>-…` 的形狀",
+    "--workspace": "副本路徑",
+    "--open": "只看還開著的(不是 Done / Cancelled)",
+    "--state X": "只看某一個狀態",
+    "--reason": "為什麼凍結",
+    "--criterion": "什麼時候可以解凍 —— 少了它,「凍著」與「忘了」長得一樣",
+}
+
 ASK = (
     ("subject", "一句話的標題", False),
     ("objective", "目標(做完了的樣子)", False),
@@ -170,6 +199,106 @@ ASK = (
     ("model", "模型", False),
     ("tool", "工具(claude-code / codex / …)", False),
 )
+
+
+AUTO_FILLED = ("base_sha",)      # 不給就自己去問主線,所以它不是「必填」
+
+USAGE = {
+    "create": "scripts/ticket.py create [旗標…]        # 一個旗標都不給就一格一格問",
+    "list": "scripts/ticket.py list [--open | --state <狀態>]",
+    "show": "scripts/ticket.py show <id>",
+    "set": "scripts/ticket.py set <id> <欄位> <值>      # 值吃得懂 JSON 就當 JSON",
+    "inbox": "scripts/ticket.py inbox",
+    "verify": "scripts/ticket.py verify <id>",
+    "close": "scripts/ticket.py close <id>              # 先 verify,>0 才准關",
+    "import": "scripts/ticket.py import <舊票目錄>",
+    "freeze": "scripts/ticket.py freeze <id> --reason … --criterion …",
+}
+
+EXAMPLE = {
+    "create": """python3 scripts/ticket.py create \\
+  --subject "land.sh 對 0 commit 的分支整批拒絕" \\
+  --objective "任一支分支相對主線 0 commit 時,land 秒退並點名,不跑全套" \\
+  --acceptance "0 commit → rc!=0 且輸出含分支名" \\
+  --acceptance "多支中一支 0 → 另一支也不在 land worktree" \\
+  --allowed-write-path "scripts/land.sh" \\
+  --allowed-write-path "tests/test_land.py" \\
+  --verify-string "scripts/land.sh:沒有新的 commit" \\
+  --role worker --model opus --tool claude-code""",
+    "list": "python3 scripts/ticket.py list --open",
+    "show": "python3 scripts/ticket.py show 7",
+    "set": """python3 scripts/ticket.py set 7 state InReview
+python3 scripts/ticket.py set 7 allowed_write_paths '["scripts/land.sh", "tests/*"]'""",
+    "inbox": "python3 scripts/ticket.py inbox",
+    "verify": "python3 scripts/ticket.py verify 7",
+    "close": "python3 scripts/ticket.py close 7",
+    "import": "python3 scripts/ticket.py import ~/somewhere/old-tickets",
+    "freeze": ('python3 scripts/ticket.py freeze 7 \\\n'
+               '  --reason "視覺方向未定" \\\n'
+               '  --criterion "產出會不會因視覺方向改變而重做"'),
+}
+
+
+def known_flags(verb):
+    """這個子指令認得哪幾個旗標。**從真正在用的那幾份表數出來**,不另抄一份 ——
+    抄的那一份會跟事實分岔,而分岔的那天使用者看到的是一份說謊的 `--help`。"""
+    if verb == "create":
+        out = []
+        blank = blank_ticket()
+        for flag in sorted(set(CREATE_FLAGS) | set(CREATE_REPEATED)):
+            field = CREATE_FLAGS.get(flag) or CREATE_REPEATED[flag]
+            # 標 [必填] 的判準是「不給就開不出票」,不是「schema 有這一格」:
+            # `--role` / `--tool` / `--state` 空白票就有預設值,`--base-sha` 不給會
+            # 自己去取主線 —— 把這四個標成必填,新來的人會以為少一個就開不了票。
+            need = (field in NOT_EMPTY and not blank.get(field)
+                    and field not in AUTO_FILLED)
+            out.append((flag, FLAG_NOTE.get(flag, "(還沒寫說明)"),
+                        flag in CREATE_REPEATED, need))
+        return out
+    if verb == "list":
+        return [(flag, FLAG_NOTE.get(flag, ""), False, False)
+                for flag in ("--open", "--state X")]
+    if verb == "freeze":
+        return [(flag, FLAG_NOTE.get(flag, ""), False, True)
+                for flag in ("--reason", "--criterion")]
+    return []
+
+
+def flag_names(verb):
+    return [row[0] for row in known_flags(verb)]
+
+
+def help_for(verb, out=sys.stdout):
+    """一個子指令的說明:用法、認得的參數、一個**可以直接貼**的範例。
+
+    為什麼範例要能直接貼:D-001 說規則住在程式裡,而**程式要自己說得出規則** ——
+    一份只列得出參數名的說明,跟沒有說明的差別,是使用者要猜幾次才會對。
+    (2026-09-12:有人照著猜 `--allowed-write-paths`,複數,開不了票。)
+    """
+    out.write("用法:%s\n" % USAGE.get(verb, "scripts/ticket.py %s" % verb))
+    flags = known_flags(verb)
+    if flags:
+        out.write("\n認得的參數:\n")
+        for flag, note, repeated, required in flags:
+            marks = "".join(["  [必填]" if required else "",
+                             "  [可重複]" if repeated else ""])
+            out.write("  %-22s %s%s\n" % (flag, note, marks))
+    example = EXAMPLE.get(verb)
+    if example:
+        out.write("\n例:\n%s\n" % example)
+    if verb == "create":
+        out.write("\n必填的那幾格在 tickets/SCHEMA.md;缺的話這支腳本會逐條說是哪一格。\n")
+    return 0
+
+
+def unknown_flag(verb, flag):
+    """不認得的參數 —— **把認得的那幾個列出來**。「不認得 X」只說了它不是什麼。"""
+    sys.stderr.write("ticket: %s 不認得 %r\n" % (verb, flag))
+    names = flag_names(verb)
+    if names:
+        sys.stderr.write("ticket: %s 認得的是:%s\n" % (verb, "  ".join(names)))
+    sys.stderr.write("ticket: 看範例:python3 scripts/ticket.py %s --help\n" % verb)
+    return 2
 
 
 def blank_ticket():
@@ -252,8 +381,7 @@ def cmd_create(argv, stdin=sys.stdin, stdout=sys.stdout):
             else:
                 ticket.setdefault(CREATE_REPEATED[flag], []).append(argv[index])
         else:
-            sys.stderr.write("ticket: create 不認得 %r\n" % flag)
-            return 2
+            return unknown_flag("create", flag)
         index += 1
     if interactive:
         ask_interactive(ticket, stdin, stdout)
@@ -289,6 +417,10 @@ def is_open(ticket):
 
 
 def cmd_list(argv):
+    for index, arg in enumerate(argv):
+        if arg.startswith("--") and arg != "--open" and arg != "--state" \
+                and (index == 0 or argv[index - 1] != "--state"):
+            return unknown_flag("list", arg)
     want_open = "--open" in argv
     state = None
     if "--state" in argv:
@@ -405,8 +537,7 @@ def cmd_freeze(argv):
                 criterion = argv[index + 1]
             index += 2
             continue
-        sys.stderr.write("ticket: freeze 不認得 %r\n" % argv[index])
-        return 2
+        return unknown_flag("freeze", argv[index])
     if not reason or not criterion:
         # criterion 是「什麼時候可以解凍」。少了它,凍結會變成一張沒有人記得要回來
         # 看的票 —— 而那正是「凍著」與「忘了」長得一樣的形狀。
@@ -714,11 +845,15 @@ def main(argv):
              "set": cmd_set, "inbox": cmd_inbox, "verify": cmd_verify,
              "close": cmd_close, "import": cmd_import, "freeze": cmd_freeze}
     if verb in ("--help", "-h", "help"):
+        if rest and rest[0] in table:
+            return help_for(rest[0])
         sys.stdout.write(__doc__)
         return 0
     if verb not in table:
         sys.stderr.write("ticket: 不認得 %r(%s)\n" % (verb, " / ".join(sorted(table))))
         return 2
+    if "--help" in rest or "-h" in rest:
+        return help_for(verb)
     return table[verb](rest)
 
 

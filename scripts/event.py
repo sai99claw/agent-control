@@ -175,6 +175,54 @@ def one_line(row):
     return "  ".join(bits)
 
 
+EMIT_FLAGS = (
+    ("--ticket", "票號"),
+    ("--role", "角色:main / scheduler / worker / reviewer / consolidator"),
+    ("--model", "模型"),
+    ("--attempt", "第幾次派工(遲到的回報對不上 attempt 就拒絕)"),
+    ("--note", "一句給人看的話"),
+    ("--kv", "任何一格 `k=v`;可重複(例:`--kv sha=abc1234 --kv mode=full`)"),
+)
+
+USAGE = {
+    "emit": "scripts/event.py emit <kind> [旗標…]",
+    "tail": "scripts/event.py tail [N]                 # 預設 20",
+    "grep": "scripts/event.py grep <kind 或票號>       # kind 吃前綴,票號可帶 #",
+}
+
+EXAMPLE = {
+    "emit": ('python3 scripts/event.py emit session.start --role main --model fable\n'
+             'python3 scripts/event.py emit ticket.attempt.done --ticket 7 '
+             '--attempt 2 --note "patch 在 …" --kv rc=0'),
+    "tail": "python3 scripts/event.py tail 20",
+    "grep": "python3 scripts/event.py grep land\npython3 scripts/event.py grep #7",
+}
+
+
+def help_for(verb, out=sys.stdout):
+    """一個子指令的說明。**程式要自己說得出規則**(D-001)。"""
+    out.write("用法:%s\n" % USAGE.get(verb, "scripts/event.py %s" % verb))
+    if verb == "emit":
+        out.write("\n認得的參數:\n")
+        for flag, note in EMIT_FLAGS:
+            out.write("  %-12s %s\n" % (flag, note))
+    out.write("\n例:\n%s\n" % EXAMPLE.get(verb, ""))
+    if verb == "emit":
+        out.write("\n事件種類是一張固定的表,不在表上的拒收:\n")
+        for kind in KINDS:
+            out.write("  %s\n" % kind)
+    return 0
+
+
+def unknown_flag(flag):
+    """不認得的參數 —— **把認得的那幾個列出來**。「不認得 X」只說了它不是什麼。"""
+    sys.stderr.write("event: emit 不認得 %r\n" % flag)
+    sys.stderr.write("event: emit 認得的是:%s\n"
+                     % "  ".join(name for name, _ in EMIT_FLAGS))
+    sys.stderr.write("event: 看範例:python3 scripts/event.py emit --help\n")
+    return 2
+
+
 def usage(out=sys.stderr):
     out.write(__doc__.split("## 種類")[0].rstrip() + "\n\n事件種類:\n")
     for kind in KINDS:
@@ -199,7 +247,7 @@ def cmd_emit(argv):
         if arg == "--kv":
             index += 1
             if index >= len(rest) or "=" not in rest[index]:
-                sys.stderr.write("event: --kv 要 k=v\n")
+                sys.stderr.write("event: --kv 要 k=v(例:--kv sha=abc1234)\n")
                 return 2
             key, _, value = rest[index].partition("=")
             fields[key] = value
@@ -212,8 +260,7 @@ def cmd_emit(argv):
                 return 2
             fields[name] = rest[index]
         else:
-            sys.stderr.write("event: 不認得 %r\n" % arg)
-            return 2
+            return unknown_flag(arg)
         index += 1
     row = emit(kind, **fields)
     sys.stdout.write(one_line(row) + "\n")
@@ -256,6 +303,10 @@ def main(argv):
         usage()
         return 2
     verb, rest = argv[0], argv[1:]
+    if verb in ("emit", "tail", "grep") and ("--help" in rest or "-h" in rest):
+        return help_for(verb)
+    if verb in ("--help", "-h", "help") and rest and rest[0] in ("emit", "tail", "grep"):
+        return help_for(rest[0])
     if verb == "emit":
         return cmd_emit(rest)
     if verb == "tail":

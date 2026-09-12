@@ -43,9 +43,51 @@ import ticket     # noqa: E402
 DEFAULT_CAP = 2000
 DEFAULT_APPLIES = ("memory/model/*.md",)
 DEFAULT_INBOX_SUFFIX = ".inbox.md"
+NOT_A_MEMORY = "README.md"     # 說明檔不是誰的記憶 —— glob 抓得到它,上限不該管它
 CONSOLIDATOR_ROLE = "consolidator"
 FENCE = "---"
 CAP_RE = re.compile(r"^cap_chars:\s*(\d+)\s*$", re.MULTILINE)
+
+
+CONSOLIDATE_FLAGS = (
+    ("--discussion", "討論檔路徑(D-007 必填;格式見 docs/DISCUSSION.md,要有 `## 結論`)"),
+    ("--new-cap", "新的上限字元數;要配 --reason"),
+    ("--reason", "為什麼值得提高 —— 寫得出「多讀的那幾百字替每個未來 session 省了什麼」"),
+    ("--by", "誰帶的討論;不給就用 config 的 memory.consolidator"),
+)
+
+USAGE = {
+    "check": "scripts/memory.py check                       # 超過上限退出碼 1(不停工)",
+    "consolidate": "scripts/memory.py consolidate <記憶檔> --discussion <path> [--new-cap N --reason …]",
+}
+
+EXAMPLE = {
+    "check": "python3 scripts/memory.py check",
+    "consolidate": ('python3 scripts/memory.py consolidate memory/model/opus.md \\\n'
+                    '  --discussion discussions/2026-09-12-memory-opus.md \\\n'
+                    '  --new-cap 2600 --by fable \\\n'
+                    '  --reason "四條 land 事故的反例各不相同,合併會失去可辨識性"'),
+}
+
+
+def help_for(verb, out=sys.stdout):
+    """一個子指令的說明。**程式要自己說得出規則**(D-001)。"""
+    out.write("用法:%s\n" % USAGE.get(verb, "scripts/memory.py %s" % verb))
+    if verb == "consolidate":
+        out.write("\n認得的參數:\n")
+        for flag, note in CONSOLIDATE_FLAGS:
+            out.write("  %-14s %s\n" % (flag, note))
+    out.write("\n例:\n%s\n" % EXAMPLE.get(verb, ""))
+    return 0
+
+
+def unknown_flag(flag):
+    """不認得的參數 —— **把認得的那幾個列出來**。"""
+    sys.stderr.write("memory: consolidate 不認得 %r\n" % flag)
+    sys.stderr.write("memory: consolidate 認得的是:%s\n"
+                     % "  ".join(name for name, _ in CONSOLIDATE_FLAGS))
+    sys.stderr.write("memory: 看範例:python3 scripts/memory.py consolidate --help\n")
+    return 2
 
 
 def memory_config():
@@ -97,7 +139,18 @@ def inbox_path(path, suffix):
 
 
 def watched_files():
-    """`memory.applies_to` 展開。`.inbox.md` 本身不受上限管(整理期間的暫存區)。"""
+    """`memory.applies_to` 展開。兩種檔不受上限管:
+
+    - `.inbox.md`:整理期間的暫存區(docs/MEMORY.md 第 4 點)。
+    - **`README.md`**:說明檔不是誰的記憶。它躺在同一個目錄裡、副檔名也對,所以
+      glob 抓得到它 —— 而量一份說明檔的字元數,量出來的數字沒有人要用:它不是
+      任何一個 session 的「第一口空氣」,壓縮它也不會替誰省下什麼。
+
+    跳過的判準寫在這裡而不是改 glob、也不是加一格白名單:glob 是設定
+    (`board/config.json`),專案換一個寫法這條就漏了;白名單要靠人記得更新,而它
+    靜默失效的那天沒有人會知道(`docs/DISPATCH-TEMPLATE.md` §5.7)。「檔名是
+    README.md」是一條**規則**,兩者都不是。
+    """
     conf = memory_config()
     root = ticket.root()
     patterns = conf.get("applies_to") or list(DEFAULT_APPLIES)
@@ -106,7 +159,7 @@ def watched_files():
     for pattern in patterns:
         for path in sorted(globmod.glob(os.path.join(root, pattern))):
             rel = os.path.relpath(path, root)
-            if rel.endswith(suffix):
+            if rel.endswith(suffix) or os.path.basename(rel) == NOT_A_MEMORY:
                 continue
             out.append(rel)
     return out
@@ -245,8 +298,7 @@ def cmd_consolidate(argv):
                 by = argv[index + 1]
             index += 2
             continue
-        sys.stderr.write("memory: consolidate 不認得 %r\n" % flag)
-        return 2
+        return unknown_flag(flag)
     if not discussion.strip():
         sys.stderr.write("memory: consolidate 要 --discussion <path> —— 整理是老師帶"
                          "學生,而「討論過了」與「沒討論就刪了」在結果檔案上長得一樣"
@@ -331,6 +383,10 @@ def main(argv):
     if verb in ("--help", "-h", "help"):
         sys.stdout.write(__doc__)
         return 0
+    if verb in ("check", "consolidate") and ("--help" in rest or "-h" in rest):
+        return help_for(verb)
+    if verb in ("--help", "-h", "help") and rest and rest[0] in ("check", "consolidate"):
+        return help_for(rest[0])
     if verb == "check":
         return cmd_check(rest)
     if verb == "consolidate":

@@ -76,6 +76,95 @@ class Create(Sandbox):
                          [{"id": "3", "condition": "閘門綠"}])
 
 
+class Help(Sandbox):
+    """D-001 的具體化:規則住在程式裡,而**程式要自己說得出規則**。
+
+    2026-09-12:有人 clone 下來、照猜寫 `--allowed-write-paths`(複數),開不了票,
+    而 `create --help` 只回一句「不認得 --help」—— 一個新來的人於是沒有下一步。
+    """
+
+    def test_each_subcommand_help_prints_its_flags_and_a_pasteable_example(self):
+        """**變異**:把 `main()` 裡接住 `--help` 的那兩段拿掉 → 這一條紅。"""
+        for verb in ("create", "list", "show", "set", "inbox", "verify",
+                     "close", "import", "freeze"):
+            done = self.ticket(verb, "--help")
+            self.assertEqual(done.returncode, 0, verb + ":" + done.stdout + done.stderr)
+            self.assertIn("用法:", done.stdout, verb + " 沒有印用法")
+            self.assertIn("例:", done.stdout, verb + " 沒有印範例")
+            self.assertIn("python3 scripts/ticket.py " + verb, done.stdout,
+                          verb + " 的範例不是這個子指令的")
+
+    def test_create_help_shows_how_to_give_the_repeated_flags(self):
+        """`acceptance` 與 `allowed_write_paths` 是多值的,而**多值怎麼給**正是猜不
+        出來的那一格(猜出來的是複數形旗標)。"""
+        done = self.ticket("create", "--help")
+        self.assertIn("--allowed-write-path", done.stdout)
+        self.assertIn("--acceptance", done.stdout)
+        self.assertIn("[可重複]", done.stdout)
+        example = done.stdout.split("例:\n", 1)[1]
+        self.assertEqual(example.count("--acceptance "), 2,
+                         "範例要真的示範同一個旗標給兩次")
+        self.assertEqual(example.count("--allowed-write-path "), 2)
+
+    def test_the_example_in_create_help_really_opens_a_ticket(self):
+        """一個貼上去開不了票的範例,跟沒有範例一樣 —— 而它讀起來像是對的。
+        所以這一條**照著 `--help` 印的那段字真的跑一次**,不是抄一份在測試裡。
+
+        **變異**:把範例裡的 `--allowed-write-path` 改成複數 → 這一條紅。
+        """
+        import shlex
+        printed = self.ticket("create", "--help").stdout
+        block = printed.split("例:\n", 1)[1].split("\n\n", 1)[0]
+        args = shlex.split(block.replace("\\\n", " "))
+        self.assertEqual(args[:2], ["python3", "scripts/ticket.py"])
+        done = self.ticket(*args[2:])
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        self.assertEqual(len(row["acceptance"]), 2)
+        self.assertEqual(len(row["allowed_write_paths"]), 2)
+
+    def test_only_the_flags_you_really_cannot_omit_are_marked_required(self):
+        """標 [必填] 的判準是「不給就開不出票」,不是「schema 有這一格」。這一條
+        照著那個標記只給必填的那幾個,票要真的開得出來。"""
+        done = self.ticket("create", "--subject", "只給必填的", "--objective", "看它開不開得出來",
+                           "--acceptance", "一條會紅的斷言", "--allowed-write-path", "src/*",
+                           "--model", "opus")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        self.assertEqual(row["state"], "Draft")
+        self.assertEqual(row["role"], "worker")
+        self.assertTrue(row["base_sha"], "base_sha 該自己去取主線的")
+
+    def test_an_unknown_flag_lists_the_ones_it_does_know(self):
+        """「不認得 X」只說了它不是什麼。**下一步要寫在訊息裡**
+        (`docs/DISPATCH-TEMPLATE.md` §5.7)。
+
+        **變異**:把 `unknown_flag()` 裡列出名單那一行拿掉 → 這一條紅。
+        """
+        done = self.ticket("create", "--allowed-write-paths", "scripts/land.sh")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("--allowed-write-path", done.stderr, "沒有列出對的那一個")
+        self.assertIn("--acceptance", done.stderr)
+        self.assertIn("--help", done.stderr, "沒有說下一步去哪看")
+        self.assertFalse(self.exists("tickets/1.json"))
+
+    def test_list_also_names_the_flags_it_knows(self):
+        done = self.ticket("list", "--closed")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("--open", done.stderr)
+        self.assertIn("--state", done.stderr)
+
+    def test_the_flag_list_is_derived_from_the_table_not_copied(self):
+        """`--help` 印的那幾個就是 `create` 真的吃的那幾個 —— 兩份名單會分岔,
+        一份不會。這一條把印出來的每一個都真的餵一次。"""
+        printed = self.ticket("create", "--help").stdout
+        for flag in ("--feature", "--outline", "--test-plan", "--workspace",
+                     "--shared-resource", "--decision-ref"):
+            self.assertIn(flag, printed)
+            done = self.ticket("create", *MIN, flag, "x")
+            self.assertEqual(done.returncode, 0, flag + ":" + done.stdout + done.stderr)
+
+
 class ListAndShow(Sandbox):
 
     def setUp(self):

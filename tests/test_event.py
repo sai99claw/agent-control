@@ -108,6 +108,28 @@ class TailAndGrep(Sandbox):
         self.assertIn("還沒有事件", done.stdout)
 
 
+class Help(Sandbox):
+
+    def test_emit_help_prints_its_flags_the_kind_table_and_an_example(self):
+        done = self.event("emit", "--help")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("用法:", done.stdout)
+        for flag in ("--ticket", "--role", "--model", "--attempt", "--note", "--kv"):
+            self.assertIn(flag, done.stdout)
+        self.assertIn("session.start", done.stdout, "沒有把種類表印出來")
+        self.assertIn("python3 scripts/event.py emit", done.stdout)
+        self.assertEqual(self.events(), [], "印說明不該發出一筆事件")
+
+    def test_an_unknown_flag_lists_the_ones_it_does_know(self):
+        """**變異**:把 `unknown_flag()` 裡列出名單那一行拿掉 → 這一條紅。"""
+        done = self.event("emit", "gate.pass", "--sha", "abc1234")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("--kv", done.stderr, "沒有告訴他該用 --kv")
+        self.assertIn("--note", done.stderr)
+        self.assertIn("--help", done.stderr)
+        self.assertEqual(self.events(), [])
+
+
 class KindTable(unittest.TestCase):
     """事件表是一張固定的表(檔頭)。這一條釘住派工、閘門、落地、決策、記憶那幾族
     都在裡面 —— 少一族的話,那一族的動作就只能靜靜發生。"""
