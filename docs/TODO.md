@@ -23,6 +23,7 @@
 - [x] `scripts/new-session.sh`、`code-map/check-stale.py`、`docs/DISPATCH-TEMPLATE.md` 通用版、`tests/`(130 條)
 
 ## 2. 第二版
+- [ ] 控制台加 `?key=` + cookie 驗證(`board/config.json` 多一格 `key_file`);v0.1 只綁 127.0.0.1
 - [ ] 排程器做成腳本(讀 `allowed_write_paths` 算衝突圖),不用模型
 - [ ] 推測性佇列(H+A 與 H+A+B 同時驗)
 - [ ] token 歸因:Claude Code 不給資料,先顯示「未知」,不估

@@ -11,7 +11,7 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 | Ready | 範圍、可操作的驗收、依賴達成、`base_sha`、`allowed_write_paths` |
 | InReview | patch、測試輸出逐字、變異驗紅、回報標明實測/推論 |
 | IntegrationQueued | 審查通過、局部閘門綠、無未解阻擋 |
-| Done | **`scripts/ticket.py verify` 證明改動真的在主線**、文件已更新、事件齊全 |
+| Done | **`scripts/ticket.py verify` 證明改動真的在主線**(票要有 `verify_strings`;沒有的話只能弱檢查,verify 會明說,主線要自己補 grep)、文件已更新、事件齊全 |
 
 **exit code 0 不等於 Done;worker 說做完不等於 Done;閘門綠是對某個 `base_sha` 說的,基準走遠就過期。**
 
@@ -23,7 +23,7 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 ## 落地(`scripts/land.sh t1 t2 …`)
 1. 先印每支分支的 commit 數與標題(**讓人看見它以為自己在做什麼**)。
 2. 任一支 0 commit → 整批拒絕(跳過會生出沒有人要求過的組合)。
-3. 任一支的 `base_sha` 不是主線祖先 → 拒絕,要求 rebase 後重跑閘門。
+3. 任一支的 `base_sha` 有問題 → 拒絕,分兩種話講:**主線根本沒有那個 sha**(副本是拿錯的 ref 做的,回去查副本從哪來)vs **有但不是主線祖先**(主線走遠了,rebase 後重跑閘門)。兩者 `merge-base` 都非零,下一步差很多。
 4. patch 動到 `allowed_write_paths` 以外 → 拒絕。
 5. 依序合到 `land/<ts>` worktree,跑全套(`scripts/gate.sh --full`),綠才 `--ff-only` 推主線;紅則主線不動、worktree 留著給人看。
 6. 每一步發事件。

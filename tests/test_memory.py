@@ -97,6 +97,47 @@ class Consolidate(Sandbox):
     def memory(self, *args):
         return self.run_py("scripts/memory.py", *args)
 
+    def talk(self, name="discussions/2026-09-12-memory-opus.md", conclusion=True):
+        body = ("---\ntopic: opus 的記憶超過上限\nkind: memory-consolidation\n"
+                "parties: [fable / 老師, opus / 學生]\n---\n\n"
+                "## 第 1 輪 — fable\n- 主張:四條可以合併成兩條\n")
+        if conclusion:
+            body += "\n## 結論\n- 結論:上限提高到 2600\n- 採用的證據:實測\n"
+        self.write(name, body)
+        return name
+
+    def test_consolidating_without_a_discussion_file_is_refused(self):
+        """「討論過了」與「沒討論就刪了」在結果檔案上長得一模一樣 —— 兩者都是一份
+        變短的記憶。唯一分得開的東西是那份紀錄(D-007)。
+
+        **變異**:把 `if not discussion.strip()` 那一段拿掉 → 這一條紅。
+        """
+        self.write("memory/model/opus.md", FRONT % 2000 + "坑\n")
+        done = self.memory("consolidate", "memory/model/opus.md")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("--discussion", done.stderr)
+        self.assertIn("坑", self.read("memory/model/opus.md"), "被拒絕就不該動到檔案")
+
+    def test_a_discussion_path_that_is_not_there_is_refused_in_its_own_words(self):
+        self.write("memory/model/opus.md", FRONT % 2000 + "坑\n")
+        done = self.memory("consolidate", "memory/model/opus.md",
+                           "--discussion", "discussions/沒有這一份.md")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("找不到討論檔", done.stderr)
+
+    def test_a_discussion_with_no_conclusion_yet_is_a_different_sentence(self):
+        """一份沒有結論的討論檔,與一場沒談完的討論長得一樣。而下一步差很多:
+        去開一份 vs 回去把結論寫完(§5.7:守衛給錯下一步比沒有守衛更糟)。
+
+        **變異**:把 `"## 結論" not in talk_text` 那一段拿掉 → 這一條紅。
+        """
+        self.write("memory/model/opus.md", FRONT % 2000 + "坑\n")
+        name = self.talk(conclusion=False)
+        done = self.memory("consolidate", "memory/model/opus.md", "--discussion", name)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("還沒有結論區", done.stderr)
+        self.assertNotIn("找不到討論檔", done.stderr)
+
     def test_raising_the_cap_without_a_reason_is_refused(self):
         """提高是掙來的。一個沒有理由的 `cap_chars: 4000` 與一場真的做過的討論長得
         一模一樣,而前者是把「還沒整理」重新命名成「上限比較高」。
@@ -104,7 +145,8 @@ class Consolidate(Sandbox):
         **變異**:把 `if new_cap is not None and not reason.strip()` 拿掉 → 這一條紅。
         """
         self.write("memory/model/opus.md", FRONT % 2000 + "坑\n")
-        done = self.memory("consolidate", "memory/model/opus.md", "--new-cap", "4000")
+        done = self.memory("consolidate", "memory/model/opus.md",
+                           "--discussion", self.talk(), "--new-cap", "4000")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("提高上限是掙來的", done.stderr)
         self.assertIn("cap_chars: 2000", self.read("memory/model/opus.md"),
@@ -112,24 +154,29 @@ class Consolidate(Sandbox):
 
     def test_a_reasoned_raise_is_written_into_the_file_with_its_history(self):
         self.write("memory/model/opus.md", FRONT % 2000 + "坑\n")
+        name = self.talk()
         done = self.memory("consolidate", "memory/model/opus.md",
-                           "--new-cap", "2600", "--by", "fable",
+                           "--discussion", name, "--new-cap", "2600", "--by", "fable",
                            "--reason", "四條反例各不相同,合併會失去可辨識性")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         text = self.read("memory/model/opus.md")
         self.assertIn("cap_chars: 2600", text)
         self.assertIn("from: 2000, to: 2600", text)
         self.assertIn("by: fable", text)
+        self.assertIn("discussion: %s" % name, text,
+                      "cap_history 那一列要指得回支撐它的討論(D-007)")
         self.assertIn("失去可辨識性", text)
         rows = [row for row in self.events() if row["kind"] == "memory.consolidated"]
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["cap_from"], 2000)
         self.assertEqual(rows[0]["cap_to"], 2600)
+        self.assertEqual(rows[0]["discussion"], name)
 
     def test_the_inbox_is_merged_in_and_then_gone(self):
         self.write("memory/model/opus.md", FRONT % 2000 + "舊的一條\n")
         self.write("memory/model/opus.inbox.md", "整理期間新記的一條\n")
-        done = self.memory("consolidate", "memory/model/opus.md")
+        done = self.memory("consolidate", "memory/model/opus.md",
+                           "--discussion", self.talk())
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         text = self.read("memory/model/opus.md")
         self.assertIn("舊的一條", text)
@@ -140,7 +187,8 @@ class Consolidate(Sandbox):
     def test_still_over_the_cap_after_consolidating_is_not_reported_as_done(self):
         """「整理完了」與「整理完還是超過」不能都是退出碼 0。"""
         self.write("memory/model/opus.md", FRONT % 2000 + "坑" * 2500)
-        done = self.memory("consolidate", "memory/model/opus.md")
+        done = self.memory("consolidate", "memory/model/opus.md",
+                           "--discussion", self.talk())
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("還是超過上限", done.stdout)
 

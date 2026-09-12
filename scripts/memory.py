@@ -3,6 +3,7 @@
 
     scripts/memory.py check                    # session 開頭跑;超過上限 → 退出碼 1
     scripts/memory.py consolidate memory/model/opus.md \
+        --discussion discussions/2026-09-12-memory-opus.md \
         --new-cap 2600 --reason "四條 land 事故的反例各不相同,合併會失去可辨識性"
 
 ## 為什麼量字元
@@ -13,6 +14,14 @@
 上限管的是**每個新 session 的第一口空氣**:`memory/model/<model>.md` 是同模型每個
 session 開頭都要讀的東西,多一個字就是每一個 session 都多讀一個字。專案共用層
 (裁示、交接)有各自的形狀,不受這條管 —— 這是 D-006 的原話更正過的範圍。
+
+## 為什麼沒有討論檔就不准整理(D-007)
+整理是**老師帶學生**,不是老師替學生刪。而「討論過了」與「沒討論就刪了」在結果檔案上
+長得一模一樣 —— 兩者都是一份變短的記憶。唯一分得開的東西是那份討論紀錄,所以它是
+`consolidate` 的必要輸入,不是建議。格式見 `docs/DISCUSSION.md`。
+
+沒有討論檔、以及有檔但**還沒有結論區**,是兩件事,兩句話 —— 下一步差很多(去開一份
+vs 回去把結論寫完)。
 
 ## 為什麼提高上限要有理由
 上限可以被討論結果打破,但**提高是掙來的**。一個沒有理由的 `cap_chars: 4000` 與
@@ -128,11 +137,12 @@ def open_ticket_for(rel, chars, cap, out):
     argv = [
         "--subject", "整理 %s(%d 字元,上限 %d)" % (rel, chars, cap),
         "--objective",
-        "跟該模型討論後壓縮 %s,或者寫出理由把上限提高(D-006「老師帶學生」);"
-        "併入 %s" % (rel, inbox),
+        "跟該模型照 docs/DISCUSSION.md 的格式討論後壓縮 %s,或者寫出理由把上限提高"
+        "(D-006「老師帶學生」、D-007「沒有討論檔不准整理」);併入 %s" % (rel, inbox),
         "--acceptance", "`scripts/memory.py check` 對 %s 退出碼 0" % rel,
         "--acceptance", "保留的每一條仍帶日期 / 來源票號 / 實測或推論三個標記",
         "--acceptance", "提高上限的話,`cap_history` 有一列寫得出多讀的那幾百字省了什麼",
+        "--acceptance", "討論存成 discussions/<date>-memory-<model>.md(docs/DISCUSSION.md 的格式)",
         "--in-scope", rel,
         "--in-scope", inbox,
         "--out-of-scope", "docs/DECISIONS.md",
@@ -183,10 +193,14 @@ def cmd_check(argv):
 def add_cap_history(front, entry):
     """`cap_history` 那一列 —— 三種既有形狀都要接得住:沒有這一格、`[]`、已經是
     一串 `- {…}`。寫成一行 flow map(與 `docs/MEMORY.md` 的範例同形),不引入
-    YAML 函式庫(零依賴)。"""
-    line = ("  - {date: %s, from: %s, to: %s, by: %s, reason: \"%s\"}"
+    YAML 函式庫(零依賴)。
+
+    `discussion:` 那一欄是 D-007 要的:上限提高的理由寫在這裡,而**支撐那個理由的
+    討論**在那個路徑上 —— 下一個想再提高的人翻得到上一次是怎麼談出來的。
+    """
+    line = ("  - {date: %s, from: %s, to: %s, by: %s, discussion: %s, reason: \"%s\"}"
             % (entry["date"], entry["from"], entry["to"], entry["by"],
-               entry["reason"].replace('"', "'")))
+               entry["discussion"], entry["reason"].replace('"', "'")))
     front = front or ""
     if re.search(r"^cap_history:\s*\[\s*\]\s*$", front, re.MULTILINE):
         return re.sub(r"^cap_history:\s*\[\s*\]\s*$", "cap_history:\n" + line,
@@ -211,10 +225,12 @@ def cmd_consolidate(argv):
     new_cap = None
     reason = ""
     by = ""
+    discussion = ""
     index = 1
     while index < len(argv):
         flag = argv[index]
-        if flag in ("--new-cap", "--reason", "--by") and index + 1 < len(argv):
+        if flag in ("--new-cap", "--reason", "--by", "--discussion") \
+                and index + 1 < len(argv):
             if flag == "--new-cap":
                 try:
                     new_cap = int(argv[index + 1])
@@ -223,11 +239,18 @@ def cmd_consolidate(argv):
                     return 2
             elif flag == "--reason":
                 reason = argv[index + 1]
+            elif flag == "--discussion":
+                discussion = argv[index + 1]
             else:
                 by = argv[index + 1]
             index += 2
             continue
         sys.stderr.write("memory: consolidate 不認得 %r\n" % flag)
+        return 2
+    if not discussion.strip():
+        sys.stderr.write("memory: consolidate 要 --discussion <path> —— 整理是老師帶"
+                         "學生,而「討論過了」與「沒討論就刪了」在結果檔案上長得一樣"
+                         "(D-007,格式見 docs/DISCUSSION.md)\n")
         return 2
     if new_cap is not None and not reason.strip():
         # 提高是掙來的。沒有理由的提高,`check` 視為未整理 —— 所以這裡直接擋,
@@ -237,6 +260,21 @@ def cmd_consolidate(argv):
                          "(D-006)\n")
         return 2
     root = ticket.root()
+    # 討論檔要**真的在那裡**,而且要**真的有結論**。兩件事兩句話:一句要人去開一份,
+    # 一句要人回去把結論寫完(§5.7:守衛給錯下一步比沒有守衛更糟)。
+    talk = discussion if os.path.isabs(discussion) \
+        else os.path.join(ticket.root(), discussion)
+    if not os.path.exists(talk):
+        sys.stderr.write("memory: 找不到討論檔 %s —— 先照 templates/discussion.md "
+                         "開一份(D-007)\n" % discussion)
+        return 2
+    with open(talk, encoding="utf-8") as handle:
+        talk_text = handle.read()
+    if "## 結論" not in talk_text:
+        sys.stderr.write("memory: %s 還沒有結論區 —— 一份沒有結論的討論檔,與一場沒"
+                         "談完的討論長得一樣。把 `## 結論` 那幾格填完再來(D-007)\n"
+                         % discussion)
+        return 2
     path = os.path.join(root, rel) if not os.path.isabs(rel) else rel
     rel = os.path.relpath(path, root)
     try:
@@ -268,15 +306,17 @@ def cmd_consolidate(argv):
         front = set_cap(front, new_cap)
         front = add_cap_history(front, {
             "date": date.today().isoformat(), "from": old_cap, "to": new_cap,
-            "by": by or conf.get("consolidator") or "?", "reason": reason.strip()})
+            "by": by or conf.get("consolidator") or "?",
+            "discussion": discussion, "reason": reason.strip()})
     head = FENCE + "\n" + front + FENCE + "\n" if front else ""
     write(path, head + body)
     after = len(body)
     event.emit("memory.consolidated", file=rel, before=before, after=after,
                merged=merged, cap_from=old_cap, cap_to=cap,
-               by=by or conf.get("consolidator") or "", note=reason.strip())
-    sys.stdout.write("memory: %s %d -> %d 字元(併入 %d)、上限 %d -> %d\n"
-                     % (rel, before, after, merged, old_cap, cap))
+               by=by or conf.get("consolidator") or "",
+               discussion=discussion, note=reason.strip())
+    sys.stdout.write("memory: %s %d -> %d 字元(併入 %d)、上限 %d -> %d、討論 %s\n"
+                     % (rel, before, after, merged, old_cap, cap, discussion))
     if after > cap:
         sys.stdout.write("memory: 還是超過上限 —— 沒有整理完\n")
         return 1
