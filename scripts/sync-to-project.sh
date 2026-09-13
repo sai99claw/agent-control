@@ -2,7 +2,7 @@
 # 把 agent-control(主)裡的角色卡與模型記憶複製進一個專案(從)。
 #   sh scripts/sync-to-project.sh <專案根目錄>
 # 方向只有一個:agent-control → 專案。專案裡那份是產出物,檔頭標明「請到 agent-control 改」。
-# 為什麼要有這支:規範若在兩個 repo 各改各的,三天內就會分岔(2026-09-13 tabby_pool 實測);
+# 為什麼要有這支:規範若在兩個 repo 各改各的,三天內就會分岔(2026-09-13 第一個專案實測);
 # 一份乾淨的 repo 當主,專案只拿複本,改了再同步,分岔就沒地方長。
 set -eu
 HERE=$(cd "$(dirname "$0")/.." && pwd)
