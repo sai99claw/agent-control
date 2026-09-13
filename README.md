@@ -61,3 +61,9 @@ python3 scripts/event.py tail 20
 ## 狀態
 
 v0.1(2026-09-12)。從 tabby_pool 抽出來、去掉專案名。**還沒有第二個專案用過**——`docs/TODO.md` 第一節就是遷移計畫。
+
+## 把規範同步進專案(agent-control 是主,專案是從)
+```sh
+sh scripts/sync-to-project.sh /path/to/project   # 角色卡 → docs/roles/,模型記憶 → docs/roles/model/
+```
+專案裡那份檔頭標「請到 agent-control 改」;改規範永遠在這個 repo 改,再同步。
