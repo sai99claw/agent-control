@@ -26,3 +26,8 @@
 - 交接:主線寫 `docs/HANDOFF.md`;worker 的交接寫在回報裡。
 - 發 `session.end`。
 - **關票前**:`scripts/ticket.py verify <id>`(它會 `git show main:<檔> | grep` 那張票獨有的字串)。
+
+## 角色卡(2026-09-13 起)
+開場除了模型記憶,再讀 `memory/role/<role>.md`。派工 prompt 不重貼規則,只指路 + 四件票獨有的事。
+主線是溝通者(不查 code、不改票面、不驗證、不逐則轉述);開題者可派子工作者搜集;調度員只排序 + git 腳本;
+覆核者讀證據帳、只重播最關鍵一兩條。細節見 `memory/role/README.md`。
