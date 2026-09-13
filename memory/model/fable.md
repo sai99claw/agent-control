@@ -10,6 +10,7 @@ cap_history: []
 - 2026-09-12(主線,agent-control)**在 builder 還在寫的工作樹上 `git add -A` commit 自己的文件**,把它未完成、未審的檔一起掃進歷史。→ 共用工作樹只 `git add <指名的檔>`;或等 builder 交件再 commit。(實測)
 - 2026-09-12(主線)**落地進行中時直接 commit 到 main**(D-G112 那筆文件 commit),害調度員的 ff-only 被拒、得手動合併。→ commit 到 main 之前先 `pgrep -f land.sh`;有人在落地就等,或交給調度員排進下一批。(實測)
 - 2026-09-13(主線)**zsh 不會對未加引號的 `$P` 做字詞切分**,`kill $P` 對多個 PID 是 no-op(或 illegal pid),我連殺五輪以為行程不理 TERM。→ 多 PID 用 `… | xargs kill`,殺完用 `ps` 數一次才算數。(實測)
+- 2026-09-13(主線)**`pgrep -f <字串> | xargs kill` 殺到調度員的計時器**(它的指令列也含那個字串)。→ 殺前逐一 `ps -o command= -p` 看是不是自己起的;我自己立的規矩自己破。(實測)
 
 # Fable 的範圍(2026-09-12 裁示:五張調查票花了 114 萬,因為 Fable 自己下去跑)
 
