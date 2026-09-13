@@ -3,11 +3,13 @@
 
     python3 scripts/verify.py --list                 # 標籤 → 案例檔
     python3 scripts/verify.py --tag ledger-colour    # 只跑帶這個標籤的案例(可重複 --tag)
-    python3 scripts/verify.py                        # 全部
+    python3 scripts/verify.py                        # 全部回歸
+    python3 scripts/verify.py --unit                 # 專案的單元層(board/config.json 的 unit_cmd)
+    python3 scripts/verify.py --all                  # 單元 + 回歸
 
 每個 verify/<feature>/test_*.py 必須宣告 TAGS(list[str]),且每個標籤登記在 verify/TAGS.md;否則 rc=2 並指名檔案。
 """
-import argparse, ast, os, re, subprocess, sys
+import argparse, ast, json, os, re, subprocess, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VERIFY = os.path.join(ROOT, "verify")
@@ -37,7 +39,18 @@ def main(argv):
     ap = argparse.ArgumentParser()
     ap.add_argument("--tag", action="append", default=[])
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--unit", action="store_true")
+    ap.add_argument("--all", action="store_true")
     a = ap.parse_args(argv)
+    if a.unit or a.all:
+        cfg = os.path.join(ROOT, "board", "config.json")
+        cmd = (json.load(open(cfg)).get("unit_cmd") if os.path.exists(cfg) else None)
+        if not cmd:
+            print("verify: 單元層未設定(board/config.json 的 unit_cmd)"); return 3
+        rc = subprocess.run(cmd, shell=True, cwd=ROOT).returncode
+        print(f"verify: 單元層 rc={rc}")
+        if rc or a.unit:
+            return rc
     known = registered_tags()
     bad, picked = [], []
     for c in cases():

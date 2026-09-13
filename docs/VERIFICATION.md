@@ -5,7 +5,12 @@
 ## 單元層(實作者的)
 - 位置:專案原本的測試樹(例如 `demo/test_*.py`);實作者每張票附自己的單元測試,**綠了才交**。
 - 誰跑:實作者自己;閘門(`gate`)用專案的對照表挑一組跑。
-- 收集:`scripts/unit.sh`(專案自備,agent-control 只規定介面)——輸入無,輸出 `Ran N / rc`。
+- 收集:同一支執行器 `scripts/verify.py --unit` 跑專案在 `board/config.json` 的 `unit_cmd`(例如 `cd demo && python3 -m unittest discover -s . -p "test_*.py"`);`--all` = 單元 + 回歸。專案沒設 `unit_cmd` 就印「未設定」rc=3,不假綠。
+
+## 測試計畫(開題者的,票面必填)
+每條驗收一列:`行為 | 層(unit/api/browser)| 怎麼驗(輸入、步驟、可觀察輸出、期望值來源)| 標籤`。
+期望值來源必須獨立於被測程式(設計文件、手算、既有 golden);「跑一次記下來當期望」不算。
+驗證者照計畫實作,一列一個案例;計畫寫不出可執行的驗法 → 退回開題者,不猜。
 
 ## 回歸層(驗證者的)
 - 位置:`verify/<feature>/test_*.py`,每個檔頂宣告 `TAGS = ["ledger-colour", "report"]`(功能標籤,小寫 kebab)。

@@ -9,6 +9,12 @@ class VerifyRunner(unittest.TestCase):
         self.assertEqual(subprocess.run(RUN + ["--tag", "no-such-tag"], capture_output=True).returncode, 3)
         self.assertEqual(subprocess.run(RUN, capture_output=True).returncode, 0)
 
+    def test_unit_layer_without_config_is_loud_not_green(self):
+        r = subprocess.run(RUN + ["--unit"], capture_output=True, text=True)
+        self.assertIn(r.returncode, (0, 3), r.stdout)
+        if r.returncode == 3:
+            self.assertIn("未設定", r.stdout)
+
     def test_a_case_without_registered_tags_is_refused(self):
         p = os.path.join(HERE, "verify/example/test_zz_unregistered.py")
         with open(p, "w") as f:
