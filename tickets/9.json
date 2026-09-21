@@ -23,7 +23,7 @@
   "attempt": 0,
   "base_sha": "2969fa0e33afd897308839934a194d86c4c6789a",
   "state": "Ready",
-  "state_version": 5,
+  "state_version": 7,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -32,5 +32,16 @@
     "run": "",
     "notes": ""
   },
-  "outline": "專案側 #635 已讓 gate 寫回 base_sha/branch;剩下 auto-fix.sh 第 337 行附近寫死 gate.sh。另:memory/model/gpt-5.6-sol.md 不存在,pack 指到一個不存在的路徑——本票順手建一張最小模型卡(只放已知的兩條:沙盒綁不了埠所以瀏覽器/server 案例交閘門;5 小時額度會用完要排程)。"
+  "outline": "專案側 #635 已讓 gate 寫回 base_sha/branch;剩下 auto-fix.sh 第 337 行附近寫死 gate.sh。另:memory/model/gpt-5.6-sol.md 不存在,pack 指到一個不存在的路徑——本票順手建一張最小模型卡(只放已知的兩條:沙盒綁不了埠所以瀏覽器/server 案例交閘門;5 小時額度會用完要排程)。",
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "b9a665907ffe0c9c97eaf0b567e3f28b8282b527",
+    "note": "auto-fix 續跑指令讀 config gate.rerun_cmd;rebase 缺 base_sha 明說;codex sol 模型卡",
+    "at": "2026-09-22T06:37:29+08:00",
+    "state_version": 6
+  },
+  "verify_strings": [
+    "rerun_cmd"
+  ]
 }
