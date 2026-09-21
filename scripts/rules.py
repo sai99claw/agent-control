@@ -36,6 +36,18 @@ import event  # noqa: E402  共用 repo 根
 SOURCES = (os.path.join("docs", "DISPATCH-COMMON-RULES.md"),
            os.path.join("docs", "DISPATCH-TEMPLATE.md"))
 DEFAULT_MAX = 4096
+# 第五段,**固定文字、先扣預算**(與 260 B 鷹架同列,不吃比例):每個角色都帶,而且
+# 最後那一刀砍不到它。措辭對著 `memory.py note` 真正的用法寫 —— 這一段決定 agent
+# 會不會亂寫記憶:預設不寫、三種時刻、一行一原則、model 層只能寫自己。
+MEMORY_NOTE = """## 記憶回寫(D-013)
+預設不寫。只在三種時刻寫,一次一行:
+1 同一類錯絆你兩次以上 → `model <你的模型名>`(只准寫自己的)
+2 角色卡沒講、這輪自己補的規矩 → `role <角色卡檔名>`(誰都能寫)
+3 跨票都成立的專案事實 → `project <主題>`(直接進主檔)
+`memory.py note <層> <名> "<一句原則>" --ticket <票號> --by <角色>@<模型>`
+≤ 300 字元、只寫原則,案例用票號指路;不改主檔,超標由整理票的兩個模型併。
+收工前在 EVIDENCE「記憶」段列出寫了哪幾行;沒寫就寫「無」。"""
+MEMORY_NOTE_BYTES = len(MEMORY_NOTE.encode("utf-8"))
 HEADING = re.compile(r"^(#{2,4})\s+(.*)$")
 NUMBER = re.compile(r"^(\d+(?:\.\d+)*)\.?\s")
 
@@ -233,7 +245,7 @@ def pack(root, role, model, max_bytes, override=""):
     scaffold = ("## 角色卡(節錄)\n\n\n## 共用規矩節錄\n\n\n"
                 "## 你這個模型的記憶(節錄)\n\n\n")
     room = max(max_bytes - len(fixed.encode("utf-8"))
-               - len(scaffold.encode("utf-8")) - 260, 0)
+               - len(scaffold.encode("utf-8")) - 260 - MEMORY_NOTE_BYTES - 1, 0)
     cut = []
     # 預算順序 = 重要性順序:角色卡(你是誰)> 共用規矩(你會被擋在哪)>
     # 模型記憶(你自己踩過什麼)。
@@ -281,8 +293,11 @@ def pack(root, role, model, max_bytes, override=""):
     text = "\n".join(out)
     # 最後一道:**組出來的整份**再量一次。上面的分配是估的,而估錯的那一次要在這裡
     # 被擋住,不是在呼叫者那裡變成一份超過上限的派工文。
-    text, _ = clip(text, max_bytes, "`%s` 與上面列的那幾份" % rel)
-    return text
+    # 記憶回寫段在這一刀**之外**:先量給它,砍的是前面那幾份 —— 它是固定文字,
+    # 砍到一半的「只在三種時刻寫」會變成「隨時可以寫」。
+    text, _ = clip(text, max_bytes - MEMORY_NOTE_BYTES - 1,
+                   "`%s` 與上面列的那幾份" % rel)
+    return text.rstrip("\n") + "\n\n" + MEMORY_NOTE
 
 
 def cmd_pack(args):
@@ -301,7 +316,8 @@ def cmd_pack(args):
         return 1
     sys.stdout.write(text if text.endswith("\n") else text + "\n")
     if args.stats:
-        sys.stderr.write("rules: %s %d bytes(上限 %d)\n" % (role, size, args.max_bytes))
+        sys.stderr.write("rules: %s %d bytes(上限 %d;記憶回寫 %d bytes)\n"
+                         % (role, size, args.max_bytes, MEMORY_NOTE_BYTES))
     return 0
 
 
