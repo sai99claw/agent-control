@@ -21,7 +21,7 @@
   "attempt": 0,
   "base_sha": "49428afca0e464db226968572a1f5527564af0e0",
   "state": "Ready",
-  "state_version": 3,
+  "state_version": 6,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -30,5 +30,25 @@
     "run": "",
     "notes": ""
   },
-  "outline": "規格見評估報告 docs/review/2026-09-22-memory-board-review.md §B4;裁示:project 層=紀錄、依主題分節、pack 帶最後 30 行;任何角色可寫任一角色 inbox;model 層只能寫自己模型;主檔只有 consolidate 能改"
+  "outline": "規格見評估報告 docs/review/2026-09-22-memory-board-review.md §B4;裁示:project 層=紀錄、依主題分節、pack 帶最後 30 行;任何角色可寫任一角色 inbox;model 層只能寫自己模型;主檔只有 consolidate 能改",
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "a9fe7a9cc834aa02b0409462833535244d9075b7",
+    "note": "agent.start/done/failed + memory.noted kinds;auto-fix 起 worker 前後 emit、stdout 導 worker-round<r>.log;dry-run 驗收改在 stub worker 路徑(test_defect 反駁成立)",
+    "at": "2026-09-22T05:54:37+08:00",
+    "state_version": 4
+  },
+  "objections": [
+    {
+      "category": "test_defect",
+      "body": "--dry-run 明定不起 worker,不能誠實產生 agent 事件;驗收改在 stub worker 路徑",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "票面驗收寫錯,worker 的替代做法正確"
+    }
+  ],
+  "verify_strings": [
+    "agent.start"
+  ]
 }

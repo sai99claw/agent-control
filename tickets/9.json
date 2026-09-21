@@ -13,15 +13,17 @@
   "allowed_write_paths": [
     "scripts/auto-fix.sh",
     "scripts/apply.sh",
+    "scripts/event.py",
+    "memory/model/*",
     "tests/*"
   ],
   "role": "worker",
   "model": "codex:gpt-5.6-sol",
   "tool": "codex",
   "attempt": 0,
-  "base_sha": "49428afca0e464db226968572a1f5527564af0e0",
+  "base_sha": "55cdb990178707dbe8e664587fa3538cfe6341bc",
   "state": "Ready",
-  "state_version": 2,
+  "state_version": 4,
   "lease": null,
   "retry_limit": 2,
   "verify": {
