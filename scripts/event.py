@@ -30,6 +30,8 @@ KINDS = (
     "ticket.created", "ticket.state", "ticket.frozen", "ticket.closed",
     # 一次派工的三種結局。attempt 對不上的遲到回報要能被認出來(SCHEMA §執行)。
     "ticket.attempt.start", "ticket.attempt.done", "ticket.attempt.failed",
+    # 機器派出的 agent:看板用 ticket + ts 與主線採樣到的 agent 對上。
+    "agent.start", "agent.done", "agent.failed",
     # 排順序只是提案(docs/ROLES.md:沒有調度員這個角色),所以它只有這一種事件。
     "schedule.proposed",
     # 閘門。綠是對某一個 base_sha 說的,所以 kv 要帶 sha。
@@ -43,7 +45,7 @@ KINDS = (
     # 終態叫醒主線(D-015):一則事件 + `reports/inbox/` 一頁。主線不輪詢 status。
     "inbox.posted",
     # 記憶:量到超過上限、整理完成(docs/MEMORY.md「容量與整理」,D-006)。
-    "memory.over_cap", "memory.consolidated",
+    "memory.over_cap", "memory.consolidated", "memory.noted",
 )
 
 ENV_ROOT = "AC_ROOT"

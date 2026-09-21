@@ -73,6 +73,7 @@ printf '# 第 %s 輪\\n還是紅的\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.m
 # 假 worker:看完票說票寫錯了。**它不交 patch,只交一行反駁。**
 WORKER_OBJECTS = """#!/bin/sh
 set -e
+echo "worker stdout round $AC_ROUND"
 echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
 cd "$AC_WORK"
 printf 'OBJECTION: ticket-wrong 驗收第二條與設計文件對不上\\n' \\
@@ -82,6 +83,11 @@ printf 'OBJECTION: ticket-wrong 驗收第二條與設計文件對不上\\n' \\
 WORKER_NEVER = """#!/bin/sh
 echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
 exit 0
+"""
+
+WORKER_FAILS = """#!/bin/sh
+echo "worker stderr round $AC_ROUND" >&2
+exit 7
 """
 
 GREEN_LOG = """test_ok (test_thing.T.test_ok) ... ok
@@ -182,6 +188,22 @@ class WhenThereIsNothingToFix(AutoFixBase):
 
 class ThingsThatStopIt(AutoFixBase):
 
+    def test_a_failed_worker_records_its_rc_and_stderr(self):
+        self.set_worker(WORKER_FAILS)
+        self.ticket_ready()
+        self.status(1, RED_LOG)
+        done = self.auto_fix()
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        agent_events = [row for row in self.events()
+                        if row["kind"].startswith("agent.")]
+        self.assertEqual([row["kind"] for row in agent_events],
+                         ["agent.start", "agent.failed"])
+        self.assertEqual(agent_events[-1]["rc"], "7")
+        worker_log = os.path.join(self.repo, "reports", "t1", "20260921-100000-1",
+                                  "worker-round2.log")
+        with open(worker_log, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "worker stderr round 2\n")
+
     def test_a_red_with_no_attribution_is_not_handed_to_a_new_worker(self):
         """rc 非零卻一條紅都解析不出來,**最像「沒有紅」** —— 而派下去的 worker 會
         拿著一份空紅榜去猜,猜出來的修法會改到沒有壞的地方。
@@ -232,6 +254,22 @@ class ThingsThatStopIt(AutoFixBase):
         self.assertIn("decision.asked", self.kinds())
         self.assertIn("反駁", self.inbox_list())
 
+        agent_events = [row for row in self.events()
+                        if row["kind"].startswith("agent.")]
+        self.assertEqual([row["kind"] for row in agent_events],
+                         ["agent.start", "agent.done"])
+        for row in agent_events:
+            self.assertEqual(row["ticket"], "1")
+            self.assertEqual(row["model"], "opus")
+            self.assertEqual(row["run_id"], "20260921-100000-1")
+            self.assertEqual(row["round"], "2")
+            self.assertEqual(row["agent"], "auto-fix")
+        self.assertEqual(agent_events[-1]["rc"], "0")
+        worker_log = os.path.join(self.repo, "reports", "t1", "20260921-100000-1",
+                                  "worker-round2.log")
+        with open(worker_log, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "worker stdout round 2\n")
+
 
 class TheDispatchPacket(AutoFixBase):
 
@@ -246,6 +284,9 @@ class TheDispatchPacket(AutoFixBase):
         done = self.auto_fix("--dry-run")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.worker_rounds(), [])
+        self.assertEqual([row for row in self.events()
+                          if row["kind"].startswith("agent.")], [],
+                         "dry-run 沒有起 agent,不能留下假的 agent 事件")
         where = os.path.join(self.repo, "reports", "t1", "20260921-100000-1",
                              "dispatch-round2.md")
         self.assertTrue(os.path.exists(where), done.stdout)
