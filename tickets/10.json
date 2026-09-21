@@ -1,0 +1,36 @@
+{
+  "id": "10",
+  "subject": "worker 在副本裡寫不了記憶:EVIDENCE 的「記憶」段由 apply.sh / auto-fix.sh 收割,逐行執行 memory.py note 到真 repo(worker 只交文字)",
+  "created": "2026-09-22T05:38:52+08:00",
+  "objective": "worker 照 pack 的記憶回寫段寫在 EVIDENCE 裡,落地那一手自動變成 inbox 行;不再出現「note 落點是真 repo,與不准寫入真 repo 衝突」",
+  "acceptance": [
+    "EVIDENCE 含「記憶:」段兩行 memory.py note 指令 → apply.sh 後 memory/<層>/<名>.inbox.md 多兩行、events 有 memory.noted 兩筆;寫「無」→ 零筆",
+    "一行超過 300 字元或層名不合法 → 那一行被拒並印出,其他行照收;不擋 apply"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/apply.sh",
+    "scripts/auto-fix.sh",
+    "scripts/memory.py",
+    "scripts/rules.py",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "5b44ea1251a52723da95c3f5a0218a02db3b68a6",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "2026-09-22 #624 worker 實測指出;pack 的記憶回寫段要改成「寫進 EVIDENCE 的記憶段,格式:每行一句 memory.py note …」而不是叫 worker 自己跑;apply.sh 收到 patch 時讀同目錄 EVIDENCE.md(或 --evidence 參數)。"
+}
