@@ -32,8 +32,8 @@ BOARD_DIR = os.environ.get("AC_TEST_BOARD", os.path.join(ROOT, "board"))
 CODE_MAP = os.path.join(ROOT, "code-map")
 TIMEOUT = 180
 
-SCRIPT_FILES = ("event.py", "ticket.py", "memory.py", "land.sh", "gate.sh",
-                "heartbeat.sh", "new-session.sh")
+SCRIPT_FILES = ("event.py", "ticket.py", "memory.py", "status.py", "land.sh",
+                "gate.sh", "heartbeat.sh", "new-session.sh")
 
 # 閘門的替身:寫一行標記檔就退出。**「有沒有被呼叫」因此是一個看得見的事實。**
 GATE_STUB_GREEN = """#!/bin/sh
@@ -56,7 +56,8 @@ DEFAULT_CONFIG = {
     "memory": {"unit": "chars", "cap_chars": 2000, "consolidator": "fable",
                "raise_allowed": True, "applies_to": ["memory/model/*.md"],
                "inbox_suffix": ".inbox.md"},
-    "lease_seconds": {"scheduler": 900, "land": 1800, "worker": 7200},
+    "lease_seconds": {"opener": 900, "verifier": 3600, "land": 1800,
+                      "worker": 7200},
 }
 
 

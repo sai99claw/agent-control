@@ -40,7 +40,7 @@ REQUIRED = ("id", "subject", "created", "objective", "acceptance",
             "in_scope", "out_of_scope", "depends_on", "allowed_write_paths",
             "role", "model", "tool", "attempt", "base_sha",
             "state", "state_version", "lease", "retry_limit")
-# 這幾格空著等於沒填:一張沒有驗收條件、沒有寫入範圍的票,排程器與落地器都讀不動。
+# 這幾格空著等於沒填:一張沒有驗收條件、沒有寫入範圍的票,排順序的人與落地器都讀不動。
 NOT_EMPTY = ("subject", "objective", "acceptance", "allowed_write_paths",
              "role", "model", "tool", "base_sha", "state")
 LIST_FIELDS = ("acceptance", "in_scope", "out_of_scope", "depends_on",
@@ -151,12 +151,16 @@ CREATE_FLAGS = {
     "--model": "model", "--tool": "tool", "--base-sha": "base_sha",
     "--state": "state", "--feature": "feature", "--outline": "outline",
     "--test-plan": "test_plan", "--branch": "branch", "--workspace": "workspace",
+    # `verify` 那一格是**驗證者**寫的(D-010):它交的不是判決,是「案例在哪、
+    # 怎麼跑」。帶點的名字寫進巢狀的 `verify` 底下,見 `put_field`。
+    "--verify-run": "verify.run", "--verify-note": "verify.notes",
 }
 CREATE_REPEATED = {
     "--acceptance": "acceptance", "--in-scope": "in_scope",
     "--out-of-scope": "out_of_scope", "--allowed-write-path": "allowed_write_paths",
     "--depends-on": "depends_on", "--decision-ref": "decision_refs",
     "--verify-string": "verify_strings", "--shared-resource": "shared_resources",
+    "--verify-file": "verify.files", "--verify-tag": "verify.tags",
 }
 # 旗標 → 一句話說明。**名單不在這裡** —— `--help` 要印哪幾個是從 `CREATE_FLAGS` /
 # `CREATE_REPEATED` 自己數出來的,這裡只補說明。兩份名單會分岔,一份不會。
@@ -166,12 +170,16 @@ FLAG_NOTE = {
     "--acceptance": "驗收;**一條一個旗標**,每條要能寫成一條會紅的斷言",
     "--in-scope": "範圍內的檔;一個一個給",
     "--out-of-scope": "明說不要動的;一個一個給",
-    "--allowed-write-path": "允許寫入的路徑 glob;**一個一個給**(排程器判平行、落地器判越界,讀的都是這一格)",
+    "--allowed-write-path": "允許寫入的路徑 glob;**一個一個給**(排順序判平行、落地器判越界,讀的都是這一格)",
     "--depends-on": "前置票號;`7` 或 `7:閘門綠`;一個一個給",
     "--decision-ref": "相關裁示編號(D-00x);一個一個給",
     "--verify-string": "關票時要在主線上抓到的字;`路徑:那串字` 或只給字;一個一個給",
+    "--verify-file": "驗證者寫的回歸案例檔;一個一個給(進票的 `verify.files`)",
+    "--verify-tag": "那幾個案例宣告的功能標籤;一個一個給(進票的 `verify.tags`)",
+    "--verify-run": "怎麼跑那幾個案例(一句可以直接貼的指令)",
+    "--verify-note": "跑的時候要知道的事(前置、已知 flaky、為什麼這樣驗)",
     "--shared-resource": "共用的執行資源(同一顆 DB、同一個埠);一個一個給",
-    "--role": "角色:worker / reviewer / scheduler / consolidator",
+    "--role": "角色:worker / verifier / opener / consolidator",
     "--model": "模型",
     "--tool": "工具:claude-code / codex / …",
     "--base-sha": "基準 sha;不給就自己取主線的 HEAD",
@@ -195,7 +203,7 @@ ASK = (
     ("out_of_scope", "明說不要動的(空行結束)", True),
     ("allowed_write_paths", "允許寫入的路徑 glob(空行結束)", True),
     ("depends_on", "前置票號(空行結束)", True),
-    ("role", "角色(worker / reviewer / …)", False),
+    ("role", "角色(worker / verifier / opener / …)", False),
     ("model", "模型", False),
     ("tool", "工具(claude-code / codex / …)", False),
 )
@@ -307,7 +315,30 @@ def blank_ticket():
             "depends_on": [], "allowed_write_paths": [],
             "role": "worker", "model": "", "tool": "claude-code", "attempt": 0,
             "base_sha": "", "state": "Draft", "state_version": 1,
-            "lease": None, "retry_limit": 2}
+            "lease": None, "retry_limit": 2,
+            # 驗證者的交付落在這一格(D-010):案例檔、標籤、怎麼跑、要知道的事。
+            # **空著是誠實的「還沒有人寫案例」**,不是「這張票不用驗」。
+            "verify": {"files": [], "tags": [], "run": "", "notes": ""}}
+
+
+def put_field(ticket, field, value, repeated=False):
+    """`a.b` 寫進巢狀的字典。**只准一層** —— 再深就是把一份 schema 塞進旗標裡,
+    那時該改的是 `tickets/SCHEMA.md`,不是這裡。"""
+    head, dot, tail = field.partition(".")
+    if not dot:
+        if repeated:
+            ticket.setdefault(field, []).append(value)
+        else:
+            ticket[field] = value
+        return
+    nest = ticket.get(head)
+    if not isinstance(nest, dict):
+        nest = {}
+        ticket[head] = nest
+    if repeated:
+        nest.setdefault(tail, []).append(value)
+    else:
+        nest[tail] = value
 
 
 def normalise_depends(values):
@@ -377,9 +408,9 @@ def cmd_create(argv, stdin=sys.stdin, stdout=sys.stdout):
                 sys.stderr.write("ticket: %s 少了值\n" % flag)
                 return 2
             if flag in CREATE_FLAGS:
-                ticket[CREATE_FLAGS[flag]] = argv[index]
+                put_field(ticket, CREATE_FLAGS[flag], argv[index])
             else:
-                ticket.setdefault(CREATE_REPEATED[flag], []).append(argv[index])
+                put_field(ticket, CREATE_REPEATED[flag], argv[index], repeated=True)
         else:
             return unknown_flag("create", flag)
         index += 1
@@ -712,6 +743,29 @@ def verify(ident):
     return len(touched) > 0, rows, True
 
 
+def print_verify_plan(ticket):
+    """把驗證者寫進票的那一格印出來。**印「還沒有人寫」而不是印一片空白** ——
+    一張沒人寫過案例的票,與一張案例寫好了的票,在空白的輸出上長得一樣
+    (`docs/DISPATCH-TEMPLATE.md` §5.5)。"""
+    plan = ticket.get("verify")
+    if not isinstance(plan, dict):
+        plan = {}
+    files = plan.get("files") or []
+    tags = plan.get("tags") or []
+    run = (plan.get("run") or "").strip()
+    notes = (plan.get("notes") or "").strip()
+    sys.stdout.write("  回歸案例(票的 verify 欄,驗證者寫的):\n")
+    if not (files or tags or run or notes):
+        sys.stdout.write("    還沒有人寫 —— 驗證者交件時要填 files / tags / run\n")
+        return
+    sys.stdout.write("    files: %s\n" % (", ".join(files) or "(沒填)"))
+    sys.stdout.write("    tags:  %s\n" % (", ".join(tags) or "(沒填)"))
+    sys.stdout.write("    run:   %s\n"
+                     % (run or "(沒填 —— 沒有這一句,別人得自己猜怎麼跑)"))
+    if notes:
+        sys.stdout.write("    notes: %s\n" % notes)
+
+
 def print_verify(ident, ok, rows, weak):
     for row in rows:
         mark = "OK " if row["hits"] > 0 else "零 "
@@ -735,6 +789,10 @@ def cmd_verify(argv):
         sys.stderr.write("ticket: 讀不到 #%s —— %s\n" % (ident, exc))
         return 2
     print_verify(ident, ok, rows, weak)
+    try:
+        print_verify_plan(load(ident))
+    except (OSError, ValueError):
+        pass
     return 0 if ok else 1
 
 

@@ -4,9 +4,12 @@
 #
 #   sh scripts/land.sh t7-land-refuses t9-event-kinds ...   # 依給的順序合
 #
-# 這一支**沒有判斷**(docs/ROLES.md:落地器是程式,排程器才是提案)。它只會拒絕:
+# 這一支**沒有判斷**(docs/ROLES.md:落地器是程式;順序是主線決定的)。它只會拒絕:
 # 0 commit、票對不上、`base_sha` 過期、寫入範圍越界、閘門紅。要它放寬的時候,
 # 放寬的是規矩,不是這支腳本。
+#
+# 每一輪都寫 `reports/t<票號>-status.json`(D-010):跑完了沒、rc、紅了哪幾條、去哪看。
+# 讀那一份就夠了 —— 不必把整份 log 讀進上下文,也不必輪詢背景工作。
 #
 # 做法:從主線開一個 land-<時間> worktree,逐條 --no-ff merge(衝突就停、留著
 # worktree 給人看),在那個 worktree 跑 `scripts/gate.sh --full`;綠才
@@ -40,7 +43,26 @@ ev() {
 }
 
 STAMP=$(date +%Y%m%d-%H%M%S)
+IDS=""
 ev land.start --note "$*" --kv "stamp=$STAMP"
+
+# 狀態檔:這一批每一張票各一份 `reports/t<票號>-status.json`(D-010,格式見
+# `scripts/status.py`)。**寫不出來要出聲但不擋落地** —— 同上面那一段事件的理由。
+# 為什麼一張票一份而不是一批一份:讀它的人手上有的是票號,不是這一批的時間戳。
+status_all() {   # $1 = start|done  $2 = rc(done 才用)
+    [ -n "$IDS" ] || return 0
+    for i in $IDS; do
+        if [ "$1" = "start" ]; then
+            python3 "$ROOT/scripts/status.py" start --ticket "$i" --kind land \
+                --sha "$(git -C "$ROOT" rev-parse --short "$MAIN")" >/dev/null 2>&1 \
+                || echo "land: #$i 的狀態檔寫不出來(不擋落地)" >&2
+        else
+            python3 "$ROOT/scripts/status.py" done --ticket "$i" --kind land \
+                --sha "${SHA:-}" --rc "$2" --log "$WT/gate.log" >/dev/null 2>&1 \
+                || echo "land: #$i 的狀態檔寫不出來(不擋落地)" >&2
+        fi
+    done
+}
 
 # ---------------------------------------------------------------- 第 1〜4 步
 #
@@ -92,6 +114,7 @@ for b in "$@"; do
         STOP=1
         continue
     fi
+    IDS="$IDS $id"
     tf=$ROOT/$TICKETS/$id.json
     if [ ! -f "$tf" ]; then
         echo "land: $b —— 找不到票 #$id($tf)"
@@ -132,8 +155,8 @@ PY
         continue
     fi
 
-    # 寫入範圍。排程器就是拿這一格判能不能平行的(docs/DESIGN.md §10),所以越界
-    # 不只是「改了不該改的檔」,是**排程當時算出來的那張衝突圖已經不成立**。
+    # 寫入範圍。排順序的人就是拿這一格判能不能平行的(docs/DESIGN.md §10),所以越界
+    # 不只是「改了不該改的檔」,是**排順序當時算出來的那張衝突圖已經不成立**。
     out=$(python3 - "$ROOT" "$MAIN" "$b" "$tf" <<'PY'
 import fnmatch, json, subprocess, sys
 root, main, branch, path = sys.argv[1:5]
@@ -196,12 +219,16 @@ COUNT=$(git -C "$WT" log --oneline "$MAIN..HEAD" | wc -l | tr -d ' ')
 SHA=$(git -C "$WT" rev-parse --short HEAD)
 echo "land: $COUNT 個 commit 串好,跑全套 -> $WT/gate.log"
 ev gate.start --kv mode=full --kv "sha=$SHA"
+status_all start
 if ! (cd "$WT" && sh scripts/gate.sh --full); then
     echo "land: 全套紅,$MAIN 沒動;worktree 留在 $WT"
+    echo "land: 紅榜逐條在 reports/t<票號>-status.json 的 failures(案例、檔、行、log、excerpt)"
     ev gate.fail --kv mode=full --kv "sha=$SHA"
     ev land.fail --note "閘門紅" --kv "stamp=$STAMP"
+    status_all done 1
     exit 1
 fi
+status_all done 0
 ev gate.pass --kv mode=full --kv "sha=$SHA"
 
 # ------------------------------------------------------------------- 第 6 步

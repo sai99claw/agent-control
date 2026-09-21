@@ -262,6 +262,57 @@ class Freeze(Sandbox):
         self.assertNotIn("frozen", self.load_ticket("1"))
 
 
+class VerifyPlan(Sandbox):
+    """票的 `verify` 欄(D-010):**驗證者寫的**「案例在哪、怎麼跑」。
+
+    2026-09-20 的成本:驗證者交了案例卻沒寫怎麼跑,下一個人為了找它們重跑整組閘門、
+    再用 sleep 迴圈等它,一次幾十萬 token。**案例在哪與怎麼跑,是交付的一部分。**
+    """
+
+    def test_the_verifier_flags_write_into_the_nested_verify_field(self):
+        done = self.ticket(
+            "create", "--subject", "驗證者交件", "--objective", "案例進回歸層",
+            "--acceptance", "乾淨主線上紅", "--allowed-write-path", "verify/*",
+            "--role", "verifier", "--model", "sonnet", "--tool", "codex",
+            "--verify-file", "verify/nav/test_ticket_7.py",
+            "--verify-tag", "nav-size", "--verify-tag", "report",
+            "--verify-run", "python3 scripts/verify.py --tag nav-size",
+            "--verify-note", "要先 npm ci --prefix tools/compat")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        plan = self.load_ticket("1")["verify"]
+        self.assertEqual(plan["files"], ["verify/nav/test_ticket_7.py"])
+        self.assertEqual(plan["tags"], ["nav-size", "report"])
+        self.assertEqual(plan["run"], "python3 scripts/verify.py --tag nav-size")
+        self.assertIn("npm ci", plan["notes"])
+
+    def test_a_ticket_with_no_plan_still_has_the_field_and_it_is_empty(self):
+        """空著是誠實的「還沒有人寫案例」 —— **不是沒有這一格**。缺了整格的票,
+        下游分不出「這張票不用驗」與「沒人寫」。"""
+        self.ticket("create", "--subject", "s", "--objective", "o",
+                    "--acceptance", "a", "--allowed-write-path", "src/*",
+                    "--role", "worker", "--model", "opus", "--tool", "claude-code")
+        self.assertEqual(self.load_ticket("1")["verify"],
+                         {"files": [], "tags": [], "run": "", "notes": ""})
+
+    def test_verify_prints_the_plan_so_the_next_person_can_run_it(self):
+        self.make_ticket(1, allowed_write_paths=["src/*"],
+                         verify_strings=["src/nav.py:def size_nav"],
+                         verify={"files": ["verify/nav/test_ticket_1.py"],
+                                 "tags": ["nav-size"],
+                                 "run": "python3 scripts/verify.py --tag nav-size",
+                                 "notes": ""})
+        done = self.ticket("verify", "1")
+        self.assertIn("verify/nav/test_ticket_1.py", done.stdout)
+        self.assertIn("python3 scripts/verify.py --tag nav-size", done.stdout)
+
+    def test_a_ticket_nobody_wrote_cases_for_says_so_instead_of_printing_blanks(self):
+        """**變異**:把 `print_verify_plan` 的那一句「還沒有人寫」改成 `return`
+        → 這一條紅。空白的輸出裡,「沒人寫」與「寫好了」長得一樣。"""
+        self.make_ticket(1, allowed_write_paths=["src/*"])
+        done = self.ticket("verify", "1")
+        self.assertIn("還沒有人寫", done.stdout)
+
+
 class VerifyAndClose(Sandbox):
     """2026-09-10(前一個專案):一張票被關成完成,而它的程式碼從來沒有進主線。
     事後查證用的就是 `git show main:<檔> | grep -c <那張票獨有的字串>` = 0。"""

@@ -13,3 +13,16 @@
 - `docs/REHEARSAL.md` 有七條「還只在演練裡成立」的保證——**下一個 session 第一次真的用到某條時,確認過就把那一列刪掉**。
 - 還沒做:`docs/TODO.md` §0 遷移(第一個使用者是 tabby_pool 自己)、§2 第二版。控制台只綁 127.0.0.1、沒有 key 驗證。
 - 主線自己踩的坑記在 `memory/model/fable.md`(`git add -A` 掃進別人未完成的檔)。
+
+## 2026-09-21 流程定案:調度員退場、驗證者只寫案例、狀態檔進腳本
+- **角色只剩七個**(`docs/ROLES.md`):產品負責人、主線、開題者、Worker/實作者、驗證者、落地器(腳本)、知識維護。
+  **調度員 / 排程器整個拿掉**(D-010,不是瘦身):順序由主線決定或由腳本依 `allowed_write_paths` 提案;
+  `memory/role/dispatcher.md` 已刪,`scripts/new-session.sh` 的 `scheduler` 角色換成 `opener` / `verifier`。
+- **驗證者只寫案例**:證明案例是對的(乾淨主線紅、patch 綠)、登記 tag、把怎麼跑寫進票的 `verify` 欄、交
+  `patch-verify.diff`、結束。**VERDICT 退場**;主線的「覆核 = 讀 patch 記 `review`」留著,那不是驗證者。
+  票多兩格:`verify`({files,tags,run,notes})與 `review`,`ticket.py create` 有 `--verify-file/-tag/-run/-note`。
+- **狀態檔已經是程式**:`scripts/status.py` + `gate.sh --ticket <n>` + `land.sh`,寫 `reports/t<n>-status.json`
+  (state / rc / failures 逐條含 log 與 excerpt / flaky)。gate 紅了會把每條紅的案例**單獨重跑一次**判 flake,全 flaky 視為綠。
+- **規格已定、腳本還沒做**(`docs/WORKFLOW.md` 有一張表逐列標著):落地器用 headless `claude -p` 自動起新 worker
+  (三輪上限)、land 前檢查 `verify.files` 在不在分支上、land 那一側的 flake 重跑。**不要當成已經做了。**
+- 下一個 session:`docs/TODO.md` §2 第一條(排序做成腳本)與上面那張表沒打勾的三項;測試 `python3 -m unittest discover -s tests`(現在 172 條)。

@@ -202,7 +202,7 @@ class TicketChecks(LandBase):
         self.assertIn("沒有 base_sha", done.stdout)
 
     def test_writing_outside_allowed_write_paths_is_refused_and_the_files_are_named(self):
-        """排程器就是拿這一格判能不能平行的 —— 越界不只是「改了不該改的檔」,是
+        """排順序的人就是拿這一格判能不能平行的 —— 越界不只是「改了不該改的檔」,是
         排程當時算出來的那張衝突圖已經不成立。
 
         **變異**:把越界那一段的 `if [ -n "$out" ]` 改成永遠不成立 → 這一條紅。
@@ -281,6 +281,78 @@ class GateRed(LandBase):
         self.assertIn("gate.fail", kinds)
         self.assertIn("land.fail", kinds)
         self.assertNotIn("land.pass", kinds)
+
+
+class LandStatus(LandBase):
+    """狀態檔:這一批每一張票各一份 `reports/t<票號>-status.json`(D-010)。
+
+    讀它的人手上有的是**票號**,不是這一批的時間戳 —— 所以一張票一份,不是一批一份。
+    """
+
+    def status(self, ident):
+        import json
+        return json.loads(self.read(os.path.join("reports", "t%s-status.json" % ident)))
+
+    def test_every_ticket_in_the_batch_gets_its_own_done_status(self):
+        first = self.branch_for(1, "t1-first")
+        self.commit_in(first, "src/a1", "第一張")
+        second = self.branch_for(2, "t2-second")
+        self.commit_in(second, "src/b1", "第二張")
+
+        done = self.land("t1-first", "t2-second")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        for ident in ("1", "2"):
+            data = self.status(ident)
+            self.assertEqual(data["state"], "done", "#%s 停在 running" % ident)
+            self.assertEqual(data["rc"], 0)
+            self.assertEqual(data["kind"], "land")
+            self.assertEqual(data["ticket"], ident)
+
+
+class LandStatusWhenRed(LandBase):
+    # 這一支假閘門除了標記檔,還在 worktree 裡留一份真的像 unittest 輸出的 log ——
+    # 紅榜是從那一份剖出來的,所以演練要餵它真的形狀,不是一句「紅了」。
+    gate_stub = """#!/bin/sh
+echo "gate $* $(git rev-parse --short HEAD)" >> "$AC_TEST_LOG"
+cat > gate.log <<'LOG'
+======================================================================
+FAIL: test_it (test_thing.T.test_it)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/sandbox/tests/test_thing.py", line 9, in test_it
+    self.assertEqual(1, 2)
+AssertionError: 1 != 2
+
+----------------------------------------------------------------------
+Ran 1 test in 0.001s
+
+FAILED (failures=1)
+LOG
+echo "FAILED (假的紅)"
+exit 1
+"""
+
+    def test_a_red_land_writes_the_red_list_and_says_where_to_look(self):
+        """**變異**:把紅的那條路上的 `status_all done 1` 拿掉 → 這一條紅。
+
+        理由:停在 `running` 的狀態檔與**還在跑**的狀態檔長得一模一樣,而下一個
+        agent 分不出來時,它會回去做這一份檔本來要取代的那兩件事(讀整份 log、
+        或輪詢等它跑完)。
+        """
+        import json
+        good = self.branch_for(1, "t1-good")
+        self.commit_in(good, "src/g1", "有 commit 的那一張")
+
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("reports/t<票號>-status.json", done.stdout,
+                      "紅了要告訴人去哪裡看")
+        data = json.loads(self.read(os.path.join("reports", "t1-status.json")))
+        self.assertEqual(data["state"], "done")
+        self.assertEqual(data["rc"], 1)
+        self.assertEqual([row["case"] for row in data["failures"]],
+                         ["test_thing.T.test_it"])
+        self.assertIn("AssertionError: 1 != 2", data["failures"][0]["excerpt"])
 
 
 if __name__ == "__main__":

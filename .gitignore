@@ -10,3 +10,5 @@ __pycache__/
 *.pyc
 # 票與事件寫檔時的暫存(寫完 os.replace,留下來的是當機的殘骸)
 *.tmp[0-9]*
+# 閘門與落地寫的狀態檔(`scripts/status.py`):事實的紀錄,不是原始碼
+reports/

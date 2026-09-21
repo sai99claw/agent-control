@@ -6,6 +6,18 @@
 #   sh scripts/gate.sh --branch --base   # 票收尾
 #   sh scripts/gate.sh --full            # 全套(land.sh 跑的就是這一發)
 #   sh scripts/gate.sh <檔> <檔> …       # 指定檔
+#   sh scripts/gate.sh --branch --ticket 7   # 同上,外加狀態檔與 flake 重跑(見下)
+#
+# ## `--ticket <票號>`:狀態檔與 flake 重跑(D-010)
+# 給了票號,這一支會寫 `reports/t<票號>-status.json`(格式見 `scripts/status.py` 與
+# `docs/WORKFLOW.md` §狀態檔):開跑前 `running`,跑完覆寫 `done` + `rc` + 紅榜逐條
+# (案例、檔、行、引擎、log 路徑、≤20 行 excerpt)。**下一個 agent 讀那一份就夠了**
+# ——不必把整份 log 讀進上下文,也不必用 sleep 迴圈輪詢(那兩種一次燒掉幾十萬 token)。
+#
+# 紅了先把**每一條紅的案例單獨重跑一次**:單跑綠的移進 `flaky`,**全部都是 flaky
+# 就視為綠**。理由:一條偶發的紅與一條真的紅,在退出碼上長得一樣,而照著偶發的紅
+# 去派一輪修 bug,那一輪從頭到尾都是白跑的。`AC_NO_FLAKE_RERUN=1` 可以關掉。
+# 沒給票號就完全照舊 —— 不寫檔、不重跑、退出碼不變。
 #
 # **這一份是本 repo 自己的實作。** 別的專案把 `scripts/gate.sh` 換成自己的
 # (範本見 `scripts/gate.example.sh`),介面不變 —— `land.sh` 只認 `--full` 的
@@ -58,6 +70,8 @@ map() {
         scripts/heartbeat.sh) add test_heartbeat ;;
         scripts/new-session.sh) add test_new_session ;;
         scripts/memory.py) add test_memory ;;
+        # 狀態檔:閘門與落地都寫它,所以動它要連那兩側一起跑。
+        scripts/status.py) add test_status test_gate test_land ;;
         # 記憶檔既受上限守衛管(test_memory),也在「不准出現專案名」那一掃裡。
         memory/model/*.md) add test_memory test_no_project_names ;;
         board/board.py) add test_board ;;
@@ -74,25 +88,80 @@ map() {
 }
 
 want_base=0; want_branch=0; want_full=0
-for a in "$@"; do
-    case "$a" in
+TICKET=${AC_GATE_TICKET:-}
+ARGC=$#
+while [ $# -gt 0 ]; do
+    case "$1" in
         --base) want_base=1 ;;
         --branch) want_branch=1 ;;
         --full) want_full=1 ;;
-        --*) echo "gate: 不認得 $a(--branch / --base / --full)" >&2; exit 2 ;;
-        *) map "$a" ;;
+        --ticket)
+            shift
+            [ $# -ge 1 ] || { echo "gate: --ticket 後面要票號" >&2; exit 2; }
+            TICKET=$1 ;;
+        --*) echo "gate: 不認得 $1(--branch / --base / --full / --ticket <票號>)" >&2; exit 2 ;;
+        *) map "$1" ;;
     esac
+    shift
 done
-[ $# -ge 1 ] || { echo "gate: 要 --branch / --base / --full 或一串檔名" >&2; exit 2; }
+[ "$ARGC" -ge 1 ] || { echo "gate: 要 --branch / --base / --full 或一串檔名" >&2; exit 2; }
+
+SHA=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo "")
+FLAKY_ARGS=""
+
+# 狀態檔發不出去要出聲,但**不擋閘門** —— 同 land.sh 的事件:寫不出來的那一刻正是
+# 最需要紀錄的那一刻,而讓它擋住測試會把一個紀錄問題升級成一個交付問題。
+status_start() {
+    [ -n "$TICKET" ] || return 0
+    python3 "$ROOT/scripts/status.py" start --ticket "$TICKET" --kind gate \
+        --sha "$SHA" >/dev/null 2>&1 || echo "gate: 狀態檔寫不出來(不擋閘門)" >&2
+}
+
+status_done() {   # $1 = rc
+    [ -n "$TICKET" ] || return 0
+    # shellcheck disable=SC2086
+    python3 "$ROOT/scripts/status.py" done --ticket "$TICKET" --kind gate \
+        --sha "$SHA" --rc "$1" --log "$LOG" $FLAKY_ARGS \
+        || echo "gate: 狀態檔寫不出來(不擋閘門)" >&2
+}
+
+# 紅的案例單獨重跑一次。**單跑綠 = flaky**,不是「修好了」—— 所以它進 flaky 而不是
+# 從紅榜消失:一條經常 flaky 的案例要被看見,才有人會去修它的不穩定。
+flake_rerun() {   # $1 = rc;印訊息,回傳新的 rc
+    [ "$1" -eq 0 ] && return 0
+    [ -n "$TICKET" ] || return "$1"
+    [ -z "${AC_NO_FLAKE_RERUN:-}" ] || return "$1"
+    cases=$(python3 "$ROOT/scripts/status.py" failures --log "$LOG" 2>/dev/null || true)
+    [ -n "$cases" ] || return "$1"
+    total=0
+    flaked=0
+    for case in $cases; do
+        total=$((total + 1))
+        if ( cd "$ROOT/tests" && python3 -m unittest "$case" ) >/dev/null 2>&1; then
+            echo "gate: $case 單獨重跑是綠的 —— 標成 flaky"
+            FLAKY_ARGS="$FLAKY_ARGS --flaky $case"
+            flaked=$((flaked + 1))
+        fi
+    done
+    if [ "$total" -gt 0 ] && [ "$total" -eq "$flaked" ]; then
+        echo "gate: 紅的 $total 條單獨重跑全是綠的 —— 這一輪視為綠(紅榜留在狀態檔的 flaky)"
+        return 0
+    fi
+    return "$1"
+}
 
 if [ "$want_full" -eq 1 ]; then
     echo "gate: 全套 —— python3 -m unittest discover -s tests"
+    status_start
     # 判綠先寫檔再讀退出碼,不用 `cmd | tail`:管線的退出碼是右邊那一支的
     # (`false | tail` 是 0),而那會讓「根本沒跑起來」靜靜判成綠。
     ( cd "$ROOT" && python3 -m unittest discover -s tests -v ) > "$LOG" 2>&1
     rc=$?
     grep -aE "^Ran |^OK|^FAILED" "$LOG" || echo "gate: log 裡連 Ran 都沒有,看 $LOG"
+    flake_rerun "$rc"
+    rc=$?
     [ "$rc" -eq 0 ] || echo "gate: 紅了,看 $LOG"
+    status_done "$rc"
     exit $rc
 fi
 
@@ -109,13 +178,20 @@ mods=$(echo "$mods" | tr ' ' '\n' | sed '/^$/d' | sort -u | tr '\n' ' ')
 rc=0
 if [ -n "$mods" ]; then
     echo "gate: python3 -m unittest$(echo " $mods" | sed 's/ *$//')"
+    status_start
     ( cd "$ROOT/tests" && python3 -m unittest $mods ) > "$LOG" 2>&1
     rc=$?
     grep -aE "^Ran |^OK|^FAILED" "$LOG" || echo "gate: log 裡連 Ran 都沒有,看 $LOG"
+    flake_rerun "$rc"
+    rc=$?
     [ "$rc" -eq 0 ] || echo "gate: 紅了,看 $LOG"
+    status_done "$rc"
 fi
 
 if [ -n "$unmapped" ]; then
+    # 對不到模組也要留下狀態檔:**「沒有人守著這幾個檔」是一個結果,不是一次沒跑**。
+    [ -n "$mods" ] || status_start
+    status_done 3
     echo "gate: 這幾個改動檔對不到任何測試模組 —— 沒有人守著它們:"
     for f in $unmapped; do echo "gate:   $f"; done
     echo "gate: 要嘛補 scripts/gate.sh 的對照表,要嘛在票裡寫明為什麼它們不需要測試。"

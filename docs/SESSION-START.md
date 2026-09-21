@@ -9,15 +9,14 @@
 
 ## 主線
 - 看收件匣 `python3 scripts/ticket.py inbox`:使用者填過的裁示要落成 `docs/DECISIONS.md` 一列。
-- 檢查 `scripts/heartbeat.sh`:上一個排程器 / land 有沒有死在半路(有的話清 worktree、把票狀態對回事實)。
+- 檢查 `scripts/heartbeat.sh`:上一個 session / land 有沒有死在半路(有的話清 worktree、把票狀態對回事實)。
 - 用一句話跟使用者說現況。
 
-## 排程器
-- 只讀:票、`allowed_write_paths`、主線 HEAD。
-- 產出一行:「可平行:#a #b;序列:#c → #d;理由:…」,發事件 `schedule.proposed`。
-- **不派工、不落地、不寫文件。**
+## 開題者
+- 只讀:使用者原話、repo 的設計文件與裁示、自己派的子工作者交回的數字。
+- 產出:一張完整票面(驗收 = 測試計畫)+ 給主線的 300 字摘要與建議順序。開完就結束。
 
-## Worker / Reviewer
+## Worker / 驗證者
 - 讀派工文裡指定的副本路徑;先 `ls` 確認 `work/`、`base/` 都在。
 - 讀 `docs/DISPATCH-TEMPLATE.md` §禁區與 §假綠家族。
 - 開工發 `ticket.attempt.start`,交付發 `ticket.attempt.done`(附 patch 路徑)。
@@ -29,5 +28,5 @@
 
 ## 角色卡(2026-09-13 起)
 開場除了模型記憶,再讀 `memory/role/<role>.md`。派工 prompt 不重貼規則,只指路 + 四件票獨有的事。
-主線是溝通者(不查 code、不改票面、不驗證、不逐則轉述);開題者可派子工作者搜集;調度員只排序 + git 腳本;
-覆核者讀證據帳、只重播最關鍵一兩條。細節見 `memory/role/README.md`。
+主線是溝通者(不查 code、不改票面、不驗證、不逐則轉述),順序也由它決定(**沒有調度員這個角色**,D-010);
+開題者可派子工作者搜集;驗證者只寫案例、證明案例是對的、登記標籤,不判 PASS/FAIL。細節見 `memory/role/README.md`。

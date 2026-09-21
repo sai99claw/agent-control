@@ -36,7 +36,7 @@ sh -c "python3 \"$ROOT/scripts/memory.py\" check" || echo "new-session: (超過�
 if [ "$ROLE" = "main" ]; then
     say "5. 收件匣:使用者填過的裁示要落成 docs/DECISIONS.md 一列"
     python3 "$ROOT/scripts/ticket.py" inbox
-    say "6. 心跳:上一個排程器 / land 有沒有死在半路"
+    say "6. 心跳:上一個 session / land 有沒有死在半路"
     sh "$ROOT/scripts/heartbeat.sh" || true
 fi
 
@@ -52,9 +52,13 @@ case "$ROLE" in
         echo "  CLAUDE.md                不可違反的那幾條"
         echo "  docs/TODO.md             §1 還沒打勾的"
         ;;
-    scheduler)
-        echo "  docs/ROLES.md            §排程器:只提案,不派工、不落地、不寫文件"
-        echo "  票的 allowed_write_paths 判平行用的就是這一格"
+    opener)
+        echo "  docs/ROLES.md            §開題者:寫完整票面(驗收 = 測試計畫),開完就結束"
+        echo "  docs/VERIFICATION.md     §測試計畫:每條驗收一列,期望值來源要獨立於被測程式"
+        ;;
+    verifier)
+        echo "  docs/ROLES.md            §驗證者:只寫案例、證明案例是對的,不判 PASS/FAIL、無 VERDICT"
+        echo "  docs/VERIFICATION.md     §回歸層:TAGS 要登記,票的 verify 欄要寫怎麼跑"
         ;;
     *)
         echo "  docs/DISPATCH-TEMPLATE.md  §禁區 與 §5.5 假綠家族"

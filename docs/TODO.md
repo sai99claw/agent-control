@@ -15,7 +15,7 @@
 - [x] `scripts/event.py`:emit / tail / grep;事件種類是一張固定的表,未知的拒收
 - [x] `scripts/land.sh`:0 commit 拒絕、`base_sha` 檢查、寫入範圍檢查、先印再做
 - [x] `scripts/gate.sh` 介面(專案實作)+ 範例(`scripts/gate.example.sh`);對不到模組要出聲且非零
-- [x] `scripts/heartbeat.sh`:排程器 / land / attempt 的租約與死亡偵測、land worktree 殘骸
+- [x] `scripts/heartbeat.sh`:session / land / attempt 的租約與死亡偵測、land worktree 殘骸
 - [x] `board/board.py`:抽出、去專案名、讀 `board/config.json`;agent 時間線與「哪些保證還只在演練裡成立」(`docs/REHEARSAL.md`)
 - [x] 決策收件匣填完自動發事件(`decision.answered`;主線用 `ticket.py inbox` 讀,它拿 `docs/DECISIONS.md` 判哪些還沒落成裁示)
 - [x] `scripts/memory.py check|consolidate`:量每份必讀記憶檔的字元數對 front matter 的 `cap_chars`(預設 2000),超過就發 `memory.over_cap` 並開整理票;`consolidate` 必須帶 `--discussion <path>`(D-007),提高上限要有理由(D-006)
@@ -24,7 +24,8 @@
 
 ## 2. 第二版
 - [ ] 控制台加 `?key=` + cookie 驗證(`board/config.json` 多一格 `key_file`);v0.1 只綁 127.0.0.1
-- [ ] 排程器做成腳本(讀 `allowed_write_paths` 算衝突圖),不用模型
+- [ ] 排序做成腳本(讀 `allowed_write_paths` 算衝突圖)**提案**給主線,不用模型 —— 調度員這個角色已退場(D-010),這一格是它留下來的那一成機械工作
+- [ ] 落地器紅了自動起新 worker(headless `claude -p`,三輪上限):規格在 `docs/WORKFLOW.md` §回歸紅了之後,腳本還沒做
 - [ ] 推測性佇列(H+A 與 H+A+B 同時驗)
 - [ ] token 歸因:Claude Code 不給資料,先顯示「未知」,不估
 - [ ] 產品功能地圖

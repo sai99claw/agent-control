@@ -17,4 +17,6 @@
 | `scripts/memory.py check` 開的整理票 | 下一次某份 `memory/model/<model>.md` 真的超過上限 | 事件 `memory.over_cap`、票開出來一次(**第二次跑不再開第二張**) |
 | `scripts/memory.py consolidate` 的討論檔必填(D-007) | 下一次真的要整理一份記憶 | 沒有 `--discussion` 直接拒絕;討論檔沒有結論區是**另一句話** |
 | `scripts/heartbeat.sh` 的租約到期 | 下一次有 session 或 land 真的死在半路 | 指名那一筆 start、已經幾秒、租約幾秒,並說出處置 |
+| `scripts/gate.sh --ticket` 的 flake 重跑 | 下一次真閘門紅在一條偶發的案例上 | 印「<案例> 單獨重跑是綠的 —— 標成 flaky」,`reports/t<n>-status.json` 的 `flaky` 有它、`failures` 沒有它;**全 flaky 時 rc 才是 0** |
+| `scripts/land.sh` 的 `reports/t<n>-status.json` | 下一次真的落地一批票(綠或紅都算) | 批次裡**每一張票各一份**檔,`state=done`、`kind=land`、rc 對得上落地的結果;紅的那一次 `failures` 逐條有案例名與 excerpt |
 | `board/board.py` 的收件匣儲存 | 下一次使用者在網頁上填一則裁示 | `answers.jsonl` 多一行、事件多一筆 `decision.answered`、**票的狀態一個字都沒變** |

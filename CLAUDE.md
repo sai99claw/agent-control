@@ -13,7 +13,7 @@
 - **每個動作要發事件**(`scripts/event.py emit`),控制台只認事件。沒發事件的事,對系統而言沒發生。
 - **落地只走 `scripts/land.sh`**,它會拒絕該拒絕的(0 commit、基準版本過期、寫入範圍越界)。不准手動 merge 進主線。
 - **實作 agent 在副本裡工作、交 patch**,禁一切 git 寫入;規矩在 `docs/DISPATCH-TEMPLATE.md`,派工時整份給它。
-- **發版永遠是人授權、主線執行**;排程器與 worker 不碰。
+- **發版永遠是人授權、主線執行**;worker 與驗證者不碰。
 - **裁示進 `docs/DECISIONS.md`**,一列一條,附來源原話。半成品、未驗證、讀 code 推的,都要標出來。
 
 ## 每個 session 結束前

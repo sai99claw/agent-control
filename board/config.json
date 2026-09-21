@@ -3,13 +3,17 @@
   "tickets_dir": "tickets",
   "events_file": "board/events.jsonl",
   "answers_file": "board/answers.jsonl",
+  "reports_dir": "reports",
   "health_urls": {},
   "routing": {
     "main": "fable",
+    "open": "fable",
     "design": "fable",
     "bug": "fable",
-    "implement": "opus",
-    "schedule": "sonnet",
+    "implement": "codex:gpt-5.6-sol",
+    "implement_browser": "opus",
+    "verify": "sonnet",
+    "second_opinion": "agy:gemini-3.8-flash-high",
     "discuss": "agy:gemini-3.8-flash-high"
   },
   "memory": {
@@ -23,7 +27,8 @@
     "inbox_suffix": ".inbox.md"
   },
   "lease_seconds": {
-    "scheduler": 900,
+    "opener": 900,
+    "verifier": 3600,
     "land": 1800,
     "worker": 7200
   }

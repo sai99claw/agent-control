@@ -41,18 +41,18 @@ class Heartbeat(Sandbox):
     def test_a_session_past_its_lease_with_no_end_is_named(self):
         """**變異**:把 `age > lease` 改成 `age > lease * 100` → 這一條紅。"""
         self.events_file({"ts": ago(3600), "kind": "session.start", "pid": 4242,
-                          "role": "scheduler", "model": "sonnet"})
+                          "role": "opener", "model": "fable"})
         done = self.beat()
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("租約到期還沒回來", done.stdout)
         self.assertIn("pid=4242", done.stdout)
-        self.assertIn("role=scheduler", done.stdout)
+        self.assertIn("role=opener", done.stdout)
         self.assertIn("租約 900 秒", done.stdout)
 
     def test_a_session_still_inside_its_lease_is_left_alone(self):
         """「還在跑」與「死了」的差別只有時間 —— 所以時間之內的不准被點名。"""
         self.events_file({"ts": ago(60), "kind": "session.start", "pid": 4242,
-                          "role": "scheduler", "model": "sonnet"})
+                          "role": "opener", "model": "fable"})
         done = self.beat()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("4242", done.stdout)

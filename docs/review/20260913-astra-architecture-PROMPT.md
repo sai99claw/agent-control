@@ -1,3 +1,7 @@
+> **歷史文件(2026-09-13 的快照)。** 裡面講的「調度員 / dispatcher / 排程器」這個角色
+> **2026-09-21 已整個退場**(`docs/DECISIONS.md` D-010):順序由主線決定,紅了由落地器自動派新 worker。
+> 這一份保留原文,不要拿它當現行規範。
+
 你是「agent-control」(一套讓多個 AI agent 協作開發軟體的規範與工具:票系統、調度員 session、落地腳本、模型私有記憶、看板)的架構審稿人(Codex gpt-6-astra)。唯讀:只讀 ./work(repo 乾淨副本)、./TABBY-LESSONS.md(第一個使用它的專案 tabby_pool 三天內的裁示 D-G112/D-G113 與派工路由)、./DISPATCHER-STATE-SAMPLE.md(真實的調度員交接檔樣本)。不改檔、不跑 git、不連網。用繁體中文,輸出寫到 ./REVIEW.md,回覆時貼「P1」與「建議改善的前五件」。
 
 先讀 work/README.md、work/docs/DESIGN.md、ROLES.md、WORKFLOW.md、SESSION-START.md、MEMORY.md、CODE-MAP.md、DISCUSSION.md、DISPATCH-TEMPLATE.md、REHEARSAL.md、TODO.md、DECISIONS.md、tickets/SCHEMA.md、scripts/*.sh、scripts/*.py、board/board.py、tests/。

@@ -4,7 +4,7 @@
 #   sh scripts/heartbeat.sh
 #
 # 主線 session 開頭跑這一支(`docs/SESSION-START.md`)。它回答一個問題:
-# **上一個排程器 / land / worker 是不是死在半路了?**
+# **上一個 session / land / worker 是不是死在半路了?**
 #
 # 為什麼需要它:協調者自己會撞額度(`docs/DESIGN.md` 主線審稿第 3 點 —— 一天內三個
 # 模型都撞過),而**一個撞了額度靜停的 session,與一個正在思考的 session,在事件檔上

@@ -30,7 +30,7 @@ KINDS = (
     "ticket.created", "ticket.state", "ticket.frozen", "ticket.closed",
     # 一次派工的三種結局。attempt 對不上的遲到回報要能被認出來(SCHEMA §執行)。
     "ticket.attempt.start", "ticket.attempt.done", "ticket.attempt.failed",
-    # 排程器只提案(docs/ROLES.md),所以它只有這一種事件。
+    # 排順序只是提案(docs/ROLES.md:沒有調度員這個角色),所以它只有這一種事件。
     "schedule.proposed",
     # 閘門。綠是對某一個 base_sha 說的,所以 kv 要帶 sha。
     "gate.start", "gate.pass", "gate.fail",
@@ -177,7 +177,7 @@ def one_line(row):
 
 EMIT_FLAGS = (
     ("--ticket", "票號"),
-    ("--role", "角色:main / scheduler / worker / reviewer / consolidator"),
+    ("--role", "角色:main / opener / worker / verifier / consolidator"),
     ("--model", "模型"),
     ("--attempt", "第幾次派工(遲到的回報對不上 attempt 就拒絕)"),
     ("--note", "一句給人看的話"),
