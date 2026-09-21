@@ -35,7 +35,7 @@ KINDS = (
     # 排順序只是提案(docs/ROLES.md:沒有調度員這個角色),所以它只有這一種事件。
     "schedule.proposed",
     # 閘門。綠是對某一個 base_sha 說的,所以 kv 要帶 sha。
-    "gate.start", "gate.pass", "gate.fail",
+    "gate.start", "gate.rerun", "gate.pass", "gate.fail",
     # 落地。refused 與 fail 分開:前者是「還沒開始就退回」,後者是「跑了、紅了」。
     "land.start", "land.refused", "land.pass", "land.fail",
     # 發版:人授權、主線執行。

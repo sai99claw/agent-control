@@ -251,6 +251,14 @@ class Rebase(ApplyBase):
         self.assertIn("+new", text)
         self.assertIn("一行前言", text, "重生出來的 diff 要是對今天的主線說的")
 
+    def test_a_ticket_without_base_sha_names_the_missing_field(self):
+        self.make("1", base_sha="")
+        done = self.apply("rebase", "1", self.patch_file("p.diff", CHANGE))
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("票 #1 缺 base_sha", done.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.home, "repo-wt", "rebase-t1")),
+                         "答不出原 patch 的版本時不該先做一份看似可用的副本")
+
     def test_the_rebuilt_diff_applies_cleanly_through_the_normal_entry(self):
         """重生的 diff 要**能餵回這一支自己** —— 不然它只是一個好看的檔。"""
         self.make("1")
