@@ -18,9 +18,9 @@
   "model": "codex:gpt-5.6-sol",
   "tool": "codex",
   "attempt": 0,
-  "base_sha": "2969fa0e33afd897308839934a194d86c4c6789a",
+  "base_sha": "cdf2328bfa63bb2dcf7f1b7d3b2117ff2684ec9a",
   "state": "Ready",
-  "state_version": 2,
+  "state_version": 3,
   "lease": null,
   "retry_limit": 2,
   "verify": {
