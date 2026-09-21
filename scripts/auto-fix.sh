@@ -27,7 +27,10 @@
 #   0 綠了(停在等覆核)   1 三輪耗盡仍紅   2 用法 / 沒有狀態檔可讀
 #   3 worker 提反駁       4 failures 沒有歸因   5 worker 沒交出可用的 patch
 set -u
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# `AC_ROOT` 優先:被 `gate.sh --auto-fix` 叫到的時候,這支檔案住在**副本**裡,
+# 而票、reports 與收件匣住在主 repo。照 `$0` 算根會把它們寫進一個等一下會被
+# 收掉的目錄 —— 而且不會報錯。
+ROOT=${AC_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}
 export AC_ROOT=$ROOT
 
 cfg() {   # $1 = key(巢狀用 a.b)  $2 = 預設

@@ -25,7 +25,10 @@
 #   3 檔頭不合格或 `--check` 不過(rebase 那一支的 `.rej`≠0 也是 3)
 #   4 套完的比對不過         5 動到 `allowed_write_paths` 以外
 set -u
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# `AC_ROOT` 優先:被 `gate.sh --auto-fix` 叫到的時候,這支檔案住在**副本**裡,
+# 而票、reports 與收件匣住在主 repo。照 `$0` 算根會把它們寫進一個等一下會被
+# 收掉的目錄 —— 而且不會報錯。
+ROOT=${AC_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}
 
 cfg() {   # $1 = key  $2 = 預設;巢狀用 a.b
     python3 - "$ROOT" "$1" "$2" <<'PY'

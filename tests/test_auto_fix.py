@@ -310,6 +310,27 @@ class TheWholeLoop(AutoFixBase):
                          "auto-fix 不准自己蓋覆核那一格")
         self.assertTrue(os.path.isdir(wt))
 
+    def test_the_gate_hook_dispatches_against_the_main_repo_not_the_worktree(self):
+        """`gate.sh --branch --ticket n --auto-fix` 在**副本**裡跑,而票、reports 與
+        收件匣住在主 repo。照 `$0` 算根的話,這一輪的結果會寫進一個等一下就被收掉的
+        目錄 —— **而且不會報錯**。
+
+        **變異**:把 `auto-fix.sh` 的 `ROOT=${AC_ROOT:-…}` 改回只看 `$0` → 這一條紅。
+        """
+        self.set_worker(WORKER_FIXES)
+        self.ticket_ready()
+        patch = self.write("p1.diff", RED_CASE, where=self.home)
+        self.assertEqual(self.run_sh("scripts/apply.sh", "1", patch).returncode, 0)
+        wt = os.path.join(self.home, "repo-wt", "t1")
+        done = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
+                           "--branch", "--ticket", "1", "--auto-fix", cwd=wt,
+                           env=self.env(AC_ROOT=self.repo))
+        self.assertNotEqual(done.returncode, 0,
+                            "閘門自己的 rc 不因為下一輪修好了而變綠")
+        self.assertEqual(self.worker_rounds(), ["worker ran round 2"], done.stdout)
+        self.assertEqual(self.load_ticket("1")["state"], "InReview")
+        self.assertIn("等覆核", self.inbox_list())
+
     def test_three_red_rounds_end_as_blocked_and_owned_by_main(self):
         """**三輪耗盡不是一句話,是一個狀態轉換**(D-014):
         「報了」與「沒報」以前在票上長得一樣。"""
