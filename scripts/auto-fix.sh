@@ -286,17 +286,20 @@ PY
 
     echo "auto-fix: 起第 $r 輪的 worker —— $WORKER_CMD(cwd $FIX,派工文從 stdin 餵)"
     ev ticket.attempt.start --ticket "$ID" --attempt "$r" --note "auto-fix 第 $r 輪"
-    python3 - "$WORKER_CMD" "$DISPATCH" "$FIX" "$WORKER_TIMEOUT" "$ID" "$r" <<'PY'
+    WORKER_LOG=$(dirname "$DISPATCH")/worker-round$r.log
+    ev agent.start --ticket "$ID" --model "$MODEL" \
+        --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix
+    WRC=$(python3 - "$WORKER_CMD" "$DISPATCH" "$FIX" "$WORKER_TIMEOUT" "$ID" "$r" "$WORKER_LOG" <<'PY'
 import subprocess, sys
-cmd, dispatch, cwd, timeout, ident, r = sys.argv[1:7]
+cmd, dispatch, cwd, timeout, ident, r, log_path = sys.argv[1:8]
 env_extra = {"AC_DISPATCH": dispatch, "AC_TICKET": ident, "AC_ROUND": r, "AC_WORK": cwd}
 import os
 env = dict(os.environ)
 env.update(env_extra)
 try:
-    with open(dispatch, encoding="utf-8") as handle:
+    with open(dispatch, encoding="utf-8") as handle, open(log_path, "w", encoding="utf-8") as log:
         done = subprocess.run(cmd, shell=True, cwd=cwd, env=env, stdin=handle,
-                              timeout=float(timeout))
+                              stdout=log, stderr=subprocess.STDOUT, timeout=float(timeout))
     rc = done.returncode
 except subprocess.TimeoutExpired:
     sys.stderr.write("auto-fix: worker 超過 %s 秒還沒回來 —— 當它沒交\n" % timeout)
@@ -304,9 +307,16 @@ except subprocess.TimeoutExpired:
 except OSError as exc:
     sys.stderr.write("auto-fix: worker 起不來 —— %s\n" % exc)
     rc = 127
-sys.exit(0 if rc == 0 else 1)
+print(rc)
 PY
-    WRC=$?
+)
+    if [ "$WRC" -eq 0 ]; then
+        ev agent.done --ticket "$ID" --model "$MODEL" \
+            --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix
+    else
+        ev agent.failed --ticket "$ID" --model "$MODEL" \
+            --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix
+    fi
     [ "$WRC" -eq 0 ] || echo "auto-fix: worker 自己回非零 —— 還是看它交了什麼,不看它說什麼"
 
     PATCH_OUT=$FIX/patch-round$r.diff

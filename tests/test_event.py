@@ -139,11 +139,12 @@ class KindTable(unittest.TestCase):
                      "ticket.created", "ticket.state", "ticket.frozen", "ticket.closed",
                      "ticket.attempt.start", "ticket.attempt.done",
                      "ticket.attempt.failed", "schedule.proposed",
+                     "agent.start", "agent.done", "agent.failed",
                      "gate.start", "gate.pass", "gate.fail",
                      "land.start", "land.refused", "land.pass", "land.fail",
                      "release.start", "release.pass", "release.fail",
                      "decision.asked", "decision.answered",
-                     "memory.over_cap", "memory.consolidated"):
+                     "memory.over_cap", "memory.consolidated", "memory.noted"):
             self.assertIn(kind, event.KINDS)
 
     def test_the_table_has_no_duplicates(self):
