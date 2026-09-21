@@ -50,6 +50,27 @@ class NewSession(Sandbox):
         self.assertIn("等你裁決的", done.stdout)
         self.assertIn("沒有到期的租約", done.stdout)
 
+    def test_the_opening_prints_the_terminal_state_inbox(self):
+        """主線開場讀一次收件匣,之後只在被通知時讀 —— **不輪詢**(D-015)。"""
+        self.make_ticket(1)
+        self.run_py("scripts/inbox.py", "post", "--ticket", "1", "--run-id", "r1",
+                    "--kind", "gate", "--state", "閘門紅", "--what", "看紅榜",
+                    "--where", "reports/t1/r1/status.json")
+        done = self.start("main", "fable")
+        self.assertIn("閘門紅", done.stdout, "跑完的事沒有在開場出現 = 沒有人會去看")
+        self.assertIn("reports/inbox/", done.stdout)
+
+    def test_the_opening_does_not_leak_a_shell_error(self):
+        """🩸 反引號在雙引號裡是**命令替換**:那一行在乾淨 clone 裡吐出
+        `command substitution: syntax error`,而畫面上其他每一段都正常 ——
+        一個 session 的第一印象因此是「這份東西壞的」。
+
+        **變異**:把那一行的單引號改回雙引號加反引號 → 這一條紅。
+        """
+        done = self.start("main", "fable")
+        for noise in ("syntax error", "command not found", "command substitution"):
+            self.assertNotIn(noise, done.stdout + done.stderr, "開場吐了 shell 的錯")
+
     def test_memory_over_cap_does_not_stop_the_session(self):
         """退出碼 1 只是讓這個 session 知道自己的記憶該整理了 —— **不停工**
         (docs/MEMORY.md 第 1 點)。

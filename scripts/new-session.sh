@@ -48,7 +48,10 @@ say "發事件:控制台從此看得到你"
 python3 "$ROOT/scripts/event.py" emit session.start --role "$ROLE" --model "$MODEL"
 
 say "接下來要讀的(照順序)"
-echo "  reports/inbox/           上面印的那幾則(`inbox.py show <票號>` 讀一頁)"
+# 反引號在雙引號裡是**命令替換**,不是引用 —— 這一行以前在乾淨 clone 裡吐出
+# 「command substitution: syntax error」。單引號的 echo 不會。
+echo '  reports/inbox/           上面印的那幾則(inbox.py show <票號> 讀一頁)'
+
 echo "  docs/HANDOFF.md          最後三節 —— 上一個 session 留給你的"
 echo "  docs/SESSION-START.md    你這個角色($ROLE)那一節"
 echo "  memory/model/$MODEL.md   你這個模型在這個專案踩過的坑"
