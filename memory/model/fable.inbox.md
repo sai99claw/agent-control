@@ -1,0 +1,1 @@
+- 派工基底寫明確的 commit sha,不寫 HEAD;派工文建好之後再往同一 repo 提交,worker 的 archive 就對不上 (#5) (#5, 2026-09-22, main@fable)
