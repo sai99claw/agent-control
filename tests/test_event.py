@@ -140,7 +140,7 @@ class KindTable(unittest.TestCase):
                      "ticket.attempt.start", "ticket.attempt.done",
                      "ticket.attempt.failed", "schedule.proposed",
                      "agent.start", "agent.done", "agent.failed",
-                     "gate.start", "gate.pass", "gate.fail",
+                     "gate.start", "gate.rerun", "gate.pass", "gate.fail",
                      "land.start", "land.refused", "land.pass", "land.fail",
                      "release.start", "release.pass", "release.fail",
                      "decision.asked", "decision.answered",

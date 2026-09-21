@@ -161,6 +161,21 @@ cmd_rebase() {
     ident=$1
     patch_file=$2
     out=${3:-}
+    tf=$TDIR/$ident.json
+    [ -f "$tf" ] || { echo "apply: 找不到票 #$ident($tf)" >&2; exit 2; }
+    base=$(python3 - "$tf" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        print(json.load(handle).get("base_sha") or "")
+except (OSError, ValueError):
+    print("")
+PY
+)
+    if [ -z "$base" ]; then
+        echo "apply: 票 #$ident 缺 base_sha —— 答不出原 patch 是對哪一版做的,不能 rebase" >&2
+        exit 2
+    fi
     [ -f "$patch_file" ] || { echo "apply: 找不到 patch $patch_file" >&2; exit 2; }
     patch_file=$(cd "$(dirname "$patch_file")" && pwd)/$(basename "$patch_file")
     [ -n "$out" ] || out=$ROOT/$(cfg reports_dir reports)/t$ident/patch-rebased.diff
@@ -171,6 +186,7 @@ cmd_rebase() {
     git -C "$ROOT" archive "$MAIN" | tar -x -C "$WORK/base" || {
         echo "apply: 取不出 $MAIN 的副本" >&2; exit 2; }
     cp -R "$WORK/base" "$WORK/work"
+    echo "apply: 票 #$ident patch base_sha=$base"
     echo "apply: 副本 $WORK(base = 當前主線 $(git -C "$ROOT" rev-parse --short "$MAIN"))"
     ( cd "$WORK/work" && patch -p1 -F 2 --no-backup-if-mismatch -i "$patch_file" ) \
         || echo "apply: patch 有幾塊沒進去(往下看 .rej)"

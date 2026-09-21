@@ -128,11 +128,13 @@ class AutoFixBase(Sandbox):
         super(AutoFixBase, self).setUp()
         self.worker_log = os.path.join(self.home, "worker.log")
 
-    def set_worker(self, body):
+    def set_worker(self, body, rerun_cmd=None):
         path = os.path.join(self.home, "fake-worker.sh")
         write_executable(path, body)
         conf = dict(DEFAULT_CONFIG)
         conf["worker"] = {"command": "sh %s" % path, "timeout_seconds": 120}
+        if rerun_cmd is not None:
+            conf["gate"] = {"rerun_cmd": rerun_cmd}
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
         return path
 
@@ -339,6 +341,7 @@ class TheWholeLoop(AutoFixBase):
         wt = self.first_round()
         done = self.auto_fix()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("沒有設 gate.rerun_cmd", done.stderr)
         self.assertEqual(self.worker_rounds(), ["worker ran round 2"])
         self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "2",
                          "第二輪的修補要進同一條分支")
@@ -350,6 +353,27 @@ class TheWholeLoop(AutoFixBase):
         self.assertNotIn("review", json.dumps(ticket.get("review") or {}),
                          "auto-fix 不准自己蓋覆核那一格")
         self.assertTrue(os.path.isdir(wt))
+
+    def test_a_configured_rerun_command_runs_after_apply_and_emits_an_event(self):
+        rerun = os.path.join(self.home, "fake-rerun.sh")
+        write_executable(rerun, """#!/bin/sh
+set -e
+grep -q 'assertEqual(1, 1)' tests/test_thing.py
+echo "rerun $AC_ROUND" >> "$AC_TEST_LOG"
+""")
+        self.set_worker(WORKER_FIXES, "sh %s" % rerun)
+        self.ticket_ready()
+        self.first_round()
+        done = self.auto_fix()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.worker_rounds(), ["worker ran round 2"])
+        with open(self.log, encoding="utf-8") as handle:
+            self.assertIn("rerun 2", handle.read())
+        rows = [row for row in self.events() if row["kind"] == "gate.rerun"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["ticket"], "1")
+        self.assertEqual(rows[0]["round"], "2")
+        self.assertTrue(rows[0]["run_id"])
 
     def test_the_gate_hook_dispatches_against_the_main_repo_not_the_worktree(self):
         """`gate.sh --branch --ticket n --auto-fix` 在**副本**裡跑,而票、reports 與

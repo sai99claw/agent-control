@@ -79,6 +79,7 @@ TICKETS=${AC_TICKETS_DIR:-$(cfg tickets_dir tickets)}
 case $TICKETS in /*) TDIR=$TICKETS ;; *) TDIR=$ROOT/$TICKETS ;; esac
 WORKER_CMD=$(cfg worker.command "claude -p --model opus")
 WORKER_TIMEOUT=$(cfg worker.timeout_seconds 3600)
+RERUN_CMD=$(cfg gate.rerun_cmd "")
 # 副本/worktree 的根:環境變數 > board/config.json 的 `worktree_dir`(相對 repo 根)> 預設 `../<repo>-wt`。
 WTBASE=${AC_WORKTREE_DIR:-$(cfg worktree_dir "")}
 case "$WTBASE" in "") WTBASE=$ROOT/../$(basename "$ROOT")-wt ;; /*) ;; *) WTBASE=$ROOT/$WTBASE ;; esac
@@ -373,12 +374,20 @@ PY
         return 1
     fi
 
-    echo "auto-fix: 第 $r 輪的閘門 —— (cd $WT && sh scripts/gate.sh --branch --ticket $ID)"
+    if [ -n "$RERUN_CMD" ]; then
+        gate_cmd=$RERUN_CMD
+    else
+        gate_cmd="sh scripts/gate.sh --branch --ticket $ID"
+        echo "auto-fix: 警告:沒有設 gate.rerun_cmd —— 退回 $gate_cmd" >&2
+    fi
+    echo "auto-fix: 第 $r 輪的閘門 —— (cd $WT && $gate_cmd)"
+    ev gate.rerun --ticket "$ID" --attempt "$r" --note "$gate_cmd" \
+        --kv run_id="$RUN_ID" --kv round="$r"
     # `AC_ROOT=$ROOT`:閘門在**副本**裡跑,但狀態檔與收件匣要寫回**主 repo**
     # —— 不然這一輪的結果留在一個等一下會被收掉的目錄裡,而讀它的人在主 repo。
     ( cd "$WT" && AC_ROOT=$ROOT AC_ROUND=$r AC_PATCH=$PATCH_OUT \
         AC_PREV_EVIDENCE=$EVIDENCE AC_IN_AUTOFIX=1 \
-        sh scripts/gate.sh --branch --ticket "$ID" )
+        sh -c "$gate_cmd" )
     grc=$?
     if [ "$grc" -eq 0 ]; then
         python3 "$AC/ticket.py" round "$ID" "$r" --green || true
