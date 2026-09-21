@@ -38,3 +38,19 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 - 排程器讀票的 `allowed_write_paths` 判平行;**不同檔不代表安全**,介面耦合要看票的 `interface_contracts`。
 - 兩支分支都往同一份文件尾巴附加(HANDOFF 那類)一定衝突:**先等對方進去再寫**,而不是寫完再解——解衝突時讀的是 diff,先等讀的是完整的檔。
 - 自動合成功不等於合對:land 輸出出現 `Auto-merging <文件>` 就把結果讀一遍。
+
+## 狀態檔(2026-09-21,D-G122)
+每次 gate / land / docs 開跑寫 `reports/t<n>-status.json` `{state:"running", kind, sha, started}`,跑完覆寫 `{state:"done", rc, report, logs:[…], failures:[{case, file, engine, log, line, excerpt}], flaky:[…]}`。failures 從 `^(FAIL|ERROR):` 與其後的 Traceback 擷取(excerpt ≤ 20 行)。agent 讀這一份就知道跑完了沒、錯了什麼、去哪看;不必看全套輸出。
+
+## 回歸紅了之後
+1. 紅的案例**單獨重跑一次**(同 worktree、同 commit);單跑綠的標 flaky 移出 failures;全 flaky → gate 視為綠,land 自動再跑一次全套(上限一次)。
+2. 真紅 → 落地器用 headless `claude -p` 起**新** worker:派工文 = 共用規矩 + 票面 + 目前 patch 路徑 + failures 逐條 excerpt + 上一輪 EVIDENCE + 「第 r 輪」;交回 `patch-round<r+1>.diff` 後自動 redo / land。
+3. 停下來報主線的三種情況:worker 標「票寫錯 / 需要裁示」;三輪仍紅;failures 裡有票沒動到的檔(疑似他票或環境)。
+4. 覆核不自動:主線讀 patch 記 review 後才 land。
+
+## 驗證者的案例怎麼進閘門
+票的 `verify.tags` 併進 `tags` 一起跑;land 前檢查 `verify.files` 都在分支上(#587 那把尺:patch 裡列的每個 `+++` 檔都要真的出現在 worktree)。驗證者不出 VERDICT;紅了照上一節走。
+
+## 派工的並行上限
+同時最多兩個會起瀏覽器的 agent;全套並跑時不再起瀏覽器型 agent(2026-09-20 旅程「11-batch」在滿載下紅五次,每次白跑一輪全套)。優先序改變時把低優先的 agent 停掉,不要讓它自己滾。
+
