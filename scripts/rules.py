@@ -125,6 +125,19 @@ def clip(text, budget, pointer):
     return "\n".join(kept + [mark]), True
 
 
+def model_card(root, model):
+    """模型記憶的檔名。路由表裡的模型帶著工具前綴(`codex:gpt-5.6-sol`),而記憶檔
+    的名字只有模型那一半 —— 指著一個永遠不存在的路徑,比不指路更糟:它看起來像
+    「那個模型還沒有記憶」。"""
+    if not model:
+        return ""
+    for name in (model, model.split(":")[-1]):
+        rel = os.path.join("memory", "model", "%s.md" % name)
+        if os.path.exists(os.path.join(root, rel)):
+            return rel
+    return os.path.join("memory", "model", "%s.md" % model.split(":")[-1])
+
+
 def read_text(path):
     try:
         with open(path, encoding="utf-8") as handle:
@@ -139,7 +152,7 @@ def pack(root, role, model, max_bytes, override=""):
     rel = os.path.relpath(path, root)
     found = blocks(path)
     card_rel = os.path.join("memory", "role", card_name)
-    model_rel = os.path.join("memory", "model", "%s.md" % model) if model else ""
+    model_rel = model_card(root, model)
 
     head = ["# 規則包:%s —— %s" % (role, one_line),
             "",

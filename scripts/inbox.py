@@ -134,9 +134,16 @@ PAGE = """# #%(ticket)s —— %(state)s
 
 def cmd_post(args):
     root = event.repo_root()
-    name = "%s-%s" % (args.ticket, args.run_id or "no-run")
     where = inbox_dir(root)
     os.makedirs(where, exist_ok=True)
+    # 同一輪可以有兩個終態(閘門綠了,接著 auto-fix 說「停在等覆核」)。同名會讓
+    # 後面那一頁**蓋掉**前面那一頁,而索引上兩列還指著同一個檔 —— 讀的人看到兩列、
+    # 打開是同一頁,分不出哪一列是真的。所以撞名就加序號。
+    stem = "%s-%s" % (args.ticket, args.run_id or "no-run")
+    name, serial = stem, 1
+    while os.path.exists(os.path.join(where, "%s.md" % name)):
+        serial += 1
+        name = "%s-%d" % (stem, serial)
     page = PAGE % {
         "ticket": args.ticket,
         "subject": subject_of(root, args.ticket),

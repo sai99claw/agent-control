@@ -114,6 +114,17 @@ class HowItAnswers(RulesBase):
         for role in ("worker", "verifier", "opener", "main"):
             self.assertIn(role, done.stdout)
 
+    def test_a_model_name_with_a_tool_prefix_still_finds_its_memory(self):
+        """路由表裡的模型帶著工具前綴(`codex:gpt-5.6-sol`),記憶檔只有模型那一半。
+        指著一個永遠不存在的路徑,比不指路更糟 —— 它看起來像「那個模型還沒有記憶」。
+
+        **變異**:把 `model_card` 的第二個候選拿掉 → 這一條紅。
+        """
+        done = self.rules("pack", "worker", "--model", "codex:opus")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("memory/model/opus.md", done.stdout)
+        self.assertNotIn("memory/model/codex:opus.md", done.stdout)
+
     def test_a_missing_model_memory_does_not_break_the_pack(self):
         """模型記憶還沒有的那個模型也要派得出工。"""
         done = self.rules("pack", "worker", "--model", "nobody")

@@ -57,6 +57,22 @@ class OnePage(InboxBase):
         self.assertTrue(self.exists(os.path.join("reports", "inbox", "7-r1.md")))
         self.assertTrue(self.exists(os.path.join("reports", "inbox", "7-r2.md")))
 
+    def test_two_terminal_states_in_one_run_do_not_share_a_page(self):
+        """同一輪可以有兩個終態(閘門綠了,接著 auto-fix 說「停在等覆核」)。
+
+        **變異**:把撞名加序號那一段拿掉 → 這一條紅(索引上兩列指著同一個檔,
+        而後寫的那一頁蓋掉了前一頁)。
+        """
+        self.make_ticket("7")
+        self.post(run="r1", state="閘門綠")
+        self.post(run="r1", state="第 2 輪綠了,等覆核")
+        rows = [json.loads(line) for line in self.read(
+            os.path.join("reports", "inbox", "index.jsonl")).splitlines() if line.strip()]
+        self.assertEqual(len({row["page"] for row in rows}), 2, "兩列指著同一頁")
+        for row in rows:
+            page = self.read(row["page"])
+            self.assertIn(row["state"], page)
+
     def test_posting_emits_an_event_so_the_board_sees_it(self):
         """控制台只認事件(D-003):沒發事件的事,對系統而言沒發生。"""
         self.make_ticket("7")
