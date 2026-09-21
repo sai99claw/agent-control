@@ -12,7 +12,8 @@
   "depends_on": [],
   "allowed_write_paths": [
     "scripts/rules.py",
-    "tests/*"
+    "tests/*",
+    "docs/DISPATCH-TEMPLATE.md"
   ],
   "role": "worker",
   "model": "fable",
@@ -20,7 +21,7 @@
   "attempt": 0,
   "base_sha": "bd8e5034c4f3e90f4851e702f87ec2a338834a29",
   "state": "Ready",
-  "state_version": 1,
+  "state_version": 2,
   "lease": null,
   "retry_limit": 2,
   "verify": {
