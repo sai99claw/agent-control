@@ -9,6 +9,8 @@
     scripts/ticket.py inbox                       # 等裁決的 + 使用者答了還沒落成裁示的
     scripts/ticket.py verify 7                    # 改動真的在主線?
     scripts/ticket.py close 7                     # 先 verify,>0 才准關
+    scripts/ticket.py set 7 verify '{…}' --expect-state-version 4   # 過期的回報拒收
+    scripts/ticket.py round 7 3 --red             # 第三輪仍紅 -> Blocked,指派主線
     scripts/ticket.py import <舊票目錄>           # 轉成這份 schema,缺的留空並標 legacy
     scripts/ticket.py freeze 7 --reason … --criterion …
 
@@ -16,12 +18,14 @@
 過期的那一格,而手改不會動它。
 """
 
+import errno
 import fnmatch
 import json
 import os
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -45,7 +49,16 @@ NOT_EMPTY = ("subject", "objective", "acceptance", "allowed_write_paths",
              "role", "model", "tool", "base_sha", "state")
 LIST_FIELDS = ("acceptance", "in_scope", "out_of_scope", "depends_on",
                "allowed_write_paths", "shared_resources", "decision_refs",
-               "test_evidence", "attempt_history", "verify_strings")
+               "test_evidence", "attempt_history", "verify_strings",
+               # 實作者的反駁(D-014):每筆 {category, body, evidence, owner,
+               # disposition, blocking}。沒處置的阻擋項 land 會拒絕。
+               "objections", "tags")
+
+# 覆核算通過的幾種寫法,與「算已經處置」的幾種 disposition。表在這裡,不在提示裡。
+REVIEW_PASS = ("pass", "approved", "ok", "通過")
+DISPOSED = ("accepted", "rejected", "deferred", "fixed", "已處置")
+LOCK_NAME = ".ticket.lock"
+LOCK_TIMEOUT = 10.0
 
 DECISIONS_REL = os.path.join("docs", "DECISIONS.md")
 DEFAULT_MAIN = "main"
@@ -91,6 +104,48 @@ def load_all(where=None):
             out.append(data)
     out.sort(key=lambda t: (0, int(t["id"])) if str(t["id"]).isdigit() else (1, 0))
     return out
+
+
+class Lock(object):
+    """票的寫入鎖。**`mkdir` 成功與否是原子的**;`if not exists: mkdir` 不是 ——
+    兩個同時回寫 verify 與 review 的 session 會雙雙通過那個檢查,後寫的整份蓋掉先寫的
+    (2026-09-21 外部審查:平行回寫可能互蓋)。
+
+    一把鎖管整個票庫而不是一票一把:遲到的回報是拿 `state_version` 認出來的,而那一格
+    是讀出來 +1 再寫回去的,所以「讀」與「寫」之間不准有別人。
+    """
+
+    def __init__(self, where=None, timeout=LOCK_TIMEOUT):
+        self.path = os.path.join(where or event.tickets_dir(root()), LOCK_NAME)
+        self.timeout = timeout
+        self.held = False
+
+    def __enter__(self):
+        deadline = time.time() + self.timeout
+        parent = os.path.dirname(self.path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        while True:
+            try:
+                os.mkdir(self.path)
+                self.held = True
+                return self
+            except OSError as exc:
+                if exc.errno != errno.EEXIST:
+                    raise
+                if time.time() >= deadline:
+                    raise RuntimeError(
+                        "票庫的寫入鎖拿不到(%s)—— 有別的 session 正在回寫,"
+                        "或上一個死在半路。確定死了就 rmdir 它。" % self.path)
+                time.sleep(0.05)
+
+    def __exit__(self, *exc):
+        if self.held:
+            try:
+                os.rmdir(self.path)
+            except OSError:
+                pass
+        return False
 
 
 def save(ticket, where=None):
@@ -193,6 +248,10 @@ FLAG_NOTE = {
     "--state X": "只看某一個狀態",
     "--reason": "為什麼凍結",
     "--criterion": "什麼時候可以解凍 —— 少了它,「凍著」與「忘了」長得一樣",
+    "--expect-state-version": "這份回報是對票的哪一版說的;對不上就拒收(rc=4)",
+    "--expect-attempt": "這份回報是第幾次派工的;對不上就拒收(rc=4)",
+    "--red": "這一輪仍然紅(預設);第 retry_limit+1 輪仍紅 -> 轉 Blocked、指派主線",
+    "--green": "這一輪綠了",
 }
 
 ASK = (
@@ -215,12 +274,14 @@ USAGE = {
     "create": "scripts/ticket.py create [旗標…]        # 一個旗標都不給就一格一格問",
     "list": "scripts/ticket.py list [--open | --state <狀態>]",
     "show": "scripts/ticket.py show <id>",
-    "set": "scripts/ticket.py set <id> <欄位> <值>      # 值吃得懂 JSON 就當 JSON",
+    "set": ("scripts/ticket.py set <id> <欄位> <值> "
+            "[--expect-state-version N] [--expect-attempt N]"),
     "inbox": "scripts/ticket.py inbox",
     "verify": "scripts/ticket.py verify <id>",
     "close": "scripts/ticket.py close <id>              # 先 verify,>0 才准關",
     "import": "scripts/ticket.py import <舊票目錄>",
     "freeze": "scripts/ticket.py freeze <id> --reason … --criterion …",
+    "round": "scripts/ticket.py round <id> <第幾輪> [--red|--green]",
 }
 
 EXAMPLE = {
@@ -244,6 +305,7 @@ python3 scripts/ticket.py set 7 allowed_write_paths '["scripts/land.sh", "tests/
     "freeze": ('python3 scripts/ticket.py freeze 7 \\\n'
                '  --reason "視覺方向未定" \\\n'
                '  --criterion "產出會不會因視覺方向改變而重做"'),
+    "round": "python3 scripts/ticket.py round 7 3 --red",
 }
 
 
@@ -269,6 +331,12 @@ def known_flags(verb):
     if verb == "freeze":
         return [(flag, FLAG_NOTE.get(flag, ""), False, True)
                 for flag in ("--reason", "--criterion")]
+    if verb == "set":
+        return [(flag, FLAG_NOTE.get(flag, ""), False, False)
+                for flag in ("--expect-state-version", "--expect-attempt")]
+    if verb == "round":
+        return [(flag, FLAG_NOTE.get(flag, ""), False, False)
+                for flag in ("--red", "--green")]
     return []
 
 
@@ -516,30 +584,98 @@ def parse_value(field, raw):
     return value
 
 
+def take_expected(argv):
+    """`--expect-state-version N` / `--expect-attempt N` 從參數裡挑出來。
+
+    SCHEMA 早就宣稱「遲到的回報對不上 attempt 就拒絕」,而舊版的 `set` 讀出來直接
+    覆寫 —— **宣稱與實作分岔的那一格,看起來與有守衛的那一格一模一樣**
+    (2026-09-21 外部審查)。
+    """
+    rest, want = [], {}
+    index = 0
+    while index < len(argv):
+        flag = argv[index]
+        if flag in ("--expect-state-version", "--expect-attempt"):
+            index += 1
+            if index >= len(argv):
+                raise ValueError("%s 少了值" % flag)
+            want[flag] = argv[index]
+        else:
+            rest.append(flag)
+        index += 1
+    return rest, want
+
+
+def stale(ticket, want):
+    """過期的交付:回傳一句話,或空字串。"""
+    if "--expect-state-version" in want:
+        got = str(ticket.get("state_version"))
+        if got != str(want["--expect-state-version"]):
+            return ("這份回報是對票 v%s 說的,票現在是 v%s —— 中間有人改過"
+                    % (want["--expect-state-version"], got))
+    if "--expect-attempt" in want:
+        got = str(ticket.get("attempt"))
+        if got != str(want["--expect-attempt"]):
+            return ("這份回報是第 %s 次派工的,票現在在第 %s 次 —— 遲到了"
+                    % (want["--expect-attempt"], got))
+    return ""
+
+
 def cmd_set(argv):
+    try:
+        argv, want = take_expected(argv)
+    except ValueError as exc:
+        sys.stderr.write("ticket: %s\n" % exc)
+        return 2
     if len(argv) < 3:
-        sys.stderr.write("ticket: set <id> <field> <value>\n")
+        sys.stderr.write("ticket: set <id> <field> <value> "
+                         "[--expect-state-version N] [--expect-attempt N]\n")
         return 2
     ident, field, raw = argv[0].lstrip("#"), argv[1], argv[2]
-    try:
-        ticket = load(ident)
-    except (OSError, ValueError) as exc:
-        sys.stderr.write("ticket: 讀不到 #%s —— %s\n" % (ident, exc))
-        return 2
     if field in ("id", "state_version"):
         sys.stderr.write("ticket: %s 不給改(id 是身分,state_version 是這支腳本自己數的)\n" % field)
         return 2
-    value = parse_value(field, raw)
+    try:
+        value = parse_value(field, raw)
+    except ValueError as exc:
+        sys.stderr.write("ticket: 讀不懂這個值 —— %s\n" % exc)
+        return 2
     if field == "state" and value not in STATES:
         sys.stderr.write("ticket: 沒有 %r 這個狀態(%s)\n" % (value, "/".join(STATES)))
         return 2
-    before = ticket.get(field)
-    ticket[field] = value
-    # **每次變更 +1**,不管改的是哪一格:遲到的回報拿舊的 state_version 回來,
-    # 對得上的才收(SCHEMA §執行)。只在改 state 時 +1 的版本擋不住「改了範圍、
-    # 版本沒動」那一種。
-    ticket["state_version"] = int(ticket.get("state_version") or 0) + 1
-    save(ticket)
+    # 讀、比對、寫回**在同一把鎖裡**:中間放別人進來,`state_version` 就會有兩個人
+    # 同時讀到 v3、各自寫回 v4,而後寫的那一份整份蓋掉先寫的。
+    try:
+        with Lock():
+            try:
+                ticket = load(ident)
+            except (OSError, ValueError) as exc:
+                sys.stderr.write("ticket: 讀不到 #%s —— %s\n" % (ident, exc))
+                return 2
+            late = stale(ticket, want)
+            if late:
+                sys.stderr.write("ticket: #%s 這一筆不收 —— %s\n" % (ident, late))
+                return 4
+            if field == "state" and value == "Done":
+                missing = done_blockers(ticket)
+                if missing:
+                    print_done_blockers(ident, missing)
+                    return 1
+            before = ticket.get(field)
+            ticket[field] = value
+            # **每次變更 +1**,不管改的是哪一格:遲到的回報拿舊的 state_version 回來,
+            # 對得上的才收(SCHEMA §執行)。只在改 state 時 +1 的版本擋不住「改了範圍、
+            # 版本沒動」那一種。
+            ticket["state_version"] = int(ticket.get("state_version") or 0) + 1
+            if field == "review" and isinstance(value, dict):
+                # 覆核**綁在它覆核的那個版本上**。蓋章的當下就把版本寫進去,之後任何
+                # 一次 `set` 都會讓票往前一版,而 land 一比就知道這張章過期了。
+                value.setdefault("at", now())
+                value["state_version"] = ticket["state_version"]
+            save(ticket)
+    except RuntimeError as exc:
+        sys.stderr.write("ticket: %s\n" % exc)
+        return 5
     event.emit("ticket.state", ticket=ident, field=field,
                **{"from": json.dumps(before, ensure_ascii=False),
                   "to": json.dumps(value, ensure_ascii=False),
@@ -548,6 +684,78 @@ def cmd_set(argv):
                      % (ident, field, json.dumps(before, ensure_ascii=False),
                         json.dumps(value, ensure_ascii=False), ticket["state_version"]))
     return 0
+
+
+# --------------------------------------------------------- 進 Done 的必要條件
+
+
+def review_problems(ticket, tip=""):
+    """覆核那一格過不過得了。`tip` 給了就一起比分支 / patch 的 sha。"""
+    out = []
+    review = ticket.get("review")
+    if not isinstance(review, dict) or not review.get("verdict"):
+        return ["沒有 review —— 覆核是主線讀 patch 記進票的那一格"]
+    if str(review.get("verdict")).lower() not in REVIEW_PASS:
+        out.append("review.verdict=%r 不是通過" % review.get("verdict"))
+    bound = review.get("state_version")
+    if bound is None:
+        out.append("review 沒有綁票版本(state_version)—— 票改過之後它還是長得有效")
+    elif str(bound) != str(ticket.get("state_version")):
+        out.append("review 綁的是票 v%s,票現在是 v%s —— 覆核之後票被改過"
+                   % (bound, ticket.get("state_version")))
+    sha = str(review.get("sha") or "")
+    if not sha:
+        out.append("review 沒有綁最終 patch / 分支的 sha")
+    elif tip and not (tip.startswith(sha) or sha.startswith(tip)):
+        out.append("review 綁的是 %s,現在的頭是 %s" % (sha[:12], tip[:12]))
+    return out
+
+
+def objection_problems(ticket):
+    out = []
+    for index, row in enumerate(ticket.get("objections") or []):
+        if not isinstance(row, dict):
+            out.append("objections[%d] 不是 {category, body, evidence, owner, disposition}"
+                       % index)
+            continue
+        blocking = row.get("blocking")
+        if blocking is None:
+            blocking = str(row.get("category") or "").lower() in ("blocking", "阻擋",
+                                                                 "ticket-wrong")
+        if blocking and str(row.get("disposition") or "").strip().lower() not in DISPOSED:
+            out.append("反駁 objections[%d](%s / owner=%s)還沒處置:%s"
+                       % (index, row.get("category") or "?", row.get("owner") or "沒人",
+                          (row.get("body") or "")[:60]))
+    return out
+
+
+def done_blockers(ticket):
+    """**進 Done 只有這一份必要條件**,`set state Done` 與 `close` 共用它。
+
+    舊版兩條路各走各的:`set state Done` 只檢查狀態名對不對,`close` 只問「東西在不
+    在主線」而且弱檢查也算過 —— 於是 Done 的契約有兩個不同的把關強度,而弱的那一個
+    沒有人記得(2026-09-21 外部審查:Done 的契約可以繞過)。
+    """
+    out = []
+    plan = ticket.get("verify") if isinstance(ticket.get("verify"), dict) else {}
+    baseline = plan.get("baseline") if isinstance(plan.get("baseline"), dict) else None
+    if not ticket.get("test_evidence") and not baseline:
+        out.append("沒有回歸證據:票上既沒有 test_evidence,verify 也沒有 baseline"
+                   "(`scripts/verify-case.py check <票號>` 會寫那一格)")
+    elif baseline and not baseline.get("ok"):
+        out.append("verify.baseline 說驗紅沒過:%s"
+                   % (baseline.get("why") or "乾淨主線上沒有紅"))
+    out.extend(review_problems(ticket))
+    out.extend(objection_problems(ticket))
+    return out
+
+
+def print_done_blockers(ident, missing):
+    sys.stdout.write("ticket: #%s 進不了 Done —— 還缺:\n" % ident)
+    for line in missing:
+        sys.stdout.write("  %s\n" % line)
+    sys.stdout.write("(exit code 0 不等於 Done;worker 說做完也不等於 Done。"
+                     "契約見 docs/WORKFLOW.md §票的狀態機)\n")
 
 
 # ------------------------------------------------------------------- freeze
@@ -813,14 +1021,87 @@ def cmd_close(argv):
                          "exit code 0 不等於 Done,worker 說做完也不等於 Done"
                          "(docs/WORKFLOW.md)。\n" % ident)
         return 1
-    ticket["state"] = "Done"
-    ticket["state_version"] = int(ticket.get("state_version") or 0) + 1
-    save(ticket)
+    if weak:
+        # **弱檢查不能自動關票**(2026-09-21 外部審查)。弱檢查答的是「這幾個檔被動
+        # 過」,不是「這張票的東西在主線上」—— 而那正是 2026-09-10 那次事故的縫。
+        sys.stdout.write("ticket: #%s 沒關 —— 只做得了弱檢查。補一條 verify_strings "
+                         "再關(`ticket.py set %s verify_strings '<那串字>'`)。\n"
+                         % (ident, ident))
+        return 1
+    missing = done_blockers(ticket)
+    if missing:
+        print_done_blockers(ident, missing)
+        return 1
+    try:
+        with Lock():
+            ticket = load(ident)
+            ticket["state"] = "Done"
+            ticket["state_version"] = int(ticket.get("state_version") or 0) + 1
+            # 關票這一動自己也讓票往前一版,所以把章重蓋在新的版本上 —— 不然下一個人
+            # 讀到的會是一張「覆核過期」的已完成票,而那句話是假的。
+            if isinstance(ticket.get("review"), dict):
+                ticket["review"]["state_version"] = ticket["state_version"]
+            save(ticket)
+    except RuntimeError as exc:
+        sys.stderr.write("ticket: %s\n" % exc)
+        return 5
     event.emit("ticket.closed", ticket=ident,
                hits=sum(row["hits"] for row in rows),
                weak=1 if weak else 0, state_version=ticket["state_version"])
     sys.stdout.write("ticket: #%s -> Done(state_version %d)\n"
                      % (ident, ticket["state_version"]))
+    return 0
+
+
+# --------------------------------------------------------------------- round
+
+
+def cmd_round(argv):
+    """修復迴圈的一輪結束了。**三輪耗盡不是一句話,是一個狀態轉換。**
+
+    舊規則只寫「三輪仍紅就報主線」—— 而「報了」與「沒報」在票上長得一樣,票還停在
+    Running,沒有人是它的 owner(2026-09-21 外部審查:三輪失敗可能只被看見)。
+    """
+    rest = [x for x in argv if not x.startswith("--")]
+    if len(rest) < 2:
+        sys.stderr.write("ticket: round <id> <第幾輪> [--red|--green]\n")
+        return 2
+    ident = rest[0].lstrip("#")
+    try:
+        number = int(rest[1])
+    except ValueError:
+        sys.stderr.write("ticket: 第幾輪要是數字\n")
+        return 2
+    red = "--green" not in argv
+    try:
+        with Lock():
+            ticket = load(ident)
+            ticket["repair_round"] = number
+            limit = int(ticket.get("retry_limit") or 2) + 1
+            exhausted = red and number >= limit
+            if exhausted:
+                ticket["state"] = "Blocked"
+                ticket["owner"] = "main"
+            ticket["state_version"] = int(ticket.get("state_version") or 0) + 1
+            save(ticket)
+    except (OSError, ValueError) as exc:
+        sys.stderr.write("ticket: 讀不到 #%s —— %s\n" % (ident, exc))
+        return 2
+    except RuntimeError as exc:
+        sys.stderr.write("ticket: %s\n" % exc)
+        return 5
+    if exhausted:
+        event.emit("ticket.attempt.failed", ticket=ident, attempt=number,
+                   note="第 %d 輪仍紅,上限 %d —— 票轉 Blocked,owner=main" % (number, limit))
+        event.emit("ticket.state", ticket=ident, field="state",
+                   **{"from": "Running", "to": "Blocked",
+                      "state_version": ticket["state_version"]})
+        sys.stdout.write("ticket: #%s 第 %d 輪仍紅(上限 %d)—— 轉 Blocked,"
+                         "指派主線(state_version %d)\n"
+                         % (ident, number, limit, ticket["state_version"]))
+        return 0
+    sys.stdout.write("ticket: #%s 記下第 %d 輪 %s(state_version %d)\n"
+                     % (ident, number, "紅" if red else "綠", ticket["state_version"]))
     return 0
 
 
@@ -901,7 +1182,8 @@ def main(argv):
     verb, rest = argv[0], argv[1:]
     table = {"create": cmd_create, "list": cmd_list, "show": cmd_show,
              "set": cmd_set, "inbox": cmd_inbox, "verify": cmd_verify,
-             "close": cmd_close, "import": cmd_import, "freeze": cmd_freeze}
+             "close": cmd_close, "import": cmd_import, "freeze": cmd_freeze,
+             "round": cmd_round}
     if verb in ("--help", "-h", "help"):
         if rest and rest[0] in table:
             return help_for(rest[0])

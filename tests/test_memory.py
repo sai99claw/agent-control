@@ -4,6 +4,7 @@
 超過會開票而且只開一張、提高上限要有理由。
 """
 
+import json
 import os
 import sys
 import unittest
@@ -48,6 +49,34 @@ class MemoryCheck(Sandbox):
         self.assertEqual(row["model"], "fable", "整理要派給 config 指定的高階模型")
         self.assertEqual(sorted(row["allowed_write_paths"]),
                          ["memory/model/opus.inbox.md", "memory/model/opus.md"])
+
+    def test_the_consolidation_ticket_names_two_different_models(self):
+        """**變異**:把 `consolidators()` 改回只讀單數的 `memory.consolidator` → 這一條紅。
+
+        D-013:整理不准由單一 session 自己做 —— 一個 session 最先刪掉的是它自己看不懂
+        的那幾條,而那正是別的模型看得出價值的那幾條。
+        """
+        conf = json.loads(self.read("board/config.json"))
+        conf["memory"]["consolidators"] = ["fable", "codex:gpt-6-astra"]
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        self.note("opus", "坑" * 2500)
+        self.memory("check")
+        row = self.load_ticket("1")
+        self.assertIn("fable", row["model"])
+        self.assertIn("codex:gpt-6-astra", row["model"])
+        text = json.dumps(row, ensure_ascii=False)
+        self.assertIn("兩個不同的模型", text)
+        self.assertIn("不直接寫案例", text, "整理的產出是原則,不是案例(D-013)")
+
+    def test_a_role_card_over_the_cap_is_watched_too(self):
+        """D-013:上限適用**任一層記憶**,不只模型私有那一層。"""
+        conf = json.loads(self.read("board/config.json"))
+        conf["memory"]["applies_to"] = ["memory/model/*.md", "memory/role/*.md"]
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        self.write("memory/role/implementer.md", "規矩" * 2500)
+        done = self.memory("check")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("memory/role/implementer.md", done.stdout)
 
     def test_the_second_run_does_not_open_a_second_ticket(self):
         """**變異**:把 `open_consolidation()` 改成永遠回 None → 這一條紅。"""

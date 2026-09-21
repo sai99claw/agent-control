@@ -348,16 +348,120 @@ class VerifyAndClose(Sandbox):
         self.assertEqual(self.load_ticket("1")["state"], "Ready", "票不該被關掉")
         self.assertNotIn("ticket.closed", self.kinds())
 
+    def done_ready(self, **extra):
+        """一張**真的可以關**的票:東西在主線上、有回歸證據、有綁版本的覆核。
+
+        `close` 與 `set state Done` 共用同一份必要條件(D-014)—— 舊版兩條路各走各
+        的,弱的那一條沒有人記得。
+        """
+        fields = {"allowed_write_paths": ["src/*"],
+                  "verify_strings": ["src/nav.py:def size_nav"],
+                  "test_evidence": [{"cmd": "gate --branch", "rc": 0}]}
+        fields.update(extra)
+        self.make_ticket(1, **fields)
+        self.ticket("set", "1", "review",
+                    json.dumps({"verdict": "pass", "by": "main", "sha": "deadbeef"},
+                               ensure_ascii=False))
+
     def test_close_goes_through_once_the_change_is_really_on_main(self):
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.make_ticket(1, allowed_write_paths=["src/*"],
-                         verify_strings=["src/nav.py:def size_nav"])
+        self.done_ready()
+        before = self.load_ticket("1")["state_version"]
         done = self.ticket("close", "1")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         row = self.load_ticket("1")
         self.assertEqual(row["state"], "Done")
-        self.assertEqual(row["state_version"], 2)
+        self.assertEqual(row["state_version"], before + 1)
+        self.assertEqual(row["review"]["state_version"], row["state_version"],
+                         "關票讓票往前一版,章要跟著蓋在新版本上")
         self.assertIn("ticket.closed", self.kinds())
+
+    def test_close_refuses_a_ticket_nobody_reviewed(self):
+        """**變異**:把 `done_blockers` 裡的 `review_problems` 拿掉 → 這一條紅。
+
+        覆核沒有被任何程式消費過:`review` 只有 verdict/by/at/note,land 不讀它,
+        `close` 也不問(2026-09-21 外部審查)。
+        """
+        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
+        self.make_ticket(1, allowed_write_paths=["src/*"],
+                         verify_strings=["src/nav.py:def size_nav"],
+                         test_evidence=[{"cmd": "gate", "rc": 0}])
+        done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("沒有 review", done.stdout)
+        self.assertEqual(self.load_ticket("1")["state"], "Ready")
+
+    def test_close_refuses_when_there_is_no_regression_evidence(self):
+        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
+        self.done_ready(test_evidence=[])
+        done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("沒有回歸證據", done.stdout)
+
+    def test_a_review_stamped_before_a_later_edit_no_longer_counts(self):
+        """**變異**:把 `review_problems` 裡比 state_version 的那一段拿掉 → 這一條紅。
+
+        修復或重新套 patch 之後,舊 review 仍然長得有效 —— 而它蓋的是另一份東西。
+        """
+        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
+        self.done_ready()
+        self.ticket("set", "1", "objective", "改了票面")
+        done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("覆核之後票被改過", done.stdout)
+
+    def test_an_unresolved_blocking_objection_stops_done(self):
+        """實作者的反駁要有**收件與處置的契約**:沒處置的阻擋項不得落地、不得 Done。"""
+        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
+        self.done_ready(objections=[{"category": "ticket-wrong", "owner": "main",
+                                     "body": "驗收第二條和設計文件對不上",
+                                     "evidence": "EVIDENCE.md:12", "disposition": ""}])
+        done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("還沒處置", done.stdout)
+
+    def test_set_state_done_goes_through_the_same_gate_as_close(self):
+        """**變異**:把 `cmd_set` 裡那一段 `done_blockers` 拿掉 → 這一條紅。
+
+        舊版 `set state Done` 只檢查狀態名對不對 —— Done 的契約有一條旁路。
+        """
+        self.make_ticket(1, allowed_write_paths=["src/*"])
+        done = self.ticket("set", "1", "state", "Done")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("進不了 Done", done.stdout)
+        self.assertEqual(self.load_ticket("1")["state"], "Ready")
+
+    def test_a_stale_report_is_refused_instead_of_overwriting(self):
+        """**變異**:把 `stale()` 的比對拿掉 → 這一條紅。
+
+        SCHEMA 早就宣稱「遲到的回報對不上 attempt 就拒絕」,而舊版讀出來直接覆寫
+        —— 宣稱與實作分岔的那一格,看起來與有守衛的那一格一模一樣。
+        """
+        self.make_ticket(1, attempt=2)
+        done = self.ticket("set", "1", "outline", "第一次派工交回來的",
+                           "--expect-attempt", "1")
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        self.assertIn("遲到", done.stderr)
+        self.assertNotIn("outline", json.dumps(self.load_ticket("1")))
+        ok = self.ticket("set", "1", "outline", "這一次的",
+                         "--expect-attempt", "2", "--expect-state-version", "1")
+        self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+
+    def test_three_rounds_of_red_park_the_ticket_on_main(self):
+        """**變異**:把 `cmd_round` 的 `exhausted` 那一段拿掉 → 這一條紅。
+
+        舊規則只寫「三輪仍紅就報主線」,而「報了」與「沒報」在票上長得一樣:票停在
+        Running,沒有人是它的 owner。
+        """
+        self.make_ticket(1, retry_limit=2, state="Running")
+        self.assertEqual(self.ticket("round", "1", "2", "--red").returncode, 0)
+        self.assertEqual(self.load_ticket("1")["state"], "Running")
+        done = self.ticket("round", "1", "3", "--red")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        self.assertEqual(row["state"], "Blocked")
+        self.assertEqual(row["owner"], "main")
+        self.assertIn("ticket.attempt.failed", self.kinds())
 
     def test_without_verify_strings_it_falls_back_and_says_the_check_is_weak(self):
         base = self.git("rev-parse", "main").strip()

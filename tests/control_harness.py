@@ -33,7 +33,20 @@ CODE_MAP = os.path.join(ROOT, "code-map")
 TIMEOUT = 180
 
 SCRIPT_FILES = ("event.py", "ticket.py", "memory.py", "status.py", "land.sh",
-                "gate.sh", "heartbeat.sh", "new-session.sh")
+                "gate.sh", "heartbeat.sh", "new-session.sh", "verify.py",
+                "verify-case.py")
+
+# 回歸層的最小形狀:一個登記過的標籤 + 一個會綠的案例。沙盒少了它,`gate --full`
+# 跑到的回歸是一個空集合 —— 而**空集合與「都過了」長得一樣**,那正是這裡在擋的事。
+VERIFY_TAGS = "# 功能標籤登記\n- `example` — 沙盒示範用\n"
+VERIFY_CASE = """import unittest
+TAGS = ["example"]
+
+
+class T(unittest.TestCase):
+    def test_true(self):
+        self.assertTrue(True)
+"""
 
 # 閘門的替身:寫一行標記檔就退出。**「有沒有被呼叫」因此是一個看得見的事實。**
 GATE_STUB_GREEN = """#!/bin/sh
@@ -80,6 +93,7 @@ class Sandbox(unittest.TestCase):
         self.origin = os.path.join(self.home, "origin.git")
         self.log = os.path.join(self.home, "calls.log")
         for rel in ("scripts", "tickets", "board", "docs", "tests",
+                    os.path.join("verify", "example"),
                     os.path.join("memory", "model"), os.path.join("code-map", "cards")):
             os.makedirs(os.path.join(self.repo, rel))
 
@@ -103,6 +117,10 @@ class Sandbox(unittest.TestCase):
         self.write("docs/REHEARSAL.md", "# 哪些保證還只在演練裡成立\n\n"
                                         "| 工具 | 第一次真跑 | 要看到什麼 |\n|---|---|---|\n")
         self.write("README", "main\n")
+        self.write(os.path.join("verify", "__init__.py"), "")
+        self.write(os.path.join("verify", "example", "__init__.py"), "")
+        self.write(os.path.join("verify", "example", "test_example.py"), VERIFY_CASE)
+        self.write(os.path.join("verify", "TAGS.md"), VERIFY_TAGS)
 
         self.git("init", "-q", "--bare", self.origin, cwd=self.home)
         self.git("init", "-q")
@@ -225,6 +243,27 @@ class Sandbox(unittest.TestCase):
         self.write(os.path.join("tickets", "%s.json" % ident),
                    json.dumps(row, ensure_ascii=False, indent=2) + "\n")
         return row
+
+    def approve(self, ident, branch=None, verdict="pass"):
+        """主線的覆核:**綁票版本與分支頭的 sha**(D-014)。land 少了它會拒絕,
+        而那正是這一格的重點 —— 一張沒有人讀過 patch 的票不該進得了主線。"""
+        sha = self.git("rev-parse", branch).strip() if branch else ""
+        self.ticket("set", str(ident), "review",
+                    json.dumps({"verdict": verdict, "by": "main", "sha": sha,
+                                "note": "沙盒的覆核"}, ensure_ascii=False))
+
+    def status_of(self, ident, kind=None):
+        """這張票最新一輪的狀態檔。**一輪一個目錄、不覆寫**,所以讀的人要先挑輪
+        (D-014);挑最新那一輪就是接手的人會做的事。"""
+        where = os.path.join(self.repo, "reports", "t%s" % ident)
+        runs = sorted(name for name in os.listdir(where)
+                      if os.path.exists(os.path.join(where, name, "status.json")))
+        for name in reversed(runs):
+            with open(os.path.join(where, name, "status.json"), encoding="utf-8") as fh:
+                data = json.load(fh)
+            if kind is None or data.get("kind") == kind:
+                return data
+        raise AssertionError("#%s 沒有 kind=%s 的狀態檔(%s)" % (ident, kind, runs))
 
     def gate_ran(self):
         return os.path.exists(self.log)

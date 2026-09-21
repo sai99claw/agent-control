@@ -10,6 +10,7 @@ land —— 中間漏了 `git commit`。腳本照樣開 worktree、照樣跑完�
 的 bug 的可觀察面。
 """
 
+import json
 import os
 import sys
 import unittest
@@ -54,6 +55,8 @@ class NamesWhatItIsAbout(LandBase):
         second = self.branch_for(2, "t2-second")
         self.commit_in(second, "src/b1", "另一張票")
 
+        self.approve(1, "t1-first")
+        self.approve(2, "t2-second")
         done = self.land("t1-first", "t2-second")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("land: t1-first —— 2 個 commit", done.stdout)
@@ -233,6 +236,7 @@ class HappyPath(LandBase):
         """
         good = self.branch_for(1, "t1-good")
         self.commit_in(good, "src/g1", "有 commit 的那一張")
+        self.approve(1, "t1-good")
         before = self.git("rev-parse", "main").strip()
 
         done = self.land("t1-good")
@@ -251,6 +255,7 @@ class HappyPath(LandBase):
     def test_the_land_worktree_is_cleaned_up_after_a_green_landing(self):
         good = self.branch_for(1, "t1-good")
         self.commit_in(good, "src/g1", "有 commit 的那一張")
+        self.approve(1, "t1-good")
         self.assertEqual(self.land("t1-good").returncode, 0)
         self.assertEqual(os.listdir(self.wt_base()), [])
 
@@ -258,6 +263,7 @@ class HappyPath(LandBase):
         """控制台只讀事件,不猜 —— 沒發事件的事對系統而言沒發生(D-003)。"""
         good = self.branch_for(1, "t1-good")
         self.commit_in(good, "src/g1", "有 commit 的那一張")
+        self.approve(1, "t1-good")
         self.land("t1-good")
         kinds = self.kinds()
         for kind in ("land.start", "gate.start", "gate.pass", "land.pass"):
@@ -270,6 +276,7 @@ class GateRed(LandBase):
     def test_a_red_gate_leaves_main_alone_and_keeps_the_worktree(self):
         good = self.branch_for(1, "t1-good")
         self.commit_in(good, "src/g1", "有 commit 的那一張")
+        self.approve(1, "t1-good")
         before = self.main_log()
 
         done = self.land("t1-good")
@@ -284,20 +291,21 @@ class GateRed(LandBase):
 
 
 class LandStatus(LandBase):
-    """狀態檔:這一批每一張票各一份 `reports/t<票號>-status.json`(D-010)。
+    """狀態檔:這一批每一張票各一份 `reports/t<票號>/<run_id>/status.json`(D-010)。
 
     讀它的人手上有的是**票號**,不是這一批的時間戳 —— 所以一張票一份,不是一批一份。
     """
 
     def status(self, ident):
-        import json
-        return json.loads(self.read(os.path.join("reports", "t%s-status.json" % ident)))
+        return self.status_of(ident, kind="land")
 
     def test_every_ticket_in_the_batch_gets_its_own_done_status(self):
         first = self.branch_for(1, "t1-first")
         self.commit_in(first, "src/a1", "第一張")
         second = self.branch_for(2, "t2-second")
         self.commit_in(second, "src/b1", "第二張")
+        self.approve(1, "t1-first")
+        self.approve(2, "t2-second")
 
         done = self.land("t1-first", "t2-second")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -342,17 +350,149 @@ exit 1
         import json
         good = self.branch_for(1, "t1-good")
         self.commit_in(good, "src/g1", "有 commit 的那一張")
+        self.approve(1, "t1-good")
 
         done = self.land("t1-good")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertIn("reports/t<票號>-status.json", done.stdout,
+        self.assertIn("reports/t<票號>/<run_id>/status.json", done.stdout,
                       "紅了要告訴人去哪裡看")
-        data = json.loads(self.read(os.path.join("reports", "t1-status.json")))
+        data = self.status_of("1", kind="land")
         self.assertEqual(data["state"], "done")
         self.assertEqual(data["rc"], 1)
         self.assertEqual([row["case"] for row in data["failures"]],
                          ["test_thing.T.test_it"])
         self.assertIn("AssertionError: 1 != 2", data["failures"][0]["excerpt"])
+
+
+class ReviewIsAHardGate(LandBase):
+    """覆核與反駁從「寫在票上的一格」變成**land 會拒絕的條件**(D-014)。
+
+    2026-09-21 外部審查:`review` 只有 verdict / by / at / note,修復或重新套 patch
+    之後舊 review 仍然長得有效,而 land 根本不讀它;實作者的反駁也沒有收件與處置的
+    契約 —— 「這張票寫錯了」講完之後東西照樣落地。
+    """
+
+    def ready(self, ident=1, name="t1-good"):
+        branch = self.branch_for(ident, name)
+        self.commit_in(branch, "src/g1", "做完的那一張")
+        return branch
+
+    def test_a_branch_nobody_reviewed_is_refused(self):
+        """**變異**:把 land 裡讀 review 的那一段拿掉 → 這一條紅。"""
+        self.ready()
+        before = self.main_log()
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("票上沒有 review", done.stdout)
+        self.assertEqual(self.main_log(), before, "沒人覆核過的東西不該進主線")
+        self.assertFalse(self.gate_ran(), "拒絕要發生在九分鐘的全套之前")
+
+    def test_a_review_bound_to_an_older_commit_is_refused(self):
+        """覆核綁的是**那一份** patch。蓋完章又 commit 一次,章就過期了。"""
+        branch = self.ready()
+        self.approve(1, "t1-good")
+        self.commit_in(branch, "src/g2", "蓋完章之後又改的")
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("覆核之後又 commit 過", done.stdout)
+
+    def test_a_review_stamped_before_a_ticket_edit_is_refused(self):
+        branch = self.ready()
+        self.approve(1, "t1-good")
+        self.ticket("set", "1", "objective", "蓋完章之後改的票面")
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("覆核之後票被改過", done.stdout)
+
+    def test_an_unresolved_blocking_objection_is_refused(self):
+        """**變異**:把 objections 那一段拿掉 → 這一條紅。"""
+        self.ready()
+        self.ticket("set", "1", "objections",
+                    json.dumps([{"category": "ticket-wrong", "owner": "main",
+                                 "body": "驗收第二條和設計文件對不上",
+                                 "evidence": "EVIDENCE.md:12", "disposition": ""}],
+                               ensure_ascii=False))
+        self.approve(1, "t1-good")
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("還沒處置", done.stdout)
+
+    def test_a_disposed_objection_does_not_block(self):
+        """處置過的反駁不擋 —— 這一格要的是**有人收、有人答**,不是不准有異議。"""
+        self.ready()
+        self.ticket("set", "1", "objections",
+                    json.dumps([{"category": "ticket-wrong", "owner": "main",
+                                 "body": "驗收第二條對不上", "evidence": "EVIDENCE.md:12",
+                                 "disposition": "accepted", "follow_up": "#9"}],
+                               ensure_ascii=False))
+        self.approve(1, "t1-good")
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+
+class OnlyOneLandAtATime(LandBase):
+    """`docs/WORKFLOW.md` 早就寫「同時只准一個 land」,而腳本從來沒有擋(外部審查)。"""
+
+    def test_a_second_land_is_refused_while_the_lock_is_held(self):
+        """**變異**:把 `mkdir "$LOCK"` 那一段拿掉 → 這一條紅。"""
+        branch = self.branch_for(1, "t1-good")
+        self.commit_in(branch, "src/g1", "做完的那一張")
+        self.approve(1, "t1-good")
+        os.makedirs(os.path.join(self.repo, ".land.lock"))
+        self.write(os.path.join(".land.lock", "holder"), "pid=999 開始=剛剛\n")
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("已經有一個 land 在跑", done.stdout)
+        self.assertIn("pid=999", done.stdout, "要說得出現在是誰在落地")
+        self.assertFalse(self.gate_ran())
+
+    def test_the_lock_is_released_when_the_land_finishes(self):
+        branch = self.branch_for(1, "t1-good")
+        self.commit_in(branch, "src/g1", "做完的那一張")
+        self.approve(1, "t1-good")
+        self.assertEqual(self.land("t1-good").returncode, 0)
+        self.assertFalse(self.exists(".land.lock"), "鎖沒有放掉,下一次 land 永遠卡住")
+
+    def test_the_lock_is_released_even_when_it_refuses(self):
+        self.branch_for(1, "t1-empty")
+        self.assertEqual(self.land("t1-empty").returncode, 2)
+        self.assertFalse(self.exists(".land.lock"))
+
+
+class PhasesAndClosing(LandBase):
+
+    def test_gate_merge_and_push_are_recorded_separately(self):
+        """**變異**:把 `status_phase_all` 拿掉 → 這一條紅。
+
+        舊版在 merge 與 push 之前就寫 `done, rc=0`,所以「閘門綠了但沒合進去」與
+        「已經落地」在狀態檔上長得一樣(外部審查)。
+        """
+        branch = self.branch_for(1, "t1-good")
+        self.commit_in(branch, "src/g1", "做完的那一張")
+        self.approve(1, "t1-good")
+        self.assertEqual(self.land("t1-good").returncode, 0)
+        phases = [(row["phase"], row["rc"]) for row in self.status_of("1", kind="land")["phases"]]
+        self.assertEqual(phases, [("gate", 0), ("merge", 0), ("push", 0)])
+
+    def test_a_green_landing_says_the_ticket_is_still_open(self):
+        """能力表誤稱 land 會關票(外部審查)—— 它不會,而「已合併」與「已關票」是
+        兩件事。"""
+        branch = self.branch_for(1, "t1-good")
+        self.commit_in(branch, "src/g1", "做完的那一張")
+        self.approve(1, "t1-good")
+        done = self.land("t1-good")
+        self.assertIn("已合併、尚未關票", done.stdout)
+        self.assertIn("ticket.py close 1", done.stdout)
+        self.assertEqual(self.load_ticket("1")["state"], "Ready", "land 不關票")
+
+    def test_a_refused_batch_still_leaves_a_terminal_status(self):
+        """拒絕也是一個結果 —— 停在 running 的狀態檔與還在跑的長得一樣。"""
+        branch = self.branch_for(1, "t1-good")
+        self.commit_in(branch, "src/g1", "做完的那一張")
+        self.assertEqual(self.land("t1-good").returncode, 2)
+        data = self.status_of("1", kind="land")
+        self.assertEqual(data["state"], "done")
+        self.assertEqual(data["rc"], 2)
 
 
 if __name__ == "__main__":

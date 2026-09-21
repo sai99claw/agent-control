@@ -8,8 +8,21 @@
 # 0 commit、票對不上、`base_sha` 過期、寫入範圍越界、閘門紅。要它放寬的時候,
 # 放寬的是規矩,不是這支腳本。
 #
-# 每一輪都寫 `reports/t<票號>-status.json`(D-010):跑完了沒、rc、紅了哪幾條、去哪看。
-# 讀那一份就夠了 —— 不必把整份 log 讀進上下文,也不必輪詢背景工作。
+# 每一輪都寫 `reports/t<票號>/<run_id>/status.json`(D-010、D-014):跑完了沒、rc、
+# 紅了哪幾條、去哪看。讀那一份就夠了 —— 不必把整份 log 讀進上下文,也不必輪詢背景工作。
+# **一輪一個目錄、不覆寫**,而且 gate / merge / push **分開記**:舊版在 merge 與 push
+# 之前就寫 `done, rc=0`,所以「合進去了」與「只是閘門綠」長得一樣(2026-09-21 外部審查)。
+#
+# ## 互斥鎖(2026-09-21)
+# `docs/WORKFLOW.md` 早就寫「同時只准一個 land」,而腳本從來沒有擋 —— 兩個 land 會各自
+# 開 worktree、各跑一次九分鐘的全套,最後靠 `ff-only` 擋下**後果的一部分**。所以這裡先
+# `mkdir` 一把鎖(mkdir 是原子的;`[ -e ]` 之後再建不是),拿不到就指名現在是誰在落地。
+#
+# ## 覆核與反駁是硬閘門(2026-09-21)
+# 票要有一格**綁著票版本與分支 sha** 的 `review`(主線讀 patch 記的),否則拒絕:
+# 舊版的 review 只有 verdict / by / at / note,重套一次 patch 之後它還是長得有效,
+# 而 land 根本沒讀它。票的 `objections[]` 裡還有沒處置的阻擋項,也拒絕 ——
+# 實作者說「這張票寫錯了」而東西照樣落地,那句話等於沒有人收。
 #
 # 做法:從主線開一個 land-<時間> worktree,逐條 --no-ff merge(衝突就停、留著
 # worktree 給人看),在那個 worktree 跑 `scripts/gate.sh --full`;綠才
@@ -35,6 +48,20 @@ PY
 MAIN=$(cfg main_branch main)
 TICKETS=$(cfg tickets_dir tickets)
 
+# 互斥鎖:`mkdir` 成功與否是原子的,`[ -e ]` 之後再建不是(兩個 land 會同時通過檢查)。
+LOCK=${AC_LAND_LOCK:-$ROOT/.land.lock}
+HELD=""
+release() { [ -n "$HELD" ] && rm -rf "$LOCK"; }
+trap 'release' EXIT INT TERM
+if ! mkdir "$LOCK" 2>/dev/null; then
+    echo "land: 已經有一個 land 在跑 —— 同時只准一個(docs/WORKFLOW.md)"
+    [ -f "$LOCK/holder" ] && sed 's/^/land:   /' "$LOCK/holder"
+    echo "land: 確定那一個已經死了(heartbeat.sh 會說),就 rm -rf $LOCK"
+    exit 2
+fi
+HELD=1
+printf 'pid=%s 開始=%s 分支=%s\n' "$$" "$(date +%Y-%m-%dT%H:%M:%S)" "$*" > "$LOCK/holder"
+
 # 事件發不出去要出聲,但不擋落地:發不出去的那一刻正是最需要紀錄的那一刻,而
 # 「靜靜地沒發」與「發了」在控制台上長得一樣(D-003)。
 ev() {
@@ -44,21 +71,56 @@ ev() {
 
 STAMP=$(date +%Y%m%d-%H%M%S)
 IDS=""
+ALL_BRANCHES="$*"
 ev land.start --note "$*" --kv "stamp=$STAMP"
 
 # 狀態檔:這一批每一張票各一份 `reports/t<票號>-status.json`(D-010,格式見
 # `scripts/status.py`)。**寫不出來要出聲但不擋落地** —— 同上面那一段事件的理由。
 # 為什麼一張票一份而不是一批一份:讀它的人手上有的是票號,不是這一批的時間戳。
-status_all() {   # $1 = start|done  $2 = rc(done 才用)
+LAND_RUN=""
+status_start_all() {
     [ -n "$IDS" ] || return 0
+    LAND_RUN=${LAND_RUN:-$STAMP-$$}
     for i in $IDS; do
-        if [ "$1" = "start" ]; then
-            python3 "$ROOT/scripts/status.py" start --ticket "$i" --kind land \
-                --sha "$(git -C "$ROOT" rev-parse --short "$MAIN")" >/dev/null 2>&1 \
+        python3 "$ROOT/scripts/status.py" start --ticket "$i" --kind land \
+            --run-id "$LAND_RUN" --sha "$(git -C "$ROOT" rev-parse --short "$MAIN")" \
+            --base-sha "$(git -C "$ROOT" rev-parse "$MAIN")" \
+            --worktree "${WT:-}" --repro "sh scripts/land.sh $ALL_BRANCHES" \
+            --cwd "$ROOT" >/dev/null 2>&1 \
+            || echo "land: #$i 的狀態檔寫不出來(不擋落地)" >&2
+    done
+}
+
+# gate / merge / push **各記一筆**。混成一格的 `done` 會說謊:舊版在 merge 與 push
+# 之前就寫 `done, rc=0`,於是「閘門綠了但沒合進去」在狀態檔上與「已經落地」一樣。
+status_phase_all() {   # $1 = gate|merge|push  $2 = rc  $3 = 說明
+    [ -n "$IDS" ] || return 0
+    [ -n "$LAND_RUN" ] || return 0
+    for i in $IDS; do
+        python3 "$ROOT/scripts/status.py" phase --ticket "$i" --run-id "$LAND_RUN" \
+            --phase "$1" --rc "$2" --note "$3" >/dev/null 2>&1 \
+            || echo "land: #$i 的 $1 狀態寫不出來(不擋落地)" >&2
+    done
+}
+
+# **每一條退出路徑都要寫終態**(2026-09-21 外部審查:停在 running 的檔與還在跑的
+# 檔長得一樣)。log 由 status.py 複製一份進 run 目錄 —— 成功之後 worktree 會被收掉。
+status_done_all() {   # $1 = rc  $2 = 說明
+    [ -n "$IDS" ] || return 0
+    if [ -z "$LAND_RUN" ]; then
+        LAND_RUN=$STAMP-$$
+        status_start_all
+    fi
+    for i in $IDS; do
+        if [ -n "${WT:-}" ] && [ -f "$WT/gate.log" ]; then
+            python3 "$ROOT/scripts/status.py" done --ticket "$i" --kind land \
+                --run-id "$LAND_RUN" --sha "${SHA:-}" --rc "$1" --note "$2" \
+                --log "$WT/gate.log" >/dev/null 2>&1 \
                 || echo "land: #$i 的狀態檔寫不出來(不擋落地)" >&2
         else
             python3 "$ROOT/scripts/status.py" done --ticket "$i" --kind land \
-                --sha "${SHA:-}" --rc "$2" --log "$WT/gate.log" >/dev/null 2>&1 \
+                --run-id "$LAND_RUN" --sha "${SHA:-}" --rc "$1" --note "$2" \
+                >/dev/null 2>&1 \
                 || echo "land: #$i 的狀態檔寫不出來(不擋落地)" >&2
         fi
     done
@@ -191,11 +253,67 @@ PY
         STOP=1
         continue
     fi
+    # 覆核與反駁。**覆核要綁被覆核的那個版本**:舊版的 `review` 只有 verdict/by/at/
+    # note,重套一次 patch、改一次票面之後它仍然長得有效,而 land 從來沒有讀它。
+    # 反駁(`objections[]`)同理:實作者說「這張票寫錯了」而東西照樣落地,那句話等於沒人收。
+    out=$(python3 - "$tf" "$(git -C "$ROOT" rev-parse "$b")" <<'PY'
+import json, sys
+path, tip = sys.argv[1], sys.argv[2]
+PASS = ("pass", "approved", "ok", "通過")
+DISPOSED = ("accepted", "rejected", "deferred", "fixed", "已處置")
+try:
+    with open(path, encoding="utf-8") as handle:
+        ticket = json.load(handle)
+except (OSError, ValueError) as exc:
+    print("票讀不動:%s" % exc)
+    raise SystemExit(0)
+
+for index, row in enumerate(ticket.get("objections") or []):
+    if not isinstance(row, dict):
+        print("objections[%d] 不是 {category, body, evidence, owner, disposition}" % index)
+        continue
+    blocking = row.get("blocking")
+    if blocking is None:
+        blocking = str(row.get("category") or "").lower() in ("blocking", "阻擋", "ticket-wrong")
+    if blocking and str(row.get("disposition") or "").strip().lower() not in DISPOSED:
+        print("反駁 objections[%d](%s / owner=%s)還沒處置:%s"
+              % (index, row.get("category") or "?", row.get("owner") or "沒人",
+                 (row.get("body") or "")[:60]))
+
+review = ticket.get("review")
+if not isinstance(review, dict) or not review.get("verdict"):
+    print("票上沒有 review —— 覆核是主線讀 patch 記進票的那一格,land 不替它判")
+    raise SystemExit(0)
+if str(review.get("verdict")).lower() not in PASS:
+    print("review.verdict=%r 不是通過" % review.get("verdict"))
+bound = review.get("state_version")
+current = ticket.get("state_version")
+if bound is None:
+    print("review 沒有綁票版本(state_version)—— 票改過之後它還是長得有效")
+elif str(bound) != str(current):
+    print("review 綁的是票 v%s,票現在是 v%s —— 覆核之後票被改過"
+          % (bound, current))
+sha = str(review.get("sha") or "")
+if not sha:
+    print("review 沒有綁最終 patch / 分支的 sha")
+elif not (tip.startswith(sha) or sha.startswith(tip)):
+    print("review 綁的是 %s,這條分支的頭是 %s —— 覆核之後又 commit 過"
+          % (sha[:12], tip[:12]))
+PY
+)
+    if [ -n "$out" ]; then
+        echo "land: $b —— 票 #$id 的覆核 / 反駁過不了:"
+        echo "$out" | sed 's/^/land:   /'
+        echo "land:   覆核記法:scripts/ticket.py set $id review '{\"verdict\":\"pass\",\"by\":\"main\",\"sha\":\"<分支頭>\"}'"
+        STOP=1
+        continue
+    fi
 done
 if [ -n "$STOP" ]; then
     echo "land: 一條都沒有落地 —— 上面那幾條先處理掉再來。"
     echo "land: (要嘛一起進去、要嘛都不進:跳掉一條會生出一個沒有人要求過的組合。)"
     ev land.refused --note "$*" --kv "stamp=$STAMP"
+    status_done_all 2 "land 拒收"
     exit 2
 fi
 
@@ -206,12 +324,16 @@ BR=land/$STAMP
 mkdir -p "$WTBASE"
 git -C "$ROOT" worktree add -q -b "$BR" "$WT" "$MAIN" || {
     ev land.fail --note "worktree add 失敗" --kv "stamp=$STAMP"
+    status_done_all 2 "worktree add 失敗"
     exit 2
 }
 for b in "$@"; do
     if ! git -C "$WT" merge -q --no-ff "$b" -m "Merge $b (land $STAMP)"; then
         echo "land: 合 $b 時衝突 —— worktree 留在 $WT,自己看"
         ev land.fail --note "合 $b 時衝突" --kv "stamp=$STAMP"
+        status_start_all
+        status_phase_all merge 3 "串 $b 時衝突"
+        status_done_all 3 "串接時衝突,一條都沒進主線"
         exit 3
     fi
 done
@@ -219,32 +341,47 @@ COUNT=$(git -C "$WT" log --oneline "$MAIN..HEAD" | wc -l | tr -d ' ')
 SHA=$(git -C "$WT" rev-parse --short HEAD)
 echo "land: $COUNT 個 commit 串好,跑全套 -> $WT/gate.log"
 ev gate.start --kv mode=full --kv "sha=$SHA"
-status_all start
+status_start_all
 if ! (cd "$WT" && sh scripts/gate.sh --full); then
     echo "land: 全套紅,$MAIN 沒動;worktree 留在 $WT"
-    echo "land: 紅榜逐條在 reports/t<票號>-status.json 的 failures(案例、檔、行、log、excerpt)"
+    echo "land: 紅榜逐條在 reports/t<票號>/<run_id>/status.json 的 failures(案例、檔、行、log、excerpt)"
     ev gate.fail --kv mode=full --kv "sha=$SHA"
     ev land.fail --note "閘門紅" --kv "stamp=$STAMP"
-    status_all done 1
+    status_phase_all gate 1 "全套紅"
+    status_done_all 1 "閘門紅,沒有 merge、沒有 push"
     exit 1
 fi
-status_all done 0
+status_phase_all gate 0 "全套綠"
 ev gate.pass --kv mode=full --kv "sha=$SHA"
 
 # ------------------------------------------------------------------- 第 6 步
 git -C "$ROOT" merge -q --ff-only "$BR" || {
     echo "land: $MAIN 在這中間動了,ff-only 進不去 —— worktree 留在 $WT"
     ev land.fail --note "ff-only 進不去" --kv "stamp=$STAMP"
+    status_phase_all merge 1 "ff-only 進不去"
+    status_done_all 1 "閘門綠了但沒合進主線"
     exit 1
 }
+status_phase_all merge 0 "已 ff-only 合進 $MAIN"
 if git -C "$ROOT" remote get-url origin >/dev/null 2>&1; then
     git -C "$ROOT" push -q origin "$MAIN" || {
         echo "land: 合進 $MAIN 了,但 push 沒成功 —— 自己推一次"
         ev land.fail --note "push 沒成功" --kv "stamp=$STAMP"
+        status_phase_all push 1 "push 沒成功"
+        status_done_all 1 "已合進主線,push 沒成功,票還沒關"
         exit 1
     }
+    status_phase_all push 0 "已推上 origin"
+else
+    status_phase_all push 0 "沒有 origin,不用推"
 fi
 echo "land: $MAIN -> $(git -C "$ROOT" rev-parse --short HEAD) 已推上"
 ev land.pass --note "$*" --kv "stamp=$STAMP" \
     --kv "sha=$(git -C "$ROOT" rev-parse --short HEAD)"
+# **已合併、尚未關票**要分開講(2026-09-21 外部審查:能力表誤稱 land 會關票)。
+# 關票走 `scripts/ticket.py close <票號>`,它自己會再問一次「改動真的在主線嗎」。
+status_done_all 0 "已合併、已推上;**票還沒關** —— 關票走 ticket.py close"
+for i in $IDS; do
+    echo "land: #$i 已合併、尚未關票 —— python3 scripts/ticket.py close $i"
+done
 git -C "$ROOT" worktree remove "$WT" && git -C "$ROOT" branch -q -D "$BR"

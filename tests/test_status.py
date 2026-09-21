@@ -7,7 +7,9 @@ log 讀進上下文,或用 sleep 迴圈輪詢背景工作,兩條都是一次幾�
 所以這裡問的不是「JSON 長得對不對」,是那三句話**答不出來的時候會不會被發現**:
 - 還在跑 vs 跑完了:`state` 與 `rc` 是兩格,少了 `finished` 的 `done` 是壞掉的檔。
 - 錯了什麼:`failures` 逐條要有案例名、檔、行、log 路徑與 excerpt。
-- 偶發的紅 vs 真的紅:單獨重跑綠的進 `flaky`,**不是從紅榜消失**。
+- 偶發的紅 vs 真的紅:單獨重跑綠的只降級成 `suspected_flaky`,**紅榜與 rc 都不動**
+  (2026-09-21 外部審查的順序依賴反例:整組必紅、單跑必綠,而舊版正是以「全部單跑
+  都綠」為由回傳 0)。
 """
 
 import json
@@ -66,6 +68,31 @@ class T(unittest.TestCase):
         self.assertTrue(seen, "第一次跑一定紅")
 """
 
+# 原生 subTest 的輸出:**圓括號的參數**,不是自己組的方括號標籤。這一段是 2026-09-21
+# 外部審查跑出來的原文,一個字都沒改 —— 舊版把它解析成
+# `__main__.NativeSubtest.test_engine) (engine='firefox'.test_engine`,一個餵不回
+# `python3 -m unittest` 的 id。
+LOG_NATIVE_SUBTEST = """FAIL: test_engine (__main__.NativeSubtest.test_engine) (engine='firefox')
+AssertionError: 1 != 2
+Ran 1 test in 0.000s
+FAILED (failures=1)
+"""
+
+# 順序依賴的最小反例(同一份審查):第一條污染共用狀態,第二條檢查乾淨狀態。
+# **整組必紅,單跑第二條必綠** —— 舊版的 flake 判定正是放它過去的那一條。
+ORDER_DEPENDENT = """import unittest
+
+LEAKED = []
+
+
+class T(unittest.TestCase):
+    def test_a_leaks(self):
+        LEAKED.append("leak")
+
+    def test_b_wants_it_clean(self):
+        self.assertEqual(LEAKED, [], "Lists differ")
+"""
+
 ALWAYS_RED = """import unittest
 
 
@@ -81,7 +108,7 @@ class StatusFile(Sandbox):
         return self.run_py("scripts/status.py", *args)
 
     def load(self, ticket="7"):
-        return json.loads(self.read(os.path.join("reports", "t%s-status.json" % ticket)))
+        return self.status_of(ticket)
 
     # ------------------------------------------------------------ 跑完了沒
 
@@ -164,19 +191,108 @@ class StatusFile(Sandbox):
 
     # -------------------------------------------------------------- flaky
 
-    def test_a_flaky_case_moves_out_of_failures_but_does_not_disappear(self):
-        """**變異**:把 `cmd_done` 裡那一行改成 `flaky = []` → 這一條紅。
+    def test_a_suspected_flaky_case_stays_in_the_red_list(self):
+        """**變異**:把 `cmd_done` 裡那一行改回「從 failures 搬走」→ 這一條紅。
 
-        單跑綠 **≠ 修好了**。一條經常 flaky 的案例要被看見,才有人會去修它的不穩定
-        —— 從紅榜整個消失的那一條,誰都不會再想起它。
+        單跑綠 **≠ 修好了**,也 **≠ 那條紅是假的**:順序依賴的失敗單跑一定綠。所以
+        它只是被標記,不是被搬走 —— 從紅榜消失的那一條,誰都不會再想起它。
         """
         log = self.write("gate.log", LOG)
-        self.status("done", "--ticket", "7", "--rc", "0", "--log", log,
-                    "--flaky", "test_zz_red.T.test_it_is_red")
+        self.status("done", "--ticket", "7", "--rc", "1", "--log", log,
+                    "--suspected-flaky", "test_zz_red.T.test_it_is_red")
         data = self.load()
-        self.assertEqual(data["failures"], [])
-        self.assertEqual(len(data["flaky"]), 1)
-        self.assertEqual(data["flaky"][0]["case"], "test_zz_red.T.test_it_is_red")
+        self.assertEqual(len(data["failures"]), 1, "疑似 flaky 不准離開紅榜")
+        self.assertTrue(data["failures"][0]["suspected_flaky"])
+        self.assertEqual([row["case"] for row in data["suspected_flaky"]],
+                         ["test_zz_red.T.test_it_is_red"])
+
+    def test_a_native_subtest_parses_into_a_rerunnable_id(self):
+        """**變異**:把 `parse_head` 換回舊的那個正規表示式 → 這一條紅。
+
+        審查實測:舊版把整行尾巴吃進 qualifier,case 變成
+        `__main__.NativeSubtest.test_engine) (engine='firefox'.test_engine`,
+        subtest 與 engine 都是空字串 —— 而**餵不回 unittest 的紅榜與沒有紅榜一樣**。
+        """
+        log = self.write("gate.log", LOG_NATIVE_SUBTEST)
+        self.status("done", "--ticket", "7", "--rc", "1", "--log", log)
+        row = self.load()["failures"][0]
+        self.assertEqual(row["case"], "__main__.NativeSubtest.test_engine")
+        self.assertEqual(row["subtest"], "engine='firefox'")
+        self.assertEqual(row["engine"], "firefox")
+
+    def test_each_round_gets_its_own_directory_and_the_old_one_survives(self):
+        """**變異**:把 run 目錄改回單一覆寫檔 → 這一條紅。
+
+        舊版每票一份覆寫檔:上一輪的結果被這一輪蓋掉,而接手的人分不出手上這份是
+        誰的(審查:status 的生命週期會誤導接手者)。
+        """
+        self.status("start", "--ticket", "7", "--run-id", "r1")
+        self.status("done", "--ticket", "7", "--run-id", "r1", "--rc", "1")
+        self.status("start", "--ticket", "7", "--run-id", "r2")
+        self.status("done", "--ticket", "7", "--run-id", "r2", "--rc", "0")
+        done = self.status("show", "--ticket", "7", "--runs")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("r1", done.stdout)
+        self.assertIn("r2", done.stdout)
+        first = json.loads(self.read(os.path.join("reports", "t7", "r1", "status.json")))
+        self.assertEqual(first["rc"], 1, "上一輪被這一輪蓋掉了")
+        self.assertEqual(self.load()["rc"], 0, "show 預設要給最新那一輪")
+
+    def test_the_repair_context_carries_what_a_new_worker_needs(self):
+        """下一輪換的是**新的** worker,它手上只有這一份檔(審查:status 不是交接包)。"""
+        patch = self.write("patch.diff", "--- base/x\n+++ work/x\n")
+        self.make_ticket(7, attempt=2)
+        self.status("start", "--ticket", "7", "--run-id", "r1", "--base-sha", "abc123",
+                    "--worktree", "/tmp/wt", "--patch", patch, "--round", "2",
+                    "--prev-evidence", "EVIDENCE.md", "--repro", "sh scripts/gate.sh --branch",
+                    "--cwd", "/tmp/wt", "--env", "AC_GATE_LOG=gate.log")
+        ctx = json.loads(self.read(os.path.join("reports", "t7", "r1", "status.json")))["repair_context"]
+        self.assertEqual(ctx["base_sha"], "abc123")
+        self.assertEqual(ctx["worktree"], "/tmp/wt")
+        self.assertEqual(ctx["round"], 2)
+        self.assertEqual(ctx["prev_evidence"], "EVIDENCE.md")
+        self.assertEqual(ctx["repro"], {"cmd": "sh scripts/gate.sh --branch", "cwd": "/tmp/wt"})
+        self.assertEqual(ctx["env"], {"AC_GATE_LOG": "gate.log"})
+        self.assertEqual(len(ctx["patch"]["sha256"]), 64, "一個路徑答不出是不是同一份 patch")
+        self.assertEqual(ctx["ticket"]["attempt"], 2, "票面快照沒帶進來")
+        self.assertEqual(ctx["ticket"]["state_version"], 1)
+
+    def test_the_log_is_copied_so_it_survives_the_worktree_going_away(self):
+        """land 成功後會把 worktree 收掉,而 log 就住在那裡面 —— 只留路徑等於留了一個
+        明天不存在的路徑。"""
+        log = self.write("gate.log", LOG)
+        self.status("done", "--ticket", "7", "--run-id", "r1", "--rc", "1", "--log", log)
+        kept = self.load()["kept_logs"][0]["kept"]
+        self.assertTrue(self.exists(kept), kept)
+        self.assertIn("AssertionError", self.read(kept))
+
+    def test_phases_are_recorded_separately(self):
+        """gate / merge / push 混成一格的 `done` 會說謊 —— 舊版在 merge 與 push 之前
+        就寫 `done, rc=0`。"""
+        self.status("start", "--ticket", "7", "--run-id", "r1", "--kind", "land")
+        self.status("phase", "--ticket", "7", "--run-id", "r1", "--phase", "gate", "--rc", "0")
+        self.status("phase", "--ticket", "7", "--run-id", "r1", "--phase", "merge", "--rc", "1")
+        self.status("done", "--ticket", "7", "--run-id", "r1", "--rc", "1")
+        phases = self.load()["phases"]
+        self.assertEqual([(row["phase"], row["rc"]) for row in phases],
+                         [("gate", 0), ("merge", 1)])
+
+    def test_suspected_flakes_go_into_a_persistent_ledger(self):
+        """**變異**:把 `record_flakes` 拿掉 → 這一條紅。
+
+        舊版只把 flake 留在當前 status,下一次 start 就清空 —— 同一條案例每天疑似
+        一次,累計次數永遠是 1,沒有人會去修它的不穩定。
+        """
+        log = self.write("gate.log", LOG)
+        for index in range(3):
+            self.status("done", "--ticket", "7", "--run-id", "r%d" % index, "--rc", "1",
+                        "--log", log, "--suspected-flaky", "test_zz_red.T.test_it_is_red")
+        rows = [json.loads(line) for line
+                in self.read(os.path.join("reports", "flaky.jsonl")).splitlines() if line.strip()]
+        self.assertEqual(len(rows), 3)
+        self.assertEqual({row["case"] for row in rows}, {"test_zz_red.T.test_it_is_red"})
+        self.assertIn("decision.asked", self.kinds(),
+                      "達門檻要發 NeedsDecision,不是只寫進一份沒有人讀的檔")
 
 
 class GateWritesStatus(Sandbox):
@@ -195,7 +311,7 @@ class GateWritesStatus(Sandbox):
                            env=self.env(AC_TEST_HOME=self.home, **extra))
 
     def load(self, ticket="7"):
-        return json.loads(self.read(os.path.join("reports", "t%s-status.json" % ticket)))
+        return self.status_of(ticket)
 
     def test_without_a_ticket_nothing_is_written(self):
         """沒給票號就完全照舊 —— 一支新功能不該改變舊呼叫者看到的東西。"""
@@ -234,29 +350,92 @@ class GateWritesStatus(Sandbox):
         self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
         self.assertEqual(self.load()["rc"], 3)
 
-    def test_a_case_that_passes_on_its_own_is_flaky_and_the_gate_goes_green(self):
-        """紅的案例單獨重跑一次:單跑綠的全部都是 flaky → 這一輪視為綠。
+    def test_a_case_that_passes_on_its_own_is_only_suspected_not_green(self):
+        """單跑綠的那一條只降級成 `suspected_flaky`,**rc 一個位元都不動**。
 
-        **變異**:把 `flake_rerun` 裡的 `return 0` 改成 `return "$1"` → 這一條紅。
-        理由:照著偶發的紅去派一輪修 bug,那一輪從頭到尾都是白跑的。
+        **變異**:把 `flake_rerun` 改回「全 flaky 就 `return 0`」→ 這一條紅。
+        理由就是下一條那個反例:順序依賴的紅單跑一定綠,而判它綠等於每次都放它過去。
         """
         self.write("tests/test_land.py", FLAKY)
         done = self.gate("scripts/land.sh", "--ticket", "7")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("標成 flaky", done.stdout)
+        self.assertNotEqual(done.returncode, 0,
+                            "單跑綠不准把這一輪判綠\n" + done.stdout + done.stderr)
+        self.assertIn("標成 suspected_flaky", done.stdout)
         data = self.load()
-        self.assertEqual(data["rc"], 0)
-        self.assertEqual(data["failures"], [], "全 flaky 時紅榜要是空的")
-        self.assertEqual([row["case"] for row in data["flaky"]],
-                         ["test_land.T.test_flaky"], "但它不准從狀態檔消失")
+        self.assertNotEqual(data["rc"], 0)
+        self.assertEqual([row["case"] for row in data["failures"]],
+                         ["test_land.T.test_flaky"], "原始失敗要留在紅榜")
+        self.assertEqual([row["case"] for row in data["suspected_flaky"]],
+                         ["test_land.T.test_flaky"])
+
+    def test_an_order_dependent_failure_is_not_written_off_as_flaky(self):
+        """**審查的實測反例**:第一條污染共用狀態、第二條檢查乾淨狀態。整組必紅、
+        乾淨程序單跑第二條必綠 —— 舊版正是以「所有紅的案例單跑都綠」為由回傳 0。
+
+        **變異**:把整組重跑那一段拿掉並讓單跑綠回傳 0 → 這一條紅。
+        """
+        self.write("tests/test_land.py", ORDER_DEPENDENT)
+        done = self.gate("scripts/land.sh", "--ticket", "7")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("單獨重跑是綠的", done.stdout)
+        self.assertIn("整組重跑仍然紅", done.stdout, "沒有用原順序整組重跑過")
+        data = self.load()
+        self.assertNotEqual(data["rc"], 0)
+        self.assertIn("真紅", data["note"])
+        self.assertTrue(data["extra_logs"], "整組重跑的原始輸出被丟掉了")
+
+    def test_the_group_rerun_can_be_turned_off(self):
+        """`AC_FLAKE_RERUN_GROUP=0`:整組重跑很貴,關得掉;**關掉也還是紅**。"""
+        self.write("tests/test_land.py", ORDER_DEPENDENT)
+        done = self.gate("scripts/land.sh", "--ticket", "7", AC_FLAKE_RERUN_GROUP="0")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("不做整組重跑", done.stdout)
 
     def test_a_case_that_is_red_on_its_own_stays_red(self):
         """flake 重跑不是一張免死金牌:單跑還是紅的就是真紅。"""
         self.write("tests/test_land.py", ALWAYS_RED)
         done = self.gate("scripts/land.sh", "--ticket", "7")
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertNotIn("標成 flaky", done.stdout)
-        self.assertEqual(self.load()["flaky"], [])
+        self.assertNotIn("標成 suspected_flaky", done.stdout)
+        self.assertEqual(self.load()["suspected_flaky"], [])
+
+    def test_nothing_to_run_still_leaves_a_terminal_status(self):
+        """**變異**:把 `status_nothing` 從「沒有東西可跑」那條路上拿掉 → 這一條紅。
+
+        「這一輪根本沒有東西跑」是一個結果,不是一次沒跑;而停在 running 的檔與還在
+        跑的檔長得一樣。
+        """
+        done = self.gate("--branch", "--ticket", "7")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        data = self.load()
+        self.assertEqual(data["state"], "done")
+        self.assertEqual(data["rc"], 2)
+        self.assertIn("沒有任何要跑的東西", data["note"])
+
+    def test_the_ticket_tags_really_call_the_regression_runner(self):
+        """**變異**:把 `regression ticket` 那一段拿掉 → 這一條紅。
+
+        舊版 `--ticket` 只拿票號寫狀態檔,**票的回歸從來沒有被閘門跑過** ——
+        「驗證者交了案例」與「案例真的在守這張票」因此長得一樣(2026-09-21 外部審查)。
+        """
+        self.make_ticket(7, verify={"files": ["verify/example/test_example.py"],
+                                    "tags": ["example"], "run": "", "notes": ""})
+        done = self.gate("scripts/land.sh", "--ticket", "7")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("--tag example", done.stdout, "票的 tags 沒有被拿去叫 verify.py")
+        data = self.load()
+        self.assertTrue([row for row in data["logs"] if row.endswith("verify.log")],
+                        "回歸的原始輸出沒有存檔")
+
+    def test_a_ticket_whose_tags_match_no_case_is_a_gap_not_a_green(self):
+        """票說它有 tags,執行器卻一個案例都選不到 —— 那是缺口。"""
+        self.make_ticket(7, verify={"files": [], "tags": ["no-such-tag"],
+                                    "run": "", "notes": ""})
+        self.write(os.path.join("verify", "TAGS.md"),
+                   "# 標籤\n- `example` — 沙盒\n- `no-such-tag` — 沙盒\n")
+        done = self.gate("scripts/land.sh", "--ticket", "7")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("一個案例都選不到", done.stdout)
 
     def test_the_rerun_can_be_turned_off(self):
         self.write("tests/test_land.py", FLAKY)

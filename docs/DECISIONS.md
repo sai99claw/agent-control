@@ -61,3 +61,42 @@ tabby_pool 三天實測:角色定義散在派工 prompt 裡會漂,同一主張�
 票的 `verify_strings` 落地前先對 patch `grep` 一次;**patch 檔頭只准 `base/…` / `work/…` 的相對形式,絕對路徑閘門要拒**
 —— 🩸 真的發生過:絕對路徑的檔頭讓檔案被寫進暫存目錄,套用成功、閘門也綠,而被改的不是 repo 裡那一份。
 細節與理由:`docs/WORKFLOW.md` §patch 管線。
+
+## D-013(2026-09-21)記憶整理:兩個模型、只留原則、記憶與紀錄分開
+使用者原話:「任一層記憶超過上限時,由**兩個不同模型**或一個高階模型討論後整理,不是單一 session 自己刪」;
+「整理後只留**具體的原則、行為準則、思考方式**,**不直接寫案例**,允許引用票號當來源」。
+
+1. **上限適用任一層記憶**:`memory/model/`、`memory/role/`、`memory/project/`,以及專案給 agent 讀的那一份共識。
+   名單在 `board/config.json` 的 `memory.applies_to`。
+2. **整理由兩個不同的模型**(`memory.consolidators`,例如 Fable + Codex astra)或一個明確更高階的模型帶;
+   **不准單一 session 自己刪自己的記憶** —— 它最先刪掉的是它自己看不懂的那幾條,而那正是別的模型看得出價值的那幾條。
+3. **產出是原則,不是案例**:一條保留下來的記憶要能直接當行為準則用;案例用票號引用
+   (例:「快照層只畫說得出處的畫面(#585)」),原文留在紀錄類文件。
+4. **記憶與紀錄分開**:agent 每次只載入「角色卡 + 自己模型的記憶 + 專案共識 + 這張票」;
+   紀錄類(`DECISIONS` 歸檔、`HANDOFF` 歷史、`docs/review/`、`discussions/`)**用 grep 定位,不整份讀**。
+   理由:原則每次讀都在用,案例只有寫的那一天在用;一年問一次的東西不該每個 session 付一次。
+5. **`scripts/memory.py check` 超標時自動開一張「記憶整理」票並指定那兩個模型**;票面的驗收就是上面 3、4 兩條。
+6. `memory/model/fable.md`、`memory/model/opus.md` 已照這個規矩重寫一次,當範例。
+   文件:`docs/MEMORY.md` §記憶不是紀錄;同步的一句話在 `CLAUDE.md`、`memory/role/README.md`、`docs/SESSION-START.md`。
+
+## D-014(2026-09-21)外部審查的處置:硬閘門、取消 flake 自動判綠、交接閉環
+來源:Codex astra 的獨立審查(全文與逐條處置 `docs/review/2026-09-21-astra-workflow-review.md`)。
+總評原話:「最大三個風險是回歸與覆核契約沒有真正擋住落地、單跑綠掩蓋順序/負載問題、失敗回報缺少版本與負責人而失聯…
+**這三件先完成,再上自動派 worker**,才不會把目前的漏接自動放大。」主線照它的順序做,**自動派 worker 這一輪不做**。
+
+1. **硬閘門**:`gate.sh --ticket` 真的呼叫票的 `verify.tags`(原始輸出存檔);`--full` 跑全部回歸;
+   land 檢查 `review`(綁票版本 + 分支 sha)與 `objections[]`(未處置的阻擋項);land 持一把 mkdir 互斥鎖;
+   進 Done 的必要條件 `close` 與 `set state Done` 共用,弱檢查不准自動關票。
+2. **取消 flake 自動判綠**(取代 D-010 第 2 點的後半):單跑綠只標 `suspected_flaky`,
+   **原始失敗與非零 rc 保留**,再用原順序整組重跑一次判真紅。實測反例:第一條測試污染共用狀態、
+   第二條檢查乾淨狀態 —— 整組必紅、單跑必綠。疑似 flaky 進持久事件帳 `reports/flaky.jsonl`,達門檻發 NeedsDecision。
+3. **交接閉環**:狀態檔一輪一個目錄、不覆寫,帶 `repair_context`(base_sha、票面快照、worktree、patch 路徑與雜湊、
+   輪數、上一輪 EVIDENCE、重現指令與 cwd/env);gate / merge / push 分開記;每條退出路徑寫終態(含「沒有測試可跑」);
+   `ticket.py set` 帶 `--expect-attempt` / `--expect-state-version` 拒收過期回報,寫入走同一把鎖;
+   三輪耗盡由 `ticket.py round` 轉 Blocked 並指派主線。
+4. **`verify-case.py`**:同一份案例在乾淨主線該紅、candidate 該綠,證據寫進票的 `verify.baseline`;
+   **import 失敗不算紅**要明列;`extract` 只抽驗證檔;新 tag 一票一個片段 `verify/TAGS.d/<n>.md` 由工具合併。
+5. **歸責規則改寫**:拿掉「紅在票沒動到的檔 → 疑似他票」(`failures.file` 取 traceback 最後一個檔,
+   經常是既有測試或共用 helper),改用同條件的 baseline / candidate 對照;**未歸因前由原票 owner 持有**。
+6. **`test_defect` 交接類型**:案例的 oracle 或 fixture 錯了 → 派獨立驗證者修案例,**產品 worker 不改 oracle**。
+7. 能力表以真實入口逐項重寫(以前漏列票 tags 串接、review 檢查、baseline 驗紅、套 patch 與關票、land 互斥鎖)。

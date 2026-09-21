@@ -12,3 +12,8 @@ __pycache__/
 *.tmp[0-9]*
 # 閘門與落地寫的狀態檔(`scripts/status.py`):事實的紀錄,不是原始碼
 reports/
+
+# land 的互斥鎖(mkdir 鎖;它是執行時的事實,不是原始碼)
+.land.lock/
+# 回歸層執行器寫的 log
+verify.log

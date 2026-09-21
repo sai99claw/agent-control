@@ -22,14 +22,21 @@
     "consolidator": "fable",
     "raise_allowed": true,
     "applies_to": [
-      "memory/model/*.md"
+      "memory/model/*.md",
+      "memory/role/*.md",
+      "memory/project/*.md"
     ],
-    "inbox_suffix": ".inbox.md"
+    "inbox_suffix": ".inbox.md",
+    "consolidators": [
+      "fable",
+      "codex:gpt-6-astra"
+    ]
   },
   "lease_seconds": {
     "opener": 900,
     "verifier": 3600,
     "land": 1800,
     "worker": 7200
-  }
+  },
+  "flaky_threshold": 3
 }

@@ -147,6 +147,20 @@ class GateExample(unittest.TestCase):
             self.assertIn(flag, text)
         self.assertIn("對不到任何測試模組", text)
 
+    def test_the_example_accepts_the_ticket_flag(self):
+        """**變異**:把範本的 `--ticket` 那一格拿掉 → 這一條紅。
+
+        2026-09-21 外部審查:範本不接受 `--ticket`,照抄的人拿不到狀態檔與票的回歸,
+        而他的 gate 收到 `--ticket 7` 只會回「不認得」+ 退出碼 2 —— 而 2 與「紅了」
+        在呼叫者眼裡長得很像。
+        """
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(here, "scripts", "gate.example.sh"), encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertIn("--ticket", text)
+        self.assertIn("status.py", text, "範本要示範狀態檔怎麼寫")
+        self.assertIn("verify.py", text, "範本要示範票的回歸怎麼跑")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,8 +9,13 @@
 | **主線** | 跟人互動的 session(Fable) | 接需求、派開題者、裁示、**覆核(讀 patch 記 `review`)**、決定落地順序、發版、維持脈絡 | 裁示、票的 `review` 格、交接、發版紀錄 | 不放寬驗收;不跳過閘門;不自己查 code、不自己改票面;不替人做產品決策 |
 | **開題者** | 短命 session(Fable) | 把使用者一句話寫成**完整票面**(含測試計畫) | 票 JSON + 給主線的 300 字摘要與建議順序 | 不改檔、不 git 寫入、不執行整支腳本;不替實作者先做一遍 |
 | **Worker / 實作者** | 短命(Codex sol,要起 server / 瀏覽器的票 Opus) | 在副本裡實作與局部驗證 | `patch.diff`(含自己的單元測試)、`EVIDENCE.md`、變異驗紅 | 只寫自己的副本;禁 git 寫入;範圍擴大要回報不准自己做 |
-| **驗證者** | 短命、獨立上下文(Sonnet / Codex sol) | 把票面驗收寫成回歸案例,**證明案例是對的**(乾淨主線紅、patch 綠),登記標籤,把怎麼跑寫進票的 `verify` 欄 | `verify/<feature>/test_ticket_<n>.py` + 票的 `verify` 欄 + `patch-verify.diff` | **不判 PASS/FAIL、不寫 VERDICT**;不讀實作者的 `EVIDENCE.md`;不重跑票閘門那整組;不輪詢;不改產品碼 |
-| **落地器** | `scripts/land.sh`(程式) | 套 patch → 閘門 → 合併 → 關票;紅了寫紅榜、自動起新 worker | 事件、退出碼、`reports/t<n>-status.json` | 0 commit 拒絕、基準過期拒絕、越界拒絕、閘門紅拒絕;它**沒有判斷** |
+| **驗證者** | 短命、獨立上下文(Sonnet / Codex sol) | 把票面驗收寫成回歸案例;`verify-case.py check` **證明案例是對的**(乾淨主線紅、candidate 綠),登記片段 `verify/TAGS.d/<n>.md`,把怎麼跑寫進票的 `verify` 欄 | `verify/<feature>/test_ticket_<n>.py` + 票的 `verify`(含 `baseline`)+ `patch-verify.diff`(`verify-case.py extract` 出的) | **不判 PASS/FAIL、不寫 VERDICT**;不讀實作者的 `EVIDENCE.md`;**不跑 tag 回歸那一整組**(只跑自己的案例與 `verify-case.py check`);不輪詢;不改產品碼 |
+| **落地器** | `scripts/land.sh`(程式) | 閘門 → 合併 → push;紅了寫紅榜 | 事件、退出碼、`reports/t<n>/<run_id>/status.json` | 0 commit / 基準過期 / 越界 / **覆核缺或過期** / **未處置的阻擋反駁** / 閘門紅,一律拒絕;land 期間持一把互斥鎖。它**沒有判斷** |
+
+> **落地器不做兩件事,而角色表以前把它們藏掉了**(2026-09-21 外部審查):
+> **① 套 patch、建分支、commit** —— 這一手是**主線手動做**的(`docs/WORKFLOW.md` §patch 管線);`land.sh` 收的是已經有 commit 的分支。
+> **② 關票** —— land 成功後印「已合併、尚未關票」,關票走 `scripts/ticket.py close <n>`。
+> **③ 自動起新 worker** —— 規格已定、腳本未實作,這一輪先不做(見 WORKFLOW 的能力表)。
 | **知識維護** | 主線 | 更新 code map 與記憶 | 帶來源與版本的變更 | 未驗證推測不進共用知識 |
 
 ## 排序誰來做:沒有調度員這個角色(2026-09-21,D-010)
@@ -36,11 +41,17 @@
 額度政策:Codex 的五小時桶**一次派三張就會用盡**,別再多;用完**退 Opus 一張並報主線**。
 **等、換、或送進收件匣;不准默默改走付費通道。**
 
-## 回歸紅了誰去修(2026-09-21,D-010)
-不叫醒舊 worker(它醒來一次 = 累積的整份上下文),也不設常駐調度員。落地器把紅榜寫成
-`reports/t<n>-status.json`,先把紅的案例**單獨重跑一次**判 flake,真紅就用 headless `claude -p`
-起一個**新** worker(票 + 目前 patch + 紅榜 + 上一輪 EVIDENCE),**三輪上限**。三種情況停下來報主線:
-worker 判斷票寫錯 / 需要裁示、三輪仍紅、紅在票沒動到的檔。**覆核不自動**:主線讀 patch 記 `review` 後才 land。
+## 回歸紅了誰去修(2026-09-21,D-010;flake 與歸責 D-014 改寫)
+不叫醒舊 worker(它醒來一次 = 累積的整份上下文),也不設常駐調度員。紅榜寫成
+`reports/t<n>/<run_id>/status.json`,紅的案例**單獨重跑一次**:**單跑綠只標 `suspected_flaky`,rc 不動**,
+再用原順序整組重跑一次判真紅。真紅就起一個**新** worker(票 + `repair_context` + 紅榜),**三輪上限**;
+第 `retry_limit+1` 輪仍紅由 `ticket.py round` 把票轉 **Blocked、owner=main**。
+停下來報主線的兩種情況:worker 判斷票寫錯 / 需要裁示(寫成 `objections[]`)、三輪耗盡。
+**覆核不自動**:主線讀 patch 記 `review`(綁票版本與分支 sha)後 land 才收。
+
+**歸責不看「這個檔有沒有被這張票改過」**(2026-09-21 取消這一條):`failures.file` 取的是 traceback 最後一個檔案,
+經常是既有測試或共用 helper,而產品改壞行為本來就會紅在沒修改過的測試檔。改用同條件的
+**baseline / candidate 對照**(`scripts/verify-case.py check`)。**未完成歸因前,票由原 owner 持有。**
 流程與狀態檔格式:`docs/WORKFLOW.md`。
 
 ## 並行上限與不准輪詢

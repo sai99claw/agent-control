@@ -7,6 +7,10 @@ invariants:
   - "拒絕發生在 worktree add 之前,所以拒絕的路徑不留殘骸"
   - "全套跑在 land/<時間> worktree 裡,主線的工作樹全程沒有人動"
   - "每一步都發事件;控制台只讀事件"
+  - "同時只准一個 land:.land.lock 是 mkdir 鎖,拿不到就指名 holder(2026-09-21)"
+  - "覆核與反駁是拒絕條件:review 要綁票版本與分支 sha,objections 的阻擋項要處置過"
+  - "gate / merge / push 分開記進狀態檔;每一條退出路徑都寫終態"
+  - "land 不關票 —— 成功後印「已合併、尚未關票」"
 depends_on: [scripts/event.py, scripts/gate.sh, board/config.json, tickets/*.json]
 depended_by: [scripts/heartbeat.sh, board/board.py]
 source_paths: [scripts/land.sh]
@@ -28,6 +32,8 @@ verified_by: opus 2026-09-12
   (`docs/DISPATCH-TEMPLATE.md` §5.5 最後一列)。
 - `AC_WORKTREE_DIR` 沒設時,worktree 開在 repo 的**兄弟目錄**;測試要記得它不在
   repo 裡面。
+- **鎖死在半路**:`.land.lock` 是目錄,裡面的 `holder` 寫著 pid 與開始時間。
+  `scripts/heartbeat.sh` 會說上一個 land 有沒有死;確定死了才 `rm -rf .land.lock`。
 
 ## 這張卡自己會示範什麼叫過期
 `verified_at_commit` 記的是 `scripts/land.sh` 還沒進主線的那個 commit。它一進主線,

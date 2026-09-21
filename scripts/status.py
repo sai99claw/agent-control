@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""閘門與落地的狀態檔 — `docs/WORKFLOW.md` §狀態檔(D-010)。
+"""閘門與落地的狀態檔 — `docs/WORKFLOW.md` §狀態檔(D-010、D-014)。
 
-    scripts/status.py start  --ticket 7 --kind gate --sha abc1234
+    scripts/status.py start  --ticket 7 --kind gate --run-id 20260921-101500-42 \
+                             --base-sha abc1234 --worktree /path/wt --round 2
+    scripts/status.py phase  --ticket 7 --run-id … --phase merge --rc 0
     scripts/status.py failures --log gate.log        # 印可以單獨重跑的案例 id,一行一個
-    scripts/status.py done   --ticket 7 --kind gate --sha abc1234 --rc 1 \
-                             --log gate.log [--flaky test_x.Case.test_y …]
-    scripts/status.py show   --ticket 7
+    scripts/status.py done   --ticket 7 --run-id … --rc 1 --log gate.log \
+                             [--suspected-flaky test_x.Case.test_y …]
+    scripts/status.py show   --ticket 7 [--run-id …] [--runs]
 
-寫的是 `<reports_dir>/t<票號>-status.json`(`board/config.json` 的 `reports_dir`,
-預設 `reports/`)。
+寫的是 `<reports_dir>/t<票號>/<run_id>/status.json`(`board/config.json` 的
+`reports_dir`,預設 `reports/`),**一輪一個目錄、不覆寫**,log 另外複製一份進
+`logs/` 留著 —— land 成功後會把 worktree 收掉,而 log 就住在那裡面(D-014 §2)。
 
 ## 這一份要回答的三個問題
 **「跑完了沒、錯了什麼、去哪看」** —— 這三句是使用者 2026-09-20 的原話。在它之前,
@@ -25,9 +28,22 @@ rc),`done` 才覆寫成 `done` 並帶 `rc`。一份沒有 `finished` 的 `done` 
 ## 為什麼 failures 要帶 excerpt 而不是只給 log 路徑
 只給路徑的話,下一個人還是得把整份 log 讀進來 —— 那就回到原本的成本。excerpt 上限
 20 行:夠認出是哪一條斷言倒了,不夠讓人偷懶把整份貼進去。
+
+## 為什麼多了 `repair_context`(2026-09-21 外部審查)
+> 「目前 status 是結果摘要,不是新 worker 可直接開工的交接包。」
+
+下一輪換一個**新的** worker,它手上只有這一份檔。少了 base_sha、票面快照、副本位置、
+patch 路徑與雜湊、第幾輪、上一輪排除過什麼、怎麼重現,它就得回頭翻對話或猜檔案位置
+—— 那一趟比整份 log 還貴。
+
+## 為什麼是 `suspected_flaky` 而不是 `flaky`
+單跑綠**不等於**那條紅是假的:第一條測試污染共用狀態、第二條檢查乾淨狀態時,整組
+必紅而單跑必綠(審查的實測反例)。所以單跑綠只降級成「疑似」,原始失敗留在 `failures`
+裡、rc 不動;要不要放行是人的判斷,不是解析器的。
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -39,29 +55,103 @@ import event  # noqa: E402  共用 repo 根與 board/config.json 的判讀
 
 EXCERPT_LINES = 20
 DEFAULT_REPORTS = "reports"
+FLAKY_LEDGER = "flaky.jsonl"
+DEFAULT_FLAKY_THRESHOLD = 3
+PHASES = ("gate", "merge", "push", "verify", "docs")
 
 # `FAIL: test_x (test_mod.Case.test_x)` / `ERROR: test_x (test_mod.Case)` /
-# subTest 的 `FAIL: test_x (test_mod.Case.test_x) [engine=firefox]` —— **方括號那一段
-# 一定要認**,不然瀏覽器那一族的紅一條都進不了紅榜,而紅榜是空的與沒有紅長得一樣。
-HEAD = re.compile(r"^(FAIL|ERROR):\s+(\S+)"
-                  r"(?:\s+\((.*?)\))?"
-                  r"(?:\s+\[(.*?)\])?\s*$")
+# subTest 的兩種形狀 —— 方括號的 `[engine=firefox]`(自己組的標籤)與**原生的圓括號
+# 參數** `(engine='firefox')`。第二種一定要認:2026-09-21 的外部審查實測,舊版把整
+# 行尾巴吃進 qualifier,解析出來的 case 是
+# `__main__.NativeSubtest.test_engine) (engine='firefox'.test_engine` —— 一個餵不回
+# `python3 -m unittest` 的 id,而**餵不回去的紅榜與沒有紅榜一樣**。
+HEAD = re.compile(r"^(FAIL|ERROR):\s+(\S+)\s*(.*?)\s*$")
+DOTTED = re.compile(r"^[A-Za-z_][\w.]*$")
 DIVIDER = re.compile(r"^(=|-){20,}\s*$")
 FILE_LINE = re.compile(r'^\s*File "([^"]+)", line (\d+)')
-# 瀏覽器那一族會在案例名或輸出裡帶 `engine=chrome`;沒有就留空,不猜。
-ENGINE = re.compile(r"engine[= ]([A-Za-z0-9_-]+)")
+# 瀏覽器那一族會在案例名或輸出裡帶 `engine=chrome` / `engine='firefox'`;沒有就留空,不猜。
+ENGINE = re.compile(r"engine\s*[=:]\s*['\"]?([A-Za-z0-9_.-]+)")
+CLOSERS = {"(": ")", "[": "]"}
 
 
 def reports_dir(root):
     return os.path.join(root, event.config(root).get("reports_dir") or DEFAULT_REPORTS)
 
 
-def path_for(root, ticket):
-    return os.path.join(reports_dir(root), "t%s-status.json" % ticket)
+def ticket_dir(root, ticket):
+    return os.path.join(reports_dir(root), "t%s" % ticket)
+
+
+def run_dir(root, ticket, run_id):
+    return os.path.join(ticket_dir(root, ticket), run_id)
+
+
+def path_for(root, ticket, run_id):
+    return os.path.join(run_dir(root, ticket, run_id), "status.json")
+
+
+def runs_of(root, ticket):
+    """這張票跑過哪幾輪,舊的在前。run_id 是時間戳開頭,所以字典序就是時間序。"""
+    where = ticket_dir(root, ticket)
+    try:
+        names = sorted(os.listdir(where))
+    except OSError:
+        return []
+    return [name for name in names
+            if os.path.exists(os.path.join(where, name, "status.json"))]
+
+
+def latest_run(root, ticket):
+    rows = runs_of(root, ticket)
+    return rows[-1] if rows else ""
+
+
+def new_run_id():
+    return "%s-%d" % (datetime.now().strftime("%Y%m%d-%H%M%S"), os.getpid())
 
 
 def now():
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def sha256_of(path):
+    try:
+        with open(path, "rb") as handle:
+            return hashlib.sha256(handle.read()).hexdigest()
+    except OSError:
+        return ""
+
+
+def file_ref(path):
+    """patch 那一格要帶雜湊。**一個路徑答不出「是不是同一份 patch」** —— 下一輪的
+    worker 拿到的可能是被重套過、被重生過清單的另一份。"""
+    if not path:
+        return None
+    return {"path": path, "sha256": sha256_of(path),
+            "exists": os.path.exists(path)}
+
+
+def split_groups(rest):
+    """把 `(a.b.c) (engine='firefox')` 拆成 `['a.b.c', "engine='firefox'"]`。
+
+    巢狀要算深度:subTest 的參數裡可以有 `size=(1, 2)`,而用非貪婪的正規表示式去抓
+    會在第一個 `)` 斷掉,把剩下的塞進下一格。
+    """
+    groups, buf, depth, opener = [], [], 0, ""
+    for ch in rest:
+        if depth == 0:
+            if ch in CLOSERS:
+                depth, opener, buf = 1, ch, []
+            continue
+        if ch == opener:
+            depth += 1
+        elif ch == CLOSERS[opener]:
+            depth -= 1
+            if depth == 0:
+                groups.append("".join(buf))
+                continue
+        buf.append(ch)
+    return groups
 
 
 def dotted(case, qualifier):
@@ -73,6 +163,19 @@ def dotted(case, qualifier):
     if qualifier.endswith("." + case) or qualifier == case:
         return qualifier
     return "%s.%s" % (qualifier, case)
+
+
+def parse_head(line):
+    """一行 `FAIL:` / `ERROR:` → (kind, case_id, subtest 標籤) 或 None。"""
+    found = HEAD.match(line)
+    if not found:
+        return None
+    kind, case, rest = found.group(1), found.group(2), found.group(3)
+    labels = [g.strip() for g in split_groups(rest)]
+    qualifier = ""
+    if labels and DOTTED.match(labels[0]):
+        qualifier = labels.pop(0)
+    return kind, dotted(case, qualifier), ", ".join(x for x in labels if x)
 
 
 def parse_failures(log_path):
@@ -89,17 +192,16 @@ def parse_failures(log_path):
     out = []
     index = 0
     while index < len(lines):
-        found = HEAD.match(lines[index])
-        if not found:
+        head = parse_head(lines[index])
+        if not head:
             index += 1
             continue
-        kind, case, qualifier = found.group(1), found.group(2), found.group(3)
-        label = found.group(4) or ""
+        kind, case, label = head
         body = []
         index += 1
         while index < len(lines):
             line = lines[index]
-            if HEAD.match(line) or line.startswith("Ran ") or line.startswith("OK") \
+            if parse_head(line) or line.startswith("Ran ") or line.startswith("OK") \
                     or line.startswith("FAILED"):
                 break
             if DIVIDER.match(line):
@@ -118,31 +220,33 @@ def parse_failures(log_path):
             if spot:
                 where, line_no = spot.group(1), int(spot.group(2))
         engine = ""
-        for line in [label, case, qualifier or ""] + body:
+        for line in [label, case] + body:
             hit = ENGINE.search(line)
             if hit:
                 engine = hit.group(1)
                 break
         out.append({
-            "case": dotted(case, qualifier),
+            "case": case,
             "kind": kind,
-            # subTest 的方括號標籤。單獨重跑餵回去的是 `case`(subTest 沒辦法單獨
-            # 叫),所以標籤另外留一格,讓人看得出紅的是哪一個子情境。
+            # subTest 的參數。單獨重跑餵回去的是 `case`(subTest 沒辦法單獨叫),
+            # 所以標籤另外留一格,讓人看得出紅的是哪一個子情境。
             "subtest": label,
             "file": where,
             "line": line_no,
             "engine": engine,
             "log": log_path,
             "excerpt": "\n".join(body[:EXCERPT_LINES]),
+            "suspected_flaky": False,
         })
     return out
 
 
-def write(root, ticket, data):
-    path = path_for(root, ticket)
-    parent = os.path.dirname(path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
+# ------------------------------------------------------------------ 讀寫
+
+
+def write(root, ticket, run_id, data):
+    path = path_for(root, ticket, run_id)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp%d" % os.getpid()
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(data, handle, ensure_ascii=False, indent=2, sort_keys=False)
@@ -151,49 +255,197 @@ def write(root, ticket, data):
     return path
 
 
-def read(root, ticket):
+def read(root, ticket, run_id):
     try:
-        with open(path_for(root, ticket), encoding="utf-8") as handle:
+        with open(path_for(root, ticket, run_id), encoding="utf-8") as handle:
             return json.load(handle)
     except (OSError, ValueError):
         return {}
 
 
+def keep_logs(root, ticket, run_id, logs):
+    """把 log 複製進這一輪的目錄。**land 成功後 worktree 會被收掉**,而 log 就在
+    那裡面 —— 只留路徑等於留了一個明天不存在的路徑(審查:status 的生命週期)。"""
+    kept = []
+    where = os.path.join(run_dir(root, ticket, run_id), "logs")
+    for log in logs:
+        if not os.path.exists(log):
+            kept.append({"path": log, "kept": "", "note": "跑完時這個檔不在"})
+            continue
+        os.makedirs(where, exist_ok=True)
+        target = os.path.join(where, os.path.basename(log))
+        stem, ext = os.path.splitext(target)
+        serial = 1
+        while os.path.exists(target):
+            target = "%s-%d%s" % (stem, serial, ext)
+            serial += 1
+        with open(log, "rb") as src, open(target, "wb") as dst:
+            dst.write(src.read())
+        kept.append({"path": log, "kept": os.path.relpath(target, root), "note": ""})
+    return kept
+
+
+def ticket_snapshot(root, ticket):
+    """票面快照:下一輪的 worker 不必再去讀票檔,也認得出票在它開工後被改過。"""
+    path = os.path.join(event.tickets_dir(root), "%s.json" % ticket)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    keep = ("id", "subject", "objective", "state", "state_version", "attempt",
+            "base_sha", "allowed_write_paths", "acceptance", "verify",
+            "objections", "review", "retry_limit")
+    return {key: data[key] for key in keep if key in data}
+
+
+def repair_context(root, args):
+    env = {}
+    for item in args.env or []:
+        key, _, value = item.partition("=")
+        if key:
+            env[key] = value
+    return {
+        "version": 1,
+        "base_sha": args.base_sha or "",
+        "ticket": ticket_snapshot(root, args.ticket),
+        "worktree": args.worktree or "",
+        "patch": file_ref(args.patch),
+        "verify_patch": file_ref(args.verify_patch),
+        "round": args.round,
+        "prev_evidence": args.prev_evidence or "",
+        "repro": {"cmd": args.repro or "", "cwd": args.cwd or ""},
+        "env": env,
+    }
+
+
+# ------------------------------------------------------------------ 子指令
+
+
 def cmd_start(args):
     root = event.repo_root()
-    data = {"state": "running", "kind": args.kind, "ticket": args.ticket,
-            "sha": args.sha or "", "started": now(), "finished": None,
-            "rc": None, "report": args.report or "", "logs": [],
-            "failures": [], "flaky": []}
-    print("status: %s" % os.path.relpath(write(root, args.ticket, data), root))
+    run_id = args.run_id or new_run_id()
+    data = {"state": "running", "run_id": run_id, "kind": args.kind,
+            "ticket": args.ticket, "sha": args.sha or "", "started": now(),
+            "finished": None, "rc": None, "note": "",
+            "report": args.report or "", "logs": [], "kept_logs": [],
+            "phases": [], "failures": [], "suspected_flaky": [],
+            "repair_context": repair_context(root, args)}
+    path = write(root, args.ticket, run_id, data)
+    print("status: %s" % os.path.relpath(path, root))
+    print("run_id: %s" % run_id)
     return 0
+
+
+def cmd_phase(args):
+    """gate / merge / push 各記一筆。**混成一格的 `done` 會說謊**:land 舊版在 merge
+    與 push 之前就寫 `done, rc=0`,所以「合進去了」與「只是閘門綠」長得一樣。"""
+    root = event.repo_root()
+    run_id = args.run_id or latest_run(root, args.ticket)
+    if not run_id:
+        sys.stderr.write("status: #%s 沒有任何一輪可以記 phase\n" % args.ticket)
+        return 2
+    data = read(root, args.ticket, run_id)
+    if not data:
+        sys.stderr.write("status: #%s 的 %s 讀不到\n" % (args.ticket, run_id))
+        return 2
+    data.setdefault("phases", []).append({
+        "phase": args.phase, "rc": args.rc, "at": now(),
+        "note": args.note or ""})
+    write(root, args.ticket, run_id, data)
+    print("status: #%s %s %s rc=%d" % (args.ticket, run_id, args.phase, args.rc))
+    return 0
+
+
+def flaky_ledger_path(root):
+    return os.path.join(reports_dir(root), FLAKY_LEDGER)
+
+
+def record_flakes(root, ticket, run_id, rows):
+    """持久事件帳。**舊版把單跑的證據丟掉**,所以同一條案例每天疑似一次,累計次數
+    永遠是 1,沒有人會去修它的不穩定(審查:flake 只被看見,沒有追到底)。"""
+    if not rows:
+        return []
+    path = flaky_ledger_path(root)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps({
+                "at": now(), "ticket": ticket, "run_id": run_id,
+                "case": row["case"], "kind": row["kind"],
+                "subtest": row.get("subtest", ""), "log": row.get("log", ""),
+            }, ensure_ascii=False) + "\n")
+    counts = {}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    case = json.loads(line)["case"]
+                except (ValueError, KeyError):
+                    continue
+                counts[case] = counts.get(case, 0) + 1
+    except OSError:
+        return []
+    threshold = event.config(root).get("flaky_threshold") or DEFAULT_FLAKY_THRESHOLD
+    hot = []
+    for row in rows:
+        seen = counts.get(row["case"], 0)
+        if seen >= threshold:
+            hot.append((row["case"], seen))
+    for case, seen in hot:
+        try:
+            event.emit("decision.asked", ticket=ticket, case=case, seen=seen,
+                       note="疑似 flaky 累計 %d 次(門檻 %d)—— 要開一張修不穩定的票嗎"
+                            % (seen, threshold))
+        except Exception:                                  # noqa: BLE001
+            pass
+        print("status: %s 疑似 flaky 累計 %d 次(門檻 %d)—— 已發 decision.asked,"
+              "主線用 `ticket.py inbox` 收" % (case, seen, threshold))
+    return hot
 
 
 def cmd_done(args):
     root = event.repo_root()
-    before = read(root, args.ticket)
+    run_id = args.run_id or latest_run(root, args.ticket) or new_run_id()
+    before = read(root, args.ticket, run_id)
     failures = []
     for log in args.log or []:
         failures.extend(parse_failures(log))
-    flaky_names = set(args.flaky or [])
-    flaky = [row for row in failures if row["case"] in flaky_names]
-    failures = [row for row in failures if row["case"] not in flaky_names]
+    suspect_names = set(args.suspected_flaky or [])
+    for row in failures:
+        row["suspected_flaky"] = row["case"] in suspect_names
+    # **留在 failures 裡**,不搬走:單跑綠只降級成「疑似」,紅還是紅(D-014 §1)。
+    suspected = [row for row in failures if row["suspected_flaky"]]
     data = {
         "state": "done",
+        "run_id": run_id,
         "kind": args.kind or before.get("kind") or "",
         "ticket": args.ticket,
         "sha": args.sha or before.get("sha") or "",
         "started": before.get("started") or now(),
         "finished": now(),
         "rc": args.rc,
+        "note": args.note or before.get("note") or "",
         "report": args.report or before.get("report") or "",
         "logs": list(args.log or []),
+        # 重跑的原始輸出**不再丟掉**(審查:「重跑輸出直接丟掉」)。它不進 failures
+        # 的解析 —— 同一條紅解析兩遍會讓紅榜看起來有兩條 —— 但檔要留著。
+        "extra_logs": list(args.extra_log or []),
+        "kept_logs": keep_logs(root, args.ticket, run_id,
+                               list(args.log or []) + list(args.extra_log or [])),
+        "phases": before.get("phases") or [],
         "failures": failures,
-        "flaky": flaky,
+        "suspected_flaky": suspected,
+        "repair_context": before.get("repair_context")
+                          or repair_context(root, args),
     }
-    path = write(root, args.ticket, data)
-    print("status: %s rc=%d 紅 %d 條,flaky %d 條"
-          % (os.path.relpath(path, root), args.rc, len(failures), len(flaky)))
+    path = write(root, args.ticket, run_id, data)
+    record_flakes(root, args.ticket, run_id, suspected)
+    print("status: %s rc=%d 紅 %d 條(其中疑似 flaky %d 條)"
+          % (os.path.relpath(path, root), args.rc, len(failures), len(suspected)))
     return 0
 
 
@@ -212,13 +464,38 @@ def cmd_failures(args):
 
 def cmd_show(args):
     root = event.repo_root()
-    data = read(root, args.ticket)
+    if args.runs:
+        rows = runs_of(root, args.ticket)
+        if not rows:
+            sys.stderr.write("status: #%s 一輪都還沒跑過\n" % args.ticket)
+            return 2
+        for name in rows:
+            data = read(root, args.ticket, name)
+            sys.stdout.write("%s  %s  %s  rc=%s\n"
+                             % (name, data.get("kind", "?"), data.get("state", "?"),
+                                data.get("rc")))
+        return 0
+    run_id = args.run_id or latest_run(root, args.ticket)
+    data = read(root, args.ticket, run_id) if run_id else {}
     if not data:
         sys.stderr.write("status: #%s 還沒有狀態檔(%s)—— 這一輪閘門根本沒開跑?\n"
-                         % (args.ticket, os.path.relpath(path_for(root, args.ticket), root)))
+                         % (args.ticket,
+                            os.path.relpath(ticket_dir(root, args.ticket), root)))
         return 2
     sys.stdout.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
     return 0
+
+
+def add_context_flags(parser):
+    parser.add_argument("--base-sha", default="")
+    parser.add_argument("--worktree", default="")
+    parser.add_argument("--patch", default="")
+    parser.add_argument("--verify-patch", default="")
+    parser.add_argument("--round", type=int, default=1)
+    parser.add_argument("--prev-evidence", default="")
+    parser.add_argument("--repro", default="")
+    parser.add_argument("--cwd", default="")
+    parser.add_argument("--env", action="append", default=[])
 
 
 def main(argv):
@@ -227,19 +504,33 @@ def main(argv):
 
     start = subs.add_parser("start")
     start.add_argument("--ticket", required=True)
+    start.add_argument("--run-id", default="")
     start.add_argument("--kind", default="gate")
     start.add_argument("--sha", default="")
     start.add_argument("--report", default="")
+    add_context_flags(start)
     start.set_defaults(run=cmd_start)
+
+    phase = subs.add_parser("phase")
+    phase.add_argument("--ticket", required=True)
+    phase.add_argument("--run-id", default="")
+    phase.add_argument("--phase", required=True, choices=PHASES)
+    phase.add_argument("--rc", type=int, required=True)
+    phase.add_argument("--note", default="")
+    phase.set_defaults(run=cmd_phase)
 
     done = subs.add_parser("done")
     done.add_argument("--ticket", required=True)
+    done.add_argument("--run-id", default="")
     done.add_argument("--kind", default="")
     done.add_argument("--sha", default="")
     done.add_argument("--rc", type=int, required=True)
+    done.add_argument("--note", default="")
     done.add_argument("--report", default="")
     done.add_argument("--log", action="append", default=[])
-    done.add_argument("--flaky", action="append", default=[])
+    done.add_argument("--extra-log", action="append", default=[])
+    done.add_argument("--suspected-flaky", action="append", default=[])
+    add_context_flags(done)
     done.set_defaults(run=cmd_done)
 
     fails = subs.add_parser("failures")
@@ -248,6 +539,8 @@ def main(argv):
 
     show = subs.add_parser("show")
     show.add_argument("--ticket", required=True)
+    show.add_argument("--run-id", default="")
+    show.add_argument("--runs", action="store_true")
     show.set_defaults(run=cmd_show)
 
     args = parser.parse_args(argv)

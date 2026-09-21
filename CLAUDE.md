@@ -12,7 +12,11 @@
 - **票是唯一的工作單位。** 沒有票的工作不派、不落地。票的契約在 `tickets/SCHEMA.md`。
 - **每個動作要發事件**(`scripts/event.py emit`),控制台只認事件。沒發事件的事,對系統而言沒發生。
 - **落地只走 `scripts/land.sh`**,它會拒絕該拒絕的(0 commit、基準版本過期、寫入範圍越界)。不准手動 merge 進主線。
-- **實作 agent 在副本裡工作、交 patch**,禁一切 git 寫入;規矩在 `docs/DISPATCH-TEMPLATE.md`,派工時整份給它。
+- **實作 agent 在副本裡工作、交 patch**,禁一切 git 寫入;規矩在 `docs/DISPATCH-TEMPLATE.md`。
+  **派工 prompt 只指路,不整份貼**(與 `memory/role/README.md`、`docs/SESSION-START.md` 同一句話):
+  短命角色開場自己讀 `memory/role/<role>.md` + `memory/model/<model>.md` + `docs/DISPATCH-TEMPLATE.md`;
+  prompt 裡只給**這張票獨有的四件事**(票號與票庫路徑、base sha、副本路徑、回報對象)。
+  全域交接(`docs/HANDOFF.md`)、事件流、開票清單**是主線的**,短命角色不讀 —— 每貼一份就是每一個 agent 各付一次。
 - **發版永遠是人授權、主線執行**;worker 與驗證者不碰。
 - **裁示進 `docs/DECISIONS.md`**,一列一條,附來源原話。半成品、未驗證、讀 code 推的,都要標出來。
 

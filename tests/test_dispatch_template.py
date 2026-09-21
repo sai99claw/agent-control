@@ -70,7 +70,22 @@ class Template(unittest.TestCase):
     def test_the_report_format_still_asks_for_verbatim_output_and_mutations(self):
         self.assertIn("測試輸出**逐字**", self.text)
         self.assertIn("變異驗紅表", self.text)
-        self.assertIn("票寫錯或發現的別的問題", self.text)
+        self.assertIn("票寫錯、發現的別的問題", self.text)
+
+    def test_the_report_format_asks_for_what_the_next_round_needs(self):
+        """**變異**:把 §8 的第 5、6 點拿掉 → 這一條紅。
+
+        2026-09-21 外部審查:每輪換新 worker,卻只傳上一輪 EVIDENCE —— 證據帳沒有
+        要求保留已排除的假設與最小重現,三輪可能重查相同 code。
+        """
+        for phrase in ("已排除的假設", "最小重現"):
+            self.assertIn(phrase, self.text, "少了給下一輪那個新的人的那一段")
+
+    def test_an_objection_has_to_land_on_the_ticket_not_just_in_the_report(self):
+        """**沒被收進票的反駁,與沒有反駁長得一樣**(外部審查 5.1)。"""
+        self.assertIn("objections[]", self.text)
+        self.assertIn("test_defect", self.text)
+        self.assertIn("不准放寬斷言", self.text)
 
 
 if __name__ == "__main__":

@@ -15,10 +15,22 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VERIFY = os.path.join(ROOT, "verify")
 
 def registered_tags():
-    p = os.path.join(VERIFY, "TAGS.md")
-    if not os.path.exists(p):
-        return set()
-    return set(re.findall(r"^- `([a-z0-9-]+)`", open(p, encoding="utf-8").read(), re.M))
+    """`verify/TAGS.md` **加上** `verify/TAGS.d/*.md` 的片段。
+
+    一票一個片段檔是為了讓「登記新標籤」不再讓每張票排隊等前一張落地(D-012 認過
+    TAGS 是最常見的衝突點)。片段還沒被 `verify-case.py tags-merge` 折進去之前也算數
+    —— 不然合併那一步就變成新的排隊點。
+    """
+    out = set()
+    paths = [os.path.join(VERIFY, "TAGS.md")]
+    d = os.path.join(VERIFY, "TAGS.d")
+    if os.path.isdir(d):
+        paths += [os.path.join(d, n) for n in sorted(os.listdir(d)) if n.endswith(".md")]
+    for p in paths:
+        if not os.path.exists(p):
+            continue
+        out |= set(re.findall(r"^- `([a-z0-9-]+)`", open(p, encoding="utf-8").read(), re.M))
+    return out
 
 def tags_of(path):
     tree = ast.parse(open(path, encoding="utf-8").read(), path)

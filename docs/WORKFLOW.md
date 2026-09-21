@@ -11,25 +11,34 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 | Ready | 範圍、可操作的驗收、依賴達成、`base_sha`、`allowed_write_paths` |
 | InReview | patch、測試輸出逐字、變異驗紅、回報標明實測/推論 |
 | IntegrationQueued | 審查通過、局部閘門綠、無未解阻擋 |
-| Done | **`scripts/ticket.py verify` 證明改動真的在主線**(票要有 `verify_strings`;沒有的話只能弱檢查,verify 會明說,主線要自己補 grep)、文件已更新、事件齊全 |
+| Done | **同一份必要條件,`close` 與 `set state Done` 共用**(D-014):① `scripts/ticket.py verify` 證明改動真的在主線,**弱檢查不算過**(沒有 `verify_strings` 就補一條再關);② 有回歸證據(`test_evidence` 或 `verify.baseline`);③ 有一格**綁著票版本與分支 sha** 的 `review`;④ `objections[]` 裡沒有未處置的阻擋項 |
 
 **exit code 0 不等於 Done;worker 說做完不等於 Done;閘門綠是對某個 `base_sha` 說的,基準走遠就過期。**
 
 ## 一票一分支一副本
 - worker 拿到 `base_sha` 的 `git archive` 副本(`work/`)與對照副本(`base/`),交 `diff -ruN base work > patch.diff`。
-- 主線或落地器把 patch 套進 `wt/<ticket>` worktree,跑局部閘門(`scripts/gate.sh --branch`),commit,排隊。
-- **同時只准一個 `land.sh`**;land 期間主線不得往主線提交。發版期間不開 land。
+- 主線或落地器把 patch 套進 `wt/<ticket>` worktree,跑局部閘門(`scripts/gate.sh --branch --ticket <n>`),commit,排隊。
+  **這一手是人做的,不是 `land.sh` 做的** —— `land.sh` 收的是已經有 commit 的分支(`docs/ROLES.md` 的角色表以前把這一手藏掉了)。
+- **同時只准一個 `land.sh`**:`land.sh` 自己用一把 `mkdir` 鎖擋(`.land.lock`),拿不到就指名現在是誰在落地。land 期間主線不得往主線提交。發版期間不開 land。
 
 ## 落地(`scripts/land.sh t1 t2 …`)
 1. 先印每支分支的 commit 數與標題(**讓人看見它以為自己在做什麼**)。
 2. 任一支 0 commit → 整批拒絕(跳過會生出沒有人要求過的組合)。
 3. 任一支的 `base_sha` 有問題 → 拒絕,分兩種話講:**主線根本沒有那個 sha**(副本是拿錯的 ref 做的,回去查副本從哪來)vs **有但不是主線祖先**(主線走遠了,rebase 後重跑閘門)。兩者 `merge-base` 都非零,下一步差很多。
 4. patch 動到 `allowed_write_paths` 以外 → 拒絕。
-5. 依序合到 `land/<ts>` worktree,跑全套(`scripts/gate.sh --full`),綠才 `--ff-only` 推主線;紅則主線不動、worktree 留著給人看。
-6. 每一步發事件。
+5. **覆核與反駁是硬閘門**(D-014):票要有一格 `review`,`verdict` 通過、`state_version` 等於票現在的版本、`sha` 對得上這條分支的頭;`objections[]` 裡有未處置的阻擋項 → 拒絕。三者任一不成立都在**開 worktree、跑九分鐘全套之前**就退回。
+6. 依序合到 `land/<ts>` worktree,跑全套(`scripts/gate.sh --full`),綠才 `--ff-only` 推主線;紅則主線不動、worktree 留著給人看。
+7. **gate / merge / push 各記一筆**(狀態檔的 `phases`),而且**每一條退出路徑都寫終態**。
+8. 綠了之後 land 印「#n 已合併、尚未關票」——**land 不關票**,關票走 `scripts/ticket.py close <n>`。
+9. 每一步發事件。
 
 ## 閘門(`scripts/gate.sh`)
 專案自己定義三層:`--branch`(改動檔對應的模組)、`--base`(基礎組)、`--full`(全套)。**對不到任何模組要出聲,不准印一行綠。** 判綠先寫檔再讀退出碼,不用 `cmd | tail`。瀏覽器引擎由 `available()` 判,不在指令列收窄。
+
+`--ticket <n>` 再多做三件事(範本 `scripts/gate.example.sh` 也示範了這一格):
+1. 寫這一輪的狀態檔(見下)。
+2. **真的去跑票的回歸**:票的 `verify.tags` 併 `tags` → `scripts/verify.py --tag …`,原始輸出存 `verify.log` 並進狀態檔的 `logs`。宣告了 tags 卻一個案例都選不到 = 非零(那是缺口,不是綠)。`--full` 則跑**全部**回歸。
+3. flake 重跑(見下一節)。
 
 ## 發版
 主線執行、人事先授權;順序:tag → build → staging → 閘門 → prod → 健康檢查 → 記事件。**發版期間不開 land。**
@@ -39,25 +48,75 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 - 兩支分支都往同一份文件尾巴附加(HANDOFF 那類)一定衝突:**先等對方進去再寫**,而不是寫完再解——解衝突時讀的是 diff,先等讀的是完整的檔。
 - 自動合成功不等於合對:land 輸出出現 `Auto-merging <文件>` 就把結果讀一遍。
 
-## 狀態檔(2026-09-21,D-010)
-每次 gate / land / docs 開跑寫 `reports/t<n>-status.json` `{state:"running", kind, sha, started}`,跑完覆寫 `{state:"done", rc, report, logs:[…], failures:[{case, file, engine, log, line, excerpt}], flaky:[…]}`。failures 從 `^(FAIL|ERROR):` 與其後的 Traceback 擷取(excerpt ≤ 20 行)。agent 讀這一份就知道跑完了沒、錯了什麼、去哪看;不必看全套輸出。
+## 狀態檔 = 交接包(2026-09-21,D-010 + D-014)
+每次 gate / land / docs 開跑寫 `reports/t<n>/<run_id>/status.json`,**一輪一個目錄、不覆寫**;log 另外複製一份進 `reports/t<n>/<run_id>/logs/`(land 成功後 worktree 會被收掉,而 log 就住在那裡面)。
 
-## 回歸紅了之後(2026-09-21,D-010)
-1. 紅的案例**單獨重跑一次**(同 worktree、同 commit);單跑綠的標 flaky 移出 failures;全 flaky → gate 視為綠,land 自動再跑一次全套(上限一次)。
-2. 真紅 → 落地器用 headless `claude -p` 起**新** worker:派工文 = 共用規矩 + 票面 + 目前 patch 路徑 + failures 逐條 excerpt + 上一輪 EVIDENCE + 「第 r 輪」;交回 `patch-round<r+1>.diff` 後自動 redo / land。
-3. 停下來報主線的三種情況:worker 標「票寫錯 / 需要裁示」;三輪仍紅;failures 裡有票沒動到的檔(疑似他票或環境)。
-4. 覆核不自動:主線讀 patch 記 review 後才 land。
+```
+{state, run_id, kind, ticket, sha, started, finished, rc, note,
+ phases: [{phase: gate|merge|push, rc, at, note}],
+ logs: […], extra_logs: […], kept_logs: [{path, kept}],
+ failures: [{case, kind, subtest, file, line, engine, log, excerpt, suspected_flaky}],
+ suspected_flaky: […],
+ repair_context: {version, base_sha, ticket: <票面快照>, worktree,
+                  patch: {path, sha256}, verify_patch: {path, sha256},
+                  round, prev_evidence, repro: {cmd, cwd}, env}}
+```
 
-### 這一段哪些已經是程式,哪些還只是規格
-| 規格 | 這個 repo 的狀態 |
-|---|---|
-| `reports/t<n>-status.json`(running / done、rc、failures 逐條、flaky) | **已實作**:`scripts/status.py`,由 `scripts/gate.sh --ticket <n>` 與 `scripts/land.sh` 寫 |
-| 紅的案例單獨重跑一次判 flake;全 flaky 視為綠 | **已實作**:`scripts/gate.sh --ticket <n>`(`AC_NO_FLAKE_RERUN=1` 可關)。`land.sh` 那一側**只寫紅榜、不重跑** —— 一批裡哪一條紅對到哪一張票,要有票↔案例的對照才判得出來,還沒做。 |
-| 落地器用 headless `claude -p` 起新 worker、三輪上限、三種停下來報主線 | **規格已定、腳本未實作**(第一個使用它的專案 #615 / #616 實作中)。在那之前這一步由主線手動做,做的時候照上面 1–4 條。 |
-| land 前檢查 `verify.files` 都在分支上 | **規格已定、腳本未實作**;`land.sh` 現在只檢查 `allowed_write_paths` 與 `verify_strings`。 |
+`repair_context` 存在的理由:下一輪換的是**新的** worker,它手上只有這一份檔。少了 base_sha、票面快照、副本位置、patch 雜湊、第幾輪、上一輪排除過什麼、怎麼重現,它得回頭翻對話或猜檔案位置 —— 那一趟比整份 log 還貴。`failures` 從 `^(FAIL|ERROR):` 與其後的 Traceback 擷取(excerpt ≤ 20 行),**原生 subTest 的圓括號參數也認**(`FAIL: test_x (mod.Case.test_x) (engine='firefox')`)。
+
+## 回歸紅了之後(2026-09-21,D-010;flake 與歸責那兩條 D-014 改寫)
+1. 紅的案例**單獨重跑一次**(同 worktree、同 commit)。**單跑綠只標 `suspected_flaky`** —— 原始失敗留在紅榜、rc 一個位元都不動。接著用**原順序整組重跑一次**(`AC_FLAKE_RERUN_GROUP=0` 關掉),仍紅就是真紅;綠了也只是「疑似」,放不放行是人的判斷。
+   > ⛔ 取代 D-010 原本的「全 flaky 視為綠」。2026-09-21 外部審查的實測反例:第一條測試污染共用狀態、第二條檢查乾淨狀態 —— 整組必紅、乾淨程序單跑必綠,而舊規則正是以「所有紅的案例單跑都綠」為由回傳 0。**順序依賴的 bug 於是每一次都被判成偶發。**
+2. 疑似 flaky 逐筆寫進 `reports/flaky.jsonl`(持久事件帳,不隨下一輪清空)。同一條累計到門檻(`board/config.json` 的 `flaky_threshold`,預設 3)自動發 `decision.asked`,主線用 `ticket.py inbox` 收,決定要不要開一張修不穩定的票。
+3. 真紅 → 起**新** worker:派工文 = 共用規矩指路 + 票面 + `repair_context`(patch 路徑與雜湊、第幾輪、上一輪 EVIDENCE、重現指令)+ failures 逐條 excerpt。每輪結束 `scripts/ticket.py round <n> <第幾輪> --red|--green`。
+4. **三輪耗盡不是一句話,是一個狀態轉換**:`round` 在第 `retry_limit+1` 輪仍紅時把票轉 **Blocked**、`owner` 設成 `main`,並發 `ticket.attempt.failed`。舊規則只寫「報主線」,而「報了」與「沒報」在票上長得一樣。
+5. 停下來報主線的兩種情況:worker 判斷**票寫錯 / 需要裁示**(寫成 `objections[]` 的一筆,見下);三輪耗盡。
+   > ⛔ **「紅在票沒動到的檔 → 疑似他票」這一條拿掉了**(D-014)。`failures.file` 取的是 traceback 最後一個檔案,經常是既有測試或共用 helper;而產品改壞行為,本來就會紅在完全沒修改的測試檔。歸責改用**同條件的 baseline / candidate 對照**(`scripts/verify-case.py check`:同一份案例在乾淨主線與 candidate 上各跑一次)。**未完成歸因前,票由原 owner 持有** —— 不因為某個檔沒被這張票改過就轉成別人的問題。
+6. 覆核不自動:主線讀 patch 把 `review` 記進票(工具自動把票的 `state_version` 蓋進去),land 才收。
+
+## 實作者的反駁怎麼被收下(2026-09-21,D-014)
+worker 說「這張票寫錯了」以前只是一句話:沒有結構化類別、沒有收件者、沒有處置期限,而**沒有人收的反駁與沒有反駁長得一樣**。現在它是票上的一格:
+
+```json
+"objections": [{"category": "ticket-wrong", "body": "驗收第二條與設計文件對不上",
+                "evidence": "EVIDENCE.md:12", "owner": "main",
+                "disposition": "", "follow_up": ""}]
+```
+`category` 是 `ticket-wrong` / `blocking`(或 `blocking: true`)就是阻擋項;`disposition` 空著 → **land 拒絕、`close` 拒絕**。處置寫 `accepted` / `rejected` / `deferred` / `fixed`,要有 owner,建議附後續票號。
+
+## 交接類型:`test_defect`(2026-09-21,D-014)
+票是對的、程式也是對的,**錯的是案例本身**(oracle 或 fixture 寫錯)時:worker **不准**放寬斷言、不准改 oracle。它交一筆 `objections[{"category": "test_defect", …}]` 附反例,主線派**獨立的驗證者**去修案例(產品 worker 不碰)。需求本身有爭議才退回開題者。少了這一條,流程只剩一句模糊的「需要裁示」,而 worker 手上唯一能動的東西就是斷言。
+
+### 這一段哪些已經是程式,哪些還只是規格(2026-09-21 逐項對照真實入口重寫)
+**這張表以前漏列了四項重大未實作**,而一張漏列的能力表比沒有能力表更糟:它讓人以為那幾件事有程式在守。以下每一列都對著一個真的入口。
+
+| 規格 | 這個 repo 的狀態 | 真實入口 |
+|---|---|---|
+| 狀態檔:一輪一個目錄、不覆寫、`repair_context`、`phases`、持久 log | **已實作** | `scripts/status.py`,由 `gate.sh --ticket` 與 `land.sh` 寫 |
+| 單跑綠只標 `suspected_flaky` + 原順序整組重跑;rc 不因 flake 變綠 | **已實作** | `scripts/gate.sh`(`AC_NO_FLAKE_RERUN=1` / `AC_FLAKE_RERUN_GROUP=0`) |
+| flake 持久事件帳 + 達門檻發 NeedsDecision | **已實作** | `reports/flaky.jsonl`;`status.py` 發 `decision.asked` |
+| flake 達門檻**自動開修復票** | **規格已定、未實作** —— 現在只發 `decision.asked`,由主線決定開不開 | — |
+| 局部閘門跑**票的 `verify.tags`** | **已實作**(以前漏列) | `gate.sh --ticket <n>` → `scripts/verify.py --tag …`,原始輸出存檔 |
+| 全套跑**全部回歸**,不靠執行器自測間接跑 | **已實作**(以前漏列) | `gate.sh --full` → `scripts/verify.py` |
+| **baseline 驗紅**(乾淨主線該紅、candidate 該綠),import 失敗不算紅 | **已實作**(以前漏列) | `scripts/verify-case.py check <n>` → 寫票的 `verify.baseline` |
+| 驗證產物抽成 `patch-verify.diff`;新 tag 一票一片段再合併 | **已實作** | `verify-case.py extract` / `tags-merge`;`verify/TAGS.d/<n>.md` |
+| **land 檢查 review 綁票版本與分支 sha、objections 未處置就拒絕** | **已實作**(以前漏列) | `scripts/land.sh` 第 5 步 |
+| **land 互斥鎖** | **已實作**(以前只寫在文件裡) | `scripts/land.sh` 的 `.land.lock`(mkdir) |
+| 進 Done 的必要條件 `close` 與 `set state Done` 共用;弱檢查不准自動關票 | **已實作**(以前 `set state Done` 是一條旁路) | `ticket.py` 的 `done_blockers()` |
+| 遲到的回報拿 `attempt` / `state_version` 比對後拒收;寫入走同一把鎖 | **已實作**(SCHEMA 以前宣稱過但沒有實作) | `ticket.py set --expect-attempt / --expect-state-version`;`.ticket.lock` |
+| 三輪耗盡 → 票轉 Blocked 並指派主線 | **已實作** | `ticket.py round <n> <r> --red` |
+| **套 patch、建分支、commit** | **未實作** —— 這一手**由主線手動做**(`docs/WORKFLOW.md` §patch 管線),`land.sh` 收的是已經有 commit 的分支 | — |
+| **關票** | **land 不關票**;它印「已合併、尚未關票」 | `scripts/ticket.py close <n>` |
+| land 前檢查 `verify.files` 都在分支上 | **規格已定、未實作** | — |
+| 落地器用 headless `claude -p` **自動起新 worker** | **規格已定、腳本未實作**(2026-09-21 主線裁示:這一輪先不做;硬閘門與交接閉環先上,免得把現有漏接自動放大) | — |
+| `land.sh` 那一側自己判 flake | **未實作** —— 一批裡哪一條紅對到哪一張票,要有票↔案例的對照才判得出來 | — |
 
 ## 驗證者的案例怎麼進閘門
-票的 `verify.tags` 併進 `tags` 一起跑;land 前檢查 `verify.files` 都在分支上(#587 那把尺:patch 裡列的每個 `+++` 檔都要真的出現在 worktree)。驗證者不出 VERDICT;紅了照上一節走。
+票的 `verify.tags` 併進 `tags`,由 `gate.sh --ticket <n>` **真的呼叫** `scripts/verify.py --tag …`(原始輸出存檔)。`--full` 跑全部回歸。驗證者不出 VERDICT;紅了照上一節走。
+
+**新標籤一票一個片段檔** `verify/TAGS.d/<票號>.md`,`scripts/verify.py` 直接認它,`scripts/verify-case.py tags-merge` 再折進 `verify/TAGS.md`。理由:所有票都往同一份登記檔的尾巴附加,等於每張票都要等前一張落地(D-012 認過 TAGS 是最常見的衝突點);一票一個檔就不會撞,序列化的只剩合併那一步。
+
+land 前檢查 `verify.files` 都在分支上(#587 那把尺)**還沒實作**,見上面的能力表。
 
 ## patch 管線:多張票接連落地時會撞什麼(2026-09-21 實測)
 連續落地幾張票,**幾乎一定**撞到兩個地方:所有票都往尾端附加的登記檔(`verify/TAGS.md` 那一類)

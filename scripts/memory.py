@@ -41,7 +41,10 @@ import event      # noqa: E402
 import ticket     # noqa: E402
 
 DEFAULT_CAP = 2000
-DEFAULT_APPLIES = ("memory/model/*.md",)
+# D-013:**任一層記憶**都受上限管,不只模型私有那一層 —— 角色卡與專案共識一樣是
+# 「每個 session 的第一口空氣」。紀錄類文件(DECISIONS / HANDOFF)不在這裡:
+# 它們是**用 grep 查的**,不是每次載入的。
+DEFAULT_APPLIES = ("memory/model/*.md", "memory/role/*.md", "memory/project/*.md")
 DEFAULT_INBOX_SUFFIX = ".inbox.md"
 NOT_A_MEMORY = "README.md"     # 說明檔不是誰的記憶 —— glob 抓得到它,上限不該管它
 CONSOLIDATOR_ROLE = "consolidator"
@@ -182,17 +185,38 @@ def open_consolidation(rel):
     return None
 
 
+def consolidators(conf):
+    """整理由**兩個不同的模型**討論(D-013),不是單一 session 自己刪。
+
+    理由:一個 session 刪自己的記憶時,最先刪掉的是它自己看不懂的那幾條 —— 而那正是
+    別的模型看得出價值的那幾條。`memory.consolidators` 是一張名單;只設了舊的單數
+    `memory.consolidator` 就退回一個人,並在票面上說出來。
+    """
+    many = conf.get("consolidators")
+    if isinstance(many, list) and many:
+        return [str(x) for x in many if x]
+    one = conf.get("consolidator")
+    return [str(one)] if one else []
+
+
 def open_ticket_for(rel, chars, cap, out):
     conf = memory_config()
     suffix = conf.get("inbox_suffix") or DEFAULT_INBOX_SUFFIX
-    model = conf.get("consolidator") or ""
+    who = consolidators(conf)
+    model = ", ".join(who)
     inbox = inbox_path(rel, suffix)
     argv = [
         "--subject", "整理 %s(%d 字元,上限 %d)" % (rel, chars, cap),
         "--objective",
-        "跟該模型照 docs/DISCUSSION.md 的格式討論後壓縮 %s,或者寫出理由把上限提高"
-        "(D-006「老師帶學生」、D-007「沒有討論檔不准整理」);併入 %s" % (rel, inbox),
+        "由 %s 照 docs/DISCUSSION.md 的格式討論後壓縮 %s,或者寫出理由把上限提高"
+        "(D-006「老師帶學生」、D-007「沒有討論檔不准整理」、D-013「兩個模型、只留原則」);"
+        "併入 %s" % (model or "兩個不同的模型", rel, inbox),
         "--acceptance", "`scripts/memory.py check` 對 %s 退出碼 0" % rel,
+        "--acceptance", "**兩個不同的模型**參與討論(%s);討論檔列得出雙方的分歧"
+                        % (model or "名單見 board/config.json 的 memory.consolidators"),
+        "--acceptance", "整理後只留**具體的原則、行為準則、思考方式**;**不直接寫案例**,"
+                        "案例用票號當來源引用(例:「快照層只畫說得出處的畫面(#585)」)",
+        "--acceptance", "案例原文留在紀錄類文件(DECISIONS 歸檔 / HANDOFF 歷史),記憶檔只留指路",
         "--acceptance", "保留的每一條仍帶日期 / 來源票號 / 實測或推論三個標記",
         "--acceptance", "提高上限的話,`cap_history` 有一列寫得出多讀的那幾百字省了什麼",
         "--acceptance", "討論存成 discussions/<date>-memory-<model>.md(docs/DISCUSSION.md 的格式)",

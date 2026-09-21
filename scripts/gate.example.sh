@@ -7,8 +7,13 @@
 #   --branch   改動檔對應到的模組(改一個錯字不該跑全套)
 #   --base     基礎組:不管改了什麼都要過的那幾支(不變量、授權、入口守衛、契約)
 #   --full     全套(落地前跑的就是這一發)
+#   --ticket <票號>   多寫一份狀態檔、多跑票的回歸(照抄的人常常漏這一格)
 #
 # 照抄這一支,改三個地方:BASE、map() 的對照表、最底下真正跑測試的那兩行。
+#
+# 5️⃣ `--ticket`:**照抄舊版的人拿不到新狀態功能**(2026-09-21 外部審查)。少了這一格,
+#    專案的 gate 收到 `--ticket 7` 會回「不認得」而整個閘門退出碼 2 —— 而 2 與「紅了」
+#    在呼叫者眼裡長得很像。所以這一支把它一起示範掉。
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 LOG=${AC_GATE_LOG:-$ROOT/gate.log}
@@ -61,16 +66,41 @@ map() {
 #   分支多跑兩分鐘,換到零。
 
 want_base=0; want_branch=0; want_full=0
-for a in "$@"; do
-    case "$a" in
+TICKET=${AC_GATE_TICKET:-}
+ARGC=$#
+while [ $# -gt 0 ]; do
+    case "$1" in
         --base) want_base=1 ;;
         --branch) want_branch=1 ;;
         --full) want_full=1 ;;
-        --*) echo "gate: 不認得 $a(--branch / --base / --full)" >&2; exit 2 ;;
-        *) map "$a" ;;
+        --ticket)
+            shift
+            [ $# -ge 1 ] || { echo "gate: --ticket 後面要票號" >&2; exit 2; }
+            TICKET=$1 ;;
+        --*) echo "gate: 不認得 $1(--branch / --base / --full / --ticket <票號>)" >&2; exit 2 ;;
+        *) map "$1" ;;
     esac
+    shift
 done
-[ $# -ge 1 ] || { echo "gate: 要 --branch / --base / --full 或一串檔名" >&2; exit 2; }
+[ "$ARGC" -ge 1 ] || { echo "gate: 要 --branch / --base / --full 或一串檔名" >&2; exit 2; }
+
+# 狀態檔與票的回歸。`AC` 這一組腳本在哪由專案填(同一顆 repo 就是 $ROOT/scripts)。
+AC=${AC_CONTROL_DIR:-$ROOT/scripts}
+RUN_ID=${AC_GATE_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}
+# 寫不出來要出聲,但**不擋閘門**:讓一個紀錄問題升級成一個交付問題是划不來的。
+status_start() {
+    [ -n "$TICKET" ] || return 0
+    python3 "$AC/status.py" start --ticket "$TICKET" --kind gate --run-id "$RUN_ID" \
+        --sha "$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo '')" \
+        --repro "sh scripts/gate.sh $*" --cwd "$ROOT" >/dev/null 2>&1 \
+        || echo "gate: 狀態檔寫不出來(不擋閘門)" >&2
+}
+status_done() {   # $1 = rc
+    [ -n "$TICKET" ] || return 0
+    python3 "$AC/status.py" done --ticket "$TICKET" --kind gate --run-id "$RUN_ID" \
+        --rc "$1" --log "$LOG" >/dev/null 2>&1 \
+        || echo "gate: 狀態檔寫不出來(不擋閘門)" >&2
+}
 
 # 4️⃣ 真的跑測試的那兩行。**判綠先寫檔再讀退出碼**,不用 `cmd | tail`:
 #    管線的退出碼是右邊那一支的(`false | tail` 是 0)。
@@ -78,6 +108,7 @@ if [ "$want_full" -eq 1 ]; then
     ( cd "$ROOT/$TESTS" && python3 -m unittest discover -s . -p "test_*.py" ) > "$LOG" 2>&1
     rc=$?
     grep -aE "^Ran |^OK|^FAILED" "$LOG" || echo "gate: log 裡連 Ran 都沒有,看 $LOG"
+    status_done "$rc"
     exit $rc
 fi
 
@@ -93,14 +124,56 @@ fi
 mods=$(echo "$mods" | tr ' ' '\n' | sed '/^$/d' | sort -u | tr '\n' ' ')
 rc=0
 if [ -n "$mods" ]; then
+    status_start
     ( cd "$ROOT/$TESTS" && python3 -m unittest $mods ) > "$LOG" 2>&1
     rc=$?
     grep -aE "^Ran |^OK|^FAILED" "$LOG" || echo "gate: log 裡連 Ran 都沒有,看 $LOG"
+    # 票的回歸:`verify.tags` 併 `tags` 拿去叫執行器。**不跑等於沒有守著這張票**
+    # —— 「驗證者交了案例」與「案例真的在守這張票」在閘門的綠上長得一樣。
+    if [ -n "$TICKET" ] && [ -f "$AC/verify.py" ]; then
+        tags=$(python3 - "$ROOT" "$TICKET" <<'PY' 2>/dev/null || true
+import json, os, sys
+root, ident = sys.argv[1], sys.argv[2]
+sys.path.insert(0, os.path.join(root, "scripts"))
+import event
+try:
+    with open(os.path.join(event.tickets_dir(root), "%s.json" % ident),
+              encoding="utf-8") as handle:
+        data = json.load(handle)
+except (OSError, ValueError):
+    raise SystemExit(0)
+plan = data.get("verify") if isinstance(data.get("verify"), dict) else {}
+out = []
+for tag in list(data.get("tags") or []) + list(plan.get("tags") or []):
+    if tag and tag not in out:
+        out.append(str(tag))
+print(" ".join(out))
+PY
+)
+        if [ -n "$tags" ]; then
+            targs=""
+            for t in $tags; do targs="$targs --tag $t"; done
+            # shellcheck disable=SC2086
+            ( cd "$ROOT" && python3 "$AC/verify.py" $targs ) > "$LOG.verify" 2>&1
+            vrc=$?
+            grep -aE "^Ran |^OK|^FAILED|^verify: " "$LOG.verify" || true
+            [ "$rc" -ne 0 ] || rc=$vrc
+        else
+            echo "gate: 票 #$TICKET 沒有宣告 verify.tags —— 這一輪沒有回歸可跑"
+        fi
+    fi
+    status_done "$rc"
 fi
 if [ -n "$unmapped" ]; then
     echo "gate: 這幾個改動檔對不到任何測試模組 —— 沒有人守著它們:"
     for f in $unmapped; do echo "gate:   $f"; done
     exit 3
 fi
-[ -n "$mods" ] || { echo "gate: 沒有給我任何要跑的東西"; exit 2; }
+if [ -z "$mods" ]; then
+    # 「這一輪根本沒有東西跑」也是一個結果:狀態檔留在 running 與「還在跑」長得一樣。
+    status_start
+    status_done 2
+    echo "gate: 沒有給我任何要跑的東西"
+    exit 2
+fi
 exit $rc

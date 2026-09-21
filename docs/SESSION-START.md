@@ -2,10 +2,19 @@
 
 ## 所有角色
 1. `git log --oneline -1 main` 與 `git status --short`:知道自己站在哪個版本、工作樹乾不乾淨。
-2. 讀 `docs/HANDOFF.md` 最後三節。
-3. `python3 scripts/event.py tail 20`:最近發生的事;`python3 scripts/ticket.py list --open`。
-4. **發一筆事件**:`scripts/event.py emit session.start --role <role> --model <model>`。控制台從此看得到你。
-5. 讀 `memory/model/<你的模型>.md`(你這個模型在這個專案踩過的坑)。
+2. **發一筆事件**:`scripts/event.py emit session.start --role <role> --model <model>`。控制台從此看得到你。
+3. 讀 `memory/model/<你的模型>.md` 與 `memory/role/<你的角色>.md`。
+
+## 第 1 步之外,誰讀什麼(2026-09-21 對齊 `CLAUDE.md` 與 `memory/role/README.md`)
+| | 主線 | 短命角色(開題者 / 實作者 / 驗證者) |
+|---|---|---|
+| `docs/HANDOFF.md` 最後三節 | ✓ | ✗ —— 那是主線的交接 |
+| `event.py tail 20`、`ticket.py list --open` | ✓ | ✗ |
+| 自己那張票 + 票的 `decision_refs` | — | ✓ |
+| `docs/DISPATCH-TEMPLATE.md` | ✓ | ✓ |
+| 其他文件 | **grep 定位,讀那幾行** | **grep 定位,讀那幾行** |
+
+理由:每一份「所有角色都要讀」的檔案,成本是**乘以 agent 數**的。全域交接留給主線。
 
 ## 主線
 - 看收件匣 `python3 scripts/ticket.py inbox`:使用者填過的裁示要落成 `docs/DECISIONS.md` 一列。
