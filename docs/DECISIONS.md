@@ -79,6 +79,8 @@ tabby_pool 三天實測:角色定義散在派工 prompt 裡會漂,同一主張�
 6. `memory/model/fable.md`、`memory/model/opus.md` 已照這個規矩重寫一次,當範例。
    文件:`docs/MEMORY.md` §記憶不是紀錄;同步的一句話在 `CLAUDE.md`、`memory/role/README.md`、`docs/SESSION-START.md`。
 
+**補註(2026-09-21,使用者裁示)**:`memory/project/`(專案共識 = 前人踩坑的經驗)**不設大小上限**,它本來就會長得比較快,之後的人進去 grep 或整份讀都可以;它仍只准寫原則 / 行為準則 / 思考方式並引用票號,不貼案例原文。有上限、超標要兩個模型整理的是 `memory/model/` 與 `memory/role/`(每個 session 都要載入的那兩層)。
+
 ## D-014(2026-09-21)外部審查的處置:硬閘門、取消 flake 自動判綠、交接閉環
 來源:Codex astra 的獨立審查(全文與逐條處置 `docs/review/2026-09-21-astra-workflow-review.md`)。
 總評原話:「最大三個風險是回歸與覆核契約沒有真正擋住落地、單跑綠掩蓋順序/負載問題、失敗回報缺少版本與負責人而失聯…
