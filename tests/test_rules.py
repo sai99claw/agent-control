@@ -82,9 +82,10 @@ class WhatItPacks(RulesBase):
 class WhenItHasToCut(RulesBase):
 
     def test_cutting_says_which_file_was_cut(self):
-        done = self.rules("pack", "worker", "--model", "opus", "--max-bytes", "1200")
+        # 2000 不是 1200:記憶回寫段(約 600 B)先扣,1200 連前言 + 「砍過」那一句都放不下。
+        done = self.rules("pack", "worker", "--model", "opus", "--max-bytes", "2000")
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertLessEqual(len(done.stdout.encode("utf-8")), 1200)
+        self.assertLessEqual(len(done.stdout.encode("utf-8")), 2000)
         self.assertIn("截斷", done.stdout)
         self.assertIn("砍過", done.stdout)
 
@@ -141,6 +142,53 @@ class HowItAnswers(RulesBase):
         done = self.rules("pack", "worker", "--model", "nobody")
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("memory/role/implementer.md", done.stdout)
+
+
+class WhatItAlwaysCarries(RulesBase):
+    """第五段「記憶回寫」是固定文字、先扣預算:每個角色都帶,砍預算時砍的是別份。
+
+    **變異**:把 `pack()` 結尾接上 `MEMORY_NOTE` 那一行拿掉 → 這一組全紅。
+    """
+
+    ROLES = ("worker", "verifier", "opener", "main", "consolidator")
+    LAST_LINE = "沒寫就寫「無」。"
+
+    def test_every_role_gets_the_memory_writeback_section_within_the_cap(self):
+        for role in self.ROLES:
+            done = self.rules("pack", role, "--model", "opus")
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertIn("## 記憶回寫", done.stdout, role)
+            self.assertIn(self.LAST_LINE, done.stdout, role)
+            self.assertLessEqual(len(done.stdout.encode("utf-8")), 4096, role)
+
+    def test_the_section_says_when_to_write_and_when_not(self):
+        """措辭是這一段的全部:三種時刻、預設不寫、只寫原則、model 層只寫自己。"""
+        text = self.rules("pack", "worker", "--model", "opus").stdout
+        for phrase in ("預設不寫", "兩次以上", "角色卡沒講", "跨票", "memory.py note",
+                       "只准寫自己的", "300 字元", "EVIDENCE"):
+            self.assertIn(phrase, text)
+
+    def test_the_section_is_under_600_bytes(self):
+        sys.path.insert(0, os.path.join(self.repo, "scripts"))
+        try:
+            import importlib
+            rules = importlib.import_module("rules")
+        finally:
+            sys.path.pop(0)
+        self.assertLessEqual(rules.MEMORY_NOTE_BYTES, 600)
+
+    def test_a_tight_budget_cuts_the_other_parts_not_this_one(self):
+        """先扣預算的意思:上限縮到 2000 時,砍的是角色卡與節錄,這一段一個字不少。"""
+        done = self.rules("pack", "worker", "--model", "opus", "--max-bytes", "2000")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertLessEqual(len(done.stdout.encode("utf-8")), 2000)
+        self.assertIn("砍過", done.stdout)
+        self.assertTrue(done.stdout.rstrip("\n").endswith(self.LAST_LINE), done.stdout[-300:])
+
+    def test_stats_reports_the_section_bytes(self):
+        done = self.rules("pack", "worker", "--model", "opus", "--stats")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertRegex(done.stderr, r"記憶回寫 \d+ bytes")
 
 
 if __name__ == "__main__":
