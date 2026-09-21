@@ -1,0 +1,33 @@
+{
+  "id": "2",
+  "subject": "B1 memory.py note:記憶的唯一寫入口(O_APPEND 一行到 inbox / project 主檔)+ consolidate 持 memory/.lock",
+  "created": "2026-09-22T01:40:05+08:00",
+  "objective": "任何 agent 用一行指令寫一則原則到對的層,不 RMW 主檔;consolidate 在鎖內併 inbox 並 rename 成 .consumed;model 層 --by 的模型必須等於檔名",
+  "acceptance": [
+    "兩個行程各 note 50 行到同一 inbox → 100 行無交錯(subprocess 測)",
+    "consolidate 卡在鎖內時另一行程 note → 那行落在新 inbox 不消失;--by 模型不符 rc=2;超過 300 字元 rc=2"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/memory.py",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "bd8e5034c4f3e90f4851e702f87ec2a338834a29",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "規格見評估報告 docs/review/2026-09-22-memory-board-review.md §B1、§C2;裁示:project 層=紀錄、依主題分節、pack 帶最後 30 行;任何角色可寫任一角色 inbox;model 層只能寫自己模型;主檔只有 consolidate 能改"
+}

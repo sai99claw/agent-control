@@ -53,6 +53,17 @@ class WhatItPacks(RulesBase):
         self.assertIn("禁區", done.stdout)
         self.assertIn("5.5", done.stdout)
 
+    def test_a_consolidator_gets_a_pack_with_memory(self):
+        done = self.rules("pack", "consolidator", "--model", "opus")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("memory/model/opus.md", done.stdout)
+        self.assertIn("共用規矩節錄", done.stdout)
+
+    def test_the_chinese_consolidator_alias_is_recognized(self):
+        done = self.rules("pack", "整理者", "--model", "opus")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("規則包:consolidator", done.stdout)
+
     def test_a_verifier_gets_a_different_cut(self):
         """驗證者不需要「副本 + patch」那一整節(它交的是案例,不是產品 patch)。"""
         worker = self.rules("pack", "worker", "--model", "opus").stdout
@@ -111,7 +122,7 @@ class HowItAnswers(RulesBase):
     def test_roles_prints_the_table_of_who_gets_what(self):
         done = self.rules("roles")
         self.assertEqual(done.returncode, 0, done.stderr)
-        for role in ("worker", "verifier", "opener", "main"):
+        for role in ("worker", "verifier", "opener", "main", "consolidator"):
             self.assertIn(role, done.stdout)
 
     def test_a_model_name_with_a_tool_prefix_still_finds_its_memory(self):

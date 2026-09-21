@@ -1,0 +1,33 @@
+{
+  "id": "5",
+  "subject": "B4 event.py 加 agent.start/done/failed/memory.noted;auto-fix 起 worker 前後 emit 並把 stdout/stderr 導到 reports/t<n>/<run_id>/worker-round<r>.log",
+  "created": "2026-09-22T01:40:05+08:00",
+  "objective": "機器派的 agent 有事件與 log 檔可讓看板讀;不開 stream-json",
+  "acceptance": [
+    "auto-fix.sh --dry-run 後 events.jsonl 多 agent.start 與 agent.done|failed 各一行(帶 ticket/run_id/round/rc)",
+    "worker-round<r>.log 存在且非空(樁一個 echo 的 worker.command)"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "bd8e5034c4f3e90f4851e702f87ec2a338834a29",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "規格見評估報告 docs/review/2026-09-22-memory-board-review.md §B4;裁示:project 層=紀錄、依主題分節、pack 帶最後 30 行;任何角色可寫任一角色 inbox;model 層只能寫自己模型;主檔只有 consolidate 能改"
+}

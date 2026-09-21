@@ -1,0 +1,33 @@
+{
+  "id": "3",
+  "subject": "B3 status.py / ticket.py 補鎖:AC_RUN_ID 強制、flaky.jsonl 單次 write、create 配號進 Lock",
+  "created": "2026-09-22T01:40:05+08:00",
+  "objective": "同票兩輪 done 各帶 run_id 不互蓋;兩個行程同時 create 拿到不同 id",
+  "acceptance": [
+    "兩個行程同時 create → id 不同(subprocess 測)",
+    "phase/done 無 --run-id 且有 AC_RUN_ID → 用 env;都沒有 → 印警告再 fallback latest_run"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/status.py",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "bd8e5034c4f3e90f4851e702f87ec2a338834a29",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "規格見評估報告 docs/review/2026-09-22-memory-board-review.md §B3;裁示:project 層=紀錄、依主題分節、pack 帶最後 30 行;任何角色可寫任一角色 inbox;model 層只能寫自己模型;主檔只有 consolidate 能改"
+}

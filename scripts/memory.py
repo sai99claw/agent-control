@@ -30,11 +30,13 @@ vs 回去把結論寫完)。
 `cap_history` —— 寫在**那份檔自己身上**,下一個要再提高的人看得到上一次的理由。
 """
 
+import errno
 import glob as globmod
 import os
 import re
 import sys
-from datetime import date
+import time
+from datetime import date, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import event      # noqa: E402
@@ -44,10 +46,13 @@ DEFAULT_CAP = 2000
 # D-013:**任一層記憶**都受上限管,不只模型私有那一層 —— 角色卡與專案共識一樣是
 # 「每個 session 的第一口空氣」。紀錄類文件(DECISIONS / HANDOFF)不在這裡:
 # 它們是**用 grep 查的**,不是每次載入的。
-DEFAULT_APPLIES = ("memory/model/*.md", "memory/role/*.md", "memory/project/*.md")
+DEFAULT_APPLIES = ("memory/model/*.md", "memory/role/*.md")
 DEFAULT_INBOX_SUFFIX = ".inbox.md"
+DEFAULT_INBOX_MAX_LINES = 20
 NOT_A_MEMORY = "README.md"     # 說明檔不是誰的記憶 —— glob 抓得到它,上限不該管它
 CONSOLIDATOR_ROLE = "consolidator"
+LOCK_NAME = ".lock"
+LOCK_TIMEOUT = 10.0
 FENCE = "---"
 CAP_RE = re.compile(r"^cap_chars:\s*(\d+)\s*$", re.MULTILINE)
 
@@ -61,11 +66,14 @@ CONSOLIDATE_FLAGS = (
 
 USAGE = {
     "check": "scripts/memory.py check                       # 超過上限退出碼 1(不停工)",
+    "note": "scripts/memory.py note <model|role|project> <名> \"<一行>\" [--ticket N] [--by <role>@<model>]",
     "consolidate": "scripts/memory.py consolidate <記憶檔> --discussion <path> [--new-cap N --reason …]",
 }
 
 EXAMPLE = {
     "check": "python3 scripts/memory.py check",
+    "note": ('python3 scripts/memory.py note role implementer '
+             '"變異後先確認替換真的生效" --ticket 17 --by worker@opus'),
     "consolidate": ('python3 scripts/memory.py consolidate memory/model/opus.md \\\n'
                     '  --discussion discussions/2026-09-12-memory-opus.md \\\n'
                     '  --new-cap 2600 --by fable \\\n'
@@ -141,6 +149,106 @@ def inbox_path(path, suffix):
     return stem + suffix
 
 
+class MemoryLock(object):
+
+    def __init__(self, root, timeout=LOCK_TIMEOUT):
+        self.path = os.path.join(root, "memory", LOCK_NAME)
+        self.timeout = timeout
+        self.held = False
+
+    def __enter__(self):
+        deadline = time.time() + self.timeout
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        while True:
+            try:
+                os.mkdir(self.path)
+                self.held = True
+                with open(os.path.join(self.path, "holder"), "w", encoding="utf-8") as handle:
+                    handle.write("%d\n" % os.getpid())
+                return self
+            except OSError as exc:
+                if exc.errno != errno.EEXIST:
+                    raise
+                if time.time() >= deadline:
+                    raise RuntimeError("memory: 整理鎖拿不到(%s)" % self.path)
+                time.sleep(0.05)
+
+    def __exit__(self, *exc):
+        if self.held:
+            try:
+                os.remove(os.path.join(self.path, "holder"))
+                os.rmdir(self.path)
+            except OSError:
+                pass
+        return False
+
+
+def append_line(path, line):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    data = line.encode("utf-8")
+    handle = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        os.write(handle, data)
+    finally:
+        os.close(handle)
+
+
+def cmd_note(argv):
+    if len(argv) < 3:
+        sys.stderr.write("memory: %s\n" % USAGE["note"])
+        return 2
+    layer, name, text = argv[:3]
+    ticket_no = ""
+    by = ""
+    index = 3
+    while index < len(argv):
+        flag = argv[index]
+        if flag in ("--ticket", "--by") and index + 1 < len(argv):
+            if flag == "--ticket":
+                ticket_no = argv[index + 1]
+            else:
+                by = argv[index + 1]
+            index += 2
+            continue
+        return unknown_flag(flag)
+    if layer not in ("model", "role", "project"):
+        sys.stderr.write("memory: 層只認 model / role / project\n")
+        return 2
+    if not name or os.path.basename(name) != name:
+        sys.stderr.write("memory: 名稱只能是一個檔名\n")
+        return 2
+    if "\n" in text or "\r" in text:
+        sys.stderr.write("memory: note 一次只能寫一行\n")
+        return 2
+    if len(text) > 300:
+        sys.stderr.write("memory: note 最多 300 字元\n")
+        return 2
+    if by and ("@" not in by or by.rsplit("@", 1)[1] == ""):
+        sys.stderr.write("memory: --by 要是 <role>@<model>\n")
+        return 2
+    if not by:
+        by = "?@%s" % name if layer == "model" else "?@?"
+    if layer == "model" and by.rsplit("@", 1)[1] != name:
+        sys.stderr.write("memory: model 層只能由同模型寫入(%s != %s)\n"
+                         % (by.rsplit("@", 1)[1], name))
+        return 2
+    if any(word in text for word in ("當時", "那次")):
+        sys.stderr.write("memory: 警告:這句像案例;記憶只留原則,案例請用票號指路\n")
+    root = ticket.root()
+    suffix = memory_config().get("inbox_suffix") or DEFAULT_INBOX_SUFFIX
+    if layer == "project":
+        path = os.path.join(root, "memory", layer, name + ".md")
+    else:
+        path = os.path.join(root, "memory", layer, name + suffix)
+    meta = []
+    if ticket_no:
+        meta.append("#%s" % ticket_no.lstrip("#"))
+    meta.extend((date.today().isoformat(), by))
+    append_line(path, "- %s (%s)\n" % (text, ", ".join(meta)))
+    sys.stdout.write("memory: noted %s/%s\n" % (layer, name))
+    return 0
+
+
 def watched_files():
     """`memory.applies_to` 展開。兩種檔不受上限管:
 
@@ -160,6 +268,12 @@ def watched_files():
     suffix = conf.get("inbox_suffix") or DEFAULT_INBOX_SUFFIX
     out = []
     for pattern in patterns:
+        normalized = os.path.normpath(pattern)
+        project = os.path.join("memory", "project")
+        if normalized == project or normalized.startswith(project + os.sep):
+            sys.stdout.write("memory: %s 是 project 紀錄層,不做容量檢查 —— 已跳過\n"
+                             % pattern)
+            continue
         for path in sorted(globmod.glob(os.path.join(root, pattern))):
             rel = os.path.relpath(path, root)
             if rel.endswith(suffix) or os.path.basename(rel) == NOT_A_MEMORY:
@@ -262,6 +376,25 @@ def cmd_check(argv):
             sys.stdout.write("memory:   已經有一張開著的整理票 #%s,沒有再開\n" % already)
             continue
         open_ticket_for(rel, chars, cap, sys.stdout)
+    conf = memory_config()
+    suffix = conf.get("inbox_suffix") or DEFAULT_INBOX_SUFFIX
+    max_lines = int(conf.get("inbox_max_lines") or DEFAULT_INBOX_MAX_LINES)
+    root = ticket.root()
+    for layer in ("model", "role"):
+        pattern = os.path.join(root, "memory", layer, "*" + suffix)
+        for path in sorted(globmod.glob(pattern)):
+            with open(path, encoding="utf-8") as handle:
+                lines = sum(1 for line in handle if line.strip())
+            if lines <= max_lines:
+                continue
+            rel = os.path.relpath(path, root)
+            main_rel = rel[:-len(suffix)] + ".md"
+            over += 1
+            sys.stdout.write("memory: %s **%d / %d 行超過**\n"
+                             % (rel, lines, max_lines))
+            event.emit("memory.over_cap", file=rel, lines=lines, cap=max_lines)
+            if not open_consolidation(main_rel):
+                open_ticket_for(main_rel, lines, max_lines, sys.stdout)
     # 退出碼 1 是給 session 開頭看的:`new-session.sh` 跑這一支,紅了那個 session
     # 就知道自己的記憶該整理了 —— **但不停工**(docs/MEMORY.md 第 1 點)。
     return 1 if over else 0
@@ -353,39 +486,42 @@ def cmd_consolidate(argv):
         return 2
     path = os.path.join(root, rel) if not os.path.isabs(rel) else rel
     rel = os.path.relpath(path, root)
-    try:
-        text = read(path)
-    except OSError as exc:
-        sys.stderr.write("memory: 讀不到 %s —— %s\n" % (rel, exc))
-        return 2
     conf = memory_config()
     suffix = conf.get("inbox_suffix") or DEFAULT_INBOX_SUFFIX
     default_cap = int(conf.get("cap_chars") or DEFAULT_CAP)
-    front, body = split_front_matter(text)
-    before = len(body)
-    old_cap, _ = cap_of(front, default_cap)
-
-    inbox = inbox_path(path, suffix)
-    merged = 0
-    if os.path.exists(inbox):
-        extra = read(inbox)
-        _, extra_body = split_front_matter(extra)
-        extra_body = extra_body.strip()
-        if extra_body:
-            body = body.rstrip("\n") + "\n" + extra_body + "\n"
-            merged = len(extra_body)
-        os.remove(inbox)
-
-    cap = old_cap
-    if new_cap is not None:
-        cap = new_cap
-        front = set_cap(front, new_cap)
-        front = add_cap_history(front, {
-            "date": date.today().isoformat(), "from": old_cap, "to": new_cap,
-            "by": by or conf.get("consolidator") or "?",
-            "discussion": discussion, "reason": reason.strip()})
-    head = FENCE + "\n" + front + FENCE + "\n" if front else ""
-    write(path, head + body)
+    with MemoryLock(root):
+        try:
+            text = read(path)
+        except OSError as exc:
+            sys.stderr.write("memory: 讀不到 %s —— %s\n" % (rel, exc))
+            return 2
+        front, body = split_front_matter(text)
+        before = len(body)
+        old_cap, _ = cap_of(front, default_cap)
+        inbox = inbox_path(path, suffix)
+        consumed = ""
+        merged = 0
+        if os.path.exists(inbox):
+            run_id = os.environ.get("AC_RUN_ID") or "%s-%d" \
+                % (datetime.now().strftime("%Y%m%d-%H%M%S"), os.getpid())
+            consumed = "%s.%s.consumed" % (inbox, run_id)
+            os.rename(inbox, consumed)
+            extra = read(consumed)
+            _, extra_body = split_front_matter(extra)
+            extra_body = extra_body.strip()
+            if extra_body:
+                body = body.rstrip("\n") + "\n" + extra_body + "\n"
+                merged = len(extra_body)
+        cap = old_cap
+        if new_cap is not None:
+            cap = new_cap
+            front = set_cap(front, new_cap)
+            front = add_cap_history(front, {
+                "date": date.today().isoformat(), "from": old_cap, "to": new_cap,
+                "by": by or conf.get("consolidator") or "?",
+                "discussion": discussion, "reason": reason.strip()})
+        head = FENCE + "\n" + front + FENCE + "\n" if front else ""
+        write(path, head + body)
     after = len(body)
     event.emit("memory.consolidated", file=rel, before=before, after=after,
                merged=merged, cap_from=old_cap, cap_to=cap,
@@ -407,15 +543,17 @@ def main(argv):
     if verb in ("--help", "-h", "help"):
         sys.stdout.write(__doc__)
         return 0
-    if verb in ("check", "consolidate") and ("--help" in rest or "-h" in rest):
+    if verb in ("check", "note", "consolidate") and ("--help" in rest or "-h" in rest):
         return help_for(verb)
-    if verb in ("--help", "-h", "help") and rest and rest[0] in ("check", "consolidate"):
+    if verb in ("--help", "-h", "help") and rest and rest[0] in ("check", "note", "consolidate"):
         return help_for(rest[0])
     if verb == "check":
         return cmd_check(rest)
+    if verb == "note":
+        return cmd_note(rest)
     if verb == "consolidate":
         return cmd_consolidate(rest)
-    sys.stderr.write("memory: 不認得 %r(check / consolidate)\n" % verb)
+    sys.stderr.write("memory: 不認得 %r(check / note / consolidate)\n" % verb)
     return 2
 
 

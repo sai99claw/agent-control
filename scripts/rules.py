@@ -53,6 +53,9 @@ WANTED = {
     "main": ("main.md",
              ("0", "5.5", "5.7", "6.5"),
              "接需求、覆核、決定順序、發版"),
+    "consolidator": ("implementer.md",
+                     ("0.5", "5.5", "8"),
+                     "依討論結論整理記憶,保留原則與來源"),
 }
 # 專案可以在 board/config.json 的 `rules` 段改版面(同步到專案後角色卡住在
 # `docs/roles/`,共用規矩的節沒有編號、只有標題):
@@ -97,7 +100,8 @@ def resolve(found, key):
 
 ALIASES = {"implementer": "worker", "impl": "worker", "verify": "verifier",
            "verifier": "verifier", "opener": "opener", "open": "opener",
-           "main": "main", "worker": "worker"}
+           "main": "main", "worker": "worker", "consolidator": "consolidator",
+           "整理者": "consolidator"}
 
 
 def source_path(root, override=""):

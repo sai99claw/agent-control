@@ -16,9 +16,14 @@ import json
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from control_harness import Sandbox  # noqa: E402
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                "scripts"))
+import status as status_module  # noqa: E402
 
 # 一份真的 unittest 輸出(從這個 repo 自己跑出來的形狀抄的,不是手捏的格式)。
 LOG = """test_it_ran (test_ticket.T.test_it_ran) ... ok
@@ -104,8 +109,8 @@ class T(unittest.TestCase):
 
 class StatusFile(Sandbox):
 
-    def status(self, *args):
-        return self.run_py("scripts/status.py", *args)
+    def status(self, *args, env=None):
+        return self.run_py("scripts/status.py", *args, env=env)
 
     def load(self, ticket="7"):
         return self.status_of(ticket)
@@ -276,6 +281,43 @@ class StatusFile(Sandbox):
         phases = self.load()["phases"]
         self.assertEqual([(row["phase"], row["rc"]) for row in phases],
                          [("gate", 0), ("merge", 1)])
+
+    def test_phase_and_done_force_the_environment_run_id(self):
+        self.status("start", "--ticket", "7", "--run-id", "from-env")
+        self.status("start", "--ticket", "7", "--run-id", "from-flag")
+        env = self.env(AC_RUN_ID="from-env")
+        phase = self.status("phase", "--ticket", "7", "--run-id", "from-flag",
+                            "--phase", "gate", "--rc", "0", env=env)
+        done = self.status("done", "--ticket", "7", "--run-id", "from-flag",
+                           "--rc", "1", env=env)
+        self.assertEqual((phase.returncode, done.returncode), (0, 0))
+        env_data = json.loads(self.read("reports/t7/from-env/status.json"))
+        flag_data = json.loads(self.read("reports/t7/from-flag/status.json"))
+        self.assertEqual(env_data["rc"], 1)
+        self.assertEqual(env_data["phases"][0]["phase"], "gate")
+        self.assertEqual(flag_data["state"], "running")
+
+    def test_falling_back_to_latest_run_prints_a_warning(self):
+        self.status("start", "--ticket", "7", "--run-id", "r1")
+        phase = self.status("phase", "--ticket", "7", "--phase", "gate", "--rc", "0")
+        done = self.status("done", "--ticket", "7", "--rc", "0")
+        self.assertEqual((phase.returncode, done.returncode), (0, 0))
+        self.assertIn("警告", phase.stderr)
+        self.assertIn("警告", done.stderr)
+
+    def test_flaky_rows_are_appended_with_one_write(self):
+        rows = [
+            {"case": "test_x.T.test_a", "kind": "FAIL", "subtest": "", "log": "a.log"},
+            {"case": "test_x.T.test_b", "kind": "ERROR", "subtest": "", "log": "b.log"},
+        ]
+        original_write = os.write
+        with mock.patch.object(status_module.os, "write", wraps=original_write) as write_call:
+            status_module.record_flakes(self.repo, "7", "r1", rows)
+        self.assertEqual(write_call.call_count, 1)
+        saved = [json.loads(line) for line in
+                 self.read("reports/flaky.jsonl").splitlines()]
+        self.assertEqual([row["case"] for row in saved],
+                         ["test_x.T.test_a", "test_x.T.test_b"])
 
     def test_suspected_flakes_go_into_a_persistent_ledger(self):
         """**變異**:把 `record_flakes` 拿掉 → 這一條紅。

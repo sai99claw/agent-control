@@ -27,6 +27,30 @@ HERE=$(cd "$(dirname "$0")/.." && pwd)
 DEST=${1:?用法: sync-to-project.sh <專案根目錄> [--dry-run]}
 DRY=${2:-}
 [ -d "$DEST" ] || { echo "sync: 找不到專案目錄 $DEST" >&2; exit 2; }
+if [ "$DRY" = "--dry-run" ]; then
+  python3 - "$DEST/board/config.json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as handle:
+        config = json.load(handle)
+except (OSError, ValueError):
+    config = {}
+checks = (
+    ("rules.roles_dir", (config.get("rules") or {}).get("roles_dir") == "docs/roles"),
+    ("rules.models_dir", (config.get("rules") or {}).get("models_dir") == "docs/roles/model"),
+    ("memory.applies_to", isinstance((config.get("memory") or {}).get("applies_to"), list)),
+)
+missing = [name for name, present in checks if not present]
+if missing:
+    sys.stderr.write("sync: 專案 board/config.json 缺少必要設定:\n")
+    for name in missing:
+        sys.stderr.write("  %s\n" % name)
+    sys.exit(2)
+PY
+fi
 SRC_SHA=$(cd "$HERE" && git rev-parse --short HEAD 2>/dev/null || echo unknown)
 ROLES=$DEST/docs/roles
 MANIFEST=$ROLES/.sync-manifest

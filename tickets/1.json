@@ -1,0 +1,33 @@
+{
+  "id": "1",
+  "subject": "B0 修三處做錯:rules.py 認得 consolidator;memory.py check 不算 project 層;sync 檢查專案 config 三鍵",
+  "created": "2026-09-22T01:40:05+08:00",
+  "objective": "rules.py pack consolidator rc=0;memory.py check 對 memory/project 不開票;sync --dry-run 到缺鍵的目標 rc≠0 並點名三鍵",
+  "acceptance": [
+    "python3 scripts/rules.py pack consolidator → rc=0 且含記憶段",
+    "memory.py check 在含 project 檔的假 repo 上不列 project 檔;sync-to-project.sh --dry-run 對缺 rules.roles_dir 的目標回非零"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/*",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "bd8e5034c4f3e90f4851e702f87ec2a338834a29",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "規格見評估報告 docs/review/2026-09-22-memory-board-review.md §B0;裁示:project 層=紀錄、依主題分節、pack 帶最後 30 行;任何角色可寫任一角色 inbox;model 層只能寫自己模型;主檔只有 consolidate 能改"
+}

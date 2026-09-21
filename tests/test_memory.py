@@ -6,11 +6,18 @@
 
 import json
 import os
+import subprocess
 import sys
+import threading
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from control_harness import Sandbox  # noqa: E402
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                "scripts"))
+import memory as memory_module  # noqa: E402
 
 FRONT = "---\ncap_chars: %d\ncap_history: []\n---\n"
 
@@ -135,6 +142,16 @@ class MemoryCheck(Sandbox):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("inbox", done.stdout)
 
+    def test_project_memory_is_a_record_and_is_not_capped(self):
+        conf = json.loads(self.read("board/config.json"))
+        conf["memory"]["applies_to"] = ["memory/model/*.md", "memory/project/*.md"]
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        self.write("memory/project/decisions.md", "紀錄" * 2500)
+        done = self.memory("check")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("memory/project/*.md 是 project 紀錄層", done.stdout)
+        self.assertFalse(self.exists("tickets/1.json"))
+
 
 class Consolidate(Sandbox):
 
@@ -240,6 +257,44 @@ class Consolidate(Sandbox):
         self.assertIn("整理期間新記的一條", text)
         self.assertFalse(self.exists("memory/model/opus.inbox.md"),
                          "併過的 inbox 要收掉,不然下一輪會再併一次")
+        consumed = [name for name in os.listdir(os.path.join(self.repo, "memory", "model"))
+                    if name.startswith("opus.inbox.md.") and name.endswith(".consumed")]
+        self.assertEqual(len(consumed), 1)
+
+    def test_a_note_during_consolidation_lands_in_a_new_inbox(self):
+        self.write("memory/model/opus.md", FRONT % 2000 + "舊的一條\n")
+        self.write("memory/model/opus.inbox.md", "待整理的一條\n")
+        talk = self.talk()
+        entered = threading.Event()
+        release = threading.Event()
+        original = memory_module.write
+
+        def blocked_write(path, text):
+            entered.set()
+            self.assertTrue(release.wait(5))
+            original(path, text)
+
+        result = []
+        env = {"AC_ROOT": self.repo}
+
+        def consolidate():
+            with mock.patch.dict(os.environ, env, clear=False), \
+                    mock.patch.object(memory_module, "write", side_effect=blocked_write):
+                result.append(memory_module.cmd_consolidate(
+                    ["memory/model/opus.md", "--discussion", talk]))
+
+        thread = threading.Thread(target=consolidate)
+        thread.start()
+        self.assertTrue(entered.wait(5), "consolidate 沒有在鎖內走到主檔寫入")
+        noted = self.memory("note", "model", "opus", "整理同時寫入的新原則",
+                            "--ticket", "2", "--by", "worker@opus")
+        self.assertEqual(noted.returncode, 0, noted.stdout + noted.stderr)
+        release.set()
+        thread.join(5)
+        self.assertEqual(result, [0])
+        inbox = self.read("memory/model/opus.inbox.md")
+        self.assertIn("整理同時寫入的新原則", inbox)
+        self.assertNotIn("待整理的一條", inbox, "已被整理的舊 inbox 不該混進新 inbox")
 
     def test_still_over_the_cap_after_consolidating_is_not_reported_as_done(self):
         """「整理完了」與「整理完還是超過」不能都是退出碼 0。"""
@@ -248,6 +303,58 @@ class Consolidate(Sandbox):
                            "--discussion", self.talk())
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("還是超過上限", done.stdout)
+
+
+class Note(Sandbox):
+
+    def memory(self, *args):
+        return self.run_py("scripts/memory.py", *args)
+
+    def test_two_processes_append_fifty_complete_lines_each(self):
+        code = ("import os,sys; sys.path.insert(0,sys.argv[1]); import memory; "
+                "[memory.cmd_note(['role','worker',sys.argv[2]+str(i),"
+                "'--ticket','2','--by','worker@opus']) for i in range(50)]")
+        env = self.env(AC_ROOT=self.repo)
+        procs = [subprocess.Popen([sys.executable, "-c", code,
+                                  os.path.join(self.repo, "scripts"), prefix],
+                                 env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 text=True) for prefix in ("A-", "B-")]
+        outputs = [proc.communicate(timeout=30) for proc in procs]
+        self.assertEqual([proc.returncode for proc in procs], [0, 0], outputs)
+        lines = self.read("memory/role/worker.inbox.md").splitlines()
+        self.assertEqual(len(lines), 100)
+        self.assertTrue(all(line.startswith("- ") and "worker@opus" in line
+                            for line in lines))
+
+    def test_model_memory_rejects_a_different_writers_model(self):
+        done = self.memory("note", "model", "opus", "只寫自己的模型層",
+                           "--by", "worker@fable")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("只能由同模型寫入", done.stderr)
+
+    def test_a_note_over_three_hundred_characters_is_refused(self):
+        done = self.memory("note", "role", "worker", "x" * 301,
+                           "--by", "worker@opus")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("300", done.stderr)
+
+    def test_project_notes_append_the_main_record(self):
+        first = self.memory("note", "project", "decisions", "第一條",
+                            "--ticket", "2", "--by", "worker@opus")
+        second = self.memory("note", "project", "decisions", "第二條",
+                             "--ticket", "2", "--by", "verifier@fable")
+        self.assertEqual((first.returncode, second.returncode), (0, 0))
+        lines = self.read("memory/project/decisions.md").splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertIn("第一條", lines[0])
+        self.assertIn("第二條", lines[1])
+
+    def test_check_counts_an_inbox_over_twenty_lines(self):
+        self.write("memory/model/opus.md", "短的\n")
+        self.write("memory/model/opus.inbox.md", "".join("- 第%d條\n" % i for i in range(21)))
+        done = self.memory("check")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("21 / 20 行超過", done.stdout)
 
 
 if __name__ == "__main__":

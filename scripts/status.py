@@ -343,7 +343,10 @@ def cmd_phase(args):
     """gate / merge / push 各記一筆。**混成一格的 `done` 會說謊**:land 舊版在 merge
     與 push 之前就寫 `done, rc=0`,所以「合進去了」與「只是閘門綠」長得一樣。"""
     root = event.repo_root()
-    run_id = args.run_id or latest_run(root, args.ticket)
+    run_id = os.environ.get("AC_RUN_ID") or args.run_id
+    if not run_id:
+        sys.stderr.write("status: 警告:沒有 --run-id 或 AC_RUN_ID,改用最新一輪\n")
+        run_id = latest_run(root, args.ticket)
     if not run_id:
         sys.stderr.write("status: #%s 沒有任何一輪可以記 phase\n" % args.ticket)
         return 2
@@ -370,13 +373,18 @@ def record_flakes(root, ticket, run_id, rows):
         return []
     path = flaky_ledger_path(root)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "a", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps({
-                "at": now(), "ticket": ticket, "run_id": run_id,
-                "case": row["case"], "kind": row["kind"],
-                "subtest": row.get("subtest", ""), "log": row.get("log", ""),
-            }, ensure_ascii=False) + "\n")
+    lines = []
+    for row in rows:
+        lines.append(json.dumps({
+            "at": now(), "ticket": ticket, "run_id": run_id,
+            "case": row["case"], "kind": row["kind"],
+            "subtest": row.get("subtest", ""), "log": row.get("log", ""),
+        }, ensure_ascii=False) + "\n")
+    handle = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        os.write(handle, "".join(lines).encode("utf-8"))
+    finally:
+        os.close(handle)
     counts = {}
     try:
         with open(path, encoding="utf-8") as handle:
@@ -479,7 +487,10 @@ def open_flaky_ticket(root, case, seen, threshold, log, from_ticket):
 
 def cmd_done(args):
     root = event.repo_root()
-    run_id = args.run_id or latest_run(root, args.ticket) or new_run_id()
+    run_id = os.environ.get("AC_RUN_ID") or args.run_id
+    if not run_id:
+        sys.stderr.write("status: 警告:沒有 --run-id 或 AC_RUN_ID,改用最新一輪\n")
+        run_id = latest_run(root, args.ticket) or new_run_id()
     before = read(root, args.ticket, run_id)
     failures = []
     for log in args.log or []:

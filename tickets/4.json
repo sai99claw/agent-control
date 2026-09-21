@@ -1,0 +1,33 @@
+{
+  "id": "4",
+  "subject": "B2 pack 加固定「記憶回寫」段(≤600 B、先扣預算)+ DISPATCH-TEMPLATE §8 第八項交付「記憶」",
+  "created": "2026-09-22T01:40:05+08:00",
+  "objective": "四個角色與 consolidator 的 pack 都帶記憶回寫段且總量 ≤ 4096;EVIDENCE 可 grep 到 agent 寫了哪幾行",
+  "acceptance": [
+    "rules.py pack worker --stats 含「記憶回寫」且總 bytes ≤ 4096(golden 測試)",
+    "docs/DISPATCH-TEMPLATE.md §8 含「記憶:…沒寫就寫『無』」"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/rules.py",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "fable",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "bd8e5034c4f3e90f4851e702f87ec2a338834a29",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "規格見評估報告 docs/review/2026-09-22-memory-board-review.md §B2、§C1;裁示:project 層=紀錄、依主題分節、pack 帶最後 30 行;任何角色可寫任一角色 inbox;model 層只能寫自己模型;主檔只有 consolidate 能改"
+}

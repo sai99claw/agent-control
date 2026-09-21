@@ -14,6 +14,13 @@ def sync(dest, *extra):
                           capture_output=True, text=True, timeout=120)
 
 
+def write_config(dest):
+    os.makedirs(os.path.join(dest, "board"), exist_ok=True)
+    with open(os.path.join(dest, "board", "config.json"), "w") as handle:
+        handle.write('{"rules":{"roles_dir":"docs/roles","models_dir":"docs/roles/model"},'
+                     '"memory":{"applies_to":["memory/model/*.md"]}}')
+
+
 class SyncsTheScripts(unittest.TestCase):
     """遷移計畫 §0 第 3 條要專案的落地腳本「呼叫這一套」,而專案端以前**沒有東西可以
     呼叫** —— 這幾支只住在 agent-control 裡。"""
@@ -69,6 +76,7 @@ class SyncsTheScripts(unittest.TestCase):
 
     def test_dry_run_writes_nothing(self):
         with tempfile.TemporaryDirectory() as d:
+            write_config(d)
             r = sync(d, "--dry-run")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertFalse(os.path.exists(os.path.join(d, "scripts", "control",
@@ -115,10 +123,21 @@ class SyncToProject(unittest.TestCase):
 
     def test_dry_run_changes_nothing(self):
         with tempfile.TemporaryDirectory() as d:
+            write_config(d)
             r = sync(d, "--dry-run")
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("(dry-run)", r.stdout)
             self.assertFalse(os.path.exists(os.path.join(d, "docs/roles/verifier.md")))
+
+    def test_dry_run_refuses_a_project_missing_the_three_config_keys(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "board"))
+            with open(os.path.join(d, "board", "config.json"), "w") as handle:
+                handle.write('{"rules": {}, "memory": {}}')
+            r = sync(d, "--dry-run")
+            self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+            for key in ("rules.roles_dir", "rules.models_dir", "memory.applies_to"):
+                self.assertIn(key, r.stderr)
 
     def test_refuses_a_missing_project_dir(self):
         r = subprocess.run(["sh", os.path.join(HERE, "scripts/sync-to-project.sh"), "/nonexistent/x"], capture_output=True, text=True)
