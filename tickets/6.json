@@ -1,0 +1,33 @@
+{
+  "id": "6",
+  "subject": "flake 自動判定:紅的 case 單跑 5 次全綠 **且** 原順序整組再跑一次也綠 → 標 flaky 並自動重送(gate 續跑 / land 重跑);單跑綠整組紅 → 順序污染,當真 bug 交 worker",
+  "created": "2026-09-22T02:35:42+08:00",
+  "objective": "閘門與落地對隨機抖動不再要人手重跑;順序污染不會被誤判成 flake",
+  "acceptance": [
+    "假測試模組:一條隨機紅(rand < 0.3)→ 5 次單跑綠 + 整組綠 → status.json 標 flaky=auto、rc 轉 0、events 有 flake.auto_pass;flaky.jsonl 累計",
+    "一條靠前一條污染才紅的案例 → 單跑綠、整組紅 → rc 不變、紅榜保留、status 標 order_dependent"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/status.py",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "13fc95e3a43afbfd393a1872493d36f754522a21",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "使用者 2026-09-22 提案:worker 重現單隻 case,pass 再跑 5 次,全 pass 當系統怪/隨機 bug 重送;主線補一條:整組原順序也要綠,否則是順序污染。gate.example.sh 與 status.py failures/record_flakes 那一段;flaky_threshold 用既有 config。閾值(5 次、整組 1 次)寫進 board/config.json 可調。"
+}

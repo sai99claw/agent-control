@@ -1,0 +1,33 @@
+{
+  "id": "7",
+  "subject": "環境壞了要當場停:同一段裡同一引擎連紅 ≥ N 條且訊息同形 → 中止那一段、發 env.suspect 事件與 inbox 頁(列出引擎、同形訊息、疑似原因清單),不跑完再說",
+  "created": "2026-09-22T02:35:42+08:00",
+  "objective": "一次環境故障(瀏覽器自動化行程壞掉、磁碟滿、埠被占)最多浪費 N 條案例的時間,不是整段",
+  "acceptance": [
+    "假測試模組:safari 子測試連紅 12 條同一句 → 段 rc 非 0、status.json state=env_suspect、inbox 有一頁含『Safari --automation』檢查提示、events 有 env.suspect",
+    "同一段 3 條不同訊息的紅 → 不觸發,照常跑完"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/status.py",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "13fc95e3a43afbfd393a1872493d36f754522a21",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "2026-09-22 #620 落地兩輪白跑:safaridriver 起的 Safari 行程掛數小時後 storage 壞,26 條 safari 全紅、訊息同形(localStorage 空 / 進不了 #/home)。N 預設 8,同形 = 去掉數字與 id 後訊息相同。疑似原因清單寫在 inbox 頁:掛很久的 Safari --automation 行程、磁碟剩餘、埠占用。"
+}
