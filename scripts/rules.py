@@ -54,6 +54,47 @@ WANTED = {
              ("0", "5.5", "5.7", "6.5"),
              "接需求、覆核、決定順序、發版"),
 }
+# 專案可以在 board/config.json 的 `rules` 段改版面(同步到專案後角色卡住在
+# `docs/roles/`,共用規矩的節沒有編號、只有標題):
+#   "rules": {"roles_dir": "docs/roles", "models_dir": "docs/roles/model",
+#             "sections": {"worker": ["工作區", "判綠", …]}}
+# `sections` 的每一項可以是節號(`5.5`)或標題的一段字(子字串,第一個命中的節)。
+def rules_config(root):
+    try:
+        data = event.config(root).get("rules") or {}
+    except Exception:  # noqa: BLE001  config 壞掉就用預設版面,不要在這裡倒
+        data = {}
+    return data if isinstance(data, dict) else {}
+
+
+def roles_dir(root):
+    return rules_config(root).get("roles_dir") or os.path.join("memory", "role")
+
+
+def models_dir(root):
+    return rules_config(root).get("models_dir") or os.path.join("memory", "model")
+
+
+def wanted_sections(root, role, default):
+    custom = (rules_config(root).get("sections") or {}).get(role)
+    if isinstance(custom, list) and custom:
+        return tuple(str(x) for x in custom)
+    return default
+
+
+def resolve(found, key):
+    """`key` 對到 `blocks()` 的哪一格:先要完全相等(節號或整個標題),再用標題子字串。"""
+    if key in found:
+        return key
+    # 節號只准完全相等:`2` 不能因為某個標題裡有「2026」就算對上。
+    if re.match(r"^\d+(?:\.\d+)*$", key):
+        return None
+    for name, (title, _text) in found.items():
+        if key in title:
+            return name
+    return None
+
+
 ALIASES = {"implementer": "worker", "impl": "worker", "verify": "verifier",
            "verifier": "verifier", "opener": "opener", "open": "opener",
            "main": "main", "worker": "worker"}
@@ -131,11 +172,12 @@ def model_card(root, model):
     「那個模型還沒有記憶」。"""
     if not model:
         return ""
+    where = models_dir(root)
     for name in (model, model.split(":")[-1]):
-        rel = os.path.join("memory", "model", "%s.md" % name)
+        rel = os.path.join(where, "%s.md" % name)
         if os.path.exists(os.path.join(root, rel)):
             return rel
-    return os.path.join("memory", "model", "%s.md" % model.split(":")[-1])
+    return os.path.join(where, "%s.md" % model.split(":")[-1])
 
 
 def read_text(path):
@@ -147,11 +189,15 @@ def read_text(path):
 
 
 def pack(root, role, model, max_bytes, override=""):
-    card_name, wanted, one_line = WANTED[role]
+    card_name, default_wanted, one_line = WANTED[role]
+    wanted = wanted_sections(root, role, default_wanted)
     path = source_path(root, override)
     rel = os.path.relpath(path, root)
     found = blocks(path)
-    card_rel = os.path.join("memory", "role", card_name)
+    # 名單上的字對到文件裡的哪一節:節號完全相等,或標題含那段字。對到的用文件裡的
+    # 鍵,對不到的保留原字(底下會點名)。
+    keys = [(num, resolve(found, num)) for num in wanted]
+    card_rel = os.path.join(roles_dir(root), card_name)
     model_rel = model_card(root, model)
 
     head = ["# 規則包:%s —— %s" % (role, one_line),
@@ -166,7 +212,7 @@ def pack(root, role, model, max_bytes, override=""):
     head.append("- `%s` —— 共用規矩全文(下面只節錄 %d 節)" % (rel, len(wanted)))
     head.append("")
 
-    missing = [num for num in wanted if num not in found]
+    missing = [num for num, hit in keys if hit is None]
     if missing:
         # 名單與文件分岔了要**出聲**:一份靜靜少了兩節的規則包,與完整的那一份
         # 在畫面上長得一樣。
@@ -194,7 +240,7 @@ def pack(root, role, model, max_bytes, override=""):
     # 節的預算**逐節分,而且照名單的順序先給滿** —— 一整包分的話,第一節(最長的
     # 那一節)會把額度吃光,後面九節連標題都不會出現,讀的人因此不知道還有那九條規矩。
     # 每一節至少留標題 + 一句「全文在哪」:那一行本身就是一條提醒。
-    picked = [num for num in wanted if num in found]
+    picked = [hit for _num, hit in keys if hit is not None]
     budget = int(room * 0.45)
     reserve = 120
     body, rules_cut, used = [], False, 0
