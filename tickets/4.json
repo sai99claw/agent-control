@@ -21,7 +21,7 @@
   "attempt": 0,
   "base_sha": "bd8e5034c4f3e90f4851e702f87ec2a338834a29",
   "state": "Ready",
-  "state_version": 3,
+  "state_version": 4,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -38,5 +38,8 @@
     "note": "記憶回寫段 592 B、五角色都帶、golden 5 條;措辭對到 memory.py note 用法",
     "at": "2026-09-22T02:52:02+08:00",
     "state_version": 3
-  }
+  },
+  "verify_strings": [
+    "記憶回寫"
+  ]
 }
