@@ -3,7 +3,7 @@
 評估者:Fable(獨立)。對象:agent-control HEAD bd8e503;tabby_pool main 5c8718c。
 日期:2026-09-22。未改任何檔、未做 git 寫入、未碰任何 127.0.0.1 埠、未跑整支腳本。
 證據由三個 Opus 唯讀子工作者搜集(agent-control 端、tabby 看板端、原始 log 格式),我做交叉核對與結論。
-每條標「實測」(有人跑指令看到輸出)或「讀 code 推的」。路徑一律絕對路徑;`AC/` = /Users/franksai/ai_workspace/claude_workspace/agent-control,`TB/` = /Users/franksai/ai_workspace/claude_workspace/tabby_pool,`WT/` = /Users/franksai/ai_workspace/claude_workspace/tabby_pool_wt。
+每條標「實測」(有人跑指令看到輸出)或「讀 code 推的」。路徑一律絕對路徑;`AC/` = <home>/ai_workspace/claude_workspace/agent-control,`TB/` = <home>/ai_workspace/claude_workspace/tabby_pool,`WT/` = <home>/ai_workspace/claude_workspace/tabby_pool_wt。
 
 ---
 
