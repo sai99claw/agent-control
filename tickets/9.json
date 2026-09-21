@@ -1,0 +1,34 @@
+{
+  "id": "9",
+  "subject": "auto-fix 的重現/續跑指令要從 board/config.json 讀(gate.rerun_cmd),不寫死 scripts/gate.sh;同步到專案後閘門是 land-ticket.sh gate --rerun",
+  "created": "2026-09-22T05:26:16+08:00",
+  "objective": "同步產物在專案裡能自己把第 2 輪套回分支並續跑閘門,主線不用手合",
+  "acceptance": [
+    "config gate.rerun_cmd 設成假指令 → auto-fix 第 2 輪 apply 成功後呼叫它(事件記 gate.rerun);未設 → 用 scripts/gate.sh 並印警告",
+    "apply.sh rebase 在票有 base_sha 時套到當前主線副本、沒有時明說缺哪一格(不再只回 rc=2)"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/apply.sh",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "083f5801df50f01fdeee2d918d6cac8f68cc1c23",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "專案側 #635 已讓 gate 寫回 base_sha/branch;剩下 auto-fix.sh 第 337 行附近寫死 gate.sh。另:memory/model/gpt-5.6-sol.md 不存在,pack 指到一個不存在的路徑——本票順手建一張最小模型卡(只放已知的兩條:沙盒綁不了埠所以瀏覽器/server 案例交閘門;5 小時額度會用完要排程)。"
+}
