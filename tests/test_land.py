@@ -65,6 +65,96 @@ class NamesWhatItIsAbout(LandBase):
             self.assertIn(subject, done.stdout, "要落地的 commit 沒有被唸出來")
 
 
+class VerifyFilesMustBeOnTheBranch(LandBase):
+    """#587 那把尺:票說「案例在這幾個檔」,而分支上沒有那幾個檔。
+
+    少了這一條,票的 `verify.tags` 照樣會被閘門呼叫、照樣一個案例都選不到、照樣印
+    一行綠 —— 驗證者的交付沒有跟著進來,而畫面上一個徵兆都沒有。
+    """
+
+    def test_a_missing_verify_file_is_refused_with_its_own_exit_code(self):
+        """**變異**:把 `verify.files` 那一段拿掉 → 這一條紅。"""
+        branch = self.branch_for(1, "t1-x", verify={
+            "files": ["verify/example/test_ticket_1.py"], "tags": ["example"],
+            "run": "python3 scripts/verify.py --tag example", "notes": ""})
+        self.commit_in(branch, "src/a", "做了事,但沒把案例帶進來")
+        self.approve(1, "t1-x")
+        done = self.land("t1-x")
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        self.assertIn("verify/example/test_ticket_1.py", done.stdout)
+        self.assertIn("不在這條分支上", done.stdout)
+        self.assertFalse(self.gate_ran(), "拒絕要發生在跑九分鐘全套之前")
+
+    def test_a_verify_file_that_is_there_lands_normally(self):
+        """守衛要分得開「沒帶進來」與「帶進來了」—— 不然它擋的是所有帶 verify 的票。"""
+        branch = self.branch_for(1, "t1-x", allowed_write_paths=["src/*", "verify/*"],
+                                 verify={
+            "files": ["verify/example/test_ticket_1.py"], "tags": ["example"],
+            "run": "", "notes": ""})
+        self.write("verify/example/test_ticket_1.py",
+                   "import unittest\nTAGS = [\"example\"]\n\n\n"
+                   "class T(unittest.TestCase):\n    def test_one(self):\n"
+                   "        self.assertTrue(True)\n", where=branch)
+        self.git("add", "-A", cwd=branch)
+        self.git("commit", "-q", "-m", "案例跟著進來", cwd=branch)
+        self.approve(1, "t1-x")
+        done = self.land("t1-x")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def test_a_ticket_with_no_verify_files_is_not_blocked_by_this(self):
+        branch = self.branch_for(1, "t1-x")
+        self.commit_in(branch, "src/a", "還沒有回歸案例的票")
+        self.approve(1, "t1-x")
+        self.assertEqual(self.land("t1-x").returncode, 0)
+
+
+class LandWakesMainUp(LandBase):
+    """每一條退出路徑都寫一則收件匣 —— 主線不輪詢(D-015)。"""
+
+    def inbox(self):
+        return self.run_py("scripts/inbox.py", "list", "--all").stdout
+
+    def test_a_green_landing_says_the_ticket_still_needs_closing(self):
+        branch = self.branch_for(1, "t1-x")
+        self.commit_in(branch, "src/a", "一件事")
+        self.approve(1, "t1-x")
+        self.assertEqual(self.land("t1-x").returncode, 0)
+        listed = self.inbox()
+        self.assertIn("#1", listed)
+        self.assertIn("尚未關票", listed)
+
+    def test_a_refusal_also_leaves_a_page(self):
+        """**拒收也是終態**:退回去而沒有人知道,與沒有退回去一樣。"""
+        self.branch_for(1, "t1-empty")
+        self.assertNotEqual(self.land("t1-empty").returncode, 0)
+        self.assertIn("land 拒收", self.inbox())
+
+
+class AutoFixHook(LandBase):
+    """`land --auto-fix`:全套紅了派下一輪,**但只在這一批剛好一張票的時候**。"""
+
+    gate_stub = GATE_STUB_RED
+
+    def test_a_batch_with_two_tickets_refuses_to_guess_who_is_red(self):
+        """一批裡哪一條紅對到哪一張票,要有票↔案例的對照才判得出來 ——
+        **猜錯的歸責比不歸責更貴**:它會讓新 worker 去修一張沒有壞的票。"""
+        first = self.branch_for(1, "t1-a")
+        self.commit_in(first, "src/a", "第一張")
+        second = self.branch_for(2, "t2-b")
+        self.commit_in(second, "src/b", "第二張")
+        self.approve(1, "t1-a")
+        self.approve(2, "t2-b")
+        done = self.land("t1-a", "t2-b", "--auto-fix")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("不猜是誰紅的", done.stdout)
+
+    def test_an_unknown_flag_is_named(self):
+        self.branch_for(1, "t1-a")
+        done = self.land("t1-a", "--redo-everything")
+        self.assertEqual(done.returncode, 2, done.stdout)
+        self.assertIn("不認得", done.stdout)
+
+
 class ZeroCommits(LandBase):
 
     def test_a_branch_with_no_new_commits_is_refused_in_that_many_words(self):

@@ -70,6 +70,13 @@
 
 ## 未處置的清單(連同理由)
 
+> **2026-09-21 後續**:下面前七項在 **D-015** 全部做成程式 + 測試
+> (`scripts/apply.sh`、`scripts/auto-fix.sh`、`scripts/inbox.py`、`scripts/rules.py`、
+> `status.py` 的自動開票、`land.sh` 的 `verify.files`、`verify.py` 的同輪快取,
+> 遷移步驟寫進 `docs/TODO.md` §0 並由 `sync-to-project.sh` 同步到專案的 `scripts/control/`)。
+> 留著的只剩**一批多張票時的歸責**:票↔案例的對照還沒有,而猜錯的歸責比不歸責更貴。
+> 下表保留當時的理由原文,不改寫 —— 它記的是那一天的判斷。
+
 | 項目 | 理由 |
 |---|---|
 | 自動派新 worker(headless `claude -p`,三輪上限) | **主線裁示這一輪不做**。審查自己的總評就是「這三件先完成,再上自動派 worker,才不會把目前的漏接自動放大」。 |

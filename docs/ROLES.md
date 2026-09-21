@@ -12,10 +12,12 @@
 | **驗證者** | 短命、獨立上下文(Sonnet / Codex sol) | 把票面驗收寫成回歸案例;`verify-case.py check` **證明案例是對的**(乾淨主線紅、candidate 綠),登記片段 `verify/TAGS.d/<n>.md`,把怎麼跑寫進票的 `verify` 欄 | `verify/<feature>/test_ticket_<n>.py` + 票的 `verify`(含 `baseline`)+ `patch-verify.diff`(`verify-case.py extract` 出的) | **不判 PASS/FAIL、不寫 VERDICT**;不讀實作者的 `EVIDENCE.md`;**不跑 tag 回歸那一整組**(只跑自己的案例與 `verify-case.py check`);不輪詢;不改產品碼 |
 | **落地器** | `scripts/land.sh`(程式) | 閘門 → 合併 → push;紅了寫紅榜 | 事件、退出碼、`reports/t<n>/<run_id>/status.json` | 0 commit / 基準過期 / 越界 / **覆核缺或過期** / **未處置的阻擋反駁** / 閘門紅,一律拒絕;land 期間持一把互斥鎖。它**沒有判斷** |
 
-> **落地器不做兩件事,而角色表以前把它們藏掉了**(2026-09-21 外部審查):
-> **① 套 patch、建分支、commit** —— 這一手是**主線手動做**的(`docs/WORKFLOW.md` §patch 管線);`land.sh` 收的是已經有 commit 的分支。
+> **落地器不做三件事,而角色表以前把它們藏掉了**(2026-09-21 外部審查;第 ①③ 兩條 D-015 起有自己的入口):
+> **① 套 patch、建分支、commit** —— 走 `scripts/apply.sh <票號> <patch> [<patch-verify>]`;
+> `land.sh` 收的還是**已經有 commit 的分支**,它自己不套 patch。
 > **② 關票** —— land 成功後印「已合併、尚未關票」,關票走 `scripts/ticket.py close <n>`。
-> **③ 自動起新 worker** —— 規格已定、腳本未實作,這一輪先不做(見 WORKFLOW 的能力表)。
+> **③ 自動起新 worker** —— 走 `scripts/auto-fix.sh <票號>`(`land.sh --auto-fix` 只在一批剛好
+> 一張票時掛得上去;多張票的歸責要票↔案例的對照,還沒有)。
 | **知識維護** | 主線 | 更新 code map 與記憶 | 帶來源與版本的變更 | 未驗證推測不進共用知識 |
 
 ## 排序誰來做:沒有調度員這個角色(2026-09-21,D-010)
@@ -44,10 +46,13 @@
 ## 回歸紅了誰去修(2026-09-21,D-010;flake 與歸責 D-014 改寫)
 不叫醒舊 worker(它醒來一次 = 累積的整份上下文),也不設常駐調度員。紅榜寫成
 `reports/t<n>/<run_id>/status.json`,紅的案例**單獨重跑一次**:**單跑綠只標 `suspected_flaky`,rc 不動**,
-再用原順序整組重跑一次判真紅。真紅就起一個**新** worker(票 + `repair_context` + 紅榜),**三輪上限**;
+再用原順序整組重跑一次判真紅。真紅就由 **`scripts/auto-fix.sh <票號>`** 起一個**新** worker
+(規則包 + 票面快照 + `repair_context` + 紅榜),**三輪上限**;
 第 `retry_limit+1` 輪仍紅由 `ticket.py round` 把票轉 **Blocked、owner=main**。
-停下來報主線的兩種情況:worker 判斷票寫錯 / 需要裁示(寫成 `objections[]`)、三輪耗盡。
-**覆核不自動**:主線讀 patch 記 `review`(綁票版本與分支 sha)後 land 才收。
+停下來報主線的三種情況:worker 判斷票寫錯 / 需要裁示(EVIDENCE 寫一行 `OBJECTION:`,
+工具記成 `objections[]`)、三輪耗盡、**failures 沒有歸因**。每一種都寫一則
+`reports/inbox/<票號>-<run_id>.md` 去叫醒主線 —— **主線不輪詢**。
+**覆核不自動**:綠了票停在 `InReview`,主線讀 patch 記 `review`(綁票版本與分支 sha)後 land 才收。
 
 **歸責不看「這個檔有沒有被這張票改過」**(2026-09-21 取消這一條):`failures.file` 取的是 traceback 最後一個檔案,
 經常是既有測試或共用 helper,而產品改壞行為本來就會紅在沒修改過的測試檔。改用同條件的

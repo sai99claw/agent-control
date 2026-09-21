@@ -34,9 +34,13 @@ say "4. 記憶有沒有超過上限(D-006)"
 sh -c "python3 \"$ROOT/scripts/memory.py\" check" || echo "new-session: (超過上限,不停工;整理票已經開了)"
 
 if [ "$ROLE" = "main" ]; then
-    say "5. 收件匣:使用者填過的裁示要落成 docs/DECISIONS.md 一列"
+    # 終態收件匣(D-015)。**開場印一次,之後只在被通知時讀** —— 主線不輪詢 status,
+    # 因為每看一次背景工作就是整份上下文重送一輪。跑完的事自己會來這裡排隊。
+    say "5. 收件匣:跑完的事在等你(閘門、auto-fix、落地、轉 Blocked)"
+    python3 "$ROOT/scripts/inbox.py" list || true
+    say "6. 決策收件匣:使用者填過的裁示要落成 docs/DECISIONS.md 一列"
     python3 "$ROOT/scripts/ticket.py" inbox
-    say "6. 心跳:上一個 session / land 有沒有死在半路"
+    say "7. 心跳:上一個 session / land 有沒有死在半路"
     sh "$ROOT/scripts/heartbeat.sh" || true
 fi
 
@@ -44,6 +48,7 @@ say "發事件:控制台從此看得到你"
 python3 "$ROOT/scripts/event.py" emit session.start --role "$ROLE" --model "$MODEL"
 
 say "接下來要讀的(照順序)"
+echo "  reports/inbox/           上面印的那幾則(`inbox.py show <票號>` 讀一頁)"
 echo "  docs/HANDOFF.md          最後三節 —— 上一個 session 留給你的"
 echo "  docs/SESSION-START.md    你這個角色($ROLE)那一節"
 echo "  memory/model/$MODEL.md   你這個模型在這個專案踩過的坑"

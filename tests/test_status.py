@@ -294,6 +294,50 @@ class StatusFile(Sandbox):
         self.assertIn("decision.asked", self.kinds(),
                       "達門檻要發 NeedsDecision,不是只寫進一份沒有人讀的檔")
 
+    def test_reaching_the_threshold_opens_a_repair_ticket(self):
+        """達門檻**自動開一張修復票**(D-015)。
+
+        以前只發 `decision.asked` 就停在那裡,理由是「自動開票會生出沒人認領的票」。
+        實際相反:事件沒有 owner、沒有驗收,而**一則沒人認領的事件比一張沒人認領的
+        票更容易被滑過去** —— 票至少每個 session 開場都看得到。
+
+        **變異**:把 `open_flaky_ticket` 拿掉 → 這一條紅。
+        """
+        log = self.write("gate.log", LOG)
+        for index in range(3):
+            self.status("done", "--ticket", "7", "--run-id", "r%d" % index, "--rc", "1",
+                        "--log", log, "--suspected-flaky", "test_zz_red.T.test_it_is_red")
+        made = [row for row in self.tickets_on_disk()
+                if row.get("flaky_case") == "test_zz_red.T.test_it_is_red"]
+        self.assertEqual(len(made), 1, "同一條案例只開一張,不是每輪一張")
+        self.assertEqual(made[0]["role"], "verifier")
+        self.assertEqual(made[0]["state"], "Ready")
+        self.assertIn("test_zz_red.T.test_it_is_red", made[0]["subject"])
+        self.assertTrue(made[0]["acceptance"], "沒有驗收的票跟沒有票一樣")
+
+    def test_a_fourth_flake_does_not_open_a_second_ticket(self):
+        """誤判那一半用「同一條案例只開一張」擋住 —— 開著的還在就不再開。"""
+        log = self.write("gate.log", LOG)
+        for index in range(5):
+            self.status("done", "--ticket", "7", "--run-id", "r%d" % index, "--rc", "1",
+                        "--log", log, "--suspected-flaky", "test_zz_red.T.test_it_is_red")
+        made = [row for row in self.tickets_on_disk()
+                if row.get("flaky_case") == "test_zz_red.T.test_it_is_red"]
+        self.assertEqual(len(made), 1)
+
+    def test_the_auto_ticket_can_be_turned_off_in_config(self):
+        import json as _json
+        conf = _json.loads(self.read("board/config.json"))
+        conf["flaky_auto_ticket"] = False
+        self.write("board/config.json", _json.dumps(conf, ensure_ascii=False))
+        log = self.write("gate.log", LOG)
+        for index in range(3):
+            self.status("done", "--ticket", "7", "--run-id", "r%d" % index, "--rc", "1",
+                        "--log", log, "--suspected-flaky", "test_zz_red.T.test_it_is_red")
+        self.assertEqual([row for row in self.tickets_on_disk()
+                          if row.get("flaky_case")], [])
+        self.assertIn("decision.asked", self.kinds(), "關掉開票不等於關掉出聲")
+
 
 class GateWritesStatus(Sandbox):
     """`gate.sh --ticket <票號>`:同一支閘門,多一份給 agent 讀的狀態檔。"""

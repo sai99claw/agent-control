@@ -5,13 +5,18 @@
 ## 開 session 的第一件事(不要跳過)
 1. 讀 `docs/HANDOFF.md` 最後三節——上一個 session 留給你的。
 2. 讀 `docs/SESSION-START.md` 你這個角色那一節,照做。
-3. `python3 scripts/ticket.py list --open` 看開著的票;`python3 scripts/event.py tail 20` 看最近發生的事。
+3. `python3 scripts/inbox.py list` 看跑完的事在等你什麼;
+   `python3 scripts/ticket.py list --open` 看開著的票;`python3 scripts/event.py tail 20` 看最近發生的事。
 4. 用一句話跟使用者說你看到的現況,再開始。
 
 ## 不可違反的
 - **票是唯一的工作單位。** 沒有票的工作不派、不落地。票的契約在 `tickets/SCHEMA.md`。
 - **每個動作要發事件**(`scripts/event.py emit`),控制台只認事件。沒發事件的事,對系統而言沒發生。
-- **落地只走 `scripts/land.sh`**,它會拒絕該拒絕的(0 commit、基準版本過期、寫入範圍越界)。不准手動 merge 進主線。
+- **套 patch 只走 `scripts/apply.sh`**(它先驗檔頭與寫入範圍,commit 訊息帶票號與 patch sha256);
+  **落地只走 `scripts/land.sh`**,它會拒絕該拒絕的(0 commit、基準版本過期、寫入範圍越界、覆核過期、
+  `verify.files` 沒帶進來)。不准手動 merge 進主線。
+- **不准輪詢 status**:跑完的事會寫進 `reports/inbox/`,開場 `python3 scripts/inbox.py list` 一次,
+  之後被通知時再讀。每看一次背景工作就是整份上下文重送一輪。
 - **實作 agent 在副本裡工作、交 patch**,禁一切 git 寫入;規矩在 `docs/DISPATCH-TEMPLATE.md`。
   **派工 prompt 只指路,不整份貼**(與 `memory/role/README.md`、`docs/SESSION-START.md` 同一句話):
   短命角色開場自己讀 `memory/role/<role>.md` + `memory/model/<model>.md` + `docs/DISPATCH-TEMPLATE.md`;

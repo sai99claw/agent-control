@@ -34,7 +34,8 @@ TIMEOUT = 180
 
 SCRIPT_FILES = ("event.py", "ticket.py", "memory.py", "status.py", "land.sh",
                 "gate.sh", "heartbeat.sh", "new-session.sh", "verify.py",
-                "verify-case.py")
+                "verify-case.py", "apply.sh", "auto-fix.sh", "inbox.py",
+                "rules.py")
 
 # 回歸層的最小形狀:一個登記過的標籤 + 一個會綠的案例。沙盒少了它,`gate --full`
 # 跑到的回歸是一個空集合 —— 而**空集合與「都過了」長得一樣**,那正是這裡在擋的事。
@@ -46,6 +47,21 @@ TAGS = ["example"]
 class T(unittest.TestCase):
     def test_true(self):
         self.assertTrue(True)
+"""
+
+# 沙盒也要有 `.gitignore`,而且是**真 repo 那幾條**:執行時寫出來的東西不進 git。
+# 少了它,`gate.sh --branch` 會把 `reports/`、`__pycache__/` 當成「沒有人守著的改動檔」
+# 而退 3 —— 那是沙盒與事實的差異,不是受測腳本的行為(§5.6:演練環境要真)。
+SANDBOX_IGNORE = """__pycache__/
+*.pyc
+reports/
+gate.log
+gate.log.*
+verify.log
+board/events.jsonl
+board/answers.jsonl
+.land.lock/
+*.tmp[0-9]*
 """
 
 # 閘門的替身:寫一行標記檔就退出。**「有沒有被呼叫」因此是一個看得見的事實。**
@@ -117,6 +133,7 @@ class Sandbox(unittest.TestCase):
         self.write("docs/REHEARSAL.md", "# 哪些保證還只在演練裡成立\n\n"
                                         "| 工具 | 第一次真跑 | 要看到什麼 |\n|---|---|---|\n")
         self.write("README", "main\n")
+        self.write(".gitignore", SANDBOX_IGNORE)
         self.write(os.path.join("verify", "__init__.py"), "")
         self.write(os.path.join("verify", "example", "__init__.py"), "")
         self.write(os.path.join("verify", "example", "test_example.py"), VERIFY_CASE)
@@ -210,6 +227,17 @@ class Sandbox(unittest.TestCase):
     def kinds(self):
         return [row["kind"] for row in self.events()]
 
+    def tickets_on_disk(self):
+        """票庫裡現在有哪幾張(含腳本自己開出來的)。"""
+        where = os.path.join(self.repo, "tickets")
+        rows = []
+        for name in sorted(os.listdir(where)):
+            if not name.endswith(".json"):
+                continue
+            with open(os.path.join(where, name), encoding="utf-8") as handle:
+                rows.append(json.load(handle))
+        return rows
+
     def load_ticket(self, ident):
         return json.loads(self.read(os.path.join("tickets", "%s.json" % ident)))
 
@@ -267,3 +295,21 @@ class Sandbox(unittest.TestCase):
 
     def gate_ran(self):
         return os.path.exists(self.log)
+
+    # ------------------------------------------------------- 規則包要的那幾份
+
+    def install_rules_sources(self):
+        """`rules.py` 讀的三份:共用規矩、角色卡、模型記憶。
+
+        **只有要它們的測試才裝** —— 預設就複製進去的話,記憶上限那一組會量到這幾份,
+        而那一組問的是「超標會不會被發現」,不是「這個 repo 有幾份記憶」。
+        """
+        shutil.copy(os.path.join(ROOT, "docs", "DISPATCH-TEMPLATE.md"),
+                    os.path.join(self.repo, "docs", "DISPATCH-TEMPLATE.md"))
+        for kind in ("role", "model"):
+            src = os.path.join(ROOT, "memory", kind)
+            dst = os.path.join(self.repo, "memory", kind)
+            os.makedirs(dst, exist_ok=True)
+            for name in sorted(os.listdir(src)):
+                if name.endswith(".md"):
+                    shutil.copy(os.path.join(src, name), os.path.join(dst, name))

@@ -40,6 +40,8 @@ KINDS = (
     "release.start", "release.pass", "release.fail",
     # 決策收件匣:問出去、答回來。
     "decision.asked", "decision.answered",
+    # 終態叫醒主線(D-015):一則事件 + `reports/inbox/` 一頁。主線不輪詢 status。
+    "inbox.posted",
     # 記憶:量到超過上限、整理完成(docs/MEMORY.md「容量與整理」,D-006)。
     "memory.over_cap", "memory.consolidated",
 )
@@ -54,11 +56,26 @@ OUTSIDE = "(repo 外)"
 
 def repo_root():
     """repo 根。`AC_ROOT` 可以蓋掉它 —— 測試要把整支腳本指到一顆拋棄式 repo,
-    而**能被指到別處**正是「這一支沒有寫死任何專案」的可驗證形狀。"""
+    而**能被指到別處**正是「這一支沒有寫死任何專案」的可驗證形狀。
+
+    沒有 `AC_ROOT` 時往上找 `board/config.json`。理由是同步過去的形狀:專案把這幾支
+    放在 `scripts/control/`(`scripts/sync-to-project.sh`),而「上兩層」在那裡是
+    `<專案>/scripts` —— 票、事件、reports 會通通寫到一個沒有人看的目錄,而且
+    **它不會報錯**(設定讀不到就回空 dict,一路用預設值)。找不到就退回上兩層,
+    行為與以前一模一樣。
+    """
     override = os.environ.get(ENV_ROOT)
     if override:
         return os.path.abspath(os.path.expanduser(override))
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    here = os.path.dirname(os.path.abspath(__file__))
+    walk = here
+    for _ in range(5):
+        walk = os.path.dirname(walk)
+        if not walk or walk == os.path.dirname(walk):
+            break
+        if os.path.exists(os.path.join(walk, CONFIG_REL)):
+            return walk
+    return os.path.dirname(here)
 
 
 def config(root=None):

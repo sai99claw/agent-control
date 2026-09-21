@@ -27,6 +27,8 @@
 
 **第一段(票 Ready 就能開始,不必等 patch)**:照票面驗收寫案例、宣告 `TAGS`、寫 `verify/TAGS.d/<票號>.md`、
 把 `files` / `tags` / `run` / `notes` 寫進票的 `verify` 欄。
+> `files` 那一格是一把尺:**land 會檢查它們真的在分支上**,缺了 rc=4(D-015)。填了卻沒交,
+> 票的 tags 會被閘門呼叫、卻一個案例都選不到 —— 那是缺口,不是綠。
 **第二段(拿到指定的 patch 之後)**:`scripts/verify-case.py check <票號>` —— 同一份案例在**乾淨主線副本**上跑
 (該紅)、在 **candidate 副本**上跑(該綠),工具把證據寫進票的 `verify.baseline`:案例數、紅的是哪幾條、skip 幾條、
 兩邊的 sha。交付物用 `scripts/verify-case.py extract <票號>` 出(**只含自己的 verify 檔**,差分基準是乾淨主線)。
@@ -40,7 +42,9 @@
 **誰判對錯:閘門。** 驗證者**不判 PASS/FAIL、不寫 VERDICT、不讀實作者的 `EVIDENCE.md`、不輪詢**,
 而且**不跑 tag 回歸那一整組** —— 它只跑自己的案例與 `verify-case.py check`。同一組 tag 被 worker、驗證者、gate 各跑一次
 是三份同樣的綠(2026-09-21 外部審查的 token 帳)。
-閘門紅了走 `docs/WORKFLOW.md` §回歸紅了之後(起新 worker),**不回到驗證者**。
+閘門紅了走 `docs/WORKFLOW.md` §回歸紅了之後(`scripts/auto-fix.sh` 起新 worker),**不回到驗證者**。
+同一組標籤在同一輪裡只跑一次(`scripts/verify.py` 的 `reports/t<n>/<run_id>/verify-<雜湊>.log`,
+雜湊含標籤與 HEAD sha;`--no-cache` 關)—— 三份一模一樣的綠只是三份帳單。
 案例寫不出來(票面驗收不可執行)→ 退回開題者,不猜。
 
 ## 案例本身錯了:`test_defect`(2026-09-21,D-014)

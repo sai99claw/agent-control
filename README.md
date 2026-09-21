@@ -28,7 +28,20 @@ python3 scripts/event.py tail 20
 ```
 `ticket.py verify <id>` 會對主線 `grep` 那些 `--verify-string`;沒給就只能弱檢查,它會明說。
 
-上面這段是在乾淨 clone 裡真的跑過一遍才寫的(2026-09-12):new-session → 開票 → 事件 → 控制台 → heartbeat → verify,全部走得通。
+票開好、worker 把 `patch.diff` 交回來之後,**一路到落地都有入口,不必手動套 patch**:
+```sh
+sh scripts/apply.sh 1 /path/to/patch.diff          # 套進 t1 分支 + commit(檔頭與寫入範圍先驗過)
+(cd ../agent-control-wt/t1 && sh scripts/gate.sh --branch --ticket 1 --auto-fix)
+                                                    # 閘門;紅了自動派下一輪 worker(三輪上限)
+python3 scripts/inbox.py list                       # 跑完的事在這裡等你(主線不輪詢)
+python3 scripts/ticket.py set 1 review '{"verdict":"pass","by":"main","sha":"<分支頭>"}'
+sh scripts/land.sh t1                               # 全套綠才進主線;land 不關票
+python3 scripts/ticket.py close 1
+```
+主線走遠了先 `sh scripts/apply.sh rebase 1 <patch>` 重生一份乾淨 diff 再套。
+
+上面這兩段是在乾淨 clone 裡真的跑過一遍才寫的(2026-09-12 第一段;2026-09-21 連新入口
+再走一次:new-session → 開票 → apply → gate → inbox → review → land → close,全部走得通)。
 
 ## 這個 repo 裡有什麼
 
@@ -45,10 +58,24 @@ python3 scripts/event.py tail 20
 | `docs/TODO.md` | 還沒做的事與遷移計畫 | 主線 |
 | `tickets/` | 票的契約(schema)與票本身 | 控制台、排程、落地 |
 | `board/` | 控制台網頁與事件 API | 你 |
-| `scripts/` | land / gate / ticket / event / status 的可執行部分 | 落地與派工 |
+| `scripts/` | apply / gate / auto-fix / land / ticket / event / status / inbox / rules 的可執行部分 | 落地與派工 |
 | `templates/` | 派工文與討論的範本(`dispatch-verifier.md`、`project-CLAUDE.md`、`discussion.md`) | 派工的人 |
 | `memory/` | `project/` 共用、`model/<model>.md` 私有、`role/<role>.md` 角色卡 | 所有人 |
 | `code-map/` | 模組卡片與過期檢查 | 讀 code 的人 |
+
+## 一張票從頭到尾會碰到哪幾支
+
+| 這一步 | 入口 | 它擋住什麼 |
+|---|---|---|
+| 開票 | `scripts/ticket.py create` | 沒有驗收、沒有寫入範圍的票開不出來 |
+| 派工文前言 | `scripts/rules.py pack <角色>` | 整份共用規矩重複載入(≤ 4 KB,砍掉的會指名) |
+| 套 patch、建分支、commit | `scripts/apply.sh` | 絕對路徑檔頭、只清空不刪檔、越界、套一半 |
+| 局部閘門 | `scripts/gate.sh --branch --ticket <n>` | 對不到模組不准印綠;票的 `verify.tags` 真的被呼叫 |
+| 紅了修 | `scripts/auto-fix.sh <n>`(或閘門 `--auto-fix`) | 三輪上限;反駁 / 沒有歸因會停下來報主線 |
+| 主線被叫醒 | `scripts/inbox.py list` | 輪詢(每看一次背景工作 = 整份上下文重送一輪) |
+| 覆核 | `scripts/ticket.py set <n> review …` | 沒有人讀過 patch 的票進主線 |
+| 落地 | `scripts/land.sh` | 0 commit、基準過期、越界、覆核過期、`verify.files` 沒帶進來、閘門紅 |
+| 關票 | `scripts/ticket.py close <n>` | 改動其實不在主線上的票被關成完成 |
 
 ## 設計上的三個決定
 
@@ -61,10 +88,15 @@ python3 scripts/event.py tail 20
 
 ## 狀態
 
-v0.1(2026-09-12)。從 tabby_pool 抽出來、去掉專案名。**還沒有第二個專案用過**——`docs/TODO.md` 第一節就是遷移計畫。
+v0.2(2026-09-21)。從 tabby_pool 抽出來、去掉專案名。2026-09-21 補上七個原本「規格已定、未實作」的入口
+(套 patch、自動派 worker、終態收件匣、flake 自動開票、`verify.files` 檢查、角色規則包、同輪回歸去重;D-015)。
+**還沒有第二個專案真的接上去**——`docs/TODO.md` §0 是可執行的遷移步驟。
 
-## 把規範同步進專案(agent-control 是主,專案是從)
+## 把規範與腳本同步進專案(agent-control 是主,專案是從)
 ```sh
 sh scripts/sync-to-project.sh /path/to/project   # 角色卡 → docs/roles/,模型記憶 → docs/roles/model/
+                                                 # 控制腳本 → scripts/control/,並印出專案端要改的接點
 ```
 專案裡那份檔頭標「請到 agent-control 改」;改規範永遠在這個 repo 改,再同步。
+退場的角色卡與腳本會**先唸出來再刪**(靜悄悄的刪除與沒發生的刪除長得一樣)。
+一個既有專案怎麼接上來,逐步在 `docs/TODO.md` §0。

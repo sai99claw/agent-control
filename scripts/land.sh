@@ -3,6 +3,7 @@
 # 六步照 `docs/WORKFLOW.md` §落地,每一步發事件。
 #
 #   sh scripts/land.sh t7-land-refuses t9-event-kinds ...   # 依給的順序合
+#   sh scripts/land.sh t7-x --auto-fix                      # 全套紅了就派下一輪 worker
 #
 # 這一支**沒有判斷**(docs/ROLES.md:落地器是程式;順序是主線決定的)。它只會拒絕:
 # 0 commit、票對不上、`base_sha` 過期、寫入範圍越界、閘門紅。要它放寬的時候,
@@ -28,9 +29,31 @@
 # worktree 給人看),在那個 worktree 跑 `scripts/gate.sh --full`;綠才
 # `git merge --ff-only` 進主線並 push,worktree 收掉。主線的工作樹全程沒有人動、
 # 沒有人在上面跑測試,所以其他票的分支閘門可以同時進行。
+#
+# ## 終態叫醒主線 + `--auto-fix`(2026-09-21,D-015)
+# 每一條退出路徑除了狀態檔,還寫一則 `reports/inbox/<票號>-<run_id>.md`:哪張票、
+# 什麼狀態、要主線做什麼、去哪看。主線因此不必輪詢。
+# `--auto-fix` 在全套紅時派下一輪 worker,**但只在這一批剛好一張票的時候** ——
+# 一批裡哪一條紅對到哪一張票,要有票↔案例的對照才判得出來(能力表列著這一條未實作),
+# 而**猜錯的歸責比不歸責更貴**:它會讓一個新 worker 去修一張沒有壞的票。
 set -u
 [ $# -ge 1 ] || { echo "land: 給我至少一條分支"; exit 2; }
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+
+# 旗標先挑掉,剩下的才是分支。**分支名不准有空白**(`t<票號>-…` 的形狀),所以這裡
+# 用字串重組位置參數是安全的。
+AUTOFIX=0
+REBUILT=""
+for a in "$@"; do
+    case "$a" in
+        --auto-fix) AUTOFIX=1 ;;
+        --*) echo "land: 不認得 $a(--auto-fix)"; exit 2 ;;
+        *) REBUILT="$REBUILT $a" ;;
+    esac
+done
+# shellcheck disable=SC2086
+set -- $REBUILT
+[ $# -ge 1 ] || { echo "land: 給我至少一條分支"; exit 2; }
 
 # 設定走 `board/config.json`,不寫死 —— 這支腳本要能被別的專案原樣拿走。
 cfg() {
@@ -126,6 +149,34 @@ status_done_all() {   # $1 = rc  $2 = 說明
     done
 }
 
+# 終態叫醒主線(D-015)。一票一頁:哪張票、什麼狀態、要主線做什麼、去哪看。
+inbox_all() {   # $1 = 狀態  $2 = 要主線做什麼  $3 = 去哪看
+    [ -n "$IDS" ] || return 0
+    [ -z "${AC_NO_INBOX:-}" ] || return 0
+    for i in $IDS; do
+        python3 "$ROOT/scripts/inbox.py" post --ticket "$i" \
+            --run-id "${LAND_RUN:-$STAMP-$$}" --kind land \
+            --state "$1" --what "$2" --where "$3" >/dev/null 2>&1 \
+            || echo "land: #$i 的收件匣寫不出來(不擋落地)" >&2
+    done
+}
+
+# 全套紅了自動派下一輪 —— **只在剛好一張票的時候**(見檔頭)。
+auto_fix_all() {
+    [ "$AUTOFIX" -eq 1 ] || return 0
+    count=$(echo "$IDS" | wc -w | tr -d " ")
+    if [ "$count" != "1" ]; then
+        echo "land: --auto-fix 這一批有 $count 張票 —— 不猜是誰紅的,留給主線"
+        echo "land:   (票↔案例的對照還沒有;猜錯的歸責會讓新 worker 去修沒壞的票。)"
+        return 0
+    fi
+    for i in $IDS; do
+        echo "land: --auto-fix —— sh scripts/auto-fix.sh $i"
+        sh "$ROOT/scripts/auto-fix.sh" "$i" \
+            || echo "land: auto-fix 停下來了(rc=$?)—— 看 reports/inbox/ 那一頁"
+    done
+}
+
 # ---------------------------------------------------------------- 第 1〜4 步
 #
 # 開跑前先把「要落地的東西」逐條唸出來。
@@ -145,12 +196,28 @@ status_done_all() {   # $1 = rc  $2 = 說明
 # 了那個組合。(它擋到的比寫它的時候想到的多:跳過的版本會讓一張沒進主線的票被
 # 關成完成,而畫面上一個徵兆都沒有。)
 STOP=""
+RC_REFUSE=2
 for b in "$@"; do
     if ! git -C "$ROOT" rev-parse -q --verify "$b^{commit}" >/dev/null; then
         echo "land: $b —— 沒有這條分支(名字打錯了?)"
         STOP=1
         continue
     fi
+    # 分支名 `t<票號>-…` 對到票。對不到就停:沒有票的東西不落地(CLAUDE.md)。
+    # `t7` 與 `t7-那張票` 都認:`scripts/apply.sh` 預設開的就是 `t<票號>`,
+    # 而一條開得出來、land 卻對不到票的分支,是一個只會在最後一步才說話的陷阱。
+    #
+    # **這一步在數 commit 之前**:拒收也是終態,而終態要寫得出「是哪一張票被退回」。
+    # 擺在後面的話,0 commit 那一條路的退回沒有票號,於是狀態檔與收件匣都是空的 ——
+    # 「退回去了」與「沒有退回去」在票上又長得一樣。
+    id=$(echo "$b" | sed -n 's/^t\([0-9][0-9]*\)\([-.].*\)\{0,1\}$/\1/p')
+    if [ -z "$id" ]; then
+        echo "land: $b —— 分支名對不到票(要 t<票號> 或 t<票號>-… 的形狀),沒有票的工作不落地"
+        STOP=1
+        continue
+    fi
+    IDS="$IDS $id"
+
     n=$(git -C "$ROOT" rev-list --count "$MAIN..$b")
     echo "land: $b —— $n 個 commit"
     git -C "$ROOT" log --oneline "$MAIN..$b" | sed 's/^/land:   /'
@@ -169,14 +236,6 @@ for b in "$@"; do
         continue
     fi
 
-    # 分支名 `t<票號>-…` 對到票。對不到就停:沒有票的東西不落地(CLAUDE.md)。
-    id=$(echo "$b" | sed -n 's/^t\([0-9][0-9]*\)[-.].*$/\1/p')
-    if [ -z "$id" ]; then
-        echo "land: $b —— 分支名對不到票(要 t<票號>-… 的形狀),沒有票的工作不落地"
-        STOP=1
-        continue
-    fi
-    IDS="$IDS $id"
     tf=$ROOT/$TICKETS/$id.json
     if [ ! -f "$tf" ]; then
         echo "land: $b —— 找不到票 #$id($tf)"
@@ -308,13 +367,48 @@ PY
         STOP=1
         continue
     fi
+
+    # 票的 `verify.files` 真的在這條分支上嗎(#587 那把尺)。
+    # 票上寫著「案例在這幾個檔」而分支上沒有那幾個檔,代表**驗證者的交付沒有跟著進來**
+    # —— 而 `verify.tags` 照樣會被閘門呼叫、照樣一個案例都選不到、照樣印一行綠。
+    # 退出碼與其他拒收分開(4):呼叫者要分得出「票面沒填好」與「分支沒準備好」。
+    out=$(python3 - "$ROOT" "$b" "$tf" <<'VFILES_PY'
+import json, subprocess, sys
+root, branch, path = sys.argv[1:4]
+try:
+    with open(path, encoding="utf-8") as handle:
+        plan = json.load(handle).get("verify") or {}
+except (OSError, ValueError):
+    plan = {}
+files = (plan.get("files") or []) if isinstance(plan, dict) else []
+for name in files:
+    if not name:
+        continue
+    done = subprocess.run(["git", "-C", root, "cat-file", "-e",
+                           "%s:%s" % (branch, name)], capture_output=True)
+    if done.returncode != 0:
+        print(name)
+VFILES_PY
+)
+    if [ -n "$out" ]; then
+        echo "land: $b —— 票 #$id 的 verify.files 有幾個不在這條分支上:"
+        echo "$out" | sed 's/^/land:   /'
+        echo "land:   驗證者的案例沒有跟著進來 —— 票的 tags 會被呼叫、卻一個案例都選不到。"
+        echo "land:   先把 patch-verify 套進這條分支:sh scripts/apply.sh $id <patch> <patch-verify>"
+        STOP=1
+        RC_REFUSE=4
+        continue
+    fi
 done
 if [ -n "$STOP" ]; then
     echo "land: 一條都沒有落地 —— 上面那幾條先處理掉再來。"
     echo "land: (要嘛一起進去、要嘛都不進:跳掉一條會生出一個沒有人要求過的組合。)"
     ev land.refused --note "$*" --kv "stamp=$STAMP"
-    status_done_all 2 "land 拒收"
-    exit 2
+    status_done_all "$RC_REFUSE" "land 拒收"
+    inbox_all "land 拒收(rc=$RC_REFUSE)" \
+        "上面逐條寫了是哪一條不過:0 commit / base 過期 / 越界 / 覆核 / verify.files" \
+        "reports/t<票號>/${LAND_RUN:-} 的 status.json"
+    exit "$RC_REFUSE"
 fi
 
 # ------------------------------------------------------------------- 第 5 步
@@ -334,6 +428,7 @@ for b in "$@"; do
         status_start_all
         status_phase_all merge 3 "串 $b 時衝突"
         status_done_all 3 "串接時衝突,一條都沒進主線"
+        inbox_all "串接衝突" "自己解衝突:worktree 留著給你看" "$WT"
         exit 3
     fi
 done
@@ -349,6 +444,10 @@ if ! (cd "$WT" && sh scripts/gate.sh --full); then
     ev land.fail --note "閘門紅" --kv "stamp=$STAMP"
     status_phase_all gate 1 "全套紅"
     status_done_all 1 "閘門紅,沒有 merge、沒有 push"
+    inbox_all "落地時全套紅" \
+        "看紅榜逐條;要自動派下一輪 worker:land --auto-fix 或 auto-fix.sh <票號>" \
+        "$WT/gate.log 與 reports/t<票號>/$LAND_RUN/status.json"
+    auto_fix_all
     exit 1
 fi
 status_phase_all gate 0 "全套綠"
@@ -360,6 +459,7 @@ git -C "$ROOT" merge -q --ff-only "$BR" || {
     ev land.fail --note "ff-only 進不去" --kv "stamp=$STAMP"
     status_phase_all merge 1 "ff-only 進不去"
     status_done_all 1 "閘門綠了但沒合進主線"
+    inbox_all "閘門綠了但沒合進主線" "主線在這中間動了 —— rebase 後重跑閘門" "$WT"
     exit 1
 }
 status_phase_all merge 0 "已 ff-only 合進 $MAIN"
@@ -369,6 +469,7 @@ if git -C "$ROOT" remote get-url origin >/dev/null 2>&1; then
         ev land.fail --note "push 沒成功" --kv "stamp=$STAMP"
         status_phase_all push 1 "push 沒成功"
         status_done_all 1 "已合進主線,push 沒成功,票還沒關"
+        inbox_all "已合進主線,push 沒成功" "自己推一次:git push origin $MAIN" "$ROOT"
         exit 1
     }
     status_phase_all push 0 "已推上 origin"
@@ -381,6 +482,9 @@ ev land.pass --note "$*" --kv "stamp=$STAMP" \
 # **已合併、尚未關票**要分開講(2026-09-21 外部審查:能力表誤稱 land 會關票)。
 # 關票走 `scripts/ticket.py close <票號>`,它自己會再問一次「改動真的在主線嗎」。
 status_done_all 0 "已合併、已推上;**票還沒關** —— 關票走 ticket.py close"
+inbox_all "已合併、尚未關票" \
+    "關票:python3 scripts/ticket.py close <票號>(它會再問一次改動真的在主線嗎)" \
+    "git log --oneline -3 $MAIN"
 for i in $IDS; do
     echo "land: #$i 已合併、尚未關票 —— python3 scripts/ticket.py close $i"
 done

@@ -8,6 +8,7 @@
     scripts/status.py done   --ticket 7 --run-id … --rc 1 --log gate.log \
                              [--suspected-flaky test_x.Case.test_y …]
     scripts/status.py show   --ticket 7 [--run-id …] [--runs]
+    scripts/status.py rundir --ticket 7 --run-id …   # 這一輪的目錄(回歸快取住那裡)
 
 寫的是 `<reports_dir>/t<票號>/<run_id>/status.json`(`board/config.json` 的
 `reports_dir`,預設 `reports/`),**一輪一個目錄、不覆寫**,log 另外複製一份進
@@ -44,6 +45,7 @@ patch 路徑與雜湊、第幾輪、上一輪排除過什麼、怎麼重現,它�
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import re
@@ -57,7 +59,7 @@ EXCERPT_LINES = 20
 DEFAULT_REPORTS = "reports"
 FLAKY_LEDGER = "flaky.jsonl"
 DEFAULT_FLAKY_THRESHOLD = 3
-PHASES = ("gate", "merge", "push", "verify", "docs")
+PHASES = ("gate", "merge", "push", "verify", "docs", "apply")
 
 # `FAIL: test_x (test_mod.Case.test_x)` / `ERROR: test_x (test_mod.Case)` /
 # subTest 的兩種形狀 —— 方括號的 `[engine=firefox]`(自己組的標籤)與**原生的圓括號
@@ -398,13 +400,81 @@ def record_flakes(root, ticket, run_id, rows):
     for case, seen in hot:
         try:
             event.emit("decision.asked", ticket=ticket, case=case, seen=seen,
-                       note="疑似 flaky 累計 %d 次(門檻 %d)—— 要開一張修不穩定的票嗎"
+                       note="疑似 flaky 累計 %d 次(門檻 %d)—— 已開修復票"
                             % (seen, threshold))
         except Exception:                                  # noqa: BLE001
             pass
-        print("status: %s 疑似 flaky 累計 %d 次(門檻 %d)—— 已發 decision.asked,"
-              "主線用 `ticket.py inbox` 收" % (case, seen, threshold))
+        print("status: %s 疑似 flaky 累計 %d 次(門檻 %d)—— 已發 decision.asked"
+              % (case, seen, threshold))
+        made = open_flaky_ticket(root, case, seen, threshold,
+                                 row.get("log", ""), ticket)
+        if made:
+            print("status: 自動開了修不穩定的票 #%s(role=verifier)—— "
+                  "`python3 scripts/ticket.py show %s`" % (made, made))
     return hot
+
+
+def open_flaky_ticket(root, case, seen, threshold, log, from_ticket):
+    """達門檻就**自動開一張修復票**(D-015)。
+
+    以前只發 `decision.asked` 停在那裡,理由是「自動開票會在門檻誤判時生出一堆沒人
+    認領的票」。實際跑起來相反:`decision.asked` 沒有 owner、沒有驗收,而**一則沒有
+    人認領的事件比一張沒有人認領的票更容易被滑過去** —— 票至少會出現在 `list --open`
+    裡,每個 session 開場都看得到。
+
+    誤判那一半用**同一條案例只開一張**擋住:票上留 `flaky_case`,還開著就不再開。
+    要完全關掉的人設 `board/config.json` 的 `flaky_auto_ticket: false`。
+    """
+    conf = event.config(root)
+    if conf.get("flaky_auto_ticket") is False:
+        return ""
+    try:
+        import ticket as ticket_mod                        # noqa: PLC0415
+    except ImportError:
+        return ""
+    try:
+        for row in ticket_mod.load_all():
+            if str(row.get("flaky_case") or "") == case and ticket_mod.is_open(row):
+                return ""
+    except OSError:
+        return ""
+    model = (conf.get("routing") or {}).get("verify") or "sonnet"
+    out = io.StringIO()
+    argv = [
+        "--subject", "把 %s 修穩 —— 疑似 flaky 累計 %d 次" % (case, seen),
+        "--objective",
+        "同一條案例連續 %d 次單跑綠、整組紅(門檻 %d)。找出它依賴的共用狀態或時序,"
+        "修到同一組在原順序下跑十次都綠。" % (seen, threshold),
+        "--acceptance", "原順序整組連跑 10 次,%s 沒有一次紅" % case,
+        "--acceptance", "說得出它不穩的原因(共用狀態 / 時序 / 外部資源),寫進 EVIDENCE",
+        "--acceptance", "不是靠放寬斷言或加 retry 讓它綠的",
+        "--in-scope", case,
+        "--allowed-write-path", "verify/*",
+        "--allowed-write-path", "tests/*",
+        "--role", "verifier", "--model", str(model), "--tool", "claude-code",
+        "--state", "Ready",
+    ]
+    try:
+        rc = ticket_mod.cmd_create(argv, stdout=out)
+    except (OSError, ValueError, RuntimeError):
+        return ""
+    if rc != 0:
+        return ""
+    found = re.search(r"#(\S+)", out.getvalue())
+    ident = found.group(1) if found else ""
+    if not ident:
+        return ""
+    try:
+        with ticket_mod.Lock():
+            data = ticket_mod.load(ident)
+            data["flaky_case"] = case
+            data["flaky_seen"] = seen
+            data["flaky_log"] = log
+            data["flaky_from_ticket"] = from_ticket
+            ticket_mod.save(data)
+    except (OSError, ValueError, RuntimeError):
+        pass
+    return ident
 
 
 def cmd_done(args):
@@ -459,6 +529,18 @@ def cmd_failures(args):
                 seen.append(row["case"])
     for case in seen:
         print(case)
+    return 0
+
+
+def cmd_rundir(args):
+    """這一輪的目錄。**回歸快取住在這裡**(`verify-<tags 雜湊>.log`),所以呼叫者
+    要問得出路徑 —— 自己拼一次 `reports/t<n>/<run_id>` 的人會拼錯 `reports_dir`。"""
+    root = event.repo_root()
+    run_id = args.run_id or latest_run(root, args.ticket)
+    if not run_id:
+        sys.stderr.write("status: #%s 還沒有任何一輪\n" % args.ticket)
+        return 2
+    sys.stdout.write(run_dir(root, args.ticket, run_id) + "\n")
     return 0
 
 
@@ -536,6 +618,11 @@ def main(argv):
     fails = subs.add_parser("failures")
     fails.add_argument("--log", action="append", default=[])
     fails.set_defaults(run=cmd_failures)
+
+    rundir = subs.add_parser("rundir")
+    rundir.add_argument("--ticket", required=True)
+    rundir.add_argument("--run-id", default="")
+    rundir.set_defaults(run=cmd_rundir)
 
     show = subs.add_parser("show")
     show.add_argument("--ticket", required=True)

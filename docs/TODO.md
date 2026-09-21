@@ -1,12 +1,30 @@
 # 還沒做的事
 
-## 0. 遷移計畫(從 tabby_pool 搬過來)
-1. [ ] tabby_pool 的 `CLAUDE.md` 改成:先讀本 repo 的 `CLAUDE.md`,再讀專案自己的。
-2. [ ] tabby_pool 的票(`~/.claude/tasks/<id>/*.json`)轉成本 repo 的 schema(`scripts/ticket.py import`),補 `base_sha` / `allowed_write_paths`(舊票允許空,新票必填)。
-3. [ ] tabby_pool 的 `scripts/{land,fullsuite,test-for}.sh` 改成呼叫本 repo 的 `scripts/land.sh` + 專案自己的 `scripts/gate.sh`。
-4. [ ] `docs/DISPATCH-TEMPLATE.md` 專案特有的段落(埠號、目錄、測試陷阱)搬回 tabby_pool 的 `docs/`,本 repo 留通用版。
-5. [ ] 控制台改讀本 repo 的事件檔;`board-note.py` 退役,改用 `scripts/event.py`。
-6. [ ] 兩邊並行跑一週,比較 `docs/DESIGN.md` §21 的指標。
+## 0. 遷移計畫:一個既有專案怎麼接上這一套(可執行步驟)
+
+以 tabby_pool 為例(本節是文件,所以指得出名字;程式與設定一律不准出現專案名 ——
+`tests/test_no_project_names.py` 在守)。**每一步都有一句可以直接貼的指令,與一句「怎麼知道它成了」。**
+
+| # | 做什麼 | 指令 | 怎麼知道它成了 |
+|---|---|---|---|
+| 0 | 專案先有一份 `board/config.json`(`tickets_dir` / `events_file` / `reports_dir` / `flaky_threshold` / `worker.command`) | 抄 agent-control 的那一份改埠與目錄 | `python3 scripts/control/event.py tail 1` 不再寫到別的地方 —— **少了它,票與 reports 會寫到沒有人在看的目錄,而且不會報錯** |
+| 1 | 同步角色卡、模型記憶與控制腳本 | `sh scripts/sync-to-project.sh <專案根> [--dry-run]` | 專案多出 `docs/roles/` 與 `scripts/control/`(裡面有 `apply.sh` / `auto-fix.sh` / `inbox.py` / `rules.py` / `status.py` / `verify-case.py` / `memory.py`),結尾印出**接點清單** |
+| 2 | 專案的 `CLAUDE.md` 改成先讀這一套的契約,再讀專案自己的 | 手改一段 | 新 session 開場唸得出「票是唯一的工作單位」 |
+| 3 | 舊票轉進來 | `python3 scripts/control/ticket.py import <舊票目錄>` | `ticket.py list --open` 看得到;缺的欄位標 `legacy`,**不補假的 `base_sha`** |
+| 4 | 專案的閘門接 `--ticket` | 照 `scripts/gate.example.sh` 改專案的 `scripts/gate.sh` | `sh scripts/gate.sh --branch --ticket <n>` 會寫 `reports/t<n>/<run_id>/status.json`,而且**真的呼叫票的 `verify.tags`** |
+| 5 | 專案的落地腳本改成呼叫這一套 | `land-ticket.sh` 裡:閘門跑完 `python3 scripts/control/status.py done --ticket <n> --run-id <run> --kind gate --rc $rc --log <log>`;開跑前對應的 `status.py start` | 落地紅了之後,`reports/t<n>/<run_id>/status.json` 的 `failures` 逐條有案例、檔、行、excerpt |
+| 6 | 套 patch 改走程式入口 | `sh scripts/control/apply.sh <n> patch.diff [patch-verify.diff]` | 絕對路徑檔頭的 patch 被 rc=3 退回;commit 訊息帶票號與 patch sha256 |
+| 7 | 紅了自動派下一輪 | `sh scripts/control/auto-fix.sh <n>`(或閘門加 `--auto-fix`) | 第二輪的 commit 進同一條 `t<n>` 分支;三輪耗盡票轉 Blocked、owner=main |
+| 8 | 主線開場讀收件匣、不輪詢 | `python3 scripts/control/inbox.py list` | 跑完的事自己排隊;主線不再用 sleep 迴圈等背景工作 |
+| 9 | 派工文前言改成引用規則包 | `python3 scripts/control/rules.py pack worker --model <模型>` | 派工文 ≤ 4 KB 的前言 + 指路,不再整份貼 |
+| 10 | 控制台改讀這一套的事件檔;`board-note.py` 退役 | 改 `board/config.json` 的 `events_file` | 控制台上看得到 `gate.*` / `land.*` / `inbox.posted` |
+| 11 | 兩邊並行跑一週,比 `docs/DESIGN.md` §21 的指標 | — | 有數字可以比,而不是感覺 |
+
+**專案特有的段落**(埠號、目錄、測試陷阱)留在專案自己的 `docs/`;本 repo 的
+`docs/DISPATCH-TEMPLATE.md` 留通用版,派工時用 `rules.py pack` 裁切。
+
+**還沒做的是遷移本身**(上表第 2、3、10、11 步要在那個專案裡做,不在這個 repo)。
+步驟與腳本這一側 2026-09-21 已經做完並有測試(`tests/test_sync_to_project.py`)。
 
 ## 1. 第一版必須有(對照 `docs/DESIGN.md` §18)
 - [x] 票契約(`tickets/SCHEMA.md`)
@@ -30,12 +48,15 @@
 ## 2. 第二版
 - [ ] 控制台加 `?key=` + cookie 驗證(`board/config.json` 多一格 `key_file`);v0.1 只綁 127.0.0.1
 - [ ] 排序做成腳本(讀 `allowed_write_paths` 算衝突圖)**提案**給主線,不用模型 —— 調度員這個角色已退場(D-010),這一格是它留下來的那一成機械工作
-- [ ] 落地器紅了自動起新 worker(headless `claude -p`,三輪上限):規格在 `docs/WORKFLOW.md` §回歸紅了之後,腳本還沒做
-      —— **2026-09-21 主線裁示:這一輪先不做**。硬閘門、取消 flake 自動判綠、交接閉環先上,免得把現有的漏接自動放大
-      (外部審查總評的原話:「這三件先完成,再上自動派 worker」)。
-- [ ] land 前檢查票的 `verify.files` 都在分支上(#587 那把尺):規格已定、未實作
-- [ ] flake 達門檻**自動開修復票**:現在只發 `decision.asked`,開不開由主線決定
-- [ ] 套 patch → 建分支 → commit 做成一個程式入口(現在是主線手動做;`land.sh` 收的是已有 commit 的分支)
+- [x] 落地器紅了自動起新 worker(headless `claude -p`,三輪上限):`scripts/auto-fix.sh`、
+      `gate.sh --auto-fix`、`land.sh --auto-fix`(D-015)。前提的那三件(硬閘門、取消 flake 自動判綠、
+      交接閉環)是 D-014 做完的,順序照外部審查總評
+- [x] land 前檢查票的 `verify.files` 都在分支上(#587 那把尺):`land.sh` 第 5 步,缺了 rc=4
+- [x] flake 達門檻**自動開修復票**:`status.py` 的 `open_flaky_ticket`(同一案例只開一張)
+- [x] 套 patch → 建分支 → commit 做成一個程式入口:`scripts/apply.sh`(含 `rebase` 重生)
+- [x] 終態叫醒主線:`scripts/inbox.py` + `new-session.sh` 開場印;主線不輪詢
+- [x] 同一輪的回歸只跑一次:`scripts/verify.py` 的快取(標籤 + sha),`--no-cache` 關
+- [x] 按角色裁切、帶版本的規則包:`scripts/rules.py pack <角色>`(≤ 4 KB)
 - [ ] 推測性佇列(H+A 與 H+A+B 同時驗)
 - [ ] token 歸因:Claude Code 不給資料,先顯示「未知」,不估
 - [ ] 產品功能地圖

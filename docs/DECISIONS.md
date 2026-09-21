@@ -102,3 +102,44 @@ tabby_pool 三天實測:角色定義散在派工 prompt 裡會漂,同一主張�
    經常是既有測試或共用 helper),改用同條件的 baseline / candidate 對照;**未歸因前由原票 owner 持有**。
 6. **`test_defect` 交接類型**:案例的 oracle 或 fixture 錯了 → 派獨立驗證者修案例,**產品 worker 不改 oracle**。
 7. 能力表以真實入口逐項重寫(以前漏列票 tags 串接、review 檢查、baseline 驗紅、套 patch 與關票、land 互斥鎖)。
+
+## D-015(2026-09-21)規格已定的那七件事全部做成程式:套 patch、自動派 worker、終態喚醒
+D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠、交接閉環),而它自己列的
+「未處置清單」有七項是**規格已定、未實作**。一份寫著規格卻沒有程式的流程,與沒有規格
+的流程在明天早上長得一樣 —— 差別只在誰記得。所以這一輪把那七項做成入口與測試:
+
+1. **`scripts/apply.sh <票號> <patch> [<patch-verify>]`** —— 套 patch → 開 `t<票號>` 分支與
+   worktree → commit(訊息帶票號與 patch 的 **sha256**)。`git apply` 之前擋檔頭
+   (只准 `base/…` / `work/…` / `/dev/null`;絕對路徑拒;`diff -ruN` 的刪檔沒把 `+++` 改成
+   `/dev/null` 也拒 —— 那會讓 `git apply` **清空**而不是刪掉),之後逐一比對 `+++` 目標並
+   `--reverse --check`(rc=4),再檢查 `allowed_write_paths`(rc=5)。
+   `apply.sh rebase` 用 GNU `patch` 吃 fuzz 套到**當前主線**的副本、跑可設定的清單重生 hook
+   (`apply.regen_cmd`)、出一份乾淨 diff,**`.rej`≠0 一律失敗**。
+2. **`scripts/auto-fix.sh <票號>`** —— 讀最新狀態檔,紅就用 `worker.command`(預設
+   `claude -p --model opus`)派**新的** worker,收 `patch-round<r>.diff` + `EVIDENCE-round<r>.md`,
+   走 `apply.sh` → `gate.sh --branch --ticket`,三輪上限。`gate.sh --auto-fix` /
+   `land.sh --auto-fix` 掛在後面。**三種停下來**:worker 在 EVIDENCE 寫 `OBJECTION:`(記成票的
+   `objections[]`、轉 Blocked)、三輪耗盡、**failures 沒有歸因**(rc 非零卻解析不出紅榜 ——
+   那一種最像「沒紅」,而派下去的 worker 會拿著空紅榜去猜)。**覆核不自動**:綠了停在 `InReview`。
+3. **終態叫醒主線** —— `scripts/inbox.py post|list|show|ack` + `reports/inbox/<票號>-<run_id>.md`
+   一頁四句(哪張票、什麼狀態、要主線做什麼、去哪看)+ `inbox.posted` 事件;
+   `new-session.sh` 開場印。**主線不輪詢** status:每看一次背景工作就是整份上下文重送一輪。
+4. **flake 達門檻自動開修復票** —— 改掉 D-014 的「只發 `decision.asked`」。理由反過來了:
+   事件沒有 owner、沒有驗收,而**一則沒人認領的事件比一張沒人認領的票更容易被滑過去**。
+   誤判那一半用「同一條案例只開一張」(票上的 `flaky_case`)擋;`flaky_auto_ticket: false` 可關。
+5. **land 前檢查票的 `verify.files` 都在分支上**(#587 那把尺),缺了 **rc=4** —— 與其他拒收的 2
+   分開:呼叫者要分得出「票面沒填好」與「分支沒準備好」。
+6. **`scripts/rules.py pack <角色>`** —— 從共用規矩抽該角色要的幾節 + 角色卡 + 那個模型的記憶,
+   壓進 4 KB,砍掉的部分**指名砍了哪一份**。派工範本改成引用它,不整份貼。
+7. **同一輪的回歸只跑一次** —— `scripts/verify.py` 在 `AC_TICKET` + `AC_RUN_ID` 下把輸出與 rc
+   存成 `reports/t<n>/<run_id>/verify-<雜湊>.log`,雜湊含標籤與 **HEAD sha**(sha 變了一定失效);
+   `--no-cache` 關,沒有 `AC_RUN_ID` 就完全不快取。
+
+另外:遷移計畫寫成可執行步驟(`docs/TODO.md` §0),`scripts/sync-to-project.sh` 把控制腳本同步到
+專案的 `scripts/control/`、刪已退場的檔、並印出**專案端要改的接點**;`event.repo_root()` 改成往上找
+`board/config.json`(不然放在 `scripts/control/` 的那幾支會把票與 reports 寫進 `<專案>/scripts/`,
+**而且不會報錯**)。
+
+**留著沒做的一項,連同理由**:`land.sh` 那一側在**一批多張票**時的歸責。一批裡哪一條紅對到哪一張票,
+要有票↔案例的對照才判得出來,而**猜錯的歸責比不歸責更貴** —— 它會讓一個新 worker 去修一張沒有壞的票。
+所以 `land --auto-fix` 只在剛好一張票時派下一輪,多張就印出來留給主線。

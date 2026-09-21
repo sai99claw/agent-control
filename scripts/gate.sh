@@ -7,6 +7,8 @@
 #   sh scripts/gate.sh --full            # 全套(land.sh 跑的就是這一發)
 #   sh scripts/gate.sh <檔> <檔> …       # 指定檔
 #   sh scripts/gate.sh --branch --ticket 7   # 同上,外加狀態檔、票的回歸、flake 重跑
+#   sh scripts/gate.sh --branch --ticket 7 --auto-fix   # 紅了就自動派下一輪 worker
+#   sh scripts/gate.sh --branch --ticket 7 --no-cache   # 不吃同一輪的回歸快取
 #
 # ## `--ticket <票號>`:狀態檔、票的回歸、flake 重跑(D-010 / D-014)
 # 給了票號,這一支會做三件多的事:
@@ -30,6 +32,16 @@
 # 也只是「疑似」——要不要放行是人的判斷,不是這支腳本的。
 # `AC_NO_FLAKE_RERUN=1` 連單跑都不做。
 # 沒給票號就完全照舊 —— 不寫檔、不重跑、退出碼不變。
+#
+# ## 終態會叫醒主線(D-015)
+# 給了票號,跑完就寫一則 `reports/inbox/<票號>-<run_id>.md` 並發 `inbox.posted`:
+# **哪張票、什麼狀態、要主線做什麼、去哪看**。主線因此不必輪詢 status ——
+# 每看一次背景工作就是整份上下文重送一輪。
+#
+# ## `--auto-fix`:紅了自動派下一輪(D-010)
+# 紅了就呼叫 `scripts/auto-fix.sh <票號>`。**閘門自己的退出碼不會因此變綠** ——
+# 這個 commit 對這一組測試就是紅的,而 auto-fix 產生的是**下一個** commit。
+# 修好了沒、停在哪一種,看 inbox 那一頁。
 #
 # **這一份是本 repo 自己的實作。** 別的專案把 `scripts/gate.sh` 換成自己的
 # (範本見 `scripts/gate.example.sh`),介面不變 —— `land.sh` 只認 `--full` 的
@@ -75,7 +87,8 @@ map() {
         tests/control_harness.py) add test_ticket test_event test_memory test_land \
                                       test_gate test_heartbeat test_new_session \
                                       test_board test_check_stale test_no_project_names \
-                                      test_status test_verify_case ;;
+                                      test_status test_verify_case test_apply \
+                                      test_auto_fix test_inbox test_rules ;;
         # `.gitignore` 決定「不准出現專案名」那一掃看得到哪些檔。
         .gitignore) add test_no_project_names ;;
         # ticket.py import event.py:動 event 的人要連票那一側一起跑。
@@ -83,6 +96,11 @@ map() {
         scripts/ticket.py) add test_ticket test_land ;;
         scripts/land.sh) add test_land ;;
         scripts/gate.sh|scripts/gate.example.sh) add test_gate test_status ;;
+        scripts/apply.sh) add test_apply ;;
+        scripts/auto-fix.sh) add test_auto_fix ;;
+        # 收件匣:閘門與落地的終態都寫它,所以動它要連那兩側一起跑。
+        scripts/inbox.py) add test_inbox test_gate test_land test_new_session ;;
+        scripts/rules.py) add test_rules ;;
         scripts/heartbeat.sh) add test_heartbeat ;;
         scripts/new-session.sh) add test_new_session ;;
         scripts/memory.py) add test_memory ;;
@@ -111,6 +129,8 @@ map() {
 }
 
 want_base=0; want_branch=0; want_full=0
+want_autofix=0
+NO_CACHE=${AC_NO_VERIFY_CACHE:-}
 TICKET=${AC_GATE_TICKET:-}
 ARGC=$#
 while [ $# -gt 0 ]; do
@@ -122,7 +142,9 @@ while [ $# -gt 0 ]; do
             shift
             [ $# -ge 1 ] || { echo "gate: --ticket 後面要票號" >&2; exit 2; }
             TICKET=$1 ;;
-        --*) echo "gate: 不認得 $1(--branch / --base / --full / --ticket <票號>)" >&2; exit 2 ;;
+        --auto-fix) want_autofix=1 ;;
+        --no-cache) NO_CACHE=1 ;;
+        --*) echo "gate: 不認得 $1(--branch / --base / --full / --ticket <票號> / --auto-fix / --no-cache)" >&2; exit 2 ;;
         *) map "$1" ;;
     esac
     shift
@@ -157,6 +179,43 @@ status_done() {   # $1 = rc
         --run-id "$RUN_ID" --sha "$SHA" --rc "$1" --note "$NOTE" \
         --log "$LOG" $VERIFY_LOG_ARGS $EXTRA_LOG_ARGS $FLAKY_ARGS \
         || echo "gate: 狀態檔寫不出來(不擋閘門)" >&2
+    inbox_post "$1"
+}
+
+# 終態叫醒主線(D-015)。**一頁四句**:哪張票、什麼狀態、要主線做什麼、去哪看。
+# 寫不出來要出聲但不擋閘門 —— 同狀態檔的理由。
+inbox_post() {   # $1 = rc
+    [ -n "$TICKET" ] || return 0
+    [ -z "${AC_NO_INBOX:-}" ] || return 0
+    if [ "$1" -eq 0 ]; then
+        state="閘門綠(gate rc=0)"
+        what="讀 patch 記 review(綁票版本與分支頭 sha),再 sh scripts/land.sh t$TICKET"
+    else
+        state="閘門紅(gate rc=$1)"
+        what="看紅榜逐條;要自動派下一輪 worker:sh scripts/auto-fix.sh $TICKET"
+    fi
+    python3 "$ROOT/scripts/inbox.py" post --ticket "$TICKET" --run-id "$RUN_ID" \
+        --kind gate --state "$state" --what "$what" \
+        --where "$(python3 "$ROOT/scripts/status.py" rundir --ticket "$TICKET" \
+                   --run-id "$RUN_ID" 2>/dev/null || echo "reports/t$TICKET/$RUN_ID")/status.json" \
+        >/dev/null 2>&1 || echo "gate: 收件匣寫不出來(不擋閘門)" >&2
+}
+
+# 紅了自動派下一輪。**閘門自己的 rc 不動** —— 這個 commit 對這一組測試就是紅的。
+auto_fix() {   # $1 = rc
+    [ "$want_autofix" -eq 1 ] || return 0
+    [ "$1" -eq 0 ] && return 0
+    if [ -z "$TICKET" ]; then
+        echo "gate: --auto-fix 要有 --ticket <票號> —— 沒有票就沒有紅榜可以派" >&2
+        return 0
+    fi
+    if [ -n "${AC_IN_AUTOFIX:-}" ]; then
+        echo "gate: 已經在 auto-fix 裡面了,不再往下派(免得自己叫自己)"
+        return 0
+    fi
+    echo "gate: --auto-fix —— sh scripts/auto-fix.sh $TICKET"
+    sh "$ROOT/scripts/auto-fix.sh" "$TICKET" \
+        || echo "gate: auto-fix 停下來了(rc=$?)—— 看 reports/inbox/ 那一頁"
 }
 
 # 沒有測試可跑也要留下終態。**「這一輪根本沒有東西跑」是一個結果,不是一次沒跑**
@@ -172,6 +231,7 @@ status_nothing() {   # $1 = rc  $2 = 為什麼
     python3 "$ROOT/scripts/status.py" done --ticket "$TICKET" --kind gate \
         --run-id "$RUN_ID" --sha "$SHA" --rc "$1" --note "$2" >/dev/null 2>&1 \
         || echo "gate: 狀態檔寫不出來(不擋閘門)" >&2
+    inbox_post "$1"
 }
 
 # 票的 `verify.tags` 併 `tags`。**票是唯一的工作單位**,所以要跑哪幾個回歸標籤這件事
@@ -223,8 +283,12 @@ regression() {   # $1 = ticket|full;設定 VRC
     else
         echo "gate: 回歸全部 —— python3 scripts/verify.py"
     fi
+    [ -z "$NO_CACHE" ] || args="$args --no-cache"
+    # `AC_TICKET` + `AC_RUN_ID` 讓 worker、驗證者與這裡共用同一輪的回歸快取:
+    # 同一份程式、同一組標籤、同一個 sha 只跑一次(D-015)。
     # shellcheck disable=SC2086
-    ( cd "$ROOT" && python3 scripts/verify.py $args ) > "$VERIFY_LOG" 2>&1
+    ( cd "$ROOT" && AC_TICKET="$TICKET" AC_RUN_ID="$RUN_ID" \
+        python3 scripts/verify.py $args ) > "$VERIFY_LOG" 2>&1
     VRC=$?
     grep -aE "^Ran |^OK|^FAILED|^verify: " "$VERIFY_LOG" \
         || echo "gate: 回歸的 log 裡連 Ran 都沒有,看 $VERIFY_LOG"
@@ -305,6 +369,7 @@ if [ "$want_full" -eq 1 ]; then
     rc=$(merge_rc "$rc" "$VRC")
     [ "$rc" -eq 0 ] || echo "gate: 紅了,看 $LOG"
     status_done "$rc"
+    auto_fix "$rc"
     exit $rc
 fi
 
@@ -333,6 +398,7 @@ if [ -n "$mods" ]; then
     fi
     [ "$rc" -eq 0 ] || echo "gate: 紅了,看 $LOG"
     status_done "$rc"
+    auto_fix "$rc"
 fi
 
 if [ -n "$unmapped" ]; then

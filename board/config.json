@@ -38,5 +38,13 @@
     "land": 1800,
     "worker": 7200
   },
-  "flaky_threshold": 3
+  "flaky_threshold": 3,
+  "flaky_auto_ticket": true,
+  "worker": {
+    "command": "claude -p --model opus",
+    "timeout_seconds": 3600
+  },
+  "apply": {
+    "regen_cmd": ""
+  }
 }
