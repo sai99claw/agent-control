@@ -1,0 +1,34 @@
+{
+  "id": "11",
+  "subject": "gate.rerun_cmd 拿不到票號:auto-fix 起閘門時要 export AC_TICKET(與 AC_WT、AC_ROUND 同列),讓專案的 rerun_cmd 能寫 'cd \"$AC_ROOT\" && sh scripts/land-ticket.sh gate --rerun \"$AC_TICKET\"'",
+  "created": "2026-09-22T06:40:38+08:00",
+  "objective": "同步到專案後 auto-fix 第 2 輪能自動續跑專案自己的閘門",
+  "acceptance": [
+    "rerun_cmd 設成 'printf %s $AC_TICKET > $AC_WT/seen' → 第 2 輪後 seen 檔內容 = 票號",
+    "rerun_cmd 內用到的 AC_ROOT/AC_WT/AC_ROUND/AC_TICKET 四個都在 docs/WORKFLOW.md 的 auto-fix 段列出"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "docs/WORKFLOW.md",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "ffdf9d4bc6892c0ff7aaebbd4a9c2bdf3874b838",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "#9 落地後主線接專案時發現:gate_cmd 是照抄 config 的字串,沒有票號可用。"
+}
