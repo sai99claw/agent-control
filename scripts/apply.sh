@@ -28,7 +28,21 @@ set -u
 # `AC_ROOT` 優先:被 `gate.sh --auto-fix` 叫到的時候,這支檔案住在**副本**裡,
 # 而票、reports 與收件匣住在主 repo。照 `$0` 算根會把它們寫進一個等一下會被
 # 收掉的目錄 —— 而且不會報錯。
-ROOT=${AC_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}
+# 主 repo 根:找 board/config.json 往上走(同步到專案後這幾支住在 scripts/control/,
+# 「上一層」不再是根);找不到才退回上一層,跟以前一樣。
+_ac_root() {
+    _d=$(cd "$(dirname "$0")" && pwd); _i=0
+    while [ $_i -lt 5 ]; do
+        [ -f "$_d/board/config.json" ] && { echo "$_d"; return; }
+        _d=$(dirname "$_d"); _i=$((_i+1))
+    done
+    cd "$(dirname "$0")/.." && pwd
+}
+ROOT=${AC_ROOT:-$(_ac_root)}
+# 控制腳本自己住的目錄:agent-control 裡是 scripts/,同步到專案後是 scripts/control/。
+# 同伴腳本一律從這裡叫,不寫死 $ROOT/scripts。
+AC=${AC_CONTROL_DIR:-$(cd "$(dirname "$0")" && pwd)}
+export AC_CONTROL_DIR=$AC
 
 cfg() {   # $1 = key  $2 = 預設;巢狀用 a.b
     python3 - "$ROOT" "$1" "$2" <<'PY'
@@ -45,7 +59,8 @@ print(data if data else default)
 PY
 }
 MAIN=$(cfg main_branch main)
-TICKETS=$(cfg tickets_dir tickets)
+TICKETS=${AC_TICKETS_DIR:-$(cfg tickets_dir tickets)}
+case $TICKETS in /*) TDIR=$TICKETS ;; *) TDIR=$ROOT/$TICKETS ;; esac
 WTBASE=${AC_WORKTREE_DIR:-$ROOT/../$(basename "$ROOT")-wt}
 
 sha256_of() {
@@ -232,7 +247,7 @@ fi
 ID=$1
 PATCH=$2
 VPATCH=${3:-}
-TF=$ROOT/$TICKETS/$ID.json
+TF=$TDIR/$ID.json
 [ -f "$TF" ] || { echo "apply: 找不到票 #$ID($TF)" >&2; exit 2; }
 [ -f "$PATCH" ] || { echo "apply: 找不到 patch $PATCH" >&2; exit 2; }
 PATCH=$(cd "$(dirname "$PATCH")" && pwd)/$(basename "$PATCH")
@@ -262,14 +277,14 @@ PATCH_SHA=$(sha256_of "$PATCH")
 NOTE=""
 
 status_start() {
-    python3 "$ROOT/scripts/status.py" start --ticket "$ID" --kind apply \
+    python3 "$AC/status.py" start --ticket "$ID" --kind apply \
         --run-id "$RUN_ID" --base-sha "$BASE" --worktree "$WT" \
         --patch "$PATCH" --verify-patch "$VPATCH" --round "${AC_ROUND:-1}" \
         --repro "sh scripts/apply.sh $ID $PATCH $VPATCH" --cwd "$ROOT" \
         >/dev/null 2>&1 || echo "apply: 狀態檔寫不出來(不擋套用)" >&2
 }
 status_done() {   # $1 = rc  $2 = 說明
-    python3 "$ROOT/scripts/status.py" done --ticket "$ID" --kind apply \
+    python3 "$AC/status.py" done --ticket "$ID" --kind apply \
         --run-id "$RUN_ID" --sha "$(git -C "$WT" rev-parse --short HEAD 2>/dev/null || echo '')" \
         --rc "$1" --note "$2" >/dev/null 2>&1 \
         || echo "apply: 狀態檔寫不出來(不擋套用)" >&2
@@ -346,7 +361,7 @@ fi
 OUT=$(python3 - "$ROOT" "$WT" "$TF" <<'PY'
 import json, os, subprocess, sys
 root, wt, path = sys.argv[1:4]
-sys.path.insert(0, os.path.join(root, "scripts"))
+sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import ticket as ticket_mod
 try:
     with open(path, encoding="utf-8") as handle:

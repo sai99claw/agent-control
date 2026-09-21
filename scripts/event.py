@@ -105,6 +105,12 @@ def answers_path(root=None):
 
 
 def tickets_dir(root=None):
+    """票庫目錄。`AC_TICKETS_DIR` 環境變數優先(專案的票庫可能在 repo 外、路徑帶
+    session id,寫進 board/config.json 會被專案自己的路徑檢查擋下);其次
+    config 的 `tickets_dir`,相對路徑接在 repo 根後面,絕對路徑照用。"""
+    override = os.environ.get("AC_TICKETS_DIR")
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
     return _from_config("tickets_dir", DEFAULT_TICKETS, root)
 
 

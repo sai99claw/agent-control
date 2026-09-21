@@ -30,7 +30,21 @@ set -u
 # `AC_ROOT` 優先:被 `gate.sh --auto-fix` 叫到的時候,這支檔案住在**副本**裡,
 # 而票、reports 與收件匣住在主 repo。照 `$0` 算根會把它們寫進一個等一下會被
 # 收掉的目錄 —— 而且不會報錯。
-ROOT=${AC_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}
+# 主 repo 根:找 board/config.json 往上走(同步到專案後這幾支住在 scripts/control/,
+# 「上一層」不再是根);找不到才退回上一層,跟以前一樣。
+_ac_root() {
+    _d=$(cd "$(dirname "$0")" && pwd); _i=0
+    while [ $_i -lt 5 ]; do
+        [ -f "$_d/board/config.json" ] && { echo "$_d"; return; }
+        _d=$(dirname "$_d"); _i=$((_i+1))
+    done
+    cd "$(dirname "$0")/.." && pwd
+}
+ROOT=${AC_ROOT:-$(_ac_root)}
+# 控制腳本自己住的目錄:agent-control 裡是 scripts/,同步到專案後是 scripts/control/。
+# 同伴腳本一律從這裡叫,不寫死 $ROOT/scripts。
+AC=${AC_CONTROL_DIR:-$(cd "$(dirname "$0")" && pwd)}
+export AC_CONTROL_DIR=$AC
 export AC_ROOT=$ROOT
 
 cfg() {   # $1 = key(巢狀用 a.b)  $2 = 預設
@@ -61,37 +75,38 @@ while [ $# -gt 0 ]; do
 done
 
 MAIN=$(cfg main_branch main)
-TICKETS=$(cfg tickets_dir tickets)
+TICKETS=${AC_TICKETS_DIR:-$(cfg tickets_dir tickets)}
+case $TICKETS in /*) TDIR=$TICKETS ;; *) TDIR=$ROOT/$TICKETS ;; esac
 WORKER_CMD=$(cfg worker.command "claude -p --model opus")
 WORKER_TIMEOUT=$(cfg worker.timeout_seconds 3600)
 WTBASE=${AC_WORKTREE_DIR:-$ROOT/../$(basename "$ROOT")-wt}
-TF=$ROOT/$TICKETS/$ID.json
+TF=$TDIR/$ID.json
 [ -f "$TF" ] || { echo "auto-fix: 找不到票 #$ID($TF)" >&2; exit 2; }
 
 ev() {
-    python3 "$ROOT/scripts/event.py" emit "$@" >/dev/null \
+    python3 "$AC/event.py" emit "$@" >/dev/null \
         || echo "auto-fix: 事件發不出去($*)" >&2
 }
 
 post() {   # $1 = 狀態  $2 = 要主線做什麼  $3 = 去哪看
-    python3 "$ROOT/scripts/inbox.py" post --ticket "$ID" --run-id "${RUN_ID:-}" \
+    python3 "$AC/inbox.py" post --ticket "$ID" --run-id "${RUN_ID:-}" \
         --kind auto-fix --state "$1" --what "$2" --where "$3" \
         || echo "auto-fix: inbox 寫不出來($1)" >&2
 }
 
 block() {   # $1 = 為什麼;票轉 Blocked、指派主線
-    python3 "$ROOT/scripts/ticket.py" set "$ID" state Blocked >/dev/null 2>&1 \
+    python3 "$AC/ticket.py" set "$ID" state Blocked >/dev/null 2>&1 \
         || echo "auto-fix: 票狀態改不動(Blocked)" >&2
-    python3 "$ROOT/scripts/ticket.py" set "$ID" owner main >/dev/null 2>&1 || true
+    python3 "$AC/ticket.py" set "$ID" owner main >/dev/null 2>&1 || true
     ev decision.asked --ticket "$ID" --note "$1"
 }
 
 # 最新一輪的狀態檔。**讀的是檔,不是輪詢** —— 每看一次背景工作就是整份上下文重送一輪。
 read_status() {
-    eval "$(python3 - "$ROOT" "$ID" <<'PY'
+    eval "$(python3 - "$ROOT" "$ID" "$TF" <<'PY'
 import json, os, shlex, sys
-root, ident = sys.argv[1], sys.argv[2]
-sys.path.insert(0, os.path.join(root, "scripts"))
+root, ident, tf = sys.argv[1:4]
+sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import status
 
 run_id = status.latest_run(root, ident)
@@ -99,7 +114,7 @@ data = status.read(root, ident, run_id) if run_id else {}
 ctx = data.get("repair_context") or {}
 patch = (ctx.get("patch") or {}).get("path") or ""
 try:
-    with open(os.path.join(root, "tickets", "%s.json" % ident), encoding="utf-8") as fh:
+    with open(tf, encoding="utf-8") as fh:
         limit = int(json.load(fh).get("retry_limit") or 2) + 1
 except (OSError, ValueError, TypeError):
     limit = 3
@@ -150,7 +165,7 @@ fi
 
 if [ "$S_ROUND" -ge "$S_LIMIT" ]; then
     echo "auto-fix: 已經是第 $S_ROUND 輪(上限 $S_LIMIT)—— 不再派,轉主線"
-    python3 "$ROOT/scripts/ticket.py" round "$ID" "$S_ROUND" --red || true
+    python3 "$AC/ticket.py" round "$ID" "$S_ROUND" --red || true
     post "三輪耗盡仍紅" "這張票由你接手:讀紅榜決定要改票面還是換做法" \
          "reports/t$ID/$S_RUN/status.json"
     exit 1
@@ -186,12 +201,12 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
     DISPATCH=$ROOT/$(cfg reports_dir reports)/t$ID/$RUN_ID/dispatch-round$r.md
     mkdir -p "$(dirname "$DISPATCH")"
     {
-        python3 "$ROOT/scripts/rules.py" pack worker --model "$MODEL" 2>/dev/null \
+        python3 "$AC/rules.py" pack worker --model "$MODEL" 2>/dev/null \
             || echo "(規則包產不出來 —— 自己讀 memory/role/implementer.md)"
         python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "$FIX" <<'PY'
 import json, os, sys
 root, ident, run_id, r, fix = sys.argv[1:6]
-sys.path.insert(0, os.path.join(root, "scripts"))
+sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import status
 
 data = status.read(root, ident, run_id)
@@ -299,21 +314,20 @@ PY
     if [ -f "$EVIDENCE" ] && grep -q '^OBJECTION:' "$EVIDENCE"; then
         line=$(grep -m1 '^OBJECTION:' "$EVIDENCE")
         echo "auto-fix: worker 提了反駁 —— $line"
-        python3 - "$ROOT" "$ID" "$line" "$EVIDENCE" <<'PY'
+        python3 - "$ROOT" "$ID" "$line" "$EVIDENCE" "$TF" <<'PY'
 import json, os, subprocess, sys
-root, ident, line, evidence = sys.argv[1:5]
+root, ident, line, evidence, path = sys.argv[1:6]
 rest = line.split(":", 1)[1].strip()
 parts = rest.split(None, 1)
 category = parts[0] if parts and parts[0] in (
     "ticket-wrong", "test_defect", "blocking") else "ticket-wrong"
 body = parts[1] if len(parts) > 1 else rest
-path = os.path.join(root, "tickets", "%s.json" % ident)
 with open(path, encoding="utf-8") as handle:
     rows = json.load(handle).get("objections") or []
 rows.append({"category": category, "body": body,
              "evidence": os.path.relpath(evidence, root), "owner": "main",
              "disposition": "", "follow_up": ""})
-subprocess.run([sys.executable, os.path.join(root, "scripts", "ticket.py"),
+subprocess.run([sys.executable, os.path.join(os.environ["AC_CONTROL_DIR"], "ticket.py"),
                 "set", ident, "objections",
                 json.dumps(rows, ensure_ascii=False)], check=False)
 PY
@@ -334,7 +348,7 @@ PY
     fi
 
     AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE \
-        sh "$ROOT/scripts/apply.sh" "$ID" "$PATCH_OUT"
+        sh "$AC/apply.sh" "$ID" "$PATCH_OUT"
     arc=$?
     if [ "$arc" -ne 0 ]; then
         echo "auto-fix: 第 $r 輪的 patch 套不上(apply rc=$arc)" >&2
@@ -353,8 +367,8 @@ PY
         sh scripts/gate.sh --branch --ticket "$ID" )
     grc=$?
     if [ "$grc" -eq 0 ]; then
-        python3 "$ROOT/scripts/ticket.py" round "$ID" "$r" --green || true
-        python3 "$ROOT/scripts/ticket.py" set "$ID" state InReview >/dev/null 2>&1 || true
+        python3 "$AC/ticket.py" round "$ID" "$r" --green || true
+        python3 "$AC/ticket.py" set "$ID" state InReview >/dev/null 2>&1 || true
         read_status
         RUN_ID=$S_RUN
         echo "auto-fix: 第 $r 輪綠了 —— **覆核不自動**,停在這裡等主線"
@@ -364,7 +378,7 @@ PY
         ROUND_RC=0
         return 1
     fi
-    python3 "$ROOT/scripts/ticket.py" round "$ID" "$r" --red || true
+    python3 "$AC/ticket.py" round "$ID" "$r" --red || true
     read_status
     RUN_ID=$S_RUN
     ROUND_RC=1

@@ -16,7 +16,21 @@
 # JSON 交給 python3(POSIX sh 沒有解析器,而自己用 sed 剖 JSON 是在測自己寫的
 # 剖析器 —— 同 `docs/DISPATCH-TEMPLATE.md` §5.6「不要造一個自己寫的模擬器」)。
 set -u
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# 主 repo 根:找 board/config.json 往上走(同步到專案後這幾支住在 scripts/control/,
+# 「上一層」不再是根);找不到才退回上一層,跟以前一樣。
+_ac_root() {
+    _d=$(cd "$(dirname "$0")" && pwd); _i=0
+    while [ $_i -lt 5 ]; do
+        [ -f "$_d/board/config.json" ] && { echo "$_d"; return; }
+        _d=$(dirname "$_d"); _i=$((_i+1))
+    done
+    cd "$(dirname "$0")/.." && pwd
+}
+ROOT=${AC_ROOT:-$(_ac_root)}
+# 控制腳本自己住的目錄:agent-control 裡是 scripts/,同步到專案後是 scripts/control/。
+# 同伴腳本一律從這裡叫,不寫死 $ROOT/scripts。
+AC=${AC_CONTROL_DIR:-$(cd "$(dirname "$0")" && pwd)}
+export AC_CONTROL_DIR=$AC
 export AC_ROOT=$ROOT
 
 python3 - "$ROOT" <<'PY'
@@ -27,7 +41,7 @@ import sys
 from datetime import datetime
 
 root = sys.argv[1]
-sys.path.insert(0, os.path.join(root, "scripts"))
+sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import event  # noqa: E402
 
 conf = event.config(root)
