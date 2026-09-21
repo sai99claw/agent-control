@@ -21,7 +21,7 @@
   "attempt": 0,
   "base_sha": "49428afca0e464db226968572a1f5527564af0e0",
   "state": "Ready",
-  "state_version": 6,
+  "state_version": 7,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -35,9 +35,9 @@
     "verdict": "pass",
     "by": "main",
     "sha": "a9fe7a9cc834aa02b0409462833535244d9075b7",
-    "note": "agent.start/done/failed + memory.noted kinds;auto-fix 起 worker 前後 emit、stdout 導 worker-round<r>.log;dry-run 驗收改在 stub worker 路徑(test_defect 反駁成立)",
-    "at": "2026-09-22T05:54:37+08:00",
-    "state_version": 4
+    "note": "agent.* 事件 + worker log 導出;dry-run 驗收改在 stub worker 路徑(test_defect 反駁成立)",
+    "at": "2026-09-22T05:54:53+08:00",
+    "state_version": 7
   },
   "objections": [
     {
