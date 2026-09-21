@@ -61,7 +61,9 @@ PY
 MAIN=$(cfg main_branch main)
 TICKETS=${AC_TICKETS_DIR:-$(cfg tickets_dir tickets)}
 case $TICKETS in /*) TDIR=$TICKETS ;; *) TDIR=$ROOT/$TICKETS ;; esac
-WTBASE=${AC_WORKTREE_DIR:-$ROOT/../$(basename "$ROOT")-wt}
+# 副本/worktree 的根:環境變數 > board/config.json 的 `worktree_dir`(相對 repo 根)> 預設 `../<repo>-wt`。
+WTBASE=${AC_WORKTREE_DIR:-$(cfg worktree_dir "")}
+case "$WTBASE" in "") WTBASE=$ROOT/../$(basename "$ROOT")-wt ;; /*) ;; *) WTBASE=$ROOT/$WTBASE ;; esac
 
 sha256_of() {
     python3 - "$1" <<'PY'

@@ -79,7 +79,9 @@ TICKETS=${AC_TICKETS_DIR:-$(cfg tickets_dir tickets)}
 case $TICKETS in /*) TDIR=$TICKETS ;; *) TDIR=$ROOT/$TICKETS ;; esac
 WORKER_CMD=$(cfg worker.command "claude -p --model opus")
 WORKER_TIMEOUT=$(cfg worker.timeout_seconds 3600)
-WTBASE=${AC_WORKTREE_DIR:-$ROOT/../$(basename "$ROOT")-wt}
+# 副本/worktree 的根:環境變數 > board/config.json 的 `worktree_dir`(相對 repo 根)> 預設 `../<repo>-wt`。
+WTBASE=${AC_WORKTREE_DIR:-$(cfg worktree_dir "")}
+case "$WTBASE" in "") WTBASE=$ROOT/../$(basename "$ROOT")-wt ;; /*) ;; *) WTBASE=$ROOT/$WTBASE ;; esac
 TF=$TDIR/$ID.json
 [ -f "$TF" ] || { echo "auto-fix: 找不到票 #$ID($TF)" >&2; exit 2; }
 
@@ -229,9 +231,11 @@ print("- 上一輪的 patch:`%s`(sha256 %s)"
       % ((ctx.get("patch") or {}).get("path") or "(沒有)",
          ((ctx.get("patch") or {}).get("sha256") or "")[:16]))
 print("- 上一輪的 EVIDENCE:`%s`" % (ctx.get("prev_evidence") or "(沒有 —— 第一輪)"))
-print("- 重現:`%s`(cwd `%s`)"
+print("- 主線重現用的指令(**你不要跑它** —— 它動的是主 repo 的閘門/worktree):`%s`(cwd `%s`)"
       % ((ctx.get("repro") or {}).get("cmd") or "?",
          (ctx.get("repro") or {}).get("cwd") or "?"))
+print("- 你在副本裡重現:照底下紅榜的 case 名單跑(例 `python3 -m unittest <模組>.<類>.<案例>`,"
+      "cwd 是副本裡那個測試模組所在的目錄);修好後跑同一組再交,整套留給閘門。")
 print("- 這是第 %s 輪,上限 %s 輪" % (r, int(snap.get("retry_limit") or 2) + 1))
 print("")
 print("## 紅榜(逐條,excerpt ≤ 20 行)")
