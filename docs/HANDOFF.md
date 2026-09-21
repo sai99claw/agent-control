@@ -48,3 +48,36 @@
 - **自動派新 worker 這一輪沒做**(主線裁示,照審查總評的順序)。`docs/WORKFLOW.md` 的能力表
   已經逐項對著真實入口重寫,**未實作的那幾列寫明現在由誰手動做** —— 不要當成已經做了。
 - 下一個 session:`docs/TODO.md` §2 沒打勾的那幾項;測試 `sh scripts/gate.sh --full`(現在 215 條 + 回歸層)。
+
+## 2026-09-21(晚):規格已定的那七件事現在都有入口(D-015)
+
+上一節說「自動派新 worker 這一輪沒做」。**這一輪做了**,連同 D-014 留在「未處置清單」
+裡的另外六項。每一支都有測試,全套 292 條綠(`sh scripts/gate.sh --full`)。
+
+| 入口 | 一句話 | 退出碼要看的 |
+|---|---|---|
+| `sh scripts/apply.sh <n> <patch> [<patch-verify>]` | 套 patch → 開 `t<n>` 分支與副本 → commit(訊息帶票號 + patch sha256) | 3 檔頭 / 預檢、4 套完對不上、5 越界 |
+| `sh scripts/apply.sh rebase <n> <patch>` | 套到**當前主線**副本、跑 `apply.regen_cmd`、出乾淨 diff | 3(`.rej`≠0 一律失敗) |
+| `sh scripts/auto-fix.sh <n>` | 讀最新狀態檔,紅就派**新** worker,三輪上限 | 0 綠(停在 InReview)、1 三輪耗盡、3 反駁、4 沒有歸因、5 沒交 patch |
+| `sh scripts/gate.sh … --auto-fix` / `sh scripts/land.sh … --auto-fix` | 把上面那一支掛在閘門 / 落地後面 | 閘門自己的 rc **不會**因此變綠 |
+| `python3 scripts/inbox.py list\|show\|ack` | 終態一頁四句,開場印一次 | — |
+| `python3 scripts/rules.py pack <角色> --model <模型>` | ≤ 4 KB 的派工文前言,砍掉的會指名 | 1 = 壓不到上限(那是這一支壞了) |
+
+其他:flake 累計達門檻**自動開修復票**(同一案例只開一張,`flaky_auto_ticket: false` 可關);
+land 拒收 `verify.files` 沒帶進來的分支(**rc=4**);`verify.py` 在同一個 `AC_RUN_ID` + 同一個 sha
+下只跑一次同一組標籤(`--no-cache` 關);遷移步驟寫成表(`docs/TODO.md` §0),
+`sync-to-project.sh` 把控制腳本同步到專案的 `scripts/control/` 並印出接點。
+
+**在乾淨 clone 裡走過兩遍**(2026-09-21):
+① new-session → create → `apply.sh` → gate → inbox → review → `land.sh`(全套 289 條綠)→ `close`
+(close 正確地擋下來:那張票沒有回歸證據 —— D-014 的 Done 契約在守);
+② 紅的票走 `gate --auto-fix`:派工 → 第 2 輪 patch → `apply.sh` 進同一條分支 → 閘門綠 → 票停在
+`InReview`、收件匣寫「等覆核」。走的過程抓到三個只在乾淨 clone 才會現形的 bug
+(開場那一行的反引號、`apply`/`auto-fix` 在副本裡算錯 repo 根、同一輪兩則收件匣互蓋),
+都已修並各補一條會紅的測試。
+
+**還沒做、而且是刻意的**:一批多張票落地時的歸責(要票↔案例的對照;猜錯的歸責比不歸責更貴)。
+`docs/TODO.md` §0 的遷移**步驟**做完了,遷移**本身**還沒開始 —— 那要在那個專案裡做。
+
+下一個 session:`docs/TODO.md` §2 剩下的(控制台驗證、排序腳本、推測性佇列、token 歸因、
+產品功能地圖、多 repo),或直接開始 §0 的遷移。

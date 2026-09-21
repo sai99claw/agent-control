@@ -11,6 +11,9 @@ invariants:
   - "覆核與反駁是拒絕條件:review 要綁票版本與分支 sha,objections 的阻擋項要處置過"
   - "gate / merge / push 分開記進狀態檔;每一條退出路徑都寫終態"
   - "land 不關票 —— 成功後印「已合併、尚未關票」"
+  - "票的 verify.files 不在分支上就拒絕,rc=4(與其他拒收的 2 分開;2026-09-21)"
+  - "每一條退出路徑寫一則 reports/inbox/ 的終態頁,主線不輪詢(2026-09-21)"
+  - "--auto-fix 只在這一批剛好一張票時派下一輪;多張票的歸責要票↔案例的對照,還沒有"
 depends_on: [scripts/event.py, scripts/gate.sh, board/config.json, tickets/*.json]
 depended_by: [scripts/heartbeat.sh, board/board.py]
 source_paths: [scripts/land.sh]

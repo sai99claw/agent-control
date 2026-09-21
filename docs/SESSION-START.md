@@ -17,7 +17,10 @@
 理由:每一份「所有角色都要讀」的檔案,成本是**乘以 agent 數**的。全域交接留給主線。
 
 ## 主線
-- 看收件匣 `python3 scripts/ticket.py inbox`:使用者填過的裁示要落成 `docs/DECISIONS.md` 一列。
+- 看**終態收件匣** `python3 scripts/inbox.py list`:閘門、auto-fix、落地、轉 Blocked 跑完的事
+  在這裡排隊,一頁答四句(哪張票、什麼狀態、要你做什麼、去哪看)。收下用 `inbox.py ack <票號>`。
+  **開場讀一次,之後只在被通知時讀 —— 不准輪詢 status**(每看一次背景工作 = 整份上下文重送一輪)。
+- 看裁示收件匣 `python3 scripts/ticket.py inbox`:使用者填過的裁示要落成 `docs/DECISIONS.md` 一列。
 - 檢查 `scripts/heartbeat.sh`:上一個 session / land 有沒有死在半路(有的話清 worktree、把票狀態對回事實)。
 - 用一句話跟使用者說現況。
 
