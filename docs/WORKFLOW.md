@@ -11,9 +11,11 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 | Ready | 範圍、可操作的驗收、依賴達成、`base_sha`、`allowed_write_paths` |
 | InReview | patch、測試輸出逐字、變異驗紅、回報標明實測/推論 |
 | IntegrationQueued | 審查通過、局部閘門綠、無未解阻擋 |
-| Done | **同一份必要條件,`close` 與 `set state Done` 共用**(D-014):① `scripts/ticket.py verify` 證明改動真的在主線,**弱檢查不算過**(沒有 `verify_strings` 就補一條再關);② 有回歸證據(`test_evidence` 或 `verify.baseline`);③ 有一格**綁著票版本與分支 sha** 的 `review`;④ `objections[]` 裡沒有未處置的阻擋項 |
+| Done | **同一份必要條件,`close` 與 `set state Done` 共用**(D-014):① `scripts/ticket.py verify` 證明改動真的在主線,**弱檢查不算過**(沒有 `verify_strings` 就補一條再關);② 有回歸證據(`test_evidence` 或 `verify.baseline`)——**或**票上有誠實的 `verify_waiver{by,reason}`(#8)且 review 綁的 sha 真的在主線歷史裡(`git merge-base --is-ancestor`,不是逐字比對分支的頭,#15);③ 有一格**綁著票版本與分支 sha** 的 `review`;④ `objections[]` 裡沒有未處置的阻擋項 |
 
 **exit code 0 不等於 Done;worker 說做完不等於 Done;閘門綠是對某個 `base_sha` 說的,基準走遠就過期。**
+
+**已落地的票關不掉(#15)**:落地之後補一條 `verify_strings`、記一筆 `verify_waiver`、或處置一筆 `objections`,都是**收尾**,不是重審票面 —— `ticket.py set <n> verify_waiver|verify_strings|objections …` 會把既有 `review.state_version` 跟著蓋到新版本(不算讓 review 過期),改票面其他格照舊規矩過期。落地那一手如果手上就是合併出來的 sha,`ticket.py close <n> --landed <merge sha>` 一步把它蓋進 `review.sha`(先確認在主線歷史裡)再走關票流程,不必先 `set review` 再 `close` 兩步。
 
 ## 一票一分支一副本
 - worker 拿到 `base_sha` 的 `git archive` 副本(`work/`)與對照副本(`base/`),交 `diff -ruN base work > patch.diff`。
@@ -127,7 +129,7 @@ worker 說「這張票寫錯了」以前只是一句話:沒有結構化類別、
 | 遲到的回報拿 `attempt` / `state_version` 比對後拒收;寫入走同一把鎖 | **已實作**(SCHEMA 以前宣稱過但沒有實作) | `ticket.py set --expect-attempt / --expect-state-version`;`.ticket.lock` |
 | 三輪耗盡 → 票轉 Blocked 並指派主線 | **已實作** | `ticket.py round <n> <r> --red` |
 | **套 patch、建分支、commit** | **已實作**(2026-09-21,D-015) | `scripts/apply.sh <票號> <patch> [<patch-verify>]`;重套走 `scripts/apply.sh rebase` |
-| **關票** | **land 不關票**;它印「已合併、尚未關票」 | `scripts/ticket.py close <n>` |
+| **關票** | **land 不關票**;它印「已合併、尚未關票」。誠實的 `verify_waiver` + review sha 在主線歷史裡可免回歸證據那格;`verify_waiver`/`verify_strings`/`objections` 的 `set` 不讓既有 review 過期 | `scripts/ticket.py close <n> [--landed <merge sha>]` |
 | land 前檢查 `verify.files` 都在分支上 | **已實作**(2026-09-21,D-015) | `scripts/land.sh` 第 5 步,缺了 rc=4 |
 | 用 headless `claude -p` **自動起新 worker**(三輪上限) | **已實作**(2026-09-22;gate / 單票 land 預設開,`--no-auto-fix` 關) | `scripts/auto-fix.sh <票號>`;`gate.sh`、`land.sh` |
 | **終態叫醒主線**(gate done / auto-fix 停 / land done / 轉 Blocked)+ 禁止輪詢 | **已實作**(2026-09-21,D-015) | `scripts/inbox.py post\|list\|show\|ack`;`reports/inbox/<票號>-<run_id>.md`;`new-session.sh` 開場印 |

@@ -9,6 +9,7 @@
     scripts/ticket.py inbox                       # 等裁決的 + 使用者答了還沒落成裁示的
     scripts/ticket.py verify 7                    # 改動真的在主線?
     scripts/ticket.py close 7                     # 先 verify,>0 才准關
+    scripts/ticket.py close 7 --landed <merge sha> # 落地後一步:蓋 review.sha 再關
     scripts/ticket.py set 7 verify '{…}' --expect-state-version 4   # 過期的回報拒收
     scripts/ticket.py round 7 3 --red             # 第三輪仍紅 -> Blocked,指派主線
     scripts/ticket.py import <舊票目錄>           # 轉成這份 schema,缺的留空並標 legacy
@@ -57,6 +58,10 @@ LIST_FIELDS = ("acceptance", "in_scope", "out_of_scope", "depends_on",
 # 覆核算通過的幾種寫法,與「算已經處置」的幾種 disposition。表在這裡,不在提示裡。
 REVIEW_PASS = ("pass", "approved", "ok", "通過")
 DISPOSED = ("accepted", "rejected", "deferred", "fixed", "已處置")
+# 這幾格是驗證者/開題者在落地**之後**補的(補一條 verify_strings、記一筆 waiver、
+# 處置一筆反駁),不是重新審過一次票面 —— `set` 這幾格時把 review 的版本跟著蓋上去,
+# 不讓它因此過期(#15)。
+CARRY_REVIEW_FIELDS = ("verify_waiver", "verify_strings", "objections")
 LOCK_NAME = ".ticket.lock"
 LOCK_TIMEOUT = 10.0
 
@@ -252,6 +257,7 @@ FLAG_NOTE = {
     "--expect-attempt": "這份回報是第幾次派工的;對不上就拒收(rc=4)",
     "--red": "這一輪仍然紅(預設);第 retry_limit+1 輪仍紅 -> 轉 Blocked、指派主線",
     "--green": "這一輪綠了",
+    "--landed": "落地後的合併 sha;先確認它在主線歷史裡,再蓋進 review.sha 一步關票",
 }
 
 ASK = (
@@ -278,7 +284,7 @@ USAGE = {
             "[--expect-state-version N] [--expect-attempt N]"),
     "inbox": "scripts/ticket.py inbox",
     "verify": "scripts/ticket.py verify <id>",
-    "close": "scripts/ticket.py close <id>              # 先 verify,>0 才准關",
+    "close": "scripts/ticket.py close <id> [--landed <merge sha>]  # 先 verify,>0 才准關",
     "import": "scripts/ticket.py import <舊票目錄>",
     "freeze": "scripts/ticket.py freeze <id> --reason … --criterion …",
     "round": "scripts/ticket.py round <id> <第幾輪> [--red|--green]",
@@ -300,7 +306,8 @@ EXAMPLE = {
 python3 scripts/ticket.py set 7 allowed_write_paths '["scripts/land.sh", "tests/*"]'""",
     "inbox": "python3 scripts/ticket.py inbox",
     "verify": "python3 scripts/ticket.py verify 7",
-    "close": "python3 scripts/ticket.py close 7",
+    "close": "python3 scripts/ticket.py close 7\n"
+             "python3 scripts/ticket.py close 7 --landed a1b2c3d",
     "import": "python3 scripts/ticket.py import ~/somewhere/old-tickets",
     "freeze": ('python3 scripts/ticket.py freeze 7 \\\n'
                '  --reason "視覺方向未定" \\\n'
@@ -337,6 +344,8 @@ def known_flags(verb):
     if verb == "round":
         return [(flag, FLAG_NOTE.get(flag, ""), False, False)
                 for flag in ("--red", "--green")]
+    if verb == "close":
+        return [("--landed", FLAG_NOTE.get("--landed", ""), False, False)]
     return []
 
 
@@ -676,6 +685,13 @@ def cmd_set(argv):
                 # 一次 `set` 都會讓票往前一版,而 land 一比就知道這張章過期了。
                 value.setdefault("at", now())
                 value["state_version"] = ticket["state_version"]
+            # #15:補 waiver / verify_strings / 處置 objections 是**落地之後的收尾**,
+            # 不是重審票面 —— 既有的 review 跟著蓋到新版本,不因為這幾格被改就過期。
+            # 其他欄位仍然照舊規矩讓 review 過期(state_version 對不上就是對不上)。
+            carried = False
+            if field in CARRY_REVIEW_FIELDS and isinstance(ticket.get("review"), dict):
+                ticket["review"]["state_version"] = ticket["state_version"]
+                carried = True
             save(ticket)
     except RuntimeError as exc:
         sys.stderr.write("ticket: %s\n" % exc)
@@ -683,10 +699,14 @@ def cmd_set(argv):
     event.emit("ticket.state", ticket=ident, field=field,
                **{"from": json.dumps(before, ensure_ascii=False),
                   "to": json.dumps(value, ensure_ascii=False),
-                  "state_version": ticket["state_version"]})
+                  "state_version": ticket["state_version"],
+                  "review_carried": 1 if carried else None})
     sys.stdout.write("ticket: #%s %s: %s -> %s(state_version %d)\n"
                      % (ident, field, json.dumps(before, ensure_ascii=False),
                         json.dumps(value, ensure_ascii=False), ticket["state_version"]))
+    if carried:
+        sys.stdout.write("ticket: #%s 的 review 跟著蓋到 v%d(這格不算改票面,#15)\n"
+                         % (ident, ticket["state_version"]))
     return 0
 
 
@@ -733,22 +753,62 @@ def objection_problems(ticket):
     return out
 
 
+def sha_on_branch(sha, branch):
+    """`sha` 是不是 `branch` 歷史裡的一個祖先(含它自己)。**用 `merge-base
+    --is-ancestor`**,不是逐字比對分支的頭 —— 落地是合併(或 squash)出一個新 sha,
+    review 蓋章時記的那個 sha 之後主線還會再往前走,逐字比頭那條路,票一過夜就過期
+    (#15)。"""
+    sha = str(sha or "").strip()
+    if not sha:
+        return False
+    done = git(["merge-base", "--is-ancestor", sha, branch])
+    return done.returncode == 0
+
+
+def has_valid_waiver(ticket):
+    """`verify_waiver` 有沒有把話說清楚(#8 開的那一格:`{by, reason}`)。**只問這一
+    格自己是不是誠實地填好了**,不問「誰有資格免驗」—— land.sh 才是把關落地的那一道,
+    這裡問的是關票。"""
+    waiver = ticket.get("verify_waiver")
+    if not isinstance(waiver, dict):
+        return False
+    return bool(str(waiver.get("by") or "").strip()) and bool(str(waiver.get("reason") or "").strip())
+
+
+def waiver_covers_regression(ticket):
+    """免驗只在**票上的 waiver 誠實** *且* **review 綁的 sha 真的在主線歷史裡**時才
+    生效 —— 少了後半,一張隨口寫的 waiver 配一個從沒進過主線的 sha 也會通過
+    (#15 acceptance①)。"""
+    if not has_valid_waiver(ticket):
+        return False
+    review = ticket.get("review")
+    if not isinstance(review, dict):
+        return False
+    return sha_on_branch(review.get("sha"), main_branch())
+
+
 def done_blockers(ticket):
     """**進 Done 只有這一份必要條件**,`set state Done` 與 `close` 共用它。
 
     舊版兩條路各走各的:`set state Done` 只檢查狀態名對不對,`close` 只問「東西在不
     在主線」而且弱檢查也算過 —— 於是 Done 的契約有兩個不同的把關強度,而弱的那一個
     沒有人記得(2026-09-21 外部審查:Done 的契約可以繞過)。
+
+    #15:票有誠實的 `verify_waiver` **且** review 綁的 sha 真的在主線歷史裡,才免
+    `test_evidence` / `verify.baseline` 這一關 —— review 本身該不該過(§review_problems)
+    與 objections 是否處置完,不受這格豁免。
     """
     out = []
-    plan = ticket.get("verify") if isinstance(ticket.get("verify"), dict) else {}
-    baseline = plan.get("baseline") if isinstance(plan.get("baseline"), dict) else None
-    if not ticket.get("test_evidence") and not baseline:
-        out.append("沒有回歸證據:票上既沒有 test_evidence,verify 也沒有 baseline"
-                   "(`scripts/verify-case.py check <票號>` 會寫那一格)")
-    elif baseline and not baseline.get("ok"):
-        out.append("verify.baseline 說驗紅沒過:%s"
-                   % (baseline.get("why") or "乾淨主線上沒有紅"))
+    if not waiver_covers_regression(ticket):
+        plan = ticket.get("verify") if isinstance(ticket.get("verify"), dict) else {}
+        baseline = plan.get("baseline") if isinstance(plan.get("baseline"), dict) else None
+        if not ticket.get("test_evidence") and not baseline:
+            out.append("沒有回歸證據:票上既沒有 test_evidence,verify 也沒有 baseline"
+                       "(`scripts/verify-case.py check <票號>` 會寫那一格;"
+                       "或補一條誠實的 verify_waiver{by,reason} 且 review.sha 在主線歷史裡)")
+        elif baseline and not baseline.get("ok"):
+            out.append("verify.baseline 說驗紅沒過:%s"
+                       % (baseline.get("why") or "乾淨主線上沒有紅"))
     out.extend(review_problems(ticket))
     out.extend(objection_problems(ticket))
     return out
@@ -1008,11 +1068,76 @@ def cmd_verify(argv):
     return 0 if ok else 1
 
 
+def take_landed(argv):
+    """`--landed <merge sha>` 從參數裡挑出來,不在乎它出現在哪個位置。"""
+    rest, landed = [], None
+    index = 0
+    while index < len(argv):
+        flag = argv[index]
+        if flag == "--landed":
+            index += 1
+            if index >= len(argv):
+                raise ValueError("--landed 少了值")
+            landed = argv[index]
+        else:
+            rest.append(flag)
+        index += 1
+    return rest, landed
+
+
+def stamp_landed(ident, sha):
+    """`close --landed <sha>`(#15):落地是合併出一個**新**的 sha,不是分支審過的
+    那個頭 —— 先確認它真的在主線歷史裡,再把它蓋進 review.sha,一步做完「補審 + 關」。
+    沒有既有 review 就開一張(verdict/by 給預設,主線隨時可以事後改)。"""
+    branch = main_branch()
+    if not sha_on_branch(sha, branch):
+        sys.stdout.write("ticket: #%s 沒關 —— %s 不在主線 %s 的歷史裡"
+                         "(git merge-base --is-ancestor 判的)\n"
+                         % (ident, sha[:12], branch))
+        return 1
+    try:
+        with Lock():
+            try:
+                ticket = load(ident)
+            except (OSError, ValueError) as exc:
+                sys.stderr.write("ticket: 讀不到 #%s —— %s\n" % (ident, exc))
+                return 2
+            review = ticket.get("review")
+            review = dict(review) if isinstance(review, dict) else {}
+            before = json.dumps(ticket.get("review"), ensure_ascii=False)
+            review.setdefault("verdict", "pass")
+            review.setdefault("by", "main")
+            review["sha"] = sha
+            review["at"] = now()
+            ticket["state_version"] = int(ticket.get("state_version") or 0) + 1
+            review["state_version"] = ticket["state_version"]
+            ticket["review"] = review
+            save(ticket)
+    except RuntimeError as exc:
+        sys.stderr.write("ticket: %s\n" % exc)
+        return 5
+    event.emit("ticket.state", ticket=ident, field="review",
+               **{"from": before, "to": json.dumps(review, ensure_ascii=False),
+                  "state_version": ticket["state_version"], "landed": sha[:12]})
+    sys.stdout.write("ticket: #%s review.sha -> %s(--landed,已確認在主線歷史裡)\n"
+                     % (ident, sha[:12]))
+    return 0
+
+
 def cmd_close(argv):
+    try:
+        argv, landed = take_landed(argv)
+    except ValueError as exc:
+        sys.stderr.write("ticket: %s\n" % exc)
+        return 2
     if not argv:
-        sys.stderr.write("ticket: close <id>\n")
+        sys.stderr.write("ticket: close <id> [--landed <merge sha>]\n")
         return 2
     ident = argv[0].lstrip("#")
+    if landed:
+        rc = stamp_landed(ident, landed)
+        if rc:
+            return rc
     try:
         ticket = load(ident)
         ok, rows, weak = verify(ident)
