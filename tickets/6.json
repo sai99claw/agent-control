@@ -25,7 +25,7 @@
   "attempt": 0,
   "base_sha": "cdf2328bfa63bb2dcf7f1b7d3b2117ff2684ec9a",
   "state": "Ready",
-  "state_version": 6,
+  "state_version": 8,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -39,11 +39,15 @@
     "verdict": "pass",
     "by": "main",
     "sha": "f60fde6ea092a053ce3434d764fbd64abd24f1c1",
-    "note": "flake 自動判定:單跑 5 次 + 原順序整組綠才自動重送;單跑綠整組紅標 order_dependent",
-    "at": "2026-09-22T11:25:50+08:00",
-    "state_version": 5
+    "note": "已落地(見 Merge t6);補綁最新票版本",
+    "at": "2026-09-22T12:15:00+08:00",
+    "state_version": 8
   },
   "verify_strings": [
     "order_dependent"
-  ]
+  ],
+  "verify_waiver": {
+    "by": "main",
+    "reason": "控制腳本票:驗收單元測試由 worker 放在票內、閘門與落地全套已跑;無獨立驗證者"
+  }
 }

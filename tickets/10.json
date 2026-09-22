@@ -23,7 +23,7 @@
   "attempt": 0,
   "base_sha": "cdf2328bfa63bb2dcf7f1b7d3b2117ff2684ec9a",
   "state": "Ready",
-  "state_version": 5,
+  "state_version": 7,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -37,11 +37,15 @@
     "verdict": "pass",
     "by": "main",
     "sha": "44a9829cc37516297742d7f1c99a7cb5bd95f97f",
-    "note": "EVIDENCE 記憶段由 apply/auto-fix 收割成 memory.py note;壞行拒收不擋 apply",
-    "at": "2026-09-22T10:27:47+08:00",
-    "state_version": 4
+    "note": "已落地(見 Merge t10);補綁最新票版本",
+    "at": "2026-09-22T12:15:02+08:00",
+    "state_version": 7
   },
   "verify_strings": [
     "記憶"
-  ]
+  ],
+  "verify_waiver": {
+    "by": "main",
+    "reason": "控制腳本票:驗收單元測試由 worker 放在票內、閘門與落地全套已跑;無獨立驗證者"
+  }
 }

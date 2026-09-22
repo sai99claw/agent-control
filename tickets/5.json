@@ -21,7 +21,7 @@
   "attempt": 0,
   "base_sha": "49428afca0e464db226968572a1f5527564af0e0",
   "state": "Ready",
-  "state_version": 7,
+  "state_version": 9,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -35,9 +35,9 @@
     "verdict": "pass",
     "by": "main",
     "sha": "a9fe7a9cc834aa02b0409462833535244d9075b7",
-    "note": "agent.* 事件 + worker log 導出;dry-run 驗收改在 stub worker 路徑(test_defect 反駁成立)",
-    "at": "2026-09-22T05:54:53+08:00",
-    "state_version": 7
+    "note": "已落地(見 Merge t5);補綁最新票版本",
+    "at": "2026-09-22T12:15:00+08:00",
+    "state_version": 9
   },
   "objections": [
     {
@@ -50,5 +50,9 @@
   ],
   "verify_strings": [
     "agent.start"
-  ]
+  ],
+  "verify_waiver": {
+    "by": "main",
+    "reason": "控制腳本票:驗收單元測試由 worker 放在票內、閘門與落地全套已跑;無獨立驗證者"
+  }
 }

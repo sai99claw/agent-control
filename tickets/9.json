@@ -23,7 +23,7 @@
   "attempt": 0,
   "base_sha": "2969fa0e33afd897308839934a194d86c4c6789a",
   "state": "Ready",
-  "state_version": 7,
+  "state_version": 9,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -37,11 +37,15 @@
     "verdict": "pass",
     "by": "main",
     "sha": "b9a665907ffe0c9c97eaf0b567e3f28b8282b527",
-    "note": "auto-fix 續跑指令讀 config gate.rerun_cmd;rebase 缺 base_sha 明說;codex sol 模型卡",
-    "at": "2026-09-22T06:37:29+08:00",
-    "state_version": 6
+    "note": "已落地(見 Merge t9);補綁最新票版本",
+    "at": "2026-09-22T12:15:02+08:00",
+    "state_version": 9
   },
   "verify_strings": [
     "rerun_cmd"
-  ]
+  ],
+  "verify_waiver": {
+    "by": "main",
+    "reason": "控制腳本票:驗收單元測試由 worker 放在票內、閘門與落地全套已跑;無獨立驗證者"
+  }
 }

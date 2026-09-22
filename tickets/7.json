@@ -25,7 +25,7 @@
   "attempt": 0,
   "base_sha": "cdf2328bfa63bb2dcf7f1b7d3b2117ff2684ec9a",
   "state": "InReview",
-  "state_version": 9,
+  "state_version": 11,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -39,12 +39,16 @@
     "verdict": "pass",
     "by": "main",
     "sha": "aa578f6fb9f907996f1eb2fc4ed0535c5e6e61c2",
-    "note": "第 2 輪:auto-fix 迴圈測試的固定裝置與 fail-fast 共存;閘門重跑綠",
-    "at": "2026-09-22T12:11:49+08:00",
-    "state_version": 8
+    "note": "已落地(見 Merge t7);補綁最新票版本",
+    "at": "2026-09-22T12:15:01+08:00",
+    "state_version": 11
   },
   "repair_round": 2,
   "verify_strings": [
     "env.suspect"
-  ]
+  ],
+  "verify_waiver": {
+    "by": "main",
+    "reason": "控制腳本票:驗收單元測試由 worker 放在票內、閘門與落地全套已跑;無獨立驗證者"
+  }
 }
