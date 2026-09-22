@@ -245,6 +245,30 @@ def now():
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def stamp(text):
+    """ISO 時間戳 → datetime,讀不懂就是讀不懂(回 None),不猜一個。"""
+    try:
+        return datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def seconds_between(first, last):
+    """兩個時間戳差幾秒。**任一格缺就回 None,不回 0**(D-017 ①)。
+
+    0 秒是「跑得很快」,而「算不出來」不是一個秒數 —— 揉成同一個 0 的那一刻,
+    一份缺了 `started` 的壞檔與一趟真的在同一秒內跑完的閘門長得一樣。
+    """
+    start, end = stamp(first), stamp(last)
+    if start is None or end is None:
+        return None
+    try:
+        return int((end - start).total_seconds())
+    except (TypeError, ValueError, OverflowError):
+        # 一邊帶時區一邊不帶,相減會拋 —— 那也是「算不出來」。
+        return None
+
+
 def sha256_of(path):
     try:
         with open(path, "rb") as handle:
@@ -483,8 +507,14 @@ def cmd_phase(args):
     if not data:
         sys.stderr.write("status: #%s 的 %s 讀不到\n" % (args.ticket, run_id))
         return 2
-    data.setdefault("phases", []).append({
-        "phase": args.phase, "rc": args.rc, "at": now(),
+    phases = data.setdefault("phases", [])
+    # 上一筆 phase 的 `at`,沒有上一筆就是這一輪的 `started` —— 一段的牆鐘秒數是
+    # 「從上一個記號到這個記號」,而第一段的上一個記號是開跑那一刻。
+    since = phases[-1].get("at") if phases else data.get("started")
+    at = now()
+    phases.append({
+        "phase": args.phase, "rc": args.rc, "at": at,
+        "seconds": seconds_between(since, at),
         "note": args.note or ""})
     write(root, args.ticket, run_id, data)
     print("status: #%s %s %s rc=%d" % (args.ticket, run_id, args.phase, args.rc))
@@ -636,6 +666,7 @@ def cmd_done(args):
     suspected = [row for row in failures if row["suspected_flaky"]]
     automatic = [row for row in failures if row["flaky"] == "auto"]
     failures = [row for row in failures if row["flaky"] != "auto"]
+    finished = now()
     environment = {}
     if args.environment_log:
         try:
@@ -643,14 +674,15 @@ def cmd_done(args):
                 environment = json.load(handle)
         except (OSError, ValueError):
             environment = {}
+    context = before.get("repair_context") or repair_context(root, args)
     data = {
         "state": args.state,
         "run_id": run_id,
         "kind": args.kind or before.get("kind") or "",
         "ticket": args.ticket,
         "sha": args.sha or before.get("sha") or "",
-        "started": before.get("started") or now(),
-        "finished": now(),
+        "started": before.get("started") or finished,
+        "finished": finished,
         "rc": args.rc,
         "note": args.note or before.get("note") or "",
         "report": args.report or before.get("report") or "",
@@ -668,8 +700,13 @@ def cmd_done(args):
         "flaky": "auto" if automatic else "",
         "order_dependent": bool(order_names),
         "order_dependent_cases": sorted(order_names),
-        "repair_context": before.get("repair_context")
-                          or repair_context(root, args),
+        "repair_context": context,
+        # **秒數從 `before` 的 `started` 算,不從上面那一格算** —— 那一格缺料時
+        # 會退回 `finished`,而拿它相減得到的 0 是一句假話(D-017 ①)。
+        "duration_seconds": seconds_between(before.get("started"), finished),
+        # 第幾輪。`repair_context.round` 裡本來就有,但跨票數返工輪的人要為它開
+        # 一份檔、鑽一層 —— 一個數不出來的數字與一個沒有人去數的數字長得一樣。
+        "round": context.get("round") if isinstance(context, dict) else None,
     }
     path = write(root, args.ticket, run_id, data)
     record_flakes(root, args.ticket, run_id, automatic or suspected)

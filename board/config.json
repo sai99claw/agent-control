@@ -44,7 +44,7 @@
   "environment_fail_fast_threshold": 8,
   "flaky_auto_ticket": true,
   "worker": {
-    "command": "claude -p --model opus --permission-mode acceptEdits --allowedTools Read Edit Write Glob Grep Bash",
+    "command": "claude -p --model opus --permission-mode acceptEdits --allowedTools Read Edit Write Glob Grep Bash --output-format json",
     "timeout_seconds": 3600
   },
   "apply": {

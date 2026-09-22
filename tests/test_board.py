@@ -153,6 +153,38 @@ class Pages(BoardUp):
         self.assertEqual(data["tokens"], "未知")
         self.assertEqual(data["tickets"][0]["id"], "1")
 
+    def test_the_ticket_table_draws_the_metrics_without_touching_the_token_header(self):
+        """**變異**:把 `state()` 的 `metrics` 那一格拿掉 → 這一條紅。
+
+        抬頭那一句 `token 用量:未知` 問的是「這個看板知不知道整體用量」(不知道);
+        票表那一欄答的是「這一張票各自量到了什麼」。**兩件事不是同一格** —— 混成
+        一格的話,任何一張票量到了數字,抬頭就會變成一句它答不出來的話。
+        """
+        self.make_ticket(1, state="Ready", subject="有數字的那一張")
+        self.write(os.path.join("reports", "t1", "r1", "status.json"),
+                   json.dumps({"state": "done", "run_id": "r1", "kind": "gate",
+                               "ticket": "1", "rc": 1, "round": 2,
+                               "environment_suspect": {"engine": "safari"},
+                               "duration_seconds": 12}, ensure_ascii=False))
+        self.up()
+        _, body = self.get("/")
+        section = body.split("id=\"tickets\"")[1].split("</section>")[0]
+        for header in ("返工輪", "紅(env/product)", "token"):
+            self.assertIn(header, section, "票表少了 %s 這一欄" % header)
+        self.assertIn("1 (1/0)", section, "紅的分類沒有畫出來")
+        self.assertIn("token 用量:未知", body, "抬頭那一格不准被票表的數字改掉")
+
+    def test_the_state_api_carries_the_metrics_next_to_the_unknown_token_total(self):
+        self.make_ticket(1)
+        self.up()
+        status, body = self.get("/api/state")
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data["tokens"], "未知")
+        self.assertIn("metrics", data, "/api/state 少了 metrics 這個頂層鍵")
+        self.assertEqual(data["metrics"]["1"]["tokens"], "未知",
+                         "一份 log 都沒有的票,token 是未知,不是 0")
+
     def test_the_css_and_js_are_served_from_the_same_origin(self):
         self.up()
         self.assertEqual(self.get("/board.css")[0], 200)

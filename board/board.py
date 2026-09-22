@@ -32,8 +32,9 @@ from urllib.parse import urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
-import event   # noqa: E402
-import ticket  # noqa: E402
+import event    # noqa: E402
+import metrics  # noqa: E402
+import ticket   # noqa: E402
 
 DEFAULT_PORT = 18905
 ANSWER_MAX = 64 * 1024
@@ -183,6 +184,10 @@ def state():
             "sessions": sessions(rows),
             "answers": latest_answers(),
             "rehearsal": rehearsal_rows(),
+            # 每票一筆,鍵是票號。**這一格不是 `tokens` 的替身** —— 抬頭那一格問的
+            # 是「這個看板自己知不知道整體用量」(不知道),這一格答的是「每一張票
+            # 各自量到了什麼」,而其中一部分的答案照樣是「未知」。
+            "metrics": metrics.collect(root()),
             "tokens": UNKNOWN}
 
 
@@ -326,6 +331,16 @@ def ancestor_cell(value):
     return "<span class=\"warn\">問不出來</span>"
 
 
+def red_cell(row):
+    """`紅(env/product)`。**三個數字一起印** —— 只印總數的話,「環境爛了四次」與
+    「程式錯了四次」長得一樣,而那兩件事的下一步完全不同(一個修機器,一個修 code)。
+    """
+    if not row:
+        return esc(UNKNOWN)
+    return "%s (%s/%s)" % (esc(row.get("red_runs", 0)), esc(row.get("env_runs", 0)),
+                           esc(row.get("product_runs", 0)))
+
+
 def render_tickets(data):
     out = ["<section id=\"tickets\"><h2>① 票與依賴</h2>"]
     tickets = data["tickets"]
@@ -340,17 +355,25 @@ def render_tickets(data):
         out.append("<div><b>%d</b>%s</div>" % (count, esc(state_name)))
     out.append("</div>")
     out.append("<table><tr><th>票</th><th>狀態</th><th>v</th><th>前置</th>"
-               "<th>base_sha 還是主線祖先?</th><th>凍結</th><th>標題</th></tr>")
+               "<th>base_sha 還是主線祖先?</th><th>返工輪</th>"
+               "<th>紅(env/product)</th><th>token</th>"
+               "<th>凍結</th><th>標題</th></tr>")
+    numbers = data.get("metrics") or {}
     for one in tickets:
         deps = ", ".join("#%s" % esc(d.get("id", "")) for d in (one.get("depends_on") or []))
         frozen = one.get("frozen") or {}
+        row = numbers.get(str(one.get("id", ""))) or {}
         out.append(
             "<tr><td class=\"id\">#%s</td>"
             "<td><span class=\"pill s-%s\">%s</span></td>"
-            "<td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
+            "<td>%s</td><td>%s</td><td>%s</td>"
+            "<td>%s</td><td>%s</td><td>%s</td>"
+            "<td>%s</td><td>%s</td></tr>"
             % (esc(one.get("id", "")), esc(one.get("state", "")),
                esc(one.get("state", "")), esc(one.get("state_version", "")),
                deps or "—", ancestor_cell(one.get("_ancestor")),
+               esc(row.get("fix_rounds", UNKNOWN)), red_cell(row),
+               esc(row.get("tokens", UNKNOWN)),
                esc(frozen.get("reason", "")) or "—", esc(one.get("subject", ""))))
     out.append("</table></section>")
     return "".join(out)

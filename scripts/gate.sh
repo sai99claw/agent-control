@@ -125,6 +125,10 @@ map() {
         scripts/sync-to-project.sh) add test_sync_to_project ;;
         # 狀態檔:閘門與落地都寫它,所以動它要連那兩側一起跑。
         scripts/status.py) add test_status test_gate test_land ;;
+        # 每票一行的數字:看板 import 它(board.py 的 state() 與票表那三欄),
+        # 所以動它要連看板一起跑 —— 少了 test_board,「metrics 壞了」會在看板那一側
+        # 靜悄悄地變成三欄空白。
+        scripts/metrics.py) add test_metrics test_board ;;
         # 記憶檔既受上限守衛管(test_memory),也在「不准出現專案名」那一掃裡。
         memory/model/*.md) add test_memory test_no_project_names ;;
         memory/role/*.md) add test_memory test_sync_to_project test_no_project_names ;;

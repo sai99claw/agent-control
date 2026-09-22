@@ -35,7 +35,7 @@ TIMEOUT = 180
 SCRIPT_FILES = ("event.py", "ticket.py", "memory.py", "status.py", "land.sh",
                 "gate.sh", "heartbeat.sh", "new-session.sh", "verify.py",
                 "verify-case.py", "apply.sh", "auto-fix.sh", "inbox.py",
-                "rules.py")
+                "rules.py", "metrics.py")
 
 # 回歸層的最小形狀:一個登記過的標籤 + 一個會綠的案例。沙盒少了它,`gate --full`
 # 跑到的回歸是一個空集合 —— 而**空集合與「都過了」長得一樣**,那正是這裡在擋的事。
