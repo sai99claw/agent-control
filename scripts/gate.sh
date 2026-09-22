@@ -7,7 +7,8 @@
 #   sh scripts/gate.sh --full            # 全套(land.sh 跑的就是這一發)
 #   sh scripts/gate.sh <檔> <檔> …       # 指定檔
 #   sh scripts/gate.sh --branch --ticket 7   # 同上,外加狀態檔、票的回歸、flake 重跑
-#   sh scripts/gate.sh --branch --ticket 7 --auto-fix   # 紅了就自動派下一輪 worker
+#   sh scripts/gate.sh --branch --ticket 7              # 紅了預設派下一輪 worker
+#   sh scripts/gate.sh --branch --ticket 7 --no-auto-fix # 明說要人下場
 #   sh scripts/gate.sh --branch --ticket 7 --no-cache   # 不吃同一輪的回歸快取
 #
 # ## `--ticket <票號>`:狀態檔、票的回歸、flake 重跑(D-010 / D-014)
@@ -50,7 +51,7 @@
 # **哪張票、什麼狀態、要主線做什麼、去哪看**。主線因此不必輪詢 status ——
 # 每看一次背景工作就是整份上下文重送一輪。
 #
-# ## `--auto-fix`:紅了自動派下一輪(D-010)
+# ## auto-fix:紅了預設派下一輪(D-010)
 # 紅了就呼叫 `scripts/auto-fix.sh <票號>`。**閘門自己的退出碼不會因此變綠** ——
 # 這個 commit 對這一組測試就是紅的,而 auto-fix 產生的是**下一個** commit。
 # 修好了沒、停在哪一種,看 inbox 那一頁。
@@ -142,7 +143,7 @@ map() {
 }
 
 want_base=0; want_branch=0; want_full=0
-want_autofix=0
+want_autofix=1
 NO_CACHE=${AC_NO_VERIFY_CACHE:-}
 TICKET=${AC_GATE_TICKET:-}
 ARGC=$#
@@ -156,8 +157,9 @@ while [ $# -gt 0 ]; do
             [ $# -ge 1 ] || { echo "gate: --ticket 後面要票號" >&2; exit 2; }
             TICKET=$1 ;;
         --auto-fix) want_autofix=1 ;;
+        --no-auto-fix) want_autofix=0 ;;
         --no-cache) NO_CACHE=1 ;;
-        --*) echo "gate: 不認得 $1(--branch / --base / --full / --ticket <票號> / --auto-fix / --no-cache)" >&2; exit 2 ;;
+        --*) echo "gate: 不認得 $1(--branch / --base / --full / --ticket <票號> / --auto-fix / --no-auto-fix / --no-cache)" >&2; exit 2 ;;
         *) map "$1" ;;
     esac
     shift
@@ -358,19 +360,19 @@ inbox_post() {   # $1 = rc
         >/dev/null 2>&1 || echo "gate: 收件匣寫不出來(不擋閘門)" >&2
 }
 
-# 紅了自動派下一輪。**閘門自己的 rc 不動** —— 這個 commit 對這一組測試就是紅的。
+# 紅了預設自動派下一輪;`--no-auto-fix` 才關。**閘門自己的 rc 不動**。
 auto_fix() {   # $1 = rc
     [ "$want_autofix" -eq 1 ] || return 0
     [ "$1" -eq 0 ] && return 0
     if [ -z "$TICKET" ]; then
-        echo "gate: --auto-fix 要有 --ticket <票號> —— 沒有票就沒有紅榜可以派" >&2
+        echo "gate: auto-fix 要有 --ticket <票號> —— 沒有票就沒有紅榜可以派" >&2
         return 0
     fi
     if [ -n "${AC_IN_AUTOFIX:-}" ]; then
         echo "gate: 已經在 auto-fix 裡面了,不再往下派(免得自己叫自己)"
         return 0
     fi
-    echo "gate: --auto-fix —— sh scripts/auto-fix.sh $TICKET"
+    echo "gate: auto-fix —— sh scripts/auto-fix.sh $TICKET"
     sh "$ROOT/scripts/auto-fix.sh" "$TICKET" \
         || echo "gate: auto-fix 停下來了(rc=$?)—— 看 reports/inbox/ 那一頁"
 }

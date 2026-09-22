@@ -4,8 +4,7 @@
 #   sh scripts/auto-fix.sh <票號>              # 讀最新狀態檔,紅就派下一輪
 #   sh scripts/auto-fix.sh <票號> --dry-run    # 只印派工文,不起 worker
 #
-# 也可以掛在閘門與落地後面:`sh scripts/gate.sh --branch --ticket 7 --auto-fix`、
-# `sh scripts/land.sh t7-x --auto-fix`。
+# 閘門與單票落地預設會叫這一支;`--no-auto-fix` 才停給人處理。
 #
 # ## 為什麼不叫醒舊的 worker
 # 它醒來一次 = 累積的整份上下文重送一輪(D-010)。所以每一輪都是**新的** worker,
@@ -27,7 +26,7 @@
 #   0 綠了(停在等覆核)   1 三輪耗盡仍紅   2 用法 / 沒有狀態檔可讀
 #   3 worker 提反駁       4 failures 沒有歸因   5 worker 沒交出可用的 patch
 set -u
-# `AC_ROOT` 優先:被 `gate.sh --auto-fix` 叫到的時候,這支檔案住在**副本**裡,
+# `AC_ROOT` 優先:被 `gate.sh` 的 auto-fix 叫到時,這支檔案住在**副本**裡,
 # 而票、reports 與收件匣住在主 repo。照 `$0` 算根會把它們寫進一個等一下會被
 # 收掉的目錄 —— 而且不會報錯。
 # 主 repo 根:找 board/config.json 往上走(同步到專案後這幾支住在 scripts/control/,
@@ -176,7 +175,103 @@ fi
 
 # --------------------------------------------------------------- 一輪的動作
 MODEL=$(cfg routing.implement opus)
+VERIFIER_MODEL=$(cfg routing.verify "$MODEL")
+VERIFIER_CMD=$(cfg verifier.command "$WORKER_CMD")
 WT=$WTBASE/t$ID
+
+dispatch_verifier() {   # uses r/FIX/DISPATCH/line; sets PATCH_OUT/EVIDENCE/CASE_FIXED
+    python3 - "$TF" "$ID" <<'PY'
+import json, os, subprocess, sys
+path, ident = sys.argv[1:3]
+with open(path, encoding="utf-8") as handle:
+    ticket = json.load(handle)
+allowed = list(ticket.get("allowed_write_paths") or [])
+for item in list(ticket.get("in_scope") or []) + ["tests/*"]:
+    if item not in allowed:
+        allowed.append(item)
+subprocess.run([sys.executable, os.path.join(os.environ["AC_CONTROL_DIR"], "ticket.py"),
+                "set", ident, "allowed_write_paths",
+                json.dumps(allowed, ensure_ascii=False)], check=False)
+PY
+    VFIX=$WTBASE/verify-t$ID/round$r
+    rm -rf "$VFIX"
+    mkdir -p "$VFIX"
+    cp -R "$FIX/base" "$VFIX/base"
+    cp -R "$FIX/base" "$VFIX/work"
+    VDISPATCH=$(dirname "$DISPATCH")/dispatch-verifier-round$r.md
+    {
+        python3 "$AC/rules.py" pack verifier --model "$VERIFIER_MODEL" 2>/dev/null \
+            || echo "(規則包產不出來 —— 自己讀 memory/role/verifier.md)"
+        python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "$VFIX" "$line" <<'PY'
+import os, sys
+root, ident, run_id, r, fix, objection = sys.argv[1:7]
+sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
+import status
+
+data = status.read(root, ident, run_id)
+files = []
+print("\n# 這一輪:#%s 第 %s 輪(獨立驗證者修案例)" % (ident, r))
+print("\n產品 worker 提出:`%s`" % objection)
+print("你是**新的 role=verifier worker**;只修案例,不改產品程式。")
+print("\n## 紅榜")
+for row in data.get("failures") or []:
+    path = row.get("file") or ""
+    if path and path not in files:
+        files.append(path)
+    print("- %s %s (%s:%s)" % (row.get("kind") or "FAIL", row.get("case") or "?",
+                                 path or "?", row.get("line") or "?"))
+    print("  " + (row.get("excerpt") or "(沒有 excerpt)").splitlines()[0])
+print("\n## 案例檔路徑")
+for path in files:
+    print("- `%s`" % path)
+if not files:
+    print("- `(紅榜沒有 file;從 case 名定位,不猜 oracle)`")
+print("\n## 副本與交付")
+print("- 只改 `%s/work`;`%s/base` 是對照組。" % (fix, fix))
+print("- 交 `%s/patch-verify.diff` 與 `%s/EVIDENCE-verifier.md`。" % (fix, fix))
+print("- patch 檔頭只准 `base/…` / `work/…`。")
+PY
+    } > "$VDISPATCH"
+    echo "auto-fix: test_defect —— 起第 $r 輪的新驗證者 worker"
+    VLOG=$(dirname "$DISPATCH")/verifier-round$r.log
+    ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
+        --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix-verifier
+    VWRC=$(python3 - "$VERIFIER_CMD" "$VDISPATCH" "$VFIX" "$WORKER_TIMEOUT" "$ID" "$r" "$VLOG" <<'PY'
+import os, subprocess, sys
+cmd, dispatch, cwd, timeout, ident, r, log_path = sys.argv[1:8]
+env = dict(os.environ)
+env.update({"AC_DISPATCH": dispatch, "AC_TICKET": ident, "AC_ROUND": r,
+            "AC_WORK": cwd, "AC_ROLE": "verifier"})
+try:
+    with open(dispatch, encoding="utf-8") as handle, open(log_path, "w", encoding="utf-8") as log:
+        done = subprocess.run(cmd, shell=True, cwd=cwd, env=env, stdin=handle,
+                              stdout=log, stderr=subprocess.STDOUT, timeout=float(timeout))
+    rc = done.returncode
+except subprocess.TimeoutExpired:
+    rc = 124
+except OSError:
+    rc = 127
+print(rc)
+PY
+)
+    if [ "$VWRC" -eq 0 ]; then
+        ev agent.done --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
+            --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$VWRC" --kv agent=auto-fix-verifier
+    else
+        ev agent.failed --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
+            --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$VWRC" --kv agent=auto-fix-verifier
+    fi
+    PATCH_OUT=$VFIX/patch-verify.diff
+    EVIDENCE=$VFIX/EVIDENCE-verifier.md
+    if [ "$VWRC" -ne 0 ] || [ ! -f "$PATCH_OUT" ]; then
+        block "#$ID 第 $r 輪的驗證者沒交出 patch-verify"
+        post "驗證者沒交出 patch-verify" \
+             "讀驗證者派工文與副本;不要讓主線自己改案例" "$VFIX"
+        return 1
+    fi
+    CASE_FIXED=1
+    return 0
+}
 
 round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
     r=$1
@@ -187,7 +282,7 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
     # worker 交的 diff 下一步要餵給 `apply.sh` 套在**分支上**,而分支已經有前幾輪了
     # —— 拿 base_sha 當對照組的話,第二輪的 patch 會宣稱自己在新建一個已經存在的檔,
     # 而 `git apply --check` 會在那裡整輪停住。分支還不存在(第一輪就紅)才退回 base_sha。
-    SRC=t$ID
+    SRC=${AC_FIX_SOURCE:-t$ID}
     git -C "$ROOT" rev-parse -q --verify "$SRC^{commit}" >/dev/null || SRC=$S_BASE
     if ! git -C "$ROOT" archive "$SRC" 2>/dev/null | tar -x -C "$FIX/base"; then
         echo "auto-fix: 取不出 $SRC 的副本 —— 這張票的 base 對不上這顆 repo" >&2
@@ -293,7 +388,8 @@ PY
     WRC=$(python3 - "$WORKER_CMD" "$DISPATCH" "$FIX" "$WORKER_TIMEOUT" "$ID" "$r" "$WORKER_LOG" <<'PY'
 import subprocess, sys
 cmd, dispatch, cwd, timeout, ident, r, log_path = sys.argv[1:8]
-env_extra = {"AC_DISPATCH": dispatch, "AC_TICKET": ident, "AC_ROUND": r, "AC_WORK": cwd}
+env_extra = {"AC_DISPATCH": dispatch, "AC_TICKET": ident, "AC_ROUND": r,
+             "AC_WORK": cwd, "AC_ROLE": "worker"}
 import os
 env = dict(os.environ)
 env.update(env_extra)
@@ -325,11 +421,12 @@ PY
     [ -f "$PATCH_OUT" ] || PATCH_OUT=$FIX/work/patch-round$r.diff
     [ -f "$EVIDENCE" ] || EVIDENCE=$FIX/work/EVIDENCE-round$r.md
 
+    CASE_FIXED=""
     # 反駁比 patch 先看:worker 說「這張票寫錯了」而東西照樣落地,那句話等於沒人收。
     if [ -f "$EVIDENCE" ] && grep -q '^OBJECTION:' "$EVIDENCE"; then
         line=$(grep -m1 '^OBJECTION:' "$EVIDENCE")
         echo "auto-fix: worker 提了反駁 —— $line"
-        python3 - "$ROOT" "$ID" "$line" "$EVIDENCE" "$TF" <<'PY'
+        category=$(python3 - "$ROOT" "$ID" "$line" "$EVIDENCE" "$TF" <<'PY'
 import json, os, subprocess, sys
 root, ident, line, evidence, path = sys.argv[1:6]
 rest = line.split(":", 1)[1].strip()
@@ -340,18 +437,29 @@ body = parts[1] if len(parts) > 1 else rest
 with open(path, encoding="utf-8") as handle:
     rows = json.load(handle).get("objections") or []
 rows.append({"category": category, "body": body,
-             "evidence": os.path.relpath(evidence, root), "owner": "main",
+             "evidence": os.path.relpath(evidence, root),
+             "owner": "verifier" if category == "test_defect" else "main",
              "disposition": "", "follow_up": ""})
 subprocess.run([sys.executable, os.path.join(os.environ["AC_CONTROL_DIR"], "ticket.py"),
                 "set", ident, "objections",
-                json.dumps(rows, ensure_ascii=False)], check=False)
+                json.dumps(rows, ensure_ascii=False)], check=False,
+               stdout=subprocess.DEVNULL)
+print(category)
 PY
-        block "#$ID 的 worker 提反駁:$line"
-        post "worker 提反駁(票寫錯 / 需裁示)" \
-             "讀 EVIDENCE 那一行反駁,處置它(accepted / rejected / deferred / fixed);沒處置的阻擋項 land 與 close 都會拒絕" \
-             "$EVIDENCE"
-        ROUND_RC=3
-        return 1
+)
+        if [ "$category" = "test_defect" ]; then
+            if ! dispatch_verifier; then
+                ROUND_RC=5
+                return 1
+            fi
+        else
+            block "#$ID 的 worker 提反駁:$line"
+            post "worker 提反駁(票寫錯 / 需裁示)" \
+                 "讀 EVIDENCE 那一行反駁,處置它(accepted / rejected / deferred / fixed);沒處置的阻擋項 land 與 close 都會拒絕" \
+                 "$EVIDENCE"
+            ROUND_RC=3
+            return 1
+        fi
     fi
 
     if [ ! -f "$PATCH_OUT" ]; then
@@ -372,6 +480,22 @@ PY
              "$PATCH_OUT"
         ROUND_RC=5
         return 1
+    fi
+    if [ -n "$CASE_FIXED" ]; then
+        python3 - "$TF" "$ID" "$PATCH_OUT" <<'PY'
+import json, os, subprocess, sys
+path, ident, patch = sys.argv[1:4]
+with open(path, encoding="utf-8") as handle:
+    ticket = json.load(handle)
+rows = ticket.get("objections") or []
+for row in reversed(rows):
+    if row.get("category") == "test_defect" and not row.get("disposition"):
+        row["disposition"] = "fixed"
+        row["follow_up"] = os.path.relpath(patch, os.environ["AC_ROOT"])
+        break
+subprocess.run([sys.executable, os.path.join(os.environ["AC_CONTROL_DIR"], "ticket.py"),
+                "set", ident, "objections", json.dumps(rows, ensure_ascii=False)], check=False)
+PY
     fi
 
     if [ -n "$RERUN_CMD" ]; then
@@ -396,7 +520,12 @@ PY
         read_status
         RUN_ID=$S_RUN
         echo "auto-fix: 第 $r 輪綠了 —— **覆核不自動**,停在這裡等主線"
-        post "第 $r 輪綠了,等覆核" \
+        if [ -n "$CASE_FIXED" ]; then
+            result="案例已修,第 $r 輪綠了,等覆核"
+        else
+            result="第 $r 輪綠了,等覆核"
+        fi
+        post "$result" \
              "讀 patch 記 review(綁票版本與分支頭 sha),再 sh scripts/land.sh t$ID" \
              "$WT 與 reports/t$ID/$S_RUN/status.json"
         ROUND_RC=0
@@ -405,6 +534,11 @@ PY
     python3 "$AC/ticket.py" round "$ID" "$r" --red || true
     read_status
     RUN_ID=$S_RUN
+    if [ -n "$CASE_FIXED" ]; then
+        post "案例已修,第 $r 輪仍紅" \
+             "auto-fix 會帶新紅榜進下一輪;主線不用自己判斷或改案例" \
+             "reports/t$ID/$RUN_ID/status.json"
+    fi
     ROUND_RC=1
     return 0
 }

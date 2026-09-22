@@ -3,7 +3,8 @@
 # 六步照 `docs/WORKFLOW.md` §落地,每一步發事件。
 #
 #   sh scripts/land.sh t7-land-refuses t9-event-kinds ...   # 依給的順序合
-#   sh scripts/land.sh t7-x --auto-fix                      # 全套紅了就派下一輪 worker
+#   sh scripts/land.sh t7-x                                 # 全套紅了預設派下一輪 worker
+#   sh scripts/land.sh t7-x --no-auto-fix                   # 明說要人下場
 #
 # 這一支**沒有判斷**(docs/ROLES.md:落地器是程式;順序是主線決定的)。它只會拒絕:
 # 0 commit、票對不上、`base_sha` 過期、寫入範圍越界、閘門紅。要它放寬的時候,
@@ -30,10 +31,10 @@
 # `git merge --ff-only` 進主線並 push,worktree 收掉。主線的工作樹全程沒有人動、
 # 沒有人在上面跑測試,所以其他票的分支閘門可以同時進行。
 #
-# ## 終態叫醒主線 + `--auto-fix`(2026-09-21,D-015)
+# ## 終態叫醒主線 + auto-fix(2026-09-21,D-015)
 # 每一條退出路徑除了狀態檔,還寫一則 `reports/inbox/<票號>-<run_id>.md`:哪張票、
 # 什麼狀態、要主線做什麼、去哪看。主線因此不必輪詢。
-# `--auto-fix` 在全套紅時派下一輪 worker,**但只在這一批剛好一張票的時候** ——
+# 全套紅時預設派下一輪 worker(`--no-auto-fix` 才關),**但只在這一批剛好一張票的時候** ——
 # 一批裡哪一條紅對到哪一張票,要有票↔案例的對照才判得出來(能力表列著這一條未實作),
 # 而**猜錯的歸責比不歸責更貴**:它會讓一個新 worker 去修一張沒有壞的票。
 set -u
@@ -42,12 +43,13 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 
 # 旗標先挑掉,剩下的才是分支。**分支名不准有空白**(`t<票號>-…` 的形狀),所以這裡
 # 用字串重組位置參數是安全的。
-AUTOFIX=0
+AUTOFIX=1
 REBUILT=""
 for a in "$@"; do
     case "$a" in
         --auto-fix) AUTOFIX=1 ;;
-        --*) echo "land: 不認得 $a(--auto-fix)"; exit 2 ;;
+        --no-auto-fix) AUTOFIX=0 ;;
+        --*) echo "land: 不認得 $a(--auto-fix / --no-auto-fix)"; exit 2 ;;
         *) REBUILT="$REBUILT $a" ;;
     esac
 done
@@ -166,13 +168,13 @@ auto_fix_all() {
     [ "$AUTOFIX" -eq 1 ] || return 0
     count=$(echo "$IDS" | wc -w | tr -d " ")
     if [ "$count" != "1" ]; then
-        echo "land: --auto-fix 這一批有 $count 張票 —— 不猜是誰紅的,留給主線"
+        echo "land: auto-fix 這一批有 $count 張票 —— 不猜是誰紅的,留給主線"
         echo "land:   (票↔案例的對照還沒有;猜錯的歸責會讓新 worker 去修沒壞的票。)"
         return 0
     fi
     for i in $IDS; do
-        echo "land: --auto-fix —— sh scripts/auto-fix.sh $i"
-        sh "$ROOT/scripts/auto-fix.sh" "$i" \
+        echo "land: auto-fix —— sh scripts/auto-fix.sh $i(base=$BR)"
+        AC_FIX_SOURCE="$BR" sh "$ROOT/scripts/auto-fix.sh" "$i" \
             || echo "land: auto-fix 停下來了(rc=$?)—— 看 reports/inbox/ 那一頁"
     done
 }
@@ -471,7 +473,7 @@ if [ "$(echo "$IDS" | wc -w | tr -d ' ')" = "1" ]; then
     for i in $IDS; do GATE_TICKET=$i; done
 fi
 if ! (cd "$WT" && AC_ROOT="$ROOT" AC_GATE_TICKET="$GATE_TICKET" \
-    AC_GATE_RUN_ID="$LAND_RUN-gate" AC_NO_INBOX=1 sh scripts/gate.sh --full); then
+    AC_GATE_RUN_ID="$LAND_RUN-gate" AC_NO_INBOX=1 sh scripts/gate.sh --full --no-auto-fix); then
     echo "land: 全套紅,$MAIN 沒動;worktree 留在 $WT"
     echo "land: 紅榜逐條在 reports/t<票號>/<run_id>/status.json 的 failures(案例、檔、行、log、excerpt)"
     ev gate.fail --kv mode=full --kv "sha=$SHA"
@@ -479,7 +481,7 @@ if ! (cd "$WT" && AC_ROOT="$ROOT" AC_GATE_TICKET="$GATE_TICKET" \
     status_phase_all gate 1 "全套紅"
     status_done_all 1 "閘門紅,沒有 merge、沒有 push"
     inbox_all "落地時全套紅" \
-        "看紅榜逐條;要自動派下一輪 worker:land --auto-fix 或 auto-fix.sh <票號>" \
+        "預設已自動派下一輪 worker;--no-auto-fix 才留給人處理" \
         "$WT/gate.log 與 reports/t<票號>/$LAND_RUN/status.json"
     auto_fix_all
     exit 1

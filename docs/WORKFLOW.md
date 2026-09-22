@@ -38,7 +38,7 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 8. **gate / merge / push 各記一筆**(狀態檔的 `phases`),而且**每一條退出路徑都寫終態**,
    同時寫一則 `reports/inbox/<票號>-<run_id>.md`(D-015:終態去叫醒主線,主線不輪詢)。
 9. 綠了之後 land 印「#n 已合併、尚未關票」——**land 不關票**,關票走 `scripts/ticket.py close <n>`。
-10. 每一步發事件。`--auto-fix` 在全套紅時派下一輪 worker,**只在這一批剛好一張票的時候**
+10. 每一步發事件。全套紅時預設派下一輪 worker,**只在這一批剛好一張票的時候**
    (一批裡哪一條紅對到哪一張票,要有票↔案例的對照才判得出來)。
 
 ## 閘門(`scripts/gate.sh`)
@@ -78,7 +78,8 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
    > ⛔ 取代 D-010 原本的「全 flaky 視為綠」。2026-09-21 外部審查的實測反例:第一條測試污染共用狀態、第二條檢查乾淨狀態 —— 整組必紅、乾淨程序單跑必綠,而舊規則正是以「所有紅的案例單跑都綠」為由回傳 0。**順序依賴的 bug 於是每一次都被判成偶發。**
 2. 疑似 flaky 逐筆寫進 `reports/flaky.jsonl`(持久事件帳,不隨下一輪清空)。同一條累計到門檻(`board/config.json` 的 `flaky_threshold`,預設 3)發 `decision.asked`,**並自動開一張修不穩定的票**(role=verifier,票上留 `flaky_case`;同一條案例只開一張,`flaky_auto_ticket: false` 可關)。
    > 為什麼從「只發事件」改成「自動開票」(D-015):事件沒有 owner、沒有驗收,而**一則沒有人認領的事件比一張沒有人認領的票更容易被滑過去** —— 票至少每個 session 開場都出現在 `list --open` 裡。
-3. 真紅 → 起**新** worker:`scripts/auto-fix.sh <票號>`(也可以 `gate.sh --auto-fix` / `land.sh --auto-fix` 掛在後面)。
+3. 真紅 → 起**新** worker:`scripts/auto-fix.sh <票號>`。`gate.sh` 與單票 `land.sh`
+   預設就會走 auto-fix;**要人下場才明寫 `--no-auto-fix`**。
    它讀最新狀態檔,組派工文 = **規則包**(`scripts/rules.py pack worker`)+ 票面快照 + `repair_context`
    + failures 逐條 excerpt + 上一輪 EVIDENCE + 第幾輪,用 `board/config.json` 的 `worker.command`
    (預設 `claude -p --model opus`)在副本裡跑,收 `patch-round<r>.diff` 與 `EVIDENCE-round<r>.md`,
@@ -105,7 +106,7 @@ worker 說「這張票寫錯了」以前只是一句話:沒有結構化類別、
 `category` 是 `ticket-wrong` / `blocking`(或 `blocking: true`)就是阻擋項;`disposition` 空著 → **land 拒絕、`close` 拒絕**。處置寫 `accepted` / `rejected` / `deferred` / `fixed`,要有 owner,建議附後續票號。
 
 ## 交接類型:`test_defect`(2026-09-21,D-014)
-票是對的、程式也是對的,**錯的是案例本身**(oracle 或 fixture 寫錯)時:worker **不准**放寬斷言、不准改 oracle。它交一筆 `objections[{"category": "test_defect", …}]` 附反例,主線派**獨立的驗證者**去修案例(產品 worker 不碰)。需求本身有爭議才退回開題者。少了這一條,流程只剩一句模糊的「需要裁示」,而 worker 手上唯一能動的東西就是斷言。
+票是對的、程式也是對的,**錯的是案例本身**(oracle 或 fixture 寫錯)時:worker **不准**放寬斷言、不准改 oracle。它交一筆 `objections[{"category": "test_defect", …}]` 附反例,auto-fix 立即派**新的 role=verifier worker**(規則包 + 紅榜 + 反駁行 + 案例檔路徑)。驗證者交 `patch-verify.diff`,腳本併入同一分支後續跑閘門;主線只從 inbox 看「案例已修,第 N 輪綠/紅」。需求本身有爭議才退回開題者。
 
 ### 這一段哪些已經是程式,哪些還只是規格(2026-09-21 逐項對照真實入口重寫)
 **這張表以前漏列了四項重大未實作**,而一張漏列的能力表比沒有能力表更糟:它讓人以為那幾件事有程式在守。以下每一列都對著一個真的入口。
@@ -128,12 +129,12 @@ worker 說「這張票寫錯了」以前只是一句話:沒有結構化類別、
 | **套 patch、建分支、commit** | **已實作**(2026-09-21,D-015) | `scripts/apply.sh <票號> <patch> [<patch-verify>]`;重套走 `scripts/apply.sh rebase` |
 | **關票** | **land 不關票**;它印「已合併、尚未關票」 | `scripts/ticket.py close <n>` |
 | land 前檢查 `verify.files` 都在分支上 | **已實作**(2026-09-21,D-015) | `scripts/land.sh` 第 5 步,缺了 rc=4 |
-| 用 headless `claude -p` **自動起新 worker**(三輪上限) | **已實作**(2026-09-21,D-015;硬閘門與交接閉環先上的那一輪已經做完) | `scripts/auto-fix.sh <票號>`;`gate.sh --auto-fix`、`land.sh --auto-fix` |
+| 用 headless `claude -p` **自動起新 worker**(三輪上限) | **已實作**(2026-09-22;gate / 單票 land 預設開,`--no-auto-fix` 關) | `scripts/auto-fix.sh <票號>`;`gate.sh`、`land.sh` |
 | **終態叫醒主線**(gate done / auto-fix 停 / land done / 轉 Blocked)+ 禁止輪詢 | **已實作**(2026-09-21,D-015) | `scripts/inbox.py post\|list\|show\|ack`;`reports/inbox/<票號>-<run_id>.md`;`new-session.sh` 開場印 |
 | 同一輪的回歸**只跑一次**(worker / 驗證者 / gate 共用) | **已實作**(2026-09-21,D-015) | `scripts/verify.py` 的 `reports/t<n>/<run_id>/verify-<雜湊>.log`(雜湊含標籤 + sha);`--no-cache` 關 |
 | **按角色裁切、帶版本的規則包** | **已實作**(2026-09-21,D-015) | `scripts/rules.py pack <角色> --model <模型>`(≤ 4 KB,砍掉的部分會指名) |
 | 一個既有專案**接上這一套** | **已實作**(步驟 + 腳本;實際遷移還沒做) | `docs/TODO.md` §0;`scripts/sync-to-project.sh` 同步到專案的 `scripts/control/` 並印出接點 |
-| `land.sh` 那一側自己判 flake / 一批多張票時歸責 | **未實作,而且是刻意的** —— 一批裡哪一條紅對到哪一張票,要有票↔案例的對照才判得出來;`land --auto-fix` 因此只在**剛好一張票**時派下一輪,多張就留給主線 | `scripts/land.sh` 的 `auto_fix_all` |
+| `land.sh` 那一側自己判 flake / 一批多張票時歸責 | **未實作,而且是刻意的** —— 一批裡哪一條紅對到哪一張票,要有票↔案例的對照才判得出來;land 因此只在**剛好一張票**時派下一輪,多張就留給主線 | `scripts/land.sh` 的 `auto_fix_all` |
 
 ## 驗證者的案例怎麼進閘門
 票的 `verify.tags` 併進 `tags`,由 `gate.sh --ticket <n>` **真的呼叫** `scripts/verify.py --tag …`(原始輸出存檔)。`--full` 跑全部回歸。驗證者不出 VERDICT;紅了照上一節走。

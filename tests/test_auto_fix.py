@@ -15,6 +15,7 @@ worker 用一支假的可執行檔(`board/config.json` 的 `worker.command`)。*
 不是語意**:真的 headless 模型要錢要時間,而這一組要問的是腳本怎麼接它的產出。
 """
 
+import glob
 import json
 import os
 import sys
@@ -80,6 +81,47 @@ echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
 cd "$AC_WORK"
 printf 'OBJECTION: ticket-wrong 驗收第二條與設計文件對不上\\n' \\
     > "EVIDENCE-round$AC_ROUND.md"
+"""
+
+WORKER_REPORTS_TEST_DEFECT = """#!/bin/sh
+set -e
+echo "$AC_ROLE ran round $AC_ROUND" >> "$AC_TEST_LOG"
+cd "$AC_WORK"
+if [ "$AC_ROLE" = worker ]; then
+    printf 'OBJECTION: test_defect fixture 把正確結果寫成 2\\n' \\
+        > "EVIDENCE-round$AC_ROUND.md"
+    exit 0
+fi
+cat > work/tests/test_thing.py <<'CASE'
+import unittest
+
+
+class T(unittest.TestCase):
+    def test_thing(self):
+        self.assertEqual(1, 1)
+CASE
+diff -ruN base work > patch-verify.diff || true
+printf '# verifier\\n案例已修\\n' > EVIDENCE-verifier.md
+"""
+
+WORKER_TEST_DEFECT_THEN_FIXES_PRODUCT = """#!/bin/sh
+set -e
+echo "$AC_ROLE ran round $AC_ROUND" >> "$AC_TEST_LOG"
+cd "$AC_WORK"
+if [ "$AC_ROLE" = verifier ]; then
+    sed 's/assertEqual(1, 2/assertEqual(1, 3/' base/tests/test_thing.py \\
+        > work/tests/test_thing.py
+    diff -ruN base work > patch-verify.diff || true
+    printf '# verifier\\n案例已修但產品仍紅\\n' > EVIDENCE-verifier.md
+elif [ "$AC_ROUND" = 2 ]; then
+    printf 'OBJECTION: test_defect fixture 把正確結果寫成 2\\n' \\
+        > "EVIDENCE-round$AC_ROUND.md"
+else
+    sed 's/assertEqual(1, 3/assertEqual(1, 1/' base/tests/test_thing.py \\
+        > work/tests/test_thing.py
+    diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+    printf '# worker\\n產品修復\\n' > "EVIDENCE-round$AC_ROUND.md"
+fi
 """
 
 WORKER_NEVER = """#!/bin/sh
@@ -274,6 +316,62 @@ class ThingsThatStopIt(AutoFixBase):
         with open(worker_log, encoding="utf-8") as handle:
             self.assertEqual(handle.read(), "worker stdout round 2\n")
 
+    def test_a_test_defect_dispatches_a_new_verifier_and_resumes_the_gate(self):
+        self.set_worker(WORKER_REPORTS_TEST_DEFECT)
+        self.ticket_ready(in_scope=["src/app.py"])
+        patch = self.write("p1.diff", RED_CASE, where=self.home)
+        self.assertEqual(self.run_sh("scripts/apply.sh", "1", patch).returncode, 0)
+        wt = os.path.join(self.home, "repo-wt", "t1")
+        gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
+                           "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
+                           env=self.env(AC_ROOT=self.repo))
+        self.assertNotEqual(gate.returncode, 0, gate.stdout + gate.stderr)
+
+        done = self.auto_fix()
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("test_defect", done.stdout)
+        with open(self.log, encoding="utf-8") as handle:
+            self.assertEqual(handle.read().splitlines(),
+                             ["worker ran round 2", "verifier ran round 2"])
+        starts = [row for row in self.events() if row["kind"] == "agent.start"]
+        self.assertEqual(starts[-1]["role"], "verifier")
+        self.assertEqual(starts[-1]["agent"], "auto-fix-verifier")
+        ticket = self.load_ticket("1")
+        objection = ticket["objections"][0]
+        self.assertEqual(objection["owner"], "verifier")
+        self.assertEqual(objection["disposition"], "fixed")
+        self.assertIn("tests/*", ticket["allowed_write_paths"])
+        packets = glob.glob(os.path.join(self.repo, "reports", "t1", "*",
+                                         "dispatch-verifier-round2.md"))
+        self.assertEqual(len(packets), 1)
+        with open(packets[0], encoding="utf-8") as handle:
+            packet = handle.read()
+        for text in ("role=verifier", "test_thing.T.test_thing",
+                     "fixture 把正確結果寫成 2", "tests/test_thing.py"):
+            self.assertIn(text, packet)
+        self.assertIn("案例已修,第 2 輪綠", self.inbox_list())
+
+    def test_a_fixed_case_that_is_still_red_is_reported_before_the_next_round(self):
+        self.set_worker(WORKER_TEST_DEFECT_THEN_FIXES_PRODUCT)
+        self.ticket_ready()
+        patch = self.write("p1.diff", RED_CASE, where=self.home)
+        self.assertEqual(self.run_sh("scripts/apply.sh", "1", patch).returncode, 0)
+        wt = os.path.join(self.home, "repo-wt", "t1")
+        gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
+                           "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
+                           env=self.env(AC_ROOT=self.repo))
+        self.assertNotEqual(gate.returncode, 0, gate.stdout + gate.stderr)
+
+        done = self.auto_fix()
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        with open(self.log, encoding="utf-8") as handle:
+            self.assertEqual(handle.read().splitlines(),
+                             ["worker ran round 2", "verifier ran round 2",
+                              "worker ran round 3"])
+        self.assertIn("案例已修,第 2 輪仍紅", self.inbox_list())
+
 
 class TheDispatchPacket(AutoFixBase):
 
@@ -332,7 +430,7 @@ class TheWholeLoop(AutoFixBase):
         # 「這條分支改了什麼」,而在主 repo 上問等於問 main 對 main —— 答案是「沒有」,
         # 而「沒有東西可跑」與「跑完了都過」長得一樣(§5.5)。
         gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
-                           "--branch", "--ticket", "1", cwd=wt,
+                           "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
                            env=self.env(AC_ROOT=self.repo))
         self.assertNotEqual(gate.returncode, 0, gate.stdout + gate.stderr)
         return wt
@@ -363,7 +461,7 @@ class TheWholeLoop(AutoFixBase):
         write_executable(rerun, """#!/bin/sh
 set -e
 grep -q 'assertEqual(1, 1)' tests/test_thing.py
-echo "rerun $AC_ROUND" >> "$AC_TEST_LOG"
+echo "rerun $AC_ROUND ticket=$AC_TICKET" >> "$AC_TEST_LOG"
 """)
         self.set_worker(WORKER_FIXES, "sh %s" % rerun)
         self.ticket_ready()
@@ -372,7 +470,7 @@ echo "rerun $AC_ROUND" >> "$AC_TEST_LOG"
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.worker_rounds(), ["worker ran round 2"])
         with open(self.log, encoding="utf-8") as handle:
-            self.assertIn("rerun 2", handle.read())
+            self.assertIn("rerun 2 ticket=1", handle.read())
         rows = [row for row in self.events() if row["kind"] == "gate.rerun"]
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["ticket"], "1")
@@ -402,13 +500,27 @@ echo "rerun $AC_ROUND" >> "$AC_TEST_LOG"
         self.assertEqual(self.run_sh("scripts/apply.sh", "1", patch).returncode, 0)
         wt = os.path.join(self.home, "repo-wt", "t1")
         done = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
-                           "--branch", "--ticket", "1", "--auto-fix", cwd=wt,
+                           "--branch", "--ticket", "1", cwd=wt,
                            env=self.env(AC_ROOT=self.repo))
         self.assertNotEqual(done.returncode, 0,
                             "閘門自己的 rc 不因為下一輪修好了而變綠")
         self.assertEqual(self.worker_rounds(), ["worker ran round 2"], done.stdout)
         self.assertEqual(self.load_ticket("1")["state"], "InReview")
         self.assertIn("等覆核", self.inbox_list())
+
+    def test_no_auto_fix_leaves_the_red_round_for_a_human(self):
+        self.set_worker(WORKER_FIXES)
+        self.ticket_ready()
+        patch = self.write("p1.diff", RED_CASE, where=self.home)
+        self.assertEqual(self.run_sh("scripts/apply.sh", "1", patch).returncode, 0)
+        wt = os.path.join(self.home, "repo-wt", "t1")
+
+        done = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
+                           "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
+                           env=self.env(AC_ROOT=self.repo))
+
+        self.assertNotEqual(done.returncode, 0)
+        self.assertEqual(self.worker_rounds(), [])
 
     def test_three_red_rounds_end_as_blocked_and_owned_by_main(self):
         """**三輪耗盡不是一句話,是一個狀態轉換**(D-014):
