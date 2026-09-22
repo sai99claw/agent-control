@@ -493,6 +493,126 @@ class VerifyAndClose(Sandbox):
         self.assertEqual(self.ticket("verify", "1").returncode, 0)
 
 
+class WaiverAndLanded(Sandbox):
+    """#15:已落地的票關不掉 —— close 要認得 `verify_waiver`(#8),而 `set` 那幾格
+    (`verify_waiver` / `verify_strings` / `objections`)是落地後的收尾,不該讓既有
+    review 過期。"""
+
+    def land_a_file(self, path, text):
+        self.write(path, text)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "把 %s 放進主線" % path)
+
+    def test_a_waiver_with_a_review_sha_on_main_skips_the_regression_check(self):
+        """**變異**:把 `waiver_covers_regression` 拿掉(改回舊的無條件檢查)
+        → 這一條紅(沒有 test_evidence 就過不了)。"""
+        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
+        self.make_ticket(1, allowed_write_paths=["src/*"],
+                         verify_strings=["src/nav.py:def size_nav"],
+                         verify_waiver={"by": "main", "reason": "控制腳本票:無獨立驗證者"})
+        self.approve(1, branch="main")  # review.sha = main 的頭,state_version 跟著綁上
+        done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["state"], "Done")
+        self.assertNotIn("test_evidence", self.load_ticket("1"))
+
+    def test_a_waiver_does_not_cover_a_review_sha_that_never_reached_main(self):
+        """免驗**只在 review 綁的 sha 真的在主線歷史裡才生效**——票寫了 waiver,但
+        review 蓋的章是另一條沒進主線的分支,不該就這樣免了回歸證據。"""
+        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
+        self.make_ticket(1, allowed_write_paths=["src/*"],
+                         verify_strings=["src/nav.py:def size_nav"],
+                         verify_waiver={"by": "main", "reason": "控制腳本票"})
+        path = self.worktree("t1-unmerged")
+        self.commit_in(path, "extra.txt", "沒有進主線的 commit")
+        self.approve(1, branch="t1-unmerged")
+        done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("沒有回歸證據", done.stdout)
+        self.assertEqual(self.load_ticket("1")["state"], "Ready")
+
+    def test_a_waiver_missing_reason_does_not_count(self):
+        """票面沒說清楚(`reason` 空著)不算誠實的 waiver。"""
+        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
+        self.make_ticket(1, allowed_write_paths=["src/*"],
+                         verify_strings=["src/nav.py:def size_nav"],
+                         verify_waiver={"by": "main", "reason": ""})
+        self.approve(1, branch="main")
+        done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("沒有回歸證據", done.stdout)
+
+    def done_ready(self, **extra):
+        fields = {"allowed_write_paths": ["src/*"],
+                  "verify_strings": ["src/nav.py:def size_nav"],
+                  "test_evidence": [{"cmd": "gate --branch", "rc": 0}]}
+        fields.update(extra)
+        self.make_ticket(1, **fields)
+        self.ticket("set", "1", "review",
+                    json.dumps({"verdict": "pass", "by": "main", "sha": "deadbeef"},
+                               ensure_ascii=False))
+
+    def test_setting_verify_waiver_carries_the_review_version_forward(self):
+        """**變異**:把 `cmd_set` 裡「`field in CARRY_REVIEW_FIELDS` 跟著蓋
+        `review['state_version']`」那一段拿掉 → 這一條紅
+        (`覆核之後票被改過`,close 回 1)。"""
+        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
+        self.done_ready()
+        before_version = self.load_ticket("1")["review"]["state_version"]
+        set_done = self.ticket("set", "1", "verify_waiver",
+                               json.dumps({"by": "main", "reason": "後補"},
+                                          ensure_ascii=False))
+        self.assertEqual(set_done.returncode, 0, set_done.stdout + set_done.stderr)
+        row = self.load_ticket("1")
+        self.assertGreater(row["state_version"], before_version)
+        self.assertEqual(row["review"]["state_version"], row["state_version"],
+                         "review 該跟著蓋到新版本,不能停在舊的")
+        done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        carried = [r for r in self.events()
+                  if r.get("kind") == "ticket.state" and r.get("field") == "verify_waiver"]
+        self.assertTrue(carried and carried[-1].get("review_carried") == 1)
+
+    def test_setting_an_unrelated_field_still_lets_the_review_expire(self):
+        """只有那三格(`verify_waiver`/`verify_strings`/`objections`)算收尾;
+        改票面其他格(這裡改 `objective`)review 照舊規矩過期 —— 沒有把「所有 set
+        都跟著蓋」誤植進去。"""
+        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
+        self.done_ready()
+        self.ticket("set", "1", "objective", "改了票面")
+        done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("覆核之後票被改過", done.stdout)
+
+    def test_close_landed_stamps_review_sha_and_closes_in_one_step(self):
+        """**變異**:把 `stamp_landed` 裡 `sha_on_branch` 的檢查拿掉 → 下一條測試
+        (拒收不在主線的 sha)會紅。這一條驗的是正常路徑:`--landed` 一步關票。"""
+        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
+        sha = self.git("rev-parse", "main").strip()
+        self.make_ticket(1, allowed_write_paths=["src/*"],
+                         verify_strings=["src/nav.py:def size_nav"],
+                         test_evidence=[{"cmd": "gate --branch", "rc": 0}])
+        done = self.ticket("close", "1", "--landed", sha)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        self.assertEqual(row["state"], "Done")
+        self.assertEqual(row["review"]["sha"], sha)
+        self.assertEqual(row["review"]["verdict"], "pass")
+        self.assertEqual(row["review"]["state_version"], row["state_version"])
+
+    def test_close_landed_refuses_a_sha_that_never_reached_main(self):
+        """**變異**:把 `sha_on_branch` 的 `merge-base --is-ancestor` 判斷改成永遠
+        `True` → 這一條紅(不在主線的 sha 被誤蓋進 review)。"""
+        self.make_ticket(1, allowed_write_paths=["src/*"])
+        path = self.worktree("t1-x")
+        self.commit_in(path, "x.txt", "沒進主線")
+        off_main = self.git("rev-parse", "t1-x").strip()
+        done = self.ticket("close", "1", "--landed", off_main)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("不在主線", done.stdout)
+        self.assertNotIn("review", self.load_ticket("1"))
+
+
 class Inbox(Sandbox):
 
     def answer(self, ident, text):
