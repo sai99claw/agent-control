@@ -21,3 +21,4 @@
 | `scripts/land.sh` 的 `reports/t<n>-status.json` | 下一次真的落地一批票(綠或紅都算) | 批次裡**每一張票各一份**檔,`state=done`、`kind=land`、rc 對得上落地的結果;紅的那一次 `failures` 逐條有案例名與 excerpt |
 | `scripts/metrics.py` 的 token 解析 | 下一次 auto-fix 真的用帶 `--output-format json` 的 `worker.command` 派出一輪 | 那一輪的 `worker-round<r>.log` 檔尾是一個含 `usage` 的 JSON 物件,而 `python3 scripts/metrics.py line <票號>` 的 `tokens=` 從 `未知` 變成 `已知<K>趟=<input 加 output>`;**還是 `未知` 就是產出端沒照設定跑**,不是解析壞了 —— 那兩件事在同一個「未知」上長得一樣 |
 | `board/board.py` 的收件匣儲存 | 下一次使用者在網頁上填一則裁示 | `answers.jsonl` 多一行、事件多一筆 `decision.answered`、**票的狀態一個字都沒變** |
+| `board/board.py` 的 `/t/<票號>` | 下一次主線真的拿這一頁去接手一張紅票(不開終端機、不貼任何一份輸出進看板) | 那一頁上四件事各自答得出來:全部 run 一列一趟(`kind`/`state`/`rc`/秒)、紅榜前 5 條的 case 與 excerpt 首行、還擋著的反駁排在最前面、`review.state_version` 與票對不上時印「這份覆核已過期」;而 `#20` 落地之前每一趟都印「worker 沒交結構化輸出」——**那一句是對的**,不是讀不到 |
