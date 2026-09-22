@@ -420,6 +420,23 @@ class GateWritesStatus(Sandbox):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertFalse(self.exists("reports"), "沒給票號卻寫了檔")
 
+    def test_the_outer_gate_env_does_not_leak_into_the_sandbox(self):
+        """land.sh 跑全套時 `gate.sh --full` 帶著 AC_GATE_TICKET / AC_NO_INBOX /
+        AC_GATE_RUN_ID / AC_ROOT;這一組測試就在那一層底下跑。舊沙盒只擋 AC_ROOT,
+        其餘漏進去 —— 於是「沒給票號」變成有票、閘門該寫的 inbox 頁不見了,而落地時
+        的紅榜指向 test_status / test_inbox / test_land(#7 第 1 輪落地)。"""
+        outer = {"AC_GATE_TICKET": "7", "AC_NO_INBOX": "1",
+                 "AC_GATE_RUN_ID": "outer-gate", "AC_ROOT": "/nope"}
+        with mock.patch.dict(os.environ, outer):
+            done = self.gate("scripts/land.sh")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertFalse(self.exists("reports"), "外面的 AC_GATE_TICKET 漏進沙盒")
+            done = self.gate("scripts/land.sh", "--ticket", "7")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotEqual(self.load()["run_id"], "outer-gate",
+                            "外面的 AC_GATE_RUN_ID 漏進沙盒")
+        self.assertIn("inbox.posted", self.kinds(), "外面的 AC_NO_INBOX 漏進沙盒")
+
     def test_a_green_run_leaves_a_done_status_with_rc_zero(self):
         done = self.gate("scripts/land.sh", "--ticket", "7")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
