@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import unittest
+from datetime import datetime
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -296,6 +297,67 @@ class StatusFile(Sandbox):
         phases = self.load()["phases"]
         self.assertEqual([(row["phase"], row["rc"]) for row in phases],
                          [("gate", 0), ("merge", 1)])
+
+    # ------------------------------------------------------------ 花了多久
+
+    def test_done_writes_the_duration_and_the_round(self):
+        """**變異**:把 `duration_seconds` 那一格拿掉 → 這一條紅。
+
+        期望值從**檔上的兩個時間戳**自己減一次來,不從被測程式算 —— 拿被測程式的
+        輸出當期望值,是「把期望值改成程式現在印什麼」的那一種假綠。
+        """
+        self.status("start", "--ticket", "7", "--run-id", "r1", "--round", "3")
+        self.status("done", "--ticket", "7", "--run-id", "r1", "--rc", "0",
+                    "--round", "3")
+        data = self.load()
+        started = datetime.fromisoformat(data["started"])
+        finished = datetime.fromisoformat(data["finished"])
+        self.assertEqual(data["duration_seconds"],
+                         int((finished - started).total_seconds()))
+        self.assertIsInstance(data["duration_seconds"], int)
+        self.assertGreaterEqual(data["duration_seconds"], 0)
+        self.assertEqual(data["round"], 3, "頂層的 round 要等於 repair_context 那一格")
+        self.assertEqual(data["round"], data["repair_context"]["round"])
+
+    def test_a_missing_start_time_makes_the_duration_null_not_zero(self):
+        """**變異**:算不出來時回 0 → 這一條紅。
+
+        0 秒是「跑得很快」,而「算不出來」不是一個秒數 —— 揉成同一個 0 的那一刻,
+        一份缺了 `started` 的壞檔與一趟真的在同一秒內跑完的閘門長得一樣。
+        """
+        broken = {"state": "running", "run_id": "r1", "kind": "gate",
+                  "ticket": "7", "rc": None, "finished": None, "phases": []}
+        self.write(os.path.join("reports", "t7", "r1", "status.json"),
+                   json.dumps(broken, ensure_ascii=False))
+        self.status("done", "--ticket", "7", "--run-id", "r1", "--rc", "0")
+        text = self.read(os.path.join("reports", "t7", "r1", "status.json"))
+        self.assertIsNone(json.loads(text)["duration_seconds"])
+        self.assertNotIn("\"duration_seconds\": 0", text,
+                         "算不出來被寫成 0 了")
+
+    def test_each_phase_carries_the_seconds_since_the_last_mark(self):
+        """**變異**:把「沒有上一筆就減 `started`」那一支拿掉 → 這一條紅
+        (第一筆的 `seconds` 會變成 null)。
+
+        一段的牆鐘秒數是「從上一個記號到這個記號」,而第一段的上一個記號是開跑
+        那一刻 —— 少了它,land 的第一段(閘門,最久的那一段)永遠沒有秒數。
+        """
+        self.status("start", "--ticket", "7", "--run-id", "r1", "--kind", "land")
+        for phase in ("gate", "merge", "push"):
+            self.status("phase", "--ticket", "7", "--run-id", "r1",
+                        "--phase", phase, "--rc", "0")
+        self.status("done", "--ticket", "7", "--run-id", "r1", "--rc", "0")
+        data = self.load()
+        phases = data["phases"]
+        self.assertEqual([row["phase"] for row in phases], ["gate", "merge", "push"],
+                         "land 現有的三筆要照樣寫得出來")
+        marks = [data["started"]] + [row["at"] for row in phases]
+        for index, row in enumerate(phases):
+            self.assertEqual(
+                row["seconds"],
+                int((datetime.fromisoformat(row["at"])
+                     - datetime.fromisoformat(marks[index])).total_seconds()),
+                "第 %d 筆對到的不是上一個記號" % (index + 1))
 
     def test_phase_and_done_force_the_environment_run_id(self):
         self.status("start", "--ticket", "7", "--run-id", "from-env")
