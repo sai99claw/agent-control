@@ -56,6 +56,22 @@ class Create(Sandbox):
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("allowed_write_paths", done.stderr)
 
+    def test_in_scope_becomes_the_default_allowed_write_paths(self):
+        args = [a for a in MIN]
+        at = args.index("--allowed-write-path")
+        del args[at:at + 2]
+        done = self.ticket("create", *args, "--in-scope", "scripts/a.py",
+                           "--in-scope", "docs/b.md")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["allowed_write_paths"],
+                         ["scripts/a.py", "docs/b.md", "tests/*"])
+
+    def test_explicit_allowed_write_paths_override_the_in_scope_default(self):
+        done = self.ticket("create", *MIN, "--in-scope", "docs/b.md")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["allowed_write_paths"],
+                         ["scripts/land.sh"])
+
     def test_it_can_be_asked_one_field_at_a_time(self):
         answers = "\n".join([
             "互動開的票", "把每一格問出來",
