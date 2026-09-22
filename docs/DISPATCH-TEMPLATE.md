@@ -388,6 +388,63 @@ Chrome 完全不管。分支閘門收窄成 chrome 全綠,一路藏到 land 的�
 改到使用者看得到的文字時,**把「舊 → 新」的完整對照表列出來** —— 那是使用者會逐句看
 的東西,不要只寫「已全部改為 X」。
 
+## 8.5 🩸 結構化交付:EVIDENCE 尾端那一塊 `result`
+
+§8 那八點是**寫給人看的**,照舊。同一份檔的**最後**再加一段 `## result`,底下一塊
+語言標記是 `result` 的 fenced JSON 物件 —— 那一塊是**寫給機器看的**。
+`scripts/auto-fix.sh` 在收 patch 的同一手把它抽成
+`reports/t<票號>/<run_id>/result-round<輪>.json`(驗證者那條路是
+`result-verifier-round<輪>.json`),與那一輪的 `status.json` 同目錄;**抽取只讀
+EVIDENCE,不改它**。看板的 `/t/<票號>` 畫的就是那一份。
+
+為什麼不是另外一份 `RESULT.md`:多一份要 agent 維護的檔就是多一個忘記寫的地方,
+而 EVIDENCE 本來就非寫不可。為什麼不是「沒有就算了」:**三種缺漏各有各的樣子** ——
+沒有 EVIDENCE 檔(`no-evidence`)、有 EVIDENCE 但沒有那一塊(`no-block`)、有那一塊
+但 JSON 解不開(`bad-json`,原文前 500 字留在 `raw`)。揉成同一個空檔的那一刻,
+「沒交」與「交了但都是空的」長得一樣(§5.5)。三種都不改變退出碼,也不擋流程。
+
+| 鍵 | 型別 | 寫什麼 |
+|---|---|---|
+| `ticket` | 字串 | 票號 |
+| `role` | 字串 | `worker` 或 `verifier` |
+| `round` | 整數 | 第幾輪 |
+| `rc` | 整數 | 你自己跑的那一組閘門的退出碼 —— **判綠只看它**(§3) |
+| `patch_sha256` | 字串 | 交出去那份 patch 的 sha256 |
+| `gate` | 物件 | `{cmd, ran, rc}`:指令逐字、`ran` 是 `Ran N` 的 N、`rc` 同上一格 |
+| `mutations` | 陣列 | 一條變異一項 `{id, count, case, red_first_line}`(§5) |
+| `objection` | 物件或 `null` | `{category, body}`;`category` 是 `ticket-wrong` / `test_defect` / `blocking` |
+| `excluded` | 陣列 | 已排除的假設,一項一句(§8 第 5 點的機器版) |
+| `repro` | 物件 | `{cmd, expect}`:最小重現那一句與預期輸出(§8 第 6 點) |
+| `memory` | 陣列 | 這一輪寫的記憶,一項 `{layer, name, line, ticket}` |
+
+`memory` 是**鏡像,不是入口**:真正寫進記憶的是 §8 第 8 點那幾行 `memory.py note`,
+抽這一塊不會再寫第二次。兩份對不上的時候要修的是你自己的 EVIDENCE。
+
+`objection` 與 §7 那一行 `OBJECTION:` 同時存在而**對不上**時,以 `OBJECTION:` 那一行
+為準 —— 既有的收件、轉 Blocked、退出碼一個字不改,抽出來的 json 多一格
+`"conflict": true`。
+
+寫不出來的欄位**照實留空**(`null` / `[]`)。**編一個數字進去,與量過那個數字長得
+一樣**,而下一輪那個新的人分不出哪一個是哪一個。
+
+抽出來的那一份就是這一塊再加一格 `"present": true`:
+
+```result
+{
+  "ticket": "42", "role": "worker", "round": 2, "rc": 0,
+  "patch_sha256": "3f1c0b…",
+  "gate": {"cmd": "python3 -m unittest discover -s tests -p 'test_*.py'",
+           "ran": 214, "rc": 0},
+  "mutations": [{"id": "M1", "count": 1,
+                 "case": "tests/test_land.py::TheLock::test_second_land_refuses",
+                 "red_first_line": "AssertionError: 0 != 2"}],
+  "objection": null,
+  "excluded": ["不是 worktree 沒收 —— 那一輪的 status.json 裡 rc 已經是 2"],
+  "repro": {"cmd": "python3 -m unittest tests.test_land", "expect": "Ran 12 tests … OK"},
+  "memory": []
+}
+```
+
 ## 9. 專案特有的那幾節
 
 **這一份不收專案特有的東西。** 埠、目錄、不准跑的腳本、這個 code base 的測試陷阱

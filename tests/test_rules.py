@@ -191,6 +191,64 @@ class WhatItAlwaysCarries(RulesBase):
         self.assertRegex(done.stderr, r"記憶回寫 \d+ bytes")
 
 
+class TheStructuredDeliverySection(RulesBase):
+    """第六段「結構化交付」是固定文字、先扣預算(D-017,#20):交出來的東西一產生
+    就要是機器讀得懂的,所以每個角色都帶得到這一句,而砍預算時砍的是別份。
+
+    **變異**:把 `pack()` 結尾接上 `DELIVERY_NOTE` 那一段拿掉 → 這一組全紅。
+    """
+
+    ROLES = ("worker", "verifier", "opener", "main", "consolidator")
+    LAST_LINE = "編一個數字進去,與量過那個數字長得一樣。"
+
+    def test_every_role_gets_the_section_within_the_cap(self):
+        for role in self.ROLES:
+            done = self.rules("pack", role, "--model", "opus")
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertIn("## 結構化交付", done.stdout, role)
+            self.assertIn(self.LAST_LINE, done.stdout, role)
+            self.assertLessEqual(len(done.stdout.encode("utf-8")), 4096, role)
+
+    def test_the_section_says_where_the_block_goes_and_who_picks_it_up(self):
+        """措辭是這一段的全部:檔尾、那個語言標記、auto-fix 抽成哪一個檔、留空不要編。"""
+        text = self.rules("pack", "worker", "--model", "opus").stdout
+        for phrase in ("檔尾", "result", "auto-fix", "result-round", "照實留空"):
+            self.assertIn(phrase, text)
+
+    def test_it_points_at_the_two_places_instead_of_copying_the_keys(self):
+        """schema 只寫兩處。規則包抄第三份的那一天,三份會各自往不同方向漂 ——
+        而漂開的那一份看起來仍然像規格。
+
+        **變異**:把 `DELIVERY_NOTE` 改成列出鍵名 → 這一條紅。
+        """
+        text = self.rules("pack", "worker", "--model", "opus").stdout
+        for pointer in ("docs/DISPATCH-TEMPLATE.md", "tickets/SCHEMA.md"):
+            self.assertIn(pointer, text)
+        for key in ("patch_sha256", "red_first_line", "no-block"):
+            self.assertNotIn(key, text, "規則包裡出現了第三份 schema")
+
+    def test_the_section_is_under_600_bytes(self):
+        sys.path.insert(0, os.path.join(self.repo, "scripts"))
+        try:
+            import importlib
+            rules = importlib.import_module("rules")
+        finally:
+            sys.path.pop(0)
+        self.assertLessEqual(rules.DELIVERY_NOTE_BYTES, 600)
+
+    def test_a_tight_budget_cuts_the_other_parts_not_this_one(self):
+        done = self.rules("pack", "worker", "--model", "opus", "--max-bytes", "2000")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertLessEqual(len(done.stdout.encode("utf-8")), 2000)
+        self.assertIn("砍過", done.stdout)
+        self.assertIn(self.LAST_LINE, done.stdout)
+
+    def test_stats_reports_the_section_bytes(self):
+        done = self.rules("pack", "worker", "--model", "opus", "--stats")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertRegex(done.stderr, r"結構化交付 \d+ bytes")
+
+
 class EfficiencyOverSpeed(RulesBase):
     """第一段「不追求快,只看效率」是固定文字、先扣預算(D-016,#16):產品負責人
     2026-09-21 原話 —— 因為「這樣比較快」而做事之前先算 token。放在標題之後、

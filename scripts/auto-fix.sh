@@ -103,6 +103,91 @@ block() {   # $1 = 為什麼;票轉 Blocked、指派主線
     ev decision.asked --ticket "$ID" --note "$1"
 }
 
+# EVIDENCE 尾端那一塊 `result`(D-017,#20)。**只讀 EVIDENCE,不改它。**
+#
+# 抽出來的落在 `reports/t<票號>/<run_id>/` 裡,與那一輪的 `status.json` 同目錄 ——
+# 要讀它的人已經在那個目錄了。鍵名**不寫在這一支**:schema 只有兩份
+# (`docs/DISPATCH-TEMPLATE.md` §8.5 與 `tickets/SCHEMA.md`),抄第三份的那一天,
+# 三份會各自往不同方向漂,而漂開的那一份看起來仍然像規格。
+#
+# ## 三種缺漏要有三種樣子
+# 沒有 EVIDENCE 檔 / 有 EVIDENCE 但沒有那一塊 / 有那一塊但 JSON 解不開。揉成同一個
+# 空檔的那一刻,「沒交」與「交了但都是空的」長得一樣(`DISPATCH-TEMPLATE` §5.5)。
+# 三種都**不改變退出碼、也不擋流程**:這一手是留痕跡,不是新的一道閘門。
+harvest_result() {   # $1 = EVIDENCE(可以不存在) $2 = 輸出 json $3 = 角色 $4 = 第幾輪
+    python3 - "$1" "$2" "$3" "$4" "$ID" <<'PY' \
+        || echo "auto-fix: result 抽不出來($1)—— 不擋流程" >&2
+import json, os, re, sys
+
+evidence, out, role, rnd, ident = sys.argv[1:6]
+# 開頭那一行的語言標記就是 `result`;收尾是任何一道同族的圍籬。
+OPEN = re.compile(r"^\s*(?:`{3,}|~{3,})[ \t]*result[ \t]*$")
+CLOSE = re.compile(r"^\s*(?:`{3,}|~{3,})[ \t]*$")
+RAW_CAP = 500
+
+
+def block_of(lines):
+    """**最後**那一塊 —— 前面幾塊可能是引用的範例,尾端那一塊才是這一輪交的。"""
+    start = None
+    for index, line in enumerate(lines):
+        if OPEN.match(line):
+            start = index
+    if start is None:
+        return None
+    body = []
+    for line in lines[start + 1:]:
+        if CLOSE.match(line):
+            break
+        body.append(line)
+    return "\n".join(body)
+
+
+def objection_category(lines):
+    """`OBJECTION:` 那一行的類別 —— 解法與這一支收反駁那一段逐字相同。"""
+    for line in lines:
+        if line.startswith("OBJECTION:"):
+            parts = line.split(":", 1)[1].strip().split(None, 1)
+            if parts and parts[0] in ("ticket-wrong", "test_defect", "blocking"):
+                return parts[0]
+            return "ticket-wrong"
+    return ""
+
+
+miss = {"present": False, "ticket": ident, "role": role, "round": int(rnd),
+        "evidence": os.path.basename(evidence)}
+try:
+    with open(evidence, encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+except OSError:
+    data = dict(miss, reason="no-evidence")
+else:
+    raw = block_of(lines)
+    if raw is None:
+        data = dict(miss, reason="no-block")
+    else:
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            parsed = None
+        if not isinstance(parsed, dict):
+            data = dict(miss, reason="bad-json", raw=raw[:RAW_CAP])
+        else:
+            data = dict(parsed)
+            data["present"] = True
+            said = parsed.get("objection")
+            said = said.get("category") if isinstance(said, dict) else None
+            # 對不上時**以 `OBJECTION:` 那一行為準**(既有的收件、轉 Blocked、
+            # 退出碼一個字不改)—— 這一格只是讓那次分岔看得見。
+            data["conflict"] = (objection_category(lines) or None) != (said or None)
+where = os.path.dirname(out)
+if where:
+    os.makedirs(where, exist_ok=True)
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, ensure_ascii=False, indent=2)
+    handle.write("\n")
+PY
+}
+
 # 最新一輪的狀態檔。**讀的是檔,不是輪詢** —— 每看一次背景工作就是整份上下文重送一輪。
 read_status() {
     eval "$(python3 - "$ROOT" "$ID" "$TF" <<'PY'
@@ -284,6 +369,10 @@ PY
     fi
     PATCH_OUT=$VFIX/patch-verify.diff
     EVIDENCE=$VFIX/EVIDENCE-verifier.md
+    # 驗證者那條路也要留痕跡,**而且在「沒交 patch 就回去」之前** —— 沒交的那一次
+    # 正是最需要一份「沒交」的檔的那一次。
+    harvest_result "$EVIDENCE" \
+        "$(dirname "$DISPATCH")/result-verifier-round$r.json" verifier "$r"
     if [ "$VWRC" -ne 0 ] || [ ! -f "$PATCH_OUT" ]; then
         block "#$ID 第 $r 輪的驗證者沒交出 patch-verify"
         post "驗證者沒交出 patch-verify" \
@@ -441,6 +530,12 @@ PY
     EVIDENCE=$FIX/EVIDENCE-round$r.md
     [ -f "$PATCH_OUT" ] || PATCH_OUT=$FIX/work/patch-round$r.diff
     [ -f "$EVIDENCE" ] || EVIDENCE=$FIX/work/EVIDENCE-round$r.md
+
+    # **收 patch 的同一手**把 EVIDENCE 尾端那一塊抽出來。位置在反駁那一段**之前**:
+    # 反駁那條路會直接 return,而那一輪一樣要留得下一份可讀的結果。
+    RESULT_JSON=$(dirname "$DISPATCH")/result-round$r.json
+    harvest_result "$EVIDENCE" "$RESULT_JSON" worker "$r"
+    echo "auto-fix: 結構化交付 -> $(basename "$RESULT_JSON")"
 
     CASE_FIXED=""
     # 反駁比 patch 先看:worker 說「這張票寫錯了」而東西照樣落地,那句話等於沒人收。

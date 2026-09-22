@@ -39,6 +39,37 @@
 }
 ```
 
+## EVIDENCE 尾端的 `result` 區塊(D-017)
+
+票是規格,這一塊是**這一輪交出來的東西**。worker 與 verifier 的 `EVIDENCE-round<輪>.md`
+五段散文照舊給人看,檔尾再加一段 `## result`,底下一塊語言標記是 `result` 的 fenced
+JSON 物件;`scripts/auto-fix.sh` 在收 patch 的同一手把它抽成
+`reports/t<票號>/<run_id>/result-round<輪>.json`(驗證者那條路是
+`result-verifier-round<輪>.json`),與那一輪的 `status.json` 同目錄。**抽取只讀
+EVIDENCE,不改它**;抽不出來也不改變退出碼、不擋流程。
+
+| 鍵 | 型別 | 說明 |
+|---|---|---|
+| `ticket` | 字串 | 票號 |
+| `role` | 字串 | `worker` / `verifier` |
+| `round` | 整數 | 第幾輪 |
+| `rc` | 整數 | 交出來那一刻自己跑的閘門退出碼 —— 判綠只看它 |
+| `patch_sha256` | 字串 | 交出去那份 patch 的 sha256 |
+| `gate` | 物件 | `{cmd, ran, rc}` |
+| `mutations` | 陣列 | `{id, count, case, red_first_line}` |
+| `objection` | 物件或 `null` | `{category, body}`;`category` 是 `ticket-wrong` / `test_defect` / `blocking` |
+| `excluded` | 陣列 | 已排除的假設 |
+| `repro` | 物件 | `{cmd, expect}` |
+| `memory` | 陣列 | `{layer, name, line, ticket}`;**鏡像而已,寫入仍由 `memory.py harvest` 做** |
+
+抽出來的那一份多一格 `"present": true` 與一格 `"conflict"`(`objection` 與 EVIDENCE 裡
+那一行 `OBJECTION:` 對不上時為 `true`,並**以那一行為準**)。沒交的三種各有各的樣子:
+`{"present": false, "reason": "no-evidence"}`、`"no-block"`、`"bad-json"`(後者把原文前
+500 字放進 `raw`)—— **揉成同一個空檔的那一刻,「沒交」與「交了但都是空的」長得一樣**。
+
+欄位的完整說明與範例另一份在 `docs/DISPATCH-TEMPLATE.md` §8.5(**只有這兩份**:第三份
+一出現,三份就會各自往不同方向漂,而漂開的那一份看起來仍然像規格)。
+
 ## 為什麼是這幾個欄位(每一個都對應一次事故)
 - `base_sha`:2026-09-10 用過期的 branch ref 做副本,agent 拿到看起來正常但缺了上一張票的樹。
 - `allowed_write_paths`:五張票共用 index.html、三張共用同一支測試檔,只能靠人讀 code 排序。
@@ -49,3 +80,4 @@
 - `review.state_version` / `review.sha`:同一次審查 —— 舊的 `review` 只有 verdict/by/at/note,重套一次 patch、改一次票面之後它仍然長得有效,而 land 根本沒有讀它。
 - `objections`:同一次審查 —— 實作者的反駁沒有可靠的收件與處置契約,「這張票寫錯了」講完之後東西照樣落地。
 - `attempt` / `state_version` 的**比對**:同一次審查 —— schema 宣稱過「對不上就拒絕」,而 `ticket.py set` 讀出來直接覆寫。**宣稱與實作分岔的那一格,看起來與有守衛的那一格一模一樣。**
+- `result` 區塊:2026-09-22 —— 機器讀得懂的只有一行 `OBJECTION:` 與一個退出碼,**停下來的理由沒有一格寫得下**;看板因此只能印「worker 沒交結構化輸出」。

@@ -134,6 +134,109 @@ echo "worker stderr round $AC_ROUND" >&2
 exit 7
 """
 
+# 假 worker:修好那條紅,並照 §8.5 在 EVIDENCE 尾端交一塊 `result`。
+# `memory` 那一格是**鏡像**:這一份 EVIDENCE 裡沒有 `## 記憶` 段,所以跑完一輪之後
+# 記憶收件匣一行都不該多 —— 寫入仍然只由 `memory.py harvest` 那一手做(#10)。
+WORKER_WITH_RESULT = """#!/bin/sh
+set -e
+echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+cd "$AC_WORK"
+cat > work/tests/test_thing.py <<'CASE'
+import unittest
+
+
+class T(unittest.TestCase):
+    def test_thing(self):
+        self.assertEqual(1, 1)
+CASE
+diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+sed "s/@R@/$AC_ROUND/g; s/@T@/$AC_TICKET/g" > "EVIDENCE-round$AC_ROUND.md" <<'EV'
+# 第 @R@ 輪
+已排除的假設:沒有
+
+## result
+
+```result
+{"ticket": "@T@", "role": "worker", "round": @R@, "rc": 0,
+ "patch_sha256": "0f0f0f",
+ "gate": {"cmd": "python3 -m unittest test_thing", "ran": 1, "rc": 0},
+ "mutations": [{"id": "M1", "count": 1, "case": "T.test_thing",
+                "red_first_line": "AssertionError: 1 != 2"}],
+ "objection": null,
+ "excluded": ["不是副本沒同步 —— base/ 與 work/ 只差那一個檔"],
+ "repro": {"cmd": "python3 -m unittest test_thing", "expect": "Ran 1 test ... OK"},
+ "memory": [{"layer": "role", "name": "implementer", "line": "一句原則", "ticket": "@T@"},
+            {"layer": "model", "name": "opus", "line": "另一句原則", "ticket": "@T@"}]}
+```
+EV
+"""
+
+# 假 worker:交了 EVIDENCE **但沒有那一塊**(五段散文照舊,機器那一份忘了)。
+WORKER_NO_BLOCK = """#!/bin/sh
+set -e
+echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+cd "$AC_WORK"
+printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
+"""
+
+# 假 worker:那一塊在,但裡面不是 JSON(少一個右括號那一種)。
+WORKER_BAD_JSON = """#!/bin/sh
+set -e
+echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+cd "$AC_WORK"
+cat > "EVIDENCE-round$AC_ROUND.md" <<'EV'
+# 交了,但那一塊解不開
+
+## result
+
+```result
+{"ticket": "1", "role": "worker", "rc": 0, 這裡少了一個引號}
+```
+EV
+"""
+
+# 假 worker:`OBJECTION:` 那一行說 ticket-wrong,而同一份的 block 說 test_defect。
+WORKER_CONFLICTING_OBJECTION = """#!/bin/sh
+set -e
+echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+cd "$AC_WORK"
+cat > "EVIDENCE-round$AC_ROUND.md" <<'EV'
+OBJECTION: ticket-wrong 驗收第二條與設計文件對不上
+
+## result
+
+```result
+{"ticket": "1", "role": "worker", "round": 2, "rc": 1, "patch_sha256": "",
+ "gate": {"cmd": "", "ran": null, "rc": null}, "mutations": [],
+ "objection": {"category": "test_defect", "body": "fixture 把正確結果寫成 2"},
+ "excluded": [], "repro": {"cmd": "", "expect": ""}, "memory": []}
+```
+EV
+"""
+
+# 假 worker:說 test_defect(走驗證者那條路);驗證者交 EVIDENCE 但不交 patch-verify。
+WORKER_TEST_DEFECT_VERIFIER_RESULT = """#!/bin/sh
+set -e
+echo "$AC_ROLE ran round $AC_ROUND" >> "$AC_TEST_LOG"
+cd "$AC_WORK"
+if [ "$AC_ROLE" = worker ]; then
+    printf 'OBJECTION: test_defect fixture 把正確結果寫成 2\\n' \\
+        > "EVIDENCE-round$AC_ROUND.md"
+    exit 0
+fi
+cat > EVIDENCE-verifier.md <<'EV'
+# verifier
+
+## result
+
+```result
+{"ticket": "1", "role": "verifier", "round": 2, "rc": 0, "patch_sha256": "",
+ "gate": {"cmd": "", "ran": null, "rc": null}, "mutations": [],
+ "objection": null, "excluded": [], "repro": {"cmd": "", "expect": ""}, "memory": []}
+```
+EV
+"""
+
 GREEN_LOG = """test_ok (test_thing.T.test_ok) ... ok
 
 ----------------------------------------------------------------------
@@ -210,6 +313,36 @@ class AutoFixBase(Sandbox):
 
     def inbox_list(self):
         return self.run_py("scripts/inbox.py", "list", "--all").stdout
+
+    def first_round(self):
+        patch = self.write("p1.diff", RED_CASE, where=self.home)
+        done = self.run_sh("scripts/apply.sh", "1", patch)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        wt = os.path.join(self.home, "repo-wt", "t1")
+        # **副本裡那一支** gate.sh(不是主 repo 那一支):`--branch` 問的是
+        # 「這條分支改了什麼」,而在主 repo 上問等於問 main 對 main —— 答案是「沒有」,
+        # 而「沒有東西可跑」與「跑完了都過」長得一樣(§5.5)。
+        gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
+                           "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
+                           env=self.env(AC_ROOT=self.repo))
+        self.assertNotEqual(gate.returncode, 0, gate.stdout + gate.stderr)
+        return wt
+
+    def result_files(self, name):
+        return sorted(glob.glob(os.path.join(self.repo, "reports", "t1", "*", name)))
+
+    def result_json(self, name="result-round2.json"):
+        found = self.result_files(name)
+        self.assertEqual(len(found), 1, "找不到(或不只一份)%s:%s" % (name, found))
+        with open(found[0], encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def memory_inbox_lines(self, rel="memory/role/implementer.inbox.md"):
+        path = os.path.join(self.repo, rel)
+        if not os.path.exists(path):
+            return 0
+        with open(path, encoding="utf-8") as handle:
+            return len(handle.read().splitlines())
 
 
 class WhenThereIsNothingToFix(AutoFixBase):
@@ -462,20 +595,6 @@ class TheWholeLoop(AutoFixBase):
     這裡用**真的** `apply.sh` 與真的 `gate.sh`:要問的正是「這幾支接得起來嗎」。
     """
 
-    def first_round(self):
-        patch = self.write("p1.diff", RED_CASE, where=self.home)
-        done = self.run_sh("scripts/apply.sh", "1", patch)
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        wt = os.path.join(self.home, "repo-wt", "t1")
-        # **副本裡那一支** gate.sh(不是主 repo 那一支):`--branch` 問的是
-        # 「這條分支改了什麼」,而在主 repo 上問等於問 main 對 main —— 答案是「沒有」,
-        # 而「沒有東西可跑」與「跑完了都過」長得一樣(§5.5)。
-        gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
-                           "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
-                           env=self.env(AC_ROOT=self.repo))
-        self.assertNotEqual(gate.returncode, 0, gate.stdout + gate.stderr)
-        return wt
-
     def test_a_red_round_gets_fixed_and_stops_at_awaiting_review(self):
         self.set_worker(WORKER_FIXES)
         self.ticket_ready()
@@ -579,6 +698,158 @@ echo "rerun $AC_ROUND ticket=$AC_TICKET" >> "$AC_TEST_LOG"
         self.assertEqual(ticket["owner"], "main")
         self.assertIn("ticket.attempt.failed", self.kinds())
         self.assertIn("三輪耗盡", self.inbox_list())
+
+
+class TheResultBlockAtTheEndOfEvidence(AutoFixBase):
+    """EVIDENCE 尾端那一塊 `result`,由這一支在**收 patch 的同一手**抽成
+    `reports/t<票號>/<run_id>/result-round<輪>.json`(D-017,#20)。
+
+    以前機器讀得懂的只有一行 `OBJECTION:` 與一個退出碼 —— **停下來的理由沒有一格
+    寫得下**,而看板只能印「worker 沒交結構化輸出」。所以這一組問四件事:
+    1. 交了那一塊會不會**真的**落在 `status.json` 隔壁,而且十一個鍵一個不少;
+    2. **三種缺漏有沒有三種樣子** —— 揉成同一個空檔的那一刻,「沒交」與「交了但都是
+       空的」長得一樣(§5.5);
+    3. 反駁**不開第二條路**:`OBJECTION:` 那一行照舊說了算,分岔只留一格 `conflict`;
+    4. `memory` 那一格是**鏡像不是入口** —— 抽它不會把同一句記憶寫第二次(#10)。
+    """
+
+    KEYS = ("ticket", "role", "round", "rc", "patch_sha256", "gate",
+            "mutations", "objection", "excluded", "repro", "memory")
+
+    def test_a_shipped_block_lands_next_to_the_status_file_of_that_round(self):
+        """**變異**:把 `round_once` 裡 `harvest_result` 那一行拿掉 → 這一條紅。"""
+        self.set_worker(WORKER_WITH_RESULT)
+        self.ticket_ready()
+        self.first_round()
+
+        done = self.auto_fix()
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        found = self.result_files("result-round2.json")
+        self.assertEqual(len(found), 1, done.stdout)
+        self.assertTrue(os.path.exists(os.path.join(os.path.dirname(found[0]),
+                                                    "status.json")),
+                        "抽出來的要與那一輪的 status.json 同目錄 —— 讀的人已經在那裡了")
+        data = self.result_json()
+        for key in self.KEYS:
+            self.assertIn(key, data, key)
+        self.assertEqual(data["ticket"], "1")
+        self.assertEqual(data["round"], 2, "第幾輪要對得上這一輪")
+        self.assertEqual(data["role"], "worker")
+        self.assertIs(data["present"], True)
+        self.assertIs(data["conflict"], False)
+        # 看板(#19)讀的就是這三格。
+        self.assertEqual(data["rc"], 0)
+        self.assertEqual(data["gate"]["ran"], 1)
+        self.assertEqual(len(data["mutations"]), 1)
+
+    def test_harvesting_the_memory_mirror_does_not_write_it_a_second_time(self):
+        """`memory[]` 只是同一份記憶的鏡像,這一手**只讀不寫** —— 真正的寫入是
+        `apply.sh` 叫的那一支 `memory.py harvest`(#10)。
+
+        **變異**:讓 `harvest_result` 順手把 `memory[]` 餵給 `memory.py note`
+        → 這一條紅(收件匣多兩行、`memory.noted` 多兩筆)。
+        """
+        self.set_worker(WORKER_WITH_RESULT)
+        self.ticket_ready()
+        self.first_round()
+        before = self.memory_inbox_lines()
+
+        done = self.auto_fix()
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(len(self.result_json()["memory"]), 2,
+                         "鏡像那一格本身要抽得出來")
+        self.assertEqual(self.memory_inbox_lines(), before,
+                         "記憶收件匣的行數不准因為這一手而變多")
+        self.assertEqual(self.kinds().count("memory.noted"), 0)
+
+    def test_no_evidence_at_all_leaves_a_no_evidence_trace(self):
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready()
+        self.status(1, RED_LOG)
+
+        done = self.auto_fix()
+
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        data = self.result_json()
+        self.assertIs(data["present"], False)
+        self.assertEqual(data["reason"], "no-evidence")
+        self.assertEqual(data["round"], 2)
+
+    def test_an_evidence_without_the_block_says_so_in_its_own_words(self):
+        """**變異**:把 `no-block` 那一支改成與 `no-evidence` 同一個 reason
+        → 這一條紅(兩種缺漏會變成同一句話)。
+        """
+        self.set_worker(WORKER_NO_BLOCK)
+        self.ticket_ready()
+        self.status(1, RED_LOG)
+
+        done = self.auto_fix()
+
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        data = self.result_json()
+        self.assertIs(data["present"], False)
+        self.assertEqual(data["reason"], "no-block")
+        self.assertNotEqual(data["reason"], "no-evidence",
+                            "交了 EVIDENCE 卻忘了那一塊,與根本沒交不是同一件事")
+        self.assertNotIn("raw", data, "沒有那一塊就沒有原文可留")
+
+    def test_a_block_that_will_not_parse_keeps_the_first_500_characters(self):
+        self.set_worker(WORKER_BAD_JSON)
+        self.ticket_ready()
+        self.status(1, RED_LOG)
+
+        done = self.auto_fix()
+
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        data = self.result_json()
+        self.assertIs(data["present"], False)
+        self.assertEqual(data["reason"], "bad-json")
+        self.assertIn("這裡少了一個引號", data["raw"],
+                      "解不開的那一份要留得下原文,不然沒有人知道它長什麼樣")
+        self.assertLessEqual(len(data["raw"]), 500)
+
+    def test_the_objection_line_still_wins_and_the_disagreement_is_recorded(self):
+        """反駁**不另開第二條路**:收件、轉 Blocked、退出碼 3 一個字不改,
+        兩個來源對不上只多一格 `conflict`。
+
+        **變異**:把 `conflict` 那一行改成永遠 `False` → 這一條紅。
+        """
+        self.set_worker(WORKER_CONFLICTING_OBJECTION)
+        self.ticket_ready()
+        self.status(1, RED_LOG)
+
+        done = self.auto_fix()
+
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        ticket = self.load_ticket("1")
+        self.assertEqual(len(ticket["objections"]), 1, "只准多一筆")
+        self.assertEqual(ticket["objections"][0]["category"], "ticket-wrong",
+                         "以 OBJECTION: 那一行為準")
+        self.assertEqual(ticket["state"], "Blocked")
+        data = self.result_json()
+        self.assertIs(data["conflict"], True)
+        self.assertEqual(data["objection"]["category"], "test_defect",
+                         "block 裡那一句照實留著 —— 分岔要看得見,不是被蓋掉")
+
+    def test_the_verifier_path_writes_a_file_of_its_own_name(self):
+        """驗證者那條路的檔名不一樣(`result-verifier-round<輪>.json`),而且**在
+        「沒交 patch-verify 就回去」之前**就寫 —— 沒交的那一次正是最需要痕跡的那一次。
+        """
+        self.set_worker(WORKER_TEST_DEFECT_VERIFIER_RESULT)
+        self.ticket_ready()
+        self.status(1, RED_LOG)
+
+        done = self.auto_fix()
+
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        verifier = self.result_json("result-verifier-round2.json")
+        self.assertEqual(verifier["role"], "verifier")
+        self.assertIs(verifier["present"], True)
+        worker = self.result_json("result-round2.json")
+        self.assertEqual(worker["reason"], "no-block",
+                         "worker 只交了一行反駁,那一份也要留得下痕跡")
 
 
 if __name__ == "__main__":
