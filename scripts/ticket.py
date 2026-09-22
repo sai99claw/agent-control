@@ -485,6 +485,10 @@ def cmd_create(argv, stdin=sys.stdin, stdout=sys.stdout):
     if interactive:
         ask_interactive(ticket, stdin, stdout)
     ticket["depends_on"] = normalise_depends(ticket.get("depends_on") or [])
+    if not ticket.get("allowed_write_paths") and ticket.get("in_scope"):
+        ticket["allowed_write_paths"] = list(ticket["in_scope"])
+        if "tests/*" not in ticket["allowed_write_paths"]:
+            ticket["allowed_write_paths"].append("tests/*")
     if ticket.get("verify_strings"):
         ticket["verify_strings"] = normalise_verify(ticket["verify_strings"])
     ticket["id"] = next_id()

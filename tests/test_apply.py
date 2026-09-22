@@ -63,6 +63,11 @@ OUTSIDE = """diff -ruN base/docs/secret.md work/docs/secret.md
 +++ work/docs/secret.md\t2026-09-21 10:00:00
 @@ -0,0 +1 @@
 +not in allowed_write_paths
+diff -ruN base/config/private.ini work/config/private.ini
+--- base/config/private.ini\t1970-01-01 08:00:00
++++ work/config/private.ini\t2026-09-21 10:00:00
+@@ -0,0 +1 @@
++also outside allowed_write_paths
 """
 
 IGNORED = """diff -ruN base/junk/x.log work/junk/x.log
@@ -242,6 +247,12 @@ class ThingsItRefuses(ApplyBase):
         done = self.apply("1", self.patch_file("p.diff", OUTSIDE))
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         self.assertIn("allowed_write_paths", done.stderr)
+        self.assertIn("docs/secret.md", done.stderr)
+        self.assertIn("config/private.ini", done.stderr)
+        self.assertIn(
+            "python3 scripts/ticket.py set 1 allowed_write_paths "
+            "'[\"src/*\", \"config/private.ini\", \"docs/secret.md\"]'",
+            done.stderr)
         self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "0",
                          "越界的 patch 不該留下 commit")
 

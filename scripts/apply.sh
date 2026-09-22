@@ -403,7 +403,8 @@ try:
         globs = json.load(handle).get("allowed_write_paths") or []
 except (OSError, ValueError):
     globs = []
-done = subprocess.run(["git", "-C", wt, "status", "--porcelain", "-z"],
+done = subprocess.run(["git", "-C", wt, "status", "--porcelain", "-z",
+                       "--untracked-files=all"],
                       capture_output=True, text=True)
 for item in done.stdout.split("\0"):
     if len(item) < 4:
@@ -416,6 +417,20 @@ PY
 if [ -n "$OUT" ]; then
     echo "apply: 動到票 #$ID 的 allowed_write_paths 以外的檔:" >&2
     echo "$OUT" | sed 's/^/apply:   /' >&2
+    FIX=$(python3 - "$TF" "$OUT" <<'PY'
+import json, shlex, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    ticket = json.load(handle)
+paths = ticket.get("allowed_write_paths") or []
+for path in sys.argv[2].splitlines():
+    if path not in paths:
+        paths.append(path)
+value = json.dumps(paths, ensure_ascii=False)
+print("python3 scripts/ticket.py set %s allowed_write_paths %s"
+      % (ticket["id"], shlex.quote(value)))
+PY
+)
+    echo "apply:   要把這些檔加入票面可貼:$FIX" >&2
     echo "apply:   工作樹留在 $WT(沒有 commit)—— 要嘛改票面,要嘛改 patch" >&2
     die 5 "寫入範圍越界"
 fi
