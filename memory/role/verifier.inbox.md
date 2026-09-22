@@ -1,1 +1,2 @@
 - verify/<feature>/test_ticket_<n>.py 由你獨占;實作者交的同名檔落地時以你的為準,票的 verify.files 記你那份 (#630) (#630, 2026-09-22, main@fable)
+- 不追求快,只看效率:因為比較快而做事之前先算 token 多還是少;快不快不是判準 (D-016) (2026-09-22, main@fable)

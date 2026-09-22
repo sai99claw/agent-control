@@ -1,0 +1,34 @@
+{
+  "id": "16",
+  "subject": "規則包每一份固定帶「不追求快,只看效率」一行(D-016):rules.py pack 開頭第一段,所有角色與模型,先扣預算",
+  "created": "2026-09-22T14:08:33+08:00",
+  "objective": "任何 agent 一開場就看到:因為比較快而做事之前先算 token;快不快不是判準",
+  "acceptance": [
+    "pack worker/verifier/opener/main/consolidator 輸出的前 3 行含「不追求快」與「token」;--stats 列該段 bytes;總量仍 ≤ 4096",
+    "golden 測試:把那一段拿掉 → 五個角色都紅"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/rules.py",
+    "docs/DISPATCH-TEMPLATE.md",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "92bac0a35a44a1dc99cc6dd6c79902c1949d0a81",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "文字(≤ 160 bytes):「不追求快,只看效率(D-016):在因為『這樣比較快』而做任何事之前,先算 token 是多還是少;快不快不是判準。」放在 pack 標題之後、先讀清單之前。"
+}
