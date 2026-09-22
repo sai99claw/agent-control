@@ -10,7 +10,7 @@
     "open": "fable",
     "design": "fable",
     "bug": "fable",
-    "implement": "codex:gpt-5.6-sol",
+    "implement": "opus",
     "implement_browser": "opus",
     "verify": "sonnet",
     "second_opinion": "agy:gemini-3.8-flash-high",
