@@ -108,6 +108,51 @@ class VerifyFilesMustBeOnTheBranch(LandBase):
         self.assertEqual(self.land("t1-x").returncode, 0)
 
 
+class ProductTicketsNeedVerifierCases(LandBase):
+
+    def test_a_product_ticket_without_verify_files_is_refused_and_names_the_action(self):
+        branch = self.branch_for(1, "t1-x", in_scope=["demo/app.py"],
+                                 allowed_write_paths=["demo/*"])
+        self.commit_in(branch, "demo/app.py", "產品改動")
+        self.approve(1, "t1-x")
+
+        done = self.land("t1-x")
+
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        self.assertIn("verify.files 是空的", done.stdout)
+        self.assertIn("派驗證者", done.stdout)
+        self.assertIn("驗證者", self.run_py(
+            "scripts/inbox.py", "show", "1").stdout)
+        self.assertFalse(self.gate_ran(), "拒絕要在全套門禁之前")
+
+    def test_needs_verifier_false_allows_a_product_ticket(self):
+        branch = self.branch_for(1, "t1-x", in_scope=["demo/app.py"],
+                                 allowed_write_paths=["demo/*"],
+                                 needs_verifier=False)
+        self.commit_in(branch, "demo/app.py", "明確不需要驗證者")
+        self.approve(1, "t1-x")
+
+        done = self.land("t1-x")
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def test_control_and_documentation_scopes_do_not_require_verifier_cases(self):
+        branches = []
+        for ident, scope in enumerate(("docs/guide.md", "board/config.json",
+                                       "scripts/control/tool.sh"), 1):
+            name = "t%s-x" % ident
+            branch = self.branch_for(ident, name, in_scope=[scope],
+                                     allowed_write_paths=[scope])
+            self.commit_in(branch, scope, "非產品範圍 %s" % ident)
+            branches.append(name)
+        for ident, branch in enumerate(branches, 1):
+            self.approve(ident, branch)
+
+        done = self.land(*branches)
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+
 class LandWakesMainUp(LandBase):
     """每一條退出路徑都寫一則收件匣 —— 主線不輪詢(D-015)。"""
 

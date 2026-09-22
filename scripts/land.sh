@@ -372,6 +372,35 @@ PY
     # 票上寫著「案例在這幾個檔」而分支上沒有那幾個檔,代表**驗證者的交付沒有跟著進來**
     # —— 而 `verify.tags` 照樣會被閘門呼叫、照樣一個案例都選不到、照樣印一行綠。
     # 退出碼與其他拒收分開(4):呼叫者要分得出「票面沒填好」與「分支沒準備好」。
+    out=$(python3 - "$tf" <<'VERIFIER_PY'
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as handle:
+        ticket = json.load(handle)
+except (OSError, ValueError):
+    ticket = {}
+plan = ticket.get("verify") or {}
+files = (plan.get("files") or []) if isinstance(plan, dict) else []
+scope = ticket.get("in_scope") or []
+infra = ("docs/", "board/", "scripts/control/")
+product = [name for name in scope
+           if isinstance(name, str)
+           and not any(name == prefix[:-1] or name.startswith(prefix)
+                       for prefix in infra)]
+if ticket.get("needs_verifier") is not False and product and not files:
+    print(product[0])
+VERIFIER_PY
+)
+    if [ -n "$out" ]; then
+        echo "land: $b —— 票 #$id 的 verify.files 是空的,但 in_scope 含產品碼:"
+        echo "$out" | sed 's/^/land:   /'
+        echo "land:   先派驗證者寫回歸案例;若這張票明確不需要,在票面設 needs_verifier=false。"
+        STOP=1
+        RC_REFUSE=4
+        continue
+    fi
+
     out=$(python3 - "$ROOT" "$b" "$tf" <<'VFILES_PY'
 import json, subprocess, sys
 root, branch, path = sys.argv[1:4]
@@ -406,7 +435,7 @@ if [ -n "$STOP" ]; then
     ev land.refused --note "$*" --kv "stamp=$STAMP"
     status_done_all "$RC_REFUSE" "land 拒收"
     inbox_all "land 拒收(rc=$RC_REFUSE)" \
-        "上面逐條寫了是哪一條不過:0 commit / base 過期 / 越界 / 覆核 / verify.files" \
+        "上面逐條寫了是哪一條不過:0 commit / base 過期 / 越界 / 覆核 / verify.files;產品票缺案例時先派驗證者" \
         "reports/t<票號>/${LAND_RUN:-} 的 status.json"
     exit "$RC_REFUSE"
 fi
