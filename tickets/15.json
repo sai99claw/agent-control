@@ -1,0 +1,34 @@
+{
+  "id": "15",
+  "subject": "已落地的票關不掉:close 要認得 verify_waiver(#8)、主線補 waiver/verify_strings 不該打掉 review 的版本綁定;加 ticket.py close --landed <merge sha> 一步關票",
+  "created": "2026-09-22T12:15:29+08:00",
+  "objective": "落地後主線一句 ticket.py close <n> 就能把票轉 Done,不必猜哪一格還缺",
+  "acceptance": [
+    "票有 verify_waiver{by,reason} 且 review.sha 在主線歷史裡 → close 轉 Done(不要求 verify.baseline / test_evidence)",
+    "set verify_waiver / verify_strings / objections 之後 review 仍有效(這幾格不算改票面;或 set 時自動把 review.state_version 跟上並記事件)"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/ticket.py",
+    "docs/WORKFLOW.md",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "97d4fb0b48cad239482a6cf90cfa529e43546cbf",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "2026-09-22 主線實測:#1–#10 全部已落地(Merge t<n> 在 main),close 每張都拒:『沒有回歸證據』『review 綁的是 v8 票現在 v9』。落地票在 ticket.py list --open 裡一直是 Ready,看板因此不準。"
+}
