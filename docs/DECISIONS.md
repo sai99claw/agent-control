@@ -56,8 +56,8 @@ tabby_pool 三天實測:角色定義散在派工 prompt 裡會漂,同一主張�
 
 ## D-012(2026-09-21)patch 管線:落地前重套、重生清單、出乾淨 diff
 多張票接連落地幾乎一定撞到「所有票都往尾端附加的登記檔」與「自動產生的清單」。
-落地前把 patch 用 GNU `patch`(吃 fuzz)套到**當前主線的副本**、重生清單、出一份乾淨 diff;
-**`.rej` 數量 ≠ 0 一律當失敗**;`diff -ruN` 刪檔的 `+++` 側要手改成 `/dev/null`(不然 `git apply` 只清空不刪);
+落地前把 patch 三向合併到**當前主線的副本**(祖先 = 票的 base_sha,對方 = base_sha + patch,`git apply` 不吃 fuzz;#17 改,原本是 GNU `patch` 吃 fuzz)、重生清單、出一份乾淨 diff;
+**衝突 rc 3 並指名檔與行號、空 diff rc 4 一律當失敗**(#17;原本是 `.rej`≠0);`diff -ruN` 刪檔的 `+++` 側要手改成 `/dev/null`(不然 `git apply` 只清空不刪);
 票的 `verify_strings` 落地前先對 patch `grep` 一次;**patch 檔頭只准 `base/…` / `work/…` 的相對形式,絕對路徑閘門要拒**
 —— 🩸 真的發生過:絕對路徑的檔頭讓檔案被寫進暫存目錄,套用成功、閘門也綠,而被改的不是 repo 裡那一份。
 細節與理由:`docs/WORKFLOW.md` §patch 管線。
@@ -113,8 +113,8 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
    (只准 `base/…` / `work/…` / `/dev/null`;絕對路徑拒;`diff -ruN` 的刪檔沒把 `+++` 改成
    `/dev/null` 也拒 —— 那會讓 `git apply` **清空**而不是刪掉),之後逐一比對 `+++` 目標並
    `--reverse --check`(rc=4),再檢查 `allowed_write_paths`(rc=5)。
-   `apply.sh rebase` 用 GNU `patch` 吃 fuzz 套到**當前主線**的副本、跑可設定的清單重生 hook
-   (`apply.regen_cmd`)、出一份乾淨 diff,**`.rej`≠0 一律失敗**。
+   `apply.sh rebase` 三向合併到**當前主線**的副本(#17 起;原本 GNU `patch` 吃 fuzz)、跑可設定的清單重生 hook
+   (`apply.regen_cmd`)、出一份乾淨 diff,**衝突 rc 3、空 diff rc 4 一律失敗**(#17)。
 2. **`scripts/auto-fix.sh <票號>`** —— 讀最新狀態檔,紅就用 `worker.command`(預設
    `claude -p --model opus`)派**新的** worker,收 `patch-round<r>.diff` + `EVIDENCE-round<r>.md`,
    走 `apply.sh` → `gate.sh --branch --ticket`,三輪上限。`gate.sh --auto-fix` /

@@ -57,7 +57,7 @@
 | 入口 | 一句話 | 退出碼要看的 |
 |---|---|---|
 | `sh scripts/apply.sh <n> <patch> [<patch-verify>]` | 套 patch → 開 `t<n>` 分支與副本 → commit(訊息帶票號 + patch sha256) | 3 檔頭 / 預檢、4 套完對不上、5 越界 |
-| `sh scripts/apply.sh rebase <n> <patch>` | 套到**當前主線**副本、跑 `apply.regen_cmd`、出乾淨 diff | 3(`.rej`≠0 一律失敗) |
+| `sh scripts/apply.sh rebase <n> <patch>` | 三向合併(祖先 = 票的 base_sha,我方 = 當前主線,對方 = base_sha + patch),跑 `apply.regen_cmd`、出乾淨 diff | 2 祖先取不出 / 3 patch 套不回 base_sha 或衝突(指名檔與行號)/ 4 空 diff(#17;以前的『`.rej`≠0 一律失敗) |
 | `sh scripts/auto-fix.sh <n>` | 讀最新狀態檔,紅就派**新** worker,三輪上限 | 0 綠(停在 InReview)、1 三輪耗盡、3 反駁、4 沒有歸因、5 沒交 patch |
 | `sh scripts/gate.sh … --auto-fix` / `sh scripts/land.sh … --auto-fix` | 把上面那一支掛在閘門 / 落地後面 | 閘門自己的 rc **不會**因此變綠 |
 | `python3 scripts/inbox.py list\|show\|ack` | 終態一頁四句,開場印一次 | — |
