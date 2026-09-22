@@ -8,7 +8,7 @@
 | **產品負責人** | 人 | 方向、取捨、必要決策 | 目標、優先序、裁示 | 可暫停、取消、重排;不逐步批准例行工作 |
 | **主線** | 跟人互動的 session(Fable) | 接需求、派開題者、裁示、**覆核(讀 patch 記 `review`)**、決定落地順序、發版、維持脈絡 | 裁示、票的 `review` 格、交接、發版紀錄 | 不放寬驗收;不跳過閘門;不自己查 code、不自己改票面;不替人做產品決策 |
 | **開題者** | 短命 session(Fable) | 把使用者一句話寫成**完整票面**(含測試計畫) | 票 JSON + 給主線的 300 字摘要與建議順序 | 不改檔、不 git 寫入、不執行整支腳本;不替實作者先做一遍 |
-| **Worker / 實作者** | 短命(Codex sol,要起 server / 瀏覽器的票 Opus) | 在副本裡實作與局部驗證 | `patch.diff`(含自己的單元測試)、`EVIDENCE.md`、變異驗紅 | 只寫自己的副本;禁 git 寫入;範圍擴大要回報不准自己做 |
+| **Worker / 實作者** | 短命(預設 Opus;機械、規格逐字的票可派 Codex sol) | 在副本裡實作與局部驗證 | `patch.diff`(含自己的單元測試)、`EVIDENCE.md`、變異驗紅 | 只寫自己的副本;禁 git 寫入;範圍擴大要回報不准自己做 |
 | **驗證者** | 短命、獨立上下文(Sonnet / Codex sol) | 把票面驗收寫成回歸案例;`verify-case.py check` **證明案例是對的**(乾淨主線紅、candidate 綠),登記片段 `verify/TAGS.d/<n>.md`,把怎麼跑寫進票的 `verify` 欄 | `verify/<feature>/test_ticket_<n>.py` + 票的 `verify`(含 `baseline`)+ `patch-verify.diff`(`verify-case.py extract` 出的) | **不判 PASS/FAIL、不寫 VERDICT**;不讀實作者的 `EVIDENCE.md`;**不跑 tag 回歸那一整組**(只跑自己的案例與 `verify-case.py check`);不輪詢;不改產品碼 |
 | **落地器** | `scripts/land.sh`(程式) | 閘門 → 合併 → push;紅了寫紅榜 | 事件、退出碼、`reports/t<n>/<run_id>/status.json` | 0 commit / 基準過期 / 越界 / **覆核缺或過期** / **未處置的阻擋反駁** / 閘門紅,一律拒絕;land 期間持一把互斥鎖。它**沒有判斷** |
 
@@ -34,7 +34,7 @@
 |---|---|---|
 | 主線、設計、查 bug 根因、驗收計畫、審稿 | **Fable** | 判斷題,不是打字題 |
 | 開題 | **Fable**(短命) | 票面的品質決定下游要不要重做 |
-| 實作 | **Codex `gpt-5.6-sol`** | 機械、規格逐字的票 |
+| 實作 | **Opus**(`worker.command` 實際起的那個);機械、規格逐字的票可選 Codex `gpt-5.6-sol` | `board/config.json` 的 `routing.implement` 只是路由標籤,事件記的是 `worker.command` 真的起的模型 |
 | 實作(要起 server / 瀏覽器實跑) | **Opus** | Codex 在 `workspace-write` 綁不了埠、起不了瀏覽器(`-s danger-full-access` **不設**) |
 | 驗證(寫回歸案例) | **Sonnet** 或 Codex sol | 照票面寫案例是機械的 |
 | 帳務 / 資料遷移類的票 | 加派**第二家模型**(agy gemini 或 Codex)做**機器可驗**的獨立驗證 | 同一家模型的兩個 session 會犯同一種錯 |

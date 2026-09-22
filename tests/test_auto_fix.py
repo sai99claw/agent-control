@@ -373,6 +373,47 @@ class ThingsThatStopIt(AutoFixBase):
         self.assertIn("案例已修,第 2 輪仍紅", self.inbox_list())
 
 
+class TheEventModelIsTheOneThatActuallyRan(AutoFixBase):
+    """`routing.implement` 只是路由標籤;`worker.command` 才是真的起的那個(#21)。
+    `agent.start`/`agent.done`/`agent.failed` 的 `model` 欄要記後者,兩者不一致時
+    還要印一行警告 —— 不然 events.jsonl 會記著一個從沒跑過的模型。
+
+    **變異**:把 `round_once` 裡三個 `ev agent.*` 的 `--model "$WORKER_MODEL"` 改回
+    `--model "$MODEL"` → 這一條紅(`row["model"]` 變回 routing 那個標籤)。
+    """
+
+    def set_worker_with_model(self, body, worker_model, routing_model):
+        path = os.path.join(self.home, "fake-worker.sh")
+        write_executable(path, body)
+        conf = dict(DEFAULT_CONFIG)
+        conf["worker"] = {
+            "command": "sh %s --model %s --permission-mode acceptEdits" % (
+                path, worker_model),
+            "timeout_seconds": 120,
+        }
+        conf["routing"] = dict(DEFAULT_CONFIG["routing"])
+        conf["routing"]["implement"] = routing_model
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        return path
+
+    def test_events_record_the_worker_command_model_not_the_routing_label(self):
+        self.set_worker_with_model(WORKER_NEVER, "claude-opus-x", "codex:gpt-5.6-sol")
+        self.ticket_ready()
+        self.status(1, RED_LOG)
+
+        done = self.auto_fix()
+
+        self.assertIn("警告", done.stdout, done.stdout + done.stderr)
+        self.assertIn("routing.implement=codex:gpt-5.6-sol", done.stdout)
+        self.assertIn("claude-opus-x", done.stdout)
+        agent_events = [row for row in self.events()
+                        if row["kind"].startswith("agent.")]
+        self.assertTrue(agent_events, "沒有 agent 事件可以查")
+        for row in agent_events:
+            self.assertEqual(row["model"], "claude-opus-x",
+                             "events.jsonl 記著一個從沒跑過的模型 —— 這正是 #21 要擋的事")
+
+
 class TheDispatchPacket(AutoFixBase):
 
     def test_dry_run_writes_the_packet_and_does_not_start_a_worker(self):

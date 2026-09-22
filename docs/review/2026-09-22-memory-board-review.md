@@ -203,7 +203,7 @@ B0 → B1 → B2(記憶主線,串行,同一人做最省);B3 → B4(鎖與事件,
 - AGENTS.jsonl 停更 09-09、SPAWNS 09-22 在跑:實測 `ls -la ~/.claude/tasks/57571b28-2167-4d48-b38d-ec8e2669d577/`
 - WT 控制檔:`TB/board/config.json`(tickets_dir/reports_dir/events_file 指向 `../tabby_pool_wt`);實測 `WT/events.jsonl` 18 行、`WT/reports/inbox/index.jsonl`、`WT/reports/t623/20260922-000213-79471/status.json`
 - transcript 形狀:`~/.claude/projects/<slug>/<session>/subagents/agent-<id>.{jsonl,meta.json}`;`/private/tmp/…/tasks/*.output` 為其 symlink(實測)
-- auto-fix 不存 worker stdout、無 --output-format:`AC/scripts/auto-fix.sh:289-308`
+- auto-fix 現在把 worker stdout 導向 `reports/t<n>/<run_id>/worker-round<r>.log`(`AC/scripts/auto-fix.sh:385-399`),仍無 --output-format(#21)
 - Codex 無 --json:`TB/scripts/astra-review.sh:53`;`TB/docs/DISPATCH-TEMPLATE.md:49`
 
 ---

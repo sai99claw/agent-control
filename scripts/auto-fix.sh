@@ -177,6 +177,27 @@ fi
 MODEL=$(cfg routing.implement opus)
 VERIFIER_MODEL=$(cfg routing.verify "$MODEL")
 VERIFIER_CMD=$(cfg verifier.command "$WORKER_CMD")
+# `MODEL`(routing.implement)只是路由標籤;`agent.start`/`agent.done` 的 model 欄要記
+# **實際起的那個** —— 也就是 `worker.command` 裡 `--model`後面那個值。兩者不一致時
+# 舊版只印 routing 那個標籤,events.jsonl 就記著一個從沒跑過的模型(#21)。
+WORKER_MODEL=$(python3 - "$WORKER_CMD" "$MODEL" <<'PY'
+import shlex, sys
+cmd, default = sys.argv[1], sys.argv[2]
+try:
+    parts = shlex.split(cmd)
+except ValueError:
+    parts = cmd.split()
+model = default
+for i, tok in enumerate(parts):
+    if tok == "--model" and i + 1 < len(parts):
+        model = parts[i + 1]
+        break
+print(model)
+PY
+)
+if [ "$WORKER_MODEL" != "$MODEL" ]; then
+    echo "auto-fix: 警告:routing.implement=$MODEL,但 worker.command 實際起的是 $WORKER_MODEL —— agent.start/done/failed 的 model 記後者"
+fi
 WT=$WTBASE/t$ID
 
 dispatch_verifier() {   # uses r/FIX/DISPATCH/line; sets PATCH_OUT/EVIDENCE/CASE_FIXED
@@ -383,7 +404,7 @@ PY
     echo "auto-fix: 起第 $r 輪的 worker —— $WORKER_CMD(cwd $FIX,派工文從 stdin 餵)"
     ev ticket.attempt.start --ticket "$ID" --attempt "$r" --note "auto-fix 第 $r 輪"
     WORKER_LOG=$(dirname "$DISPATCH")/worker-round$r.log
-    ev agent.start --ticket "$ID" --model "$MODEL" \
+    ev agent.start --ticket "$ID" --model "$WORKER_MODEL" \
         --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix
     WRC=$(python3 - "$WORKER_CMD" "$DISPATCH" "$FIX" "$WORKER_TIMEOUT" "$ID" "$r" "$WORKER_LOG" <<'PY'
 import subprocess, sys
@@ -408,10 +429,10 @@ print(rc)
 PY
 )
     if [ "$WRC" -eq 0 ]; then
-        ev agent.done --ticket "$ID" --model "$MODEL" \
+        ev agent.done --ticket "$ID" --model "$WORKER_MODEL" \
             --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix
     else
-        ev agent.failed --ticket "$ID" --model "$MODEL" \
+        ev agent.failed --ticket "$ID" --model "$WORKER_MODEL" \
             --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix
     fi
     [ "$WRC" -eq 0 ] || echo "auto-fix: worker 自己回非零 —— 還是看它交了什麼,不看它說什麼"
