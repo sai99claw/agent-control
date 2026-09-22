@@ -1,0 +1,34 @@
+{
+  "id": "14",
+  "subject": "ticket.py create 從 in_scope 推 allowed_write_paths(聯集 tests/*),開票的人不用手抄;apply.sh 拒收越界時列出『patch 改到但不在名單的檔』並提示用 ticket.py set 加",
+  "created": "2026-09-22T09:02:01+08:00",
+  "objective": "允許寫入路徑漏列這種錯在開票那一刻就消失;真越界時訊息可以直接照做",
+  "acceptance": [
+    "create 只給 --in-scope a b → allowed_write_paths = [a, b, tests/*];同時給 --allowed-write-path 則以給的為準",
+    "apply.sh 越界 rc=5 的輸出列出每個越界檔與一行可貼的 ticket.py set 指令"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/ticket.py",
+    "scripts/apply.sh",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "d624188882a1a68f80b111c9033ebdd2f2290720",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "AC #3/#5/#9 三次是主線把 in_scope 與 allowed_write_paths 分開手抄漏了。"
+}

@@ -1,0 +1,34 @@
+{
+  "id": "13",
+  "subject": "紅了就派,不經主線:gate 與 land 的紅預設走 auto-fix(主線只在 inbox 看終態;要人下場用 --no-auto-fix 明說);worker 提 test_defect 反駁時,派**新的驗證者 worker** 修案例而不是回主線",
+  "created": "2026-09-22T09:02:01+08:00",
+  "objective": "主線不再自己判『這條紅小不小』、不再自己改測試或案例;每一次紅都有 worker 與 EVIDENCE",
+  "acceptance": [
+    "gate 紅 → 不加旗標就自動起 auto-fix 第 2 輪(events 有 agent.start);land 全套紅 → 同,base 是 land 那棵樹",
+    "worker 的 OBJECTION: test_defect → 起 role=verifier 的 worker(pack verifier、紅榜 + 反駁那一行、案例檔路徑),它交 patch-verify → 併入分支 → 續跑閘門;主線只在 inbox 看到『案例已修、第 N 輪綠/紅』"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/land.sh",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "d624188882a1a68f80b111c9033ebdd2f2290720",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "使用者 2026-09-22:『測試有錯就該發新 worker,這種基礎判斷不要讓主線做』。今天主線自己改的:#620 firefox 量法、#632 fixture、#624 over 例外、#630/#624 兩輪合併——每一次都花主線(最貴的上下文)的 token,而且沒有 EVIDENCE。gate.sh --auto-fix 旗標已存在,改成預設開。"
+}

@@ -1,0 +1,34 @@
+{
+  "id": "12",
+  "subject": "閘門先驗機械格再跑測試:verify_strings 要在 patch 內容裡、tags 要已登記、patch 的檔案清單要在 allowed_write_paths 內 —— 三格任一不合,gate 在跑任何測試之前秒退並指名哪一格",
+  "created": "2026-09-22T09:02:01+08:00",
+  "objective": "主線開票寫錯機械格時,幾秒內被擋,不是跑完單元層才知道",
+  "acceptance": [
+    "verify_strings 之一不在 patch 內容(檔名不算)→ gate rc=4、訊息含那串字與『內容』",
+    "tag 未登記 / patch 改到 allowed_write_paths 外的檔 → gate rc=4 且沒起任何測試(事件裡沒有 gate.start 之後的 phase)"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/gate.sh",
+    "scripts/apply.sh",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "d624188882a1a68f80b111c9033ebdd2f2290720",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "2026-09-22 主線實測:#623 verify_strings 寫檔名(落地才擋)、#627/#631 tag 未登記(跑完單元層才擋)、AC #3/#5/#9 允許路徑開太窄(worker 白跑一輪)。同步到專案後 land-ticket.sh gate 同一套(專案票另開)。"
+}

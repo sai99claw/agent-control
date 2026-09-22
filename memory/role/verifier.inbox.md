@@ -1,0 +1,1 @@
+- verify/<feature>/test_ticket_<n>.py 由你獨占;實作者交的同名檔落地時以你的為準,票的 verify.files 記你那份 (#630) (#630, 2026-09-22, main@fable)

@@ -2,10 +2,11 @@
   "id": "8",
   "subject": "產品票落地必須有驗證者的案例:票有 in-scope 產品碼(demo/**、非 docs/config)而 verify.files 空 → land 拒收 exit 4,並在 inbox 說『派驗證者』;設定同步票、docs 票不受此限(票面 needs_verifier=false 明說)",
   "created": "2026-09-22T02:35:42+08:00",
-  "objective": "實作者兼寫驗收的情況不再靜靜通過;主線派實作者時忘了派驗證者會被落地器攔下",
+  "objective": "每張票預設都要有驗證者的案例(verify.files);唯一例外是開題者在票上寫明 verify_waiver(理由:改名/小修/純設定同步這類一句話能說清楚的),沒有 waiver 又沒有 verify.files 的票,land 拒收 exit 4 並在 inbox 說『派驗證者或補 waiver』",
   "acceptance": [
-    "票 in-scope 含 demo/ 且 verify.files 空 → land rc=4、inbox 頁含『驗證者』",
-    "票 needs_verifier=false 或 in-scope 只有 docs/board/scripts/control → 照常"
+    "票無 verify.files 且無 verify_waiver → land rc=4、inbox 頁含『驗證者』",
+    "票有 verify_waiver={by:opener, reason:…} → 照常;waiver 沒有 reason 或 by 不是 opener/main → 仍拒",
+    "ticket.py show 列出 waiver;board 的票列顯示『免驗(理由)』"
   ],
   "in_scope": [],
   "out_of_scope": [],
@@ -20,7 +21,7 @@
   "attempt": 0,
   "base_sha": "cdf2328bfa63bb2dcf7f1b7d3b2117ff2684ec9a",
   "state": "Ready",
-  "state_version": 3,
+  "state_version": 5,
   "lease": null,
   "retry_limit": 2,
   "verify": {
