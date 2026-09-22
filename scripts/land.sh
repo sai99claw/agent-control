@@ -466,7 +466,12 @@ SHA=$(git -C "$WT" rev-parse --short HEAD)
 echo "land: $COUNT 個 commit 串好,跑全套 -> $WT/gate.log"
 ev gate.start --kv mode=full --kv "sha=$SHA"
 status_start_all
-if ! (cd "$WT" && sh scripts/gate.sh --full); then
+GATE_TICKET=""
+if [ "$(echo "$IDS" | wc -w | tr -d ' ')" = "1" ]; then
+    for i in $IDS; do GATE_TICKET=$i; done
+fi
+if ! (cd "$WT" && AC_ROOT="$ROOT" AC_GATE_TICKET="$GATE_TICKET" \
+    AC_GATE_RUN_ID="$LAND_RUN-gate" AC_NO_INBOX=1 sh scripts/gate.sh --full); then
     echo "land: 全套紅,$MAIN 沒動;worktree 留在 $WT"
     echo "land: 紅榜逐條在 reports/t<票號>/<run_id>/status.json 的 failures(案例、檔、行、log、excerpt)"
     ev gate.fail --kv mode=full --kv "sha=$SHA"

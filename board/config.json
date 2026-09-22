@@ -39,6 +39,8 @@
     "worker": 7200
   },
   "flaky_threshold": 3,
+  "flake_auto_single_runs": 5,
+  "flake_auto_group_runs": 1,
   "flaky_auto_ticket": true,
   "worker": {
     "command": "claude -p --model opus",

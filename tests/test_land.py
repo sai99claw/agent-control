@@ -200,6 +200,31 @@ class AutoFixHook(LandBase):
         self.assertIn("不認得", done.stdout)
 
 
+class AutoFlakeOnLand(LandBase):
+    gate_stub = None
+
+    def test_a_single_ticket_land_auto_passes_a_confirmed_flake(self):
+        branch = self.branch_for(1, "t1-flake", allowed_write_paths=["tests/*"])
+        marker = repr(os.path.join(self.home, "land-flake"))
+        self.write("tests/test_one_time_flake.py",
+                   "import os\nimport unittest\n\n\nclass T(unittest.TestCase):\n"
+                   "    def test_flaky(self):\n"
+                   "        path = %s\n"
+                   "        seen = os.path.exists(path)\n"
+                   "        open(path, 'a', encoding='utf-8').close()\n"
+                   "        self.assertTrue(seen, 'one-time flake')\n" % marker, where=branch)
+        self.git("add", "-A", cwd=branch)
+        self.git("commit", "-q", "-m", "add one-time flake", cwd=branch)
+        self.approve(1, "t1-flake")
+
+        done = self.land("t1-flake")
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("flaky=auto", done.stdout)
+        self.assertIn("flake.auto_pass", self.kinds())
+        self.assertEqual(self.status_of(1, kind="gate")["flaky"], "auto")
+
+
 class ZeroCommits(LandBase):
 
     def test_a_branch_with_no_new_commits_is_refused_in_that_many_words(self):
