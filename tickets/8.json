@@ -21,7 +21,7 @@
   "attempt": 0,
   "base_sha": "cdf2328bfa63bb2dcf7f1b7d3b2117ff2684ec9a",
   "state": "Ready",
-  "state_version": 5,
+  "state_version": 7,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -30,5 +30,16 @@
     "run": "",
     "notes": ""
   },
-  "outline": "2026-09-22 主線實查:七張落地票沒有一張派過驗證者,落地器只在 verify.files 有值時才檢查。land.sh 的 verify.files 那一段加『空值 + 產品票』分支;ticket.py 認 needs_verifier 欄。同步到專案的 land-ticket.sh 由專案自己接(另開專案票)。"
+  "outline": "2026-09-22 主線實查:七張落地票沒有一張派過驗證者,落地器只在 verify.files 有值時才檢查。land.sh 的 verify.files 那一段加『空值 + 產品票』分支;ticket.py 認 needs_verifier 欄。同步到專案的 land-ticket.sh 由專案自己接(另開專案票)。",
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "c0001102fc2fd49df3f2fef4776a298501a86d76",
+    "note": "產品票無 verify.files 且無 verify_waiver → land 拒收;waiver 要 by+reason",
+    "at": "2026-09-22T10:24:06+08:00",
+    "state_version": 6
+  },
+  "verify_strings": [
+    "verify_waiver"
+  ]
 }
