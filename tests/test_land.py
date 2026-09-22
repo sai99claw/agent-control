@@ -16,7 +16,8 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import GATE_STUB_GREEN, GATE_STUB_RED, Sandbox  # noqa: E402
+from control_harness import (GATE_STUB_GREEN, GATE_STUB_RED, Sandbox,
+                             write_executable)  # noqa: E402
 
 
 class LandBase(Sandbox):
@@ -176,9 +177,40 @@ class LandWakesMainUp(LandBase):
 
 
 class AutoFixHook(LandBase):
-    """`land --auto-fix`:全套紅了派下一輪,**但只在這一批剛好一張票的時候**。"""
+    """land 預設 auto-fix:**但只在這一批剛好一張票的時候**。"""
 
     gate_stub = GATE_STUB_RED
+
+    def setUp(self):
+        super(AutoFixHook, self).setUp()
+        write_executable(os.path.join(self.repo, "scripts", "auto-fix.sh"), """#!/bin/sh
+echo "autofix $1 source=$AC_FIX_SOURCE" >> "$AC_TEST_LOG"
+""")
+
+    def auto_fix_lines(self):
+        with open(self.log, encoding="utf-8") as handle:
+            return [line.strip() for line in handle if line.startswith("autofix ")]
+
+    def test_a_single_ticket_dispatches_by_default_from_the_land_tree(self):
+        branch = self.branch_for(1, "t1-a")
+        self.commit_in(branch, "src/a", "第一張")
+        self.approve(1, "t1-a")
+
+        done = self.land("t1-a")
+
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(len(self.auto_fix_lines()), 1)
+        self.assertIn("autofix 1 source=land/", self.auto_fix_lines()[0])
+
+    def test_no_auto_fix_leaves_a_single_red_land_for_a_human(self):
+        branch = self.branch_for(1, "t1-a")
+        self.commit_in(branch, "src/a", "第一張")
+        self.approve(1, "t1-a")
+
+        done = self.land("t1-a", "--no-auto-fix")
+
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(self.auto_fix_lines(), [])
 
     def test_a_batch_with_two_tickets_refuses_to_guess_who_is_red(self):
         """一批裡哪一條紅對到哪一張票,要有票↔案例的對照才判得出來 ——
@@ -189,7 +221,7 @@ class AutoFixHook(LandBase):
         self.commit_in(second, "src/b", "第二張")
         self.approve(1, "t1-a")
         self.approve(2, "t2-b")
-        done = self.land("t1-a", "t2-b", "--auto-fix")
+        done = self.land("t1-a", "t2-b")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("不猜是誰紅的", done.stdout)
 

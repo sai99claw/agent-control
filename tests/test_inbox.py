@@ -140,7 +140,8 @@ class WhoWritesIntoIt(InboxBase):
 
     def test_a_red_gate_round_leaves_a_page_that_names_the_next_step(self):
         self.make_ticket("7")
-        done = self.run_sh("scripts/gate.sh", "scripts/land.sh", "--ticket", "7")
+        done = self.run_sh("scripts/gate.sh", "scripts/land.sh", "--ticket", "7",
+                           "--no-auto-fix")
         self.assertNotEqual(done.returncode, 0, done.stdout)
         listed = self.inbox("list")
         self.assertIn("#7", listed.stdout, listed.stdout + done.stdout)

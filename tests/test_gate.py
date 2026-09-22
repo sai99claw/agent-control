@@ -156,7 +156,7 @@ class GateSh(Sandbox):
         裡面 —— 只設它,那一段還是會整組跑完,而「跑完再說」就是這張票要擋的事。"""
         self.write("tests/test_env_wave.py", ENVIRONMENT_WAVE)
         self.make_ticket(7, allowed_write_paths=["tests/*"])
-        done = self.gate("tests/test_env_wave.py", "--ticket", "7")
+        done = self.gate("tests/test_env_wave.py", "--ticket", "7", "--no-auto-fix")
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(len([row for row in self.ran() if row.startswith("safari-")]), 8,
                          "預設門檻 8 到了就要停,不准把 12 條跑完")
@@ -178,7 +178,7 @@ class GateSh(Sandbox):
         也不准留下 flaky 的判定。"""
         self.write("tests/test_env_wave.py", ENVIRONMENT_WAVE)
         self.make_ticket(7, allowed_write_paths=["tests/*"])
-        done = self.gate("tests/test_env_wave.py", "--ticket", "7")
+        done = self.gate("tests/test_env_wave.py", "--ticket", "7", "--no-auto-fix")
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("單獨重跑", done.stdout)
         self.assertNotIn("整組重跑", done.stdout)
@@ -198,7 +198,7 @@ class GateSh(Sandbox):
         self.git("add", "board/config.json")
         self.git("commit", "-q", "-m", "沙盒的環境門檻")
         self.make_ticket(7, allowed_write_paths=["tests/*"])
-        done = self.gate("tests/test_env_wave.py", "--ticket", "7")
+        done = self.gate("tests/test_env_wave.py", "--ticket", "7", "--no-auto-fix")
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(len([row for row in self.ran() if row.startswith("safari-")]), 3,
                          "設定檔說 3 就停在 3")
@@ -218,7 +218,7 @@ class GateSh(Sandbox):
         self.git("commit", "-q", "-m", "沙盒的環境門檻")
         self.make_ticket(7, allowed_write_paths=["tests/*"])
         done = self.run_sh("scripts/gate.sh", "tests/test_env_wave.py", "--ticket", "7",
-                           env=self.env(AC_NO_FLAKE_RERUN="1"))
+                           "--no-auto-fix", env=self.env(AC_NO_FLAKE_RERUN="1"))
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(len([row for row in self.ran() if row.startswith("different-")]), 3,
                          "三條不同訊息要照常跑完")
