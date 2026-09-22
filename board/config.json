@@ -43,10 +43,11 @@
   "flake_auto_group_runs": 1,
   "flaky_auto_ticket": true,
   "worker": {
-    "command": "claude -p --model opus",
+    "command": "claude -p --model opus --permission-mode acceptEdits --allowedTools Read Edit Write Glob Grep Bash",
     "timeout_seconds": 3600
   },
   "apply": {
     "regen_cmd": ""
-  }
+  },
+  "worktree_dir": "../agent-control-wt"
 }
