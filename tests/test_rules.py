@@ -191,5 +191,46 @@ class WhatItAlwaysCarries(RulesBase):
         self.assertRegex(done.stderr, r"記憶回寫 \d+ bytes")
 
 
+class EfficiencyOverSpeed(RulesBase):
+    """第一段「不追求快,只看效率」是固定文字、先扣預算(D-016,#16):產品負責人
+    2026-09-21 原話 —— 因為「這樣比較快」而做事之前先算 token。放在標題之後、
+    先讀清單之前,每個角色都帶,而且量在最前面三行裡,讀的人第一眼就看得到。
+
+    **變異**:把 `pack()` 的 head 拿掉 `EFFICIENCY_NOTE` 那一行 → 這一組五個角色都紅
+    (golden:第一條就是「拿掉這一段」的那一個)。
+    """
+
+    ROLES = ("worker", "verifier", "opener", "main", "consolidator")
+
+    def test_every_role_carries_the_line_in_the_first_three_lines(self):
+        for role in self.ROLES:
+            done = self.rules("pack", role, "--model", "opus")
+            self.assertEqual(done.returncode, 0, done.stderr)
+            head = "\n".join(done.stdout.splitlines()[:3])
+            self.assertIn("不追求快", head, role)
+            self.assertIn("token", head, role)
+            self.assertLessEqual(len(done.stdout.encode("utf-8")), 4096, role)
+
+    def test_it_sits_after_the_title_and_before_the_reading_list(self):
+        done = self.rules("pack", "worker", "--model", "opus")
+        lines = done.stdout.splitlines()
+        self.assertTrue(lines[0].startswith("# 規則包:"), lines[0])
+        title_at = done.stdout.index(lines[0])
+        note_at = done.stdout.index("不追求快")
+        list_at = done.stdout.index("## 先讀這幾份")
+        self.assertTrue(title_at < note_at < list_at,
+                        "D-016 那一行要在標題之後、先讀清單之前")
+
+    def test_stats_reports_the_section_bytes(self):
+        done = self.rules("pack", "worker", "--model", "opus", "--stats")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertRegex(done.stderr, r"不追求快 \d+ bytes")
+
+    def test_the_wording_says_count_tokens_not_speed(self):
+        text = self.rules("pack", "worker", "--model", "opus").stdout
+        for phrase in ("D-016", "這樣比較快", "token", "判準"):
+            self.assertIn(phrase, text)
+
+
 if __name__ == "__main__":
     unittest.main()

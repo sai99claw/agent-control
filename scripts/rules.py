@@ -48,6 +48,12 @@ MEMORY_NOTE = """## 記憶回寫(D-013)
 ≤ 300 字元、只寫原則,案例用票號指路;不改主檔,超標由整理票的兩個模型併。
 收工前在 EVIDENCE「記憶」段列出寫了哪幾行;沒寫就寫「無」。"""
 MEMORY_NOTE_BYTES = len(MEMORY_NOTE.encode("utf-8"))
+# 第一段,**固定文字、先扣預算**,放在標題之後、先讀清單之前(D-016,#16):產品負責人
+# 2026-09-21 原話——「這樣比較快」不是判準,先算 token。所有角色與模型都帶,量在最前面
+# 的三行裡,讀的人第一眼就看得到。
+EFFICIENCY_NOTE = ("不追求快,只看效率(D-016):在因為「這樣比較快」而做任何事之前,"
+                   "先算 token 是多還是少;快不快不是判準。")
+EFFICIENCY_NOTE_BYTES = len(EFFICIENCY_NOTE.encode("utf-8"))
 HEADING = re.compile(r"^(#{2,4})\s+(.*)$")
 NUMBER = re.compile(r"^(\d+(?:\.\d+)*)\.?\s")
 
@@ -217,6 +223,7 @@ def pack(root, role, model, max_bytes, override=""):
     model_rel = model_card(root, model)
 
     head = ["# 規則包:%s —— %s" % (role, one_line),
+            EFFICIENCY_NOTE,
             "",
             "來源 `%s` @ %s,上限 %d bytes。**這是節錄,不是全文** —— "
             "每一段結尾寫了全文在哪。" % (rel, short_sha(root), max_bytes),
@@ -316,8 +323,9 @@ def cmd_pack(args):
         return 1
     sys.stdout.write(text if text.endswith("\n") else text + "\n")
     if args.stats:
-        sys.stderr.write("rules: %s %d bytes(上限 %d;記憶回寫 %d bytes)\n"
-                         % (role, size, args.max_bytes, MEMORY_NOTE_BYTES))
+        sys.stderr.write("rules: %s %d bytes(上限 %d;不追求快 %d bytes;記憶回寫 %d bytes)\n"
+                         % (role, size, args.max_bytes,
+                            EFFICIENCY_NOTE_BYTES, MEMORY_NOTE_BYTES))
     return 0
 
 
