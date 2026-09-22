@@ -5,6 +5,7 @@
 發現的。所以這一組釘的重點不是那幾格對照表,是**缺口會不會出聲**。
 """
 
+import json
 import os
 import sys
 import unittest
@@ -27,6 +28,33 @@ FAILING = """import unittest
 class T(unittest.TestCase):
     def test_it_is_red(self):
         self.assertEqual(1, 2, "假的紅")
+"""
+# #620 的形狀:同一個引擎、12 條 subTest 倒在同一句,只差流水號與 id。
+ENVIRONMENT_WAVE = """import os
+import unittest
+
+
+class T(unittest.TestCase):
+    def test_wave(self):
+        for index in range(12):
+            with self.subTest(engine="safari", id=index):
+                with open(os.environ["AC_TEST_LOG"], "a", encoding="utf-8") as handle:
+                    handle.write("safari-%d\\n" % index)
+                self.assertEqual("home", "", "localStorage id=%d empty after %d seconds"
+                                 % (index, index + 100))
+"""
+# 同一引擎但三句不同的紅:那是三個 bug,不是一次環境故障 —— 要照常跑完。
+DIFFERENT_FAILURES = """import os
+import unittest
+
+
+class T(unittest.TestCase):
+    def test_wave(self):
+        for index, message in enumerate(("storage empty", "port occupied", "disk full")):
+            with self.subTest(engine="safari", id=index):
+                with open(os.environ["AC_TEST_LOG"], "a", encoding="utf-8") as handle:
+                    handle.write("different-%d\\n" % index)
+                self.fail(message)
 """
 
 
@@ -117,6 +145,81 @@ class GateSh(Sandbox):
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("FAILED", done.stdout)
         self.assertIn("紅了", done.stdout)
+
+    # ------------------------------------------------- 環境壞了要當場停(#7)
+
+    def test_same_safari_failure_shape_stops_the_segment_and_alerts(self):
+        """**變異**:把 `EnvironmentResult._observe` 裡的 `self.failfast = True`
+        拿掉 → 這一條紅(12 != 8)。
+
+        理由:`shouldStop` 停的是下一條測試方法,而這 12 條 subTest 跑在同一個方法
+        裡面 —— 只設它,那一段還是會整組跑完,而「跑完再說」就是這張票要擋的事。"""
+        self.write("tests/test_env_wave.py", ENVIRONMENT_WAVE)
+        self.make_ticket(7)
+        done = self.gate("tests/test_env_wave.py", "--ticket", "7")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(len([row for row in self.ran() if row.startswith("safari-")]), 8,
+                         "預設門檻 8 到了就要停,不准把 12 條跑完")
+        data = self.status_of("7")
+        self.assertEqual(data["state"], "env_suspect")
+        self.assertEqual(data["environment_suspect"]["engine"], "safari")
+        self.assertEqual(data["environment_suspect"]["count"], 8)
+        self.assertIn("env.suspect", self.kinds())
+        pages = [name for name in os.listdir(os.path.join(self.repo, "reports", "inbox"))
+                 if name.endswith(".md")]
+        page = self.read(os.path.join("reports", "inbox", pages[0]))
+        self.assertIn("Safari --automation", page)
+        self.assertIn("引擎:safari", page)
+        self.assertIn("同形訊息:", page)
+
+    def test_the_aborted_segment_does_not_pay_for_flake_reruns(self):
+        """環境 fail-fast 在 flake 判定**之前**:被中止的紅榜不完整,而在壞掉的環境
+        裡每條紅例單跑 N 次只會把浪費加倍。所以這一段不准印出 flake 那幾句,狀態檔
+        也不准留下 flaky 的判定。"""
+        self.write("tests/test_env_wave.py", ENVIRONMENT_WAVE)
+        self.make_ticket(7)
+        done = self.gate("tests/test_env_wave.py", "--ticket", "7")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("單獨重跑", done.stdout)
+        self.assertNotIn("整組重跑", done.stdout)
+        data = self.status_of("7")
+        self.assertEqual(data["suspected_flaky"], [])
+        self.assertEqual(data["auto_flaky"], [])
+        self.assertEqual(data["flaky"], "")
+        self.assertNotIn("flake.auto_pass", self.kinds())
+
+    def test_the_threshold_comes_from_board_config(self):
+        """**變異**:把門檻改成讀死的常數、不讀 `board/config.json` → 這一條紅
+        (停在 8 而不是 3)。N 住在設定檔裡才調得動:不同專案的環境壞法不一樣。"""
+        self.write("tests/test_env_wave.py", ENVIRONMENT_WAVE)
+        config = json.loads(self.read("board/config.json"))
+        config["environment_fail_fast_threshold"] = 3
+        self.write("board/config.json", json.dumps(config, ensure_ascii=False, indent=2))
+        self.make_ticket(7)
+        done = self.gate("tests/test_env_wave.py", "--ticket", "7")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(len([row for row in self.ran() if row.startswith("safari-")]), 3,
+                         "設定檔說 3 就停在 3")
+        data = self.status_of("7")
+        self.assertEqual(data["state"], "env_suspect")
+        self.assertEqual(data["environment_suspect"]["threshold"], 3)
+
+    def test_different_messages_do_not_trigger_environment_fail_fast(self):
+        """**變異**:把形狀的鍵改成只看引擎、不看訊息 → 這一條紅(state 變
+        `env_suspect`)。三條不同訊息是三個 bug,把它們算成一次環境故障等於**把真的
+        紅榜丟掉**。"""
+        self.write("tests/test_env_wave.py", DIFFERENT_FAILURES)
+        config = json.loads(self.read("board/config.json"))
+        config["environment_fail_fast_threshold"] = 3
+        self.write("board/config.json", json.dumps(config, ensure_ascii=False, indent=2))
+        self.make_ticket(7)
+        done = self.run_sh("scripts/gate.sh", "tests/test_env_wave.py", "--ticket", "7",
+                           env=self.env(AC_NO_FLAKE_RERUN="1"))
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(len([row for row in self.ran() if row.startswith("different-")]), 3,
+                         "三條不同訊息要照常跑完")
+        self.assertEqual(self.status_of("7")["state"], "done")
+        self.assertNotIn("env.suspect", self.kinds())
 
     def test_an_unknown_flag_is_refused(self):
         done = self.gate("--quick")

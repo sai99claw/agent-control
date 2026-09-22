@@ -116,6 +116,20 @@ class StatusFile(Sandbox):
     def load(self, ticket="7"):
         return self.status_of(ticket)
 
+    def test_failure_shape_removes_numbers_and_ids(self):
+        """**變異**:拿掉數字正規化 → 這一條紅。
+
+        理由:同一個環境故障的每一條只差流水號(`... after 101 seconds` /
+        `... after 202 seconds`)。逐字比就是 26 種不同的紅,而「環境壞了」與「26 個
+        真 bug」因此長得一樣。"""
+        first = status_module.normalized_failure_message(
+            AssertionError("localStorage id=abc-123 empty after 101 seconds"))
+        second = status_module.normalized_failure_message(
+            AssertionError("localStorage id=xyz-987 empty after 202 seconds"))
+        self.assertEqual(first, second)
+        self.assertNotIn("abc-123", first)
+        self.assertNotIn("101", first)
+
     # ------------------------------------------------------------ 跑完了沒
 
     def test_start_says_running_and_has_no_rc_yet(self):

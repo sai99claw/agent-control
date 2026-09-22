@@ -141,7 +141,7 @@ class KindTable(unittest.TestCase):
                      "ticket.attempt.failed", "schedule.proposed",
                      "agent.start", "agent.done", "agent.failed",
                      "gate.start", "gate.rerun", "gate.pass", "gate.fail",
-                     "flake.auto_pass",
+                     "flake.auto_pass", "env.suspect",
                      "land.start", "land.refused", "land.pass", "land.fail",
                      "release.start", "release.pass", "release.fail",
                      "decision.asked", "decision.answered",
