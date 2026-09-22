@@ -363,7 +363,7 @@ PY
     fi
 
     AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE \
-        sh "$AC/apply.sh" "$ID" "$PATCH_OUT"
+        sh "$AC/apply.sh" "$ID" "$PATCH_OUT" --evidence "$EVIDENCE"
     arc=$?
     if [ "$arc" -ne 0 ]; then
         echo "auto-fix: 第 $r 輪的 patch 套不上(apply rc=$arc)" >&2

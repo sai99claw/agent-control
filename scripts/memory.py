@@ -2,6 +2,7 @@
 """記憶的容量與整理 — D-006(`docs/MEMORY.md`「容量與整理:老師帶學生」)。
 
     scripts/memory.py check                    # session 開頭跑;超過上限 → 退出碼 1
+    scripts/memory.py harvest EVIDENCE.md      # 收割「記憶」段的 note 指令
     scripts/memory.py consolidate memory/model/opus.md \
         --discussion discussions/2026-09-12-memory-opus.md \
         --new-cap 2600 --reason "四條 land 事故的反例各不相同,合併會失去可辨識性"
@@ -34,6 +35,7 @@ import errno
 import glob as globmod
 import os
 import re
+import shlex
 import sys
 import time
 from datetime import date, datetime
@@ -67,6 +69,7 @@ CONSOLIDATE_FLAGS = (
 USAGE = {
     "check": "scripts/memory.py check                       # 超過上限退出碼 1(不停工)",
     "note": "scripts/memory.py note <model|role|project> <名> \"<一行>\" [--ticket N] [--by <role>@<model>]",
+    "harvest": "scripts/memory.py harvest <EVIDENCE.md>",
     "consolidate": "scripts/memory.py consolidate <記憶檔> --discussion <path> [--new-cap N --reason …]",
 }
 
@@ -245,7 +248,55 @@ def cmd_note(argv):
         meta.append("#%s" % ticket_no.lstrip("#"))
     meta.extend((date.today().isoformat(), by))
     append_line(path, "- %s (%s)\n" % (text, ", ".join(meta)))
+    event.emit("memory.noted", layer=layer, name=name, ticket=ticket_no,
+               by=by, note=text)
     sys.stdout.write("memory: noted %s/%s\n" % (layer, name))
+    return 0
+
+
+MEMORY_HEADING = re.compile(r"^(?:#+\s*)?記憶[:：]?\s*$")
+
+
+def cmd_harvest(argv):
+    if len(argv) != 1:
+        sys.stderr.write("memory: %s\n" % USAGE["harvest"])
+        return 2
+    path = argv[0]
+    try:
+        lines = read(path).splitlines()
+    except OSError as exc:
+        sys.stderr.write("memory: evidence 讀不到:%s\n" % exc)
+        return 2
+    inside = False
+    found = False
+    for raw in lines:
+        stripped = raw.strip()
+        if MEMORY_HEADING.match(stripped):
+            inside = True
+            found = True
+            continue
+        if inside and stripped.startswith("#"):
+            break
+        if not inside or not stripped or stripped in ("無", "- 無"):
+            continue
+        line = stripped[2:].strip() if stripped.startswith("- ") else stripped
+        line = line.strip("`")
+        try:
+            words = shlex.split(line)
+        except ValueError as exc:
+            sys.stderr.write("memory: 拒絕 evidence 行:%s (%s)\n" % (raw, exc))
+            continue
+        prefix = 1 if words[:1] == ["python3"] else 0
+        if (len(words) < prefix + 2
+                or os.path.basename(words[prefix]) != "memory.py"
+                or words[prefix + 1] != "note"):
+            sys.stderr.write("memory: 拒絕 evidence 行:%s\n" % raw)
+            continue
+        args = words[prefix + 2:]
+        if cmd_note(args) != 0:
+            sys.stderr.write("memory: 拒絕 evidence 行:%s\n" % raw)
+    if not found:
+        sys.stdout.write("memory: evidence 沒有記憶段 —— 0 筆\n")
     return 0
 
 
@@ -543,17 +594,20 @@ def main(argv):
     if verb in ("--help", "-h", "help"):
         sys.stdout.write(__doc__)
         return 0
-    if verb in ("check", "note", "consolidate") and ("--help" in rest or "-h" in rest):
+    if verb in ("check", "note", "harvest", "consolidate") and ("--help" in rest or "-h" in rest):
         return help_for(verb)
-    if verb in ("--help", "-h", "help") and rest and rest[0] in ("check", "note", "consolidate"):
+    if verb in ("--help", "-h", "help") and rest and rest[0] in (
+            "check", "note", "harvest", "consolidate"):
         return help_for(rest[0])
     if verb == "check":
         return cmd_check(rest)
     if verb == "note":
         return cmd_note(rest)
+    if verb == "harvest":
+        return cmd_harvest(rest)
     if verb == "consolidate":
         return cmd_consolidate(rest)
-    sys.stderr.write("memory: 不認得 %r(check / note / consolidate)\n" % verb)
+    sys.stderr.write("memory: 不認得 %r(check / note / harvest / consolidate)\n" % verb)
     return 2
 
 

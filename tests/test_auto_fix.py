@@ -51,6 +51,8 @@ CASE
 diff -ruN base work > "patch-round$AC_ROUND.diff" || true
 printf '# 第 %s 輪\\n已排除的假設:沒有\\n最小重現:python3 -m unittest test_thing\\n' \\
     "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
+printf '## 記憶\\nmemory.py note role implementer "auto-fix 收割" --ticket 1 --by worker@opus\\n' \\
+    >> "EVIDENCE-round$AC_ROUND.md"
 """
 
 # 假 worker:改了東西但還是紅的(三輪耗盡那一條路)。
@@ -346,6 +348,8 @@ class TheWholeLoop(AutoFixBase):
         self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "2",
                          "第二輪的修補要進同一條分支")
         self.assertIn("assertEqual(1, 1)", self.git("show", "t1:tests/test_thing.py"))
+        self.assertIn("auto-fix 收割", self.read("memory/role/implementer.inbox.md"))
+        self.assertEqual(self.kinds().count("memory.noted"), 1)
         ticket = self.load_ticket("1")
         self.assertEqual(ticket["state"], "InReview",
                          "綠了停在等覆核 —— 覆核不自動(D-010)")
