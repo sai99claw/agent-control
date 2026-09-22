@@ -2,8 +2,14 @@
 """驗證產物工具:同一份案例,在乾淨主線該紅、在 candidate 該綠 — D-014。
 
     scripts/verify-case.py check 7            # 驗紅 + 驗綠,證據寫進票的 verify.baseline
+    scripts/verify-case.py check 7 --candidate t7          # candidate 是分支名
+    scripts/verify-case.py check 7 --ref <base_sha> --candidate <merge sha>   # 落地後補量
     scripts/verify-case.py extract 7          # 只抽驗證檔,出 patch-verify.diff
     scripts/verify-case.py tags-merge         # 把 verify/TAGS.d/*.md 合進 verify/TAGS.md
+
+`--ref` 沒給時是**這張票的 `base_sha`**,不是主線的頭:票落地之後主線上已經有那份
+實作,對主線量出來的「一條都沒紅」說的是「這一趟量錯了地方」,不是「這條案例是假的」
+(#19)。`--ref` / `--candidate` 三種寫法都解得開:worktree 路徑、分支名、sha(#20)。
 
 ## 為什麼要有這一支
 範本只要求驗證者「兩份 Ran/OK 各貼一份」,而**一份貼上來的輸出沒有辦法被機器比對**:
@@ -127,9 +133,49 @@ def overlay(rels, src, dst):
     return missing
 
 
+def resolve_tree(root, spec, where, label):
+    """把 `--ref` / `--candidate` 這一格解成「一棵可以跑測試的樹」+ 它的 sha。
+
+    三種寫法都要解得開:**worktree 路徑、分支名、sha**。舊版一律當路徑用,於是
+    `--candidate t20` 去找 `$PWD/t20`,印出「candidate 裡找不到這幾個案例檔」——
+    而檔就在 t20 上,只是沒有人去 git 裡拿(#20)。
+
+    順序是**路徑先於 ref**:既有的叫法一律傳路徑,反過來會讓一個剛好與分支同名的
+    目錄被解成 ref,而那一趟跑的樹與呼叫者指的不是同一棵。
+
+    回傳 `(樹的路徑, sha, 解不開的理由)`;解不開時前兩格不保證有值。
+    """
+    if not spec:
+        return root, git(["rev-parse", "HEAD"], root).stdout.strip(), ""
+    if os.path.isdir(spec):
+        path = os.path.abspath(spec)
+        return path, git(["rev-parse", "HEAD"], path).stdout.strip(), ""
+    seen = git(["rev-parse", "--verify", "--quiet", "%s^{commit}" % spec], root)
+    if seen.returncode != 0 or not seen.stdout.strip():
+        return None, "", "%s「%s」既不是一個目錄,也不是這個 repo 裡的 ref" % (label, spec)
+    sha = seen.stdout.strip()
+    if not clean_copy(root, sha, where):
+        return None, sha, "做不出 %s(%s)的乾淨副本" % (spec, sha[:12])
+    return where, sha, ""
+
+
+def unmeasured(ident, why, ref):
+    """**量不到就不要在票上留一個長得像判決的紀錄。**
+
+    #19 落地之後 `check` 在主線上量不到紅,把 `ok: false` 蓋回票的 `verify.baseline`,
+    `ticket.py close` 從此擋著那張票 —— 而那一格說的其實是「這一趟沒量到」,不是
+    「這條案例驗不到東西」,兩者的下一步差很多。所以量不到的路徑**不寫票**,改印
+    下一步該敲什麼。
+    """
+    sys.stderr.write("verify-case: #%s 量不到基準,票沒有動 —— %s\n" % (ident, why))
+    sys.stderr.write("  下一步:scripts/verify-case.py check %s --ref <票的 base_sha> "
+                     "--candidate <分支名 / sha / worktree 路徑>"
+                     "(這一趟用的 ref 是 %s)\n" % (ident, ref))
+    return 2
+
+
 def cmd_check(args):
     root = event.repo_root()
-    candidate = os.path.abspath(args.candidate or root)
     try:
         data = ticketlib.load(args.ticket)
     except (OSError, ValueError) as exc:
@@ -141,23 +187,40 @@ def cmd_check(args):
         sys.stderr.write("verify-case: 票 #%s 的 verify.files 是空的 —— "
                          "驗證者還沒交案例,沒有東西可以驗紅\n" % args.ticket)
         return 3
+    # 預設的 ref 是**票的 base_sha**:對主線量,票一落地就量不到紅了(#19)。
+    ref = args.ref or data.get("base_sha") or ticketlib.main_branch()
     where = args.out_dir or tempfile.mkdtemp(prefix="verify-case-")
-    base_dir = os.path.join(where, "base")
     logs = os.path.join(where, "logs")
     os.makedirs(logs, exist_ok=True)
-    if not clean_copy(root, args.ref, base_dir):
-        sys.stderr.write("verify-case: 做不出 %s 的乾淨副本\n" % args.ref)
-        return 2
+
+    candidate, cand_sha, why = resolve_tree(
+        root, args.candidate, os.path.join(where, "candidate"), "candidate")
+    if why:
+        return unmeasured(args.ticket, why, ref)
+    base_dir, base_sha, why = resolve_tree(
+        root, ref, os.path.join(where, "base"), "ref")
+    if why:
+        return unmeasured(args.ticket, why, ref)
+    # ref 的歷史裡已經有 candidate = 那棵樹上**本來就有這份實作**,再怎麼跑也紅不
+    # 起來。舊版把那一趟的「一條都沒紅」當判決蓋進票,`ticket.py close` 從此擋著那
+    # 張票(#19)。兩個 sha 一樣時不算 —— 那是「candidate 是同一棵樹上未 commit 的
+    # 改動」,驗證者交件時的正常形狀。
+    if cand_sha and base_sha and cand_sha != base_sha and git(
+            ["merge-base", "--is-ancestor", cand_sha, base_sha], root).returncode == 0:
+        return unmeasured(args.ticket,
+                          "ref(%s / %s)的歷史裡已經有 candidate(%s / %s)——"
+                          "那棵樹上本來就有這份實作,量不出紅"
+                          % (ref, base_sha[:12], args.candidate or root, cand_sha[:12]), ref)
+    # ref 那棵樹上本來就不會有這幾個案例檔(案例是這張票才加的),所以一律把
+    # candidate 的那一份疊上去 —— **兩邊跑的一定要是同一份檔**。
     missing = overlay(rels, candidate, base_dir)
     if missing:
-        sys.stderr.write("verify-case: candidate 裡找不到這幾個案例檔:%s\n"
-                         % ", ".join(missing))
-        return 2
+        return unmeasured(args.ticket,
+                          "candidate(%s)裡找不到這幾個案例檔:%s"
+                          % (args.candidate or root, ", ".join(missing)), ref)
 
     baseline = run_cases(base_dir, rels, os.path.join(logs, "baseline.log"))
     cand = run_cases(candidate, rels, os.path.join(logs, "candidate.log"))
-    base_sha = git(["rev-parse", args.ref], root).stdout.strip()
-    cand_sha = git(["rev-parse", "HEAD"], candidate).stdout.strip()
 
     why = []
     if baseline["import_failures"]:
@@ -178,9 +241,9 @@ def cmd_check(args):
         "why": ";".join(why),
         "at": now(),
         "files": rels,
-        "base_ref": args.ref,
+        "base_ref": ref,
         "base_sha": base_sha,
-        "candidate": candidate,
+        "candidate": args.candidate or root,
         "candidate_sha": cand_sha,
         "baseline": baseline,
         "candidate_run": cand,
@@ -202,7 +265,7 @@ def cmd_check(args):
 
     sys.stdout.write("verify-case: #%s 案例 %d 個\n" % (args.ticket, baseline["cases"]))
     sys.stdout.write("  乾淨主線 %s(%s):紅 %d、skip %d、import 失敗 %d -> %s\n"
-                     % (args.ref, base_sha[:12], len(baseline["red"]),
+                     % (ref, base_sha[:12], len(baseline["red"]),
                         baseline["skipped"], len(baseline["import_failures"]),
                         baseline["log"]))
     for name in baseline["red"]:
@@ -210,7 +273,7 @@ def cmd_check(args):
     for name in baseline["import_failures"]:
         sys.stdout.write("    import 失敗(不算紅) %s\n" % name)
     sys.stdout.write("  candidate %s(%s):紅 %d、skip %d -> %s\n"
-                     % (candidate, cand_sha[:12], len(cand["red"]),
+                     % (args.candidate or root, cand_sha[:12], len(cand["red"]),
                         cand["skipped"], cand["log"]))
     for name in cand["red"]:
         sys.stdout.write("    紅 %s\n" % name)
@@ -241,9 +304,10 @@ def cmd_extract(args):
     if not rels:
         sys.stderr.write("verify-case: 票 #%s 的 verify.files 是空的\n" % args.ticket)
         return 3
+    ref = args.ref or data.get("base_sha") or ticketlib.main_branch()
     chunks = []
     for rel in rels:
-        old = git(["show", "%s:%s" % (args.ref, rel)], root)
+        old = git(["show", "%s:%s" % (ref, rel)], root)
         before = old.stdout.splitlines(keepends=True) if old.returncode == 0 else []
         target = os.path.join(candidate, rel)
         if not os.path.exists(target):
@@ -341,8 +405,7 @@ def main(argv):
     if not getattr(args, "run", None):
         parser.print_help()
         return 2
-    if getattr(args, "ref", None) == "":
-        args.ref = ticketlib.main_branch()
+    # `--ref` 的預設不在這裡填:它要看**那張票的 base_sha**,而票是子指令才讀的。
     return args.run(args)
 
 

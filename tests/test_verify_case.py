@@ -114,6 +114,138 @@ class VerifyCase(Sandbox):
         self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
         self.assertIn("verify.files 是空的", done.stderr)
 
+    # ------------------------------------------ candidate 的三種寫法(#22)
+
+    def a_branch(self, branch="t1", case=CASE):
+        """票的實作與案例都 commit 在分支上,主線還停在舊值 —— 落地**前**的真實形狀。
+
+        關鍵是 repo 的工作樹裡**沒有**那個案例檔:只有真的去 git 裡把 candidate 那棵樹
+        拿出來,才跑得到它。
+        """
+        path = self.worktree(branch)
+        self.write("src/value.txt", "2\n", where=path)
+        self.write(os.path.join("verify", "nav", "__init__.py"), "", where=path)
+        self.write(os.path.join("verify", "nav", "test_ticket_1.py"), case, where=path)
+        self.git("add", "-A", cwd=path)
+        self.git("commit", "-q", "-m", "值改成 2,附案例", cwd=path)
+        self.make_ticket(1, verify={"files": ["verify/nav/test_ticket_1.py"],
+                                    "tags": ["example"], "run": "", "notes": ""})
+        return path, self.git("rev-parse", branch).strip()
+
+    def assert_measured(self, sha):
+        base = self.load_ticket("1")["verify"]["baseline"]
+        self.assertTrue(base["ok"], base["why"])
+        self.assertEqual(base["baseline"]["red"],
+                         ["verify.nav.test_ticket_1.NavSize.test_value"])
+        self.assertEqual(base["candidate_run"]["red"], [])
+        self.assertEqual(base["candidate_sha"], sha)
+        self.assertEqual(base["base_sha"], self.load_ticket("1")["base_sha"])
+        return base
+
+    def test_candidate_may_be_a_branch_name(self):
+        """🩸 #20:`--candidate t20` 舊版去找 `$PWD/t20`,印「candidate 裡找不到這幾個
+        案例檔」—— 而檔就在 t20 上,只是沒有人去 git 裡拿。
+
+        **變異**:把 `resolve_tree` 裡 `rev-parse --verify` 那一段拔掉 → 這一條紅。
+        """
+        _, sha = self.a_branch()
+        done = self.tool("check", "1", "--candidate", "t1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.assert_measured(sha)["candidate"], "t1")
+
+    def test_candidate_may_be_a_sha(self):
+        """落地後補量走的是 `--ref <base_sha> --candidate <merge sha>`,兩格都是 sha。"""
+        _, sha = self.a_branch()
+        done = self.tool("check", "1", "--candidate", sha)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assert_measured(sha)
+
+    def test_candidate_may_be_a_worktree_path(self):
+        """路徑這一種是舊的叫法,**不准被新的解法吃掉**(同名目錄優先於同名分支)。"""
+        path, sha = self.a_branch()
+        done = self.tool("check", "1", "--candidate", path)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assert_measured(sha)
+
+    def test_the_case_file_is_overlaid_onto_a_ref_tree_that_lacks_it(self):
+        """案例是這張票才加的,ref 那棵樹上本來就沒有它 —— 不疊上去,乾淨主線那一趟
+        跑到的是**零個案例**,而零個案例與「都過了」長得一樣。"""
+        _, _ = self.a_branch()
+        out = os.path.join(self.home, "vc")
+        done = self.tool("check", "1", "--candidate", "t1", "--out-dir", out)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue(os.path.exists(os.path.join(
+            out, "base", "verify", "nav", "test_ticket_1.py")), "沒疊上去")
+        self.assertEqual(self.load_ticket("1")["verify"]["baseline"]["baseline"]["cases"], 1)
+
+    def test_after_landing_the_ref_defaults_to_the_ticket_base_sha(self):
+        """🩸 #19:票落地之後,對**主線**量基準永遠是「一條都沒紅」—— 實作已經在主線
+        上了。那一句說的是「這一趟量錯了地方」,不是「這條案例是假的」。
+
+        **變異**:把預設的 ref 改回 `ticketlib.main_branch()` → 這一條紅。
+        """
+        self.make_ticket(1, verify={"files": ["verify/nav/test_ticket_1.py"],
+                                    "tags": ["example"], "run": "", "notes": ""})
+        opened_at = self.load_ticket("1")["base_sha"]
+        self.write("src/value.txt", "2\n")                 # 落地:主線的頭往前走
+        self.write(os.path.join("verify", "nav", "test_ticket_1.py"), CASE)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "#1 落地")
+        self.assertNotEqual(self.git("rev-parse", "main").strip(), opened_at)
+        done = self.tool("check", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        base = self.load_ticket("1")["verify"]["baseline"]
+        self.assertTrue(base["ok"], base["why"])
+        self.assertEqual(base["base_sha"], opened_at, "量的不是開票那一版")
+
+    # --------------------------------------------------- 量不到 ≠ 驗紅沒過
+
+    def test_a_baseline_that_cannot_be_measured_does_not_overwrite_the_ticket(self):
+        """🩸「這一趟沒量到」與「這條案例驗不到東西」在票上長得一樣,而 `ticket.py
+        close` 只看得到 `ok: false` —— #19 就是這樣卡死的:一句量錯地方的結論蓋掉了
+        票上已經有的判決,而且再也沒有人分得出來。
+
+        **變異**:把失敗路徑改回蓋寫票(`unmeasured` 換成走 record 那一段)→ 這一條紅。
+        """
+        self.a_ticket()
+        row = self.load_ticket("1")
+        row["verify"]["baseline"] = {"ok": True, "why": "",
+                                     "at": "2026-09-22T00:00:00+08:00"}
+        row["state_version"] = 7
+        self.write(os.path.join("tickets", "1.json"),
+                   json.dumps(row, ensure_ascii=False, indent=2) + "\n")
+        done = self.tool("check", "1", "--candidate", "沒有這個分支")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("量不到基準,票沒有動", done.stderr)
+        self.assertIn("下一步", done.stderr, "守衛的產出要是一個可以敲的動作")
+        after = self.load_ticket("1")
+        self.assertTrue(after["verify"]["baseline"]["ok"], "量不到卻把票上的判決蓋掉了")
+        self.assertEqual(after["state_version"], 7, "量不到的那一趟不該動票")
+
+    def test_a_ref_that_already_contains_the_candidate_is_not_a_verdict(self):
+        """🩸 #19:票落地之後拿 `--ref main` 去量,主線上**已經有**那份實作 ——
+        「一條都沒紅」說的是這一趟量錯了地方,不是這條案例是假的。舊版把它當判決
+        蓋進票,`close` 從此擋著那張票,而票面上再也看不出差別。
+
+        **變異**:把 `merge-base --is-ancestor` 那一段拔掉 → 這一條紅。
+        """
+        self.a_branch()
+        landed = self.worktree("landed")
+        self.git("merge", "-q", "--no-ff", "-m", "#1 落地", "t1", cwd=landed)
+        done = self.tool("check", "1", "--ref", "landed", "--candidate", "t1")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("量不到基準,票沒有動", done.stderr)
+        self.assertIn("本來就有這份實作", done.stderr)
+        self.assertNotIn("baseline", self.load_ticket("1")["verify"])
+
+    def test_case_files_missing_from_the_candidate_is_not_a_verdict_either(self):
+        """#20 印的就是這一句。它說的是「這一趟拿錯樹」,不是「驗紅沒過」。"""
+        self.a_branch()
+        done = self.tool("check", "1", "--candidate", "main")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("找不到這幾個案例檔", done.stderr)
+        self.assertNotIn("baseline", self.load_ticket("1")["verify"])
+
     # -------------------------------------------------------------- extract
 
     def test_extract_writes_a_diff_of_only_the_verify_files(self):
