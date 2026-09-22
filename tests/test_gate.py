@@ -155,7 +155,7 @@ class GateSh(Sandbox):
         理由:`shouldStop` 停的是下一條測試方法,而這 12 條 subTest 跑在同一個方法
         裡面 —— 只設它,那一段還是會整組跑完,而「跑完再說」就是這張票要擋的事。"""
         self.write("tests/test_env_wave.py", ENVIRONMENT_WAVE)
-        self.make_ticket(7)
+        self.make_ticket(7, allowed_write_paths=["tests/*"])
         done = self.gate("tests/test_env_wave.py", "--ticket", "7")
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(len([row for row in self.ran() if row.startswith("safari-")]), 8,
@@ -177,7 +177,7 @@ class GateSh(Sandbox):
         裡每條紅例單跑 N 次只會把浪費加倍。所以這一段不准印出 flake 那幾句,狀態檔
         也不准留下 flaky 的判定。"""
         self.write("tests/test_env_wave.py", ENVIRONMENT_WAVE)
-        self.make_ticket(7)
+        self.make_ticket(7, allowed_write_paths=["tests/*"])
         done = self.gate("tests/test_env_wave.py", "--ticket", "7")
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("單獨重跑", done.stdout)
@@ -195,7 +195,9 @@ class GateSh(Sandbox):
         config = json.loads(self.read("board/config.json"))
         config["environment_fail_fast_threshold"] = 3
         self.write("board/config.json", json.dumps(config, ensure_ascii=False, indent=2))
-        self.make_ticket(7)
+        self.git("add", "board/config.json")
+        self.git("commit", "-q", "-m", "沙盒的環境門檻")
+        self.make_ticket(7, allowed_write_paths=["tests/*"])
         done = self.gate("tests/test_env_wave.py", "--ticket", "7")
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(len([row for row in self.ran() if row.startswith("safari-")]), 3,
@@ -212,7 +214,9 @@ class GateSh(Sandbox):
         config = json.loads(self.read("board/config.json"))
         config["environment_fail_fast_threshold"] = 3
         self.write("board/config.json", json.dumps(config, ensure_ascii=False, indent=2))
-        self.make_ticket(7)
+        self.git("add", "board/config.json")
+        self.git("commit", "-q", "-m", "沙盒的環境門檻")
+        self.make_ticket(7, allowed_write_paths=["tests/*"])
         done = self.run_sh("scripts/gate.sh", "tests/test_env_wave.py", "--ticket", "7",
                            env=self.env(AC_NO_FLAKE_RERUN="1"))
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)

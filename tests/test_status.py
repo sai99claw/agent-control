@@ -414,6 +414,62 @@ class GateWritesStatus(Sandbox):
     def load(self, ticket="7"):
         return self.status_of(ticket)
 
+    def install_test_marker(self):
+        self.write("tests/test_land.py",
+                   "import os\nimport unittest\n\n\nclass T(unittest.TestCase):\n"
+                   "    def test_ok(self):\n"
+                   "        with open(os.environ['AC_TEST_LOG'], 'a', encoding='utf-8') as handle:\n"
+                   "            handle.write('test-started\\n')\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "測試啟動標記")
+
+    def assert_preflight_stopped_before_tests(self, done):
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        self.assertFalse(os.path.exists(self.log), "機械格紅了之後仍啟動測試")
+        self.assertNotIn("gate.start", self.kinds())
+        self.assertFalse(self.exists("reports"), "機械格紅了之後仍建立測試狀態")
+
+    def test_verify_string_must_be_in_patch_content_not_its_filename(self):
+        self.make_ticket(7, allowed_write_paths=["tests/*"], verify_strings=["filename-token"])
+        self.write("tests/test_filename-token.py", "import unittest\n\nclass T(unittest.TestCase):\n    pass\n")
+        done = self.gate("tests/test_filename-token.py", "--ticket", "7")
+        self.assert_preflight_stopped_before_tests(done)
+        self.assertIn("filename-token", done.stderr)
+        self.assertIn("內容", done.stderr)
+
+    def test_an_unregistered_ticket_tag_stops_before_tests(self):
+        self.install_test_marker()
+        self.make_ticket(7, verify={"files": [], "tags": ["not-registered"],
+                                    "run": "", "notes": ""})
+        done = self.gate("scripts/land.sh", "--ticket", "7")
+        self.assert_preflight_stopped_before_tests(done)
+        self.assertIn("tags", done.stderr)
+        self.assertIn("not-registered", done.stderr)
+        self.assertIn("未登記", done.stderr)
+
+    def test_a_patch_outside_allowed_write_paths_stops_before_tests(self):
+        self.install_test_marker()
+        self.make_ticket(7, allowed_write_paths=["src/*"])
+        self.write("scripts/land.sh", self.read("scripts/land.sh") + "\n# outside scope\n")
+        done = self.gate("--branch", "--ticket", "7")
+        self.assert_preflight_stopped_before_tests(done)
+        self.assertIn("allowed_write_paths", done.stderr)
+        self.assertIn("scripts/land.sh", done.stderr)
+
+    def test_valid_mechanical_fields_allow_tests_to_start(self):
+        self.install_test_marker()
+        self.make_ticket(7, allowed_write_paths=["scripts/land.sh"],
+                         verify_strings=["gate-preflight-token"],
+                         verify={"files": ["verify/example/test_example.py"],
+                                 "tags": ["example"], "run": "", "notes": ""})
+        self.git("add", "tickets/7.json")
+        self.git("commit", "-q", "-m", "沙盒的票面")
+        self.write("scripts/land.sh",
+                   self.read("scripts/land.sh") + "\n# gate-preflight-token\n")
+        done = self.gate("--branch", "--ticket", "7")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue(os.path.exists(self.log), "合法機械格沒有進入測試")
+
     def test_without_a_ticket_nothing_is_written(self):
         """沒給票號就完全照舊 —— 一支新功能不該改變舊呼叫者看到的東西。"""
         done = self.gate("scripts/land.sh")
@@ -565,6 +621,8 @@ class GateWritesStatus(Sandbox):
                                     "run": "", "notes": ""})
         self.write(os.path.join("verify", "TAGS.md"),
                    "# 標籤\n- `example` — 沙盒\n- `no-such-tag` — 沙盒\n")
+        self.git("add", "verify/TAGS.md")
+        self.git("commit", "-q", "-m", "沙盒的標籤登記")
         done = self.gate("scripts/land.sh", "--ticket", "7")
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("一個案例都選不到", done.stdout)

@@ -164,6 +164,103 @@ while [ $# -gt 0 ]; do
 done
 [ "$ARGC" -ge 1 ] || { echo "gate: 要 --branch / --base / --full 或一串檔名" >&2; exit 2; }
 
+if [ -n "$TICKET" ]; then
+    python3 - "$ROOT" "$TICKET" "$MAIN" <<'PREFLIGHT_PY'
+import json, os, re, subprocess, sys
+
+root, ident, main = sys.argv[1:4]
+sys.path.insert(0, os.path.join(root, "scripts"))
+import event
+import ticket as ticket_mod
+
+path = os.path.join(event.tickets_dir(root), "%s.json" % ident)
+try:
+    with open(path, encoding="utf-8") as handle:
+        ticket = json.load(handle)
+except (OSError, ValueError):
+    raise SystemExit(0)
+
+def git(*args):
+    return subprocess.run(["git", "-C", root, *args], capture_output=True).stdout
+
+def names(*args):
+    return [name.decode("utf-8", "surrogateescape")
+            for name in git(*args).split(b"\0") if name]
+
+changed = []
+for args in (("diff", "--name-only", "-z", "%s...HEAD" % main),
+             ("diff", "--name-only", "-z", "HEAD"),
+             ("ls-files", "--others", "--exclude-standard", "-z")):
+    for name in names(*args):
+        if name not in changed:
+            changed.append(name)
+try:
+    ticket_rel = os.path.relpath(path, root)
+except ValueError:
+    ticket_rel = ""
+if ticket_rel and not ticket_rel.startswith(".." + os.sep):
+    changed = [name for name in changed if name != ticket_rel]
+
+content = []
+for args in (("diff", "--no-ext-diff", "--unified=0", "%s...HEAD" % main),
+             ("diff", "--no-ext-diff", "--unified=0", "HEAD")):
+    for line in git(*args).decode("utf-8", "replace").splitlines():
+        if line.startswith(("+++ ", "--- ")):
+            continue
+        if line.startswith(("+", "-")):
+            content.append(line[1:])
+tracked = set(names("ls-files", "-z"))
+for name in changed:
+    if name in tracked:
+        continue
+    try:
+        with open(os.path.join(root, name), encoding="utf-8", errors="replace") as handle:
+            content.append(handle.read())
+    except OSError:
+        pass
+blob = "\n".join(content)
+
+errors = []
+for row in ticket.get("verify_strings") or []:
+    needle = row.get("contains") if isinstance(row, dict) else row
+    if needle and str(needle) not in blob:
+        errors.append("verify_strings: %r 不在 patch 內容裡" % needle)
+
+registered = set()
+tag_paths = [os.path.join(root, "verify", "TAGS.md")]
+fragments = os.path.join(root, "verify", "TAGS.d")
+if os.path.isdir(fragments):
+    tag_paths += [os.path.join(fragments, name) for name in sorted(os.listdir(fragments))
+                  if name.endswith(".md")]
+for tag_path in tag_paths:
+    try:
+        with open(tag_path, encoding="utf-8") as handle:
+            registered.update(re.findall(r"^- `([a-z0-9-]+)`", handle.read(), re.M))
+    except OSError:
+        pass
+plan = ticket.get("verify") if isinstance(ticket.get("verify"), dict) else {}
+tags = []
+for tag in list(ticket.get("tags") or []) + list(plan.get("tags") or []):
+    if tag and tag not in tags:
+        tags.append(str(tag))
+for tag in tags:
+    if tag not in registered:
+        errors.append("tags: %r 未登記(登記在 verify/TAGS.md 或 verify/TAGS.d/)" % tag)
+
+globs = ticket.get("allowed_write_paths") or []
+for name in changed:
+    if not ticket_mod.matches_any(name, globs):
+        errors.append("allowed_write_paths: %s 在允許範圍外" % name)
+
+if errors:
+    for error in errors:
+        print("gate: 機械格不合 —— " + error, file=sys.stderr)
+    raise SystemExit(4)
+PREFLIGHT_PY
+    preflight_rc=$?
+    [ "$preflight_rc" -eq 0 ] || exit "$preflight_rc"
+fi
+
 SHA=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo "")
 BASE_SHA=$(git -C "$ROOT" rev-parse "$MAIN" 2>/dev/null || echo "")
 RUN_ID=${AC_GATE_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}
