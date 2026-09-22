@@ -22,6 +22,18 @@
 #    宣告了 tags 卻一個案例都選不到 = 非零(`verify.py` 的 rc=3):那是缺口,不是綠。
 # 3. **flake 重跑**:紅的案例各連續單跑設定次數,再以原順序整組重跑設定次數。
 #
+# ## 紅榜的處理順序:先環境 fail-fast、再 flake 判定(#7)
+# 測試由 `scripts/status.py run-tests` 跑(不再由這一支 shell 直接叫 unittest),它在
+# 同一個程序裡看每一條結果:同一引擎、同形訊息連紅達 `board/config.json` 的
+# `environment_fail_fast_threshold`(預設 8)就**中止那一段**、回 rc=86。
+#
+# 這一關擺在 flake 判定前面,理由是兩個:
+#   * 被中止的那一段紅榜本來就**不完整** —— 拿不完整的紅榜做 flake 判定,結論不成立。
+#   * flake 判定要做的事(每條紅例單跑 N 次、再原順序整組重跑)在壞掉的環境裡最貴,
+#     而且只會再紅一輪 —— 那正是這張票要省下的時間,不是要加倍的時間。
+# 所以 rc=86 時 `flake_rerun` 與回歸層都不跑,狀態檔寫 `env_suspect`,inbox 那一頁
+# 列出引擎、同形訊息、連紅條數與疑似原因清單。
+#
 # ## 單跑綠**不等於**綠(2026-09-21 改;取代 D-010 的「全 flaky 視為綠」)
 # 審查的實測反例:第一條測試污染共用狀態、第二條檢查乾淨狀態 —— 整組必紅,乾淨程序
 # 單跑第二條必綠。舊版正是以「所有紅的案例單跑都綠」為由回傳 0,於是**順序依賴的
@@ -67,6 +79,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 LOG=${AC_GATE_LOG:-$ROOT/gate.log}
 RERUN_LOG=$LOG.rerun
 VERIFY_LOG=${AC_VERIFY_LOG:-$ROOT/verify.log}
+SUSPECT_FILE=$LOG.env-suspect.json
 MAIN=main
 ALL_ARGS="$*"
 
@@ -160,6 +173,33 @@ ORDER_ARGS=""
 EXTRA_LOG_ARGS=""
 VERIFY_LOG_ARGS=""
 NOTE=""
+ENV_SUSPECT=0
+
+suspect_field() {   # $1 = JSON 欄位;讀不到就印空的,不猜
+    python3 - "$SUSPECT_FILE" "$1" <<'SUSPECT_PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        data = json.load(handle)
+except (OSError, ValueError):
+    data = {}
+print(data.get(sys.argv[2], ""))
+SUSPECT_PY
+}
+
+# 測試一律走這裡。判綠仍然只看 rc:86 = 環境可疑(那一段被中止)、1 = 紅、0 = 綠。
+run_tests() {   # $1 = discover|names;其餘是模組名
+    mode=$1
+    shift
+    python3 "$ROOT/scripts/status.py" run-tests --root "$ROOT" --log "$LOG" \
+        --suspect-file "$SUSPECT_FILE" --mode "$mode" "$@"
+}
+
+env_suspect_note() {
+    ENV_SUSPECT=1
+    NOTE="$NOTE 同一引擎同形訊息連紅達環境門檻,已中止這一段(不做 flake 判定)。"
+    echo "gate: 環境可疑 —— $(suspect_field engine) 連紅 $(suspect_field count) 條同形訊息,這一段中止了"
+}
 
 # 狀態檔發不出去要出聲,但**不擋閘門** —— 同 land.sh 的事件:寫不出來的那一刻正是
 # 最需要紀錄的那一刻,而讓它擋住測試會把一個紀錄問題升級成一個交付問題。
@@ -176,10 +216,14 @@ status_start() {
 
 status_done() {   # $1 = rc
     [ -n "$TICKET" ] || return 0
+    state_args=""
+    if [ "$ENV_SUSPECT" -eq 1 ]; then
+        state_args="--state env_suspect --environment-log $SUSPECT_FILE"
+    fi
     # shellcheck disable=SC2086
     python3 "$ROOT/scripts/status.py" done --ticket "$TICKET" --kind gate \
         --run-id "$RUN_ID" --sha "$SHA" --rc "$1" --note "$NOTE" \
-        --log "$LOG" $VERIFY_LOG_ARGS $EXTRA_LOG_ARGS $FLAKY_ARGS \
+        --log "$LOG" $state_args $VERIFY_LOG_ARGS $EXTRA_LOG_ARGS $FLAKY_ARGS \
         $AUTO_FLAKY_ARGS $ORDER_ARGS \
         || echo "gate: 狀態檔寫不出來(不擋閘門)" >&2
     inbox_post "$1"
@@ -190,7 +234,20 @@ status_done() {   # $1 = rc
 inbox_post() {   # $1 = rc
     [ -n "$TICKET" ] || return 0
     [ -z "${AC_NO_INBOX:-}" ] || return 0
-    if [ "$1" -eq 0 ]; then
+    note=""
+    if [ "$ENV_SUSPECT" -eq 1 ]; then
+        # 環境那一頁要能直接動手:哪個引擎、倒在哪一句、連幾條,以及**先去看哪三樣**。
+        # 一句「環境可疑」不是一個可以執行的動作(DISPATCH-TEMPLATE §5.7)。
+        engine=$(suspect_field engine)
+        message=$(suspect_field message_shape)
+        count=$(suspect_field count)
+        state="env_suspect(gate rc=$1)"
+        what="先別重跑;查 $engine 那一側的環境,修好再跑這一段"
+        note="引擎:$engine
+同形訊息:$message
+連續紅:$count
+疑似原因:掛很久的 Safari --automation 行程、磁碟剩餘空間不足、測試埠被占用。"
+    elif [ "$1" -eq 0 ]; then
         state="閘門綠(gate rc=0)"
         what="讀 patch 記 review(綁票版本與分支頭 sha),再 sh scripts/land.sh t$TICKET"
     else
@@ -198,7 +255,7 @@ inbox_post() {   # $1 = rc
         what="看紅榜逐條;要自動派下一輪 worker:sh scripts/auto-fix.sh $TICKET"
     fi
     python3 "$ROOT/scripts/inbox.py" post --ticket "$TICKET" --run-id "$RUN_ID" \
-        --kind gate --state "$state" --what "$what" \
+        --kind gate --state "$state" --what "$what" --note "$note" \
         --where "$(python3 "$ROOT/scripts/status.py" rundir --ticket "$TICKET" \
                    --run-id "$RUN_ID" 2>/dev/null || echo "reports/t$TICKET/$RUN_ID")/status.json" \
         >/dev/null 2>&1 || echo "gate: 收件匣寫不出來(不擋閘門)" >&2
@@ -404,14 +461,21 @@ if [ "$want_full" -eq 1 ]; then
     status_start
     # 判綠先寫檔再讀退出碼,不用 `cmd | tail`:管線的退出碼是右邊那一支的
     # (`false | tail` 是 0),而那會讓「根本沒跑起來」靜靜判成綠。
-    ( cd "$ROOT" && python3 -m unittest discover -s tests -v ) > "$LOG" 2>&1
+    run_tests discover
     rc=$?
     grep -aE "^Ran |^OK|^FAILED" "$LOG" || echo "gate: log 裡連 Ran 都沒有,看 $LOG"
-    flake_rerun "$rc" "cd \"$ROOT\" && python3 -m unittest discover -s tests -v"
-    rc=$?
+    # 先環境 fail-fast、再 flake 判定(見檔頭)。
+    if [ "$rc" -eq 86 ]; then
+        env_suspect_note
+    else
+        flake_rerun "$rc" "cd \"$ROOT\" && python3 -m unittest discover -s tests -v"
+        rc=$?
+    fi
     # 全套 = 單元全部 + **回歸全部**。回歸不靠執行器自測間接跑。
-    regression full
-    rc=$(merge_rc "$rc" "$VRC")
+    if [ "$ENV_SUSPECT" -eq 0 ]; then
+        regression full
+        rc=$(merge_rc "$rc" "$VRC")
+    fi
     [ "$rc" -eq 0 ] || echo "gate: 紅了,看 $LOG"
     status_done "$rc"
     auto_fix "$rc"
@@ -432,12 +496,18 @@ rc=0
 if [ -n "$mods" ]; then
     echo "gate: python3 -m unittest$(echo " $mods" | sed 's/ *$//')"
     status_start
-    ( cd "$ROOT/tests" && python3 -m unittest $mods ) > "$LOG" 2>&1
+    # shellcheck disable=SC2086
+    run_tests names $mods
     rc=$?
     grep -aE "^Ran |^OK|^FAILED" "$LOG" || echo "gate: log 裡連 Ran 都沒有,看 $LOG"
-    flake_rerun "$rc" "cd \"$ROOT/tests\" && python3 -m unittest $mods"
-    rc=$?
-    if [ -n "$TICKET" ]; then
+    # 先環境 fail-fast、再 flake 判定(見檔頭)。
+    if [ "$rc" -eq 86 ]; then
+        env_suspect_note
+    else
+        flake_rerun "$rc" "cd \"$ROOT/tests\" && python3 -m unittest $mods"
+        rc=$?
+    fi
+    if [ -n "$TICKET" ] && [ "$ENV_SUSPECT" -eq 0 ]; then
         regression ticket
         rc=$(merge_rc "$rc" "$VRC")
     fi

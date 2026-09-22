@@ -151,7 +151,11 @@ class Sandbox(unittest.TestCase):
     # ------------------------------------------------------------ 基本動作
 
     def env(self, **extra):
-        base = dict(os.environ)
+        # 外面那一層的 `AC_*` 一個都不准進沙盒:land.sh 跑全套時帶著 AC_GATE_TICKET /
+        # AC_NO_INBOX / AC_GATE_RUN_ID,auto-fix 派的 worker 帶著 AC_ROUND / AC_ROOT ——
+        # 漏進去就是「沒給票號卻有票」「該有 inbox 卻沒有」,而紅榜指的是被測的腳本。
+        base = {key: value for key, value in os.environ.items()
+                if not key.startswith("AC_")}
         base.update({
             "HOME": self.home,
             "GIT_CONFIG_GLOBAL": os.devnull,
@@ -163,7 +167,6 @@ class Sandbox(unittest.TestCase):
             "AC_TEST_LOG": self.log,
             "AC_GATE_LOG": os.path.join(self.home, "gate.log"),
         })
-        base.pop("AC_ROOT", None)
         base.update(extra)
         return base
 

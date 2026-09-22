@@ -41,6 +41,7 @@
   "flaky_threshold": 3,
   "flake_auto_single_runs": 5,
   "flake_auto_group_runs": 1,
+  "environment_fail_fast_threshold": 8,
   "flaky_auto_ticket": true,
   "worker": {
     "command": "claude -p --model opus --permission-mode acceptEdits --allowedTools Read Edit Write Glob Grep Bash",

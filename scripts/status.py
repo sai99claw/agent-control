@@ -5,6 +5,8 @@
                              --base-sha abc1234 --worktree /path/wt --round 2
     scripts/status.py phase  --ticket 7 --run-id … --phase merge --rc 0
     scripts/status.py failures --log gate.log        # 印可以單獨重跑的案例 id,一行一個
+    scripts/status.py run-tests --root . --log gate.log --suspect-file gate.log.env-suspect.json \
+                             --mode discover              # 跑測試,環境壞了當場中止(rc=86)
     scripts/status.py done   --ticket 7 --run-id … --rc 1 --log gate.log \
                              [--suspected-flaky test_x.Case.test_y …]
     scripts/status.py show   --ticket 7 [--run-id …] [--runs]
@@ -37,6 +39,18 @@ rc),`done` 才覆寫成 `done` 並帶 `rc`。一份沒有 `finished` 的 `done` 
 patch 路徑與雜湊、第幾輪、上一輪排除過什麼、怎麼重現,它就得回頭翻對話或猜檔案位置
 —— 那一趟比整份 log 還貴。
 
+## 環境壞了要當場停(`run-tests`,rc=86)
+2026-09-22 #620:safaridriver 起的 Safari 行程掛了幾小時後 storage 壞掉,26 條 safari
+案例全紅、訊息同一形狀。閘門把整段跑完才說話 —— 兩輪落地白跑。所以測試不再由 shell
+直接叫,改由 `run-tests` 在同一個程序裡跑:每條紅例取「引擎 + 去掉數字與 id 的訊息」
+當形狀,同一形狀連紅達 `board/config.json` 的 `environment_fail_fast_threshold`
+(預設 8)就**中止那一段**並回 rc=86。一次環境故障最多浪費 N 條案例,不是整段。
+
+**這一關在 flake 判定之前。** 環境壞掉時那一段是被中止的,紅榜本來就不完整;而 flake
+判定要做的事(每條紅例單跑 5 次 + 原順序整組再跑)正是在壞掉的環境裡最貴、最沒有意義
+的那件事 —— 它會把「環境壞了」重新量成「這些案例都是真紅」。所以 rc=86 的時候
+`flake_rerun` 與回歸層都不跑,狀態檔直接寫 `env_suspect`。
+
 ## 自動 flake 與順序污染
 單跑綠**不等於**那條紅是假的:第一條測試污染共用狀態、第二條檢查乾淨狀態時,整組
 必紅而單跑必綠。只有每條紅例連續單跑達設定門檻、原順序整組也達門檻全綠,才標
@@ -50,6 +64,7 @@ import json
 import os
 import re
 import sys
+import unittest
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -59,6 +74,10 @@ EXCERPT_LINES = 20
 DEFAULT_REPORTS = "reports"
 FLAKY_LEDGER = "flaky.jsonl"
 DEFAULT_FLAKY_THRESHOLD = 3
+DEFAULT_ENV_FAIL_FAST_THRESHOLD = 8
+# 86 不是隨便挑的:0 是綠、1 是 unittest 的紅、2/3 是 gate.sh 自己的用法(參數錯、
+# 對不到模組)。要一個不會與那幾個撞的碼,呼叫者才分得出「紅了」與「環境壞了」。
+ENV_SUSPECT_RC = 86
 PHASES = ("gate", "merge", "push", "verify", "docs", "apply")
 
 # `FAIL: test_x (test_mod.Case.test_x)` / `ERROR: test_x (test_mod.Case)` /
@@ -74,6 +93,116 @@ FILE_LINE = re.compile(r'^\s*File "([^"]+)", line (\d+)')
 # 瀏覽器那一族會在案例名或輸出裡帶 `engine=chrome` / `engine='firefox'`;沒有就留空,不猜。
 ENGINE = re.compile(r"engine\s*[=:]\s*['\"]?([A-Za-z0-9_.-]+)")
 CLOSERS = {"(": ")", "[": "]"}
+
+
+def normalized_failure_message(error):
+    """訊息的**形狀**:去掉數字與 id。
+
+    同一個環境故障每一條的訊息只差流水號與 case id(`localStorage id=ab-1 empty
+    after 101 seconds`)。逐字比會判成 26 種不同的紅,於是「環境壞了」與「26 個真
+    bug」長得一樣 —— 那正是要分開的兩件事。
+    """
+    message = str(error)
+    message = re.sub(r"\b(?:id|case_id|request_id)\s*[=:]\s*[^\s,;)}\]]+",
+                     "id=<id>", message, flags=re.IGNORECASE)
+    message = re.sub(r"\b[0-9a-f]{8}-[0-9a-f-]{27,}\b", "<id>", message,
+                     flags=re.IGNORECASE)
+    return re.sub(r"\d+", "<n>", message).strip()
+
+
+class EnvironmentResult(unittest.TextTestResult):
+    """同一引擎、同形訊息連紅達門檻就中止那一段。
+
+    只算**連續**的:中間夾一條綠或一條別的形狀就歸零。「一路都在倒同一句」是環境的
+    徵狀,「散落幾條同句」是程式的 bug,這兩件事不該走同一條路。
+    """
+
+    def __init__(self, *args, threshold=DEFAULT_ENV_FAIL_FAST_THRESHOLD, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.threshold = threshold
+        self.last_shape = None
+        self.streak = 0
+        self.environment_suspect = None
+
+    def _observe(self, test, err):
+        if err is None:
+            self.last_shape = None
+            self.streak = 0
+            return
+        detail = "%s\n%s" % (test, err[1])
+        found = ENGINE.search(detail)
+        if not found:
+            # 認不出引擎就不猜:這一條可能只是一個普通的紅。
+            self.last_shape = None
+            self.streak = 0
+            return
+        engine = found.group(1)
+        message = normalized_failure_message(err[1])
+        shape = (engine.lower(), message)
+        self.streak = self.streak + 1 if shape == self.last_shape else 1
+        self.last_shape = shape
+        if self.streak >= self.threshold:
+            self.environment_suspect = {
+                "engine": engine,
+                "message_shape": message,
+                "count": self.streak,
+                "threshold": self.threshold,
+            }
+            # 兩個旗標都要設:`shouldStop` 停的是**下一條測試方法**,而 subTest 的
+            # 迴圈跑在同一個方法裡面 —— 只設它,那 12 條 subTest 會整組跑完才停。
+            # `failfast` 才是 subTest 自己看的那一格(實測見 EVIDENCE M1)。
+            self.failfast = True
+            self.shouldStop = True
+
+    def addSuccess(self, test):
+        self._observe(test, None)
+        super().addSuccess(test)
+
+    def addFailure(self, test, err):
+        self._observe(test, err)
+        super().addFailure(test, err)
+
+    def addError(self, test, err):
+        self._observe(test, err)
+        super().addError(test, err)
+
+    def addSubTest(self, test, subtest, err):
+        self._observe(subtest, err)
+        super().addSubTest(test, subtest, err)
+
+
+def cmd_run_tests(args):
+    """跑測試並在環境可疑時中止。**shell 不再自己叫 unittest** —— 要看到一條一條的
+    結果就得待在同一個程序裡;等 log 寫完再解析等於等整段跑完,那正是這張票要省下的。
+
+    log 的寫法與舊版的 shell 一樣:先整份寫檔,再回退出碼。判綠只看 rc。
+    """
+    root = os.path.abspath(args.root)
+    threshold = int(event.config(root).get("environment_fail_fast_threshold")
+                    or DEFAULT_ENV_FAIL_FAST_THRESHOLD)
+    with open(args.suspect_file, "w", encoding="utf-8") as handle:
+        handle.write("")
+    # cwd 照舊版兩條路各自的樣子:discover 在 repo 根、指名模組在 `tests/`。
+    where = root if args.mode == "discover" else os.path.join(root, "tests")
+    os.chdir(where)
+    sys.path.insert(0, os.path.join(root, "tests"))
+    loader = unittest.defaultTestLoader
+    if args.mode == "discover":
+        suite = loader.discover("tests", pattern="test_*.py")
+    else:
+        suite = loader.loadTestsFromNames(args.names)
+    with open(args.log, "w", encoding="utf-8") as stream:
+        runner = unittest.TextTestRunner(
+            stream=stream, verbosity=2,
+            resultclass=lambda *items, **kw: EnvironmentResult(
+                *items, threshold=threshold, **kw))
+        result = runner.run(suite)
+    if result.environment_suspect:
+        with open(args.suspect_file, "w", encoding="utf-8") as handle:
+            json.dump(result.environment_suspect, handle, ensure_ascii=False)
+            handle.write("\n")
+        return ENV_SUSPECT_RC
+    return 0 if result.wasSuccessful() else 1
 
 
 def reports_dir(root):
@@ -507,8 +636,15 @@ def cmd_done(args):
     suspected = [row for row in failures if row["suspected_flaky"]]
     automatic = [row for row in failures if row["flaky"] == "auto"]
     failures = [row for row in failures if row["flaky"] != "auto"]
+    environment = {}
+    if args.environment_log:
+        try:
+            with open(args.environment_log, encoding="utf-8") as handle:
+                environment = json.load(handle)
+        except (OSError, ValueError):
+            environment = {}
     data = {
-        "state": "done",
+        "state": args.state,
         "run_id": run_id,
         "kind": args.kind or before.get("kind") or "",
         "ticket": args.ticket,
@@ -527,6 +663,7 @@ def cmd_done(args):
         "phases": before.get("phases") or [],
         "failures": failures,
         "suspected_flaky": suspected,
+        "environment_suspect": environment,
         "auto_flaky": automatic,
         "flaky": "auto" if automatic else "",
         "order_dependent": bool(order_names),
@@ -536,6 +673,17 @@ def cmd_done(args):
     }
     path = write(root, args.ticket, run_id, data)
     record_flakes(root, args.ticket, run_id, automatic or suspected)
+    if args.state == "env_suspect":
+        # 事件發不出去不該讓狀態檔白寫:那份 JSON 已經在磁碟上了,而它才是接手的人
+        # 要讀的東西。出聲,不改 rc(同 gate.sh 對狀態檔的態度)。
+        try:
+            event.emit("env.suspect", ticket=args.ticket, run_id=run_id,
+                       engine=environment.get("engine", ""),
+                       message_shape=environment.get("message_shape", ""),
+                       count=environment.get("count", ""),
+                       threshold=environment.get("threshold", ""))
+        except Exception:                                  # noqa: BLE001
+            sys.stderr.write("status: env.suspect 事件發不出去(狀態檔仍已寫入)\n")
     print("status: %s rc=%d 紅 %d 條(疑似 flaky %d 條,自動 flaky %d 條)"
           % (os.path.relpath(path, root), args.rc, len(failures), len(suspected),
              len(automatic)))
@@ -630,6 +778,8 @@ def main(argv):
     done.add_argument("--kind", default="")
     done.add_argument("--sha", default="")
     done.add_argument("--rc", type=int, required=True)
+    done.add_argument("--state", choices=("done", "env_suspect"), default="done")
+    done.add_argument("--environment-log", default="")
     done.add_argument("--note", default="")
     done.add_argument("--report", default="")
     done.add_argument("--log", action="append", default=[])
@@ -639,6 +789,14 @@ def main(argv):
     done.add_argument("--order-dependent", action="append", default=[])
     add_context_flags(done)
     done.set_defaults(run=cmd_done)
+
+    run_tests = subs.add_parser("run-tests")
+    run_tests.add_argument("--root", required=True)
+    run_tests.add_argument("--log", required=True)
+    run_tests.add_argument("--suspect-file", required=True)
+    run_tests.add_argument("--mode", choices=("discover", "names"), required=True)
+    run_tests.add_argument("names", nargs="*")
+    run_tests.set_defaults(run=cmd_run_tests)
 
     fails = subs.add_parser("failures")
     fails.add_argument("--log", action="append", default=[])
