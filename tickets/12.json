@@ -13,6 +13,7 @@
   "allowed_write_paths": [
     "scripts/gate.sh",
     "scripts/apply.sh",
+    "scripts/ticket.py",
     "tests/*"
   ],
   "role": "worker",
@@ -21,7 +22,7 @@
   "attempt": 0,
   "base_sha": "d624188882a1a68f80b111c9033ebdd2f2290720",
   "state": "Ready",
-  "state_version": 1,
+  "state_version": 2,
   "lease": null,
   "retry_limit": 2,
   "verify": {

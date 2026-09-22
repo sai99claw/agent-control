@@ -13,6 +13,9 @@
   "allowed_write_paths": [
     "scripts/auto-fix.sh",
     "scripts/land.sh",
+    "scripts/gate.sh",
+    "scripts/rules.py",
+    "docs/WORKFLOW.md",
     "tests/*"
   ],
   "role": "worker",
@@ -21,7 +24,7 @@
   "attempt": 0,
   "base_sha": "d624188882a1a68f80b111c9033ebdd2f2290720",
   "state": "Ready",
-  "state_version": 1,
+  "state_version": 2,
   "lease": null,
   "retry_limit": 2,
   "verify": {

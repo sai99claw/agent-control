@@ -12,6 +12,7 @@
   "depends_on": [],
   "allowed_write_paths": [
     "scripts/auto-fix.sh",
+    "scripts/sync-to-project.sh",
     "docs/WORKFLOW.md",
     "tests/*"
   ],
@@ -21,7 +22,7 @@
   "attempt": 0,
   "base_sha": "ffdf9d4bc6892c0ff7aaebbd4a9c2bdf3874b838",
   "state": "Ready",
-  "state_version": 1,
+  "state_version": 2,
   "lease": null,
   "retry_limit": 2,
   "verify": {

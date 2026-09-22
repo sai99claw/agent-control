@@ -23,7 +23,7 @@
   "attempt": 0,
   "base_sha": "cdf2328bfa63bb2dcf7f1b7d3b2117ff2684ec9a",
   "state": "Ready",
-  "state_version": 3,
+  "state_version": 5,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -32,5 +32,16 @@
     "run": "",
     "notes": ""
   },
-  "outline": "2026-09-22 #624 worker 實測指出;pack 的記憶回寫段要改成「寫進 EVIDENCE 的記憶段,格式:每行一句 memory.py note …」而不是叫 worker 自己跑;apply.sh 收到 patch 時讀同目錄 EVIDENCE.md(或 --evidence 參數)。"
+  "outline": "2026-09-22 #624 worker 實測指出;pack 的記憶回寫段要改成「寫進 EVIDENCE 的記憶段,格式:每行一句 memory.py note …」而不是叫 worker 自己跑;apply.sh 收到 patch 時讀同目錄 EVIDENCE.md(或 --evidence 參數)。",
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "44a9829cc37516297742d7f1c99a7cb5bd95f97f",
+    "note": "EVIDENCE 記憶段由 apply/auto-fix 收割成 memory.py note;壞行拒收不擋 apply",
+    "at": "2026-09-22T10:27:47+08:00",
+    "state_version": 4
+  },
+  "verify_strings": [
+    "記憶"
+  ]
 }

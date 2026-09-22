@@ -11,7 +11,12 @@
   "out_of_scope": [],
   "depends_on": [],
   "allowed_write_paths": [
+    "scripts/gate.sh",
     "scripts/status.py",
+    "scripts/event.py",
+    "scripts/auto-fix.sh",
+    "scripts/land.sh",
+    "board/config.json",
     "tests/*"
   ],
   "role": "worker",
@@ -20,7 +25,7 @@
   "attempt": 0,
   "base_sha": "cdf2328bfa63bb2dcf7f1b7d3b2117ff2684ec9a",
   "state": "Ready",
-  "state_version": 3,
+  "state_version": 4,
   "lease": null,
   "retry_limit": 2,
   "verify": {
