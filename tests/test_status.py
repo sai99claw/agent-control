@@ -69,7 +69,8 @@ class T(unittest.TestCase):
     def test_flaky(self):
         mark = os.path.join(os.environ["AC_TEST_HOME"], "flaky.count")
         seen = os.path.exists(mark)
-        open(mark, "a", encoding="utf-8").close()
+        with open(mark, "a", encoding="utf-8") as handle:
+            handle.write("x")
         self.assertTrue(seen, "第一次跑一定紅")
 """
 
@@ -436,23 +437,23 @@ class GateWritesStatus(Sandbox):
         self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
         self.assertEqual(self.load()["rc"], 3)
 
-    def test_a_case_that_passes_on_its_own_is_only_suspected_not_green(self):
-        """單跑綠的那一條只降級成 `suspected_flaky`,**rc 一個位元都不動**。
-
-        **變異**:把 `flake_rerun` 改回「全 flaky 就 `return 0`」→ 這一條紅。
-        理由就是下一條那個反例:順序依賴的紅單跑一定綠,而判它綠等於每次都放它過去。
-        """
+    def test_five_single_passes_and_a_group_pass_auto_pass_the_flake(self):
+        """**變異**:少跑一次單例或不跑原順序整組 → 計數斷言紅。"""
         self.write("tests/test_land.py", FLAKY)
         done = self.gate("scripts/land.sh", "--ticket", "7")
-        self.assertNotEqual(done.returncode, 0,
-                            "單跑綠不准把這一輪判綠\n" + done.stdout + done.stderr)
-        self.assertIn("標成 suspected_flaky", done.stdout)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("flaky=auto", done.stdout)
+        self.assertEqual(len(self.read("flaky.count", where=self.home)), 7,
+                         "原跑 1 次 + 單跑 5 次 + 原順序整組 1 次")
         data = self.load()
-        self.assertNotEqual(data["rc"], 0)
-        self.assertEqual([row["case"] for row in data["failures"]],
-                         ["test_land.T.test_flaky"], "原始失敗要留在紅榜")
-        self.assertEqual([row["case"] for row in data["suspected_flaky"]],
+        self.assertEqual(data["rc"], 0)
+        self.assertEqual(data["flaky"], "auto")
+        self.assertEqual(data["failures"], [])
+        self.assertEqual([row["case"] for row in data["auto_flaky"]],
                          ["test_land.T.test_flaky"])
+        self.assertIn("flake.auto_pass", self.kinds())
+        ledger = [json.loads(line) for line in self.read("reports/flaky.jsonl").splitlines()]
+        self.assertEqual(ledger[-1]["classification"], "auto")
 
     def test_an_order_dependent_failure_is_not_written_off_as_flaky(self):
         """**審查的實測反例**:第一條污染共用狀態、第二條檢查乾淨狀態。整組必紅、
@@ -463,12 +464,26 @@ class GateWritesStatus(Sandbox):
         self.write("tests/test_land.py", ORDER_DEPENDENT)
         done = self.gate("scripts/land.sh", "--ticket", "7")
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("單獨重跑是綠的", done.stdout)
-        self.assertIn("整組重跑仍然紅", done.stdout, "沒有用原順序整組重跑過")
+        self.assertIn("單獨重跑 5 次全綠", done.stdout)
+        self.assertIn("原順序整組第 1 次仍然紅", done.stdout,
+                      "沒有用原順序整組重跑過")
         data = self.load()
         self.assertNotEqual(data["rc"], 0)
-        self.assertIn("真紅", data["note"])
+        self.assertTrue(data["order_dependent"])
+        self.assertEqual(data["order_dependent_cases"],
+                         ["test_land.T.test_b_wants_it_clean"])
+        self.assertIn("order_dependent", data["note"])
         self.assertTrue(data["extra_logs"], "整組重跑的原始輸出被丟掉了")
+
+    def test_flake_retry_counts_come_from_config(self):
+        conf = json.loads(self.read("board/config.json"))
+        conf["flake_auto_single_runs"] = 2
+        conf["flake_auto_group_runs"] = 1
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False))
+        self.write("tests/test_land.py", FLAKY)
+        done = self.gate("scripts/land.sh", "--ticket", "7")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(len(self.read("flaky.count", where=self.home)), 4)
 
     def test_the_group_rerun_can_be_turned_off(self):
         """`AC_FLAKE_RERUN_GROUP=0`:整組重跑很貴,關得掉;**關掉也還是紅**。"""

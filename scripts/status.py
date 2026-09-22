@@ -37,10 +37,10 @@ rc),`done` 才覆寫成 `done` 並帶 `rc`。一份沒有 `finished` 的 `done` 
 patch 路徑與雜湊、第幾輪、上一輪排除過什麼、怎麼重現,它就得回頭翻對話或猜檔案位置
 —— 那一趟比整份 log 還貴。
 
-## 為什麼是 `suspected_flaky` 而不是 `flaky`
+## 自動 flake 與順序污染
 單跑綠**不等於**那條紅是假的:第一條測試污染共用狀態、第二條檢查乾淨狀態時,整組
-必紅而單跑必綠(審查的實測反例)。所以單跑綠只降級成「疑似」,原始失敗留在 `failures`
-裡、rc 不動;要不要放行是人的判斷,不是解析器的。
+必紅而單跑必綠。只有每條紅例連續單跑達設定門檻、原順序整組也達門檻全綠,才標
+`flaky: auto`;單跑全綠但整組紅則標 `order_dependent`,原始失敗留在紅榜、rc 不動。
 """
 
 import argparse
@@ -379,6 +379,7 @@ def record_flakes(root, ticket, run_id, rows):
             "at": now(), "ticket": ticket, "run_id": run_id,
             "case": row["case"], "kind": row["kind"],
             "subtest": row.get("subtest", ""), "log": row.get("log", ""),
+            "classification": row.get("flaky") or "suspected",
         }, ensure_ascii=False) + "\n")
     handle = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
     try:
@@ -496,10 +497,16 @@ def cmd_done(args):
     for log in args.log or []:
         failures.extend(parse_failures(log))
     suspect_names = set(args.suspected_flaky or [])
+    auto_names = set(args.auto_flaky or [])
+    order_names = set(args.order_dependent or [])
     for row in failures:
         row["suspected_flaky"] = row["case"] in suspect_names
+        row["flaky"] = "auto" if row["case"] in auto_names else ""
+        row["order_dependent"] = row["case"] in order_names
     # **留在 failures 裡**,不搬走:單跑綠只降級成「疑似」,紅還是紅(D-014 §1)。
     suspected = [row for row in failures if row["suspected_flaky"]]
+    automatic = [row for row in failures if row["flaky"] == "auto"]
+    failures = [row for row in failures if row["flaky"] != "auto"]
     data = {
         "state": "done",
         "run_id": run_id,
@@ -520,13 +527,18 @@ def cmd_done(args):
         "phases": before.get("phases") or [],
         "failures": failures,
         "suspected_flaky": suspected,
+        "auto_flaky": automatic,
+        "flaky": "auto" if automatic else "",
+        "order_dependent": bool(order_names),
+        "order_dependent_cases": sorted(order_names),
         "repair_context": before.get("repair_context")
                           or repair_context(root, args),
     }
     path = write(root, args.ticket, run_id, data)
-    record_flakes(root, args.ticket, run_id, suspected)
-    print("status: %s rc=%d 紅 %d 條(其中疑似 flaky %d 條)"
-          % (os.path.relpath(path, root), args.rc, len(failures), len(suspected)))
+    record_flakes(root, args.ticket, run_id, automatic or suspected)
+    print("status: %s rc=%d 紅 %d 條(疑似 flaky %d 條,自動 flaky %d 條)"
+          % (os.path.relpath(path, root), args.rc, len(failures), len(suspected),
+             len(automatic)))
     return 0
 
 
@@ -623,6 +635,8 @@ def main(argv):
     done.add_argument("--log", action="append", default=[])
     done.add_argument("--extra-log", action="append", default=[])
     done.add_argument("--suspected-flaky", action="append", default=[])
+    done.add_argument("--auto-flaky", action="append", default=[])
+    done.add_argument("--order-dependent", action="append", default=[])
     add_context_flags(done)
     done.set_defaults(run=cmd_done)
 

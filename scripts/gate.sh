@@ -20,16 +20,16 @@
 #    原始輸出存 `verify.log`。舊版只拿票號寫狀態檔,**票的回歸從來沒被閘門跑過** ——
 #    「驗證者交了案例」與「案例真的在守這張票」因此長得一樣。
 #    宣告了 tags 卻一個案例都選不到 = 非零(`verify.py` 的 rc=3):那是缺口,不是綠。
-# 3. **flake 重跑**:紅的案例各單獨重跑一次。
+# 3. **flake 重跑**:紅的案例各連續單跑設定次數,再以原順序整組重跑設定次數。
 #
 # ## 單跑綠**不等於**綠(2026-09-21 改;取代 D-010 的「全 flaky 視為綠」)
 # 審查的實測反例:第一條測試污染共用狀態、第二條檢查乾淨狀態 —— 整組必紅,乾淨程序
 # 單跑第二條必綠。舊版正是以「所有紅的案例單跑都綠」為由回傳 0,於是**順序依賴的
 # bug 每一次都被判成偶發**。
 #
-# 所以現在:單跑綠只標 `suspected_flaky`,**原始失敗留在紅榜、rc 一個位元都不動**;
-# 接著用**原順序整組再跑一次**(`AC_FLAKE_RERUN_GROUP=0` 關掉),仍紅就是真紅,綠了
-# 也只是「疑似」——要不要放行是人的判斷,不是這支腳本的。
+# 所以現在:每條紅例連續單跑 `flake_auto_single_runs` 次全綠,再用**原順序整組**重跑
+# `flake_auto_group_runs` 次也全綠,才標 `flaky=auto` 並放行。單跑全綠但整組仍紅就是
+# 順序污染:**原始失敗留在紅榜、rc 一個位元都不動**。
 # `AC_NO_FLAKE_RERUN=1` 連單跑都不做。
 # 沒給票號就完全照舊 —— 不寫檔、不重跑、退出碼不變。
 #
@@ -155,6 +155,8 @@ SHA=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo "")
 BASE_SHA=$(git -C "$ROOT" rev-parse "$MAIN" 2>/dev/null || echo "")
 RUN_ID=${AC_GATE_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}
 FLAKY_ARGS=""
+AUTO_FLAKY_ARGS=""
+ORDER_ARGS=""
 EXTRA_LOG_ARGS=""
 VERIFY_LOG_ARGS=""
 NOTE=""
@@ -178,6 +180,7 @@ status_done() {   # $1 = rc
     python3 "$ROOT/scripts/status.py" done --ticket "$TICKET" --kind gate \
         --run-id "$RUN_ID" --sha "$SHA" --rc "$1" --note "$NOTE" \
         --log "$LOG" $VERIFY_LOG_ARGS $EXTRA_LOG_ARGS $FLAKY_ARGS \
+        $AUTO_FLAKY_ARGS $ORDER_ARGS \
         || echo "gate: 狀態檔寫不出來(不擋閘門)" >&2
     inbox_post "$1"
 }
@@ -314,44 +317,86 @@ merge_rc() {   # $1 = 目前 rc  $2 = 另一個 rc;印出合併後的
     if [ "$1" -ne 0 ]; then echo "$1"; else echo "$2"; fi
 }
 
-# 紅的案例單獨重跑一次,再用**原順序整組**重跑一次。單跑綠只標 `suspected_flaky`
-# —— 不是「修好了」,也不是「可以判綠」(見檔頭)。
-flake_rerun() {   # $1 = rc  $2 = 整組重跑的指令描述;回傳原本的 rc
+# 紅例連續單跑與原順序整組都達設定門檻才自動放行。
+flake_rerun() {   # $1 = rc  $2 = 整組重跑的指令描述
     [ "$1" -eq 0 ] && return 0
     [ -n "$TICKET" ] || return "$1"
     [ -z "${AC_NO_FLAKE_RERUN:-}" ] || return "$1"
     cases=$(python3 "$ROOT/scripts/status.py" failures --log "$LOG" 2>/dev/null || true)
     [ -n "$cases" ] || return "$1"
+    single_runs=$(python3 - "$ROOT" <<'PY'
+import json, os, sys
+try:
+    with open(os.path.join(sys.argv[1], "board", "config.json"), encoding="utf-8") as handle:
+        value = int(json.load(handle).get("flake_auto_single_runs") or 5)
+except (OSError, ValueError, TypeError):
+    value = 5
+print(max(1, value))
+PY
+)
+    group_runs=$(python3 - "$ROOT" <<'PY'
+import json, os, sys
+try:
+    with open(os.path.join(sys.argv[1], "board", "config.json"), encoding="utf-8") as handle:
+        value = int(json.load(handle).get("flake_auto_group_runs") or 1)
+except (OSError, ValueError, TypeError):
+    value = 1
+print(max(1, value))
+PY
+)
     total=0
-    flaked=0
+    qualified=0
     for case in $cases; do
         total=$((total + 1))
-        if ( cd "$ROOT/tests" && python3 -m unittest "$case" ) >/dev/null 2>&1; then
-            echo "gate: $case 單獨重跑是綠的 —— 標成 suspected_flaky(紅榜與 rc 不動)"
+        passed=0
+        attempt=1
+        while [ "$attempt" -le "$single_runs" ]; do
+            if ( cd "$ROOT/tests" && python3 -m unittest "$case" ) >/dev/null 2>&1; then
+                passed=$((passed + 1))
+            else
+                break
+            fi
+            attempt=$((attempt + 1))
+        done
+        if [ "$passed" -eq "$single_runs" ]; then
+            echo "gate: $case 單獨重跑 $single_runs 次全綠"
             FLAKY_ARGS="$FLAKY_ARGS --suspected-flaky $case"
-            flaked=$((flaked + 1))
+            qualified=$((qualified + 1))
+        else
+            echo "gate: $case 單獨重跑只綠 $passed/$single_runs 次 —— 真紅"
         fi
     done
-    [ "$flaked" -gt 0 ] || return "$1"
-    NOTE="$NOTE 單跑綠 $flaked/$total 條,只標 suspected_flaky。"
+    [ "$qualified" -gt 0 ] || return "$1"
+    NOTE="$NOTE 單跑門檻達標 $qualified/$total 條。"
+    [ "$qualified" -eq "$total" ] || return "$1"
     if [ -n "${AC_FLAKE_RERUN_GROUP:-}" ] && [ "${AC_FLAKE_RERUN_GROUP:-}" = "0" ]; then
         echo "gate: AC_FLAKE_RERUN_GROUP=0 —— 不做整組重跑;rc 維持 $1"
         return "$1"
     fi
-    echo "gate: 用原順序整組重跑一次 —— 順序依賴的紅單跑一定綠,整組一定紅"
-    ( eval "$2" ) > "$RERUN_LOG" 2>&1
-    grc=$?
-    EXTRA_LOG_ARGS="--extra-log $RERUN_LOG"
-    grep -aE "^Ran |^OK|^FAILED" "$RERUN_LOG" || true
-    if [ "$grc" -ne 0 ]; then
-        echo "gate: 整組重跑仍然紅 —— 這是真紅,不是偶發(log: $RERUN_LOG)"
-        NOTE="$NOTE 原順序整組重跑仍紅 = 真紅。"
-    else
-        echo "gate: 整組重跑綠了 —— 仍然只是 suspected_flaky,rc 維持 $1"
-        echo "gate:   (放不放行是人的判斷:看 reports/t$TICKET/$RUN_ID/status.json)"
-        NOTE="$NOTE 原順序整組重跑綠,仍只是疑似。"
-    fi
-    return "$1"
+    echo "gate: 用原順序整組重跑 $group_runs 次 —— 順序污染會在這裡再紅"
+    group=1
+    while [ "$group" -le "$group_runs" ]; do
+        run_log=$RERUN_LOG.$group
+        ( eval "$2" ) > "$run_log" 2>&1
+        grc=$?
+        EXTRA_LOG_ARGS="$EXTRA_LOG_ARGS --extra-log $run_log"
+        grep -aE "^Ran |^OK|^FAILED" "$run_log" || true
+        if [ "$grc" -ne 0 ]; then
+            for case in $cases; do ORDER_ARGS="$ORDER_ARGS --order-dependent $case"; done
+            echo "gate: 原順序整組第 $group 次仍然紅 —— order_dependent(log: $run_log)"
+            NOTE="$NOTE 原順序整組重跑仍紅 = order_dependent。"
+            return "$1"
+        fi
+        group=$((group + 1))
+    done
+    for case in $cases; do AUTO_FLAKY_ARGS="$AUTO_FLAKY_ARGS --auto-flaky $case"; done
+    echo "gate: 單跑與原順序整組都達門檻 —— flaky=auto,rc 轉 0"
+    NOTE="$NOTE 單跑與整組都達門檻,flaky=auto。"
+    python3 "$ROOT/scripts/event.py" emit flake.auto_pass --ticket "$TICKET" \
+        --kv "run_id=$RUN_ID" --kv "single_runs=$single_runs" \
+        --kv "group_runs=$group_runs" --note "$cases" >/dev/null \
+        || echo "gate: flake.auto_pass 事件發不出去(不擋閘門)" >&2
+    return 0
 }
 
 if [ "$want_full" -eq 1 ]; then
