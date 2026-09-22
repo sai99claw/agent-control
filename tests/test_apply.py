@@ -167,6 +167,46 @@ class TheHappyPath(ApplyBase):
         self.assertEqual(data["state"], "done")
         self.assertTrue(data["repair_context"]["patch"]["sha256"])
 
+    def test_it_harvests_two_memory_notes_from_evidence(self):
+        self.make("1")
+        evidence = self.patch_file(
+            "EVIDENCE.md",
+            "# Evidence\n\n## 記憶\n"
+            "memory.py note role implementer \"第一條原則\" --ticket 1 --by worker@opus\n"
+            "python3 scripts/memory.py note model opus \"第二條原則\" "
+            "--ticket 1 --by worker@opus\n")
+        patch = self.patch_file("p.diff", CHANGE)
+        done = self.apply("1", patch, "--evidence", evidence)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("第一條原則", self.read("memory/role/implementer.inbox.md"))
+        self.assertIn("第二條原則", self.read("memory/model/opus.inbox.md"))
+        self.assertEqual(self.kinds().count("memory.noted"), 2)
+
+    def test_no_memory_and_bad_lines_do_not_block_apply(self):
+        self.make("1")
+        too_long = "x" * 301
+        evidence = self.patch_file(
+            "EVIDENCE.md",
+            "## 記憶:\n"
+            "memory.py note wrong implementer \"壞層名\" --ticket 1 --by worker@opus\n"
+            "memory.py note role implementer \"%s\" --ticket 1 --by worker@opus\n"
+            "memory.py note role implementer \"仍會收這行\" --ticket 1 --by worker@opus\n"
+            % too_long)
+        done = self.apply("1", self.patch_file("p.diff", CHANGE),
+                          "--evidence", evidence)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.stderr.count("拒絕 evidence 行"), 2, done.stderr)
+        self.assertIn("仍會收這行", self.read("memory/role/implementer.inbox.md"))
+        self.assertEqual(self.kinds().count("memory.noted"), 1)
+
+    def test_an_explicit_no_memory_section_writes_nothing(self):
+        self.make("1")
+        evidence = self.patch_file("EVIDENCE.md", "## 記憶\n無\n")
+        done = self.apply("1", self.patch_file("p.diff", CHANGE),
+                          "--evidence", evidence)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("memory.noted", self.kinds())
+
 
 class ThingsItRefuses(ApplyBase):
 

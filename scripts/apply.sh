@@ -1,7 +1,7 @@
 #!/bin/sh
 # 套 patch → 建分支 → commit:**一個程式入口** — `docs/WORKFLOW.md` §patch 管線(D-012、D-015)。
 #
-#   sh scripts/apply.sh <票號> <patch> [<patch-verify>]   # 套進 t<票號> 分支並 commit
+#   sh scripts/apply.sh <票號> <patch> [<patch-verify>] [--evidence <檔>] # 套進 t<票號> 分支並 commit
 #   sh scripts/apply.sh rebase <票號> <patch> [-o <輸出>] # 套到**當前主線**的副本,出一份乾淨 diff
 #
 # 這一手以前是主線手動做的(`docs/ROLES.md` 的引言框:落地器**不**套 patch)。手動的
@@ -241,7 +241,7 @@ PY
 
 # ------------------------------------------------------------------ apply
 [ $# -ge 1 ] || {
-    echo "用法:sh scripts/apply.sh <票號> <patch> [<patch-verify>]"
+    echo "用法:sh scripts/apply.sh <票號> <patch> [<patch-verify>] [--evidence <檔>]"
     echo "      sh scripts/apply.sh rebase <票號> <patch> [-o <輸出>]"
     exit 2
 }
@@ -264,11 +264,28 @@ fi
 [ $# -ge 2 ] || { echo "apply: 要 <票號> 與 <patch>" >&2; exit 2; }
 ID=$1
 PATCH=$2
-VPATCH=${3:-}
+VPATCH=""
+EVIDENCE=""
+shift 2
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --evidence)
+            shift
+            [ $# -ge 1 ] || { echo "apply: --evidence 後面要路徑" >&2; exit 2; }
+            EVIDENCE=$1 ;;
+        *)
+            [ -z "$VPATCH" ] || { echo "apply: 多出的參數 $1" >&2; exit 2; }
+            VPATCH=$1 ;;
+    esac
+    shift
+done
 TF=$TDIR/$ID.json
 [ -f "$TF" ] || { echo "apply: 找不到票 #$ID($TF)" >&2; exit 2; }
 [ -f "$PATCH" ] || { echo "apply: 找不到 patch $PATCH" >&2; exit 2; }
 PATCH=$(cd "$(dirname "$PATCH")" && pwd)/$(basename "$PATCH")
+if [ -z "$EVIDENCE" ]; then
+    EVIDENCE=$(dirname "$PATCH")/EVIDENCE.md
+fi
 if [ -n "$VPATCH" ]; then
     [ -f "$VPATCH" ] || { echo "apply: 找不到 patch-verify $VPATCH" >&2; exit 2; }
     VPATCH=$(cd "$(dirname "$VPATCH")" && pwd)/$(basename "$VPATCH")
@@ -461,6 +478,12 @@ round: ${AC_ROUND:-1}"
 git -C "$WT" commit -q -m "$MSG" || die 2 "git commit 失敗"
 SHA=$(git -C "$WT" rev-parse --short HEAD)
 echo "apply: #$ID -> $BR $SHA 已 commit($(git -C "$WT" rev-list --count "$MAIN..HEAD") 個 commit)"
+if [ -f "$EVIDENCE" ]; then
+    python3 "$AC/memory.py" harvest "$EVIDENCE" \
+        || echo "apply: EVIDENCE 記憶收割失敗($EVIDENCE)—— 不擋 apply" >&2
+else
+    echo "apply: 找不到 EVIDENCE $EVIDENCE —— 記憶 0 筆" >&2
+fi
 status_done 0 "套好並 commit 成 $SHA"
 echo "apply: 下一步 —— (cd $WT && sh scripts/gate.sh --branch --ticket $ID)"
 echo "apply:       閘門綠了主線覆核記 review,再 sh scripts/land.sh $BR"
