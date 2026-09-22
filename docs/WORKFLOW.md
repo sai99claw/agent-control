@@ -122,6 +122,7 @@ worker 說「這張票寫錯了」以前只是一句話:沒有結構化類別、
 | 局部閘門跑**票的 `verify.tags`** | **已實作**(以前漏列) | `gate.sh --ticket <n>` → `scripts/verify.py --tag …`,原始輸出存檔 |
 | 全套跑**全部回歸**,不靠執行器自測間接跑 | **已實作**(以前漏列) | `gate.sh --full` → `scripts/verify.py` |
 | **baseline 驗紅**(乾淨主線該紅、candidate 該綠),import 失敗不算紅 | **已實作**(以前漏列) | `scripts/verify-case.py check <n>` → 寫票的 `verify.baseline` |
+| baseline 的 **ref 預設是票的 `base_sha`**;`--ref` / `--candidate` 吃 worktree 路徑 / 分支名 / sha;**量不到就不動票**,改印下一步 | **已實作**(2026-09-22,#22) | `verify-case.py check <n> [--ref <base_sha>] [--candidate <分支/sha/路徑>]` |
 | 驗證產物抽成 `patch-verify.diff`;新 tag 一票一片段再合併 | **已實作** | `verify-case.py extract` / `tags-merge`;`verify/TAGS.d/<n>.md` |
 | **land 檢查 review 綁票版本與分支 sha、objections 未處置就拒絕** | **已實作**(以前漏列) | `scripts/land.sh` 第 5 步 |
 | **land 互斥鎖** | **已實作**(以前只寫在文件裡) | `scripts/land.sh` 的 `.land.lock`(mkdir) |
@@ -140,6 +141,13 @@ worker 說「這張票寫錯了」以前只是一句話:沒有結構化類別、
 
 ## 驗證者的案例怎麼進閘門
 票的 `verify.tags` 併進 `tags`,由 `gate.sh --ticket <n>` **真的呼叫** `scripts/verify.py --tag …`(原始輸出存檔)。`--full` 跑全部回歸。驗證者不出 VERDICT;紅了照上一節走。
+
+### baseline 要對著哪一版量(2026-09-22,#22)
+`--ref` **沒給時是那張票的 `base_sha`**,不是主線的頭。票一落地,主線上就已經有那份實作,對主線量出來的「一條都沒紅」說的是**這一趟量錯了地方**,不是「這條案例是假的」(#19)。落地後要補量就寫死兩端:`check <n> --ref <票的 base_sha> --candidate <merge sha>`。
+
+`--ref` / `--candidate` 三種寫法都解得開:**worktree 路徑、分支名、sha**;同名時路徑優先(舊的叫法一律傳路徑)。以前只當路徑用,於是 `--candidate t20` 去找 `$PWD/t20`,印「candidate 裡找不到這幾個案例檔」,而檔就在 t20 上(#20)。
+
+**量不到 ≠ 驗紅沒過**:candidate 解不開、案例檔不在 candidate 上、ref 的歷史裡已經有 candidate —— 這三種是「這一趟沒量到」,rc=2、**票一個字都不改**、印下一步。只有真的兩邊都跑完才寫 `verify.baseline`。舊版把量不到也寫成 `ok: false`,`ticket.py close` 從此擋著那張票,而票面上看不出那一格說的是哪一件事。
 
 **新標籤一票一個片段檔** `verify/TAGS.d/<票號>.md`,`scripts/verify.py` 直接認它,`scripts/verify-case.py tags-merge` 再折進 `verify/TAGS.md`。理由:所有票都往同一份登記檔的尾巴附加,等於每張票都要等前一張落地(D-012 認過 TAGS 是最常見的衝突點);一票一個檔就不會撞,序列化的只剩合併那一步。
 
