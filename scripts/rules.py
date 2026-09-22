@@ -48,6 +48,17 @@ MEMORY_NOTE = """## 記憶回寫(D-013)
 ≤ 300 字元、只寫原則,案例用票號指路;不改主檔,超標由整理票的兩個模型併。
 收工前在 EVIDENCE「記憶」段列出寫了哪幾行;沒寫就寫「無」。"""
 MEMORY_NOTE_BYTES = len(MEMORY_NOTE.encode("utf-8"))
+# 第六段,**固定文字、先扣預算**(D-017,#20):交出來的東西一產生就要是機器讀得懂的。
+# 這一段不抄鍵名 —— 鍵只寫在兩處(`docs/DISPATCH-TEMPLATE.md` §8.5 與 `tickets/SCHEMA.md`),
+# 抄第三份的那一天,三份會各自往不同方向漂,而漂開的那一份看起來仍然像規格。
+DELIVERY_NOTE = """## 結構化交付(D-017)
+五段散文照舊給人看;**檔尾再加一段 `## result`**,底下一塊語言標記是 result 的
+fenced JSON 物件 —— auto-fix 收 patch 的同一手把它抽成
+`reports/t<票號>/<run_id>/result-round<輪>.json`。
+鍵與範例只有兩處:`docs/DISPATCH-TEMPLATE.md` §8.5 與 `tickets/SCHEMA.md`;照抄,
+不要自己發明欄位。寫不出來的欄位**照實留空**(`null` / `[]`)不要編 ——
+編一個數字進去,與量過那個數字長得一樣。"""
+DELIVERY_NOTE_BYTES = len(DELIVERY_NOTE.encode("utf-8"))
 # 第一段,**固定文字、先扣預算**,放在標題之後、先讀清單之前(D-016,#16):產品負責人
 # 2026-09-21 原話——「這樣比較快」不是判準,先算 token。所有角色與模型都帶,量在最前面
 # 的三行裡,讀的人第一眼就看得到。
@@ -252,7 +263,8 @@ def pack(root, role, model, max_bytes, override=""):
     scaffold = ("## 角色卡(節錄)\n\n\n## 共用規矩節錄\n\n\n"
                 "## 你這個模型的記憶(節錄)\n\n\n")
     room = max(max_bytes - len(fixed.encode("utf-8"))
-               - len(scaffold.encode("utf-8")) - 260 - MEMORY_NOTE_BYTES - 1, 0)
+               - len(scaffold.encode("utf-8")) - 260 - MEMORY_NOTE_BYTES
+               - DELIVERY_NOTE_BYTES - 1, 0)
     cut = []
     # 預算順序 = 重要性順序:角色卡(你是誰)> 共用規矩(你會被擋在哪)>
     # 模型記憶(你自己踩過什麼)。
@@ -300,11 +312,13 @@ def pack(root, role, model, max_bytes, override=""):
     text = "\n".join(out)
     # 最後一道:**組出來的整份**再量一次。上面的分配是估的,而估錯的那一次要在這裡
     # 被擋住,不是在呼叫者那裡變成一份超過上限的派工文。
-    # 記憶回寫段在這一刀**之外**:先量給它,砍的是前面那幾份 —— 它是固定文字,
-    # 砍到一半的「只在三種時刻寫」會變成「隨時可以寫」。
-    text, _ = clip(text, max_bytes - MEMORY_NOTE_BYTES - 1,
+    # 記憶回寫段與結構化交付段在這一刀**之外**:先量給它們,砍的是前面那幾份 ——
+    # 它們是固定文字,砍到一半的「只在三種時刻寫」會變成「隨時可以寫」,砍到一半的
+    # 「照實留空不要編」會變成「留空」。
+    text, _ = clip(text, max_bytes - MEMORY_NOTE_BYTES - DELIVERY_NOTE_BYTES - 4,
                    "`%s` 與上面列的那幾份" % rel)
-    return text.rstrip("\n") + "\n\n" + MEMORY_NOTE
+    # 記憶回寫**留在最後一行**:它是收工前最後一個動作,而讀的人從尾巴往回讀。
+    return (text.rstrip("\n") + "\n\n" + DELIVERY_NOTE + "\n\n" + MEMORY_NOTE)
 
 
 def cmd_pack(args):
@@ -323,9 +337,10 @@ def cmd_pack(args):
         return 1
     sys.stdout.write(text if text.endswith("\n") else text + "\n")
     if args.stats:
-        sys.stderr.write("rules: %s %d bytes(上限 %d;不追求快 %d bytes;記憶回寫 %d bytes)\n"
-                         % (role, size, args.max_bytes,
-                            EFFICIENCY_NOTE_BYTES, MEMORY_NOTE_BYTES))
+        sys.stderr.write("rules: %s %d bytes(上限 %d;不追求快 %d bytes;"
+                         "結構化交付 %d bytes;記憶回寫 %d bytes)\n"
+                         % (role, size, args.max_bytes, EFFICIENCY_NOTE_BYTES,
+                            DELIVERY_NOTE_BYTES, MEMORY_NOTE_BYTES))
     return 0
 
 
