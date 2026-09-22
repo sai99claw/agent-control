@@ -90,6 +90,25 @@ VERIFY_CASE = """diff -ruN base/verify/example/test_ticket_1.py work/verify/exam
 +        self.assertTrue(True)
 """
 
+# 重套那幾條用一個**有上下文**的檔。三向合併看的就是上下文,而一行的檔沒有上下文:
+# 主線在唯一那一行旁邊動一下,對 git 來說就是同一塊被兩邊改了(`git rebase` 自己也
+# 衝突)。拿一行的檔去量,量到的是「模糊比對敢不敢猜」,不是重套對不對。
+WIDE = "序\n一\n二\nold\n三\n四\n跋\n"
+
+WIDE_CHANGE = """diff -ruN base/src/wide.txt work/src/wide.txt
+--- base/src/wide.txt\t2026-09-21 10:00:00
++++ work/src/wide.txt\t2026-09-21 10:00:00
+@@ -1,7 +1,7 @@
+ 序
+ 一
+ 二
+-old
++new
+ 三
+ 四
+ 跋
+"""
+
 
 class ApplyBase(Sandbox):
 
@@ -284,23 +303,42 @@ class ThingsItRefuses(ApplyBase):
 
 
 class Rebase(ApplyBase):
-    """落地前把 patch 套到**當前主線**的副本,重生清單,出一份乾淨的 diff(D-012)。"""
+    """落地前把 patch 重套到**當前主線**,重生清單,出一份乾淨的 diff(D-012)。
+
+    重套是**三向合併**:祖先 = 票的 `base_sha`、我方 = 當前主線、對方 = base_sha + patch
+    (#17)。以前這裡是 GNU `patch -F 2`,而判失敗只看 `.rej` —— 上下文走遠的時候
+    `patch` 會整支 fatal 掉(「misordered hunks」)、**一個 `.rej` 都不留**,於是 0 byte
+    的檔案被印成「乾淨的 diff」,一路要到下一步 `git apply` 才喊「一個檔頭都沒有」。
+    """
+
+    def setUp(self):
+        super(Rebase, self).setUp()
+        self.write("src/wide.txt", WIDE)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "主線上先有一個有上下文的 src/wide.txt")
+
+    def main_moves_near_the_patch(self):
+        """主線在 patch 那一塊**旁邊**動一行:三向合併過得去,而重生的 diff 要說得出
+        主線這一行 —— 那正是「對今天的主線說的」的意思。"""
+        self.write("src/wide.txt", WIDE.replace("一\n", "壹\n", 1))
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "主線在隔壁那一行走遠了")
+
+    def rebased(self, ident="1"):
+        out = os.path.join(self.repo, "reports", "t%s" % ident, "patch-rebased.diff")
+        with open(out, encoding="utf-8") as handle:
+            return out, handle.read()
 
     def test_it_rebuilds_a_clean_diff_against_todays_main(self):
         self.make("1")
-        # 主線往前走一步:patch 的上下文位移了,`git apply` 會拒絕,GNU patch 吃得下。
-        self.write("src/a.txt", "一行前言\nold\n")
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "主線走遠一步")
-        done = self.apply("rebase", "1", self.patch_file("p.diff", CHANGE))
+        self.main_moves_near_the_patch()
+        done = self.apply("rebase", "1", self.patch_file("p.diff", WIDE_CHANGE))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        out = os.path.join(self.repo, "reports", "t1", "patch-rebased.diff")
+        out, text = self.rebased()
         self.assertTrue(os.path.exists(out), done.stdout)
-        with open(out, encoding="utf-8") as handle:
-            text = handle.read()
-        self.assertIn("--- base/src/a.txt", text)
+        self.assertIn("--- base/src/wide.txt", text)
         self.assertIn("+new", text)
-        self.assertIn("一行前言", text, "重生出來的 diff 要是對今天的主線說的")
+        self.assertIn("壹", text, "重生出來的 diff 要是對今天的主線說的")
 
     def test_a_ticket_without_base_sha_names_the_missing_field(self):
         self.make("1", base_sha="")
@@ -310,18 +348,27 @@ class Rebase(ApplyBase):
         self.assertFalse(os.path.exists(os.path.join(self.home, "repo-wt", "rebase-t1")),
                          "答不出原 patch 的版本時不該先做一份看似可用的副本")
 
+    def test_a_base_sha_the_repo_does_not_have_is_named_before_any_copy(self):
+        """`base_sha` 是三向合併的祖先。取不出祖先的時候沒有任何一棵樹算得出來 ——
+        而「算不出來」不可以長得像「算出來是空的」。"""
+        self.make("1", base_sha="0" * 40)
+        done = self.apply("rebase", "1", self.patch_file("p.diff", CHANGE))
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("0" * 40, done.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.home, "repo-wt", "rebase-t1")),
+                         "取不出祖先時不該先做一份看似可用的副本")
+
     def test_the_rebuilt_diff_applies_cleanly_through_the_normal_entry(self):
         """重生的 diff 要**能餵回這一支自己** —— 不然它只是一個好看的檔。"""
         self.make("1")
-        self.write("src/a.txt", "一行前言\nold\n")
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "主線走遠一步")
+        self.main_moves_near_the_patch()
         self.assertEqual(
-            self.apply("rebase", "1", self.patch_file("p.diff", CHANGE)).returncode, 0)
-        out = os.path.join(self.repo, "reports", "t1", "patch-rebased.diff")
+            self.apply("rebase", "1", self.patch_file("p.diff", WIDE_CHANGE)).returncode, 0)
+        out, _ = self.rebased()
         done = self.apply("1", out)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.git("show", "t1:src/a.txt"), "一行前言\nnew\n")
+        self.assertEqual(self.git("show", "t1:src/wide.txt"),
+                         WIDE.replace("一\n", "壹\n", 1).replace("old\n", "new\n"))
 
     def test_a_deletion_comes_back_with_dev_null_on_the_plus_side(self):
         """重生出來的 diff 自己就是下一步的輸入,所以刪檔那一側要**這裡**改好 ——
@@ -329,21 +376,89 @@ class Rebase(ApplyBase):
         self.make("1")
         done = self.apply("rebase", "1", self.patch_file("p.diff", DELETE))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        with open(os.path.join(self.repo, "reports", "t1", "patch-rebased.diff"),
-                  encoding="utf-8") as handle:
-            text = handle.read()
-        self.assertIn("+++ /dev/null", text)
+        self.assertIn("+++ /dev/null", self.rebased()[1])
 
-    def test_leftover_rej_files_are_a_failure_not_a_warning(self):
-        """**`.rej` 數量 ≠ 0 一律當失敗**:「套了但有幾塊沒進去」與「全套進去了」
-        在退出碼上長得一樣(D-012 第 2 點)。"""
+    def test_a_three_way_conflict_fails_and_names_the_file_and_the_hunk(self):
+        """「套了但有幾塊沒進去」與「全套進去了」在退出碼上長得一樣(D-012 第 2 點),
+        所以衝突要非零 —— 而且要指名到**檔與行**:「有問題」不是一個可以執行的動作。
+
+        **變異**:把 `gitw merge` 那一段的 `exit 3` 改成 `:` → 這一條紅。
+        """
         self.make("1")
-        self.write("src/a.txt", "完全不一樣的內容\n")
+        self.write("src/wide.txt", "序\n一\n二\n完全不一樣的內容\n三\n四\n跋\n")
         self.git("add", "-A")
-        self.git("commit", "-q", "-m", "主線把那個檔重寫了")
-        done = self.apply("rebase", "1", self.patch_file("p.diff", CHANGE))
+        self.git("commit", "-q", "-m", "主線把同一行重寫了")
+        done = self.apply("rebase", "1", self.patch_file("p.diff", WIDE_CHANGE))
         self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
-        self.assertIn(".rej", done.stderr)
+        # 指名要是**自己說的那一句**,不是順手轉印的 git 輸出 —— 轉印那一段換個
+        # git 版本就換句話,而這一條問的是「接手的人看不看得到要動哪個檔的哪幾行」。
+        self.assertIn("衝突檔 src/wide.txt", done.stdout, "衝突的檔名要在 stdout 上")
+        self.assertRegex(done.stdout, r"第 \d+ 行:<<<<<<<")
+        self.assertFalse(
+            os.path.exists(os.path.join(self.repo, "reports", "t1",
+                                        "patch-rebased.diff")),
+            "衝突的時候不該留下一份看起來可以餵給下一步的 diff")
+
+    def test_an_empty_rebuilt_diff_is_never_called_clean(self):
+        """🩸 #17:`patch(1)` 在上下文走遠時整支 fatal 掉、**不留 `.rej`**,於是舊版印
+        「乾淨的 diff」而檔案是 0 byte,要到下一步 `git apply` 才喊「一個檔頭都沒有」。
+        **「沒有東西可做」與「做完了」長得一樣**,所以 0 byte 一定要自己喊。
+
+        **變異**:把 `[ ! -s "$out" ]` 那一段拿掉 → 這一條紅(rc 回 0、又印「乾淨的 diff」)。
+        """
+        self.make("1")
+        # 主線上已經有 patch 要做的那件事:三向合併過得去,但重套出來的樹 == 主線。
+        self.write("src/wide.txt", WIDE.replace("old\n", "new\n"))
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "主線上已經是 new 了")
+        out = self.patch_file("rebased.diff", "")
+        done = self.apply("rebase", "1", self.patch_file("p.diff", WIDE_CHANGE), "-o", out)
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(os.path.getsize(out), 0)
+        self.assertNotIn("乾淨的 diff", done.stdout, done.stdout)
+        self.assertIn("0 byte", done.stderr, done.stderr)
+
+    def test_the_rebuilt_tree_is_what_git_rebase_itself_would_have_produced(self):
+        """重套的定義就是 rebase,所以答案要跟 **git 自己 rebase** 出來的那一棵樹
+        逐位元相同 —— 不然這一支只是「某種會猜的東西」,而它猜錯的那一次沒有人會知道。
+
+        **變異**:把三向合併換成「把 patch 那一版直接蓋上去」
+        (`gitw merge …` → `gitw checkout ac-rebase-ticket -- .`)→ 這一條紅。
+        """
+        import subprocess
+        self.make("1")
+        self.main_moves_near_the_patch()
+        patch = self.patch_file("p.diff", WIDE_CHANGE)
+        self.assertEqual(self.apply("rebase", "1", patch).returncode, 0)
+        out, _ = self.rebased()
+        done = self.apply("1", out)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+        # 對照組:同一份 patch 在 base_sha 上 commit,然後讓 **git 自己** rebase 到主線。
+        where = os.path.join(self.home, "wt", "git-rebase")
+        self.git("worktree", "add", "-q", "-b", "g1", where,
+                 self.load_ticket("1")["base_sha"])
+        plain = subprocess.run(["git", "-C", where, "apply", "-p1", patch],
+                               capture_output=True, text=True, env=self.env())
+        self.assertEqual(plain.returncode, 0, plain.stdout + plain.stderr)
+        self.git("add", "-A", cwd=where)
+        self.git("commit", "-q", "-m", "t1 的那一手", cwd=where)
+        self.git("rebase", "main", cwd=where)
+
+        self.assertEqual(self.git("rev-parse", "t1^{tree}"),
+                         self.git("rev-parse", "g1^{tree}"),
+                         "重套出來的樹與 git 自己 rebase 的不是同一棵")
+
+    def test_a_patch_that_does_not_fit_its_own_base_sha_is_refused(self):
+        """三向合併的「對方」是 base_sha + patch。patch 套不回自己的 base_sha,就代表
+        票面上那一格是錯的 —— 這時候猜出來的任何一棵樹都沒有意義。
+
+        **變異**:把 `gitw apply` 後面的 `exit 3` 改成 `:` → 這一條紅。
+        """
+        self.make("1", base_sha=self.git("rev-list", "--max-parents=0", "main").strip())
+        done = self.apply("rebase", "1", self.patch_file("p.diff", WIDE_CHANGE))
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertIn("base_sha", done.stderr)
 
 
 if __name__ == "__main__":

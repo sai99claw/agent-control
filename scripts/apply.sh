@@ -22,8 +22,9 @@
 #
 # ## 退出碼
 #   0 套好、commit 好了      2 用法 / 票的問題(找不到票、沒有 base_sha)
-#   3 檔頭不合格或 `--check` 不過(rebase 那一支的 `.rej`≠0 也是 3)
-#   4 套完的比對不過         5 動到 `allowed_write_paths` 以外
+#   3 檔頭不合格或 `--check` 不過(rebase 那一支的三向合併衝突也是 3)
+#   4 套完的比對不過(rebase 那一支的 **0 byte diff** 也是 4)
+#   5 動到 `allowed_write_paths` 以外
 set -u
 # `AC_ROOT` 優先:被 `gate.sh --auto-fix` 叫到的時候,這支檔案住在**副本**裡,
 # 而票、reports 與收件匣住在主 repo。照 `$0` 算根會把它們寫進一個等一下會被
@@ -153,10 +154,19 @@ PY
 # ------------------------------------------------------------------ rebase
 #
 # 連續落地幾張票,**幾乎一定**撞到所有票都往尾端附加的登記檔與自動產生的清單
-# (D-012)。所以落地前把 patch 套到「當前主線」的副本上,用 GNU `patch`(它吃 fuzz、
-# 會自己找位移),重生清單,再從那份副本出一份乾淨的 diff。
-# **`.rej` 數量 ≠ 0 一律當失敗** —— 「套了但有幾塊沒進去」與「全套進去了」在退出碼上
-# 長得一樣。
+# (D-012)。所以落地前把 patch 重套到「當前主線」上,重生清單,再出一份乾淨的 diff。
+#
+# ## 重套的方式是**三向合併**,不是模糊比對(#17)
+#   祖先 = 票的 `base_sha`(patch 就是對那一版做的)
+#   我方 = 當前主線      對方 = `base_sha` + 這份 patch
+# 所以 patch 先**嚴格**套回它自己的 base_sha(`git apply`,不吃 fuzz);套不上就代表
+# 票面的 `base_sha` 與這份 patch 對不起來,當場停。
+#
+# 🩸 以前這裡是 GNU `patch -F 2`,而判失敗只看 `.rej`:上下文走遠的時候 `patch` 會整支
+# **fatal** 掉(「misordered hunks! output would be garbled」),退出碼 2、**一個 `.rej`
+# 都不留**。於是那個 `|| echo` 把退出碼吞掉、`.rej` 檢查也是空的,最後印出「乾淨的
+# diff」而檔案是 **0 byte** —— 下一步 `git apply` 才喊「一個檔頭都沒有」(#17)。
+# 現在三件事都守:**退出碼看**、**衝突指名到檔與行**、**空的 diff 一律非零**。
 cmd_rebase() {
     ident=$1
     patch_file=$2
@@ -178,25 +188,80 @@ PY
     fi
     [ -f "$patch_file" ] || { echo "apply: 找不到 patch $patch_file" >&2; exit 2; }
     patch_file=$(cd "$(dirname "$patch_file")" && pwd)/$(basename "$patch_file")
+    # 祖先取不出來就不能三向合併。**在做副本之前**問,不然留下一份看似可用的副本。
+    if ! git -C "$ROOT" rev-parse -q --verify "$base^{tree}" >/dev/null 2>&1; then
+        echo "apply: 票 #$ident 的 base_sha=$base 不在這個 repo 裡 —— 取不出三向合併的祖先" >&2
+        exit 2
+    fi
     [ -n "$out" ] || out=$ROOT/$(cfg reports_dir reports)/t$ident/patch-rebased.diff
     mkdir -p "$(dirname "$out")"
     WORK=$WTBASE/rebase-t$ident
     rm -rf "$WORK"
-    mkdir -p "$WORK/base"
+    mkdir -p "$WORK/base" "$WORK/work"
     git -C "$ROOT" archive "$MAIN" | tar -x -C "$WORK/base" || {
         echo "apply: 取不出 $MAIN 的副本" >&2; exit 2; }
-    cp -R "$WORK/base" "$WORK/work"
+    git -C "$ROOT" archive "$base" | tar -x -C "$WORK/work" || {
+        echo "apply: 取不出 base_sha=$base 的副本" >&2; exit 2; }
     echo "apply: 票 #$ident patch base_sha=$base"
     echo "apply: 副本 $WORK(base = 當前主線 $(git -C "$ROOT" rev-parse --short "$MAIN"))"
-    ( cd "$WORK/work" && patch -p1 -F 2 --no-backup-if-mismatch -i "$patch_file" ) \
-        || echo "apply: patch 有幾塊沒進去(往下看 .rej)"
-    rej=$(cd "$WORK/work" && find . \( -name '*.rej' -o -name '*.orig' \) | sed 's/^\.\///')
-    if [ -n "$rej" ]; then
-        echo "apply: .rej / .orig 不是零 —— 這一份**沒有全套進去**(D-012 第 2 點):" >&2
-        echo "$rej" | sed 's/^/apply:   /' >&2
-        echo "apply: 副本留在 $WORK,自己看那幾塊要怎麼進去" >&2
+
+    # `$WORK/work` 先當成一顆**拋棄式的 git**:祖先一個 commit、對方一個 commit,
+    # 我方換成當前主線再一個 commit,然後讓 git 自己做那次三向合併。最後 `.git` 會被
+    # 刪掉,交出去的還是一個單純的目錄(`diff -ruN base work` 照舊)。
+    gitw() {
+        git -C "$WORK/work" -c user.name=agent-control \
+            -c user.email=agent-control@invalid -c commit.gpgsign=false "$@"
+    }
+    gitw init -q >/dev/null 2>&1 || { echo "apply: 副本裡開不了暫時的 git" >&2; exit 2; }
+    gitw symbolic-ref HEAD refs/heads/ac-rebase-base
+    # `-f`:repo 自己的 `.gitignore` 蓋不到這一顆暫時的 git —— 少一個被忽略的檔,
+    # 最後那份 diff 就多一段假的刪檔。
+    gitw add -A -f >/dev/null || { echo "apply: 暫時的 git 收不進祖先那一版" >&2; exit 2; }
+    gitw commit -q -m "base_sha $base" >/dev/null \
+        || { echo "apply: 暫時的 git commit 不了祖先那一版" >&2; exit 2; }
+    gitw checkout -q -b ac-rebase-ticket
+
+    # 對方:patch **嚴格**套回自己的 base_sha。這裡不吃 fuzz —— 這一步要是要靠猜,
+    # 那後面三向合併的「對方」就不是這份 patch 真正的意思。
+    if ! gitw apply -p1 "$patch_file" 2>"$WORK/apply.err"; then
+        sed 's/^/apply:   /' "$WORK/apply.err" >&2
+        echo "apply: patch 套不回它自己的 base_sha=$base —— 這份 patch 不是對那一版做的" >&2
+        echo "apply: 副本留在 $WORK" >&2
         exit 3
     fi
+    gitw add -A -f >/dev/null
+    if gitw diff --cached --quiet; then
+        echo "apply: patch 套進 base_sha=$base 之後一個位元都沒變 —— 空的 patch 不是綠" >&2
+        exit 4
+    fi
+    gitw commit -q -m "t$ident patch" >/dev/null \
+        || { echo "apply: 暫時的 git commit 不了 patch 那一版" >&2; exit 2; }
+
+    # 我方:把工作樹換成當前主線。`.git` 以外全刪再倒進去,刪檔才進得了 commit。
+    gitw checkout -q ac-rebase-base
+    find "$WORK/work" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+    cp -R "$WORK/base/." "$WORK/work/"
+    gitw add -A -f >/dev/null
+    if ! gitw diff --cached --quiet; then
+        gitw commit -q -m "當前主線 $(git -C "$ROOT" rev-parse --short "$MAIN")" >/dev/null \
+            || { echo "apply: 暫時的 git commit 不了當前主線" >&2; exit 2; }
+    fi
+
+    # 三向合併。**衝突要指名到檔與行** —— 「有問題」不是一個可以執行的動作。
+    if ! gitw merge --no-ff --no-edit ac-rebase-ticket >"$WORK/merge.out" 2>&1; then
+        echo "apply: 三向合併有衝突 —— 祖先 base_sha=$base / 我方 當前主線 / 對方 這份 patch"
+        gitw diff --name-only --diff-filter=U | while read -r name; do
+            [ -n "$name" ] || continue
+            echo "apply:   衝突檔 $name"
+            grep -n '^<<<<<<<\|^=======$\|^>>>>>>>' "$WORK/work/$name" 2>/dev/null \
+                | sed 's/^\([0-9][0-9]*\):/apply:     第 \1 行:/'
+        done
+        sed 's/^/apply:   /' "$WORK/merge.out"
+        echo "apply:   副本留在 $WORK(衝突標記還在檔案裡),自己看那幾塊要怎麼進去"
+        echo "apply: 三向合併有衝突,沒有出 diff" >&2
+        exit 3
+    fi
+    rm -rf "$WORK/work/.git" "$WORK/apply.err" "$WORK/merge.out"
     hook=$(cfg apply.regen_cmd "")
     if [ -n "$hook" ]; then
         echo "apply: 重生清單 —— $hook"
@@ -234,6 +299,15 @@ with open(path, "w", encoding="utf-8") as handle:
 if fixed:
     print("apply: 把 %d 段刪檔的 `+++` 側改成 /dev/null(不改的話 git apply 只會清空)" % fixed)
 PY
+    # 🩸 **0 byte 不是乾淨**(#17)。重生出來的 diff 空掉的時候,前面每一句都還是
+    # 成功的樣子,而「沒有東西可做」與「做完了」在這裡長得一模一樣 —— 一路要等到
+    # 下一步 `git apply` 喊「一個檔頭都沒有」才會有人發現。
+    if [ ! -s "$out" ]; then
+        echo "apply: 重生出來的 diff 是 **0 byte** —— 空的 diff 不是乾淨的 diff" >&2
+        echo "apply:   重套之後的樹與當前主線一模一樣:這份 patch 的改動可能已經在主線上了" >&2
+        echo "apply:   副本留在 $WORK,$out 沒有東西可以餵給下一步" >&2
+        exit 4
+    fi
     echo "apply: 乾淨的 diff -> $out"
     echo "apply: 下一步 —— sh scripts/apply.sh $ident $out"
     exit 0
