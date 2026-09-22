@@ -25,7 +25,7 @@
   "attempt": 0,
   "base_sha": "cdf2328bfa63bb2dcf7f1b7d3b2117ff2684ec9a",
   "state": "Ready",
-  "state_version": 4,
+  "state_version": 6,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -34,5 +34,16 @@
     "run": "",
     "notes": ""
   },
-  "outline": "使用者 2026-09-22 提案:worker 重現單隻 case,pass 再跑 5 次,全 pass 當系統怪/隨機 bug 重送;主線補一條:整組原順序也要綠,否則是順序污染。gate.example.sh 與 status.py failures/record_flakes 那一段;flaky_threshold 用既有 config。閾值(5 次、整組 1 次)寫進 board/config.json 可調。"
+  "outline": "使用者 2026-09-22 提案:worker 重現單隻 case,pass 再跑 5 次,全 pass 當系統怪/隨機 bug 重送;主線補一條:整組原順序也要綠,否則是順序污染。gate.example.sh 與 status.py failures/record_flakes 那一段;flaky_threshold 用既有 config。閾值(5 次、整組 1 次)寫進 board/config.json 可調。",
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "f60fde6ea092a053ce3434d764fbd64abd24f1c1",
+    "note": "flake 自動判定:單跑 5 次 + 原順序整組綠才自動重送;單跑綠整組紅標 order_dependent",
+    "at": "2026-09-22T11:25:50+08:00",
+    "state_version": 5
+  },
+  "verify_strings": [
+    "order_dependent"
+  ]
 }
