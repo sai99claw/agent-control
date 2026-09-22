@@ -25,7 +25,7 @@
   "attempt": 0,
   "base_sha": "cdf2328bfa63bb2dcf7f1b7d3b2117ff2684ec9a",
   "state": "InReview",
-  "state_version": 8,
+  "state_version": 9,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -43,5 +43,8 @@
     "at": "2026-09-22T12:11:49+08:00",
     "state_version": 8
   },
-  "repair_round": 2
+  "repair_round": 2,
+  "verify_strings": [
+    "env.suspect"
+  ]
 }
