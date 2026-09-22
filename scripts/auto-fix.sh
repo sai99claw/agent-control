@@ -385,7 +385,8 @@ PY
         --kv run_id="$RUN_ID" --kv round="$r"
     # `AC_ROOT=$ROOT`:閘門在**副本**裡跑,但狀態檔與收件匣要寫回**主 repo**
     # —— 不然這一輪的結果留在一個等一下會被收掉的目錄裡,而讀它的人在主 repo。
-    ( cd "$WT" && AC_ROOT=$ROOT AC_ROUND=$r AC_PATCH=$PATCH_OUT \
+    ( cd "$WT" && AC_ROOT=$ROOT AC_WT=$WT AC_ROUND=$r AC_TICKET=$ID \
+        AC_PATCH=$PATCH_OUT \
         AC_PREV_EVIDENCE=$EVIDENCE AC_IN_AUTOFIX=1 \
         sh -c "$gate_cmd" )
     grc=$?

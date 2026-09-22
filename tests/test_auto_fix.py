@@ -379,6 +379,16 @@ echo "rerun $AC_ROUND" >> "$AC_TEST_LOG"
         self.assertEqual(rows[0]["round"], "2")
         self.assertTrue(rows[0]["run_id"])
 
+    def test_a_configured_rerun_command_receives_the_ticket_number(self):
+        self.set_worker(WORKER_FIXES,
+                        'printf %s "$AC_TICKET" > "$AC_WT/seen"')
+        self.ticket_ready()
+        wt = self.first_round()
+        done = self.auto_fix()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        with open(os.path.join(wt, "seen"), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "1")
+
     def test_the_gate_hook_dispatches_against_the_main_repo_not_the_worktree(self):
         """`gate.sh --branch --ticket n --auto-fix` 在**副本**裡跑,而票、reports 與
         收件匣住在主 repo。照 `$0` 算根的話,這一輪的結果會寫進一個等一下就被收掉的

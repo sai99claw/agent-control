@@ -83,6 +83,8 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
    + failures 逐條 excerpt + 上一輪 EVIDENCE + 第幾輪,用 `board/config.json` 的 `worker.command`
    (預設 `claude -p --model opus`)在副本裡跑,收 `patch-round<r>.diff` 與 `EVIDENCE-round<r>.md`,
    再走 `apply.sh` → `gate.sh --branch --ticket`。每輪結束 `scripts/ticket.py round <n> <第幾輪> --red|--green`。
+   專案自訂的 `gate.rerun_cmd` 會在 worktree 內執行,並收到 `AC_ROOT`(主 repo)、
+   `AC_WT`(這張票的 worktree)、`AC_ROUND`(本輪)與 `AC_TICKET`(票號)。
    **綠了停在 `InReview`** —— 覆核不自動。
 4. **三輪耗盡不是一句話,是一個狀態轉換**:`round` 在第 `retry_limit+1` 輪仍紅時把票轉 **Blocked**、`owner` 設成 `main`,並發 `ticket.attempt.failed`。舊規則只寫「報主線」,而「報了」與「沒報」在票上長得一樣。
 5. 停下來報主線的**三種**情況,每一種都寫一則收件匣:worker 判斷**票寫錯 / 需要裁示**
@@ -167,4 +169,3 @@ sha 變了就是不同的問題,快取一定失效;單獨跑的人(沒有 `AC_RU
 
 ## 派工的並行上限
 同時最多兩個會起瀏覽器的 agent;全套並跑時不再起瀏覽器型 agent(2026-09-20 旅程「11-batch」在滿載下紅五次,每次白跑一輪全套)。優先序改變時把低優先的 agent 停掉,不要讓它自己滾。
-
