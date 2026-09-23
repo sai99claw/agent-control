@@ -167,6 +167,19 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 
 設計文件:`docs/DESIGN-ENV-SUSPECT.md`(Fable 設計 session 裁,依 D-018 每個取捨附未來每票省/多花)。結論:`status.json` 的 `environment_suspect` 永遠是 list,空值只有 `[]`;每筆七鍵 `source(statistical|declared) / engine / why / count / threshold / log / line`,缺料 null;`state`/`rc` 不因這格而變;**這格非空 → gate 不自動派 auto-fix**(每次環境紅省一輪 worker)。實作票 #23,tabby 端由同步票帶回;讀端正規化舊檔,不改寫 reports/。
 
+## D-020(2026-09-23)驗證者只證紅,綠由閘門量
+
+設計文件:`docs/DESIGN-VERIFY-CASES.md`(Fable 設計 session,依 D-018 每個取捨附未來每票省/多花;全篇結論皆為讀 code 推的,沒有執行任何腳本、沒有動任何 repo)。起因:驗證者每張票自己搭一套拋棄式參考實作來證明「案例做得到綠」,每張多燒 5 萬到十幾萬 token(#23 sonnet 340K 自報、#647 約 260K、#642 約 294K)。結論(C1–C7,細節見該文件):
+- **C1** 根因排序:主線派工文(三份都明著或等於明著要求「有實作時綠」)> 沒把閘門接上 `verify-case.py check` > 沒範本 > 格式不明確;使用者原先假設的「沒範本、格式不明」只占三分之一的帳。
+- **C2** 驗證者只證「乾淨基底紅、而且紅在自己的斷言」(`verify-case.py red`,新子指令),寫進票的 `verify.baseline{stage:"red"}`;**不搭參考實作、不做產品變異、不證綠**。綠由閘門在實作者 patch 進來時用既有的 `verify-case.py check` 量(#22 做好的,現在沒人自動叫它)。
+- **C3** 驗證者的變異驗紅整條拿掉;oracle 不被騙的證據改成三件機器量的事(基底紅在案例檔自己的 `AssertionError`、candidate 上綠、兩邊案例數相同),`red_lines` 給主線覆核時看。實作者對自己單元測試的變異照舊(D-009 那一半不動)。
+- **C4** 一份範本 `verify/_template_ticket.py`(A 正本、同步到 T)+ 機器 lint(F1–F6,`verify-case.py lint`,閘門叫)。
+- **C5** 閘門接線:`gate.sh --ticket`(A)/ `land-ticket.sh gate`(T)在回歸層之後多兩步 `lint` → `check`;`check` 把 `stage` 從 `red` 升成 `check`;`ticket.py close` 只認 `stage=="check"`(或 `verify_waiver`)。
+- **C6** A 放:範本、lint、`red` 子指令、gate 接線、角色卡、`templates/dispatch-verifier.md`、VERIFICATION/SCHEMA 措辭。T 自備:`land-ticket.sh` 的兩行呼叫、`board/config.json` 禁字清單、fixture、`docs/DISPATCH-COMMON-RULES.md` §133(過期,還在說 VERDICT)。
+- **C7** 四張票,順序:#25 文字(sonnet)→ #26 工具(opus)→ #27 閘門(opus)→ T#650 同步+接線(sonnet);#26 依賴 #25,#27 依賴 #26,T#650 依賴 #25–#27 全落地。
+
+本票(#25)只動文字與一份 ≤60 行範本檔,`verify-case.py` 的 `red`/`lint`/`stage` 實作在 #26,`gate.sh` 接線在 #27。
+
 ## D-021(2026-09-23)專案端記憶備忘的唯一去處:專案自己的 `memory/`,規則包疊兩層
 
 設計文件 `docs/DESIGN-MEMORY-INBOX.md`(Fable 設計 session)。結論:`memory.py note` 寫的 `<repo>/memory/{role,model,project}/` 就是唯一去處,寫入端不改;`roles_dir == memory/role` 的 repo 是正本,否則是專案,`rules.py pack` 疊兩層(正本角色卡 + 專案 memory 主檔與 inbox 尾巴,上限仍 4 KB);`sync-to-project.sh` 不再複製 `*.inbox.md`、永不碰專案 `memory/`(測試釘死);專案 config 的 `memory.applies_to` 指 `memory/`。實測發現:`rules.py pack` 整支沒有 inbox 這個字,inbox 備忘在 A 也要等整理才進規則包。否決甲(專案事實污染所有專案,A inbox 已混入 1 行 T 專屬)與乙(與同步產出物同名同目錄)。A 正本改動另開 opus 票;tabby #648 只做 config 與 `git add memory/`。
