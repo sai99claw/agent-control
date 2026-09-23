@@ -29,15 +29,16 @@
   "allowed_write_paths": [
     "scripts/gate.sh",
     "tests/test_gate.py",
-    "tests/test_ticket_27.py"
+    "tests/test_ticket_27.py",
+    "tests/control_harness.py"
   ],
   "role": "worker",
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "7c5d803bd029620f8dd59d1a60d18c67e99142f0",
+  "base_sha": "141261b033971a76914bc39eddc8b0c597f871f4",
   "state": "Ready",
-  "state_version": 2,
+  "state_version": 6,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -45,11 +46,12 @@
       "tests/test_ticket_27.py"
     ],
     "tags": [],
-    "run": "",
-    "notes": ""
+    "run": "python3 -m unittest tests.test_ticket_27",
+    "notes": "驗證者(sonnet,只證紅)7 條:marker 檔在 base_sha 之後才加,check 的基底副本天生沒有(紅)、候選有(綠);A5 恆假案例逼 ok:false 走 auto-fix 假 worker"
   },
   "decision_refs": [
     "D-020"
   ],
-  "outline": "依 docs/DESIGN-VERIFY-CASES.md §三三步驟接線;shell + 沙盒 repo 整合測試,gate.sh 已 600 行、要繞開既有 auto-fix 分支。依賴 A #26(verify-case.py 的 lint/check 子指令要先存在)。驗證者案例 tests/test_ticket_27.py。"
+  "outline": "依 docs/DESIGN-VERIFY-CASES.md §三三步驟接線;shell + 沙盒 repo 整合測試,gate.sh 已 600 行、要繞開既有 auto-fix 分支。依賴 A #26(verify-case.py 的 lint/check 子指令要先存在)。驗證者案例 tests/test_ticket_27.py。",
+  "needs_verifier": false
 }
