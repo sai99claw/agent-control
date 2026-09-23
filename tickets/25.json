@@ -1,0 +1,92 @@
+{
+  "id": "25",
+  "subject": "驗證者只證紅:派工文字改法 + verify/_template_ticket.py 範本 + D-020",
+  "created": "2026-09-23T13:29:14+08:00",
+  "objective": "把 docs/DESIGN-VERIFY-CASES.md §八列的六處原句改掉(memory/role/verifier.md、templates/dispatch-verifier.md、docs/DISPATCH-TEMPLATE.md、docs/VERIFICATION.md、tickets/SCHEMA.md),新增 verify/_template_ticket.py(§四全文,≤60 行)與 scripts/sync-to-project.sh 的同步條,docs/DECISIONS.md 記一條 D-020;派工文不再要求驗證者搭參考實作、做變異、等 patch",
+  "acceptance": [
+    "memory/role/verifier.md 的 ② 段含『rc=0 才算交件』『綠不是你的事』『不搭參考實作、不做變異、不等 patch』,不再含『拋棄式參考實作』",
+    "templates/dispatch-verifier.md 第 2 樣整段換成新句(含『verify-case.py red』),不再含『有實作時綠』;第 1 樣含『verify/_template_ticket.py』與『驗收編號』",
+    "docs/DISPATCH-TEMPLATE.md §9 含『rules.py pack verifier』,且明列派工文不准出現『有實作時綠』『參考實作』『每條一個變異』這三串字",
+    "docs/VERIFICATION.md §流程第二段含『閘門做』,不再以『拿到指定的 patch 之後』描述驗證者何時跑 check",
+    "tickets/SCHEMA.md 的 verify.baseline 段含『red』與『check』兩個 stage 的說明與『close 只認 check』",
+    "verify/_template_ticket.py 存在、≤60 行,依序含 ## 驗收表 / ## 介面字串 / ## 怎麼做假 / ## 不做 四個標題與 TAGS = 字面 list",
+    "scripts/sync-to-project.sh 新增一條把 verify/_template_ticket.py 複製到 T 同路徑",
+    "docs/DECISIONS.md 新增一條 D-020,摘要 docs/DESIGN-VERIFY-CASES.md 的 C1–C7 裁示"
+  ],
+  "in_scope": [
+    "memory/role/verifier.md",
+    "templates/dispatch-verifier.md",
+    "docs/DISPATCH-TEMPLATE.md",
+    "docs/VERIFICATION.md",
+    "tickets/SCHEMA.md",
+    "verify/_template_ticket.py",
+    "scripts/sync-to-project.sh",
+    "docs/DECISIONS.md"
+  ],
+  "out_of_scope": [
+    "scripts/verify-case.py(red/lint 子指令,見另一張票)",
+    "scripts/gate.sh(接線見另一張票)",
+    "tabby_pool 任一檔案(同步票另開)"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "memory/role/verifier.md",
+    "templates/dispatch-verifier.md",
+    "docs/VERIFICATION.md",
+    "docs/DISPATCH-TEMPLATE.md",
+    "tickets/SCHEMA.md",
+    "verify/_template_ticket.py",
+    "scripts/sync-to-project.sh",
+    "docs/DECISIONS.md",
+    "docs/DESIGN-VERIFY-CASES.md"
+  ],
+  "role": "worker",
+  "model": "sonnet",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "7c5d803bd029620f8dd59d1a60d18c67e99142f0",
+  "state": "Ready",
+  "state_version": 4,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-020"
+  ],
+  "outline": "依 docs/DESIGN-VERIFY-CASES.md(設計 session Fable,2026-09-23)§八逐句改;本票純文字與新增一份 ≤60 行範本檔,沒有可執行的產品行為,建議 verify_waiver(理由:無邏輯可紅,by 主線設定,本票不自己標)。§四的範本全文照抄,不重新設計格式。與 A #26(verify-case.py)、A #27(gate.sh 接線)各自獨立,不互相 depends_on。",
+  "verify_strings": [
+    {
+      "path": "memory/role/verifier.md",
+      "contains": "不搭參考實作、不做變異、不等 patch"
+    },
+    {
+      "path": "templates/dispatch-verifier.md",
+      "contains": "verify-case.py red"
+    },
+    {
+      "path": "docs/DISPATCH-TEMPLATE.md",
+      "contains": "rules.py pack verifier"
+    },
+    {
+      "path": "docs/VERIFICATION.md",
+      "contains": "閘門做"
+    },
+    {
+      "path": "tickets/SCHEMA.md",
+      "contains": "stage=check"
+    },
+    {
+      "path": "docs/DECISIONS.md",
+      "contains": "D-020"
+    }
+  ],
+  "verify_waiver": {
+    "by": "main",
+    "reason": "純文字+範本檔票(D-020);lint 落地後由 T#650 對範本本身跑一次;無獨立驗證者"
+  }
+}

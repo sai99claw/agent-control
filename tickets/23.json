@@ -1,0 +1,149 @@
+{
+  "id": "23",
+  "subject": "status.py 認不出 log 上的 ENVIRONMENT-SUSPECT 行,而 tabby 手改出另一格同名不同形的 environment_suspect —— 同步一次就有一邊被蓋掉;兩條來源要收成同一種形狀",
+  "created": "2026-09-23T11:35:31+08:00",
+  "objective": "status.py 的兩條環境嫌疑來源 —— 自己在程序裡量到的同引擎連紅(#7)、與專案的案例在 log 上留的 ENVIRONMENT-SUSPECT 行(tabby #644)—— 寫進 status.json 的同一格 environment_suspect,形狀照 docs/DESIGN-ENV-SUSPECT.md(設計 session 產出,**開工前它必須已經在 main 上**);metrics.py 的 env/product 分類與看板讀得到這一格;同步到 tabby 之後 #644 的行為不靠專案端手改就還在",
+  "acceptance": [
+    "gate 跑 tests/test_gate.py:33 的 ENVIRONMENT_WAVE,--ticket 7 --no-auto-fix → status.json 的 state==\"env_suspect\";environment_suspect 是 list、長度 1;[0] 七鍵齊全、source==\"statistical\"、engine==\"safari\"、count==8、threshold==8、why 不含數字(正規化過)、line 含原始未正規化訊息的字(例如 101 seconds)",
+    "status.py done --rc 1 --log <a_log 兩行宣告>(fixture 照 T 的 verify/land_preflight/test_ticket_644.py:261-284,再加一行 ENVIRONMENT-SUSPECT: safari session 斷了(#645))→ 2 筆、都 source==\"declared\"、count==1、threshold is None、engine==\"safari\"、why in line、log 等於傳進去的那個路徑;rc==1、failures 仍 3 條",
+    "同一趟兩份 log(gate.log 與 gate.log.rerun)各含 1 行宣告 → 2 筆,log 的 basename 排序等於那兩個檔名 —— 一行一筆,不去重(T 的 demo/test_control.py:484-491 明著要求)",
+    "done 沒有環境檔、log 裡也沒有宣告行 → 這一格**存在**且 == [];start 寫出來的檔也 == [](空值只有 [] 一種寫法)",
+    "同一趟環境檔 1 筆 statistical + log 2 行 declared → 3 筆,順序 statistical 在前,sources 集合 == {statistical, declared}",
+    "run-tests 跑一條會 print(\"ENVIRONMENT-SUSPECT: firefox 假的宣告\") 然後 skip 的案例 → --log 那份檔裡找得到那一行(cmd_run_tests 要把案例 stdout 也導進 log),接著 done --log 得 1 筆 declared",
+    "上面第 2 條之後 events.jsonl 有一則 env.suspect,kv 是 rows=2 sources=declared engines=safari —— 改成**這一格非空就發**,不再只有 rc=86 才發",
+    "gate 跑 ENVIRONMENT_WAVE **不帶** --no-auto-fix(沙盒 worker.command 換成記一行的假指令)→ 假 worker **一次都沒被叫**,stdout 含「環境可疑,不自動派」",
+    "讀端正規化 environment_suspects(data):三份手造 status.json(缺這一格 / {} / 舊形狀非空 dict {\"engine\":\"safari\",\"count\":8})→ 前兩份得 [],第三份得 1 筆 statistical(why 取 message_shape 的值、line==\"\"、log==\"\")",
+    "metrics:既有那條 fixture 改成 list 之後 env_runs=1 product_runs=1;另加一份舊 dict 形狀的 run → env_runs=2(metrics 與 board 一律經正規化函式讀,不直接下標)",
+    "board 首頁:一份 run 帶 1 筆 declared(engine firefox)且 failures 3 條 → 該列含「環境可疑 1 筆」與 firefox,且**仍然**含「紅 3 條」",
+    "auto-fix.sh 被手打時:最新一輪這一格非空 → stdout 印一行「上一輪環境可疑(<engine>:<why>),你確定要派?」,但**仍然照派**(手打就是覆寫)",
+    "docs/DESIGN-ENV-SUSPECT.md 是形狀的唯一真實來源:status.py / gate.sh / auto-fix.sh / metrics.py / board.py 碰這一格的地方註解指得到它,repo 裡不出現第二份形狀規格;docs/WORKFLOW.md 的狀態檔 schema 與 docs/DECISIONS.md 收本條"
+  ],
+  "in_scope": [
+    "scripts/status.py",
+    "scripts/gate.sh",
+    "scripts/auto-fix.sh",
+    "scripts/metrics.py",
+    "board/board.py",
+    "docs/DESIGN-ENV-SUSPECT.md",
+    "docs/WORKFLOW.md",
+    "docs/DECISIONS.md",
+    "docs/REHEARSAL.md",
+    "tests/test_status.py",
+    "tests/test_gate.py",
+    "tests/test_metrics.py",
+    "tests/test_board.py",
+    "tests/test_auto_fix.py"
+  ],
+  "out_of_scope": [
+    "改寫舊的 status.json —— D-019 裁「不改寫舊檔」(一輪一目錄不覆寫是 D-014 的規矩),相容性由讀端正規化吃掉四種空與舊 dict。實測 A 的 reports/ 95 份裡 0 份是非空 dict",
+    "改 tabby 的 demo/test_browsers.py 印行格式 —— D-019 否決案 H:前綴是兩端各留一份的契約,不改",
+    "改 tabby 的 demo/test_control.py / verify/land_preflight/test_ticket_644.py / verify/safari_session/test_ticket_645.py —— 鍵取 T 的超集合就是為了讓它們一個字都不用改;它們紅了代表本票的形狀沒把 T 的行為收進去",
+    "tabby_pool 這個 repo 的任何檔 —— 移除它的手改、跑同步在 T #648",
+    "T 接 status.py run-tests(把 statistical 那條來源接進 T)—— D-019 要求獨立一張 opus 票",
+    "scripts/sync-to-project.sh 的 SCRIPT_LIST(要不要把 gate.sh / metrics.py 也同步,另一張票)",
+    "看板的視覺改版;本票只要求 verdict 那一格多一支判斷與數字正確",
+    "合併同形的 declared 行(D-019 否決案 I:真的太多筆時由 board 摺疊顯示,不在檔裡合併)"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "board/board.py",
+    "docs/DECISIONS.md",
+    "docs/DESIGN-ENV-SUSPECT.md",
+    "docs/REHEARSAL.md",
+    "docs/WORKFLOW.md",
+    "scripts/auto-fix.sh",
+    "scripts/gate.sh",
+    "scripts/metrics.py",
+    "scripts/status.py",
+    "tests/test_auto_fix.py",
+    "tests/test_board.py",
+    "tests/test_gate.py",
+    "tests/test_metrics.py",
+    "tests/test_status.py",
+    "verify/TAGS.d/23.md",
+    "tests/test_ticket_23.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "c9164eda8d724a72dfdf426837c52bcb80566b0d",
+  "state": "Done",
+  "state_version": 20,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [
+      "tests/test_ticket_23.py"
+    ],
+    "tags": [
+      "env-suspect"
+    ],
+    "run": "python3 -m unittest tests.test_ticket_23",
+    "notes": "驗證者(sonnet)13 條照 D-019 驗收表;fixture A = test_gate.ENVIRONMENT_WAVE,fixture T = tabby test_ticket_644 的 SUSPECT_LINE 逐字",
+    "baseline": {
+      "ok": true,
+      "why": "",
+      "at": "2026-09-23T13:31:37+08:00",
+      "files": [
+        "tests/test_ticket_23.py"
+      ],
+      "base_ref": "c9164ed",
+      "base_sha": "c9164eda8d724a72dfdf426837c52bcb80566b0d",
+      "candidate": "2c99d42",
+      "candidate_sha": "2c99d425cebc96034b9c995c5d138130ffa10b83",
+      "baseline": {
+        "rc": 1,
+        "cases": 13,
+        "skipped": 1,
+        "red": [
+          "tests.test_ticket_23.DoneAndStartShapes.test_acceptance_04_the_empty_value_has_exactly_one_spelling",
+          "tests.test_ticket_23.NormalizeOnRead.test_acceptance_09_three_hand_built_shapes_normalize_correctly",
+          "tests.test_ticket_23.NormalizeOnRead.test_acceptance_09_three_hand_built_shapes_normalize_correctly",
+          "tests.test_ticket_23.NormalizeOnRead.test_acceptance_09_three_hand_built_shapes_normalize_correctly",
+          "tests.test_ticket_23.AutoFixManualDispatch.test_acceptance_12_manual_auto_fix_warns_but_still_dispatches",
+          "tests.test_ticket_23.BoardShowsEnvironmentSuspicion.test_acceptance_11_the_run_row_shows_the_suspicion_and_still_shows_the_reds",
+          "tests.test_ticket_23.DoneAndStartShapes.test_acceptance_02_two_declared_lines_in_one_log_become_two_rows",
+          "tests.test_ticket_23.DoneAndStartShapes.test_acceptance_03_two_logs_each_with_one_line_are_not_merged",
+          "tests.test_ticket_23.DoneAndStartShapes.test_acceptance_04_the_empty_value_has_exactly_one_spelling",
+          "tests.test_ticket_23.DoneAndStartShapes.test_acceptance_05_statistical_and_declared_can_both_have_evidence",
+          "tests.test_ticket_23.DoneAndStartShapes.test_acceptance_07_the_event_fires_whenever_non_empty_not_only_rc_86",
+          "tests.test_ticket_23.GateEndToEnd.test_acceptance_01_environment_wave_lands_as_one_statistical_row",
+          "tests.test_ticket_23.GateEndToEnd.test_acceptance_08_gate_without_no_auto_fix_refuses_to_dispatch",
+          "tests.test_ticket_23.MetricsClassification.test_acceptance_10_env_and_product_classify_through_the_normalizer",
+          "tests.test_ticket_23.RunTestsCapturesDeclaredLines.test_acceptance_06_a_printed_declaration_survives_into_the_log",
+          "tests.test_ticket_23.SingleSourceOfShapeTruth.test_acceptance_13_the_shape_lives_in_exactly_one_document"
+        ],
+        "import_failures": [],
+        "log": "/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/verify-case-gcl7pvp3/logs/baseline.log"
+      },
+      "candidate_run": {
+        "rc": 0,
+        "cases": 13,
+        "skipped": 0,
+        "red": [],
+        "import_failures": [],
+        "log": "/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/verify-case-gcl7pvp3/logs/candidate.log"
+      }
+    }
+  },
+  "feature": "控制管線 / 環境紅",
+  "decision_refs": [
+    "D-017",
+    "D-019"
+  ],
+  "verify_strings": [
+    "def environment_suspects(",
+    "def cmd_suspects"
+  ],
+  "outline": "開工前置(**不是這張票要做的判斷**):`docs/DESIGN-ENV-SUSPECT.md` 由另一個設計 session 裁定「唯一一種形狀」並先進 main。本票只實作那份文件,票面刻意不定 list 還是 dict —— 上一次兩邊各自決定形狀,就是這張票要修的東西。\n\n## 兩邊現況(實測)\n\n**A(scripts/status.py,#7 起)**:偵測在 `run-tests` 的**同一個程序裡**做 —— `EnvironmentResult`(:113-170)看同一引擎、同形訊息**連續**紅達門檻(`environment_fail_fast_threshold`,預設 8),立刻 failfast 並把 `{\"engine\",\"message_shape\",\"count\",\"threshold\"}` 寫成 `--suspect-file` 的 JSON、回 rc 86(`ENV_SUSPECT_RC`)。`gate.sh:324` 再用 `done --state env_suspect --environment-log <那份 json>` 把它讀進 `status.json:698` 的 `environment_suspect`。**那一格永遠是 dict**:沒料時是 `{}`,不是 `None`(`None` 只活在記憶體屬性 :125,不落盤)。\n\n**T(tabby_pool scripts/control/status.py,#644,commit 7252364,62 行手改)**:偵測在**案例裡**做 —— `demo/test_browsers.py` 紅的那一刻回頭問 `browsers.screen_is_locked()`,鎖著就改記 skip 並 `print` 一行;外面那支 shell 早就不在現場了,兩端之間的線就是 log 上那一行。`parse_environment_suspects(log_path)`(:268-296)逐行 `line.find(SUSPECT_PREFIX)`(**find,不是 startswith** —— 前綴可以不在行首),每筆吐 `{\"engine\",\"why\",\"line\",\"log\"}`;`cmd_done` 對 `--log` 的每一份都跑一次並 `extend`,寫進 `environment_suspect`(**list**,沒料時 `[]`,不去重)。`cmd_start` 也先放一格 `[]`。\n\n**欄名相同、形狀不同,且 `scripts/status.py` 是 `sync-to-project.sh` 的 `SCRIPT_LIST` 第一支** —— 下一次同步會把 T 那 62 行整片蓋掉,而蓋掉的徵兆只有 T 的 `demo/test_control.py::TheStatusFileSeparatesEnvironmentRedFromCaseRed` 與 `verify/land_preflight/test_ticket_644.py` 會紅。\n\n## 附:T 的 `ENVIRONMENT-SUSPECT` 行格式(去 T 讀出來的,實測)\n\n常數在 `demo/test_browsers.py:841` `ENVIRONMENT_SUSPECT = \"ENVIRONMENT-SUSPECT:\"`;兩個產出點是 `:1293`(螢幕中途上鎖,#644)與 `:1311`(session 斷過一次,#645)。格式 `ENVIRONMENT-SUSPECT: <引擎> <為什麼>`,冒號後一個半角空格,引擎與理由之間一個半角空格;**引擎選填**(`\" \".join(x for x in (engine, said) if x)`,引擎為空就只剩理由)。引擎的真實值域是 `demo/browsers.py:949` 的 `chrome / safari / firefox`(**不是** chromium / webkit)。真實樣本:\n\n```\nENVIRONMENT-SUSPECT: safari 螢幕鎖著 —— 這一條記成環境紅,不是案例紅(#474);解鎖再跑一次\nENVIRONMENT-SUSPECT: firefox session 斷了(#645)\nENVIRONMENT-SUSPECT: 螢幕鎖著 —— 這一條記成環境紅,不是案例紅(#474);解鎖再跑一次\n```\n\n理由裡會有全形破折號、全形分號、全形括號、`#` 與數字;**不會有換行**(單一 `print`,解析端也是 `splitlines()`);冒號無害(切法是固定長度)。T 的引擎切法:`SUSPECT_ENGINE = re.compile(r\"^([a-z][a-z0-9_.-]*)(\\s+|$)\")`,而且**後面必須還有話**才把第一個字當引擎名(只有一個字的那一行整句是理由;中文開頭的整段落在 `why`、`engine` 空字串)。同一輪 `land-ticket.sh` 會把 `gate.log` 與 `gate.log.rerun` 兩份都餵給 `done`,所以同一條紅**會有兩筆** —— 那是 T 明著斷言的行為(`demo/test_control.py:459-518`),合形狀的時候不要把它當 bug 順手去重(要去重就寫進 DESIGN 文件再改,並把 T 那條案例一起改)。\n\n## 看板讀這一格的路(實測)\n\n`board/` 底下**一行都沒有** `environment_suspect`。看板是經 `scripts/metrics.py:196-206` 的唯一判準 `if data.get(\"environment_suspect\")` 把那一輪分成 `env_runs` / `product_runs`(恆等式 `env + product == red`),再由 `board/board.py:597-604` 的 `red_cell()` 印成「紅(env/product)」那一欄(表頭在 `:621-623`),`/t/<票號>` 頁的 run 表只印 `state`。**所以 `data.get(...)` 的真假值是看板的全部依賴** —— 空 dict 與空 list 都是假,兩邊現況剛好都成立;真正會壞的是「有料時的 key 名」(`inbox` 那一頁印 `引擎:` / `同形訊息:`,見 `tests/test_gate.py:160-163`)。新形狀要讓這三處都對得上。\n\n## fixture(兩套都已經有,照抄不要另發明)\n\n- log 片段餵 `done`:`tests/test_status.py` 頂部的 `LOG` / `LOG_ENGINE` 常數 + `tests/control_harness.py` 的 `Sandbox`(`write` / `run_py` / `status_of`)。**T 的真實 log 片段**照 `verify/land_preflight/test_ticket_644.py:261-280` 的 `a_log()` 造:幾行 suspect + 三條真紅 + `Ran 12 tests in 902.418s` / `FAILED (failures=3)` 收尾。\n- 連紅那條路:`tests/test_gate.py:33-45` 的 `ENVIRONMENT_WAVE`(一份會產生 12 條同形 subTest 紅的測試檔)。\n- 旁路:`done --environment-log <json 檔>` 可以直接塞一份既成的嫌疑進去。\n\n## 覆核者要特別看的一格\n\n「兩條路同時有料」那一條。它是唯一一條**只靠讀 code 看不出來對不對**的驗收:合成順序若寫成「後到的整格覆寫」,單獨跑任一條路的測試都會綠。\n\n## verify_waiver(建議,由主線寫,票面不自填)\n\n`{\"by\": \"main\", \"reason\": \"管線腳本票,實作者的單元案例與變異表即驗收;無獨立驗證者(同 #22)\"}`。理由:這張票的驗收全在 A 自己的 `tests/`,沒有產品畫面可讓第三人量基準;而 `verify.tags` 只認 `verify/TAGS.md` 登記過的,本票若要開新標籤得同時寫 `verify/TAGS.d/23.md`(建議 `env-suspect`,與 T 的同名)。\n---\n\n## 形狀已裁定(2026-09-23,D-019) —— 上面「票面不定形狀」那幾句已作廢\n\n`docs/DESIGN-ENV-SUSPECT.md`(A main `c9164ed`,D-019;**D-018 是另一條原則**,不要引錯)裁定:\n\n- `environment_suspect` **永遠是一個 list**,空值**只有** `[]` 一種寫法(現在 A 有四種:缺格 / `{}` / docstring 說 None / `start` 根本不寫)。\n- 每一筆固定七鍵、一個都不缺、缺料填 `null`:`source`(只有 `\"statistical\"` / `\"declared\"` 兩個字面)、`engine`、`why`、`count`、`threshold`、`log`、`line`。\n- `source` 是**每一筆**的欄位,不是頂層分兩格。`statistical` = #7 的 `EnvironmentResult` 連紅統計;`declared` = 案例自己印的那一行。\n- `why`:statistical = 原 `message_shape`(**改名併進來**);declared = 前綴與引擎名之後的原樣文字。`line`:statistical = 觸發那一條紅的**未正規化**訊息第一行;declared = 整行原樣(含前綴)。\n- `count`:statistical = 連紅條數;declared = 1。`threshold`:statistical = 門檻;declared = `null`。\n- `state` / `rc` 不因這一格而變。`state==\"env_suspect\"` ⇔ `rc==86` ⇔ 那一段被中止,必然帶至少一筆 `statistical`;`declared` 筆可以出現在 `state==\"done\"`、rc 1 的檔裡。\n- 排序照 `done --log` 的順序、同一份 log 內照行序;**一行一筆,不去重、不合併**。\n- 事件 `env.suspect`:**非空就發**(不再只有 rc=86 才發),kv 改成 `rows=<筆數> sources=<逗號> engines=<逗號> why=<第一筆>`。\n- **這一格非空 → gate 不自動派 auto-fix**,inbox 走環境那一頁;人要派就手打 `auto-fix.sh`(那一支印一行警告但照派)。理由在文件 §理由 5:A 的 `gate.sh:584,619` 對任何 rc≠0 都叫 `auto_fix`,而 `auto_fix()`(366-382)與 `auto-fix.sh`(228-245)都沒看 `state==env_suspect` —— rc=86 那一輪照樣派一個 opus worker 進一個「機器現在不能跑」的環境。\n\n**鍵名刻意取 T 的超集合**(`engine` / `why` / `line` / `log`),所以 T 的三組既有案例同步後一個字都不用改;要改的是 A 自己那三處 dict 下標(`tests/test_gate.py:165-167,207`)。\n\n### 遷移清單(照文件 §遷移 A 段)\n\n`scripts/status.py`(`_observe` 寫 list、suspect file 寫 `[]`、搬 T 的 `SUSPECT_PREFIX`/`SUSPECT_ENGINE`/`parse_environment_suspects`、`cmd_run_tests` 用 `contextlib.redirect_stdout(stream)` 把案例 stdout 也導進 log、`cmd_done` 合兩條來源、`cmd_start` 寫 `[]`、新增讀端正規化 `environment_suspects(data)`、新增 `suspects` 子指令)、`scripts/gate.sh`(`suspect_field` 改讀 `[0]`;用**新的 `status.py suspects` 子指令**判非空,**不要 grep `done` 的輸出** —— 那是 §5.5 的坑;`auto_fix` 開頭加守衛;inbox 頁 `message_shape` 改印 `why` 並列 `source`)、`scripts/auto-fix.sh`(印警告仍照派)、`scripts/metrics.py:202`(經正規化)、`board/board.py`(`one_run()` 多回 `env_suspects`;`verdict_cell` 在 `failure_total` 之前加一支)、`tests/` 五處 fixture 改 list **並另留一條舊 dict fixture 驗相容**、`docs/`(DECISIONS / WORKFLOW schema / REHEARSAL 多一列)。\n\n### 這一段作廢:verify_waiver\n\n**本票有獨立驗證者**(D-019 §模型表:#23 驗證者 = sonnet,照文件那 12 條寫案例)。所以**不要**補 verify_waiver;`verify.files` / `verify.tags` / `verify.run` / `verify.baseline` 由驗證者交件時寫。要開的標籤寫進 `verify/TAGS.d/23.md`(建議 `env-suspect`,與 T 的同名)。\n\n### base_sha\n\n票上現在是 `create` 當下自動取的那個,**它早於 `c9164ed`**(設計文件那一筆)。派工時主線要把 `base_sha` 覆寫成 `c9164ed` 或更新的 main —— 沒有那份文件,實作者就沒有形狀規格。\n",
+  "test_plan": "每條寫「驗什麼 / 在哪一層 / 怎麼驗 / 期望值從哪來」。期望值一律從 DESIGN-ENV-SUSPECT.md 與 T 的真實 log 片段來,**不從被測的 status.py 算**。\n\n**T1 log 行那條路(單元,tests/test_status.py)** —— 寫一份含 3 行真實 `ENVIRONMENT-SUSPECT:` 的 log(樣本見 outline),`status.py start` 之後 `done --ticket 7 --rc 1 --log <那份 log>`,讀回 `status.json`:那 3 行的引擎與理由都在;`rc` 仍是 1;`failures` 仍有那三條真紅;`suspected_flaky` 不受影響。→ 驗收 1。\n\n**T2 沒有那種行(單元,同檔)** —— 同一份 log 去掉 suspect 行,`environment_suspect` 是 DESIGN 定的空值,且 `metrics.py` 讀它時不丟例外。→ 驗收 2。\n\n**T3 兩條路同形(單元,同檔,一支測試兩個 subTest)** —— (a) `done --environment-log <連紅偵測產出的 json>`;(b) `done --log <含 suspect 行的 log>`;對兩者斷言**同一組 key、同一種容器型別**。→ 驗收 3。\n\n**T4 兩條路同時有料(單元,同檔)** —— 同一次 `done` 同時給 `--environment-log` 與含 suspect 行的 `--log`:兩邊的證據都讀得出來(引擎名兩種都在),沒有一邊消失。→ 驗收 4。\n\n**T5 連紅偵測端到端不退化(整合,tests/test_gate.py)** —— `ENVIRONMENT_WAVE` 那條既有路徑:rc 仍是 86、跑到第 8 條就停、inbox 那一頁仍印得出引擎與同形訊息。→ 驗收 3、6。\n\n**T6 metrics 分類(單元,tests/test_metrics.py)** —— 手寫兩份 `status.json`:一份只有 log 行那條路的嫌疑、一份沒有嫌疑,都 rc!=0。斷言前者 `env_runs=1 product_runs=0`、後者 `env_runs=0 product_runs=1`,且兩份都滿足 `env_runs + product_runs == red_runs`。→ 驗收 5。\n\n**T7 看板(單元,tests/test_board.py)** —— 用 T6 那兩份 fixture 渲染主表:「紅(env/product)」那一欄印 `1 (1/0)` 與 `1 (0/1)`;`/t/<票號>` 頁那一輪的 `state` 仍畫得出來。→ 驗收 7。\n\n**T8 行格式的三種變異(單元,tests/test_status.py,參數化)** —— 三種輸入:`ENVIRONMENT-SUSPECT: 螢幕鎖著 ——(#474)`(中文開頭,引擎應為空、整段是理由)、`ENVIRONMENT-SUSPECT: safari`(只有一個字,整句是理由、引擎空)、`[chrome] ENVIRONMENT-SUSPECT: safari session 斷了(#645)`(前綴不在行首,仍抓得到、引擎是 safari)。期望值從 T 的 `parse_environment_suspects` 現行行為來(outline 已抄出規則)。→ 驗收 9。\n\n**T9 形狀只有一份(機械,grep)** —— `git grep -l DESIGN-ENV-SUSPECT` 命中 `scripts/status.py`、`scripts/metrics.py`、`docs/DESIGN-ENV-SUSPECT.md`;repo 裡不出現第二份「形狀規格」文件。→ 驗收 8。\n\n## 變異(每條指定哪一條驗收會紅)\n\n- **M1** 把 log 行的解析函式整支 `return []` → T1 紅、T6 前者紅、T7 前者紅(驗收 1、5、7)。\n- **M2** 把連紅偵測那條路寫進另一個 key(例如 `env_suspect_legacy`)→ T3 紅、T5 紅(驗收 3)。\n- **M3** 把兩條路的合成改成「後到的整格覆寫」→ **只有 T4 紅**,T1/T3/T5 全綠。這一條是本票最重要的變異。\n- **M4** 把「引擎後面沒有話就整句當理由」那一條拿掉(改成一律切第一個字)→ T8 第二種紅(驗收 9)。\n- **M5** 把 `metrics.py` 的判準改成永遠 False → T6 紅、T7 紅(驗收 5、7)。\n- **M6** 把 `line.find(SUSPECT_PREFIX)` 改成 `startswith` → T8 第三種紅(驗收 9)。\n- **M7** 把 DESIGN-ENV-SUSPECT.md 裡的形狀改一個 key 名但 code 不改 → T3 或 T9 要出聲(說明形狀文件與 code 的對齊靠哪一條案例釘住;若目前沒有一條釘得住它,就補一條)。\n\n## 怎麼跑\n\n`cd /Users/franksai/ai_workspace/claude_workspace/agent-control && python3 -m unittest discover -s tests -p 'test_*.py' -v`(或 `python3 scripts/status.py run-tests --root . --mode discover --log /tmp/g.log --suspect-file /tmp/s.json`)。變異一條一條改、一條一條跑、EVIDENCE 貼每一條的第一行紅。\n---\n\n## D-019 之後:驗收表就是測試計畫(上面 T1–T9 那一組併入下表,編號改對驗收 1–13)\n\n照 `docs/DESIGN-ENV-SUSPECT.md` §驗收 那 12 列一條一條寫,fixture 兩邊各用真的:\n\n- **fixture A** = `tests/test_gate.py:33` 的 `ENVIRONMENT_WAVE`(12 條同引擎同句 subTest 紅)。\n- **fixture T** = `verify/land_preflight/test_ticket_644.py:261-284` 的 `SUSPECT_LINE` + `a_log()`(2 行宣告 + 3 條真紅 + 真的收尾),再加一行 `ENVIRONMENT-SUSPECT: safari session 斷了(#645)`(`demo/test_browsers.py:1311` 印的就是這句)。\n\n層次:驗收 1、8 在 gate 沙盒(`tests/test_gate.py`);2–7、9 在 `tests/test_status.py` 沙盒;10 在 `tests/test_metrics.py`;11 在 `tests/test_board.py`;12 在 `tests/test_auto_fix.py`;13 是機械 grep。\n\n### 變異(文件那一列的「拿掉哪一支就該紅」,逐條對到驗收)\n\n- run-tests 仍寫 dict → 驗收 1 紅(`isinstance(list)`)。\n- 拿掉 `parse_environment_suspects` → 驗收 2 得 0 筆。\n- 去重 → 驗收 3 只剩 1 筆。\n- `start` 不寫這一格 → 驗收 4 KeyError。\n- 只讀環境檔或只讀 log 其中一邊 → 驗收 5 少一邊。\n- 不 `redirect_stdout` → 驗收 6 的 log 裡沒有那一行。**這一條是本票最容易漏的**:`TextTestRunner(stream=…)` 只收 runner 的輸出,案例 `print()` 現在流到 gate.sh 的 stdout、不在 log 裡,於是 `done --log` 永遠讀不到 declared 行(T 今天沒中招是因為 T 不走 run-tests,整段 stdout 被 test-for.sh 收進 gate.log)。\n- 事件只在 rc=86 發 → 驗收 7 沒事件。\n- 拿掉 `auto_fix` 那一行守衛 → 驗收 8 的假 worker 被叫。**守衛寫反邊(非空才派)時,其他 12 條全綠,只有這一條紅。**\n- 拿掉正規化的舊 dict 分支 → 驗收 9 第三份得 `[]`。\n- metrics 不經正規化 → 驗收 10 的舊 dict run 在 `[0]` 下標炸。\n- `verdict_cell` 不看這一格 → 驗收 11 沒有「環境可疑」。\n- 形狀文件改一個鍵名而 code 不改 → 驗收 13 要出聲(若目前沒有一條案例釘得住文件與 code 的對齊,就補一條)。\n",
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "2c99d42",
+    "state_version": 20,
+    "note": "read patches r1+r2: status.py environment_suspect list of 7-key rows (statistical/declared), start/done always [] , declared lines parsed only at line start + LogStream newline fix, env.suspect event on non-empty, gate/auto-fix refuse to auto-dispatch when non-empty, metrics/board read normalized; verifier 13 cases (fixture T=#644 SUSPECT_LINE verbatim); r2 fixed acceptance 1 oracle (tightened), acceptance 9 why=None, docstring literal prefix + ast guard, project-name in test file; round-3 gate green on main+#24 (Ran 231 OK)",
+    "at": "2026-09-23T13:31:37+08:00"
+  }
+}

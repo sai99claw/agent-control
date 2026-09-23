@@ -1,0 +1,56 @@
+{
+  "id": "24",
+  "subject": "主線紅:verify/agent-output/test_ticket_20.py 把 tickets/20.json 當成『多帶 schema 兩個鍵的文件』而紅,連帶 tests/test_verify_runner 全套 rc=1,所有票的閘門都過不了",
+  "created": "2026-09-23T13:16:24+08:00",
+  "objective": "乾淨 main 上 python3 scripts/verify.py --tag agent-output 與 python3 -m unittest tests.test_verify_runner 都 rc=0;案例仍守住『schema 兩個鍵只住在兩份 schema 文件與測試夾具』的本意,票檔(tickets/*.json)引用鍵名是合法的,不算違規",
+  "acceptance": [
+    "main 7a0c107 上重現:verify --tag agent-output 印 AssertionError: Lists differ: ['tickets/20.json'] != [];修後同指令 rc=0",
+    "python3 -m unittest tests.test_verify_runner rc=0",
+    "變異:把兩個鍵逐字放進 docs/WORKFLOW.md 以外的任一份 docs/*.md → 案例仍紅(守衛沒被拿掉)"
+  ],
+  "in_scope": [
+    "verify/agent-output/test_ticket_20.py"
+  ],
+  "out_of_scope": [
+    "tickets/*",
+    "scripts/*"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "verify/agent-output/test_ticket_20.py"
+  ],
+  "role": "worker",
+  "model": "sonnet",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "7a0c10785f5435b318f4e63a6ef2dce37b1e5e00",
+  "state": "Done",
+  "state_version": 7,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [
+      "agent-output"
+    ],
+    "run": "python3 scripts/verify.py --tag agent-output",
+    "notes": "測試票;主線在 19d2a72 把 tickets/*.json 的關票狀態進版控後才紅(讀 code 推的,worker 要實測 19d2a72^ 是否綠)"
+  },
+  "verify_strings": [
+    "tickets/"
+  ],
+  "outline": "擋住 #23 落地的主線紅;修案例不修票檔;無獨立驗證者(verify_waiver 由 main 給)",
+  "verify_waiver": {
+    "by": "main",
+    "reason": "測試票:改的就是案例;變異在 acceptance 裡;無獨立驗證者"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "7c5d803bd029620f8dd59d1a60d18c67e99142f0",
+    "state_version": 7,
+    "note": "read patch: test_ticket_20 excludes tickets/*.json (ticket files legitimately quote schema keys); SCHEMA.md still exact-listed; M1/M2 mutations red; gate green; needs_verifier=false (test-only ticket)",
+    "at": "2026-09-23T13:25:05+08:00"
+  },
+  "needs_verifier": false
+}

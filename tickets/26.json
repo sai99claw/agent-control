@@ -1,0 +1,61 @@
+{
+  "id": "26",
+  "subject": "verify-case.py:red 子指令 + 四類紅分類 + red_lines + lint(F1–F6);ticket.py close 認 stage==check",
+  "created": "2026-09-23T13:29:29+08:00",
+  "objective": "依 docs/DESIGN-VERIFY-CASES.md §三/§四,新增 verify-case.py red 子指令(乾淨基底套案例、只跑一次,依 traceback 分四類判紅算不算)與 lint 子指令(F1–F6 六條規則);ticket.py close 只放行 verify.baseline.stage=='check' 或有 verify_waiver 的票",
+  "acceptance": [
+    "verify-case.py red <n> --candidate <dir> 對只有案例、沒有實作的乾淨基底副本跑一次案例檔;最後一個 frame 在 verify.files 之一且例外是 AssertionError(含 self.fail)時算數的紅,印『紅 <案例>: <第一行>』並寫進 baseline.red_lines",
+    "ImportError/ModuleNotFoundError/_FailedTest 不算紅,印『import 失敗(不算紅)』",
+    "AttributeError/NameError/FileNotFoundError/TypeError 且最後 frame 在案例檔:不算紅,印『紅在缺符號(不算紅):改成先 assert 它存在』",
+    "最後一個 frame 不在案例檔(產品碼或既有測試炸):不算紅,印『紅在別處(不算紅)』",
+    "skip 另外分開計數,不歸進算數或不算的紅",
+    "cases>0 且算數的紅>=1 且三類不算的紅=0 時 rc=0,寫 verify.baseline = {stage:red, ok:true, files, base_ref, base_sha, baseline:{...,red_lines}},candidate_run:null",
+    "三類不算的紅任一出現時列出來、rc=1、不寫票(同 #22『量不到不動票』的原則)",
+    "verify-case.py lint <files> 對 F1:模組 docstring 缺 ## 驗收表/## 介面字串/## 怎麼做假/## 不做 任一段落即報那一行",
+    "lint 對 F2:TAGS 是字面 list 且已在 TAGS.md 或 TAGS.d 登記(既有邏輯延用)",
+    "lint 對 F3:每個 test_ 方法 docstring 首行以驗收編號開頭(正則 ^[A-Z]{0,2}[0-9]+(-[0-9]+)?),缺的印出來但不擋(rc 不因此非0)",
+    "lint 對 F4:原始碼字串裡也不含 board/config.json 的 verify_lint.forbid 禁字(預設 kill 家族)",
+    "lint 對 F5:tempfile.mkdtemp/TemporaryDirectory 同一語句或下一行有 addCleanup,缺的報那一行",
+    "lint 對 F6:模組頂層 import 沒有票面 verify_strings 裡『def <name>(』的新符號名字",
+    "ticket.py close 讀 verify.baseline.stage,只有 check 或票面有 verify_waiver 時放行;stage=red 時拒絕並印出還缺 check"
+  ],
+  "in_scope": [
+    "scripts/verify-case.py",
+    "scripts/ticket.py",
+    "tests/test_verify_case.py",
+    "tests/test_ticket_26.py"
+  ],
+  "out_of_scope": [
+    "scripts/gate.sh(接線見 A #27)",
+    "memory/role/verifier.md、templates/dispatch-verifier.md 等文字檔(見 A #25)",
+    "tabby_pool 任一檔案(同步票另開)"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/verify-case.py",
+    "scripts/ticket.py",
+    "tests/test_verify_case.py",
+    "tests/test_ticket_26.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "7c5d803bd029620f8dd59d1a60d18c67e99142f0",
+  "state": "Ready",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [
+      "tests/test_ticket_26.py"
+    ],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-020"
+  ],
+  "outline": "依 docs/DESIGN-VERIFY-CASES.md §三(紅的形狀分類表)與 §四(F1–F6 lint 規則表)實作;traceback 分類與 ast lint 的邊界(subTest、_FailedTest、多檔 traceback)自己設計 fixture 驗證。與 A #25(文字/範本)各自獨立,不 depends_on 它;A #27(gate.sh 接線)依賴這一張。有驗證者(sonnet)寫 tests/test_ticket_26.py,已列進 verify.files 與 allowed_write_paths。"
+}

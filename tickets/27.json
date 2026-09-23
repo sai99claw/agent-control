@@ -1,0 +1,55 @@
+{
+  "id": "27",
+  "subject": "gate.sh --ticket 接線:lint → check,status.json 收 baseline 紅榜",
+  "created": "2026-09-23T13:29:38+08:00",
+  "objective": "依 docs/DESIGN-VERIFY-CASES.md §三『綠由誰量、何時量』,gate.sh --ticket <n> 在 regression() 之後跑 verify-case.py lint 與 check,stage 由 red 升成 check,ok:false 時把紅榜寫進 status.json 的 failures[]",
+  "acceptance": [
+    "票的 verify.files 空且沒有 verify_waiver 時,gate.sh 印『這張票沒有驗證者案例』,視為缺口(同 #619 精神)",
+    "verify.files 非空時,gate.sh 先跑 verify-case.py lint <files>,lint rc!=0 時 gate 停下並指名行,不繼續跑 check",
+    "lint 過了才跑 verify-case.py check <n> --ref <base_sha> --candidate <這一輪的分支樹>",
+    "check 執行後把 verify.baseline.stage 從 red 升成 check",
+    "check 判 ok:false 時,紅榜寫進 status.json 的 failures[],走既有 auto-fix 路(worker 拿到『你的實作讓驗證者的第 k 條紅』或 test_defect,D-014 既有機制,不重造)",
+    "check 在 regression() 之後執行,不是在 land 才量"
+  ],
+  "in_scope": [
+    "scripts/gate.sh",
+    "tests/test_gate.py",
+    "tests/test_ticket_27.py"
+  ],
+  "out_of_scope": [
+    "scripts/verify-case.py 內部分類/lint 邏輯(A #26 的事,這張票只呼叫既有介面)",
+    "tabby_pool 任一檔案(同步票另開)"
+  ],
+  "depends_on": [
+    {
+      "id": "26",
+      "condition": ""
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/gate.sh",
+    "tests/test_gate.py",
+    "tests/test_ticket_27.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "7c5d803bd029620f8dd59d1a60d18c67e99142f0",
+  "state": "Draft",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [
+      "tests/test_ticket_27.py"
+    ],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-020"
+  ],
+  "outline": "依 docs/DESIGN-VERIFY-CASES.md §三三步驟接線;shell + 沙盒 repo 整合測試,gate.sh 已 600 行、要繞開既有 auto-fix 分支。依賴 A #26(verify-case.py 的 lint/check 子指令要先存在)。驗證者案例 tests/test_ticket_27.py。"
+}

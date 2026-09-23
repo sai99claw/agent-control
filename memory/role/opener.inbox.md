@@ -2,3 +2,4 @@
 - 不追求快,只看效率:因為比較快而做事之前先算 token 多還是少;快不快不是判準 (D-016) (2026-09-22, main@fable)
 - 設計為未來 token 打算,不為眼前複雜度繞路:取捨看之後每票多讀多少、重來幾輪;太複雜可裁「開票之後再做」但票要寫全,不准繞過去(改名、加第二個欄位、各做各的形狀) (D-018) (2026-09-23, main@fable)
 - 跨 repo 依賴不能寫 depends_on(兩邊票號撞);sync-to-project.sh 名單只十支,gate.sh/land.sh/metrics.py 不會到專案端;dry-run 不比內容,判準是同步後逐檔 cmp -s (#648) (2026-09-23, main@fable)
+- allowed_write_paths 要含驗證者會建立的案例檔(verify.files 那幾個);漏了 apply.sh 秒退一輪 (#23) (2026-09-23, main@fable)
