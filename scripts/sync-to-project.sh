@@ -18,6 +18,13 @@
 # 名單裡有 `event.py` / `ticket.py` / `verify.py`,不是因為專案要直接叫它們,是因為
 # 另外那幾支 `import` 它們 —— 少了它們,同步過去的是一組 import 就炸的檔。
 #
+# ## 暫存區不同步、`<專案>/memory/` 一個位元組都不碰(2026-09-23,D-021)
+# `memory/` 永遠是「這個 repo 自己寫的」;`roles_dir` 是「規矩從哪來」。所以 A 的
+# `*.inbox.md` 是 **A 自己的暫存區,不是規矩** —— 同步過去的話,專案會拿到一份檔頭寫著
+# 「不要改這一份」、內容是別人的專案事實、而且沒有任何讀者的檔(2026-09-23 實測 T 就躺著
+# 兩份)。專案自己的備忘住 `<專案>/memory/{role,model,project}/`,規則包(`rules.py pack`)
+# 會疊上去讀;這一支**不讀也不寫那個目錄**,測試逐位元組釘住這件事。
+#
 # ## 專案端能力檢查:**不要叫人去跑一個不存在的入口**
 # 舊版最後一行要求專案跑 `land-ticket.sh docs …`,而本 repo 從來沒有提供那一支 ——
 # 一句指不到東西的下一步,比沒有下一步更糟:它讓人以為自己漏裝了什麼。
@@ -30,6 +37,7 @@ DRY=${2:-}
 if [ "$DRY" = "--dry-run" ]; then
   python3 - "$DEST/board/config.json" <<'PY'
 import json
+import os
 import sys
 
 path = sys.argv[1]
@@ -38,10 +46,12 @@ try:
         config = json.load(handle)
 except (OSError, ValueError):
     config = {}
+rules = config.get("rules") or {}
+applies = (config.get("memory") or {}).get("applies_to")
 checks = (
-    ("rules.roles_dir", (config.get("rules") or {}).get("roles_dir") == "docs/roles"),
-    ("rules.models_dir", (config.get("rules") or {}).get("models_dir") == "docs/roles/model"),
-    ("memory.applies_to", isinstance((config.get("memory") or {}).get("applies_to"), list)),
+    ("rules.roles_dir", rules.get("roles_dir") == "docs/roles"),
+    ("rules.models_dir", rules.get("models_dir") == "docs/roles/model"),
+    ("memory.applies_to", isinstance(applies, list)),
 )
 missing = [name for name, present in checks if not present]
 if missing:
@@ -49,9 +59,37 @@ if missing:
     for name in missing:
         sys.stderr.write("  %s\n" % name)
     sys.exit(2)
+# `memory.applies_to` 指到 `roles_dir` 底下 = 專案在量一份**自己改不了的檔**:那一層是
+# 同步產出物,下一次 sync 就蓋掉,而超標開出來的整理票沒有人能執行(D-021)。上限與整理
+# 票管的是專案自己寫的 `memory/`。
+where = [rules.get("roles_dir"), rules.get("models_dir")]
+inside = [one for one in applies
+          if any(w and os.path.normpath(one).startswith(os.path.normpath(w) + os.sep)
+                 for w in where)]
+if inside:
+    sys.stderr.write("sync: 專案 board/config.json 的 memory.applies_to 指到 "
+                     "rules.roles_dir 底下:%s\n" % "、".join(inside))
+    sys.stderr.write("sync:   那一層是同步產出物,專案改不了也留不住 —— 改成 "
+                     "memory/role/*.md、memory/model/*.md(專案自己寫的那一層)。\n")
+    sys.exit(2)
 PY
 fi
 SRC_SHA=$(cd "$HERE" && git rev-parse --short HEAD 2>/dev/null || echo unknown)
+# 暫存區的副檔名讀 **A 自己**的設定(`memory.inbox_suffix`),與 `memory.py` 同一格:
+# 寫死第二份的那一天,兩份會各自往不同方向漂,而漂開的那一份看起來仍然像規格。
+INBOX_SUFFIX=$(python3 - "$HERE/board/config.json" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        conf = json.load(handle)
+except (OSError, ValueError):
+    conf = {}
+memory = conf.get("memory") if isinstance(conf.get("memory"), dict) else {}
+sys.stdout.write(str(memory.get("inbox_suffix") or ".inbox.md"))
+PY
+)
 ROLES=$DEST/docs/roles
 MANIFEST=$ROLES/.sync-manifest
 NEW_LIST=""
@@ -66,6 +104,14 @@ copy_dir() {  # $1 = 來源目錄  $2 = 目的目錄  $3 = manifest 前綴
   for f in "$1"/*.md; do
     [ -f "$f" ] || continue
     name=$(basename "$f")
+    # 暫存區留在 A:它是 A 自己還沒併進主檔的筆記,不是規矩(D-021)。**不進 NEW_LIST**,
+    # 所以上一次同步過去的那幾份會走底下的「退場」被刪掉並唸出來。
+    case "$name" in
+      *"$INBOX_SUFFIX")
+        echo "sync: 不同步 $name(agent-control 自己的暫存區,不是規矩)"
+        continue
+        ;;
+    esac
     NEW_LIST="$NEW_LIST$3$name
 "
     [ "$DRY" = "--dry-run" ] && { echo "sync: (dry-run) $2/$name"; continue; }
@@ -137,7 +183,13 @@ if [ -f "$MANIFEST" ]; then
     case "$NEW_LIST" in
       *"$old"*) ;;
       *)
-        echo "sync: 退場 $ROLES/$old(agent-control 已經沒有這一份)"
+        case "$old" in
+          *"$INBOX_SUFFIX")
+            # 說得出**對的理由**:A 還有這一份,是「暫存區不再同步」,不是「已經沒有」。
+            echo "sync: 退場 $ROLES/$old(暫存區不再同步;專案自己的備忘寫 memory/)"
+            ;;
+          *) echo "sync: 退場 $ROLES/$old(agent-control 已經沒有這一份)" ;;
+        esac
         [ "$DRY" = "--dry-run" ] || rm -f "$ROLES/$old"
         ;;
     esac
