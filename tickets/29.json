@@ -89,8 +89,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "d4d177ec8bf3b9fe318d77b28f8fdbc7d0ad2cb8",
-  "state": "Ready",
-  "state_version": 11,
+  "state": "Done",
+  "state_version": 16,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -99,7 +99,84 @@
     ],
     "tags": [],
     "run": "python3 -m unittest tests.test_ticket_29",
-    "notes": "驗證者(sonnet,只證紅)20 條 A1–A11 + 3 條 A12(基底綠);案例住 tests/,verify.py --tag 選不到,tags 留空(TAGS 字面只給 lint F2)"
+    "notes": "驗證者(sonnet,只證紅)20 條 A1–A11 + 3 條 A12(基底綠);案例住 tests/,verify.py --tag 選不到,tags 留空(TAGS 字面只給 lint F2)",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-09-23T19:57:19+08:00",
+      "files": [
+        "tests/test_ticket_29.py"
+      ],
+      "base_ref": "d4d177ec8bf3b9fe318d77b28f8fdbc7d0ad2cb8",
+      "base_sha": "d4d177ec8bf3b9fe318d77b28f8fdbc7d0ad2cb8",
+      "candidate": "53b4e369a1dd68a097a7ec57d12d37e70ef9f0e8",
+      "candidate_sha": "53b4e369a1dd68a097a7ec57d12d37e70ef9f0e8",
+      "baseline": {
+        "red": [
+          "tests.test_ticket_29.Acceptance10LandHasNoDocsChannel.test_a10_land_sh_does_not_recognise_a_docs_subcommand",
+          "tests.test_ticket_29.Acceptance11SyncDoesNotCheckCallPoints.test_a11_sync_does_not_report_missing_call_points",
+          "tests.test_ticket_29.Acceptance1DesignAndReviewerRolesExist.test_a1_design_doc_fixed_sections_are_undefined",
+          "tests.test_ticket_29.Acceptance1DesignAndReviewerRolesExist.test_a1_design_role_card_is_missing",
+          "tests.test_ticket_29.Acceptance1DesignAndReviewerRolesExist.test_a1_reviewer_role_card_and_rules_entry_are_missing",
+          "tests.test_ticket_29.Acceptance1DesignAndReviewerRolesExist.test_a1_roles_doc_has_no_design_session_row",
+          "tests.test_ticket_29.Acceptance1DesignAndReviewerRolesExist.test_a1_rules_py_pack_design_fails",
+          "tests.test_ticket_29.Acceptance2OpenerHasATemplate.test_a2_deliverable_wording_does_not_name_the_outline_field",
+          "tests.test_ticket_29.Acceptance2OpenerHasATemplate.test_a2_dispatch_opener_template_is_missing",
+          "tests.test_ticket_29.Acceptance2OpenerHasATemplate.test_a2_opener_card_still_points_at_the_missing_project_doc",
+          "tests.test_ticket_29.Acceptance3FirstRoundDispatchViaDryRun.test_a3_dry_run_round_1_without_status_is_not_supported",
+          "tests.test_ticket_29.Acceptance4ApplyExtractsResultAndRecordsObjection.test_a4_evidence_does_not_produce_result_round1_json",
+          "tests.test_ticket_29.Acceptance4ApplyExtractsResultAndRecordsObjection.test_a4_objection_line_in_evidence_is_not_recorded",
+          "tests.test_ticket_29.Acceptance5EvidenceVerifierRecipientIsUndecided.test_a5_mention_counts_disagree_between_card_and_template",
+          "tests.test_ticket_29.Acceptance6AutoFixLeavesWorkAndBaseBehind.test_a6_a_green_round_does_not_clean_up_its_own_copy",
+          "tests.test_ticket_29.Acceptance7CloseNamesTheConcreteCheckCommand.test_a7_close_blocker_does_not_name_ref_and_candidate_shas",
+          "tests.test_ticket_29.Acceptance8ConsolidatorHasItsOwnCardAndTemplate.test_a8_consolidator_role_card_is_missing",
+          "tests.test_ticket_29.Acceptance8ConsolidatorHasItsOwnCardAndTemplate.test_a8_dispatch_consolidator_template_is_missing",
+          "tests.test_ticket_29.Acceptance8ConsolidatorHasItsOwnCardAndTemplate.test_a8_opened_ticket_outline_does_not_reference_the_template",
+          "tests.test_ticket_29.Acceptance9EmitInsideACopyWritesIntoIt.test_a9_emit_inside_a_git_less_copy_still_writes_events_jsonl"
+        ],
+        "red_lines": [
+          "tests.test_ticket_29.Acceptance10LandHasNoDocsChannel.test_a10_land_sh_does_not_recognise_a_docs_subcommand: AssertionError: 2 != 0 : land.sh 現在還沒有 docs 子指令,把 'docs' 當成一條不存在的分支名處理:land: docs —— 沒有這條分支(名字打錯了?)",
+          "tests.test_ticket_29.Acceptance11SyncDoesNotCheckCallPoints.test_a11_sync_does_not_report_missing_call_points: AssertionError: '同步了但專案端沒有呼叫點' not found in 'sync: /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a11-d40eb069/docs/roles/README.md\\nsync: 不同步 implementer.inbox.md(agent-control 自己的暫存區,不是規矩)\\nsync: /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a11-d40eb069/docs/roles/implementer.md\\nsync: 不同步 main.inbox.md(agent-control 自己的暫存區,不是規矩)\\nsync: /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a11-d40eb069/docs/roles/main.md\\nsync: 不同步 opener.inbox.md(agent-control 自己的暫存區,不是規矩)\\nsync: /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a11-d40eb069/docs/roles/opener.md\\nsync: 不同步 verifier.inbox.md(agent-control 自己的暫存區,不是規矩)\\nsync: /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a11-d40eb069/docs/roles/verifier.md\\nsync: /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a11-d40eb069/docs/roles/model/README.md\\nsync: 不同步 fable.inbox.md(agent-control 自己的暫存區,不是規矩)\\nsync: /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a11-d40eb069/docs/roles/model/fable.md\\nsync: /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a11-d40eb069/docs/roles/model/gpt-5.6-sol.md\\nsync: 不同步 opus.inbox.md(agent-control 自己的暫存區,不是規矩)\\nsync: /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a11-d40eb069/docs/roles/model/opus.md\\nsync: /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a11-d40eb069/scripts/control/status.py\\nsync: /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a11-d40eb069/scripts/control/verify-case.py\\nsync: /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a11-d40eb069/scripts/control/apply.sh\\nsync: /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a11-d40eb069/scripts/control/auto-fix.sh\\nsync: /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a11-d40eb069/scripts/control/inbox.py\\nsync: /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a11-d40eb069/scripts/control/rules.py\\nsync: /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a11-d40eb069/scripts/control/memory.py\\nsync: /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a11-d40eb069/scripts/control/event.py\\nsync: /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a11-d40eb069/scripts/control/ticket.py\\nsync: /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a11-d40eb069/scripts/control/verify.py\\nsync: /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a11-d40eb069/verify/_template_ticket.py\\nsync: 完成(來源 unknown)。\\nsync: 這個專案沒有 scripts/land.sh 也沒有 scripts/land-ticket.sh —— **它還沒有 docs 通道**。\\nsync:   同步出來的檔現在只是工作樹裡的改動;要進它的主線,專案得先有一條落地入口。\\nsync: 專案端要改的接點(這幾行要出現在專案自己的腳本裡):\\nsync:   1. 閘門跑完(專案的 gate):\\nsync:        python3 scripts/control/status.py done --ticket <n> --run-id <run> \\\\\\nsync:            --kind gate --rc $rc --log <log 路徑>\\nsync:      跑之前先 `status.py start --ticket <n> --kind gate --run-id <run> --base-sha <sha>`,\\nsync:      不然接手的人分不出「還在跑」與「跑完了沒寫 rc」。\\nsync:   2. 驗證者交件(案例是對的的證明):\\nsync:        python3 scripts/control/verify-case.py check <n> --candidate <work 副本>\\nsync:   3. 套 patch → 建分支 → commit(以前是人手動做的那一手):\\nsync:        sh scripts/control/apply.sh <n> patch.diff [patch-verify.diff]\\nsync:   4. 閘門紅了自動派下一輪 worker(三輪上限):\\nsync:        sh scripts/control/auto-fix.sh <n>\\nsync:   5. 主線開場讀終態收件匣(不要輪詢 status):\\nsync:        python3 scripts/control/inbox.py list\\nsync:   6. 派工文前言(按角色裁切,≤ 4 KB,不整份貼):\\nsync:        python3 scripts/control/rules.py pack worker --model <模型>\\n' : sync-to-project.sh 現在還沒有這一條檢查;dest 裡沒有任何 scripts/*.sh 呼叫 apply.sh 等腳本,但輸出裡沒有這句話",
+          "tests.test_ticket_29.Acceptance1DesignAndReviewerRolesExist.test_a1_design_doc_fixed_sections_are_undefined: AssertionError: 0 not greater than or equal to 1 : tickets/SCHEMA.md 與 docs/DESIGN.md 都還沒有定義 docs/DESIGN-<題>.md 的固定段落(「未來每票省/多花」欄)",
+          "tests.test_ticket_29.Acceptance1DesignAndReviewerRolesExist.test_a1_design_role_card_is_missing: AssertionError: False is not true : 乾淨基底上還沒有 memory/role/design.md",
+          "tests.test_ticket_29.Acceptance1DesignAndReviewerRolesExist.test_a1_reviewer_role_card_and_rules_entry_are_missing: AssertionError: False is not true : 乾淨基底上還沒有 memory/role/reviewer.md(D-022 待補)",
+          "tests.test_ticket_29.Acceptance1DesignAndReviewerRolesExist.test_a1_roles_doc_has_no_design_session_row: AssertionError: [] is not true : docs/ROLES.md 的角色表現在還沒有「設計 session」那一列",
+          "tests.test_ticket_29.Acceptance1DesignAndReviewerRolesExist.test_a1_rules_py_pack_design_fails: AssertionError: 2 != 0 : 乾淨基底上 rules.py 還不認得 design 角色:rules: 不認得角色 'design' —— 認得的是 consolidator / impl / implementer / main / open / opener / verifier / verify / worker / 整理者",
+          "tests.test_ticket_29.Acceptance2OpenerHasATemplate.test_a2_deliverable_wording_does_not_name_the_outline_field: AssertionError: 'outline' not found in '# 開題者(Fable,短命)\\n\\n**做**:把使用者原話變成一張完整票:症狀 → 假設(附證偽法)、設計裁示、in-scope、驗收 = **測試計畫**(這是票面最重要的一段):每條寫「驗什麼行為 / 在哪一層驗(單元、API、瀏覽器)/ 怎麼驗(輸入、步驟、可觀察的輸出、期望值從哪裡來,不從被測程式算)/ 功能標籤」;驗證者照這份計畫實作案例,計畫寫不清就是開題者的錯、變異(指定哪條紅)、verify_strings、不在本票、依賴。**判斷自己下**;搜集與量測(全站掃、數處數、跑競爭迴圈、算色組、拍畫面)**派 Opus 子工作者**,自己只讀結論。\\n**不做**:不改檔、不 git 寫入、不執行整支腳本(fullsuite/land)、不碰服務埠;不替實作者先做一遍(可行性只要一個小證據,不要完整解)。\\n**交付物**:票 JSON(目錄見 `docs/TICKET-OPENER-PROMPT.md(專案自備)`)+ 給主線的 300 字摘要與建議順序。開完就結束。\\n**信誰**:自己派的子工作者交回的數字(標實測),repo 的設計文件與裁示。讀事故現場前先問「這個檔是不是變異中的中間狀態」。\\n**上限**:一張票 ≤ 60K 自己的 token;超過代表在做實作者的事。\\n**票面的機械格要能被機器驗**(2026-09-22,#623/#627):`verify_strings` 是落地時 `git grep` 的**內容**字串,檔名不算;`tags` 只能用 `verify/TAGS.md` 登記過的;票面引用的指令先 `--help` 一次再寫(寫錯一個旗標,worker 會照打到禁區埠)。這三格錯一格,閘門或落地就白跑一輪。\\n**第二輪以後的假設要標「哪些已排除」**(#623 第 2 輪):診斷本身有價值,但建議的變異要自己驗過紅;沒驗過的寫「未實測」,下一輪才不會照做。\\n' : memory/role/opener.md 的交付物欄還沒有點名 outline 欄",
+          "tests.test_ticket_29.Acceptance2OpenerHasATemplate.test_a2_dispatch_opener_template_is_missing: AssertionError: False is not true : 乾淨基底上還沒有 templates/dispatch-opener.md",
+          "tests.test_ticket_29.Acceptance2OpenerHasATemplate.test_a2_opener_card_still_points_at_the_missing_project_doc: AssertionError: False is not true : memory/role/opener.md 還指著不存在的 docs/TICKET-OPENER-PROMPT.md(命中 1 次,docs/ 裡沒有這份檔)",
+          "tests.test_ticket_29.Acceptance3FirstRoundDispatchViaDryRun.test_a3_dry_run_round_1_without_status_is_not_supported: AssertionError: 2 != 0 : auto-fix.sh 現在還不認得 --round,沒有 reports/t1/ 時也印不出第一輪的派工文:auto-fix: 不認得 --round(--dry-run)",
+          "tests.test_ticket_29.Acceptance4ApplyExtractsResultAndRecordsObjection.test_a4_evidence_does_not_produce_result_round1_json: AssertionError: [] is not true : apply.sh --evidence 現在還沒有抽 result-round1.json(它只跑 memory.py harvest)",
+          "tests.test_ticket_29.Acceptance4ApplyExtractsResultAndRecordsObjection.test_a4_objection_line_in_evidence_is_not_recorded: AssertionError: None is not true : apply.sh --evidence 現在還不會把 OBJECTION: 那一行記進票的 objections[](只有 auto-fix.sh 的 round_once 會)",
+          "tests.test_ticket_29.Acceptance5EvidenceVerifierRecipientIsUndecided.test_a5_mention_counts_disagree_between_card_and_template: AssertionError: 1 != 0 : memory/role/verifier.md 提了 EVIDENCE-verifier 1 次,templates/dispatch-verifier.md 提了 0 次 —— 兩選一還沒選",
+          "tests.test_ticket_29.Acceptance6AutoFixLeavesWorkAndBaseBehind.test_a6_a_green_round_does_not_clean_up_its_own_copy: AssertionError: True is not false : 第 2 輪綠了、停在 InReview 之後,/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpyusm4s1i/repo-wt/fix-t1/round2 底下的 work/base 現在還留著",
+          "tests.test_ticket_29.Acceptance7CloseNamesTheConcreteCheckCommand.test_a7_close_blocker_does_not_name_ref_and_candidate_shas: AssertionError: False is not true : ticket.py close 現在還沒有印出一句可貼的 `verify-case.py check 1 --ref 485d9e5ea29b792ea49fc8ff5145ba34b25e0b43 --candidate 1fbe3bb9d01d9c574b7b1db6849b38ae8ce7ebcc`:",
+          "tests.test_ticket_29.Acceptance8ConsolidatorHasItsOwnCardAndTemplate.test_a8_consolidator_role_card_is_missing: AssertionError: False is not true : 乾淨基底上還沒有 memory/role/consolidator.md(rules.py WANTED['consolidator'] 現在借用 implementer.md)",
+          "tests.test_ticket_29.Acceptance8ConsolidatorHasItsOwnCardAndTemplate.test_a8_dispatch_consolidator_template_is_missing: AssertionError: False is not true : 乾淨基底上還沒有 templates/dispatch-consolidator.md",
+          "tests.test_ticket_29.Acceptance8ConsolidatorHasItsOwnCardAndTemplate.test_a8_opened_ticket_outline_does_not_reference_the_template: AssertionError: 'templates/dispatch-consolidator.md' not found in '' : 整理票的 outline 欄現在沒有引用 templates/dispatch-consolidator.md(欄位內容:'')",
+          "tests.test_ticket_29.Acceptance9EmitInsideACopyWritesIntoIt.test_a9_emit_inside_a_git_less_copy_still_writes_events_jsonl: AssertionError: False is not true : event.py emit 在一個沒有 .git 的副本裡還是把事件寫進了副本自己的 board/events.jsonl(rc=0):/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/t29-a9-9ywejtdu/board/events.jsonl"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 23,
+        "skipped": 0,
+        "log": "/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/verify-case-fhent31l/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 23,
+        "skipped": 0,
+        "log": "/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/verify-case-fhent31l/logs/candidate.log"
+      }
+    }
   },
   "decision_refs": [
     "D-015",
@@ -120,8 +197,16 @@
     },
     {
       "path": "scripts/apply.sh",
-      "contains": "result-round1"
+      "contains": "result-round"
     }
   ],
-  "tags": []
+  "tags": [],
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus (D-022) via main",
+    "sha": "53b4e369a1dd68a097a7ec57d12d37e70ef9f0e8",
+    "state_version": 16,
+    "note": "D-022 first run: reviewer read t29 code against 12 acceptances, each mapped to impl lines and guarding cases (REVIEW.md in scratchpad/dispatch/review-29); scope ok; A12 wording differs because the ticket text is stale (T#650 exists, #27 Done). Concerns for follow-up tickets: A11 DEPENDENCY_ONLY hides verify.py; cross-second apply run still wins over an older red gate; A5 mention-count oracle brittle; apply.sh rc=0 on already-recorded OBJECTION. Gate: 485 OK, lint pass, baseline 20 red / candidate 0.",
+    "at": "2026-09-23T19:57:19+08:00"
+  }
 }

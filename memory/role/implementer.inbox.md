@@ -12,3 +12,7 @@
 - 測試一律前景跑加 timeout;把全套丟背景後就結束回合 = 什麼都沒交(claude -p 不會再醒,#26 第 2 輪 auto-fix worker 的 patch 因此沒生出來) (2026-09-23, main@fable)
 - 為了讓既有測試回綠而給共用夾具加預設值(#27 第 2 輪 make_ticket 預設 verify_waiver)會把受測的那一層整個關掉:夾具預設值要跟受測行為反向檢查一次 (2026-09-23, main@fable)
 - 守衛量文件時要量**那一段**,不要量整份輸出:`--help` 的範例行會讓參數表的變異存活(#29 M18 第一次是綠的) (#29, 2026-09-23, worker@opus)
+- 守衛量文件時要量**那一段**,不要量整份輸出:`--help` 的範例行會讓參數表的變異存活(#29 M18 第一次是綠的) (#29, 2026-09-23, worker@opus)
+- 守衛量文件時要量**那一段**,不要量整份輸出:`--help` 的範例行會讓參數表的變異存活(#29 M18 第一次是綠的) (#29, 2026-09-23, worker@opus)
+- 在 $W/work 裡跑過 gate.sh 後,gate.log 與 *.env-suspect.json 會被 diff -ruN 收進 patch(守衛看不到,因為真 repo .gitignore 了):交付前 diff -rq base work | grep '^Only in work' 對一次 (#29) (2026-09-23, main@fable)
+- 守衛量文件時要量**那一段**,不要量整份輸出:`--help` 的範例行會讓參數表的變異存活(#29 M18 第一次是綠的) (#29, 2026-09-23, worker@opus)

@@ -1,0 +1,57 @@
+{
+  "id": "33",
+  "subject": "gate.sh 接的 verify-case.py check 把整棵基底樹展在 worktree 內的 gate.log.verify-case.d/base/,第二次跑閘門時全樹掃描的守衛(verify/agent-output/test_ticket_20、test_no_project_names)掃到那份副本而紅:同一 worktree 重跑必紅",
+  "created": "2026-09-23T18:56:47+08:00",
+  "objective": "check/red 的暫存樹放在 worktree 外(mkdtemp)或跑完即刪;守衛掃描以 git ls-files 為準不掃未追蹤目錄;同一 worktree 連跑兩次 gate.sh --branch --ticket 結果一致",
+  "acceptance": [
+    "沙盒 repo 跑兩次 gate.sh --branch --ticket <n>(有 verify.files 的票)→ 兩次 rc 相同,第二次 worktree 內沒有 gate.log.verify-case.d/base(現況:第二次 verify.py 全跑紅 1 條,指名 gate.log.verify-case.d/base/tickets/20.json)",
+    "verify-case.py check 與 red 結束後暫存副本不留在 worktree(留 logs 可以,base/candidate 樹不留);變異:把清理拿掉 → 第一條紅",
+    "tests/test_verify_case.py 補一條:check 完 worktree 只多 logs 目錄"
+  ],
+  "in_scope": [
+    "scripts/verify-case.py"
+  ],
+  "out_of_scope": [
+    "verify/agent-output/test_ticket_20.py",
+    "tests/test_no_project_names.py"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/verify-case.py",
+    "scripts/gate.sh",
+    "tests/test_verify_case.py",
+    "tests/test_gate.py"
+  ],
+  "role": "worker",
+  "model": "sonnet",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "039ca428d7c4e408c9eb08d67352c5b9d30749ba",
+  "state": "Done",
+  "state_version": 6,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": "測試票性質;verify_waiver 由 main 給"
+  },
+  "verify_strings": [
+    "mkdtemp"
+  ],
+  "outline": "#29 第 4 次閘門實測:第 2 次 gate 在同一 t29 worktree 因上一次 check 留下的 base 樹而紅。主線暫以刪目錄重跑繞過,本票把它修掉(D-018:不繞)。",
+  "verify_waiver": {
+    "by": "main",
+    "reason": "測試票性質:案例即驗收;無獨立驗證者"
+  },
+  "needs_verifier": false,
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "c57aa512481dcbf45f0e44c196d1f694de070664",
+    "state_version": 6,
+    "note": "read patch: verify-case.py discard_scratch_trees(where) in try/finally for red and check (base/ and candidate/ removed, logs kept) covering both --out-dir inside the worktree and mkdtemp; 3 unit cases; mutation red; gate.sh unchanged; waiver (test-ticket nature)",
+    "at": "2026-09-23T19:38:07+08:00"
+  }
+}
