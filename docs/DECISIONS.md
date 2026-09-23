@@ -183,3 +183,9 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 ## D-021(2026-09-23)專案端記憶備忘的唯一去處:專案自己的 `memory/`,規則包疊兩層
 
 設計文件 `docs/DESIGN-MEMORY-INBOX.md`(Fable 設計 session)。結論:`memory.py note` 寫的 `<repo>/memory/{role,model,project}/` 就是唯一去處,寫入端不改;`roles_dir == memory/role` 的 repo 是正本,否則是專案,`rules.py pack` 疊兩層(正本角色卡 + 專案 memory 主檔與 inbox 尾巴,上限仍 4 KB);`sync-to-project.sh` 不再複製 `*.inbox.md`、永不碰專案 `memory/`(測試釘死);專案 config 的 `memory.applies_to` 指 `memory/`。實測發現:`rules.py pack` 整支沒有 inbox 這個字,inbox 備忘在 A 也要等整理才進規則包。否決甲(專案事實污染所有專案,A inbox 已混入 1 行 T 專屬)與乙(與同步產出物同名同目錄)。A 正本改動另開 opus 票;tabby #648 只做 config 與 `git add memory/`。
+
+## D-022(2026-09-23)覆核由短命 opus 做,看的是「做出來的是不是票要的」
+
+閘門綠、票停 InReview 之後,**主線不自己讀 patch 覆核**;派一個短命的 opus 覆核者(reviewer):讀票面 objective/acceptance、讀分支上的 code(不只 diff)、讀 EVIDENCE,逐條把驗收對到實作的行與守它的案例,查範圍有沒有擴、反駁有沒有處置;不重跑測試、不改檔。交付固定格式:`verdict(pass|fail)`、逐條驗收 → code 位置、疑慮清單;fail 寫成 objection。主線只把 verdict 寫進票(`ticket.py set <n> review …`)並決定落地順序。
+
+來源:產品負責人 2026-09-23 原話(「不要用主線去覆核,新的 opus 做就可以;要看 code 理解實際做出來的功能是不是票上定義所需要的」)。理由:主線上下文最貴(D-016),而覆核是讀 patch 對票面的工作;今天七張票主線自己覆核,每張都把 patch 讀進主線。待補:reviewer 角色卡與 `rules.py pack reviewer`(併 #29 的 G1 一類)、派工範本。

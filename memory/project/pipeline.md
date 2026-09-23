@@ -1,2 +1,3 @@
 - auto-fix.sh 在 ticket 分支 worktree 找不到未進版控的票檔而 rc=2(#23 第 2 輪);票檔要進版控或 auto-fix 讀 AC_ROOT 的 tickets/ (2026-09-23, main@fable)
 - auto-fix.sh 從票的 worktree 起跑時副本路徑用相對的 ../agent-control-wt/fix-t<n>,結果開在 agent-control-wt/agent-control-wt/ 巢狀目錄,主線找不到;要以 AC_ROOT 絕對路徑算 (#26 第 2 輪) (2026-09-23, main@fable)
+- 開題者(sonnet)說開票時給了 --verify-string,但 #26 #27 落地時票上 verify_strings 都是 null → close 只能弱檢查;要查 ticket.py create 的 --verify-string 是否真的寫進票(疑似全形冒號切斷或旗標被吃) (2026-09-23, main@fable)

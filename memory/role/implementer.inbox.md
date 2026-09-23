@@ -10,3 +10,4 @@
 - patch.diff 檔頭只准 base/… work/…(在 $W 裡跑 diff -ruN base work,不要給絕對路徑);絕對路徑 apply.sh 檔頭秒退 (#25) (2026-09-23, main@fable)
 - 派工副本沒有 .git:test_no_project_names 靠 git ls-files 必紅,判綠要拿 base 副本對照同一條 (#28) (2026-09-23, main@fable)
 - 測試一律前景跑加 timeout;把全套丟背景後就結束回合 = 什麼都沒交(claude -p 不會再醒,#26 第 2 輪 auto-fix worker 的 patch 因此沒生出來) (2026-09-23, main@fable)
+- 為了讓既有測試回綠而給共用夾具加預設值(#27 第 2 輪 make_ticket 預設 verify_waiver)會把受測的那一層整個關掉:夾具預設值要跟受測行為反向檢查一次 (2026-09-23, main@fable)
