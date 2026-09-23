@@ -98,6 +98,10 @@ CTRL_MANIFEST=$CTRL/.sync-manifest
 NEW_SCRIPTS=""
 # 專案端要用到的那幾支 + 它們 import 的。順序無所謂,名單本身要進 code review。
 SCRIPT_LIST="status.py verify-case.py apply.sh auto-fix.sh inbox.py rules.py memory.py event.py ticket.py verify.py"
+# 這三支**不是入口**,是被上面那幾支 `import` 的(見檔頭)。查「接了沒」時要把它們挑掉
+# —— 對一支本來就沒有人直接叫的檔說「沒有呼叫點」,是一句假話,而假警報會讓真的那幾條
+# 被一起跳過(`docs/DISPATCH-TEMPLATE.md` §5.7)。
+DEPENDENCY_ONLY="event.py ticket.py verify.py"
 
 copy_dir() {  # $1 = 來源目錄  $2 = 目的目錄  $3 = manifest 前綴
   mkdir -p "$2"
@@ -248,3 +252,54 @@ sync:        python3 scripts/control/inbox.py list
 sync:   6. 派工文前言(按角色裁切,≤ 4 KB,不整份貼):
 sync:        python3 scripts/control/rules.py pack worker --model <模型>
 EOF
+
+# 接了沒:**同步了但沒有呼叫點**(2026-09-23,#29 A11;G11)。
+# 上面那張接點清單是「要改的那幾行」,而它每一次都印一模一樣的內容 —— 於是「已經接上三支」
+# 與「一支都沒接」在畫面上長得一樣。這裡真的去專案自己的 `scripts/*.sh` 裡 grep 一次
+# (**排除 `scripts/control/` 自己** —— 產出物互相呼叫不算專案接上了)。
+UNCALLED=""
+for name in $SCRIPT_LIST; do
+  case " $DEPENDENCY_ONLY " in *" $name "*) continue ;; esac
+  hit=""
+  # 要找的形狀有兩種,而**只認第一種會把真的呼叫判成沒有**:寫死的
+  # `scripts/control/status.py`,與專案自己拉一格變數的 `$CONTROL/status.py`
+  # (實測 2026-09-23:某個下游專案的 `land-ticket.sh` 六處都是後者)。所以比對的是
+  # `control/<檔名>`,大小寫不分(`$CONTROL/` 的那個 CONTROL 是大寫的變數名)。
+  # `.` 要跳脫 —— 不跳的話 `status.py` 會對上 `statusXpy`,而那種命中沒有人看得出來。
+  esc=$(printf '%s' "$name" | sed 's/\./\\./g')
+  for caller in "$DEST"/scripts/*.sh; do
+    [ -f "$caller" ] || continue
+    case "$caller" in "$CTRL"/*) continue ;; esac
+    # **註解不算接上了**:`^[^#]*` 要求那一行在提到它之前沒有 `#`。實測 2026-09-23:
+    # 某個下游專案的 `scripts/test-for.sh` 只在一行註解裡寫了 `scripts/control/apply.sh`,
+    # 而純字串 grep 會因此判它「接上了」—— 抓錯了是吵一次,**放過了是靜的**(§5.7),
+    # 所以脫罪那一段故意寫得笨,寧可多唸一次。
+    if grep -liE "^[^#]*control/$esc" "$caller" >/dev/null 2>&1; then
+      hit=1
+      break
+    fi
+  done
+  [ -n "$hit" ] || UNCALLED="$UNCALLED $name"
+done
+if [ -n "$UNCALLED" ]; then
+  # shellcheck disable=SC2086
+  echo "sync: 同步了但專案端沒有呼叫點:$(echo $UNCALLED)"
+  echo "sync:   (搬過去的檔不會自己被呼叫;上面第 1–6 點就是那幾行要寫在哪。"
+  echo "sync:    主線手打的那幾支這裡分辨不出來 —— 這一行說的是「專案的腳本裡沒有」。)"
+else
+  echo "sync: 專案端每一支都有呼叫點(排除只被 import 的 $DEPENDENCY_ONLY)。"
+fi
+
+# `docs/roles/` 裡**不在 manifest 上**的檔:那是專案自己放的,不是產出物。
+# 混在產出物目錄裡的自建檔,下一次同步不會被蓋、也不會被退場,而它讀起來與角色卡一樣 ——
+# 唸出來,讓放的人自己決定要搬走還是登記。
+if [ -d "$ROLES" ]; then
+  for f in "$ROLES"/*.md; do
+    [ -f "$f" ] || continue
+    name=$(basename "$f")
+    case "$NEW_LIST" in
+      *"$name"*) ;;
+      *) echo "sync: 非產出物:$ROLES/$name(不在 manifest 上,是專案自己放的 —— 同步不管它)" ;;
+    esac
+  done
+fi

@@ -62,6 +62,11 @@ EVIDENCE,不改它**;抽不出來也不改變退出碼、不擋流程。
 | `repro` | 物件 | `{cmd, expect}` |
 | `memory` | 陣列 | `{layer, name, line, ticket}`;**鏡像而已,寫入仍由 `memory.py harvest` 做** |
 
+抽出來的那一份還多一格 `sections`:`{patch_sha256, gate, mutations, excluded, repro}` 五個 bool,
+答的是「EVIDENCE 那**五段散文**在不在」(§8 那五段;抽取只看小標與關鍵詞,**缺段印出來、不擋流程**)。
+為什麼要分開記:`result` 那一塊是機器版,五段是人版;兩者都可能單獨缺,而**只驗機器版的那一天,
+一份沒有「已排除的假設」的 EVIDENCE 會長得跟完整的一模一樣**,下一輪那個新的人因此把同一段 code 再查一次。
+
 抽出來的那一份多一格 `"present": true` 與一格 `"conflict"`(`objection` 與 EVIDENCE 裡
 那一行 `OBJECTION:` 對不上時為 `true`,並**以那一行為準**)。沒交的三種各有各的樣子:
 `{"present": false, "reason": "no-evidence"}`、`"no-block"`、`"bad-json"`(後者把原文前

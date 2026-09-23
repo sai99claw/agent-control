@@ -1,0 +1,158 @@
+"""`templates/` 底下的派工範本:**存在,而且說得出這張票獨有的那幾件事**。
+
+G2 / G8(`docs/FLOW.html` §G):主線 → 開題者、主線 → 整理者這兩條線以前沒有範本檔
+(`templates/` 只有驗證者那一份),於是每一次派工都重寫一遍 —— 而**重寫的那一份少了哪
+一格,沒有人看得出來**(§5.5 的母題)。
+
+所以這一組只問兩件事:範本在不在、四件事的四個佔位在不在。不比對逐字內容:
+範本是給人讀的,措辭會改;**格子少一個才是回歸**。
+"""
+
+import os
+import unittest
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TEMPLATES = os.path.join(ROOT, "templates")
+
+
+def read(name):
+    with open(os.path.join(TEMPLATES, name), encoding="utf-8") as handle:
+        return handle.read()
+
+
+class TheOpenerTemplate(unittest.TestCase):
+    """A2:主線 → 開題者的派工有範本。"""
+
+    def test_the_template_file_is_there(self):
+        self.assertTrue(os.path.exists(os.path.join(TEMPLATES, "dispatch-opener.md")),
+                        "templates/dispatch-opener.md 不在 —— 沒有範本就是每次重寫一遍")
+
+    def test_it_carries_the_four_things_that_are_unique_to_this_ticket(self):
+        """`memory/role/README.md`:派工 prompt 只指路 + **這張票獨有的四件事**。
+
+        **變異**:把範本裡「這張票獨有的四件事」那一節拿掉 → 這一條紅。
+        """
+        text = read("dispatch-opener.md")
+        self.assertIn("四件事", text)
+        block = text.split("四件事", 1)[1].split("\n## ", 1)[0]
+        for slot in ("題目", "base sha", "票庫路徑", "回報對象"):
+            self.assertIn(slot, block, "四件事少了「%s」那一格" % slot)
+        self.assertGreaterEqual(block.count("`<"), 4,
+                                "四個佔位要真的是佔位(`<…>`),不是寫死的例子")
+
+    def test_it_points_at_the_rules_pack_instead_of_pasting_the_rules(self):
+        text = read("dispatch-opener.md")
+        self.assertIn("rules.py pack opener", text)
+        self.assertIn("memory/role/opener.md", text)
+
+    def test_the_summary_has_a_field_to_land_in(self):
+        """開題者的摘要以前沒有檔名、沒有格式、看板讀不到 —— 一段沒有落點的交付物,
+        與沒有交付長得一樣。"""
+        text = read("dispatch-opener.md")
+        self.assertIn("outline", text)
+        self.assertIn("--outline", text)
+
+
+class TheConsolidatorTemplate(unittest.TestCase):
+    """A8:整理票開出來以後,**兩個 session 怎麼被派**有一句可以貼的指令。"""
+
+    def test_the_template_file_is_there(self):
+        self.assertTrue(
+            os.path.exists(os.path.join(TEMPLATES, "dispatch-consolidator.md")))
+
+    def test_it_says_two_models_each_get_their_own_session(self):
+        text = read("dispatch-consolidator.md")
+        self.assertIn("兩個模型", text)
+        self.assertIn("discussions/", text, "討論檔的路徑")
+        self.assertIn("memory.py consolidate", text, "收的那一句")
+        self.assertIn("rules.py pack consolidator", text)
+
+    def test_the_consolidator_has_its_own_role_card_now(self):
+        """以前它**借用** `implementer.md` —— 一張寫著「交 patch.diff」的角色卡,
+        對一個不交 patch 的角色說話。"""
+        card = os.path.join(ROOT, "memory", "role", "consolidator.md")
+        self.assertTrue(os.path.exists(card))
+        with open(card, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+        self.assertLessEqual(len(lines), 40, "角色卡 ≤ 40 行(memory/role/README.md)")
+
+
+class TheVerifierEvidenceHasAReceiver(unittest.TestCase):
+    """#29 A5 / G5:`EVIDENCE-verifier.md` 以前是**一份沒有收件者的交付物** ——
+    角色卡要求交,而沒有任何入口讀它。
+
+    這一組釘的是「文件說的」與「程式做的」對得上:兩份檔提到它 ≥ 1 次,而
+    `apply.sh --help` 真的認得那個旗標。**兩邊分岔的那一份看起來仍然像規格**(D-018)。
+    """
+
+    def mentions(self, rel):
+        with open(os.path.join(ROOT, rel), encoding="utf-8") as handle:
+            return handle.read().count("EVIDENCE-verifier")
+
+    def test_both_documents_still_ask_for_it(self):
+        card = self.mentions(os.path.join("memory", "role", "verifier.md"))
+        template = self.mentions(os.path.join("templates", "dispatch-verifier.md"))
+        self.assertGreaterEqual(card, 1)
+        self.assertGreaterEqual(template, 1)
+        # **兩份的提及數要一樣**:驗收案例(`tests/test_ticket_29.py` 的 A5)拿數字
+        # 相等當「二選一真的選完了」的判準,所以這裡把同一個條件釘在自己這一層 ——
+        # 不然下一個人改一句措辭,紅的會是驗收層,而他看不出是自己改的。
+        self.assertEqual(card, template,
+                         "角色卡提 %d 次、範本提 %d 次 —— A5 的驗收要求兩邊一致"
+                         % (card, template))
+
+    def test_the_program_entry_really_exists(self):
+        """**變異**:把 `apply.sh` 的 `--evidence-verifier` 那一格拿掉 → 這一條紅。"""
+        import subprocess
+        done = subprocess.run(["sh", os.path.join(ROOT, "scripts", "apply.sh"), "--help"],
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        # 量的是**「認得的旗標」那一段**,不是整份 `--help`:範例那一行也寫著這個旗標,
+        # 所以整份比對時把參數表那一列拿掉照樣是綠的(實測 2026-09-23 的變異 M18)。
+        # 「變異沒生效」與「守衛有漏洞」長得一樣,而這一次是守衛量錯了地方。
+        flags = done.stdout.split("認得的旗標:", 1)[1].split("\n例:", 1)[0]
+        self.assertIn("--evidence-verifier", flags,
+                      "文件要它交,而程式沒有旗標收 —— 那就是 G5 本身")
+
+    def test_the_two_documents_name_the_same_entry(self):
+        for rel in (os.path.join("memory", "role", "verifier.md"),
+                    os.path.join("templates", "dispatch-verifier.md")):
+            with open(os.path.join(ROOT, rel), encoding="utf-8") as handle:
+                text = handle.read()
+            self.assertIn("--evidence-verifier", text, rel)
+            self.assertIn("result-verifier-round", text, rel)
+
+
+class TheDesignSessionHasACardNow(unittest.TestCase):
+    """A1:設計 session 是 D-019 每天在派、卻**唯一沒有角色卡**的角色。"""
+
+    def cards(self):
+        return os.path.join(ROOT, "memory", "role")
+
+    def test_the_card_is_there_and_within_forty_lines(self):
+        for name in ("design.md", "reviewer.md"):
+            path = os.path.join(self.cards(), name)
+            self.assertTrue(os.path.exists(path), name)
+            with open(path, encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+            self.assertLessEqual(len(lines), 40, name + " 超過 40 行")
+
+    def test_the_design_card_answers_the_five_questions(self):
+        with open(os.path.join(self.cards(), "design.md"), encoding="utf-8") as handle:
+            text = handle.read()
+        for slot in ("讀什麼", "交什麼", "不做", "誰派", "何時結束"):
+            self.assertIn(slot, text, "角色卡少了「%s」" % slot)
+        self.assertIn("設計 session", text)
+
+    def test_the_fixed_sections_of_a_design_document_are_written_down(self):
+        """`docs/DESIGN-<題>.md` 以前沒有固定格式 —— 少了哪一段,下一個人分不出
+        「這一題沒有那個面向」與「上一個人忘了寫」。"""
+        with open(os.path.join(ROOT, "docs", "DESIGN.md"), encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertIn("設計文件的固定段", text)
+        self.assertIn("未來每票省/多花", text, "D-018 那一欄")
+        self.assertIn("模型", text, "後續工作的模型表")
+
+
+if __name__ == "__main__":
+    unittest.main()

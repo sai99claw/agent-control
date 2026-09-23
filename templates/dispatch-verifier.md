@@ -48,6 +48,16 @@
    —— 它只抽 `verify.files` 那幾個檔,差分基準是乾淨基底,檔頭是 `--- base/…` / `+++ work/…` 的相對形式。
    **不要手工挑檔**。
 
+## 第五樣:`EVIDENCE-verifier.md`(有收件者才交)
+五段散文照舊給人看,檔尾再加一段 `## result`(鍵見 `tickets/SCHEMA.md` §result,`role` 寫 `verifier`)。
+**收件者是 `apply.sh`**(2026-09-23,#29 A5):主線套 patch 那一手跑
+```sh
+sh scripts/apply.sh <票號> <patch.diff> <patch-verify.diff> --evidence-verifier <EVIDENCE-verifier.md>
+```
+它抽成 `reports/t<票號>/<run_id>/result-verifier-round<輪>.json`,與那一輪的 `status.json` 同目錄。
+抽取**只讀,不改你的檔**;抽不出來也不擋流程,但三種缺漏各有各的樣子
+(`no-evidence` / `no-block` / `bad-json`)—— 揉成同一個空檔的那一刻,「沒交」與「交了但都是空的」長得一樣。
+
 ## 然後就結束
 - **不判 PASS/FAIL、不寫 VERDICT、不讀實作者的 `EVIDENCE.md`。** 對錯由閘門跑票的
   `tags` 判;紅了走 `docs/WORKFLOW.md` §回歸紅了之後(起新 worker),**不回到你這裡**。
@@ -57,7 +67,8 @@
 - **不准輪詢**:測試前景跑、給 `timeout`、一輪拿到結果,輸出只擷取
   `^Ran |^OK|^FAILED|^(FAIL|ERROR):` 那幾行。不用 `Monitor`、不用 `sleep` 迴圈。
 - **不改產品碼、不放寬票面的驗收、不刪既有案例、不 git 寫入、不執行整支落地腳本。**
-- 交完刪掉自己的副本,只留 `patch-verify.diff`(票的 `verify.baseline` 已經是機器可讀的證據)。
+- 交完刪掉自己的副本,只留 `patch-verify.diff` 與上面那一份 EVIDENCE
+  (票的 `verify.baseline` 是機器可讀的證據;那一份是給人與看板看的)。
 
 ## 寫不出來的時候
 票面的驗收**不可執行**(說不出輸入、步驟、可觀察的輸出,或期望值只能從被測程式算出來)

@@ -5,6 +5,17 @@
 #   sh scripts/land.sh t7-land-refuses t9-event-kinds ...   # 依給的順序合
 #   sh scripts/land.sh t7-x                                 # 全套紅了預設派下一輪 worker
 #   sh scripts/land.sh t7-x --no-auto-fix                   # 明說要人下場
+#   sh scripts/land.sh docs "<訊息>" tickets/7.json docs/X.md memory/role/y.inbox.md
+#                                                           # 票檔 / 文件 / 記憶進主線
+#
+# ## docs 通道(2026-09-23,#29 A10;G10 / G17)
+# 票檔、`memory/`、`docs/DECISIONS.md` 以前進主線**只有裸 commit 一條路**,而
+# `memory/role/main.md` 明禁裸 commit 主線 —— 一條每天都在走、卻沒有任何守衛的路,
+# 與沒有規矩長得一樣(G17:同一天兩筆)。所以給它一個入口,而且:
+#   * **只收 `tickets/` `docs/` `memory/` 三個前綴** —— 產品碼走一票一分支,越界 rc=2 指名檔;
+#   * **與票的落地共用同一把 `.land.lock`** —— land 跑到一半有人往主線塞 commit,
+#     那條 `ff-only` 就進不去了,而失敗訊息說的是另一件事。
+# 它**不跑閘門**:這三個前綴不進產品碼,跑九分鐘全套換來的是同一份綠。
 #
 # 這一支**沒有判斷**(docs/ROLES.md:落地器是程式;順序是主線決定的)。它只會拒絕:
 # 0 commit、票對不上、`base_sha` 過期、寫入範圍越界、閘門紅。要它放寬的時候,
@@ -41,6 +52,119 @@ set -u
 [ $# -ge 1 ] || { echo "land: 給我至少一條分支"; exit 2; }
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 
+cfg() {
+    python3 - "$ROOT" "$1" "$2" <<'PY'
+import json, os, sys
+root, key, default = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    with open(os.path.join(root, "board", "config.json"), encoding="utf-8") as handle:
+        data = json.load(handle)
+except (OSError, ValueError):
+    data = {}
+print(data.get(key) or default)
+PY
+}
+MAIN=$(cfg main_branch main)
+TICKETS=$(cfg tickets_dir tickets)
+
+LOCK=${AC_LAND_LOCK:-$ROOT/.land.lock}
+HELD=""
+release() { [ -n "$HELD" ] && rm -rf "$LOCK"; }
+trap 'release' EXIT INT TERM
+take_lock() {   # $1 = 這一次在做什麼(寫進 holder,給撞上的人看)
+    if ! mkdir "$LOCK" 2>/dev/null; then
+        echo "land: 已經有一個 land 在跑 —— 同時只准一個(docs/WORKFLOW.md)"
+        [ -f "$LOCK/holder" ] && sed 's/^/land:   /' "$LOCK/holder"
+        echo "land: 確定那一個已經死了(heartbeat.sh 會說),就 rm -rf $LOCK"
+        exit 2
+    fi
+    HELD=1
+    printf 'pid=%s 開始=%s 分支=%s\n' "$$" "$(date +%Y-%m-%dT%H:%M:%S)" "$1" > "$LOCK/holder"
+}
+
+ev() {
+    python3 "$ROOT/scripts/event.py" emit "$@" >/dev/null \
+        || echo "land: 事件發不出去($*)" >&2
+}
+
+# ------------------------------------------------------------------ docs 通道
+DOCS_PREFIXES="tickets/ docs/ memory/"
+
+cmd_docs() {   # $1 = commit 訊息  $2… = 檔案(repo 相對路徑)
+    if [ $# -lt 2 ]; then
+        echo "land: docs <訊息> <檔…>  —— 只收 $DOCS_PREFIXES 三個前綴" >&2
+        echo "land:   例:sh scripts/land.sh docs \"tickets: #29 v2\" tickets/29.json" >&2
+        exit 2
+    fi
+    msg=$1
+    shift
+    bad=""
+    for f in "$@"; do
+        case "/$f/" in
+            */../*) bad="$bad $f(路徑裡有..)" ; continue ;;
+        esac
+        case "$f" in
+            /*) bad="$bad $f(絕對路徑)" ; continue ;;
+        esac
+        ok=""
+        for prefix in $DOCS_PREFIXES; do
+            case "$f" in "$prefix"*) ok=1 ;; esac
+        done
+        [ -n "$ok" ] || bad="$bad $f"
+    done
+    if [ -n "$bad" ]; then
+        echo "land: docs 通道只收 $DOCS_PREFIXES —— 這幾個不在裡面:" >&2
+        for one in $bad; do echo "land:   $one" >&2; done
+        echo "land:   產品碼走一票一分支:sh scripts/apply.sh <票號> <patch>,再 sh scripts/land.sh t<票號>" >&2
+        exit 2
+    fi
+    here=$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    if [ "$here" != "$MAIN" ]; then
+        echo "land: docs 通道要在 $MAIN 上跑,現在在 $here —— 進錯分支的 commit 沒有人看得出來" >&2
+        exit 2
+    fi
+    take_lock "docs: $msg"
+    ev land.start --note "docs $msg"
+    git -C "$ROOT" add -- "$@" || {
+        echo "land: git add 收不下這幾個檔(打錯路徑?)" >&2
+        ev land.refused --note "docs add 失敗"
+        exit 2
+    }
+    if git -C "$ROOT" diff --cached --quiet -- "$@"; then
+        # **已經在主線上就是做完了**,所以 rc=0:這一手要的是「這幾個檔在 main 上」,
+        # 而它們已經在了。第一版回 rc=3(「空的 commit 不是落地」),而那讓一個**幂等**
+        # 的動作變成失敗 —— 主線重跑一次(接連落地很常重跑)就會收到一個假的紅。
+        # §5.5 要的是「沒有東西可做」與「做完了」**看得出差別**,而差別寫在這兩行裡:
+        # 它說的是「已經在主線上」,不是「已 commit」,而且不會多出一個 commit。
+        echo "land: docs —— 這幾個檔已經在 $MAIN 上了,沒有新的 commit(沒有東西要落地)"
+        echo "land:   (與「剛剛落地了」的差別在這一行,不在退出碼:上面沒有 -> $MAIN 那一句。)"
+        ev land.pass --note "docs 沒有改動(已在主線上)"
+        exit 0
+    fi
+    git -C "$ROOT" commit -q -m "$msg" -- "$@" || {
+        echo "land: git commit 失敗" >&2
+        ev land.fail --note "docs commit 失敗"
+        exit 2
+    }
+    sha=$(git -C "$ROOT" rev-parse --short HEAD)
+    echo "land: docs -> $MAIN $sha"
+    git -C "$ROOT" show --stat --oneline -s HEAD | sed 's/^/land:   /'
+    if git -C "$ROOT" remote get-url origin >/dev/null 2>&1; then
+        git -C "$ROOT" push -q origin "$MAIN" || {
+            echo "land: 已 commit,但 push 沒成功 —— 自己推一次:git push origin $MAIN" >&2
+            ev land.fail --note "docs push 沒成功" --kv "sha=$sha"
+            exit 1
+        }
+    fi
+    ev land.pass --note "docs $msg" --kv "sha=$sha"
+    exit 0
+}
+
+if [ "$1" = "docs" ]; then
+    shift
+    cmd_docs "$@"
+fi
+
 # 旗標先挑掉,剩下的才是分支。**分支名不准有空白**(`t<票號>-…` 的形狀),所以這裡
 # 用字串重組位置參數是安全的。
 AUTOFIX=1
@@ -57,42 +181,7 @@ done
 set -- $REBUILT
 [ $# -ge 1 ] || { echo "land: 給我至少一條分支"; exit 2; }
 
-# 設定走 `board/config.json`,不寫死 —— 這支腳本要能被別的專案原樣拿走。
-cfg() {
-    python3 - "$ROOT" "$1" "$2" <<'PY'
-import json, os, sys
-root, key, default = sys.argv[1], sys.argv[2], sys.argv[3]
-try:
-    with open(os.path.join(root, "board", "config.json"), encoding="utf-8") as handle:
-        data = json.load(handle)
-except (OSError, ValueError):
-    data = {}
-print(data.get(key) or default)
-PY
-}
-MAIN=$(cfg main_branch main)
-TICKETS=$(cfg tickets_dir tickets)
-
-# 互斥鎖:`mkdir` 成功與否是原子的,`[ -e ]` 之後再建不是(兩個 land 會同時通過檢查)。
-LOCK=${AC_LAND_LOCK:-$ROOT/.land.lock}
-HELD=""
-release() { [ -n "$HELD" ] && rm -rf "$LOCK"; }
-trap 'release' EXIT INT TERM
-if ! mkdir "$LOCK" 2>/dev/null; then
-    echo "land: 已經有一個 land 在跑 —— 同時只准一個(docs/WORKFLOW.md)"
-    [ -f "$LOCK/holder" ] && sed 's/^/land:   /' "$LOCK/holder"
-    echo "land: 確定那一個已經死了(heartbeat.sh 會說),就 rm -rf $LOCK"
-    exit 2
-fi
-HELD=1
-printf 'pid=%s 開始=%s 分支=%s\n' "$$" "$(date +%Y-%m-%dT%H:%M:%S)" "$*" > "$LOCK/holder"
-
-# 事件發不出去要出聲,但不擋落地:發不出去的那一刻正是最需要紀錄的那一刻,而
-# 「靜靜地沒發」與「發了」在控制台上長得一樣(D-003)。
-ev() {
-    python3 "$ROOT/scripts/event.py" emit "$@" >/dev/null \
-        || echo "land: 事件發不出去($*)" >&2
-}
+take_lock "$*"
 
 STAMP=$(date +%Y%m%d-%H%M%S)
 IDS=""
@@ -525,3 +614,15 @@ for i in $IDS; do
     echo "land: #$i 已合併、尚未關票 —— python3 scripts/ticket.py close $i"
 done
 git -C "$ROOT" worktree remove "$WT" && git -C "$ROOT" branch -q -D "$BR"
+
+# 還躺在 $WTBASE 底下的修復 / 驗證副本(#29 A6,G6)。**只印不刪**:這裡不知道哪一份
+# 還有人在看(綠了停 InReview 的那一輪就留著),而**猜錯刪掉的是別人正在讀的證據**。
+# 印出來是為了讓「沒人收」不再是靜的 —— 2026-09-16 某個下游專案的副本 14 GB 塞滿磁碟,
+# 全套當場 disk I/O error,而在那之前它一聲都沒有出過。
+LEFT=$(ls -d "$WTBASE"/fix-t*/ "$WTBASE"/verify-t*/ 2>/dev/null || true)
+if [ -n "$LEFT" ]; then
+    echo "land: $WTBASE 底下還留著這幾份副本(只印不刪,確認沒人在看再 rm -rf):"
+    echo "$LEFT" | sed 's/^/land:   /'
+    echo "land:   (auto-fix 每一輪收完 patch 就刪掉 work/ 與 base/;剩下的是 patch、"
+    echo "land:    EVIDENCE 與派工文,那幾份是證據,不要一起掃掉。)"
+fi

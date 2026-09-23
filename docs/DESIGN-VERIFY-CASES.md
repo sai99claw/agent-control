@@ -207,9 +207,9 @@ D-018 檢查:兩邊只有一種 `verify.baseline` 形狀(`stage` 是同一格的
 | 1 | **#25** 驗證者只證紅:派工範本、角色卡、VERIFICATION、SCHEMA 措辭 + `verify/_template_ticket.py` + `sync-to-project.sh` 多一條 copy + DECISIONS D-020 | sonnet | 文字與範本本設計已給全文,是搬字;但跨六個檔、每句要對得上既有措辭,haiku 會漏 | 40K |
 | 2 | **#26** `verify-case.py`:`red` 子指令、四類紅的分類、`red_lines`、`stage`、`lint`(F1–F6)、`ticket.py close` 認 `stage=="check"`;`tests/test_verify_case.py` 補案例 | opus | traceback 分類與 ast lint 有邊界(subTest、`_FailedTest`、多檔 traceback),要自己設計 fixture;sonnet 做這種會把「紅在別處」判成算數 | 120K |
 | 3 | **#27** `gate.sh --ticket`:lint → check 接線,status.json 收 baseline 紅榜,`tests/test_gate.py` 沙盒案例 | opus | shell + 沙盒 repo 的整合測試,gate.sh 已 600 行、有 auto-fix 分支要繞開 | 100K |
-| 4 | **T #650** 同步 A 到 T + `land-ticket.sh gate` 接線 + `board/config.json` 禁字 + `DISPATCH-COMMON-RULES.md` §133 + 把 #647/#644/#642 三份既有案例過一次 lint(不改內容,只補 docstring 首行編號) | sonnet | 鏡像 A 的 diff,形狀已定;lint 對既有檔的補丁是機械的 | 60K |
+| 4 | **T #650**(**已開**,tabby #650)同步 A 到 T + `land-ticket.sh gate` 接線 + `board/config.json` 禁字 + `DISPATCH-COMMON-RULES.md` §133 + 把 #647/#644/#642 三份既有案例過一次 lint(不改內容,只補 docstring 首行編號) | sonnet | 鏡像 A 的 diff,形狀已定;lint 對既有檔的補丁是機械的 | 60K |
 
-**依賴**:#25 獨立(今天可派,`verify-case.py red` 未落地前派工文寫過渡指令:`cd $W/base-with-cases && python3 -m unittest <module> -v`,只貼 `^Ran|^FAILED|^(FAIL|ERROR):` 與 rc,**不准搭實作、不准變異**);#26 獨立;#27 依賴 #26;#650 依賴 #25–#27 全落地。
+**依賴**:#25 獨立(今天可派,`verify-case.py red` 未落地前派工文寫過渡指令:`cd $W/base-with-cases && python3 -m unittest <module> -v`,只貼 `^Ran|^FAILED|^(FAIL|ERROR):` 與 rc,**不准搭實作、不准變異**);#26 獨立;#27 依賴 #26;#650(**已開**,tabby #650)依賴 #25–#27 全落地。
 
 **驗證者**:#25 `verify_waiver`(純文字 + 範本檔,lint 落地後 #650 會對範本本身跑一次);#26 / #27 有驗證者(sonnet),**用本設計的規矩派**——它們是第一批只交紅的票,派工文照 #25 改好的範本。
 

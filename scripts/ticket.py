@@ -288,6 +288,10 @@ USAGE = {
     "import": "scripts/ticket.py import <舊票目錄>",
     "freeze": "scripts/ticket.py freeze <id> --reason … --criterion …",
     "round": "scripts/ticket.py round <id> <第幾輪> [--red|--green]",
+    "result": ("scripts/ticket.py result <EVIDENCE> <輸出.json> "
+               "--ticket <id> --role worker|verifier --round N"),
+    "objection": ("scripts/ticket.py objection <id> --line \"OBJECTION: …\" "
+                  "--evidence <EVIDENCE>"),
 }
 
 EXAMPLE = {
@@ -313,6 +317,12 @@ python3 scripts/ticket.py set 7 allowed_write_paths '["scripts/land.sh", "tests/
                '  --reason "視覺方向未定" \\\n'
                '  --criterion "產出會不會因視覺方向改變而重做"'),
     "round": "python3 scripts/ticket.py round 7 3 --red",
+    "result": ("python3 scripts/ticket.py result EVIDENCE-round2.md \\\n"
+               "  reports/t7/20260923-101500-1/result-round2.json \\\n"
+               "  --ticket 7 --role worker --round 2"),
+    "objection": ('python3 scripts/ticket.py objection 7 \\\n'
+                  '  --line "OBJECTION: ticket-wrong 驗收 A3 指的欄位不存在" \\\n'
+                  '  --evidence reports/t7/EVIDENCE.md'),
 }
 
 
@@ -346,6 +356,13 @@ def known_flags(verb):
                 for flag in ("--red", "--green")]
     if verb == "close":
         return [("--landed", FLAG_NOTE.get("--landed", ""), False, False)]
+    if verb == "result":
+        return [("--ticket", "票號", False, True),
+                ("--role", "worker 或 verifier", False, True),
+                ("--round", "第幾輪", False, True)]
+    if verb == "objection":
+        return [("--line", "EVIDENCE 裡那一行 `OBJECTION: <類別> <理由>`", False, True),
+                ("--evidence", "那份 EVIDENCE 的路徑(記進票面當證據)", False, True)]
     return []
 
 
@@ -825,6 +842,49 @@ def done_blockers(ticket):
     return out
 
 
+def on_main(sha):
+    """這個 sha 在主線歷史裡嗎。取不到就回 False —— **答不出來不等於答是**。"""
+    if not sha:
+        return False
+    done = git(["merge-base", "--is-ancestor", sha, main_branch()])
+    return done.returncode == 0
+
+
+def baseline_next_step(ticket):
+    """落地後 `verify.baseline` 還缺那一趟時,**印一句可以直接貼的指令**。
+
+    G7(#29 A7):`land.sh` 不自動補量,而 `ticket.py close` 擋下來的時候只說「缺
+    baseline」—— 一個守衛給錯了下一步,比沒有守衛更糟(§5.7):那個人會自己去猜
+    `--ref` 與 `--candidate` 該填什麼,而**對主線的頭量出來的「一條都沒紅」說的是
+    這一趟量錯了地方**,不是案例是假的(#19)。所以兩端都寫死:`--ref` 是票的
+    `base_sha`、`--candidate` 是覆核綁的那個 sha(它已經在主線歷史裡)。
+
+    回 `None` = 沒有東西要說。**它不改退出碼**:補量是主線的下一步,不是關票的條件
+    (條件在 `done_blockers()`)。
+    """
+    plan = ticket.get("verify") if isinstance(ticket.get("verify"), dict) else {}
+    baseline = plan.get("baseline") if isinstance(plan.get("baseline"), dict) else None
+    if baseline and baseline.get("ok") is True:
+        return None
+    review = ticket.get("review") if isinstance(ticket.get("review"), dict) else {}
+    sha = str(review.get("sha") or "")
+    base = str(ticket.get("base_sha") or "")
+    if not sha or not base or not on_main(sha):
+        return None
+    return ("python3 scripts/verify-case.py check %s --ref %s --candidate %s"
+            % (ticket.get("id"), base, sha))
+
+
+def print_baseline_next_step(ident, ticket):
+    line = baseline_next_step(ticket)
+    if not line:
+        return
+    sys.stdout.write("ticket: #%s 落地後的補量還沒做(verify.baseline %s)—— 貼這一句:\n"
+                     % (ident, "缺" if not (ticket.get("verify") or {}).get("baseline")
+                        else "的 ok 不是 true"))
+    sys.stdout.write("  %s\n" % line)
+
+
 def print_done_blockers(ident, missing):
     sys.stdout.write("ticket: #%s 進不了 Done —— 還缺:\n" % ident)
     for line in missing:
@@ -1168,6 +1228,7 @@ def cmd_close(argv):
                          "再關(`ticket.py set %s verify_strings '<那串字>'`)。\n"
                          % (ident, ident))
         return 1
+    print_baseline_next_step(ident, ticket)
     missing = done_blockers(ticket)
     if missing:
         print_done_blockers(ident, missing)
@@ -1335,6 +1396,222 @@ def cmd_import(argv):
     return 0 if broken == 0 else 1
 
 
+# ------------------------------------------------- EVIDENCE 尾端那一塊 result
+
+# `## result` 那一塊怎麼開頭、怎麼收尾。**最後**一塊才算:前面幾塊可能是規則包裡
+# 引用的範例,而尾端那一塊才是這一輪交的(`docs/DISPATCH-TEMPLATE.md` §8.5)。
+RESULT_OPEN = re.compile(r"^\s*(?:`{3,}|~{3,})[ \t]*result[ \t]*$")
+RESULT_CLOSE = re.compile(r"^\s*(?:`{3,}|~{3,})[ \t]*$")
+RESULT_RAW_CAP = 500
+OBJECTION_CATEGORIES = ("ticket-wrong", "test_defect", "blocking")
+# 五段散文在不在 —— **人版**與機器版分開記(`tickets/SCHEMA.md` §result)。關鍵詞取
+# 角色卡那五段的標題字,一段給幾個同義詞:只認一個詞的話,換一種寫法就變成「沒交」,
+# 而**誤報缺段會讓人去補一段已經在那裡的東西**,比漏報更吵。
+RESULT_SECTIONS = (
+    ("patch_sha256", ("sha256", "SHA256")),
+    ("gate", ("閘門", "Ran ", "rc=")),
+    ("mutations", ("變異",)),
+    ("excluded", ("排除的假設", "已排除")),
+    ("repro", ("最小重現", "重現指令", "重現:")),
+)
+
+
+def result_block(lines):
+    """EVIDENCE 裡**最後**那一塊 ```result 的內文;一塊都沒有回 `None`。"""
+    start = None
+    for index, line in enumerate(lines):
+        if RESULT_OPEN.match(line):
+            start = index
+    if start is None:
+        return None
+    body = []
+    for line in lines[start + 1:]:
+        if RESULT_CLOSE.match(line):
+            break
+        body.append(line)
+    return "\n".join(body)
+
+
+def objection_line(lines):
+    """EVIDENCE 裡第一行 `OBJECTION:`(沒有就回空字串)。"""
+    for line in lines:
+        if line.startswith("OBJECTION:"):
+            return line
+    return ""
+
+
+def objection_parts(line):
+    """`OBJECTION: <類別> <一句話>` → `(類別, 理由)`。類別不在表上就當 `ticket-wrong`
+    —— 拼錯的類別與沒有反駁長得一樣,而當成最重的那一種至少會有人看。"""
+    rest = line.split(":", 1)[1].strip() if ":" in line else line.strip()
+    parts = rest.split(None, 1)
+    category = parts[0] if parts and parts[0] in OBJECTION_CATEGORIES else "ticket-wrong"
+    body = parts[1] if len(parts) > 1 else rest
+    return category, body
+
+
+def result_sections(text):
+    """五段散文在不在 —— 回一個 `{段名: bool}`。"""
+    return {name: any(word in text for word in words)
+            for name, words in RESULT_SECTIONS}
+
+
+def harvest_result(evidence, out, role, rnd, ident):
+    """把 EVIDENCE 尾端那一塊抽成 `result-round<輪>.json`。**只讀 EVIDENCE,不改它。**
+
+    這一支是 `auto-fix.sh`(第 2 輪起)與 `apply.sh`(第 1 輪)**共用的那一支**
+    (#29 A4)。以前抽取只寫在 `auto-fix.sh` 的一段 heredoc 裡,於是走 `apply.sh` 的
+    第一輪永遠沒有 `result-round1.json` —— 而看板對那一輪只印得出「沒交結構化輸出」,
+    與真的沒交長得一樣。兩邊各抄一份的那一天,兩份會往不同方向漂(D-018)。
+
+    **三種缺漏各有各的樣子**:沒有 EVIDENCE(`no-evidence`)、有 EVIDENCE 但沒有那一塊
+    (`no-block`)、有那一塊但 JSON 解不開(`bad-json`,原文前 500 字留在 `raw`)。
+    揉成同一個空檔的那一刻,「沒交」與「交了但都是空的」長得一樣。
+    """
+    miss = {"present": False, "ticket": str(ident), "role": role,
+            "round": int(rnd), "evidence": os.path.basename(evidence)}
+    try:
+        with open(evidence, encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError:
+        data = dict(miss, reason="no-evidence")
+        text = ""
+        lines = []
+    else:
+        lines = text.splitlines()
+        raw = result_block(lines)
+        if raw is None:
+            data = dict(miss, reason="no-block")
+        else:
+            try:
+                parsed = json.loads(raw)
+            except ValueError:
+                parsed = None
+            if not isinstance(parsed, dict):
+                data = dict(miss, reason="bad-json", raw=raw[:RESULT_RAW_CAP])
+            else:
+                data = dict(parsed)
+                data["present"] = True
+                said = parsed.get("objection")
+                said = said.get("category") if isinstance(said, dict) else None
+                here = objection_line(lines)
+                mine = objection_parts(here)[0] if here else None
+                data["conflict"] = (mine or None) != (said or None)
+    data["sections"] = result_sections(text) if text else {
+        name: False for name, _words in RESULT_SECTIONS}
+    where = os.path.dirname(out)
+    if where:
+        os.makedirs(where, exist_ok=True)
+    with open(out, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    return data
+
+
+def cmd_result(argv):
+    if len(argv) < 2:
+        sys.stderr.write("ticket: %s\n" % USAGE["result"])
+        return 2
+    evidence, out = argv[0], argv[1]
+    ident, role, rnd = "", "worker", "1"
+    index = 2
+    while index < len(argv):
+        flag = argv[index]
+        if flag in ("--ticket", "--role", "--round") and index + 1 < len(argv):
+            value = argv[index + 1]
+            if flag == "--ticket":
+                ident = value
+            elif flag == "--role":
+                role = value
+            else:
+                rnd = value
+            index += 2
+            continue
+        return unknown_flag("result", flag)
+    try:
+        number = int(rnd)
+    except ValueError:
+        sys.stderr.write("ticket: --round 要是數字\n")
+        return 2
+    data = harvest_result(evidence, out, role, number, ident)
+    if not data.get("present"):
+        sys.stdout.write("ticket: result 抽不出來(%s)—— %s;不擋流程\n"
+                         % (data.get("reason") or "?", evidence))
+    # **缺段印出來、不擋流程**:五段散文是給下一輪那個新的人的,少一段他就得把
+    # 你查過的路再查一次(`docs/DISPATCH-TEMPLATE.md` §8 第 5、6 點)。
+    gone = [name for name, ok in sorted((data.get("sections") or {}).items()) if not ok]
+    if gone:
+        sys.stdout.write("ticket: EVIDENCE 少了這幾段:%s(不擋;見角色卡「必備五段」)\n"
+                         % "、".join(gone))
+    sys.stdout.write("ticket: result -> %s\n" % out)
+    return 0
+
+
+# ------------------------------------------------------------------ objection
+
+
+def record_objection(ident, line, evidence):
+    """把 EVIDENCE 裡那一行 `OBJECTION:` 記成票的 `objections[]` 一筆。
+
+    **記過就不再記第二次**:`auto-fix.sh` 在叫 `apply.sh` 之前就先收過(`test_defect`
+    那條路還會續跑),`apply.sh` 再收一次的話,同一句話會在票上長出兩筆,而處置的人
+    分不出哪一筆是哪一輪的。回 `(類別, 是不是新的)`。
+    """
+    category, body = objection_parts(line)
+    where = os.path.relpath(evidence, root()) if evidence else ""
+    with Lock():
+        ticket = load(ident)
+        rows = ticket.get("objections") or []
+        for row in rows:
+            if isinstance(row, dict) and row.get("category") == category \
+                    and (row.get("body") or "") == body:
+                return category, False
+        rows.append({"category": category, "body": body, "evidence": where,
+                     "owner": "verifier" if category == "test_defect" else "main",
+                     "disposition": "", "follow_up": ""})
+        ticket["objections"] = rows
+        ticket["state_version"] = int(ticket.get("state_version") or 0) + 1
+        # 反駁是落地**之後**才補得上處置的那一格,不是重新審過一次票面:跟著把
+        # review 的版本蓋上去,不讓既有的覆核因為收了一筆反駁而過期(#15 同一條)。
+        if isinstance(ticket.get("review"), dict) \
+                and ticket["review"].get("state_version") is not None:
+            ticket["review"]["state_version"] = ticket["state_version"]
+        save(ticket)
+    event.emit("ticket.state", ticket=str(ident), field="objections",
+               note=category, state_version=ticket["state_version"])
+    return category, True
+
+
+def cmd_objection(argv):
+    if not argv:
+        sys.stderr.write("ticket: %s\n" % USAGE["objection"])
+        return 2
+    ident = argv[0].lstrip("#")
+    line = evidence = ""
+    index = 1
+    while index < len(argv):
+        flag = argv[index]
+        if flag in ("--line", "--evidence") and index + 1 < len(argv):
+            if flag == "--line":
+                line = argv[index + 1]
+            else:
+                evidence = argv[index + 1]
+            index += 2
+            continue
+        return unknown_flag("objection", flag)
+    if not line:
+        sys.stderr.write("ticket: objection 要 --line \"OBJECTION: <類別> <理由>\"\n")
+        return 2
+    try:
+        category, fresh = record_objection(ident, line, evidence)
+    except (OSError, ValueError, RuntimeError) as exc:
+        sys.stderr.write("ticket: 反駁記不進 #%s —— %s\n" % (ident, exc))
+        return 2
+    sys.stdout.write("ticket: #%s 反駁 %s —— %s\n"
+                     % (ident, category, "記下了" if fresh else "已經有同一筆,沒有再記"))
+    return 0 if fresh else 3
+
+
 # --------------------------------------------------------------------- main
 
 
@@ -1346,7 +1623,8 @@ def main(argv):
     table = {"create": cmd_create, "list": cmd_list, "show": cmd_show,
              "set": cmd_set, "inbox": cmd_inbox, "verify": cmd_verify,
              "close": cmd_close, "import": cmd_import, "freeze": cmd_freeze,
-             "round": cmd_round}
+             "round": cmd_round, "result": cmd_result,
+             "objection": cmd_objection}
     if verb in ("--help", "-h", "help"):
         if rest and rest[0] in table:
             return help_for(rest[0])

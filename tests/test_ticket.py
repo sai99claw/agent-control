@@ -493,6 +493,65 @@ class VerifyAndClose(Sandbox):
         self.assertEqual(self.ticket("verify", "1").returncode, 0)
 
 
+class TheNextStepAfterLanding(Sandbox):
+    """G7 / #29 A7:落地之後 `verify.baseline` 還缺閘門那一趟時,**印一句可以貼的指令**。
+
+    以前 `close` 只說「缺 baseline」,而補量要主線自己打
+    `verify-case.py check <n> --ref … --candidate …` —— 兩端填錯一邊,量出來的
+    「一條都沒紅」說的是**這一趟量錯了地方**,不是案例是假的(#19)。
+    一個守衛給錯了下一步,比沒有守衛更糟(`docs/DISPATCH-TEMPLATE.md` §5.7)。
+    """
+
+    def landed(self, **extra):
+        base = self.git("rev-parse", "main").strip()
+        self.write("src/nav.py", "def size_nav():\n    return 42\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "把 #1 的東西放進主線")
+        tip = self.git("rev-parse", "main").strip()
+        fields = {"allowed_write_paths": ["src/*"],
+                  "verify_strings": ["src/nav.py:def size_nav"],
+                  "base_sha": base}
+        fields.update(extra)
+        self.make_ticket(1, **fields)
+        self.ticket("set", "1", "review",
+                    json.dumps({"verdict": "pass", "by": "main", "sha": tip},
+                               ensure_ascii=False))
+        return base, tip
+
+    def test_close_prints_the_line_with_both_shas(self):
+        """**變異**:把 `cmd_close` 裡那一行 `print_baseline_next_step` 拿掉 → 這一條紅。"""
+        base, tip = self.landed()
+        done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("verify-case.py check 1", done.stdout)
+        self.assertIn("--ref %s" % base, done.stdout, "ref 要寫死票的 base_sha")
+        self.assertIn("--candidate %s" % tip, done.stdout, "candidate 要寫死覆核那個 sha")
+        self.assertEqual(self.load_ticket("1")["state"], "Ready", "它不改票的狀態")
+
+    def test_a_baseline_that_already_passed_says_nothing(self):
+        """**它不是每次都印**:量過了還叫人再量一次,下一次就沒有人看這一行了。"""
+        self.landed(verify={"files": ["verify/example/test_example.py"],
+                            "baseline": {"ok": True, "stage": "check"}},
+                    test_evidence=[{"cmd": "gate", "rc": 0}])
+        done = self.ticket("close", "1")
+        # 比對 `--ref`:`done_blockers()` 本來就有一句提到 `verify-case.py check <票號>`,
+        # 而**兩句都出現時分不出是誰印的** —— 這一行要問的是那句「可以直接貼」的。
+        self.assertNotIn("--ref ", done.stdout, done.stdout)
+
+    def test_a_review_sha_that_never_reached_main_says_nothing(self):
+        """**這一句的前提是「東西已經在主線上」** —— review 綁的 sha 還沒進主線時,
+        補量沒有東西可量,而印出來的那一句會被照著貼(§5.7:守衛的下一步要是對的)。
+        """
+        self.landed()
+        self.ticket("set", "1", "review",
+                    json.dumps({"verdict": "pass", "by": "main", "sha": "deadbeef"},
+                               ensure_ascii=False))
+        done = self.ticket("close", "1")
+        # 比對 `--ref`:`done_blockers()` 本來就有一句提到 `verify-case.py check <票號>`,
+        # 而**兩句都出現時分不出是誰印的** —— 這一行要問的是那句「可以直接貼」的。
+        self.assertNotIn("--ref ", done.stdout, done.stdout)
+
+
 class WaiverAndLanded(Sandbox):
     """#15:已落地的票關不掉 —— close 要認得 `verify_waiver`(#8),而 `set` 那幾格
     (`verify_waiver` / `verify_strings` / `objections`)是落地後的收尾,不該讓既有

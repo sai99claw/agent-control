@@ -1,7 +1,8 @@
 #!/bin/sh
 # 套 patch → 建分支 → commit:**一個程式入口** — `docs/WORKFLOW.md` §patch 管線(D-012、D-015)。
 #
-#   sh scripts/apply.sh <票號> <patch> [<patch-verify>] [--evidence <檔>] # 套進 t<票號> 分支並 commit
+#   sh scripts/apply.sh <票號> <patch> [<patch-verify>] [--evidence <檔>]
+#       [--evidence-verifier <檔>]                    # 套進 t<票號> 分支並 commit
 #   sh scripts/apply.sh rebase <票號> <patch> [-o <輸出>] # 套到**當前主線**的副本,出一份乾淨 diff
 #
 # 這一手以前是主線手動做的(`docs/ROLES.md` 的引言框:落地器**不**套 patch)。手動的
@@ -25,6 +26,19 @@
 #   3 檔頭不合格或 `--check` 不過(rebase 那一支的三向合併衝突也是 3)
 #   4 套完的比對不過(rebase 那一支的 **0 byte diff** 也是 4)
 #   5 動到 `allowed_write_paths` 以外
+#   6 patch 套好了,但 EVIDENCE 裡有一行 `OBJECTION:` —— 已記進票的 `objections[]`
+#
+# ## `--evidence` 收三樣(2026-09-23,#29 A4;以前只收第一樣)
+# 1. `memory.py harvest` —— EVIDENCE 記憶段那幾行;
+# 2. `ticket.py result` —— 檔尾那一塊 `result` 抽成
+#    `reports/t<票號>/<run_id>/result-round<輪>.json`(**與 `auto-fix.sh` 同一支抽取**;
+#    `--evidence-verifier` 那一份抽成 `result-verifier-round<輪>.json`);
+# 3. `ticket.py objection` —— `^OBJECTION:` 那一行記進票的 `objections[]`,rc=6 指名。
+#    **記過的同一筆不會再記第二次**(`auto-fix.sh` 那條路已經先收過)。
+#
+# 為什麼 rc 非零:反駁是「這張票寫錯了」,而東西照樣套進分支、主線照樣往下走的那一刻,
+# 那句話等於沒有人收(`docs/DISPATCH-TEMPLATE.md` §7)。patch 該 commit 的還是 commit 了
+# —— 退出碼說的是「這一手沒有結束」,不是「什麼都沒發生」。
 set -u
 # `AC_ROOT` 優先:被 `gate.sh --auto-fix` 叫到的時候,這支檔案住在**副本**裡,
 # 而票、reports 與收件匣住在主 repo。照 `$0` 算根會把它們寫進一個等一下會被
@@ -314,11 +328,25 @@ PY
 }
 
 # ------------------------------------------------------------------ apply
-[ $# -ge 1 ] || {
-    echo "用法:sh scripts/apply.sh <票號> <patch> [<patch-verify>] [--evidence <檔>]"
-    echo "      sh scripts/apply.sh rebase <票號> <patch> [-o <輸出>]"
-    exit 2
+usage() {   # $1 = 出去的檔案描述子(1 = 有人問 --help,2 = 用錯了)
+    {
+        echo "用法:sh scripts/apply.sh <票號> <patch> [<patch-verify>] [旗標…]"
+        echo "      sh scripts/apply.sh rebase <票號> <patch> [-o <輸出>]"
+        echo ""
+        echo "認得的旗標:"
+        echo "  --evidence <檔>            實作者的 EVIDENCE:收記憶、抽 result-round<輪>.json、"
+        echo "                             收 ^OBJECTION: 那一行(不給就找 patch 旁邊的 EVIDENCE.md)"
+        echo "  --evidence-verifier <檔>   驗證者的 EVIDENCE-verifier.md:抽 result-verifier-round<輪>.json"
+        echo ""
+        echo "例:"
+        echo "  sh scripts/apply.sh 7 patch.diff patch-verify.diff \\"
+        echo "     --evidence EVIDENCE.md --evidence-verifier EVIDENCE-verifier.md"
+    } >&"$1"
 }
+case "${1:-}" in
+    --help|-h|help) usage 1; exit 0 ;;
+esac
+[ $# -ge 1 ] || { usage 2; exit 2; }
 if [ "$1" = "rebase" ]; then
     shift
     [ $# -ge 2 ] || { echo "apply: rebase <票號> <patch> [-o <輸出>]" >&2; exit 2; }
@@ -340,6 +368,7 @@ ID=$1
 PATCH=$2
 VPATCH=""
 EVIDENCE=""
+VEVIDENCE=""
 shift 2
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -347,6 +376,14 @@ while [ $# -gt 0 ]; do
             shift
             [ $# -ge 1 ] || { echo "apply: --evidence 後面要路徑" >&2; exit 2; }
             EVIDENCE=$1 ;;
+        --evidence-verifier)
+            shift
+            [ $# -ge 1 ] || { echo "apply: --evidence-verifier 後面要路徑" >&2; exit 2; }
+            VEVIDENCE=$1 ;;
+        --help|-h)
+            usage 1; exit 0 ;;
+        -*)
+            echo "apply: 不認得 $1" >&2; usage 2; exit 2 ;;
         *)
             [ -z "$VPATCH" ] || { echo "apply: 多出的參數 $1" >&2; exit 2; }
             VPATCH=$1 ;;
@@ -567,13 +604,49 @@ round: ${AC_ROUND:-1}"
 git -C "$WT" commit -q -m "$MSG" || die 2 "git commit 失敗"
 SHA=$(git -C "$WT" rev-parse --short HEAD)
 echo "apply: #$ID -> $BR $SHA 已 commit($(git -C "$WT" rev-list --count "$MAIN..HEAD") 個 commit)"
+ROUND=${AC_ROUND:-1}
+REPORTS=$ROOT/$(cfg reports_dir reports)/t$ID/$RUN_ID
 if [ -f "$EVIDENCE" ]; then
     python3 "$AC/memory.py" harvest "$EVIDENCE" \
         || echo "apply: EVIDENCE 記憶收割失敗($EVIDENCE)—— 不擋 apply" >&2
 else
     echo "apply: 找不到 EVIDENCE $EVIDENCE —— 記憶 0 筆" >&2
 fi
+# **收 patch 的同一手抽 result**(#29 A4)。抽不出來的三種樣子由 `ticket.py result`
+# 分開記(`no-evidence` / `no-block` / `bad-json`),一律不改退出碼、不擋流程 ——
+# 揉成同一個空檔的那一刻,「沒交」與「交了但都是空的」長得一樣。
+# `AC_RESULT_DONE=1` = 上游(`auto-fix.sh`)在收 patch 的同一手已經抽過了。兩邊都抽的
+# 話,同一輪會有兩份 `result-round<r>.json` 躺在兩個 run 目錄裡,而看板的「輪數最大
+# 那一份」就有兩個答案 —— 一份說綠、一份說綠,看起來沒問題,直到它們不一樣的那一天。
+if [ -n "${AC_RESULT_DONE:-}" ]; then
+    echo "apply: result 由上游抽過了(AC_RESULT_DONE)—— 這裡不抽第二份"
+else
+python3 "$AC/ticket.py" result "$EVIDENCE" "$REPORTS/result-round$ROUND.json" \
+    --ticket "$ID" --role worker --round "$ROUND" \
+    || echo "apply: result 抽不出來($EVIDENCE)—— 不擋 apply" >&2
+if [ -n "$VEVIDENCE" ]; then
+    python3 "$AC/ticket.py" result "$VEVIDENCE" \
+        "$REPORTS/result-verifier-round$ROUND.json" \
+        --ticket "$ID" --role verifier --round "$ROUND" \
+        || echo "apply: 驗證者的 result 抽不出來($VEVIDENCE)—— 不擋 apply" >&2
+fi
+fi
 status_done 0 "套好並 commit 成 $SHA"
 echo "apply: 下一步 —— (cd $WT && sh scripts/gate.sh --branch --ticket $ID)"
 echo "apply:       閘門綠了主線覆核記 review,再 sh scripts/land.sh $BR"
+# **反駁放在最後**:patch 已經 commit 了(那是事實),但這一手沒有結束 ——
+# 一個「票寫錯了」的說法沒有人收,與沒有那個說法長得一樣(§7)。
+if [ -f "$EVIDENCE" ] && grep -q '^OBJECTION:' "$EVIDENCE"; then
+    OLINE=$(grep -m1 '^OBJECTION:' "$EVIDENCE")
+    echo "apply: EVIDENCE 裡有一行反駁 —— $OLINE" >&2
+    python3 "$AC/ticket.py" objection "$ID" --line "$OLINE" --evidence "$EVIDENCE"
+    orc=$?
+    if [ "$orc" -eq 0 ]; then
+        echo "apply: #$ID 已記進 objections[] —— 處置它(accepted / rejected / deferred / fixed)" >&2
+        echo "apply:   沒處置的阻擋項 land 與 close 都會拒絕。" >&2
+        status_done 6 "patch 已 commit,但 worker 提了反駁"
+        exit 6
+    fi
+    echo "apply: 這一筆反駁票上已經有了(auto-fix 那條路先收過)—— 沒有再記一次" >&2
+fi
 exit 0

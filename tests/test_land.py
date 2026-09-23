@@ -417,6 +417,140 @@ class TicketChecks(LandBase):
         self.assertFalse(self.gate_ran())
 
 
+class TheDocsChannel(LandBase):
+    """#29 A10 / G10 / G17:票檔、`memory/`、`docs/` 進主線的**入口**。
+
+    以前它們只有裸 commit 一條路,而 `memory/role/main.md` 明禁裸 commit 主線 ——
+    一條每天都在走、卻沒有任何守衛的路,與沒有規矩長得一樣(2026-09-23 一天兩筆)。
+    """
+
+    def docs(self, *args):
+        return self.run_sh("scripts/land.sh", "docs", *args)
+
+    def test_tickets_and_memory_go_in_with_one_commit(self):
+        """**變異**:把 `cmd_docs` 那一段拿掉 → 這一條紅(`docs` 會被當成分支名)。"""
+        self.make_ticket(7)
+        self.write("memory/role/implementer.inbox.md", "- 一條新的教訓 (#7)\n")
+        before = self.git("rev-parse", "main").strip()
+        done = self.docs("tickets: #7 開票與一條 inbox",
+                         "tickets/7.json", "memory/role/implementer.inbox.md")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("tickets: #7 開票與一條 inbox", self.main_log())
+        landed = self.git("show", "--name-only", "--format=", "main").split()
+        self.assertEqual(sorted(landed),
+                         ["memory/role/implementer.inbox.md", "tickets/7.json"])
+        self.assertNotEqual(self.git("rev-parse", "main").strip(), before)
+        self.assertEqual(self.git("rev-parse", "main", cwd=self.origin).strip(),
+                         self.git("rev-parse", "main").strip(), "push 沒有跟上")
+        self.assertFalse(self.gate_ran(),
+                         "這三個前綴不進產品碼 —— 跑一次全套換來的是同一份綠")
+
+    def test_a_file_outside_the_three_prefixes_is_refused_by_name(self):
+        """**變異**:把前綴檢查那一段拿掉 → 這一條紅。
+
+        產品碼從這裡進去的那一刻,一票一分支、閘門、覆核三件事一起被繞過。
+        """
+        self.make_ticket(7)
+        self.write("scripts/sneaky.sh", "#!/bin/sh\n")
+        before = self.git("rev-parse", "main").strip()
+        done = self.docs("順手帶一支腳本", "tickets/7.json", "scripts/sneaky.sh")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("scripts/sneaky.sh", done.stderr, "越界要指名是哪一個檔")
+        self.assertIn("apply.sh", done.stderr, "說得出下一步(§5.7)")
+        self.assertEqual(self.git("rev-parse", "main").strip(), before,
+                         "拒收的那一次主線一個 commit 都不該多")
+
+    def test_a_path_that_escapes_with_dotdot_is_refused(self):
+        done = self.docs("繞出去", "docs/../scripts/land.sh")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("..", done.stderr)
+
+    def test_it_waits_behind_the_same_lock_as_a_ticket_landing(self):
+        """**同一把鎖**:land 跑到一半有人往主線塞 commit,那一條 `ff-only` 就進不去,
+        而它的失敗訊息說的是「主線在這中間動了」—— 沒有人會知道動它的是誰。
+
+        **變異**:把 `cmd_docs` 裡的 `take_lock` 拿掉 → 這一條紅。
+        """
+        self.make_ticket(7)
+        os.mkdir(os.path.join(self.repo, ".land.lock"))
+        with open(os.path.join(self.repo, ".land.lock", "holder"), "w") as handle:
+            handle.write("pid=1 開始=now 分支=t1-good\n")
+        done = self.docs("擠進去", "tickets/7.json")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("已經有一個 land 在跑", done.stdout)
+        self.assertIn("t1-good", done.stdout, "說得出現在是誰在落地")
+
+    def test_running_it_twice_is_idempotent_and_says_which_one_happened(self):
+        """**已經在主線上就是做完了**,所以第二次 rc=0 —— 這一手要的是「這幾個檔在
+        main 上」,而它們已經在了。第一版回 rc=3(「空的 commit 不是落地」),而那讓
+        一個幂等的動作變成失敗:主線接連落地時很常重跑同一句,收到的會是一個假的紅。
+
+        §5.5 要的是兩者**看得出差別**,而差別在輸出:第一次印 `docs -> main <sha>`,
+        第二次印「已經在 main 上了,沒有新的 commit」,主線也不會多一個 commit。
+
+        **變異**:把第二次那一段的訊息改成與第一次一樣 → 這一條紅。
+        """
+        self.make_ticket(7)
+        first = self.docs("第一次", "tickets/7.json")
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertIn("docs -> main", first.stdout)
+        before = self.git("rev-parse", "main").strip()
+
+        again = self.docs("第二次", "tickets/7.json")
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn("已經在 main 上了", again.stdout)
+        self.assertNotIn("docs -> main", again.stdout,
+                         "「剛剛落地了」與「本來就在」要看得出差別")
+        self.assertEqual(self.git("rev-parse", "main").strip(), before,
+                         "沒有東西要落地的那一次不該多一個 commit")
+
+    def test_it_refuses_when_the_checkout_is_not_on_main(self):
+        self.make_ticket(7)
+        self.git("checkout", "-q", "-b", "somewhere-else")
+        done = self.docs("在別的分支上", "tickets/7.json")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("要在 main 上跑", done.stderr)
+
+    def test_usage_names_the_three_prefixes(self):
+        done = self.docs("只給訊息沒給檔")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        for prefix in ("tickets/", "docs/", "memory/"):
+            self.assertIn(prefix, done.stderr)
+
+
+class LeftoverCopiesAreNamed(LandBase):
+    """#29 A6 / G6:落地成功之後,**唸出還躺在 worktree 基底下的修復 / 驗證副本**。
+
+    只印不刪:這裡不知道哪一份還有人在看(綠了停 InReview 的那一輪就留著),而猜錯
+    刪掉的是別人正在讀的證據。印出來是為了讓「沒人收」不再是靜的 —— 2026-09-16
+    某個下游專案的副本 14 GB 塞滿磁碟,而在那之前它一聲都沒有出過。
+    """
+
+    def test_a_green_landing_lists_what_is_still_lying_around(self):
+        """**變異**:把 land.sh 尾端那一段 `LEFT=` 拿掉 → 這一條紅。"""
+        good = self.branch_for(1, "t1-good")
+        self.commit_in(good, "src/g1", "有 commit 的那一張")
+        self.approve(1, "t1-good")
+        stale = os.path.join(self.wt_base(), "fix-t1", "round2")
+        os.makedirs(stale)
+        with open(os.path.join(stale, "patch-round2.diff"), "w") as handle:
+            handle.write("# 上一輪的 patch\n")
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("還留著這幾份副本", done.stdout)
+        self.assertIn("fix-t1", done.stdout)
+        self.assertTrue(os.path.isdir(stale), "只印不刪 —— 那幾份是證據")
+
+    def test_a_clean_worktree_base_says_nothing(self):
+        """沒有東西要說的時候不要說 —— 每次都印的那一行,下一次就沒有人看了。"""
+        good = self.branch_for(1, "t1-good")
+        self.commit_in(good, "src/g1", "有 commit 的那一張")
+        self.approve(1, "t1-good")
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("還留著這幾份副本", done.stdout)
+
+
 class HappyPath(LandBase):
 
     def test_a_branch_with_commits_still_lands_the_way_it_always_did(self):
