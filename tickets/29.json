@@ -80,7 +80,9 @@
     "scripts/land.sh",
     "scripts/sync-to-project.sh",
     "scripts/memory.py",
-    "tests/*.py"
+    "tests/*.py",
+    "verify/TAGS.d/29.md",
+    "scripts/gate.sh"
   ],
   "role": "worker",
   "model": "opus",
@@ -88,16 +90,18 @@
   "attempt": 0,
   "base_sha": "d4d177ec8bf3b9fe318d77b28f8fdbc7d0ad2cb8",
   "state": "Ready",
-  "state_version": 5,
+  "state_version": 9,
   "lease": null,
   "retry_limit": 2,
   "verify": {
     "files": [
       "tests/test_ticket_29.py"
     ],
-    "tags": [],
+    "tags": [
+      "flow-audit"
+    ],
     "run": "python3 -m unittest tests.test_ticket_29",
-    "notes": "驗證者(sonnet,只證紅)照 12 條 acceptance;A12 在 #25 已落,案例應在基底綠(寫明)"
+    "notes": "驗證者(sonnet,只證紅)20 條 A1–A11 + 3 條 A12(基底綠);第 2 輪照範本補 F1/F2/F5"
   },
   "decision_refs": [
     "D-015",
@@ -121,5 +125,7 @@
       "contains": "result-round1"
     }
   ],
-  "tags": []
+  "tags": [
+    "flow-audit"
+  ]
 }
