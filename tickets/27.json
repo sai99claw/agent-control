@@ -36,8 +36,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "7c5d803bd029620f8dd59d1a60d18c67e99142f0",
-  "state": "Draft",
-  "state_version": 1,
+  "state": "Ready",
+  "state_version": 2,
   "lease": null,
   "retry_limit": 2,
   "verify": {

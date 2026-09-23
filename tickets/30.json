@@ -25,8 +25,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "2219a9c91948066c9f352900216dc1767059c750",
-  "state": "Ready",
-  "state_version": 3,
+  "state": "Done",
+  "state_version": 6,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -43,5 +43,13 @@
     "by": "main",
     "reason": "測試票:改的就是守衛;變異在 acceptance;無獨立驗證者"
   },
-  "needs_verifier": false
+  "needs_verifier": false,
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "a2f84efe4b6d57f1ba8cdc24a3709ba3a3246aab",
+    "state_version": 6,
+    "note": "read patch: is_document(path) = docs/**.md, docs/**.html, tickets/*.json; absolute paths still banned everywhere; 5 direct offences() cases; mutation red; gate green; waiver (test-only)",
+    "at": "2026-09-23T14:16:04+08:00"
+  }
 }

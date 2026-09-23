@@ -43,8 +43,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "461fa4646a6376f680e2f322f3e3d6adc549525a",
-  "state": "Ready",
-  "state_version": 7,
+  "state": "Done",
+  "state_version": 15,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -53,7 +53,54 @@
     ],
     "tags": [],
     "run": "cd <workspace>/agent-control && python3 -m unittest tests.test_ticket_28 tests.test_rules tests.test_memory tests.test_sync_to_project",
-    "notes": "六條 acceptance 全部用 tests/control_harness.py 的 Sandbox 造假專案,不連真的 tabby_pool;第 6 條是文件字句,verify_strings 驗,不在這支跑的案例裡"
+    "notes": "六條 acceptance 全部用 tests/control_harness.py 的 Sandbox 造假專案,不連真的 tabby_pool;第 6 條是文件字句,verify_strings 驗,不在這支跑的案例裡",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-09-23T15:04:55+08:00",
+      "files": [
+        "tests/test_ticket_28.py"
+      ],
+      "base_ref": "461fa4646a6376f680e2f322f3e3d6adc549525a",
+      "base_sha": "461fa4646a6376f680e2f322f3e3d6adc549525a",
+      "candidate": "a40dc3cff307eccdc66f783f10c53aa4ca6de5fe",
+      "candidate_sha": "a40dc3cff307eccdc66f783f10c53aa4ca6de5fe",
+      "baseline": {
+        "red": [
+          "tests.test_ticket_28.Acceptance1PackOverlaysProjectLayer.test_pack_overlays_canon_and_local_role_model_and_lists_project_paths",
+          "tests.test_ticket_28.Acceptance3MissingCardKeepsInboxAndNamesItWhenCut.test_inbox_slot_names_its_own_path_when_it_gets_clipped",
+          "tests.test_ticket_28.Acceptance3MissingCardKeepsInboxAndNamesItWhenCut.test_missing_local_card_is_quiet_and_inbox_tail_still_shows",
+          "tests.test_ticket_28.Acceptance5SyncSkipsInboxAndLeavesProjectMemoryAlone.test_dry_run_refuses_applies_to_pointing_at_the_synced_canonical_dir",
+          "tests.test_ticket_28.Acceptance5SyncSkipsInboxAndLeavesProjectMemoryAlone.test_sync_retires_stale_inbox_copies_and_leaves_project_memory_byte_identical"
+        ],
+        "red_lines": [
+          "tests.test_ticket_28.Acceptance1PackOverlaysProjectLayer.test_pack_overlays_canon_and_local_role_model_and_lists_project_paths: AssertionError: 'LOCAL-ROLE' not found in '# 規則包:worker —— 在副本裡實作與局部驗證,交 patch + EVIDENCE\\n不追求快,只看效率(D-016):在因為「這樣比較快」而做任何事之前,先算 token 是多還是少;快不快不是判準。\\n\\n來源 `docs/DISPATCH-TEMPLATE.md` @ 3a94232,上限 4096 bytes。**這是節錄,不是全文** —— 每一段結尾寫了全文在哪。\\n\\n## 先讀這幾份(路徑,不是內容)\\n- `docs/roles/implementer.md` —— 你做什麼、不做什麼\\n- `docs/roles/model/opus.md` —— 你這個模型在這裡踩過什麼\\n- `docs/DISPATCH-TEMPLATE.md` —— 共用規矩全文(下面只節錄 10 節)\\n\\n> ⚠️ 共用規矩裡找不到這幾節:§1, §2, §3, §4, §5, §5.5, §5.7, §6.4, §7, §8 —— `rules.py` 的名單與 `docs/DISPATCH-TEMPLATE.md` 分岔了。\\n\\n## 角色卡(節錄)\\nCANON-ROLE\\n\\n## 共用規矩節錄\\n(一節都沒抽到)\\n\\n## 你這個模型的記憶(節錄)\\nCANON-MODEL\\n\\n## 結構化交付(D-017)\\n五段散文照舊給人看;**檔尾再加一段 `## result`**,底下一塊語言標記是 result 的\\nfenced JSON 物件 —— auto-fix 收 patch 的同一手把它抽成\\n`reports/t<票號>/<run_id>/result-round<輪>.json`。\\n鍵與範例只有兩處:`docs/DISPATCH-TEMPLATE.md` §8.5 與 `tickets/SCHEMA.md`;照抄,\\n不要自己發明欄位。寫不出來的欄位**照實留空**(`null` / `[]`)不要編 ——\\n編一個數字進去,與量過那個數字長得一樣。\\n\\n## 記憶回寫(D-013)\\n預設不寫。只在三種時刻寫,一次一行:\\n1 同一類錯絆你兩次以上 → `model <你的模型名>`(只准寫自己的)\\n2 角色卡沒講、這輪自己補的規矩 → `role <角色卡檔名>`(誰都能寫)\\n3 跨票都成立的專案事實 → `project <主題>`(直接進主檔)\\n`memory.py note <層> <名> \"<一句原則>\" --ticket <票號> --by <角色>@<模型>`\\n≤ 300 字元、只寫原則,案例用票號指路;不改主檔,超標由整理票的兩個模型併。\\n收工前在 EVIDENCE「記憶」段列出寫了哪幾行;沒寫就寫「無」。\\n' : rules.py 現在還沒疊讀專案層記憶 —— 輸出裡沒有 'LOCAL-ROLE'",
+          "tests.test_ticket_28.Acceptance3MissingCardKeepsInboxAndNamesItWhenCut.test_inbox_slot_names_its_own_path_when_it_gets_clipped: AssertionError: 'memory/role/implementer.inbox.md' not found in '# 規則包:worker —— 在副本裡實作與局部驗證,交 patch + EVIDENCE\\n不追求快,只看效率(D-016):在因為「這樣比較快」而做任何事之前,先算 token 是多還是少;快不快不是判準。\\n\\n…(截斷:全文見 `docs/DISPATCH-TEMPLATE.md` 與上面列的那幾份)\\n\\n## 結構化交付(D-017)\\n五段散文照舊給人看;**檔尾再加一段 `## result`**,底下一塊語言標記是 result 的\\nfenced JSON 物件 —— auto-fix 收 patch 的同一手把它抽成\\n`reports/t<票號>/<run_id>/result-round<輪>.json`。\\n鍵與範例只有兩處:`docs/DISPATCH-TEMPLATE.md` §8.5 與 `tickets/SCHEMA.md`;照抄,\\n不要自己發明欄位。寫不出來的欄位**照實留空**(`null` / `[]`)不要編 ——\\n編一個數字進去,與量過那個數字長得一樣。\\n\\n## 記憶回寫(D-013)\\n預設不寫。只在三種時刻寫,一次一行:\\n1 同一類錯絆你兩次以上 → `model <你的模型名>`(只准寫自己的)\\n2 角色卡沒講、這輪自己補的規矩 → `role <角色卡檔名>`(誰都能寫)\\n3 跨票都成立的專案事實 → `project <主題>`(直接進主檔)\\n`memory.py note <層> <名> \"<一句原則>\" --ticket <票號> --by <角色>@<模型>`\\n≤ 300 字元、只寫原則,案例用票號指路;不改主檔,超標由整理票的兩個模型併。\\n收工前在 EVIDENCE「記憶」段列出寫了哪幾行;沒寫就寫「無」。\\n' : rules.py 現在還沒讀專案層 inbox,1500 bytes 上限下完全沒有點名它",
+          "tests.test_ticket_28.Acceptance3MissingCardKeepsInboxAndNamesItWhenCut.test_missing_local_card_is_quiet_and_inbox_tail_still_shows: AssertionError: 'INBOX-3' not found in '# 規則包:worker —— 在副本裡實作與局部驗證,交 patch + EVIDENCE\\n不追求快,只看效率(D-016):在因為「這樣比較快」而做任何事之前,先算 token 是多還是少;快不快不是判準。\\n\\n來源 `docs/DISPATCH-TEMPLATE.md` @ 0488684,上限 4096 bytes。**這是節錄,不是全文** —— 每一段結尾寫了全文在哪。\\n\\n## 先讀這幾份(路徑,不是內容)\\n- `docs/roles/implementer.md` —— 你做什麼、不做什麼\\n- `docs/roles/model/opus.md` —— 你這個模型在這裡踩過什麼\\n- `docs/DISPATCH-TEMPLATE.md` —— 共用規矩全文(下面只節錄 10 節)\\n\\n> ⚠️ 共用規矩裡找不到這幾節:§1, §2, §3, §4, §5, §5.5, §5.7, §6.4, §7, §8 —— `rules.py` 的名單與 `docs/DISPATCH-TEMPLATE.md` 分岔了。\\n\\n## 角色卡(節錄)\\nCANON-ROLE\\n\\n## 共用規矩節錄\\n(一節都沒抽到)\\n\\n## 你這個模型的記憶(節錄)\\nCANON-MODEL\\n\\n## 結構化交付(D-017)\\n五段散文照舊給人看;**檔尾再加一段 `## result`**,底下一塊語言標記是 result 的\\nfenced JSON 物件 —— auto-fix 收 patch 的同一手把它抽成\\n`reports/t<票號>/<run_id>/result-round<輪>.json`。\\n鍵與範例只有兩處:`docs/DISPATCH-TEMPLATE.md` §8.5 與 `tickets/SCHEMA.md`;照抄,\\n不要自己發明欄位。寫不出來的欄位**照實留空**(`null` / `[]`)不要編 ——\\n編一個數字進去,與量過那個數字長得一樣。\\n\\n## 記憶回寫(D-013)\\n預設不寫。只在三種時刻寫,一次一行:\\n1 同一類錯絆你兩次以上 → `model <你的模型名>`(只准寫自己的)\\n2 角色卡沒講、這輪自己補的規矩 → `role <角色卡檔名>`(誰都能寫)\\n3 跨票都成立的專案事實 → `project <主題>`(直接進主檔)\\n`memory.py note <層> <名> \"<一句原則>\" --ticket <票號> --by <角色>@<模型>`\\n≤ 300 字元、只寫原則,案例用票號指路;不改主檔,超標由整理票的兩個模型併。\\n收工前在 EVIDENCE「記憶」段列出寫了哪幾行;沒寫就寫「無」。\\n' : rules.py 現在還沒讀專案層 inbox 尾巴 —— INBOX-3 不在輸出裡",
+          "tests.test_ticket_28.Acceptance5SyncSkipsInboxAndLeavesProjectMemoryAlone.test_dry_run_refuses_applies_to_pointing_at_the_synced_canonical_dir: AssertionError: 0 != 2 : sync: (dry-run) /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpbs6zhzcl/docs/roles/README.md",
+          "tests.test_ticket_28.Acceptance5SyncSkipsInboxAndLeavesProjectMemoryAlone.test_sync_retires_stale_inbox_copies_and_leaves_project_memory_byte_identical: AssertionError: Lists differ: ['implementer.inbox.md', 'opener.inbox.md'[69 chars].md'] != []"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 7,
+        "skipped": 0,
+        "log": "/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/verify-case-2em2hhut/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 7,
+        "skipped": 0,
+        "log": "/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/verify-case-2em2hhut/logs/candidate.log"
+      }
+    }
   },
   "decision_refs": [
     "D-021"
@@ -78,5 +125,14 @@
       "contains": "同一目錄就是正本"
     }
   ],
-  "needs_verifier": false
+  "needs_verifier": false,
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "a40dc3cff307eccdc66f783f10c53aa4ca6de5fe",
+    "state_version": 15,
+    "note": "read patch: rules.py overlays project layer (memory/role|model main + inbox tails <=600B, memory/project paths) only when roles_dir != memory/role; sync skips *.inbox.md, never touches project memory/, dry-run refuses applies_to under roles_dir; MEMORY.md + README; verifier 7 red-only cases; 9 mutations red; gate green. Follow-up ruled: canon inbox tail into canon pack (new ticket)",
+    "at": "2026-09-23T14:40:48+08:00"
+  },
+  "verify_waiver": null
 }

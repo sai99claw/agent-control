@@ -1,0 +1,2 @@
+- status.parse_failures 的 body 停在標頭後第一條分隔線,unittest 的方法 docstring 說明行會佔掉那一格 —— 有 docstring 的案例整段 traceback 進不到 excerpt(#31) (#31, 2026-09-23, worker@opus)
+- unittest verbose 的方法 docstring 說明行印在 FAIL: 標頭下一行,status.parse_failures 會把它當 traceback 首行而整段收掉(file 空、excerpt 只剩一行);verify-case.py 用 parse_reds 先剝掉,status.py 本身未改 (#31) (2026-09-23, main@fable)

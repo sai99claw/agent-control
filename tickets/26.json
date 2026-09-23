@@ -42,8 +42,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "2c99d425cebc96034b9c995c5d138130ffa10b83",
-  "state": "Ready",
-  "state_version": 4,
+  "state": "Done",
+  "state_version": 13,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -52,11 +52,89 @@
     ],
     "tags": [],
     "run": "",
-    "notes": ""
+    "notes": "",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-09-23T15:04:51+08:00",
+      "files": [
+        "tests/test_ticket_26.py"
+      ],
+      "base_ref": "2c99d425cebc96034b9c995c5d138130ffa10b83",
+      "base_sha": "2c99d425cebc96034b9c995c5d138130ffa10b83",
+      "candidate": "62dba4a86c9a435214b78cec2ca87df02fda9f4b",
+      "candidate_sha": "62dba4a86c9a435214b78cec2ca87df02fda9f4b",
+      "baseline": {
+        "red": [
+          "tests.test_ticket_26.CloseGate.test_a14_close_gates_on_verify_baseline_stage",
+          "tests.test_ticket_26.Lint.test_a10_lint_names_missing_acceptance_numbers_without_blocking",
+          "tests.test_ticket_26.Lint.test_a11_lint_flags_a_forbidden_word_even_inside_a_string_literal",
+          "tests.test_ticket_26.Lint.test_a12_lint_flags_a_tempdir_without_addcleanup",
+          "tests.test_ticket_26.Lint.test_a13_lint_flags_a_top_level_import_of_a_new_ticket_symbol",
+          "tests.test_ticket_26.Lint.test_a8_lint_flags_a_missing_docstring_section",
+          "tests.test_ticket_26.Lint.test_a9_lint_flags_an_unregistered_tag",
+          "tests.test_ticket_26.RedClassification.test_a1_an_assertion_error_in_the_case_file_counts_as_red",
+          "tests.test_ticket_26.RedClassification.test_a2_an_import_failure_does_not_count_as_red",
+          "tests.test_ticket_26.RedClassification.test_a3_a_missing_symbol_error_in_the_case_file_does_not_count",
+          "tests.test_ticket_26.RedClassification.test_a4_an_error_that_blows_up_elsewhere_does_not_count",
+          "tests.test_ticket_26.RedClassification.test_a5_a_skip_is_counted_separately_from_red",
+          "tests.test_ticket_26.RedClassification.test_a6_a_clean_red_run_writes_the_full_baseline_shape",
+          "tests.test_ticket_26.RedClassification.test_a7_any_uncounted_red_blocks_and_leaves_the_ticket_untouched"
+        ],
+        "red_lines": [
+          "tests.test_ticket_26.CloseGate.test_a14_close_gates_on_verify_baseline_stage: AssertionError: 0 == 0 :   OK def size_nav —— 1(src/nav.py×1)",
+          "tests.test_ticket_26.Lint.test_a10_lint_names_missing_acceptance_numbers_without_blocking: AssertionError: 2 != 0 : usage: verify-case.py [-h] {check,extract,tags-merge} ...",
+          "tests.test_ticket_26.Lint.test_a11_lint_flags_a_forbidden_word_even_inside_a_string_literal: AssertionError: 'pkill' not found in \"usage: verify-case.py [-h] {check,extract,tags-merge} ...\\nverify-case.py: error: argument verb: invalid choice: 'lint' (choose from check, extract, tags-merge)\\n\"",
+          "tests.test_ticket_26.Lint.test_a12_lint_flags_a_tempdir_without_addcleanup: AssertionError: 'addCleanup' not found in \"usage: verify-case.py [-h] {check,extract,tags-merge} ...\\nverify-case.py: error: argument verb: invalid choice: 'lint' (choose from check, extract, tags-merge)\\n\"",
+          "tests.test_ticket_26.Lint.test_a13_lint_flags_a_top_level_import_of_a_new_ticket_symbol: AssertionError: 'brand_new_symbol' not found in \"usage: verify-case.py [-h] {check,extract,tags-merge} ...\\nverify-case.py: error: argument verb: invalid choice: 'lint' (choose from check, extract, tags-merge)\\n\"",
+          "tests.test_ticket_26.Lint.test_a8_lint_flags_a_missing_docstring_section: AssertionError: '## 不做' not found in \"usage: verify-case.py [-h] {check,extract,tags-merge} ...\\nverify-case.py: error: argument verb: invalid choice: 'lint' (choose from check, extract, tags-merge)\\n\"",
+          "tests.test_ticket_26.Lint.test_a9_lint_flags_an_unregistered_tag: AssertionError: 'never-registered-tag-xyz' not found in \"usage: verify-case.py [-h] {check,extract,tags-merge} ...\\nverify-case.py: error: argument verb: invalid choice: 'lint' (choose from check, extract, tags-merge)\\n\"",
+          "tests.test_ticket_26.RedClassification.test_a1_an_assertion_error_in_the_case_file_counts_as_red: AssertionError: 2 != 0 : usage: verify-case.py [-h] {check,extract,tags-merge} ...",
+          "tests.test_ticket_26.RedClassification.test_a2_an_import_failure_does_not_count_as_red: AssertionError: 2 != 1 : usage: verify-case.py [-h] {check,extract,tags-merge} ...",
+          "tests.test_ticket_26.RedClassification.test_a3_a_missing_symbol_error_in_the_case_file_does_not_count: AssertionError: 2 != 1 : usage: verify-case.py [-h] {check,extract,tags-merge} ...",
+          "tests.test_ticket_26.RedClassification.test_a4_an_error_that_blows_up_elsewhere_does_not_count: AssertionError: 2 != 1 : usage: verify-case.py [-h] {check,extract,tags-merge} ...",
+          "tests.test_ticket_26.RedClassification.test_a5_a_skip_is_counted_separately_from_red: AssertionError: 2 != 0 : usage: verify-case.py [-h] {check,extract,tags-merge} ...",
+          "tests.test_ticket_26.RedClassification.test_a6_a_clean_red_run_writes_the_full_baseline_shape: AssertionError: 2 != 0 : usage: verify-case.py [-h] {check,extract,tags-merge} ...",
+          "tests.test_ticket_26.RedClassification.test_a7_any_uncounted_red_blocks_and_leaves_the_ticket_untouched: AssertionError: 2 != 1 : usage: verify-case.py [-h] {check,extract,tags-merge} ..."
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 14,
+        "skipped": 0,
+        "log": "/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/verify-case-qogzmj1n/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 14,
+        "skipped": 0,
+        "log": "/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/verify-case-qogzmj1n/logs/candidate.log"
+      }
+    }
   },
   "decision_refs": [
     "D-020"
   ],
   "outline": "依 docs/DESIGN-VERIFY-CASES.md §三(紅的形狀分類表)與 §四(F1–F6 lint 規則表)實作;traceback 分類與 ast lint 的邊界(subTest、_FailedTest、多檔 traceback)自己設計 fixture 驗證。與 A #25(文字/範本)各自獨立,不 depends_on 它;A #27(gate.sh 接線)依賴這一張。有驗證者(sonnet)寫 tests/test_ticket_26.py,已列進 verify.files 與 allowed_write_paths。",
-  "needs_verifier": false
+  "needs_verifier": false,
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "62dba4a86c9a435214b78cec2ca87df02fda9f4b",
+    "state_version": 13,
+    "note": "read patches r1+r2: verify-case.py red/lint/stage, check promotes stage, candidate counts four red shapes; r2 (auto-fix opus worker, patch recovered by main from its copy): lint F6 takes the ticket from test_ticket_<n>.py filename when --ticket absent, unreadable ticket = no F6; verifier 14 red-only cases; gate green",
+    "at": "2026-09-23T14:36:27+08:00"
+  },
+  "verify_strings": [
+    "def cmd_red",
+    "def cmd_lint"
+  ],
+  "verify_waiver": null
 }

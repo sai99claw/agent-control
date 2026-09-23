@@ -8,3 +8,5 @@
 - 注延遲的時序案例,窗口要蓋得住 app 那一包的 parse/exec:150ms 在負載下開不出窗口(前提大聲紅),600ms 兩邊都穩 —— 比照 #639 的 T1 (#642, 2026-09-22, verifier@opus)
 - 設計為未來 token 打算,不為眼前複雜度繞路:取捨看之後每票多讀多少、重來幾輪;太複雜可裁「開票之後再做」但票要寫全,不准繞過去(改名、加第二個欄位、各做各的形狀) (D-018) (2026-09-23, main@fable)
 - patch.diff 檔頭只准 base/… work/…(在 $W 裡跑 diff -ruN base work,不要給絕對路徑);絕對路徑 apply.sh 檔頭秒退 (#25) (2026-09-23, main@fable)
+- 派工副本沒有 .git:test_no_project_names 靠 git ls-files 必紅,判綠要拿 base 副本對照同一條 (#28) (2026-09-23, main@fable)
+- 測試一律前景跑加 timeout;把全套丟背景後就結束回合 = 什麼都沒交(claude -p 不會再醒,#26 第 2 輪 auto-fix worker 的 patch 因此沒生出來) (2026-09-23, main@fable)

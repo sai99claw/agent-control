@@ -1,0 +1,54 @@
+{
+  "id": "31",
+  "subject": "verify-case.py check/red 的紅分類把「案例用 subprocess 跑工具、在案例檔自己 assertEqual(rc) 上紅」判成『紅在別處』:#26 落地後 check 對 14 條驗證者案例全判不算紅,baseline 不成立",
+  "created": "2026-09-23T14:36:27+08:00",
+  "objective": "案例最後一個 frame 在 verify.files 之一且例外是 AssertionError 就算數的紅,不論案例內部有沒有起子行程;#26 的 tests/test_ticket_26.py 在 ref 2c99d42 / candidate 62dba4a 上 check 得 baseline ok:true(紅 14 / 綠 0)",
+  "acceptance": [
+    "python3 scripts/verify-case.py check 26 --ref 2c99d42 --candidate 62dba4a → baseline 成立,red_lines 14 條都是 tests/test_ticket_26.py 的 AssertionError(現況:13 條『紅在別處』+ 1 條 import 失敗)",
+    "tests/test_verify_case.py 補一條:案例檔裡 subprocess.run 工具後 assertEqual(rc) 紅 → 歸『算數的紅』;變異:把最後 frame 判定改成看第一個 frame → 該案例紅",
+    "既有 44+ 條 test_verify_case 仍綠"
+  ],
+  "in_scope": [
+    "scripts/verify-case.py"
+  ],
+  "out_of_scope": [
+    "tests/test_ticket_26.py"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/verify-case.py",
+    "tests/test_verify_case.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "62dba4a86c9a435214b78cec2ca87df02fda9f4b",
+  "state": "Done",
+  "state_version": 6,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "verify_strings": [
+    "subprocess"
+  ],
+  "outline": "#26 的 check 對自己的驗證者案例失效;先查 classify 為什麼把最後 frame 看成不在案例檔(疑似 traceback 最後一段是 subprocess 的 CalledProcessError 或 unittest 的 _AssertRaisesContext)",
+  "needs_verifier": false,
+  "verify_waiver": {
+    "by": "main",
+    "reason": "分類器修正票:實作者 47 條單元案例 + 2 條變異;驗收 1 用真票 #26 的 ref/candidate 重現量到 14 紅;無獨立驗證者"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "e87f7e7333d2d7e149032f5d4b3ced5b4f4a294c",
+    "state_version": 6,
+    "note": "read patch: parse_reds strips unittest docstring line before shared parser, traceback_end follows chained exceptions, red_shape reads frame+type from same segment; check 26 ref/candidate now 14 red ok:true; 47 unit cases; M1/M2 red; objection ticket-wrong on acceptance-2 mutation wording (first frame is always the test method) accepted",
+    "at": "2026-09-23T15:04:43+08:00"
+  }
+}

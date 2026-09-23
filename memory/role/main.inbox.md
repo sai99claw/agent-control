@@ -6,3 +6,4 @@
 - 落地後關票前先 verify-case.py check <n> --ref <base> --candidate <merge sha>,close 才有 baseline;land.sh 還沒自動做(#27 接線前) (#23) (2026-09-23, main@fable)
 - 驗證者派工用 rules.py pack verifier,派工文不准寫「參考實作」「有實作時綠」「每條一個變異」;只證基底紅 (D-020) (2026-09-23, main@fable)
 - AC 主線沒有 docs 通道:任何裸 commit(票檔、FLOW.html)前先跑 python3 -m unittest tests.test_no_project_names;今天兩次主線紅(#24 #30)都是主線裸 commit 引的 (G10) (2026-09-23, main@fable)
+- 驗證者派工文由實作者派工文改字時,$W 那一行要逐字檢查指到 t<n>v;#648 驗證者照字面開在實作者的 $W 覆蓋過 work/ —— 派工前 grep '$W =' 一次 (2026-09-23, main@fable)

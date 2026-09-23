@@ -45,8 +45,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "2219a9c91948066c9f352900216dc1767059c750",
-  "state": "Ready",
-  "state_version": 8,
+  "state": "Done",
+  "state_version": 11,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -89,5 +89,13 @@
     "by": "main",
     "reason": "純文字+範本檔票(D-020);lint 落地後由 T#650 對範本本身跑一次;無獨立驗證者"
   },
-  "needs_verifier": false
+  "needs_verifier": false,
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "5b6781de0bbf6d19e97979130a1b694920a35b6a",
+    "state_version": 11,
+    "note": "read patch: D-020 doc + DECISIONS entry (D-020 inserted before D-021), verifier.md/dispatch-verifier/DISPATCH-TEMPLATE/VERIFICATION/SCHEMA reworded to red-only, verify/_template_ticket.py + sync copy_template; gate green after merging main (#30); waiver (text+template)",
+    "at": "2026-09-23T14:20:06+08:00"
+  }
 }
