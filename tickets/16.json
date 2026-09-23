@@ -19,9 +19,9 @@
   "model": "codex:gpt-5.6-sol",
   "tool": "codex",
   "attempt": 0,
-  "base_sha": "92bac0a35a44a1dc99cc6dd6c79902c1949d0a81",
-  "state": "Ready",
-  "state_version": 1,
+  "base_sha": "2958fc2f135372beb9a563d21861a8ef0f031e17",
+  "state": "Done",
+  "state_version": 11,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -30,5 +30,20 @@
     "run": "",
     "notes": ""
   },
-  "outline": "文字(≤ 160 bytes):「不追求快,只看效率(D-016):在因為『這樣比較快』而做任何事之前,先算 token 是多還是少;快不快不是判準。」放在 pack 標題之後、先讀清單之前。"
+  "outline": "文字(≤ 160 bytes):「不追求快,只看效率(D-016):在因為『這樣比較快』而做任何事之前,先算 token 是多還是少;快不快不是判準。」放在 pack 標題之後、先讀清單之前。",
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "5bca622",
+    "note": "read patch: rules.py EFFICIENCY_NOTE fixed head segment (D-016) for all five roles, stats line; 4 tests, 2 mutations; gate green",
+    "at": "2026-09-22T20:42:47+08:00",
+    "state_version": 11
+  },
+  "verify_strings": [
+    "EFFICIENCY_NOTE"
+  ],
+  "verify_waiver": {
+    "by": "main",
+    "reason": "agent-control 內部票,實作者自帶單元案例與變異表,無獨立驗證者(D-013 時代開的票)"
+  }
 }

@@ -22,8 +22,8 @@
   "tool": "codex",
   "attempt": 0,
   "base_sha": "2969fa0e33afd897308839934a194d86c4c6789a",
-  "state": "Ready",
-  "state_version": 9,
+  "state": "Done",
+  "state_version": 12,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -36,16 +36,16 @@
   "review": {
     "verdict": "pass",
     "by": "main",
-    "sha": "b9a665907ffe0c9c97eaf0b567e3f28b8282b527",
+    "sha": "3262cf7",
     "note": "已落地(見 Merge t9);補綁最新票版本",
-    "at": "2026-09-22T12:15:02+08:00",
-    "state_version": 9
+    "at": "2026-09-22T21:09:24+08:00",
+    "state_version": 12
   },
   "verify_strings": [
     "rerun_cmd"
   ],
   "verify_waiver": {
     "by": "main",
-    "reason": "控制腳本票:驗收單元測試由 worker 放在票內、閘門與落地全套已跑;無獨立驗證者"
+    "reason": "agent-control 內部票,實作者自帶單元案例與變異表,無獨立驗證者(D-013 時代開的票)"
   }
 }

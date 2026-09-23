@@ -1,0 +1,51 @@
+{
+  "id": "21",
+  "subject": "routing 與事件記的模型要是真的跑的那個:board/config.json routing.implement 仍是 codex:gpt-5.6-sol、docs/ROLES.md:37 仍寫 Codex,而 auto-fix.sh 只拿 routing.implement 當 agent.start 的 --model 標籤、實際永遠起 worker.command(claude -p --model opus)—— events.jsonl 記著一個從沒跑過的模型",
+  "created": "2026-09-22T21:09:53+08:00",
+  "objective": "D-017 ③ 落進設定與程式:預設工人 opus;agent.start/done 事件的 model 欄位來自實際起的 worker.command,不來自 routing 標籤;routing 與實際不一致時 auto-fix 印一行警告",
+  "acceptance": [
+    "board/config.json routing.implement = opus 家族;docs/ROLES.md 的工人段不再寫 Codex 為預設(codex 路保留為選項)",
+    "單元案例:worker.command 用 model X、routing 寫 Y 時,events.jsonl 的 agent.start.model == X 且 stdout 含警告;變異:把 model 來源改回 routing → 紅",
+    "docs/review/2026-09-22-memory-board-review.md:206 那句『claude -p stdout 沒導向任何檔』改成指向 auto-fix.sh 的 worker-round<r>.log 現況(一句話,附行號)"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "board/config.json",
+    "scripts/auto-fix.sh",
+    "docs/ROLES.md",
+    "docs/review/2026-09-22-memory-board-review.md",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "sonnet",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "5b77212eb9c8cfa9448afe8adc32748d298bc338",
+  "state": "Done",
+  "state_version": 8,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "verify_strings": [
+    "worker.command"
+  ],
+  "verify_waiver": {
+    "by": "main",
+    "reason": "設定與事件欄位的機械修正,實作者的單元案例與變異表即驗收;無獨立驗證者"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "71f08f2",
+    "note": "read patch: routing.implement=opus; agent.* events model parsed from worker.command with mismatch warning; ROLES + review doc corrected; 1 test, mutation red; gate green",
+    "at": "2026-09-22T21:30:47+08:00",
+    "state_version": 8
+  }
+}

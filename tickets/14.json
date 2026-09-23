@@ -19,9 +19,9 @@
   "model": "codex:gpt-5.6-sol",
   "tool": "codex",
   "attempt": 0,
-  "base_sha": "d624188882a1a68f80b111c9033ebdd2f2290720",
-  "state": "Ready",
-  "state_version": 2,
+  "base_sha": "7d27561a7513d9d3b8ec246b331a5ddeb73cce7f",
+  "state": "Done",
+  "state_version": 11,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -30,5 +30,20 @@
     "run": "",
     "notes": ""
   },
-  "outline": "AC #3/#5/#9 三次是主線把 in_scope 與 allowed_write_paths 分開手抄漏了。"
+  "outline": "AC #3/#5/#9 三次是主線把 in_scope 與 allowed_write_paths 分開手抄漏了。",
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "2958fc2",
+    "note": "read patch: allowed_write_paths defaults from in_scope at create, explicit override kept; apply refuses out-of-scope writes; 4 mutations; gate green",
+    "at": "2026-09-22T20:42:46+08:00",
+    "state_version": 11
+  },
+  "verify_strings": [
+    "in_scope"
+  ],
+  "verify_waiver": {
+    "by": "main",
+    "reason": "agent-control 內部票,實作者自帶單元案例與變異表,無獨立驗證者(D-013 時代開的票)"
+  }
 }

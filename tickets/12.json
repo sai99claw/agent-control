@@ -20,9 +20,9 @@
   "model": "codex:gpt-5.6-sol",
   "tool": "codex",
   "attempt": 0,
-  "base_sha": "d624188882a1a68f80b111c9033ebdd2f2290720",
-  "state": "Ready",
-  "state_version": 2,
+  "base_sha": "e83f67c462c3349868c4ef1effa77d93f838c326",
+  "state": "Done",
+  "state_version": 10,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -31,5 +31,20 @@
     "run": "",
     "notes": ""
   },
-  "outline": "2026-09-22 主線實測:#623 verify_strings 寫檔名(落地才擋)、#627/#631 tag 未登記(跑完單元層才擋)、AC #3/#5/#9 允許路徑開太窄(worker 白跑一輪)。同步到專案後 land-ticket.sh gate 同一套(專案票另開)。"
+  "outline": "2026-09-22 主線實測:#623 verify_strings 寫檔名(落地才擋)、#627/#631 tag 未登記(跑完單元層才擋)、AC #3/#5/#9 允許路徑開太窄(worker 白跑一輪)。同步到專案後 land-ticket.sh gate 同一套(專案票另開)。",
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "e8b0099",
+    "note": "read patch: gate.sh fails fast on missing verify_strings/tags/allowed paths; tests; gate green",
+    "at": "2026-09-22T20:42:46+08:00",
+    "state_version": 10
+  },
+  "verify_strings": [
+    "allowed_write_paths"
+  ],
+  "verify_waiver": {
+    "by": "main",
+    "reason": "agent-control 內部票,實作者自帶單元案例與變異表,無獨立驗證者(D-013 時代開的票)"
+  }
 }

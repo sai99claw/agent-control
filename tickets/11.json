@@ -20,9 +20,9 @@
   "model": "codex:gpt-5.6-sol",
   "tool": "codex",
   "attempt": 0,
-  "base_sha": "ffdf9d4bc6892c0ff7aaebbd4a9c2bdf3874b838",
-  "state": "Ready",
-  "state_version": 2,
+  "base_sha": "e83f67c462c3349868c4ef1effa77d93f838c326",
+  "state": "Done",
+  "state_version": 13,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -31,5 +31,20 @@
     "run": "",
     "notes": ""
   },
-  "outline": "#9 落地後主線接專案時發現:gate_cmd 是照抄 config 的字串,沒有票號可用。"
+  "outline": "#9 落地後主線接專案時發現:gate_cmd 是照抄 config 的字串,沒有票號可用。",
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "a92d40e",
+    "note": "read patch: gate.sh exports AC_ROOT/AC_WT/AC_ROUND/AC_TICKET to rerun_cmd; unit case + WORKFLOW note; gate green 20260922-161003",
+    "at": "2026-09-22T20:42:52+08:00",
+    "state_version": 13
+  },
+  "verify_strings": [
+    "AC_TICKET"
+  ],
+  "verify_waiver": {
+    "by": "main",
+    "reason": "agent-control 內部票,實作者自帶單元案例與變異表,無獨立驗證者(D-013 時代開的票)"
+  }
 }

@@ -1,0 +1,103 @@
+{
+  "id": "19",
+  "subject": "控制台直接讀已經在磁碟上的結構化檔:每票所有 run 的 status.json、收件匣 index、反駁/覆核/驗證三格,加一頁 /t/<票號>",
+  "created": "2026-09-22T21:06:47+08:00",
+  "objective": "主線不開終端機、不把任何一份輸出貼進看板,就能在網頁上看到 票 → 每一趟 run → 閘門/落地狀態 → 反駁 → 指標;現在畫面上缺的那五樣(run、輪數、反駁、覆核結論、驗證案例)全部來自已經存在的檔,一行都不必轉寫(D-017 ②)",
+  "acceptance": [
+    "board.py 新增三個唯讀 loader,路徑一律從 board/config.json 的 reports_dir 與 tickets_dir 解析(reports_dir 這個鍵今天在 config 裡而 board.py 全檔沒用過),不新增環境變數、不新增寫入:(a) reports/t<n>/<run_id>/status.json 每票全部 run,依 run_id 字典序等於時間序;(b) reports/inbox/index.jsonl 減掉 reports/inbox/acked.jsonl;(c) 票 JSON 的 objections[] / review / verify 三格",
+    "首頁多兩段,錨點字面為 id=\"runs\" 與 id=\"objections\"。runs 段每票印最後一輪:kind、state、rc、started、finished、duration_seconds、failures 前 5 條的 case 與 excerpt 首行。objections 段把 disposition 為空且 blocking 為真的排最前,每筆印 category、owner、disposition、blocking、body 前 200 字",
+    "runs 段每一趟若同目錄有 result-round<r>.json 就多畫 rc、gate.ran、mutations 筆數三格;沒有那個檔就印字面 worker 沒交結構化輸出(#20 落地前每一趟都會是這一句,那是對的)",
+    "新路由 /t/<票號> 一頁:票面關鍵格、全部 run 一列一趟、反駁、review 的 verdict/by/sha/state_version 並在 review.state_version 不等於票現在的 state_version 時印字面 這份覆核已過期、verify 的 files/tags/run/baseline、以及該票的收件匣頁。票號不存在回 404 且 body 是既有的 找不到,不是 500;票號含 / 或 .. 一律 404,不准讀到 tickets 以外的檔",
+    "三種『沒有』要用三句不同的字:reports/t<n>/ 目錄不存在 → 沒有跑過;目錄在但 0 個 status.json → 有目錄、沒有結果;status.json 在且 rc=0 且 failures 是 [] → 綠。三句都出現在 / 或 /t/<n> 的 body 裡,且兩兩不相等",
+    "壞資料不准 500:index.jsonl 有一行壞 JSON、某份 status.json 整份壞 JSON、acked.jsonl 不存在 —— 這三種情況下 /、/t/<n>、/api/state 都回 200,並在該段印出 <路徑> 讀不動",
+    "已經 ack 的收件匣頁不出現在收件匣段;既有的 state 等於 NeedsDecision 的票照舊出現、儲存鈕照舊只寫 answers.jsonl 不改票。tests/test_board.py 既有 13 條與 #18 新增的那幾條全綠,五個既有 section id 一個不改名",
+    "純 stdlib、純伺服器端字串組 HTML:不新增第三方 import、不連外、不引 CDN、CSS/JS 仍是 board.py 裡的模組常數由 /board.css /board.js 送出。不得出現絕對家目錄路徑,不得寫死任何專案名(tests/test_no_project_names.py 對 .py 檔禁四個字面)",
+    "新測試一律用 --port 0 起 board(既有 harness 的做法),不碰任何固定埠;啟動那一行 stderr 訊息的格式不准改,改了 tests/test_board.py 抓埠的 regex 會全紅",
+    "變異:把『目錄在但 0 個 status.json』那一支改成回傳與『沒有跑過』同一句話,tests/test_board.py 至少一條紅;還原後 sha256 相同",
+    "docs/REHEARSAL.md 多一列:/t/<票號> 第一次真的被拿來接手一張紅票時要看到什麼"
+  ],
+  "in_scope": [
+    "board/board.py:新增三個 loader、兩個 render 函式、一條 GET 路由、state() 多幾個鍵",
+    "tests/test_board.py:新案例"
+  ],
+  "out_of_scope": [
+    "任何寫入端(event.py / status.py / inbox.py / auto-fix.sh)—— 看板只讀",
+    "worker / verifier 輸出格式的改動(那是 #20)",
+    "board/config.json(#18 在動它)",
+    "新事件種類、新票欄位"
+  ],
+  "depends_on": [
+    {
+      "id": "18",
+      "condition": "落地(同時動 board/board.py 與 tests/test_board.py)"
+    }
+  ],
+  "allowed_write_paths": [
+    "board/board.py",
+    "tests/test_board.py",
+    "verify/board/*",
+    "verify/TAGS.d/*.md",
+    "docs/REHEARSAL.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "8afd712234ed655f4b65529957fab218d8b1a603",
+  "state": "Done",
+  "state_version": 17,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [
+      "verify/board/test_ticket_19.py"
+    ],
+    "tags": [
+      "board-reads"
+    ],
+    "run": "",
+    "notes": ""
+  },
+  "feature": "指標與看板",
+  "decision_refs": [
+    "D-017",
+    "D-003",
+    "D-014",
+    "D-015"
+  ],
+  "outline": "現況(實測):board/board.py 601 行,state()(:173-186)只呼叫 event.read_events、ticket.load_all、ancestor_cache、latest_answers、rehearsal_rows;全檔沒有 reports 或 status.json 字樣,沒有 objections、沒有 review、沒有 verify、沒有輪數。而 reports/t<n>/<run_id>/status.json(22 個頂層格)、reports/inbox/index.jsonl(每行 name/ticket/run_id/kind/state/what/where/at/page)與 acked.jsonl 都已經是結構化的 append-only 檔,票 JSON 的 objections/review/verify 也早就在。所以這張票不需要任何新的產出端:缺的只是 loader 與畫面。HTML 由 % 字串串接產生,發 HTML 的函式是 esc/page/ancestor_cell/render_tickets/render_timeline/render_land/render_inbox/render_rehearsal/render,照同一個寫法加。路由在 do_GET(:503-521),今天只有 /healthz /board.css /board.js /api/state /。",
+  "test_plan": "驗證者照這份寫案例,標籤 board-reads(片段寫進 verify/TAGS.d/<本票號>.md)。\n1 驗三個 loader 真的讀到檔:API 層(board.py --port 0)。怎麼驗:沙盒裡造一張票、兩個 run 目錄各一份 status.json(一綠一紅)、一份 index.jsonl 兩行其中一行已在 acked.jsonl,GET / 斷言 runs 段出現紅那一輪的 rc 與 failures 的 case 名、收件匣段出現未 ack 的那一筆而不出現已 ack 的那一筆;期望值從自己寫進去的檔來。\n2 驗 run 的順序:API 層。怎麼驗:兩個 run_id 時間戳一前一後,斷言頁面上後者出現在前者之後(用 body.index 比大小)。\n3 驗 result-round<r>.json 有無兩種樣子:API 層。怎麼驗:同一個 run 目錄放與不放那個檔各一次,斷言有的那次出現 mutations 筆數、沒有的那次出現字面 worker 沒交結構化輸出。\n4 驗 /t/<票號> 一頁:API 層。怎麼驗:GET /t/<存在的票號> 斷言 200 且同時含反駁的 body 前綴、review.verdict、verify.run;GET /t/9999 斷言 404;GET /t/..%2f..%2fetc 斷言 404 且回應不含任何檔案內容。\n5 驗覆核過期那句話:API 層。怎麼驗:票的 review.state_version 設成比票現在的 state_version 小 1,斷言頁面含 這份覆核已過期;設成相等時斷言不含。\n6 驗三種空各有各的字:API 層。怎麼驗:三張票分別是沒有 reports 目錄、有目錄零個 status.json、一個 rc=0 failures=[] 的 run,斷言三段文字兩兩不相等且各自命中指定字面。\n7 驗壞資料不 500:API 層。怎麼驗:寫一行 not-json 進 index.jsonl、寫 { 進某份 status.json、刪掉 acked.jsonl,三個端點各 GET 一次斷言 200 且 body 含 讀不動。\n8 驗既有斷言沒被打壞:API 層。怎麼驗:直接跑既有的 tests/test_board.py 全組,Ran/OK 貼進 EVIDENCE。\n9 驗沒有對外連線與專案名:單元層。怎麼驗:對 board/board.py 原始碼斷言不含 http:// 開頭的外部主機(127.0.0.1 除外)、不含 cdn,並跑 tests/test_no_project_names.py。\n10 變異:第 6 條的空目錄分支改成與沒有目錄同字,期望第 6 條紅。",
+  "verify_strings": [
+    "ticket_runs"
+  ],
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "票面第 6 條把 acked.jsonl 不存在與兩種壞 JSON 並列成『讀不動』;不存在其實是『一則都還沒 ack』",
+      "evidence": "dispatch/ac-19/EVIDENCE.md ④a",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "主線 22:5x 裁:採 worker 讀法,三種都 200,『讀不動』只印給真的讀不動的兩種;票面不改",
+      "blocking": false
+    }
+  ],
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "ef76bfa",
+    "note": "read patch: board loaders run_rows/inbox_rows/ticket_boxes from reports/inbox/tickets, /t/<n> page with whitelist, 3 kinds of nothing, 200 on broken data; 14 unit + verifier 8 cases (board-reads, red on reverted loader); gate green",
+    "at": "2026-09-22T22:53:16+08:00",
+    "state_version": 17
+  },
+  "test_evidence": [
+    {
+      "by": "verifier@sonnet",
+      "cases": "verify/board/test_ticket_19.py (tag board-reads)",
+      "on_branch": "Ran 8 / OK rc=0 x2",
+      "on_reverted_loader": "FAILED (failures=1, errors=6) rc=1: 7/8 red",
+      "mutation": "1 (three kinds of nothing) red only case 6",
+      "evidence": "scratchpad dispatch/ac-19v/EVIDENCE.md",
+      "note": "verify-case.py check cannot take a post-landing baseline (case file absent at ref) -> recorded by main from the verifier evidence"
+    }
+  ]
+}

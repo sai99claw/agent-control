@@ -1,0 +1,48 @@
+{
+  "id": "17",
+  "subject": "apply.sh rebase 產出空 diff 卻回報「乾淨的 diff」:#13 的 patch 在 #12 落地後 git apply --check 不過,走 rebase 子指令得到 0 byte 的 patch-rebased.diff,下一步 apply 才說「一個檔頭都沒有」",
+  "created": "2026-09-22T16:19:22+08:00",
+  "objective": "rebase 子指令要嘛交出真的重套過的 diff,要嘛在衝突時 rc 非零並指名衝突的檔與 hunk;絕不能把空 diff 說成乾淨",
+  "acceptance": [
+    "用 #13 原 patch(base e83f67c)對 main e8b0099 重現:rebase 現況得到 0 byte;修後得到含 scripts/gate.sh 檔頭的 diff 或 rc 非零並列出衝突 hunk",
+    "單元案例:三向合併衝突時 rebase rc 非零、stdout 含衝突檔名;無衝突時輸出 diff 與 git 直接 rebase 的結果逐位元相同"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/apply.sh",
+    "tests/*",
+    "docs/WORKFLOW.md"
+  ],
+  "role": "worker",
+  "model": "codex-sol",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "74a3e6b7c4821dd65a3d6edfb2b20995323e390c",
+  "state": "Done",
+  "state_version": 7,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "verify_strings": [
+    "衝突檔"
+  ],
+  "verify_waiver": {
+    "by": "main",
+    "reason": "管線腳本票,實作者的 9 條 Rebase 案例與 6 條變異即驗收;無獨立驗證者"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "5b77212",
+    "note": "read patch: cmd_rebase = three-way merge (ancestor base_sha, ours main, theirs base+patch via git apply) in a throwaway .git; rc 2/3/4 for missing ancestor / patch not on its base / conflict (names file+line) / empty diff; 9 Rebase tests, 6 mutations; stricter on wrong base_sha accepted",
+    "at": "2026-09-22T21:13:30+08:00",
+    "state_version": 7
+  }
+}

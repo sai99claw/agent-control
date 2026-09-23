@@ -1,0 +1,49 @@
+{
+  "id": "22",
+  "subject": "verify-case.py check 找不到分支上的案例檔、落地後量不到基準:#19 落地後 check 說『乾淨主線一條都沒紅』並把 ok:false 寫進 verify.baseline 讓 close 卡死;#20 落地前 check --ref main --candidate t20 說『candidate 裡找不到這幾個案例檔』,而檔就在 t20 上",
+  "created": "2026-09-22T23:43:10+08:00",
+  "objective": "check 能對『ref = 票的 base_sha、candidate = 分支名或 sha』量基準(案例檔取自 candidate,跑在 ref 的樹上要紅、跑在 candidate 要綠);落地後也能用 --ref <base_sha> --candidate <merge sha> 補量;量不到時不把 ok:false 蓋進票,改印下一步",
+  "acceptance": [
+    "用 #20 的 ref ef76bfa / candidate ff9a710 重現:現況印找不到案例檔;修後 baseline ok:true,verify.baseline 記 ref/candidate/紅綠條數",
+    "單元案例:candidate 是分支名、是 sha、是 worktree 路徑三種都解得開;ref 樹沒有案例檔時把 candidate 的案例檔疊上去跑;失敗路徑不寫 ok:false 進票(變異:改回蓋寫 → 紅)"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/verify-case.py",
+    "scripts/ticket.py",
+    "tests/*",
+    "docs/WORKFLOW.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "ff9a710ac2947285ff6b3b21f3589a138c2924c9",
+  "state": "Done",
+  "state_version": 7,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "verify_strings": [
+    "candidate"
+  ],
+  "verify_waiver": {
+    "by": "main",
+    "reason": "管線腳本票,實作者的單元案例與變異表即驗收;無獨立驗證者"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "f60dabe",
+    "note": "read patch: verify-case resolve_tree (path > ref > archive), ref defaults to ticket base_sha, unmeasured() rc=2 never writes ok:false; 8 tests, 4 mutations; ticket.py untouched; gate green",
+    "at": "2026-09-23T00:18:31+08:00",
+    "state_version": 7
+  }
+}

@@ -19,8 +19,8 @@
   "tool": "codex",
   "attempt": 0,
   "base_sha": "bd8e5034c4f3e90f4851e702f87ec2a338834a29",
-  "state": "Ready",
-  "state_version": 3,
+  "state": "Done",
+  "state_version": 7,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -32,14 +32,17 @@
   "outline": "規格見評估報告 docs/review/2026-09-22-memory-board-review.md §B1、§C2;裁示:project 層=紀錄、依主題分節、pack 帶最後 30 行;任何角色可寫任一角色 inbox;model 層只能寫自己模型;主檔只有 consolidate 能改",
   "verify_waiver": {
     "by": "main",
-    "reason": "控制腳本票:驗收單元測試由 worker 放在票內、閘門與落地全套已跑;無獨立驗證者"
+    "reason": "早期 B 系列票,直接 commit 04b9d2a 落地;實作者單元案例即驗收"
   },
   "review": {
     "verdict": "pass",
     "by": "main",
-    "sha": "",
+    "sha": "04b9d2a",
     "note": "已落地(見 Merge t2);補綁最新票版本",
-    "at": "2026-09-22T12:14:59+08:00",
-    "state_version": 3
-  }
+    "at": "2026-09-22T23:43:26+08:00",
+    "state_version": 7
+  },
+  "verify_strings": [
+    "note"
+  ]
 }

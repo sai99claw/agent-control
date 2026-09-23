@@ -19,9 +19,9 @@
   "model": "codex:gpt-5.6-sol",
   "tool": "codex",
   "attempt": 0,
-  "base_sha": "97d4fb0b48cad239482a6cf90cfa529e43546cbf",
-  "state": "Ready",
-  "state_version": 1,
+  "base_sha": "2958fc2f135372beb9a563d21861a8ef0f031e17",
+  "state": "Done",
+  "state_version": 11,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -30,5 +30,20 @@
     "run": "",
     "notes": ""
   },
-  "outline": "2026-09-22 主線實測:#1–#10 全部已落地(Merge t<n> 在 main),close 每張都拒:『沒有回歸證據』『review 綁的是 v8 票現在 v9』。落地票在 ticket.py list --open 裡一直是 Ready,看板因此不準。"
+  "outline": "2026-09-22 主線實測:#1–#10 全部已落地(Merge t<n> 在 main),close 每張都拒:『沒有回歸證據』『review 綁的是 v8 票現在 v9』。落地票在 ticket.py list --open 裡一直是 Ready,看板因此不準。",
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "6605847",
+    "note": "read patch: verify_waiver + review.sha ancestor exempts landed tickets from test_evidence gate; set of waiver/verify_strings/objections carries review version; close --landed <sha>; 7 tests, 4 mutations; gate green",
+    "at": "2026-09-22T20:42:46+08:00",
+    "state_version": 11
+  },
+  "verify_strings": [
+    "--landed"
+  ],
+  "verify_waiver": {
+    "by": "main",
+    "reason": "agent-control 內部票,實作者自帶單元案例與變異表,無獨立驗證者(D-013 時代開的票)"
+  }
 }

@@ -1,0 +1,119 @@
+{
+  "id": "18",
+  "subject": "每票的數字自己長出來:status.json 補 duration_seconds/round、新 scripts/metrics.py 一票一行、控制台畫出返工輪數與 token",
+  "created": "2026-09-22T21:05:50+08:00",
+  "objective": "不抄任何一份輸出,就能從 metrics.py 與控制台看到每張票的返工輪數、紅的分類計數、每一段的牆鐘秒數、以及每一趟 worker 的 token;拿不到 token 的那一趟寫『未知』,不估、不寫 0(D-017 ①、DESIGN §15)",
+  "acceptance": [
+    "status.py done 寫出的 status.json 多兩個頂層格:duration_seconds(finished 減 started 的整數秒;任一格缺就寫 null,不准寫 0)與 round(值等於 repair_context.round);既有 22 個頂層格一格不改名、不改型別",
+    "status.py phase 寫的每一筆 phases[] 多一格 seconds:該 phase 的 at 減去上一筆 phases 的 at,沒有上一筆就減 run 的 started;算不出來寫 null。land.sh 現有的 gate/merge/push 三筆照樣寫得出來",
+    "python3 scripts/metrics.py line <票號> 對一張有兩個 run 目錄的票印恰一行,含這十二個鍵字面:ticket= gate_runs= land_runs= apply_runs= fix_rounds= red_runs= env_runs= product_runs= wall_seconds= objections_ticket_wrong= objections_test_defect= tokens=;metrics.py all 每張票一行,順序照票號數值由小到大",
+    "分類規則可以單獨驗:rc 非 0 且該輪 environment_suspect 非空 → 記進 env_runs;rc 非 0 且 environment_suspect 空 → 記進 product_runs;對任一張票 env_runs 加 product_runs 等於 red_runs。objections_* 兩格數的是票 objections[] 的 category 筆數,與 red_runs 不同單位,輸出那一行要印 runs: 與 objections: 兩個分段標示,讓兩種單位不會被加在一起",
+    "token:同一個 run 目錄下的 worker-round<r>.log 末尾有一個 JSON 物件且含 usage → 取 usage.input_tokens 加 usage.output_tokens;沒有 JSON 但有一行含 tokens used <N> → 取 N;兩者都沒有 → 那一趟算 unknown。tokens= 印成 已知<K>趟=<總和> 未知<M>趟;K 為 0 時整格印 未知,不准印 0",
+    "一張連 reports/t<票號>/ 目錄都沒有的票,metrics.py line 仍印一行:runs 類的鍵印 0(看了、沒有),tokens= 印 未知(根本沒在看)。目錄在但 0 個 status.json 要與目錄不存在印不同的字",
+    "board/config.json 的 worker.command 字串尾端加 --output-format json;沙盒測試不依賴這個值(harness 自己寫 config),所以改它不准讓 tests/test_auto_fix.py 任何一條變色",
+    "控制台第一段票表多三欄,表頭字面為 返工輪、紅(env/product)、token,值取自 metrics;/api/state 多一個頂層鍵 metrics,值是每票一筆的 dict。既有 13 條 tests/test_board.py 全綠,尤其 header 的 token 用量:未知 與 /api/state 的 tokens 等於 未知 這兩條不准改",
+    "變異:把『兩者都沒有 → unknown』那一支改成回傳 0,tests/test_metrics.py 至少一條紅且紅訊息含 未知;還原後檔案 sha256 與變異前相同",
+    "docs/REHEARSAL.md 多一列:metrics.py 的 token 解析第一次真的吃到一份 worker log 時要看到什麼"
+  ],
+  "in_scope": [
+    "scripts/status.py 的 cmd_done 與 cmd_phase",
+    "新檔 scripts/metrics.py",
+    "board/board.py 的 state() 與 render_tickets()",
+    "board/config.json 的 worker.command 一個字串"
+  ],
+  "out_of_scope": [
+    "scripts/auto-fix.sh(票 #5 與 #10 正在動它;worker-round<r>.log 已經由它產生,本票只讀)",
+    "scripts/event.py 與 KINDS(不新增事件種類)",
+    "worker / verifier 產出端的格式(那是另一張票)",
+    "控制台的新分頁與新路由(那是下一張票)"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/metrics.py",
+    "scripts/status.py",
+    "board/board.py",
+    "board/config.json",
+    "tests/test_metrics.py",
+    "tests/test_status.py",
+    "tests/test_board.py",
+    "tests/control_harness.py",
+    "verify/metrics/*",
+    "verify/TAGS.d/*.md",
+    "docs/REHEARSAL.md",
+    "scripts/gate.sh"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "feec6f340c6efb57872ea4b65ccbbd3992d7f88a",
+  "state": "Done",
+  "state_version": 14,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [
+      "verify/metrics/test_metrics_line.py"
+    ],
+    "tags": [
+      "metrics"
+    ],
+    "run": "",
+    "notes": ""
+  },
+  "feature": "指標與看板",
+  "decision_refs": [
+    "D-017",
+    "D-003",
+    "D-015",
+    "D-016"
+  ],
+  "outline": "現況(實測):status.json 已有 started/finished/phases[]/failures[]/environment_suspect/repair_context.round,沒有任何 duration、頂層沒有 round、全 repo 零處解析 token;worker 的 stdout 已經落在 reports/t<n>/<run_id>/worker-round<r>.log(auto-fix.sh:385,396-398)但沒有一行程式讀它;board.py 的 tokens 永遠是常數 未知(board.py:47,186),而且全檔沒用過 config 的 reports_dir。介面約定:metrics.py 子指令 line <票號> 與 all [--json];所有路徑從 board/config.json 的 reports_dir 與 tickets_dir 解析,不新增環境變數;一行的形狀是 ticket=<n> runs: gate_runs=… land_runs=… apply_runs=… fix_rounds=… red_runs=… env_runs=… product_runs=… wall_seconds=… objections: objections_ticket_wrong=… objections_test_defect=… tokens=…。所以這張票只做三件事:status.py 補兩格算術、新開一支跨票的 metrics.py(status.py 自己沒有跨票入口,列舉靠 ticket.load_all 加 status.runs_of)、board 把它畫出來。",
+  "test_plan": "驗證者照這份寫案例,標籤 metrics(片段寫進 verify/TAGS.d/<本票號>.md)。\n1 驗 duration 與 round 兩格真的寫進檔:單元層。怎麼驗:在沙盒裡 status.py start 再 status.py done --rc 0,直接讀回 status.json,斷言 duration_seconds 是整數且大於等於 0、round 等於傳進去的 --round;期望值從呼叫參數與兩個時間戳來,不從被測程式算。\n2 驗 duration 缺料時是 null 不是 0:單元層。怎麼驗:手工造一份缺 started 的 status.json 再 done,斷言該格是 None,且 json 文字裡不出現 duration_seconds: 0。\n3 驗 phases[].seconds:單元層。怎麼驗:連下三次 status.py phase(gate/merge/push),斷言第一筆的 seconds 對到 run 的 started、第二三筆各對到前一筆的 at。\n4 驗一行十二個鍵都在、且只有一行:單元層。怎麼驗:造兩個 run 目錄,跑 metrics.py line,斷言輸出 splitlines 長度為 1 且十二個鍵字面全部命中。\n5 驗分類的加總律:單元層。怎麼驗:造三個 run(一綠、一紅含 environment_suspect、一紅不含),斷言 env_runs=1、product_runs=1、red_runs=2,且 env_runs 加 product_runs 等於 red_runs。\n6 驗兩種單位不會被混加:單元層。怎麼驗:票上放兩筆 objections(category 各為 ticket-wrong 與 test_defect),斷言那一行同時出現 runs: 與 objections: 兩個分段字面。\n7 驗 token 三條路:單元層。怎麼驗:同一個 run 目錄下分別放三種 worker-round1.log(尾端 JSON 含 usage 的、只有 tokens used 123 一行的、純散文的),各跑一次,期望值分別是兩數相加、123、未知;純散文那一次斷言輸出不含 tokens=0。\n8 驗沒有目錄與空目錄兩種空的長得不一樣:單元層。怎麼驗:一張票完全沒有 reports 目錄、另一張有目錄但 0 個 status.json,斷言兩行的文字不相等。\n9 驗看板畫得出來也沒打壞舊的:API 層(board.py --port 0,不碰固定埠)。怎麼驗:起 board、GET / 斷言三個新表頭字面在票表那一段裡、GET /api/state 斷言 metrics 鍵存在且 tokens 仍等於 未知;既有 13 條照跑。\n10 變異:第 7 條的 unknown 分支改成 return 0,期望第 7 條紅、紅訊息含 未知。",
+  "verify_strings": [
+    {
+      "path": "scripts/status.py",
+      "contains": "duration_seconds"
+    },
+    {
+      "path": "scripts/metrics.py",
+      "contains": "fix_rounds="
+    },
+    {
+      "path": "board/board.py",
+      "contains": "返工輪"
+    }
+  ],
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "allowed_write_paths 沒有 scripts/gate.sh,而新檔 scripts/metrics.py 對不到 gate.sh 的檔→模組對照表,分支閘門必然 rc=3",
+      "evidence": "dispatch/ac-18/EVIDENCE.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "主線 21:4x:選 (a) 把 scripts/gate.sh 加進 allowed_write_paths,同一 worker 補一格 `scripts/metrics.py) add test_metrics test_board ;;`",
+      "blocking": true
+    },
+    {
+      "category": "ticket-wrong",
+      "body": "acceptance 列 12 個鍵,test_plan 寫十一個鍵",
+      "evidence": "dispatch/ac-18/EVIDENCE.md",
+      "owner": "main",
+      "disposition": "fixed",
+      "follow_up": "主線把 test_plan 的十一改成十二;以 acceptance 的 12 個為準",
+      "blocking": false
+    }
+  ],
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "8afd712",
+    "note": "read patch: status.py duration_seconds/round/phase seconds; metrics.py line/all; board 3 columns + /api/state.metrics; worker.command --output-format json; gate.sh mapping; regression case verify/metrics (tag metrics) by implementer, waiver recorded; gate green 215634",
+    "at": "2026-09-22T22:03:58+08:00",
+    "state_version": 14
+  },
+  "verify_waiver": {
+    "by": "main",
+    "reason": "內部工具票(metrics/看板欄位);實作者交了回歸案例 verify/metrics/test_metrics_line.py(tag metrics)+ 13 條單元 + 9 條變異,主線讀過;無獨立驗證者"
+  }
+}
