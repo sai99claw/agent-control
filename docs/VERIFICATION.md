@@ -29,10 +29,15 @@
 把 `files` / `tags` / `run` / `notes` 寫進票的 `verify` 欄。
 > `files` 那一格是一把尺:**land 會檢查它們真的在分支上**,缺了 rc=4(D-015)。填了卻沒交,
 > 票的 tags 會被閘門呼叫、卻一個案例都選不到 —— 那是缺口,不是綠。
-**第二段(拿到指定的 patch 之後)**:`scripts/verify-case.py check <票號>` —— 同一份案例在**乾淨主線副本**上跑
+驗證者這一段結束前先跑 `scripts/verify-case.py red <票號>`,只證明「乾淨基底上紅、而且紅在案例檔自己的
+`AssertionError`」(rc=0 才算交件;算數的紅只有這一種,import / 缺符號 / 別處炸的紅列出來、不算、票不寫)。
+**不搭參考實作、不做變異、不等 patch。** 交付物用 `scripts/verify-case.py extract <票號>` 出(**只含自己的
+verify 檔**,差分基準是乾淨基底)。然後**結束**。
+
+**第二段(閘門做)**:`scripts/verify-case.py check <票號>` —— 同一份案例在**乾淨主線副本**上跑
 (該紅)、在 **candidate 副本**上跑(該綠),工具把證據寫進票的 `verify.baseline`:案例數、紅的是哪幾條、skip 幾條、
-兩邊的 sha。交付物用 `scripts/verify-case.py extract <票號>` 出(**只含自己的 verify 檔**,差分基準是乾淨主線)。
-然後**結束**。
+兩邊的 sha,`stage` 從 `red` 升成 `check`。**綠不是驗證者的事**——閘門在實作者的 patch 進來時跑,
+`ticket.py close` 只認 `stage=="check"`。
 
 > 🩸 **`import` 失敗不算紅。** 乾淨主線上沒有那個新符號,案例 `import` 就會炸 —— 那是「還沒接上」,不是「驗到了」,
 > 而兩者都讓 unittest 回非零。工具把它們分開數並**明列**;不適用「baseline 該紅」的驗收要在票裡寫明理由。
@@ -40,7 +45,7 @@
 接著:gate(單元對照組 + **票的 `tags` 真的被呼叫**)→ 主線讀 patch 記 `review`(綁票版本與分支 sha)→ land(單元全套 + 回歸全部)。
 
 **誰判對錯:閘門。** 驗證者**不判 PASS/FAIL、不寫 VERDICT、不讀實作者的 `EVIDENCE.md`、不輪詢**,
-而且**不跑 tag 回歸那一整組** —— 它只跑自己的案例與 `verify-case.py check`。同一組 tag 被 worker、驗證者、gate 各跑一次
+而且**不跑 tag 回歸那一整組** —— 它只跑自己的案例與 `verify-case.py red`。同一組 tag 被 worker、驗證者、gate 各跑一次
 是三份同樣的綠(2026-09-21 外部審查的 token 帳)。
 閘門紅了走 `docs/WORKFLOW.md` §回歸紅了之後(`scripts/auto-fix.sh` 起新 worker),**不回到驗證者**。
 同一組標籤在同一輪裡只跑一次(`scripts/verify.py` 的 `reports/t<n>/<run_id>/verify-<雜湊>.log`,

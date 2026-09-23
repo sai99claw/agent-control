@@ -76,7 +76,7 @@ EVIDENCE,不改它**;抽不出來也不改變退出碼、不擋流程。
 - `attempt` / `state_version`:一張票被關成 Done 但從沒進主線,兩天後才發現。
 - `test_evidence.base_sha`:一支分支 3470 條綠,跑在三小時前的基準上,主線早已走遠。
 - `verify`:2026-09-20 驗證者交了案例卻沒寫怎麼跑,下一個人重跑整組閘門去找它們,一次等待燒掉幾十萬 token(D-010)。**案例在哪與怎麼跑,是交付的一部分。**
-- `verify.baseline`:2026-09-21 外部審查 —— 範本只要求貼兩份 Ran/OK,而**一份貼上來的輸出沒辦法被機器比對**;票上沒有一格說得出「乾淨主線上真的紅過」,於是一條永遠綠的斷言與一條真的在驗的斷言長得一樣。由 `scripts/verify-case.py check <n>` 寫。
+- `verify.baseline`:2026-09-21 外部審查 —— 範本只要求貼兩份 Ran/OK,而**一份貼上來的輸出沒辦法被機器比對**;票上沒有一格說得出「乾淨主線上真的紅過」,於是一條永遠綠的斷言與一條真的在驗的斷言長得一樣。同一格由兩個 `stage` 接力寫(D-020,2026-09-23):`red`(驗證者,`scripts/verify-case.py red <n>` 寫,只證乾淨基底上紅、紅在案例檔自己的斷言,`stage=red`)升成 `check`(閘門,`scripts/verify-case.py check <n>` 寫,乾淨主線該紅、candidate 該綠,`stage=check`)。`ticket.py` 的 close 只認 check——`stage=red` 只代表案例寫好了,還沒有人量過綠。
 - `review.state_version` / `review.sha`:同一次審查 —— 舊的 `review` 只有 verdict/by/at/note,重套一次 patch、改一次票面之後它仍然長得有效,而 land 根本沒有讀它。
 - `objections`:同一次審查 —— 實作者的反駁沒有可靠的收件與處置契約,「這張票寫錯了」講完之後東西照樣落地。
 - `attempt` / `state_version` 的**比對**:同一次審查 —— schema 宣稱過「對不上就拒絕」,而 `ticket.py set` 讀出來直接覆寫。**宣稱與實作分岔的那一格,看起來與有守衛的那一格一模一樣。**

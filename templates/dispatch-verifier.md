@@ -18,22 +18,20 @@
 **副本**:`<$W>/work`(套了實作者 patch 的 candidate)。
 **回報給**:`<主線 / session 名>`。
 
-> **第一段不必等 patch**(2026-09-21):寫案例、宣告 `TAGS`、寫登記片段、填票的 `verify` 欄 —— 這些票 Ready 就能做完。
-> **第二段**才需要指定的 patch:`verify-case.py check` 會自己做乾淨主線副本,**你不必自己維護一份 `base/`**。
+> **你不等 patch**(D-020,2026-09-23):寫案例、宣告 `TAGS`、寫登記片段、填票的 `verify` 欄、跑
+> `verify-case.py red` 證明乾淨基底上紅 —— 這些票 Ready 就能做完,交件就結束。**綠由閘門在實作者
+> 的 patch 進來時用 `verify-case.py check` 量**,不是你的事,你不搭參考實作、不做變異、不等 patch。
 
 ## 你要交的四樣
 1. `verify/<feature>/test_ticket_<票號>.py` —— 票面**每一條驗收各一個案例**,檔頂宣告
    `TAGS = [...]`(小寫 kebab)。期望值來源要獨立於被測程式:設計文件、手算、既有 golden。
-   **「跑一次記下來當期望」不算。**
-2. **案例是對的的證明 —— 用工具跑,不要手貼**:
-   ```sh
-   python3 scripts/verify-case.py check <票號> --candidate <$W>/work
-   ```
-   它自己做乾淨主線副本、把**同一份案例**覆加到兩邊、各跑一次,把案例數、紅的是哪幾條、
-   skip、兩邊 sha 寫進票的 `verify.baseline`。rc=0 才算過。
-   🩸 少了「乾淨主線上會紅」這一半,一個永遠綠的案例與一個真的在驗的案例長得一樣。
-   🩸 **`import` 失敗不算紅**:乾淨主線上沒有那個新符號,案例 import 就會炸 —— 那是還沒接上,
-   不是驗到了。工具會分開數並明列;不適用「baseline 該紅」的驗收,在票的 `verify.notes` 寫明理由。
+   **「跑一次記下來當期望」不算。** 照 `verify/_template_ticket.py` 的形狀,每個 `test_` 的
+   docstring 第一行是驗收編號。
+2. 寫完案例 —— 跑 `python3 scripts/verify-case.py red <票號> --candidate <$W/work>`
+   (它自己做乾淨基底副本、覆上你的案例、只跑一次;算數的紅只有「案例檔自己的
+   `AssertionError`」,import / 缺符號 / 別處炸的紅會列出來、不算、票不寫)。rc=0 才算交件。
+   **綠不是你的事**:閘門在實作者 patch 進來時用 `verify-case.py check` 量,`ticket.py close`
+   只認那一趟。**不搭參考實作、不做變異、不等 patch。** 交付物 `verify-case.py extract`。
 3. **標籤登記**:新標籤寫成**自己的片段** `verify/TAGS.d/<票號>.md`(格式 `` - `tag` — 說明(#票號) ``)。
    不要直接改 `verify/TAGS.md` —— 所有票都往那一份的尾巴附加,等於每張票都要等前一張落地(D-012)。
    執行器認片段,所以片段寫好就不會紅;合併由 `verify-case.py tags-merge` 做。
@@ -46,16 +44,16 @@
      "notes": "<跑之前要知道的事:前置、已知不穩、為什麼這樣驗>"
    }'
    ```
-   交付物本身是 `patch-verify.diff`,用 `python3 scripts/verify-case.py extract <票號> --candidate <$W>/work` 出
-   —— 它只抽 `verify.files` 那幾個檔,差分基準是乾淨主線,檔頭是 `--- base/…` / `+++ work/…` 的相對形式。
-   **不要手工挑檔**:你的 `work/` 裡已經有實作者的 patch。
+   交付物本身是 `patch-verify.diff`,用 `python3 scripts/verify-case.py extract <票號>` 出
+   —— 它只抽 `verify.files` 那幾個檔,差分基準是乾淨基底,檔頭是 `--- base/…` / `+++ work/…` 的相對形式。
+   **不要手工挑檔**。
 
 ## 然後就結束
 - **不判 PASS/FAIL、不寫 VERDICT、不讀實作者的 `EVIDENCE.md`。** 對錯由閘門跑票的
   `tags` 判;紅了走 `docs/WORKFLOW.md` §回歸紅了之後(起新 worker),**不回到你這裡**。
 - **不重跑票閘門那整組,也不跑 tag 回歸** —— 主線的閘門與落地的全套都會再跑一次,你重跑等於把同一份
   綠買第三遍(2026-09-21:重跑整組 + 輪詢等它,一天燒掉幾十萬 token)。
-  你只跑:**自己的案例**,以及 `scripts/verify-case.py check <票號>`。其他的交給 gate。
+  你只跑:**自己的案例**,以及 `scripts/verify-case.py red <票號>`。`check` 是閘門的事,不是你的。
 - **不准輪詢**:測試前景跑、給 `timeout`、一輪拿到結果,輸出只擷取
   `^Ran |^OK|^FAILED|^(FAIL|ERROR):` 那幾行。不用 `Monitor`、不用 `sleep` 迴圈。
 - **不改產品碼、不放寬票面的驗收、不刪既有案例、不 git 寫入、不執行整支落地腳本。**

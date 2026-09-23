@@ -112,6 +112,24 @@ EOF
 }
 copy_scripts
 
+# 範本:D-020(2026-09-23)起 verify/_template_ticket.py 是 A 正本,同步到 T 同路徑
+# ——**不加檔頭**(檔頭會被 verify.py 的 lint / py_compile 當成第一行 docstring 的一部分)。
+copy_template() {
+  src=$HERE/verify/_template_ticket.py
+  if [ ! -f "$src" ]; then
+    echo "sync: 主 repo 沒有 verify/_template_ticket.py —— 名單與事實分岔了(先修這支腳本)" >&2
+    return 0
+  fi
+  if [ "$DRY" = "--dry-run" ]; then
+    echo "sync: (dry-run) $DEST/verify/_template_ticket.py"
+    return 0
+  fi
+  mkdir -p "$DEST/verify"
+  cp "$src" "$DEST/verify/_template_ticket.py"
+  echo "sync: $DEST/verify/_template_ticket.py"
+}
+copy_template
+
 # 退場的角色卡。**先唸出來再刪** —— 一次靜悄悄的刪除與一次沒發生的刪除長得一樣。
 if [ -f "$MANIFEST" ]; then
   while IFS= read -r old; do
