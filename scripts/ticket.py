@@ -797,6 +797,12 @@ def done_blockers(ticket):
     #15:票有誠實的 `verify_waiver` **且** review 綁的 sha 真的在主線歷史裡,才免
     `test_evidence` / `verify.baseline` 這一關 —— review 本身該不該過(§review_problems)
     與 objections 是否處置完,不受這格豁免。
+
+    D-020:`verify.baseline` 是**兩段**寫同一格 —— `verify-case.py red`(驗證者)只證
+    乾淨基底該紅(`stage="red"`),`verify-case.py check`(閘門)在實作者的 patch 進來
+    時才證候選該綠(`stage="check"`)。**close 只認 check**:驗證者交件的那一趟說的是
+    「這條案例真的在驗東西」,不是「這張票的東西真的做出來了」,而少了後半的票與做完
+    的票在票面上長得一樣。
     """
     out = []
     if not waiver_covers_regression(ticket):
@@ -809,6 +815,11 @@ def done_blockers(ticket):
         elif baseline and not baseline.get("ok"):
             out.append("verify.baseline 說驗紅沒過:%s"
                        % (baseline.get("why") or "乾淨主線上沒有紅"))
+        elif baseline and str(baseline.get("stage") or "") != "check":
+            out.append("verify.baseline 的 stage 是 %s,還缺閘門那一趟 check —— "
+                       "驗證者只量了「乾淨基底該紅」,候選該綠由閘門量"
+                       "(`scripts/verify-case.py check <票號> --candidate <分支>`,D-020)"
+                       % (baseline.get("stage") or "空的"))
     out.extend(review_problems(ticket))
     out.extend(objection_problems(ticket))
     return out
