@@ -104,7 +104,8 @@ FILE_LINE = re.compile(r'^\s*File "([^"]+)", line (\d+)')
 ENGINE = re.compile(r"engine\s*[=:]\s*['\"]?([A-Za-z0-9_.-]+)")
 # 案例自己宣告環境紅的那一行:`ENVIRONMENT-SUSPECT: safari 螢幕鎖著(#474)`。
 # 引擎那一格是**選填**的第一個字 —— 認得出引擎名就拆出來,認不出就整段都是「為什麼」
-# (有些環境紅不屬於任何一個引擎,硬拆會把半句話當成引擎名)。前綴**不必在行首**。
+# (有些環境紅不屬於任何一個引擎,硬拆會把半句話當成引擎名)。前綴**只認行首**
+# (去掉前導空白之後),理由寫在 `parse_environment_suspects` 的 docstring。
 SUSPECT_PREFIX = "ENVIRONMENT-SUSPECT:"
 SUSPECT_ENGINE = re.compile(r"^([a-z][a-z0-9_.-]*)(\s+|$)")
 # `environment_suspect` 每一筆的七個鍵,順序照 `docs/DESIGN-ENV-SUSPECT.md`(D-019)。
@@ -209,6 +210,57 @@ class EnvironmentResult(unittest.TextTestResult):
         super().addSubTest(test, subtest, err)
 
 
+class LogStream:
+    """同一份 log 收兩種輸出:runner 的,與案例自己 `print` 的。
+
+    `verbosity=2` 的 runner 把 `test_x (…) ... ` 寫完**不換行**就去跑案例,所以案例
+    `print` 出來的字會黏在那一行尾巴。實測(#23 第 2 輪)那一行長這樣:
+
+        test_it_declares_and_skips (…) ... ENVIRONMENT-SUSPECT: firefox 假的宣告
+
+    於是兩件事同時壞:`line` 那一格前面多帶了一截案例名(文件要的是**整行原樣**),
+    而宣告行不在行首 —— 而行首是唯一分得開「印出那一行」與「在講那一行」的東西
+    (`parse_environment_suspects`)。所以這裡追蹤這份 log 現在停在第幾欄,**換寫入者
+    而且還停在半行**的時候補一個換行。
+    """
+
+    def __init__(self, handle):
+        self.handle = handle
+        self.column = 0
+        self.who = None
+
+    def side(self, who):
+        return LogSide(self, who)
+
+    def write(self, who, text):
+        if not text:
+            return 0
+        if self.column and who != self.who:
+            self.handle.write("\n")
+            self.column = 0
+        self.who = who
+        self.handle.write(text)
+        if "\n" in text:
+            self.column = len(text.rsplit("\n", 1)[1])
+        else:
+            self.column += len(text)
+        return len(text)
+
+
+class LogSide:
+    """`LogStream` 的一個寫入者;runner 與 `redirect_stdout` 各拿一個。"""
+
+    def __init__(self, shared, who):
+        self.shared = shared
+        self.who = who
+
+    def write(self, text):
+        return self.shared.write(self.who, text)
+
+    def __getattr__(self, name):
+        return getattr(self.shared.handle, name)
+
+
 def cmd_run_tests(args):
     """跑測試並在環境可疑時中止。**shell 不再自己叫 unittest** —— 要看到一條一條的
     結果就得待在同一個程序裡;等 log 寫完再解析等於等整段跑完,那正是這張票要省下的。
@@ -231,16 +283,18 @@ def cmd_run_tests(args):
         suite = loader.discover("tests", pattern="test_*.py")
     else:
         suite = loader.loadTestsFromNames(args.names)
-    with open(args.log, "w", encoding="utf-8") as stream:
-        runner = unittest.TextTestRunner(
-            stream=stream, verbosity=2,
-            resultclass=lambda *items, **kw: EnvironmentResult(
-                *items, threshold=threshold, **kw))
+    with open(args.log, "w", encoding="utf-8") as handle:
         # **案例自己 `print` 的那一行也要進 log。** `TextTestRunner(stream=…)` 只收
         # runner 的輸出,而 `ENVIRONMENT-SUSPECT:` 那一行是案例印的 —— 不導進來,
         # 它會流到呼叫者的 stdout 而不在 log 裡,於是 `done --log` 永遠讀不到
-        # declared 那一條來源(`docs/DESIGN-ENV-SUSPECT.md` §遷移)。
-        with contextlib.redirect_stdout(stream):
+        # declared 那一條來源(`docs/DESIGN-ENV-SUSPECT.md` §遷移)。兩邊共用一個
+        # `LogStream`,它負責讓案例印的那一行落在**行首**(理由見那個 class)。
+        shared = LogStream(handle)
+        runner = unittest.TextTestRunner(
+            stream=shared.side("runner"), verbosity=2,
+            resultclass=lambda *items, **kw: EnvironmentResult(
+                *items, threshold=threshold, **kw))
+        with contextlib.redirect_stdout(shared.side("case")):
             result = runner.run(suite)
     if result.environment_suspect:
         for row in result.environment_suspect:
@@ -451,10 +505,16 @@ def parse_environment_suspects(log_path):
     宣告是跑在裡面的案例自己說的 —— 螢幕中途上鎖那一種紅被案例改記成 skip,
     `addFailure` 根本不會被叫,統計看不到它,而兩端之間唯一的線就是 log 上那一行。
 
-    切法照 `docs/DESIGN-ENV-SUSPECT.md`:前綴用 `find` 找,**不是 `startswith`**
-    (前綴可以不在行首,前面還有別的輸出);引擎名後面要**真的還有話**才把第一個字
-    當引擎,只有一個字的那一行整句就是理由。**一行一筆,不去重** —— 同一趟兩份 log
-    各記一次是明著要的行為。
+    切法照 `docs/DESIGN-ENV-SUSPECT.md`:宣告行**只認行首**(去掉前導空白之後以前綴
+    開頭);引擎名後面要**真的還有話**才把第一個字當引擎,只有一個字的那一行整句就是
+    理由。**一行一筆,不去重** —— 同一趟兩份 log 各記一次是明著要的行為。
+
+    **為什麼只認行首而不是 `find`**:#23 第 1 輪實測,`unittest -v` 把案例 docstring
+    的第一行也印進 log,而那一行裡逐字寫著前綴,於是被讀成一筆
+    `engine="firefox"` / `why="假的 ... ok"` 的宣告 —— 「這一格非空就不自動派」那條
+    守衛照著把那一輪的 auto-fix 擋掉了。中段出現的前綴是在**講**那一行,不是**印出**
+    那一行,而位置是唯一分得開兩者的東西。案例真的印出來的那一行一定在行首:`print`
+    自己起一行,而 runner 停在半行時由 `LogStream` 補一個換行。
     """
     try:
         with open(log_path, encoding="utf-8", errors="replace") as handle:
@@ -463,10 +523,10 @@ def parse_environment_suspects(log_path):
         return []
     out = []
     for line in lines:
-        at = line.find(SUSPECT_PREFIX)
-        if at < 0:
+        line = line.strip()
+        if not line.startswith(SUSPECT_PREFIX):
             continue
-        rest = line[at + len(SUSPECT_PREFIX):].strip()
+        rest = line[len(SUSPECT_PREFIX):].strip()
         if not rest:
             continue
         engine = ""
@@ -477,7 +537,7 @@ def parse_environment_suspects(log_path):
         # `count` 是 1(這一行就是一次觀測),`threshold` 沒有門檻可言 —— 填 `None`,
         # 不填 0:0 是一個門檻,而「不適用」不是一個數字。
         out.append(suspect_row("declared", engine=engine, why=rest, count=1,
-                               threshold=None, log=log_path, line=line.strip()))
+                               threshold=None, log=log_path, line=line))
     return out
 
 
@@ -496,8 +556,13 @@ def environment_suspects(data):
         return [row for row in raw if isinstance(row, dict)]
     if isinstance(raw, dict):
         # 舊形狀:`message_shape` 就是今天的 `why`;那一版沒有留原始那一行與 log。
+        # 沒有 `message_shape` 的舊檔,`why` 是 **`None` 而不是 `""`**:`""` 在說
+        # 「理由是一句空話」,`None` 在說「那一版根本沒記理由」,而只有後者是真的
+        # (`docs/DESIGN-ENV-SUSPECT.md` §結論「缺料就 null」、DISPATCH-TEMPLATE §5.5
+        # 「拿不到就當空的」)。`line` / `log` 那兩格是文件與票面**逐字**釘成 `""` 的,
+        # 照釘的寫。
         return [suspect_row("statistical", engine=raw.get("engine") or "",
-                            why=raw.get("message_shape") or raw.get("why") or "",
+                            why=raw.get("message_shape") or raw.get("why"),
                             count=raw.get("count"), threshold=raw.get("threshold"),
                             log="", line="")]
     return []

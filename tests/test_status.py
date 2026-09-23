@@ -12,6 +12,7 @@ log 讀進上下文,或用 sleep 迴圈輪詢背景工作,兩條都是一次幾�
   都綠」為由回傳 0)。
 """
 
+import ast
 import json
 import os
 import re
@@ -905,6 +906,13 @@ class EnvironmentSuspectHasOneShape(Sandbox):
             text = handle.read()
         self.assertIn("ENVIRONMENT-SUSPECT: firefox 假的宣告", text,
                       "案例印的那一行不在 log 裡:%r" % text[-400:])
+        # **在 log 裡**還不夠,要**在行首**:解析只認行首,而 `verbosity=2` 的 runner
+        # 停在 `test_x (…) ... ` 半行上就去跑案例,不補換行的話那一行會黏在它後面
+        # (實測:`… ... ENVIRONMENT-SUSPECT: firefox 假的宣告`)。那時 `assertIn`
+        # 照樣綠、`done` 照樣讀得到(舊的 `find` 切法),但 `line` 那一格會多帶一截
+        # 案例名 —— 「有那一行」與「那一行是原樣的」長得一樣。
+        self.assertIn("\nENVIRONMENT-SUSPECT: firefox 假的宣告\n", text,
+                      "那一行沒有落在行首:%r" % text[:300])
         with open(suspect, encoding="utf-8") as handle:
             self.assertEqual(json.load(handle), [],
                              "沒有連紅統計時那一份檔是 [],不是空字串")
@@ -915,23 +923,24 @@ class EnvironmentSuspectHasOneShape(Sandbox):
         self.assertEqual(rows[0]["source"], "declared")
         self.assertEqual(rows[0]["engine"], "firefox")
         self.assertEqual(rows[0]["why"], "假的宣告")
+        self.assertEqual(rows[0]["line"], "ENVIRONMENT-SUSPECT: firefox 假的宣告",
+                         "line 要是案例印的那一行原樣,不准前面黏一截案例名")
 
     # ------------------------------------------- 行格式的三種變異(切法)
 
     def test_the_three_shapes_of_a_declaration_line(self):
         """期望值從那一行的切法規則來,不從程式現在吐什麼來。
 
-        **變異**:(a) 拿掉「引擎後面要真的還有話」那一條(改成一律切第一個字)
-        → 第二種紅;(b) 把 `line.find(SUSPECT_PREFIX)` 改成 `startswith`
-        → 第三種紅。
+        **變異**:拿掉「引擎後面要真的還有話」那一條(改成一律切第一個字)
+        → 第二種紅。
         """
         cases = (
             # 中文開頭:認不出引擎,整段都是理由 —— 硬切會把半句話當成引擎名。
             ("ENVIRONMENT-SUSPECT: 螢幕鎖著 ——(#474)", "", "螢幕鎖著 ——(#474)"),
             # 只有一個字:後面沒有話,所以那一個字**是理由不是引擎**。
             ("ENVIRONMENT-SUSPECT: safari", "", "safari"),
-            # 前綴不在行首:前面還有別的輸出,照樣抓得到。
-            ("[chrome] ENVIRONMENT-SUSPECT: safari session 斷了(#645)",
+            # 前導空白吃掉(縮排過的輸出照樣算),引擎與理由照切。
+            ("    ENVIRONMENT-SUSPECT: safari session 斷了(#645)",
              "safari", "session 斷了(#645)"),
         )
         for line, engine, why in cases:
@@ -941,8 +950,63 @@ class EnvironmentSuspectHasOneShape(Sandbox):
                 self.assertEqual(len(rows), 1, rows)
                 self.assertEqual(rows[0]["engine"], engine)
                 self.assertEqual(rows[0]["why"], why)
-                self.assertEqual(rows[0]["line"], line, "line 是整行原樣")
+                self.assertEqual(rows[0]["line"], line.strip(), "line 是整行原樣")
                 os.remove(log)
+
+    def test_only_a_line_that_starts_with_the_prefix_is_a_declaration(self):
+        """**印出那一行**與**在講那一行**只有位置分得開。
+
+        #23 第 1 輪實測踩到的就是這個:`unittest -v` 把案例 docstring 的第一行印進
+        gate.log,而那一行裡逐字寫著前綴,於是被讀成一筆
+        `engine="firefox"` / `why="假的 ... ok"` 的宣告 —— 「這一格非空就不自動派」
+        照著把那一輪的 auto-fix 擋掉了(狀態檔 `20260923-123307-89768`)。
+
+        **變異**:把 `line.strip().startswith(...)` 改回 `line.find(...) >= 0`
+        → 第二組每一行都變成一筆,這一條紅。
+        """
+        prefix = status_module.SUSPECT_PREFIX
+        taken = ("%s safari 螢幕鎖著(#474/#644)" % prefix,
+                 "  \t%s safari session 斷了(#645)" % prefix)
+        # 三種「在講那一行」:verbose 印出來的 docstring、註解、把它包在別的輸出裡。
+        ignored = ('驗收 6:run-tests 跑一條會 `print("%s firefox 假的 ... ok' % prefix,
+                   "# 案例自己宣告環境紅的那一行:%s safari 螢幕鎖著" % prefix,
+                   "[chrome] %s safari session 斷了(#645)" % prefix)
+        for line in taken:
+            with self.subTest(taken=line):
+                log = self.a_log("taken.log", declared=(line,), reds=())
+                self.assertEqual(len(status_module.parse_environment_suspects(log)), 1)
+                os.remove(log)
+        for line in ignored:
+            with self.subTest(ignored=line):
+                log = self.a_log("ignored.log", declared=(line,), reds=())
+                self.assertEqual(status_module.parse_environment_suspects(log), [],
+                                 "中段出現的前綴不是一筆宣告")
+                os.remove(log)
+
+    def test_no_test_docstring_carries_the_prefix_verbatim(self):
+        """反方向的守衛:`tests/` 底下的 docstring 不准逐字寫出那個前綴。
+
+        上面那一條擋的是解析,這一條擋的是**來源** —— 兩道都要,因為 `-v` 印的不只有
+        docstring(以後有人在案例裡 `print` 一段說明也會進 log),而位置這條線只在
+        「說明文字不在行首」的時候才成立。要提到它就用 `status.SUSPECT_PREFIX` 拼,
+        別寫死。
+
+        **變異**:把哪一支測試的 docstring 改回逐字寫前綴 → 這一條紅並指名那個檔。
+        """
+        prefix = status_module.SUSPECT_PREFIX
+        where = os.path.dirname(os.path.abspath(__file__))
+        bad = []
+        for name in sorted(os.listdir(where)):
+            if not (name.startswith("test_") and name.endswith(".py")):
+                continue
+            with open(os.path.join(where, name), encoding="utf-8") as handle:
+                tree = ast.parse(handle.read())
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef)):
+                    continue
+                if prefix in (ast.get_docstring(node) or ""):
+                    bad.append("%s:%s" % (name, getattr(node, "name", "<module>")))
+        self.assertEqual(bad, [], "docstring 逐字寫了前綴,`-v` 會把它印成一筆宣告")
 
     # ---------------------------------- 驗收 9:讀端正規化吃掉舊檔的五種形狀
 
@@ -971,7 +1035,9 @@ class EnvironmentSuspectHasOneShape(Sandbox):
                          "舊的那一格裝的就是連紅統計")
         self.assertEqual(rows[0]["engine"], "safari")
         self.assertEqual(rows[0]["count"], 8)
-        self.assertEqual(rows[0]["why"], "", "舊形狀沒有 message_shape 就沒有 why")
+        self.assertIsNone(rows[0]["why"],
+                          "舊形狀沒有 message_shape:那一格是 None(那一版沒記理由),"
+                          "不是 \"\"(理由是一句空話)")
         self.assertEqual(rows[0]["line"], "", "舊形狀沒留原始那一行")
         self.assertEqual(rows[0]["log"], "", "舊形狀沒留 log")
         self.assertEqual(sorted(rows[0]), sorted(status_module.SUSPECT_KEYS),

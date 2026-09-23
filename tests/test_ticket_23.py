@@ -7,8 +7,9 @@ agent-control 這顆 repo 的範圍內,同步票另開)。
 ## 兩份 fixture,兩邊都用真的
 - **fixture A**:`tests/test_gate.py:33` 的 `ENVIRONMENT_WAVE`(#7 同形連紅 12 條,
   門檻預設 8)—— 這裡用 `import test_gate` 直接讀常數,不重抄一份。
-- **fixture T**:`tabby_pool` 的 `verify/land_preflight/test_ticket_644.py:261-284`
-  的 `SUSPECT_LINE` + `a_log()`,一個字沒改;#645 那一行是
+- **fixture T**:這支工具的下游專案(名字走 `board/config.json`,不寫在這裡 ——
+  `tests/test_no_project_names.py`)的 `verify/land_preflight/test_ticket_644.py:261-284`
+  的 `SUSPECT_LINE` + `a_log()`,一個字沒改;#645 那一行是那邊
   `demo/test_browsers.py:1311` 印的原句。
 
 ## 為什麼有些測試重用 test_gate / test_auto_fix / test_board 的類別
@@ -39,7 +40,7 @@ TAGS = ["env-suspect"]
 SEVEN_KEYS = ("source", "engine", "why", "count", "threshold", "log", "line")
 
 # --------------------------------------------------------------- fixture T
-# 去 tabby_pool 的 `verify/land_preflight/test_ticket_644.py:261-284` 讀出來的,
+# 去下游專案的 `verify/land_preflight/test_ticket_644.py:261-284` 讀出來的,
 # 一個字都沒改;#645 那一行是 `demo/test_browsers.py:1311` 印的原句
 # (`docs/DESIGN-ENV-SUSPECT.md` §驗收 fixture T)。
 SUSPECT_LINE = "ENVIRONMENT-SUSPECT: safari 螢幕鎖著(#474/#644)"
@@ -227,9 +228,13 @@ class RunTestsCapturesDeclaredLines(Sandbox):
         return self.run_py("scripts/status.py", *args)
 
     def test_acceptance_06_a_printed_declaration_survives_into_the_log(self):
-        """驗收 6:run-tests 跑一條會 `print("ENVIRONMENT-SUSPECT: firefox 假的
-        宣告")` 然後 skip 的案例 → `--log` 那份檔裡找得到那一行(`cmd_run_tests`
-        要把案例 stdout 也導進 log),接著 `done --log` 得 1 筆 declared。
+        """驗收 6:run-tests 跑一條會印一行宣告(前綴 + `firefox 假的宣告`)然後
+        skip 的案例 → `--log` 那份檔裡找得到那一行(`cmd_run_tests` 要把案例 stdout
+        也導進 log),接著 `done --log` 得 1 筆 declared。
+
+        這一段**故意不逐字寫出那個前綴**:`unittest -v` 會把 docstring 的第一行印進
+        同一份 log,而逐字寫的那一行會被讀成一筆宣告 —— #23 第 1 輪就是這樣把自己
+        那一輪的 auto-fix 擋掉的。要提到它就用 `status.SUSPECT_PREFIX` 拼。
 
         **變異**:不包 `contextlib.redirect_stdout` → `print()` 那一行流到
         `run-tests` 呼叫者自己的 stdout,不進 `--log`。這一條紅在「log 裡找不到
@@ -295,13 +300,15 @@ class GateEndToEnd(test_auto_fix.AutoFixBase):
         self.assertEqual(row["threshold"], 8)
         self.assertIsNone(re.search(r"\d", row["why"]),
                           "why 是正規化過的形狀,不准帶數字:%r" % row["why"])
-        # `line` = 觸發門檻那一條紅**未正規化**的訊息第一行(D-019 §遷移:
-        # `line=str(err[1]).splitlines()[0]`)。`ENVIRONMENT_WAVE` 用
-        # `assertEqual("home", "", "localStorage id=… empty after … seconds")`
-        # 觸發,Python 的 `assertEqual` 診斷把自訂訊息接在標準診斷**之後**,所以
-        # 第一行是標準診斷 `'home' != ''`,不是那句帶數字的自訂訊息 —— 期望值從
-        # 這裡直接量出來,不是編一個「看起來該長什麼樣」的字串。
-        self.assertEqual(row["line"], "'home' != ''")
+        # `line` = 觸發門檻那一條紅**未正規化**的訊息第一行(D-019 §結論;文件的
+        # 範例就是 `AssertionError: localStorage id=ab-1 empty after 101 seconds`)。
+        # 所以這一格**必須帶得回數字** —— 那正是 `why` 被抹掉的東西,也是「那台機器
+        # 當時說了什麼」唯一還答得出來的地方。期望值從 fixture 那一句
+        # `self.fail("localStorage id=%d empty after %d seconds")` 來
+        # (`tests/test_gate.py` 的 `ENVIRONMENT_WAVE`),不從程式現在吐什麼來。
+        self.assertRegex(row["line"], r"localStorage id=\d+ empty after \d+ seconds")
+        self.assertNotEqual(row["line"], row["why"],
+                            "line 是原文、why 是形狀,兩格不准是同一個字串")
 
     def test_acceptance_08_gate_without_no_auto_fix_refuses_to_dispatch(self):
         """驗收 8:gate 跑 `ENVIRONMENT_WAVE` **不帶** `--no-auto-fix`(沙盒
