@@ -1,0 +1,415 @@
+<title>agent-control 流程圖</title>
+<style>
+:root{
+  --bg:#f6f7f5; --panel:#eceeeb; --ink:#1c2430; --muted:#5b6672; --line:#d3d8d5;
+  --accent:#2f6f8f; --accent-soft:#dbe8ee;
+  --design:#b5731a; --design-soft:#f4e6cf;
+  --hole:#b23a3a; --hole-soft:#f3dcdc;
+  --warn:#8a7a1f; --warn-soft:#efe9c6;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --sans:"PingFang TC","Noto Sans TC","Microsoft JhengHei","Helvetica Neue",Arial,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#141a1f; --panel:#1c232a; --ink:#e4e8eb; --muted:#9aa5ae; --line:#2d363e;
+    --accent:#7dbbd8; --accent-soft:#1f3540;
+    --design:#e0a54d; --design-soft:#3a2d17;
+    --hole:#e07a7a; --hole-soft:#3d2222;
+    --warn:#d6c455; --warn-soft:#38341a;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#141a1f; --panel:#1c232a; --ink:#e4e8eb; --muted:#9aa5ae; --line:#2d363e;
+  --accent:#7dbbd8; --accent-soft:#1f3540;
+  --design:#e0a54d; --design-soft:#3a2d17;
+  --hole:#e07a7a; --hole-soft:#3d2222;
+  --warn:#d6c455; --warn-soft:#38341a;
+}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.6;margin:0}
+main{max-width:1180px;margin:0 auto;padding:0 20px 80px}
+header.top{padding:40px 0 18px;border-bottom:1px solid var(--line)}
+header.top .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+header.top h1{font-size:30px;line-height:1.2;margin:8px 0 10px;letter-spacing:-.01em;text-wrap:balance}
+header.top p{margin:0;max-width:70ch;color:var(--muted)}
+nav.toc{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);display:flex;gap:6px;flex-wrap:wrap;padding:10px 0;margin-bottom:8px}
+nav.toc a{font-family:var(--mono);font-size:12.5px;text-decoration:none;color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:3px 9px;background:var(--panel)}
+nav.toc a b{color:var(--accent)}
+nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none}
+.legend{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0 0;font-size:13px;color:var(--muted);align-items:center}
+.chip{display:inline-block;font-family:var(--mono);font-size:11.5px;line-height:1;padding:4px 7px;border-radius:3px;border:1px solid transparent;white-space:nowrap;vertical-align:middle}
+.chip.landed{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+.chip.design{background:var(--design-soft);color:var(--design);border-color:var(--design);border-style:dashed}
+.chip.hole{background:var(--hole-soft);color:var(--hole);border-color:var(--hole)}
+.chip.warn{background:var(--warn-soft);color:var(--warn);border-color:var(--warn)}
+.src{font-family:var(--mono);font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:3px;padding:1px 5px;white-space:nowrap}
+.src.t{color:var(--accent)}
+section{padding:34px 0 8px;border-bottom:1px solid var(--line)}
+section h2{font-size:22px;margin:0 0 6px;display:flex;gap:12px;align-items:baseline;text-wrap:balance}
+section h2 .q{font-family:var(--mono);font-size:14px;color:var(--accent);border:1.5px solid var(--accent);border-radius:4px;padding:1px 8px;line-height:1.4}
+section > p.lead{margin:0 0 16px;color:var(--muted);max-width:80ch}
+.diagram{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 12px;overflow-x:auto;margin:0 0 18px}
+.diagram pre.mermaid{margin:0;min-width:640px}
+.tablewrap{overflow-x:auto;margin:0 0 18px;border:1px solid var(--line);border-radius:6px}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:820px}
+th,td{text-align:left;vertical-align:top;padding:8px 10px;border-bottom:1px solid var(--line)}
+th{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--panel);font-weight:600;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+tr.hole td:first-child{box-shadow:inset 3px 0 0 var(--hole)}
+tr.warn td:first-child{box-shadow:inset 3px 0 0 var(--warn)}
+tr.design td:first-child{box-shadow:inset 3px 0 0 var(--design)}
+td.n{font-family:var(--mono);color:var(--muted);white-space:nowrap}
+code{font-family:var(--mono);font-size:12.5px;background:var(--panel);border:1px solid var(--line);border-radius:3px;padding:0 4px;white-space:nowrap}
+td code{white-space:normal}
+h3{font-size:15px;margin:18px 0 8px;color:var(--muted);font-weight:600}
+ul.notes{margin:0 0 14px;padding-left:20px;color:var(--muted);font-size:13.5px}
+ul.notes li{margin:2px 0}
+.holes ol{padding-left:0;list-style:none;margin:0}
+.holes li{display:grid;grid-template-columns:64px 1fr 96px;gap:12px;padding:10px 0;border-bottom:1px solid var(--line);align-items:start}
+.holes li:last-child{border-bottom:none}
+.holes .id{font-family:var(--mono);color:var(--hole);font-weight:600}
+.holes .acc{font-family:var(--mono);font-size:12px;color:var(--muted);text-align:right;white-space:nowrap}
+footer{padding:26px 0 0;color:var(--muted);font-size:12.5px;max-width:80ch}
+@media (max-width:640px){header.top h1{font-size:24px}.holes li{grid-template-columns:52px 1fr;}.holes .acc{grid-column:2;text-align:left}}
+@media (prefers-reduced-motion: reduce){*{scroll-behavior:auto}}
+html{scroll-behavior:smooth;scroll-padding-top:56px}
+</style>
+
+<main>
+<header class="top">
+  <div class="eyebrow">agent-control · docs/FLOW.html · 2026-09-23 · 設計 session(Fable)</div>
+  <h1>一個需求怎麼從一句話走到主線,中間每一支箭頭交的是什麼</h1>
+  <p>七題,一題一張圖、一張表。節點只用 repo 裡真的檔名與腳本名。每個結論標 <span class="src t">實測</span>(讀了檔、跑了 --help、ls 過)或 <span class="src">讀 code 推的</span>。沒有格式定義、或沒人機器驗的格子標紅,並收進票 #29。</p>
+  <div class="legend">
+    <span class="chip landed">已落地</span> 程式入口存在(main 124505c)
+    <span class="chip design">設計中</span> D-020 / 票 #25–#27 尚未落地
+    <span class="chip warn">黃</span> 有定義但只驗一半
+    <span class="chip hole">標紅</span> 沒定義或沒人驗 → #29
+  </div>
+</header>
+
+<nav class="toc" aria-label="章節">
+  <a href="#a"><b>A</b> 需求到落地</a>
+  <a href="#b"><b>B</b> 角色一覽</a>
+  <a href="#c"><b>C</b> 生命週期</a>
+  <a href="#d"><b>D</b> 固定格式清單</a>
+  <a href="#e"><b>E</b> 回歸紅了</a>
+  <a href="#f"><b>F</b> 兩個 repo</a>
+  <a href="#g"><b>G</b> 寫不出來的</a>
+</nav>
+
+<!-- ============================================================ A -->
+<section id="a">
+  <h2><span class="q">A</span>一個需求進來到落地</h2>
+  <p class="lead">箭頭上寫的是交出去的東西。實線是已落地的入口;虛線框是設計中;紅框是這一趟畫不出「交什麼 / 誰驗」的地方。</p>
+  <div class="diagram"><pre class="mermaid">
+flowchart TB
+  U["使用者原話"] -->|"一句話(對話裡)"| M["主線<br/>memory/role/main.md"]
+  M -->|"原話 + 回報對象 + rules.py pack opener<br/>沒有範本檔"| O["開題者<br/>memory/role/opener.md"]
+  O -->|"scripts/ticket.py create …<br/>+ 300 字摘要(對話,無格式)"| T[("tickets/{n}.json")]
+  T -->|"rules.py pack worker --model opus<br/>+ 票號 + base sha + $W/work、$W/base"| W["實作者(worker)"]
+  T -->|"templates/dispatch-verifier.md<br/>+ rules.py pack verifier"| V["驗證者(verifier)"]
+  W -->|"patch.diff(diff -ruN base work)<br/>+ EVIDENCE.md(五段 + 記憶段 + result)"| AP["scripts/apply.sh {n} patch.diff [patch-verify.diff] --evidence EVIDENCE.md"]
+  V -->|"verify/{feature}/test_ticket_{n}.py + verify/TAGS.d/{n}.md<br/>票的 verify 欄(ticket.py set)+ verify.baseline(verify-case.py check)<br/>patch-verify.diff(verify-case.py extract)"| AP
+  AP -->|"t{n} 分支 + commit(訊息帶 patch sha256)"| G["scripts/gate.sh --branch --ticket {n}"]
+  G -->|"reports/t{n}/{run_id}/status.json + verify.log<br/>reports/inbox/{n}-{run_id}.md"| Q{"rc"}
+  Q -->|"非 0:status.json 紅榜"| AF["scripts/auto-fix.sh {n}(見 E)"]
+  AF --> G
+  Q -->|"0:票停 InReview,inbox 頁「等覆核」"| MR["主線覆核:讀 patch<br/>ticket.py set {n} review {verdict,by,sha,note}"]
+  MR -->|"review 格(state_version 自動蓋)"| L["scripts/land.sh t{n}-…"]
+  L -->|"gate.sh --full → ff-only → push<br/>status.json phases[gate,merge,push] + inbox「已合併、尚未關票」"| C["scripts/ticket.py close {n} --landed {merge sha}"]
+  C -->|"ticket.closed 事件(board/events.jsonl)"| B["看板 board/board.py /t/{n}<br/>docs/HANDOFF.md(主線手寫)"]
+  classDef landed fill:#dbe8ee,stroke:#2f6f8f,color:#1c2430;
+  classDef human fill:#e7e6df,stroke:#5b6672,color:#1c2430;
+  classDef hole fill:#f3dcdc,stroke:#b23a3a,color:#1c2430;
+  class T,AP,G,L,C,B,AF landed;
+  class U,M,MR human;
+  class O,W,V hole;
+  </pre></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>#</th><th>誰 → 誰</th><th>交出去的東西(檔名 / 格式)</th><th>定義在</th><th>機器驗</th><th>狀態</th></tr></thead>
+    <tbody>
+      <tr><td class="n">1</td><td>使用者 → 主線</td><td>一句話(對話)</td><td>—</td><td>無(設計上就是人話)</td><td><span class="chip landed">已落地</span></td></tr>
+      <tr class="hole"><td class="n">2</td><td>主線 → 開題者</td><td>「一段原話 + 回報對象」+ <code>rules.py pack opener --model fable</code> <span class="src t">實測 rules.py WANTED</span></td><td><code>memory/role/README.md</code>「只指路 + 四件事」</td><td>無範本檔(<code>templates/</code> 只有 <code>dispatch-verifier.md</code> <span class="src t">實測 ls</span>)</td><td><span class="chip hole">G2</span></td></tr>
+      <tr class="hole"><td class="n">3</td><td>開題者 → 票庫</td><td><code>tickets/{n}.json</code>(<code>ticket.py create</code>)+ 給主線的 300 字摘要與建議順序</td><td><code>tickets/SCHEMA.md</code>;摘要:無</td><td>票:<code>ticket.py create</code> 驗 <code>REQUIRED</code>/<code>NOT_EMPTY</code>,缺格逐條說 <span class="src t">實測 --help</span>;摘要:沒有檔、沒人讀</td><td><span class="chip hole">G2</span></td></tr>
+      <tr class="hole"><td class="n">4</td><td>主線 → 實作者(第 1 輪)</td><td>派工文 = 規則包(≤ 4 KB)+ 票號 + base sha(<code>git log --oneline -1</code> 對過)+ 副本路徑(<code>git archive {sha} | tar -x</code> 展成 <code>$W/work</code>、<code>$W/base</code>)+ 回報對象</td><td><code>docs/DISPATCH-TEMPLATE.md</code> §1、§8</td><td>規則包 ≤ 4096 B 由 <code>rules.py</code> 守;派工文本身無範本檔(第 2 輪起才有 <code>auto-fix.sh</code> 產的 <code>dispatch-round{r}.md</code>)</td><td><span class="chip hole">G3</span></td></tr>
+      <tr><td class="n">5</td><td>主線 → 驗證者(與 4 平行)</td><td><code>templates/dispatch-verifier.md</code> 填空 + <code>rules.py pack verifier</code>(不准用 worker 包,D-020)</td><td><code>templates/dispatch-verifier.md</code></td><td>無(範本是給人抄的)</td><td><span class="chip landed">已落地</span> <span class="chip design">#25 改字</span></td></tr>
+      <tr><td class="n">6</td><td>實作者 → 主線</td><td><code>patch.diff</code>(<code>-p1</code>,檔頭只准 <code>base/…</code> / <code>work/…</code> / <code>/dev/null</code>)+ <code>EVIDENCE.md</code>(五段 + 記憶段 + 尾端 <code>```result</code> JSON)</td><td>§1、§8、§8.5;<code>memory/role/implementer.md</code>;<code>SCHEMA.md</code> §result</td><td>patch:<code>apply.sh</code>;EVIDENCE:見 D-3</td><td><span class="chip landed">已落地</span></td></tr>
+      <tr><td class="n">7</td><td>驗證者 → 票 + 主線</td><td><code>verify/{feature}/test_ticket_{n}.py</code>(檔頂 <code>TAGS</code>)、<code>verify/TAGS.d/{n}.md</code>、票的 <code>verify{files,tags,run,notes}</code>、<code>verify.baseline</code>(<code>verify-case.py check</code> 寫)、<code>patch-verify.diff</code>(<code>verify-case.py extract</code>)</td><td><code>docs/VERIFICATION.md</code>;<code>SCHEMA.md</code> §驗證</td><td><code>verify.py</code> 守 TAGS 已登記;<code>verify-case.py check</code> 量乾淨主線紅 / candidate 綠;<code>land.sh</code> 第 5 步驗 <code>verify.files</code> 在分支上(rc=4)</td><td><span class="chip landed">已落地</span> <span class="chip design">#26 red/lint</span></td></tr>
+      <tr class="warn"><td class="n">8</td><td>主線 → <code>apply.sh</code></td><td><code>sh scripts/apply.sh {n} patch.diff [patch-verify.diff] --evidence EVIDENCE.md</code> → <code>t{n}</code> 分支 + worktree + commit</td><td><code>docs/WORKFLOW.md</code> §一票一分支;<code>apply.sh</code> 檔頭</td><td>檔頭(rc=3)、<code>--reverse --check</code>(rc=4)、<code>allowed_write_paths</code>(rc=5);<code>--evidence</code> 只做 <code>memory.py harvest</code>,不抽 result、不收 <code>OBJECTION:</code> <span class="src">讀 code 推的(grep apply.sh 無 result)</span></td><td><span class="chip hole">G4</span></td></tr>
+      <tr><td class="n">9</td><td>主線 → <code>gate.sh</code></td><td><code>sh scripts/gate.sh --branch --ticket {n}</code>:先驗機械格(<code>verify_strings</code> 在 patch、tags 已登記、檔在 <code>allowed_write_paths</code>,#12)→ <code>status.py run-tests</code> → <code>verify.py --tag</code> → flake 重跑 → <code>status.py done</code> → <code>inbox.py post</code></td><td><code>docs/WORKFLOW.md</code> §閘門</td><td>gate 自己就是驗證器;紅預設叫 <code>auto-fix.sh</code>(#13)</td><td><span class="chip landed">已落地</span></td></tr>
+      <tr><td class="n">10</td><td>主線覆核</td><td><code>ticket.py set {n} review '{"verdict":"pass","by":"main","sha":"&lt;分支頭&gt;","note":"…"}'</code>;工具蓋 <code>state_version</code></td><td><code>SCHEMA.md</code> §覆核</td><td><code>ticket.py review_problems</code>、<code>land.sh</code> 第 6 步、看板 <code>review_stale</code></td><td><span class="chip landed">已落地</span></td></tr>
+      <tr><td class="n">11</td><td>主線 → <code>land.sh</code></td><td><code>sh scripts/land.sh t{n}-…</code>:印 commit → 0 commit / base_sha / 越界 / verify.files / review / objections 六道拒絕 → <code>land/{ts}</code> worktree → <code>gate.sh --full</code> → <code>--ff-only</code> → push</td><td><code>docs/WORKFLOW.md</code> §落地</td><td>land 自己;<code>.land.lock</code> 互斥;每條退出路徑寫 status.json + inbox 頁</td><td><span class="chip landed">已落地</span></td></tr>
+      <tr class="warn"><td class="n">12</td><td>主線 → 關票</td><td><code>ticket.py close {n} --landed {merge sha}</code>:<code>done_blockers()</code> 四條(verify_strings 在主線、baseline 或 waiver、review 綁版本、objections 無未處置)</td><td><code>docs/WORKFLOW.md</code> §狀態機 Done</td><td><code>ticket.py</code>;但落地後 <code>verify-case.py check {n} --ref {base_sha} --candidate {merge sha}</code> 要主線手打,land.sh 不自動做 <span class="src t">實測 memory/role/main.inbox.md</span></td><td><span class="chip hole">G7</span> <span class="chip design">#27</span></td></tr>
+      <tr class="warn"><td class="n">13</td><td>→ 看板 / 交接</td><td>看板 <code>/t/{n}</code> 讀票、<code>events.jsonl</code>、<code>status.json</code>、<code>result-round{r}.json</code>、<code>inbox/index.jsonl</code>;交接 <code>docs/HANDOFF.md</code> 由主線手寫</td><td><code>board/README.md</code>;<code>docs/MEMORY.md</code>(紀錄類)</td><td>看板只讀不猜(D-003);HANDOFF 是紀錄類,設計上不驗</td><td><span class="chip warn">黃</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ============================================================ B -->
+<section id="b">
+  <h2><span class="q">B</span>角色一覽:誰派它、它讀什麼、交什麼、不准做什麼、什麼時候結束</h2>
+  <p class="lead">圖畫「誰派誰」。人只派主線;主線派四種短命角色;程式(gate / land / auto-fix / memory.py check)派另外兩種。看板不是 agent,只讀檔案。</p>
+  <div class="diagram"><pre class="mermaid">
+flowchart LR
+  P["產品負責人(人)"] -->|"方向、裁示、發版授權"| M["主線(長命,Fable)<br/>memory/role/main.md"]
+  M -->|"設計題"| DS["設計 session(Fable)<br/>沒有角色卡"]
+  DS -->|"docs/DESIGN-*.md"| M
+  M -->|"原話"| O["開題者(短命,Fable)<br/>memory/role/opener.md"]
+  M -->|"票 + 副本"| W["實作者 第 1 輪(Opus)<br/>memory/role/implementer.md"]
+  M -->|"票"| V["驗證者(Sonnet)<br/>memory/role/verifier.md"]
+  GL["gate.sh / 單票 land.sh(紅)"] --> AF["scripts/auto-fix.sh"]
+  AF -->|"worker.command = claude -p --model opus"| W2["auto-fix worker 第 2+ 輪"]
+  AF -->|"category=test_defect"| V2["驗證者 worker(修案例)"]
+  MC["scripts/memory.py check(超 2K)"] -->|"自動開整理票 role=consolidator"| M
+  M -->|"討論檔 + 票"| CO["consolidator × 2 模型<br/>(fable + codex:gpt-6-astra)<br/>角色卡借 implementer.md"]
+  B["看板 board/board.py :18905"] -.->|"只讀 tickets/ events.jsonl reports/"| M
+  classDef human fill:#e7e6df,stroke:#5b6672,color:#1c2430;
+  classDef landed fill:#dbe8ee,stroke:#2f6f8f,color:#1c2430;
+  classDef hole fill:#f3dcdc,stroke:#b23a3a,color:#1c2430;
+  class P,M human;
+  class O,W,V,GL,AF,W2,V2,MC,B landed;
+  class DS,CO hole;
+  </pre></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>角色</th><th>讀什麼(輸入)</th><th>交什麼(輸出)</th><th>不准做什麼</th><th>誰派它</th><th>什麼時候結束</th><th>角色卡 / 規則包</th></tr></thead>
+    <tbody>
+      <tr><td><b>主線</b></td><td><code>docs/HANDOFF.md</code> 最後三節、<code>inbox.py list</code>、<code>ticket.py inbox</code>、<code>heartbeat.sh</code>、<code>event.py tail 20</code>、<code>ticket.py list --open</code>、<code>memory/model/fable.md</code>、<code>memory/role/main.md</code>(<code>docs/SESSION-START.md</code> <span class="src t">實測</span>)</td><td>給開題者的原話;裁示題(附建議);<code>docs/DECISIONS.md</code> 條文;票的 <code>review</code> 格;<code>docs/HANDOFF.md</code>;deploy</td><td>查 code 找根因、改票面、驗證交件、重跑測試、裸 commit 主線、逐則轉述、輪詢</td><td>使用者</td><td>長命;<code>session.end</code> 事件 + 寫 HANDOFF</td><td><code>main.md</code>;<code>rules.py pack main</code>(§0、5.5、5.7、6.5)</td></tr>
+      <tr><td><b>開題者</b></td><td>使用者原話、repo 設計文件與裁示、自己派的 Opus 子工作者交回的數字、<code>opener.md</code>、<code>fable.md</code>、<code>DISPATCH-TEMPLATE.md</code></td><td><code>tickets/{n}.json</code>(驗收 = 測試計畫、<code>verify_strings</code>、<code>tags</code>、<code>allowed_write_paths</code> 含驗證者會建的檔)+ 300 字摘要與建議順序</td><td>改檔、git 寫入、跑整支腳本、碰服務埠、替實作者先做一遍</td><td>主線</td><td>票開完即結束;≤ 60K token</td><td><code>opener.md</code>;<code>pack opener</code>(§0、5.5、8)</td></tr>
+      <tr><td><b>實作者(worker)</b></td><td>派工文(規則包)、票 + <code>decision_refs</code>、<code>$W/work</code>、<code>implementer.md</code>、<code>memory/model/opus.md</code></td><td><code>patch.diff</code>(含自己的單元測試)+ <code>EVIDENCE.md</code>(五段 + 記憶段 <code>memory.py note</code> 行 + <code>result</code>)+ 變異驗紅表</td><td>git 寫入、受保護埠、kill 不是自己起的行程、放寬斷言、改 oracle(<code>test_defect</code> 走 <code>objections[]</code>)、輪詢、範圍擴大</td><td>主線(第 1 輪)</td><td>交付並刪 <code>work/</code> <code>base/</code>;交付前跑 tag 回歸 + 整支瀏覽器模組</td><td><code>implementer.md</code>;<code>pack worker</code>(§1–5、5.5、5.7、6.4、7、8)</td></tr>
+      <tr><td><b>驗證者</b></td><td>票面驗收(行為 + 標籤)、<code>templates/dispatch-verifier.md</code>、<code>verifier.md</code>、模型記憶。<b>不讀</b>實作者的 EVIDENCE</td><td><code>verify/{feature}/test_ticket_{n}.py</code>、<code>verify/TAGS.d/{n}.md</code>、票的 <code>verify</code> 欄、<code>verify.baseline</code>(工具寫)、<code>patch-verify.diff</code>、<code>EVIDENCE-verifier.md</code>(尾端 result)</td><td>判 PASS/FAIL、寫 VERDICT、跑 tag 整組、改產品碼、放寬驗收、刪既有案例、輪詢</td><td>主線(與實作者平行,票 Ready 即可)</td><td><code>verify-case.py check</code> rc=0 後刪副本;設計中改成 <code>red</code> 只證基底紅、不等 patch(#25/#26)</td><td><code>verifier.md</code>;<code>pack verifier</code>(§0.5、2、3、5.5、6.4、8)</td></tr>
+      <tr><td><b>auto-fix worker</b></td><td><code>reports/t{n}/{run_id}/dispatch-round{r}.md</code> = 規則包 + 票面快照 + <code>repair_context</code> + <code>failures[]</code> excerpt + 上一輪 EVIDENCE + 輪數上限</td><td><code>patch-round{r}.diff</code> + <code>EVIDENCE-round{r}.md</code>(→ <code>result-round{r}.json</code>);要反駁就寫一行 <code>OBJECTION: &lt;類別&gt; &lt;理由&gt;</code></td><td>同實作者;另:不重查上一輪 <code>excluded</code> 的假設</td><td><code>scripts/auto-fix.sh</code>(由 <code>gate.sh --ticket</code>、單票 <code>land.sh</code> 預設叫;<code>--no-auto-fix</code> 才停)</td><td><code>apply.sh</code> → <code>gate.sh --branch --ticket</code>;綠停 <code>InReview</code>、紅下一輪、第 <code>retry_limit+1</code> 輪 → <code>Blocked</code>。副本 <code>fix-t{n}/round{r}</code> 下一輪開始才 <code>rm -rf</code> <span class="src t">實測 auto-fix.sh:403</span></td><td>同 worker(包內建在 dispatch-round)</td></tr>
+      <tr class="hole"><td><b>consolidator(記憶整理)</b></td><td>超標的記憶檔、整理票、討論檔 <code>discussions/{date}-memory-{model}.md</code>(<code>templates/discussion.md</code>)</td><td>壓縮後的記憶檔,或 front matter <code>cap_chars</code> 提高 + 理由;<code>memory.consolidated</code> 事件</td><td>單一 session 自己刪、把未共識寫成事實、沒有 <code>--discussion</code> 就 consolidate(D-007)</td><td><code>memory.py check</code> 自動開票(role=consolidator,指派 <code>memory.consolidators</code> 兩個模型);人/主線派 session</td><td><code>memory.py consolidate</code> 跑完</td><td>角色卡<b>借用</b> <code>implementer.md</code>(<code>rules.py WANTED</code> <span class="src t">實測</span>);無派工範本 → <span class="chip hole">G8</span></td></tr>
+      <tr class="hole"><td><b>設計 session(Fable)</b></td><td>設計題原話、<code>docs/*</code>、兩個 repo 的檔案(只讀)</td><td><code>docs/DESIGN-*.md</code>(每個取捨附「未來每票省/多花」,D-018;後續每件工作的模型表)+ ≤ 300 字回覆</td><td>git 寫入、跑 gate/land、碰服務埠(由派工文逐次規定)</td><td>主線(設計題先派設計 session 再派開題者,D-019)</td><td>文件交付即結束</td><td>無角色卡、<code>rules.py WANTED</code> 無 design、<code>ticket.py --role</code> 不認、<code>ROLES.md</code> 表無此列 <span class="src t">實測</span> → <span class="chip hole">G1</span></td></tr>
+      <tr><td><b>看板(非 agent)</b></td><td><code>tickets/*.json</code>、<code>board/events.jsonl</code>、<code>reports/t*/*/status.json</code>、<code>result-round{r}.json</code>、<code>reports/inbox/index.jsonl</code>、<code>answers.jsonl</code>、<code>docs/REHEARSAL.md</code></td><td>網頁 <code>/</code>、<code>/t/{n}</code>、<code>/api/state</code>;決策收件匣填答 → <code>answers.jsonl</code> → <code>decision.answered</code></td><td>寫票、猜狀態(只讀事件,D-003)</td><td>launchd / 人(埠 18905)</td><td>常駐</td><td><code>board/README.md</code></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ============================================================ C -->
+<section id="c">
+  <h2><span class="q">C</span>每個角色的生命週期模板</h2>
+  <p class="lead">共用的骨架七步;下表寫每個角色在每一步實際做的事,「—」代表這一步對它不存在。</p>
+  <div class="diagram"><pre class="mermaid">
+flowchart LR
+  S["① spawn<br/>Agent 工具 / worker.command(claude -p)"] --> R["② 讀規則包<br/>rules.py pack {role} --model {m}<br/>= 角色卡 + 模型記憶 + 該角色會被擋到的幾節"]
+  R --> E0["③ event.py emit session.start<br/>(副本裡發會寫進副本)"]
+  E0 --> C["④ 開副本<br/>git archive {base_sha} | tar -x → $W/work、$W/base"]
+  C --> K["⑤ 工作<br/>票面 + decision_refs;grep 定位,不整份讀"]
+  K --> D["⑥ 交付<br/>patch.diff + EVIDENCE.md(尾端 result JSON)"]
+  D --> X["⑦ 刪副本 → session.end"]
+  classDef landed fill:#dbe8ee,stroke:#2f6f8f,color:#1c2430;
+  classDef hole fill:#f3dcdc,stroke:#b23a3a,color:#1c2430;
+  class S,R,C,K,D landed;
+  class E0,X hole;
+  </pre></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>步驟</th><th>共用?</th><th>主線</th><th>開題者</th><th>實作者(第 1 輪)</th><th>驗證者</th><th>auto-fix worker</th><th>consolidator</th><th>設計 session</th></tr></thead>
+    <tbody>
+      <tr><td class="n">① spawn</td><td>共用</td><td>人開 session;<code>sh scripts/new-session.sh main fable</code></td><td>主線 Agent 工具(model fable)</td><td>主線 Agent 工具(opus)</td><td>主線 Agent 工具(sonnet)</td><td><code>auto-fix.sh</code> 用 <code>board/config.json</code> 的 <code>worker.command</code>,timeout 3600s</td><td>主線派兩個模型 session</td><td>主線 Agent 工具(fable)</td></tr>
+      <tr class="hole"><td class="n">② 規則包</td><td>共用(角色特有的節)</td><td><code>pack main</code></td><td><code>pack opener</code></td><td><code>pack worker --model opus</code></td><td><code>pack verifier</code>(不准用 worker 包)</td><td>包內建於 <code>dispatch-round{r}.md</code></td><td><code>pack consolidator</code>(卡借 implementer)</td><td><b>無</b> → G1</td></tr>
+      <tr class="hole"><td class="n">③ session.start</td><td>共用(SESSION-START 說所有角色)</td><td><code>new-session.sh</code> 發</td><td>自己發(在主 repo)</td><td>角色卡要 worker 發 <code>ticket.attempt.start</code>;但 <code>event.repo_root()</code> 往上找 <code>board/config.json</code>,副本裡有一份 → 寫進副本 <span class="src">讀 code 推的</span></td><td>同左</td><td><code>auto-fix.sh</code> 代發 <code>agent.start/done</code>(#5)</td><td>自己發</td><td>沒有規定</td></tr>
+      <tr><td class="n">④ 開副本</td><td>只有動檔的角色</td><td>—(主線工作樹不動;land 用 <code>land/{ts}</code> worktree)</td><td>—(不改檔)</td><td>主線手建 <code>$W/work</code> <code>$W/base</code>(§1;<code>git log --oneline -1</code> 先對標題)</td><td>派工文給 <code>$W/work</code>;<code>verify-case.py check</code> 自建乾淨基底副本</td><td><code>$WTBASE/fix-t{n}/round{r}</code>(base = 分支現況,不是 base_sha)</td><td>直接在主 repo 工作樹改 <code>memory/</code></td><td>—(只讀)</td></tr>
+      <tr><td class="n">⑤ 工作</td><td>共用</td><td>接需求、覆核、排順序、發版</td><td>寫票面(驗收 = 測試計畫)</td><td>實作 + 單元測試 + 變異驗紅 + 交付前回歸</td><td>寫案例 → <code>TAGS.d</code> → 填 <code>verify</code> 欄 → <code>check</code></td><td>讀 <code>repair_context</code>,不重查 <code>excluded</code></td><td>兩模型討論(<code>templates/discussion.md</code>)</td><td>寫設計文件、每取捨附 token 帳</td></tr>
+      <tr><td class="n">⑥ 交付</td><td>共用(形狀各異)</td><td><code>review</code> 格、DECISIONS 列、HANDOFF</td><td><code>tickets/{n}.json</code> + 300 字摘要</td><td><code>patch.diff</code> + <code>EVIDENCE.md</code></td><td>案例檔 + <code>verify</code> 欄 + <code>patch-verify.diff</code> + <code>EVIDENCE-verifier.md</code></td><td><code>patch-round{r}.diff</code> + <code>EVIDENCE-round{r}.md</code></td><td>記憶檔 + 討論檔 + <code>memory.consolidated</code></td><td><code>docs/DESIGN-*.md</code> + 300 字回覆</td></tr>
+      <tr class="hole"><td class="n">⑦ 刪副本 / 結束</td><td>只有有副本的角色</td><td><code>session.end</code></td><td>結束</td><td>自己刪 <code>work/</code> <code>base/</code>(角色卡);主線建的 <code>$W</code> 沒腳本清</td><td>自己刪,只留 <code>patch-verify.diff</code></td><td>沒人刪:<code>fix-t{n}/round{r}</code> 只在下一輪開始 <code>rm -rf</code>;綠了停 InReview 就留著 → G6</td><td>結束</td><td>結束</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ============================================================ D -->
+<section id="d">
+  <h2><span class="q">D</span>固定格式的輸入輸出清單:誰產生、誰讀、定義在哪、哪支腳本驗</h2>
+  <p class="lead">圖只畫核心七種產物的流向;表列全部。「機器驗」那一格答不出腳本名的,標紅。</p>
+  <div class="diagram"><pre class="mermaid">
+flowchart LR
+  subgraph P["產生者"]
+    O["開題者"]; W["worker"]; V["驗證者"]; GS["gate.sh / land.sh / auto-fix.sh"]; M["主線"]
+  end
+  subgraph F["格式(定義在)"]
+    T["tickets/{n}.json<br/>SCHEMA.md"]; PD["patch.diff<br/>DISPATCH-TEMPLATE §1"]; EV["EVIDENCE.md 五段+result<br/>implementer.md、§8.5"]; SJ["status.json<br/>WORKFLOW §狀態檔、DESIGN-ENV-SUSPECT"]; IB["reports/inbox/*.md + index.jsonl<br/>inbox.py"]; EJ["board/events.jsonl<br/>event.py KINDS"]; VB["verify.baseline<br/>SCHEMA §驗證"]
+  end
+  subgraph C["讀者 / 驗證器"]
+    TP["ticket.py create/set/close<br/>land.sh 第 5–6 步"]; AP["apply.sh(檔頭、reverse-check、allowed_write_paths)"]; AF["auto-fix.sh(result、OBJECTION)"]; BD["board.py /t/{n}、metrics.py"]; MI["主線 inbox.py list"]
+  end
+  O --> T --> TP
+  W --> PD --> AP
+  W --> EV --> AF
+  GS --> SJ --> BD
+  GS --> IB --> MI
+  GS --> EJ --> BD
+  V --> VB --> TP
+  M -->|"review / objections 處置"| T
+  classDef landed fill:#dbe8ee,stroke:#2f6f8f,color:#1c2430;
+  classDef hole fill:#f3dcdc,stroke:#b23a3a,color:#1c2430;
+  class T,PD,SJ,IB,EJ,VB,TP,AP,AF,BD,MI landed;
+  class EV hole;
+  </pre></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>#</th><th>格式 / 檔</th><th>誰產生</th><th>誰讀</th><th>格式定義在</th><th>機器驗(哪支腳本)</th><th>狀態</th></tr></thead>
+    <tbody>
+      <tr><td class="n">D1</td><td>票 <code>tickets/{n}.json</code></td><td>開題者 <code>ticket.py create</code>;之後 <code>set / round / close / freeze</code></td><td>主線、<code>apply.sh</code>、<code>gate.sh</code>、<code>land.sh</code>、<code>auto-fix.sh</code>、<code>verify-case.py</code>、看板</td><td><code>tickets/SCHEMA.md</code></td><td><code>ticket.py</code>:<code>REQUIRED</code>/<code>NOT_EMPTY</code>、<code>--expect-attempt/--expect-state-version</code>(rc=4)、<code>done_blockers()</code>、<code>.ticket.lock</code>;<code>land.sh</code> 第 5–6 步 <span class="src t">實測 --help + grep</span></td><td><span class="chip landed">已落地</span></td></tr>
+      <tr><td class="n">D2</td><td><code>patch.diff</code>(<code>-p1</code>;檔頭 <code>base/…</code> <code>work/…</code> <code>/dev/null</code>)</td><td>worker:<code>diff -ruN -x node_modules -x __pycache__ -x '*.pyc' base work</code></td><td><code>apply.sh</code>(第 1 輪與 rebase)、<code>auto-fix.sh</code></td><td><code>DISPATCH-TEMPLATE.md</code> §1;<code>WORKFLOW.md</code> §patch 管線</td><td><code>apply.sh</code>:檔頭 rc=3、<code>--reverse --check</code> rc=4、<code>allowed_write_paths</code> rc=5、刪檔 <code>+++</code> 非 <code>/dev/null</code> 拒;<code>gate.sh</code> #12:<code>verify_strings</code> 要在 patch 內</td><td><span class="chip landed">已落地</span></td></tr>
+      <tr class="hole"><td class="n">D3</td><td><code>EVIDENCE.md</code>:五段(patch sha256 / 閘門指令+Ran+rc / 變異表 / 已排除的假設 / 最小重現)+ 記憶段 + 尾端 <code>```result</code> JSON(#20)</td><td>worker、auto-fix worker</td><td>主線覆核;下一輪 worker(<code>repair_context.prev_evidence</code>);<code>auto-fix.sh</code>;<code>apply.sh --evidence</code></td><td><code>memory/role/implementer.md</code>;<code>DISPATCH-TEMPLATE.md</code> §8、§8.5;<code>SCHEMA.md</code> §result</td><td><code>auto-fix.sh</code> 抽 <code>result-round{r}.json</code>(<code>present / no-block / bad-json / conflict</code>)+ 收 <code>^OBJECTION:</code> 行 → <code>objections[]</code>;<code>apply.sh --evidence</code> 只跑 <code>memory.py harvest</code>。<b>五段標題沒人驗;第 1 輪(走 apply.sh)沒有 result-round1.json、OBJECTION 行沒人收</b> <span class="src">讀 code 推的</span></td><td><span class="chip hole">G4</span></td></tr>
+      <tr class="hole"><td class="n">D4</td><td><code>EVIDENCE-verifier.md</code>(尾端 result,role=verifier)</td><td>驗證者</td><td><b>沒有人</b>:<code>auto-fix.sh</code> 只在 <code>test_defect</code> 路徑抽 <code>result-verifier-round{r}.json</code>;第一段交件無入口 <span class="src t">實測 grep auto-fix.sh:389</span></td><td><code>memory/role/verifier.md</code></td><td>無</td><td><span class="chip hole">G5</span></td></tr>
+      <tr class="warn"><td class="n">D5</td><td><code>reports/t{n}/{run_id}/status.json</code>:<code>state, run_id, kind, ticket, sha, rc, phases[], logs, failures[{case,kind,subtest,file,line,engine,log,excerpt,suspected_flaky}], suspected_flaky[], environment_suspect[七鍵 source/engine/why/count/threshold/log/line], repair_context{…}, duration_seconds, round</code></td><td><code>status.py start/phase/done/run-tests</code>(由 <code>gate.sh</code>、<code>land.sh</code>、<code>auto-fix.sh</code> 叫)</td><td><code>auto-fix.sh</code>、<code>inbox.py</code>、<code>metrics.py</code>、<code>board.py</code>、下一輪 worker</td><td><code>WORKFLOW.md</code> §狀態檔;<code>docs/DESIGN-ENV-SUSPECT.md</code>(D-019);<code>status.py</code> docstring</td><td>寫端固定形狀;讀端一律經 <code>status.environment_suspects()</code> 正規化;<code>tests/test_status.py</code>、<code>test_ticket_23.py</code>。沒有獨立的 <code>status.py check &lt;path&gt;</code></td><td><span class="chip warn">黃</span></td></tr>
+      <tr class="warn"><td class="n">D6</td><td><code>reports/inbox/{n}-{run_id}[-k].md</code>(四句:哪張票 / 什麼狀態 / 要主線做什麼 / 去哪看)+ <code>index.jsonl{name,ticket,run_id,kind,state,what,where,at,page}</code> + <code>acked.jsonl</code></td><td><code>inbox.py post</code>(gate / land / auto-fix / <code>ticket.py round</code>)</td><td>主線 <code>inbox.py list/show/ack</code>;看板 ④;<code>new-session.sh</code></td><td><code>inbox.py</code> 的 <code>PAGE</code> 與索引欄 <span class="src t">實測</span></td><td><code>list</code> 只讀索引;md 頁不驗、md 與索引一致性不驗(設計上索引為準)</td><td><span class="chip warn">黃</span></td></tr>
+      <tr class="warn"><td class="n">D7</td><td><code>board/events.jsonl</code> 一行 JSON:<code>{ts, kind, pid, cwd, ticket?, role?, model?, …kv}</code></td><td><code>event.py emit</code>(所有腳本與角色)</td><td><code>board.py</code>、<code>metrics.py</code>、<code>heartbeat.sh</code>、<code>event.py tail/grep</code></td><td><code>event.py</code> 的 <code>KINDS</code>(34 種)</td><td><code>kind</code> 不在表 → rc=2;其餘 kv 自由、不驗票存不存在(刻意)。副本內 emit 寫進副本 → <span class="chip hole">G9</span></td><td><span class="chip warn">黃</span></td></tr>
+      <tr><td class="n">D8</td><td><code>verify.baseline{ok, why, at, files, base_ref, base_sha, candidate, candidate_sha, baseline{rc,cases,skipped,red[],import_failures[]}, candidate_run}</code></td><td><code>verify-case.py check {n} [--ref] [--candidate]</code></td><td><code>ticket.py close</code>(讀 <code>ok</code>)、看板、主線</td><td><code>SCHEMA.md</code> §驗證;<code>WORKFLOW.md</code> §baseline</td><td>工具自己寫;量不到 rc=2 不動票;import 失敗分開數 <span class="src t">實測 tickets/23.json</span></td><td><span class="chip landed">已落地</span> <span class="chip design">#26 加 stage=red/check、red_lines</span></td></tr>
+      <tr><td class="n">D9</td><td><code>review{verdict, by, at, note, state_version, sha}</code></td><td>主線 <code>ticket.py set {n} review '{…}'</code>(工具蓋 <code>state_version</code>);<code>close --landed</code> 蓋 <code>sha</code></td><td><code>land.sh</code> 第 6 步、<code>ticket.py close</code>、看板 <code>review_stale</code></td><td><code>SCHEMA.md</code> §覆核</td><td><code>ticket.py review_problems</code>;<code>land.sh</code>:verdict / state_version 相等 / sha = 分支頭</td><td><span class="chip landed">已落地</span></td></tr>
+      <tr class="warn"><td class="n">D10</td><td><code>objections[{category, body, evidence, owner, disposition, blocking, follow_up}]</code></td><td>worker 在 EVIDENCE 寫 <code>OBJECTION:</code> 行 → <code>auto-fix.sh</code> 記;主線 <code>ticket.py set</code> 處置</td><td><code>land.sh</code>、<code>ticket.py close</code>、看板 ⑦、<code>auto-fix.sh</code>(<code>test_defect</code> → 派驗證者 worker)</td><td><code>SCHEMA.md</code> §反駁;<code>WORKFLOW.md</code> §反駁</td><td><code>ticket.py objection_problems</code>(五鍵齊、阻擋項要 disposition);第 1 輪的 <code>OBJECTION:</code> 行無人收(併 G4)</td><td><span class="chip warn">黃</span></td></tr>
+      <tr><td class="n">D11</td><td><code>memory.py note &lt;model|role|project&gt; &lt;名&gt; "&lt;一行&gt;" --ticket N --by role@model</code> 一行</td><td>worker 在 EVIDENCE「記憶」段寫指令行(副本裡寫不了);<code>apply.sh --evidence</code> / <code>auto-fix.sh</code> 跑 <code>memory.py harvest</code> 執行;主線直接跑</td><td>寫進 <code>memory/{layer}/{name}.inbox.md</code>(O_APPEND);下一輪 consolidator 併入;每個 session 開場讀</td><td><code>memory.py --help</code>;<code>DISPATCH-TEMPLATE.md</code> §8 第 8 點</td><td><code>memory.py note</code> 參數;<code>memory.py check</code> 量 <code>cap_chars</code>(2000)發 <code>memory.over_cap</code> 並開票 <span class="src t">實測 --help</span></td><td><span class="chip landed">已落地</span></td></tr>
+      <tr><td class="n">D12</td><td><code>verify/{feature}/test_ticket_{n}.py</code>(檔頂 <code>TAGS = [...]</code>)+ <code>verify/TAGS.d/{n}.md</code>(一行 <code>- `tag` — 說明(#n)</code>)</td><td>驗證者</td><td><code>verify.py --tag</code>(<code>gate.sh --ticket</code> / <code>--full</code>)、<code>verify-case.py</code>、<code>tags-merge</code></td><td><code>docs/VERIFICATION.md</code>;範本 <code>verify/_template_ticket.py</code>(設計中)</td><td><code>verify.py</code>:沒 TAGS 或未登記就紅、選不到案例 rc=3;lint F1–F6 設計中(#26)</td><td><span class="chip landed">已落地</span> <span class="chip design">#25 範本、#26 lint</span></td></tr>
+      <tr><td class="n">D13</td><td><code>patch-verify.diff</code>(只含 <code>verify.files</code>,基準乾淨主線)</td><td><code>verify-case.py extract {n} --candidate …</code></td><td><code>apply.sh</code> 第三參數;<code>auto-fix.sh</code>(test_defect 路徑)</td><td><code>templates/dispatch-verifier.md</code></td><td>同 D2(<code>apply.sh</code>);<code>land.sh</code> 第 5 步驗 <code>verify.files</code> 在分支(rc=4)</td><td><span class="chip landed">已落地</span></td></tr>
+      <tr class="hole"><td class="n">D14</td><td>規則包(<code>rules.py pack {role} --model {m}</code>,≤ 4096 B,砍掉的指名出處;固定帶 D-016 一行)</td><td><code>rules.py</code></td><td>每個短命角色的派工文前言</td><td><code>rules.py WANTED</code>(worker / verifier / opener / main / consolidator)</td><td><code>rules.py</code> 自己守上限;<code>tests/test_rules.py</code>。<b>沒有 design 角色</b></td><td><span class="chip hole">G1</span></td></tr>
+      <tr class="hole"><td class="n">D15</td><td>派工文:<code>dispatch-round{r}.md</code>(第 2+ 輪)/ 第 1 輪與開題者的派工文</td><td><code>auto-fix.sh</code> / 主線手寫</td><td>第 r 輪 worker / 開題者、第 1 輪 worker</td><td><code>auto-fix.sh</code> 內;<code>DISPATCH-TEMPLATE.md</code> §8 散文;<code>templates/dispatch-verifier.md</code> 只有驗證者那一份</td><td>無(第 1 輪與開題者)</td><td><span class="chip hole">G2 G3</span></td></tr>
+      <tr><td class="n">D16</td><td><code>result-round{r}.json</code> / <code>result-verifier-round{r}.json</code>(SCHEMA 十一鍵 + <code>present</code> + <code>conflict</code>)</td><td><code>auto-fix.sh</code> 抽</td><td>看板 <code>/t/{n}</code>(輪數最大那份)、<code>metrics.py</code></td><td><code>SCHEMA.md</code> §result;§8.5</td><td>三種缺漏各有形狀(<code>no-evidence / no-block / bad-json</code>)</td><td><span class="chip landed">已落地</span>(第 1 輪缺,見 G4)</td></tr>
+      <tr><td class="n">D17</td><td>看板 <code>/t/{n}</code>、<code>/api/state</code></td><td><code>board/board.py</code></td><td>人</td><td><code>board/README.md</code></td><td><code>tests/test_board.py</code>;#19 只加讀不加寫</td><td><span class="chip landed">已落地</span></td></tr>
+      <tr class="hole"><td class="n">D18</td><td>設計文件 <code>docs/DESIGN-*.md</code>(結論表 + 理由 + 否決案 + 遷移 + 驗收表 + 模型表)</td><td>設計 session</td><td>開題者、主線</td><td>無固定格式;D-018 只要求每取捨附「未來每票省/多花」</td><td>無</td><td><span class="chip hole">G1</span></td></tr>
+      <tr class="hole"><td class="n">D19</td><td>開題者的 300 字摘要與建議順序</td><td>開題者</td><td>主線(對話)</td><td>無</td><td>無;沒有檔名,看板讀不到</td><td><span class="chip hole">G2</span></td></tr>
+      <tr class="warn"><td class="n">D20</td><td><code>docs/HANDOFF.md</code>、<code>docs/DECISIONS.md</code>、<code>docs/review/</code>、<code>discussions/</code>(紀錄類)</td><td>主線 / consolidators</td><td>主線下一 session(grep 定位);<code>ticket.py inbox</code> 對 DECISIONS 判裁示落了沒</td><td><code>docs/MEMORY.md</code> §記憶不是紀錄;<code>templates/discussion.md</code></td><td>紀錄類設計上不設上限、不驗;<code>memory.py consolidate</code> 要求討論檔存在且有結論區</td><td><span class="chip warn">黃(刻意)</span></td></tr>
+      <tr class="warn"><td class="n">D21</td><td>票的 <code>verify.run</code>(一句可貼的指令)</td><td>驗證者</td><td>下一個人(對話)</td><td><code>SCHEMA.md</code></td><td>沒人執行它:gate 跑的是 <code>verify.tags</code>,不是 <code>run</code></td><td><span class="chip warn">黃</span></td></tr>
+      <tr><td class="n">D22</td><td><code>reports/flaky.jsonl</code></td><td><code>status.py</code></td><td><code>status.py</code>(累計達 <code>flaky_threshold</code>=3 → <code>decision.asked</code> + 自動開修復票 role=verifier)</td><td><code>WORKFLOW.md</code> §回歸紅了 2</td><td>自寫自讀;同一案例只開一張</td><td><span class="chip landed">已落地</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ============================================================ E -->
+<section id="e">
+  <h2><span class="q">E</span>回歸紅了怎麼走</h2>
+  <p class="lead">gate 紅 → status.json → auto-fix(#13 預設)→ 第 r 輪新 worker → 三輪仍紅轉 Blocked。四條分岔:test_defect、environment_suspect、objections blocking、flake。</p>
+  <div class="diagram"><pre class="mermaid">
+flowchart TB
+  G["gate.sh --branch --ticket {n}<br/>status.py run-tests(環境 fail-fast 門檻 8)"] --> Q{"rc"}
+  Q -->|"0"| IR["票 InReview<br/>inbox 頁:等主線覆核"]
+  Q -->|"86 環境中止"| ES["status.json state=env_suspect<br/>environment_suspect 至少一筆 statistical"]
+  Q -->|"非 0"| FL["flake 判定:紅例各單跑 5 次 + 原順序整組 1 次<br/>單跑綠只標 suspected_flaky,rc 不動"]
+  FL --> FJ["reports/flaky.jsonl 累計<br/>達 3 → decision.asked + 自動開修復票(role=verifier,flaky_case)"]
+  FL --> SD["status.py done → status.json<br/>failures[] / repair_context / environment_suspect(含 declared 行)"]
+  SD --> EQ{"environment_suspect 非空?"}
+  ES --> EQ
+  EQ -->|"是"| NI["gate 不自動派(D-019)<br/>inbox 環境頁:source / engine / why / 筆數<br/>人要派就手打 auto-fix.sh(印警告照派)"]
+  EQ -->|"否,且未帶 --no-auto-fix"| AF["scripts/auto-fix.sh {n}"]
+  AF --> AT{"failures 解析得出?"}
+  AT -->|"否"| NA["停(rc=4):failures 沒有歸因 → inbox"]
+  AT -->|"是"| WR["第 r 輪新 worker(worker.command)<br/>輸入 dispatch-round{r}.md = 規則包 + 票面快照 + repair_context<br/>+ failures excerpt + 上一輪 EVIDENCE + 輪數上限"]
+  WR --> OUT["patch-round{r}.diff + EVIDENCE-round{r}.md<br/>→ result-round{r}.json"]
+  OUT --> OB{"EVIDENCE 有 OBJECTION: 行?"}
+  OB -->|"test_defect"| VW["派 role=verifier worker<br/>輸入:規則包 + 紅榜 + 反駁行 + 案例檔路徑<br/>交 patch-verify.diff → 併同一分支"]
+  VW --> AP
+  OB -->|"ticket-wrong / blocking"| BL["objections[] 記一筆、票 Blocked、owner=main<br/>decision.asked + inbox(rc=3)"]
+  OB -->|"無"| AP["apply.sh {n} patch-round{r}.diff"]
+  AP --> RG["ticket.py round {n} {r} --red / --green<br/>gate.sh --branch --ticket {n}(AC_ROUND、AC_WT、AC_TICKET)"]
+  RG --> Q2{"綠?"}
+  Q2 -->|"綠"| IR
+  Q2 -->|"紅,r ≤ retry_limit"| AF
+  Q2 -->|"第 retry_limit+1 輪仍紅"| B3["ticket.py round → Blocked、owner=main<br/>ticket.attempt.failed + inbox(rc=1)"]
+  LD["land.sh 開跑前"] -->|"objections 有未處置阻擋項 / review 過期"| LR["land 拒絕(rc=2),不開 worktree、不跑全套"]
+  LD -->|"全套紅"| LF["一批剛好一張票才派 auto-fix;多張留給主線(刻意未實作)"]
+  classDef landed fill:#dbe8ee,stroke:#2f6f8f,color:#1c2430;
+  classDef human fill:#e7e6df,stroke:#5b6672,color:#1c2430;
+  class G,ES,FL,FJ,SD,NI,AF,NA,WR,OUT,VW,BL,AP,RG,B3,LD,LR,LF landed;
+  class IR human;
+  </pre></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>節點</th><th>輸入</th><th>輸出</th><th>入口 / 守在哪</th><th>狀態</th></tr></thead>
+    <tbody>
+      <tr><td>閘門紅</td><td><code>t{n}</code> 分支、票的 <code>verify.tags</code> 併 <code>tags</code></td><td><code>status.json</code>(<code>failures[]</code> 從 <code>^(FAIL|ERROR):</code> + Traceback 擷取,excerpt ≤ 20 行,認 subTest 括號)、<code>verify.log</code>、<code>gate.fail</code> 事件、inbox 頁</td><td><code>gate.sh --ticket</code> → <code>status.py run-tests / done</code></td><td><span class="chip landed">已落地</span></td></tr>
+      <tr><td>flake 判定</td><td>紅例清單</td><td><code>suspected_flaky[]</code>(rc 不變)、<code>reports/flaky.jsonl</code>、達門檻 → <code>decision.asked</code> + 修復票</td><td><code>gate.sh</code>(<code>AC_NO_FLAKE_RERUN=1</code> / <code>AC_FLAKE_RERUN_GROUP=0</code> 關);<code>status.py open_flaky_ticket</code></td><td><span class="chip landed">已落地</span>(只標不判綠,D-014)</td></tr>
+      <tr><td>environment_suspect 非空</td><td><code>run-tests</code> 的統計(同引擎同形連紅 ≥ 8)+ log 行首 <code>ENVIRONMENT-SUSPECT: &lt;引擎&gt; &lt;why&gt;</code></td><td>七鍵 list;<code>env.suspect</code> 事件;inbox 環境頁;<b>不自動派</b></td><td><code>status.py</code> + <code>gate.sh</code> 的 <code>ENV_SUSPECT</code>;<code>auto-fix.sh:226</code> 印警告照派 <span class="src t">實測 grep</span></td><td><span class="chip landed">#23 Done</span></td></tr>
+      <tr><td>auto-fix 第 r 輪</td><td>最新 <code>status.json</code>(<code>repair_context</code> 含 base_sha、票面快照、worktree、patch sha256、round、prev_evidence、repro)</td><td><code>dispatch-round{r}.md</code>、<code>fix-t{n}/round{r}/{work,base}</code>、<code>patch-round{r}.diff</code>、<code>EVIDENCE-round{r}.md</code>、<code>result-round{r}.json</code>、<code>agent.start/done</code> 事件</td><td><code>scripts/auto-fix.sh</code>;rc 0 綠 / 1 三輪耗盡 / 2 沒狀態檔 / 3 反駁 / 4 沒歸因 / 5 沒 patch</td><td><span class="chip landed">已落地</span></td></tr>
+      <tr><td>test_defect 反駁</td><td><code>OBJECTION: test_defect …</code> 行 + 案例檔路徑</td><td>新 role=verifier worker → <code>patch-verify.diff</code> 併入同分支 → <code>result-verifier-round{r}.json</code> → 續跑閘門;主線只在 inbox 看「案例已修,第 N 輪綠/紅」</td><td><code>auto-fix.sh:316,389</code> <span class="src t">實測 grep</span></td><td><span class="chip landed">已落地</span></td></tr>
+      <tr><td>ticket-wrong / blocking</td><td><code>OBJECTION:</code> 行</td><td><code>objections[]</code> 一筆(disposition 空)、票 Blocked、owner=main、<code>decision.asked</code>、inbox</td><td><code>auto-fix.sh</code>;之後 <code>land.sh</code> / <code>close</code> 對未處置阻擋項拒絕</td><td><span class="chip landed">已落地</span></td></tr>
+      <tr><td>三輪仍紅</td><td>第 <code>retry_limit+1</code> 輪(預設 3)的紅</td><td>票 Blocked、owner=main、<code>ticket.attempt.failed</code>、inbox</td><td><code>ticket.py round {n} {r} --red</code></td><td><span class="chip landed">已落地</span></td></tr>
+      <tr><td>land 全套紅</td><td>一批分支</td><td>worktree 留著、<code>status.json</code> phases、inbox;一張票才 <code>auto_fix_all</code></td><td><code>land.sh</code></td><td><span class="chip landed">已落地</span>(多票歸責刻意未做)</td></tr>
+      <tr class="design"><td>baseline 紅榜進閘門</td><td><code>verify.files</code></td><td><code>verify-case.py lint</code> → <code>check --ref base_sha --candidate 分支樹</code>;<code>ok:false</code> = 閘門紅,寫進 <code>failures[]</code></td><td><code>gate.sh --ticket</code> 接線</td><td><span class="chip design">#27 Draft</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ============================================================ F -->
+<section id="f">
+  <h2><span class="q">F</span>兩個 repo 的關係:正本、同步、專案自備的接線點</h2>
+  <p class="lead">方向只有一個:agent-control → 專案。同步的是角色卡、模型記憶與十支控制腳本;閘門與落地腳本各專案自備。實測對象:tabby_pool(<code>scripts/control/</code>、<code>docs/roles/</code>、<code>scripts/land-ticket.sh</code>)。</p>
+  <div class="diagram"><pre class="mermaid">
+flowchart LR
+  subgraph A["agent-control(正本,main 124505c)"]
+    S1["同步名單 SCRIPT_LIST(10 支)<br/>status.py verify-case.py apply.sh auto-fix.sh inbox.py<br/>rules.py memory.py event.py ticket.py verify.py"]
+    S2["不同步(專案自備或正本專用)<br/>gate.sh land.sh metrics.py heartbeat.sh<br/>new-session.sh sync-to-project.sh board/board.py"]
+    R1["memory/role/*.md、memory/model/*.md"]
+  end
+  SY["sh scripts/sync-to-project.sh {專案根} [--dry-run]<br/>manifest:上次同步過、這次不在名單的檔唸出來再刪"]
+  subgraph T["tabby_pool(專案)"]
+    C1["scripts/control/(10 支 + README + .sync-manifest)"]
+    D1["docs/roles/*.md、docs/roles/model/*.md<br/>檔頭:由 agent-control {sha} 同步產生"]
+    LT["scripts/land-ticket.sh gate / land / docs(專案自備)"]
+    TF["scripts/test-for.sh、land.sh、fullsuite.sh(專案自備)"]
+    CFG["board/config.json(專案自備)<br/>rules.roles_dir=docs/roles、tickets_dir=../tabby_pool_wt/tickets"]
+  end
+  S1 --> SY
+  R1 --> SY
+  SY --> C1
+  SY --> D1
+  LT -->|"status.py start/done、ticket.py(review_problems、objection_problems)<br/>verify-case.py tags-merge、auto-fix.sh"| C1
+  LT --> TF
+  C1 -.->|"同步了但專案端無呼叫點:<br/>apply.sh inbox.py rules.py memory.py"| X["G11"]
+  D1 -.->|"缺 *.inbox.md 三份(同步過期)<br/>dispatcher.md 非產出物混在目錄裡"| X
+  classDef landed fill:#dbe8ee,stroke:#2f6f8f,color:#1c2430;
+  classDef hole fill:#f3dcdc,stroke:#b23a3a,color:#1c2430;
+  classDef human fill:#e7e6df,stroke:#5b6672,color:#1c2430;
+  class S1,SY,C1,D1,R1 landed;
+  class S2,LT,TF,CFG human;
+  class X hole;
+  </pre></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>東西</th><th>正本(agent-control)</th><th>同步?</th><th>專案端(tabby_pool)呼叫點</th><th>備註</th></tr></thead>
+    <tbody>
+      <tr><td><code>status.py</code></td><td><code>scripts/status.py</code></td><td>是</td><td><code>land-ticket.sh</code> 一處(<code>start/done</code>)<span class="src t">實測 grep</span></td><td>#23 落地後要再同步一次,T 才拿到 list 形狀</td></tr>
+      <tr><td><code>ticket.py</code></td><td><code>scripts/ticket.py</code></td><td>是(被 import 也被叫)</td><td><code>land-ticket.sh</code> 三處:<code>review_problems</code>、<code>objection_problems</code>、關票</td><td>T 的票庫在 repo 外 <code>../tabby_pool_wt/tickets</code></td></tr>
+      <tr><td><code>verify-case.py</code></td><td><code>scripts/verify-case.py</code></td><td>是</td><td><code>land-ticket.sh:1362</code> 只叫 <code>tags-merge</code>;<code>check</code> 由驗證者手跑</td><td>#26/#27 的 <code>red / lint / check</code> 接線 T 端要自備兩行(設計 C6)</td></tr>
+      <tr><td><code>auto-fix.sh</code></td><td><code>scripts/auto-fix.sh</code></td><td>是</td><td><code>land-ticket.sh:1270</code>(<code>--auto-fix</code> 時)</td><td>T 的 <code>land-ticket.sh</code> 要加「environment_suspect 非空不自動派」(設計 §T 第 2 點)</td></tr>
+      <tr class="hole"><td><code>apply.sh</code></td><td><code>scripts/apply.sh</code></td><td>是</td><td><b>無</b>:<code>land-ticket.sh gate</code> 自己套 patch <span class="src t">實測 grep 無 control/apply.sh</span></td><td>G11</td></tr>
+      <tr class="hole"><td><code>inbox.py</code></td><td><code>scripts/inbox.py</code></td><td>是</td><td><b>無</b>(T 主線開場沒有 <code>inbox.py list</code> 這一步)</td><td>G11</td></tr>
+      <tr class="hole"><td><code>rules.py</code></td><td><code>scripts/rules.py</code></td><td>是</td><td><b>無</b> 腳本呼叫;主線派工手打 <code>rules.py pack</code>(<code>config.rules.sections</code> 有 T 版面)</td><td>G11(手打不算沒接,但 sync 沒法分辨)</td></tr>
+      <tr class="hole"><td><code>memory.py</code></td><td><code>scripts/memory.py</code></td><td>是</td><td><b>無</b>(<code>apply.sh</code> 不被叫,harvest 就不會發生)</td><td>G11</td></tr>
+      <tr><td><code>event.py</code>、<code>verify.py</code></td><td><code>scripts/</code></td><td>是(只為了被 import)</td><td>不直接叫;T 有自己的 <code>scripts/verify.py</code>(#568)與 <code>scripts/control/verify.py</code> 並存</td><td>設計 C6 明說 lint 放 <code>verify-case.py</code> 就是為了避開兩份 verify.py</td></tr>
+      <tr><td><code>gate.sh</code> / <code>land.sh</code></td><td>正本有</td><td>否</td><td>T 用 <code>test-for.sh</code> + 自己的 <code>land.sh</code> + <code>fullsuite.sh</code>,由 <code>land-ticket.sh</code> 包</td><td><code>opener.inbox.md</code>:「gate.sh/land.sh/metrics.py 不會到專案端」</td></tr>
+      <tr><td><code>metrics.py</code>、<code>board/board.py</code>、<code>heartbeat.sh</code>、<code>new-session.sh</code></td><td>正本有</td><td>否</td><td>T 有自己的 <code>scripts/board.py</code>、<code>board-note.py</code>(TODO §0 第 10 步:退役)</td><td>遷移計畫第 2、3、10、11 步未做 <span class="src t">實測 docs/TODO.md</span></td></tr>
+      <tr class="hole"><td><code>memory/role/*.md</code> → <code>docs/roles/</code></td><td>9 份(含 4 份 <code>.inbox.md</code>)</td><td>是(檔頭加註)</td><td>T 現有 <code>README implementer main main.inbox opener verifier</code> + <code>dispatcher.md</code>(T 自建告示,不在 manifest)</td><td>缺 <code>implementer.inbox / opener.inbox / verifier.inbox</code> → 上次同步早於這三份 <span class="src t">實測 ls + .sync-manifest</span>;G11</td></tr>
+      <tr><td><code>board/config.json</code></td><td>正本一份(埠 18905)</td><td>否(專案自備)</td><td>T:<code>unit_cmd</code>、<code>rules.roles_dir</code>、<code>rules.sections</code>(worker / verifier 用標題選節)、<code>flaky_auto_ticket:false</code></td><td>控制腳本往上找它認 repo 根;少了會寫進沒人看的目錄且不報錯</td></tr>
+      <tr><td>接線點清單</td><td><code>sync-to-project.sh</code> 結尾印六條</td><td>—</td><td>1 gate 跑完 <code>status.py done</code> ✔;2 <code>verify-case.py check</code> 手跑;3 <code>apply.sh</code> ✘;4 <code>auto-fix.sh</code> ✔(選項);5 <code>inbox.py list</code> ✘;6 <code>rules.py pack</code> 手打</td><td>「同步完成」與「接上了」長得一樣 —— sync 自己的註解這樣寫,但它不檢查</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ============================================================ G -->
+<section id="g" class="holes">
+  <h2><span class="q">G</span>寫不出來 / 不合理的清單 → 票 #29</h2>
+  <p class="lead">畫圖時答不出「這個箭頭交的是什麼」「這一格由誰驗」的地方。右欄對到 #29 的 acceptance 編號。每一條都能寫成會紅的斷言或可 grep 的文件修改。</p>
+  <ol>
+    <li><span class="id">G1</span><div>設計 session(Fable)沒有角色卡、<code>rules.py WANTED</code> 沒有 design、<code>ticket.py --role</code> 不認、<code>docs/ROLES.md</code> 角色表沒有這一列;交付物 <code>docs/DESIGN-*.md</code> 沒有固定段落。D-019 與 <code>main.inbox.md</code> 都在派它,而它是唯一一個沒有規則包的角色。<span class="src t">實測 ls memory/role、rules.py WANTED、ticket.py create --help</span></div><span class="acc">#29 A1</span></li>
+    <li><span class="id">G2</span><div>主線 → 開題者的派工沒有範本檔(<code>templates/</code> 只有 <code>dispatch-verifier.md</code>);<code>opener.md</code> 指到不存在的 <code>docs/TICKET-OPENER-PROMPT.md(專案自備)</code>;開題者交的「300 字摘要與建議順序」沒有檔名、沒有格式、看板讀不到。<span class="src t">實測</span></div><span class="acc">#29 A2</span></li>
+    <li><span class="id">G3</span><div>第 1 輪 worker 的派工文由主線手寫,只有 §8 散文可抄;第 2 輪起 <code>auto-fix.sh</code> 才產 <code>dispatch-round{r}.md</code>。同一個角色的兩輪拿到兩種形狀的派工文。<span class="src t">實測 auto-fix.sh --dry-run 只在有 status.json 時可用</span></div><span class="acc">#29 A3</span></li>
+    <li><span class="id">G4</span><div><code>apply.sh --evidence</code> 只跑 <code>memory.py harvest</code>:第 1 輪沒有 <code>result-round1.json</code>(看板 <code>/t/{n}</code> 對第一輪只能印「沒交結構化輸出」)、EVIDENCE 裡的 <code>OBJECTION:</code> 行沒人收進 <code>objections[]</code>;五段標題從來沒有機器驗。<span class="src">讀 code 推的:grep apply.sh 只有 harvest</span></div><span class="acc">#29 A4</span></li>
+    <li><span class="id">G5</span><div>驗證者角色卡要求交 <code>EVIDENCE-verifier.md</code>(尾端 result),但沒有任何入口讀它 —— <code>auto-fix.sh</code> 只在 <code>test_defect</code> 路徑抽 <code>result-verifier-round{r}.json</code>;<code>apply.sh</code> 只收一份 <code>--evidence</code>。一份沒有收件者的交付物。<span class="src t">實測 grep</span></div><span class="acc">#29 A5</span></li>
+    <li><span class="id">G6</span><div>副本清理:worker 自己刪 <code>work/ base/</code>(角色卡),但 <code>auto-fix.sh</code> 的 <code>fix-t{n}/round{r}</code>、<code>verify-t{n}/round{r}</code> 只在下一輪開始 <code>rm -rf</code>,綠了停 InReview 就留著;主線手建的 <code>$W</code> 沒有腳本清。tabby 端 2026-09-16 副本 14 GB 塞滿磁碟過。<span class="src t">實測 auto-fix.sh:316,403</span></div><span class="acc">#29 A6</span></li>
+    <li><span class="id">G7</span><div>落地後 <code>verify-case.py check {n} --ref {base_sha} --candidate {merge sha}</code> 要主線手打,<code>land.sh</code> 不做、<code>ticket.py close</code> 擋下時也不印那一句;#27 接的是 gate 這一側,落地後補量不在 #25–#27 任何一張票的 acceptance 裡。<span class="src t">實測 main.inbox.md、tickets/27.json</span></div><span class="acc">#29 A7</span></li>
+    <li><span class="id">G8</span><div>consolidator 的角色卡借用 <code>implementer.md</code>(<code>rules.py WANTED</code>),沒有派工範本;<code>memory.py check</code> 自動開的整理票指定兩個模型,但兩個 session 怎麼被派、討論檔誰先寫,沒有一句可貼的指令。<span class="src t">實測</span></div><span class="acc">#29 A8</span></li>
+    <li><span class="id">G9</span><div><code>SESSION-START.md</code> 要 worker / 驗證者自己發 <code>ticket.attempt.start/done</code>,但副本裡 <code>event.repo_root()</code> 往上找到的是副本裡那份 <code>board/config.json</code>,事件寫進一個等一下會被刪的目錄且不報錯;<code>auto-fix.sh</code> 那條路是代發(#5),第 1 輪不是。<span class="src">讀 code 推的:event.py:61、apply.sh 檔頭同一句話</span></div><span class="acc">#29 A9</span></li>
+    <li><span class="id">G10</span><div>agent-control 自己沒有 docs 通道:<code>main.md</code> 明禁裸 commit 主線,而票檔、<code>memory/</code>、<code>docs/DECISIONS.md</code> 進主線只有裸 commit 一條路(最近一筆 124505c 就是);<code>auto-fix.sh</code> 在票分支 worktree 找不到未進版控的票檔 rc=2(#23 第 2 輪,<code>memory/project</code> 已記)。<code>sync-to-project.sh</code> 對專案會印「它還沒有 docs 通道」,對自己不印。<span class="src t">實測 git log、events.jsonl 最後三筆</span></div><span class="acc">#29 A10</span></li>
+    <li><span class="id">G11</span><div>同步十支,tabby 的 <code>land-ticket.sh</code> 只叫四支(<code>status.py ticket.py verify-case.py tags-merge auto-fix.sh</code>);<code>apply.sh inbox.py rules.py memory.py</code> 到了專案沒有呼叫點;<code>docs/roles/</code> 缺三份 <code>.inbox.md</code>(同步過期)、<code>dispatcher.md</code> 是專案自建告示混在產出物目錄。sync 印接點清單,但不檢查接了沒。<span class="src t">實測 grep + ls + .sync-manifest</span></div><span class="acc">#29 A11</span></li>
+    <li><span class="id">G12</span><div><code>DESIGN-VERIFY-CASES.md</code>(D-020)住在 scratchpad 不在 repo;§六 票號寫 A#24/#25/#26 而實際開出來是 #25/#26/#27(#24 是另一張主線紅的票);<code>T#650</code> 未開;<code>docs/DECISIONS.md</code> 還沒有 D-020 一列(在 #25 的 acceptance 裡)。<span class="src t">實測 ticket.py list、awk DECISIONS</span></div><span class="acc">#29 A12</span></li>
+  </ol>
+  <h3>黃的(有定義、驗一半;沒開 acceptance,寫在這裡讓人看見)</h3>
+  <ul class="notes">
+    <li><code>status.json</code> 只有寫端形狀與讀端正規化,沒有獨立的 validate 子指令(D5)。</li>
+    <li><code>reports/inbox/*.md</code> 頁與 <code>index.jsonl</code> 一致性不驗;設計上索引為準(D6)。</li>
+    <li><code>events.jsonl</code> 只驗 <code>kind</code>,kv 自由(D7,刻意便宜)。</li>
+    <li>票的 <code>verify.run</code> 沒人執行,gate 跑的是 tags(D21)。</li>
+    <li><code>docs/HANDOFF.md</code>、給使用者的回報:紀錄類,設計上不驗(D20)。</li>
+  </ul>
+</section>
+
+<footer>
+  來源(只讀):agent-control <code>docs/ROLES.md WORKFLOW.md VERIFICATION.md DISPATCH-TEMPLATE.md MEMORY.md DESIGN.md CODE-MAP.md DECISIONS.md(D-010 起) DESIGN-ENV-SUSPECT.md SESSION-START.md TODO.md</code>、<code>tickets/SCHEMA.md</code>、<code>memory/role/*.md</code>、<code>templates/*</code>、<code>scripts/*</code>(<code>--help</code> 與 grep)、<code>board/board.py board/config.json</code>;設計中:<code>DESIGN-VERIFY-CASES.md</code>(D-020,#25–#27);tabby_pool <code>scripts/land-ticket.sh scripts/control/ docs/roles/ board/config.json docs/WORKFLOW.md</code>。本頁沒有跑 gate / land / auto-fix,沒有 git 寫入。
+</footer>
+</main>

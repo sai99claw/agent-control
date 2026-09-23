@@ -1,0 +1,124 @@
+{
+  "id": "29",
+  "subject": "流程圖稽核(docs/FLOW.html)找出的 12 個洞:設計 session 角色卡、開題/第一輪派工範本、apply.sh 抽 result 與 OBJECTION、副本清理、事件寫進副本、docs 通道、sync 接線檢查、D-020 文件歸位",
+  "created": "2026-09-23T13:49:31+08:00",
+  "objective": "docs/FLOW.html §G 列的十二處「答不出這個箭頭交什麼 / 這一格由誰驗」全部有程式入口或有裁示落文件;每一條對應一條會紅的斷言或可 grep 的文件修改。建議主線拆成兩批:文字/範本(A1 A2 A5 A8 A12,sonnet)與腳本(A3 A4 A6 A7 A9 A10 A11,opus);本票 model 依較難那一半裁 opus。",
+  "acceptance": [
+    "A1 設計 session 有角色:memory/role/design.md 存在(≤40 行,含 讀什麼/交什麼/不做/誰派/何時結束);python3 scripts/rules.py pack design --model fable rc=0 且輸出 ≤4096 bytes;docs/ROLES.md 角色表多一列「設計 session」;tickets/SCHEMA.md 或 docs/DESIGN.md 定義 docs/DESIGN-<題>.md 的固定段(結論表含「未來每票省/多花」欄、後續工作的模型表);tests/test_rules.py 一條對 design 角色",
+    "A2 開題者派工有範本:templates/dispatch-opener.md 存在;grep -c TICKET-OPENER-PROMPT memory/role/opener.md == 0(或該檔存在於 docs/);開題者的摘要與建議順序落在票的 outline 欄(ticket.py create --outline),docs/ROLES.md 與 memory/role/opener.md 的交付物欄改寫成該欄名;tests/test_templates.py 或等價案例斷言範本存在且含「四件事」的四個佔位",
+    "A3 第一輪 worker 派工文由工具產:sh scripts/auto-fix.sh <n> --dry-run --round 1(或新入口)在沒有 status.json 時印出第一輪派工文(規則包 + 票面 + base_sha + 副本路徑 + 回報格式)rc=0;tests/test_auto_fix.py 一條:沒有 reports/t<n>/ 時 --dry-run --round 1 輸出含 rules.py pack 的首行與票號;變異:拿掉 round 1 分支 → rc=2",
+    "A4 apply.sh --evidence 與 auto-fix.sh 共用同一支抽取:apply.sh <n> <patch> --evidence <E> 之後 reports/t<n>/<run_id>/result-round1.json 存在且 present:true;EVIDENCE 有 ^OBJECTION: 行時 apply.sh 記進票的 objections[] 並 rc≠0 指名;抽出的 json 多一格 sections{patch_sha256,gate,mutations,excluded,repro}: bool,缺段印出來不擋;tests/test_apply.py 三條(有 result / 無 result / 有 OBJECTION)",
+    "A5 EVIDENCE-verifier.md 有收件者或被裁掉:二選一寫進 memory/role/verifier.md 與 templates/dispatch-verifier.md —— (a) 刪掉該交付物,只留 patch-verify.diff + verify 欄;或 (b) apply.sh 收 --evidence-verifier <E> 抽 result-verifier-round1.json;tests 斷言兩份檔對「EVIDENCE-verifier」的提及數與程式入口一致(a:0 且 apply.sh 無此旗標;b:≥1 且 apply.sh --help 含旗標)",
+    "A6 副本自己收:auto-fix.sh 收完 patch-round<r>.diff 與 EVIDENCE-round<r>.md 後刪 $FIX/work 與 $FIX/base(留 patch / EVIDENCE / dispatch / result);verify-t<n>/round<r> 同;tests/test_auto_fix.py 斷言一輪結束後兩個目錄不存在而 patch 存在;land.sh 成功後印出 $WTBASE 下殘留的 fix-t<n>/ verify-t<n>/ 清單(只印不刪),tests/test_land.py 一條",
+    "A7 落地後補量有下一步:ticket.py close <n> 在 verify.baseline 缺(或 ok 不為 true)、review.sha 在主線歷史裡時,印一句可貼的 python3 scripts/verify-case.py check <n> --ref <base_sha> --candidate <review.sha>(rc 不變);tests/test_ticket.py 一條斷言那一句含兩個 sha;若 #27 落地後已由 land.sh 自動 check,改為 test 驗 land.sh 綠後票的 verify.baseline.candidate_sha == merge sha",
+    "A8 consolidator 有自己的卡與範本:memory/role/consolidator.md 存在(≤40 行);rules.py WANTED[consolidator] 指向它(python3 scripts/rules.py pack consolidator --model fable 輸出含 consolidator.md 的首行);templates/dispatch-consolidator.md 存在(兩個模型各一段、討論檔路徑、memory.py consolidate 那一句);memory.py check 開的整理票 outline 引用該範本路徑;tests/test_memory.py 一條",
+    "A9 副本裡發事件不再寫進副本:在 git archive 副本內執行 python3 scripts/event.py emit ticket.attempt.start --ticket <n>,事件寫進 AC_ROOT 的 events.jsonl,或 rc≠0 並印「副本裡不發事件,由派工方代發」;docs/SESSION-START.md §Worker 那兩行改成對應寫法;tests/test_event.py 一條:副本目錄(有 board/config.json、無 .git)內 emit 不會在副本產生 events.jsonl",
+    "A10 agent-control 自己有 docs 通道:docs/WORKFLOW.md 新增一節「票檔 / memory / docs 進主線的入口」;sh scripts/land.sh docs \"<訊息>\" tickets/<n>.json memory/role/x.inbox.md rc=0 且只准 tickets/ docs/ memory/ 三個前綴(越界 rc≠0 指名檔),與票的 land 共用 .land.lock;auto-fix.sh 在票分支 worktree 以 AC_ROOT 的 tickets/ 找票(未進版控的票檔不再 rc=2);tests/test_land.py 兩條、tests/test_auto_fix.py 一條",
+    "A11 sync 報「同步了但沒接」:sync-to-project.sh 結尾對 SCRIPT_LIST 每一支 grep -l scripts/control/<name> 專案的 scripts/*.sh(排除 scripts/control/),印「sync: 同步了但專案端沒有呼叫點:…」;docs/roles/ 下不在 manifest 的檔印「sync: 非產出物:<檔>」;tests/test_sync_to_project.py 兩條;對 tabby_pool 跑 --dry-run 應列出 apply.sh inbox.py rules.py memory.py 與 dispatcher.md(EVIDENCE 貼輸出)",
+    "A12 D-020 文件歸位:docs/DESIGN-VERIFY-CASES.md 進 repo(從 scratchpad 搬),§六 與 C7 票號改成 #25/#26/#27、T#650 標「未開」;docs/DECISIONS.md 有 D-020 一列指向它(grep -c 'D-020' docs/DECISIONS.md ≥ 1;若 #25 已先落地則只驗連結存在);docs/WORKFLOW.md 能力表加三列(verify-case.py red、lint、gate 接線)標「設計中 #26/#27」;docs/FLOW.html §G 的票號與本票一致"
+  ],
+  "in_scope": [
+    "memory/role/design.md",
+    "memory/role/consolidator.md",
+    "memory/role/opener.md",
+    "memory/role/verifier.md",
+    "templates/dispatch-opener.md",
+    "templates/dispatch-consolidator.md",
+    "templates/dispatch-verifier.md",
+    "docs/ROLES.md",
+    "docs/WORKFLOW.md",
+    "docs/SESSION-START.md",
+    "docs/DECISIONS.md",
+    "docs/DESIGN-VERIFY-CASES.md",
+    "docs/FLOW.html",
+    "tickets/SCHEMA.md",
+    "scripts/rules.py",
+    "scripts/apply.sh",
+    "scripts/auto-fix.sh",
+    "scripts/ticket.py",
+    "scripts/event.py",
+    "scripts/land.sh",
+    "scripts/sync-to-project.sh",
+    "scripts/memory.py",
+    "tests/test_rules.py",
+    "tests/test_apply.py",
+    "tests/test_auto_fix.py",
+    "tests/test_ticket.py",
+    "tests/test_event.py",
+    "tests/test_land.py",
+    "tests/test_sync_to_project.py",
+    "tests/test_memory.py",
+    "tests/test_templates.py"
+  ],
+  "out_of_scope": [
+    "scripts/gate.sh",
+    "scripts/verify-case.py",
+    "board/board.py",
+    "tabby_pool 端任何檔(A11 只讀它)"
+  ],
+  "depends_on": [
+    {
+      "id": "25",
+      "condition": "落地(A12 的 D-020 列由它帶進來)"
+    },
+    {
+      "id": "27",
+      "condition": "落地(A7 依它的結果二選一)"
+    }
+  ],
+  "allowed_write_paths": [
+    "memory/role/*.md",
+    "templates/*.md",
+    "docs/*.md",
+    "docs/FLOW.html",
+    "tickets/SCHEMA.md",
+    "scripts/rules.py",
+    "scripts/apply.sh",
+    "scripts/auto-fix.sh",
+    "scripts/ticket.py",
+    "scripts/event.py",
+    "scripts/land.sh",
+    "scripts/sync-to-project.sh",
+    "scripts/memory.py",
+    "tests/*.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "461fa4646a6376f680e2f322f3e3d6adc549525a",
+  "state": "Draft",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [
+      "flow-audit"
+    ],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-015",
+    "D-018",
+    "D-019",
+    "D-020"
+  ],
+  "outline": "來源:設計 session 2026-09-23 畫 docs/FLOW.html 時答不出的十二格(§G)。每條標實測/讀 code 推的。拆票建議:文字批(A1 A2 A5 A8 A12,sonnet,~40K)先派;腳本批(A3 A4 A6 A9 A10 A11,opus,~120K);A7 等 #27。D-018:不准用「加第二格 / 改名」繞過 —— A4 的 result 抽取要與 auto-fix 同一支函式,A10 的 docs 通道要與票的 land 同一把鎖。",
+  "test_plan": "A1/A8:單元 —— rules.py pack design|consolidator 輸出首行與大小;期望值來自 rules.py DEFAULT_MAX 與角色卡檔名。A2/A5/A12:文件 —— grep 計數,期望值寫在 acceptance。A3/A4/A6/A9/A10/A11:沙盒 —— tempdir 真 git repo(不假 git,DISPATCH §5.6)+ 寫標記檔就退出的假 worker.command;可觀察輸出是檔案存在與否、rc、stdout 句子。A7:單元 —— 手造票 JSON 走 ticket.py close,斷言 stdout 含 --ref 與 --candidate 兩個 sha。tags:flow-audit",
+  "verify_strings": [
+    {
+      "path": "scripts/sync-to-project.sh",
+      "contains": "同步了但專案端沒有呼叫點"
+    },
+    {
+      "path": "memory/role/design.md",
+      "contains": "設計 session"
+    },
+    {
+      "path": "scripts/apply.sh",
+      "contains": "result-round1"
+    }
+  ]
+}
