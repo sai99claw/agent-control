@@ -628,8 +628,21 @@ class LintIsTheFormatRuleInMachineForm(CaseSandbox):
         self.assertIn("F6 模組頂層 import 了票面的新符號 size_nav", done.stdout)
         self.assertIn("票 #1 有 1 條驗收", done.stdout)
 
+    def test_f6_takes_the_ticket_from_the_test_ticket_n_filename(self):
+        """🩸 `--ticket` 是選項,而閘門與驗證者都是整批餵檔名進來:少了檔名這條路,
+        F6 在真的會跑的那一趟一次都不會查(#26 第 2 輪紅在這裡)。
+
+        **變異**:把 `cmd_lint` 裡 `ticket_of_case(rel)` 那一段拿掉 → 這一條紅。
+        """
+        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav("])
+        done = self.lint(GOOD_CASE.replace(
+            "import shutil", "import shutil\nfrom src.nav import size_nav"))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("F6 模組頂層 import 了票面的新符號 size_nav", done.stdout)
+
     def test_without_a_ticket_f6_is_not_checked(self):
-        """拿不到票就查不了「哪些符號是新的」—— 猜出來的那一份會擋掉既有模組。"""
+        """拿不到票就查不了「哪些符號是新的」—— 猜出來的那一份會擋掉既有模組。
+        檔名是 `test_ticket_1.py` 而票 #1 不存在,所以檔名那條路也拿不到票。"""
         done = self.lint(GOOD_CASE.replace(
             "import shutil", "import shutil\nfrom src.nav import size_nav"))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)

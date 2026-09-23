@@ -47,7 +47,8 @@ False:要嘛把案例寫成不依賴新符號,要嘛在票裡寫明為什麼這�
 `docs/DESIGN-VERIFY-CASES.md` §四那張表的可執行副本:F1 模組 docstring 的四段、
 F2 `TAGS` 字面且登記過、F3 每個 `test_` 的 docstring 首行是驗收編號(**印出來不擋**)、
 F4 禁字(`board/config.json` 的 `verify_lint.forbid`,預設 kill 家族)、F5 拋棄式目錄
-綁 `addCleanup`、F6 模組頂層不 import 票面的新符號。F3 之外任一條命中 rc=1 並**指名
+綁 `addCleanup`、F6 模組頂層不 import 票面的新符號(`--ticket` 沒給時走檔名慣例
+`test_ticket_<n>.py`;那張票也讀不到才是「拿不到票」,F6 不查)。F3 之外任一條命中 rc=1 並**指名
 行號** —— 一句「格式不合」要人自己去找是哪一行,那一份退件與沒有退件一樣貴。
 
 ## 為什麼登記走 `verify/TAGS.d/<票號>.md`
@@ -102,6 +103,8 @@ DEFAULT_FORBID = (r"os\.kill", r"killpg", r"pkill", r"kill -")
 TEMP_CALLS = ("mkdtemp", "TemporaryDirectory")
 # lint F6:票面 `verify_strings` 裡的 `def <name>(` 就是這張票才會有的符號。
 DEF_NAME = re.compile(r"def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+# lint F6:`--ticket` 沒給時,案例檔名 `test_ticket_<n>.py` 就是那張票。
+CASE_FILE_TICKET = re.compile(r"^test_ticket_([0-9]+)\.py$")
 TIMEOUT = 900
 
 
@@ -539,6 +542,23 @@ def new_symbols(ident):
     return out
 
 
+def ticket_of_case(rel):
+    """F6 拿票的第二條路:檔名慣例 `test_ticket_<n>.py`(§四的例子就長這樣)。
+
+    `--ticket` 沒給時才走。**讀不到那張票就是拿不到票**,F6 照設計不查 —— 猜出來的
+    符號名單會擋掉既有模組。
+    """
+    hit = CASE_FILE_TICKET.match(os.path.basename(rel))
+    if not hit:
+        return None
+    ident = hit.group(1)
+    try:
+        ticketlib.load(ident)
+    except (OSError, ValueError):
+        return None
+    return ident
+
+
 def tags_node(tree):
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(
@@ -646,8 +666,12 @@ def cmd_lint(args):
         except SyntaxError as exc:
             bad.append("%s:%d 解不開 —— %s" % (rel, exc.lineno or 1, exc.msg))
             continue
+        mine = symbols
+        if not args.ticket:
+            ident = ticket_of_case(rel)
+            mine = new_symbols(ident) if ident else set()
         one_bad, one_notes, one_numbers = lint_one(
-            path, rel, text, tree, forbid, known, symbols)
+            path, rel, text, tree, forbid, known, mine)
         bad.extend(one_bad)
         notes.extend(one_notes)
         numbers.extend(one_numbers)
