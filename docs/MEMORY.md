@@ -5,6 +5,24 @@
 |---|---|---|---|
 | **專案共用** | `docs/DECISIONS.md`、`docs/HANDOFF.md`、`code-map/`、`memory/project/*.md` | 主線(經裁示)、知識維護 | 已接受的需求、介面、不變條件、裁示、交接 |
 | **模型私有** | `memory/model/<model>.md` | 該模型的任何 session | **跟別的模型討論時發現的自身盲點**、有效的除錯法、失敗的嘗試、角色技巧 |
+| **專案端**(接 agent-control 的專案) | `memory/role/<role>.md`、`memory/model/<model>.md`(各帶一份 `.inbox.md` 暫存)、`memory/project/<主題>.md` | 那個專案裡的任何 session(`scripts/control/memory.py note`) | **這個專案的事實與教訓**;規則包在正本規矩之外**疊**這一層 |
+
+### 專案端那三個目錄(2026-09-23,D-021)
+
+`memory/` 永遠是「**這個 repo 自己寫的**」;`rules.roles_dir` 是「**規矩從哪來**」。
+兩者是同一個目錄時,**同一目錄就是正本**(agent-control 自己),規則包只讀一次;不同時,
+這個 repo 是專案,規則包兩層都疊。一條規則,沒有第二個設定鍵、沒有旗標。
+
+| 目錄 | 誰寫 | 規則包(`rules.py pack`)怎麼疊 | 上限 |
+|---|---|---|---|
+| `memory/role/<role>.md` + `<role>.inbox.md` | 專案裡的任何 session(`memory.py note role …`) | 疊在 `roles_dir` 的正本角色卡**之後**;暫存區只帶**最後幾行**(≤ 600 B,砍了會點名) | 2K / 暫存 20 行 |
+| `memory/model/<model>.md` + `<model>.inbox.md` | 該模型的 session(model 層只准寫自己) | 疊在 `models_dir` 的正本模型記憶**之後**;暫存區同上 | 2K / 暫存 20 行 |
+| `memory/project/<主題>.md` | 任何 session(`note project …` 直接進主檔) | 只在「先讀這幾份」**列路徑**,不貼內容 —— 貼進 4 KB 包會把別的擠掉,要看就 grep | 不設上限 |
+
+**同步(`sync-to-project.sh`)一個位元組都不碰 `<專案>/memory/`**,也不再複製 A 的
+`*.inbox.md`(A 的暫存區是 A 的,不是規矩)。專案的 `memory.applies_to` 因此要指
+`memory/role/*.md`、`memory/model/*.md`,不是 `docs/roles/*.md` —— 指到同步產出物的話,
+上限量的是一份專案改不了、下一次同步就蓋掉的檔,而它開出來的整理票沒有人能執行。
 
 模型私有記憶的重點是**同模型跨 session 共享**:Opus 的下一個 session 應該知道 Opus 上次在這裡犯過什麼。每一條附:日期、來源(票號或對話)、適用範圍(專案 / 角色)、是實測還是推論。
 

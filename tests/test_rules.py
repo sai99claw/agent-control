@@ -10,6 +10,7 @@
 3. 砍掉的時候**說得出砍了哪一份** —— 砍掉而不說,與那一節不存在長得一樣。
 """
 
+import json
 import os
 import sys
 import unittest
@@ -288,6 +289,131 @@ class EfficiencyOverSpeed(RulesBase):
         text = self.rules("pack", "worker", "--model", "opus").stdout
         for phrase in ("D-016", "這樣比較快", "token", "判準"):
             self.assertIn(phrase, text)
+
+
+class TheProjectLayer(RulesBase):
+    """疊在正本規矩上的**專案自己那一層**(D-021,#28)。
+
+    `memory/` 永遠是「這個 repo 自己寫的」,`roles_dir` 是「規矩從哪來」。同一個目錄時
+    這個 repo 就是正本(agent-control 自己),不同時它是專案 —— 而專案的教訓寫在
+    `memory/`,以前 `pack` 一個字都沒讀到:路徑錯(它只讀 `roles_dir`)+ 暫存區本來就
+    不進包。少讀一次的代價是一輪落地紅。
+
+    **變異**:把 `pack()` 裡 `local = not is_canon(root)` 改成 `local = False`
+    → 這一組除了「A 自己」那兩條之外全紅。
+    """
+
+    config_extra = {"rules": {"roles_dir": os.path.join("docs", "roles"),
+                              "models_dir": os.path.join("docs", "roles", "model")}}
+    CANON_ROLE = "CANON-ROLE 正本角色卡說的那一句。"
+    LOCAL_ROLE = "LOCAL-ROLE 這個 repo 自己補的那一句。"
+    CANON_MODEL = "CANON-MODEL 正本模型記憶說的那一句。"
+    LOCAL_MODEL = "LOCAL-MODEL 這個 repo 自己補的那一句。"
+    PROJECT_NOTE = "PROJECT-BODY 專案備忘的內文不該進包。"
+
+    def setUp(self):
+        super(TheProjectLayer, self).setUp()
+        self.write(os.path.join("docs", "roles", "implementer.md"),
+                   "# 正本角色卡\n%s\n" % self.CANON_ROLE)
+        self.write(os.path.join("docs", "roles", "model", "opus.md"),
+                   "# 正本模型記憶\n%s\n" % self.CANON_MODEL)
+        self.write(os.path.join("memory", "role", "implementer.md"),
+                   "%s\n" % self.LOCAL_ROLE)
+        self.write(os.path.join("memory", "role", "implementer.inbox.md"),
+                   "- 第一條 INBOX-1\n- 第二條 INBOX-2\n- 第三條 INBOX-3\n")
+        self.write(os.path.join("memory", "model", "opus.md"),
+                   "%s\n" % self.LOCAL_MODEL)
+        self.write(os.path.join("memory", "project", "foo.md"),
+                   "- %s\n" % self.PROJECT_NOTE)
+
+    def single_layer(self):
+        """`roles_dir` 不設 = 這個 repo 自己就是正本(agent-control)。"""
+        conf = json.loads(self.read(os.path.join("board", "config.json")))
+        conf["rules"] = {}
+        self.write(os.path.join("board", "config.json"),
+                   json.dumps(conf, ensure_ascii=False, indent=2))
+
+    def test_both_layers_are_in_the_pack_and_it_still_fits(self):
+        done = self.rules("pack", "worker", "--model", "opus")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        for phrase in (self.CANON_ROLE, self.LOCAL_ROLE, "INBOX-3",
+                       self.CANON_MODEL, self.LOCAL_MODEL):
+            self.assertIn(phrase, done.stdout, "疊上去的那一層漏了:" + phrase)
+        self.assertLessEqual(len(done.stdout.encode("utf-8")), 4096,
+                            "疊第二層不准把上限撐開")
+
+    def test_project_notes_are_a_path_not_a_paste(self):
+        """專案層不設上限、會長;貼進 4 KB 包會把角色卡擠掉,而砍到只剩標題與沒貼
+        一樣。所以只列路徑,要看的那一次用 grep(D-013 第 4 條)。"""
+        done = self.rules("pack", "worker", "--model", "opus")
+        self.assertIn(os.path.join("memory", "project", "foo.md"), done.stdout)
+        self.assertIn("## 先讀這幾份",
+                      done.stdout[:done.stdout.index("memory/project/foo.md")],
+                      "專案備忘的路徑要在先讀清單裡")
+        self.assertNotIn(self.PROJECT_NOTE, done.stdout)
+
+    def test_the_inbox_only_brings_its_last_lines(self):
+        """暫存區一行一條、越新越下面:從頭留會只留到最舊的那幾條。"""
+        self.write(os.path.join("memory", "role", "implementer.inbox.md"),
+                   "".join("- 第%d條 INBOX-%d\n" % (i, i) for i in range(1, 60)))
+        done = self.rules("pack", "worker", "--model", "opus")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("INBOX-59", done.stdout, "最後一行才是最新的那一條")
+        self.assertNotIn("INBOX-1 ", done.stdout)
+        self.assertIn("只留最後幾行", done.stdout, "砍了要出聲")
+
+    def test_being_the_canon_repo_itself_reads_the_card_once(self):
+        """`roles_dir` 與 `memory/role` 是同一個目錄 = 這個 repo 就是正本。疊兩次的話
+        角色卡會整份出現兩遍,而讀的人會以為那是兩份不同的規矩。"""
+        self.single_layer()
+        done = self.rules("pack", "worker", "--model", "opus")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.count(self.LOCAL_ROLE), 1)
+        self.assertNotIn("本專案", done.stdout, "A 自己不該有「本專案」這個小標")
+
+    def test_being_the_canon_repo_does_not_list_the_project_layer(self):
+        self.single_layer()
+        done = self.rules("pack", "worker", "--model", "opus")
+        self.assertNotIn(os.path.join("memory", "project", "foo.md"), done.stdout)
+
+    def test_an_inbox_without_a_main_file_is_not_an_error(self):
+        """主檔還沒有人寫、只有暫存區 —— 那不是壞掉,不要印「找不到」。"""
+        os.remove(os.path.join(self.repo, "memory", "role", "implementer.md"))
+        os.remove(os.path.join(self.repo, "memory", "model", "opus.md"))
+        done = self.rules("pack", "worker", "--model", "opus")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertNotIn("找不到 memory/role", done.stdout)
+        self.assertIn("INBOX-3", done.stdout, "主檔不在,暫存區還是要讀得到")
+
+    def test_a_budget_too_small_for_the_inbox_still_names_it(self):
+        """**默默消失的一格與從來沒有過的一格長得一樣**:預算縮到連暫存區都放不下時,
+        輸出裡仍然要點得出是哪一個檔被砍掉。
+
+        **變異**:把最後那一刀的指路改回不含 `cut` 名單 → 這一條紅。
+        """
+        os.remove(os.path.join(self.repo, "memory", "role", "implementer.md"))
+        done = self.rules("pack", "worker", "--model", "opus", "--max-bytes", "1500")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertLessEqual(len(done.stdout.encode("utf-8")), 1500)
+        self.assertIn(os.path.join("memory", "role", "implementer.inbox.md"),
+                      done.stdout, "砍掉了卻沒點名 = 讀的人以為本來就沒有這一格")
+
+    def test_the_reading_list_points_at_both_layers(self):
+        done = self.rules("pack", "worker", "--model", "opus")
+        head = done.stdout[:done.stdout.index("## 角色卡")]
+        for pointer in (os.path.join("docs", "roles", "implementer.md"),
+                        os.path.join("memory", "role", "implementer.md"),
+                        os.path.join("docs", "roles", "model", "opus.md"),
+                        os.path.join("memory", "model", "opus.md")):
+            self.assertIn(pointer, head)
+
+    def test_roles_prints_the_canon_directory_not_a_hardcoded_one(self):
+        """`roles` 那張表以前寫死 `memory/role/` —— 在專案裡那句話指向一個不是正本的
+        目錄,而讀的人會去改那一份(改了下一次同步就被蓋掉)。"""
+        done = self.rules("roles")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn(os.path.join("docs", "roles", "implementer.md"), done.stdout)
+        self.assertNotIn(os.path.join("memory", "role", "implementer.md"), done.stdout)
 
 
 if __name__ == "__main__":

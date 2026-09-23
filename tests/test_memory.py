@@ -357,5 +357,53 @@ class Note(Sandbox):
         self.assertIn("21 / 20 行超過", done.stdout)
 
 
+class TheProjectSideIsWhatGetsWatched(Sandbox):
+    """上限與整理票管的是**專案自己寫的那一層**(D-021,#28)。
+
+    `memory.applies_to` 指到 `docs/roles/*.md`(同步產出物)的時候,量到超標會開一張
+    專案**改不了**的整理票:那一層下一次同步就被蓋掉。所以這一條釘住:名單指
+    `memory/role/*.md` 時,開出來的票寫得可以動的那個路徑。
+
+    **變異**:把 `open_ticket_for` 的 `--allowed-write-path rel` 換成 `docs/roles/…`
+    → 這一條紅。
+    """
+
+    config_extra = {"memory": {"unit": "chars", "cap_chars": 2000,
+                               "consolidators": ["fable", "codex:astra"],
+                               "applies_to": ["memory/role/*.md"],
+                               "inbox_suffix": ".inbox.md"}}
+
+    def memory(self, *args):
+        return self.run_py("scripts/memory.py", *args)
+
+    def test_twenty_one_notes_open_a_ticket_the_project_can_actually_write(self):
+        self.write(os.path.join("memory", "role", "implementer.md"), "短短一句。\n")
+        for index in range(21):
+            done = self.memory("note", "role", "implementer",
+                               "第 %d 條原則" % index, "--ticket", "28",
+                               "--by", "worker@opus")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        done = self.memory("check")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("21 / 20 行超過", done.stdout)
+        opened = [one for one in self.tickets_on_disk()
+                  if one.get("role") == "consolidator"]
+        self.assertEqual(len(opened), 1, opened)
+        paths = opened[0]["allowed_write_paths"]
+        self.assertIn(os.path.join("memory", "role", "implementer.md"), paths)
+        self.assertFalse([one for one in paths if one.startswith("docs/roles")],
+                         "整理票不該指向同步產出物 —— 改了下一次同步就被蓋掉")
+
+    def test_the_notes_land_in_the_project_memory_not_in_the_canon_dir(self):
+        """`note` 寫哪裡本票不改,這一條只是把「它已經寫對地方」釘住。"""
+        done = self.memory("note", "role", "implementer", "一條原則",
+                           "--ticket", "28", "--by", "worker@opus")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue(self.exists(os.path.join("memory", "role",
+                                                 "implementer.inbox.md")))
+        self.assertFalse(self.exists(os.path.join("docs", "roles",
+                                                  "implementer.inbox.md")))
+
+
 if __name__ == "__main__":
     unittest.main()

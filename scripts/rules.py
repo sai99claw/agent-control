@@ -36,6 +36,11 @@ import event  # noqa: E402  共用 repo 根
 SOURCES = (os.path.join("docs", "DISPATCH-COMMON-RULES.md"),
            os.path.join("docs", "DISPATCH-TEMPLATE.md"))
 DEFAULT_MAX = 4096
+# 專案自己寫的暫存區在包裡的一格(D-021):**固定 ≤ 600 B、先扣預算**,4 KB 上限不變。
+# 為什麼要有這一格:`.inbox.md` 要累到 21 行才開整理票,在那之前寫下的教訓誰都讀不到,
+# 而少讀一次的代價是一輪重來。為什麼只給 600 B:塞整份的話 4 KB 包會把角色卡擠掉,
+# 而砍到只剩標題與沒貼一樣。
+LOCAL_INBOX_BYTES = 600
 # 第五段,**固定文字、先扣預算**(與 260 B 鷹架同列,不吃比例):每個角色都帶,而且
 # 最後那一刀砍不到它。措辭對著 `memory.py note` 真正的用法寫 —— 這一段決定 agent
 # 會不會亂寫記憶:預設不寫、三種時刻、一行一原則、model 層只能寫自己。
@@ -105,6 +110,46 @@ def roles_dir(root):
 
 def models_dir(root):
     return rules_config(root).get("models_dir") or os.path.join("memory", "model")
+
+
+def local_dir(layer):
+    """專案**自己寫的**那一層,固定住 `memory/<layer>`(D-021)。
+
+    不做成設定鍵:`memory/` 永遠是「這個 repo 自己寫的」,`roles_dir` 是「規矩從哪來」。
+    兩者是同一個目錄時,這個 repo 就是正本;不同時,這個 repo 是專案,規則包兩層都疊。
+    一條規則,沒有第二個欄位、沒有旗標 —— 多一個鍵就多一個要對齊的地方,而對不齊的
+    那天沒有人會知道(`memory.py watched_files` 的 docstring 講過同一件事)。
+    """
+    return os.path.join("memory", layer)
+
+
+def is_canon(root):
+    """這個 repo 自己就是正本嗎 —— `roles_dir` 與 `memory/role` 指到同一個目錄。"""
+    return os.path.normpath(roles_dir(root)) == os.path.normpath(local_dir("role"))
+
+
+def inbox_suffix(root):
+    """暫存區的副檔名,與 `memory.py` 讀同一格設定(`memory.inbox_suffix`)。"""
+    try:
+        conf = event.config(root).get("memory") or {}
+    except Exception:  # noqa: BLE001  config 壞掉就用預設,不要在這裡倒
+        conf = {}
+    value = conf.get("inbox_suffix") if isinstance(conf, dict) else ""
+    return value or ".inbox.md"
+
+
+def project_notes(root):
+    """`memory/project/*.md` 的路徑,**只列路徑不貼內容**。
+
+    專案層不設上限、本來就會長(`docs/MEMORY.md` 2026-09-21 補註);貼進 4 KB 包裡會把
+    角色卡與規矩擠掉,而砍到只剩標題與沒貼一樣。要看的那一次用 grep(D-013 第 4 條)。
+    """
+    where = os.path.join(root, local_dir("project"))
+    try:
+        names = sorted(name for name in os.listdir(where) if name.endswith(".md"))
+    except OSError:
+        return []
+    return [os.path.join(local_dir("project"), name) for name in names]
 
 
 def wanted_sections(root, role, default):
@@ -199,6 +244,34 @@ def clip(text, budget, pointer):
     return "\n".join(kept + [mark]), True
 
 
+def tail(text, budget, pointer):
+    """暫存區在包裡只留**最後幾行** —— 新寫的那幾條在檔尾,而砍掉的部分要點名。
+
+    與 `clip` 同一條規矩(砍了要出聲),差別只在留哪一頭:主檔從頭讀,暫存區是一行
+    一條、越新越下面,從頭留會只留到最舊的那幾條。
+    """
+    raw = text.encode("utf-8")
+    if len(raw) <= budget:
+        return text, False
+    mark = "…(只留最後幾行:全文見 %s)" % pointer
+    room = budget - len(mark.encode("utf-8")) - 1
+    kept = []
+    used = 0
+    for line in reversed(text.splitlines()):
+        size = len(line.encode("utf-8")) + 1
+        if used + size > room:
+            break
+        kept.append(line)
+        used += size
+    return "\n".join([mark] + list(reversed(kept))), True
+
+
+def local_heading(rel, is_inbox):
+    """專案層那幾格的小標。**標題本身就寫出路徑**:預算緊的時候被最後一刀砍掉的是
+    內容,而留下來的那一行要還說得出「這裡本來有一格、在哪個檔」。"""
+    return "### 本專案自己寫的 `%s`%s" % (rel, "(最後幾行)" if is_inbox else "")
+
+
 def model_card(root, model):
     """模型記憶的檔名。路由表裡的模型帶著工具前綴(`codex:gpt-5.6-sol`),而記憶檔
     的名字只有模型那一半 —— 指著一個永遠不存在的路徑,比不指路更糟:它看起來像
@@ -233,6 +306,27 @@ def pack(root, role, model, max_bytes, override=""):
     card_rel = os.path.join(roles_dir(root), card_name)
     model_rel = model_card(root, model)
 
+    # 專案層(D-021):`roles_dir` 不是 `memory/role` 的時候,這個 repo 在讀**別人的**
+    # 正本規矩,而它自己的教訓寫在 `memory/`。兩層都疊;同一個目錄時只讀一次 ——
+    # 疊兩次的話角色卡會整份出現兩遍,而讀的人會以為那是兩份不同的規矩。
+    local = not is_canon(root)
+    suffix = inbox_suffix(root)
+    local_card_rel = os.path.join(local_dir("role"), card_name) if local else ""
+    local_model_rel = (os.path.join(local_dir("model"), os.path.basename(model_rel))
+                       if local and model_rel else "")
+    local_card = read_text(os.path.join(root, local_card_rel)) if local_card_rel else ""
+    local_memory = read_text(os.path.join(root, local_model_rel)) if local_model_rel else ""
+    # 暫存區:主檔不在也要讀得到 —— 一條寫進 inbox 還沒併檔的教訓,與併過檔的那一條
+    # 一樣會擋到人。主檔不在就**不出聲**(那不是壞掉,是還沒有人寫過)。
+    inboxes = []
+    for main_rel in (local_card_rel, local_model_rel):
+        if not main_rel:
+            continue
+        one = main_rel[:-len(".md")] + suffix
+        text = read_text(os.path.join(root, one))
+        if text:
+            inboxes.append((one, text))
+
     head = ["# 規則包:%s —— %s" % (role, one_line),
             EFFICIENCY_NOTE,
             "",
@@ -244,6 +338,15 @@ def pack(root, role, model, max_bytes, override=""):
     if model_rel:
         head.append("- `%s` —— 你這個模型在這裡踩過什麼" % model_rel)
     head.append("- `%s` —— 共用規矩全文(下面只節錄 %d 節)" % (rel, len(wanted)))
+    if local_card:
+        head.append("- `%s` —— 本專案對這個角色的補充(底下疊進來了)" % local_card_rel)
+    if local_memory:
+        head.append("- `%s` —— 本專案對這個模型的補充(底下疊進來了)" % local_model_rel)
+    for one, _text in inboxes:
+        head.append("- `%s` —— 本專案還沒併進主檔的暫存(包裡只帶最後幾行)" % one)
+    if local:
+        for one in project_notes(root):
+            head.append("- `%s` —— 本專案的共用備忘(只給路徑,要看就 grep)" % one)
     head.append("")
 
     missing = [num for num, hit in keys if hit is None]
@@ -262,15 +365,29 @@ def pack(root, role, model, max_bytes, override=""):
     # 組出來的整份必定超過 —— 而那會讓這一支自己在守自己時倒下。
     scaffold = ("## 角色卡(節錄)\n\n\n## 共用規矩節錄\n\n\n"
                 "## 你這個模型的記憶(節錄)\n\n\n")
-    room = max(max_bytes - len(fixed.encode("utf-8"))
-               - len(scaffold.encode("utf-8")) - 260 - MEMORY_NOTE_BYTES
-               - DELIVERY_NOTE_BYTES - 1, 0)
+    local_rels = ([local_card_rel] if local_card else []) + \
+                 ([local_model_rel] if local_memory else [])
+    local_scaffold = "".join(local_heading(one, False) + "\n\n\n" for one in local_rels) \
+        + "".join(local_heading(one, True) + "\n\n\n" for one, _t in inboxes)
+    base = (max_bytes - len(fixed.encode("utf-8")) - len(scaffold.encode("utf-8"))
+            - len(local_scaffold.encode("utf-8")) - 260 - MEMORY_NOTE_BYTES
+            - DELIVERY_NOTE_BYTES - 1)
+    # 暫存區那一格**先扣**(與 MEMORY_NOTE 同列),所以主檔與節錄少 600 B,總量不變;
+    # 預算本來就不夠的時候這一格跟著縮,縮到 0 也還是會印出小標與「砍過」那一句。
+    inbox_room = min(LOCAL_INBOX_BYTES, max(base // 3, 0)) if inboxes else 0
+    room = max(base - inbox_room, 0)
     cut = []
     # 預算順序 = 重要性順序:角色卡(你是誰)> 共用規矩(你會被擋在哪)>
-    # 模型記憶(你自己踩過什麼)。
-    card_text, card_cut = clip(card, int(room * 0.35), "`%s`" % card_rel)
+    # 模型記憶(你自己踩過什麼)。角色卡那 35% 在有專案主檔時拆成正本 20% / 專案 15%。
+    card_share = 0.20 if local_card else 0.35
+    card_text, card_cut = clip(card, int(room * card_share), "`%s`" % card_rel)
     if card_cut:
         cut.append(card_rel)
+    local_card_text, local_card_cut = (
+        clip(local_card, int(room * 0.15), "`%s`" % local_card_rel)
+        if local_card else ("", False))
+    if local_card_cut:
+        cut.append(local_card_rel)
 
     # 節的預算**逐節分,而且照名單的順序先給滿** —— 一整包分的話,第一節(最長的
     # 那一節)會把額度吃光,後面九節連標題都不會出現,讀的人因此不知道還有那九條規矩。
@@ -294,10 +411,34 @@ def pack(root, role, model, max_bytes, override=""):
     if rules_cut:
         cut.append("%s 的節錄" % rel)
 
-    mem_text, mem_cut = (clip(memory, max(room - int(room * 0.35) - used, 0),
-                              "`%s`" % model_rel) if memory else ("", False))
+    # 模型記憶:**A 自己照舊拿「角色卡與節錄用剩的」**;疊了專案層的時候剩不下來 ——
+    # 那 10 個節標題加上 10 句「全文在哪」本身就吃掉一半的額度,於是 20 B 的專案補充
+    # 會被一句比它還長的「截斷」取代。所以兩層的時候給固定比例,正本 12% / 專案 8%。
+    if local:
+        mem_budget = int(room * (0.12 if local_memory else 0.20))
+        local_mem_budget = int(room * 0.08)
+    else:
+        mem_budget = max(room - int(room * card_share) - used, 0)
+        local_mem_budget = 0
+    mem_text, mem_cut = (clip(memory, mem_budget, "`%s`" % model_rel)
+                         if memory else ("", False))
     if mem_cut:
         cut.append(model_rel)
+    local_mem_text, local_mem_cut = (
+        clip(local_memory, local_mem_budget, "`%s`" % local_model_rel)
+        if local_memory else ("", False))
+    if local_mem_cut:
+        cut.append(local_model_rel)
+
+    # 暫存區:兩格平分那 600 B。砍了的要進「砍過」名單 —— 這一格常常正好排在最後,
+    # 而**默默消失的一格與從來沒有過的一格長得一樣**。
+    each = inbox_room // len(inboxes) if inboxes else 0
+    inbox_texts = []
+    for one, text in inboxes:
+        kept, was_cut = tail(text, each, "`%s`" % one)
+        if was_cut:
+            cut.append(one)
+        inbox_texts.append((one, kept))
 
     out = list(head)
     if cut:
@@ -305,18 +446,31 @@ def pack(root, role, model, max_bytes, override=""):
         # 而一份砍過卻沒說砍過的規則包,與完整的那一份長得一樣。
         out += ["> 這一份為了守住 %d bytes 砍過:%s —— 砍掉的部分去讀原檔。"
                 % (max_bytes, "、".join(cut)), ""]
-    out += ["## 角色卡(節錄)", card_text or "(找不到 %s)" % card_rel, "",
-            "## 共用規矩節錄", rules_text or "(一節都沒抽到)", ""]
-    if memory:
-        out += ["## 你這個模型的記憶(節錄)", mem_text, ""]
+    out += ["## 角色卡(節錄)", card_text or "(找不到 %s)" % card_rel, ""]
+    if local_card_text:
+        out += [local_heading(local_card_rel, False), local_card_text, ""]
+    for one, kept in inbox_texts:
+        if one.startswith(local_dir("role")):
+            out += [local_heading(one, True), kept, ""]
+    out += ["## 共用規矩節錄", rules_text or "(一節都沒抽到)", ""]
+    if memory or local_mem_text:
+        out += ["## 你這個模型的記憶(節錄)"]
+        out += [mem_text, ""] if memory else []
+        if local_mem_text:
+            out += [local_heading(local_model_rel, False), local_mem_text, ""]
+    for one, kept in inbox_texts:
+        if not one.startswith(local_dir("role")):
+            out += [local_heading(one, True), kept, ""]
     text = "\n".join(out)
     # 最後一道:**組出來的整份**再量一次。上面的分配是估的,而估錯的那一次要在這裡
     # 被擋住,不是在呼叫者那裡變成一份超過上限的派工文。
     # 記憶回寫段與結構化交付段在這一刀**之外**:先量給它們,砍的是前面那幾份 ——
     # 它們是固定文字,砍到一半的「只在三種時刻寫」會變成「隨時可以寫」,砍到一半的
     # 「照實留空不要編」會變成「留空」。
+    # 這一刀的指路**列出砍過的那幾份**:預算緊到連上面那句「砍過」都留不住時,這個
+    # 記號是最後一個還說得出「哪一格不見了」的地方(D-021 的暫存區正好排在最後)。
     text, _ = clip(text, max_bytes - MEMORY_NOTE_BYTES - DELIVERY_NOTE_BYTES - 4,
-                   "`%s` 與上面列的那幾份" % rel)
+                   "、".join(cut) if cut else "`%s` 與上面列的那幾份" % rel)
     # 記憶回寫**留在最後一行**:它是收工前最後一個動作,而讀的人從尾巴往回讀。
     return (text.rstrip("\n") + "\n\n" + DELIVERY_NOTE + "\n\n" + MEMORY_NOTE)
 
@@ -353,8 +507,9 @@ def cmd_roles(args):
     for role in sorted(WANTED):
         card, wanted, one_line = WANTED[role]
         sys.stdout.write("  %-9s %s\n" % (role, one_line))
-        sys.stdout.write("            角色卡 memory/role/%s;節 %s\n"
-                         % (card, "、".join("§" + x for x in wanted)))
+        sys.stdout.write("            角色卡 %s;節 %s\n"
+                         % (os.path.join(roles_dir(root), card),
+                            "、".join("§" + x for x in wanted)))
     return 0
 
 
