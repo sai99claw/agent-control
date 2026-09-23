@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """驗證產物工具:同一份案例,在乾淨主線該紅、在 candidate 該綠 — D-014。
 
+    scripts/verify-case.py red 7 --candidate <$W/work>     # 只驗紅(驗證者交件,stage=red)
+    scripts/verify-case.py lint verify/nav/test_ticket_7.py --ticket 7   # 案例格式 F1–F6
     scripts/verify-case.py check 7            # 驗紅 + 驗綠,證據寫進票的 verify.baseline
     scripts/verify-case.py check 7 --candidate t7          # candidate 是分支名
     scripts/verify-case.py check 7 --ref <base_sha> --candidate <merge sha>   # 落地後補量
@@ -21,6 +23,33 @@
 兩者都讓 unittest 回非零,所以這裡把它們分開數,import 失敗一律明列,並且讓 `ok` 是
 False:要嘛把案例寫成不依賴新符號,要嘛在票裡寫明為什麼這條驗收不適用 baseline 紅。
 
+## 紅的四種形狀(D-020)
+`red` 與 `check` 共用同一張分類表(`docs/DESIGN-VERIFY-CASES.md` §三)。**看起來紅、
+其實是還沒接上**的紅有三種,而它們與「驗到了」一樣讓 unittest 回非零:
+
+| traceback 最後一個 frame 與例外型別 | 算不算 | 印什麼 |
+|---|---|---|
+| `AssertionError`(含 `self.fail`),frame 在 `verify.files` 之一 | **算** | `紅 <案例>: <第一行>`,並寫進 `baseline.red_lines` |
+| `ImportError` / `ModuleNotFoundError` / `_FailedTest` | 不算 | `import 失敗(不算紅)` |
+| 其他例外(`AttributeError` / `NameError` / `FileNotFoundError` / `TypeError` …),frame 在案例檔 | 不算 | `紅在缺符號(不算紅):改成先 assert 它存在` |
+| frame 不在案例檔(產品碼或既有測試炸了) | 不算 | `紅在別處(不算紅)` |
+
+`skip` 另外數,兩邊都不歸。**三類不算的紅任一出現就 rc=1 而且不寫票** —— 同 #22
+「量不到不動票」:「驗紅沒過」與「這一趟還沒接上」在票面上長得一樣,而下一步差很多。
+
+## 為什麼綠不是驗證者的事(D-020)
+驗證者在時間上拿不到實作者的 patch,於是「證明案例做得到綠」只剩一條路:自己搭一份
+拋棄式參考實作 —— 那是 #23 那 340K 的來源。所以同一格 `verify.baseline` 分兩段升級:
+`red`(驗證者,`stage="red"`)只證乾淨基底該紅;`check`(閘門,`stage="check"`)在
+實作者的 patch 進來時才證候選該綠。`ticket.py close` 只認 `stage=="check"`。
+
+## lint 的六條(F1–F6)
+`docs/DESIGN-VERIFY-CASES.md` §四那張表的可執行副本:F1 模組 docstring 的四段、
+F2 `TAGS` 字面且登記過、F3 每個 `test_` 的 docstring 首行是驗收編號(**印出來不擋**)、
+F4 禁字(`board/config.json` 的 `verify_lint.forbid`,預設 kill 家族)、F5 拋棄式目錄
+綁 `addCleanup`、F6 模組頂層不 import 票面的新符號。F3 之外任一條命中 rc=1 並**指名
+行號** —— 一句「格式不合」要人自己去找是哪一行,那一份退件與沒有退件一樣貴。
+
 ## 為什麼登記走 `verify/TAGS.d/<票號>.md`
 所有票都往 `verify/TAGS.md` 的尾巴附加 = 每張票都要等前一張落地(D-012 認過 TAGS 是
 常見衝突點)。一票一個片段檔就不會撞;`tags-merge` 把它們折進 TAGS.md,序列化的只剩
@@ -28,6 +57,7 @@ False:要嘛把案例寫成不依賴新符號,要嘛在票裡寫明為什麼這�
 """
 
 import argparse
+import ast
 import difflib
 import json
 import os
@@ -42,6 +72,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import event    # noqa: E402
 import status   # noqa: E402
 import ticket as ticketlib  # noqa: E402
+import verify as verifylib  # noqa: E402
 
 TAGS_REL = os.path.join("verify", "TAGS.md")
 TAGS_DIR_REL = os.path.join("verify", "TAGS.d")
@@ -50,6 +81,27 @@ RAN = re.compile(r"^Ran (\d+) test")
 SKIPPED = re.compile(r"skipped=(\d+)")
 IMPORT_MARKS = ("ImportError", "ModuleNotFoundError", "_FailedTest",
                 "cannot import name", "No module named")
+# 「紅在缺符號」那一類最常見的四個名字。**分類不靠這份名單**:frame 在案例檔而例外
+# 不是 `AssertionError` 就一律算這一類 —— 名單漏一個型別的那一刻,那條紅會被算成
+# 「驗到了」,而這張表擋的就是那件事。名單只進訊息,讓人看得出在說哪一族。
+MISSING_SYMBOL_EXCS = ("AttributeError", "NameError", "FileNotFoundError", "TypeError")
+# traceback 最後一個 frame 之後那一行 `SomeError: 訊息`:行首不縮排、名字後面直接是
+# 冒號或行尾。`Traceback (most recent call last):` 與 `During handling …` 進不來
+# (名字後面不是冒號),`assertEqual` 的 diff 也進不來(以 `- ` / `+ ` 開頭)。
+EXC_LINE = re.compile(r"^([A-Za-z_][A-Za-z0-9_.]*)(?::\s?(.*))?$")
+# lint F1:模組 docstring 固定這四段(`docs/DESIGN-VERIFY-CASES.md` §四)。
+DOC_SECTIONS = ("## 驗收表", "## 介面字串", "## 怎麼做假", "## 不做")
+# lint F3:`A3`、`D1-2`、`13` 都算。**不加 `\b`**:docstring 首行是「A1 讀端…」這種
+# 中文,而 CJK 在 Python 的 `\w` 裡面 —— 加了 `\b` 之後「A1讀端」(少一個空白)會被
+# 報成沒編號。設計文件 §四寫的是 `\b`,票面沒有;這裡照票面,理由寫在這一行。
+CASE_NUMBER = re.compile(r"^[A-Z]{0,2}[0-9]+(-[0-9]+)?")
+# lint F4:禁字的預設是 kill 家族。埠與專案特有的字走 `board/config.json` 的
+# `verify_lint.forbid`(T 自備五個埠)—— 專案特有的東西不寫進這一份(§9)。
+DEFAULT_FORBID = (r"os\.kill", r"killpg", r"pkill", r"kill -")
+# lint F5:拋棄式目錄只有這兩種做法。
+TEMP_CALLS = ("mkdtemp", "TemporaryDirectory")
+# lint F6:票面 `verify_strings` 裡的 `def <name>(` 就是這張票才會有的符號。
+DEF_NAME = re.compile(r"def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 TIMEOUT = 900
 
 
@@ -66,6 +118,95 @@ def module_of(rel):
     return rel[:-3].replace(os.sep, ".").replace("/", ".")
 
 
+def red_shape(row):
+    """一筆紅 → `(例外型別, 紅訊息的第一行)`。
+
+    型別讀的是 traceback **最後一個 frame 之後**那一行:鏈起來的例外
+    (`During handling of the above exception …`)有好幾行長得像,而算數的是最後被
+    丟出來的那一個。認不出型別時第一行退回「最後一行非空白」—— 空字串會讓
+    `red_lines` 只剩案例名,而主線覆核時要看的就是那句話。
+    """
+    body = (row.get("excerpt") or "").splitlines()
+    last_frame = -1
+    for index, line in enumerate(body):
+        if status.FILE_LINE.match(line):
+            last_frame = index
+    for line in body[last_frame + 1:]:
+        if not line.strip():
+            continue
+        hit = EXC_LINE.match(line)
+        if hit:
+            return hit.group(1).rsplit(".", 1)[-1], line.strip()
+    tail = [line for line in body if line.strip()]
+    return "", tail[-1].strip() if tail else ""
+
+
+def frame_in(where, rels):
+    """traceback 裡的檔路徑是絕對的(副本在 tempdir 裡),票面的是 repo 相對路徑 ——
+    直接比會**一條都對不上**,而「一條都在別處」與「一條都沒紅」的下一步不一樣。"""
+    got = str(where or "").replace(os.sep, "/")
+    for rel in rels:
+        want = str(rel).replace(os.sep, "/")
+        if got == want or got.endswith("/" + want):
+            return True
+    return False
+
+
+def shapes(rows, rels):
+    """一份紅榜 → 四種形狀。**不准揉成一句「N 條紅」**:揉起來的那一刻,「驗到了」與
+    「還沒接上」長得一樣(`docs/DESIGN-VERIFY-CASES.md` §三)。"""
+    imports = [row for row in rows
+               if any(mark in (row["case"] + row["excerpt"]) for mark in IMPORT_MARKS)]
+    out = {"red": [], "red_lines": [], "import_failures": [], "missing_symbol": [],
+           "elsewhere": []}
+    for row in rows:
+        if row in imports:
+            out["import_failures"].append(
+                "%s: %s" % (row["case"], row["excerpt"].splitlines()[-1]
+                            if row["excerpt"] else ""))
+            continue
+        exc, first = red_shape(row)
+        label = "%s: %s" % (row["case"], first)
+        if not frame_in(row.get("file"), rels):
+            out["elsewhere"].append(label)
+        elif row["kind"] == "FAIL" or exc.endswith("AssertionError"):
+            # unittest 只把 `failureException`(= `AssertionError`,`self.fail` 也是它)
+            # 報成 `FAIL:`,其他例外一律 `ERROR:` —— 所以這一格問的就是票面那一句
+            # 「例外是 AssertionError」,而不是一份型別名單。
+            out["red"].append(row["case"])
+            out["red_lines"].append(label)
+        else:
+            out["missing_symbol"].append(label)
+    return out
+
+
+def print_shapes(run, prefix="    "):
+    for line in run["red_lines"]:
+        sys.stdout.write("%s紅 %s\n" % (prefix, line))
+    for line in run["import_failures"]:
+        sys.stdout.write("%simport 失敗(不算紅) %s\n" % (prefix, line))
+    for line in run["missing_symbol"]:
+        sys.stdout.write("%s紅在缺符號(不算紅):改成先 assert 它存在 —— %s\n"
+                         % (prefix, line))
+    for line in run["elsewhere"]:
+        sys.stdout.write("%s紅在別處(不算紅) %s\n" % (prefix, line))
+
+
+def not_counted(run, where):
+    """三類不算的紅,一類一句。**列得出來才擋得住** —— 一句「驗紅沒過」給不出下一步。"""
+    out = []
+    if run["import_failures"]:
+        out.append("%s上有 %d 個 import 失敗 —— 那是還沒接上,不是驗到了"
+                   % (where, len(run["import_failures"])))
+    if run["missing_symbol"]:
+        out.append("%s上有 %d 條紅在缺符號(%s 那一族)—— 改成先 assert 它存在"
+                   % (where, len(run["missing_symbol"]), "/".join(MISSING_SYMBOL_EXCS)))
+    if run["elsewhere"]:
+        out.append("%s上有 %d 條紅在別處(產品碼或既有測試炸了,不是這幾條案例在說話)"
+                   % (where, len(run["elsewhere"])))
+    return out
+
+
 def run_cases(where, rels, log_path):
     """在 `where` 這份副本裡跑這幾個案例檔,回傳一份可以比對的結果。
 
@@ -77,10 +218,7 @@ def run_cases(where, rels, log_path):
     text = (done.stdout or "") + (done.stderr or "")
     with open(log_path, "w", encoding="utf-8") as handle:
         handle.write(text)
-    rows = status.parse_failures(log_path)
-    imports = [row for row in rows
-               if any(mark in (row["case"] + row["excerpt"]) for mark in IMPORT_MARKS)]
-    red = [row for row in rows if row not in imports]
+    out = shapes(status.parse_failures(log_path), rels)
     count, skipped = 0, 0
     for line in text.splitlines():
         hit = RAN.match(line)
@@ -89,12 +227,9 @@ def run_cases(where, rels, log_path):
         hit = SKIPPED.search(line)
         if hit:
             skipped = int(hit.group(1))
-    return {"rc": done.returncode, "cases": count, "skipped": skipped,
-            "red": [row["case"] for row in red],
-            "import_failures": ["%s: %s" % (row["case"], row["excerpt"].splitlines()[-1]
-                                            if row["excerpt"] else "")
-                                for row in imports],
-            "log": log_path}
+    out.update({"rc": done.returncode, "cases": count, "skipped": skipped,
+                "log": log_path})
+    return out
 
 
 def clean_copy(root, ref, where):
@@ -159,7 +294,7 @@ def resolve_tree(root, spec, where, label):
     return where, sha, ""
 
 
-def unmeasured(ident, why, ref):
+def unmeasured(ident, why, ref, verb="check"):
     """**量不到就不要在票上留一個長得像判決的紀錄。**
 
     #19 落地之後 `check` 在主線上量不到紅,把 `ok: false` 蓋回票的 `verify.baseline`,
@@ -168,75 +303,181 @@ def unmeasured(ident, why, ref):
     下一步該敲什麼。
     """
     sys.stderr.write("verify-case: #%s 量不到基準,票沒有動 —— %s\n" % (ident, why))
-    sys.stderr.write("  下一步:scripts/verify-case.py check %s --ref <票的 base_sha> "
+    sys.stderr.write("  下一步:scripts/verify-case.py %s %s --ref <票的 base_sha> "
                      "--candidate <分支名 / sha / worktree 路徑>"
-                     "(這一趟用的 ref 是 %s)\n" % (ident, ref))
+                     "(這一趟用的 ref 是 %s)\n" % (verb, ident, ref))
     return 2
 
 
-def cmd_check(args):
-    root = event.repo_root()
+def plan_of(ident):
+    """票的 `verify` 那一格 + 案例檔清單;`(data, plan, rels, rc)`,rc 非 None 就回它。"""
     try:
-        data = ticketlib.load(args.ticket)
+        data = ticketlib.load(ident)
     except (OSError, ValueError) as exc:
-        sys.stderr.write("verify-case: 讀不到票 #%s —— %s\n" % (args.ticket, exc))
-        return 2
+        sys.stderr.write("verify-case: 讀不到票 #%s —— %s\n" % (ident, exc))
+        return None, {}, [], 2
     plan = data.get("verify") if isinstance(data.get("verify"), dict) else {}
     rels = list(plan.get("files") or [])
     if not rels:
         sys.stderr.write("verify-case: 票 #%s 的 verify.files 是空的 —— "
-                         "驗證者還沒交案例,沒有東西可以驗紅\n" % args.ticket)
-        return 3
-    # 預設的 ref 是**票的 base_sha**:對主線量,票一落地就量不到紅了(#19)。
-    ref = args.ref or data.get("base_sha") or ticketlib.main_branch()
-    where = args.out_dir or tempfile.mkdtemp(prefix="verify-case-")
-    logs = os.path.join(where, "logs")
-    os.makedirs(logs, exist_ok=True)
+                         "驗證者還沒交案例,沒有東西可以驗紅\n" % ident)
+        return data, plan, rels, 3
+    return data, plan, rels, None
 
+
+def clean_base(args, rels, ref, where, verb):
+    """`red` 與 `check` 共用的前置:解 candidate、解 ref、把案例疊到乾淨基底上。
+
+    回傳 `(candidate, candidate sha, base 樹, base sha, rc)`;rc 非 None 就是**這一趟
+    量不到**,呼叫者直接回它 —— 量不到的路徑一律不寫票(`unmeasured`)。
+    """
+    root = event.repo_root()
     candidate, cand_sha, why = resolve_tree(
         root, args.candidate, os.path.join(where, "candidate"), "candidate")
     if why:
-        return unmeasured(args.ticket, why, ref)
+        return None, "", None, "", unmeasured(args.ticket, why, ref, verb)
     base_dir, base_sha, why = resolve_tree(
         root, ref, os.path.join(where, "base"), "ref")
     if why:
-        return unmeasured(args.ticket, why, ref)
+        return None, "", None, "", unmeasured(args.ticket, why, ref, verb)
     # ref 的歷史裡已經有 candidate = 那棵樹上**本來就有這份實作**,再怎麼跑也紅不
     # 起來。舊版把那一趟的「一條都沒紅」當判決蓋進票,`ticket.py close` 從此擋著那
     # 張票(#19)。兩個 sha 一樣時不算 —— 那是「candidate 是同一棵樹上未 commit 的
     # 改動」,驗證者交件時的正常形狀。
     if cand_sha and base_sha and cand_sha != base_sha and git(
             ["merge-base", "--is-ancestor", cand_sha, base_sha], root).returncode == 0:
-        return unmeasured(args.ticket,
-                          "ref(%s / %s)的歷史裡已經有 candidate(%s / %s)——"
-                          "那棵樹上本來就有這份實作,量不出紅"
-                          % (ref, base_sha[:12], args.candidate or root, cand_sha[:12]), ref)
+        return None, "", None, "", unmeasured(
+            args.ticket,
+            "ref(%s / %s)的歷史裡已經有 candidate(%s / %s)——"
+            "那棵樹上本來就有這份實作,量不出紅"
+            % (ref, base_sha[:12], args.candidate or root, cand_sha[:12]), ref, verb)
     # ref 那棵樹上本來就不會有這幾個案例檔(案例是這張票才加的),所以一律把
     # candidate 的那一份疊上去 —— **兩邊跑的一定要是同一份檔**。
     missing = overlay(rels, candidate, base_dir)
     if missing:
-        return unmeasured(args.ticket,
-                          "candidate(%s)裡找不到這幾個案例檔:%s"
-                          % (args.candidate or root, ", ".join(missing)), ref)
+        return None, "", None, "", unmeasured(
+            args.ticket, "candidate(%s)裡找不到這幾個案例檔:%s"
+            % (args.candidate or root, ", ".join(missing)), ref, verb)
+    return candidate, cand_sha, base_dir, base_sha, None
+
+
+def write_baseline(ident, plan, record, to):
+    """證據寫回票的 `verify.baseline`(同一格,`stage` 是它的升級)。"""
+    plan = dict(plan)
+    plan["baseline"] = record
+    try:
+        with ticketlib.Lock():
+            fresh = ticketlib.load(ident)
+            fresh["verify"] = plan
+            fresh["state_version"] = int(fresh.get("state_version") or 0) + 1
+            ticketlib.save(fresh)
+    except (OSError, ValueError, RuntimeError) as exc:
+        sys.stderr.write("verify-case: 證據寫不回票 #%s —— %s\n" % (ident, exc))
+        return 2
+    event.emit("ticket.state", ticket=ident, field="verify.baseline",
+               **{"to": to, "state_version": fresh["state_version"]})
+    return 0
+
+
+def cmd_red(args):
+    """**只驗紅**:乾淨基底上套案例、只跑一次,四種形狀分類(D-020 C2/C3)。
+
+    綠不在這裡量 —— 驗證者在時間上拿不到實作者的 patch,要它證綠就等於要它自己搭一份
+    參考實作(#23 那 340K)。過了寫 `stage="red"`;閘門之後用 `check` 把同一格升成
+    `check`,`ticket.py close` 只認那一趟。
+    """
+    root = event.repo_root()
+    data, plan, rels, rc = plan_of(args.ticket)
+    if rc is not None:
+        return rc
+    ref = args.ref or data.get("base_sha") or ticketlib.main_branch()
+    where = args.out_dir or tempfile.mkdtemp(prefix="verify-case-red-")
+    logs = os.path.join(where, "logs")
+    os.makedirs(logs, exist_ok=True)
+    _, cand_sha, base_dir, base_sha, rc = clean_base(args, rels, ref, where, "red")
+    if rc is not None:
+        return rc
+
+    run = run_cases(base_dir, rels, os.path.join(logs, "baseline.log"))
+    sys.stdout.write("verify-case: #%s 案例 %d 個(乾淨基底 %s / %s)\n"
+                     % (args.ticket, run["cases"], ref, base_sha[:12] or "無 sha"))
+    print_shapes(run)
+    sys.stdout.write("  算數的紅 %d、skip %d、不算的紅 %d -> %s\n"
+                     % (len(run["red"]), run["skipped"],
+                        len(run["import_failures"]) + len(run["missing_symbol"])
+                        + len(run["elsewhere"]), run["log"]))
+
+    why = not_counted(run, "乾淨基底")
+    if not run["cases"]:
+        why.append("乾淨基底上一個案例都沒跑到 —— 零個案例與「都過了」長得一樣")
+    elif not run["red"]:
+        why.append("乾淨基底上一條算數的紅都沒有 —— 一個永遠綠的案例與一個真的在驗的"
+                   "案例長得一樣")
+    if why:
+        # **量不到的路徑不寫票**(#22):一句蓋進票的 `ok:false` 會讓 `close` 從此
+        # 擋著那張票,而那一格說的其實是「這一趟還沒接上」。
+        sys.stdout.write("verify-case: #%s 驗紅**不成立**(票沒有動):%s\n"
+                         % (args.ticket, ";".join(why)))
+        return 1
+    record = {
+        "stage": "red",
+        "ok": True,
+        "why": "",
+        "at": now(),
+        "files": rels,
+        "base_ref": ref,
+        "base_sha": base_sha,
+        "candidate": args.candidate or root,
+        "candidate_sha": cand_sha,
+        "baseline": run,
+        "candidate_run": None,
+    }
+    rc = write_baseline(args.ticket, plan, record, "red")
+    if rc:
+        return rc
+    sys.stdout.write("verify-case: #%s 驗紅成立(stage=red 寫進票的 verify.baseline;"
+                     "綠由閘門的 check 量)\n" % args.ticket)
+    return 0
+
+
+def cmd_check(args):
+    root = event.repo_root()
+    data, plan, rels, rc = plan_of(args.ticket)
+    if rc is not None:
+        return rc
+    # 預設的 ref 是**票的 base_sha**:對主線量,票一落地就量不到紅了(#19)。
+    ref = args.ref or data.get("base_sha") or ticketlib.main_branch()
+    where = args.out_dir or tempfile.mkdtemp(prefix="verify-case-")
+    logs = os.path.join(where, "logs")
+    os.makedirs(logs, exist_ok=True)
+    candidate, cand_sha, base_dir, base_sha, rc = clean_base(
+        args, rels, ref, where, "check")
+    if rc is not None:
+        return rc
 
     baseline = run_cases(base_dir, rels, os.path.join(logs, "baseline.log"))
     cand = run_cases(candidate, rels, os.path.join(logs, "candidate.log"))
 
-    why = []
-    if baseline["import_failures"]:
-        why.append("乾淨主線上有 %d 個 import 失敗 —— 那是還沒接上,不是驗到了"
-                   % len(baseline["import_failures"]))
+    why = not_counted(baseline, "乾淨主線")
     if not baseline["red"]:
         why.append("乾淨主線上一條都沒紅 —— 一個永遠綠的案例與一個真的在驗的案例長得一樣")
-    if cand["red"] or cand["import_failures"]:
-        why.append("candidate 上還有 %d 條紅 / %d 個 import 失敗"
-                   % (len(cand["red"]), len(cand["import_failures"])))
+    # candidate 這一邊**四種形狀都算紅**:一條 `AttributeError` 說的是實作還沒接上,
+    # 而「不算紅」那張表問的是「基底紅得對不對」,不是「候選綠不綠」。
+    cand_bad = (len(cand["red"]) + len(cand["import_failures"])
+                + len(cand["missing_symbol"]) + len(cand["elsewhere"]))
+    if cand_bad:
+        why.append("candidate 上還有 %d 條紅(其中 import 失敗 %d、缺符號 %d、別處 %d)"
+                   % (cand_bad, len(cand["import_failures"]),
+                      len(cand["missing_symbol"]), len(cand["elsewhere"])))
     if baseline["cases"] != cand["cases"]:
         why.append("兩邊跑到的案例數不一樣(%d vs %d)—— 比的不是同一組"
                    % (baseline["cases"], cand["cases"]))
     ok = not why
 
     record = {
+        # 閘門量的是同一格的**升級**,不是第二格:`red`(驗證者)→ `check`(閘門),
+        # 而 `ticket.py close` 只認 `check`(D-020 C5)。兩格會長成兩種形狀(D-018)。
+        "stage": "check",
         "ok": ok,
         "why": ";".join(why),
         "at": now(),
@@ -248,41 +489,185 @@ def cmd_check(args):
         "baseline": baseline,
         "candidate_run": cand,
     }
-    plan = dict(plan)
-    plan["baseline"] = record
-    try:
-        with ticketlib.Lock():
-            fresh = ticketlib.load(args.ticket)
-            fresh["verify"] = plan
-            fresh["state_version"] = int(fresh.get("state_version") or 0) + 1
-            ticketlib.save(fresh)
-    except (OSError, ValueError, RuntimeError) as exc:
-        sys.stderr.write("verify-case: 證據寫不回票 #%s —— %s\n" % (args.ticket, exc))
-        return 2
-    event.emit("ticket.state", ticket=args.ticket, field="verify.baseline",
-               **{"to": "ok" if ok else "紅不起來",
-                  "state_version": fresh["state_version"]})
+    rc = write_baseline(args.ticket, plan, record, "ok" if ok else "紅不起來")
+    if rc:
+        return rc
 
     sys.stdout.write("verify-case: #%s 案例 %d 個\n" % (args.ticket, baseline["cases"]))
     sys.stdout.write("  乾淨主線 %s(%s):紅 %d、skip %d、import 失敗 %d -> %s\n"
                      % (ref, base_sha[:12], len(baseline["red"]),
                         baseline["skipped"], len(baseline["import_failures"]),
                         baseline["log"]))
-    for name in baseline["red"]:
-        sys.stdout.write("    紅 %s\n" % name)
-    for name in baseline["import_failures"]:
-        sys.stdout.write("    import 失敗(不算紅) %s\n" % name)
+    print_shapes(baseline)
     sys.stdout.write("  candidate %s(%s):紅 %d、skip %d -> %s\n"
                      % (args.candidate or root, cand_sha[:12], len(cand["red"]),
                         cand["skipped"], cand["log"]))
-    for name in cand["red"]:
-        sys.stdout.write("    紅 %s\n" % name)
+    print_shapes(cand)
     if ok:
         sys.stdout.write("verify-case: #%s baseline 成立(證據寫進票的 verify.baseline)\n"
                          % args.ticket)
         return 0
     sys.stdout.write("verify-case: #%s baseline **不成立**:%s\n" % (args.ticket, record["why"]))
     return 1
+
+
+def forbidden_patterns(root):
+    """F4 的禁字:`board/config.json` 的 `verify_lint.forbid`,沒設就是 kill 家族。
+
+    每一條當**正則**編(埠那一族要寫成 `1890[3-5]` 才一條頂五個);編不起來的退回當
+    字面字串 —— 一條編不起來就靜靜不生效的規則,與沒有那條規則長得一樣。
+    """
+    raw = (event.config(root).get("verify_lint") or {}).get("forbid")
+    out = []
+    for item in (raw if isinstance(raw, list) and raw else list(DEFAULT_FORBID)):
+        text = str(item)
+        try:
+            out.append((text, re.compile(text)))
+        except re.error:
+            out.append((text, re.compile(re.escape(text))))
+    return out
+
+
+def new_symbols(ident):
+    """F6:票面 `verify_strings` 裡的 `def <name>(` = 這張票才會有的符號名字。"""
+    data = ticketlib.load(ident)
+    out = set()
+    for row in ticketlib.normalise_verify(data.get("verify_strings") or []):
+        text = row.get("contains") if isinstance(row, dict) else row
+        for hit in DEF_NAME.finditer(str(text or "")):
+            out.add(hit.group(1))
+    return out
+
+
+def tags_node(tree):
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+                getattr(target, "id", "") == "TAGS" for target in node.targets):
+            return node
+    return None
+
+
+def lint_one(path, rel, text, tree, forbid, known, symbols):
+    """一個案例檔的 F1–F6。回傳 `(擋的, 不擋的, 這一檔宣告的驗收編號)`。"""
+    bad, notes, numbers = [], [], []
+
+    def say(line_no, what):
+        bad.append("%s:%d %s" % (rel, line_no, what))
+
+    doc = ast.get_docstring(tree)
+    if not doc:
+        say(1, "F1 模組沒有 docstring —— 要有 %s" % "、".join(DOC_SECTIONS))
+    else:
+        for want in DOC_SECTIONS:
+            if want not in doc:
+                say(tree.body[0].lineno, "F1 模組 docstring 缺 %s" % want)
+
+    node = tags_node(tree)
+    if node is None:
+        say(1, "F2 沒有 TAGS(verify.py 只認字面 list)")
+    else:
+        try:
+            tags = verifylib.tags_of(path)
+        except (ValueError, AttributeError, TypeError, SyntaxError):
+            tags = None
+            say(node.lineno, "F2 TAGS 不是字面 list(verify.py 用 ast.literal_eval 讀)")
+        unknown = [tag for tag in (tags or []) if tag not in known]
+        if unknown:
+            say(node.lineno, "F2 標籤未登記 %s —— 一行 `- `<tag>` — 說明(#<票號>)` 寫進 "
+                             "verify/TAGS.d/<票號>.md" % unknown)
+
+    lines = text.splitlines()
+    for spot in ast.walk(tree):
+        if isinstance(spot, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+                and spot.name.startswith("test_"):
+            head = (ast.get_docstring(spot) or "").strip().splitlines()
+            hit = CASE_NUMBER.match(head[0] if head else "")
+            if hit:
+                numbers.append(hit.group(0))
+            else:
+                # **F3 不擋**:編號對不上票面是主線覆核要看的事,而一條沒編號的案例
+                # 仍然在驗東西 —— 擋下去只會讓人為了過 lint 編一個號碼。
+                notes.append("%s:%d F3 %s 的 docstring 首行不是驗收編號(不擋)"
+                             % (rel, spot.lineno, spot.name))
+        if isinstance(spot, ast.Call):
+            name = getattr(spot.func, "attr", "") or getattr(spot.func, "id", "")
+            if name in TEMP_CALLS:
+                end = getattr(spot, "end_lineno", None) or spot.lineno
+                window = "\n".join(lines[spot.lineno - 1:end + 1])
+                if "addCleanup" not in window:
+                    say(spot.lineno, "F5 %s() 同一語句或下一行沒有 addCleanup —— "
+                                     "跑完不收的拋棄式目錄會留在磁碟上" % name)
+
+    for index, line in enumerate(lines, 1):
+        for raw, pattern in forbid:
+            if pattern.search(line):
+                say(index, "F4 禁字 %s(派工文鐵律:不碰受保護的埠、不殺不是自己起的"
+                           "行程)" % raw)
+
+    for spot in tree.body:
+        names = []
+        if isinstance(spot, ast.Import):
+            names = [alias.name.split(".")[-1] for alias in spot.names]
+        elif isinstance(spot, ast.ImportFrom):
+            names = [alias.name for alias in spot.names]
+        for name in names:
+            if name in symbols:
+                say(spot.lineno, "F6 模組頂層 import 了票面的新符號 %s —— 乾淨基底上那是"
+                                 "import 失敗(不算紅),改成 getattr 再先 assert 它存在"
+                                 % name)
+    return bad, notes, numbers
+
+
+def cmd_lint(args):
+    """案例格式的機器版(F1–F6)。**指名行號**:一句「格式不合」要人自己找是哪一行,
+    那一份退件與沒有退件一樣貴(D-020 C4)。"""
+    root = event.repo_root()
+    forbid = forbidden_patterns(root)
+    known = verifylib.registered_tags()
+    symbols = set()
+    if args.ticket:
+        try:
+            symbols = new_symbols(args.ticket)
+        except (OSError, ValueError) as exc:
+            sys.stderr.write("verify-case: 讀不到票 #%s —— %s\n" % (args.ticket, exc))
+            return 2
+    bad, notes, numbers = [], [], []
+    for spec in args.files:
+        path = spec if os.path.isabs(spec) else os.path.join(root, spec)
+        rel = os.path.relpath(path, root)
+        try:
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError as exc:
+            sys.stderr.write("verify-case lint: 讀不到 %s —— %s\n" % (spec, exc))
+            return 2
+        try:
+            tree = ast.parse(text, path)
+        except SyntaxError as exc:
+            bad.append("%s:%d 解不開 —— %s" % (rel, exc.lineno or 1, exc.msg))
+            continue
+        one_bad, one_notes, one_numbers = lint_one(
+            path, rel, text, tree, forbid, known, symbols)
+        bad.extend(one_bad)
+        notes.extend(one_notes)
+        numbers.extend(one_numbers)
+    for line in bad + notes:
+        sys.stdout.write("verify-case lint: %s\n" % line)
+    sys.stdout.write("verify-case lint: %d 個檔,驗收編號 %s\n"
+                     % (len(args.files), " ".join(numbers) or "(一條都沒宣告)"))
+    if args.ticket:
+        try:
+            count = len(ticketlib.load(args.ticket).get("acceptance") or [])
+        except (OSError, ValueError):
+            count = 0
+        sys.stdout.write("verify-case lint: 票 #%s 有 %d 條驗收,案例宣告了 %d 個編號"
+                         "(對不上不擋,主線覆核時看)\n"
+                         % (args.ticket, count, len(numbers)))
+    if bad:
+        sys.stdout.write("verify-case lint: **不過**(%d 條)\n" % len(bad))
+        return 1
+    sys.stdout.write("verify-case lint: 過\n")
+    return 0
 
 
 def cmd_extract(args):
@@ -382,6 +767,18 @@ def cmd_tags_merge(args):
 def main(argv):
     parser = argparse.ArgumentParser(prog="verify-case.py")
     subs = parser.add_subparsers(dest="verb")
+
+    red = subs.add_parser("red")
+    red.add_argument("ticket")
+    red.add_argument("--ref", default="")
+    red.add_argument("--candidate", default="")
+    red.add_argument("--out-dir", default="")
+    red.set_defaults(run=cmd_red)
+
+    lint = subs.add_parser("lint")
+    lint.add_argument("files", nargs="+")
+    lint.add_argument("--ticket", default="")
+    lint.set_defaults(run=cmd_lint)
 
     check = subs.add_parser("check")
     check.add_argument("ticket")

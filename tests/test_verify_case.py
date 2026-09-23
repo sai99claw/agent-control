@@ -8,6 +8,14 @@ Ran/OK,而**一份貼上來的輸出沒有辦法被機器比對** —— 票的 
 - 案例在兩邊都綠 → 不准算過(「一條都沒紅」)。
 - 乾淨主線上是 `import` 炸掉 → 不算紅,而且要**明列**(那是還沒接上,不是驗到了)。
 - 過了才寫進票的 `verify.baseline`,讓 `ticket.py close` 有東西可以問。
+
+2026-09-23(#26 / D-020):`red` 與 `lint` 兩個子指令,以及 `close` 只認 `stage=="check"`。
+釘的是**四種紅分不分得開**:看起來紅、其實是還沒接上的紅有三種(import 失敗、紅在缺
+符號、紅在別處),它們與「驗到了」一樣讓 unittest 回非零。揉成同一句「N 條紅」的那一刻,
+驗證者交的紅與一份還沒接上的案例長得一樣。
+
+`close` 那幾條本來該住 `tests/test_ticket.py`,#26 的 `allowed_write_paths` 沒有它 ——
+所以放在這一份的最後一個 class 裡(EVIDENCE 有記)。
 """
 
 import json
@@ -38,6 +46,90 @@ class Nothing(unittest.TestCase):
         self.assertTrue(True)
 """
 
+# 紅在案例檔自己、但例外不是 AssertionError:`dict` 沒有 `missing_key` 這個屬性。
+MISSING_SYMBOL = """import unittest
+TAGS = ["example"]
+
+
+class NeedsSymbol(unittest.TestCase):
+    def test_symbol(self):
+        where = {}
+        self.assertEqual(where.missing_key(), 2)
+"""
+
+# 紅在產品碼:最後一個 frame 是 src/boom.py,不是案例檔。
+RED_ELSEWHERE = """import unittest
+TAGS = ["example"]
+
+
+class Elsewhere(unittest.TestCase):
+    def test_product_blows_up(self):
+        import src.boom
+        src.boom.go()
+"""
+
+# 一條算數的紅 + 一條不算的紅同一檔:算數的那一條**蓋不過**不算的那一條。
+MIXED_RED = """import unittest
+TAGS = ["example"]
+
+
+class Mixed(unittest.TestCase):
+    def test_value(self):
+        with open("src/value.txt", encoding="utf-8") as handle:
+            self.assertEqual(handle.read().strip(), "2")
+
+    def test_symbol(self):
+        import src.thing
+        self.assertEqual(src.thing.size(), 2)
+"""
+
+# skip 與算數的紅同一檔:skip 要另外數,不歸進任何一邊。
+SKIP_AND_RED = """import unittest
+TAGS = ["example"]
+
+
+class Mixed(unittest.TestCase):
+    @unittest.skip("沙盒:這一條跳過")
+    def test_skipped(self):
+        self.fail("不該跑到這裡")
+
+    def test_value(self):
+        with open("src/value.txt", encoding="utf-8") as handle:
+            self.assertEqual(handle.read().strip(), "2")
+"""
+
+# lint 的基準:F1–F6 六條都過。每一條變異都從這一份改一個地方。
+GOOD_CASE = '''"""#1 一句話:這一組案例守住哪個行為。
+
+## 驗收表(期望值來源獨立於被測程式)
+A1 | unit | 起一顆拋棄式目錄 | 目錄在 | 票面驗收第 1 條
+
+## 介面字串
+REFUSAL = "擋下:"
+
+## 怎麼做假
+不上真埠、不起真服務、不殺行程。
+
+## 不做
+不改產品碼;不放寬票面驗收。
+"""
+import shutil
+import tempfile
+import unittest
+
+TAGS = ["example"]
+
+REFUSAL = "擋下:"
+
+
+class TheValue(unittest.TestCase):
+
+    def test_a1_a_throwaway_dir_is_bound_to_cleanup(self):
+        """A1 拋棄式目錄同一行綁 addCleanup。"""
+        where = tempfile.mkdtemp(prefix="t1-"); self.addCleanup(shutil.rmtree, where, True)
+        self.assertTrue(where)
+'''
+
 NEEDS_NEW_MODULE = """import unittest
 from src.newthing import size
 
@@ -50,7 +142,12 @@ class NeedsIt(unittest.TestCase):
 """
 
 
-class VerifyCase(Sandbox):
+class CaseSandbox(Sandbox):
+    """主線上的值是 1、`verify/nav/` 在、一張票指著一份案例。
+
+    **這個 class 自己沒有 test_**:子類別繼承過去的 test_ 會被 unittest 再跑一次,而
+    同一組斷言跑三遍的那幾秒沒有換到任何新的資訊。
+    """
 
     def tool(self, *args):
         return self.run_py("scripts/verify-case.py", *args)
@@ -66,6 +163,9 @@ class VerifyCase(Sandbox):
         self.write(os.path.join("verify", "nav", "test_ticket_1.py"), case)
         self.make_ticket(1, verify={"files": ["verify/nav/test_ticket_1.py"],
                                     "tags": ["example"], "run": "", "notes": ""})
+
+
+class VerifyCase(CaseSandbox):
 
     # ------------------------------------------------------------ 驗紅驗綠
 
@@ -289,6 +389,324 @@ class VerifyCase(Sandbox):
         done = self.tool("tags-merge")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("撞名", done.stderr)
+
+
+class RedIsTheOnlyThingTheVerifierMeasures(CaseSandbox):
+    """`red`:乾淨基底上跑一次,四種形狀分開數(#26 / D-020 §三)。
+
+    **綠不在這裡量**:驗證者在時間上拿不到實作者的 patch,要它證綠等於要它自己搭一份
+    參考實作 —— 那是 #23 那 340K 的來源。
+    """
+
+    def test_an_assertion_in_the_case_file_counts_and_lands_in_red_lines(self):
+        """**變異**:把 `shapes` 裡 `row["kind"] == "FAIL" or …` 換成 `False`
+        → 這一條紅(算數的紅變成 0,rc 從 0 變 1)。"""
+        self.a_ticket()
+        done = self.tool("red", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("紅 verify.nav.test_ticket_1.NavSize.test_value", done.stdout)
+        base = self.load_ticket("1")["verify"]["baseline"]
+        self.assertEqual(base["stage"], "red")
+        self.assertTrue(base["ok"], base["why"])
+        self.assertIsNone(base["candidate_run"], "red 不跑 candidate —— 綠不是驗證者的事")
+        self.assertEqual(base["files"], ["verify/nav/test_ticket_1.py"])
+        self.assertEqual(base["base_sha"], self.load_ticket("1")["base_sha"])
+        self.assertEqual(len(base["baseline"]["red_lines"]), 1)
+        self.assertIn("AssertionError", base["baseline"]["red_lines"][0],
+                      "red_lines 要留紅訊息的第一行,主線覆核時就是掃這一句")
+
+    def test_a_case_that_is_green_on_the_clean_base_is_not_a_baseline(self):
+        """🩸 一個永遠綠的案例與一個真的在驗的案例長得一樣。"""
+        self.a_ticket(ALWAYS_GREEN)
+        done = self.tool("red", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("一條算數的紅都沒有", done.stdout)
+        self.assertNotIn("baseline", self.load_ticket("1")["verify"], "不成立就不動票")
+
+    def test_an_import_failure_does_not_count_and_the_ticket_is_not_touched(self):
+        """🩸 乾淨基底上沒有那個新符號,案例 `import` 就會炸 —— 那是**還沒接上**。
+
+        **變異**:把 `IMPORT_MARKS` 那一段拿掉 → 這一條紅(它會被算成缺符號那一類)。
+        """
+        self.a_ticket(NEEDS_NEW_MODULE)
+        self.write("src/newthing.py", "def size():\n    return 2\n")
+        done = self.tool("red", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("import 失敗(不算紅)", done.stdout)
+        self.assertNotIn("baseline", self.load_ticket("1")["verify"])
+
+    def test_a_red_that_is_only_a_missing_symbol_does_not_count(self):
+        """🩸 `AttributeError` 也讓 unittest 回非零,而它說的是「這個名字還不存在」。
+
+        **變異**:把 `shapes` 的 `missing_symbol` 那一支改成走 `red` → 這一條紅。
+        """
+        self.a_ticket(MISSING_SYMBOL)
+        done = self.tool("red", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("紅在缺符號(不算紅):改成先 assert 它存在", done.stdout)
+        self.assertNotIn("baseline", self.load_ticket("1")["verify"])
+
+    def test_a_red_whose_last_frame_is_product_code_does_not_count(self):
+        """🩸 產品碼炸掉不是這幾條案例在說話 —— 而它與驗到了一樣是一條紅。
+
+        **變異**:把 `frame_in` 的 `endswith` 那一段改成永遠 True → 這一條紅。
+        """
+        self.write("src/boom.py", 'def go():\n    raise AssertionError("產品碼自己炸了")\n')
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "產品碼會炸的那一版")
+        self.a_ticket(RED_ELSEWHERE)
+        done = self.tool("red", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("紅在別處(不算紅)", done.stdout)
+        self.assertNotIn("baseline", self.load_ticket("1")["verify"])
+
+    def a_half_finished_product(self):
+        """`src/thing.py` 在,但裡面還沒有 `size()` —— 乾淨基底上那是 `AttributeError`
+        (不算紅),而候選補上 `size()` 之後同一條會綠。"""
+        self.write("src/thing.py", "# size() 還沒寫\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "src/thing.py 還沒有 size()")
+
+    def test_one_counted_red_does_not_cover_for_a_red_that_does_not_count(self):
+        """🩸 一條算數的紅**蓋不過**一條不算的紅 —— 三類不算的紅任一出現就不成立。
+
+        **變異**:把 `cmd_red` 的 `why = not_counted(run, "乾淨基底")` 換成 `why = []`
+        → 這一條紅。只問「有沒有算數的紅」的版本會放它過,而那份 baseline 裡有一條
+        說的是「還沒接上」。
+        """
+        self.a_half_finished_product()
+        self.a_ticket(MIXED_RED)
+        done = self.tool("red", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("紅 verify.nav.test_ticket_1.Mixed.test_value", done.stdout)
+        self.assertIn("紅在缺符號(不算紅)", done.stdout)
+        self.assertNotIn("baseline", self.load_ticket("1")["verify"])
+
+    def test_check_also_refuses_a_baseline_whose_red_is_half_not_connected(self):
+        """同一件事在 `check` 那一邊:基底上一條算數的紅 + 一條缺符號的紅,候選兩條都
+        綠 —— 舊的判準(只問 `baseline["red"]` 空不空)會把它算成過。
+
+        **變異**:把 `cmd_check` 的 `why = not_counted(baseline, "乾淨主線")` 換成
+        `why = []` → 這一條紅。
+        """
+        self.a_half_finished_product()
+        self.a_ticket(MIXED_RED)
+        self.write("src/value.txt", "2\n")
+        self.write("src/thing.py", "def size():\n    return 2\n")
+        done = self.tool("check", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("紅在缺符號", done.stdout)
+        base = self.load_ticket("1")["verify"]["baseline"]
+        self.assertFalse(base["ok"], base["why"])
+        self.assertEqual(base["candidate_run"]["red"], [], "候選那一邊是綠的")
+
+    def test_a_skip_is_counted_apart_from_both_kinds_of_red(self):
+        self.a_ticket(SKIP_AND_RED)
+        done = self.tool("red", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        run = self.load_ticket("1")["verify"]["baseline"]["baseline"]
+        self.assertEqual(run["cases"], 2)
+        self.assertEqual(run["skipped"], 1)
+        self.assertEqual(len(run["red"]), 1, "skip 不准算成紅")
+        self.assertEqual(run["missing_symbol"], [])
+        self.assertEqual(run["elsewhere"], [])
+
+    def test_a_ticket_without_verify_files_says_so(self):
+        self.make_ticket(1)
+        done = self.tool("red", "1")
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertIn("verify.files 是空的", done.stderr)
+
+    def test_a_base_that_cannot_be_measured_does_not_write_the_ticket(self):
+        """量不到的下一步是一句可以敲的指令,而且**要指名 red**(不是 check)。"""
+        self.a_ticket()
+        done = self.tool("red", "1", "--candidate", "沒有這個分支")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("量不到基準,票沒有動", done.stderr)
+        self.assertIn("verify-case.py red 1", done.stderr)
+        self.assertNotIn("baseline", self.load_ticket("1")["verify"])
+
+    def test_check_upgrades_the_same_slot_from_red_to_check(self):
+        """🩸 `stage` 是同一格的**升級**,不是第二格 —— 兩格會長成兩種形狀(D-018)。"""
+        self.a_ticket()
+        self.assertEqual(self.tool("red", "1").returncode, 0)
+        self.write("src/value.txt", "2\n")
+        done = self.tool("check", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        base = self.load_ticket("1")["verify"]["baseline"]
+        self.assertEqual(base["stage"], "check")
+        self.assertTrue(base["candidate_run"], "check 才量 candidate")
+
+    def test_a_candidate_red_that_is_only_a_missing_symbol_still_fails_check(self):
+        """🩸「不算紅」那張表問的是**基底紅得對不對**,不是候選綠不綠:候選上一條
+        `AttributeError` 說的是實作還沒接上。
+
+        **變異**:把 `cand_bad` 裡的 `missing_symbol` 那一項拿掉 → 這一條紅。
+        """
+        self.a_ticket(MISSING_SYMBOL)
+        done = self.tool("check", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("candidate 上還有", done.stdout)
+        self.assertFalse(self.load_ticket("1")["verify"]["baseline"]["ok"])
+
+
+class LintIsTheFormatRuleInMachineForm(CaseSandbox):
+    """`lint`:F1–F6(#26 / D-020 §四)。**指名行號** —— 一句「格式不合」要人自己去找
+    是哪一行,那一份退件與沒有退件一樣貴。"""
+
+    REL = "verify/nav/test_ticket_1.py"
+
+    def lint(self, case, *args):
+        self.write(os.path.join("verify", "nav", "test_ticket_1.py"), case)
+        return self.tool("lint", self.REL, *args)
+
+    def test_a_case_that_follows_the_template_passes_all_six(self):
+        done = self.lint(GOOD_CASE)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("lint: 過", done.stdout)
+        self.assertIn("A1", done.stdout, "宣告到的驗收編號要印出來給主線對照")
+
+    def test_f1_names_the_line_of_a_missing_docstring_section(self):
+        done = self.lint(GOOD_CASE.replace(
+            "## 不做\n不改產品碼;不放寬票面驗收。\n", ""))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("F1 模組 docstring 缺 ## 不做", done.stdout)
+        self.assertIn("%s:1" % self.REL, done.stdout, "要指名行")
+
+    def test_f2_an_unregistered_tag_is_named(self):
+        done = self.lint(GOOD_CASE.replace('TAGS = ["example"]', 'TAGS = ["nope"]'))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("F2 標籤未登記", done.stdout)
+
+    def test_f2_a_tags_that_is_not_a_literal_list_is_named(self):
+        """`verify.py` 用 `ast.literal_eval` 讀 TAGS —— 算出來的那一份它讀不到,而
+        「讀不到」與「沒宣告」在回歸選案例時長得一樣。"""
+        done = self.lint(GOOD_CASE.replace('TAGS = ["example"]',
+                                           'TAGS = list(("example",))'))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("F2 TAGS 不是字面 list", done.stdout)
+
+    def test_f3_a_method_without_an_acceptance_number_is_printed_but_does_not_block(self):
+        """🩸 F3 **不擋**:擋下去只會讓人為了過 lint 編一個號碼進去。"""
+        done = self.lint(GOOD_CASE.replace('"""A1 拋棄式目錄同一行綁 addCleanup。"""',
+                                           '"""拋棄式目錄同一行綁 addCleanup。"""'))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("F3", done.stdout)
+        self.assertIn("(一條都沒宣告)", done.stdout)
+
+    def test_f4_a_forbidden_word_is_named_even_inside_a_string(self):
+        """禁字在**原始碼**上掃,不是 ast:寫在字串裡的那一招也要抓得到。"""
+        done = self.lint(GOOD_CASE + '\nSTOP = "os.kill(pid, 9)"\n')
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("F4 禁字", done.stdout)
+
+    def test_f4_reads_the_forbidden_list_from_the_board_config(self):
+        """埠那一族是**專案特有**的,走 `board/config.json` 的 `verify_lint.forbid`
+        —— 寫進這一支就是把專案的東西塞進共用工具(§9)。"""
+        conf = json.loads(self.read("board/config.json"))
+        conf["verify_lint"] = {"forbid": ["1890[3-5]"]}
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        done = self.lint(GOOD_CASE + '\nPORT = 18904\n')
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("F4 禁字 1890[3-5]", done.stdout)
+
+    def test_f5_a_throwaway_dir_without_cleanup_is_named(self):
+        done = self.lint(GOOD_CASE.replace(
+            'where = tempfile.mkdtemp(prefix="t1-"); '
+            'self.addCleanup(shutil.rmtree, where, True)',
+            'where = tempfile.mkdtemp(prefix="t1-")'))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("F5 mkdtemp() 同一語句或下一行沒有 addCleanup", done.stdout)
+
+    def test_f6_importing_the_new_symbol_at_module_level_is_named(self):
+        """🩸「import 失敗不算紅」的預防版:與其事後不算,不如寫的時候就擋。"""
+        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav("])
+        done = self.lint(GOOD_CASE.replace(
+            "import shutil", "import shutil\nfrom src.nav import size_nav"),
+            "--ticket", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("F6 模組頂層 import 了票面的新符號 size_nav", done.stdout)
+        self.assertIn("票 #1 有 1 條驗收", done.stdout)
+
+    def test_without_a_ticket_f6_is_not_checked(self):
+        """拿不到票就查不了「哪些符號是新的」—— 猜出來的那一份會擋掉既有模組。"""
+        done = self.lint(GOOD_CASE.replace(
+            "import shutil", "import shutil\nfrom src.nav import size_nav"))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def test_a_case_file_that_does_not_parse_is_a_finding_not_a_crash(self):
+        done = self.lint(GOOD_CASE + "\ndef (:\n")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("解不開", done.stdout)
+
+
+class CloseOnlyCountsTheGateRun(Sandbox):
+    """`ticket.py close` 只認 `verify.baseline.stage == "check"`(#26 / D-020 C5)。
+
+    驗證者交的那一趟說的是「這條案例真的在驗東西」,不是「這張票的東西真的做出來了」
+    —— 少了後半的票與做完的票在票面上長得一樣。
+
+    (這幾條本來該住 `tests/test_ticket.py`;#26 的 `allowed_write_paths` 沒有它。)
+    """
+
+    def a_closable(self, baseline=None, **extra):
+        self.write("src/nav.py", "def size_nav():\n    return 42\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "把 src/nav.py 放進主線")
+        plan = {"files": ["verify/nav/test_ticket_1.py"], "tags": ["example"],
+                "run": "", "notes": ""}
+        if baseline is not None:
+            plan["baseline"] = baseline
+        fields = {"allowed_write_paths": ["src/*"],
+                  "verify_strings": ["src/nav.py:def size_nav"], "verify": plan}
+        fields.update(extra)
+        self.make_ticket(1, **fields)
+        self.ticket("set", "1", "review",
+                    json.dumps({"verdict": "pass", "by": "main", "sha": "deadbeef"},
+                               ensure_ascii=False))
+
+    def test_a_baseline_that_the_gate_measured_closes_the_ticket(self):
+        self.a_closable({"stage": "check", "ok": True, "why": ""})
+        done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["state"], "Done")
+
+    def test_a_baseline_still_at_stage_red_does_not_close(self):
+        """**變異**:把 `done_blockers` 裡 `stage != "check"` 那一段拿掉 → 這一條紅。"""
+        self.a_closable({"stage": "red", "ok": True, "why": ""})
+        done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("還缺閘門那一趟 check", done.stdout)
+        self.assertIn("stage 是 red", done.stdout)
+        self.assertEqual(self.load_ticket("1")["state"], "Ready", "票不該被關掉")
+
+    def test_a_baseline_without_any_stage_does_not_close_either(self):
+        """舊版的 `check` 沒有寫 `stage`。**沒有那一格**與「閘門量過了」長得一樣,
+        而 close 只認量過的那一趟。"""
+        self.a_closable({"ok": True, "why": ""})
+        done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("還缺閘門那一趟 check", done.stdout)
+
+    def test_a_baseline_that_says_red_failed_still_names_that_instead(self):
+        """`ok:false` 與「還缺 check」的下一步不一樣,兩句話不准揉在一起。"""
+        self.a_closable({"stage": "check", "ok": False, "why": "乾淨主線上一條都沒紅"})
+        done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("verify.baseline 說驗紅沒過", done.stdout)
+        self.assertNotIn("還缺閘門那一趟 check", done.stdout)
+
+    def test_an_honest_waiver_still_gets_past_the_stage_check(self):
+        """#15 那條豁免不變:誠實的 `verify_waiver` + review.sha 真的在主線歷史裡。"""
+        self.a_closable({"stage": "red", "ok": True, "why": ""},
+                        verify_waiver={"by": "main", "reason": "控制腳本票:無獨立驗證者"})
+        sha = self.git("rev-parse", "main").strip()
+        self.ticket("set", "1", "review",
+                    json.dumps({"verdict": "pass", "by": "main", "sha": sha},
+                               ensure_ascii=False))
+        done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["state"], "Done")
 
 
 if __name__ == "__main__":
