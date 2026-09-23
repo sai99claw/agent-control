@@ -7,3 +7,4 @@
 - 需要讓 session 失效的瀏覽器案例,只改這個分頁 localStorage 上那把 token(加一個字元);不要打 logout/logout-all —— 那會撤掉 test_browsers.GUESTS 的共用訪客,--target 下所有 class 共用它 (#642, 2026-09-22, verifier@opus)
 - 注延遲的時序案例,窗口要蓋得住 app 那一包的 parse/exec:150ms 在負載下開不出窗口(前提大聲紅),600ms 兩邊都穩 —— 比照 #639 的 T1 (#642, 2026-09-22, verifier@opus)
 - 設計為未來 token 打算,不為眼前複雜度繞路:取捨看之後每票多讀多少、重來幾輪;太複雜可裁「開票之後再做」但票要寫全,不准繞過去(改名、加第二個欄位、各做各的形狀) (D-018) (2026-09-23, main@fable)
+- patch.diff 檔頭只准 base/… work/…(在 $W 裡跑 diff -ruN base work,不要給絕對路徑);絕對路徑 apply.sh 檔頭秒退 (#25) (2026-09-23, main@fable)
