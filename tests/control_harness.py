@@ -40,14 +40,33 @@ SCRIPT_FILES = ("event.py", "ticket.py", "memory.py", "status.py", "land.sh",
 # 回歸層的最小形狀:一個登記過的標籤 + 一個會綠的案例。沙盒少了它,`gate --full`
 # 跑到的回歸是一個空集合 —— 而**空集合與「都過了」長得一樣**,那正是這裡在擋的事。
 VERIFY_TAGS = "# 功能標籤登記\n- `example` — 沙盒示範用\n"
-VERIFY_CASE = """import unittest
+# 模組 docstring 的四段是 `verify-case.py lint` 的 F1(D-020 §四)。**沙盒的示範案例
+# 也要過 lint** —— 閘門現在會對票的 `verify.files` 跑一次 lint(#27),而一份 lint 過
+# 不了的示範案例會讓「閘門有沒有去 lint」與「被測的票寫壞了」長得一樣。
+VERIFY_CASE = '''"""#0 沙盒的示範案例:回歸層不是空集合。
+
+## 驗收表(期望值來源獨立於被測程式)
+A1 | unit | 跑這一條 | 綠 | 沙盒用:只證「回歸層選得到案例」
+
+## 介面字串
+(沒有;這一條不斷言任何字串)
+
+## 怎麼做假
+不上真埠、不起真服務、不殺行程。
+
+## 不做
+不改產品碼;不放寬任何票面驗收。
+"""
+import unittest
+
 TAGS = ["example"]
 
 
 class T(unittest.TestCase):
     def test_true(self):
+        """A1 沙盒的示範案例是綠的。"""
         self.assertTrue(True)
-"""
+'''
 
 # 沙盒也要有 `.gitignore`,而且是**真 repo 那幾條**:執行時寫出來的東西不進 git。
 # 少了它,`gate.sh --branch` 會把 `reports/`、`__pycache__/` 當成「沒有人守著的改動檔」
@@ -260,7 +279,12 @@ class Sandbox(unittest.TestCase):
 
     def make_ticket(self, ident, **fields):
         """直接寫一張合乎 schema 的票(不經 CLI)—— 給「受測的不是 create」的那些
-        測試用,省掉一次子行程。"""
+        測試用,省掉一次子行程。
+
+        **這一份票面沒有 `verify` 那一格**,而閘門把「沒有宣告」與「宣告了卻沒有案例」
+        分開處理(#27):所以用它的測試不會被驗證者那一層擋住,而要測那一層的人自己
+        傳一格 `verify={...}` 進來。
+        """
         row = {"id": str(ident), "subject": "第 %s 張" % ident,
                "created": "2026-09-12T10:00:00+08:00",
                "objective": "做完某件事", "acceptance": ["會紅的斷言一條"],

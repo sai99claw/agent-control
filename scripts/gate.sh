@@ -23,6 +23,34 @@
 #    宣告了 tags 卻一個案例都選不到 = 非零(`verify.py` 的 rc=3):那是缺口,不是綠。
 # 3. **flake 重跑**:紅的案例各連續單跑設定次數,再以原順序整組重跑設定次數。
 #
+# ## 驗證者的案例:`lint` → `check`(D-020,`docs/DESIGN-VERIFY-CASES.md` §三)
+# 回歸層之後還有一層:**驗證者寫的那幾條案例,在這一輪的樹上綠了沒有**。
+# `verify-case.py red`(驗證者交件那一趟)只證「乾淨基底上該紅」;候選該綠一直沒有人
+# 自動量 —— 而唯一被點名去量的那個人(驗證者)在時間上拿不到實作者的 patch,於是他
+# 只剩一條路:自己搭一份拋棄式參考實作(#23 那 340K 的來源)。
+#
+# 所以這一支在 `regression()` 之後多兩步:
+#   1. `verify-case.py lint <verify.files>` —— 格式六條(F1–F6),紅了**停在這裡**、
+#      不繼續跑 check:格式不合的案例跑出來的紅指向的是格式,不是實作。
+#   2. `verify-case.py check <票號> --ref <票的 base_sha> --candidate <這一輪的樹>`
+#      —— 把票的 `verify.baseline.stage` 從 `red` 升成 `check`(`ticket.py close`
+#      只認 `check`)。`ok:false` 時 candidate 那一趟的原始輸出當成 `--log` 餵給
+#      狀態檔,紅榜因此落進 `failures[]`,走既有的 auto-fix 路(D-014,不重造)。
+#
+# **量在閘門,不在 land**:worker 的三輪修復迴圈住在閘門,量在落地等於紅了才發現,
+# 而那是多一整輪的事。`verify.files` 是空的而這張票**該有**案例時,這一層印
+# 「這張票沒有驗證者案例」並且**非零** —— 同 #619 那條「宣告了卻選不到案例 = 缺口」
+# 的精神:一張沒有人驗的票與一張驗過的票,不該在退出碼上長得一樣。
+# 「該有」的三個例外:票上有誠實的 `verify_waiver`、票上明著寫 `needs_verifier=false`
+# (`land.sh` 也認這一格,#8)、或**票上連 `verify` 這一格都沒有宣告**(那是「沒有宣告」,
+# 與「宣告了卻沒有案例」不同 —— 同一支腳本對回歸層就是這樣分的)。三個例外都只管
+# 「有沒有案例」那一格:`verify.files` 非空時,lint 與 check **一律照跑**,waiver 也不例外。
+#
+# `check` 回非零的兩種要分開:**候選樹上真的有紅**才算這一輪(worker)的紅,紅榜進
+# `failures[]`、走 auto-fix;`ok:false` 但候選全綠(乾淨基底沒紅、兩邊案例數不同)是
+# **驗證者那一趟**(`stage=red`)的事,worker 修不動 —— 出聲、寫進 note,但不算這一輪
+# 的紅;票上那一格仍是 `ok:false`,`ticket.py close` 照樣擋著。
+#
 # ## 紅榜的處理順序:先環境 fail-fast、再 flake 判定(#7)
 # 測試由 `scripts/status.py run-tests` 跑(不再由這一支 shell 直接叫 unittest),它在
 # 同一個程序裡看每一條結果:同一引擎、同形訊息連紅達 `board/config.json` 的
@@ -278,8 +306,15 @@ AUTO_FLAKY_ARGS=""
 ORDER_ARGS=""
 EXTRA_LOG_ARGS=""
 VERIFY_LOG_ARGS=""
+CHECK_LOG_ARGS=""
 NOTE=""
 ENV_SUSPECT=0
+# 驗證者那一層的 rc(`verify_case` 設它);`VRC` 之於回歸層是什麼,它之於這一層就是
+# 什麼 —— 兩層各自的 rc 分開留著,合併在呼叫的那一行做。
+CRC=0
+LINT_LOG=$LOG.lint
+CHECK_LOG=$LOG.verify-case
+CHECK_DIR=$LOG.verify-case.d
 
 # `--suspect-file` 那一份是**一個 list**(形狀見 `docs/DESIGN-ENV-SUSPECT.md`,D-019);
 # 連紅統計達門檻時只會有第一筆,所以這裡讀 `[0]`。舊的單筆 dict 也讀得懂。
@@ -343,7 +378,7 @@ status_done() {   # $1 = rc
     # shellcheck disable=SC2086
     python3 "$ROOT/scripts/status.py" done --ticket "$TICKET" --kind gate \
         --run-id "$RUN_ID" --sha "$SHA" --rc "$1" --note "$NOTE" \
-        --log "$LOG" $state_args $VERIFY_LOG_ARGS $EXTRA_LOG_ARGS $FLAKY_ARGS \
+        --log "$LOG" $state_args $VERIFY_LOG_ARGS $CHECK_LOG_ARGS $EXTRA_LOG_ARGS $FLAKY_ARGS \
         $AUTO_FLAKY_ARGS $ORDER_ARGS \
         || echo "gate: 狀態檔寫不出來(不擋閘門)" >&2
     inbox_post "$1"
@@ -505,6 +540,186 @@ regression() {   # $1 = ticket|full;設定 VRC
     return 0
 }
 
+# 票的 `verify.files` + 「這張票到底需不需要驗證者案例」。**一趟問完**:這幾件事住在
+# 同一張票裡,分三次起直譯器換不到任何新的資訊。
+#
+# 第一行是**為什麼不需要**(`waiver` / `needs-verifier-false` / `no-product`,都不是就
+# `required`)、第二行是票的 `base_sha`、其餘每行一個案例檔。讀不到票就**非零**
+# (同 preflight:沒有票檔的呼叫照舊,不要憑空長出一個缺口)。
+#
+# 「需不需要」那一格的判準**與 `land.sh` 的 `VERIFIER_PY` 同一份**(#8 / #587):
+# `needs_verifier is not False` 且 `in_scope` 含產品碼(不在 `docs/` / `board/` /
+# `scripts/control/` 這幾個前綴底下)才要求案例。兩支各自寫一份的那一刻,同一張票在
+# 閘門是缺口、在落地是放行 —— 而兩份規則都看起來像規格(D-018)。
+verify_plan() {
+    python3 - "$ROOT" "$TICKET" <<'TICKET_PY' 2>/dev/null
+import json, os, sys
+root, ident = sys.argv[1], sys.argv[2]
+sys.path.insert(0, os.path.join(root, "scripts"))
+import event
+path = os.path.join(event.tickets_dir(root), "%s.json" % ident)
+try:
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except (OSError, ValueError):
+    raise SystemExit(3)
+waiver = data.get("verify_waiver")
+plan = data.get("verify") if isinstance(data.get("verify"), dict) else None
+if isinstance(waiver, dict) and waiver:
+    print("waiver")
+elif data.get("needs_verifier") is False:
+    print("needs-verifier-false")
+elif plan is None:
+    # 票上連 `verify` 這一格都沒有 = **沒有宣告**,不是「宣告了卻沒有案例」。
+    # 同一支腳本對回歸層就是這樣分的(`regression()`:「沒有宣告 verify.tags」出聲
+    # 不擋,「宣告了卻一個案例都選不到」才是缺口)。
+    print("undeclared")
+else:
+    print("required")
+print(str(data.get("base_sha") or ""))
+plan = plan or {}
+for rel in plan.get("files") or []:
+    if rel:
+        print(rel)
+TICKET_PY
+}
+
+# `check` 剛寫回票的 `verify.baseline.candidate_run`:**候選樹上算得出來的紅有幾條**
+# (紅 + import 失敗 + 缺符號 + 別處 —— `cmd_check` 判 `cand_bad` 用的就是這四格)。
+# 讀不到印 `?`,不印 0:那兩件事的下一步不同(同 `env_suspect_rows`)。
+#
+# **用 `ticketlib.load` 而不是自己拼路徑**:`verify-case.py` 寫回票時走的是
+# `event.repo_root()`(`AC_ROOT` 蓋得掉),而閘門可能跑在副本裡 —— 自己拼 `$ROOT`
+# 那一份讀到的會是上一輪的舊值,而舊值與「這一輪真的沒紅」長得一樣。
+candidate_reds() {
+    python3 - "$ROOT" "$TICKET" <<'CAND_PY' 2>/dev/null || echo "?"
+import os, sys
+# `$ROOT/scripts` 進 path,票的根由 `event.repo_root()`(`AC_ROOT` 蓋得掉)自己決定 ——
+# 與 `verify-case.py` 寫回票時走的是同一條路。
+sys.path.insert(0, os.path.join(sys.argv[1], "scripts"))
+try:
+    import ticket as ticketlib
+    plan = ticketlib.load(sys.argv[2]).get("verify") or {}
+    record = plan.get("baseline") or {}
+    run = record.get("candidate_run") or {}
+    if not run:
+        raise ValueError("沒有 candidate_run")
+    print(sum(len(run.get(key) or []) for key in
+              ("red", "import_failures", "missing_symbol", "elsewhere")))
+except Exception:                                      # noqa: BLE001
+    print("?")
+CAND_PY
+}
+
+# 驗證者那一層:`lint` -> `check`(檔頭那一節;`docs/DESIGN-VERIFY-CASES.md` §三)。
+# 設定 `CRC`。**這一層與回歸層一樣不靠別人間接跑**:原始輸出各自存檔,candidate 那
+# 一份還要當成 `--log` 餵進狀態檔 —— 紅榜要指得到是哪一條案例紅,而不是只剩一個
+# 「verify-case 回了 1」。
+verify_case() {
+    CRC=0
+    [ -n "$TICKET" ] || return 0
+    if [ ! -f "$ROOT/scripts/verify-case.py" ]; then
+        # 同 `regression()` 的態度:沒有這一層要**說出來**,不要讓「沒驗」穿著
+        # 「驗過了」的衣服走過去(`docs/DISPATCH-TEMPLATE.md` §5.5)。
+        echo "gate: 這顆 repo 沒有 scripts/verify-case.py —— 驗證者那一層沒跑(不是綠)"
+        NOTE="$NOTE 沒有 scripts/verify-case.py,驗證者的案例沒跑。"
+        return 0
+    fi
+    plan=$(verify_plan) || return 0
+    why=$(echo "$plan" | sed -n 1p)
+    ticket_base=$(echo "$plan" | sed -n 2p)
+    files=$(echo "$plan" | sed -n '3,$p')
+    # **只有「有沒有案例」這一格看 waiver**,lint 與 check 不看。第 2 輪把 waiver 寫成
+    # 短路整層,於是每一張帶 waiver 的票都不再被 lint / check —— 而票面的驗收 2 與 3
+    # 對「verify.files 非空」的票沒有例外(#27 第 3 輪:驗證者的 A2–A6 就是量這件事)。
+    if [ -z "$files" ]; then
+        case "$why" in
+            waiver)
+                echo "gate: 票 #$TICKET 有 verify_waiver —— 這一層不要求案例(理由寫在票上)"
+                NOTE="$NOTE 票有 verify_waiver,這一層不要求案例。"
+                return 0 ;;
+            needs-verifier-false)
+                # `land.sh` 也認這一格(#8):兩支對同一張票不該給出不同的答案。
+                echo "gate: 票 #$TICKET 明著寫了 needs_verifier=false —— 這一層不要求案例"
+                NOTE="$NOTE 票 needs_verifier=false,這一層不要求案例。"
+                return 0 ;;
+            undeclared)
+                # 票上連 `verify` 這一格都沒有。**出聲但不擋**,與 `regression()` 對
+                # 「票沒有宣告 verify.tags」的處理同一個形狀 —— 而宣告了 `verify`
+                # 卻沒有案例(下面那一段)才是缺口(#619 的精神)。
+                echo "gate: 票 #$TICKET 連 verify 這一格都沒有宣告 —— 驗證者那一層這一輪沒跑"
+                NOTE="$NOTE 票沒有宣告 verify 這一格,驗證者那一層沒跑。"
+                return 0 ;;
+        esac
+        echo "gate: 這張票沒有驗證者案例(#$TICKET 的 verify.files 是空的)—— 那是缺口,不是綠。"
+        echo "gate:   (要嘛派驗證者補案例,要嘛在票上補一條誠實的 verify_waiver{by,reason}"
+        echo "gate:    或 needs_verifier=false。)"
+        NOTE="$NOTE 票宣告了 verify 卻沒有案例、也沒有 waiver = 缺口。"
+        CRC=3
+        return 0
+    fi
+    echo "gate: 驗證者案例的格式 —— python3 scripts/verify-case.py lint$(echo " $files" | tr '\n' ' ' | sed 's/ *$//') --ticket $TICKET"
+    # shellcheck disable=SC2086
+    ( cd "$ROOT" && python3 scripts/verify-case.py lint $files --ticket "$TICKET" ) \
+        > "$LINT_LOG" 2>&1
+    lrc=$?
+    # lint 的產出就是**指名的那幾行**;把它吞進 log 裡等於把退件的理由藏起來。
+    cat "$LINT_LOG"
+    EXTRA_LOG_ARGS="$EXTRA_LOG_ARGS --extra-log $LINT_LOG"
+    if [ "$lrc" -ne 0 ]; then
+        echo "gate: 案例格式沒過(rc=$lrc)—— 停在這裡,不跑 check;上面指名了是哪一行"
+        NOTE="$NOTE 驗證者案例的 lint 沒過,check 沒跑。"
+        CRC=$lrc
+        return 0
+    fi
+    # `--ref` 是**票的 `base_sha`**,不是主線的頭:票一落地,主線上就已經有那份實作,
+    # 對主線量出來的「一條都沒紅」說的是「量錯了地方」(#19)。`--candidate` 是這一輪
+    # 的樹本身(含還沒 commit 的改動)—— 閘門問的就是「現在手上這一份」。
+    rm -rf "$CHECK_DIR"
+    ref_args=""
+    [ -z "$ticket_base" ] || ref_args="--ref $ticket_base"
+    echo "gate: 驗證者案例的綠 —— python3 scripts/verify-case.py check $TICKET $ref_args --candidate $ROOT"
+    # shellcheck disable=SC2086
+    ( cd "$ROOT" && python3 scripts/verify-case.py check "$TICKET" $ref_args \
+        --candidate "$ROOT" --out-dir "$CHECK_DIR" ) > "$CHECK_LOG" 2>&1
+    CRC=$?
+    cat "$CHECK_LOG"
+    EXTRA_LOG_ARGS="$EXTRA_LOG_ARGS --extra-log $CHECK_LOG"
+    if [ "$CRC" -eq 0 ]; then
+        return 0
+    fi
+    if [ ! -f "$CHECK_DIR/logs/candidate.log" ]; then
+        # rc≠0 卻連 candidate 那一趟都沒跑到(量不到:ref 解不開、案例檔不在候選樹上)。
+        # 那**不是**「驗證者的案例紅了」,下一步也不同 —— 兩者混成一句話的那一刻,
+        # 下一輪的 worker 會去修一個沒有壞掉的東西。**rc 維持非零**:量不到不是綠。
+        echo "gate: 這一趟量不到驗證者的案例(rc=$CRC)—— 看 $CHECK_LOG 的下一步"
+        NOTE="$NOTE 這一趟量不到驗證者的案例(verify-case check rc=$CRC)。"
+        return 0
+    fi
+    bad=$(candidate_reds)
+    if [ "$bad" = "0" ]; then
+        # `ok:false`,但**候選樹上一條都沒紅**:baseline 不成立的理由在另一邊
+        # (乾淨基底上沒紅、或兩邊案例數不同)。那是**驗證者那一趟**(`stage=red`)
+        # 要證的事,worker 這一輪修不動它 —— 把它算成 worker 的紅,下一輪的人會去修
+        # 一個沒有壞掉的東西(D-014 §紅了誰修)。
+        #
+        # **這不是把它吞掉**:票上那一格仍然是 `ok:false`,`ticket.py close` 照樣擋著
+        # (`done_blockers()` 讀 `baseline.ok`),而下面這一行與狀態檔的 note 都寫著。
+        echo "gate: 驗證者的案例在這一輪的樹上全綠,但 baseline 仍然不成立 —— 那是驗證者"
+        echo "gate:   那一趟(stage=red)的事,不算這一輪的紅;票上仍是 ok:false,close 會擋。"
+        NOTE="$NOTE 驗證者的案例候選全綠但 baseline 不成立(驗證者那一趟的事,close 仍擋)。"
+        CRC=0
+        return 0
+    fi
+    # `ok:false` 而且候選真的紅了。紅榜住在 candidate 的原始輸出裡,**餵給狀態檔的是
+    # 它**,不是一句「verify-case 回了 1」—— 下一輪的 worker 讀的是 `failures[]`,而
+    # 一個沒有案例名字的紅榜與沒有紅榜一樣(D-014)。
+    CHECK_LOG_ARGS="--log $CHECK_DIR/logs/candidate.log"
+    echo "gate: 驗證者的案例在這一輪的樹上紅了($bad 條)—— 紅榜進狀態檔的 failures[]"
+    NOTE="$NOTE 驗證者的案例這一輪沒綠(verify-case check rc=$CRC,候選 $bad 條)。"
+    return 0
+}
+
 merge_rc() {   # $1 = 目前 rc  $2 = 另一個 rc;印出合併後的
     if [ "$1" -ne 0 ]; then echo "$1"; else echo "$2"; fi
 }
@@ -645,6 +860,10 @@ if [ -n "$mods" ]; then
     if [ -n "$TICKET" ] && [ "$ENV_SUSPECT" -eq 0 ]; then
         regression ticket
         rc=$(merge_rc "$rc" "$VRC")
+        # **回歸層之後**才是驗證者那一層(D-020 C5):兩層問的不是同一件事,而
+        # 「這一輪的樹讓驗證者的第 k 條紅」要與回歸的紅分得開。
+        verify_case
+        rc=$(merge_rc "$rc" "$CRC")
     fi
     [ "$rc" -eq 0 ] || echo "gate: 紅了,看 $LOG"
     status_done "$rc"
