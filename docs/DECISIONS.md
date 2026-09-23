@@ -166,3 +166,7 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 ## D-019(2026-09-23)`environment_suspect` 只有一種形狀:list,每筆標來源
 
 設計文件:`docs/DESIGN-ENV-SUSPECT.md`(Fable 設計 session 裁,依 D-018 每個取捨附未來每票省/多花)。結論:`status.json` 的 `environment_suspect` 永遠是 list,空值只有 `[]`;每筆七鍵 `source(statistical|declared) / engine / why / count / threshold / log / line`,缺料 null;`state`/`rc` 不因這格而變;**這格非空 → gate 不自動派 auto-fix**(每次環境紅省一輪 worker)。實作票 #23,tabby 端由同步票帶回;讀端正規化舊檔,不改寫 reports/。
+
+## D-021(2026-09-23)專案端記憶備忘的唯一去處:專案自己的 `memory/`,規則包疊兩層
+
+設計文件 `docs/DESIGN-MEMORY-INBOX.md`(Fable 設計 session)。結論:`memory.py note` 寫的 `<repo>/memory/{role,model,project}/` 就是唯一去處,寫入端不改;`roles_dir == memory/role` 的 repo 是正本,否則是專案,`rules.py pack` 疊兩層(正本角色卡 + 專案 memory 主檔與 inbox 尾巴,上限仍 4 KB);`sync-to-project.sh` 不再複製 `*.inbox.md`、永不碰專案 `memory/`(測試釘死);專案 config 的 `memory.applies_to` 指 `memory/`。實測發現:`rules.py pack` 整支沒有 inbox 這個字,inbox 備忘在 A 也要等整理才進規則包。否決甲(專案事實污染所有專案,A inbox 已混入 1 行 T 專屬)與乙(與同步產出物同名同目錄)。A 正本改動另開 opus 票;tabby #648 只做 config 與 `git add memory/`。
