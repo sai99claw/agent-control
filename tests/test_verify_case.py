@@ -299,14 +299,50 @@ class VerifyCase(CaseSandbox):
 
     def test_the_case_file_is_overlaid_onto_a_ref_tree_that_lacks_it(self):
         """案例是這張票才加的,ref 那棵樹上本來就沒有它 —— 不疊上去,乾淨主線那一趟
-        跑到的是**零個案例**,而零個案例與「都過了」長得一樣。"""
+        跑到的是**零個案例**,而零個案例與「都過了」長得一樣。
+
+        `base` 副本跑完就砍(#33),疊上去了沒有改看 `cases`:沒疊上去的話 import 就
+        炸,`cases` 停在 0,不會是 1。
+        """
         _, _ = self.a_branch()
         out = os.path.join(self.home, "vc")
         done = self.tool("check", "1", "--candidate", "t1", "--out-dir", out)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertTrue(os.path.exists(os.path.join(
-            out, "base", "verify", "nav", "test_ticket_1.py")), "沒疊上去")
-        self.assertEqual(self.load_ticket("1")["verify"]["baseline"]["baseline"]["cases"], 1)
+        self.assertEqual(self.load_ticket("1")["verify"]["baseline"]["baseline"]["cases"], 1,
+                         "沒疊上去")
+
+    def test_check_leaves_only_logs_behind_in_the_out_dir(self):
+        """🩸 #33:`gate.sh` 把 `--out-dir` 指到 worktree 內的 `gate.log.verify-case.d`,
+        `clean_copy` 出來的 `base`(乾淨主線的拋棄式副本,`--candidate` 是分支/sha 時
+        還有 `candidate`)從來沒被清掉過 —— 同一個 worktree 第二次跑閘門時,全樹掃描
+        的守衛把上一次留下的那份樹當成工作樹裡真的檔案掃到而紅(同一 worktree 重跑
+        必紅)。
+
+        **變異**:把 `discard_scratch_trees` 的呼叫拿掉 → 這一條紅。
+        """
+        self.a_ticket()
+        self.write("src/value.txt", "2\n")
+        out = os.path.join(self.home, "vc-check")
+        done = self.tool("check", "1", "--out-dir", out)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(sorted(os.listdir(out)), ["logs"], "base/candidate 該砍掉了")
+
+    def test_check_with_a_branch_candidate_also_discards_the_candidate_copy(self):
+        """`--candidate` 是分支名時,`resolve_tree` 另外做了一份 `candidate` 副本
+        (與路徑寫法不同:路徑直接指到工作樹,不必複製)—— 那一份也要砍。"""
+        self.a_branch()
+        out = os.path.join(self.home, "vc-cand")
+        done = self.tool("check", "1", "--candidate", "t1", "--out-dir", out)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(sorted(os.listdir(out)), ["logs"], "base/candidate 該砍掉了")
+
+    def test_red_leaves_only_logs_behind_in_the_out_dir(self):
+        """`red`(驗證者交件那一趟)共用同一支 `clean_base`,一樣的殘留與一樣的修法。"""
+        self.a_ticket()
+        out = os.path.join(self.home, "vc-red")
+        done = self.tool("red", "1", "--out-dir", out)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(sorted(os.listdir(out)), ["logs"], "base 該砍掉了")
 
     def test_after_landing_the_ref_defaults_to_the_ticket_base_sha(self):
         """🩸 #19:票落地之後,對**主線**量基準永遠是「一條都沒紅」—— 實作已經在主線

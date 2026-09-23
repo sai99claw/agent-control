@@ -328,6 +328,18 @@ def clean_copy(root, ref, where):
     return done.returncode == 0
 
 
+def discard_scratch_trees(where):
+    """`red` / `check` 跑完就砍 `base` / `candidate` 這兩份 `clean_copy` 出來的拋棄式
+    樹,`logs` 留著。
+
+    `gate.sh` 的 `--out-dir` 指的是 worktree 內的 `gate.log.verify-case.d`(不是系統
+    tempdir),而這兩份副本從來沒被清掉過:同一個 worktree 第二次跑閘門時,全樹掃描
+    的守衛(`git ls-files` 以外的那幾支)會把上一次留下的 `base/` 當成工作樹裡真的檔
+    案掃到而紅(#33)。"""
+    for name in ("base", "candidate"):
+        shutil.rmtree(os.path.join(where, name), ignore_errors=True)
+
+
 def overlay(rels, src, dst):
     """同一份案例覆加到副本上。**兩邊跑的一定要是同一份檔**,不然比的是兩份案例。"""
     missing = []
@@ -479,46 +491,51 @@ def cmd_red(args):
     if rc is not None:
         return rc
 
-    run = run_cases(base_dir, rels, os.path.join(logs, "baseline.log"))
-    sys.stdout.write("verify-case: #%s 案例 %d 個(乾淨基底 %s / %s)\n"
-                     % (args.ticket, run["cases"], ref, base_sha[:12] or "無 sha"))
-    print_shapes(run)
-    sys.stdout.write("  算數的紅 %d、skip %d、不算的紅 %d -> %s\n"
-                     % (len(run["red"]), run["skipped"],
-                        len(run["import_failures"]) + len(run["missing_symbol"])
-                        + len(run["elsewhere"]), run["log"]))
+    try:
+        run = run_cases(base_dir, rels, os.path.join(logs, "baseline.log"))
+        sys.stdout.write("verify-case: #%s 案例 %d 個(乾淨基底 %s / %s)\n"
+                         % (args.ticket, run["cases"], ref, base_sha[:12] or "無 sha"))
+        print_shapes(run)
+        sys.stdout.write("  算數的紅 %d、skip %d、不算的紅 %d -> %s\n"
+                         % (len(run["red"]), run["skipped"],
+                            len(run["import_failures"]) + len(run["missing_symbol"])
+                            + len(run["elsewhere"]), run["log"]))
 
-    why = not_counted(run, "乾淨基底")
-    if not run["cases"]:
-        why.append("乾淨基底上一個案例都沒跑到 —— 零個案例與「都過了」長得一樣")
-    elif not run["red"]:
-        why.append("乾淨基底上一條算數的紅都沒有 —— 一個永遠綠的案例與一個真的在驗的"
-                   "案例長得一樣")
-    if why:
-        # **量不到的路徑不寫票**(#22):一句蓋進票的 `ok:false` 會讓 `close` 從此
-        # 擋著那張票,而那一格說的其實是「這一趟還沒接上」。
-        sys.stdout.write("verify-case: #%s 驗紅**不成立**(票沒有動):%s\n"
-                         % (args.ticket, ";".join(why)))
-        return 1
-    record = {
-        "stage": "red",
-        "ok": True,
-        "why": "",
-        "at": now(),
-        "files": rels,
-        "base_ref": ref,
-        "base_sha": base_sha,
-        "candidate": args.candidate or root,
-        "candidate_sha": cand_sha,
-        "baseline": run,
-        "candidate_run": None,
-    }
-    rc = write_baseline(args.ticket, plan, record, "red")
-    if rc:
-        return rc
-    sys.stdout.write("verify-case: #%s 驗紅成立(stage=red 寫進票的 verify.baseline;"
-                     "綠由閘門的 check 量)\n" % args.ticket)
-    return 0
+        why = not_counted(run, "乾淨基底")
+        if not run["cases"]:
+            why.append("乾淨基底上一個案例都沒跑到 —— 零個案例與「都過了」長得一樣")
+        elif not run["red"]:
+            why.append("乾淨基底上一條算數的紅都沒有 —— 一個永遠綠的案例與一個真的在驗的"
+                       "案例長得一樣")
+        if why:
+            # **量不到的路徑不寫票**(#22):一句蓋進票的 `ok:false` 會讓 `close` 從此
+            # 擋著那張票,而那一格說的其實是「這一趟還沒接上」。
+            sys.stdout.write("verify-case: #%s 驗紅**不成立**(票沒有動):%s\n"
+                             % (args.ticket, ";".join(why)))
+            return 1
+        record = {
+            "stage": "red",
+            "ok": True,
+            "why": "",
+            "at": now(),
+            "files": rels,
+            "base_ref": ref,
+            "base_sha": base_sha,
+            "candidate": args.candidate or root,
+            "candidate_sha": cand_sha,
+            "baseline": run,
+            "candidate_run": None,
+        }
+        rc = write_baseline(args.ticket, plan, record, "red")
+        if rc:
+            return rc
+        sys.stdout.write("verify-case: #%s 驗紅成立(stage=red 寫進票的 verify.baseline;"
+                         "綠由閘門的 check 量)\n" % args.ticket)
+        return 0
+    finally:
+        # `base` 是拋棄式的乾淨副本,用完就砍 —— 不留在 worktree 裡讓下一次全樹掃描
+        # 的守衛掃到(#33)。`logs` 留著。
+        discard_scratch_trees(where)
 
 
 def cmd_check(args):
@@ -536,60 +553,65 @@ def cmd_check(args):
     if rc is not None:
         return rc
 
-    baseline = run_cases(base_dir, rels, os.path.join(logs, "baseline.log"))
-    cand = run_cases(candidate, rels, os.path.join(logs, "candidate.log"))
+    try:
+        baseline = run_cases(base_dir, rels, os.path.join(logs, "baseline.log"))
+        cand = run_cases(candidate, rels, os.path.join(logs, "candidate.log"))
 
-    why = not_counted(baseline, "乾淨主線")
-    if not baseline["red"]:
-        why.append("乾淨主線上一條都沒紅 —— 一個永遠綠的案例與一個真的在驗的案例長得一樣")
-    # candidate 這一邊**四種形狀都算紅**:一條 `AttributeError` 說的是實作還沒接上,
-    # 而「不算紅」那張表問的是「基底紅得對不對」,不是「候選綠不綠」。
-    cand_bad = (len(cand["red"]) + len(cand["import_failures"])
-                + len(cand["missing_symbol"]) + len(cand["elsewhere"]))
-    if cand_bad:
-        why.append("candidate 上還有 %d 條紅(其中 import 失敗 %d、缺符號 %d、別處 %d)"
-                   % (cand_bad, len(cand["import_failures"]),
-                      len(cand["missing_symbol"]), len(cand["elsewhere"])))
-    if baseline["cases"] != cand["cases"]:
-        why.append("兩邊跑到的案例數不一樣(%d vs %d)—— 比的不是同一組"
-                   % (baseline["cases"], cand["cases"]))
-    ok = not why
+        why = not_counted(baseline, "乾淨主線")
+        if not baseline["red"]:
+            why.append("乾淨主線上一條都沒紅 —— 一個永遠綠的案例與一個真的在驗的案例長得一樣")
+        # candidate 這一邊**四種形狀都算紅**:一條 `AttributeError` 說的是實作還沒接上,
+        # 而「不算紅」那張表問的是「基底紅得對不對」,不是「候選綠不綠」。
+        cand_bad = (len(cand["red"]) + len(cand["import_failures"])
+                    + len(cand["missing_symbol"]) + len(cand["elsewhere"]))
+        if cand_bad:
+            why.append("candidate 上還有 %d 條紅(其中 import 失敗 %d、缺符號 %d、別處 %d)"
+                       % (cand_bad, len(cand["import_failures"]),
+                          len(cand["missing_symbol"]), len(cand["elsewhere"])))
+        if baseline["cases"] != cand["cases"]:
+            why.append("兩邊跑到的案例數不一樣(%d vs %d)—— 比的不是同一組"
+                       % (baseline["cases"], cand["cases"]))
+        ok = not why
 
-    record = {
-        # 閘門量的是同一格的**升級**,不是第二格:`red`(驗證者)→ `check`(閘門),
-        # 而 `ticket.py close` 只認 `check`(D-020 C5)。兩格會長成兩種形狀(D-018)。
-        "stage": "check",
-        "ok": ok,
-        "why": ";".join(why),
-        "at": now(),
-        "files": rels,
-        "base_ref": ref,
-        "base_sha": base_sha,
-        "candidate": args.candidate or root,
-        "candidate_sha": cand_sha,
-        "baseline": baseline,
-        "candidate_run": cand,
-    }
-    rc = write_baseline(args.ticket, plan, record, "ok" if ok else "紅不起來")
-    if rc:
-        return rc
+        record = {
+            # 閘門量的是同一格的**升級**,不是第二格:`red`(驗證者)→ `check`(閘門),
+            # 而 `ticket.py close` 只認 `check`(D-020 C5)。兩格會長成兩種形狀(D-018)。
+            "stage": "check",
+            "ok": ok,
+            "why": ";".join(why),
+            "at": now(),
+            "files": rels,
+            "base_ref": ref,
+            "base_sha": base_sha,
+            "candidate": args.candidate or root,
+            "candidate_sha": cand_sha,
+            "baseline": baseline,
+            "candidate_run": cand,
+        }
+        rc = write_baseline(args.ticket, plan, record, "ok" if ok else "紅不起來")
+        if rc:
+            return rc
 
-    sys.stdout.write("verify-case: #%s 案例 %d 個\n" % (args.ticket, baseline["cases"]))
-    sys.stdout.write("  乾淨主線 %s(%s):紅 %d、skip %d、import 失敗 %d -> %s\n"
-                     % (ref, base_sha[:12], len(baseline["red"]),
-                        baseline["skipped"], len(baseline["import_failures"]),
-                        baseline["log"]))
-    print_shapes(baseline)
-    sys.stdout.write("  candidate %s(%s):紅 %d、skip %d -> %s\n"
-                     % (args.candidate or root, cand_sha[:12], len(cand["red"]),
-                        cand["skipped"], cand["log"]))
-    print_shapes(cand)
-    if ok:
-        sys.stdout.write("verify-case: #%s baseline 成立(證據寫進票的 verify.baseline)\n"
-                         % args.ticket)
-        return 0
-    sys.stdout.write("verify-case: #%s baseline **不成立**:%s\n" % (args.ticket, record["why"]))
-    return 1
+        sys.stdout.write("verify-case: #%s 案例 %d 個\n" % (args.ticket, baseline["cases"]))
+        sys.stdout.write("  乾淨主線 %s(%s):紅 %d、skip %d、import 失敗 %d -> %s\n"
+                         % (ref, base_sha[:12], len(baseline["red"]),
+                            baseline["skipped"], len(baseline["import_failures"]),
+                            baseline["log"]))
+        print_shapes(baseline)
+        sys.stdout.write("  candidate %s(%s):紅 %d、skip %d -> %s\n"
+                         % (args.candidate or root, cand_sha[:12], len(cand["red"]),
+                            cand["skipped"], cand["log"]))
+        print_shapes(cand)
+        if ok:
+            sys.stdout.write("verify-case: #%s baseline 成立(證據寫進票的 verify.baseline)\n"
+                             % args.ticket)
+            return 0
+        sys.stdout.write("verify-case: #%s baseline **不成立**:%s\n" % (args.ticket, record["why"]))
+        return 1
+    finally:
+        # `base` / `candidate`(candidate 是分支或 sha 時才有)用完就砍,不留在
+        # worktree 裡讓下一次全樹掃描的守衛掃到(#33)。`logs` 留著。
+        discard_scratch_trees(where)
 
 
 def forbidden_patterns(root):
