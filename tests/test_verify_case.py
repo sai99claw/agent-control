@@ -68,6 +68,36 @@ class Elsewhere(unittest.TestCase):
         src.boom.go()
 """
 
+# 案例用 `subprocess` 跑工具,再把工具的**輸出**當 `assertEqual` 的訊息:那份輸出裡
+# 的整段 traceback 排在 `AssertionError:` 那一行**後面**,而紅是紅在案例檔自己這一行。
+RED_AFTER_A_SUBPROCESS = """import subprocess
+import sys
+import unittest
+
+TAGS = ["example"]
+
+
+class ToolExitCode(unittest.TestCase):
+    def test_the_tool_exits_zero(self):
+        done = subprocess.run([sys.executable, "src/tool.py"],
+                              capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+"""
+
+# 與上面同一條紅,差別只在**測試方法有 docstring**:unittest 會把它的第一行印在
+# `FAIL:` 標頭下面,而那一行不是 traceback。
+RED_WITH_A_DOCSTRING = """import unittest
+
+TAGS = ["example"]
+
+
+class NavSize(unittest.TestCase):
+    def test_value(self):
+        \"\"\"A1 主線上的值是 2。\"\"\"
+        with open("src/value.txt", encoding="utf-8") as handle:
+            self.assertEqual(handle.read().strip(), "2")
+"""
+
 # 一條算數的紅 + 一條不算的紅同一檔:算數的那一條**蓋不過**不算的那一條。
 MIXED_RED = """import unittest
 TAGS = ["example"]
@@ -459,6 +489,50 @@ class RedIsTheOnlyThingTheVerifierMeasures(CaseSandbox):
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("紅在別處(不算紅)", done.stdout)
         self.assertNotIn("baseline", self.load_ticket("1")["verify"])
+
+    def a_tool_that_blows_up(self):
+        """乾淨基底上有一支自己會炸的工具 —— 案例跑它、拿它的輸出當紅訊息。"""
+        self.write("src/tool.py",
+                   'def go():\n    raise ValueError("工具自己炸了")\n\n\ngo()\n')
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "會炸的工具")
+
+    def test_a_red_after_a_subprocess_still_counts_as_the_case_files_own(self):
+        """🩸 工具的 traceback 在**訊息裡**,排在例外那一行後面;照字面取最後一個
+        frame 會指到工具裡的檔,於是一條紅在案例檔自己斷言的紅被算成「紅在別處」
+        —— #26 那 14 條驗證者案例就是這樣全被判成不算紅的(#31)。
+
+        **變異**:`traceback_end` 裡那一行 `if not any(mark in text …CHAIN_MARKS):`
+        換成 `if False:`(= 回到「整段文字裡最後一個 frame」)→ 這一條紅。
+        """
+        self.a_tool_that_blows_up()
+        self.a_ticket(RED_AFTER_A_SUBPROCESS)
+        done = self.tool("red", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("紅在別處", done.stdout)
+        base = self.load_ticket("1")["verify"]["baseline"]
+        self.assertEqual(base["baseline"]["red"],
+                         ["verify.nav.test_ticket_1.ToolExitCode.test_the_tool_exits_zero"])
+        self.assertEqual(base["baseline"]["elsewhere"], [])
+        self.assertIn("AssertionError", base["baseline"]["red_lines"][0],
+                      "型別要讀案例自己丟的那一個,不是工具訊息裡那一個")
+
+    def test_a_case_method_with_a_docstring_still_has_its_traceback_read(self):
+        """🩸 `unittest` 把方法 docstring 的第一行印在 `FAIL:` 標頭下面 —— 那一行不是
+        traceback。把它當 body 的第一行,標頭與 traceback 之間那條分隔線就把整筆收掉,
+        `excerpt` 裡只剩一行中文:frame 讀不到、型別讀不到,分類只能說「紅在別處」。
+
+        **變異**:`parse_reds` 裡那一行 `if not status.parse_head(lines[index]):`
+        換成 `if True:`(= 說明行不再拿掉)→ 這一條紅。
+        """
+        self.a_ticket(RED_WITH_A_DOCSTRING)
+        done = self.tool("red", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("紅在別處", done.stdout)
+        base = self.load_ticket("1")["verify"]["baseline"]
+        self.assertEqual(base["baseline"]["red"],
+                         ["verify.nav.test_ticket_1.NavSize.test_value"])
+        self.assertIn("AssertionError", base["baseline"]["red_lines"][0])
 
     def a_half_finished_product(self):
         """`src/thing.py` 在,但裡面還沒有 `size()` —— 乾淨基底上那是 `AttributeError`

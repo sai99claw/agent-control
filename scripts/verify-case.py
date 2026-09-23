@@ -34,6 +34,11 @@ False:要嘛把案例寫成不依賴新符號,要嘛在票裡寫明為什麼這�
 | 其他例外(`AttributeError` / `NameError` / `FileNotFoundError` / `TypeError` …),frame 在案例檔 | 不算 | `紅在缺符號(不算紅):改成先 assert 它存在` |
 | frame 不在案例檔(產品碼或既有測試炸了) | 不算 | `紅在別處(不算紅)` |
 
+問的是 **traceback 本體**的最後一個 frame,不是輸出裡最後一個長得像 frame 的東西:
+案例用 `subprocess` 跑工具、把工具的輸出當 `assertEqual` 的訊息時,那份輸出裡的整段
+traceback 跟在例外那一行後面 —— 照字面數會指到工具裡的檔,一條算數的紅就成了「紅在
+別處」(#31)。`unittest` 印在 `FAIL:` 標頭下面那一行是方法 docstring,也不是 traceback。
+
 `skip` 另外數,兩邊都不歸。**三類不算的紅任一出現就 rc=1 而且不寫票** —— 同 #22
 「量不到不動票」:「驗紅沒過」與「這一趟還沒接上」在票面上長得一樣,而下一步差很多。
 
@@ -90,6 +95,14 @@ MISSING_SYMBOL_EXCS = ("AttributeError", "NameError", "FileNotFoundError", "Type
 # 冒號或行尾。`Traceback (most recent call last):` 與 `During handling …` 進不來
 # (名字後面不是冒號),`assertEqual` 的 diff 也進不來(以 `- ` / `+ ` 開頭)。
 EXC_LINE = re.compile(r"^([A-Za-z_][A-Za-z0-9_.]*)(?::\s?(.*))?$")
+# 例外那一行之後還有 traceback 的**唯一**合法理由:鏈起來的例外。認的是這兩句標記,
+# 不是「又出現一段 `Traceback (most recent call last):`」—— 案例把工具的輸出當
+# `assertEqual` 的訊息時,訊息裡貼著的那一份也長那樣(#31)。
+CHAIN_MARKS = ("During handling of the above exception",
+               "The above exception was the direct cause")
+# 鏈的標記是 unittest 緊接著印的:例外那一行、空行、標記、空行。往下看三行就夠 ——
+# 再遠就會掃進訊息本文,而那正是這一條要擋的東西。
+CHAIN_LOOKAHEAD = 3
 # lint F1:模組 docstring 固定這四段(`docs/DESIGN-VERIFY-CASES.md` §四)。
 DOC_SECTIONS = ("## 驗收表", "## 介面字串", "## 怎麼做假", "## 不做")
 # lint F3:`A3`、`D1-2`、`13` 都算。**不加 `\b`**:docstring 首行是「A1 讀端…」這種
@@ -121,27 +134,92 @@ def module_of(rel):
     return rel[:-3].replace(os.sep, ".").replace("/", ".")
 
 
-def red_shape(row):
-    """一筆紅 → `(例外型別, 紅訊息的第一行)`。
+def parse_reds(log_path):
+    """一份 log → 一份紅榜。**先把 unittest 的說明行拿掉**,再餵給共用的那支解析器。
 
-    型別讀的是 traceback **最後一個 frame 之後**那一行:鏈起來的例外
-    (`During handling of the above exception …`)有好幾行長得像,而算數的是最後被
-    丟出來的那一個。認不出型別時第一行退回「最後一行非空白」—— 空字串會讓
-    `red_lines` 只剩案例名,而主線覆核時要看的就是那句話。
+    `unittest` 在 `FAIL:` 標頭下面印的是測試方法 docstring 的第一行
+    (`descriptions=True` 是預設),它不是 traceback 的一部分;而
+    `status.parse_failures` 把它當成 body 的第一行,於是標頭與 traceback 之間那條
+    分隔線就把這一筆收掉了 —— **有 docstring 的案例,整段 traceback 都進不到
+    `excerpt`**:`file` 是空的、型別讀不到,十四條紅在案例檔自己斷言的紅全被算成
+    「紅在別處」(#31 量到 13 條別處 + 1 條 import 失敗)。
+
+    `scripts/status.py` 是別張票的檔,所以這裡在**餵進去之前**把那幾行拿掉,不動那
+    支解析器 —— 一份紅榜只該有一個解析器,兩份會各自往不同方向漂。
+    """
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return []
+    keep, index = [], 0
+    while index < len(lines):
+        keep.append(lines[index])
+        if not status.parse_head(lines[index]):
+            index += 1
+            continue
+        index += 1
+        while index < len(lines) and not status.DIVIDER.match(lines[index]) \
+                and not status.parse_head(lines[index]):
+            index += 1
+    fd, scratch = tempfile.mkstemp(prefix="verify-case-reds-", suffix=".log")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            out.write("\n".join(keep) + "\n")
+        rows = status.parse_failures(scratch)
+    finally:
+        os.unlink(scratch)
+    for row in rows:
+        # 紅榜裡留的要是**原始那一份**的路徑:normalise 過的那一份下一行就刪了。
+        row["log"] = log_path
+    return rows
+
+
+def traceback_end(body):
+    """一段 traceback 文字 → `(最後一個 frame 的 index, 例外那一行的 index)`,沒有就 -1。
+
+    「最後一個 frame」指的是 **traceback 本體**的最後一個,不是這段文字裡最後一個長得
+    像 frame 的東西:案例用 `subprocess` 跑工具、再把工具的輸出當 `assertEqual` 的訊息
+    時,那份輸出裡的整段 traceback 會跟在例外那一行**後面**。照字面取最後一個,指到的
+    是工具裡的檔,於是一條紅在案例檔自己斷言的紅被算成「紅在別處」(#31)。
+
+    鏈起來的例外要跟到最後一段(算數的是最後被丟出來的那一個),而**鏈是有標記的**:
+    看到 `CHAIN_MARKS` 才往下一段數,沒看到就停在這裡。
+    """
+    frame, out, index = -1, (-1, -1), 0
+    while index < len(body):
+        line = body[index]
+        if status.FILE_LINE.match(line):
+            frame = index
+        elif frame >= 0 and line.strip() and EXC_LINE.match(line):
+            out = (frame, index)
+            window = body[index + 1:index + 1 + CHAIN_LOOKAHEAD]
+            if not any(mark in text for text in window for mark in CHAIN_MARKS):
+                return out
+            frame = -1
+        index += 1
+    return out
+
+
+def red_shape(row):
+    """一筆紅 → `(例外型別, 紅訊息的第一行, 最後一個 frame 的檔路徑)`。
+
+    型別與 frame 讀的是**同一段** traceback 本體(`traceback_end`):兩邊各讀各的那
+    一刻,「型別是 AssertionError」與「frame 在案例檔」會說的是兩個不同的例外。認不出
+    型別時第一行退回「最後一行非空白」—— 空字串會讓 `red_lines` 只剩案例名,而主線
+    覆核時要看的就是那句話。
     """
     body = (row.get("excerpt") or "").splitlines()
-    last_frame = -1
-    for index, line in enumerate(body):
-        if status.FILE_LINE.match(line):
-            last_frame = index
-    for line in body[last_frame + 1:]:
-        if not line.strip():
-            continue
-        hit = EXC_LINE.match(line)
-        if hit:
-            return hit.group(1).rsplit(".", 1)[-1], line.strip()
+    frame, exc_at = traceback_end(body)
+    where = ""
+    if frame >= 0:
+        spot = status.FILE_LINE.match(body[frame])
+        where = spot.group(1) if spot else ""
+    if exc_at >= 0:
+        line = body[exc_at].strip()
+        return EXC_LINE.match(body[exc_at]).group(1).rsplit(".", 1)[-1], line, where
     tail = [line for line in body if line.strip()]
-    return "", tail[-1].strip() if tail else ""
+    return "", tail[-1].strip() if tail else "", where
 
 
 def frame_in(where, rels):
@@ -168,9 +246,9 @@ def shapes(rows, rels):
                 "%s: %s" % (row["case"], row["excerpt"].splitlines()[-1]
                             if row["excerpt"] else ""))
             continue
-        exc, first = red_shape(row)
+        exc, first, where = red_shape(row)
         label = "%s: %s" % (row["case"], first)
-        if not frame_in(row.get("file"), rels):
+        if not frame_in(where, rels):
             out["elsewhere"].append(label)
         elif row["kind"] == "FAIL" or exc.endswith("AssertionError"):
             # unittest 只把 `failureException`(= `AssertionError`,`self.fail` 也是它)
@@ -221,7 +299,7 @@ def run_cases(where, rels, log_path):
     text = (done.stdout or "") + (done.stderr or "")
     with open(log_path, "w", encoding="utf-8") as handle:
         handle.write(text)
-    out = shapes(status.parse_failures(log_path), rels)
+    out = shapes(parse_reds(log_path), rels)
     count, skipped = 0, 0
     for line in text.splitlines():
         hit = RAN.match(line)
