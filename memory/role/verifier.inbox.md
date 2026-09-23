@@ -1,3 +1,4 @@
 - verify/<feature>/test_ticket_<n>.py 由你獨占;實作者交的同名檔落地時以你的為準,票的 verify.files 記你那份 (#630) (#630, 2026-09-22, main@fable)
 - 不追求快,只看效率:因為比較快而做事之前先算 token 多還是少;快不快不是判準 (D-016) (2026-09-22, main@fable)
 - 設計為未來 token 打算,不為眼前複雜度繞路:取捨看之後每票多讀多少、重來幾輪;太複雜可裁「開票之後再做」但票要寫全,不准繞過去(改名、加第二個欄位、各做各的形狀) (D-018) (2026-09-23, main@fable)
+- patch.diff 在 $W 裡跑 diff -ruN base work,檔頭只准 base/… work/…;絕對路徑檔頭 apply.sh 秒退、patch -p1 會把檔案建到 work/private/… (#25 #26 #28) (2026-09-23, main@fable)

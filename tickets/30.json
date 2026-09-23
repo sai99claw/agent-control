@@ -1,0 +1,47 @@
+{
+  "id": "30",
+  "subject": "主線紅:test_no_project_names 把 docs/FLOW.html(.html 文件)與 tickets/23.json(票檔紀錄)當成程式/設定而紅;文件與票這兩種紀錄可以指名來源專案,絕對路徑仍全面禁止",
+  "created": "2026-09-23T13:57:29+08:00",
+  "objective": "守衛的『兩級嚴格』把 docs/ 底下的 .html 與 tickets/*.json 歸到文件那一級(可寫來源專案名、禁絕對路徑);乾淨 main 上 python3 -m unittest tests.test_no_project_names rc=0;tickets/23.json 裡的絕對家目錄路徑由主線用 ticket.py set 改成相對路徑(worker 只回報在哪一格)",
+  "acceptance": [
+    "main 上重現:test_no_code_or_config_names_the_project_it_came_from 印 docs/FLOW.html 與 tickets/23.json;修後同案例綠(docs/FLOW.html 不動內容)",
+    "offences('docs/FLOW.html', <含來源專案名>) == [];offences('tickets/23.json', <含來源專案名>) == [];兩者含絕對家目錄路徑時仍列出(變異:把 .html 歸回程式級 → 第一條回到紅)",
+    "scripts/*.py、board/config.json、templates/*.md 含來源專案名仍紅(守衛沒被放寬到程式與設定)",
+    "test_no_file_carries_an_absolute_home_path 對 tickets/23.json 仍紅,直到主線把那一格改掉;EVIDENCE 列出 23.json 哪幾格含絕對路徑"
+  ],
+  "in_scope": [
+    "tests/test_no_project_names.py"
+  ],
+  "out_of_scope": [
+    "tickets/*",
+    "docs/FLOW.html"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "tests/test_no_project_names.py"
+  ],
+  "role": "worker",
+  "model": "sonnet",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "2219a9c91948066c9f352900216dc1767059c750",
+  "state": "Ready",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": "測試票;verify_waiver 由 main 給"
+  },
+  "verify_strings": [
+    ".html"
+  ],
+  "outline": "擋住 #25 落地的主線紅,元兇是主線裸 commit 了 FLOW.html 與票檔(G10)。文件級 = docs/**.md、docs/**.html、tickets/*.json;其餘照舊。",
+  "verify_waiver": {
+    "by": "main",
+    "reason": "測試票:改的就是守衛;變異在 acceptance;無獨立驗證者"
+  },
+  "needs_verifier": false
+}

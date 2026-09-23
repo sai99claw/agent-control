@@ -1,0 +1,82 @@
+{
+  "id": "28",
+  "subject": "rules.py pack 疊專案層記憶(memory/role、memory/model 主檔 + inbox 尾巴、memory/project 路徑清單),sync-to-project.sh 不再複製 inbox 也不碰專案 memory/",
+  "created": "2026-09-23T13:42:20+08:00",
+  "objective": "roles_dir(root) != memory/role 時(專案在讀正本規則),rules.py pack 額外疊讀專案層 memory/role/<card>.md、memory/model/<model>.md 主檔與兩者 .inbox.md 尾巴(<=600B),先讀清單多列 memory/project/*.md 路徑(只列路徑不貼內容);4KB 上限與最後一刀不變;roles_dir(root) == memory/role(A 自己)時只讀一次、不印本專案小標。sync-to-project.sh 的 copy_dir 不再複製 *.inbox.md,且 <專案>/memory/** 在 sync 前後逐位元組不變(manifest 測試釘死)。docs/MEMORY.md 兩層表加一節說明專案端三個目錄。scripts/memory.py 的 note/check 已對齊,本票不改。",
+  "acceptance": [
+    "tests/test_rules.py 新案例:假專案 config 設 roles_dir=docs/roles、models_dir=docs/roles/model,放 docs/roles/implementer.md(內容含 CANON-ROLE)、memory/role/implementer.md(LOCAL-ROLE)、memory/role/implementer.inbox.md 三行(INBOX-3 在最後一行)、docs/roles/model/opus.md(CANON-MODEL)、memory/model/opus.md(LOCAL-MODEL)、memory/project/foo.md;跑 pack worker --model opus 期望輸出同時含 CANON-ROLE、LOCAL-ROLE、INBOX-3、CANON-MODEL、LOCAL-MODEL 五個字串、memory/project/foo.md 這個路徑出現在先讀清單裡、輸出總長度 <= 4096、rc == 0",
+    "同一 fixture,roles_dir 改成不設(等於 A 自己)時,pack 輸出不含本專案這個小標、角色卡內容只出現一次(不重複)",
+    "同一 fixture,拿掉專案主檔只留 inbox 時,pack 不印找不到 memory/role/ 這樣的字樣、inbox 尾巴的內容仍在輸出裡;加 --max-bytes 1500 時如果 inbox 那格被砍,輸出裡點名 inbox 那個路徑(不是默默消失)",
+    "tests/test_memory.py 新案例:假專案 config 設 memory.applies_to=[memory/role/*.md],對同一角色 note role implementer 21 次之後,check 的 rc == 1,且它開出的整理票 allowed_write_path 是 memory/role/implementer.md,不是 docs/roles/ 開頭的路徑",
+    "tests/test_sync_to_project.py 新案例:A 側(HERE)先放 memory/role/main.inbox.md;假專案先放 memory/role/main.inbox.md 與 memory/project/x.md,且舊 manifest 裡含 main.inbox.md 條目、docs/roles/main.inbox.md 檔案存在。跑一次 sync 之後:docs/roles/ 底下找不到任何 *.inbox.md、stdout 裡有一行點名退場 main.inbox.md、新寫回的 manifest 不含任何 inbox 條目、假專案 memory/ 底下每個檔案的 sha256 與 sync 前逐一相同;對 applies_to=[docs/roles/*.md] 的假專案跑 sync 的 --dry-run 得 rc == 2 且輸出點名 applies_to 這一鍵",
+    "docs/MEMORY.md 的兩層表加一列專案端,列出 memory/role、memory/model、memory/project 三個目錄各自誰寫、規則包怎麼疊,且含一句同一目錄就是正本;memory/role/README.md 同步這一句(這條用 verify_strings 機器驗,不寫成 unittest 案例)"
+  ],
+  "in_scope": [
+    "scripts/rules.py",
+    "scripts/sync-to-project.sh",
+    "docs/MEMORY.md",
+    "memory/role/README.md",
+    "tests/test_rules.py",
+    "tests/test_memory.py",
+    "tests/test_sync_to_project.py",
+    "tests/test_ticket_29.py"
+  ],
+  "out_of_scope": [
+    "scripts/memory.py(note/check 已對齊,本票不改)",
+    "tabby_pool 任何檔案(T 端接線是 tabby_pool #648,不是本票)",
+    "board/config.json 的 T 端 memory.applies_to 改動(#648 帶)",
+    "在 T 端手改 scripts/control/rules.py(sync 一跑就會被蓋掉,不是正本改法)"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/rules.py",
+    "scripts/sync-to-project.sh",
+    "docs/MEMORY.md",
+    "memory/role/README.md",
+    "tests/test_rules.py",
+    "tests/test_memory.py",
+    "tests/test_sync_to_project.py",
+    "tests/test_ticket_28.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "461fa4646a6376f680e2f322f3e3d6adc549525a",
+  "state": "Ready",
+  "state_version": 7,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [
+      "tests/test_ticket_28.py"
+    ],
+    "tags": [],
+    "run": "cd <workspace>/agent-control && python3 -m unittest tests.test_ticket_28 tests.test_rules tests.test_memory tests.test_sync_to_project",
+    "notes": "六條 acceptance 全部用 tests/control_harness.py 的 Sandbox 造假專案,不連真的 tabby_pool;第 6 條是文件字句,verify_strings 驗,不在這支跑的案例裡"
+  },
+  "decision_refs": [
+    "D-021"
+  ],
+  "outline": "跨 repo:tabby_pool #648(sonnet,已開)的同步接線要等本票落地的 sha 才能當同步目標,本票需先於 #648 落地;不建 depends_on(#648 在 T 側,不是本系統的票)。D-021 結論丙:專案備忘的唯一去處是 <專案>/memory/{role,model,project}/,memory.py note 不改。rules.py 新增 local_dir(layer) = 固定 memory/<layer>;pack() 在 roles_dir(root) != memory/role 時疊讀專案層主檔與兩者 inbox 尾巴(<=600B,與 MEMORY_NOTE 同列先扣預算),先讀清單多列 memory/project/*.md 路徑;roles_dir(root) == memory/role(A 自己)時只讀一次、不印本專案小標;4KB 上限與最後一刀不變。sync-to-project.sh 的 copy_dir 跳過 *${INBOX_SUFFIX}(讀 memory.inbox_suffix,預設 .inbox.md);舊 manifest 的 inbox 條目走既有退場路徑刪除並唸出來;--dry-run 前置檢查多一條:applies_to 不得含 roles_dir 底下的路徑。docs/MEMORY.md 兩層表加專案端一列,memory/role/README.md 同步一句同一目錄就是正本。",
+  "test_plan": "驗證者用既有 tests/control_harness.py 的 Sandbox 造假 repo,不碰真 T。前五條 acceptance 各對到 tests/test_rules.py(3 案例)、tests/test_memory.py(1 案例)、tests/test_sync_to_project.py(1 案例);tests/test_ticket_29.py 收整合性案例或跑其餘三檔的索引。第 6 條(docs/MEMORY.md 文字)不寫 unittest,靠 verify_strings 機器驗。",
+  "verify_strings": [
+    {
+      "path": "scripts/rules.py",
+      "contains": "local_dir"
+    },
+    {
+      "path": "scripts/rules.py",
+      "contains": "memory/project"
+    },
+    {
+      "path": "scripts/sync-to-project.sh",
+      "contains": "inbox_suffix"
+    },
+    {
+      "path": "docs/MEMORY.md",
+      "contains": "同一目錄就是正本"
+    }
+  ],
+  "needs_verifier": false
+}
