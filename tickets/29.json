@@ -86,18 +86,18 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "461fa4646a6376f680e2f322f3e3d6adc549525a",
-  "state": "Draft",
-  "state_version": 1,
+  "base_sha": "d4d177ec8bf3b9fe318d77b28f8fdbc7d0ad2cb8",
+  "state": "Ready",
+  "state_version": 5,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
-    "tags": [
-      "flow-audit"
+    "files": [
+      "tests/test_ticket_29.py"
     ],
-    "run": "",
-    "notes": ""
+    "tags": [],
+    "run": "python3 -m unittest tests.test_ticket_29",
+    "notes": "驗證者(sonnet,只證紅)照 12 條 acceptance;A12 在 #25 已落,案例應在基底綠(寫明)"
   },
   "decision_refs": [
     "D-015",
@@ -120,5 +120,6 @@
       "path": "scripts/apply.sh",
       "contains": "result-round1"
     }
-  ]
+  ],
+  "tags": []
 }

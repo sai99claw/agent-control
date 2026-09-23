@@ -37,8 +37,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "141261b033971a76914bc39eddc8b0c597f871f4",
-  "state": "Ready",
-  "state_version": 6,
+  "state": "Done",
+  "state_version": 12,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -47,11 +47,71 @@
     ],
     "tags": [],
     "run": "python3 -m unittest tests.test_ticket_27",
-    "notes": "驗證者(sonnet,只證紅)7 條:marker 檔在 base_sha 之後才加,check 的基底副本天生沒有(紅)、候選有(綠);A5 恆假案例逼 ok:false 走 auto-fix 假 worker"
+    "notes": "驗證者(sonnet,只證紅)7 條:marker 檔在 base_sha 之後才加,check 的基底副本天生沒有(紅)、候選有(綠);A5 恆假案例逼 ok:false 走 auto-fix 假 worker",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-09-23T16:09:12+08:00",
+      "files": [
+        "tests/test_ticket_27.py"
+      ],
+      "base_ref": "141261b033971a76914bc39eddc8b0c597f871f4",
+      "base_sha": "141261b033971a76914bc39eddc8b0c597f871f4",
+      "candidate": "ec98c91007744af1f2b8b3054ffdd4d0cd724274",
+      "candidate_sha": "ec98c91007744af1f2b8b3054ffdd4d0cd724274",
+      "baseline": {
+        "red": [
+          "tests.test_ticket_27.GateTicketWiring.test_a1_empty_verify_files_without_waiver_prints_the_gap_line",
+          "tests.test_ticket_27.GateTicketWiring.test_a2_lint_failure_stops_before_check_runs",
+          "tests.test_ticket_27.GateTicketWiring.test_a3_check_runs_once_lint_passes",
+          "tests.test_ticket_27.GateTicketWiring.test_a4_check_upgrades_the_stage_from_red_to_check",
+          "tests.test_ticket_27.GateTicketWiring.test_a5_a_failing_check_lands_in_status_failures_and_dispatches_autofix",
+          "tests.test_ticket_27.GateTicketWiring.test_a6_check_happens_inside_gate_after_regression_not_at_land"
+        ],
+        "red_lines": [
+          "tests.test_ticket_27.GateTicketWiring.test_a1_empty_verify_files_without_waiver_prints_the_gap_line: AssertionError: '這張票沒有驗證者案例' not found in 'gate: python3 -m unittest test_dummy91\\nRan 1 test in 0.000s\\nOK\\ngate: 票 #91 沒有宣告 verify.tags —— 這一輪沒有回歸可跑\\ngate:   (驗證者交件時要填票的 verify.tags;現在這個綠只涵蓋單元層。)\\nstatus: reports/t91/20260923-160904-4878/status.json rc=0 紅 0 條(疑似 flaky 0 條,自動 flaky 0 條)\\n' : verify.files 空且沒有 waiver 時,gate 沒有印票面 acceptance 第 1 條指定的那句話:",
+          "tests.test_ticket_27.GateTicketWiring.test_a2_lint_failure_stops_before_check_runs: AssertionError: 'verify/t91/test_badlint.py' not found in 'gate: python3 -m unittest test_dummy91\\nRan 1 test in 0.000s\\nOK\\ngate: 票 #91 沒有宣告 verify.tags —— 這一輪沒有回歸可跑\\ngate:   (驗證者交件時要填票的 verify.tags;現在這個綠只涵蓋單元層。)\\nstatus: reports/t91/20260923-160904-4932/status.json rc=0 紅 0 條(疑似 flaky 0 條,自動 flaky 0 條)\\n' : lint 不過時 gate 要指名是哪個檔,而不是只說一句『lint 不過』:",
+          "tests.test_ticket_27.GateTicketWiring.test_a3_check_runs_once_lint_passes: AssertionError: 'verify-case: #91 案例' not found in 'gate: python3 -m unittest test_dummy91\\nRan 1 test in 0.000s\\nOK\\ngate: 票 #91 沒有宣告 verify.tags —— 這一輪沒有回歸可跑\\ngate:   (驗證者交件時要填票的 verify.tags;現在這個綠只涵蓋單元層。)\\nstatus: reports/t91/20260923-160905-4990/status.json rc=0 紅 0 條(疑似 flaky 0 條,自動 flaky 0 條)\\n' : lint 過了,check 應該要被叫到(cmd_check 開頭那一句沒有出現):",
+          "tests.test_ticket_27.GateTicketWiring.test_a4_check_upgrades_the_stage_from_red_to_check: AssertionError: 'red' != 'check'",
+          "tests.test_ticket_27.GateTicketWiring.test_a5_a_failing_check_lands_in_status_failures_and_dispatches_autofix: AssertionError: 0 == 0 : 候選上這條案例永遠紅,check 判 ok:false 要讓整趟閘門非零:",
+          "tests.test_ticket_27.GateTicketWiring.test_a6_check_happens_inside_gate_after_regression_not_at_land: AssertionError: 'verify-case: #91 案例' not found in 'gate: python3 -m unittest test_dummy91\\nRan 1 test in 0.000s\\nOK\\ngate: 票 #91 沒有宣告 verify.tags —— 這一輪沒有回歸可跑\\ngate:   (驗證者交件時要填票的 verify.tags;現在這個綠只涵蓋單元層。)\\nstatus: reports/t91/20260923-160906-5165/status.json rc=0 紅 0 條(疑似 flaky 0 條,自動 flaky 0 條)\\n' : 只跑了一次 gate.sh、完全沒有呼叫 land.sh,check 卻沒有被叫到——量綠這件事不該等到 land 才發生:"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 7,
+        "skipped": 0,
+        "log": "/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/verify-case-xjfb7irp/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 7,
+        "skipped": 0,
+        "log": "/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/verify-case-xjfb7irp/logs/candidate.log"
+      }
+    }
   },
   "decision_refs": [
     "D-020"
   ],
   "outline": "依 docs/DESIGN-VERIFY-CASES.md §三三步驟接線;shell + 沙盒 repo 整合測試,gate.sh 已 600 行、要繞開既有 auto-fix 分支。依賴 A #26(verify-case.py 的 lint/check 子指令要先存在)。驗證者案例 tests/test_ticket_27.py。",
-  "needs_verifier": false
+  "needs_verifier": false,
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "ec98c91007744af1f2b8b3054ffdd4d0cd724274",
+    "state_version": 12,
+    "note": "read patches r1-r3: gate.sh verify_case() runs beside regression (tags-independent): gap = verify declared but files empty (waiver or needs_verifier=false only frees that check), lint <files> --ticket n, check n --ref base_sha --candidate tree; candidate reds feed status.py done failures[] (auto-fix path), ok:false with green candidate is the verifier stage=red round (note only, close still blocked); control_harness F1 fixture, no default waiver; 11 mutations red; full suite 528 with only the no-.git base red; verifier 7 red-only cases green with patch",
+    "at": "2026-09-23T16:09:28+08:00"
+  },
+  "verify_strings": [
+    "verify_case()"
+  ]
 }

@@ -9,3 +9,4 @@
 - 驗證者派工文由實作者派工文改字時,$W 那一行要逐字檢查指到 t<n>v;#648 驗證者照字面開在實作者的 $W 覆蓋過 work/ —— 派工前 grep '$W =' 一次 (2026-09-23, main@fable)
 - 刪檔段 +++ /dev/null 在 Apple patch 2.0 會套成 0 byte 檔,git apply 才真刪;合併驗證用 git apply --check 不用 patch -p1 (#648) (2026-09-23, main@fable)
 - 覆核不由主線讀 patch:閘門綠後派短命 opus reviewer,讀票面+分支 code+EVIDENCE,逐條驗收對到實作行與案例、查範圍與反駁,交 verdict/對照表/疑慮;主線只寫 review 格與排落地 (D-022) (2026-09-23, main@fable)
+- 單票 land 全套紅時 land.sh 會自己叫 auto-fix.sh(#13)並繼續持有 .land.lock;主線要重落同一票前先看 pgrep 'land.sh t<n>' 與 auto-fix,killed 才清鎖,否則兩個 land 並跑 (#32) (2026-09-23, main@fable)

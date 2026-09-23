@@ -1,0 +1,54 @@
+{
+  "id": "32",
+  "subject": "scripts/verify.py 的 ROOT = dirname(dirname(__file__)) 在專案端 scripts/control/ 底下算成 <專案>/scripts,verify/ 找不到、registered_tags() 回空 → verify-case.py lint 的 F2 在專案對每份案例恆紅",
+  "created": "2026-09-23T17:33:14+08:00",
+  "objective": "verify.py 找 repo 根的方式與其他控制腳本一致(往上找 board/config.json,AC_ROOT 可覆蓋);放在 <root>/scripts/ 與 <root>/scripts/control/ 兩處都算出同一個 root;registered_tags() 在專案端讀得到 <root>/verify/TAGS.md 與 TAGS.d",
+  "acceptance": [
+    "fixture:mkdtemp 假專案,board/config.json + verify/TAGS.md 登記一個 tag,把 scripts/verify.py 複製到 <fake>/scripts/control/verify.py,以該路徑 import 後 registered_tags() 含那個 tag(現況:空集合)",
+    "A 自己:python3 scripts/verify.py --list 與 --tag example 行為不變(tests/test_verify_runner 綠)",
+    "變異:把往上找改回 dirname(dirname(__file__)) → fixture 案例紅"
+  ],
+  "in_scope": [
+    "scripts/verify.py"
+  ],
+  "out_of_scope": [
+    "scripts/verify-case.py"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/verify.py",
+    "tests/test_verify_runner.py"
+  ],
+  "role": "worker",
+  "model": "sonnet",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "d4d177ec8bf3b9fe318d77b28f8fdbc7d0ad2cb8",
+  "state": "Done",
+  "state_version": 7,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": "測試票性質;verify_waiver 由 main 給(fixture 案例即驗收)"
+  },
+  "verify_strings": [
+    "board/config.json"
+  ],
+  "outline": "tabby #650 驗證者實測抓到(OBJECTION blocking):同步到專案端後 lint F2 恆紅,閘門永遠停在 lint。修完 → land → #650 換同步目標 sha 重跑。",
+  "verify_waiver": {
+    "by": "main",
+    "reason": "測試票性質:fixture 案例即驗收,變異在 acceptance;無獨立驗證者"
+  },
+  "needs_verifier": false,
+  "review": {
+    "verdict": "pass",
+    "by": "main",
+    "sha": "0fc650a",
+    "state_version": 7,
+    "note": "read patch: verify.py _find_root() = AC_ROOT or walk up to board/config.json (inlined, no import of event.py); fixture proves scripts/ and scripts/control/ resolve the same root and registered_tags() sees the project's TAGS; RunScopedCache fixture made real (copies verify/ into AC_ROOT); mutation red; r2: fixtures pin or clear AC_ROOT (land sets it), RunScopedCache proven env-independent; waiver (test-ticket nature)",
+    "at": "2026-09-23T17:58:53+08:00"
+  }
+}
