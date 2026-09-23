@@ -66,6 +66,86 @@ class T(unittest.TestCase):
 """
 
 
+# ---------------------------------------- D-020:驗證者的案例(lint -> check)
+# 乾淨基底上紅、這一輪的樹上綠的一條案例。**期望值 2 是票面說的**,不是跑一次記
+# 下來的;lint 的六條(F1-F6)在這一份上全過 —— 它是 `verify/_template_ticket.py`
+# 的形狀,`test_` 的 docstring 首行是驗收編號(F3)。
+#
+# 那個 docstring **是這一組的一部分**,不是裝飾:#31 之前 `unittest` 印在 `FAIL:`
+# 標頭下面的那一行說明會把整段 traceback 擠出 `excerpt`,於是照 F3 寫的案例一律被
+# 算成「紅在別處(不算紅)」—— lint 要求的形狀與分類器對打。這一份照 F3 寫,所以
+# 那條路要是再壞掉,這裡會紅。
+VERIFIER_CASE = '''"""#7 一句話:src/value.txt 的值由 1 變成 2。
+
+## 驗收表(期望值來源獨立於被測程式)
+A1 | unit | 讀 src/value.txt | 檔裡的那個字 | 票面驗收第 1 條:2
+
+## 介面字串
+VALUE = "2"          ← A1 斷言檔裡的字等於它
+
+## 怎麼做假
+不上真埠、不起真服務、不殺行程:只讀工作目錄裡的一個檔。
+
+## 不做
+不改產品碼;不放寬票面驗收。
+"""
+import unittest
+
+TAGS = ["example"]
+
+VALUE = "2"
+
+
+class TheValue(unittest.TestCase):
+
+    def test_a1_the_value_is_two(self):
+        """A1 src/value.txt 的值是 2。"""
+        with open("src/value.txt", encoding="utf-8") as handle:
+            self.assertEqual(handle.read().strip(), VALUE)
+'''
+
+# 兩邊都綠的一條案例:lint 過得了,但它在乾淨基底上也不會紅 —— `check` 因此判
+# `ok:false`(「一個永遠綠的案例與一個真的在驗的案例長得一樣」)。**那是驗證者那一趟
+# 要證的事**,不是 worker 這一輪弄壞的。
+ALWAYS_GREEN_CASE = '''"""#7 一句話:一條永遠綠的案例(沙盒用)。
+
+## 驗收表(期望值來源獨立於被測程式)
+A1 | unit | 跑這一條 | 綠 | 沙盒 fixture:兩邊都綠
+
+## 介面字串
+(沒有;這一條不斷言任何字串)
+
+## 怎麼做假
+不上真埠、不起真服務、不殺行程。
+
+## 不做
+不改產品碼;不放寬票面驗收。
+"""
+import unittest
+
+TAGS = ["example"]
+
+
+class NeverRed(unittest.TestCase):
+
+    def test_a1_it_is_green_on_both_trees(self):
+        """A1 這一條兩邊都綠。"""
+        self.assertTrue(True)
+'''
+
+# 同一條斷言,但模組 docstring 的四段一段都沒有 —— lint 的 F1 擋它。
+UNLINTED_CASE = """import unittest
+
+TAGS = ["example"]
+
+
+class TheValue(unittest.TestCase):
+    def test_a1_the_value_is_two(self):
+        with open("src/value.txt", encoding="utf-8") as handle:
+            self.assertEqual(handle.read().strip(), "2")
+"""
+
+
 class GateSh(Sandbox):
 
     def setUp(self):
@@ -328,6 +408,227 @@ class GateSh(Sandbox):
     def test_no_arguments_at_all_is_a_usage_error(self):
         done = self.gate()
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+
+
+class VerifierCasesAtTheGate(Sandbox):
+    """`gate.sh --ticket <票號>` 在回歸層之後多跑的兩步(D-020 C5)。
+
+    在這一層接上之前,「候選該綠」這一半**沒有任何腳本自動量**:`verify-case.py check`
+    存在(#22),而唯一被要求跑它的人(驗證者)在時間上拿不到實作者的 patch。於是
+    驗證者只剩一條路 —— 自己搭一份拋棄式參考實作,那是 #23 那 340K 的來源。
+
+    所以這一組問的不是 `verify-case.py` 怎麼分類紅(那是 #26 / `test_verify_case`),
+    是**閘門到底有沒有去叫它、紅了有沒有進紅榜**。
+    """
+
+    def setUp(self):
+        super().setUp()
+        # 對得到對照表、而且會綠的一支替身模組:這一組問的不是單元層。
+        self.write(os.path.join("tests", "test_land.py"), PASSING % "test_land")
+        self.write(os.path.join("src", "value.txt"), "1\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "沙盒:主線上的值是 1")
+
+    def a_ticket(self, case=VERIFIER_CASE, **fields):
+        """一張指著一份驗證者案例的票。
+
+        `verify.tags` 留空是**故意的**:回歸層因此只印一行就回來,這一組量到的紅與
+        綠就只會來自驗證者那一層 —— 兩層混在同一個 rc 裡的話,紅榜指誰說不清楚。
+        """
+        self.write(os.path.join("verify", "nav", "__init__.py"), "")
+        self.write(os.path.join("verify", "nav", "test_ticket_7.py"), case)
+        fields.setdefault("verify", {"files": ["verify/nav/test_ticket_7.py"],
+                                     "tags": [], "run": "", "notes": ""})
+        return self.make_ticket(7, allowed_write_paths=["verify/*", "src/*", "tests/*"],
+                                **fields)
+
+    def implement(self):
+        """實作者這一輪的改動:值變成 2(還沒 commit —— 閘門問的是現在手上這一份)。"""
+        self.write(os.path.join("src", "value.txt"), "2\n")
+
+    def gate(self, *extra):
+        return self.run_sh("scripts/gate.sh", "tests/test_land.py", "--ticket", "7",
+                           "--no-auto-fix", *extra)
+
+    # --------------------------------------------- 沒有案例 = 缺口,不是綠
+
+    def test_a_declared_but_empty_verify_files_is_a_gap_not_a_green(self):
+        """驗收 1(同 #619 的精神)。
+
+        **變異**:把 `verify_case` 裡 `CRC=3` 那一行拿掉(退回只印一行)→ 這一條紅,
+        因為退出碼變成 0 —— 而「沒有人驗過」與「驗過了都過」正是在那裡長得一樣。
+        """
+        self.make_ticket(7, allowed_write_paths=["tests/*", "src/*"],
+                         verify={"files": [], "tags": [], "run": "", "notes": ""})
+        done = self.gate()
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertIn("這張票沒有驗證者案例", done.stdout)
+        self.assertIn("verify_waiver", done.stdout, "下一步要寫在裡面")
+
+    def test_a_waiver_excuses_the_ticket_from_this_layer(self):
+        """驗收 1 的另一半:**有 waiver 就不是缺口**。守衛擋下所有沒有案例的票的
+        那一版,與 `verify_waiver` 這一格不存在長得一樣。
+
+        waiver 免的是**「有沒有案例」那一格**,不是整層:`verify.files` 非空時 lint 與
+        check 照跑(票面驗收 2、3 對這兩步沒有寫例外)。第 2 輪把它寫成短路整層,於是
+        帶 waiver 的票再也不會被 lint —— 驗證者的 A2–A6 就是量到那件事(#27 第 3 輪)。
+
+        **變異**:把 `waiver)` 那一格拿掉 → 前半紅(rc 變 3);把它從 `[ -z "$files" ]`
+        裡面搬到外面(退回第 2 輪)→ 後半紅(lint 不會被叫到)。
+        """
+        self.make_ticket(7, allowed_write_paths=["tests/*", "src/*"],
+                         verify={"files": [], "tags": [], "run": "", "notes": ""},
+                         verify_waiver={"by": "main", "reason": "純文字,沒有邏輯可紅"})
+        done = self.gate()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("verify_waiver", done.stdout)
+        self.assertNotIn("這張票沒有驗證者案例", done.stdout)
+
+        # 同一張票,這次**有**案例檔(而且是一份 lint 過不了的):waiver 不免 lint。
+        self.a_ticket(UNLINTED_CASE,
+                      verify_waiver={"by": "main", "reason": "純文字,沒有邏輯可紅"})
+        done = self.gate()
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("verify-case lint:", done.stdout,
+                      "有 waiver 的票,案例檔還是要過 lint")
+
+    def test_a_ticket_that_never_declared_verify_is_not_a_gap(self):
+        """**沒有宣告**與**宣告了卻沒有案例**是兩件事,下一步也不同。
+
+        同一支腳本對回歸層就是這樣分的:`regression()` 對「票沒有宣告 verify.tags」
+        出聲不擋,對「宣告了 tags 卻一個案例都選不到」才非零(#619)。`needs_verifier`
+        那一格則是與 `land.sh` 對齊(#8)—— 兩支對同一張票不該給出不同的答案。
+
+        **變異**:把 `undeclared)` 那一格拿掉 → 後半紅(rc 變 3);把
+        `needs-verifier-false)` 那一格拿掉 → 前半紅。
+        """
+        self.make_ticket(7, allowed_write_paths=["tests/*", "src/*"],
+                         needs_verifier=False,
+                         verify={"files": [], "tags": [], "run": "", "notes": ""})
+        done = self.gate()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("needs_verifier=false", done.stdout)
+
+        # 票上連 `verify` 這一格都沒有(沙盒手寫票的形狀)。
+        self.make_ticket(7, allowed_write_paths=["tests/*", "src/*"])
+        done = self.gate()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("連 verify 這一格都沒有宣告", done.stdout)
+        self.assertNotIn("這張票沒有驗證者案例", done.stdout)
+
+    # ------------------------------------------------- lint 紅了就停在這裡
+
+    def test_a_case_that_fails_lint_stops_the_gate_and_names_the_line(self):
+        """驗收 2:lint 的 rc 非零時**不繼續跑 check**。
+
+        格式不合的案例跑出來的紅指向的是格式,不是實作 —— 讓它往下跑,下一輪的
+        worker 會去修一個沒有壞掉的東西。
+
+        **變異**:把 `if [ "$lrc" -ne 0 ]` 那一段拿掉 → 這一條紅(check 的那一行
+        會出現在 stdout 裡)。
+        """
+        self.a_ticket(UNLINTED_CASE)
+        self.implement()
+        done = self.gate()
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("verify/nav/test_ticket_7.py:1", done.stdout, "沒有指名是哪一行")
+        self.assertIn("F1", done.stdout)
+        self.assertIn("不跑 check", done.stdout)
+        self.assertNotIn("驗證者案例的綠", done.stdout, "lint 紅了還往下跑 check")
+        self.assertNotIn("baseline", self.load_ticket("7")["verify"],
+                         "lint 紅了卻仍然在票上寫了一格判決")
+
+    # --------------------------------------------- lint 過了才量「候選該綠」
+
+    def test_lint_passing_lets_check_run_and_lifts_the_stage(self):
+        """驗收 3 與 4:`stage` 由 `red` 升成 `check`(`ticket.py close` 只認它)。
+
+        **變異**:把 `verify_case` 裡 check 那一段拿掉 → 這一條紅(票上沒有
+        `verify.baseline`)。
+        """
+        self.a_ticket()
+        self.implement()
+        done = self.gate()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("verify-case lint: 過", done.stdout)
+        self.assertIn("驗證者案例的綠", done.stdout)
+        baseline = self.load_ticket("7")["verify"]["baseline"]
+        self.assertEqual(baseline["stage"], "check",
+                         "閘門量完了,stage 還停在驗證者那一段")
+        self.assertTrue(baseline["ok"], baseline["why"])
+        self.assertEqual(baseline["candidate_run"]["red"], [])
+        self.assertEqual(baseline["baseline"]["red"],
+                         ["verify.nav.test_ticket_7.TheValue.test_a1_the_value_is_two"],
+                         "乾淨基底上要紅在案例檔自己的斷言")
+
+    def test_check_runs_after_the_regression_layer_not_at_land_time(self):
+        """驗收 6:**回歸層之後**。
+
+        量在 land 等於紅了才發現,而 worker 的三輪修復迴圈住在閘門 —— 那是多一整輪
+        的事。**變異**:把 `verify_case` 的呼叫搬到 `regression ticket` 前面 →
+        這一條紅。
+        """
+        self.a_ticket()
+        self.implement()
+        done = self.gate()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertLess(done.stdout.index("沒有宣告 verify.tags"),
+                        done.stdout.index("驗證者案例的綠"),
+                        "驗證者那一層跑在回歸層前面")
+
+    # ------------------------------------- 候選上紅 = 閘門紅,紅榜要指得到人
+
+    def test_a_verifier_case_that_stays_red_puts_the_red_list_in_the_status_file(self):
+        """驗收 5:`ok:false` 的紅榜進 `status.json` 的 `failures[]`。
+
+        沒有 `implement()` —— 值還是 1,驗證者的那一條在這一輪的樹上仍然紅。
+
+        **變異**:把 `CHECK_LOG_ARGS="--log …candidate.log"` 那一行拿掉 → 這一條紅
+        (rc 仍然非零,但 `failures[]` 是空的,而下一輪的 worker 讀的正是那一格 ——
+        一個沒有案例名字的紅榜與沒有紅榜一樣)。
+        """
+        self.a_ticket()
+        done = self.gate()
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("紅榜進狀態檔", done.stdout)
+        self.assertFalse(self.load_ticket("7")["verify"]["baseline"]["ok"])
+        data = self.status_of("7")
+        self.assertIn("verify.nav.test_ticket_7.TheValue.test_a1_the_value_is_two",
+                      [row["case"] for row in data["failures"]],
+                      "紅榜裡沒有那一條驗證者案例:%r" % data["failures"])
+
+    def test_a_case_that_never_turns_red_is_not_this_rounds_red(self):
+        """`ok:false` 但**候選樹上一條都沒紅**:baseline 不成立的理由在另一邊(乾淨
+        基底上沒紅)。那是驗證者那一趟(`stage=red`)要證的事,worker 這一輪修不動 ——
+        把它算成這一輪的紅,下一輪的人會去修一個沒有壞掉的東西(D-014 §紅了誰修)。
+
+        **不是把它吞掉**:票上那一格仍然是 `ok:false`(下面第三句),`ticket.py close`
+        讀的就是它;閘門也印了一行、寫進狀態檔的 note。
+
+        **變異**:把 `[ "$bad" = "0" ]` 那一段拿掉(退回「rc 非零就是這一輪的紅」)
+        → 這一條紅(rc 變 1)。
+        """
+        self.a_ticket(ALWAYS_GREEN_CASE)
+        self.implement()
+        done = self.gate()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("不算這一輪的紅", done.stdout)
+        baseline = self.load_ticket("7")["verify"]["baseline"]
+        self.assertFalse(baseline["ok"], "票上那一格被寫成綠了 —— close 就擋不住了")
+        self.assertEqual(baseline["stage"], "check")
+        self.assertEqual(self.status_of("7")["failures"], [],
+                         "候選全綠卻留了一份紅榜給下一輪的 worker")
+
+    def test_a_red_verifier_case_goes_down_the_existing_auto_fix_path(self):
+        """驗收 5 的另一半:走的是**既有**那條路(D-014),不是新造一條。
+
+        **變異**:把 `rc=$(merge_rc "$rc" "$CRC")` 那一行拿掉 → 這一條紅
+        (rc 是 0,`auto_fix` 第一行就回去了)。
+        """
+        self.a_ticket()
+        done = self.run_sh("scripts/gate.sh", "tests/test_land.py", "--ticket", "7")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("gate: auto-fix ——", done.stdout)
 
 
 class GateExample(unittest.TestCase):
