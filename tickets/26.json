@@ -41,9 +41,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "7c5d803bd029620f8dd59d1a60d18c67e99142f0",
+  "base_sha": "2c99d425cebc96034b9c995c5d138130ffa10b83",
   "state": "Ready",
-  "state_version": 2,
+  "state_version": 4,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -57,5 +57,6 @@
   "decision_refs": [
     "D-020"
   ],
-  "outline": "依 docs/DESIGN-VERIFY-CASES.md §三(紅的形狀分類表)與 §四(F1–F6 lint 規則表)實作;traceback 分類與 ast lint 的邊界(subTest、_FailedTest、多檔 traceback)自己設計 fixture 驗證。與 A #25(文字/範本)各自獨立,不 depends_on 它;A #27(gate.sh 接線)依賴這一張。有驗證者(sonnet)寫 tests/test_ticket_26.py,已列進 verify.files 與 allowed_write_paths。"
+  "outline": "依 docs/DESIGN-VERIFY-CASES.md §三(紅的形狀分類表)與 §四(F1–F6 lint 規則表)實作;traceback 分類與 ast lint 的邊界(subTest、_FailedTest、多檔 traceback)自己設計 fixture 驗證。與 A #25(文字/範本)各自獨立,不 depends_on 它;A #27(gate.sh 接線)依賴這一張。有驗證者(sonnet)寫 tests/test_ticket_26.py,已列進 verify.files 與 allowed_write_paths。",
+  "needs_verifier": false
 }
