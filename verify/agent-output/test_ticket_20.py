@@ -79,6 +79,11 @@ class SchemaKeysLiveInOnlyTwoDocs(unittest.TestCase):
     fenced 標記字面(範例、註解),但**不抄鍵名**——`harvest_result()` 那段註解
     自己就寫著「鍵名不寫在這一支」。所以判準改成同時出現 `patch_sha256` 與
     `red_first_line` 這兩個只有 schema 範例才會湊在一起的鍵名。
+
+    2026-09-23(#24):`tickets/*.json` 引用鍵名是合法的 —— 票的 `acceptance`
+    要逐字講清楚案例要守住的 schema 形狀本來就得抄鍵名(#20 自己的票檔就是
+    這樣),不算多抄了一份 schema。`tickets/SCHEMA.md` 仍是精確比對那一份
+    規格檔,`tickets/*.json` 另外放行。
     """
 
     SKIP_DIRS = {".git", "__pycache__", "reports", "wt", "land", ".land.lock"}
@@ -101,7 +106,8 @@ class SchemaKeysLiveInOnlyTwoDocs(unittest.TestCase):
         third_copy = [rel for rel in hits
                      if rel not in self.ALLOWED_EXACT
                      and not rel.startswith("tests/")
-                     and not rel.startswith("verify/")]
+                     and not rel.startswith("verify/")
+                     and not (rel.startswith("tickets/") and rel.endswith(".json"))]
         self.assertEqual(third_copy, [], "schema 鍵名多抄了一份:%s" % third_copy)
         self.assertTrue(self.ALLOWED_EXACT <= set(hits),
                         "兩份規格檔本身都要帶得到鍵名範例:命中 %s" % hits)
