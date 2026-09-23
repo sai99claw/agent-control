@@ -390,6 +390,15 @@ def open_ticket_for(rel, chars, cap, out):
         "--out-of-scope", "docs/DECISIONS.md",
         "--allowed-write-path", rel,
         "--allowed-write-path", inbox,
+        # 怎麼派這兩個 session:**一句可以貼的指令住在範本裡**(#29 A8,G8)。以前
+        # 票面只寫「由兩個模型討論」,而「兩個 session 怎麼被派、討論檔誰先寫」沒有
+        # 任何一份檔說得出來 —— 一張沒有人知道怎麼執行的票,與沒有開票長得一樣。
+        "--outline",
+        "派工照 `templates/dispatch-consolidator.md`(兩個模型各開一個 session、各貼一次;"
+        "規則包 `python3 scripts/rules.py pack consolidator --model <模型>`,"
+        "角色卡 `memory/role/consolidator.md`)。"
+        "先各自寫討論檔、再互讀寫分歧,最後一位跑 "
+        "`python3 scripts/memory.py consolidate %s --discussion <討論檔>`。" % rel,
         "--role", CONSOLIDATOR_ROLE,
         "--model", model,
         "--tool", "claude-code",

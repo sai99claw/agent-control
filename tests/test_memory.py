@@ -75,6 +75,21 @@ class MemoryCheck(Sandbox):
         self.assertIn("兩個不同的模型", text)
         self.assertIn("不直接寫案例", text, "整理的產出是原則,不是案例(D-013)")
 
+    def test_the_ticket_says_how_the_two_sessions_get_dispatched(self):
+        """A8 / G8:票面以前只寫「由兩個模型討論」,而**兩個 session 怎麼被派、
+        討論檔誰先寫**沒有任何一份檔說得出來 —— 一張沒有人知道怎麼執行的票,與沒有
+        開票長得一樣。
+
+        **變異**:把 `open_ticket_for()` 裡那一格 `--outline` 拿掉 → 這一條紅。
+        """
+        self.note("opus", "坑" * 2500)
+        self.memory("check")
+        row = self.load_ticket("1")
+        self.assertIn("templates/dispatch-consolidator.md", row.get("outline") or "",
+                      "整理票要指得出那一份範本")
+        self.assertIn("memory.py consolidate", row.get("outline") or "",
+                      "收的那一句要可以直接貼")
+
     def test_a_role_card_over_the_cap_is_watched_too(self):
         """D-013:上限適用**任一層記憶**,不只模型私有那一層。"""
         conf = json.loads(self.read("board/config.json"))

@@ -82,6 +82,22 @@ def repo_root():
     return os.path.dirname(here)
 
 
+def looks_like_a_copy(root):
+    """這個根是 `git archive <ref> | tar -x` 展出來的**副本**嗎。
+
+    判準是兩件事一起成立:有 `board/config.json`(所以 `repo_root()` 會停在這裡)、
+    **而且沒有 `.git`**(所以它不是 repo、也不是 worktree —— worktree 的 `.git` 是一個
+    檔,`exists` 一樣看得到)。
+
+    為什麼要問(G9,#29 A9):`docs/SESSION-START.md` 要 worker / 驗證者自己發
+    `ticket.attempt.start`,而 worker 住在副本裡 —— 往上找到的是**副本自己那份**
+    `board/config.json`,於是事件寫進 `<副本>/board/events.jsonl`,**一個等一下會被刪掉
+    的檔**,而且一聲都不吭。發出去了與沒發出去因此長得一樣,那正是控制台最不該有的那種洞。
+    """
+    return (os.path.exists(os.path.join(root, CONFIG_REL))
+            and not os.path.exists(os.path.join(root, ".git")))
+
+
 def config(root=None):
     """`board/config.json`。讀不到就回空 dict:設定檔壞掉不該讓事件發不出去
     (發不出去的那一刻,正是最需要留下紀錄的那一刻)。"""
@@ -261,6 +277,16 @@ def cmd_emit(argv):
         usage()
         return 2
     kind = argv[0]
+    if not os.environ.get(ENV_ROOT) and looks_like_a_copy(repo_root()):
+        # **副本裡不發事件,由派工方代發。** 不悄悄寫進副本(那一行會跟著副本被刪),
+        # 也不自作主張去猜主 repo 在哪 —— 猜錯的那一次會把事件寫進另一顆 repo 的控制台。
+        sys.stderr.write("event: 副本裡不發事件,由派工方代發 —— %s\n" % repo_root())
+        sys.stderr.write("event:   這個目錄有 board/config.json 卻沒有 .git,"
+                         "是 `git archive | tar -x` 展出來的副本;\n")
+        sys.stderr.write("event:   寫進去的那一行會跟著副本一起被刪,而且不會報錯。\n")
+        sys.stderr.write("event:   真的要從這裡發:AC_ROOT=<主 repo 根> "
+                         "python3 scripts/event.py emit %s …\n" % kind)
+        return 3
     if kind not in KINDS:
         sys.stderr.write("event: 不認得的事件種類 %r —— 種類是一張固定的表:\n" % kind)
         for known in KINDS:

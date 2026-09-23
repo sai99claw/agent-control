@@ -87,9 +87,17 @@ WANTED = {
     "main": ("main.md",
              ("0", "5.5", "5.7", "6.5"),
              "接需求、覆核、決定順序、發版"),
-    "consolidator": ("implementer.md",
+    "consolidator": ("consolidator.md",
                      ("0.5", "5.5", "8"),
                      "依討論結論整理記憶,保留原則與來源"),
+    # 設計 session 與覆核者 2026-09-23 補上(#29 A1;D-019 / D-022)。以前它們是
+    # **唯二沒有規則包的角色** —— 而「沒有包」與「不必給規矩」在派工文上長得一樣。
+    "design": ("design.md",
+               ("0.5", "5.5", "6.4", "8"),
+               "把設計題寫成 docs/DESIGN-<題>.md,每個取捨附未來每票省/多花"),
+    "reviewer": ("reviewer.md",
+                 ("0.5", "3", "5.5", "6.4", "8"),
+                 "讀分支上的 code 對票面驗收,交 verdict 與逐條對照"),
 }
 # 專案可以在 board/config.json 的 `rules` 段改版面(同步到專案後角色卡住在
 # `docs/roles/`,共用規矩的節沒有編號、只有標題):
@@ -175,7 +183,8 @@ def resolve(found, key):
 ALIASES = {"implementer": "worker", "impl": "worker", "verify": "verifier",
            "verifier": "verifier", "opener": "opener", "open": "opener",
            "main": "main", "worker": "worker", "consolidator": "consolidator",
-           "整理者": "consolidator"}
+           "整理者": "consolidator", "design": "design", "設計": "design",
+           "reviewer": "reviewer", "review": "reviewer", "覆核者": "reviewer"}
 
 
 def source_path(root, override=""):

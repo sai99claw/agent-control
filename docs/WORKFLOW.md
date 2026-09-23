@@ -43,6 +43,30 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 10. 每一步發事件。全套紅時預設派下一輪 worker,**只在這一批剛好一張票的時候**
    (一批裡哪一條紅對到哪一張票,要有票↔案例的對照才判得出來)。
 
+## 票檔 / `memory` / `docs` 進主線的入口(2026-09-23,#29 A10)
+
+```sh
+sh scripts/land.sh docs "tickets: #29 v2 與整理票的 outline" \
+   tickets/29.json memory/role/implementer.inbox.md docs/DECISIONS.md
+```
+
+**只收三個前綴**:`tickets/`、`docs/`、`memory/`。越界 rc=2 **指名是哪一個檔** ——
+產品碼走一票一分支(`scripts/apply.sh <票號> <patch>` → `scripts/land.sh t<票號>`),
+不走這一條。路徑裡有 `..` 或絕對路徑一樣拒。
+
+**與票的落地共用同一把 `.land.lock`**:land 正在跑九分鐘全套的時候有人往主線塞一個
+commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊息說的是「主線在這中間
+動了」,沒有人會知道動它的是誰。所以兩條路排同一個佇列。
+
+**它不跑閘門**:這三個前綴不進產品碼,跑一次全套換來的是同一份綠。它也**不是**
+「什麼都可以塞」的後門:三個前綴之外一律拒,而拒的時候說得出下一步。
+
+為什麼要有(G10 / G17):票檔、`memory/`、`docs/DECISIONS.md` 以前進主線只有**裸 commit**
+一條路,而 `memory/role/main.md` 明禁裸 commit 主線 —— 一條每天都在走、卻沒有任何守衛的路,
+與沒有規矩長得一樣(2026-09-23 一天之內兩筆:`141261b`、`bf11529`)。連帶的一件事:
+`auto-fix.sh` 在票分支的 worktree 裡找票時,改問主 repo 的 `tickets/`(`--git-common-dir`
+的上一層)—— 票檔還沒進版控就 rc=2 停掉的那一種(#23 第 2 輪)不再發生。
+
 ## 閘門(`scripts/gate.sh`)
 專案自己定義三層:`--branch`(改動檔對應的模組)、`--base`(基礎組)、`--full`(全套)。**對不到任何模組要出聲,不准印一行綠。** 判綠先寫檔再讀退出碼,不用 `cmd | tail`。瀏覽器引擎由 `available()` 判,不在指令列收窄。
 
@@ -140,6 +164,9 @@ worker 說「這張票寫錯了」以前只是一句話:沒有結構化類別、
 | 同一輪的回歸**只跑一次**(worker / 驗證者 / gate 共用) | **已實作**(2026-09-21,D-015) | `scripts/verify.py` 的 `reports/t<n>/<run_id>/verify-<雜湊>.log`(雜湊含標籤 + sha);`--no-cache` 關 |
 | **按角色裁切、帶版本的規則包** | **已實作**(2026-09-21,D-015) | `scripts/rules.py pack <角色> --model <模型>`(≤ 4 KB,砍掉的部分會指名) |
 | 一個既有專案**接上這一套** | **已實作**(步驟 + 腳本;實際遷移還沒做) | `docs/TODO.md` §0;`scripts/sync-to-project.sh` 同步到專案的 `scripts/control/` 並印出接點 |
+| **驗證者只證紅**:`verify-case.py red <n> --candidate <樹>`,四類紅分開數,`red_lines` 給覆核看 | **已落地**(D-020,#26) | `scripts/verify-case.py red` → 票的 `verify.baseline{stage:"red"}` |
+| **案例格式 lint**(F1–F6:模組 docstring 四段、`TAGS`、每個 `test_` 的驗收編號…) | **已落地**(D-020,#26) | `scripts/verify-case.py lint <檔…> --ticket <n>`;閘門自己叫 |
+| **閘門接線**:回歸層之後 `lint` → `check`,`stage` 由 `red` 升成 `check`,紅榜收進 `status.json` | **已落地**(D-020,#27) | `scripts/gate.sh --ticket <n>`;`ticket.py close` 只認 `stage=="check"` |
 | `land.sh` 那一側自己判 flake / 一批多張票時歸責 | **未實作,而且是刻意的** —— 一批裡哪一條紅對到哪一張票,要有票↔案例的對照才判得出來;land 因此只在**剛好一張票**時派下一輪,多張就留給主線 | `scripts/land.sh` 的 `auto_fix_all` |
 
 ## 驗證者的案例怎麼進閘門

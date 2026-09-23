@@ -172,6 +172,19 @@ map() {
         templates/dispatch-verifier.md) add test_dispatch_template test_no_project_names ;;
         # 文件**有**一支測試真的讀它們:那條「不准出現專案名 / 絕對路徑」的守衛
         # 掃的就是整個 repo。所以這一格不是硬塞,是實話。
+        #
+        # `docs/**.html` 與 `.md` 同一格(2026-09-23,#29):`docs/FLOW.html` 畫的是
+        # 這條管線自己,而 `test_no_project_names` **逐字讀它**
+        # (`test_real_flow_html_passes_the_project_name_check` 直接 `read("docs/FLOW.html")`,
+        # 而且 `is_document()` 把「`docs/` 前綴 + `.html`」列為文件級)。所以這一格
+        # 同樣不是硬塞。**只有 `docs/` 底下的 `.html` 算** —— 守衛那一側也只放行
+        # `docs/` 底下的(`templates/x.html` 仍是程式級),兩邊用同一條判準;
+        # `case` 的 `*` 會跨 `/`,所以 `docs/a/b.html` 一樣對得到。
+        #
+        # 🩸 沒有這一格的時候:改 `docs/FLOW.html` 的那一輪,閘門走「對不到任何測試
+        # 模組」退 3 —— 而那條守衛真的在守它,只是對照表沒說。**一個沒有人守的檔與
+        # 一個沒被登記的檔長得一樣**,而這裡是後者(#29 第 2 輪實測)。
+        docs/*.html) add test_no_project_names ;;
         *.md) add test_no_project_names ;;
         *) miss "$f" ;;
     esac

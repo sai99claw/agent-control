@@ -13,6 +13,8 @@
   重套過的那一份路徑一樣、內容不一樣,所以要 sha256。
 """
 
+import glob
+import json
 import os
 import sys
 import unittest
@@ -230,6 +232,156 @@ class TheHappyPath(ApplyBase):
                           "--evidence", evidence)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("memory.noted", self.kinds())
+
+
+FULL_EVIDENCE = """# EVIDENCE #1 第 1 輪
+
+## 1 patch
+sha256 0123456789abcdef
+
+## 2 閘門
+`python3 -m unittest discover -s tests`:Ran 3 tests,rc=0
+
+## 3 變異表
+| M1 | count 1 | tests/test_x.py::T::test_y | AssertionError: 0 != 2 |
+
+## 4 已排除的假設
+不是 worktree 沒收 —— 那一輪的 status.json 裡 rc 已經是 2。
+
+## 5 最小重現
+`python3 -m unittest tests.test_x`,預期 `Ran 3 tests … OK`
+
+## result
+
+```result
+{"ticket": "1", "role": "worker", "round": 1, "rc": 0,
+ "patch_sha256": "0123456789abcdef",
+ "gate": {"cmd": "python3 -m unittest discover -s tests", "ran": 3, "rc": 0},
+ "mutations": [{"id": "M1", "count": 1, "case": "T::test_y",
+                "red_first_line": "AssertionError: 0 != 2"}],
+ "objection": null, "excluded": [], "repro": {"cmd": "x", "expect": "OK"},
+ "memory": []}
+```
+"""
+
+THIN_EVIDENCE = "# EVIDENCE\n\n交了,但是只有散文,沒有那一塊。\n"
+
+OBJECTING_EVIDENCE = """# EVIDENCE
+
+OBJECTION: ticket-wrong 驗收 A3 指的那個欄位在這一版根本不存在
+
+## result
+
+```result
+{"ticket": "1", "role": "worker", "round": 1, "rc": 0,
+ "objection": {"category": "ticket-wrong", "body": "欄位不存在"}}
+```
+"""
+
+VERIFIER_EVIDENCE = """# EVIDENCE-verifier
+
+## result
+
+```result
+{"ticket": "1", "role": "verifier", "round": 1, "rc": 0}
+```
+"""
+
+
+class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
+    """#29 A4 / G4:第 1 輪走 `apply.sh`,而 `apply.sh` 以前只跑 `memory.py harvest`
+    —— 於是**第一輪永遠沒有 `result-round1.json`**,看板對那一輪只印得出「沒交結構化
+    輸出」,與真的沒交長得一樣。抽取與 `auto-fix.sh`(第 2 輪起)是**同一支**
+    (`ticket.py result`);抄第二份的那一天,兩份會往不同方向漂(D-018)。
+    """
+
+    def result_json(self, name="result-round1.json"):
+        found = sorted(glob.glob(os.path.join(self.repo, "reports", "t1", "*", name)))
+        self.assertEqual(len(found), 1, "找不到(或不只一份)%s:%s" % (name, found))
+        with open(found[0], encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_the_block_at_the_end_of_evidence_becomes_a_result_file(self):
+        """**變異**:把 `apply.sh` 尾端那一段 `ticket.py result` 拿掉 → 這一條紅。"""
+        self.make("1")
+        evidence = self.patch_file("EVIDENCE.md", FULL_EVIDENCE)
+        done = self.apply("1", self.patch_file("p.diff", CHANGE),
+                          "--evidence", evidence)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.result_json()
+        self.assertTrue(row["present"])
+        self.assertEqual(row["gate"]["ran"], 3)
+        self.assertEqual(row["sections"],
+                         {"patch_sha256": True, "gate": True, "mutations": True,
+                          "excluded": True, "repro": True},
+                         "五段散文在不在是**另一格**,不是靠 result 那一塊推的")
+
+    def test_evidence_without_the_block_is_recorded_as_no_block_not_as_nothing(self):
+        """三種缺漏各有各的樣子 —— 揉成同一個空檔的那一刻,「沒交」與「交了但都是
+        空的」長得一樣(§5.5)。
+
+        **變異**:把 `harvest_result()` 的 `reason` 三分支併成一個 → 這一條紅。
+        """
+        self.make("1")
+        evidence = self.patch_file("EVIDENCE.md", THIN_EVIDENCE)
+        done = self.apply("1", self.patch_file("p.diff", CHANGE),
+                          "--evidence", evidence)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.result_json()
+        self.assertFalse(row["present"])
+        self.assertEqual(row["reason"], "no-block")
+        self.assertFalse(row["sections"]["mutations"], "缺段要看得出來")
+        self.assertIn("少了這幾段", done.stdout, "缺段印出來(但不擋)")
+
+    def test_an_objection_is_recorded_on_the_ticket_and_the_exit_code_says_so(self):
+        """**沒被收進票的反駁,與沒有反駁長得一樣**(§7)。第 1 輪的 `OBJECTION:` 行
+        以前沒有任何人收。
+
+        **變異**:把 `apply.sh` 尾端收反駁那一段拿掉 → 這一條紅。
+        """
+        self.make("1")
+        evidence = self.patch_file("EVIDENCE.md", OBJECTING_EVIDENCE)
+        done = self.apply("1", self.patch_file("p.diff", CHANGE),
+                          "--evidence", evidence)
+        self.assertEqual(done.returncode, 6, done.stdout + done.stderr)
+        rows = self.load_ticket("1")["objections"]
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]["category"], "ticket-wrong")
+        self.assertIn("欄位在這一版根本不存在", rows[0]["body"])
+        self.assertEqual(rows[0]["owner"], "main")
+        self.assertTrue(self.branch_exists("t1"),
+                        "patch 該 commit 的還是 commit 了 —— rc 說的是「這一手沒有結束」")
+
+    def test_the_same_objection_is_not_recorded_twice(self):
+        """`auto-fix.sh` 在叫 `apply.sh` 之前就先收過一次 —— 兩邊各記一次的話,
+        同一句話會在票上長成兩筆,而處置的人分不出哪一筆是哪一輪的。
+        """
+        self.make("1")
+        evidence = self.patch_file("EVIDENCE.md", OBJECTING_EVIDENCE)
+        self.apply("1", self.patch_file("p.diff", CHANGE), "--evidence", evidence)
+        second = self.run_sh("scripts/apply.sh", "1",
+                             self.patch_file("p2.diff", CREATE),
+                             "--evidence", evidence)
+        self.assertEqual(len(self.load_ticket("1")["objections"]), 1,
+                         second.stdout + second.stderr)
+        self.assertNotEqual(second.returncode, 6, "第二次不是新的反駁")
+
+    def test_the_verifier_evidence_has_a_receiver_now(self):
+        """#29 A5 / G5:`EVIDENCE-verifier.md` 以前是**一份沒有收件者的交付物**。"""
+        self.make("1")
+        done = self.apply("1", self.patch_file("p.diff", CHANGE),
+                          "--evidence", self.patch_file("EVIDENCE.md", FULL_EVIDENCE),
+                          "--evidence-verifier",
+                          self.patch_file("EV.md", VERIFIER_EVIDENCE))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.result_json("result-verifier-round1.json")
+        self.assertTrue(row["present"])
+        self.assertEqual(row["role"], "verifier")
+
+    def test_the_help_lists_the_verifier_flag(self):
+        done = self.apply("--help")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("--evidence-verifier", done.stdout)
 
 
 class ThingsItRefuses(ApplyBase):

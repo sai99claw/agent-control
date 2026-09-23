@@ -185,6 +185,43 @@ class GateSh(Sandbox):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.ran(), ["test_no_project_names"])
 
+    def test_a_docs_html_file_maps_to_the_guard_that_really_reads_it(self):
+        """`docs/FLOW.html` 與 `.md` 同一格(#29):`test_no_project_names` 逐字讀它
+        (`test_real_flow_html_passes_the_project_name_check` 直接
+        `read("docs/FLOW.html")`),而 `is_document()` 也把「`docs/` 前綴 + `.html`」
+        列為文件級 —— 兩邊同一條判準。
+
+        🩸 沒有這一格的時候,改 `docs/FLOW.html` 的那一輪走「對不到任何測試模組」退 3,
+        而那條守衛**真的在守它**,只是對照表沒說:一個沒有人守的檔與一個沒被登記的檔
+        長得一樣,而這是後者(#29 第 2 輪實測)。
+
+        **變異**:把 `gate.sh` 對照表裡 `docs/*.html` 那一列拿掉 → 這一條紅(rc=3)。
+        """
+        done = self.gate("docs/FLOW.html")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.ran(), ["test_no_project_names"])
+        self.assertNotIn("對不到任何測試模組", done.stdout)
+
+    def test_a_nested_docs_html_is_covered_too(self):
+        """守衛的判準是「`docs/` 前綴 + `.html`」,不分幾層;`case` 的 `*` 跨 `/`,
+        所以對照表那一列一樣蓋得到 —— 兩邊不能只有一邊分層。"""
+        done = self.gate("docs/review/20260913/report.html")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.ran(), ["test_no_project_names"])
+
+    def test_an_html_outside_docs_is_still_nobody_guarded(self):
+        """**只有 `docs/` 底下的 `.html` 算**:守衛那一側把 `templates/x.html` 當
+        程式級(`test_docs_html_and_ticket_json_are_document_level` 釘住這一條),
+        所以對照表放寬到所有 `.html` 的那一刻,兩邊的判準就分岔了 —— 而分岔的那一份
+        看起來仍然像規格。
+
+        **變異**:把對照表那一列改成 `*.html` → 這一條紅。
+        """
+        done = self.gate("templates/x.html")
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertIn("templates/x.html", done.stdout)
+        self.assertIn("對不到任何測試模組", done.stdout)
+
     def test_base_adds_the_contract_layer(self):
         done = self.gate("--base")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)

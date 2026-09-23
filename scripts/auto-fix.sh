@@ -1,8 +1,9 @@
 #!/bin/sh
 # 回歸紅了自動派**新** worker — `docs/WORKFLOW.md` §回歸紅了之後(D-010、D-015)。
 #
-#   sh scripts/auto-fix.sh <票號>              # 讀最新狀態檔,紅就派下一輪
-#   sh scripts/auto-fix.sh <票號> --dry-run    # 只印派工文,不起 worker
+#   sh scripts/auto-fix.sh <票號>                       # 讀最新狀態檔,紅就派下一輪
+#   sh scripts/auto-fix.sh <票號> --dry-run             # 只印派工文,不起 worker
+#   sh scripts/auto-fix.sh <票號> --dry-run --round 1   # 第 1 輪的派工文(還沒有狀態檔時)
 #
 # 閘門與單票落地預設會叫這一支;`--no-auto-fix` 才停給人處理。
 #
@@ -61,17 +62,28 @@ print(data if data not in (None, "") else default)
 PY
 }
 
-[ $# -ge 1 ] || { echo "用法:sh scripts/auto-fix.sh <票號> [--dry-run]"; exit 2; }
+[ $# -ge 1 ] || { echo "用法:sh scripts/auto-fix.sh <票號> [--dry-run] [--round 1]"; exit 2; }
 ID=$1
 shift
 DRY=""
+WANT_ROUND=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY=1 ;;
-        *) echo "auto-fix: 不認得 $1(--dry-run)" >&2; exit 2 ;;
+        --round)
+            shift
+            [ $# -ge 1 ] || { echo "auto-fix: --round 後面要一個數字" >&2; exit 2; }
+            WANT_ROUND=$1 ;;
+        *) echo "auto-fix: 不認得 $1(--dry-run / --round <n>)" >&2; exit 2 ;;
     esac
     shift
 done
+case "${WANT_ROUND:-}" in
+    "") ;;
+    1) ;;
+    *) echo "auto-fix: --round 只接 1(第一輪派工文)—— 第 2 輪起由紅榜決定第幾輪,不用指定" >&2
+       exit 2 ;;
+esac
 
 MAIN=$(cfg main_branch main)
 TICKETS=${AC_TICKETS_DIR:-$(cfg tickets_dir tickets)}
@@ -82,7 +94,30 @@ RERUN_CMD=$(cfg gate.rerun_cmd "")
 # 副本/worktree 的根:環境變數 > board/config.json 的 `worktree_dir`(相對 repo 根)> 預設 `../<repo>-wt`。
 WTBASE=${AC_WORKTREE_DIR:-$(cfg worktree_dir "")}
 case "$WTBASE" in "") WTBASE=$ROOT/../$(basename "$ROOT")-wt ;; /*) ;; *) WTBASE=$ROOT/$WTBASE ;; esac
+WTBASE=$(cd "$(dirname "$WTBASE")" 2>/dev/null && pwd)/$(basename "$WTBASE")
 TF=$TDIR/$ID.json
+# 票分支的 worktree **不是**控制根(G10 / #29 A10):`_ac_root()` 往上找
+# `board/config.json`,在 worktree 裡找到的是 worktree 自己,於是票檔要在**那一條分支上
+# 進了版控**才找得到 —— 而票檔是走 docs 通道進主線的,常常還沒進去(#23 第 2 輪就是這樣
+# rc=2 停掉的)。所以找不到票時改問主 repo:`--git-common-dir` 的上一層。
+if [ ! -f "$TF" ] && [ -z "${AC_TICKETS_DIR:-}" ]; then
+    _common=$(git -C "$ROOT" rev-parse --git-common-dir 2>/dev/null || echo "")
+    case "$_common" in
+        "") ;;
+        /*) _mainroot=$(cd "$(dirname "$_common")" 2>/dev/null && pwd || echo "") ;;
+        *)  _mainroot=$(cd "$ROOT/$(dirname "$_common")" 2>/dev/null && pwd || echo "") ;;
+    esac
+    if [ -n "${_mainroot:-}" ] && [ "$_mainroot" != "$ROOT" ] \
+            && [ -f "$_mainroot/board/config.json" ] && [ -f "$_mainroot/$TICKETS/$ID.json" ]; then
+        echo "auto-fix: $ROOT 是 worktree —— 票 / reports / 事件改用主 repo $_mainroot"
+        ROOT=$_mainroot
+        export AC_ROOT=$ROOT
+        TDIR=$ROOT/$TICKETS
+        TF=$TDIR/$ID.json
+        WTBASE=${AC_WORKTREE_DIR:-$(cfg worktree_dir "")}
+        case "$WTBASE" in "") WTBASE=$ROOT/../$(basename "$ROOT")-wt ;; /*) ;; *) WTBASE=$ROOT/$WTBASE ;; esac
+    fi
+fi
 [ -f "$TF" ] || { echo "auto-fix: 找不到票 #$ID($TF)" >&2; exit 2; }
 
 ev() {
@@ -115,80 +150,38 @@ block() {   # $1 = 為什麼;票轉 Blocked、指派主線
 # 空檔的那一刻,「沒交」與「交了但都是空的」長得一樣(`DISPATCH-TEMPLATE` §5.5)。
 # 三種都**不改變退出碼、也不擋流程**:這一手是留痕跡,不是新的一道閘門。
 harvest_result() {   # $1 = EVIDENCE(可以不存在) $2 = 輸出 json $3 = 角色 $4 = 第幾輪
-    python3 - "$1" "$2" "$3" "$4" "$ID" <<'PY' \
+    # **與 `apply.sh` 共用同一支抽取**(#29 A4):實作在 `ticket.py result`。
+    # 以前這裡是一段 heredoc,而走 `apply.sh` 的第 1 輪根本沒有這一手 —— 看板對那一輪
+    # 只印得出「沒交結構化輸出」,與真的沒交長得一樣。抄第二份的那一天,兩份會往不同
+    # 方向漂,而漂開的那一份看起來仍然像規格(D-018)。
+    python3 "$AC/ticket.py" result "$1" "$2" --ticket "$ID" --role "$3" --round "$4" \
         || echo "auto-fix: result 抽不出來($1)—— 不擋流程" >&2
-import json, os, re, sys
-
-evidence, out, role, rnd, ident = sys.argv[1:6]
-# 開頭那一行的語言標記就是 `result`;收尾是任何一道同族的圍籬。
-OPEN = re.compile(r"^\s*(?:`{3,}|~{3,})[ \t]*result[ \t]*$")
-CLOSE = re.compile(r"^\s*(?:`{3,}|~{3,})[ \t]*$")
-RAW_CAP = 500
-
-
-def block_of(lines):
-    """**最後**那一塊 —— 前面幾塊可能是引用的範例,尾端那一塊才是這一輪交的。"""
-    start = None
-    for index, line in enumerate(lines):
-        if OPEN.match(line):
-            start = index
-    if start is None:
-        return None
-    body = []
-    for line in lines[start + 1:]:
-        if CLOSE.match(line):
-            break
-        body.append(line)
-    return "\n".join(body)
-
-
-def objection_category(lines):
-    """`OBJECTION:` 那一行的類別 —— 解法與這一支收反駁那一段逐字相同。"""
-    for line in lines:
-        if line.startswith("OBJECTION:"):
-            parts = line.split(":", 1)[1].strip().split(None, 1)
-            if parts and parts[0] in ("ticket-wrong", "test_defect", "blocking"):
-                return parts[0]
-            return "ticket-wrong"
-    return ""
-
-
-miss = {"present": False, "ticket": ident, "role": role, "round": int(rnd),
-        "evidence": os.path.basename(evidence)}
-try:
-    with open(evidence, encoding="utf-8") as handle:
-        lines = handle.read().splitlines()
-except OSError:
-    data = dict(miss, reason="no-evidence")
-else:
-    raw = block_of(lines)
-    if raw is None:
-        data = dict(miss, reason="no-block")
-    else:
-        try:
-            parsed = json.loads(raw)
-        except ValueError:
-            parsed = None
-        if not isinstance(parsed, dict):
-            data = dict(miss, reason="bad-json", raw=raw[:RAW_CAP])
-        else:
-            data = dict(parsed)
-            data["present"] = True
-            said = parsed.get("objection")
-            said = said.get("category") if isinstance(said, dict) else None
-            # 對不上時**以 `OBJECTION:` 那一行為準**(既有的收件、轉 Blocked、
-            # 退出碼一個字不改)—— 這一格只是讓那次分岔看得見。
-            data["conflict"] = (objection_category(lines) or None) != (said or None)
-where = os.path.dirname(out)
-if where:
-    os.makedirs(where, exist_ok=True)
-with open(out, "w", encoding="utf-8") as handle:
-    json.dump(data, handle, ensure_ascii=False, indent=2)
-    handle.write("\n")
-PY
 }
 
-# 最新一輪的狀態檔。**讀的是檔,不是輪詢** —— 每看一次背景工作就是整份上下文重送一輪。
+shed_copies() {   # $1 = 副本根(fix-t<n>/round<r> 或 verify-t<n>/round<r>)
+    # **副本自己收**(#29 A6,G6):`patch` / `EVIDENCE` / `dispatch` / `result` 留著,
+    # `work/` 與 `base/` 刪掉。以前它們只在**下一輪開始**才 `rm -rf`,綠了停 InReview
+    # 就永遠留著 —— 而「沒人收」與「收過了」在磁碟上長得一樣,直到滿的那一刻
+    # (2026-09-16 某個下游專案的副本 14 GB 塞滿磁碟,整台機器 disk I/O error)。
+    [ -n "${1:-}" ] || return 0
+    [ -d "$1/work" ] || [ -d "$1/base" ] || return 0
+    rm -rf "$1/work" "$1/base"
+    echo "auto-fix: 收掉副本 $1/{work,base}(patch 與 EVIDENCE 留著)"
+}
+
+collect_from_copy() {   # $1 = 副本根  $2… = 要撿出來的檔名
+    # worker 有時把交付物放在 `work/` 裡(派工文說放在副本根)。**先撿出來再刪副本** ——
+    # 反過來的話,刪掉的是這一輪唯一的一份 patch。
+    where=$1
+    shift
+    for name in "$@"; do
+        [ -f "$where/$name" ] && continue
+        [ -f "$where/work/$name" ] || continue
+        cp "$where/work/$name" "$where/$name" \
+            && echo "auto-fix: 從 work/ 撿出 $name"
+    done
+}
+
 read_status() {
     eval "$(python3 - "$ROOT" "$ID" "$TF" <<'PY'
 import json, os, shlex, sys
@@ -196,7 +189,45 @@ root, ident, tf = sys.argv[1:4]
 sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import status
 
-run_id = status.latest_run(root, ident)
+# 帶判決的那幾種 run:**只有它們答得出「這棵樹紅不紅」**。`apply` 那一筆的 rc=0
+# 說的是「patch 套上了」,不是「測試過了」。
+VERDICT_KINDS = ("gate", "land")
+
+
+def run_key(name):
+    """「最新一輪」的排序鍵 —— **同一秒裡不准靠運氣**(#29 第 4 輪)。
+
+    `run_id` 的形狀是 `<YYYYMMDD-HHMMSS>-<pid>`,而 `sorted()` 比的是整個字串:
+    第二段因此按**十進位字面**排,`…-99993` 會排在 `…-100017` 後面(`9` > `1`)。
+    同一秒裡誰算「最新」於是由 pid 的位數決定 —— 而那是運氣,不是時序。
+
+    🩸 實測(#29 第 3 輪的閘門):`apply` 與 `gate` 落在同一秒,`apply` 那一筆
+    (`rc=0`、紅 0 條)排到最後,auto-fix 讀成「上一輪是綠的 —— 沒有東西要修」就
+    不派下一輪;而樹其實是紅的。**它不是每次都發生**:同一份 code 在別台機器、
+    別個 pid 寬度下是綠的,所以這一條在自己跑的時候看起來沒問題。
+
+    鍵有四段,由粗到細:
+    1. **秒**(字串前綴,本來就是時間序);
+    2. **有沒有判決** —— 同一秒裡 `gate` / `land` 勝過 `apply`:問的是「紅不紅」,
+       而 `apply` 從來不回答那件事(這一格只在同一秒內生效,跨秒仍然以時間為準);
+    3. **`status.json` 的 mtime** —— 比秒細,同秒同類時還原得出誰後寫;
+    4. **pid 當數字比**,不是當字串:到這裡已經沒有真相可還原了,但至少**是決定性的**。
+    """
+    stamp, _, tail = name.rpartition("-")
+    try:
+        serial = int(tail)
+    except ValueError:
+        serial = -1
+    try:
+        mtime = os.path.getmtime(status.path_for(root, ident, name))
+    except OSError:
+        mtime = 0.0
+    kind = (status.read(root, ident, name) or {}).get("kind") or ""
+    return (stamp, 1 if kind in VERDICT_KINDS else 0, mtime, serial)
+
+
+rows = status.runs_of(root, ident)
+run_id = max(rows, key=run_key) if rows else ""
 data = status.read(root, ident, run_id) if run_id else {}
 ctx = data.get("repair_context") or {}
 patch = (ctx.get("patch") or {}).get("path") or ""
@@ -232,10 +263,94 @@ PY
 )"
 }
 
+first_round_dispatch() {
+    # **第 1 輪的派工文也由工具產**(#29 A3,G3)。以前第 1 輪是主線手寫、只有
+    # `docs/DISPATCH-TEMPLATE.md` §8 的散文可抄,第 2 輪起才有 `dispatch-round<r>.md`
+    # —— 同一個角色的兩輪因此拿到兩種形狀的派工文,而**少了哪一格沒有人看得出來**。
+    #
+    # 這一支**不起 worker**:第 1 輪是主線用 Agent 工具派的(`docs/FLOW.html` ②),
+    # 這裡只負責把那一份文產出來。產完就結束。
+    fr_model=$(cfg routing.implement opus)
+    fr_run=${AC_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}
+    fr_fix=$WTBASE/fix-t$ID/round1
+    fr_dispatch=$ROOT/$(cfg reports_dir reports)/t$ID/$fr_run/dispatch-round1.md
+    mkdir -p "$(dirname "$fr_dispatch")"
+    {
+        python3 "$AC/rules.py" pack worker --model "$fr_model" 2>/dev/null \
+            || echo "(規則包產不出來 —— 自己讀 memory/role/implementer.md)"
+        python3 - "$ROOT" "$ID" "$TF" "$fr_fix" "$fr_model" <<'PY'
+import json, os, sys
+root, ident, tf, fix, model = sys.argv[1:6]
+try:
+    with open(tf, encoding="utf-8") as handle:
+        ticket = json.load(handle)
+except (OSError, ValueError) as exc:
+    ticket = {}
+    sys.stderr.write("auto-fix: 票讀不動 —— %s\n" % exc)
+base = ticket.get("base_sha") or "(票面沒有 base_sha —— 先補上再派)"
+print("")
+print("# 這一輪:#%s 第 1 輪(第一次實作)" % ident)
+print("")
+print("你是 **role=worker** 的實作者,**短命**:交付那一回合結束,不會再被叫醒。")
+print("")
+print("## 票面(`%s` 是現況)" % os.path.join("tickets", "%s.json" % ident))
+print("```json")
+print(json.dumps(ticket, ensure_ascii=False, indent=2))
+print("```")
+print("")
+print("## 這張票獨有的四件事(`memory/role/README.md`)")
+print("1. **票號**:#%s" % ident)
+print("2. **base sha**:`%s`(派工方已經 `git log --oneline -1` 對過)" % base)
+print("3. **副本路徑**:`%s/work`(改這個)、`%s/base`(一個字都不准動,它是 diff 的對照組)"
+      % (fix, fix))
+print("   兩個都這樣展:")
+print("   ```sh")
+print("   mkdir -p %s/base %s/work" % (fix, fix))
+print("   git -C %s archive %s | tar -x -C %s/base" % (root, base, fix))
+print("   git -C %s archive %s | tar -x -C %s/work" % (root, base, fix))
+print("   ```")
+print("   副本裡**沒有 `.git`**:想 git 寫入也寫不了,而票閘門的 `--branch` 在那裡是空閘門。")
+print("4. **回報對象**:派工的那一條主線 session。")
+print("")
+print("## 你要交的兩樣(放在 `%s`)" % fix)
+print("1. `patch-round1.diff` —— `cd %s && diff -ruN -x __pycache__ -x '*.pyc' base work > patch-round1.diff`"
+      % fix)
+print("   檔頭只准 `base/…` / `work/…` 的相對形式(絕對路徑 `apply.sh` 檔頭秒退);"
+      "刪檔的 `+++` 側要改成 `/dev/null`。")
+print("2. `EVIDENCE-round1.md` —— 必備五段(見角色卡)+ 記憶段 + 檔尾一塊 ```result` JSON。")
+print("   主線收件那一手是:")
+print("   ```sh")
+print("   sh scripts/apply.sh %s %s/patch-round1.diff --evidence %s/EVIDENCE-round1.md"
+      % (ident, fix, fix))
+print("   ```")
+print("   它會抽出 `result-round1.json`,並把 EVIDENCE 裡的 `OBJECTION:` 行記進票的 `objections[]`。")
+print("")
+print("## 回報格式")
+print("① patch 絕對路徑 + diffstat;② 閘門指令、`Ran N`、`rc=`(**判綠只看 rc**);"
+      "③ 變異驗紅表;④ 已排除的假設;⑤ 最小重現。")
+print("**測試一律前景跑加 timeout** —— 把整套丟背景後結束回合 = 什麼都沒交。")
+print("")
+print("## 票寫錯 / 需要裁示怎麼說")
+print("在 EVIDENCE 裡寫**一行**:`OBJECTION: <ticket-wrong|test_defect|blocking> <一句話>`。")
+print("**不准**放寬既有斷言、不准把期望值改成程式現在印的東西(那是假綠家族)。")
+PY
+    } > "$fr_dispatch"
+    cat "$fr_dispatch"
+    echo "auto-fix: 第 1 輪派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$fr_dispatch" "$ROOT")" >&2
+    echo "auto-fix: 這一支**不起第 1 輪的 worker** —— 主線把上面那一份餵給 Agent 工具。" >&2
+    return 0
+}
+
 read_status
+if [ "${WANT_ROUND:-}" = "1" ]; then
+    [ -z "${S_RUN:-}" ] || echo "auto-fix: #$ID 已經有 $S_RUN 這一輪,你要的是第 1 輪的派工文 —— 照給" >&2
+    first_round_dispatch
+    exit $?
+fi
 if [ -z "${S_RUN:-}" ]; then
     echo "auto-fix: #$ID 一輪都還沒跑過 —— 沒有紅榜就沒有東西可以派" >&2
-    echo "auto-fix:   先跑 sh scripts/gate.sh --branch --ticket $ID" >&2
+    echo "auto-fix:   第 1 輪的派工文:sh scripts/auto-fix.sh $ID --dry-run --round 1" >&2
+    echo "auto-fix:   已經派過第 1 輪、要修紅的:先跑 sh scripts/gate.sh --branch --ticket $ID" >&2
     exit 2
 fi
 RUN_ID=$S_RUN
@@ -381,12 +496,15 @@ PY
         ev agent.failed --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
             --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$VWRC" --kv agent=auto-fix-verifier
     fi
+    collect_from_copy "$VFIX" patch-verify.diff EVIDENCE-verifier.md
     PATCH_OUT=$VFIX/patch-verify.diff
     EVIDENCE=$VFIX/EVIDENCE-verifier.md
     # 驗證者那條路也要留痕跡,**而且在「沒交 patch 就回去」之前** —— 沒交的那一次
     # 正是最需要一份「沒交」的檔的那一次。
     harvest_result "$EVIDENCE" \
         "$(dirname "$DISPATCH")/result-verifier-round$r.json" verifier "$r"
+    shed_copies "$VFIX"
+    shed_copies "$FIX"
     if [ "$VWRC" -ne 0 ] || [ ! -f "$PATCH_OUT" ]; then
         block "#$ID 第 $r 輪的驗證者沒交出 patch-verify"
         post "驗證者沒交出 patch-verify" \
@@ -540,10 +658,9 @@ PY
     fi
     [ "$WRC" -eq 0 ] || echo "auto-fix: worker 自己回非零 —— 還是看它交了什麼,不看它說什麼"
 
+    collect_from_copy "$FIX" "patch-round$r.diff" "EVIDENCE-round$r.md"
     PATCH_OUT=$FIX/patch-round$r.diff
     EVIDENCE=$FIX/EVIDENCE-round$r.md
-    [ -f "$PATCH_OUT" ] || PATCH_OUT=$FIX/work/patch-round$r.diff
-    [ -f "$EVIDENCE" ] || EVIDENCE=$FIX/work/EVIDENCE-round$r.md
 
     # **收 patch 的同一手**把 EVIDENCE 尾端那一塊抽出來。位置在反駁那一段**之前**:
     # 反駁那條路會直接 return,而那一輪一樣要留得下一份可讀的結果。
@@ -551,30 +668,30 @@ PY
     harvest_result "$EVIDENCE" "$RESULT_JSON" worker "$r"
     echo "auto-fix: 結構化交付 -> $(basename "$RESULT_JSON")"
 
+    # `base/` 只剩一個用途:`test_defect` 那條路要拿它做驗證者的副本。用**與底下那一段
+    # 同一個判準**問一次(類別那個字),不是「反正留著」—— 留著的那一份就是沒人收的那一份。
+    if [ -f "$EVIDENCE" ] && grep -qE '^OBJECTION:[[:space:]]*test_defect' "$EVIDENCE"; then
+        echo "auto-fix: 先留著 $FIX/base —— 驗證者的副本要從它做"
+    else
+        shed_copies "$FIX"
+    fi
+
     CASE_FIXED=""
     # 反駁比 patch 先看:worker 說「這張票寫錯了」而東西照樣落地,那句話等於沒人收。
     if [ -f "$EVIDENCE" ] && grep -q '^OBJECTION:' "$EVIDENCE"; then
         line=$(grep -m1 '^OBJECTION:' "$EVIDENCE")
         echo "auto-fix: worker 提了反駁 —— $line"
-        category=$(python3 - "$ROOT" "$ID" "$line" "$EVIDENCE" "$TF" <<'PY'
-import json, os, subprocess, sys
-root, ident, line, evidence, path = sys.argv[1:6]
-rest = line.split(":", 1)[1].strip()
+        # **與 `apply.sh` 共用同一支收件**(#29 A4):實作在 `ticket.py objection`,
+        # 它記過的同一筆不會再記第二次 —— 兩邊各記一次的話,同一句話會在票上長成兩筆,
+        # 而處置的人分不出哪一筆是哪一輪的。
+        python3 "$AC/ticket.py" objection "$ID" --line "$line" --evidence "$EVIDENCE" \
+            >/dev/null 2>&1 || true
+        category=$(python3 - "$line" <<'PY'
+import sys
+rest = sys.argv[1].split(":", 1)[1].strip() if ":" in sys.argv[1] else sys.argv[1].strip()
 parts = rest.split(None, 1)
-category = parts[0] if parts and parts[0] in (
-    "ticket-wrong", "test_defect", "blocking") else "ticket-wrong"
-body = parts[1] if len(parts) > 1 else rest
-with open(path, encoding="utf-8") as handle:
-    rows = json.load(handle).get("objections") or []
-rows.append({"category": category, "body": body,
-             "evidence": os.path.relpath(evidence, root),
-             "owner": "verifier" if category == "test_defect" else "main",
-             "disposition": "", "follow_up": ""})
-subprocess.run([sys.executable, os.path.join(os.environ["AC_CONTROL_DIR"], "ticket.py"),
-                "set", ident, "objections",
-                json.dumps(rows, ensure_ascii=False)], check=False,
-               stdout=subprocess.DEVNULL)
-print(category)
+print(parts[0] if parts and parts[0] in ("ticket-wrong", "test_defect", "blocking")
+      else "ticket-wrong")
 PY
 )
         if [ "$category" = "test_defect" ]; then
@@ -600,7 +717,7 @@ PY
         return 1
     fi
 
-    AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE \
+    AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 \
         sh "$AC/apply.sh" "$ID" "$PATCH_OUT" --evidence "$EVIDENCE"
     arc=$?
     if [ "$arc" -ne 0 ]; then

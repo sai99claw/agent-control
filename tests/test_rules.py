@@ -65,6 +65,36 @@ class WhatItPacks(RulesBase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("規則包:consolidator", done.stdout)
 
+    def test_the_design_session_has_a_pack_of_its_own(self):
+        """A1 / G1:設計 session 是 D-019 每天在派、卻**唯一沒有規則包**的角色 ——
+        而「沒有包」與「這個角色不必給規矩」在派工文上長得一樣。
+
+        **變異**:把 `WANTED["design"]` 那一格拿掉 → 這一條紅(rc=2,不認得角色)。
+        """
+        done = self.rules("pack", "design", "--model", "fable")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("memory/role/design.md", done.stdout, "角色卡指路")
+        self.assertIn("設計 session", done.stdout)
+        self.assertLessEqual(len(done.stdout.encode("utf-8")), 4096)
+
+    def test_the_reviewer_has_a_pack_of_its_own(self):
+        """D-022:覆核改由短命 opus 做,而它上一分鐘還沒有角色卡也沒有規則包。"""
+        done = self.rules("pack", "reviewer", "--model", "opus")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("memory/role/reviewer.md", done.stdout)
+        self.assertLessEqual(len(done.stdout.encode("utf-8")), 4096)
+
+    def test_the_consolidator_stops_borrowing_the_implementer_card(self):
+        """A8 / G8:整理者以前借 `implementer.md` —— 一張寫著「交 patch.diff」的
+        角色卡,對一個不交 patch 的角色說話。
+
+        **變異**:把 `WANTED["consolidator"]` 的第一格改回 `implementer.md` → 這一條紅。
+        """
+        done = self.rules("pack", "consolidator", "--model", "fable")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("memory/role/consolidator.md", done.stdout)
+        self.assertNotIn("memory/role/implementer.md", done.stdout)
+
     def test_a_verifier_gets_a_different_cut(self):
         """驗證者不需要「副本 + patch」那一整節(它交的是案例,不是產品 patch)。"""
         worker = self.rules("pack", "worker", "--model", "opus").stdout

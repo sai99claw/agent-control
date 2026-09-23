@@ -12,6 +12,68 @@ sys.path.insert(0, SCRIPTS)
 import event  # noqa: E402
 
 
+class InsideACopy(Sandbox):
+    """副本裡不發事件,由派工方代發(#29 A9,G9)。
+
+    `docs/SESSION-START.md` 以前要 worker / 驗證者自己發 `ticket.attempt.start`,而
+    worker 住在 `git archive | tar -x` 展出來的副本裡 —— `repo_root()` 往上找到的是
+    **副本自己那份** `board/config.json`,事件因此寫進一個等一下會被刪掉的檔,
+    **而且一聲都不吭**。發出去了與沒發出去於是長得一樣。
+    """
+
+    def copy_of_the_repo(self):
+        """一份**像副本的副本**:有 `board/config.json`、沒有 `.git`。"""
+        import shutil
+        where = os.path.join(self.home, "fix-t1", "work")
+        os.makedirs(where)
+        for rel in ("scripts", "board"):
+            shutil.copytree(os.path.join(self.repo, rel), os.path.join(where, rel))
+        for junk in ("events.jsonl", "answers.jsonl"):
+            path = os.path.join(where, "board", junk)
+            if os.path.exists(path):
+                os.remove(path)
+        self.assertFalse(os.path.exists(os.path.join(where, ".git")))
+        return where
+
+    def emit_in(self, where, *args, **extra):
+        import subprocess
+        return subprocess.run(
+            ["python3", os.path.join(where, "scripts", "event.py"), "emit", *args],
+            cwd=where, env=self.env(**extra), capture_output=True, text=True,
+            timeout=60)
+
+    def test_emitting_from_a_copy_is_refused_and_writes_nothing_there(self):
+        """**變異**:把 `cmd_emit` 裡那一段 `looks_like_a_copy` 拿掉 → 這一條紅。"""
+        where = self.copy_of_the_repo()
+        done = self.emit_in(where, "ticket.attempt.start", "--ticket", "1")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("副本裡不發事件,由派工方代發", done.stderr)
+        self.assertIn("AC_ROOT", done.stderr, "說得出下一步")
+        self.assertFalse(os.path.exists(os.path.join(where, "board", "events.jsonl")),
+                         "副本裡那一行會跟著副本一起被刪 —— 不該寫得出來")
+
+    def test_with_ac_root_it_writes_into_the_real_repo(self):
+        """派工方帶著 `AC_ROOT` 就照發 —— 擋的是「寫進副本」,不是「從副本發」。"""
+        where = self.copy_of_the_repo()
+        done = self.emit_in(where, "ticket.attempt.start", "--ticket", "1",
+                            AC_ROOT=self.repo)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual([row["kind"] for row in self.events()],
+                         ["ticket.attempt.start"])
+        self.assertFalse(os.path.exists(os.path.join(where, "board", "events.jsonl")))
+
+    def test_a_worktree_is_not_a_copy(self):
+        """worktree 的 `.git` 是一個**檔**,不是目錄 —— 判準要看得到它,
+        不然票分支的 worktree 會被誤判成副本,而那一側是真的要發事件的。"""
+        wt = self.worktree("t1")
+        import subprocess
+        done = subprocess.run(
+            ["python3", os.path.join(wt, "scripts", "event.py"), "emit",
+             "gate.start"],
+            cwd=wt, env=self.env(), capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+
 class Emit(Sandbox):
 
     def test_a_line_carries_time_kind_pid_and_where_it_ran(self):

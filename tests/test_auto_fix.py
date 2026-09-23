@@ -631,6 +631,204 @@ class TheDispatchPacket(AutoFixBase):
         self.assertIn("規則包", packet)
 
 
+class TheFirstRoundPacket(AutoFixBase):
+    """#29 A3 / G3:第 1 輪的派工文**也由工具產**。
+
+    以前第 1 輪是主線手寫、只有 `docs/DISPATCH-TEMPLATE.md` §8 的散文可抄,第 2 輪起
+    `auto-fix.sh` 才產 `dispatch-round<r>.md` —— 同一個角色的兩輪因此拿到兩種形狀的
+    派工文,而**少了哪一格沒有人看得出來**。
+    """
+
+    def fix_dir(self, round_no=1):
+        return os.path.join(self.home, "repo-wt", "fix-t1", "round%d" % round_no)
+
+    def test_round_one_prints_a_packet_before_any_gate_has_run(self):
+        """**變異**:把 `--round 1` 那一段分支拿掉 → 這一條紅(退回「一輪都還沒跑過」rc=2)。"""
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready(subject="把清單接上票的回歸")
+        self.assertFalse(os.path.exists(os.path.join(self.repo, "reports", "t1")),
+                         "這一條問的正是「還沒有 status.json 的時候」")
+        done = self.auto_fix("--dry-run", "--round", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue(done.stdout.startswith("# 規則包:worker"),
+                        "第一行要是規則包的首行:" + done.stdout[:120])
+        self.assertIn("#1", done.stdout, "票號")
+        self.assertIn("把清單接上票的回歸", done.stdout, "票面快照")
+        self.assertIn("base sha", done.stdout)
+        self.assertIn(self.fix_dir(), done.stdout, "副本路徑")
+        self.assertIn("patch-round1.diff", done.stdout, "要交什麼")
+        self.assertIn("OBJECTION:", done.stdout, "票寫錯的時候怎麼說")
+        self.assertIn("前景跑", done.stdout, "G14:丟背景就結束回合 = 什麼都沒交")
+        self.assertEqual(self.worker_rounds(), [], "第 1 輪不由這一支起 worker")
+
+    def test_the_packet_is_also_written_where_the_second_round_would_go(self):
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready()
+        self.auto_fix("--dry-run", "--round", "1")
+        found = glob.glob(os.path.join(self.repo, "reports", "t1", "*",
+                                       "dispatch-round1.md"))
+        self.assertEqual(len(found), 1, found)
+
+    def test_a_round_number_it_does_not_support_is_refused_by_name(self):
+        """「不認得 X」只說了它不是什麼(§5.7)。"""
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready()
+        done = self.auto_fix("--round", "4")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("--round 只接 1", done.stderr)
+
+    def test_without_round_one_it_still_says_where_to_start(self):
+        """沒有狀態檔又沒給 `--round 1` 時,那一句要**指得到兩條路**。"""
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready()
+        done = self.auto_fix()
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("--round 1", done.stderr)
+
+
+class WhichRoundIsTheLatestOne(AutoFixBase):
+    """#29 第 4 輪:「最新一輪」不准靠同一秒的運氣。
+
+    `run_id` 是 `<YYYYMMDD-HHMMSS>-<pid>`,而 `sorted()` 比整個字串 —— 第二段因此按
+    **十進位字面**排:`…-99993` 排在 `…-100017` 後面(`9` > `1`)。同一秒裡誰算
+    「最新」於是由 pid 的位數決定。
+
+    🩸 實測(#29 第 3 輪的閘門):`apply` 與 `gate` 落在同一秒,`apply` 那一筆
+    (rc=0、紅 0 條)排到最後,auto-fix 讀成「上一輪是綠的」就不派下一輪,而樹是紅的。
+    **同一份 code 在別台機器上是綠的** —— 那正是這一類 bug 最貴的地方。
+    """
+
+    # 同一秒,而且 apply 那一筆的 pid **字串**排在 gate 後面(`9…` > `1…`)。
+    SECOND = "20260921-100000"
+    GATE_RUN = SECOND + "-100017"
+    APPLY_RUN = SECOND + "-99993"
+
+    def apply_run(self, run_id):
+        """一筆 `kind=apply` 的狀態:rc=0、一條紅都沒有 —— 它說的是「patch 套上了」,
+        不是「測試過了」。"""
+        base = self.git("rev-parse", "main").strip()
+        self.run_py("scripts/status.py", "start", "--ticket", "1", "--kind", "apply",
+                    "--run-id", run_id, "--base-sha", base, "--round", "1",
+                    "--worktree", self.repo)
+        return self.run_py("scripts/status.py", "done", "--ticket", "1",
+                           "--kind", "apply", "--run-id", run_id, "--rc", "0",
+                           "--note", "套好並 commit")
+
+    def test_an_apply_run_in_the_same_second_does_not_hide_the_red_gate(self):
+        """**變異**:把 `run_key()` 換回 `status.latest_run(root, ident)` → 這一條紅
+        (auto-fix 會說「上一輪是綠的」而不派)。"""
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready()
+        self.status(1, RED_LOG, run_id=self.GATE_RUN)
+        self.apply_run(self.APPLY_RUN)
+
+        # 先證明**字典序真的會挑錯**,不然這一條在排序沒問題的機器上是空跑的(§5.5)。
+        self.assertEqual(sorted([self.GATE_RUN, self.APPLY_RUN])[-1], self.APPLY_RUN,
+                         "夾具沒有重現那個排序,這一條什麼都沒問到")
+
+        done = self.auto_fix("--dry-run")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("%s(gate)" % self.GATE_RUN, done.stdout,
+                      "挑到的不是帶判決的那一筆:" + done.stdout)
+        self.assertNotIn("上一輪是綠的", done.stdout,
+                         "apply 的 rc=0 被當成「測試過了」")
+        self.assertTrue(
+            os.path.exists(os.path.join(self.repo, "reports", "t1", self.GATE_RUN,
+                                        "dispatch-round2.md")),
+            "派工文要落在 gate 那一輪的目錄裡:" + done.stdout)
+
+    def test_a_later_second_still_wins_even_without_a_verdict(self):
+        """**同秒才看種類**:跨秒仍然以時間為準,不然「最新一輪」會變成「最新的閘門」,
+        而那是另一個意思 —— 主線重跑 apply 之後的狀態就再也讀不到了。
+
+        **變異**:把 `run_key()` 的第一段(秒)拿掉 → 這一條紅。
+        """
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready()
+        self.status(1, RED_LOG, run_id="20260921-100000-100017")
+        self.apply_run("20260921-100005-100018")
+        done = self.auto_fix("--dry-run")
+        self.assertIn("20260921-100005-100018(apply)", done.stdout, done.stdout)
+        self.assertIn("上一輪是綠的", done.stdout,
+                      "比較晚的那一輪就是最新的那一輪,不管它是哪一種")
+
+
+class RunFromInsideATicketWorktree(AutoFixBase):
+    """#29 A10(G10 的另一半):票分支的 worktree **不是**控制根。
+
+    `_ac_root()` 往上找 `board/config.json`,在 worktree 裡找到的是 worktree 自己 ——
+    於是票檔要在**那一條分支上進了版控**才找得到,而票檔是走 docs 通道進主線的,常常
+    還沒進去。#23 第 2 輪就是這樣 rc=2 停掉的。
+    """
+
+    def test_a_ticket_that_is_not_in_version_control_yet_is_still_found(self):
+        """**變異**:把 `TF` 那一段 `--git-common-dir` 的退路拿掉 → 這一條紅(rc=2 找不到票)。"""
+        self.set_worker(WORKER_NEVER)
+        self.make_ticket("1", allowed_write_paths=["tests/*"])   # **故意不 commit**
+        wt = self.worktree("t1")
+        self.assertFalse(os.path.exists(os.path.join(wt, "tickets", "1.json")),
+                         "這一條問的正是「票檔還沒進版控」")
+        done = self.run_sh(os.path.join(wt, "scripts", "auto-fix.sh"),
+                           "1", "--dry-run", "--round", "1", cwd=wt)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("找不到票", done.stderr)
+        self.assertIn("是 worktree", done.stdout, "改用主 repo 這件事要說出來")
+        self.assertIn("#1", done.stdout)
+        found = glob.glob(os.path.join(self.repo, "reports", "t1", "*",
+                                       "dispatch-round1.md"))
+        self.assertEqual(len(found), 1,
+                         "reports 要落在主 repo,不是等一下會被收掉的 worktree:%s" % found)
+
+
+class TheCopiesGetCollected(AutoFixBase):
+    """#29 A6 / G6:副本自己收 —— `work/` 與 `base/` 刪掉,patch 與 EVIDENCE 留著。
+
+    以前它們只在**下一輪開始**才 `rm -rf`,綠了停 InReview 就永遠留著;而「沒人收」與
+    「收過了」在磁碟上長得一樣,直到滿的那一刻(2026-09-16 某個下游專案的副本 14 GB 塞滿磁碟,
+    全套當場 disk I/O error)。
+    """
+
+    def fix_dir(self, round_no=2):
+        return os.path.join(self.home, "repo-wt", "fix-t1", "round%d" % round_no)
+
+    def test_work_and_base_are_gone_but_the_patch_stays(self):
+        """**變異**:把 `round_once` 裡那一句 `shed_copies "$FIX"` 拿掉 → 這一條紅。"""
+        self.set_worker(WORKER_FIXES)
+        self.ticket_ready()
+        self.first_round()
+        done = self.auto_fix()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        where = self.fix_dir()
+        self.assertFalse(os.path.isdir(os.path.join(where, "work")), "work/ 沒被收掉")
+        self.assertFalse(os.path.isdir(os.path.join(where, "base")), "base/ 沒被收掉")
+        self.assertTrue(os.path.isfile(os.path.join(where, "patch-round2.diff")),
+                        "patch 是證據,不能跟著被掃掉")
+        self.assertTrue(os.path.isfile(os.path.join(where, "EVIDENCE-round2.md")))
+        self.assertIn("收掉副本", done.stdout)
+
+    def test_a_patch_left_inside_work_is_picked_out_before_the_copy_goes(self):
+        """worker 有時把交付物放在 `work/` 裡。**先撿出來再刪** —— 反過來的話,
+        刪掉的是這一輪唯一的一份 patch。
+
+        **變異**:把 `collect_from_copy` 那一句拿掉 → 這一條紅。
+        """
+        self.set_worker(WORKER_FIXES.replace(
+            'diff -ruN base work > "patch-round$AC_ROUND.diff" || true',
+            'diff -ruN base work > "work/patch-round$AC_ROUND.diff" || true')
+            .replace('> "EVIDENCE-round$AC_ROUND.md"',
+                     '> "work/EVIDENCE-round$AC_ROUND.md"')
+            .replace('>> "EVIDENCE-round$AC_ROUND.md"',
+                     '>> "work/EVIDENCE-round$AC_ROUND.md"'))
+        self.ticket_ready()
+        self.first_round()
+        done = self.auto_fix()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        where = self.fix_dir()
+        self.assertTrue(os.path.isfile(os.path.join(where, "patch-round2.diff")),
+                        done.stdout + done.stderr)
+        self.assertFalse(os.path.isdir(os.path.join(where, "work")))
+
+
 class TheWholeLoop(AutoFixBase):
     """一整圈:紅 → 派 worker → 套 patch → 閘門 → 綠 → 停在等覆核。
 

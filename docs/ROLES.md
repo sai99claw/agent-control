@@ -7,9 +7,12 @@
 |---|---|---|---|---|
 | **產品負責人** | 人 | 方向、取捨、必要決策 | 目標、優先序、裁示 | 可暫停、取消、重排;不逐步批准例行工作 |
 | **主線** | 跟人互動的 session(Fable) | 接需求、派開題者、裁示、**覆核(讀 patch 記 `review`)**、決定落地順序、發版、維持脈絡 | 裁示、票的 `review` 格、交接、發版紀錄 | 不放寬驗收;不跳過閘門;不自己查 code、不自己改票面;不替人做產品決策 |
-| **開題者** | 短命 session(Fable) | 把使用者一句話寫成**完整票面**(含測試計畫) | 票 JSON + 給主線的 300 字摘要與建議順序 | 不改檔、不 git 寫入、不執行整支腳本;不替實作者先做一遍 |
+| **開題者** | 短命 session(Fable) | 把使用者一句話寫成**完整票面**(含測試計畫) | 票 JSON;**摘要與建議順序寫進票的 `outline` 欄**(`ticket.py create --outline`),不只回在對話裡 | 不改檔、不 git 寫入、不執行整支腳本;不替實作者先做一遍 |
+| **設計 session** | 短命 session(Fable) | 設計題先設計再開題(D-019):決定形狀、比較方案、每個取捨附「未來每票省/多花」(D-018) | `docs/DESIGN-<題>.md`(固定段見 `docs/DESIGN.md` §設計文件的固定段) + 回主線 ≤ 300 字摘要 | 不開票、不改產品碼、不 git 寫入、不跑閘門 / 落地;量測派子工作者,自己只讀結論 |
 | **Worker / 實作者** | 短命(預設 Opus;機械、規格逐字的票可派 Codex sol) | 在副本裡實作與局部驗證 | `patch.diff`(含自己的單元測試)、`EVIDENCE.md`、變異驗紅 | 只寫自己的副本;禁 git 寫入;範圍擴大要回報不准自己做 |
 | **驗證者** | 短命、獨立上下文(Sonnet / Codex sol) | 把票面驗收寫成回歸案例;`verify-case.py check` **證明案例是對的**(乾淨主線紅、candidate 綠),登記片段 `verify/TAGS.d/<n>.md`,把怎麼跑寫進票的 `verify` 欄 | `verify/<feature>/test_ticket_<n>.py` + 票的 `verify`(含 `baseline`)+ `patch-verify.diff`(`verify-case.py extract` 出的) | **不判 PASS/FAIL、不寫 VERDICT**;不讀實作者的 `EVIDENCE.md`;**不跑 tag 回歸那一整組**(只跑自己的案例與 `verify-case.py check`);不輪詢;不改產品碼 |
+| **覆核者** | 短命(Opus;D-022) | 閘門綠、票停 `InReview` 後讀**分支上的 code** 對票面驗收 | `verdict(pass\|fail)` + 逐條驗收 → code 位置 + 疑慮清單;`fail` 寫成 objection | 不重跑測試、不改檔、不 git 寫入、不判落地順序(主線把 verdict 寫進票的 `review` 格) |
+| **整理者** | 短命 × 2(`memory.consolidators` 兩個不同的模型) | 記憶超上限時壓縮(D-006 / D-007 / D-013);範本 `templates/dispatch-consolidator.md` | 壓縮後的記憶檔或提高上限 + `cap_history` 一列、兩份討論檔、`memory.consolidated` 事件 | 沒有討論檔不准 consolidate;不直接寫案例(用票號指路);不改 `docs/DECISIONS.md` |
 | **落地器** | `scripts/land.sh`(程式) | 閘門 → 合併 → push;紅了寫紅榜 | 事件、退出碼、`reports/t<n>/<run_id>/status.json` | 0 commit / 基準過期 / 越界 / **覆核缺或過期** / **未處置的阻擋反駁** / 閘門紅,一律拒絕;land 期間持一把互斥鎖。它**沒有判斷** |
 
 > **落地器不做三件事,而角色表以前把它們藏掉了**(2026-09-21 外部審查;第 ①③ 兩條 D-015 起有自己的入口):

@@ -31,7 +31,13 @@
 ## Worker / 驗證者
 - 讀派工文裡指定的副本路徑;先 `ls` 確認 `work/`、`base/` 都在。
 - 讀 `docs/DISPATCH-TEMPLATE.md` §禁區與 §假綠家族。
-- 開工發 `ticket.attempt.start`,交付發 `ticket.attempt.done`(附 patch 路徑)。
+- **副本裡不發事件,由派工方代發**(2026-09-23,#29 A9)。`ticket.attempt.start` /
+  `ticket.attempt.done` 由派工的那一側發:`auto-fix.sh` 自己發,第 1 輪由主線發
+  (`python3 scripts/event.py emit ticket.attempt.start --ticket <n> --attempt 1`)。
+  為什麼不是你發:副本是 `git archive | tar -x` 展出來的,`event.py` 往上找到的是
+  **副本自己那份** `board/config.json`,事件會寫進一個等一下會被刪掉的檔,**而且不報錯** ——
+  發出去了與沒發出去因此長得一樣。真的要從副本裡發就帶 `AC_ROOT=<主 repo 根>`;
+  沒帶的話 `event.py emit` 會拒收(rc=3)並說出這一句。
 
 ## 結束前(所有角色)
 - 交接:主線寫 `docs/HANDOFF.md`;worker 的交接寫在回報裡。

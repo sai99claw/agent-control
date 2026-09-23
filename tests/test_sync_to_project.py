@@ -83,6 +83,82 @@ class SyncsTheScripts(unittest.TestCase):
                                                          "apply.sh")))
 
 
+class DidTheProjectActuallyWireItUp(unittest.TestCase):
+    """#29 A11 / G11:**同步了不等於接上了**。
+
+    上面那張「接點清單」每一次都印一模一樣的內容,於是「已經接上三支」與「一支都沒接」
+    在畫面上長得一樣(§5.5 的母題)。所以這裡真的去專案自己的 `scripts/*.sh` 裡看一眼。
+    """
+
+    def project(self, dest, caller=""):
+        write_config(dest)
+        os.makedirs(os.path.join(dest, "scripts"), exist_ok=True)
+        with open(os.path.join(dest, "scripts", "land-ticket.sh"), "w") as handle:
+            handle.write("#!/bin/sh\n" + caller)
+
+    def test_a_script_nobody_calls_is_named(self):
+        """**變異**:把結尾那一段 `UNCALLED` 拿掉 → 這一條紅。"""
+        with tempfile.TemporaryDirectory() as d:
+            self.project(d)
+            r = sync(d)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            line = [x for x in r.stdout.splitlines() if "沒有呼叫點" in x]
+            self.assertTrue(line, "同步完了卻不說有沒有接上:" + r.stdout)
+            for name in ("apply.sh", "inbox.py", "rules.py", "memory.py"):
+                self.assertIn(name, line[0], name)
+            for dependency in ("event.py", "ticket.py", "verify.py"):
+                self.assertNotIn(dependency, line[0],
+                                 "只被 import 的那幾支本來就沒有人直接叫,"
+                                 "對它們喊「沒有呼叫點」是一句假話")
+
+    def test_a_variable_form_call_counts_as_wired(self):
+        """專案拉一格 `CONTROL=$ROOT/scripts/control` 再 `$CONTROL/apply.sh` 是**真的
+        呼叫**(實測 2026-09-23:某個下游專案的 `land-ticket.sh` 六處都是這一種)。只認寫死
+        路徑的話,會對一支被叫了六次的腳本說「沒有呼叫點」—— 一個守衛給錯了下一步,
+        比沒有守衛更糟(§5.7)。
+
+        **變異**:把比對字串改回 `scripts/control/$name` → 這一條紅。
+        """
+        with tempfile.TemporaryDirectory() as d:
+            self.project(d, caller='CONTROL=$ROOT/scripts/control\n'
+                                   'sh "$CONTROL/apply.sh" "$N" patch.diff\n')
+            line = [x for x in sync(d).stdout.splitlines() if "沒有呼叫點" in x]
+            self.assertTrue(line)
+            self.assertNotIn("apply.sh", line[0], "被叫到了卻說沒有")
+            self.assertIn("rules.py", line[0], "真的沒被叫的那幾支還是要點名")
+
+    def test_a_mention_inside_a_comment_is_not_a_call(self):
+        """**脫罪那一段故意寫得笨**:抓錯了是吵一次,放過了是靜的(§5.7)。
+        實測 2026-09-23:某個下游專案的 `test-for.sh` 只在註解裡寫了
+        `scripts/control/apply.sh`,而純字串 grep 會因此判它「接上了」。
+        """
+        with tempfile.TemporaryDirectory() as d:
+            self.project(d, caller="# 這裡提到 scripts/control/apply.sh 只是說明\n")
+            line = [x for x in sync(d).stdout.splitlines() if "沒有呼叫點" in x]
+            self.assertTrue(line)
+            self.assertIn("apply.sh", line[0], "註解不算接上了")
+
+    def test_a_file_that_is_not_ours_is_named_instead_of_being_ignored(self):
+        """`docs/roles/` 裡不在 manifest 上的檔是專案自己放的:同步不會蓋它、也不會
+        退場它,而它讀起來與角色卡一模一樣(實測:某個下游專案的 `dispatcher.md`)。
+
+        **變異**:把結尾那一段「非產出物」拿掉 → 這一條紅。
+        """
+        with tempfile.TemporaryDirectory() as d:
+            self.project(d)
+            os.makedirs(os.path.join(d, "docs", "roles"), exist_ok=True)
+            with open(os.path.join(d, "docs", "roles", "dispatcher.md"), "w") as handle:
+                handle.write("專案自建的告示\n")
+            r = sync(d)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            said = [x for x in r.stdout.splitlines() if "非產出物" in x]
+            self.assertTrue(said, "混在產出物目錄裡的自建檔沒有被唸出來:" + r.stdout)
+            self.assertIn("dispatcher.md", said[0])
+            self.assertTrue(os.path.exists(os.path.join(d, "docs", "roles",
+                                                        "dispatcher.md")),
+                            "只唸出來,不刪 —— 那是專案的東西")
+
+
 class SyncToProject(unittest.TestCase):
     def test_copies_role_and_model_cards_with_a_provenance_header(self):
         with tempfile.TemporaryDirectory() as d:
