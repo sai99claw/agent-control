@@ -90,18 +90,16 @@
   "attempt": 0,
   "base_sha": "d4d177ec8bf3b9fe318d77b28f8fdbc7d0ad2cb8",
   "state": "Ready",
-  "state_version": 9,
+  "state_version": 11,
   "lease": null,
   "retry_limit": 2,
   "verify": {
     "files": [
       "tests/test_ticket_29.py"
     ],
-    "tags": [
-      "flow-audit"
-    ],
+    "tags": [],
     "run": "python3 -m unittest tests.test_ticket_29",
-    "notes": "驗證者(sonnet,只證紅)20 條 A1–A11 + 3 條 A12(基底綠);第 2 輪照範本補 F1/F2/F5"
+    "notes": "驗證者(sonnet,只證紅)20 條 A1–A11 + 3 條 A12(基底綠);案例住 tests/,verify.py --tag 選不到,tags 留空(TAGS 字面只給 lint F2)"
   },
   "decision_refs": [
     "D-015",
@@ -125,7 +123,5 @@
       "contains": "result-round1"
     }
   ],
-  "tags": [
-    "flow-audit"
-  ]
+  "tags": []
 }
