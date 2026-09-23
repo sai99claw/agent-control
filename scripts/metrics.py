@@ -199,7 +199,10 @@ def measure(root, ident, objections):
             row["red_runs"] += 1
             # 分類只問一句:那一輪有沒有留下環境可疑的證據。**非空 = 環境**,
             # 空的 = 程式 —— 所以 env 與 product 兩格相加必然等於 red。
-            if data.get("environment_suspect"):
+            # 一律經 `status.environment_suspects()`(形狀見
+            # `docs/DESIGN-ENV-SUSPECT.md`,D-019),不直接看那一格的真值:舊檔有四種
+            # 「沒有」與一種舊的非空 dict,而**直接下標的那一版在舊 dict 上會炸**。
+            if status.environment_suspects(data):
                 row["env_runs"] += 1
             else:
                 row["product_runs"] += 1

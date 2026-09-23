@@ -58,7 +58,8 @@ class Metrics(Sandbox):
         其他地方走真的 `status.py`,不然測到的是這份 fixture 對格式的理解。"""
         data = {"state": "done", "run_id": run_id, "kind": "gate",
                 "ticket": str(ident), "rc": 0, "started": None, "finished": None,
-                "phases": [], "failures": [], "environment_suspect": {},
+                # 空值只有 `[]` 一種寫法(D-019,`docs/DESIGN-ENV-SUSPECT.md`)。
+                "phases": [], "failures": [], "environment_suspect": [],
                 "duration_seconds": None, "round": 1}
         data.update(fields)
         self.write(os.path.join("reports", "t%s" % ident, run_id, "status.json"),
@@ -133,9 +134,12 @@ class Metrics(Sandbox):
         """
         self.make_ticket(7)
         self.put_run(7, "r1", rc=0)
-        self.put_run(7, "r2", rc=1,
-                     environment_suspect={"engine": "safari", "count": 8})
-        self.put_run(7, "r3", rc=1, environment_suspect={})
+        self.put_run(7, "r2", rc=1, environment_suspect=[
+            {"source": "statistical", "engine": "safari",
+             "why": "localStorage id=<id> empty after <n> seconds",
+             "count": 8, "threshold": 8, "log": "gate.log",
+             "line": "AssertionError: localStorage id=ab-1 empty after 101 seconds"}])
+        self.put_run(7, "r3", rc=1, environment_suspect=[])
         line = self.line(7)
         self.assertIn("red_runs=2", line)
         self.assertIn("env_runs=1", line)
@@ -145,6 +149,31 @@ class Metrics(Sandbox):
         self.assertEqual(int(numbers["env_runs"]) + int(numbers["product_runs"]),
                          int(numbers["red_runs"]),
                          "有一種紅沒有被歸類:%s" % line)
+
+    def test_an_old_dict_shaped_run_still_counts_as_an_environment_red(self):
+        """驗收 10 的後半:**舊檔不改寫**(D-014),相容性由讀端正規化吃掉。
+
+        `reports/` 裡有 95 份舊狀態檔,而分類是回頭讀整個 `reports/` 算出來的 ——
+        一份舊檔在新的讀法下被算成「程式紅」,那張票的歷史數字就從此說謊。
+
+        **變異**:`metrics.py` 不經 `status.environment_suspects()`,直接看那一格的
+        真值 → 這一條還綠(舊 dict 也是真的);把分類改成讀 `[0]["source"]`
+        → 這一條炸在下標上。兩種都要有人接得住,所以一律經正規化函式。
+        """
+        self.make_ticket(7)
+        self.put_run(7, "r1", rc=1, environment_suspect=[
+            {"source": "declared", "engine": "firefox", "why": "session 斷了",
+             "count": 1, "threshold": None, "log": "gate.log",
+             "line": "ENVIRONMENT-SUSPECT: firefox session 斷了"}])
+        # #7 那一版寫的單筆 dict,`message_shape` 是今天的 `why`。
+        self.put_run(7, "r2", rc=1,
+                     environment_suspect={"engine": "safari", "count": 8,
+                                          "message_shape": "storage empty"})
+        self.put_run(7, "r3", rc=1, environment_suspect=[])
+        line = self.line(7)
+        self.assertIn("red_runs=3", line)
+        self.assertIn("env_runs=2", line)
+        self.assertIn("product_runs=1", line)
 
     def test_a_run_still_going_is_not_counted_as_red(self):
         """`rc` 是 `null` 的那一份是**還在跑**。算成紅等於把「要等」講成「要修」。"""
@@ -251,8 +280,10 @@ class Metrics(Sandbox):
 
     def test_all_json_carries_the_same_numbers_the_board_draws(self):
         self.make_ticket(7)
-        self.put_run(7, "r1", rc=1, round=2,
-                     environment_suspect={"engine": "safari"})
+        self.put_run(7, "r1", rc=1, round=2, environment_suspect=[
+            {"source": "declared", "engine": "safari", "why": "螢幕鎖著(#474)",
+             "count": 1, "threshold": None, "log": "gate.log",
+             "line": "ENVIRONMENT-SUSPECT: safari 螢幕鎖著(#474)"}])
         done = self.metrics("all", "--json")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         row = json.loads(done.stdout)["7"]

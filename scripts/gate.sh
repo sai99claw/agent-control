@@ -137,6 +137,9 @@ map() {
         board/config.json) add test_board test_event test_heartbeat test_memory ;;
         code-map/check-stale.py|code-map/cards/*) add test_check_stale ;;
         tickets/*.json|tickets/SCHEMA.md) add test_ticket ;;
+        # 形狀的唯一真實來源:`test_status` 有一條把它的七個鍵與 `status.py` 釘在
+        # 一起,所以改它就是改那一格的規格 —— 要連 code 那一側一起跑。
+        docs/DESIGN-ENV-SUSPECT.md) add test_status test_no_project_names ;;
         docs/DISPATCH-TEMPLATE.md) add test_dispatch_template test_no_project_names ;;
         templates/dispatch-verifier.md) add test_dispatch_template test_no_project_names ;;
         # 文件**有**一支測試真的讀它們:那條「不准出現專案名 / 絕對路徑」的守衛
@@ -278,16 +281,30 @@ VERIFY_LOG_ARGS=""
 NOTE=""
 ENV_SUSPECT=0
 
-suspect_field() {   # $1 = JSON 欄位;讀不到就印空的,不猜
+# `--suspect-file` 那一份是**一個 list**(形狀見 `docs/DESIGN-ENV-SUSPECT.md`,D-019);
+# 連紅統計達門檻時只會有第一筆,所以這裡讀 `[0]`。舊的單筆 dict 也讀得懂。
+suspect_field() {   # $1 = 第一筆的欄位;讀不到就印空的,不猜
     python3 - "$SUSPECT_FILE" "$1" <<'SUSPECT_PY'
 import json, sys
 try:
     with open(sys.argv[1], encoding="utf-8") as handle:
-        data = json.load(handle)
+        rows = json.load(handle)
 except (OSError, ValueError):
-    data = {}
-print(data.get(sys.argv[2], ""))
+    rows = []
+if isinstance(rows, dict):
+    rows = [rows]
+row = rows[0] if isinstance(rows, list) and rows else {}
+print(row.get(sys.argv[2], "") if isinstance(row, dict) else "")
 SUSPECT_PY
+}
+
+# 這一輪的 `environment_suspect` 有幾筆。**問的是 `status.py suspects`,不是 grep
+# `done` 的輸出** —— grep 不到與零筆長得一樣(`docs/DISPATCH-TEMPLATE.md` §5.5)。
+# 問不出來印 `?`,不印 0:那兩件事的下一步不同(見 `auto_fix`)。
+env_suspect_rows() {
+    [ -n "$TICKET" ] || { echo 0; return 0; }
+    python3 "$ROOT/scripts/status.py" suspects --ticket "$TICKET" \
+        --run-id "$RUN_ID" --count 2>/dev/null || echo "?"
 }
 
 # 測試一律走這裡。判綠仍然只看 rc:86 = 環境可疑(那一段被中止)、1 = 紅、0 = 綠。
@@ -342,11 +359,15 @@ inbox_post() {   # $1 = rc
         # 環境那一頁要能直接動手:哪個引擎、倒在哪一句、連幾條,以及**先去看哪三樣**。
         # 一句「環境可疑」不是一個可以執行的動作(DISPATCH-TEMPLATE §5.7)。
         engine=$(suspect_field engine)
-        message=$(suspect_field message_shape)
+        message=$(suspect_field why)
         count=$(suspect_field count)
+        source=$(suspect_field source)
         state="env_suspect(gate rc=$1)"
         what="先別重跑;查 $engine 那一側的環境,修好再跑這一段"
+        # `來源` 那一行不是裝飾:`statistical` 是這支程式從紅例推出來的,`declared`
+        # 是案例自己說的,兩種的可信度與下一步不同(`docs/DESIGN-ENV-SUSPECT.md`)。
         note="引擎:$engine
+來源:$source
 同形訊息:$message
 連續紅:$count
 疑似原因:掛很久的 Safari --automation 行程、磁碟剩餘空間不足、測試埠被占用。"
@@ -370,6 +391,17 @@ auto_fix() {   # $1 = rc
     [ "$1" -eq 0 ] && return 0
     if [ -z "$TICKET" ]; then
         echo "gate: auto-fix 要有 --ticket <票號> —— 沒有票就沒有紅榜可以派" >&2
+        return 0
+    fi
+    # **這一格非空 → 不自動派**(D-019,理由見 `docs/DESIGN-ENV-SUSPECT.md` §理由 5):
+    # 舊版對任何 rc≠0 都派,於是「機器現在不能跑」那一輪照樣送一個 worker 進去。
+    # 抓與放的代價不對稱 —— 懷疑錯了的代價是人手打一行指令,派錯了的代價是一整輪
+    # worker。所以**問不出來也當成有**,而且那一句要與「真的有」分得開。
+    rows=$(env_suspect_rows)
+    [ "$rows" = "?" ] && echo "gate: 問不出這一輪環境可疑幾筆(狀態檔讀不到)—— 當成有" >&2
+    if [ "$ENV_SUSPECT" -eq 1 ] || [ "$rows" != 0 ]; then
+        echo "gate: 環境可疑,不自動派(environment_suspect $rows 筆)—— 先修環境;"\
+             "真的要派就手打 sh scripts/auto-fix.sh $TICKET"
         return 0
     fi
     if [ -n "${AC_IN_AUTOFIX:-}" ]; then

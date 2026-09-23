@@ -10,6 +10,7 @@
     scripts/status.py done   --ticket 7 --run-id … --rc 1 --log gate.log \
                              [--suspected-flaky test_x.Case.test_y …]
     scripts/status.py show   --ticket 7 [--run-id …] [--runs]
+    scripts/status.py suspects --ticket 7 [--run-id …] [--count]   # 環境可疑幾筆
     scripts/status.py rundir --ticket 7 --run-id …   # 這一輪的目錄(回歸快取住那裡)
 
 寫的是 `<reports_dir>/t<票號>/<run_id>/status.json`(`board/config.json` 的
@@ -51,6 +52,13 @@ patch 路徑與雜湊、第幾輪、上一輪排除過什麼、怎麼重現,它�
 的那件事 —— 它會把「環境壞了」重新量成「這些案例都是真紅」。所以 rc=86 的時候
 `flake_rerun` 與回歸層都不跑,狀態檔直接寫 `env_suspect`。
 
+## 環境可疑的兩條來源收成同一格(`environment_suspect`,D-019)
+**形狀的唯一真實來源是 `docs/DESIGN-ENV-SUSPECT.md`**,這一份只實作它:那一格永遠是
+一個 list、空值只有 `[]` 一種寫法,每一筆七個鍵(`source` / `engine` / `why` /
+`count` / `threshold` / `log` / `line`)一個都不缺、缺料填 `None`。兩條來源各標
+`source`:`statistical` 是上面那條連紅統計,`declared` 是跑在裡面的案例自己印的
+`ENVIRONMENT-SUSPECT: <引擎> <為什麼>` 那一行。**`state` 與 `rc` 不因這一格而變。**
+
 ## 自動 flake 與順序污染
 單跑綠**不等於**那條紅是假的:第一條測試污染共用狀態、第二條檢查乾淨狀態時,整組
 必紅而單跑必綠。只有每條紅例連續單跑達設定門檻、原順序整組也達門檻全綠,才標
@@ -58,12 +66,14 @@ patch 路徑與雜湊、第幾輪、上一輪排除過什麼、怎麼重現,它�
 """
 
 import argparse
+import contextlib
 import hashlib
 import io
 import json
 import os
 import re
 import sys
+import traceback
 import unittest
 from datetime import datetime
 
@@ -92,6 +102,15 @@ DIVIDER = re.compile(r"^(=|-){20,}\s*$")
 FILE_LINE = re.compile(r'^\s*File "([^"]+)", line (\d+)')
 # 瀏覽器那一族會在案例名或輸出裡帶 `engine=chrome` / `engine='firefox'`;沒有就留空,不猜。
 ENGINE = re.compile(r"engine\s*[=:]\s*['\"]?([A-Za-z0-9_.-]+)")
+# 案例自己宣告環境紅的那一行:`ENVIRONMENT-SUSPECT: safari 螢幕鎖著(#474)`。
+# 引擎那一格是**選填**的第一個字 —— 認得出引擎名就拆出來,認不出就整段都是「為什麼」
+# (有些環境紅不屬於任何一個引擎,硬拆會把半句話當成引擎名)。前綴**只認行首**
+# (去掉前導空白之後),理由寫在 `parse_environment_suspects` 的 docstring。
+SUSPECT_PREFIX = "ENVIRONMENT-SUSPECT:"
+SUSPECT_ENGINE = re.compile(r"^([a-z][a-z0-9_.-]*)(\s+|$)")
+# `environment_suspect` 每一筆的七個鍵,順序照 `docs/DESIGN-ENV-SUSPECT.md`(D-019)。
+# **那一份文件是形狀的唯一真實來源**,這裡只是它的可執行副本。
+SUSPECT_KEYS = ("source", "engine", "why", "count", "threshold", "log", "line")
 CLOSERS = {"(": ")", "[": "]"}
 
 
@@ -110,6 +129,18 @@ def normalized_failure_message(error):
     return re.sub(r"\d+", "<n>", message).strip()
 
 
+def suspect_row(source, engine="", why="", count=None, threshold=None,
+                log="", line=""):
+    """一筆環境嫌疑。**七個鍵一個都不缺,缺料填 `None`**(`docs/DESIGN-ENV-SUSPECT.md`)。
+
+    「有沒有這個鍵」不准當語意:讀的人只判 `source`,不必對每一筆做 `.get` 分支 ——
+    一份鍵時有時無的紀錄,在 `.get(key, "")` 底下與一份根本沒記的紀錄長得一樣。
+    """
+    values = {"source": source, "engine": engine, "why": why, "count": count,
+              "threshold": threshold, "log": log, "line": line}
+    return {key: values[key] for key in SUSPECT_KEYS}
+
+
 class EnvironmentResult(unittest.TextTestResult):
     """同一引擎、同形訊息連紅達門檻就中止那一段。
 
@@ -122,7 +153,9 @@ class EnvironmentResult(unittest.TextTestResult):
         self.threshold = threshold
         self.last_shape = None
         self.streak = 0
-        self.environment_suspect = None
+        # **空值只有 `[]` 一種寫法**(D-019)。`None` 與 `[]` 揉在一起的那一刻,
+        # 「還沒有量到」與「量了而沒有」在真值上長得一樣。
+        self.environment_suspect = []
 
     def _observe(self, test, err):
         if err is None:
@@ -142,12 +175,18 @@ class EnvironmentResult(unittest.TextTestResult):
         self.streak = self.streak + 1 if shape == self.last_shape else 1
         self.last_shape = shape
         if self.streak >= self.threshold:
-            self.environment_suspect = {
-                "engine": engine,
-                "message_shape": message,
-                "count": self.streak,
-                "threshold": self.threshold,
-            }
+            # 形狀見 `docs/DESIGN-ENV-SUSPECT.md`:一個 list,每一筆標來源。
+            # `why` 是**正規化過的**訊息形狀(原 `message_shape`,改名併進來),
+            # `line` 是觸發那一條紅的**原始**訊息第一行 —— 形狀認得出「同一句話」,
+            # 原文才答得出「那台機器當時到底說了什麼」,兩格都要留。
+            # `log` 那一格由 `cmd_run_tests` 補:這裡看不到 `--log` 是哪一份檔。
+            # `line` 用 `format_exception_only` 的第一行:那正是 log 上的
+            # `AssertionError: <原話>`,而形狀(`why`)已經把數字換成 `<n>` 了。
+            raw = "".join(traceback.format_exception_only(err[0], err[1])).splitlines()
+            self.environment_suspect = [suspect_row(
+                "statistical", engine=engine, why=message, count=self.streak,
+                threshold=self.threshold, log="",
+                line=raw[0].strip() if raw else "")]
             # 兩個旗標都要設:`shouldStop` 停的是**下一條測試方法**,而 subTest 的
             # 迴圈跑在同一個方法裡面 —— 只設它,那 12 條 subTest 會整組跑完才停。
             # `failfast` 才是 subTest 自己看的那一格(實測見 EVIDENCE M1)。
@@ -171,6 +210,57 @@ class EnvironmentResult(unittest.TextTestResult):
         super().addSubTest(test, subtest, err)
 
 
+class LogStream:
+    """同一份 log 收兩種輸出:runner 的,與案例自己 `print` 的。
+
+    `verbosity=2` 的 runner 把 `test_x (…) ... ` 寫完**不換行**就去跑案例,所以案例
+    `print` 出來的字會黏在那一行尾巴。實測(#23 第 2 輪)那一行長這樣:
+
+        test_it_declares_and_skips (…) ... ENVIRONMENT-SUSPECT: firefox 假的宣告
+
+    於是兩件事同時壞:`line` 那一格前面多帶了一截案例名(文件要的是**整行原樣**),
+    而宣告行不在行首 —— 而行首是唯一分得開「印出那一行」與「在講那一行」的東西
+    (`parse_environment_suspects`)。所以這裡追蹤這份 log 現在停在第幾欄,**換寫入者
+    而且還停在半行**的時候補一個換行。
+    """
+
+    def __init__(self, handle):
+        self.handle = handle
+        self.column = 0
+        self.who = None
+
+    def side(self, who):
+        return LogSide(self, who)
+
+    def write(self, who, text):
+        if not text:
+            return 0
+        if self.column and who != self.who:
+            self.handle.write("\n")
+            self.column = 0
+        self.who = who
+        self.handle.write(text)
+        if "\n" in text:
+            self.column = len(text.rsplit("\n", 1)[1])
+        else:
+            self.column += len(text)
+        return len(text)
+
+
+class LogSide:
+    """`LogStream` 的一個寫入者;runner 與 `redirect_stdout` 各拿一個。"""
+
+    def __init__(self, shared, who):
+        self.shared = shared
+        self.who = who
+
+    def write(self, text):
+        return self.shared.write(self.who, text)
+
+    def __getattr__(self, name):
+        return getattr(self.shared.handle, name)
+
+
 def cmd_run_tests(args):
     """跑測試並在環境可疑時中止。**shell 不再自己叫 unittest** —— 要看到一條一條的
     結果就得待在同一個程序裡;等 log 寫完再解析等於等整段跑完,那正是這張票要省下的。
@@ -181,7 +271,9 @@ def cmd_run_tests(args):
     threshold = int(event.config(root).get("environment_fail_fast_threshold")
                     or DEFAULT_ENV_FAIL_FAST_THRESHOLD)
     with open(args.suspect_file, "w", encoding="utf-8") as handle:
-        handle.write("")
+        # **空值只有 `[]`**(`docs/DESIGN-ENV-SUSPECT.md`)。舊版寫空字串,於是
+        # 「這一趟沒有嫌疑」與「這個檔壞了」在 `json.load` 底下都是同一個例外。
+        handle.write("[]\n")
     # cwd 照舊版兩條路各自的樣子:discover 在 repo 根、指名模組在 `tests/`。
     where = root if args.mode == "discover" else os.path.join(root, "tests")
     os.chdir(where)
@@ -191,13 +283,23 @@ def cmd_run_tests(args):
         suite = loader.discover("tests", pattern="test_*.py")
     else:
         suite = loader.loadTestsFromNames(args.names)
-    with open(args.log, "w", encoding="utf-8") as stream:
+    with open(args.log, "w", encoding="utf-8") as handle:
+        # **案例自己 `print` 的那一行也要進 log。** `TextTestRunner(stream=…)` 只收
+        # runner 的輸出,而 `ENVIRONMENT-SUSPECT:` 那一行是案例印的 —— 不導進來,
+        # 它會流到呼叫者的 stdout 而不在 log 裡,於是 `done --log` 永遠讀不到
+        # declared 那一條來源(`docs/DESIGN-ENV-SUSPECT.md` §遷移)。兩邊共用一個
+        # `LogStream`,它負責讓案例印的那一行落在**行首**(理由見那個 class)。
+        shared = LogStream(handle)
         runner = unittest.TextTestRunner(
-            stream=stream, verbosity=2,
+            stream=shared.side("runner"), verbosity=2,
             resultclass=lambda *items, **kw: EnvironmentResult(
                 *items, threshold=threshold, **kw))
-        result = runner.run(suite)
+        with contextlib.redirect_stdout(shared.side("case")):
+            result = runner.run(suite)
     if result.environment_suspect:
+        for row in result.environment_suspect:
+            # `log` 只有這裡知道:嫌疑是在跑的時候量到的,而檔名是呼叫者給的。
+            row["log"] = args.log
         with open(args.suspect_file, "w", encoding="utf-8") as handle:
             json.dump(result.environment_suspect, handle, ensure_ascii=False)
             handle.write("\n")
@@ -396,6 +498,76 @@ def parse_failures(log_path):
     return out
 
 
+def parse_environment_suspects(log_path):
+    """從一份 log 裡挑出 `ENVIRONMENT-SUSPECT:` 那幾行(`source == "declared"`)。
+
+    這一條來源與上面那條統計是**兩件不同的事**:統計是外面這支程式從紅例推出來的,
+    宣告是跑在裡面的案例自己說的 —— 螢幕中途上鎖那一種紅被案例改記成 skip,
+    `addFailure` 根本不會被叫,統計看不到它,而兩端之間唯一的線就是 log 上那一行。
+
+    切法照 `docs/DESIGN-ENV-SUSPECT.md`:宣告行**只認行首**(去掉前導空白之後以前綴
+    開頭);引擎名後面要**真的還有話**才把第一個字當引擎,只有一個字的那一行整句就是
+    理由。**一行一筆,不去重** —— 同一趟兩份 log 各記一次是明著要的行為。
+
+    **為什麼只認行首而不是 `find`**:#23 第 1 輪實測,`unittest -v` 把案例 docstring
+    的第一行也印進 log,而那一行裡逐字寫著前綴,於是被讀成一筆
+    `engine="firefox"` / `why="假的 ... ok"` 的宣告 —— 「這一格非空就不自動派」那條
+    守衛照著把那一輪的 auto-fix 擋掉了。中段出現的前綴是在**講**那一行,不是**印出**
+    那一行,而位置是唯一分得開兩者的東西。案例真的印出來的那一行一定在行首:`print`
+    自己起一行,而 runner 停在半行時由 `LogStream` 補一個換行。
+    """
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        line = line.strip()
+        if not line.startswith(SUSPECT_PREFIX):
+            continue
+        rest = line[len(SUSPECT_PREFIX):].strip()
+        if not rest:
+            continue
+        engine = ""
+        found = SUSPECT_ENGINE.match(rest)
+        if found and rest[found.end():].strip():
+            engine = found.group(1)
+            rest = rest[found.end():].strip()
+        # `count` 是 1(這一行就是一次觀測),`threshold` 沒有門檻可言 —— 填 `None`,
+        # 不填 0:0 是一個門檻,而「不適用」不是一個數字。
+        out.append(suspect_row("declared", engine=engine, why=rest, count=1,
+                               threshold=None, log=log_path, line=line))
+    return out
+
+
+def environment_suspects(data):
+    """讀端正規化:一份 `status.json` → 這一格的 list(`docs/DESIGN-ENV-SUSPECT.md`)。
+
+    舊檔有**四種「沒有」**(缺這一格 / `null` / `{}` / `start` 根本沒寫)與**一種舊的
+    非空 dict**(#7 的單筆)。裁的是「不改寫舊檔」,所以相容性全靠這一支 —— `metrics`
+    與看板一律經它讀,不直接下標。少了它,舊 dict 在真值上仍是真、卻在 `[0]` 下標
+    炸掉,而那兩種壞法在畫面上都是一格空白。
+    """
+    raw = (data or {}).get("environment_suspect")
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [row for row in raw if isinstance(row, dict)]
+    if isinstance(raw, dict):
+        # 舊形狀:`message_shape` 就是今天的 `why`;那一版沒有留原始那一行與 log。
+        # 沒有 `message_shape` 的舊檔,`why` 是 **`None` 而不是 `""`**:`""` 在說
+        # 「理由是一句空話」,`None` 在說「那一版根本沒記理由」,而只有後者是真的
+        # (`docs/DESIGN-ENV-SUSPECT.md` §結論「缺料就 null」、DISPATCH-TEMPLATE §5.5
+        # 「拿不到就當空的」)。`line` / `log` 那兩格是文件與票面**逐字**釘成 `""` 的,
+        # 照釘的寫。
+        return [suspect_row("statistical", engine=raw.get("engine") or "",
+                            why=raw.get("message_shape") or raw.get("why"),
+                            count=raw.get("count"), threshold=raw.get("threshold"),
+                            log="", line="")]
+    return []
+
+
 # ------------------------------------------------------------------ 讀寫
 
 
@@ -485,6 +657,9 @@ def cmd_start(args):
             "finished": None, "rc": None, "note": "",
             "report": args.report or "", "logs": [], "kept_logs": [],
             "phases": [], "failures": [], "suspected_flaky": [],
+            # 這一格從 `start` 就在:**缺這一格與「這一趟沒有嫌疑」是兩件事**,
+            # 而讀的人用 `data["environment_suspect"]` 問的時候前者是 KeyError。
+            "environment_suspect": [],
             "repair_context": repair_context(root, args)}
     path = write(root, args.ticket, run_id, data)
     print("status: %s" % os.path.relpath(path, root))
@@ -667,13 +842,20 @@ def cmd_done(args):
     automatic = [row for row in failures if row["flaky"] == "auto"]
     failures = [row for row in failures if row["flaky"] != "auto"]
     finished = now()
-    environment = {}
+    # 兩條來源收成同一個 list(`docs/DESIGN-ENV-SUSPECT.md`,D-019):環境檔的
+    # `statistical` 在前,每一份 `--log` 的 `declared` 照傳進來的順序接在後面。
+    # **不是「後到的整格覆寫」** —— 那樣單獨跑任一條路的測試都會綠,而同一趟兩條都
+    # 有料時會靜靜地少掉一邊。
+    suspects = []
     if args.environment_log:
         try:
             with open(args.environment_log, encoding="utf-8") as handle:
-                environment = json.load(handle)
+                loaded = json.load(handle)
         except (OSError, ValueError):
-            environment = {}
+            loaded = None
+        suspects.extend(environment_suspects({"environment_suspect": loaded}))
+    for log in args.log or []:
+        suspects.extend(parse_environment_suspects(log))
     context = before.get("repair_context") or repair_context(root, args)
     data = {
         "state": args.state,
@@ -695,7 +877,7 @@ def cmd_done(args):
         "phases": before.get("phases") or [],
         "failures": failures,
         "suspected_flaky": suspected,
-        "environment_suspect": environment,
+        "environment_suspect": suspects,
         "auto_flaky": automatic,
         "flaky": "auto" if automatic else "",
         "order_dependent": bool(order_names),
@@ -710,15 +892,22 @@ def cmd_done(args):
     }
     path = write(root, args.ticket, run_id, data)
     record_flakes(root, args.ticket, run_id, automatic or suspected)
-    if args.state == "env_suspect":
+    if suspects:
+        # **這一格非空就發**(D-019),不再只有 `state == env_suspect` 才發:
+        # `state` 記的是「這一段被中止」,這一格記的是「這一趟有人懷疑環境」——
+        # 前者必然帶 `statistical`,而 `declared` 那幾筆會出現在 rc=1 的正常紅裡,
+        # 只看 `state` 的那一版把它們全部漏掉了。
         # 事件發不出去不該讓狀態檔白寫:那份 JSON 已經在磁碟上了,而它才是接手的人
         # 要讀的東西。出聲,不改 rc(同 gate.sh 對狀態檔的態度)。
         try:
             event.emit("env.suspect", ticket=args.ticket, run_id=run_id,
-                       engine=environment.get("engine", ""),
-                       message_shape=environment.get("message_shape", ""),
-                       count=environment.get("count", ""),
-                       threshold=environment.get("threshold", ""))
+                       rows=len(suspects),
+                       sources=",".join(sorted({str(row.get("source") or "")
+                                                for row in suspects})),
+                       engines=",".join(sorted({str(row.get("engine") or "")
+                                                for row in suspects
+                                                if row.get("engine")})),
+                       why=str(suspects[0].get("why") or ""))
         except Exception:                                  # noqa: BLE001
             sys.stderr.write("status: env.suspect 事件發不出去(狀態檔仍已寫入)\n")
     print("status: %s rc=%d 紅 %d 條(疑似 flaky %d 條,自動 flaky %d 條)"
@@ -737,6 +926,32 @@ def cmd_failures(args):
                 seen.append(row["case"])
     for case in seen:
         print(case)
+    return 0
+
+
+def cmd_suspects(args):
+    """這一輪的 `environment_suspect` 有幾筆、各是什麼。
+
+    **`gate.sh` 要問的是這一支,不是 grep `done` 的那一行輸出** —— 一份 grep 不到的
+    輸出與一趟沒有嫌疑長得一樣(`docs/DISPATCH-TEMPLATE.md` §5.5)。所以三種答案要
+    分得開:`--count` 印一個整數是「數過了」;**答不出來**(這一輪連狀態檔都沒有)
+    回 2 而且**一個字都不印**,呼叫者才分得出「零筆」與「問不到」。
+    """
+    root = event.repo_root()
+    run_id = args.run_id or latest_run(root, args.ticket)
+    data = read(root, args.ticket, run_id) if run_id else {}
+    if not data:
+        sys.stderr.write("status: #%s 還沒有狀態檔,問不出環境可疑幾筆\n" % args.ticket)
+        return 2
+    rows = environment_suspects(data)
+    if args.count:
+        sys.stdout.write("%d\n" % len(rows))
+        return 0
+    sys.stdout.write("rows=%d\n" % len(rows))
+    for row in rows:
+        sys.stdout.write("%s\t%s\t%s\n" % (row.get("source") or "",
+                                            row.get("engine") or "",
+                                            row.get("why") or ""))
     return 0
 
 
@@ -838,6 +1053,12 @@ def main(argv):
     fails = subs.add_parser("failures")
     fails.add_argument("--log", action="append", default=[])
     fails.set_defaults(run=cmd_failures)
+
+    suspects = subs.add_parser("suspects")
+    suspects.add_argument("--ticket", required=True)
+    suspects.add_argument("--run-id", default="")
+    suspects.add_argument("--count", action="store_true")
+    suspects.set_defaults(run=cmd_suspects)
 
     rundir = subs.add_parser("rundir")
     rundir.add_argument("--ticket", required=True)

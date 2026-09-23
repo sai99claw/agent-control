@@ -44,6 +44,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
 import event    # noqa: E402
 import metrics  # noqa: E402
+import status   # noqa: E402  `environment_suspect` 的正規化只有一份定義
 import ticket   # noqa: E402
 
 DEFAULT_PORT = 18905
@@ -328,8 +329,16 @@ def one_run(run_id, where, broken):
         if isinstance(row, dict):
             failures.append({"case": str(row.get("case") or ""),
                              "excerpt": first_line(row.get("excerpt"))})
+    # 這一格經 `status.environment_suspects()` 讀(形狀見
+    # `docs/DESIGN-ENV-SUSPECT.md`,D-019),不直接下標:舊檔的非空 dict 在 `[0]` 上會炸,
+    # 而一頁炸掉的看板與一頁「什麼都沒發生」的看板長得一樣。
+    suspects = [{"source": str(row.get("source") or ""),
+                 "engine": str(row.get("engine") or ""),
+                 "why": str(row.get("why") or "")}
+                for row in status.environment_suspects(data)]
     return {"run_id": run_id,
             "kind": data.get("kind") or "",
+            "env_suspects": suspects,
             "state": data.get("state") or "",
             "rc": data.get("rc"),
             "started": data.get("started") or "",
@@ -787,20 +796,37 @@ def broken_list(messages):
             % "".join("<li class=\"bad\">%s</li>" % esc(one) for one in seen))
 
 
+def suspect_bit(run):
+    """環境可疑那一句,**接在紅的那一句前面**(D-019)。
+
+    這一格存在就是為了把讀的人導去修環境。一張只寫著「紅 26 條」的看板把人導去
+    auto-fix,而那一輪的機器根本跑不動 —— 所以兩句都要印:**幾筆**(導向環境)
+    與**紅幾條**(那是真的證據,不該被蓋掉)。
+    """
+    rows = run.get("env_suspects") or []
+    if not rows:
+        return ""
+    first = rows[0]
+    return ("<span class=\"warn\">環境可疑 %d 筆(%s:%s)</span> "
+            % (len(rows), esc(first.get("engine") or UNKNOWN),
+               esc(first.get("why") or "")))
+
+
 def verdict_cell(run):
     """這一趟的結果。**綠是一句話,不是一格空白。**"""
     if run["broken"]:
         return "<span class=\"bad\">%s</span>" % esc(run["broken"])
+    head = suspect_bit(run)
     if run["green"]:
-        return "<span class=\"ok\">%s</span>" % esc(GREEN_RUN)
+        return head + "<span class=\"ok\">%s</span>" % esc(GREEN_RUN)
     if run["failure_total"]:
-        return "<span class=\"bad\">紅 %d 條</span>" % run["failure_total"]
+        return head + "<span class=\"bad\">紅 %d 條</span>" % run["failure_total"]
     rc = run["rc"]
     if isinstance(rc, int) and not isinstance(rc, bool) and rc != 0:
         # 紅、而且**紅榜是空的**:land 的拒收就長這樣(rc≠0,一條測試都沒倒)。
         # 這一格退回去印 `state` 的話,一次拒收會在畫面上寫著 `done`。
-        return "<span class=\"bad\">紅(rc=%d),沒有逐條紅榜</span>" % rc
-    return esc(run["state"] or UNKNOWN)
+        return head + "<span class=\"bad\">紅(rc=%d),沒有逐條紅榜</span>" % rc
+    return head + esc(run["state"] or UNKNOWN)
 
 
 def run_tr(ident, run):

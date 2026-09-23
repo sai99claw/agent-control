@@ -32,6 +32,15 @@
   「這一段被中止」與「這一趟有人懷疑環境」是兩件事,前者記在 `state`,後者記在這一格。
 - 排序:照 `done --log` 的順序、同一份 log 內照行序;**一行一筆,不合併**(T 現有案例要求兩份 log 各記一次,
   `demo/test_control.py:484-491`,實測)。
+- **declared 那一行只認行首**(去掉前導空白之後以前綴開頭;#23 第 2 輪補的)。本文件上面說「搬 T 的
+  `parse_environment_suspects`」,而 T 那一版用的是 `find`(前綴可以在中段)—— 那條切法在 A 這一側會把**在講**那一行的字
+  讀成**印出**那一行:#23 第 1 輪實測,`unittest -v` 把驗收 6 案例 docstring 的第一行印進 `gate.log`,而那一行裡逐字寫著前綴,
+  於是被讀成一筆 `engine="firefox"` / `why="假的 ... ok"`,接著「這一格非空就不自動派」照著把那一輪的 auto-fix 擋掉
+  (狀態檔 `reports/t23/20260923-123307-89768/status.json`)。**位置是唯一分得開兩者的東西。**
+  兩道守衛一起:(a) 解析只認行首;(b) `tests/` 的 docstring 不准逐字寫出前綴(要提就用 `status.SUSPECT_PREFIX` 拼)。
+  T 那一側不受影響 —— 它的兩個產出點都是 `print` 自己起一行(`demo/test_browsers.py:1293,1311`),而它自己的守衛
+  (`demo/test_browsers.py:12930`)本來就用 `startswith`(實測,讀 T 的檔)。A 的 `run-tests` 由 `LogStream` 在 runner
+  停在半行(`verbosity=2` 的 `test_x (…) ... `)時補一個換行,讓案例印的那一行落在行首、`line` 也才是整行原樣。
 - 事件 `env.suspect`:**只要這一格非空就發一則**(現在只有 rc=86 才發),kv 改成 `rows=<筆數> sources=<逗號> engines=<逗號> why=<第一筆>`。
 
 未來每票省/多花(推的):形狀本身 0 token;它省的錢在下面「auto-fix 不派」那一條。
@@ -120,6 +129,9 @@
 ### 舊 status.json 相容
 
 - 實測:A `reports/` 95 份,48 份沒這一格、47 份 `{}`、**0 份非空 dict**;T `../tabby_pool_wt/reports/` 80 份,72 份沒這一格、其餘 `[]`、0 份非空。
+- 舊 dict 沒有 `message_shape` 時 `why` 是 **`null` 而不是 `""`**(#23 第 2 輪裁的;上面第 9 列原本寫「`""` 或 `message_shape` 的值」,
+  以 §結論「缺料就 `null`」為準)。`""` 在說「理由是一句空話」,`null` 在說「那一版根本沒記理由」,而只有後者是真的
+  —— 這就是 `docs/DISPATCH-TEMPLATE.md` §5.5「拿不到就當空的」那一格。`line` / `log` 那兩格文件與票面都**逐字**釘成 `""`,照釘的寫。
 - 裁:**不改寫舊檔**(一輪一目錄不覆寫,是 D-014 的規矩),讀端正規化吃掉四種空與非空 dict。正規化函式 ≈ 10 行,永久留著
   (metrics 會回頭讀整個 reports/)。多花(推的):≈ 0;省的是一支「一次性 migration 腳本」與它的案例(≈ 一張 haiku 票)。
 
@@ -139,7 +151,7 @@ fixture T:`verify/land_preflight/test_ticket_644.py:261-284` 的 `SUSPECT_LINE` 
 | 6 | run-tests 跑一條會 `print("ENVIRONMENT-SUSPECT: firefox 假的宣告")` 然後 skip 的案例 | `--log` 檔裡找得到那一行;接著 `done --log` 得 1 筆 declared | 不 redirect stdout → log 裡沒那一行 |
 | 7 | 事件:#2 之後 `events.jsonl` 有一則 `env.suspect`,kv `rows=2 sources=declared engines=safari` | 只在 rc=86 發 → 沒事件 |
 | 8 | gate 跑 ENVIRONMENT_WAVE **不帶** `--no-auto-fix`(沙盒 worker.command 換成記一行的假指令) | 假 worker **沒被叫**;stdout 含「環境可疑,不自動派」 | 拿掉 `auto_fix` 那一行守衛 → 假 worker 被叫 |
-| 9 | 正規化:三份手造 status.json(缺格 / `{}` / 舊 dict `{"engine":"safari","count":8}`) | 前兩份 → `[]`;第三份 → 1 筆 statistical、`why==""` 或 `message_shape` 的值、`line==""` | 拿掉 dict 分支 → 第三份 `[]` |
+| 9 | 正規化:三份手造 status.json(缺格 / `{}` / 舊 dict `{"engine":"safari","count":8}`) | 前兩份 → `[]`;第三份 → 1 筆 statistical、`why` = `message_shape` 的值(舊檔沒有那一格就是 `null`,見下)、`line==""`、`log==""` | 拿掉 dict 分支 → 第三份 `[]` |
 | 10 | metrics(test_metrics 既有那條)fixture 改 list 後 `env_runs=1 product_runs=1`;另加一份舊 dict 的 run → `env_runs=2` | 不經正規化 → 舊 dict 仍算 env(真值)但 `[0]` 下標炸 |
 | 11 | board `/`:一份 run 帶 1 筆 declared(engine firefox)且 failures 3 條 | 該列含「環境可疑 1 筆」與「firefox」,且仍含「紅 3 條」 | `verdict_cell` 不看這一格 → 沒有「環境可疑」 |
 | 12 | T 端(同步票):`demo/test_control.py` 那一組 + `test_ticket_644.py` A4 + `test_ticket_645.py` ③ 原樣跑 | 全綠(鍵是超集合) | — |
