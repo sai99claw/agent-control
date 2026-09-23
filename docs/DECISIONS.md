@@ -162,3 +162,7 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 設計取捨的判準是「這個決定之後每一票多讀多少、多重來幾輪」,不是「現在改起來多難」。眼前複雜度太高,可以裁「先開票、之後再做」,但票要把問題完整寫下(症狀、為什麼現在不做、做的時候會對到哪些檔);**不准把問題繞過去**(改個名、加第二個欄位、兩邊各做各的形狀)。設計文件裡每個取捨附一行「未來每票省/多花多少」(粗估即可,標推的)。
 
 來源:產品負責人 2026-09-23 原話,起因是 `environment_suspect` 在兩個 repo 長成同名不同形(A #7 是 dict/None、tabby #644 是 list),而多階層記憶裡沒有一條擋這件事 —— D-016 管的是執行的動作(不圖快),這一條管的是設計的形狀。
+
+## D-019(2026-09-23)`environment_suspect` 只有一種形狀:list,每筆標來源
+
+設計文件:`docs/DESIGN-ENV-SUSPECT.md`(Fable 設計 session 裁,依 D-018 每個取捨附未來每票省/多花)。結論:`status.json` 的 `environment_suspect` 永遠是 list,空值只有 `[]`;每筆七鍵 `source(statistical|declared) / engine / why / count / threshold / log / line`,缺料 null;`state`/`rc` 不因這格而變;**這格非空 → gate 不自動派 auto-fix**(每次環境紅省一輪 worker)。實作票 #23,tabby 端由同步票帶回;讀端正規化舊檔,不改寫 reports/。
