@@ -14,13 +14,14 @@ log 讀進上下文,或用 sleep 迴圈輪詢背景工作,兩條都是一次幾�
 
 import json
 import os
+import re
 import sys
 import unittest
 from datetime import datetime
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import Sandbox  # noqa: E402
+from control_harness import ROOT, Sandbox  # noqa: E402
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 "scripts"))
@@ -699,6 +700,370 @@ class GateWritesStatus(Sandbox):
         done = self.gate("--branch", "--ticket")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("要票號", done.stderr)
+
+
+# --------------------------------------------------------- environment_suspect
+
+# 案例自己宣告的那一行,**真的字面**(#644 / #645 兩個產出點各一句)。冒號後一個半角
+# 空格,引擎與理由之間一個半角空格;引擎選填,理由裡有全形破折號、全形括號、`#` 與數字。
+SUSPECT_LOCKED = "ENVIRONMENT-SUSPECT: safari 螢幕鎖著(#474/#644)"
+SUSPECT_SESSION = "ENVIRONMENT-SUSPECT: safari session 斷了(#645)"
+
+# 三條真的紅 + 真的收尾摘要 —— 「宣告行有沒有被讀到」要在一份**同時有真紅**的 log 上
+# 問,不然「兩條來源各自都對」與「其中一條把另一條蓋掉了」分不開。
+RED_BLOCK = """\
+======================================================================
+FAIL: test_%(name)s (test_browsers.TheJourney.test_%(name)s) [engine=safari]
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "demo/test_browsers.py", line 1530, in test_%(name)s
+    browser.wait_until("location.hash === '#/home'")
+AssertionError: 等了 25 秒還不成立:#gate 沒有收起來
+"""
+
+# 案例自己 `print` 一行再把自己記成 skip —— `addFailure` 根本不會被叫,所以連紅統計
+# 看不到它。兩端之間唯一的線就是 log 上那一行。
+DECLARES_THEN_SKIPS = """import unittest
+
+
+class T(unittest.TestCase):
+    def test_it_declares_and_skips(self):
+        print("ENVIRONMENT-SUSPECT: firefox 假的宣告")
+        self.skipTest("環境不對,這一條記成 skip")
+"""
+
+
+class EnvironmentSuspectHasOneShape(Sandbox):
+    """`environment_suspect`:一格、一種形狀、兩條來源(D-019)。
+
+    形狀的唯一真實來源是 `docs/DESIGN-ENV-SUSPECT.md`;這一組問的是**那份文件裡的
+    每一句話在磁碟上成不成立**,期望值一個字都不從被測的 `status.py` 算回來。
+
+    最重要的一條是「兩條來源同時有料」:合成寫成「後到的整格覆寫」時,單獨跑任一
+    條來源的測試都會綠 —— 那正是這一格上一次長成兩種形狀的原因。
+    """
+
+    def status(self, *args, env=None):
+        return self.run_py("scripts/status.py", *args, env=env)
+
+    def a_log(self, name="gate.log", declared=(), reds=("journey", "layout", "session")):
+        """一份真的 unittest 尾巴 + 幾行宣告。回傳絕對路徑(`--log` 收到的就是它)。"""
+        body = ["verify: 選中 demo/test_browsers.py ['browsers']"]
+        body += list(declared)
+        body += [RED_BLOCK % {"name": one} for one in reds]
+        body += ["----------------------------------------------------------------------",
+                 "Ran 12 tests in 902.418s", "", "FAILED (failures=%d)" % len(reds), ""]
+        return self.write(name, "\n".join(body), where=self.home)
+
+    def an_environment_file(self, name="gate.log.env-suspect.json"):
+        """`run-tests` 留下的那一份:**一個 list**,一筆 statistical。"""
+        row = {"source": "statistical", "engine": "firefox",
+               "why": "localStorage id=<id> empty after <n> seconds",
+               "count": 8, "threshold": 8, "log": "gate.log",
+               "line": "AssertionError: localStorage id=ab-1 empty after 101 seconds"}
+        return self.write(name, json.dumps([row], ensure_ascii=False),
+                          where=self.home)
+
+    def suspects_of(self, ticket="7"):
+        return self.status_of(ticket)["environment_suspect"]
+
+    # ------------------------------------------------- 驗收 2:log 上的宣告行
+
+    def test_two_declared_lines_become_two_rows_and_the_red_list_is_untouched(self):
+        """**變異**:把 `parse_environment_suspects` 整支改成 `return []`
+        → 這一條紅(0 != 2)。
+        """
+        log = self.a_log(declared=(SUSPECT_LOCKED, SUSPECT_SESSION))
+        self.status("start", "--ticket", "7", "--kind", "gate")
+        done = self.status("done", "--ticket", "7", "--rc", "1", "--log", log)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        data = self.status_of("7")
+        rows = data["environment_suspect"]
+        self.assertIsInstance(rows, list)
+        self.assertEqual(len(rows), 2, rows)
+        for row in rows:
+            self.assertEqual(sorted(row), sorted(["source", "engine", "why", "count",
+                                                  "threshold", "log", "line"]),
+                             "七個鍵要一個都不缺:%r" % sorted(row))
+            self.assertEqual(row["source"], "declared")
+            self.assertEqual(row["engine"], "safari")
+            self.assertEqual(row["count"], 1)
+            self.assertIsNone(row["threshold"], "宣告那一條沒有門檻可言,是 null 不是 0")
+            self.assertEqual(row["log"], log, "log 那一格要是傳進去的那個路徑")
+            self.assertIn(row["why"], row["line"], "why 是那一行切出來的一段")
+            self.assertTrue(row["line"].startswith("ENVIRONMENT-SUSPECT:"),
+                            "line 是整行原樣,含前綴:%r" % row["line"])
+        self.assertEqual([row["why"] for row in rows],
+                         ["螢幕鎖著(#474/#644)", "session 斷了(#645)"],
+                         "順序照行序")
+        # **這一格不准動到 rc 與紅榜**:「這一段被中止」與「有人懷疑環境」是兩件事。
+        self.assertEqual(data["rc"], 1)
+        self.assertEqual(data["state"], "done")
+        self.assertEqual(len(data["failures"]), 3, "三條真的紅要還在")
+        self.assertEqual(data["suspected_flaky"], [])
+
+    # --------------------------------------- 驗收 7:非空就發一則 env.suspect
+
+    def test_a_non_empty_cell_emits_the_event_even_when_the_state_is_done(self):
+        """**變異**:把事件那一支改回「只有 `state == env_suspect` 才發」
+        → 這一條紅(一則事件都沒有)。
+
+        `state` 記的是「這一段被中止」,這一格記的是「這一趟有人懷疑環境」—— 只看
+        `state` 的那一版把所有 `declared` 筆漏掉,而漏掉與沒發生長得一樣。
+        """
+        log = self.a_log(declared=(SUSPECT_LOCKED, SUSPECT_SESSION))
+        self.status("start", "--ticket", "7", "--kind", "gate")
+        self.status("done", "--ticket", "7", "--rc", "1", "--log", log)
+        rows = [row for row in self.events() if row["kind"] == "env.suspect"]
+        self.assertEqual(len(rows), 1, self.kinds())
+        self.assertEqual(rows[0]["rows"], 2)
+        self.assertEqual(rows[0]["sources"], "declared")
+        self.assertEqual(rows[0]["engines"], "safari")
+        self.assertEqual(rows[0]["why"], "螢幕鎖著(#474/#644)")
+
+    # ------------------------------------------- 驗收 3:兩份 log,一行一筆
+
+    def test_the_same_red_in_two_logs_is_two_rows_not_one(self):
+        """同一趟的 `gate.log` 與 `gate.log.rerun` 都會被餵給 `done`,而同一條紅在
+        兩份裡各留一行 —— **那是兩次觀測,不是一筆重複的資料**。
+
+        **變異**:在合成的時候去重(照 `why` 或 `line`)→ 這一條紅(2 != 1)。
+        """
+        first = self.a_log("gate.log", declared=(SUSPECT_LOCKED,))
+        again = self.a_log("gate.log.rerun", declared=(SUSPECT_LOCKED,))
+        self.status("start", "--ticket", "7", "--kind", "gate")
+        self.status("done", "--ticket", "7", "--rc", "1", "--log", first,
+                    "--log", again)
+        rows = self.suspects_of()
+        self.assertEqual(len(rows), 2, rows)
+        self.assertEqual(sorted(os.path.basename(row["log"]) for row in rows),
+                         ["gate.log", "gate.log.rerun"])
+
+    # ------------------------------------------------- 驗收 4:空值只有一種
+
+    def test_the_cell_exists_and_is_an_empty_list_when_there_is_nothing(self):
+        """**變異**:`cmd_start` 不寫這一格 → 這一條紅(KeyError)。
+
+        「這一趟沒有環境嫌疑」與「這一版根本沒在記」是兩件事,而少了這一格,讀的人
+        用 `data["environment_suspect"]` 問的時候只會拿到一個 KeyError,用
+        `.get()` 問的時候兩件事長得一模一樣。
+        """
+        self.status("start", "--ticket", "7", "--kind", "gate")
+        self.assertEqual(self.suspects_of(), [], "start 寫出來的檔也要有這一格")
+        log = self.a_log(declared=())
+        self.status("done", "--ticket", "7", "--rc", "1", "--log", log)
+        data = self.status_of("7")
+        self.assertIn("environment_suspect", data, "這一格要存在")
+        self.assertEqual(data["environment_suspect"], [], "空值只有 [] 一種寫法")
+        self.assertEqual(len(data["failures"]), 3)
+        self.assertNotIn("env.suspect", self.kinds(), "空的不准發事件")
+
+    # -------------------------------- 驗收 5:兩條來源同時有料,一邊都不准少
+
+    def test_both_sources_in_one_run_keep_all_their_rows(self):
+        """**本票最重要的一條。** 合成若寫成「後到的整格覆寫」,單獨跑任一條來源的
+        測試都是綠的,而同一趟兩條都有料時會靜靜地少掉一邊。
+
+        **變異**:`cmd_done` 只讀環境檔、或只讀 `--log` 的宣告行(任一邊)
+        → 這一條紅(3 != 1 或 3 != 2),而驗收 2 與驗收 1 全綠。
+        """
+        env_file = self.an_environment_file()
+        log = self.a_log(declared=(SUSPECT_LOCKED, SUSPECT_SESSION))
+        self.status("start", "--ticket", "7", "--kind", "gate")
+        self.status("done", "--ticket", "7", "--rc", "1", "--log", log,
+                    "--environment-log", env_file)
+        rows = self.suspects_of()
+        self.assertEqual(len(rows), 3, rows)
+        self.assertEqual([row["source"] for row in rows],
+                         ["statistical", "declared", "declared"],
+                         "statistical 排在前面")
+        self.assertEqual({row["source"] for row in rows},
+                         {"statistical", "declared"})
+        self.assertEqual({row["engine"] for row in rows}, {"firefox", "safari"},
+                         "兩邊的引擎都要在")
+        self.assertEqual(rows[0]["count"], 8)
+        self.assertEqual(rows[0]["threshold"], 8)
+
+    # ------------------- 驗收 6:案例自己 print 的那一行要進 --log 那份檔
+
+    def test_a_case_that_prints_its_own_declaration_lands_in_the_log(self):
+        """**變異**:拿掉 `cmd_run_tests` 的 `redirect_stdout` → 這一條紅
+        (log 裡沒有那一行,接著 `done` 得 0 筆)。
+
+        **這是本票最容易漏的一條**:`TextTestRunner(stream=…)` 只收 runner 自己的
+        輸出,案例 `print()` 的那一行會流到呼叫者的 stdout。人看終端機時它在那裡,
+        所以「有印出來」與「進了 log」長得一樣 —— 而 `done --log` 只讀那份檔。
+        """
+        self.write(os.path.join("tests", "test_declared.py"), DECLARES_THEN_SKIPS)
+        log = os.path.join(self.home, "run.log")
+        suspect = os.path.join(self.home, "run.log.env-suspect.json")
+        done = self.status("run-tests", "--root", self.repo, "--log", log,
+                           "--suspect-file", suspect, "--mode", "names",
+                           "test_declared")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        with open(log, encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertIn("ENVIRONMENT-SUSPECT: firefox 假的宣告", text,
+                      "案例印的那一行不在 log 裡:%r" % text[-400:])
+        with open(suspect, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle), [],
+                             "沒有連紅統計時那一份檔是 [],不是空字串")
+        self.status("start", "--ticket", "7", "--kind", "gate")
+        self.status("done", "--ticket", "7", "--rc", "0", "--log", log)
+        rows = self.suspects_of()
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]["source"], "declared")
+        self.assertEqual(rows[0]["engine"], "firefox")
+        self.assertEqual(rows[0]["why"], "假的宣告")
+
+    # ------------------------------------------- 行格式的三種變異(切法)
+
+    def test_the_three_shapes_of_a_declaration_line(self):
+        """期望值從那一行的切法規則來,不從程式現在吐什麼來。
+
+        **變異**:(a) 拿掉「引擎後面要真的還有話」那一條(改成一律切第一個字)
+        → 第二種紅;(b) 把 `line.find(SUSPECT_PREFIX)` 改成 `startswith`
+        → 第三種紅。
+        """
+        cases = (
+            # 中文開頭:認不出引擎,整段都是理由 —— 硬切會把半句話當成引擎名。
+            ("ENVIRONMENT-SUSPECT: 螢幕鎖著 ——(#474)", "", "螢幕鎖著 ——(#474)"),
+            # 只有一個字:後面沒有話,所以那一個字**是理由不是引擎**。
+            ("ENVIRONMENT-SUSPECT: safari", "", "safari"),
+            # 前綴不在行首:前面還有別的輸出,照樣抓得到。
+            ("[chrome] ENVIRONMENT-SUSPECT: safari session 斷了(#645)",
+             "safari", "session 斷了(#645)"),
+        )
+        for line, engine, why in cases:
+            with self.subTest(line=line):
+                log = self.a_log("one.log", declared=(line,), reds=())
+                rows = status_module.parse_environment_suspects(log)
+                self.assertEqual(len(rows), 1, rows)
+                self.assertEqual(rows[0]["engine"], engine)
+                self.assertEqual(rows[0]["why"], why)
+                self.assertEqual(rows[0]["line"], line, "line 是整行原樣")
+                os.remove(log)
+
+    # ---------------------------------- 驗收 9:讀端正規化吃掉舊檔的五種形狀
+
+    def test_the_reader_normalises_every_old_way_of_saying_nothing(self):
+        """**變異**:拿掉舊 dict 那一支分支 → 第三份得 `[]`(而它明明有料)。
+
+        舊檔不改寫(D-014:一輪一目錄不覆寫),所以相容性全靠這一支。
+        """
+        shapes = {
+            "missing": {"state": "done", "rc": 1},
+            "empty_dict": {"state": "done", "rc": 1, "environment_suspect": {}},
+            "old_dict": {"state": "done", "rc": 1,
+                         "environment_suspect": {"engine": "safari", "count": 8}},
+        }
+        loaded = {}
+        for name, body in shapes.items():
+            path = self.write(os.path.join("reports", "t9", name, "status.json"),
+                              json.dumps(body, ensure_ascii=False))
+            with open(path, encoding="utf-8") as handle:
+                loaded[name] = json.load(handle)
+        self.assertEqual(status_module.environment_suspects(loaded["missing"]), [])
+        self.assertEqual(status_module.environment_suspects(loaded["empty_dict"]), [])
+        rows = status_module.environment_suspects(loaded["old_dict"])
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]["source"], "statistical",
+                         "舊的那一格裝的就是連紅統計")
+        self.assertEqual(rows[0]["engine"], "safari")
+        self.assertEqual(rows[0]["count"], 8)
+        self.assertEqual(rows[0]["why"], "", "舊形狀沒有 message_shape 就沒有 why")
+        self.assertEqual(rows[0]["line"], "", "舊形狀沒留原始那一行")
+        self.assertEqual(rows[0]["log"], "", "舊形狀沒留 log")
+        self.assertEqual(sorted(rows[0]), sorted(status_module.SUSPECT_KEYS),
+                         "正規化出來的那一筆也要七鍵齊全")
+        # `None` 與「這一格是一個字串」也都是「沒有」,不是一個例外。
+        self.assertEqual(status_module.environment_suspects(
+            {"environment_suspect": None}), [])
+        self.assertEqual(status_module.environment_suspects({}), [])
+        self.assertEqual(status_module.environment_suspects(None), [])
+
+    # ------------------------------------------- suspects 子指令:三種答案
+
+    def test_the_suspects_subcommand_separates_zero_from_cannot_answer(self):
+        """`gate.sh` 判「要不要自動派」問的是這一支,**不是 grep `done` 的輸出** ——
+        一份 grep 不到的輸出與一趟沒有嫌疑長得一樣(DISPATCH-TEMPLATE §5.5)。
+
+        **變異**:讓「沒有狀態檔」那一支也印 `0` → 這一條紅(它會印出 0 而且 rc=0)。
+        """
+        blind = self.status("suspects", "--ticket", "7", "--count")
+        self.assertEqual(blind.returncode, 2, blind.stdout + blind.stderr)
+        self.assertEqual(blind.stdout, "", "問不出來的時候一個字都不准印")
+        self.status("start", "--ticket", "7", "--kind", "gate")
+        self.status("done", "--ticket", "7", "--rc", "1",
+                    "--log", self.a_log(declared=()))
+        zero = self.status("suspects", "--ticket", "7", "--count")
+        self.assertEqual(zero.returncode, 0, zero.stdout + zero.stderr)
+        self.assertEqual(zero.stdout.strip(), "0")
+        self.status("start", "--ticket", "8", "--kind", "gate")
+        self.status("done", "--ticket", "8", "--rc", "1", "--log",
+                    self.a_log("eight.log", declared=(SUSPECT_LOCKED, SUSPECT_SESSION)))
+        two = self.status("suspects", "--ticket", "8", "--count")
+        self.assertEqual(two.stdout.strip(), "2")
+        listed = self.status("suspects", "--ticket", "8")
+        self.assertIn("rows=2", listed.stdout)
+        self.assertIn("declared", listed.stdout)
+        self.assertIn("safari", listed.stdout)
+
+
+class TheShapeHasExactlyOneSourceOfTruth(unittest.TestCase):
+    """`docs/DESIGN-ENV-SUSPECT.md` 是 `environment_suspect` 形狀的唯一真實來源。
+
+    上一次這一格在兩個 repo 長成同名不同形,就是因為**沒有一份文件是它的來源** ——
+    兩邊各自從自己的 code 讀出形狀,而兩份 code 都是對的。所以這裡釘兩件事:
+    ① 文件裡那一塊的鍵名與 `status.py` 的 `SUSPECT_KEYS` **逐字相同**(改文件而不改
+    code、或改 code 而不改文件,都在這裡紅);② 碰這一格的每一支都指得到那份文件。
+
+    **變異**:把文件那一塊的任何一個鍵名改掉(code 不動)→ 第一條紅。
+    """
+
+    doc = os.path.join(ROOT, "docs", "DESIGN-ENV-SUSPECT.md")
+    touches = ("scripts/status.py", "scripts/gate.sh", "scripts/auto-fix.sh",
+               "scripts/metrics.py", "board/board.py")
+
+    def body(self, rel):
+        with open(os.path.join(ROOT, rel), encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_the_documented_keys_are_the_keys_the_code_writes(self):
+        self.assertTrue(os.path.exists(self.doc),
+                        "形狀的來源不在 —— 沒有它,實作者就沒有規格")
+        with open(self.doc, encoding="utf-8") as handle:
+            text = handle.read()
+        # 第一塊 fenced block 就是那七個鍵的定義。
+        block = text.split("```")[1]
+        named = [key for key in re.findall(r'"([a-z_]+)":', block)
+                 if key != "environment_suspect"]
+        self.assertEqual(named, list(status_module.SUSPECT_KEYS),
+                         "文件與 code 的鍵名對不上:%r" % named)
+
+    def test_every_place_that_touches_the_cell_points_at_that_document(self):
+        for rel in self.touches:
+            with self.subTest(file=rel):
+                self.assertIn("DESIGN-ENV-SUSPECT", self.body(rel),
+                              "%s 碰這一格卻沒有指回形狀的來源" % rel)
+
+    def test_no_second_document_defines_the_shape_without_citing_it(self):
+        """第二份規格與第一份長得一樣 —— 差別只在它會先過期。
+
+        所以列出那七個鍵的文件,**要嘛就是那一份,要嘛要指名那一份**。
+        """
+        strays = []
+        for name in sorted(os.listdir(os.path.join(ROOT, "docs"))):
+            if not name.endswith(".md"):
+                continue
+            text = self.body(os.path.join("docs", name))
+            lists_all = all(re.search(r"\b%s\b" % key, text)
+                            for key in status_module.SUSPECT_KEYS)
+            if not lists_all or name == "DESIGN-ENV-SUSPECT.md":
+                continue
+            if "DESIGN-ENV-SUSPECT" not in text:
+                strays.append(name)
+        self.assertEqual(strays, [], "這幾份自己定義了一套形狀:%s" % strays)
 
 
 if __name__ == "__main__":

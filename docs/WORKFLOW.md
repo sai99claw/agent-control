@@ -68,10 +68,13 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
  logs: […], extra_logs: […], kept_logs: [{path, kept}],
  failures: [{case, kind, subtest, file, line, engine, log, excerpt, suspected_flaky}],
  suspected_flaky: […],
+ environment_suspect: [{source, engine, why, count, threshold, log, line}],
  repair_context: {version, base_sha, ticket: <票面快照>, worktree,
                   patch: {path, sha256}, verify_patch: {path, sha256},
                   round, prev_evidence, repro: {cmd, cwd}, env}}
 ```
+
+`environment_suspect` **永遠是一個 list,空值只有 `[]` 一種寫法**,每一筆七個鍵一個都不缺、缺料填 `null`;`source` 只有 `statistical`(同一引擎同形訊息連紅達門檻,由 `run-tests` 當場量到)與 `declared`(案例自己在 log 上印的 `ENVIRONMENT-SUSPECT: <引擎> <為什麼>` 那一行)兩個字面。**形狀的唯一真實來源是 `docs/DESIGN-ENV-SUSPECT.md`(D-019)** —— 這裡只是 schema 的一行,要改形狀去改那一份。`state` 與 `rc` 不因這一格而變;**這一格非空 → `gate.sh` 不自動派 auto-fix**(人手打 `scripts/auto-fix.sh` 照派,但會印一行警告)。讀端一律經 `status.environment_suspects(data)`,不直接下標。
 
 `repair_context` 存在的理由:下一輪換的是**新的** worker,它手上只有這一份檔。少了 base_sha、票面快照、副本位置、patch 雜湊、第幾輪、上一輪排除過什麼、怎麼重現,它得回頭翻對話或猜檔案位置 —— 那一趟比整份 log 還貴。`failures` 從 `^(FAIL|ERROR):` 與其後的 Traceback 擷取(excerpt ≤ 20 行),**原生 subTest 的圓括號參數也認**(`FAIL: test_x (mod.Case.test_x) (engine='firefox')`)。
 

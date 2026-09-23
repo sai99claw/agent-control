@@ -261,6 +261,13 @@ Ran 1 test in 0.001s
 FAILED (failures=1)
 """
 
+# 同一份紅,外加一行案例自己宣告的環境紅(#644 的真實字面)。手打 `auto-fix.sh` 的人
+# 面對的就是這一種:`gate.sh` 已經因為這一格非空而拒絕自動派了(D-019)。
+RED_LOG_DECLARED = RED_LOG.replace(
+    "test_thing (test_thing.T.test_thing) ... FAIL",
+    "ENVIRONMENT-SUSPECT: safari 螢幕鎖著(#474)\n"
+    "test_thing (test_thing.T.test_thing) ... FAIL", 1)
+
 # rc 非零,但一行 `FAIL:` 都沒有 —— 測試根本沒跑起來的形狀。
 NO_ATTRIBUTION_LOG = """Traceback (most recent call last):
   File "/usr/lib/python3/unittest/__main__.py", line 18, in <module>
@@ -382,6 +389,41 @@ class ThingsThatStopIt(AutoFixBase):
                                   "worker-round2.log")
         with open(worker_log, encoding="utf-8") as handle:
             self.assertEqual(handle.read(), "worker stderr round 2\n")
+
+    def test_a_typed_dispatch_over_an_environment_suspect_warns_and_still_goes(self):
+        """驗收 12(D-019):**手打就是覆寫。**
+
+        `gate.sh` 那一側這一格非空就不自動派;而人自己打這一支的時候照派 —— 只是
+        那一行覆寫要看得見。一次靜靜的拒絕會讓人以為腳本壞了,然後去改腳本
+        (`docs/DISPATCH-TEMPLATE.md` §5.7:守衛要給得出下一步)。
+
+        **變異**:拿掉 `auto-fix.sh` 那一行警告 → 這一條紅(沒有那句話);
+        把它改成 `exit 0` 不派 → 這一條也紅(worker 沒被叫)。
+        """
+        self.set_worker(WORKER_NO_BLOCK)
+        self.ticket_ready()
+        self.status(1, RED_LOG_DECLARED)
+        suspects = json.loads(self.read(os.path.join(
+            "reports", "t1", "20260921-100000-1", "status.json")))
+        self.assertEqual(len(suspects["environment_suspect"]), 1,
+                         "前提沒成立:那一輪的狀態檔沒有記到宣告行")
+        done = self.auto_fix()
+        self.assertIn("上一輪環境可疑(safari:螢幕鎖著(#474)),你確定要派?",
+                      done.stdout, done.stdout + done.stderr)
+        self.assertEqual(self.worker_rounds(), ["worker ran round 2"],
+                         "手打就是覆寫 —— 警告完還是要派")
+
+    def test_a_typed_dispatch_over_a_clean_round_says_nothing_about_the_environment(self):
+        """警告不准每一輪都印:一句每次都出現的警告與一句沒有人看的話一樣。
+
+        **變異**:把 `S_ENV` 那一問改成永遠非零 → 這一條紅。
+        """
+        self.set_worker(WORKER_NO_BLOCK)
+        self.ticket_ready()
+        self.status(1, RED_LOG)
+        done = self.auto_fix()
+        self.assertNotIn("上一輪環境可疑", done.stdout)
+        self.assertEqual(self.worker_rounds(), ["worker ran round 2"])
 
     def test_a_red_with_no_attribution_is_not_handed_to_a_new_worker(self):
         """rc 非零卻一條紅都解析不出來,**最像「沒有紅」** —— 而派下去的 worker 會

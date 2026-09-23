@@ -221,6 +221,13 @@ out("S_BASE", ctx.get("base_sha") or "")
 out("S_PATCH", patch)
 out("S_PREV_EVIDENCE", ctx.get("prev_evidence") or "")
 out("S_LIMIT", limit)
+# 上一輪的環境嫌疑(形狀見 `docs/DESIGN-ENV-SUSPECT.md`,D-019)。經正規化函式讀,
+# 不直接下標 —— 舊檔那一種非空 dict 在 `[0]` 上會炸。
+suspects = status.environment_suspects(data)
+first = suspects[0] if suspects else {}
+out("S_ENV", len(suspects))
+out("S_ENV_ENGINE", first.get("engine") or "?")
+out("S_ENV_WHY", first.get("why") or "?")
 PY
 )"
 }
@@ -233,6 +240,13 @@ if [ -z "${S_RUN:-}" ]; then
 fi
 RUN_ID=$S_RUN
 echo "auto-fix: #$ID 最新一輪 $S_RUN($S_KIND)state=$S_STATE rc=${S_RC:-?} 紅 $S_FAILS 條,第 $S_ROUND 輪(上限 $S_LIMIT)"
+
+# 手打就是覆寫:`gate.sh` 這一格非空時不自動派(D-019),但人自己打這一支的時候
+# **照派** —— 只是要看得見他覆寫了什麼。一句警告加一次照派,比一次靜靜的拒絕好:
+# 拒絕的那一版會讓人以為腳本壞了,然後去改腳本。
+if [ "${S_ENV:-0}" != "0" ]; then
+    echo "auto-fix: 上一輪環境可疑($S_ENV_ENGINE:$S_ENV_WHY),你確定要派?"
+fi
 
 if [ "${S_RC:-1}" = "0" ]; then
     echo "auto-fix: 上一輪是綠的 —— 沒有東西要修。覆核不自動:主線讀 patch 記 review。"

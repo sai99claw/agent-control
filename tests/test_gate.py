@@ -11,7 +11,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import Sandbox  # noqa: E402
+from control_harness import Sandbox, write_executable  # noqa: E402
 
 PASSING = """import os
 import unittest
@@ -30,6 +30,14 @@ class T(unittest.TestCase):
         self.assertEqual(1, 2, "假的紅")
 """
 # #620 的形狀:同一個引擎、12 條 subTest 倒在同一句,只差流水號與 id。
+#
+# 訊息用 `self.fail(…)` 的**單行**斷言訊息,不用 `assertEqual("home", "", msg)`:兩個
+# 字串進 `assertEqual` 會走 `assertMultiLineEqual`,而它的 standardMsg 是**多行的
+# ndiff**,那句話被擠到最後一行(實測 `str(err)` 是 `'home' != ''` 換行 `- home`
+# 換行 ` : localStorage …`)。於是「原始訊息第一行」會變成 `AssertionError: 'home' != ''`
+# —— 一句沒有帶到證據的話,而 #620 真實的紅是單行的斷言訊息
+# (`docs/DESIGN-ENV-SUSPECT.md` 的 `line` 範例就是它)。同一句話、同一個引擎這兩個
+# 條件一個字都沒放寬。
 ENVIRONMENT_WAVE = """import os
 import unittest
 
@@ -40,8 +48,8 @@ class T(unittest.TestCase):
             with self.subTest(engine="safari", id=index):
                 with open(os.environ["AC_TEST_LOG"], "a", encoding="utf-8") as handle:
                     handle.write("safari-%d\\n" % index)
-                self.assertEqual("home", "", "localStorage id=%d empty after %d seconds"
-                                 % (index, index + 100))
+                self.fail("localStorage id=%d empty after %d seconds"
+                          % (index, index + 100))
 """
 # 同一引擎但三句不同的紅:那是三個 bug,不是一次環境故障 —— 要照常跑完。
 DIFFERENT_FAILURES = """import os
@@ -72,6 +80,10 @@ class GateSh(Sandbox):
 
     def gate(self, *args):
         return self.run_sh("scripts/gate.sh", *args)
+
+    def gate_log_path(self):
+        """`gate.sh` 寫 log 的那一份檔 —— 沙盒用 `AC_GATE_LOG`(`control_harness`)。"""
+        return os.path.join(self.home, "gate.log")
 
     def ran(self):
         if not os.path.exists(self.log):
@@ -162,8 +174,30 @@ class GateSh(Sandbox):
                          "預設門檻 8 到了就要停,不准把 12 條跑完")
         data = self.status_of("7")
         self.assertEqual(data["state"], "env_suspect")
-        self.assertEqual(data["environment_suspect"]["engine"], "safari")
-        self.assertEqual(data["environment_suspect"]["count"], 8)
+        # D-019:這一格**永遠是 list**,每一筆七個鍵一個都不缺(形狀的真實來源是
+        # `docs/DESIGN-ENV-SUSPECT.md`)。**變異**:`_observe` 改回寫單筆 dict
+        # → 下面第一條 `assertIsInstance(list)` 紅。
+        rows = data["environment_suspect"]
+        self.assertIsInstance(rows, list, "這一格是 list,不是 dict")
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(sorted(row),
+                         sorted(["source", "engine", "why", "count",
+                                 "threshold", "log", "line"]),
+                         "七個鍵要一個都不缺:%r" % sorted(row))
+        self.assertEqual(row["source"], "statistical")
+        self.assertEqual(row["engine"], "safari")
+        self.assertEqual(row["count"], 8)
+        self.assertEqual(row["threshold"], 8)
+        # `why` 是正規化過的形狀(數字都被換掉了),`line` 是原始那一句 ——
+        # 兩格揉成一格的那一刻,「同一句話」與「那台機器當時說了什麼」少掉一邊。
+        self.assertNotRegex(row["why"], r"\d", "why 沒有正規化過:%r" % row["why"])
+        self.assertRegex(row["line"], r"\d+ seconds",
+                         "line 要是未正規化的原字:%r" % row["line"])
+        self.assertTrue(row["line"].startswith("AssertionError: "),
+                        "line 是 log 上那一行的原樣:%r" % row["line"])
+        self.assertEqual(row["log"], self.gate_log_path(),
+                         "log 那一格要指得出證據住在哪一份檔")
         self.assertIn("env.suspect", self.kinds())
         pages = [name for name in os.listdir(os.path.join(self.repo, "reports", "inbox"))
                  if name.endswith(".md")]
@@ -204,7 +238,8 @@ class GateSh(Sandbox):
                          "設定檔說 3 就停在 3")
         data = self.status_of("7")
         self.assertEqual(data["state"], "env_suspect")
-        self.assertEqual(data["environment_suspect"]["threshold"], 3)
+        self.assertEqual(data["environment_suspect"][0]["threshold"], 3)
+        self.assertEqual(data["environment_suspect"][0]["count"], 3)
 
     def test_different_messages_do_not_trigger_environment_fail_fast(self):
         """**變異**:把形狀的鍵改成只看引擎、不看訊息 → 這一條紅(state 變
@@ -224,6 +259,66 @@ class GateSh(Sandbox):
                          "三條不同訊息要照常跑完")
         self.assertEqual(self.status_of("7")["state"], "done")
         self.assertNotIn("env.suspect", self.kinds())
+
+    def test_an_environment_suspect_round_does_not_dispatch_a_worker(self):
+        """驗收 8(D-019):**這一格非空 → 不自動派**。
+
+        `gate.sh` 舊版對任何 rc≠0 都叫 `auto_fix`,而 `auto_fix()` 沒看這一格 ——
+        rc=86 那一輪照樣送一個 worker 進一台「現在跑不動」的機器(#7 的案例帶著
+        `--no-auto-fix` 跑,所以沒抓到)。
+
+        **變異**:把 `auto_fix` 開頭那一行守衛拿掉 → 這一條紅(`gate: auto-fix ——`
+        那一行會出現,假 worker 會被叫)。守衛**寫反邊**(非空才派)時,其他驗收
+        全綠,只有這一條紅。
+        """
+        self.write("tests/test_env_wave.py", ENVIRONMENT_WAVE)
+        # 假 worker:被叫到就寫一行。**換的是代價不是語意** —— 這一條問的是
+        # 「它到底有沒有被叫到」,而那正好因此變成一個看得見的事實。
+        worker = os.path.join(self.home, "fake-worker.sh")
+        write_executable(worker, "#!/bin/sh\n"
+                                 "echo fake-worker-ran >> \"$AC_TEST_LOG\"\n")
+        config = json.loads(self.read("board/config.json"))
+        config["worker"] = {"command": "sh %s" % worker, "timeout_seconds": 60}
+        self.write("board/config.json", json.dumps(config, ensure_ascii=False, indent=2))
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "沙盒的假 worker")
+        self.make_ticket(7, allowed_write_paths=["tests/*"])
+        done = self.gate("tests/test_env_wave.py", "--ticket", "7")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("環境可疑,不自動派", done.stdout)
+        # **釘住這一條的是下面兩句,不是最後那一句。** 實測:把守衛拿掉,`auto-fix.sh`
+        # 真的被叫起來(stdout 出現這兩行),但那支腳本在這個沙盒裡會因為自己的前置
+        # (票沒 commit、沒有第一輪的 patch)先停下來,所以**假 worker 兩邊都沒被叫** ——
+        # 只斷言「worker 沒被叫」的那一版,守衛在不在都是綠的(§5.5 的母題)。
+        # 最後那一句留著是因為它是驗收的字面,而它現在是**第二道**而不是唯一那道。
+        self.assertNotIn("gate: auto-fix ——", done.stdout,
+                         "連 auto-fix.sh 都不該被叫起來")
+        self.assertNotIn("auto-fix: #7", done.stdout,
+                         "auto-fix.sh 已經開始讀上一輪了")
+        self.assertEqual([row for row in self.ran() if row == "fake-worker-ran"], [],
+                         "環境可疑的那一輪派了 worker")
+        self.assertEqual(self.status_of("7")["state"], "env_suspect")
+
+    def test_a_plain_red_round_still_dispatches(self):
+        """守衛不准把**所有**紅都攔下來:那一版與「auto-fix 壞了」長得一樣。
+
+        **變異**:把守衛的條件寫成「永遠不派」→ 這一條紅。
+        """
+        self.write("tests/test_zz_red.py", FAILING)
+        worker = os.path.join(self.home, "fake-worker.sh")
+        write_executable(worker, "#!/bin/sh\n"
+                                 "echo fake-worker-ran >> \"$AC_TEST_LOG\"\n")
+        config = json.loads(self.read("board/config.json"))
+        config["worker"] = {"command": "sh %s" % worker, "timeout_seconds": 60}
+        self.write("board/config.json", json.dumps(config, ensure_ascii=False, indent=2))
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "沙盒的假 worker")
+        self.make_ticket(7, allowed_write_paths=["tests/*"])
+        done = self.gate("tests/test_zz_red.py", "--ticket", "7")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("環境可疑,不自動派", done.stdout)
+        self.assertIn("gate: auto-fix ——", done.stdout)
+        self.assertEqual(self.status_of("7")["environment_suspect"], [])
 
     def test_an_unknown_flag_is_refused(self):
         done = self.gate("--quick")

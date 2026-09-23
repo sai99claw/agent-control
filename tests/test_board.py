@@ -166,7 +166,11 @@ class Pages(BoardUp):
         self.write(os.path.join("reports", "t1", "r1", "status.json"),
                    json.dumps({"state": "done", "run_id": "r1", "kind": "gate",
                                "ticket": "1", "rc": 1, "round": 2,
-                               "environment_suspect": {"engine": "safari"},
+                               "environment_suspect": [
+                                   {"source": "statistical", "engine": "safari",
+                                    "why": "storage empty", "count": 8,
+                                    "threshold": 8, "log": "gate.log",
+                                    "line": "AssertionError: storage empty"}],
                                "duration_seconds": 12}, ensure_ascii=False))
         self.up()
         _, body = self.get("/")
@@ -413,6 +417,53 @@ class ReadsWhatIsAlreadyOnDisk(BoardUp):
         self.assertNotEqual(says["1"], says["2"], "兩種『沒有』用了同一句話")
         self.assertNotEqual(says["2"], says["3"], "兩種『沒有』用了同一句話")
         self.assertNotEqual(says["1"], says["3"], "兩種『沒有』用了同一句話")
+
+    def test_an_environment_suspect_run_says_so_without_hiding_the_red_count(self):
+        """驗收 11(D-019):那一格存在就是為了把讀的人**導去修環境**。
+
+        一張只寫著「紅 3 條」的看板把人導去 auto-fix,而那一輪的機器跑不動;反過來,
+        只寫「環境可疑」會把三條真的紅藏起來 —— **兩句都要印**。
+
+        **變異**:`verdict_cell` 不看這一格 → 這一條紅(沒有「環境可疑」);
+        把「紅 N 條」那一支換成環境那一句 → 這一條紅(少了「紅 3 條」)。
+        """
+        self.make_ticket(1)
+        self.status(1, "20260923-100000-1", rc=1, failures=[
+            {"case": "tests.test_a.C.test_a", "excerpt": "AssertionError: 一"},
+            {"case": "tests.test_b.C.test_b", "excerpt": "AssertionError: 二"},
+            {"case": "tests.test_c.C.test_c", "excerpt": "AssertionError: 三"}],
+            environment_suspect=[
+                {"source": "declared", "engine": "firefox",
+                 "why": "session 斷了(#645)", "count": 1, "threshold": None,
+                 "log": "gate.log",
+                 "line": "ENVIRONMENT-SUSPECT: firefox session 斷了(#645)"}])
+        self.up()
+        _, body = self.get("/")
+        runs = self.section(body, "runs")
+        row = runs.split("data-ticket=\"1\"")[1].split("</tr>")[0]
+        says = VERDICT.search(row).group(1)
+        self.assertIn("環境可疑 1 筆", says, says)
+        self.assertIn("firefox", says, says)
+        self.assertIn("紅 3 條", says, "三條真的紅不准被環境那一句蓋掉:%s" % says)
+
+    def test_an_old_dict_shaped_cell_does_not_take_the_board_down(self):
+        """舊檔不改寫(D-014),所以看板一定會讀到 #7 那一版的單筆 dict。
+
+        **變異**:`one_run()` 直接下標 `data["environment_suspect"][0]`
+        → 這一條紅(那一頁變成一句壞掉的檔,或整頁 500)。
+        """
+        self.make_ticket(1)
+        self.status(1, "20260923-100000-1", rc=1, failures=[],
+                    environment_suspect={"engine": "safari", "count": 8,
+                                         "message_shape": "storage empty"})
+        self.up()
+        status, body = self.get("/")
+        self.assertEqual(status, 200)
+        runs = self.section(body, "runs")
+        row = runs.split("data-ticket=\"1\"")[1].split("</tr>")[0]
+        says = VERDICT.search(row).group(1)
+        self.assertIn("環境可疑 1 筆", says, says)
+        self.assertIn("safari", says, says)
 
     def test_broken_files_never_turn_into_a_500(self):
         """看板是拿來查「哪裡壞了」的。它自己先倒下去的那一刻,壞掉的那份檔就從
