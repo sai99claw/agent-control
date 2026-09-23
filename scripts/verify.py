@@ -25,7 +25,32 @@
 """
 import argparse, ast, hashlib, json, os, re, subprocess, sys
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ENV_ROOT = "AC_ROOT"
+CONFIG_REL = os.path.join("board", "config.json")
+
+
+def _find_root():
+    """repo 根,算法同 `scripts/event.py` 的 `repo_root()`(`AC_ROOT` 可覆蓋,否則
+    往上找 `board/config.json`)—— 不 import event.py,因為這支會被
+    `scripts/sync-to-project.sh` 單獨同步到 `<專案>/scripts/control/`,那裡不保證
+    有 event.py 陪著。寫死 `dirname(dirname(__file__))` 在那個位置算出的是
+    `<專案>/scripts`,不是專案根,`verify/` 找不到、`registered_tags()` 回空集合。
+    """
+    override = os.environ.get(ENV_ROOT)
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+    here = os.path.dirname(os.path.abspath(__file__))
+    walk = here
+    for _ in range(5):
+        walk = os.path.dirname(walk)
+        if not walk or walk == os.path.dirname(walk):
+            break
+        if os.path.exists(os.path.join(walk, CONFIG_REL)):
+            return walk
+    return os.path.dirname(here)
+
+
+ROOT = _find_root()
 VERIFY = os.path.join(ROOT, "verify")
 
 
