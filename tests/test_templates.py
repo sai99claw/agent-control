@@ -52,6 +52,38 @@ class TheOpenerTemplate(unittest.TestCase):
         self.assertIn("outline", text)
         self.assertIn("--outline", text)
 
+    def test_the_last_step_is_the_docs_channel_for_its_own_ticket(self):
+        """#41 A1(D-025 ③):開票最後一步由開題者自己走 docs 通道提交票檔。
+        指令逐字來自 D-025 ③ 與 `land.sh` docs 的用法例,不從範本反推。
+
+        **變異 M1**:把那一句拿掉 → 紅。
+        """
+        text = read("dispatch-opener.md")
+        self.assertIn("你要交的兩樣", text)
+        block = text.split("你要交的兩樣", 1)[1].split("\n## ", 1)[0]
+        self.assertIn('sh scripts/land.sh docs "tickets: #<n> 開票" tickets/<n>.json', block,
+                      "「你要交的兩樣」之後要有一句可貼的 docs 通道指令")
+        self.assertIn("只准自己那張票檔", block)
+
+
+class TheOpenerCardHasOneGitException(unittest.TestCase):
+    """#41 A2(D-025 ③):角色卡「不 git 寫入」原句不動,只加一句例外。"""
+
+    def test_the_ban_stays_and_the_exception_is_one_sentence(self):
+        """量「不做」那一行,不是整份:例外那一句若也寫了禁令字樣,整份 grep 關不掉變異。
+
+        **變異 M2**:把「不做」那一句的「不 git 寫入」改掉 → 紅。
+        """
+        with open(os.path.join(ROOT, "memory", "role", "opener.md"), encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+        ban = [line for line in lines if line.startswith("**不做**")]
+        self.assertEqual(len(ban), 1, "「不做」那一行要在")
+        self.assertIn("不 git 寫入", ban[0], "禁令原句要留著;例外是加一句,不是改掉禁令")
+        exception = [line for line in lines if "land.sh docs" in line]
+        self.assertEqual(len(exception), 1, "例外只有一句")
+        for phrase in ("只准 land.sh docs", "只准自己那張票檔"):
+            self.assertIn(phrase, exception[0])
+
 
 class TheConsolidatorTemplate(unittest.TestCase):
     """A8:整理票開出來以後,**兩個 session 怎麼被派**有一句可以貼的指令。"""
