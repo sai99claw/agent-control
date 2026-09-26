@@ -150,6 +150,8 @@ map() {
         scripts/apply.sh) add test_apply ;;
         scripts/auto-fix.sh) add test_auto_fix ;;
         scripts/review.sh) add test_review ;;
+        # 副本根的唯一來源(#46):四支都 source 它。
+        scripts/wtbase.sh) add test_apply test_auto_fix test_land test_review ;;
         # 收件匣:閘門與落地的終態都寫它,所以動它要連那兩側一起跑。
         scripts/inbox.py) add test_inbox test_gate test_land test_new_session ;;
         scripts/rules.py) add test_rules ;;

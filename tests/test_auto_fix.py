@@ -20,6 +20,7 @@ import glob
 import json
 import os
 import re
+import subprocess
 import sys
 import unittest
 
@@ -913,6 +914,13 @@ class TheFirstRoundStartsFromReady(AutoFixBase):
         self.assertEqual(self.load_ticket("1")["state"], "InReview")
         self.assertEqual(self.inbox_rows(), [])
         self.assertTrue(self.went_in_review(), "events.jsonl 要有 ticket.state → InReview")
+        # #46 C2:第 1 輪綠了一樣收副本(確認用 —— #38/#40 起第 1 輪也走 `round_once`)。
+        for sub in ("work", "base"):
+            self.assertFalse(os.path.isdir(os.path.join(self.fix_dir(), sub)),
+                             "第 1 輪綠了 %s/ 沒被收掉" % sub)
+        for name in ("patch-round1.diff", "EVIDENCE-round1.md"):
+            self.assertTrue(os.path.isfile(os.path.join(self.fix_dir(), name)),
+                            "%s 是證據,不能跟著被掃掉" % name)
 
     def test_a_ticket_that_is_not_ready_is_stopped_by_its_state(self):
         """A3:沒有狀態檔、票不是 Ready ⇒ 指名 state 停下 rc=2,不起 worker、不動票。
@@ -1299,6 +1307,42 @@ class TheCopiesGetCollected(AutoFixBase):
         self.assertFalse(os.path.isdir(os.path.join(where, "base")), "round1 的 base/ 沒被收掉")
         self.assertTrue(os.path.isfile(os.path.join(where, "patch-round1.diff")),
                         "patch 是證據,不能跟著被掃掉")
+
+    def round_one_copy_with_pid(self, pid):
+        """同上一條的手建第 1 輪,外加那一輪 worker 的 `worker.pid`(#46 C3)。"""
+        self.set_worker(WORKER_FIXES)
+        self.ticket_ready()
+        self.first_round()
+        where = self.fix_dir(1)
+        for sub in ("work", "base"):
+            self.write(os.path.join(sub, "README"), "main\n", where=where)
+        self.write("patch-round1.diff", RED_CASE, where=where)
+        self.write("worker.pid", "%d\n" % pid, where=where)
+        return where
+
+    def test_a_round_whose_worker_is_still_running_keeps_its_copy(self):
+        """#46 C3:第 1 輪的 worker 還活著(pid = 這條案例自己)—— 派第 2 輪時不收它的副本。
+
+        **變異 M3**:拿掉 `kill -0` 那一問 → 這一條紅。
+        """
+        pid = os.getpid()
+        where = self.round_one_copy_with_pid(pid)
+        done = self.auto_fix()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue(os.path.isdir(os.path.join(where, "work")),
+                        "worker 還在跑,副本被從它腳下抽走了")
+        self.assertIn("auto-fix: 第 1 輪的 worker(pid %d)還在跑,不收副本" % pid, done.stdout)
+
+    def test_a_round_whose_worker_has_exited_is_collected(self):
+        """#46 C3 的另一半:pid 檔指著一個已經結束的行程 —— 照收。"""
+        gone = subprocess.Popen(["true"])
+        gone.wait()
+        where = self.round_one_copy_with_pid(gone.pid)
+        done = self.auto_fix()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertFalse(os.path.isdir(os.path.join(where, "work")), "round1 的 work/ 沒被收掉")
+        self.assertFalse(os.path.isdir(os.path.join(where, "base")), "round1 的 base/ 沒被收掉")
+        self.assertNotIn("還在跑,不收副本", done.stdout)
 
 
 class TheWholeLoop(AutoFixBase):

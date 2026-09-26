@@ -33,7 +33,7 @@
 #   3 沒交件               4 review 或反駁寫不進票
 set -u
 # 根的找法與 `auto-fix.sh` 同一套:`AC_ROOT` 優先;往上找 `board/config.json`;
-# 在票的 worktree 裡找不到票就改問主 repo(`--git-common-dir` 的上一層)。
+# 在票的 worktree 裡找不到票就改問主 repo(`wtbase.sh` 的 `main_root`)。
 _ac_root() {
     _d=$(cd "$(dirname "$0")" && pwd); _i=0
     while [ $_i -lt 5 ]; do
@@ -81,12 +81,8 @@ TICKETS=${AC_TICKETS_DIR:-$(cfg tickets_dir tickets)}
 case $TICKETS in /*) TDIR=$TICKETS ;; *) TDIR=$ROOT/$TICKETS ;; esac
 TF=$TDIR/$ID.json
 if [ ! -f "$TF" ] && [ -z "${AC_TICKETS_DIR:-}" ]; then
-    _common=$(git -C "$ROOT" rev-parse --git-common-dir 2>/dev/null || echo "")
-    case "$_common" in
-        "") MAINROOT=$ROOT ;;
-        /*) MAINROOT=$(cd "$(dirname "$_common")" 2>/dev/null && pwd) || MAINROOT=$ROOT ;;
-        *)  MAINROOT=$(cd "$ROOT/$(dirname "$_common")" 2>/dev/null && pwd) || MAINROOT=$ROOT ;;
-    esac
+    . "$AC/wtbase.sh"
+    MAINROOT=$(main_root)
     if [ "$MAINROOT" != "$ROOT" ] \
             && [ -f "$MAINROOT/board/config.json" ] && [ -f "$MAINROOT/$TICKETS/$ID.json" ]; then
         echo "review: $ROOT 是 worktree —— 票 / reports 改用主 repo $MAINROOT"
