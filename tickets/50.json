@@ -58,8 +58,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "c5d646d",
-  "state": "Ready",
-  "state_version": 13,
+  "state": "Done",
+  "state_version": 19,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -95,6 +95,42 @@
       "wall_seconds": 2309,
       "by": "auto-fix.sh",
       "at": "2026-09-26T23:17:26+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 138,
+      "tokens_out": 51937,
+      "cache_write": 300776,
+      "cache_read": 7176025,
+      "wall_seconds": 1685,
+      "by": "auto-fix.sh",
+      "at": "2026-09-26T23:46:14+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 16,
+      "tokens_out": 6197,
+      "cache_write": 71557,
+      "cache_read": 446003,
+      "wall_seconds": 65,
+      "by": "review.sh",
+      "at": "2026-09-26T23:51:23+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 376,
+      "by": "land.sh",
+      "at": "2026-09-26T23:58:01+08:00"
     }
   ],
   "objections": [
@@ -107,5 +143,14 @@
       "follow_up": "主線裁(2026-09-26 22:5x):(1) base_sha 改 c5d646d,第 2 輪從 patch-round1-rebased-c5d646d.diff 起;(2) scripts/ticket.py 加進 allowed_write_paths;三輪耗盡轉 Blocked 那一頁**留 auto-fix 的**(:448/:901,帶紅榜與輪數),ticket.py:1308 的 post_inbox 改成只發事件不發頁 —— B4「恰 1 筆 decision」以 auto-fix 那頁為準;(3) tests/test_status.py 加進 allowed_write_paths,:590 的探測改用 B5 之後仍會發的頁(decision)或 events.jsonl 行數。"
     }
   ],
-  "owner": "main"
+  "owner": "main",
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "66b6ae81a873fdf7e6e004d34a63fcdf906d8799",
+    "note": "reports/t50/20260926-234615-25681/REVIEW.md",
+    "at": "2026-09-26T23:58:01+08:00",
+    "state_version": 19
+  }
 }
