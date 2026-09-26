@@ -1,0 +1,68 @@
+{
+  "id": "36",
+  "subject": "反駁與證紅紀錄被吞:apply.sh 對已收過但未處置的 OBJECTION 回 0;verify-case.py red 的 write_baseline 寫回活票檔(G13)",
+  "created": "2026-09-26T12:49:46+08:00",
+  "objective": "同一筆 OBJECTION 第二次 apply 時,只要 disposition 還空著就照樣 rc=6 擋住;ticket.py objection 寫失敗(rc=2)不再被說成「已經有了」;verify-case.py red 跑完活 repo 的 tickets/<n>.json 在 git 裡不變,票的 verify.baseline 只由 check(閘門/land 叫的那條)與 apply.sh 收驗證者 EVIDENCE 那一步在 Lock 內寫",
+  "acceptance": [
+    "A1 沙盒:同一份含 ^OBJECTION: 行的 EVIDENCE 跑兩次 sh scripts/apply.sh <n> <patch> --evidence <E>:第二次該筆 disposition 仍空 → rc=6 且 status run rc=6,stderr 含「還沒處置」;現況 apply.sh:639-652 對 ticket.py objection 的 rc=3 掉到 exit 0(並早在 :634 寫了 status_done 0);變異:orc==3 分支拿掉 → 紅",
+    "A2 該筆 disposition 已是 accepted/rejected/deferred/fixed → 第二次 apply rc=0 並印「已處置」;tests/test_apply.py test_the_same_objection_is_not_recorded_twice(:355)改成斷 returncode==6(現況斷 !=6 把 rc=0 釘死)",
+    "A3 ticket.py objection 記不進(票庫路徑不存在,rc=2)→ apply.sh rc≠0 且 stderr 不是「已經有了」那句",
+    "A4 沙盒 git repo(tickets/<n>.json 已 commit,state_version=4),AC_ROOT 指向它,跑 python3 scripts/verify-case.py red <n> --ref <base> …(或直接呼叫 red 的入口)→ git status --porcelain tickets/ 為空、state_version 仍 4;baseline 落在 red 的 --out-dir(或 reports/t<n>/<run_id>/)的一份 JSON 且 stdout 印出路徑;現況 verify-case.py:457-472 write_baseline 走 ticketlib.save 改活票並 state_version+1(Opus mktemp 實測 M tickets/1.json);變異:red 仍呼叫 write_baseline → 紅",
+    "A5 check(verify-case.py:591)仍寫票(閘門那條路不變),tests/test_verify_case.py CloseOnlyCountsTheGateRun 那幾條維持綠;apply.sh --evidence-verifier 收到含 baseline 的 result 時在 Lock 內把它併進票的 verify.baseline(tests/test_apply.py 一條)"
+  ],
+  "in_scope": [
+    "scripts/apply.sh",
+    "scripts/ticket.py",
+    "scripts/verify-case.py",
+    "tests/test_apply.py",
+    "tests/test_verify_case.py",
+    "tests/test_ticket.py"
+  ],
+  "out_of_scope": [
+    "scripts/gate.sh",
+    "scripts/auto-fix.sh",
+    "objection 的 disposition 由誰寫(既有 ticket.py 子指令照舊)"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/apply.sh",
+    "scripts/ticket.py",
+    "scripts/verify-case.py",
+    "tests/*.py",
+    "templates/dispatch-verifier.md",
+    "memory/role/verifier.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "f3482b3",
+  "state": "Draft",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "test_plan": "A1-A3 單元(沙盒):tests/test_apply.py TheStructuredDeliveryOfTheFirstRound 的夾具(假票 + patch + EVIDENCE);可觀察輸出 = returncode、stderr 句子、tickets/<n>.json 的 objections[].disposition、status run 的 rc;期望值由票面與 SCHEMA §objections(disposition 空 = land/close 都拒)給。A4 單元(沙盒 git repo,真 git,DISPATCH §5.6):tests/test_verify_case.py RedIsTheOnlyThingTheVerifierMeasures 旁補「red 不碰活票」;可觀察 = git status --porcelain 與 state_version;A5 沿用 CloseOnlyCountsTheGateRun。變異:A1 指定 orc==3 分支;A4 指定 red 放回 write_baseline。tags 留空(案例住 tests/)",
+  "verify_strings": [
+    {
+      "path": "scripts/apply.sh",
+      "contains": "還沒處置"
+    },
+    {
+      "path": "tests/test_verify_case.py",
+      "contains": "porcelain"
+    }
+  ],
+  "decision_refs": [
+    "D-024",
+    "D-020",
+    "D-018",
+    "D-014"
+  ],
+  "outline": "兩條「紀錄被吞」:(1) apply.sh 只認 ticket.py objection 的 rc=0 才 exit 6,重複那筆(rc=3)與寫失敗(rc=2)都 exit 0 —— 未處置的反駁第二輪就放行,違反 D-014 硬閘門;既有測試斷 !=6 釘死了它。(2) FLOW.html G13:verify-case.py red 走 ticketlib.save 改活 repo 的票並 state_version+1(review 立刻過期),驗證者是「不准 git 寫入」的角色;裁示:red 只交證據檔,票的 verify.baseline 只在兩個 Lock 內的入口寫(check、apply --evidence-verifier),不加第二個欄位(D-018)。派工文若要求驗證者跑 red,templates/dispatch-verifier.md 的那句要跟著改。順序:本批第 2 張,可與 #34 平行;與 #35 都碰 tests/test_apply.py 夾具,先落一張再 rebase 另一張。"
+}

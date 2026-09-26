@@ -1,0 +1,60 @@
+{
+  "id": "35",
+  "subject": "兩條把錯的現況釘死的守衛:sync-to-project.sh 的 DEPENDENCY_ONLY 把 verify.py 排除在接線檢查外(#29 A11);A5 的提及數 oracle 改測行為",
+  "created": "2026-09-26T12:47:44+08:00",
+  "objective": "sync 對 tabby_pool 跑 --dry-run 時會點名 verify.py 沒有呼叫點、而且說出專案端有同名分岔檔;A5 那兩條測試改成真的用 --evidence-verifier 跑一次 apply 看產物,文件側只斷 ≥1 不比相等",
+  "acceptance": [
+    "A1 sh scripts/sync-to-project.sh --dry-run 對 tabby_pool(或沙盒專案:有 scripts/*.sh 但沒有一支呼叫 control/verify.py)→「同步了但專案端沒有呼叫點」那一行含 verify.py;現況 DEPENDENCY_ONLY=\"event.py ticket.py verify.py\"(sync-to-project.sh:104,:262 continue)把它跳過;變異:verify.py 放回名單 → 紅",
+    "A2 專案端存在 scripts/<同名>.py 且與 control/<同名>.py cmp 不同(tabby 的 scripts/verify.py 就是)→ 另印一行「sync: 專案有同名分岔檔:<名>」;沙盒兩種:同內容不印、不同印;tests/test_sync_to_project.py 兩條",
+    "A3 tests/test_sync_to_project.py SyncsTheScripts.test_a_script_nobody_calls_is_named(:108-112)改成斷言 verify.py 出現在那一行(現況斷言它不准出現,把錯的現況釘死)",
+    "A4 tests/test_ticket_29.py:262 test_a5_mention_counts_disagree_between_card_and_template 與 tests/test_templates.py:90-100 test_both_documents_still_ask_for_it:相等斷言拿掉;改成 (i) 沙盒 sh scripts/apply.sh <n> <patch> --evidence-verifier <E> → reports/t<n>/<run_id>/result-verifier-round1.json 存在且 present 為 true,(ii) memory/role/verifier.md 與 templates/dispatch-verifier.md 對「EVIDENCE-verifier」提及各 ≥1;變異:apply.sh 的 --evidence-verifier 只留在註解、抽取拿掉 → (i) 紅(現況這種錯誤實作存活,Opus 抽斷言邏輯餵假輸入實測)"
+  ],
+  "in_scope": [
+    "scripts/sync-to-project.sh",
+    "tests/test_sync_to_project.py",
+    "tests/test_ticket_29.py",
+    "tests/test_templates.py"
+  ],
+  "out_of_scope": [
+    "tabby_pool/scripts/verify.py 該不該換成 control 那份(專案端另裁,本票只讓 sync 說出來)",
+    "scripts/apply.sh",
+    "sync 名單本身(D-021 的 inbox 不同步照舊)"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/sync-to-project.sh",
+    "tests/*.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "f3482b3",
+  "state": "Draft",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "test_plan": "A1-A3 單元(沙盒):tests/test_sync_to_project.py 既有夾具造專案目錄(有 scripts/x.sh、無呼叫 control/verify.py),可觀察輸出 = --dry-run stdout 那兩句;期望字串由票面給,不從腳本算;A2 的「不同」用手寫兩份內容不同的 verify.py。A4 單元(沙盒):tests/test_ticket_29.py 用 tests/test_apply.py 的沙盒夾具(TheStructuredDeliveryOfTheFirstRound)跑 apply.sh --evidence-verifier,可觀察輸出 = result-verifier-round1.json 檔存在與 present 鍵;文件側 grep -c ≥1。變異:A1 指定 verify.py 放回 DEPENDENCY_ONLY;A4 指定 apply.sh 抽取段註解掉。tags 留空(案例住 tests/)",
+  "verify_strings": [
+    {
+      "path": "scripts/sync-to-project.sh",
+      "contains": "專案有同名分岔檔"
+    },
+    {
+      "path": "tests/test_ticket_29.py",
+      "contains": "result-verifier-round1"
+    }
+  ],
+  "decision_refs": [
+    "D-024",
+    "D-020",
+    "D-022"
+  ],
+  "outline": "#29 D-022 reviewer 列的兩條「守衛綠得不對」:(1) sync-to-project.sh 檔頭說 verify.py 只是被 import 的依賴,但 tabby fullsuite.sh:56 / test-for.sh:309 跑的是專案自己那支 scripts/verify.py(與 control 那份 cmp DIFFER),沒有任何 .sh 叫 control/verify.py —— 排除掉就看不見分岔;既有測試還斷言它不准被點名。(2) A5 測試比「提及數相等 + 子字串有無」,旗標只在註解、文件寫「不要交」都會綠,正確實作多一句反而紅。純機械改字 + 小沙盒,可考慮 codex sol(D-017)但預設 opus。順序:本批第 3 張,可與 #34 平行(檔不重疊)。"
+}

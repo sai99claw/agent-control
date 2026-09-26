@@ -1,0 +1,69 @@
+{
+  "id": "34",
+  "subject": "auto-fix 讀 status 的兩處誤讀:latest_run 跨秒的 apply 蓋掉更早的紅閘門;status.parse_failures 對 docstring 說明行整段收掉(G16)",
+  "created": "2026-09-26T12:47:10+08:00",
+  "objective": "auto-fix 判「上一輪紅不紅」只看 gate/land 的判決,apply 晚於最後一次判決時視為未驗、不視為綠;status.parse_failures 對有 docstring 的紅案例仍給 file/line/完整 traceback,verify-case.parse_reds 退成直接呼叫它,不再自己刪標頭",
+  "acceptance": [
+    "A1 沙盒 reports/t<n>/ 有 gate run(rc=1,failures 1 條)與晚 1 秒以上的 apply run(rc=0)→ sh scripts/auto-fix.sh <n> --dry-run 不印「沒有東西要修」、派工文紅榜含那條 failure,stderr 印一句含「晚於最後一次判決」指名那個 apply run;變異:run_key 拿掉 kind 判斷(或 latest_run 不分 kind)→ 紅。現況:auto-fix.sh:366 讀到 apply 那筆 rc=0 就 exit 0",
+    "A2 apply run rc=6(OBJECTION)晚於紅 gate → 同 A1 仍以 gate 為準,不走「沒有歸因」",
+    "A3 status.parse_failures 餵 FAIL 標頭 + 「A1 說明行」+ 分隔線 + traceback(File \"/r/tests/mod.py\", line 12)→ file=/r/tests/mod.py、line=12、excerpt ≥3 行;現況 file 空、line 0、excerpt 只剩說明行(status.py:464-468 把第一條分隔線當這一筆結尾);tests/test_status.py 補一條含 docstring 的",
+    "A4 verify-case.py parse_reds(:137-175)不再自己刪 FAIL 標頭到分隔線那段,改成呼叫 status.parse_failures;tests/test_verify_case.py:556 那條(docstring 案例仍讀得到 traceback)維持綠",
+    "A5 沙盒 status.py done --log <含 docstring 案例的 unittest 輸出> → status.json failures[0].file 非空;auto-fix 派工文對該案例不印「紅榜沒有 file;從 case 名定位」"
+  ],
+  "in_scope": [
+    "scripts/auto-fix.sh",
+    "scripts/status.py",
+    "scripts/verify-case.py",
+    "tests/test_auto_fix.py",
+    "tests/test_status.py",
+    "tests/test_verify_case.py"
+  ],
+  "out_of_scope": [
+    "scripts/gate.sh",
+    "scripts/apply.sh",
+    "status.py 的 cmd_failures(只印 case,不受影響)"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/status.py",
+    "scripts/verify-case.py",
+    "tests/*.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "f3482b3",
+  "state": "Draft",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "test_plan": "A1/A2 單元(沙盒):tests/test_auto_fix.py 仿 WhichRoundIsTheLatestOne.test_an_apply_run_in_the_same_second_does_not_hide_the_red_gate(:717),但 apply run 的 run_id 秒數比 gate 大;可觀察輸出 = --dry-run 的 stdout/stderr 與派工文;期望值來自手造的 status.json(gate rc=1 那一筆),不從被測程式算。A3 單元:tests/test_status.py 仿 StatusFile.test_failures_carry_the_case_the_file_the_line_and_an_excerpt(:174)加說明行;期望 file/line 是手造 traceback 裡寫的字面。A4 單元:既有 :556 案例不動照跑。A5 沙盒:status.py done --log 走一次,讀 status.json。變異:A1 指定 run_key 去 kind;A3 指定把「跳過說明行」拿掉。tags 留空(案例住 tests/)",
+  "verify_strings": [
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "晚於最後一次判決"
+    },
+    {
+      "path": "tests/test_status.py",
+      "contains": "說明行"
+    },
+    {
+      "path": "tests/test_auto_fix.py",
+      "contains": "跨秒"
+    }
+  ],
+  "decision_refs": [
+    "D-024",
+    "D-018",
+    "D-020"
+  ],
+  "outline": "#29 reviewer 與 FLOW.html G16 列的兩個「auto-fix 看錯 status」:(1) status.latest_run 取 rows[-1]、auto-fix run_key 第一鍵是秒,跨秒的 apply(rc=0/6)蓋掉紅 gate,auto-fix 誤判綠而 exit 0(Opus 實測 mktemp 重現);(2) status.parse_failures 把 docstring 說明行當 body,第一條分隔線就收段,file/line 空,#31 只修了 verify-case 那側的 parse_reds(繞過法)。裁示:判決只看 gate/land kind;說明行的處理搬回 status.parse_failures 一處,parse_reds 退成呼叫它(D-018 不留兩份解析)。順序:本批第 1 張(閘門誤判先修,後面每票都靠它)。"
+}

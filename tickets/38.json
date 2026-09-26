@@ -1,0 +1,60 @@
+{
+  "id": "38",
+  "subject": "G15:auto-fix 的副本根(WTBASE)一律以主 repo 根解析,相對 worktree_dir 不再巢狀;上層不存在就 rc=2 停下;第 1 輪手建副本也收",
+  "created": "2026-09-26T12:49:46+08:00",
+  "objective": "在票分支 worktree 內(票檔已在分支或設了 AC_TICKETS_DIR)跑 auto-fix,副本仍開在 <主 repo 上層>/<worktree_dir>/fix-t<n>/round<r>,不會出現 x-wt/x-wt;worktree_dir 的上層不存在時指名停下,不算出 /x-wt;主線手建的 round1 副本在收 patch 後同樣被 shed_copies 清掉",
+  "acceptance": [
+    "A1 沙盒:主 repo board/config.json worktree_dir 為 ../x-wt,票分支 worktree 內(票檔已 commit 在分支)跑 sh scripts/auto-fix.sh <n> --dry-run --round 1 → 印出的副本路徑 = <主 repo 上層>/x-wt/fix-t<n>/round1,不含 x-wt/x-wt(現況 auto-fix.sh:95-97 用 $ROOT 拼相對路徑,ROOT 是 worktree 時多一層;9/23 實際開在 agent-control-wt/agent-control-wt/,HANDOFF:1137);變異:WTBASE 改回用 $ROOT 拼 → 紅",
+    "A2 設了 AC_TICKETS_DIR 且 cwd 是票 worktree → 同 A1;主 repo 根的定義寫死一種:git rev-parse --git-common-dir 的上一層(worktree 內也指回主 repo)",
+    "A3 worktree_dir 的上層目錄不存在 → rc=2 並印出解析後的路徑,不得算出 /x-wt(現況 :97 的 cd 失敗後 WTBASE 變成檔案系統根下,Opus 實測 WTBASE=/x-wt);變異:拿掉存在性檢查 → 紅",
+    "A4 主線用 Agent 手建的 fix-t<n>/round1(有 work/ base/ patch-round1.diff)被 auto-fix 收 patch 後,work 與 base 不在而 patch 在(現況 A6 迴圈從 S_ROUND+1 起,shed_copies 只在 :506-507 :676,round1 涵蓋不到);land.sh 成功後那行殘留清單也列得到它;tests/test_auto_fix.py TheCopiesGetCollected 旁補一條"
+  ],
+  "in_scope": [
+    "scripts/auto-fix.sh",
+    "tests/test_auto_fix.py",
+    "scripts/land.sh",
+    "tests/test_land.py"
+  ],
+  "out_of_scope": [
+    "test_defect 那條路刻意留下的 $FIX/base(:674,靠驗證者那輪收,照舊)",
+    "board/config.json 的 worktree_dir 改成絕對路徑(D-018:不用改設定繞過解析錯)",
+    "scripts/gate.sh"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/land.sh",
+    "tests/*.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "f3482b3",
+  "state": "Draft",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "test_plan": "A1-A3 單元(沙盒,真 git repo + git worktree add 一個票分支,DISPATCH §5.6;假 worker.command 寫標記檔就退出):tests/test_auto_fix.py 的既有夾具;可觀察輸出 = --dry-run 印的副本路徑、rc、stderr 指名的路徑;期望路徑由測試以 os.path 從夾具的主 repo 路徑拼出,不呼叫被測腳本算。A4 單元(沙盒):手建 fix-t<n>/round1/{work,base,patch-round1.diff} 後跑一輪,可觀察 = 目錄存在與否;land.sh 那行沿用 tests/test_land.py 既有 A6 案例。變異:A1 指定改回 $ROOT 拼;A3 指定拿掉存在性檢查。tags 留空(案例住 tests/)",
+  "verify_strings": [
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "git-common-dir"
+    },
+    {
+      "path": "tests/test_auto_fix.py",
+      "contains": "巢狀"
+    }
+  ],
+  "decision_refs": [
+    "D-024",
+    "D-018"
+  ],
+  "outline": "9/23 刪目錄事故的餘波(FLOW.html G15;tabby HANDOFF:1102-1103 事故、:1137 巢狀):auto-fix.sh 用 ROOT 拼相對 worktree_dir,ROOT 在票 worktree 時副本開到 agent-control-wt/agent-control-wt/;上層不存在 cd 失敗更會算成 /x-wt(Opus 順手量到,reviewer 沒列)。#29 A6 的 shed_copies 只清迴圈內那幾輪,主線手建的 round1 漏掉。裁示:WTBASE 只用一種解析(主 repo 根 = git-common-dir 上一層),不用改 config 成絕對路徑繞過。與刪檔有關,實作者一律 mktemp 沙盒,不准對真的 agent-control-wt 跑。順序:本批第 5 張;與 #34 都改 auto-fix.sh,#34 先落,本票 rebase。"
+}

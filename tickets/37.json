@@ -1,0 +1,65 @@
+{
+  "id": "37",
+  "subject": "開票與規則包的機械格:正本 inbox 進正本規則包;--verify-string 只在冒號前像路徑時才切;ticket.py create 配號進 Lock(#3 殘項)",
+  "created": "2026-09-26T12:49:46+08:00",
+  "objective": "AC 自己(正本)跑 rules.py pack 也帶 memory/role/<角色>.inbox.md 與 memory/model/<模型>.inbox.md 的最後幾行;--verify-string 的純字串含半形冒號不再被誤切成 {path,contains};兩個行程同時 create 拿到不同 id",
+  "acceptance": [
+    "A1 python3 scripts/rules.py pack opener --model fable | grep -c inbox ≥ 1 且 wc -c ≤ 4096(現況 0 / 3267);輸出含 memory/role/opener.inbox.md 尾行的字(例「verify.tags 要留空」)與 memory/model/fable.inbox.md 的一行;tests/test_rules.py TheProjectLayer 的 test_being_the_canon_repo_itself_reads_the_card_once 仍綠(卡片只讀一次);變異:inbox 來源綁回 local(rules.py:318-337)→ 紅",
+    "A2 normalise_verify(ticket.py:451-465):「scripts/land.sh:沒有新的 commit」→ dict;「D-G89: x」「http://x/y」「驗收:A1」→ 純字串;dict 的 contains 去頭尾空白(現況 contains=\" x\");切的條件寫死一種:冒號前那段像路徑(含 / 或以 .py/.sh/.md/.json 結尾、無空白);create --help 的 --verify-string 說明寫出三種認法(路徑:字串 / 純字串 / 純字串含冒號不切);tests/test_ticket.py 補四條",
+    "A3 ticket.py create 的 next_id() 與寫檔在 ticketlib.Lock 內(現況 cmd_create:520 無鎖;#3 驗收第一條原文「兩個行程同時 create → id 不同(subprocess 測)」);測試用兩個 subprocess 同時 create(以 env 注入 sleep 或 barrier 讓競態必現),斷 id 不同;變異:拿掉 Lock → 紅(需在票面 EVIDENCE 貼紅的輸出,不准只寫「會紅」)",
+    "A4 tickets/3.json 在本票落地後可關:EVIDENCE 列出 #3 三項(AC_RUN_ID 強制 status.py:674/825 已在、flaky.jsonl 單次 O_APPEND write status.py:700 已在、create 配號鎖本票補)各指到主線行號"
+  ],
+  "in_scope": [
+    "scripts/rules.py",
+    "scripts/ticket.py",
+    "tests/test_rules.py",
+    "tests/test_ticket.py"
+  ],
+  "out_of_scope": [
+    "tabby_pool/scripts/land-ticket.sh 的 tget 對 dict 形狀 verify_strings 只會印 repr 而 grep 不到(land-ticket.sh:527-546、:1713;tabby 端另開票)",
+    "sync-to-project.sh 不同步 *.inbox.md(D-021 照舊)",
+    "status.py(#3 其餘兩項已在主線)"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/rules.py",
+    "scripts/ticket.py",
+    "tests/*.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "f3482b3",
+  "state": "Draft",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "test_plan": "A1 單元:tests/test_rules.py TheProjectLayer(:324)旁補「正本也帶自己的 inbox」:夾具造 memory/role/x.md + x.inbox.md + memory/model/m.inbox.md,roles_dir 指到 memory/role(is_canon 為真);可觀察 = pack stdout 含 inbox 尾行、bytes ≤ DEFAULT_MAX;期望值是夾具寫進 inbox 的字面。A2 單元:直接 import normalise_verify 給四種輸入,期望值由票面列;--help 那段用「量那一段不量整份」(implementer inbox 2026-09-23)。A3 單元(subprocess):tests/test_ticket.py 兩個 python3 scripts/ticket.py create 同時跑在同一個 mktemp 票庫,可觀察 = 兩張票的 id;變異拿掉 Lock 要真的紅,不穩就用 env 注入的 sleep 放大競態。tags 留空(案例住 tests/)",
+  "verify_strings": [
+    {
+      "path": "scripts/ticket.py",
+      "contains": "像路徑"
+    },
+    {
+      "path": "tests/test_rules.py",
+      "contains": "正本"
+    },
+    {
+      "path": "tests/test_ticket.py",
+      "contains": "同時 create"
+    }
+  ],
+  "decision_refs": [
+    "D-024",
+    "D-021",
+    "D-018"
+  ],
+  "outline": "三件「開票/規則包的機械格」:(1) rules.py:130-137 is_canon 為真時 local=False,inbox 只從 local_* 取,所以 AC 正本的 opener.inbox.md(1118 B)、fable.inbox.md 從來沒進過包;sync 又刻意不同步 inbox(D-021)—— 正本 inbox 兩邊都沒讀者(Opus 實測 grep -c inbox = 0,tabby 端 = 有)。(2) --verify-string 用 partition(\":\") 切,HANDOFF:1099 說全形冒號會切在現行 code 重現不出來,真正的坑是純字串含半形冒號(「D-G89: x」「http://x/y」)被誤切;tabby land 對 dict 形狀 grep 不到會 rc 4 拒收。(3) #3(InReview,無分支)三項:AC_RUN_ID、flaky 單次 write 已在主線,只剩 create 配號鎖,併入本票,落地後關 #3。順序:本批第 4 張,與 #34/#35/#36 檔不重疊可平行。"
+}
