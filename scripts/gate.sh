@@ -76,8 +76,9 @@
 # 沒給票號就完全照舊 —— 不寫檔、不重跑、退出碼不變。
 #
 # ## 終態會叫醒主線(D-015)
-# 給了票號,跑完就寫一則 `reports/inbox/<票號>-<run_id>.md` 並發 `inbox.posted`:
-# **哪張票、什麼狀態、要主線做什麼、去哪看**。主線因此不必輪詢 status ——
+# 給了票號,跑完發 `gate.pass` / `gate.fail`;只有環境可疑(不自動派、要人動手)那一種
+# 另寫一則 `reports/inbox/<票號>-<run_id>.md`(kind=decision,D-032):綠由 review.sh
+# 接手、可歸因的紅由 auto-fix.sh 接手,不發頁。主線因此不必輪詢 status ——
 # 每看一次背景工作就是整份上下文重送一輪。
 #
 # ## auto-fix:紅了預設派下一輪(D-010)
@@ -411,37 +412,37 @@ status_done() {   # $1 = rc
     inbox_post "$1"
 }
 
-# 終態叫醒主線(D-015)。**一頁四句**:哪張票、什麼狀態、要主線做什麼、去哪看。
+# 終態叫醒主線(D-015)。**只有要人動手的終態發頁**(D-032):閘門綠(review.sh 接手)與
+# 閘門紅可歸因(auto-fix.sh 接手)只發 gate.pass / gate.fail;環境可疑(不可歸因、不自動
+# 派)才發一頁 decision。`AC_NO_INBOX` = 呼叫者(land.sh 全套)自己發這一則,這裡都不發。
 # 寫不出來要出聲但不擋閘門 —— 同狀態檔的理由。
 inbox_post() {   # $1 = rc
     [ -n "$TICKET" ] || return 0
     [ -z "${AC_NO_INBOX:-}" ] || return 0
-    note=""
-    if [ "$ENV_SUSPECT" -eq 1 ]; then
-        # 環境那一頁要能直接動手:哪個引擎、倒在哪一句、連幾條,以及**先去看哪三樣**。
-        # 一句「環境可疑」不是一個可以執行的動作(DISPATCH-TEMPLATE §5.7)。
-        engine=$(suspect_field engine)
-        message=$(suspect_field why)
-        count=$(suspect_field count)
-        source=$(suspect_field source)
-        state="env_suspect(gate rc=$1)"
-        what="先別重跑;查 $engine 那一側的環境,修好再跑這一段"
-        # `來源` 那一行不是裝飾:`statistical` 是這支程式從紅例推出來的,`declared`
-        # 是案例自己說的,兩種的可信度與下一步不同(`docs/DESIGN-ENV-SUSPECT.md`)。
-        note="引擎:$engine
+    if [ "$ENV_SUSPECT" -ne 1 ]; then
+        if [ "$1" -eq 0 ]; then verdict=gate.pass; else verdict=gate.fail; fi
+        python3 "$ROOT/scripts/event.py" emit "$verdict" --ticket "$TICKET" \
+            --kv "run_id=$RUN_ID" --kv "sha=$SHA" --kv "rc=$1" >/dev/null 2>&1 \
+            || echo "gate: 事件發不出去($verdict,不擋閘門)" >&2
+        return 0
+    fi
+    # 環境那一頁要能直接動手:哪個引擎、倒在哪一句、連幾條,以及**先去看哪三樣**。
+    # 一句「環境可疑」不是一個可以執行的動作(DISPATCH-TEMPLATE §5.7)。
+    engine=$(suspect_field engine)
+    message=$(suspect_field why)
+    count=$(suspect_field count)
+    source=$(suspect_field source)
+    state="env_suspect(gate rc=$1)"
+    what="先別重跑;查 $engine 那一側的環境,修好再跑這一段"
+    # `來源` 那一行不是裝飾:`statistical` 是這支程式從紅例推出來的,`declared`
+    # 是案例自己說的,兩種的可信度與下一步不同(`docs/DESIGN-ENV-SUSPECT.md`)。
+    note="引擎:$engine
 來源:$source
 同形訊息:$message
 連續紅:$count
 疑似原因:掛很久的 Safari --automation 行程、磁碟剩餘空間不足、測試埠被占用。"
-    elif [ "$1" -eq 0 ]; then
-        state="閘門綠(gate rc=0)"
-        what="不用讀 patch:覆核由 review.sh 派(--branch 手跑綠已自動派,結果看下一頁;沒派就 sh scripts/review.sh $TICKET),review 通過後 sh scripts/land.sh t$TICKET"
-    else
-        state="閘門紅(gate rc=$1)"
-        what="看紅榜逐條;要自動派下一輪 worker:sh scripts/auto-fix.sh $TICKET"
-    fi
     python3 "$ROOT/scripts/inbox.py" post --ticket "$TICKET" --run-id "$RUN_ID" \
-        --kind gate --state "$state" --what "$what" --note "$note" \
+        --kind decision --state "$state" --what "$what" --note "$note" \
         --where "$(python3 "$ROOT/scripts/status.py" rundir --ticket "$TICKET" \
                    --run-id "$RUN_ID" 2>/dev/null || echo "reports/t$TICKET/$RUN_ID")/status.json" \
         >/dev/null 2>&1 || echo "gate: 收件匣寫不出來(不擋閘門)" >&2

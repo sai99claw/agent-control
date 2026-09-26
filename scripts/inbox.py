@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """終態的收件匣:**完成的事去叫醒主線,主線不去輪詢** — `docs/WORKFLOW.md`(D-015)。
 
-    scripts/inbox.py post --ticket 7 --run-id … --state "閘門紅" \
-                          --what "讀 patch 記 review" --where "reports/t7/…/status.json"
+    scripts/inbox.py post --ticket 7 --run-id … --kind decision --state "三輪耗盡仍紅" \
+                          --what "裁示:改票或拆票" --where "reports/t7/…/status.json"
+    scripts/inbox.py done 7 --landed <sha> --by land.sh   # 整票完成簡報(land.sh 關票後)
     scripts/inbox.py list [--all]          # 還沒 ack 的(--all 連 ack 過的一起)
     scripts/inbox.py show 7                # 那一頁
     scripts/inbox.py ack 7-20260921-…      # 收下了(by=main)
-    scripts/inbox.py ack 7 --state 等覆核 --by review.sh   # 腳本收它自己接著做掉的頁
+    scripts/inbox.py ack 7 --state 等覆核 --by review.sh   # 收 D-032 之前留下的舊頁
     scripts/inbox.py ack --all --by migration
 
 ## 為什麼要有這一支
@@ -14,8 +15,8 @@
 主線要知道一輪跑完了沒,只有兩條路 —— **輪詢**(每看一次背景工作 = 整份上下文重送
 一輪),或**等人來講**(而沒有人會來講,因為跑完的是一支腳本)。
 
-所以每一個**終態**(gate 跑完、auto-fix 停下來、land 跑完、票轉 Blocked)寫兩樣東西:
-一則事件(控制台看得到)與**一頁**`reports/inbox/<票號>-<run_id>.md`。一頁只答四句:
+每一個**終態**都寫一則事件(控制台看得到);只有要主線動手的終態另寫**一頁**
+`reports/inbox/<票號>-<run_id>.md`(見下一節)。一頁只答四句:
 **哪張票、什麼狀態、要主線做什麼、去哪看**。多寫一句,讀它的人就得把它整份讀完。
 
 ## 為什麼 `list` 讀索引而不是掃 markdown
@@ -26,12 +27,16 @@
 ack 只從清單上拿掉 —— 票的狀態由票說了算(`ticket.py`),不由收件匣說。兩者混在一起
 的話,一次 ack 會讓一張還沒處理的票在畫面上消失。
 
-## 腳本做掉的頁由腳本 ack(#43,D-025 C4)
-**post 的 what 若是某支腳本接著就會做的事,那支腳本開跑時 ack --by <script>;主線只剩
-Blocked / 裁示 / 落地順序三類頁。** 具體三處:`review.sh` 開跑時收該票「等覆核」;
-`land.sh` 收到票時收該票「等覆核」/「等落地」/「覆核通過」;`ticket.py close` 成功時
-`land.sh` 收「已合併、尚未關票」並 post 一頁 Done(what=無)隨即收掉。`--state` 只收
-state 含那幾個字的頁 —— 同一張票的 Blocked / 裁示頁不跟著消失。
+## 只有兩種頁(D-032;取代 #43 C4 的「腳本做掉的頁由腳本 ack」)
+`INBOX_KINDS = ("decision", "done")`,`post --kind` 不在其中就 rc=2、什麼都不寫 ——
+這是守衛不是約定:下一支新腳本不會再長回「腳本接著會做的事」那一類頁。
+- **decision**:要人裁才會前進的 —— ticket-wrong / blocking 反駁、三輪紅、覆核退回、
+  閘門不可歸因(環境可疑)、worker 沒交件 / patch 套不上、land 拒收或紅、關不掉的票。
+  由撞到它的那支腳本發(auto-fix.sh / gate.sh / review.sh / land.sh)。
+- **done**:整票完成簡報,`land.sh` 在 `ticket.py close` 成功後發 `inbox.py done`
+  (subject、落地 sha、做了什麼、覆核結論、cost 表)。**不自動 ack**:主線讀完自己收。
+閘門綠 / 閘門紅(可歸因)/ 等覆核 / 覆核通過 / 覆核沒交件這類腳本接著會做的終態
+只寫 events.jsonl,不發頁。`ack --by` 與 `--state` 留著:D-032 之前的舊頁還在索引裡。
 
 `acked.jsonl` 每一筆記 `by`:不帶 `--by` 記 `main`,**不是空字串** —— 「沒寫是誰收的」
 與「主線收的」要分得開(`docs/DISPATCH-TEMPLATE.md` §5.5)。
@@ -45,6 +50,9 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import event  # noqa: E402  共用 repo 根與 board/config.json 的判讀
+
+# 收件匣只收這兩種頁(D-032):要人裁的,與整票完成的簡報。其餘終態只寫事件。
+INBOX_KINDS = ("decision", "done")
 
 DEFAULT_REPORTS = "reports"
 INBOX_REL = "inbox"
@@ -116,14 +124,18 @@ def entries(root, include_acked=False):
     return rows
 
 
-def subject_of(root, ident):
+def load_ticket(root, ident):
     path = os.path.join(event.tickets_dir(root), "%s.json" % ident)
     try:
         with open(path, encoding="utf-8") as handle:
             data = json.load(handle)
     except (OSError, ValueError):
-        return ""
-    return str(data.get("subject") or "")
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def subject_of(root, ident):
+    return str(load_ticket(root, ident).get("subject") or "")
 
 
 PAGE = """# #%(ticket)s —— %(state)s
@@ -143,42 +155,31 @@ PAGE = """# #%(ticket)s —— %(state)s
 %(note)s"""
 
 
-def cmd_post(args):
-    root = event.repo_root()
-    where = inbox_dir(root)
-    os.makedirs(where, exist_ok=True)
+def publish(root, ticket, run_id, kind, state, what, where, render):
+    """寫一頁 + 索引一列 + 一則事件。`render(run_id_shown)` 回那一頁的全文。"""
+    where_dir = inbox_dir(root)
+    os.makedirs(where_dir, exist_ok=True)
     # 同一輪可以有兩個終態(閘門綠了,接著 auto-fix 說「停在等覆核」)。同名會讓
     # 後面那一頁**蓋掉**前面那一頁,而索引上兩列還指著同一個檔 —— 讀的人看到兩列、
     # 打開是同一頁,分不出哪一列是真的。所以撞名就加序號。
-    stem = "%s-%s" % (args.ticket, args.run_id or "no-run")
+    stem = "%s-%s" % (ticket, run_id or "no-run")
     name, serial = stem, 1
-    while os.path.exists(os.path.join(where, "%s.md" % name)):
+    while os.path.exists(os.path.join(where_dir, "%s.md" % name)):
         serial += 1
         name = "%s-%d" % (stem, serial)
-    page = PAGE % {
-        "ticket": args.ticket,
-        "subject": subject_of(root, args.ticket),
-        "state": args.state,
-        "run_id": args.run_id or "(沒有 run_id)",
-        "kind": args.kind or "?",
-        "at": now(),
-        "what": args.what or "(沒有寫要做什麼 —— 那等於沒有收件匣)",
-        "where": args.where or "(沒有寫去哪看)",
-        "note": ("\n## 補充\n%s\n" % args.note) if args.note else "",
-    }
-    path = os.path.join(where, "%s.md" % name)
+    path = os.path.join(where_dir, "%s.md" % name)
     with open(path, "w", encoding="utf-8") as handle:
-        handle.write(page)
+        handle.write(render())
     append_jsonl(index_path(root), {
-        "name": name, "ticket": args.ticket, "run_id": args.run_id or "",
-        "kind": args.kind or "", "state": args.state, "what": args.what or "",
-        "where": args.where or "", "at": now(),
+        "name": name, "ticket": ticket, "run_id": run_id or "",
+        "kind": kind, "state": state, "what": what,
+        "where": where, "at": now(),
         "page": os.path.relpath(path, root)})
     try:
         # `kind=` 這個名字是 `event.emit` 的第一個位置參數 —— 拿它當欄位名會丟
         # TypeError,而 except 會把它吞成「事件發不出去」。所以這一格叫 `run_kind`。
-        event.emit("inbox.posted", ticket=args.ticket, run_id=args.run_id or "",
-                   run_kind=args.kind or "", state=args.state,
+        event.emit("inbox.posted", ticket=ticket, run_id=run_id or "",
+                   run_kind=kind, state=state,
                    page=os.path.relpath(path, root))
     except Exception:                                          # noqa: BLE001
         # 事件發不出去要出聲,但不擋 —— 那一頁已經寫好了,而把紀錄問題升級成
@@ -186,6 +187,102 @@ def cmd_post(args):
         sys.stderr.write("inbox: 事件發不出去(那一頁還是寫好了)\n")
     sys.stdout.write("inbox: %s\n" % os.path.relpath(path, root))
     return 0
+
+
+def cmd_post(args):
+    root = event.repo_root()
+    # 守衛在寫任何東西之前(D-032):只寫事件的終態不准長回一頁。
+    if args.kind not in INBOX_KINDS:
+        sys.stderr.write("inbox: --kind 只收 %s(拿到 %r)—— 其餘終態只寫事件,不發頁\n"
+                         % (" / ".join(INBOX_KINDS), args.kind))
+        return 2
+    return publish(root, args.ticket, args.run_id, args.kind, args.state,
+                   args.what or "", args.where or "", lambda: PAGE % {
+                       "ticket": args.ticket,
+                       "subject": subject_of(root, args.ticket),
+                       "state": args.state,
+                       "run_id": args.run_id or "(沒有 run_id)",
+                       "kind": args.kind,
+                       "at": now(),
+                       "what": args.what or "(沒有寫要做什麼 —— 那等於沒有收件匣)",
+                       "where": args.where or "(沒有寫去哪看)",
+                       "note": ("\n## 補充\n%s\n" % args.note) if args.note else "",
+                   })
+
+
+COST_COLUMNS = ("role", "round", "model", "tokens_in", "tokens_out",
+                "cache_write", "cache_read", "wall_seconds", "by")
+COST_SUMMED = ("tokens_in", "tokens_out", "cache_write", "cache_read", "wall_seconds")
+
+
+def cell(value):
+    # null 是「拿不到」,不是 0(tickets/SCHEMA.md 成本那一列)。
+    return "—" if value is None else str(value)
+
+
+def cost_table(rows):
+    if not rows:
+        return "cost 空:沒有腳本寫過\n"
+    lines = ["| %s |" % " | ".join(COST_COLUMNS),
+             "|%s" % ("---|" * len(COST_COLUMNS))]
+    for row in rows:
+        lines.append("| %s |" % " | ".join(cell(row.get(col)) for col in COST_COLUMNS))
+    total = []
+    for col in COST_COLUMNS:
+        if col == "role":
+            total.append("合計")
+        elif col not in COST_SUMMED:
+            total.append("")
+        else:
+            known = [row.get(col) for row in rows if row.get(col) is not None]
+            missing = len(rows) - len(known)
+            text = str(sum(known)) if known else "—"
+            total.append(text + ("(%d 筆缺數)" % missing if missing else ""))
+    lines.append("| %s |" % " | ".join(total))
+    return "\n".join(lines) + "\n"
+
+
+DONE_PAGE = """# #%(ticket)s —— Done
+
+%(subject)s
+
+- 落地:`%(sha)s`
+- 這一輪:`%(run_id)s`(done,by %(by)s)
+- 時間:%(at)s
+
+## 做了什麼
+%(what_done)s
+
+## 覆核結論
+%(review)s
+
+## cost
+%(cost)s"""
+
+
+def cmd_done_brief(args):
+    """整票完成的簡報(D-032):land.sh 關票成功後發。**不自動 ack** —— 它就是給主線讀的。"""
+    root = event.repo_root()
+    data = load_ticket(root, args.ticket)
+    review = data.get("review") if isinstance(data.get("review"), dict) else {}
+    note = str(review.get("note") or "").strip()
+    if review:
+        verdict = "%s(by %s)" % (review.get("verdict") or "?", review.get("by") or "?")
+    else:
+        verdict = "無覆核"
+    cost = data.get("cost") if isinstance(data.get("cost"), list) else []
+    return publish(root, args.ticket, args.run_id, "done", "Done", "無",
+                   "tickets/%s.json" % args.ticket, lambda: DONE_PAGE % {
+                       "ticket": args.ticket,
+                       "subject": str(data.get("subject") or "(票沒有 subject)"),
+                       "sha": args.landed[:12],
+                       "run_id": args.run_id or "(沒有 run_id)",
+                       "by": args.by,
+                       "at": now(),
+                       "what_done": note or str(data.get("objective") or "(票沒有 objective)"),
+                       "review": verdict,
+                       "cost": cost_table([row for row in cost if isinstance(row, dict)]),
+                   })
 
 
 def cmd_list(args):
@@ -274,6 +371,13 @@ def main(argv):
     post.add_argument("--where", default="")
     post.add_argument("--note", default="")
     post.set_defaults(run=cmd_post)
+
+    done = subs.add_parser("done")
+    done.add_argument("ticket")
+    done.add_argument("--landed", required=True)
+    done.add_argument("--by", required=True)
+    done.add_argument("--run-id", default="")
+    done.set_defaults(run=cmd_done_brief)
 
     listing = subs.add_parser("list")
     listing.add_argument("--all", action="store_true")

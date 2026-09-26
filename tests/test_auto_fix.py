@@ -6,8 +6,8 @@
 所以這一組問四件事:
 1. 紅了會不會**真的**起一個新 worker,而且它拿到的那一份夠不夠開工(交接包);
 2. 綠了會不會**轉 InReview 並把覆核交給 `review.sh`**(#42,D-025 ②;`--no-review` 才停在
-   等覆核)—— auto-fix 自己不蓋覆核那一格;
-3. 三種停下來(反駁 / 三輪耗盡 / 沒有歸因)會不會**留下票的狀態轉換 + 一頁收件匣**,
+   InReview)—— auto-fix 自己不蓋覆核那一格,也不發頁(D-032:只寫事件);
+3. 三種停下來(反駁 / 三輪耗盡 / 沒有歸因)會不會**留下票的狀態轉換 + 一頁 decision**,
    而不是印一行就算;
 4. **不該派的時候不派** —— 尤其是「rc 非零卻一條紅都解析不出來」那一種,它看起來
    最像沒紅,而派下去的 worker 會拿著空紅榜去猜。
@@ -391,6 +391,18 @@ class AutoFixBase(Sandbox):
     def inbox_list(self):
         return self.run_py("scripts/inbox.py", "list", "--all").stdout
 
+    def inbox_rows(self):
+        path = os.path.join(self.repo, "reports", "inbox", "index.jsonl")
+        if not os.path.exists(path):
+            return []
+        with open(path, encoding="utf-8") as handle:
+            return [json.loads(line) for line in handle if line.strip()]
+
+    def went_in_review(self):
+        return any(row["kind"] == "ticket.state" and row.get("field") == "state"
+                   and str(row.get("to")).strip('"') == "InReview"
+                   for row in self.events())
+
     def first_round(self):
         patch = self.write("p1.diff", RED_CASE, where=self.home)
         done = self.run_sh("scripts/apply.sh", "1", patch)
@@ -608,7 +620,8 @@ class ThingsThatStopIt(AutoFixBase):
         for text in ("role=verifier", "test_thing.T.test_thing",
                      "fixture 把正確結果寫成 2", "tests/test_thing.py"):
             self.assertIn(text, packet)
-        self.assertIn("案例已修,第 2 輪綠", self.inbox_list())
+        self.assertEqual(self.inbox_rows(), [], "綠了只寫事件,不發頁(D-032)")
+        self.assertTrue(self.went_in_review())
 
     def test_a_red_case_with_a_docstring_still_names_its_file_to_the_verifier(self):
         """#34 A5:有 docstring 的案例紅了,閘門寫的 `status.json` 要有 `file`,驗證者
@@ -881,9 +894,10 @@ class TheFirstRoundStartsFromReady(AutoFixBase):
 
     def test_round_one_is_announced_runs_as_running_and_stops_awaiting_review(self):
         """A2:`ticket.attempt.start attempt=1` 由 auto-fix 發(只發一次);worker 跑的
-        那一刻票是 Running;綠了轉 InReview,收件匣一頁「第 1 輪綠了,等覆核」。
+        那一刻票是 Running;綠了轉 InReview —— 只有 ticket.state 事件,收件匣 0 頁(D-032)。
 
         **變異 M4**:拿掉 `round_once` 裡轉 Running 那一手 → 標記檔記的是 Ready,紅。
+        **變異**:綠了照發頁 → 「0 頁」紅。
         """
         self.ready_and_main_moved_on()
 
@@ -897,7 +911,8 @@ class TheFirstRoundStartsFromReady(AutoFixBase):
         self.assertEqual(self.worker_saw()["state"], "Running",
                          "worker 跑的那一刻票要是 Running")
         self.assertEqual(self.load_ticket("1")["state"], "InReview")
-        self.assertIn("第 1 輪綠了,等覆核", self.inbox_list())
+        self.assertEqual(self.inbox_rows(), [])
+        self.assertTrue(self.went_in_review(), "events.jsonl 要有 ticket.state → InReview")
 
     def test_a_ticket_that_is_not_ready_is_stopped_by_its_state(self):
         """A3:沒有狀態檔、票不是 Ready ⇒ 指名 state 停下 rc=2,不起 worker、不動票。
@@ -1287,7 +1302,7 @@ class TheCopiesGetCollected(AutoFixBase):
 
 
 class TheWholeLoop(AutoFixBase):
-    """一整圈:紅 → 派 worker → 套 patch → 閘門 → 綠 → 停在等覆核。
+    """一整圈:紅 → 派 worker → 套 patch → 閘門 → 綠 → InReview → review.sh。
 
     這裡用**真的** `apply.sh` 與真的 `gate.sh`:要問的正是「這幾支接得起來嗎」。
     """
@@ -1310,7 +1325,9 @@ class TheWholeLoop(AutoFixBase):
         self.assertEqual(self.kinds().count("memory.noted"), 1)
         ticket = self.load_ticket("1")
         self.assertEqual(ticket["state"], "InReview", "綠了轉 InReview,覆核 pass 不改 state")
-        self.assertIn("等覆核", self.inbox_list())
+        self.assertEqual(self.inbox_rows(), [], "綠了、覆核通過都只寫事件")
+        self.assertTrue(self.went_in_review())
+        self.assertIn("review.pass", self.kinds())
         with open(self.log, encoding="utf-8") as handle:
             self.assertIn("reviewer ran 1", handle.read(), "fixture reviewer 沒被叫到")
         review = ticket.get("review") or {}
@@ -1320,7 +1337,7 @@ class TheWholeLoop(AutoFixBase):
         self.assertTrue(os.path.isdir(wt))
 
     def test_no_review_leaves_the_review_to_a_human(self):
-        """`--no-review`:綠了停在等覆核,reviewer 不被叫、auto-fix 不准自己蓋覆核那一格。"""
+        """`--no-review`:綠了停在 InReview,reviewer 不被叫、auto-fix 不准自己蓋覆核那一格。"""
         self.set_worker(WORKER_FIXES)
         self.set_reviewer(REVIEWER_PASS)
         self.ticket_ready()
@@ -1332,7 +1349,8 @@ class TheWholeLoop(AutoFixBase):
         self.assertIsNone(ticket.get("review"), "auto-fix 不准自己蓋覆核那一格")
         with open(self.log, encoding="utf-8") as handle:
             self.assertNotIn("reviewer ran", handle.read())
-        self.assertIn("--no-review", self.inbox_list())
+        self.assertIn("--no-review", done.stdout)
+        self.assertEqual(self.inbox_rows(), [])
 
     def test_a_configured_rerun_command_runs_after_apply_and_emits_an_event(self):
         rerun = os.path.join(self.home, "fake-rerun.sh")
@@ -1384,7 +1402,8 @@ echo "rerun $AC_ROUND ticket=$AC_TICKET" >> "$AC_TEST_LOG"
                             "閘門自己的 rc 不因為下一輪修好了而變綠")
         self.assertEqual(self.worker_rounds(), ["worker ran round 2"], done.stdout)
         self.assertEqual(self.load_ticket("1")["state"], "InReview")
-        self.assertIn("等覆核", self.inbox_list())
+        self.assertEqual(self.inbox_rows(), [])
+        self.assertIn("gate.fail", self.kinds())
 
     def test_no_auto_fix_leaves_the_red_round_for_a_human(self):
         self.set_worker(WORKER_FIXES)
@@ -1415,7 +1434,10 @@ echo "rerun $AC_ROUND ticket=$AC_TICKET" >> "$AC_TEST_LOG"
         self.assertEqual(ticket["state"], "Blocked")
         self.assertEqual(ticket["owner"], "main")
         self.assertIn("ticket.attempt.failed", self.kinds())
-        self.assertIn("三輪耗盡", self.inbox_list())
+        rows = self.inbox_rows()
+        self.assertEqual([row["kind"] for row in rows], ["decision"],
+                         "三輪紅恰一頁 decision(auto-fix 那頁;ticket.py 只寫事件)")
+        self.assertIn("三輪耗盡", rows[0]["state"])
 
 
 class TheResultBlockAtTheEndOfEvidence(AutoFixBase):

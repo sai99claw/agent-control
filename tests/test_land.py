@@ -886,7 +886,7 @@ class LandTriesToClose(LandBase):
 
     def post(self, state, what="x"):
         done = self.run_py("scripts/inbox.py", "post", "--ticket", "1", "--run-id", "pre",
-                           "--kind", "auto-fix", "--state", state, "--what", what)
+                           "--kind", "decision", "--state", state, "--what", what)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
     def assert_landed_but_not_closed(self, done, reason):
@@ -904,6 +904,7 @@ class LandTriesToClose(LandBase):
         pages = [row for row in self.inbox_rows()
                  if row["ticket"] == "1" and "尚未關票" in row["state"]]
         self.assertEqual(len(pages), 1, self.inbox_rows())
+        self.assertEqual(pages[0]["kind"], "decision", "關不掉要人補齊:decision")
         self.assertIn(reason, pages[0]["what"], "inbox 那頁的 what 要帶 ticket.py 的原文")
         self.assertEqual(len(self.listed_for("1")), 1,
                          "A4:關不掉的票恰留一頁(尚未關票那頁)")
@@ -952,28 +953,27 @@ class LandTriesToClose(LandBase):
 
     # ------------------------------------------------------------ A4 收件匣
 
-    def test_a_closed_ticket_leaves_nothing_in_the_inbox(self):
-        """「等覆核」「覆核通過(等落地)」在 land 收票時收;關票成功時收「尚未關票」
-        並 post 一頁 Done(what=無)隨即收掉 —— 全部 by=land.sh。
+    def test_a_closed_ticket_leaves_exactly_one_done_brief(self):
+        """B3(D-032):關票成功那一手改叫 `inbox.py done` —— 該票 list 恰 1 頁、kind=done、
+        頁身有 subject 與落地 sha 前 12 碼;不自動 ack,它就是給主線讀的簡報。
 
-        **變異 M4**:close 成功但不 ack → 這一條紅。
+        **變異**:land 仍 post 舊的 Done what=無 那一頁 → 「恰 1 頁」紅。
         """
-        self.post("第 1 輪綠了,等覆核")
-        self.post("覆核通過(reviewer@fixture)", what="sh scripts/land.sh t1")
         self.ready(**CLOSABLE)
         done = self.land("t1-good")
         self.assertIn("已合併、已關票", done.stdout)
-        self.assertEqual(self.listed_for("1"), [], self.run_py("scripts/inbox.py", "list").stdout)
-        acked = self.acked()
+        landed = self.git("rev-parse", "main").strip()
+        self.assertEqual(len(self.listed_for("1")), 1,
+                         self.run_py("scripts/inbox.py", "list").stdout)
         rows = [row for row in self.inbox_rows() if row["ticket"] == "1"]
-        states = [row["state"] for row in rows]
-        self.assertIn("Done", states, "關票成功要留一頁 Done 在帳上")
-        for row in rows:
-            self.assertEqual(acked.get(row["name"], {}).get("by"), "land.sh", row)
-        self.assertEqual([row["what"] for row in rows if row["state"] == "Done"], ["無"])
+        self.assertEqual([(row["kind"], row["state"]) for row in rows], [("done", "Done")])
+        page = self.read(rows[0]["page"])
+        self.assertIn(self.load_ticket("1")["subject"], page)
+        self.assertIn(landed[:12], page)
+        self.assertEqual(self.acked(), {}, "done 頁不自動 ack")
 
     def test_pages_that_are_mains_to_do_are_left_alone(self):
-        """Blocked / 裁示 那幾類是主線的待辦,腳本不收(設計 ③ 丁)。"""
+        """Blocked / 裁示 那幾類是主線的待辦,腳本不收(設計 ③ 丁);關票只多一頁 done。"""
         self.post("Blocked(三輪耗盡)")
         self.post("覆核退回(1 條阻擋)", what="裁示")
         self.ready(**CLOSABLE)
@@ -981,7 +981,8 @@ class LandTriesToClose(LandBase):
         left = " ".join(self.listed_for("1"))
         self.assertIn("Blocked", left)
         self.assertIn("覆核退回", left)
-        self.assertEqual(len(self.listed_for("1")), 2)
+        self.assertEqual(len(self.listed_for("1")), 3)
+        self.assertEqual(self.acked(), {})
 
 
 class PhasesAndClosing(LandBase):

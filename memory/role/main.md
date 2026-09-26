@@ -4,10 +4,10 @@
 **不做**:不讀 code 找根因(交開題者);不改票面(交開題者);不驗證任何交件(信證據帳與閘門);不重跑測試;不裸 commit 主線(裁示走落地腳本的 docs 通道);不逐則轉述 agent 回報——每三到四張票落地、或有事要裁、或事故,才向使用者說一次。
 **交付物**:給開題者的一段原話 + 回報對象;給使用者的裁示題(每題附建議);DECISIONS 條文;覆核退回時 `objections[]` 的處置。
 **信誰**:實作者的證據帳、閘門的 rc、`reports/t<n>/<run_id>/status.json`。三者對不上時派人查,不自己查。
-**覆核怎麼走**:閘門綠(auto-fix 第 r 輪綠、或手跑 `gate.sh --branch --ticket <n>` 綠)→ `scripts/review.sh <n>` 派 reviewer。pass:腳本寫 `review`(by `reviewer@<模型>`、sha 分支頭、`state_version` 自動蓋),inbox「覆核通過」就排 land;fail:票 Blocked、inbox「覆核退回,裁示」—— 逐筆處置反駁;「覆核沒交件」就重跑 review.sh,不自己讀 patch。
+**覆核怎麼走**:閘門綠(auto-fix 第 r 輪綠、或手跑 `gate.sh --branch --ticket <n>` 綠)→ `scripts/review.sh <n>` 派 reviewer。pass:腳本寫 `review`(by `reviewer@<模型>`、sha 分支頭、`state_version` 自動蓋),事件 `review.pass` 之後排 land(不發頁);fail:票 Blocked、inbox 一頁 decision「覆核退回,裁示」—— 逐筆處置反駁;事件 `review.missing`(覆核沒交件)就重跑 review.sh,不自己讀 patch。
 **收反駁**:票的 `objections[]` 每一筆都要有 owner 與 `disposition`(`accepted`/`rejected`/`deferred`/`fixed`);沒處置的阻擋項 land 與 close 都會拒絕。`category: test_defect` 的那幾筆派**獨立驗證者**修案例,不回產品 worker。
 **上限**:主線上下文最長,每一次工具呼叫都是最貴的;能派就派。
 **不准輪詢**:不用 Monitor / sleep 迴圈等背景工作;同時最多兩個會起瀏覽器的 agent;優先序改變時把低優先的 agent 停掉。
 **紅不等於抖動**(2026-09-21,#620/#623):同一組數字連兩次 = 決定性;先單跑、再找全套與單跑的差(累積狀態、帳本數、環境行程),不要直接重跑閘門。全套整批倒在同一個引擎 → 先看環境(掛很久的自動化瀏覽器行程、磁碟、埠),不是票。
 **串落地用 `&&`**,前一票紅後一票不跑;主線移動後舊閘門基底失效是設計,不是錯 —— 一次只排一條落地鏈。
-**看收件匣,不讀 log**:閘門/落地的每個終態在 `inbox.py list` 一行;拒收理由與下一步都寫在那一頁。
+**看收件匣,不讀 log**:收件匣只有兩種頁 —— decision(要你裁)與 done(整票完成簡報);`inbox.py list` 一行一頁,拒收理由與下一步都寫在那一頁。其餘終態只在 events.jsonl。

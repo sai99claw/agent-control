@@ -171,6 +171,26 @@ class GateSh(Sandbox):
         return [line.strip() for line in self.read("calls.log", where=self.home).splitlines()
                 if line.strip()]
 
+    def inbox_rows(self):
+        path = os.path.join("reports", "inbox", "index.jsonl")
+        if not self.exists(path):
+            return []
+        return [json.loads(line) for line in self.read(path).splitlines() if line.strip()]
+
+    def test_a_green_or_attributable_red_gate_writes_no_page_only_events(self):
+        """B5(D-032):綠由 review.sh 接手、可歸因的紅由 auto-fix.sh 接手 —— 都不是主線
+        的事,只寫 gate.pass / gate.fail。**變異**:綠也發頁 → 這一條紅。"""
+        self.make_ticket(7, allowed_write_paths=["tests/*"])
+        done = self.gate("tests/test_ticket.py", "--ticket", "7")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.inbox_rows(), [])
+        self.assertIn("gate.pass", self.kinds())
+        self.write("tests/test_red.py", FAILING)
+        done = self.gate("tests/test_red.py", "--ticket", "7", "--no-auto-fix")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.inbox_rows(), [])
+        self.assertIn("gate.fail", self.kinds())
+
     # ------------------------------------------------------ 對照表挑得對不對
 
     def test_a_mapped_file_runs_the_modules_that_guard_it(self):
@@ -333,9 +353,10 @@ class GateSh(Sandbox):
         self.assertEqual(row["log"], self.gate_log_path(),
                          "log 那一格要指得出證據住在哪一份檔")
         self.assertIn("env.suspect", self.kinds())
-        pages = [name for name in os.listdir(os.path.join(self.repo, "reports", "inbox"))
-                 if name.endswith(".md")]
-        page = self.read(os.path.join("reports", "inbox", pages[0]))
+        # 不可歸因、不自動派 → 要人動手:恰 1 頁 kind=decision(D-032)。
+        rows = self.inbox_rows()
+        self.assertEqual([row["kind"] for row in rows], ["decision"])
+        page = self.read(rows[0]["page"])
         self.assertIn("Safari --automation", page)
         self.assertIn("引擎:safari", page)
         self.assertIn("同形訊息:", page)

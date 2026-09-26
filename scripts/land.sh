@@ -43,8 +43,9 @@
 # 沒有人在上面跑測試,所以其他票的分支閘門可以同時進行。
 #
 # ## 終態叫醒主線 + auto-fix(2026-09-21,D-015)
-# 每一條退出路徑除了狀態檔,還寫一則 `reports/inbox/<票號>-<run_id>.md`:哪張票、
-# 什麼狀態、要主線做什麼、去哪看。主線因此不必輪詢。
+# 每一條要人動手的退出路徑(拒收 / 串接衝突 / 全套紅 / 沒合進主線 / push 沒成功 / 關不掉)
+# 除了狀態檔,還寫一則 `reports/inbox/<票號>-<run_id>.md`(kind=decision,D-032):哪張票、
+# 什麼狀態、要主線做什麼、去哪看。關票成功寫一頁 done 簡報。主線因此不必輪詢。
 # 全套紅時預設派下一輪 worker(`--no-auto-fix` 才關),**但只在這一批剛好一張票的時候** ——
 # 一批裡哪一條紅對到哪一張票,要有票↔案例的對照才判得出來(能力表列著這一條未實作),
 # 而**猜錯的歸責比不歸責更貴**:它會讓一個新 worker 去修一張沒有壞的票。
@@ -54,8 +55,9 @@
 # **Done 的條件一條不放**:關得掉印「已合併、已關票」;關不掉照舊印「已合併、尚未關票」
 # 並寫一頁收件匣,理由是 `ticket.py close` 印出來的**原文**(這一支不自己重寫一份理由,
 # 也沒有任何放行旗標)。關不掉不改退出碼 —— 東西已經在主線上,落地這件事是成功的。
-# 收件匣的 ack 照 `scripts/inbox.py` 檔頭:收到票時收「等覆核」/「等落地」/「覆核通過」,
-# 關票成功時收「已合併、尚未關票」、post 一頁 Done(what=無)隨即收掉,一律 `--by land.sh`。
+# 關得掉就 `inbox.py done <票號> --landed <sha> --by land.sh` 發整票完成簡報(D-032:subject、
+# 落地 sha、做了什麼、覆核結論、cost 表),不自動 ack —— 它就是給主線讀的那一頁。
+# 這一支不 ack 任何一頁:D-032 之後腳本接著會做的終態只寫事件,沒有頁可收。
 set -u
 [ $# -ge 1 ] || { echo "land: 給我至少一條分支"; exit 2; }
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -255,22 +257,10 @@ inbox_all() {   # $1 = 狀態  $2 = 要主線做什麼  $3 = 去哪看
     [ -z "${AC_NO_INBOX:-}" ] || return 0
     for i in $IDS; do
         python3 "$ROOT/scripts/inbox.py" post --ticket "$i" \
-            --run-id "${LAND_RUN:-$STAMP-$$}" --kind land \
+            --run-id "${LAND_RUN:-$STAMP-$$}" --kind decision \
             --state "$1" --what "$2" --where "$3" >/dev/null 2>&1 \
             || echo "land: #$i 的收件匣寫不出來(不擋落地)" >&2
     done
-}
-
-# 腳本接著就會做掉的頁由腳本收(`scripts/inbox.py` 檔頭)。$1 = 票號,其餘 = state 含的字。
-inbox_ack() {
-    [ -z "${AC_NO_INBOX:-}" ] || return 0
-    _t=$1
-    shift
-    _states=""
-    for _s in "$@"; do _states="$_states --state $_s"; done
-    # shellcheck disable=SC2086
-    python3 "$ROOT/scripts/inbox.py" ack "$_t" $_states --by land.sh >/dev/null 2>&1 \
-        || echo "land: #$_t 的收件匣 ack 不掉(不擋落地)" >&2
 }
 
 # 全套紅了自動派下一輪 —— **只在剛好一張票的時候**(見檔頭)。
@@ -541,11 +531,6 @@ VFILES_PY
         continue
     fi
 done
-# 收到票了:「等覆核」/「等落地」(review.sh pass 那頁叫「覆核通過」)的下一步就是這一趟。
-# 拒收也照收 —— 拒收自己會寫一頁新的,主線要看的是那一頁,不是舊的「去 land」。
-for i in $IDS; do
-    inbox_ack "$i" 等覆核 等落地 覆核通過
-done
 if [ -n "$STOP" ]; then
     echo "land: 一條都沒有落地 —— 上面那幾條先處理掉再來。"
     echo "land: (要嘛一起進去、要嘛都不進:跳掉一條會生出一個沒有人要求過的組合。)"
@@ -661,12 +646,10 @@ for i in $IDS; do
     if [ "$CLOSE_RC" -eq 0 ]; then
         echo "land: #$i 已合併、已關票(ticket.py close --landed $(echo "$LANDED" | cut -c1-12))"
         if [ -z "${AC_NO_INBOX:-}" ]; then
-            python3 "$ROOT/scripts/inbox.py" post --ticket "$i" \
-                --run-id "${LAND_RUN:-$STAMP-$$}" --kind land --state Done --what 無 \
-                --where "git log --oneline -3 $MAIN" >/dev/null 2>&1 \
-                || echo "land: #$i 的收件匣寫不出來(不擋落地)" >&2
+            python3 "$ROOT/scripts/inbox.py" done "$i" --landed "$LANDED" --by land.sh \
+                --run-id "${LAND_RUN:-$STAMP-$$}" >/dev/null 2>&1 \
+                || echo "land: #$i 的完成簡報寫不出來(不擋落地)" >&2
         fi
-        inbox_ack "$i" 尚未關票 Done
         continue
     fi
     echo "land: #$i 已合併、尚未關票 —— ticket.py close 關不掉(rc=$CLOSE_RC),它說:"
@@ -676,7 +659,7 @@ for i in $IDS; do
     WHY=$(echo "$CLOSE_OUT" | awk 'NF { sub(/^[ \t]+/, ""); printf "%s%s", sep, $0; sep = " ／ " }')
     if [ -z "${AC_NO_INBOX:-}" ]; then
         python3 "$ROOT/scripts/inbox.py" post --ticket "$i" \
-            --run-id "${LAND_RUN:-$STAMP-$$}" --kind land --state "已合併、尚未關票" \
+            --run-id "${LAND_RUN:-$STAMP-$$}" --kind decision --state "已合併、尚未關票" \
             --what "ticket.py close 關不掉(rc=$CLOSE_RC):$WHY ／ 補齊後:python3 scripts/ticket.py close $i --landed $LANDED" \
             --where "git log --oneline -3 $MAIN" >/dev/null 2>&1 \
             || echo "land: #$i 的收件匣寫不出來(不擋落地)" >&2

@@ -207,6 +207,7 @@ class KindTable(unittest.TestCase):
                      "land.start", "land.refused", "land.pass", "land.fail",
                      "release.start", "release.pass", "release.fail",
                      "decision.asked", "decision.answered",
+                     "review.pass", "review.fail", "review.missing", "review.refused",
                      "memory.over_cap", "memory.consolidated", "memory.noted"):
             self.assertIn(kind, event.KINDS)
 
