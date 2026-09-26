@@ -394,7 +394,9 @@ class Acceptance7CloseNamesTheConcreteCheckCommand(Sandbox):
         `python3 scripts/verify-case.py check <n> --ref <base_sha> --candidate
         <review.sha>`(rc 不變)。"""
         base_sha = self.git("rev-parse", "main").strip()
-        self.make_ticket("1", verify_strings=["README:main"], base_sha=base_sha)
+        # `./`:冒號前那段要像路徑才會切成 {path, contains}(#37);光寫 `README` 沒有 `/`
+        # 也沒有副檔名,會被當成純字串整句去找,關票先卡在 verify,走不到這一句。
+        self.make_ticket("1", verify_strings=["./README:main"], base_sha=base_sha)
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "開票 #1")
         self.git("push", "-q", "origin", "main")

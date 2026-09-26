@@ -275,9 +275,14 @@ def tail(text, budget, pointer):
     return "\n".join([mark] + list(reversed(kept))), True
 
 
-def local_heading(rel, is_inbox):
+def local_heading(rel, is_inbox, canon=False):
     """專案層那幾格的小標。**標題本身就寫出路徑**:預算緊的時候被最後一刀砍掉的是
-    內容,而留下來的那一行要還說得出「這裡本來有一格、在哪個檔」。"""
+    內容,而留下來的那一行要還說得出「這裡本來有一格、在哪個檔」。
+
+    正本自己的暫存區(`canon`)不叫「本專案」:A 自己沒有專案層,那個字會讓讀的人
+    以為疊了第二層規矩。"""
+    if canon:
+        return "### 還沒併進主檔的暫存 `%s`(最後幾行)" % rel
     return "### 本專案自己寫的 `%s`%s" % (rel, "(最後幾行)" if is_inbox else "")
 
 
@@ -327,8 +332,13 @@ def pack(root, role, model, max_bytes, override=""):
     local_memory = read_text(os.path.join(root, local_model_rel)) if local_model_rel else ""
     # 暫存區:主檔不在也要讀得到 —— 一條寫進 inbox 還沒併檔的教訓,與併過檔的那一條
     # 一樣會擋到人。主檔不在就**不出聲**(那不是壞掉,是還沒有人寫過)。
+    # 來源**不綁 `local`**:暫存區永遠住在 `memory/`(這個 repo 自己寫的),而同步
+    # 刻意不帶它(D-021)—— 綁在 `local` 上的話,正本自己的 inbox 兩邊都沒有讀者。
+    inbox_mains = (os.path.join(local_dir("role"), card_name),
+                   os.path.join(local_dir("model"), os.path.basename(model_rel))
+                   if model_rel else "")
     inboxes = []
-    for main_rel in (local_card_rel, local_model_rel):
+    for main_rel in inbox_mains:
         if not main_rel:
             continue
         one = main_rel[:-len(".md")] + suffix
@@ -352,7 +362,8 @@ def pack(root, role, model, max_bytes, override=""):
     if local_memory:
         head.append("- `%s` —— 本專案對這個模型的補充(底下疊進來了)" % local_model_rel)
     for one, _text in inboxes:
-        head.append("- `%s` —— 本專案還沒併進主檔的暫存(包裡只帶最後幾行)" % one)
+        head.append("- `%s` —— %s還沒併進主檔的暫存(包裡只帶最後幾行)"
+                    % (one, "本專案" if local else ""))
     if local:
         for one in project_notes(root):
             head.append("- `%s` —— 本專案的共用備忘(只給路徑,要看就 grep)" % one)
@@ -377,7 +388,7 @@ def pack(root, role, model, max_bytes, override=""):
     local_rels = ([local_card_rel] if local_card else []) + \
                  ([local_model_rel] if local_memory else [])
     local_scaffold = "".join(local_heading(one, False) + "\n\n\n" for one in local_rels) \
-        + "".join(local_heading(one, True) + "\n\n\n" for one, _t in inboxes)
+        + "".join(local_heading(one, True, not local) + "\n\n\n" for one, _t in inboxes)
     base = (max_bytes - len(fixed.encode("utf-8")) - len(scaffold.encode("utf-8"))
             - len(local_scaffold.encode("utf-8")) - 260 - MEMORY_NOTE_BYTES
             - DELIVERY_NOTE_BYTES - 1)
@@ -439,12 +450,14 @@ def pack(root, role, model, max_bytes, override=""):
     if local_mem_cut:
         cut.append(local_model_rel)
 
-    # 暫存區:兩格平分那 600 B。砍了的要進「砍過」名單 —— 這一格常常正好排在最後,
-    # 而**默默消失的一格與從來沒有過的一格長得一樣**。
-    each = inbox_room // len(inboxes) if inboxes else 0
+    # 暫存區:兩格分那 600 B,前一格用剩的給下一格 —— 平分的話一行 250 B 的教訓
+    # 在兩格都有字時永遠放不進去,而那一格只剩一句「砍過」。砍了的要進「砍過」名單
+    # —— 這一格常常正好排在最後,而**默默消失的一格與從來沒有過的一格長得一樣**。
+    spare = inbox_room
     inbox_texts = []
-    for one, text in inboxes:
-        kept, was_cut = tail(text, each, "`%s`" % one)
+    for index, (one, text) in enumerate(inboxes):
+        kept, was_cut = tail(text, spare // (len(inboxes) - index), "`%s`" % one)
+        spare -= len(kept.encode("utf-8"))
         if was_cut:
             cut.append(one)
         inbox_texts.append((one, kept))
@@ -460,7 +473,7 @@ def pack(root, role, model, max_bytes, override=""):
         out += [local_heading(local_card_rel, False), local_card_text, ""]
     for one, kept in inbox_texts:
         if one.startswith(local_dir("role")):
-            out += [local_heading(one, True), kept, ""]
+            out += [local_heading(one, True, not local), kept, ""]
     out += ["## 共用規矩節錄", rules_text or "(一節都沒抽到)", ""]
     if memory or local_mem_text:
         out += ["## 你這個模型的記憶(節錄)"]
@@ -469,7 +482,7 @@ def pack(root, role, model, max_bytes, override=""):
             out += [local_heading(local_model_rel, False), local_mem_text, ""]
     for one, kept in inbox_texts:
         if not one.startswith(local_dir("role")):
-            out += [local_heading(one, True), kept, ""]
+            out += [local_heading(one, True, not local), kept, ""]
     text = "\n".join(out)
     # 最後一道:**組出來的整份**再量一次。上面的分配是估的,而估錯的那一次要在這裡
     # 被擋住,不是在呼叫者那裡變成一份超過上限的派工文。
