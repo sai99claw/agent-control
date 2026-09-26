@@ -1,0 +1,90 @@
+{
+  "id": "49",
+  "subject": "D-032 ①(T 接線前置):票 JSON 加 cost[] 由 auto-fix/review/land 寫;auto-fix 每輪收尾發 ticket.attempt.done;review.sh 也收 AwaitingReview;sync 帶 templates/dispatch-*.md 並退場 docs/roles/dispatcher.md",
+  "created": "2026-09-26T21:58:39+08:00",
+  "objective": "票 JSON 是儀表板一列(D-032):每次 headless 派工的 token 與時鐘由腳本寫進票的 cost[],拿不到的欄位是 null 不是 0;每一輪 attempt.start 都有配對的 attempt.done/failed;T 端接線(T#653)要的三個 A 側缺口收掉:review.sh 收 AwaitingReview、sync 帶 dispatch-reviewer.md / dispatch-verifier.md 到專案 templates/、sync 退場 docs/roles/dispatcher.md。",
+  "acceptance": [
+    "A1 ticket.py cost(新子指令):python3 scripts/ticket.py cost <n> --role worker --round 1 --model opus --by auto-fix.sh --from-envelope <claude -p --output-format json 的信封檔> [--wall-seconds N] 在 cost[] 尾端 append 一筆 {role, round, model, tokens_in, tokens_out, cache_write, cache_read, wall_seconds, by, at};tokens_in/out/cache_write/cache_read 取信封 usage.input_tokens / output_tokens / cache_creation_input_tokens / cache_read_input_tokens,wall_seconds 取 --wall-seconds、沒給才取 duration_ms/1000(四捨五入到整數)。單元(tests/test_ticket.py):用 reports/t48 那種真實信封形狀當 fixture → 四個 token 欄與 wall_seconds 等於 fixture 的數;期望值寫死在測試裡不從 ticket.py 算。變異:把 cache_write 讀成 cache_read_input_tokens → 紅。",
+    "A2 拿不到就 null 不猜(§5.5):信封檔不存在 / 不是 JSON / 沒有 usage → 那一筆照樣 append,四個 token 欄是 JSON null、wall_seconds 是 --wall-seconds 給的數或 null,rc=0,stderr 一行說信封讀不到;沒帶 --from-envelope 也一樣。單元:assertIsNone(row['tokens_in']) 且 assertNotEqual(row['tokens_in'], 0)。變異:解析失敗時預設 0 → 紅。",
+    "A3 cost 不動 state_version、不動 review:review 綁 state_version(SCHEMA §覆核),落地前寫成本若讓覆核過期 land 會拒;cost 子指令在 Lock 裡讀寫但 state_version 與 review 逐字不變,也不發 ticket.state 事件(發 ticket.cost 事件,event.py KINDS 加 ticket.cost,tests/test_event.py 那張表補這一族)。單元:寫 cost 前後 state_version 相等、review dict 相等。變異:cost 走 cmd_set 的 +1 路 → 紅。",
+    "A4 auto-fix.sh 每輪寫 worker 的 cost:worker 的 stdout 與 stderr 混寫在 worker-round<r>.log(auto-fix.sh:715 stdout=log, stderr=STDOUT),信封是 log 裡最後一行以 { 開頭且 json.loads 得出 type=result 的行;auto-fix 自己量 wall_seconds(派出前後 epoch 差)傳 --wall-seconds;role=worker、round=r、model=、by=auto-fix.sh。test_defect 那條路的驗證者同樣寫一筆 role=verifier。整合(tests/test_auto_fix.py,fixture worker 由 control_harness 提供):fixture worker 在 log 印一行信封 → 綠一輪後票 cost 恰 1 筆且 tokens_out 等於 fixture 印的數;fixture 不印信封 → 仍恰 1 筆、tokens_out 是 None、wall_seconds 是 int。變異:拿掉 auto-fix 的 cost 呼叫 → 「恰 1 筆」紅。",
+    "A5 review.sh 寫 reviewer 的 cost:review.sh 已把信封原樣存在 <rundir>/reviewer.json(review.sh:281–300),覆核者回來(pass / fail / 沒交件三種都算)後 ticket.py cost <n> --role reviewer --round <票 attempt> --model <MODEL> --by review.sh --from-envelope <rundir>/reviewer.json --wall-seconds <量到的>。整合(tests/test_review.py):REVIEWER_PASS fixture 印的信封 → cost 恰 1 筆 role=reviewer 且 tokens_out 等於 fixture 的數;寫在 set review 之後,且 land 對 review 的綁定檢查仍過(A3)。變異:改成寫在 set review 之前且 cost 走 +1 路 → 紅(A3 的斷言)。",
+    "A6 land.sh 寫一筆 role=land:push 成功後對批次每張票 ticket.py cost <n> --role land --round <票 attempt> --by land.sh --wall-seconds <land.start 到 push 的秒數>,model 與四個 token 欄為 null(land 沒有 LLM)。整合(tests/test_land.py 既有單票綠的案例加斷言):cost 末筆 role=land、model is None、wall_seconds 是 int;寫在 ticket.py close 之前 —— close 之後票是 Done,cost 照樣寫得進去(cost 不看 state)。變異:land 不寫 → 紅。",
+    "A7 attempt 事件配對:auto-fix.sh 每一輪在 round_once 收尾發 ev ticket.attempt.done --ticket <n> --attempt <r> --kv rc=<閘門 rc>(worker 交了 patch 且套上、閘門跑過 —— 綠或紅都發);worker 沒交 patch / 套不上 / 逾時 / 提反駁 → ev ticket.attempt.failed --attempt <r> --kv reason=<no-patch|apply-failed|timeout|objection>。今天 auto-fix.sh 只發 attempt.start(:700),done/failed 一個都沒發,heartbeat.sh:57 因此永遠把它配成未收工。整合(tests/test_auto_fix.py):綠一輪後 events.jsonl 有 attempt.start 與 attempt.done 各一筆且 attempt 相同;fixture 不交 patch → attempt.failed reason=no-patch。變異:拿掉 done 那一行 → 紅。docs/SESSION-START.md:36 那句(auto-fix 發)不改,因為它說的就是這個。",
+    "A8 review.sh 收 AwaitingReview:review.sh:149 的守衛改成 state 是 InReview 或 AwaitingReview 都派(T 的閘門綠寫的是 AwaitingReview,demo/test_control 釘著 4 處;A 自己仍寫 InReview),拒收訊息改成「不是 InReview / AwaitingReview」;不把 AwaitingReview 加進 ticket.py 的 STATES(A 的 set 不需要認它,review.sh 讀票 JSON 字面值)。整合(tests/test_review.py):make_ticket(state='AwaitingReview') → reviewer 被叫、review.verdict=pass;state=Running 仍 rc=2 且 reviewer_calls()==[]、inbox/stderr 含「不是 InReview / AwaitingReview」(tests/test_review.py:250 那條改成新字串)。變異:守衛只認 InReview → AwaitingReview 那條紅。",
+    "A9 sync 帶範本:sync-to-project.sh 新 TEMPLATE_LIST=\"dispatch-reviewer.md dispatch-verifier.md\",每支複製到 <DEST>/templates/<name> 並加與 copy_dir 相同形狀的「由 agent-control <sha> 同步產生」檔頭,名單寫進 <DEST>/templates/.sync-manifest,不在名單而在 manifest 的走既有「唸出來再刪」退場;--dry-run 只印不寫。整合(tests/test_sync_to_project.py):sync 後 DEST/templates/dispatch-reviewer.md 存在且第一行含「由 agent-control」;dry-run 不產生檔。變異:TEMPLATE_LIST 空 → 紅。",
+    "A10 sync 退場 dispatcher.md:sync-to-project.sh 新 RETIRED_ROLES=\"dispatcher.md\"(D-010 調度員退場),DEST/docs/roles/ 裡有這個檔就印「sync: 退場 <路徑>(D-010 調度員已退場)」再刪;不在 manifest 也不在 RETIRED_ROLES 的檔一個都不碰(tests/test_sync_to_project.py:162 那條照舊綠);--dry-run 只印不刪。整合:先放 DEST/docs/roles/dispatcher.md 與 DEST/docs/roles/mine.md → sync 後 dispatcher.md 不在、mine.md 還在、stdout 含「退場」與「dispatcher.md」。變異:RETIRED_ROLES 空 → 紅。",
+    "A11 SCHEMA.md 加 cost 列(群組:成本;欄位 cost (list of {role, round, model, tokens_in, tokens_out, cache_write, cache_read, wall_seconds, by, at});誰寫:auto-fix.sh / review.sh / land.sh;null 的意思:拿不到,不是 0);tickets/SCHEMA.md 是唯一說明處,不在 DISPATCH-TEMPLATE 再抄一份(D-018)。grep -c 'cost' tickets/SCHEMA.md ≥ 1。",
+    "A12 全套:cd agent-control && python3 -m unittest discover -s tests -p 'test_*.py' 綠;python3 -m unittest tests.test_no_project_names 綠(票檔與程式碼不得出現下游專案名)。"
+  ],
+  "in_scope": [
+    "scripts/ticket.py(cost 子指令)",
+    "scripts/auto-fix.sh(cost + attempt.done/failed)",
+    "scripts/review.sh(cost + AwaitingReview)",
+    "scripts/land.sh(cost role=land)",
+    "scripts/sync-to-project.sh(TEMPLATE_LIST + RETIRED_ROLES)",
+    "tickets/SCHEMA.md"
+  ],
+  "out_of_scope": [
+    "下游專案(tabby_pool)任何檔:T 端接線是 T 自己的票,這張只把 A 側缺口收掉",
+    "inbox 頁的種類與 done 簡報(D-032 ②,下一張);這張不改任何 inbox.py post 呼叫",
+    "驗證者第 1 輪平行派(C6,D-032 ③)",
+    "ticket.py STATES 不加 AwaitingReview;docs/WORKFLOW.md 狀態表不動",
+    "cost 的彙總 / 看板顯示 / 費用換算(total_cost_usd 不進票:同一模型的單價會變,票裡只留 token 與秒)"
+  ],
+  "depends_on": [
+    {
+      "id": "48",
+      "condition": "已落地(needs_verifier=false 的 close 路已在主線)"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/ticket.py",
+    "scripts/auto-fix.sh",
+    "scripts/review.sh",
+    "scripts/land.sh",
+    "scripts/sync-to-project.sh",
+    "scripts/event.py",
+    "tickets/SCHEMA.md",
+    "tests/test_ticket.py",
+    "tests/test_auto_fix.py",
+    "tests/test_review.py",
+    "tests/test_land.py",
+    "tests/test_sync_to_project.py",
+    "tests/test_event.py",
+    "tests/control_harness.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "6daa43d573f19ad21b0e81e7a342df304ea77dbe",
+  "state": "Ready",
+  "state_version": 5,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-032",
+    "D-028",
+    "D-017",
+    "D-018"
+  ],
+  "verify_strings": [
+    "def cmd_cost(",
+    "--from-envelope",
+    "ev ticket.attempt.done",
+    "AwaitingReview",
+    "RETIRED_ROLES=",
+    "TEMPLATE_LIST="
+  ],
+  "test_plan": "三層:單元 tests/test_ticket.py(cost 子指令、null、state_version 不動)、整合 tests/test_auto_fix.py / test_review.py / test_land.py / test_sync_to_project.py(各腳本真的呼叫 cost / 發事件 / 收 AwaitingReview / 帶範本 / 退場),全套 discover。每條驗收自帶變異,EVIDENCE 的 mutations 段逐條寫哪條紅、紅在哪一行。fixture 的期望值寫死在測試裡(信封的數字自己造),不從 ticket.py 算回去。",
+  "outline": "needs_verifier=false 理由:A 工具票、無產品碼;驗收全是 tests/ 的機械斷言,實作者寫案例並按票面指定的變異證紅,覆核者對照;不動 verify/ 案例所以無 tags。 D-032 拆三張的第 ①:先落基礎欄與 T 接線前置,T#653 接線票只等這一張。實測(D-033):(1) reports/t48/…/reviewer.json 是真信封,usage 有 input_tokens/output_tokens/cache_creation_input_tokens/cache_read_input_tokens,頂層有 duration_ms/total_cost_usd/modelUsage —— cost 欄的來源就是這四個 + duration_ms;(2) auto-fix.sh 只發 attempt.start(:700),整支 grep 不到 attempt.done;heartbeat.sh:57 靠 done/failed 配對;(3) review.sh:149 只認 InReview,git grep AwaitingReview 在 scripts/ 為 0;(4) sync-to-project.sh 的 copy_template 只帶 verify/_template_ticket.py,templates/*.md 一個都不帶;退場走 manifest,dispatcher.md 從沒進過 A 的 manifest 所以永遠退不了場 —— tests/test_sync_to_project.py:162 釘著「不在 manifest 不退場」,RETIRED_ROLES 是明名單不破它;(5) 舊行為釘住處:tests/test_review.py:250(「不是 InReview」字串)、tests/test_event.py:199(KINDS 表)都列進 allowed_write_paths。判斷:attempt.done 由派工方 auto-fix 每輪收尾發(與 SESSION-START:36 一致、heartbeat 按 attempt 配對),不由 land/close 發(close 已發 ticket.closed);cost 不走 set 的 state_version +1(否則落地前寫成本會讓 review 過期)。建議順序:A1–A3(ticket.py)→ A4/A7(auto-fix)→ A5/A8(review)→ A6(land)→ A9/A10(sync)→ A11。未實測:worker log 最後一行一定是信封(stderr 混寫,實際 log 可能尾端有 stderr 行)—— 所以 A4 寫「最後一行以 { 開頭且 type=result 的行」而不是「最後一行」。",
+  "feature": "agent-control 流程控制(D-032 儀表板化)",
+  "needs_verifier": false
+}

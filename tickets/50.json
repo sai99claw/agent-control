@@ -1,0 +1,84 @@
+{
+  "id": "50",
+  "subject": "D-032 ②:收件匣只剩 decision / done 兩種頁;done 簡報由 land.sh 關票後自動產(落地 sha、票 subject、做了什麼、覆核結論、cost 表);閘門綠等覆核 / 覆核通過 / 已合併尚未關票等其餘終態只寫 events.jsonl 不發頁",
+  "created": "2026-09-26T22:01:12+08:00",
+  "objective": "主線每票只收兩種頁(D-032):decision(要人裁:ticket-wrong / blocking 反駁、三輪紅、覆核 fail、閘門不可歸因、worker 沒交件 / patch 套不上、land 拒收或紅、關不掉的票)與 done(整票完成簡報)。腳本接著會做的事不再發頁 —— 那一類頁今天由 C4 的 ack 規則收,改成根本不發;inbox.py 拒收其他 kind,讓「只寫事件」是守衛不是約定。",
+  "acceptance": [
+    "B1 inbox.py post 只收兩種 kind:INBOX_KINDS = (\"decision\", \"done\");--kind 不在其中(含空)→ rc=2、stderr 一行點名允許的兩個、index.jsonl 與 markdown 都不寫。單元(tests/test_inbox.py):--kind gate → rc=2 且 list 為 0 筆;--kind decision → 1 筆。變異:守衛拿掉 → 紅。既有直接呼叫 post 的測試(tests/test_new_session.py:58 --kind gate、tests/test_land.py:880 --kind auto-fix、tests/test_board.py inbox_file 直接寫索引不經 post 不用改)改成 decision。",
+    "B2 inbox.py done <n> --landed <sha> --by land.sh(新子指令)產 done 頁:kind=done、state=Done、what=無;頁身依序:票 subject、落地 sha(--landed 前 12 碼)、做了什麼(review.note 非空取它,否則取 objective)、覆核結論(review.verdict + review.by;沒有 review 寫「無覆核」不寫空白)、cost 表(cost[] 每筆一列 role/round/model/tokens_in/tokens_out/cache_write/cache_read/wall_seconds/by,null 印「—」不印 0;末列合計只加非 null 的數並註明「n 筆缺數」;cost 空印「cost 空:沒有腳本寫過」)。單元:fixture 票 cost 兩筆其中一筆 tokens_in=null → 頁含「—」且合計等於另一筆;無 review → 含「無覆核」。變異:null 印成 0 → 紅;合計把 null 當 0 → 紅(合計數寫死在測試裡)。done 頁不自動 ack:它就是給主線讀的簡報。",
+    "B3 land.sh:ticket.py close 成功那一手改叫 inbox.py done <n> --landed <LANDED> --by land.sh(land.sh:651–658 那段);關不掉 → post --kind decision --state 已合併、尚未關票(what 仍是 ticket.py close 的原文,tests/test_land.py:837–900 那條照舊);inbox_all 的五頁(拒收 / 串接衝突 / 全套紅 / 沒合進主線 / push 沒成功)改 --kind decision;land.sh:546 的 inbox_ack '等覆核 等落地 覆核通過' 與 :658 的 inbox_ack '尚未關票 Done' 整段刪(那幾頁不再存在;tests/test_land.py:947–1009 那兩條改成斷 done 頁的內容與「該票 list 恰 1 頁且 kind=done」)。整合:單票綠 land 後 inbox list 對該票恰 1 筆、kind=done、頁身含 subject 與落地 sha 前 12 碼。變異:land 仍 post Done what=無 的舊頁 → 「恰 1 筆」紅。",
+    "B4 auto-fix.sh:post 只在 block() 的那幾處留下並改 --kind decision(紅了但沒有歸因 :439/:895、三輪耗盡仍紅 :448/:901、驗證者沒交出 patch-verify :573、worker 提反駁 :778、worker 沒交出 patch :789、patch 套不上 :799、案例已修仍紅 :868);綠了等覆核那兩處(:850 / :855)刪,只留 stdout 一行與既有事件(ticket.py set state InReview 已發 ticket.state;gate.pass 由 gate 發)。整合(tests/test_auto_fix.py:862–878、1193–1216、1226–1290 三條改):綠一輪後該票 inbox list 為 0 筆、events.jsonl 有 ticket.state 值 InReview 的那筆;三輪紅 → 恰 1 筆 kind=decision。變異:綠了照發頁 → 「0 筆」紅。",
+    "B5 gate.sh inbox_post(:416–450):閘門綠與閘門紅(可歸因)不發頁;只有 ENV_SUSPECT=1 那一頁留下,--kind decision。整合(tests/test_gate.py:336–338 那條改):--ticket 綠 → reports/inbox 該票 0 頁且 events.jsonl 有 gate.pass;env_suspect fixture → 1 頁 kind=decision。變異:綠也發頁 → 紅。",
+    "B6 review.sh 四頁改三不發一發:覆核沒派成 (:142) / 覆核沒交件 (:338) / 覆核通過 (:352) 不發頁,各發事件 review.refused / review.missing / review.pass(event.py KINDS 加 review.pass / review.fail / review.missing / review.refused,tests/test_event.py:199 那張表補);覆核退回 (:400) 改 --kind decision,decision.asked 事件照舊。review.sh:240–242 的 ack 等覆核那段刪。整合(tests/test_review.py 既有 pass / fail / 沒交件三條各加斷言):pass → inbox 0 筆且 events 有 review.pass;fail → 恰 1 筆 kind=decision;沒交件 → 0 筆且 events 有 review.missing。變異:pass 照發頁 → 紅。",
+    "B7 inbox.py 檔頭「腳本做掉的頁由腳本 ack」那段改寫成 D-032 的規則(兩種 kind、誰發、done 頁誰讀),ack --by 與 --state 旗標保留(舊頁還在索引裡,主線要能收);docs/SESSION-START.md 與 memory/role/main.md 提到「等覆核」「收件匣三類頁」的句子改成兩種頁;docs/WORKFLOW.md 提到 inbox 頁的那幾行同步。grep -c '等覆核' scripts/land.sh scripts/review.sh scripts/auto-fix.sh 各 = 0。",
+    "B8 全套:cd agent-control && python3 -m unittest discover -s tests -p 'test_*.py' 綠;python3 -m unittest tests.test_no_project_names 綠。"
+  ],
+  "in_scope": [
+    "scripts/inbox.py(INBOX_KINDS 守衛 + done 子指令)",
+    "scripts/land.sh / auto-fix.sh / gate.sh / review.sh 的 post 呼叫",
+    "scripts/event.py KINDS 加 review.* 四族"
+  ],
+  "out_of_scope": [
+    "下游專案(tabby_pool)任何檔",
+    "cost[] 的寫入(① #49 做;這張只讀它印表)",
+    "驗證者第 1 輪平行派(C6,③)",
+    "既有未 ack 的舊頁不做遷移(D-030 尾巴凍結);inbox.py list / show / ack 的行為不動",
+    "status.py 看板不改(它讀票 JSON,cost 顯示另開票)"
+  ],
+  "depends_on": [
+    {
+      "id": "49",
+      "condition": "已落地(done 頁的 cost 表讀 #49 寫的 cost[];auto-fix.sh / review.sh / land.sh 三支同檔,先後落避免重套)"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/inbox.py",
+    "scripts/land.sh",
+    "scripts/auto-fix.sh",
+    "scripts/gate.sh",
+    "scripts/review.sh",
+    "scripts/event.py",
+    "tests/test_inbox.py",
+    "tests/test_land.py",
+    "tests/test_auto_fix.py",
+    "tests/test_gate.py",
+    "tests/test_review.py",
+    "tests/test_event.py",
+    "tests/test_new_session.py",
+    "tests/test_board.py",
+    "tests/control_harness.py",
+    "docs/SESSION-START.md",
+    "docs/WORKFLOW.md",
+    "memory/role/main.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "6daa43d573f19ad21b0e81e7a342df304ea77dbe",
+  "state": "Ready",
+  "state_version": 5,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-032",
+    "D-015",
+    "D-018"
+  ],
+  "verify_strings": [
+    "INBOX_KINDS = (",
+    "def cmd_done_brief(",
+    "--kind decision",
+    "review.missing"
+  ],
+  "test_plan": "單元 tests/test_inbox.py(kind 守衛、done 頁的 null/合計/無覆核)、整合 tests/test_auto_fix.py / test_gate.py / test_review.py / test_land.py(每支腳本各一條「綠路 0 頁 + 事件在」與一條「裁示路恰 1 頁 kind=decision」)、全套 discover。期望值(合計數、頁裡的字串)寫死在測試裡。每條驗收的變異在 EVIDENCE mutations 段逐條寫。",
+  "outline": "needs_verifier=false 理由:A 工具票、無產品碼;驗收是 tests/ 機械斷言 + grep,實作者寫案例、覆核者對照;不動 verify/ 案例所以無 tags。 D-032 拆三張的第 ②:頁的種類。實測(D-033):今天發頁的地方共 4 支 —— auto-fix.sh post() 11 處(其中綠了等覆核 2 處)、gate.sh inbox_post 3 種 state、review.sh 4 種、land.sh inbox_all 5 種 + Done + 尚未關票;舊行為釘住處:tests/test_auto_fix.py:878/1216/1290(等覆核)、tests/test_land.py:172/890–900/947–964/1009(尚未關票、Done what=無、ack 等覆核)、tests/test_gate.py:336–338(綠也有一頁)、tests/test_review.py 各頁 state 斷言、tests/test_new_session.py:58 與 tests/test_land.py:880 直接 post --kind gate/auto-fix 都列進 allowed_write_paths。判斷:(a) 用 inbox.py 拒收其他 kind 當守衛,而不是只刪呼叫 —— 下一支新腳本不會再長回舊頁;(b) 「決定頁」的判準 = 票會轉 Blocked / 需要人動手才會前進,所以 land 的拒收 / 紅 / push 失敗 / 關不掉也算 decision,不只 D-032 列的四種;(c) done 頁不自動 ack(C4 的「post 即 ack」被 D-032 取代:它就是完成簡報);(d) 「做了什麼」取 review.note(覆核者已讀過分支),沒有才退回 objective,不另叫 LLM 寫摘要(多一次 opus)。順序建議:B1/B2(inbox.py)→ B6(review.sh 最小)→ B5(gate)→ B4(auto-fix)→ B3(land)→ B7。未實測:review.sh 是否已對 pass 發過事件(grep 只看到 agent.done 與 decision.asked)—— 所以 B6 明寫加四族。",
+  "feature": "agent-control 流程控制(D-032 儀表板化)",
+  "needs_verifier": false
+}
