@@ -1,7 +1,7 @@
 #!/bin/sh
 # 開 session 的固定動作,跑一遍 — `docs/SESSION-START.md`。
 #
-#   sh scripts/new-session.sh <role> <model> [--no-event]
+#   sh scripts/new-session.sh <role> <model> [--no-event] [--session <id>]
 #   sh scripts/new-session.sh main fable
 #
 # 為什麼要有這一支:那一節是一張清單,而**一張要靠人記得照做的清單,漏掉一項時
@@ -10,19 +10,27 @@
 # 它**只讀不寫**,唯一的寫入是最後那一筆 `session.start` 事件 —— 控制台從此看得到你。
 # `--no-event` 連那一筆都不發:resume / compact 後 hook 重印這一頁(`session-hook.sh`),
 # 那不是新的 session,多一筆 start 會讓 heartbeat 以為有一個死在半路。
+# `--session <id>`(#45):start 與 end 帶同一個 id,heartbeat 才配得起來(兩次 emit 是
+# 兩個 pid)。沒給就自己產一個並印出來,結語那句 session.end 帶的就是它。
 set -u
-USAGE="new-session: 要 <role> <model> [--no-event],例:sh scripts/new-session.sh main fable"
+USAGE="new-session: 要 <role> <model> [--no-event] [--session <id>],例:sh scripts/new-session.sh main fable"
 [ $# -ge 2 ] || { echo "$USAGE"; exit 2; }
 ROLE=$1
 MODEL=$2
 shift 2
 EMIT=1
-for arg in "$@"; do
-    case "$arg" in
+SID=""
+while [ $# -gt 0 ]; do
+    case "$1" in
         --no-event) EMIT=0 ;;
-        *) echo "$USAGE(不認得 $arg)"; exit 2 ;;
+        --session)
+            [ $# -ge 2 ] && [ -n "$2" ] || { echo "$USAGE(--session 少了值)"; exit 2; }
+            SID=$2; shift ;;
+        *) echo "$USAGE(不認得 $1)"; exit 2 ;;
     esac
+    shift
 done
+[ -n "$SID" ] || SID=$(date +%Y%m%d-%H%M%S)-$$
 # 根:`AC_ROOT` 有設就用,否則往上找 board/config.json(與 heartbeat.sh 同一種)——
 # 同步到專案後這一支住在 scripts/control/,「上一層」不再是根。
 _ac_root() {
@@ -69,7 +77,7 @@ fi
 
 if [ "$EMIT" -eq 1 ]; then
     say "發事件:控制台從此看得到你"
-    python3 "$AC/event.py" emit session.start --role "$ROLE" --model "$MODEL"
+    python3 "$AC/event.py" emit session.start --role "$ROLE" --model "$MODEL" --session "$SID"
 else
     say "發事件:略過(--no-event —— 同一個 session 重印這一頁,不是新的開場)"
 fi
@@ -104,4 +112,6 @@ case "$ROLE" in
         ;;
 esac
 echo
-echo "結束前:交接寫 docs/HANDOFF.md、發 session.end、關票前先 ticket.py verify。"
+echo "結束前:交接寫 docs/HANDOFF.md、關票前先 ticket.py verify。"
+echo "session: $SID"
+echo "結束前:python3 ${AC#"$ROOT"/}/event.py emit session.end --role $ROLE --session $SID"

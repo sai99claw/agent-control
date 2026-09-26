@@ -72,6 +72,21 @@ class Heartbeat(Sandbox):
         self.assertIn("pid=11", done.stdout)
         self.assertNotIn("pid=22", done.stdout)
 
+    def test_a_session_is_matched_by_its_session_id_not_its_pid(self):
+        """#45 B3:start 與 end 是兩次 `event.py emit`、兩個 pid —— 拿 pid 配永遠配不上,
+        每個 session 都被當成沒回來。同一個 `session` 欄就是同一個 session。
+
+        **變異 M4**:`key_of` 忽略 `session` 欄 → 這一條紅。
+        """
+        self.events_file(
+            {"ts": ago(20000), "kind": "session.start", "pid": 1, "role": "main",
+             "session": "x"},
+            {"ts": ago(10), "kind": "session.end", "pid": 2, "role": "main",
+             "session": "x"})
+        done = self.beat()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("沒有到期的租約", done.stdout)
+
     def test_a_land_is_matched_by_its_own_stamp(self):
         self.events_file(
             {"ts": ago(9000), "kind": "land.start", "pid": 1, "stamp": "A"},

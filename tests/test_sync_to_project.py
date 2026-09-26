@@ -324,12 +324,20 @@ class ASameNamedForkInTheProjectIsNamed(unittest.TestCase):
             handle.write(own_verify)
 
     def test_a_different_verify_py_is_named(self):
-        """**變異**:把分岔檔那一段的 `echo` 拿掉 → 這一條紅。"""
+        """**變異**:把分岔檔那一段的 `echo` 拿掉 → 這一條紅。
+
+        #45 B1:第三行是下一步,而照舊句「刪掉其中一份」刪 control 那一份會弄斷
+        `verify-case.py` 的 `import verify`。**變異 M1**:第三行改回舊句 → 這一條紅。
+        """
         with tempfile.TemporaryDirectory() as d:
             self.project(d, "#!/usr/bin/env python3\nprint('專案自己的 verify')\n")
             r = sync(d, "--dry-run")
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn(self.FORK, r.stdout.splitlines())
+            lines = r.stdout.splitlines()
+            self.assertIn(self.FORK, lines)
+            at = lines.index(self.FORK)
+            self.assertIn("內容不同", lines[at + 1])
+            self.assertIn("不要刪 scripts/control/", lines[at + 2])
 
     def test_an_identical_verify_py_is_not_named(self):
         """內容一樣就不是分岔 —— 對它喊是一句假警報(§5.7)。

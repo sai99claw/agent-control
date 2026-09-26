@@ -103,6 +103,26 @@ class NewSession(Sandbox):
         self.assertIn("memory/role/main.md", self.start("main", "fable").stdout)
         self.assertIn("memory/role/implementer.md", self.start("worker", "opus").stdout)
 
+    def test_the_closing_line_ends_the_same_session_it_started(self):
+        """#45 B3:沒給 `--session` 就自己產一個 SID、印出來,start 帶它,結語那句
+        session.end 也帶它 —— 照抄那句,heartbeat 才配得起來。"""
+        done = self.start("worker", "opus")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        rows = [row for row in self.events() if row["kind"] == "session.start"]
+        self.assertEqual(len(rows), 1)
+        sid = rows[0].get("session")
+        self.assertTrue(sid, "session.start 沒帶 session id")
+        self.assertIn("session: %s" % sid, done.stdout.splitlines())
+        self.assertIn("結束前:python3 scripts/event.py emit session.end --role worker "
+                      "--session %s" % sid, done.stdout.splitlines())
+
+    def test_a_given_session_id_is_used(self):
+        done = self.start("main", "fable", "--session", "abc")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        rows = [row for row in self.events() if row["kind"] == "session.start"]
+        self.assertEqual([row.get("session") for row in rows], ["abc"])
+        self.assertIn("--session abc", done.stdout)
+
     def test_an_unknown_flag_is_a_usage_error_and_emits_nothing(self):
         done = self.start("main", "fable", "--no-evnet")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)

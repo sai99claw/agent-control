@@ -292,6 +292,44 @@ class GateSh(Sandbox):
         self.assertEqual(self.ran(), ["test_check_stale"], "對得到的那一支要照跑")
         self.assertIn("assets/logo.png", done.stdout)
 
+    # ------------------ 對照表沒列、但同票改了 tests:推給那幾支守(#45 B2)
+
+    def test_an_unmapped_file_with_a_green_test_in_the_diff_is_guarded_by_it(self):
+        """**變異 M2**:把推導那一手拿掉 → 這一條紅(rc 3)。
+        **變異 M3**:推得到也退 3 → 這一條紅。"""
+        self.write("scripts/zzz.sh", "echo zzz\n")
+        self.write("tests/test_zzz.py", PASSING % "test_zzz")
+        done = self.gate("--branch")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("依同票 tests 改動推到", done.stdout)
+        self.assertIn("scripts/zzz.sh", done.stdout)
+        self.assertNotIn("對不到任何測試模組", done.stdout)
+        self.assertEqual(self.ran(), ["test_zzz"])
+
+    def test_an_unmapped_file_with_a_red_test_in_the_diff_is_red_by_the_test(self):
+        """推得的守衛紅了,rc 是測試的紅,不是 3;狀態檔 NOTE 記下推得的對照。"""
+        self.make_ticket(7, allowed_write_paths=["tests/*", "scripts/zzz.sh"])
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "票 #7")
+        self.write("scripts/zzz.sh", "echo zzz\n")
+        self.write("tests/test_zzz.py", FAILING)
+        done = self.gate("--branch", "--ticket", "7", "--no-auto-fix")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertIn("FAILED", done.stdout)
+        self.assertIn("依同票 tests 改動推到", done.stdout)
+        self.assertIn("推得的對照:scripts/zzz.sh→test_zzz",
+                      self.status_of(7, kind="gate").get("note", ""))
+
+    def test_an_unmapped_file_with_no_test_in_the_diff_still_refuses(self):
+        """推不到就照舊:退 3、逐檔列出。**變異 M3** 下這一條仍綠。"""
+        self.write("scripts/zzz.sh", "echo zzz\n")
+        done = self.gate("--branch")
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertIn("gate:   scripts/zzz.sh", done.stdout.splitlines())
+        self.assertIn("對不到任何測試模組", done.stdout)
+        self.assertNotIn("依同票 tests 改動推到", done.stdout)
+
     # ------------------------------------------------------------- 介面本身
 
     def test_full_runs_the_whole_discover_and_is_green(self):

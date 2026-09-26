@@ -53,10 +53,12 @@ class HookSandbox(Sandbox):
         shutil.copy(os.path.join(SCRIPTS, "session-hook.sh"), target)
         os.chmod(target, 0o755)
 
-    def hook(self, source="startup", cwd=None, **env):
+    def hook(self, source="startup", cwd=None, session_id=None, **env):
         cwd = cwd or self.repo
-        payload = json.dumps({"source": source, "cwd": cwd,
-                              "hook_event_name": "SessionStart"})
+        payload = {"source": source, "cwd": cwd, "hook_event_name": "SessionStart"}
+        if session_id is not None:
+            payload["session_id"] = session_id
+        payload = json.dumps(payload)
         return subprocess.run(
             ["sh", os.path.join(self.repo, "scripts", "session-hook.sh")],
             cwd=cwd, env=self.env(**env), input=payload,
@@ -87,6 +89,14 @@ class A2TheMainLinePage(HookSandbox):
         rows = self.starts()
         self.assertEqual(len(rows), 1)
         self.assertEqual((rows[0]["role"], rows[0]["model"]), ("main", "fable"))
+
+    def test_a2_the_hook_s_session_id_goes_on_the_start(self):
+        """#45 B3:hook JSON 的 `session_id` 轉給 new-session.sh,start 那一列帶它 ——
+        之後的 session.end 帶同一個 id,heartbeat 才配得起來。"""
+        done = self.hook("startup", session_id="abc")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual([row.get("session") for row in self.starts()], ["abc"])
+        self.assertIn("--session abc", done.stdout)
 
 
 class A3ACopyStaysSilent(HookSandbox):

@@ -128,6 +128,17 @@ class Emit(Sandbox):
         self.assertEqual(row["sha"], "abc1234")
         self.assertEqual(row["note"], "兩張一起進去")
 
+    def test_session_lands_as_a_field_and_is_absent_when_not_given(self):
+        """#45 B3:heartbeat 拿 `session` 欄配 start / end。沒給就沒有這個鍵 ——
+        空字串的鍵會被當成一個 id,讓所有沒帶 id 的列配成同一個 session。"""
+        done = self.event("emit", "session.start", "--role", "main", "--session", "x")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        done = self.event("emit", "session.start", "--role", "main")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        first, second = self.events()
+        self.assertEqual(first["session"], "x")
+        self.assertNotIn("session", second)
+
     def test_kv_without_an_equals_sign_is_refused(self):
         done = self.event("emit", "land.pass", "--kv", "stamp")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)

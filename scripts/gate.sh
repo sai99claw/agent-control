@@ -881,11 +881,25 @@ if [ "$want_full" -eq 1 ]; then
 fi
 
 if [ "$want_branch" -eq 1 ]; then
+    diff_tests=""
     for f in $(git -C "$ROOT" diff --name-only "$MAIN...HEAD"; \
                git -C "$ROOT" diff --name-only HEAD; \
                git -C "$ROOT" ls-files --others --exclude-standard); do
         map "$f"
+        case "$f" in tests/test_*.py) diff_tests="$diff_tests $(basename "$f" .py)" ;; esac
     done
+    # 對照表沒列的檔(#45 B2):同一份 diff 改到的 tests/test_*.py 就是它的守衛 ——
+    # 出聲、照那幾支跑、rc 照測試結果。推不到(diff 沒有 tests)才走下面退 3 那一段。
+    if [ -n "$unmapped" ] && [ -n "$diff_tests" ]; then
+        diff_tests=$(echo "$diff_tests" | tr ' ' '\n' | sed '/^$/d' | sort -u | tr '\n' ' ' | sed 's/ *$//')
+        for f in $unmapped; do
+            echo "gate: 對照表沒列 ${f},依同票 tests 改動推到 ${diff_tests}(請補 scripts/gate.sh 對照表)"
+            NOTE="$NOTE 推得的對照:${f}→${diff_tests}。"
+        done
+        # shellcheck disable=SC2086
+        add $diff_tests
+        unmapped=""
+    fi
 fi
 [ "$want_base" -eq 1 ] && add $BASE
 
