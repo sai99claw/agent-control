@@ -26,6 +26,10 @@
 2. **摘要與建議順序** —— 寫進票的 `outline` 欄(`ticket.py create --outline '<≤300 字>'`)。
    **不要只回在對話裡**:對話裡那一份看板讀不到,而下一個接手的人手上只有票。
 
+交完兩樣,**最後一步自己提交票檔**(D-025 ③;主線不再替你 commit):
+`sh scripts/land.sh docs "tickets: #<n> 開票" tickets/<n>.json` ——
+只准自己那張票檔、只准 `land.sh docs` 這一個入口(鎖與前綴白名單都在它裡面),裸 commit 照舊禁止。
+
 ## 票面的機械格要能被機器驗
 - `verify_strings` 是落地時 `git grep` 的**內容**字串,檔名不算。
 - `tags` 只能用 `verify/TAGS.md`(與 `verify/TAGS.d/`)登記過的。
