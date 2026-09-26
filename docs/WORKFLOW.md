@@ -115,14 +115,14 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
    再走 `apply.sh` → `gate.sh --branch --ticket`。每輪結束 `scripts/ticket.py round <n> <第幾輪> --red|--green`。
    專案自訂的 `gate.rerun_cmd` 會在 worktree 內執行,並收到 `AC_ROOT`(主 repo)、
    `AC_WT`(這張票的 worktree)、`AC_ROUND`(本輪)與 `AC_TICKET`(票號)。
-   **綠了停在 `InReview`** —— 覆核不自動。
+   **綠了轉 `InReview`,再叫 `scripts/review.sh <票號>` 派覆核**(`--no-review` 關;#42,D-025 ②)。
 4. **三輪耗盡不是一句話,是一個狀態轉換**:`round` 在第 `retry_limit+1` 輪仍紅時把票轉 **Blocked**、`owner` 設成 `main`,並發 `ticket.attempt.failed`。舊規則只寫「報主線」,而「報了」與「沒報」在票上長得一樣。
 5. 停下來報主線的**三種**情況,每一種都寫一則收件匣:worker 判斷**票寫錯 / 需要裁示**
    (它在 EVIDENCE 寫一行 `OBJECTION: <類別> <理由>`,`auto-fix.sh` 把它記成 `objections[]` 的一筆);
    三輪耗盡;**failures 沒有歸因**(rc 非零卻一條紅都解析不出來 —— 那一種最像「沒有紅」,
    而派下去的 worker 會拿著空紅榜去猜)。
    > ⛔ **「紅在票沒動到的檔 → 疑似他票」這一條拿掉了**(D-014)。`failures.file` 取的是 traceback 最後一個檔案,經常是既有測試或共用 helper;而產品改壞行為,本來就會紅在完全沒修改的測試檔。歸責改用**同條件的 baseline / candidate 對照**(`scripts/verify-case.py check`:同一份案例在乾淨主線與 candidate 上各跑一次)。**未完成歸因前,票由原 owner 持有** —— 不因為某個檔沒被這張票改過就轉成別人的問題。
-6. 覆核不自動:主線讀 patch 把 `review` 記進票(工具自動把票的 `state_version` 蓋進去),land 才收。
+6. 覆核由 `review.sh` 派(auto-fix 第 r 輪綠、手跑 `gate.sh --branch --ticket` 綠兩處觸發,主線不讀 patch):reviewer pass ⇒ 腳本 `ticket.py set review`(by `reviewer@<模型>`、sha 分支頭,`state_version` 工具自動蓋),land 才收;fail ⇒ 每條理由一筆 blocking 反駁、票轉 Blocked、inbox「覆核退回,裁示」;沒交件(沒有 `## result` / JSON 壞 / 逾時 / verdict 不是 pass|fail)⇒ 不寫 review、票留 InReview、inbox「覆核沒交件」。
 
 ## 實作者的反駁怎麼被收下(2026-09-21,D-014)
 worker 說「這張票寫錯了」以前只是一句話:沒有結構化類別、沒有收件者、沒有處置期限,而**沒有人收的反駁與沒有反駁長得一樣**。現在它是票上的一格:
@@ -161,6 +161,7 @@ worker 說「這張票寫錯了」以前只是一句話:沒有結構化類別、
 | land 前檢查 `verify.files` 都在分支上 | **已實作**(2026-09-21,D-015) | `scripts/land.sh` 第 5 步,缺了 rc=4 |
 | 用 headless `claude -p` **自動起新 worker**(三輪上限) | **已實作**(2026-09-22;gate / 單票 land 預設開,`--no-auto-fix` 關) | `scripts/auto-fix.sh <票號>`;`gate.sh`、`land.sh` |
 | **第 1 輪自動**:票 Ready 且沒有狀態檔 → 起第 1 輪 worker(發 `ticket.attempt.start`、轉 Running),apply → gate → InReview → inbox 與第 2 輪起同一段;非 Ready 指名 state 停下 | **已實作**(2026-09-26,#40,D-025 C1) | `scripts/auto-fix.sh <票號>`(`round_once 1`);只看派工文 `--dry-run --round 1` |
+| **reviewer 自動**:閘門綠、票轉 InReview → headless reviewer(`reviewer.command`,唯讀白名單);pass 由腳本寫 `review`,fail 逐條 blocking 反駁 + Blocked,沒交件不算 pass | **已實作**(2026-09-26,#42,D-025 ②) | `scripts/review.sh <票號>`;`auto-fix.sh` 綠(`--no-review` 關)與 `gate.sh --branch --ticket` 手跑綠 |
 | **終態叫醒主線**(gate done / auto-fix 停 / land done / 轉 Blocked)+ 禁止輪詢 | **已實作**(2026-09-21,D-015) | `scripts/inbox.py post\|list\|show\|ack`;`reports/inbox/<票號>-<run_id>.md`;`new-session.sh` 開場印 |
 | 同一輪的回歸**只跑一次**(worker / 驗證者 / gate 共用) | **已實作**(2026-09-21,D-015) | `scripts/verify.py` 的 `reports/t<n>/<run_id>/verify-<雜湊>.log`(雜湊含標籤 + sha);`--no-cache` 關 |
 | **按角色裁切、帶版本的規則包** | **已實作**(2026-09-21,D-015) | `scripts/rules.py pack <角色> --model <模型>`(≤ 4 KB,砍掉的部分會指名) |

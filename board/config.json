@@ -47,6 +47,10 @@
     "command": "claude -p --model opus --permission-mode acceptEdits --allowedTools Read Edit Write Glob Grep Bash --output-format json",
     "timeout_seconds": 3600
   },
+  "reviewer": {
+    "command": "claude -p --model opus --allowedTools Read Glob Grep Bash --output-format json",
+    "timeout_seconds": 1800
+  },
   "apply": {
     "regen_cmd": ""
   },

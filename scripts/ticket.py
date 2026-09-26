@@ -291,7 +291,7 @@ USAGE = {
     "freeze": "scripts/ticket.py freeze <id> --reason … --criterion …",
     "round": "scripts/ticket.py round <id> <第幾輪> [--red|--green]",
     "result": ("scripts/ticket.py result <EVIDENCE> <輸出.json> "
-               "--ticket <id> --role worker|verifier --round N"),
+               "--ticket <id> --role worker|verifier|reviewer --round N"),
     "objection": ("scripts/ticket.py objection <id> --line \"OBJECTION: …\" "
                   "--evidence <EVIDENCE>"),
 }
@@ -360,7 +360,7 @@ def known_flags(verb):
         return [("--landed", FLAG_NOTE.get("--landed", ""), False, False)]
     if verb == "result":
         return [("--ticket", "票號", False, True),
-                ("--role", "worker 或 verifier", False, True),
+                ("--role", "worker / verifier / reviewer(review.sh 抽覆核者的那一塊)", False, True),
                 ("--round", "第幾輪", False, True)]
     if verb == "objection":
         return [("--line", "EVIDENCE 裡那一行 `OBJECTION: <類別> <理由>`", False, True),

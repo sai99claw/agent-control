@@ -208,5 +208,34 @@ class TheProjectTemplate(unittest.TestCase):
                          if "session-hook.sh" in line])
 
 
+class TheReviewerTemplate(unittest.TestCase):
+    """#42 A1:`review.sh` 派覆核者用的範本 —— 四件事的佔位、固定格式、檔尾 `## result`。
+
+    佔位是 `@…@`,由 `review.sh` 填(`tests/test_review.py` 驗「一個都不剩」);這裡只問
+    範本本身少了哪一格 —— 少一格的派工文,與完整的那一份長得一樣。
+    """
+
+    def text(self):
+        return read("dispatch-reviewer.md")
+
+    def test_the_four_things_are_slots_for_the_script_to_fill(self):
+        text = self.text()
+        self.assertIn("四件事", text)
+        block = text.split("四件事", 1)[1].split("\n## ", 1)[0]
+        for slot in ("@TICKET@", "@SHA@", "@WORKTREE@", "@EVIDENCE@", "@STATUS@"):
+            self.assertIn(slot, block, "四件事少了 %s 那一格" % slot)
+
+    def test_it_asks_for_the_fixed_format_and_a_result_block_with_a_verdict(self):
+        text = self.text()
+        section = text.split("固定格式", 1)[1].split("\n## ", 1)[0]
+        for part in ("verdict", "逐條驗收", "範圍", "疑慮", "阻擋", "不阻擋", "token"):
+            self.assertIn(part, section, "固定格式少了「%s」" % part)
+        self.assertIn("OBJECTION: blocking", section)
+        tail = text.split("## result", 1)[1]
+        self.assertIn("```result", tail)
+        self.assertIn('"role": "reviewer"', tail)
+        self.assertIn('"verdict"', tail)
+
+
 if __name__ == "__main__":
     unittest.main()
