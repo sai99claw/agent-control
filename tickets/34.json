@@ -35,8 +35,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "f3482b3",
-  "state": "Draft",
-  "state_version": 1,
+  "state": "Done",
+  "state_version": 11,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -65,5 +65,19 @@
     "D-018",
     "D-020"
   ],
-  "outline": "#29 reviewer 與 FLOW.html G16 列的兩個「auto-fix 看錯 status」:(1) status.latest_run 取 rows[-1]、auto-fix run_key 第一鍵是秒,跨秒的 apply(rc=0/6)蓋掉紅 gate,auto-fix 誤判綠而 exit 0(Opus 實測 mktemp 重現);(2) status.parse_failures 把 docstring 說明行當 body,第一條分隔線就收段,file/line 空,#31 只修了 verify-case 那側的 parse_reds(繞過法)。裁示:判決只看 gate/land kind;說明行的處理搬回 status.parse_failures 一處,parse_reds 退成呼叫它(D-018 不留兩份解析)。順序:本批第 1 張(閘門誤判先修,後面每票都靠它)。"
+  "outline": "#29 reviewer 與 FLOW.html G16 列的兩個「auto-fix 看錯 status」:(1) status.latest_run 取 rows[-1]、auto-fix run_key 第一鍵是秒,跨秒的 apply(rc=0/6)蓋掉紅 gate,auto-fix 誤判綠而 exit 0(Opus 實測 mktemp 重現);(2) status.parse_failures 把 docstring 說明行當 body,第一條分隔線就收段,file/line 空,#31 只修了 verify-case 那側的 parse_reds(繞過法)。裁示:判決只看 gate/land kind;說明行的處理搬回 status.parse_failures 一處,parse_reds 退成呼叫它(D-018 不留兩份解析)。順序:本批第 1 張(閘門誤判先修,後面每票都靠它)。",
+  "verify_waiver": {
+    "by": "main",
+    "reason": "工具票性質(同 #31–#33):實作者在 tests/ 交 A1/A2/A4/A5 單元案例 + 三條變異(M1/M1b/M2 各紅、還原後 sha 一致);無獨立驗證者"
+  },
+  "needs_verifier": false,
+  "owner": "main",
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "06541a3",
+    "note": "D-022 reviewer: A1-A5 each mapped to code+case; scope within allowed_write_paths; 6 concerns all non-blocking (replaced legacy test is spec change per A1; :556 docstring stale -> small ticket later)",
+    "at": "2026-09-26T13:22:50+08:00",
+    "state_version": 11
+  }
 }
