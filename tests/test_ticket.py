@@ -755,6 +755,99 @@ class WaiverAndLanded(Sandbox):
         self.assertNotIn("review", self.load_ticket("1"))
 
 
+class NeedsVerifierFalseCloses(Sandbox):
+    """#48:票面明著寫 `needs_verifier=false` 且 review 有效(verdict pass、綁現版、
+    sha 在主線歷史裡)時,review 頂上回歸證據那一格;缺、true、字串 "false" 逐字照舊,
+    其餘條件不放寬,`verify.baseline` 在就輪不到免驗。"""
+
+    def land_a_file(self, path, text):
+        self.write(path, text)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "把 %s 放進主線" % path)
+
+    def ready(self, branch="main", **fields):
+        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
+        row = {"allowed_write_paths": ["src/*"],
+               "verify_strings": ["src/nav.py:def size_nav"],
+               "needs_verifier": False}
+        row.update(fields)
+        self.make_ticket(1, **row)
+        if branch:
+            self.approve(1, branch=branch)
+
+    def refused(self):
+        done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["state"], "Ready")
+        return done.stdout
+
+    def test_a1_needs_verifier_false_with_a_valid_review_closes(self):
+        """**變異** M1:`done_blockers` 不呼叫 `needs_verifier_false_covers_regression`
+        → 這一條紅(沒有回歸證據)。"""
+        self.ready()
+        done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("沒有回歸證據", done.stdout)
+        row = self.load_ticket("1")
+        self.assertEqual(row["state"], "Done")
+        self.assertNotIn("test_evidence", row)
+        self.assertNotIn("verify_waiver", row)
+
+    def test_a2a_no_review_is_not_regression_evidence(self):
+        self.ready(branch=None)
+        out = self.refused()
+        self.assertIn("沒有 review", out)
+        self.assertIn("沒有回歸證據", out)
+
+    def test_a2b_failed_review_is_not_regression_evidence(self):
+        """**變異** M2:新函式拿掉 `review_problems` 檢查 → 這一條紅
+        (review 沒過卻頂了回歸證據)。"""
+        self.ready(branch=None)
+        self.approve(1, branch="main", verdict="fail")
+        out = self.refused()
+        self.assertIn("不是通過", out)
+        self.assertIn("沒有回歸證據", out)
+
+    def test_a2c_review_sha_off_main_is_not_regression_evidence(self):
+        """**變異** M3:新函式拿掉「sha 在主線」檢查 → 這一條紅。"""
+        self.ready(branch=None)
+        path = self.worktree("t1-unmerged")
+        self.commit_in(path, "extra.txt", "沒有進主線的 commit")
+        self.approve(1, branch="t1-unmerged")
+        out = self.refused()
+        self.assertIn("review", out)
+        self.assertIn("沒有回歸證據", out)
+
+    def test_a3_missing_needs_verifier_behaves_as_before(self):
+        """**變異** M4:`is False` 改成 `not ticket.get("needs_verifier")` → 這一條紅。"""
+        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
+        self.make_ticket(1, allowed_write_paths=["src/*"],
+                         verify_strings=["src/nav.py:def size_nav"])
+        self.approve(1, branch="main")
+        self.assertIn("沒有回歸證據", self.refused())
+
+    def test_a3_needs_verifier_true_behaves_as_before(self):
+        self.ready(branch="main", needs_verifier=True)
+        self.assertIn("沒有回歸證據", self.refused())
+
+    def test_a3_needs_verifier_string_false_behaves_as_before(self):
+        self.ready(branch="main", needs_verifier="false")
+        self.assertIn("沒有回歸證據", self.refused())
+
+    def test_a4a_undisposed_blocking_objection_still_blocks(self):
+        self.ready(objections=[{"category": "blocking", "body": "票面寫錯",
+                                "evidence": "x", "owner": "main"}])
+        self.assertIn("還沒處置", self.refused())
+
+    def test_a4b_a_red_baseline_beats_needs_verifier_false(self):
+        """**變異** M5:新函式拿掉「`verify.baseline` 缺席」條件 → 這一條紅
+        (紅的 baseline 被免驗蓋掉)。"""
+        self.ready(verify={"files": [], "tags": [], "run": "", "notes": "",
+                           "baseline": {"ok": False, "stage": "check",
+                                        "why": "乾淨主線上沒有紅"}})
+        self.assertIn("verify.baseline 說驗紅沒過", self.refused())
+
+
 class Inbox(Sandbox):
 
     def answer(self, ident, text):
