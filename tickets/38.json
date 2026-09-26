@@ -31,8 +31,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "32fa799",
-  "state": "Ready",
-  "state_version": 3,
+  "state": "Done",
+  "state_version": 9,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -56,5 +56,18 @@
     "D-024",
     "D-018"
   ],
-  "outline": "9/23 刪目錄事故的餘波(FLOW.html G15;tabby HANDOFF:1102-1103 事故、:1137 巢狀):auto-fix.sh 用 ROOT 拼相對 worktree_dir,ROOT 在票 worktree 時副本開到 agent-control-wt/agent-control-wt/;上層不存在 cd 失敗更會算成 /x-wt(Opus 順手量到,reviewer 沒列)。#29 A6 的 shed_copies 只清迴圈內那幾輪,主線手建的 round1 漏掉。裁示:WTBASE 只用一種解析(主 repo 根 = git-common-dir 上一層),不用改 config 成絕對路徑繞過。與刪檔有關,實作者一律 mktemp 沙盒,不准對真的 agent-control-wt 跑。順序:本批第 5 張;與 #34 都改 auto-fix.sh,#34 先落,本票 rebase。"
+  "outline": "9/23 刪目錄事故的餘波(FLOW.html G15;tabby HANDOFF:1102-1103 事故、:1137 巢狀):auto-fix.sh 用 ROOT 拼相對 worktree_dir,ROOT 在票 worktree 時副本開到 agent-control-wt/agent-control-wt/;上層不存在 cd 失敗更會算成 /x-wt(Opus 順手量到,reviewer 沒列)。#29 A6 的 shed_copies 只清迴圈內那幾輪,主線手建的 round1 漏掉。裁示:WTBASE 只用一種解析(主 repo 根 = git-common-dir 上一層),不用改 config 成絕對路徑繞過。與刪檔有關,實作者一律 mktemp 沙盒,不准對真的 agent-control-wt 跑。順序:本批第 5 張;與 #34 都改 auto-fix.sh,#34 先落,本票 rebase。",
+  "verify_waiver": {
+    "by": "main",
+    "reason": "工具票性質(同 #31–#36):實作者在 tests/ 交 A1–A4 單元案例 + 4 條變異(M1–M4 各紅、還原後 sha 一致);無獨立驗證者"
+  },
+  "needs_verifier": false,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "fac0794",
+    "note": "D-022 reviewer: A1-A4 mapped to code+case; rm -rf paths bounded to fix-t<ID>/round<p>/{work,base} under an existing absolute WTBASE; brake lives in fixtures (mkdtemp, HOME sandbox). Follow-ups: apply.sh:82-83 same wrong root algorithm (open after #36; fold three copies into one, D-018); round-1 green path still leaves round1 work/base; collecting earlier rounds does not check a worker is still alive.",
+    "at": "2026-09-26T14:20:50+08:00",
+    "state_version": 9
+  }
 }

@@ -30,9 +30,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "f3482b3",
-  "state": "Draft",
-  "state_version": 1,
+  "base_sha": "9c9564a",
+  "state": "Ready",
+  "state_version": 5,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -61,5 +61,10 @@
     "D-021",
     "D-018"
   ],
-  "outline": "三件「開票/規則包的機械格」:(1) rules.py:130-137 is_canon 為真時 local=False,inbox 只從 local_* 取,所以 AC 正本的 opener.inbox.md(1118 B)、fable.inbox.md 從來沒進過包;sync 又刻意不同步 inbox(D-021)—— 正本 inbox 兩邊都沒讀者(Opus 實測 grep -c inbox = 0,tabby 端 = 有)。(2) --verify-string 用 partition(\":\") 切,HANDOFF:1099 說全形冒號會切在現行 code 重現不出來,真正的坑是純字串含半形冒號(「D-G89: x」「http://x/y」)被誤切;tabby land 對 dict 形狀 grep 不到會 rc 4 拒收。(3) #3(InReview,無分支)三項:AC_RUN_ID、flaky 單次 write 已在主線,只剩 create 配號鎖,併入本票,落地後關 #3。順序:本批第 4 張,與 #34/#35/#36 檔不重疊可平行。"
+  "outline": "三件「開票/規則包的機械格」:(1) rules.py:130-137 is_canon 為真時 local=False,inbox 只從 local_* 取,所以 AC 正本的 opener.inbox.md(1118 B)、fable.inbox.md 從來沒進過包;sync 又刻意不同步 inbox(D-021)—— 正本 inbox 兩邊都沒讀者(Opus 實測 grep -c inbox = 0,tabby 端 = 有)。(2) --verify-string 用 partition(\":\") 切,HANDOFF:1099 說全形冒號會切在現行 code 重現不出來,真正的坑是純字串含半形冒號(「D-G89: x」「http://x/y」)被誤切;tabby land 對 dict 形狀 grep 不到會 rc 4 拒收。(3) #3(InReview,無分支)三項:AC_RUN_ID、flaky 單次 write 已在主線,只剩 create 配號鎖,併入本票,落地後關 #3。順序:本批第 4 張,與 #34/#35/#36 檔不重疊可平行。",
+  "verify_waiver": {
+    "by": "main",
+    "reason": "票開於 D-028 之前未寫 needs_verifier;工具票,實作者在 tests/ 交單元案例 + 6 條變異;test_defect 反駁另派驗證者修夾具"
+  },
+  "needs_verifier": false
 }

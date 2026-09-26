@@ -29,9 +29,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "f3482b3",
-  "state": "Draft",
-  "state_version": 1,
+  "base_sha": "9c9564a",
+  "state": "Done",
+  "state_version": 9,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -56,5 +56,18 @@
     "D-020",
     "D-022"
   ],
-  "outline": "#29 D-022 reviewer 列的兩條「守衛綠得不對」:(1) sync-to-project.sh 檔頭說 verify.py 只是被 import 的依賴,但 tabby fullsuite.sh:56 / test-for.sh:309 跑的是專案自己那支 scripts/verify.py(與 control 那份 cmp DIFFER),沒有任何 .sh 叫 control/verify.py —— 排除掉就看不見分岔;既有測試還斷言它不准被點名。(2) A5 測試比「提及數相等 + 子字串有無」,旗標只在註解、文件寫「不要交」都會綠,正確實作多一句反而紅。純機械改字 + 小沙盒,可考慮 codex sol(D-017)但預設 opus。順序:本批第 3 張,可與 #34 平行(檔不重疊)。"
+  "outline": "#29 D-022 reviewer 列的兩條「守衛綠得不對」:(1) sync-to-project.sh 檔頭說 verify.py 只是被 import 的依賴,但 tabby fullsuite.sh:56 / test-for.sh:309 跑的是專案自己那支 scripts/verify.py(與 control 那份 cmp DIFFER),沒有任何 .sh 叫 control/verify.py —— 排除掉就看不見分岔;既有測試還斷言它不准被點名。(2) A5 測試比「提及數相等 + 子字串有無」,旗標只在註解、文件寫「不要交」都會綠,正確實作多一句反而紅。純機械改字 + 小沙盒,可考慮 codex sol(D-017)但預設 opus。順序:本批第 3 張,可與 #34 平行(檔不重疊)。",
+  "verify_waiver": {
+    "by": "main",
+    "reason": "工具票性質(同 #31–#38):實作者在 tests/ 交單元案例 + 4 條變異(M1–M4 各紅、還原後 sha 一致;M4 證明舊 oracle 放過錯實作);無獨立驗證者"
+  },
+  "needs_verifier": false,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "66453f2",
+    "note": "D-022 reviewer: A1-A4 mapped to code+case; scope within allowed_write_paths; ticket face named wrong class (SyncsTheScripts) - implementer found the right one. Non-blocking follow-ups: fork message 3rd line suggests deleting control/verify.py (wrong next step; verify-case.py imports it) -> reword to rename/delete project copy; test_ticket_29.py header :3-6 lacks confirmation-case note for A5, :39 stale; tabby verify.py fork will be named on every sync (real signal, project to decide).",
+    "at": "2026-09-26T14:13:22+08:00",
+    "state_version": 9
+  }
 }
