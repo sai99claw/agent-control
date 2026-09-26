@@ -41,8 +41,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "aa00f4c31693dd7b8392a970d340372101758df0",
-  "state": "Ready",
-  "state_version": 3,
+  "state": "Done",
+  "state_version": 9,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -64,5 +64,53 @@
   ],
   "test_plan": "A1:驗『AC_ROOT 指向別處時,跑的仍是 verify.py 所在樹的 verify/ 與被測檔』/ 單元 / 輸入 = tmp 副本 + tmp 內一條紅 + env AC_ROOT=HERE / 觀察 rc 與輸出含夾具字串 / 期望值來自夾具寫進 tmp 的那條紅,不從 verify.py 算。A2:驗『AC_ROOT 仍是快取(reports/)的根』/ 單元 / 輸入 = AC_TICKET+AC_RUN_ID+AC_ROOT=tmp2(無 verify/)/ 觀察 tmp2/reports/t77/<id>/verify-*.log 存在、rc 0 / 期望路徑由 status.run_dir 契約給(既有 :73 案例同一條路)。A3:驗『閘門在 worktree 裡帶 AC_ROOT=主 repo 時,回歸層看到的是 worktree 那份案例』/ 單元(沙盒跑真 gate.sh)/ 輸入 = 主 repo 綠案例、wt 紅案例、票 needs_verifier=false + tags example / 觀察 gate rc≠0 且 verify log 含紅字串 / 期望值來自夾具。?:沙盒 gate --branch 的對照表把 verify/* 對到 tests/test_verify_runner.py(gate.sh:167),沙盒沒有那支測試檔時可能退 3『沒有人守著』——若如此,在 wt 寫一份 PASSING % 'test_verify_runner'(同 :681 對 test_land 的做法);這一點未實測。tags 留空(案例住 tests/,#29)。",
   "outline": "根因(實測,D-033):land.sh:580 在 $WT 裡 export AC_ROOT=$ROOT(主 repo)→ gate.sh:567 的 verify.py 子行程繼承 → verify.py:44-46 _find_root() 先讀 AC_ROOT → ROOT=主 repo → VERIFY(:55)、cases()(:104)、unittest cwd(:175/:179)全在主 repo。副本實測:副本 verify/example 改紅,AC_ROOT=主 repo 跑副本的 verify.py → Ran 1 OK(紅看不見);AC_ROOT=副本或不帶 → FAILED。#53 沒蓋到:它只把票根拉回主 repo(preflight/ticket_tags 走 ticketlib.load、手跑無 AC_ROOT 時 export AC_ROOT=MAINROOT),而後者讓手跑的回歸層也跟著跑主 repo——本票落地後那個 export 對回歸層無害。裁示(D-018 一個形狀):AC_ROOT = 票/事件/reports 根;程式碼根 = verify.py 自己所在的樹(walk-up 既有),呼叫端一行不改。verify-case.py 不受影響(:266 自己 cwd=where)。needs_verifier=false:全是控制腳本的沙盒機械斷言(rc、log 路徑、輸出字串),期望值由夾具寫、不從被測程式算;M1/M2 由實作者證紅;沒有產品碼(D-028)。順序:#53 之後(tests/test_gate.py 同檔),派前 base_sha 改成 #53 落地後的 main。",
-  "needs_verifier": false
+  "needs_verifier": false,
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 54,
+      "tokens_out": 18632,
+      "cache_write": 72658,
+      "cache_read": 1653129,
+      "wall_seconds": 638,
+      "by": "auto-fix.sh",
+      "at": "2026-09-27T05:47:30+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 22,
+      "tokens_out": 6155,
+      "cache_write": 45763,
+      "cache_read": 498117,
+      "wall_seconds": 78,
+      "by": "review.sh",
+      "at": "2026-09-27T05:49:47+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 421,
+      "by": "land.sh",
+      "at": "2026-09-27T05:56:59+08:00"
+    }
+  ],
+  "branch": "t55",
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "fc41b7d6e5697be7ec14b5348ac1943239d2f05e",
+    "note": "reports/t55/20260927-054731-27969/REVIEW.md",
+    "at": "2026-09-27T05:56:59+08:00",
+    "state_version": 9
+  }
 }
