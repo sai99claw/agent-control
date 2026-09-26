@@ -423,29 +423,42 @@ def clean_base(args, rels, ref, where, verb):
     return candidate, cand_sha, base_dir, base_sha, None
 
 
-def write_baseline(ident, plan, record, to):
-    """證據寫回票的 `verify.baseline`(同一格,`stage` 是它的升級)。"""
-    plan = dict(plan)
-    plan["baseline"] = record
+def write_baseline(ident, record, to):
+    """證據寫回票的 `verify.baseline`(同一格,`stage` 是它的升級)。**只有 `check`
+    叫它**;`red` 交的是證據檔(`write_red_record`),不碰票(#36)。"""
     try:
-        with ticketlib.Lock():
-            fresh = ticketlib.load(ident)
-            fresh["verify"] = plan
-            fresh["state_version"] = int(fresh.get("state_version") or 0) + 1
-            ticketlib.save(fresh)
+        ticketlib.save_baseline(ident, record, to)
     except (OSError, ValueError, RuntimeError) as exc:
         sys.stderr.write("verify-case: 證據寫不回票 #%s —— %s\n" % (ident, exc))
         return 2
-    event.emit("ticket.state", ticket=ident, field="verify.baseline",
-               **{"to": to, "state_version": fresh["state_version"]})
     return 0
+
+
+def write_red_record(ident, record, where):
+    """`red` 的證據:`<out-dir>/baseline-red.json`,**不寫票**(#36,FLOW G13)。
+
+    驗證者是不准 git 寫入的角色;以前 `red` 走 `ticketlib.save` 改活 repo 的票並
+    `state_version+1`,主線的覆核立刻過期,而票檔在 git 裡多一個沒人 commit 的改動。
+    這一份由驗證者抄進 EVIDENCE 的 `result` 區塊(`baseline` 那一格),`apply.sh
+    --evidence-verifier` 在鎖裡把它併進票的 `verify.baseline`。
+    """
+    path = os.path.join(where, "baseline-red.json")
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(record, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+    except OSError as exc:
+        sys.stderr.write("verify-case: 驗紅的證據寫不出來 #%s —— %s\n" % (ident, exc))
+        return None
+    return path
 
 
 def cmd_red(args):
     """**只驗紅**:乾淨基底上套案例、只跑一次,四種形狀分類(D-020 C2/C3)。
 
     綠不在這裡量 —— 驗證者在時間上拿不到實作者的 patch,要它證綠就等於要它自己搭一份
-    參考實作(#23 那 340K)。過了寫 `stage="red"`;閘門之後用 `check` 把同一格升成
+    參考實作(#23 那 340K)。過了交一份 `stage="red"` 的證據檔(不寫票,#36);
+    `apply.sh --evidence-verifier` 把它併進票,閘門之後用 `check` 把同一格升成
     `check`,`ticket.py close` 只認那一趟。
     """
     root = event.repo_root()
@@ -495,11 +508,12 @@ def cmd_red(args):
             "baseline": run,
             "candidate_run": None,
         }
-        rc = write_baseline(args.ticket, plan, record, "red")
-        if rc:
-            return rc
-        sys.stdout.write("verify-case: #%s 驗紅成立(stage=red 寫進票的 verify.baseline;"
-                         "綠由閘門的 check 量)\n" % args.ticket)
+        path = write_red_record(args.ticket, record, where)
+        if not path:
+            return 2
+        sys.stdout.write("verify-case: #%s 驗紅成立(stage=red,票沒有動;綠由閘門的 check 量)\n"
+                         "  證據 -> %s(抄進 EVIDENCE 的 result 區塊 `baseline`)\n"
+                         % (args.ticket, path))
         return 0
     finally:
         # `base` 是拋棄式的乾淨副本,用完就砍 —— 不留在 worktree 裡讓下一次全樹掃描
@@ -557,7 +571,7 @@ def cmd_check(args):
             "baseline": baseline,
             "candidate_run": cand,
         }
-        rc = write_baseline(args.ticket, plan, record, "ok" if ok else "紅不起來")
+        rc = write_baseline(args.ticket, record, "ok" if ok else "紅不起來")
         if rc:
             return rc
 

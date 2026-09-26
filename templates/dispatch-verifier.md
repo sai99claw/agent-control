@@ -29,7 +29,9 @@
    docstring 第一行是驗收編號。
 2. 寫完案例 —— 跑 `python3 scripts/verify-case.py red <票號> --candidate <$W/work>`
    (它自己做乾淨基底副本、覆上你的案例、只跑一次;算數的紅只有「案例檔自己的
-   `AssertionError`」,import / 缺符號 / 別處炸的紅會列出來、不算、票不寫)。rc=0 才算交件。
+   `AssertionError`」,import / 缺符號 / 別處炸的紅會列出來、不算)。rc=0 才算交件。
+   **它不寫票**(#36):證據落在 `--out-dir` 的 `baseline-red.json`,路徑印在 stdout ——
+   把那份 JSON 原封抄進 `result` 區塊的 `baseline` 那一格,主線收件時在鎖裡併進票的 `verify.baseline`。
    **綠不是你的事**:閘門在實作者 patch 進來時用 `verify-case.py check` 量,`ticket.py close`
    只認那一趟。**不搭參考實作、不做變異、不等 patch。** 交付物 `verify-case.py extract`。
 3. **標籤登記**:新標籤寫成**自己的片段** `verify/TAGS.d/<票號>.md`(格式 `` - `tag` — 說明(#票號) ``)。

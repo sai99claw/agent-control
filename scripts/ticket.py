@@ -752,6 +752,12 @@ def review_problems(ticket, tip=""):
     return out
 
 
+def disposed(row):
+    """這一筆反駁處置過了沒有 —— `objection_problems`(land / close)與 `apply.sh`
+    收第二次那一手(`ticket.py objection` rc=3/4)問的是同一個判準。"""
+    return str(row.get("disposition") or "").strip().lower() in DISPOSED
+
+
 def objection_problems(ticket):
     out = []
     for index, row in enumerate(ticket.get("objections") or []):
@@ -763,7 +769,7 @@ def objection_problems(ticket):
         if blocking is None:
             blocking = str(row.get("category") or "").lower() in ("blocking", "阻擋",
                                                                  "ticket-wrong")
-        if blocking and str(row.get("disposition") or "").strip().lower() not in DISPOSED:
+        if blocking and not disposed(row):
             out.append("反駁 objections[%d](%s / owner=%s)還沒處置:%s"
                        % (index, row.get("category") or "?", row.get("owner") or "沒人",
                           (row.get("body") or "")[:60]))
@@ -1555,7 +1561,7 @@ def record_objection(ident, line, evidence):
 
     **記過就不再記第二次**:`auto-fix.sh` 在叫 `apply.sh` 之前就先收過(`test_defect`
     那條路還會續跑),`apply.sh` 再收一次的話,同一句話會在票上長出兩筆,而處置的人
-    分不出哪一筆是哪一輪的。回 `(類別, 是不是新的)`。
+    分不出哪一筆是哪一輪的。回 `(類別, 是不是新的, 票上那一筆處置過了沒有)`。
     """
     category, body = objection_parts(line)
     where = os.path.relpath(evidence, root()) if evidence else ""
@@ -1565,7 +1571,7 @@ def record_objection(ident, line, evidence):
         for row in rows:
             if isinstance(row, dict) and row.get("category") == category \
                     and (row.get("body") or "") == body:
-                return category, False
+                return category, False, disposed(row)
         rows.append({"category": category, "body": body, "evidence": where,
                      "owner": "verifier" if category == "test_defect" else "main",
                      "disposition": "", "follow_up": ""})
@@ -1579,7 +1585,7 @@ def record_objection(ident, line, evidence):
         save(ticket)
     event.emit("ticket.state", ticket=str(ident), field="objections",
                note=category, state_version=ticket["state_version"])
-    return category, True
+    return category, True, False
 
 
 def cmd_objection(argv):
@@ -1603,13 +1609,44 @@ def cmd_objection(argv):
         sys.stderr.write("ticket: objection 要 --line \"OBJECTION: <類別> <理由>\"\n")
         return 2
     try:
-        category, fresh = record_objection(ident, line, evidence)
+        category, fresh, done = record_objection(ident, line, evidence)
     except (OSError, ValueError, RuntimeError) as exc:
         sys.stderr.write("ticket: 反駁記不進 #%s —— %s\n" % (ident, exc))
         return 2
-    sys.stdout.write("ticket: #%s 反駁 %s —— %s\n"
-                     % (ident, category, "記下了" if fresh else "已經有同一筆,沒有再記"))
-    return 0 if fresh else 3
+    # **「已經有了」分兩種**(#36):還沒處置的那一筆第二次收到,與沒有收過一樣要擋
+    # (rc=3);處置過的才放行(rc=4)。揉成同一個 rc 的時候,未處置的反駁第二輪就放行了。
+    if fresh:
+        said, rc = "記下了", 0
+    elif done:
+        said, rc = "已經有同一筆,已處置,沒有再記", 4
+    else:
+        said, rc = "已經有同一筆,還沒處置,沒有再記", 3
+    sys.stdout.write("ticket: #%s 反駁 %s —— %s\n" % (ident, category, said))
+    return rc
+
+
+# ------------------------------------------------------------ verify.baseline
+
+
+def save_baseline(ident, record, to):
+    """把一份驗紅 / 驗綠的紀錄寫進票的 `verify.baseline`(同一格,`stage` 是它的升級)。
+
+    **只有兩個入口叫它**(#36,FLOW G13):`verify-case.py check`(閘門 / land)與
+    `apply.sh --evidence-verifier`(收驗證者 EVIDENCE 的那一手)。`verify-case.py red`
+    不叫 —— 驗證者是不准 git 寫入的角色,它改活票並 `state_version+1` 的那一刻,
+    主線的覆核就過期了。讀、改、寫都在鎖裡:`state_version` 是讀出來 +1 再寫回去的。
+    """
+    with Lock():
+        fresh = load(ident)
+        plan = fresh.get("verify") if isinstance(fresh.get("verify"), dict) else {}
+        plan = dict(plan)
+        plan["baseline"] = record
+        fresh["verify"] = plan
+        fresh["state_version"] = int(fresh.get("state_version") or 0) + 1
+        save(fresh)
+    event.emit("ticket.state", ticket=str(ident), field="verify.baseline",
+               **{"to": to, "state_version": fresh["state_version"]})
+    return fresh["state_version"]
 
 
 # --------------------------------------------------------------------- main
