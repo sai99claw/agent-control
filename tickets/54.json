@@ -1,0 +1,57 @@
+{
+  "id": "54",
+  "subject": "#52 整理 implementer.md 後 A 全套紅 2 條:verify/agent-output/test_ticket_20.py 自己讀 config、自己 len(整份檔) 量上限(與 memory.py check 兩個真相、兩種量法,D-018)+ #20 驗收⑦釘的句子被整理掉;上限與量法只問 memory.py,那一句 restore 一行",
+  "created": "2026-09-27T04:50:19+08:00",
+  "objective": "主線 d3a9b54 全套綠:test_ticket_20 對兩張卡只問「句子在不在」,上限與量法由既有 MemoryCheckDoesNotOpenATicketForTheTouchedCards(拿真實兩張卡進沙盒跑 memory.py check)獨自扛;memory/role/implementer.md :12 那一行 restore 成 #20 驗收⑦的原句(不是整理,其餘一字不動);tests/test_verify_runner.py::test_list_and_tag_filter_and_full_run(:35 是 verify.py 全跑 rc,紅是連帶)不改自然綠",
+  "acceptance": [
+    "A1 verify/agent-output/test_ticket_20.py(實測 d3a9b54):RoleCardsCarryTheSentenceWithinCap.test_implementer_and_verifier_cards_stay_under_cap(:129-138)改名 test_implementer_and_verifier_cards_carry_the_sentence;拿掉自己讀 board/config.json 算 cap 的 :130-132 與 len(text)<=cap 的 :137-138,只留兩張卡各 assertIn「寫不出來的欄位照實留空,不要編」;方法第一行加註解「# 上限與量法只問 memory.py check(#54):下面那個 Sandbox 案例拿同兩張卡跑它。」;模組 docstring 第 8 點的「但都不超過 `board/config.json` 的 `memory.cap_chars`」改成「上限與量法由 `memory.py check` 判(front matter 不計、檔上 cap_chars 優先)」;MemoryCheckDoesNotOpenATicketForTheTouchedCards(:141-176)一字不動;json import 若因此沒人用就拿掉",
+    "A2 memory/role/implementer.md :12(實測 d3a9b54 那一行是「**`result` 塊**:見規則包 D-017 段;寫不出的欄位留空不編(D-017,2026-09-22,引用)。」)只改那一行成「**`result` 塊**:見規則包 D-017 段;寫不出來的欄位照實留空,不要編(D-017,2026-09-22,引用;#20 驗收⑦釘句)。」—— 這是 restore 不是整理:front matter、其餘各行一字不動;`python3 scripts/memory.py check` 對 memory/role/implementer.md 印「2655 / 2700(檔上的上限)」(實測)、整支 rc 0",
+    "A3 全綠:`AC_ROOT=$PWD python3 scripts/verify.py` Ran 22 OK(實測修後 OK);`python3 -m unittest tests.test_verify_runner tests.test_memory tests.test_rules tests.test_no_project_names` OK;閘門 `sh scripts/gate.sh --branch --ticket 54` 綠(gate.sh:167 動 verify/* 會選 test_verify_runner;tags 空 → 回歸層全跑 verify.py)",
+    "A4 變異(實作者證紅,EVIDENCE 貼紅首行、還原後 sha256 相同):M1 implementer.md front matter `cap_chars: 2700`→`2000` → MemoryCheckDoesNotOpenATicketForTheTouchedCards 紅(實測首行:AssertionError: '超過' unexpectedly found in 'memory: memory/role/implementer.md **2655 / 2000 超過**(檔上的上限)');M2 A2 那一行改回整理後版本「寫不出的欄位留空不編」→ test_implementer_and_verifier_cards_carry_the_sentence 紅(實測 FAILED failures=1)"
+  ],
+  "in_scope": [
+    "verify/agent-output/test_ticket_20.py(只有 RoleCardsCarryTheSentenceWithinCap 那個方法與模組 docstring 第 8 點)",
+    "memory/role/implementer.md(只有 :12 那一行,restore)"
+  ],
+  "out_of_scope": [
+    "scripts/memory.py(上限與量法的唯一真相,不動;不加新函式)",
+    "scripts/rules.py、templates/*、docs/DISPATCH-TEMPLATE.md(D-017 段已注入規則包,實測 pack worker 含「照實留空」1 次;與本票無關)",
+    "memory/role/implementer.md 其他行、front matter cap_history;memory/role/verifier.md(原句仍在)",
+    "tests/test_verify_runner.py(:35 紅是 verify.py 全跑的連帶,A1/A2 修完自然綠,不改)",
+    "docs/DECISIONS.md;discussions/2026-09-27-memory-{fable,opus}.md 的補註記(主線 docs 通道做)",
+    "tickets/53.json 那筆 blocking objection 的處置(主線在本票落地後記)"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "verify/agent-output/test_ticket_20.py",
+    "memory/role/implementer.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "d3a9b546156410c920bcb6382dccadf4442ffb94",
+  "state": "Ready",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "verify_strings": [
+    "上限與量法只問 memory.py check(#54)",
+    "寫不出來的欄位照實留空,不要編(D-017"
+  ],
+  "decision_refs": [
+    "D-013",
+    "D-017",
+    "D-018",
+    "D-028"
+  ],
+  "test_plan": "單元層 + 回歸層,全在 repo 自己的 verify/ 與 tests/,不碰埠、不動真 repo 狀態(memory.py check 只在 Sandbox 副本裡跑;A2 那次對主 repo 跑 check 是唯讀的量,只看 stdout)。A1/A2 可觀察 = verify.py 全跑的 Ran/OK、memory.py check 那一行的數字與「檔上的上限」字樣、gate rc;期望值:句子字面來自 tickets/20.json 驗收⑦(不從被測程式抄),上限 2700 來自 implementer.md front matter(memory.py 的量法 = 正文不計 front matter,scripts/memory.py:112-135)。M1/M2 各紅一次。標籤留空:案例已在 verify/agent-output(TAGS.d/20.md 登記 agent-output),tags 空時閘門回歸層跑整支 verify.py 自然含它。",
+  "outline": "2026-09-27 開題者實測 d3a9b54(D-033)。根因:(1) test_ticket_20:136 先紅在 assertIn 句子 —— fa66048 把「寫不出來的欄位照實留空,不要編」縮成「寫不出的欄位留空不編」;同一方法 :137 接著會紅在 len(整份檔含 front matter)=3002 > config 2000,而 memory.py check 量正文 2640、上限吃檔上 2700 → rc 0:同一個上限兩個真相、兩種量法(D-018)。(2) test_verify_runner:35 是 verify.py 全跑 rc==0,git blame f6e36f5b/#32 只釘 rc,不釘任何句子;紅是 (1) 的連帶。裁示:memory.py 是上限與量法唯一真相(D-013、cap_history 就是逐檔提上限的路),test_ticket_20 拿掉自己量的那幾行,上限交給同檔既有 Sandbox 案例(它拿真實兩張卡跑 memory.py check,實測 M1 會紅);那一句是 tickets/20.json 驗收⑦明文釘的(兩張卡各加一句),restore 一行、不重整;整理者「規則包已注入 D-017」屬實(pack worker 含 1 次)但票面釘的是卡本身,兩處並存 15 字元。全部在 scratch 副本實測:修後 verify.py 22 OK、runner 案例 OK、M1/M2 各紅。needs_verifier=false:修的是驗證者案例的 test_defect + 一行 restore,沒有產品碼,期望值是票面字面與 memory.py 輸出,M1/M2 由實作者證紅(D-028)。本票授權 worker 寫 verify/agent-output/test_ticket_20.py(角色卡「不寫 verify/**」的例外,因為改的就是案例本身)。順序:獨立,可立刻跑;落地後主線用 docs 通道在 discussions/2026-09-27-memory-fable.md 補一行「L9 那句被 #20 驗收⑦釘住,#54 restore」,並處置 #53 那筆 objection。",
+  "needs_verifier": false
+}

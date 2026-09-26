@@ -52,8 +52,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "6f4dd882cd92c5e8d3dd0787a223ace1ab6717a6",
-  "state": "Ready",
-  "state_version": 3,
+  "state": "Blocked",
+  "state_version": 11,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -76,5 +76,62 @@
   ],
   "needs_verifier": false,
   "test_plan": "全部單元層、mktemp 沙盒真 git repo(tests/test_gate.py GateSh / VerifierCasesAtTheGate、tests/test_apply.py ApplyBase、tests/test_auto_fix.py AutoFixBase、tests/test_review.py 既有夾具),埠一律 0、不碰真 repo。D1/D2:可觀察 = rc、stdout、主 repo 與 worktree 兩份票檔的欄位;期望值(允許範圍、tags、state)由夾具寫進兩份票,不從 gate.sh 算。D3:可觀察 = `git branch --list`、worktree 目錄名、票的 branch 欄、副本 base/ 裡夾具放的那個檔、review.sh stderr;分支名由夾具決定。D4:grep 那一行 + memory.py check 退出碼。變異 M1–M5 各紅一次,EVIDENCE 貼紅的第一行。標籤留空(案例住 tests/)。",
-  "objections": []
+  "objections": [
+    {
+      "category": "blocking",
+      "body": "紅榜兩條同一根因是 #52 記憶整併 commit fa66048 改寫了 memory/role/implementer.md(拿掉「寫不出來的欄位照實留空,不要編」、長度 3002 > board/config.json memory.cap_chars 2000),與 #53 的 diff 無關;修法只在 memory/role/implementer.md(整理者的主檔)或 verify/agent-output/test_ticket_20.py(驗證者的)—— 兩者都不在 #53 allowed_write_paths,worker 不准碰,需主線裁示由誰修。",
+      "evidence": "../agent-control-wt/fix-t53/round2/EVIDENCE-round2.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "main 2026-09-27: root cause is #52 consolidation commit fa66048 (main red on test_ticket_20 + test_verify_runner); fixed by a separate ticket, then #53 re-lands"
+    }
+  ],
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 120,
+      "tokens_out": 43101,
+      "cache_write": 138482,
+      "cache_read": 5862430,
+      "wall_seconds": 1227,
+      "by": "auto-fix.sh",
+      "at": "2026-09-27T04:29:45+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 16,
+      "tokens_out": 8898,
+      "cache_write": 54666,
+      "cache_read": 375172,
+      "wall_seconds": 94,
+      "by": "review.sh",
+      "at": "2026-09-27T04:34:57+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 22,
+      "tokens_out": 7328,
+      "cache_write": 39281,
+      "cache_read": 434601,
+      "wall_seconds": 113,
+      "by": "auto-fix.sh",
+      "at": "2026-09-27T04:44:12+08:00"
+    }
+  ],
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "c39bb84ca5d5b6698b96d59864d15ea568b06202",
+    "note": "reports/t53/20260927-042946-24277/REVIEW.md",
+    "at": "2026-09-27T04:34:57+08:00",
+    "state_version": 11
+  },
+  "owner": "main"
 }
