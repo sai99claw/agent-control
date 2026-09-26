@@ -52,8 +52,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "5733105",
-  "state": "Ready",
-  "state_version": 9,
+  "state": "Done",
+  "state_version": 13,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -105,5 +105,13 @@
       "disposition": "accepted",
       "follow_up": "main 2026-09-26: allowed_write_paths += scripts/gate.sh, tests/test_gate.py; round 2 adds the two module-table rows (session-hook.sh, .claude/settings.json -> test_session_hook) with a test"
     }
-  ]
+  ],
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "47aa729",
+    "note": "A1-A10 對到 code+案例(A1 形狀另查 hooks 官方文件;A10 補跑 test_heartbeat Ran 77 OK);worker AC_ROLE=worker 且 cwd 在 agent-control-wt 底下,兩守衛同時成立;測試只寫 mkdtemp。不阻擋:(1) gate 對照表 new-session.sh / control_harness.py 列不挑 test_session_hook,建議補票 (2) 未設 worktree_dir 時副本守衛推不出名稱,A/T 皆有明寫 (3) implementer.md 對應格在範圍內但與 rules.py WANTED 重複 (4) AC_MODEL 優先與 source=fork 無案例 (5) 未以真 Claude Code 端對端跑(需 workspace trust,首跑要有人在場)",
+    "at": "2026-09-26T14:59:02+08:00",
+    "state_version": 13
+  }
 }
