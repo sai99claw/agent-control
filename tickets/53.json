@@ -53,7 +53,7 @@
   "attempt": 0,
   "base_sha": "6f4dd882cd92c5e8d3dd0787a223ace1ab6717a6",
   "state": "InReview",
-  "state_version": 12,
+  "state_version": 18,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -84,6 +84,14 @@
       "owner": "main",
       "disposition": "accepted",
       "follow_up": "main 2026-09-27: root cause is #52 consolidation commit fa66048 (main red on test_ticket_20 + test_verify_runner); fixed by a separate ticket, then #53 re-lands"
+    },
+    {
+      "category": "blocking",
+      "body": "紅榜兩條都只指向 tickets/54.json:107(#54 objections[].body 寫死了 `/Users/…/agent-control` 絕對路徑),該檔是主線/票板寫的、不在 #53 allowed_write_paths;#53 的 diff 無關,需主線改 #54 那段 body(例:換成「main repo」)後重落地。",
+      "evidence": "../agent-control-wt/fix-t53/round2/EVIDENCE-round2.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "main 2026-09-27: tickets/54.json objection body carried an absolute path (written by #54 worker); main scrubbed it"
     }
   ],
   "cost": [
@@ -122,6 +130,30 @@
       "wall_seconds": 113,
       "by": "auto-fix.sh",
       "at": "2026-09-27T04:44:12+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 18,
+      "tokens_out": 7373,
+      "cache_write": 52209,
+      "cache_read": 444248,
+      "wall_seconds": 78,
+      "by": "review.sh",
+      "at": "2026-09-27T05:09:33+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 18,
+      "tokens_out": 4467,
+      "cache_write": 28328,
+      "cache_read": 312358,
+      "wall_seconds": 48,
+      "by": "auto-fix.sh",
+      "at": "2026-09-27T05:17:39+08:00"
     }
   ],
   "repair_round": 1,
@@ -130,8 +162,8 @@
     "by": "reviewer@opus",
     "sha": "c39bb84ca5d5b6698b96d59864d15ea568b06202",
     "note": "reports/t53/20260927-042946-24277/REVIEW.md",
-    "at": "2026-09-27T04:34:57+08:00",
-    "state_version": 11
+    "at": "2026-09-27T05:09:33+08:00",
+    "state_version": 17
   },
   "owner": "main"
 }

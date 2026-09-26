@@ -32,7 +32,7 @@
   "attempt": 0,
   "base_sha": "d3a9b546156410c920bcb6382dccadf4442ffb94",
   "state": "Done",
-  "state_version": 12,
+  "state_version": 13,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -99,12 +99,12 @@
     "sha": "d01e3cd",
     "note": "reports/t54/20260927-045605-26610/REVIEW.md",
     "at": "2026-09-27T05:08:00+08:00",
-    "state_version": 12
+    "state_version": 13
   },
   "objections": [
     {
       "category": "blocking",
-      "body": "land gate ran verify.py with AC_ROOT=main repo (/Users/franksai/ai_workspace/claude_workspace/agent-control @ 49692dc, pre-fix), so it executed main's old verify/agent-output/test_ticket_20.py against main's old implementer.md; the land worktree (d01e3cd) already carries the fix and is green — nothing to change inside allowed_write_paths, the gate's root selection needs a fix outside this ticket.",
+      "body": "land gate ran verify.py with AC_ROOT=main repo (main repo @ 49692dc, pre-fix), so it executed main's old verify/agent-output/test_ticket_20.py against main's old implementer.md; the land worktree (d01e3cd) already carries the fix and is green — nothing to change inside allowed_write_paths, the gate's root selection needs a fix outside this ticket.",
       "evidence": "../agent-control-wt/fix-t54/round2/EVIDENCE-round2.md",
       "owner": "main",
       "disposition": "accepted",
