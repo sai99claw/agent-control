@@ -12,7 +12,8 @@
 | 執行 | `role`, `model`, `tool`, **`attempt`** (int) | ✓ | 每次派工 attempt+1;**遲到的回報對不上 attempt 就拒絕 —— 回寫時帶 `--expect-attempt N` / `--expect-state-version N`,對不上 rc=4**;`attempt_history` 建議 |
 | 版本 | **`base_sha`** | ✓ | 閘門結果只對 base_sha 有效;`branch`、`workspace` 派工時由工具填 |
 | 控制 | `state`, **`state_version`**, `lease` ({holder, until}), `retry_limit` | ✓ | state 見 `docs/WORKFLOW.md`;state_version 每次變更 +1;`budget` 建議 |
-| 交付 | `patch_ref`, `review_ref`, `test_evidence` (list), `handoff`, `knowledge_updates`, **`verify_strings`** (list) | Done 前 | evidence 每筆帶 base_sha、指令、rc、log 路徑;**`verify_strings` 是只有這張票才有的字串,`ticket.py verify` 對 `git show main:<檔>` grep 它們——沒給的話 verify 只能做弱檢查(看 `allowed_write_paths` 有沒有被動過),並會明說** |
+| 交付 | `patch_ref`, `review_ref`, `test_evidence` (list), `handoff`, `knowledge_updates`, **`verify_strings`** (list) | Done 前 | evidence 每筆帶 base_sha、指令、rc、log 路徑;**`verify_strings` 是只有這張票才有的字串,`ticket.py verify` 對 `git show main:<檔>` grep 它們——沒給的話 verify 只能做弱檢查(看 `allowed_write_paths` 有沒有被動過),並會明說**。根目錄無副檔名的檔(README、Makefile)冒號前不像路徑、不會切,要寫 `./README:那串字` |
+| 驗證 | **`needs_verifier`** | ✓ | bool;**開題者寫**,理由寫在 `outline`。`true` = 派驗證者寫案例(auto-fix 第 1 輪與 worker 平行起,#51);`false` = 實作者自證變異紅。動到產品碼預設 `true`。**缺 = 票不完整** —— 主線的 `verify_waiver` 只是補救,不是常態(D-028) |
 | 驗證 | **`verify`** ({files, tags, run, notes, **baseline**}) | 驗證者交件時 | **驗證者寫的**(D-010):案例檔在哪、宣告了哪幾個標籤、**怎麼跑**(一句可以直接貼的指令)、跑之前要知道的事。驗證者不判 PASS/FAIL、不寫 VERDICT —— 對錯由閘門跑 `verify.tags` 判。`ticket.py verify <id>` 會把這一格印出來;沒人寫時它印「還沒有人寫」而不是一片空白 |
 | 覆核 | **`review`** ({verdict, by, at, note, **state_version**, **sha**}) | land 前 | **主線**讀 patch 之後記的那一格(覆核 = 讀 patch 記 review,不重跑測試)。**它綁在被覆核的那個版本上**:`state_version` 由 `ticket.py set` 自動蓋(票之後任何一次變更都讓它過期),`sha` 是最終 patch / 分支的頭。land 缺少相符的覆核即拒絕 |
 | 反駁 | **`objections`** (list of {category, body, evidence, owner, disposition, blocking, follow_up}) | 有異議時 | 實作者說「票寫錯 / 這條驗收做不到 / 案例本身錯(`test_defect`)」的地方。`category` 是 `ticket-wrong` / `blocking`(或 `blocking: true`)= 阻擋項,`disposition` 空著 **land 與 close 都拒絕**。處置寫 `accepted` / `rejected` / `deferred` / `fixed` |
@@ -62,6 +63,7 @@ EVIDENCE,不改它**;抽不出來也不改變退出碼、不擋流程。
 | `excluded` | 陣列 | 已排除的假設 |
 | `repro` | 物件 | `{cmd, expect}` |
 | `memory` | 陣列 | `{layer, name, line, ticket}`;**鏡像而已,寫入仍由 `memory.py harvest` 做** |
+| `baseline` | 物件或 `null` | **只有 verifier 寫**:`verify-case.py red` 印出的 `<out-dir>/baseline-red.json` 原封抄進來,`stage` 必是 `red`;worker 留 `null`;`apply.sh --evidence-verifier` 在鎖裡把它併進票的 `verify.baseline` |
 
 抽出來的那一份還多一格 `sections`:`{patch_sha256, gate, mutations, excluded, repro}` 五個 bool,
 答的是「EVIDENCE 那**五段散文**在不在」(§8 那五段;抽取只看小標與關鍵詞,**缺段印出來、不擋流程**)。
@@ -82,7 +84,8 @@ EVIDENCE,不改它**;抽不出來也不改變退出碼、不擋流程。
 - `attempt` / `state_version`:一張票被關成 Done 但從沒進主線,兩天後才發現。
 - `test_evidence.base_sha`:一支分支 3470 條綠,跑在三小時前的基準上,主線早已走遠。
 - `verify`:2026-09-20 驗證者交了案例卻沒寫怎麼跑,下一個人重跑整組閘門去找它們,一次等待燒掉幾十萬 token(D-010)。**案例在哪與怎麼跑,是交付的一部分。**
-- `verify.baseline`:2026-09-21 外部審查 —— 範本只要求貼兩份 Ran/OK,而**一份貼上來的輸出沒辦法被機器比對**;票上沒有一格說得出「乾淨主線上真的紅過」,於是一條永遠綠的斷言與一條真的在驗的斷言長得一樣。同一格由兩個 `stage` 接力寫(D-020,2026-09-23):`red`(驗證者,`scripts/verify-case.py red <n>` 寫,只證乾淨基底上紅、紅在案例檔自己的斷言,`stage=red`)升成 `check`(閘門,`scripts/verify-case.py check <n>` 寫,乾淨主線該紅、candidate 該綠,`stage=check`)。`ticket.py` 的 close 只認 check——`stage=red` 只代表案例寫好了,還沒有人量過綠。
+- `verify.baseline`:2026-09-21 外部審查 —— 範本只要求貼兩份 Ran/OK,而**一份貼上來的輸出沒辦法被機器比對**;票上沒有一格說得出「乾淨主線上真的紅過」,於是一條永遠綠的斷言與一條真的在驗的斷言長得一樣。同一格由兩個 `stage` 接力寫(D-020,2026-09-23):`red`(驗證者跑 `scripts/verify-case.py red <n>`,只證乾淨基底上紅、紅在案例檔自己的斷言;red 只印 `<out-dir>/baseline-red.json`、不寫票 → 驗證者抄進 result 的 `baseline` → `apply.sh --evidence-verifier` 在鎖裡併進票,`stage=red`)升成 `check`(閘門,`scripts/verify-case.py check <n>` 寫,乾淨主線該紅、candidate 該綠,`stage=check`)。`ticket.py` 的 close 只認 check——`stage=red` 只代表案例寫好了,還沒有人量過綠。
+- `needs_verifier`:2026-09-26 #34–#38 五張票面都漏寫,驗證者要不要派只能由主線事後判、用 `verify_waiver` 補(D-028)。**沒寫的票與寫了 `false` 的票長得一樣**,所以它是必填,理由寫在 `outline`。
 - `review.state_version` / `review.sha`:同一次審查 —— 舊的 `review` 只有 verdict/by/at/note,重套一次 patch、改一次票面之後它仍然長得有效,而 land 根本沒有讀它。
 - `objections`:同一次審查 —— 實作者的反駁沒有可靠的收件與處置契約,「這張票寫錯了」講完之後東西照樣落地。
 - `attempt` / `state_version` 的**比對**:同一次審查 —— schema 宣稱過「對不上就拒絕」,而 `ticket.py set` 讀出來直接覆寫。**宣稱與實作分岔的那一格,看起來與有守衛的那一格一模一樣。**

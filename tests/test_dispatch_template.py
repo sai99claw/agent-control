@@ -6,6 +6,7 @@
 """
 
 import os
+import re
 import sys
 import unittest
 
@@ -13,6 +14,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from control_harness import ROOT  # noqa: E402
 
 PATH = os.path.join(ROOT, "docs", "DISPATCH-TEMPLATE.md")
+SCHEMA = os.path.join(ROOT, "tickets", "SCHEMA.md")
+
+
+def result_keys(text, heading):
+    """`heading` 之後第一張表、第一欄反引號內的鍵。"""
+    rest = text[text.index(heading):]
+    table = re.search(r"^\| 鍵 \|.*?\n((?:\|.*\n)+)", rest, re.M).group(1)
+    return {m.group(1) for m in re.finditer(r"^\| `([^`]+)` \|", table, re.M)}
 
 
 class Template(unittest.TestCase):
@@ -66,6 +75,21 @@ class Template(unittest.TestCase):
         self.assertIn("tickets/SCHEMA.md", self.text)
         self.assertNotIn("fullsuite.sh", self.text)
         self.assertNotIn("test-for.sh", self.text)
+
+    def test_the_two_result_tables_list_the_same_keys(self):
+        """§8.5 與 `tickets/SCHEMA.md` 的 result 鍵表**只有這兩份**(D-018);期望集合寫死在
+        這裡,不從任何一份算 —— 兩份一起漏掉同一個鍵,集合比對仍然相等。
+
+        **變異**:只在 SCHEMA 加 `baseline` 列、§8.5 不加 → 這一條紅(#44)。
+        """
+        with open(SCHEMA, encoding="utf-8") as handle:
+            schema = handle.read()
+        expected = {"ticket", "role", "round", "rc", "patch_sha256", "gate",
+                    "mutations", "objection", "excluded", "repro", "memory",
+                    "baseline"}
+        self.assertEqual(result_keys(self.text, "## 8.5"), expected, "§8.5")
+        self.assertEqual(result_keys(schema, "## EVIDENCE 尾端的 `result` 區塊"),
+                         expected, "tickets/SCHEMA.md")
 
     def test_the_report_format_still_asks_for_verbatim_output_and_mutations(self):
         self.assertIn("測試輸出**逐字**", self.text)
