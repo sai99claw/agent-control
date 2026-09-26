@@ -197,3 +197,22 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 ## D-024(2026-09-26)先把開發與制度的事完全做完,再回產品票
 
 順序:agent-control 工具與制度票(9/23 20:0x 票單、tabby #618/#621/#622)優先於 tabby 產品票;產品端的「待開題」批(#601–#614、#638)與零星小修等制度收尾後再排。來源:產品負責人 2026-09-26 原話。
+
+## D-025(2026-09-26)主線接觸點收斂四題:C3 准、C2 准、C5 准、C6 緩
+
+依 `docs/DESIGN-MAIN-TOUCHPOINTS.md` 裁示題 1–4,產品負責人原話「要產品負責人裁的題 都照你的建議」:
+1. **准**:單票 `land.sh` push 成功後對每張票試 `ticket.py close --landed`;`done_blockers()` 四條件與弱檢查一條不放,關不掉照舊印「已合併、尚未關票」+ inbox 頁,不加 `--force`。
+2. **准**:reviewer(短命 opus,`review.sh` 派)的 `pass` 由腳本直接 `set review`(綁 sha / state_version,land 照查);`fail` 寫 objection、票轉 Blocked 回主線。主線對票的補充一律寫在票面(D-023)。
+3. **准**:開題者可呼叫 `sh scripts/land.sh docs "tickets: #<n> 開票" tickets/<n>.json` 提交**自己那張**票檔;角色卡「不 git 寫入」只加這一句例外,裸 commit 禁令不動。
+4. **緩**:C6 驗證者自動進第 1 輪之前,等 C1 跑過幾張再開。
+
+## D-026(2026-09-26)session 契約三題:hook 進 repo、compact 重印不發事件、T 主線讀 A 契約
+
+依 A #39 / T #652 裁示題甲乙丙,同一句原話:
+- **甲 准**:SessionStart hook 放 repo 內 `.claude/settings.json`(換人也生效;代價是第一次互動 trust 一次)。
+- **乙 准**:`source` 為 compact / resume 時重印開場那一頁但不發 `session.start`(事件是「一個 session 開始了」;重印是為了壓縮後的新上下文還看得到收件匣)。
+- **丙 接受**:T 主線每次開場多讀 A 的 `CLAUDE.md`(~2.5 KB);不接受就得把「不可違反的」抄進 T,兩份會分岔。
+
+## D-027(2026-09-26)模型卡不按版本拆;一張卡對一個路由標籤
+
+`memory/model/opus.md` 不拆成 opus-5.4 / opus-5.5,`fable.md` 亦同。理由:卡裡記的是流程的坑不是版本的坑;`worker.command` 的 `--model opus` 是浮動別名,卡早已跨版本。只在兩個版本**同時**進 `routing` 時才拆(卡名跟路由標籤走)。被 5.5 證明不成立的那一條就刪,不預先分家。來源:產品負責人 2026-09-26(先口頭「算了先不改」,後「都照你的建議」)。
