@@ -1,0 +1,2 @@
+- 新增一支會被 apply/auto-fix/land/review source 或呼叫的腳本時,tests/control_harness.py 的 SCRIPT_FILES 要同步加名字,開票要把它列進 allowed_write_paths;漏了沙盒整片 No such file 紅 (#46, 2026-09-27, worker@opus)
+- 新增會起 headless 模型的腳本(讀 board/config.json 的 *.command)時,先在 tests/control_harness.py 的 DEFAULT_CONFIG 放一支替身命令,再把腳本加進 SCRIPT_FILES —— 缺那一段就退回真的 claude -p,既有的綠路測試會真的起模型 (#42, 2026-09-27, worker@opus)
