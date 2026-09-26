@@ -1592,5 +1592,280 @@ class TheResultBlockAtTheEndOfEvidence(AutoFixBase):
                          "worker 只交了一行反駁,那一份也要留得下痕跡")
 
 
+# 第 1 輪的驗證者(#51):worker 與驗證者是**同一支假的可執行檔**(`verifier.command` 沒設時
+# 退回 `worker.command`),由 `AC_ROLE` 分流。驗證者的呼叫紀錄寫在自己的檔(@VCALLS@),
+# 測試先建一個空檔 —— 「一發都沒有」要是「檔在而且空」,不是「檔不在」(§5.5)。
+# 驗證者一開始先在自己的副本根寫 `started`(C2),再交一份只含案例的 patch-verify 與
+# 一份 result 區塊帶 `verify` / `baseline` 的 EVIDENCE。@WAIT@ 換成 1 時是**雙向會合**(C2):
+# worker 一進來先在自己的副本根寫 `worker-started`,再輪詢驗證者的 `started` 最多 20 秒,等不到
+# 就 exit 9、不交 patch;驗證者寫完 `started` 也輪詢 `worker-started` 最多 20 秒,等不到就
+# exit 9、不交件。單向的標記只擋得住「worker 先、驗證者後」—— 驗證者先跑完再派 worker 的
+# 串行,標記檔早就在了。@VERIFIER_HANDS_IN@ 換成 0 時驗證者什麼都不交就退出(C6)。
+FIRST_ROUND_PAIR = '''#!/bin/sh
+set -e
+cd "$AC_WORK"
+if [ "$AC_ROLE" = verifier ]; then
+    echo "verifier ran round $AC_ROUND" >> "@VCALLS@"
+    : > started
+    [ "@VERIFIER_HANDS_IN@" = 1 ] || exit 0
+    if [ "@WAIT@" = 1 ]; then
+        i=0
+        while [ ! -f "@WMARK@" ]; do
+            i=$((i + 1))
+            [ "$i" -le 200 ] || exit 9
+            sleep 0.1
+        done
+    fi
+    mkdir -p work/verify/example
+    cat > work/verify/example/test_ticket_1.py <<'CASE'
+"""#1 第 1 輪驗證者的案例:worker 交的 tests/test_thing.py 要在候選樹上。
+
+## 驗收表(期望值來源獨立於被測程式)
+C4 | sandbox | 看 tests/test_thing.py 在不在 | 在 | 票面 C4:乾淨基底上沒有這個檔
+
+## 介面字串
+(沒有;這一條不斷言任何字串)
+
+## 怎麼做假
+不上真埠、不起真服務、不殺行程。
+
+## 不做
+不改產品碼;不放寬任何票面驗收。
+"""
+import os
+import unittest
+
+TAGS = ["example"]
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+class T(unittest.TestCase):
+    def test_worker_case_is_there(self):
+        """C4 worker 交的案例檔在候選樹上。"""
+        self.assertTrue(os.path.exists(os.path.join(ROOT, "tests", "test_thing.py")))
+CASE
+    diff -ruN base work > patch-verify.diff || true
+    cat > EVIDENCE-verifier.md <<'EV'
+# verifier
+案例一個,基底紅。
+
+## result
+
+```result
+{"ticket": "1", "role": "verifier", "round": 1, "rc": 0, "patch_sha256": null,
+ "gate": null, "mutations": [], "objection": null, "excluded": [], "repro": null,
+ "memory": [],
+ "verify": {"files": ["verify/example/test_ticket_1.py"], "tags": ["example"],
+            "run": "python3 scripts/verify.py --tag example", "notes": "沙盒"},
+ "baseline": {"stage": "red", "ok": true, "why": "",
+              "files": ["verify/example/test_ticket_1.py"]}}
+```
+EV
+    exit 0
+fi
+echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+: > worker-started
+if [ "@WAIT@" = 1 ]; then
+    i=0
+    while [ ! -f "@VMARK@" ]; do
+        i=$((i + 1))
+        [ "$i" -le 200 ] || exit 9
+        sleep 0.1
+    done
+fi
+mkdir -p work/tests
+cat > work/tests/test_thing.py <<'CASE'
+import unittest
+
+
+class T(unittest.TestCase):
+    def test_thing(self):
+        self.assertEqual(1, 1)
+CASE
+diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
+'''
+
+# 票面上 `<票號>` 這種人手填的角括號、與範本裡 `@…@` 這種腳本填的佔位 —— 派工文裡
+# 一個都不該剩(#51 C3)。`<feature>` / `<tag>` 是驗證者自己取的名字,不在這裡。
+UNFILLED = re.compile(r"@[A-Z_]+@|<票號>|<票庫路徑>|<sha>|<\$W|<主線 / session 名>|<輪>|<你的模型>")
+
+
+class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
+    """#51 / D-032 ③(C6):票 `needs_verifier` 是 JSON `true` ⇒ auto-fix 第 1 輪在派 worker
+    **之前**起一個背景驗證者,worker 回來之後才收;兩份 patch 一起套進閘門那一棵樹。
+    `false` / 缺這一格 ⇒ 不派(缺的那一種 stderr 說一聲)。期望值(事件的 role、cost
+    筆數、頁數、案例名)寫死在這裡,不從被測腳本算回去。"""
+
+    def vcalls(self):
+        return os.path.join(self.home, "verifier-calls.log")
+
+    def vfix(self):
+        return os.path.join(self.home, "repo-wt", "verify-t1", "round1")
+
+    def arm(self, wait=False, hands_in=True, **fields):
+        self.write("verifier-calls.log", "", where=self.home)
+        self.set_worker(FIRST_ROUND_PAIR
+                        .replace("@VCALLS@", self.vcalls())
+                        .replace("@VMARK@", os.path.join(self.vfix(), "started"))
+                        .replace("@WMARK@", os.path.join(self.home, "repo-wt", "fix-t1",
+                                                         "round1", "worker-started"))
+                        .replace("@WAIT@", "1" if wait else "0")
+                        .replace("@VERIFIER_HANDS_IN@", "1" if hands_in else "0"))
+        fields.setdefault("allowed_write_paths", ["tests/*", "verify/*"])
+        # `gate.sh --branch` 把 `verify/*` 的改動對到 `test_verify_runner`(真 repo 有這一支);
+        # 沙盒少了它,閘門紅在「模組不存在」—— 那是沙盒與事實的差異,不是受測腳本的行為。
+        self.write(os.path.join("tests", "test_verify_runner.py"),
+                   "import unittest\n\n\nclass T(unittest.TestCase):\n"
+                   "    def test_there(self):\n        self.assertTrue(True)\n")
+        row = self.make_ticket("1", **fields)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "開票 #1")
+        self.git("push", "-q", "origin", "main")
+        return row
+
+    def verifier_calls(self):
+        self.assertTrue(os.path.exists(self.vcalls()), "驗證者的呼叫紀錄檔要在(有在看)")
+        with open(self.vcalls(), encoding="utf-8") as handle:
+            return [line.strip() for line in handle if line.strip()]
+
+    def verifier_starts(self):
+        return [row for row in self.events() if row["kind"] == "agent.start"
+                and row.get("role") == "verifier"]
+
+    def test_c1_true_starts_a_verifier_in_round_one(self):
+        """C1 true。**變異**:`verifier_wanted` 的 true 分支不設 V_WANT → 紅。"""
+        self.arm(needs_verifier=True)
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        starts = self.verifier_starts()
+        self.assertEqual(len(starts), 1, starts)
+        self.assertEqual((str(starts[0].get("round")), starts[0].get("agent")),
+                         ("1", "auto-fix-verifier"))
+        self.assertEqual(self.verifier_calls(), ["verifier ran round 1"])
+
+    def test_c1_false_starts_no_verifier(self):
+        """C1 false:紀錄檔在、而且是空的。"""
+        self.arm(needs_verifier=False)
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.verifier_calls(), [])
+        self.assertEqual(self.verifier_starts(), [])
+        self.assertNotIn("needs_verifier", done.stderr)
+
+    def test_c1_missing_starts_no_verifier_and_says_so(self):
+        """C1 缺這一格。**變異**:條件改成「缺也派」→ 這一條紅。"""
+        row = self.arm()
+        self.assertNotIn("needs_verifier", row, "前提:票面沒有這一格")
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.verifier_calls(), [])
+        self.assertEqual(self.verifier_starts(), [])
+        self.assertIn("needs_verifier", done.stderr)
+        self.assertIn("D-028", done.stderr)
+
+    def test_c2_the_verifier_is_running_before_the_worker_is_dispatched(self):
+        """C2:worker 等得到驗證者的 `started` 才交 patch;綠一輪後 cost 兩筆。
+
+        **變異**:改成先等驗證者交件再派 worker(串行)→ 驗證者等不到 worker 的標記、
+        不交件 → rc=5 → 紅;反過來先 worker 後驗證者 → worker 等不到標記 exit 9 → 紅。
+        """
+        self.arm(wait=True, needs_verifier=True)
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        worker_done = [row for row in self.events() if row["kind"] == "agent.done"
+                       and row.get("agent") == "auto-fix"]
+        self.assertEqual([row.get("rc") for row in worker_done], ["0"])
+        rows = self.load_ticket("1").get("cost") or []
+        self.assertEqual(sorted((row["role"], row["round"]) for row in rows),
+                         [("verifier", 1), ("worker", 1)], rows)
+
+    def test_c3_the_verifier_packet_is_the_template_filled_in(self):
+        """C3:派工文 = 規則包 + 範本逐格填好;`--dry-run --round 1` 兩份路徑都印、不起行程。
+
+        **變異**:`verifier_packet` 少填一格(拿掉 @BASE@)→ 「沒有沒填的佔位」紅。
+        """
+        row = self.arm(needs_verifier=True)
+        shown = self.auto_fix("--dry-run", "--round", "1")
+        self.assertEqual(shown.returncode, 0, shown.stdout + shown.stderr)
+        self.assertIn("dispatch-round1.md", shown.stderr)
+        self.assertIn("dispatch-verifier-round1.md", shown.stderr)
+        self.assertEqual(self.verifier_calls(), [], "--dry-run 不起驗證者")
+        self.assertEqual(self.worker_rounds(), [], "--dry-run 不起 worker")
+
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        sent = [path for path in self.result_files("dispatch-verifier-round1.md")
+                if os.path.exists(os.path.join(os.path.dirname(path), "verifier-round1.log"))]
+        self.assertEqual(len(sent), 1, self.result_files("dispatch-verifier-round1.md"))
+        with open(sent[0], encoding="utf-8") as handle:
+            packet = handle.read()
+        self.assertIn("role=verifier", packet)
+        self.assertIn("#1", packet)
+        self.assertIn(row["base_sha"], packet)
+        self.assertIn(os.path.join(self.vfix(), "work"), packet)
+        self.assertIn(os.path.join(self.repo, "tickets", "1.json"), packet)
+        self.assertIn("auto-fix.sh(交檔即回報", packet)
+        self.assertIn("verify-case.py red 1 --ref %s" % row["base_sha"], packet)
+        # 規則包在範本之前,它自己的說明文字裡就寫著 `<票號>` 當通稱 —— 量的是範本那一段。
+        self.assertIn("# 派工:驗證者 —— #1 第 1 輪", packet)
+        filled = packet.split("# 派工:驗證者", 1)[1]
+        self.assertEqual(UNFILLED.findall(filled), [], "派工文裡還有沒填的佔位")
+
+    def test_c4_the_verifier_plan_and_baseline_are_merged_into_the_ticket(self):
+        """C4:綠一輪後票的 verify.files 非空、baseline.stage 是 red 或 check。
+
+        **變異**:`apply.sh` 不併驗證者的 verify / baseline → 紅。
+        """
+        self.arm(needs_verifier=True)
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        plan = self.load_ticket("1").get("verify") or {}
+        self.assertEqual(plan.get("files"), ["verify/example/test_ticket_1.py"], plan)
+        self.assertEqual(plan.get("tags"), ["example"], plan)
+        self.assertIn((plan.get("baseline") or {}).get("stage"), ("red", "check"), plan)
+        self.assertEqual(len(self.result_files("result-verifier-round1.json")), 1)
+
+    def test_c5_the_gate_runs_the_tree_with_both_patches(self):
+        """C5:閘門那一輪的 log 裡跑過驗證者 patch-verify 帶進來的案例。
+
+        **變異**:apply 只套 worker 那一份 → 紅。
+        """
+        self.arm(needs_verifier=True)
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        gate = self.status_of("1", kind="gate")
+        self.assertEqual(gate.get("rc"), 0, gate)
+        text = ""
+        for row in gate.get("kept_logs") or []:
+            if row.get("kept"):
+                text += self.read(row["kept"])
+        self.assertIn("test_ticket_1.T.test_worker_case_is_there", text)
+        branch = self.git("show", "t1:verify/example/test_ticket_1.py")
+        self.assertIn("test_worker_case_is_there", branch)
+
+    def test_c6_a_verifier_that_hands_in_nothing_blocks_but_keeps_the_worker_patch(self):
+        """C6:驗證者沒交件 ⇒ worker 的 patch 先收進 reports,票 Blocked、恰 1 頁 decision、
+        attempt.failed reason=verifier-no-patch、rc=5。
+
+        **變異**:worker 的 patch 被一起清掉(不先收進 reports)→ 紅。
+        """
+        self.arm(needs_verifier=True, hands_in=False)
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        self.assertEqual(self.verifier_calls(), ["verifier ran round 1"])
+        self.assertEqual(self.load_ticket("1")["state"], "Blocked")
+        pages = self.inbox_rows()
+        self.assertEqual(len(pages), 1, pages)
+        self.assertEqual(pages[0].get("kind"), "decision")
+        self.assertIn("驗證者沒交出 patch-verify", json.dumps(pages[0], ensure_ascii=False))
+        self.assertEqual(len(self.result_files("patch-round1.diff")), 1,
+                         "worker 的 patch 要留在 reports 目錄")
+        failed = [row for row in self.events() if row["kind"] == "ticket.attempt.failed"]
+        self.assertEqual([row.get("reason") for row in failed], ["verifier-no-patch"])
+        self.assertFalse(self.git("branch", "--list", "t1").strip(),
+                         "沒有案例就不套、不量綠")
+
+
 if __name__ == "__main__":
     unittest.main()

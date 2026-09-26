@@ -34,6 +34,8 @@
 
 ## Worker / 驗證者
 - 讀派工文裡指定的副本路徑;先 `ls` 確認 `work/`、`base/` 都在。
+- needs_verifier=true 的票由 auto-fix.sh 第 1 輪自動派驗證者(與 worker 平行,#51),交件路徑在派工文
+  (`<副本根>/patch-verify.diff` 與 `EVIDENCE-verifier.md`)。
 - 讀 `docs/DISPATCH-TEMPLATE.md` §禁區與 §假綠家族。
 - **副本裡不發事件,由派工方代發**(2026-09-23,#29 A9)。`ticket.attempt.start` /
   `ticket.attempt.done` 由派工的那一側發:`auto-fix.sh` 自己發,第 1 輪由 auto-fix 發

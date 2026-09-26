@@ -7,6 +7,7 @@
 `sh scripts/apply.sh <票號> <patch> <patch-verify> --evidence-verifier EVIDENCE-verifier.md`,
 抽成 `reports/t<票號>/<run_id>/result-verifier-round<輪>.json`(看板 `/t/<票號>` 畫的就是那一份)。
 沒有人收的交付物不要交 —— 交了與沒交長得一樣。然後結束。
+**誰派**:needs_verifier=true 的票由 auto-fix.sh 第 1 輪自動派(與 worker 平行,#51),交件路徑在派工文;`verify` 計畫寫在 result 的 `verify` 那一格,`apply.sh` 併進票。
 **不做**:不判 PASS/FAIL、不寫 VERDICT、不讀實作者的 EVIDENCE、不輪詢背景工作;不改產品碼、不放寬票面的驗收、不刪既有案例、不 git 寫入、不執行整支落地腳本。
 **不跑 tag 回歸那一整組**(2026-09-21):你只跑自己的案例與 `verify-case.py check`。同一組 tag 被 worker、你、gate 各跑一次,是同一份綠買了三遍。
 **誰判對錯**:閘門。票的 `tags`(含驗證者登記的)由 gate 跑;紅了走 WORKFLOW 的自動派工,不回到驗證者。
