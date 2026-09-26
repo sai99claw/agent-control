@@ -22,11 +22,12 @@
 # (rc=4)。**退出碼 0 只證明 `git apply` 沒有喊叫。**
 #
 # ## 退出碼
-#   0 套好、commit 好了      2 用法 / 票的問題(找不到票、沒有 base_sha)
+#   0 套好、commit 好了      2 用法 / 票的問題(找不到票、沒有 base_sha;反駁記不進票)
 #   3 檔頭不合格或 `--check` 不過(rebase 那一支的三向合併衝突也是 3)
 #   4 套完的比對不過(rebase 那一支的 **0 byte diff** 也是 4)
 #   5 動到 `allowed_write_paths` 以外
 #   6 patch 套好了,但 EVIDENCE 裡有一行 `OBJECTION:` —— 已記進票的 `objections[]`
+#     (記過的同一筆 disposition 還空著也是 6;處置過的才放行成 0)
 #
 # ## `--evidence` 收三樣(2026-09-23,#29 A4;以前只收第一樣)
 # 1. `memory.py harvest` —— EVIDENCE 記憶段那幾行;
@@ -34,7 +35,8 @@
 #    `reports/t<票號>/<run_id>/result-round<輪>.json`(**與 `auto-fix.sh` 同一支抽取**;
 #    `--evidence-verifier` 那一份抽成 `result-verifier-round<輪>.json`);
 # 3. `ticket.py objection` —— `^OBJECTION:` 那一行記進票的 `objections[]`,rc=6 指名。
-#    **記過的同一筆不會再記第二次**(`auto-fix.sh` 那條路已經先收過)。
+#    **記過的同一筆不會再記第二次**(`auto-fix.sh` 那條路已經先收過),但**還沒處置
+#    就照樣 rc=6** —— 「已經有了」不等於「有人收了」(#36)。
 #
 # 為什麼 rc 非零:反駁是「這張票寫錯了」,而東西照樣套進分支、主線照樣往下走的那一刻,
 # 那句話等於沒有人收(`docs/DISPATCH-TEMPLATE.md` §7)。patch 該 commit 的還是 commit 了
@@ -629,24 +631,66 @@ if [ -n "$VEVIDENCE" ]; then
         "$REPORTS/result-verifier-round$ROUND.json" \
         --ticket "$ID" --role verifier --round "$ROUND" \
         || echo "apply: 驗證者的 result 抽不出來($VEVIDENCE)—— 不擋 apply" >&2
+    # **驗證者的驗紅由這一手寫進票**(#36,FLOW G13):`verify-case.py red` 只交證據檔,
+    # 驗證者把它抄進 result 的 `baseline`;這裡在鎖裡併進票的 `verify.baseline`。
+    # 只收 `stage=red` —— 驗證者量不到綠,一份自稱 `check` 的會讓 `close` 放行。
+    python3 - "$AC" "$ID" "$REPORTS/result-verifier-round$ROUND.json" <<'PY' >&2
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import ticket
+ident, path = sys.argv[2], sys.argv[3]
+try:
+    with open(path, encoding="utf-8") as handle:
+        record = json.load(handle).get("baseline")
+except (OSError, ValueError, AttributeError):
+    record = None
+if record is None:
+    sys.exit(0)
+if not isinstance(record, dict) or record.get("stage") != "red":
+    print("apply: 驗證者 result 的 baseline 不是 stage=red 的紀錄 —— 沒有併進票")
+    sys.exit(0)
+try:
+    version = ticket.save_baseline(ident, record, "red")
+except (OSError, ValueError, RuntimeError) as exc:
+    print("apply: 驗證者的驗紅併不進票 #%s —— %s(不擋 apply)" % (ident, exc))
+    sys.exit(0)
+print("apply: 驗證者的驗紅(stage=red)併進票 #%s 的 verify.baseline(state_version=%s)"
+      % (ident, version))
+PY
 fi
 fi
-status_done 0 "套好並 commit 成 $SHA"
-echo "apply: 下一步 —— (cd $WT && sh scripts/gate.sh --branch --ticket $ID)"
-echo "apply:       閘門綠了主線覆核記 review,再 sh scripts/land.sh $BR"
 # **反駁放在最後**:patch 已經 commit 了(那是事實),但這一手沒有結束 ——
 # 一個「票寫錯了」的說法沒有人收,與沒有那個說法長得一樣(§7)。
+# 狀態檔只寫**最後那一個** rc:先寫 0 再改 6 的那一段空檔裡,讀的人看到的是綠(#36)。
 if [ -f "$EVIDENCE" ] && grep -q '^OBJECTION:' "$EVIDENCE"; then
     OLINE=$(grep -m1 '^OBJECTION:' "$EVIDENCE")
     echo "apply: EVIDENCE 裡有一行反駁 —— $OLINE" >&2
     python3 "$AC/ticket.py" objection "$ID" --line "$OLINE" --evidence "$EVIDENCE"
     orc=$?
-    if [ "$orc" -eq 0 ]; then
-        echo "apply: #$ID 已記進 objections[] —— 處置它(accepted / rejected / deferred / fixed)" >&2
-        echo "apply:   沒處置的阻擋項 land 與 close 都會拒絕。" >&2
-        status_done 6 "patch 已 commit,但 worker 提了反駁"
-        exit 6
-    fi
-    echo "apply: 這一筆反駁票上已經有了(auto-fix 那條路先收過)—— 沒有再記一次" >&2
+    case $orc in
+        0)
+            echo "apply: #$ID 已記進 objections[] —— 處置它(accepted / rejected / deferred / fixed)" >&2
+            echo "apply:   沒處置的阻擋項 land 與 close 都會拒絕。" >&2
+            status_done 6 "patch 已 commit,但 worker 提了反駁"
+            exit 6 ;;
+        3)
+            # 同一筆第二次收到,而**還沒處置**:與第一次收到一樣擋。以前這裡放行成 0,
+            # 未處置的反駁第二輪就過去了(D-014 硬閘門)。
+            echo "apply: #$ID 這一筆反駁票上已經有了,但還沒處置 —— 處置它(accepted / rejected / deferred / fixed)" >&2
+            echo "apply:   沒處置的阻擋項 land 與 close 都會拒絕。" >&2
+            status_done 6 "patch 已 commit,但 worker 的反駁還沒處置"
+            exit 6 ;;
+        4)
+            echo "apply: #$ID 這一筆反駁票上已經有了,而且已處置 —— 沒有再記一次" >&2 ;;
+        *)
+            # 記不進票(rc=2)不是「已經有了」:沒人收的反駁,與沒有反駁長得一樣(§7)。
+            echo "apply: #$ID 的反駁記不進票(ticket.py objection rc=$orc)—— 修好之後手動記:" >&2
+            echo "apply:   python3 scripts/ticket.py objection $ID --line \"$OLINE\" --evidence $EVIDENCE" >&2
+            status_done 2 "patch 已 commit,但 worker 的反駁記不進票"
+            exit 2 ;;
+    esac
 fi
+status_done 0 "套好並 commit 成 $SHA"
+echo "apply: 下一步 —— (cd $WT && sh scripts/gate.sh --branch --ticket $ID)"
+echo "apply:       閘門綠了主線覆核記 review,再 sh scripts/land.sh $BR"
 exit 0

@@ -758,5 +758,29 @@ class Import(Sandbox):
         self.assertIn("讀不懂 1 個檔", done.stdout)
 
 
+
+class ObjectionSaysWhetherItWasDisposed(Sandbox):
+    """`ticket.py objection` 的「已經有了」分兩種(#36):還沒處置(rc=3)與處置過
+    (rc=4)。揉成同一個 rc 的時候,`apply.sh` 分不出來,未處置的反駁第二輪就放行了。"""
+
+    LINE = "OBJECTION: ticket-wrong 驗收 A3 指的欄位不存在"
+
+    def test_a_duplicate_is_3_until_disposed_and_4_after(self):
+        """**變異**:把 `cmd_objection` 的 `elif done:` 換成 `elif True:` → 這一條紅。"""
+        self.make_ticket(1)
+        first = self.ticket("objection", "1", "--line", self.LINE)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        again = self.ticket("objection", "1", "--line", self.LINE)
+        self.assertEqual(again.returncode, 3, again.stdout + again.stderr)
+        self.assertIn("還沒處置", again.stdout)
+        rows = self.load_ticket("1")["objections"]
+        rows[0]["disposition"] = "deferred"
+        self.ticket("set", "1", "objections", json.dumps(rows, ensure_ascii=False))
+        third = self.ticket("objection", "1", "--line", self.LINE)
+        self.assertEqual(third.returncode, 4, third.stdout + third.stderr)
+        self.assertIn("已處置", third.stdout)
+        self.assertEqual(len(self.load_ticket("1")["objections"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

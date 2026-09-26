@@ -20,6 +20,8 @@ Ran/OK,而**一份貼上來的輸出沒有辦法被機器比對** —— 票的 
 
 import json
 import os
+import re
+import subprocess
 import sys
 import unittest
 
@@ -189,10 +191,18 @@ class CaseSandbox(Sandbox):
         self.git("commit", "-q", "-m", "主線上的值是 1")
         self.write(os.path.join("verify", "nav", "__init__.py"), "")
 
-    def a_ticket(self, case=CASE):
+    def a_ticket(self, case=CASE, **extra):
         self.write(os.path.join("verify", "nav", "test_ticket_1.py"), case)
         self.make_ticket(1, verify={"files": ["verify/nav/test_ticket_1.py"],
-                                    "tags": ["example"], "run": "", "notes": ""})
+                                    "tags": ["example"], "run": "", "notes": ""},
+                         **extra)
+
+    def red_record(self, done):
+        """`red` 交的證據檔 —— stdout 那一行 `證據 -> <路徑>` 指的那一份(#36)。"""
+        found = re.search(r"證據 -> (\S+?baseline-red\.json)", done.stdout)
+        self.assertTrue(found, "red 成立卻沒印證據檔的路徑:" + done.stdout)
+        with open(found.group(1), encoding="utf-8") as handle:
+            return json.load(handle)
 
 
 class VerifyCase(CaseSandbox):
@@ -337,12 +347,14 @@ class VerifyCase(CaseSandbox):
         self.assertEqual(sorted(os.listdir(out)), ["logs"], "base/candidate 該砍掉了")
 
     def test_red_leaves_only_logs_behind_in_the_out_dir(self):
-        """`red`(驗證者交件那一趟)共用同一支 `clean_base`,一樣的殘留與一樣的修法。"""
+        """`red`(驗證者交件那一趟)共用同一支 `clean_base`,一樣的殘留與一樣的修法。
+        多留的那一份是 `red` 的證據檔(#36:它不寫票,證據落在 `--out-dir`)。"""
         self.a_ticket()
         out = os.path.join(self.home, "vc-red")
         done = self.tool("red", "1", "--out-dir", out)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(sorted(os.listdir(out)), ["logs"], "base 該砍掉了")
+        self.assertEqual(sorted(os.listdir(out)), ["baseline-red.json", "logs"],
+                         "base 該砍掉了")
 
     def test_after_landing_the_ref_defaults_to_the_ticket_base_sha(self):
         """🩸 #19:票落地之後,對**主線**量基準永遠是「一條都沒紅」—— 實作已經在主線
@@ -471,7 +483,7 @@ class RedIsTheOnlyThingTheVerifierMeasures(CaseSandbox):
         done = self.tool("red", "1")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("紅 verify.nav.test_ticket_1.NavSize.test_value", done.stdout)
-        base = self.load_ticket("1")["verify"]["baseline"]
+        base = self.red_record(done)
         self.assertEqual(base["stage"], "red")
         self.assertTrue(base["ok"], base["why"])
         self.assertIsNone(base["candidate_run"], "red 不跑 candidate —— 綠不是驗證者的事")
@@ -546,7 +558,7 @@ class RedIsTheOnlyThingTheVerifierMeasures(CaseSandbox):
         done = self.tool("red", "1")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("紅在別處", done.stdout)
-        base = self.load_ticket("1")["verify"]["baseline"]
+        base = self.red_record(done)
         self.assertEqual(base["baseline"]["red"],
                          ["verify.nav.test_ticket_1.ToolExitCode.test_the_tool_exits_zero"])
         self.assertEqual(base["baseline"]["elsewhere"], [])
@@ -565,7 +577,7 @@ class RedIsTheOnlyThingTheVerifierMeasures(CaseSandbox):
         done = self.tool("red", "1")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("紅在別處", done.stdout)
-        base = self.load_ticket("1")["verify"]["baseline"]
+        base = self.red_record(done)
         self.assertEqual(base["baseline"]["red"],
                          ["verify.nav.test_ticket_1.NavSize.test_value"])
         self.assertIn("AssertionError", base["baseline"]["red_lines"][0])
@@ -610,11 +622,36 @@ class RedIsTheOnlyThingTheVerifierMeasures(CaseSandbox):
         self.assertFalse(base["ok"], base["why"])
         self.assertEqual(base["candidate_run"]["red"], [], "候選那一邊是綠的")
 
+    def test_red_leaves_the_live_ticket_alone_in_git(self):
+        """A4(#36,FLOW G13):驗證者是不准 git 寫入的角色,而 `red` 以前走
+        `ticketlib.save` 改活 repo 的票並 `state_version+1` —— 票檔在 git 裡多一個沒人
+        commit 的改動,主線的覆核立刻過期。證據改落在 `--out-dir`,路徑印在 stdout。
+
+        **變異**:在 `cmd_red` 裡把 `write_baseline(args.ticket, record, "red")` 放回去
+        → 這一條紅(porcelain 多一行 ` M tickets/1.json`)。
+        """
+        self.a_ticket(state_version=4)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "開票 #1(state_version=4)")
+        out = os.path.join(self.home, "vc-red")
+        done = self.tool("red", "1", "--ref", self.load_ticket("1")["base_sha"],
+                         "--out-dir", out)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        porcelain = subprocess.run(
+            ["git", "-C", self.repo, "status", "--porcelain", "tickets/"],
+            capture_output=True, text=True, env=self.env()).stdout
+        self.assertEqual(porcelain, "", "red 改了活票:" + porcelain)
+        self.assertEqual(self.load_ticket("1")["state_version"], 4)
+        self.assertNotIn("baseline", self.load_ticket("1")["verify"])
+        path = os.path.join(out, "baseline-red.json")
+        self.assertIn(path, done.stdout, "證據檔的路徑要印出來,驗證者才抄得到")
+        self.assertEqual(self.red_record(done)["stage"], "red")
+
     def test_a_skip_is_counted_apart_from_both_kinds_of_red(self):
         self.a_ticket(SKIP_AND_RED)
         done = self.tool("red", "1")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        run = self.load_ticket("1")["verify"]["baseline"]["baseline"]
+        run = self.red_record(done)["baseline"]
         self.assertEqual(run["cases"], 2)
         self.assertEqual(run["skipped"], 1)
         self.assertEqual(len(run["red"]), 1, "skip 不准算成紅")

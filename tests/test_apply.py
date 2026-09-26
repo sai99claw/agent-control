@@ -287,6 +287,19 @@ VERIFIER_EVIDENCE = """# EVIDENCE-verifier
 ```
 """
 
+# 驗證者把 `verify-case.py red` 的證據檔抄進 result 的 `baseline`(#36)。
+VERIFIER_EVIDENCE_WITH_RED = """# EVIDENCE-verifier
+
+## result
+
+```result
+{"ticket": "1", "role": "verifier", "round": 1, "rc": 0,
+ "baseline": {"stage": "%s", "ok": true, "why": "",
+              "files": ["verify/nav/test_ticket_1.py"], "candidate_run": null,
+              "baseline": {"cases": 1, "red": ["verify.nav.test_ticket_1.T.test_x"]}}}
+```
+"""
+
 
 class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
     """#29 A4 / G4:第 1 輪走 `apply.sh`,而 `apply.sh` 以前只跑 `memory.py harvest`
@@ -352,19 +365,70 @@ class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
         self.assertTrue(self.branch_exists("t1"),
                         "patch 該 commit 的還是 commit 了 —— rc 說的是「這一手沒有結束」")
 
+    def status_file(self, run_id):
+        with open(os.path.join(self.repo, "reports", "t1", run_id, "status.json"),
+                  encoding="utf-8") as handle:
+            return json.load(handle)
+
     def test_the_same_objection_is_not_recorded_twice(self):
         """`auto-fix.sh` 在叫 `apply.sh` 之前就先收過一次 —— 兩邊各記一次的話,
         同一句話會在票上長成兩筆,而處置的人分不出哪一筆是哪一輪的。
+
+        A1(#36):**不再記一次**不等於**放行** —— disposition 還空著,第二次照樣
+        rc=6,狀態檔也是 6。以前這裡斷 `!= 6`,把「未處置的反駁第二輪就放行」釘死了。
+
+        **變異**:把 `apply.sh` 尾端 `case $orc` 的 `3)` 分支拿掉 → 這一條紅。
         """
         self.make("1")
         evidence = self.patch_file("EVIDENCE.md", OBJECTING_EVIDENCE)
         self.apply("1", self.patch_file("p.diff", CHANGE), "--evidence", evidence)
         second = self.run_sh("scripts/apply.sh", "1",
                              self.patch_file("p2.diff", CREATE),
-                             "--evidence", evidence)
+                             "--evidence", evidence,
+                             env=self.env(AC_RUN_ID="second"))
         self.assertEqual(len(self.load_ticket("1")["objections"]), 1,
                          second.stdout + second.stderr)
-        self.assertNotEqual(second.returncode, 6, "第二次不是新的反駁")
+        self.assertEqual(second.returncode, 6, second.stdout + second.stderr)
+        self.assertIn("還沒處置", second.stderr)
+        self.assertEqual(self.status_file("second")["rc"], 6,
+                         "狀態檔說的要是最後那個 rc,不是中途寫的 0")
+
+    def test_an_objection_already_disposed_lets_the_second_apply_through(self):
+        """A2(#36):處置過的那一筆(accepted / rejected / deferred / fixed)第二次
+        收到才放行,並說出「已處置」—— 沒說的話,rc=0 與「沒看到反駁」長得一樣。
+
+        **變異**:把 `apply.sh` 尾端 `case $orc` 的 `4)` 分支拿掉 → 這一條紅。
+        """
+        self.make("1")
+        evidence = self.patch_file("EVIDENCE.md", OBJECTING_EVIDENCE)
+        self.apply("1", self.patch_file("p.diff", CHANGE), "--evidence", evidence)
+        rows = self.load_ticket("1")["objections"]
+        rows[0]["disposition"] = "rejected"
+        self.assertEqual(self.ticket("set", "1", "objections",
+                                     json.dumps(rows, ensure_ascii=False)).returncode, 0)
+        second = self.run_sh("scripts/apply.sh", "1",
+                             self.patch_file("p2.diff", CREATE),
+                             "--evidence", evidence,
+                             env=self.env(AC_RUN_ID="second"))
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertIn("已處置", second.stdout + second.stderr)
+        self.assertEqual(len(self.load_ticket("1")["objections"]), 1)
+        self.assertEqual(self.status_file("second")["rc"], 0)
+
+    def test_an_objection_that_cannot_be_recorded_is_not_called_already_there(self):
+        """A3(#36):`ticket.py objection` 記不進票(rc=2)以前也掉到「已經有了」那一句
+        而 exit 0 —— 沒人收的反駁與沒有反駁長得一樣(§7)。票庫唯讀 = 鎖拿不到、
+        票寫不回去,apply 前面那幾手都不寫票庫,所以只有這一手會撞到。
+        """
+        self.make("1")
+        tickets = os.path.join(self.repo, "tickets")
+        os.chmod(tickets, 0o555)
+        self.addCleanup(os.chmod, tickets, 0o755)
+        done = self.apply("1", self.patch_file("p.diff", CHANGE),
+                          "--evidence", self.patch_file("EVIDENCE.md", OBJECTING_EVIDENCE))
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("已經有了", done.stderr)
+        self.assertIn("記不進票", done.stderr)
 
     def test_the_verifier_evidence_has_a_receiver_now(self):
         """#29 A5 / G5:`EVIDENCE-verifier.md` 以前是**一份沒有收件者的交付物**。"""
@@ -377,6 +441,39 @@ class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
         row = self.result_json("result-verifier-round1.json")
         self.assertTrue(row["present"])
         self.assertEqual(row["role"], "verifier")
+
+    def test_the_verifier_red_record_is_merged_into_the_ticket_baseline(self):
+        """A5(#36):`verify-case.py red` 不寫票了,驗證者的驗紅由收件這一手在鎖裡
+        併進票的 `verify.baseline`(同一格,D-018)。
+
+        **變異**:把 `apply.sh` 裡 `ticket.save_baseline(...)` 那一行換成 `version = 0`
+        → 這一條紅。
+        """
+        self.make("1", verify={"files": ["verify/nav/test_ticket_1.py"],
+                               "tags": ["example"], "run": "", "notes": ""})
+        before = self.load_ticket("1")["state_version"]
+        done = self.apply("1", self.patch_file("p.diff", CHANGE),
+                          "--evidence", self.patch_file("EVIDENCE.md", FULL_EVIDENCE),
+                          "--evidence-verifier",
+                          self.patch_file("EV.md", VERIFIER_EVIDENCE_WITH_RED % "red"))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        ticket = self.load_ticket("1")
+        self.assertEqual(ticket["verify"]["baseline"]["stage"], "red")
+        self.assertEqual(ticket["verify"]["files"], ["verify/nav/test_ticket_1.py"],
+                         "只換 baseline 那一格,verify 其他格不動")
+        self.assertEqual(ticket["state_version"], before + 1)
+
+    def test_a_verifier_baseline_that_claims_check_is_not_merged(self):
+        """驗證者量不到綠:一份自稱 `stage=check` 的 baseline 併進去,`close` 就放行了。"""
+        self.make("1", verify={"files": ["verify/nav/test_ticket_1.py"],
+                               "tags": ["example"], "run": "", "notes": ""})
+        done = self.apply("1", self.patch_file("p.diff", CHANGE),
+                          "--evidence", self.patch_file("EVIDENCE.md", FULL_EVIDENCE),
+                          "--evidence-verifier",
+                          self.patch_file("EV.md", VERIFIER_EVIDENCE_WITH_RED % "check"))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("baseline", self.load_ticket("1")["verify"])
+        self.assertIn("不是 stage=red", done.stderr)
 
     def test_the_help_lists_the_verifier_flag(self):
         done = self.apply("--help")
