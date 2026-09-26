@@ -37,8 +37,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "f3482b3",
-  "state": "Ready",
-  "state_version": 2,
+  "state": "Done",
+  "state_version": 10,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -64,5 +64,28 @@
     "D-018",
     "D-014"
   ],
-  "outline": "兩條「紀錄被吞」:(1) apply.sh 只認 ticket.py objection 的 rc=0 才 exit 6,重複那筆(rc=3)與寫失敗(rc=2)都 exit 0 —— 未處置的反駁第二輪就放行,違反 D-014 硬閘門;既有測試斷 !=6 釘死了它。(2) FLOW.html G13:verify-case.py red 走 ticketlib.save 改活 repo 的票並 state_version+1(review 立刻過期),驗證者是「不准 git 寫入」的角色;裁示:red 只交證據檔,票的 verify.baseline 只在兩個 Lock 內的入口寫(check、apply --evidence-verifier),不加第二個欄位(D-018)。派工文若要求驗證者跑 red,templates/dispatch-verifier.md 的那句要跟著改。順序:本批第 2 張,可與 #34 平行;與 #35 都碰 tests/test_apply.py 夾具,先落一張再 rebase 另一張。"
+  "outline": "兩條「紀錄被吞」:(1) apply.sh 只認 ticket.py objection 的 rc=0 才 exit 6,重複那筆(rc=3)與寫失敗(rc=2)都 exit 0 —— 未處置的反駁第二輪就放行,違反 D-014 硬閘門;既有測試斷 !=6 釘死了它。(2) FLOW.html G13:verify-case.py red 走 ticketlib.save 改活 repo 的票並 state_version+1(review 立刻過期),驗證者是「不准 git 寫入」的角色;裁示:red 只交證據檔,票的 verify.baseline 只在兩個 Lock 內的入口寫(check、apply --evidence-verifier),不加第二個欄位(D-018)。派工文若要求驗證者跑 red,templates/dispatch-verifier.md 的那句要跟著改。順序:本批第 2 張,可與 #34 平行;與 #35 都碰 tests/test_apply.py 夾具,先落一張再 rebase 另一張。",
+  "objections": [
+    {
+      "category": "test_defect",
+      "body": "tests/test_ticket_26.py RedClassification 的 A1/A5/A6 從票的 verify.baseline 讀 red 的紀錄,與 #36 A4「red 不碰活票、證據落在 --out-dir」正面衝突(3 條 KeyError: 'baseline');要由驗證者改成讀 stdout 印出的 baseline-red.json,worker 不改案例 oracle",
+      "evidence": "../agent-control-wt/fix-t36/round1/EVIDENCE-round1.md",
+      "owner": "verifier",
+      "disposition": "fixed",
+      "follow_up": "verifier patch-verify.diff (tests/test_ticket_26.py A1/A5/A6 read baseline-red.json) applied to t36"
+    }
+  ],
+  "verify_waiver": {
+    "by": "main",
+    "reason": "工具票性質(同 #31–#34):實作者在 tests/ 交單元案例 + 7 條變異(M1–M7 各紅、還原後 sha 一致);無獨立驗證者"
+  },
+  "needs_verifier": false,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "75aaa61",
+    "note": "D-022 reviewer: A1-A5 mapped to code+case; verifier patch only changed read source of test_ticket_26 A1/A5/A6; 5 concerns non-blocking. Follow-up docs ticket: SCHEMA.md:84 + FLOW.html:196,361 still say red writes ticket; result schema lacks baseline key; auto-fix test_defect path does not merge baseline.",
+    "at": "2026-09-26T13:51:33+08:00",
+    "state_version": 10
+  }
 }
