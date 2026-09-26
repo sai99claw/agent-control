@@ -146,20 +146,20 @@ html{scroll-behavior:smooth;scroll-padding-top:56px}
   <div class="tablewrap"><table>
     <thead><tr><th>序</th><th>票</th><th>狀態</th><th>模型</th><th>一行目的</th></tr></thead>
     <tbody>
-      <tr><td class="n">1</td><td>A #34</td><td><span class="chip landed">Running(第 1 輪)</span></td><td>opus</td><td>auto-fix 讀 status 兩處誤讀:跨秒 apply 蓋掉紅 gate;G16 docstring 收段(parse_reds 退成呼叫 status 那一份)。閘門誤判先修,後面每票都靠它。</td></tr>
-      <tr><td class="n">2</td><td>A #36</td><td>Draft</td><td>opus</td><td>反駁與證紅紀錄被吞:apply.sh 重複 OBJECTION 回 0;G13 red 不寫活票。</td></tr>
-      <tr><td class="n">3</td><td>A #35</td><td>Draft</td><td>opus(可 codex sol)</td><td>兩條釘死錯現況的守衛:sync 的 DEPENDENCY_ONLY 排除 verify.py;A5 oracle 改測行為。與 #36 同碰 test_apply.py 夾具,後落者 rebase。</td></tr>
-      <tr><td class="n">4</td><td>A #37</td><td>Draft</td><td>opus</td><td>正本 inbox 進正本規則包(實測 pack 裡 grep -c inbox = 0);<code>--verify-string</code> 只在冒號前像路徑時才切(半形冒號 <code>D-G89: x</code>、<code>http://x/y</code> 誤切);<code>ticket.py create</code> 配號進 Lock(#3 殘項,落地後關 #3)。</td></tr>
-      <tr><td class="n">5</td><td>A #38</td><td>Draft</td><td>opus</td><td>G15:WTBASE 以主 repo 根解析、上層不存在 rc=2 停、第 1 輪手建副本也收。與 #34 同改 auto-fix.sh,後落者 rebase。<b>接觸點收斂 C1 依賴它。</b></td></tr>
-      <tr><td class="n">6</td><td>T #651</td><td>Draft</td><td>opus(可 codex sol)</td><td>tabby 三份案例(report_period / home_pie / ledger_close)lint F4 命中的是 <code>Run:</code> 行的 <code>TABBY_BROWSER_ENGINES=</code>,不是埠數字;只改 docstring,waiver 由主線給。獨立,隨時派。</td></tr>
+      <tr><td class="n">1</td><td>A #34</td><td><span class="chip landed">Done(main 06541a3)</span></td><td>opus</td><td>auto-fix 讀 status 兩處誤讀:跨秒 apply 蓋掉紅 gate;G16 docstring 收段(parse_reds 退成呼叫 status 那一份)。閘門誤判先修,後面每票都靠它。</td></tr>
+      <tr><td class="n">2</td><td>A #36</td><td><span class="chip landed">Done(main 75aaa61;走過 test_defect → 驗證者修案例)</span></td><td>opus</td><td>反駁與證紅紀錄被吞:apply.sh 重複 OBJECTION 回 0;G13 red 不寫活票。</td></tr>
+      <tr><td class="n">3</td><td>A #35</td><td>Running(第 1 輪)</td><td>opus(可 codex sol)</td><td>兩條釘死錯現況的守衛:sync 的 DEPENDENCY_ONLY 排除 verify.py;A5 oracle 改測行為。與 #36 同碰 test_apply.py 夾具,後落者 rebase。</td></tr>
+      <tr><td class="n">4</td><td>A #37</td><td>Running(第 1 輪)</td><td>opus</td><td>正本 inbox 進正本規則包(實測 pack 裡 grep -c inbox = 0);<code>--verify-string</code> 只在冒號前像路徑時才切(半形冒號 <code>D-G89: x</code>、<code>http://x/y</code> 誤切);<code>ticket.py create</code> 配號進 Lock(#3 殘項,落地後關 #3)。</td></tr>
+      <tr><td class="n">5</td><td>A #38</td><td>Running(第 1 輪)</td><td>opus</td><td>G15:WTBASE 以主 repo 根解析、上層不存在 rc=2 停、第 1 輪手建副本也收。與 #34 同改 auto-fix.sh,後落者 rebase。<b>接觸點收斂 C1 依賴它。</b></td></tr>
+      <tr><td class="n">6</td><td>T #651</td><td>patch 交了;閘門等解鎖螢幕(#644 守衛)</td><td>opus(可 codex sol)</td><td>tabby 三份案例(report_period / home_pie / ledger_close)lint F4 命中的是 <code>Run:</code> 行的 <code>TABBY_BROWSER_ENGINES=</code>,不是埠數字;只改 docstring,waiver 由主線給。獨立,隨時派。</td></tr>
       <tr><td class="n">7</td><td>A #39 → T #652</td><td>Draft</td><td>opus</td><td>session 契約落地:SessionStart hook 跑 <code>new-session.sh</code>(A),T CLAUDE.md 契約形 + hook + sync(T,依賴 #39)。落完主線開一個新 session 實測「第一個 prompt 之前就看到同一頁」。</td></tr>
-      <tr><td class="n">8–13</td><td>未開</td><td><span class="chip design">設計 ⑥</span></td><td>opus ×4、sonnet ×2</td><td>C1 第 1 輪自動 → C5 opener docs 通道 → C2 review.sh → C3+C4 land 試關 + inbox ack → C6(緩)→ T 端接線。等裁示題 1–3 答了再開。</td></tr>
+      <tr><td class="n">8–13</td><td>未開</td><td><span class="chip design">設計 ⑥,已裁 D-025</span></td><td>opus ×4、sonnet ×2</td><td>C1 第 1 輪自動 → C5 opener docs 通道 → C2 review.sh → C3+C4 land 試關 + inbox ack → C6(緩)→ T 端接線。#38 落地後派開題者開票(C1 依賴它)。</td></tr>
       <tr><td class="n">之後</td><td>T #618 #621 #622</td><td>pending</td><td>—</td><td>D-G124 已裁:記憶分層、票 state 欄位統一、備份第二份放外接 SSD。制度票收尾後排。</td></tr>
       <tr><td class="n">發版</td><td>tabby .41</td><td>待授權</td><td>主線</td><td>#642(成員頁空資料不畫)、#647(暫存目錄塞爆磁碟)、#644/#645/#649(落地工具環境保護)還沒上線。</td></tr>
     </tbody>
   </table></div>
 
-  <h3>③ 要產品負責人裁的題(每題附建議;答了就進 DECISIONS)</h3>
+  <h3>③ 裁示題 —— <span class="chip landed">已裁</span> 8 題全照建議(D-025 / D-026 / D-027,7676fb0)</h3>
   <div class="tablewrap"><table>
     <thead><tr><th>#</th><th>題</th><th>建議</th><th>理由</th></tr></thead>
     <tbody>
@@ -173,6 +173,82 @@ html{scroll-behavior:smooth;scroll-padding-top:56px}
       <tr><td class="n">8</td><td>模型卡要不要拆成 opus-5.4 / opus-5.5 / fable-5.1?</td><td><b>先不拆</b>(今天口頭裁「算了先不改」)</td><td>卡裡記的是流程的坑不是版本的坑;<code>--model opus</code> 是浮動別名,卡早已跨版本;只在兩個版本同時進路由表時才拆(一張卡對一個路由標籤)。</td></tr>
     </tbody>
   </table></div>
+
+  <h3>④ 你想像的 flow vs 今天實際跑的 vs 設計目標(D-025 之後)</h3>
+  <p class="lead">三張圖同一個題目:一張票從開題到進 main,誰做什麼、主線碰幾下。第二張是今天 #36 的真實軌跡(主線親手打了 20 下;#34 打了 22 下,含閘門讀錯票檔白跑 3 次 <span class="src t">實測</span>)。</p>
+  <div class="two">
+    <div><h4>你想像的</h4><div class="diagram"><pre class="mermaid">
+flowchart TB
+  M["主線"] -->|派| O["開題者"]
+  O -->|回報| M
+  M -->|派| W["Worker<br/>讀票 → 實作 → unit test → 發 PR → close"]
+  M -->|派| V["驗證者<br/>讀票 → 設計 + 實作驗證 case"]
+  W -->|PR| R["Regression script<br/>跑 PR"]
+  V -->|case| R
+  R -->|"紅:紅的 case + 該 PR + 原票"| W2["新 worker"]
+  W2 -->|PR| R
+  R -->|"綠:自動進 code"| C[("main")]
+  W -.->|完成回報| M
+  V -.->|驗證回報| M
+  W2 -.->|修改回報| M
+  C -.->|票完成回報| M
+  classDef human fill:#e7e6df,stroke:#5b6672,color:#1c2430;
+  classDef landed fill:#dbe8ee,stroke:#2f6f8f,color:#1c2430;
+  class M human; class O,W,V,R,W2,C landed;
+    </pre></div></div>
+    <div><h4>今天實際(#36,主線 20 下)</h4><div class="diagram"><pre class="mermaid">
+flowchart TB
+  M["主線"] -->|"1 派"| O["開題者(Fable)"]
+  O -->|票 JSON| M
+  M -->|"2 commit 票檔 3 set Ready<br/>4 dry-run 派工文 5 attempt.start 6 派"| W["Worker(Opus)<br/>副本無 .git:實作 + unit test + 變異驗紅<br/>交 patch.diff + EVIDENCE(含 OBJECTION)"]
+  W --> AP["7 apply.sh(主線打)<br/>檔頭 / 越界 / reverse-check → t36 commit<br/>OBJECTION 收進票"]
+  AP --> G["8 gate.sh --branch(主線打)+ 9 waiver<br/>單元組 + 票的 tags"]
+  G -->|"紅 → auto-fix(今天沒觸發)"| AF["auto-fix.sh:紅榜 + repair_context → 新 worker ≤ 3 輪<br/>flake / 環境 / 空紅榜分開停"]
+  G -->|"反駁 test_defect"| V["10 驗證者(Opus,主線派)<br/>只改案例的讀取來源 → patch-verify"]
+  V --> AP2["11 apply 12 標 fixed 13 gate 重跑"]
+  AP2 --> IR["14 set InReview 15 派 reviewer(Opus)"]
+  IR -->|pass| RV["16 set review"]
+  RV --> L["17 land.sh(主線打)<br/>全套 620 → ff-only → push"]
+  L --> CL["18 close --landed 19 ack 20 commit 票檔"]
+  classDef human fill:#e7e6df,stroke:#5b6672,color:#1c2430;
+  classDef landed fill:#dbe8ee,stroke:#2f6f8f,color:#1c2430;
+  classDef hole fill:#f3dcdc,stroke:#b23a3a,color:#1c2430;
+  class M human; class O,W,V,AF,L landed; class AP,G,AP2,IR,RV,CL hole;
+    </pre></div></div>
+  </div>
+  <div class="diagram"><pre class="mermaid">
+flowchart LR
+  M["主線(3 下 + 裁示)"] -->|"1 派"| O["開題者(Fable)<br/>票 + land.sh docs 自己 commit(C5)"]
+  O --> T[("票 Ready")]
+  M -->|"2 sh scripts/auto-fix.sh n"| AF["auto-fix.sh 第 1 輪也由它起(C1)<br/>worker → apply → gate;(驗證者先行 C6,緩)"]
+  AF -->|紅| AF2["紅榜 + repair_context → 新 worker ≤ 3 輪<br/>test_defect → 驗證者;flake / 環境 / 空紅榜不派;三輪 → Blocked"]
+  AF2 --> AF
+  AF -->|綠| RV["review.sh(C2):reviewer 讀 code 對票面<br/>pass → set review;fail → objection + Blocked"]
+  RV -->|"inbox 一行:等落地"| M
+  M -->|"3 land.sh 順序"| L["land.sh:全套 → ff-only → push → close(C3)→ ack(C4)"]
+  AF2 -.->|"Blocked / 裁示(第四種,只在出事時)"| M
+  classDef human fill:#e7e6df,stroke:#5b6672,color:#1c2430;
+  classDef landed fill:#dbe8ee,stroke:#2f6f8f,color:#1c2430;
+  classDef design fill:#f4e6cf,stroke:#b5731a,stroke-dasharray: 5 4,color:#1c2430;
+  class M human; class T,AF2,L landed; class O,AF,RV design;
+  </pre></div>
+  <div class="tablewrap"><table>
+    <thead><tr><th>步驟</th><th>你想的</th><th>現在(設計 + 今天實跑)</th><th>誰比較好</th><th>你想的盲點 / 現在多出來的是什麼換的</th></tr></thead>
+    <tbody>
+      <tr><td>開題者</td><td>派 → 等回報</td><td>同;驗收 = 測試計畫(驗證者照它寫案例)、`verify_strings` / `tags` / `allowed_write_paths` 機器可驗;設計題先設計 session(D-019)</td><td>一樣(現在多了機械格)</td><td>票面寫不清,實作者、驗證者、閘門各走一趟都在答錯的問題 —— 12 張票 6 張含錯誤那段時期的教訓。</td></tr>
+      <tr><td>Worker 發 PR</td><td>worker 自己 git、開 PR</td><td>worker 在<b>沒有 .git 的副本</b>交 `patch.diff`;`apply.sh` 替它 commit 成 `t{n}` 分支(= PR),套之前擋檔頭 / 越界 / 回不去</td><td><b>現在</b></td><td>模型跑 git 出過三次事故:`git add -A` 偷走別票半成品、`git stash` 把自己的工作回退、裸 commit 進主線。PR 與 patch+apply 是同一個東西,差別只在「誰按 git」。</td></tr>
+      <tr><td>Worker close</td><td>worker 做完自己 close</td><td>worker 交付即結束;close 是落地後的**機械四條件**(字串在主線、回歸證據或誠實 waiver、review 綁版本、反駁全處置)</td><td><b>現在</b></td><td>「沒有東西可做」與「做完了」在 worker 自己嘴裡長得一樣(§5.5 常設條款)。close 由誰按不重要,重要的是條件不是它自己說了算。</td></tr>
+      <tr><td>Regression script</td><td>跑 PR;紅 → 收紅 case + PR + 原票派新 worker;綠 → 自動進 code</td><td>`gate.sh` + `auto-fix.sh` 就是這個(`repair_context` = base_sha、票面快照、patch、紅榜、上一輪 EVIDENCE、輪數);多了:**三輪上限 → Blocked**、flake 判定、環境紅不派、空紅榜不派、`test_defect` 反駁走驗證者</td><td>骨架一樣;<b>現在</b>多的是停損</td><td>沒有輪數上限 = 無限迴圈;環境壞(螢幕鎖、磁碟滿、Safari 斷線)會讓它一直派 worker 修不存在的 bug;紅榜解析不出來時 worker 拿空榜去猜;案例本身錯了讓 worker 修 = worker 會把擋路的斷言改掉。</td></tr>
+      <tr><td>綠 → 進 code</td><td>自動 merge</td><td>綠 → InReview → **reviewer 讀 code 對票面**(D-022)→ 主線排順序 → `land.sh` 在乾淨 worktree 跑**全套** → ff-only → push;D-025 後 close / ack 也自動</td><td><b>你的方向對</b>(D-025 就是往這裡收),但 reviewer 與全套要留</td><td>閘門綠 = 「worker 自己寫的測試說綠」。worker 能加測試就能改測試(#34 就替換了一條既有測試,reviewer 判定合理);兩支各自綠的分支合起來不一定綠(所以 land 一次一批、全套、鎖);順序在多票平行時是判斷(`allowed_write_paths` 衝突圖可以之後自動)。</td></tr>
+      <tr><td>驗證者</td><td>讀票、設計 + 實作驗證 case</td><td>同;**只證乾淨基底紅、不證綠**(D-020),綠由閘門對實作 patch 量;案例格式 lint;worker 不准動 `verify/`(越界擋)</td><td>一樣;現在多了 D-020</td><td>要驗證者「證明案例做得到綠」= 它得自己搭一份參考實作,9/23 量到每票多燒 5–15 萬 token(#23 340K)。案例錯了誰修:不是 worker,是另一個驗證者(今天 #36 走了這條)。</td></tr>
+      <tr><td>主線收回報</td><td>收 4 種:worker 完成、驗證、修改、票完成</td><td>目標:只收**一行終態**(等落地 / Blocked / 裁示);今天實跑是 20 下,因為綠的那條路全程手動</td><td><b>目標比你想的還少</b></td><td>主線的上下文最貴,每收一次回報 = 整份重送一輪(D-010 / D-015)。你想像的 4 次回報比設計目標(1 次)還多;今天的 20 下則是制度沒落完的過渡,不是設計。</td></tr>
+      <tr><td>你沒畫的</td><td>—</td><td>reviewer(D-022)、docs 通道(裁示 / 票檔進主線不裸 commit)、記憶回寫、事件 / 收件匣 / heartbeat、session 契約(#39 / #652)</td><td>—</td><td>這些不是流程,是「換掉主線 session 還能接手」的基礎設施 —— 你另一個問題的答案。</td></tr>
+    </tbody>
+  </table></div>
+  <ul class="notes">
+    <li><b>結論</b>:你想的就是現在的骨架(`docs/WORKFLOW.md` / `ROLES.md` 照這個寫的);現在多出來的每一道都是某次事故換的,拿掉就是決定那個事故可以再來。你想的比現在<b>好</b>的那一段 —— 綠了就自動走到底 —— 正是 D-025 裁下去的 C1–C4;做完之後主線比你想像的還少碰(1 次終態,不是 4 次回報)。</li>
+    <li><b>三個盲點</b>:① worker 自己按 git、自己 close(自證);② 回歸腳本沒有停損(輪數 / flake / 環境 / 空紅榜);③ 綠是測試說的,而測試是 worker 自己寫的 —— 沒有獨立驗證者 + 變異驗紅 + reviewer,「做完了」與「把擋路的測試改掉」長得一樣。</li>
+  </ul>
 
   <h3>主線接觸點:前後對照(設計 session 讀 code 推的;「前」由實測 7 下佐證)</h3>
   <div class="two">
