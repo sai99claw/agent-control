@@ -416,6 +416,7 @@ EVIDENCE,不改它**。看板的 `/t/<票號>` 畫的就是那一份。
 | `excluded` | 陣列 | 已排除的假設,一項一句(§8 第 5 點的機器版) |
 | `repro` | 物件 | `{cmd, expect}`:最小重現那一句與預期輸出(§8 第 6 點) |
 | `memory` | 陣列 | 這一輪寫的記憶,一項 `{layer, name, line, ticket}` |
+| `baseline` | 物件或 `null` | **只有 verifier 寫**:`verify-case.py red` 印出的 `<out-dir>/baseline-red.json` 原封抄進來,`stage` 必是 `red`;worker 留 `null`;`apply.sh --evidence-verifier` 在鎖裡把它併進票的 `verify.baseline` |
 
 `memory` 是**鏡像,不是入口**:真正寫進記憶的是 §8 第 8 點那幾行 `memory.py note`,
 抽這一塊不會再寫第二次。兩份對不上的時候要修的是你自己的 EVIDENCE。

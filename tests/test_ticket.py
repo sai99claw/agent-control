@@ -221,7 +221,8 @@ class VerifyStringHelp(Sandbox):
         rows = [line for line in printed.splitlines()
                 if re.match(r"\s+--verify-string\s{2,}", line)]
         self.assertEqual(len(rows), 1, printed)
-        for phrase in ("路徑:那串字", "像路徑", "純字串", "純字串含冒號不切"):
+        for phrase in ("路徑:那串字", "像路徑", "純字串", "純字串含冒號不切",
+                       "./README:那串字"):
             self.assertIn(phrase, rows[0])
 
 

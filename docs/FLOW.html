@@ -269,7 +269,7 @@ flowchart TB
   T -->|"rules.py pack worker --model opus<br/>+ 票號 + base sha + $W/work、$W/base"| W["實作者(worker)"]
   T -->|"templates/dispatch-verifier.md<br/>+ rules.py pack verifier"| V["驗證者(verifier)"]
   W -->|"patch.diff(diff -ruN base work)<br/>+ EVIDENCE.md(五段 + 記憶段 + result)"| AP["scripts/apply.sh {n} patch.diff [patch-verify.diff] --evidence EVIDENCE.md"]
-  V -->|"verify/{feature}/test_ticket_{n}.py + verify/TAGS.d/{n}.md<br/>票的 verify 欄(ticket.py set)+ verify.baseline stage=red(verify-case.py red)<br/>patch-verify.diff(verify-case.py extract)"| AP
+  V -->|"verify/{feature}/test_ticket_{n}.py + verify/TAGS.d/{n}.md<br/>票的 verify 欄(ticket.py set)+ result.baseline ← verify-case.py red 印的 baseline-red.json(apply.sh --evidence-verifier 併進票,stage=red)<br/>patch-verify.diff(verify-case.py extract)"| AP
   AP -->|"t{n} 分支 + commit(訊息帶 patch sha256)"| G["scripts/gate.sh --branch --ticket {n}"]
   G -->|"reports/t{n}/{run_id}/status.json + verify.log<br/>reports/inbox/{n}-{run_id}.md"| Q{"rc"}
   Q -->|"非 0:status.json 紅榜"| AF["scripts/auto-fix.sh {n}(見 E)"]
@@ -320,7 +320,7 @@ flowchart LR
   GW --> L["land.sh 第 5 步<br/>verify.files 真的在分支上(rc=4)<br/>第 6 步 review / objections"]
   GV --> L
   L --> CL["ticket.py close<br/>只認 verify.baseline.stage == check(或 verify_waiver)"]
-  R0["驗證者交件前自己跑<br/>verify-case.py red {n}:只證乾淨基底紅、紅在自己的 AssertionError<br/>寫票 verify.baseline{stage:red}"] -.-> V
+  R0["驗證者交件前自己跑<br/>verify-case.py red {n}:只證乾淨基底紅、紅在自己的 AssertionError<br/>只印 {out-dir}/baseline-red.json → 抄進 result.baseline → apply.sh --evidence-verifier 併進票(stage=red)"] -.-> V
   classDef landed fill:#dbe8ee,stroke:#2f6f8f,color:#1c2430;
   classDef design fill:#f4e6cf,stroke:#b5731a,stroke-dasharray: 5 4,color:#1c2430;
   classDef hole fill:#f3dcdc,stroke:#b23a3a,color:#1c2430;
