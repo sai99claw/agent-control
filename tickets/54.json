@@ -31,8 +31,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "d3a9b546156410c920bcb6382dccadf4442ffb94",
-  "state": "Ready",
-  "state_version": 2,
+  "state": "Done",
+  "state_version": 12,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -53,5 +53,63 @@
   ],
   "test_plan": "單元層 + 回歸層,全在 repo 自己的 verify/ 與 tests/,不碰埠、不動真 repo 狀態(memory.py check 只在 Sandbox 副本裡跑;A2 那次對主 repo 跑 check 是唯讀的量,只看 stdout)。A1/A2 可觀察 = verify.py 全跑的 Ran/OK、memory.py check 那一行的數字與「檔上的上限」字樣、gate rc;期望值:句子字面來自 tickets/20.json 驗收⑦(不從被測程式抄),上限 2700 來自 implementer.md front matter(memory.py 的量法 = 正文不計 front matter,scripts/memory.py:112-135)。M1/M2 各紅一次。標籤留空:案例已在 verify/agent-output(TAGS.d/20.md 登記 agent-output),tags 空時閘門回歸層跑整支 verify.py 自然含它。",
   "outline": "2026-09-27 開題者實測 d3a9b54(D-033)。根因:(1) test_ticket_20:136 先紅在 assertIn 句子 —— fa66048 把「寫不出來的欄位照實留空,不要編」縮成「寫不出的欄位留空不編」;同一方法 :137 接著會紅在 len(整份檔含 front matter)=3002 > config 2000,而 memory.py check 量正文 2640、上限吃檔上 2700 → rc 0:同一個上限兩個真相、兩種量法(D-018)。(2) test_verify_runner:35 是 verify.py 全跑 rc==0,git blame f6e36f5b/#32 只釘 rc,不釘任何句子;紅是 (1) 的連帶。裁示:memory.py 是上限與量法唯一真相(D-013、cap_history 就是逐檔提上限的路),test_ticket_20 拿掉自己量的那幾行,上限交給同檔既有 Sandbox 案例(它拿真實兩張卡跑 memory.py check,實測 M1 會紅);那一句是 tickets/20.json 驗收⑦明文釘的(兩張卡各加一句),restore 一行、不重整;整理者「規則包已注入 D-017」屬實(pack worker 含 1 次)但票面釘的是卡本身,兩處並存 15 字元。全部在 scratch 副本實測:修後 verify.py 22 OK、runner 案例 OK、M1/M2 各紅。needs_verifier=false:修的是驗證者案例的 test_defect + 一行 restore,沒有產品碼,期望值是票面字面與 memory.py 輸出,M1/M2 由實作者證紅(D-028)。本票授權 worker 寫 verify/agent-output/test_ticket_20.py(角色卡「不寫 verify/**」的例外,因為改的就是案例本身)。順序:獨立,可立刻跑;落地後主線用 docs 通道在 discussions/2026-09-27-memory-fable.md 補一行「L9 那句被 #20 驗收⑦釘住,#54 restore」,並處置 #53 那筆 objection。",
-  "needs_verifier": false
+  "needs_verifier": false,
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 32,
+      "tokens_out": 12232,
+      "cache_write": 47406,
+      "cache_read": 696376,
+      "wall_seconds": 291,
+      "by": "auto-fix.sh",
+      "at": "2026-09-27T04:56:04+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 8,
+      "tokens_out": 3381,
+      "cache_write": 32692,
+      "cache_read": 129472,
+      "wall_seconds": 36,
+      "by": "review.sh",
+      "at": "2026-09-27T04:57:05+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 24,
+      "tokens_out": 8238,
+      "cache_write": 38749,
+      "cache_read": 486405,
+      "wall_seconds": 139,
+      "by": "auto-fix.sh",
+      "at": "2026-09-27T05:06:20+08:00"
+    }
+  ],
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "d01e3cd",
+    "note": "reports/t54/20260927-045605-26610/REVIEW.md",
+    "at": "2026-09-27T05:08:00+08:00",
+    "state_version": 12
+  },
+  "objections": [
+    {
+      "category": "blocking",
+      "body": "land gate ran verify.py with AC_ROOT=main repo (/Users/franksai/ai_workspace/claude_workspace/agent-control @ 49692dc, pre-fix), so it executed main's old verify/agent-output/test_ticket_20.py against main's old implementer.md; the land worktree (d01e3cd) already carries the fix and is green — nothing to change inside allowed_write_paths, the gate's root selection needs a fix outside this ticket.",
+      "evidence": "../agent-control-wt/fix-t54/round2/EVIDENCE-round2.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "main 2026-09-27: land's verify layer runs against main root (pre-fix); gap to be fixed outside this ticket"
+    }
+  ],
+  "owner": "main"
 }
