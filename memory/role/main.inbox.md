@@ -15,3 +15,4 @@
 - ticket.py close 的 done_blockers 不認 needs_verifier=false(gate 認),D-028 之後每張工具票都得再簽一次 waiver 才關得掉 —— #43(land 試 close)要一起收:needs_verifier=false 且 review pass 視同回歸證據那格 (#41, 2026-09-26, main@fable)
 - review.sh 首跑 9/26 #42:headless 覆核 2 分鐘 $1.11 pass 直寫票;覆核者卡的 40K 上限每次都超(實測 35–100K),要調;手跑 gate 沒帶 AC_ROOT 會把 InReview/review 寫進 worktree 那份票(land 會拒,不會假 review) (#42, 2026-09-26, main@fable)
 - 2026-09-26 T#652 實測:`sync-to-project.sh` 不會退場 `docs/roles/dispatcher.md`(不在 manifest,sync 只唸「非產出物」);T 端這次手刪。要退場得把它列進 sync 的退場名單 —— 給下一個開題者。
+- 2026-09-26 T#653 實測兩個 A 側缺口(T 的 gate 綠自動叫 review.sh 因此撤回,另開票時一起收):(1) `review.sh` 只收 `InReview`,T 閘門綠寫的是 `AwaitingReview`(demo/test_control 釘著這個字,4 處)—— review.sh 也收 AwaitingReview 最省;(2) `templates/dispatch-reviewer.md` 不在 `sync-to-project.sh` 名單,T 沒範本 review.sh rc=2。
