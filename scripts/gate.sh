@@ -567,16 +567,20 @@ regression() {   # $1 = ticket|full;設定 VRC
 # `needs_verifier is not False` 且 `in_scope` 含產品碼(不在 `docs/` / `board/` /
 # `scripts/control/` 這幾個前綴底下)才要求案例。兩支各自寫一份的那一刻,同一張票在
 # 閘門是缺口、在落地是放行 —— 而兩份規則都看起來像規格(D-018)。
+#
+# **verify_plan 與 candidate_reds 走同一條路**(#40):`ticketlib.load`,票的根由
+# `event.repo_root()`(`AC_ROOT` 蓋得掉)決定。以前這裡拿 `$ROOT` 拼票檔路徑,閘門在
+# 票 worktree 裡跑時讀到的是 worktree 那一份舊票 —— 主 repo 上後來補的 `verify_waiver` /
+# `needs_verifier=false` 看不到,要人手帶 `AC_TICKETS_DIR` 才對;沒帶的那一次,一張明說
+# 不要案例的票在這裡被判成缺口。
 verify_plan() {
     python3 - "$ROOT" "$TICKET" <<'TICKET_PY' 2>/dev/null
-import json, os, sys
+import os, sys
 root, ident = sys.argv[1], sys.argv[2]
 sys.path.insert(0, os.path.join(root, "scripts"))
-import event
-path = os.path.join(event.tickets_dir(root), "%s.json" % ident)
+import ticket as ticketlib
 try:
-    with open(path, encoding="utf-8") as handle:
-        data = json.load(handle)
+    data = ticketlib.load(ident)
 except (OSError, ValueError):
     raise SystemExit(3)
 waiver = data.get("verify_waiver")
