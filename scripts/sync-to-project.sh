@@ -15,8 +15,9 @@
 # 可以呼叫 —— 專案端根本沒有這幾支。所以這裡把它們同步過去,放在 `scripts/control/`
 # (與專案自己的 `scripts/` 分開:**看得出哪幾支是產出物**,改錯地方的人當場知道)。
 #
-# 名單裡有 `event.py` / `ticket.py` / `verify.py`,不是因為專案要直接叫它們,是因為
-# 另外那幾支 `import` 它們 —— 少了它們,同步過去的是一組 import 就炸的檔。
+# 名單裡有 `event.py` / `ticket.py`,不是因為專案要直接叫它們,是因為另外那幾支
+# `import` 它們 —— 少了它們,同步過去的是一組 import 就炸的檔。`verify.py` 也被 import,
+# 但它**同時是入口**:專案的閘門要跑它(#35),所以它跟入口一起查接線。
 #
 # ## 暫存區不同步、`<專案>/memory/` 一個位元組都不碰(2026-09-23,D-021)
 # `memory/` 永遠是「這個 repo 自己寫的」;`roles_dir` 是「規矩從哪來」。所以 A 的
@@ -98,10 +99,13 @@ CTRL_MANIFEST=$CTRL/.sync-manifest
 NEW_SCRIPTS=""
 # 專案端要用到的那幾支 + 它們 import 的。順序無所謂,名單本身要進 code review。
 SCRIPT_LIST="status.py verify-case.py apply.sh auto-fix.sh inbox.py rules.py memory.py event.py ticket.py verify.py"
-# 這三支**不是入口**,是被上面那幾支 `import` 的(見檔頭)。查「接了沒」時要把它們挑掉
+# 這兩支**不是入口**,是被上面那幾支 `import` 的(見檔頭)。查「接了沒」時要把它們挑掉
 # —— 對一支本來就沒有人直接叫的檔說「沒有呼叫點」,是一句假話,而假警報會讓真的那幾條
 # 被一起跳過(`docs/DISPATCH-TEMPLATE.md` §5.7)。
-DEPENDENCY_ONLY="event.py ticket.py verify.py"
+# `verify.py` **不在這裡**(#35):專案的閘門直接跑它,而下游專案的閘門跑的是它自己那支
+# `scripts/verify.py`(與 control 那份內容不同)—— 把它當成「只被 import」,就看不見
+# 那個分岔,既有測試還把「不准點名它」釘死了。
+DEPENDENCY_ONLY="event.py ticket.py"
 
 copy_dir() {  # $1 = 來源目錄  $2 = 目的目錄  $3 = manifest 前綴
   mkdir -p "$2"
@@ -289,6 +293,19 @@ if [ -n "$UNCALLED" ]; then
 else
   echo "sync: 專案端每一支都有呼叫點(排除只被 import 的 $DEPENDENCY_ONLY)。"
 fi
+
+# 同名分岔檔(#35):專案自己的 `scripts/<名>.py` 與同步過去的 `scripts/control/<名>.py`
+# 內容不同 —— 專案的腳本叫的是自己那一支,同步過去的那一份再新也用不到,而兩份讀起來
+# 都像規格。該留哪一份由專案裁,這裡只說出來(不動專案的檔)。
+for name in $SCRIPT_LIST; do
+  case "$name" in *.py) ;; *) continue ;; esac
+  [ -f "$DEST/scripts/$name" ] && [ -f "$HERE/scripts/$name" ] || continue
+  if ! cmp -s "$DEST/scripts/$name" "$HERE/scripts/$name"; then
+    echo "sync: 專案有同名分岔檔:$name"
+    echo "sync:   scripts/$name 與 scripts/control/$name 內容不同;專案的腳本叫的是前者 ——"
+    echo "sync:   改成呼叫 scripts/control/$name,或刪掉其中一份(專案裁)。"
+  fi
+done
 
 # `docs/roles/` 裡**不在 manifest 上**的檔:那是專案自己放的,不是產出物。
 # 混在產出物目錄裡的自建檔,下一次同步不會被蓋、也不會被退場,而它讀起來與角色卡一樣 ——

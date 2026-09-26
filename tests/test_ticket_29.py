@@ -14,7 +14,7 @@ A1  | unit    | `rules.py pack design/reviewer`、讀 `memory/role/`、`docs/ROL
 A2  | unit    | 讀 `templates/dispatch-opener.md`、`memory/role/opener.md`、`docs/ROLES.md` | 檔存在 / 字樣命中 / grep 計數 | 票面 acceptance A2
 A3  | sandbox | 沒有 `reports/t1/` 時跑 `auto-fix.sh 1 --dry-run --round 1` | rc、stdout 含票號 | 票面 acceptance A3
 A4  | sandbox | `apply.sh 1 <patch> --evidence <E>`(E 帶 result 區塊 / OBJECTION 行) | `reports/t1/*/result-round1.json` 是否存在;票的 `objections[]` | 票面 acceptance A4
-A5  | unit    | 讀 `memory/role/verifier.md`、`templates/dispatch-verifier.md`、`scripts/apply.sh` | `EVIDENCE-verifier` 出現次數是否一致、`--evidence-verifier` 旗標 | 票面 acceptance A5
+A5  | sandbox | `apply.sh 1 <patch> --evidence-verifier <E>`;讀 `memory/role/verifier.md`、`templates/dispatch-verifier.md` | `reports/t1/*/result-verifier-round1.json` 存在且 `present:true`;兩份文件各 ≥1 次 | 票面 acceptance A5(#35 A4 改測行為)
 A6  | sandbox | 真跑一輪紅 → worker 修好 → 閘門綠 → InReview | `fix-t1/round2/work`、`/base` 是否還在 | 票面 acceptance A6
 A7  | sandbox | 手造票(baseline 缺、review.sha 在主線)走 `ticket.py close` | stdout 是否有一行同時含真的 `--ref <base_sha>` 與 `--candidate <review_sha>` | 票面 acceptance A7
 A8  | sandbox/unit | 讀 `memory/role/consolidator.md`、`templates/dispatch-consolidator.md`;真跑 `memory.py check` | 檔存在;開出的整理票 `outline` 欄 | 票面 acceptance A8
@@ -28,8 +28,8 @@ A12 | unit    | 讀 `docs/DESIGN-VERIFY-CASES.md`、`docs/DECISIONS.md`、`docs/
 "未來每票"              ← A1 斷言 `tickets/SCHEMA.md`/`docs/DESIGN.md` 含它
 "TICKET-OPENER-PROMPT"  ← A2 斷言 `memory/role/opener.md` 的命中次數
 "outline"               ← A2 斷言 `memory/role/opener.md` 交付物欄提到這個欄名
-"EVIDENCE-verifier"     ← A5 斷言兩份文件的命中次數一致
-"--evidence-verifier"   ← A5 斷言 `scripts/apply.sh` 有沒有這個旗標
+"EVIDENCE-verifier"     ← A5 斷言兩份文件各命中 ≥1 次
+"result-verifier-round1" ← A5 斷言 `apply.sh --evidence-verifier` 抽出的檔名
 "--ref" / "--candidate" ← A7 斷言 `ticket.py close` 印出的那一行同時含這兩個旗標與真的 sha
 "templates/dispatch-consolidator.md" ← A8 斷言整理票 `outline` 欄引用它
 "同步了但專案端沒有呼叫點" ← A11 斷言 `sync-to-project.sh` 的 stdout 含它
@@ -254,30 +254,57 @@ class Acceptance4ApplyExtractsResultAndRecordsObjection(Sandbox):
 # ---------------------------------------------------------------- acceptance 5
 
 
-class Acceptance5EvidenceVerifierRecipientIsUndecided(unittest.TestCase):
-    """G5:驗證者角色卡要求交 `EVIDENCE-verifier.md`,但沒有任何入口讀它 ——
-    一份沒有收件者的交付物。"""
+VERIFIER_EVIDENCE = """# EVIDENCE-verifier
 
-    def test_a5_mention_counts_disagree_between_card_and_template(self):
-        """A5 二選一:(a) 刪掉該交付物,`EVIDENCE-verifier` 在兩份文件裡都是 0 次、
-        `apply.sh` 無 `--evidence-verifier` 旗標;或 (b) `apply.sh` 收
-        `--evidence-verifier <E>`,兩份文件都 ≥1 次。"""
-        role_mentions = read("memory/role/verifier.md").count("EVIDENCE-verifier")
-        template_mentions = read("templates/dispatch-verifier.md").count(
-            "EVIDENCE-verifier")
-        has_flag = "--evidence-verifier" in read("scripts/apply.sh")
-        self.assertEqual(role_mentions, template_mentions,
-                         "memory/role/verifier.md 提了 EVIDENCE-verifier %d 次,"
-                         "templates/dispatch-verifier.md 提了 %d 次 —— 兩選一還沒選"
-                         % (role_mentions, template_mentions))
-        if role_mentions == 0:
-            self.assertFalse(has_flag,
-                             "兩份文件都不提 EVIDENCE-verifier,"
-                             "apply.sh 卻還留著 --evidence-verifier 旗標")
-        else:
-            self.assertTrue(has_flag,
-                            "兩份文件都在提 EVIDENCE-verifier,"
-                            "apply.sh 卻沒有 --evidence-verifier 這個收件入口")
+## result
+```result
+{"ticket": "1", "role": "verifier", "round": 1, "rc": 0}
+```
+"""
+
+
+class Acceptance5EvidenceVerifierRecipientIsUndecided(Sandbox):
+    """G5:驗證者角色卡要求交 `EVIDENCE-verifier.md`,但沒有任何入口讀它 ——
+    一份沒有收件者的交付物。
+
+    #35:以前這裡比「兩份文件的提及數相等 + `apply.sh` 裡有沒有那個子字串」
+    —— 旗標只留在註解、抽取整段拿掉照樣綠,正確實作多寫一句提及反而紅。改成真的跑一次
+    `apply.sh --evidence-verifier` 看產物;文件側只斷 ≥1。"""
+
+    def setUp(self):
+        super(Acceptance5EvidenceVerifierRecipientIsUndecided, self).setUp()
+        self.write("src/a.txt", "old\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "主線上先有 src/a.txt")
+        self.git("push", "-q", "origin", "main")
+        self.make_ticket("1")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "開票 #1")
+
+    def test_a5_apply_evidence_verifier_writes_result_verifier_round1(self):
+        """A5 `apply.sh <n> <patch> --evidence-verifier <E>` 之後
+        `reports/t<n>/<run_id>/result-verifier-round1.json` 存在且 `present` 為 true。
+
+        **變異**:`apply.sh` 的 `--evidence-verifier` 抽取段註解掉 → 這一條紅。
+        """
+        patch = self.write("p.diff", CHANGE, where=self.home)
+        evidence = self.write("EVIDENCE-verifier.md", VERIFIER_EVIDENCE, where=self.home)
+        done = self.run_sh("scripts/apply.sh", "1", patch,
+                           "--evidence-verifier", evidence)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        found = glob.glob(os.path.join(self.repo, "reports", "t1", "*",
+                                       "result-verifier-round1.json"))
+        self.assertEqual(len(found), 1,
+                         "apply.sh --evidence-verifier 沒有抽出 result-verifier-round1.json:"
+                         + done.stdout + done.stderr)
+        with open(found[0], encoding="utf-8") as handle:
+            self.assertIs(json.load(handle).get("present"), True)
+
+    def test_a5_both_documents_still_mention_evidence_verifier(self):
+        """A5 `memory/role/verifier.md` 與 `templates/dispatch-verifier.md` 對
+        「EVIDENCE-verifier」提及各 ≥1(不比兩份相等)。"""
+        for rel in ("memory/role/verifier.md", "templates/dispatch-verifier.md"):
+            self.assertGreaterEqual(read(rel).count("EVIDENCE-verifier"), 1, rel)
 
 
 # ---------------------------------------------------------------- acceptance 6

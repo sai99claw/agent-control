@@ -92,14 +92,11 @@ class TheVerifierEvidenceHasAReceiver(unittest.TestCase):
     def test_both_documents_still_ask_for_it(self):
         card = self.mentions(os.path.join("memory", "role", "verifier.md"))
         template = self.mentions(os.path.join("templates", "dispatch-verifier.md"))
+        # 只斷 ≥ 1,**不比兩份相等**(#35):提及數相等量的是措辭,不是收件入口在不在
+        # —— 正確的文件多寫一句就紅。收件入口在不在,由 `tests/test_ticket_29.py` 的 A5
+        # 真的跑一次 `apply.sh --evidence-verifier` 看產物。
         self.assertGreaterEqual(card, 1)
         self.assertGreaterEqual(template, 1)
-        # **兩份的提及數要一樣**:驗收案例(`tests/test_ticket_29.py` 的 A5)拿數字
-        # 相等當「二選一真的選完了」的判準,所以這裡把同一個條件釘在自己這一層 ——
-        # 不然下一個人改一句措辭,紅的會是驗收層,而他看不出是自己改的。
-        self.assertEqual(card, template,
-                         "角色卡提 %d 次、範本提 %d 次 —— A5 的驗收要求兩邊一致"
-                         % (card, template))
 
     def test_the_program_entry_really_exists(self):
         """**變異**:把 `apply.sh` 的 `--evidence-verifier` 那一格拿掉 → 這一條紅。"""

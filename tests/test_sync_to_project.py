@@ -97,19 +97,39 @@ class DidTheProjectActuallyWireItUp(unittest.TestCase):
             handle.write("#!/bin/sh\n" + caller)
 
     def test_a_script_nobody_calls_is_named(self):
-        """**變異**:把結尾那一段 `UNCALLED` 拿掉 → 這一條紅。"""
+        """**變異**:把結尾那一段 `UNCALLED` 拿掉 → 這一條紅;把 `verify.py` 放回
+        `DEPENDENCY_ONLY` → 這一條紅(#35 A3:以前這裡斷言它**不准**出現,把錯的現況
+        釘死了 —— 專案的閘門直接跑 verify.py,它不是只被 import 的那一種)。"""
         with tempfile.TemporaryDirectory() as d:
             self.project(d)
             r = sync(d)
             self.assertEqual(r.returncode, 0, r.stderr)
             line = [x for x in r.stdout.splitlines() if "沒有呼叫點" in x]
             self.assertTrue(line, "同步完了卻不說有沒有接上:" + r.stdout)
-            for name in ("apply.sh", "inbox.py", "rules.py", "memory.py"):
+            for name in ("apply.sh", "inbox.py", "rules.py", "memory.py", "verify.py"):
                 self.assertIn(name, line[0], name)
-            for dependency in ("event.py", "ticket.py", "verify.py"):
+            for dependency in ("event.py", "ticket.py"):
                 self.assertNotIn(dependency, line[0],
                                  "只被 import 的那幾支本來就沒有人直接叫,"
                                  "對它們喊「沒有呼叫點」是一句假話")
+
+    def test_dry_run_names_verify_py_when_no_script_calls_control_verify_py(self):
+        """#35 A1:專案有 `scripts/*.sh` 但沒有一支呼叫 `control/verify.py` →
+        `--dry-run` 那一行「同步了但專案端沒有呼叫點」含 verify.py。
+
+        **變異**:把 `verify.py` 放回 `DEPENDENCY_ONLY` → 這一條紅。
+        """
+        with tempfile.TemporaryDirectory() as d:
+            self.project(d, caller='sh scripts/control/apply.sh "$N" patch.diff\n'
+                                   'python3 scripts/verify.py --tag x\n')
+            r = sync(d, "--dry-run")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            line = [x for x in r.stdout.splitlines()
+                    if "同步了但專案端沒有呼叫點" in x]
+            self.assertTrue(line, r.stdout)
+            self.assertIn("verify.py", line[0],
+                          "專案叫的是自己那支 scripts/verify.py,control 那份沒人叫")
+            self.assertNotIn("apply.sh", line[0], "被叫到了卻說沒有")
 
     def test_a_variable_form_call_counts_as_wired(self):
         """專案拉一格 `CONTROL=$ROOT/scripts/control` 再 `$CONTROL/apply.sh` 是**真的
@@ -157,6 +177,41 @@ class DidTheProjectActuallyWireItUp(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(d, "docs", "roles",
                                                         "dispatcher.md")),
                             "只唸出來,不刪 —— 那是專案的東西")
+
+
+class ASameNamedForkInTheProjectIsNamed(unittest.TestCase):
+    """#35 A2:專案自己有一支 `scripts/verify.py`,與同步過去的 `scripts/control/verify.py`
+    內容不同 —— 專案的閘門跑的是前者,後者再新也用不到,而兩份讀起來都像規格。"""
+
+    FORK = "sync: 專案有同名分岔檔:verify.py"
+
+    def project(self, dest, own_verify):
+        write_config(dest)
+        os.makedirs(os.path.join(dest, "scripts"), exist_ok=True)
+        with open(os.path.join(dest, "scripts", "verify.py"), "w",
+                  encoding="utf-8") as handle:
+            handle.write(own_verify)
+
+    def test_a_different_verify_py_is_named(self):
+        """**變異**:把分岔檔那一段的 `echo` 拿掉 → 這一條紅。"""
+        with tempfile.TemporaryDirectory() as d:
+            self.project(d, "#!/usr/bin/env python3\nprint('專案自己的 verify')\n")
+            r = sync(d, "--dry-run")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn(self.FORK, r.stdout.splitlines())
+
+    def test_an_identical_verify_py_is_not_named(self):
+        """內容一樣就不是分岔 —— 對它喊是一句假警報(§5.7)。
+
+        **變異**:把 `cmp -s` 那一格拿掉(一律印)→ 這一條紅。
+        """
+        with open(os.path.join(HERE, "scripts", "verify.py"), encoding="utf-8") as handle:
+            same = handle.read()
+        with tempfile.TemporaryDirectory() as d:
+            self.project(d, same)
+            r = sync(d, "--dry-run")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("同名分岔檔", r.stdout)
 
 
 class SyncToProject(unittest.TestCase):
