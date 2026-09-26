@@ -88,18 +88,19 @@ html{scroll-behavior:smooth;scroll-padding-top:56px}
 
 <main>
 <header class="top">
-  <div class="eyebrow">agent-control · docs/FLOW.html · 2026-09-23(下午第二版:A 補兩節、B/C 標起收、E 補 auto-fix 逐步、G 加 G13–G17)· 設計 session(Fable)</div>
+  <div class="eyebrow">agent-control · docs/FLOW.html · 2026-09-26 現況版(第 0 節新增;A–G 是 9/23 的圖,G 的落點看第 0 節)· 主線(Fable)</div>
   <h1>一個需求怎麼從一句話走到主線,中間每一支箭頭交的是什麼</h1>
   <p>七題,一題一張圖、一張表。節點只用 repo 裡真的檔名與腳本名。每個結論標 <span class="src t">實測</span>(讀了檔、跑了 --help、ls 過)或 <span class="src">讀 code 推的</span>。沒有格式定義、或沒人機器驗的格子標紅,並收進票 #29。</p>
   <div class="legend">
-    <span class="chip landed">已落地</span> 程式入口存在(main bf11529;#25 / #26 / #28 / #31 今天已落地)
-    <span class="chip design">設計中</span> D-020 只剩 #27(gate 接 lint→check)尚未落地,票 Ready
+    <span class="chip landed">已落地</span> 程式入口存在(A main b5a75f6;#29 / #30–#33 9/23 已落地,G1–G12 因此關掉)
+    <span class="chip design">設計中 / 已開票</span> #34–#38、T#651 今天開的;主線接觸點收斂六張(DESIGN-MAIN-TOUCHPOINTS)未開
     <span class="chip warn">黃</span> 有定義但只驗一半
     <span class="chip hole">標紅</span> 沒定義或沒人驗 → #29
   </div>
 </header>
 
 <nav class="toc" aria-label="章節">
+  <a href="#now"><b>0</b> 09-26 現況</a>
   <a href="#a"><b>A</b> 需求到落地</a>
   <a href="#b"><b>B</b> 角色一覽</a>
   <a href="#c"><b>C</b> 生命週期</a>
@@ -108,6 +109,77 @@ html{scroll-behavior:smooth;scroll-padding-top:56px}
   <a href="#f"><b>F</b> 兩個 repo</a>
   <a href="#g"><b>G</b> 寫不出來的</a>
 </nav>
+
+<!-- ============================================================ 0 現況 -->
+<section id="now">
+  <h2><span class="q">0</span>2026-09-26 現況:落了什麼、開了什麼、要裁什麼</h2>
+  <p class="lead">給產品負責人 review 用。下面三張表都是今天(9/26)的事實;A–G 七節是 9/23 畫的圖,原樣保留,G1–G17 的落點在表 ①。標 <span class="src t">實測</span> 的是主線跑過指令看到的;其餘來自開題者 / 設計 session 的回報。</p>
+
+  <h3>今天做了什麼(主線,依序)</h3>
+  <ul class="notes">
+    <li><b>裁示</b> D-023(開題預設 Fable;簡單題可 Opus;<b>Sonnet 不開題</b>)、D-024(制度與工具先做完,再回產品票)—— <code>f3482b3</code>,走 docs 通道 <span class="src t">實測</span>。</li>
+    <li><b>開題者(Fable)</b>把 9/23 收工票單開成 A #34–#38 + T #651(<code>49f9223</code>);順便查出 A #3(InReview 老票)只剩 <code>create</code> 配號鎖沒做,併進 #37。</li>
+    <li><b>設計 session(Fable)</b>:<code>docs/DESIGN-MAIN-TOUCHPOINTS.md</code>(<code>b5a75f6</code>)。實測 #23–#33 主線每票親手打 5–13 下、中位數 7;收件匣 40 則 24 則沒 ack;<b>auto-fix 三天只跑 2 次</b>(都是第 2 輪)—— 綠的那條路全程手動,自動化沒機會啟動。結論:每票收到 <b>3 下</b>(派開題者 → <code>auto-fix.sh &lt;n&gt;</code> → <code>land.sh</code> 順序),守衛一道不拿。</li>
+    <li><b>開題者(Fable)</b>:「流程放哪裡才會被確實讀到」→ <b>A #39</b>(<code>scripts/session-hook.sh</code> + repo 內 <code>.claude/settings.json</code> 的 SessionStart hook 叫 <code>new-session.sh main &lt;model&gt;</code>;副本 / 非 main 角色靜默 rc0 不發事件;sync 名單加三支腳本、「接了沒」也 grep settings.json)+ <b>T #652</b>(tabby <code>CLAUDE.md</code> 第一段換成「先讀 ../agent-control/CLAUDE.md」+ 對照表,T 特有段逐字保留;T 的 hook 指 <code>scripts/control/session-hook.sh</code>;跑 sync 拿新角色卡、dispatcher.md 退場)。</li>
+    <li><b>#34 第 1 輪實作者(Opus)</b>已派,跑著。主線補做了 9/23 漏的收尾:<code>session.start</code> 事件、heartbeat(收掉 #32 的殘留租約)、ack 四頁 <span class="src t">實測</span>。</li>
+    <li>tabby:main <code>b414471</code>,<b>prod 仍 release-20260908.40</b>,#642/#647/#644/#645/#649 落了沒上線 → 要發 .41(D-024 之後排)。</li>
+  </ul>
+
+  <h3>① G1–G17 的落點</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>洞</th><th>狀態</th><th>落在哪</th><th>一句話</th></tr></thead>
+    <tbody>
+      <tr><td class="n">G1 G2 G3 G7 G8 G9 G10 G12 G17</td><td><span class="chip landed">已落地</span></td><td>#29(9/23,<code>53b4e36</code>)</td><td>設計角色卡、開題範本、第 1 輪派工文由 <code>auto-fix.sh --dry-run --round 1</code> 產(今天 #34 就是這樣派的 <span class="src t">實測</span>)、close 印補量指令、consolidator 卡、副本內 emit 拒發、docs 通道(今天三筆 commit 都走它)、D-020 歸位。</td></tr>
+      <tr><td class="n">G4</td><td><span class="chip landed">已落地</span> + <span class="chip design">#36</span></td><td>#29 A4;殘餘 → #36</td><td><code>apply.sh --evidence</code> 已抽 result 與 OBJECTION;但<b>已收過而未處置的重複 OBJECTION 會回 0</b>(反駁被吞)→ #36。</td></tr>
+      <tr><td class="n">G5</td><td><span class="chip landed">已落地</span> + <span class="chip design">#35</span></td><td>#29 A5;oracle 脆 → #35</td><td>EVIDENCE-verifier 有收件者了;驗它的案例只比「兩邊都 0 或都 ≥1」→ #35 改測行為。</td></tr>
+      <tr><td class="n">G6 G15</td><td><span class="chip landed">部分</span> + <span class="chip design">#38</span></td><td>#29 A6;主線手建 $W 與巢狀路徑 → #38</td><td>auto-fix 收完自己刪副本;但從 worktree 起跑時 WTBASE 仍會算成巢狀 / 上層不存在算成 <code>/x-wt</code>,第 1 輪手建副本沒人收 → #38(9/23 刪目錄事故的餘波)。</td></tr>
+      <tr><td class="n">G11</td><td><span class="chip landed">已落地</span> + <span class="chip design">#35</span> + <span class="chip hole">開題中</span></td><td>#29 A11;<code>DEPENDENCY_ONLY</code> 排除 verify.py → #35;T 端角色卡過期 / 接線 → 開題中</td><td>sync 會報「同步了但沒接」;但它把 verify.py 排除在檢查外,而 tabby 跑的是自己分岔的 <code>scripts/verify.py</code>(cmp DIFFER)。tabby <code>docs/roles/</code> 多 dispatcher、少 reviewer/design/consolidator <span class="src t">實測 diff</span>。</td></tr>
+      <tr><td class="n">G13</td><td><span class="chip design">#36</span></td><td>#36</td><td><code>verify-case.py red</code> 只交證據檔,票只在 <code>check</code> / <code>apply --evidence-verifier</code> 的 Lock 內寫。</td></tr>
+      <tr><td class="n">G14</td><td><span class="chip landed">一半</span></td><td>#29 A3(派工文明寫前景跑)</td><td>規則包那一份要等整理票併入 <code>implementer.md</code>;未開。</td></tr>
+      <tr><td class="n">G16</td><td><span class="chip design">#34</span></td><td>#34(跑著)</td><td><code>status.parse_failures</code> 對 docstring 說明行收段;連同 latest_run 跨秒 apply 蓋紅 gate 一起修(Opus mktemp 重現)。</td></tr>
+      <tr class="hole"><td class="n">新:綠路全手動</td><td><span class="chip hole">設計已定,六張未開</span></td><td><code>docs/DESIGN-MAIN-TOUCHPOINTS.md</code> ⑥</td><td>第 1 輪由 auto-fix 起(C1)→ 開題者自走 docs 通道(C5)→ <code>review.sh</code> 自動派 reviewer(C2)→ land 試關 + inbox 由腳本 ack(C3+C4)→ 驗證者進第 1 輪前(C6,先緩)→ T 端接線。C1 依賴 #38 先落。</td></tr>
+      <tr><td class="n">新:流程沒被讀到</td><td><span class="chip design">A #39 → T #652</span></td><td>tickets/39.json;T 652.json</td><td>只有 <code>CLAUDE.md</code> / 記憶索引 / <code>SessionStart</code> hook 不靠自律就生效;tabby 的 <code>CLAUDE.md</code> 不是契約形、兩邊都沒有 hook、<code>new-session.sh</code> 沒同步到 T。今天主線在 T 開場就整段跳過 <span class="src t">實測</span>。</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>② 開著的制度票與建議順序(D-024:全部先於產品票)</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>序</th><th>票</th><th>狀態</th><th>模型</th><th>一行目的</th></tr></thead>
+    <tbody>
+      <tr><td class="n">1</td><td>A #34</td><td><span class="chip landed">Running(第 1 輪)</span></td><td>opus</td><td>auto-fix 讀 status 兩處誤讀:跨秒 apply 蓋掉紅 gate;G16 docstring 收段(parse_reds 退成呼叫 status 那一份)。閘門誤判先修,後面每票都靠它。</td></tr>
+      <tr><td class="n">2</td><td>A #36</td><td>Draft</td><td>opus</td><td>反駁與證紅紀錄被吞:apply.sh 重複 OBJECTION 回 0;G13 red 不寫活票。</td></tr>
+      <tr><td class="n">3</td><td>A #35</td><td>Draft</td><td>opus(可 codex sol)</td><td>兩條釘死錯現況的守衛:sync 的 DEPENDENCY_ONLY 排除 verify.py;A5 oracle 改測行為。與 #36 同碰 test_apply.py 夾具,後落者 rebase。</td></tr>
+      <tr><td class="n">4</td><td>A #37</td><td>Draft</td><td>opus</td><td>正本 inbox 進正本規則包(實測 pack 裡 grep -c inbox = 0);<code>--verify-string</code> 只在冒號前像路徑時才切(半形冒號 <code>D-G89: x</code>、<code>http://x/y</code> 誤切);<code>ticket.py create</code> 配號進 Lock(#3 殘項,落地後關 #3)。</td></tr>
+      <tr><td class="n">5</td><td>A #38</td><td>Draft</td><td>opus</td><td>G15:WTBASE 以主 repo 根解析、上層不存在 rc=2 停、第 1 輪手建副本也收。與 #34 同改 auto-fix.sh,後落者 rebase。<b>接觸點收斂 C1 依賴它。</b></td></tr>
+      <tr><td class="n">6</td><td>T #651</td><td>Draft</td><td>opus(可 codex sol)</td><td>tabby 三份案例(report_period / home_pie / ledger_close)lint F4 命中的是 <code>Run:</code> 行的 <code>TABBY_BROWSER_ENGINES=</code>,不是埠數字;只改 docstring,waiver 由主線給。獨立,隨時派。</td></tr>
+      <tr><td class="n">7</td><td>A #39 → T #652</td><td>Draft</td><td>opus</td><td>session 契約落地:SessionStart hook 跑 <code>new-session.sh</code>(A),T CLAUDE.md 契約形 + hook + sync(T,依賴 #39)。落完主線開一個新 session 實測「第一個 prompt 之前就看到同一頁」。</td></tr>
+      <tr><td class="n">8–13</td><td>未開</td><td><span class="chip design">設計 ⑥</span></td><td>opus ×4、sonnet ×2</td><td>C1 第 1 輪自動 → C5 opener docs 通道 → C2 review.sh → C3+C4 land 試關 + inbox ack → C6(緩)→ T 端接線。等裁示題 1–3 答了再開。</td></tr>
+      <tr><td class="n">之後</td><td>T #618 #621 #622</td><td>pending</td><td>—</td><td>D-G124 已裁:記憶分層、票 state 欄位統一、備份第二份放外接 SSD。制度票收尾後排。</td></tr>
+      <tr><td class="n">發版</td><td>tabby .41</td><td>待授權</td><td>主線</td><td>#642(成員頁空資料不畫)、#647(暫存目錄塞爆磁碟)、#644/#645/#649(落地工具環境保護)還沒上線。</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>③ 要產品負責人裁的題(每題附建議;答了就進 DECISIONS)</h3>
+  <div class="tablewrap"><table>
+    <thead><tr><th>#</th><th>題</th><th>建議</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td class="n">1</td><td>單票 land 綠後由 <code>land.sh</code> 自動 <code>close</code>,可不可以?(C3)</td><td><b>准</b></td><td>四條件與弱檢查一條不放,只是換人打指令;關不掉照今天印一行。T 端已經是落地即關而且更弱。</td></tr>
+      <tr><td class="n">2</td><td>reviewer 的 <code>pass</code> 直接寫進 <code>review</code> 格、主線不再過目,可不可以?(C2)</td><td><b>准</b></td><td>D-022 已裁主線不覆核;land 仍查 review 綁 sha / 版本;<code>fail</code> 一律回主線裁。附帶:主線對票的口頭補充 reviewer 讀不到 —— 那種補充本來就該在票面上(D-023)。</td></tr>
+      <tr><td class="n">3</td><td>開題者可以呼叫 <code>land.sh docs</code> 提交自己那張票檔嗎?(C5)</td><td><b>准</b></td><td>例外只寫這一句(只准 docs 通道、只准自己那張票),裸 commit 禁令不動;鎖與前綴白名單都在 land.sh。</td></tr>
+      <tr><td class="n">4</td><td>C6 驗證者自動派要不要現在一起做?</td><td><b>先不要</b></td><td>依賴 C1 的 round_once 形狀;等 C1 跑過幾張再開。</td></tr>
+      <tr><td class="n">5</td><td>hook 進 repo 的 <code>.claude/settings.json</code>(換人也生效;代價:第一次互動要 trust 一次)?(#39 甲)</td><td><b>准</b></td><td>放 <code>settings.local.json</code> 就回到「靠人記得」;trust 一次是一次性成本。</td></tr>
+      <tr><td class="n">6</td><td>compact / resume 之後重印開場那一頁,但不再發 <code>session.start</code>?(#39 乙)</td><td><b>准</b></td><td>事件是「一個 session 開始了」;重印是為了壓縮後的新上下文還看得到收件匣。</td></tr>
+      <tr><td class="n">7</td><td>T 主線每次開場多讀 A 的契約 ~2.5 KB?(#652 丙)</td><td><b>接受</b></td><td>這就是「放在哪裡才會被讀到」的答案;不接受就得把 A 的「不可違反的」抄進 T,兩份會分岔。</td></tr>
+      <tr><td class="n">8</td><td>模型卡要不要拆成 opus-5.4 / opus-5.5 / fable-5.1?</td><td><b>先不拆</b>(今天口頭裁「算了先不改」)</td><td>卡裡記的是流程的坑不是版本的坑;<code>--model opus</code> 是浮動別名,卡早已跨版本;只在兩個版本同時進路由表時才拆(一張卡對一個路由標籤)。</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>主線接觸點:前後對照(設計 session 讀 code 推的;「前」由實測 7 下佐證)</h3>
+  <div class="two">
+    <div><h4>前(≥ 7 下,綠路全手動)</h4><ul><li>派開題者 → <b>commit 票檔</b> → <b>派 worker + 發 attempt.start</b> → <b>apply.sh</b> → <b>gate.sh</b> → <b>派 reviewer + set review</b> → land.sh → <b>close</b> → <b>ack</b></li><li>自動化只在<b>紅</b>的時候啟動(auto-fix 第 2 輪起);三天只啟動 2 次。</li></ul></div>
+    <div><h4>後(3 下 + 裁示)</h4><ul><li>派開題者 → <code>sh scripts/auto-fix.sh &lt;n&gt;</code>(Ready → InReview → reviewer → inbox 一行)→ <code>land.sh t&lt;n&gt;…</code>(順序是判斷)</li><li>裁示只在 Blocked / OBJECTION / reviewer fail / 三輪耗盡時出現;發版只有主線(D-010)。</li></ul></div>
+  </div>
+</section>
 
 <!-- ============================================================ A -->
 <section id="a">

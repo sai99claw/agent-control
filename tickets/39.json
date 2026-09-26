@@ -1,0 +1,92 @@
+{
+  "id": "39",
+  "subject": "SessionStart hook:主線開場那一頁不靠自律 —— session-hook.sh + .claude/settings.json;new-session.sh/heartbeat.sh/session-hook.sh 進 sync 名單;project-CLAUDE 範本加對照表",
+  "created": "2026-09-26T12:51:48+08:00",
+  "objective": "在 A(與 sync 之後的任一專案)開一個互動式 Claude Code session,第一個 prompt 之前上下文裡就有 new-session.sh main 那一頁(版本、事件尾、開著的票、記憶上限、收件匣、裁示收件匣、心跳、接下來要讀的清單含 memory/role/main.md 與 memory/model/<model>.md),並發一筆 session.start;短命 worker 在副本裡開的 session 一個位元組都不印、一筆事件都不發。",
+  "acceptance": [
+    "A1 hook 形狀:.claude/settings.json 存在、json 可解析、hooks.SessionStart[0].hooks[0].command 含 scripts/session-hook.sh、type=command、timeout 有值;matcher 若有,值只由 startup|resume|clear|compact|fork 組成",
+    "A2 主線開場那一頁:在 Sandbox(乾淨 repo 副本,cwd=根,AC_ROLE 未設)以 stdin {\"source\":\"startup\",\"cwd\":\"<根>\",\"hook_event_name\":\"SessionStart\"} 執行 sh scripts/session-hook.sh → rc 0;stdout 含「站在哪個版本」「開著的票」「收件匣」「心跳」「memory/role/main.md」「memory/model/<routing.main>.md」;events 檔多一筆 kind=session.start role=main model=<routing.main>",
+    "A3 副本不觸發(三條各一案):cwd 在 <根>/../<worktree_dir basename>/t9/work/ 底下、或 env AC_SESSION_HOOK=0、或 env AC_ROLE=worker → rc 0、stdout 空(0 bytes)、events 檔行數不變",
+    "A4 compact/resume 不發事件:stdin source=compact 或 resume → stdout 仍含「開著的票」與「memory/role/main.md」,events 檔行數不變;source=clear → 多一筆 session.start",
+    "A5 model 來源:board/config.json 無 routing.main 且無 AC_MODEL → stdout 含一行含「routing.main」的警告、事件 model=unknown;AC_MODEL=opus 設了 → 事件 model=opus",
+    "A6 上限:stdout 超過 16384 bytes 時截斷,最後一行含「截斷」與原始 bytes 數;未超過時沒有那一行",
+    "A7 new-session.sh 可搬家:把 scripts/{new-session.sh,heartbeat.sh,session-hook.sh,event.py,ticket.py,inbox.py,memory.py,status.py,verify.py,rules.py} 複製到 Sandbox 的 scripts/control/ 後,AC_ROOT=<根> sh scripts/control/new-session.sh main fable --no-event rc 0 且 stdout 含「開著的票」;AC_ROOT 未設時也能從 scripts/control/ 往上找到 board/config.json(rc 0)",
+    "A8 sync 名單:sh scripts/sync-to-project.sh <暫存專案> 之後 <暫存專案>/scripts/control/ 含 new-session.sh heartbeat.sh session-hook.sh 且 chmod 755;.sync-manifest 列了這三個名字;暫存專案的 .claude/settings.json 含 control/session-hook.sh 時,「同步了但專案端沒有呼叫點」那一行不含 session-hook.sh 也不含 new-session.sh(heartbeat.sh 由 new-session.sh 叫,列入 DEPENDENCY_ONLY)",
+    "A9 範本:templates/project-CLAUDE.md 第一段仍含「先讀 `../agent-control/CLAUDE.md`」,並含「對照表」段(至少列 land.sh、apply.sh、inbox.py、event.py、ticket.py 五個 A 入口對應到 <專案入口>)與含 session-hook.sh 的一行;tests/test_templates.py 既有案例仍綠",
+    "A10 既有回歸:tests/test_new_session.py、tests/test_sync_to_project.py、tests/test_heartbeat.py 全綠(python3 -m unittest tests.test_new_session tests.test_sync_to_project tests.test_heartbeat tests.test_templates)"
+  ],
+  "in_scope": [
+    "scripts/session-hook.sh(新)",
+    ".claude/settings.json(新)",
+    "scripts/new-session.sh",
+    "scripts/sync-to-project.sh",
+    "templates/project-CLAUDE.md",
+    "docs/SESSION-START.md(加一行:主線那一節現在由 hook 自動跑)",
+    "tests/test_session_hook.py(新)、tests/test_new_session.py、tests/test_sync_to_project.py、tests/test_templates.py"
+  ],
+  "out_of_scope": [
+    "scripts/auto-fix.sh、board/config.json 的 worker.command",
+    "scripts/heartbeat.sh 的行為(只進 sync 名單,不改)",
+    "CLAUDE.md(A 的契約本文不動;只在 SESSION-START 加一行)",
+    "tabby_pool 任何檔(另一張 T 票)"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/session-hook.sh",
+    ".claude/settings.json",
+    "scripts/new-session.sh",
+    "scripts/sync-to-project.sh",
+    "templates/project-CLAUDE.md",
+    "docs/SESSION-START.md",
+    "tests/test_session_hook.py",
+    "tests/test_new_session.py",
+    "tests/test_sync_to_project.py",
+    "tests/test_templates.py",
+    "verify/session-hook/*.py",
+    "verify/TAGS.d/*.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "f3482b3",
+  "state": "Draft",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "產品負責人 2026-09-26:「我們定義的流程要放在哪裡才會被確實讀到?才能讓這套真實發生作用?之後也可能會替換掉主線的 session」。事實:不靠自律就生效的只有 CLAUDE.md / 記憶索引 / Claude Code SessionStart hook(stdout 進上下文;來源 code.claude.com/docs/en/hooks,已由子代理查證:matcher 可省略、值 startup|resume|clear|compact|fork;stdin JSON 有 source、cwd;$CLAUDE_PROJECT_DIR 固定專案根;專案 .claude/settings.json 的 hook 第一次互動要 workspace trust 一次)。今天 T 主線開場整段跳過就是因為沒有任何東西把 new-session.sh 叫起來。裁示(自己下):(1) hook 放進 repo 的 .claude/settings.json,不放 settings.local.json —— 換人、乾淨 clone 都生效,local 那份等於又靠自律。(2) hook 只叫 scripts/session-hook.sh,它再叫 new-session.sh main <model>;model = env AC_MODEL > board/config.json routing.main > 'unknown'(缺就印一行警告,不靜默)。(3) 副本守衛:AC_SESSION_HOOK=0、或 AC_ROLE 非 main、或 cwd 的祖先含 worktree_dir 的 basename(agent-control-wt / tabby_pool_wt)→ rc 0、無輸出、無事件。不用 claude --bare(它連 CLAUDE.md 都跳過)。(4) source=startup|clear 才發 session.start;resume|compact|fork 只重印那一頁(new-session.sh 加 --no-event),不然每次 compact 多一筆 start,heartbeat 會誤判死在半路。(5) new-session.sh 改成:AC_ROOT 有設就用、找同目錄的兄弟腳本(sync 後住 scripts/control/)、印 memory/role/<role>.md 那一行。(6) sync 名單加 new-session.sh heartbeat.sh session-hook.sh;「接了沒」也 grep .claude/settings.json。(7) templates/project-CLAUDE.md 加「對照表」段(A 契約的入口 → 專案自己的入口)與 hook 一行。順序:本票先落 → T 端票(T 的 CLAUDE.md、.claude/settings.json、routing.main、跑 sync)依賴本票。裁示題見 test_plan 尾。",
+  "test_plan": "每條驗收一個案例,層級全是「腳本層」(tests/control_harness.py 的 Sandbox:複製 repo 到暫存目錄、造 board/config.json 與 events 檔,同 tests/test_new_session.py 的寫法);期望值來源:hooks 文件的 matcher 值集合、board/config.json 裡自己寫進去的 routing.main / worktree_dir、事件檔行數差(數行數,不從被測腳本算)。A2/A3/A4/A5:用 subprocess 餵 stdin JSON 執行 scripts/session-hook.sh,環境變數用 env= 顯式給(A3 三案分開,各自只設一條守衛,其餘守衛條件為假 —— 揉成一案的話,守衛少實作兩條也綠)。A3 的 cwd 案:worktree_dir 讀 Sandbox 的 board/config.json(預設 ../agent-control-wt),真的 mkdir -p 那個目錄再 cwd 進去。A6:在 Sandbox 塞 300 張 Ready 票讓 ticket.py list --open 撐過 16 KB,量 stdout bytes。A7:在 Sandbox 內 cp 到 scripts/control/,兩案(AC_ROOT 有/無)。A8:sync 到 tempdir 專案(給 board/config.json 的 rules.roles_dir=docs/roles、models_dir、memory.applies_to),寫一份 .claude/settings.json 含 control/session-hook.sh,抓 sync stdout 那一行。變異(驗證者要證紅):M1 把 session-hook.sh 的 worktree_dir 守衛拿掉 → A3 cwd 案紅;M2 把 --no-event 分支拿掉 → A4 紅;M3 SCRIPT_LIST 少 session-hook.sh → A8 紅;M4 settings.json 的 matcher 多一個 startupp → A1 紅。verify.tags:驗證者在 verify/TAGS.d/<本票號>.md 登記 session-hook(本票開票時尚未登記,故不填 --verify-tag)。裁示題(附建議,產品負責人可推翻):(甲)hook 進 repo 的 .claude/settings.json —— 建議是(換人也生效;代價是第一次互動 trust 一次)。(乙)compact/resume 後重印那一頁 —— 建議是,但不發事件。(丙)T 專案的 routing.main 目前不存在 —— 建議 T 票補 routing.main=fable(D-023),而非 hook 對 T 特判。不在本票:T 端任何檔(T 票另開)、auto-fix.sh 的 worker.command(守衛靠路徑與 env,不改派工命令)、hooks 以外的 Claude Code 設定、CLAUDE_ENV_FILE。",
+  "verify_strings": [
+    {
+      "path": "scripts/session-hook.sh",
+      "contains": "AC_SESSION_HOOK"
+    },
+    {
+      "path": ".claude/settings.json",
+      "contains": "SessionStart"
+    },
+    {
+      "path": "scripts/sync-to-project.sh",
+      "contains": "session-hook.sh"
+    },
+    {
+      "path": "scripts/new-session.sh",
+      "contains": "--no-event"
+    },
+    {
+      "path": "templates/project-CLAUDE.md",
+      "contains": "對照表"
+    }
+  ],
+  "decision_refs": [
+    "D-015",
+    "D-024",
+    "D-023"
+  ]
+}
