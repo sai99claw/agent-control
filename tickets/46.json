@@ -53,8 +53,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "91b20db7d2ffa937e9795714bf10d02627ccce43",
-  "state": "InReview",
-  "state_version": 19,
+  "state": "Done",
+  "state_version": 22,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -111,15 +111,39 @@
       "wall_seconds": 52,
       "by": "review.sh",
       "at": "2026-09-27T03:58:57+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 16,
+      "tokens_out": 4685,
+      "cache_write": 45571,
+      "cache_read": 343643,
+      "wall_seconds": 49,
+      "by": "review.sh",
+      "at": "2026-09-27T04:01:01+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 452,
+      "by": "land.sh",
+      "at": "2026-09-27T04:08:46+08:00"
     }
   ],
   "owner": "main",
   "review": {
     "verdict": "pass",
     "by": "reviewer@opus",
-    "sha": "1c7585c292fdec977905c85fb7f8dd579b643199",
+    "sha": "6f4dd882cd92c5e8d3dd0787a223ace1ab6717a6",
     "note": "reports/t46/20260927-035144-73725/REVIEW.md",
-    "at": "2026-09-27T03:58:57+08:00",
-    "state_version": 16
+    "at": "2026-09-27T04:08:46+08:00",
+    "state_version": 22
   }
 }
