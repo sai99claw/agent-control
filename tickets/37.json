@@ -31,8 +31,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "9c9564a",
-  "state": "Ready",
-  "state_version": 5,
+  "state": "Done",
+  "state_version": 11,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -66,5 +66,23 @@
     "by": "main",
     "reason": "票開於 D-028 之前未寫 needs_verifier;工具票,實作者在 tests/ 交單元案例 + 6 條變異;test_defect 反駁另派驗證者修夾具"
   },
-  "needs_verifier": false
+  "needs_verifier": false,
+  "objections": [
+    {
+      "category": "test_defect",
+      "body": "照票面實作後 4 條既有案例紅(非新案例):test_rules 三條 2000 B 緊預算案例(夾具 install_rules_sources 複製真 memory/*.inbox.md,正本多帶兩份暫存後「砍過」那句放不下)+ test_ticket_29 A7(夾具 verify_strings=\"README:main\",README 不合票面「像路徑」規則,改判純字串);候選修法兩條已在拋棄式副本實測綠(見 ④),由主線裁是改夾具還是改票面規則",
+      "evidence": "../agent-control-wt/fix-t37/round1/EVIDENCE-round1.md",
+      "owner": "verifier",
+      "disposition": "fixed",
+      "follow_up": ""
+    }
+  ],
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "e79e277",
+    "note": "A1-A4 逐條有 code 位置+案例+變異紅;verify_strings 三條在分支上;範圍 5 檔皆在 allowed_write_paths(以 merge-base 5733105 計)。不阻擋:(a) worker+opus 包最後一刀砍光 opus.inbox、角色卡節錄只剩標題,屬本票造成(10 節下限未算進預算),建議近期另開票;(b) create 配號 Lock 在 ticket.py:545 with Lock(),案例 ConcurrentCreate(票面寫的 ticketlib 不存在,票面筆誤);無副檔名根目錄檔現需寫 ./README:x,寫錯 close 會擋並說明",
+    "at": "2026-09-26T14:40:01+08:00",
+    "state_version": 11
+  }
 }

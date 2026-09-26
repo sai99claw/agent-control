@@ -1,0 +1,61 @@
+{
+  "id": "41",
+  "subject": "C5:開題者自己走 docs 通道提交票檔——templates/dispatch-opener.md 末段加 land.sh docs 那一句;memory/role/opener.md「不 git 寫入」只加「只准 land.sh docs、只准自己那張票檔」這一句例外",
+  "created": "2026-09-26T14:33:55+08:00",
+  "objective": "開票的最後一步由開題者打 sh scripts/land.sh docs \"tickets: #<n> 開票\" tickets/<n>.json,主線不再替它 commit 票檔;裸 commit 禁令原句不動;鎖與前綴白名單都在 land.sh 裡(land.sh:15-18、:95-96、:110-111),不寫新腳本",
+  "acceptance": [
+    "A1 grep -c \"land.sh docs\" templates/dispatch-opener.md ≥ 1;那一句寫在「你要交的兩樣」之後、含完整可貼指令 sh scripts/land.sh docs \"tickets: #<n> 開票\" tickets/<n>.json 與一句「只准自己那張票檔」;先 sh scripts/land.sh docs(不帶參數)看一次用法再寫;tests/test_templates.py TheOpenerTemplate 加一條斷言;變異 M1:把那一句拿掉 → 紅",
+    "A2 grep -c \"land.sh docs\" memory/role/opener.md ≥ 1;例外只有一句,含「只准 land.sh docs」與「只准自己那張票檔」;「不 git 寫入」原字樣仍在(grep -c \"不 git 寫入\" memory/role/opener.md ≥ 1);tests/test_templates.py 加一條;變異 M2:把「不 git 寫入」整句改掉 → 紅",
+    "A3 python3 scripts/rules.py pack opener --model fable 產出仍 ≤ 4096 bytes 且含 memory/role/opener.md 路徑(tests/test_rules.py 既有 cap 案例照綠);角色卡加句後 rules.py 的 cap_chars 不超標(memory/role/opener.md 沒有 cap_chars 檔頭則不適用,寫明)",
+    "A4 不動:docs/DECISIONS.md(D-025 ③ 已在)、docs/DESIGN-MAIN-TOUCHPOINTS.md、land.sh;T 的 docs/roles/opener.md 同句由 T 票跑 sync-to-project.sh 帶過去,不在本票"
+  ],
+  "in_scope": [
+    "templates/dispatch-opener.md",
+    "memory/role/opener.md",
+    "tests/test_templates.py"
+  ],
+  "out_of_scope": [
+    "scripts/land.sh(docs 通道已有,#29 A10)",
+    "docs/DISPATCH-TEMPLATE.md、docs/ROLES.md",
+    "T 端 docs/roles/opener.md(sync 產出,T 票)"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "templates/dispatch-opener.md",
+    "memory/role/opener.md",
+    "tests/*.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "e79e277",
+  "state": "Ready",
+  "state_version": 4,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-025",
+    "D-028",
+    "D-024"
+  ],
+  "test_plan": "單元層,tests/test_templates.py TheOpenerTemplate 既有夾具(讀檔 assertIn);可觀察 = 兩個檔的內容字串;期望字串來自 D-025 ③ 原文(docs/DECISIONS.md:201-207)與 land.sh:96 的用法例,不從範本反推。A3 用 tests/test_rules.py 既有 pack 上限案例。變異 M1、M2 各紅一次。標籤:留空(案例住 tests/)。模型:預設 opus;純文字兩檔、驗收全 grep,主線可改派 sonnet 實作(D-023 只限制開題不派 Sonnet,實作不在此限)",
+  "verify_strings": [
+    {
+      "path": "templates/dispatch-opener.md",
+      "contains": "land.sh docs"
+    },
+    {
+      "path": "memory/role/opener.md",
+      "contains": "只准自己那張票檔"
+    }
+  ],
+  "outline": "設計 ② C5 / ⑤ C5 / ⑥ 第 2 列,D-025 ③ 准。兩檔各加一句,不寫腳本:docs 通道(land.sh docs)本來就持 .land.lock、只收 tickets/ docs/ memory/ 三個前綴、不在 main 上拒收,開題者呼叫它與主線呼叫它守衛一樣。順序:五張的第 2 張,無前置,可與 C1 平行(不共檔)。T 端 docs/roles/opener.md 由 T 票的 sync 帶。needs_verifier=false:純文字,驗收是三條 grep,沒有邏輯可紅",
+  "needs_verifier": false
+}

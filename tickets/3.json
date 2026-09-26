@@ -20,7 +20,7 @@
   "attempt": 0,
   "base_sha": "bd8e5034c4f3e90f4851e702f87ec2a338834a29",
   "state": "InReview",
-  "state_version": 2,
+  "state_version": 3,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -29,5 +29,15 @@
     "run": "",
     "notes": ""
   },
-  "outline": "規格見評估報告 docs/review/2026-09-22-memory-board-review.md §B3;裁示:project 層=紀錄、依主題分節、pack 帶最後 30 行;任何角色可寫任一角色 inbox;model 層只能寫自己模型;主檔只有 consolidate 能改"
+  "outline": "規格見評估報告 docs/review/2026-09-22-memory-board-review.md §B3;裁示:project 層=紀錄、依主題分節、pack 帶最後 30 行;任何角色可寫任一角色 inbox;model 層只能寫自己模型;主檔只有 consolidate 能改",
+  "verify_strings": [
+    {
+      "path": "tests/test_ticket.py",
+      "contains": "ConcurrentCreate"
+    },
+    {
+      "path": "scripts/status.py",
+      "contains": "AC_RUN_ID"
+    }
+  ]
 }

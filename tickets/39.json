@@ -43,15 +43,17 @@
     "tests/test_sync_to_project.py",
     "tests/test_templates.py",
     "verify/session-hook/*.py",
-    "verify/TAGS.d/*.md"
+    "verify/TAGS.d/*.md",
+    "scripts/gate.sh",
+    "tests/test_gate.py"
   ],
   "role": "worker",
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "f3482b3",
-  "state": "Draft",
-  "state_version": 1,
+  "base_sha": "5733105",
+  "state": "Ready",
+  "state_version": 9,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -88,5 +90,20 @@
     "D-015",
     "D-024",
     "D-023"
+  ],
+  "verify_waiver": {
+    "by": "main",
+    "reason": "票開於 D-028 之前未寫 needs_verifier;hook/腳本票,驗收全在 tests/ 沙盒層(10 條 + 4 變異);無獨立驗證者"
+  },
+  "needs_verifier": false,
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "scripts/gate.sh 的對照表沒有 scripts/session-hook.sh 與 .claude/settings.json(且 gate.sh 不在 allowed_write_paths),`gate.sh --branch --ticket 39` 會以「對不到任何測試模組」退 3;需主線補兩格 → test_session_hook(或放寬 allowed_write_paths 讓下一輪補)。",
+      "evidence": "../agent-control-wt/fix-t39/round1/EVIDENCE-round1.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "main 2026-09-26: allowed_write_paths += scripts/gate.sh, tests/test_gate.py; round 2 adds the two module-table rows (session-hook.sh, .claude/settings.json -> test_session_hook) with a test"
+    }
   ]
 }

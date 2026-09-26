@@ -1,0 +1,83 @@
+{
+  "id": "43",
+  "subject": "C3+C4:land.sh push 成功後對批次每張票試 ticket.py close --landed <sha>(關不掉照舊印「已合併、尚未關票」+ inbox 頁,理由逐字帶出,不加 --force);inbox.py ack 加 --by,腳本做掉的頁由腳本 ack(review.sh 開跑 / land 收票 / close 成功);遷移一次 ack --all --by migration",
+  "created": "2026-09-26T14:33:55+08:00",
+  "objective": "一張票綠、覆核 pass、落地之後主線不再打 close 與 ack;收件匣只剩三類頁(Blocked / 裁示 / 等落地順序);Done 的四條件(done_blockers)與弱檢查一條不放,只是打 close 的人從主線變成 land.sh",
+  "acceptance": [
+    "A1 tests/test_land.py:單票 land 綠、票有 verify_strings(主線上抓得到)+ review 綁分支頭 + verify.baseline stage=check 或 verify_waiver ⇒ land 後票 state=Done、事件帳有 ticket.closed、stdout 含「已合併、已關票」;PhasesAndClosing:16 那條「land 不關票」改寫成本條,不是刪掉;close 的呼叫在 push 成功之後(land.sh:616-625 那段),用 python3 scripts/ticket.py close <n> --landed <合併後 main 的 sha>;變異 M1:拿掉 land.sh 那一手 close → 紅",
+    "A2 關不掉的四種各一條同形斷言:缺 verify_strings(只做得了弱檢查)/ review 過期 / objection 未處置 / baseline 缺 check ⇒ 票不是 Done、stdout 仍「已合併、尚未關票」、land rc 不變(0)、inbox 那頁 what 含 ticket.py close 印出來的理由原文(ticket.py:1204-1284、done_blockers:813-850 既有訊息;land.sh 不自己重寫一份理由);grep -c \"\\-\\-force\" scripts/land.sh = 0;變異 M2:land 對關不掉的票也印「已關票」→ 紅",
+    "A3 tests/test_inbox.py:python3 scripts/inbox.py ack <名稱|票號> --by review.sh 後 reports/inbox/acked.jsonl 那一筆有 by=review.sh;不帶 --by 的 ack 那筆 by=main(預設;不是空字串——「沒寫是誰」與「主線收的」要分得開,§5.5);ack --all --by migration 每筆 by=migration;inbox.py list 不列已 ack 的(既有);變異 M3:--by 收了不寫進 jsonl → 紅",
+    "A4 接線三處各一條沙盒斷言:review.sh 開跑時 ack 該票 state 含「等覆核」的那幾頁(--by review.sh;其它頁不動);land.sh 收到票時 ack 該票「等覆核」/「等落地」頁(--by land.sh);close 成功時 ack 該票「已合併、尚未關票」頁並 post 一頁 state=Done、what=無、隨即 ack(--by land.sh);跑完 A1 夾具後 inbox.py list 該票 0 則;A2 夾具後該票恰 1 則(尚未關票那頁);變異 M4:close 成功但不 ack → 紅",
+    "A5 規則寫進 inbox.py 檔頭:「post 的 what 若是某支腳本接著就會做的事,那支腳本開跑時 ack --by <script>;主線只剩 Blocked / 裁示 / 落地順序三類頁」;docs/WORKFLOW.md 能力表加「land 試關」「腳本 ack」兩列。遷移指令由本票落地後主線在真 repo 跑一次:python3 scripts/inbox.py ack --all --by migration(現況 24 則未 ack,設計 ① 4a);實作者只交 A3 那條夾具,不碰真 reports/",
+    "A6 不在本票、票面列出(D-029):落地後 T 的 memory/role/tabbypool_report.md「一行給主線 #n 等落地」那一手改由 inbox 頁承接、ack 由腳本做;卡由 D-029 正式形狀設計票改"
+  ],
+  "in_scope": [
+    "scripts/land.sh",
+    "scripts/inbox.py",
+    "scripts/review.sh(只加開跑 ack 那一手)",
+    "tests/test_land.py",
+    "tests/test_inbox.py",
+    "tests/test_review.py",
+    "docs/WORKFLOW.md"
+  ],
+  "out_of_scope": [
+    "ticket.py close / done_blockers 的任何條件(一條不放,D-025 ①;設計 ③ 丙、戊否決)",
+    "--force 或任何放行旗標",
+    "T 端 land-ticket.sh(已落地即關,設計 C3 列「不動」)",
+    "多票批次的 auto-fix 規則(land.sh:257-268)",
+    "inbox 頁的格式與索引欄位(只加 acked.jsonl 的 by)",
+    "全自動 ack(設計 ③ 丁否決):Blocked / 裁示 / 等落地順序三類頁不准被腳本 ack"
+  ],
+  "depends_on": [
+    {
+      "id": "42",
+      "condition": "已落地"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/land.sh",
+    "scripts/inbox.py",
+    "scripts/review.sh",
+    "tests/*.py",
+    "docs/WORKFLOW.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "5733105",
+  "state": "Draft",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-025",
+    "D-015",
+    "D-028",
+    "D-029",
+    "D-024"
+  ],
+  "test_plan": "全部單元層、mktemp 沙盒。A1/A2:tests/test_land.py LandBase 既有夾具(HappyPath、PhasesAndClosing、ReviewIsAHardGate 的票就是四種缺格的樣板);可觀察 = 票檔 state、events.jsonl 有無 ticket.closed、stdout、rc、reports/inbox/ 該票的頁與 what;期望理由字串直接取自 ticket.py 既有訊息(assertIn 那幾個字),不從 land.sh 反推。A3:tests/test_inbox.py ListAndAck 旁;可觀察 = acked.jsonl 那一筆的 by。A4:A1 夾具跑完後 inbox.py list 輸出行數;review.sh 開跑那條在 tests/test_review.py(fixture reviewer 印 pass,夾具事先 post 一頁「等覆核」)。變異 M1-M4 各紅一次;EVIDENCE 貼紅的第一行。標籤:留空(案例住 tests/)",
+  "verify_strings": [
+    {
+      "path": "scripts/land.sh",
+      "contains": "已合併、已關票"
+    },
+    {
+      "path": "scripts/inbox.py",
+      "contains": "--by"
+    },
+    {
+      "path": "tests/test_land.py",
+      "contains": "已合併、已關票"
+    }
+  ],
+  "outline": "設計 ② C3+C4 / ⑤ C3、C4 / ⑥ 第 4 列;D-025 ① 准 close 由 land.sh 試、四條件不放。合一張因為「close 成功才 ack」是同一手。C3:land.sh:616-625 現在刻意不關、只印一行;改成試 close,關不掉照今天那一行 + inbox 頁,理由用 ticket.py 印的原文。C4:acked.jsonl 加 by;只 ack 「下一步是腳本」的頁,三類要主線的頁不動(設計 ③ 丁)。遷移 24 則由主線落地後跑一次。順序:五張的第 4 張,前置 #42 已落地(review.sh 要存在才有開跑 ack 那一手);與 C1/C5 不共檔。needs_verifier=false:A 端工具票,不動產品碼;land.sh / inbox.py 是每天走的路,所以 M1-M4 各指定變異證紅;驗收全沙盒機械",
+  "needs_verifier": false
+}

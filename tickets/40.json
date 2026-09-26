@@ -1,0 +1,81 @@
+{
+  "id": "40",
+  "subject": "C1:auto-fix.sh <n> 對 Ready 且沒有狀態檔的票直接起第 1 輪(round_once 1,發 attempt.start、轉 Running);gate.sh verify_plan 改走 ticketlib 與 candidate_reds 同路;SESSION-START/WORKFLOW 兩句改掉",
+  "created": "2026-09-26T14:33:55+08:00",
+  "objective": "主線對 Ready 票只打 sh scripts/auto-fix.sh <n> 一行,票從 Ready 經 Running 到 InReview(或紅榜 / Blocked),派工文、副本、apply、gate、inbox 全由腳本做,與 round≥2 走同一條 round_once;auto-fix 起的閘門在票 worktree 裡讀得到主 repo 票上的 verify_waiver / needs_verifier,不再要人手帶 AC_TICKETS_DIR",
+  "acceptance": [
+    "A1 沙盒(tests/test_auto_fix.py,worker.command 換成 fixture 腳本):票 state=Ready、reports/t<n>/ 沒有任何 run → sh scripts/auto-fix.sh <n> 不再 rc=2、不印「一輪都還沒跑過」;出現 reports/t<n>/<run>/dispatch-round1.md(與 --dry-run --round 1 產的同形:rules.py pack worker + 票 + 副本路徑);副本 <WTBASE>/fix-t<n>/round1/{base,work} 的 base 來自票的 base_sha(分支 t<n> 不存在時)。現況三個門檻(讀 code 推的):read_status 無狀態檔時 S_BASE 空、S_ROUND 預設 1 讓主迴圈從第 2 輪起(auto-fix.sh:825-847)、RUN_ID=$S_RUN 為空(:366);exit 2 在 :366-371。變異 M1:把「無狀態檔 ⇒ r=1」那條分支拿掉 → 紅(退回 rc=2)",
+    "A2 事件帳:ticket.attempt.start attempt=1 由 auto-fix 發(round_once 既有 :647 那一手;讀事件的寫法照 TheEventModelIsTheOneThatActuallyRan);票 state 在 fixture worker 跑的時候是 Running(fixture 把讀到的票 state 寫進標記檔)、綠後 InReview;fixture 交 patch 後 apply → gate → InReview → inbox 一頁「第 1 輪綠了,等覆核」;不加 run.sh(D-018,設計 ③ 甲)",
+    "A3 --dry-run --round 1 仍只印派工文、不起 worker、不動票(TheFirstRoundPacket 三條照綠);票 state 不是 Ready(Draft / Running / Blocked)且無狀態檔 → 指名 state 停下 rc=2,不猜;變異 M2:拿掉 state 檢查 → 紅",
+    "A4 gate.sh verify_plan():票只在主 repo 上有 needs_verifier=false(或 verify_waiver),票 worktree 內那份沒有;在 worktree 裡 AC_ROOT=<主 repo> sh scripts/gate.sh --branch --ticket <n>(不帶 AC_TICKETS_DIR)→ 印「needs_verifier=false —— 這一層不要求案例」、驗證者層不算缺口。現況 gate.sh:567-575 用 $ROOT 拼 event.tickets_dir 讀到 worktree 那份;candidate_reds :607-620 走 ticketlib.load 沒這問題(memory/project/gate.md 2026-09-26 實測);兩處收成同一條路,auto-fix.sh:780 起閘門那一手之後不必再帶 AC_TICKETS_DIR。tests/test_gate.py VerifierCasesAtTheGate 旁補一條;變異 M3:verify_plan 改回 $ROOT 拼路徑 → 紅",
+    "A5 文字:grep -c \"不起第 1 輪的 worker\" scripts/auto-fix.sh = 0(:361 與 :292-293 註解);grep -c \"第 1 輪由主線發\" docs/SESSION-START.md = 0(:35 改成由 auto-fix 發);docs/WORKFLOW.md 能力表(:141-165)加一列「第 1 輪自動」指到 auto-fix.sh;tests/test_auto_fix.py:372 那條(never ran → rc=2)改寫成 A1 的形狀,不是刪掉;auto-fix.sh:23、:388、:790「覆核不自動」三句不動(C2 那張改)"
+  ],
+  "in_scope": [
+    "scripts/auto-fix.sh",
+    "scripts/gate.sh",
+    "tests/test_auto_fix.py",
+    "tests/test_gate.py",
+    "docs/SESSION-START.md",
+    "docs/WORKFLOW.md"
+  ],
+  "out_of_scope": [
+    "reviewer 自動派、InReview 之後的任何一手(C2)",
+    "C6 驗證者自動進第 1 輪之前(D-025 ④ 緩)",
+    "apply.sh:82-83 的根解析(#38 reviewer follow-up,另開)",
+    "scripts/run.sh(設計 ③ 甲否決)",
+    "board/config.json",
+    "T memory/role/tabbypool_report.md(D-029 過渡卡):落地後卡的第 1 步(dry-run 派工文 + emit attempt.start + Agent 派實作者)、第 2 步(apply)、第 3 步(帶 AC_ROOT/AC_TICKETS_DIR 跑 gate)三步合成一行 sh scripts/auto-fix.sh <n>;卡不在本票改,由 D-029 正式形狀設計票收"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/gate.sh",
+    "tests/*.py",
+    "docs/SESSION-START.md",
+    "docs/WORKFLOW.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "e79e277",
+  "state": "Ready",
+  "state_version": 4,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-025",
+    "D-015",
+    "D-018",
+    "D-028",
+    "D-029",
+    "D-024"
+  ],
+  "test_plan": "全部單元層、mktemp 沙盒(tests/test_auto_fix.py AutoFixBase / Sandbox 既有夾具:真 git repo、假 worker.command 寫標記檔即退;DISPATCH §5.6),不准對真的 agent-control-wt 跑。A1:可觀察 = rc、stderr、dispatch-round1.md 存在、副本 base/ 裡某檔內容 = 票 base_sha 那個 commit 的內容(期望值由夾具 git show <base_sha>:<檔> 取,不從被測腳本算)。A2:可觀察 = board/events.jsonl 裡 ticket.attempt.start 那筆的 attempt 與發出者、fixture 標記檔裡記的票 state、票最終 state、reports/inbox/ 有一頁 state 含「等覆核」。A3:既有 TheFirstRoundPacket 三條 + 一條 Draft 票 rc=2 且 stderr 含 state 名。A4:夾具在主 repo 票上 set needs_verifier false 後 git worktree add 票分支(worktree 那份票檔是沒有那格的舊版),在 worktree 內只帶 AC_ROOT 跑 gate.sh --branch --ticket;可觀察 = stdout 含「needs_verifier=false」且驗證者層不非零;期望字串取自 gate.sh:656 既有訊息。A5:grep 計數。變異 M1–M3 各紅一次、還原後綠,EVIDENCE 貼紅的第一行。標籤:留空(案例住 tests/,A 端慣例,同 #38)",
+  "verify_strings": [
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "Ready 且沒有狀態檔"
+    },
+    {
+      "path": "scripts/gate.sh",
+      "contains": "verify_plan 與 candidate_reds 走同一條路"
+    },
+    {
+      "path": "docs/SESSION-START.md",
+      "contains": "第 1 輪由 auto-fix 發"
+    },
+    {
+      "path": "tests/test_auto_fix.py",
+      "contains": "Ready 且沒有狀態檔"
+    }
+  ],
+  "outline": "設計 docs/DESIGN-MAIN-TOUCHPOINTS.md ② C1 / ⑤ C1 / ⑥ 第 1 列,D-025。整條 apply→gate→InReview→inbox 已在 round_once(auto-fix.sh:539-807),第 1 輪只被 :366-371 的 exit 2 擋住;要補的是 Ready 檢查、無狀態檔時 r=1、S_BASE 取票的 base_sha、RUN_ID 自鑄。順手收 gate.sh verify_plan 只認 $ROOT 的洞(memory/project/gate.md):不收的話第 1 輪自動起的閘門在 worktree 裡看不到主 repo 票的 waiver / needs_verifier,C1 一跑就紅。接在 #38 的形狀上(WTBASE 只算一次、主 repo 根 = git-common-dir 上一層、主迴圈前收第 1 輪副本)。順序:五張的第 1 張,無前置;C2 要接 :787 轉 InReview 之後那一手,等本票落地。needs_verifier=false:A 端工具票,不動產品碼,驗收 A1-A5 全是沙盒機械斷言,案例由實作者寫在 tests/、三條變異各紅一次即可(同 #31-#38)",
+  "needs_verifier": false
+}

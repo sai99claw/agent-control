@@ -1,0 +1,109 @@
+{
+  "id": "42",
+  "subject": "C2:reviewer 在票轉 InReview 那一手自動派——新 scripts/review.sh(headless,reviewer.command)+ templates/dispatch-reviewer.md;pass 由腳本 set review(by=reviewer@<模型>),fail 逐條寫 objections 轉 Blocked;auto-fix 綠與手跑 gate 綠都觸發;main.md/ROLES/WORKFLOW/FLOW 改句;sync 名單加 review.sh",
+  "created": "2026-09-26T14:33:55+08:00",
+  "objective": "閘門綠之後主線不再組派工文、不再讀 patch、不再手抄 sha 記 review:票上的 review 由 review.sh 依 reviewer 檔尾 ## result 寫進去(ticket.py set 自動綁 state_version,land 照查);reviewer 說 fail 時票是 Blocked、objections[] 有 blocking 筆、inbox 一頁「覆核退回,裁示」給主線;沒交件不算 pass",
+  "acceptance": [
+    "A1 scripts/review.sh <n>:讀 board/config.json 的 reviewer.command(預設 claude -p --model opus --allowedTools Read Glob Grep Bash --output-format json;白名單沒有 Edit/Write)與 reviewer.timeout_seconds;派工文 = python3 scripts/rules.py pack reviewer --model <模型> + 新 templates/dispatch-reviewer.md(四件事:票號、分支 t<n> 的頭 sha、worktree 路徑、EVIDENCE 與 status.json 路徑;要求檔尾 ## result JSON,鍵照 tickets/SCHEMA.md §result,role=reviewer,多一格 verdict),寫到 reports/t<n>/<run_id>/dispatch-reviewer.md,reviewer 輸出存 reports/t<n>/<run_id>/REVIEW.md;結果用既有 python3 scripts/ticket.py result 抽(--role 若只認 worker|verifier 就加 reviewer,ticket.py 這一處准改)。fixture reviewer(tests/test_review.py 新;夾具照 tests/test_auto_fix.py AutoFixBase 把 command 換成寫檔即退的腳本)印 verdict pass ⇒ 票 review.verdict=pass、review.by 以 reviewer@ 開頭且模型名取自 reviewer.command 的 --model(不是 routing 標籤,#21)、review.sha = 分支 t<n> 的頭、review.state_version 由 ticket.py set 蓋(不手填);變異 M1:by 寫死 main → 紅",
+    "A2 fixture 印 verdict fail + 逐條理由 ⇒ objections[] 每條一筆 category=blocking、owner=reviewer@<模型>、disposition 空(SCHEMA §反駁:land 與 close 因此拒絕)、票 state=Blocked、inbox 一頁 state 含「覆核退回」what 含「裁示」;review 這一格不寫 pass;變異 M2:fail 也寫 review.verdict=pass → 紅。反駁用既有 python3 scripts/ticket.py objection <n> --line \"OBJECTION: blocking <理由>\" --evidence <REVIEW.md>(多條就多次呼叫);Blocked 由 review.sh 自己 set(objection 不轉 state,ticket.py:1591-1679)",
+    "A3 觸發點兩處:(a) auto-fix.sh 第 r 輪綠、set state InReview 之後(:787-800)呼叫 sh scripts/review.sh <n>,--no-review 關;(b) gate.sh 手跑 --branch --ticket <n> 綠、且 AC_IN_AUTOFIX 空時,先 python3 scripts/ticket.py set <n> state InReview 再呼叫 review.sh(現況手跑綠沒有人轉 InReview,設計 ① 表第 5 列;掛在 :844 / :883 auto_fix 旁,閘門 rc 不動);grep -n \"review.sh\" scripts/auto-fix.sh scripts/gate.sh 各 ≥ 1;tests/test_auto_fix.py TheWholeLoop 綠路加斷言「fixture reviewer 被叫到、票最後 review.by 以 reviewer@ 開頭」;tests/test_gate.py GateSh 加一條「手跑綠 → 票 InReview 且 review.sh 被叫」;變異 M3:拿掉 gate.sh 那一手 → 紅",
+    "A4 reviewer 沒交 ## result / JSON 壞 / 逾時 / verdict 不是 pass|fail ⇒ 不寫 review、票留 InReview、inbox 一頁「覆核沒交件」、rc 非零;「沒交」與 pass 要分得開(§5.5);tests/test_review.py 一條",
+    "A5 文字:grep -c \"覆核 = 讀 patch\" memory/role/main.md = 0(:3、:8 改成「覆核由 review.sh 派 reviewer;主線只在 fail 裁示」);docs/ROLES.md:9、:14、:58 同改;docs/WORKFLOW.md:118、:125 改句、能力表加一列「reviewer 自動」;docs/FLOW.html:277 MR 節點改「reviewer(review.sh 派)」;auto-fix.sh:23、:388、:790「覆核不自動」三句改掉;memory/role/reviewer.md「誰派:主線」改「誰派:review.sh」;scripts/sync-to-project.sh:101 SCRIPT_LIST 加 review.sh(tests/test_sync_to_project.py SyncsTheScripts 名單跟著);board/config.json 加 reviewer 段",
+    "A6 不在本票、票面列出(D-029):落地後 T 的 memory/role/tabbypool_report.md 第 4 步(set InReview → 派覆核者 → set review → 一行給主線)整步由 review.sh 做;C1 落地後第 1-3 步是一行 auto-fix.sh;卡由 D-029 正式形狀設計票改"
+  ],
+  "in_scope": [
+    "scripts/review.sh(新)",
+    "templates/dispatch-reviewer.md(新)",
+    "scripts/auto-fix.sh",
+    "scripts/gate.sh",
+    "scripts/sync-to-project.sh",
+    "scripts/ticket.py(只有 result 的 --role 白名單)",
+    "board/config.json(只加 reviewer 段)",
+    "tests/test_review.py(新)",
+    "tests/test_auto_fix.py",
+    "tests/test_gate.py",
+    "tests/test_sync_to_project.py",
+    "tests/test_templates.py",
+    "memory/role/main.md",
+    "memory/role/reviewer.md",
+    "docs/ROLES.md",
+    "docs/WORKFLOW.md",
+    "docs/FLOW.html"
+  ],
+  "out_of_scope": [
+    "inbox.py --by 與 review.sh 開跑 ack「等覆核」頁(C3+C4)",
+    "scripts/land.sh",
+    "ticket.py set / objection 的契約(用既有的;只准動 result 的 --role 白名單)",
+    "memory/role/reviewer.md 的覆核內容(D-022 已定;只改「誰派」)",
+    "主線用 Agent tool 派 reviewer 的路(設計 ③ 乙否決)"
+  ],
+  "depends_on": [
+    {
+      "id": "40",
+      "condition": "已落地"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/review.sh",
+    "templates/dispatch-reviewer.md",
+    "scripts/auto-fix.sh",
+    "scripts/gate.sh",
+    "scripts/sync-to-project.sh",
+    "scripts/ticket.py",
+    "board/config.json",
+    "tests/*.py",
+    "memory/role/main.md",
+    "memory/role/reviewer.md",
+    "docs/ROLES.md",
+    "docs/WORKFLOW.md",
+    "docs/FLOW.html"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "5733105",
+  "state": "Draft",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-025",
+    "D-022",
+    "D-018",
+    "D-028",
+    "D-029",
+    "D-024"
+  ],
+  "test_plan": "全部單元層、mktemp 沙盒。A1/A2/A4:tests/test_review.py 新,夾具照 AutoFixBase(真 git repo + 票分支 t<n> 一個 commit + reviewer.command 換成 fixture 腳本,fixture 從環境或參數讀「這次印 pass / fail / 什麼都不印」);可觀察 = 票檔的 review / objections / state、reports/inbox/ 頁的 state 與 what、rc;期望 sha 由夾具 git rev-parse t<n> 取,期望 by 由夾具寫進 config 的 --model 值拼成 reviewer@<那個值>,不從 review.sh 算。A3:TheWholeLoop 與 GateSh 既有夾具各加一條,可觀察 = fixture reviewer 的標記檔存在 + 票 state / review.by。A5:grep 計數。變異 M1-M3 各紅一次;EVIDENCE 貼紅的第一行。標籤:留空(案例住 tests/)",
+  "verify_strings": [
+    {
+      "path": "scripts/review.sh",
+      "contains": "reviewer@"
+    },
+    {
+      "path": "templates/dispatch-reviewer.md",
+      "contains": "## result"
+    },
+    {
+      "path": "scripts/gate.sh",
+      "contains": "review.sh"
+    },
+    {
+      "path": "scripts/sync-to-project.sh",
+      "contains": "review.sh"
+    },
+    {
+      "path": "memory/role/main.md",
+      "contains": "review.sh"
+    }
+  ],
+  "outline": "設計 ② C2 / ⑤ C2 / ⑥ 第 3 列,D-025 ② 准:reviewer pass 由腳本直接 set review,by 寫 reviewer@<模型>;fail 回主線裁。為什麼要腳本不要範本(設計 ③ 乙):D-022 三天只走過一次,而 Agent tool 派的 reviewer 讀了 118K 還是回到主線上下文。形狀照 auto-fix.sh 起 headless worker 的那一段(:539-660)與 ticket.py result 抽取(#29 A4)。兩個觸發點:auto-fix 綠(:787)與手跑 gate 綠(現在沒有人轉 InReview,是個洞)。sync 名單要加 review.sh,T 才拿得到。順序:五張的第 3 張,前置 #40 已落地(同動 auto-fix.sh :787 那段與「覆核不自動」三句;先落 C1 再 rebase)。C3+C4 接在本票之後(review.sh 開跑 ack)。needs_verifier=false:A 端工具票,不動產品碼;fail 路寫錯會讓 land 收到假 review,所以 M1/M2 指定變異由實作者在 tests/test_review.py 證紅;驗收全是沙盒機械斷言",
+  "needs_verifier": false
+}
