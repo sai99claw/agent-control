@@ -91,34 +91,45 @@ case $TICKETS in /*) TDIR=$TICKETS ;; *) TDIR=$ROOT/$TICKETS ;; esac
 WORKER_CMD=$(cfg worker.command "claude -p --model opus")
 WORKER_TIMEOUT=$(cfg worker.timeout_seconds 3600)
 RERUN_CMD=$(cfg gate.rerun_cmd "")
-# 副本/worktree 的根:環境變數 > board/config.json 的 `worktree_dir`(相對 repo 根)> 預設 `../<repo>-wt`。
-WTBASE=${AC_WORKTREE_DIR:-$(cfg worktree_dir "")}
-case "$WTBASE" in "") WTBASE=$ROOT/../$(basename "$ROOT")-wt ;; /*) ;; *) WTBASE=$ROOT/$WTBASE ;; esac
-WTBASE=$(cd "$(dirname "$WTBASE")" 2>/dev/null && pwd)/$(basename "$WTBASE")
 TF=$TDIR/$ID.json
+# 主 repo 根 **只有一種定義**(#38,D-018):`git rev-parse --git-common-dir` 的上一層。
+# 在票分支的 worktree 裡它也指回主 repo;不在 git 裡才退回 `$ROOT`。
+main_root() {
+    _common=$(git -C "$ROOT" rev-parse --git-common-dir 2>/dev/null || echo "")
+    case "$_common" in
+        "") echo "$ROOT" ;;
+        /*) (cd "$(dirname "$_common")" 2>/dev/null && pwd) || echo "$ROOT" ;;
+        *)  (cd "$ROOT/$(dirname "$_common")" 2>/dev/null && pwd) || echo "$ROOT" ;;
+    esac
+}
+MAINROOT=$(main_root)
 # 票分支的 worktree **不是**控制根(G10 / #29 A10):`_ac_root()` 往上找
 # `board/config.json`,在 worktree 裡找到的是 worktree 自己,於是票檔要在**那一條分支上
 # 進了版控**才找得到 —— 而票檔是走 docs 通道進主線的,常常還沒進去(#23 第 2 輪就是這樣
 # rc=2 停掉的)。所以找不到票時改問主 repo:`--git-common-dir` 的上一層。
 if [ ! -f "$TF" ] && [ -z "${AC_TICKETS_DIR:-}" ]; then
-    _common=$(git -C "$ROOT" rev-parse --git-common-dir 2>/dev/null || echo "")
-    case "$_common" in
-        "") ;;
-        /*) _mainroot=$(cd "$(dirname "$_common")" 2>/dev/null && pwd || echo "") ;;
-        *)  _mainroot=$(cd "$ROOT/$(dirname "$_common")" 2>/dev/null && pwd || echo "") ;;
-    esac
-    if [ -n "${_mainroot:-}" ] && [ "$_mainroot" != "$ROOT" ] \
-            && [ -f "$_mainroot/board/config.json" ] && [ -f "$_mainroot/$TICKETS/$ID.json" ]; then
-        echo "auto-fix: $ROOT 是 worktree —— 票 / reports / 事件改用主 repo $_mainroot"
-        ROOT=$_mainroot
+    if [ "$MAINROOT" != "$ROOT" ] \
+            && [ -f "$MAINROOT/board/config.json" ] && [ -f "$MAINROOT/$TICKETS/$ID.json" ]; then
+        echo "auto-fix: $ROOT 是 worktree —— 票 / reports / 事件改用主 repo $MAINROOT"
+        ROOT=$MAINROOT
         export AC_ROOT=$ROOT
         TDIR=$ROOT/$TICKETS
         TF=$TDIR/$ID.json
-        WTBASE=${AC_WORKTREE_DIR:-$(cfg worktree_dir "")}
-        case "$WTBASE" in "") WTBASE=$ROOT/../$(basename "$ROOT")-wt ;; /*) ;; *) WTBASE=$ROOT/$WTBASE ;; esac
     fi
 fi
 [ -f "$TF" ] || { echo "auto-fix: 找不到票 #$ID($TF)" >&2; exit 2; }
+# 副本/worktree 的根:環境變數 > board/config.json 的 `worktree_dir` > 預設 `../<主 repo>-wt`;
+# 相對路徑一律以**主 repo 根**解析(#38)。以前用 `$ROOT` 拼:在票 worktree 裡跑時 `$ROOT`
+# 是 worktree,副本開到 `x-wt/x-wt/` 底下(9/23 實際開在 `agent-control-wt/agent-control-wt/`)。
+WTBASE=${AC_WORKTREE_DIR:-$(cfg worktree_dir "")}
+case "$WTBASE" in "") WTBASE=$MAINROOT/../$(basename "$MAINROOT")-wt ;; /*) ;; *) WTBASE=$MAINROOT/$WTBASE ;; esac
+# 上層不存在就**指名停下**:以前 `cd` 失敗後前綴變成空字串,副本根算成檔案系統根下的
+# `/x-wt`,而且不報錯 —— 接下來的 `rm -rf "$FIX"` 就對著一個沒人預期的地方跑。
+_wtparent=$(cd "$(dirname "$WTBASE")" 2>/dev/null && pwd) || {
+    echo "auto-fix: 副本根 $WTBASE 的上層不存在 —— 停(worktree_dir 以主 repo $MAINROOT 解析;先建好上層)" >&2
+    exit 2
+}
+WTBASE=$_wtparent/$(basename "$WTBASE")
 
 ev() {
     python3 "$AC/event.py" emit "$@" >/dev/null \
@@ -799,6 +810,17 @@ PY
     ROUND_RC=1
     return 0
 }
+
+# 迴圈從 `S_ROUND+1` 起,碰不到前面那幾輪的副本 —— 主線用 Agent 手建的第 1 輪就在這裡
+# (#38 A4)。派下一輪之前一併收;先撿再刪,同 `round_once`。`--dry-run` 不刪東西。
+if [ -z "$DRY" ]; then
+    p=1
+    while [ "$p" -le "$S_ROUND" ]; do
+        collect_from_copy "$WTBASE/fix-t$ID/round$p" "patch-round$p.diff" "EVIDENCE-round$p.md"
+        shed_copies "$WTBASE/fix-t$ID/round$p"
+        p=$((p + 1))
+    done
+fi
 
 r=$((S_ROUND + 1))
 while :; do
