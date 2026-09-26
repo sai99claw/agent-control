@@ -237,6 +237,10 @@ for key, value in slots.items():
 sys.stdout.write("\n" + text)
 PY
 } > "$DISPATCH"
+# 「等覆核」那幾頁的 what 就是這一支接著要做的事 —— 開跑就由這一支收掉(#43,inbox.py 檔頭)。
+# 只收 state 含「等覆核」的:同一張票的 Blocked / 裁示頁是主線的,不動。
+python3 "$AC/inbox.py" ack "$ID" --state 等覆核 --by review.sh >/dev/null \
+    || echo "review: 「等覆核」那幾頁 ack 不掉(不擋覆核)" >&2
 echo "review: #$ID 派覆核 —— $REVIEWER_CMD(cwd $CWD,分支 t$ID @ $(echo "$SHA" | cut -c1-12),派工文 $(rel "$DISPATCH"))"
 
 ev agent.start --ticket "$ID" --role reviewer --model "$MODEL" \

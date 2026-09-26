@@ -12,6 +12,8 @@ land —— 中間漏了 `git commit`。腳本照樣開 worktree、照樣跑完�
 
 import json
 import os
+import re
+import shlex
 import sys
 import unittest
 
@@ -811,6 +813,168 @@ class OnlyOneLandAtATime(LandBase):
         self.assertFalse(self.exists(".land.lock"))
 
 
+# 關得掉的票面:verify_strings 指向分支上那一行、baseline 是閘門那一趟 check。
+CLOSABLE = {
+    "verify_strings": [{"path": "src/g1", "contains": "做完的那一張"}],
+    "verify": {"files": [], "tags": [], "run": "", "notes": "",
+               "baseline": {"ok": True, "stage": "check"}},
+}
+
+# 閘門的替身 + 一個鉤子:鉤子檔在就跑它。**落地途中票被改**(反駁寫進來、覆核轉 fail)
+# 只能在 land 讀完票之後、close 之前發生 —— 那一段正是閘門在跑的九分鐘。
+GATE_STUB_HOOK = """#!/bin/sh
+echo "gate $* $(git rev-parse --short HEAD)" >> "$AC_TEST_LOG"
+hook="$(dirname "$AC_TEST_LOG")/gate-hook.sh"
+[ -f "$hook" ] && sh "$hook"
+exit 0
+"""
+
+
+class LandTriesToClose(LandBase):
+    """#43 A1/A2/A4:push 成功後 land 試 `ticket.py close <n> --landed <sha>`。
+
+    關不掉的四種各一條、同一組斷言:票不是 Done、沒有 ticket.closed、stdout 仍
+    「已合併、尚未關票」、rc 不變(0)、inbox 那頁 what 含 **ticket.py 印的原文**。
+    期望的理由字串取自 `scripts/ticket.py` 既有的訊息(done_blockers / cmd_close),
+    不從 land.sh 反推。
+    """
+
+    gate_stub = GATE_STUB_HOOK
+
+    def during_gate(self, *ticket_set_args):
+        """閘門跑的時候對主 repo 的票打一次 `ticket.py set`。"""
+        line = " ".join(shlex.quote(arg) for arg in ticket_set_args)
+        self.write("gate-hook.sh",
+                   'cd "$AC_ROOT" && python3 scripts/ticket.py set %s >/dev/null\n' % line,
+                   where=self.home)
+
+    def ready(self, **fields):
+        branch = self.branch_for(1, "t1-good", **fields)
+        self.commit_in(branch, "src/g1", "做完的那一張")
+        self.approve(1, "t1-good")
+        return branch
+
+    def inbox_rows(self):
+        path = os.path.join(self.repo, "reports", "inbox", "index.jsonl")
+        if not os.path.exists(path):
+            return []
+        with open(path, encoding="utf-8") as handle:
+            return [json.loads(line) for line in handle if line.strip()]
+
+    def acked(self):
+        path = os.path.join(self.repo, "reports", "inbox", "acked.jsonl")
+        if not os.path.exists(path):
+            return {}
+        with open(path, encoding="utf-8") as handle:
+            return {row["name"]: row for row in
+                    (json.loads(line) for line in handle if line.strip())}
+
+    def listed_for(self, ident):
+        """`inbox.py list`(沒 ack 的)裡這張票的那幾列。"""
+        out = self.run_py("scripts/inbox.py", "list").stdout
+        return [line for line in out.splitlines()
+                if re.match(r"^\s+• #%s\s" % ident, line)]
+
+    def post(self, state, what="x"):
+        done = self.run_py("scripts/inbox.py", "post", "--ticket", "1", "--run-id", "pre",
+                           "--kind", "auto-fix", "--state", state, "--what", what)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def assert_landed_but_not_closed(self, done, reason):
+        """A2 同形斷言。`reason` 是 ticket.py 既有訊息裡的那幾個字。
+
+        **變異 M2**:land 對關不掉的票也印「已關票」→ 這一組紅。
+        """
+        self.assertEqual(done.returncode, 0, "關不掉不改 land 的 rc\n" + done.stdout)
+        self.assertIn("land: main -> ", done.stdout, "東西要真的進了主線")
+        self.assertIn("已合併、尚未關票", done.stdout)
+        self.assertNotIn("已合併、已關票", done.stdout)
+        self.assertIn(reason, done.stdout, "stdout 要帶 ticket.py close 的原文")
+        self.assertNotEqual(self.load_ticket("1")["state"], "Done")
+        self.assertNotIn("ticket.closed", self.kinds())
+        pages = [row for row in self.inbox_rows()
+                 if row["ticket"] == "1" and "尚未關票" in row["state"]]
+        self.assertEqual(len(pages), 1, self.inbox_rows())
+        self.assertIn(reason, pages[0]["what"], "inbox 那頁的 what 要帶 ticket.py 的原文")
+        self.assertEqual(len(self.listed_for("1")), 1,
+                         "A4:關不掉的票恰留一頁(尚未關票那頁)")
+
+    # ------------------------------------------------------------ A1 另一種
+
+    def test_an_honest_waiver_instead_of_a_baseline_also_closes(self):
+        self.ready(verify_strings=CLOSABLE["verify_strings"],
+                   verify_waiver={"by": "main", "reason": "沙盒:工具票不需要驗證者"})
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("已合併、已關票", done.stdout)
+        self.assertEqual(self.load_ticket("1")["state"], "Done", done.stdout)
+
+    # ------------------------------------------------------------ A2 四種
+
+    def test_no_verify_strings_only_a_weak_check_is_not_closed(self):
+        self.ready(verify=CLOSABLE["verify"])
+        self.assert_landed_but_not_closed(self.land("t1-good"), "只做得了弱檢查")
+
+    def test_a_review_that_turns_to_fail_during_the_gate_is_not_closed(self):
+        """票面寫的是「review 過期」;過期那一種走不到 close(見 EVIDENCE 的 OBJECTION):
+        land 在合併之前就拒過期的 review,而 `close --landed` 會把 sha 與版本重蓋。
+        走得到 close 的 review 缺格是**閘門跑的時候覆核被改成不通過**。"""
+        self.ready(**CLOSABLE)
+        self.during_gate("1", "review", json.dumps(
+            {"verdict": "fail", "by": "main", "sha": "0000000"}))
+        self.assert_landed_but_not_closed(self.land("t1-good"), "不是通過")
+
+    def test_an_objection_filed_during_the_gate_is_not_closed(self):
+        self.ready(**CLOSABLE)
+        self.during_gate("1", "objections", json.dumps(
+            [{"category": "ticket-wrong", "owner": "main", "body": "閘門跑的時候收到的反駁",
+              "evidence": "EVIDENCE.md:1", "disposition": ""}], ensure_ascii=False))
+        self.assert_landed_but_not_closed(self.land("t1-good"), "還沒處置")
+
+    def test_a_baseline_without_the_check_stage_is_not_closed(self):
+        self.ready(verify_strings=CLOSABLE["verify_strings"],
+                   verify={"files": [], "tags": [], "run": "", "notes": "",
+                           "baseline": {"ok": True, "stage": "red"}})
+        self.assert_landed_but_not_closed(self.land("t1-good"), "還缺閘門那一趟 check")
+
+    def test_there_is_no_force_flag_in_land(self):
+        with open(os.path.join(self.repo, "scripts", "land.sh"), encoding="utf-8") as fh:
+            self.assertEqual(fh.read().count("--force"), 0)
+
+    # ------------------------------------------------------------ A4 收件匣
+
+    def test_a_closed_ticket_leaves_nothing_in_the_inbox(self):
+        """「等覆核」「覆核通過(等落地)」在 land 收票時收;關票成功時收「尚未關票」
+        並 post 一頁 Done(what=無)隨即收掉 —— 全部 by=land.sh。
+
+        **變異 M4**:close 成功但不 ack → 這一條紅。
+        """
+        self.post("第 1 輪綠了,等覆核")
+        self.post("覆核通過(reviewer@fixture)", what="sh scripts/land.sh t1")
+        self.ready(**CLOSABLE)
+        done = self.land("t1-good")
+        self.assertIn("已合併、已關票", done.stdout)
+        self.assertEqual(self.listed_for("1"), [], self.run_py("scripts/inbox.py", "list").stdout)
+        acked = self.acked()
+        rows = [row for row in self.inbox_rows() if row["ticket"] == "1"]
+        states = [row["state"] for row in rows]
+        self.assertIn("Done", states, "關票成功要留一頁 Done 在帳上")
+        for row in rows:
+            self.assertEqual(acked.get(row["name"], {}).get("by"), "land.sh", row)
+        self.assertEqual([row["what"] for row in rows if row["state"] == "Done"], ["無"])
+
+    def test_pages_that_are_mains_to_do_are_left_alone(self):
+        """Blocked / 裁示 那幾類是主線的待辦,腳本不收(設計 ③ 丁)。"""
+        self.post("Blocked(三輪耗盡)")
+        self.post("覆核退回(1 條阻擋)", what="裁示")
+        self.ready(**CLOSABLE)
+        self.assertIn("已合併、已關票", self.land("t1-good").stdout)
+        left = " ".join(self.listed_for("1"))
+        self.assertIn("Blocked", left)
+        self.assertIn("覆核退回", left)
+        self.assertEqual(len(self.listed_for("1")), 2)
+
+
 class PhasesAndClosing(LandBase):
 
     def test_gate_merge_and_push_are_recorded_separately(self):
@@ -826,16 +990,31 @@ class PhasesAndClosing(LandBase):
         phases = [(row["phase"], row["rc"]) for row in self.status_of("1", kind="land")["phases"]]
         self.assertEqual(phases, [("gate", 0), ("merge", 0), ("push", 0)])
 
-    def test_a_green_landing_says_the_ticket_is_still_open(self):
-        """能力表誤稱 land 會關票(外部審查)—— 它不會,而「已合併」與「已關票」是
-        兩件事。"""
-        branch = self.branch_for(1, "t1-good")
+    def test_a_green_landing_of_a_ticket_that_meets_done_closes_it(self):
+        """#43 A1(原本是「land 不關票」那一條,改寫不刪):「已合併」與「已關票」仍是
+        兩件事,只是打 close 的人從主線變成 land —— Done 的條件一條不放。
+
+        票齊了四格:verify_strings(主線上抓得到)、review 綁分支頭、
+        verify.baseline stage=check、沒有未處置的反駁。
+
+        **變異 M1**:拿掉 land.sh 那一手 `ticket.py close` → 這一條紅。
+        """
+        branch = self.branch_for(1, "t1-good", **CLOSABLE)
         self.commit_in(branch, "src/g1", "做完的那一張")
         self.approve(1, "t1-good")
         done = self.land("t1-good")
-        self.assertIn("已合併、尚未關票", done.stdout)
-        self.assertIn("ticket.py close 1", done.stdout)
-        self.assertEqual(self.load_ticket("1")["state"], "Ready", "land 不關票")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        merged = self.git("rev-parse", "main").strip()
+        self.assertIn("已合併、已關票", done.stdout)
+        self.assertNotIn("尚未關票", done.stdout)
+        ticket = self.load_ticket("1")
+        self.assertEqual(ticket["state"], "Done", done.stdout)
+        self.assertEqual(ticket["review"]["sha"], merged,
+                         "close 要帶 --landed <合併後 main 的 sha>")
+        kinds = self.kinds()
+        self.assertIn("ticket.closed", kinds)
+        self.assertGreater(kinds.index("ticket.closed"), kinds.index("land.pass"),
+                           "close 要在 push 成功(land.pass)之後")
 
     def test_a_refused_batch_still_leaves_a_terminal_status(self):
         """拒絕也是一個結果 —— 停在 running 的狀態檔與還在跑的長得一樣。"""

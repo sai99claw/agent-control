@@ -5,8 +5,9 @@
                           --what "讀 patch 記 review" --where "reports/t7/…/status.json"
     scripts/inbox.py list [--all]          # 還沒 ack 的(--all 連 ack 過的一起)
     scripts/inbox.py show 7                # 那一頁
-    scripts/inbox.py ack 7-20260921-…      # 收下了
-    scripts/inbox.py ack --all
+    scripts/inbox.py ack 7-20260921-…      # 收下了(by=main)
+    scripts/inbox.py ack 7 --state 等覆核 --by review.sh   # 腳本收它自己接著做掉的頁
+    scripts/inbox.py ack --all --by migration
 
 ## 為什麼要有這一支
 2026-09-21 的外部審查:「最容易空轉的是『gate 紅了以後由主線人工接續』」。在它之前,
@@ -24,6 +25,16 @@
 ## ack 是「我收下了」,不是「我做完了」
 ack 只從清單上拿掉 —— 票的狀態由票說了算(`ticket.py`),不由收件匣說。兩者混在一起
 的話,一次 ack 會讓一張還沒處理的票在畫面上消失。
+
+## 腳本做掉的頁由腳本 ack(#43,D-025 C4)
+**post 的 what 若是某支腳本接著就會做的事,那支腳本開跑時 ack --by <script>;主線只剩
+Blocked / 裁示 / 落地順序三類頁。** 具體三處:`review.sh` 開跑時收該票「等覆核」;
+`land.sh` 收到票時收該票「等覆核」/「等落地」/「覆核通過」;`ticket.py close` 成功時
+`land.sh` 收「已合併、尚未關票」並 post 一頁 Done(what=無)隨即收掉。`--state` 只收
+state 含那幾個字的頁 —— 同一張票的 Blocked / 裁示頁不跟著消失。
+
+`acked.jsonl` 每一筆記 `by`:不帶 `--by` 記 `main`,**不是空字串** —— 「沒寫是誰收的」
+與「主線收的」要分得開(`docs/DISPATCH-TEMPLATE.md` §5.5)。
 """
 
 import argparse
@@ -223,6 +234,9 @@ def cmd_show(args):
 
 def cmd_ack(args):
     root = event.repo_root()
+    if not args.by.strip():
+        sys.stderr.write("inbox: --by 不能是空的 —— 空的與「沒寫是誰收的」長得一樣\n")
+        return 2
     if args.all:
         rows = entries(root, include_acked=False)
     else:
@@ -230,15 +244,19 @@ def cmd_ack(args):
             sys.stderr.write("inbox: ack <票號|名稱> 或 ack --all\n")
             return 2
         rows = [row for row in pick(root, args.which, include_acked=False)]
+    if args.state:
+        rows = [row for row in rows
+                if any(want in str(row.get("state", "")) for want in args.state)]
     if not rows:
         sys.stdout.write("inbox: 沒有還沒 ack 的%s\n"
                          % ("" if args.all else "(%s)" % args.which))
         return 0
     for row in rows:
         append_jsonl(acked_path(root), {"name": row["name"], "at": now(),
-                                        "ticket": row.get("ticket", "")})
-        sys.stdout.write("inbox: ack %s(#%s %s)\n"
-                         % (row["name"], row.get("ticket", "?"), row.get("state", "")))
+                                        "ticket": row.get("ticket", ""), "by": args.by})
+        sys.stdout.write("inbox: ack %s(#%s %s)by=%s\n"
+                         % (row["name"], row.get("ticket", "?"), row.get("state", ""),
+                            args.by))
     sys.stdout.write("inbox: ack 只是「我收下了」—— 票的狀態還是由 ticket.py 說了算\n")
     return 0
 
@@ -268,6 +286,8 @@ def main(argv):
     ack = subs.add_parser("ack")
     ack.add_argument("which", nargs="?", default="")
     ack.add_argument("--all", action="store_true")
+    ack.add_argument("--by", default="main")
+    ack.add_argument("--state", action="append", default=[])
     ack.set_defaults(run=cmd_ack)
 
     args = parser.parse_args(argv)

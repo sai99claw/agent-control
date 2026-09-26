@@ -155,6 +155,35 @@ class ThePassPath(ReviewBase):
             self.assertEqual(json.load(handle)["usage"]["output_tokens"], 42)
 
 
+class ItAcksTheWaitingForReviewPage(ReviewBase):
+    """#43 A4:「等覆核」那頁的下一步就是這一支 —— 開跑時由它收(`--by review.sh`)。"""
+
+    def acked(self):
+        path = os.path.join(self.repo, "reports", "inbox", "acked.jsonl")
+        if not os.path.exists(path):
+            return {}
+        with open(path, encoding="utf-8") as handle:
+            return {row["name"]: row for row in
+                    (json.loads(line) for line in handle if line.strip())}
+
+    def test_the_waiting_page_is_acked_by_review_and_the_others_are_left(self):
+        """**變異**:拿掉 review.sh 開跑那一手 ack → 這一條紅。"""
+        for run, state in (("r1", "第 1 輪綠了,等覆核"), ("r0", "閘門紅(gate rc=1)")):
+            done = self.run_py("scripts/inbox.py", "post", "--ticket", "1", "--run-id", run,
+                               "--kind", "auto-fix", "--state", state, "--what", "x")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.set_reviewer(REVIEWER_PASS)
+        done = self.review()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        acked = self.acked()
+        by_state = {row["state"]: row["name"] for row in self.inbox_rows()}
+        self.assertEqual(acked.get(by_state["第 1 輪綠了,等覆核"], {}).get("by"), "review.sh")
+        self.assertNotIn(by_state["閘門紅(gate rc=1)"], acked, "其它頁不動")
+        passed = [name for state, name in by_state.items() if state.startswith("覆核通過")]
+        self.assertEqual(len(passed), 1)
+        self.assertNotIn(passed[0], acked, "「覆核通過」是主線的落地順序頁,不由 review.sh 收")
+
+
 class TheFailPath(ReviewBase):
     """A2:fail ⇒ 每條理由一筆 blocking 反駁、票 Blocked、一頁「覆核退回,裁示」。"""
 

@@ -39,7 +39,7 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 7. 依序合到 `land/<ts>` worktree,跑全套(`scripts/gate.sh --full`),綠才 `--ff-only` 推主線;紅則主線不動、worktree 留著給人看。
 8. **gate / merge / push 各記一筆**(狀態檔的 `phases`),而且**每一條退出路徑都寫終態**,
    同時寫一則 `reports/inbox/<票號>-<run_id>.md`(D-015:終態去叫醒主線,主線不輪詢)。
-9. 綠了之後 land 印「#n 已合併、尚未關票」——**land 不關票**,關票走 `scripts/ticket.py close <n>`。
+9. 綠了、push 成功之後 land 對每張票試 `scripts/ticket.py close <n> --landed <合併後主線的 sha>`(#43):關得掉印「#n 已合併、已關票」;關不掉印「#n 已合併、尚未關票」+ `ticket.py close` 的理由原文,並寫一頁收件匣 —— Done 的條件一條不放,沒有放行旗標,land 的 rc 不因關不掉而變。
 10. 每一步發事件。全套紅時預設派下一輪 worker,**只在這一批剛好一張票的時候**
    (一批裡哪一條紅對到哪一張票,要有票↔案例的對照才判得出來)。
 
@@ -157,7 +157,9 @@ worker 說「這張票寫錯了」以前只是一句話:沒有結構化類別、
 | 遲到的回報拿 `attempt` / `state_version` 比對後拒收;寫入走同一把鎖 | **已實作**(SCHEMA 以前宣稱過但沒有實作) | `ticket.py set --expect-attempt / --expect-state-version`;`.ticket.lock` |
 | 三輪耗盡 → 票轉 Blocked 並指派主線 | **已實作** | `ticket.py round <n> <r> --red` |
 | **套 patch、建分支、commit** | **已實作**(2026-09-21,D-015) | `scripts/apply.sh <票號> <patch> [<patch-verify>]`;重套走 `scripts/apply.sh rebase` |
-| **關票** | **land 不關票**;它印「已合併、尚未關票」。誠實的 `verify_waiver` + review sha 在主線歷史裡可免回歸證據那格;`verify_waiver`/`verify_strings`/`objections` 的 `set` 不讓既有 review 過期 | `scripts/ticket.py close <n> [--landed <merge sha>]` |
+| **關票** | 由 land 試(下一列),主線補齊缺格後手跑同一句。誠實的 `verify_waiver` + review sha 在主線歷史裡可免回歸證據那格;`verify_waiver`/`verify_strings`/`objections` 的 `set` 不讓既有 review 過期 | `scripts/ticket.py close <n> [--landed <merge sha>]` |
+| **land 試關**:push 成功後對批次每張票試 `ticket.py close <n> --landed <sha>`;關不掉照舊印「已合併、尚未關票」+ inbox 一頁,what 是 close 的理由原文;不加 `--force`,rc 不變 | **已實作**(2026-09-26,#43,D-025 ①) | `scripts/land.sh` 第 6 步之後 |
+| **腳本 ack**:post 的 what 是某支腳本接著就會做的事 → 那支腳本開跑時 `inbox.py ack <n> --state <字> --by <腳本>`;`acked.jsonl` 記 `by`(預設 `main`)。review.sh 收「等覆核」;land 收票時收「等覆核 / 等落地 / 覆核通過」、關票成功收「尚未關票」並 post + 收一頁 Done。主線只剩 Blocked / 裁示 / 落地順序三類頁 | **已實作**(2026-09-26,#43,D-025 C4) | `scripts/inbox.py ack --by / --state`;`review.sh`、`land.sh` |
 | land 前檢查 `verify.files` 都在分支上 | **已實作**(2026-09-21,D-015) | `scripts/land.sh` 第 5 步,缺了 rc=4 |
 | 用 headless `claude -p` **自動起新 worker**(三輪上限) | **已實作**(2026-09-22;gate / 單票 land 預設開,`--no-auto-fix` 關) | `scripts/auto-fix.sh <票號>`;`gate.sh`、`land.sh` |
 | **第 1 輪自動**:票 Ready 且沒有狀態檔 → 起第 1 輪 worker(發 `ticket.attempt.start`、轉 Running),apply → gate → InReview → inbox 與第 2 輪起同一段;非 Ready 指名 state 停下 | **已實作**(2026-09-26,#40,D-025 C1) | `scripts/auto-fix.sh <票號>`(`round_once 1`);只看派工文 `--dry-run --round 1` |
