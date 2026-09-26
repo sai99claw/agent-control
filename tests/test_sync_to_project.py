@@ -179,6 +179,61 @@ class DidTheProjectActuallyWireItUp(unittest.TestCase):
                             "只唸出來,不刪 —— 那是專案的東西")
 
 
+class TheSessionHookIsSynced(unittest.TestCase):
+    """#39 A8:開場那一頁的三支(`session-hook.sh` → `new-session.sh` → `heartbeat.sh`)
+    跟著同步過去;hook 的呼叫點在 `.claude/settings.json`,不在 `scripts/*.sh`。"""
+
+    THREE = ("new-session.sh", "heartbeat.sh", "session-hook.sh")
+    HOOK = ('{"hooks":{"SessionStart":[{"hooks":[{"type":"command",'
+            '"command":"sh \\"$CLAUDE_PROJECT_DIR/scripts/control/session-hook.sh\\"",'
+            '"timeout":60}]}]}}')
+
+    def project(self, dest, hook=True):
+        write_config(dest)
+        if hook:
+            os.makedirs(os.path.join(dest, ".claude"))
+            with open(os.path.join(dest, ".claude", "settings.json"), "w") as handle:
+                handle.write(self.HOOK)
+
+    def uncalled(self, out):
+        line = [x for x in out.splitlines() if "同步了但專案端沒有呼叫點" in x]
+        self.assertTrue(line, "這個專案沒有 scripts/*.sh,那一行本來就該出現:" + out)
+        return line[0]
+
+    def test_a8_the_three_land_executable_and_in_the_manifest(self):
+        """**變異 M3**:`SCRIPT_LIST` 少了 `session-hook.sh` → 這一條紅。"""
+        with tempfile.TemporaryDirectory() as d:
+            self.project(d)
+            r = sync(d)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            control = os.path.join(d, "scripts", "control")
+            with open(os.path.join(control, ".sync-manifest")) as handle:
+                manifest = handle.read().splitlines()
+            for name in self.THREE:
+                path = os.path.join(control, name)
+                self.assertTrue(os.path.isfile(path), name)
+                self.assertEqual(os.stat(path).st_mode & 0o777, 0o755, name)
+                self.assertIn(name, manifest)
+
+    def test_a8_the_hook_in_settings_counts_as_wired(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.project(d)
+            r = sync(d)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            line = self.uncalled(r.stdout)
+            for name in self.THREE:
+                self.assertNotIn(name, line, "接在 .claude/settings.json 的 hook 被說成沒接")
+
+    def test_a8_no_hook_in_settings_is_named(self):
+        """反方向:沒接 hook 的專案要被點名 —— 不然上一條對一個根本不看 settings 的
+        版本(或把 session-hook.sh 塞進 DEPENDENCY_ONLY 的版本)也是綠的。"""
+        with tempfile.TemporaryDirectory() as d:
+            self.project(d, hook=False)
+            r = sync(d)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("session-hook.sh", self.uncalled(r.stdout))
+
+
 class ASameNamedForkInTheProjectIsNamed(unittest.TestCase):
     """#35 A2:專案自己有一支 `scripts/verify.py`,與同步過去的 `scripts/control/verify.py`
     內容不同 —— 專案的閘門跑的是前者,後者再新也用不到,而兩份讀起來都像規格。"""
