@@ -62,9 +62,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "5733105",
-  "state": "Draft",
-  "state_version": 2,
+  "base_sha": "dbce33b",
+  "state": "Ready",
+  "state_version": 4,
   "lease": null,
   "retry_limit": 2,
   "verify": {

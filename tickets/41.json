@@ -30,8 +30,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "e79e277",
-  "state": "Ready",
-  "state_version": 4,
+  "state": "InReview",
+  "state_version": 7,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -57,5 +57,13 @@
     }
   ],
   "outline": "設計 ② C5 / ⑤ C5 / ⑥ 第 2 列,D-025 ③ 准。兩檔各加一句,不寫腳本:docs 通道(land.sh docs)本來就持 .land.lock、只收 tickets/ docs/ memory/ 三個前綴、不在 main 上拒收,開題者呼叫它與主線呼叫它守衛一樣。順序:五張的第 2 張,無前置,可與 C1 平行(不共檔)。T 端 docs/roles/opener.md 由 T 票的 sync 帶。needs_verifier=false:純文字,驗收是三條 grep,沒有邏輯可紅",
-  "needs_verifier": false
+  "needs_verifier": false,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "dbce33b",
+    "note": "A1-A4 all met; 2 new cases green in gate (Ran 74 OK); scope 3 files only. Non-blocking: gate does not map memory/role/* to test_rules (implementer self-reports green); template line 7 warning does not mention the docs exception; ticket A3 cites rules.py cap_chars but it lives in memory.py; branch cut from 171bfac, ticket base_sha e79e277 stale.",
+    "at": "2026-09-26T15:18:58+08:00",
+    "state_version": 7
+  }
 }

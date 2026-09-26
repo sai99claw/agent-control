@@ -39,8 +39,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "e79e277",
-  "state": "Ready",
-  "state_version": 4,
+  "state": "InReview",
+  "state_version": 7,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -77,5 +77,13 @@
     }
   ],
   "outline": "設計 docs/DESIGN-MAIN-TOUCHPOINTS.md ② C1 / ⑤ C1 / ⑥ 第 1 列,D-025。整條 apply→gate→InReview→inbox 已在 round_once(auto-fix.sh:539-807),第 1 輪只被 :366-371 的 exit 2 擋住;要補的是 Ready 檢查、無狀態檔時 r=1、S_BASE 取票的 base_sha、RUN_ID 自鑄。順手收 gate.sh verify_plan 只認 $ROOT 的洞(memory/project/gate.md):不收的話第 1 輪自動起的閘門在 worktree 裡看不到主 repo 票的 waiver / needs_verifier,C1 一跑就紅。接在 #38 的形狀上(WTBASE 只算一次、主 repo 根 = git-common-dir 上一層、主迴圈前收第 1 輪副本)。順序:五張的第 1 張,無前置;C2 要接 :787 轉 InReview 之後那一手,等本票落地。needs_verifier=false:A 端工具票,不動產品碼,驗收 A1-A5 全是沙盒機械斷言,案例由實作者寫在 tests/、三條變異各紅一次即可(同 #31-#38)",
-  "needs_verifier": false
+  "needs_verifier": false,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "dbce33b",
+    "note": "A1-A5 met (read-only review; mutation reds from EVIDENCE M1-M9). verify_plan and candidate_reds both go ticketlib.load + event.tickets_dir(repo_root()); test_gate.py:573 guards worktree without AC_TICKETS_DIR seeing main-repo needs_verifier=false. Non-blocking: no case guards verify_waiver (same data path, inferred); gate.sh preflight :229 and ticket_tags :491 still build ticket path from $ROOT (same hole, suggest new ticket); test_auto_fix.py:768 fixture Ready->Draft, assertion unchanged; no script emits ticket.attempt.done so green round leaves unpaired attempt.start.",
+    "at": "2026-09-26T15:18:58+08:00",
+    "state_version": 7
+  }
 }

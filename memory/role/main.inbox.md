@@ -11,3 +11,4 @@
 - 覆核不由主線讀 patch:閘門綠後派短命 opus reviewer,讀票面+分支 code+EVIDENCE,逐條驗收對到實作行與案例、查範圍與反駁,交 verdict/對照表/疑慮;主線只寫 review 格與排落地 (D-022) (2026-09-23, main@fable)
 - 單票 land 全套紅時 land.sh 會自己叫 auto-fix.sh(#13)並繼續持有 .land.lock;主線要重落同一票前先看 pgrep 'land.sh t<n>' 與 auto-fix,killed 才清鎖,否則兩個 land 並跑 (#32) (2026-09-23, main@fable)
 - D-022 首跑(#29):opus reviewer 118K,逐條驗收對到實作行與案例,落地前抓到票面 verify_strings 的機械錯(result-round1 在分支上 0 次)與兩處票面過期;派工文 scratchpad/dispatch/review/TEMPLATE.md 可用 (2026-09-23, main@fable)
+- gate.sh 還有兩處自己用 $ROOT 拼票檔路徑(:229 preflight、:491 ticket_tags),與 #40 修掉的同洞;綠了那一輪沒人發 ticket.attempt.done;memory/role/*.md 沒 cap_chars 檔頭時照樣受 config 2000 字上限管 —— 併進 #45 或下一批開題 (#40, 2026-09-26, main@fable)
