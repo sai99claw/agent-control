@@ -570,6 +570,37 @@ class VerifierCasesAtTheGate(Sandbox):
         self.assertIn("連 verify 這一格都沒有宣告", done.stdout)
         self.assertNotIn("這張票沒有驗證者案例", done.stdout)
 
+    def test_a_gate_in_the_ticket_worktree_reads_the_main_repo_ticket(self):
+        """#40 A4:`needs_verifier=false` 只在**主 repo** 那一份票上,票 worktree 裡那一份
+        是沒有那一格的舊版。閘門在 worktree 裡只帶 `AC_ROOT`、**不帶** `AC_TICKETS_DIR`
+        —— auto-fix 起閘門就是這個形狀 —— 要讀到主 repo 那一份,驗證者層不算缺口。
+
+        **變異 M3**:`verify_plan` 改回拿 `$ROOT` 拼票檔路徑 → 紅(讀到 worktree 那份
+        舊票,rc=3「這張票沒有驗證者案例」)。
+        """
+        self.make_ticket(7, allowed_write_paths=["tests/*", "src/*"],
+                         verify={"files": [], "tags": [], "run": "", "notes": ""})
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "開票 #7(還沒有 needs_verifier)")
+        marked = self.ticket("set", "7", "needs_verifier", "false")
+        self.assertEqual(marked.returncode, 0, marked.stdout + marked.stderr)
+        self.assertIs(self.load_ticket("7").get("needs_verifier"), False)
+        wt = self.worktree("t7")
+        with open(os.path.join(wt, "tickets", "7.json"), encoding="utf-8") as handle:
+            self.assertNotIn("needs_verifier", json.load(handle),
+                             "前提:worktree 那一份票沒有那一格")
+        self.write(os.path.join("tests", "test_land.py"),
+                   PASSING % "test_land" + "\n# 這條分支的改動\n", where=wt)
+        env = self.env(AC_ROOT=self.repo)
+        self.assertNotIn("AC_TICKETS_DIR", env)
+
+        done = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
+                           "--branch", "--ticket", "7", "--no-auto-fix", cwd=wt, env=env)
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("needs_verifier=false —— 這一層不要求案例", done.stdout)
+        self.assertNotIn("這張票沒有驗證者案例", done.stdout)
+
     # ------------------------------------------------- lint 紅了就停在這裡
 
     def test_a_case_that_fails_lint_stops_the_gate_and_names_the_line(self):

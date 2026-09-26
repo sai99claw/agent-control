@@ -149,6 +149,37 @@ echo "worker stderr round $AC_ROUND" >&2
 exit 7
 """
 
+# 假 worker(第 1 輪,#40):先把**跑的那一刻**看到的事實寫進標記檔(票的 state、副本
+# base/ 裡的 README、自己的副本路徑),再交一份會綠的 patch。票檔與標記檔的路徑由測試
+# 填進來(@TICKET@ / @MARK@),不靠被測腳本傳的環境變數去找 —— 讀回來的才是事實。
+WORKER_FIRST_ROUND = """#!/bin/sh
+set -e
+echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+cd "$AC_WORK"
+python3 - "@TICKET@" "@MARK@" "$AC_WORK" <<'PY'
+import json, sys
+ticket, mark, work = sys.argv[1:4]
+with open(ticket, encoding="utf-8") as handle:
+    state = json.load(handle).get("state")
+with open("base/README", encoding="utf-8") as handle:
+    readme = handle.read()
+with open(mark, "w", encoding="utf-8") as out:
+    json.dump({"state": state, "base_readme": readme, "work": work}, out,
+              ensure_ascii=False)
+PY
+mkdir -p work/tests
+cat > work/tests/test_thing.py <<'CASE'
+import unittest
+
+
+class T(unittest.TestCase):
+    def test_thing(self):
+        self.assertEqual(1, 1)
+CASE
+diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
+"""
+
 # 假 worker:修好那條紅,並照 §8.5 在 EVIDENCE 尾端交一塊 `result`。
 # `memory` 那一格是**鏡像**:這一份 EVIDENCE 裡沒有 `## 記憶` 段,所以跑完一輪之後
 # 記憶收件匣一行都不該多 —— 寫入仍然只由 `memory.py harvest` 那一手做(#10)。
@@ -369,13 +400,22 @@ class AutoFixBase(Sandbox):
 
 class WhenThereIsNothingToFix(AutoFixBase):
 
-    def test_a_ticket_that_never_ran_says_so_instead_of_dispatching(self):
+    def test_a_ready_ticket_that_never_ran_starts_round_one_instead_of_stopping(self):
+        """#40 A1:這一條以前斷言 rc=2「一輪都還沒跑過」—— 那正是 C1 要拆掉的門檻。
+
+        **Ready 且沒有狀態檔**現在起第 1 輪;這個 worker 什麼都沒交,所以照既有的路
+        停在 rc=5(沒交出可用的 patch),而不是在門口就 rc=2。
+
+        **變異 M1**:把「無狀態檔 ⇒ r=1」那條分支拿掉(退回 exit 2)→ 這一條紅。
+        """
         self.set_worker(WORKER_NEVER)
         self.ticket_ready()
         done = self.auto_fix()
-        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        self.assertIn("一輪都還沒跑過", done.stderr)
-        self.assertEqual(self.worker_rounds(), [], "沒有紅榜就不該起 worker")
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        self.assertNotIn("一輪都還沒跑過", done.stderr)
+        self.assertEqual(self.worker_rounds(), ["worker ran round 1"])
+        self.assertEqual(len(self.result_files("dispatch-round1.md")), 1,
+                         "第 1 輪的派工文要落在這一輪的 reports 目錄裡")
 
     def test_a_green_round_stops_and_says_review_is_not_automatic(self):
         self.set_worker(WORKER_NEVER)
@@ -690,7 +730,8 @@ class TheFirstRoundPacket(AutoFixBase):
         return os.path.join(self.home, "repo-wt", "fix-t1", "round%d" % round_no)
 
     def test_round_one_prints_a_packet_before_any_gate_has_run(self):
-        """**變異**:把 `--round 1` 那一段分支拿掉 → 這一條紅(退回「一輪都還沒跑過」rc=2)。"""
+        """**變異**:把 `--round 1` 那一段分支拿掉 → 這一條紅(#40 起退回 `round_once 1` 的
+        dry-run,印的不再是派工文本身)。"""
         self.set_worker(WORKER_NEVER)
         self.ticket_ready(subject="把清單接上票的回歸")
         self.assertFalse(os.path.exists(os.path.join(self.repo, "reports", "t1")),
@@ -725,12 +766,140 @@ class TheFirstRoundPacket(AutoFixBase):
         self.assertIn("--round 只接 1", done.stderr)
 
     def test_without_round_one_it_still_says_where_to_start(self):
-        """沒有狀態檔又沒給 `--round 1` 時,那一句要**指得到兩條路**。"""
+        """沒有狀態檔又沒給 `--round 1` 時,那一句要**指得到兩條路**。
+
+        #40 之後 Ready 的票不帶 `--round` 就起第 1 輪,會停在門口的只剩**不是 Ready**
+        的票 —— 所以這裡拿一張 Draft 票問同一件事。
+        """
         self.set_worker(WORKER_NEVER)
-        self.ticket_ready()
+        self.ticket_ready(state="Draft")
         done = self.auto_fix()
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("--round 1", done.stderr)
+
+
+class TheFirstRoundStartsFromReady(AutoFixBase):
+    """#40 / D-025 C1:票 **Ready 且沒有狀態檔** ⇒ `auto-fix.sh <n>` 自己起第 1 輪。
+
+    以前這一格是 exit 2「一輪都還沒跑過」,主線要自己派 worker、apply、帶
+    `AC_TICKETS_DIR` 跑閘門三下 —— 而第 2 輪起那一條 `round_once` 早就全都會做。
+    這一組問的是**同一條 `round_once` 接得住第 1 輪**:派工文、副本的 base、事件、
+    票的狀態、收件匣,一格都不少;以及**不是 Ready 的票不猜**。
+    """
+
+    def fix_dir(self):
+        return os.path.join(self.home, "repo-wt", "fix-t1", "round1")
+
+    def mark(self):
+        return os.path.join(self.home, "worker-saw.json")
+
+    def worker_saw(self):
+        with open(self.mark(), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def ready_and_main_moved_on(self):
+        """一張 Ready 票,而且主線在開票之後又往前走了一個 commit(README 變了)——
+        副本 base 取的是票的 base_sha 還是主線的頭,只有這樣才分得出來。"""
+        self.set_worker(WORKER_FIRST_ROUND
+                        .replace("@TICKET@", os.path.join(self.repo, "tickets", "1.json"))
+                        .replace("@MARK@", self.mark()))
+        row = self.ticket_ready(subject="第 1 輪由 auto-fix 起")
+        self.write("README", "主線在開票之後又走了一步\n")
+        self.git("commit", "-q", "-am", "主線往前走")
+        self.git("push", "-q", "origin", "main")
+        return row
+
+    def test_a_ready_ticket_with_no_status_file_starts_round_one(self):
+        """A1:不再 rc=2;派工文與 `--dry-run --round 1` 給人看的是**同一份**;副本在
+        `<WTBASE>/fix-t1/round1`,`base/` 是票的 base_sha 那一版(分支 t1 還不存在)。
+
+        **變異 M1**:把「無狀態檔 ⇒ r=1」那條分支拿掉(退回 exit 2)→ 紅。
+        **變異 M5**:`round_once` 第 1 輪改用第 2 輪起那一份派工文 → 派工文那一段紅。
+        **變異 M6**:`S_BASE` 改取主線的頭 → `base/` 那一段紅。
+        **變異 M9**:拿掉「沒有歸因」那一格的 `S_RUN` 前提 → 紅(空紅榜被讀成 rc=4)。
+        """
+        row = self.ready_and_main_moved_on()
+        self.assertFalse(os.path.exists(os.path.join(self.repo, "reports", "t1")),
+                         "前提:這張票一個狀態檔都沒有")
+        self.assertEqual(self.git("branch", "--list", "t1").strip(), "",
+                         "前提:分支 t1 還不存在")
+        shown = self.auto_fix("--dry-run", "--round", "1")
+        self.assertEqual(shown.returncode, 0, shown.stdout + shown.stderr)
+
+        done = self.auto_fix()
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("一輪都還沒跑過", done.stderr)
+        self.assertEqual(self.worker_rounds(), ["worker ran round 1"])
+        sent = [path for path in self.result_files("dispatch-round1.md")
+                if os.path.exists(os.path.join(os.path.dirname(path), "worker-round1.log"))]
+        self.assertEqual(len(sent), 1, "餵給 worker 的第 1 輪派工文:%s"
+                         % self.result_files("dispatch-round1.md"))
+        with open(sent[0], encoding="utf-8") as handle:
+            packet = handle.read()
+        self.assertTrue(packet.startswith("# 規則包:worker"), packet[:120])
+        self.assertIn("第 1 輪(第一次實作)", packet)
+        self.assertIn(self.fix_dir(), packet, "副本路徑")
+        self.assertEqual(packet, shown.stdout,
+                         "worker 拿到的要與 --dry-run --round 1 給人看的是同一份")
+
+        saw = self.worker_saw()
+        self.assertEqual(saw["work"], self.fix_dir())
+        expected = self.git("show", "%s:README" % row["base_sha"])
+        self.assertNotEqual(expected, self.git("show", "main:README"),
+                            "前提:主線已經離開票的 base_sha")
+        self.assertEqual(saw["base_readme"], expected,
+                         "副本 base/ 要是票的 base_sha 那一版,不是主線的頭")
+
+    def test_round_one_is_announced_runs_as_running_and_stops_awaiting_review(self):
+        """A2:`ticket.attempt.start attempt=1` 由 auto-fix 發(只發一次);worker 跑的
+        那一刻票是 Running;綠了轉 InReview,收件匣一頁「第 1 輪綠了,等覆核」。
+
+        **變異 M4**:拿掉 `round_once` 裡轉 Running 那一手 → 標記檔記的是 Ready,紅。
+        """
+        self.ready_and_main_moved_on()
+
+        done = self.auto_fix()
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        starts = [row for row in self.events() if row["kind"] == "ticket.attempt.start"]
+        self.assertEqual(len(starts), 1, starts)
+        self.assertEqual(str(starts[0].get("attempt")), "1", starts[0])
+        self.assertIn("auto-fix", starts[0].get("note") or "", "發出者要是 auto-fix")
+        self.assertEqual(self.worker_saw()["state"], "Running",
+                         "worker 跑的那一刻票要是 Running")
+        self.assertEqual(self.load_ticket("1")["state"], "InReview")
+        self.assertIn("第 1 輪綠了,等覆核", self.inbox_list())
+
+    def test_a_ticket_that_is_not_ready_is_stopped_by_its_state(self):
+        """A3:沒有狀態檔、票不是 Ready ⇒ 指名 state 停下 rc=2,不起 worker、不動票。
+
+        **變異 M2**:拿掉 state 檢查 → 紅(Draft 票也起了第 1 輪)。
+        """
+        self.set_worker(WORKER_NEVER)
+        for state in ("Draft", "Running", "Blocked"):
+            with self.subTest(state=state):
+                self.make_ticket("1", allowed_write_paths=["tests/*"], state=state)
+                done = self.auto_fix()
+                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+                self.assertIn("state=%s" % state, done.stderr)
+                self.assertEqual(self.worker_rounds(), [])
+                self.assertEqual(self.load_ticket("1")["state"], state, "停下來就不動票")
+                self.assertNotIn("ticket.attempt.start", self.kinds())
+
+    def test_a_dry_run_of_a_ready_ticket_does_not_touch_it(self):
+        """A3 的另一半:`--dry-run` 不起 worker、不動票、不發 attempt.start。
+
+        **變異 M7**:把轉 Running 那一手搬到 `--dry-run` 那一格之前 → 紅(票變 Running)。
+        """
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready()
+        done = self.auto_fix("--dry-run")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.worker_rounds(), [])
+        self.assertEqual(self.load_ticket("1")["state"], "Ready")
+        self.assertNotIn("ticket.attempt.start", self.kinds())
+        self.assertEqual(len(self.result_files("dispatch-round1.md")), 1)
 
 
 class WhichRoundIsTheLatestOne(AutoFixBase):

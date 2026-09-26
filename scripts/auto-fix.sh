@@ -1,11 +1,20 @@
 #!/bin/sh
 # 回歸紅了自動派**新** worker — `docs/WORKFLOW.md` §回歸紅了之後(D-010、D-015)。
 #
-#   sh scripts/auto-fix.sh <票號>                       # 讀最新狀態檔,紅就派下一輪
+#   sh scripts/auto-fix.sh <票號>                       # 讀最新狀態檔,紅就派下一輪;
+#                                                       # 票 Ready 且沒有狀態檔 → 起第 1 輪
 #   sh scripts/auto-fix.sh <票號> --dry-run             # 只印派工文,不起 worker
 #   sh scripts/auto-fix.sh <票號> --dry-run --round 1   # 第 1 輪的派工文(還沒有狀態檔時)
 #
 # 閘門與單票落地預設會叫這一支;`--no-auto-fix` 才停給人處理。
+#
+# ## 第 1 輪也由這一支起(#40,D-025 C1)
+# 票 **Ready 且沒有狀態檔** ⇒ 走同一個 `round_once 1`:派工文就是 `--dry-run --round 1`
+# 那一份、副本 base 取票的 `base_sha`(分支 t<n> 還不存在時)、`ticket.attempt.start`
+# 由這裡發、票轉 Running;之後 apply → gate → InReview → inbox 與第 2 輪起是同一段。
+# 以前第 1 輪被「一輪都還沒跑過」的 exit 2 擋在門外,主線要自己派 worker、apply、
+# 帶 `AC_TICKETS_DIR` 跑閘門 —— 同一件事兩個入口。票不是 Ready 又沒有狀態檔 ⇒
+# 指名 state 停下(rc=2),不猜。
 #
 # ## 為什麼不叫醒舊的 worker
 # 它醒來一次 = 累積的整份上下文重送一輪(D-010)。所以每一輪都是**新的** worker,
@@ -24,7 +33,7 @@
 # 記 `review`。這一支不碰 `review` 那一格。
 #
 # ## 退出碼
-#   0 綠了(停在等覆核)   1 三輪耗盡仍紅   2 用法 / 沒有狀態檔可讀
+#   0 綠了(停在等覆核)   1 三輪耗盡仍紅   2 用法 / 沒有狀態檔而票不是 Ready
 #   3 worker 提反駁       4 failures 沒有歸因   5 worker 沒交出可用的 patch
 set -u
 # `AC_ROOT` 優先:被 `gate.sh` 的 auto-fix 叫到時,這支檔案住在**副本**裡,
@@ -284,22 +293,19 @@ PY
 )"
 }
 
-first_round_dispatch() {
+first_round_packet() {   # $1 = 派工文寫到哪  $2 = 模型
     # **第 1 輪的派工文也由工具產**(#29 A3,G3)。以前第 1 輪是主線手寫、只有
     # `docs/DISPATCH-TEMPLATE.md` §8 的散文可抄,第 2 輪起才有 `dispatch-round<r>.md`
     # —— 同一個角色的兩輪因此拿到兩種形狀的派工文,而**少了哪一格沒有人看得出來**。
     #
-    # 這一支**不起 worker**:第 1 輪是主線用 Agent 工具派的(`docs/FLOW.html` ②),
-    # 這裡只負責把那一份文產出來。產完就結束。
-    fr_model=$(cfg routing.implement opus)
-    fr_run=${AC_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}
+    # `--dry-run --round 1`(給人看)與 Ready 票的 `round_once 1`(餵給 worker)**共用
+    # 這一份**(#40):兩條路各產一份的那一天,人讀過的與 worker 拿到的就不是同一份。
     fr_fix=$WTBASE/fix-t$ID/round1
-    fr_dispatch=$ROOT/$(cfg reports_dir reports)/t$ID/$fr_run/dispatch-round1.md
-    mkdir -p "$(dirname "$fr_dispatch")"
+    mkdir -p "$(dirname "$1")"
     {
-        python3 "$AC/rules.py" pack worker --model "$fr_model" 2>/dev/null \
+        python3 "$AC/rules.py" pack worker --model "$2" 2>/dev/null \
             || echo "(規則包產不出來 —— 自己讀 memory/role/implementer.md)"
-        python3 - "$ROOT" "$ID" "$TF" "$fr_fix" "$fr_model" <<'PY'
+        python3 - "$ROOT" "$ID" "$TF" "$fr_fix" "$2" <<'PY'
 import json, os, sys
 root, ident, tf, fix, model = sys.argv[1:6]
 try:
@@ -355,10 +361,17 @@ print("## 票寫錯 / 需要裁示怎麼說")
 print("在 EVIDENCE 裡寫**一行**:`OBJECTION: <ticket-wrong|test_defect|blocking> <一句話>`。")
 print("**不准**放寬既有斷言、不准把期望值改成程式現在印的東西(那是假綠家族)。")
 PY
-    } > "$fr_dispatch"
+    } > "$1"
+}
+
+first_round_dispatch() {
+    # `--round 1`:只產、只印,不起 worker、不動票。要起第 1 輪就不帶 `--round`。
+    fr_run=${AC_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}
+    fr_dispatch=$ROOT/$(cfg reports_dir reports)/t$ID/$fr_run/dispatch-round1.md
+    first_round_packet "$fr_dispatch" "$(cfg routing.implement opus)"
     cat "$fr_dispatch"
     echo "auto-fix: 第 1 輪派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$fr_dispatch" "$ROOT")" >&2
-    echo "auto-fix: 這一支**不起第 1 輪的 worker** —— 主線把上面那一份餵給 Agent 工具。" >&2
+    echo "auto-fix: --round 1 只印派工文;票是 Ready 時不帶 --round 就由這一支起第 1 輪:sh scripts/auto-fix.sh $ID" >&2
     return 0
 }
 
@@ -369,13 +382,35 @@ if [ "${WANT_ROUND:-}" = "1" ]; then
     exit $?
 fi
 if [ -z "${S_RUN:-}" ]; then
-    echo "auto-fix: #$ID 一輪都還沒跑過 —— 沒有紅榜就沒有東西可以派" >&2
-    echo "auto-fix:   第 1 輪的派工文:sh scripts/auto-fix.sh $ID --dry-run --round 1" >&2
-    echo "auto-fix:   已經派過第 1 輪、要修紅的:先跑 sh scripts/gate.sh --branch --ticket $ID" >&2
-    exit 2
+    # **Ready 且沒有狀態檔 ⇒ 第 1 輪**(#40,D-025 C1)。只認 Ready:Draft 還沒開完、
+    # Running 多半是有人已經手派了、Blocked 在等裁示 —— 哪一種都不該由這一支猜著起。
+    eval "$(python3 - "$TF" <<'PY'
+import json, shlex, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        ticket = json.load(handle)
+except (OSError, ValueError):
+    ticket = {}
+print("T_STATE=%s" % shlex.quote(str(ticket.get("state") or "")))
+print("T_BASE=%s" % shlex.quote(str(ticket.get("base_sha") or "")))
+PY
+)"
+    if [ "$T_STATE" != "Ready" ]; then
+        echo "auto-fix: #$ID 沒有狀態檔,而票的 state=${T_STATE:-(空)},不是 Ready —— 停,不猜要不要起第 1 輪" >&2
+        echo "auto-fix:   Ready 的票才由這一支起第 1 輪;只看派工文:sh scripts/auto-fix.sh $ID --dry-run --round 1" >&2
+        echo "auto-fix:   已經派過第 1 輪、要修紅的:先跑 sh scripts/gate.sh --branch --ticket $ID" >&2
+        exit 2
+    fi
+    # 迴圈從 `S_ROUND+1` 起;副本 base 在分支 t<n> 還不存在時取 `S_BASE` = 票的 base_sha
+    # (`round_once` 既有那一格)。RUN_ID 自鑄:派工文、worker log、result 住在這一輪的目錄。
+    S_ROUND=0
+    S_BASE=$T_BASE
+    RUN_ID=${AC_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}
+    echo "auto-fix: #$ID 是 Ready、還沒有狀態檔 —— 起第 1 輪(票的 base_sha ${S_BASE:-?})"
+else
+    RUN_ID=$S_RUN
+    echo "auto-fix: #$ID 最新一輪 $S_RUN($S_KIND)state=$S_STATE rc=${S_RC:-?} 紅 $S_FAILS 條,第 $S_ROUND 輪(上限 $S_LIMIT)"
 fi
-RUN_ID=$S_RUN
-echo "auto-fix: #$ID 最新一輪 $S_RUN($S_KIND)state=$S_STATE rc=${S_RC:-?} 紅 $S_FAILS 條,第 $S_ROUND 輪(上限 $S_LIMIT)"
 
 # 手打就是覆寫:`gate.sh` 這一格非空時不自動派(D-019),但人自己打這一支的時候
 # **照派** —— 只是要看得見他覆寫了什麼。一句警告加一次照派,比一次靜靜的拒絕好:
@@ -391,7 +426,9 @@ fi
 
 # **沒有歸因的紅**:rc 非零卻一條都解析不出來。它看起來最像「沒紅」,而派下去的
 # worker 會拿著空紅榜去猜 —— 猜出來的修法會改到沒有壞的地方。
-if [ "$S_FAILS" -eq 0 ]; then
+# 第 1 輪(#40)沒有上一輪:環境嫌疑 0 條、rc 是空的、S_ROUND=0,前後三格本來就不成立;
+# 只有這一格要明著跳過 —— 不然「還沒有紅榜」會被讀成「紅了但沒有歸因」。
+if [ -n "${S_RUN:-}" ] && [ "$S_FAILS" -eq 0 ]; then
     echo "auto-fix: rc=${S_RC:-?} 卻一條紅都解析不出來 —— **沒有歸因**,不派 worker" >&2
     block "#$ID rc=${S_RC:-?} 但 failures 是空的:紅榜解析不出案例,要人看 log"
     post "紅了但沒有歸因" \
@@ -561,10 +598,14 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
 
     DISPATCH=$ROOT/$(cfg reports_dir reports)/t$ID/$RUN_ID/dispatch-round$r.md
     mkdir -p "$(dirname "$DISPATCH")"
-    {
-        python3 "$AC/rules.py" pack worker --model "$MODEL" 2>/dev/null \
-            || echo "(規則包產不出來 —— 自己讀 memory/role/implementer.md)"
-        python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "$FIX" <<'PY'
+    if [ "$r" -eq 1 ]; then
+        # 第 1 輪沒有紅榜、沒有上一輪:派工文就是 `--dry-run --round 1` 那一份(#40)。
+        first_round_packet "$DISPATCH" "$MODEL"
+    else
+        {
+            python3 "$AC/rules.py" pack worker --model "$MODEL" 2>/dev/null \
+                || echo "(規則包產不出來 —— 自己讀 memory/role/implementer.md)"
+            python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "$FIX" <<'PY'
 import json, os, sys
 root, ident, run_id, r, fix = sys.argv[1:6]
 sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
@@ -634,7 +675,8 @@ print("看到這一行,這支腳本會把它記成票的 `objections[]`、把票
       "**不會**再派下一輪。")
 print("**不准**放寬既有斷言、不准把期望值改成程式現在印的東西(那是假綠家族)。")
 PY
-    } > "$DISPATCH"
+        } > "$DISPATCH"
+    fi
     echo "auto-fix: 派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$DISPATCH" "$ROOT")"
 
     if [ -n "$DRY" ]; then
@@ -644,6 +686,12 @@ PY
     fi
 
     echo "auto-fix: 起第 $r 輪的 worker —— $WORKER_CMD(cwd $FIX,派工文從 stdin 餵)"
+    # 第 1 輪:票 Ready → Running(#40)。擺在 `--dry-run` 那一手**之後**(dry-run 不動票)、
+    # 起 worker **之前**(worker 跑的時候票就該是 Running)。第 2 輪起票已經不是 Ready 了。
+    if [ "$r" -eq 1 ]; then
+        python3 "$AC/ticket.py" set "$ID" state Running >/dev/null 2>&1 \
+            || echo "auto-fix: 票狀態改不動(Running)" >&2
+    fi
     ev ticket.attempt.start --ticket "$ID" --attempt "$r" --note "auto-fix 第 $r 輪"
     WORKER_LOG=$(dirname "$DISPATCH")/worker-round$r.log
     ev agent.start --ticket "$ID" --model "$WORKER_MODEL" \
