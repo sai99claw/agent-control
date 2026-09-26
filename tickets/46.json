@@ -1,0 +1,98 @@
+{
+  "id": "46",
+  "subject": "副本管理三題(#38 覆核 + #36 覆核):auto-fix / land / apply 的副本根解析收成一支(apply.sh:81-83 仍用 $ROOT,在票 worktree 裡會開錯層);auto-fix 第 1 輪就綠也收 round1/{work,base};收前幾輪副本前查那一輪的 worker 是否還活著;apply.sh 走 AC_RESULT_DONE 分支時仍併驗證者的 baseline",
+  "created": "2026-09-26T14:53:57+08:00",
+  "objective": "副本根只有一種算法、一個來源(D-018);任何一輪綠了副本 work/base 都被收、patch 與 EVIDENCE 留著;還在跑的 worker 的副本不會被下一輪從腳下抽走;auto-fix 的 test_defect 路收到驗證者 EVIDENCE 時票的 verify.baseline 一樣拿得到 stage=red",
+  "acceptance": [
+    "C1 根解析一支:auto-fix.sh:95-105 `main_root()` + :121-125 WTBASE、land.sh:535-545 內聯複本、apply.sh:81-83(用 $ROOT,不是 git-common-dir 的上一層)收成同一段來源,函式名 `wtbase`(印出副本根;主 repo 根 = `git rev-parse --git-common-dir` 的上一層,不在 git 裡才退回 $ROOT),三支都 source / 呼叫它;若是新檔(建議 scripts/wtbase.sh)且被 SCRIPT_LIST 內的 apply.sh / auto-fix.sh source,scripts/sync-to-project.sh:101 SCRIPT_LIST 與 tests/test_sync_to_project.py SyncsTheScripts 名單跟著加;斷言:`grep -l \"git-common-dir\" scripts/*.sh` 恰 1 個檔;tests/test_apply.py 一條:沙盒 repo `git worktree add ../<repo>-wt/t1 -b t1`,cwd 在那個 worktree、AC_ROOT 不設,呼叫 wtbase → 印出的路徑 = <主 repo 根>/../<主 repo 名>-wt(期望由夾具用主 repo 路徑拼,不從腳本算),不是 …-wt/t1-wt 也不是 …-wt/…-wt;變異 M1:apply.sh 改回 $ROOT 算 → 紅。「apply.sh 在 worktree 裡開錯層」是 #38 覆核讀 code 推的、未實測,這條案例就是證偽法:在乾淨基底上就綠的話假設錯,EVIDENCE 寫明,仍做收成一支",
+    "C2 綠路也收副本:auto-fix.sh 第 r 輪 rc=0、轉 InReview 之後 `shed_copies \"$FIX\"`(:690-697 那段只在 harvest 後且非 test_defect 才走;先在沙盒跑 tests/test_auto_fix.py TheWholeLoop 綠路看 fix-t<n>/round1/work 在不在 —— 在,假設成立);TheWholeLoop 綠路加斷言:round1/work 與 round1/base 不存在、patch-round1.diff 與 EVIDENCE-round1.md 仍在;變異 M2:拿掉綠路那一手 → 紅",
+    "C3 活著檢查:auto-fix.sh 起 headless worker 時把它的 pid 寫進 `$FIX/worker.pid`(那一輪的副本根;不動 status.py);:812-824 收前幾輪副本前讀該輪 worker.pid,`kill -0` 活著就跳過那一輪並印「auto-fix: 第 p 輪的 worker(pid <n>)還在跑,不收副本」,死了或沒 pid 檔才收;tests/test_auto_fix.py 一條:夾具在 round1 放 worker.pid = 案例自己的 os.getpid()(活著)→ 跑第 2 輪派工後 round1/work 還在、stdout 含那句;pid 換成夾具事先起又結束的行程的 pid(死的)→ 收掉;變異 M3:拿掉 kill -0 → 紅",
+    "C4 AC_RESULT_DONE 分支併 baseline:apply.sh:634-657「驗證者 result 的 baseline 併進票」那段搬出 result 抽取的 else 分支 —— AC_RESULT_DONE=1 且給了 --evidence-verifier 時,讀上游已抽好的 `$REPORTS/result-verifier-round$ROUND.json` 併進票,印「apply: 驗證者的驗紅從上游抽過的那一份併進票 #n」;tests/test_apply.py 一條:AC_RESULT_DONE=1 + 夾具事先放好 result-verifier-round1.json(baseline stage=red)+ --evidence-verifier → 票 verify.baseline.stage=red、state_version +1;變異 M4:改回只在 else 併 → 紅;tests/test_auto_fix.py 若已有 test_defect 那條路的案例,加斷言票 verify.baseline.stage=red(沒有就在 EVIDENCE 說明只靠 test_apply 那條)"
+  ],
+  "in_scope": [
+    "scripts/auto-fix.sh",
+    "scripts/apply.sh",
+    "scripts/land.sh(只有 :535-545 那段換成共用來源)",
+    "scripts/wtbase.sh(新,若選 sourced 檔)",
+    "scripts/sync-to-project.sh(只有 SCRIPT_LIST 加一個名字)",
+    "tests/test_apply.py",
+    "tests/test_auto_fix.py",
+    "tests/test_land.py",
+    "tests/test_sync_to_project.py(只有名單)"
+  ],
+  "out_of_scope": [
+    "scripts/status.py 與 status.json 的欄位",
+    "gate.sh、review.sh、inbox.py",
+    "land.sh 的關票 / ack(#43)",
+    "auto-fix 的多票批次規則與 --dry-run 行為",
+    "ticket.py save_baseline 的契約"
+  ],
+  "depends_on": [
+    {
+      "id": "39",
+      "condition": "已落地"
+    },
+    {
+      "id": "40",
+      "condition": "已落地"
+    },
+    {
+      "id": "42",
+      "condition": "已落地"
+    },
+    {
+      "id": "43",
+      "condition": "已落地"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/apply.sh",
+    "scripts/land.sh",
+    "scripts/wtbase.sh",
+    "scripts/sync-to-project.sh",
+    "tests/*.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "171bfac",
+  "state": "Draft",
+  "state_version": 5,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "verify_strings": [
+    {
+      "path": "scripts/apply.sh",
+      "contains": "wtbase"
+    },
+    {
+      "path": "scripts/land.sh",
+      "contains": "wtbase"
+    },
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "還在跑,不收副本"
+    },
+    {
+      "path": "scripts/apply.sh",
+      "contains": "上游抽過的那一份"
+    }
+  ],
+  "decision_refs": [
+    "D-018",
+    "D-020",
+    "D-012",
+    "D-028"
+  ],
+  "test_plan": "全部單元層、mktemp 沙盒真 git repo(tests/test_auto_fix.py AutoFixBase、tests/test_apply.py 既有夾具),不碰真 repo 的 worktree、埠一律 0。C1:可觀察 = wtbase 印出的路徑;期望由夾具用主 repo 路徑字串拼。C2:可觀察 = 副本目錄存在與否(os.path.isdir);TheWholeLoop 既有綠路夾具。C3:可觀察 = 目錄存在與否 + stdout;活著的 pid 用案例自己的 os.getpid(),死的 pid 用 subprocess 起一個 true 等它結束後取 pid。C4:可觀察 = 票檔 verify.baseline.stage 與 state_version;期望 stage=red 是夾具放進 JSON 的值。變異 M1–M4 各紅一次,EVIDENCE 貼紅的第一行。標籤留空(案例住 tests/)。needs_verifier=true:驗證者只寫 tests/test_ticket_<本票>.py 的紅案例(C1、C2 兩條重現)跑 verify-case.py red,不做變異、不等 patch。",
+  "outline": "#38 收了 auto-fix 的 main_root(),land.sh:535、apply.sh:81 仍各算各的(D-018 要一支);apply 在 worktree 錯層是讀 code 推的,C1 案例當證偽法。#38 A4 只在派下一輪前收前幾輪,第 1 輪綠停 InReview 沒人收;收前不查 worker 活著。#36:apply.sh 併 baseline 在 result 抽取的 else 裡,AC_RESULT_DONE=1 就跳過。順序:等 #39/#40/#42/#43 全落地再 rebase;最後一張。needs_verifier=true:假設未實測,驗證者先寫紅案例分開重現與修法;改的是 rm -rf 對象的路徑,自證綠與綠在錯處長得一樣。",
+  "needs_verifier": true
+}

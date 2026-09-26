@@ -1,0 +1,89 @@
+{
+  "id": "44",
+  "subject": "驗證契約文件對齊 #36/#37:SCHEMA / FLOW / WORKFLOW 不再寫「verify-case.py red 寫票」;SCHEMA 與 DISPATCH §8.5 的 result 鍵表加 `baseline` 列;SCHEMA 加 `needs_verifier` 說明(D-028);`--verify-string` 的 --help 與 SCHEMA 說根目錄無副檔名檔要寫 `./README:字串`",
+  "created": "2026-09-26T14:51:37+08:00",
+  "objective": "讀 SCHEMA / FLOW / WORKFLOW / DISPATCH 的人與讀 code 的人看到同一件事:red 只交 `<out-dir>/baseline-red.json`,驗證者抄進 result 的 `baseline`,apply --evidence-verifier 在鎖裡併進票;result 鍵表兩份都有 `baseline` 列且文字一致;票的 `needs_verifier` 有一格說明;`ticket.py create --help` 講清楚根目錄無副檔名檔的寫法",
+  "acceptance": [
+    "A1 「red 寫票」殘句清零:tickets/SCHEMA.md:84 那一條(「`red`(驗證者,`scripts/verify-case.py red <n>` 寫…」)、docs/FLOW.html 的 V→AP 邊(「verify.baseline stage=red(verify-case.py red)」)與 R0 節點(「寫票 verify.baseline{stage:red}」)、docs/WORKFLOW.md:167 表第三欄(「`scripts/verify-case.py red` → 票的 `verify.baseline{stage:\"red\"}`」)改成「red 只印 `<out-dir>/baseline-red.json` → 驗證者抄進 result.baseline → `apply.sh --evidence-verifier` 併進票(stage=red)」;斷言:`grep -c \"寫票 verify.baseline\" docs/FLOW.html` = 0;`grep -c \"baseline-red.json\"` 在 tickets/SCHEMA.md、docs/FLOW.html、docs/WORKFLOW.md 各 ≥ 1;docs/DECISIONS.md、docs/DESIGN-*.md 是紀錄,一字不動;FLOW G13 那列(:137)已經是對的,不動",
+    "A2 result 鍵表:tickets/SCHEMA.md §「EVIDENCE 尾端的 result 區塊」表與 docs/DISPATCH-TEMPLATE.md §8.5 表各加一列 `baseline`(物件或 null;只有 verifier 寫;內容 = `verify-case.py red` 印出的 `baseline-red.json` 原封,`stage` 必是 red;worker 留 null);兩份的那一列文字逐字相同(D-018:同一件事兩份不准各說各的);斷言:兩檔各 `grep -c \"| \\`baseline\\` |\"` = 1;tests/test_dispatch_template.py 加一條「SCHEMA 與 §8.5 兩份表的鍵集合相等」(讀兩份 markdown 表第一欄比對;若已有等價案例則只加 baseline 進期望集合);變異 M1:只加 SCHEMA 那份不加 §8.5 → 紅",
+    "A3 SCHEMA.md 欄位表加一列 `needs_verifier`(群組「驗證」;bool;必填;開題者寫,理由寫在 outline;true = 派驗證者寫案例,false = 實作者自證變異紅;動到產品碼預設 true;缺 = 票不完整,主線的 verify_waiver 只是補救不是常態;D-028),「為什麼是這幾個欄位」段加一條對應 D-028(9/26 #34–#38 五張票面漏寫,主線用 waiver 補);斷言 `grep -c \"needs_verifier\" tickets/SCHEMA.md` ≥ 2",
+    "A4 `--verify-string` 說明:scripts/ticket.py 的 FLAG_NOTE[\"--verify-string\"](:236)與 tickets/SCHEMA.md 交付列的 `verify_strings` 說明各加一句「根目錄無副檔名的檔(README、Makefile)冒號前不像路徑、不會切,要寫 `./README:那串字`」;只改說明文字,`looks_like_path`(:456)邏輯一字不動;斷言:`python3 scripts/ticket.py create --help | grep -c \"./README\"` ≥ 1;tests/test_ticket.py:215 那條量 --help 那一行的案例加 assertIn(\"./README\");變異 M2:把 FLAG_NOTE 那句拿掉 → 紅",
+    "A5 既有案例全綠:tests/test_dispatch_template.py、tests/test_no_project_names.py(gate 對照表:docs/DISPATCH-TEMPLATE.md → 這兩個模組)、tests/test_ticket.py;閘門 `sh scripts/gate.sh --branch --ticket <本票>` 綠"
+  ],
+  "in_scope": [
+    "tickets/SCHEMA.md",
+    "docs/FLOW.html",
+    "docs/WORKFLOW.md",
+    "docs/DISPATCH-TEMPLATE.md",
+    "scripts/ticket.py(只有 FLAG_NOTE 說明字串)",
+    "tests/test_ticket.py",
+    "tests/test_dispatch_template.py"
+  ],
+  "out_of_scope": [
+    "docs/DECISIONS.md、docs/DESIGN-*.md、docs/VERIFICATION.md:32(紀錄與已對的句子,不動)",
+    "memory/role/verifier.md 與 templates/dispatch-verifier.md(#36 已改對)",
+    "scripts/verify-case.py、scripts/apply.sh 的行為",
+    "looks_like_path 的切法(#37 剛落地)",
+    "ticket.py create 加 --needs-verifier 旗標(另開;本票只加文件)"
+  ],
+  "depends_on": [
+    {
+      "id": "42",
+      "condition": "已落地"
+    }
+  ],
+  "allowed_write_paths": [
+    "tickets/SCHEMA.md",
+    "docs/FLOW.html",
+    "docs/WORKFLOW.md",
+    "docs/DISPATCH-TEMPLATE.md",
+    "scripts/ticket.py",
+    "tests/*.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "171bfac",
+  "state": "Draft",
+  "state_version": 5,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "verify_strings": [
+    {
+      "path": "tickets/SCHEMA.md",
+      "contains": "baseline-red.json"
+    },
+    {
+      "path": "docs/FLOW.html",
+      "contains": "baseline-red.json"
+    },
+    {
+      "path": "docs/DISPATCH-TEMPLATE.md",
+      "contains": "`baseline`"
+    },
+    {
+      "path": "tickets/SCHEMA.md",
+      "contains": "needs_verifier"
+    },
+    {
+      "path": "scripts/ticket.py",
+      "contains": "./README"
+    }
+  ],
+  "decision_refs": [
+    "D-028",
+    "D-020",
+    "D-017",
+    "D-018"
+  ],
+  "test_plan": "全部 grep 層 / 單元層,不起服務、不碰埠。A1、A3:grep 計數,期望值是票面寫的字串與數字,不從被測文件算。A2:tests/test_dispatch_template.py 讀 SCHEMA 與 §8.5 兩份 markdown 表的第一欄(反引號內的鍵)做集合比對,期望集合寫死在案例裡(含 baseline)。A4:tests/test_ticket.py:215 既有量法(只量 --verify-string 那一行)加一句 assertIn。變異 M1、M2 各紅一次,EVIDENCE 貼紅的第一行。標籤留空(案例住 tests/,A 端沒有 verify/ 標籤)。",
+  "outline": "#36 後 red 只印證據檔不寫票(verify-case.py:438),SCHEMA:84、FLOW 的 V 邊/R0、WORKFLOW:167 仍寫 red 寫票;DISPATCH 與 SCHEMA 的 result 表都沒 baseline 列,範本已要求它;SCHEMA 沒 needs_verifier 格(D-028);README:x 不切,--help 沒說。全是文字。順序:等 #42(FLOW/WORKFLOW 同檔)。needs_verifier=false:純文件,驗收是 grep 計數;M1/M2 實作者證紅。opus;sonnet 可選。",
+  "needs_verifier": false
+}

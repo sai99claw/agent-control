@@ -1,0 +1,58 @@
+{
+  "id": "47",
+  "subject": "rules.py pack 預算:十節的下限(每節標題 + 「全文在哪」那一行,約 1.2 KB)先算進預算再分,最後一刀不再把暫存區內容與角色卡節錄砍掉;worker+opus(最常派的包)在 4096 B 內角色卡節錄 ≥ 400 B、非空的 inbox 至少留一行",
+  "created": "2026-09-26T14:53:57+08:00",
+  "objective": "pack 分預算時先扣掉每一節保底會印的 bytes,角色卡 / 記憶 / 暫存區拿到的是真的剩餘;組完超標時砍的順序固定且每一刀都進「砍過」名單,不再出現「內容沒了、名單也沒列」",
+  "acceptance": [
+    "D1 預算先扣節的下限:scripts/rules.py pack 在算 card_share / mem_budget / inbox_room 之前,先從 room 扣掉 WANTED 名單每一節「### 標題行 + 截斷指標行(…(截斷:全文見 `<rel>` §n))」的實際 bytes(照節名算出來的,不是 reserve=120 × n 那個常數);tests/test_rules.py 一條:夾具自己寫角色卡 1500 B、模型記憶 1500 B、角色 inbox 3 行各 100 B、共用規矩十節各 800 B(不用真的 memory/ 檔),pack worker、max 4096 → 總 bytes ≤ 4096(既有規矩)且「## 角色卡(節錄)」到下一個以 # 開頭的行之間 ≥ 400 B、每個「暫存」小標底下至少一行非空內容;期望數字寫死在案例;變異 M1:把「先扣節下限」那一手拿掉 → 紅",
+    "D2 最後一刀(rules.py 組完後對整份的 clip,`max_bytes - MEMORY_NOTE_BYTES - DELIVERY_NOTE_BYTES - 4` 那一行)不砍內容:若組完仍超過,砍的順序是模型記憶 → 共用規矩節錄 → 角色卡,暫存區與「砍過」那句最後才動,且每一格被砍都進「砍過」名單;tests/test_rules.py 一條:夾具同 D1 但 max 2500 → 要嘛 inbox 小標底下有內容、要嘛「砍過」名單列出那個 inbox 檔名,兩者至少一個(§5.5:不准內容沒了、名單也沒列);變異 M2:最後一刀砍了 inbox 卻不進名單 → 紅",
+    "D3 既有 tests/test_rules.py 全綠(:137 a_bigger_budget、:225 / :284 tight budget、:249 every_role_within_cap);`python3 scripts/rules.py pack <WANTED 每個角色> --model opus | wc -c` 都 ≤ 4096;實測 worker+opus 的角色卡節錄 bytes 在 EVIDENCE 標「實測」(現況 219 B,#37 覆核量的)"
+  ],
+  "in_scope": [
+    "scripts/rules.py(只有 pack 的預算與最後一刀)",
+    "tests/test_rules.py"
+  ],
+  "out_of_scope": [
+    "WANTED 名單與節的內容、DEFAULT_MAX、MEMORY_NOTE / DELIVERY_NOTE 兩段(#29 定的)",
+    "memory.py、範本、角色卡與模型卡的內容",
+    "inbox_suffix 與 D-021 兩層疊法"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/rules.py",
+    "tests/test_rules.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "914ed8a",
+  "state": "Ready",
+  "state_version": 6,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "verify_strings": [
+    {
+      "path": "scripts/rules.py",
+      "contains": "節的下限"
+    },
+    {
+      "path": "tests/test_rules.py",
+      "contains": "節的下限"
+    }
+  ],
+  "decision_refs": [
+    "D-016",
+    "D-018",
+    "D-021"
+  ],
+  "test_plan": "單元層,tests/test_rules.py 既有夾具形狀(暫存 root、自己寫 memory/ 與 docs/DISPATCH-TEMPLATE.md 的假檔,不讀真 repo 的記憶檔)。D1、D2 可觀察 = pack 輸出的 bytes 與各小標底下的內容;期望值是夾具寫進假檔的大小與票面的數字(400 B、2500),不從 rules.py 算。D3 跑既有模組 + 真跑 pack 量 wc -c(只讀)。變異 M1、M2 各紅一次,EVIDENCE 貼紅的第一行。標籤留空(案例住 tests/)。",
+  "outline": "#37 量到 pack worker --model opus 4089 B,十節只剩標題 + 全文在哪;節的保底(reserve 120×10 + 指標行)沒在分 card/mem/inbox 前扣掉,節段超支,最後一刀(整份 clip)從尾砍:opus.inbox.md 內容沒了、角色卡節錄 486→219 B。worker+opus 最常派,每次派工都少讀(D-016)。順序:不共檔,可現在派;唯一不用等的。needs_verifier=false:單一腳本、test_rules.py 夾具現成、驗收是 bytes 計數;M1/M2 實作者證紅。",
+  "needs_verifier": false
+}
