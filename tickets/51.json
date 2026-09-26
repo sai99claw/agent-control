@@ -51,8 +51,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "66b6ae8",
-  "state": "Ready",
-  "state_version": 15,
+  "state": "Done",
+  "state_version": 21,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -88,6 +88,42 @@
       "wall_seconds": 1485,
       "by": "auto-fix.sh",
       "at": "2026-09-27T00:22:51+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 142,
+      "tokens_out": 72841,
+      "cache_write": 223401,
+      "cache_read": 11257062,
+      "wall_seconds": 1483,
+      "by": "auto-fix.sh",
+      "at": "2026-09-27T00:48:18+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 18,
+      "tokens_out": 6635,
+      "cache_write": 63306,
+      "cache_read": 448063,
+      "wall_seconds": 72,
+      "by": "review.sh",
+      "at": "2026-09-27T00:54:48+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 395,
+      "by": "land.sh",
+      "at": "2026-09-27T01:01:23+08:00"
     }
   ],
   "objections": [
@@ -100,5 +136,14 @@
       "follow_up": "主線裁(2026-09-27 00:0x):scripts/gate.sh 加進 allowed_write_paths;只改 :711 那一行(lint 參數用候選樹絕對路徑,與 T#654 同病同解),不動 gate.sh 其他段;第 2 輪從 round1 patch 起。"
     }
   ],
-  "owner": "main"
+  "owner": "main",
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "d2d509853cb1f56b07b99f43a8cf84d5fbe7ce0e",
+    "note": "reports/t51/20260927-004819-42844/REVIEW.md",
+    "at": "2026-09-27T01:01:23+08:00",
+    "state_version": 21
+  }
 }
