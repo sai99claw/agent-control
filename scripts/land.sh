@@ -48,6 +48,14 @@
 # 全套紅時預設派下一輪 worker(`--no-auto-fix` 才關),**但只在這一批剛好一張票的時候** ——
 # 一批裡哪一條紅對到哪一張票,要有票↔案例的對照才判得出來(能力表列著這一條未實作),
 # 而**猜錯的歸責比不歸責更貴**:它會讓一個新 worker 去修一張沒有壞的票。
+#
+# ## push 之後試關票(2026-09-26,#43;D-025 ①)
+# push 成功後對這一批每張票試一次 `ticket.py close <票號> --landed <合併後主線的 sha>`。
+# **Done 的條件一條不放**:關得掉印「已合併、已關票」;關不掉照舊印「已合併、尚未關票」
+# 並寫一頁收件匣,理由是 `ticket.py close` 印出來的**原文**(這一支不自己重寫一份理由,
+# 也沒有任何放行旗標)。關不掉不改退出碼 —— 東西已經在主線上,落地這件事是成功的。
+# 收件匣的 ack 照 `scripts/inbox.py` 檔頭:收到票時收「等覆核」/「等落地」/「覆核通過」,
+# 關票成功時收「已合併、尚未關票」、post 一頁 Done(what=無)隨即收掉,一律 `--by land.sh`。
 set -u
 [ $# -ge 1 ] || { echo "land: 給我至少一條分支"; exit 2; }
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -250,6 +258,18 @@ inbox_all() {   # $1 = 狀態  $2 = 要主線做什麼  $3 = 去哪看
             --state "$1" --what "$2" --where "$3" >/dev/null 2>&1 \
             || echo "land: #$i 的收件匣寫不出來(不擋落地)" >&2
     done
+}
+
+# 腳本接著就會做掉的頁由腳本收(`scripts/inbox.py` 檔頭)。$1 = 票號,其餘 = state 含的字。
+inbox_ack() {
+    [ -z "${AC_NO_INBOX:-}" ] || return 0
+    _t=$1
+    shift
+    _states=""
+    for _s in "$@"; do _states="$_states --state $_s"; done
+    # shellcheck disable=SC2086
+    python3 "$ROOT/scripts/inbox.py" ack "$_t" $_states --by land.sh >/dev/null 2>&1 \
+        || echo "land: #$_t 的收件匣 ack 不掉(不擋落地)" >&2
 }
 
 # 全套紅了自動派下一輪 —— **只在剛好一張票的時候**(見檔頭)。
@@ -520,6 +540,11 @@ VFILES_PY
         continue
     fi
 done
+# 收到票了:「等覆核」/「等落地」(review.sh pass 那頁叫「覆核通過」)的下一步就是這一趟。
+# 拒收也照收 —— 拒收自己會寫一頁新的,主線要看的是那一頁,不是舊的「去 land」。
+for i in $IDS; do
+    inbox_ack "$i" 等覆核 等落地 覆核通過
+done
 if [ -n "$STOP" ]; then
     echo "land: 一條都沒有落地 —— 上面那幾條先處理掉再來。"
     echo "land: (要嘛一起進去、要嘛都不進:跳掉一條會生出一個沒有人要求過的組合。)"
@@ -614,14 +639,37 @@ fi
 echo "land: $MAIN -> $(git -C "$ROOT" rev-parse --short HEAD) 已推上"
 ev land.pass --note "$*" --kv "stamp=$STAMP" \
     --kv "sha=$(git -C "$ROOT" rev-parse --short HEAD)"
-# **已合併、尚未關票**要分開講(2026-09-21 外部審查:能力表誤稱 land 會關票)。
-# 關票走 `scripts/ticket.py close <票號>`,它自己會再問一次「改動真的在主線嗎」。
-status_done_all 0 "已合併、已推上;**票還沒關** —— 關票走 ticket.py close"
-inbox_all "已合併、尚未關票" \
-    "關票:python3 scripts/ticket.py close <票號>(它會再問一次改動真的在主線嗎)" \
-    "git log --oneline -3 $MAIN"
+# **已合併、已關票**與**已合併、尚未關票**要分開講(2026-09-21 外部審查:能力表誤稱
+# land 會關票)。關票仍是 `scripts/ticket.py close` 判:它自己再問一次「改動真的在主線嗎」
+# 與 Done 的四條件(done_blockers),這裡只是換成 land 來打(#43,見檔頭)。
+LANDED=$(git -C "$ROOT" rev-parse "$MAIN")
+status_done_all 0 "已合併、已推上;關票由 ticket.py close --landed 判(結果看 stdout 與收件匣)"
 for i in $IDS; do
-    echo "land: #$i 已合併、尚未關票 —— python3 scripts/ticket.py close $i"
+    CLOSE_OUT=$(python3 "$ROOT/scripts/ticket.py" close "$i" --landed "$LANDED" 2>&1)
+    CLOSE_RC=$?
+    if [ "$CLOSE_RC" -eq 0 ]; then
+        echo "land: #$i 已合併、已關票(ticket.py close --landed $(echo "$LANDED" | cut -c1-12))"
+        if [ -z "${AC_NO_INBOX:-}" ]; then
+            python3 "$ROOT/scripts/inbox.py" post --ticket "$i" \
+                --run-id "${LAND_RUN:-$STAMP-$$}" --kind land --state Done --what 無 \
+                --where "git log --oneline -3 $MAIN" >/dev/null 2>&1 \
+                || echo "land: #$i 的收件匣寫不出來(不擋落地)" >&2
+        fi
+        inbox_ack "$i" 尚未關票 Done
+        continue
+    fi
+    echo "land: #$i 已合併、尚未關票 —— ticket.py close 關不掉(rc=$CLOSE_RC),它說:"
+    echo "$CLOSE_OUT" | sed 's/^/land:   /'
+    echo "land:   補齊後:python3 scripts/ticket.py close $i --landed $LANDED"
+    # 一頁的 what 是一行:原文逐行接起來,一個字都不改寫(理由只有 ticket.py 一份)。
+    WHY=$(echo "$CLOSE_OUT" | awk 'NF { sub(/^[ \t]+/, ""); printf "%s%s", sep, $0; sep = " ／ " }')
+    if [ -z "${AC_NO_INBOX:-}" ]; then
+        python3 "$ROOT/scripts/inbox.py" post --ticket "$i" \
+            --run-id "${LAND_RUN:-$STAMP-$$}" --kind land --state "已合併、尚未關票" \
+            --what "ticket.py close 關不掉(rc=$CLOSE_RC):$WHY ／ 補齊後:python3 scripts/ticket.py close $i --landed $LANDED" \
+            --where "git log --oneline -3 $MAIN" >/dev/null 2>&1 \
+            || echo "land: #$i 的收件匣寫不出來(不擋落地)" >&2
+    fi
 done
 git -C "$ROOT" worktree remove "$WT" && git -C "$ROOT" branch -q -D "$BR"
 

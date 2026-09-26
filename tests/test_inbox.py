@@ -126,6 +126,61 @@ class ListAndAck(InboxBase):
         self.assertIn("沒有", done.stderr)
 
 
+class WhoAcked(InboxBase):
+    """#43 A3:`acked.jsonl` 每一筆記是誰收的。腳本做掉的頁由腳本收(`--by <腳本>`),
+    主線只剩 Blocked / 裁示 / 落地順序三類頁 —— 而「誰收的」要在帳上分得開。"""
+
+    def acked_rows(self):
+        return [json.loads(line) for line in self.read(
+            os.path.join("reports", "inbox", "acked.jsonl")).splitlines() if line.strip()]
+
+    def test_ack_by_a_script_records_that_script(self):
+        """**變異 M3**:`--by` 收了不寫進 jsonl → 這一條紅。"""
+        self.make_ticket("7")
+        self.post(state="第 1 輪綠了,等覆核")
+        done = self.inbox("ack", "7", "--by", "review.sh")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual([row.get("by") for row in self.acked_rows()], ["review.sh"])
+
+    def test_ack_without_by_is_recorded_as_main_not_blank(self):
+        """「沒寫是誰」與「主線收的」要分得開(§5.5):預設記 main,不是空字串。"""
+        self.make_ticket("7")
+        self.post()
+        self.inbox("ack", "7")
+        self.assertEqual([row.get("by") for row in self.acked_rows()], ["main"])
+
+    def test_a_blank_by_is_refused(self):
+        self.make_ticket("7")
+        self.post()
+        done = self.inbox("ack", "7", "--by", "")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("#7", self.inbox("list").stdout, "拒收的 ack 不該把頁收掉")
+
+    def test_ack_all_by_migration_marks_every_row(self):
+        for ident in ("7", "8"):
+            self.make_ticket(ident)
+            self.post(ident=ident)
+        self.post(ident="8", run="r2")
+        done = self.inbox("ack", "--all", "--by", "migration")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        rows = self.acked_rows()
+        self.assertEqual(len(rows), 3)
+        self.assertEqual({row.get("by") for row in rows}, {"migration"})
+        self.assertIn("沒有等你的東西", self.inbox("list").stdout)
+
+    def test_state_picks_only_the_pages_the_script_is_about_to_do(self):
+        """`--state` 只收 state 含那幾個字的頁:同一張票的其它頁(主線的待辦)不動。"""
+        self.make_ticket("7")
+        self.post(run="r1", state="第 1 輪綠了,等覆核")
+        self.post(run="r2", state="Blocked(三輪耗盡)")
+        done = self.inbox("ack", "7", "--state", "等覆核", "--by", "review.sh")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        listed = self.inbox("list").stdout
+        self.assertNotIn("等覆核", listed)
+        self.assertIn("Blocked", listed)
+        self.assertEqual([row["name"] for row in self.acked_rows()], ["7-r1"])
+
+
 class WhoWritesIntoIt(InboxBase):
     """三個終態各寫一則:閘門跑完、票轉 Blocked、落地跑完(land 那一則在 test_land)。
 
