@@ -564,7 +564,20 @@ PY
 if [ "$WORKER_MODEL" != "$MODEL" ]; then
     echo "auto-fix: 警告:routing.implement=$MODEL,但 worker.command 實際起的是 $WORKER_MODEL —— agent.start/done/failed 的 model 記後者"
 fi
-WT=$WTBASE/t$ID
+# 票的分支名**只有一個來源:票的 `branch` 欄**(#53,D-018;`apply.sh` 開分支時填)。
+# 空著才退回 `t<n>` —— 下游專案用 `t<n>-<slug>` 的票,寫死 `t$ID` 就找不到分支。
+ticket_branch() {
+    python3 - "$TF" "t$ID" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        name = json.load(handle).get("branch")
+except (OSError, ValueError):
+    name = None
+print(name or sys.argv[2])
+PY
+}
+WT=$WTBASE/$(ticket_branch)
 
 run_verifier() {   # $1 = 派工文  $2 = 副本根  $3 = 第幾輪  $4 = log;印出 rc
     python3 - "$VERIFIER_CMD" "$1" "$2" "$WORKER_TIMEOUT" "$ID" "$3" "$4" <<'PY'
@@ -721,7 +734,7 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
     # worker 交的 diff 下一步要餵給 `apply.sh` 套在**分支上**,而分支已經有前幾輪了
     # —— 拿 base_sha 當對照組的話,第二輪的 patch 會宣稱自己在新建一個已經存在的檔,
     # 而 `git apply --check` 會在那裡整輪停住。分支還不存在(第一輪就紅)才退回 base_sha。
-    SRC=${AC_FIX_SOURCE:-t$ID}
+    SRC=${AC_FIX_SOURCE:-$(ticket_branch)}
     git -C "$ROOT" rev-parse -q --verify "$SRC^{commit}" >/dev/null || SRC=$S_BASE
     if ! git -C "$ROOT" archive "$SRC" 2>/dev/null | tar -x -C "$FIX/base"; then
         echo "auto-fix: 取不出 $SRC 的副本 —— 這張票的 base 對不上這顆 repo" >&2

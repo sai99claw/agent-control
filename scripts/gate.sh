@@ -114,6 +114,7 @@
 # `--base` 不受這一條影響(它本來就是「不管改了什麼都跑這一組」)。
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+AC=${AC_CONTROL_DIR:-$(cd "$(dirname "$0")" && pwd)}
 LOG=${AC_GATE_LOG:-$ROOT/gate.log}
 RERUN_LOG=$LOG.rerun
 VERIFY_LOG=${AC_VERIFY_LOG:-$ROOT/verify.log}
@@ -231,6 +232,26 @@ while [ $# -gt 0 ]; do
 done
 [ "$ARGC" -ge 1 ] || { echo "gate: 要 --branch / --base / --full 或一串檔名" >&2; exit 2; }
 
+# 手跑在票 worktree 裡、沒帶 `AC_ROOT`(#53,同 review.sh 那一段):`event.repo_root()`
+# 會找到 worktree 自己的 board/config.json,票與狀態就寫進副本那一份。主 repo 有這張票
+# 就把票根指回主 repo;auto-fix 起的閘門帶著 `AC_ROOT`,不走這裡。
+if [ -n "$TICKET" ] && [ -z "${AC_ROOT:-}" ]; then
+    . "$AC/wtbase.sh"
+    MAINROOT=$(main_root)
+    if [ "$MAINROOT" != "$ROOT" ] && python3 - "$AC" "$MAINROOT" "$TICKET" <<'MAIN_TICKET_PY'
+import os, sys
+here, root, ident = sys.argv[1:4]
+sys.path.insert(0, here)
+import event
+raise SystemExit(0 if os.path.isfile(
+    os.path.join(event.tickets_dir(root), "%s.json" % ident)) else 1)
+MAIN_TICKET_PY
+    then
+        echo "gate: $ROOT 是 worktree —— 票改讀主 repo $MAINROOT"
+        export AC_ROOT=$MAINROOT
+    fi
+fi
+
 if [ -n "$TICKET" ]; then
     python3 - "$ROOT" "$TICKET" "$MAIN" <<'PREFLIGHT_PY'
 import json, os, re, subprocess, sys
@@ -240,10 +261,11 @@ sys.path.insert(0, os.path.join(root, "scripts"))
 import event
 import ticket as ticket_mod
 
-path = os.path.join(event.tickets_dir(root), "%s.json" % ident)
+# preflight 與 ticket_tags 走 ticketlib.load(#53,同 verify_plan):票根由
+# `event.repo_root()`(`AC_ROOT` 蓋得掉)決定,不拿 `$ROOT` 拼。
+path = ticket_mod.ticket_path(ident)
 try:
-    with open(path, encoding="utf-8") as handle:
-        ticket = json.load(handle)
+    ticket = ticket_mod.load(ident)
 except (OSError, ValueError):
     raise SystemExit(0)
 
@@ -261,12 +283,13 @@ for args in (("diff", "--name-only", "-z", "%s...HEAD" % main),
     for name in names(*args):
         if name not in changed:
             changed.append(name)
-try:
-    ticket_rel = os.path.relpath(path, root)
-except ValueError:
-    ticket_rel = ""
-if ticket_rel and not ticket_rel.startswith(".." + os.sep):
-    changed = [name for name in changed if name != ticket_rel]
+for ticket_file in (path, os.path.join(event.tickets_dir(root), "%s.json" % ident)):
+    try:
+        ticket_rel = os.path.relpath(ticket_file, root)
+    except ValueError:
+        ticket_rel = ""
+    if ticket_rel and not ticket_rel.startswith(".." + os.sep):
+        changed = [name for name in changed if name != ticket_rel]
 
 content = []
 for args in (("diff", "--no-ext-diff", "--unified=0", "%s...HEAD" % main),
@@ -514,14 +537,12 @@ status_nothing() {   # $1 = rc  $2 = 為什麼
 # 住在票裡,不住在呼叫者的記憶裡。
 ticket_tags() {
     python3 - "$ROOT" "$TICKET" <<'PY' 2>/dev/null
-import json, os, sys
+import os, sys
 root, ident = sys.argv[1], sys.argv[2]
 sys.path.insert(0, os.path.join(root, "scripts"))
-import event
-path = os.path.join(event.tickets_dir(root), "%s.json" % ident)
+import ticket as ticketlib
 try:
-    with open(path, encoding="utf-8") as handle:
-        data = json.load(handle)
+    data = ticketlib.load(ident)
 except (OSError, ValueError):
     raise SystemExit(0)
 plan = data.get("verify") if isinstance(data.get("verify"), dict) else {}

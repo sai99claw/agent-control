@@ -153,9 +153,11 @@ esac
 
 # review 綁的就是**這一刻**的頭:派工文寫它、pass 寫它。reviewer 讀的時候分支又動了,
 # land 比對得出這張章過期 —— 比事後再 rev-parse 一次、蓋上一個沒人讀過的 sha 誠實。
-SHA=$(git -C "$ROOT" rev-parse -q --verify "t$ID^{commit}" 2>/dev/null || echo "")
-[ -n "$SHA" ] || refuse "分支 t$ID 不存在" \
-    "先 sh scripts/apply.sh $ID <patch>(它建分支 t$ID),閘門綠了再覆核"
+# 分支名**只有一個來源:票的 `branch` 欄**(#53,D-018;`apply.sh` 開分支時填),空著才 `t<n>`。
+BR=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("branch") or "t"+sys.argv[2])' "$TF" "$ID" 2>/dev/null || echo "t$ID")
+SHA=$(git -C "$ROOT" rev-parse -q --verify "$BR^{commit}" 2>/dev/null || echo "")
+[ -n "$SHA" ] || refuse "分支 $BR 不存在" \
+    "先 sh scripts/apply.sh $ID <patch>(它建分支 $BR),閘門綠了再覆核"
 
 TEMPLATE=""
 for candidate in "$ROOT/templates/dispatch-reviewer.md" "$AC/../templates/dispatch-reviewer.md"; do
@@ -166,9 +168,9 @@ done
 
 # 四件事的另外兩件:worktree(問 git,不照命名規則猜)、EVIDENCE 與狀態檔(問狀態檔)。
 WT=""; STATUS_FILE=""; EVIDENCE=""; ROUND=1
-eval "$(python3 - "$AC" "$ROOT" "$ID" "$RUN_ID" <<'PY'
+eval "$(python3 - "$AC" "$ROOT" "$ID" "$RUN_ID" "$BR" <<'PY'
 import glob, os, shlex, subprocess, sys
-ac, root, ident, run_id = sys.argv[1:5]
+ac, root, ident, run_id, branch = sys.argv[1:6]
 sys.path.insert(0, ac)
 import status
 
@@ -178,7 +180,7 @@ worktree, here = "", ""
 for line in listing.splitlines():
     if line.startswith("worktree "):
         here = line[len("worktree "):]
-    elif line == "branch refs/heads/t%s" % ident:
+    elif line == "branch refs/heads/%s" % branch:
         worktree = here
         break
 
@@ -239,7 +241,7 @@ for key, value in slots.items():
 sys.stdout.write("\n" + text)
 PY
 } > "$DISPATCH"
-echo "review: #$ID 派覆核 —— $REVIEWER_CMD(cwd $CWD,分支 t$ID @ $(echo "$SHA" | cut -c1-12),派工文 $(rel "$DISPATCH"))"
+echo "review: #$ID 派覆核 —— $REVIEWER_CMD(cwd $CWD,分支 $BR @ $(echo "$SHA" | cut -c1-12),派工文 $(rel "$DISPATCH"))"
 
 ev agent.start --ticket "$ID" --role reviewer --model "$MODEL" \
     --kv run_id="$RUN_ID" --kv round="$ROUND" --kv agent=review
