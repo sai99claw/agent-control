@@ -551,6 +551,32 @@ class LeftoverCopiesAreNamed(LandBase):
         self.assertNotIn("還留著這幾份副本", done.stdout)
 
 
+class LeftoversUnderTheConfiguredWorktreeDir(LandBase):
+    """#38 A4:殘留清單要看 **auto-fix 開副本的那個目錄** —— `worktree_dir` 以主 repo 根解析。
+
+    以前 land.sh 的副本根不讀 `worktree_dir`,設了它之後 auto-fix 開副本的地方與這裡唸
+    清單的地方不是同一個目錄,而「沒有殘留」與「看錯地方」長得一樣。
+    """
+
+    def test_a_hand_built_round_one_is_listed_after_a_green_landing(self):
+        """**變異**:land.sh 的 `WTBASE` 改回 `$ROOT/../$(basename "$ROOT")-wt`(不讀 `worktree_dir`)→ 這一條紅。"""
+        conf = json.loads(self.read("board/config.json"))
+        conf["worktree_dir"] = "../x-wt"
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        good = self.branch_for(1, "t1-good")
+        self.commit_in(good, "src/g1", "有 commit 的那一張")
+        self.approve(1, "t1-good")
+        stale = os.path.join(self.home, "x-wt", "fix-t1", "round1")
+        os.makedirs(stale)
+        with open(os.path.join(stale, "patch-round1.diff"), "w") as handle:
+            handle.write("# 主線手建的第 1 輪留下的 patch\n")
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("還留著這幾份副本", done.stdout)
+        self.assertIn(os.path.join("x-wt", "fix-t1"), done.stdout)
+        self.assertTrue(os.path.isdir(stale), "只印不刪 —— 那幾份是證據")
+
+
 class HappyPath(LandBase):
 
     def test_a_branch_with_commits_still_lands_the_way_it_always_did(self):

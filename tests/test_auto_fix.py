@@ -18,6 +18,7 @@ worker 用一支假的可執行檔(`board/config.json` 的 `worker.command`)。*
 import glob
 import json
 import os
+import re
 import sys
 import unittest
 
@@ -858,6 +859,91 @@ class RunFromInsideATicketWorktree(AutoFixBase):
                          "reports 要落在主 repo,不是等一下會被收掉的 worktree:%s" % found)
 
 
+class TheCopyRootComesFromTheMainRepo(AutoFixBase):
+    """#38(G15):副本根 `WTBASE` 的相對 `worktree_dir` 一律以**主 repo 根**解析 ——
+    主 repo 根只有一種定義:`git rev-parse --git-common-dir` 的上一層。
+
+    以前用 `$ROOT` 拼,而在票分支的 worktree 裡 `$ROOT` 是 worktree 自己:副本於是
+    **巢狀**開到 `x-wt/x-wt/` 底下(9/23 實際開在 `agent-control-wt/agent-control-wt/`)。
+    上層不存在時 `cd` 失敗、前綴變成空字串,副本根更會算成檔案系統根下的 `/x-wt`。
+
+    期望路徑一律由這裡從夾具的主 repo 路徑拼,不問被測腳本。比較前兩邊都過
+    `realpath`:worktree 裡的 `--git-common-dir` 是 git 給的實體路徑(macOS 的
+    `/var` → `/private/var`),而夾具的 `self.home` 是邏輯路徑。
+    """
+
+    def config_with(self, worktree_dir):
+        self.set_worker(WORKER_NEVER)
+        conf = json.loads(self.read("board/config.json"))
+        conf["worktree_dir"] = worktree_dir
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+
+    def ticket_worktree(self):
+        """真實的形狀:票 worktree 自己就住在 `worktree_dir` 底下。"""
+        path = os.path.join(self.home, "x-wt", "t1")
+        self.git("worktree", "add", "-q", "-b", "t1", path, "main")
+        return path
+
+    def copy_root_in(self, done):
+        found = re.search(r"副本路徑\*\*:`([^`]+)/work`", done.stdout)
+        self.assertIsNotNone(found, "派工文裡找不到副本路徑:" + done.stdout[-1500:] + done.stderr)
+        return found.group(1)
+
+    def expected(self):
+        return os.path.realpath(os.path.join(self.home, "x-wt", "fix-t1", "round1"))
+
+    def test_a_committed_ticket_run_from_its_worktree_does_not_nest_the_copy(self):
+        """A1:票檔已在分支上,在票 worktree 裡跑 —— 副本不得巢狀成 `x-wt/x-wt`。
+
+        **變異**:`WTBASE=$MAINROOT/$WTBASE` 改回 `$ROOT/$WTBASE` → 這一條紅。
+        """
+        self.config_with("../x-wt")
+        self.ticket_ready()
+        wt = self.ticket_worktree()
+        self.assertTrue(os.path.isfile(os.path.join(wt, "tickets", "1.json")),
+                        "這一條問的是「票檔已經在分支上」—— 走不到找票的退路")
+        done = self.run_sh(os.path.join(wt, "scripts", "auto-fix.sh"),
+                           "1", "--dry-run", "--round", "1", cwd=wt)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn(os.path.join("x-wt", "x-wt"), done.stdout, "副本巢狀了")
+        self.assertEqual(os.path.realpath(self.copy_root_in(done)), self.expected())
+
+    def test_a_tickets_dir_from_the_environment_resolves_the_same_way(self):
+        """A2:設了 `AC_TICKETS_DIR`、cwd 是票 worktree —— 同 A1。
+
+        **變異**:`WTBASE=$MAINROOT/$WTBASE` 改回 `$ROOT/$WTBASE` → 這一條紅。
+        """
+        self.config_with("../x-wt")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "worktree_dir")
+        wt = self.ticket_worktree()
+        self.make_ticket("1", allowed_write_paths=["tests/*"])   # 只在主 repo,不進版控
+        self.assertFalse(os.path.exists(os.path.join(wt, "tickets", "1.json")))
+        done = self.run_sh(os.path.join(wt, "scripts", "auto-fix.sh"),
+                           "1", "--dry-run", "--round", "1", cwd=wt,
+                           env=self.env(AC_TICKETS_DIR=os.path.join(self.repo, "tickets")))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn(os.path.join("x-wt", "x-wt"), done.stdout, "副本巢狀了")
+        self.assertEqual(os.path.realpath(self.copy_root_in(done)), self.expected())
+
+    def test_a_missing_parent_stops_by_name_instead_of_landing_at_the_root(self):
+        """A3:`worktree_dir` 的上層不存在 → rc=2,stderr 指名解析後的路徑;不得算出 `/x-wt`。
+
+        **變異**:拿掉上層存在性檢查(`exit 2` 那一句)→ 這一條紅。
+        """
+        self.config_with("../nope/x-wt")
+        self.ticket_ready()
+        self.assertFalse(os.path.exists(os.path.join(self.home, "nope")))
+        done = self.auto_fix("--dry-run", "--round", "1")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        named = re.search(r"副本根 (\S+) 的上層不存在", done.stderr)
+        self.assertIsNotNone(named, "要指名停在哪一個路徑:" + done.stderr)
+        self.assertEqual(os.path.realpath(named.group(1)),
+                         os.path.realpath(os.path.join(self.home, "nope", "x-wt")))
+        self.assertNotIn("`/x-wt/", done.stdout, "算到檔案系統根下了")
+        self.assertNotIn("# 規則包", done.stdout, "停下來就不該再印派工文")
+
+
 class TheCopiesGetCollected(AutoFixBase):
     """#29 A6 / G6:副本自己收 —— `work/` 與 `base/` 刪掉,patch 與 EVIDENCE 留著。
 
@@ -905,6 +991,27 @@ class TheCopiesGetCollected(AutoFixBase):
         self.assertTrue(os.path.isfile(os.path.join(where, "patch-round2.diff")),
                         done.stdout + done.stderr)
         self.assertFalse(os.path.isdir(os.path.join(where, "work")))
+
+
+    def test_a_hand_built_round_one_copy_is_collected_too(self):
+        """#38 A4:主線用 Agent 手建的 `fix-t<n>/round1` —— 迴圈從 `S_ROUND+1` 起,碰不到它。
+        auto-fix 收過 patch、派下一輪之後,它的 `work/` 與 `base/` 也要不在,patch 留著。
+
+        **變異**:拿掉迴圈前收前幾輪的那一句 `shed_copies "$WTBASE/fix-t$ID/round$p"` → 這一條紅。
+        """
+        self.set_worker(WORKER_FIXES)
+        self.ticket_ready()
+        self.first_round()
+        where = self.fix_dir(1)
+        for sub in ("work", "base"):
+            self.write(os.path.join(sub, "README"), "main\n", where=where)
+        self.write("patch-round1.diff", RED_CASE, where=where)
+        done = self.auto_fix()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertFalse(os.path.isdir(os.path.join(where, "work")), "round1 的 work/ 沒被收掉")
+        self.assertFalse(os.path.isdir(os.path.join(where, "base")), "round1 的 base/ 沒被收掉")
+        self.assertTrue(os.path.isfile(os.path.join(where, "patch-round1.diff")),
+                        "patch 是證據,不能跟著被掃掉")
 
 
 class TheWholeLoop(AutoFixBase):
