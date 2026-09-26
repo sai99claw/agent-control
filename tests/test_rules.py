@@ -486,5 +486,150 @@ class TheProjectLayer(RulesBase):
         self.assertNotIn(os.path.join("memory", "role", "implementer.md"), done.stdout)
 
 
+def hundred_byte_lines(tag, count):
+    """`count` 行、每行剛好 100 B(含換行);行首 `- <tag>-NN` 認得出是哪一格的哪一行。"""
+    out = []
+    for index in range(count):
+        head = "- %s-%02d " % (tag, index)
+        out.append(head + "x" * (99 - len(head)) + "\n")
+    return "".join(out)
+
+
+def below(text, is_heading):
+    """每個 `is_heading` 的行底下、到下一個以 `#` 開頭的行之前的那一段。"""
+    lines = text.split("\n")
+    out = []
+    for index, line in enumerate(lines):
+        if not is_heading(line):
+            continue
+        end = index + 1
+        while end < len(lines) and not lines[end].startswith("#"):
+            end += 1
+        out.append("\n".join(lines[index + 1:end]))
+    return out
+
+
+class TheSectionFloor(RulesBase):
+    """節的下限(#47):每一節至少印「### 標題」+ 一行「全文在哪」—— 那幾 bytes 照節名
+    算得出來,要**先從預算扣掉**,角色卡 / 記憶 / 暫存區分的才是真的剩餘。以前分完才用
+    `120 × 剩幾節` 擋,十節的下限撐破節錄那一份,最後一刀從尾巴砍:暫存區內容沒了、
+    角色卡節錄 486→219 B(#37 量的)。
+
+    夾具自己寫,不吃真的 `memory/` 與共用規矩(那幾份會長會縮):角色卡 1500 B、模型記憶
+    1500 B、角色暫存區 3 行各 100 B、共用規矩十節各 800 B;節標題長度照真的節抓,十節的
+    下限約 1.2 KB。模型暫存區不在夾具裡 —— `install_rules_sources` 複製進來的那一份刪掉。
+    """
+
+    NUMS = ("1", "2", "3", "4", "5", "5.5", "5.7", "6.4", "7", "8")
+    TITLE = "節" * 18
+    INBOX = os.path.join("memory", "role", "implementer.inbox.md")
+
+    def setUp(self):
+        super(TheSectionFloor, self).setUp()
+        self.write(os.path.join("memory", "role", "implementer.md"),
+                   hundred_byte_lines("CARD", 15))
+        self.write(os.path.join("memory", "model", "opus.md"), hundred_byte_lines("MODEL", 15))
+        self.write(self.INBOX, hundred_byte_lines("INBOX", 3))
+        os.remove(os.path.join(self.repo, "memory", "model", "opus.inbox.md"))
+        self.write(os.path.join("docs", "DISPATCH-TEMPLATE.md"), "# 假的共用規矩\n\n" + "".join(
+            "## %s. %s\n\n%s\n" % (num, self.TITLE, hundred_byte_lines("RULE" + num, 8))
+            for num in self.NUMS))
+
+    def pack(self, max_bytes):
+        done = self.rules("pack", "worker", "--model", "opus", "--max-bytes", str(max_bytes))
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertLessEqual(len(done.stdout.encode("utf-8")), max_bytes)
+        return done.stdout
+
+    def inbox_bodies(self, text):
+        return below(text, lambda line: line.startswith("#") and "暫存" in line)
+
+    def test_the_fixture_is_the_size_the_ticket_says(self):
+        for rel, size in ((os.path.join("memory", "role", "implementer.md"), 1500),
+                          (os.path.join("memory", "model", "opus.md"), 1500),
+                          (self.INBOX, 300)):
+            self.assertEqual(len(self.read(rel).encode("utf-8")), size, rel)
+        sections = rules_blocks(self.repo)
+        for num in self.NUMS:
+            self.assertEqual(len((sections[num][1] + "\n").encode("utf-8")), 800, num)
+
+    def test_the_floor_is_paid_before_the_card_and_the_inbox_get_theirs(self):
+        """D1:4096 B 裡十節的下限全在、角色卡節錄 ≥ 400 B、暫存區至少留一行。
+
+        **變異 M1**:把 `free` 裡的 `- sum(floors)` 拿掉 → 紅(分出去的超過上限,最後一刀
+        從節錄砍,後面幾節的標題與「全文在哪」不見了)。
+        """
+        text = self.pack(4096)
+        cards = below(text, lambda line: line == "## 角色卡(節錄)")
+        self.assertEqual(len(cards), 1, text)
+        self.assertGreaterEqual(len(cards[0].encode("utf-8")), 400, cards[0])
+        bodies = self.inbox_bodies(text)
+        self.assertEqual(len(bodies), 1, "夾具只有角色暫存區這一格")
+        for body in bodies:
+            self.assertTrue([line for line in body.split("\n") if line.startswith("- INBOX-")],
+                            "暫存區一行都沒留:" + body)
+        for num in self.NUMS:
+            self.assertIn("### %s. %s\n…(截斷:全文見 `docs/DISPATCH-TEMPLATE.md` §%s)"
+                          % (num, self.TITLE, num), text, "節的下限不見了:§" + num)
+
+    def test_a_budget_below_the_floor_still_names_the_inbox_it_cut(self):
+        """D2:上限 2500 連十節的下限都放不下。暫存區要嘛小標底下還有內容,要嘛「砍過」
+        名單列出它的檔名 —— 內容沒了、名單也沒列,與那一格從來沒有過長得一樣(§5.5)。
+
+        **變異**:暫存區砍了卻不進名單(`inbox_cut.append(one)` 拿掉)→ 紅。
+        """
+        text = self.pack(2500)
+        kept = [line for body in self.inbox_bodies(text) for line in body.split("\n")
+                if line.startswith("- INBOX-")]
+        notes = [line for line in text.split("\n") if line.startswith("> 這一份為了守住")]
+        named = bool(notes) and self.INBOX in notes[0].split("砍過:", 1)[1]
+        self.assertTrue(kept or named, text)
+
+
+class TheLastCut(RulesBase):
+    """最後一刀(#47 D2):組完仍超過就照順序砍 —— 模型記憶 → 共用規矩節錄 → 角色卡,
+    暫存區最後;每砍一格都進「砍過」名單,砍到放得下就停。
+
+    直接叫 `rules.trim`:分預算照真的長度算過之後,`pack` 很難再走到「暫存區還有內容、
+    卻得在最後一刀被砍」那一步,而那一步正是 #37 量到的那一種消失。
+    """
+
+    LIMIT = 400
+
+    def test_it_cuts_memory_rules_card_then_inbox_and_names_each(self):
+        """**變異 M2**:最後一刀砍了暫存區卻不進名單 → 紅。"""
+        rules = rules_module(self.repo)
+        parts = {key: "\n".join(hundred_byte_lines(key.upper(), 5).split("\n")[:-1])
+                 for key in ("card", "inbox", "rules", "mem")}
+        last = parts["inbox"].split("\n")[-1]
+        cut = []
+
+        def render():
+            note = ["> 砍過:" + "、".join(cut)] if cut else []
+            return "\n".join(note + [parts[key] for key in ("card", "inbox", "rules", "mem")])
+
+        order = [("mem", "M.md", "`M.md`", rules.clip),
+                 ("rules", "R.md 的節錄", "`R.md`", rules.clip),
+                 ("card", "C.md", "`C.md`", rules.clip),
+                 ("inbox", "I.inbox.md", "`I.inbox.md`", rules.tail)]
+        text = rules.trim(render, parts, order, cut, self.LIMIT)
+        self.assertLessEqual(len(text.encode("utf-8")), self.LIMIT, text)
+        self.assertEqual(cut, ["M.md", "R.md 的節錄", "C.md", "I.inbox.md"])
+        self.assertIn(last, text, "暫存區最新的那一行最後才砍")
+
+
+def rules_module(repo):
+    sys.path.insert(0, os.path.join(repo, "scripts"))
+    try:
+        import importlib
+        return importlib.import_module("rules")
+    finally:
+        sys.path.pop(0)
+
+
+def rules_blocks(repo):
+    return rules_module(repo).blocks(os.path.join(repo, "docs", "DISPATCH-TEMPLATE.md"))
+
+
 if __name__ == "__main__":
     unittest.main()

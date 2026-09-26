@@ -41,7 +41,7 @@ DEFAULT_MAX = 4096
 # 而少讀一次的代價是一輪重來。為什麼只給 600 B:塞整份的話 4 KB 包會把角色卡擠掉,
 # 而砍到只剩標題與沒貼一樣。
 LOCAL_INBOX_BYTES = 600
-# 第五段,**固定文字、先扣預算**(與 260 B 鷹架同列,不吃比例):每個角色都帶,而且
+# 第五段,**固定文字、先扣預算**(與鷹架同列,不吃比例):每個角色都帶,而且
 # 最後那一刀砍不到它。措辭對著 `memory.py note` 真正的用法寫 —— 這一段決定 agent
 # 會不會亂寫記憶:預設不寫、三種時刻、一行一原則、model 層只能寫自己。
 MEMORY_NOTE = """## 記憶回寫(D-013)
@@ -308,6 +308,33 @@ def read_text(path):
         return ""
 
 
+def trim(render, parts, order, cut, limit):
+    """最後一刀(#47):`render()` 組出來的整份超過 `limit` 就照 `order` 一格一格砍 ——
+    每一格是 `(鍵, 名單上的名字, 指路, 砍法)`,砍到剛好放得下為止,每砍一格都進 `cut`
+    (「砍過」名單;`render` 每次照它重組,名單變長吃掉的 bytes 也算進去)。
+
+    以前這一刀是整份從尾巴砍:排在最後的暫存區內容沒了,名單卻只列分預算時砍過的
+    那幾份 —— 「內容沒了、名單也沒列」與那一格從來沒有過長得一樣。
+    """
+    for key, label, pointer, shrink in order:
+        before = len(render().encode("utf-8"))
+        if before <= limit:
+            break
+        if not parts.get(key):
+            continue
+        old, added = parts[key], label not in cut
+        if added:
+            cut.append(label)
+        over = len(render().encode("utf-8")) - limit
+        parts[key], _ = shrink(old, max(len(old.encode("utf-8")) - over, 0), pointer)
+        # 砍了反而更長(字比指路 + 名單上多一個名字還短)就放回去,換下一格。
+        if len(render().encode("utf-8")) >= before:
+            parts[key] = old
+            if added:
+                cut.pop()
+    return render()
+
+
 def pack(root, role, model, max_bytes, override=""):
     card_name, default_wanted, one_line = WANTED[role]
     wanted = wanted_sections(root, role, default_wanted)
@@ -381,7 +408,7 @@ def pack(root, role, model, max_bytes, override=""):
     memory = read_text(os.path.join(root, model_rel)) if model_rel else ""
     fixed = "\n".join(head)
 
-    # 預算要扣掉**鷹架自己**(小標、空行、結尾那一句),不然三份加起來剛好等於上限時,
+    # 預算要扣掉**鷹架自己**(小標、空行),不然三份加起來剛好等於上限時,
     # 組出來的整份必定超過 —— 而那會讓這一支自己在守自己時倒下。
     scaffold = ("## 角色卡(節錄)\n\n\n## 共用規矩節錄\n\n\n"
                 "## 你這個模型的記憶(節錄)\n\n\n")
@@ -389,110 +416,160 @@ def pack(root, role, model, max_bytes, override=""):
                  ([local_model_rel] if local_memory else [])
     local_scaffold = "".join(local_heading(one, False) + "\n\n\n" for one in local_rels) \
         + "".join(local_heading(one, True, not local) + "\n\n\n" for one, _t in inboxes)
-    base = (max_bytes - len(fixed.encode("utf-8")) - len(scaffold.encode("utf-8"))
-            - len(local_scaffold.encode("utf-8")) - 260 - MEMORY_NOTE_BYTES
-            - DELIVERY_NOTE_BYTES - 1)
-    # 暫存區那一格**先扣**(與 MEMORY_NOTE 同列),所以主檔與節錄少 600 B,總量不變;
-    # 預算本來就不夠的時候這一格跟著縮,縮到 0 也還是會印出小標與「砍過」那一句。
-    inbox_room = min(LOCAL_INBOX_BYTES, max(base // 3, 0)) if inboxes else 0
-    room = max(base - inbox_room, 0)
-    cut = []
-    # 預算順序 = 重要性順序:角色卡(你是誰)> 共用規矩(你會被擋在哪)>
-    # 模型記憶(你自己踩過什麼)。角色卡那 35% 在有專案主檔時拆成正本 20% / 專案 15%。
-    card_share = 0.20 if local_card else 0.35
-    card_text, card_cut = clip(card, int(room * card_share), "`%s`" % card_rel)
-    if card_cut:
-        cut.append(card_rel)
-    local_card_text, local_card_cut = (
-        clip(local_card, int(room * 0.15), "`%s`" % local_card_rel)
-        if local_card else ("", False))
-    if local_card_cut:
-        cut.append(local_card_rel)
-
-    # 節的預算**逐節分,而且照名單的順序先給滿** —— 一整包分的話,第一節(最長的
-    # 那一節)會把額度吃光,後面九節連標題都不會出現,讀的人因此不知道還有那九條規矩。
-    # 每一節至少留標題 + 一句「全文在哪」:那一行本身就是一條提醒。
+    # 節的下限(#47):每一節至少印「### 標題」+ 一行「全文在哪」,那一行本身就是一條
+    # 提醒。它的 bytes 照節名算得出來,**先從預算扣掉**,角色卡 / 記憶 / 暫存區分的才是
+    # 真的剩餘。以前是分完才用 `120 × 剩幾節` 擋:十節的下限(約 1.2 KB)撐破節錄那一份,
+    # 超支由最後一刀從尾巴砍 —— 暫存區內容沒了、角色卡節錄 486→219 B(#37 量的)。
     picked = [hit for _num, hit in keys if hit is not None]
-    budget = int(room * 0.45)
-    reserve = 120
-    body, rules_cut, used = [], False, 0
-    for index, num in enumerate(picked):
-        title, text = found[num]
-        line = "### %s" % title
-        cost = len(line.encode("utf-8")) + 1
-        left = len(picked) - index - 1
-        allow = max(budget - used - cost - left * reserve, 0)
-        one, was_cut = clip(text, allow, "`%s` §%s" % (rel, num))
-        rules_cut = rules_cut or was_cut
-        chunk = "%s\n%s\n" % (line, one)
-        used += len(chunk.encode("utf-8"))
-        body.append(chunk)
-    rules_text = "\n".join(body).strip("\n")
-    if rules_cut:
-        cut.append("%s 的節錄" % rel)
+    floors = [len(("### %s\n%s\n" % (found[num][0],
+                                     clip(found[num][1], 0, "`%s` §%s" % (rel, num))[0]))
+                  .encode("utf-8")) + 1 for num in picked]
+    free = (max_bytes - len(fixed.encode("utf-8")) - len(scaffold.encode("utf-8"))
+            - len(local_scaffold.encode("utf-8")) - MEMORY_NOTE_BYTES
+            - DELIVERY_NOTE_BYTES - 1 - sum(floors))
 
-    # 模型記憶:**A 自己照舊拿「角色卡與節錄用剩的」**;疊了專案層的時候剩不下來 ——
-    # 那 10 個節標題加上 10 句「全文在哪」本身就吃掉一半的額度,於是 20 B 的專案補充
-    # 會被一句比它還長的「截斷」取代。所以兩層的時候給固定比例,正本 12% / 專案 8%。
-    if local:
-        mem_budget = int(room * (0.12 if local_memory else 0.20))
-        local_mem_budget = int(room * 0.08)
-    else:
-        mem_budget = max(room - int(room * card_share) - used, 0)
-        local_mem_budget = 0
-    mem_text, mem_cut = (clip(memory, mem_budget, "`%s`" % model_rel)
-                         if memory else ("", False))
-    if mem_cut:
-        cut.append(model_rel)
-    local_mem_text, local_mem_cut = (
-        clip(local_memory, local_mem_budget, "`%s`" % local_model_rel)
-        if local_memory else ("", False))
-    if local_mem_cut:
-        cut.append(local_model_rel)
+    def cut_note(cut):
+        return ("> 這一份為了守住 %d bytes 砍過:%s —— 砍掉的部分去讀原檔。"
+                % (max_bytes, "、".join(cut)))
 
-    # 暫存區:兩格分那 600 B,前一格用剩的給下一格 —— 平分的話一行 250 B 的教訓
-    # 在兩格都有字時永遠放不進去,而那一格只剩一句「砍過」。砍了的要進「砍過」名單
-    # —— 這一格常常正好排在最後,而**默默消失的一格與從來沒有過的一格長得一樣**。
-    spare = inbox_room
-    inbox_texts = []
-    for index, (one, text) in enumerate(inboxes):
-        kept, was_cut = tail(text, spare // (len(inboxes) - index), "`%s`" % one)
-        spare -= len(kept.encode("utf-8"))
-        if was_cut:
-            cut.append(one)
-        inbox_texts.append((one, kept))
+    # 角色卡與模型記憶的各格:(字, 名單上的名字)。每一格至少會印一行「全文在哪」——
+    # 與節的下限同一件事:前面的格分預算時,後面每一格的這一行先留著,不然最後一格的
+    # 指路會撐破上限,由最後一刀替它砍別人。字比「指路 + 名單上多一個名字」還短的那一格
+    # 砍了反而更長,整格照印。
+    cells = {"card": (card, card_rel), "local_card": (local_card, local_card_rel),
+             "mem": (memory, model_rel), "local_mem": (local_memory, local_model_rel)}
+    least = {}
+    for key, (text, one) in cells.items():
+        mark = len(clip(text, 0, "`%s`" % one)[0].encode("utf-8"))
+        size = len(text.encode("utf-8"))
+        least[key] = size if size <= mark + len(("、" + one).encode("utf-8")) else mark
 
-    out = list(head)
-    if cut:
-        # **砍過這句話放在最前面**:放在最後的話,它自己會被最後那一刀砍掉,
-        # 而一份砍過卻沒說砍過的規則包,與完整的那一份長得一樣。
-        out += ["> 這一份為了守住 %d bytes 砍過:%s —— 砍掉的部分去讀原檔。"
-                % (max_bytes, "、".join(cut)), ""]
-    out += ["## 角色卡(節錄)", card_text or "(找不到 %s)" % card_rel, ""]
-    if local_card_text:
-        out += [local_heading(local_card_rel, False), local_card_text, ""]
-    for one, kept in inbox_texts:
-        if one.startswith(local_dir("role")):
-            out += [local_heading(one, True, not local), kept, ""]
-    out += ["## 共用規矩節錄", rules_text or "(一節都沒抽到)", ""]
-    if memory or local_mem_text:
-        out += ["## 你這個模型的記憶(節錄)"]
-        out += [mem_text, ""] if memory else []
-        if local_mem_text:
-            out += [local_heading(local_model_rel, False), local_mem_text, ""]
-    for one, kept in inbox_texts:
-        if not one.startswith(local_dir("role")):
-            out += [local_heading(one, True, not local), kept, ""]
-    text = "\n".join(out)
-    # 最後一道:**組出來的整份**再量一次。上面的分配是估的,而估錯的那一次要在這裡
-    # 被擋住,不是在呼叫者那裡變成一份超過上限的派工文。
+    def allocate(base):
+        """把 `base` 分給暫存區、角色卡、節錄、模型記憶;回 (「砍過」名單, 各格的字)。"""
+        # 暫存區(D-021)**非空的每一格至少留最後一行**(#47):照順序、放得下才給;
+        # 再多的行只在 600 B 與剩餘的三分之一以內,前一格用剩的給下一格 —— 平分的話
+        # 一行 250 B 的教訓在兩格都有字時永遠放不進去。一行都放不下的那一格只剩小標
+        # (小標寫著檔名)並進「砍過」名單:**默默消失的一格與從來沒有過的一格長得一樣**。
+        firsts = []
+        for one, text in inboxes:
+            mark = len(tail(text, 0, "`%s`" % one)[0].encode("utf-8"))
+            first = min(len(text.encode("utf-8")),
+                        mark + len(text.splitlines()[-1].encode("utf-8")) + 2)
+            fits = sum(firsts) + first <= min(LOCAL_INBOX_BYTES, base)
+            firsts.append(first if fits else 0)
+        spare = max(min(LOCAL_INBOX_BYTES, max(base // 3, 0)) - sum(firsts), 0)
+        parts, inbox_cut = {}, []
+        for index, (one, text) in enumerate(inboxes):
+            kept, was_cut = (tail(text, firsts[index] + spare // (len(inboxes) - index),
+                                  "`%s`" % one) if firsts[index] else ("", True))
+            spare -= max(len(kept.encode("utf-8")) - firsts[index], 0)
+            if was_cut:
+                inbox_cut.append(one)
+            parts[one] = kept
+        left = max(base - sum(len(kept.encode("utf-8")) for kept in parts.values()), 0)
+
+        # 預算順序 = 重要性順序:角色卡(你是誰)> 共用規矩(你會被擋在哪)>
+        # 模型記憶(你自己踩過什麼)。角色卡那 35% 在有專案主檔時拆成正本 20% / 專案 15%。
+        # 比例是整個內容區(用剩的 + 節的下限)的比例 —— 節錄那一份本來就含它的下限;
+        # 但每一格都從用剩的裡面拿,加起來不會超過它。
+        cut = []
+        area = left + sum(floors)
+
+        def take(key, budget, later):
+            text, one = cells[key]
+            budget = max(min(budget, left - sum(least[k] for k in later)), least[key])
+            parts[key], was_cut = clip(text, budget, "`%s`" % one) if text else ("", False)
+            if was_cut:
+                cut.append(one)
+            return len(parts[key].encode("utf-8"))
+
+        left -= take("card", int(area * (0.20 if local_card else 0.35)),
+                     ("local_card", "mem", "local_mem"))
+        left -= take("local_card", int(area * 0.15), ("mem", "local_mem"))
+
+        # 節的預算**逐節分,而且照名單的順序先給滿** —— 一整包分的話,第一節(最長的
+        # 那一節)會把額度吃光,後面九節連標題都不會出現,讀的人因此不知道還有那九條規矩。
+        # 後面每一節的下限先留著(`floors`);+2 是這一節結尾的換行與節間空行。
+        budget = sum(floors) + min(max(int(area * 0.45) - sum(floors), 0),
+                                   max(left - least["mem"] - least["local_mem"], 0))
+        body, rules_cut, used = [], False, 0
+        for index, num in enumerate(picked):
+            title, text = found[num]
+            line = "### %s" % title
+            cost = len(line.encode("utf-8")) + 1
+            allow = max(budget - used - cost - 2 - sum(floors[index + 1:]), 0)
+            one, was_cut = clip(text, allow, "`%s` §%s" % (rel, num))
+            rules_cut = rules_cut or was_cut
+            chunk = "%s\n%s\n" % (line, one)
+            used += len(chunk.encode("utf-8")) + 1
+            body.append(chunk)
+        parts["rules"] = "\n".join(body).strip("\n")
+        if rules_cut:
+            cut.append("%s 的節錄" % rel)
+        left -= used - sum(floors)
+
+        # 模型記憶:A 自己拿「角色卡與節錄用剩的」。兩層的時候給固定比例(正本 12% /
+        # 專案 8%)—— 20 B 的專案補充不該因為排在後面就被一句比它還長的「截斷」取代。
+        left -= take("mem", int(area * (0.12 if local_memory else 0.20)) if local else left,
+                     ("local_mem",))
+        take("local_mem", int(area * 0.08), ())
+        return cut + inbox_cut, parts
+
+    # 「砍過」那一句多長要分完才知道:先當它不在,分完量它的真長度再重分,留下放得下的
+    # 那幾輪裡留得最少的一輪(名單幾輪就不再變)。以前固定留 260 B —— 兩層疊起來時多留
+    # 的那幾十 B,正好是模型記憶放不放得下的差別。
+    reserve, fits = 0, []
+    for _round in range(6):
+        cut, parts = allocate(free - reserve)
+        need = len(cut_note(cut).encode("utf-8")) + 2 if cut else 0
+        if need <= reserve:
+            fits.append((reserve, cut, parts))
+            if need == reserve:
+                break
+        reserve = need
+    if fits:
+        _reserve, cut, parts = min(fits, key=lambda one: one[0])
+
+    def render():
+        out = list(head)
+        if cut:
+            # **砍過這句話放在最前面**:放在最後的話,它自己會被最後那一刀砍掉,
+            # 而一份砍過卻沒說砍過的規則包,與完整的那一份長得一樣。
+            out += [cut_note(cut), ""]
+        out += ["## 角色卡(節錄)", parts["card"] or "(找不到 %s)" % card_rel, ""]
+        if parts["local_card"]:
+            out += [local_heading(local_card_rel, False), parts["local_card"], ""]
+        for one, _text in inboxes:
+            if one.startswith(local_dir("role")):
+                out += [local_heading(one, True, not local), parts[one], ""]
+        out += ["## 共用規矩節錄", parts["rules"] or "(一節都沒抽到)", ""]
+        if memory or parts["local_mem"]:
+            out += ["## 你這個模型的記憶(節錄)"]
+            out += [parts["mem"], ""] if memory else []
+            if parts["local_mem"]:
+                out += [local_heading(local_model_rel, False), parts["local_mem"], ""]
+        for one, _text in inboxes:
+            if not one.startswith(local_dir("role")):
+                out += [local_heading(one, True, not local), parts[one], ""]
+        return "\n".join(out)
+
+    # 最後一道:**組出來的整份**再量一次。上面的分配照真的長度算,還超過的那一次(例如
+    # 節的下限本身就塞不下)要在這裡被擋住,不是在呼叫者那裡變成一份超過上限的派工文。
     # 記憶回寫段與結構化交付段在這一刀**之外**:先量給它們,砍的是前面那幾份 ——
     # 它們是固定文字,砍到一半的「只在三種時刻寫」會變成「隨時可以寫」,砍到一半的
     # 「照實留空不要編」會變成「留空」。
-    # 這一刀的指路**列出砍過的那幾份**:預算緊到連上面那句「砍過」都留不住時,這個
-    # 記號是最後一個還說得出「哪一格不見了」的地方(D-021 的暫存區正好排在最後)。
-    text, _ = clip(text, max_bytes - MEMORY_NOTE_BYTES - DELIVERY_NOTE_BYTES - 4,
-                   "、".join(cut) if cut else "`%s` 與上面列的那幾份" % rel)
+    limit = max_bytes - MEMORY_NOTE_BYTES - DELIVERY_NOTE_BYTES - 4
+    order = ([("mem", model_rel, "`%s`" % model_rel, clip),
+              ("local_mem", local_model_rel, "`%s`" % local_model_rel, clip),
+              ("rules", "%s 的節錄" % rel, "`%s`" % rel, clip),
+              ("card", card_rel, "`%s`" % card_rel, clip),
+              ("local_card", local_card_rel, "`%s`" % local_card_rel, clip)]
+             + [(one, one, "`%s`" % one, tail) for one, _text in inboxes])
+    text = trim(render, parts, order, cut, limit)
+    # 照順序砍完還放不下(上限小到連前言都塞不下)才整份從尾巴砍。這一刀的指路**列出
+    # 砍過的那幾份**:連上面那句「砍過」都留不住時,這個記號是最後一個還說得出「哪一格
+    # 不見了」的地方。
+    text, _ = clip(text, limit, "、".join(cut) if cut else "`%s` 與上面列的那幾份" % rel)
     # 記憶回寫**留在最後一行**:它是收工前最後一個動作,而讀的人從尾巴往回讀。
     return (text.rstrip("\n") + "\n\n" + DELIVERY_NOTE + "\n\n" + MEMORY_NOTE)
 
