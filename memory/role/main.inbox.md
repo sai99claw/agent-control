@@ -12,3 +12,4 @@
 - 單票 land 全套紅時 land.sh 會自己叫 auto-fix.sh(#13)並繼續持有 .land.lock;主線要重落同一票前先看 pgrep 'land.sh t<n>' 與 auto-fix,killed 才清鎖,否則兩個 land 並跑 (#32) (2026-09-23, main@fable)
 - D-022 首跑(#29):opus reviewer 118K,逐條驗收對到實作行與案例,落地前抓到票面 verify_strings 的機械錯(result-round1 在分支上 0 次)與兩處票面過期;派工文 scratchpad/dispatch/review/TEMPLATE.md 可用 (2026-09-23, main@fable)
 - gate.sh 還有兩處自己用 $ROOT 拼票檔路徑(:229 preflight、:491 ticket_tags),與 #40 修掉的同洞;綠了那一輪沒人發 ticket.attempt.done;memory/role/*.md 沒 cap_chars 檔頭時照樣受 config 2000 字上限管 —— 併進 #45 或下一批開題 (#40, 2026-09-26, main@fable)
+- ticket.py close 的 done_blockers 不認 needs_verifier=false(gate 認),D-028 之後每張工具票都得再簽一次 waiver 才關得掉 —— #43(land 試 close)要一起收:needs_verifier=false 且 review pass 視同回歸證據那格 (#41, 2026-09-26, main@fable)
