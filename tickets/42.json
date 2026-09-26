@@ -63,8 +63,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "dbce33b",
-  "state": "Ready",
-  "state_version": 4,
+  "state": "Done",
+  "state_version": 9,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -105,5 +105,17 @@
     }
   ],
   "outline": "設計 ② C2 / ⑤ C2 / ⑥ 第 3 列,D-025 ② 准:reviewer pass 由腳本直接 set review,by 寫 reviewer@<模型>;fail 回主線裁。為什麼要腳本不要範本(設計 ③ 乙):D-022 三天只走過一次,而 Agent tool 派的 reviewer 讀了 118K 還是回到主線上下文。形狀照 auto-fix.sh 起 headless worker 的那一段(:539-660)與 ticket.py result 抽取(#29 A4)。兩個觸發點:auto-fix 綠(:787)與手跑 gate 綠(現在沒有人轉 InReview,是個洞)。sync 名單要加 review.sh,T 才拿得到。順序:五張的第 3 張,前置 #40 已落地(同動 auto-fix.sh :787 那段與「覆核不自動」三句;先落 C1 再 rebase)。C3+C4 接在本票之後(review.sh 開跑 ack)。needs_verifier=false:A 端工具票,不動產品碼;fail 路寫錯會讓 land 收到假 review,所以 M1/M2 指定變異由實作者在 tests/test_review.py 證紅;驗收全是沙盒機械斷言",
-  "needs_verifier": false
+  "needs_verifier": false,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "00f8e36",
+    "note": "reports/t42/20260926-160259-22469/REVIEW.md",
+    "at": "2026-09-26T16:16:24+08:00",
+    "state_version": 9
+  },
+  "verify_waiver": {
+    "by": "main",
+    "reason": "D-028:票面 needs_verifier=false(工具票,review.sh 用假 reviewer.command 的沙盒案例);close 尚未認得這一格,先以 waiver 補(#43 收)"
+  }
 }
