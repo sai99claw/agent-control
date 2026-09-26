@@ -30,7 +30,7 @@
   "attempt": 0,
   "base_sha": "ee4993f5f3790e56e3f752745e9f47f65f5936fc",
   "state": "Ready",
-  "state_version": 1,
+  "state_version": 2,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -39,5 +39,8 @@
     "run": "",
     "notes": ""
   },
-  "outline": "派工照 `templates/dispatch-consolidator.md`(兩個模型各開一個 session、各貼一次;規則包 `python3 scripts/rules.py pack consolidator --model <模型>`,角色卡 `memory/role/consolidator.md`)。先各自寫討論檔、再互讀寫分歧,最後一位跑 `python3 scripts/memory.py consolidate memory/role/implementer.md --discussion <討論檔>`。"
+  "outline": "派工照 `templates/dispatch-consolidator.md`(兩個模型各開一個 session、各貼一次;規則包 `python3 scripts/rules.py pack consolidator --model <模型>`,角色卡 `memory/role/consolidator.md`)。先各自寫討論檔、再互讀寫分歧,最後一位跑 `python3 scripts/memory.py consolidate memory/role/implementer.md --discussion <討論檔>`。",
+  "verify_strings": [
+    "cap_chars: 2700"
+  ]
 }
