@@ -119,6 +119,16 @@ class RedClassification(Sandbox):
         self.make_ticket(ident, verify={"files": rels, "tags": ["example"],
                                         "run": "", "notes": ""})
 
+    def red_record(self, done, out):
+        """`red` 的紀錄不寫票(#36 A4):讀 stdout『證據 -> <路徑>』印出的那份
+        `<out-dir>/baseline-red.json`。"""
+        lines = [line for line in done.stdout.splitlines() if "證據 -> " in line]
+        self.assertTrue(lines, "red 要在 stdout 印出證據檔路徑:" + done.stdout)
+        path = os.path.join(out, "baseline-red.json")
+        self.assertTrue(lines[0].split("證據 -> ", 1)[1].startswith(path), done.stdout)
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+
     def test_a1_an_assertion_error_in_the_case_file_counts_as_red(self):
         """A1 最後一個 frame 在 verify.files 之一且例外是 AssertionError(含
         self.fail)時算數的紅,印『紅 <案例>: <第一行>』並寫進 baseline.red_lines。
@@ -127,10 +137,11 @@ class RedClassification(Sandbox):
         self.write(rel, CASE_A1)
         self.a_ticket(1, [rel])
         expected_id = "verify.redcase.test_ticket_1.ARedAssertion.test_one_is_not_two"
-        done = self.tool("red", "1", "--candidate", self.repo)
+        out = os.path.join(self.home, "red-out")
+        done = self.tool("red", "1", "--candidate", self.repo, "--out-dir", out)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("紅 %s:" % expected_id, done.stdout)
-        base = self.load_ticket("1")["verify"]["baseline"]
+        base = self.red_record(done, out)
         self.assertTrue(base["baseline"]["red_lines"], "算數的紅要寫進 red_lines")
         self.assertTrue(any(expected_id in str(row) for row in base["baseline"]["red_lines"]),
                         base["baseline"]["red_lines"])
@@ -174,9 +185,10 @@ class RedClassification(Sandbox):
         rel = os.path.join("verify", "redcase", "test_ticket_1.py")
         self.write(rel, CASE_A5)
         self.a_ticket(1, [rel])
-        done = self.tool("red", "1", "--candidate", self.repo)
+        out = os.path.join(self.home, "red-out")
+        done = self.tool("red", "1", "--candidate", self.repo, "--out-dir", out)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        base = self.load_ticket("1")["verify"]["baseline"]
+        base = self.red_record(done, out)
         self.assertEqual(base["baseline"].get("skipped"), 1,
                          "skip 要另外算,不是 0 也不是併進紅")
         red_names = " ".join(str(row) for row in base["baseline"]["red_lines"])
@@ -189,9 +201,10 @@ class RedClassification(Sandbox):
         rel = os.path.join("verify", "redcase", "test_ticket_1.py")
         self.write(rel, CASE_A1)
         self.a_ticket(1, [rel])
-        done = self.tool("red", "1", "--candidate", self.repo)
+        out = os.path.join(self.home, "red-out")
+        done = self.tool("red", "1", "--candidate", self.repo, "--out-dir", out)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        base = self.load_ticket("1")["verify"]["baseline"]
+        base = self.red_record(done, out)
         self.assertEqual(base["stage"], "red")
         self.assertTrue(base["ok"])
         self.assertEqual(base["files"], [rel])
