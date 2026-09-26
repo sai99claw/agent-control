@@ -43,7 +43,8 @@
     "tests/control_harness.py",
     "docs/SESSION-START.md",
     "docs/WORKFLOW.md",
-    "memory/role/verifier.md"
+    "memory/role/verifier.md",
+    "scripts/gate.sh"
   ],
   "role": "worker",
   "model": "opus",
@@ -51,7 +52,7 @@
   "attempt": 0,
   "base_sha": "66b6ae8",
   "state": "Ready",
-  "state_version": 8,
+  "state_version": 15,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -74,5 +75,30 @@
   "test_plan": "全部整合層 tests/test_auto_fix.py(harness 的 fixture worker / verifier 由 AC_ROLE 分流,既有):C1 三態(true / false / 缺)、C2 平行(標記檔逾時證串行紅)、C3 派工文填值、C4/C5 兩份 patch 套進閘門、C6 沒交件。tests/test_templates.py 兩條照舊。期望值(事件 role、cost 筆數、頁數)寫死。每條變異在 EVIDENCE mutations 段。",
   "outline": "needs_verifier=false 理由:A 工具票(改的是派驗證者的腳本本身,沒有產品碼);驗收全在 tests/test_auto_fix.py 用 harness fixture 機械證,平行性由標記檔逾時證;不動 verify/ 案例所以無 tags。 D-032 拆三張的第 ③:C6 驗證者自動派,設計文件當時緩「等 C1 跑幾張」,D-032 ③ 裁現在做。實測(D-033):(1) auto-fix.sh 已有 dispatch_verifier()(:480–580,test_defect 專用,round ≥ 2、串行、內嵌派工文不讀範本),VERIFIER_CMD / VERIFIER_MODEL(:455–456)與 collect_from_copy / result-verifier 抽取都在 —— 這張是把它搬到第 1 輪並改成背景行程,不是新寫;(2) auto-fix.sh 今天 grep 不到 needs_verifier;(3) apply.sh 已收 [<patch-verify>] 第三個位置參數與 --evidence-verifier(apply.sh:4、:403–502);(4) templates/dispatch-verifier.md 存在但是「整份複製把 <…> 換掉」的人用格式,tests/test_templates.py:126–150 釘它兩件事(EVIDENCE-verifier 提及、與角色卡同入口);(5) control_harness.py:128 的 fixture 已有 AC_ROLE=verifier 分支。判斷:(a) 平行而不是先驗證者再 worker(設計文件原案是串行):驗證者不等 patch(D-020),串行只多等一次 sonnet 的時鐘;(b) 缺 needs_verifier 不擋(只 stderr):既有 test_auto_fix 的票都沒這格,擋會讓整套紅,而 D-031 自檢已在開題端擋;(c) 沒交件先收 worker patch 再 block。順序建議:C3(範本與組法)→ C1/C2(起與等)→ C5/C4(套與併)→ C6 → C7。未實測:apply.sh 併 verify.files/tags 進票的路在第 1 輪(沒有前一輪 status)是否走得到 —— 所以 C4 要實作者先跑一次再決定要不要動 apply.sh。",
   "feature": "agent-control 流程控制(D-032 儀表板化)",
-  "needs_verifier": false
+  "needs_verifier": false,
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 132,
+      "tokens_out": 80177,
+      "cache_write": 225677,
+      "cache_read": 10447519,
+      "wall_seconds": 1485,
+      "by": "auto-fix.sh",
+      "at": "2026-09-27T00:22:51+08:00"
+    }
+  ],
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "C4「綠一輪後 verify.files 非空、stage=check」在 allowed_write_paths 內做不到:gate.sh verify_case() 把相對路徑交給 verify-case.py lint,lint 以 AC_ROOT(主 repo)解析,讀不到只在分支上的案例 → rc=2、整輪 rc=4;修法是 gate.sh:711 的 lint 參數改成 \"$ROOT/<檔>\"(一行,已在 scratch 複本實測綠),需要把 scripts/gate.sh 加進寫入範圍或另開一張票",
+      "evidence": "../agent-control-wt/fix-t51/round1/EVIDENCE-round1.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "主線裁(2026-09-27 00:0x):scripts/gate.sh 加進 allowed_write_paths;只改 :711 那一行(lint 參數用候選樹絕對路徑,與 T#654 同病同解),不動 gate.sh 其他段;第 2 輪從 round1 patch 起。"
+    }
+  ],
+  "owner": "main"
 }
