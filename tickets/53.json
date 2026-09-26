@@ -53,7 +53,7 @@
   "attempt": 0,
   "base_sha": "6f4dd882cd92c5e8d3dd0787a223ace1ab6717a6",
   "state": "InReview",
-  "state_version": 18,
+  "state_version": 25,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -87,11 +87,19 @@
     },
     {
       "category": "blocking",
-      "body": "紅榜兩條都只指向 tickets/54.json:107(#54 objections[].body 寫死了 `/Users/…/agent-control` 絕對路徑),該檔是主線/票板寫的、不在 #53 allowed_write_paths;#53 的 diff 無關,需主線改 #54 那段 body(例:換成「main repo」)後重落地。",
+      "body": "紅榜兩條都只指向 tickets/54.json:107(#54 objections[].body 寫死了 `<home path>` 絕對路徑),該檔是主線/票板寫的、不在 #53 allowed_write_paths;#53 的 diff 無關,需主線改 #54 那段 body(例:換成「main repo」)後重落地。",
       "evidence": "../agent-control-wt/fix-t53/round2/EVIDENCE-round2.md",
       "owner": "main",
       "disposition": "accepted",
       "follow_up": "main 2026-09-27: tickets/54.json objection body carried an absolute path (written by #54 worker); main scrubbed it"
+    },
+    {
+      "category": "blocking",
+      "body": "tickets/53.json:90 (#53 objections[1].body, written by the OBJECTION pipeline from an earlier round) quotes the home-path prefix literally in backticks, so test_no_project_names flags #53's own ticket file; tickets/53.json is not in allowed_write_paths — main must reword that body (e.g. \"an absolute home path\") and re-land; #53's code diff is unrelated.",
+      "evidence": "../agent-control-wt/fix-t53/round2/EVIDENCE-round2.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "main 2026-09-27: objection bodies in tickets/*.json scrubbed of home paths"
     }
   ],
   "cost": [
@@ -154,6 +162,30 @@
       "wall_seconds": 48,
       "by": "auto-fix.sh",
       "at": "2026-09-27T05:17:39+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 18,
+      "tokens_out": 6458,
+      "cache_write": 49429,
+      "cache_read": 422629,
+      "wall_seconds": 74,
+      "by": "review.sh",
+      "at": "2026-09-27T05:19:24+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 20,
+      "tokens_out": 5485,
+      "cache_write": 31512,
+      "cache_read": 366687,
+      "wall_seconds": 61,
+      "by": "auto-fix.sh",
+      "at": "2026-09-27T05:27:25+08:00"
     }
   ],
   "repair_round": 1,
@@ -162,8 +194,8 @@
     "by": "reviewer@opus",
     "sha": "c39bb84ca5d5b6698b96d59864d15ea568b06202",
     "note": "reports/t53/20260927-042946-24277/REVIEW.md",
-    "at": "2026-09-27T05:09:33+08:00",
-    "state_version": 17
+    "at": "2026-09-27T05:19:24+08:00",
+    "state_version": 24
   },
   "owner": "main"
 }
