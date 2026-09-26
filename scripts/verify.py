@@ -22,23 +22,27 @@
 **為什麼雜湊要含 sha**:快取的危險不是省太多,是省錯 —— 「上一次綠」與「這一次也會綠」
 之間隔著一次 commit。sha 變了就是不同的問題,快取一定失效。
 沒有 `AC_RUN_ID` 就完全不快取(單獨跑的人拿到的永遠是真的跑)。
+
+## 兩個根(#55)
+程式碼根是這支檔案所在的那棵樹(#55):`verify/` 的案例、被測檔、unittest 的 cwd、
+`--unit` 的 `unit_cmd`、快取雜湊裡的 HEAD sha,全部跟 `ROOT`(從 `__file__` 往上找
+`board/config.json`)。AC_ROOT 不再是程式碼根(#55):它只管票、事件與 `reports/`
+—— 快取檔住在 `event.repo_root()` 那棵樹。land.sh 在票 worktree 裡帶
+`AC_ROOT=<主 repo>` 跑閘門時,回歸層跑的是 worktree 那份案例,不是主 repo 那份。
 """
 import argparse, ast, hashlib, json, os, re, subprocess, sys
 
-ENV_ROOT = "AC_ROOT"
 CONFIG_REL = os.path.join("board", "config.json")
 
 
 def _find_root():
-    """repo 根,算法同 `scripts/event.py` 的 `repo_root()`(`AC_ROOT` 可覆蓋,否則
-    往上找 `board/config.json`)—— 不 import event.py,因為這支會被
+    """程式碼根:從這支檔案往上找 `board/config.json`。**不認 `AC_ROOT`**(#55)——
+    那是票根;認了它,worktree 裡的閘門跑的就是主 repo 的 `verify/`。
+    不 import event.py,因為這支會被
     `scripts/sync-to-project.sh` 單獨同步到 `<專案>/scripts/control/`,那裡不保證
     有 event.py 陪著。寫死 `dirname(dirname(__file__))` 在那個位置算出的是
     `<專案>/scripts`,不是專案根,`verify/` 找不到、`registered_tags()` 回空集合。
     """
-    override = os.environ.get(ENV_ROOT)
-    if override:
-        return os.path.abspath(os.path.expanduser(override))
     here = os.path.dirname(os.path.abspath(__file__))
     walk = here
     for _ in range(5):
