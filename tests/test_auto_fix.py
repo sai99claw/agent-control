@@ -759,6 +759,25 @@ class TheDispatchPacket(AutoFixBase):
             packet = handle.read()
         self.assertIn("規則包", packet)
 
+    def test_the_second_round_copy_comes_from_the_ticket_branch(self):
+        """#53 D3(D-018):分支名**只有一個來源 —— 票的 `branch` 欄**。票面 branch=t1-gaps
+        (下游專案的形狀),第 2 輪副本的 base 要取自那一條,不是退回 base_sha。夾具在
+        t1-gaps 放一個 t1 / main 都沒有的檔。
+
+        **變異 M5**:auto-fix.sh 的 `SRC` 改回 `${AC_FIX_SOURCE:-t$ID}` → 這一條紅。
+        """
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready(branch="t1-gaps")
+        wt = os.path.join(self.home, "wt", "t1-gaps")
+        self.git("worktree", "add", "-q", "-b", "t1-gaps", wt, "main")
+        self.commit_in(wt, "src/only-on-gaps.txt", "只在 t1-gaps 上")
+        self.status(1, RED_LOG)
+        done = self.auto_fix("--dry-run")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        base = os.path.join(self.home, "repo-wt", "fix-t1", "round2", "base")
+        self.assertTrue(os.path.isfile(os.path.join(base, "src", "only-on-gaps.txt")),
+                        done.stdout)
+
 
 class TheFirstRoundPacket(AutoFixBase):
     """#29 A3 / G3:第 1 輪的派工文**也由工具產**。

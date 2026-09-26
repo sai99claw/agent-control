@@ -692,6 +692,69 @@ class VerifierCasesAtTheGate(Sandbox):
         self.assertIn("needs_verifier=false —— 這一層不要求案例", done.stdout)
         self.assertNotIn("這張票沒有驗證者案例", done.stdout)
 
+    def worktree_with_an_old_ticket(self, old, new):
+        """#53 D1 的形狀(同上一條):worktree 那一份票是 `old`、主 repo 那一份是 `new`,
+        分支改了 tests/test_land.py;回傳 worktree 路徑。兩份票的欄位都由這裡寫。"""
+        self.make_ticket(7, **old)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "開票 #7(舊版)")
+        wt = self.worktree("t7")
+        self.make_ticket(7, **new)
+        self.write(os.path.join("tests", "test_land.py"),
+                   PASSING % "test_land" + "\n# 這條分支的改動\n", where=wt)
+        return wt
+
+    def gate_in(self, wt, env):
+        return self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
+                           "--branch", "--ticket", "7", "--no-auto-fix", cwd=wt, env=env)
+
+    def test_preflight_in_the_ticket_worktree_reads_the_main_repo_allowed_paths(self):
+        """#53 D1(a):主 repo 那一份票的 `allowed_write_paths` 含 tests/*,worktree 那份只有
+        src/*。閘門只帶 `AC_ROOT`,preflight 要讀主 repo 那一份。
+
+        **變異 M1**:preflight 改回 `event.tickets_dir(root)` 拼路徑 → 紅(rc 4)。
+        """
+        wt = self.worktree_with_an_old_ticket({"allowed_write_paths": ["src/*"]},
+                                              {"allowed_write_paths": ["src/*", "tests/*"]})
+        env = self.env(AC_ROOT=self.repo)
+        self.assertNotIn("AC_TICKETS_DIR", env)
+        done = self.gate_in(wt, env)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("在允許範圍外", done.stdout + done.stderr)
+
+    def test_ticket_tags_in_the_ticket_worktree_come_from_the_main_repo(self):
+        """#53 D1(b):主 repo 那一份 `verify.tags` 是 [],worktree 那份是未登記的 ["zzz"]。
+        preflight 不退 4,回歸層也不拿 zzz 去選案例。
+
+        **變異 M2**:ticket_tags 改回 `event.tickets_dir(root)` 拼路徑 → 紅(回歸層選 zzz)。
+        """
+        fields = {"allowed_write_paths": ["tests/*"], "needs_verifier": False}
+        wt = self.worktree_with_an_old_ticket(
+            dict(fields, verify={"files": [], "tags": ["zzz"], "run": "", "notes": ""}),
+            dict(fields, verify={"files": [], "tags": [], "run": "", "notes": ""}))
+        done = self.gate_in(wt, self.env(AC_ROOT=self.repo))
+        self.assertNotEqual(done.returncode, 4, done.stdout + done.stderr)
+        self.assertNotIn("zzz", done.stdout + done.stderr)
+        self.assertIn("沒有宣告 verify.tags", done.stdout)
+
+    def test_a_hand_run_in_the_ticket_worktree_writes_the_main_repo_ticket(self):
+        """#53 D2:手跑在 worktree、**沒帶** `AC_ROOT`。綠了轉 InReview 要寫主 repo 那一份,
+        worktree 那一份不動。
+
+        **變異 M3**:拿掉 gate.sh 那段 `export AC_ROOT=<main_root>` → 紅(worktree 那份
+        被寫成 InReview)。
+        """
+        fields = {"allowed_write_paths": ["tests/*"], "state": "Running"}
+        wt = self.worktree_with_an_old_ticket(fields, fields)
+        env = self.env()
+        self.assertNotIn("AC_ROOT", env)
+        done = self.gate_in(wt, env)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("票改讀主 repo", done.stdout)
+        self.assertEqual(self.load_ticket("7")["state"], "InReview")
+        with open(os.path.join(wt, "tickets", "7.json"), encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["state"], "Running", "worktree 那一份被寫了")
+
     # ------------------------------------------------- lint 紅了就停在這裡
 
     def test_a_case_that_fails_lint_stops_the_gate_and_names_the_line(self):

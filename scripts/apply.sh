@@ -419,7 +419,46 @@ if [ -z "$BASE" ]; then
     exit 2
 fi
 
-BR=${AC_BRANCH:-t$ID}
+# 分支名**只有一個來源:票的 `branch` 欄**(#53,D-018)。`AC_BRANCH` > 票的 `branch` >
+# `t<n>`;用到的名字在鎖裡寫回票(已有且相同不動)。`AC_BRANCH` 與票上已有的不同 →
+# rc=2 印兩個名字 —— 靜悄悄換掉,auto-fix / review 讀票就找不到這條分支。
+# `branch` 是工具填的欄位(SCHEMA:「派工時由工具填」),同 `ticket.py cost` 不動
+# `state_version`;寫不回去只警告、不擋 apply。
+BR=$(python3 - "$AC" "$TDIR" "$ID" "${AC_BRANCH:-}" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import event
+import ticket
+where, ident, wanted = sys.argv[2:5]
+
+
+def refuse(have):
+    print("apply: 票 #%s 的 branch 是 %s,AC_BRANCH 卻是 %s —— 不換;要換先改票"
+          % (ident, have, wanted), file=sys.stderr)
+    raise SystemExit(2)
+
+
+have = ticket.load(ident, where).get("branch") or ""
+if wanted and have and wanted != have:
+    refuse(have)
+name = wanted or have or "t%s" % ident
+if name != have:
+    try:
+        with ticket.Lock(where):
+            fresh = ticket.load(ident, where)
+            have = fresh.get("branch") or ""
+            if have and have != name:
+                refuse(have)
+            fresh["branch"] = name
+            ticket.save(fresh, where)
+    except (OSError, ValueError, RuntimeError) as exc:
+        print("apply: 票 #%s 的 branch 寫不回去 —— %s(不擋 apply)" % (ident, exc),
+              file=sys.stderr)
+    else:
+        event.emit("ticket.state", ticket=str(ident), field="branch", to=name)
+print(name)
+PY
+) || exit 2
 WT=$WTBASE/$BR
 RUN_ID=${AC_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}
 PATCH_SHA=$(sha256_of "$PATCH")

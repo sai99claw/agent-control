@@ -319,6 +319,19 @@ class ItOnlyReviewsWhatIsReadyForIt(ReviewBase):
         self.assertEqual(self.inbox_rows(), [])
         self.assertIn("分支 t2 不存在", self.last_event("review.refused").get("note") or "")
 
+    def test_the_branch_named_on_the_ticket_is_the_one_reviewed(self):
+        """#53 D3(D-018):分支名**只有一個來源 —— 票的 `branch` 欄**。票面 branch=t2-gaps
+        而且只有這一條(沒有 t2):不說分支不存在,review 綁的是 t2-gaps 的頭。"""
+        self.set_reviewer(REVIEWER_PASS)
+        self.make_ticket("2", state="InReview", branch="t2-gaps")
+        wt = self.worktree("t2-gaps")
+        self.commit_in(wt, "gaps.txt", "#2 的實作")
+        done = self.review(ident="2")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("不存在", done.stderr)
+        self.assertEqual((self.load_ticket("2").get("review") or {}).get("sha"),
+                         self.git("rev-parse", "t2-gaps").strip())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -507,6 +507,40 @@ class TheCopyRootComesFromTheMainRepo(ApplyBase):
         self.assertFalse(os.path.exists(os.path.join(self.home, "repo-wt", "t1-wt")), "副本巢狀了")
 
 
+class TheBranchNameComesFromTheTicket(ApplyBase):
+    """#53 D3(D-018):分支名**只有一個來源 —— 票的 `branch` 欄**。`AC_BRANCH` > 票的
+    `branch` > `t<n>`;用到的名字寫回票。下游專案的票用 `t<n>-<slug>`,apply 寫死 `t<n>`
+    時 auto-fix / review 讀票就找不到這條分支。分支名由夾具寫進票,不問被測腳本。
+    """
+
+    def test_a_ticket_branch_is_the_branch_and_the_worktree(self):
+        """**變異 M4**:apply.sh 改回 `BR=${AC_BRANCH:-t$ID}` → 這一條紅。"""
+        self.make("7", branch="t7-gaps")
+        done = self.apply("7", self.patch_file("p.diff", CHANGE))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue(self.branch_exists("t7-gaps"), done.stdout)
+        self.assertFalse(self.branch_exists("t7"), "另開了一條 t7")
+        self.assertTrue(os.path.isdir(self.wt("t7-gaps")), done.stdout)
+        self.assertEqual(self.load_ticket("7").get("branch"), "t7-gaps")
+
+    def test_an_empty_ticket_branch_opens_t_n_and_writes_it_back(self):
+        self.make("7")
+        done = self.apply("7", self.patch_file("p.diff", CHANGE))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue(self.branch_exists("t7"), done.stdout)
+        self.assertEqual(self.load_ticket("7").get("branch"), "t7")
+
+    def test_ac_branch_that_disagrees_with_the_ticket_is_refused(self):
+        self.make("7", branch="t7-a")
+        done = self.run_sh("scripts/apply.sh", "7", self.patch_file("p.diff", CHANGE),
+                           env=self.env(AC_BRANCH="t7-b"))
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("t7-a", done.stderr)
+        self.assertIn("t7-b", done.stderr)
+        self.assertFalse(self.branch_exists("t7-b"), done.stdout)
+        self.assertEqual(self.load_ticket("7").get("branch"), "t7-a")
+
+
 class ThingsItRefuses(ApplyBase):
 
     def test_an_absolute_header_is_refused_before_anything_is_touched(self):
