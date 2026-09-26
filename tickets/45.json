@@ -58,7 +58,7 @@
   "attempt": 0,
   "base_sha": "171bfac",
   "state": "Draft",
-  "state_version": 5,
+  "state_version": 6,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -96,5 +96,9 @@
   ],
   "test_plan": "全部單元層、mktemp 沙盒(tests/control_harness.py 的 Sandbox),埠一律 0、不碰真 repo。B1:既有 FORK 夾具,可觀察 = stdout 三行,期望字串寫死在案例。B2:tests/test_gate.py 既有 GateSh 沙盒:分支 diff 放一個對照表沒列的檔(如 scripts/zzz.sh)+ 一個夾具自己寫的 tests/test_zzz.py(綠 / 紅兩版),可觀察 = rc、stdout、狀態檔 NOTE;期望 rc 由夾具自己那個 test 決定,不從 gate.sh 算。B3:tests/test_heartbeat.py 既有 events_file 夾具,列裡直接寫 session 欄;tests/test_event.py 真跑 event.py emit 讀 jsonl;tests/test_new_session.py 真跑 new-session.sh 讀 stdout。B4:跑既有模組。變異 M1–M4 各紅一次,EVIDENCE 貼紅的第一行。標籤留空(案例住 tests/)。",
   "outline": "三個守衛的下一步或判定是錯的。B1 sync 比對 A 來源與專案 scripts/<名>,刪 control 那份下次照喊,且 verify-case.py:81 import 同目錄 verify。B2 #39 兩個新檔不在表就整票退 3;裁示「從票推」:同票 diff 的 tests/ 當守衛、出聲記 NOTE,推不到才 3;tabby #511 同題。B3 pid 是 emit 行程的,start/end 永遠不同;夾具同 pid 所以綠(§5.5)。B4 檔頭與事實不符。順序:等 #39/#40/#42(同檔)。needs_verifier=false:訊息、推導、配對鍵、docstring,沙盒機械斷言;M1–M4 實作者證紅。",
-  "needs_verifier": false
+  "needs_verifier": false,
+  "frozen": {
+    "reason": "D-030 尾巴凍結:訊息措辭 / 對照表推導 / heartbeat 配對,不影響主線接觸點",
+    "criterion": "sync 分岔訊息害人刪錯檔、或閘門因對照表對不到再退 3 一次、或 heartbeat 誤報一次時解凍"
+  }
 }

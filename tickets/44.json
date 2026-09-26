@@ -46,7 +46,7 @@
   "attempt": 0,
   "base_sha": "171bfac",
   "state": "Draft",
-  "state_version": 5,
+  "state_version": 6,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -85,5 +85,9 @@
   ],
   "test_plan": "全部 grep 層 / 單元層,不起服務、不碰埠。A1、A3:grep 計數,期望值是票面寫的字串與數字,不從被測文件算。A2:tests/test_dispatch_template.py 讀 SCHEMA 與 §8.5 兩份 markdown 表的第一欄(反引號內的鍵)做集合比對,期望集合寫死在案例裡(含 baseline)。A4:tests/test_ticket.py:215 既有量法(只量 --verify-string 那一行)加一句 assertIn。變異 M1、M2 各紅一次,EVIDENCE 貼紅的第一行。標籤留空(案例住 tests/,A 端沒有 verify/ 標籤)。",
   "outline": "#36 後 red 只印證據檔不寫票(verify-case.py:438),SCHEMA:84、FLOW 的 V 邊/R0、WORKFLOW:167 仍寫 red 寫票;DISPATCH 與 SCHEMA 的 result 表都沒 baseline 列,範本已要求它;SCHEMA 沒 needs_verifier 格(D-028);README:x 不切,--help 沒說。全是文字。順序:等 #42(FLOW/WORKFLOW 同檔)。needs_verifier=false:純文件,驗收是 grep 計數;M1/M2 實作者證紅。opus;sonnet 可選。",
-  "needs_verifier": false
+  "needs_verifier": false,
+  "frozen": {
+    "reason": "D-030 尾巴凍結:純文件對齊,不影響主線接觸點",
+    "criterion": "SCHEMA/FLOW 過時句子誤導了某一次派工或覆核(有票號可指)時解凍"
+  }
 }

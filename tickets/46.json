@@ -59,7 +59,7 @@
   "attempt": 0,
   "base_sha": "171bfac",
   "state": "Draft",
-  "state_version": 5,
+  "state_version": 6,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -94,5 +94,9 @@
   ],
   "test_plan": "全部單元層、mktemp 沙盒真 git repo(tests/test_auto_fix.py AutoFixBase、tests/test_apply.py 既有夾具),不碰真 repo 的 worktree、埠一律 0。C1:可觀察 = wtbase 印出的路徑;期望由夾具用主 repo 路徑字串拼。C2:可觀察 = 副本目錄存在與否(os.path.isdir);TheWholeLoop 既有綠路夾具。C3:可觀察 = 目錄存在與否 + stdout;活著的 pid 用案例自己的 os.getpid(),死的 pid 用 subprocess 起一個 true 等它結束後取 pid。C4:可觀察 = 票檔 verify.baseline.stage 與 state_version;期望 stage=red 是夾具放進 JSON 的值。變異 M1–M4 各紅一次,EVIDENCE 貼紅的第一行。標籤留空(案例住 tests/)。needs_verifier=true:驗證者只寫 tests/test_ticket_<本票>.py 的紅案例(C1、C2 兩條重現)跑 verify-case.py red,不做變異、不等 patch。",
   "outline": "#38 收了 auto-fix 的 main_root(),land.sh:535、apply.sh:81 仍各算各的(D-018 要一支);apply 在 worktree 錯層是讀 code 推的,C1 案例當證偽法。#38 A4 只在派下一輪前收前幾輪,第 1 輪綠停 InReview 沒人收;收前不查 worker 活著。#36:apply.sh 併 baseline 在 result 抽取的 else 裡,AC_RESULT_DONE=1 就跳過。順序:等 #39/#40/#42/#43 全落地再 rebase;最後一張。needs_verifier=true:假設未實測,驗證者先寫紅案例分開重現與修法;改的是 rm -rf 對象的路徑,自證綠與綠在錯處長得一樣。",
-  "needs_verifier": true
+  "needs_verifier": true,
+  "frozen": {
+    "reason": "D-030 尾巴凍結:副本根三份解析合一 / round1 綠不收 / worker 存活檢查,#38 已修主路徑",
+    "criterion": "副本又開錯位置、或磁碟因 round1 殘留低於門檻一次時解凍"
+  }
 }
