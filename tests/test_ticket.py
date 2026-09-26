@@ -9,7 +9,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import SCRIPTS, TIMEOUT, Sandbox  # noqa: E402
+from control_harness import SCRIPTS, TIMEOUT, Sandbox, envelope  # noqa: E402
 
 sys.path.insert(0, SCRIPTS)
 from ticket import normalise_verify  # noqa: E402
@@ -956,6 +956,96 @@ class ObjectionSaysWhetherItWasDisposed(Sandbox):
         self.assertEqual(third.returncode, 4, third.stdout + third.stderr)
         self.assertIn("已處置", third.stdout)
         self.assertEqual(len(self.load_ticket("1")["objections"]), 1)
+
+
+class Cost(Sandbox):
+    """#49 A1–A3:`ticket.py cost` 把一次 headless 派工的 token 與時鐘 append 進 `cost[]`。
+    期望值是夾具信封裡寫死的數字(形狀照 reports/t48 那份真的 reviewer.json),
+    不從 ticket.py 算回去。"""
+
+    def setUp(self):
+        super().setUp()
+        self.make_ticket(1, state="InReview", state_version=4,
+                         review={"verdict": "pass", "by": "reviewer@opus",
+                                 "sha": "abc1234", "state_version": 4})
+
+    def envelope_file(self, text):
+        return self.write("envelope.json", text, where=self.home)
+
+    def cost(self, *args):
+        return self.ticket("cost", "1", "--role", "worker", "--round", "1",
+                           "--model", "opus", "--by", "auto-fix.sh", *args)
+
+    def test_the_four_token_fields_and_the_clock_come_from_the_envelope(self):
+        """A1。**變異**:把 cache_write 讀成 `cache_read_input_tokens` → 這一條紅。"""
+        path = self.envelope_file(envelope("x", input_tokens=12, output_tokens=3601,
+                                           cache_write=34386, cache_read=218504,
+                                           duration_ms=35590))
+        done = self.cost("--from-envelope", path)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        rows = self.load_ticket("1")["cost"]
+        self.assertEqual(len(rows), 1, rows)
+        row = rows[0]
+        self.assertEqual(row["tokens_in"], 12)
+        self.assertEqual(row["tokens_out"], 3601)
+        self.assertEqual(row["cache_write"], 34386)
+        self.assertEqual(row["cache_read"], 218504)
+        self.assertEqual(row["wall_seconds"], 36, "duration_ms 35590 → 36 秒(四捨五入)")
+        self.assertEqual((row["role"], row["round"], row["model"], row["by"]),
+                         ("worker", 1, "opus", "auto-fix.sh"))
+        self.assertTrue(row["at"])
+
+    def test_wall_seconds_given_wins_over_the_envelope(self):
+        path = self.envelope_file(envelope("x", 1, 2, 3, 4, duration_ms=35590))
+        self.cost("--from-envelope", path, "--wall-seconds", "412")
+        self.assertEqual(self.load_ticket("1")["cost"][0]["wall_seconds"], 412)
+
+    def test_the_envelope_is_the_last_result_line_of_a_mixed_log(self):
+        """worker 的 log 是 stdout 與 stderr 混寫:信封之後還可能有 stderr 行。"""
+        log = "\n".join(["worker stdout", '{"type": "system"}',
+                         envelope("x", 5, 77, 0, 9, duration_ms=1000),
+                         "some stderr after the envelope", ""])
+        done = self.cost("--from-envelope", self.envelope_file(log))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("1")["cost"][0]
+        self.assertEqual((row["tokens_in"], row["tokens_out"], row["cache_read"]), (5, 77, 9))
+
+    def test_an_unreadable_envelope_is_null_not_zero(self):
+        """A2(§5.5)。**變異**:解析失敗時預設 0 → 這一條紅。"""
+        cases = (("不存在", ["--from-envelope", os.path.join(self.home, "nope.json")]),
+                 ("不是 JSON", ["--from-envelope", self.envelope_file("not json\n")]),
+                 ("沒有 usage", ["--from-envelope",
+                                 self.envelope_file('{"type": "result", "result": "x"}')]),
+                 ("沒帶", []))
+        for index, (name, extra) in enumerate(cases):
+            with self.subTest(name):
+                done = self.cost("--wall-seconds", "7", *extra)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertIn("信封讀不到", done.stderr)
+                row = self.load_ticket("1")["cost"][index]
+                for field in ("tokens_in", "tokens_out", "cache_write", "cache_read"):
+                    self.assertIsNone(row[field], field)
+                    self.assertNotEqual(row[field], 0, field)
+                self.assertEqual(row["wall_seconds"], 7)
+        done = self.cost()
+        self.assertIsNone(self.load_ticket("1")["cost"][-1]["wall_seconds"])
+
+    def test_cost_does_not_touch_state_version_or_review(self):
+        """A3:review 綁 state_version;寫成本若讓覆核過期,land 就會拒。
+
+        **變異**:cost 走 `cmd_set` 的 +1 路 → 這一條紅。
+        """
+        before = self.load_ticket("1")
+        done = self.ticket("cost", "1", "--role", "land", "--round", "1",
+                           "--by", "land.sh", "--wall-seconds", "3")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        after = self.load_ticket("1")
+        self.assertEqual(after["state_version"], before["state_version"])
+        self.assertEqual(after["review"], before["review"])
+        self.assertIsNone(after["cost"][0]["model"])
+        kinds = self.kinds()
+        self.assertIn("ticket.cost", kinds)
+        self.assertNotIn("ticket.state", kinds)
 
 
 if __name__ == "__main__":

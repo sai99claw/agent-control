@@ -194,6 +194,7 @@ take_lock "$*"
 STAMP=$(date +%Y%m%d-%H%M%S)
 IDS=""
 ALL_BRANCHES="$*"
+LAND_T0=$(date +%s)
 ev land.start --note "$*" --kv "stamp=$STAMP"
 
 # 狀態檔:這一批每一張票各一份 `reports/t<票號>-status.json`(D-010,格式見
@@ -644,6 +645,16 @@ ev land.pass --note "$*" --kv "stamp=$STAMP" \
 # 與 Done 的四條件(done_blockers),這裡只是換成 land 來打(#43,見檔頭)。
 LANDED=$(git -C "$ROOT" rev-parse "$MAIN")
 status_done_all 0 "已合併、已推上;關票由 ticket.py close --landed 判(結果看 stdout 與收件匣)"
+# 每張票一筆 role=land 的成本(D-032):land 沒有 LLM,model 與 token 欄是 null,只有
+# land.start 到 push 的秒數。寫在 close 之前;cost 不看 state、不動 state_version。
+LAND_SECS=$(( $(date +%s) - LAND_T0 ))
+for i in $IDS; do
+    _attempt=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("attempt") or 0)' \
+        "$ROOT/$TICKETS/$i.json" 2>/dev/null || echo 0)
+    python3 "$ROOT/scripts/ticket.py" cost "$i" --role land --round "$_attempt" --by land.sh \
+        --wall-seconds "$LAND_SECS" >/dev/null 2>&1 \
+        || echo "land: #$i 的 cost 寫不進票(不擋落地)" >&2
+done
 for i in $IDS; do
     CLOSE_OUT=$(python3 "$ROOT/scripts/ticket.py" close "$i" --landed "$LANDED" 2>&1)
     CLOSE_RC=$?

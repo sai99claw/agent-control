@@ -162,21 +162,97 @@ class DidTheProjectActuallyWireItUp(unittest.TestCase):
         """`docs/roles/` 裡不在 manifest 上的檔是專案自己放的:同步不會蓋它、也不會
         退場它,而它讀起來與角色卡一模一樣(實測:某個下游專案的 `dispatcher.md`)。
 
+        #49 起 `dispatcher.md` 在 `RETIRED_ROLES` 明名單上(D-010 調度員退場),所以這裡
+        換一個不在任何名單上的檔名 —— 要釘的仍是「名單以外的檔只唸不刪」。
+
         **變異**:把結尾那一段「非產出物」拿掉 → 這一條紅。
         """
         with tempfile.TemporaryDirectory() as d:
             self.project(d)
             os.makedirs(os.path.join(d, "docs", "roles"), exist_ok=True)
-            with open(os.path.join(d, "docs", "roles", "dispatcher.md"), "w") as handle:
+            with open(os.path.join(d, "docs", "roles", "notice.md"), "w") as handle:
                 handle.write("專案自建的告示\n")
             r = sync(d)
             self.assertEqual(r.returncode, 0, r.stderr)
             said = [x for x in r.stdout.splitlines() if "非產出物" in x]
             self.assertTrue(said, "混在產出物目錄裡的自建檔沒有被唸出來:" + r.stdout)
-            self.assertIn("dispatcher.md", said[0])
+            self.assertIn("notice.md", said[0])
             self.assertTrue(os.path.exists(os.path.join(d, "docs", "roles",
-                                                        "dispatcher.md")),
+                                                        "notice.md")),
                             "只唸出來,不刪 —— 那是專案的東西")
+
+
+class TheDispatchTemplatesAreSynced(unittest.TestCase):
+    """#49 A9:`review.sh` 逐字讀 `templates/dispatch-reviewer.md`,以前要專案自己複製。"""
+
+    def test_the_two_templates_land_with_a_provenance_header(self):
+        """**變異**:`TEMPLATE_LIST` 空 → 這一條紅。"""
+        with tempfile.TemporaryDirectory() as d:
+            r = sync(d)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            for name in ("dispatch-reviewer.md", "dispatch-verifier.md"):
+                path = os.path.join(d, "templates", name)
+                self.assertTrue(os.path.exists(path), name)
+                with open(path, encoding="utf-8") as handle:
+                    self.assertIn("由 agent-control", handle.readline(), name)
+            with open(os.path.join(d, "templates", ".sync-manifest")) as handle:
+                self.assertEqual(handle.read().split(),
+                                 ["dispatch-reviewer.md", "dispatch-verifier.md"])
+
+    def test_a_template_that_left_the_list_is_retired_out_loud(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(sync(d).returncode, 0)
+            stale = os.path.join(d, "templates", "dispatch-old.md")
+            with open(stale, "w") as handle:
+                handle.write("上一次同步留下來的\n")
+            with open(os.path.join(d, "templates", ".sync-manifest"), "a") as handle:
+                handle.write("dispatch-old.md\n")
+            r = sync(d)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("退場", r.stdout)
+            self.assertFalse(os.path.exists(stale))
+
+    def test_dry_run_writes_no_template(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_config(d)
+            r = sync(d, "--dry-run")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("(dry-run) %s" % os.path.join(d, "templates", "dispatch-reviewer.md"),
+                          r.stdout)
+            self.assertFalse(os.path.exists(os.path.join(d, "templates")))
+
+
+class TheDispatcherCardIsRetired(unittest.TestCase):
+    """#49 A10:`dispatcher.md` 從沒進過 manifest,manifest 那一段永遠退不了它;
+    `RETIRED_ROLES` 是明名單,名單以外、manifest 以外的檔一個都不碰。"""
+
+    def roles(self, dest):
+        where = os.path.join(dest, "docs", "roles")
+        os.makedirs(where, exist_ok=True)
+        for name in ("dispatcher.md", "mine.md"):
+            with open(os.path.join(where, name), "w") as handle:
+                handle.write("放在這裡的 %s\n" % name)
+        return where
+
+    def test_dispatcher_goes_and_the_projects_own_card_stays(self):
+        """**變異**:`RETIRED_ROLES` 空 → 這一條紅。"""
+        with tempfile.TemporaryDirectory() as d:
+            where = self.roles(d)
+            r = sync(d)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertFalse(os.path.exists(os.path.join(where, "dispatcher.md")))
+            self.assertTrue(os.path.exists(os.path.join(where, "mine.md")))
+            said = [x for x in r.stdout.splitlines() if "退場" in x and "dispatcher.md" in x]
+            self.assertTrue(said, r.stdout)
+
+    def test_dry_run_only_says_it(self):
+        with tempfile.TemporaryDirectory() as d:
+            write_config(d)
+            where = self.roles(d)
+            r = sync(d, "--dry-run")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("dispatcher.md", r.stdout)
+            self.assertTrue(os.path.exists(os.path.join(where, "dispatcher.md")))
 
 
 class TheSessionHookIsSynced(unittest.TestCase):

@@ -18,6 +18,7 @@
 | 反駁 | **`objections`** (list of {category, body, evidence, owner, disposition, blocking, follow_up}) | 有異議時 | 實作者說「票寫錯 / 這條驗收做不到 / 案例本身錯(`test_defect`)」的地方。`category` 是 `ticket-wrong` / `blocking`(或 `blocking: true`)= 阻擋項,`disposition` 空著 **land 與 close 都拒絕**。處置寫 `accepted` / `rejected` / `deferred` / `fixed` |
 | 修復迴圈 | `repair_round`, `owner` | 自動 | `ticket.py round <n> <r> --red` 記的;第 `retry_limit+1` 輪仍紅 → `state` 轉 Blocked、`owner` 設 main |
 | 凍結 | `frozen` ({reason, criterion}) | 選 | 例:「產出會不會因視覺方向改變而重做」 |
+| 成本 | `cost` (list of {role, round, model, tokens_in, tokens_out, cache_write, cache_read, wall_seconds, by, at}) | 自動 | 每次 headless 派工一筆,由 `auto-fix.sh`(worker / verifier)、`review.sh`(reviewer)、`land.sh`(land)經 `ticket.py cost` 寫(D-032)。token 四欄取信封 `usage` 的 `input_tokens` / `output_tokens` / `cache_creation_input_tokens` / `cache_read_input_tokens`;`wall_seconds` 是腳本量的秒數。**`null` 的意思是拿不到,不是 0**(land 沒有 LLM,model 與 token 欄都是 null)。**不動 `state_version`、不動 `review`** —— 落地前寫一筆成本不會讓覆核過期。不存費用:同一模型的單價會變 |
 
 ## 最小可開工範例
 ```json

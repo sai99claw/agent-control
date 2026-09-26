@@ -1,7 +1,7 @@
 #!/bin/sh
 # 覆核自動派 — `docs/DESIGN-MAIN-TOUCHPOINTS.md` C2(D-025 ②、D-022)。
 #
-#   sh scripts/review.sh <票號>                  # 票要是 InReview、分支 t<票號> 要在
+#   sh scripts/review.sh <票號>                  # 票要是 InReview / AwaitingReview、分支 t<票號> 要在
 #   sh scripts/review.sh <票號> --run-id <id>    # 派工文與 REVIEW.md 落在那一輪的目錄
 #
 # 閘門綠、票轉 `InReview` 之後由兩處叫這一支:`auto-fix.sh` 第 r 輪綠(`--no-review` 關)
@@ -17,6 +17,7 @@
 #   fail   → REVIEW.md 每一行 `OBJECTION:` 記成一筆 blocking 反駁(owner=reviewer@<模型>)、
 #            票轉 Blocked、inbox 一頁「覆核退回,裁示」;
 #   沒交件 → 不寫 review、票留 InReview、inbox 一頁「覆核沒交件」。
+# 三種都在收尾寫一筆 `ticket.py cost --role reviewer`(信封 reviewer.json;D-032)。
 #
 # ## 「沒交」與 pass 要分得開(`docs/DISPATCH-TEMPLATE.md` §5.5)
 # 沒有 `## result`、JSON 解不開、逾時、verdict 不是 pass|fail —— 四種都**不是 pass**。
@@ -143,11 +144,15 @@ refuse() {   # $1 = 為什麼沒派成  $2 = 下一步;一頁 inbox,rc=2
     exit 2
 }
 
-# 只在 InReview 派:Running 的票還在改、Blocked 的票在等裁示 —— 在哪一種上蓋一張 pass
-# 都是替一份還沒定案的東西作保。
+# 只在 InReview / AwaitingReview 派:Running 的票還在改、Blocked 的票在等裁示 —— 在哪一種
+# 上蓋一張 pass 都是替一份還沒定案的東西作保。AwaitingReview 是下游專案閘門綠寫的字面值
+# (D-032);這裡讀票 JSON 的字面值,ticket.py 的 STATES 不認它。
 STATE=$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1],encoding="utf-8")).get("state") or ""))' "$TF" 2>/dev/null || echo "")
-[ "$STATE" = "InReview" ] || refuse "票的 state=${STATE:-(空)},不是 InReview" \
-    "閘門綠之後票才轉 InReview;要覆核就先確認閘門綠:sh scripts/gate.sh --branch --ticket $ID"
+case "$STATE" in
+    InReview|AwaitingReview) ;;
+    *) refuse "票的 state=${STATE:-(空)},不是 InReview / AwaitingReview" \
+    "閘門綠之後票才轉 InReview;要覆核就先確認閘門綠:sh scripts/gate.sh --branch --ticket $ID" ;;
+esac
 
 # review 綁的就是**這一刻**的頭:派工文寫它、pass 寫它。reviewer 讀的時候分支又動了,
 # land 比對得出這張章過期 —— 比事後再 rev-parse 一次、蓋上一個沒人讀過的 sha 誠實。
@@ -247,6 +252,9 @@ ev agent.start --ticket "$ID" --role reviewer --model "$MODEL" \
     --kv run_id="$RUN_ID" --kv round="$ROUND" --kv agent=review
 # stdin / timeout / rc 與 `auto-fix.sh` 起 headless worker 那一段同形:派工文從 stdin 餵、
 # 逾時 124、起不來 127。stdout 是交付物(REVIEW.md),stderr 另存 reviewer.log。
+# 上一次派(同一個 run_id 重派)留下的信封不准被這一次的成本讀到。
+rm -f "$RUNDIR/reviewer.json"
+RSTART=$(date +%s)
 RRC=$(python3 - "$REVIEWER_CMD" "$DISPATCH" "$CWD" "$REVIEWER_TIMEOUT" "$ID" "$ROUND" \
         "$REVIEW" "$RLOG" <<'PY'
 import os, subprocess, sys
@@ -270,6 +278,7 @@ except OSError as exc:
 print(rc)
 PY
 )
+RSECS=$(( $(date +%s) - RSTART ))
 if [ "$RRC" -eq 0 ]; then
     ev agent.done --ticket "$ID" --role reviewer --model "$MODEL" \
         --kv run_id="$RUN_ID" --kv round="$ROUND" --kv rc="$RRC" --kv agent=review
@@ -333,11 +342,21 @@ PY
 )"
 REL_REVIEW=$(rel "$REVIEW")
 
+write_cost() {   # 覆核者的 token 與時鐘進票的 `cost[]`(D-032)。pass / fail / 沒交件都寫;
+    # pass 那條路要寫在 `set review` **之後** —— cost 不動 state_version,先寫後寫都不會讓
+    # review 過期,但順序照事實:覆核先落,成本後記。
+    _attempt=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("attempt") or 0)' "$TF" 2>/dev/null || echo 0)
+    python3 "$AC/ticket.py" cost "$ID" --role reviewer --round "$_attempt" --model "$MODEL" \
+        --by review.sh --from-envelope "$RUNDIR/reviewer.json" --wall-seconds "$RSECS" \
+        >/dev/null 2>&1 || echo "review: #$ID 的 cost 寫不進票 —— 不擋覆核" >&2
+}
+
 if [ -z "$VERDICT" ]; then
     echo "review: #$ID 覆核沒交件 —— $WHY;不寫 review,票留 InReview" >&2
     post "覆核沒交件($WHY)" \
          "沒交不是 pass:看 $(rel "$RLOG") 與 $REL_REVIEW,再重派 sh scripts/review.sh $ID" \
          "$(rel "$RUNDIR")"
+    write_cost
     exit 3
 fi
 
@@ -348,6 +367,7 @@ if [ "$VERDICT" = "pass" ]; then
         echo "review: #$ID 的 review 寫不進票" >&2
         exit 4
     }
+    write_cost
     echo "review: #$ID 覆核通過($BY,sha $(echo "$SHA" | cut -c1-12))—— review 已寫進票"
     post "覆核通過($BY)" \
          "sh scripts/land.sh t$ID(review 綁分支頭 $(echo "$SHA" | cut -c1-12) 與票現在的版本)" \
@@ -392,6 +412,7 @@ print(len(bodies) if done.returncode == 0 else -1)
 PY
 )
 [ "${COUNT:--1}" -ge 0 ] || { echo "review: #$ID 的反駁寫不進票" >&2; exit 4; }
+write_cost
 python3 "$AC/ticket.py" set "$ID" state Blocked >/dev/null 2>&1 \
     || echo "review: 票狀態改不動(Blocked)" >&2
 python3 "$AC/ticket.py" set "$ID" owner main >/dev/null 2>&1 || true

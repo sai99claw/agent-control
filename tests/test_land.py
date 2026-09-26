@@ -605,6 +605,15 @@ class HappyPath(LandBase):
         self.assertIn("land: main -> ", done.stdout)
         self.assertEqual(self.git("rev-parse", "main", cwd=self.origin).strip(), after,
                          "push 沒有跟上")
+        # #49 A6:push 之後每張票一筆 role=land 的成本;land 沒有 LLM,model 是 null。
+        # **變異**:land 不寫 cost → 這一段紅。
+        rows = self.load_ticket("1").get("cost") or []
+        self.assertTrue(rows, "land 沒有寫 cost")
+        self.assertEqual(rows[-1]["role"], "land")
+        self.assertEqual(rows[-1]["by"], "land.sh")
+        self.assertIsNone(rows[-1]["model"])
+        self.assertIsNone(rows[-1]["tokens_out"])
+        self.assertIsInstance(rows[-1]["wall_seconds"], int)
 
     def test_the_land_worktree_is_cleaned_up_after_a_green_landing(self):
         good = self.branch_for(1, "t1-good")

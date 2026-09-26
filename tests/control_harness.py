@@ -136,6 +136,50 @@ EOF
 """
 
 
+def envelope(result, input_tokens, output_tokens, cache_write, cache_read, duration_ms):
+    """`claude -p --output-format json` 的信封,**形狀照 reports/t48 那份真的 reviewer.json**
+    (usage 裡還有 iterations / cache_creation,頂層有 total_cost_usd / modelUsage)——
+    只讀四個 token 欄的程式,碰到真信封多出來的那幾格也不該讀歪。一行,不縮排。"""
+    return json.dumps({
+        "type": "result", "subtype": "success", "is_error": False,
+        "duration_ms": duration_ms, "duration_api_ms": duration_ms - 274,
+        "num_turns": 6, "result": result, "stop_reason": "end_turn",
+        "session_id": "00000000-0000-0000-0000-000000000000",
+        "total_cost_usd": 0.39085679999999995,
+        "usage": {"input_tokens": input_tokens,
+                  "cache_creation_input_tokens": cache_write,
+                  "cache_read_input_tokens": cache_read,
+                  "output_tokens": output_tokens,
+                  "output_tokens_details": {"thinking_tokens": 664},
+                  "service_tier": "standard",
+                  "cache_creation": {"ephemeral_1h_input_tokens": cache_write,
+                                     "ephemeral_5m_input_tokens": 0},
+                  "iterations": [{"input_tokens": 2, "output_tokens": 2394,
+                                  "cache_read_input_tokens": 46130,
+                                  "cache_creation_input_tokens": 1727,
+                                  "type": "message"}]},
+        "modelUsage": {"fixture-model": {"inputTokens": input_tokens,
+                                         "outputTokens": output_tokens,
+                                         "costUSD": 0.39085679999999995}},
+    }, ensure_ascii=False)
+
+
+# 假 reviewer(信封版):與 `REVIEWER_PASS` 同一份 pass,但照真的 `--output-format json`
+# 把全文包在信封裡印 —— `review.sh` 拆信封、把信封原樣留在 reviewer.json(token 在裡面)。
+REVIEWER_PASS_ENVELOPE = """#!/bin/sh
+echo "reviewer ran $AC_TICKET" >> "$AC_TEST_LOG"
+cat > /dev/null
+cat <<'EOF'
+%s
+EOF
+""" % envelope("# 覆核\n① verdict:pass\n\n## result\n\n```result\n"
+               '{"ticket": "1", "role": "reviewer", "round": 1, "verdict": "pass",'
+               ' "rc": null, "patch_sha256": null, "gate": null, "mutations": [],'
+               ' "objection": null, "excluded": [], "repro": null, "memory": []}\n```\n',
+               input_tokens=12, output_tokens=3601, cache_write=34386,
+               cache_read=218504, duration_ms=35590)
+
+
 def write_executable(path, body):
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(body)

@@ -23,7 +23,11 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import REVIEWER_PASS, Sandbox  # noqa: E402
+from control_harness import (REVIEWER_PASS, REVIEWER_PASS_ENVELOPE,  # noqa: E402
+                             SCRIPTS, Sandbox)
+
+sys.path.insert(0, SCRIPTS)
+from ticket import review_problems  # noqa: E402
 
 
 def reviewer_printing(text, then=""):
@@ -155,6 +159,51 @@ class ThePassPath(ReviewBase):
             self.assertEqual(json.load(handle)["usage"]["output_tokens"], 42)
 
 
+class TheReviewerCostGoesOnTheTicket(ReviewBase):
+    """#49 A5 / A3:覆核者回來之後 `ticket.py cost --role reviewer` 記一筆;期望的數字是
+    夾具信封裡寫死的那幾個(`REVIEWER_PASS_ENVELOPE`),不從 ticket.py 算回去。"""
+
+    def test_a_pass_records_one_reviewer_row_and_the_review_still_binds(self):
+        """**變異**:把 `write_cost` 搬到 `set review` 之前、且 cost 走 `state_version +1`
+        → review 綁的版本對不上票,`review_problems` 那一條紅。"""
+        model = self.set_reviewer(REVIEWER_PASS_ENVELOPE)
+        done = self.review()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        ticket = self.load_ticket("1")
+        rows = ticket.get("cost") or []
+        self.assertEqual(len(rows), 1, rows)
+        row = rows[0]
+        self.assertEqual(row["role"], "reviewer")
+        self.assertEqual(row["model"], model)
+        self.assertEqual(row["by"], "review.sh")
+        self.assertEqual(row["round"], 1, "round 是票的 attempt")
+        self.assertEqual(row["tokens_out"], 3601)
+        self.assertEqual(row["tokens_in"], 12)
+        self.assertEqual(row["cache_write"], 34386)
+        self.assertEqual(row["cache_read"], 218504)
+        self.assertIsInstance(row["wall_seconds"], int)
+        self.assertEqual(review_problems(ticket, self.sha), [],
+                         "寫了 cost 之後 land 對 review 的綁定檢查要照樣過")
+        self.assertIn("ticket.cost", self.kinds())
+
+    def test_a_reviewer_that_delivers_nothing_still_costs_a_row_of_nulls(self):
+        """沒交件也算派過一次:照樣一筆,token 欄是 null(拿不到,不是 0)。"""
+        self.set_reviewer(reviewer_printing("# 覆核\n(忘了檔尾那一塊)"))
+        done = self.review()
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        rows = self.load_ticket("1").get("cost") or []
+        self.assertEqual([row["role"] for row in rows], ["reviewer"])
+        self.assertIsNone(rows[0]["tokens_out"])
+        self.assertIsInstance(rows[0]["wall_seconds"], int)
+
+    def test_a_fail_records_one_reviewer_row(self):
+        self.set_reviewer(REVIEW_FAIL)
+        done = self.review()
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        rows = self.load_ticket("1").get("cost") or []
+        self.assertEqual([row["role"] for row in rows], ["reviewer"])
+
+
 class ItAcksTheWaitingForReviewPage(ReviewBase):
     """#43 A4:「等覆核」那頁的下一步就是這一支 —— 開跑時由它收(`--by review.sh`)。"""
 
@@ -247,7 +296,20 @@ class ItOnlyReviewsWhatIsReadyForIt(ReviewBase):
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertEqual(self.reviewer_calls(), [])
         self.assertIsNone(self.load_ticket("1").get("review"))
-        self.assertIn("不是 InReview", self.inbox_rows()[-1]["state"])
+        self.assertIn("不是 InReview / AwaitingReview", self.inbox_rows()[-1]["state"])
+        self.assertIn("不是 InReview / AwaitingReview", done.stderr)
+
+    def test_a_ticket_awaiting_review_is_reviewed_too(self):
+        """#49 A8:下游閘門綠寫的是 `AwaitingReview`(A 自己仍寫 InReview)—— 兩個都派。
+
+        **變異**:守衛只認 InReview → 這一條紅(rc=2、reviewer 沒被叫)。
+        """
+        self.set_reviewer(REVIEWER_PASS)
+        self.make_ticket("1", state="AwaitingReview")
+        done = self.review()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.reviewer_calls(), ["reviewer ran 1"])
+        self.assertEqual((self.load_ticket("1").get("review") or {}).get("verdict"), "pass")
 
     def test_a_ticket_without_its_branch_is_refused_by_name(self):
         self.set_reviewer(REVIEWER_PASS)

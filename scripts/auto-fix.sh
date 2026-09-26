@@ -183,6 +183,20 @@ harvest_result() {   # $1 = EVIDENCE(可以不存在) $2 = 輸出 json $3 = 角�
         || echo "auto-fix: result 抽不出來($1)—— 不擋流程" >&2
 }
 
+write_cost() {   # $1 = 角色  $2 = 第幾輪  $3 = 模型  $4 = 信封(log)  $5 = 量到的秒數
+    # 一次 headless 派工的 token 與時鐘進票的 `cost[]`(D-032)。信封在 log 裡:stdout 與
+    # stderr 混寫,`ticket.py cost` 取最後一行 `type=result` 的那一行;讀不到就記 null。
+    python3 "$AC/ticket.py" cost "$ID" --role "$1" --round "$2" --model "$3" \
+        --by auto-fix.sh --from-envelope "$4" --wall-seconds "$5" >/dev/null \
+        || echo "auto-fix: #$ID 的 cost 寫不進票($1 第 $2 輪)—— 不擋流程" >&2
+}
+
+attempt_failed() {   # $1 = no-patch | apply-failed | timeout | objection
+    # 每一個 `ticket.attempt.start` 都要有配對的 done / failed:heartbeat.sh 按 attempt 配對,
+    # 沒配上的那一輪永遠算「還在跑」。
+    ev ticket.attempt.failed --ticket "$ID" --attempt "$r" --kv reason="$1"
+}
+
 shed_copies() {   # $1 = 副本根(fix-t<n>/round<r> 或 verify-t<n>/round<r>)
     # **副本自己收**(#29 A6,G6):`patch` / `EVIDENCE` / `dispatch` / `result` 留著,
     # `work/` 與 `base/` 刪掉。以前它們只在**下一輪開始**才 `rm -rf`,綠了停 InReview
@@ -534,6 +548,7 @@ PY
     VLOG=$(dirname "$DISPATCH")/verifier-round$r.log
     ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
         --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix-verifier
+    VSTART=$(date +%s)
     VWRC=$(python3 - "$VERIFIER_CMD" "$VDISPATCH" "$VFIX" "$WORKER_TIMEOUT" "$ID" "$r" "$VLOG" <<'PY'
 import os, subprocess, sys
 cmd, dispatch, cwd, timeout, ident, r, log_path = sys.argv[1:8]
@@ -559,6 +574,7 @@ PY
         ev agent.failed --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
             --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$VWRC" --kv agent=auto-fix-verifier
     fi
+    write_cost verifier "$r" "$VERIFIER_MODEL" "$VLOG" "$(( $(date +%s) - VSTART ))"
     collect_from_copy "$VFIX" patch-verify.diff EVIDENCE-verifier.md
     PATCH_OUT=$VFIX/patch-verify.diff
     EVIDENCE=$VFIX/EVIDENCE-verifier.md
@@ -701,6 +717,7 @@ PY
     WORKER_LOG=$(dirname "$DISPATCH")/worker-round$r.log
     ev agent.start --ticket "$ID" --model "$WORKER_MODEL" \
         --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix
+    WSTART=$(date +%s)
     WRC=$(python3 - "$WORKER_CMD" "$DISPATCH" "$FIX" "$WORKER_TIMEOUT" "$ID" "$r" "$WORKER_LOG" <<'PY'
 import subprocess, sys
 cmd, dispatch, cwd, timeout, ident, r, log_path = sys.argv[1:8]
@@ -730,6 +747,7 @@ PY
         ev agent.failed --ticket "$ID" --model "$WORKER_MODEL" \
             --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix
     fi
+    write_cost worker "$r" "$WORKER_MODEL" "$WORKER_LOG" "$(( $(date +%s) - WSTART ))"
     [ "$WRC" -eq 0 ] || echo "auto-fix: worker 自己回非零 —— 還是看它交了什麼,不看它說什麼"
 
     collect_from_copy "$FIX" "patch-round$r.diff" "EVIDENCE-round$r.md"
@@ -770,6 +788,7 @@ PY
 )
         if [ "$category" = "test_defect" ]; then
             if ! dispatch_verifier; then
+                attempt_failed no-patch
                 ROUND_RC=5
                 return 1
             fi
@@ -778,6 +797,7 @@ PY
             post "worker 提反駁(票寫錯 / 需裁示)" \
                  "讀 EVIDENCE 那一行反駁,處置它(accepted / rejected / deferred / fixed);沒處置的阻擋項 land 與 close 都會拒絕" \
                  "$EVIDENCE"
+            attempt_failed objection
             ROUND_RC=3
             return 1
         fi
@@ -787,6 +807,7 @@ PY
         echo "auto-fix: 第 $r 輪的 worker 沒有交出 patch-round$r.diff" >&2
         block "#$ID 第 $r 輪的 worker 沒交出 patch"
         post "worker 沒交出 patch" "自己看副本裡有什麼;要嘛重派,要嘛人下場" "$FIX"
+        if [ "$WRC" -eq 124 ]; then attempt_failed timeout; else attempt_failed no-patch; fi
         ROUND_RC=5
         return 1
     fi
@@ -799,6 +820,7 @@ PY
         post "第 $r 輪的 patch 套不上(apply rc=$arc)" \
              "看 apply 的輸出:檔頭不合格、主線走遠(走 apply.sh rebase),還是越界" \
              "$PATCH_OUT"
+        attempt_failed apply-failed
         ROUND_RC=5
         return 1
     fi
@@ -835,6 +857,8 @@ PY
         AC_PREV_EVIDENCE=$EVIDENCE AC_IN_AUTOFIX=1 \
         sh -c "$gate_cmd" )
     grc=$?
+    # 閘門跑過了 —— 綠或紅,這一次派工都算收工(紅的下一輪是另一個 attempt)。
+    ev ticket.attempt.done --ticket "$ID" --attempt "$r" --kv rc="$grc"
     if [ "$grc" -eq 0 ]; then
         python3 "$AC/ticket.py" round "$ID" "$r" --green || true
         python3 "$AC/ticket.py" set "$ID" state InReview >/dev/null 2>&1 || true
