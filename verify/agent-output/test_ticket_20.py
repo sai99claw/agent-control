@@ -17,8 +17,8 @@ EVIDENCE。這一組獨立問票面 `test_plan` 的九件事:
    夾具裡 —— **判準是鍵名(`patch_sha256` + `red_first_line`),不是那個 fenced
    標記本身**:`scripts/auto-fix.sh` 與 `scripts/rules.py` 合法地帶有 `result-round`
    / `no-block` / fenced 標記等詞,但不抄鍵名(2026-09-22 派工裁示);
-8. `memory/role/implementer.md`、`memory/role/verifier.md` 各多一句,但都不超過
-   `board/config.json` 的 `memory.cap_chars`,`memory.py check` 不因這兩張卡開票。
+8. `memory/role/implementer.md`、`memory/role/verifier.md` 各多一句,上限與量法由
+   `memory.py check` 判(front matter 不計、檔上 cap_chars 優先),`memory.py check` 不因這兩張卡開票。
 
 worker 用一支這個案例**自己的**假可執行檔(`board/config.json` 的
 `worker.command`)。沙盒借用 `tests/control_harness.Sandbox`(拋棄式真 git repo,
@@ -126,16 +126,12 @@ class SchemaKeysLiveInOnlyTwoDocs(unittest.TestCase):
 class RoleCardsCarryTheSentenceWithinCap(unittest.TestCase):
     """#20 驗收⑧(前半):兩張卡各多一句,但都不超過字元上限。"""
 
-    def test_implementer_and_verifier_cards_stay_under_cap(self):
-        cfg_path = os.path.join(ROOT, "board", "config.json")
-        with open(cfg_path, encoding="utf-8") as handle:
-            cap = int((json.load(handle).get("memory") or {}).get("cap_chars") or 2000)
+    def test_implementer_and_verifier_cards_carry_the_sentence(self):
+        # 上限與量法只問 memory.py check(#54):下面那個 Sandbox 案例拿同兩張卡跑它。
         for rel in ("memory/role/implementer.md", "memory/role/verifier.md"):
             with open(os.path.join(ROOT, rel), encoding="utf-8") as handle:
                 text = handle.read()
             self.assertIn("寫不出來的欄位照實留空,不要編", text, rel)
-            self.assertLessEqual(len(text), cap,
-                                 "%s %d 字元超過上限 %d" % (rel, len(text), cap))
 
 
 class MemoryCheckDoesNotOpenATicketForTheTouchedCards(Sandbox):
