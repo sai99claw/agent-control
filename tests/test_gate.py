@@ -11,7 +11,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import REVIEWER_PASS, Sandbox, write_executable  # noqa: E402
+from control_harness import REVIEWER_PASS, VERIFY_CASE, Sandbox, write_executable  # noqa: E402
 
 PASSING = """import os
 import unittest
@@ -754,6 +754,39 @@ class VerifierCasesAtTheGate(Sandbox):
         self.assertEqual(self.load_ticket("7")["state"], "InReview")
         with open(os.path.join(wt, "tickets", "7.json"), encoding="utf-8") as handle:
             self.assertEqual(json.load(handle)["state"], "Running", "worktree 那一份被寫了")
+
+    def test_the_regression_layer_in_the_ticket_worktree_runs_the_worktree_cases(self):
+        """#55 A3:閘門在 worktree 裡帶 `AC_ROOT=<主 repo>`(land.sh 的形狀),回歸層
+        看到的要是 **worktree** 那份 `verify/`。主 repo 的 example 案例是綠的,worktree
+        那份改成紅(字串由這裡寫)—— 紅只可能來自 worktree。
+
+        **變異 M1**:verify.py 的 `_find_root()` 放回 `AC_ROOT` override 分支 → 紅
+        (回歸層跑主 repo 那份綠案例,rc 0)。
+        """
+        self.make_ticket(7, allowed_write_paths=["verify/*", "tests/*"],
+                         needs_verifier=False,
+                         verify={"files": [], "tags": ["example"], "run": "", "notes": ""})
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "開票 #7(回歸層 example)")
+        wt = self.worktree("t7")
+        red = VERIFY_CASE.replace("self.assertTrue(True)", "self.fail('wt-only red')")
+        self.assertNotEqual(red, VERIFY_CASE, "前提:夾具真的把案例改成紅")
+        self.write(os.path.join("verify", "example", "test_example.py"), red, where=wt)
+        # 對照表把 verify/* 對到 test_verify_runner;沙盒沒有那支,給一份綠的替身,
+        # 讓這一條的紅只可能來自回歸層。
+        self.write(os.path.join("tests", "test_verify_runner.py"),
+                   PASSING % "test_verify_runner", where=wt)
+        log = os.path.join(self.home, "verify-t55.log")
+        env = self.env(AC_ROOT=self.repo, AC_VERIFY_LOG=log)
+        self.assertNotIn("AC_TICKETS_DIR", env)
+
+        done = self.gate_in(wt, env)
+
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        with open(log, encoding="utf-8") as handle:
+            self.assertIn("wt-only red", handle.read())
+        self.assertEqual(self.read(os.path.join("verify", "example", "test_example.py")),
+                         VERIFY_CASE, "主 repo 的 verify/example 被動了")
 
     # ------------------------------------------------- lint 紅了就停在這裡
 

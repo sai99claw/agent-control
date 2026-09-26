@@ -60,11 +60,8 @@ class RunScopedCache(unittest.TestCase):
     """
 
     def run_with(self, root, run_id, *extra):
-        # scripts/verify.py 的 ROOT 現在跟其他控制腳本一樣認 AC_ROOT(#32)—— `root`
-        # 不再只是快取檔要寫去哪裡,它同時也是案例檔要去哪裡找,所以這裡的假專案要有
-        # 自己的 verify/(帶 `example` 標籤那個案例),不能只是一個空 tempdir。
-        if not os.path.exists(os.path.join(root, "verify")):
-            shutil.copytree(os.path.join(HERE, "verify"), os.path.join(root, "verify"))
+        # `root` 只是票根(AC_ROOT):快取檔寫去它的 reports/。案例與被測檔來自
+        # scripts/verify.py 自己所在的那棵樹(HERE),所以假專案不需要自己的 verify/(#55)。
         env = dict(os.environ)
         env.update({"AC_TICKET": "77", "AC_RUN_ID": run_id, "AC_ROOT": root})
         return subprocess.run(RUN + ["--tag", "example", *extra],
@@ -121,6 +118,74 @@ class RunScopedCache(unittest.TestCase):
                 os.environ.pop("AC_ROOT", None)
             else:
                 os.environ["AC_ROOT"] = outer
+
+
+class CodeRootIsNotTheTicketRoot(unittest.TestCase):
+    """#55:land.sh 在票 worktree 裡帶 `AC_ROOT=<主 repo>` 跑閘門,verify.py 子行程繼承
+    它 —— 舊版的 `_find_root()` 先讀 `AC_ROOT`,於是 worktree 的閘門跑的是主 repo 的
+    `verify/`,worktree 裡的紅看不見。兩個根分開:程式碼根跟檔案走,`AC_ROOT` 只管
+    票、事件與 reports。"""
+
+    def test_ac_root_elsewhere_still_runs_the_cases_beside_this_file(self):
+        """程式碼根是這支檔案所在的那棵樹(#55)。
+
+        A1:把 HERE 的必要部分拷到 tmp,tmp 那份 example 案例改成紅(字串由這裡寫);
+        `AC_ROOT=HERE` 跑 tmp 的 verify.py —— 紅只可能來自 tmp。HERE 的 verify/ 不動。
+
+        **變異 M1**:`_find_root()` 放回 `AC_ROOT` override 分支 → 紅(跑到 HERE 那份綠
+        案例,rc 0)。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            for rel in ("scripts/verify.py", "scripts/status.py", "scripts/event.py",
+                        "board/config.json"):
+                os.makedirs(os.path.dirname(os.path.join(tmp, rel)), exist_ok=True)
+                shutil.copy(os.path.join(HERE, rel), os.path.join(tmp, rel))
+            shutil.copytree(os.path.join(HERE, "verify"), os.path.join(tmp, "verify"),
+                            ignore=shutil.ignore_patterns("__pycache__"))
+            with open(os.path.join(tmp, "verify", "example", "test_example.py"), "w",
+                      encoding="utf-8") as f:
+                f.write("import unittest\nTAGS = ['example']\n\n"
+                        "class T(unittest.TestCase):\n"
+                        "    def test_red(self):\n"
+                        "        self.fail('copy-only red')\n")
+            env = local_env()
+            env.pop("AC_TICKET", None)
+            env.pop("AC_RUN_ID", None)
+            done = subprocess.run(
+                [sys.executable, os.path.join(tmp, "scripts", "verify.py"),
+                 "--tag", "example", "--no-cache"],
+                capture_output=True, text=True, env=env, timeout=300)
+            self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertIn("copy-only red", done.stdout + done.stderr)
+
+    def test_ac_root_is_still_where_the_cache_lives(self):
+        """AC_ROOT 不再是程式碼根(#55),但仍是快取的根。
+
+        A2:`AC_ROOT` 指到一顆只有 board/config.json、沒有 verify/ 的 tmp2 —— 案例照樣
+        跑得到(來自 HERE),快取落在 `<tmp2>/reports/t77/<run_id>/`。
+
+        **變異 M2**:`cache_path()` 改成用 `ROOT` 拼 reports/ → 紅(log 落到 HERE)。
+        """
+        with tempfile.TemporaryDirectory() as tmp2:
+            os.makedirs(os.path.join(tmp2, "board"))
+            with open(os.path.join(tmp2, "board", "config.json"), "w", encoding="utf-8") as f:
+                f.write("{}")
+            run_id = "r-ticket-root-%d" % os.getpid()
+            env = dict(os.environ)
+            env.update({"AC_TICKET": "77", "AC_RUN_ID": run_id, "AC_ROOT": tmp2})
+            try:
+                done = subprocess.run(RUN + ["--tag", "example"], capture_output=True,
+                                      text=True, env=env, timeout=300)
+                self.assertFalse(os.path.exists(os.path.join(tmp2, "verify")))
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertRegex(done.stdout + done.stderr, r"Ran [1-9]")
+                where = os.path.join(tmp2, "reports", "t77", run_id)
+                logs = [n for n in (os.listdir(where) if os.path.isdir(where) else [])
+                        if n.startswith("verify-") and n.endswith(".log")]
+                self.assertTrue(logs, "快取該住在 AC_ROOT 那棵樹:%s" % where)
+            finally:
+                # 變異下 log 會落到 HERE/reports —— 不留垃圾在 HERE。
+                shutil.rmtree(os.path.join(HERE, "reports", "t77", run_id), True)
 
 
 class RootFindsProjectRootWhenSyncedToControl(unittest.TestCase):
