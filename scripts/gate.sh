@@ -708,7 +708,7 @@ verify_case() {
     fi
     echo "gate: 驗證者案例的格式 —— python3 scripts/verify-case.py lint$(echo " $files" | tr '\n' ' ' | sed 's/ *$//') --ticket $TICKET"
     # shellcheck disable=SC2086
-    ( cd "$ROOT" && python3 scripts/verify-case.py lint $files --ticket "$TICKET" ) \
+    ( cd "$ROOT" && python3 scripts/verify-case.py lint $(echo "$files" | sed "s|^|$ROOT/|") --ticket "$TICKET" ) \
         > "$LINT_LOG" 2>&1
     lrc=$?
     # lint 的產出就是**指名的那幾行**;把它吞進 log 裡等於把退件的理由藏起來。

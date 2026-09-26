@@ -192,7 +192,7 @@ write_cost() {   # $1 = 角色  $2 = 第幾輪  $3 = 模型  $4 = 信封(log)  $
         || echo "auto-fix: #$ID 的 cost 寫不進票($1 第 $2 輪)—— 不擋流程" >&2
 }
 
-attempt_failed() {   # $1 = no-patch | apply-failed | timeout | objection
+attempt_failed() {   # $1 = no-patch | apply-failed | timeout | objection | verifier-no-patch
     # 每一個 `ticket.attempt.start` 都要有配對的 done / failed:heartbeat.sh 按 attempt 配對,
     # 沒配上的那一輪永遠算「還在跑」。
     ev ticket.attempt.failed --ticket "$ID" --attempt "$r" --kv reason="$1"
@@ -384,6 +384,81 @@ PY
     } > "$1"
 }
 
+# 驗證者的派工文**只有一種組法**(#51,C3):`rules.py pack verifier` + `templates/dispatch-verifier.md`
+# 逐格填好。第 1 輪(needs_verifier)與 test_defect 那條路共用;後者只在尾巴多一段紅榜。
+# 以前 test_defect 那條路是一段內嵌文字 —— 人讀的範本與腳本餵的派工文是兩份,少了哪一格沒有人看得出來。
+verifier_packet() {   # $1 = 派工文寫到哪  $2 = 第幾輪  $3 = 驗證者副本根  $4 = base sha
+    vp_template=""
+    for candidate in "$ROOT/templates/dispatch-verifier.md" "$AC/../templates/dispatch-verifier.md"; do
+        [ -f "$candidate" ] && { vp_template=$candidate; break; }
+    done
+    mkdir -p "$(dirname "$1")"
+    {
+        python3 "$AC/rules.py" pack verifier --model "$VERIFIER_MODEL" 2>/dev/null \
+            || echo "(規則包產不出來 —— 自己讀 memory/role/verifier.md)"
+        if [ -z "$vp_template" ]; then
+            echo "auto-fix: 找不到 templates/dispatch-verifier.md —— 驗證者派工文少了範本那一段" >&2
+            echo "(範本 templates/dispatch-verifier.md 找不到 —— 自己讀 memory/role/verifier.md)"
+        else
+            python3 - "$vp_template" "$ID" "$TF" "$4" "$3" "$2" "$VERIFIER_MODEL" <<'PY'
+import sys
+template, ident, ticket_file, base, copy, rnd, model = sys.argv[1:8]
+with open(template, encoding="utf-8") as handle:
+    text = handle.read()
+fill = {
+    "@TICKET@": ident,
+    "@TICKET_FILE@": ticket_file,
+    "@BASE@": base or "(票面沒有 base_sha —— 先補上再派)",
+    "@COPY@": copy,
+    "@ROUND@": rnd,
+    "@MODEL@": model,
+    "@REPORT_TO@": "auto-fix.sh(交檔即回報:`%s/patch-verify.diff` 與 `%s/EVIDENCE-verifier.md`)"
+                   % (copy, copy),
+}
+for key, value in fill.items():
+    text = text.replace(key, value)
+sys.stdout.write("\n" + text)
+PY
+        fi
+    } > "$1"
+}
+
+# 第 1 輪要不要起驗證者(#51,D-032 ③):票 `needs_verifier` 是 JSON `true`、而且 `verify.baseline`
+# 還是空的。**缺這一格不擋**,只說一聲:開題端的自檢(D-031)已經擋,既有的票多半沒有這一格。
+# 設定 V_WANT(1 / 空)與 V_BASE(票的 base_sha,驗證者副本從它展開)。
+verifier_wanted() {
+    eval "$(python3 - "$TF" <<'PY'
+import json, shlex, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        ticket = json.load(handle)
+except (OSError, ValueError):
+    ticket = {}
+plan = ticket.get("verify") if isinstance(ticket.get("verify"), dict) else {}
+if "needs_verifier" not in ticket:
+    flag = "missing"
+elif ticket["needs_verifier"] is True:
+    flag = "true"
+else:
+    flag = "no"
+print("V_FLAG=%s" % flag)
+print("V_HAS_BASELINE=%s" % ("1" if plan.get("baseline") else ""))
+print("V_BASE=%s" % shlex.quote(str(ticket.get("base_sha") or "")))
+PY
+)"
+    V_WANT=""
+    case "$V_FLAG" in
+        true)
+            if [ -n "$V_HAS_BASELINE" ]; then
+                echo "auto-fix: #$ID needs_verifier=true,但 verify.baseline 已經有了 —— 第 1 輪不再起驗證者"
+            else
+                V_WANT=1
+            fi ;;
+        missing)
+            echo "auto-fix: #$ID 票面沒寫 needs_verifier(D-028)—— 第 1 輪不起驗證者" >&2 ;;
+    esac
+}
+
 first_round_dispatch() {
     # `--round 1`:只產、只印,不起 worker、不動票。要起第 1 輪就不帶 `--round`。
     fr_run=${AC_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}
@@ -391,6 +466,14 @@ first_round_dispatch() {
     first_round_packet "$fr_dispatch" "$(cfg routing.implement opus)"
     cat "$fr_dispatch"
     echo "auto-fix: 第 1 輪派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$fr_dispatch" "$ROOT")" >&2
+    # 驗證者那一份也在這裡產、只印路徑(#51 C3):人要看得到第 1 輪會派出去的**兩份**。
+    verifier_wanted >&2
+    if [ -n "$V_WANT" ]; then
+        VERIFIER_MODEL=$(cfg routing.verify "$(cfg routing.implement opus)")
+        fr_vdispatch=$(dirname "$fr_dispatch")/dispatch-verifier-round1.md
+        verifier_packet "$fr_vdispatch" 1 "$WTBASE/verify-t$ID/round1" "$V_BASE"
+        echo "auto-fix: 第 1 輪驗證者派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$fr_vdispatch" "$ROOT")" >&2
+    fi
     echo "auto-fix: --round 1 只印派工文;票是 Ready 時不帶 --round 就由這一支起第 1 輪:sh scripts/auto-fix.sh $ID" >&2
     return 0
 }
@@ -492,6 +575,80 @@ if [ "$WORKER_MODEL" != "$MODEL" ]; then
 fi
 WT=$WTBASE/t$ID
 
+run_verifier() {   # $1 = 派工文  $2 = 副本根  $3 = 第幾輪  $4 = log;印出 rc
+    python3 - "$VERIFIER_CMD" "$1" "$2" "$WORKER_TIMEOUT" "$ID" "$3" "$4" <<'PY'
+import os, subprocess, sys
+cmd, dispatch, cwd, timeout, ident, r, log_path = sys.argv[1:8]
+env = dict(os.environ)
+env.update({"AC_DISPATCH": dispatch, "AC_TICKET": ident, "AC_ROUND": r,
+            "AC_WORK": cwd, "AC_ROLE": "verifier"})
+try:
+    with open(dispatch, encoding="utf-8") as handle, open(log_path, "w", encoding="utf-8") as log:
+        done = subprocess.run(cmd, shell=True, cwd=cwd, env=env, stdin=handle,
+                              stdout=log, stderr=subprocess.STDOUT, timeout=float(timeout))
+    rc = done.returncode
+except subprocess.TimeoutExpired:
+    rc = 124
+except OSError:
+    rc = 127
+print(rc)
+PY
+}
+
+verifier_done() {   # $1 = rc  $2 = 第幾輪  $3 = log  $4 = 起跑秒;事件 + cost
+    if [ "$1" -eq 0 ]; then
+        ev agent.done --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
+            --kv run_id="$RUN_ID" --kv round="$2" --kv rc="$1" --kv agent=auto-fix-verifier
+    else
+        ev agent.failed --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
+            --kv run_id="$RUN_ID" --kv round="$2" --kv rc="$1" --kv agent=auto-fix-verifier
+    fi
+    write_cost verifier "$2" "$VERIFIER_MODEL" "$3" "$(( $(date +%s) - $4 ))"
+}
+
+# **與 worker 平行**(#51 C2):驗證者不等 patch(D-020),所以在 worker 派出**之前**就起跑,
+# worker 回來之後 `wait_verifier` 才收。串行只是多等一次驗證者的時鐘。
+# 副本是票的 base_sha(`git archive`,與 test_defect 那條路一樣是 {work,base} 兩份)。
+start_verifier_bg() {   # uses r/VFIX/VDISPATCH;設定 VPID/VLOG/VRC_FILE/VSTART
+    rm -rf "$VFIX"
+    mkdir -p "$VFIX/base"
+    if ! git -C "$ROOT" archive "$V_BASE" 2>/dev/null | tar -x -C "$VFIX/base"; then
+        echo "auto-fix: 取不出 ${V_BASE:-(空)} 給驗證者的副本 —— 這一輪驗證者不起" >&2
+        return 1
+    fi
+    cp -R "$VFIX/base" "$VFIX/work"
+    VLOG=$(dirname "$VDISPATCH")/verifier-round$r.log
+    VRC_FILE=$(dirname "$VDISPATCH")/verifier-round$r.rc
+    rm -f "$VRC_FILE"
+    echo "auto-fix: needs_verifier —— 第 $r 輪的驗證者先起跑(背景,副本 $VFIX)"
+    ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
+        --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix-verifier
+    VSTART=$(date +%s)
+    run_verifier "$VDISPATCH" "$VFIX" "$r" "$VLOG" > "$VRC_FILE" &
+    VPID=$!
+}
+
+wait_verifier() {   # 設定 VPATCH / VEVIDENCE(沒交就是空字串)
+    wait "$VPID"
+    VPID=""
+    VWRC=$(cat "$VRC_FILE" 2>/dev/null)
+    [ -n "$VWRC" ] || VWRC=127
+    rm -f "$VRC_FILE"
+    verifier_done "$VWRC" "$r" "$VLOG" "$VSTART"
+    collect_from_copy "$VFIX" patch-verify.diff EVIDENCE-verifier.md
+    # 沒交的那一次一樣留一份 result(`no-evidence` / `no-block`)—— 最需要它的就是那一次。
+    harvest_result "$VFIX/EVIDENCE-verifier.md" \
+        "$(dirname "$VDISPATCH")/result-verifier-round$r.json" verifier "$r"
+    shed_copies "$VFIX"
+    VPATCH=""
+    VEVIDENCE=""
+    if [ "$VWRC" -eq 0 ] && [ -f "$VFIX/patch-verify.diff" ]; then
+        VPATCH=$VFIX/patch-verify.diff
+        VEVIDENCE=$VFIX/EVIDENCE-verifier.md
+    fi
+    echo "auto-fix: 第 $r 輪的驗證者回來了(rc=$VWRC)—— patch-verify ${VPATCH:-沒交}"
+}
+
 dispatch_verifier() {   # uses r/FIX/DISPATCH/line; sets PATCH_OUT/EVIDENCE/CASE_FIXED
     python3 - "$TF" "$ID" <<'PY'
 import json, os, subprocess, sys
@@ -512,20 +669,18 @@ PY
     cp -R "$FIX/base" "$VFIX/base"
     cp -R "$FIX/base" "$VFIX/work"
     VDISPATCH=$(dirname "$DISPATCH")/dispatch-verifier-round$r.md
-    {
-        python3 "$AC/rules.py" pack verifier --model "$VERIFIER_MODEL" 2>/dev/null \
-            || echo "(規則包產不出來 —— 自己讀 memory/role/verifier.md)"
-        python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "$VFIX" "$line" <<'PY'
+    verifier_packet "$VDISPATCH" "$r" "$VFIX" "$S_BASE"
+    python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "$line" >> "$VDISPATCH" <<'PY'
 import os, sys
-root, ident, run_id, r, fix, objection = sys.argv[1:7]
+root, ident, run_id, r, objection = sys.argv[1:6]
 sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import status
 
 data = status.read(root, ident, run_id)
 files = []
-print("\n# 這一輪:#%s 第 %s 輪(獨立驗證者修案例)" % (ident, r))
+print("\n# 這一輪多的一件事:test_defect(第 %s 輪,修案例)" % r)
 print("\n產品 worker 提出:`%s`" % objection)
-print("你是**新的 role=verifier worker**;只修案例,不改產品程式。")
+print("副本是**分支上**那一版(前幾輪的 patch 都在);只修案例,不改產品程式。")
 print("\n## 紅榜")
 for row in data.get("failures") or []:
     path = row.get("file") or ""
@@ -539,43 +694,14 @@ for path in files:
     print("- `%s`" % path)
 if not files:
     print("- `(紅榜沒有 file;從 case 名定位,不猜 oracle)`")
-print("\n## 副本與交付")
-print("- 只改 `%s/work`;`%s/base` 是對照組。" % (fix, fix))
-print("- 交 `%s/patch-verify.diff` 與 `%s/EVIDENCE-verifier.md`。" % (fix, fix))
-print("- patch 檔頭只准 `base/…` / `work/…`。")
 PY
-    } > "$VDISPATCH"
     echo "auto-fix: test_defect —— 起第 $r 輪的新驗證者 worker"
     VLOG=$(dirname "$DISPATCH")/verifier-round$r.log
     ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
         --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix-verifier
     VSTART=$(date +%s)
-    VWRC=$(python3 - "$VERIFIER_CMD" "$VDISPATCH" "$VFIX" "$WORKER_TIMEOUT" "$ID" "$r" "$VLOG" <<'PY'
-import os, subprocess, sys
-cmd, dispatch, cwd, timeout, ident, r, log_path = sys.argv[1:8]
-env = dict(os.environ)
-env.update({"AC_DISPATCH": dispatch, "AC_TICKET": ident, "AC_ROUND": r,
-            "AC_WORK": cwd, "AC_ROLE": "verifier"})
-try:
-    with open(dispatch, encoding="utf-8") as handle, open(log_path, "w", encoding="utf-8") as log:
-        done = subprocess.run(cmd, shell=True, cwd=cwd, env=env, stdin=handle,
-                              stdout=log, stderr=subprocess.STDOUT, timeout=float(timeout))
-    rc = done.returncode
-except subprocess.TimeoutExpired:
-    rc = 124
-except OSError:
-    rc = 127
-print(rc)
-PY
-)
-    if [ "$VWRC" -eq 0 ]; then
-        ev agent.done --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
-            --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$VWRC" --kv agent=auto-fix-verifier
-    else
-        ev agent.failed --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
-            --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$VWRC" --kv agent=auto-fix-verifier
-    fi
-    write_cost verifier "$r" "$VERIFIER_MODEL" "$VLOG" "$(( $(date +%s) - VSTART ))"
+    VWRC=$(run_verifier "$VDISPATCH" "$VFIX" "$r" "$VLOG")
+    verifier_done "$VWRC" "$r" "$VLOG" "$VSTART"
     collect_from_copy "$VFIX" patch-verify.diff EVIDENCE-verifier.md
     PATCH_OUT=$VFIX/patch-verify.diff
     EVIDENCE=$VFIX/EVIDENCE-verifier.md
@@ -701,8 +827,23 @@ PY
     fi
     echo "auto-fix: 派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$DISPATCH" "$ROOT")"
 
+    # 第 1 輪的驗證者(#51):只看第 1 輪;第 2 輪起的驗證者只有 test_defect 那一條路。
+    V_WANT=""
+    VPID=""
+    VPATCH=""
+    VEVIDENCE=""
+    if [ "$r" -eq 1 ]; then
+        verifier_wanted
+        if [ -n "$V_WANT" ]; then
+            VFIX=$WTBASE/verify-t$ID/round$r
+            VDISPATCH=$(dirname "$DISPATCH")/dispatch-verifier-round$r.md
+            verifier_packet "$VDISPATCH" "$r" "$VFIX" "$V_BASE"
+            echo "auto-fix: 驗證者派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$VDISPATCH" "$ROOT")"
+        fi
+    fi
+
     if [ -n "$DRY" ]; then
-        echo "auto-fix: --dry-run —— 不起 worker。派工文在上面那一份。"
+        echo "auto-fix: --dry-run —— 不起 worker 也不起驗證者。派工文在上面那一份。"
         ROUND_RC=0
         return 1
     fi
@@ -715,6 +856,8 @@ PY
             || echo "auto-fix: 票狀態改不動(Running)" >&2
     fi
     ev ticket.attempt.start --ticket "$ID" --attempt "$r" --note "auto-fix 第 $r 輪"
+    # 起不來(副本取不出)照樣派 worker,收件時走「驗證者沒交出 patch-verify」那一頁。
+    [ -z "$V_WANT" ] || start_verifier_bg || true
     WORKER_LOG=$(dirname "$DISPATCH")/worker-round$r.log
     ev agent.start --ticket "$ID" --model "$WORKER_MODEL" \
         --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix
@@ -750,6 +893,8 @@ PY
     fi
     write_cost worker "$r" "$WORKER_MODEL" "$WORKER_LOG" "$(( $(date +%s) - WSTART ))"
     [ "$WRC" -eq 0 ] || echo "auto-fix: worker 自己回非零 —— 還是看它交了什麼,不看它說什麼"
+    # worker 回來了才收驗證者(#51 C2)—— 它比 worker 早回來的話這一手不用等。
+    [ -z "$VPID" ] || wait_verifier
 
     collect_from_copy "$FIX" "patch-round$r.diff" "EVIDENCE-round$r.md"
     PATCH_OUT=$FIX/patch-round$r.diff
@@ -813,8 +958,29 @@ PY
         return 1
     fi
 
-    AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 \
-        sh "$AC/apply.sh" "$ID" "$PATCH_OUT" --evidence "$EVIDENCE"
+    # 驗證者沒交件(#51 C6):worker 的 patch **先收進 reports**(下一輪或人下場還用得到,
+    # 不浪費那一趟),再停下來問主線 —— 只套 worker 那一份等於沒有案例就量綠。
+    if [ -n "$V_WANT" ] && [ -z "$VPATCH" ]; then
+        cp "$PATCH_OUT" "$(dirname "$DISPATCH")/" 2>/dev/null
+        [ ! -f "$EVIDENCE" ] || cp "$EVIDENCE" "$(dirname "$DISPATCH")/"
+        echo "auto-fix: 第 $r 輪的驗證者沒交出 patch-verify —— worker 的 patch 收在 $(dirname "$DISPATCH")/" >&2
+        block "#$ID 第 $r 輪的驗證者沒交出 patch-verify"
+        post "驗證者沒交出 patch-verify" \
+             "讀驗證者派工文與它的 log;worker 的 patch 已收在 reports,不要讓主線自己寫案例" \
+             "${VDISPATCH:-$(dirname "$DISPATCH")}"
+        attempt_failed verifier-no-patch
+        ROUND_RC=5
+        return 1
+    fi
+
+    if [ -n "$VPATCH" ]; then
+        AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 \
+            sh "$AC/apply.sh" "$ID" "$PATCH_OUT" "$VPATCH" --evidence "$EVIDENCE" \
+            --evidence-verifier "$VEVIDENCE"
+    else
+        AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 \
+            sh "$AC/apply.sh" "$ID" "$PATCH_OUT" --evidence "$EVIDENCE"
+    fi
     arc=$?
     if [ "$arc" -ne 0 ]; then
         echo "auto-fix: 第 $r 輪的 patch 套不上(apply rc=$arc)" >&2

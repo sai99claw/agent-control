@@ -37,8 +37,9 @@ SCRIPT_FILES = ("event.py", "ticket.py", "memory.py", "status.py", "land.sh",
                 "verify-case.py", "apply.sh", "auto-fix.sh", "review.sh", "inbox.py",
                 "rules.py", "metrics.py")
 # `review.sh` 逐字讀它(#42):沙盒少了它,覆核在「派工文組不出來」那一步就停,
-# 而那與「reviewer 沒交件」在收件匣上是兩頁不同的東西。
-TEMPLATE_FILES = ("dispatch-reviewer.md",)
+# 而那與「reviewer 沒交件」在收件匣上是兩頁不同的東西。`auto-fix.sh` 的驗證者派工文
+# 也是範本填出來的(#51):少了它,派工文裡只剩一行「範本找不到」。
+TEMPLATE_FILES = ("dispatch-reviewer.md", "dispatch-verifier.md")
 
 # 回歸層的最小形狀:一個登記過的標籤 + 一個會綠的案例。沙盒少了它,`gate --full`
 # 跑到的回歸是一個空集合 —— 而**空集合與「都過了」長得一樣**,那正是這裡在擋的事。

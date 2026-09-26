@@ -631,19 +631,49 @@ if [ -n "$VEVIDENCE" ]; then
         "$REPORTS/result-verifier-round$ROUND.json" \
         --ticket "$ID" --role verifier --round "$ROUND" \
         || echo "apply: 驗證者的 result 抽不出來($VEVIDENCE)—— 不擋 apply" >&2
-    # **驗證者的驗紅由這一手寫進票**(#36,FLOW G13):`verify-case.py red` 只交證據檔,
-    # 驗證者把它抄進 result 的 `baseline`;這裡在鎖裡併進票的 `verify.baseline`。
-    # 只收 `stage=red` —— 驗證者量不到綠,一份自稱 `check` 的會讓 `close` 放行。
-    python3 - "$AC" "$ID" "$REPORTS/result-verifier-round$ROUND.json" <<'PY' >&2
+fi
+fi
+# **驗證者的計畫與驗紅由這一手寫進票**(#36,FLOW G13;#51):`verify-case.py red` 只交證據檔,
+# 驗證者把它抄進 result 的 `baseline`、把 `files` / `tags` / `run` / `notes` 寫在 result 的
+# `verify`;這裡在鎖裡併進票。**直接讀 EVIDENCE 那一塊**,不讀抽出來的檔 —— 上游抽過
+# (`AC_RESULT_DONE`,auto-fix 第 1 輪)時那一份落在別的 run 目錄,以前整段因此被跳過,
+# 票的 `verify` 一格都沒併進去,閘門的驗證者那一層就量不到案例(#51 實測)。
+# 只收 `stage=red` —— 驗證者量不到綠,一份自稱 `check` 的會讓 `close` 放行。
+if [ -n "$VEVIDENCE" ]; then
+    python3 - "$AC" "$ID" "$VEVIDENCE" <<'PY' >&2
 import json, sys
 sys.path.insert(0, sys.argv[1])
+import event
 import ticket
 ident, path = sys.argv[2], sys.argv[3]
 try:
     with open(path, encoding="utf-8") as handle:
-        record = json.load(handle).get("baseline")
-except (OSError, ValueError, AttributeError):
-    record = None
+        raw = ticket.result_block(handle.read().splitlines())
+    data = json.loads(raw) if raw is not None else {}
+except (OSError, ValueError):
+    data = {}
+if not isinstance(data, dict):
+    data = {}
+plan = data.get("verify")
+if isinstance(plan, dict):
+    keep = {key: plan[key] for key in ("files", "tags", "run", "notes") if plan.get(key)}
+    if keep:
+        try:
+            with ticket.Lock():
+                fresh = ticket.load(ident)
+                merged = dict(fresh.get("verify") if isinstance(fresh.get("verify"), dict) else {})
+                merged.update(keep)
+                fresh["verify"] = merged
+                fresh["state_version"] = int(fresh.get("state_version") or 0) + 1
+                ticket.save(fresh)
+        except (OSError, ValueError, RuntimeError) as exc:
+            print("apply: 驗證者的 verify 計畫併不進票 #%s —— %s(不擋 apply)" % (ident, exc))
+        else:
+            event.emit("ticket.state", ticket=str(ident), field="verify",
+                       **{"to": ",".join(sorted(keep)), "state_version": fresh["state_version"]})
+            print("apply: 驗證者的 verify(%s)併進票 #%s(state_version=%s)"
+                  % ("、".join(sorted(keep)), ident, fresh["state_version"]))
+record = data.get("baseline")
 if record is None:
     sys.exit(0)
 if not isinstance(record, dict) or record.get("stage") != "red":
@@ -657,7 +687,6 @@ except (OSError, ValueError, RuntimeError) as exc:
 print("apply: 驗證者的驗紅(stage=red)併進票 #%s 的 verify.baseline(state_version=%s)"
       % (ident, version))
 PY
-fi
 fi
 # **反駁放在最後**:patch 已經 commit 了(那是事實),但這一手沒有結束 ——
 # 一個「票寫錯了」的說法沒有人收,與沒有那個說法長得一樣(§7)。
