@@ -46,8 +46,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "00f8e36",
-  "state": "Ready",
-  "state_version": 4,
+  "state": "Done",
+  "state_version": 12,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -79,5 +79,28 @@
     }
   ],
   "outline": "設計 ② C3+C4 / ⑤ C3、C4 / ⑥ 第 4 列;D-025 ① 准 close 由 land.sh 試、四條件不放。合一張因為「close 成功才 ack」是同一手。C3:land.sh:616-625 現在刻意不關、只印一行;改成試 close,關不掉照今天那一行 + inbox 頁,理由用 ticket.py 印的原文。C4:acked.jsonl 加 by;只 ack 「下一步是腳本」的頁,三類要主線的頁不動(設計 ③ 丁)。遷移 24 則由主線落地後跑一次。順序:五張的第 4 張,前置 #42 已落地(review.sh 要存在才有開跑 ack 那一手);與 C1/C5 不共檔。needs_verifier=false:A 端工具票,不動產品碼;land.sh / inbox.py 是每天走的路,所以 M1-M4 各指定變異證紅;驗收全沙盒機械",
-  "needs_verifier": false
+  "needs_verifier": false,
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "(1) 主線補充 A+(done_blockers 認 needs_verifier=false+review pass)要改 scripts/ticket.py,與票面 out_of_scope 第一條「done_blockers 的任何條件」及 allowed_write_paths(無 ticket.py,apply.sh 會 rc=5 退整份)衝突,未做;(2) A2「review 過期」經 land 走不到 close(land 合併前就拒過期 review,close --landed 重蓋 sha 與版本,實測),改以「閘門途中 review 轉 fail」代替",
+      "evidence": "../agent-control-wt/fix-t43/round1/EVIDENCE-round1.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "(1) A+ 撤回,done_blockers 認 needs_verifier=false+review pass 另開小票(Opus 開題,#43 之後、產品票之前);(2) A2 改測「閘門途中 review 轉 fail」接受。main@fable 2026-09-26"
+    }
+  ],
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "cd187e7",
+    "note": "reports/t43/20260926-164235-62821/REVIEW.md",
+    "at": "2026-09-26T16:52:55+08:00",
+    "state_version": 12
+  },
+  "verify_waiver": {
+    "by": "main@fable",
+    "reason": "D-028 needs_verifier=false + review pass(reviewer@opus db0ec98);#48 落地前 close 仍不認,依裁示簽",
+    "at": "2026-09-26T16:50+08:00"
+  }
 }

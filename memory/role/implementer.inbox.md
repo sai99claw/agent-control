@@ -16,3 +16,6 @@
 - 守衛量文件時要量**那一段**,不要量整份輸出:`--help` 的範例行會讓參數表的變異存活(#29 M18 第一次是綠的) (#29, 2026-09-23, worker@opus)
 - 在 $W/work 裡跑過 gate.sh 後,gate.log 與 *.env-suspect.json 會被 diff -ruN 收進 patch(守衛看不到,因為真 repo .gitignore 了):交付前 diff -rq base work | grep '^Only in work' 對一次 (#29) (2026-09-23, main@fable)
 - 守衛量文件時要量**那一段**,不要量整份輸出:`--help` 的範例行會讓參數表的變異存活(#29 M18 第一次是綠的) (#29, 2026-09-23, worker@opus)
+- 在 base/ 跑對照測試會長出 __pycache__(base 一個字都不准動):對照那一趟加 PYTHONDONTWRITEBYTECODE=1,或跑完 find base -name __pycache__ 刪乾淨 (#40, 2026-09-26, worker@opus)
+- 在 base/ 跑對照測試會長出 __pycache__(base 一個字都不准動):對照那一趟加 PYTHONDONTWRITEBYTECODE=1,或跑完 find base -name __pycache__ 刪乾淨 (#40, 2026-09-26, worker@opus)
+- 新增會起 headless 模型的腳本(讀 board/config.json 的 *.command)時,先在 tests/control_harness.py 的 DEFAULT_CONFIG 放一支替身命令,再把腳本加進 SCRIPT_FILES —— 缺那一段就退回真的 claude -p,既有的綠路測試會真的起模型 (#42) (#42, 2026-09-26, worker@opus)

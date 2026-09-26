@@ -1,1 +1,3 @@
 - gate.sh verify_plan() 用 $ROOT(worktree)拼票檔路徑、不認 AC_ROOT,waiver/needs_verifier 只在 AC_TICKETS_DIR 指回主 repo 時看得到;candidate_reds() 走 ticketlib 沒這問題 —— 兩處讀票要收成同一條路 (#34, 2026-09-26, main@fable)
+- gate.sh 讀票:verify_plan / candidate_reds 走 ticketlib(AC_ROOT 蓋得掉);preflight 與 ticket_tags 仍拿 $ROOT 拼路徑,票 worktree 裡讀到的是舊票的 verify_strings / tags —— 收同一條路要另開票 (#40, 2026-09-26, worker@opus)
+- gate.sh 讀票:verify_plan / candidate_reds 走 ticketlib(AC_ROOT 蓋得掉);preflight 與 ticket_tags 仍拿 $ROOT 拼路徑,票 worktree 裡讀到的是舊票的 verify_strings / tags —— 收同一條路要另開票 (#40, 2026-09-26, worker@opus)

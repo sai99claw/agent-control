@@ -14,3 +14,4 @@
 - gate.sh 還有兩處自己用 $ROOT 拼票檔路徑(:229 preflight、:491 ticket_tags),與 #40 修掉的同洞;綠了那一輪沒人發 ticket.attempt.done;memory/role/*.md 沒 cap_chars 檔頭時照樣受 config 2000 字上限管 —— 併進 #45 或下一批開題 (#40, 2026-09-26, main@fable)
 - ticket.py close 的 done_blockers 不認 needs_verifier=false(gate 認),D-028 之後每張工具票都得再簽一次 waiver 才關得掉 —— #43(land 試 close)要一起收:needs_verifier=false 且 review pass 視同回歸證據那格 (#41, 2026-09-26, main@fable)
 - review.sh 首跑 9/26 #42:headless 覆核 2 分鐘 $1.11 pass 直寫票;覆核者卡的 40K 上限每次都超(實測 35–100K),要調;手跑 gate 沒帶 AC_ROOT 會把 InReview/review 寫進 worktree 那份票(land 會拒,不會假 review) (#42, 2026-09-26, main@fable)
+- 2026-09-26 T#652 實測:`sync-to-project.sh` 不會退場 `docs/roles/dispatcher.md`(不在 manifest,sync 只唸「非產出物」);T 端這次手刪。要退場得把它列進 sync 的退場名單 —— 給下一個開題者。

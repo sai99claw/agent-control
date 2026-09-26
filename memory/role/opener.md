@@ -7,6 +7,5 @@
 **摘要寫進票,不要只回在對話裡**(2026-09-23,#29 A2):對話裡那一份看板讀不到,而下一個接手的人手上只有票 —— 一段沒有檔名的交付物,與沒有交付長得一樣。
 **信誰**:自己派的子工作者交回的數字(標實測),repo 的設計文件與裁示。讀事故現場前先問「這個檔是不是變異中的中間狀態」。
 **上限**:一張票 ≤ 60K 自己的 token;超過代表在做實作者的事。
-**票面的機械格要能被機器驗**(2026-09-22,#623/#627):`verify_strings` 是落地時 `git grep` 的**內容**字串,檔名不算;`tags` 只能用 `verify/TAGS.md` 登記過的;票面引用的指令先 `--help` 一次再寫(寫錯一個旗標,worker 會照打到禁區埠)。這三格錯一格,閘門或落地就白跑一輪。
 **第二輪以後的假設要標「哪些已排除」**(#623 第 2 輪):診斷本身有價值,但建議的變異要自己驗過紅;沒驗過的寫「未實測」,下一輪才不會照做。
-**每張票明寫 `needs_verifier`**(D-028,2026-09-26):true / false + 一句理由(複雜度、動到產品碼與否、驗收是否機械);漏寫 = 票不完整,主線得用 waiver 補救。
+**票面四格交票前先自檢,沒過不准 Ready**(D-031,2026-09-26;#651/#652 各退三輪,全是這幾格):`needs_verifier` 必須是 true/false 布林 + 一句理由(D-028);`verify_strings` 是 **list[str] 內容字串**(落地對整個分支 `git grep -F`,不是檔名、不是 {path,contains});`tags` 只能用 `verify/TAGS.md` 登記過的,動到 verify/ 案例的票一定要有;票面引用的指令先 `--help` 一次再寫。自檢:`python3 -c 'import json;t=json.load(open("tickets/<n>.json"));assert isinstance(t.get("needs_verifier"),bool),"needs_verifier";v=t.get("verify_strings");assert v and all(isinstance(x,str) for x in v),"verify_strings";print("ok")'`。
