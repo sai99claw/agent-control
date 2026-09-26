@@ -239,7 +239,7 @@ flowchart LR
       <tr><td>Worker 發 PR</td><td>worker 自己 git、開 PR</td><td>worker 在<b>沒有 .git 的副本</b>交 `patch.diff`;`apply.sh` 替它 commit 成 `t{n}` 分支(= PR),套之前擋檔頭 / 越界 / 回不去</td><td><b>現在</b></td><td>模型跑 git 出過三次事故:`git add -A` 偷走別票半成品、`git stash` 把自己的工作回退、裸 commit 進主線。PR 與 patch+apply 是同一個東西,差別只在「誰按 git」。</td></tr>
       <tr><td>Worker close</td><td>worker 做完自己 close</td><td>worker 交付即結束;close 是落地後的**機械四條件**(字串在主線、回歸證據或誠實 waiver、review 綁版本、反駁全處置)</td><td><b>現在</b></td><td>「沒有東西可做」與「做完了」在 worker 自己嘴裡長得一樣(§5.5 常設條款)。close 由誰按不重要,重要的是條件不是它自己說了算。</td></tr>
       <tr><td>Regression script</td><td>跑 PR;紅 → 收紅 case + PR + 原票派新 worker;綠 → 自動進 code</td><td>`gate.sh` + `auto-fix.sh` 就是這個(`repair_context` = base_sha、票面快照、patch、紅榜、上一輪 EVIDENCE、輪數);多了:**三輪上限 → Blocked**、flake 判定、環境紅不派、空紅榜不派、`test_defect` 反駁走驗證者</td><td>骨架一樣;<b>現在</b>多的是停損</td><td>沒有輪數上限 = 無限迴圈;環境壞(螢幕鎖、磁碟滿、Safari 斷線)會讓它一直派 worker 修不存在的 bug;紅榜解析不出來時 worker 拿空榜去猜;案例本身錯了讓 worker 修 = worker 會把擋路的斷言改掉。</td></tr>
-      <tr><td>綠 → 進 code</td><td>自動 merge</td><td>綠 → InReview → **reviewer 讀 code 對票面**(D-022)→ 主線排順序 → `land.sh` 在乾淨 worktree 跑**全套** → ff-only → push;D-025 後 close / ack 也自動</td><td><b>你的方向對</b>(D-025 就是往這裡收),但 reviewer 與全套要留</td><td>閘門綠 = 「worker 自己寫的測試說綠」。worker 能加測試就能改測試(#34 就替換了一條既有測試,reviewer 判定合理);兩支各自綠的分支合起來不一定綠(所以 land 一次一批、全套、鎖);順序在多票平行時是判斷(`allowed_write_paths` 衝突圖可以之後自動)。</td></tr>
+      <tr><td>綠 → 進 code</td><td>自動 merge</td><td>綠 → InReview → **reviewer 讀 code 對票面**(D-022)→ 主線排順序 → `land.sh` 在乾淨 worktree 跑**全套** → ff-only → push;D-025 後 close / ack 也自動</td><td><b>你的方向對</b>(D-025 就是往這裡收),但 reviewer 與全套要留</td><td>判決來自<b>驗證者</b>的案例(進 regression),不是 worker 的 unit test —— 這點你的流程有,現在也是這樣做(verify/ 登記 TAGS、閘門跑票的 tags、land 檢查 verify.files 在分支上)。差的是兩道鎖:案例要先證明會咬人(乾淨基底紅,D-020)、worker 不准動 verify/(越界擋)。<b>今天實跑的落差反而在主線</b>:A 端五張工具票全用 `verify_waiver` 跳過驗證者(沿 #31–#33 先例),與「驗證者寫的一定要進 regression」不合,要裁;兩支各自綠的分支合起來不一定綠(所以 land 一次一批、全套、鎖);順序在多票平行時是判斷(`allowed_write_paths` 衝突圖可以之後自動)。</td></tr>
       <tr><td>驗證者</td><td>讀票、設計 + 實作驗證 case</td><td>同;**只證乾淨基底紅、不證綠**(D-020),綠由閘門對實作 patch 量;案例格式 lint;worker 不准動 `verify/`(越界擋)</td><td>一樣;現在多了 D-020</td><td>要驗證者「證明案例做得到綠」= 它得自己搭一份參考實作,9/23 量到每票多燒 5–15 萬 token(#23 340K)。案例錯了誰修:不是 worker,是另一個驗證者(今天 #36 走了這條)。</td></tr>
       <tr><td>主線收回報</td><td>收 4 種:worker 完成、驗證、修改、票完成</td><td>目標:只收**一行終態**(等落地 / Blocked / 裁示);今天實跑是 20 下,因為綠的那條路全程手動</td><td><b>目標比你想的還少</b></td><td>主線的上下文最貴,每收一次回報 = 整份重送一輪(D-010 / D-015)。你想像的 4 次回報比設計目標(1 次)還多;今天的 20 下則是制度沒落完的過渡,不是設計。</td></tr>
       <tr><td>你沒畫的</td><td>—</td><td>reviewer(D-022)、docs 通道(裁示 / 票檔進主線不裸 commit)、記憶回寫、事件 / 收件匣 / heartbeat、session 契約(#39 / #652)</td><td>—</td><td>這些不是流程,是「換掉主線 session 還能接手」的基礎設施 —— 你另一個問題的答案。</td></tr>
@@ -247,7 +247,7 @@ flowchart LR
   </table></div>
   <ul class="notes">
     <li><b>結論</b>:你想的就是現在的骨架(`docs/WORKFLOW.md` / `ROLES.md` 照這個寫的);現在多出來的每一道都是某次事故換的,拿掉就是決定那個事故可以再來。你想的比現在<b>好</b>的那一段 —— 綠了就自動走到底 —— 正是 D-025 裁下去的 C1–C4;做完之後主線比你想像的還少碰(1 次終態,不是 4 次回報)。</li>
-    <li><b>三個盲點</b>:① worker 自己按 git、自己 close(自證);② 回歸腳本沒有停損(輪數 / flake / 環境 / 空紅榜);③ 綠是測試說的,而測試是 worker 自己寫的 —— 沒有獨立驗證者 + 變異驗紅 + reviewer,「做完了」與「把擋路的測試改掉」長得一樣。</li>
+    <li><b>三個盲點</b>:① worker 自己按 git、自己 close(自證);② 回歸腳本沒有停損(輪數 / flake / 環境 / 空紅榜);③ 綠由驗證者的案例判,這你有;少的是兩道鎖 —— 案例先證紅(D-020)、worker 不准碰 verify/。(原稿寫「測試是 worker 自己寫的」,錯,已撤。)今天的落差在主線:A 端工具票用 waiver 跳過驗證者。</li>
   </ul>
 
   <h3>主線接觸點:前後對照(設計 session 讀 code 推的;「前」由實測 7 下佐證)</h3>
