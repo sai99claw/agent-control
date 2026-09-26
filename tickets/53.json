@@ -1,0 +1,80 @@
+{
+  "id": "53",
+  "subject": "控制腳本對得到主線的票與票的分支:gate.sh preflight / ticket_tags 仍拿 $ROOT 拼票檔路徑、手跑在 worktree 沒帶 AC_ROOT 時票寫進副本那份;apply / auto-fix / review 寫死分支 t<n>,票面 `branch` 欄沒人讀寫(D-018 裁唯一形狀:票的 branch 欄是真相);覆核者卡上限 40K 改 120K",
+  "created": "2026-09-27T02:52:36+08:00",
+  "objective": "閘門不論從主 repo、auto-fix 的副本、還是主線手跑的票 worktree 起,讀與寫的都是主 repo 那一份票;票的分支名只有一個來源(票的 `branch` 欄,apply 開分支時填、auto-fix / review 讀,空著才退回 t<n>),下游專案用 t<n>-<slug> 的分支也走得完 auto-fix → apply → gate → review 整鏈;覆核者卡的上限與實測同一個數量級",
+  "acceptance": [
+    "D1 gate.sh 兩處票根(實測 ee4993f:preflight :233-241 與 ticket_tags :513-519 都是 `event.tickets_dir(root)`、root=$ROOT;verify_plan :604 / candidate_reds :642 已由 #40 改走 `ticketlib.load`,票根由 `event.repo_root()`、AC_ROOT 蓋得掉):兩處改成與 verify_plan 同一條路(`import ticket as ticketlib; ticketlib.load(ident)`),註解一行「preflight 與 ticket_tags 走 ticketlib.load」;tests/test_gate.py 加兩條(照 :626 test_a_gate_in_the_ticket_worktree_reads_the_main_repo_ticket 的形狀:worktree 那份票是舊版、只帶 AC_ROOT 不帶 AC_TICKETS_DIR):(a) 主 repo 票 allowed_write_paths 含 tests/*、worktree 那份只有 src/*,分支改 tests/test_land.py → rc 0,stdout 不含「在允許範圍外」;(b) 主 repo 票 verify.tags 為 [],worktree 那份是 [\"zzz\"](未登記)→ preflight 不退 4、regression 層不拿 zzz 去選案例;變異 M1:preflight 改回 `tickets_dir(root)` → (a) 紅(rc 4);變異 M2:ticket_tags 改回 → (b) 紅",
+    "D2 手跑在 worktree 沒帶 AC_ROOT(實測 ee4993f:gate.sh:488 手跑綠 `ticket.py set state InReview` 走 event.repo_root(),在 worktree 裡往上找到的是 worktree 自己的 board/config.json,票寫進副本那份;review.sh:84-97 對同一題已有一段:是 worktree 且主 repo 有這張票就 `export AC_ROOT=主 repo`):gate.sh 在解析 --ticket 之後 `. \"$AC/wtbase.sh\"`(#46 的共用來源;gate.sh 自己的 AC 變數若還沒有就照 apply.sh:61 那一行加),AC_ROOT 沒設、`main_root` ≠ $ROOT、且 <main_root>/<tickets_dir>/<n>.json 存在 → `export AC_ROOT=<main_root>` 並印「gate: $ROOT 是 worktree —— 票改讀主 repo <main_root>」;有 AC_ROOT 的呼叫(auto-fix 起的)一字不變;tests/test_gate.py 一條:不帶 AC_ROOT、cwd 在 worktree 手跑 `--branch --ticket 7` 綠 → 主 repo 那份票 state=InReview、worktree 那份不變、stdout 含「票改讀主 repo」;變異 M3:拿掉那段 export → 紅(worktree 那份被寫成 InReview)",
+    "D3 分支名唯一形狀(實測 ee4993f 讀 code:apply.sh:421 `BR=${AC_BRANCH:-t$ID}`、auto-fix.sh:576 `WT=$WTBASE/t$ID` 與 :733 `SRC=${AC_FIX_SOURCE:-t$ID}`、review.sh:160-162 `t$ID^{commit}` 三支各自寫死;票面 `branch` 欄只有 ticket.py create --branch 會填、四支腳本都不讀;land.sh:315 已認 `t<n>` 與 `t<n>-…` 兩種;下游專案的落地腳本用票面 branch 欄(例 t656-land-ticket-gaps)—— 對不上時 auto-fix 第 2 輪的副本 SRC 退回 base_sha、review 說分支不存在。裁示(D-018):**票的 `branch` 欄是唯一來源**,不准腳本各自算):apply.sh 開分支時 `BR=${AC_BRANCH:-<票的 branch 欄>}`,兩者都空才 `t$ID`,並在既有那次鎖內寫票的同一手把用到的名字寫進票的 `branch`(票已有且相同就不動;已有且不同 → 拒絕 rc=2 印兩個名字,不靜悄悄換);auto-fix.sh :576 與 :733、review.sh :160 改讀票的 `branch`(空 → t$ID),訊息裡的 `t$ID` 字面跟著用變數;tests/test_apply.py 一條:票面 branch=t7-gaps、不帶 AC_BRANCH → 建的分支與 worktree 是 t7-gaps、票的 branch 仍 t7-gaps;一條:票面 branch 空 → 建 t7 並把票的 branch 寫成 t7;一條:票面 branch=t7-a 而 AC_BRANCH=t7-b → rc 2、兩個名字都在 stderr;tests/test_auto_fix.py 一條:票面 branch=t1-gaps、第 1 輪紅後第 2 輪的副本 base 取自 t1-gaps(夾具在 t1-gaps 放一個 t1 沒有的檔,斷言 base/ 有它);tests/test_review.py 一條:票面 branch=t1-gaps 且只有這條分支存在 → review.sh 不說「分支不存在」;既有案例(branch 欄空的票)全部照綠;變異 M4:apply.sh 改回不讀票的 branch → t7-gaps 那條紅;變異 M5:auto-fix.sh :733 改回 t$ID → 副本那條紅",
+    "D4 覆核者卡上限(實測:memory/role/reviewer.md:27 「≤ 40K」;#29 首跑 118K、#42 起 35–100K,主線 9/26 收件匣;review.sh 沒有硬上限,只有 timeout 1800s):那一行改成「**上限**:一張票 ≤ 120K 自己的 token(2026-09-26 實測 35–118K;超過代表在重跑測試或整份讀 code)」;`python3 scripts/memory.py check` 對 memory/role/reviewer.md 仍在 2000 字內;tests/test_memory.py、tests/test_no_project_names.py 照綠",
+    "D5 既有案例全綠:tests/test_gate.py、tests/test_apply.py、tests/test_auto_fix.py、tests/test_review.py、tests/test_status.py、tests/test_memory.py、tests/test_sync_to_project.py、tests/test_no_project_names.py;閘門 `sh scripts/gate.sh --branch --ticket 53` 綠"
+  ],
+  "in_scope": [
+    "scripts/gate.sh(preflight、ticket_tags、--ticket 解析後那一段)",
+    "scripts/apply.sh(只有 BR 與寫票那一手)",
+    "scripts/auto-fix.sh(只有 :576 WT 與 :733 SRC)",
+    "scripts/review.sh(只有 :160-162)",
+    "memory/role/reviewer.md(只有 :27 那一行)",
+    "tests/test_gate.py",
+    "tests/test_apply.py",
+    "tests/test_auto_fix.py",
+    "tests/test_review.py"
+  ],
+  "out_of_scope": [
+    "gate.sh 對照表推導(#45 B2)與對照表內容",
+    "scripts/wtbase.sh 本身(#46 建;本票只 source 它)",
+    "land.sh 的分支名解析(:315 已認兩種形狀,不動)",
+    "ticket.py create --branch 的 --help 文字、SCHEMA 的 branch 列(已寫「派工時由工具填」,不動)",
+    "下游專案的落地腳本(它們讀票面 branch,本票讓 A 的三支也讀同一格)",
+    "memory/role/reviewer.md 其他行、任何 memory.py 整理",
+    "docs/DECISIONS.md(裁示由主線記)"
+  ],
+  "depends_on": [
+    {
+      "id": "46",
+      "condition": "已落地(scripts/wtbase.sh 在主線上)"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/gate.sh",
+    "scripts/apply.sh",
+    "scripts/auto-fix.sh",
+    "scripts/review.sh",
+    "memory/role/reviewer.md",
+    "tests/test_gate.py",
+    "tests/test_apply.py",
+    "tests/test_auto_fix.py",
+    "tests/test_review.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "ee4993f",
+  "state": "Ready",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-018",
+    "D-028",
+    "D-032",
+    "D-033"
+  ],
+  "outline": "2026-09-27 開題者收 memory/role/main.inbox.md 未收缺口,逐條對 main ee4993f 實測(D-033)。收進本票:①gate.sh preflight/ticket_tags 仍用 $ROOT(讀 code 確認 :241/:519;#45 沒列)→ D1;②手跑 worktree 沒帶 AC_ROOT 票寫進副本(#42 備忘;review.sh 已有同題的解法)→ D2;③分支名寫死 t<n>(主線追加;讀 code 確認 apply :421 / auto-fix :576、:733 / review :160,票的 branch 欄無人讀寫;land.sh :315 已認 t<n>-…)→ D3,裁票的 branch 欄是唯一來源;④覆核者卡 40K 上限(實測 35–118K)→ D4。實測已修、不收:閘門綠那輪的 ticket.attempt.done(auto-fix.sh:1028 綠紅都發,#49);sync 退場名單(sync-to-project.sh:119 RETIRED_ROLES=dispatcher.md);review.sh 收 AwaitingReview(:153,#51);dispatch-reviewer.md 在 sync TEMPLATE_LIST(:115)。不收、附理由:memory/role/*.md 沒 cap_chars 檔頭受 config 2000 管 —— 這是 D-013 的設計(任一層記憶都受上限管;memory.py:48),要提高走 `memory.py consolidate --new-cap --reason`,不是 code 缺口;ticket.py close --legacy —— 不收:那 16 張是 D-022/D-028 之前落地的有限集合、主線已手關;done_blockers 已有「誠實 waiver + review.sha 在主線歷史」與「needs_verifier=false + review pass」兩條免驗路,第三條只准 legacy 的旗標與前兩條做的是同一件事(D-018 同一件事不准第二個形狀),而 Done 契約可繞過正是 2026-09-21 稽核的洞;再遇到就 `ticket.py set <n> verify_waiver '{by,reason}'` 一行。順序:在 #46 之後(source wtbase.sh;三支腳本與 #46 同檔),最後一張。verify_strings 純內容字串,三條現在 allowed_write_paths 內都 0 次。 needs_verifier=false:全是沙盒裡的機械斷言(rc、stdout、票檔欄位、分支名、目錄),期望值由夾具寫進票與 repo、不從被測腳本算;M1–M5 由實作者證紅;沒有產品碼(D-028)",
+  "verify_strings": [
+    "preflight 與 ticket_tags 走 ticketlib.load",
+    "票改讀主 repo",
+    "≤ 120K"
+  ],
+  "needs_verifier": false,
+  "test_plan": "全部單元層、mktemp 沙盒真 git repo(tests/test_gate.py GateSh / VerifierCasesAtTheGate、tests/test_apply.py ApplyBase、tests/test_auto_fix.py AutoFixBase、tests/test_review.py 既有夾具),埠一律 0、不碰真 repo。D1/D2:可觀察 = rc、stdout、主 repo 與 worktree 兩份票檔的欄位;期望值(允許範圍、tags、state)由夾具寫進兩份票,不從 gate.sh 算。D3:可觀察 = `git branch --list`、worktree 目錄名、票的 branch 欄、副本 base/ 裡夾具放的那個檔、review.sh stderr;分支名由夾具決定。D4:grep 那一行 + memory.py check 退出碼。變異 M1–M5 各紅一次,EVIDENCE 貼紅的第一行。標籤留空(案例住 tests/)。",
+  "objections": []
+}

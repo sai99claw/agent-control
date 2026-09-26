@@ -1,0 +1,43 @@
+{
+  "id": "52",
+  "subject": "整理 memory/role/implementer.md(23 字元,上限 20)",
+  "created": "2026-09-27T02:43:44+08:00",
+  "objective": "由 fable, codex:gpt-6-astra 照 docs/DISCUSSION.md 的格式討論後壓縮 memory/role/implementer.md,或者寫出理由把上限提高(D-006「老師帶學生」、D-007「沒有討論檔不准整理」、D-013「兩個模型、只留原則」);併入 memory/role/implementer.inbox.md",
+  "acceptance": [
+    "`scripts/memory.py check` 對 memory/role/implementer.md 退出碼 0",
+    "**兩個不同的模型**參與討論(fable, codex:gpt-6-astra);討論檔列得出雙方的分歧",
+    "整理後只留**具體的原則、行為準則、思考方式**;**不直接寫案例**,案例用票號當來源引用(例:「快照層只畫說得出處的畫面(#585)」)",
+    "案例原文留在紀錄類文件(DECISIONS 歸檔 / HANDOFF 歷史),記憶檔只留指路",
+    "保留的每一條仍帶日期 / 來源票號 / 實測或推論三個標記",
+    "提高上限的話,`cap_history` 有一列寫得出多讀的那幾百字省了什麼",
+    "討論存成 discussions/<date>-memory-<model>.md(docs/DISCUSSION.md 的格式)"
+  ],
+  "in_scope": [
+    "memory/role/implementer.md",
+    "memory/role/implementer.inbox.md"
+  ],
+  "out_of_scope": [
+    "docs/DECISIONS.md"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "memory/role/implementer.md",
+    "memory/role/implementer.inbox.md"
+  ],
+  "role": "consolidator",
+  "model": "fable, codex:gpt-6-astra",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "ee4993f5f3790e56e3f752745e9f47f65f5936fc",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "派工照 `templates/dispatch-consolidator.md`(兩個模型各開一個 session、各貼一次;規則包 `python3 scripts/rules.py pack consolidator --model <模型>`,角色卡 `memory/role/consolidator.md`)。先各自寫討論檔、再互讀寫分歧,最後一位跑 `python3 scripts/memory.py consolidate memory/role/implementer.md --discussion <討論檔>`。"
+}

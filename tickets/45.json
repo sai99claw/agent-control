@@ -4,10 +4,10 @@
   "created": "2026-09-26T14:53:57+08:00",
   "objective": "三個守衛給的下一步或判定都指向對的動作:分岔訊息照做不會弄斷 control/ 的 import;新檔沒進 gate 對照表時不整票退、而是出聲 + 用同票的 tests 守;同一個 session 的 start/end 配得起來,heartbeat 不再把每個 session 都當沒回來;test_ticket_29 檔頭與案例分組對得上事實",
   "acceptance": [
-    "B1 sync 分岔訊息:scripts/sync-to-project.sh:304-306 三行的第三行改為「改成叫 scripts/control/<名>,然後刪掉或改名專案自己的 scripts/<名>;不要刪 scripts/control/ 那一份 —— 它是產出物,下次同步會回來,而 control 裡的腳本互相 import(verify-case.py:81 `import verify`)」;tests/test_sync_to_project.py 的 FORK 案例(:186 起,現在只斷第一行)對第二、三行各加 assertIn(「內容不同」、「不要刪」);:204 那條「內容一樣不喊」照綠;變異 M1:第三行改回舊句 → 紅",
-    "B2 gate.sh --branch 對不到對照表的檔:對每個 unmapped 檔 f,若同一份 diff 也改到 ≥ 1 個 tests/test_*.py,那些模組就是 f 的守衛 —— 印「gate: 對照表沒列 <f>,依同票 tests 改動推到 <模組列表>(請補 scripts/gate.sh 對照表)」、把它們併進要跑的模組、rc 照測試結果、狀態檔 NOTE 記「推得的對照:<f>→<模組>」,不退 3;diff 沒改到任何 tests/test_*.py → 照今天(:887-897)退 3 並逐檔列出,那段不動;tests/test_gate.py 加三條:(a) unmapped 檔 + diff 含一個會綠的 tests/test_x.py → rc 0、stdout 含「依同票 tests 改動推到」、不含「對不到任何測試模組」;(b) 同 (a) 但那個 test 會紅 → rc 非 0 且是測試的紅不是 3;(c) unmapped 檔、diff 沒有 tests → 仍 3 且 stdout 列出檔名;既有 :238 那條「對不到要出聲」照綠;變異 M2:把推導那一手拿掉 → (a) 紅;變異 M3:推得到也退 3 → (a) 紅、(c) 仍綠。對照表本身不補(補表是各票的事;#39 的 session-hook.sh / .claude/settings.json 由 #39 自己補)",
-    "B3 session 配對:scripts/event.py `emit` 收 `--session <id>`(寫進事件列 `session` 欄;沒給就不寫這欄,不寫空字串 —— §5.5);scripts/heartbeat.sh `key_of` 對 session.* 列:有 `session` 欄用 (\"session\", row[\"session\"], role),沒有才照舊 pid;scripts/new-session.sh:48 發 session.start 時帶 `--session \"$SID\"`(SID = 時間戳+pid 或 uuidgen,腳本自己產、印在 stdout),:77 那句改成「結束前:python3 scripts/event.py emit session.end --role <role> --session <剛印的 SID>」;tests/test_heartbeat.py 加一條:start pid=1、end pid=2、同 role、同 session=x → clean bill(現況 pid 不同就永遠配不上;既有案例夾具都給同 pid,綠著卻與真實不符 —— §5.5);既有 :60 兩條線互不銷那條照綠;tests/test_event.py 加一條:emit --session x 後 events.jsonl 那一列 session=x,不帶就沒這個鍵;tests/test_new_session.py 加一條:stdout 含 session.end 那句且含同一個 SID;變異 M4:key_of 忽略 session 欄 → 紅。#39 的 scripts/session-hook.sh 若已落地且也發 session.start,帶 stdin JSON 的 session_id 當 --session(沒有就不動它,EVIDENCE 寫明留續票)",
-    "B4 tests/test_ticket_29.py 檔頭::3-6 加一句「A5 在乾淨基底上就綠、屬確認用案例(同 A12)」,:39 把 A5 從「讀既有檔案 / 真跑一次性腳本」那組移到與 A12 同列的確認組;只改 docstring;先在 main 跑一次 `python3 -m unittest tests.test_ticket_29 -v` 看 A5 那條真的綠 —— 紅的話這一項不做並在 EVIDENCE 說明(票面假設被證偽);整個模組照綠"
+    "B1 sync 分岔訊息(實測 ee4993f 仍是舊句,scripts/sync-to-project.sh:365-367):第三行(:367「改成呼叫 scripts/control/<名>,或刪掉其中一份(專案裁)。」)改為「改成叫 scripts/control/<名>,然後刪掉或改名專案自己的 scripts/<名>;不要刪 scripts/control/ 那一份 —— 它是產出物,下次同步會回來,而 control 裡的腳本互相 import(verify-case.py `import verify`)」;tests/test_sync_to_project.py ASameNamedForkInTheProjectIsNamed(:313)的 test_a_different_verify_py_is_named 現在只斷第一行(FORK),對第二、三行各加 assertIn(「內容不同」、「不要刪 scripts/control/」);test_an_identical_verify_py_is_not_named 照綠;變異 M1:第三行改回舊句 → 紅",
+    "B2 gate.sh --branch 對不到對照表的檔(實測 ee4993f 仍整票退 3,scripts/gate.sh:921-930):對每個 unmapped 檔 f,若同一份 diff 也改到 ≥ 1 個 tests/test_*.py,那些模組就是 f 的守衛 —— 印「gate: 對照表沒列 <f>,依同票 tests 改動推到 <模組列表>(請補 scripts/gate.sh 對照表)」、把它們併進要跑的模組、rc 照測試結果、狀態檔 NOTE 記「推得的對照:<f>→<模組>」,不退 3;diff 沒改到任何 tests/test_*.py → 照今天退 3 並逐檔列出,那段不動;tests/test_gate.py GateSh 加三條:(a) unmapped 檔 + diff 含一個會綠的 tests/test_zzz.py → rc 0、stdout 含「依同票 tests 改動推到」、不含「對不到任何測試模組」;(b) 同 (a) 但那個 test 會紅 → rc 非 0 且是測試的紅不是 3;(c) unmapped 檔、diff 沒有 tests → 仍 3 且 stdout 列出檔名;既有 :277 test_a_file_nobody_guards_is_named… 與 :287 test_a_mixed_change…(夾具 code-map/check-stale.py + assets/logo.png,diff 沒 tests)照綠;變異 M2:把推導那一手拿掉 → (a) 紅;變異 M3:推得到也退 3 → (a) 紅、(c) 仍綠。對照表本身不補(補表是各票的事)",
+    "B3 session 配對(實測 ee4993f:event.py 沒有 --session、heartbeat.sh:62-68 key_of 用 pid、new-session.sh:72 發 session.start 不帶 id、:107 結語沒給 id):scripts/event.py `emit` 收 `--session <id>`(寫進事件列 `session` 欄;沒給就不寫這欄,不寫空字串);scripts/heartbeat.sh `key_of` 對 session.* 列:有 `session` 欄用 (\"session\", row.get(\"session\"), role),沒有才照舊 pid;scripts/new-session.sh 旗標迴圈(:20-25,現在只認 --no-event)加 `--session <id>`,沒給就自己產 SID(時間戳+pid 或 uuidgen)並印在 stdout,:72 發 session.start 時帶 `--session \"$SID\"`,:107 那句改成「結束前:python3 scripts/event.py emit session.end --role <role> --session <剛印的 SID>」;scripts/session-hook.sh 從 stdin hook JSON 的 `session_id`(有就帶)以 `--session` 傳給 new-session.sh;tests/test_heartbeat.py 加一條:start pid=1、end pid=2、同 role、同 session=x → clean bill(現況 pid 不同永遠配不上;既有 :32/:60 夾具都給同 pid 所以綠著);既有 :60 兩條線互不銷那條照綠;tests/test_event.py Emit 加一條:emit --session x 後 events.jsonl 那一列 session=x,不帶就沒這個鍵;tests/test_new_session.py 加一條:stdout 含 session.end 那句且含同一個 SID(既有 :106 不認得的旗標是用法錯誤那條照綠);tests/test_session_hook.py 加一條:payload 帶 session_id=abc(hook() 夾具 :56-59 現在不帶)→ 事件列 session=abc;變異 M4:key_of 忽略 session 欄 → 紅",
+    "B4 tests/test_ticket_29.py 檔頭(實測 2026-09-27 main 上 `python3 -m unittest tests.test_ticket_29` Ran 24 OK,A5 那條綠,假設成立)::3-6 加一句「A5 在乾淨基底上就綠、屬確認用案例(同 A12)」,:15 把 A5 從「讀既有檔案 / 真跑一次性腳本」那組移到與 A12 同列的確認組;只改 docstring;整個模組照綠"
   ],
   "in_scope": [
     "scripts/sync-to-project.sh(只有分岔訊息第三行)",
@@ -15,34 +15,23 @@
     "scripts/event.py",
     "scripts/heartbeat.sh",
     "scripts/new-session.sh",
+    "scripts/session-hook.sh(只加 --session 轉傳)",
     "tests/test_sync_to_project.py",
     "tests/test_gate.py",
     "tests/test_heartbeat.py",
     "tests/test_event.py",
     "tests/test_new_session.py",
+    "tests/test_session_hook.py",
     "tests/test_ticket_29.py(只有 docstring)"
   ],
   "out_of_scope": [
     "gate.sh 對照表的內容(補表是各票自己的事)",
+    "gate.sh preflight / ticket_tags 用 $ROOT 拼票檔路徑(#53 收)",
     "gate.sh 三層介面與 verify.py 的 rc=3(標籤選不到案例那條是另一件事)",
-    "scripts/session-hook.sh 的內容(#39 的檔;只在已落地且發 session.start 時加 --session)",
     "scripts/status.py、scripts/land.sh",
     "sync 的 SCRIPT_LIST 與名單比對"
   ],
-  "depends_on": [
-    {
-      "id": "39",
-      "condition": "已落地"
-    },
-    {
-      "id": "40",
-      "condition": "已落地"
-    },
-    {
-      "id": "42",
-      "condition": "已落地"
-    }
-  ],
+  "depends_on": [],
   "allowed_write_paths": [
     "scripts/sync-to-project.sh",
     "scripts/gate.sh",
@@ -50,15 +39,21 @@
     "scripts/heartbeat.sh",
     "scripts/new-session.sh",
     "scripts/session-hook.sh",
-    "tests/*.py"
+    "tests/test_sync_to_project.py",
+    "tests/test_gate.py",
+    "tests/test_heartbeat.py",
+    "tests/test_event.py",
+    "tests/test_new_session.py",
+    "tests/test_session_hook.py",
+    "tests/test_ticket_29.py"
   ],
   "role": "worker",
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "171bfac",
-  "state": "Draft",
-  "state_version": 6,
+  "base_sha": "ee4993f",
+  "state": "Ready",
+  "state_version": 7,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -68,26 +63,11 @@
     "notes": ""
   },
   "verify_strings": [
-    {
-      "path": "scripts/sync-to-project.sh",
-      "contains": "不要刪"
-    },
-    {
-      "path": "scripts/gate.sh",
-      "contains": "依同票 tests 改動推到"
-    },
-    {
-      "path": "scripts/heartbeat.sh",
-      "contains": "row.get(\"session\")"
-    },
-    {
-      "path": "scripts/event.py",
-      "contains": "--session"
-    },
-    {
-      "path": "tests/test_ticket_29.py",
-      "contains": "確認用案例"
-    }
+    "不要刪 scripts/control/",
+    "依同票 tests 改動推到",
+    "row.get(\"session\")",
+    "--session",
+    "確認用案例"
   ],
   "decision_refs": [
     "D-018",
@@ -95,10 +75,7 @@
     "D-015"
   ],
   "test_plan": "全部單元層、mktemp 沙盒(tests/control_harness.py 的 Sandbox),埠一律 0、不碰真 repo。B1:既有 FORK 夾具,可觀察 = stdout 三行,期望字串寫死在案例。B2:tests/test_gate.py 既有 GateSh 沙盒:分支 diff 放一個對照表沒列的檔(如 scripts/zzz.sh)+ 一個夾具自己寫的 tests/test_zzz.py(綠 / 紅兩版),可觀察 = rc、stdout、狀態檔 NOTE;期望 rc 由夾具自己那個 test 決定,不從 gate.sh 算。B3:tests/test_heartbeat.py 既有 events_file 夾具,列裡直接寫 session 欄;tests/test_event.py 真跑 event.py emit 讀 jsonl;tests/test_new_session.py 真跑 new-session.sh 讀 stdout。B4:跑既有模組。變異 M1–M4 各紅一次,EVIDENCE 貼紅的第一行。標籤留空(案例住 tests/)。",
-  "outline": "三個守衛的下一步或判定是錯的。B1 sync 比對 A 來源與專案 scripts/<名>,刪 control 那份下次照喊,且 verify-case.py:81 import 同目錄 verify。B2 #39 兩個新檔不在表就整票退 3;裁示「從票推」:同票 diff 的 tests/ 當守衛、出聲記 NOTE,推不到才 3;tabby #511 同題。B3 pid 是 emit 行程的,start/end 永遠不同;夾具同 pid 所以綠(§5.5)。B4 檔頭與事實不符。順序:等 #39/#40/#42(同檔)。needs_verifier=false:訊息、推導、配對鍵、docstring,沙盒機械斷言;M1–M4 實作者證紅。",
+  "outline": "2026-09-27 開題者對 main ee4993f 逐條實測(D-033):B1 sync :365-367 仍是「或刪掉其中一份」;B2 gate.sh :921-930 仍整票退 3、:287 混合案例夾具沒 tests 檔所以不受推導影響;B3 event.py 無 --session、heartbeat key_of 仍 pid、new-session.sh 只認 --no-event、session-hook.sh 經 new-session.sh 發 start(hook JSON 有 session_id 可用);B4 test_ticket_29 Ran 24 OK(A5 綠)。四項全留;#38/#40/#43/#48–#51 沒碰到這幾段。變更:B3 加 session-hook.sh 轉傳與 test_session_hook 一條(#39 已落地,hook 走 new-session.sh 所以旗標加在 new-session.sh)。#39/#40/#42 皆 Done,depends_on 清空;D-030 凍結由主線 2026-09-27 解除。verify_strings 純內容字串,五條現在在 allowed_write_paths 內都是 0 次。順序:本票先於 #46 與 #53(三張都動 gate.sh,本票的 B2 讓 #46 的新檔 wtbase.sh 就算漏補對照表也不會退 3);可與 #44 平行。 needs_verifier=false:訊息措辭、對照表推導、配對鍵、docstring;全在 mktemp 沙盒裡做機械斷言(stdout 字串、rc、事件列鍵),期望值寫死在案例;M1–M4 由實作者證紅;沒有產品碼(D-028)",
   "needs_verifier": false,
-  "frozen": {
-    "reason": "D-030 尾巴凍結:訊息措辭 / 對照表推導 / heartbeat 配對,不影響主線接觸點",
-    "criterion": "sync 分岔訊息害人刪錯檔、或閘門因對照表對不到再退 3 一次、或 heartbeat 誤報一次時解凍"
-  }
+  "objections": []
 }
