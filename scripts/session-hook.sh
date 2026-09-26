@@ -81,15 +81,21 @@ warn = ""
 if not model:
     warn = ("session-hook: board/config.json 沒有 routing.main、也沒有設 AC_MODEL —— "
             "這個 session 記成 model=unknown;補 routing.main(或 export AC_MODEL=<模型>)。")
-print("MODE=%s MODEL=%s WARN=%s" % (mode, shlex.quote(model or "unknown"), shlex.quote(warn)))
+sid = hook.get("session_id")
+# 下面 `$FLAG` 不加引號展開:只收 id 會用到的字元,別的一律當沒給。
+sid = sid if isinstance(sid, str) and all(c.isalnum() or c in "-_." for c in sid) else ""
+print("MODE=%s MODEL=%s WARN=%s SID=%s" % (mode, shlex.quote(model or "unknown"),
+                                         shlex.quote(warn), shlex.quote(sid)))
 PY
 )
-MODE=""; MODEL=unknown; WARN=""
+MODE=""; MODEL=unknown; WARN=""; SID=""
 eval "$PLAN"
 [ "$MODE" = "skip" ] && exit 0
 
 FLAG=""
 [ "$MODE" = "emit" ] || FLAG=--no-event
+# hook JSON 有 `session_id` 就轉給 new-session.sh(#45 B3):start 與之後的 end 用它配對。
+[ -z "$SID" ] || FLAG="$FLAG --session $SID"
 AGAIN="sh ${AC#"$ROOT"/}/new-session.sh main $MODEL --no-event"
 
 PAGE=$(

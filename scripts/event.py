@@ -228,6 +228,7 @@ EMIT_FLAGS = (
     ("--model", "模型"),
     ("--attempt", "第幾次派工(遲到的回報對不上 attempt 就拒絕)"),
     ("--note", "一句給人看的話"),
+    ("--session", "session id:heartbeat 拿它配 session.start / session.end(沒給就不寫這欄)"),
     ("--kv", "任何一格 `k=v`;可重複(例:`--kv sha=abc1234 --kv mode=full`)"),
 )
 
@@ -309,7 +310,7 @@ def cmd_emit(argv):
             key, _, value = rest[index].partition("=")
             fields[key] = value
         elif arg.startswith("--") and arg[2:] in ("ticket", "role", "model",
-                                                  "attempt", "note"):
+                                                  "attempt", "note", "session"):
             name = arg[2:]
             index += 1
             if index >= len(rest):

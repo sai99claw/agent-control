@@ -364,7 +364,7 @@ for name in $SCRIPT_LIST; do
   if ! cmp -s "$DEST/scripts/$name" "$HERE/scripts/$name"; then
     echo "sync: 專案有同名分岔檔:$name"
     echo "sync:   scripts/$name 與 scripts/control/$name 內容不同;專案的腳本叫的是前者 ——"
-    echo "sync:   改成呼叫 scripts/control/$name,或刪掉其中一份(專案裁)。"
+    echo "sync:   改成叫 scripts/control/$name,然後刪掉或改名專案自己的 scripts/$name;不要刪 scripts/control/ 那一份 —— 它是產出物,下次同步會回來,而 control 裡的腳本互相 import(verify-case.py \`import verify\`)"
   fi
 done
 

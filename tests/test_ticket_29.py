@@ -4,6 +4,7 @@
 的 docstring 第一行是票面 `acceptance` 的編號(A1–A11)。A12 例外:`docs/DESIGN-
 VERIFY-CASES.md` 已由 #25 落地,這裡的案例是**確認**,在乾淨基底就該是綠的(見該
 class 的說明;若之後又紅了,代表 #25 的產出被別的票動過)。
+A5 在乾淨基底上就綠、屬確認用案例(同 A12)。
 
 D-022 的 reviewer 角色卡與 `rules.py WANTED[reviewer]`(派工文說「算在 A1 內」)併
 在 `Acceptance1DesignAndReviewerRolesExist` 裡,不另開一條。
@@ -36,8 +37,9 @@ A12 | unit    | 讀 `docs/DESIGN-VERIFY-CASES.md`、`docs/DECISIONS.md`、`docs/
 "#29 A1".."#29 A12"     ← A12 斷言 `docs/FLOW.html` §G 都點名 #29
 
 ## 怎麼做假(不上真埠、不起真服務、不殺行程、不鎖螢幕)
-A1/A2/A5/A9/A11/A12 讀既有檔案或用 `subprocess` 真跑一次性的腳本指令(`rules.py
-pack`、`sync-to-project.sh`),不碰任何 repo 的 git 狀態。A3/A4/A6/A7/A8/A10 用
+A1/A2/A9/A11 讀既有檔案或用 `subprocess` 真跑一次性的腳本指令(`rules.py
+pack`、`sync-to-project.sh`),不碰任何 repo 的 git 狀態。確認組(乾淨基底上就綠):
+A12 讀既有檔案;A5 在 `Sandbox` 裡真跑 `apply.sh --evidence-verifier`、另讀兩份文件。A3/A4/A6/A7/A8/A10 用
 `tests/control_harness.py` 的 `Sandbox`——一顆 tempdir 裡的拋棄式真 git repo(埠
 一律 0,`HOME`/`GIT_CONFIG_*` 都指進沙盒),不是這台機器上任何一個真的 repo。A9
 與 A11 各自的拋棄式目錄用 `tempfile.mkdtemp()` + `case.addCleanup(shutil.rmtree,

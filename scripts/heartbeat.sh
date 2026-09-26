@@ -49,7 +49,7 @@ leases = conf.get("lease_seconds") or {}
 DEFAULT_LEASE = 7200
 
 # 開始 → 什麼算它回來了。land 用 stamp 配對(同一輪落地的四種結局);session 用
-# pid;attempt 用票號加 attempt。**配對的鍵要選得夠細** —— 用「最近一筆 end」去
+# session id(舊列沒有才用 pid);attempt 用票號加 attempt。**配對的鍵要選得夠細** —— 用「最近一筆 end」去
 # 配所有 start,兩條同時在跑的線會互相把對方銷掉,而那看起來就像大家都回來了。
 CLOSERS = {
     "session.start": ("session.end",),
@@ -65,6 +65,10 @@ def key_of(row):
         return ("land", str(row.get("stamp", "")))
     if kind.startswith("ticket.attempt."):
         return ("attempt", str(row.get("ticket", "")), str(row.get("attempt", "")))
+    # session 先看 emit 的 `--session` id(#45 B3):start 與 end 是兩次 `event.py emit`、
+    # 兩個 pid,拿 pid 配永遠配不上。沒有那一欄的舊列才退回 pid。
+    if row.get("session"):
+        return ("session", row.get("session"), str(row.get("role", "")))
     return ("session", str(row.get("pid", "")), str(row.get("role", "")))
 
 
