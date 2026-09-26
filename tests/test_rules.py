@@ -31,6 +31,20 @@ class RulesBase(Sandbox):
     def source_size(self):
         return len(self.read(os.path.join("docs", "DISPATCH-TEMPLATE.md")).encode("utf-8"))
 
+    # 緊預算那一包。正本也帶自己的暫存區之後(#37),先讀清單多兩行、「砍過」名單多兩名,
+    # 2000 B 連前言 + 「砍過」那一句都放不下(實測到 2307 才放得下)。
+    TIGHT_BYTES = 2400
+
+    def tight_pack(self):
+        """暫存區寫死在這裡,不吃真的 `memory/*.inbox.md` —— 那幾份會長會縮,這一組的
+        餘裕就跟著漂。兩格都比暫存區那 600 B 長,所以一定被砍、一定進「砍過」名單:
+        角色卡、節錄、模型記憶、兩格暫存五份都砍過,仍然是緊預算。"""
+        lessons = "".join("- 暫存第%d條 %s\n" % (i, "舊" * 60) for i in range(1, 6))
+        self.write(os.path.join("memory", "role", "implementer.inbox.md"), lessons)
+        self.write(os.path.join("memory", "model", "opus.inbox.md"), lessons)
+        return self.rules("pack", "worker", "--model", "opus",
+                          "--max-bytes", str(self.TIGHT_BYTES))
+
 
 class WhatItPacks(RulesBase):
 
@@ -113,10 +127,10 @@ class WhatItPacks(RulesBase):
 class WhenItHasToCut(RulesBase):
 
     def test_cutting_says_which_file_was_cut(self):
-        # 2000 不是 1200:記憶回寫段(約 600 B)先扣,1200 連前言 + 「砍過」那一句都放不下。
-        done = self.rules("pack", "worker", "--model", "opus", "--max-bytes", "2000")
+        # 緊預算不是 1200:記憶回寫段(約 600 B)先扣,1200 連前言 + 「砍過」那一句都放不下。
+        done = self.tight_pack()
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertLessEqual(len(done.stdout.encode("utf-8")), 2000)
+        self.assertLessEqual(len(done.stdout.encode("utf-8")), self.TIGHT_BYTES)
         self.assertIn("截斷", done.stdout)
         self.assertIn("砍過", done.stdout)
 
@@ -209,10 +223,10 @@ class WhatItAlwaysCarries(RulesBase):
         self.assertLessEqual(rules.MEMORY_NOTE_BYTES, 600)
 
     def test_a_tight_budget_cuts_the_other_parts_not_this_one(self):
-        """先扣預算的意思:上限縮到 2000 時,砍的是角色卡與節錄,這一段一個字不少。"""
-        done = self.rules("pack", "worker", "--model", "opus", "--max-bytes", "2000")
+        """先扣預算的意思:上限縮到緊預算時,砍的是角色卡與節錄,這一段一個字不少。"""
+        done = self.tight_pack()
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertLessEqual(len(done.stdout.encode("utf-8")), 2000)
+        self.assertLessEqual(len(done.stdout.encode("utf-8")), self.TIGHT_BYTES)
         self.assertIn("砍過", done.stdout)
         self.assertTrue(done.stdout.rstrip("\n").endswith(self.LAST_LINE), done.stdout[-300:])
 
@@ -268,9 +282,9 @@ class TheStructuredDeliverySection(RulesBase):
         self.assertLessEqual(rules.DELIVERY_NOTE_BYTES, 600)
 
     def test_a_tight_budget_cuts_the_other_parts_not_this_one(self):
-        done = self.rules("pack", "worker", "--model", "opus", "--max-bytes", "2000")
+        done = self.tight_pack()
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertLessEqual(len(done.stdout.encode("utf-8")), 2000)
+        self.assertLessEqual(len(done.stdout.encode("utf-8")), self.TIGHT_BYTES)
         self.assertIn("砍過", done.stdout)
         self.assertIn(self.LAST_LINE, done.stdout)
 
