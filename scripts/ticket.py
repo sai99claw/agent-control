@@ -831,6 +831,20 @@ def waiver_covers_regression(ticket):
     return sha_on_branch(review.get("sha"), main_branch())
 
 
+def needs_verifier_false_covers_regression(ticket):
+    """票面**明著寫** `needs_verifier=false`(JSON false,不是缺、不是字串)*且* review
+    有效 *且* review 綁的 sha 真的在主線歷史裡時,review 就是回歸證據(#48)。
+    `verify.baseline` 一旦存在就不頂 —— 紅的證據永遠贏過免驗。"""
+    if ticket.get("needs_verifier") is not False:
+        return False
+    if review_problems(ticket):
+        return False
+    plan = ticket.get("verify") if isinstance(ticket.get("verify"), dict) else {}
+    if isinstance(plan.get("baseline"), dict):
+        return False
+    return sha_on_branch(ticket["review"].get("sha"), main_branch())
+
+
 def done_blockers(ticket):
     """**進 Done 只有這一份必要條件**,`set state Done` 與 `close` 共用它。
 
@@ -840,7 +854,8 @@ def done_blockers(ticket):
 
     #15:票有誠實的 `verify_waiver` **且** review 綁的 sha 真的在主線歷史裡,才免
     `test_evidence` / `verify.baseline` 這一關 —— review 本身該不該過(§review_problems)
-    與 objections 是否處置完,不受這格豁免。
+    與 objections 是否處置完,不受這格豁免。#48:`needs_verifier=false` 配有效 review
+    也免這一關(§needs_verifier_false_covers_regression)。
 
     D-020:`verify.baseline` 是**兩段**寫同一格 —— `verify-case.py red`(驗證者)只證
     乾淨基底該紅(`stage="red"`),`verify-case.py check`(閘門)在實作者的 patch 進來
@@ -849,7 +864,8 @@ def done_blockers(ticket):
     的票在票面上長得一樣。
     """
     out = []
-    if not waiver_covers_regression(ticket):
+    if not (waiver_covers_regression(ticket)
+            or needs_verifier_false_covers_regression(ticket)):
         plan = ticket.get("verify") if isinstance(ticket.get("verify"), dict) else {}
         baseline = plan.get("baseline") if isinstance(plan.get("baseline"), dict) else None
         if not ticket.get("test_evidence") and not baseline:
