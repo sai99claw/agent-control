@@ -440,6 +440,11 @@ def parse_failures(log_path):
 
     只認 `^(FAIL|ERROR):` 開頭那幾行 —— 不去猜「看起來像錯誤」的行。猜出來的那幾筆
     會讓 `failures` 變成一份沒有人敢信的清單,而**一份不能信的紅榜與沒有紅榜一樣**。
+
+    標頭與第一條分隔線之間的是 unittest 印的**說明行**(方法 docstring 的第一行,
+    `descriptions=True` 是預設),不是 traceback,不進 body。🩸 把它當 body 的第一行,
+    標頭下那條分隔線就被讀成這一筆的結尾:`file` 空、`line` 0、`excerpt` 只剩那一行
+    說明(G16;#31 在 `verify-case.py` 那側繞過,#34 搬回這裡,只留一份解析)。
     """
     try:
         with open(log_path, encoding="utf-8", errors="replace") as handle:
@@ -455,6 +460,7 @@ def parse_failures(log_path):
             continue
         kind, case, label = head
         body = []
+        opened = False
         index += 1
         while index < len(lines):
             line = lines[index]
@@ -462,9 +468,11 @@ def parse_failures(log_path):
                     or line.startswith("FAILED"):
                 break
             if DIVIDER.match(line):
-                # 第一條分隔線是標頭與 traceback 之間的那一條;第二條是這一筆的結尾。
-                if body:
+                # 第一條分隔線是標頭與 traceback 之間的那一條,它上面收到的是說明行;
+                # 第二條是這一筆的結尾。
+                if opened:
                     break
+                opened, body = True, []
                 index += 1
                 continue
             body.append(line)
