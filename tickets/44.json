@@ -41,8 +41,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "ee4993f",
-  "state": "Ready",
-  "state_version": 9,
+  "state": "Done",
+  "state_version": 19,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -66,5 +66,61 @@
   "test_plan": "全部 grep 層 / 單元層,不起服務、不碰埠。A1、A3:grep 計數,期望值是票面寫的字串與數字,不從被測文件算。A2:tests/test_dispatch_template.py 讀 SCHEMA 與 §8.5 兩份 markdown 表的第一欄(反引號內的鍵)做集合比對,期望集合寫死在案例裡(含 baseline)。A4:tests/test_ticket.py:215 既有量法(只量 --verify-string 那一行)加一句 assertIn。變異 M1、M2 各紅一次,EVIDENCE 貼紅的第一行。標籤留空(案例住 tests/,A 端沒有 verify/ 標籤)。",
   "outline": "2026-09-27 開題者對 main ee4993f 逐條實測(D-033):A1 四處殘句都還在(FLOW 「寫票 verify.baseline」1 次;三檔 baseline-red.json 都 0);A2 兩份 result 表都沒 baseline 列(SCHEMA :54-64、DISPATCH :408-418);A3 SCHEMA 沒 needs_verifier(0 次;表已多了 D-032 的 cost 列,新列放驗證群組);A4 --help 沒 ./README(0 次)。#38/#40/#43/#48–#51 一項都沒順手修到,四項全留。行號已對到現在的 main(SCHEMA :85、WORKFLOW :172、FLOW :272/:323、ticket.py :237、test_ticket :214)。D-030 凍結由主線 2026-09-27 解除(流程收尾),#42 已 Done 所以 depends_on 清空。verify_strings 是純內容字串,關票時對 allowed_write_paths 內的主線檔 grep;四條現在在那幾個檔裡都是 0 次。needs_verifier=false 理由見 outline 末句。跑票順序:與 #45 無共檔可平行;不動 gate.sh/land.sh。 needs_verifier=false:純文件與一句說明文字;驗收全是 grep 計數與兩條單元案例,期望值寫死在票面;M1/M2 由實作者證紅;沒有產品碼(D-028)",
   "needs_verifier": false,
-  "objections": []
+  "objections": [
+    {
+      "category": "blocking",
+      "body": "my throwaway gate run inherited AC_ROOT and pushed main-repo ticket #44 to InReview (sv 11) plus events 1052–1054 and reports/t44/20260927-025826-94933; the main line must reset or accept it (patch content itself is unaffected)",
+      "evidence": "../agent-control-wt/fix-t44/round1/EVIDENCE-round1.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "process-only: stray gate run inherited AC_ROOT (gap collected in #53 D2); patch unaffected; main continues apply→gate→review on round1 patch"
+    }
+  ],
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 52,
+      "tokens_out": 17523,
+      "cache_write": 61006,
+      "cache_read": 1405529,
+      "wall_seconds": 294,
+      "by": "auto-fix.sh",
+      "at": "2026-09-27T03:01:22+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 10,
+      "tokens_out": 3734,
+      "cache_write": 39159,
+      "cache_read": 183833,
+      "wall_seconds": 38,
+      "by": "review.sh",
+      "at": "2026-09-27T03:04:14+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 442,
+      "by": "land.sh",
+      "at": "2026-09-27T03:11:52+08:00"
+    }
+  ],
+  "owner": "main",
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "843589e8df7482e9cde94206ff80944936e1ba84",
+    "note": "reports/t44/20260927-030209-35118/REVIEW.md",
+    "at": "2026-09-27T03:11:52+08:00",
+    "state_version": 19
+  }
 }

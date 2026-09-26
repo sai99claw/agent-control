@@ -52,8 +52,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "ee4993f",
-  "state": "Ready",
-  "state_version": 7,
+  "state": "Done",
+  "state_version": 13,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -77,5 +77,52 @@
   "test_plan": "全部單元層、mktemp 沙盒(tests/control_harness.py 的 Sandbox),埠一律 0、不碰真 repo。B1:既有 FORK 夾具,可觀察 = stdout 三行,期望字串寫死在案例。B2:tests/test_gate.py 既有 GateSh 沙盒:分支 diff 放一個對照表沒列的檔(如 scripts/zzz.sh)+ 一個夾具自己寫的 tests/test_zzz.py(綠 / 紅兩版),可觀察 = rc、stdout、狀態檔 NOTE;期望 rc 由夾具自己那個 test 決定,不從 gate.sh 算。B3:tests/test_heartbeat.py 既有 events_file 夾具,列裡直接寫 session 欄;tests/test_event.py 真跑 event.py emit 讀 jsonl;tests/test_new_session.py 真跑 new-session.sh 讀 stdout。B4:跑既有模組。變異 M1–M4 各紅一次,EVIDENCE 貼紅的第一行。標籤留空(案例住 tests/)。",
   "outline": "2026-09-27 開題者對 main ee4993f 逐條實測(D-033):B1 sync :365-367 仍是「或刪掉其中一份」;B2 gate.sh :921-930 仍整票退 3、:287 混合案例夾具沒 tests 檔所以不受推導影響;B3 event.py 無 --session、heartbeat key_of 仍 pid、new-session.sh 只認 --no-event、session-hook.sh 經 new-session.sh 發 start(hook JSON 有 session_id 可用);B4 test_ticket_29 Ran 24 OK(A5 綠)。四項全留;#38/#40/#43/#48–#51 沒碰到這幾段。變更:B3 加 session-hook.sh 轉傳與 test_session_hook 一條(#39 已落地,hook 走 new-session.sh 所以旗標加在 new-session.sh)。#39/#40/#42 皆 Done,depends_on 清空;D-030 凍結由主線 2026-09-27 解除。verify_strings 純內容字串,五條現在在 allowed_write_paths 內都是 0 次。順序:本票先於 #46 與 #53(三張都動 gate.sh,本票的 B2 讓 #46 的新檔 wtbase.sh 就算漏補對照表也不會退 3);可與 #44 平行。 needs_verifier=false:訊息措辭、對照表推導、配對鍵、docstring;全在 mktemp 沙盒裡做機械斷言(stdout 字串、rc、事件列鍵),期望值寫死在案例;M1–M4 由實作者證紅;沒有產品碼(D-028)",
   "needs_verifier": false,
-  "objections": []
+  "objections": [],
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 118,
+      "tokens_out": 37660,
+      "cache_write": 121933,
+      "cache_read": 5556035,
+      "wall_seconds": 1127,
+      "by": "auto-fix.sh",
+      "at": "2026-09-27T03:15:20+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 12,
+      "tokens_out": 4423,
+      "cache_write": 43573,
+      "cache_read": 242020,
+      "wall_seconds": 47,
+      "by": "review.sh",
+      "at": "2026-09-27T03:18:54+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 412,
+      "by": "land.sh",
+      "at": "2026-09-27T03:25:58+08:00"
+    }
+  ],
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "91b20db7d2ffa937e9795714bf10d02627ccce43",
+    "note": "reports/t45/20260927-031521-20287/REVIEW.md",
+    "at": "2026-09-27T03:25:58+08:00",
+    "state_version": 13
+  }
 }

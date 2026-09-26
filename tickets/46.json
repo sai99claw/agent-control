@@ -45,15 +45,16 @@
     "tests/test_land.py",
     "tests/test_review.py",
     "tests/test_sync_to_project.py",
-    "tests/test_gate.py"
+    "tests/test_gate.py",
+    "tests/control_harness.py"
   ],
   "role": "worker",
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "91b20db7d2ffa937e9795714bf10d02627ccce43",
-  "state": "Ready",
-  "state_version": 8,
+  "state": "InReview",
+  "state_version": 19,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -76,5 +77,49 @@
   "test_plan": "全部單元層、mktemp 沙盒真 git repo(tests/test_auto_fix.py AutoFixBase、tests/test_apply.py ApplyBase 既有夾具),不碰真 repo 的 worktree、埠一律 0。C1:可觀察 = apply.sh 開出來的副本根路徑;期望由夾具用主 repo 路徑字串拼、兩邊 realpath 後比較(照 TheCopyRootComesFromTheMainRepo)。C2:可觀察 = 目錄存在與否(os.path.isdir),既有第 1 輪綠路夾具。C3:可觀察 = 目錄存在與否 + stdout;活著的 pid 用案例自己的 os.getpid(),死的 pid 用 subprocess 起一個 true 等它結束後取 pid。變異 M1、M3 各紅一次(M2 只在 C2 真的紅時),EVIDENCE 貼紅的第一行。標籤留空(案例住 tests/)。",
   "outline": "2026-09-27 開題者對 main ee4993f 重審(D-033):C1 git-common-dir 現在有三份內聯(auto-fix/land/review),apply.sh 仍用 $ROOT —— 從「三支收一支」改成「四支收一支 + 新檔 wtbase.sh」,並補 gate.sh 對照表一列與 sync SCRIPT_LIST(新檔不補表會退 3);C2 讀 code 發現 auto-fix.sh:909-916 在收 patch 那一手就收、#40 起第 1 輪也走同一段,降為確認用斷言;C3 仍缺(沒 worker.pid / kill -0),留;原 C4 實測 #51 已修(apply.sh:636-660 直接讀 EVIDENCE),刪。needs_verifier 由 true 改 false,理由見 outline 末句。#39/#40/#42/#43 皆 Done,depends_on 清空;D-030 凍結由主線解除。verify_strings 純內容字串(三條現在 allowed_write_paths 內都 0 次)。順序:在 #45 之後(兩張都動 gate.sh 與 sync-to-project.sh,不同區段;#45 B2 落地後新檔漏表也不退 3),在 #53 之前(#53 要 source 本票的 wtbase.sh)。 needs_verifier=false:三條都是沙盒裡「路徑字串相等 / 目錄在不在 / stdout 含句」的機械斷言,期望值由夾具拼、不從被測腳本算;M1/M3 由實作者證紅;沒有產品碼(D-028)。原票寫 true 的理由(rm -rf 對象的路徑,綠在錯處與綠長得一樣)由夾具拼期望路徑這一手就擋住,不需要第二個人再寫一份紅案例",
   "needs_verifier": false,
-  "objections": []
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "allowed_write_paths 漏了 tests/control_harness.py:四支腳本改成 `. wtbase.sh` 後,沙盒 `SCRIPT_FILES` 不含 wtbase.sh → test_apply/auto_fix/land/review/ticket_23/ticket_29/verify 的 agent-output 案例整片 `wtbase.sh: No such file` 紅(實測 120 failures);patch 裡已含那一行(`SCRIPT_FILES` 加 \"wtbase.sh\"),請把 tests/control_harness.py 加進 allowed_write_paths 後再套",
+      "evidence": "../agent-control-wt/fix-t46/round1/EVIDENCE-round1.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "main 2026-09-27: allowed_write_paths widened with tests/control_harness.py; round1 patch applied as-is"
+    }
+  ],
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 108,
+      "tokens_out": 34986,
+      "cache_write": 112661,
+      "cache_read": 4673286,
+      "wall_seconds": 1474,
+      "by": "auto-fix.sh",
+      "at": "2026-09-27T03:50:55+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 14,
+      "tokens_out": 5118,
+      "cache_write": 48568,
+      "cache_read": 285235,
+      "wall_seconds": 52,
+      "by": "review.sh",
+      "at": "2026-09-27T03:58:57+08:00"
+    }
+  ],
+  "owner": "main",
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "1c7585c292fdec977905c85fb7f8dd579b643199",
+    "note": "reports/t46/20260927-035144-73725/REVIEW.md",
+    "at": "2026-09-27T03:58:57+08:00",
+    "state_version": 16
+  }
 }
