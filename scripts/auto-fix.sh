@@ -207,9 +207,11 @@ def run_key(name):
     別個 pid 寬度下是綠的,所以這一條在自己跑的時候看起來沒問題。
 
     鍵有四段,由粗到細:
-    1. **秒**(字串前綴,本來就是時間序);
-    2. **有沒有判決** —— 同一秒裡 `gate` / `land` 勝過 `apply`:問的是「紅不紅」,
-       而 `apply` 從來不回答那件事(這一格只在同一秒內生效,跨秒仍然以時間為準);
+    1. **有沒有判決** —— `gate` / `land` 勝過 `apply`,**不分同秒跨秒**(#34):問的是
+       「紅不紅」,而 `apply` 從來不回答那件事。🩸 只在同秒生效的那一版(#29 第 4 輪)
+       擋不住晚一秒以上的 apply:它的 rc=0 蓋掉紅 gate,auto-fix 說「沒有東西要修」
+       就 exit 0;rc=6 那一筆則被讀成「沒有歸因」。一筆判決都沒有才輪到 apply;
+    2. **秒**(字串前綴,本來就是時間序);
     3. **`status.json` 的 mtime** —— 比秒細,同秒同類時還原得出誰後寫;
     4. **pid 當數字比**,不是當字串:到這裡已經沒有真相可還原了,但至少**是決定性的**。
     """
@@ -223,11 +225,19 @@ def run_key(name):
     except OSError:
         mtime = 0.0
     kind = (status.read(root, ident, name) or {}).get("kind") or ""
-    return (stamp, 1 if kind in VERDICT_KINDS else 0, mtime, serial)
+    return (1 if kind in VERDICT_KINDS else 0, stamp, mtime, serial)
 
 
 rows = status.runs_of(root, ident)
 run_id = max(rows, key=run_key) if rows else ""
+# 判決之後又有一筆沒判決的(套了新 patch 還沒跑閘門):那棵樹**未驗**,不是綠。
+# 照判決走,但要說出來 —— 靜靜地略過它,與它不存在長得一樣。
+newest = max(rows, key=lambda name: run_key(name)[1:]) if rows else ""
+if newest != run_id:
+    sys.stderr.write("auto-fix: %s(%s)晚於最後一次判決 %s(%s)—— 它沒有判決,"
+                     "視為未驗、不當成綠;照判決走\n"
+                     % (newest, (status.read(root, ident, newest) or {}).get("kind") or "?",
+                        run_id, (status.read(root, ident, run_id) or {}).get("kind") or "?"))
 data = status.read(root, ident, run_id) if run_id else {}
 ctx = data.get("repair_context") or {}
 patch = (ctx.get("patch") or {}).get("path") or ""

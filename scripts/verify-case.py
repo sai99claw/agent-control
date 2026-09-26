@@ -135,44 +135,13 @@ def module_of(rel):
 
 
 def parse_reds(log_path):
-    """一份 log → 一份紅榜。**先把 unittest 的說明行拿掉**,再餵給共用的那支解析器。
+    """一份 log → 一份紅榜:就是 `status.parse_failures`,**不再自己先刪說明行**。
 
-    `unittest` 在 `FAIL:` 標頭下面印的是測試方法 docstring 的第一行
-    (`descriptions=True` 是預設),它不是 traceback 的一部分;而
-    `status.parse_failures` 把它當成 body 的第一行,於是標頭與 traceback 之間那條
-    分隔線就把這一筆收掉了 —— **有 docstring 的案例,整段 traceback 都進不到
-    `excerpt`**:`file` 是空的、型別讀不到,十四條紅在案例檔自己斷言的紅全被算成
-    「紅在別處」(#31 量到 13 條別處 + 1 條 import 失敗)。
-
-    `scripts/status.py` 是別張票的檔,所以這裡在**餵進去之前**把那幾行拿掉,不動那
-    支解析器 —— 一份紅榜只該有一個解析器,兩份會各自往不同方向漂。
+    `unittest` 在 `FAIL:` 標頭下印的方法 docstring 第一行,#31 在這裡餵進去之前拿掉;
+    #34 把那一步搬回 `status.parse_failures` 本身 —— 一份紅榜只該有一個解析器,兩份會
+    各自往不同方向漂,而閘門寫的 `status.json` 當時就是沒修到的那一份(G16)。
     """
-    try:
-        with open(log_path, encoding="utf-8", errors="replace") as handle:
-            lines = handle.read().splitlines()
-    except OSError:
-        return []
-    keep, index = [], 0
-    while index < len(lines):
-        keep.append(lines[index])
-        if not status.parse_head(lines[index]):
-            index += 1
-            continue
-        index += 1
-        while index < len(lines) and not status.DIVIDER.match(lines[index]) \
-                and not status.parse_head(lines[index]):
-            index += 1
-    fd, scratch = tempfile.mkstemp(prefix="verify-case-reds-", suffix=".log")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as out:
-            out.write("\n".join(keep) + "\n")
-        rows = status.parse_failures(scratch)
-    finally:
-        os.unlink(scratch)
-    for row in rows:
-        # 紅榜裡留的要是**原始那一份**的路徑:normalise 過的那一份下一行就刪了。
-        row["log"] = log_path
-    return rows
+    return status.parse_failures(log_path)
 
 
 def traceback_end(body):

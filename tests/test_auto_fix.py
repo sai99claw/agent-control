@@ -36,6 +36,20 @@ RED_CASE = """diff -ruN base/tests/test_thing.py work/tests/test_thing.py
 +        self.assertEqual(1, 2, "第一輪是紅的")
 """
 
+# 同一條紅,案例方法多一行 docstring —— unittest 把它當**說明行**印在 `FAIL:` 標頭下(G16)。
+RED_CASE_WITH_DOCSTRING = """diff -ruN base/tests/test_thing.py work/tests/test_thing.py
+--- base/tests/test_thing.py\t1970-01-01 08:00:00
++++ work/tests/test_thing.py\t2026-09-21 10:00:00
+@@ -0,0 +1,7 @@
++import unittest
++
++
++class T(unittest.TestCase):
++    def test_thing(self):
++        \"\"\"A5 說明行\"\"\"
++        self.assertEqual(1, 2, "第一輪是紅的")
+"""
+
 # 假 worker:把那條紅的改綠,再照規矩出一份 `diff -ruN base work`。
 WORKER_FIXES = """#!/bin/sh
 set -e
@@ -527,6 +541,38 @@ class ThingsThatStopIt(AutoFixBase):
             self.assertIn(text, packet)
         self.assertIn("案例已修,第 2 輪綠", self.inbox_list())
 
+    def test_a_red_case_with_a_docstring_still_names_its_file_to_the_verifier(self):
+        """#34 A5:有 docstring 的案例紅了,閘門寫的 `status.json` 要有 `file`,驗證者
+        派工文才不會退成「紅榜沒有 file;從 case 名定位」(G16)。
+
+        **變異**:`status.parse_failures` 裡 `if opened:` 換成 `if opened or body:`
+        → 這一條紅。
+        """
+        self.set_worker(WORKER_REPORTS_TEST_DEFECT)
+        self.ticket_ready(in_scope=["src/app.py"])
+        patch = self.write("p1.diff", RED_CASE_WITH_DOCSTRING, where=self.home)
+        self.assertEqual(self.run_sh("scripts/apply.sh", "1", patch).returncode, 0)
+        wt = os.path.join(self.home, "repo-wt", "t1")
+        gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
+                           "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
+                           env=self.env(AC_ROOT=self.repo))
+        self.assertNotEqual(gate.returncode, 0, gate.stdout + gate.stderr)
+        rows = [row for path in glob.glob(os.path.join(self.repo, "reports", "t1", "*",
+                                                        "status.json"))
+                for row in json.load(open(path, encoding="utf-8")).get("failures") or []]
+        self.assertEqual([row["case"] for row in rows], ["test_thing.T.test_thing"], rows)
+        self.assertTrue(rows[0]["file"].endswith("tests/test_thing.py"), rows[0])
+
+        self.auto_fix()
+
+        packets = glob.glob(os.path.join(self.repo, "reports", "t1", "*",
+                                         "dispatch-verifier-round2.md"))
+        self.assertEqual(len(packets), 1)
+        with open(packets[0], encoding="utf-8") as handle:
+            packet = handle.read()
+        self.assertNotIn("紅榜沒有 file", packet)
+        self.assertIn("tests/test_thing.py", packet)
+
     def test_a_fixed_case_that_is_still_red_is_reported_before_the_next_round(self):
         self.set_worker(WORKER_TEST_DEFECT_THEN_FIXES_PRODUCT)
         self.ticket_ready()
@@ -703,15 +749,15 @@ class WhichRoundIsTheLatestOne(AutoFixBase):
     GATE_RUN = SECOND + "-100017"
     APPLY_RUN = SECOND + "-99993"
 
-    def apply_run(self, run_id):
-        """一筆 `kind=apply` 的狀態:rc=0、一條紅都沒有 —— 它說的是「patch 套上了」,
-        不是「測試過了」。"""
+    def apply_run(self, run_id, rc=0):
+        """一筆 `kind=apply` 的狀態:一條紅都沒有 —— rc=0 說的是「patch 套上了」,
+        rc=6 說的是「worker 提了反駁」,兩個都不是「測試過了」。"""
         base = self.git("rev-parse", "main").strip()
         self.run_py("scripts/status.py", "start", "--ticket", "1", "--kind", "apply",
                     "--run-id", run_id, "--base-sha", base, "--round", "1",
                     "--worktree", self.repo)
         return self.run_py("scripts/status.py", "done", "--ticket", "1",
-                           "--kind", "apply", "--run-id", run_id, "--rc", "0",
+                           "--kind", "apply", "--run-id", run_id, "--rc", str(rc),
                            "--note", "套好並 commit")
 
     def test_an_apply_run_in_the_same_second_does_not_hide_the_red_gate(self):
@@ -737,20 +783,52 @@ class WhichRoundIsTheLatestOne(AutoFixBase):
                                         "dispatch-round2.md")),
             "派工文要落在 gate 那一輪的目錄裡:" + done.stdout)
 
-    def test_a_later_second_still_wins_even_without_a_verdict(self):
-        """**同秒才看種類**:跨秒仍然以時間為準,不然「最新一輪」會變成「最新的閘門」,
-        而那是另一個意思 —— 主線重跑 apply 之後的狀態就再也讀不到了。
+    GATE_EARLIER = "20260921-100000-100017"
+    APPLY_LATER = "20260921-100005-100018"
 
-        **變異**:把 `run_key()` 的第一段(秒)拿掉 → 這一條紅。
+    def gate_dir_packet(self):
+        where = os.path.join(self.repo, "reports", "t1", self.GATE_EARLIER,
+                             "dispatch-round2.md")
+        self.assertTrue(os.path.exists(where), "派工文要落在 gate 那一輪的目錄裡")
+        with open(where, encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_an_apply_run_seconds_later_does_not_hide_the_red_gate(self):
+        """🩸 **跨秒**(#34 A1):同秒才看種類的那一版,晚 5 秒的 apply(rc=0)就蓋掉紅
+        gate,auto-fix 說「沒有東西要修」exit 0。判紅不紅只看判決;apply 晚於最後一次
+        判決 = 未驗,不是綠。
+
+        **變異**:`run_key()` 回傳值拿掉第一格(有沒有判決)→ 這一條紅。
         """
         self.set_worker(WORKER_NEVER)
         self.ticket_ready()
-        self.status(1, RED_LOG, run_id="20260921-100000-100017")
-        self.apply_run("20260921-100005-100018")
+        self.status(1, RED_LOG, run_id=self.GATE_EARLIER)
+        self.apply_run(self.APPLY_LATER)
         done = self.auto_fix("--dry-run")
-        self.assertIn("20260921-100005-100018(apply)", done.stdout, done.stdout)
-        self.assertIn("上一輪是綠的", done.stdout,
-                      "比較晚的那一輪就是最新的那一輪,不管它是哪一種")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("沒有東西要修", done.stdout, "apply 的 rc=0 被當成「測試過了」")
+        self.assertIn("%s(gate)" % self.GATE_EARLIER, done.stdout, done.stdout)
+        self.assertIn("晚於最後一次判決", done.stderr, done.stderr)
+        self.assertIn(self.APPLY_LATER, done.stderr, "要指名是哪一筆沒判決的蓋在上面")
+        packet = self.gate_dir_packet()
+        self.assertIn("test_thing.T.test_thing", packet, "紅榜要有 gate 那一條")
+        self.assertIn("第一輪是紅的", packet)
+
+    def test_an_objection_apply_seconds_later_is_not_read_as_unattributed(self):
+        """#34 A2:apply rc=6(OBJECTION)、紅 0 條,晚於紅 gate —— 讀成最新一輪就是
+        「rc 非零卻一條紅都沒有」,走「沒有歸因」exit 4。仍以 gate 為準。
+
+        **變異**:同上一條 → 這一條紅(exit 4)。
+        """
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready()
+        self.status(1, RED_LOG, run_id=self.GATE_EARLIER)
+        self.apply_run(self.APPLY_LATER, rc=6)
+        done = self.auto_fix("--dry-run")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("沒有歸因", done.stdout + done.stderr)
+        self.assertIn("%s(gate)" % self.GATE_EARLIER, done.stdout, done.stdout)
+        self.assertIn("test_thing.T.test_thing", self.gate_dir_packet())
 
 
 class RunFromInsideATicketWorktree(AutoFixBase):

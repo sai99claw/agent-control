@@ -46,6 +46,22 @@ Ran 2 tests in 0.003s
 FAILED (failures=1)
 """
 
+# 案例方法有 docstring:unittest 把它的第一行(**說明行**)印在標頭與分隔線之間(G16)。
+LOG_DOCSTRING = """======================================================================
+FAIL: test_value (mod.Nav.test_value)
+A1 說明行
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/r/tests/mod.py", line 12, in test_value
+    self.assertEqual(size(), 2)
+AssertionError: 3 != 2
+
+----------------------------------------------------------------------
+Ran 1 test in 0.001s
+
+FAILED (failures=1)
+"""
+
 # 瀏覽器那一族:引擎寫在輸出裡,紅榜要把它帶出來 —— 「chrome 紅 firefox 綠」與
 # 「兩個都紅」是兩件事,而少了 engine 那一格,它們在紅榜上長得一樣。
 LOG_ENGINE = """======================================================================
@@ -199,6 +215,22 @@ class StatusFile(Sandbox):
         self.assertEqual(row["engine"], "firefox",
                          "「chrome 紅 firefox 綠」與「兩個都紅」是兩件事")
         self.assertEqual(row["case"], "test_browsers.Band.test_top_band")
+
+    def test_a_case_with_a_docstring_keeps_its_file_line_and_traceback(self):
+        """🩸 說明行不是 body:把它當第一行,標頭下那條分隔線就把這一筆收掉 ——
+        `file` 空、`line` 0、`excerpt` 只剩說明行,派工文於是說「紅榜沒有 file」(G16)。
+
+        **變異**:`parse_failures` 裡 `if opened:` 換成 `if opened or body:`
+        (= 說明行不再跳過,第一條分隔線又被讀成結尾)→ 這一條紅。
+        """
+        log = self.write("gate.log", LOG_DOCSTRING)
+        self.status("start", "--ticket", "7", "--kind", "gate")
+        self.status("done", "--ticket", "7", "--rc", "1", "--log", log)
+        row = self.load()["failures"][0]
+        self.assertEqual(row["file"], "/r/tests/mod.py", row)
+        self.assertEqual(row["line"], 12, row)
+        self.assertGreaterEqual(len(row["excerpt"].splitlines()), 3, row["excerpt"])
+        self.assertIn("AssertionError: 3 != 2", row["excerpt"])
 
     def test_failures_prints_one_rerunnable_id_per_line(self):
         """呼叫它的是 shell 迴圈 —— 多印一個字,那個迴圈就會拿它當案例名去跑。"""
