@@ -107,21 +107,13 @@ WORKER_CMD=$(cfg worker.command "claude -p --model opus")
 WORKER_TIMEOUT=$(cfg worker.timeout_seconds 3600)
 RERUN_CMD=$(cfg gate.rerun_cmd "")
 TF=$TDIR/$ID.json
-# 主 repo 根 **只有一種定義**(#38,D-018):`git rev-parse --git-common-dir` 的上一層。
-# 在票分支的 worktree 裡它也指回主 repo;不在 git 裡才退回 `$ROOT`。
-main_root() {
-    _common=$(git -C "$ROOT" rev-parse --git-common-dir 2>/dev/null || echo "")
-    case "$_common" in
-        "") echo "$ROOT" ;;
-        /*) (cd "$(dirname "$_common")" 2>/dev/null && pwd) || echo "$ROOT" ;;
-        *)  (cd "$ROOT/$(dirname "$_common")" 2>/dev/null && pwd) || echo "$ROOT" ;;
-    esac
-}
+# 主 repo 根與副本根 **只有一種定義**(#38,#46,D-018):`scripts/wtbase.sh`。
+. "$AC/wtbase.sh"
 MAINROOT=$(main_root)
 # 票分支的 worktree **不是**控制根(G10 / #29 A10):`_ac_root()` 往上找
 # `board/config.json`,在 worktree 裡找到的是 worktree 自己,於是票檔要在**那一條分支上
 # 進了版控**才找得到 —— 而票檔是走 docs 通道進主線的,常常還沒進去(#23 第 2 輪就是這樣
-# rc=2 停掉的)。所以找不到票時改問主 repo:`--git-common-dir` 的上一層。
+# rc=2 停掉的)。所以找不到票時改問主 repo(`wtbase.sh` 的 `main_root`)。
 if [ ! -f "$TF" ] && [ -z "${AC_TICKETS_DIR:-}" ]; then
     if [ "$MAINROOT" != "$ROOT" ] \
             && [ -f "$MAINROOT/board/config.json" ] && [ -f "$MAINROOT/$TICKETS/$ID.json" ]; then
@@ -136,8 +128,7 @@ fi
 # 副本/worktree 的根:環境變數 > board/config.json 的 `worktree_dir` > 預設 `../<主 repo>-wt`;
 # 相對路徑一律以**主 repo 根**解析(#38)。以前用 `$ROOT` 拼:在票 worktree 裡跑時 `$ROOT`
 # 是 worktree,副本開到 `x-wt/x-wt/` 底下(9/23 實際開在 `agent-control-wt/agent-control-wt/`)。
-WTBASE=${AC_WORKTREE_DIR:-$(cfg worktree_dir "")}
-case "$WTBASE" in "") WTBASE=$MAINROOT/../$(basename "$MAINROOT")-wt ;; /*) ;; *) WTBASE=$MAINROOT/$WTBASE ;; esac
+WTBASE=$(wtbase)
 # 上層不存在就**指名停下**:以前 `cd` 失敗後前綴變成空字串,副本根算成檔案系統根下的
 # `/x-wt`,而且不報錯 —— 接下來的 `rm -rf "$FIX"` 就對著一個沒人預期的地方跑。
 _wtparent=$(cd "$(dirname "$WTBASE")" 2>/dev/null && pwd) || {
@@ -870,11 +861,23 @@ env_extra = {"AC_DISPATCH": dispatch, "AC_TICKET": ident, "AC_ROUND": r,
 import os
 env = dict(os.environ)
 env.update(env_extra)
+# `worker.pid` 住在副本根(#46):下一輪收前幾輪副本之前先問它還活著沒有。回來了就刪掉,
+# 留著的那一份只會是「auto-fix 被砍了、worker 還在跑」的那一種。
+pid_path = os.path.join(cwd, "worker.pid")
 try:
     with open(dispatch, encoding="utf-8") as handle, open(log_path, "w", encoding="utf-8") as log:
-        done = subprocess.run(cmd, shell=True, cwd=cwd, env=env, stdin=handle,
-                              stdout=log, stderr=subprocess.STDOUT, timeout=float(timeout))
-    rc = done.returncode
+        proc = subprocess.Popen(cmd, shell=True, cwd=cwd, env=env, stdin=handle,
+                                stdout=log, stderr=subprocess.STDOUT)
+        with open(pid_path, "w", encoding="utf-8") as pid_file:
+            pid_file.write("%d\n" % proc.pid)
+        try:
+            rc = proc.wait(timeout=float(timeout))
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            raise
+        finally:
+            os.remove(pid_path)
 except subprocess.TimeoutExpired:
     sys.stderr.write("auto-fix: worker 超過 %s 秒還沒回來 —— 當它沒交\n" % timeout)
     rc = 124
@@ -1055,9 +1058,16 @@ PY
 
 # 迴圈從 `S_ROUND+1` 起,碰不到前面那幾輪的副本 —— 主線用 Agent 手建的第 1 輪就在這裡
 # (#38 A4)。派下一輪之前一併收;先撿再刪,同 `round_once`。`--dry-run` 不刪東西。
+# 那一輪的 worker 還活著(`worker.pid` + `kill -0`)就不收:收了等於從它腳下抽走副本(#46)。
 if [ -z "$DRY" ]; then
     p=1
     while [ "$p" -le "$S_ROUND" ]; do
+        _pid=$(cat "$WTBASE/fix-t$ID/round$p/worker.pid" 2>/dev/null || echo "")
+        if [ -n "$_pid" ] && kill -0 "$_pid" 2>/dev/null; then
+            echo "auto-fix: 第 $p 輪的 worker(pid $_pid)還在跑,不收副本"
+            p=$((p + 1))
+            continue
+        fi
         collect_from_copy "$WTBASE/fix-t$ID/round$p" "patch-round$p.diff" "EVIDENCE-round$p.md"
         shed_copies "$WTBASE/fix-t$ID/round$p"
         p=$((p + 1))

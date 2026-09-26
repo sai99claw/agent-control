@@ -544,16 +544,11 @@ fi
 
 # ------------------------------------------------------------------- 第 5 步
 # 副本根與 `auto-fix.sh` **同一種解析**(#38):環境變數 > `worktree_dir` > `../<主 repo>-wt`,
-# 相對路徑以主 repo 根(`--git-common-dir` 的上一層)拼。各算各的那一天,auto-fix 開副本的
+# 相對路徑以主 repo 根(`wtbase.sh` 的 `main_root`)拼。各算各的那一天,auto-fix 開副本的
 # 地方與底下唸殘留清單的地方就不是同一個目錄,而「沒有殘留」與「看錯地方」長得一樣。
-_common=$(git -C "$ROOT" rev-parse --git-common-dir 2>/dev/null || echo "")
-case "$_common" in
-    "") MAINROOT=$ROOT ;;
-    /*) MAINROOT=$( (cd "$(dirname "$_common")" 2>/dev/null && pwd) || echo "$ROOT") ;;
-    *)  MAINROOT=$( (cd "$ROOT/$(dirname "$_common")" 2>/dev/null && pwd) || echo "$ROOT") ;;
-esac
-WTBASE=${AC_WORKTREE_DIR:-$(cfg worktree_dir "")}
-case "$WTBASE" in "") WTBASE=$MAINROOT/../$(basename "$MAINROOT")-wt ;; /*) ;; *) WTBASE=$MAINROOT/$WTBASE ;; esac
+# 兩支共用 `scripts/wtbase.sh`(#46)。
+. "$ROOT/scripts/wtbase.sh"
+WTBASE=$(wtbase)
 WT=$WTBASE/land-$STAMP
 BR=land/$STAMP
 mkdir -p "$WTBASE"

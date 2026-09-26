@@ -481,6 +481,32 @@ class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
         self.assertIn("--evidence-verifier", done.stdout)
 
 
+class TheCopyRootComesFromTheMainRepo(ApplyBase):
+    """#46 C1:副本根以**主 repo 根**解析(`scripts/wtbase.sh`),與 auto-fix / land / review
+    同一個來源。以前 apply.sh 用 `$ROOT` 拼:在票分支的 worktree 裡手跑時 `$ROOT` 是
+    worktree 自己,副本開到 `…-wt/t1-wt/` 底下。
+
+    期望路徑由這裡從夾具的主 repo 路徑拼,不問被測腳本;比較前兩邊都過 `realpath`
+    (macOS 的 `/var` → `/private/var`),同 test_auto_fix 的 TheCopyRootComesFromTheMainRepo。
+    """
+
+    def test_run_from_a_ticket_worktree_the_copy_opens_under_the_main_repo_wt(self):
+        """**變異 M1**:apply.sh 改回 `$ROOT` 拼 WTBASE → 這一條紅。"""
+        self.make("2")
+        wt = os.path.join(self.home, "repo-wt", "t1")
+        self.git("worktree", "add", "-q", wt, "-b", "t1")
+        patch = self.patch_file("p.diff", CHANGE)
+        done = self.run_sh(os.path.join(wt, "scripts", "apply.sh"), "2", patch, cwd=wt)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        expected = os.path.realpath(os.path.join(self.home, "repo-wt", "t2"))
+        found = [line for line in done.stdout.splitlines() if line.startswith("apply: 開了分支 t2 與副本 ")]
+        self.assertEqual(len(found), 1, done.stdout)
+        copy = found[0][len("apply: 開了分支 t2 與副本 "):].rsplit("(", 1)[0]
+        self.assertEqual(os.path.realpath(copy), expected)
+        self.assertTrue(os.path.isdir(expected), done.stdout)
+        self.assertFalse(os.path.exists(os.path.join(self.home, "repo-wt", "t1-wt")), "副本巢狀了")
+
+
 class ThingsItRefuses(ApplyBase):
 
     def test_an_absolute_header_is_refused_before_anything_is_touched(self):

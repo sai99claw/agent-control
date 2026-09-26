@@ -33,7 +33,7 @@ class SyncsTheScripts(unittest.TestCase):
             for name in ("status.py", "verify-case.py", "apply.sh", "auto-fix.sh",
                          "review.sh", "inbox.py", "rules.py", "memory.py"):
                 self.assertIn(name, got)
-            for dependency in ("event.py", "ticket.py"):
+            for dependency in ("event.py", "ticket.py", "wtbase.sh"):
                 self.assertIn(dependency, got,
                               "少了它們,同步過去的是一組 import 就炸的檔")
 
