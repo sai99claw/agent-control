@@ -9,3 +9,4 @@
 **上限**:一張票 ≤ 60K 自己的 token;超過代表在做實作者的事。
 **第二輪以後的假設要標「哪些已排除」**(#623 第 2 輪):診斷本身有價值,但建議的變異要自己驗過紅;沒驗過的寫「未實測」,下一輪才不會照做。
 **票面四格交票前先自檢,沒過不准 Ready**(D-031,2026-09-26;#651/#652 各退三輪,全是這幾格):`needs_verifier` 必須是 true/false 布林 + 一句理由(D-028);`verify_strings` 是 **list[str] 內容字串**(落地對整個分支 `git grep -F`,不是檔名、不是 {path,contains});`tags` 只能用 `verify/TAGS.md` 登記過的,動到 verify/ 案例的票一定要有;票面引用的指令先 `--help` 一次再寫。自檢:`python3 -c 'import json;t=json.load(open("tickets/<n>.json"));assert isinstance(t.get("needs_verifier"),bool),"needs_verifier";v=t.get("verify_strings");assert v and all(isinstance(x,str) for x in v),"verify_strings";print("ok")'`。
+**開票前實測票面假設**(D-033,2026-09-26;三張產品票第 1 輪全 ticket-wrong):grep 既有測試對這個行為的斷言(釘住舊行為的要列進 allowed_write_paths);票面要的前置狀態自己造一次(造不出來就不是這張票的前提);算改動會牽動哪些黃金檔/快照。驗過的寫進 outline,驗不了的標「未實測」。

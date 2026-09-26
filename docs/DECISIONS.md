@@ -232,3 +232,10 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 
 ## D-031(2026-09-26)開題者交票前必做票面格式自檢
 使用者裁示:「票面格式退回好幾次很沒效率,票面格式檢查加到開票者記憶中」。#651/#652 同一個開題者把 `verify_strings` 寫成 {path,contains}、漏 `needs_verifier`、漏 `tags`,兩張票各退三輪閘門/落地。規則寫進 `memory/role/opener.md`:四格(needs_verifier 布林、verify_strings list[str] 內容字串、tags 登記過、指令先 --help)交票前跑一行 python 自檢,沒過不准 `set Ready`。後續若要做成 `ticket.py lint`,另開票。
+
+## D-032(2026-09-26)接收者退場:票 JSON 就是儀表板,主線只收兩種頁
+使用者裁示:「Worker 正常在跑的話訊息不該送到主線;接收者不該是 session,應該是儀表板上的一個欄位或格式;只有需要 user 決定方向、或整票完成時回報主線(這票在幹嘛 + 完成簡報)。」實測依據:2026-09-26 三張 T 產品票,接收者一個花 25 萬 token 只在轉述票面。
+形狀:(1) 票 JSON 是儀表板一列,派工/閘門/覆核/落地腳本直接寫進去,加 `cost[]`(每輪 token 與時鐘,腳本寫);(2) inbox 只剩兩種頁:`decision`(ticket-wrong / blocking 反駁、三輪紅、覆核 fail、閘門不可歸因)與 `done`(落地 sha、做了什麼、覆核結論、成本);其餘事件只進 events.jsonl 與 EVIDENCE;(3) A 端先做(C6 驗證者自動派、done 頁格式、cost 欄),T 端接線跟著(AUTOFIX、review.sh 收 AwaitingReview、dispatch-reviewer 範本進 sync)。tabbypool_report 卡在 T 接線完成後退場。
+
+## D-033(2026-09-26)開題者開票前在既有測試與資料上實測票面假設
+三張產品票第 1 輪全 ticket-wrong:#605 既有快照測試把舊行為釘死且 docstring 明寫;#614 票面假設的「零帳本帳號」註冊流程根本造不出來;#520 投影多兩鍵讓 545 份黃金檔跟著動,寫入範圍沒列。共同點都不是實作問題,是票面假設沒驗。規則進 memory/role/opener.md:開票前 grep 既有測試對這個行為的斷言、跑一次票面要的前置狀態能不能造出來、改動會牽動哪些黃金檔;驗過的寫進 outline,驗不了的標「未實測」。
