@@ -209,6 +209,23 @@ class GateSh(Sandbox):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.ran(), ["test_no_project_names"])
 
+    def test_the_session_hook_and_its_settings_map_to_test_session_hook(self):
+        """#39 的兩個新檔各自對到 `test_session_hook`:它 A1 解析 `.claude/settings.json`、
+        其餘案例跑 `scripts/session-hook.sh`。兩個檔分開叫,一列少了另一列補不了。
+
+        **變異**:把對照表裡其中一個檔名拿掉 → 那一個 subTest 紅(rc=3)。
+        """
+        self.write(os.path.join("tests", "test_session_hook.py"),
+                   PASSING % "test_session_hook")
+        for path in ("scripts/session-hook.sh", ".claude/settings.json"):
+            with self.subTest(path=path):
+                if os.path.exists(self.log):
+                    os.remove(self.log)
+                done = self.gate(path)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertEqual(self.ran(), ["test_session_hook"])
+                self.assertNotIn("對不到任何測試模組", done.stdout)
+
     def test_an_html_outside_docs_is_still_nobody_guarded(self):
         """**只有 `docs/` 底下的 `.html` 算**:守衛那一側把 `templates/x.html` 當
         程式級(`test_docs_html_and_ticket_json_are_document_level` 釘住這一條),

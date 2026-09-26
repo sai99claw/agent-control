@@ -5,11 +5,12 @@
 """
 
 import os
+import shutil
 import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import Sandbox  # noqa: E402
+from control_harness import SCRIPTS, Sandbox  # noqa: E402
 
 
 class NewSession(Sandbox):
@@ -88,6 +89,56 @@ class NewSession(Sandbox):
         done = self.start("main")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertEqual(self.events(), [], "沒開成的 session 不該留下一筆 start")
+
+    def test_no_event_prints_the_page_and_emits_nothing(self):
+        """#39:resume / compact 後 hook 重印這一頁 —— 那不是新的 session。"""
+        done = self.start("main", "fable", "--no-event")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("開著的票", done.stdout)
+        self.assertEqual(self.events(), [], "--no-event 還是發了事件")
+
+    def test_the_reading_list_names_this_role_s_card(self):
+        """#39:角色卡那一行。worker 的卡叫 implementer.md(rules.py WANTED)——
+        指到一個不存在的檔,比沒有那一行更糟。"""
+        self.assertIn("memory/role/main.md", self.start("main", "fable").stdout)
+        self.assertIn("memory/role/implementer.md", self.start("worker", "opus").stdout)
+
+    def test_an_unknown_flag_is_a_usage_error_and_emits_nothing(self):
+        done = self.start("main", "fable", "--no-evnet")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertEqual(self.events(), [])
+
+
+class A7ItMovesWithTheSync(Sandbox):
+    """#39 A7:同步到專案後這幾支住在 `scripts/control/`,「上一層」不再是根。"""
+
+    MOVED = ("new-session.sh", "heartbeat.sh", "session-hook.sh", "event.py",
+             "ticket.py", "inbox.py", "memory.py", "status.py", "verify.py", "rules.py")
+
+    def setUp(self):
+        super().setUp()
+        control = os.path.join(self.repo, "scripts", "control")
+        os.makedirs(control)
+        for name in self.MOVED:
+            shutil.copy(os.path.join(SCRIPTS, name), os.path.join(control, name))
+        self.make_ticket(7, subject="只有這顆沙盒才有的那一張")
+
+    def run_moved(self, **env):
+        return self.run_sh("scripts/control/new-session.sh", "main", "fable",
+                           "--no-event", env=self.env(**env))
+
+    def test_a7_with_ac_root(self):
+        done = self.run_moved(AC_ROOT=self.repo)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("開著的票", done.stdout)
+        self.assertIn("只有這顆沙盒才有的那一張", done.stdout)
+
+    def test_a7_without_ac_root_it_walks_up_to_the_config(self):
+        done = self.run_moved()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("開著的票", done.stdout)
+        self.assertIn("只有這顆沙盒才有的那一張", done.stdout,
+                      "票庫讀錯地方 —— 根沒有往上找到 board/config.json")
 
 
 if __name__ == "__main__":

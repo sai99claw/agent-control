@@ -151,5 +151,30 @@ class TheDesignSessionHasACardNow(unittest.TestCase):
         self.assertIn("模型", text, "後續工作的模型表")
 
 
+class TheProjectTemplate(unittest.TestCase):
+    """#39 A9:專案的 CLAUDE.md 範本 —— A 契約的入口在專案裡叫什麼,寫在一張對照表裡。"""
+
+    def text(self):
+        return read("project-CLAUDE.md")
+
+    def test_a9_the_first_paragraph_still_points_at_agent_control(self):
+        paragraphs = [p for p in self.text().split("\n\n")
+                      if p.strip() and not p.startswith("#")]
+        self.assertIn("先讀 `../agent-control/CLAUDE.md`", paragraphs[0])
+
+    def test_a9_the_mapping_table_names_the_five_entries(self):
+        text = self.text()
+        self.assertIn("## 對照表", text)
+        section = text.split("## 對照表", 1)[1].split("\n## ", 1)[0]
+        for entry in ("land.sh", "apply.sh", "inbox.py", "event.py", "ticket.py"):
+            rows = [line for line in section.splitlines() if entry in line]
+            self.assertTrue(rows, "對照表少了 %s" % entry)
+            self.assertIn("<專案入口>", rows[0], entry + " 沒有對應到專案入口的那一格")
+
+    def test_a9_the_hook_has_a_line(self):
+        self.assertTrue([line for line in self.text().splitlines()
+                         if "session-hook.sh" in line])
+
+
 if __name__ == "__main__":
     unittest.main()

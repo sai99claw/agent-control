@@ -98,14 +98,16 @@ CTRL=$DEST/scripts/control
 CTRL_MANIFEST=$CTRL/.sync-manifest
 NEW_SCRIPTS=""
 # 專案端要用到的那幾支 + 它們 import 的。順序無所謂,名單本身要進 code review。
-SCRIPT_LIST="status.py verify-case.py apply.sh auto-fix.sh inbox.py rules.py memory.py event.py ticket.py verify.py"
+SCRIPT_LIST="status.py verify-case.py apply.sh auto-fix.sh inbox.py rules.py memory.py event.py ticket.py verify.py new-session.sh heartbeat.sh session-hook.sh"
 # 這兩支**不是入口**,是被上面那幾支 `import` 的(見檔頭)。查「接了沒」時要把它們挑掉
 # —— 對一支本來就沒有人直接叫的檔說「沒有呼叫點」,是一句假話,而假警報會讓真的那幾條
 # 被一起跳過(`docs/DISPATCH-TEMPLATE.md` §5.7)。
 # `verify.py` **不在這裡**(#35):專案的閘門直接跑它,而下游專案的閘門跑的是它自己那支
 # `scripts/verify.py`(與 control 那份內容不同)—— 把它當成「只被 import」,就看不見
 # 那個分岔,既有測試還把「不准點名它」釘死了。
-DEPENDENCY_ONLY="event.py ticket.py"
+# `heartbeat.sh` 由 `new-session.sh` 叫、`new-session.sh` 由 `session-hook.sh` 叫(#39):
+# 專案要接的只有 hook 那一支(接在 `.claude/settings.json`),另外兩支是它帶進來的。
+DEPENDENCY_ONLY="event.py ticket.py heartbeat.sh new-session.sh"
 
 copy_dir() {  # $1 = 來源目錄  $2 = 目的目錄  $3 = manifest 前綴
   mkdir -p "$2"
@@ -255,12 +257,16 @@ sync:   5. 主線開場讀終態收件匣(不要輪詢 status):
 sync:        python3 scripts/control/inbox.py list
 sync:   6. 派工文前言(按角色裁切,≤ 4 KB,不整份貼):
 sync:        python3 scripts/control/rules.py pack worker --model <模型>
+sync:   7. 主線開場那一頁(SessionStart hook,寫在專案的 .claude/settings.json):
+sync:        "command": "sh \"$CLAUDE_PROJECT_DIR/scripts/control/session-hook.sh\""
+sync:      model 讀 board/config.json 的 routing.main(或 AC_MODEL);副本裡不觸發。
 EOF
 
 # 接了沒:**同步了但沒有呼叫點**(2026-09-23,#29 A11;G11)。
 # 上面那張接點清單是「要改的那幾行」,而它每一次都印一模一樣的內容 —— 於是「已經接上三支」
 # 與「一支都沒接」在畫面上長得一樣。這裡真的去專案自己的 `scripts/*.sh` 裡 grep 一次
 # (**排除 `scripts/control/` 自己** —— 產出物互相呼叫不算專案接上了)。
+# hook 的呼叫點不在 `scripts/*.sh`,在 `.claude/settings.json`(#39),所以那一份也看。
 UNCALLED=""
 for name in $SCRIPT_LIST; do
   case " $DEPENDENCY_ONLY " in *" $name "*) continue ;; esac
@@ -271,7 +277,7 @@ for name in $SCRIPT_LIST; do
   # `control/<檔名>`,大小寫不分(`$CONTROL/` 的那個 CONTROL 是大寫的變數名)。
   # `.` 要跳脫 —— 不跳的話 `status.py` 會對上 `statusXpy`,而那種命中沒有人看得出來。
   esc=$(printf '%s' "$name" | sed 's/\./\\./g')
-  for caller in "$DEST"/scripts/*.sh; do
+  for caller in "$DEST"/scripts/*.sh "$DEST/.claude/settings.json"; do
     [ -f "$caller" ] || continue
     case "$caller" in "$CTRL"/*) continue ;; esac
     # **註解不算接上了**:`^[^#]*` 要求那一行在提到它之前沒有 `#`。實測 2026-09-23:
@@ -288,10 +294,10 @@ done
 if [ -n "$UNCALLED" ]; then
   # shellcheck disable=SC2086
   echo "sync: 同步了但專案端沒有呼叫點:$(echo $UNCALLED)"
-  echo "sync:   (搬過去的檔不會自己被呼叫;上面第 1–6 點就是那幾行要寫在哪。"
+  echo "sync:   (搬過去的檔不會自己被呼叫;上面第 1–7 點就是那幾行要寫在哪。"
   echo "sync:    主線手打的那幾支這裡分辨不出來 —— 這一行說的是「專案的腳本裡沒有」。)"
 else
-  echo "sync: 專案端每一支都有呼叫點(排除只被 import 的 $DEPENDENCY_ONLY)。"
+  echo "sync: 專案端每一支都有呼叫點(排除只被別支 import / 呼叫的 $DEPENDENCY_ONLY)。"
 fi
 
 # 同名分岔檔(#35):專案自己的 `scripts/<名>.py` 與同步過去的 `scripts/control/<名>.py`

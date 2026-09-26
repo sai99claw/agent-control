@@ -17,6 +17,7 @@
 理由:每一份「所有角色都要讀」的檔案,成本是**乘以 agent 數**的。全域交接留給主線。
 
 ## 主線
+- **這一節現在由 hook 自動跑**(#39):`.claude/settings.json` 的 SessionStart hook 叫 `scripts/session-hook.sh` → `new-session.sh main <routing.main>`,那一頁在第一個 prompt 之前就在上下文裡;startup / clear 發 `session.start`,resume / compact 只重印;副本裡(`worktree_dir` 底下、`AC_ROLE` 非 main、`AC_SESSION_HOOK=0`)不觸發。
 - 看**終態收件匣** `python3 scripts/inbox.py list`:閘門、auto-fix、落地、轉 Blocked 跑完的事
   在這裡排隊,一頁答四句(哪張票、什麼狀態、要你做什麼、去哪看)。收下用 `inbox.py ack <票號>`。
   **開場讀一次,之後只在被通知時讀 —— 不准輪詢 status**(每看一次背景工作 = 整份上下文重送一輪)。
