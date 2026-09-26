@@ -233,7 +233,9 @@ FLAG_NOTE = {
     "--allowed-write-path": "允許寫入的路徑 glob;**一個一個給**(排順序判平行、落地器判越界,讀的都是這一格)",
     "--depends-on": "前置票號;`7` 或 `7:閘門綠`;一個一個給",
     "--decision-ref": "相關裁示編號(D-00x);一個一個給",
-    "--verify-string": "關票時要在主線上抓到的字;`路徑:那串字` 或只給字;一個一個給",
+    "--verify-string": ("關票時要在主線上抓到的字;三種認法:`路徑:那串字`(冒號前像路徑"
+                        "才切 —— 含 / 或 .py/.sh/.md/.json 結尾、無空白)/ 純字串 / "
+                        "純字串含冒號不切(`D-G89: x`);一個一個給"),
     "--verify-file": "驗證者寫的回歸案例檔;一個一個給(進票的 `verify.files`)",
     "--verify-tag": "那幾個案例宣告的功能標籤;一個一個給(進票的 `verify.tags`)",
     "--verify-run": "怎麼跑那幾個案例(一句可以直接貼的指令)",
@@ -448,9 +450,25 @@ def normalise_depends(values):
     return out
 
 
+PATH_SUFFIXES = (".py", ".sh", ".md", ".json")
+
+
+def looks_like_path(head):
+    """冒號前那一段像不像路徑:含 `/` 或以 `.py/.sh/.md/.json` 結尾,而且沒有空白。
+
+    **只有這一種認法**:以前見冒號就切,「D-G89: x」「http://x/y」「驗收:A1」這種
+    本來就含半形冒號的純字串被切成 `{path, contains}`,關票時拿一個不存在的路徑去
+    grep —— 抓不到,而那看起來跟「這張票沒做」一樣。"""
+    return bool(head) and not re.search(r"\s", head) \
+        and ("/" in head or head.endswith(PATH_SUFFIXES))
+
+
 def normalise_verify(values):
-    """`--verify-string 'path:那串字'` → `{path, contains}`;沒有冒號就是「在
-    allowed_write_paths 底下任一個檔裡找這串字」。"""
+    """`--verify-string 'path:那串字'` → `{path, contains}`;其餘一律是純字串 ——
+    「在 allowed_write_paths 底下任一個檔裡找這串字」。
+
+    三種認法:冒號前那段**像路徑**(`looks_like_path`)才切;沒有冒號是純字串;
+    有冒號但冒號前不像路徑(`D-G89: x`、`http://x/y`)也是純字串,整句不切。"""
     out = []
     for raw in values:
         if isinstance(raw, dict):
@@ -458,8 +476,8 @@ def normalise_verify(values):
             continue
         text = str(raw)
         path, sep, needle = text.partition(":")
-        if sep and needle.strip():
-            out.append({"path": path.strip(), "contains": needle})
+        if sep and needle.strip() and looks_like_path(path):
+            out.append({"path": path, "contains": needle.strip()})
         else:
             out.append(text)
     return out
@@ -517,20 +535,23 @@ def cmd_create(argv, stdin=sys.stdin, stdout=sys.stdout):
             ticket["allowed_write_paths"].append("tests/*")
     if ticket.get("verify_strings"):
         ticket["verify_strings"] = normalise_verify(ticket["verify_strings"])
-    ticket["id"] = next_id()
     ticket["created"] = now()
     if not ticket.get("base_sha"):
         # 派工那一刻的主線 sha。閘門的綠只對它有效(SCHEMA §版本),所以寧可自己
         # 去問一次,也不要留空 —— 留空的那一格看起來跟「還沒決定」一樣。
         ticket["base_sha"] = head_sha(main_branch())
-    bad = missing_fields(ticket)
-    if bad:
-        sys.stderr.write("ticket: 這張票還開不了工,缺:\n")
-        for line in bad:
-            sys.stderr.write("  %s\n" % line)
-        sys.stderr.write("(契約見 tickets/SCHEMA.md)\n")
-        return 2
-    path = save(ticket)
+    # 配號與寫檔在同一把鎖裡(#3):`next_id()` 是「讀最大的 +1」,兩個同時 create 的
+    # 行程在寫檔之前讀到同一個最大值,就拿到同一個號碼,後寫的整份蓋掉先寫的。
+    with Lock():
+        ticket["id"] = next_id()
+        bad = missing_fields(ticket)
+        if bad:
+            sys.stderr.write("ticket: 這張票還開不了工,缺:\n")
+            for line in bad:
+                sys.stderr.write("  %s\n" % line)
+            sys.stderr.write("(契約見 tickets/SCHEMA.md)\n")
+            return 2
+        path = save(ticket)
     event.emit("ticket.created", ticket=ticket["id"], role=ticket["role"],
                model=ticket["model"], state=ticket["state"])
     stdout.write("ticket: #%s 開好了 -> %s\n"

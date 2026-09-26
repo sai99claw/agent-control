@@ -401,6 +401,32 @@ class TheProjectLayer(RulesBase):
         self.assertEqual(done.stdout.count(self.LOCAL_ROLE), 1)
         self.assertNotIn("本專案", done.stdout, "A 自己不該有「本專案」這個小標")
 
+    def test_the_canon_repo_packs_its_own_inbox_too(self):
+        """正本(A 自己)也帶自己的暫存區(#37):以前暫存區只從專案層取,而同步刻意
+        不帶 inbox(D-021)—— 正本的 `*.inbox.md` 兩邊都沒有讀者。
+
+        用開題者 + fable(票面 A1 量的那一組)。兩格都有字、每一行都是真實長度(最後
+        一行約 190 B / 250 B):平分 600 B 的時候後面那一格只剩一句「砍過」。
+
+        **變異**:inbox 來源綁回 `local`(`(local_card_rel, local_model_rel)`)→ 紅;
+        前一格用剩的不給下一格(`inbox_room // len(inboxes)`)→ 紅。
+        """
+        self.single_layer()
+        role_last = "- ROLE-INBOX-LAST " + "角" * 56
+        model_last = "- MODEL-INBOX-LAST " + "模" * 76
+        # 舊的幾條也是真實長度(一條教訓約 150–260 B),不是一兩個字的填充。
+        older = "".join("- 舊的第%d條 %s\n" % (i, "舊" * 60) for i in range(1, 6))
+        self.write(os.path.join("memory", "role", "opener.inbox.md"),
+                   older + role_last + "\n")
+        self.write(os.path.join("memory", "model", "fable.inbox.md"),
+                   older + model_last + "\n")
+        done = self.rules("pack", "opener", "--model", "fable")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn(role_last, done.stdout, "正本的角色暫存區沒進包")
+        self.assertIn(model_last, done.stdout, "正本的模型暫存區沒進包")
+        self.assertLessEqual(len(done.stdout.encode("utf-8")), 4096)
+        self.assertNotIn("本專案", done.stdout, "A 自己不該有「本專案」這個小標")
+
     def test_being_the_canon_repo_does_not_list_the_project_layer(self):
         self.single_layer()
         done = self.rules("pack", "worker", "--model", "opus")

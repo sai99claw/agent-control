@@ -3,11 +3,16 @@
 
 import json
 import os
+import re
+import subprocess
 import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import Sandbox  # noqa: E402
+from control_harness import SCRIPTS, TIMEOUT, Sandbox  # noqa: E402
+
+sys.path.insert(0, SCRIPTS)
+from ticket import normalise_verify  # noqa: E402
 
 MIN = ("--subject", "land 對 0 commit 整批拒絕",
        "--objective", "任一支 0 commit 時 land 秒退並點名",
@@ -179,6 +184,84 @@ class Help(Sandbox):
             self.assertIn(flag, printed)
             done = self.ticket("create", *MIN, flag, "x")
             self.assertEqual(done.returncode, 0, flag + ":" + done.stdout + done.stderr)
+
+
+class VerifyStringShapes(unittest.TestCase):
+    """`--verify-string` 的三種認法(#37):冒號前那段**像路徑**才切成 `{path, contains}`,
+    其餘一律是純字串。以前見冒號就切,本來就含半形冒號的字串被切成一個不存在的路徑,
+    關票時 grep 不到 —— 那看起來跟「這張票沒做」一樣。
+
+    **變異**:拿掉 `and looks_like_path(path)` → 純字串那兩條紅;`needle.strip()` 改回
+    `needle` → 路徑那一條紅。
+    """
+
+    def test_a_path_before_the_colon_is_split_and_the_needle_is_trimmed(self):
+        self.assertEqual(normalise_verify(["scripts/land.sh:沒有新的 commit"]),
+                         [{"path": "scripts/land.sh", "contains": "沒有新的 commit"}])
+        self.assertEqual(normalise_verify(["scripts/a.py: x "]),
+                         [{"path": "scripts/a.py", "contains": "x"}])
+
+    def test_a_plain_string_with_a_colon_is_not_split(self):
+        for text in ("D-G89: x", "http://x/y", "驗收:A1"):
+            self.assertEqual(normalise_verify([text]), [text], text)
+
+    def test_a_plain_string_without_a_colon_stays_plain(self):
+        self.assertEqual(normalise_verify(["沒有新的 commit"]), ["沒有新的 commit"])
+
+
+class VerifyStringHelp(Sandbox):
+
+    def test_create_help_names_the_three_ways_it_reads_a_verify_string(self):
+        """量那一段(`--verify-string` 那一行),不量整份 —— 範例行裡本來就有
+        `路徑:那串字` 的樣子,量整份的話說明改回舊的也是綠的。
+
+        **變異**:`FLAG_NOTE["--verify-string"]` 改回舊的一句 → 這一條紅。
+        """
+        printed = self.ticket("create", "--help").stdout
+        rows = [line for line in printed.splitlines()
+                if re.match(r"\s+--verify-string\s{2,}", line)]
+        self.assertEqual(len(rows), 1, printed)
+        for phrase in ("路徑:那串字", "像路徑", "純字串", "純字串含冒號不切"):
+            self.assertIn(phrase, rows[0])
+
+
+# 放大競態:`next_id()` 算完之後停一下再回去寫檔。沒有鎖的話,同時跑的幾個行程
+# 全都在別人寫檔之前讀到同一個最大值。停在**測試這一側**,不在產品裡留一個鉤子。
+SLOW_NEXT_ID = """
+import sys, time
+sys.path.insert(0, sys.argv[1])
+import ticket
+real = ticket.next_id
+def slow(*args, **kwargs):
+    got = real(*args, **kwargs)
+    time.sleep(0.3)
+    return got
+ticket.next_id = slow
+sys.exit(ticket.main(sys.argv[2:]))
+"""
+
+
+class ConcurrentCreate(Sandbox):
+
+    def test_processes_that_create_at_the_same_time_get_different_ids(self):
+        """#3 驗收第一條:兩個以上行程同時 create → id 不同(subprocess 測)。
+
+        4 個行程,不是 2 個:2 個常被作業系統排成一先一後,沒鎖也是綠的。
+
+        **變異**:把 `cmd_create` 裡的 `with Lock():` 拿掉 → 這一條紅。
+        """
+        scripts = os.path.join(self.repo, "scripts")
+        procs = [subprocess.Popen(
+            ["python3", "-c", SLOW_NEXT_ID, scripts, "create", *MIN],
+            cwd=self.repo, env=self.env(), stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True) for _ in range(4)]
+        outs = [proc.communicate(timeout=TIMEOUT) for proc in procs]
+        for proc, (out, err) in zip(procs, outs):
+            self.assertEqual(proc.returncode, 0, out + err)
+        ids = sorted(re.search(r"#(\d+) 開好了", out).group(1) for out, _err in outs)
+        self.assertEqual(ids, ["1", "2", "3", "4"], "同時 create 拿到重複的號碼")
+        self.assertEqual(sorted(row["id"] for row in self.tickets_on_disk()),
+                         ["1", "2", "3", "4"], "重複的號碼 = 後寫的整份蓋掉先寫的")
 
 
 class ListAndShow(Sandbox):
