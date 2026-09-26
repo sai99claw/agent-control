@@ -98,7 +98,7 @@ CTRL=$DEST/scripts/control
 CTRL_MANIFEST=$CTRL/.sync-manifest
 NEW_SCRIPTS=""
 # 專案端要用到的那幾支 + 它們 import 的。順序無所謂,名單本身要進 code review。
-SCRIPT_LIST="status.py verify-case.py apply.sh auto-fix.sh inbox.py rules.py memory.py event.py ticket.py verify.py new-session.sh heartbeat.sh session-hook.sh"
+SCRIPT_LIST="status.py verify-case.py apply.sh auto-fix.sh review.sh inbox.py rules.py memory.py event.py ticket.py verify.py new-session.sh heartbeat.sh session-hook.sh"
 # 這兩支**不是入口**,是被上面那幾支 `import` 的(見檔頭)。查「接了沒」時要把它們挑掉
 # —— 對一支本來就沒有人直接叫的檔說「沒有呼叫點」,是一句假話,而假警報會讓真的那幾條
 # 被一起跳過(`docs/DISPATCH-TEMPLATE.md` §5.7)。
@@ -260,6 +260,9 @@ sync:        python3 scripts/control/rules.py pack worker --model <模型>
 sync:   7. 主線開場那一頁(SessionStart hook,寫在專案的 .claude/settings.json):
 sync:        "command": "sh \"$CLAUDE_PROJECT_DIR/scripts/control/session-hook.sh\""
 sync:      model 讀 board/config.json 的 routing.main(或 AC_MODEL);副本裡不觸發。
+sync:   8. 閘門手跑綠 → 票轉 InReview → 派覆核(auto-fix 綠的那一趟它自己會叫):
+sync:        python3 scripts/control/ticket.py set <n> state InReview && sh scripts/control/review.sh <n>
+sync:      review.sh 讀 templates/dispatch-reviewer.md(從 agent-control 複製一份)與 board/config.json 的 reviewer 段。
 EOF
 
 # 接了沒:**同步了但沒有呼叫點**(2026-09-23,#29 A11;G11)。
@@ -294,7 +297,7 @@ done
 if [ -n "$UNCALLED" ]; then
   # shellcheck disable=SC2086
   echo "sync: 同步了但專案端沒有呼叫點:$(echo $UNCALLED)"
-  echo "sync:   (搬過去的檔不會自己被呼叫;上面第 1–7 點就是那幾行要寫在哪。"
+  echo "sync:   (搬過去的檔不會自己被呼叫;上面第 1–8 點就是那幾行要寫在哪。"
   echo "sync:    主線手打的那幾支這裡分辨不出來 —— 這一行說的是「專案的腳本裡沒有」。)"
 else
   echo "sync: 專案端每一支都有呼叫點(排除只被別支 import / 呼叫的 $DEPENDENCY_ONLY)。"

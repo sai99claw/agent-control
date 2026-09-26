@@ -1,6 +1,6 @@
 # 覆核者(短命 Opus;D-022,2026-09-23)
 
-**誰派**:主線。閘門綠、票停 `InReview` 之後派這一個 —— **主線不自己讀 patch 覆核**
+**誰派**:`scripts/review.sh`(D-025 ②,#42)。閘門綠、票轉 `InReview` 之後它 headless 派這一個 —— **主線不自己讀 patch 覆核**
 (主線的上下文最貴,而覆核是「讀 code 對票面」的工作)。
 
 **做**:讀票面的 `objective` / `acceptance`,讀**分支上的 code**(不只 diff —— 只看 diff

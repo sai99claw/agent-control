@@ -10,6 +10,7 @@
 #   sh scripts/gate.sh --branch --ticket 7              # 紅了預設派下一輪 worker
 #   sh scripts/gate.sh --branch --ticket 7 --no-auto-fix # 明說要人下場
 #   sh scripts/gate.sh --branch --ticket 7 --no-cache   # 不吃同一輪的回歸快取
+#   (`--branch --ticket` 手跑綠 → 票轉 InReview、叫 scripts/review.sh 派覆核;見下)
 #
 # ## `--ticket <票號>`:狀態檔、票的回歸、flake 重跑(D-010 / D-014)
 # 給了票號,這一支會做三件多的事:
@@ -84,6 +85,13 @@
 # 這個 commit 對這一組測試就是紅的,而 auto-fix 產生的是**下一個** commit。
 # 修好了沒、停在哪一種,看 inbox 那一頁。
 #
+# ## 手跑綠:票轉 InReview、派覆核(#42,D-025 ②)
+# `--branch --ticket <n>` 綠、而且**不是** auto-fix 叫的(`AC_IN_AUTOFIX` 空)時,先
+# `ticket.py set <n> state InReview`,再叫 `scripts/review.sh <n>`。以前手跑綠沒有人轉
+# InReview —— 票停在 Running,與「還在修」長得一樣。auto-fix 叫的那一趟由 auto-fix 自己
+# 轉、自己叫(免得同一個綠派兩次覆核);`--full`(land 跑的那一發)與指定檔不觸發。
+# **閘門自己的 rc 不動**:覆核的結果看 review.sh 那一頁。
+#
 # **這一份是本 repo 自己的實作。** 別的專案把 `scripts/gate.sh` 換成自己的
 # (範本見 `scripts/gate.example.sh`),介面不變 —— `land.sh` 只認 `--full` 的
 # 退出碼,不認它跑了什麼。
@@ -140,6 +148,7 @@ map() {
         scripts/gate.sh|scripts/gate.example.sh) add test_gate test_status ;;
         scripts/apply.sh) add test_apply ;;
         scripts/auto-fix.sh) add test_auto_fix ;;
+        scripts/review.sh) add test_review ;;
         # 收件匣:閘門與落地的終態都寫它,所以動它要連那兩側一起跑。
         scripts/inbox.py) add test_inbox test_gate test_land test_new_session ;;
         scripts/rules.py) add test_rules ;;
@@ -173,6 +182,8 @@ map() {
         docs/DESIGN-ENV-SUSPECT.md) add test_status test_no_project_names ;;
         docs/DISPATCH-TEMPLATE.md) add test_dispatch_template test_no_project_names ;;
         templates/dispatch-verifier.md) add test_dispatch_template test_no_project_names ;;
+        # review.sh 逐字讀它、填它的佔位再餵給 reviewer:動它就是動覆核的派工文。
+        templates/dispatch-reviewer.md) add test_review test_templates test_no_project_names ;;
         # 文件**有**一支測試真的讀它們:那條「不准出現專案名 / 絕對路徑」的守衛
         # 掃的就是整個 repo。所以這一格不是硬塞,是實話。
         #
@@ -424,7 +435,7 @@ inbox_post() {   # $1 = rc
 疑似原因:掛很久的 Safari --automation 行程、磁碟剩餘空間不足、測試埠被占用。"
     elif [ "$1" -eq 0 ]; then
         state="閘門綠(gate rc=0)"
-        what="讀 patch 記 review(綁票版本與分支頭 sha),再 sh scripts/land.sh t$TICKET"
+        what="不用讀 patch:覆核由 review.sh 派(--branch 手跑綠已自動派,結果看下一頁;沒派就 sh scripts/review.sh $TICKET),review 通過後 sh scripts/land.sh t$TICKET"
     else
         state="閘門紅(gate rc=$1)"
         what="看紅榜逐條;要自動派下一輪 worker:sh scripts/auto-fix.sh $TICKET"
@@ -462,6 +473,22 @@ auto_fix() {   # $1 = rc
     echo "gate: auto-fix —— sh scripts/auto-fix.sh $TICKET"
     sh "$ROOT/scripts/auto-fix.sh" "$TICKET" \
         || echo "gate: auto-fix 停下來了(rc=$?)—— 看 reports/inbox/ 那一頁"
+}
+
+# 手跑 `--branch --ticket` 綠 → 票轉 InReview → 派覆核(見檔頭)。**閘門自己的 rc 不動**。
+review_after_green() {   # $1 = rc
+    [ "$1" -eq 0 ] || return 0
+    [ -n "$TICKET" ] || return 0
+    [ "$want_branch" -eq 1 ] || return 0
+    if [ -n "${AC_IN_AUTOFIX:-}" ]; then
+        echo "gate: 在 auto-fix 裡面 —— InReview 與覆核由 auto-fix 自己做"
+        return 0
+    fi
+    python3 "$ROOT/scripts/ticket.py" set "$TICKET" state InReview >/dev/null 2>&1 \
+        || echo "gate: 票狀態改不動(InReview)" >&2
+    echo "gate: 綠了 —— 票轉 InReview,派覆核:sh scripts/review.sh $TICKET"
+    sh "$ROOT/scripts/review.sh" "$TICKET" --run-id "$RUN_ID" \
+        || echo "gate: 覆核停下來了(rc=$?)—— 看 reports/inbox/ 那一頁"
 }
 
 # 沒有測試可跑也要留下終態。**「這一輪根本沒有東西跑」是一個結果,不是一次沒跑**
@@ -908,4 +935,5 @@ if [ -z "$mods" ]; then
     echo "gate: 沒有給我任何要跑的東西(--branch 沒有改動檔?要跑基礎組加 --base)"
     exit 2
 fi
+review_after_green "$rc"
 exit $rc

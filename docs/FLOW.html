@@ -274,15 +274,15 @@ flowchart TB
   G -->|"reports/t{n}/{run_id}/status.json + verify.log<br/>reports/inbox/{n}-{run_id}.md"| Q{"rc"}
   Q -->|"非 0:status.json 紅榜"| AF["scripts/auto-fix.sh {n}(見 E)"]
   AF --> G
-  Q -->|"0:票停 InReview,inbox 頁「等覆核」"| MR["主線覆核:讀 patch<br/>ticket.py set {n} review {verdict,by,sha,note}"]
+  Q -->|"0:票轉 InReview → scripts/review.sh {n}"| MR["reviewer(review.sh 派)<br/>pass → ticket.py set {n} review {verdict,by:reviewer@模型,sha,note}<br/>fail → objections + Blocked → 主線裁示"]
   MR -->|"review 格(state_version 自動蓋)"| L["scripts/land.sh t{n}-…"]
   L -->|"gate.sh --full → ff-only → push<br/>status.json phases[gate,merge,push] + inbox「已合併、尚未關票」"| C["scripts/ticket.py close {n} --landed {merge sha}"]
   C -->|"ticket.closed 事件(board/events.jsonl)"| B["看板 board/board.py /t/{n}<br/>docs/HANDOFF.md(主線手寫)"]
   classDef landed fill:#dbe8ee,stroke:#2f6f8f,color:#1c2430;
   classDef human fill:#e7e6df,stroke:#5b6672,color:#1c2430;
   classDef hole fill:#f3dcdc,stroke:#b23a3a,color:#1c2430;
-  class T,AP,G,L,C,B,AF landed;
-  class U,M,MR human;
+  class T,AP,G,L,C,B,AF,MR landed;
+  class U,M human;
   class O,W,V hole;
   </pre></div>
   <div class="tablewrap"><table>

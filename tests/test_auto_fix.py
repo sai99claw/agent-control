@@ -5,7 +5,8 @@
 
 所以這一組問四件事:
 1. 紅了會不會**真的**起一個新 worker,而且它拿到的那一份夠不夠開工(交接包);
-2. 綠了會不會**停在等覆核** —— 覆核不自動,這一點是 D-010 明文;
+2. 綠了會不會**轉 InReview 並把覆核交給 `review.sh`**(#42,D-025 ②;`--no-review` 才停在
+   等覆核)—— auto-fix 自己不蓋覆核那一格;
 3. 三種停下來(反駁 / 三輪耗盡 / 沒有歸因)會不會**留下票的狀態轉換 + 一頁收件匣**,
    而不是印一行就算;
 4. **不該派的時候不派** —— 尤其是「rc 非零卻一條紅都解析不出來」那一種,它看起來
@@ -23,7 +24,8 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import DEFAULT_CONFIG, Sandbox, write_executable  # noqa: E402
+from control_harness import (DEFAULT_CONFIG, REVIEWER_PASS, Sandbox,  # noqa: E402
+                             write_executable)
 
 RED_CASE = """diff -ruN base/tests/test_thing.py work/tests/test_thing.py
 --- base/tests/test_thing.py\t1970-01-01 08:00:00
@@ -417,13 +419,15 @@ class WhenThereIsNothingToFix(AutoFixBase):
         self.assertEqual(len(self.result_files("dispatch-round1.md")), 1,
                          "第 1 輪的派工文要落在這一輪的 reports 目錄裡")
 
-    def test_a_green_round_stops_and_says_review_is_not_automatic(self):
+    def test_a_green_round_stops_and_points_at_review_sh(self):
+        """上一輪已經綠了:沒有東西要修。覆核不在這裡觸發(#42 的觸發點是「第 r 輪綠」
+        與「手跑閘門綠」),但下一步要說得出是哪一支。"""
         self.set_worker(WORKER_NEVER)
         self.ticket_ready()
         self.status(0, GREEN_LOG)
         done = self.auto_fix()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("覆核不自動", done.stdout)
+        self.assertIn("sh scripts/review.sh 1", done.stdout)
         self.assertEqual(self.worker_rounds(), [])
 
 
@@ -564,7 +568,9 @@ class ThingsThatStopIt(AutoFixBase):
         with open(self.log, encoding="utf-8") as handle:
             self.assertEqual(handle.read().splitlines(),
                              ["worker ran round 2", "verifier ran round 2"])
-        starts = [row for row in self.events() if row["kind"] == "agent.start"]
+        # 綠了之後 review.sh 還會起一個 reviewer(#42)—— 這一條問的是 auto-fix 自己最後派的那一個。
+        starts = [row for row in self.events() if row["kind"] == "agent.start"
+                  and row.get("role") != "reviewer"]
         self.assertEqual(starts[-1]["role"], "verifier")
         self.assertEqual(starts[-1]["agent"], "auto-fix-verifier")
         ticket = self.load_ticket("1")
@@ -1190,7 +1196,10 @@ class TheWholeLoop(AutoFixBase):
     """
 
     def test_a_red_round_gets_fixed_and_stops_at_awaiting_review(self):
+        """#42 A3(a):綠了轉 InReview 之後叫 `review.sh`;假 reviewer 說 pass,票的
+        `review.by` 是 `reviewer@…`、`sha` 是分支頭 —— 由 review.sh 寫,不是 auto-fix。"""
         self.set_worker(WORKER_FIXES)
+        model = self.set_reviewer(REVIEWER_PASS)
         self.ticket_ready()
         wt = self.first_round()
         done = self.auto_fix()
@@ -1203,12 +1212,30 @@ class TheWholeLoop(AutoFixBase):
         self.assertIn("auto-fix 收割", self.read("memory/role/implementer.inbox.md"))
         self.assertEqual(self.kinds().count("memory.noted"), 1)
         ticket = self.load_ticket("1")
-        self.assertEqual(ticket["state"], "InReview",
-                         "綠了停在等覆核 —— 覆核不自動(D-010)")
+        self.assertEqual(ticket["state"], "InReview", "綠了轉 InReview,覆核 pass 不改 state")
         self.assertIn("等覆核", self.inbox_list())
-        self.assertNotIn("review", json.dumps(ticket.get("review") or {}),
-                         "auto-fix 不准自己蓋覆核那一格")
+        with open(self.log, encoding="utf-8") as handle:
+            self.assertIn("reviewer ran 1", handle.read(), "fixture reviewer 沒被叫到")
+        review = ticket.get("review") or {}
+        self.assertTrue(str(review.get("by") or "").startswith("reviewer@"), review)
+        self.assertEqual(review.get("by"), "reviewer@" + model)
+        self.assertEqual(review.get("sha"), self.git("rev-parse", "t1").strip())
         self.assertTrue(os.path.isdir(wt))
+
+    def test_no_review_leaves_the_review_to_a_human(self):
+        """`--no-review`:綠了停在等覆核,reviewer 不被叫、auto-fix 不准自己蓋覆核那一格。"""
+        self.set_worker(WORKER_FIXES)
+        self.set_reviewer(REVIEWER_PASS)
+        self.ticket_ready()
+        self.first_round()
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        ticket = self.load_ticket("1")
+        self.assertEqual(ticket["state"], "InReview")
+        self.assertIsNone(ticket.get("review"), "auto-fix 不准自己蓋覆核那一格")
+        with open(self.log, encoding="utf-8") as handle:
+            self.assertNotIn("reviewer ran", handle.read())
+        self.assertIn("--no-review", self.inbox_list())
 
     def test_a_configured_rerun_command_runs_after_apply_and_emits_an_event(self):
         rerun = os.path.join(self.home, "fake-rerun.sh")

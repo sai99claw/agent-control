@@ -31,7 +31,7 @@ class SyncsTheScripts(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             got = os.listdir(os.path.join(d, "scripts", "control"))
             for name in ("status.py", "verify-case.py", "apply.sh", "auto-fix.sh",
-                         "inbox.py", "rules.py", "memory.py"):
+                         "review.sh", "inbox.py", "rules.py", "memory.py"):
                 self.assertIn(name, got)
             for dependency in ("event.py", "ticket.py"):
                 self.assertIn(dependency, got,

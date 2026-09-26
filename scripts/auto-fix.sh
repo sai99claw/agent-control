@@ -5,6 +5,7 @@
 #                                                       # 票 Ready 且沒有狀態檔 → 起第 1 輪
 #   sh scripts/auto-fix.sh <票號> --dry-run             # 只印派工文,不起 worker
 #   sh scripts/auto-fix.sh <票號> --dry-run --round 1   # 第 1 輪的派工文(還沒有狀態檔時)
+#   sh scripts/auto-fix.sh <票號> --no-review           # 綠了停在等覆核,不叫 review.sh
 #
 # 閘門與單票落地預設會叫這一支;`--no-auto-fix` 才停給人處理。
 #
@@ -29,11 +30,13 @@
 #    這一種**最危險**:它看起來像「沒有紅」,而自動派下去的 worker 會拿著一份空紅榜
 #    去猜。所以這裡當場停,不派。
 #
-# **覆核不自動**(D-010):綠了之後票轉 `InReview` 並寫 inbox 停在那裡,等主線讀 patch
-# 記 `review`。這一支不碰 `review` 那一格。
+# **覆核由 `review.sh` 派**(#42,D-025 ②):綠了之後票轉 `InReview`、寫 inbox,再叫
+# `sh scripts/review.sh <票號>` —— reviewer pass 由它寫 `review`,fail 由它轉 Blocked 回主線
+# 裁示。這一支自己不碰 `review` 那一格;`--no-review` 停在等覆核(主線手跑 review.sh)。
+# 覆核的結果看它那一頁 inbox,不改這一支的退出碼。
 #
 # ## 退出碼
-#   0 綠了(停在等覆核)   1 三輪耗盡仍紅   2 用法 / 沒有狀態檔而票不是 Ready
+#   0 綠了(覆核交給 review.sh)   1 三輪耗盡仍紅   2 用法 / 沒有狀態檔而票不是 Ready
 #   3 worker 提反駁       4 failures 沒有歸因   5 worker 沒交出可用的 patch
 set -u
 # `AC_ROOT` 優先:被 `gate.sh` 的 auto-fix 叫到時,這支檔案住在**副本**裡,
@@ -71,19 +74,21 @@ print(data if data not in (None, "") else default)
 PY
 }
 
-[ $# -ge 1 ] || { echo "用法:sh scripts/auto-fix.sh <票號> [--dry-run] [--round 1]"; exit 2; }
+[ $# -ge 1 ] || { echo "用法:sh scripts/auto-fix.sh <票號> [--dry-run] [--round 1] [--no-review]"; exit 2; }
 ID=$1
 shift
 DRY=""
 WANT_ROUND=""
+NO_REVIEW=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY=1 ;;
+        --no-review) NO_REVIEW=1 ;;
         --round)
             shift
             [ $# -ge 1 ] || { echo "auto-fix: --round 後面要一個數字" >&2; exit 2; }
             WANT_ROUND=$1 ;;
-        *) echo "auto-fix: 不認得 $1(--dry-run / --round <n>)" >&2; exit 2 ;;
+        *) echo "auto-fix: 不認得 $1(--dry-run / --round <n> / --no-review)" >&2; exit 2 ;;
     esac
     shift
 done
@@ -420,7 +425,7 @@ if [ "${S_ENV:-0}" != "0" ]; then
 fi
 
 if [ "${S_RC:-1}" = "0" ]; then
-    echo "auto-fix: 上一輪是綠的 —— 沒有東西要修。覆核不自動:主線讀 patch 記 review。"
+    echo "auto-fix: 上一輪是綠的 —— 沒有東西要修。覆核由 review.sh 派:sh scripts/review.sh $ID"
     exit 0
 fi
 
@@ -835,15 +840,24 @@ PY
         python3 "$AC/ticket.py" set "$ID" state InReview >/dev/null 2>&1 || true
         read_status
         RUN_ID=$S_RUN
-        echo "auto-fix: 第 $r 輪綠了 —— **覆核不自動**,停在這裡等主線"
         if [ -n "$CASE_FIXED" ]; then
             result="案例已修,第 $r 輪綠了,等覆核"
         else
             result="第 $r 輪綠了,等覆核"
         fi
-        post "$result" \
-             "讀 patch 記 review(綁票版本與分支頭 sha),再 sh scripts/land.sh t$ID" \
-             "$WT 與 reports/t$ID/$S_RUN/status.json"
+        if [ -n "$NO_REVIEW" ]; then
+            echo "auto-fix: 第 $r 輪綠了 —— --no-review,覆核不派,停在這裡等主線"
+            post "$result" \
+                 "覆核沒有自動派(--no-review):sh scripts/review.sh $ID;review 通過後 sh scripts/land.sh t$ID" \
+                 "$WT 與 reports/t$ID/$S_RUN/status.json"
+        else
+            echo "auto-fix: 第 $r 輪綠了 —— 覆核交給 review.sh(sh scripts/review.sh $ID)"
+            post "$result" \
+                 "不用讀 patch:覆核由 review.sh 派,結果看另一頁(通過 → land;退回 → 裁示;沒交件 → 重派)" \
+                 "$WT 與 reports/t$ID/$S_RUN/status.json"
+            sh "$AC/review.sh" "$ID" --run-id "$RUN_ID" \
+                || echo "auto-fix: 覆核停下來了(rc=$?)—— 看 reports/inbox/ 那一頁"
+        fi
         ROUND_RC=0
         return 1
     fi

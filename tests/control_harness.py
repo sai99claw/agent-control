@@ -34,8 +34,11 @@ TIMEOUT = 180
 
 SCRIPT_FILES = ("event.py", "ticket.py", "memory.py", "status.py", "land.sh",
                 "gate.sh", "heartbeat.sh", "new-session.sh", "verify.py",
-                "verify-case.py", "apply.sh", "auto-fix.sh", "inbox.py",
+                "verify-case.py", "apply.sh", "auto-fix.sh", "review.sh", "inbox.py",
                 "rules.py", "metrics.py")
+# `review.sh` 逐字讀它(#42):沙盒少了它,覆核在「派工文組不出來」那一步就停,
+# 而那與「reviewer 沒交件」在收件匣上是兩頁不同的東西。
+TEMPLATE_FILES = ("dispatch-reviewer.md",)
 
 # 回歸層的最小形狀:一個登記過的標籤 + 一個會綠的案例。沙盒少了它,`gate --full`
 # 跑到的回歸是一個空集合 —— 而**空集合與「都過了」長得一樣**,那正是這裡在擋的事。
@@ -106,7 +109,31 @@ DEFAULT_CONFIG = {
                "inbox_suffix": ".inbox.md"},
     "lease_seconds": {"opener": 900, "verifier": 3600, "land": 1800,
                       "worker": 7200},
+    # **保險絲**(#42):`review.sh` 在設定裡找不到 `reviewer.command` 就起真的
+    # `claude -p`,而 auto-fix 綠與手跑 `gate.sh --branch --ticket` 綠都會叫它。
+    # 沙盒預設一支什麼都不印的替身 —— 覆核照走「沒交件」那條路,**從不**碰真的模型。
+    # 要測覆核的案例用 `set_reviewer()` 換掉它。
+    "reviewer": {"command": "true", "timeout_seconds": 60},
 }
+
+# 假 reviewer:記一行「被叫到了」、把派工文(stdin)留一份,印一份 pass 的覆核。
+REVIEWER_PASS = """#!/bin/sh
+echo "reviewer ran $AC_TICKET" >> "$AC_TEST_LOG"
+cat > "$(dirname "$AC_TEST_LOG")/reviewer-stdin.md"
+cat <<'EOF'
+# 覆核
+① verdict:pass
+② 逐條驗收 → code 位置:沙盒的替身不讀 code
+
+## result
+
+```result
+{"ticket": "1", "role": "reviewer", "round": 1, "verdict": "pass",
+ "rc": null, "patch_sha256": null, "gate": null, "mutations": [],
+ "objection": null, "excluded": [], "repro": null, "memory": []}
+```
+EOF
+"""
 
 
 def write_executable(path, body):
@@ -139,6 +166,10 @@ class Sandbox(unittest.TestCase):
                 continue
             shutil.copy(os.path.join(SCRIPTS, name), target)
             os.chmod(target, 0o755)
+        os.makedirs(os.path.join(self.repo, "templates"))
+        for name in TEMPLATE_FILES:
+            shutil.copy(os.path.join(ROOT, "templates", name),
+                        os.path.join(self.repo, "templates", name))
         shutil.copy(os.path.join(BOARD_DIR, "board.py"),
                     os.path.join(self.repo, "board", "board.py"))
         shutil.copy(os.path.join(CODE_MAP, "check-stale.py"),
@@ -188,6 +219,17 @@ class Sandbox(unittest.TestCase):
         })
         base.update(extra)
         return base
+
+    def set_reviewer(self, body, model="fixture-model", timeout=60):
+        """`reviewer.command` 換成一支假的可執行檔;`--model` 放進命令,因為 `review.by`
+        的模型名取自那一格(#21)。回傳那個模型名,讓斷言自己拼 `reviewer@<模型>`。"""
+        path = os.path.join(self.home, "fake-reviewer.sh")
+        write_executable(path, body)
+        conf = json.loads(self.read("board/config.json"))
+        conf["reviewer"] = {"command": "sh %s --model %s" % (path, model),
+                            "timeout_seconds": timeout}
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        return model
 
     def git(self, *args, cwd=None):
         done = subprocess.run(["git", *args], cwd=cwd or self.repo, env=self.env(),

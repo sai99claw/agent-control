@@ -11,7 +11,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import Sandbox, write_executable  # noqa: E402
+from control_harness import REVIEWER_PASS, Sandbox, write_executable  # noqa: E402
 
 PASSING = """import os
 import unittest
@@ -453,6 +453,38 @@ class GateSh(Sandbox):
         self.assertNotIn("環境可疑,不自動派", done.stdout)
         self.assertIn("gate: auto-fix ——", done.stdout)
         self.assertEqual(self.status_of("7")["environment_suspect"], [])
+
+    def test_a_hand_run_green_branch_turns_the_ticket_in_review_and_calls_review_sh(self):
+        """#42 A3(b):手跑 `--branch --ticket <n>` 綠 → 票轉 InReview、`review.sh` 被叫。
+        以前手跑綠沒有人轉 InReview:票停在 Running,與「還在修」長得一樣。
+
+        **變異 M3**:拿掉 gate.sh 結尾那一手 `review_after_green` → 這一條紅。
+        """
+        model = self.set_reviewer(REVIEWER_PASS)
+        self.make_ticket(7, allowed_write_paths=["tests/*"], state="Running")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "沙盒的假 reviewer 與票 #7")
+        self.git("branch", "t7")
+        self.write("tests/test_zz_green.py", PASSING % "test_zz_green")
+        done = self.gate("--branch", "--ticket", "7")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("reviewer ran 7", self.ran(), "review.sh 沒被叫(或沒起 reviewer)")
+        ticket = self.load_ticket("7")
+        self.assertEqual(ticket["state"], "InReview")
+        self.assertEqual((ticket.get("review") or {}).get("by"), "reviewer@" + model)
+
+    def test_a_green_file_run_does_not_call_review_sh(self):
+        """指定檔(與 land 跑的 `--full`)不是「手跑票閘門」:不轉 InReview、不派覆核。"""
+        self.set_reviewer(REVIEWER_PASS)
+        self.make_ticket(7, allowed_write_paths=["tests/*"], state="Running")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "沙盒的假 reviewer 與票 #7")
+        self.git("branch", "t7")
+        self.write("tests/test_zz_green.py", PASSING % "test_zz_green")
+        done = self.gate("tests/test_zz_green.py", "--ticket", "7")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("reviewer ran 7", self.ran())
+        self.assertEqual(self.load_ticket("7")["state"], "Running")
 
     def test_an_unknown_flag_is_refused(self):
         done = self.gate("--quick")
