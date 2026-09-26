@@ -145,6 +145,9 @@ map() {
         scripts/rules.py) add test_rules ;;
         scripts/heartbeat.sh) add test_heartbeat ;;
         scripts/new-session.sh) add test_new_session ;;
+        # SessionStart hook(#39):`test_session_hook` 兩個都讀 —— A1 解析
+        # `.claude/settings.json` 的形狀,其餘案例跑 `session-hook.sh`。
+        scripts/session-hook.sh|.claude/settings.json) add test_session_hook ;;
         scripts/memory.py) add test_memory ;;
         # 回歸層的執行器與它的登記檔:動它就是動「哪些案例會被跑到」。
         scripts/verify.py|verify/TAGS.md|verify/TAGS.d/*) add test_verify_runner test_verify_case ;;
