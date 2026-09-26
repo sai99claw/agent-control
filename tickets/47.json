@@ -28,7 +28,7 @@
   "attempt": 0,
   "base_sha": "914ed8a",
   "state": "Ready",
-  "state_version": 6,
+  "state_version": 8,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -54,5 +54,15 @@
   ],
   "test_plan": "單元層,tests/test_rules.py 既有夾具形狀(暫存 root、自己寫 memory/ 與 docs/DISPATCH-TEMPLATE.md 的假檔,不讀真 repo 的記憶檔)。D1、D2 可觀察 = pack 輸出的 bytes 與各小標底下的內容;期望值是夾具寫進假檔的大小與票面的數字(400 B、2500),不從 rules.py 算。D3 跑既有模組 + 真跑 pack 量 wc -c(只讀)。變異 M1、M2 各紅一次,EVIDENCE 貼紅的第一行。標籤留空(案例住 tests/)。",
   "outline": "#37 量到 pack worker --model opus 4089 B,十節只剩標題 + 全文在哪;節的保底(reserve 120×10 + 指標行)沒在分 card/mem/inbox 前扣掉,節段超支,最後一刀(整份 clip)從尾砍:opus.inbox.md 內容沒了、角色卡節錄 486→219 B。worker+opus 最常派,每次派工都少讀(D-016)。順序:不共檔,可現在派;唯一不用等的。needs_verifier=false:單一腳本、test_rules.py 夾具現成、驗收是 bytes 計數;M1/M2 實作者證紅。",
-  "needs_verifier": false
+  "needs_verifier": false,
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "票面 subject 的「worker+opus 在 4096 B 內角色卡節錄 ≥ 400 B、且非空 inbox 至少留一行」對真檔不可行 —— 扣掉前言、兩段固定文字、十節下限、「砍過」那句之後,內容區只剩約 607 B,角色卡要到 400 B 得印 484 B(前三行 + 指路),兩格 inbox 各留一行要 503 B;本輪照 D2 的順序讓暫存區優先,真包角色卡節錄因此從 220 B 降到 51 B(實測),要換優先序得由主線裁示(另兩處票面落差見下面「票面與現況的落差」)。",
+      "evidence": "../agent-control-wt/fix-t47/round1/EVIDENCE-round1.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "main 2026-09-26: inbox 優先成立;票面「角色卡節錄 >= 400 B」改為「角色卡至少保留指路行(標題 + 全文在哪)」;每格 inbox 先保最後一行、砍過那句照實際長度重分、太小的格不砍 —— 這三條視為票面補充,覆核以此判"
+    }
+  ]
 }
