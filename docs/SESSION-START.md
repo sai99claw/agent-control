@@ -18,8 +18,11 @@
 
 ## 主線
 - **這一節現在由 hook 自動跑**(#39):`.claude/settings.json` 的 SessionStart hook 叫 `scripts/session-hook.sh` → `new-session.sh main <routing.main>`,那一頁在第一個 prompt 之前就在上下文裡;startup / clear 發 `session.start`,resume / compact 只重印;副本裡(`worktree_dir` 底下、`AC_ROLE` 非 main、`AC_SESSION_HOOK=0`)不觸發。
-- 看**終態收件匣** `python3 scripts/inbox.py list`:閘門、auto-fix、落地、轉 Blocked 跑完的事
-  在這裡排隊,一頁答四句(哪張票、什麼狀態、要你做什麼、去哪看)。收下用 `inbox.py ack <票號>`。
+- 看**終態收件匣** `python3 scripts/inbox.py list`:只有兩種頁(D-032)—— **decision**(要你裁:
+  反駁、三輪紅、覆核退回、環境可疑、worker 沒交件 / patch 套不上、land 拒收或紅、關不掉的票)
+  與 **done**(整票完成簡報:subject、落地 sha、做了什麼、覆核結論、cost 表)。一頁答四句
+  (哪張票、什麼狀態、要你做什麼、去哪看);閘門綠、覆核通過這類腳本接著會做的事只寫事件。
+  收下用 `inbox.py ack <票號>`。
   **開場讀一次,之後只在被通知時讀 —— 不准輪詢 status**(每看一次背景工作 = 整份上下文重送一輪)。
 - 看裁示收件匣 `python3 scripts/ticket.py inbox`:使用者填過的裁示要落成 `docs/DECISIONS.md` 一列。
 - 檢查 `scripts/heartbeat.sh`:上一個 session / land 有沒有死在半路(有的話清 worktree、把票狀態對回事實)。

@@ -587,7 +587,8 @@ class GateWritesStatus(Sandbox):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotEqual(self.load()["run_id"], "outer-gate",
                             "外面的 AC_GATE_RUN_ID 漏進沙盒")
-        self.assertIn("inbox.posted", self.kinds(), "外面的 AC_NO_INBOX 漏進沙盒")
+        # 綠不發頁(D-032),但 gate.pass 照發 —— 而 AC_NO_INBOX 漏進來的話它也不發。
+        self.assertIn("gate.pass", self.kinds(), "外面的 AC_NO_INBOX 漏進沙盒")
 
     def test_a_green_run_leaves_a_done_status_with_rc_zero(self):
         done = self.gate("scripts/land.sh", "--ticket", "7")

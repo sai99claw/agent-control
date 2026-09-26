@@ -5,10 +5,10 @@ D-022 裁「覆核由短命 opus 做」,三天只走過一次 —— 沒有派�
 
 1. reviewer 說 **pass** ⇒ 票的 `review` 由腳本寫,`by` 是 `reviewer@<reviewer.command 的 --model>`
    (不是 routing 標籤,#21)、`sha` 是分支頭、`state_version` 由 `ticket.py set` 蓋;
-2. reviewer 說 **fail** ⇒ 逐條 blocking 反駁、票 Blocked、inbox 一頁「覆核退回,裁示」,
-   `review` 這一格不寫;
+2. reviewer 說 **fail** ⇒ 逐條 blocking 反駁、票 Blocked、inbox 恰一頁 decision「覆核退回,
+   裁示」,`review` 這一格不寫;
 3. **沒交件不是 pass**(§5.5):沒有 `## result`、JSON 壞、逾時、verdict 不是 pass|fail ——
-   不寫 review、票留 InReview、inbox「覆核沒交件」、rc 非零。
+   不寫 review、票留 InReview、事件 review.missing(不發頁,D-032)、rc 非零。
 
 reviewer 一律是假的可執行檔(`reviewer.command`)。**該替換的是代價,不是語意**:這一組
 問的是腳本怎麼接它的產出,不是模型會不會覆核。期望的 sha 由夾具 `git rev-parse t1` 取、
@@ -96,6 +96,11 @@ class ReviewBase(Sandbox):
         with open(self.log, encoding="utf-8") as handle:
             return [line.strip() for line in handle if line.startswith("reviewer ran")]
 
+    def last_event(self, kind):
+        rows = [row for row in self.events() if row["kind"] == kind]
+        self.assertTrue(rows, "沒有 %s 事件" % kind)
+        return rows[-1]
+
     def one(self, name):
         found = glob.glob(os.path.join(self.repo, "reports", "t1", "*", name))
         self.assertEqual(len(found), 1, "找不到(或不只一份)%s:%s" % (name, found))
@@ -121,7 +126,10 @@ class ThePassPath(ReviewBase):
                          "state_version 由 ticket.py set 蓋,land 比得上")
         self.assertIn("REVIEW.md", review.get("note") or "")
         self.assertEqual(ticket["state"], "InReview")
-        self.assertIn("覆核通過", self.inbox_rows()[-1]["state"])
+        # 通過之後是 land,不是主線的裁示:只寫事件,不發頁(D-032)。
+        # **變異**:pass 照發頁 → 這一條紅。
+        self.assertEqual(self.inbox_rows(), [])
+        self.assertIn("REVIEW.md", self.last_event("review.pass").get("note") or "")
 
     def test_the_packet_names_the_four_things_and_goes_in_on_stdin(self):
         """派工文 = 規則包 + 範本;四件事都填上、**一個佔位都不剩**,而 reviewer 從 stdin
@@ -204,33 +212,19 @@ class TheReviewerCostGoesOnTheTicket(ReviewBase):
         self.assertEqual([row["role"] for row in rows], ["reviewer"])
 
 
-class ItAcksTheWaitingForReviewPage(ReviewBase):
-    """#43 A4:「等覆核」那頁的下一步就是這一支 —— 開跑時由它收(`--by review.sh`)。"""
+class ItLeavesEarlierPagesAlone(ReviewBase):
+    """D-032 之後沒有「等覆核」頁可收:review.sh 不再 ack 任何一頁,舊頁留給主線收。"""
 
-    def acked(self):
-        path = os.path.join(self.repo, "reports", "inbox", "acked.jsonl")
-        if not os.path.exists(path):
-            return {}
-        with open(path, encoding="utf-8") as handle:
-            return {row["name"]: row for row in
-                    (json.loads(line) for line in handle if line.strip())}
-
-    def test_the_waiting_page_is_acked_by_review_and_the_others_are_left(self):
-        """**變異**:拿掉 review.sh 開跑那一手 ack → 這一條紅。"""
-        for run, state in (("r1", "第 1 輪綠了,等覆核"), ("r0", "閘門紅(gate rc=1)")):
-            done = self.run_py("scripts/inbox.py", "post", "--ticket", "1", "--run-id", run,
-                               "--kind", "auto-fix", "--state", state, "--what", "x")
-            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+    def test_a_review_neither_acks_nor_adds_a_page(self):
+        done = self.run_py("scripts/inbox.py", "post", "--ticket", "1", "--run-id", "r1",
+                           "--kind", "decision", "--state", "第 1 輪綠了,等覆核", "--what", "x")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.set_reviewer(REVIEWER_PASS)
         done = self.review()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        acked = self.acked()
-        by_state = {row["state"]: row["name"] for row in self.inbox_rows()}
-        self.assertEqual(acked.get(by_state["第 1 輪綠了,等覆核"], {}).get("by"), "review.sh")
-        self.assertNotIn(by_state["閘門紅(gate rc=1)"], acked, "其它頁不動")
-        passed = [name for state, name in by_state.items() if state.startswith("覆核通過")]
-        self.assertEqual(len(passed), 1)
-        self.assertNotIn(passed[0], acked, "「覆核通過」是主線的落地順序頁,不由 review.sh 收")
+        self.assertFalse(os.path.exists(
+            os.path.join(self.repo, "reports", "inbox", "acked.jsonl")))
+        self.assertEqual([row["state"] for row in self.inbox_rows()], ["第 1 輪綠了,等覆核"])
 
 
 class TheFailPath(ReviewBase):
@@ -251,9 +245,12 @@ class TheFailPath(ReviewBase):
             self.assertEqual(row.get("owner"), "reviewer@" + model)
             self.assertEqual(row.get("disposition"), "", "沒處置 —— land 與 close 因此拒絕")
             self.assertTrue(row.get("evidence", "").endswith("REVIEW.md"), row)
-        page = self.inbox_rows()[-1]
-        self.assertIn("覆核退回", page["state"])
-        self.assertIn("裁示", page["what"])
+        rows = self.inbox_rows()
+        self.assertEqual([row["kind"] for row in rows], ["decision"], "恰一頁 decision")
+        self.assertIn("覆核退回", rows[0]["state"])
+        self.assertIn("裁示", rows[0]["what"])
+        self.assertIn("review.fail", self.kinds())
+        self.assertIn("decision.asked", self.kinds())
 
     def test_a_pass_with_an_objection_line_is_read_as_a_fail(self):
         """verdict 說 pass、阻擋那一行卻寫了:放行的話那一行等於沒人收(§8.5 以行為準)。"""
@@ -280,10 +277,10 @@ class NotDeliveredIsNotAPass(ReviewBase):
                 self.assertIsNone(ticket.get("review"), "沒交件寫出了 review")
                 self.assertEqual(ticket["state"], "InReview")
                 self.assertEqual(ticket.get("objections") or [], [])
-                page = self.inbox_rows()[-1]
-                self.assertIn("覆核沒交件", page["state"])
-                self.assertIn(name, page["state"], "四種沒交要說得出是哪一種")
-                self.assertIn("review.sh 1", page["what"])
+                self.assertEqual(self.inbox_rows(), [], "沒交件只寫事件,不發頁")
+                note = self.last_event("review.missing").get("note") or ""
+                self.assertIn(name, note, "四種沒交要說得出是哪一種")
+                self.assertIn("review.sh 1", note)
 
 
 class ItOnlyReviewsWhatIsReadyForIt(ReviewBase):
@@ -296,7 +293,9 @@ class ItOnlyReviewsWhatIsReadyForIt(ReviewBase):
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertEqual(self.reviewer_calls(), [])
         self.assertIsNone(self.load_ticket("1").get("review"))
-        self.assertIn("不是 InReview / AwaitingReview", self.inbox_rows()[-1]["state"])
+        self.assertEqual(self.inbox_rows(), [])
+        self.assertIn("不是 InReview / AwaitingReview",
+                      self.last_event("review.refused").get("note") or "")
         self.assertIn("不是 InReview / AwaitingReview", done.stderr)
 
     def test_a_ticket_awaiting_review_is_reviewed_too(self):
@@ -317,7 +316,8 @@ class ItOnlyReviewsWhatIsReadyForIt(ReviewBase):
         done = self.review(ident="2")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertEqual(self.reviewer_calls(), [])
-        self.assertIn("分支 t2 不存在", self.inbox_rows()[-1]["state"])
+        self.assertEqual(self.inbox_rows(), [])
+        self.assertIn("分支 t2 不存在", self.last_event("review.refused").get("note") or "")
 
 
 if __name__ == "__main__":

@@ -15,8 +15,9 @@
 #   pass   → `ticket.py set <n> review {verdict, by: reviewer@<模型>, sha: 派工那一刻的分支頭, note}`
 #            —— `state_version` 由 set 自己蓋,land 照查;
 #   fail   → REVIEW.md 每一行 `OBJECTION:` 記成一筆 blocking 反駁(owner=reviewer@<模型>)、
-#            票轉 Blocked、inbox 一頁「覆核退回,裁示」;
-#   沒交件 → 不寫 review、票留 InReview、inbox 一頁「覆核沒交件」。
+#            票轉 Blocked、inbox 一頁 decision「覆核退回,裁示」、事件 review.fail;
+#   沒交件 → 不寫 review、票留 InReview、事件 review.missing(不發頁)。
+# pass 發 review.pass、沒派成發 review.refused,都不發頁:收件匣只收 decision / done(D-032)。
 # 三種都在收尾寫一筆 `ticket.py cost --role reviewer`(信封 reviewer.json;D-032)。
 #
 # ## 「沒交」與 pass 要分得開(`docs/DISPATCH-TEMPLATE.md` §5.5)
@@ -134,13 +135,13 @@ ev() {
 
 post() {   # $1 = 狀態  $2 = 要主線做什麼  $3 = 去哪看
     python3 "$AC/inbox.py" post --ticket "$ID" --run-id "$RUN_ID" \
-        --kind review --state "$1" --what "$2" --where "$3" \
+        --kind decision --state "$1" --what "$2" --where "$3" \
         || echo "review: inbox 寫不出來($1)" >&2
 }
 
-refuse() {   # $1 = 為什麼沒派成  $2 = 下一步;一頁 inbox,rc=2
+refuse() {   # $1 = 為什麼沒派成  $2 = 下一步;只發事件(D-032),rc=2
     echo "review: #$ID 覆核沒派成 —— $1" >&2
-    post "覆核沒派成($1)" "$2" "$(rel "$TF")"
+    ev review.refused --ticket "$ID" --kv run_id="$RUN_ID" --note "$1;$2"
     exit 2
 }
 
@@ -242,10 +243,6 @@ for key, value in slots.items():
 sys.stdout.write("\n" + text)
 PY
 } > "$DISPATCH"
-# 「等覆核」那幾頁的 what 就是這一支接著要做的事 —— 開跑就由這一支收掉(#43,inbox.py 檔頭)。
-# 只收 state 含「等覆核」的:同一張票的 Blocked / 裁示頁是主線的,不動。
-python3 "$AC/inbox.py" ack "$ID" --state 等覆核 --by review.sh >/dev/null \
-    || echo "review: 「等覆核」那幾頁 ack 不掉(不擋覆核)" >&2
 echo "review: #$ID 派覆核 —— $REVIEWER_CMD(cwd $CWD,分支 t$ID @ $(echo "$SHA" | cut -c1-12),派工文 $(rel "$DISPATCH"))"
 
 ev agent.start --ticket "$ID" --role reviewer --model "$MODEL" \
@@ -353,9 +350,8 @@ write_cost() {   # 覆核者的 token 與時鐘進票的 `cost[]`(D-032)。pass 
 
 if [ -z "$VERDICT" ]; then
     echo "review: #$ID 覆核沒交件 —— $WHY;不寫 review,票留 InReview" >&2
-    post "覆核沒交件($WHY)" \
-         "沒交不是 pass:看 $(rel "$RLOG") 與 $REL_REVIEW,再重派 sh scripts/review.sh $ID" \
-         "$(rel "$RUNDIR")"
+    ev review.missing --ticket "$ID" --kv run_id="$RUN_ID" \
+        --note "沒交不是 pass($WHY):看 $(rel "$RLOG") 與 $REL_REVIEW,再重派 sh scripts/review.sh $ID"
     write_cost
     exit 3
 fi
@@ -369,9 +365,8 @@ if [ "$VERDICT" = "pass" ]; then
     }
     write_cost
     echo "review: #$ID 覆核通過($BY,sha $(echo "$SHA" | cut -c1-12))—— review 已寫進票"
-    post "覆核通過($BY)" \
-         "sh scripts/land.sh t$ID(review 綁分支頭 $(echo "$SHA" | cut -c1-12) 與票現在的版本)" \
-         "$REL_REVIEW"
+    ev review.pass --ticket "$ID" --kv run_id="$RUN_ID" --kv by="$BY" \
+        --kv sha="$(echo "$SHA" | cut -c1-12)" --note "$REL_REVIEW"
     exit 0
 fi
 
@@ -416,6 +411,7 @@ write_cost
 python3 "$AC/ticket.py" set "$ID" state Blocked >/dev/null 2>&1 \
     || echo "review: 票狀態改不動(Blocked)" >&2
 python3 "$AC/ticket.py" set "$ID" owner main >/dev/null 2>&1 || true
+ev review.fail --ticket "$ID" --kv run_id="$RUN_ID" --kv by="$BY" --note "$REL_REVIEW"
 ev decision.asked --ticket "$ID" --note "#$ID 覆核退回($BY):$COUNT 條阻擋"
 echo "review: #$ID 覆核退回($BY)—— $COUNT 條阻擋記進 objections[],票轉 Blocked${WHY:+;$WHY}"
 post "覆核退回($COUNT 條阻擋)" \

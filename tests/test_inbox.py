@@ -30,10 +30,17 @@ class InboxBase(Sandbox):
     def inbox(self, *args):
         return self.run_py("scripts/inbox.py", *args)
 
-    def post(self, ident="7", run="r1", state="閘門紅", what="看紅榜", where="reports/x"):
+    def post(self, ident="7", run="r1", state="閘門紅", what="看紅榜", where="reports/x",
+             kind="decision"):
         return self.inbox("post", "--ticket", ident, "--run-id", run,
-                          "--kind", "gate", "--state", state, "--what", what,
+                          "--kind", kind, "--state", state, "--what", what,
                           "--where", where)
+
+    def pages(self, ident=None):
+        rows = [json.loads(line) for line in self.read(
+            os.path.join("reports", "inbox", "index.jsonl")).splitlines() if line.strip()] \
+            if self.exists(os.path.join("reports", "inbox", "index.jsonl")) else []
+        return [row for row in rows if ident is None or row["ticket"] == ident]
 
 
 class OnePage(InboxBase):
@@ -73,6 +80,24 @@ class OnePage(InboxBase):
             page = self.read(row["page"])
             self.assertIn(row["state"], page)
 
+    def test_only_the_two_kinds_are_accepted(self):
+        """B1(D-032):收件匣只收 decision / done。其餘終態只寫事件 —— 這是守衛不是約定。
+
+        **變異**:把 `cmd_post` 的 INBOX_KINDS 守衛拿掉 → 這一條紅。
+        """
+        self.make_ticket("7")
+        for kind in ("gate", ""):
+            done = self.post(kind=kind)
+            self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+            self.assertIn("decision", done.stderr)
+            self.assertIn("done", done.stderr)
+        self.assertEqual(self.pages(), [])
+        self.assertFalse(self.exists(os.path.join("reports", "inbox", "7-r1.md")))
+        self.assertIn("沒有等你的東西", self.inbox("list").stdout)
+        done = self.post(kind="decision")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual([row["kind"] for row in self.pages()], ["decision"])
+
     def test_posting_emits_an_event_so_the_board_sees_it(self):
         """控制台只認事件(D-003):沒發事件的事,對系統而言沒發生。"""
         self.make_ticket("7")
@@ -83,6 +108,62 @@ class OnePage(InboxBase):
         """`inbox.posted` 要真的在 `event.py` 的固定表裡,不是靠 inbox.py 自己說了算。"""
         done = self.event("emit", "inbox.posted", "--ticket", "7")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+
+SHA = "0123456789abcdef0123456789abcdef01234567"
+
+
+class DoneBrief(InboxBase):
+    """B2(D-032):整票完成簡報由 `inbox.py done` 產,land.sh 關票成功後叫。
+    期望值(合計、頁裡的字串)寫死在這裡 —— 不是程式現在印什麼就收什麼。"""
+
+    COST = [
+        {"role": "worker", "round": 1, "model": "opus", "tokens_in": None,
+         "tokens_out": 800, "cache_write": 100, "cache_read": 5000,
+         "wall_seconds": 120, "by": "auto-fix.sh", "at": "2026-09-26T10:00:00+08:00"},
+        {"role": "reviewer", "round": 1, "model": "sonnet", "tokens_in": 1500,
+         "tokens_out": 300, "cache_write": None, "cache_read": 2000,
+         "wall_seconds": 45, "by": "review.sh", "at": "2026-09-26T10:05:00+08:00"},
+    ]
+
+    def done(self, ident="7"):
+        return self.inbox("done", ident, "--landed", SHA, "--by", "land.sh")
+
+    def test_the_brief_has_subject_sha_what_was_done_review_and_the_cost_table(self):
+        """**變異**:null 印成 0 → 紅(worker 那一列);合計把 null 當 0 → 紅(合計那一列)。"""
+        self.make_ticket("7", subject="把收件匣收成兩種頁", cost=self.COST,
+                         review={"verdict": "pass", "by": "reviewer@sonnet",
+                                 "note": "只留 decision / done 兩種頁"})
+        done = self.done()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        rows = self.pages("7")
+        self.assertEqual([(row["kind"], row["state"], row["what"]) for row in rows],
+                         [("done", "Done", "無")])
+        page = self.read(rows[0]["page"])
+        order = [page.index(text) for text in (
+            "把收件匣收成兩種頁", SHA[:12], "只留 decision / done 兩種頁",
+            "pass(by reviewer@sonnet)", "| role |")]
+        self.assertEqual(order, sorted(order), page)
+        self.assertNotIn(SHA, page, "落地 sha 只印前 12 碼")
+        self.assertIn("| worker | 1 | opus | — | 800 | 100 | 5000 | 120 | auto-fix.sh |", page)
+        self.assertIn("| reviewer | 1 | sonnet | 1500 | 300 | — | 2000 | 45 | review.sh |",
+                      page)
+        self.assertIn("| 合計 |  |  | 1500(1 筆缺數) | 1100 | 100(1 筆缺數) | 7000 | 165 |  |",
+                      page)
+
+    def test_no_review_says_so_and_what_was_done_falls_back_to_the_objective(self):
+        self.make_ticket("7", objective="主線每票只收兩種頁")
+        self.assertEqual(self.done().returncode, 0)
+        page = self.read(self.pages("7")[0]["page"])
+        self.assertIn("無覆核", page)
+        self.assertIn("主線每票只收兩種頁", page)
+        self.assertIn("cost 空:沒有腳本寫過", page)
+
+    def test_the_brief_is_not_acked_it_is_what_main_reads(self):
+        self.make_ticket("7")
+        self.done()
+        self.assertIn("#7", self.inbox("list").stdout)
+        self.assertFalse(self.exists(os.path.join("reports", "inbox", "acked.jsonl")))
 
 
 class ListAndAck(InboxBase):
@@ -182,7 +263,9 @@ class WhoAcked(InboxBase):
 
 
 class WhoWritesIntoIt(InboxBase):
-    """三個終態各寫一則:閘門跑完、票轉 Blocked、落地跑完(land 那一則在 test_land)。
+    """誰寫進來、誰只寫事件(D-032):閘門綠 / 紅(可歸因)與三輪耗盡轉 Blocked 在這裡
+    都不發頁 —— 綠由 review.sh 接手、紅由 auto-fix.sh 接手,三輪耗盡那一頁由 auto-fix.sh
+    發(test_auto_fix)。land 那一頁在 test_land。
 
     這裡用**真的** `gate.sh`(不換替身):要問的正是「那一支自己會不會寫」。
     """
@@ -193,43 +276,35 @@ class WhoWritesIntoIt(InboxBase):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "沙盒的替身測試模組")
 
-    def test_a_red_gate_round_leaves_a_page_that_names_the_next_step(self):
+    def test_a_red_gate_round_writes_no_page_only_gate_fail(self):
         self.make_ticket("7")
         done = self.run_sh("scripts/gate.sh", "scripts/land.sh", "--ticket", "7",
                            "--no-auto-fix")
         self.assertNotEqual(done.returncode, 0, done.stdout)
-        listed = self.inbox("list")
-        self.assertIn("#7", listed.stdout, listed.stdout + done.stdout)
-        self.assertIn("閘門紅", listed.stdout)
-        self.assertIn("auto-fix.sh 7", self.read(
-            os.path.join("reports", "inbox", "%s.md" % self._only_page())))
+        self.assertEqual(self.pages("7"), [], done.stdout)
+        self.assertIn("gate.fail", self.kinds())
 
-    def _only_page(self):
-        rows = [json.loads(line) for line in self.read(
-            os.path.join("reports", "inbox", "index.jsonl")).splitlines() if line.strip()]
-        return rows[-1]["name"]
-
-    def test_a_green_gate_round_asks_for_a_review_not_for_a_fix(self):
-        """綠了也是終態,而它要主線做的事不一樣 —— **覆核不自動**(D-010)。"""
+    def test_a_green_gate_round_writes_no_page_only_gate_pass(self):
+        """綠了接著是覆核(review.sh 派),不是主線的事 —— 只寫事件。"""
         self.write("tests/test_land.py",
                    "import unittest\n\n\nclass T(unittest.TestCase):\n"
                    "    def test_ok(self):\n        pass\n")
         self.make_ticket("7", allowed_write_paths=["tests/*"])
         done = self.run_sh("scripts/gate.sh", "scripts/land.sh", "--ticket", "7")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        page = self.read(os.path.join("reports", "inbox", "%s.md" % self._only_page()))
-        self.assertIn("review", page)
-        self.assertIn("閘門綠", page)
+        self.assertEqual(self.pages("7"), [])
+        self.assertIn("gate.pass", self.kinds())
 
-    def test_running_out_of_rounds_leaves_a_page_that_names_the_next_step(self):
-        """三輪耗盡是一個**狀態轉換**,而狀態轉換是一個終態 —— 它要來叫醒主線。"""
+    def test_running_out_of_rounds_is_a_state_change_not_a_second_page(self):
+        """三輪耗盡是一個**狀態轉換**:票轉 Blocked、兩則事件。叫醒主線的那一頁由
+        auto-fix.sh 發(帶紅榜與輪數)—— 這裡再發一頁就是同一件事兩頁(#50 裁示)。"""
         self.make_ticket("7", retry_limit=2, state="Running")
         done = self.ticket("round", "7", "3", "--red")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.load_ticket("7")["state"], "Blocked")
-        listed = self.inbox("list")
-        self.assertIn("Blocked", listed.stdout)
-        self.assertIn("#7", listed.stdout)
+        self.assertEqual(self.pages("7"), [])
+        self.assertIn("Blocked", [row.get("to") for row in self.events()
+                                  if row["kind"] == "ticket.state"])
 
     def test_the_index_is_append_only_json_not_parsed_prose(self):
         """`list` 讀索引而不是掃 markdown:散文改一個字就會解析錯。"""

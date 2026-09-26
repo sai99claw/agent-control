@@ -5,14 +5,14 @@
 #                                                       # 票 Ready 且沒有狀態檔 → 起第 1 輪
 #   sh scripts/auto-fix.sh <票號> --dry-run             # 只印派工文,不起 worker
 #   sh scripts/auto-fix.sh <票號> --dry-run --round 1   # 第 1 輪的派工文(還沒有狀態檔時)
-#   sh scripts/auto-fix.sh <票號> --no-review           # 綠了停在等覆核,不叫 review.sh
+#   sh scripts/auto-fix.sh <票號> --no-review           # 綠了票停在 InReview,不叫 review.sh
 #
 # 閘門與單票落地預設會叫這一支;`--no-auto-fix` 才停給人處理。
 #
 # ## 第 1 輪也由這一支起(#40,D-025 C1)
 # 票 **Ready 且沒有狀態檔** ⇒ 走同一個 `round_once 1`:派工文就是 `--dry-run --round 1`
 # 那一份、副本 base 取票的 `base_sha`(分支 t<n> 還不存在時)、`ticket.attempt.start`
-# 由這裡發、票轉 Running;之後 apply → gate → InReview → inbox 與第 2 輪起是同一段。
+# 由這裡發、票轉 Running;之後 apply → gate → InReview → review.sh 與第 2 輪起是同一段。
 # 以前第 1 輪被「一輪都還沒跑過」的 exit 2 擋在門外,主線要自己派 worker、apply、
 # 帶 `AC_TICKETS_DIR` 跑閘門 —— 同一件事兩個入口。票不是 Ready 又沒有狀態檔 ⇒
 # 指名 state 停下(rc=2),不猜。
@@ -22,7 +22,7 @@
 # 而它手上只有一份檔:狀態檔的 `repair_context`(base_sha、票面快照、副本、patch 路徑
 # 與雜湊、第幾輪、上一輪的 EVIDENCE、重現指令)。少一格,它就得回頭翻對話或猜檔案位置。
 #
-# ## 三種停下來(每一種都寫一則 inbox,不是印一行就算)
+# ## 三種停下來(每一種都寫一則 inbox,kind=decision —— 不是印一行就算)
 # 1. worker 說**票寫錯 / 需要裁示** —— 它在 EVIDENCE 裡寫一行 `OBJECTION: <類別> <理由>`;
 #    這一支把它記成票的 `objections[]`,票轉 Blocked、owner=main,發 `decision.asked`。
 # 2. **三輪仍紅** —— `ticket.py round` 在第 `retry_limit+1` 輪把票轉 Blocked、owner=main。
@@ -30,10 +30,11 @@
 #    這一種**最危險**:它看起來像「沒有紅」,而自動派下去的 worker 會拿著一份空紅榜
 #    去猜。所以這裡當場停,不派。
 #
-# **覆核由 `review.sh` 派**(#42,D-025 ②):綠了之後票轉 `InReview`、寫 inbox,再叫
-# `sh scripts/review.sh <票號>` —— reviewer pass 由它寫 `review`,fail 由它轉 Blocked 回主線
-# 裁示。這一支自己不碰 `review` 那一格;`--no-review` 停在等覆核(主線手跑 review.sh)。
-# 覆核的結果看它那一頁 inbox,不改這一支的退出碼。
+# **覆核由 `review.sh` 派**(#42,D-025 ②):綠了之後票轉 `InReview`(`ticket.state` 事件)、
+# 再叫 `sh scripts/review.sh <票號>` —— reviewer pass 由它寫 `review`,fail 由它轉 Blocked 回主線
+# 裁示。這一支自己不碰 `review` 那一格;`--no-review` 停在 InReview(主線手跑 review.sh)。
+# 綠了**不發頁**(D-032):接著的事是腳本做的,收件匣只收 decision / done。
+# 覆核的結果看 review.sh 的事件與頁,不改這一支的退出碼。
 #
 # ## 退出碼
 #   0 綠了(覆核交給 review.sh)   1 三輪耗盡仍紅   2 用法 / 沒有狀態檔而票不是 Ready
@@ -152,7 +153,7 @@ ev() {
 
 post() {   # $1 = 狀態  $2 = 要主線做什麼  $3 = 去哪看
     python3 "$AC/inbox.py" post --ticket "$ID" --run-id "${RUN_ID:-}" \
-        --kind auto-fix --state "$1" --what "$2" --where "$3" \
+        --kind decision --state "$1" --what "$2" --where "$3" \
         || echo "auto-fix: inbox 寫不出來($1)" >&2
 }
 
@@ -864,21 +865,10 @@ PY
         python3 "$AC/ticket.py" set "$ID" state InReview >/dev/null 2>&1 || true
         read_status
         RUN_ID=$S_RUN
-        if [ -n "$CASE_FIXED" ]; then
-            result="案例已修,第 $r 輪綠了,等覆核"
-        else
-            result="第 $r 輪綠了,等覆核"
-        fi
         if [ -n "$NO_REVIEW" ]; then
-            echo "auto-fix: 第 $r 輪綠了 —— --no-review,覆核不派,停在這裡等主線"
-            post "$result" \
-                 "覆核沒有自動派(--no-review):sh scripts/review.sh $ID;review 通過後 sh scripts/land.sh t$ID" \
-                 "$WT 與 reports/t$ID/$S_RUN/status.json"
+            echo "auto-fix: 第 $r 輪綠了 —— --no-review,覆核不派,票停在 InReview:sh scripts/review.sh $ID"
         else
             echo "auto-fix: 第 $r 輪綠了 —— 覆核交給 review.sh(sh scripts/review.sh $ID)"
-            post "$result" \
-                 "不用讀 patch:覆核由 review.sh 派,結果看另一頁(通過 → land;退回 → 裁示;沒交件 → 重派)" \
-                 "$WT 與 reports/t$ID/$S_RUN/status.json"
             sh "$AC/review.sh" "$ID" --run-id "$RUN_ID" \
                 || echo "auto-fix: 覆核停下來了(rc=$?)—— 看 reports/inbox/ 那一頁"
         fi

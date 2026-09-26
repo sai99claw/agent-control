@@ -1315,24 +1315,6 @@ def cmd_close(argv):
 # --------------------------------------------------------------------- round
 
 
-def post_inbox(ident, state, what, where):
-    """終態寫一頁收件匣。**寫不出來要出聲但不擋票的狀態轉換** —— 把一個紀錄問題
-    升級成一個交付問題,會讓票卡在原狀態,而那比沒有收件匣更糟。"""
-    try:
-        import inbox                                       # noqa: PLC0415
-        argv = ["post", "--ticket", str(ident), "--kind", "ticket",
-                "--state", state, "--what", what, "--where", where]
-        import io
-        keep = sys.stdout
-        sys.stdout = io.StringIO()
-        try:
-            inbox.main(argv)
-        finally:
-            sys.stdout = keep
-    except Exception:                                      # noqa: BLE001
-        sys.stderr.write("ticket: 收件匣寫不出來(票的狀態還是改好了)\n")
-
-
 def cmd_round(argv):
     """修復迴圈的一輪結束了。**三輪耗盡不是一句話,是一個狀態轉換。**
 
@@ -1373,11 +1355,8 @@ def cmd_round(argv):
         event.emit("ticket.state", ticket=ident, field="state",
                    **{"from": "Running", "to": "Blocked",
                       "state_version": ticket["state_version"]})
-        # 轉 Blocked 是一個**終態**,所以它要去叫醒主線(D-015)。
-        # 「報了」與「沒報」以前在票上長得一樣;現在收件匣裡有一頁寫著要它做什麼。
-        post_inbox(ident, "三輪耗盡,票轉 Blocked、owner=main",
-                   "這張票由你接手:讀紅榜決定要改票面、換做法,還是拆票",
-                   "reports/t%s/ 最新那一輪的 status.json" % ident)
+        # 轉 Blocked 只寫上面兩則事件,不發頁(#50 裁示):叫醒主線的那一頁由 auto-fix.sh
+        # 發(帶紅榜與輪數),這裡再發一頁就是同一件事兩頁 decision。
         sys.stdout.write("ticket: #%s 第 %d 輪仍紅(上限 %d)—— 轉 Blocked,"
                          "指派主線(state_version %d)\n"
                          % (ident, number, limit, ticket["state_version"]))

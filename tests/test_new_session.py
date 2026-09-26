@@ -55,7 +55,7 @@ class NewSession(Sandbox):
         """主線開場讀一次收件匣,之後只在被通知時讀 —— **不輪詢**(D-015)。"""
         self.make_ticket(1)
         self.run_py("scripts/inbox.py", "post", "--ticket", "1", "--run-id", "r1",
-                    "--kind", "gate", "--state", "閘門紅", "--what", "看紅榜",
+                    "--kind", "decision", "--state", "閘門紅", "--what", "看紅榜",
                     "--where", "reports/t1/r1/status.json")
         done = self.start("main", "fable")
         self.assertIn("閘門紅", done.stdout, "跑完的事沒有在開場出現 = 沒有人會去看")
