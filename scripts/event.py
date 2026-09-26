@@ -30,6 +30,8 @@ KINDS = (
     "ticket.created", "ticket.state", "ticket.frozen", "ticket.closed",
     # 一次派工的三種結局。attempt 對不上的遲到回報要能被認出來(SCHEMA §執行)。
     "ticket.attempt.start", "ticket.attempt.done", "ticket.attempt.failed",
+    # 一次 headless 派工的 token 與時鐘進了票的 cost[](D-032);不動 state_version。
+    "ticket.cost",
     # 機器派出的 agent:看板用 ticket + ts 與主線採樣到的 agent 對上。
     "agent.start", "agent.done", "agent.failed",
     # 排順序只是提案(docs/ROLES.md:沒有調度員這個角色),所以它只有這一種事件。

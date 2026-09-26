@@ -25,7 +25,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from control_harness import (DEFAULT_CONFIG, REVIEWER_PASS, Sandbox,  # noqa: E402
-                             write_executable)
+                             envelope, write_executable)
 
 RED_CASE = """diff -ruN base/tests/test_thing.py work/tests/test_thing.py
 --- base/tests/test_thing.py\t1970-01-01 08:00:00
@@ -180,6 +180,28 @@ class T(unittest.TestCase):
 CASE
 diff -ruN base work > "patch-round$AC_ROUND.diff" || true
 printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
+"""
+
+# 假 worker(#49):第 1 輪交一份會綠的 patch;`@ENVELOPE@` 換成一行信封時,照真的
+# `claude -p --output-format json` 把它印在 stdout,**之後**再往 stderr 寫一行 ——
+# log 是兩者混寫的,最後一行不一定是信封。
+WORKER_ROUND_ONE_COSTS = """#!/bin/sh
+set -e
+echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+cd "$AC_WORK"
+mkdir -p work/tests
+cat > work/tests/test_thing.py <<'CASE'
+import unittest
+
+
+class T(unittest.TestCase):
+    def test_thing(self):
+        self.assertEqual(1, 1)
+CASE
+diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
+echo '@ENVELOPE@'
+echo "worker stderr after the envelope" >&2
 """
 
 # 假 worker:修好那條紅,並照 §8.5 在 EVIDENCE 尾端交一塊 `result`。
@@ -906,6 +928,81 @@ class TheFirstRoundStartsFromReady(AutoFixBase):
         self.assertEqual(self.load_ticket("1")["state"], "Ready")
         self.assertNotIn("ticket.attempt.start", self.kinds())
         self.assertEqual(len(self.result_files("dispatch-round1.md")), 1)
+
+
+class EveryRoundCostsARowAndClosesItsAttempt(AutoFixBase):
+    """#49 A4 / A7:每一輪派工在票的 `cost[]` 記一筆(role=worker),每一個
+    `ticket.attempt.start` 都有配對的 done / failed —— heartbeat.sh 按 attempt 配對。
+    期望的 token 數是這裡寫死的,不從 ticket.py 算回去。"""
+
+    def worker_with(self, line):
+        self.set_worker(WORKER_ROUND_ONE_COSTS.replace("@ENVELOPE@", line))
+        self.ticket_ready()
+
+    def attempts(self, kind):
+        return [row for row in self.events() if row["kind"] == kind]
+
+    def test_a_green_round_writes_exactly_one_worker_row_from_the_envelope(self):
+        """**變異**:拿掉 round_once 裡 `write_cost worker` 那一行 → 「恰 1 筆」紅。"""
+        self.worker_with(envelope("done", input_tokens=21, output_tokens=4242,
+                                  cache_write=1000, cache_read=50000, duration_ms=9000))
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        rows = self.load_ticket("1").get("cost") or []
+        self.assertEqual(len(rows), 1, rows)
+        row = rows[0]
+        self.assertEqual((row["role"], row["round"], row["model"], row["by"]),
+                         ("worker", 1, "opus", "auto-fix.sh"))
+        self.assertEqual(row["tokens_out"], 4242)
+        self.assertEqual(row["tokens_in"], 21)
+        self.assertEqual(row["cache_write"], 1000)
+        self.assertEqual(row["cache_read"], 50000)
+        self.assertIsInstance(row["wall_seconds"], int,
+                              "wall_seconds 是 auto-fix 自己量的派出前後差")
+
+    def test_a_worker_that_prints_no_envelope_still_costs_one_row_of_nulls(self):
+        self.worker_with("not an envelope")
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        rows = self.load_ticket("1").get("cost") or []
+        self.assertEqual(len(rows), 1, rows)
+        self.assertIsNone(rows[0]["tokens_out"])
+        self.assertIsInstance(rows[0]["wall_seconds"], int)
+
+    def test_a_round_whose_gate_ran_is_done_with_the_same_attempt(self):
+        """A7。**變異**:拿掉 `ev ticket.attempt.done` 那一行 → 這一條紅。"""
+        self.worker_with("not an envelope")
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        starts = self.attempts("ticket.attempt.start")
+        dones = self.attempts("ticket.attempt.done")
+        self.assertEqual(len(starts), 1, starts)
+        self.assertEqual(len(dones), 1, dones)
+        self.assertEqual(str(dones[0].get("attempt")), str(starts[0].get("attempt")))
+        self.assertEqual(dones[0].get("rc"), "0")
+        self.assertEqual(self.attempts("ticket.attempt.failed"), [])
+
+    def test_a_worker_that_hands_in_no_patch_fails_its_attempt(self):
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready()
+        done = self.auto_fix()
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        failed = self.attempts("ticket.attempt.failed")
+        self.assertEqual([(str(row.get("attempt")), row.get("reason")) for row in failed],
+                         [("1", "no-patch")])
+        self.assertEqual(self.attempts("ticket.attempt.done"), [])
+        self.assertEqual(len(self.load_ticket("1").get("cost") or []), 1,
+                         "沒交 patch 也派過一次,成本照記")
+
+    def test_an_objection_fails_its_attempt_by_that_name(self):
+        self.set_worker(WORKER_OBJECTS)
+        self.ticket_ready()
+        self.status(1, RED_LOG)
+        done = self.auto_fix()
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        failed = self.attempts("ticket.attempt.failed")
+        self.assertEqual([(str(row.get("attempt")), row.get("reason")) for row in failed],
+                         [("2", "objection")])
 
 
 class WhichRoundIsTheLatestOne(AutoFixBase):

@@ -14,6 +14,7 @@
     scripts/ticket.py round 7 3 --red             # 第三輪仍紅 -> Blocked,指派主線
     scripts/ticket.py import <舊票目錄>           # 轉成這份 schema,缺的留空並標 legacy
     scripts/ticket.py freeze 7 --reason … --criterion …
+    scripts/ticket.py cost 7 --role worker --round 1 --from-envelope <信封>  # 不動 state_version
 
 **不要手改票檔**(`tickets/README.md`):`state_version` 是遲到的回報用來認出自己
 過期的那一格,而手改不會動它。
@@ -294,6 +295,9 @@ USAGE = {
                "--ticket <id> --role worker|verifier|reviewer --round N"),
     "objection": ("scripts/ticket.py objection <id> --line \"OBJECTION: …\" "
                   "--evidence <EVIDENCE>"),
+    "cost": ("scripts/ticket.py cost <id> --role worker|verifier|reviewer|land "
+             "[--round N] [--model M] [--by <腳本>] [--from-envelope <信封檔>] "
+             "[--wall-seconds N]"),
 }
 
 EXAMPLE = {
@@ -325,6 +329,9 @@ python3 scripts/ticket.py set 7 allowed_write_paths '["scripts/land.sh", "tests/
     "objection": ('python3 scripts/ticket.py objection 7 \\\n'
                   '  --line "OBJECTION: ticket-wrong 驗收 A3 指的欄位不存在" \\\n'
                   '  --evidence reports/t7/EVIDENCE.md'),
+    "cost": ("python3 scripts/ticket.py cost 7 --role worker --round 1 --model opus \\\n"
+             "  --by auto-fix.sh --from-envelope reports/t7/20260923-101500-1/worker-round1.log \\\n"
+             "  --wall-seconds 412"),
 }
 
 
@@ -365,6 +372,14 @@ def known_flags(verb):
     if verb == "objection":
         return [("--line", "EVIDENCE 裡那一行 `OBJECTION: <類別> <理由>`", False, True),
                 ("--evidence", "那份 EVIDENCE 的路徑(記進票面當證據)", False, True)]
+    if verb == "cost":
+        return [("--role", "worker / verifier / reviewer / land", False, True),
+                ("--round", "第幾輪", False, False),
+                ("--model", "模型;land 不給(null)", False, False),
+                ("--by", "哪一支腳本寫的", False, False),
+                ("--from-envelope", "claude -p --output-format json 的信封檔(或混著它的 log)",
+                 False, False),
+                ("--wall-seconds", "量到的秒數;沒給才取信封 duration_ms/1000", False, False)]
     return []
 
 
@@ -1372,6 +1387,111 @@ def cmd_round(argv):
     return 0
 
 
+# ---------------------------------------------------------------------- cost
+
+
+# 信封 `usage` 的哪一格進票的哪一格(D-032)。`total_cost_usd` 不進票:同一個模型的
+# 單價會變,票裡只留 token 與秒。
+COST_USAGE = (("tokens_in", "input_tokens"), ("tokens_out", "output_tokens"),
+              ("cache_write", "cache_creation_input_tokens"),
+              ("cache_read", "cache_read_input_tokens"))
+COST_FLAGS = ("--role", "--round", "--model", "--by", "--from-envelope", "--wall-seconds")
+
+
+def read_envelope(path):
+    """`claude -p --output-format json` 的信封。整份是一個 JSON 就用它;不是的話
+    (worker 的 log 是 stdout 與 stderr 混寫的)取**最後一行**以 `{` 開頭、讀得出
+    `type=result` 的那一行。讀不到回 `(None, 原因)` —— 不猜。"""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+    except OSError as exc:
+        return None, "讀不到 %s(%s)" % (path, exc.strerror or exc)
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = None
+        for line in reversed(text.splitlines()):
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and row.get("type") == "result":
+                data = row
+                break
+    if not isinstance(data, dict):
+        return None, "%s 裡沒有 JSON 信封" % path
+    if not isinstance(data.get("usage"), dict):
+        return None, "%s 的信封沒有 usage" % path
+    return data, ""
+
+
+def cmd_cost(argv):
+    """一次 headless 派工的 token 與時鐘,append 進票的 `cost[]`(D-032)。
+
+    **不動 `state_version`、不動 `review`**:review 綁 state_version,落地前寫一筆成本
+    若讓覆核過期,land 就會拒。拿不到的欄位是 null,不是 0 —— 0 與量過是 0 長得一樣。
+    """
+    if not argv or argv[0].startswith("--"):
+        sys.stderr.write("ticket: %s\n" % USAGE["cost"])
+        return 2
+    ident = argv[0].lstrip("#")
+    got = {}
+    index = 1
+    while index < len(argv):
+        flag = argv[index]
+        if flag in COST_FLAGS and index + 1 < len(argv):
+            got[flag] = argv[index + 1]
+            index += 2
+            continue
+        return unknown_flag("cost", flag)
+    if not got.get("--role"):
+        sys.stderr.write("ticket: cost 要 --role\n")
+        return 2
+    try:
+        rnd = int(got["--round"]) if got.get("--round") else None
+        wall = int(round(float(got["--wall-seconds"]))) \
+            if got.get("--wall-seconds") else None
+    except ValueError:
+        sys.stderr.write("ticket: --round / --wall-seconds 要是數字\n")
+        return 2
+    row = {"role": got["--role"], "round": rnd, "model": got.get("--model") or None}
+    envelope, why = None, "沒帶 --from-envelope"
+    if got.get("--from-envelope"):
+        envelope, why = read_envelope(got["--from-envelope"])
+    usage = envelope["usage"] if envelope else {}
+    for field, key in COST_USAGE:
+        value = usage.get(key)
+        row[field] = value if isinstance(value, int) and not isinstance(value, bool) else None
+    if wall is None and envelope and isinstance(envelope.get("duration_ms"), (int, float)):
+        wall = int(round(envelope["duration_ms"] / 1000.0))
+    row.update({"wall_seconds": wall, "by": got.get("--by") or None, "at": now()})
+    if envelope is None:
+        sys.stderr.write("ticket: #%s cost 的信封讀不到(%s)—— token 欄記 null\n"
+                         % (ident, why))
+    try:
+        with Lock():
+            ticket = load(ident)
+            rows = ticket.get("cost") if isinstance(ticket.get("cost"), list) else []
+            rows.append(row)
+            ticket["cost"] = rows
+            save(ticket)
+    except (OSError, ValueError) as exc:
+        sys.stderr.write("ticket: 讀不到 #%s —— %s\n" % (ident, exc))
+        return 2
+    except RuntimeError as exc:
+        sys.stderr.write("ticket: %s\n" % exc)
+        return 5
+    event.emit("ticket.cost", ticket=ident, role=row["role"], round=rnd,
+               tokens_out=row["tokens_out"], wall_seconds=wall)
+    sys.stdout.write("ticket: #%s cost 記一筆 role=%s round=%s tokens_out=%s wall=%s\n"
+                     % (ident, row["role"], rnd, row["tokens_out"], wall))
+    return 0
+
+
 # ------------------------------------------------------------------- import
 
 
@@ -1698,7 +1818,7 @@ def main(argv):
              "set": cmd_set, "inbox": cmd_inbox, "verify": cmd_verify,
              "close": cmd_close, "import": cmd_import, "freeze": cmd_freeze,
              "round": cmd_round, "result": cmd_result,
-             "objection": cmd_objection}
+             "objection": cmd_objection, "cost": cmd_cost}
     if verb in ("--help", "-h", "help"):
         if rest and rest[0] in table:
             return help_for(rest[0])

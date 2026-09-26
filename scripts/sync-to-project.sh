@@ -108,6 +108,15 @@ SCRIPT_LIST="status.py verify-case.py apply.sh auto-fix.sh review.sh inbox.py ru
 # `heartbeat.sh` 由 `new-session.sh` 叫、`new-session.sh` 由 `session-hook.sh` 叫(#39):
 # 專案要接的只有 hook 那一支(接在 `.claude/settings.json`),另外兩支是它帶進來的。
 DEPENDENCY_ONLY="event.py ticket.py heartbeat.sh new-session.sh"
+# 派工範本(D-032):`review.sh` 逐字讀 `templates/dispatch-reviewer.md`,驗證者派工讀
+# `dispatch-verifier.md`。以前要專案自己從 A 複製一份 —— 複製的那一份從此不會跟著 A 改。
+TPL=$DEST/templates
+TPL_MANIFEST=$TPL/.sync-manifest
+TEMPLATE_LIST="dispatch-reviewer.md dispatch-verifier.md"
+NEW_TEMPLATES=""
+# 明名單退場(D-010 調度員退場):這幾份**從沒進過 manifest**(manifest 比它們晚生),
+# 所以「不在名單上就退場」那一段永遠碰不到它們。名單以外、manifest 以外的檔一個都不碰。
+RETIRED_ROLES="dispatcher.md"
 
 copy_dir() {  # $1 = 來源目錄  $2 = 目的目錄  $3 = manifest 前綴
   mkdir -p "$2"
@@ -186,6 +195,27 @@ copy_template() {
 }
 copy_template
 
+# 派工範本:與角色卡同一種檔頭(.md,不會踩到 shebang 或 docstring)。
+copy_templates() {
+  for name in $TEMPLATE_LIST; do
+    src=$HERE/templates/$name
+    if [ ! -f "$src" ]; then
+      echo "sync: 主 repo 沒有 templates/$name —— 名單與事實分岔了(先修名單)" >&2
+      continue
+    fi
+    NEW_TEMPLATES="$NEW_TEMPLATES$name
+"
+    [ "$DRY" = "--dry-run" ] && { echo "sync: (dry-run) $TPL/$name"; continue; }
+    mkdir -p "$TPL"
+    {
+      printf '<!-- 由 agent-control %s 的 %s 同步產生;請到 agent-control 改,不要改這一份 -->\n' "$SRC_SHA" "templates/$name"
+      cat "$src"
+    } > "$TPL/$name"
+    echo "sync: $TPL/$name"
+  done
+}
+copy_templates
+
 # 退場的角色卡。**先唸出來再刪** —— 一次靜悄悄的刪除與一次沒發生的刪除長得一樣。
 if [ -f "$MANIFEST" ]; then
   while IFS= read -r old; do
@@ -222,6 +252,28 @@ if [ -f "$CTRL_MANIFEST" ]; then
   done < "$CTRL_MANIFEST"
 fi
 [ "$DRY" = "--dry-run" ] || printf '%s' "$NEW_SCRIPTS" > "$CTRL_MANIFEST"
+
+# 退場的範本同理:**唸出來再刪**。
+if [ -f "$TPL_MANIFEST" ]; then
+  while IFS= read -r old; do
+    [ -n "$old" ] || continue
+    case "$NEW_TEMPLATES" in
+      *"$old"*) ;;
+      *)
+        echo "sync: 退場 $TPL/$old(agent-control 已經不同步這一份)"
+        [ "$DRY" = "--dry-run" ] || rm -f "$TPL/$old"
+        ;;
+    esac
+  done < "$TPL_MANIFEST"
+fi
+[ "$DRY" = "--dry-run" ] || [ ! -d "$TPL" ] || printf '%s' "$NEW_TEMPLATES" > "$TPL_MANIFEST"
+
+# 明名單退場的角色卡:有就唸出來再刪。
+for name in $RETIRED_ROLES; do
+  [ -f "$ROLES/$name" ] || continue
+  echo "sync: 退場 $ROLES/$name(D-010 調度員已退場)"
+  [ "$DRY" = "--dry-run" ] || rm -f "$ROLES/$name"
+done
 
 # 專案端有什麼:說得出對**這個**專案成立的下一句。
 echo "sync: 完成(來源 $SRC_SHA)。"
@@ -262,7 +314,7 @@ sync:        "command": "sh \"$CLAUDE_PROJECT_DIR/scripts/control/session-hook.s
 sync:      model 讀 board/config.json 的 routing.main(或 AC_MODEL);副本裡不觸發。
 sync:   8. 閘門手跑綠 → 票轉 InReview → 派覆核(auto-fix 綠的那一趟它自己會叫):
 sync:        python3 scripts/control/ticket.py set <n> state InReview && sh scripts/control/review.sh <n>
-sync:      review.sh 讀 templates/dispatch-reviewer.md(從 agent-control 複製一份)與 board/config.json 的 reviewer 段。
+sync:      review.sh 讀 templates/dispatch-reviewer.md(這一支已同步過去)與 board/config.json 的 reviewer 段。
 EOF
 
 # 接了沒:**同步了但沒有呼叫點**(2026-09-23,#29 A11;G11)。

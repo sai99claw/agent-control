@@ -200,7 +200,7 @@ class KindTable(unittest.TestCase):
         for kind in ("session.start", "session.end",
                      "ticket.created", "ticket.state", "ticket.frozen", "ticket.closed",
                      "ticket.attempt.start", "ticket.attempt.done",
-                     "ticket.attempt.failed", "schedule.proposed",
+                     "ticket.attempt.failed", "ticket.cost", "schedule.proposed",
                      "agent.start", "agent.done", "agent.failed",
                      "gate.start", "gate.rerun", "gate.pass", "gate.fail",
                      "flake.auto_pass", "env.suspect",
