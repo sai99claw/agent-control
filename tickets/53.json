@@ -52,8 +52,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "6f4dd882cd92c5e8d3dd0787a223ace1ab6717a6",
-  "state": "InReview",
-  "state_version": 25,
+  "state": "Done",
+  "state_version": 28,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -186,16 +186,40 @@
       "wall_seconds": 61,
       "by": "auto-fix.sh",
       "at": "2026-09-27T05:27:25+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 22,
+      "tokens_out": 8164,
+      "cache_write": 58282,
+      "cache_read": 545672,
+      "wall_seconds": 84,
+      "by": "review.sh",
+      "at": "2026-09-27T05:29:23+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 422,
+      "by": "land.sh",
+      "at": "2026-09-27T05:36:25+08:00"
     }
   ],
   "repair_round": 1,
   "review": {
     "verdict": "pass",
     "by": "reviewer@opus",
-    "sha": "c39bb84ca5d5b6698b96d59864d15ea568b06202",
+    "sha": "aa00f4c31693dd7b8392a970d340372101758df0",
     "note": "reports/t53/20260927-042946-24277/REVIEW.md",
-    "at": "2026-09-27T05:19:24+08:00",
-    "state_version": 24
+    "at": "2026-09-27T05:36:25+08:00",
+    "state_version": 28
   },
   "owner": "main"
 }

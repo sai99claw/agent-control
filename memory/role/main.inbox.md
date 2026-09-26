@@ -17,3 +17,4 @@
 - 2026-09-26 T#652 實測:`sync-to-project.sh` 不會退場 `docs/roles/dispatcher.md`(不在 manifest,sync 只唸「非產出物」);T 端這次手刪。要退場得把它列進 sync 的退場名單 —— 給下一個開題者。
 - 2026-09-26 T#653 實測兩個 A 側缺口(T 的 gate 綠自動叫 review.sh 因此撤回,另開票時一起收):(1) `review.sh` 只收 `InReview`,T 閘門綠寫的是 `AwaitingReview`(demo/test_control 釘著這個字,4 處)—— review.sh 也收 AwaitingReview 最省;(2) `templates/dispatch-reviewer.md` 不在 `sync-to-project.sh` 名單,T 沒範本 review.sh rc=2。
 - land.sh docs 只收 tickets/ docs/ memory/,整理票的 discussions/ 進不去,主線得裸 commit(先跑 tests.test_no_project_names);要嘛 docs 通道加 discussions/,要嘛整理票落地走別的入口 (#52, 2026-09-27, main@fable)
+- worker 的 OBJECTION 行常帶本機絕對路徑,ticket.py objection 原樣寫進 tickets/<n>.json,下一次 land 就被 test_no_project_names 擋(#53 兩輪、#54 一輪);要嘛 objection 收件時把 home 路徑改成佔位字,要嘛派工文禁止反駁行寫絕對路徑 (#53, 2026-09-27, main@fable)

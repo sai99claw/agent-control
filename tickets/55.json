@@ -1,0 +1,68 @@
+{
+  "id": "55",
+  "subject": "verify.py 的程式碼根與票根分開:回歸層跑「這支檔案所在的那棵樹」,AC_ROOT 只管票/事件/reports(land 與 gate 在 worktree 裡的 verify/ 層現在跑的是主 repo)",
+  "created": "2026-09-27T05:18:30+08:00",
+  "objective": "land.sh:580 與手跑 gate.sh 在 worktree 裡帶 AC_ROOT=<主 repo> 時,verify/ 案例與被測檔都來自 worktree(合併樹);快取仍寫在 AC_ROOT 那棵樹的 reports/。呼叫端(land.sh、gate.sh)一行不改就正確。",
+  "acceptance": [
+    "A1(unit,tests/test_verify_runner.py):把整棵 HERE 拷到 tmp(至少 scripts/verify.py、scripts/status.py、scripts/event.py、board/config.json、verify/),把 tmp 的 verify/example/test_example.py 改成一條紅(夾具自己寫的字串,例如 'copy-only red');跑 [sys.executable, tmp/scripts/verify.py, --tag, example, --no-cache] 且 env AC_ROOT=HERE → rc≠0、stdout+stderr 含那條字串。HERE 的 verify/ 不改。",
+    "A2(unit,tests/test_verify_runner.py):AC_TICKET=77 AC_RUN_ID=<id> AC_ROOT=<tmp2,只有 board/config.json、沒有 verify/> 跑 HERE/scripts/verify.py --tag example → rc 0、Ran ≥1,且 <tmp2>/reports/t77/<id>/verify-*.log 存在(快取住票根);tmp2 沒有 verify/ 也跑得到案例(案例來自 HERE)。",
+    "A3(unit,tests/test_gate.py,沙盒):主 repo 票 #7 needs_verifier=false、verify.tags=['example'],commit;worktree t7 裡把 verify/example/test_example.py 改成紅(保留 TAGS=['example'] 與 lint 四段 docstring);在 wt 裡跑 scripts/gate.sh --branch --ticket 7 --no-auto-fix,env AC_ROOT=<主 repo>、不帶 AC_TICKETS_DIR → rc≠0,且 AC_VERIFY_LOG 那份 log 含那條紅的字串;主 repo 的 verify/example 沒動(紅只可能來自 wt 的 verify/)。",
+    "A4(unit):tests/test_verify_runner.py 既有 21 條與 tests/test_gate.py 既有案例全綠;走到 scripts/control/ 那兩條(:154/:161)仍綠(walk-up 不變)。",
+    "A5(變異,實作者證紅並貼進 EVIDENCE):M1 把 _find_root() 的 AC_ROOT override 分支放回去 → A1、A3 紅(rc 變 0);M2 cache_path() 改成用 ROOT 拼 reports/ → A2 紅(log 落到 HERE/reports 不是 tmp2)。",
+    "A6:verify_strings 兩條字面出現在分支上(verify.py docstring 與 test_verify_runner.py 案例 docstring 各一)。"
+  ],
+  "in_scope": [
+    "scripts/verify.py:_find_root() 不再讀 AC_ROOT(:44-46 那個 override 分支拿掉),ROOT = 從 __file__ 往上找 board/config.json 的那棵樹(既有 walk-up),VERIFY/cases()/unittest cwd/--unit 的 unit_cmd/head_sha 全跟 ROOT;cache_path() 維持 status.event.repo_root()(= AC_ROOT)不動;模組 docstring 加一段說明兩個根",
+    "tests/test_verify_runner.py:A1/A2 新案例;run_with() :63-69 那段 copytree + 註解釘的是舊行為(AC_ROOT 同時是案例根),改成不再 copytree、註解改述新契約;local_env()/no_ac_root() 可留",
+    "tests/test_gate.py:A3 新案例(形狀照 :664 test_a_gate_in_the_ticket_worktree_reads_the_main_repo_ticket)"
+  ],
+  "out_of_scope": [
+    "scripts/land.sh:580 與 scripts/gate.sh:567 的呼叫形狀(AC_ROOT=$ROOT 照舊;修在 verify.py 一處,D-018 一個形狀)",
+    "scripts/event.py repo_root()(票根的定義不變)",
+    "scripts/verify-case.py(red/check 自己 cwd=where 跑 unittest,:266,不經 verify.py,不受此洞影響)",
+    "#53 動的 gate.sh preflight/ticket_tags/AC_ROOT fallback(那是票根,不是程式碼根;本票落地後它 export AC_ROOT=MAINROOT 對回歸層變成無害)",
+    "tabby_pool 那支 scripts/verify.py(不在 sync SCRIPT_LIST,#35;同型問題 T 端已由 #654 另解)",
+    "docs/DECISIONS.md、docs/HANDOFF.md(主線 docs 通道)",
+    "scripts/gate.example.sh"
+  ],
+  "depends_on": [
+    {
+      "id": "53",
+      "condition": "落地(tests/test_gate.py 同檔;#55 在它之後 rebase 再派)"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/verify.py",
+    "tests/test_verify_runner.py",
+    "tests/test_gate.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "aa00f4c31693dd7b8392a970d340372101758df0",
+  "state": "Ready",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "feature": "控制腳本:閘門回歸層(scripts/verify.py)",
+  "decision_refs": [
+    "D-018",
+    "D-015",
+    "D-028",
+    "D-033"
+  ],
+  "verify_strings": [
+    "程式碼根是這支檔案所在的那棵樹(#55)",
+    "AC_ROOT 不再是程式碼根(#55)"
+  ],
+  "test_plan": "A1:驗『AC_ROOT 指向別處時,跑的仍是 verify.py 所在樹的 verify/ 與被測檔』/ 單元 / 輸入 = tmp 副本 + tmp 內一條紅 + env AC_ROOT=HERE / 觀察 rc 與輸出含夾具字串 / 期望值來自夾具寫進 tmp 的那條紅,不從 verify.py 算。A2:驗『AC_ROOT 仍是快取(reports/)的根』/ 單元 / 輸入 = AC_TICKET+AC_RUN_ID+AC_ROOT=tmp2(無 verify/)/ 觀察 tmp2/reports/t77/<id>/verify-*.log 存在、rc 0 / 期望路徑由 status.run_dir 契約給(既有 :73 案例同一條路)。A3:驗『閘門在 worktree 裡帶 AC_ROOT=主 repo 時,回歸層看到的是 worktree 那份案例』/ 單元(沙盒跑真 gate.sh)/ 輸入 = 主 repo 綠案例、wt 紅案例、票 needs_verifier=false + tags example / 觀察 gate rc≠0 且 verify log 含紅字串 / 期望值來自夾具。?:沙盒 gate --branch 的對照表把 verify/* 對到 tests/test_verify_runner.py(gate.sh:167),沙盒沒有那支測試檔時可能退 3『沒有人守著』——若如此,在 wt 寫一份 PASSING % 'test_verify_runner'(同 :681 對 test_land 的做法);這一點未實測。tags 留空(案例住 tests/,#29)。",
+  "outline": "根因(實測,D-033):land.sh:580 在 $WT 裡 export AC_ROOT=$ROOT(主 repo)→ gate.sh:567 的 verify.py 子行程繼承 → verify.py:44-46 _find_root() 先讀 AC_ROOT → ROOT=主 repo → VERIFY(:55)、cases()(:104)、unittest cwd(:175/:179)全在主 repo。副本實測:副本 verify/example 改紅,AC_ROOT=主 repo 跑副本的 verify.py → Ran 1 OK(紅看不見);AC_ROOT=副本或不帶 → FAILED。#53 沒蓋到:它只把票根拉回主 repo(preflight/ticket_tags 走 ticketlib.load、手跑無 AC_ROOT 時 export AC_ROOT=MAINROOT),而後者讓手跑的回歸層也跟著跑主 repo——本票落地後那個 export 對回歸層無害。裁示(D-018 一個形狀):AC_ROOT = 票/事件/reports 根;程式碼根 = verify.py 自己所在的樹(walk-up 既有),呼叫端一行不改。verify-case.py 不受影響(:266 自己 cwd=where)。needs_verifier=false:全是控制腳本的沙盒機械斷言(rc、log 路徑、輸出字串),期望值由夾具寫、不從被測程式算;M1/M2 由實作者證紅;沒有產品碼(D-028)。順序:#53 之後(tests/test_gate.py 同檔),派前 base_sha 改成 #53 落地後的 main。",
+  "needs_verifier": false
+}
