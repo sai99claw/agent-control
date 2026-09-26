@@ -19,3 +19,4 @@
 - 在 base/ 跑對照測試會長出 __pycache__(base 一個字都不准動):對照那一趟加 PYTHONDONTWRITEBYTECODE=1,或跑完 find base -name __pycache__ 刪乾淨 (#40, 2026-09-26, worker@opus)
 - 在 base/ 跑對照測試會長出 __pycache__(base 一個字都不准動):對照那一趟加 PYTHONDONTWRITEBYTECODE=1,或跑完 find base -name __pycache__ 刪乾淨 (#40, 2026-09-26, worker@opus)
 - 新增會起 headless 模型的腳本(讀 board/config.json 的 *.command)時,先在 tests/control_harness.py 的 DEFAULT_CONFIG 放一支替身命令,再把腳本加進 SCRIPT_FILES —— 缺那一段就退回真的 claude -p,既有的綠路測試會真的起模型 (#42) (#42, 2026-09-26, worker@opus)
+- 副本沒有 .git 時 test_no_project_names 必紅(git ls-files 掃到 0 檔);全套要在 cp -R work + git init 的複本跑才拿得到乾淨 rc,並用 base 複本對照證明紅來自環境 (#49, 2026-09-26, worker@opus)

@@ -49,15 +49,17 @@
     "tests/control_harness.py",
     "docs/SESSION-START.md",
     "docs/WORKFLOW.md",
-    "memory/role/main.md"
+    "memory/role/main.md",
+    "scripts/ticket.py",
+    "tests/test_status.py"
   ],
   "role": "worker",
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "6daa43d573f19ad21b0e81e7a342df304ea77dbe",
+  "base_sha": "c5d646d",
   "state": "Ready",
-  "state_version": 5,
+  "state_version": 13,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -80,5 +82,30 @@
   "test_plan": "單元 tests/test_inbox.py(kind 守衛、done 頁的 null/合計/無覆核)、整合 tests/test_auto_fix.py / test_gate.py / test_review.py / test_land.py(每支腳本各一條「綠路 0 頁 + 事件在」與一條「裁示路恰 1 頁 kind=decision」)、全套 discover。期望值(合計數、頁裡的字串)寫死在測試裡。每條驗收的變異在 EVIDENCE mutations 段逐條寫。",
   "outline": "needs_verifier=false 理由:A 工具票、無產品碼;驗收是 tests/ 機械斷言 + grep,實作者寫案例、覆核者對照;不動 verify/ 案例所以無 tags。 D-032 拆三張的第 ②:頁的種類。實測(D-033):今天發頁的地方共 4 支 —— auto-fix.sh post() 11 處(其中綠了等覆核 2 處)、gate.sh inbox_post 3 種 state、review.sh 4 種、land.sh inbox_all 5 種 + Done + 尚未關票;舊行為釘住處:tests/test_auto_fix.py:878/1216/1290(等覆核)、tests/test_land.py:172/890–900/947–964/1009(尚未關票、Done what=無、ack 等覆核)、tests/test_gate.py:336–338(綠也有一頁)、tests/test_review.py 各頁 state 斷言、tests/test_new_session.py:58 與 tests/test_land.py:880 直接 post --kind gate/auto-fix 都列進 allowed_write_paths。判斷:(a) 用 inbox.py 拒收其他 kind 當守衛,而不是只刪呼叫 —— 下一支新腳本不會再長回舊頁;(b) 「決定頁」的判準 = 票會轉 Blocked / 需要人動手才會前進,所以 land 的拒收 / 紅 / push 失敗 / 關不掉也算 decision,不只 D-032 列的四種;(c) done 頁不自動 ack(C4 的「post 即 ack」被 D-032 取代:它就是完成簡報);(d) 「做了什麼」取 review.note(覆核者已讀過分支),沒有才退回 objective,不另叫 LLM 寫摘要(多一次 opus)。順序建議:B1/B2(inbox.py)→ B6(review.sh 最小)→ B5(gate)→ B4(auto-fix)→ B3(land)→ B7。未實測:review.sh 是否已對 pass 發過事件(grep 只看到 agent.done 與 decision.asked)—— 所以 B6 明寫加四族。",
   "feature": "agent-control 流程控制(D-032 儀表板化)",
-  "needs_verifier": false
+  "needs_verifier": false,
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 170,
+      "tokens_out": 81583,
+      "cache_write": 214976,
+      "cache_read": 12609603,
+      "wall_seconds": 2309,
+      "by": "auto-fix.sh",
+      "at": "2026-09-26T23:17:26+08:00"
+    }
+  ],
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "三處票面與現況不合,要主線裁:(1) base_sha 6daa43d 早於 depends_on #49 的落地 c5d646d,tests/test_review.py:250 兩邊都得改同一行,這份 patch 經 apply.sh 三向合併必衝突 —— 請把 base_sha 設成 c5d646d,改套 patch-round1-rebased-c5d646d.diff;(2) scripts/ticket.py:1308 post_inbox 用 --kind ticket(三輪耗盡轉 Blocked 那一頁),B1 守衛會拒收它,但 ticket.py 不在 allowed_write_paths → tests/test_inbox.py:224 紅;而改成 decision 後三輪紅迴圈會有 2 頁 decision(ticket.py 一頁 + auto-fix :448/:901 一頁),又違反 B4 的「恰 1 筆」—— 兩頁留哪一頁要主線決定;(3) tests/test_status.py:590 用「閘門綠發頁」探測 AC_NO_INBOX 有沒有漏進沙盒,B5 之後綠不發頁,這條必紅,而 test_status.py 不在 allowed_write_paths。",
+      "evidence": "../agent-control-wt/fix-t50/round1/EVIDENCE-round1.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "主線裁(2026-09-26 22:5x):(1) base_sha 改 c5d646d,第 2 輪從 patch-round1-rebased-c5d646d.diff 起;(2) scripts/ticket.py 加進 allowed_write_paths;三輪耗盡轉 Blocked 那一頁**留 auto-fix 的**(:448/:901,帶紅榜與輪數),ticket.py:1308 的 post_inbox 改成只發事件不發頁 —— B4「恰 1 筆 decision」以 auto-fix 那頁為準;(3) tests/test_status.py 加進 allowed_write_paths,:590 的探測改用 B5 之後仍會發的頁(decision)或 events.jsonl 行數。"
+    }
+  ],
+  "owner": "main"
 }
