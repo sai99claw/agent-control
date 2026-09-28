@@ -903,6 +903,70 @@ class VerifierCasesAtTheGate(Sandbox):
         self.assertIn("gate: auto-fix ——", done.stdout)
 
 
+class TheHandRunGateWritesTheTicketGate(Sandbox):
+    """#56 第 2 輪(主線裁示):手跑 `gate.sh --branch --ticket <n>` 也寫票上**同一個**
+    `gate` 欄 —— 與 auto-fix 綠了寫的同形狀 {rc, sha, run_id, at}。以前這條路只寫狀態檔,
+    review.sh 看票上沒有這個 sha,派工文就照實說「沒跑過閘門」,即使閘門剛跑完。
+
+    形狀照真的:票在主 repo、分支 t7 一個 worktree、閘門在 worktree 手跑(不帶 `AC_ROOT`)。
+    期望的 sha 由夾具 `git rev-parse t7` 取,不由受測腳本印。
+    """
+
+    KEYS = {"rc", "sha", "run_id", "at"}
+
+    def branch_with(self, name, body):
+        self.set_reviewer(REVIEWER_PASS)
+        self.make_ticket(7, allowed_write_paths=["tests/*"], state="Running")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "沙盒的假 reviewer 與票 #7")
+        wt = self.worktree("t7")
+        self.write(os.path.join("tests", name), body, where=wt)
+        self.git("add", "-A", cwd=wt)
+        self.git("commit", "-q", "-m", "#7 的改動", cwd=wt)
+        return wt
+
+    def gate_in(self, wt, *extra):
+        env = self.env()
+        self.assertNotIn("AC_ROOT", env)
+        return self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
+                           "--branch", "--ticket", "7", *extra, cwd=wt, env=env)
+
+    def test_a_green_hand_run_writes_rc_0_at_the_branch_head(self):
+        """(a) **變異**:拿掉綠那一路的 `ticket_gate` → 票上沒有 gate 欄,紅。"""
+        wt = self.branch_with("test_zz_green.py", PASSING % "test_zz_green")
+        done = self.gate_in(wt)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        gate = self.load_ticket("7").get("gate")
+        self.assertIsInstance(gate, dict, "手跑綠了,票上沒有 gate 欄")
+        self.assertEqual(set(gate), self.KEYS, "形狀要與 auto-fix 寫的同一個")
+        self.assertIs(type(gate["rc"]), int)
+        self.assertEqual(gate["rc"], 0)
+        self.assertEqual(gate["sha"], self.git("rev-parse", "t7").strip())
+        self.assertEqual(gate["run_id"], self.status_of("7", kind="gate")["run_id"])
+
+    def test_a_red_hand_run_writes_its_rc_at_the_same_sha(self):
+        """(b) 紅也寫:票上記的是這個 sha 真正的結果,不是上一個綠。"""
+        wt = self.branch_with("test_zz_red.py", FAILING)
+        done = self.gate_in(wt, "--no-auto-fix")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        gate = self.load_ticket("7").get("gate")
+        self.assertIsInstance(gate, dict, "手跑紅了,票上沒有 gate 欄")
+        self.assertEqual(set(gate), self.KEYS)
+        self.assertEqual(gate["rc"], done.returncode)
+        self.assertEqual(gate["sha"], self.git("rev-parse", "t7").strip())
+
+    def test_the_review_packet_after_a_green_hand_run_says_the_gate_ran(self):
+        """(c) 覆核者收到的派工文說「已對 <sha> 跑過閘門」,不說「沒跑過閘門」。"""
+        wt = self.branch_with("test_zz_green.py", PASSING % "test_zz_green")
+        done = self.gate_in(wt)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        stdin = os.path.join(self.home, "reviewer-stdin.md")
+        self.assertTrue(os.path.exists(stdin), "reviewer 沒被叫到:" + done.stdout + done.stderr)
+        packet = self.read("reviewer-stdin.md", where=self.home)
+        self.assertIn("已對 %s 跑過閘門" % self.git("rev-parse", "t7").strip(), packet)
+        self.assertNotIn("沒跑過閘門", packet)
+
+
 class GateExample(unittest.TestCase):
     """範例那一份要**自己的語法是對的** —— 一份 `sh -n` 過不了的範本,照抄的人第一
     件事是修語法,不是讀理由。"""
