@@ -18,7 +18,7 @@
 # 它**不跑閘門**:這三個前綴不進產品碼,跑九分鐘全套換來的是同一份綠。
 #
 # 這一支**沒有判斷**(docs/ROLES.md:落地器是程式;順序是主線決定的)。它只會拒絕:
-# 0 commit、票對不上、`base_sha` 過期、寫入範圍越界、閘門紅。要它放寬的時候,
+# 0 commit、票對不上、`base_sha` 過期、寫入範圍命中硬擋、閘門紅。要它放寬的時候,
 # 放寬的是規矩,不是這支腳本。
 #
 # 每一輪都寫 `reports/t<票號>/<run_id>/status.json`(D-010、D-014):跑完了沒、rc、
@@ -378,38 +378,29 @@ PY
         continue
     fi
 
-    # 寫入範圍。排順序的人就是拿這一格判能不能平行的(docs/DESIGN.md §10),所以越界
-    # 不只是「改了不該改的檔」,是**排順序當時算出來的那張衝突圖已經不成立**。
+    # 寫入範圍(D-H38 ①)。`allowed_write_paths` 是預期會動的檔:越出不擋(apply 記進
+    # result 的 `extra_paths`、覆核者逐檔看過了),硬擋只剩票的 `out_of_scope` 與
+    # `board/config.json` 的 `protected_paths`。
     out=$(python3 - "$ROOT" "$MAIN" "$b" "$tf" <<'PY'
-import fnmatch, json, subprocess, sys
+import json, os, subprocess, sys
 root, main, branch, path = sys.argv[1:5]
+sys.path.insert(0, os.path.join(root, "scripts"))
+import ticket as ticket_mod
 try:
     with open(path, encoding="utf-8") as handle:
-        globs = json.load(handle).get("allowed_write_paths") or []
+        row = json.load(handle)
 except (OSError, ValueError):
-    globs = []
+    row = {}
 done = subprocess.run(["git", "-C", root, "diff", "--name-only",
                        "%s...%s" % (main, branch)],
                       capture_output=True, text=True)
-
-
-def allowed(name):
-    for pattern in globs:
-        if fnmatch.fnmatch(name, pattern) or name == pattern:
-            return True
-        if pattern and not pattern.endswith("*") \
-                and name.startswith(pattern.rstrip("/") + "/"):
-            return True
-    return False
-
-
-for name in done.stdout.splitlines():
-    if name and not allowed(name):
-        print(name)
+names = [name for name in done.stdout.splitlines() if name]
+for name, field, pattern in ticket_mod.write_scope(row, root, names)[0]:
+    print("%s —— 命中%s(`%s`)" % (name, field, pattern))
 PY
 )
     if [ -n "$out" ]; then
-        echo "land: $b —— 動到票 #$id 的 allowed_write_paths 以外的檔:"
+        echo "land: $b —— 動到票 #$id 硬擋的檔:"
         echo "$out" | sed 's/^/land:   /'
         STOP=1
         continue

@@ -8,7 +8,8 @@
 - `diff -ruN` 的刪檔有沒有把 `+++` 側改成 `/dev/null` —— 不改的話 `git apply` 只會把
   檔案**清空**,而清空的檔在 diffstat 上看起來像「改過」。
 - 套完的樹與 patch 說的是不是同一件事(該在的在、該刪的不在、反著套回得去)。
-- 有沒有動到 `allowed_write_paths` 以外。
+- 有沒有動到硬擋的檔(票的 `out_of_scope`、config 的 `protected_paths`);
+  `allowed_write_paths` 以外不擋,記進 result 的 `extra_paths`(D-H38 ①)。
 - commit 訊息答不答得出「分支上這一手是哪一份 patch 做的」—— 路徑答不出來,
   重套過的那一份路徑一樣、內容不一樣,所以要 sha256。
 """
@@ -570,19 +571,95 @@ class ThingsItRefuses(ApplyBase):
         listed = self.git("ls-tree", "-r", "--name-only", "t1")
         self.assertNotIn("src/a.txt", listed.split())
 
-    def test_writing_outside_allowed_write_paths_is_refused_and_not_committed(self):
+    def test_the_hard_fences_are_empty_by_default(self):
+        """(D-H38 ①)沙盒的 config 沒有 `protected_paths`、票沒有 `out_of_scope`:
+        白名單外的檔一個都不擋。"""
+        self.assertNotIn("protected_paths", json.loads(self.read("board/config.json")))
+        row = self.make("1", allowed_write_paths=["src/*"])
+        self.assertEqual(row.get("out_of_scope") or [], [])
+        done = self.apply("1", self.patch_file("p.diff", OUTSIDE))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("show", "t1:docs/secret.md"), "not in allowed_write_paths\n")
+
+
+class TheWriteScope(ApplyBase):
+    """D-H38 ①:`allowed_write_paths` 是**預期會動的檔,不是限制**。越出只記錄
+    (result 的 `extra_paths`),硬擋只剩票的 `out_of_scope` 與 config 的 `protected_paths`。
+    """
+
+    def result_json(self):
+        found = sorted(glob.glob(os.path.join(self.repo, "reports", "t1", "*",
+                                              "result-round1.json")))
+        self.assertEqual(len(found), 1, found)
+        with open(found[0], encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def protect(self, *globs):
+        conf = json.loads(self.read("board/config.json"))
+        conf["protected_paths"] = list(globs)
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+
+    def test_files_outside_the_allow_list_go_through_and_land_in_extra_paths(self):
+        """**變異 M1**:白名單外照舊 `die 5` → 這一條紅。
+        **變異 M2**:不把 `extra_paths` 寫進 result → 這一條紅。"""
         self.make("1", allowed_write_paths=["src/*"])
+        evidence = self.patch_file("EVIDENCE.md", FULL_EVIDENCE)
+        done = self.apply("1", self.patch_file("p.diff", OUTSIDE + CHANGE),
+                          "--evidence", evidence)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "1")
+        self.assertEqual(sorted(self.result_json()["extra_paths"]),
+                         ["config/private.ini", "docs/secret.md"],
+                         "白名單內的 src/a.txt 不算 extra")
+        self.assertIn("docs/secret.md", done.stdout, "越出要說出來,只是不擋")
+
+    def test_no_extra_files_is_an_empty_list_not_a_missing_key(self):
+        self.make("1", allowed_write_paths=["src/*"])
+        evidence = self.patch_file("EVIDENCE.md", FULL_EVIDENCE)
+        done = self.apply("1", self.patch_file("p.diff", CHANGE), "--evidence", evidence)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.result_json()["extra_paths"], [])
+
+    def test_upstream_result_file_named_by_ac_result_json_gets_the_extra_paths(self):
+        """auto-fix 在收 patch 的同一手已經抽過 result(`AC_RESULT_DONE`):extra_paths
+        寫進它指的那一份,不另開第二份。"""
+        self.make("1", allowed_write_paths=["src/*"])
+        upstream = self.patch_file("upstream-result.json", '{"present": true}\n')
+        done = self.run_sh("scripts/apply.sh", "1", self.patch_file("p.diff", OUTSIDE),
+                           env=self.env(AC_RESULT_DONE="1", AC_RESULT_JSON=upstream))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        with open(upstream, encoding="utf-8") as handle:
+            data = json.load(handle)
+        self.assertEqual(sorted(data["extra_paths"]), ["config/private.ini", "docs/secret.md"])
+        self.assertTrue(data["present"])
+        self.assertEqual(glob.glob(os.path.join(self.repo, "reports", "t1", "*",
+                                                "result-round1.json")), [])
+
+    def test_a_file_named_by_out_of_scope_is_refused_by_name_and_field(self):
+        """**變異 M3**:硬擋不看 `out_of_scope` → 這一條紅。"""
+        self.make("1", allowed_write_paths=["src/*", "docs/*"], out_of_scope=["docs/*"])
         done = self.apply("1", self.patch_file("p.diff", OUTSIDE))
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
-        self.assertIn("allowed_write_paths", done.stderr)
-        self.assertIn("docs/secret.md", done.stderr)
-        self.assertIn("config/private.ini", done.stderr)
-        self.assertIn(
-            "python3 scripts/ticket.py set 1 allowed_write_paths "
-            "'[\"src/*\", \"config/private.ini\", \"docs/secret.md\"]'",
-            done.stderr)
+        line = [row for row in done.stderr.splitlines() if "docs/secret.md" in row]
+        self.assertEqual(len(line), 1, done.stderr)
+        self.assertIn("out_of_scope", line[0])
+        self.assertIn("`docs/*`", line[0])
+        self.assertNotIn("config/private.ini", done.stderr, "白名單外但沒被硬擋的不點名成擋")
         self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "0",
-                         "越界的 patch 不該留下 commit")
+                         "硬擋的 patch 不該留下 commit")
+
+    def test_a_file_in_config_protected_paths_is_refused_by_name_and_field(self):
+        """**變異 M4**:硬擋不看 config 的 `protected_paths` → 這一條紅。"""
+        self.protect("config/**", "docs/DECISIONS.md")
+        self.make("1", allowed_write_paths=["config/*"])
+        done = self.apply("1", self.patch_file("p.diff", OUTSIDE))
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        line = [row for row in done.stderr.splitlines() if "config/private.ini" in row]
+        self.assertEqual(len(line), 1, done.stderr)
+        self.assertIn("board/config.json 的 protected_paths", line[0])
+        self.assertIn("`config/**`", line[0])
+        self.assertNotIn("docs/secret.md", done.stderr)
+        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "0")
 
     def test_a_patch_that_only_touches_ignored_files_is_not_a_green_apply(self):
         """套完之後 `git add -A` 一個位元都沒進 index —— **「套好了」與「什麼都沒做」

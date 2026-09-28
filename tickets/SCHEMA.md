@@ -8,7 +8,7 @@
 | 產品關聯 | `feature`, `requirement_version` | 建議 | 對到產品功能;需求改版時辨識受影響票 |
 | 目標與範圍 | `objective`, `acceptance` (list), `in_scope`, `out_of_scope` | ✓ | acceptance 每條要能寫成一條會紅的斷言 |
 | 高階規劃 | `decision_refs` (list), `outline`, `interface_contracts`, `test_plan` | 建議 | 留關鍵決定,不抄整段規劃聊天 |
-| 依賴與衝突 | `depends_on` (list of {id, condition}), **`allowed_write_paths`** (list of globs) | ✓ | 排順序的人與落地器都讀;`shared_resources` 建議 |
+| 依賴與衝突 | `depends_on` (list of {id, condition}), **`allowed_write_paths`** (list of globs) | ✓ | `allowed_write_paths` 是**預期會動的檔,不是限制**(D-H38 ①):排順序的人拿它判平行、覆核者拿它對照;越出不擋,`apply.sh` 列進 result 的 `extra_paths`、覆核派工文多一段「白名單外改動」。**硬擋只有兩格**:票的 `out_of_scope`(glob)與 `board/config.json` 的 `protected_paths`(專案自訂的 glob 清單;沒有這一格就不擋),命中 → apply rc=5、閘門 preflight rc=4、land 拒絕,都點名檔與格;`shared_resources` 建議 |
 | 執行 | `role`, `model`, `tool`, **`attempt`** (int) | ✓ | 每次派工 attempt+1;**遲到的回報對不上 attempt 就拒絕 —— 回寫時帶 `--expect-attempt N` / `--expect-state-version N`,對不上 rc=4**;`attempt_history` 建議 |
 | 版本 | **`base_sha`** | ✓ | 閘門結果只對 base_sha 有效;`branch`、`workspace` 派工時由工具填 |
 | 控制 | `state`, **`state_version`**, `lease` ({holder, until}), `retry_limit` | ✓ | state 見 `docs/WORKFLOW.md`;state_version 每次變更 +1;`budget` 建議 |
@@ -64,6 +64,8 @@ EVIDENCE,不改它**;抽不出來也不改變退出碼、不擋流程。
 | `repro` | 物件 | `{cmd, expect}` |
 | `memory` | 陣列 | `{layer, name, line, ticket}`;**鏡像而已,寫入仍由 `memory.py harvest` 做** |
 | `baseline` | 物件或 `null` | **只有 verifier 寫**:`verify-case.py red` 印出的 `<out-dir>/baseline-red.json` 原封抄進來,`stage` 必是 `red`;worker 留 `null`;`apply.sh --evidence-verifier` 在鎖裡把它併進票的 `verify.baseline` |
+
+`apply.sh` 收件那一手再補一格 `extra_paths`:這一輪改到、不在 `allowed_write_paths` 裡的檔(沒有就是 `[]`;auto-fix 抽過的那一份由 `AC_RESULT_JSON` 指路)。
 
 抽出來的那一份還多一格 `sections`:`{patch_sha256, gate, mutations, excluded, repro}` 五個 bool,
 答的是「EVIDENCE 那**五段散文**在不在」(§8 那五段;抽取只看小標與關鍵詞,**缺段印出來、不擋流程**)。

@@ -25,7 +25,8 @@
 #   0 套好、commit 好了      2 用法 / 票的問題(找不到票、沒有 base_sha;反駁記不進票)
 #   3 檔頭不合格或 `--check` 不過(rebase 那一支的三向合併衝突也是 3)
 #   4 套完的比對不過(rebase 那一支的 **0 byte diff** 也是 4)
-#   5 動到 `allowed_write_paths` 以外
+#   5 動到票的 `out_of_scope` 或 `board/config.json` 的 `protected_paths`(D-H38 ①;
+#     `allowed_write_paths` 以外**不擋**,列進 result 的 `extra_paths`)
 #   6 patch 套好了,但 EVIDENCE 裡有一行 `OBJECTION:` —— 已記進票的 `objections[]`
 #     (記過的同一筆 disposition 還空著也是 6;處置過的才放行成 0)
 #
@@ -549,8 +550,10 @@ if [ -n "$VPATCH" ]; then
         || die 4 "patch-verify 反著套回不去"
 fi
 
-# 5. 寫入範圍。排順序的人就是拿這一格判平行的(`docs/DESIGN.md` §10),所以越界不只是
-#    「改了不該改的檔」,是**排順序當時算出來的那張衝突圖已經不成立**。
+# 5. 寫入範圍(D-H38 ①)。`allowed_write_paths` 是**預期會動的檔**:排順序的人拿它判平行、
+#    覆核者拿它對照 —— 越出**不擋**,記進 result 的 `extra_paths`、由覆核者逐檔看。
+#    硬擋只剩兩格:票的 `out_of_scope` 與 `board/config.json` 的 `protected_paths`。
+#    印 `B <檔>\t<哪一格>\t<glob>`(硬擋)與 `E <檔>`(白名單外)。
 OUT=$(python3 - "$ROOT" "$WT" "$TF" "$RESIDUE" <<'PY'
 import json, os, subprocess, sys
 root, wt, path, residue = sys.argv[1:5]
@@ -559,41 +562,39 @@ sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import ticket as ticket_mod
 try:
     with open(path, encoding="utf-8") as handle:
-        globs = json.load(handle).get("allowed_write_paths") or []
+        row = json.load(handle)
 except (OSError, ValueError):
-    globs = []
+    row = {}
 done = subprocess.run(["git", "-C", wt, "status", "--porcelain", "-z",
                        "--untracked-files=all"],
                       capture_output=True, text=True)
+names = []
 for item in done.stdout.split("\0"):
     if len(item) < 4:
         continue
     name = item[3:]
     if item.startswith("?? ") and name in residue:
         continue
-    if name and not ticket_mod.matches_any(name, globs):
-        print(name)
+    if name:
+        names.append(name)
+blocked, extra = ticket_mod.write_scope(row, root, names)
+for name, field, pattern in blocked:
+    print("B %s\t%s\t%s" % (name, field, pattern))
+for name in extra:
+    print("E %s" % name)
 PY
 )
-if [ -n "$OUT" ]; then
-    echo "apply: 動到票 #$ID 的 allowed_write_paths 以外的檔:" >&2
-    echo "$OUT" | sed 's/^/apply:   /' >&2
-    FIX=$(python3 - "$TF" "$OUT" <<'PY'
-import json, shlex, sys
-with open(sys.argv[1], encoding="utf-8") as handle:
-    ticket = json.load(handle)
-paths = ticket.get("allowed_write_paths") or []
-for path in sys.argv[2].splitlines():
-    if path not in paths:
-        paths.append(path)
-value = json.dumps(paths, ensure_ascii=False)
-print("python3 scripts/ticket.py set %s allowed_write_paths %s"
-      % (ticket["id"], shlex.quote(value)))
-PY
-)
-    echo "apply:   要把這些檔加入票面可貼:$FIX" >&2
-    echo "apply:   工作樹留在 $WT(沒有 commit)—— 要嘛改票面,要嘛改 patch" >&2
-    die 5 "寫入範圍越界"
+BLOCKED=$(echo "$OUT" | sed -n 's/^B //p')
+EXTRA=$(echo "$OUT" | sed -n 's/^E //p')
+if [ -n "$BLOCKED" ]; then
+    echo "apply: 動到票 #$ID 硬擋的檔:" >&2
+    echo "$BLOCKED" | awk -F '\t' '{ printf "apply:   %s —— 命中%s(`%s`)\n", $1, $2, $3 }' >&2
+    echo "apply:   工作樹留在 $WT(沒有 commit)—— 改 patch;真要動它就先改票面或 config" >&2
+    die 5 "寫入範圍命中硬擋(out_of_scope / protected_paths)"
+fi
+if [ -n "$EXTRA" ]; then
+    echo "apply: 白名單外的改動(不擋,記進 result 的 extra_paths、交覆核者逐檔看):"
+    echo "$EXTRA" | sed 's/^/apply:   /'
 fi
 
 # 6. 票的 `verify_strings` 先對 patch 抓一次。**不擋**,但要現在說:
@@ -683,6 +684,27 @@ if [ -n "$VEVIDENCE" ]; then
         --ticket "$ID" --role verifier --round "$ROUND" \
         || echo "apply: 驗證者的 result 抽不出來($VEVIDENCE)—— 不擋 apply" >&2
 fi
+fi
+# 白名單外的檔記進**這一輪那一份** result 的 `extra_paths`(D-H38 ①;空的也寫 `[]` ——
+# 沒有這一格與「量過、沒有」長得一樣)。上游抽過的那一份由它用 `AC_RESULT_JSON` 指路;
+# 沒指路就不寫,不另開第二份 `result-round<r>.json`。
+if [ -n "${AC_RESULT_DONE:-}" ] && [ -z "${AC_RESULT_JSON:-}" ]; then
+    echo "apply: 上游抽過 result 但沒給 AC_RESULT_JSON —— extra_paths 沒寫進去" >&2
+else
+    python3 - "${AC_RESULT_JSON:-$REPORTS/result-round$ROUND.json}" "$EXTRA" <<'PY'
+import json, sys
+path, extra = sys.argv[1], [line for line in sys.argv[2].splitlines() if line]
+try:
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except (OSError, ValueError) as exc:
+    sys.stderr.write("apply: result 讀不到(%s)—— extra_paths 沒寫進去:%s\n" % (path, exc))
+    raise SystemExit(0)
+data["extra_paths"] = extra
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, ensure_ascii=False, indent=2)
+    handle.write("\n")
+PY
 fi
 # **驗證者的計畫與驗紅由這一手寫進票**(#36,FLOW G13;#51):`verify-case.py red` 只交證據檔,
 # 驗證者把它抄進 result 的 `baseline`、把 `files` / `tags` / `run` / `notes` 寫在 result 的

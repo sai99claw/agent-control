@@ -231,7 +231,7 @@ FLAG_NOTE = {
     "--acceptance": "驗收;**一條一個旗標**,每條要能寫成一條會紅的斷言",
     "--in-scope": "範圍內的檔;一個一個給",
     "--out-of-scope": "明說不要動的;一個一個給",
-    "--allowed-write-path": "允許寫入的路徑 glob;**一個一個給**(排順序判平行、落地器判越界,讀的都是這一格)",
+    "--allowed-write-path": "預期會動的路徑 glob;**一個一個給**(排順序判平行、覆核者對照;不是限制,硬擋的是 out_of_scope,D-H38)",
     "--depends-on": "前置票號;`7` 或 `7:閘門綠`;一個一個給",
     "--decision-ref": "相關裁示編號(D-00x);一個一個給",
     "--verify-string": ("關票時要在主線上抓到的字;三種認法:`路徑:那串字`(冒號前像路徑"
@@ -270,7 +270,7 @@ ASK = (
     ("acceptance", "驗收(每條要能寫成一條會紅的斷言;空行結束)", True),
     ("in_scope", "範圍內的檔(空行結束)", True),
     ("out_of_scope", "明說不要動的(空行結束)", True),
-    ("allowed_write_paths", "允許寫入的路徑 glob(空行結束)", True),
+    ("allowed_write_paths", "預期會動的路徑 glob(空行結束)", True),
     ("depends_on", "前置票號(空行結束)", True),
     ("role", "角色(worker / verifier / opener / …)", False),
     ("model", "模型", False),
@@ -1071,14 +1071,50 @@ def main_files(branch):
     return [name for name in done.stdout.split("\0") if name]
 
 
-def matches_any(path, globs):
+def first_match(path, globs):
     for pattern in globs:
+        if not isinstance(pattern, str):
+            continue
         if fnmatch.fnmatch(path, pattern) or path == pattern:
-            return True
+            return pattern
         # `scripts` 這種目錄形狀的 glob 要蓋住底下的檔
         if pattern and not pattern.endswith("*") and path.startswith(pattern.rstrip("/") + "/"):
-            return True
-    return False
+            return pattern
+    return None
+
+
+def matches_any(path, globs):
+    return first_match(path, globs) is not None
+
+
+def write_scope(row, root, names):
+    """寫入範圍(D-H38 ①):`allowed_write_paths` 是**預期會動的檔,不是限制**。
+
+    回 `(blocked, extra)`:`blocked` 是 `(檔, 哪一格, 命中的 glob)`,只來自票的
+    `out_of_scope` 與 `board/config.json` 的 `protected_paths`(專案自訂,沒有就是空);
+    `extra` 是白名單外、沒被硬擋的檔 —— 不擋,交給 result 的 `extra_paths` 與覆核者。
+    apply / gate / land 共用這一支:三份各抄一份的那一天,擋的東西會不一樣。
+    """
+    try:
+        with open(os.path.join(root, "board", "config.json"), encoding="utf-8") as handle:
+            conf = json.load(handle)
+    except (OSError, ValueError):
+        conf = {}
+    protected = conf.get("protected_paths") if isinstance(conf, dict) else None
+    fences = (("票的 out_of_scope", row.get("out_of_scope") or []),
+              ("board/config.json 的 protected_paths", protected or []))
+    allowed = row.get("allowed_write_paths") or []
+    blocked, extra = [], []
+    for name in names:
+        for field, globs in fences:
+            pattern = first_match(name, globs)
+            if pattern is not None:
+                blocked.append((name, field, pattern))
+                break
+        else:
+            if not matches_any(name, allowed):
+                extra.append(name)
+    return blocked, extra
 
 
 def verify(ident):

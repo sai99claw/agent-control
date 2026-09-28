@@ -150,6 +150,33 @@ class ThePassPath(ReviewBase):
         self.assertTrue(os.path.exists(self.one("REVIEW.md")))
         self.assertTrue(os.path.exists(self.one("result-reviewer-round1.json")))
 
+    def packet(self):
+        with open(self.one("dispatch-reviewer.md"), encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_files_outside_the_allow_list_get_their_own_section_in_the_packet(self):
+        """D-H38 ①:白名單外不擋,擋的是覆核者這一段。票允許 `src/*`,分支改的是
+        `thing.txt`。**變異**:不插這一段 → 這一條紅。"""
+        self.set_reviewer(REVIEWER_PASS)
+        done = self.review()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        packet = self.packet()
+        self.assertIn("## 白名單外改動", packet)
+        section = packet.split("## 白名單外改動")[1].split("\n## ")[0]
+        self.assertIn("- `thing.txt`", section)
+        self.assertIn("斷言數不減", section)
+        self.assertIn("無關或改弱 = fail", section)
+        self.assertLess(packet.index("## 白名單外改動"), packet.index("## 交付:固定格式"))
+
+    def test_no_files_outside_the_allow_list_means_no_such_section(self):
+        """**變異**:不管有沒有都印 → 這一條紅。"""
+        self.assertEqual(self.ticket("set", "1", "allowed_write_paths",
+                                     '["thing.txt"]').returncode, 0)
+        self.set_reviewer(REVIEWER_PASS)
+        done = self.review()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("白名單外改動", self.packet())
+
     def test_the_default_json_envelope_is_unwrapped_before_the_result_is_read(self):
         """預設命令帶 `--output-format json`:stdout 是一個信封,全文在 `result` 裡、換行是
         `\\n`。不拆開的話 `## result` 不在行首,**每一次真的覆核都會被判成沒交件**。"""

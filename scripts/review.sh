@@ -220,9 +220,12 @@ RESULT_JSON=$RUNDIR/result-reviewer-round$ROUND.json
     python3 "$AC/rules.py" pack reviewer --model "$MODEL" 2>/dev/null \
         || echo "(規則包產不出來 —— 自己讀 memory/role/reviewer.md)"
     python3 - "$TEMPLATE" "$ID" "$SHA" "$WT" "$EVIDENCE" "$STATUS_FILE" "$REVIEW" \
-        "$MODEL" "$ROUND" "$(rel "$TF")" "$TF" <<'PY'
-import json, sys
+        "$MODEL" "$ROUND" "$(rel "$TF")" "$TF" "$AC" "$ROOT" "$(cfg main_branch main)" <<'PY'
+import json, subprocess, sys
 template, ident, sha, wt, evidence, state_file, review, model, rnd, ticket_file, tf = sys.argv[1:12]
+ac, root, main = sys.argv[12:15]
+sys.path.insert(0, ac)
+import ticket as ticket_mod
 with open(template, encoding="utf-8") as handle:
     text = handle.read()
 # 「已對 <sha> 跑過閘門」只在票上 `gate.sha` 就是分支頭時說(#56,D-H38)。以前範本無條件
@@ -230,9 +233,10 @@ with open(template, encoding="utf-8") as handle:
 # 看紅榜,實際上這個 sha 沒有人跑過(#661)。
 try:
     with open(tf, encoding="utf-8") as handle:
-        gate = json.load(handle).get("gate")
+        row = json.load(handle)
 except (OSError, ValueError):
-    gate = None
+    row = {}
+gate = row.get("gate")
 gate = gate if isinstance(gate, dict) else {}
 if gate.get("sha") == sha:
     gate_line = "已對 %s 跑過閘門(rc=%s,run %s)" % (sha, gate.get("rc"), gate.get("run_id") or "?")
@@ -257,6 +261,22 @@ slots = {
     "@MODEL@": model,
     "@ROUND@": rnd,
 }
+# 白名單外改動(D-H38 ①):`allowed_write_paths` 是預期會動的檔,越出不擋 —— 擋的是覆核者
+# 這一段。沒有就不印,免得每一份派工文都多一段空話。
+changed = subprocess.run(["git", "-C", root, "diff", "--name-only", "%s...%s" % (main, sha)],
+                         capture_output=True, text=True).stdout.splitlines()
+extra = ticket_mod.write_scope(row, root, [name for name in changed if name])[1]
+if extra:
+    section = ("## 白名單外改動\n"
+               "這幾個檔不在票面 `allowed_write_paths`(它是預期會動的檔,不是限制;越出不擋):\n"
+               + "".join("- `%s`\n" % name for name in extra)
+               + "\n逐檔確認與票面目標相關、測試沒改弱(斷言數不減、刪案例要有票面理由),"
+                 "無關或改弱 = fail。\n\n")
+    marker = "## 交付:固定格式"
+    if marker in text:
+        text = text.replace(marker, section + marker, 1)
+    else:
+        text = text.rstrip("\n") + "\n\n" + section
 for key, value in slots.items():
     text = text.replace(key, value)
 sys.stdout.write("\n" + text)
