@@ -192,9 +192,9 @@ def missing_fields(ticket):
     return bad
 
 
-def git(args, cwd=None, check=False):
+def git(args, cwd=None, check=False, text=True):
     done = subprocess.run(["git", *args], cwd=cwd or root(), capture_output=True,
-                          text=True, timeout=GIT_TIMEOUT)
+                          text=text, timeout=GIT_TIMEOUT)
     if check and done.returncode != 0:
         raise RuntimeError((done.stderr or done.stdout).strip())
     return done
@@ -1156,11 +1156,20 @@ def verify(ident):
             for path in paths:
                 if not path:
                     continue
-                done = git(["show", "%s:%s" % (branch, path)])
+                # 位元組讀、自己解碼(#65):glob 掃得到 PNG,而 text 模式的一個
+                # UnicodeDecodeError 會讓整張票「讀不到」。非文字檔不算命中;指名的
+                # 那一個要說出來,不然與「掃過、沒抓到」長得一樣。
+                done = git(["show", "%s:%s" % (branch, path)], text=False)
                 if done.returncode != 0:
                     looked.append("%s(主線上沒有這個檔)" % path)
                     continue
-                found = sum(1 for line in done.stdout.splitlines() if needle in line)
+                try:
+                    body = done.stdout.decode("utf-8")
+                except UnicodeDecodeError:
+                    if isinstance(item, dict):
+                        looked.append("%s(非文字檔,沒掃)" % path)
+                    continue
+                found = sum(1 for line in body.splitlines() if needle in line)
                 hits += found
                 if found:
                     looked.append("%s×%d" % (path, found))
