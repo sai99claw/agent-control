@@ -478,7 +478,7 @@ fi
 if [ -z "${S_RUN:-}" ]; then
     # **Ready 且沒有狀態檔 ⇒ 第 1 輪**(#40,D-025 C1)。只認 Ready:Draft 還沒開完、
     # Running 多半是有人已經手派了、Blocked 在等裁示 —— 哪一種都不該由這一支猜著起。
-    eval "$(python3 - "$TF" <<'PY'
+    eval "$(python3 - "$TF" "$ID" <<'PY'
 import json, shlex, sys
 try:
     with open(sys.argv[1], encoding="utf-8") as handle:
@@ -487,6 +487,7 @@ except (OSError, ValueError):
     ticket = {}
 print("T_STATE=%s" % shlex.quote(str(ticket.get("state") or "")))
 print("T_BASE=%s" % shlex.quote(str(ticket.get("base_sha") or "")))
+print("T_BRANCH=%s" % shlex.quote(str(ticket.get("branch") or "t%s" % sys.argv[2])))
 PY
 )"
     if [ "$T_STATE" != "Ready" ]; then
@@ -494,6 +495,24 @@ PY
         echo "auto-fix:   Ready 的票才由這一支起第 1 輪;只看派工文:sh scripts/auto-fix.sh $ID --dry-run --round 1" >&2
         echo "auto-fix:   已經派過第 1 輪、要修紅的:先跑 sh scripts/gate.sh --branch --ticket $ID" >&2
         exit 2
+    fi
+    # **base 落後主線就換成主線的頭**(#57)。第 1 輪的 patch 由 `apply.sh` 套在**從主線開**
+    # 的分支上;副本卻從票的舊 base_sha 展開的話,worker 對著舊樹寫、`git apply --check`
+    # 在主線上整輪停住。只在「還沒有分支、還沒有任何一輪」時換 —— 有分支就有人在上面
+    # 做過事,換 base 等於改寫它的對照組。`--dry-run` 不動票,只說一聲。
+    MAIN_HEAD=$(git -C "$ROOT" rev-parse -q --verify "$MAIN^{commit}" 2>/dev/null || echo "")
+    if [ -n "$MAIN_HEAD" ] && [ -n "$T_BASE" ] \
+            && ! git -C "$ROOT" rev-parse -q --verify "$T_BRANCH^{commit}" >/dev/null \
+            && [ "$(git -C "$ROOT" rev-parse -q --verify "$T_BASE^{commit}" 2>/dev/null)" != "$MAIN_HEAD" ] \
+            && git -C "$ROOT" merge-base --is-ancestor "$T_BASE" "$MAIN_HEAD" 2>/dev/null; then
+        if [ -n "$DRY" ]; then
+            echo "auto-fix: #$ID 的 base_sha $T_BASE 落後 $MAIN($MAIN_HEAD)—— 真的起跑時會換成 $MAIN 的頭(--dry-run 不動票)"
+        elif python3 "$AC/ticket.py" set "$ID" base_sha "\"$MAIN_HEAD\"" >/dev/null; then
+            echo "auto-fix: #$ID 的 base_sha $T_BASE 落後 $MAIN —— 還沒有分支,換成 $MAIN 的頭 $MAIN_HEAD"
+            T_BASE=$MAIN_HEAD
+        else
+            echo "auto-fix: #$ID 的 base_sha 換不動 —— 照舊用 $T_BASE" >&2
+        fi
     fi
     # 迴圈從 `S_ROUND+1` 起;副本 base 在分支 t<n> 還不存在時取 `S_BASE` = 票的 base_sha
     # (`round_once` 既有那一格)。RUN_ID 自鑄:派工文、worker log、result 住在這一輪的目錄。
@@ -757,9 +776,9 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
         {
             python3 "$AC/rules.py" pack worker --model "$MODEL" 2>/dev/null \
                 || echo "(規則包產不出來 —— 自己讀 memory/role/implementer.md)"
-            python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "$FIX" <<'PY'
+            python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "$FIX" "$TF" <<'PY'
 import json, os, sys
-root, ident, run_id, r, fix = sys.argv[1:6]
+root, ident, run_id, r, fix, tf = sys.argv[1:7]
 sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import status
 
@@ -808,6 +827,28 @@ for row in data.get("failures") or []:
     print("```")
     print(row.get("excerpt") or "(沒有 excerpt)")
     print("```")
+# **反駁與裁示也是交接包的一格**(#57):覆核退回的理由、主線對每一條反駁的處置與
+# follow_up 只住在票的 `objections[]`(現況,不是快照)。少了這一段,新 worker 照紅榜修完,
+# 會把主線已經裁掉的做法再做一次、或把覆核退回的那一點原樣交回去。
+try:
+    with open(tf, encoding="utf-8") as handle:
+        objections = json.load(handle).get("objections") or []
+except (OSError, ValueError):
+    objections = []
+print("")
+print("## 反駁、覆核退回與主線裁示(票的 `objections[]` 現況 —— 照裁示做,不要重吵)")
+if not objections:
+    print("- (沒有)")
+for row in objections:
+    if not isinstance(row, dict):
+        continue
+    source = "覆核退回" if os.path.basename(str(row.get("evidence") or "")) == "REVIEW.md" \
+        else "反駁"
+    print("- **%s** [%s] %s(提出:%s;出處 `%s`)"
+          % (source, row.get("category") or "?", row.get("body") or "(沒有內容)",
+             row.get("owner") or "?", row.get("evidence") or "?"))
+    print("  - 處置:%s" % (row.get("disposition") or "**還沒處置**"))
+    print("  - 主線裁示 follow_up:%s" % (row.get("follow_up") or "(沒有)"))
 print("")
 print("## 副本")
 print("- `%s/work` —— 改這個(上一輪的 patch 已經套進去了)" % fix)
@@ -867,29 +908,56 @@ PY
         --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix
     WSTART=$(date +%s)
     WRC=$(python3 - "$WORKER_CMD" "$DISPATCH" "$FIX" "$WORKER_TIMEOUT" "$ID" "$r" "$WORKER_LOG" <<'PY'
-import subprocess, sys
+import signal, subprocess, sys, threading
 cmd, dispatch, cwd, timeout, ident, r, log_path = sys.argv[1:8]
 env_extra = {"AC_DISPATCH": dispatch, "AC_TICKET": ident, "AC_ROUND": r,
-             "AC_WORK": cwd, "AC_ROLE": "worker"}
+             "AC_WORK": cwd, "AC_ROLE": "worker", "PYTHONUNBUFFERED": "1"}
 import os
 env = dict(os.environ)
 env.update(env_extra)
 # `worker.pid` 住在副本根(#46):下一輪收前幾輪副本之前先問它還活著沒有。回來了就刪掉,
 # 留著的那一份只會是「auto-fix 被砍了、worker 還在跑」的那一種。
 pid_path = os.path.join(cwd, "worker.pid")
+
+
+def tee(stream, log):
+    # **邊跑邊寫**(#57):以前 log 是 worker 的 stdout 本身,被砍的那一刻還在它緩衝裡的
+    # 全部丟掉 —— 逾時的那一輪偏偏是最需要看它做到哪的那一輪。一行一 flush,並抄一份到
+    # stderr 給叫這一支的人即時看(stdout 是 rc 那一行)。
+    for chunk in iter(stream.readline, b""):
+        log.write(chunk)
+        log.flush()
+        sys.stderr.buffer.write(chunk)
+        sys.stderr.buffer.flush()
+
+
 try:
-    with open(dispatch, encoding="utf-8") as handle, open(log_path, "w", encoding="utf-8") as log:
+    with open(dispatch, encoding="utf-8") as handle, open(log_path, "wb") as log:
+        # 自己一個行程群組:逾時要砍的是 worker **整棵**,不是 `sh -c` 那一層 ——
+        # 只砍那一層的話,孫行程還拿著 pipe,tee 那條線永遠等不到 EOF。
         proc = subprocess.Popen(cmd, shell=True, cwd=cwd, env=env, stdin=handle,
-                                stdout=log, stderr=subprocess.STDOUT)
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                start_new_session=True)
+        reader = threading.Thread(target=tee, args=(proc.stdout, log), daemon=True)
+        reader.start()
         with open(pid_path, "w", encoding="utf-8") as pid_file:
             pid_file.write("%d\n" % proc.pid)
         try:
             rc = proc.wait(timeout=float(timeout))
         except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
+            # 先 TERM 給它收尾的機會,再 KILL 整個群組(先死的 `sh` 不代表孫行程也走了)。
+            for sig, grace in ((signal.SIGTERM, 5), (signal.SIGKILL, None)):
+                try:
+                    os.killpg(proc.pid, sig)
+                except OSError:
+                    pass
+                try:
+                    proc.wait(timeout=grace)
+                except subprocess.TimeoutExpired:
+                    pass
             raise
         finally:
+            reader.join(timeout=10)
             os.remove(pid_path)
 except subprocess.TimeoutExpired:
     sys.stderr.write("auto-fix: worker 超過 %s 秒還沒回來 —— 當它沒交\n" % timeout)
@@ -921,6 +989,28 @@ PY
     RESULT_JSON=$(dirname "$DISPATCH")/result-round$r.json
     harvest_result "$EVIDENCE" "$RESULT_JSON" worker "$r"
     echo "auto-fix: 結構化交付 -> $(basename "$RESULT_JSON")"
+
+    # **逾時:副本不收、留半成品**(#57)。被砍的 worker 沒有機會出 diff,但它在 `work/`
+    # 做到哪都還在 —— 收掉副本就是把那一小時丟掉,下一個人從零開始。所以:副本留著、
+    # `work/` 對 `base/` 的 diff 存成 `patch-partial-round<r>.diff`(不套、不當交付),停下來問主線。
+    # 它交了 patch 也不收:被砍在寫到一半的那一份,與寫完的那一份長得一樣。
+    if [ "$WRC" -eq 124 ]; then
+        PARTIAL=$(dirname "$DISPATCH")/patch-partial-round$r.diff
+        ( cd "$FIX" && diff -ruN -x __pycache__ -x '*.pyc' base work ) > "$PARTIAL"
+        if [ -s "$PARTIAL" ]; then
+            partial_note="work/ 的半成品 diff 在 $PARTIAL"
+        else
+            partial_note="work/ 與 base/ 沒有差異($PARTIAL 是 0 byte:它什麼都還沒改)"
+        fi
+        echo "auto-fix: 第 $r 輪的 worker 逾時(${WORKER_TIMEOUT} 秒)—— 副本 $FIX 留著;$partial_note" >&2
+        block "#$ID 第 $r 輪的 worker 逾時(${WORKER_TIMEOUT} 秒)"
+        post "worker 逾時(${WORKER_TIMEOUT} 秒),副本留著" \
+             "讀 $WORKER_LOG 看它做到哪;${partial_note}。要嘛拆票或加 worker.timeout_seconds 重派,要嘛人從副本接手" \
+             "$FIX"
+        attempt_failed timeout
+        ROUND_RC=5
+        return 1
+    fi
 
     # `base/` 只剩一個用途:`test_defect` 那條路要拿它做驗證者的副本。用**與底下那一段
     # 同一個判準**問一次(類別那個字),不是「反正留著」—— 留著的那一份就是沒人收的那一份。

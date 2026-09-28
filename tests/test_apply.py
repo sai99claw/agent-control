@@ -770,5 +770,43 @@ class Rebase(ApplyBase):
         self.assertIn("base_sha", done.stderr)
 
 
+class TheGateResidueOfTheLastRound(ApplyBase):
+    """#57 (a):第 2 輪起 apply 沿用閘門跑過的 worktree,上一輪閘門寫的 `gate.log*` 還在。
+
+    這一份 repo 的 `.gitignore` 沒有 `gate.log*`(下游專案的形狀 —— 真 repo 與沙盒預設都
+    忽略它們,所以不拿掉就測不到):它們是**未追蹤**的殘留,不是 patch 的改動。
+    """
+
+    def setUp(self):
+        super(TheGateResidueOfTheLastRound, self).setUp()
+        kept = [line for line in self.read(".gitignore").splitlines()
+                if not line.startswith("gate.log")]
+        self.write(".gitignore", "\n".join(kept) + "\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "下游專案:gate.log 沒被忽略")
+
+    def test_untracked_gate_logs_in_the_worktree_do_not_block_round_two(self):
+        """**變異 M1**:範圍檢查不略過殘留 → rc=5 寫入範圍越界,紅。
+        **變異 M2**:commit 前不把殘留退出 index → 分支上多出 gate.log*,紅。"""
+        self.make("1")
+        self.assertEqual(self.apply("1", self.patch_file("p1.diff", CHANGE)).returncode, 0)
+        self.write("gate.log", "Ran 1 test\n", where=self.wt())
+        self.write("gate.log.verify-check", "check\n", where=self.wt())
+        self.write(os.path.join("gate.log.verify-case.d", "x.log"), "case\n", where=self.wt())
+        self.assertIn("?? gate.log.verify-check",
+                      self.git("status", "--porcelain", cwd=self.wt()),
+                      "前提:殘留是未追蹤、沒被忽略的檔")
+
+        done = self.run_sh("scripts/apply.sh", "1", self.patch_file("p2.diff", CREATE),
+                           env=self.env(AC_ROUND="2"))
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("show", "t1:src/b.txt"), "made by the patch\n")
+        committed = self.git("show", "--name-only", "--format=", "t1").split()
+        self.assertEqual(committed, ["src/b.txt"], "殘留不進 commit")
+        self.assertTrue(os.path.isfile(os.path.join(self.wt(), "gate.log.verify-check")),
+                        "殘留是上一輪的證據,不刪")
+
+
 if __name__ == "__main__":
     unittest.main()
