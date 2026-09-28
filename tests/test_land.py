@@ -398,25 +398,40 @@ class TicketChecks(LandBase):
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("沒有 base_sha", done.stdout)
 
-    def test_writing_outside_allowed_write_paths_is_refused_and_the_files_are_named(self):
-        """排順序的人就是拿這一格判能不能平行的 —— 越界不只是「改了不該改的檔」,是
-        排程當時算出來的那張衝突圖已經不成立。
+    def test_writing_into_out_of_scope_is_refused_and_the_files_are_named(self):
+        """D-H38 ①:硬擋只剩票的 `out_of_scope` 與 config 的 `protected_paths`。
 
-        **變異**:把越界那一段的 `if [ -n "$out" ]` 改成永遠不成立 → 這一條紅。
+        **變異**:把硬擋那一段的 `if [ -n "$out" ]` 改成永遠不成立 → 這一條紅。
         """
-        branch = self.branch_for(1, "t1-wide", allowed_write_paths=["src/*"])
+        branch = self.branch_for(1, "t1-wide", allowed_write_paths=["src/*"],
+                                 out_of_scope=["docs/*"])
         self.commit_in(branch, "src/inside.py", "範圍內")
-        self.commit_in(branch, "docs/outside.md", "範圍外")
+        self.commit_in(branch, "docs/outside.md", "硬擋")
+        self.commit_in(branch, "lib/extra.py", "白名單外但沒被硬擋")
         before = self.main_log()
 
         done = self.land("t1-wide")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        self.assertIn("allowed_write_paths 以外", done.stdout)
-        self.assertIn("docs/outside.md", done.stdout)
-        self.assertNotIn("land:   src/inside.py", done.stdout,
-                         "範圍內的檔不該被當成越界")
+        self.assertIn("land:   docs/outside.md —— 命中票的 out_of_scope(`docs/*`)",
+                      done.stdout)
+        self.assertNotIn("src/inside.py", done.stdout.split("硬擋的檔")[-1])
+        self.assertNotIn("lib/extra.py", done.stdout.split("硬擋的檔")[-1],
+                         "白名單外只記錄不擋")
         self.assertEqual(self.main_log(), before)
         self.assertFalse(self.gate_ran())
+
+    def test_writing_outside_allowed_write_paths_alone_lands(self):
+        """白名單外的檔 apply 放過、覆核者看過 —— land 照舊擋的話,這條路永遠走不完。
+
+        **變異**:land 退回「不在 allowed_write_paths 就擋」→ 這一條紅。
+        """
+        branch = self.branch_for(1, "t1-wide", allowed_write_paths=["src/*"])
+        self.commit_in(branch, "src/inside.py", "範圍內")
+        self.commit_in(branch, "lib/extra.py", "白名單外")
+        self.approve(1, "t1-wide")
+        done = self.land("t1-wide")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("lib/extra.py", self.git("ls-tree", "-r", "--name-only", "main"))
 
 
 class TheDocsChannel(LandBase):

@@ -337,10 +337,9 @@ for tag in tags:
     if tag not in registered:
         errors.append("tags: %r 未登記(登記在 verify/TAGS.md 或 verify/TAGS.d/)" % tag)
 
-globs = ticket.get("allowed_write_paths") or []
-for name in changed:
-    if not ticket_mod.matches_any(name, globs):
-        errors.append("allowed_write_paths: %s 在允許範圍外" % name)
+# 寫入範圍(D-H38 ①):`allowed_write_paths` 以外不擋(覆核者逐檔看),只擋硬擋那兩格。
+for name, field, pattern in ticket_mod.write_scope(ticket, root, changed)[0]:
+    errors.append("%s:%s 命中 `%s`" % (field, name, pattern))
 
 if errors:
     for error in errors:

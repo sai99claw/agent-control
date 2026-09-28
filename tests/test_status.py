@@ -543,14 +543,25 @@ class GateWritesStatus(Sandbox):
         self.assertIn("not-registered", done.stderr)
         self.assertIn("未登記", done.stderr)
 
-    def test_a_patch_outside_allowed_write_paths_stops_before_tests(self):
+    def test_a_patch_touching_out_of_scope_stops_before_tests(self):
+        """D-H38 ①:硬擋只剩 `out_of_scope` / `protected_paths`。**變異**:preflight 不看
+        `write_scope` 的 blocked → 這一條紅。"""
         self.install_test_marker()
-        self.make_ticket(7, allowed_write_paths=["src/*"])
+        self.make_ticket(7, allowed_write_paths=["src/*"], out_of_scope=["scripts/land.sh"])
         self.write("scripts/land.sh", self.read("scripts/land.sh") + "\n# outside scope\n")
         done = self.gate("--branch", "--ticket", "7")
         self.assert_preflight_stopped_before_tests(done)
-        self.assertIn("allowed_write_paths", done.stderr)
+        self.assertIn("out_of_scope", done.stderr)
         self.assertIn("scripts/land.sh", done.stderr)
+
+    def test_a_patch_outside_allowed_write_paths_alone_does_not_stop_the_preflight(self):
+        """白名單外只記錄不擋 —— preflight 照舊擋它,apply 放過的東西閘門永遠過不去。
+        **變異**:preflight 退回「不在 allowed_write_paths 就擋」→ 這一條紅。"""
+        self.make_ticket(7, allowed_write_paths=["src/*"])
+        self.write("scripts/land.sh", self.read("scripts/land.sh") + "\n# outside scope\n")
+        done = self.gate("--branch", "--ticket", "7")
+        self.assertNotEqual(done.returncode, 4, done.stdout + done.stderr)
+        self.assertNotIn("機械格不合", done.stderr)
 
     def test_valid_mechanical_fields_allow_tests_to_start(self):
         self.install_test_marker()

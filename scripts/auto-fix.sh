@@ -1100,11 +1100,11 @@ PY
     fi
 
     if [ -n "$VPATCH" ]; then
-        AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 \
+        AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 AC_RESULT_JSON=$RESULT_JSON \
             sh "$AC/apply.sh" "$ID" "$PATCH_OUT" "$VPATCH" --evidence "$EVIDENCE" \
             --evidence-verifier "$VEVIDENCE"
     else
-        AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 \
+        AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 AC_RESULT_JSON=$RESULT_JSON \
             sh "$AC/apply.sh" "$ID" "$PATCH_OUT" --evidence "$EVIDENCE"
     fi
     arc=$?
