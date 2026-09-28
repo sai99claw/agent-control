@@ -52,6 +52,9 @@ KINDS = (
     "inbox.posted",
     # 記憶:量到超過上限、整理完成(docs/MEMORY.md「容量與整理」,D-006)。
     "memory.over_cap", "memory.consolidated", "memory.noted",
+    # 主線越界守衛(#63,guard-main.sh):擋了一次、放行一次越界。blocked 是分母 ——
+    # 只記 override 的話,遵循度算不出來。
+    "main.blocked", "main.override",
 )
 
 ENV_ROOT = "AC_ROOT"
