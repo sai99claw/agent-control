@@ -1448,7 +1448,10 @@ def cmd_cost(argv):
         row[field] = value if isinstance(value, int) and not isinstance(value, bool) else None
     if wall is None and envelope and isinstance(envelope.get("duration_ms"), (int, float)):
         wall = int(round(envelope["duration_ms"] / 1000.0))
-    row.update({"wall_seconds": wall, "by": got.get("--by") or None, "at": now()})
+    # token 欄是 null 的那一列,原因寫在 `note`(#58):「沒量」與「量了但信封不見」
+    # 都是 null,只看數字分不出來。
+    row.update({"wall_seconds": wall, "by": got.get("--by") or None,
+                "note": None if envelope else why, "at": now()})
     if envelope is None:
         sys.stderr.write("ticket: #%s cost 的信封讀不到(%s)—— token 欄記 null\n"
                          % (ident, why))
