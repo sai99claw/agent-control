@@ -103,11 +103,14 @@ esac
 MAIN=$(cfg main_branch main)
 TICKETS=${AC_TICKETS_DIR:-$(cfg tickets_dir tickets)}
 case $TICKETS in /*) TDIR=$TICKETS ;; *) TDIR=$ROOT/$TICKETS ;; esac
-with_envelope() {   # $1 = 命令;`claude` 起頭而沒指定 --output-format 的,補 `--output-format json`
+with_envelope() {   # $1 = 命令;`claude` 起頭而沒指定 --output-format 的,補 `--output-format stream-json --verbose`
     # 信封是 `cost[]` 的 token 唯一來源(#58):純文字輸出沒有 usage,那一輪的 token 只能記
     # null —— 下游設定沒帶這一格的票,worker / verifier 的 token 全是 null。已經指定格式
     # (json / stream-json)的照用;不是 `claude` 的命令(替身、別家 CLI)不動。
     # worker 的交件是它寫在副本裡的檔,不經 stdout —— 換輸出格式不影響交件。
+    # 補的是 **stream-json**(#64):`json` 只在結束時印一個信封,被砍的那一輪 log 是 0 byte;
+    # stream-json 逐行印事件,最後一行 `type=result` 就是同一個信封(`ticket.py cost` 照讀)。
+    # `-p` 配 stream-json 不帶 `--verbose`,claude 直接 rc=1 拒跑(#64 A7,2026-09-29 實測)。
     python3 - "$1" <<'PY'
 import os, shlex, sys
 cmd = sys.argv[1]
@@ -118,13 +121,14 @@ except ValueError:
 head = next((tok for tok in parts if "=" not in tok), "")
 if os.path.basename(head) == "claude" \
         and not any(tok.split("=", 1)[0] == "--output-format" for tok in parts):
-    cmd += " --output-format json"
+    cmd += " --output-format stream-json"
+    if "--verbose" not in parts:
+        cmd += " --verbose"
 print(cmd)
 PY
 }
 
-WORKER_CMD=$(with_envelope "$(cfg worker.command "claude -p --model opus --output-format json")")
-WORKER_TIMEOUT=$(cfg worker.timeout_seconds 3600)
+WORKER_CMD=$(with_envelope "$(cfg worker.command "claude -p --model opus")")
 RERUN_CMD=$(cfg gate.rerun_cmd "")
 TF=$TDIR/$ID.json
 # 主 repo 根與副本根 **只有一種定義**(#38,#46,D-018):`scripts/wtbase.sh`。
@@ -145,6 +149,30 @@ if [ ! -f "$TF" ] && [ -z "${AC_TICKETS_DIR:-}" ]; then
     fi
 fi
 [ -f "$TF" ] || { echo "auto-fix: 找不到票 #$ID($TF)" >&2; exit 2; }
+# worker 與驗證者的逾時秒數**只解析這一次**(#64):票的 `worker.timeout_seconds` >
+# `board/config.json` 的 `worker.timeout_seconds` > 3600。以前只讀 config,票上寫 7200 的
+# 那一張照樣在 3600 被砍。票的值不是正數就不採用、點名那一格,退回下一層。
+# 印出來的是「秒數 來源」兩個字,`逾時來源=` 那一行在起 worker 時印。
+TIMEOUT_LINE=$(python3 - "$TF" "$(cfg worker.timeout_seconds "")" <<'PY'
+import json, sys
+path, conf = sys.argv[1], sys.argv[2]
+try:
+    with open(path, encoding="utf-8") as handle:
+        worker = json.load(handle).get("worker")
+except (OSError, ValueError):
+    worker = None
+if isinstance(worker, dict) and "timeout_seconds" in worker:
+    value = worker["timeout_seconds"]
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+        print("%g 票" % value)
+        sys.exit(0)
+    sys.stderr.write("auto-fix: 票的 worker.timeout_seconds=%s 不是正數 —— 不採用,退回 config / 預設\n"
+                     % json.dumps(value, ensure_ascii=False))
+print("%s config" % conf if conf else "3600 預設")
+PY
+)
+WORKER_TIMEOUT=${TIMEOUT_LINE%% *}
+TIMEOUT_SRC=${TIMEOUT_LINE#* }
 # 副本/worktree 的根:環境變數 > board/config.json 的 `worktree_dir` > 預設 `../<主 repo>-wt`;
 # 相對路徑一律以**主 repo 根**解析(#38)。以前用 `$ROOT` 拼:在票 worktree 裡跑時 `$ROOT`
 # 是 worktree,副本開到 `x-wt/x-wt/` 底下(9/23 實際開在 `agent-control-wt/agent-control-wt/`)。
@@ -642,6 +670,7 @@ try:
                               stdout=log, stderr=subprocess.STDOUT, timeout=float(timeout))
     rc = done.returncode
 except subprocess.TimeoutExpired:
+    sys.stderr.write("auto-fix: 驗證者超過 %s 秒還沒回來 —— 當它沒交\n" % timeout)
     rc = 124
 except OSError:
     rc = 127
@@ -944,6 +973,7 @@ PY
     fi
     ev ticket.attempt.start --ticket "$ID" --attempt "$r" --note "auto-fix 第 $r 輪"
     # 起不來(副本取不出)照樣派 worker,收件時走「驗證者沒交出 patch-verify」那一頁。
+    echo "auto-fix: 逾時來源=$TIMEOUT_SRC $WORKER_TIMEOUT 秒" >&2
     [ -z "$V_WANT" ] || [ -z "$V_PARALLEL" ] || start_verifier_bg || true
     WORKER_LOG=$(dirname "$DISPATCH")/worker-round$r.log
     ev agent.start --ticket "$ID" --model "$WORKER_MODEL" \
