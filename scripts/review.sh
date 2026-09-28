@@ -220,11 +220,32 @@ RESULT_JSON=$RUNDIR/result-reviewer-round$ROUND.json
     python3 "$AC/rules.py" pack reviewer --model "$MODEL" 2>/dev/null \
         || echo "(規則包產不出來 —— 自己讀 memory/role/reviewer.md)"
     python3 - "$TEMPLATE" "$ID" "$SHA" "$WT" "$EVIDENCE" "$STATUS_FILE" "$REVIEW" \
-        "$MODEL" "$ROUND" "$(rel "$TF")" <<'PY'
-import sys
-template, ident, sha, wt, evidence, state_file, review, model, rnd, ticket_file = sys.argv[1:11]
+        "$MODEL" "$ROUND" "$(rel "$TF")" "$TF" <<'PY'
+import json, sys
+template, ident, sha, wt, evidence, state_file, review, model, rnd, ticket_file, tf = sys.argv[1:12]
 with open(template, encoding="utf-8") as handle:
     text = handle.read()
+# 「已對 <sha> 跑過閘門」只在票上 `gate.sha` 就是分支頭時說(#56,D-H38)。以前範本無條件
+# 說「閘門已經對這個 sha 跑過」,而 auto-fix 在副本跑的綠沒寫回票 —— 覆核者被告知不必
+# 看紅榜,實際上這個 sha 沒有人跑過(#661)。
+try:
+    with open(tf, encoding="utf-8") as handle:
+        gate = json.load(handle).get("gate")
+except (OSError, ValueError):
+    gate = None
+gate = gate if isinstance(gate, dict) else {}
+if gate.get("sha") == sha:
+    gate_line = "已對 %s 跑過閘門(rc=%s,run %s)" % (sha, gate.get("rc"), gate.get("run_id") or "?")
+else:
+    gate_line = ("這個 sha 沒跑過閘門,覆核者要自己看紅榜(票上 gate.sha=%s,分支頭 %s)"
+                 % ((gate.get("sha") or "(空)")[:12], sha[:12]))
+    text = text.replace("(閘門已經對這個 sha 跑過,重跑是把\n同一份綠買第二遍)",
+                        "(這個 sha 沒跑過閘門 —— 見下面「閘門」那一行)")
+marker = "## 這張票獨有的四件事"
+if marker in text:
+    text = text.replace(marker, "**閘門**:%s\n\n%s" % (gate_line, marker), 1)
+else:
+    text = text.rstrip("\n") + "\n\n**閘門**:%s\n" % gate_line
 slots = {
     "@TICKET@": ident,
     "@TICKET_FILE@": ticket_file,

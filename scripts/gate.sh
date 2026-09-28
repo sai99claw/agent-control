@@ -352,6 +352,9 @@ PREFLIGHT_PY
 fi
 
 SHA=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo "")
+# 票 `gate` 欄的 sha 在開跑這一刻就定:紅了派出去的 auto-fix 可能在同一個 worktree 推進
+# HEAD,跑完再問會把這一輪的結果記到下一個 commit 上。
+HEAD_SHA=$(git -C "$ROOT" rev-parse -q --verify "HEAD^{commit}" 2>/dev/null || echo "")
 BASE_SHA=$(git -C "$ROOT" rev-parse "$MAIN" 2>/dev/null || echo "")
 RUN_ID=${AC_GATE_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}
 FLAKY_ARGS=""
@@ -499,6 +502,26 @@ auto_fix() {   # $1 = rc
     echo "gate: auto-fix —— sh scripts/auto-fix.sh $TICKET"
     sh "$ROOT/scripts/auto-fix.sh" "$TICKET" \
         || echo "gate: auto-fix 停下來了(rc=$?)—— 看 reports/inbox/ 那一頁"
+}
+
+# 票上的 `gate` 欄(#56,D-H38):`--branch --ticket` 綠紅都寫進 auto-fix 綠了寫的**同一個**
+# 欄、同一個形狀 {rc, sha, run_id, at},sha 是開跑時的 HEAD。閘門只有一個真相 —— 以前這條路
+# 只寫狀態檔,review.sh 看票上沒有這個 sha 就說「沒跑過閘門」。寫在 auto_fix 與
+# review_after_green 之前:紅了派出去的下一輪綠會寫新 sha,不能被這裡事後蓋回去;覆核要
+# 讀到這一筆。寫不進去要出聲但不擋閘門 —— 同狀態檔的理由。
+ticket_gate() {   # $1 = rc
+    [ -n "$TICKET" ] || return 0
+    [ "$want_branch" -eq 1 ] || return 0
+    if [ -z "$HEAD_SHA" ]; then
+        echo "gate: 問不到 HEAD —— 票的 gate 欄不寫" >&2
+        return 0
+    fi
+    python3 "$ROOT/scripts/ticket.py" set "$TICKET" gate "$(python3 -c '
+import datetime, json, sys
+print(json.dumps({"rc": int(sys.argv[1]), "sha": sys.argv[2], "run_id": sys.argv[3],
+                  "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}))
+' "$1" "$HEAD_SHA" "$RUN_ID")" >/dev/null 2>&1 \
+        || echo "gate: 票的 gate 欄寫不進去(不擋閘門)—— review.sh 會說沒跑過閘門" >&2
 }
 
 # 手跑 `--branch --ticket` 綠 → 票轉 InReview → 派覆核(見檔頭)。**閘門自己的 rc 不動**。
@@ -952,6 +975,8 @@ if [ -n "$mods" ]; then
     fi
     [ "$rc" -eq 0 ] || echo "gate: 紅了,看 $LOG"
     status_done "$rc"
+    # 有檔對不到模組時這一輪下面退 3 —— 票上記的是閘門真正的退出碼。
+    if [ -n "$unmapped" ]; then ticket_gate 3; else ticket_gate "$rc"; fi
     auto_fix "$rc"
 fi
 
@@ -962,6 +987,7 @@ if [ -n "$unmapped" ]; then
         status_done 3
     else
         status_nothing 3 "這幾個改動檔對不到任何測試模組:$unmapped"
+        ticket_gate 3
     fi
     echo "gate: 這幾個改動檔對不到任何測試模組 —— 沒有人守著它們:"
     for f in $unmapped; do echo "gate:   $f"; done
@@ -970,6 +996,7 @@ if [ -n "$unmapped" ]; then
 fi
 if [ -z "$mods" ]; then
     status_nothing 2 "沒有任何要跑的東西(--branch 沒有改動檔?)"
+    ticket_gate 2
     echo "gate: 沒有給我任何要跑的東西(--branch 沒有改動檔?要跑基礎組加 --base)"
     exit 2
 fi
