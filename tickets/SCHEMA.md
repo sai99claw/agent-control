@@ -6,9 +6,9 @@
 |---|---|---|---|
 | 識別 | `id`, `subject`, `created` | ✓ | id 遞增整數字串 |
 | 產品關聯 | `feature`, `requirement_version` | 建議 | 對到產品功能;需求改版時辨識受影響票 |
-| 目標與範圍 | `objective`, `acceptance` (list), `in_scope`, `out_of_scope` | ✓ | acceptance 每條要能寫成一條會紅的斷言 |
+| 目標與範圍 | `objective`, `acceptance` (list), `in_scope`, `out_of_scope` | ✓ | acceptance 每條要能寫成一條會紅的斷言,斷言的對象是**使用者看到的結果**(畫面上的字、數字、能做的動作)。DOM 結構、樣式掛在哪個元素、金額帶不帶幣別一律寫「照產品既有慣例」,除非票本身就是改這些(D-H38,#61)。「其餘斷言不變」只准在查過既有 oracle(測試、期望檔、守衛)與新行為不衝突之後寫,並列出查過的檔 |
 | 高階規劃 | `decision_refs` (list), `outline`, `interface_contracts`, `test_plan` | 建議 | 留關鍵決定,不抄整段規劃聊天 |
-| 依賴與衝突 | `depends_on` (list of {id, condition}), **`allowed_write_paths`** (list of globs) | ✓ | `allowed_write_paths` 是**預期會動的檔,不是限制**(D-H38 ①):排順序的人拿它判平行、覆核者拿它對照;越出不擋,`apply.sh` 列進 result 的 `extra_paths`、覆核派工文多一段「白名單外改動」。**硬擋只有兩格**:票的 `out_of_scope`(glob)與 `board/config.json` 的 `protected_paths`(專案自訂的 glob 清單;沒有這一格就不擋),命中 → apply rc=5、閘門 preflight rc=4、land 拒絕,都點名檔與格;`shared_resources` 建議 |
+| 依賴與衝突 | `depends_on` (list of {id, condition}), **`allowed_write_paths`** (list of globs) | ✓ | `allowed_write_paths` 是**預期會動的檔,不是限制**(D-H38 ①);開題時對每個要改的函式、字串、DOM id、schema 鍵先 grep 引用端(測試、verify 案例、expected 檔、lib 腳本),會跟著動的一併列進來(#61):排順序的人拿它判平行、覆核者拿它對照;越出不擋,`apply.sh` 列進 result 的 `extra_paths`、覆核派工文多一段「白名單外改動」。**硬擋只有兩格**:票的 `out_of_scope`(glob)與 `board/config.json` 的 `protected_paths`(專案自訂的 glob 清單;沒有這一格就不擋),命中 → apply rc=5、閘門 preflight rc=4、land 拒絕,都點名檔與格;`shared_resources` 建議 |
 | 執行 | `role`, `model`, `tool`, **`attempt`** (int) | ✓ | 每次派工 attempt+1;**遲到的回報對不上 attempt 就拒絕 —— 回寫時帶 `--expect-attempt N` / `--expect-state-version N`,對不上 rc=4**;`attempt_history` 建議 |
 | 版本 | **`base_sha`** | ✓ | 閘門結果只對 base_sha 有效;`branch`、`workspace` 派工時由工具填 |
 | 控制 | `state`, **`state_version`**, `lease` ({holder, until}), `retry_limit` | ✓ | state 見 `docs/WORKFLOW.md`;state_version 每次變更 +1;`budget` 建議 |
