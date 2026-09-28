@@ -2002,6 +2002,106 @@ Ran 2 tests in 0.001s
 FAILED (failures=2)""")
 
 
+# 假 `claude`(#58):照真的 `claude -p` 認 `--output-format` —— `json` 才在 stdout 印信封,
+# 其他格式只印一行純文字(沒有 usage)。交件是底下那支 `FIRST_ROUND_PAIR` 寫在副本裡的檔,
+# 與輸出格式無關。`--output-format` 出現兩次就 exit 3:補旗標的那一手不准疊在已指定的上面。
+FAKE_CLAUDE = """#!/bin/sh
+fmt=""
+seen=0
+prev=""
+for arg in "$@"; do
+    [ "$prev" = "--output-format" ] && fmt=$arg
+    case $arg in
+        --output-format) seen=$((seen + 1)) ;;
+        --output-format=*) seen=$((seen + 1)); fmt=${arg#--output-format=} ;;
+    esac
+    prev=$arg
+done
+[ "$seen" -le 1 ] || { echo "--output-format given $seen times" >&2; exit 3; }
+sh "@BODY@" || exit $?
+if [ "$fmt" = json ]; then
+    if [ "$AC_ROLE" = verifier ]; then
+        echo '@V_ENVELOPE@'
+    else
+        echo '@W_ENVELOPE@'
+    fi
+else
+    echo "plain text result, no usage"
+fi
+"""
+
+
+class ClaudeIsAskedForAnEnvelope(AutoFixBase):
+    """#58(稽核 R9):`worker.command` / `verifier.command` 是 `claude` 而沒指定
+    `--output-format` 時,auto-fix 補 `--output-format json`,`cost[]` 的 worker 與 verifier
+    兩列才有 token。期望的 token 數寫死在夾具信封裡,不從 ticket.py 算回去。"""
+
+    vcalls = TheFirstRoundVerifierRunsAlongside.vcalls
+    vfix = TheFirstRoundVerifierRunsAlongside.vfix
+    arm = TheFirstRoundVerifierRunsAlongside.arm
+    verifier_calls = TheFirstRoundVerifierRunsAlongside.verifier_calls
+    commands = ("claude -p --model opus", "claude -p --model sonnet")
+
+    def set_worker(self, body, rerun_cmd=None):
+        # `arm()` 叫這一手:本體照舊,命令換成 PATH 上那支假 `claude`。
+        path = os.path.join(self.home, "fake-worker.sh")
+        write_executable(path, body)
+        self.bindir = os.path.join(self.home, "bin")
+        os.makedirs(self.bindir, exist_ok=True)
+        write_executable(os.path.join(self.bindir, "claude"), FAKE_CLAUDE
+                         .replace("@BODY@", path)
+                         .replace("@W_ENVELOPE@", envelope("w", 21, 4242, 1000, 50000, 9000))
+                         .replace("@V_ENVELOPE@", envelope("v", 8, 777, 300, 4000, 5000)))
+        conf = dict(DEFAULT_CONFIG)
+        conf["worker"] = {"command": self.commands[0], "timeout_seconds": 120}
+        conf["verifier"] = {"command": self.commands[1]}
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        return path
+
+    def auto_fix(self, *args):
+        return self.run_sh("scripts/auto-fix.sh", "1", *args,
+                           env=self.env(PATH=self.bindir + os.pathsep + os.environ["PATH"]))
+
+    def rows(self):
+        rows = self.load_ticket("1").get("cost") or []
+        return {row["role"]: row for row in rows}
+
+    def test_worker_and_verifier_rows_carry_tokens_from_the_envelope(self):
+        """**變異**:拿掉 WORKER_CMD 的 `with_envelope` → worker 列 null 紅;
+        拿掉 VERIFIER_CMD 的 → verifier 列 null 紅。"""
+        self.arm(needs_verifier=True)
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        rows = self.rows()
+        self.assertEqual(sorted(rows), ["verifier", "worker"], rows)
+        self.assertEqual(rows["worker"]["tokens_out"], 4242)
+        self.assertEqual(rows["worker"]["cache_read"], 50000)
+        self.assertEqual(rows["verifier"]["tokens_out"], 777)
+        self.assertEqual(rows["verifier"]["tokens_in"], 8)
+        self.assertIsNone(rows["worker"]["note"])
+        self.assertIsNone(rows["verifier"]["note"])
+
+    def test_no_envelope_is_null_with_a_note_and_the_handin_is_unaffected(self):
+        """已指定的格式照用(`text` 不印信封)→ token null、note 說原因;交件照收、閘門綠。
+
+        **變異**:ticket.py 的 note 恆為 None → 紅;補旗標不看已指定 → 假 claude exit 3 紅。
+        """
+        self.commands = ("claude -p --model opus --output-format text",
+                         "claude -p --model sonnet --output-format=text")
+        self.arm(needs_verifier=True)
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.worker_rounds(), ["worker ran round 1"])
+        self.assertEqual(self.verifier_calls(), ["verifier ran round 1"])
+        rows = self.rows()
+        self.assertEqual(sorted(rows), ["verifier", "worker"], rows)
+        for role in ("worker", "verifier"):
+            with self.subTest(role):
+                for field in ("tokens_in", "tokens_out", "cache_write", "cache_read"):
+                    self.assertIsNone(rows[role][field], field)
+                self.assertIn("沒有 JSON 信封", rows[role]["note"] or "")
+
+
 class ATimedOutWorkerLeavesItsWorkBehind(AutoFixBase):
     """#57 (b):worker 逾時 —— 副本不收、log 邊跑邊寫、work/ 的半成品存成 patch-partial。
 

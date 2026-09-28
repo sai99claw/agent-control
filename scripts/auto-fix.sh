@@ -103,7 +103,27 @@ esac
 MAIN=$(cfg main_branch main)
 TICKETS=${AC_TICKETS_DIR:-$(cfg tickets_dir tickets)}
 case $TICKETS in /*) TDIR=$TICKETS ;; *) TDIR=$ROOT/$TICKETS ;; esac
-WORKER_CMD=$(cfg worker.command "claude -p --model opus")
+with_envelope() {   # $1 = 命令;`claude` 起頭而沒指定 --output-format 的,補 `--output-format json`
+    # 信封是 `cost[]` 的 token 唯一來源(#58):純文字輸出沒有 usage,那一輪的 token 只能記
+    # null —— 下游設定沒帶這一格的票,worker / verifier 的 token 全是 null。已經指定格式
+    # (json / stream-json)的照用;不是 `claude` 的命令(替身、別家 CLI)不動。
+    # worker 的交件是它寫在副本裡的檔,不經 stdout —— 換輸出格式不影響交件。
+    python3 - "$1" <<'PY'
+import os, shlex, sys
+cmd = sys.argv[1]
+try:
+    parts = shlex.split(cmd)
+except ValueError:
+    parts = cmd.split()
+head = next((tok for tok in parts if "=" not in tok), "")
+if os.path.basename(head) == "claude" \
+        and not any(tok.split("=", 1)[0] == "--output-format" for tok in parts):
+    cmd += " --output-format json"
+print(cmd)
+PY
+}
+
+WORKER_CMD=$(with_envelope "$(cfg worker.command "claude -p --model opus --output-format json")")
 WORKER_TIMEOUT=$(cfg worker.timeout_seconds 3600)
 RERUN_CMD=$(cfg gate.rerun_cmd "")
 TF=$TDIR/$ID.json
@@ -561,7 +581,7 @@ fi
 # --------------------------------------------------------------- 一輪的動作
 MODEL=$(cfg routing.implement opus)
 VERIFIER_MODEL=$(cfg routing.verify "$MODEL")
-VERIFIER_CMD=$(cfg verifier.command "$WORKER_CMD")
+VERIFIER_CMD=$(with_envelope "$(cfg verifier.command "$WORKER_CMD")")
 # `MODEL`(routing.implement)只是路由標籤;`agent.start`/`agent.done` 的 model 欄要記
 # **實際起的那個** —— 也就是 `worker.command` 裡 `--model`後面那個值。兩者不一致時
 # 舊版只印 routing 那個標籤,events.jsonl 就記著一個從沒跑過的模型(#21)。

@@ -1031,6 +1031,29 @@ class Cost(Sandbox):
         done = self.cost()
         self.assertIsNone(self.load_ticket("1")["cost"][-1]["wall_seconds"])
 
+    def test_a_null_row_says_why_in_its_note(self):
+        """#58:token 是 null 的那一列,`note` 寫原因;讀到信封的那一列 note 是 null。
+
+        **變異**:note 恆為 None → 這一條紅。
+        """
+        # 信封檔只有一個路徑:每一格輪到了才寫。
+        cases = (("讀不到", lambda: ["--from-envelope", os.path.join(self.home, "nope.json")]),
+                 ("沒有 JSON 信封", lambda: ["--from-envelope",
+                                           self.envelope_file("not json\n")]),
+                 ("沒有 usage", lambda: ["--from-envelope", self.envelope_file(
+                     '{"type": "result", "result": "x"}')]),
+                 ("沒帶 --from-envelope", lambda: []))
+        for index, (reason, extra) in enumerate(cases):
+            with self.subTest(reason):
+                done = self.cost(*extra())
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                row = self.load_ticket("1")["cost"][index]
+                self.assertIsNone(row["tokens_out"])
+                self.assertIn(reason, row["note"] or "")
+        path = self.envelope_file(envelope("x", 1, 2, 3, 4, duration_ms=1000))
+        self.cost("--from-envelope", path)
+        self.assertIsNone(self.load_ticket("1")["cost"][-1]["note"])
+
     def test_cost_does_not_touch_state_version_or_review(self):
         """A3:review 綁 state_version;寫成本若讓覆核過期,land 就會拒。
 
