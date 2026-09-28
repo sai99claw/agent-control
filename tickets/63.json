@@ -1,0 +1,71 @@
+{
+  "id": "63",
+  "subject": "主線越界的機械守衛:PreToolUse hook 擋自寫票面、讀 worker log / task output、裸 git commit/merge;AC_MAIN_OVERRIDE 放行並記事件",
+  "created": "2026-09-29T03:39:33+08:00",
+  "objective": "新增 scripts/guard-main.sh,由 A 的 .claude/settings.json 以 PreToolUse(matcher 'Bash|Read')叫;只對主線本人生效。主線打出越界動作時,工具呼叫被 deny,理由一行寫『該走哪』;真的要越界時 AC_MAIN_OVERRIDE=1 放行並發 main.override 事件;每一次擋也發 main.blocked 事件 —— 遵循度從 board/events.jsonl 就算得出來,不靠自覺。",
+  "acceptance": [
+    "介面(釘死):stdin = Claude Code PreToolUse 的 JSON(tool_name、tool_input.command 或 tool_input.file_path、cwd、可能有 agent_id)。擋 = stdout 印 {\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"<一行:guard-main: 擋了什麼 → 該走哪>\"}} 且 rc 0;放行 = rc 0、stdout 空。JSON 讀不懂 / 指令 shlex 拆不開 → 放行(守衛只擋認得出來的,不猜)。",
+    "B1 擋 ticket.py create(單元,tests/test_guard_main.py 沙盒):command 'python3 scripts/ticket.py create --subject x' 與 'python3 scripts/control/ticket.py create' → deny,reason 含 '開題者'。",
+    "B2 擋改票面的 set(單元):'python3 scripts/ticket.py set 5 acceptance [...]' → deny,reason 含 '開題者';欄位清單 subject / objective / acceptance / in_scope / out_of_scope / allowed_write_paths / verify_strings / test_plan 各一案都 deny。",
+    "B3 擋讀 log / output(單元):Bash 'cat reports/t12/20260929-1/worker-round1.log'、'tail -50 ../x-wt/reports/t3/r/gate.log'、'sed -n 1,9p worker-round2.log'、'grep FAIL reports/t7/r/x.log',以及 tool_name=Read、file_path 以 '/tasks/abc123.output' 結尾 → 都 deny,reason 含 'inbox.py show'。讀動詞:cat head tail less more sed awk grep rg。",
+    "B4 擋裸 git 寫主線(單元):'git commit -m x'、'git -C . merge t5'、'cd x && git commit -am y' → deny,reason 指落地腳本:這個 repo 有 scripts/land.sh 就寫 'land.sh'(含 docs 通道),沒有就寫『專案 CLAUDE.md 對照表的落地入口』。",
+    "C1 不擋 ticket 的流程欄(單元):'ticket.py set 5 state Ready' 以及 objections / verify_waiver / base_sha / needs_verifier / worker 各一案 → 放行(stdout 空)。",
+    "C2 不擋讀收件匣與控制腳本(單元):'python3 scripts/inbox.py show 5'、'python3 scripts/event.py tail 20'、'python3 scripts/ticket.py show 5'、'ticket.py list --open'、'ticket.py verify 5'、'sh scripts/land.sh docs \"m\" tickets/5.json'、'sh scripts/apply.sh 5 p.diff'、'sh scripts/review.sh 5'、'sh scripts/auto-fix.sh 5'、'cat reports/inbox/5-r1.md'、'git log --oneline -3'、'git merge --abort'、'echo \"git commit\"'(字串裡提到不算)→ 全部放行。",
+    "D1 逃生口(單元):command 以 'AC_MAIN_OVERRIDE=1 ' 開頭(或 hook 行程環境 AC_MAIN_OVERRIDE=1)的 B1 指令 → 放行;沙盒 board/events.jsonl 多且只多一行 kind=main.override,role=main,note 含 'ticket.py create'(指令摘要,≤ 200 字元)。D2:B1 被擋時 events.jsonl 多一行 kind=main.blocked,note 含被擋的指令摘要。期望值從事件檔直接數行,不從被測腳本算。main.override、main.blocked 加進 scripts/event.py 的 KINDS。",
+    "E1 非主線不觸發(單元):同一條 B1 指令,在 (a) env AC_ROLE=worker、(b) stdin 帶 agent_id(子代理人的呼叫,開題者就是這樣被派的)、(c) cwd 在 board/config.json worktree_dir 底下 三種情況 → 放行、stdout 空、events.jsonl 行數不變。",
+    "F1 接線(單元 + 實跑):tests 讀 .claude/settings.json → hooks.PreToolUse 有一筆 matcher 切 '|' 後含 Bash 與 Read、command 含 'scripts/guard-main.sh'、有 timeout;SessionStart 那一筆不變(test_session_hook.py a1 照舊綠)。實跑:把分支樹複製到 $TMPDIR 底下(不在 worktree_dir 裡)、在那裡 'claude -p' 請它執行 'python3 scripts/ticket.py create --subject probe',貼出輸出中的 deny 理由與那份複本 board/events.jsonl 的 main.blocked 那一行(證明 hook 真的被叫到)。",
+    "G1 同步(單元):scripts/sync-to-project.sh 的 SCRIPT_LIST 加 guard-main.sh,同步後專案 scripts/control/guard-main.sh 存在;專案 .claude/settings.json 沒接 PreToolUse 時,sync 的結尾提示印出該貼的那一行(與 session-hook 的提示同一種),不自己改專案的 settings.json。"
+  ],
+  "in_scope": [
+    "scripts/guard-main.sh",
+    ".claude/settings.json",
+    "scripts/event.py"
+  ],
+  "out_of_scope": [
+    "../tabby_pool/**",
+    "scripts/land.sh",
+    "scripts/apply.sh",
+    "CLAUDE.md"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/guard-main.sh",
+    ".claude/settings.json",
+    "scripts/event.py",
+    "tests/test_guard_main.py",
+    "tests/test_event.py",
+    "tests/test_session_hook.py",
+    "scripts/sync-to-project.sh",
+    "tests/test_sync_to_project.py",
+    "tests/control_harness.py",
+    "docs/SESSION-START.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "942030173271ce5fef193527e23a983afe2443c5",
+  "state": "Draft",
+  "state_version": 5,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-015",
+    "D-025",
+    "D-026"
+  ],
+  "verify_strings": [
+    "AC_MAIN_OVERRIDE",
+    "main.override",
+    "guard-main.sh"
+  ],
+  "outline": "PreToolUse 守衛只擋主線本人:子代理人(stdin 帶 agent_id)、AC_ROLE≠main、副本 cwd 都放行 —— 否則開題者(子代理人)的 ticket.py create 會被擋死。逃生口在指令前綴(hook 環境傳不進 export)。加 main.blocked 當分母。needs_verifier=false:案例已逐條列在驗收,實作者自證變異紅。建議在 #62 之後落。細節見 interface_contracts。",
+  "needs_verifier": false,
+  "interface_contracts": "起因:主線 compact 後自寫票面(ticket.py create/set)、讀 worker log 與 task output 不看 inbox、裸 commit。規則靠自覺在 compact 後失效,改由 PreToolUse 機械擋。Claude Code 事實(讀文件 code.claude.com/docs/en/hooks,未實測,F1 實跑就是驗它):deny 用 hookSpecificOutput.permissionDecision;matcher 'Bash|Read' 是 regex;子代理人的工具呼叫也會觸發父 session 的 PreToolUse,stdin 帶 agent_id/agent_type —— 所以 E1(b) 必要:主線用 Agent 派的開題者就是在同一個 session 裡跑 ticket.py create,不排除會把開題流程整條擋死。逃生口放在指令前綴:hook 行程的環境是 Claude Code 的,主線在 Bash 裡 export 傳不進 hook。Read 工具沒有前綴可放,只能靠行程環境。加 main.blocked(主線原話只要 override):沒有分母,遵循度算不出來;也是 F1 證明接線的觀察點。擋的欄位多列 in_scope、test_plan(SCHEMA『目標與範圍』群組的票面格)。未涵蓋:Grep 工具讀 log(主線原話只點 Bash/Read)。與 #62 同改 sync-to-project.sh、test_sync_to_project.py、test_session_hook.py —— 不平行落地,後落的重套。needs_verifier=false:框架腳本票,案例已逐條列在驗收,實作者自證變異紅(同 #61);建議變異:拿掉 agent_id 判斷 → E1(b) 紅;把 git 子指令比對改成子字串 → C2 的 echo 案例紅(未實測)。後續(主線,本票外):落地後 sync 到 T、在 T 的 .claude/settings.json 接 PreToolUse 走 T 的 docs 通道。"
+}

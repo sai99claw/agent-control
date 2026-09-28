@@ -1,0 +1,70 @@
+{
+  "id": "62",
+  "subject": "開場頁:規則印在最前面、票與收件匣收成截斷上限內的形狀、讀單路徑照 roles_dir(compact 後主線看得到規則)",
+  "created": "2026-09-29T03:37:42+08:00",
+  "objective": "main 角色的開場頁(new-session.sh,compact/resume 時由 session-hook.sh 重印)第一段就是 A 的「不可違反的」那一節與主線角色卡全文,專案層 main.inbox.md 的尾巴接在後面;票與收件匣改成有上限的一行一筆;整頁在 50 則 inbox + 60 張開著的票時仍在 Claude Code 的 hook 輸出上限(10,000 字元)之內;讀單印的每一條路徑在這個 repo 裡真的存在(專案端照 rules.roles_dir / models_dir),不在的標出來。目的:compact 後主線不必自覺去讀規則,規則已經在上下文最前面。",
+  "acceptance": [
+    "A1 規則置頂(單元,tests/test_new_session.py 沙盒):沙盒的 CLAUDE.md 放一節 '## 不可違反的' 含標記字串 RULE-MARK、下一節 '## 別的' 含 OTHER-MARK;memory/role/main.md 含 CARD-MARK。跑 'sh scripts/new-session.sh main fable --no-event'。期望:RULE-MARK、CARD-MARK 都在,且位置都在 '站在哪個版本' 之前;RULE-MARK 在 CARD-MARK 之前;OTHER-MARK 不在(只印那一節,到下一個 '## ' 為止)。期望值來自沙盒自己寫的標記,不從被測腳本算。",
+    "A2 專案端疊層(單元):沙盒 board/config.json 設 rules.roles_dir=docs/roles、rules.models_dir=docs/roles/model,放 docs/roles/contract.md(含 RULE-MARK)、docs/roles/main.md(含 CARD-MARK)、memory/role/main.inbox.md 共 12 行、每行不同標記 L01..L12。期望:輸出依序含 RULE-MARK → CARD-MARK → L08..L12(最後 5 行),L07 以前不在,全部在 '站在哪個版本' 之前。另一案:刪掉 docs/roles/contract.md → 輸出有一行同時含 'contract.md' 與 'sync-to-project.sh'(缺了要講、不靜默),rc 仍 0。",
+    "A3 其他角色不變(單元):worker / opener / verifier 角色跑 new-session.sh,輸出不含 RULE-MARK 與 CARD-MARK(規則置頂只給 main)。",
+    "A4 票段有上限(單元):沙盒造 45 張 Draft(subject 含 DRAFT-SUBJ)+ 15 張 Ready。期望:DRAFT-SUBJ 一次都不出現;票段有一行含 'Draft' 與 '45';15 張 Ready 的票號都出現。另一案:60 張全 Ready → 票段列出的票行數 ≤ 20,且有一行含 '還有 40 張沒列' 與 'ticket.py list --open'。Blocked / Running / InReview / NeedsDecision 與 Ready 同待遇(都列、都計入上限)。",
+    "A5 收件匣有上限(單元):沙盒用 inbox.py post 造 50 則。期望:收件匣段每則一行(不印頁檔路徑那一行,每一行都含票號),列出 ≤ 20 則,且有一行含 '還有 30 則沒列' 與 'inbox.py list'。0 則時照舊印空的樣子、不出現 '沒列'。",
+    "A6 大小(單元):沙盒 = A1 的規則與角色卡 + 50 則 inbox + 60 張全 Ready 開著的票(每張 subject 60 個中文字)+ 事件 30 筆。期望:new-session.sh main 的 stdout 字元數(len(stdout),非 bytes)< 10000,且 RULE-MARK、CARD-MARK、'接下來要讀的' 都在。",
+    "A7 session-hook 上限改成字元(單元,tests/test_session_hook.py):session-hook.sh 的截斷上限改為 10000 字元(依 Claude Code 文件:hook 的 plain stdout 上限 10,000 characters;原本 16384 bytes 單位與數字都不對)。a6 那一案改成仍能撐過上限(例如灌大量事件或長 git status),期望:輸出字元數 ≤ 10000、最後一行含 '截斷' 與原始長度、'接下來要讀的' 段與 RULE-MARK 都還在(截的是中間,開頭的規則與結尾的讀單都留)。",
+    "A8 讀單的順序與路徑(單元;使用者 2026-09-29 裁示:讀單與 docs/HANDOFF.md 開頭說同一件事)。main 角色的「接下來要讀的」依序:① 角色卡:照 rules.roles_dir(專案沙盒 = 'docs/roles/main.md',該行標明它是 agent-control 的 memory/role/main.md 同步本;正本沙盒 = 'memory/role/main.md');② 專案疊層 'memory/role/main.inbox.md'(只在非正本時印);③ 多層記憶:'memory/model/<模型>.md' —— 主檔不在而暫存區在(memory.inbox_suffix,例 'memory/model/fable.inbox.md';T 現況就是這樣)就印暫存區那一條;非正本時另印 models_dir 那一份、'memory/role/'、'memory/project/';④ 'docs/HANDOFF.md' 只寫『現況』(不再寫『最後三節』;舊資訊在 docs/handoff/)。測:A2 的專案沙盒 → 讀單段裡 ①②③④ 出現的位置遞增;不出現 'memory/role/main.md    你這個角色的角色卡' 那種把專案指到不存在路徑的行;讀單每一條路徑相對於根解析,不存在的那一行含 '(不在)'(例:刪掉 memory/project/ → 那一行含 '(不在)'),存在的不含。不動 docs/HANDOFF.md(主線另派人整理);與 HANDOFF 開頭逐字一致由主線在兩邊都落地後對一次,不是本票的斷言。",
+    "A9 sync 產出契約節(單元,tests/test_sync_to_project.py):sync-to-project.sh 同步到專案時多寫一份 docs/roles/contract.md = A 的 CLAUDE.md '## 不可違反的' 那一節(到下一個 '## '),檔頭與角色卡同樣標『同步產生,請到 agent-control 改』;列入 docs/roles 的 manifest(再同步一次不重複、不被當成退場刪掉);A 端那一節改一個字再同步,專案那一份跟著變。專案的 memory/ 仍一個位元組都不碰(既有測試照舊綠)。",
+    "A10 實跑(貼輸出進 EVIDENCE):(a) 在分支副本上 'AC_ROOT=<專案 T 的根> sh scripts/new-session.sh main fable --no-event' 對真實資料(T 現有 101 則 inbox、54 張開著的票)→ 貼 'python3 -c \"import sys;print(len(sys.stdin.read()))\"' 的字元數(< 10000)與讀單那一段(每條路徑在 T 都存在,或標 '(不在)')與 'head -40'(此時 T 還沒同步,第一段應是 contract.md 缺了那一行 + docs/roles/main.md 全文);(b) 'git clone' T 到 $TMPDIR 底下的暫存目錄、把分支的 A 同步進那份 clone、跑 clone 的 scripts/control/new-session.sh main fable --no-event | head -40 → 第一段是「不可違反的」那一節。T 的工作目錄本身一個檔都不改。"
+  ],
+  "in_scope": [
+    "scripts/new-session.sh",
+    "scripts/session-hook.sh",
+    "scripts/sync-to-project.sh"
+  ],
+  "out_of_scope": [
+    "../tabby_pool/**",
+    "scripts/land.sh",
+    "scripts/apply.sh",
+    "CLAUDE.md",
+    "memory/role/*.md"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/new-session.sh",
+    "scripts/session-hook.sh",
+    "scripts/sync-to-project.sh",
+    "tests/test_new_session.py",
+    "tests/test_session_hook.py",
+    "tests/test_sync_to_project.py",
+    "tests/control_harness.py",
+    "docs/SESSION-START.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "942030173271ce5fef193527e23a983afe2443c5",
+  "state": "Draft",
+  "state_version": 9,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-015",
+    "D-021",
+    "D-026"
+  ],
+  "verify_strings": [
+    "張沒列",
+    "則沒列",
+    "contract.md",
+    "LIMIT=10000"
+  ],
+  "outline": "規則置頂、票與 inbox 設上限、讀單照 roles_dir;上限依 Claude Code 文件是 10,000 字元(未實測),session-hook 一併改。實測:T 開場頁 37 KB 主要是 inbox 17 KB、票 11 KB。已排除:T 有 docs/roles/main.md,斷的是寫死路徑。needs_verifier=false:框架腳本票,單元測試即驗收,實作者自證變異紅。與 #63 共用 sync-to-project.sh、兩支測試檔 → 先落 #62、#63 重套。細節見 interface_contracts。",
+  "needs_verifier": false,
+  "interface_contracts": "起因:主線 compact 後憑摘要越界(自寫票面、讀 worker log、代驗、12 小時看 46 次狀態)。實測(開題者,2026-09-29,T 真實資料):ticket.py list --open 10,704 B(54 張,43 Draft)、inbox.py list 17,335 B(101 則、每則兩行)、event tail 20 2,894 B、heartbeat 3,064 B;頁上沒有一行規則。契約節 1,582 B、T 的 docs/roles/main.md 14 行、T memory/role/main.inbox.md 29 行 8 KB。已排除:主線說的『memory/role/main.md 在 T 不存在、正本只在 A』—— T 有 docs/roles/main.md(sync 產),斷的是 new-session.sh 寫死 memory/role/$CARD.md 沒照 rules.roles_dir。上限:Claude Code 文件寫 hook plain stdout 上限 10,000 characters(讀文件,未實測);session-hook.sh 現在的 16384 bytes 單位與數字都不對,故納入。契約節的來源設計:D-026 丙擔心手抄分岔;這裡用 sync 產生的 docs/roles/contract.md(與角色卡同一機制,不會分岔),正本端直接讀 CLAUDE.md。會牽動的既有斷言:test_new_session.py:100-104 釘 memory/role/main.md(正本沙盒,仍成立)、test_session_hook.py a6(300 張票撐過上限,改形狀後可能撐不過 → 要改造法)。needs_verifier=false:框架腳本票,tests/ 單元測試就是驗收,實作者自證變異紅(同 #61 慣例);建議變異:拿掉 Draft 過濾 → A4 紅;把規則段移到讀單後 → A1 紅(未實測)。後續(主線,本票外):落地後跑 sync-to-project.sh 到 T 並走 T 的 docs 通道提交。 併入使用者 2026-09-29 裁示(A8):讀單先角色卡、再專案疊層、再多層記憶(memory/model、memory/role、memory/project)、HANDOFF 只讀現況;HANDOFF 本身不在本票。『正本 ../agent-control/memory/role/main.md』這條路徑腳本算不出來(專案 config 沒有指到 A 的鍵),改印 roles_dir 的同步本並標明是同步本。"
+}
