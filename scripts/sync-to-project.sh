@@ -49,22 +49,25 @@ except (OSError, ValueError):
     config = {}
 rules = config.get("rules") or {}
 applies = (config.get("memory") or {}).get("applies_to")
+# 專案的落地入口由專案自己宣告(#66):guard-main.sh 擋裸 commit 時照這兩格印「該走哪」。
+land = config.get("land") if isinstance(config.get("land"), dict) else {}
 checks = (
     ("rules.roles_dir", rules.get("roles_dir") == "docs/roles"),
     ("rules.models_dir", rules.get("models_dir") == "docs/roles/model"),
     ("memory.applies_to", isinstance(applies, list)),
+    ("land.entry", isinstance(land.get("entry"), str) and bool(land.get("entry"))),
+    ("land.docs", isinstance(land.get("docs"), str) and bool(land.get("docs"))),
 )
 missing = [name for name, present in checks if not present]
 if missing:
     sys.stderr.write("sync: 專案 board/config.json 缺少必要設定:\n")
     for name in missing:
         sys.stderr.write("  %s\n" % name)
-    sys.exit(2)
 # `memory.applies_to` 指到 `roles_dir` 底下 = 專案在量一份**自己改不了的檔**:那一層是
 # 同步產出物,下一次 sync 就蓋掉,而超標開出來的整理票沒有人能執行(D-021)。上限與整理
 # 票管的是專案自己寫的 `memory/`。
 where = [rules.get("roles_dir"), rules.get("models_dir")]
-inside = [one for one in applies
+inside = [one for one in (applies if isinstance(applies, list) else [])
           if any(w and os.path.normpath(one).startswith(os.path.normpath(w) + os.sep)
                  for w in where)]
 if inside:
@@ -72,6 +75,8 @@ if inside:
                      "rules.roles_dir 底下:%s\n" % "、".join(inside))
     sys.stderr.write("sync:   那一層是同步產出物,專案改不了也留不住 —— 改成 "
                      "memory/role/*.md、memory/model/*.md(專案自己寫的那一層)。\n")
+# 兩種問題一次列完再退:只報第一種,修完才看得到第二種。
+if missing or inside:
     sys.exit(2)
 PY
 fi

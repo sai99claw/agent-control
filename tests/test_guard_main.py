@@ -66,6 +66,11 @@ class GuardSandbox(Sandbox):
             cwd=cwd, env=self.env(**env), input=raw,
             capture_output=True, text=True, timeout=TIMEOUT)
 
+    def set_config(self, **keys):
+        conf = json.loads(self.read("board/config.json"))
+        conf.update(keys)
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False))
+
     def event_lines(self):
         """直接數事件檔的行數 —— 不從被測腳本算。"""
         path = os.path.join(self.repo, "board", "events.jsonl")
@@ -130,12 +135,41 @@ class B4BareGit(GuardSandbox):
             with self.subTest(command=command):
                 reason = self.assert_denied(self.guard(command), "land.sh")
                 self.assertIn("docs", reason)
+                self.assertIn("sh scripts/land.sh", reason)
+                self.assertIn("land.sh docs", reason)
 
-    def test_b4_without_land_sh_points_at_the_project_table(self):
-        os.remove(os.path.join(self.repo, "scripts", "land.sh"))
-        reason = self.assert_denied(self.guard("git commit -m x"),
-                                    "專案 CLAUDE.md 對照表的落地入口")
-        self.assertNotIn("land.sh", reason)
+    def test_g2_canon_with_a_land_key_follows_the_key(self):
+        self.set_config(land=LAND)
+        reason = self.assert_denied(self.guard("git commit -m x"), LAND["entry"])
+        self.assertIn(LAND["docs"], reason)
+
+
+# 下游專案的落地入口不是 scripts/land.sh(那一支可能是別的東西),兩支都放進沙盒。
+LAND = {"entry": "sh scripts/land-ticket.sh <分支…>",
+        "docs": 'sh scripts/land-ticket.sh docs "<訊息>" <檔…>'}
+
+
+class B4ProjectLayout(GuardSandbox):
+    config_extra = {"worktree_dir": WORKTREE,
+                    "rules": {"roles_dir": "docs/roles", "models_dir": "docs/roles/model"}}
+
+    def setUp(self):
+        super().setUp()
+        self.write("scripts/land-ticket.sh", "#!/bin/sh\n")
+        self.assertTrue(os.path.isfile(os.path.join(self.repo, "scripts", "land.sh")))
+
+    def test_g1_the_declared_entry_is_printed_not_land_sh(self):
+        """**變異**:改回 os.path.exists(scripts/land.sh) 判斷 → 這一條紅。"""
+        self.set_config(land=LAND)
+        reason = self.assert_denied(self.guard("git commit -m x"), "land-ticket.sh")
+        self.assertIn(LAND["entry"], reason)
+        self.assertIn(LAND["docs"], reason)
+        self.assertNotIn("land.sh", reason.replace("land-ticket.sh", ""))
+
+    def test_g3_without_the_key_points_at_the_table_and_names_the_key(self):
+        reason = self.assert_denied(self.guard("git commit -m x"), "對照表")
+        self.assertNotIn("scripts/land.sh", reason)
+        self.assertIn("land", reason)
 
 
 class C1C2WhatStaysOpen(GuardSandbox):
@@ -238,7 +272,8 @@ class G1Sync(unittest.TestCase):
         os.makedirs(os.path.join(dest, "board"))
         with open(os.path.join(dest, "board", "config.json"), "w") as handle:
             handle.write('{"rules":{"roles_dir":"docs/roles","models_dir":"docs/roles/model"},'
-                         '"memory":{"applies_to":["memory/model/*.md"]}}')
+                         '"memory":{"applies_to":["memory/model/*.md"]},'
+                         '"land":' + json.dumps(LAND) + '}')
         if settings is not None:
             os.makedirs(os.path.join(dest, ".claude"))
             with open(os.path.join(dest, ".claude", "settings.json"), "w") as handle:
