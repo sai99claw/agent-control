@@ -8,7 +8,7 @@
 ## 第 1 步之外,誰讀什麼(2026-09-21 對齊 `CLAUDE.md` 與 `memory/role/README.md`)
 | | 主線 | 短命角色(開題者 / 實作者 / 驗證者) |
 |---|---|---|
-| `docs/HANDOFF.md` 最後三節 | ✓ | ✗ —— 那是主線的交接 |
+| `docs/HANDOFF.md` 現況(舊的在 `docs/handoff/`) | ✓ | ✗ —— 那是主線的交接 |
 | `event.py tail 20`、`ticket.py list --open` | ✓ | ✗ |
 | 自己那張票 + 票的 `decision_refs` | — | ✓ |
 | `docs/DISPATCH-TEMPLATE.md` | ✓ | ✓ |
@@ -18,6 +18,10 @@
 
 ## 主線
 - **這一節現在由 hook 自動跑**(#39):`.claude/settings.json` 的 SessionStart hook 叫 `scripts/session-hook.sh` → `new-session.sh main <routing.main>`,那一頁在第一個 prompt 之前就在上下文裡;startup / clear 發 `session.start`,resume / compact 只重印;副本裡(`worktree_dir` 底下、`AC_ROLE` 非 main、`AC_SESSION_HOOK=0`)不觸發。
+- 那一頁的**第一段**是「不可違反的」那一節 + 主線角色卡全文 + `memory/role/main.inbox.md` 最後 5 行(#62):
+  compact 後規則已經在上下文最前面,不靠自覺去讀。正本讀 `CLAUDE.md` 那一節;專案讀 sync 產的
+  `<rules.roles_dir>/contract.md`,缺了那一頁會說。票(Draft 只計數)與收件匣各列最多 20 行,
+  沒列的說數字與全文指令;整頁要在 hook 輸出上限 10,000 字元內(`session-hook.sh` 超過就截中間)。
 - 看**終態收件匣** `python3 scripts/inbox.py list`:只有兩種頁(D-032)—— **decision**(要你裁:
   反駁、三輪紅、覆核退回、環境可疑、worker 沒交件 / patch 套不上、land 拒收或紅、關不掉的票)
   與 **done**(整票完成簡報:subject、落地 sha、做了什麼、覆核結論、cost 表)。一頁答四句

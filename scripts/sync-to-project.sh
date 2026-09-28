@@ -144,6 +144,26 @@ copy_dir() {  # $1 = 來源目錄  $2 = 目的目錄  $3 = manifest 前綴
 copy_dir "$HERE/memory/role"  "$ROLES"       ""
 copy_dir "$HERE/memory/model" "$ROLES/model" "model/"
 
+# 契約節(#62):A 的 CLAUDE.md「## 不可違反的」那一節(到下一個 `## `)→ `docs/roles/contract.md`。
+# 專案的主線開場那一頁(new-session.sh)把它印在最前面;與角色卡同一條同步、同一種檔頭、
+# 進同一份 manifest —— 手抄一份到專案的那一天就分岔了(D-026 丙)。
+copy_contract() {
+  body=$(awk '/^## /{ if (p) exit; p = ($0 ~ /^## 不可違反的/) } p' "$HERE/CLAUDE.md" 2>/dev/null || true)
+  if [ -z "$body" ]; then
+    echo "sync: agent-control 的 CLAUDE.md 沒有「## 不可違反的」那一節 —— 不產 contract.md(專案開場那一頁會說它缺了)" >&2
+    return 0
+  fi
+  NEW_LIST="${NEW_LIST}contract.md
+"
+  [ "$DRY" = "--dry-run" ] && { echo "sync: (dry-run) $ROLES/contract.md"; return 0; }
+  {
+    printf '<!-- 由 agent-control %s 的 CLAUDE.md「## 不可違反的」同步產生;請到 agent-control 改,不要改這一份 -->\n' "$SRC_SHA"
+    printf '%s\n' "$body"
+  } > "$ROLES/contract.md"
+  echo "sync: $ROLES/contract.md"
+}
+copy_contract
+
 # 腳本:**不加檔頭**(會踩到 shebang),改在目錄裡留一份 README 說它是產出物。
 copy_scripts() {
   mkdir -p "$CTRL"

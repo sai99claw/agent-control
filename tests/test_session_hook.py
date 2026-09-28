@@ -22,7 +22,8 @@ from control_harness import ROOT, SCRIPTS, TIMEOUT, Sandbox  # noqa: E402
 
 SETTINGS = os.path.join(ROOT, ".claude", "settings.json")
 SOURCES = {"startup", "resume", "clear", "compact", "fork"}
-LIMIT = 16384
+# Claude Code 的 hook 文件:plain stdout 上限 10,000 characters(#62;字元,不是 bytes)。
+LIMIT = 10000
 WORKTREE = "../agent-control-wt"
 
 
@@ -169,26 +170,34 @@ class A5WhereTheModelComesFrom(HookSandbox):
 class A6TheCap(HookSandbox):
 
     def test_a6_a_long_page_is_cut_and_says_how_long_it_was(self):
-        for n in range(300):
-            self.make_ticket(n + 1, subject="開著的第 %d 張:%s" % (n + 1, "撐" * 20))
+        """#62 A7:票、收件匣、事件、git status 都有上限之後,唯一不設上限的是規則與
+        角色卡 —— 撐過上限的是一張長到一萬字的角色卡。截的是中間:開頭的規則與結尾的
+        讀單都要留。
+
+        **變異**:上限量回 bytes → 最後一行的原始長度對不上(這一條紅)。
+        """
+        self.write("CLAUDE.md", "## 不可違反的\n- RULE-MARK 一條規則\n\n## 別的\n")
+        self.write("memory/role/main.md", "# 主線\n" + "長的角色卡一行。\n" * 1300)
         full = self.run_sh("scripts/new-session.sh", "main", "fable", "--no-event")
         self.assertEqual(full.stderr, "", "量原始長度那一趟要乾淨,不然兩邊量的不是同一頁")
-        original = len(full.stdout.encode("utf-8"))
+        original = len(full.stdout)
         self.assertGreater(original, LIMIT, "沙盒沒撐過上限 —— 這一條什麼都沒驗")
 
         done = self.hook("resume")
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertLessEqual(len(done.stdout.encode("utf-8")), LIMIT)
+        self.assertLessEqual(len(done.stdout), LIMIT)
         last = done.stdout.rstrip("\n").splitlines()[-1]
         self.assertIn("截斷", last)
         self.assertIn(str(original), re.findall(r"\d+", last))
+        self.assertIn("RULE-MARK", done.stdout, "開頭的規則被截掉了")
+        self.assertIn("接下來要讀的", done.stdout)
         self.assertIn("memory/role/main.md", done.stdout,
                       "截掉的是中間;「接下來要讀的」是這一頁的目的,要留著")
 
     def test_a6_a_short_page_has_no_cut_line(self):
         done = self.hook("resume")
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertLessEqual(len(done.stdout.encode("utf-8")), LIMIT)
+        self.assertLessEqual(len(done.stdout), LIMIT)
         self.assertNotIn("截斷", done.stdout)
 
 
