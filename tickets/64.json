@@ -1,0 +1,60 @@
+{
+  "id": "64",
+  "subject": "auto-fix 讀票上的 worker.timeout_seconds;claude worker 改 stream-json,逾時被砍時 log 留得下做到哪",
+  "created": "2026-09-29T03:43:57+08:00",
+  "objective": "(1) 票上寫了 worker.timeout_seconds 就用它(票 > board/config.json worker.timeout_seconds > 3600),worker 與 verifier 兩條路都照,逾時訊息印出實際用的秒數與來源;SCHEMA 記這一格。(2) auto-fix 替 claude 命令補的輸出格式從 --output-format json 改成 stream-json(含 claude 要求的 --verbose),worker log 逐行寫入 —— 被砍時 log 不是 0 bytes,看得到砍之前做到哪;cost[] 照舊從最後一行 type=result 取 usage。",
+  "acceptance": [
+    "A1 票的逾時優先(單元,tests/test_auto_fix.py 沙盒,沿用既有假 worker 與 2260 行那組逾時案例):config worker.timeout_seconds=120、票設 worker={\"timeout_seconds\": 3},假 worker sleep 60 → 第 1 輪在約 3 秒被當逾時(rc 124 路徑、inbox 頁與 stderr 的『逾時(3 秒)』含 3 不含 120);stderr 有一行 'auto-fix: 逾時來源=票 3 秒'(config 取值時是 '逾時來源=config <N> 秒',都沒有是 '逾時來源=預設 3600 秒')。反向:config=3、票設 120、假 worker sleep 5 → 不逾時、正常交件。期望值來自沙盒設定。",
+    "A2 沒寫就照舊(單元):票沒有 worker 欄 → 用 config 的值(既有逾時案例照舊綠);票的 worker.timeout_seconds 不是正數(0、負數、字串 'x')→ 不採用、stderr 印一行點名那一格,退回 config 值。",
+    "A3 驗證者同一個逾時(單元):verifier 那條路(auto-fix.sh 約 633 行)用與 worker 同一個已解析的秒數;沙盒票設 3 秒、假 verifier sleep 60 → 驗證者逾時,訊息含 3。",
+    "A4 stream-json(單元):worker.command 是 'claude -p --model opus'(沒指定格式)→ 實際起的命令含 '--output-format stream-json' 與 '--verbose' 各一次;已指定 --output-format json / text 的照用不動(既有 2229 行 text 案例照舊);非 claude 命令不動。假 claude 照真的 claude 認 stream-json:逐行印 {\"type\":\"system\"…}、{\"type\":\"assistant\"…}、最後一行 {\"type\":\"result\",\"usage\":{…}}。期望:cost[] 的 tokens_in/out 等於假 claude 最後一行 usage 的值(從假 claude 的輸出抄,不從被測程式算)。",
+    "A5 被砍也留得下(單元):假 claude 用 stream-json 先印兩行事件(第二行含 'got-this-far')、再 sleep 60;票設逾時 3 秒 → worker-round1.log 大小 > 0 且含 'got-this-far'。",
+    "A6 metrics 認得新形狀(單元,tests/test_metrics.py):worker log 是 stream-json(多行,最後一行 type=result 帶 usage)→ metrics.py line 的 tokens 是已知、數值 = 那行 input+output。",
+    "A7 實跑一次真的 claude(貼輸出進 EVIDENCE):在 $TMPDIR 下跑 'echo \"reply ok\" | claude -p --model opus --output-format stream-json --verbose > x.log; wc -c x.log; tail -1 x.log | python3 -c \"import json,sys;print(json.load(sys.stdin)[\\\"type\\\"])\"' → 貼出位元組數與 'result'。確認 --verbose 是否必要(讀記憶,未實測);不必要就不加,驗收 A4 相應改寫並記在 EVIDENCE。"
+  ],
+  "in_scope": [
+    "scripts/auto-fix.sh",
+    "tickets/SCHEMA.md"
+  ],
+  "out_of_scope": [
+    "../tabby_pool/**",
+    "scripts/land.sh",
+    "scripts/apply.sh",
+    "scripts/review.sh"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "tests/test_auto_fix.py",
+    "tests/control_harness.py",
+    "scripts/metrics.py",
+    "tests/test_metrics.py",
+    "tickets/SCHEMA.md",
+    "board/config.json",
+    "docs/REHEARSAL.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "9e0cf3780af0dd7bf04325cb1127f6aaa37be4c7",
+  "state": "Draft",
+  "state_version": 6,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-032"
+  ],
+  "verify_strings": [
+    "逾時來源=",
+    "got-this-far"
+  ],
+  "outline": "兩個症狀一個入口(auto-fix.sh 起 worker)。已查:WORKER_TIMEOUT 只讀 config(auto-fix.sh:127),票的 worker 欄沒有任何腳本讀,SCHEMA 也沒寫 —— T #675 票設 7200 仍在 3600 砍。T #675 run 20260929-022214-78154 的 worker-round1.log 實測 0 bytes:tee(#57)已逐行寫,但 json 格式 claude 只在結束印一個信封,被砍就什麼都沒有。needs_verifier=false:框架腳本票,案例已逐條列,實作者自證變異紅。建議變異:拿掉票值優先 → A1 紅。",
+  "needs_verifier": false
+}

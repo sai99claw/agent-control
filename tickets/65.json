@@ -1,0 +1,48 @@
+{
+  "id": "65",
+  "subject": "ticket.py verify/close:寫入範圍 glob 掃到主線上的二進位檔(PNG)就整張讀不到;改成不倒、文字檔的命中照算",
+  "created": "2026-09-29T03:44:55+08:00",
+  "objective": "verify_strings 是純字串時,ticket.py verify / close 對主線上符合 allowed_write_paths 的每個檔做 git show;遇到非 UTF-8 的檔(PNG、woff2)不再讓整個指令以『讀不到 #<n> —— utf-8 codec can't decode』倒下,其餘文字檔的命中照數,close 能關。",
+  "acceptance": [
+    "B1 重現與修好(單元,tests/test_ticket.py 或新 tests/test_ticket_65.py 沙盒):沙盒主線 commit 一個 web/icon.png(檔頭位元組 0x89 'PNG' + 任意非 UTF-8 位元組)與 web/app.js(含 NEEDLE-65);票 allowed_write_paths=['web/**']、verify_strings=['NEEDLE-65']。修前:'ticket.py verify <n>' rc 2 且 stderr 含 \"can't decode\"(這一條就是紅的那一條)。修後:rc 0、輸出含 'web/app.js' 的命中、不含 \"can't decode\"。",
+    "B2 close 真的關(單元):同 B1 沙盒,票 state=InReview、帶有效 review;'ticket.py close <n> --landed <主線上那個 merge sha>' → rc 0、票 state=Done。再跑一次同一條指令(模擬 T #674 已被第一次 close 蓋過 review.sha 的半套狀態)→ 不報錯(已 Done 的處理照 close 既有慣例)。",
+    "B3 needle 只在二進位檔裡不算命中(單元):verify_strings 的字串只出現在 PNG 的位元組裡(不在任何文字檔)→ 命中數 0、verify 不過(ok=false),照既有『抓不到』的輸出;不因為跳過或亂碼替換而誤報命中。",
+    "B4 帶路徑的 needle 指到二進位檔(單元):verify_strings=['web/icon.png:NEEDLE-65'] → 不倒、該列命中 0,並在 where 標明那個檔不是文字(例如含『非文字』),不靜默。",
+    "B5 實跑(貼輸出進 EVIDENCE,不改 T 的任何檔):在分支副本上 'AC_ROOT=<T 的根> python3 scripts/ticket.py verify 674' → rc 0、命中 demo/test_browsers.py(T 主線上實測有 1 處);同指令用 main 上舊版 ticket.py 跑一次貼出原本的 \"can't decode byte 0x89\"。不跑 close(close 會寫 T 的票),T 的 close 由主線在同步後自己跑。先確認 AC_ROOT 在 ticket.py 的根解析裡生效(讀 code 推的,未實測)。"
+  ],
+  "in_scope": [
+    "scripts/ticket.py"
+  ],
+  "out_of_scope": [
+    "../tabby_pool/**",
+    "../tabby_pool_wt/**",
+    "scripts/land.sh",
+    "scripts/apply.sh"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/ticket.py",
+    "tests/test_ticket.py",
+    "tests/test_ticket_65.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "9e0cf3780af0dd7bf04325cb1127f6aaa37be4c7",
+  "state": "Draft",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "verify_strings": [
+    "NEEDLE-65"
+  ],
+  "outline": "根因已實測:verify()(ticket.py:1142 起)對純字串 needle 掃主線上符合 allowed_write_paths 的所有檔,git() 用 text=True(ticket.py:195),T #674 的 'demo/web/**' 掃到 demo/web/icons/*.png → UnicodeDecodeError(是 ValueError)→ cmd_close 的 except 印『讀不到 #674』。開題者在 T 上 subprocess git show main:demo/web/icons/icon-192.png text=True 逐字重現同一句 0x89 錯誤。票 JSON 無辜。附帶:close --landed 先 stamp_landed 再 verify,所以 T #674 的 review.sha 已被蓋成 68ba828 而沒關 —— B2 第二次 close 就是這個狀態。同型寫法:verify-case.py:802 也是 text 模式 git show,本票不動。needs_verifier=false:單點修正,實作者自證 B1 修前紅。後續(主線):同步到 T 後跑 close 674 --landed 68ba828。",
+  "needs_verifier": false
+}

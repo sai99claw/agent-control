@@ -42,9 +42,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "942030173271ce5fef193527e23a983afe2443c5",
-  "state": "Draft",
-  "state_version": 9,
+  "base_sha": "9e0cf3780af0dd7bf04325cb1127f6aaa37be4c7",
+  "state": "Running",
+  "state_version": 12,
   "lease": null,
   "retry_limit": 2,
   "verify": {
