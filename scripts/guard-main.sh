@@ -179,20 +179,27 @@ if not rule:
     sys.exit(0)
 summary = " ".join(summary.split())[:200]
 
-if os.path.exists(os.path.join(root, "scripts", "land.sh")):
-    land = ("sh scripts/land.sh <分支…>;票檔 / 文件 / 記憶走 docs 通道 "
-            "sh scripts/land.sh docs \"<訊息>\" <檔…>")
+sys.path.insert(0, here)
+import event  # noqa: E402
+import rules  # noqa: E402
+
+# 落地入口照專案自己宣告的印(#66):`land = {"entry": …, "docs": …}`。不看 scripts/land.sh
+# 在不在 —— 專案可以兩支都有,而那一支不一定是落地入口。
+DOCS = ";票檔 / 文件 / 記憶走 docs 通道 "
+declared = conf.get("land") if isinstance(conf.get("land"), dict) else {}
+entry, docs = (declared.get(k) if isinstance(declared.get(k), str) else "" for k in ("entry", "docs"))
+if entry:
+    land = entry + (DOCS + docs if docs else "")
+elif rules.is_canon(root):
+    land = "sh scripts/land.sh <分支…>" + DOCS + "sh scripts/land.sh docs \"<訊息>\" <檔…>"
 else:
-    land = "專案 CLAUDE.md 對照表的落地入口"
+    land = "專案 CLAUDE.md 對照表的落地入口(board/config.json 缺 land 鍵:land.entry / land.docs)"
 REASONS = {
     "ticket": "擋了主線自寫票面(ticket.py create / set <票面欄>) → 派開題者(Agent)開票或改票面",
     "log": "擋了主線讀 log / task output(%s) → 讀收件匣 python3 %s/inbox.py show <票號>"
            % (summary, ctl),
     "git": "擋了裸 git commit / merge 主線 → 走 %s" % land,
 }
-
-sys.path.insert(0, here)
-import event  # noqa: E402
 
 overridden = prefixed or env_override == "1"
 try:

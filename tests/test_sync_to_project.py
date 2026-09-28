@@ -14,11 +14,15 @@ def sync(dest, *extra):
                           capture_output=True, text=True, timeout=120)
 
 
+LAND_JSON = ('"land":{"entry":"sh scripts/land-ticket.sh <branch>",'
+             '"docs":"sh scripts/land-ticket.sh docs <msg> <files>"}')
+
+
 def write_config(dest):
     os.makedirs(os.path.join(dest, "board"), exist_ok=True)
     with open(os.path.join(dest, "board", "config.json"), "w") as handle:
         handle.write('{"rules":{"roles_dir":"docs/roles","models_dir":"docs/roles/model"},'
-                     '"memory":{"applies_to":["memory/model/*.md"]}}')
+                     '"memory":{"applies_to":["memory/model/*.md"]},' + LAND_JSON + '}')
 
 
 class SyncsTheScripts(unittest.TestCase):
@@ -409,6 +413,27 @@ class SyncToProject(unittest.TestCase):
             for key in ("rules.roles_dir", "rules.models_dir", "memory.applies_to"):
                 self.assertIn(key, r.stderr)
 
+    def test_g4_dry_run_refuses_a_project_missing_land_entry_or_land_docs(self):
+        land = json.loads("{%s}" % LAND_JSON)["land"]
+        for drop in ("entry", "docs"):
+            with self.subTest(drop=drop), tempfile.TemporaryDirectory() as d:
+                write_config(d)
+                path = os.path.join(d, "board", "config.json")
+                with open(path) as handle:
+                    conf = json.load(handle)
+                conf["land"] = {k: v for k, v in land.items() if k != drop}
+                with open(path, "w") as handle:
+                    json.dump(conf, handle)
+                r = sync(d, "--dry-run")
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("缺少必要設定", r.stderr)
+                self.assertIn("land." + drop, r.stderr)
+        with tempfile.TemporaryDirectory() as d:
+            write_config(d)
+            r = sync(d, "--dry-run")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn("land.", r.stderr)
+
     def test_refuses_a_missing_project_dir(self):
         r = subprocess.run(["sh", os.path.join(HERE, "scripts/sync-to-project.sh"), "/nonexistent/x"], capture_output=True, text=True)
         self.assertEqual(r.returncode, 2)
@@ -430,7 +455,8 @@ class TheProjectsOwnMemoryIsNotOurs(unittest.TestCase):
             handle.write(json.dumps(
                 {"rules": {"roles_dir": "docs/roles",
                            "models_dir": "docs/roles/model"},
-                 "memory": {"applies_to": list(applies)}}, ensure_ascii=False))
+                 "memory": {"applies_to": list(applies)},
+                 "land": json.loads("{%s}" % LAND_JSON)["land"]}, ensure_ascii=False))
         # 專案自己寫的那兩個檔 + 上一次同步留下來的那一份同名暫存(這正是「乙原樣」
         # 會踩到的形狀:同名同目錄,下一次同步直接蓋掉)。
         with open(os.path.join(dest, "memory", "role", "main.inbox.md"), "w") as handle:
