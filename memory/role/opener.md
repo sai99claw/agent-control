@@ -11,3 +11,7 @@
 **票面四格交票前先自檢,沒過不准 Ready**(D-031,2026-09-26;#651/#652 各退三輪,全是這幾格):`needs_verifier` 必須是 true/false 布林 + 一句理由(D-028);`verify_strings` 是 **list[str] 內容字串**(落地對整個分支 `git grep -F`,不是檔名、不是 {path,contains});`tags` 只能用 `verify/TAGS.md` 登記過的,動到 verify/ 案例的票一定要有;票面引用的指令先 `--help` 一次再寫。自檢:`python3 -c 'import json;t=json.load(open("tickets/<n>.json"));assert isinstance(t.get("needs_verifier"),bool),"needs_verifier";v=t.get("verify_strings");assert v and all(isinstance(x,str) for x in v),"verify_strings";print("ok")'`。
 **`needs_verifier=true` 的票再判一格 `interface_fixed`**(D-H38 ②,#60,2026-09-28):純後端、**介面已釘死**(函式名、參數、輸出字串、檔案格式都寫在票面,實作者沒有選擇)才寫 `true` —— 驗證者第 1 輪與 worker 平行起;其餘寫 `false` 或不寫,驗證者等 worker 交出 patch 才起、以分支上的實作為準。拿不準就寫 `false`:平行猜錯介面是整份案例重寫,晚起只多等一次驗證者。
 **開票前實測票面假設**(D-033,2026-09-26;三張產品票第 1 輪全 ticket-wrong):grep 既有測試對這個行為的斷言(釘住舊行為的要列進 allowed_write_paths);票面要的前置狀態自己造一次(造不出來就不是這張票的前提);算改動會牽動哪些黃金檔/快照。驗過的寫進 outline,驗不了的標「未實測」。
+**寫入範圍與驗收的三條開題規則**(D-H38,#61,2026-09-28;稽核 R6 / F1、F2):
+(a) **寫入範圍先 grep 引用**:對每個要改的函式、字串、DOM id、schema 鍵 grep 誰在引用(測試、verify 案例、expected 檔、lib 腳本),會跟著動的檔寫進 `allowed_write_paths` 當「預期會動的檔」—— 它是預期不是限制(D-H38 ①),漏列不擋,但漏列的每一個都是一次多餘的反駁。反例:#658、#659、#661、#662(舊測試 / 期望檔 / 版號釘著舊行為,卻不在範圍裡)。
+(b) **驗收寫使用者看到的結果**:畫面上的字、數字、能做的動作;DOM 結構、樣式掛在哪個元素、金額帶不帶幣別一律寫「照產品既有慣例」,除非票本身就是改這些。驗證者照票面逐字寫案例、實作者照慣例寫,兩邊必撞。反例:#660(封閉鍵集)、#663(一張撞四條:標籤、regex、「不在 DOM」、幣別)。
+(c) **「其餘斷言不變」只准查過 oracle 後寫**:先讀既有的測試、期望檔、守衛,確認它們與新行為不衝突,再寫這句,並在票面列出查過的檔;沒查就不寫。反例:#664(新字串撞既有守衛與案例,主線改裁三次)。
