@@ -1,0 +1,56 @@
+{
+  "id": "66",
+  "subject": "guard-main.sh 擋 git commit/merge 時的落地入口改讀 board/config.json 的 land 鍵,不用 scripts/land.sh 存不存在來猜;sync-to-project.sh 要求專案帶這個鍵",
+  "created": "2026-09-29T05:36:09+08:00",
+  "objective": "守衛的『該走哪』照專案自己宣告的落地入口印:board/config.json 新鍵 land = {\"entry\": \"<落地指令>\", \"docs\": \"<docs 通道指令>\"}(兩格都是給人看的字串)。有鍵就印它;沒有鍵時,正本(rules.is_canon() 為真,即 A)印 sh scripts/land.sh 與 land.sh docs;非正本(專案)印『專案 CLAUDE.md 對照表的落地入口』並點名缺 board/config.json 的 land 鍵 —— 不再看 scripts/land.sh 存不存在(T 的 scripts/land.sh 是 D-G101 的多分支串接器,不是落地入口;T 的入口是 scripts/land-ticket.sh)。sync-to-project.sh 把 land.entry / land.docs 列進專案端必要設定。",
+  "acceptance": [
+    "G1 專案 layout(單元,tests/test_guard_main.py 沙盒):沙盒設 rules.roles_dir=docs/roles(非正本)、放 scripts/land.sh 與 scripts/land-ticket.sh 兩支、config land={\"entry\":\"sh scripts/land-ticket.sh <分支…>\",\"docs\":\"sh scripts/land-ticket.sh docs \\\"<訊息>\\\" <檔…>\"};餵 'git commit -m x' → deny,reason 含 'land-ticket.sh',且把 reason 裡的 'land-ticket.sh' 全部拿掉後不再含 'land.sh'(不指 T 的串接器)。期望字串來自沙盒 config。",
+    "G2 正本 layout(單元):A 自己的沙盒(無 rules 設定、無 land 鍵、有 scripts/land.sh)→ reason 含 'sh scripts/land.sh' 與 'land.sh docs'(既有 test_b4_commit_and_merge_point_at_land_sh 照舊綠);正本有 land 鍵時以鍵為準。",
+    "G3 專案缺鍵(單元):非正本沙盒、有 scripts/land.sh、沒有 land 鍵 → reason 不含 'scripts/land.sh',含『對照表』與 'land'(點名缺的鍵),rc 0、仍是 deny。既有 test_b4_without_land_sh_points_at_the_project_table 改寫成這一條的形狀(判準從檔案存在改成鍵與正本)。",
+    "G4 sync 帶過去(單元,tests/test_sync_to_project.py):專案 config 缺 land.entry 或 land.docs → 'sync-to-project.sh <專案> --dry-run' rc 2、stderr 列出 'land.entry' / 'land.docs'(與既有 rules.roles_dir 等必要設定同一種訊息);有這兩格 → 照舊 rc 0。既有同步測試沙盒補上 land 鍵後照舊綠。",
+    "G5 字串不寫死專案名:guard-main.sh 與測試裡不出現下游專案名或絕對路徑(tests/test_no_project_names.py 照舊綠)。"
+  ],
+  "in_scope": [
+    "scripts/guard-main.sh",
+    "scripts/sync-to-project.sh"
+  ],
+  "out_of_scope": [
+    "../tabby_pool/**",
+    "scripts/land.sh",
+    "scripts/apply.sh",
+    "CLAUDE.md"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/guard-main.sh",
+    "tests/test_guard_main.py",
+    "scripts/sync-to-project.sh",
+    "tests/test_sync_to_project.py",
+    "tests/control_harness.py",
+    "board/config.json"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "463d4cf8e4e94b62ffd2862ca3efb4ed0c7a2c68",
+  "state": "Draft",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-021"
+  ],
+  "verify_strings": [
+    "land.entry",
+    "land.docs"
+  ],
+  "outline": "起因:T #676 覆核退回 —— A #63 的 guard-main.sh:182 用 os.path.exists(scripts/land.sh) 判落地入口,T 兩支都有,守衛會把主線指到 D-G101 串接器。已查:A 與 T 的 board/config.json、rules 段都沒有現成的落地入口鍵(gate.rerun_cmd 是閘門,不是落地),故開 land 鍵;sync 不寫專案 config(A 慣例),只在 dry-run 必要設定裡要求它,T 端由 T #676 加。同型未處理:apply.sh:797 收尾那一句寫死 sh scripts/land.sh、sync-to-project.sh:300 的收尾提示也靠檔案存在判斷,本票不動(apply.sh 在 out_of_scope)。needs_verifier=false:窄的腳本票,案例已逐條列,實作者自證變異紅;建議變異:改回 os.path.exists 判斷 → G1 紅。model=opus:A 的 worker.command 就是 opus,窄票不另開 Codex 通道。",
+  "needs_verifier": false
+}
