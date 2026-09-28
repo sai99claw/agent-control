@@ -1047,6 +1047,20 @@ PY
         python3 "$AC/ticket.py" set "$ID" state InReview >/dev/null 2>&1 || true
         read_status
         RUN_ID=$S_RUN
+        # 閘門只有一個真相(#56,D-H38):這一輪的綠寫進票上**同一個** `gate` 欄,sha 是
+        # 分支此刻的頭。以前副本裡的綠只留在狀態檔,land 只認 `gate.rc` 就拒收,主線只剩
+        # `gate --redo` —— 它改了分支 sha,綁在舊 sha 的覆核跟著失效。
+        GATE_SHA=$(git -C "$ROOT" rev-parse -q --verify "$(ticket_branch)^{commit}" 2>/dev/null || echo "")
+        if [ -n "$GATE_SHA" ]; then
+            python3 "$AC/ticket.py" set "$ID" gate "$(python3 -c '
+import datetime, json, sys
+print(json.dumps({"rc": 0, "sha": sys.argv[1], "run_id": sys.argv[2],
+                  "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}))
+' "$GATE_SHA" "$RUN_ID")" >/dev/null 2>&1 \
+                || echo "auto-fix: 票的 gate 欄寫不進去 —— land 會拒收,review.sh 會說沒跑過閘門" >&2
+        else
+            echo "auto-fix: 問不到分支 $(ticket_branch) 的頭 —— 票的 gate 欄不寫" >&2
+        fi
         if [ -n "$NO_REVIEW" ]; then
             echo "auto-fix: 第 $r 輪綠了 —— --no-review,覆核不派,票停在 InReview:sh scripts/review.sh $ID"
         else

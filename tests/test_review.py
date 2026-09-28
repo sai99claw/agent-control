@@ -167,6 +167,51 @@ class ThePassPath(ReviewBase):
             self.assertEqual(json.load(handle)["usage"]["output_tokens"], 42)
 
 
+class ThePacketOnlySaysTheGateRanWhenItDid(ReviewBase):
+    """#56(D-H38):「已對 <sha> 跑過閘門」只在票上 `gate.sha` 等於分支頭時寫。範本以前無條件
+    說「閘門已經對這個 sha 跑過」,而 auto-fix 在副本的綠沒寫回票 —— 覆核者被告知不必看紅榜,
+    那個 sha 其實沒有人跑過(#661)。期望的 sha 由夾具 `git rev-parse t1` 取。"""
+
+    def packet_with_gate(self, gate):
+        if gate is not None:
+            done = self.run_py("scripts/ticket.py", "set", "1", "gate",
+                               json.dumps(gate, ensure_ascii=False))
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.set_reviewer(REVIEWER_PASS)
+        done = self.review()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        with open(self.one("dispatch-reviewer.md"), encoding="utf-8") as handle:
+            return handle.read()
+
+    def assert_not_ran(self, packet):
+        self.assertIn("這個 sha 沒跑過閘門,覆核者要自己看紅榜", packet)
+        self.assertNotIn("已對 %s 跑過閘門" % self.sha, packet)
+        self.assertIsNone(re.search(r"已對 \S+ 跑過閘門", packet), "任何一個 sha 都不准說跑過")
+        self.assertNotIn("閘門已經對這個 sha 跑過", packet,
+                         "範本那一句「閘門已經對這個 sha 跑過」也要拿掉,不然兩句互相矛盾")
+
+    def test_a_gate_on_an_older_sha_says_this_sha_did_not_run(self):
+        """**變異**:比對改成「有 gate 欄就算跑過」(`if gate:`)→ 這一條紅。"""
+        older = self.git("rev-parse", "main").strip()
+        self.assertNotEqual(older, self.sha)
+        packet = self.packet_with_gate({"rc": 0, "sha": older, "run_id": "20260928-100000-1",
+                                        "at": "2026-09-28T10:00:00+08:00"})
+        self.assert_not_ran(packet)
+        self.assertIn(older[:12], packet, "說得出票上那一個 sha 是哪一個")
+
+    def test_a_ticket_with_no_gate_says_this_sha_did_not_run(self):
+        self.assert_not_ran(self.packet_with_gate(None))
+
+    def test_a_gate_on_the_branch_head_keeps_the_packet_as_before(self):
+        """**變異**:比對寫反(`!=`)→ 這一條與上面兩條一起紅。"""
+        packet = self.packet_with_gate({"rc": 0, "sha": self.sha, "run_id": "20260928-100000-1",
+                                        "at": "2026-09-28T10:00:00+08:00"})
+        self.assertIn("已對 %s 跑過閘門" % self.sha, packet)
+        self.assertNotIn("沒跑過閘門", packet)
+        self.assertIn("閘門已經對這個 sha 跑過", packet, "範本原文照舊")
+        self.assertEqual(re.findall(r"@[A-Z_]+@", packet), [], "範本的佔位沒填完")
+
+
 class TheReviewerCostGoesOnTheTicket(ReviewBase):
     """#49 A5 / A3:覆核者回來之後 `ticket.py cost --role reviewer` 記一筆;期望的數字是
     夾具信封裡寫死的那幾個(`REVIEWER_PASS_ENVELOPE`),不從 ticket.py 算回去。"""

@@ -1399,6 +1399,36 @@ class TheWholeLoop(AutoFixBase):
         self.assertEqual(review.get("sha"), self.git("rev-parse", "t1").strip())
         self.assertTrue(os.path.isdir(wt))
 
+    def test_a_green_second_round_writes_the_gate_on_the_ticket_at_the_branch_head(self):
+        """#56(D-H38):第 2 輪在副本跑綠 → 票上**同一個** `gate` 欄 rc 是整數 0、sha 是分支頭,
+        下游 land 的 gate 檢查(`type(gate["rc"]) is int and == 0`,land-ticket.sh `gate_rc`)
+        放行;覆核派工文說「已對 <那個 sha> 跑過閘門」。期望 sha 由夾具 `git rev-parse t1` 取。
+
+        **變異**:拿掉 auto-fix 綠分支寫 `gate` 那一段 → 這一條紅(票上沒有 gate)。"""
+        self.set_worker(WORKER_FIXES)
+        self.set_reviewer(REVIEWER_PASS)
+        self.ticket_ready()
+        self.first_round()
+        done = self.auto_fix()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.worker_rounds(), ["worker ran round 2"])
+        head = self.git("rev-parse", "t1").strip()
+        gate = self.load_ticket("1").get("gate")
+        self.assertIsInstance(gate, dict, "第 2 輪綠了,票上沒有 gate 欄")
+        self.assertIs(type(gate.get("rc")), int, "rc 要是整數 —— land 認的是 JSON 型別")
+        self.assertEqual(gate["rc"], 0)
+        self.assertEqual(gate.get("sha"), head, "gate.sha 是這一輪分支的頭")
+        self.assertTrue(gate.get("run_id"))
+        self.assertTrue(os.path.isdir(os.path.join(self.repo, "reports", "t1", gate["run_id"])),
+                        "run_id 指得到那一輪的狀態檔目錄")
+        self.assertTrue(gate.get("at"))
+        packets = self.result_files("dispatch-reviewer.md")
+        self.assertEqual(len(packets), 1, packets)
+        with open(packets[0], encoding="utf-8") as handle:
+            packet = handle.read()
+        self.assertIn("已對 %s 跑過閘門" % head, packet)
+        self.assertNotIn("沒跑過閘門", packet)
+
     def test_no_review_leaves_the_review_to_a_human(self):
         """`--no-review`:綠了停在 InReview,reviewer 不被叫、auto-fix 不准自己蓋覆核那一格。"""
         self.set_worker(WORKER_FIXES)
