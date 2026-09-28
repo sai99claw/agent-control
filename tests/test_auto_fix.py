@@ -22,6 +22,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -870,16 +871,30 @@ class TheFirstRoundStartsFromReady(AutoFixBase):
         self.git("push", "-q", "origin", "main")
         return row
 
+    def ready_on_main_head(self):
+        """一張 Ready 票,base_sha 就是主線的頭 —— #57 (d) 換 base 那一手不會動它。"""
+        self.set_worker(WORKER_FIRST_ROUND
+                        .replace("@TICKET@", os.path.join(self.repo, "tickets", "1.json"))
+                        .replace("@MARK@", self.mark()))
+        row = self.ticket_ready(subject="第 1 輪由 auto-fix 起")
+        # 只改工作樹上的票檔、不 commit:commit 一次主線就又往前走一步。
+        row["base_sha"] = self.git("rev-parse", "main").strip()
+        self.write("tickets/1.json", json.dumps(row, ensure_ascii=False, indent=2) + "\n")
+        return row
+
     def test_a_ready_ticket_with_no_status_file_starts_round_one(self):
         """A1:不再 rc=2;派工文與 `--dry-run --round 1` 給人看的是**同一份**;副本在
         `<WTBASE>/fix-t1/round1`,`base/` 是票的 base_sha 那一版(分支 t1 還不存在)。
 
+        #57 (d) 之後,base_sha 落後主線的票在第 1 輪起跑時會被換成主線的頭(那一半由
+        `TheFirstRoundBaseFollowsMain` 問);這一條改用 base_sha 就是主線頭的票,問的仍是
+        「副本 base/ 取自票的 base_sha」與「派工文與 dry-run 同一份」。
+
         **變異 M1**:把「無狀態檔 ⇒ r=1」那條分支拿掉(退回 exit 2)→ 紅。
         **變異 M5**:`round_once` 第 1 輪改用第 2 輪起那一份派工文 → 派工文那一段紅。
-        **變異 M6**:`S_BASE` 改取主線的頭 → `base/` 那一段紅。
         **變異 M9**:拿掉「沒有歸因」那一格的 `S_RUN` 前提 → 紅(空紅榜被讀成 rc=4)。
         """
-        row = self.ready_and_main_moved_on()
+        row = self.ready_on_main_head()
         self.assertFalse(os.path.exists(os.path.join(self.repo, "reports", "t1")),
                          "前提:這張票一個狀態檔都沒有")
         self.assertEqual(self.git("branch", "--list", "t1").strip(), "",
@@ -906,11 +921,8 @@ class TheFirstRoundStartsFromReady(AutoFixBase):
 
         saw = self.worker_saw()
         self.assertEqual(saw["work"], self.fix_dir())
-        expected = self.git("show", "%s:README" % row["base_sha"])
-        self.assertNotEqual(expected, self.git("show", "main:README"),
-                            "前提:主線已經離開票的 base_sha")
-        self.assertEqual(saw["base_readme"], expected,
-                         "副本 base/ 要是票的 base_sha 那一版,不是主線的頭")
+        self.assertEqual(saw["base_readme"], self.git("show", "%s:README" % row["base_sha"]),
+                         "副本 base/ 要是票的 base_sha 那一版")
 
     def test_round_one_is_announced_runs_as_running_and_stops_awaiting_review(self):
         """A2:`ticket.attempt.start attempt=1` 由 auto-fix 發(只發一次);worker 跑的
@@ -1878,7 +1890,7 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
 
         **變異**:`verifier_packet` 少填一格(拿掉 @BASE@)→ 「沒有沒填的佔位」紅。
         """
-        row = self.arm(needs_verifier=True)
+        self.arm(needs_verifier=True)
         shown = self.auto_fix("--dry-run", "--round", "1")
         self.assertEqual(shown.returncode, 0, shown.stdout + shown.stderr)
         self.assertIn("dispatch-round1.md", shown.stderr)
@@ -1895,11 +1907,14 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
             packet = handle.read()
         self.assertIn("role=verifier", packet)
         self.assertIn("#1", packet)
-        self.assertIn(row["base_sha"], packet)
+        # 票的 base_sha **現況**(#57 (d):開票那個 commit 讓它落後主線一步,第 1 輪起跑時
+        # 換成主線的頭);驗證者副本與派工文跟著票走,不是跟著開票當下的快照。
+        base = self.load_ticket("1")["base_sha"]
+        self.assertIn(base, packet)
         self.assertIn(os.path.join(self.vfix(), "work"), packet)
         self.assertIn(os.path.join(self.repo, "tickets", "1.json"), packet)
         self.assertIn("auto-fix.sh(交檔即回報", packet)
-        self.assertIn("verify-case.py red 1 --ref %s" % row["base_sha"], packet)
+        self.assertIn("verify-case.py red 1 --ref %s" % base, packet)
         # 規則包在範本之前,它自己的說明文字裡就寫著 `<票號>` 當通稱 —— 量的是範本那一段。
         self.assertIn("# 派工:驗證者 —— #1 第 1 輪", packet)
         filled = packet.split("# 派工:驗證者", 1)[1]
@@ -1958,6 +1973,187 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
         self.assertEqual([row.get("reason") for row in failed], ["verifier-no-patch"])
         self.assertFalse(self.git("branch", "--list", "t1").strip(),
                          "沒有案例就不套、不量綠")
+
+
+# 假 worker(#57 b):在 work/ 改了一個檔、印一行,然後卡住直到被砍。印的那一行走 Python
+# 的 print —— 不接 tty 時是區塊緩衝,只寫進 worker 自己的 stdout 的話,被砍就跟著消失。
+# Python 是 `sh` 的**子行程**(不 exec):只砍 `sh` 那一層的話它還活著,@PIDF@ 記它的 pid。
+WORKER_HANGS = """#!/bin/sh
+cd "$AC_WORK"
+mkdir -p work/tests
+echo "half of the fix" > work/tests/half.py
+python3 -c "import os, time; open('@PIDF@', 'w').write(str(os.getpid())); print('worker got this far before the timeout'); time.sleep(60)"
+"""
+
+# 兩條紅(#57 c):派工文要逐條帶,不是只帶第一條。
+RED_LOG_TWO = RED_LOG.replace(
+    "Ran 1 test in 0.001s\n\nFAILED (failures=1)",
+    """======================================================================
+FAIL: test_other (test_thing.T.test_other)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/sandbox/tests/test_thing.py", line 9, in test_other
+    self.assertEqual(3, 4, "第二條紅")
+AssertionError: 3 != 4 : 第二條紅
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.001s
+
+FAILED (failures=2)""")
+
+
+class ATimedOutWorkerLeavesItsWorkBehind(AutoFixBase):
+    """#57 (b):worker 逾時 —— 副本不收、log 邊跑邊寫、work/ 的半成品存成 patch-partial。
+
+    以前逾時與「沒交 patch」同一條路:副本照收、log 是 worker 的 stdout 本身(被砍時
+    緩衝裡的全丟),做了一小時的東西與什麼都沒做長得一樣。
+    """
+
+    def test_the_copy_the_log_and_a_partial_patch_survive_the_timeout(self):
+        """**變異 M1**:逾時那一段拿掉(退回走「沒交 patch」)→ 副本被收、沒有 partial,紅。
+        **變異 M2**:worker 的環境不帶 PYTHONUNBUFFERED、log 不 tee → log 是空的,紅。
+        **變異 M3**:逾時只砍 `sh` 那一層、不砍群組 → 孫行程拿著 pipe,tee 等不到 EOF,
+        log / rc 那一格紅或整條逾時。"""
+        pidf = os.path.join(self.home, "hung-worker.pid")
+        self.set_worker(WORKER_HANGS.replace("@PIDF@", pidf))
+        conf = json.loads(self.read("board/config.json"))
+        conf["worker"]["timeout_seconds"] = 3
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        self.ticket_ready()
+        self.status(1, RED_LOG)
+
+        done = self.auto_fix()
+
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        fix = os.path.join(self.home, "repo-wt", "fix-t1", "round2")
+        for sub in ("work", "base"):
+            self.assertTrue(os.path.isdir(os.path.join(fix, sub)),
+                            "逾時的副本 %s/ 被收掉了" % sub)
+        run_dir = os.path.join(self.repo, "reports", "t1", "20260921-100000-1")
+        with open(os.path.join(run_dir, "worker-round2.log"), encoding="utf-8") as handle:
+            self.assertIn("worker got this far before the timeout", handle.read())
+        with open(os.path.join(run_dir, "patch-partial-round2.diff"), encoding="utf-8") as handle:
+            partial = handle.read()
+        self.assertIn("+++ work/tests/half.py", partial)
+        self.assertIn("+half of the fix", partial)
+        pages = self.inbox_rows()
+        self.assertEqual(len(pages), 1, pages)
+        self.assertIn("逾時", self.read(pages[0]["page"]))
+        self.assertEqual(self.load_ticket("1")["state"], "Blocked")
+        failed = [row for row in self.events() if row["kind"] == "ticket.attempt.failed"]
+        self.assertEqual([row.get("reason") for row in failed], ["timeout"])
+        with open(pidf, encoding="utf-8") as handle:
+            hung = int(handle.read())
+        self.addCleanup(self.reap, hung)
+        self.assertFalse(self.alive(hung), "逾時要砍 worker 整棵,孫行程 %d 還活著" % hung)
+
+    @staticmethod
+    def alive(pid):
+        for _ in range(20):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return False
+            time.sleep(0.1)
+        return True
+
+    @staticmethod
+    def reap(pid):
+        try:
+            os.kill(pid, 9)
+        except ProcessLookupError:
+            pass
+
+
+class TheNextRoundCarriesTheRulings(AutoFixBase):
+    """#57 (c):下一輪的派工文帶齊上一輪紅榜、覆核退回的理由、主線對每條反駁的處置。"""
+
+    def test_the_round_two_packet_has_the_red_list_the_review_fail_and_the_ruling(self):
+        """**變異 M1**:派工文那一段 `objections[]` 拿掉 → X / Y 不在,紅。
+        **變異 M2**:紅榜只印第一條 → test_other 不在,紅。"""
+        self.set_worker(WORKER_NEVER)
+        ruling = "改走 status.py 既有的 failures 解析,不要自己 grep"
+        review_body = "patch 把 gate.log 當成交付物一起 commit 了"
+        self.ticket_ready()
+        self.status(1, RED_LOG_TWO)
+        # 覆核退回與主線裁示都在閘門**之後**才進票 —— 狀態檔裡的票面快照沒有它們。
+        rows = [{"category": "blocking", "body": review_body, "owner": "reviewer@fable",
+                 "blocking": True, "evidence": "reports/t1/20260921-090000-1/REVIEW.md",
+                 "disposition": "accepted", "follow_up": ruling}]
+        done = self.run_py("scripts/ticket.py", "set", "1", "objections",
+                           json.dumps(rows, ensure_ascii=False))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        failures = json.loads(self.read(os.path.join(
+            "reports", "t1", "20260921-100000-1", "status.json")))["failures"]
+        self.assertEqual(len(failures), 2, "前提:上一輪紅榜兩條")
+
+        done = self.auto_fix("--dry-run")
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        packet = self.read(os.path.join("reports", "t1", "20260921-100000-1",
+                                        "dispatch-round2.md"))
+        for row in failures:
+            self.assertIn(row["case"], packet)
+        self.assertIn(review_body, packet, "覆核退回的理由")
+        self.assertIn(ruling, packet, "主線裁示 follow_up")
+        self.assertIn("accepted", packet, "處置")
+
+
+class TheFirstRoundBaseFollowsMain(AutoFixBase):
+    """#57 (d):第 1 輪起跑時票的 base_sha 落後主線、而且還沒有分支 ⇒ 換成主線的頭。
+
+    `apply.sh` 從主線開分支;副本卻從舊 base_sha 展開的話,worker 對著舊樹寫,
+    `git apply --check` 在主線上整輪停住。
+    """
+
+    def mark(self):
+        return os.path.join(self.home, "worker-saw.json")
+
+    def ready_and_main_moved_on(self):
+        self.set_worker(WORKER_FIRST_ROUND
+                        .replace("@TICKET@", os.path.join(self.repo, "tickets", "1.json"))
+                        .replace("@MARK@", self.mark()))
+        row = self.ticket_ready()
+        self.write("README", "主線在開票之後又走了一步\n")
+        self.git("commit", "-q", "-am", "主線往前走")
+        self.git("push", "-q", "origin", "main")
+        self.assertNotEqual(row["base_sha"], self.git("rev-parse", "main").strip(),
+                            "前提:主線已經離開票的 base_sha")
+        return row
+
+    def base_sha_events(self):
+        return [row for row in self.events()
+                if row["kind"] == "ticket.state" and row.get("field") == "base_sha"]
+
+    def test_a_stale_base_with_no_branch_moves_to_main_head(self):
+        """**變異 M1**:換 base 那一段拿掉 → 副本 base/ 是舊 README、票沒改,紅。
+        **變異 M2**:換了票但不改 `T_BASE`(副本照舊)→ base/ 那一格紅。"""
+        self.ready_and_main_moved_on()
+        head = self.git("rev-parse", "main").strip()
+
+        done = self.auto_fix("--no-review")
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        with open(self.mark(), encoding="utf-8") as handle:
+            saw = json.load(handle)
+        self.assertEqual(saw["base_readme"], self.git("show", "%s:README" % head),
+                         "副本 base/ 要是主線的頭")
+        self.assertEqual(self.load_ticket("1")["base_sha"], head)
+        moved = self.base_sha_events()
+        self.assertEqual(len(moved), 1, moved)
+        self.assertEqual(json.loads(moved[0]["to"]), head)
+
+    def test_a_ticket_that_already_has_a_branch_keeps_its_base(self):
+        """**變異 M3**:拿掉「分支已存在」那一格 → 票的 base_sha 被換掉,紅。"""
+        row = self.ready_and_main_moved_on()
+        self.git("branch", "t1", row["base_sha"])
+        self.set_worker(WORKER_NEVER)
+
+        done = self.auto_fix()
+
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["base_sha"], row["base_sha"])
+        self.assertEqual(self.base_sha_events(), [])
 
 
 if __name__ == "__main__":

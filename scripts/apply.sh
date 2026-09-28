@@ -508,6 +508,11 @@ if [ ! -d "$WT" ]; then
 else
     echo "apply: 沿用副本 $WT"
 fi
+# 閘門的殘留(#57):第 2 輪起沿用同一個 worktree,上一輪閘門寫的 `gate.log*`(未追蹤)
+# 還躺在那裡。它們不是 patch 的改動 —— 不算越界、不進 commit。清單在套 patch **之前**取,
+# patch 自己新增的同名檔因此不會被當成殘留。
+RESIDUE=$(git -C "$WT" ls-files --others --exclude-standard -- 'gate.log*')
+[ -z "$RESIDUE" ] || echo "apply: 略過上一輪閘門的殘留:$(echo $RESIDUE)"
 
 # 3. 預檢。不過就**不要套**:套一半的工作樹比沒套更難收。
 if ! git -C "$WT" apply -p1 --check "$PATCH" 2>/tmp/ac-apply-$$.err; then
@@ -546,9 +551,10 @@ fi
 
 # 5. 寫入範圍。排順序的人就是拿這一格判平行的(`docs/DESIGN.md` §10),所以越界不只是
 #    「改了不該改的檔」,是**排順序當時算出來的那張衝突圖已經不成立**。
-OUT=$(python3 - "$ROOT" "$WT" "$TF" <<'PY'
+OUT=$(python3 - "$ROOT" "$WT" "$TF" "$RESIDUE" <<'PY'
 import json, os, subprocess, sys
-root, wt, path = sys.argv[1:4]
+root, wt, path, residue = sys.argv[1:5]
+residue = set(residue.splitlines())
 sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import ticket as ticket_mod
 try:
@@ -563,6 +569,8 @@ for item in done.stdout.split("\0"):
     if len(item) < 4:
         continue
     name = item[3:]
+    if item.startswith("?? ") and name in residue:
+        continue
     if name and not ticket_mod.matches_any(name, globs):
         print(name)
 PY
@@ -630,6 +638,9 @@ except (OSError, ValueError):
 PY
 )
 git -C "$WT" add -A || die 2 "git add 失敗"
+for name in $RESIDUE; do
+    git -C "$WT" reset -q -- "$name" || die 2 "git reset $name 失敗(閘門殘留退不出 index)"
+done
 if git -C "$WT" diff --cached --quiet; then
     die 4 "套完之後工作樹沒有任何改動 —— 這份 patch 等於什麼都沒做"
 fi
