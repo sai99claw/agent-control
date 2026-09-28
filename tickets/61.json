@@ -1,0 +1,46 @@
+{
+  "id": "61",
+  "subject": "開題規則:寫入範圍先 grep 引用;驗收寫使用者看到的結果,不寫 DOM/樣式/幣別格式;不寫「其餘斷言不變」除非查過 oracle",
+  "created": "2026-09-28T13:39:23+08:00",
+  "objective": "稽核 R6(F1/F2)落到開題者角色卡、SCHEMA 措辭、DISPATCH-TEMPLATE:(a) 開票時對每個要改的函式/字串/DOM id/schema 鍵 grep 誰在引用(測試、verify 案例、expected、lib 腳本),把會跟著動的檔寫進 allowed_write_paths 當「預期會動的檔」(D-H38 ①:它是預期不是限制,漏列不擋);(b) acceptance 寫「使用者看到的結果」,DOM 結構、樣式掛哪個元素、金額是否帶幣別一律寫「照產品既有慣例」,除非票本身就是改這些;(c) 「其餘斷言不變」只准在查過既有 oracle 與新行為不衝突後寫,並列出查過的檔。附 tabby_pool #658–#664 的七條反例(引票號,不抄內文)。",
+  "acceptance": [
+    "memory/role/opener.md 含 (a)(b)(c) 三條與反例票號",
+    "tickets/SCHEMA.md acceptance 一格的說明含「使用者看到的結果」與「照產品既有慣例」",
+    "docs/DISPATCH-TEMPLATE.md 對應段落更新;tests/test_dispatch_template.py、test_no_project_names.py 綠"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "memory/role/opener.md",
+    "tickets/SCHEMA.md",
+    "docs/DISPATCH-TEMPLATE.md",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "sonnet",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "434d3181fdf4fdbe21febb309680340e706f18f2",
+  "state": "Ready",
+  "state_version": 4,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-H38"
+  ],
+  "verify_strings": [
+    {
+      "path": "memory/role/opener.md",
+      "contains": "照產品既有慣例"
+    }
+  ],
+  "needs_verifier": false,
+  "outline": "needs_verifier=false:框架腳本票,tests/ 裡的單元測試就是驗收,實作者自證變異紅(依 A #43/#48 慣例)。稽核來源:tabby_pool docs/review/20260928-flow-waste-audit.md;裁示 D-H38。"
+}

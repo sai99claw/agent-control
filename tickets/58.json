@@ -1,0 +1,45 @@
+{
+  "id": "58",
+  "subject": "cost[] 量得到 headless worker/verifier 的 token:auto-fix 用 --output-format json 收信封",
+  "created": "2026-09-28T13:39:23+08:00",
+  "objective": "auto-fix.sh 起 worker/verifier 的 claude -p 帶 --output-format json(或 stream-json 邊 tee 邊留最後信封),結束後 ticket.py cost --from-envelope 填 tokens_in/out/cache;信封讀不到時 cost 列的 note 寫原因。稽核 R9(F8):六張票 worker/verifier tokens 全 null。",
+  "acceptance": [
+    "tests:假 claude 輸出 JSON 信封 → 票 cost[] worker 與 verifier 列的 tokens_out 非 null",
+    "tests:信封缺 → tokens 記 null 且該列 note 含原因字樣;worker 的交件(patch/EVIDENCE)不受輸出格式影響",
+    "既有 tests/test_auto_fix.py、test_ticket.py 綠"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/ticket.py",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "sonnet",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "434d3181fdf4fdbe21febb309680340e706f18f2",
+  "state": "Ready",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-H38"
+  ],
+  "verify_strings": [
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "--output-format"
+    }
+  ],
+  "needs_verifier": false,
+  "outline": "needs_verifier=false:框架腳本票,tests/ 裡的單元測試就是驗收,實作者自證變異紅(依 A #43/#48 慣例)。稽核來源:tabby_pool docs/review/20260928-flow-waste-audit.md;裁示 D-H38。"
+}

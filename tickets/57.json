@@ -1,0 +1,49 @@
+{
+  "id": "57",
+  "subject": "auto-fix 韌性:後續輪 apply 忽略閘門殘留 gate.log*;worker 逾時保留副本、即時 tee 輸出、留半成品 patch;下一輪派工文帶齊紅榜+覆核反駁+主線裁示;第 1 輪 base 落後 main 自動換",
+  "created": "2026-09-28T13:39:23+08:00",
+  "objective": "四個實證缺口一次修(稽核 R2/R5,tabby_pool HANDOFF 洞 7/8/10/11):(a) 後續輪 apply 沿用閘門 worktree 時,未追蹤的 gate.log* 不算越界;(b) worker 逾時:副本不收、worker-roundN.log 即時 tee(不是結束才寫)、work/ 的 git diff 存成 patch-partial-roundN.diff,收件匣頁寫明;(c) 任何下一輪的派工文包含:上一輪紅榜、覆核 fail 的反駁、票 objections[] 每條的 disposition 與 follow_up(主線裁示);(d) 第 1 輪起跑時票 base_sha 是 main 的祖先且票還沒有分支/patch → 自動改成 main HEAD 並發事件。",
+  "acceptance": [
+    "tests:worktree 有未追蹤 gate.log.verify-check → 第 2 輪 apply rc==0",
+    "tests:假 worker 超時 → 副本目錄仍在、worker-roundN.log 非空(超時前的輸出)、patch-partial-roundN.diff 存在且含 work/ 的改動、inbox 頁含「逾時」",
+    "tests:票有 objections[] {disposition:accepted, follow_up:X} 與 review verdict fail body Y → 第 2 輪 dispatch-roundN.md 含 X 與 Y 與上一輪紅榜每條",
+    "tests:票 base_sha 落後 main 且無分支 → 第 1 輪副本 base = main HEAD,票 base_sha 改成 main HEAD,events 有 base_sha 事件;票已有分支 → 不動"
+  ],
+  "in_scope": [],
+  "out_of_scope": [
+    "review.sh;land.sh"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/apply.sh",
+    "scripts/inbox.py",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "434d3181fdf4fdbe21febb309680340e706f18f2",
+  "state": "Ready",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-H38"
+  ],
+  "verify_strings": [
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "patch-partial"
+    }
+  ],
+  "needs_verifier": false,
+  "outline": "needs_verifier=false:框架腳本票,tests/ 裡的單元測試就是驗收,實作者自證變異紅(依 A #43/#48 慣例)。稽核來源:tabby_pool docs/review/20260928-flow-waste-audit.md;裁示 D-H38。"
+}

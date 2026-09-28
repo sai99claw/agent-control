@@ -1,0 +1,51 @@
+{
+  "id": "59",
+  "subject": "寫入範圍改成「白名單只是建議、黑名單才擋」:allowed_write_paths 用於排平行與提醒覆核者,越出只記錄不擋;只有票的 out_of_scope 與 config 的 protected_paths 硬擋",
+  "created": "2026-09-28T13:39:23+08:00",
+  "objective": "使用者 2026-09-28 裁示(D-H38 ①,取代兩層方案):開票不再限制實作者只能改哪些檔。allowed_write_paths 保留但降為「預期會動的檔」——排順序的人拿它判平行、覆核者拿它對照;apply.sh/land 對越出白名單的檔不再 rc=5,而是列進 result json 的 extra_paths 與覆核派工文的「白名單外改動:逐檔確認與票面目標相關、測試沒改弱(斷言數不減、刪案例要有票面理由),無關或改弱 = fail」段。硬擋只剩兩種:票的 out_of_scope 明列的路徑(glob)、board/config.json 的 protected_paths(專案自訂;tabby_pool 預設 docs/DECISIONS.md、scripts/build.sh、scripts/deploy-prod.sh、demo/data/**)。反駁類別 paths-only 廢除;實作者角色卡改成「要改就改、EVIDENCE 列出白名單外的每個檔與理由」。稽核 docs/review/20260928-flow-waste-audit.md R3/R4(tabby_pool)。",
+  "acceptance": [
+    "tests:改動含 allowed_write_paths 外、且不在 out_of_scope/protected_paths 的檔 → apply rc==0,result.extra_paths 列出該檔",
+    "tests:改動命中票 out_of_scope 或 config protected_paths → apply rc==5,訊息點名該檔與擋它的是哪一格",
+    "tests:有 extra_paths → dispatch-reviewer.md 含「白名單外改動」段與每個檔名;沒有 → 沒這段",
+    "tests:config 沒有 protected_paths、票沒有 out_of_scope → 任何檔都不擋(只記錄)",
+    "memory/role/implementer.md 有「白名單外的檔要改就改、EVIDENCE 列出」一句且刪掉 paths-only 反駁;tickets/SCHEMA.md 的 allowed_write_paths 說明改成「預期會動的檔,不是限制」並記 protected_paths 來自 board/config.json"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/apply.sh",
+    "scripts/review.sh",
+    "scripts/auto-fix.sh",
+    "memory/role/implementer.md",
+    "tickets/SCHEMA.md",
+    "board/*",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "434d3181fdf4fdbe21febb309680340e706f18f2",
+  "state": "Ready",
+  "state_version": 7,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-H38"
+  ],
+  "verify_strings": [
+    {
+      "path": "scripts/apply.sh",
+      "contains": "extra_paths"
+    }
+  ],
+  "needs_verifier": false,
+  "outline": "needs_verifier=false:框架腳本票,tests/ 裡的單元測試就是驗收,實作者自證變異紅(依 A #43/#48 慣例)。稽核來源:tabby_pool docs/review/20260928-flow-waste-audit.md;裁示 D-H38。"
+}

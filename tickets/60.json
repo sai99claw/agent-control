@@ -1,0 +1,48 @@
+{
+  "id": "60",
+  "subject": "驗證者預設不與實作者平行:票 interface_fixed=true 才第 1 輪並派,否則等 worker 第 1 輪 patch 出來再派",
+  "created": "2026-09-28T13:39:23+08:00",
+  "objective": "主線裁示(D-H38 ②,稽核 R7/F6):SCHEMA 新增 interface_fixed(bool,開題者寫;純後端/介面已釘死才 true)。auto-fix 第 1 輪:interface_fixed=true → 照現在與 worker 平行起驗證者;false 或缺 → worker 交出 patch-round1 後才起驗證者,驗證者派工文多一行「介面以分支上的實作為準,票面寫法與實作衝突時照實作、在 EVIDENCE 記一行」。#51 的平行規則改成有條件。",
+  "acceptance": [
+    "tests:interface_fixed=true → 驗證者與 worker 同時起(現行行為)",
+    "tests:interface_fixed 缺或 false → 驗證者在 patch-round1.diff 出現之後才起,派工文含「以分支上的實作為準」",
+    "tests:worker 第 1 輪反駁/沒交 → 驗證者不起,inbox 頁寫明;SCHEMA 與 memory/role/opener.md 記欄位與判準"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/ticket.py",
+    "tickets/SCHEMA.md",
+    "memory/role/opener.md",
+    "memory/role/verifier.md",
+    "tests/*"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "434d3181fdf4fdbe21febb309680340e706f18f2",
+  "state": "Ready",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-H38"
+  ],
+  "verify_strings": [
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "interface_fixed"
+    }
+  ],
+  "needs_verifier": false,
+  "outline": "needs_verifier=false:框架腳本票,tests/ 裡的單元測試就是驗收,實作者自證變異紅(依 A #43/#48 慣例)。稽核來源:tabby_pool docs/review/20260928-flow-waste-audit.md;裁示 D-H38。"
+}

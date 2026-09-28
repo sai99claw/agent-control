@@ -1,0 +1,75 @@
+{
+  "id": "56",
+  "subject": "auto-fix 後續輪的綠寫回票的 gate 欄(閘門只有一個真相);review.sh 只在 gate.sha 等於分支 HEAD 時才說「已跑過閘門」",
+  "created": "2026-09-28T13:39:23+08:00",
+  "objective": "auto-fix.sh 任一輪在副本跑綠後,票的 gate 欄(rc/sha/run_id/at)與專案閘門寫的形狀一致且 sha 是該輪分支 HEAD,land 不再拒收、主線不必 gate --redo;review.sh 派工文的「已對 <sha> 跑過閘門」只在票 gate.sha == 分支 HEAD 時寫,否則寫「這個 sha 沒跑過閘門,覆核者要自己看紅榜」。稽核 docs/review/20260928-flow-waste-audit.md(tabby_pool)R1(F4)。",
+  "acceptance": [
+    "tests:auto-fix 第 2 輪綠 → 票 gate.rc==0 且 gate.sha == 分支 HEAD,land 的 gate 檢查放行",
+    "tests:票 gate.sha 與分支 HEAD 不同 → review.sh 派工文含「沒跑過閘門」且不含「已對 <sha> 跑過閘門」",
+    "tests:gate.sha 相同 → 派工文照舊;既有 tests/test_auto_fix.py、test_review.py、test_land.py 全綠"
+  ],
+  "in_scope": [],
+  "out_of_scope": [
+    "gate.sh 本身的判定"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/review.sh",
+    "scripts/land.sh",
+    "tests/*",
+    "scripts/gate.sh"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "434d3181fdf4fdbe21febb309680340e706f18f2",
+  "state": "Blocked",
+  "state_version": 9,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-H38"
+  ],
+  "verify_strings": [
+    {
+      "path": "scripts/review.sh",
+      "contains": "沒跑過閘門"
+    }
+  ],
+  "needs_verifier": false,
+  "outline": "needs_verifier=false:框架腳本票,tests/ 裡的單元測試就是驗收,實作者自證變異紅(依 A #43/#48 慣例)。稽核來源:tabby_pool docs/review/20260928-flow-waste-audit.md;裁示 D-H38。",
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 90,
+      "tokens_out": 28659,
+      "cache_write": 102546,
+      "cache_read": 3301733,
+      "wall_seconds": 1182,
+      "by": "auto-fix.sh",
+      "at": "2026-09-28T13:59:57+08:00"
+    }
+  ],
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "this repo's own gate.sh --branch --ticket (hand-run round 1, which calls review.sh via review_after_green) never writes the ticket gate field and gate.sh is outside allowed_write_paths, so after this patch every review packet from that path truthfully says the sha has not run the gate even though it just did; mainline must decide whether a follow-up ticket makes gate.sh write the same gate field.",
+      "evidence": "../agent-control-wt/fix-t56/round1/EVIDENCE-round1.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "主線裁示:接受。scripts/gate.sh --branch --ticket 也要寫同一個票 gate 欄(rc/sha/run_id/at,與 auto-fix 寫的同形狀),閘門只能有一個真相;gate.sh 加進 allowed_write_paths,同票做,不另開票。"
+    }
+  ],
+  "owner": "main",
+  "branch": "t56"
+}
