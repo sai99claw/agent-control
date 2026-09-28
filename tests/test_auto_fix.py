@@ -2144,36 +2144,50 @@ FAILED (failures=2)""")
 # 假 `claude`(#58):照真的 `claude -p` 認 `--output-format` —— `json` 才在 stdout 印信封,
 # 其他格式只印一行純文字(沒有 usage)。交件是底下那支 `FIRST_ROUND_PAIR` 寫在副本裡的檔,
 # 與輸出格式無關。`--output-format` 出現兩次就 exit 3:補旗標的那一手不准疊在已指定的上面。
+# `stream-json`(#64)照真的 claude:沒帶 `--verbose` 就 rc=1 拒跑(2026-09-29 實測的那一句);
+# 帶了就逐行印 system / assistant 事件,最後一行才是同一個信封。每次被叫的 argv 記進 @ARGS@。
 FAKE_CLAUDE = """#!/bin/sh
+echo "$AC_ROLE $*" >> "@ARGS@"
 fmt=""
 seen=0
+verbose=0
 prev=""
 for arg in "$@"; do
     [ "$prev" = "--output-format" ] && fmt=$arg
     case $arg in
         --output-format) seen=$((seen + 1)) ;;
         --output-format=*) seen=$((seen + 1)); fmt=${arg#--output-format=} ;;
+        --verbose) verbose=1 ;;
     esac
     prev=$arg
 done
 [ "$seen" -le 1 ] || { echo "--output-format given $seen times" >&2; exit 3; }
-sh "@BODY@" || exit $?
-if [ "$fmt" = json ]; then
-    if [ "$AC_ROLE" = verifier ]; then
-        echo '@V_ENVELOPE@'
-    else
-        echo '@W_ENVELOPE@'
-    fi
-else
-    echo "plain text result, no usage"
+if [ "$fmt" = stream-json ] && [ "$verbose" = 0 ]; then
+    echo "Error: When using --print, --output-format=stream-json requires --verbose" >&2
+    exit 1
 fi
+[ "$fmt" != stream-json ] || echo '{"type":"system","subtype":"init","session_id":"s"}'
+sh "@BODY@" || exit $?
+if [ "$AC_ROLE" = verifier ]; then
+    env_line='@V_ENVELOPE@'
+else
+    env_line='@W_ENVELOPE@'
+fi
+case $fmt in
+    json) echo "$env_line" ;;
+    stream-json)
+        echo '{"type":"assistant","message":{"content":[{"type":"text","text":"done"}],"usage":{"input_tokens":1,"output_tokens":1}}}'
+        echo "$env_line" ;;
+    *) echo "plain text result, no usage" ;;
+esac
 """
 
 
 class ClaudeIsAskedForAnEnvelope(AutoFixBase):
     """#58(稽核 R9):`worker.command` / `verifier.command` 是 `claude` 而沒指定
-    `--output-format` 時,auto-fix 補 `--output-format json`,`cost[]` 的 worker 與 verifier
-    兩列才有 token。期望的 token 數寫死在夾具信封裡,不從 ticket.py 算回去。"""
+    `--output-format` 時,auto-fix 補 `--output-format stream-json --verbose`(#64;以前是
+    `json`),`cost[]` 的 worker 與 verifier 兩列才有 token。期望的 token 數寫死在夾具信封裡,
+    不從 ticket.py 算回去。"""
 
     vcalls = TheFirstRoundVerifierRunsAlongside.vcalls
     vfix = TheFirstRoundVerifierRunsAlongside.vfix
@@ -2189,6 +2203,7 @@ class ClaudeIsAskedForAnEnvelope(AutoFixBase):
         self.bindir = os.path.join(self.home, "bin")
         os.makedirs(self.bindir, exist_ok=True)
         write_executable(os.path.join(self.bindir, "claude"), FAKE_CLAUDE
+                         .replace("@ARGS@", self.args_log())
                          .replace("@BODY@", path)
                          .replace("@W_ENVELOPE@", envelope("w", 21, 4242, 1000, 50000, 9000))
                          .replace("@V_ENVELOPE@", envelope("v", 8, 777, 300, 4000, 5000)))
@@ -2205,6 +2220,51 @@ class ClaudeIsAskedForAnEnvelope(AutoFixBase):
     def rows(self):
         rows = self.load_ticket("1").get("cost") or []
         return {row["role"]: row for row in rows}
+
+    def args_log(self):
+        return os.path.join(self.home, "claude-args.log")
+
+    def argv(self, role):
+        with open(self.args_log(), encoding="utf-8") as handle:
+            return [line.split(" ", 1)[1].split() for line in handle
+                    if line.startswith(role + " ")]
+
+    def test_t64_a4_a_bare_claude_gets_stream_json_and_verbose_once(self):
+        """#64 A4:`claude -p --model opus`(沒指定格式)→ 實際起的命令 `--output-format
+        stream-json` 與 `--verbose` 各一次;cost[] 的 tokens 等於假 claude 最後一行的 usage
+        (worker 21 / 4242、verifier 8 / 777,抄自上面的 envelope(),不從 ticket.py 算)。
+
+        **變異**:with_envelope 補回 `json` → argv 那一格紅;不補 `--verbose` → 假 claude
+        照真的 rc=1、沒有信封,worker 列 null 紅。"""
+        self.arm(needs_verifier=True)
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        for role in ("worker", "verifier"):
+            with self.subTest(role):
+                calls = self.argv(role)
+                self.assertEqual(len(calls), 1, calls)
+                argv = calls[0]
+                self.assertEqual(argv.count("--output-format"), 1, argv)
+                self.assertEqual(argv[argv.index("--output-format") + 1], "stream-json", argv)
+                self.assertEqual(argv.count("--verbose"), 1, argv)
+        rows = self.rows()
+        self.assertEqual((rows["worker"]["tokens_in"], rows["worker"]["tokens_out"]), (21, 4242))
+        self.assertEqual((rows["verifier"]["tokens_in"], rows["verifier"]["tokens_out"]), (8, 777))
+
+    def test_t64_a4_an_explicit_json_is_left_alone(self):
+        """#64 A4:已指定 `--output-format json` 的照用,不補 stream-json 也不補 `--verbose`。
+
+        **變異**:補旗標不看已指定 → 假 claude exit 3(兩次 --output-format)紅。"""
+        self.commands = ("claude -p --model opus --output-format json",
+                         "claude -p --model sonnet --output-format json")
+        self.arm(needs_verifier=True)
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        argv = self.argv("worker")[0]
+        self.assertEqual(argv[argv.index("--output-format") + 1], "json", argv)
+        self.assertNotIn("stream-json", argv)
+        self.assertNotIn("--verbose", argv)
+        self.assertEqual(self.rows()["worker"]["tokens_out"], 4242)
 
     def test_worker_and_verifier_rows_carry_tokens_from_the_envelope(self):
         """**變異**:拿掉 WORKER_CMD 的 `with_envelope` → worker 列 null 紅;
@@ -2303,6 +2363,173 @@ class ATimedOutWorkerLeavesItsWorkBehind(AutoFixBase):
             os.kill(pid, 9)
         except ProcessLookupError:
             pass
+
+
+# #64:worker 命令外面包一層,`@PRE@` 決定誰卡住(worker / 驗證者)、卡多久;其餘照
+# `FIRST_ROUND_PAIR` 交件。驗證者沒設 `verifier.command`,跟 worker 用同一支。
+TIMEOUT_WRAP = """#!/bin/sh
+@PRE@
+exec sh "@BODY@"
+"""
+WORKER_HANGS_60 = 'if [ "$AC_ROLE" = worker ]; then exec sleep 60; fi'
+VERIFIER_HANGS_60 = 'if [ "$AC_ROLE" = verifier ]; then exec sleep 60; fi'
+
+# #64 A5:假 claude 照真的認 stream-json(沒 `--verbose` 就 rc=1),印兩行事件後卡住。
+CLAUDE_STREAMS_THEN_HANGS = """#!/bin/sh
+case " $* " in *" --output-format stream-json "*) ;; *) echo "not stream-json: $*"; exit 3 ;; esac
+case " $* " in
+    *" --verbose "*) ;;
+    *) echo "Error: When using --print, --output-format=stream-json requires --verbose" >&2
+       exit 1 ;;
+esac
+echo '{"type":"system","subtype":"init","session_id":"s"}'
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"got-this-far"}]}}'
+exec sleep 60
+"""
+
+
+class TheTicketSetsTheTimeout(AutoFixBase):
+    """#64:逾時秒數 票 `worker.timeout_seconds` > config `worker.timeout_seconds` > 3600,
+    worker 與驗證者同一個數。期望的秒數全部來自這裡寫進沙盒的設定與票面。"""
+
+    vcalls = TheFirstRoundVerifierRunsAlongside.vcalls
+    vfix = TheFirstRoundVerifierRunsAlongside.vfix
+    vsaw = TheFirstRoundVerifierRunsAlongside.vsaw
+    arm = TheFirstRoundVerifierRunsAlongside.arm
+    verifier_calls = TheFirstRoundVerifierRunsAlongside.verifier_calls
+    pre = ""
+    conf_timeout = 120
+
+    def set_worker(self, body, rerun_cmd=None):
+        path = os.path.join(self.home, "fake-worker.sh")
+        write_executable(path, body)
+        wrap = os.path.join(self.home, "wrap.sh")
+        write_executable(wrap, TIMEOUT_WRAP.replace("@PRE@", self.pre).replace("@BODY@", path))
+        conf = dict(DEFAULT_CONFIG)
+        conf["worker"] = {"command": "sh %s" % wrap}
+        if self.conf_timeout is not None:
+            conf["worker"]["timeout_seconds"] = self.conf_timeout
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        return path
+
+    def timed_auto_fix(self):
+        started = time.time()
+        done = self.auto_fix("--no-review")
+        return done, time.time() - started
+
+    def assert_worker_timed_out_at(self, done, elapsed, seconds, other):
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        self.assertLess(elapsed, 40, "沒在 %s 秒附近被砍" % seconds)
+        self.assertIn("逾時(%s 秒)" % seconds, done.stderr)
+        self.assertNotIn("逾時(%s 秒)" % other, done.stderr)
+        pages = self.inbox_rows()
+        self.assertEqual(len(pages), 1, pages)
+        page = self.read(pages[0]["page"])
+        self.assertIn("逾時(%s 秒)" % seconds, page)
+        self.assertNotIn("%s 秒" % other, page)
+        failed = [row for row in self.events() if row["kind"] == "ticket.attempt.failed"]
+        self.assertEqual([row.get("reason") for row in failed], ["timeout"])
+
+    def test_t64_a1_the_ticket_value_beats_the_config(self):
+        """A1:config 120、票 3、worker 卡 60 秒 → 約 3 秒被當逾時,訊息含 3 不含 120。
+
+        **變異**:拿掉票值優先(只讀 config)→ 120 秒後才砍 / 來源行是 config,紅。"""
+        self.pre = WORKER_HANGS_60
+        self.arm(worker={"timeout_seconds": 3})
+        done, elapsed = self.timed_auto_fix()
+        self.assertIn("auto-fix: 逾時來源=票 3 秒", done.stderr)
+        self.assert_worker_timed_out_at(done, elapsed, 3, 120)
+
+    def test_t64_a1_a_longer_ticket_value_lets_a_slow_worker_finish(self):
+        """A1 反向:config 3、票 120、worker 先睡 5 秒才交件 → 不逾時、正常交件。"""
+        self.pre = 'if [ "$AC_ROLE" = worker ]; then sleep 5; fi'
+        self.conf_timeout = 3
+        self.arm(worker={"timeout_seconds": 120})
+        done, _ = self.timed_auto_fix()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("auto-fix: 逾時來源=票 120 秒", done.stderr)
+        self.assertEqual(self.worker_rounds(), ["worker ran round 1"])
+        self.assertNotIn("逾時(", done.stderr)
+
+    def bad_ticket_value(self, value):
+        self.pre = WORKER_HANGS_60
+        self.conf_timeout = 3
+        self.arm(worker={"timeout_seconds": value})
+        done, elapsed = self.timed_auto_fix()
+        named = [line for line in done.stderr.splitlines()
+                 if "worker.timeout_seconds=%s" % json.dumps(value) in line]
+        self.assertEqual(len(named), 1, done.stderr)
+        self.assertIn("auto-fix: 逾時來源=config 3 秒", done.stderr)
+        self.assert_worker_timed_out_at(done, elapsed, 3, value)
+
+    def test_t64_a2_a_zero_ticket_value_falls_back_to_the_config(self):
+        """A2:票 0 → 不採用、點名那一格、退回 config 3。**變異**:拿掉 `value > 0` → 0 秒
+        (Python 的 wait(timeout=0) 立刻逾時)來源行是票,紅。"""
+        self.bad_ticket_value(0)
+
+    def test_t64_a2_a_negative_ticket_value_falls_back_to_the_config(self):
+        self.bad_ticket_value(-1)
+
+    def test_t64_a2_a_string_ticket_value_falls_back_to_the_config(self):
+        """A2:票 'x' → 不採用。**變異**:拿掉型別檢查 → Python 比較 str > int 例外,紅。"""
+        self.bad_ticket_value("x")
+
+    def test_t64_a2_no_worker_field_uses_the_config_then_the_default(self):
+        """A2:票沒有 worker 欄 → config 120;config 也沒有 → 預設 3600。非 claude 命令不補格式。"""
+        self.arm()
+        done, _ = self.timed_auto_fix()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("auto-fix: 逾時來源=config 120 秒", done.stderr)
+        started = [line for line in done.stdout.splitlines() if "起第 1 輪的 worker" in line]
+        self.assertEqual(len(started), 1, done.stdout)
+        self.assertNotIn("--output-format", started[0])
+
+    def test_t64_a2_no_value_anywhere_is_the_default(self):
+        self.conf_timeout = None
+        self.arm()
+        done, _ = self.timed_auto_fix()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("auto-fix: 逾時來源=預設 3600 秒", done.stderr)
+
+    def test_t64_a3_the_verifier_uses_the_same_ticket_value(self):
+        """A3:config 120、票 3、驗證者卡 60 秒 → 驗證者逾時,訊息含 3。
+
+        **變異**:run_verifier 改回吃 config 的秒數 → 120 秒才砍,紅(elapsed / 訊息)。"""
+        self.pre = VERIFIER_HANGS_60
+        self.arm(needs_verifier=True, worker={"timeout_seconds": 3})
+        done, elapsed = self.timed_auto_fix()
+        self.assertLess(elapsed, 40, done.stdout + done.stderr)
+        self.assertIn("驗證者超過 3 秒還沒回來", done.stderr)
+        self.assertNotIn("120 秒", done.stderr)
+        failed = [row for row in self.events() if row["kind"] == "agent.failed"
+                  and row.get("role") == "verifier"]
+        self.assertEqual([str(row.get("rc")) for row in failed], ["124"], failed)
+
+
+class AStreamingClaudeLeavesALogWhenKilled(AutoFixBase):
+    """#64 A5:json 格式的 claude 只在結束時印一個信封,被砍的那一輪 log 是 0 byte;
+    stream-json 逐行印,砍之前做到哪看得到。"""
+
+    def test_t64_a5_the_log_has_what_came_before_the_kill(self):
+        """**變異**:with_envelope 補回 `json` → 假 claude 印 not stream-json 就走,log 沒有
+        got-this-far,紅;不補 `--verbose` → 假 claude 照真的 rc=1,紅。"""
+        bindir = os.path.join(self.home, "bin")
+        os.makedirs(bindir, exist_ok=True)
+        write_executable(os.path.join(bindir, "claude"), CLAUDE_STREAMS_THEN_HANGS)
+        conf = dict(DEFAULT_CONFIG)
+        conf["worker"] = {"command": "claude -p --model opus", "timeout_seconds": 120}
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        self.ticket_ready(worker={"timeout_seconds": 3})
+
+        done = self.run_sh("scripts/auto-fix.sh", "1", "--no-review",
+                           env=self.env(PATH=bindir + os.pathsep + os.environ["PATH"]))
+
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        logs = glob.glob(os.path.join(self.repo, "reports", "t1", "*", "worker-round1.log"))
+        self.assertEqual(len(logs), 1, logs)
+        self.assertGreater(os.path.getsize(logs[0]), 0)
+        with open(logs[0], encoding="utf-8") as handle:
+            self.assertIn("got-this-far", handle.read())
 
 
 class TheNextRoundCarriesTheRulings(AutoFixBase):

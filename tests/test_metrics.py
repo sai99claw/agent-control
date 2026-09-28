@@ -27,6 +27,16 @@ JSON_LOG = """開場講了幾句話
             "cache_read_input_tokens": 999}
 }
 """
+# `claude -p --output-format stream-json --verbose` 的形狀(#64):一行一個事件,
+# `assistant` 那幾行的 usage 在 `message` 裡面(不算),最後一行 `type=result` 帶頂層 usage。
+STREAM_LOG = "\n".join([
+    '{"type":"system","subtype":"init","session_id":"s"}',
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"got-this-far"}],'
+    '"usage":{"input_tokens":5,"output_tokens":7}}}',
+    '{"type":"rate_limit_event"}',
+    '{"type":"result","subtype":"success","is_error":false,'
+    '"usage":{"input_tokens":2100,"output_tokens":678,"cache_read_input_tokens":4000}}',
+]) + "\n"
 # 另一種產出端:散文裡夾一行總計。
 COUNTED_LOG = "worker 跑完了\ntokens used 123\n收工\n"
 # 什麼都沒記的那一種 —— 這個 repo 2026-09-22 磁碟上那一份真的長這樣。
@@ -223,6 +233,16 @@ class Metrics(Sandbox):
                       "兩種形狀都認不出來的那一趟是未知,不是 0:%s" % line)
         self.assertNotIn("tokens=0", line,
                          "未知被寫成 0 了 —— 那與「這一趟很省」長得一樣:%s" % line)
+
+    def test_a_stream_json_log_is_read_from_its_last_result_line(self):
+        """#64 A6:worker log 是 stream-json(多行事件,最後一行 `type=result`)→ 已知,
+        數值 = 那一行的 input 2100 + output 678(從 STREAM_LOG 抄,不從 metrics.py 算)。
+
+        **變異**:`tokens_in_log` 不讀檔尾 JSON(`row = None`)→ 未知,紅。"""
+        self.make_ticket(7)
+        self.put_run(7, "r1")
+        self.put_worker_log(7, "r1", STREAM_LOG)
+        self.assertIn("tokens=已知1趟=2778", self.line(7))
 
     def test_a_known_trip_and_an_unknown_trip_are_both_reported(self):
         """一趟問得出來、一趟問不出來時,總和**不可以**把問不出來的那一趟當 0 吃掉。"""

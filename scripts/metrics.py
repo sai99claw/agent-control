@@ -35,7 +35,7 @@
 所以這裡只認兩種形狀,認不出就說不知道):
 
 1. 檔尾是一個 JSON 物件而且有 `usage` → `usage.input_tokens + usage.output_tokens`
-   (`board/config.json` 的 `worker.command` 帶 `--output-format json` 時的形狀);
+   (`--output-format json` 的信封;`stream-json` 的最後一行 `type=result` 也是它,#64);
 2. 有一行含 `tokens used <N>` → 取 N(最後一筆);
 3. 都不是 → **那一趟是 unknown**,不估、不寫 0。
 """
