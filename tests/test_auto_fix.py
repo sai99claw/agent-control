@@ -1706,11 +1706,15 @@ class TheResultBlockAtTheEndOfEvidence(AutoFixBase):
 # 就 exit 9、不交 patch;驗證者寫完 `started` 也輪詢 `worker-started` 最多 20 秒,等不到就
 # exit 9、不交件。單向的標記只擋得住「worker 先、驗證者後」—— 驗證者先跑完再派 worker 的
 # 串行,標記檔早就在了。@VERIFIER_HANDS_IN@ 換成 0 時驗證者什麼都不交就退出(C6)。
+# #60:驗證者**在寫 `started` 之前**先看 worker 的 patch-round1.diff(@WPATCH@)在不在,
+# 把 yes / no 寫進 @VSAW@ —— 先看再標記,平行那一種的 worker 才不可能搶在它看之前交件。
+# @WORKER_MODE@ 換成 objection 時 worker 只交一行反駁、nopatch 時什麼都不交。
 FIRST_ROUND_PAIR = '''#!/bin/sh
 set -e
 cd "$AC_WORK"
 if [ "$AC_ROLE" = verifier ]; then
     echo "verifier ran round $AC_ROUND" >> "@VCALLS@"
+    if [ -f "@WPATCH@" ]; then echo yes > "@VSAW@"; else echo no > "@VSAW@"; fi
     : > started
     [ "@VERIFIER_HANDS_IN@" = 1 ] || exit 0
     if [ "@WAIT@" = 1 ]; then
@@ -1778,6 +1782,13 @@ if [ "@WAIT@" = 1 ]; then
         sleep 0.1
     done
 fi
+case "@WORKER_MODE@" in
+    objection)
+        printf 'OBJECTION: ticket-wrong 票面的介面與設計文件互相矛盾\\n' > "EVIDENCE-round$AC_ROUND.md"
+        exit 0 ;;
+    nopatch)
+        exit 0 ;;
+esac
 mkdir -p work/tests
 cat > work/tests/test_thing.py <<'CASE'
 import unittest
@@ -1808,10 +1819,17 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
     def vfix(self):
         return os.path.join(self.home, "repo-wt", "verify-t1", "round1")
 
-    def arm(self, wait=False, hands_in=True, **fields):
+    def vsaw(self):
+        return os.path.join(self.home, "verifier-saw-patch")
+
+    def arm(self, wait=False, hands_in=True, worker_mode="patch", **fields):
         self.write("verifier-calls.log", "", where=self.home)
         self.set_worker(FIRST_ROUND_PAIR
                         .replace("@VCALLS@", self.vcalls())
+                        .replace("@VSAW@", self.vsaw())
+                        .replace("@WPATCH@", os.path.join(self.home, "repo-wt", "fix-t1",
+                                                          "round1", "patch-round1.diff"))
+                        .replace("@WORKER_MODE@", worker_mode)
                         .replace("@VMARK@", os.path.join(self.vfix(), "started"))
                         .replace("@WMARK@", os.path.join(self.home, "repo-wt", "fix-t1",
                                                          "round1", "worker-started"))
@@ -1871,11 +1889,12 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
 
     def test_c2_the_verifier_is_running_before_the_worker_is_dispatched(self):
         """C2:worker 等得到驗證者的 `started` 才交 patch;綠一輪後 cost 兩筆。
+        #60 起平行只在票 `interface_fixed=true`(這一條就是「現行行為」那一種)。
 
         **變異**:改成先等驗證者交件再派 worker(串行)→ 驗證者等不到 worker 的標記、
         不交件 → rc=5 → 紅;反過來先 worker 後驗證者 → worker 等不到標記 exit 9 → 紅。
         """
-        self.arm(wait=True, needs_verifier=True)
+        self.arm(wait=True, needs_verifier=True, interface_fixed=True)
         done = self.auto_fix("--no-review")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         worker_done = [row for row in self.events() if row["kind"] == "agent.done"
@@ -1974,6 +1993,126 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
         self.assertFalse(self.git("branch", "--list", "t1").strip(),
                          "沒有案例就不套、不量綠")
 
+    def saw_patch(self):
+        self.assertTrue(os.path.exists(self.vsaw()), "驗證者沒起,沒有東西可看")
+        with open(self.vsaw(), encoding="utf-8") as handle:
+            return handle.read().strip()
+
+    def sent_verifier_packet(self):
+        sent = [path for path in self.result_files("dispatch-verifier-round1.md")
+                if os.path.exists(os.path.join(os.path.dirname(path), "verifier-round1.log"))]
+        self.assertEqual(len(sent), 1, self.result_files("dispatch-verifier-round1.md"))
+        with open(sent[0], encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_t60_interface_fixed_true_starts_the_verifier_alongside_the_worker(self):
+        """#60 驗收一:interface_fixed=true ⇒ 驗證者起跑時 worker 的 patch 還不在(平行),
+        派工文沒有「以分支上的實作為準」那一段。
+
+        **變異**:平行的條件拿掉(一律等 patch)→ 驗證者看到 patch(yes)→ 紅。
+        """
+        self.arm(needs_verifier=True, interface_fixed=True, wait=True)
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.verifier_calls(), ["verifier ran round 1"])
+        self.assertEqual(self.saw_patch(), "no")
+        self.assertNotIn("以分支上的實作為準", self.sent_verifier_packet())
+
+    def test_t60_interface_fixed_missing_starts_the_verifier_after_the_patch(self):
+        """#60 驗收二(缺):驗證者起跑時 patch-round1.diff 已經在;派工文含那一句與 patch 路徑。
+
+        **變異**:`start_verifier_bg` 那一手不看 V_PARALLEL(照舊平行)→ 驗證者看不到 patch → 紅;
+        派工文不帶第 5 個參數 → 「以分支上的實作為準」紅。
+        """
+        row = self.arm(needs_verifier=True)
+        self.assertNotIn("interface_fixed", row, "前提:票面沒有這一格")
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.verifier_calls(), ["verifier ran round 1"])
+        self.assertEqual(self.saw_patch(), "yes")
+        packet = self.sent_verifier_packet()
+        self.assertIn("以分支上的實作為準", packet)
+        self.assertIn("在 EVIDENCE 記一行", packet)
+        self.assertIn(os.path.join(self.home, "repo-wt", "fix-t1", "round1",
+                                   "patch-round1.diff"), packet)
+        # 兩份照樣一起進閘門那一棵樹(#51 C5 不因為晚起而少一份)。
+        self.assertIn("test_worker_case_is_there",
+                      self.git("show", "t1:verify/example/test_ticket_1.py"))
+
+    def test_t60_interface_fixed_false_waits_for_the_patch_too(self):
+        """#60 驗收二(false):與缺同一條路。
+
+        **變異**:判準寫成「有這一格就平行」(`in ticket` 而不是 `is True`)→ 紅。
+        """
+        self.arm(needs_verifier=True, interface_fixed=False)
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.saw_patch(), "yes")
+        self.assertIn("以分支上的實作為準", self.sent_verifier_packet())
+
+    def test_t60_a_worker_objection_leaves_the_verifier_unstarted_and_says_so(self):
+        """#60 驗收三(反駁):驗證者不起(呼叫紀錄在而且空、沒有 verifier 的 agent.start),
+        恰 1 頁、頁上寫明驗證者沒起。
+
+        **變異**:等 patch 的那一手擺在反駁判斷之前 → 驗證者起了 → 紅;頁上不接 V_HELD → 紅。
+        """
+        self.arm(needs_verifier=True, worker_mode="objection")
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertEqual(self.verifier_calls(), [])
+        self.assertEqual(self.verifier_starts(), [])
+        pages = self.inbox_rows()
+        self.assertEqual(len(pages), 1, pages)
+        self.assertIn("驗證者沒起", json.dumps(pages[0], ensure_ascii=False))
+
+    def test_t60_a_worker_with_no_patch_leaves_the_verifier_unstarted_and_says_so(self):
+        """#60 驗收三(沒交):同上,rc=5、reason=no-patch。
+
+        **變異**:等 patch 的那一手擺在「沒交 patch」判斷之前 → 驗證者起了 → 紅。
+        """
+        self.arm(needs_verifier=True, worker_mode="nopatch")
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        self.assertEqual(self.verifier_calls(), [])
+        self.assertEqual(self.verifier_starts(), [])
+        pages = self.inbox_rows()
+        self.assertEqual(len(pages), 1, pages)
+        self.assertIn("驗證者沒起", json.dumps(pages[0], ensure_ascii=False))
+        failed = [row for row in self.events() if row["kind"] == "ticket.attempt.failed"]
+        self.assertEqual([row.get("reason") for row in failed], ["no-patch"])
+
+    def test_t60_an_interface_fixed_objection_page_does_not_claim_the_verifier_waited(self):
+        """平行那一種(驗證者已經起了)的反駁頁不寫「驗證者沒起」—— 那句話只屬於等 patch 的票。"""
+        self.arm(needs_verifier=True, interface_fixed=True, worker_mode="objection")
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertEqual(self.verifier_calls(), ["verifier ran round 1"])
+        pages = self.inbox_rows()
+        self.assertEqual(len(pages), 1, pages)
+        self.assertNotIn("驗證者沒起", json.dumps(pages[0], ensure_ascii=False))
+
+
+class InterfaceFixedIsWrittenDown(unittest.TestCase):
+    """#60 驗收三(文件):欄位與判準寫在開題者會讀的兩處。量的是這份原始碼樹,不是沙盒。"""
+
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def read(self, rel):
+        with open(os.path.join(self.ROOT, rel), encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_schema_has_the_field_and_its_rule(self):
+        row = [line for line in self.read("tickets/SCHEMA.md").splitlines()
+               if line.startswith("| 驗證 | `interface_fixed`")]
+        self.assertEqual(len(row), 1, "SCHEMA 欄位表要有恰一列 interface_fixed")
+        self.assertIn("開題者", row[0])
+        self.assertIn("以分支上的實作為準", row[0])
+
+    def test_the_opener_card_says_when_to_write_true(self):
+        text = self.read("memory/role/opener.md")
+        self.assertIn("interface_fixed", text)
+        self.assertIn("介面已釘死", text)
+
 
 # 假 worker(#57 b):在 work/ 改了一個檔、印一行,然後卡住直到被砍。印的那一行走 Python
 # 的 print —— 不接 tty 時是區塊緩衝,只寫進 worker 自己的 stdout 的話,被砍就跟著消失。
@@ -2038,6 +2177,7 @@ class ClaudeIsAskedForAnEnvelope(AutoFixBase):
 
     vcalls = TheFirstRoundVerifierRunsAlongside.vcalls
     vfix = TheFirstRoundVerifierRunsAlongside.vfix
+    vsaw = TheFirstRoundVerifierRunsAlongside.vsaw
     arm = TheFirstRoundVerifierRunsAlongside.arm
     verifier_calls = TheFirstRoundVerifierRunsAlongside.verifier_calls
     commands = ("claude -p --model opus", "claude -p --model sonnet")

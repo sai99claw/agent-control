@@ -398,7 +398,7 @@ PY
 # 驗證者的派工文**只有一種組法**(#51,C3):`rules.py pack verifier` + `templates/dispatch-verifier.md`
 # 逐格填好。第 1 輪(needs_verifier)與 test_defect 那條路共用;後者只在尾巴多一段紅榜。
 # 以前 test_defect 那條路是一段內嵌文字 —— 人讀的範本與腳本餵的派工文是兩份,少了哪一格沒有人看得出來。
-verifier_packet() {   # $1 = 派工文寫到哪  $2 = 第幾輪  $3 = 驗證者副本根  $4 = base sha
+verifier_packet() {   # $1 = 派工文寫到哪  $2 = 第幾輪  $3 = 驗證者副本根  $4 = base sha  $5 = worker 的 patch(非空 = 等 patch 才起,#60)
     vp_template=""
     for candidate in "$ROOT/templates/dispatch-verifier.md" "$AC/../templates/dispatch-verifier.md"; do
         [ -f "$candidate" ] && { vp_template=$candidate; break; }
@@ -431,12 +431,20 @@ for key, value in fill.items():
 sys.stdout.write("\n" + text)
 PY
         fi
+        if [ -n "${5:-}" ]; then
+            echo ""
+            echo "## 介面以分支上的實作為準(#60:這張票 interface_fixed 不是 true)"
+            echo "你是在 worker 第 1 輪交出 patch 之後才起的:介面以分支上的實作為準(worker 的 patch 在 \`$5\`,讀它、不要套進你的 work/)。"
+            echo "票面寫法與實作衝突時照實作、在 EVIDENCE 記一行(票面怎麼寫、實作怎麼做、你照哪個寫了案例)。"
+        fi
     } > "$1"
 }
 
 # 第 1 輪要不要起驗證者(#51,D-032 ③):票 `needs_verifier` 是 JSON `true`、而且 `verify.baseline`
 # 還是空的。**缺這一格不擋**,只說一聲:開題端的自檢(D-031)已經擋,既有的票多半沒有這一格。
-# 設定 V_WANT(1 / 空)與 V_BASE(票的 base_sha,驗證者副本從它展開)。
+# 設定 V_WANT(1 / 空)、V_BASE(票的 base_sha,驗證者副本從它展開)與 V_PARALLEL:
+# 票 `interface_fixed` 是 JSON `true` 才與 worker 平行起(#60,D-H38 ②);false / 缺 ⇒ 等 worker
+# 第 1 輪交出 patch 才起 —— 介面沒釘死的票,驗證者照票面猜的介面寫案例,worker 做出來的是另一個。
 verifier_wanted() {
     eval "$(python3 - "$TF" <<'PY'
 import json, shlex, sys
@@ -455,6 +463,7 @@ else:
 print("V_FLAG=%s" % flag)
 print("V_HAS_BASELINE=%s" % ("1" if plan.get("baseline") else ""))
 print("V_BASE=%s" % shlex.quote(str(ticket.get("base_sha") or "")))
+print("V_PARALLEL=%s" % ("1" if ticket.get("interface_fixed") is True else ""))
 PY
 )"
     V_WANT=""
@@ -482,7 +491,9 @@ first_round_dispatch() {
     if [ -n "$V_WANT" ]; then
         VERIFIER_MODEL=$(cfg routing.verify "$(cfg routing.implement opus)")
         fr_vdispatch=$(dirname "$fr_dispatch")/dispatch-verifier-round1.md
-        verifier_packet "$fr_vdispatch" 1 "$WTBASE/verify-t$ID/round1" "$V_BASE"
+        fr_after=""
+        [ -n "$V_PARALLEL" ] || fr_after=$WTBASE/fix-t$ID/round1/patch-round1.diff
+        verifier_packet "$fr_vdispatch" 1 "$WTBASE/verify-t$ID/round1" "$V_BASE" "$fr_after"
         echo "auto-fix: 第 1 輪驗證者派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$fr_vdispatch" "$ROOT")" >&2
     fi
     echo "auto-fix: --round 1 只印派工文;票是 Ready 時不帶 --round 就由這一支起第 1 輪:sh scripts/auto-fix.sh $ID" >&2
@@ -649,8 +660,9 @@ verifier_done() {   # $1 = rc  $2 = 第幾輪  $3 = log  $4 = 起跑秒;事件 +
     write_cost verifier "$2" "$VERIFIER_MODEL" "$3" "$(( $(date +%s) - $4 ))"
 }
 
-# **與 worker 平行**(#51 C2):驗證者不等 patch(D-020),所以在 worker 派出**之前**就起跑,
-# worker 回來之後 `wait_verifier` 才收。串行只是多等一次驗證者的時鐘。
+# **與 worker 平行**(#51 C2)只在票 `interface_fixed=true`(#60):驗證者不等 patch(D-020),
+# 所以在 worker 派出**之前**就起跑,worker 回來之後 `wait_verifier` 才收。其餘的票在 worker
+# 第 1 輪交出 patch 之後才起、起了就收 —— 同一支、同一個副本做法,只差起跑的時機。
 # 副本是票的 base_sha(`git archive`,與 test_defect 那條路一樣是 {work,base} 兩份)。
 start_verifier_bg() {   # uses r/VFIX/VDISPATCH;設定 VPID/VLOG/VRC_FILE/VSTART
     rm -rf "$VFIX"
@@ -663,7 +675,11 @@ start_verifier_bg() {   # uses r/VFIX/VDISPATCH;設定 VPID/VLOG/VRC_FILE/VSTART
     VLOG=$(dirname "$VDISPATCH")/verifier-round$r.log
     VRC_FILE=$(dirname "$VDISPATCH")/verifier-round$r.rc
     rm -f "$VRC_FILE"
-    echo "auto-fix: needs_verifier —— 第 $r 輪的驗證者先起跑(背景,副本 $VFIX)"
+    if [ -n "$V_PARALLEL" ]; then
+        echo "auto-fix: needs_verifier + interface_fixed —— 第 $r 輪的驗證者先起跑(背景,副本 $VFIX)"
+    else
+        echo "auto-fix: needs_verifier —— worker 交了 patch-round$r.diff,第 $r 輪的驗證者現在起跑(副本 $VFIX)"
+    fi
     ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
         --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix-verifier
     VSTART=$(date +%s)
@@ -897,12 +913,18 @@ PY
     VPID=""
     VPATCH=""
     VEVIDENCE=""
+    V_HELD=""
     if [ "$r" -eq 1 ]; then
         verifier_wanted
         if [ -n "$V_WANT" ]; then
             VFIX=$WTBASE/verify-t$ID/round$r
             VDISPATCH=$(dirname "$DISPATCH")/dispatch-verifier-round$r.md
-            verifier_packet "$VDISPATCH" "$r" "$VFIX" "$V_BASE"
+            # 等 patch 才起的那一種(#60):底下 worker 沒走到交 patch 的每一頁都要說驗證者沒起,
+            # 不然「沒起」與「起了、沒交」在 inbox 長得一樣。
+            [ -n "$V_PARALLEL" ] \
+                || V_HELD="。驗證者沒起:票 interface_fixed 不是 true,要等 worker 第 1 輪交出 patch 才起"
+            verifier_packet "$VDISPATCH" "$r" "$VFIX" "$V_BASE" \
+                "${V_HELD:+$FIX/patch-round$r.diff}"
             echo "auto-fix: 驗證者派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$VDISPATCH" "$ROOT")"
         fi
     fi
@@ -922,7 +944,7 @@ PY
     fi
     ev ticket.attempt.start --ticket "$ID" --attempt "$r" --note "auto-fix 第 $r 輪"
     # 起不來(副本取不出)照樣派 worker,收件時走「驗證者沒交出 patch-verify」那一頁。
-    [ -z "$V_WANT" ] || start_verifier_bg || true
+    [ -z "$V_WANT" ] || [ -z "$V_PARALLEL" ] || start_verifier_bg || true
     WORKER_LOG=$(dirname "$DISPATCH")/worker-round$r.log
     ev agent.start --ticket "$ID" --model "$WORKER_MODEL" \
         --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix
@@ -1025,7 +1047,7 @@ PY
         echo "auto-fix: 第 $r 輪的 worker 逾時(${WORKER_TIMEOUT} 秒)—— 副本 $FIX 留著;$partial_note" >&2
         block "#$ID 第 $r 輪的 worker 逾時(${WORKER_TIMEOUT} 秒)"
         post "worker 逾時(${WORKER_TIMEOUT} 秒),副本留著" \
-             "讀 $WORKER_LOG 看它做到哪;${partial_note}。要嘛拆票或加 worker.timeout_seconds 重派,要嘛人從副本接手" \
+             "讀 $WORKER_LOG 看它做到哪;${partial_note}。要嘛拆票或加 worker.timeout_seconds 重派,要嘛人從副本接手${V_HELD}" \
              "$FIX"
         attempt_failed timeout
         ROUND_RC=5
@@ -1059,6 +1081,11 @@ print(parts[0] if parts and parts[0] in ("ticket-wrong", "test_defect", "blockin
 PY
 )
         if [ "$category" = "test_defect" ]; then
+            # 等 patch 才起的第 1 輪驗證者(#60):worker 反駁了就不起 —— 案例要照的實作不在。
+            if [ -n "$V_HELD" ]; then
+                echo "auto-fix: worker 提了反駁$V_HELD —— 這一輪不起"
+                V_WANT=""
+            fi
             if ! dispatch_verifier; then
                 attempt_failed no-patch
                 ROUND_RC=5
@@ -1067,7 +1094,7 @@ PY
         else
             block "#$ID 的 worker 提反駁:$line"
             post "worker 提反駁(票寫錯 / 需裁示)" \
-                 "讀 EVIDENCE 那一行反駁,處置它(accepted / rejected / deferred / fixed);沒處置的阻擋項 land 與 close 都會拒絕" \
+                 "讀 EVIDENCE 那一行反駁,處置它(accepted / rejected / deferred / fixed);沒處置的阻擋項 land 與 close 都會拒絕${V_HELD}" \
                  "$EVIDENCE"
             attempt_failed objection
             ROUND_RC=3
@@ -1078,10 +1105,15 @@ PY
     if [ ! -f "$PATCH_OUT" ]; then
         echo "auto-fix: 第 $r 輪的 worker 沒有交出 patch-round$r.diff" >&2
         block "#$ID 第 $r 輪的 worker 沒交出 patch"
-        post "worker 沒交出 patch" "自己看副本裡有什麼;要嘛重派,要嘛人下場" "$FIX"
+        post "worker 沒交出 patch" "自己看副本裡有什麼;要嘛重派,要嘛人下場${V_HELD}" "$FIX"
         if [ "$WRC" -eq 124 ]; then attempt_failed timeout; else attempt_failed no-patch; fi
         ROUND_RC=5
         return 1
+    fi
+
+    # 等 patch 才起的那一種(#60):worker 的 patch 在了,現在起、起了就收。
+    if [ -n "$V_WANT" ] && [ -n "$V_HELD" ]; then
+        if start_verifier_bg; then wait_verifier; fi
     fi
 
     # 驗證者沒交件(#51 C6):worker 的 patch **先收進 reports**(下一輪或人下場還用得到,
