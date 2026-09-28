@@ -4,7 +4,9 @@
 都真的跑過」以及「事件真的發出去了」。
 """
 
+import json
 import os
+import re
 import shutil
 import sys
 import unittest
@@ -159,6 +161,265 @@ class A7ItMovesWithTheSync(Sandbox):
         self.assertIn("開著的票", done.stdout)
         self.assertIn("只有這顆沙盒才有的那一張", done.stdout,
                       "票庫讀錯地方 —— 根沒有往上找到 board/config.json")
+
+
+
+# #62:主線開場那一頁。期望值都來自沙盒自己寫進去的標記,不從被測腳本算。
+RULES = ("# 沙盒的契約\n\n## 開場\n開場那一節\n\n## 不可違反的\n- RULE-MARK 一條規則\n"
+         "### 子標題不算下一節\n- 還是規則\n\n## 別的\n- OTHER-MARK 不該印\n")
+CARD = "# 主線\nCARD-MARK 主線角色卡\n"
+PROJECT_RULES = {"roles_dir": "docs/roles", "models_dir": "docs/roles/model"}
+
+
+def section(out, title, stop="\n── "):
+    """`── <title>` 那一段(到下一個 `── `)。"""
+    at = out.index("── " + title)
+    end = out.find(stop, at + 1)
+    return out[at:end if end >= 0 else len(out)]
+
+
+class OpeningPage(Sandbox):
+
+    def main(self, *more):
+        done = self.run_sh("scripts/new-session.sh", "main", "fable", "--no-event", *more)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        return done.stdout
+
+    def canon(self):
+        self.write("CLAUDE.md", RULES)
+        self.write("memory/role/main.md", CARD)
+
+    def post(self, count):
+        for n in range(1, count + 1):
+            done = self.run_py("scripts/inbox.py", "post", "--ticket", str(n), "--run-id",
+                               "r%d" % n, "--kind", "decision", "--state", "閘門紅",
+                               "--what", "看紅榜 %d" % n,
+                               "--where", "reports/t%d/r%d/status.json" % (n, n))
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+
+class A1RulesOnTop(OpeningPage):
+
+    def test_a1_the_contract_and_the_card_come_before_everything(self):
+        """**變異**:把規則段移到讀單後 → 這一條紅。"""
+        self.canon()
+        out = self.main()
+        first = out.index("站在哪個版本")
+        self.assertLess(out.index("RULE-MARK"), first)
+        self.assertLess(out.index("CARD-MARK"), first)
+        self.assertLess(out.index("RULE-MARK"), out.index("CARD-MARK"))
+        self.assertIn("還是規則", out, "### 子標題不是下一節")
+        self.assertNotIn("OTHER-MARK", out, "只印「不可違反的」那一節,到下一個 ## 為止")
+        self.assertNotIn("開場那一節", out)
+
+
+class A2ProjectLayers(OpeningPage):
+    config_extra = {"rules": PROJECT_RULES}
+
+    def setUp(self):
+        super().setUp()
+        self.write("docs/roles/contract.md", "## 不可違反的\n- RULE-MARK 專案那一份\n")
+        self.write("docs/roles/main.md", CARD)
+        self.write("memory/role/main.inbox.md",
+                   "".join("- L%02d 專案疊層第 %d 行\n" % (n, n) for n in range(1, 13)))
+
+    def test_a2_contract_then_card_then_the_inbox_tail(self):
+        out = self.main()
+        marks = ["RULE-MARK", "CARD-MARK"] + ["L%02d" % n for n in range(8, 13)]
+        where = [out.index(mark) for mark in marks]
+        self.assertEqual(where, sorted(where), "順序:契約 → 角色卡 → 暫存區尾巴")
+        self.assertLess(where[-1], out.index("站在哪個版本"))
+        for n in range(1, 8):
+            self.assertNotIn("L%02d" % n, out, "只印最後 5 行")
+
+    def test_a2_a_missing_contract_is_said_out_loud(self):
+        os.remove(os.path.join(self.repo, "docs", "roles", "contract.md"))
+        done = self.run_sh("scripts/new-session.sh", "main", "fable", "--no-event")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        said = [line for line in done.stdout.splitlines()
+                if "contract.md" in line and "sync-to-project.sh" in line]
+        self.assertTrue(said, "缺了要講,不靜默:" + done.stdout[:2000])
+
+
+class A3OnlyTheMainLine(OpeningPage):
+
+    def test_a3_other_roles_do_not_get_the_rules_on_top(self):
+        self.canon()
+        for role in ("worker", "opener", "verifier"):
+            done = self.run_sh("scripts/new-session.sh", role, "opus", "--no-event")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertNotIn("RULE-MARK", done.stdout, role)
+            self.assertNotIn("CARD-MARK", done.stdout, role)
+
+
+class A4TicketsHaveACap(OpeningPage):
+
+    def ticket_lines(self, out):
+        return [line for line in section(out, "3. 開著的票").splitlines()
+                if re.match(r"#\d+\s", line)]
+
+    def test_a4_drafts_are_counted_not_listed(self):
+        """**變異**:拿掉 Draft 過濾 → 這一條紅。"""
+        for n in range(1, 46):
+            self.make_ticket(n, state="Draft", subject="DRAFT-SUBJ 第 %d 張" % n)
+        for n in range(46, 61):
+            self.make_ticket(n, state="Ready", subject="READY 第 %d 張" % n)
+        part = section(self.main(), "3. 開著的票")
+        self.assertNotIn("DRAFT-SUBJ", part)
+        self.assertTrue([line for line in part.splitlines() if "Draft" in line and "45" in line],
+                        part)
+        listed = {int(re.match(r"#(\d+)", line).group(1)) for line in self.ticket_lines(part)}
+        self.assertEqual(listed, set(range(46, 61)))
+
+    def test_a4_sixty_ready_tickets_list_twenty_and_say_the_rest(self):
+        for n in range(1, 61):
+            self.make_ticket(n, state="Ready")
+        out = self.main()
+        self.assertLessEqual(len(self.ticket_lines(out)), 20)
+        self.assertTrue([line for line in section(out, "3. 開著的票").splitlines()
+                         if "還有 40 張沒列" in line and "ticket.py list --open" in line])
+
+    def test_a4_the_other_open_states_are_listed_and_count_toward_the_cap(self):
+        states = ("Blocked", "Running", "InReview", "NeedsDecision")
+        for n, state in enumerate(states, 1):
+            self.make_ticket(n, state=state, subject="%s-SUBJ" % state)
+        for n in range(5, 23):
+            self.make_ticket(n, state="Ready")
+        out = self.main()
+        part = section(out, "3. 開著的票")
+        for state in states:
+            self.assertIn("%s-SUBJ" % state, part)
+        self.assertLessEqual(len(self.ticket_lines(out)), 20)
+        self.assertIn("還有 2 張沒列", part, "22 張不是 Draft 的,列 20、說 2")
+
+
+class A5InboxHasACap(OpeningPage):
+
+    def test_a5_fifty_entries_list_twenty_one_line_each(self):
+        for n in range(1, 51):
+            self.make_ticket(n)
+        self.post(50)
+        part = section(self.main(), "5. 收件匣")
+        entries = [line for line in part.splitlines() if "看紅榜" in line]
+        self.assertLessEqual(len(entries), 20)
+        self.assertTrue(entries)
+        for line in entries:
+            number = re.search(r"看紅榜 (\d+)", line).group(1)
+            self.assertIn("#%s" % number, line, "每一行都含票號")
+        self.assertNotIn("reports/inbox/", part, "頁檔路徑那一行不印")
+        self.assertTrue([line for line in part.splitlines()
+                         if "還有 30 則沒列" in line and "inbox.py list" in line], part)
+
+    def test_a5_an_empty_inbox_looks_empty(self):
+        part = section(self.main(), "5. 收件匣")
+        self.assertIn("沒有等你的東西", part)
+        self.assertNotIn("沒列", part)
+
+
+class A6ThePageFitsTheHook(OpeningPage):
+
+    def test_a6_a_full_board_stays_under_ten_thousand_characters(self):
+        self.canon()
+        for n in range(1, 61):
+            self.make_ticket(n, state="Ready", subject="%02d" % n + "滿" * 58)
+        self.post(50)
+        for n in range(30):
+            done = self.run_py("scripts/event.py", "emit", "ticket.state", "--role", "main",
+                               "--ticket", str(n + 1), "--note", "事件 %d:" % n + "長" * 40)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        out = self.main()
+        self.assertLess(len(out), 10000)
+        for piece in ("RULE-MARK", "CARD-MARK", "接下來要讀的"):
+            self.assertIn(piece, out)
+
+
+class TheOtherSectionsHaveACapToo(OpeningPage):
+    """#62:在 T 的真實資料上,票與收件匣收完之後頁面仍超過 10,000 字元 —— 多出來的是
+    24 筆到期租約、一列 300 字元的事件與髒工作樹。這三段也收,沒列的說數字。"""
+
+    def test_git_status_lists_ten_and_says_the_rest(self):
+        for n in range(15):
+            self.write("dirty-%02d.txt" % n, "")
+        part = section(self.main(), "1. 站在哪個版本")
+        self.assertEqual(len([line for line in part.splitlines() if "dirty-" in line]), 10)
+        self.assertIn("還有 5 行沒列", part)
+
+    def test_heartbeat_lists_five_stale_rows_per_block(self):
+        rows = [json.dumps({"ts": "2026-09-01T00:0%d:00+08:00" % n, "kind": "session.start",
+                            "role": "main", "session": "stale-%d" % n})
+                for n in range(8)]
+        self.write("board/events.jsonl", "\n".join(rows) + "\n")
+        part = section(self.main(), "7. 心跳")
+        self.assertEqual(len([line for line in part.splitlines() if "stale-" in line
+                              or "session.start" in line]), 5, part)
+        self.assertIn("還有 3 列沒列", part)
+        self.assertIn("處置", part, "塊尾那一行處置不能被收掉")
+
+    def test_one_long_event_is_cut_to_one_short_line(self):
+        done = self.run_py("scripts/event.py", "emit", "ticket.state", "--ticket", "1",
+                           "--note", "長" * 400)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        part = section(self.main(), "2. 最近發生的事")
+        line = [one for one in part.splitlines() if "長長" in one][0]
+        self.assertLessEqual(len(line), 160)
+
+
+class A8TheReadingList(OpeningPage):
+    config_extra = {"rules": PROJECT_RULES}
+
+    def setUp(self):
+        super().setUp()
+        self.write("docs/roles/contract.md", "## 不可違反的\n- RULE-MARK\n")
+        self.write("docs/roles/main.md", CARD)
+        self.write("docs/roles/model/fable.md", "# fable\n")
+        self.write("memory/role/main.inbox.md", "- 專案疊層\n")
+        self.write("memory/model/fable.inbox.md", "- 還沒併檔的\n")
+        self.write("memory/project/facts.md", "# 事實\n")
+        self.write("docs/HANDOFF.md", "# 交接\n")
+
+    def reading(self):
+        return section(self.main(), "接下來要讀的", stop="\n\n")
+
+    def test_a8_card_then_project_layer_then_memory_then_handoff(self):
+        part = self.reading()
+        order = [part.index(one) for one in ("docs/roles/main.md", "memory/role/main.inbox.md",
+                                             "memory/model/fable.inbox.md", "docs/HANDOFF.md")]
+        self.assertEqual(order, sorted(order), part)
+        self.assertIn("memory/role/main.md", part[:part.index("memory/role/main.inbox.md")],
+                      "角色卡那一行要標明它是 memory/role/main.md 的同步本")
+        self.assertNotIn("memory/role/main.md    你這個角色的角色卡", part)
+        self.assertFalse([line for line in part.splitlines()
+                          if line.split()[:1] == ["memory/role/main.md"]],
+                         "專案沒有 memory/role/main.md,不准指過去")
+        for one in ("docs/roles/model/fable.md", "memory/role/", "memory/project/"):
+            self.assertIn(one, part)
+        self.assertIn("現況", part)
+        self.assertNotIn("最後三節", part)
+
+    def test_a8_every_path_is_checked_against_the_root(self):
+        shutil.rmtree(os.path.join(self.repo, "memory", "project"))
+        part = self.reading()
+        seen = 0
+        for line in part.splitlines()[1:]:
+            words = line.split()
+            if not words or not ("/" in words[0] or words[0].endswith(".md")):
+                continue
+            seen += 1
+            gone = not os.path.exists(os.path.join(self.repo, words[0]))
+            self.assertEqual("(不在)" in line, gone, line)
+        self.assertGreater(seen, 5, part)
+        self.assertIn("(不在)", [line for line in part.splitlines()
+                               if "memory/project/" in line][0])
+
+    def test_a8_canon_points_at_its_own_card(self):
+        conf = json.loads(self.read("board/config.json"))
+        del conf["rules"]
+        self.write("board/config.json", json.dumps(conf))
+        self.write("memory/role/main.md", CARD)
+        part = self.reading()
+        self.assertEqual([line.split()[0] for line in part.splitlines()[1:3]],
+                         ["memory/role/main.md", "memory/model/fable.inbox.md"])
+        self.assertNotIn("memory/role/main.inbox.md", part, "正本不印專案疊層")
 
 
 if __name__ == "__main__":

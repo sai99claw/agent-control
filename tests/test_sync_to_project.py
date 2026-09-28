@@ -498,5 +498,84 @@ class TheProjectsOwnMemoryIsNotOurs(unittest.TestCase):
             self.assertIn("memory/role/*.md", r.stderr, "說得出該改成什麼")
 
 
+
+def contract_of(text):
+    """「## 不可違反的」那一節(到下一個 `## `)—— 測試自己切,不問被測腳本。"""
+    out, inside = [], False
+    for line in text.splitlines():
+        if line.startswith("## "):
+            if inside:
+                break
+            inside = line.startswith("## 不可違反的")
+        if inside:
+            out.append(line)
+    return "\n".join(out).strip()
+
+
+class TheContractIsSynced(unittest.TestCase):
+    """#62 A9:專案主線開場那一頁把「不可違反的」印在最前面,來源是 sync 產的
+    `docs/roles/contract.md` —— 與角色卡同一條同步,不會手抄分岔(D-026 丙)。"""
+
+    def read(self, *parts):
+        with open(os.path.join(*parts), encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_a9_contract_md_is_the_section_with_a_provenance_header(self):
+        """**變異**:拿掉 copy_contract 那一行呼叫 → 這一條紅。"""
+        with tempfile.TemporaryDirectory() as d:
+            r = sync(d)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            got = self.read(d, "docs", "roles", "contract.md")
+            first, _, body = got.partition("\n")
+            self.assertIn("同步產生", first)
+            self.assertIn("請到 agent-control 改", first)
+            want = contract_of(self.read(HERE, "CLAUDE.md"))
+            self.assertTrue(want, "A 的 CLAUDE.md 沒有那一節 —— 這一條什麼都沒驗")
+            self.assertEqual(body.strip(), want)
+
+    def test_a9_it_is_in_the_manifest_once_and_survives_a_second_sync(self):
+        """**變異**:不把 contract.md 記進 NEW_LIST → 第二次同步把它當成非產出物唸出來。"""
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(sync(d).returncode, 0)
+            r = sync(d)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            manifest = self.read(d, "docs", "roles", ".sync-manifest").splitlines()
+            self.assertEqual(manifest.count("contract.md"), 1)
+            self.assertTrue(os.path.exists(os.path.join(d, "docs", "roles", "contract.md")))
+            for line in r.stdout.splitlines():
+                if "contract.md" in line:
+                    self.assertNotIn("退場", line)
+                    self.assertNotIn("非產出物", line)
+
+    def test_a9_a_change_on_the_a_side_follows(self):
+        """A 端那一節改一個字再同步,專案那一份跟著變。用一顆**拋棄式的 A**
+        (只放 sync 要的那幾份),真的 A 一個字都不動。"""
+        with tempfile.TemporaryDirectory() as a, tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(a, "scripts"))
+            os.makedirs(os.path.join(a, "memory", "role"))
+            with open(os.path.join(HERE, "scripts", "sync-to-project.sh"), encoding="utf-8") as f:
+                script = f.read()
+            with open(os.path.join(a, "scripts", "sync-to-project.sh"), "w",
+                      encoding="utf-8") as f:
+                f.write(script)
+            with open(os.path.join(a, "memory", "role", "main.md"), "w", encoding="utf-8") as f:
+                f.write("# 主線\n")
+
+            def run(word):
+                with open(os.path.join(a, "CLAUDE.md"), "w", encoding="utf-8") as f:
+                    f.write("# A\n\n## 不可違反的\n- 規則%s\n\n## 別的\n- 不同步\n" % word)
+                r = subprocess.run(["sh", os.path.join(a, "scripts", "sync-to-project.sh"), d],
+                                   capture_output=True, text=True, timeout=120)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                return self.read(d, "docs", "roles", "contract.md")
+
+            first = run("甲")
+            self.assertIn("規則甲", first)
+            self.assertNotIn("不同步", first)
+            second = run("乙")
+            self.assertIn("規則乙", second)
+            self.assertNotIn("規則甲", second)
+
+
 if __name__ == "__main__":
     unittest.main()

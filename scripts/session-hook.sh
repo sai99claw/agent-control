@@ -23,9 +23,11 @@
 # ## model:`AC_MODEL` > board/config.json 的 `routing.main` > unknown
 # 缺的時候印一行警告,不靜默 —— 一筆 model=unknown 的事件與一筆量過的長得一樣。
 #
-# ## 上限 16384 bytes
-# 超過就截掉**中間**:開頭與「接下來要讀的」那一段留著(那一段是這一頁的目的),
-# 最後一行說原始多大、全文怎麼看。
+# ## 上限 10000 字元(#62)
+# Claude Code 的 hook 文件:plain stdout 上限 10,000 characters —— 單位是字元不是 bytes
+# (以前寫 16384 bytes,單位與數字都不對;一個中文字 3 bytes,量 bytes 會截在錯的地方)。
+# 超過就截掉**中間**:開頭(不可違反的那一節與角色卡)與「接下來要讀的」那一段留著
+# (那一段是這一頁的目的),最後一行說原始多長、全文怎麼看。
 set -u
 [ "${AC_SESSION_HOOK:-}" = "0" ] && exit 0
 [ -n "${AC_ROLE:-}" ] && [ "$AC_ROLE" != "main" ] && exit 0
@@ -41,7 +43,7 @@ _ac_root() {
 }
 ROOT=${AC_ROOT:-$(_ac_root)}
 AC=$(cd "$(dirname "$0")" && pwd)
-LIMIT=16384
+LIMIT=10000
 
 # stdin 是 hook 的 JSON;手動在終端機跑時沒有,不要卡在讀 stdin。
 if [ -t 0 ]; then INPUT=""; else INPUT=$(cat); fi
@@ -109,19 +111,20 @@ printf '%s\n' "$PAGE" | python3 -c '
 import sys
 
 limit, again = int(sys.argv[1]), sys.argv[2]
-data = sys.stdin.buffer.read()
+data = sys.stdin.buffer.read().decode("utf-8", "replace")
+out = sys.stdout.buffer
 if len(data) <= limit:
-    sys.stdout.buffer.write(data)
+    out.write(data.encode("utf-8"))
     sys.exit(0)
-notice = ("session-hook: 截斷 —— 原始 %d bytes 超過上限 %d,中間略去;全文:%s\n"
-          % (len(data), limit, again)).encode("utf-8")
-gap = "session-hook: …(中間略去,見最後一行)…\n".encode("utf-8")
-at = data.rfind("── 接下來要讀的".encode("utf-8"))
-tail = data[data.rfind(b"\n", 0, at) + 1:] if at >= 0 else b""
+notice = ("session-hook: 截斷 —— 原始 %d 字元超過上限 %d,中間略去;全文:%s\n"
+          % (len(data), limit, again))
+gap = "session-hook: …(中間略去,見最後一行)…\n"
+at = data.rfind("── 接下來要讀的")
+tail = data[data.rfind("\n", 0, at) + 1:] if at >= 0 else ""
 if len(tail) + len(notice) + len(gap) > limit // 2:
-    tail = b""
+    tail = ""
 head = data[:limit - len(tail) - len(notice) - len(gap)]
-head = head[:head.rfind(b"\n") + 1]
-sys.stdout.buffer.write(head + gap + tail + notice)
+head = head[:head.rfind("\n") + 1]
+out.write((head + gap + tail + notice).encode("utf-8"))
 ' "$LIMIT" "$AGAIN"
 exit 0
