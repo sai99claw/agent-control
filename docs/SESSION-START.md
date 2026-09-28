@@ -18,6 +18,9 @@
 
 ## 主線
 - **這一節現在由 hook 自動跑**(#39):`.claude/settings.json` 的 SessionStart hook 叫 `scripts/session-hook.sh` → `new-session.sh main <routing.main>`,那一頁在第一個 prompt 之前就在上下文裡;startup / clear 發 `session.start`,resume / compact 只重印;副本裡(`worktree_dir` 底下、`AC_ROLE` 非 main、`AC_SESSION_HOOK=0`)不觸發。
+- **越界由 PreToolUse hook 機械擋**(#63):`scripts/guard-main.sh` 擋主線自寫票面(`ticket.py create` / `set <票面欄>` → 派開題者)、
+  讀 log / task output(→ `inbox.py show`)、裸 `git commit` / `merge`(→ `land.sh`);每一次擋發 `main.blocked`。
+  真的要越界:指令前面加 `AC_MAIN_OVERRIDE=1 `(放行並發 `main.override`)。子代理人、`AC_ROLE` 非 main、副本裡不觸發。
 - 那一頁的**第一段**是「不可違反的」那一節 + 主線角色卡全文 + `memory/role/main.inbox.md` 最後 5 行(#62):
   compact 後規則已經在上下文最前面,不靠自覺去讀。正本讀 `CLAUDE.md` 那一節;專案讀 sync 產的
   `<rules.roles_dir>/contract.md`,缺了那一頁會說。票(Draft 只計數)與收件匣各列最多 20 行,
