@@ -6,7 +6,7 @@
 - 閘門:`scripts/gate.sh --branch|--base|--full`(對照表在裡面;對不到要出聲)。
 - 禁區埠:<prod/staging/portal 埠>;禁區目錄:<資料與秘密>。
 - 副本裡**不准跑**的腳本:<會寫到 repo 外或 prod 的那幾支>。
-- 發版:`scripts/release.sh <tag>`,人授權、主線執行。
+- 發版:`scripts/release.sh <tag>`,人授權、主線執行。回歸紅在既有案例上 → 發版腳本叫 `scripts/control/status.py regression-red --source release --log <log> --dispatch`,發版照擋。
 - 開場:`.claude/settings.json` 的 SessionStart hook 叫 `scripts/control/session-hook.sh`,主線那一頁在第一個 prompt 之前就在上下文裡(model 讀 `board/config.json` 的 `routing.main`;副本裡不觸發)。
 
 ## 對照表
