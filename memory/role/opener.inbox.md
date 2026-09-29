@@ -4,3 +4,4 @@
 - 跨 repo 依賴不能寫 depends_on(兩邊票號撞);sync-to-project.sh 名單只十支,gate.sh/land.sh/metrics.py 不會到專案端;dry-run 不比內容,判準是同步後逐檔 cmp -s (#648) (2026-09-23, main@fable)
 - allowed_write_paths 要含驗證者會建立的案例檔(verify.files 那幾個);漏了 apply.sh 秒退一輪 (#23) (2026-09-23, main@fable)
 - AC 的驗證者案例住 tests/ 時票的 verify.tags 要留空:gate 會拿 tags 跑 verify.py --tag,選不到案例算缺口 rc=3;TAGS 字面只為 lint F2 (#29) (2026-09-23, main@fable)
+- needs_verifier 用 docs/DISPATCH-TEMPLATE.md §5.8 第 3 問判:驗證者案例只會重演 worker 自己案例的同一契約就寫 false + 一句理由(T #679 先例:驗證者案例只會重複 worker 的案例) (#68, 2026-09-30, worker@opus)

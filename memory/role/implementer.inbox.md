@@ -1,0 +1,1 @@
+- 每條新增/改動的測試先答 docs/DISPATCH-TEMPLATE.md §5.8 四問,答案一行 `四問:` 放在 EVIDENCE ③ 變異表旁 (#68, 2026-09-30, worker@opus)
