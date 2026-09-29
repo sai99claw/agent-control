@@ -69,7 +69,8 @@ class SyncsTheScripts(unittest.TestCase):
             out = sync(d).stdout
             self.assertIn("接點", out)
             for entry in ("status.py done", "verify-case.py check", "apply.sh",
-                          "auto-fix.sh", "inbox.py list", "rules.py pack"):
+                          "auto-fix.sh", "inbox.py list", "rules.py pack",
+                          "status.py regression-red"):
                 self.assertIn(entry, out)
 
     def test_a_project_without_a_config_is_told_to_add_one_first(self):

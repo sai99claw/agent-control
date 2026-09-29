@@ -340,6 +340,8 @@ sync:      model 讀 board/config.json 的 routing.main(或 AC_MODEL);副本裡�
 sync:   8. 閘門手跑綠 → 票轉 InReview → 派覆核(auto-fix 綠的那一趟它自己會叫):
 sync:        python3 scripts/control/ticket.py set <n> state InReview && sh scripts/control/review.sh <n>
 sync:      review.sh 讀 templates/dispatch-reviewer.md(這一支已同步過去)與 board/config.json 的 reviewer 段。
+sync:   9. 發版回歸紅了自動開修復票並交 auto-fix:python3 scripts/control/status.py regression-red --source release --log <log> --dispatch
+sync:      紅在既有案例上 → 每條開(或沿用)一張 Ready 的 worker 票;發版照擋。
 EOF
 
 # 接了沒:**同步了但沒有呼叫點**(2026-09-23,#29 A11;G11)。

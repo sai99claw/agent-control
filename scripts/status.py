@@ -12,6 +12,9 @@
     scripts/status.py show   --ticket 7 [--run-id …] [--runs]
     scripts/status.py suspects --ticket 7 [--run-id …] [--count]   # 環境可疑幾筆
     scripts/status.py rundir --ticket 7 --run-id …   # 這一輪的目錄(回歸快取住那裡)
+    scripts/status.py regression-red --source release|gate [--log gate.log]… [--case id]…
+                             [--from-ticket 7] [--model m] [--rerun "<全套指令>"] [--dispatch]
+                             # 回歸紅在既有案例上 → 每條開(或沿用)一張修復票(T D-G130)
 
 寫的是 `<reports_dir>/t<票號>/<run_id>/status.json`(`board/config.json` 的
 `reports_dir`,預設 `reports/`),**一輪一個目錄、不覆寫**,log 另外複製一份進
@@ -72,6 +75,8 @@ import io
 import json
 import os
 import re
+import shlex
+import subprocess
 import sys
 import traceback
 import unittest
@@ -779,18 +784,7 @@ def open_flaky_ticket(root, case, seen, threshold, log, from_ticket):
     conf = event.config(root)
     if conf.get("flaky_auto_ticket") is False:
         return ""
-    try:
-        import ticket as ticket_mod                        # noqa: PLC0415
-    except ImportError:
-        return ""
-    try:
-        for row in ticket_mod.load_all():
-            if str(row.get("flaky_case") or "") == case and ticket_mod.is_open(row):
-                return ""
-    except OSError:
-        return ""
     model = (conf.get("routing") or {}).get("verify") or "sonnet"
-    out = io.StringIO()
     argv = [
         "--subject", "把 %s 修穩 —— 疑似 flaky 累計 %d 次" % (case, seen),
         "--objective",
@@ -805,27 +799,169 @@ def open_flaky_ticket(root, case, seen, threshold, log, from_ticket):
         "--role", "verifier", "--model", str(model), "--tool", "claude-code",
         "--state", "Ready",
     ]
+    ident, _ = open_repair_ticket(case, ("flaky_case",), argv, {
+        "flaky_case": case, "flaky_seen": seen, "flaky_log": log,
+        "flaky_from_ticket": from_ticket})
+    return ident
+
+
+def open_repair_ticket(case, keys, argv, fields):
+    """自動開票的三段:**查重 → `cmd_create` → 鎖裡補欄**。flaky 與 regression-red 共用。
+
+    查重只認**開著的**票、而且 `keys` 裡任一格等於 `case`;找到就回 `("", 那張票)`,
+    **不寫它** —— 覆核綁的 `state_version` 不能因為同一條又紅一次而過期。
+    開好了回 `(票號, None)`;開不出來回 `("", None)`。
+    `fields` 是 `cmd_create` 沒有旗標的那幾格(`flaky_*` / `regression_*` / 布林),
+    在同一把鎖裡補進去。
+    """
+    try:
+        import ticket as ticket_mod                        # noqa: PLC0415
+    except ImportError:
+        return "", None
+    try:
+        for row in ticket_mod.load_all():
+            if ticket_mod.is_open(row) and any(
+                    str(row.get(key) or "") == case for key in keys):
+                return "", row
+    except OSError:
+        return "", None
+    out = io.StringIO()
     try:
         rc = ticket_mod.cmd_create(argv, stdout=out)
     except (OSError, ValueError, RuntimeError):
-        return ""
+        return "", None
     if rc != 0:
-        return ""
+        return "", None
     found = re.search(r"#(\S+)", out.getvalue())
     ident = found.group(1) if found else ""
     if not ident:
-        return ""
+        return "", None
     try:
         with ticket_mod.Lock():
             data = ticket_mod.load(ident)
-            data["flaky_case"] = case
-            data["flaky_seen"] = seen
-            data["flaky_log"] = log
-            data["flaky_from_ticket"] = from_ticket
+            data.update(fields)
             ticket_mod.save(data)
     except (OSError, ValueError, RuntimeError):
         pass
-    return ident
+    return ident, None
+
+
+REGRESSION_SOURCES = ("release", "gate")
+DEFAULT_REGRESSION_WRITE_PATHS = ["tests/*", "verify/*"]
+# 修復票的驗收是**固定樣板**(T D-G130):這類票的驗收就是案例本身,所以不驗證者、
+# 不讓開票的人各寫各的。`{case}` / `{rerun}` 代入。
+REGRESSION_ACCEPTANCE = (
+    "{case} 在全套原順序下綠:`{rerun}` rc=0,且這一條不是 skip;紅的那個環境(發版靶)"
+    "由主線發版時再跑一次證 —— 這張票不放行任何發版",
+    "不准加 sleep 或猜測性等待(setTimeout/rAF/retry);不准放寬既有 timeout 或任何斷言;"
+    "不准刪案例、不准 skip、不准收窄引擎或條件",
+    "EVIDENCE 說得出紅的原因(測試等錯訊號 / 共用狀態 / 時序 / 產品行為改了),"
+    "修的是原因不是症狀;產品行為改了而案例仍對 → 修產品",
+    "案例明顯過時或不合理(D-G130 例外)→ 不改案例,OBJECTION category=ticket-wrong "
+    "寫明為什麼過時,停下等使用者裁;worker 不准自己判過時",
+    "變異:把修法還原 → 同一條案例在同樣條件下至少紅一次,輸出逐字貼進 EVIDENCE",
+)
+
+
+def dispatch_command():
+    """`--dispatch` 起的那一支。`AC_REGRESSION_DISPATCH_CMD` 給測試換成替身。"""
+    raw = os.environ.get("AC_REGRESSION_DISPATCH_CMD")
+    if raw:
+        return shlex.split(raw)
+    return ["sh", os.path.join(os.path.dirname(os.path.abspath(__file__)), "auto-fix.sh")]
+
+
+def cmd_regression_red(args):
+    """發版 / 閘門的回歸紅在**既有案例**上 → 每一條案例開(或沿用)一張固定樣板的
+    修復票,直接 Ready 交 auto-fix(T D-G130)。**發版照擋** —— 這一支只開票,不改
+    呼叫者的退出碼。
+    """
+    if args.source not in REGRESSION_SOURCES:
+        sys.stderr.write("status: --source 要是 %s 之一(收到 %r)\n"
+                         % (" / ".join(REGRESSION_SOURCES), args.source))
+        return 2
+    for log in args.log:
+        if not os.path.isfile(log):
+            sys.stderr.write("status: --log 找不到 %s\n" % log)
+            return 2
+    root = event.repo_root()
+    cases, logs = [], {}
+    for log in args.log:
+        for row in parse_failures(log):
+            if row["case"] not in cases:
+                cases.append(row["case"])
+                logs[row["case"]] = log
+    for case in args.case:
+        if case not in cases:
+            cases.append(case)
+    if not cases:
+        print("status: 沒有紅的案例(%s)—— 沒開票" % args.source)
+        return 0
+    conf = event.config(root)
+    regression = conf.get("regression") or {}
+    enabled = conf.get("regression_auto_ticket") is not False
+    model = args.model or (conf.get("routing") or {}).get("implement") or "opus"
+    rerun = args.rerun or regression.get("rerun_cmd") or conf.get("unit_cmd") or ""
+    paths = regression.get("write_paths")
+    if not isinstance(paths, list) or not paths:
+        paths = DEFAULT_REGRESSION_WRITE_PATHS
+    if enabled and not rerun:
+        sys.stderr.write("status: 沒有全套指令,verify.run 留空:"
+                         "設 board/config.json 的 regression.rerun_cmd\n")
+    rc = 0
+    made = []
+    for case in cases:
+        ident, reused = "", None
+        if enabled:
+            argv = [
+                "--subject", "回歸紅:%s(%s)—— 修到全套原順序綠" % (case, args.source),
+                "--objective",
+                "既有案例 %s 在 %s 回歸紅了。找出紅的原因並修掉,修到全套在原順序下綠;"
+                "發版照擋,直到主線在發版靶上再跑一次綠。" % (case, args.source),
+            ]
+            for line in REGRESSION_ACCEPTANCE:
+                argv += ["--acceptance", line.format(case=case, rerun=rerun)]
+            argv += ["--in-scope", case]
+            for path in paths:
+                argv += ["--allowed-write-path", str(path)]
+            if rerun:
+                argv += ["--verify-run", rerun]
+            argv += ["--role", "worker", "--model", str(model), "--tool", "claude-code",
+                     "--state", "Ready"]
+            ident, reused = open_repair_ticket(
+                case, ("regression_case", "flaky_case"), argv, {
+                    "needs_verifier": False, "interface_fixed": False,
+                    "regression_case": case, "regression_source": args.source,
+                    "regression_log": logs.get(case, ""),
+                    "regression_from_ticket": args.from_ticket})
+            if reused is not None:
+                ident = str(reused.get("id") or "")
+                print("status: %s 沿用 #%s(%s)" % (case, ident, reused.get("state", "?")))
+            elif ident:
+                made.append(ident)
+                print("status: %s 開了修復票 #%s(role=worker,Ready)" % (case, ident))
+            else:
+                sys.stderr.write("status: %s 修復票開不出來\n" % case)
+                rc = 1
+        else:
+            print("status: %s 紅了 —— regression_auto_ticket=false,只發事件" % case)
+        try:
+            event.emit("regression.red", ticket=ident, case=case, source=args.source,
+                       reused=reused is not None)
+        except Exception:                                  # noqa: BLE001
+            sys.stderr.write("status: regression.red 事件發不出去(%s)\n" % case)
+            rc = 2
+    if args.dispatch:
+        command = dispatch_command()
+        for ident in made:
+            log = os.path.join(ticket_dir(root, ident), "regression-dispatch.log")
+            os.makedirs(os.path.dirname(log), exist_ok=True)
+            with open(log, "ab") as handle:
+                subprocess.Popen(command + [ident], cwd=root, stdin=subprocess.DEVNULL,
+                                 stdout=handle, stderr=subprocess.STDOUT,
+                                 start_new_session=True)
+            print("status: 已起 auto-fix #%s(背景,log %s)" % (ident, log))
+    return rc
 
 
 def cmd_done(args):
@@ -1072,6 +1208,17 @@ def main(argv):
     rundir.add_argument("--ticket", required=True)
     rundir.add_argument("--run-id", default="")
     rundir.set_defaults(run=cmd_rundir)
+
+    red = subs.add_parser("regression-red")
+    # 不用 `choices` / `required`:缺與錯要一樣列出認得的值,argparse 缺的那一種不列。
+    red.add_argument("--source", default="")
+    red.add_argument("--log", action="append", default=[])
+    red.add_argument("--case", action="append", default=[])
+    red.add_argument("--from-ticket", default="")
+    red.add_argument("--model", default="")
+    red.add_argument("--rerun", default="")
+    red.add_argument("--dispatch", action="store_true")
+    red.set_defaults(run=cmd_regression_red)
 
     show = subs.add_parser("show")
     show.add_argument("--ticket", required=True)

@@ -40,6 +40,8 @@ KINDS = (
     "gate.start", "gate.rerun", "gate.pass", "gate.fail", "flake.auto_pass",
     # 環境壞了:同一引擎同形訊息連紅達門檻,那一段當場中止(#7)。
     "env.suspect",
+    # 發版 / 閘門回歸紅在既有案例上:開了(或沿用)哪張修復票(T D-G130,#67)。
+    "regression.red",
     # 落地。refused 與 fail 分開:前者是「還沒開始就退回」,後者是「跑了、紅了」。
     "land.start", "land.refused", "land.pass", "land.fail",
     # 發版:人授權、主線執行。

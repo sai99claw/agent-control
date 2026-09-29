@@ -107,6 +107,8 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
    > ⛔ 取代 D-010 原本的「全 flaky 視為綠」。2026-09-21 外部審查的實測反例:第一條測試污染共用狀態、第二條檢查乾淨狀態 —— 整組必紅、乾淨程序單跑必綠,而舊規則正是以「所有紅的案例單跑都綠」為由回傳 0。**順序依賴的 bug 於是每一次都被判成偶發。**
 2. 疑似 flaky 逐筆寫進 `reports/flaky.jsonl`(持久事件帳,不隨下一輪清空)。同一條累計到門檻(`board/config.json` 的 `flaky_threshold`,預設 3)發 `decision.asked`,**並自動開一張修不穩定的票**(role=verifier,票上留 `flaky_case`;同一條案例只開一張,`flaky_auto_ticket: false` 可關)。
    > 為什麼從「只發事件」改成「自動開票」(D-015):事件沒有 owner、沒有驗收,而**一則沒有人認領的事件比一張沒有人認領的票更容易被滑過去** —— 票至少每個 session 開場都出現在 `list --open` 裡。
+
+   **發版 / 閘門回歸紅在既有案例上(`regression-red`,T D-G130,#67)**:`python3 scripts/status.py regression-red --source <release|gate> --log <log> [--case <id>]… [--dispatch]`。每一條紅的案例(log 只認 `^FAIL:` / `^ERROR:`)開一張 role=worker、state=Ready、`needs_verifier=false` 的修復票,驗收是**固定五條樣板**(全套原順序綠 / 不准 sleep、放寬、刪、skip / 說得出原因 / 過時走 OBJECTION 等使用者裁 / 還原修法要紅),票上留 `regression_case` / `regression_source` / `regression_log` / `regression_from_ticket`。**查重**:已有開著的票且 `regression_case` 或 `flaky_case` 等於它 → 印「沿用 #n」、**不寫票**(覆核綁的 `state_version` 不因又紅一次而過期)。每條發一則 `regression.red`;`regression_auto_ticket: false` 只發事件不開票。`--dispatch` 對這次新開的票背景起 `auto-fix.sh`,不等。model:`--model` > `routing.implement` > opus;verify.run:`--rerun` > `regression.rerun_cmd` > `unit_cmd`;寫入範圍:`regression.write_paths` > `tests/*`、`verify/*`。**發版照擋** —— 這一支只開票。
 3. 真紅 → 起**新** worker:`scripts/auto-fix.sh <票號>`。`gate.sh` 與單票 `land.sh`
    預設就會走 auto-fix;**要人下場才明寫 `--no-auto-fix`**。
    它讀最新狀態檔,組派工文 = **規則包**(`scripts/rules.py pack worker`)+ 票面快照 + `repair_context`
@@ -146,6 +148,7 @@ worker 說「這張票寫錯了」以前只是一句話:沒有結構化類別、
 | 單跑綠只標 `suspected_flaky` + 原順序整組重跑;rc 不因 flake 變綠 | **已實作** | `scripts/gate.sh`(`AC_NO_FLAKE_RERUN=1` / `AC_FLAKE_RERUN_GROUP=0`) |
 | flake 持久事件帳 + 達門檻發 NeedsDecision | **已實作** | `reports/flaky.jsonl`;`status.py` 發 `decision.asked` |
 | flake 達門檻**自動開修復票** | **已實作**(2026-09-21,D-015) | `status.py` 的 `open_flaky_ticket`;同一案例只開一張,`flaky_auto_ticket: false` 可關 |
+| 發版 / 閘門回歸紅在既有案例上**自動開修復票**(固定五條樣板,可 `--dispatch` 交 auto-fix) | **已實作**(2026-09-29,#67,T D-G130) | `status.py regression-red`;與 flaky 共用 `open_repair_ticket`(查重認 `regression_case` / `flaky_case`,只認開著的),`regression_auto_ticket: false` 可關 |
 | 局部閘門跑**票的 `verify.tags`** | **已實作**(以前漏列) | `gate.sh --ticket <n>` → `scripts/verify.py --tag …`,原始輸出存檔 |
 | 全套跑**全部回歸**,不靠執行器自測間接跑 | **已實作**(以前漏列) | `gate.sh --full` → `scripts/verify.py` |
 | **baseline 驗紅**(乾淨主線該紅、candidate 該綠),import 失敗不算紅 | **已實作**(以前漏列) | `scripts/verify-case.py check <n>` → 寫票的 `verify.baseline` |
