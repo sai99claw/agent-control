@@ -1,0 +1,75 @@
+{
+  "id": "67",
+  "subject": "status.py regression-red:發版/閘門回歸紅在既有案例上 → 依案例 id 自動開(或沿用)一張固定樣板的修復票,直接 Ready 交 auto-fix;發版照擋(T D-G130)",
+  "created": "2026-09-29T23:50:17+08:00",
+  "objective": "新增 `python3 scripts/status.py regression-red --source <release|gate> [--log <unittest 輸出>]… [--case <id>]… [--from-ticket n] [--model m] [--rerun \"<全套指令>\"] [--dispatch]`:從 log(parse_failures,只認 ^FAIL:/^ERROR:)與 --case 收齊紅的案例 id,每一條:已有開著的票且 regression_case 或 flaky_case 等於它 → 印「沿用 #n(state)」、不寫票(覆核綁的 state_version 不能因為又紅一次而過期);沒有 → ticket.py cmd_create 開一張 role=worker、state=Ready、needs_verifier=false、驗收是固定樣板的票,票上留 regression_case/regression_source/regression_log/regression_from_ticket;每條發一則 event `regression.red`(ticket、case、source、reused);--dispatch 對「這次新開的」每一張起 `sh <同目錄>/auto-fix.sh <n>`(背景、不等)。board/config.json 的 `regression_auto_ticket: false` 只發事件不開票(與 flaky_auto_ticket 同形)。open_flaky_ticket 改成呼叫同一個「查重 → create → 鎖裡補欄」helper,flaky 的既有測試一條不改仍綠。sync-to-project 的接點清單多第 9 點,templates/project-CLAUDE.md 發版那一行寫明紅了叫哪一支。",
+  "acceptance": [
+    "【A1 開票,單元】tests/test_status_67.py(用 tests/test_status.py 的 Sandbox/StatusFile 那套 harness:self.status()/self.write()/self.tickets_on_disk()/self.kinds()):一份含兩條 FAIL/ERROR 的 unittest log(比照既有 LOG 常數,兩個不同 case id)→ `status.py regression-red --source release --log <log>` rc=0;tickets/ 多兩張:state=Ready、role=worker、needs_verifier 是 JSON false、interface_fixed 是 JSON false、regression_case==那條 id、regression_source==\"release\"、regression_log==log 路徑、subject 含 case id、in_scope==[case]、verify.run==rerun 指令、base_sha 非空。期望值全部從旗標與 log 文字來,不從 status.py 算。",
+    "【A2 固定樣板,單元】新開的票 acceptance 恰好這五條(逐字,{case}/{rerun} 代入):(1)「{case} 在全套原順序下綠:`{rerun}` rc=0,且這一條不是 skip;紅的那個環境(發版靶)由主線發版時再跑一次證 —— 這張票不放行任何發版」(2)「不准加 sleep 或猜測性等待(setTimeout/rAF/retry);不准放寬既有 timeout 或任何斷言;不准刪案例、不准 skip、不准收窄引擎或條件」(3)「EVIDENCE 說得出紅的原因(測試等錯訊號 / 共用狀態 / 時序 / 產品行為改了),修的是原因不是症狀;產品行為改了而案例仍對 → 修產品」(4)「案例明顯過時或不合理(D-G130 例外)→ 不改案例,OBJECTION category=ticket-wrong 寫明為什麼過時,停下等使用者裁;worker 不准自己判過時」(5)「變異:把修法還原 → 同一條案例在同樣條件下至少紅一次,輸出逐字貼進 EVIDENCE」。測試 assertEqual 整個 list。",
+    "【A3 查重,單元】同一份 log 跑兩次 → 仍只有兩張;第二次 stdout 含「沿用 #<n>」;第二次前後那兩張票檔 bytes 相同(state_version 不動)。預先放一張 state=Ready、flaky_case==同一 id 的票 → 沿用它、不新開。預先放一張 state=Done、regression_case==同一 id 的票 → 新開一張(關掉的不算)。",
+    "【A4 來源與空集合,單元】只給 `--case a.B.c --case a.B.d` 不給 --log → 開兩張;--log 與 --case 同一 id 合併只開一張;log 全綠(沒有 ^FAIL:/^ERROR:)且沒有 --case → rc=0、stdout 含「沒有紅的案例」、tickets/ 不變;--log 指到不存在的檔 → rc=2、stderr 點名路徑;--source 缺或不在 release/gate → rc=2 並列出認得的值。",
+    "【A5 模型與 rerun 取值順序,單元】model:`--model x` > board/config.json routing.implement > \"opus\";rerun:`--rerun` > config `regression.rerun_cmd` > config `unit_cmd`;三層都沒有 → 票仍開得出來,verify.run 為空字串、stderr 一行說「沒有全套指令,verify.run 留空:設 board/config.json 的 regression.rerun_cmd」。allowed_write_paths:config `regression.write_paths`(list)> [\"tests/*\",\"verify/*\"]。",
+    "【A6 關閉開關與事件,單元】config `regression_auto_ticket: false` → 不開票、rc=0、events 仍有 regression.red;每一條 case 一則 `regression.red`,欄位 ticket(沿用或新開的 id;關閉時為空字串)、case、source、reused(bool)。`event.py` 的 KINDS 加 \"regression.red\",tests/test_event.py 那張固定表跟著加;kind 不在表上 event.py 會拒收(rc=2),所以少加這一格 A1 整條紅。",
+    "【A7 --dispatch,單元】環境變數 `AC_REGRESSION_DISPATCH_CMD`(測試用,預設 `sh <status.py 同目錄>/auto-fix.sh`)指到一支把 argv 追加到檔案的 stub;log 兩條紅、一條已有開著的票 → stub 恰被叫一次,argv 含新開那張的 id、不含沿用那張的;沒有 --dispatch → stub 沒被叫。stdout 印「已起 auto-fix #<n>(背景,log <reports>/t<n>/regression-dispatch.log)」。狀態不等它跑完:Popen 不 wait。",
+    "【A8 flaky 路徑共用 helper,回歸】open_flaky_ticket 改叫共用的 helper 後,tests/test_status.py 現有的 test_reaching_the_threshold_opens_a_repair_ticket / test_a_fourth_flake_does_not_open_a_second_ticket / test_the_auto_ticket_can_be_turned_off_in_config **一個字不改**仍綠(oracle 已查:它們斷言 flaky_case、role==verifier、state==Ready、subject 含 case、acceptance 非空、關閉時仍有 decision.asked)。flaky 票仍是 role=verifier、驗收文字不變。",
+    "【A9 sync 與範本,單元+文件】scripts/sync-to-project.sh 的接點清單多第 9 點:「發版回歸紅了自動開修復票並交 auto-fix:python3 scripts/control/status.py regression-red --source release --log <log> --dispatch」;tests/test_sync_to_project.py 第 71 行那個 entry 表加 \"status.py regression-red\"。templates/project-CLAUDE.md 發版那一行接一句「回歸紅在既有案例上 → 發版腳本叫 `scripts/control/status.py regression-red --source release --log <log> --dispatch`,發版照擋」。docs/WORKFLOW.md flaky 那一段(第 108 行與第 148 行的表)旁加一段 regression-red;tickets/SCHEMA.md 加一列「自動開票欄」列 flaky_* 與 regression_*。",
+    "【A10 全套】`python3 -m unittest discover -s tests -p \"test_*.py\"` rc=0,skip 數與 base 相同。"
+  ],
+  "in_scope": [
+    "scripts/status.py",
+    "scripts/event.py",
+    "tests/test_status_67.py"
+  ],
+  "out_of_scope": [
+    "scripts/auto-fix.sh",
+    "scripts/land.sh",
+    "scripts/gate.sh",
+    "memory/**"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/status.py",
+    "scripts/event.py",
+    "tests/test_status_67.py",
+    "tests/test_event.py",
+    "tests/test_status.py",
+    "scripts/sync-to-project.sh",
+    "tests/test_sync_to_project.py",
+    "templates/project-CLAUDE.md",
+    "docs/WORKFLOW.md",
+    "tickets/SCHEMA.md",
+    "board/config.json"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "cb13f874b5ea25775422c531d7e962feea76b80b",
+  "state": "Ready",
+  "state_version": 5,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "python3 -m unittest tests.test_status_67 tests.test_status tests.test_event tests.test_sync_to_project -v",
+    "notes": "needs_verifier=false:控制腳本 + 同 repo 單元測試,worker 自寫 tests/test_status_67.py 並自證變異紅(把查重那一段拿掉 → A3 紅;把 KINDS 那一格拿掉 → A1 紅);驗證者另寫只會是同一份的複本(#65/#66 先例)。interface_fixed 不適用。"
+  },
+  "verify_strings": [
+    "regression-red",
+    "regression_case",
+    "regression_auto_ticket",
+    "regression.red"
+  ],
+  "decision_refs": [
+    "D-015",
+    "D-025",
+    "D-028",
+    "D-033"
+  ],
+  "feature": "control:regression-red",
+  "outline": "來源:T D-G130(2026-09-29)「以前過的 case 之後也要過,舊案例紅了就發 worker 修」;缺口是發版回歸(T release-test.sh)紅在既有案例上時沒有票可接 auto-fix,主線只能手開 stub(T #679 從早上放到晚上)。設計:status.py 新子命令 regression-red,重用 parse_failures 與 open_flaky_ticket 的「查重→cmd_create→鎖裡補欄」三段(抽成 helper,flaky 改叫它、測試不動);查重同時認 regression_case 與 flaky_case、只認開著的票;沿用時不寫票(review.state_version 不能因為又紅而過期)。驗收是固定五條樣板(全套原順序綠 / 不准 sleep 放寬刪 skip / 說原因 / 過時走 OBJECTION 等使用者裁 / 還原修法要紅),needs_verifier=false —— D-G130:這類票的驗收就是案例本身。--dispatch 對新開的票背景起 auto-fix.sh,不等。T 端接法(另開 T 票,不在本票):release-test.sh(不是 protected;deploy-prod.sh 是,不用動 —— 它已 exit 1)把 `python3 demo/test_browsers.py --target $BASE` 的輸出 tee 到 $DATA_DIR/logs/release-test-<ts>.log,失敗分支叫 `AC_ROOT=$ROOT python3 scripts/control/status.py regression-red --source release --log <那份 log> --model opus --dispatch`;board/config.json 加 regression.rerun_cmd=\"sh scripts/test-for.sh --branch\"、regression.write_paths=[\"demo/test_*.py\",\"demo/web/**\"];status.py 走既有 sync-to-project 名單,不用加檔。已實測:A main 無 regression-red/regression_case/regression_auto_ticket 字樣(verify_strings 唯一);flaky 三條測試的斷言已讀(A8 oracle);event.py KINDS 不在表上會 rc=2(A6 理由);T 的 protected_paths 不含 release-test.sh。未實測:--dispatch 從 deploy-prod 底下起 claude -p 的環境變數是否夠(T 票再驗)。順序 A6 KINDS → A8 抽 helper → A1/A2 → A3/A4/A5 → A7 → A9 → A10。建議 Opus。",
+  "needs_verifier": false,
+  "interface_fixed": false,
+  "test_plan": "每條驗收即一條案例,層級全是單元(tests/test_status_67.py,拋棄式 repo 的 Sandbox harness);輸入=log 文字/旗標/board/config.json,可觀察輸出=tickets/*.json 內容、events.jsonl 的 kind 與欄位、stdout/stderr 字串、rc、stub 檔的 argv;期望值來自旗標與樣板文字,不從 status.py 算。變異:拿掉查重 → A3 紅;拿掉 KINDS 的 regression.red → A1 紅;拿掉 --dispatch 的 Popen → A7 紅。"
+}
