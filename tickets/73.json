@@ -1,0 +1,62 @@
+{
+  "id": "73",
+  "subject": "tests 稽核批 3-B:test_land / test_auto_fix / test_verify_runner 的機械合併與改寫(~25 條、~80 s),斷言一條不少;接在 #70 之後",
+  "created": "2026-09-30T16:29:31+08:00",
+  "objective": "test_land 的綠色單票落地與空分支拒絕各只建一次沙盒、test_auto_fix 同 setUp 的全輪次案例折成一條、test_verify_runner 的 21.6 s 真跑全庫改成沙盒只放 example;每條保留的斷言仍在且照原 docstring 的變異會紅;三支合計 wall 少 ~80 s;python3 -m unittest discover -s tests 全綠",
+  "acceptance": [
+    "A1 test_land(−~11,改寫 1):綠色落地六條折進 HappyPath.test_a_branch_with_commits_still_lands_the_way_it_always_did —— HappyPath.test_the_land_worktree_is_cleaned_up_after_a_green_landing、HappyPath.test_every_step_is_an_event、PhasesAndClosing.test_gate_merge_and_push_are_recorded_separately、LandWakesMainUp.test_a_green_landing_says_the_ticket_still_needs_closing、OnlyOneLandAtATime.test_the_lock_is_released_when_the_land_finishes、LeftoverCopiesAreNamed.test_a_clean_worktree_base_says_nothing;刪 VerifyFilesMustBeOnTheBranch.test_a_ticket_with_no_verify_files_is_not_blocked_by_this(只驗 rc 0,HappyPath 的票本來就沒 verify.files)。空分支拒絕四條折進 ZeroCommits.test_a_branch_with_no_new_commits_is_refused_in_that_many_words —— test_it_does_not_open_a_land_worktree_when_it_refuses(它的 rc==2 比 rc!=0 強,留這個斷言)、test_a_clean_worktree_is_not_accused_of_holding_uncommitted_work(裸 assertNotIn 一句,改成有對象的或刪行)、LandWakesMainUp.test_a_refusal_also_leaves_a_page、OnlyOneLandAtATime.test_the_lock_is_released_even_when_it_refuses。改寫 LandTriesToClose.test_there_is_no_force_flag_in_land(grep land.sh 原始碼數 --force,註解提到就紅)為 test_land_refuses_a_force_flag_and_leaves_main_alone:跑 land t1 --force → rc 2 且主線 HEAD 不變(land.sh 已拒未知 flag)。變異:land.sh 放行 --force → 紅",
+    "A2 test_auto_fix(−~12):刪 WhenThereIsNothingToFix.test_a_ready_ticket_that_never_ran_starts_round_one_instead_of_stopping(同 TheFirstRoundStartsFromReady.test_a_ready_ticket_with_no_status_file_starts_round_one 的 M1);TheFirstRoundPacket.test_without_round_one_it_still_says_where_to_start 的 --round 1 併進 TheFirstRoundStartsFromReady.test_a_ticket_that_is_not_ready_is_stopped_by_its_state 的 Draft subTest;TheFirstRoundPacket.test_the_packet_is_also_written_where_the_second_round_would_go = test_a_dry_run_of_a_ready_ticket_does_not_touch_it / RunFromInsideATicketWorktree.test_a_ticket_that_is_not_in_version_control_yet_is_still_found → 留一條;TheDispatchPacket.test_the_packet_points_at_the_rules_pack_instead_of_pasting_everything 折進 test_dry_run_writes_the_packet_and_does_not_start_a_worker;TheWholeLoop.test_a_configured_rerun_command_receives_the_ticket_number ⊂ test_a_configured_rerun_command_runs_after_apply_and_emits_an_event;TheWholeLoop.test_a_red_round_gets_fixed_and_stops_at_awaiting_review + test_a_green_second_round_writes_the_gate_on_the_ticket_at_the_branch_head 同全輪 setUp → 一條(省 ~6 s;派工文措辭那兩行屬 test_gate:958,拿掉);EveryRoundCostsARowAndClosesItsAttempt.test_an_objection_fails_its_attempt_by_that_name 併 ThingsThatStopIt.test_an_objection_from_the_worker_becomes_a_row_on_the_ticket;ClaudeIsAskedForAnEnvelope.test_worker_and_verifier_rows_carry_tokens_from_the_envelope 併 test_t64_a4_a_bare_claude_gets_stream_json_and_verbose_once(省 ~11 s);TheFirstRoundVerifierRunsAlongside.test_c2_the_verifier_is_running_before_the_worker_is_dispatched 併 test_t60_interface_fixed_true_starts_the_verifier_alongside_the_worker;test_c1_true_starts_a_verifier_in_round_one 只剩 agent label 一個獨有斷言 → 併入同 class 任一條;刪 TheTicketSetsTheTimeout.test_t64_a2_a_negative_ticket_value_falls_back_to_the_config(同 test_t64_a2_a_zero_ticket_value… 的 value>0 分支;省 ~6 s;把負值加進那條的 subTest 也可);EveryRoundCostsARowAndClosesItsAttempt.test_a_green_round_writes_exactly_one_worker_row_from_the_envelope / test_a_worker_that_prints_no_envelope_still_costs_one_row_of_nulls 的逐欄 token 重驗屬 test_ticket:980–1014 → auto-fix 只留「恰一列、role/round/by」;刪 InterfaceFixedIsWrittenDown 兩條(grep SCHEMA.md 與 opener.md 的「介面已釘死」,沒有腳本讀)",
+    "A3 test_verify_runner(−2,改寫 3):刪 RunScopedCache.test_the_second_call_still_scopes_by_run_with_an_external_ac_root_present(設了 AC_ROOT 但 run_with 一律覆寫 → 測的是助手);刪 RootFinds….test_registered_tags_found_at_scripts_control(⊂ 同 class 另一條 :234–235);改寫 VerifyRunner.test_list_and_tag_filter_and_full_run 為 test_list_and_tag_filter_run_in_a_sandbox_with_only_example(用 #70 A4 抽出的搬樹 helper,只放 verify/example;現況 21.6 s 無參數跑真 verify/ 全庫);改寫 test_without_a_run_id_nothing_is_cached:先 prime 快取再斷言(現況從沒 prime,忽略 run id 也綠);改寫 test_unit_layer_without_config_is_loud_not_green:真的把 config 拿掉、斷言 rc 非 0 且訊息點名(現況接受 rc 0 或 3、對 0 不斷言)。#70 已改寫的 test_a_case_without_registered_tags_is_refused 不動",
+    "A4(數字與全綠):EVIDENCE 記改前(#70 落地後主線)/改後 AST 方法數與 python3 -m unittest discover -s tests 的 wall 秒數、Ran N / OK,以及三支各自單跑的秒數(改前基準:稽核 test_auto_fix 321 s、test_land 111 s、test_verify_runner 27 s);改後 rc 0。變異抽查至少四條各貼紅的第一行:A1 --force、A1 合併後的 HappyPath 任一原變異(例如 land.sh 不清 worktree)、A2 全輪 setUp 合併後的 M1、A3 config 拿掉。合併不減斷言:EVIDENCE 附「原案例 → 併入哪條」表,原斷言數 = 新斷言數;#70 加的絆線案例與 control_harness 的替身不動"
+  ],
+  "in_scope": [
+    "tests/test_land.py",
+    "tests/test_auto_fix.py",
+    "tests/test_verify_runner.py"
+  ],
+  "out_of_scope": [
+    "scripts/**",
+    "tests/control_harness.py",
+    "verify/**",
+    "board/**",
+    "templates/**",
+    "memory/**",
+    "docs/**"
+  ],
+  "depends_on": [
+    {
+      "id": "70",
+      "condition": "落地進主線(#70 改同三支檔與 control_harness,先落 #70 再以主線上的版本為底)"
+    }
+  ],
+  "allowed_write_paths": [
+    "tests/test_land.py",
+    "tests/test_auto_fix.py",
+    "tests/test_verify_runner.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "3b62959f37a595103490579eef6b6ebb28a4b91b",
+  "state": "Ready",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-018"
+  ],
+  "verify_strings": [
+    "test_land_refuses_a_force_flag_and_leaves_main_alone",
+    "test_list_and_tag_filter_run_in_a_sandbox_with_only_example"
+  ],
+  "test_plan": "全部單元層。合併的預言機是斷言數守恆表(原案例每個斷言落到新案例哪一行)。A1 --force 的預言機是 land 的 rc 與主線 HEAD(git rev-parse 前後相等),期望值來自 land.sh 對未知 flag 的既有拒絕(rc 2)。A3 沙盒的預言機是 verify.py --list 的輸出只含 example 的案例、wall 秒數 < 5 s;config 拿掉那條的期望值來自 verify.py 對缺 config 的訊息文字(worker 先跑一次確認實際字串再寫)。票面 test id 全以 main 207c544 為準;#70 落地後行號會變,只認 test id。功能標籤:無。",
+  "outline": "使用者裁示 2026-09-30「都按照你的建議做」;本票 = 稽核 §3.3 中 #70 也動到的三支(test_land/test_auto_fix/test_verify_runner),所以接在 #70 之後、以主線上落地的版本為底。性質:機械合併(同 setUp 的全輪次案例每條 5–12 s)+ 三條改寫(--force 從 grep 原始碼改成真跑;verify_runner 21.6 s 真跑全庫改沙盒;兩條從不 prime / 從不拿掉 config 的改成真的會紅)。預期 −~25 條、−~80 s(auto_fix ~30、land ~30、verify_runner ~20;稽核估算)。開票前實測:行號→test id 對照已用 AST 做過;稽核的 §4 真 CLI 主張主線抽查過;--force 現況 land.sh:186 拒未知 flag 是讀 code,未實測。與 #71/#72 沒有共同檔,可平行。needs_verifier=false:純測試檔整理,驗證者案例無新契約可寫(§5.8 第 3 問);正確性由斷言數守恆表 + 四條變異紅自證。不在本票:§3.4 的 test_land 重演 close 擋法五條與釘整句的 :275/:334/:376/:692(使用者裁示暫緩)、test_auto_fix WhichRoundIsTheLatestOne/TheCopiesGetCollected/TheResultBlock 那幾對(§3.4)。",
+  "needs_verifier": false
+}
