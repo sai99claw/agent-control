@@ -1,1 +1,6 @@
 - 每條新增/改動的測試先答 docs/DISPATCH-TEMPLATE.md §5.8 四問,答案一行 `四問:` 放在 EVIDENCE ③ 變異表旁 (#68, 2026-09-30, worker@opus)
+- 在副本 base/ 或 work/ 裡跑任何會發事件的腳本(連 memory.py check)都會新建 board/events.jsonl:base 就被動了、patch 多一個檔;要跑就在 base 的暫存拷貝裡跑,交件前拿 git archive 對 base 做一次 diff -r (#53, 2026-09-27, worker@opus)
+- OBJECTION lines are copied verbatim into tickets/<n>.json, which test_no_project_names scans: never quote an absolute home path (or project name) in them, or the ticket turns its own gate red (#53, 2026-09-27, worker@opus)
+- sh 腳本裡 $var 後面緊接全形字(。、,)時 bash 會把 UTF-8 位元組吃進變數名,set -u 下變成 unbound variable;新增的變數一律寫成 ${var} (#57, 2026-09-28, worker@opus)
+- 副本裡跑任何 scripts/*(含 memory.py check)前先 env -u AC_ROOT -u AC_CONTROL_DIR:派工帶的 AC_ROOT 讓它量主 repo 的檔(量到舊的就是假綠),還會在副本寫 board/events.jsonl 混進 patch (#59, 2026-09-28, worker@opus)
+- 對真實專案根實跑 new-session.sh / session-hook 前先把專案與它的 board 資料(tickets_dir、events_file、reports_dir 可能在根外)複製到 TMPDIR 再跑:memory.py check 在 --no-event 下仍會 emit memory.over_cap、還可能開整理票進專案票庫 (#62, 2026-09-29, worker@opus)
