@@ -115,7 +115,21 @@ DEFAULT_CONFIG = {
     # 沙盒預設一支什麼都不印的替身 —— 覆核照走「沒交件」那條路,**從不**碰真的模型。
     # 要測覆核的案例用 `set_reviewer()` 換掉它。
     "reviewer": {"command": "true", "timeout_seconds": 60},
+    # 同一個保險絲(#70):`auto-fix.sh` 找不到 `worker.command` 就起 `claude -p --model
+    # opus` —— 紅的 land 預設 auto-fix,於是紅的 land 測試會從透傳的 PATH 起真的模型
+    # (沒認證的機器靠認證失敗才綠)。`verifier.command` **故意不放**:沒設時它跟 worker
+    # 同一支(這裡就是這支替身),而 `test_auto_fix` 與 `verify/agent-output` 的案例只蓋
+    # `worker`、靠的正是「驗證者跟 worker 同一支」。
+    "worker": {"command": "true"},
 }
+
+# 絆線(#70):每個沙盒的 PATH 最前面放這一支 `claude`。**替身漏了哪一條路**,那條路
+# 起的就是它 —— 把完整參數記進 `AC_TEST_TRIPWIRE`、退非 0;cleanup 讀到非空就紅在那一條
+# 測試自己身上,不是靠「這台機器沒認證」靜靜綠。環境被誰剝掉 `AC_*` 時退回沙盒裡那一份。
+TRIPWIRE_CLAUDE = """#!/bin/sh
+echo "claude $*" >> "${AC_TEST_TRIPWIRE:-%s}"
+exit 97
+"""
 
 # 假 reviewer:記一行「被叫到了」、把派工文(stdin)留一份,印一份 pass 的覆核。
 REVIEWER_PASS = """#!/bin/sh
@@ -196,6 +210,13 @@ class Sandbox(unittest.TestCase):
     def setUp(self):
         self.home = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.home, True)
+        self.tripwire = os.path.join(self.home, "tripwire.log")
+        self.stub_bin = os.path.join(self.home, "stub-bin")
+        os.makedirs(self.stub_bin)
+        write_executable(os.path.join(self.stub_bin, "claude"),
+                         TRIPWIRE_CLAUDE % self.tripwire)
+        # 後登記先跑:在 rmtree 之前讀絆線。
+        self.addCleanup(self.assert_no_tripwire)
         self.repo = os.path.join(self.home, "repo")
         self.origin = os.path.join(self.home, "origin.git")
         self.log = os.path.join(self.home, "calls.log")
@@ -259,11 +280,24 @@ class Sandbox(unittest.TestCase):
             "GIT_AUTHOR_NAME": "sandbox", "GIT_AUTHOR_EMAIL": "s@example.invalid",
             "GIT_COMMITTER_NAME": "sandbox", "GIT_COMMITTER_EMAIL": "s@example.invalid",
             "GIT_TERMINAL_PROMPT": "0",
+            # 呼叫端自己給 `PATH=` 的(自帶假 claude 的案例)下面的 update 照舊蓋掉這一格。
+            "PATH": self.stub_bin + os.pathsep + os.environ.get("PATH", os.defpath),
+            "AC_TEST_TRIPWIRE": self.tripwire,
             "AC_TEST_LOG": self.log,
             "AC_GATE_LOG": os.path.join(self.home, "gate.log"),
         })
         base.update(extra)
         return base
+
+    def assert_no_tripwire(self):
+        """cleanup:絆線被踩過(沙盒裡有誰起了 `claude`)就紅,並印出被叫的參數。"""
+        if not os.path.exists(self.tripwire):
+            return
+        with open(self.tripwire, encoding="utf-8") as handle:
+            calls = handle.read()
+        if calls.strip():
+            raise AssertionError("tripwire: real claude would have run in %s:\n%s"
+                                 % (self.id(), calls))
 
     def set_reviewer(self, body, model="fixture-model", timeout=60):
         """`reviewer.command` 換成一支假的可執行檔;`--model` 放進命令,因為 `review.by`
