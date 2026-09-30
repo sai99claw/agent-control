@@ -35,7 +35,7 @@ class Template(unittest.TestCase):
         for heading in ("## 1. 副本 + patch", "## 2. 禁區", "## 3. 判綠",
                         "## 4. 不准收窄", "## 5. 變異驗紅",
                         "## 5.5", "## 6. 查證", "## 6.5 發現問題與處置問題要分開",
-                        "## 8. 回報格式"):
+                        "## 8. 回報格式", "## 5.8"):
             self.assertIn(heading, self.text, "少了一節")
 
     def test_the_false_green_table_is_still_the_whole_table(self):
