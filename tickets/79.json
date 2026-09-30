@@ -1,0 +1,80 @@
+{
+  "id": "79",
+  "subject": "將記憶分層契約做成 note/consolidate/gate 共用 lint",
+  "created": "2026-09-30T17:24:14+08:00",
+  "objective": "角色/模型記憶中的實作細節、專案記憶中的易過期定位,不能只靠人工自律混入主線。",
+  "acceptance": [
+    "`python3 -m unittest discover -s tests -p 'test_memory_layer_policy.py'`:各規則正例、模組名稱/時間等反例、精確 allow marker 與無效 marker 均符合矩陣。",
+    "同測試經 note、consolidate 真入口確認拒絕發生在寫檔/發 noted 或 consolidated 之前。",
+    "`python3 scripts/memory.py lint --json` 對候選 A 為 0;輸出明列掃描檔數及允許例外,不容許空掃描成功。",
+    "在拋棄式候選記憶插入一條函式呼叫後執行 `sh scripts/gate.sh --branch --ticket <本票>` 必紅,診斷含檔、行、rule 及建議目的地。",
+    "`python3 scripts/memory.py check --read-only` 與 `python3 scripts/repo-map.py check` 為 0,既有 cap 未提高。"
+  ],
+  "in_scope": [
+    "scripts/memory.py",
+    "scripts/gate.sh",
+    "CLAUDE.md",
+    "memory/role/README.md",
+    "memory/model/README.md",
+    "memory/project/README.md",
+    "docs/MEMORY.md",
+    "memory/role/*.md",
+    "memory/model/*.md",
+    "memory/project/*.md",
+    "tests/test_memory_layer_policy.py",
+    "tests/test_memory.py",
+    "code-map/index.json",
+    "code-map/INDEX.md"
+  ],
+  "out_of_scope": [],
+  "depends_on": [
+    {
+      "id": "78",
+      "condition": "落地"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/memory.py",
+    "scripts/gate.sh",
+    "CLAUDE.md",
+    "memory/role/README.md",
+    "memory/model/README.md",
+    "memory/project/README.md",
+    "docs/MEMORY.md",
+    "memory/role/*.md",
+    "memory/model/*.md",
+    "memory/project/*.md",
+    "tests/test_memory_layer_policy.py",
+    "tests/test_memory.py",
+    "code-map/index.json",
+    "code-map/INDEX.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "234d4451d1ae5d07ad3c6f393e055198fdd43d2c",
+  "state": "Draft",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "【裁示原話 Q2(本票承接)】「直接跟實作相關的內容只能寫在專案記憶,不該出現在模型記憶或角色記憶,他們只會有原則性的通用描述,是學習後檢討的地方。」\n【裁示原話 Q3(本票承接)】「專案記憶也不該寫太實作的東西,裡面該寫的是那種東西的設計邏輯跟原則,目的是讓整個框架可以長期有一致性的被維護,還有避免出現錯誤的過期指示。」\n【為什麼】README 說角色卡不受 2K,程式卻檢查;MEMORY 同時存在「project 全讀/受限」與「按需/不限」的文字。內容層已有路徑、函式、旗標、SHA 與案件敘事混入〔前報實測、讀碼推論〕。\n【規劃】\n1. 在 `memory/role/README.md`、`CLAUDE.md`、`docs/MEMORY.md` 寫同一契約:role/model 只存通用原則及自身反思;project 存專案設計理由、不變條件;具體命令、符號與易變事實去 reference/repo map;事故去票/review 歷史。\n2. 對齊容量單位:預設主卡正文 2,000 chars、合法 front matter override、角色卡 40 行、inbox 20 非空行、pack 4,096 UTF-8 bytes。project 不設容量上限、按需查詢。既有 D-006/D-013/D-021 及 T D-G123 不被默默改數字。\n3. 新 `memory.py lint [--file PATH] --json` 唯讀;共用判斷供 note 寫入前、consolidate 提交前及 gate 使用。\n4. 掃 role/model 主卡、inbox、本地疊層及有效來源角色卡;README 為契約文件不當作記憶正文掃。結構化 front matter 的來源/討論連結另驗格式,不把 metadata 當正文。\n5. 最小可執行規則如下,rule ID 必須穩定(欄位:rule | 判準 | role/model | project):\n   - `path` | 含路徑/檔名副檔名,如 `(?:[\\w.-]+/)*[\\w.-]+\\.(?:py|sh|js|ts|tsx|jsx|json|ya?ml|toml|sql|md|html|css)\\b` | 擋 | 可作模組/設計引用\n   - `line` | 檔案定位的 `:123`、`#L123`、`line 123`;不得把時間誤判為行號 | 擋 | 擋\n   - `call` | `\\b[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)*\\s*\\([^()\\n]*\\)` | 擋 | 擋,精確 API 去 reference\n   - `flag` | token 邊界的 `--[A-Za-z][\\w-]*`,及 shell code span 中的短旗標 | 擋 | 擋\n   - `sha` | 獨立或 backtick 包住的 7–64 位 hex,至少含一個 a–f;含 commit/sha/base 上下文亦檢查 | 擋 | 擋\n6. 這是可測的語法近似,不宣稱能判斷所有語意錯層。抽象化後的專案限定說法仍須覆核者判斷。\n7. 誤判例外使用同一行的精確 marker,例如:`<!-- memory-allow rule=path value=\"docs/ROLES.md\" reason=\"navigation-only\" ref=\"D-...\" -->`。只豁免指定規則與 exact value;必須有理由及存在的裁示引用,不准整檔/萬用字元豁免。適用於導覽指標、名稱恰似 SHA 等誤判,不准用來藏命令配方或實作流程。lint 輸出所有例外,覆核者可見。\n8. 啟用前修完 #78 遺留命中,不放 grandfather baseline。gate 必跑,不僅靠改記憶檔時才選中測試。\n9. 對新 note,缺來源 metadata 或 lint 失敗均在寫入前拒絕。\n【前置】#78 落地;落地前留 Draft。\n【needs_verifier=false 理由】共用 lint 的行為表及真寫入/gate 邊界已是主守衛,另做字串稽核沒有新增價值。\n【model=opus 理由】需處理規範例外、誤判及既有記憶遷移。\n【規模】M,約 250–450 行工具/測試及契約整理。裁示草稿 D-035(角色與模型記憶只留通用原則)、D-036 由主線登記,編號可能順延。",
+  "test_plan": "四問:守錯層內容無法寫入/落地;回歸為漏掃 inbox、例外變成全行豁免;既有容量守衛不查內容層;lint 是生產入口,無測試專用縫。交件時每個新增/改動案例仍須在 EVIDENCE 寫一行完整的 `四問:`。",
+  "feature": "記憶治理",
+  "decision_refs": [
+    "D-006",
+    "D-013",
+    "D-021"
+  ],
+  "verify_strings": [
+    "test_memory_layer_policy",
+    "memory-allow rule="
+  ],
+  "needs_verifier": false
+}

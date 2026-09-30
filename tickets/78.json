@@ -1,0 +1,71 @@
+{
+  "id": "78",
+  "subject": "整理 opener 超標及 A 記憶錯層,保留原則與逐條去向",
+  "created": "2026-09-30T17:24:14+08:00",
+  "objective": "opener 回到既有容量限制;A 角色/模型記憶只留通用原則,專案記憶只留設計理由。",
+  "acceptance": [
+    "`python3 scripts/memory.py check --read-only` 為 0;EVIDENCE 列 opener 的正文字元、行數及 implementer cap 未變。",
+    "`python3 scripts/memory.py check-stale --read-only` 對已處理 inbox 無未處置 closed-source 條目。",
+    "執行 Python 清單核對:整理前每條記憶都有唯一處置與可讀目的地;兩份討論模型不同,無未映射/遺失條目。",
+    "`python3 scripts/repo-map.py check` 為 0;實作細節目的地可由 query 找到。",
+    "`python3 scripts/rules.py inspect opener --model fable --json` 確認整理後 opener 正文仍被包入,沒有只剩標題。"
+  ],
+  "in_scope": [
+    "memory/role/*.md",
+    "memory/model/*.md",
+    "memory/project/*.md",
+    "docs/reference/memory-maintenance.md",
+    "docs/review/memory-remediation-a.md",
+    "discussions/*-memory-remediation-*.md",
+    "code-map/catalog.json",
+    "code-map/index.json",
+    "code-map/INDEX.md"
+  ],
+  "out_of_scope": [
+    "memory/role/README.md",
+    "memory/model/README.md"
+  ],
+  "depends_on": [
+    {
+      "id": "77",
+      "condition": "落地"
+    }
+  ],
+  "allowed_write_paths": [
+    "memory/role/*.md",
+    "memory/model/*.md",
+    "memory/project/*.md",
+    "docs/reference/memory-maintenance.md",
+    "docs/review/memory-remediation-a.md",
+    "discussions/*-memory-remediation-*.md",
+    "code-map/catalog.json",
+    "code-map/index.json",
+    "code-map/INDEX.md"
+  ],
+  "role": "consolidator",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "234d4451d1ae5d07ad3c6f393e055198fdd43d2c",
+  "state": "Draft",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "【裁示原話 Q3(本票承接)】「專案記憶也不該寫太實作的東西,裡面該寫的是那種東西的設計邏輯跟原則,目的是讓整個框架可以長期有一致性的被維護,還有避免出現錯誤的過期指示。」\n【為什麼】opener 正文 2,449 字元,高於 2,000;implementer 2,700 已有合法上限,不是違規。另有 Opus 四次重複、reviewer 誰寫 review 的矛盾,以及已退場 workaround〔前報實測〕。\n【規劃】\n1. 依 #76 產生兩模型獨立討論及逐條處置清單;將早上報告的 A 項目全部列入盤點。\n2. opener 的操作命令、schema 欄位範例、路徑與具體事故移至現有契約/reference(`docs/reference/memory-maintenance.md`;opener 角色卡留一行指路引用它);角色卡留下「先驗前置條件、查既有 oracle、寫可觀察驗收」等原則。\n3. 移除/歸檔已不成立的 AwaitingReview、docs 通道、40K reviewer 等 workaround;review 由腳本寫回的角色責任與現行流程一致。\n4. Fable inbox 的通用設計原則移至共用權威;Opus inbox 去重;不得為壓縮而丟棄來源。\n5. A-specific 實作定位移入 code-map catalog/reference;project 只留下設計理由與不變條件。\n6. 不提高 cap。opener ≤2,000 正文字元且 ≤40 行;implementer 保留既有 2,700 合法上限。\n【寫入範圍備註】`memory/role/*.md`、`memory/model/*.md` 不含各自的 README.md(列在 out_of_scope 硬擋)。整理票的 model 是執行協調者,不取代兩個不同模型的討論要求(依 board/config.json 的 memory.consolidators 邀另一模型)。\n【前置】#77 落地;落地前留 Draft。\n【needs_verifier=false 理由】使用既有容量、來源完整性、pack 與索引守衛;兩模型討論負責語意,不加只檢文句的測試。\n【model=opus 理由】需要判斷抽象原則、現行契約與歷史事故的差異。\n【規模】M,約 15–20 個記憶檔,另兩份討論與一份處置表。裁示草稿 D-036(專案記憶保留設計理由)由主線登記,編號可能順延。",
+  "test_plan": "四問:不新增措辭測試;可觀察契約由既有主守衛驗證,語意去向由兩模型逐條覆核,避免為每條文字再寫重複斷言。交件時每個新增/改動案例仍須在 EVIDENCE 寫一行完整的 `四問:`。",
+  "feature": "記憶治理",
+  "decision_refs": [
+    "D-006",
+    "D-013"
+  ],
+  "verify_strings": [
+    "memory-maintenance.md"
+  ],
+  "needs_verifier": false
+}

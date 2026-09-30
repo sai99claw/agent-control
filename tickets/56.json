@@ -25,8 +25,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "434d3181fdf4fdbe21febb309680340e706f18f2",
-  "state": "Blocked",
-  "state_version": 9,
+  "state": "Done",
+  "state_version": 15,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -58,6 +58,30 @@
       "wall_seconds": 1182,
       "by": "auto-fix.sh",
       "at": "2026-09-28T13:59:57+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 26,
+      "tokens_out": 6752,
+      "cache_write": 43967,
+      "cache_read": 571138,
+      "wall_seconds": 70,
+      "by": "review.sh",
+      "at": "2026-09-28T14:33:04+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 505,
+      "by": "land.sh",
+      "at": "2026-09-28T14:41:51+08:00"
     }
   ],
   "objections": [
@@ -68,8 +92,30 @@
       "owner": "main",
       "disposition": "accepted",
       "follow_up": "主線裁示:接受。scripts/gate.sh --branch --ticket 也要寫同一個票 gate 欄(rc/sha/run_id/at,與 auto-fix 寫的同形狀),閘門只能有一個真相;gate.sh 加進 allowed_write_paths,同票做,不另開票。"
+    },
+    {
+      "category": "scope",
+      "body": "第 2 輪落差:gate.sh 與 auto-fix.sh 各組一次四鍵 gate JSON(共用 helper 只能放 ticket.py/wtbase.sh,不在範圍);形狀由 test_gate (a) 釘住。",
+      "evidence": "../agent-control-wt/fix-t56/round1/EVIDENCE-round2.md",
+      "owner": "main",
+      "disposition": "deferred",
+      "follow_up": "主線:接受兩處各組;要收成一份組法放 ticket.py 時併進 A #57 或另開小票,不擋本票。"
     }
   ],
   "owner": "main",
-  "branch": "t56"
+  "branch": "t56",
+  "gate": {
+    "rc": 0,
+    "sha": "43f6785bbeca811434675c30bfab097c8290bdf2",
+    "run_id": "20260928-142746-68933",
+    "at": "2026-09-28T14:31:53+08:00"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "932c080e8fcb86c7207a9bcd5234cb6c23dbedb1",
+    "note": "reports/t56/20260928-142746-68933/REVIEW.md",
+    "at": "2026-09-28T14:41:51+08:00",
+    "state_version": 15
+  }
 }

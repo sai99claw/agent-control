@@ -1,0 +1,79 @@
+{
+  "id": "77",
+  "subject": "延伸既有 code-map,建立可查詢且可驗新鮮度的實作索引",
+  "created": "2026-09-30T17:24:14+08:00",
+  "objective": "agent 能由穩定入口查到程式入口、相關守衛與設計來源,實作位置不再存入記憶正文。",
+  "acceptance": [
+    "`python3 scripts/repo-map.py build` 連跑兩次輸出位元組相同;`python3 scripts/repo-map.py check` 為 0。",
+    "`python3 -m unittest discover -s tests -p 'test_repo_map_contract.py'`:新增/改名/刪除已管理來源或入口,未重生時 check 非零,重生後 query 正確;無關檔變動不造成 churn。",
+    "`python3 scripts/repo-map.py query memory` 與 `query rules` 能定位真實入口及主守衛,所有連結存在;拼錯查詢非零並給索引入口。",
+    "同測試經同步 fixture 確認工具可在 `scripts/control/` 使用,T 型本地 catalog/人工卡不被同步覆蓋。",
+    "`sh scripts/gate.sh --branch --ticket <本票>` 必須拒絕候選樹中過期索引;關掉 freshness 檢查的變異必紅。"
+  ],
+  "in_scope": [
+    "scripts/repo-map.py",
+    "scripts/sync-to-project.sh",
+    "scripts/rules.py",
+    "scripts/gate.sh",
+    "board/config.json",
+    "code-map/catalog.json",
+    "code-map/index.json",
+    "code-map/INDEX.md",
+    "docs/CODE-MAP.md",
+    "docs/DISPATCH-TEMPLATE.md",
+    "tests/test_repo_map_contract.py",
+    "tests/test_sync_to_project.py"
+  ],
+  "out_of_scope": [],
+  "depends_on": [
+    {
+      "id": "76",
+      "condition": "落地"
+    },
+    {
+      "id": "71",
+      "condition": "落地"
+    },
+    {
+      "id": "72",
+      "condition": "落地"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/repo-map.py",
+    "scripts/sync-to-project.sh",
+    "scripts/rules.py",
+    "scripts/gate.sh",
+    "board/config.json",
+    "code-map/catalog.json",
+    "code-map/index.json",
+    "code-map/INDEX.md",
+    "docs/CODE-MAP.md",
+    "docs/DISPATCH-TEMPLATE.md",
+    "tests/test_repo_map_contract.py",
+    "tests/test_sync_to_project.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "234d4451d1ae5d07ad3c6f393e055198fdd43d2c",
+  "state": "Draft",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "【裁示原話 Q4(本票承接)】「實作相關的東西應該有個架構可以讓 agent 速查到需要的東西而不是每次都 grep。」\n【為什麼】現有 `docs/CODE-MAP.md` 已有模組卡與 stale 偵測,但明列符號索引尚未做;目前仍依賴 grep。此次唯讀列檔得到 A 209、T 1,567 個追蹤檔案,不宜把所有路徑貼進 4 KB pack。\n【規劃】\n1. 採 repo map+既有架構導覽,延伸 `code-map/`,不另造全文 wiki。\n2. 新增 `code-map/catalog.json`,手寫主題、責任、來源檔、入口符號、相關測試/裁示引用;只保存關係與導覽,不抄函式內容或行號。\n3. 新增 `scripts/repo-map.py`:`build` 生成 `code-map/index.json`、`code-map/INDEX.md`;`check` 唯讀重算並比對,缺檔、過期、失效入口非零;`query <topic-or-symbol>` 輸出來源路徑、符號、相關守衛及設計入口,找不到明說,不回空成功。\n4. 生成內容包含受管理來源檔集合與內容摘要、入口符號;Python 用 AST。Shell/JS 只宣告並支援本 repo 實際需要的 declaration 形式,不能把 regex 結果宣稱完整語意分析。\n5. catalog 為可控範圍;不掃描秘密、資料目錄、reports、node_modules 或整個家目錄。不寫時間戳/HEAD SHA 造成無內容變動的 churn。\n6. worker 修改來源後執行 build 並交產物;`apply.regen_cmd` 在支援的重建路徑重生;落地閘門執行 check,不得在覆核後悄悄生成新差異。\n7. `docs/DISPATCH-TEMPLATE.md` 與 rules pack 指示先 query;找不到/驗證失敗才對來源做針對性搜尋。pack 只放一個入口。\n8. 保留既有人工卡片的 stale advisory 語意;新增生成索引的 freshness 是可重算契約,過期必擋。\n9. 由 `sync-to-project.sh` 同步生成工具;專案 catalog 與 index 為專案所有,不由 A 覆蓋。\n【方案取捨】`llms.txt` 適合提供網站文件入口;aider repo map 接近本次「快速定位程式與符號」需求;matklad 的 `ARCHITECTURE.md` 適合說明模組關係;ADR index 解釋決策來源;Diátaxis reference 適合保存精確技術資料。因此以生成 repo map 為主、既有架構/裁示為連結來源最合適,不需要一次導入五套文件。參考:https://llmstxt.org/ 、https://aider.chat/docs/repomap.html 、https://matklad.github.io/2021/02/06/ARCHITECTURE.md.html 、https://diataxis.fr/reference/\n【前置】#76、A #71、#72 落地;落地前留 Draft。\n【needs_verifier=false 理由】生成/修改來源/check 的單一邊界足以證明 freshness,另派相同案例無新增保障。\n【model=opus 理由】需控制索引範圍、生成時點與覆核一致性。\n【規模】M–L,約 350–600 行工具與測試,另加生成產物。裁示草稿 D-037(建立實作速查入口)由主線登記,編號可能順延。",
+  "test_plan": "四問:守查詢可定位、過期可察覺;回歸為來源變動仍回舊入口;既有 check-stale 只檢人工卡 commit 差異且不擋;query/build/check 都是生產用途,不加測試專用縫。交件時每個新增/改動案例仍須在 EVIDENCE 寫一行完整的 `四問:`。",
+  "feature": "記憶治理",
+  "verify_strings": [
+    "test_repo_map_contract",
+    "repo-map.py"
+  ],
+  "needs_verifier": false
+}

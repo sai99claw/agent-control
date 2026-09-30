@@ -44,9 +44,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "942030173271ce5fef193527e23a983afe2443c5",
-  "state": "Ready",
-  "state_version": 6,
+  "base_sha": "1676c5bf8e7191cfb1e4b43d9b88e44fd78113f5",
+  "state": "Done",
+  "state_version": 15,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -67,5 +67,62 @@
   ],
   "outline": "PreToolUse 守衛只擋主線本人:子代理人(stdin 帶 agent_id)、AC_ROLE≠main、副本 cwd 都放行 —— 否則開題者(子代理人)的 ticket.py create 會被擋死。逃生口在指令前綴(hook 環境傳不進 export)。加 main.blocked 當分母。needs_verifier=false:案例已逐條列在驗收,實作者自證變異紅。建議在 #62 之後落。細節見 interface_contracts。",
   "needs_verifier": false,
-  "interface_contracts": "起因:主線 compact 後自寫票面(ticket.py create/set)、讀 worker log 與 task output 不看 inbox、裸 commit。規則靠自覺在 compact 後失效,改由 PreToolUse 機械擋。Claude Code 事實(讀文件 code.claude.com/docs/en/hooks,未實測,F1 實跑就是驗它):deny 用 hookSpecificOutput.permissionDecision;matcher 'Bash|Read' 是 regex;子代理人的工具呼叫也會觸發父 session 的 PreToolUse,stdin 帶 agent_id/agent_type —— 所以 E1(b) 必要:主線用 Agent 派的開題者就是在同一個 session 裡跑 ticket.py create,不排除會把開題流程整條擋死。逃生口放在指令前綴:hook 行程的環境是 Claude Code 的,主線在 Bash 裡 export 傳不進 hook。Read 工具沒有前綴可放,只能靠行程環境。加 main.blocked(主線原話只要 override):沒有分母,遵循度算不出來;也是 F1 證明接線的觀察點。擋的欄位多列 in_scope、test_plan(SCHEMA『目標與範圍』群組的票面格)。未涵蓋:Grep 工具讀 log(主線原話只點 Bash/Read)。與 #62 同改 sync-to-project.sh、test_sync_to_project.py、test_session_hook.py —— 不平行落地,後落的重套。needs_verifier=false:框架腳本票,案例已逐條列在驗收,實作者自證變異紅(同 #61);建議變異:拿掉 agent_id 判斷 → E1(b) 紅;把 git 子指令比對改成子字串 → C2 的 echo 案例紅(未實測)。後續(主線,本票外):落地後 sync 到 T、在 T 的 .claude/settings.json 接 PreToolUse 走 T 的 docs 通道。"
+  "interface_contracts": "起因:主線 compact 後自寫票面(ticket.py create/set)、讀 worker log 與 task output 不看 inbox、裸 commit。規則靠自覺在 compact 後失效,改由 PreToolUse 機械擋。Claude Code 事實(讀文件 code.claude.com/docs/en/hooks,未實測,F1 實跑就是驗它):deny 用 hookSpecificOutput.permissionDecision;matcher 'Bash|Read' 是 regex;子代理人的工具呼叫也會觸發父 session 的 PreToolUse,stdin 帶 agent_id/agent_type —— 所以 E1(b) 必要:主線用 Agent 派的開題者就是在同一個 session 裡跑 ticket.py create,不排除會把開題流程整條擋死。逃生口放在指令前綴:hook 行程的環境是 Claude Code 的,主線在 Bash 裡 export 傳不進 hook。Read 工具沒有前綴可放,只能靠行程環境。加 main.blocked(主線原話只要 override):沒有分母,遵循度算不出來;也是 F1 證明接線的觀察點。擋的欄位多列 in_scope、test_plan(SCHEMA『目標與範圍』群組的票面格)。未涵蓋:Grep 工具讀 log(主線原話只點 Bash/Read)。與 #62 同改 sync-to-project.sh、test_sync_to_project.py、test_session_hook.py —— 不平行落地,後落的重套。needs_verifier=false:框架腳本票,案例已逐條列在驗收,實作者自證變異紅(同 #61);建議變異:拿掉 agent_id 判斷 → E1(b) 紅;把 git 子指令比對改成子字串 → C2 的 echo 案例紅(未實測)。後續(主線,本票外):落地後 sync 到 T、在 T 的 .claude/settings.json 接 PreToolUse 走 T 的 docs 通道。",
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 56,
+      "tokens_out": 36065,
+      "cache_write": 115681,
+      "cache_read": 2542615,
+      "wall_seconds": 823,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-09-29T04:46:55+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 10,
+      "tokens_out": 5587,
+      "cache_write": 44668,
+      "cache_read": 193203,
+      "wall_seconds": 58,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-09-29T04:51:26+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 716,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-09-29T05:14:57+08:00"
+    }
+  ],
+  "branch": "t63",
+  "gate": {
+    "rc": 0,
+    "sha": "f8404a7e1c654066fd33815b364854e3f9a8b601",
+    "run_id": "20260929-044656-19321",
+    "at": "2026-09-29T04:50:27+08:00"
+  },
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "463d4cf8e4e94b62ffd2862ca3efb4ed0c7a2c68",
+    "note": "reports/t63/20260929-044656-19321/REVIEW.md",
+    "at": "2026-09-29T05:14:57+08:00",
+    "state_version": 15
+  }
 }

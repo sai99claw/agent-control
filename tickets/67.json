@@ -44,9 +44,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "cb13f874b5ea25775422c531d7e962feea76b80b",
-  "state": "Ready",
-  "state_version": 5,
+  "base_sha": "42fab7a4e631b13c36529532695703d31bf50a30",
+  "state": "Done",
+  "state_version": 14,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -71,5 +71,62 @@
   "outline": "來源:T D-G130(2026-09-29)「以前過的 case 之後也要過,舊案例紅了就發 worker 修」;缺口是發版回歸(T release-test.sh)紅在既有案例上時沒有票可接 auto-fix,主線只能手開 stub(T #679 從早上放到晚上)。設計:status.py 新子命令 regression-red,重用 parse_failures 與 open_flaky_ticket 的「查重→cmd_create→鎖裡補欄」三段(抽成 helper,flaky 改叫它、測試不動);查重同時認 regression_case 與 flaky_case、只認開著的票;沿用時不寫票(review.state_version 不能因為又紅而過期)。驗收是固定五條樣板(全套原順序綠 / 不准 sleep 放寬刪 skip / 說原因 / 過時走 OBJECTION 等使用者裁 / 還原修法要紅),needs_verifier=false —— D-G130:這類票的驗收就是案例本身。--dispatch 對新開的票背景起 auto-fix.sh,不等。T 端接法(另開 T 票,不在本票):release-test.sh(不是 protected;deploy-prod.sh 是,不用動 —— 它已 exit 1)把 `python3 demo/test_browsers.py --target $BASE` 的輸出 tee 到 $DATA_DIR/logs/release-test-<ts>.log,失敗分支叫 `AC_ROOT=$ROOT python3 scripts/control/status.py regression-red --source release --log <那份 log> --model opus --dispatch`;board/config.json 加 regression.rerun_cmd=\"sh scripts/test-for.sh --branch\"、regression.write_paths=[\"demo/test_*.py\",\"demo/web/**\"];status.py 走既有 sync-to-project 名單,不用加檔。已實測:A main 無 regression-red/regression_case/regression_auto_ticket 字樣(verify_strings 唯一);flaky 三條測試的斷言已讀(A8 oracle);event.py KINDS 不在表上會 rc=2(A6 理由);T 的 protected_paths 不含 release-test.sh。未實測:--dispatch 從 deploy-prod 底下起 claude -p 的環境變數是否夠(T 票再驗)。順序 A6 KINDS → A8 抽 helper → A1/A2 → A3/A4/A5 → A7 → A9 → A10。建議 Opus。",
   "needs_verifier": false,
   "interface_fixed": false,
-  "test_plan": "每條驗收即一條案例,層級全是單元(tests/test_status_67.py,拋棄式 repo 的 Sandbox harness);輸入=log 文字/旗標/board/config.json,可觀察輸出=tickets/*.json 內容、events.jsonl 的 kind 與欄位、stdout/stderr 字串、rc、stub 檔的 argv;期望值來自旗標與樣板文字,不從 status.py 算。變異:拿掉查重 → A3 紅;拿掉 KINDS 的 regression.red → A1 紅;拿掉 --dispatch 的 Popen → A7 紅。"
+  "test_plan": "每條驗收即一條案例,層級全是單元(tests/test_status_67.py,拋棄式 repo 的 Sandbox harness);輸入=log 文字/旗標/board/config.json,可觀察輸出=tickets/*.json 內容、events.jsonl 的 kind 與欄位、stdout/stderr 字串、rc、stub 檔的 argv;期望值來自旗標與樣板文字,不從 status.py 算。變異:拿掉查重 → A3 紅;拿掉 KINDS 的 regression.red → A1 紅;拿掉 --dispatch 的 Popen → A7 紅。",
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 60,
+      "tokens_out": 31445,
+      "cache_write": 110095,
+      "cache_read": 2534521,
+      "wall_seconds": 1263,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-09-30T00:12:03+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 10,
+      "tokens_out": 4938,
+      "cache_write": 50927,
+      "cache_read": 196888,
+      "wall_seconds": 57,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-09-30T00:16:58+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 709,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-09-30T00:28:57+08:00"
+    }
+  ],
+  "branch": "t67",
+  "gate": {
+    "rc": 0,
+    "sha": "47597ec7ece3cc9d889ce64dc6881bbb13c0d022",
+    "run_id": "20260930-001206-24864",
+    "at": "2026-09-30T00:16:00+08:00"
+  },
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "351251c2e0805dbdda790c9dc38f452de86a5e3c",
+    "note": "reports/t67/20260930-001206-24864/REVIEW.md",
+    "at": "2026-09-30T00:28:57+08:00",
+    "state_version": 14
+  }
 }

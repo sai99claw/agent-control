@@ -4,3 +4,4 @@
 - sh 腳本裡 $var 後面緊接全形字(。、,)時 bash 會把 UTF-8 位元組吃進變數名,set -u 下變成 unbound variable;新增的變數一律寫成 ${var} (#57, 2026-09-28, worker@opus)
 - 副本裡跑任何 scripts/*(含 memory.py check)前先 env -u AC_ROOT -u AC_CONTROL_DIR:派工帶的 AC_ROOT 讓它量主 repo 的檔(量到舊的就是假綠),還會在副本寫 board/events.jsonl 混進 patch (#59, 2026-09-28, worker@opus)
 - 對真實專案根實跑 new-session.sh / session-hook 前先把專案與它的 board 資料(tickets_dir、events_file、reports_dir 可能在根外)複製到 TMPDIR 再跑:memory.py check 在 --no-event 下仍會 emit memory.over_cap、還可能開整理票進專案票庫 (#62, 2026-09-29, worker@opus)
+- unittest discover -s tests 全套超過前景 600s 上限(#70 實測 878 條、單 test_auto_fix 270s):逐模組分批前景跑、每批 <590s,合計 Ran 與各批 rc;給 control_harness 的 DEFAULT_CONFIG 加預設值前先 grep verify/ 與 tests/ 有沒有靠「沒設就退回」的案例 (#70, 2026-09-30, worker@opus)

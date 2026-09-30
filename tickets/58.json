@@ -20,9 +20,9 @@
   "model": "sonnet",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "434d3181fdf4fdbe21febb309680340e706f18f2",
-  "state": "Ready",
-  "state_version": 3,
+  "base_sha": "fc1a1c9d7f420e8c66e632f98728da07e533a2ca",
+  "state": "Done",
+  "state_version": 12,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -41,5 +41,60 @@
     }
   ],
   "needs_verifier": false,
-  "outline": "needs_verifier=false:框架腳本票,tests/ 裡的單元測試就是驗收,實作者自證變異紅(依 A #43/#48 慣例)。稽核來源:tabby_pool docs/review/20260928-flow-waste-audit.md;裁示 D-H38。"
+  "outline": "needs_verifier=false:框架腳本票,tests/ 裡的單元測試就是驗收,實作者自證變異紅(依 A #43/#48 慣例)。稽核來源:tabby_pool docs/review/20260928-flow-waste-audit.md;裁示 D-H38。",
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 68,
+      "tokens_out": 24333,
+      "cache_write": 78265,
+      "cache_read": 2203445,
+      "wall_seconds": 604,
+      "by": "auto-fix.sh",
+      "at": "2026-09-28T15:35:48+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 12,
+      "tokens_out": 3463,
+      "cache_write": 36744,
+      "cache_read": 218117,
+      "wall_seconds": 39,
+      "by": "review.sh",
+      "at": "2026-09-28T15:40:17+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 495,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-09-28T15:49:00+08:00"
+    }
+  ],
+  "branch": "t58",
+  "gate": {
+    "rc": 0,
+    "sha": "97740c8b9eb5785620570d55f0c2c2c8ed38ca94",
+    "run_id": "20260928-153549-47104",
+    "at": "2026-09-28T15:39:37+08:00"
+  },
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "ef3303d5639fffef462dad61c62341af43570d20",
+    "note": "reports/t58/20260928-153549-47104/REVIEW.md",
+    "at": "2026-09-28T15:49:01+08:00",
+    "state_version": 12
+  }
 }

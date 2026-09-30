@@ -1,0 +1,93 @@
+{
+  "id": "74",
+  "subject": "必要規則不得截空;產包失敗必須停止派工並送 decision 頁",
+  "created": "2026-09-30T17:24:13+08:00",
+  "objective": "每次派工都取得有實質正文且不超過 4,096 bytes 的必要規則;產不出合法包時不得啟動 agent。",
+  "acceptance": [
+    "`python3 -m unittest discover -s tests -p 'test_rules_delivery.py'`:正常 A 與泛用專案 fixture,所有支援角色均 ≤4,096 B、固定成本 ≤1,024 B;逐項斷言必要正文非空,統計總和與輸出實際 UTF-8 bytes 相符。",
+    "同測試移除必要章節、提供空模型卡及超長不可分正文:pack 非零、stdout 無半包、decision 頁點名正確缺項;重試不重複通知。",
+    "同測試經真正派工入口執行,失敗時 worker/verifier/reviewer 替身的啟動計數均為零;移除呼叫端錯誤傳遞後案例必紅。",
+    "同測試使用 `roles_dir=docs/roles` 的 fixture:實際派工文中角色與模型入口全部存在;reviewer 沒有寫記憶動作。",
+    "同測試經 new-session 入口確認本地主卡整理前後都可見;短命角色輸出不含全域交接區塊。",
+    "`sh scripts/gate.sh --branch --ticket <本票>` 必須選到新主守衛;恢復「只有標題仍成功」的變異須使閘門失敗。"
+  ],
+  "in_scope": [
+    "scripts/rules.py",
+    "scripts/auto-fix.sh",
+    "scripts/review.sh",
+    "scripts/new-session.sh",
+    "scripts/inbox.py",
+    "scripts/gate.sh",
+    "templates/dispatch-*.md",
+    "docs/SESSION-START.md",
+    "tests/test_rules_delivery.py",
+    "tests/test_rules.py",
+    "tests/test_templates.py",
+    "tests/test_dispatch_template.py",
+    "tests/test_new_session.py",
+    "tests/test_auto_fix.py",
+    "tests/test_review.py"
+  ],
+  "out_of_scope": [
+    "tests/control_harness.py"
+  ],
+  "depends_on": [
+    {
+      "id": "71",
+      "condition": "落地"
+    },
+    {
+      "id": "72",
+      "condition": "落地"
+    },
+    {
+      "id": "73",
+      "condition": "落地"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/rules.py",
+    "scripts/auto-fix.sh",
+    "scripts/review.sh",
+    "scripts/new-session.sh",
+    "scripts/inbox.py",
+    "scripts/gate.sh",
+    "templates/dispatch-*.md",
+    "docs/SESSION-START.md",
+    "tests/test_rules_delivery.py",
+    "tests/test_rules.py",
+    "tests/test_templates.py",
+    "tests/test_dispatch_template.py",
+    "tests/test_new_session.py",
+    "tests/test_auto_fix.py",
+    "tests/test_review.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "234d4451d1ae5d07ad3c6f393e055198fdd43d2c",
+  "state": "Draft",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "【裁示原話 Q1(本票承接)】「這個問題很嚴重,讓astra 去開票,把所有該修復的地方寫清楚,我希望這次改完之後這些規矩可以真正被落實。」\n【為什麼】前報實測 T project 清單占 1,121 B,三段固定文字占 1,228 B,合計 2,349 B,約占 4 KiB 的 57.3%;worker 的角色、模型、inbox 正文被擠空,reviewer 缺五節。此次讀碼確認 `auto-fix.sh`、`review.sh` 以 `|| echo` 吞掉產包失敗〔推論:只改 rules.py 退出碼不足以阻止派工〕。\n【規劃】\n1. 保留 D-015/D-021 的 4,096-byte 上限與 600-byte inbox 預算,不提高數字掩蓋問題。\n2. project 逐檔清單改為一個速查入口;#77 落地前可指向既有 `docs/CODE-MAP.md`。\n3. 定義 required:角色正本、指定模型卡、每個設定要求的共用章節;存在且有正文的本地 role/model 主卡及各 inbox 也必須留下正文。不存在的可選本地疊層不算錯;指定但不存在的模型卡算錯。\n4. 「正文」不含 front matter、標題、空行、來源欄、截斷提示或只有連結的指路行。每個必要項至少保留一個完整正文單位;inbox 至少保留一條完整條目,不以半句湊數。\n5. 缺章節、空正文或預算放不下時,stdout 不得留下可被誤用的半成品包;非零退出,stderr 列角色、來源、缺項、實際 bytes 與修復方向。\n6. 增加供實際派工及維護使用的 `rules.py inspect <role> --model <model> --json`,輸出 `total_bytes`、`fixed_bytes`、各節 `source_bytes/rendered_bytes/content_units`、missing/truncated 清單。唯讀,不發事件。\n7. 正常包的固定成本包含索引、標題、指路、截斷訊息與固定說明,限制為 ≤1,024 B。這是新增的組成預算,並非提高既有總上限;依據是現有 2,349 B 已擠空必要正文。\n8. pack CLI 失敗送既有 `decision` 頁;同一角色、模型、內容指紋重試只送一頁。有 `AC_TICKET` 時綁該票,無票時使用明確的 rules 維護識別,不偽造數字票號。寫頁失敗仍須非零且明說原因。\n9. 所有 worker 首輪、修復輪、verifier、reviewer 呼叫端傳遞失敗,不得 fallback 後起 agent。\n10. 範本改引用 pack 已解析的來源,去除寫死的 `memory/role/*.md`/`memory/model/*.md` 路徑。reviewer 只提出候選記憶,不要求唯讀角色呼叫 `note`。\n11. `new-session.sh` 的 main 頁納入存在的本地已整理主卡;短命角色不列全域 HANDOFF、事件與開票清單。\n【寫入範圍備註】既有測試檔只調整被新契約取代的期待,不趁機重整;不修改 `tests/control_harness.py`(#70 的東西)。\n【前置】A #71、#72、#73 落地;#73 已依賴 #70。全部落地前留 Draft。\n【needs_verifier=false 理由】完整 CLI/派工邊界由同一主守衛負責,另一組驗證者案例會重演同一契約;worker 必須交變異驗紅。\n【model=opus 理由】涉及預算、角色權限與多個呼叫端的錯誤傳遞。\n【規模】L,約 500–800 行差異。\n【本批順序】本票 → #75 → #76 → #77 → #78 → #79 串行落地。裁示草稿 D-034(記憶規則必須由腳本與測試落實)由主線登記,編號可能順延。",
+  "test_plan": "四問:守「agent 實際收到合法規則或完全不起動」;可信回歸是截空、吞 rc、錯來源;既有測試容許節錄只剩指路,且缺派工失敗閉環;不加測試專用 API,`inspect` 是維護與派工診斷介面。交件時每個新增/改動案例仍須在 EVIDENCE 寫一行完整的 `四問:`。",
+  "feature": "記憶治理",
+  "decision_refs": [
+    "D-015",
+    "D-021"
+  ],
+  "verify_strings": [
+    "fixed_bytes",
+    "content_units",
+    "test_rules_delivery"
+  ],
+  "needs_verifier": false
+}

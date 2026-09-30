@@ -43,8 +43,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "9e0cf3780af0dd7bf04325cb1127f6aaa37be4c7",
-  "state": "Running",
-  "state_version": 12,
+  "state": "Done",
+  "state_version": 19,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -66,5 +66,62 @@
   ],
   "outline": "規則置頂、票與 inbox 設上限、讀單照 roles_dir;上限依 Claude Code 文件是 10,000 字元(未實測),session-hook 一併改。實測:T 開場頁 37 KB 主要是 inbox 17 KB、票 11 KB。已排除:T 有 docs/roles/main.md,斷的是寫死路徑。needs_verifier=false:框架腳本票,單元測試即驗收,實作者自證變異紅。與 #63 共用 sync-to-project.sh、兩支測試檔 → 先落 #62、#63 重套。細節見 interface_contracts。",
   "needs_verifier": false,
-  "interface_contracts": "起因:主線 compact 後憑摘要越界(自寫票面、讀 worker log、代驗、12 小時看 46 次狀態)。實測(開題者,2026-09-29,T 真實資料):ticket.py list --open 10,704 B(54 張,43 Draft)、inbox.py list 17,335 B(101 則、每則兩行)、event tail 20 2,894 B、heartbeat 3,064 B;頁上沒有一行規則。契約節 1,582 B、T 的 docs/roles/main.md 14 行、T memory/role/main.inbox.md 29 行 8 KB。已排除:主線說的『memory/role/main.md 在 T 不存在、正本只在 A』—— T 有 docs/roles/main.md(sync 產),斷的是 new-session.sh 寫死 memory/role/$CARD.md 沒照 rules.roles_dir。上限:Claude Code 文件寫 hook plain stdout 上限 10,000 characters(讀文件,未實測);session-hook.sh 現在的 16384 bytes 單位與數字都不對,故納入。契約節的來源設計:D-026 丙擔心手抄分岔;這裡用 sync 產生的 docs/roles/contract.md(與角色卡同一機制,不會分岔),正本端直接讀 CLAUDE.md。會牽動的既有斷言:test_new_session.py:100-104 釘 memory/role/main.md(正本沙盒,仍成立)、test_session_hook.py a6(300 張票撐過上限,改形狀後可能撐不過 → 要改造法)。needs_verifier=false:框架腳本票,tests/ 單元測試就是驗收,實作者自證變異紅(同 #61 慣例);建議變異:拿掉 Draft 過濾 → A4 紅;把規則段移到讀單後 → A1 紅(未實測)。後續(主線,本票外):落地後跑 sync-to-project.sh 到 T 並走 T 的 docs 通道提交。 併入使用者 2026-09-29 裁示(A8):讀單先角色卡、再專案疊層、再多層記憶(memory/model、memory/role、memory/project)、HANDOFF 只讀現況;HANDOFF 本身不在本票。『正本 ../agent-control/memory/role/main.md』這條路徑腳本算不出來(專案 config 沒有指到 A 的鍵),改印 roles_dir 的同步本並標明是同步本。"
+  "interface_contracts": "起因:主線 compact 後憑摘要越界(自寫票面、讀 worker log、代驗、12 小時看 46 次狀態)。實測(開題者,2026-09-29,T 真實資料):ticket.py list --open 10,704 B(54 張,43 Draft)、inbox.py list 17,335 B(101 則、每則兩行)、event tail 20 2,894 B、heartbeat 3,064 B;頁上沒有一行規則。契約節 1,582 B、T 的 docs/roles/main.md 14 行、T memory/role/main.inbox.md 29 行 8 KB。已排除:主線說的『memory/role/main.md 在 T 不存在、正本只在 A』—— T 有 docs/roles/main.md(sync 產),斷的是 new-session.sh 寫死 memory/role/$CARD.md 沒照 rules.roles_dir。上限:Claude Code 文件寫 hook plain stdout 上限 10,000 characters(讀文件,未實測);session-hook.sh 現在的 16384 bytes 單位與數字都不對,故納入。契約節的來源設計:D-026 丙擔心手抄分岔;這裡用 sync 產生的 docs/roles/contract.md(與角色卡同一機制,不會分岔),正本端直接讀 CLAUDE.md。會牽動的既有斷言:test_new_session.py:100-104 釘 memory/role/main.md(正本沙盒,仍成立)、test_session_hook.py a6(300 張票撐過上限,改形狀後可能撐不過 → 要改造法)。needs_verifier=false:框架腳本票,tests/ 單元測試就是驗收,實作者自證變異紅(同 #61 慣例);建議變異:拿掉 Draft 過濾 → A4 紅;把規則段移到讀單後 → A1 紅(未實測)。後續(主線,本票外):落地後跑 sync-to-project.sh 到 T 並走 T 的 docs 通道提交。 併入使用者 2026-09-29 裁示(A8):讀單先角色卡、再專案疊層、再多層記憶(memory/model、memory/role、memory/project)、HANDOFF 只讀現況;HANDOFF 本身不在本票。『正本 ../agent-control/memory/role/main.md』這條路徑腳本算不出來(專案 config 沒有指到 A 的鍵),改印 roles_dir 的同步本並標明是同步本。",
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 172,
+      "tokens_out": 78613,
+      "cache_write": 197099,
+      "cache_read": 12452041,
+      "wall_seconds": 2270,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-09-29T04:19:03+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 28,
+      "tokens_out": 9684,
+      "cache_write": 66150,
+      "cache_read": 821411,
+      "wall_seconds": 105,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-09-29T04:21:34+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 673,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-09-29T04:32:59+08:00"
+    }
+  ],
+  "branch": "t62",
+  "gate": {
+    "rc": 0,
+    "sha": "6a250703f4cfbc09babe51ed0d79eca4cf4eca89",
+    "run_id": "20260929-041904-34763",
+    "at": "2026-09-29T04:19:49+08:00"
+  },
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "1676c5bf8e7191cfb1e4b43d9b88e44fd78113f5",
+    "note": "reports/t62/20260929-041904-34763/REVIEW.md",
+    "at": "2026-09-29T04:32:59+08:00",
+    "state_version": 19
+  }
 }

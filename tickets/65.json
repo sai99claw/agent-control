@@ -29,9 +29,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "9e0cf3780af0dd7bf04325cb1127f6aaa37be4c7",
-  "state": "Draft",
-  "state_version": 3,
+  "base_sha": "51e93305f11829a9c5655078732ca806787a414c",
+  "state": "Done",
+  "state_version": 13,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -44,5 +44,62 @@
     "NEEDLE-65"
   ],
   "outline": "根因已實測:verify()(ticket.py:1142 起)對純字串 needle 掃主線上符合 allowed_write_paths 的所有檔,git() 用 text=True(ticket.py:195),T #674 的 'demo/web/**' 掃到 demo/web/icons/*.png → UnicodeDecodeError(是 ValueError)→ cmd_close 的 except 印『讀不到 #674』。開題者在 T 上 subprocess git show main:demo/web/icons/icon-192.png text=True 逐字重現同一句 0x89 錯誤。票 JSON 無辜。附帶:close --landed 先 stamp_landed 再 verify,所以 T #674 的 review.sha 已被蓋成 68ba828 而沒關 —— B2 第二次 close 就是這個狀態。同型寫法:verify-case.py:802 也是 text 模式 git show,本票不動。needs_verifier=false:單點修正,實作者自證 B1 修前紅。後續(主線):同步到 T 後跑 close 674 --landed 68ba828。",
-  "needs_verifier": false
+  "needs_verifier": false,
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 58,
+      "tokens_out": 17468,
+      "cache_write": 69969,
+      "cache_read": 1725466,
+      "wall_seconds": 792,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-09-29T03:58:51+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 8,
+      "tokens_out": 3168,
+      "cache_write": 33644,
+      "cache_read": 129764,
+      "wall_seconds": 34,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-09-29T04:01:28+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 657,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-09-29T04:13:18+08:00"
+    }
+  ],
+  "branch": "t65",
+  "gate": {
+    "rc": 0,
+    "sha": "3401c41b9a5580ca68fea76c757aee70325c1204",
+    "run_id": "20260929-035852-23478",
+    "at": "2026-09-29T04:00:52+08:00"
+  },
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "6ec5bae2097e088fbc875e7f603f13cc63551135",
+    "note": "reports/t65/20260929-035852-23478/REVIEW.md",
+    "at": "2026-09-29T04:13:18+08:00",
+    "state_version": 13
+  }
 }

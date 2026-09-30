@@ -40,9 +40,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "fa74b59119641fd7e95b4fe05c1cdc96bd7df8f2",
-  "state": "Ready",
-  "state_version": 3,
+  "base_sha": "4f6ad80289484803e768a0068362ac0c37226e7c",
+  "state": "Done",
+  "state_version": 16,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -68,5 +68,76 @@
   "outline": "來源:2026-09-30 #68 落地 —— 閘門與覆核都綠,ff-only 兩次失敗,land.sh 兩次都印「主線在這中間動了 / rebase 後重跑閘門」;主線其實沒動,真因是主線工作樹裡有一個未追蹤的 memory/role/implementer.inbox.md,而分支新增同一路徑,git 拒絕(error: The following untracked working tree files would be overwritten by merge)。三個洞:(a) 每一種 ff-only 失敗都被標成主線動了,下一步(rebase)是錯的;(b) git 的 stderr 沒進 stdout / 收件匣 / status.json;(c) 這件事在跑九分鐘全套之前就查得出來,卻沒查。裁示:分清「主線動了」(HEAD != 開跑前記的)與「git 拒絕」(印原話),第 1〜4 步先擋未追蹤撞路徑;**不替人搬檔、不刪檔**(那是使用者的檔,搬了就是另一種事故)。開票實測(沙盒 git repo,不是 A 的 repo):`git merge -q --ff-only` 對未追蹤撞路徑 rc=1、-q 不吃掉那段 stderr、HEAD 不動;`git diff --name-only --no-renames --diff-filter=A main...feat` + `git ls-files --others --exclude-standard -- <paths>` 能點名撞到的路徑。已查的 oracle:tests/test_land.py 沒有任何斷言釘「在這中間動了」(只在 test_it_waits_behind_the_same_lock… 的 docstring 提到);gate.sh 的 AC_ROOT 已傳給 gate stub,T2/T3 自訂 stub 用得到,不必改 control_harness.py;事件種類不加(land.refused / land.fail 既有)。needs_verifier=false:控制碼票,land.sh 的守衛就是 tests/test_land.py 的沙盒案例,驗證者案例只會重演同一契約(§5.8 第 3 問;#38/#43/#46/#49/#56/#59 同一慣例)。interface_fixed=false(用不到)。不在本票:主線工作樹**已追蹤但改過**的檔撞路徑(git 另一句 local changes would be overwritten —— 同一個機制可延伸,先不做);被 ignore 的檔會被 git 靜靜覆蓋;自動搬檔;docs 通道。建議順序:A2(第 6 步分話)→ T3、T2 → A1(早退)→ T1 → 變異表 → 文件。",
   "test_plan": "層:單元(tests/test_land.py 的沙盒 —— 真 git + 假閘門;閘門有沒有被叫到是可觀察事實)。跑法:python3 -m unittest tests.test_land;merge 前 python3 -m unittest discover -s tests。期望值來源:git 的行為(開票在沙盒 git repo 實測過:未追蹤撞路徑 rc=1、HEAD 不動)與票面釘死的字串,不從 land.sh 算。T1(A3)四問草稿:①守「未追蹤撞路徑在閘門之前就被點名退回、不動使用者的檔」;②早退被拿掉或擺到 worktree add 之後 → gate_ran 變 True 就紅;③既有案例都不在主線工作樹放未追蹤檔,抓不到;④不用縫,gate stub 與 wt_base 是既有的觀察點。T2(A4)四問:①守「主線真的動了時仍說主線動了、且說得出從哪到哪」;②比較邏輯壞掉或 sha 不印就紅;③既有沒有案例讓主線在閘門期間前進;④縫 = 自訂 gate stub 對 AC_ROOT commit(沒有生產呼叫者,但 AC_ROOT 是 land 本來就傳的環境變數,不加新縫)。T3(A5)四問:①守「主線沒動時不誤報 rebase、git 原話進 stdout」;②回到一律「動了」就紅;③既有沒有案例讓 ff-only 在主線沒動時失敗;④縫同 T2(stub 在 AC_ROOT 寫未追蹤檔)。成功路徑:不加案例,既有 test_a_branch_with_commits_still_lands_the_way_it_always_did 是主守衛;M2 證明它守得住早退的「空列表不印不擋」。變異 M1〜M5 見 A6,每條一次、記紅的第一行。",
   "needs_verifier": false,
-  "interface_fixed": false
+  "interface_fixed": false,
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 50,
+      "tokens_out": 18702,
+      "cache_write": 95574,
+      "cache_read": 1947356,
+      "wall_seconds": 1008,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-09-30T13:32:49+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 10,
+      "tokens_out": 4933,
+      "cache_write": 40892,
+      "cache_read": 191109,
+      "wall_seconds": 65,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-09-30T13:35:55+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 12,
+      "tokens_out": 4587,
+      "cache_write": 38829,
+      "cache_read": 238096,
+      "wall_seconds": 79,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-09-30T14:16:56+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 815,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-09-30T14:30:31+08:00"
+    }
+  ],
+  "branch": "t69",
+  "gate": {
+    "rc": 0,
+    "sha": "b32015a121502a508d29f9e4fe915eb8006b7aeb",
+    "run_id": "20260930-133255-7547",
+    "at": "2026-09-30T13:34:49+08:00"
+  },
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "207c54412edced12a21928e69e6040a01937ebd4",
+    "note": "reports/t69/20260930-140054-62842/REVIEW.md",
+    "at": "2026-09-30T14:30:31+08:00",
+    "state_version": 16
+  },
+  "owner": "main"
 }

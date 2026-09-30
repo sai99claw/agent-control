@@ -1,0 +1,95 @@
+{
+  "id": "76",
+  "subject": "過期與超標記憶必須開票、指派及啟動整理;成功前不得消耗原文",
+  "created": "2026-09-30T17:24:13+08:00",
+  "objective": "讓超標/已結案來源條目進入可恢復、可追蹤的整理流程,不再累積無人處理的告警。",
+  "acceptance": [
+    "`python3 -m unittest discover -s tests -p 'test_memory_lifecycle.py'`:Done、其他 closed、Ready、未知票、跨 repo 同號票各得到正確分類;純讀指令前後記憶、票庫、events、reports 不變。",
+    "同測試在真拋棄式 repo 連續及同時執行兩次 main new-session:只產生一張完整整理票、一組有效指派;兩個模型替身各收到對應討論任務,並可追到交件。",
+    "同測試以 21 條 inbox 開票,subject 使用「行」,不是「字元」;主卡不存在也可依 candidate 建立。",
+    "同測試涵蓋只有一份討論、相同模型、候選仍超標、來源摘要不符、逾時:無 consolidated、無資料遺失,decision 有可執行下一步。",
+    "同測試在整理期間追加一條 note,落地候選只消耗已處置快照,新條目仍在;重跑不重複完成。",
+    "`sh scripts/gate.sh --branch --ticket <本票>` 跑 lifecycle 主守衛;移除租約排他或先消耗再驗證的變異必紅。"
+  ],
+  "in_scope": [
+    "scripts/memory.py",
+    "scripts/consolidate-memory.sh",
+    "scripts/new-session.sh",
+    "scripts/sync-to-project.sh",
+    "scripts/gate.sh",
+    "board/config.json",
+    "templates/dispatch-consolidator.md",
+    "docs/MEMORY.md",
+    "docs/DISCUSSION.md",
+    "tests/test_memory_lifecycle.py",
+    "tests/test_memory.py",
+    "tests/test_new_session.py",
+    "tests/test_sync_to_project.py"
+  ],
+  "out_of_scope": [],
+  "depends_on": [
+    {
+      "id": "75",
+      "condition": "落地"
+    },
+    {
+      "id": "70",
+      "condition": "落地"
+    },
+    {
+      "id": "71",
+      "condition": "落地"
+    },
+    {
+      "id": "72",
+      "condition": "落地"
+    },
+    {
+      "id": "73",
+      "condition": "落地"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/memory.py",
+    "scripts/consolidate-memory.sh",
+    "scripts/new-session.sh",
+    "scripts/sync-to-project.sh",
+    "scripts/gate.sh",
+    "board/config.json",
+    "templates/dispatch-consolidator.md",
+    "docs/MEMORY.md",
+    "docs/DISCUSSION.md",
+    "tests/test_memory_lifecycle.py",
+    "tests/test_memory.py",
+    "tests/test_new_session.py",
+    "tests/test_sync_to_project.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "234d4451d1ae5d07ad3c6f393e055198fdd43d2c",
+  "state": "Draft",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "【為什麼】T 12 次 over_cap、0 次 consolidated,T #667 留在 Ready;`note` 未呼叫檢查。現行 consolidate 只檢查一份含結論標題的文件,先串接/消耗 inbox、發完成事件,之後才判超標〔前報實測及此次讀碼推論〕。\n【規劃】\n1. `memory.py check --read-only [--file PATH]` 純讀容量,不開票、發事件或建鎖檔。保留既有預設 check 的管理用途。\n2. 新增 `memory.py check-stale --read-only [--file PATH]`:解析 inbox 的來源票,透過設定的票庫與 `ticket.CLOSED_STATES` 判斷,不寫死僅 Done。\n3. Done/其他 closed 來源標 `needs-review`,不等同內容錯誤、不自動刪除。無來源、解析失敗、找不到票分別列出,不當成 fresh;跨 repo 引用須明示來源 repo。\n4. 超標與 stale 合併成每個目標主檔一張整理票;票含 `needs_verifier`、正確單位、owner、兩個模型、來源快照與完整驗收。既有整理票補指派,不另開。\n5. `note` 成功後觸發該檔的容量/stale 檢查;main new-session 執行 ensure/assign,交由新 `scripts/consolidate-memory.sh <ticket>` 啟動兩個配置模型的獨立討論。短命角色只標記需求,不遞迴啟動整理者。\n6. coordinator 使用現有票/租約機制;同時兩次開場只取得一個執行權。模型命令缺少、啟動失敗、逾時或 lease 失效時,票轉明確待處置狀態並送 decision;不得維持虛假的 Running。\n7. 兩份討論需有不同模型身份、來源快照指紋、逐條處置及結論。coordinator 保留實際啟動模型/交件證據,不能只相信 Markdown 自稱兩個模型。\n8. consolidate 接受整理後 candidate 及兩份 discussion,不再把原 inbox 無條件串回。逐條處置使用「保留/升格/移至 reference/歸檔/重複」及目的地。\n9. 提交前檢查候選容量、來源完整性與快照版本;任何失敗不改主檔、不消耗 inbox、不發 consolidated。整理期間新增 note 必須保留給下一輪。\n10. 主線 canonical 變更仍由既有 apply/gate/review/land 路徑完成;hook 不直接覆寫記憶,也不自行關票。成功落地後才確認完成事件與票結案。\n【前置】#75、A #70–#73 落地;落地前留 Draft。\n【needs_verifier=true 理由】獨立驗證者負責 `test_memory_lifecycle.py` 的持久化、併發與失敗恢復邊界;worker 不另寫同一流程的第二套案例。interface_fixed=false:測試以 worker 第一輪實際介面為準,但不得放寬上述可觀察結果。\n【model=opus 理由】跨模型執行、租約、資料保留及提交順序需要整體判斷。\n【規模】L,約 600–1,000 行差異。",
+  "test_plan": "四問:守「告警確實成為工作,失敗不丟記憶」;回歸為重複啟動、只有文字指派、提前消耗;現有測試只證明開票/單份討論,沒有閉環;只替換昂貴模型執行,真票庫、檔案與 Git 語意不替換。交件時每個新增/改動案例仍須在 EVIDENCE 寫一行完整的 `四問:`。",
+  "feature": "記憶治理",
+  "decision_refs": [
+    "D-006",
+    "D-013"
+  ],
+  "verify_strings": [
+    "test_memory_lifecycle",
+    "consolidate-memory.sh"
+  ],
+  "needs_verifier": true,
+  "interface_fixed": false
+}

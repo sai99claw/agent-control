@@ -4,7 +4,7 @@
   "created": "2026-09-30T16:06:48+08:00",
   "objective": "跑 python3 -m unittest discover -s tests 全程不會 exec 到真的 claude(任何沙盒裡的 auto-fix / review / land / gate 子行程都拿到替身),萬一哪條路仍走到 claude,那條測試自己紅並印出被叫的命令;整套跑完真 repo 的 git status --porcelain 與跑前逐字相同(含被 kill 的情況:測試只往 tempfile 目錄寫)",
   "acceptance": [
-    "A1(替身):tests/control_harness.py 的 DEFAULT_CONFIG 補 worker.command 與 verifier.command 替身(與 reviewer 同一個保險絲寫法);把一支只會記一行到 log 並 exit 97 的假 claude 放在 PATH 最前,跑 python3 -m unittest tests.test_land.LandStatusWhenRed tests.test_land.GateRed → 兩條 OK 且假 claude 的 log 為空(現況實測:被叫一次,參數 -p --model opus --output-format stream-json --verbose)",
+    "A1(替身):tests/control_harness.py 的 DEFAULT_CONFIG 只補 worker.command 替身(與 reviewer 同一個保險絲寫法),不加 verifier.command —— verifier 沒設時沿用 worker 的指令,verifier 路徑靠這個 fallback 吃到同一個替身(verify/agent-output/test_ticket_20.py:320–321、tests/test_auto_fix.py:360/:2409 依賴此 fallback;加了 verifier.command 會讓 TheVerifierPathWritesAFileOfItsOwnName 紅,#70 第 1 輪實測,反駁 accepted);漏網的由 A2 絆線兜底。驗法:把一支只會記一行到 log 並 exit 97 的假 claude 放在 PATH 最前,(i) 跑 python3 -m unittest tests.test_land.LandStatusWhenRed tests.test_land.GateRed tests.test_auto_fix.TheFirstRoundVerifierRunsAlongside → 全 OK 且假 claude 的 log 為空(現況實測:前兩條被叫一次,參數 -p --model opus --output-format stream-json --verbose);(ii) 同一個 PATH 跑 python3 scripts/verify.py → verify/agent-output/test_ticket_20.py 的 TheVerifierPathWritesAFileOfItsOwnName 綠且 log 仍為空(看得到驗證者路徑也沒碰到真 claude)。EVIDENCE 貼兩次的 log 大小",
     "A2(絆線):Sandbox.env() 對每個沙盒都把一個只放 stub claude 的目錄接在 PATH 最前(呼叫端自己給 PATH= 的照舊以呼叫端為準,test_auto_fix 自帶假 claude 的案例 :2197–2218、:2516–2525 不受影響);stub 把被叫的完整參數 append 到 AC_TEST_TRIPWIRE 指的檔並 exit 非 0;Sandbox 的 cleanup 讀那個檔,非空就 raise AssertionError,訊息含 'tripwire: real claude would have run' 與被叫的參數 → 走到真 claude 的測試在自己那條紅,不是靜靜綠",
     "A3(絆線自證):tests/test_land.py 新增一條案例:沙盒 config 故意拿掉 worker.command,對紅的單票跑 land(預設 auto-fix)→ 斷言 cleanup 的 AssertionError 被觸發且訊息含 '--model opus'。變異:把 env() 的 PATH 前置拿掉 → 這條紅(assertRaises 沒等到)。四問要寫進 EVIDENCE",
     "A4(不寫真 repo):tests/test_verify_runner.py 的 test_a_case_without_registered_tags_is_refused 改成把 scripts/verify.py、scripts/status.py、scripts/event.py、board/config.json、verify/ 複製進 tempfile.TemporaryDirectory 再寫未登記標籤的案例(CodeRootIsNotTheTicketRoot 已有同樣的搬樹寫法可抽成共用 helper);斷言不變(rc 2、輸出含 '標籤未登記')。驗法:python3 -c 把 os.remove 換成 no-op 後只跑這一條,git status --porcelain 在 verify/ 底下沒有任何一行(現況實測:出現 ?? verify/example/test_zz_unregistered.py)",
@@ -34,9 +34,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "207c54412edced12a21928e69e6040a01937ebd4",
-  "state": "Ready",
-  "state_version": 3,
+  "base_sha": "234d4451d1ae5d07ad3c6f393e055198fdd43d2c",
+  "state": "Done",
+  "state_version": 21,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -53,6 +53,87 @@
     "D-028"
   ],
   "test_plan": "全部在單元層(tests/,unittest)。A1/A5 的預言機是外部假 claude 的 log 檔(不是被測程式算的):log 空 = 沒被叫。A2/A3 的預言機是 Sandbox cleanup 丟出的 AssertionError 文字。A4 的預言機是真 repo 的 git status --porcelain。期望值來源:A1 現況已實測紅(假 claude 被叫一次);A4 現況已實測紅(os.remove 換掉後留下 ?? verify/example/test_zz_unregistered.py)。verify.tags 留空:案例住 tests/,gate 的模組對照會跑到。功能標籤:無(不動 verify/)。",
-  "outline": "兩個衛生 bug(稽核 §4-1、4-2),都是 harness 沙盒沒封死:(1) DEFAULT_CONFIG 只給 reviewer.command 替身,auto-fix.sh:131 預設 claude -p --model opus 從 env() 透傳的 PATH 起真的模型 —— 紅的 land 測試靠 claude 認證失敗才綠,能認證的機器會燒 token;(2) test_verify_runner 直接寫 HERE/verify/example,被 kill 就留檔。修法三層:替身(worker/verifier 進 DEFAULT_CONFIG)、絆線(每個沙盒 PATH 最前放 stub claude,cleanup 非空即紅)、絆線自證案例;verify_runner 抽 CodeRootIsNotTheTicketRoot 的搬樹 helper 共用。建議順序 A4 → A1 → A2 → A3 → A5。實測:A1 紅(假 claude 被叫,參數 -p --model opus --output-format stream-json --verbose)、A4 紅(留下 ?? verify/example/test_zz_unregistered.py)皆在 main 207c544 重現;A2/A3 的 cleanup 寫法未實測。needs_verifier=false:動的是測試基礎設施,驗證者案例只會重演 A3 那條絆線契約(§5.8 第 3 問,T#679 先例)。不在本票:test_verify_runner 的 21.6 s full_run 改沙盒、稽核 §3 的合併與刪除、gate.sh 模組對照的洞(§4-3)。",
-  "needs_verifier": false
+  "outline": "兩個衛生 bug(稽核 §4-1、4-2),都是 harness 沙盒沒封死:(1) DEFAULT_CONFIG 只給 reviewer.command 替身,auto-fix.sh:131 預設 claude -p --model opus 從 env() 透傳的 PATH 起真的模型 —— 紅的 land 測試靠 claude 認證失敗才綠,能認證的機器會燒 token;(2) test_verify_runner 直接寫 HERE/verify/example,被 kill 就留檔。修法三層:替身(只 worker 進 DEFAULT_CONFIG,verifier 靠 fallback 繼承 —— 第 1 輪反駁 accepted)、絆線(每個沙盒 PATH 最前放 stub claude,cleanup 非空即紅)、絆線自證案例;verify_runner 抽 CodeRootIsNotTheTicketRoot 的搬樹 helper 共用。建議順序 A4 → A1 → A2 → A3 → A5。實測:A1 紅(假 claude 被叫,參數 -p --model opus --output-format stream-json --verbose)、A4 紅(留下 ?? verify/example/test_zz_unregistered.py)皆在 main 207c544 重現;A2/A3 的 cleanup 寫法未實測。needs_verifier=false:動的是測試基礎設施,驗證者案例只會重演 A3 那條絆線契約(§5.8 第 3 問,T#679 先例)。不在本票:test_verify_runner 的 21.6 s full_run 改沙盒、稽核 §3 的合併與刪除、gate.sh 模組對照的洞(§4-3)。",
+  "needs_verifier": false,
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 86,
+      "tokens_out": 35205,
+      "cache_write": 100586,
+      "cache_read": 3578066,
+      "wall_seconds": 1936,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-09-30T16:40:09+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 48,
+      "tokens_out": 16754,
+      "cache_write": 62174,
+      "cache_read": 1359793,
+      "wall_seconds": 1179,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-09-30T17:02:02+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 12,
+      "tokens_out": 5532,
+      "cache_write": 42231,
+      "cache_read": 232484,
+      "wall_seconds": 62,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-09-30T17:13:29+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 764,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-09-30T17:26:33+08:00"
+    }
+  ],
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "A1 asks for `verifier.command` in DEFAULT_CONFIG, but `verify/agent-output/test_ticket_20.py` (out_of_scope) and `tests/test_auto_fix.py:1700/:2369` override only `worker` via `dict(DEFAULT_CONFIG)` and rely on \"verifier unset → same command as worker\"; adding it turned `TheVerifierPathWritesAFileOfItsOwnName` red (measured). Shipped worker-only: the verifier falls back to the same `true` stand-in, so the fuse covers it, and the tripwire catches anything left.",
+      "evidence": "../agent-control-wt/fix-t70/round1/EVIDENCE-round1.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": ""
+    }
+  ],
+  "owner": "main",
+  "branch": "t70",
+  "gate": {
+    "rc": 0,
+    "sha": "e9a72df116bdd37ec10a149ffbd04f6c9514ba2c",
+    "run_id": "20260930-170204-47894",
+    "at": "2026-09-30T17:12:25+08:00"
+  },
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "83e37d1786d6d895f65d04aa67e559a4297f4b76",
+    "note": "reports/t70/20260930-170204-47894/REVIEW.md",
+    "at": "2026-09-30T17:26:33+08:00",
+    "state_version": 21
+  }
 }

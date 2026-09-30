@@ -33,9 +33,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "463d4cf8e4e94b62ffd2862ca3efb4ed0c7a2c68",
-  "state": "Draft",
-  "state_version": 3,
+  "base_sha": "80c256d85591ae90c03981784aa472089119af6e",
+  "state": "Done",
+  "state_version": 13,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -52,5 +52,62 @@
     "land.docs"
   ],
   "outline": "起因:T #676 覆核退回 —— A #63 的 guard-main.sh:182 用 os.path.exists(scripts/land.sh) 判落地入口,T 兩支都有,守衛會把主線指到 D-G101 串接器。已查:A 與 T 的 board/config.json、rules 段都沒有現成的落地入口鍵(gate.rerun_cmd 是閘門,不是落地),故開 land 鍵;sync 不寫專案 config(A 慣例),只在 dry-run 必要設定裡要求它,T 端由 T #676 加。同型未處理:apply.sh:797 收尾那一句寫死 sh scripts/land.sh、sync-to-project.sh:300 的收尾提示也靠檔案存在判斷,本票不動(apply.sh 在 out_of_scope)。needs_verifier=false:窄的腳本票,案例已逐條列,實作者自證變異紅;建議變異:改回 os.path.exists 判斷 → G1 紅。model=opus:A 的 worker.command 就是 opus,窄票不另開 Codex 通道。",
-  "needs_verifier": false
+  "needs_verifier": false,
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 8,
+      "tokens_out": 879,
+      "cache_write": 2985,
+      "cache_read": 289820,
+      "wall_seconds": 1584,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-09-29T06:03:45+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 12,
+      "tokens_out": 3623,
+      "cache_write": 34466,
+      "cache_read": 215947,
+      "wall_seconds": 44,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-09-29T06:04:48+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 646,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-09-29T06:15:34+08:00"
+    }
+  ],
+  "branch": "t66",
+  "gate": {
+    "rc": 0,
+    "sha": "2540a8adce3807be29476ba2e776cd3607aa8a63",
+    "run_id": "20260929-060347-45509",
+    "at": "2026-09-29T06:04:04+08:00"
+  },
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "cb13f874b5ea25775422c531d7e962feea76b80b",
+    "note": "reports/t66/20260929-060347-45509/REVIEW.md",
+    "at": "2026-09-29T06:15:34+08:00",
+    "state_version": 13
+  }
 }

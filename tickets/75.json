@@ -1,0 +1,63 @@
+{
+  "id": "75",
+  "subject": "正規化 memory note 名稱,阻止 `.md.inbox.md` 孤兒與重複回寫",
+  "created": "2026-09-30T17:24:13+08:00",
+  "objective": "合法名稱只寫到唯一主檔/inbox,保留來源並拒絕不明確的名稱。",
+  "acceptance": [
+    "`python3 -m unittest discover -s tests -p 'test_memory_note_names.py'`:role/model/project 帶與不帶 `.md` 都落到正確檔名,目錄內無 `.md.inbox.md`。",
+    "同測試對非法名稱斷言非零、正確提示及記憶/事件/票庫逐位元組不變。",
+    "同測試確認同來源重送只留一筆,不同來源仍可追溯;他模型作者仍被拒絕。",
+    "`sh scripts/gate.sh --branch --ticket <本票>` 選到該主守衛;拿掉正規化的變異必紅。"
+  ],
+  "in_scope": [
+    "scripts/memory.py",
+    "docs/MEMORY.md",
+    "scripts/gate.sh",
+    "tests/test_memory_note_names.py",
+    "tests/test_memory.py"
+  ],
+  "out_of_scope": [],
+  "depends_on": [
+    {
+      "id": "74",
+      "condition": "落地"
+    },
+    {
+      "id": "72",
+      "condition": "落地"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/memory.py",
+    "docs/MEMORY.md",
+    "scripts/gate.sh",
+    "tests/test_memory_note_names.py",
+    "tests/test_memory.py"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "234d4451d1ae5d07ad3c6f393e055198fdd43d2c",
+  "state": "Draft",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "【為什麼】前報找到兩個不可載入的 T 孤兒;此次讀碼確認 `note` 直接把 `name + suffix` 串接,範本卻要求角色卡檔名。A Opus inbox 同句已有四次〔前報實測〕。\n【規劃】\n1. `implementer` 與 `implementer.md` 正規化為同一名稱;project、model 同樣接受單一 `.md` 後綴。\n2. 先正規化,再做 model 作者身份檢查;不得因此放寬「只能寫自己的模型記憶」。\n3. 拒絕 `.inbox.md`、`.md.md`、分隔符、空名稱與 `.`/`..`,列出可直接重試的正確名稱。\n4. 同層、名稱、正文、來源票完全相同的重送不再新增行與 noted 事件;不同來源票不靜默丟棄。\n5. 孤兒內容遷移交 tabby_pool #689,本票不讀寫 T。\n【前置】#74、A #72 落地;落地前留 Draft。\n【needs_verifier=false 理由】名稱與落檔契約可在單一 CLI 邊界完整證明。\n【model=codex sol 理由】介面、有效值及錯誤結果已釘死。\n【規模】S,約 120–220 行差異。",
+  "test_plan": "四問:守實際落檔與來源保留;回歸為多接一個副檔名或錯誤去重;既有案例未覆蓋依文件輸入完整檔名;無測試專用縫。交件時每個新增/改動案例仍須在 EVIDENCE 寫一行完整的 `四問:`。",
+  "feature": "記憶治理",
+  "decision_refs": [
+    "D-021"
+  ],
+  "verify_strings": [
+    "test_memory_note_names",
+    ".md.inbox.md"
+  ],
+  "needs_verifier": false
+}

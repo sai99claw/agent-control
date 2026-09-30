@@ -37,9 +37,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "9e0cf3780af0dd7bf04325cb1127f6aaa37be4c7",
-  "state": "Draft",
-  "state_version": 6,
+  "base_sha": "6ec5bae2097e088fbc875e7f603f13cc63551135",
+  "state": "Done",
+  "state_version": 16,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -56,5 +56,62 @@
     "got-this-far"
   ],
   "outline": "兩個症狀一個入口(auto-fix.sh 起 worker)。已查:WORKER_TIMEOUT 只讀 config(auto-fix.sh:127),票的 worker 欄沒有任何腳本讀,SCHEMA 也沒寫 —— T #675 票設 7200 仍在 3600 砍。T #675 run 20260929-022214-78154 的 worker-round1.log 實測 0 bytes:tee(#57)已逐行寫,但 json 格式 claude 只在結束印一個信封,被砍就什麼都沒有。needs_verifier=false:框架腳本票,案例已逐條列,實作者自證變異紅。建議變異:拿掉票值優先 → A1 紅。",
-  "needs_verifier": false
+  "needs_verifier": false,
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 76,
+      "tokens_out": 40575,
+      "cache_write": 111525,
+      "cache_read": 3064084,
+      "wall_seconds": 1891,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-09-29T04:45:14+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 10,
+      "tokens_out": 4017,
+      "cache_write": 42748,
+      "cache_read": 183322,
+      "wall_seconds": 42,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-09-29T04:51:06+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 692,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-09-29T05:02:53+08:00"
+    }
+  ],
+  "branch": "t64",
+  "gate": {
+    "rc": 0,
+    "sha": "3abacfd88e870acc5dccbe32e648eafb7dce0443",
+    "run_id": "20260929-044515-5303",
+    "at": "2026-09-29T04:50:24+08:00"
+  },
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "e86eb1db18875b5febda89f77242d6903d2c5560",
+    "note": "reports/t64/20260929-044515-5303/REVIEW.md",
+    "at": "2026-09-29T05:02:53+08:00",
+    "state_version": 16
+  }
 }

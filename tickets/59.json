@@ -14,21 +14,24 @@
   "out_of_scope": [],
   "depends_on": [],
   "allowed_write_paths": [
-    "scripts/apply.sh",
-    "scripts/review.sh",
-    "scripts/auto-fix.sh",
-    "memory/role/implementer.md",
-    "tickets/SCHEMA.md",
     "board/*",
-    "tests/*"
+    "memory/role/implementer.md",
+    "scripts/apply.sh",
+    "scripts/auto-fix.sh",
+    "scripts/gate.sh",
+    "scripts/land.sh",
+    "scripts/review.sh",
+    "scripts/ticket.py",
+    "tests/*",
+    "tickets/SCHEMA.md"
   ],
   "role": "worker",
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "434d3181fdf4fdbe21febb309680340e706f18f2",
-  "state": "Ready",
-  "state_version": 7,
+  "base_sha": "ef3303d5639fffef462dad61c62341af43570d20",
+  "state": "Done",
+  "state_version": 19,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -47,5 +50,72 @@
     }
   ],
   "needs_verifier": false,
-  "outline": "needs_verifier=false:框架腳本票,tests/ 裡的單元測試就是驗收,實作者自證變異紅(依 A #43/#48 慣例)。稽核來源:tabby_pool docs/review/20260928-flow-waste-audit.md;裁示 D-H38。"
+  "outline": "needs_verifier=false:框架腳本票,tests/ 裡的單元測試就是驗收,實作者自證變異紅(依 A #43/#48 慣例)。稽核來源:tabby_pool docs/review/20260928-flow-waste-audit.md;裁示 D-H38。",
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 122,
+      "tokens_out": 56628,
+      "cache_write": 166192,
+      "cache_read": 7608023,
+      "wall_seconds": 1613,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-09-28T16:15:55+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 16,
+      "tokens_out": 6627,
+      "cache_write": 51301,
+      "cache_read": 366846,
+      "wall_seconds": 69,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-09-28T16:25:24+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 513,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-09-28T16:33:57+08:00"
+    }
+  ],
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "allowed_write_paths lacks scripts/gate.sh, scripts/land.sh, scripts/ticket.py — the objective (land stops refusing extras) needs land.sh, and gate.sh preflight rc=4 would refuse every branch apply now lets through; ticket.py holds the one shared write_scope(). Current main apply.sh will rc=5 on them; widen with: python3 scripts/ticket.py set 59 allowed_write_paths '[\"scripts/apply.sh\", \"scripts/review.sh\", \"scripts/auto-fix.sh\", \"memory/role/implementer.md\", \"tickets/SCHEMA.md\", \"board/*\", \"tests/*\", \"scripts/gate.sh\", \"scripts/land.sh\", \"scripts/ticket.py\"]'",
+      "evidence": "../agent-control-wt/fix-t59/round1/EVIDENCE-round1.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "主線裁示:接受。gate.sh 的 preflight、land.sh 的越界拒收、ticket.py 的 write_scope() 都是同一條規則的三個出口,一起改;allowed_write_paths 加 scripts/gate.sh、scripts/land.sh、scripts/ticket.py。"
+    }
+  ],
+  "owner": "main",
+  "branch": "t59",
+  "gate": {
+    "rc": 0,
+    "sha": "39856de6788174fa577b508b2c9ac9813ab4588e",
+    "run_id": "20260928-161755-23134",
+    "at": "2026-09-28T16:24:13+08:00"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "40057525ea694e90edb12c730425b8e7a9b2cd4b",
+    "note": "reports/t59/20260928-161755-23134/REVIEW.md",
+    "at": "2026-09-28T16:33:57+08:00",
+    "state_version": 19
+  }
 }
