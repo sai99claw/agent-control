@@ -668,6 +668,117 @@ class GateRed(LandBase):
         self.assertNotIn("land.pass", kinds)
 
 
+class UntrackedFileInTheWay(LandBase):
+    """#69:分支新增的路徑,在主線工作樹裡已經是未追蹤的檔 —— ff-only 會被 git 拒絕,
+    而那是九分鐘全套之後的事。第 1〜4 步就點名退回,不搬、不刪使用者的檔。
+
+    **變異 M1**:拿掉早退 → 這一條紅(閘門被叫到)。
+    """
+
+    def test_an_untracked_file_on_a_path_the_branch_adds_is_refused_before_the_gate(self):
+        good = self.branch_for(1, "t1-good")
+        self.commit_in(good, "src/g1", "有 commit 的那一張")
+        self.approve(1, "t1-good")
+        self.write("src/g1", "使用者自己的檔,與分支的不同\n")
+        before = self.git("rev-parse", "main").strip()
+
+        done = self.land("t1-good")
+
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        lines = done.stdout.splitlines()
+        head = [n for n, line in enumerate(lines)
+                if "主線工作樹裡有未追蹤的檔" in line and "t1-good" in line]
+        self.assertTrue(head, done.stdout)
+        self.assertEqual(lines[head[0] + 1], "land:   src/g1", done.stdout)
+        self.assertIn("不會替你搬、不會刪", lines[head[0] + 2])
+        self.assertFalse(self.gate_ran(), "拒絕要發生在跑全套之前")
+        self.assertFalse(os.path.exists(self.wt_base()), "拒收不該開 land worktree")
+        self.assertEqual(self.git("rev-parse", "main").strip(), before)
+        self.assertEqual(self.read("src/g1"), "使用者自己的檔,與分支的不同\n",
+                         "使用者的檔被動過")
+        self.assertIn("land 拒收", self.run_py("scripts/inbox.py", "list", "--all").stdout)
+        self.assertIn("land.refused", self.kinds())
+
+
+# 閘門期間讓主線前進:AC_ROOT 是 land 本來就傳給 gate.sh 的主 repo 根。
+GATE_STUB_MOVES_MAIN = """#!/bin/sh
+echo "gate $* $(git rev-parse --short HEAD)" >> "$AC_TEST_LOG"
+git -C "$AC_ROOT" -c user.name=t -c user.email=t@t commit -q --allow-empty -m moved
+exit 0
+"""
+
+# 閘門期間在主線工作樹放一個未追蹤檔 —— 第 1〜4 步的早退看不到它,第 6 步的 ff-only 會被 git 拒絕。
+GATE_STUB_DROPS_UNTRACKED = """#!/bin/sh
+echo "gate $* $(git rev-parse --short HEAD)" >> "$AC_TEST_LOG"
+mkdir -p "$AC_ROOT/src"
+echo "gate 期間才出現的檔" > "$AC_ROOT/src/g1"
+exit 0
+"""
+
+
+class FastForwardFailsBecauseMainMoved(LandBase):
+    """#69:主線真的動了 —— 仍說「動了」,而且說得出從哪到哪。
+
+    **變異 M4**:「動了」那一句不印兩個短 sha → 這一條紅。
+    """
+    gate_stub = GATE_STUB_MOVES_MAIN
+
+    def test_it_says_main_moved_and_names_both_shas(self):
+        good = self.branch_for(1, "t1-good")
+        self.commit_in(good, "src/g1", "有 commit 的那一張")
+        self.approve(1, "t1-good")
+        before = self.git("rev-parse", "--short", "main").strip()
+
+        done = self.land("t1-good")
+
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        now = self.git("rev-parse", "--short", "main").strip()
+        self.assertNotEqual(now, before, "假閘門沒有讓主線前進")
+        self.assertEqual(self.git("log", "-1", "--format=%s", "main").strip(), "moved",
+                         "land 不該再動主線")
+        self.assertIn("在這中間動了", done.stdout)
+        self.assertIn("%s -> %s" % (before, now), done.stdout)
+        self.assertTrue(os.listdir(self.wt_base()), "worktree 要留著給人看")
+        self.assertIn("rebase", self.run_py("scripts/inbox.py", "show", "1").stdout)
+        self.assertIn(("merge", 1), [(row["phase"], row["rc"]) for row
+                                     in self.status_of("1", kind="land")["phases"]])
+        self.assertIn("land.fail", self.kinds())
+
+
+class FastForwardRefusedByGit(LandBase):
+    """#69:主線沒動、是 git 拒絕 —— 不說「動了」、不叫人 rebase,git 的原話進 stdout。
+
+    **變異 M3**(一律走「動了」)、**M5**(stderr 不轉到 stdout)→ 這一條紅。
+    """
+    gate_stub = GATE_STUB_DROPS_UNTRACKED
+
+    def test_it_says_main_did_not_move_and_prints_what_git_said(self):
+        good = self.branch_for(1, "t1-good")
+        self.commit_in(good, "src/g1", "有 commit 的那一張")
+        self.approve(1, "t1-good")
+        before = self.git("rev-parse", "main").strip()
+
+        done = self.land("t1-good")
+
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertTrue(self.gate_ran())
+        self.assertEqual(self.git("rev-parse", "main").strip(), before)
+        self.assertIn("ff-only 進不去,但", done.stdout)
+        self.assertIn("沒有動", done.stdout)
+        self.assertNotIn("在這中間動了", done.stdout)
+        self.assertIn("git 的原話", done.stdout)
+        # 只斷言路徑,不斷言 git 的英文句子 —— locale 會翻譯。
+        self.assertTrue([line for line in done.stdout.splitlines()
+                         if line.startswith("land:   ") and "src/g1" in line], done.stdout)
+        self.assertTrue(os.listdir(self.wt_base()), "worktree 要留著給人看")
+        page = self.run_py("scripts/inbox.py", "show", "1").stdout
+        self.assertIn("git 拒絕", page)
+        self.assertNotIn("rebase", page)
+        self.assertIn(("merge", 1), [(row["phase"], row["rc"]) for row
+                                     in self.status_of("1", kind="land")["phases"]])
+        self.assertIn("land.fail", self.kinds())
+
+
 class LandStatus(LandBase):
     """狀態檔:這一批每一張票各一份 `reports/t<票號>/<run_id>/status.json`(D-010)。
 

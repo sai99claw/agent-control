@@ -521,6 +521,34 @@ VFILES_PY
         RC_REFUSE=4
         continue
     fi
+
+    # 分支**新增**的路徑,在主線工作樹裡已經是未追蹤的檔(#69)。第 6 步的 ff-only 會被
+    # git 拒絕(untracked working tree files would be overwritten by merge),而那是跑完
+    # 九分鐘全套之後的事 —— 這裡先查得出來就先查。判準用 git 自己的:未追蹤且未被 ignore。
+    # **不替人搬、不刪**:那是使用者的檔,搬了就是另一種事故。
+    out=$(python3 - "$ROOT" "$MAIN" "$b" <<'UNTRACKED_PY'
+import subprocess, sys
+root, main, branch = sys.argv[1:4]
+added = subprocess.run(["git", "-C", root, "diff", "-z", "--name-only", "--no-renames",
+                        "--diff-filter=A", "%s...%s" % (main, branch)],
+                       capture_output=True, text=True)
+names = [name for name in added.stdout.split("\0") if name]
+if names:
+    found = subprocess.run(["git", "--literal-pathspecs", "-C", root, "ls-files", "-z",
+                            "--others", "--exclude-standard", "--"] + names,
+                           capture_output=True, text=True)
+    for name in found.stdout.split("\0"):
+        if name:
+            print(name)
+UNTRACKED_PY
+)
+    if [ -n "$out" ]; then
+        echo "land: $b —— 主線工作樹裡有未追蹤的檔,與這條分支新增的路徑撞在一起(ff-only 會被 git 拒絕):"
+        echo "$out" | sed 's/^/land:   /'
+        echo "land:   land 不會替你搬、不會刪 —— 自己把它們移走,或 commit 進 $MAIN,再重跑 land。"
+        STOP=1
+        continue
+    fi
 done
 if [ -n "$STOP" ]; then
     echo "land: 一條都沒有落地 —— 上面那幾條先處理掉再來。"
@@ -528,7 +556,7 @@ if [ -n "$STOP" ]; then
     ev land.refused --note "$*" --kv "stamp=$STAMP"
     status_done_all "$RC_REFUSE" "land 拒收"
     inbox_all "land 拒收(rc=$RC_REFUSE)" \
-        "上面逐條寫了是哪一條不過:0 commit / base 過期 / 越界 / 覆核 / verify.files;產品票缺案例時先派驗證者" \
+        "上面逐條寫了是哪一條不過:0 commit / base 過期 / 越界 / 覆核 / verify.files / 未追蹤撞路徑;產品票缺案例時先派驗證者" \
         "reports/t<票號>/${LAND_RUN:-} 的 status.json"
     exit "$RC_REFUSE"
 fi
@@ -542,6 +570,8 @@ fi
 WTBASE=$(wtbase)
 WT=$WTBASE/land-$STAMP
 BR=land/$STAMP
+# 第 6 步 ff-only 進不去時拿來比:主線真的動了,還是沒動、是 git 拒絕(#69)。
+MAIN_BEFORE=$(git -C "$ROOT" rev-parse "$MAIN")
 mkdir -p "$WTBASE"
 git -C "$ROOT" worktree add -q -b "$BR" "$WT" "$MAIN" || {
     ev land.fail --note "worktree add 失敗" --kv "stamp=$STAMP"
@@ -586,12 +616,27 @@ status_phase_all gate 0 "全套綠"
 ev gate.pass --kv mode=full --kv "sha=$SHA"
 
 # ------------------------------------------------------------------- 第 6 步
-git -C "$ROOT" merge -q --ff-only "$BR" || {
-    echo "land: $MAIN 在這中間動了,ff-only 進不去 —— worktree 留在 $WT"
-    ev land.fail --note "ff-only 進不去" --kv "stamp=$STAMP"
-    status_phase_all merge 1 "ff-only 進不去"
+# ff-only 進不去有兩種,下一步差很多(#69):主線真的動了 → rebase 後重跑閘門;主線沒動、
+# 是 git 拒絕(例:主線工作樹的檔會被覆蓋)→ rebase 是錯的下一步,要看 git 的原話。
+# 舊版一律說「動了」,而 git 的 stderr 沒進 stdout / 收件匣 / status.json。
+MERGE_ERR=$(git -C "$ROOT" merge -q --ff-only "$BR" 2>&1 >/dev/null) || {
+    MAIN_NOW=$(git -C "$ROOT" rev-parse "$MAIN")
+    if [ "$MAIN_NOW" != "$MAIN_BEFORE" ]; then
+        echo "land: $MAIN 在這中間動了($(git -C "$ROOT" rev-parse --short "$MAIN_BEFORE") -> $(git -C "$ROOT" rev-parse --short "$MAIN_NOW")),ff-only 進不去 —— worktree 留在 $WT"
+        ev land.fail --note "ff-only 進不去(主線動了)" --kv "stamp=$STAMP"
+        status_phase_all merge 1 "ff-only 進不去:主線動了"
+        status_done_all 1 "閘門綠了但沒合進主線"
+        inbox_all "閘門綠了但沒合進主線" "主線在這中間動了 —— rebase 後重跑閘門" "$WT"
+        exit 1
+    fi
+    echo "land: ff-only 進不去,但 $MAIN 沒有動($(git -C "$ROOT" rev-parse --short "$MAIN_NOW"))—— 是 git 拒絕合併;worktree 留在 $WT"
+    echo "land: git 的原話:"
+    echo "$MERGE_ERR" | sed 's/^/land:   /'
+    ev land.fail --note "ff-only 進不去(主線沒動,git 拒絕)" --kv "stamp=$STAMP"
+    status_phase_all merge 1 "ff-only 進不去,主線沒動,git 的原話:$MERGE_ERR"
     status_done_all 1 "閘門綠了但沒合進主線"
-    inbox_all "閘門綠了但沒合進主線" "主線在這中間動了 —— rebase 後重跑閘門" "$WT"
+    inbox_all "閘門綠了但沒合進主線" \
+        "主線沒動,git 拒絕合併 —— 看 stdout / status.json 的原話,處理完重跑 land" "$WT"
     exit 1
 }
 status_phase_all merge 0 "已 ff-only 合進 $MAIN"
