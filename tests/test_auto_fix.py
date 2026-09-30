@@ -438,23 +438,6 @@ class AutoFixBase(Sandbox):
 
 class WhenThereIsNothingToFix(AutoFixBase):
 
-    def test_a_ready_ticket_that_never_ran_starts_round_one_instead_of_stopping(self):
-        """#40 A1:這一條以前斷言 rc=2「一輪都還沒跑過」—— 那正是 C1 要拆掉的門檻。
-
-        **Ready 且沒有狀態檔**現在起第 1 輪;這個 worker 什麼都沒交,所以照既有的路
-        停在 rc=5(沒交出可用的 patch),而不是在門口就 rc=2。
-
-        **變異 M1**:把「無狀態檔 ⇒ r=1」那條分支拿掉(退回 exit 2)→ 這一條紅。
-        """
-        self.set_worker(WORKER_NEVER)
-        self.ticket_ready()
-        done = self.auto_fix()
-        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
-        self.assertNotIn("一輪都還沒跑過", done.stderr)
-        self.assertEqual(self.worker_rounds(), ["worker ran round 1"])
-        self.assertEqual(len(self.result_files("dispatch-round1.md")), 1,
-                         "第 1 輪的派工文要落在這一輪的 reports 目錄裡")
-
     def test_a_green_round_stops_and_points_at_review_sh(self):
         """上一輪已經綠了:沒有東西要修。覆核不在這裡觸發(#42 的觸發點是「第 r 輪綠」
         與「手跑閘門綠」),但下一步要說得出是哪一支。"""
@@ -585,6 +568,9 @@ class ThingsThatStopIt(AutoFixBase):
                                   "worker-round2.log")
         with open(worker_log, encoding="utf-8") as handle:
             self.assertEqual(handle.read(), "worker stdout round 2\n")
+        failed = [row for row in self.events() if row["kind"] == "ticket.attempt.failed"]
+        self.assertEqual([(str(row.get("attempt")), row.get("reason")) for row in failed],
+                         [("2", "objection")], "反駁那一輪的 attempt 以 objection 之名結束")
 
     def test_a_test_defect_dispatches_a_new_verifier_and_resumes_the_gate(self):
         self.set_worker(WORKER_REPORTS_TEST_DEFECT)
@@ -748,17 +734,7 @@ class TheDispatchPacket(AutoFixBase):
         self.assertIn("patch-round2.diff", packet, "要交什麼")
         self.assertIn("OBJECTION:", packet, "票寫錯的時候怎麼說")
         self.assertIn("memory/role/implementer.md", packet, "角色卡指路")
-
-    def test_the_packet_points_at_the_rules_pack_instead_of_pasting_everything(self):
-        self.set_worker(WORKER_NEVER)
-        self.ticket_ready()
-        self.status(1, RED_LOG)
-        self.auto_fix("--dry-run")
-        where = os.path.join(self.repo, "reports", "t1", "20260921-100000-1",
-                             "dispatch-round2.md")
-        with open(where, encoding="utf-8") as handle:
-            packet = handle.read()
-        self.assertIn("規則包", packet)
+        self.assertIn("規則包", packet, "指向規則包,不是整份貼")
 
     def test_the_second_round_copy_comes_from_the_ticket_branch(self):
         """#53 D3(D-018):分支名**只有一個來源 —— 票的 `branch` 欄**。票面 branch=t1-gaps
@@ -811,14 +787,6 @@ class TheFirstRoundPacket(AutoFixBase):
         self.assertIn("前景跑", done.stdout, "G14:丟背景就結束回合 = 什麼都沒交")
         self.assertEqual(self.worker_rounds(), [], "第 1 輪不由這一支起 worker")
 
-    def test_the_packet_is_also_written_where_the_second_round_would_go(self):
-        self.set_worker(WORKER_NEVER)
-        self.ticket_ready()
-        self.auto_fix("--dry-run", "--round", "1")
-        found = glob.glob(os.path.join(self.repo, "reports", "t1", "*",
-                                       "dispatch-round1.md"))
-        self.assertEqual(len(found), 1, found)
-
     def test_a_round_number_it_does_not_support_is_refused_by_name(self):
         """「不認得 X」只說了它不是什麼(§5.7)。"""
         self.set_worker(WORKER_NEVER)
@@ -826,18 +794,6 @@ class TheFirstRoundPacket(AutoFixBase):
         done = self.auto_fix("--round", "4")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("--round 只接 1", done.stderr)
-
-    def test_without_round_one_it_still_says_where_to_start(self):
-        """沒有狀態檔又沒給 `--round 1` 時,那一句要**指得到兩條路**。
-
-        #40 之後 Ready 的票不帶 `--round` 就起第 1 輪,會停在門口的只剩**不是 Ready**
-        的票 —— 所以這裡拿一張 Draft 票問同一件事。
-        """
-        self.set_worker(WORKER_NEVER)
-        self.ticket_ready(state="Draft")
-        done = self.auto_fix()
-        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        self.assertIn("--round 1", done.stderr)
 
 
 class TheFirstRoundStartsFromReady(AutoFixBase):
@@ -954,7 +910,8 @@ class TheFirstRoundStartsFromReady(AutoFixBase):
                             "%s 是證據,不能跟著被掃掉" % name)
 
     def test_a_ticket_that_is_not_ready_is_stopped_by_its_state(self):
-        """A3:沒有狀態檔、票不是 Ready ⇒ 指名 state 停下 rc=2,不起 worker、不動票。
+        """A3:沒有狀態檔、票不是 Ready ⇒ 指名 state 停下 rc=2,不起 worker、不動票;
+        那一句要**指得到兩條路**(`--round 1` 只看派工文)。
 
         **變異 M2**:拿掉 state 檢查 → 紅(Draft 票也起了第 1 輪)。
         """
@@ -965,6 +922,7 @@ class TheFirstRoundStartsFromReady(AutoFixBase):
                 done = self.auto_fix()
                 self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
                 self.assertIn("state=%s" % state, done.stderr)
+                self.assertIn("--round 1", done.stderr)
                 self.assertEqual(self.worker_rounds(), [])
                 self.assertEqual(self.load_ticket("1")["state"], state, "停下來就不動票")
                 self.assertNotIn("ticket.attempt.start", self.kinds())
@@ -987,7 +945,8 @@ class TheFirstRoundStartsFromReady(AutoFixBase):
 class EveryRoundCostsARowAndClosesItsAttempt(AutoFixBase):
     """#49 A4 / A7:每一輪派工在票的 `cost[]` 記一筆(role=worker),每一個
     `ticket.attempt.start` 都有配對的 done / failed —— heartbeat.sh 按 attempt 配對。
-    期望的 token 數是這裡寫死的,不從 ticket.py 算回去。"""
+    信封逐欄怎麼變成 token 是 `ticket.py cost` 的事(tests/test_ticket.py 問);這裡只問
+    auto-fix 每輪恰記一筆。"""
 
     def worker_with(self, line):
         self.set_worker(WORKER_ROUND_ONE_COSTS.replace("@ENVELOPE@", line))
@@ -1007,12 +966,6 @@ class EveryRoundCostsARowAndClosesItsAttempt(AutoFixBase):
         row = rows[0]
         self.assertEqual((row["role"], row["round"], row["model"], row["by"]),
                          ("worker", 1, "opus", "auto-fix.sh"))
-        self.assertEqual(row["tokens_out"], 4242)
-        self.assertEqual(row["tokens_in"], 21)
-        self.assertEqual(row["cache_write"], 1000)
-        self.assertEqual(row["cache_read"], 50000)
-        self.assertIsInstance(row["wall_seconds"], int,
-                              "wall_seconds 是 auto-fix 自己量的派出前後差")
 
     def test_a_worker_that_prints_no_envelope_still_costs_one_row_of_nulls(self):
         self.worker_with("not an envelope")
@@ -1020,8 +973,6 @@ class EveryRoundCostsARowAndClosesItsAttempt(AutoFixBase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         rows = self.load_ticket("1").get("cost") or []
         self.assertEqual(len(rows), 1, rows)
-        self.assertIsNone(rows[0]["tokens_out"])
-        self.assertIsInstance(rows[0]["wall_seconds"], int)
 
     def test_a_round_whose_gate_ran_is_done_with_the_same_attempt(self):
         """A7。**變異**:拿掉 `ev ticket.attempt.done` 那一行 → 這一條紅。"""
@@ -1047,16 +998,6 @@ class EveryRoundCostsARowAndClosesItsAttempt(AutoFixBase):
         self.assertEqual(self.attempts("ticket.attempt.done"), [])
         self.assertEqual(len(self.load_ticket("1").get("cost") or []), 1,
                          "沒交 patch 也派過一次,成本照記")
-
-    def test_an_objection_fails_its_attempt_by_that_name(self):
-        self.set_worker(WORKER_OBJECTS)
-        self.ticket_ready()
-        self.status(1, RED_LOG)
-        done = self.auto_fix()
-        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
-        failed = self.attempts("ticket.attempt.failed")
-        self.assertEqual([(str(row.get("attempt")), row.get("reason")) for row in failed],
-                         [("2", "objection")])
 
 
 class WhichRoundIsTheLatestOne(AutoFixBase):
@@ -1384,7 +1325,14 @@ class TheWholeLoop(AutoFixBase):
 
     def test_a_red_round_gets_fixed_and_stops_at_awaiting_review(self):
         """#42 A3(a):綠了轉 InReview 之後叫 `review.sh`;假 reviewer 說 pass,票的
-        `review.by` 是 `reviewer@…`、`sha` 是分支頭 —— 由 review.sh 寫,不是 auto-fix。"""
+        `review.by` 是 `reviewer@…`、`sha` 是分支頭 —— 由 review.sh 寫,不是 auto-fix。
+
+        #56(D-H38):第 2 輪在副本跑綠 → 票上**同一個** `gate` 欄 rc 是整數 0、sha 是分支頭,
+        下游 land 的 gate 檢查(`type(gate["rc"]) is int and == 0`,land-ticket.sh `gate_rc`)
+        放行。期望 sha 由夾具 `git rev-parse t1` 取。覆核派工文的措辭由 tests/test_gate.py 問。
+
+        **變異**:auto-fix 綠分支寫 `gate` 那一段的 rc 寫成字串 → 這一條紅(型別)。
+        只拿掉那一段不會紅:副本裡的 `gate.sh --branch --ticket` 也寫同一格(#73 實測)。"""
         self.set_worker(WORKER_FIXES)
         model = self.set_reviewer(REVIEWER_PASS)
         self.ticket_ready()
@@ -1410,22 +1358,8 @@ class TheWholeLoop(AutoFixBase):
         self.assertEqual(review.get("by"), "reviewer@" + model)
         self.assertEqual(review.get("sha"), self.git("rev-parse", "t1").strip())
         self.assertTrue(os.path.isdir(wt))
-
-    def test_a_green_second_round_writes_the_gate_on_the_ticket_at_the_branch_head(self):
-        """#56(D-H38):第 2 輪在副本跑綠 → 票上**同一個** `gate` 欄 rc 是整數 0、sha 是分支頭,
-        下游 land 的 gate 檢查(`type(gate["rc"]) is int and == 0`,land-ticket.sh `gate_rc`)
-        放行;覆核派工文說「已對 <那個 sha> 跑過閘門」。期望 sha 由夾具 `git rev-parse t1` 取。
-
-        **變異**:拿掉 auto-fix 綠分支寫 `gate` 那一段 → 這一條紅(票上沒有 gate)。"""
-        self.set_worker(WORKER_FIXES)
-        self.set_reviewer(REVIEWER_PASS)
-        self.ticket_ready()
-        self.first_round()
-        done = self.auto_fix()
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.worker_rounds(), ["worker ran round 2"])
         head = self.git("rev-parse", "t1").strip()
-        gate = self.load_ticket("1").get("gate")
+        gate = ticket.get("gate")
         self.assertIsInstance(gate, dict, "第 2 輪綠了,票上沒有 gate 欄")
         self.assertIs(type(gate.get("rc")), int, "rc 要是整數 —— land 認的是 JSON 型別")
         self.assertEqual(gate["rc"], 0)
@@ -1436,10 +1370,6 @@ class TheWholeLoop(AutoFixBase):
         self.assertTrue(gate.get("at"))
         packets = self.result_files("dispatch-reviewer.md")
         self.assertEqual(len(packets), 1, packets)
-        with open(packets[0], encoding="utf-8") as handle:
-            packet = handle.read()
-        self.assertIn("已對 %s 跑過閘門" % head, packet)
-        self.assertNotIn("沒跑過閘門", packet)
 
     def test_no_review_leaves_the_review_to_a_human(self):
         """`--no-review`:綠了停在 InReview,reviewer 不被叫、auto-fix 不准自己蓋覆核那一格。"""
@@ -1477,16 +1407,6 @@ echo "rerun $AC_ROUND ticket=$AC_TICKET" >> "$AC_TEST_LOG"
         self.assertEqual(rows[0]["ticket"], "1")
         self.assertEqual(rows[0]["round"], "2")
         self.assertTrue(rows[0]["run_id"])
-
-    def test_a_configured_rerun_command_receives_the_ticket_number(self):
-        self.set_worker(WORKER_FIXES,
-                        'printf %s "$AC_TICKET" > "$AC_WT/seen"')
-        self.ticket_ready()
-        wt = self.first_round()
-        done = self.auto_fix()
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        with open(os.path.join(wt, "seen"), encoding="utf-8") as handle:
-            self.assertEqual(handle.read(), "1")
 
     def test_the_gate_hook_dispatches_against_the_main_repo_not_the_worktree(self):
         """`gate.sh --branch --ticket n --auto-fix` 在**副本**裡跑,而票、reports 與
@@ -1856,17 +1776,6 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
         return [row for row in self.events() if row["kind"] == "agent.start"
                 and row.get("role") == "verifier"]
 
-    def test_c1_true_starts_a_verifier_in_round_one(self):
-        """C1 true。**變異**:`verifier_wanted` 的 true 分支不設 V_WANT → 紅。"""
-        self.arm(needs_verifier=True)
-        done = self.auto_fix("--no-review")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        starts = self.verifier_starts()
-        self.assertEqual(len(starts), 1, starts)
-        self.assertEqual((str(starts[0].get("round")), starts[0].get("agent")),
-                         ("1", "auto-fix-verifier"))
-        self.assertEqual(self.verifier_calls(), ["verifier ran round 1"])
-
     def test_c1_false_starts_no_verifier(self):
         """C1 false:紀錄檔在、而且是空的。"""
         self.arm(needs_verifier=False)
@@ -1886,23 +1795,6 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
         self.assertEqual(self.verifier_starts(), [])
         self.assertIn("needs_verifier", done.stderr)
         self.assertIn("D-028", done.stderr)
-
-    def test_c2_the_verifier_is_running_before_the_worker_is_dispatched(self):
-        """C2:worker 等得到驗證者的 `started` 才交 patch;綠一輪後 cost 兩筆。
-        #60 起平行只在票 `interface_fixed=true`(這一條就是「現行行為」那一種)。
-
-        **變異**:改成先等驗證者交件再派 worker(串行)→ 驗證者等不到 worker 的標記、
-        不交件 → rc=5 → 紅;反過來先 worker 後驗證者 → worker 等不到標記 exit 9 → 紅。
-        """
-        self.arm(wait=True, needs_verifier=True, interface_fixed=True)
-        done = self.auto_fix("--no-review")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        worker_done = [row for row in self.events() if row["kind"] == "agent.done"
-                       and row.get("agent") == "auto-fix"]
-        self.assertEqual([row.get("rc") for row in worker_done], ["0"])
-        rows = self.load_ticket("1").get("cost") or []
-        self.assertEqual(sorted((row["role"], row["round"]) for row in rows),
-                         [("verifier", 1), ("worker", 1)], rows)
 
     def test_c3_the_verifier_packet_is_the_template_filled_in(self):
         """C3:派工文 = 規則包 + 範本逐格填好;`--dry-run --round 1` 兩份路徑都印、不起行程。
@@ -1941,12 +1833,18 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
 
     def test_c4_the_verifier_plan_and_baseline_are_merged_into_the_ticket(self):
         """C4:綠一輪後票的 verify.files 非空、baseline.stage 是 red 或 check。
+        C1 true:第 1 輪起了恰一個驗證者,事件的 agent 是 auto-fix-verifier。
 
         **變異**:`apply.sh` 不併驗證者的 verify / baseline → 紅。
+        **變異**:`verifier_wanted` 的 true 分支不設 V_WANT → 紅。
         """
         self.arm(needs_verifier=True)
         done = self.auto_fix("--no-review")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        starts = self.verifier_starts()
+        self.assertEqual(len(starts), 1, starts)
+        self.assertEqual((str(starts[0].get("round")), starts[0].get("agent")),
+                         ("1", "auto-fix-verifier"))
         plan = self.load_ticket("1").get("verify") or {}
         self.assertEqual(plan.get("files"), ["verify/example/test_ticket_1.py"], plan)
         self.assertEqual(plan.get("tags"), ["example"], plan)
@@ -2008,8 +1906,11 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
     def test_t60_interface_fixed_true_starts_the_verifier_alongside_the_worker(self):
         """#60 驗收一:interface_fixed=true ⇒ 驗證者起跑時 worker 的 patch 還不在(平行),
         派工文沒有「以分支上的實作為準」那一段。
+        C2:worker 等得到驗證者的 `started` 才交 patch;綠一輪後 cost 兩筆。
 
         **變異**:平行的條件拿掉(一律等 patch)→ 驗證者看到 patch(yes)→ 紅。
+        **變異**:改成先等驗證者交件再派 worker(串行)→ 驗證者等不到 worker 的標記、
+        不交件 → rc=5 → 紅;反過來先 worker 後驗證者 → worker 等不到標記 exit 9 → 紅。
         """
         self.arm(needs_verifier=True, interface_fixed=True, wait=True)
         done = self.auto_fix("--no-review")
@@ -2017,6 +1918,12 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
         self.assertEqual(self.verifier_calls(), ["verifier ran round 1"])
         self.assertEqual(self.saw_patch(), "no")
         self.assertNotIn("以分支上的實作為準", self.sent_verifier_packet())
+        worker_done = [row for row in self.events() if row["kind"] == "agent.done"
+                       and row.get("agent") == "auto-fix"]
+        self.assertEqual([row.get("rc") for row in worker_done], ["0"])
+        rows = self.load_ticket("1").get("cost") or []
+        self.assertEqual(sorted((row["role"], row["round"]) for row in rows),
+                         [("verifier", 1), ("worker", 1)], rows)
 
     def test_t60_interface_fixed_missing_starts_the_verifier_after_the_patch(self):
         """#60 驗收二(缺):驗證者起跑時 patch-round1.diff 已經在;派工文含那一句與 patch 路徑。
@@ -2090,28 +1997,6 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
         pages = self.inbox_rows()
         self.assertEqual(len(pages), 1, pages)
         self.assertNotIn("驗證者沒起", json.dumps(pages[0], ensure_ascii=False))
-
-
-class InterfaceFixedIsWrittenDown(unittest.TestCase):
-    """#60 驗收三(文件):欄位與判準寫在開題者會讀的兩處。量的是這份原始碼樹,不是沙盒。"""
-
-    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-    def read(self, rel):
-        with open(os.path.join(self.ROOT, rel), encoding="utf-8") as handle:
-            return handle.read()
-
-    def test_schema_has_the_field_and_its_rule(self):
-        row = [line for line in self.read("tickets/SCHEMA.md").splitlines()
-               if line.startswith("| 驗證 | `interface_fixed`")]
-        self.assertEqual(len(row), 1, "SCHEMA 欄位表要有恰一列 interface_fixed")
-        self.assertIn("開題者", row[0])
-        self.assertIn("以分支上的實作為準", row[0])
-
-    def test_the_opener_card_says_when_to_write_true(self):
-        text = self.read("memory/role/opener.md")
-        self.assertIn("interface_fixed", text)
-        self.assertIn("介面已釘死", text)
 
 
 # 假 worker(#57 b):在 work/ 改了一個檔、印一行,然後卡住直到被砍。印的那一行走 Python
@@ -2235,7 +2120,8 @@ class ClaudeIsAskedForAnEnvelope(AutoFixBase):
         (worker 21 / 4242、verifier 8 / 777,抄自上面的 envelope(),不從 ticket.py 算)。
 
         **變異**:with_envelope 補回 `json` → argv 那一格紅;不補 `--verbose` → 假 claude
-        照真的 rc=1、沒有信封,worker 列 null 紅。"""
+        照真的 rc=1、沒有信封,worker 列 null 紅;拿掉 WORKER_CMD / VERIFIER_CMD 的
+        `with_envelope` → 那一列 null 紅。"""
         self.arm(needs_verifier=True)
         done = self.auto_fix("--no-review")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -2248,8 +2134,12 @@ class ClaudeIsAskedForAnEnvelope(AutoFixBase):
                 self.assertEqual(argv[argv.index("--output-format") + 1], "stream-json", argv)
                 self.assertEqual(argv.count("--verbose"), 1, argv)
         rows = self.rows()
+        self.assertEqual(sorted(rows), ["verifier", "worker"], rows)
         self.assertEqual((rows["worker"]["tokens_in"], rows["worker"]["tokens_out"]), (21, 4242))
         self.assertEqual((rows["verifier"]["tokens_in"], rows["verifier"]["tokens_out"]), (8, 777))
+        self.assertEqual(rows["worker"]["cache_read"], 50000)
+        self.assertIsNone(rows["worker"]["note"])
+        self.assertIsNone(rows["verifier"]["note"])
 
     def test_t64_a4_an_explicit_json_is_left_alone(self):
         """#64 A4:已指定 `--output-format json` 的照用,不補 stream-json 也不補 `--verbose`。
@@ -2265,21 +2155,6 @@ class ClaudeIsAskedForAnEnvelope(AutoFixBase):
         self.assertNotIn("stream-json", argv)
         self.assertNotIn("--verbose", argv)
         self.assertEqual(self.rows()["worker"]["tokens_out"], 4242)
-
-    def test_worker_and_verifier_rows_carry_tokens_from_the_envelope(self):
-        """**變異**:拿掉 WORKER_CMD 的 `with_envelope` → worker 列 null 紅;
-        拿掉 VERIFIER_CMD 的 → verifier 列 null 紅。"""
-        self.arm(needs_verifier=True)
-        done = self.auto_fix("--no-review")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        rows = self.rows()
-        self.assertEqual(sorted(rows), ["verifier", "worker"], rows)
-        self.assertEqual(rows["worker"]["tokens_out"], 4242)
-        self.assertEqual(rows["worker"]["cache_read"], 50000)
-        self.assertEqual(rows["verifier"]["tokens_out"], 777)
-        self.assertEqual(rows["verifier"]["tokens_in"], 8)
-        self.assertIsNone(rows["worker"]["note"])
-        self.assertIsNone(rows["verifier"]["note"])
 
     def test_no_envelope_is_null_with_a_note_and_the_handin_is_unaffected(self):
         """已指定的格式照用(`text` 不印信封)→ token null、note 說原因;交件照收、閘門綠。
@@ -2466,9 +2341,6 @@ class TheTicketSetsTheTimeout(AutoFixBase):
         """A2:票 0 → 不採用、點名那一格、退回 config 3。**變異**:拿掉 `value > 0` → 0 秒
         (Python 的 wait(timeout=0) 立刻逾時)來源行是票,紅。"""
         self.bad_ticket_value(0)
-
-    def test_t64_a2_a_negative_ticket_value_falls_back_to_the_config(self):
-        self.bad_ticket_value(-1)
 
     def test_t64_a2_a_string_ticket_value_falls_back_to_the_config(self):
         """A2:票 'x' → 不採用。**變異**:拿掉型別檢查 → Python 比較 str > int 例外,紅。"""

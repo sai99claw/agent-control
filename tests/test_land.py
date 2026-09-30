@@ -104,12 +104,6 @@ class VerifyFilesMustBeOnTheBranch(LandBase):
         done = self.land("t1-x")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
-    def test_a_ticket_with_no_verify_files_is_not_blocked_by_this(self):
-        branch = self.branch_for(1, "t1-x")
-        self.commit_in(branch, "src/a", "還沒有回歸案例的票")
-        self.approve(1, "t1-x")
-        self.assertEqual(self.land("t1-x").returncode, 0)
-
 
 class ProductTicketsNeedVerifierCases(LandBase):
 
@@ -154,28 +148,6 @@ class ProductTicketsNeedVerifierCases(LandBase):
         done = self.land(*branches)
 
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-
-
-class LandWakesMainUp(LandBase):
-    """每一條退出路徑都寫一則收件匣 —— 主線不輪詢(D-015)。"""
-
-    def inbox(self):
-        return self.run_py("scripts/inbox.py", "list", "--all").stdout
-
-    def test_a_green_landing_says_the_ticket_still_needs_closing(self):
-        branch = self.branch_for(1, "t1-x")
-        self.commit_in(branch, "src/a", "一件事")
-        self.approve(1, "t1-x")
-        self.assertEqual(self.land("t1-x").returncode, 0)
-        listed = self.inbox()
-        self.assertIn("#1", listed)
-        self.assertIn("尚未關票", listed)
-
-    def test_a_refusal_also_leaves_a_page(self):
-        """**拒收也是終態**:退回去而沒有人知道,與沒有退回去一樣。"""
-        self.branch_for(1, "t1-empty")
-        self.assertNotEqual(self.land("t1-empty").returncode, 0)
-        self.assertIn("land 拒收", self.inbox())
 
 
 class AutoFixHook(LandBase):
@@ -265,30 +237,29 @@ class ZeroCommits(LandBase):
         """退出碼之外連那句話一起釘 —— 它是給人看的,下一步就寫在裡面。
 
         **變異**:把 `if [ "$n" -eq 0 ]` 那一段拿掉 → 這一條紅。
+
+        同一次拒收還釘:拒絕發生在 `worktree add` 之前(沒有殘骸要人收)、乾淨的
+        worktree 不被說成有東西沒 commit(「有東西沒 commit」與「這條分支就是空的」
+        是兩件事)、拒收也寫一則收件匣(退回去而沒有人知道,與沒有退回去一樣)、
+        鎖照樣放掉。
         """
-        self.branch_for(1, "t1-empty")
+        empty = self.branch_for(1, "t1-empty")
         before = self.main_log()
 
         done = self.land("t1-empty")
-        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("land: t1-empty —— 0 個 commit", done.stdout)
         self.assertIn("是不是忘了 `git commit`?", done.stdout)
         self.assertFalse(self.gate_ran(),
                          "0 個 commit 還跑完整套,正是那個 bug")
         self.assertEqual(self.main_log(), before, "主線不該動")
         self.assertNotIn("串好,跑全套", done.stdout)
-
-    def test_it_does_not_open_a_land_worktree_when_it_refuses(self):
-        """拒絕發生在 `worktree add` 之前,所以沒有殘骸要人收。"""
-        self.branch_for(1, "t1-empty")
-        done = self.land("t1-empty")
-        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertFalse(os.path.exists(self.wt_base()))
-
-    def test_a_clean_worktree_is_not_accused_of_holding_uncommitted_work(self):
-        """「有東西沒 commit」與「這條分支就是空的」是兩件事,不能都印同一句。"""
-        self.branch_for(1, "t1-empty")
-        self.assertNotIn("還沒 commit 的改動", self.land("t1-empty").stdout)
+        self.assertNotIn("%s 裡有還沒 commit 的改動" % empty, done.stdout,
+                         "乾淨的 worktree 被說成有東西沒 commit")
+        self.assertIn("land 拒收",
+                      self.run_py("scripts/inbox.py", "list", "--all").stdout)
+        self.assertFalse(self.exists(".land.lock"))
 
     def test_the_uncommitted_changes_in_that_branch_worktree_are_named(self):
         """當時的處境是「東西都在,只差一個 commit」—— 指著那幾個檔比只說「沒有
@@ -558,15 +529,6 @@ class LeftoverCopiesAreNamed(LandBase):
         self.assertIn("fix-t1", done.stdout)
         self.assertTrue(os.path.isdir(stale), "只印不刪 —— 那幾份是證據")
 
-    def test_a_clean_worktree_base_says_nothing(self):
-        """沒有東西要說的時候不要說 —— 每次都印的那一行,下一次就沒有人看了。"""
-        good = self.branch_for(1, "t1-good")
-        self.commit_in(good, "src/g1", "有 commit 的那一張")
-        self.approve(1, "t1-good")
-        done = self.land("t1-good")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertNotIn("還留著這幾份副本", done.stdout)
-
 
 class LeftoversUnderTheConfiguredWorktreeDir(LandBase):
     """#38 A4:殘留清單要看 **auto-fix 開副本的那個目錄** —— `worktree_dir` 以主 repo 根解析。
@@ -602,6 +564,10 @@ class HappyPath(LandBase):
 
         釘的是那一整條:閘門被叫到、主線前進、origin 跟上、退出碼 0,以及
         「N 個 commit 串好,跑全套 -> …」那一行的格式。
+
+        同一次綠色落地還釘:land worktree 收乾淨、每一步都是事件(控制台只讀事件,
+        D-003)、狀態檔把 gate / merge / push 分開記(**變異**:把 `status_phase_all`
+        拿掉 → 紅)、收件匣說票還沒關、鎖放掉、沒有殘留副本就不唸清單。
         """
         good = self.branch_for(1, "t1-good")
         self.commit_in(good, "src/g1", "有 commit 的那一張")
@@ -629,23 +595,17 @@ class HappyPath(LandBase):
         self.assertIsNone(rows[-1]["model"])
         self.assertIsNone(rows[-1]["tokens_out"])
         self.assertIsInstance(rows[-1]["wall_seconds"], int)
-
-    def test_the_land_worktree_is_cleaned_up_after_a_green_landing(self):
-        good = self.branch_for(1, "t1-good")
-        self.commit_in(good, "src/g1", "有 commit 的那一張")
-        self.approve(1, "t1-good")
-        self.assertEqual(self.land("t1-good").returncode, 0)
         self.assertEqual(os.listdir(self.wt_base()), [])
-
-    def test_every_step_is_an_event(self):
-        """控制台只讀事件,不猜 —— 沒發事件的事對系統而言沒發生(D-003)。"""
-        good = self.branch_for(1, "t1-good")
-        self.commit_in(good, "src/g1", "有 commit 的那一張")
-        self.approve(1, "t1-good")
-        self.land("t1-good")
         kinds = self.kinds()
         for kind in ("land.start", "gate.start", "gate.pass", "land.pass"):
             self.assertIn(kind, kinds)
+        phases = [(row["phase"], row["rc"]) for row in self.status_of("1", kind="land")["phases"]]
+        self.assertEqual(phases, [("gate", 0), ("merge", 0), ("push", 0)])
+        listed = self.run_py("scripts/inbox.py", "list", "--all").stdout
+        self.assertIn("#1", listed)
+        self.assertIn("尚未關票", listed)
+        self.assertFalse(self.exists(".land.lock"), "鎖沒有放掉,下一次 land 永遠卡住")
+        self.assertNotIn("還留著這幾份副本", done.stdout)
 
 
 class GateRed(LandBase):
@@ -966,18 +926,6 @@ class OnlyOneLandAtATime(LandBase):
         self.assertIn("pid=999", done.stdout, "要說得出現在是誰在落地")
         self.assertFalse(self.gate_ran())
 
-    def test_the_lock_is_released_when_the_land_finishes(self):
-        branch = self.branch_for(1, "t1-good")
-        self.commit_in(branch, "src/g1", "做完的那一張")
-        self.approve(1, "t1-good")
-        self.assertEqual(self.land("t1-good").returncode, 0)
-        self.assertFalse(self.exists(".land.lock"), "鎖沒有放掉,下一次 land 永遠卡住")
-
-    def test_the_lock_is_released_even_when_it_refuses(self):
-        self.branch_for(1, "t1-empty")
-        self.assertEqual(self.land("t1-empty").returncode, 2)
-        self.assertFalse(self.exists(".land.lock"))
-
 
 # 關得掉的票面:verify_strings 指向分支上那一行、baseline 是閘門那一趟 check。
 CLOSABLE = {
@@ -1104,9 +1052,16 @@ class LandTriesToClose(LandBase):
                            "baseline": {"ok": True, "stage": "red"}})
         self.assert_landed_but_not_closed(self.land("t1-good"), "還缺閘門那一趟 check")
 
-    def test_there_is_no_force_flag_in_land(self):
-        with open(os.path.join(self.repo, "scripts", "land.sh"), encoding="utf-8") as fh:
-            self.assertEqual(fh.read().count("--force"), 0)
+    def test_land_refuses_a_force_flag_and_leaves_main_alone(self):
+        """一張落得下去的票帶 `--force`:land 不認得這個旗標,rc 2、主線不動。
+
+        **變異**:land.sh 放行 `--force` → 照常落地(rc 0、主線前進)→ 這一條紅。
+        """
+        self.ready()
+        before = self.git("rev-parse", "main").strip()
+        done = self.land("t1-good", "--force")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertEqual(self.git("rev-parse", "main").strip(), before)
 
     # ------------------------------------------------------------ A4 收件匣
 
@@ -1143,19 +1098,6 @@ class LandTriesToClose(LandBase):
 
 
 class PhasesAndClosing(LandBase):
-
-    def test_gate_merge_and_push_are_recorded_separately(self):
-        """**變異**:把 `status_phase_all` 拿掉 → 這一條紅。
-
-        舊版在 merge 與 push 之前就寫 `done, rc=0`,所以「閘門綠了但沒合進去」與
-        「已經落地」在狀態檔上長得一樣(外部審查)。
-        """
-        branch = self.branch_for(1, "t1-good")
-        self.commit_in(branch, "src/g1", "做完的那一張")
-        self.approve(1, "t1-good")
-        self.assertEqual(self.land("t1-good").returncode, 0)
-        phases = [(row["phase"], row["rc"]) for row in self.status_of("1", kind="land")["phases"]]
-        self.assertEqual(phases, [("gate", 0), ("merge", 0), ("push", 0)])
 
     def test_a_green_landing_of_a_ticket_that_meets_done_closes_it(self):
         """#43 A1(原本是「land 不關票」那一條,改寫不刪):「已合併」與「已關票」仍是

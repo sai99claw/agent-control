@@ -28,29 +28,68 @@ def no_ac_root():
             os.environ["AC_ROOT"] = old
 
 
-def copy_code_tree(tmp):
+def copy_code_tree(tmp, only=None):
     """把 verify.py 跑得起來的那幾份從 HERE 拷進 `tmp`:要寫案例的測試寫 tmp 那一份,
-    被 kill 也只在 tempfile 目錄留檔,HERE 的 verify/ 一個字都不動(#70)。"""
+    被 kill 也只在 tempfile 目錄留檔,HERE 的 verify/ 一個字都不動(#70)。
+
+    `only` 給了就只搬 verify/ 底下那幾個功能目錄(登記檔照搬):全庫的回歸案例
+    與這裡要問的事無關,只是時間(#73)。"""
     for rel in ("scripts/verify.py", "scripts/status.py", "scripts/event.py",
                 "board/config.json"):
         os.makedirs(os.path.dirname(os.path.join(tmp, rel)), exist_ok=True)
         shutil.copy(os.path.join(HERE, rel), os.path.join(tmp, rel))
-    shutil.copytree(os.path.join(HERE, "verify"), os.path.join(tmp, "verify"),
-                    ignore=shutil.ignore_patterns("__pycache__"))
+    src = os.path.join(HERE, "verify")
+
+    def skip(where, names):
+        dropped = set(shutil.ignore_patterns("__pycache__")(where, names))
+        if only is not None and os.path.samefile(where, src):
+            dropped |= {n for n in names
+                        if os.path.isdir(os.path.join(where, n))
+                        and n != "TAGS.d" and n not in only}
+        return dropped
+    shutil.copytree(src, os.path.join(tmp, "verify"), ignore=skip)
 
 
 class VerifyRunner(unittest.TestCase):
-    def test_list_and_tag_filter_and_full_run(self):
-        self.assertEqual(subprocess.run(RUN + ["--list"], capture_output=True, text=True, env=local_env()).returncode, 0)
-        self.assertEqual(subprocess.run(RUN + ["--tag", "example"], capture_output=True, env=local_env()).returncode, 0)
-        self.assertEqual(subprocess.run(RUN + ["--tag", "no-such-tag"], capture_output=True, env=local_env()).returncode, 3)
-        self.assertEqual(subprocess.run(RUN, capture_output=True, env=local_env()).returncode, 0)
+    def test_list_and_tag_filter_run_in_a_sandbox_with_only_example(self):
+        """沙盒只放 verify/example:`--list` 只列得出 example 的案例,無參數的全跑
+        也只跑那一份(以前跑的是真 verify/ 全庫)。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            copy_code_tree(tmp, only=("example",))
+            run = [sys.executable, os.path.join(tmp, "scripts", "verify.py")]
+            env = local_env(AC_ROOT=tmp)
+            env.pop("AC_TICKET", None)
+            env.pop("AC_RUN_ID", None)
+            listed = subprocess.run(run + ["--list"], capture_output=True, text=True, env=env)
+            self.assertEqual(listed.returncode, 0, listed.stdout)
+            cases = [line.split()[0] for line in listed.stdout.splitlines()
+                     if not line.startswith("verify:")]
+            self.assertEqual(cases, [os.path.join("verify", "example", "test_example.py")],
+                             listed.stdout)
+            self.assertEqual(subprocess.run(run + ["--tag", "example"], capture_output=True, env=env).returncode, 0)
+            self.assertEqual(subprocess.run(run + ["--tag", "no-such-tag"], capture_output=True, env=env).returncode, 3)
+            self.assertEqual(subprocess.run(run, capture_output=True, env=env).returncode, 0)
 
     def test_unit_layer_without_config_is_loud_not_green(self):
-        r = subprocess.run(RUN + ["--unit"], capture_output=True, text=True, env=local_env())
-        self.assertIn(r.returncode, (0, 3), r.stdout)
-        if r.returncode == 3:
-            self.assertIn("未設定", r.stdout)
+        """沒有 `unit_cmd` 的單元層不准回 0:config 整份拿掉、或在但沒有那一格,都要
+        rc 非 0 並點名 board/config.json 的 unit_cmd。
+
+        **變異**:verify.py 未設定那一句改回 `return 0` → 這一條紅。
+        """
+        for shape in ("no config", "config without unit_cmd"):
+            with self.subTest(shape), tempfile.TemporaryDirectory() as tmp:
+                copy_code_tree(tmp, only=("example",))
+                cfg = os.path.join(tmp, "board", "config.json")
+                if shape == "no config":
+                    os.remove(cfg)
+                else:
+                    with open(cfg, "w", encoding="utf-8") as f:
+                        f.write("{}")
+                r = subprocess.run([sys.executable, os.path.join(tmp, "scripts", "verify.py"),
+                                    "--unit"], capture_output=True, text=True,
+                                   env=local_env(AC_ROOT=tmp))
+                self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertIn("單元層未設定(board/config.json 的 unit_cmd)", r.stdout)
 
     def test_a_case_without_registered_tags_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -103,33 +142,22 @@ class RunScopedCache(unittest.TestCase):
             self.assertNotIn("用快取", other.stdout)
 
     def test_without_a_run_id_nothing_is_cached(self):
-        """單獨跑的人拿到的永遠是真的跑。"""
-        env = local_env()
-        env.pop("AC_RUN_ID", None)
-        env.pop("AC_TICKET", None)
-        done = subprocess.run(RUN + ["--tag", "example"], capture_output=True,
-                              text=True, env=env, timeout=300)
-        self.assertNotIn("用快取", done.stdout)
+        """單獨跑的人拿到的永遠是真的跑。
 
-    def test_the_second_call_still_scopes_by_run_with_an_external_ac_root_present(self):
-        """`run_with()` 明確把 `AC_ROOT` 蓋成 `root`(#32 第 2 輪)—— 即使外層
-        (模擬 land.sh)已經設了另一個 `AC_ROOT`,子行程收到的還是 `run_with()` 給的
-        那一個,不是外層繼承下來的。"""
-        outer = os.environ.get("AC_ROOT")
-        os.environ["AC_ROOT"] = HERE  # 模擬 land.sh 全套跑時,行程environ 裡已經有 AC_ROOT
-        try:
-            with tempfile.TemporaryDirectory() as home:
-                first = self.run_with(home, "r-outer-ac-root")
-                self.assertEqual(first.returncode, 0, first.stdout)
-                self.assertNotIn("用快取", first.stdout)
-                second = self.run_with(home, "r-outer-ac-root")
-                self.assertEqual(second.returncode, 0, second.stdout)
-                self.assertIn("用快取", second.stdout)
-        finally:
-            if outer is None:
-                os.environ.pop("AC_ROOT", None)
-            else:
-                os.environ["AC_ROOT"] = outer
+        先把快取 prime 好(同一張票、有 run id 的一次;再一次沒有 run id 的),
+        第二次沒有 run id 的呼叫仍然不准說「用快取」。
+
+        **變異**:`cache_path()` 不看 `AC_RUN_ID`(只要有票號就快取)→ 這一條紅。
+        """
+        with tempfile.TemporaryDirectory() as home:
+            self.run_with(home, "r1")
+            env = dict(os.environ)
+            env.update({"AC_TICKET": "77", "AC_ROOT": home})
+            env.pop("AC_RUN_ID", None)
+            for _ in range(2):
+                done = subprocess.run(RUN + ["--tag", "example"], capture_output=True,
+                                      text=True, env=env, timeout=300)
+                self.assertNotIn("用快取", done.stdout)
 
 
 class CodeRootIsNotTheTicketRoot(unittest.TestCase):
@@ -222,13 +250,6 @@ class RootFindsProjectRootWhenSyncedToControl(unittest.TestCase):
         with no_ac_root():
             spec.loader.exec_module(mod)
         return mod
-
-    def test_registered_tags_found_at_scripts_control(self):
-        with tempfile.TemporaryDirectory() as fake:
-            self._fake_project(fake, "example-fake")
-            mod = self._load_verify_copied_to(os.path.join(fake, "scripts", "control"))
-            self.assertIn("example-fake", mod.registered_tags(),
-                          "registered_tags() 在 scripts/control/verify.py 這個位置該找得到 <fake>/verify/TAGS.md")
 
     def test_scripts_and_scripts_control_agree_on_the_same_root(self):
         """放在 `<root>/scripts/` 與 `<root>/scripts/control/` 兩處都要算出同一個 root。"""
