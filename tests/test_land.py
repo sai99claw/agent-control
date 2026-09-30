@@ -668,6 +668,37 @@ class GateRed(LandBase):
         self.assertNotIn("land.pass", kinds)
 
 
+class TripwireCatchesARealClaude(unittest.TestCase):
+    """#70 A3:沙盒漏了 `worker.command` 替身,紅的單票 land(預設 auto-fix)起的
+    `claude` 是 PATH 最前那支絆線 —— 而那條測試**自己紅**,不是靠認證失敗靜靜綠。
+
+    內層案例定義在方法裡(discover 收不到),用 `TestResult` 跑完整的一趟(含 cleanup),
+    看絆線有沒有把它標紅。
+
+    **變異**:`Sandbox.env()` 拿掉 PATH 前置 → 內層起的是外層 PATH 上的 claude,絆線沒被
+    踩,內層綠 → 這一條紅。
+    """
+
+    def test_a_missing_worker_command_turns_the_red_land_red(self):
+        class RealClaudeOnTheRedPath(LandBase):
+            # 要剖得出紅榜的那一支:`GATE_STUB_RED` 那條路 auto-fix 不派 worker。
+            gate_stub = LandStatusWhenRed.gate_stub
+            config_extra = {"worker": {}}      # 拿掉 worker.command:auto-fix 退回預設 claude
+
+            def test_red_land(self):
+                good = self.branch_for(1, "t1-good")
+                self.commit_in(good, "src/g1", "有 commit 的那一張")
+                self.approve(1, "t1-good")
+                done = self.land("t1-good")
+                self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+
+        result = unittest.TestResult()
+        RealClaudeOnTheRedPath("test_red_land").run(result)
+        reds = "\n".join(text for _, text in result.failures + result.errors)
+        self.assertIn("tripwire: real claude would have run", reds)
+        self.assertIn("--model opus", reds)
+
+
 class UntrackedFileInTheWay(LandBase):
     """#69:分支新增的路徑,在主線工作樹裡已經是未追蹤的檔 —— ff-only 會被 git 拒絕,
     而那是九分鐘全套之後的事。第 1〜4 步就點名退回,不搬、不刪使用者的檔。

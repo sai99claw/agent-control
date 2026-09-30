@@ -27,6 +27,18 @@ def no_ac_root():
         if had:
             os.environ["AC_ROOT"] = old
 
+
+def copy_code_tree(tmp):
+    """把 verify.py 跑得起來的那幾份從 HERE 拷進 `tmp`:要寫案例的測試寫 tmp 那一份,
+    被 kill 也只在 tempfile 目錄留檔,HERE 的 verify/ 一個字都不動(#70)。"""
+    for rel in ("scripts/verify.py", "scripts/status.py", "scripts/event.py",
+                "board/config.json"):
+        os.makedirs(os.path.dirname(os.path.join(tmp, rel)), exist_ok=True)
+        shutil.copy(os.path.join(HERE, rel), os.path.join(tmp, rel))
+    shutil.copytree(os.path.join(HERE, "verify"), os.path.join(tmp, "verify"),
+                    ignore=shutil.ignore_patterns("__pycache__"))
+
+
 class VerifyRunner(unittest.TestCase):
     def test_list_and_tag_filter_and_full_run(self):
         self.assertEqual(subprocess.run(RUN + ["--list"], capture_output=True, text=True, env=local_env()).returncode, 0)
@@ -41,15 +53,15 @@ class VerifyRunner(unittest.TestCase):
             self.assertIn("未設定", r.stdout)
 
     def test_a_case_without_registered_tags_is_refused(self):
-        p = os.path.join(HERE, "verify/example/test_zz_unregistered.py")
-        with open(p, "w") as f:
-            f.write("import unittest\nTAGS=['not-registered']\nclass T(unittest.TestCase):\n    def test_x(self): pass\n")
-        try:
-            r = subprocess.run(RUN + ["--list"], capture_output=True, text=True, env=local_env())
+        with tempfile.TemporaryDirectory() as tmp:
+            copy_code_tree(tmp)
+            p = os.path.join(tmp, "verify/example/test_zz_unregistered.py")
+            with open(p, "w") as f:
+                f.write("import unittest\nTAGS=['not-registered']\nclass T(unittest.TestCase):\n    def test_x(self): pass\n")
+            r = subprocess.run([sys.executable, os.path.join(tmp, "scripts", "verify.py"), "--list"],
+                               capture_output=True, text=True, env=local_env(AC_ROOT=tmp))
             self.assertEqual(r.returncode, 2, r.stdout)
             self.assertIn("標籤未登記", r.stdout)
-        finally:
-            os.remove(p)
 
 class RunScopedCache(unittest.TestCase):
     """同一輪裡,同一組標籤、同一個 sha 只跑一次(D-015)。
@@ -136,12 +148,7 @@ class CodeRootIsNotTheTicketRoot(unittest.TestCase):
         案例,rc 0)。
         """
         with tempfile.TemporaryDirectory() as tmp:
-            for rel in ("scripts/verify.py", "scripts/status.py", "scripts/event.py",
-                        "board/config.json"):
-                os.makedirs(os.path.dirname(os.path.join(tmp, rel)), exist_ok=True)
-                shutil.copy(os.path.join(HERE, rel), os.path.join(tmp, rel))
-            shutil.copytree(os.path.join(HERE, "verify"), os.path.join(tmp, "verify"),
-                            ignore=shutil.ignore_patterns("__pycache__"))
+            copy_code_tree(tmp)
             with open(os.path.join(tmp, "verify", "example", "test_example.py"), "w",
                       encoding="utf-8") as f:
                 f.write("import unittest\nTAGS = ['example']\n\n"
