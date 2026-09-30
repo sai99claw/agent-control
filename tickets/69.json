@@ -1,0 +1,72 @@
+{
+  "id": "69",
+  "subject": "land.sh 第 6 步:ff-only 進不去時分清「主線動了」與「git 拒絕」、印 git 原話;第 1〜4 步先擋「主線工作樹的未追蹤檔撞到分支新增的路徑」(閘門跑之前就退回)",
+  "created": "2026-09-30T13:15:23+08:00",
+  "objective": "land.sh 對 ff-only 失敗不再一律說「主線在這中間動了」:(1) 開 worktree 前先記主線 HEAD,第 6 步失敗時拿現在的 HEAD 比 —— 不同才說主線動了(兩個短 sha 都印),相同就說主線沒動、把 git merge 的 stderr 逐行原話印出來,收件匣的下一步也分開寫;(2) 第 1〜4 步的逐分支檢查多一項:分支相對主線**新增**的路徑,若在主線工作樹裡已經存在為**未追蹤**(git 自己的判準:未追蹤且未被 ignore)的檔,當場點名每一個路徑與下一步、整批拒收 rc=2,**不開 worktree、不跑閘門**;不替人搬、不刪任何檔。成功路徑的輸出與退出碼一個字不變。",
+  "acceptance": [
+    "【A1 早退,land.sh 第 1〜4 步】分支 t1-good 新增 src/g1,主線工作樹裡 src/g1 已存在且未追蹤 → sh scripts/land.sh t1-good 退出碼 2;stdout 有一行含逐字 `主線工作樹裡有未追蹤的檔` 與該分支名,接著每個撞到的路徑各一行 `land:   src/g1`,再一行下一步(含逐字 `不會替你搬、不會刪`,並說明自己移走或 commit 進主線後重跑 land);假閘門沒有被叫到(harness 的 gate_ran() 為 False);沒有 land worktree(wt_base 不存在);主線 HEAD 不變;主線工作樹裡的 src/g1 仍在、內容原封;照既有拒收路徑寫終態與收件匣(收件匣有「land 拒收」),`ev land.refused` 照舊。判準用 git 的:分支新增的路徑 = `git diff --name-only --no-renames --diff-filter=A <main>...<branch>`;未追蹤 = 這些路徑丟給 `git ls-files --others --exclude-standard -- <paths>` 有輸出。列表為空就不印任何東西(不能多一句「沒有撞到」)。多分支批次:任一支撞到就整批退,與其他拒收同一個 STOP 出口。",
+    "【A2 第 6 步分兩種話,land.sh】開 worktree 之前記 MAIN_BEFORE=主線 HEAD;`git merge --ff-only` 失敗時抓 stderr,再讀一次主線 HEAD:(a) 不同 → stdout 那一行仍含逐字 `在這中間動了`,並含 MAIN_BEFORE 與現在 HEAD 兩個短 sha(格式 `<before短> -> <now短>`),收件匣 what 照舊含「rebase 後重跑閘門」;(b) 相同 → stdout 有一行含逐字 `ff-only 進不去,但` 與逐字 `沒有動`,不得出現 `在這中間動了`;接著一行含逐字 `git 的原話`,其後 git stderr 每一行各以 `land:   ` 前綴原封印出(不翻譯、不摘要);收件匣 what 不含「rebase」,寫「主線沒動,git 拒絕合併 —— 看 stdout / status.json 的原話,處理完重跑 land」這個意思。兩種都維持 rc=1、worktree 留著、status.json phases.merge rc=1、`ev land.fail`,主線不被動。",
+    "【A3 案例 T1:未追蹤撞路徑早退】tests/test_land.py 新增一條(GATE_STUB_GREEN 的 class):branch_for(1,'t1-good') + commit_in(good,'src/g1',…) + approve;在主線 checkout 寫一個未追蹤的 src/g1(內容與分支不同);land → 斷言 A1 的每一項(rc=2、分支名、`land:   src/g1`、gate_ran() False、wt_base 不存在、主線 HEAD 不變、src/g1 內容原封、收件匣「land 拒收」)。修前紅:現況會跑閘門(gate_ran True)、rc=1、輸出說「在這中間動了」。",
+    "【A4 案例 T2:主線真的動了】tests/test_land.py 新增一個 class,gate_stub 是一支先 `git -C \"$AC_ROOT\" -c user.name=t -c user.email=t@t commit -q --allow-empty -m moved` 再 exit 0 的假閘門(land 已把 AC_ROOT=主 repo 傳給 gate.sh);land → rc=1;stdout 含 `在這中間動了`、含開跑前主線的短 sha 與 stub 那個 commit 的短 sha;主線 HEAD == stub 那個 commit(land 沒再動它);worktree 留著;收件匣 what 含「rebase」。修前:「在這中間動了」那一句本來就綠,**兩個短 sha 那一句紅** —— 這條的紅點在 sha,EVIDENCE 寫清楚。",
+    "【A5 案例 T3:主線沒動、git 拒絕】tests/test_land.py 新增一個 class,gate_stub 在 `$AC_ROOT/src/g1` 寫一個未追蹤檔再 exit 0(所以 A1 的早退抓不到它 —— 檔是閘門期間才出現的);land → rc=1;stdout 含 `ff-only 進不去,但` 與 `沒有動`、不含 `在這中間動了`;stdout 有以 `land:   ` 開頭且含 `src/g1` 的那一行(git 原話裡的路徑;**不斷言 git 的英文句子** —— locale 會翻譯);主線 HEAD 不變;worktree 留著;收件匣 what 不含「rebase」。修前紅:輸出說「在這中間動了」、git 原話只在 stderr 不在 stdout。",
+    "【A6 成功路徑不變 + 變異驗紅】不新增成功路徑案例:主守衛是既有的 test_a_branch_with_commits_still_lands_the_way_it_always_did(釘閘門被叫到、主線前進、push、rc 0、輸出格式、cost),它與 GateRed、LandStatus 那幾條全數照舊綠。變異表(每條做一次、跑一次、恢復):M1 拿掉 A1 的早退 → T1 紅;M2 早退在列表為空時也印 / 也 STOP → test_a_branch_with_commits_still_lands… 紅;M3 第 6 步不比 HEAD、一律走「動了」那一句 → T3 紅;M4 「動了」那一句不印兩個短 sha → T2 紅;M5 git stderr 不轉到 stdout → T3 紅。python3 -m unittest tests.test_land 全綠,再 python3 -m unittest discover -s tests 全綠(test_no_project_names 會掃 docs/FLOW.html,改它時別寫專案名)。",
+    "【A7 文件與四問】docs/WORKFLOW.md §落地 的編號清單:第 6 與第 7 之間加一項寫未追蹤撞路徑的早退(判準與下一步各一句),第 7 項「綠才 --ff-only 推主線」後補一句 ff-only 失敗分「主線動了(兩個 sha)」與「主線沒動、印 git 原話」;docs/FLOW.html 第 6 步那一則同步一句(可選,動了就要過 test_no_project_names)。T1/T2/T3 每條在 EVIDENCE 各一行行首逐字 `四問:`(docs/DISPATCH-TEMPLATE.md §5.8);票的 test_plan 給了草稿,實作者照實際案例改。"
+  ],
+  "in_scope": [
+    "scripts/land.sh(第 1〜4 步的逐分支檢查迴圈、第 5 步前記 HEAD、第 6 步的失敗分支;docs 通道 cmd_docs 不動)",
+    "tests/test_land.py",
+    "docs/WORKFLOW.md §落地",
+    "docs/FLOW.html(可選)"
+  ],
+  "out_of_scope": [
+    "scripts/gate.sh",
+    "scripts/apply.sh",
+    "scripts/auto-fix.sh",
+    "scripts/event.py",
+    "scripts/status.py",
+    "scripts/inbox.py",
+    "scripts/ticket.py",
+    "tickets/SCHEMA.md",
+    "verify/**"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/land.sh",
+    "tests/test_land.py",
+    "docs/WORKFLOW.md",
+    "docs/FLOW.html"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "fa74b59119641fd7e95b4fe05c1cdc96bd7df8f2",
+  "state": "Ready",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "verify_strings": [
+    "主線工作樹裡有未追蹤的檔",
+    "ff-only 進不去,但",
+    "git 的原話",
+    "不會替你搬、不會刪"
+  ],
+  "decision_refs": [
+    "D-003",
+    "D-010",
+    "D-014",
+    "D-015",
+    "D-H38"
+  ],
+  "feature": "land-pipeline",
+  "outline": "來源:2026-09-30 #68 落地 —— 閘門與覆核都綠,ff-only 兩次失敗,land.sh 兩次都印「主線在這中間動了 / rebase 後重跑閘門」;主線其實沒動,真因是主線工作樹裡有一個未追蹤的 memory/role/implementer.inbox.md,而分支新增同一路徑,git 拒絕(error: The following untracked working tree files would be overwritten by merge)。三個洞:(a) 每一種 ff-only 失敗都被標成主線動了,下一步(rebase)是錯的;(b) git 的 stderr 沒進 stdout / 收件匣 / status.json;(c) 這件事在跑九分鐘全套之前就查得出來,卻沒查。裁示:分清「主線動了」(HEAD != 開跑前記的)與「git 拒絕」(印原話),第 1〜4 步先擋未追蹤撞路徑;**不替人搬檔、不刪檔**(那是使用者的檔,搬了就是另一種事故)。開票實測(沙盒 git repo,不是 A 的 repo):`git merge -q --ff-only` 對未追蹤撞路徑 rc=1、-q 不吃掉那段 stderr、HEAD 不動;`git diff --name-only --no-renames --diff-filter=A main...feat` + `git ls-files --others --exclude-standard -- <paths>` 能點名撞到的路徑。已查的 oracle:tests/test_land.py 沒有任何斷言釘「在這中間動了」(只在 test_it_waits_behind_the_same_lock… 的 docstring 提到);gate.sh 的 AC_ROOT 已傳給 gate stub,T2/T3 自訂 stub 用得到,不必改 control_harness.py;事件種類不加(land.refused / land.fail 既有)。needs_verifier=false:控制碼票,land.sh 的守衛就是 tests/test_land.py 的沙盒案例,驗證者案例只會重演同一契約(§5.8 第 3 問;#38/#43/#46/#49/#56/#59 同一慣例)。interface_fixed=false(用不到)。不在本票:主線工作樹**已追蹤但改過**的檔撞路徑(git 另一句 local changes would be overwritten —— 同一個機制可延伸,先不做);被 ignore 的檔會被 git 靜靜覆蓋;自動搬檔;docs 通道。建議順序:A2(第 6 步分話)→ T3、T2 → A1(早退)→ T1 → 變異表 → 文件。",
+  "test_plan": "層:單元(tests/test_land.py 的沙盒 —— 真 git + 假閘門;閘門有沒有被叫到是可觀察事實)。跑法:python3 -m unittest tests.test_land;merge 前 python3 -m unittest discover -s tests。期望值來源:git 的行為(開票在沙盒 git repo 實測過:未追蹤撞路徑 rc=1、HEAD 不動)與票面釘死的字串,不從 land.sh 算。T1(A3)四問草稿:①守「未追蹤撞路徑在閘門之前就被點名退回、不動使用者的檔」;②早退被拿掉或擺到 worktree add 之後 → gate_ran 變 True 就紅;③既有案例都不在主線工作樹放未追蹤檔,抓不到;④不用縫,gate stub 與 wt_base 是既有的觀察點。T2(A4)四問:①守「主線真的動了時仍說主線動了、且說得出從哪到哪」;②比較邏輯壞掉或 sha 不印就紅;③既有沒有案例讓主線在閘門期間前進;④縫 = 自訂 gate stub 對 AC_ROOT commit(沒有生產呼叫者,但 AC_ROOT 是 land 本來就傳的環境變數,不加新縫)。T3(A5)四問:①守「主線沒動時不誤報 rebase、git 原話進 stdout」;②回到一律「動了」就紅;③既有沒有案例讓 ff-only 在主線沒動時失敗;④縫同 T2(stub 在 AC_ROOT 寫未追蹤檔)。成功路徑:不加案例,既有 test_a_branch_with_commits_still_lands_the_way_it_always_did 是主守衛;M2 證明它守得住早退的「空列表不印不擋」。變異 M1〜M5 見 A6,每條一次、記紅的第一行。",
+  "needs_verifier": false,
+  "interface_fixed": false
+}
