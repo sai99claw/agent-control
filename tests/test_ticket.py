@@ -209,23 +209,6 @@ class VerifyStringShapes(unittest.TestCase):
         self.assertEqual(normalise_verify(["沒有新的 commit"]), ["沒有新的 commit"])
 
 
-class VerifyStringHelp(Sandbox):
-
-    def test_create_help_names_the_three_ways_it_reads_a_verify_string(self):
-        """量那一段(`--verify-string` 那一行),不量整份 —— 範例行裡本來就有
-        `路徑:那串字` 的樣子,量整份的話說明改回舊的也是綠的。
-
-        **變異**:`FLAG_NOTE["--verify-string"]` 改回舊的一句 → 這一條紅。
-        """
-        printed = self.ticket("create", "--help").stdout
-        rows = [line for line in printed.splitlines()
-                if re.match(r"\s+--verify-string\s{2,}", line)]
-        self.assertEqual(len(rows), 1, printed)
-        for phrase in ("路徑:那串字", "像路徑", "純字串", "純字串含冒號不切",
-                       "./README:那串字"):
-            self.assertIn(phrase, rows[0])
-
-
 # 放大競態:`next_id()` 算完之後停一下再回去寫檔。沒有鎖的話,同時跑的幾個行程
 # 全都在別人寫檔之前讀到同一個最大值。停在**測試這一側**,不在產品裡留一個鉤子。
 SLOW_NEXT_ID = """

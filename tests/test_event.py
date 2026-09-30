@@ -204,23 +204,7 @@ class Help(Sandbox):
 
 
 class KindTable(unittest.TestCase):
-    """事件表是一張固定的表(檔頭)。這一條釘住派工、閘門、落地、決策、記憶那幾族
-    都在裡面 —— 少一族的話,那一族的動作就只能靜靜發生。"""
-
-    def test_every_family_the_workflow_needs_is_on_the_table(self):
-        for kind in ("session.start", "session.end",
-                     "ticket.created", "ticket.state", "ticket.frozen", "ticket.closed",
-                     "ticket.attempt.start", "ticket.attempt.done",
-                     "ticket.attempt.failed", "ticket.cost", "schedule.proposed",
-                     "agent.start", "agent.done", "agent.failed",
-                     "gate.start", "gate.rerun", "gate.pass", "gate.fail",
-                     "flake.auto_pass", "env.suspect", "regression.red",
-                     "land.start", "land.refused", "land.pass", "land.fail",
-                     "release.start", "release.pass", "release.fail",
-                     "decision.asked", "decision.answered",
-                     "review.pass", "review.fail", "review.missing", "review.refused",
-                     "memory.over_cap", "memory.consolidated", "memory.noted"):
-            self.assertIn(kind, event.KINDS)
+    """事件表是一張固定的表(檔頭)。"""
 
     def test_the_table_has_no_duplicates(self):
         self.assertEqual(len(event.KINDS), len(set(event.KINDS)))

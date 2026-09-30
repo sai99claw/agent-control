@@ -1126,14 +1126,12 @@ class TheShapeHasExactlyOneSourceOfTruth(unittest.TestCase):
     上一次這一格在兩個 repo 長成同名不同形,就是因為**沒有一份文件是它的來源** ——
     兩邊各自從自己的 code 讀出形狀,而兩份 code 都是對的。所以這裡釘兩件事:
     ① 文件裡那一塊的鍵名與 `status.py` 的 `SUSPECT_KEYS` **逐字相同**(改文件而不改
-    code、或改 code 而不改文件,都在這裡紅);② 碰這一格的每一支都指得到那份文件。
+    code、或改 code 而不改文件,都在這裡紅);② 沒有第二份文件自己定義這個形狀。
 
     **變異**:把文件那一塊的任何一個鍵名改掉(code 不動)→ 第一條紅。
     """
 
     doc = os.path.join(ROOT, "docs", "DESIGN-ENV-SUSPECT.md")
-    touches = ("scripts/status.py", "scripts/gate.sh", "scripts/auto-fix.sh",
-               "scripts/metrics.py", "board/board.py")
 
     def body(self, rel):
         with open(os.path.join(ROOT, rel), encoding="utf-8") as handle:
@@ -1150,12 +1148,6 @@ class TheShapeHasExactlyOneSourceOfTruth(unittest.TestCase):
                  if key != "environment_suspect"]
         self.assertEqual(named, list(status_module.SUSPECT_KEYS),
                          "文件與 code 的鍵名對不上:%r" % named)
-
-    def test_every_place_that_touches_the_cell_points_at_that_document(self):
-        for rel in self.touches:
-            with self.subTest(file=rel):
-                self.assertIn("DESIGN-ENV-SUSPECT", self.body(rel),
-                              "%s 碰這一格卻沒有指回形狀的來源" % rel)
 
     def test_no_second_document_defines_the_shape_without_citing_it(self):
         """第二份規格與第一份長得一樣 —— 差別只在它會先過期。

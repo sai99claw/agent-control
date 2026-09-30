@@ -134,7 +134,8 @@ BASE="test_ticket test_event test_memory test_no_project_names"
 map() {
     f=$1
     case "$f" in
-        tests/test_*.py) add "$(basename "$f" .py)" ;;
+        # 這一份 diff 刪掉的測試檔不排進模組清單(#71 A3):unittest 對不存在的模組會報錯。
+        tests/test_*.py) [ -f "$ROOT/$f" ] && add "$(basename "$f" .py)" ;;
         # 沙盒共用給每一支用,所以動它就是動全部。
         tests/control_harness.py) add test_ticket test_event test_memory test_land \
                                       test_gate test_heartbeat test_new_session \

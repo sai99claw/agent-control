@@ -38,16 +38,14 @@
   "attempt": 0,
   "base_sha": "141261b033971a76914bc39eddc8b0c597f871f4",
   "state": "Done",
-  "state_version": 12,
+  "state_version": 13,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [
-      "tests/test_ticket_27.py"
-    ],
+    "files": [],
     "tags": [],
-    "run": "python3 -m unittest tests.test_ticket_27",
-    "notes": "驗證者(sonnet,只證紅)7 條:marker 檔在 base_sha 之後才加,check 的基底副本天生沒有(紅)、候選有(綠);A5 恆假案例逼 ok:false 走 auto-fix 假 worker",
+    "run": "",
+    "notes": "retired 2026-09-30: tests/test_ticket_27.py 退役,契約由 tests/test_gate.py、tests/test_verify_case.py 守(稽核 A-tests-audit §3.1); 驗證者(sonnet,只證紅)7 條:marker 檔在 base_sha 之後才加,check 的基底副本天生沒有(紅)、候選有(綠);A5 恆假案例逼 ok:false 走 auto-fix 假 worker",
     "baseline": {
       "stage": "check",
       "ok": true,

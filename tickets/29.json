@@ -90,16 +90,14 @@
   "attempt": 0,
   "base_sha": "d4d177ec8bf3b9fe318d77b28f8fdbc7d0ad2cb8",
   "state": "Done",
-  "state_version": 16,
+  "state_version": 17,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [
-      "tests/test_ticket_29.py"
-    ],
+    "files": [],
     "tags": [],
-    "run": "python3 -m unittest tests.test_ticket_29",
-    "notes": "驗證者(sonnet,只證紅)20 條 A1–A11 + 3 條 A12(基底綠);案例住 tests/,verify.py --tag 選不到,tags 留空(TAGS 字面只給 lint F2)",
+    "run": "",
+    "notes": "retired 2026-09-30: tests/test_ticket_29.py 退役,契約由 tests/test_rules.py、tests/test_dispatch_template.py、tests/test_auto_fix.py、tests/test_apply.py、tests/test_ticket.py、tests/test_memory.py、tests/test_event.py、tests/test_land.py、tests/test_sync_to_project.py 守(稽核 A-tests-audit §3.1); 驗證者(sonnet,只證紅)20 條 A1–A11 + 3 條 A12(基底綠);案例住 tests/,verify.py --tag 選不到,tags 留空(TAGS 字面只給 lint F2)",
     "baseline": {
       "stage": "check",
       "ok": true,
