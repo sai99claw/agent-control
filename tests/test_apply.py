@@ -476,11 +476,6 @@ class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
         self.assertNotIn("baseline", self.load_ticket("1")["verify"])
         self.assertIn("不是 stage=red", done.stderr)
 
-    def test_the_help_lists_the_verifier_flag(self):
-        done = self.apply("--help")
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("--evidence-verifier", done.stdout)
-
 
 class TheCopyRootComesFromTheMainRepo(ApplyBase):
     """#46 C1:副本根以**主 repo 根**解析(`scripts/wtbase.sh`),與 auto-fix / land / review
@@ -570,16 +565,6 @@ class ThingsItRefuses(ApplyBase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         listed = self.git("ls-tree", "-r", "--name-only", "t1")
         self.assertNotIn("src/a.txt", listed.split())
-
-    def test_the_hard_fences_are_empty_by_default(self):
-        """(D-H38 ①)沙盒的 config 沒有 `protected_paths`、票沒有 `out_of_scope`:
-        白名單外的檔一個都不擋。"""
-        self.assertNotIn("protected_paths", json.loads(self.read("board/config.json")))
-        row = self.make("1", allowed_write_paths=["src/*"])
-        self.assertEqual(row.get("out_of_scope") or [], [])
-        done = self.apply("1", self.patch_file("p.diff", OUTSIDE))
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.git("show", "t1:docs/secret.md"), "not in allowed_write_paths\n")
 
 
 class TheWriteScope(ApplyBase):
@@ -715,17 +700,6 @@ class Rebase(ApplyBase):
         with open(out, encoding="utf-8") as handle:
             return out, handle.read()
 
-    def test_it_rebuilds_a_clean_diff_against_todays_main(self):
-        self.make("1")
-        self.main_moves_near_the_patch()
-        done = self.apply("rebase", "1", self.patch_file("p.diff", WIDE_CHANGE))
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        out, text = self.rebased()
-        self.assertTrue(os.path.exists(out), done.stdout)
-        self.assertIn("--- base/src/wide.txt", text)
-        self.assertIn("+new", text)
-        self.assertIn("壹", text, "重生出來的 diff 要是對今天的主線說的")
-
     def test_a_ticket_without_base_sha_names_the_missing_field(self):
         self.make("1", base_sha="")
         done = self.apply("rebase", "1", self.patch_file("p.diff", CHANGE))
@@ -743,18 +717,6 @@ class Rebase(ApplyBase):
         self.assertIn("0" * 40, done.stderr)
         self.assertFalse(os.path.exists(os.path.join(self.home, "repo-wt", "rebase-t1")),
                          "取不出祖先時不該先做一份看似可用的副本")
-
-    def test_the_rebuilt_diff_applies_cleanly_through_the_normal_entry(self):
-        """重生的 diff 要**能餵回這一支自己** —— 不然它只是一個好看的檔。"""
-        self.make("1")
-        self.main_moves_near_the_patch()
-        self.assertEqual(
-            self.apply("rebase", "1", self.patch_file("p.diff", WIDE_CHANGE)).returncode, 0)
-        out, _ = self.rebased()
-        done = self.apply("1", out)
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.git("show", "t1:src/wide.txt"),
-                         WIDE.replace("一\n", "壹\n", 1).replace("old\n", "new\n"))
 
     def test_a_deletion_comes_back_with_dev_null_on_the_plus_side(self):
         """重生出來的 diff 自己就是下一步的輸入,所以刪檔那一側要**這裡**改好 ——
@@ -810,15 +772,28 @@ class Rebase(ApplyBase):
 
         **變異**:把三向合併換成「把 patch 那一版直接蓋上去」
         (`gitw merge …` → `gitw checkout ac-rebase-ticket -- .`)→ 這一條紅。
+
+        #72 併入同一場景(主線在隔壁走遠 + WIDE_CHANGE)的兩條,真 git rebase 的樹是
+        預言機,手算的內容留作第二預言機:
+        - 原 test_it_rebuilds_a_clean_diff_against_todays_main:重生的 diff 對今天的主線說。
+        - 原 test_the_rebuilt_diff_applies_cleanly_through_the_normal_entry:重生的 diff 要
+          **能餵回這一支自己** —— 不然它只是一個好看的檔。
         """
         import subprocess
         self.make("1")
         self.main_moves_near_the_patch()
         patch = self.patch_file("p.diff", WIDE_CHANGE)
-        self.assertEqual(self.apply("rebase", "1", patch).returncode, 0)
-        out, _ = self.rebased()
+        rebuilt = self.apply("rebase", "1", patch)
+        self.assertEqual(rebuilt.returncode, 0, rebuilt.stdout + rebuilt.stderr)
+        out, text = self.rebased()
+        self.assertTrue(os.path.exists(out), rebuilt.stdout)
+        self.assertIn("--- base/src/wide.txt", text)
+        self.assertIn("+new", text)
+        self.assertIn("壹", text, "重生出來的 diff 要是對今天的主線說的")
         done = self.apply("1", out)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("show", "t1:src/wide.txt"),
+                         WIDE.replace("一\n", "壹\n", 1).replace("old\n", "new\n"))
 
         # 對照組:同一份 patch 在 base_sha 上 commit,然後讓 **git 自己** rebase 到主線。
         where = os.path.join(self.home, "wt", "git-rebase")

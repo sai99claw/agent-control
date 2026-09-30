@@ -73,16 +73,6 @@ class BoardUp(Sandbox):
 
 class Pages(BoardUp):
 
-    def test_the_five_sections_are_all_there(self):
-        self.make_ticket(1, state="Ready", subject="第一張票")
-        self.up()
-        status, body = self.get("/")
-        self.assertEqual(status, 200)
-        for anchor in ("id=\"tickets\"", "id=\"timeline\"", "id=\"land\"",
-                       "id=\"inbox\"", "id=\"rehearsal\""):
-            self.assertIn(anchor, body, "少了一段")
-        self.assertIn("第一張票", body)
-
     def test_token_usage_says_unknown_and_never_zero(self):
         """`docs/DESIGN.md` §15:**未知不可顯示為零**。一個估出來的數字與一個量出來
         的數字在畫面上長得一樣,而只有後者可以拿來做決定。
@@ -146,15 +136,6 @@ class Pages(BoardUp):
         section = body.split("id=\"rehearsal\"")[1].split("</section>")[0]
         self.assertIn("沒有欠確認的真跑", section)
 
-    def test_the_state_api_answers_json(self):
-        self.make_ticket(1)
-        self.up()
-        status, body = self.get("/api/state")
-        self.assertEqual(status, 200)
-        data = json.loads(body)
-        self.assertEqual(data["tokens"], "未知")
-        self.assertEqual(data["tickets"][0]["id"], "1")
-
     def test_the_ticket_table_draws_the_metrics_without_touching_the_token_header(self):
         """**變異**:把 `state()` 的 `metrics` 那一格拿掉 → 這一條紅。
 
@@ -178,9 +159,14 @@ class Pages(BoardUp):
         for header in ("返工輪", "紅(env/product)", "token"):
             self.assertIn(header, section, "票表少了 %s 這一欄" % header)
         self.assertIn("1 (1/0)", section, "紅的分類沒有畫出來")
+        # #72:原 test_the_five_sections_are_all_there 的「票的標題畫進頁面」搬到這裡;
+        # 五節錨點每一節都有別的測試切 section 時要用到,缺一節那幾條就 IndexError。
+        self.assertIn("有數字的那一張", section)
         self.assertIn("token 用量:未知", body, "抬頭那一格不准被票表的數字改掉")
 
     def test_the_state_api_carries_the_metrics_next_to_the_unknown_token_total(self):
+        """#72 併入原 test_the_state_api_answers_json 的 200 / JSON / tokens 未知(票 id 那一句
+        併進 ReadsWhatIsAlreadyOnDisk.test_the_state_api_carries_the_runs_the_boxes_and_the_inbox)。"""
         self.make_ticket(1)
         self.up()
         status, body = self.get("/api/state")
@@ -218,13 +204,6 @@ class SavingAnAnswer(BoardUp):
         self.assertEqual(row["state"], "NeedsDecision", "票的狀態不該被動到")
         self.assertEqual(row["state_version"], 1)
 
-    def test_the_saved_answer_comes_back_in_the_box(self):
-        self.make_ticket(1, state="NeedsDecision")
-        self.up()
-        self.post("/api/answer", {"ticket": "1", "answer": "先照舊"})
-        _, body = self.get("/")
-        self.assertIn("先照舊", body)
-
     def test_a_body_without_the_two_fields_is_refused(self):
         self.make_ticket(1, state="NeedsDecision")
         self.up()
@@ -235,7 +214,10 @@ class SavingAnAnswer(BoardUp):
         self.assertFalse(self.exists("board/answers.jsonl"))
 
     def test_two_answers_both_stay_in_the_file_and_the_last_one_shows(self):
-        """那份檔是「使用者說過什麼」的歷史,畫面上顯示的是最後那一句。"""
+        """那份檔是「使用者說過什麼」的歷史,畫面上顯示的是最後那一句。
+
+        #72 併入原 test_the_saved_answer_comes_back_in_the_box:存下的回答回到框裡
+        (= 下面 `assertIn("改成這樣", body)` 那一句)。"""
         self.make_ticket(1, state="NeedsDecision")
         self.up()
         self.post("/api/answer", {"ticket": "1", "answer": "第一次說的"})
@@ -498,6 +480,7 @@ class ReadsWhatIsAlreadyOnDisk(BoardUp):
         self.assertEqual(data["ticket_runs"]["1"]["runs"][0]["rc"], 1)
         self.assertEqual(data["boxes"]["1"]["objections"][0]["category"], "test_defect")
         self.assertEqual(data["inbox"]["entries"][0]["name"], "1-a")
+        self.assertEqual(data["tickets"][0]["id"], "1")
 
     def test_an_open_blocking_objection_comes_first(self):
         """沒被收進票的反駁與沒有反駁長得一樣 —— 排在最後一頁的阻擋項也是。"""

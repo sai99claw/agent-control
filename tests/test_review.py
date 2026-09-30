@@ -111,7 +111,17 @@ class ThePassPath(ReviewBase):
     """A1:pass ⇒ 腳本寫 review;by / sha / state_version 各有各的來源。"""
 
     def test_a_pass_writes_review_bound_to_the_branch_head_by_the_reviewer_model(self):
-        """**變異 M1**:`review.sh` 的 by 寫死 `main` → 這一條紅。"""
+        """**變異 M1**:`review.sh` 的 by 寫死 `main` → 這一條紅。
+
+        #72 併入同一趟 REVIEWER_PASS 的兩條:
+        - 原 test_the_packet_names_the_four_things_and_goes_in_on_stdin:派工文 = 規則包 +
+          範本;四件事都填上、**一個佔位都不剩**,而 reviewer 從 stdin 拿到的就是寫在
+          reports 裡的那一份。佔位沒填與填了長得一樣 —— 除非有人數。
+        - 原 test_files_outside_the_allow_list_get_their_own_section_in_the_packet:D-H38 ①:
+          白名單外不擋,擋的是覆核者這一段。票允許 `src/*`,分支改的是 `thing.txt`。
+          **變異**:不插這一段 → 這一條紅(負對照留在
+          test_no_files_outside_the_allow_list_means_no_such_section)。
+        """
         model = self.set_reviewer(REVIEWER_PASS)
         done = self.review()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -131,14 +141,7 @@ class ThePassPath(ReviewBase):
         self.assertEqual(self.inbox_rows(), [])
         self.assertIn("REVIEW.md", self.last_event("review.pass").get("note") or "")
 
-    def test_the_packet_names_the_four_things_and_goes_in_on_stdin(self):
-        """派工文 = 規則包 + 範本;四件事都填上、**一個佔位都不剩**,而 reviewer 從 stdin
-        拿到的就是寫在 reports 裡的那一份。佔位沒填與填了長得一樣 —— 除非有人數。"""
-        self.set_reviewer(REVIEWER_PASS)
-        done = self.review()
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        with open(self.one("dispatch-reviewer.md"), encoding="utf-8") as handle:
-            packet = handle.read()
+        packet = self.packet()
         with open(os.path.join(self.home, "reviewer-stdin.md"), encoding="utf-8") as handle:
             self.assertEqual(handle.read(), packet, "reviewer 的 stdin 就是那一份派工文")
         self.assertEqual(re.findall(r"@[A-Z_]+@", packet), [], "範本的佔位沒填完")
@@ -150,23 +153,16 @@ class ThePassPath(ReviewBase):
         self.assertTrue(os.path.exists(self.one("REVIEW.md")))
         self.assertTrue(os.path.exists(self.one("result-reviewer-round1.json")))
 
-    def packet(self):
-        with open(self.one("dispatch-reviewer.md"), encoding="utf-8") as handle:
-            return handle.read()
-
-    def test_files_outside_the_allow_list_get_their_own_section_in_the_packet(self):
-        """D-H38 ①:白名單外不擋,擋的是覆核者這一段。票允許 `src/*`,分支改的是
-        `thing.txt`。**變異**:不插這一段 → 這一條紅。"""
-        self.set_reviewer(REVIEWER_PASS)
-        done = self.review()
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        packet = self.packet()
         self.assertIn("## 白名單外改動", packet)
         section = packet.split("## 白名單外改動")[1].split("\n## ")[0]
         self.assertIn("- `thing.txt`", section)
         self.assertIn("斷言數不減", section)
         self.assertIn("無關或改弱 = fail", section)
         self.assertLess(packet.index("## 白名單外改動"), packet.index("## 交付:固定格式"))
+
+    def packet(self):
+        with open(self.one("dispatch-reviewer.md"), encoding="utf-8") as handle:
+            return handle.read()
 
     def test_no_files_outside_the_allow_list_means_no_such_section(self):
         """**變異**:不管有沒有都印 → 這一條紅。"""
@@ -266,23 +262,6 @@ class TheReviewerCostGoesOnTheTicket(ReviewBase):
                          "寫了 cost 之後 land 對 review 的綁定檢查要照樣過")
         self.assertIn("ticket.cost", self.kinds())
 
-    def test_a_reviewer_that_delivers_nothing_still_costs_a_row_of_nulls(self):
-        """沒交件也算派過一次:照樣一筆,token 欄是 null(拿不到,不是 0)。"""
-        self.set_reviewer(reviewer_printing("# 覆核\n(忘了檔尾那一塊)"))
-        done = self.review()
-        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
-        rows = self.load_ticket("1").get("cost") or []
-        self.assertEqual([row["role"] for row in rows], ["reviewer"])
-        self.assertIsNone(rows[0]["tokens_out"])
-        self.assertIsInstance(rows[0]["wall_seconds"], int)
-
-    def test_a_fail_records_one_reviewer_row(self):
-        self.set_reviewer(REVIEW_FAIL)
-        done = self.review()
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        rows = self.load_ticket("1").get("cost") or []
-        self.assertEqual([row["role"] for row in rows], ["reviewer"])
-
 
 class ItLeavesEarlierPagesAlone(ReviewBase):
     """D-032 之後沒有「等覆核」頁可收:review.sh 不再 ack 任何一頁,舊頁留給主線收。"""
@@ -303,7 +282,11 @@ class TheFailPath(ReviewBase):
     """A2:fail ⇒ 每條理由一筆 blocking 反駁、票 Blocked、一頁「覆核退回,裁示」。"""
 
     def test_a_fail_turns_each_reason_into_a_blocking_objection_and_blocks_the_ticket(self):
-        """**變異 M2**:fail 那條路也寫 `review.verdict=pass` → 這一條紅。"""
+        """**變異 M2**:fail 那條路也寫 `review.verdict=pass` → 這一條紅。
+
+        #72 併入原 TheReviewerCostGoesOnTheTicket.test_a_fail_records_one_reviewer_row:
+        fail 也記一筆 reviewer 的 cost。
+        """
         model = self.set_reviewer(REVIEW_FAIL)
         done = self.review()
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
@@ -323,6 +306,7 @@ class TheFailPath(ReviewBase):
         self.assertIn("裁示", rows[0]["what"])
         self.assertIn("review.fail", self.kinds())
         self.assertIn("decision.asked", self.kinds())
+        self.assertEqual([row["role"] for row in ticket.get("cost") or []], ["reviewer"])
 
     def test_a_pass_with_an_objection_line_is_read_as_a_fail(self):
         """verdict 說 pass、阻擋那一行卻寫了:放行的話那一行等於沒人收(§8.5 以行為準)。"""
@@ -340,7 +324,11 @@ class NotDeliveredIsNotAPass(ReviewBase):
     """A4:四種沒交,每一種都**說了 pass**,每一種都不准變成 pass。"""
 
     def test_no_block_bad_json_timeout_and_an_unknown_verdict_all_leave_it_in_review(self):
-        for name, body, timeout in NOT_DELIVERED:
+        """#72 併入原 TheReviewerCostGoesOnTheTicket.
+        test_a_reviewer_that_delivers_nothing_still_costs_a_row_of_nulls:沒交件也算派過
+        一次 —— 每一種照樣一筆,token 欄是 null(拿不到,不是 0)。同一個沙盒連派四次,
+        所以第 n 種之後是 n 筆。"""
+        for count, (name, body, timeout) in enumerate(NOT_DELIVERED, 1):
             with self.subTest(name):
                 self.set_reviewer(body, timeout=timeout)
                 done = self.review()
@@ -353,6 +341,10 @@ class NotDeliveredIsNotAPass(ReviewBase):
                 note = self.last_event("review.missing").get("note") or ""
                 self.assertIn(name, note, "四種沒交要說得出是哪一種")
                 self.assertIn("review.sh 1", note)
+                rows = ticket.get("cost") or []
+                self.assertEqual([row["role"] for row in rows], ["reviewer"] * count)
+                self.assertIsNone(rows[-1]["tokens_out"])
+                self.assertIsInstance(rows[-1]["wall_seconds"], int)
 
 
 class ItOnlyReviewsWhatIsReadyForIt(ReviewBase):

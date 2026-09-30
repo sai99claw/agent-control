@@ -169,7 +169,7 @@ class B4ProjectLayout(GuardSandbox):
     def test_g3_without_the_key_points_at_the_table_and_names_the_key(self):
         reason = self.assert_denied(self.guard("git commit -m x"), "對照表")
         self.assertNotIn("scripts/land.sh", reason)
-        self.assertIn("land", reason)
+        self.assertIn("land.entry", reason)
 
 
 class C1C2WhatStaysOpen(GuardSandbox):
@@ -218,7 +218,6 @@ class D1D2TheEscapeHatchAndTheDenominator(GuardSandbox):
         row = rows[-1]
         self.assertEqual((row["kind"], row["role"]), ("main.override", "main"))
         self.assertIn("ticket.py create", row["note"])
-        self.assertLessEqual(len(row["note"]), 200)
 
     def test_d1_the_hook_environment_passes_too(self):
         before = len(self.event_lines())

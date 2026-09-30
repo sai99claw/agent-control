@@ -264,15 +264,10 @@ class Metrics(Sandbox):
         self.make_ticket(7)
         self.make_ticket(8)
         os.makedirs(os.path.join(self.repo, "reports", "t8"))
-
-        def without_the_id(line, ident):
-            # 票號本來就不一樣,不把它洗掉的話兩行永遠不相等 —— 那條斷言就變成
-            # 「答不出來的時候看起來也是通過」的那一種。
-            return line.replace("t%d" % ident, "tN").replace("ticket=%d" % ident,
-                                                             "ticket=N")
-        self.assertNotEqual(without_the_id(self.line(7), 7),
-                            without_the_id(self.line(8), 8),
-                            "目錄不在與目錄空著印了同一句話")
+        # #72:兩句各自的內容(期望值是模組檔頭說的兩種話),不再只比「不相等」。
+        missing, empty = self.line(7), self.line(8)
+        self.assertIn("note=沒有 reports/t7 —— 這張票一輪都還沒跑過", missing, missing)
+        self.assertIn("note=reports/t8 在,但裡面 0 個 status.json", empty, empty)
 
     def test_a_ticket_with_no_reports_prints_zero_runs_but_unknown_tokens(self):
         """`runs` 是「看了,而一趟都沒有」→ 0;`tokens` 是「根本沒有 log 可以看」

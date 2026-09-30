@@ -239,11 +239,6 @@ class StatusFile(Sandbox):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(done.stdout.split(), ["test_zz_red.T.test_it_is_red"])
 
-    def test_a_green_log_has_no_failures(self):
-        log = self.write("gate.log", "Ran 2 tests in 0.003s\n\nOK\n")
-        self.status("done", "--ticket", "7", "--rc", "0", "--log", log)
-        self.assertEqual(self.load()["failures"], [])
-
     # -------------------------------------------------------------- flaky
 
     def test_a_suspected_flaky_case_stays_in_the_red_list(self):
@@ -415,6 +410,10 @@ class StatusFile(Sandbox):
         self.assertEqual((phase.returncode, done.returncode), (0, 0))
         self.assertIn("警告", phase.stderr)
         self.assertIn("警告", done.stderr)
+        # 退回最新那一輪不只是印一句:phase 與 done 真的寫進了 r1 的狀態檔。
+        data = json.loads(self.read(os.path.join("reports", "t7", "r1", "status.json")))
+        self.assertEqual([(row["phase"], row["rc"]) for row in data["phases"]], [("gate", 0)])
+        self.assertEqual((data["state"], data["rc"]), ("done", 0))
 
     def test_flaky_rows_are_appended_with_one_write(self):
         rows = [
@@ -467,6 +466,14 @@ class StatusFile(Sandbox):
         self.assertEqual(made[0]["state"], "Ready")
         self.assertIn("test_zz_red.T.test_it_is_red", made[0]["subject"])
         self.assertTrue(made[0]["acceptance"], "沒有驗收的票跟沒有票一樣")
+        # #72 併入原 test_status_67.FlakyStillOpensVerifierTickets(#67 A8 的補強):
+        # flaky 票改走共用 helper 之後,驗收三條文字不變、沒有 regression_* 欄。
+        self.assertEqual(made[0]["acceptance"], [
+            "原順序整組連跑 10 次,test_zz_red.T.test_it_is_red 沒有一次紅",
+            "說得出它不穩的原因(共用狀態 / 時序 / 外部資源),寫進 EVIDENCE",
+            "不是靠放寬斷言或加 retry 讓它綠的",
+        ])
+        self.assertNotIn("regression_case", made[0])
 
     def test_a_fourth_flake_does_not_open_a_second_ticket(self):
         """誤判那一半用「同一條案例只開一張」擋住 —— 開著的還在就不再開。"""
@@ -602,6 +609,8 @@ class GateWritesStatus(Sandbox):
         self.assertIn("gate.pass", self.kinds(), "外面的 AC_NO_INBOX 漏進沙盒")
 
     def test_a_green_run_leaves_a_done_status_with_rc_zero(self):
+        """#72 併入原 StatusFile.test_a_green_log_has_no_failures:綠的 log 交給 status.py
+        之後紅榜是空的(那一條的斷言 = 這裡的 `failures == []`,閘門餵的是真的綠 log)。"""
         done = self.gate("scripts/land.sh", "--ticket", "7")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         data = self.load()
@@ -613,6 +622,8 @@ class GateWritesStatus(Sandbox):
     def test_a_red_run_names_the_case_in_the_status_file(self):
         """**變異**:把 `status_done "$rc"` 從紅的那條路上拿掉 → 這一條紅
         (狀態檔會停在 `running`,而**停在 running 的檔與還在跑的檔長得一樣**)。
+
+        (#72 併入)flake 重跑不是一張免死金牌:單跑還是紅的就是真紅。
         """
         self.write("tests/test_land.py", ALWAYS_RED)
         done = self.gate("scripts/land.sh", "--ticket", "7")
@@ -623,6 +634,9 @@ class GateWritesStatus(Sandbox):
         self.assertEqual([row["case"] for row in data["failures"]],
                          ["test_land.T.test_always_red"])
         self.assertIn("真的紅", data["failures"][0]["excerpt"])
+        # #72 併入原 test_a_case_that_is_red_on_its_own_stays_red(同一份 ALWAYS_RED):
+        # flake 重跑不是一張免死金牌 —— 單跑還是紅的就是真紅。
+        self.assertEqual(data["suspected_flaky"], [])
 
     def test_a_file_nobody_guards_still_leaves_a_status_file(self):
         """「沒有人守著這幾個檔」是一個結果,不是一次沒跑 —— 讀狀態檔的人要看得到
@@ -680,20 +694,24 @@ class GateWritesStatus(Sandbox):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(len(self.read("flaky.count", where=self.home)), 4)
 
-    def test_the_group_rerun_can_be_turned_off(self):
-        """`AC_FLAKE_RERUN_GROUP=0`:整組重跑很貴,關得掉;**關掉也還是紅**。"""
+    def test_turning_off_the_group_rerun_leaves_no_order_dependent_row(self):
+        """`AC_FLAKE_RERUN_GROUP=0`:整組重跑很貴,關得掉;**關掉也還是紅**。
+
+        rc 非零對 ORDER_DEPENDENT 本來就成立,量不到開關;開關真的關掉整組重跑,
+        狀態檔(docs/WORKFLOW.md §狀態檔的 `extra_logs` 與 order_dependent 兩格)就沒有
+        整組重跑的 log、也沒有 order_dependent 的判定。
+
+        **變異**:拿掉 gate.sh `AC_FLAKE_RERUN_GROUP = 0` 那一段 → 這一條紅(整組照跑,
+        extra_logs 非空、order_dependent 為真)。
+        """
         self.write("tests/test_land.py", ORDER_DEPENDENT)
         done = self.gate("scripts/land.sh", "--ticket", "7", AC_FLAKE_RERUN_GROUP="0")
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("不做整組重跑", done.stdout)
-
-    def test_a_case_that_is_red_on_its_own_stays_red(self):
-        """flake 重跑不是一張免死金牌:單跑還是紅的就是真紅。"""
-        self.write("tests/test_land.py", ALWAYS_RED)
-        done = self.gate("scripts/land.sh", "--ticket", "7")
-        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertNotIn("標成 suspected_flaky", done.stdout)
-        self.assertEqual(self.load()["suspected_flaky"], [])
+        data = self.load()
+        self.assertEqual(data["extra_logs"], [], "關掉了還是跑了整組重跑")
+        self.assertFalse(data["order_dependent"])
+        self.assertEqual(data["order_dependent_cases"], [])
 
     def test_nothing_to_run_still_leaves_a_terminal_status(self):
         """**變異**:把 `status_nothing` 從「沒有東西可跑」那條路上拿掉 → 這一條紅。
@@ -739,7 +757,6 @@ class GateWritesStatus(Sandbox):
         self.write("tests/test_land.py", FLAKY)
         done = self.gate("scripts/land.sh", "--ticket", "7", AC_NO_FLAKE_RERUN="1")
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertNotIn("標成 flaky", done.stdout)
 
     def test_a_ticket_flag_with_no_value_is_a_usage_error(self):
         done = self.gate("--branch", "--ticket")

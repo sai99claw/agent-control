@@ -18,7 +18,6 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from control_harness import Sandbox, write_executable  # noqa: E402
-from test_status import LOG  # noqa: E402
 
 CASE_A = "test_zz_red.T.test_it_is_red"
 CASE_B = "test_zz_red.T.test_it_errors"
@@ -325,26 +324,6 @@ class RegressionRed(Sandbox):
                          "--dispatch", env=env)
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
         self.assertEqual(self.dispatched(1), [self.by_case()["a.B.c"]["id"]])
-
-
-class FlakyStillOpensVerifierTickets(Sandbox):
-    """A8 的補強:flaky 票改走共用 helper 之後,仍是 role=verifier、驗收三條文字不變、
-    沒有 regression_* 欄。既有三條(test_status.py)一個字不改,這裡只多釘文字。"""
-
-    def test_the_flaky_ticket_keeps_its_role_and_acceptance(self):
-        log = self.write("gate.log", LOG)
-        for index in range(3):
-            self.run_py("scripts/status.py", "done", "--ticket", "7", "--run-id", "r%d" % index, "--rc", "1",
-                        "--log", log, "--suspected-flaky", CASE_A)
-        made = [row for row in self.tickets_on_disk() if row.get("flaky_case") == CASE_A]
-        self.assertEqual(len(made), 1)
-        self.assertEqual(made[0]["role"], "verifier")
-        self.assertEqual(made[0]["acceptance"], [
-            "原順序整組連跑 10 次,%s 沒有一次紅" % CASE_A,
-            "說得出它不穩的原因(共用狀態 / 時序 / 外部資源),寫進 EVIDENCE",
-            "不是靠放寬斷言或加 retry 讓它綠的",
-        ])
-        self.assertNotIn("regression_case", made[0])
 
 
 if __name__ == "__main__":

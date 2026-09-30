@@ -108,7 +108,10 @@ class TheShippedCard(unittest.TestCase):
                   encoding="utf-8") as handle:
             fields = module.parse_card(handle.read())
         self.assertIsNotNone(fields, "示範卡的 front matter 讀不動")
-        self.assertEqual(fields["source_paths"], ["scripts/land.sh"])
+        # #72:只斷言必要鍵在且有值,不釘 source_paths 的內容(卡會跟著 land.sh 改)。
+        for key in ("source_paths", "verified_at_commit", "invariants"):
+            self.assertIn(key, fields)
+        self.assertTrue(fields["source_paths"], "卡上要指得到它守的檔")
         self.assertEqual(len(fields["verified_at_commit"]), 40)
         self.assertTrue(fields["invariants"], "卡上要有不變條件")
 

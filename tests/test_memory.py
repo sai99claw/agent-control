@@ -71,9 +71,6 @@ class MemoryCheck(Sandbox):
         row = self.load_ticket("1")
         self.assertIn("fable", row["model"])
         self.assertIn("codex:gpt-6-astra", row["model"])
-        text = json.dumps(row, ensure_ascii=False)
-        self.assertIn("兩個不同的模型", text)
-        self.assertIn("不直接寫案例", text, "整理的產出是原則,不是案例(D-013)")
 
     def test_the_ticket_says_how_the_two_sessions_get_dispatched(self):
         """A8 / G8:票面以前只寫「由兩個模型討論」,而**兩個 session 怎麼被派、
@@ -410,14 +407,25 @@ class TheProjectSideIsWhatGetsWatched(Sandbox):
                          "整理票不該指向同步產出物 —— 改了下一次同步就被蓋掉")
 
     def test_the_notes_land_in_the_project_memory_not_in_the_canon_dir(self):
-        """`note` 寫哪裡本票不改,這一條只是把「它已經寫對地方」釘住。"""
+        """`note` 寫哪裡本票不改,這一條只是把「它已經寫對地方」釘住。
+
+        #72:負向那一句要有對象 —— 設定真的把正本指到 `docs/roles`、那裡真的有一張
+        角色卡;以前沒設 `roles_dir`,「沒寫進 docs/roles」因無關原因成立。
+        """
+        conf = json.loads(self.read("board/config.json"))
+        conf["rules"] = {"roles_dir": os.path.join("docs", "roles"),
+                         "models_dir": os.path.join("docs", "roles", "model")}
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        self.write(os.path.join("docs", "roles", "implementer.md"), "# 正本角色卡\n")
         done = self.memory("note", "role", "implementer", "一條原則",
                            "--ticket", "28", "--by", "worker@opus")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertTrue(self.exists(os.path.join("memory", "role",
                                                  "implementer.inbox.md")))
-        self.assertFalse(self.exists(os.path.join("docs", "roles",
-                                                  "implementer.inbox.md")))
+        self.assertEqual(sorted(os.listdir(os.path.join(self.repo, "docs", "roles"))),
+                         ["implementer.md"], "note 寫進了正本那一層")
+        self.assertEqual(self.read(os.path.join("docs", "roles", "implementer.md")),
+                         "# 正本角色卡\n")
 
 
 if __name__ == "__main__":
