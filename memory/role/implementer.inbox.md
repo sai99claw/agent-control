@@ -5,3 +5,8 @@
 - 副本裡跑任何 scripts/*(含 memory.py check)前先 env -u AC_ROOT -u AC_CONTROL_DIR:派工帶的 AC_ROOT 讓它量主 repo 的檔(量到舊的就是假綠),還會在副本寫 board/events.jsonl 混進 patch (#59, 2026-09-28, worker@opus)
 - 對真實專案根實跑 new-session.sh / session-hook 前先把專案與它的 board 資料(tickets_dir、events_file、reports_dir 可能在根外)複製到 TMPDIR 再跑:memory.py check 在 --no-event 下仍會 emit memory.over_cap、還可能開整理票進專案票庫 (#62, 2026-09-29, worker@opus)
 - unittest discover -s tests 全套超過前景 600s 上限(#70 實測 878 條、單 test_auto_fix 270s):逐模組分批前景跑、每批 <590s,合計 Ran 與各批 rc;給 control_harness 的 DEFAULT_CONFIG 加預設值前先 grep verify/ 與 tests/ 有沒有靠「沒設就退回」的案例 (#70, 2026-09-30, worker@opus)
+- 副本裡跑任何寫票指令(ticket.py set 等)前先 AC_ROOT=$PWD —— 派工帶的 AC_ROOT 指主 repo,不帶就把票與 events.jsonl 寫回主線;事後只能 git checkout 票檔,事件行收不回 (#71) (#71, 2026-09-30, worker@opus)
+- 測試子行程呼叫本樹腳本讀『真文件』時要傳 env AC_ROOT=ROOT —— 腳本經 event.repo_root() 吃派工帶的 AC_ROOT,不釘就讀主 repo,副本裡的變異驗不紅、案例假綠 (#71) (#71, 2026-09-30, worker@opus)
+- 稽核票改寫恆真斷言:同一個變異也在 base 的舊案例上跑一次,舊綠新紅才證明改寫有對象;只貼新案例的紅,分不出原本就守得住還是改寫才守住 (#72, 2026-09-30, worker@opus)
+- 同一輪被重派、副本已重展:先從上一次的 worker log 抽出逐字 replace(assert count==1)腳本重放,再用 AST 方法數/斷言數/逐檔 diffstat 對上一次 EVIDENCE 證明重放一致;變異與閘門照樣本輪重跑,數字不沿用 (#72, 2026-09-30, worker@opus)
+- 合併案例時,舊 docstring 寫的「變異 → 紅」要在 base 上重跑一次再抄進新案例:同一格有兩個寫入者時,拿掉其中一個不會紅,抄過去就是把一句假話搬家;抄不過去就換一條真的會紅的變異並改寫那一句 (#73, 2026-09-30, worker@opus)

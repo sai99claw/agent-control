@@ -43,12 +43,12 @@
     "code-map/INDEX.md"
   ],
   "role": "consolidator",
-  "model": "opus",
-  "tool": "claude-code",
+  "model": "codex:gpt-6-astra",
+  "tool": "codex",
   "attempt": 0,
   "base_sha": "234d4451d1ae5d07ad3c6f393e055198fdd43d2c",
   "state": "Draft",
-  "state_version": 2,
+  "state_version": 4,
   "lease": null,
   "retry_limit": 2,
   "verify": {

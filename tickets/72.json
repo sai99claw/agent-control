@@ -4,7 +4,7 @@
   "created": "2026-09-30T16:29:31+08:00",
   "objective": "同一沙盒場景拆成 N 條的方法折成一條(subTest 或同一 setUp 內多個斷言),每條保留的斷言仍在且照原 docstring 的變異會紅;稽核點名的恆真斷言(assertNotIn 一個 scripts/ 裡根本不存在的字串、assertLessEqual 永遠成立、名字說拒絕本體驗接受)改成有對象的斷言或刪;討論的檔 wall 秒數合計少 ~60 s;python3 -m unittest discover -s tests 全綠",
   "acceptance": [
-    "A1 test_gate(−3,改寫 2):刪 VerifierCasesAtTheGate.test_a_red_verifier_case_goes_down_the_existing_auto_fix_path(14.9 s,全套最慢;其變異 gate.sh:975 拿掉 merge_rc 已由 …test_a_verifier_case_that_stays_red_puts_the_red_list_in_the_status_file 守,派工由 test_a_plain_red_round_still_dispatches 守 —— 刪前把這兩條各跑一次該變異貼紅);刪 GateSh.test_a_green_or_attributable_red_gate_writes_no_page_only_events(= test_inbox.WhoWritesIntoIt :279/:287);手跑綠三條(GateSh…calls_review_sh / TheHandRunGate…rc_0… / …review_packet…says_the_gate_ran)後兩條併成一條、斷言全留;GateExample 兩條改成:直接執行 scripts/gate.example.sh 或只斷言它含 status.py 與 verify.py 兩個接點與旗標,不再 grep 範本散文",
+    "A1 test_gate(−3,改寫 2):刪 VerifierCasesAtTheGate.test_a_red_verifier_case_goes_down_the_existing_auto_fix_path(14.9 s,全套最慢)。它守的「驗證者紅 → 派工」刪後由兩條案例合起來守:「驗證者紅 → rc≠0」= VerifierCasesAtTheGate.test_a_verifier_case_that_stays_red_puts_the_red_list_in_the_status_file,「rc≠0 → 派工」= GateSh.test_a_plain_red_round_still_dispatches(後者不帶驗證者案例,merge_rc 變異下單獨是綠的,屬預期;不要求補新案例)。EVIDENCE 附實測:gate.sh:975 拿掉 `rc=$(merge_rc \"$rc\" \"$CRC\")` 的變異下,這兩條各跑一次,至少一條紅並貼紅的第一行(若兩條全綠 = 真洞,另寫 OBJECTION,不在本票補);刪 GateSh.test_a_green_or_attributable_red_gate_writes_no_page_only_events(= test_inbox.WhoWritesIntoIt :279/:287);手跑綠三條(GateSh…calls_review_sh / TheHandRunGate…rc_0… / …review_packet…says_the_gate_ran)後兩條併成一條、斷言全留;GateExample 兩條改成:直接執行 scripts/gate.example.sh 或只斷言它含 status.py 與 verify.py 兩個接點與旗標,不再 grep 範本散文",
     "A2 test_status / test_status_67(−5 條,改寫 2):GateWritesStatus.test_a_case_that_is_red_on_its_own_stays_red(:690)併進 test_a_red_run_names_the_case_in_the_status_file(:613,同 ALWAYS_RED);StatusFile.test_a_green_log_has_no_failures(:242)併進 GateWritesStatus.test_a_green_run_leaves_a_done_status_with_rc_zero(:604);:695 與 :742 的 assertNotIn(\"標成 …flaky\") —— 先 git grep 那串字在 scripts/ 是否存在,不存在(稽核實測不存在)就把那一行刪掉、其餘斷言留;改寫 StatusFile.test_falling_back_to_latest_run_prints_a_warning(:411)加斷言 phase/done 真的落到 status.json;改寫 GateWritesStatus.test_the_group_rerun_can_be_turned_off(:683)為 test_turning_off_the_group_rerun_leaves_no_order_dependent_row:斷言 status.json 沒有 extra_logs / order_dependent 列(rc!=0 對 ORDER_DEPENDENT 本來就成立,不算斷言);test_status_67.FlakyStillOpensVerifierTickets.test_the_flaky_ticket_keeps_its_role_and_acceptance(:334)併進 test_status.StatusFile.test_reaching_the_threshold_opens_a_repair_ticket(:450),role 與 acceptance 的斷言搬過去",
     "A3 test_rules(−~9):三條 test_stats_reports_the_section_bytes → 1;三個 every-role 迴圈(15 pack × 3)→ 1 個迴圈、三組斷言都留;兩條 ≤600 bytes 只讀常數的 → 1 條、不建沙盒(注意 import_module(\"rules\") 有快取,sys.path insert 對第二次 import 無效 —— 直接 import 一次即可);WhenItHasToCut.test_cutting_says_which_file_was_cut(:129)、WhatItAlwaysCarries.test_a_tight_budget_cuts_the_other_parts_not_this_one(:225)、TheStructuredDeliverySection 同名(:284)同一 tight_pack → 1 條三組斷言;TheProjectLayer.test_being_the_canon_repo_does_not_list_the_project_layer(:444)併進 test_being_the_canon_repo_itself_reads_the_card_once(:409);TheSectionFloor.test_the_fixture_is_the_size_the_ticket_says(:547)測 fixture → 搬進 setUp 當前提斷言;:553 用 rules.blocks 量 fixture = 受測程式算期望值 → 期望值手算寫死",
     "A4 test_review(−~4)、test_apply(−3):review 的 ThePassPath :134 與 :157 折進 :113(同 REVIEWER_PASS 場景,:171 留作 :157 的負對照);TheReviewerCostGoesOnTheTicket :279 折進 TheFailPath :305;:269 折進 NotDeliveredIsNotAPass :342 的迴圈。apply 的 Rebase :718 與 :747 折進 :807(真 git rebase 的樹是預言機;:747 手算的內容留作第二預言機);刪 ThingsItRefuses.test_the_hard_fences_are_empty_by_default(:574,前兩個斷言測沙盒 fixture;行為部分 = TheWriteScope :602);刪 TheStructuredDeliveryOfTheFirstRound.test_the_help_lists_the_verifier_flag(:479,flag 已由 :434/:446/:467 真跑)",
@@ -72,9 +72,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "3b62959f37a595103490579eef6b6ebb28a4b91b",
-  "state": "Ready",
-  "state_version": 2,
+  "base_sha": "91a17ba15453fa49cd381b0f7c7863b27a7582e0",
+  "state": "Done",
+  "state_version": 18,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -91,5 +91,86 @@
   ],
   "test_plan": "全部單元層。合併的預言機是「斷言數守恆」:EVIDENCE 的對照表列原案例的每個斷言落到新案例的哪一行,原斷言數 = 新斷言數(刪的只有稽核點名的恆真行)。改寫條的預言機:A2 :683 是 status.json 的鍵集(期望值來自 docs/WORKFLOW.md §狀態檔,不從 status.py 算);A5 new_session 是頁面第 5–7 節標題有無(期望來自 new-session.sh 對 main 的分支);A6 :169 是 board/config.json 的鍵名 land.entry(期望來自 config 檔)。行號全部是 main 207c544(#71 只刪這些檔裡的整條方法,行號會小幅上移,以 test id 為準)。功能標籤:無。",
   "outline": "使用者裁示 2026-09-30「都按照你的建議做」;本票 = 稽核 §3.3 中 #70 沒動到的那些檔(#70 動 control_harness/test_land/test_verify_runner/test_auto_fix,那三支的合併在另一張票)。性質:機械合併,不減斷言,只減沙盒(每條 Sandbox ≈ 1 s,test_gate 最慢一條 14.9 s);外加稽核點名的恆真斷言。預期 −~45 條、−~60 s(gate ~30、rules/review/others ~30;稽核估算)。開票前實測:行號→test id 對照已用 AST 做過(票面的 test id 就是),稽核的三個關鍵主張(§4 真 CLI、_29 反向斷言、_23 同型對)主線抽查過;A2 :695/:742 那串字在 scripts/ 不存在是稽核實測,worker 刪前再 grep 一次。依賴 #71:兩張票都動 test_gate/test_status/test_rules/test_event,先落 #71。needs_verifier=false:純測試檔整理,驗證者案例無新契約可寫(§5.8 第 3 問);合併正確性由「斷言數守恆表 + 四條變異紅」自證。不在本票:§3.4(使用者裁示暫緩)、test_no_project_names :173(要動 gate.sh 註解)、test_status :419 的 os.write 計數(§3.4)。",
-  "needs_verifier": false
+  "needs_verifier": false,
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 152,
+      "tokens_out": 77222,
+      "cache_write": 248132,
+      "cache_read": 12155529,
+      "wall_seconds": 2097,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-09-30T18:59:06+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 74,
+      "tokens_out": 23130,
+      "cache_write": 90024,
+      "cache_read": 2508189,
+      "wall_seconds": 2194,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-09-30T19:37:09+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 18,
+      "tokens_out": 8388,
+      "cache_write": 76472,
+      "cache_read": 529851,
+      "wall_seconds": 93,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-09-30T19:42:48+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 659,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-09-30T19:53:47+08:00"
+    }
+  ],
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "A1 說被刪的 test_a_red_verifier_case_goes_down_the_existing_auto_fix_path 的派工由 test_a_plain_red_round_still_dispatches 守,實測 merge_rc CRC 變異下它是綠的;「驗證者紅→派工」現在只由兩條合成守,要不要補一句請主線裁",
+      "evidence": "../agent-control-wt/fix-t72/round1/EVIDENCE-round1.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": ""
+    }
+  ],
+  "owner": "main",
+  "branch": "t72",
+  "gate": {
+    "rc": 0,
+    "sha": "e954f71e28eca6663db609188eb8d678c65e5d18",
+    "run_id": "20260930-193710-55245",
+    "at": "2026-09-30T19:41:13+08:00"
+  },
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "ee63be3b47ef0cb89f2adb4862e796c0b958da54",
+    "note": "reports/t72/20260930-193710-55245/REVIEW.md",
+    "at": "2026-09-30T19:53:47+08:00",
+    "state_version": 18
+  }
 }

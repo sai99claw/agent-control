@@ -38,9 +38,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "3b62959f37a595103490579eef6b6ebb28a4b91b",
-  "state": "Ready",
-  "state_version": 2,
+  "base_sha": "ee63be3b47ef0cb89f2adb4862e796c0b958da54",
+  "state": "Done",
+  "state_version": 11,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -58,5 +58,62 @@
   ],
   "test_plan": "全部單元層。合併的預言機是斷言數守恆表(原案例每個斷言落到新案例哪一行)。A1 --force 的預言機是 land 的 rc 與主線 HEAD(git rev-parse 前後相等),期望值來自 land.sh 對未知 flag 的既有拒絕(rc 2)。A3 沙盒的預言機是 verify.py --list 的輸出只含 example 的案例、wall 秒數 < 5 s;config 拿掉那條的期望值來自 verify.py 對缺 config 的訊息文字(worker 先跑一次確認實際字串再寫)。票面 test id 全以 main 207c544 為準;#70 落地後行號會變,只認 test id。功能標籤:無。",
   "outline": "使用者裁示 2026-09-30「都按照你的建議做」;本票 = 稽核 §3.3 中 #70 也動到的三支(test_land/test_auto_fix/test_verify_runner),所以接在 #70 之後、以主線上落地的版本為底。性質:機械合併(同 setUp 的全輪次案例每條 5–12 s)+ 三條改寫(--force 從 grep 原始碼改成真跑;verify_runner 21.6 s 真跑全庫改沙盒;兩條從不 prime / 從不拿掉 config 的改成真的會紅)。預期 −~25 條、−~80 s(auto_fix ~30、land ~30、verify_runner ~20;稽核估算)。開票前實測:行號→test id 對照已用 AST 做過;稽核的 §4 真 CLI 主張主線抽查過;--force 現況 land.sh:186 拒未知 flag 是讀 code,未實測。與 #71/#72 沒有共同檔,可平行。needs_verifier=false:純測試檔整理,驗證者案例無新契約可寫(§5.8 第 3 問);正確性由斷言數守恆表 + 四條變異紅自證。不在本票:§3.4 的 test_land 重演 close 擋法五條與釘整句的 :275/:334/:376/:692(使用者裁示暫緩)、test_auto_fix WhichRoundIsTheLatestOne/TheCopiesGetCollected/TheResultBlock 那幾對(§3.4)。",
-  "needs_verifier": false
+  "needs_verifier": false,
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 110,
+      "tokens_out": 62842,
+      "cache_write": 193326,
+      "cache_read": 7965365,
+      "wall_seconds": 3228,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-09-30T20:47:38+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 14,
+      "tokens_out": 6997,
+      "cache_write": 60184,
+      "cache_read": 312813,
+      "wall_seconds": 79,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-09-30T20:53:42+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 774,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-10-01T00:57:39+08:00"
+    }
+  ],
+  "branch": "t73",
+  "gate": {
+    "rc": 0,
+    "sha": "70eef489ab3439e95e26f5bf5e3ac5051706ae52",
+    "run_id": "20260930-204740-57002",
+    "at": "2026-09-30T20:52:22+08:00"
+  },
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "fa94c022e3be056035d5051d82e1cb8fdfb2a3aa",
+    "note": "reports/t73/20260930-204740-57002/REVIEW.md",
+    "at": "2026-10-01T00:57:39+08:00",
+    "state_version": 11
+  }
 }
