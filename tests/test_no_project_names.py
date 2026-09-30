@@ -101,20 +101,9 @@ class NoProjectNames(unittest.TestCase):
         for must in ("scripts/land.sh", "board/board.py", "CLAUDE.md"):
             self.assertIn(must, names)
 
-    def test_no_file_carries_an_absolute_home_path(self):
-        bad = []
-        for name in repo_files():
-            if name.lower().endswith(BINARY_SUFFIXES):
-                continue
-            try:
-                text = self.read(name)
-            except (OSError, UnicodeError):
-                continue
-            if ABSOLUTE_HOME.lower() in text.lower():
-                bad.append(name)
-        self.assertEqual(bad, [], "這幾個檔寫死了這台機器的絕對路徑")
-
     def test_no_code_or_config_names_the_project_it_came_from(self):
+        """絕對路徑在 EVERYWHERE 裡,兩級都算:這一趟全掃也守「沒有檔寫死這台機器的
+        絕對路徑」(#72 刪掉只掃那一個字的重複全掃)。"""
         bad = {}
         for name in repo_files():
             if name.lower().endswith(BINARY_SUFFIXES):
@@ -145,6 +134,9 @@ class NoProjectNames(unittest.TestCase):
         self.assertEqual(offences("memory/role/README.md", text), [],
                          ".md 的文件級判準看副檔名,不看是不是在 docs/ 底下")
         self.assertEqual(offences("scripts/land.sh", text), [PRIOR_PROJECT])
+        # #30 acceptance #3(#72 由 test_non_docs_non_markdown_files_are_not_relaxed 併入,
+        # 那一條唯一的新輸入):守衛沒被放寬到設定檔 —— `.json` 不在 tickets/ 底下照抓。
+        self.assertEqual(offences("board/config.json", text), [PRIOR_PROJECT])
         # 絕對路徑兩級都抓。
         self.assertEqual(offences("docs/TODO.md", "在 %s 底下" % ABSOLUTE_HOME),
                          [ABSOLUTE_HOME])
@@ -160,15 +152,6 @@ class NoProjectNames(unittest.TestCase):
         home_text = "在 %s底下跑" % ABSOLUTE_HOME
         self.assertEqual(offences("docs/FLOW.html", home_text), [ABSOLUTE_HOME])
         self.assertEqual(offences("tickets/23.json", home_text), [ABSOLUTE_HOME])
-
-    def test_non_docs_non_markdown_files_are_not_relaxed(self):
-        """#30 acceptance #3:守衛沒被放寬到程式與設定 —— `scripts/*.py`、
-        `board/config.json` 含來源專案名仍紅。(`.md` 本身一律文件級,見上面
-        `test_the_level_comes_from_the_suffix_not_from_the_file_name`;這裡驗的是
-        非 `.md`、非 `docs/**.html`、非 `tickets/*.json` 的東西沒被放寬。)"""
-        text = "從 %s 搬過來" % PRIOR_PROJECT
-        self.assertEqual(offences("scripts/x.py", text), [PRIOR_PROJECT])
-        self.assertEqual(offences("board/config.json", text), [PRIOR_PROJECT])
 
     def test_real_flow_html_passes_the_project_name_check(self):
         """對真正的 `docs/FLOW.html` 內容重現 #30 的 acceptance #1 —— 這份檔在修好

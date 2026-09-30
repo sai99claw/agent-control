@@ -237,9 +237,20 @@ class VerifyCase(CaseSandbox):
 
         乾淨主線上沒有那個新符號,案例 `import` 就會炸;它與真的驗到了一樣讓
         unittest 回非零,而下一步差很多。
+
+        #72 併入原 RedIsTheOnlyThingTheVerifierMeasures.
+        test_an_import_failure_does_not_count_and_the_ticket_is_not_touched(同一份夾具,
+        先 `red` 再 `check`):🩸 乾淨基底上沒有那個新符號,案例 `import` 就會炸 —— 那是
+        **還沒接上**;`red` 不成立就不動票。**變異**:把 `IMPORT_MARKS` 那一段拿掉 → 紅
+        (它會被算成缺符號那一類)。
         """
         self.a_ticket(NEEDS_NEW_MODULE)
         self.write("src/newthing.py", "def size():\n    return 2\n")
+        done = self.tool("red", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("import 失敗(不算紅)", done.stdout)
+        self.assertNotIn("baseline", self.load_ticket("1")["verify"])
+
         done = self.tool("check", "1")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("import 失敗(不算紅)", done.stdout)
@@ -249,10 +260,13 @@ class VerifyCase(CaseSandbox):
         self.assertEqual(base["baseline"]["red"], [])
 
     def test_a_ticket_without_verify_files_says_so(self):
+        """#72:`check` 與 `red` 兩條併成 subTest(原 RedIsTheOnlyThingTheVerifierMeasures 同名)。"""
         self.make_ticket(1)
-        done = self.tool("check", "1")
-        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
-        self.assertIn("verify.files 是空的", done.stderr)
+        for command in ("check", "red"):
+            with self.subTest(command):
+                done = self.tool(command, "1")
+                self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+                self.assertIn("verify.files 是空的", done.stderr)
 
     # ------------------------------------------ candidate 的三種寫法(#22)
 
@@ -287,11 +301,17 @@ class VerifyCase(CaseSandbox):
         案例檔」—— 而檔就在 t20 上,只是沒有人去 git 裡拿。
 
         **變異**:把 `resolve_tree` 裡 `rev-parse --verify` 那一段拔掉 → 這一條紅。
+
+        #72 併入原 test_the_case_file_is_overlaid_onto_a_ref_tree_that_lacks_it(同一個
+        分支形狀):案例是這張票才加的,ref 那棵樹上本來就沒有它 —— 不疊上去,乾淨主線
+        那一趟跑到的是**零個案例**,而零個案例與「都過了」長得一樣。
         """
         _, sha = self.a_branch()
         done = self.tool("check", "1", "--candidate", "t1")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.assert_measured(sha)["candidate"], "t1")
+        base = self.assert_measured(sha)
+        self.assertEqual(base["candidate"], "t1")
+        self.assertEqual(base["baseline"]["cases"], 1, "沒疊上去")
 
     def test_candidate_may_be_a_sha(self):
         """落地後補量走的是 `--ref <base_sha> --candidate <merge sha>`,兩格都是 sha。"""
@@ -306,20 +326,6 @@ class VerifyCase(CaseSandbox):
         done = self.tool("check", "1", "--candidate", path)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assert_measured(sha)
-
-    def test_the_case_file_is_overlaid_onto_a_ref_tree_that_lacks_it(self):
-        """案例是這張票才加的,ref 那棵樹上本來就沒有它 —— 不疊上去,乾淨主線那一趟
-        跑到的是**零個案例**,而零個案例與「都過了」長得一樣。
-
-        `base` 副本跑完就砍(#33),疊上去了沒有改看 `cases`:沒疊上去的話 import 就
-        炸,`cases` 停在 0,不會是 1。
-        """
-        _, _ = self.a_branch()
-        out = os.path.join(self.home, "vc")
-        done = self.tool("check", "1", "--candidate", "t1", "--out-dir", out)
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.load_ticket("1")["verify"]["baseline"]["baseline"]["cases"], 1,
-                         "沒疊上去")
 
     def test_check_leaves_only_logs_behind_in_the_out_dir(self):
         """🩸 #33:`gate.sh` 把 `--out-dir` 指到 worktree 內的 `gate.log.verify-case.d`,
@@ -501,18 +507,6 @@ class RedIsTheOnlyThingTheVerifierMeasures(CaseSandbox):
         self.assertIn("一條算數的紅都沒有", done.stdout)
         self.assertNotIn("baseline", self.load_ticket("1")["verify"], "不成立就不動票")
 
-    def test_an_import_failure_does_not_count_and_the_ticket_is_not_touched(self):
-        """🩸 乾淨基底上沒有那個新符號,案例 `import` 就會炸 —— 那是**還沒接上**。
-
-        **變異**:把 `IMPORT_MARKS` 那一段拿掉 → 這一條紅(它會被算成缺符號那一類)。
-        """
-        self.a_ticket(NEEDS_NEW_MODULE)
-        self.write("src/newthing.py", "def size():\n    return 2\n")
-        done = self.tool("red", "1")
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertIn("import 失敗(不算紅)", done.stdout)
-        self.assertNotIn("baseline", self.load_ticket("1")["verify"])
-
     def test_a_red_that_is_only_a_missing_symbol_does_not_count(self):
         """🩸 `AttributeError` 也讓 unittest 回非零,而它說的是「這個名字還不存在」。
 
@@ -657,12 +651,6 @@ class RedIsTheOnlyThingTheVerifierMeasures(CaseSandbox):
         self.assertEqual(len(run["red"]), 1, "skip 不准算成紅")
         self.assertEqual(run["missing_symbol"], [])
         self.assertEqual(run["elsewhere"], [])
-
-    def test_a_ticket_without_verify_files_says_so(self):
-        self.make_ticket(1)
-        done = self.tool("red", "1")
-        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
-        self.assertIn("verify.files 是空的", done.stderr)
 
     def test_a_base_that_cannot_be_measured_does_not_write_the_ticket(self):
         """量不到的下一步是一句可以敲的指令,而且**要指名 red**(不是 check)。"""

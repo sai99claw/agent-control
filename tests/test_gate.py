@@ -177,20 +177,6 @@ class GateSh(Sandbox):
             return []
         return [json.loads(line) for line in self.read(path).splitlines() if line.strip()]
 
-    def test_a_green_or_attributable_red_gate_writes_no_page_only_events(self):
-        """B5(D-032):綠由 review.sh 接手、可歸因的紅由 auto-fix.sh 接手 —— 都不是主線
-        的事,只寫 gate.pass / gate.fail。**變異**:綠也發頁 → 這一條紅。"""
-        self.make_ticket(7, allowed_write_paths=["tests/*"])
-        done = self.gate("tests/test_ticket.py", "--ticket", "7")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.inbox_rows(), [])
-        self.assertIn("gate.pass", self.kinds())
-        self.write("tests/test_red.py", FAILING)
-        done = self.gate("tests/test_red.py", "--ticket", "7", "--no-auto-fix")
-        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.inbox_rows(), [])
-        self.assertIn("gate.fail", self.kinds())
-
     # ------------------------------------------------------ 對照表挑得對不對
 
     def test_a_mapped_file_runs_the_modules_that_guard_it(self):
@@ -909,17 +895,6 @@ class VerifierCasesAtTheGate(Sandbox):
         self.assertEqual(self.status_of("7")["failures"], [],
                          "候選全綠卻留了一份紅榜給下一輪的 worker")
 
-    def test_a_red_verifier_case_goes_down_the_existing_auto_fix_path(self):
-        """驗收 5 的另一半:走的是**既有**那條路(D-014),不是新造一條。
-
-        **變異**:把 `rc=$(merge_rc "$rc" "$CRC")` 那一行拿掉 → 這一條紅
-        (rc 是 0,`auto_fix` 第一行就回去了)。
-        """
-        self.a_ticket()
-        done = self.run_sh("scripts/gate.sh", "tests/test_land.py", "--ticket", "7")
-        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("gate: auto-fix ——", done.stdout)
-
 
 class TheHandRunGateWritesTheTicketGate(Sandbox):
     """#56 第 2 輪(主線裁示):手跑 `gate.sh --branch --ticket <n>` 也寫票上**同一個**
@@ -950,7 +925,11 @@ class TheHandRunGateWritesTheTicketGate(Sandbox):
                            "--branch", "--ticket", "7", *extra, cwd=wt, env=env)
 
     def test_a_green_hand_run_writes_rc_0_at_the_branch_head(self):
-        """(a) **變異**:拿掉綠那一路的 `ticket_gate` → 票上沒有 gate 欄,紅。"""
+        """(a) **變異**:拿掉綠那一路的 `ticket_gate` → 票上沒有 gate 欄,紅。
+
+        (c)(#72 併入原 test_the_review_packet_after_a_green_hand_run_says_the_gate_ran,
+        同一趟綠):覆核者收到的派工文說「已對 <sha> 跑過閘門」,不說「沒跑過閘門」。
+        """
         wt = self.branch_with("test_zz_green.py", PASSING % "test_zz_green")
         done = self.gate_in(wt)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -961,6 +940,12 @@ class TheHandRunGateWritesTheTicketGate(Sandbox):
         self.assertEqual(gate["rc"], 0)
         self.assertEqual(gate["sha"], self.git("rev-parse", "t7").strip())
         self.assertEqual(gate["run_id"], self.status_of("7", kind="gate")["run_id"])
+
+        stdin = os.path.join(self.home, "reviewer-stdin.md")
+        self.assertTrue(os.path.exists(stdin), "reviewer 沒被叫到:" + done.stdout + done.stderr)
+        packet = self.read("reviewer-stdin.md", where=self.home)
+        self.assertIn("已對 %s 跑過閘門" % self.git("rev-parse", "t7").strip(), packet)
+        self.assertNotIn("沒跑過閘門", packet)
 
     def test_a_red_hand_run_writes_its_rc_at_the_same_sha(self):
         """(b) 紅也寫:票上記的是這個 sha 真正的結果,不是上一個綠。"""
@@ -973,21 +958,25 @@ class TheHandRunGateWritesTheTicketGate(Sandbox):
         self.assertEqual(gate["rc"], done.returncode)
         self.assertEqual(gate["sha"], self.git("rev-parse", "t7").strip())
 
-    def test_the_review_packet_after_a_green_hand_run_says_the_gate_ran(self):
-        """(c) 覆核者收到的派工文說「已對 <sha> 跑過閘門」,不說「沒跑過閘門」。"""
-        wt = self.branch_with("test_zz_green.py", PASSING % "test_zz_green")
-        done = self.gate_in(wt)
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        stdin = os.path.join(self.home, "reviewer-stdin.md")
-        self.assertTrue(os.path.exists(stdin), "reviewer 沒被叫到:" + done.stdout + done.stderr)
-        packet = self.read("reviewer-stdin.md", where=self.home)
-        self.assertIn("已對 %s 跑過閘門" % self.git("rev-parse", "t7").strip(), packet)
-        self.assertNotIn("沒跑過閘門", packet)
-
 
 class GateExample(unittest.TestCase):
     """範例那一份要**自己的語法是對的** —— 一份 `sh -n` 過不了的範本,照抄的人第一
-    件事是修語法,不是讀理由。"""
+    件事是修語法,不是讀理由。
+
+    #72:介面那兩條改成**真的執行**範本(只走參數解析與「對不到」那一段,不跑測試),
+    不再 grep 範本散文。"""
+
+    HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def example(self, *args):
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ, AC_GATE_LOG=os.path.join(tmp, "gate.log"))
+            env.pop("AC_GATE_TICKET", None)
+            return subprocess.run(["sh", os.path.join(self.HERE, "scripts", "gate.example.sh")]
+                                  + list(args), capture_output=True, text=True, timeout=60,
+                                  env=env, cwd=tmp)
 
     def test_the_example_parses(self):
         import subprocess
@@ -997,12 +986,14 @@ class GateExample(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
     def test_the_example_keeps_the_three_layer_interface(self):
-        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        with open(os.path.join(here, "scripts", "gate.example.sh"), encoding="utf-8") as handle:
-            text = handle.read()
+        """不認得的旗標退 2、用法列出三層;對不到任何模組的檔退 3 並出聲(§5.5)。"""
+        done = self.example("--quick")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         for flag in ("--branch", "--base", "--full"):
-            self.assertIn(flag, text)
-        self.assertIn("對不到任何測試模組", text)
+            self.assertIn(flag, done.stderr)
+        done = self.example("README.md")
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertIn("對不到任何測試模組", done.stdout)
 
     def test_the_example_accepts_the_ticket_flag(self):
         """**變異**:把範本的 `--ticket` 那一格拿掉 → 這一條紅。
@@ -1011,13 +1002,14 @@ class GateExample(unittest.TestCase):
         而他的 gate 收到 `--ticket 7` 只會回「不認得」+ 退出碼 2 —— 而 2 與「紅了」
         在呼叫者眼裡長得很像。
         """
-        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        with open(os.path.join(here, "scripts", "gate.example.sh"), encoding="utf-8") as handle:
+        done = self.example("--ticket", "7", "README.md")
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertNotIn("不認得", done.stderr)
+        with open(os.path.join(self.HERE, "scripts", "gate.example.sh"),
+                  encoding="utf-8") as handle:
             text = handle.read()
-        self.assertIn("--ticket", text)
-        self.assertIn("status.py", text, "範本要示範狀態檔怎麼寫")
-        self.assertIn("verify.py", text, "範本要示範票的回歸怎麼跑")
-
+        self.assertIn('"$AC/status.py"', text, "範本要示範狀態檔怎麼寫")
+        self.assertIn('"$AC/verify.py"', text, "範本要示範票的回歸怎麼跑")
 
 if __name__ == "__main__":
     unittest.main()

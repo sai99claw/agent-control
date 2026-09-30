@@ -83,9 +83,8 @@ class A2TheMainLinePage(HookSandbox):
         before = self.event_lines()
         done = self.hook("startup")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        for piece in ("站在哪個版本", "開著的票", "收件匣", "心跳",
-                      "memory/role/main.md", "memory/model/fable.md"):
-            self.assertIn(piece, done.stdout, "那一頁少了「%s」" % piece)
+        # 頁面各段的內容由 test_new_session 守;這裡只要一個標記證明印的是主線那一頁。
+        self.assertIn("memory/role/main.md", done.stdout, "那一頁不是主線的開場頁")
         self.assertEqual(self.event_lines(), before + 1)
         rows = self.starts()
         self.assertEqual(len(rows), 1)

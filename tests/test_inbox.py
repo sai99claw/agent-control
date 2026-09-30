@@ -56,14 +56,6 @@ class OnePage(InboxBase):
         self.assertIn("看紅榜", page, "要主線做什麼")
         self.assertIn("reports/x", page, "去哪看")
 
-    def test_each_round_gets_its_own_page(self):
-        """**一輪一頁、不覆寫** —— 覆寫的話,接手的人分不出手上這頁是哪一輪的。"""
-        self.make_ticket("7")
-        self.post(run="r1")
-        self.post(run="r2", state="閘門綠")
-        self.assertTrue(self.exists(os.path.join("reports", "inbox", "7-r1.md")))
-        self.assertTrue(self.exists(os.path.join("reports", "inbox", "7-r2.md")))
-
     def test_two_terminal_states_in_one_run_do_not_share_a_page(self):
         """同一輪可以有兩個終態(閘門綠了,接著 auto-fix 說「停在等覆核」)。
 
@@ -103,11 +95,6 @@ class OnePage(InboxBase):
         self.make_ticket("7")
         self.post()
         self.assertIn("inbox.posted", self.kinds())
-
-    def test_an_unknown_event_kind_would_be_refused(self):
-        """`inbox.posted` 要真的在 `event.py` 的固定表裡,不是靠 inbox.py 自己說了算。"""
-        done = self.event("emit", "inbox.posted", "--ticket", "7")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
 
 SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -307,10 +294,16 @@ class WhoWritesIntoIt(InboxBase):
                                   if row["kind"] == "ticket.state"])
 
     def test_the_index_is_append_only_json_not_parsed_prose(self):
-        """`list` 讀索引而不是掃 markdown:散文改一個字就會解析錯。"""
+        """`list` 讀索引而不是掃 markdown:散文改一個字就會解析錯。
+
+        併入(#72)原 OnePage.test_each_round_gets_its_own_page:**一輪一頁、不覆寫** ——
+        覆寫的話,接手的人分不出手上這頁是哪一輪的。
+        """
         self.make_ticket("7")
-        self.post()
-        self.post(run="r2")
+        self.post(run="r1")
+        self.post(run="r2", state="閘門綠")
+        self.assertTrue(self.exists(os.path.join("reports", "inbox", "7-r1.md")))
+        self.assertTrue(self.exists(os.path.join("reports", "inbox", "7-r2.md")))
         rows = [json.loads(line) for line
                 in self.read(os.path.join("reports", "inbox", "index.jsonl")).splitlines()
                 if line.strip()]

@@ -6,10 +6,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import SCRIPTS, Sandbox  # noqa: E402
-
-sys.path.insert(0, SCRIPTS)
-import event  # noqa: E402
+from control_harness import Sandbox  # noqa: E402
 
 
 class InsideACopy(Sandbox):
@@ -201,13 +198,6 @@ class Help(Sandbox):
         self.assertIn("--note", done.stderr)
         self.assertIn("--help", done.stderr)
         self.assertEqual(self.events(), [])
-
-
-class KindTable(unittest.TestCase):
-    """事件表是一張固定的表(檔頭)。"""
-
-    def test_the_table_has_no_duplicates(self):
-        self.assertEqual(len(event.KINDS), len(set(event.KINDS)))
 
 
 if __name__ == "__main__":

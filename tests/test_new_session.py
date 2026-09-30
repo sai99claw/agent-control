@@ -33,35 +33,29 @@ class NewSession(Sandbox):
         self.assertEqual(rows[0]["role"], "worker")
         self.assertEqual(rows[0]["model"], "opus")
 
-    def test_the_reading_list_points_at_this_model_s_own_memory(self):
-        """同模型跨 session 共享:Opus 的下一個 session 應該知道 Opus 上次犯過什麼。"""
-        done = self.start("worker", "opus")
-        self.assertIn("memory/model/opus.md", done.stdout)
-        self.assertIn("docs/HANDOFF.md", done.stdout)
+    def test_main_gets_sections_5_to_7_and_a_worker_does_not(self):
+        """主線多印第 5–7 節(收件匣、決策收件匣、心跳);worker 指向派工規矩,不印那三節。
+        節標題的期望來自 new-session.sh 對 main 的分支。
 
-    def test_a_worker_is_pointed_at_the_dispatch_rules_and_the_main_line_is_not(self):
+        #72 由原 test_a_worker_is_pointed_at_the_dispatch_rules_and_the_main_line_is_not
+        與 test_the_main_line_also_gets_the_inbox_and_the_heartbeat 併成,斷言全留,
+        補上「worker 沒有」那一半(以前沒有任何測試守)。
+
+        **變異**:把 new-session.sh 第 5–7 節外面那個 `if [ "$ROLE" = "main" ]` 拿掉
+        → 這一條紅(worker 也印了第 5–7 節)。
+        """
+        self.make_ticket(1, state="NeedsDecision", subject="等你裁決的")
         worker = self.start("worker", "opus")
         self.assertIn("DISPATCH-TEMPLATE", worker.stdout)
         main = self.start("main", "fable")
+        self.assertEqual(main.returncode, 0, main.stdout + main.stderr)
         self.assertIn("收件匣", main.stdout)
         self.assertIn("心跳", main.stdout)
-
-    def test_the_main_line_also_gets_the_inbox_and_the_heartbeat(self):
-        self.make_ticket(1, state="NeedsDecision", subject="等你裁決的")
-        done = self.start("main", "fable")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("等你裁決的", done.stdout)
-        self.assertIn("沒有到期的租約", done.stdout)
-
-    def test_the_opening_prints_the_terminal_state_inbox(self):
-        """主線開場讀一次收件匣,之後只在被通知時讀 —— **不輪詢**(D-015)。"""
-        self.make_ticket(1)
-        self.run_py("scripts/inbox.py", "post", "--ticket", "1", "--run-id", "r1",
-                    "--kind", "decision", "--state", "閘門紅", "--what", "看紅榜",
-                    "--where", "reports/t1/r1/status.json")
-        done = self.start("main", "fable")
-        self.assertIn("閘門紅", done.stdout, "跑完的事沒有在開場出現 = 沒有人會去看")
-        self.assertIn("reports/inbox/", done.stdout)
+        self.assertIn("等你裁決的", main.stdout)
+        self.assertIn("沒有到期的租約", main.stdout)
+        for title in ("5. 收件匣:", "6. 決策收件匣:", "7. 心跳:"):
+            self.assertIn(title, main.stdout)
+            self.assertNotIn(title, worker.stdout)
 
     def test_the_opening_does_not_leak_a_shell_error(self):
         """🩸 反引號在雙引號裡是**命令替換**:那一行在乾淨 clone 裡吐出
@@ -101,9 +95,15 @@ class NewSession(Sandbox):
 
     def test_the_reading_list_names_this_role_s_card(self):
         """#39:角色卡那一行。worker 的卡叫 implementer.md(rules.py WANTED)——
-        指到一個不存在的檔,比沒有那一行更糟。"""
+        指到一個不存在的檔,比沒有那一行更糟。
+
+        #72 併入原 test_the_reading_list_points_at_this_model_s_own_memory:同模型跨
+        session 共享 —— Opus 的下一個 session 應該知道 Opus 上次犯過什麼。"""
         self.assertIn("memory/role/main.md", self.start("main", "fable").stdout)
-        self.assertIn("memory/role/implementer.md", self.start("worker", "opus").stdout)
+        worker = self.start("worker", "opus").stdout
+        self.assertIn("memory/role/implementer.md", worker)
+        self.assertIn("memory/model/opus.md", worker)
+        self.assertIn("docs/HANDOFF.md", worker)
 
     def test_the_closing_line_ends_the_same_session_it_started(self):
         """#45 B3:沒給 `--session` 就自己產一個 SID、印出來,start 帶它,結語那句
