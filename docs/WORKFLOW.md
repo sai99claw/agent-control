@@ -36,11 +36,14 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
    代表驗證者的交付沒有跟著進來 —— 而 `verify.tags` 照樣會被閘門呼叫、照樣一個案例都選不到、照樣印一行綠。
    缺了 **rc=4**(與其他拒收的 2 分開:呼叫者要分得出「票面沒填好」與「分支沒準備好」)。
 6. **覆核與反駁是硬閘門**(D-014):票要有一格 `review`,`verdict` 通過、`state_version` 等於票現在的版本、`sha` 對得上這條分支的頭;`objections[]` 裡有未處置的阻擋項 → 拒絕。三者任一不成立都在**開 worktree、跑九分鐘全套之前**就退回。
-7. 依序合到 `land/<ts>` worktree,跑全套(`scripts/gate.sh --full`),綠才 `--ff-only` 推主線;紅則主線不動、worktree 留著給人看。
-8. **gate / merge / push 各記一筆**(狀態檔的 `phases`),而且**每一條退出路徑都寫終態**,
+7. **分支新增的路徑撞到主線工作樹的未追蹤檔** → 拒絕(#69,rc=2):判準是 git 自己的 —— `git diff --name-only --no-renames --diff-filter=A <main>...<branch>` 的路徑,丟給 `git ls-files --others --exclude-standard` 有輸出(未追蹤且未被 ignore);不擋的話 ff-only 會在九分鐘全套之後被 git 拒絕。
+   下一步:逐一點名撞到的路徑,由人自己移走或 commit 進主線再重跑 land —— land **不替人搬、不刪**(那是使用者的檔)。
+8. 依序合到 `land/<ts>` worktree,跑全套(`scripts/gate.sh --full`),綠才 `--ff-only` 推主線;紅則主線不動、worktree 留著給人看。
+   ff-only 進不去分兩種話(#69):**主線動了**(HEAD 與開 worktree 前記的不同,印 `<前> -> <後>` 兩個短 sha,下一步 rebase 後重跑閘門)vs **主線沒動、git 拒絕**(git 的 stderr 逐行原話印進 stdout 與 status.json,rebase 是錯的下一步)。
+9. **gate / merge / push 各記一筆**(狀態檔的 `phases`),而且**每一條退出路徑都寫終態**,
    要人動手的(拒收 / 串接衝突 / 全套紅 / 沒合進主線 / push 沒成功)同時寫一則 `reports/inbox/<票號>-<run_id>.md`,kind=decision(D-015 / D-032:終態去叫醒主線,主線不輪詢)。
-9. 綠了、push 成功之後 land 對每張票試 `scripts/ticket.py close <n> --landed <合併後主線的 sha>`(#43):關得掉印「#n 已合併、已關票」;關得掉再發一頁 done 簡報(`inbox.py done`:subject、落地 sha、做了什麼、覆核結論、cost 表;不自動 ack);關不掉印「#n 已合併、尚未關票」+ `ticket.py close` 的理由原文,並寫一頁 decision —— Done 的條件一條不放,沒有放行旗標,land 的 rc 不因關不掉而變。
-10. 每一步發事件。全套紅時預設派下一輪 worker,**只在這一批剛好一張票的時候**
+10. 綠了、push 成功之後 land 對每張票試 `scripts/ticket.py close <n> --landed <合併後主線的 sha>`(#43):關得掉印「#n 已合併、已關票」;關得掉再發一頁 done 簡報(`inbox.py done`:subject、落地 sha、做了什麼、覆核結論、cost 表;不自動 ack);關不掉印「#n 已合併、尚未關票」+ `ticket.py close` 的理由原文,並寫一頁 decision —— Done 的條件一條不放,沒有放行旗標,land 的 rc 不因關不掉而變。
+11. 每一步發事件。全套紅時預設派下一輪 worker,**只在這一批剛好一張票的時候**
    (一批裡哪一條紅對到哪一張票,要有票↔案例的對照才判得出來)。
 
 ## 票檔 / `memory` / `docs` 進主線的入口(2026-09-23,#29 A10)
