@@ -272,6 +272,24 @@ class GateSh(Sandbox):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.ran(), ["test_land"])
 
+    def test_a_deleted_test_module_is_not_run(self):
+        """#71 A3:這條分支刪掉的 `tests/test_*.py` 不排進模組清單 —— unittest 對
+        不存在的模組會報錯,閘門就紅在自己排錯的清單上。
+        **變異**:把 `map()` 的 `[ -f "$ROOT/$f" ]` 守衛拿掉 → 這一條紅。"""
+        self.write("tests/test_x.py", PASSING % "test_x")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "test_x 先在主線")
+        self.git("checkout", "-q", "-b", "t71")
+        self.git("rm", "-q", "tests/test_x.py")
+        self.write("scripts/land.sh", self.read("scripts/land.sh") + "\n# 動一下\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "刪掉 test_x")
+        done = self.gate("--branch")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        line = [l for l in done.stdout.splitlines() if l.startswith("gate: python3 -m unittest")]
+        self.assertEqual(line, ["gate: python3 -m unittest test_land"])
+        self.assertEqual(self.ran(), ["test_land"])
+
     # ----------------------------------------------- 對不到任何模組:要出聲
 
     def test_a_file_nobody_guards_is_named_and_the_exit_code_is_not_zero(self):

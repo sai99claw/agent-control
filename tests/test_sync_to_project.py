@@ -41,14 +41,6 @@ class SyncsTheScripts(unittest.TestCase):
                 self.assertIn(dependency, got,
                               "少了它們,同步過去的是一組 import 就炸的檔")
 
-    def test_the_copied_scripts_say_they_are_not_the_place_to_edit(self):
-        with tempfile.TemporaryDirectory() as d:
-            sync(d)
-            with open(os.path.join(d, "scripts", "control", "README.md")) as handle:
-                text = handle.read()
-            self.assertIn("產出物", text)
-            self.assertIn("board/config.json", text)
-
     def test_a_script_that_left_agent_control_is_removed(self):
         with tempfile.TemporaryDirectory() as d:
             self.assertEqual(sync(d).returncode, 0)

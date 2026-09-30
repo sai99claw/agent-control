@@ -43,16 +43,14 @@
   "attempt": 0,
   "base_sha": "2c99d425cebc96034b9c995c5d138130ffa10b83",
   "state": "Done",
-  "state_version": 13,
+  "state_version": 14,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [
-      "tests/test_ticket_26.py"
-    ],
+    "files": [],
     "tags": [],
     "run": "",
-    "notes": "",
+    "notes": "retired 2026-09-30: tests/test_ticket_26.py 退役,契約由 tests/test_verify_case.py、tests/test_land.py 守(稽核 A-tests-audit §3.1)",
     "baseline": {
       "stage": "check",
       "ok": true,

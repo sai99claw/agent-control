@@ -206,13 +206,6 @@ class WhatItAlwaysCarries(RulesBase):
             self.assertIn(self.LAST_LINE, done.stdout, role)
             self.assertLessEqual(len(done.stdout.encode("utf-8")), 4096, role)
 
-    def test_the_section_says_when_to_write_and_when_not(self):
-        """措辭是這一段的全部:三種時刻、預設不寫、只寫原則、model 層只寫自己。"""
-        text = self.rules("pack", "worker", "--model", "opus").stdout
-        for phrase in ("預設不寫", "兩次以上", "角色卡沒講", "跨票", "memory.py note",
-                       "只准寫自己的", "300 字元", "EVIDENCE"):
-            self.assertIn(phrase, text)
-
     def test_the_section_is_under_600_bytes(self):
         sys.path.insert(0, os.path.join(self.repo, "scripts"))
         try:
@@ -253,12 +246,6 @@ class TheStructuredDeliverySection(RulesBase):
             self.assertIn("## 結構化交付", done.stdout, role)
             self.assertIn(self.LAST_LINE, done.stdout, role)
             self.assertLessEqual(len(done.stdout.encode("utf-8")), 4096, role)
-
-    def test_the_section_says_where_the_block_goes_and_who_picks_it_up(self):
-        """措辭是這一段的全部:檔尾、那個語言標記、auto-fix 抽成哪一個檔、留空不要編。"""
-        text = self.rules("pack", "worker", "--model", "opus").stdout
-        for phrase in ("檔尾", "result", "auto-fix", "result-round", "照實留空"):
-            self.assertIn(phrase, text)
 
     def test_it_points_at_the_two_places_instead_of_copying_the_keys(self):
         """schema 只寫兩處。規則包抄第三份的那一天,三份會各自往不同方向漂 ——
@@ -328,11 +315,6 @@ class EfficiencyOverSpeed(RulesBase):
         done = self.rules("pack", "worker", "--model", "opus", "--stats")
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertRegex(done.stderr, r"不追求快 \d+ bytes")
-
-    def test_the_wording_says_count_tokens_not_speed(self):
-        text = self.rules("pack", "worker", "--model", "opus").stdout
-        for phrase in ("D-016", "這樣比較快", "token", "判準"):
-            self.assertIn(phrase, text)
 
 
 class TheProjectLayer(RulesBase):

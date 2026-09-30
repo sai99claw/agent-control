@@ -44,16 +44,14 @@
   "attempt": 0,
   "base_sha": "461fa4646a6376f680e2f322f3e3d6adc549525a",
   "state": "Done",
-  "state_version": 15,
+  "state_version": 16,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [
-      "tests/test_ticket_28.py"
-    ],
+    "files": [],
     "tags": [],
-    "run": "cd <workspace>/agent-control && python3 -m unittest tests.test_ticket_28 tests.test_rules tests.test_memory tests.test_sync_to_project",
-    "notes": "六條 acceptance 全部用 tests/control_harness.py 的 Sandbox 造假專案,不連真的 tabby_pool;第 6 條是文件字句,verify_strings 驗,不在這支跑的案例裡",
+    "run": "",
+    "notes": "retired 2026-09-30: tests/test_ticket_28.py 退役,契約由 tests/test_rules.py、tests/test_memory.py、tests/test_sync_to_project.py 守(稽核 A-tests-audit §3.1); 六條 acceptance 全部用 tests/control_harness.py 的 Sandbox 造假專案,不連真的 tabby_pool;第 6 條是文件字句,verify_strings 驗,不在這支跑的案例裡",
     "baseline": {
       "stage": "check",
       "ok": true,

@@ -69,18 +69,16 @@
   "attempt": 0,
   "base_sha": "c9164eda8d724a72dfdf426837c52bcb80566b0d",
   "state": "Done",
-  "state_version": 21,
+  "state_version": 22,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [
-      "tests/test_ticket_23.py"
-    ],
+    "files": [],
     "tags": [
       "env-suspect"
     ],
-    "run": "python3 -m unittest tests.test_ticket_23",
-    "notes": "驗證者(sonnet)13 條照 D-019 驗收表;fixture A = test_gate.ENVIRONMENT_WAVE,fixture T = tabby test_ticket_644 的 SUSPECT_LINE 逐字",
+    "run": "",
+    "notes": "retired 2026-09-30: tests/test_ticket_23.py 退役,契約由 tests/test_status.py、tests/test_gate.py、tests/test_metrics.py、tests/test_board.py、tests/test_auto_fix.py 守(稽核 A-tests-audit §3.1); 驗證者(sonnet)13 條照 D-019 驗收表;fixture A = test_gate.ENVIRONMENT_WAVE,fixture T = tabby test_ticket_644 的 SUSPECT_LINE 逐字",
     "baseline": {
       "ok": true,
       "why": "",
