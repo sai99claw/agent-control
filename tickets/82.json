@@ -1,0 +1,69 @@
+{
+  "id": "82",
+  "subject": "auto-fix 派的 worker/驗證者寫不進真看板(拋棄式控制根,不繼承指向主 repo 的 AC_*);逾時收掉 agent 整棵子行程樹",
+  "created": "2026-10-03T18:01:18+08:00",
+  "objective": "auto-fix 起的 worker 與驗證者在副本裡跑任何 repo 腳本,事件、票、inbox、reports 只落在這一輪自己的拋棄式控制根,真看板一筆不多、patch 不夾帶;worker / 驗證者 / reviewer 逾時時,所有後代行程(含自開 session 的)在腳本返回前結束。",
+  "acceptance": [
+    "隔離(單元層,tests/test_auto_fix.py 沙盒):Ready 票、worker.command 換成替身;替身在它的 cwd(副本 work/)依序跑 `python3 scripts/memory.py check`(副本裡放一張超過上限的角色卡)、`python3 scripts/ticket.py create --subject 外洩探針 …`、`python3 scripts/rules.py pack worker --model opus`(規則來源刻意缺)。auto-fix 返回後,沙盒主 repo:board/events.jsonl 沒有 kind=memory.over_cap、kind=ticket.created 的列,tickets/ 檔數與起跑前相同,reports/inbox/ 頁數與起跑前相同(期望值 = 起跑前自己數的,不從被測程式算)。",
+    "patch 乾淨(同一沙盒):那一輪交出的 patch 檔裡沒有任何一行 `+++` 指向 board/events.jsonl、tickets/、reports/ —— 副作用落在拋棄式控制根,不落在 work/。",
+    "worker 自己的閘門仍能用(同一沙盒):替身在副本跑 `sh scripts/gate.sh --branch --ticket <本沙盒票號>`,輸出不含「讀不到」那張票的字樣,preflight 照票的 allowed_write_paths 判;而它跑出來的狀態檔 / inbox 不落在沙盒主 repo。",
+    "驗證者同一條(needs_verifier=true 的沙盒票):驗證者替身做驗收 1 的三件事,沙盒主 repo 的事件 / 票 / inbox 同樣一筆不多。",
+    "派給 agent 的環境:worker 與驗證者替身把自己收到的 `AC_*` 寫進檔;其中沒有任何一格的值是沙盒主 repo 根或它底下的路徑(含 AC_ROOT、AC_CONTROL_DIR、AC_TICKETS_DIR);AC_DISPATCH / AC_TICKET / AC_ROUND / AC_WORK / AC_ROLE 照舊在。",
+    "逾時收整棵樹(單元層):票的 worker.timeout_seconds 設小值;worker 替身起一個孫行程,孫行程先 `os.setsid()` 自開 session,再每 0.2 秒往一個 heartbeat 檔追加一行、睡過逾時。auto-fix 返回後等 2 秒,heartbeat 檔行數不再增加,且孫行程 pid `kill -0` 失敗。驗證者路徑(auto-fix)與 reviewer 路徑(review.sh 的 reviewer.timeout_seconds)各一條同形案例。",
+    "auto-fix 自己起的閘門(收 patch 後那一段,帶主 repo 的 AC_ROOT)照舊把狀態檔與 inbox 寫回主 repo:tests/test_auto_fix.py 既有的狀態檔 / inbox 斷言不改仍綠。",
+    "docs/WORKFLOW.md「一票一分支一副本」段多一句,含字串「拋棄式控制根」,說明 agent 在副本裡跑腳本時寫入落在哪、何時隨副本一起收;docs/SESSION-START.md 的「副本裡不發事件,由派工方代發」段與之對齊(手派的人照舊可自帶 AC_ROOT,auto-fix 派的不再帶)。",
+    "變異(驗證者指定哪條紅):(a) 把 worker 的環境改回繼承主 repo 的 AC_ROOT → 驗收 1 紅;(b) 逾時只 killpg agent 自己那一組、不收自開 session 的後代 → 驗收 6 紅;(c) 把 AC_CONTROL_DIR 留在 agent 環境 → 驗收 5 紅。"
+  ],
+  "in_scope": [
+    "scripts/auto-fix.sh",
+    "scripts/review.sh",
+    "tests/test_auto_fix.py",
+    "tests/test_review.py",
+    "docs/WORKFLOW.md",
+    "docs/SESSION-START.md"
+  ],
+  "out_of_scope": [
+    "tests/control_harness.py",
+    "scripts/event.py"
+  ],
+  "depends_on": [
+    {
+      "id": "74",
+      "condition": "落地"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/review.sh",
+    "tests/test_auto_fix.py",
+    "tests/test_review.py",
+    "docs/WORKFLOW.md",
+    "docs/SESSION-START.md",
+    "verify/worker-isolation/*",
+    "verify/TAGS.d/82.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "3531c9beae0dcf4ae35fe70064e62e548264970d",
+  "state": "Draft",
+  "state_version": 4,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "feature": "派工隔離",
+  "outline": "【題目(主線轉述上一位開題者唯讀實測)】#74 第 1 輪 worker 在副本裡跑 `scripts/memory.py check`,因繼承 auto-fix 傳下、指向 A 本體的 AC_ROOT,把 memory.over_cap 與 ticket.created #81 寫進真看板(events 2026-10-03T16:58:05,cwd=(repo 外));auto-fix 3600 秒逾時後,閘門變異子行程成了孤兒跑到 17:50。\n【7 頁同源(本開題者讀檔實測)】10/1 01:45:19 的 7 頁「規則包產不出來(<role>)」(events 2043–2049,run_id rules-<role>-…,綁 #74,cwd=(repo 外)):發頁那段 code(`rules-%s-%s` run_id、「規則包產不出來」字樣)在主線 3531c9b 的 scripts/rules.py 一處都沒有,只在 #74 第 1 輪副本的 rules.py 裡;時間落在 auto-fix #74 那一輪(agent.start 01:36:56,下一次轉態 03:25:05)之內;頁面量的是 A 本體的 memory/role/implementer.md(8508 B)。結論:同源 —— 副本裡 #74 的新 rules.py 讀寫都經繼承的 AC_ROOT / AC_TICKET 落到真 A。\n【讀碼發現】(1) auto-fix.sh 開頭 `export AC_ROOT=$ROOT`、`export AC_CONTROL_DIR=$AC`,worker / 驗證者的 env 由 os.environ 複製,兩格都帶過去;副本裡的 gate.sh 以 `AC=${AC_CONTROL_DIR:-…}` 取同伴腳本,等於 worker 在副本跑閘門時叫到的是 A 本體的腳本、不是它改的那一份〔推論,未實測〕。(2) event.py 的副本守衛(#29 A9)只在 CLI `emit`;memory.py / ticket.py / rules.py 走函式庫 emit,沒有 AC_ROOT 時會靜靜寫進副本自己的 board/(會進 patch)—— 所以只拿掉 AC_ROOT 不夠,要給一個拋棄式控制根。(3) worker 已 start_new_session + killpg 整組(#57);驗證者(auto-fix run_verifier)與 reviewer(review.sh)是 subprocess.run(timeout) 只收 sh 那一層。孤兒活下來的假設:後代自開 session / 行程群組(例:agent CLI 的 shell 工具、閘門變異子行程),killpg 搆不到。證偽法:驗收 6 的替身孫行程不 setsid 時主線已綠、setsid 時主線紅〔未實測〕。父行程死後孫行程會被 init 收養、ppid 查不到 —— 收樹要在送訊號之前先記下整棵。\n【設計裁示(開題者)】沿用 #29 A9「副本裡不發事件,由派工方代發」:auto-fix 已自己發 ticket.attempt.start / agent.start(events 實測),agent 不需要寫真看板的路。每一輪在副本目錄、work/ 與 base/ 之外開一個拋棄式控制根,放 board/config.json 與本票 tickets/<n>.json 的快照(worker 自跑閘門要讀票);agent 的 AC_ROOT / AC_TICKETS_DIR 指它,AC_CONTROL_DIR 不帶。收副本時一起收。手派的 session 照舊可自帶 AC_ROOT(本票不擋)。\n【既有斷言(D-H38 c,grep 實測)】tests/test_auto_fix.py、tests/test_review.py、tests/control_harness.py、verify/*/*.py 沒有任何案例釘「worker 環境帶主 repo 的 AC_ROOT / AC_CONTROL_DIR」;harness 的 env() 本來就濾掉外層 AC_*(#70)。test_event.py 的副本守衛兩條(拒收 / 帶 AC_ROOT 照發)不受影響,event.py 不改。\n【needs_verifier=true 理由】改的是控制腳本的派工邊界與行程管理,實作者自證容易只測自己寫的那條路;interface_fixed=false:控制根的位置與名字由實作者定,驗證者以分支上的實作為準。\n【依賴】#74 落地(同動 scripts/auto-fix.sh、scripts/review.sh、tests/test_auto_fix.py、tests/test_review.py);落地前留 Draft。#80 也動 auto-fix.sh,誰先落地另一張 rebase。\n【另記,不在本票】memory.py 的 open_consolidation 用 `rel in allowed_write_paths` 逐字比對,#78 寫的是 glob `memory/role/*.md`,比不到 —— 所以 #81 在真 A 上也會被開出來;#81 作廢後,下一次在 A 跑非唯讀的 `memory.py check` 會再開一張 opener 整理票〔讀碼推論,未實測〕。建議另開小票或在 #76 承接。\n【規模】M,約 150–300 行(兩支腳本 + 測試 + 兩段文件)。model=opus:行程管理與環境邊界要判斷,不派 sonnet。",
+  "test_plan": "四問:守「agent 在副本裡做的任何事都寫不進真看板、逾時不留活口」;可信回歸是 env 繼承回來、收樹只收一層;既有測試全在 harness 濾掉 AC_* 的沙盒裡,所以從沒量到真派工的 env;不加測試專用 API。\n驗證者照驗收 1–6 寫案例,層級都是單元層(tests/control_harness.Sandbox 起真 auto-fix.sh / review.sh 子行程,worker.command / verifier 指令換替身)。期望值都從起跑前自己數的事件列數、票檔數、inbox 頁數與替身寫出的 env / heartbeat 檔來,不從被測程式算。逾時案例的 timeout 取個位數秒,孫行程的睡眠要明顯長於 timeout + 2 秒。功能標籤 `worker-isolation`:驗證者登記在 verify/TAGS.d/82.md,寫進票的 verify.tags。變異見驗收 9。",
+  "verify_strings": [
+    "worker-isolation",
+    "拋棄式控制根"
+  ],
+  "needs_verifier": true,
+  "interface_fixed": false
+}

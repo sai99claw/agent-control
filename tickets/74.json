@@ -26,7 +26,8 @@
     "tests/test_dispatch_template.py",
     "tests/test_new_session.py",
     "tests/test_auto_fix.py",
-    "tests/test_review.py"
+    "tests/test_review.py",
+    "tests/test_gate.py"
   ],
   "out_of_scope": [
     "tests/control_harness.py"
@@ -60,15 +61,19 @@
     "tests/test_dispatch_template.py",
     "tests/test_new_session.py",
     "tests/test_auto_fix.py",
-    "tests/test_review.py"
+    "tests/test_review.py",
+    "tests/test_gate.py",
+    "tests/test_session_hook.py",
+    "verify/agent-output/test_ticket_20.py",
+    "tests/test_land.py"
   ],
   "role": "worker",
   "model": "codex:gpt-6-astra",
   "tool": "codex",
   "attempt": 0,
-  "base_sha": "234d4451d1ae5d07ad3c6f393e055198fdd43d2c",
-  "state": "Draft",
-  "state_version": 5,
+  "base_sha": "3531c9beae0dcf4ae35fe70064e62e548264970d",
+  "state": "Done",
+  "state_version": 28,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -77,7 +82,7 @@
     "run": "",
     "notes": ""
   },
-  "outline": "【裁示原話 Q1(本票承接)】「這個問題很嚴重,讓astra 去開票,把所有該修復的地方寫清楚,我希望這次改完之後這些規矩可以真正被落實。」\n【為什麼】前報實測 T project 清單占 1,121 B,三段固定文字占 1,228 B,合計 2,349 B,約占 4 KiB 的 57.3%;worker 的角色、模型、inbox 正文被擠空,reviewer 缺五節。此次讀碼確認 `auto-fix.sh`、`review.sh` 以 `|| echo` 吞掉產包失敗〔推論:只改 rules.py 退出碼不足以阻止派工〕。\n【規劃】\n1. 保留 D-015/D-021 的 4,096-byte 上限與 600-byte inbox 預算,不提高數字掩蓋問題。\n2. project 逐檔清單改為一個速查入口;#77 落地前可指向既有 `docs/CODE-MAP.md`。\n3. 定義 required:角色正本、指定模型卡、每個設定要求的共用章節;存在且有正文的本地 role/model 主卡及各 inbox 也必須留下正文。不存在的可選本地疊層不算錯;指定但不存在的模型卡算錯。\n4. 「正文」不含 front matter、標題、空行、來源欄、截斷提示或只有連結的指路行。每個必要項至少保留一個完整正文單位;inbox 至少保留一條完整條目,不以半句湊數。\n5. 缺章節、空正文或預算放不下時,stdout 不得留下可被誤用的半成品包;非零退出,stderr 列角色、來源、缺項、實際 bytes 與修復方向。\n6. 增加供實際派工及維護使用的 `rules.py inspect <role> --model <model> --json`,輸出 `total_bytes`、`fixed_bytes`、各節 `source_bytes/rendered_bytes/content_units`、missing/truncated 清單。唯讀,不發事件。\n7. 正常包的固定成本包含索引、標題、指路、截斷訊息與固定說明,限制為 ≤1,024 B。這是新增的組成預算,並非提高既有總上限;依據是現有 2,349 B 已擠空必要正文。\n8. pack CLI 失敗送既有 `decision` 頁;同一角色、模型、內容指紋重試只送一頁。有 `AC_TICKET` 時綁該票,無票時使用明確的 rules 維護識別,不偽造數字票號。寫頁失敗仍須非零且明說原因。\n9. 所有 worker 首輪、修復輪、verifier、reviewer 呼叫端傳遞失敗,不得 fallback 後起 agent。\n10. 範本改引用 pack 已解析的來源,去除寫死的 `memory/role/*.md`/`memory/model/*.md` 路徑。reviewer 只提出候選記憶,不要求唯讀角色呼叫 `note`。\n11. `new-session.sh` 的 main 頁納入存在的本地已整理主卡;短命角色不列全域 HANDOFF、事件與開票清單。\n【寫入範圍備註】既有測試檔只調整被新契約取代的期待,不趁機重整;不修改 `tests/control_harness.py`(#70 的東西)。\n【前置】A #71、#72、#73 落地;#73 已依賴 #70。全部落地前留 Draft。\n【needs_verifier=false 理由】完整 CLI/派工邊界由同一主守衛負責,另一組驗證者案例會重演同一契約;worker 必須交變異驗紅。\n【model=opus 理由】涉及預算、角色權限與多個呼叫端的錯誤傳遞。\n【規模】L,約 500–800 行差異。\n【本批順序】本票 → #75 → #76 → #77 → #78 → #79 串行落地。裁示草稿 D-034(記憶規則必須由腳本與測試落實)由主線登記,編號可能順延。",
+  "outline": "【裁示原話 Q1(本票承接)】「這個問題很嚴重,讓astra 去開票,把所有該修復的地方寫清楚,我希望這次改完之後這些規矩可以真正被落實。」\n【為什麼】前報實測 T project 清單占 1,121 B,三段固定文字占 1,228 B,合計 2,349 B,約占 4 KiB 的 57.3%;worker 的角色、模型、inbox 正文被擠空,reviewer 缺五節。此次讀碼確認 `auto-fix.sh`、`review.sh` 以 `|| echo` 吞掉產包失敗〔推論:只改 rules.py 退出碼不足以阻止派工〕。\n【規劃】\n1. 保留 D-015/D-021 的 4,096-byte 上限與 600-byte inbox 預算,不提高數字掩蓋問題。\n2. project 逐檔清單改為一個速查入口;#77 落地前可指向既有 `docs/CODE-MAP.md`。\n3. 定義 required:角色正本、指定模型卡、每個設定要求的共用章節;存在且有正文的本地 role/model 主卡及各 inbox 也必須留下正文。不存在的可選本地疊層不算錯;指定但不存在的模型卡算錯。\n4. 「正文」不含 front matter、標題、空行、來源欄、截斷提示或只有連結的指路行。每個必要項至少保留一個完整正文單位;inbox 至少保留一條完整條目,不以半句湊數。\n5. 缺章節、空正文或預算放不下時,stdout 不得留下可被誤用的半成品包;非零退出,stderr 列角色、來源、缺項、實際 bytes 與修復方向。\n6. 增加供實際派工及維護使用的 `rules.py inspect <role> --model <model> --json`,輸出 `total_bytes`、`fixed_bytes`、各節 `source_bytes/rendered_bytes/content_units`、missing/truncated 清單。唯讀,不發事件。\n7. 正常包的固定成本包含索引、標題、指路、截斷訊息與固定說明,限制為 ≤1,024 B。這是新增的組成預算,並非提高既有總上限;依據是現有 2,349 B 已擠空必要正文。\n8. pack CLI 失敗送既有 `decision` 頁;同一角色、模型、內容指紋重試只送一頁。有 `AC_TICKET` 時綁該票,無票時使用明確的 rules 維護識別,不偽造數字票號。寫頁失敗仍須非零且明說原因。\n9. 所有 worker 首輪、修復輪、verifier、reviewer 呼叫端傳遞失敗,不得 fallback 後起 agent。\n10. 範本改引用 pack 已解析的來源,去除寫死的 `memory/role/*.md`/`memory/model/*.md` 路徑。reviewer 只提出候選記憶,不要求唯讀角色呼叫 `note`。\n11. `new-session.sh` 的 main 頁納入存在的本地已整理主卡;短命角色不列全域 HANDOFF、事件與開票清單。\n【寫入範圍備註】既有測試檔只調整被新契約取代的期待,不趁機重整;不修改 `tests/control_harness.py`(#70 的東西)。\n【前置】A #71、#72、#73 已落地(main 3531c9b,2026-10-01 開題者核對);#73 已依賴 #70。\n【needs_verifier=false 理由】完整 CLI/派工邊界由同一主守衛負責,另一組驗證者案例會重演同一契約;worker 必須交變異驗紅。\n【model 理由】涉及預算、角色權限與多個呼叫端的錯誤傳遞;3531c9b 改派 codex:gpt-6-astra。派工路徑:#80 落地前 auto-fix 不讀票的 model/tool(#80 票面實測),codex 派法由主線定。\n【規模】L,約 500–800 行差異。\n【本批順序】本票 → #75 → #76 → #77 → #78 → #79 串行落地。裁示草稿 D-034(記憶規則必須由腳本與測試落實)由主線登記,編號可能順延。\n【D-033 實測 2026-10-01,main 3531c9b】control_harness 預設沙盒沒有角色卡、模型卡與共用章節,現在 `rules.py pack worker/verifier/reviewer --model opus` 在其中 rc=0、約 1,980 B(幾乎只剩固定文字)。本票讓缺角色卡/模型卡/空正文非零後,test_auto_fix(約 77 處派工)、test_review(約 14 處)、test_gate 的 review.sh 案例(斷言 reviewer ran)在預設沙盒都會因不起 agent 而紅。control_harness.py 是 out_of_scope(硬擋),修法是在這幾支測試模組自己的 setUp 呼叫既有的 `install_rules_sources()`(test_rules.py 已這樣用),不要改 harness;記憶上限那一組不要跟著裝。test_session_hook.py 斷言 new-session 主線頁內容,第 11 點若改動那一頁可能要跟著調,故列入 allowed_write_paths。既有測試沒有釘「規則包產不出來」那句 fallback 字串(grep 實測)。\n【寫入範圍追加 2026-10-03,開題者】加 `verify/agent-output/test_ticket_20.py`:本票讓缺規則來源時 pack 非零、不起 agent,而該檔 `AgentOutputHarness` 的沙盒沒裝規則來源(推論,上一位開題者實測帶 patch 跑紅 6 條),修法同 D-033 段:在該案例類別自己裝規則來源(`install_rules_sources()`),`MemoryCheckDoesNotOpenATicketForTheTouchedCards` 那一類刻意只裝兩張卡,不要跟著整批裝;control_harness.py 仍 out_of_scope。加 `tests/test_land.py`:第 1 輪副本已改到它(預期內,補列)。票 `tags` 設 `agent-output`,讓 `gate.sh --branch --ticket 74` 的回歸層照得到這組案例(登記在 verify/TAGS.d/20.md)。第 1 輪副本(逾時、近完成)留著,續做者在同一份副本補:這組案例轉綠、確認變異紅、寫 EVIDENCE。",
   "test_plan": "四問:守「agent 實際收到合法規則或完全不起動」;可信回歸是截空、吞 rc、錯來源;既有測試容許節錄只剩指路,且缺派工失敗閉環;不加測試專用 API,`inspect` 是維護與派工診斷介面。交件時每個新增/改動案例仍須在 EVIDENCE 寫一行完整的 `四問:`。",
   "feature": "記憶治理",
   "decision_refs": [
@@ -89,5 +94,91 @@
     "content_units",
     "test_rules_delivery"
   ],
-  "needs_verifier": false
+  "needs_verifier": false,
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "codex:gpt-6-astra",
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1698,
+      "by": "astra-worker.sh",
+      "note": "/Users/franksai/ai_workspace/claude_workspace/agent-control-wt/fix-t74/astra/round1.log 裡沒有 JSON 信封",
+      "at": "2026-10-01T01:30:21+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 3601,
+      "by": "auto-fix.sh",
+      "note": "/Users/franksai/ai_workspace/claude_workspace/agent-control/reports/t74/20261003-164724-68109/worker-round1.log 裡沒有 JSON 信封",
+      "at": "2026-10-03T17:47:25+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 26,
+      "tokens_out": 9638,
+      "cache_write": 101404,
+      "cache_read": 894383,
+      "wall_seconds": 102,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-03T18:17:34+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 32,
+      "tokens_out": 8918,
+      "cache_write": 85512,
+      "cache_read": 1129437,
+      "wall_seconds": 109,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-03T18:19:23+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 535,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-10-03T18:30:08+08:00"
+    }
+  ],
+  "owner": "main",
+  "tags": [
+    "agent-output"
+  ],
+  "branch": "t74",
+  "gate": {
+    "rc": 0,
+    "sha": "08a9e567a0a9deef8b3f75ab82315996d54feb71",
+    "run_id": "20261003-180914-11616",
+    "at": "2026-10-03T18:15:51+08:00"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "4353f7d606c5e815ddeab979a5923322bc5e87f8",
+    "note": "reports/t74/20261003-180914-11616/REVIEW.md",
+    "at": "2026-10-03T18:30:08+08:00",
+    "state_version": 28
+  }
 }

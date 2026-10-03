@@ -1,0 +1,44 @@
+{
+  "id": "81",
+  "subject": "整理 memory/role/opener.md(2449 字元,上限 2000)",
+  "created": "2026-10-03T16:58:05+08:00",
+  "objective": "由 fable, codex:gpt-6-astra 照 docs/DISCUSSION.md 的格式討論後壓縮 memory/role/opener.md,或者寫出理由把上限提高(D-006「老師帶學生」、D-007「沒有討論檔不准整理」、D-013「兩個模型、只留原則」);併入 memory/role/opener.inbox.md",
+  "acceptance": [
+    "`scripts/memory.py check` 對 memory/role/opener.md 退出碼 0",
+    "**兩個不同的模型**參與討論(fable, codex:gpt-6-astra);討論檔列得出雙方的分歧",
+    "整理後只留**具體的原則、行為準則、思考方式**;**不直接寫案例**,案例用票號當來源引用(例:「快照層只畫說得出處的畫面(#585)」)",
+    "案例原文留在紀錄類文件(DECISIONS 歸檔 / HANDOFF 歷史),記憶檔只留指路",
+    "保留的每一條仍帶日期 / 來源票號 / 實測或推論三個標記",
+    "提高上限的話,`cap_history` 有一列寫得出多讀的那幾百字省了什麼",
+    "討論存成 discussions/<date>-memory-<model>.md(docs/DISCUSSION.md 的格式)"
+  ],
+  "in_scope": [
+    "memory/role/opener.md",
+    "memory/role/opener.inbox.md"
+  ],
+  "out_of_scope": [
+    "docs/DECISIONS.md"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "memory/role/opener.md",
+    "memory/role/opener.inbox.md"
+  ],
+  "role": "consolidator",
+  "model": "fable, codex:gpt-6-astra",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "3531c9beae0dcf4ae35fe70064e62e548264970d",
+  "state": "Cancelled",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "派工照 `templates/dispatch-consolidator.md`(兩個模型各開一個 session、各貼一次;規則包 `python3 scripts/rules.py pack consolidator --model <模型>`,角色卡 `memory/role/consolidator.md`)。先各自寫討論檔、再互讀寫分歧,最後一位跑 `python3 scripts/memory.py consolidate memory/role/opener.md --discussion <討論檔>`。",
+  "handoff": "作廢(2026-10-03,開題者):非主線開的票。#74 第 1 輪 worker 在副本裡跑 `memory.py check` 時繼承了 auto-fix 傳下的 AC_ROOT(指向 A 本體),把 memory.over_cap 與 ticket.created #81 寫進真看板(events 2026-10-03T16:58:05,cwd=(repo 外))。內容與 #78(整理 opener 超標及 A 記憶錯層)重複,opener 超標由 #78 承接。外洩根因另開票處理。"
+}
