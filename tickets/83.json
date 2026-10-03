@@ -29,8 +29,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "3e3c82d3c9397aba1209ba364380f3bbc2d074d8",
-  "state": "Draft",
-  "state_version": 3,
+  "state": "Cancelled",
+  "state_version": 5,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -45,5 +45,6 @@
   "feature": "成本紀錄",
   "test_plan": "驗什麼/哪一層/怎麼驗/期望值來源:A1 單元:沙盒 repo 根下造非 JSON 的 log,絕對路徑傳 --from-envelope,讀票 cost[-1].note == 測試自拼的 'reports/t1/worker-round1.log 裡沒有 JSON 信封'。A2 單元:repo 外兄弟目錄的檔(非 JSON / 不存在 / 無 usage 三種),note 以 '../' 開頭、含原因字樣、assertNotIn 沙盒根絕對路徑。A3 單元:不加案例,既有 test_ticket.py cost 案例與 test_auto_fix.py 成本案例全綠當守衛。新案例方法名用 test_cost_note_records_the_envelope_path_relative_to_the_repo(可再加同前綴的子案例)。功能標籤:無(不動 verify/ 案例)。",
   "outline": "【來源】#75 第 2 輪 blocking 反駁(accepted):tickets/74.json 的 cost[0]/[1].note 含絕對路徑,test_no_project_names(tickets/*.json 為文件級,只禁家目錄絕對路徑前綴)在 main 紅;74.json 已由開題者用 ticket.py set 74 cost 清成相對路徑。【D-033 實測】寫入點不是 auto-fix.sh:note 由 scripts/ticket.py read_envelope() 的原因字串 '%s 裡沒有 JSON 信封' / '讀不到 %s' / '%s 的信封沒有 usage' 把傳入路徑原樣嵌入,cmd_cost 存進 note;auto-fix.sh:230、review.sh:393、land.sh:670 都經 ticket.py cost,修這一處全收(主線 scratchpad 的 astra-worker.sh 是否也經 ticket.py cost【未實測】,by 欄寫 astra-worker.sh 推定是)。root() = event.repo_root()。【設計裁示】note 裡的路徑以 repo 根為基準 os.path.relpath;stderr 訊息怎麼印交實作者。不放寬守衛、不加白名單。【不併 #82】#82 是 worker 環境隔離(Draft、依 #74、範圍 auto-fix.sh/review.sh),而本票寫入點在 ticket.py,併入只會擴大 #82 範圍並讓這個小修等它。【needs_verifier=false】A 的腳本票慣例,介面(note 字樣)寫死在驗收,實作者以變異自證。【規模】S:ticket.py 約 5–10 行、新案例 2–4 條。",
-  "needs_verifier": false
+  "needs_verifier": false,
+  "handoff": "作廢(2026-10-03,開題者):使用者裁示「新的 A 票只有一張,worker 改完一次測」,全文併入 #86 驗收 A1(A2 是同型新項);本票不派、不落地,留檔當來源。"
 }

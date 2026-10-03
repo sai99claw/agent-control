@@ -42,8 +42,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "91a17ba15453fa49cd381b0f7c7863b27a7582e0",
-  "state": "Draft",
-  "state_version": 3,
+  "state": "Cancelled",
+  "state_version": 5,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -66,5 +66,6 @@
   ],
   "outline": "【裁示原話 2026-09-30】「改A的東西 我是不是應該讓astra 直接改完?我總覺得這塊東西來來回回開票 發worker 沒有太大的意義」→ 折衷:票仍走管線,實作者可為 codex 模型。本票是讓管線真的能派 codex。\n【D-033 實測】① auto-fix.sh:131 WORKER_CMD 只讀 config worker.command;621-641 只從那句解析 --model,票的 model/tool 兩欄從頭到尾沒讀(grep 實測)。② worker 以 Popen(shell=True, stdin=派工文, cwd=副本 work/) 起(auto-fix.sh:982-);`codex exec --help` 實測:PROMPT 省略即讀 stdin,有 -m、-s {read-only,workspace-write,danger-full-access}、-C、--skip-git-repo-check、--json、-o;所以 stdin 餵法可沿用。副本 work/ 是 cp -R 出來的(auto-fix.sh:828),是否仍是 git repo【未實測】——不是的話要帶 --skip-git-repo-check(參考 tabby_pool/scripts/astra-review.sh:58 那句已在用)。③ 替身機制:tests/test_auto_fix.py 2144-2225 用 bindir 放假 `claude` + env(PATH=bindir:…) 的做法;codex 路徑同法放假 `codex`(記 argv、跑 BODY 寫 patch;429 變體印 `429 Too Many Requests` 後 exit 1)。harness DEFAULT_CONFIG worker.command=\"true\"、make_ticket 預設 model=opus/tool=claude-code,既有案例全走 claude 路,判斷鍵放在票的 tool(不是 routing.implement)就不會撞 test_events_record_the_worker_command_model_not_the_routing_label(它只改 routing)。④ cost:ticket.py cost 只認最後一行 type=result 的 claude 信封;codex --json 的 usage 事件形狀【未實測】→ A1 允許 token null(D-032「null=拿不到」),要不要順手解析交實作者判,不在驗收。⑤ 429 真實字樣【未實測】:codex 額度用完的輸出沒抓過(D-017 ③ 只記「週額用完」);判準寫成三個字樣任一命中,實作者若查到真實輸出以真實為準、EVIDENCE 記一行。⑥ ticket.py set model 無白名單、rules.py:289 model_card 用 model 冒號後那一半找模型卡——不動這兩處。\n【設計裁示】判斷鍵 = 票的 tool;model 只取 `codex:` 後的 id 給 -m。codex 命令寫死在 auto-fix.sh(不加 config 格:一個從沒被驗過的可設定格看起來與被驗過的一樣);verifier 路徑不動(仍 verifier.command / claude)。429 改派只改票不重派:同一次執行重派會讓 attempt 與 verifier 平行那手雙份,交給下一次 auto-fix。\n【needs_verifier=false 理由】A 的腳本票慣例(#79 同);實作者以 A7 的變異表自證紅,新案例放新檔避免 test_auto_fix.py 再長。\n【規模】S–M:auto-fix.sh 約 40–70 行、新測試檔 4–6 條。\n【前置】#79 落地(記憶 lint 會掃模型卡;本票先留 Draft)。",
   "test_plan": "驗什麼/哪一層/怎麼驗/期望值來源:A1 單元(subprocess 跑 scripts/auto-fix.sh 於 harness repo):bindir 假 codex 記 argv 到 log;期望 argv 起頭 `exec -m gpt-6-astra -s workspace-write`(從票面抄,不從腳本算);讀 events.jsonl 與票 cost[] 的 model 欄 = `codex:gpt-6-astra`。A2 單元:不加案例,跑既有 tests/test_auto_fix.py 全綠當守衛。A3/A4 單元:改票 tool/model 或把 bindir 拿掉,期望 rc=2、stderr 字樣、票 state==Ready、events 無 agent.start。A5 單元:假 codex 印 `429 Too Many Requests` exit 1;期望 stdout 含 `改派 opus`、票 model==opus/tool==claude-code/state==Ready、inbox 一頁。A6 單元:假 codex 印別的錯 exit 1;期望走既有沒交 patch 頁(state==Blocked)、stdout 無 `改派 opus`。每條在 EVIDENCE 附 `四問:` 與變異紅的第一行。功能標籤:無(不動 verify/ 案例)。",
-  "needs_verifier": false
+  "needs_verifier": false,
+  "handoff": "作廢(2026-10-03,開題者):使用者裁示「新的 A 票只有一張,worker 改完一次測」,全文併入 #86 驗收 A19–A25;本票不派、不落地,留檔當來源。"
 }

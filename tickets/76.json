@@ -49,7 +49,7 @@
   "attempt": 0,
   "base_sha": "e746e868a6f775f0b498f47e0b9570b890570efd",
   "state": "Blocked",
-  "state_version": 43,
+  "state_version": 44,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -69,7 +69,7 @@
       ],
       "base_ref": "e746e868a6f775f0b498f47e0b9570b890570efd",
       "base_sha": "e746e868a6f775f0b498f47e0b9570b890570efd",
-      "candidate": "/Users/franksai/ai_workspace/claude_workspace/agent-control-wt/t76",
+      "candidate": "../agent-control-wt/t76",
       "candidate_sha": "1622a9a55cc87a3c9b9b4a1a040e32c0c34c6851",
       "baseline": {
         "red": [
@@ -118,7 +118,7 @@
         "rc": 1,
         "cases": 15,
         "skipped": 0,
-        "log": "/Users/franksai/ai_workspace/claude_workspace/agent-control-wt/t76/gate.log.verify-case.d/logs/baseline.log"
+        "log": "../agent-control-wt/t76/gate.log.verify-case.d/logs/baseline.log"
       },
       "candidate_run": {
         "red": [],
@@ -129,7 +129,7 @@
         "rc": 0,
         "cases": 15,
         "skipped": 0,
-        "log": "/Users/franksai/ai_workspace/claude_workspace/agent-control-wt/t76/gate.log.verify-case.d/logs/candidate.log"
+        "log": "../agent-control-wt/t76/gate.log.verify-case.d/logs/candidate.log"
       }
     }
   },

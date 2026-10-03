@@ -43,12 +43,12 @@
     "code-map/INDEX.md"
   ],
   "role": "consolidator",
-  "model": "codex:gpt-6-astra",
+  "model": "opus",
   "tool": "codex",
   "attempt": 0,
   "base_sha": "234d4451d1ae5d07ad3c6f393e055198fdd43d2c",
   "state": "Draft",
-  "state_version": 4,
+  "state_version": 7,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -67,5 +67,10 @@
   "verify_strings": [
     "memory-maintenance.md"
   ],
-  "needs_verifier": false
+  "needs_verifier": false,
+  "handoff": "凍結(2026-10-03,開題者):記憶正文整理要兩個模型討論(D-007/D-013),不是 worker 的 code 改動,不併 #86;等 #86 落地(code-map 當去向 A28–A32、lint 當判準 A33–A37)後解凍人工派兩模型。opener 角色卡那句「verify_strings 是 list[str]」與 ticket.py 三種認法不一致,解凍時一併整理。",
+  "frozen": {
+    "reason": "使用者裁示 A 只留一張新票(#86);本票是兩模型記憶整理,不是 code,等 #86 落地",
+    "criterion": "#86 Done 且 memory.py lint / repo-map query 可用"
+  }
 }

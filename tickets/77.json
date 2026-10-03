@@ -58,8 +58,8 @@
   "tool": "codex",
   "attempt": 0,
   "base_sha": "234d4451d1ae5d07ad3c6f393e055198fdd43d2c",
-  "state": "Draft",
-  "state_version": 4,
+  "state": "Cancelled",
+  "state_version": 6,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -75,5 +75,6 @@
     "test_repo_map_contract",
     "repo-map.py"
   ],
-  "needs_verifier": false
+  "needs_verifier": false,
+  "handoff": "作廢(2026-10-03,開題者):使用者裁示「新的 A 票只有一張,worker 改完一次測」,全文併入 #86 驗收 A28–A32;本票不派、不落地,留檔當來源。"
 }

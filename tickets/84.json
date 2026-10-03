@@ -51,8 +51,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "71d949bde7664dcd0278add14426b3dba1f40a6b",
-  "state": "Draft",
-  "state_version": 1,
+  "state": "Cancelled",
+  "state_version": 3,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -66,5 +66,6 @@
     "D-013"
   ],
   "feature": "記憶治理",
-  "outline": "【來源】#76 原規劃第 5–7 點(啟動兩模型討論、coordinator 租約、模型身份證據),2026-10-03 開題者為讓 #76 一輪做得完拆出。【為什麼等 #80/#82】在 new-session 裡起 codex/claude 要先有『依票 model/tool 派』(#80)與『副本寫不進真看板、逾時收整棵行程樹』(#82),否則啟動端會重犯兩者。【規模】M,未實測;落地前留 Draft,由下一位開題者補測試計畫、verify_strings、needs_verifier。"
+  "outline": "【來源】#76 原規劃第 5–7 點(啟動兩模型討論、coordinator 租約、模型身份證據),2026-10-03 開題者為讓 #76 一輪做得完拆出。【為什麼等 #80/#82】在 new-session 裡起 codex/claude 要先有『依票 model/tool 派』(#80)與『副本寫不進真看板、逾時收整棵行程樹』(#82),否則啟動端會重犯兩者。【規模】M,未實測;落地前留 Draft,由下一位開題者補測試計畫、verify_strings、needs_verifier。",
+  "handoff": "作廢(2026-10-03,開題者):使用者裁示「新的 A 票只有一張,worker 改完一次測」,全文併入 #86 驗收 A39–A41;本票不派、不落地,留檔當來源。"
 }
