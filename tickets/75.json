@@ -45,9 +45,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "3e3c82d3c9397aba1209ba364380f3bbc2d074d8",
-  "state": "Ready",
-  "state_version": 25,
+  "base_sha": "331832e8716946c1633bd9b286e65bcef7a3f54a",
+  "state": "Done",
+  "state_version": 37,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -94,14 +94,66 @@
       "by": "auto-fix.sh",
       "note": null,
       "at": "2026-10-03T18:39:38+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 28,
+      "tokens_out": 9873,
+      "cache_write": 40604,
+      "cache_read": 577562,
+      "wall_seconds": 115,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-03T18:46:02+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 10,
+      "tokens_out": 4732,
+      "cache_write": 38721,
+      "cache_read": 185106,
+      "wall_seconds": 57,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-03T18:49:22+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 10,
+      "tokens_out": 3853,
+      "cache_write": 17875,
+      "cache_read": 201859,
+      "wall_seconds": 40,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-03T18:50:04+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 535,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-10-03T19:10:45+08:00"
     }
   ],
   "branch": "t75",
   "gate": {
-    "rc": 1,
-    "sha": "2db927f49954a27ad1d69b321dd9c4669bb57bf9",
-    "run_id": "20261003-183711-38181",
-    "at": "2026-10-03T18:38:13+08:00"
+    "rc": 0,
+    "sha": "8808f02651bb22864f886e527696e1378d63d89c",
+    "run_id": "20261003-184718-87004",
+    "at": "2026-10-03T18:48:24+08:00"
   },
   "repair_round": 1,
   "objections": [
@@ -112,7 +164,23 @@
       "owner": "main",
       "disposition": "accepted",
       "follow_up": "tickets/74.json 的 cost[0]/[1].note 已用 ticket.py set 74 cost 改成相對路徑(74 v29),A main 上 test_no_project_names 轉綠;寫入端(ticket.py read_envelope/cmd_cost 把傳入的絕對路徑原樣嵌進 note)另開 #83,不併 #82。"
+    },
+    {
+      "category": "blocking",
+      "body": "t75 branch (2db927f) is parented on 3e3c82d, not on 331832e where main fixed tickets/74.json; the only red is that file, a worker patch cannot fix it, so main must rebase/merge t75 onto 331832e (git write) and re-run the gate.",
+      "evidence": "../agent-control-wt/fix-t75/round2/EVIDENCE-round2.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "main rebased the round-1 implementation onto main 331832e via apply.sh rebase; base_sha updated; branch re-applied"
     }
   ],
-  "owner": "main"
+  "owner": "main",
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "a202c291de88eea61c219894152c8359596fba81",
+    "note": "reports/t75/20261003-184718-87004/REVIEW.md",
+    "at": "2026-10-03T19:10:46+08:00",
+    "state_version": 37
+  }
 }
