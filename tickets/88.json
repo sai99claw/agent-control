@@ -1,0 +1,120 @@
+{
+  "id": "88",
+  "subject": "A 收尾 prompt 票(#86 拆出):模型卡清單、派工文與範本規矩、SCHEMA 契約句、記憶分層契約、CODE-MAP 與記憶文件對齊 #87 的新入口(opus 覆核逐檔審)",
+  "created": "2026-10-03T22:39:22+08:00",
+  "objective": "給模型讀的文字(memory/*/README.md、CLAUDE.md、docs/DISPATCH-TEMPLATE.md、WORKFLOW.md、SESSION-START.md、MEMORY.md、CODE-MAP.md、tickets/SCHEMA.md、templates/dispatch-verifier.md 與 dispatch-consolidator.md)與 #87 落地後的程式一致:寫到的入口、旗標、字樣都存在,分層契約只有一份正文,沒有該由程式強制卻只寫在文字上的規則。不寫單元測試;驗收由 review.sh 的 opus 覆核者照 P11 審查清單逐檔判,既有守衛不改仍綠(P12)。",
+  "acceptance": [
+    "P1 [原 A6 的文字半] memory/model/README.md 列的卡名與 memory/model/ 目錄實際檔名(不含 README.md 與 *.inbox.md)逐一一致:opus、fable、gpt-5.6-sol、gpt-6-astra、gemini-3.8-flash-high(最後一張由 #87 A6 補);不再出現 sonnet、codex-sol、agy-gemini 三個不存在的名字;加一句規則,逐字含「routing 值去掉冒號前的工具前綴就是檔名」。覆核:ls memory/model 對照、讀 scripts/rules.py 的 model_card 確認取法相同。",
+    "P2 [原 A8 的文字半] docs/DISPATCH-TEMPLATE.md 開場(規則包那段)加一句:`rules.py pack` rc=2 時 agent 停下、回報逐字「模型低於這個角色的 routing 下限」,不自行繼續。覆核:scripts/rules.py 的 pack 在該條件確實 rc=2、stderr 含「低於 routing 下限」(#87 A8)。",
+    "P3 [原 A16,整條] docs/WORKFLOW.md「一票一分支一副本」段多一句,含字串「拋棄式控制根」,說明 auto-fix 派的 agent 在副本裡跑腳本時寫入落在哪、何時隨副本一起收;docs/SESSION-START.md「副本裡不發事件,由派工方代發」段與之對齊(手派的人照舊可自帶 AC_ROOT,auto-fix 派的不再帶)。覆核:哪些 AC_* 不帶、拋棄式根在哪建、何時刪,與 scripts/auto-fix.sh 的實作逐項一致(#87 A9–A15)。",
+    "P4 [原 A18 的文字半] templates/dispatch-verifier.md 與 docs/DISPATCH-TEMPLATE.md 的 worker 段寫同一條規矩:只跑派工文「## 只准跑的測試」段列的測試,不跑全套(unittest discover 整組、gate.sh --full)、不跑 verify.py 全部回歸 —— 回歸是閘門的事,閘門紅由 auto-fix 下一輪派 worker 處理,全套只在 land 跑一次;票沒有 test_plan 時只跑自己改到的 tests/ 檔。段名與用字和 #87 A18 由 auto-fix.sh 產生的段落一致。templates/dispatch-worker.md 不存在(worker 派工文由 auto-fix.sh 組),不新建。",
+    "P5 [原 A25 的文字半] tickets/SCHEMA.md 執行那一列補契約:model 欄 `codex:<id>` 必配 tool=codex(逐字含「必配 tool=codex」),兩格不一致 auto-fix 拒派(rc=2、票留 Ready);codex 額度用完(429 / rate limit / usage limit)auto-fix 改派 opus、票回 Ready。覆核:與 scripts/auto-fix.sh 的一致性檢查與改派分支逐項對得上(#87 A21、A23)。",
+    "P6 [原 A26 的文字半] tickets/SCHEMA.md 交付那一列的 patch_ref 補一句,逐字含「apply.sh 收件時寫」,並寫明相對主 repo 根、repo 外以 '../' 開頭、不含絕對路徑。覆核:scripts/apply.sh 收件與 rebase 兩條路都寫 patch_ref(#87 A26)。",
+    "P7 [原 #77 規劃 7 / A28–A32 的文字半] docs/CODE-MAP.md 寫 repo-map 的 build / check / query 各一句用途、閘門對過期索引必擋、專案的 catalog 與 index 歸專案所有不被同步覆蓋;docs/DISPATCH-TEMPLATE.md 加一句:查實作位置先 `python3 scripts/repo-map.py query <主題或符號>`,查不到或 check 非零才對來源針對性 grep。覆核:三個子命令與「查不到非零」在 scripts/repo-map.py 存在(#87 A28–A31),freshness 檢查在 scripts/gate.sh(#87 A32)。",
+    "P8 [原 #79 規劃 1–2 / A33–A37 的文字半] 記憶分層契約只寫一份正文、其他處指路:memory/role/README.md 寫正文(role/model 只存通用原則與自身反思;project 存專案設計理由與不變條件;具體命令、符號、易變事實去 code-map / reference;事故去票與 review 歷史);CLAUDE.md、docs/MEMORY.md、memory/project/README.md 各一句指向它,不另寫第二份規則。lint 的 rule id(path / line / call / flag / sha)與例外標記格式(`memory-allow rule=… value=… reason=… ref=…`)照 scripts/memory.py 實作逐字寫;容量數字(主卡正文字元上限、角色卡行數、inbox 行數、規則包 bytes)照程式現值與既有裁示寫,不改數字(D-006 / D-013 / D-021)。#79 開題時讀碼記下兩處矛盾(未重測):README「角色卡不受 2K 上限管」與程式實際檢查、MEMORY.md「project 全讀/受限」與「按需/不限」兩種說法 —— 以程式現行行為與裁示為準改文字;程式與裁示本身衝突的,不改文字、寫 OBJECTION(ticket-wrong)。",
+    "P9 [原 A38 的文字半] docs/MEMORY.md 寫清「已有整理票」判準:開著(不在終態)且 allowed_write_paths 覆蓋該記憶檔的任何票都算,不只 role=consolidator;有就不新開票。覆核:與 scripts/memory.py check 的判定一致(#87 A38)。",
+    "P10 [原 A39–A41 的文字半] templates/dispatch-consolidator.md「怎麼用」段補:主線開場由 scripts/new-session.sh 對符合條件的整理票叫 scripts/consolidate-memory.sh,依 board/config.json memory.consolidators 自動起兩個模型,同一張票租約排他;命令缺 / 退出非零 / 逾時 → 票轉 NeedsDecision 並發 decision 頁;人工貼範本的用法保留。`<…>` 佔位的名字一個都不改(consolidate-memory.sh 照現有佔位填,改名會壞)。覆核:說法與 #87 A39–A41 實作一致。",
+    "P11 [覆核審查清單 —— 本票的主驗收;review.sh 的 opus 覆核者照它逐檔判] 對本票改到的每個檔、每段新增或改寫的文字:(a) 與 docs/DECISIONS.md 現行裁示、tickets/SCHEMA.md 欄位契約、memory/role/README.md 分層契約無矛盾 —— 有矛盾即 fail,objection 引裁示編號或 SCHEMA 列名並並列兩邊原文;(b) 文中點名的每個腳本、子命令、旗標、設定鍵、檔名、輸出字樣,在分支上的程式裡存在且行為如文所述(grep 得到檔:行)—— 不存在或行為不符即 fail;(c) 只寫在文字上、但可由程式強制的規則(「必須 / 不准 / 一定」類句子而程式沒有守衛)逐條列出:屬 #87 驗收本該強制而沒有的 → 擋落地;#87 範圍外的 → 「可之後再說」並寫建議歸哪張票;(d) 沒有家目錄絕對路徑、沒有專案名;(e) 分層:命令、函式、行號、sha、事故敘事不寫進角色卡或模型卡正文(那些檔本票 out_of_scope 硬擋),README 與 docs 裡的具體入口只當指路;(f) 同一條規則只有一處正文、其他處指路 —— 同一規則出現兩種說法即 fail。REVIEW.md 逐條表寫「驗收 → 文字檔:行 → 對到的程式檔:行」;本票沒有測試案例,「守它的案例」一欄寫「無(文字票,依 P11 判)」,不因此 fail,垃圾案例清單不適用。",
+    "P12 [既有守衛,不寫新測試] 閘門對本票改到的檔排到的模組(test_no_project_names、test_memory、test_dispatch_template、test_rules_delivery、test_ticket、test_sync_to_project)不改一行仍綠;閘門依 #87 A35 對本分支改到的記憶檔跑的 memory.py lint 為 0(README 是否在掃描範圍照 #87 實作)。本票不新增、不修改任何 tests/ 檔;某支守衛釘住了必須改的段落 → 不改測試,寫 OBJECTION(ticket-wrong)交主線。"
+  ],
+  "in_scope": [
+    "CLAUDE.md",
+    "docs/CODE-MAP.md",
+    "docs/DISPATCH-TEMPLATE.md",
+    "docs/MEMORY.md",
+    "docs/SESSION-START.md",
+    "docs/WORKFLOW.md",
+    "memory/model/README.md",
+    "memory/project/README.md",
+    "memory/role/README.md",
+    "templates/dispatch-consolidator.md",
+    "templates/dispatch-verifier.md",
+    "tickets/SCHEMA.md"
+  ],
+  "out_of_scope": [
+    "scripts/*",
+    "tests/*",
+    "verify/*",
+    "board/*",
+    "code-map/*",
+    "memory/model/gemini-3.8-flash-high.md",
+    "memory/role/opener.md",
+    "memory/role/implementer.md",
+    "memory/role/main.md",
+    "memory/role/verifier.md",
+    "memory/role/reviewer.md",
+    "memory/role/consolidator.md",
+    "memory/role/design.md",
+    "memory/model/opus.md",
+    "memory/model/fable.md",
+    "memory/model/gpt-5.6-sol.md",
+    "memory/model/gpt-6-astra.md",
+    "memory/*/*.inbox.md",
+    "memory/project/gate.md",
+    "memory/project/log-parsing.md",
+    "memory/project/pipeline.md",
+    "memory/project/sandbox.md",
+    "templates/dispatch-reviewer.md",
+    "templates/dispatch-opener.md",
+    "docs/DECISIONS.md",
+    "docs/HANDOFF.md"
+  ],
+  "depends_on": [
+    {
+      "id": "87",
+      "condition": "落地(覆核前必須;worker 可在 #87 Running 時以 --no-review 平行派,覆核前 apply.sh rebase 到含 #87 的主線)"
+    }
+  ],
+  "allowed_write_paths": [
+    "CLAUDE.md",
+    "docs/CODE-MAP.md",
+    "docs/DISPATCH-TEMPLATE.md",
+    "docs/MEMORY.md",
+    "docs/SESSION-START.md",
+    "docs/WORKFLOW.md",
+    "memory/model/README.md",
+    "memory/project/README.md",
+    "memory/role/README.md",
+    "templates/dispatch-consolidator.md",
+    "templates/dispatch-verifier.md",
+    "tickets/SCHEMA.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "50819be56b7bfa8c061e37b1835f4c932b73eec1",
+  "state": "Ready",
+  "state_version": 10,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "【裁示】使用者 2026-10-03:「把86切成2張 一張是改code 一張是改prompt 分別跑的測試照前面說的 一邊跑regression 一邊跑llm review (opus)」。本票是 prompt 那一張:#86 的 A16 整條 + A6 A8 A18 A25 A26 A38 A39–A41 的文字半 + 原 #77 規劃 7、#79 規劃 1–2 的文件交付(#86 的寫入範圍有、驗收沒寫出來的那幾份)= P1–P12。對照表 docs/review/20261003-a-reticket.md「#86 拆票」。\n【依賴】depends_on #87 落地:P1–P10 每條都指向 #87 新增的入口,覆核的 (b) 要在分支上 grep 得到。可先做:worker 可在 #87 Running 時平行派(`auto-fix.sh 88 --no-review`),入口名、旗標、字樣全照 #87 票面釘的寫;P8 的分層原則句不依賴任何入口。覆核必須等 #87 落地後:`apply.sh rebase 88 <patch>` 套到含 #87 的主線 → `review.sh 88`。不想管兩段的話就等 #87 落地再派,本票短。\n【驗收方式】needs_verifier=false:沒有可寫成單元案例的行為;正確性是「文字與程式、裁示、契約一致」,由 opus 覆核者照 P11 判(reviewer 角色卡要求的「守它的案例」本票寫無,P11 已說明)。回歸只靠既有守衛(P12)。\n【寫入範圍不重疊】本票 12 個文字檔列在 #87 out_of_scope 硬擋;scripts/* tests/* verify/* board/* code-map/* 與 gemini 卡列在本票 out_of_scope 硬擋。既有角色卡、模型卡、inbox、memory/project 各卡正文不動(記憶正文整理是 #78)。\n【逾時 3600 秒:只計 worker 自己的三段,不含閘門與覆核(未實測)】①寫文字:12 檔約 150–300 行,大半是一兩句增補,最重的是分層契約(一份正文 + 三處指路)與 CODE-MAP.md;每句先 grep #87 的入口 → 30–40 分。②跑指定測試:P12 那六支守衛約 1–2 分,跑兩輪 ≈ 5 分。③變異自證:0(沒有新測試)。合計 35–45 分,×1.3 ≈ 60 分 → 3600。覆核 config reviewer.timeout_seconds 1800 夠(讀 12 檔 + grep 入口;#76 reviewer 121 秒)。\n【#78 不併】見對照表:#78 要兩模型討論(D-007/D-013)且以本票寫定的分層契約為判準,建議 depends_on 改成 #87 + #88 落地後解凍。",
+  "test_plan": "worker 只寫文字 + 跑本段列的守衛測試;不跑全套(unittest discover 整組、gate.sh --full)、不跑 verify.py 全部回歸 —— 回歸是閘門的事:auto-fix 收 patch 後跑閘門,閘門紅由 auto-fix 下一輪派 worker 處理。全套只在 land 跑一次。\nworker 不寫、不改任何 tests/ 檔;不跑全套、不跑 gate.sh --full、不跑 verify.py。\n交件前只跑:python3 -m unittest tests.test_no_project_names;cd tests && python3 -m unittest test_memory test_dispatch_template test_rules_delivery test_ticket test_sync_to_project(閘門對照表對本票改到的檔會排到的這組)。\n#87 落地後才有的兩支:python3 scripts/memory.py lint --json(本票改到的記憶檔為 0);python3 scripts/repo-map.py check(為 0;本票不改 code-map,但 CODE-MAP.md 寫的子命令要真的跑得起來)。\n自檢(給覆核者的對照起點):EVIDENCE 列一張表「文字檔:行 → 程式檔:行」,每個寫進文字的入口、旗標、設定鍵、輸出字樣各 grep 一次;grep 不到的不准寫進文字。\n變異:無(沒有新測試);EVIDENCE result 的 mutations 留 []。\n閘門跑對照表模組(上面那組);覆核 review.sh(opus)照 P11 判,這是本票的主驗收。",
+  "feature": "agent-control 工具鏈收尾(prompt)",
+  "decision_refs": [
+    "D-040",
+    "D-006",
+    "D-013",
+    "D-021",
+    "D-022",
+    "D-039"
+  ],
+  "verify_strings": [
+    "routing 值去掉冒號前的工具前綴就是檔名",
+    "模型低於這個角色的 routing 下限",
+    "拋棄式控制根",
+    "必配 tool=codex",
+    "apply.sh 收件時寫"
+  ],
+  "needs_verifier": false,
+  "interface_fixed": false,
+  "worker": {
+    "timeout_seconds": 3600
+  }
+}

@@ -141,8 +141,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "45d2d9ccb3e7ba86b9091bdeda4d0c779f6fabda",
-  "state": "Ready",
-  "state_version": 6,
+  "state": "Cancelled",
+  "state_version": 8,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -179,5 +179,6 @@
   "interface_fixed": false,
   "worker": {
     "timeout_seconds": 10800
-  }
+  },
+  "handoff": "拆成 #87(code)/ #88(prompt)(2026-10-03,開題者;使用者裁示「把86切成2張 一張是改code 一張是改prompt」)。#87 = A1–A15、A17–A41 共 40 條(A6 A8 A18 A25 A26 A38 A39 的文字半移走),測試 + 閘門回歸;#88 = A16 + 上述七條的文字半 + #77/#79 的文件交付共 P1–P12,opus 覆核照 P11 清單審。#88 depends_on #87。逐條去向:docs/review/20261003-a-reticket.md「#86 拆票」。"
 }
