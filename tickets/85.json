@@ -31,9 +31,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "52ddb0a78e1f74633b69a2123e18c055c69b5ba7",
-  "state": "Ready",
-  "state_version": 3,
+  "base_sha": "9d4fabf5564a5c33947450dc565a790ab7f103ba",
+  "state": "Done",
+  "state_version": 12,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -52,5 +52,62 @@
     "\"verify\": \"opus\"",
     "驗證者是判斷工作"
   ],
-  "needs_verifier": false
+  "needs_verifier": false,
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 32,
+      "tokens_out": 12732,
+      "cache_write": 46319,
+      "cache_read": 683334,
+      "wall_seconds": 145,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-03T19:31:26+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 6,
+      "tokens_out": 3001,
+      "cache_write": 31876,
+      "cache_read": 89789,
+      "wall_seconds": 30,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-03T19:32:24+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 570,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-10-03T19:41:54+08:00"
+    }
+  ],
+  "branch": "t85",
+  "gate": {
+    "rc": 0,
+    "sha": "d0f5c501aa0407fea20060f3e32698aa8d143715",
+    "run_id": "20261003-193127-17541",
+    "at": "2026-10-03T19:31:54+08:00"
+  },
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "e746e868a6f775f0b498f47e0b9570b890570efd",
+    "note": "reports/t85/20261003-193127-17541/REVIEW.md",
+    "at": "2026-10-03T19:41:55+08:00",
+    "state_version": 12
+  }
 }

@@ -261,3 +261,8 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 ## D-038(2026-09-30)建立實作速查入口
 使用者原話:「實作相關的東西應該有個架構可以讓 agent 速查到需要的東西而不是每次都 grep。」
 - 實作提案(Astra):延伸既有 code-map,可重生的 repo map(aider repo map 形式)連結架構、裁示與 reference,閘門驗索引新鮮度(#77)。
+
+## D-039(2026-10-03)主線與開題者的建議模型改為 opus 或以上
+使用者原話:「agent-control 的開題者 主線 建議模型 改成opus 或以上」
+- 起因:board/config.json 的 routing.main / routing.open 是 fable,但 10/03 主線 session 跑在 opus、派的開題者也全是 opus,結果可用;使用者裁示下限放寬為 opus。
+- 落實:routing.main、routing.open 改 opus(fable 仍可用,屬「以上」);board/config.json 受保護,走票(排在 #85 之後,兩張同改 config)。design/bug 未裁,維持 fable。

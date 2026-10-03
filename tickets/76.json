@@ -47,9 +47,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "52ddb0a78e1f74633b69a2123e18c055c69b5ba7",
-  "state": "Ready",
-  "state_version": 28,
+  "base_sha": "e746e868a6f775f0b498f47e0b9570b890570efd",
+  "state": "Blocked",
+  "state_version": 43,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -57,8 +57,81 @@
       "tests/test_memory_lifecycle.py"
     ],
     "tags": [],
-    "run": "python3 -m unittest discover -s tests -p 'test_memory_lifecycle.py'",
-    "notes": "驗證者寫 A1–A7;只斷言票面寫出的字串、檔案內容、事件與退出碼(interface_fixed=true)。"
+    "run": "env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR python3 -m unittest discover -s tests -p 'test_memory_lifecycle.py'",
+    "notes": "A1–A8 各至少一個案例,全走 control_harness.Sandbox + memory.py / new-session.sh 子行程,約 1–2 分鐘。檔頂 TAGS=['memory-lifecycle'](片段 verify/TAGS.d/76.md)只為過 lint F2;verify.py 只掃 verify/,所以票的 verify.tags 故意留空,回歸靠 gate.sh 的 scripts/memory.py) 對照格(A8 要 worker 加)。讀不準的介面形狀:討論檔頭三行放在 front matter(--- 夾住),結論行 `- L<n>: <處置>`;--file 與 --discussion 用 repo 相對路徑;check-stale 輸出以 `memory: <inbox>:` 前綴過濾後逐行比。A3 併發案例在乾淨基底上這一趟恰好紅(開了 2 張),但票面說它只當回歸、競態不保證每次紅。A2 跨 repo 案例用 cwd=另一個沙盒目錄跑,守的是「不以 cwd 找票庫」。A7 main 那一條與 A4 字元形 subject 在基底上本來就綠(回歸)。A8 只檢查四條具名舊案例改用 --candidate;無討論/無結論兩條拒絕案例的改寫留給覆核看。",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-03T20:00:12+08:00",
+      "files": [
+        "tests/test_memory_lifecycle.py"
+      ],
+      "base_ref": "e746e868a6f775f0b498f47e0b9570b890570efd",
+      "base_sha": "e746e868a6f775f0b498f47e0b9570b890570efd",
+      "candidate": "/Users/franksai/ai_workspace/claude_workspace/agent-control-wt/t76",
+      "candidate_sha": "1622a9a55cc87a3c9b9b4a1a040e32c0c34c6851",
+      "baseline": {
+        "red": [
+          "tests.test_memory_lifecycle.A1ReadOnlyLeavesNoTrace.test_a1_read_only_check_and_check_stale_change_nothing",
+          "tests.test_memory_lifecycle.A2StaleSources.test_a2_another_repo_with_the_same_number_does_not_count",
+          "tests.test_memory_lifecycle.A2StaleSources.test_a2_only_fresh_entries_exit_zero",
+          "tests.test_memory_lifecycle.A2StaleSources.test_a2_seven_entries_classify_in_order",
+          "tests.test_memory_lifecycle.A2StaleSources.test_a2_seven_entries_classify_in_order",
+          "tests.test_memory_lifecycle.A2StaleSources.test_a2_seven_entries_classify_in_order",
+          "tests.test_memory_lifecycle.A3OneConsolidationTicket.test_a3_a_glob_scoped_open_ticket_covers_the_card",
+          "tests.test_memory_lifecycle.A3OneConsolidationTicket.test_a3_two_checks_at_once_open_exactly_one",
+          "tests.test_memory_lifecycle.A4TicketContents.test_a4_an_inbox_over_its_lines_opens_a_lines_shaped_ticket",
+          "tests.test_memory_lifecycle.A4TicketContents.test_a4_needs_review_alone_opens_one_ticket",
+          "tests.test_memory_lifecycle.A5RefusalsTouchNothing.test_a5_each_bad_input_is_refused_and_nothing_moves",
+          "tests.test_memory_lifecycle.A6OnlyTheSnapshotIsConsumed.test_a6_a_note_after_the_snapshot_survives",
+          "tests.test_memory_lifecycle.A7OnlyTheMainLineOpens.test_a7_a_worker_goes_on_and_opens_nothing",
+          "tests.test_memory_lifecycle.A8GateAndOldCases.test_a8_the_gate_runs_the_lifecycle_cases_for_memory_py",
+          "tests.test_memory_lifecycle.A8GateAndOldCases.test_a8_the_old_consolidate_cases_use_the_new_contract",
+          "tests.test_memory_lifecycle.A8GateAndOldCases.test_a8_the_old_consolidate_cases_use_the_new_contract",
+          "tests.test_memory_lifecycle.A8GateAndOldCases.test_a8_the_old_consolidate_cases_use_the_new_contract",
+          "tests.test_memory_lifecycle.A8GateAndOldCases.test_a8_the_old_consolidate_cases_use_the_new_contract"
+        ],
+        "red_lines": [
+          "tests.test_memory_lifecycle.A1ReadOnlyLeavesNoTrace.test_a1_read_only_check_and_check_stale_change_nothing: AssertionError: 2 != 1 : memory: 不認得 'check-stale'(check / note / harvest / consolidate)",
+          "tests.test_memory_lifecycle.A2StaleSources.test_a2_another_repo_with_the_same_number_does_not_count: AssertionError: '3 fresh #3 Ready' not found in [] : memory: 不認得 'check-stale'(check / note / harvest / consolidate)",
+          "tests.test_memory_lifecycle.A2StaleSources.test_a2_only_fresh_entries_exit_zero: AssertionError: 2 != 0 : memory: 不認得 'check-stale'(check / note / harvest / consolidate)",
+          "tests.test_memory_lifecycle.A2StaleSources.test_a2_seven_entries_classify_in_order: AssertionError: 2 != 1 : memory: 不認得 'check-stale'(check / note / harvest / consolidate)",
+          "tests.test_memory_lifecycle.A2StaleSources.test_a2_seven_entries_classify_in_order: AssertionError: 2 != 1 : memory: 不認得 'check-stale'(check / note / harvest / consolidate)",
+          "tests.test_memory_lifecycle.A2StaleSources.test_a2_seven_entries_classify_in_order: AssertionError: 2 != 1 : memory: 不認得 'check-stale'(check / note / harvest / consolidate)",
+          "tests.test_memory_lifecycle.A3OneConsolidationTicket.test_a3_a_glob_scoped_open_ticket_covers_the_card: AssertionError: '已經有一張開著的整理票 #7' not found in 'memory: memory/role/opener.md **2500 / 2000 超過**(設定的上限)\\nticket: #8 開好了 -> tickets/8.json\\n' : memory: memory/role/opener.md **2500 / 2000 超過**(設定的上限)",
+          "tests.test_memory_lifecycle.A3OneConsolidationTicket.test_a3_two_checks_at_once_open_exactly_one: AssertionError: 2 != 1 : [('memory: memory/role/opener.md **2500 / 2000 超過**(設定的上限)\\nticket: #1 開好了 -> tickets/1.json\\n', ''), ('memory: memory/role/opener.md **2500 / 2000 超過**(設定的上限)\\nticket: #2 開好了 -> tickets/2.json\\n', '')]",
+          "tests.test_memory_lifecycle.A4TicketContents.test_a4_an_inbox_over_its_lines_opens_a_lines_shaped_ticket: AssertionError: 'inbox 21 行,上限 20 行' not found in '整理 memory/role/worker.md(21 字元,上限 20)'",
+          "tests.test_memory_lifecycle.A4TicketContents.test_a4_needs_review_alone_opens_one_ticket: AssertionError: 0 != 1 : memory: memory/role/reviewer.md 6 / 2000(設定的上限)",
+          "tests.test_memory_lifecycle.A5RefusalsTouchNothing.test_a5_each_bad_input_is_refused_and_nothing_moves: AssertionError: 0 == 0 : memory: memory/model/opus.md 5 -> 83 字元(併入 77)、上限 2000 -> 2000、討論 d/b.md",
+          "tests.test_memory_lifecycle.A6OnlyTheSnapshotIsConsumed.test_a6_a_note_after_the_snapshot_survives: AssertionError: 2 != 0 : memory: 不認得 'snapshot'(check / note / harvest / consolidate)",
+          "tests.test_memory_lifecycle.A7OnlyTheMainLineOpens.test_a7_a_worker_goes_on_and_opens_nothing: AssertionError: Lists differ: ['1'] != []",
+          "tests.test_memory_lifecycle.A8GateAndOldCases.test_a8_the_gate_runs_the_lifecycle_cases_for_memory_py: AssertionError: 'test_memory_lifecycle' not found in ' add test_memory test_memory_note_names ;;'",
+          "tests.test_memory_lifecycle.A8GateAndOldCases.test_a8_the_old_consolidate_cases_use_the_new_contract: AssertionError: '--candidate' not found in '    def test_the_inbox_is_merged_in_and_then_gone(self):\\n        self.write(\"memory/model/opus.md\", FRONT % 2000 + \"舊的一條\\\\n\")\\n        self.write(\"memory/model/opus.inbox.md\", \"整理期間新記的一條\\\\n\")\\n        done = self.memory(\"consolidate\", \"memory/model/opus.md\",\\n                           \"--discussion\", self.talk())\\n        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)\\n        text = self.read(\"memory/model/opus.md\")\\n        self.assertIn(\"舊的一條\", text)\\n        self.assertIn(\"整理期間新記的一條\", text)\\n        self.assertFalse(self.exists(\"memory/model/opus.inbox.md\"),\\n                         \"併過的 inbox 要收掉,不然下一輪會再併一次\")\\n        consumed = [name for name in os.listdir(os.path.join(self.repo, \"memory\", \"model\"))\\n                    if name.startswith(\"opus.inbox.md.\") and name.endswith(\".consumed\")]\\n        self.assertEqual(len(consumed), 1)\\n'",
+          "tests.test_memory_lifecycle.A8GateAndOldCases.test_a8_the_old_consolidate_cases_use_the_new_contract: AssertionError: '--candidate' not found in '    def test_a_note_during_consolidation_lands_in_a_new_inbox(self):\\n        self.write(\"memory/model/opus.md\", FRONT % 2000 + \"舊的一條\\\\n\")\\n        self.write(\"memory/model/opus.inbox.md\", \"待整理的一條\\\\n\")\\n        talk = self.talk()\\n        entered = threading.Event()\\n        release = threading.Event()\\n        original = memory_module.write\\n\\n        def blocked_write(path, text):\\n            entered.set()\\n            self.assertTrue(release.wait(5))\\n            original(path, text)\\n\\n        result = []\\n        env = {\"AC_ROOT\": self.repo}\\n\\n        def consolidate():\\n            with mock.patch.dict(os.environ, env, clear=False), \\\\\\n                    mock.patch.object(memory_module, \"write\", side_effect=blocked_write):\\n                result.append(memory_module.cmd_consolidate(\\n                    [\"memory/model/opus.md\", \"--discussion\", talk]))\\n\\n        thread = threading.Thread(target=consolidate)\\n        thread.start()\\n        self.assertTrue(entered.wait(5), \"consolidate 沒有在鎖內走到主檔寫入\")\\n        noted = self.memory(\"note\", \"model\", \"opus\", \"整理同時寫入的新原則\",\\n                            \"--ticket\", \"2\", \"--by\", \"worker@opus\")\\n        self.assertEqual(noted.returncode, 0, noted.stdout + noted.stderr)\\n        release.set()\\n        thread.join(5)\\n        self.assertEqual(result, [0])\\n        inbox = self.read(\"memory/model/opus.inbox.md\")\\n        self.assertIn(\"整理同時寫入的新原則\", inbox)\\n        self.assertNotIn(\"待整理的一條\", inbox, \"已被整理的舊 inbox 不該混進新 inbox\")\\n'",
+          "tests.test_memory_lifecycle.A8GateAndOldCases.test_a8_the_old_consolidate_cases_use_the_new_contract: AssertionError: '--candidate' not found in '    def test_still_over_the_cap_after_consolidating_is_not_reported_as_done(self):\\n        \"\"\"「整理完了」與「整理完還是超過」不能都是退出碼 0。\"\"\"\\n        self.write(\"memory/model/opus.md\", FRONT % 2000 + \"坑\" * 2500)\\n        done = self.memory(\"consolidate\", \"memory/model/opus.md\",\\n                           \"--discussion\", self.talk())\\n        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)\\n        self.assertIn(\"還是超過上限\", done.stdout)\\n\\n'",
+          "tests.test_memory_lifecycle.A8GateAndOldCases.test_a8_the_old_consolidate_cases_use_the_new_contract: AssertionError: '--candidate' not found in '    def test_a_reasoned_raise_is_written_into_the_file_with_its_history(self):\\n        self.write(\"memory/model/opus.md\", FRONT % 2000 + \"坑\\\\n\")\\n        name = self.talk()\\n        done = self.memory(\"consolidate\", \"memory/model/opus.md\",\\n                           \"--discussion\", name, \"--new-cap\", \"2600\", \"--by\", \"fable\",\\n                           \"--reason\", \"四條反例各不相同,合併會失去可辨識性\")\\n        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)\\n        text = self.read(\"memory/model/opus.md\")\\n        self.assertIn(\"cap_chars: 2600\", text)\\n        self.assertIn(\"from: 2000, to: 2600\", text)\\n        self.assertIn(\"by: fable\", text)\\n        self.assertIn(\"discussion: %s\" % name, text,\\n                      \"cap_history 那一列要指得回支撐它的討論(D-007)\")\\n        self.assertIn(\"失去可辨識性\", text)\\n        rows = [row for row in self.events() if row[\"kind\"] == \"memory.consolidated\"]\\n        self.assertEqual(len(rows), 1)\\n        self.assertEqual(rows[0][\"cap_from\"], 2000)\\n        self.assertEqual(rows[0][\"cap_to\"], 2600)\\n        self.assertEqual(rows[0][\"discussion\"], name)\\n'"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 15,
+        "skipped": 0,
+        "log": "/Users/franksai/ai_workspace/claude_workspace/agent-control-wt/t76/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 15,
+        "skipped": 0,
+        "log": "/Users/franksai/ai_workspace/claude_workspace/agent-control-wt/t76/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "outline": "【為什麼】T 12 次 over_cap、0 次 consolidated;現行 consolidate 只認一份討論、先把 inbox 整份改名併進主檔再判超標〔讀碼,main 71d949b〕;open_consolidation 對 allowed_write_paths 逐字比對,#78 寫 glob `memory/role/*.md` 比不到,主線開場的非唯讀 check 會重開 opener 整理票(#81 即此誤建;#81 已 Cancelled,下一次 A 主線開場會再開一張)〔讀碼推論,未實測〕。\n【#81 型重複開票 → 併入本票】同一個函式(open_consolidation)本票本來就要改(stale 合併開票、鎖內開票),拆票會兩張改同一段;寫入範圍不增檔,驗收加 A3。\n【與原 Draft 的差別(2026-10-03 開題者)】原規劃第 5–7 點(new-session 自動啟動兩模型、coordinator 租約、模型身份證據、consolidate-memory.sh)拆到 #84,因為在開場起 codex/claude 要先有 #80(依票 model/tool 派)與 #82(副本隔離、收行程樹);#78 的整理者照 templates/dispatch-consolidator.md 人工派兩個模型即可,只需要本票的 check --read-only、check-stale、snapshot 與新 consolidate。note 觸發檢查不做(開場 check 已涵蓋)。依賴只剩 #75(A #70–#73、#74、#75 皆 Done)。\n【#74/#75 對照】#74 改 rules.py/new-session.sh(規則包失敗送 decision)與 dispatch-consolidator.md 4 行,不碰 memory.py 的 check/consolidate;#75 只改 note_name/already_noted。兩者都沒推翻本票範圍;new-session.sh 第 256 行仍是唯一呼叫 check 的地方〔讀碼〕。\n【D-033 實測】main 71d949b 跑 test_memory.py 11 s、test_memory_note_names.py 2 s、test_new_session.py 33 s 全綠;釘舊行為的是 test_memory.py 第 261/276/311 行附近的 consolidate 案例(已列 A8)。verify/agent-output/test_ticket_20.py 只跑非唯讀 check、不涉 consolidate,不受影響〔讀碼〕。ticket.first_match 已存在(ticket.py)可直接用。ticket.py create 沒有 --needs-verifier,本票不改 ticket.py。\n【同步副作用〔未實測〕】memory.py 同步到專案後,專案主線開場也會為 needs-review 開整理票;專案既有記憶票若不是 role=consolidator 或 allowed_write_paths 不覆蓋該檔,會多開一張。\n【規模】M,約 400–550 行(memory.py 約 250–350、test_memory.py 改寫約 100、文件/範本約 60)。#74 1,294 行插入的實作 30 分鐘做完、其餘耗在全套;本票只准跑三支檔(合計約 50 s)。\n【needs_verifier=true 理由】只消耗快照、失敗不動檔與併發開票是資料保留邊界,需要獨立案例;interface_fixed=true:指令、旗標、輸出行形、討論檔頭三行、處置行、事件欄位都釘在驗收,驗證者可與 worker 平行起。\n【model=opus 理由】主線裁示 D-G137:這批記憶票在 astra 額度用完後回 opus;資料保留與提交順序要整體判斷。",
   "test_plan": "worker 只跑下面幾條(在副本一律前綴 `env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR`,#82 落地前必須;否則測試寫進主線票庫與事件):\n  env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR python3 -m unittest discover -s tests -p 'test_memory.py'            # 約 11 s\n  env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR python3 -m unittest discover -s tests -p 'test_memory_note_names.py' # 約 2 s\n  env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR python3 -m unittest discover -s tests -p 'test_new_session.py'       # 約 33 s,改完 new-session.sh 跑一次即可\n  分支上已有驗證者的 test_memory_lifecycle.py 時再加跑它\n**不要**跑全套、`gate.sh`、test_auto_fix、test_rules_delivery(全套與閘門由 land 跑;#74 第 1 輪就是被全套吃完 3600 s)。\nworker 不寫 test_memory_lifecycle.py(驗證者寫,interface_fixed=true 平行起);worker 只把 test_memory.py 釘舊行為的案例改成新契約。新案例用 control_harness.Sandbox + run_py(\"scripts/memory.py\", …),同 test_memory.Note 寫法,不加測試專用縫。\n變異(驗證者做,每條只跑 test_memory_lifecycle.py,EVIDENCE 貼紅的第一行):\n  M1 已有整理票判定改回 `rel in allowed_write_paths` 逐字比對 → A3 紅\n  M2 consolidate 把寫主檔/搬 inbox 移到驗證之前 → A5 紅\n  M3 consolidate 改成消耗整份 inbox(不切前 K 行)→ A6 紅\n  M4 check --read-only 仍走開票路徑 → A1 紅\n  (鎖內開票的併發不做變異:拿掉鎖的競態視窗太小、紅不穩定;A3 併發案例只當回歸。)\n四問:守「告警恰好變成一張工作、失敗不丟記憶」;可信回歸是 glob 範圍認不得而重複開票、先消耗後驗證、整份 inbox 被吃掉含整理期間的新條目、唯讀指令留下副作用;既有測試只驗單份討論與無條件併入 inbox(那正是要改掉的行為);只替換昂貴模型,真票庫/檔案語意不替換。交件時每個新增/改動案例在 EVIDENCE 寫一行完整的 `四問:`。",
@@ -76,5 +149,76 @@
     "test_memory_lifecycle"
   ],
   "needs_verifier": true,
-  "interface_fixed": true
+  "interface_fixed": true,
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 60,
+      "tokens_out": 56689,
+      "cache_write": 138914,
+      "cache_read": 3002623,
+      "wall_seconds": 604,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-03T19:52:00+08:00"
+    },
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 42,
+      "tokens_out": 27860,
+      "cache_write": 112905,
+      "cache_read": 1825052,
+      "wall_seconds": 604,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-03T19:52:00+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 30,
+      "tokens_out": 8862,
+      "cache_write": 49893,
+      "cache_read": 769998,
+      "wall_seconds": 138,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-03T19:57:11+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 20,
+      "tokens_out": 9147,
+      "cache_write": 76985,
+      "cache_read": 526876,
+      "wall_seconds": 121,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-03T20:02:14+08:00"
+    }
+  ],
+  "branch": "t76",
+  "gate": {
+    "rc": 0,
+    "sha": "1622a9a55cc87a3c9b9b4a1a040e32c0c34c6851",
+    "run_id": "20261003-195712-33506",
+    "at": "2026-10-03T20:00:13+08:00"
+  },
+  "repair_round": 2,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "1622a9a55cc87a3c9b9b4a1a040e32c0c34c6851",
+    "note": "reports/t76/20261003-195712-33506/REVIEW.md",
+    "at": "2026-10-03T20:02:14+08:00",
+    "state_version": 41
+  },
+  "owner": "main"
 }

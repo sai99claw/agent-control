@@ -10,3 +10,4 @@
 - 稽核票改寫恆真斷言:同一個變異也在 base 的舊案例上跑一次,舊綠新紅才證明改寫有對象;只貼新案例的紅,分不出原本就守得住還是改寫才守住 (#72, 2026-09-30, worker@opus)
 - 同一輪被重派、副本已重展:先從上一次的 worker log 抽出逐字 replace(assert count==1)腳本重放,再用 AST 方法數/斷言數/逐檔 diffstat 對上一次 EVIDENCE 證明重放一致;變異與閘門照樣本輪重跑,數字不沿用 (#72, 2026-09-30, worker@opus)
 - 合併案例時,舊 docstring 寫的「變異 → 紅」要在 base 上重跑一次再抄進新案例:同一格有兩個寫入者時,拿掉其中一個不會紅,抄過去就是把一句假話搬家;抄不過去就換一條真的會紅的變異並改寫那一句 (#73, 2026-09-30, worker@opus)
+- control_harness 沙盒 config 的 memory.applies_to 只有 memory/model/*.md:角色卡超標的案例要先把 memory/role/*.md 加進去,否則 check 不量那份檔、輸出是空的而不是紅的 (#76, 2026-10-03, worker@opus)
