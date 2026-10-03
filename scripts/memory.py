@@ -196,6 +196,51 @@ def append_line(path, line):
         os.close(handle)
 
 
+NOTE_LINE = re.compile(r"^- (.*) \(([^()]*)\)$")
+
+
+def note_name(name, suffix):
+    """`X` 或 `X.md` → `(X, None)`;不合法 → `(None, 錯誤訊息)`。
+
+    串接是 `name + suffix`:多一個 `.md` 就落成 `X.md.inbox.md`,讀端只認
+    `X.inbox.md`,那一條沒有讀者。推得出本意的(多寫了 `.md` 或 inbox 後綴)附上
+    可以直接重試的名稱。
+    """
+    stem = name[:-3] if name.endswith(".md") else name
+    inbox = suffix[:-3] if suffix.endswith(".md") else suffix
+    if stem in ("", ".", "..") or "/" in name or "\\" in name:
+        return None, "memory: 名稱不合法:'%s'(要是一個檔名)\n" % name
+    if not stem.endswith(".md") and not (inbox and stem.endswith(inbox)):
+        return stem, None
+    guess = stem
+    while True:
+        if guess.endswith(".md"):
+            guess = guess[:-3]
+        elif inbox and guess.endswith(inbox):
+            guess = guess[:-len(inbox)]
+        else:
+            break
+    hint = ";改用 %s" % guess if guess not in ("", ".", "..") else ""
+    return None, ("memory: 名稱不合法:'%s'(只寫名稱,不帶第二個 .md 或 %s 後綴)%s\n"
+                  % (name, suffix, hint))
+
+
+def already_noted(path, text, tag):
+    """去重鍵 =(檔、正文、票號);日期與 `--by` 不入鍵。"""
+    try:
+        lines = read(path).splitlines()
+    except FileNotFoundError:
+        return False
+    for line in lines:
+        found = NOTE_LINE.match(line)
+        if not found or found.group(1) != text:
+            continue
+        first = found.group(2).split(", ")[0]
+        if (first if first.startswith("#") else "") == tag:
+            return True
+    return False
+
+
 def cmd_note(argv):
     if len(argv) < 3:
         sys.stderr.write("memory: %s\n" % USAGE["note"])
@@ -217,8 +262,10 @@ def cmd_note(argv):
     if layer not in ("model", "role", "project"):
         sys.stderr.write("memory: 層只認 model / role / project\n")
         return 2
-    if not name or os.path.basename(name) != name:
-        sys.stderr.write("memory: 名稱只能是一個檔名\n")
+    suffix = memory_config().get("inbox_suffix") or DEFAULT_INBOX_SUFFIX
+    name, problem = note_name(name, suffix)
+    if problem:
+        sys.stderr.write(problem)
         return 2
     if "\n" in text or "\r" in text:
         sys.stderr.write("memory: note 一次只能寫一行\n")
@@ -238,7 +285,6 @@ def cmd_note(argv):
     if any(word in text for word in ("當時", "那次")):
         sys.stderr.write("memory: 警告:這句像案例;記憶只留原則,案例請用票號指路\n")
     root = ticket.root()
-    suffix = memory_config().get("inbox_suffix") or DEFAULT_INBOX_SUFFIX
     if layer == "project":
         path = os.path.join(root, "memory", layer, name + ".md")
     else:
@@ -246,6 +292,10 @@ def cmd_note(argv):
     meta = []
     if ticket_no:
         meta.append("#%s" % ticket_no.lstrip("#"))
+    # auto-fix 每輪 harvest 同一份 EVIDENCE;重送要 rc 0,harvest 把非零當「拒絕」。
+    if already_noted(path, text, meta[0] if meta else ""):
+        sys.stdout.write("memory: 已有同一條 %s/%s,不重寫\n" % (layer, name))
+        return 0
     meta.extend((date.today().isoformat(), by))
     append_line(path, "- %s (%s)\n" % (text, ", ".join(meta)))
     event.emit("memory.noted", layer=layer, name=name, ticket=ticket_no,

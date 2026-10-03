@@ -19,6 +19,8 @@
 | `memory/model/<model>.md` + `<model>.inbox.md` | 該模型的 session(model 層只准寫自己) | 疊在 `models_dir` 的正本模型記憶**之後**;暫存區同上 | 2K / 暫存 20 行 |
 | `memory/project/<主題>.md` | 任何 session(`note project …` 直接進主檔) | 只在「先讀這幾份」**列路徑**,不貼內容 —— 貼進 4 KB 包會把別的擠掉,要看就 grep | 不設上限 |
 
+`note` 的名稱寫 `X` 或 `X.md` 都落到同一份(只去一個 `.md`);空、`.`/`..`、含路徑分隔、多一個 `.md` 或帶 inbox 後綴(`.inbox.md`/`.inbox`)的名稱 rc 2 `名稱不合法`,推得出本意時附「改用 X」。同層、同名、同正文、同票號再送一次 rc 0 `已有同一條`、不追加;換票號照寫,兩行各帶自己的 `#票號`(#75)。
+
 **同步(`sync-to-project.sh`)一個位元組都不碰 `<專案>/memory/`**,也不再複製 A 的
 `*.inbox.md`(A 的暫存區是 A 的,不是規矩)。專案的 `memory.applies_to` 因此要指
 `memory/role/*.md`、`memory/model/*.md`,不是 `docs/roles/*.md` —— 指到同步產出物的話,
