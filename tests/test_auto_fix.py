@@ -352,6 +352,15 @@ class AutoFixBase(Sandbox):
 
     def setUp(self):
         super(AutoFixBase, self).setUp()
+        # #74:缺角色卡、指定的模型卡不在、或只剩標題的規則包現在非零,而且不起 agent。
+        # 預設沙盒沒有那幾份(`control_harness` 只給要的測試裝),不裝的話每一條派工的案例
+        # 都停在「規則包產不出來」。假 reviewer 的模型(`set_reviewer` 的 fixture-model)
+        # 也要有一張卡 —— 指定了卻不存在是錯,不是「沒有記憶」。
+        self.install_rules_sources()
+        self.write(os.path.join("memory", "model", "fixture-model.md"),
+                   "- 沙盒替身模型:照派工文做,不猜。\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "沙盒:規則包的來源")
         self.worker_log = os.path.join(self.home, "worker.log")
 
     def set_worker(self, body, rerun_cmd=None):

@@ -39,6 +39,7 @@
 # ## 退出碼
 #   0 綠了(覆核交給 review.sh)   1 三輪耗盡仍紅   2 用法 / 沒有狀態檔而票不是 Ready
 #   3 worker 提反駁       4 failures 沒有歸因   5 worker 沒交出可用的 patch
+#   6 規則包產不出來(#74):worker / 驗證者一個都沒起;缺項在 rules.py 送的 decision 頁
 set -u
 # `AC_ROOT` 優先:被 `gate.sh` 的 auto-fix 叫到時,這支檔案住在**副本**裡,
 # 而票、reports 與收件匣住在主 repo。照 `$0` 算根會把它們寫進一個等一下會被
@@ -352,6 +353,17 @@ PY
 )"
 }
 
+# 規則包(#74):**先產、成功才組派工文**。產不出來(缺章節、空正文、放不下)時 rules.py
+# 已經非零、stdout 一個字都沒印、送了 decision 頁;這裡只負責不讓任何 agent 起來 ——
+# 以前 `|| echo "(規則包產不出來 —— 自己讀 …)"` 把那一次變成一份照派的派工文。
+rules_pack() {   # $1 = 派工文寫到哪(失敗就刪掉,不留半份)  $2 = 角色  $3 = 模型;成功設 RULES_TEXT
+    RULES_TEXT=$(AC_TICKET=$ID python3 "$AC/rules.py" pack "$2" --model "$3") && return 0
+    rm -f "$1"
+    RULES_FAILED=1
+    echo "auto-fix: #$ID 的 $2 規則包產不出來(模型 $3)—— 不起任何 agent;缺項見上面 rules: 那幾行與 decision 頁" >&2
+    return 1
+}
+
 first_round_packet() {   # $1 = 派工文寫到哪  $2 = 模型
     # **第 1 輪的派工文也由工具產**(#29 A3,G3)。以前第 1 輪是主線手寫、只有
     # `docs/DISPATCH-TEMPLATE.md` §8 的散文可抄,第 2 輪起才有 `dispatch-round<r>.md`
@@ -361,9 +373,9 @@ first_round_packet() {   # $1 = 派工文寫到哪  $2 = 模型
     # 這一份**(#40):兩條路各產一份的那一天,人讀過的與 worker 拿到的就不是同一份。
     fr_fix=$WTBASE/fix-t$ID/round1
     mkdir -p "$(dirname "$1")"
+    rules_pack "$1" worker "$2" || return 1
     {
-        python3 "$AC/rules.py" pack worker --model "$2" 2>/dev/null \
-            || echo "(規則包產不出來 —— 自己讀 memory/role/implementer.md)"
+        printf '%s\n' "$RULES_TEXT"
         python3 - "$ROOT" "$ID" "$TF" "$fr_fix" "$2" <<'PY'
 import json, os, sys
 root, ident, tf, fix, model = sys.argv[1:6]
@@ -384,7 +396,7 @@ print("```json")
 print(json.dumps(ticket, ensure_ascii=False, indent=2))
 print("```")
 print("")
-print("## 這張票獨有的四件事(`memory/role/README.md`)")
+print("## 這張票獨有的四件事")
 print("1. **票號**:#%s" % ident)
 print("2. **base sha**:`%s`(派工方已經 `git log --oneline -1` 對過)" % base)
 print("3. **副本路徑**:`%s/work`(改這個)、`%s/base`(一個字都不准動,它是 diff 的對照組)"
@@ -432,12 +444,12 @@ verifier_packet() {   # $1 = 派工文寫到哪  $2 = 第幾輪  $3 = 驗證者�
         [ -f "$candidate" ] && { vp_template=$candidate; break; }
     done
     mkdir -p "$(dirname "$1")"
+    rules_pack "$1" verifier "$VERIFIER_MODEL" || return 1
     {
-        python3 "$AC/rules.py" pack verifier --model "$VERIFIER_MODEL" 2>/dev/null \
-            || echo "(規則包產不出來 —— 自己讀 memory/role/verifier.md)"
+        printf '%s\n' "$RULES_TEXT"
         if [ -z "$vp_template" ]; then
             echo "auto-fix: 找不到 templates/dispatch-verifier.md —— 驗證者派工文少了範本那一段" >&2
-            echo "(範本 templates/dispatch-verifier.md 找不到 —— 自己讀 memory/role/verifier.md)"
+            echo "(範本 templates/dispatch-verifier.md 找不到 —— 照上面規則包標題列的角色卡)"
         else
             python3 - "$vp_template" "$ID" "$TF" "$4" "$3" "$2" "$VERIFIER_MODEL" <<'PY'
 import sys
@@ -511,7 +523,7 @@ first_round_dispatch() {
     # `--round 1`:只產、只印,不起 worker、不動票。要起第 1 輪就不帶 `--round`。
     fr_run=${AC_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}
     fr_dispatch=$ROOT/$(cfg reports_dir reports)/t$ID/$fr_run/dispatch-round1.md
-    first_round_packet "$fr_dispatch" "$(cfg routing.implement opus)"
+    first_round_packet "$fr_dispatch" "$(cfg routing.implement opus)" || return 6
     cat "$fr_dispatch"
     echo "auto-fix: 第 1 輪派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$fr_dispatch" "$ROOT")" >&2
     # 驗證者那一份也在這裡產、只印路徑(#51 C3):人要看得到第 1 輪會派出去的**兩份**。
@@ -521,7 +533,8 @@ first_round_dispatch() {
         fr_vdispatch=$(dirname "$fr_dispatch")/dispatch-verifier-round1.md
         fr_after=""
         [ -n "$V_PARALLEL" ] || fr_after=$WTBASE/fix-t$ID/round1/patch-round1.diff
-        verifier_packet "$fr_vdispatch" 1 "$WTBASE/verify-t$ID/round1" "$V_BASE" "$fr_after"
+        verifier_packet "$fr_vdispatch" 1 "$WTBASE/verify-t$ID/round1" "$V_BASE" "$fr_after" \
+            || return 6
         echo "auto-fix: 第 1 輪驗證者派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$fr_vdispatch" "$ROOT")" >&2
     fi
     echo "auto-fix: --round 1 只印派工文;票是 Ready 時不帶 --round 就由這一支起第 1 輪:sh scripts/auto-fix.sh $ID" >&2
@@ -757,7 +770,10 @@ PY
     cp -R "$FIX/base" "$VFIX/base"
     cp -R "$FIX/base" "$VFIX/work"
     VDISPATCH=$(dirname "$DISPATCH")/dispatch-verifier-round$r.md
-    verifier_packet "$VDISPATCH" "$r" "$VFIX" "$S_BASE"
+    if ! verifier_packet "$VDISPATCH" "$r" "$VFIX" "$S_BASE"; then
+        shed_copies "$VFIX"
+        return 1
+    fi
     python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "$line" >> "$VDISPATCH" <<'PY'
 import os, sys
 root, ident, run_id, r, objection = sys.argv[1:6]
@@ -836,11 +852,17 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
     mkdir -p "$(dirname "$DISPATCH")"
     if [ "$r" -eq 1 ]; then
         # 第 1 輪沒有紅榜、沒有上一輪:派工文就是 `--dry-run --round 1` 那一份(#40)。
-        first_round_packet "$DISPATCH" "$MODEL"
+        if ! first_round_packet "$DISPATCH" "$MODEL"; then
+            ROUND_RC=6
+            return 1
+        fi
     else
+        if ! rules_pack "$DISPATCH" worker "$MODEL"; then
+            ROUND_RC=6
+            return 1
+        fi
         {
-            python3 "$AC/rules.py" pack worker --model "$MODEL" 2>/dev/null \
-                || echo "(規則包產不出來 —— 自己讀 memory/role/implementer.md)"
+            printf '%s\n' "$RULES_TEXT"
             python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "$FIX" "$TF" <<'PY'
 import json, os, sys
 root, ident, run_id, r, fix, tf = sys.argv[1:7]
@@ -952,8 +974,11 @@ PY
             # 不然「沒起」與「起了、沒交」在 inbox 長得一樣。
             [ -n "$V_PARALLEL" ] \
                 || V_HELD="。驗證者沒起:票 interface_fixed 不是 true,要等 worker 第 1 輪交出 patch 才起"
-            verifier_packet "$VDISPATCH" "$r" "$VFIX" "$V_BASE" \
-                "${V_HELD:+$FIX/patch-round$r.diff}"
+            if ! verifier_packet "$VDISPATCH" "$r" "$VFIX" "$V_BASE" \
+                    "${V_HELD:+$FIX/patch-round$r.diff}"; then
+                ROUND_RC=6
+                return 1
+            fi
             echo "auto-fix: 驗證者派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$VDISPATCH" "$ROOT")"
         fi
     fi
@@ -1117,6 +1142,12 @@ PY
                 V_WANT=""
             fi
             if ! dispatch_verifier; then
+                if [ -n "${RULES_FAILED:-}" ]; then
+                    # 驗證者的規則包產不出來:驗證者沒起,這一輪停在 worker 的反駁上。
+                    attempt_failed objection
+                    ROUND_RC=6
+                    return 1
+                fi
                 attempt_failed no-patch
                 ROUND_RC=5
                 return 1

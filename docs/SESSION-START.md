@@ -15,13 +15,15 @@
 | 其他文件 | **grep 定位,讀那幾行** | **grep 定位,讀那幾行** |
 
 理由:每一份「所有角色都要讀」的檔案,成本是**乘以 agent 數**的。全域交接留給主線。
+`new-session.sh <短命角色> <模型>` 照這張表印:不印事件流、開票清單,讀單不列 `docs/HANDOFF.md`(#74)。
 
 ## 主線
 - **這一節現在由 hook 自動跑**(#39):`.claude/settings.json` 的 SessionStart hook 叫 `scripts/session-hook.sh` → `new-session.sh main <routing.main>`,那一頁在第一個 prompt 之前就在上下文裡;startup / clear 發 `session.start`,resume / compact 只重印;副本裡(`worktree_dir` 底下、`AC_ROLE` 非 main、`AC_SESSION_HOOK=0`)不觸發。
 - **越界由 PreToolUse hook 機械擋**(#63):`scripts/guard-main.sh` 擋主線自寫票面(`ticket.py create` / `set <票面欄>` → 派開題者)、
   讀 log / task output(→ `inbox.py show`)、裸 `git commit` / `merge`(→ `land.sh`);每一次擋發 `main.blocked`。
   真的要越界:指令前面加 `AC_MAIN_OVERRIDE=1 `(放行並發 `main.override`)。子代理人、`AC_ROLE` 非 main、副本裡不觸發。
-- 那一頁的**第一段**是「不可違反的」那一節 + 主線角色卡全文 + `memory/role/main.inbox.md` 最後 5 行(#62):
+- 那一頁的**第一段**是「不可違反的」那一節 + 主線角色卡全文 + 專案自己整理過的 `memory/role/main.md`
+  (專案才有、存在才印,#74)+ `memory/role/main.inbox.md` 最後 5 行(#62):
   compact 後規則已經在上下文最前面,不靠自覺去讀。正本讀 `CLAUDE.md` 那一節;專案讀 sync 產的
   `<rules.roles_dir>/contract.md`,缺了那一頁會說。票(Draft 只計數)與收件匣各列最多 20 行,
   沒列的說數字與全文指令;整頁要在 hook 輸出上限 10,000 字元內(`session-hook.sh` 超過就截中間)。
@@ -41,6 +43,8 @@
 
 ## Worker / 驗證者
 - 讀派工文裡指定的副本路徑;先 `ls` 確認 `work/`、`base/` 都在。
+- 派工文的前言是 `rules.py pack` 產的規則包:角色卡、模型卡、每一節都至少帶一段正文,標題列就是
+  全文路徑。產不出來(缺節、空正文、放不下)時 pack 非零、送 decision 頁,派工方**不起 agent**(#74)。
 - needs_verifier=true 的票由 auto-fix.sh 第 1 輪自動派驗證者(與 worker 平行,#51),交件路徑在派工文
   (`<副本根>/patch-verify.diff` 與 `EVIDENCE-verifier.md`)。
 - 讀 `docs/DISPATCH-TEMPLATE.md` §禁區與 §假綠家族。

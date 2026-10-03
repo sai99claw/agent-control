@@ -150,15 +150,17 @@ map() {
         scripts/land.sh) add test_land ;;
         scripts/gate.sh|scripts/gate.example.sh) add test_gate test_status ;;
         scripts/apply.sh) add test_apply ;;
-        scripts/auto-fix.sh) add test_auto_fix ;;
-        scripts/review.sh) add test_review ;;
+        # 派工的三個入口與規則包本身(#74):`test_rules_delivery` 是「agent 收到合法規則
+        # 或完全不起動」的主守衛,四支都要過它。
+        scripts/auto-fix.sh) add test_auto_fix test_rules_delivery ;;
+        scripts/review.sh) add test_review test_rules_delivery ;;
         # 副本根的唯一來源(#46):四支都 source 它。
         scripts/wtbase.sh) add test_apply test_auto_fix test_land test_review ;;
         # 收件匣:閘門與落地的終態都寫它,所以動它要連那兩側一起跑。
         scripts/inbox.py) add test_inbox test_gate test_land test_new_session ;;
-        scripts/rules.py) add test_rules ;;
+        scripts/rules.py) add test_rules test_rules_delivery ;;
         scripts/heartbeat.sh) add test_heartbeat ;;
-        scripts/new-session.sh) add test_new_session ;;
+        scripts/new-session.sh) add test_new_session test_rules_delivery ;;
         # SessionStart hook(#39):`test_session_hook` 兩個都讀 —— A1 解析
         # `.claude/settings.json` 的形狀,其餘案例跑 `session-hook.sh`。
         scripts/session-hook.sh|.claude/settings.json) add test_session_hook ;;
@@ -188,9 +190,13 @@ map() {
         # 一起,所以改它就是改那一格的規格 —— 要連 code 那一側一起跑。
         docs/DESIGN-ENV-SUSPECT.md) add test_status test_no_project_names ;;
         docs/DISPATCH-TEMPLATE.md) add test_dispatch_template test_no_project_names ;;
-        templates/dispatch-verifier.md) add test_dispatch_template test_no_project_names ;;
+        templates/dispatch-verifier.md) add test_dispatch_template test_rules_delivery \
+                                           test_no_project_names ;;
         # review.sh 逐字讀它、填它的佔位再餵給 reviewer:動它就是動覆核的派工文。
-        templates/dispatch-reviewer.md) add test_review test_templates test_no_project_names ;;
+        templates/dispatch-reviewer.md) add test_review test_templates test_rules_delivery \
+                                           test_no_project_names ;;
+        # 人手派的那兩份(開題者、整理者)也引用規則包解析出來的路徑(#74)。
+        templates/dispatch-*.md) add test_rules_delivery test_no_project_names ;;
         # 文件**有**一支測試真的讀它們:那條「不准出現專案名 / 絕對路徑」的守衛
         # 掃的就是整個 repo。所以這一格不是硬塞,是實話。
         #

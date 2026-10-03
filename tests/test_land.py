@@ -645,6 +645,12 @@ class TripwireCatchesARealClaude(unittest.TestCase):
             gate_stub = LandStatusWhenRed.gate_stub
             config_extra = {"worker": {}}      # 拿掉 worker.command:auto-fix 退回預設 claude
 
+            def setUp(self):
+                super().setUp()
+                # #74:規則包缺角色卡 / 模型卡時 auto-fix 一個 agent 都不起 —— 不裝來源,
+                # 這條路在產包那一步就停了,走不到預設的 claude。
+                self.install_rules_sources()
+
             def test_red_land(self):
                 good = self.branch_for(1, "t1-good")
                 self.commit_in(good, "src/g1", "有 commit 的那一張")

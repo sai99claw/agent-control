@@ -21,8 +21,10 @@ class NewSession(Sandbox):
         return self.run_sh("scripts/new-session.sh", *args)
 
     def test_it_runs_every_step_and_puts_the_session_on_the_board(self):
+        """#74:事件流與開票清單只給主線(`docs/SESSION-START.md` 那張表),所以「每一段」
+        用 main 跑;短命角色少的那兩段由 `test_rules_delivery` 釘。"""
         self.make_ticket(1, state="Ready", subject="開著的那一張")
-        done = self.start("worker", "opus")
+        done = self.start("main", "fable")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         for step in ("站在哪個版本", "最近發生的事", "開著的票",
                      "記憶有沒有超過上限", "接下來要讀的"):
@@ -30,8 +32,8 @@ class NewSession(Sandbox):
         self.assertIn("開著的那一張", done.stdout)
         rows = [row for row in self.events() if row["kind"] == "session.start"]
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["role"], "worker")
-        self.assertEqual(rows[0]["model"], "opus")
+        self.assertEqual(rows[0]["role"], "main")
+        self.assertEqual(rows[0]["model"], "fable")
 
     def test_main_gets_sections_5_to_7_and_a_worker_does_not(self):
         """主線多印第 5–7 節(收件匣、決策收件匣、心跳);worker 指向派工規矩,不印那三節。
@@ -99,11 +101,14 @@ class NewSession(Sandbox):
 
         #72 併入原 test_the_reading_list_points_at_this_model_s_own_memory:同模型跨
         session 共享 —— Opus 的下一個 session 應該知道 Opus 上次犯過什麼。"""
-        self.assertIn("memory/role/main.md", self.start("main", "fable").stdout)
+        main = self.start("main", "fable").stdout
+        self.assertIn("memory/role/main.md", main)
+        self.assertIn("docs/HANDOFF.md", main)
         worker = self.start("worker", "opus").stdout
         self.assertIn("memory/role/implementer.md", worker)
         self.assertIn("memory/model/opus.md", worker)
-        self.assertIn("docs/HANDOFF.md", worker)
+        # #74:全域交接是主線的,短命角色的讀單不列它。
+        self.assertNotIn("docs/HANDOFF.md", worker)
 
     def test_the_closing_line_ends_the_same_session_it_started(self):
         """#45 B3:沒給 `--session` 就自己產一個 SID、印出來,start 帶它,結語那句
