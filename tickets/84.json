@@ -1,0 +1,70 @@
+{
+  "id": "84",
+  "subject": "整理票自動啟動:主線開場依票派兩個模型討論,租約排他,失敗送 decision(自 #76 拆出)",
+  "created": "2026-10-03T19:18:50+08:00",
+  "objective": "#76 讓整理票不重複、consolidate 成功前不消耗原文之後,把「開了票沒人執行」補上:主線開場對沒有執行者的整理票啟動兩個不同模型的獨立討論,並把啟動失敗變成看得見的待處置。",
+  "acceptance": [
+    "(Draft,#76/#80/#82 落地後重寫成測試計畫)主線 new-session 連續與同時跑兩次:同一張整理票只取得一個租約、只啟動一組兩模型討論(模型以替身驗,真 claude/codex 不碰)。",
+    "模型命令缺少、啟動失敗、逾時、租約失效:票不停在虛假的 Running,轉明確待處置並送 kind=decision 的 inbox 頁。",
+    "兩份討論的模型身份由啟動端記錄(實際啟動的命令/模型與交件),不只信討論檔自稱的 model: 欄;短命角色開場不啟動整理。"
+  ],
+  "in_scope": [
+    "scripts/consolidate-memory.sh(新)",
+    "scripts/new-session.sh",
+    "scripts/sync-to-project.sh(SCRIPT_LIST)",
+    "board/config.json",
+    "templates/dispatch-consolidator.md"
+  ],
+  "out_of_scope": [
+    "consolidate 的驗證與只消耗快照(#76 已做)",
+    "auto-fix 依票 model/tool 派工(#80)",
+    "副本環境隔離與逾時收行程樹(#82)"
+  ],
+  "depends_on": [
+    {
+      "id": "76",
+      "condition": ""
+    },
+    {
+      "id": "80",
+      "condition": ""
+    },
+    {
+      "id": "82",
+      "condition": ""
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/consolidate-memory.sh",
+    "scripts/new-session.sh",
+    "scripts/sync-to-project.sh",
+    "board/config.json",
+    "templates/dispatch-consolidator.md",
+    "docs/MEMORY.md",
+    "tests/test_consolidate_memory.py",
+    "tests/test_new_session.py",
+    "tests/test_sync_to_project.py",
+    "scripts/gate.sh"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "71d949bde7664dcd0278add14426b3dba1f40a6b",
+  "state": "Draft",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-006",
+    "D-013"
+  ],
+  "feature": "記憶治理",
+  "outline": "【來源】#76 原規劃第 5–7 點(啟動兩模型討論、coordinator 租約、模型身份證據),2026-10-03 開題者為讓 #76 一輪做得完拆出。【為什麼等 #80/#82】在 new-session 裡起 codex/claude 要先有『依票 model/tool 派』(#80)與『副本寫不進真看板、逾時收整棵行程樹』(#82),否則啟動端會重犯兩者。【規模】M,未實測;落地前留 Draft,由下一位開題者補測試計畫、verify_strings、needs_verifier。"
+}

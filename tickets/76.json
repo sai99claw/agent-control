@@ -1,95 +1,80 @@
 {
   "id": "76",
-  "subject": "過期與超標記憶必須開票、指派及啟動整理;成功前不得消耗原文",
+  "subject": "超標與過期記憶:唯讀檢查、不重複開整理票、整理成功前不得消耗原文",
   "created": "2026-09-30T17:24:13+08:00",
-  "objective": "讓超標/已結案來源條目進入可恢復、可追蹤的整理流程,不再累積無人處理的告警。",
+  "objective": "讓超標/來源已結案的記憶條目恰好變成一張整理票(glob 範圍也認得,不再重複開),並讓 consolidate 只在候選與兩份不同模型的討論都驗過之後才改主檔、且只消耗已處置的快照;另給短命角色與 #78 驗收用的純讀檢查。啟動兩模型討論的自動化拆到 #84。",
   "acceptance": [
-    "`python3 -m unittest discover -s tests -p 'test_memory_lifecycle.py'`:Done、其他 closed、Ready、未知票、跨 repo 同號票各得到正確分類;純讀指令前後記憶、票庫、events、reports 不變。",
-    "同測試在真拋棄式 repo 連續及同時執行兩次 main new-session:只產生一張完整整理票、一組有效指派;兩個模型替身各收到對應討論任務,並可追到交件。",
-    "同測試以 21 條 inbox 開票,subject 使用「行」,不是「字元」;主卡不存在也可依 candidate 建立。",
-    "同測試涵蓋只有一份討論、相同模型、候選仍超標、來源摘要不符、逾時:無 consolidated、無資料遺失,decision 有可執行下一步。",
-    "同測試在整理期間追加一條 note,落地候選只消耗已處置快照,新條目仍在;重跑不重複完成。",
-    "`sh scripts/gate.sh --branch --ticket <本票>` 跑 lifecycle 主守衛;移除租約排他或先消耗再驗證的變異必紅。"
+    "A1 純讀(單元層 CLI 子行程,tests/test_memory_lifecycle.py):沙盒內 memory/model/opus.md 正文 2500 字元(上限 2000)、memory/role/worker.inbox.md 21 行且含來源 Done 的條目。`memory.py check --read-only` 與 `memory.py check-stale --read-only` 各跑一次:rc 皆 1;check --read-only 的 stdout 含與 `check` 同一行 `memory/model/opus.md **2500 / 2000 超過**`;兩次呼叫前後 tickets/、board/events.jsonl、memory/(含不得出現 memory/.lock)、reports/ 逐位元組相同(呼叫前快照比對)。",
+    "A2 來源分類(同檔,subTest):`memory.py check-stale --read-only [--file <主檔或 inbox 相對路徑>]` 只讀 memory/model、memory/role 的 inbox,每條印一行 `memory: <inbox 相對路徑>:<行號> <分類> <來源>`。分類與來源:`#N` 且本 repo 票庫有、state ∈ ticket.CLOSED_STATES → `needs-review #N <state>`;有但未結案 → `fresh #N <state>`;票庫沒有 → `unknown-ticket #N`;無 `#` 標記 → `no-source -`;`#` 後不是純數字(例 `#T-5`)→ `foreign #T-5`;不合 `- 正文 (標記…)` 形的行 → `unparsed -`。沙盒票 #1 Done、#2 Cancelled、#3 Ready,inbox 依序放 #1、#2、#3、#99、無標記、#T-5、一行亂文 → 七行分類依序為 needs-review、needs-review、fresh、unknown-ticket、no-source、foreign、unparsed;有任何 needs-review 則 rc 1,否則 0。跨 repo 同號:另一個沙盒目錄的 tickets/3.json 為 Done,不影響本 repo #3 判 fresh(只認 ticket 模組設定的本 repo 票庫)。",
+    "A3 不重複開票(同檔):`memory.py check`(非唯讀)判「已有整理票」改用 `ticket.first_match`(glob 語意,與 land 判範圍同一支):開著(state 不在 CLOSED_STATES,含 Draft)、role=consolidator、allowed_write_paths 為 `[\"memory/role/*.md\"]` 的票存在時,memory/role/opener.md 超標 → 不開新票,stdout 含 `已經有一張開著的整理票 #<該票號>`;同一張票改 Cancelled 再跑 → 開 1 張。無覆蓋票時兩個 `memory.py check` 子行程同時跑 → tickets/ 恰好多 1 張(查核與開票在 memory.py 既有 MemoryLock 內)。",
+    "A4 開票內容(同檔):主卡 memory/role/worker.md 不存在、memory/role/worker.inbox.md 21 行 → `check` 開 1 張票:subject 含 `inbox 21 行,上限 20 行` 且不含 `字元`;allowed_write_paths 含 memory/role/worker.md 與 memory/role/worker.inbox.md;票 JSON 的 needs_verifier 是布林 false。只因 needs-review(未超標)的 inbox 也開 1 張,subject 含 `needs-review`。字元超標的 subject 維持 `整理 <檔>(N 字元,上限 M)`。",
+    "A5 驗證失敗不動任何東西(同檔,subTest):新介面 `memory.py consolidate <主檔> --candidate <檔> --discussion <A> --discussion <B> [--new-cap N --reason …] [--by …]`;`memory.py snapshot <主檔>` 印兩行 `source_lines: K`、`source_sha256: <hex>`(K = inbox 現有行數,hex = inbox 前 K 行原始位元組的 sha256;無 inbox 則 K=0)。每份討論檔要有 `model: <名>`、`source_lines: K`、`source_sha256: <hex>` 三行、`## 結論`,且結論區對 1..K 每個 n 有一行 `- L<n>: <保留|升格|移至 reference|歸檔|重複>`(其後可接目的地)。以下各一個 subTest:只給一個 --discussion、兩份 model 相同、source_sha256 對不上、缺任一 L<n>、候選正文超過上限、缺 `## 結論`、缺 --candidate → rc 非 0、stderr 非空;主檔、inbox、board/events.jsonl 逐位元組不變,memory/ 底下沒有新的 `*.consumed`,沒有 memory.consolidated 事件。",
+    "A6 只消耗已處置快照(同檔):inbox 3 行 → 跑 snapshot、照輸出寫兩份不同模型的討論 → 再 `memory.py note` 追加第 4 條 → consolidate rc 0:主檔正文等於候選正文;inbox 只剩第 4 條;memory/ 下恰一個 `<inbox>.<run>.consumed` 且內容是原前 3 行;恰一筆 memory.consolidated 事件且其 source_lines 為 3。同指令再跑一次 → rc 非 0、無第二筆事件、主檔與 inbox 不變。",
+    "A7 開場分流(test_new_session.py 或 lifecycle 檔):`sh scripts/new-session.sh worker opus` 在超標沙盒 → rc 0、stdout 含 `不停工`、tickets/ 不多票;`sh scripts/new-session.sh main fable` → 開 1 張整理票。既有 test_memory_over_cap_does_not_stop_the_session 不改斷言仍綠。",
+    "A8 回歸與閘門:scripts/gate.sh 的 `scripts/memory.py)` 那一格加 test_memory_lifecycle;tests/test_memory.py 中釘舊行為的案例改成新契約(test_the_inbox_is_merged_in_and_then_gone、test_a_note_during_consolidation_lands_in_a_new_inbox、test_still_over_the_cap_after_consolidating_is_not_reported_as_done、test_a_reasoned_raise_is_written_into_the_file_with_its_history、無討論/無結論兩條拒絕案例 —— 改用 --candidate + 兩份討論),其餘 test_memory.py 與 test_memory_note_names.py 案例不改斷言仍綠。落地前 `sh scripts/gate.sh --branch --ticket 76` 由 land 跑,worker 不跑。"
   ],
   "in_scope": [
-    "scripts/memory.py",
-    "scripts/consolidate-memory.sh",
-    "scripts/new-session.sh",
-    "scripts/sync-to-project.sh",
-    "scripts/gate.sh",
-    "board/config.json",
-    "templates/dispatch-consolidator.md",
-    "docs/MEMORY.md",
-    "docs/DISCUSSION.md",
-    "tests/test_memory_lifecycle.py",
-    "tests/test_memory.py",
-    "tests/test_new_session.py",
-    "tests/test_sync_to_project.py"
+    "scripts/memory.py:check --read-only、check-stale、snapshot、glob 覆蓋判定 + 鎖內開票、consolidate 新契約",
+    "scripts/new-session.sh:main 跑 check,其他角色跑 check --read-only",
+    "scripts/gate.sh:memory.py 對照加 test_memory_lifecycle",
+    "docs/MEMORY.md、docs/DISCUSSION.md、templates/dispatch-consolidator.md:新討論檔頭三行、逐條處置行、consolidate 用法",
+    "tests/test_memory.py 釘舊 consolidate 行為的案例改新契約;tests/test_memory_lifecycle.py 由驗證者寫"
   ],
-  "out_of_scope": [],
+  "out_of_scope": [
+    "自動啟動兩模型討論、coordinator 租約、啟動失敗送 decision、模型身份由啟動端記錄、scripts/consolidate-memory.sh → #84(依賴 #80、#82)",
+    "note 成功後觸發檢查:不做,主線開場的 check 已涵蓋;短命角色不開票",
+    "scripts/ticket.py(不加 create 旗標;needs_verifier 由 memory.py 開票後用既有 ticket API 補)",
+    "既有記憶內容的整理(#78)、分層 lint(#79)、board/config.json、sync-to-project.sh"
+  ],
   "depends_on": [
     {
       "id": "75",
-      "condition": "落地"
-    },
-    {
-      "id": "70",
-      "condition": "落地"
-    },
-    {
-      "id": "71",
-      "condition": "落地"
-    },
-    {
-      "id": "72",
-      "condition": "落地"
-    },
-    {
-      "id": "73",
       "condition": "落地"
     }
   ],
   "allowed_write_paths": [
     "scripts/memory.py",
-    "scripts/consolidate-memory.sh",
     "scripts/new-session.sh",
-    "scripts/sync-to-project.sh",
     "scripts/gate.sh",
-    "board/config.json",
-    "templates/dispatch-consolidator.md",
     "docs/MEMORY.md",
     "docs/DISCUSSION.md",
-    "tests/test_memory_lifecycle.py",
+    "templates/dispatch-consolidator.md",
     "tests/test_memory.py",
-    "tests/test_new_session.py",
-    "tests/test_sync_to_project.py"
+    "tests/test_memory_lifecycle.py",
+    "tests/test_new_session.py"
   ],
   "role": "worker",
-  "model": "codex:gpt-6-astra",
-  "tool": "codex",
+  "model": "opus",
+  "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "234d4451d1ae5d07ad3c6f393e055198fdd43d2c",
-  "state": "Draft",
-  "state_version": 5,
+  "base_sha": "71d949bde7664dcd0278add14426b3dba1f40a6b",
+  "state": "Ready",
+  "state_version": 27,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
+    "files": [
+      "tests/test_memory_lifecycle.py"
+    ],
     "tags": [],
-    "run": "",
-    "notes": ""
+    "run": "python3 -m unittest discover -s tests -p 'test_memory_lifecycle.py'",
+    "notes": "驗證者寫 A1–A7;只斷言票面寫出的字串、檔案內容、事件與退出碼(interface_fixed=true)。"
   },
-  "outline": "【為什麼】T 12 次 over_cap、0 次 consolidated,T #667 留在 Ready;`note` 未呼叫檢查。現行 consolidate 只檢查一份含結論標題的文件,先串接/消耗 inbox、發完成事件,之後才判超標〔前報實測及此次讀碼推論〕。\n【規劃】\n1. `memory.py check --read-only [--file PATH]` 純讀容量,不開票、發事件或建鎖檔。保留既有預設 check 的管理用途。\n2. 新增 `memory.py check-stale --read-only [--file PATH]`:解析 inbox 的來源票,透過設定的票庫與 `ticket.CLOSED_STATES` 判斷,不寫死僅 Done。\n3. Done/其他 closed 來源標 `needs-review`,不等同內容錯誤、不自動刪除。無來源、解析失敗、找不到票分別列出,不當成 fresh;跨 repo 引用須明示來源 repo。\n4. 超標與 stale 合併成每個目標主檔一張整理票;票含 `needs_verifier`、正確單位、owner、兩個模型、來源快照與完整驗收。既有整理票補指派,不另開。\n5. `note` 成功後觸發該檔的容量/stale 檢查;main new-session 執行 ensure/assign,交由新 `scripts/consolidate-memory.sh <ticket>` 啟動兩個配置模型的獨立討論。短命角色只標記需求,不遞迴啟動整理者。\n6. coordinator 使用現有票/租約機制;同時兩次開場只取得一個執行權。模型命令缺少、啟動失敗、逾時或 lease 失效時,票轉明確待處置狀態並送 decision;不得維持虛假的 Running。\n7. 兩份討論需有不同模型身份、來源快照指紋、逐條處置及結論。coordinator 保留實際啟動模型/交件證據,不能只相信 Markdown 自稱兩個模型。\n8. consolidate 接受整理後 candidate 及兩份 discussion,不再把原 inbox 無條件串回。逐條處置使用「保留/升格/移至 reference/歸檔/重複」及目的地。\n9. 提交前檢查候選容量、來源完整性與快照版本;任何失敗不改主檔、不消耗 inbox、不發 consolidated。整理期間新增 note 必須保留給下一輪。\n10. 主線 canonical 變更仍由既有 apply/gate/review/land 路徑完成;hook 不直接覆寫記憶,也不自行關票。成功落地後才確認完成事件與票結案。\n【前置】#75、A #70–#73 落地;落地前留 Draft。\n【needs_verifier=true 理由】獨立驗證者負責 `test_memory_lifecycle.py` 的持久化、併發與失敗恢復邊界;worker 不另寫同一流程的第二套案例。interface_fixed=false:測試以 worker 第一輪實際介面為準,但不得放寬上述可觀察結果。\n【model=opus 理由】跨模型執行、租約、資料保留及提交順序需要整體判斷。\n【規模】L,約 600–1,000 行差異。",
-  "test_plan": "四問:守「告警確實成為工作,失敗不丟記憶」;回歸為重複啟動、只有文字指派、提前消耗;現有測試只證明開票/單份討論,沒有閉環;只替換昂貴模型執行,真票庫、檔案與 Git 語意不替換。交件時每個新增/改動案例仍須在 EVIDENCE 寫一行完整的 `四問:`。",
+  "outline": "【為什麼】T 12 次 over_cap、0 次 consolidated;現行 consolidate 只認一份討論、先把 inbox 整份改名併進主檔再判超標〔讀碼,main 71d949b〕;open_consolidation 對 allowed_write_paths 逐字比對,#78 寫 glob `memory/role/*.md` 比不到,主線開場的非唯讀 check 會重開 opener 整理票(#81 即此誤建;#81 已 Cancelled,下一次 A 主線開場會再開一張)〔讀碼推論,未實測〕。\n【#81 型重複開票 → 併入本票】同一個函式(open_consolidation)本票本來就要改(stale 合併開票、鎖內開票),拆票會兩張改同一段;寫入範圍不增檔,驗收加 A3。\n【與原 Draft 的差別(2026-10-03 開題者)】原規劃第 5–7 點(new-session 自動啟動兩模型、coordinator 租約、模型身份證據、consolidate-memory.sh)拆到 #84,因為在開場起 codex/claude 要先有 #80(依票 model/tool 派)與 #82(副本隔離、收行程樹);#78 的整理者照 templates/dispatch-consolidator.md 人工派兩個模型即可,只需要本票的 check --read-only、check-stale、snapshot 與新 consolidate。note 觸發檢查不做(開場 check 已涵蓋)。依賴只剩 #75(A #70–#73、#74、#75 皆 Done)。\n【#74/#75 對照】#74 改 rules.py/new-session.sh(規則包失敗送 decision)與 dispatch-consolidator.md 4 行,不碰 memory.py 的 check/consolidate;#75 只改 note_name/already_noted。兩者都沒推翻本票範圍;new-session.sh 第 256 行仍是唯一呼叫 check 的地方〔讀碼〕。\n【D-033 實測】main 71d949b 跑 test_memory.py 11 s、test_memory_note_names.py 2 s、test_new_session.py 33 s 全綠;釘舊行為的是 test_memory.py 第 261/276/311 行附近的 consolidate 案例(已列 A8)。verify/agent-output/test_ticket_20.py 只跑非唯讀 check、不涉 consolidate,不受影響〔讀碼〕。ticket.first_match 已存在(ticket.py)可直接用。ticket.py create 沒有 --needs-verifier,本票不改 ticket.py。\n【同步副作用〔未實測〕】memory.py 同步到專案後,專案主線開場也會為 needs-review 開整理票;專案既有記憶票若不是 role=consolidator 或 allowed_write_paths 不覆蓋該檔,會多開一張。\n【規模】M,約 400–550 行(memory.py 約 250–350、test_memory.py 改寫約 100、文件/範本約 60)。#74 1,294 行插入的實作 30 分鐘做完、其餘耗在全套;本票只准跑三支檔(合計約 50 s)。\n【needs_verifier=true 理由】只消耗快照、失敗不動檔與併發開票是資料保留邊界,需要獨立案例;interface_fixed=true:指令、旗標、輸出行形、討論檔頭三行、處置行、事件欄位都釘在驗收,驗證者可與 worker 平行起。\n【model=opus 理由】主線裁示 D-G137:這批記憶票在 astra 額度用完後回 opus;資料保留與提交順序要整體判斷。",
+  "test_plan": "worker 只跑下面幾條(在副本一律前綴 `env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR`,#82 落地前必須;否則測試寫進主線票庫與事件):\n  env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR python3 -m unittest discover -s tests -p 'test_memory.py'            # 約 11 s\n  env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR python3 -m unittest discover -s tests -p 'test_memory_note_names.py' # 約 2 s\n  env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR python3 -m unittest discover -s tests -p 'test_new_session.py'       # 約 33 s,改完 new-session.sh 跑一次即可\n  分支上已有驗證者的 test_memory_lifecycle.py 時再加跑它\n**不要**跑全套、`gate.sh`、test_auto_fix、test_rules_delivery(全套與閘門由 land 跑;#74 第 1 輪就是被全套吃完 3600 s)。\nworker 不寫 test_memory_lifecycle.py(驗證者寫,interface_fixed=true 平行起);worker 只把 test_memory.py 釘舊行為的案例改成新契約。新案例用 control_harness.Sandbox + run_py(\"scripts/memory.py\", …),同 test_memory.Note 寫法,不加測試專用縫。\n變異(驗證者做,每條只跑 test_memory_lifecycle.py,EVIDENCE 貼紅的第一行):\n  M1 已有整理票判定改回 `rel in allowed_write_paths` 逐字比對 → A3 紅\n  M2 consolidate 把寫主檔/搬 inbox 移到驗證之前 → A5 紅\n  M3 consolidate 改成消耗整份 inbox(不切前 K 行)→ A6 紅\n  M4 check --read-only 仍走開票路徑 → A1 紅\n  (鎖內開票的併發不做變異:拿掉鎖的競態視窗太小、紅不穩定;A3 併發案例只當回歸。)\n四問:守「告警恰好變成一張工作、失敗不丟記憶」;可信回歸是 glob 範圍認不得而重複開票、先消耗後驗證、整份 inbox 被吃掉含整理期間的新條目、唯讀指令留下副作用;既有測試只驗單份討論與無條件併入 inbox(那正是要改掉的行為);只替換昂貴模型,真票庫/檔案語意不替換。交件時每個新增/改動案例在 EVIDENCE 寫一行完整的 `四問:`。",
   "feature": "記憶治理",
   "decision_refs": [
     "D-006",
+    "D-007",
     "D-013"
   ],
   "verify_strings": [
-    "test_memory_lifecycle",
-    "consolidate-memory.sh"
+    "source_sha256",
+    "source_lines",
+    "needs-review",
+    "unknown-ticket",
+    "test_memory_lifecycle"
   ],
   "needs_verifier": true,
-  "interface_fixed": false
+  "interface_fixed": true
 }
