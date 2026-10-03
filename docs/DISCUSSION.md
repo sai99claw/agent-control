@@ -39,4 +39,21 @@
 - 老師**不替學生刪**;老師問「這條你下次還會用到嗎?為什麼?」,學生答,答不出來的才降級。
 - 學生可以**主張打破上限**,但要拿出「多讀這幾百字替每個未來 session 省了什麼」;老師只判理由站不站得住。
 - 反例與盲點優先於成功經驗;三個標記(日期、來源、實測/推論)壓縮不能壓掉。
-- 討論檔就是 `memory.py consolidate --discussion <path>` 的必要輸入;沒有討論檔的整理拒絕執行。
+- 討論檔就是 `memory.py consolidate --discussion <path>` 的必要輸入;沒有討論檔的整理拒絕執行。兩個模型**各一份**,兩份都要給(`--discussion A --discussion B`)。
+
+### 記憶整理討論檔的檔頭與逐條處置(#76)
+檔頭三行(放 front matter 或正文開頭都可以;後兩行照 `python3 scripts/memory.py snapshot <主檔>` 的輸出抄,兩份必須一樣):
+```
+model: <你的模型>
+source_lines: <K>
+source_sha256: <inbox 前 K 行的 sha256>
+```
+`## 結論` 區對 inbox 的第 1..K 行**每一行**寫一句處置,其後可接目的地:
+```
+- L1: 保留
+- L2: 升格 memory/role/worker.md
+- L3: 移至 reference docs/…
+- L4: 歸檔
+- L5: 重複 L2
+```
+處置只有五種:`保留`、`升格`、`移至 reference`、`歸檔`、`重複`。缺任一行,`consolidate` 拒絕 —— 沒處置過的那一行不會被消耗,K 之後新記的也不會。
