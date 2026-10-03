@@ -12,7 +12,7 @@
     "bug": "fable",
     "implement": "opus",
     "implement_browser": "opus",
-    "verify": "sonnet",
+    "verify": "opus",
     "second_opinion": "agy:gemini-3.8-flash-high",
     "discuss": "agy:gemini-3.8-flash-high"
   },
