@@ -2,21 +2,28 @@
   "id": "75",
   "subject": "正規化 memory note 名稱,阻止 `.md.inbox.md` 孤兒與重複回寫",
   "created": "2026-09-30T17:24:13+08:00",
-  "objective": "合法名稱只寫到唯一主檔/inbox,保留來源並拒絕不明確的名稱。",
+  "objective": "`memory.py note` 的名稱帶不帶 `.md` 都只寫到唯一主檔/inbox;拒絕不明確的名稱並給可重試的正確名稱;同來源重送不重寫,不同來源可追溯。",
   "acceptance": [
-    "`python3 -m unittest discover -s tests -p 'test_memory_note_names.py'`:role/model/project 帶與不帶 `.md` 都落到正確檔名,目錄內無 `.md.inbox.md`。",
-    "同測試對非法名稱斷言非零、正確提示及記憶/事件/票庫逐位元組不變。",
-    "同測試確認同來源重送只留一筆,不同來源仍可追溯;他模型作者仍被拒絕。",
-    "`sh scripts/gate.sh --branch --ticket <本票>` 選到該主守衛;拿掉正規化的變異必紅。"
+    "A1 名稱正規化(單元層,CLI 子行程,`tests/test_memory_note_names.py`):`memory.py note` 對 role `implementer` 與 `implementer.md`、model `opus` 與 `opus.md`(`--by worker@opus`)、project `gate` 與 `gate.md` 各寫一條**不同正文**,rc 皆 0;落檔分別是 `memory/role/implementer.inbox.md`、`memory/model/opus.inbox.md`、`memory/project/gate.md`,各 2 行;`memory/` 底下遞迴找不到任何以 `.md.inbox.md` 或 `.md.md` 結尾的檔;`memory.noted` 事件的 `name` 欄是去掉 `.md` 的名稱(`implementer`/`opus`/`gate`),stdout 為 `memory: noted <層>/<去掉 .md 的名稱>`。期望值來自本條,不從 memory.py 算。",
+    "A2 非法名稱(同檔,subTest):名稱 `implementer.inbox.md`、`implementer.inbox`、`implementer.md.md`、`a/b`、`..`、`.`、空字串 —— rc 2,stderr 含 `名稱不合法`;前三個另含 `改用 implementer`(可直接重試的名稱);每一個呼叫前後 `memory/` 全部檔案、`board/events.jsonl`、`tickets/` 逐位元組相同(呼叫前快照比對)。",
+    "A3 同來源不重寫(同檔):同層、同名、同正文、同 `--ticket 2` 送兩次 → 目標檔只 1 行、`memory.noted` 只 1 筆,第二次 rc 0 且 stdout 含 `已有同一條`;同正文改 `--ticket 3` 再送 → 2 行,兩行分別帶 `#2`、`#3`。另以同一份含記憶段的 EVIDENCE 跑 `memory.py harvest` 兩次 → 目標檔 1 行、stderr 不含 `拒絕 evidence 行`。",
+    "A4 他模型作者仍拒(同檔):`note model opus.md \"x\" --by worker@fable` → rc 2,stderr 含 `只能由同模型寫入`,`memory/model/` 底下沒有新檔。",
+    "A5 閘門對照:`scripts/gate.sh` 的 `scripts/memory.py)` 那一格加 `test_memory_note_names`(動 memory.py 時主守衛被選到);既有 `tests/test_memory.py`、`tests/test_apply.py -k memory` 不改斷言仍綠。"
   ],
   "in_scope": [
     "scripts/memory.py",
     "docs/MEMORY.md",
     "scripts/gate.sh",
-    "tests/test_memory_note_names.py",
-    "tests/test_memory.py"
+    "tests/test_memory_note_names.py"
   ],
-  "out_of_scope": [],
+  "out_of_scope": [
+    "T 端既有 `.md.inbox.md` 孤兒的內容遷移(T #689;本票不讀寫 T)",
+    "consolidate / check 的邏輯與上限數字",
+    "scripts/rules.py(讀端不動;#74 剛落)",
+    "tests/control_harness.py",
+    "副本環境變數隔離與逾時收行程(#82)",
+    "note 改拿整理鎖(會與 test_memory 的「整理中可寫入」案例死鎖,見 outline)"
+  ],
   "depends_on": [
     {
       "id": "74",
@@ -35,12 +42,12 @@
     "tests/test_memory.py"
   ],
   "role": "worker",
-  "model": "codex:gpt-6-astra",
-  "tool": "codex",
+  "model": "opus",
+  "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "234d4451d1ae5d07ad3c6f393e055198fdd43d2c",
-  "state": "Draft",
-  "state_version": 5,
+  "base_sha": "3e3c82d3c9397aba1209ba364380f3bbc2d074d8",
+  "state": "Ready",
+  "state_version": 25,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -49,15 +56,63 @@
     "run": "",
     "notes": ""
   },
-  "outline": "【為什麼】前報找到兩個不可載入的 T 孤兒;此次讀碼確認 `note` 直接把 `name + suffix` 串接,範本卻要求角色卡檔名。A Opus inbox 同句已有四次〔前報實測〕。\n【規劃】\n1. `implementer` 與 `implementer.md` 正規化為同一名稱;project、model 同樣接受單一 `.md` 後綴。\n2. 先正規化,再做 model 作者身份檢查;不得因此放寬「只能寫自己的模型記憶」。\n3. 拒絕 `.inbox.md`、`.md.md`、分隔符、空名稱與 `.`/`..`,列出可直接重試的正確名稱。\n4. 同層、名稱、正文、來源票完全相同的重送不再新增行與 noted 事件;不同來源票不靜默丟棄。\n5. 孤兒內容遷移交 tabby_pool #689,本票不讀寫 T。\n【前置】#74、A #72 落地;落地前留 Draft。\n【needs_verifier=false 理由】名稱與落檔契約可在單一 CLI 邊界完整證明。\n【model=codex sol 理由】介面、有效值及錯誤結果已釘死。\n【規模】S,約 120–220 行差異。",
-  "test_plan": "四問:守實際落檔與來源保留;回歸為多接一個副檔名或錯誤去重;既有案例未覆蓋依文件輸入完整檔名;無測試專用縫。交件時每個新增/改動案例仍須在 EVIDENCE 寫一行完整的 `四問:`。",
+  "outline": "【為什麼】`cmd_note` 直接把 `name + suffix` 串接(memory.py 約 243–245 行,讀碼實證):`note role implementer.md` 落成 `implementer.md.inbox.md`,`rules.py` 只讀 `<名>.inbox.md`,這條教訓沒有讀者;project 層同理成 `<名>.md.md`。auto-fix 每輪 harvest 同一份 EVIDENCE 會把同一條再寫一次。\n【介面(釘死)】\n1. 名稱接受 `X` 或 `X.md`(只去一個 `.md`),之後一律以 `X` 走既有路徑、事件、stdout。\n2. 拒絕(rc 2,不寫任何檔、不發事件):空、`.`/`..`、含 `/` 或 `\\`、去一個 `.md` 後仍以 `.md` 結尾、以 inbox 後綴(設定 `memory.inbox_suffix`,預設 `.inbox.md`)或其去 `.md` 的形(`.inbox`)結尾。stderr 首行以 `memory: 名稱不合法` 起頭並含原名稱;推得出正確名稱時(後兩類)附 `改用 X`。\n3. model 作者檢查用正規化後的 `X` 比;不放寬「只寫自己的模型」。\n4. 去重鍵 =(層、X、正文、票號;沒給 `--ticket` 視為空票號),只比對目標檔既有行;日期與 `--by` 不入鍵。重複 → rc 0、不追加、不發 `memory.noted`,stdout `memory: 已有同一條 …`。rc 必須是 0:`apply.sh`/harvest 把非零當「拒絕 evidence 行」計數(test_apply 有斷言)。\n5. note **不拿** MemoryLock:test_memory「整理中寫入落進新 inbox」案例在 consolidate 持鎖時呼叫 note,拿鎖就死鎖。並發的同句重送不保證去重,不在本票。\n6. docs/MEMORY.md 專案端那張表下加一段名稱規則(兩三行)。\n【D-033 實測 2026-10-03,main 3e3c82d】grep 既有斷言:`名稱只能是一個檔名`、`名稱不合法`、`已有同一條` 在 tests/verify 無人釘;test_memory、test_apply(harvest 三條)、test_auto_fix(:1356/:1530)、verify/agent-output/test_ticket_20(:397–425)的 note 都是不同正文或單次寫入,去重不會讓它們變紅 —— 查過這幾檔才寫「既有斷言不改」。#74(4353f7d)沒動 memory.py/test_memory;gate.sh 只改了 rules/派工那幾格,`scripts/memory.py)` 那格仍是 `add test_memory`。耗時實測:test_memory.py 約 9 s,test_apply -k memory 3 條約 3.4 s。\n【前置】#72、#74 已落地(Done)。\n【needs_verifier=false 理由】純 CLI 邊界、介面上面全釘死,worker 自證變異紅即可;另派驗證者只會重演同一份契約。\n【model=opus 理由】D-G137:astra 用量上限,記憶批改 opus。\n【規模】S,約 150–250 行差異(memory.py ~40、新測試 ~120、gate 1 行、文件 ~5)。一輪做得完:#74 第 1 輪 30 分鐘寫完 L 票,其餘被全套吃掉;本票 worker 只跑三支小檔(合計 <20 s)與 4 條變異。",
+  "test_plan": "worker 只跑下面三條(在副本一律前綴 `env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR`,#82 落地前必須;否則測試會寫到主線的票庫與事件):\n  python3 -m unittest discover -s tests -p 'test_memory_note_names.py'\n  python3 -m unittest discover -s tests -p 'test_memory.py'\n  python3 -m unittest discover -s tests -p 'test_apply.py' -k memory\n**不要**跑全套、`gate.sh`、test_auto_fix(全套與閘門由 land 跑;#74 第 1 輪就是被全套吃完 3600 s)。\n新測試用 `control_harness.Sandbox` + `run_py(\"scripts/memory.py\", …)`(同 test_memory.Note 的寫法),A1–A4 各一個測試方法、A2 用 subTest;不加測試專用縫。\n變異(每條只跑 test_memory_note_names.py,EVIDENCE 貼紅的第一行):\n  M1 拿掉去 `.md` 的正規化 → A1 紅\n  M2 拿掉去重 → A3 紅\n  M3 拿掉 `.inbox` 後綴的拒絕 → A2 紅\n  M4 作者檢查改用原始名稱比 → A1 的 model 子案紅\n四問:守實際落檔路徑與來源可追溯;可信回歸是多接一個副檔名、錯誤去重(吞掉不同票)或放寬作者;既有案例只用不帶 .md 的名稱,沒覆蓋文件/範本裡寫完整檔名的用法;無測試專用縫。交件時每個新增/改動案例在 EVIDENCE 寫一行完整的 `四問:`。",
   "feature": "記憶治理",
   "decision_refs": [
     "D-021"
   ],
   "verify_strings": [
     "test_memory_note_names",
-    ".md.inbox.md"
+    "名稱不合法",
+    "已有同一條"
   ],
-  "needs_verifier": false
+  "needs_verifier": false,
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 38,
+      "tokens_out": 17431,
+      "cache_write": 62507,
+      "cache_read": 1028268,
+      "wall_seconds": 176,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-03T18:37:10+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 24,
+      "tokens_out": 7496,
+      "cache_write": 41125,
+      "cache_read": 498487,
+      "wall_seconds": 85,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-03T18:39:38+08:00"
+    }
+  ],
+  "branch": "t75",
+  "gate": {
+    "rc": 1,
+    "sha": "2db927f49954a27ad1d69b321dd9c4669bb57bf9",
+    "run_id": "20261003-183711-38181",
+    "at": "2026-10-03T18:38:13+08:00"
+  },
+  "repair_round": 1,
+  "objections": [
+    {
+      "category": "blocking",
+      "body": "紅榜唯一一條 test_no_project_names 抓的是 tickets/74.json 的 .cost[0].note / .cost[1].note(由 astra-worker.sh 與 auto-fix.sh 寫入的絕對路徑),它在 base 上一樣紅、與 #75 的 patch 無關;要修的是寫 cost note 的管線(改成相對路徑)並清 tickets/74.json,不在 #75 範圍,而且 #75 自己的 cost note 之後也會被寫成同樣的絕對路徑。",
+      "evidence": "../agent-control-wt/fix-t75/round2/EVIDENCE-round2.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "tickets/74.json 的 cost[0]/[1].note 已用 ticket.py set 74 cost 改成相對路徑(74 v29),A main 上 test_no_project_names 轉綠;寫入端(ticket.py read_envelope/cmd_cost 把傳入的絕對路徑原樣嵌進 note)另開 #83,不併 #82。"
+    }
+  ],
+  "owner": "main"
 }

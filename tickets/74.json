@@ -73,7 +73,7 @@
   "attempt": 0,
   "base_sha": "3531c9beae0dcf4ae35fe70064e62e548264970d",
   "state": "Done",
-  "state_version": 28,
+  "state_version": 29,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -106,7 +106,7 @@
       "cache_read": null,
       "wall_seconds": 1698,
       "by": "astra-worker.sh",
-      "note": "/Users/franksai/ai_workspace/claude_workspace/agent-control-wt/fix-t74/astra/round1.log 裡沒有 JSON 信封",
+      "note": "../agent-control-wt/fix-t74/astra/round1.log 裡沒有 JSON 信封",
       "at": "2026-10-01T01:30:21+08:00"
     },
     {
@@ -119,7 +119,7 @@
       "cache_read": null,
       "wall_seconds": 3601,
       "by": "auto-fix.sh",
-      "note": "/Users/franksai/ai_workspace/claude_workspace/agent-control/reports/t74/20261003-164724-68109/worker-round1.log 裡沒有 JSON 信封",
+      "note": "reports/t74/20261003-164724-68109/worker-round1.log 裡沒有 JSON 信封",
       "at": "2026-10-03T17:47:25+08:00"
     },
     {

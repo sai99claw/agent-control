@@ -1,0 +1,49 @@
+{
+  "id": "83",
+  "subject": "ticket.py cost 的 note 不寫絕對路徑(信封路徑記成相對 repo 根)",
+  "created": "2026-10-03T18:42:06+08:00",
+  "objective": "任何一支腳本(auto-fix.sh / review.sh / land.sh / 主線外掛的 worker 腳本)經 ticket.py cost 帶絕對路徑的 --from-envelope 寫進票的 cost[].note,都不含絕對路徑;tickets/*.json 不再因成本紀錄讓 test_no_project_names 變紅。",
+  "acceptance": [
+    "單元(tests/test_ticket.py,沿用該檔 cost 案例的沙盒):在沙盒 repo 根底下造 reports/t1/worker-round1.log(內容 'not json'),以它的**絕對路徑**跑 ticket.py cost 1 --from-envelope;票 cost[-1].note 逐字等於 'reports/t1/worker-round1.log 裡沒有 JSON 信封'(期望值由測試自己拼的相對路徑 + 既有原因字樣,不從被測程式算),且不含沙盒根的絕對路徑字串。",
+    "單元(同檔):信封檔放在沙盒 repo 根的兄弟目錄(repo 外)、以絕對路徑傳入且內容不是 JSON;note 以 '../' 開頭、含 '沒有 JSON 信封'、不含沙盒根或其父目錄的絕對路徑字串。'讀不到'(檔不存在)與 '的信封沒有 usage' 兩種原因各一條同形斷言。",
+    "讀得到信封的那一列 note 照舊是 null;沒帶 --from-envelope 的 note 照舊是 '沒帶 --from-envelope'。既有 oracle 查過不衝突、不改仍綠:tests/test_ticket.py test_a_null_row_says_why_in_its_note(assertIn 原因字樣)、tests/test_auto_fix.py 約 2186 行 assertIn '沒有 JSON 信封'。",
+    "變異(實作者自證):把 note 改回寫傳入的原字串 → 驗收 1、2 紅;EVIDENCE 附紅的第一行。"
+  ],
+  "in_scope": [
+    "scripts/ticket.py",
+    "tests/test_ticket.py"
+  ],
+  "out_of_scope": [
+    "scripts/auto-fix.sh",
+    "scripts/review.sh",
+    "scripts/land.sh",
+    "tests/test_no_project_names.py"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/ticket.py",
+    "tests/test_ticket.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "3e3c82d3c9397aba1209ba364380f3bbc2d074d8",
+  "state": "Draft",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "verify_strings": [
+    "test_cost_note_records_the_envelope_path_relative_to_the_repo"
+  ],
+  "feature": "成本紀錄",
+  "test_plan": "驗什麼/哪一層/怎麼驗/期望值來源:A1 單元:沙盒 repo 根下造非 JSON 的 log,絕對路徑傳 --from-envelope,讀票 cost[-1].note == 測試自拼的 'reports/t1/worker-round1.log 裡沒有 JSON 信封'。A2 單元:repo 外兄弟目錄的檔(非 JSON / 不存在 / 無 usage 三種),note 以 '../' 開頭、含原因字樣、assertNotIn 沙盒根絕對路徑。A3 單元:不加案例,既有 test_ticket.py cost 案例與 test_auto_fix.py 成本案例全綠當守衛。新案例方法名用 test_cost_note_records_the_envelope_path_relative_to_the_repo(可再加同前綴的子案例)。功能標籤:無(不動 verify/ 案例)。",
+  "outline": "【來源】#75 第 2 輪 blocking 反駁(accepted):tickets/74.json 的 cost[0]/[1].note 含絕對路徑,test_no_project_names(tickets/*.json 為文件級,只禁家目錄絕對路徑前綴)在 main 紅;74.json 已由開題者用 ticket.py set 74 cost 清成相對路徑。【D-033 實測】寫入點不是 auto-fix.sh:note 由 scripts/ticket.py read_envelope() 的原因字串 '%s 裡沒有 JSON 信封' / '讀不到 %s' / '%s 的信封沒有 usage' 把傳入路徑原樣嵌入,cmd_cost 存進 note;auto-fix.sh:230、review.sh:393、land.sh:670 都經 ticket.py cost,修這一處全收(主線 scratchpad 的 astra-worker.sh 是否也經 ticket.py cost【未實測】,by 欄寫 astra-worker.sh 推定是)。root() = event.repo_root()。【設計裁示】note 裡的路徑以 repo 根為基準 os.path.relpath;stderr 訊息怎麼印交實作者。不放寬守衛、不加白名單。【不併 #82】#82 是 worker 環境隔離(Draft、依 #74、範圍 auto-fix.sh/review.sh),而本票寫入點在 ticket.py,併入只會擴大 #82 範圍並讓這個小修等它。【needs_verifier=false】A 的腳本票慣例,介面(note 字樣)寫死在驗收,實作者以變異自證。【規模】S:ticket.py 約 5–10 行、新案例 2–4 條。",
+  "needs_verifier": false
+}
