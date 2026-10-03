@@ -198,7 +198,7 @@ class Consolidate(Sandbox):
 
     def candidate(self, body):
         self.write("discussions/2026-09-12-memory-opus.candidate.md", body)
-        return ["--candidate", "discussions/2026-09-12-memory-opus.candidate.md"]
+        return "discussions/2026-09-12-memory-opus.candidate.md"
 
     def test_consolidate_help_prints_its_flags_and_a_pasteable_example(self):
         done = self.memory("consolidate", "--help")
@@ -221,7 +221,8 @@ class Consolidate(Sandbox):
         (落到「要兩份」那一句,不說 D-007 的理由)。
         """
         self.write("memory/model/opus.md", FRONT % 2000 + "坑\n")
-        done = self.memory("consolidate", "memory/model/opus.md", *self.candidate("新版\n"))
+        done = self.memory("consolidate", "memory/model/opus.md",
+                           "--candidate", self.candidate("新版\n"))
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("--discussion", done.stderr)
         self.assertIn("沒討論就刪了", done.stderr)
@@ -242,7 +243,8 @@ class Consolidate(Sandbox):
         """
         self.write("memory/model/opus.md", FRONT % 2000 + "坑\n")
         name = self.talk("fable", conclusion=False)
-        done = self.memory("consolidate", "memory/model/opus.md", *self.candidate("新版\n"),
+        done = self.memory("consolidate", "memory/model/opus.md",
+                           "--candidate", self.candidate("新版\n"),
                            "--discussion", name, "--discussion", self.talk("opus"))
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("還沒有結論區", done.stderr)
@@ -265,7 +267,8 @@ class Consolidate(Sandbox):
     def test_a_reasoned_raise_is_written_into_the_file_with_its_history(self):
         self.write("memory/model/opus.md", FRONT % 2000 + "坑\n")
         talks = self.both()
-        done = self.memory("consolidate", "memory/model/opus.md", *self.candidate("坑\n"),
+        done = self.memory("consolidate", "memory/model/opus.md",
+                           "--candidate", self.candidate("坑\n"),
                            *talks, "--new-cap", "2600", "--by", "fable",
                            "--reason", "四條反例各不相同,合併會失去可辨識性")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -290,7 +293,8 @@ class Consolidate(Sandbox):
         self.write("memory/model/opus.md", FRONT % 2000 + "舊的一條\n")
         self.write("memory/model/opus.inbox.md", "- 整理期間新記的一條 (#1, 2026-09-12, worker@opus)\n")
         done = self.memory("consolidate", "memory/model/opus.md",
-                           *self.candidate("舊的一條\n整理期間新記的一條\n"), *self.both())
+                           "--candidate", self.candidate("舊的一條\n整理期間新記的一條\n"),
+                           *self.both())
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         text = self.read("memory/model/opus.md")
         self.assertEqual(text, FRONT % 2000 + "舊的一條\n整理期間新記的一條\n")
@@ -305,7 +309,7 @@ class Consolidate(Sandbox):
     def test_a_note_during_consolidation_lands_in_a_new_inbox(self):
         self.write("memory/model/opus.md", FRONT % 2000 + "舊的一條\n")
         self.write("memory/model/opus.inbox.md", "- 待整理的一條 (#1, 2026-09-12, worker@opus)\n")
-        argv = ["memory/model/opus.md"] + self.candidate("新版\n") + self.both()
+        argv = ["memory/model/opus.md", "--candidate", self.candidate("新版\n")] + self.both()
         entered = threading.Event()
         release = threading.Event()
         original = memory_module.write
@@ -342,7 +346,7 @@ class Consolidate(Sandbox):
         self.write("memory/model/opus.md", FRONT % 2000 + "坑\n")
         self.write("memory/model/opus.inbox.md", "- 一條 (#1, 2026-09-12, worker@opus)\n")
         done = self.memory("consolidate", "memory/model/opus.md",
-                           *self.candidate("坑" * 2500), *self.both())
+                           "--candidate", self.candidate("坑" * 2500), *self.both())
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("超過上限", done.stderr)
         self.assertEqual(self.read("memory/model/opus.md"), FRONT % 2000 + "坑\n")
