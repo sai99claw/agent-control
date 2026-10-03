@@ -314,6 +314,15 @@ EV
 class AgentOutputHarness(Sandbox):
     """這一組的共用機關:開票、樁一支 worker、直接寫一輪紅榜、起 `auto-fix.sh`。"""
 
+    def setUp(self):
+        super(AgentOutputHarness, self).setUp()
+        # #74:缺角色卡或模型卡時規則包非零、`auto-fix.sh` 不起 agent(rc=6)。這一組要
+        # 起假 worker / 驗證者,所以裝規則來源;只裝在這一組 —— 上面記憶上限那一類刻意
+        # 只裝兩張卡,不跟著整批裝。
+        self.install_rules_sources()
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "沙盒:規則包的來源(#74)")
+
     def stub_worker(self, body):
         path = os.path.join(self.home, "agentout-worker.sh")
         write_executable(path, body)

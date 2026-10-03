@@ -122,6 +122,13 @@ def top():
                          " —— 到 agent-control 跑 sh scripts/sync-to-project.sh <這個專案的根>"))
     else:
         sys.stdout.write(text.rstrip("\n") + "\n")
+    # 專案自己整理過的主卡(#74):暫存區整理進 `memory/role/<卡>.md` 之後,那幾條從暫存區
+    # 消失 —— 只印暫存區的話,整理前看得到的規矩整理後就看不到了。正本的主卡就是上面那一張。
+    if not canon:
+        rel = os.path.join(local_role, card + ".md")
+        text = read(rel)
+        if text and text.strip():
+            sys.stdout.write("\n%s(本專案整理過的主卡):\n%s\n" % (rel, text.strip("\n")))
     # 暫存區住在 memory/(這個 repo 自己寫的),同步刻意不帶它(D-021):只印尾巴。
     rel = os.path.join(local_role, card + suffix)
     lines = [line for line in (read(rel) or "").splitlines() if line.strip()]
@@ -191,6 +198,8 @@ def reading():
     else:
         say(rel, "你這個角色的角色卡(agent-control 的 %s 同步本)"
             % os.path.join(local_role, card + ".md"))
+        if os.path.exists(os.path.join(root, local_role, card + ".md")):
+            say(os.path.join(local_role, card + ".md"), "這個專案整理過的角色規矩")
         say(os.path.join(local_role, card + suffix), "這個專案疊上去的角色規矩")
     name = os.path.basename(rules.model_card(root, model) or model + ".md")
     rel = os.path.join(local_model, name)
@@ -203,6 +212,9 @@ def reading():
         say(os.path.join(models, name), "你這個模型在 agent-control 踩過的坑(同步本)")
         say(local_role + "/", "這個專案自己寫的角色備忘")
         say(rules.local_dir("project") + "/", "這個專案的專案事實")
+    # 全域交接與收件匣是主線的(`docs/SESSION-START.md` 那張表):短命角色不列(#74)。
+    if role != "main":
+        return
     say(os.path.join("docs", "HANDOFF.md"), "現況 —— 上一個 session 留給你的(舊的在 docs/handoff/)")
     # 收件匣住在設定的 reports_dir(專案可以放在根外面),照 inbox.py 同一格解析。
     say(os.path.relpath(inbox.inbox_dir(root), root) + "/", "上面印的那幾則(inbox.py show <票號> 讀一頁)")
@@ -226,11 +238,17 @@ git -C "$ROOT" status --short | awk '
     NR <= 10 { print }
     END { if (NR > 10) printf "git: 還有 %d 行沒列 —— 全部:git status --short\n", NR - 10 }'
 
-say "2. 最近發生的事"
-part events
+# 事件流與開票清單是主線的全域交接(`docs/SESSION-START.md` 那張表,#74):短命角色
+# 每貼一份就是每一個 agent 各付一次,而它們用不到。
+if [ "$ROLE" = "main" ]; then
+    say "2. 最近發生的事"
+    part events
 
-say "3. 開著的票"
-part tickets
+    say "3. 開著的票"
+    part tickets
+else
+    say "2–3. 略過:事件流與開票清單是主線的全域交接,$ROLE 不讀(docs/SESSION-START.md)"
+fi
 
 # 記憶的上限:D-006 要求每個 session 開頭量一次。**退出碼 1 不停工** ——
 # 它只是讓這個 session 知道自己的記憶該整理了(docs/MEMORY.md 第 1 點)。
@@ -287,6 +305,10 @@ case "$ROLE" in
         ;;
 esac
 echo
-echo "結束前:交接寫 docs/HANDOFF.md、關票前先 ticket.py verify。"
+if [ "$ROLE" = "main" ]; then
+    echo "結束前:交接寫 docs/HANDOFF.md、關票前先 ticket.py verify。"
+else
+    echo "結束前:交接寫在你的回報裡(全域交接是主線的)。"
+fi
 echo "session: $SID"
 echo "結束前:python3 $CTL/event.py emit session.end --role $ROLE --session $SID"

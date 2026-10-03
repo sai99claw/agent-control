@@ -31,14 +31,13 @@ class RulesBase(Sandbox):
     def source_size(self):
         return len(self.read(os.path.join("docs", "DISPATCH-TEMPLATE.md")).encode("utf-8"))
 
-    # 緊預算那一包。正本也帶自己的暫存區之後(#37),先讀清單多兩行、「砍過」名單多兩名,
-    # 2000 B 連前言 + 「砍過」那一句都放不下(實測到 2307 才放得下)。
-    TIGHT_BYTES = 2400
+    # 緊預算那一包。#74 起每一項至少留一個完整的正文單位、放不下就不交:worker 十節 +
+    # 角色卡 + 模型卡 + 兩格暫存區各一個單位,加上固定成本,真的 `memory/` 量到約 3.3 KB。
+    TIGHT_BYTES = 3500
 
     def tight_pack(self):
         """暫存區寫死在這裡,不吃真的 `memory/*.inbox.md` —— 那幾份會長會縮,這一組的
-        餘裕就跟著漂。兩格都比暫存區那 600 B 長,所以一定被砍、一定進「砍過」名單:
-        角色卡、節錄、模型記憶、兩格暫存五份都砍過,仍然是緊預算。"""
+        餘裕就跟著漂。兩格都比暫存區那 600 B 長,所以一定被砍、一定留 `…`。"""
         lessons = "".join("- 暫存第%d條 %s\n" % (i, "舊" * 60) for i in range(1, 6))
         self.write(os.path.join("memory", "role", "implementer.inbox.md"), lessons)
         self.write(os.path.join("memory", "model", "opus.inbox.md"), lessons)
@@ -112,10 +111,12 @@ class WhatItPacks(RulesBase):
     def test_a_verifier_gets_a_different_cut(self):
         """驗證者不需要「副本 + patch」那一整節(它交的是案例,不是產品 patch)。"""
         worker = self.rules("pack", "worker", "--model", "opus").stdout
-        verifier = self.rules("pack", "verifier", "--model", "sonnet").stdout
+        # #74:指定了卻沒有卡的模型(以前是 sonnet)現在是錯 —— 換一個有卡的。
+        verifier = self.rules("pack", "verifier", "--model", "fable").stdout
         self.assertNotEqual(worker, verifier)
         self.assertIn("副本 + patch", worker)
-        self.assertNotIn("### 1. 副本 + patch", verifier)
+        self.assertTrue(verifier.strip(), "驗證者的包是空的")
+        self.assertNotIn("§1 副本 + patch", verifier)
 
     def test_it_names_the_version_it_was_cut_from(self):
         """規則包會被貼進派工文,而**一份不知道自己是哪一版的規則包**沒辦法被追。"""
@@ -130,42 +131,44 @@ class WhenItHasToCut(RulesBase):
         """同一份 tight_pack 答三件事(#72 併入 WhatItAlwaysCarries 與
         TheStructuredDeliverySection 的 test_a_tight_budget_cuts_the_other_parts_not_this_one):
 
-        1. 砍了要說砍了哪一份(「截斷」「砍過」)。
-        2. 記憶回寫段先扣預算:上限縮到緊預算時,砍的是角色卡與節錄,這一段一個字不少。
-           **變異**:把 `pack()` 結尾接上 `MEMORY_NOTE` 那一行拿掉 → 紅。
-        3. 結構化交付段同樣先扣、不被砍。
-           **變異**:把 `pack()` 結尾接上 `DELIVERY_NOTE` 那一段拿掉 → 紅。
+        1. 砍了要說砍了(包頭那一行說「…」= 截斷,砍過的每一格留一個 `…`)。
+        2. 記憶回寫段是固定成本:上限縮到緊預算時,砍的是角色卡與節錄,這一段一個字不少。
+           **變異**:把 `build()` 的 layout 拿掉 `MEMORY_NOTE` → 紅。
+        3. 結構化交付段同樣是固定成本、不被砍。
+           **變異**:把 `build()` 的 layout 拿掉 `DELIVERY_NOTE` → 紅。
         """
-        # 緊預算不是 1200:記憶回寫段(約 600 B)先扣,1200 連前言 + 「砍過」那一句都放不下。
         done = self.tight_pack()
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertLessEqual(len(done.stdout.encode("utf-8")), self.TIGHT_BYTES)
-        self.assertIn("截斷", done.stdout)
-        self.assertIn("砍過", done.stdout)
+        self.assertIn("截斷", "\n".join(done.stdout.splitlines()[:3]))
+        self.assertGreaterEqual(done.stdout.splitlines().count("…"), 5,
+                                "角色卡、節錄、模型記憶、兩格暫存都砍過,每一格都要留記號")
         self.assertTrue(done.stdout.rstrip("\n").endswith(WhatItAlwaysCarries.LAST_LINE),
                         done.stdout[-300:])
         self.assertIn(TheStructuredDeliverySection.LAST_LINE, done.stdout)
 
     def test_a_bigger_budget_carries_more(self):
-        small = self.rules("pack", "worker", "--model", "opus",
-                           "--max-bytes", "1500").stdout
-        big = self.rules("pack", "worker", "--model", "opus",
-                         "--max-bytes", "6000").stdout
-        self.assertGreater(len(big.encode("utf-8")), len(small.encode("utf-8")))
+        small = self.rules("pack", "worker", "--model", "opus", "--max-bytes", "3500")
+        big = self.rules("pack", "worker", "--model", "opus", "--max-bytes", "6000")
+        # #74:放不下就非零、stdout 是空的 —— 不先釘 rc,「小的那份是空字串」也會讓這一條綠。
+        self.assertEqual(small.returncode, 0, small.stderr)
+        self.assertEqual(big.returncode, 0, big.stderr)
+        self.assertGreater(len(big.stdout.encode("utf-8")), len(small.stdout.encode("utf-8")))
 
     def test_a_section_that_is_no_longer_in_the_source_is_called_out(self):
         """名單與文件分岔時要**出聲**:一份靜靜少了兩節的規則包,與完整的那一份
-        在畫面上長得一樣。
+        在畫面上長得一樣。#74 起少一節就不交:非零、stdout 沒有半包、stderr 點名。
 
-        **變異**:把 `missing` 那一段拿掉 → 這一條紅。
+        **變異**:把 `build()` 裡「找不到這一節」那一格的 `problem(...)` 拿掉 → 這一條紅。
         """
         text = self.read(os.path.join("docs", "DISPATCH-TEMPLATE.md"))
         self.write(os.path.join("docs", "DISPATCH-TEMPLATE.md"),
                    text.replace("## 2. 禁區", "## 2222. 換了號碼的禁區"))
         done = self.rules("pack", "worker", "--model", "opus")
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("找不到這幾節", done.stdout)
-        self.assertIn("§2", done.stdout)
+        self.assertEqual(done.returncode, 1, done.stdout)
+        self.assertEqual(done.stdout, "")
+        self.assertIn("找不到這一節", done.stderr)
+        self.assertIn("§2 ", done.stderr)
 
 
 class HowItAnswers(RulesBase):
@@ -194,11 +197,16 @@ class HowItAnswers(RulesBase):
         self.assertIn("memory/model/opus.md", done.stdout)
         self.assertNotIn("memory/model/codex:opus.md", done.stdout)
 
-    def test_a_missing_model_memory_does_not_break_the_pack(self):
-        """模型記憶還沒有的那個模型也要派得出工。"""
+    def test_a_named_model_without_a_card_is_an_error(self):
+        """#74 取代「模型記憶還沒有的模型也要派得出工」:**指定了**卻沒有卡,與「這個模型
+        沒踩過坑」長得一樣 —— 派出去的包少了整格,而沒有人知道。沒指定模型才不要卡。"""
         done = self.rules("pack", "worker", "--model", "nobody")
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("memory/role/implementer.md", done.stdout)
+        self.assertEqual(done.returncode, 1, done.stdout)
+        self.assertEqual(done.stdout, "")
+        self.assertIn("memory/model/nobody.md", done.stderr)
+        unnamed = self.rules("pack", "worker")
+        self.assertEqual(unnamed.returncode, 0, unnamed.stderr)
+        self.assertIn("memory/role/implementer.md", unnamed.stdout)
 
 
 class WhatItAlwaysCarries(RulesBase):
@@ -246,7 +254,7 @@ class TheStructuredDeliverySection(RulesBase):
     **變異**:把 `pack()` 結尾接上 `DELIVERY_NOTE` 那一段拿掉 → 這一組全紅。
     """
 
-    LAST_LINE = "編一個數字進去,與量過那個數字長得一樣。"
+    LAST_LINE = "寫不出的留 `null`,不要編。"
 
     def test_it_points_at_the_two_places_instead_of_copying_the_keys(self):
         """schema 只寫兩處。規則包抄第三份的那一天,三份會各自往不同方向漂 ——
@@ -276,9 +284,10 @@ class EfficiencyOverSpeed(RulesBase):
         self.assertTrue(lines[0].startswith("# 規則包:"), lines[0])
         title_at = done.stdout.index(lines[0])
         note_at = done.stdout.index("不追求快")
-        list_at = done.stdout.index("## 先讀這幾份")
+        # #74:逐檔的先讀清單併進各段標題(標題列就是路徑),第一段是角色卡。
+        list_at = done.stdout.index("## 角色卡")
         self.assertTrue(title_at < note_at < list_at,
-                        "D-016 那一行要在標題之後、先讀清單之前")
+                        "D-016 那一行要在標題之後、第一段之前")
 
 
 class TheFixedSectionsAreSmall(unittest.TestCase):
@@ -343,12 +352,13 @@ class TheProjectLayer(RulesBase):
 
     def test_project_notes_are_a_path_not_a_paste(self):
         """專案層不設上限、會長;貼進 4 KB 包會把角色卡擠掉,而砍到只剩標題與沒貼
-        一樣。所以只列路徑,要看的那一次用 grep(D-013 第 4 條)。"""
+        一樣。所以只給**一個**速查入口,要看的那一次用 grep(D-013 第 4 條)。#74 量到
+        逐檔清單在 T 占 1,121 B —— 檔名也不逐個列。"""
         done = self.rules("pack", "worker", "--model", "opus")
-        self.assertIn(os.path.join("memory", "project", "foo.md"), done.stdout)
-        self.assertIn("## 先讀這幾份",
-                      done.stdout[:done.stdout.index("memory/project/foo.md")],
-                      "專案備忘的路徑要在先讀清單裡")
+        self.assertIn("`memory/project/`", done.stdout)
+        self.assertNotIn(os.path.join("memory", "project", "foo.md"), done.stdout)
+        self.assertIn("memory/project/",
+                      done.stdout[:done.stdout.index("## 角色卡")], "入口要在包頭")
         self.assertNotIn(self.PROJECT_NOTE, done.stdout)
 
     def test_the_inbox_only_brings_its_last_lines(self):
@@ -359,7 +369,8 @@ class TheProjectLayer(RulesBase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn("INBOX-59", done.stdout, "最後一行才是最新的那一條")
         self.assertNotIn("INBOX-1 ", done.stdout)
-        self.assertIn("只留最後幾行", done.stdout, "砍了要出聲")
+        heading = "### 暫存 `memory/role/implementer.inbox.md`\n"
+        self.assertIn(heading + "…\n", done.stdout, "砍了要出聲(記號在留下的那幾條前面)")
 
     def test_being_the_canon_repo_itself_reads_the_card_once(self):
         """`roles_dir` 與 `memory/role` 是同一個目錄 = 這個 repo 就是正本。疊兩次的話
@@ -408,21 +419,26 @@ class TheProjectLayer(RulesBase):
         self.assertIn("INBOX-3", done.stdout, "主檔不在,暫存區還是要讀得到")
 
     def test_a_budget_too_small_for_the_inbox_still_names_it(self):
-        """**默默消失的一格與從來沒有過的一格長得一樣**:預算縮到連暫存區都放不下時,
-        輸出裡仍然要點得出是哪一個檔被砍掉。
+        """**默默消失的一格與從來沒有過的一格長得一樣**:#74 起暫存區至少留最後一條、
+        標題列寫著它的檔名;連那一條都放不下就整包不交、stderr 點名,不是靜靜少一格。
 
-        **變異**:把最後那一刀的指路改回不含 `cut` 名單 → 這一條紅。
+        **變異**:`build()` 裡角色暫存區那一格換成 `None`(不進包)→ 這一條紅。
         """
         os.remove(os.path.join(self.repo, "memory", "role", "implementer.md"))
-        done = self.rules("pack", "worker", "--model", "opus", "--max-bytes", "1500")
+        done = self.rules("pack", "worker", "--model", "opus", "--max-bytes", "3000")
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertLessEqual(len(done.stdout.encode("utf-8")), 1500)
+        self.assertLessEqual(len(done.stdout.encode("utf-8")), 3000)
         self.assertIn(os.path.join("memory", "role", "implementer.inbox.md"),
                       done.stdout, "砍掉了卻沒點名 = 讀的人以為本來就沒有這一格")
+        self.assertIn("INBOX-3", done.stdout, "暫存區最新的那一條是必要正文")
+        tiny = self.rules("pack", "worker", "--model", "opus", "--max-bytes", "1500")
+        self.assertEqual(tiny.returncode, 1, tiny.stdout)
+        self.assertEqual(tiny.stdout, "")
 
     def test_the_reading_list_points_at_both_layers(self):
         done = self.rules("pack", "worker", "--model", "opus")
-        head = done.stdout[:done.stdout.index("## 角色卡")]
+        # #74:沒有獨立的先讀清單了,每一格的標題列就是它的路徑。
+        head = "\n".join(line for line in done.stdout.splitlines() if line.startswith("#"))
         for pointer in (os.path.join("docs", "roles", "implementer.md"),
                         os.path.join("memory", "role", "implementer.md"),
                         os.path.join("docs", "roles", "model", "opus.md"),
@@ -447,29 +463,14 @@ def hundred_byte_lines(tag, count):
     return "".join(out)
 
 
-def below(text, is_heading):
-    """每個 `is_heading` 的行底下、到下一個以 `#` 開頭的行之前的那一段。"""
-    lines = text.split("\n")
-    out = []
-    for index, line in enumerate(lines):
-        if not is_heading(line):
-            continue
-        end = index + 1
-        while end < len(lines) and not lines[end].startswith("#"):
-            end += 1
-        out.append("\n".join(lines[index + 1:end]))
-    return out
-
-
 class TheSectionFloor(RulesBase):
-    """節的下限(#47):每一節至少印「### 標題」+ 一行「全文在哪」—— 那幾 bytes 照節名
-    算得出來,要**先從預算扣掉**,角色卡 / 記憶 / 暫存區分的才是真的剩餘。以前分完才用
-    `120 × 剩幾節` 擋,十節的下限撐破節錄那一份,最後一刀從尾巴砍:暫存區內容沒了、
-    角色卡節錄 486→219 B(#37 量的)。
+    """節的下限(#47 → #74):每一節、角色卡、模型卡、暫存區至少留一個**完整的正文單位**
+    —— 以前的下限是「### 標題 + 一行全文在哪」,十節都只剩標題也算過關(#74 量到的就是
+    那一種)。
 
     夾具自己寫,不吃真的 `memory/` 與共用規矩(那幾份會長會縮):角色卡 1500 B、模型記憶
-    1500 B、角色暫存區 3 行各 100 B、共用規矩十節各 800 B;節標題長度照真的節抓,十節的
-    下限約 1.2 KB。模型暫存區不在夾具裡 —— `install_rules_sources` 複製進來的那一份刪掉。
+    1500 B、角色暫存區 3 行各 100 B、共用規矩十節各 800 B。模型暫存區不在夾具裡 ——
+    `install_rules_sources` 複製進來的那一份刪掉。
     """
 
     NUMS = ("1", "2", "3", "4", "5", "5.5", "5.7", "6.4", "7", "8")
@@ -506,72 +507,32 @@ class TheSectionFloor(RulesBase):
         self.assertLessEqual(len(done.stdout.encode("utf-8")), max_bytes)
         return done.stdout
 
-    def inbox_bodies(self, text):
-        return below(text, lambda line: line.startswith("#") and "暫存" in line)
+    def lines_of(self, text, tag):
+        return [line for line in text.split("\n") if line.startswith("- %s-" % tag)]
 
     def test_the_floor_is_paid_before_the_card_and_the_inbox_get_theirs(self):
-        """D1:4096 B 裡十節的下限全在、角色卡節錄 ≥ 400 B、暫存區至少留一行。
+        """D1:4096 B 裡十節每一節都至少一行正文、角色卡 ≥ 5 行(它一輪多給三個單位;
+        每格一輪一個單位的話只輪得到 3 行 —— 2026-10-03 對這個夾具實測 6 / 3)、
+        暫存區至少留最後一行。
 
-        **變異 M1**:把 `free` 裡的 `- sum(floors)` 拿掉 → 紅(分出去的超過上限,最後一刀
-        從節錄砍,後面幾節的標題與「全文在哪」不見了)。
+        **變異 M1**:`grow()` 裡角色卡的 `weight` 不看(每格一輪一個單位)→ 角色卡那一句紅。
         """
         text = self.pack(4096)
-        cards = below(text, lambda line: line == "## 角色卡(節錄)")
-        self.assertEqual(len(cards), 1, text)
-        self.assertGreaterEqual(len(cards[0].encode("utf-8")), 400, cards[0])
-        bodies = self.inbox_bodies(text)
-        self.assertEqual(len(bodies), 1, "夾具只有角色暫存區這一格")
-        for body in bodies:
-            self.assertTrue([line for line in body.split("\n") if line.startswith("- INBOX-")],
-                            "暫存區一行都沒留:" + body)
+        self.assertGreaterEqual(len(self.lines_of(text, "CARD")), 5, text)
+        self.assertIn("- INBOX-02 ", text, "暫存區最新的那一行沒留")
         for num in self.NUMS:
-            self.assertIn("### %s. %s\n…(截斷:全文見 `docs/DISPATCH-TEMPLATE.md` §%s)"
-                          % (num, self.TITLE, num), text, "節的下限不見了:§" + num)
+            self.assertTrue(self.lines_of(text, "RULE" + num), "§%s 只剩標題:%s" % (num, text))
 
-    def test_a_budget_below_the_floor_still_names_the_inbox_it_cut(self):
-        """D2:上限 2500 連十節的下限都放不下。暫存區要嘛小標底下還有內容,要嘛「砍過」
-        名單列出它的檔名 —— 內容沒了、名單也沒列,與那一格從來沒有過長得一樣(§5.5)。
-
-        **變異**:暫存區砍了卻不進名單(`inbox_cut.append(one)` 拿掉)→ 紅。
-        """
+    def test_a_tight_budget_still_carries_every_floor(self):
+        """D2:2500 B —— 每一格只放得下一兩個單位,但每一格都還在;放不下下限的預算是
+        非零(不是只剩標題的半包)。"""
         text = self.pack(2500)
-        kept = [line for body in self.inbox_bodies(text) for line in body.split("\n")
-                if line.startswith("- INBOX-")]
-        notes = [line for line in text.split("\n") if line.startswith("> 這一份為了守住")]
-        named = bool(notes) and self.INBOX in notes[0].split("砍過:", 1)[1]
-        self.assertTrue(kept or named, text)
-
-
-class TheLastCut(RulesBase):
-    """最後一刀(#47 D2):組完仍超過就照順序砍 —— 模型記憶 → 共用規矩節錄 → 角色卡,
-    暫存區最後;每砍一格都進「砍過」名單,砍到放得下就停。
-
-    直接叫 `rules.trim`:分預算照真的長度算過之後,`pack` 很難再走到「暫存區還有內容、
-    卻得在最後一刀被砍」那一步,而那一步正是 #37 量到的那一種消失。
-    """
-
-    LIMIT = 400
-
-    def test_it_cuts_memory_rules_card_then_inbox_and_names_each(self):
-        """**變異 M2**:最後一刀砍了暫存區卻不進名單 → 紅。"""
-        rules = rules_module(self.repo)
-        parts = {key: "\n".join(hundred_byte_lines(key.upper(), 5).split("\n")[:-1])
-                 for key in ("card", "inbox", "rules", "mem")}
-        last = parts["inbox"].split("\n")[-1]
-        cut = []
-
-        def render():
-            note = ["> 砍過:" + "、".join(cut)] if cut else []
-            return "\n".join(note + [parts[key] for key in ("card", "inbox", "rules", "mem")])
-
-        order = [("mem", "M.md", "`M.md`", rules.clip),
-                 ("rules", "R.md 的節錄", "`R.md`", rules.clip),
-                 ("card", "C.md", "`C.md`", rules.clip),
-                 ("inbox", "I.inbox.md", "`I.inbox.md`", rules.tail)]
-        text = rules.trim(render, parts, order, cut, self.LIMIT)
-        self.assertLessEqual(len(text.encode("utf-8")), self.LIMIT, text)
-        self.assertEqual(cut, ["M.md", "R.md 的節錄", "C.md", "I.inbox.md"])
-        self.assertIn(last, text, "暫存區最新的那一行最後才砍")
+        for tag in ("CARD", "MODEL", "INBOX") + tuple("RULE" + num for num in self.NUMS):
+            self.assertTrue(self.lines_of(text, tag), "%s 只剩標題:%s" % (tag, text))
+        done = self.rules("pack", "worker", "--model", "opus", "--max-bytes", "1800")
+        self.assertEqual(done.returncode, 1, done.stdout)
+        self.assertEqual(done.stdout, "")
+        self.assertIn("1800", done.stderr)
 
 
 def rules_module(repo):

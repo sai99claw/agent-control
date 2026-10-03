@@ -30,6 +30,7 @@
 #
 # ## 退出碼
 #   0 pass(review 已寫)   1 fail(票 Blocked,等主線裁示)   2 用法 / 前提不成立
+#     (含規則包產不出來 —— reviewer 沒起,#74)
 #   3 沒交件               4 review 或反駁寫不進票
 set -u
 # 根的找法與 `auto-fix.sh` 同一套:`AC_ROOT` 優先;往上找 `board/config.json`;
@@ -216,9 +217,16 @@ PY
 CWD=${WT:-$ROOT}
 RESULT_JSON=$RUNDIR/result-reviewer-round$ROUND.json
 
+# 規則包先產、成功才組派工文(#74):產不出來時 rules.py 已經非零、stdout 沒有半包、送了
+# decision 頁 —— 這裡不准 fallback 起 reviewer。命令裡沒寫 `--model`(MODEL=unknown)就不指定
+# 模型卡:指定一張不存在的卡是錯,而「不知道是哪個模型」不是指定。
+RULES_MODEL=$MODEL
+[ "$RULES_MODEL" != "unknown" ] || RULES_MODEL=""
+RULES_TEXT=$(AC_TICKET=$ID python3 "$AC/rules.py" pack reviewer --model "$RULES_MODEL") \
+    || refuse "規則包產不出來(模型 ${RULES_MODEL:-未指定})" \
+              "補齊 rules.py 列的缺項(decision 頁)再跑 sh scripts/review.sh $ID"
 {
-    python3 "$AC/rules.py" pack reviewer --model "$MODEL" 2>/dev/null \
-        || echo "(規則包產不出來 —— 自己讀 memory/role/reviewer.md)"
+    printf '%s\n' "$RULES_TEXT"
     python3 - "$TEMPLATE" "$ID" "$SHA" "$WT" "$EVIDENCE" "$STATUS_FILE" "$REVIEW" \
         "$MODEL" "$ROUND" "$(rel "$TF")" "$TF" "$AC" "$ROOT" "$(cfg main_branch main)" <<'PY'
 import json, subprocess, sys

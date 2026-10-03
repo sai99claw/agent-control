@@ -1,14 +1,14 @@
 # 派工文範本 —— 整理者(consolidator;D-006 / D-007 / D-013;#29 A8,2026-09-23)
 
 **怎麼用**:整份複製,把 `<…>` 換掉,**兩個模型各開一個 session、各貼一次**。
-前言用 `python3 scripts/rules.py pack consolidator --model <模型>` 產(≤ 4 KB)。
+前言用 `python3 scripts/rules.py pack consolidator --model <模型>` 產(≤ 4 KB);它非零就**不派**,照 stderr 補缺項,不要手寫前言代替(#74)。
 
 > ⚠️ **一個 session 自己整理不算數**(D-013)。一個 session 刪自己的記憶時,最先刪掉的是
 > 它自己看不懂的那幾條 —— 而那正是另一個模型看得出價值的那幾條。
 
 ---
 
-你是 **整理者**。先讀 `memory/role/consolidator.md` 與 `memory/model/<你的模型>.md`。
+你是 **整理者**。先讀上面規則包標題列的角色卡與模型記憶(路徑是 pack 解析過的那一份)。
 
 ## 這一次獨有的四件事
 1. **整理票**:#`<票號>`(`<票庫路徑>/<票號>.json`;`memory.py check` 自動開的)
