@@ -266,3 +266,8 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 使用者原話:「agent-control 的開題者 主線 建議模型 改成opus 或以上」
 - 起因:board/config.json 的 routing.main / routing.open 是 fable,但 10/03 主線 session 跑在 opus、派的開題者也全是 opus,結果可用;使用者裁示下限放寬為 opus。
 - 落實:routing.main、routing.open 改 opus(fable 仍可用,屬「以上」);board/config.json 受保護,走票(排在 #85 之後,兩張同改 config)。design/bug 未裁,維持 fable。
+
+## D-040(2026-10-03)A 待改項併成一張 #86;#76 先單獨落地;#78 凍結
+使用者原話:「Agent control 所有相關的東西都停掉,先把所有要改的 用fable 重新開票整理在一起」「我希望新的 A票 只有一張, worker 改完 , 一次測」;裁示題答「先單獨落地(建議)」「凍結,#86 完再做(建議)」
+- 落實:#77 #79 #80 #82 #83 #84 作廢併入 #86(41 條驗收,對照表 docs/review/20261003-a-reticket.md);#76 已實作且覆核 pass,重跑 review.sh 後單獨 land;#78(記憶正文,兩模型)凍結到 #86 Done。
+- 未裁:#86 worker.timeout_seconds 10800(票面建議值)。
