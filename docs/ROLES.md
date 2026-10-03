@@ -10,7 +10,7 @@
 | **開題者** | 短命 session(Fable;簡單題可 Opus,不派 Sonnet,D-023) | 把使用者一句話寫成**完整票面**(含測試計畫) | 票 JSON;**摘要與建議順序寫進票的 `outline` 欄**(`ticket.py create --outline`),不只回在對話裡 | 不改檔、不 git 寫入、不執行整支腳本;不替實作者先做一遍 |
 | **設計 session** | 短命 session(Fable) | 設計題先設計再開題(D-019):決定形狀、比較方案、每個取捨附「未來每票省/多花」(D-018) | `docs/DESIGN-<題>.md`(固定段見 `docs/DESIGN.md` §設計文件的固定段) + 回主線 ≤ 300 字摘要 | 不開票、不改產品碼、不 git 寫入、不跑閘門 / 落地;量測派子工作者,自己只讀結論 |
 | **Worker / 實作者** | 短命(預設 Opus;機械、規格逐字的票可派 Codex sol) | 在副本裡實作與局部驗證 | `patch.diff`(含自己的單元測試)、`EVIDENCE.md`、變異驗紅 | 只寫自己的副本;禁 git 寫入;範圍擴大要回報不准自己做 |
-| **驗證者** | 短命、獨立上下文(Sonnet / Codex sol) | 把票面驗收寫成回歸案例;`verify-case.py check` **證明案例是對的**(乾淨主線紅、candidate 綠),登記片段 `verify/TAGS.d/<n>.md`,把怎麼跑寫進票的 `verify` 欄 | `verify/<feature>/test_ticket_<n>.py` + 票的 `verify`(含 `baseline`)+ `patch-verify.diff`(`verify-case.py extract` 出的) | **不判 PASS/FAIL、不寫 VERDICT**;不讀實作者的 `EVIDENCE.md`;**不跑 tag 回歸那一整組**(只跑自己的案例與 `verify-case.py check`);不輪詢;不改產品碼 |
+| **驗證者** | 短命、獨立上下文(Opus / Codex sol) | 把票面驗收寫成回歸案例;`verify-case.py check` **證明案例是對的**(乾淨主線紅、candidate 綠),登記片段 `verify/TAGS.d/<n>.md`,把怎麼跑寫進票的 `verify` 欄 | `verify/<feature>/test_ticket_<n>.py` + 票的 `verify`(含 `baseline`)+ `patch-verify.diff`(`verify-case.py extract` 出的) | **不判 PASS/FAIL、不寫 VERDICT**;不讀實作者的 `EVIDENCE.md`;**不跑 tag 回歸那一整組**(只跑自己的案例與 `verify-case.py check`);不輪詢;不改產品碼 |
 | **覆核者** | 短命(Opus;D-022;`scripts/review.sh` 派,D-025 ②) | 閘門綠、票轉 `InReview` 後讀**分支上的 code** 對票面驗收 | `verdict(pass\|fail)` + 逐條驗收 → code 位置 + 疑慮清單;`fail` 寫成 objection | 不重跑測試、不改檔、不 git 寫入、不判落地順序(`review.sh` 依檔尾 `## result` 把 pass 寫進票的 `review` 格;fail 轉 Blocked 回主線) |
 | **整理者** | 短命 × 2(`memory.consolidators` 兩個不同的模型) | 記憶超上限時壓縮(D-006 / D-007 / D-013);範本 `templates/dispatch-consolidator.md` | 壓縮後的記憶檔或提高上限 + `cap_history` 一列、兩份討論檔、`memory.consolidated` 事件 | 沒有討論檔不准 consolidate;不直接寫案例(用票號指路);不改 `docs/DECISIONS.md` |
 | **落地器** | `scripts/land.sh`(程式) | 閘門 → 合併 → push;紅了寫紅榜 | 事件、退出碼、`reports/t<n>/<run_id>/status.json` | 0 commit / 基準過期 / 越界 / **覆核缺或過期** / **未處置的阻擋反駁** / 閘門紅,一律拒絕;land 期間持一把互斥鎖。它**沒有判斷** |
@@ -39,7 +39,7 @@
 | 開題 | **Fable**(短命;簡單題可 Opus,**不派 Sonnet**,D-023) | 票面的品質決定下游要不要重做 |
 | 實作 | **Opus**(`worker.command` 實際起的那個);機械、規格逐字的票可選 Codex `gpt-5.6-sol` | `board/config.json` 的 `routing.implement` 只是路由標籤,事件記的是 `worker.command` 真的起的模型 |
 | 實作(要起 server / 瀏覽器實跑) | **Opus** | Codex 在 `workspace-write` 綁不了埠、起不了瀏覽器(`-s danger-full-access` **不設**) |
-| 驗證(寫回歸案例) | **Sonnet** 或 Codex sol | 照票面寫案例是機械的 |
+| 驗證(寫回歸案例) | **Opus**(預設)或 Codex sol | 驗證者是判斷工作(使用者 2026-10-03 裁示) |
 | 帳務 / 資料遷移類的票 | 加派**第二家模型**(agy gemini 或 Codex)做**機器可驗**的獨立驗證 | 同一家模型的兩個 session 會犯同一種錯 |
 | 討論、找靈感 | 另一家模型(agy / Codex) | 要第二個腦袋,不是第二雙手;**它的回答提到產品功能一律 grep 一次再用** |
 
