@@ -1,0 +1,56 @@
+{
+  "id": "85",
+  "subject": "routing.verify 改 opus:sonnet 沒有模型卡,#74 後 auto-fix 起不了驗證者",
+  "created": "2026-10-03T19:28:12+08:00",
+  "objective": "board/config.json 的 routing.verify 由 sonnet 改為 opus(使用者 2026-10-03 裁示:驗證者是判斷工作,預設 opus),auto-fix 對 needs_verifier=true 的票能產出驗證者規則包、#76 可開跑;docs/ROLES.md 驗證者模型兩格同步;routing 其餘值逐一確認不會因缺卡被拒並寫進 EVIDENCE。",
+  "acceptance": [
+    "A1 board/config.json 的 routing.verify 是 \"opus\";routing 其餘 8 個鍵(main/open/design/bug/implement/implement_browser/second_opinion/discuss)的值與 `git show main:board/config.json` 逐字相同;檔仍是合法 JSON;`git diff main -- board/config.json` 只有 verify 那一行的 -/+。",
+    "A2 `env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR python3 scripts/rules.py inspect verifier --model \"$(python3 -c 'import json;print(json.load(open(\"board/config.json\"))[\"routing\"][\"verify\"])')\"` rc=0,輸出沒有任何「缺:」行(改前實測:rc=1、`缺:模型卡 memory/model/sonnet.md:檔案不存在`)。",
+    "A3 `env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR sh scripts/auto-fix.sh 76 --dry-run --round 1` rc=0,stderr 有「第 1 輪驗證者派工文 ->」那一行,整段輸出沒有「規則包產不出來」(只印派工文,不起 agent;#76 needs_verifier=true,改前這一步就是 #76 被擋的那一手)。",
+    "A4 docs/ROLES.md 驗證者的兩格改成 Opus:角色表驗證者列的「短命、獨立上下文(Sonnet / Codex sol)」改為「短命、獨立上下文(Opus / Codex sol)」;模型表那一列整列改為 `| 驗證(寫回歸案例) | **Opus**(預設)或 Codex sol | 驗證者是判斷工作(使用者 2026-10-03 裁示) |`。ROLES.md 其他列不動(開題者那兩格的「不派 Sonnet」是 D-023,照舊)。",
+    "A5 EVIDENCE 貼 routing 掃描:對 routing 每個值跑 `rules.py inspect <角色> --model <值>`(verify→verifier、implement/implement_browser→worker、open→opener、design→design、bug→opener、main→main、second_opinion/discuss→opener)的 rc 與「缺:」行;期望(開題實測):改後只有 agy:gemini-3.8-flash-high 兩鍵缺卡,其餘全 rc=0。另貼一行 `grep -rn routing scripts/` 的結論:只有 auto-fix.sh 讀 implement/verify、session-hook.sh 讀 main、status.py 讀 verify/implement 當票面標籤;open/design/bug/implement_browser/second_opinion/discuss 沒有任何腳本讀。"
+  ],
+  "in_scope": [
+    "board/config.json(routing.verify 一行)",
+    "docs/ROLES.md(驗證者兩格)"
+  ],
+  "out_of_scope": [
+    "補 gemini 模型卡(memory/model/gemini-3.8-flash-high.md)或改 second_opinion/discuss 路由 —— 沒有腳本經 pack 派這兩鍵,主線/記憶整理通道決定;memory/model/README.md 列的 sonnet.md、agy-gemini.md 檔名與 rules.py model_card 取冒號後那半的規則不一致,同一處理",
+    "auto-fix 驗證者事件的 model 欄取 routing.verify 標籤而非 verifier.command 實際 --model(#21 的驗證者版)—— 本票改後兩者恰好一致,根因另開票由主線決定",
+    "scripts/status.py flaky 自動開票缺 routing.verify 時預設 \"sonnet\" 的那個字面值 —— 主線決定",
+    "tickets/76.json 的狀態與 inbox 頁 76-rules-verifier-c1a14a7f56a8 —— 落地後主線處置",
+    "docs/DECISIONS.md(裁示紀錄走主線 docs 通道)",
+    "tabby_pool 的 board/config.json 與模型卡"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "board/config.json",
+    "docs/ROLES.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "52ddb0a78e1f74633b69a2123e18c055c69b5ba7",
+  "state": "Ready",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": "無驗證者案例(needs_verifier=false);實作者自證見 test_plan 變異 M1/M2。"
+  },
+  "feature": "派工路由",
+  "decision_refs": [
+    "D-023"
+  ],
+  "test_plan": "副本內每一條指令一律前綴 `env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR`(#82 落地前必須,否則寫進主線票庫/事件)。\n1. config(對 A1):`python3 -c 'import json;print(json.load(open(\"board/config.json\"))[\"routing\"])'` 與 `git show main:board/config.json` 的 routing 逐鍵比;期望值來源 = 使用者 2026-10-03 裁示(verify=opus)+ main 上的原值,不從被測程式算。\n2. 規則包(對 A2):A2 那一句;rc 與輸出整段貼 EVIDENCE。\n3. 派工路徑(對 A3):`sh scripts/auto-fix.sh 76 --dry-run --round 1`;只產派工文,不起 worker/驗證者、不動票。\n4. 掃描(對 A5):逐值 `python3 scripts/rules.py inspect <角色> --model <值>`,貼 rc 與「缺:」行。\n單元測試:不跑。tests/ 全用沙盒設定,不讀真的 board/config.json(開題 grep 實測:tests/control_harness.py DEFAULT_CONFIG 的 routing 只有 implement;tests/test_rules_delivery.py set_config 自寫 routing.verify)。**不要**跑全套、gate.sh、test_auto_fix、test_rules_delivery。\n變異(needs_verifier=false,實作者自證紅;每條做完還原):\n  M1 routing.verify 改回 sonnet → 步驟 2 rc=1 且印「缺:模型卡 `memory/model/sonnet.md`:檔案不存在」;步驟 3 rc=6、stderr 含「規則包產不出來(模型 sonnet)」。\n  M2 routing.verify 改成 ghost-model → 步驟 2 rc=1、缺 memory/model/ghost-model.md。\nEVIDENCE 貼兩條變異紅的第一行。",
+  "outline": "【為什麼】#74 落地後 rules.py pack 缺模型卡就拒派;routing.verify=sonnet 而 memory/model/sonnet.md 不存在 → auto-fix 76 起驗證者被拒(inbox 76-rules-verifier-c1a14a7f56a8),#76 卡在 Ready。使用者 2026-10-03 裁示「開小票改 opus」:驗證者是判斷工作,預設 opus。\n【needs_verifier=false】本票自己就起不了驗證者(改前 verify 路由缺卡);改動是一個設定值+兩格文件,實作者用 A2/A3 與變異 M1/M2 自證。\n【開題實測(A main 52ddb0a)】inspect verifier sonnet rc=1 缺 sonnet.md;verifier opus/worker opus/opener fable/design fable/main fable/reviewer opus/consolidator fable/consolidator codex:gpt-6-astra 全 ok;agy:gemini-3.8-flash-high 缺 memory/model/gemini-3.8-flash-high.md。只有 auto-fix 讀 implement/verify 走 pack;second_opinion/discuss 沒有腳本讀、agy 派工不經 rules.py pack,本票不動。\n【旁證】auto-fix 驗證者實際命令是 verifier.command(缺)→ worker.command 的 --model opus,改前事件 model 欄記 sonnet 其實跑 opus;改後一致。\n【順序】先於 #84 落地(#84 Draft 也列 board/config.json)。落地後主線重跑 auto-fix 76、收掉那張 inbox 頁。",
+  "verify_strings": [
+    "\"verify\": \"opus\"",
+    "驗證者是判斷工作"
+  ],
+  "needs_verifier": false
+}
