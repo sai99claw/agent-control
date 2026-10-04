@@ -63,7 +63,9 @@
 理由:這些檔是**每個新 session 的第一口空氣**,多一個字就是每一個 session 都多讀一個字。上限不是為了省,是為了逼人分辨「值得每次都讀」與「查得到就好」。
 
 ### 超過上限時發生什麼
-1. `scripts/memory.py check`(session 開頭與每次寫入後跑)量到某檔超過它的上限 → 發事件 `memory.over_cap`、開一張整理票,**指派給 `memory.consolidators` 那兩個模型**(舊設定只有單數 `memory.consolidator` 時退回一個人,票面會說出來)。**該模型的 session 不因此停工**,只是知道自己的記憶該整理了。
+1. `scripts/memory.py check`(主線開場跑)量到某檔超過它的上限、inbox 超過行數,或 inbox 裡有來源票已結案的條目(needs-review)→ 發事件 `memory.over_cap`、開一張整理票,**指派給 `memory.consolidators` 那兩個模型**(舊設定只有單數 `memory.consolidator` 時退回一個人,票面會說出來)。一份主檔一張票:已經有開著的 consolidator 票、`allowed_write_paths` 蓋得到它(glob 也算,`ticket.first_match`)就不再開;查核與開票在 `memory/.lock` 裡。**該模型的 session 不因此停工**,只是知道自己的記憶該整理了。
+   - 短命角色開場跑 `check --read-only`:同樣的量法與輸出,不開票、不發事件、不拿鎖(#76)。
+   - `check-stale --read-only [--file <主檔或 inbox>]` 逐條印 `memory: <inbox>:<行號> <分類> <來源>`;分類 `needs-review`(`#N` 在本 repo 票庫且已 Done/Cancelled)、`fresh`、`unknown-ticket`、`no-source`、`foreign`(`#` 後不是純數字)、`unparsed`。有 needs-review 退出碼 1。
 2. 那兩個模型**討論,用 `docs/DISCUSSION.md` 的標準格式,存成 `discussions/<date>-memory-<model>.md`**:哪些要合併、哪些降級成「查得到就好」(搬去 `code-map/` 或 `docs/`,留一行指路)、哪些是反例必須留、哪些已經過期。這一步像老師帶學生:不是替它刪,是幫它分辨。
 3. 討論的產出兩種,都要寫回檔案:
    - **壓縮後的新版**(舊版在 git 歷史,不另存)。
@@ -76,8 +78,15 @@
      ---
      ```
    **提高是掙來的,不是自動的**:理由要寫得出「多讀的那幾百字替每個未來 session 省了什麼」。沒有理由的提高,`memory.py check` 視為未整理。
-4. 整理期間的新筆記寫 `<model>.inbox.md`(不受上限),下一輪併入。
-5. 事件 `memory.consolidated` 記錄整理者、前後大小、上限有沒有變、**討論檔路徑**。`memory.py consolidate` 沒有 `--discussion <path>` 拒絕執行。
+4. 整理期間的新筆記照樣寫 `<model>.inbox.md`(不受上限),下一輪處置。
+5. 收的那一手(#76):
+   ```sh
+   python3 scripts/memory.py snapshot <主檔>        # 印 source_lines: K / source_sha256: <前 K 行的 sha256>
+   python3 scripts/memory.py consolidate <主檔> --candidate <新版> \
+       --discussion <模型 A 的討論檔> --discussion <模型 B 的討論檔> [--new-cap N --reason …] [--by …]
+   ```
+   兩份討論檔的 `model:` 不同、`source_lines` / `source_sha256` 與鎖內重算的 inbox 前 K 行一致、結論區對每一行都有處置、候選正文不超過上限 —— 全部驗過才把主檔換成候選,並只把前 K 行移進 `<inbox>.<run>.consumed`;第 K+1 行以後(整理期間新記的)留在 inbox。任何一項不過:退出碼非 0,主檔、inbox、事件一個位元組都不動。
+6. 事件 `memory.consolidated` 記錄整理者、前後大小、上限有沒有變、`source_lines`、**兩份討論檔路徑**與兩個 model。
 
 ### 整理的原則
 - **產出是原則,不是案例**(D-013):一條保留下來的記憶要能直接當行為準則用;案例原文留在紀錄類文件,記憶裡只留票號指路。

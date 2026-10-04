@@ -252,8 +252,14 @@ fi
 
 # 記憶的上限:D-006 要求每個 session 開頭量一次。**退出碼 1 不停工** ——
 # 它只是讓這個 session 知道自己的記憶該整理了(docs/MEMORY.md 第 1 點)。
+# 整理票只由主線開(#76):短命角色量的是同一份記憶,各開一張就是同一件事派好幾次。
 say "4. 記憶有沒有超過上限(D-006)"
-sh -c "python3 \"$AC/memory.py\" check" || echo "new-session: (超過上限,不停工;整理票已經開了)"
+if [ "$ROLE" = "main" ]; then
+    sh -c "python3 \"$AC/memory.py\" check" || echo "new-session: (超過上限,不停工;整理票已經開了)"
+else
+    sh -c "python3 \"$AC/memory.py\" check --read-only" \
+        || echo "new-session: (超過上限,不停工;整理票由主線開場開,$ROLE 不開)"
+fi
 
 if [ "$ROLE" = "main" ]; then
     # 終態收件匣(D-015)。**開場印一次,之後只在被通知時讀** —— 主線不輪詢 status,

@@ -18,15 +18,21 @@
 4. **回報對象**:`<主線 / session 名>`
 
 ## 兩個模型各做什麼(**先各自寫,再互讀**)
-- **第一段(各自,不看對方)**:讀那一份記憶檔與它的 `.inbox.md`,提出「留 / 併 / 刪」的名單,
+- **第零段(開場,兩位同一份)**:`python3 scripts/memory.py snapshot <要整理的檔>`,把印出的
+  `source_lines` / `source_sha256` 兩行連同 `model: <你的模型>` 抄進自己討論檔的檔頭;
+  逐條來源分類看 `python3 scripts/memory.py check-stale --read-only --file <要整理的檔>`。
+- **第一段(各自,不看對方)**:讀那一份記憶檔與它的 `.inbox.md`(前 `source_lines` 行),
+  `## 結論` 區對每一行寫 `- L<n>: <保留|升格|移至 reference|歸檔|重複>`(其後可接目的地),
   每一條寫**為什麼**。先各自寫,是為了不讓第二個人只是附和第一個人。
 - **第二段(互讀)**:讀對方的討論檔,把**分歧**逐條寫下來(沒有分歧就寫「同意,理由是…」,
   不要留白 —— 一份沒有分歧欄的討論檔,與沒有討論長得一樣)。
-- **第三段(收)**:`<先寫完的那一位>` 跑合併那一句:
+- **第三段(收)**:`<先寫完的那一位>` 把整理後的新版寫成候選檔,跑合併那一句:
   ```sh
-  python3 scripts/memory.py consolidate <要整理的檔> --discussion discussions/<date>-memory-<模型>.md
+  python3 scripts/memory.py consolidate <要整理的檔> --candidate <候選檔> \
+    --discussion discussions/<date>-memory-<模型 A>.md --discussion discussions/<date>-memory-<模型 B>.md
   ```
-  沒有 `--discussion` 它會拒絕(D-007)。它自己發 `memory.consolidated` 事件。
+  少一份討論、兩份 model 相同、快照對不上、缺某一行的處置、候選超過上限,它都拒絕且不動任何檔
+  (D-007 / D-013)。通過才換主檔、只消耗那 K 行,並自己發 `memory.consolidated` 事件。
 
 ## 整理出來要長什麼樣
 - 只留**具體的原則、行為準則、思考方式**;**不直接寫案例** —— 案例用票號指路

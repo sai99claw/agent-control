@@ -170,14 +170,35 @@ class Consolidate(Sandbox):
     def memory(self, *args):
         return self.run_py("scripts/memory.py", *args)
 
-    def talk(self, name="discussions/2026-09-12-memory-opus.md", conclusion=True):
+    def snapshot(self):
+        done = self.memory("snapshot", "memory/model/opus.md")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        return dict(line.split(": ", 1) for line in done.stdout.splitlines())
+
+    def talk(self, model="fable", conclusion=True):
+        """一份討論檔:檔頭抄 `snapshot` 的兩行,結論區對每一行寫一個處置(#76)。"""
+        snap = self.snapshot()
+        name = "discussions/2026-09-12-memory-opus-%s.md" % model
         body = ("---\ntopic: opus 的記憶超過上限\nkind: memory-consolidation\n"
-                "parties: [fable / 老師, opus / 學生]\n---\n\n"
-                "## 第 1 輪 — fable\n- 主張:四條可以合併成兩條\n")
+                "parties: [fable / 老師, opus / 學生]\nmodel: %s\n"
+                "source_lines: %s\nsource_sha256: %s\n---\n\n"
+                "## 第 1 輪 — %s\n- 主張:四條可以合併成兩條\n"
+                % (model, snap["source_lines"], snap["source_sha256"], model))
         if conclusion:
             body += "\n## 結論\n- 結論:上限提高到 2600\n- 採用的證據:實測\n"
+            body += "".join("- L%d: 保留\n" % n
+                            for n in range(1, int(snap["source_lines"]) + 1))
         self.write(name, body)
         return name
+
+    def both(self):
+        """兩個不同 model 的討論檔,`--discussion` 各一次。"""
+        a, b = self.talk("fable"), self.talk("opus")
+        return ["--discussion", a, "--discussion", b]
+
+    def candidate(self, body):
+        self.write("discussions/2026-09-12-memory-opus.candidate.md", body)
+        return "discussions/2026-09-12-memory-opus.candidate.md"
 
     def test_consolidate_help_prints_its_flags_and_a_pasteable_example(self):
         done = self.memory("consolidate", "--help")
@@ -196,12 +217,15 @@ class Consolidate(Sandbox):
         """「討論過了」與「沒討論就刪了」在結果檔案上長得一模一樣 —— 兩者都是一份
         變短的記憶。唯一分得開的東西是那份紀錄(D-007)。
 
-        **變異**:把 `if not discussion.strip()` 那一段拿掉 → 這一條紅。
+        **變異**:把 `if not [one for one in discussions …]` 那一段拿掉 → 這一條紅
+        (落到「要兩份」那一句,不說 D-007 的理由)。
         """
         self.write("memory/model/opus.md", FRONT % 2000 + "坑\n")
-        done = self.memory("consolidate", "memory/model/opus.md")
+        done = self.memory("consolidate", "memory/model/opus.md",
+                           "--candidate", self.candidate("新版\n"))
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("--discussion", done.stderr)
+        self.assertIn("沒討論就刪了", done.stderr)
         self.assertIn("坑", self.read("memory/model/opus.md"), "被拒絕就不該動到檔案")
 
     def test_a_discussion_path_that_is_not_there_is_refused_in_its_own_words(self):
@@ -215,11 +239,13 @@ class Consolidate(Sandbox):
         """一份沒有結論的討論檔,與一場沒談完的討論長得一樣。而下一步差很多:
         去開一份 vs 回去把結論寫完(§5.7:守衛給錯下一步比沒有守衛更糟)。
 
-        **變異**:把 `"## 結論" not in talk_text` 那一段拿掉 → 這一條紅。
+        **變異**:把 `read_discussion` 裡 `if not heading` 那一段拿掉 → 這一條紅。
         """
         self.write("memory/model/opus.md", FRONT % 2000 + "坑\n")
-        name = self.talk(conclusion=False)
-        done = self.memory("consolidate", "memory/model/opus.md", "--discussion", name)
+        name = self.talk("fable", conclusion=False)
+        done = self.memory("consolidate", "memory/model/opus.md",
+                           "--candidate", self.candidate("新版\n"),
+                           "--discussion", name, "--discussion", self.talk("opus"))
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("還沒有結論區", done.stderr)
         self.assertNotIn("找不到討論檔", done.stderr)
@@ -240,43 +266,50 @@ class Consolidate(Sandbox):
 
     def test_a_reasoned_raise_is_written_into_the_file_with_its_history(self):
         self.write("memory/model/opus.md", FRONT % 2000 + "坑\n")
-        name = self.talk()
+        talks = self.both()
         done = self.memory("consolidate", "memory/model/opus.md",
-                           "--discussion", name, "--new-cap", "2600", "--by", "fable",
+                           "--candidate", self.candidate("坑\n"),
+                           *talks, "--new-cap", "2600", "--by", "fable",
                            "--reason", "四條反例各不相同,合併會失去可辨識性")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         text = self.read("memory/model/opus.md")
         self.assertIn("cap_chars: 2600", text)
         self.assertIn("from: 2000, to: 2600", text)
         self.assertIn("by: fable", text)
-        self.assertIn("discussion: %s" % name, text,
-                      "cap_history 那一列要指得回支撐它的討論(D-007)")
+        self.assertIn("discussion: %s + %s" % (talks[1], talks[3]), text,
+                      "cap_history 那一列要指得回支撐它的兩份討論(D-007)")
         self.assertIn("失去可辨識性", text)
         rows = [row for row in self.events() if row["kind"] == "memory.consolidated"]
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["cap_from"], 2000)
         self.assertEqual(rows[0]["cap_to"], 2600)
-        self.assertEqual(rows[0]["discussion"], name)
+        self.assertEqual(rows[0]["discussions"], [talks[1], talks[3]])
 
     def test_the_inbox_is_merged_in_and_then_gone(self):
+        """#76:inbox 不再整份併進主檔 —— 主檔換成候選,討論過的那幾行移進 `.consumed`。
+
+        **變異**:把 `if rest:` 那一段改成把整份 inbox 寫回 → 這一條紅(inbox 還在)。
+        """
         self.write("memory/model/opus.md", FRONT % 2000 + "舊的一條\n")
-        self.write("memory/model/opus.inbox.md", "整理期間新記的一條\n")
+        self.write("memory/model/opus.inbox.md", "- 整理期間新記的一條 (#1, 2026-09-12, worker@opus)\n")
         done = self.memory("consolidate", "memory/model/opus.md",
-                           "--discussion", self.talk())
+                           "--candidate", self.candidate("舊的一條\n整理期間新記的一條\n"),
+                           *self.both())
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         text = self.read("memory/model/opus.md")
-        self.assertIn("舊的一條", text)
-        self.assertIn("整理期間新記的一條", text)
+        self.assertEqual(text, FRONT % 2000 + "舊的一條\n整理期間新記的一條\n")
         self.assertFalse(self.exists("memory/model/opus.inbox.md"),
-                         "併過的 inbox 要收掉,不然下一輪會再併一次")
+                         "處置過的 inbox 要收掉,不然下一輪會再處置一次")
         consumed = [name for name in os.listdir(os.path.join(self.repo, "memory", "model"))
                     if name.startswith("opus.inbox.md.") and name.endswith(".consumed")]
         self.assertEqual(len(consumed), 1)
+        self.assertEqual(self.read(os.path.join("memory", "model", consumed[0])),
+                         "- 整理期間新記的一條 (#1, 2026-09-12, worker@opus)\n")
 
     def test_a_note_during_consolidation_lands_in_a_new_inbox(self):
         self.write("memory/model/opus.md", FRONT % 2000 + "舊的一條\n")
-        self.write("memory/model/opus.inbox.md", "待整理的一條\n")
-        talk = self.talk()
+        self.write("memory/model/opus.inbox.md", "- 待整理的一條 (#1, 2026-09-12, worker@opus)\n")
+        argv = ["memory/model/opus.md", "--candidate", self.candidate("新版\n")] + self.both()
         entered = threading.Event()
         release = threading.Event()
         original = memory_module.write
@@ -292,8 +325,7 @@ class Consolidate(Sandbox):
         def consolidate():
             with mock.patch.dict(os.environ, env, clear=False), \
                     mock.patch.object(memory_module, "write", side_effect=blocked_write):
-                result.append(memory_module.cmd_consolidate(
-                    ["memory/model/opus.md", "--discussion", talk]))
+                result.append(memory_module.cmd_consolidate(argv))
 
         thread = threading.Thread(target=consolidate)
         thread.start()
@@ -309,12 +341,17 @@ class Consolidate(Sandbox):
         self.assertNotIn("待整理的一條", inbox, "已被整理的舊 inbox 不該混進新 inbox")
 
     def test_still_over_the_cap_after_consolidating_is_not_reported_as_done(self):
-        """「整理完了」與「整理完還是超過」不能都是退出碼 0。"""
-        self.write("memory/model/opus.md", FRONT % 2000 + "坑" * 2500)
+        """「整理完了」與「整理完還是超過」不能都是退出碼 0。#76:超過上限的候選
+        直接拒絕,主檔與 inbox 一個位元組都不動。"""
+        self.write("memory/model/opus.md", FRONT % 2000 + "坑\n")
+        self.write("memory/model/opus.inbox.md", "- 一條 (#1, 2026-09-12, worker@opus)\n")
         done = self.memory("consolidate", "memory/model/opus.md",
-                           "--discussion", self.talk())
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertIn("還是超過上限", done.stdout)
+                           "--candidate", self.candidate("坑" * 2500), *self.both())
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("超過上限", done.stderr)
+        self.assertEqual(self.read("memory/model/opus.md"), FRONT % 2000 + "坑\n")
+        self.assertEqual(self.read("memory/model/opus.inbox.md"),
+                         "- 一條 (#1, 2026-09-12, worker@opus)\n")
 
 
 class Note(Sandbox):
