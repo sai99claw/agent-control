@@ -6,6 +6,7 @@
 鍵表列的是同一組鍵」。
 """
 
+import json
 import os
 import re
 import subprocess
@@ -44,8 +45,15 @@ class EveryRolePacks(unittest.TestCase):
         roles = re.findall(r"^  (\w+) ", done.stdout, re.M)
         self.assertLessEqual({"consolidator", "design", "main", "opener", "reviewer",
                               "verifier", "worker"}, set(roles), done.stdout)
+        # 每個角色用它 routing 那一格的模型(#87 A8:低於下限 `pack` 就 rc=2,例 design=fable);
+        # 沒有路由格的角色用 opus。
+        with open(os.path.join(ROOT, "board", "config.json"), encoding="utf-8") as handle:
+            routing = json.load(handle).get("routing") or {}
+        keys = {"opener": "open", "worker": "implement", "verifier": "verify",
+                "main": "main", "design": "design"}
         for role in roles:
-            pack = subprocess.run(["python3", rules, "pack", role, "--model", "opus"],
+            model = routing.get(keys.get(role), "opus")
+            pack = subprocess.run(["python3", rules, "pack", role, "--model", model],
                                   capture_output=True, text=True, env=env, timeout=60)
             self.assertEqual(pack.returncode, 0, role + ": " + pack.stderr)
             self.assertNotIn("找不到這幾節", pack.stdout, role)
