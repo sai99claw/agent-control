@@ -135,9 +135,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "add52562cb597b568564ffb8ea1f7e786cbed676",
-  "state": "Running",
-  "state_version": 42,
+  "base_sha": "76c4e5b429edba70c49e8c3fba4f5b9fdc5f79b9",
+  "state": "Done",
+  "state_version": 55,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -190,6 +190,71 @@
       "by": "auto-fix.sh",
       "note": null,
       "at": "2026-10-04T14:47:24+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 34,
+      "tokens_out": 13978,
+      "cache_write": 114694,
+      "cache_read": 1455536,
+      "wall_seconds": 148,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-04T15:16:44+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 44,
+      "tokens_out": 18435,
+      "cache_write": 101674,
+      "cache_read": 1974915,
+      "wall_seconds": 190,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-04T15:19:55+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 34,
+      "tokens_out": 10559,
+      "cache_write": 50915,
+      "cache_read": 849060,
+      "wall_seconds": 135,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-04T15:32:37+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 38,
+      "tokens_out": 11417,
+      "cache_write": 99556,
+      "cache_read": 1403540,
+      "wall_seconds": 118,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-04T15:44:14+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 631,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-10-04T15:55:22+08:00"
     }
   ],
   "objections": [
@@ -202,5 +267,21 @@
       "follow_up": "開題者判(D-041,主線手派,2026-10-04):兩條都合理、票面已改。A3:收窄方向對(既有六條案例在主線帶真改動跑,字面一律拒會誤殺),但第 1 輪只扣本票票檔不夠 —— 真主線常態有別張票的未提交票檔(此刻 tickets/76.json 就是),判準不觸發、preflight 照舊對著別張票的 diff 假紅。A3 改成扣掉票庫目錄底下所有 *.json,加案例 test_a3_other_dirty_ticket_files_still_refuse(已進 verify_strings)與變異 M3b。A37:base 上就 rc=1、原因在 out_of_scope 檔,改驗「分支不新增超標、cap 未提高」(第 1 輪 EVIDENCE ② 已滿足),base 既有超標排 #78。第 1 輪 patch 沿用:套進 t87 後只剩 A3 收緊這一小段 delta(gate.sh 主線空比那段的 changed 扣票庫檔 + 一條案例 + M3b),其餘 39 條不重做。"
     }
   ],
-  "owner": "main"
+  "owner": "main",
+  "branch": "t87",
+  "gate": {
+    "rc": 0,
+    "sha": "50855816ab0f733a450ddc67f14eaeef6df8f20e",
+    "run_id": "20261004-153238-41562",
+    "at": "2026-10-04T15:42:15+08:00"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "849b6374b16bac74b11df9bc4ed7eac6f87d99b1",
+    "note": "reports/t87/20261004-153238-41562/REVIEW.md",
+    "at": "2026-10-04T15:55:22+08:00",
+    "state_version": 55
+  },
+  "repair_round": 2
 }

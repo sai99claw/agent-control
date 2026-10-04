@@ -11,3 +11,4 @@
 - 同一輪被重派、副本已重展:先從上一次的 worker log 抽出逐字 replace(assert count==1)腳本重放,再用 AST 方法數/斷言數/逐檔 diffstat 對上一次 EVIDENCE 證明重放一致;變異與閘門照樣本輪重跑,數字不沿用 (#72, 2026-09-30, worker@opus)
 - 合併案例時,舊 docstring 寫的「變異 → 紅」要在 base 上重跑一次再抄進新案例:同一格有兩個寫入者時,拿掉其中一個不會紅,抄過去就是把一句假話搬家;抄不過去就換一條真的會紅的變異並改寫那一句 (#73, 2026-09-30, worker@opus)
 - control_harness 沙盒 config 的 memory.applies_to 只有 memory/model/*.md:角色卡超標的案例要先把 memory/role/*.md 加進去,否則 check 不量那份檔、輸出是空的而不是紅的 (#76, 2026-10-03, worker@opus)
+- 副本沒有 .git:test_no_project_names 在副本裡掃到 0 個檔、test_the_scan_sees_something_at_all 必紅(base/ 同紅),其餘五條是空掃描;改動檔要自己 grep 那四個字樣 (#89, 2026-10-04, worker@opus)

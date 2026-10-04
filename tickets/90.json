@@ -1,0 +1,85 @@
+{
+  "id": "90",
+  "subject": "閘門機械格不合(rc=4)要歸因:gate 退出前寫 status.json、auto-fix 點名票面哪一條 needle,不再報「紅了但沒有歸因」",
+  "created": "2026-10-04T16:24:30+08:00",
+  "objective": "#89 第 1 輪(2026-10-04):worker 正常交件,閘門 preflight 以 rc=4 擋下(verify_strings 寫的是新檔檔名,只出現在 diff 檔頭),但 gate.sh 在機械格退出前不寫 status.json,auto-fix 讀到的最新一筆是 apply 的 status(rc=0、紅 0 條),於是發一頁「紅了但沒有歸因 / 自己看 log:紅榜是空的」、去哪看指向 apply 那一輪 —— 主線只能自己挖 worker log 才知道是票面寫錯。做完的樣子:gate.sh 每一條機械格退出(rc=4)都先寫一份自己的 status.json(kind gate、rc 4、note 帶原文);auto-fix 認得這一種,收件匣那一頁寫明是哪一條機械格、歸因(verify_strings / tags 不合 → 票面寫錯、開題者;其餘 → 交件),並給主線接回的確切步驟(改票面 → 轉 Running → 重跑閘門,不轉 Ready,patch 留在分支上);開題者卡、派工範本與 ticket.py 的 --verify-string 說明寫清楚 verify_strings 比的是改動內文、不是檔名。",
+  "acceptance": [
+    "A1 [gate 寫自己的 status.json;單元 tests/test_status.py GateWritesStatus] gate.sh 帶 --ticket 時,每一條機械格退出(preflight 的 verify_strings / tags / out_of_scope·protected_paths 命中、code-map 索引過期、記憶分層 lint)在 exit 4 之前寫 reports/t<n>/<run_id>/status.json:kind == \"gate\"、rc == 4、state == \"done\"、note 逐字含閘門印在 stderr 的每一行 `機械格不合 —— <原文>`(多條全列,不截)。形狀用 status.py 既有的 start/done 與既有 note 欄(同 gate.sh status_nothing 那一手),不加新鍵(test_status 釘著狀態檔的鍵)。仍不起測試、不發 gate.start;沒給 --ticket 時照舊什麼都不寫(test_without_a_ticket_nothing_is_written 不改仍綠)。既有 assert_preflight_stopped_before_tests 的 `assertFalse(self.exists(\"reports\"))` 釘的是舊行為,只准把那一句改成:status_of(7, kind=\"gate\") 的 rc == 4、note 含 `機械格不合`;其餘斷言(rc 4、測試 log 不存在、無 gate.start)不改。test_verify_string_must_be_in_patch_content_not_its_filename 加一句:note 含 `verify_strings: 'filename-token' 不在 patch 內容裡`(期望值 = 閘門 stderr 既有字樣,gate.sh 約 401 行)。",
+    "A2 [auto-fix 歸因到票面;單元 tests/test_auto_fix.py 新類 MechanicalRedIsAttributed,沿用 AutoFixBase 與 TheWholeLoop 那一手的真 apply.sh / 真 gate.sh] 沙盒票 verify_strings=[\"filename-token\"],worker 替身交一個新檔 tests/test_filename-token.py(檔內不含 filename-token)的 patch → 閘門 rc=4 → auto-fix:(1) exit 4;(2) 票 state == \"Blocked\"、owner == \"main\",不轉 Ready,分支 t1 頭 == 套 patch 後那個 commit(patch 沒丟);(3) 收件匣恰好新增一頁,其狀態格 == `閘門機械格不合`,頁內容逐字含 `verify_strings: 'filename-token' 不在 patch 內容裡`、`歸因到票面(開題者)`、`比的是改動內文`、接回三步 `ticket.py set 1 verify_strings`、`ticket.py set 1 state Running`、`gate.sh --branch --ticket 1` 與 `不要轉 Ready`;(4) 頁的「去哪看」== reports/t1/<閘門那一輪 run_id>/status.json,且該檔 kind == \"gate\"(不是 apply 那一輪);(5) 頁、stdout、stderr 全不含 `沒有歸因`;(6) decision.asked 事件的 note 含 `機械格不合`;(7) 沒有起第 2 輪 worker(worker_rounds() 只有第 1 輪)。",
+    "A3 [只有票面格歸到開題者;同 A2 沙盒] 機械格不合的那一行是 verify_strings 或 tags(`未登記`)→ 歸因到票面;其餘(out_of_scope / protected_paths 命中、code-map 索引過期、記憶分層 lint)→ 頁含那一行原文與 `歸因到交件(worker)`、不含 `歸因到票面`。案例:worker 替身的 patch 改到票的 out_of_scope 檔(verify_strings 合格)→ 頁含 `out_of_scope`、那個檔名、`歸因到交件(worker)`,不含 `歸因到票面`;兩種同時不合 → 兩組各自列、兩個歸因字樣都在。",
+    "A4 [開場那條路也認得;同沙盒] auto-fix 起跑時讀到的最新一輪是 A1 那種 gate status(rc 4、note 有 `機械格不合 —— `)→ 走 A2 同一頁(狀態格、歸因字樣、去哪看規則同 A2),不起 worker,不出現 `沒有歸因`。既有 test_a_red_with_no_attribution_is_not_handed_to_a_new_worker 與 test_an_objection_apply_seconds_later_is_not_read_as_unattributed 不改仍綠(它們的狀態檔 note 沒有機械格字樣,照舊走「沒有歸因」或 gate 為準)。auto-fix.sh 檔頭退出碼表 4 那一格改成「failures 沒有歸因,或閘門機械格不合(頁的狀態格分得出)」;退出碼本身不新增(land.sh 等呼叫端不改)。",
+    "A5 [prompt 類 —— 歸 #88 那一類,由 opus 覆核審文字,不寫單元案例] 三處寫清「verify_strings 比的是改動內文(diff 的增刪行與新檔全文),diff 檔頭與檔名不算;新檔就挑檔內一定會有的字(類名、函式名)」,三處都要有連續字樣 `比的是改動內文`:(a) scripts/ticket.py 的 --verify-string 說明(create --help 印得出);(b) templates/dispatch-opener.md「票面的機械格要能被機器驗」那一條就地改寫;(c) memory/role/opener.md D-031 那一句(現在寫「落地對整個分支 git grep -F,不是檔名」,與閘門實際比法不符)就地改寫,不加新段、卡淨增 ≤ 40 字(卡已超標,見 #78)。覆核者對照 scripts/gate.sh 約 367–401 行的實際比法,確認三處說法與程式一致、三處彼此一致。",
+    "A6 [變異,實作者自證,每條只跑守它的那一條案例,EVIDENCE 貼紅的第一行] M1 gate 機械格退出前不寫 status → A1 紅;M2 auto-fix 不看 note、rc 非零紅 0 條一律走「沒有歸因」→ A2 紅;M3 所有機械格行一律歸因到票面 → A3 紅;M4 只改迴圈內那條、開場那條路不認 → A4 紅。"
+  ],
+  "in_scope": [
+    "scripts/gate.sh",
+    "scripts/auto-fix.sh",
+    "scripts/ticket.py",
+    "templates/dispatch-opener.md",
+    "memory/role/opener.md",
+    "tests/test_status.py",
+    "tests/test_auto_fix.py"
+  ],
+  "out_of_scope": [
+    "scripts/status.py",
+    "scripts/land.sh",
+    "scripts/review.sh",
+    "scripts/inbox.py",
+    "tests/control_harness.py",
+    "tests/test_no_project_names.py",
+    "tickets/SCHEMA.md",
+    "docs/DECISIONS.md",
+    "docs/HANDOFF.md",
+    "memory/role/implementer.md",
+    "memory/role/verifier.md",
+    "memory/role/main.md",
+    "memory/*/*.inbox.md"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/gate.sh",
+    "scripts/auto-fix.sh",
+    "scripts/ticket.py",
+    "templates/dispatch-opener.md",
+    "memory/role/opener.md",
+    "tests/test_status.py",
+    "tests/test_auto_fix.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "849b6374b16bac74b11df9bc4ed7eac6f87d99b1",
+  "state": "Ready",
+  "state_version": 5,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "shared_resources": [
+    "scripts/auto-fix.sh 讀狀態檔與「沒有歸因」那兩段(#89 改的是反駁分支與副本收件,區段不同)",
+    "memory/role/opener.md(#88 P13–P16 也改這張卡;誰後落地誰 rebase,本票只動 D-031 那一句)"
+  ],
+  "decision_refs": [
+    "D-031",
+    "D-014"
+  ],
+  "verify_strings": [
+    "閘門機械格不合",
+    "歸因到票面",
+    "比的是改動內文",
+    "MechanicalRedIsAttributed"
+  ],
+  "feature": "agent-control 閘門與 auto-fix 的停下來歸因",
+  "test_plan": "worker 只寫程式 + 跑本段列的測試(+ 變異自證只跑守它的那一條案例);不跑全套(unittest discover 整組、gate.sh --full)、不跑 verify.py 全部回歸 —— 回歸是閘門的事。\n只跑:python3 -m unittest tests.test_status.GateWritesStatus(整類一次;A1);python3 -m unittest tests.test_auto_fix.MechanicalRedIsAttributed(新類;A2–A4);既有兩條各單跑一次:python3 -m unittest tests.test_auto_fix.<類>.test_a_red_with_no_attribution_is_not_handed_to_a_new_worker、tests.test_auto_fix.<類>.test_an_objection_apply_seconds_later_is_not_read_as_unattributed(類名以檔內為準);python3 -m unittest tests.test_auto_fix.TheWholeLoop(整類一次,真 gate 路徑沒被改壞);動到 templates/dispatch-opener.md 跑 python3 -m unittest tests.test_rules_delivery tests.test_templates;收尾 python3 -m unittest tests.test_no_project_names(副本沒有 .git 時這支會空掃,改動檔自己 grep 專案名字樣)。\n變異(EVIDENCE 貼紅的第一行):M1–M4 見 A6。\n每條新增 / 改動案例在 EVIDENCE 寫一行完整的 `四問:`(守什麼 / 可信回歸 / 既有測試為何不夠 / 不加測試專用縫)。\nA5 是文字,不寫案例;opus 覆核審。\n閘門(auto-fix 收 patch 後跑):對照表模組 + verify.py 回歸案例,這是本票的 regression。",
+  "outline": "【來源】#89 第 1 輪 2026-10-04:worker 正常交件、patch 已 commit(分支 t89),閘門 preflight rc=4「verify_strings: 'test_objection_triage' 不在 patch 內容裡」(新檔檔名,只在 diff 檔頭;gate.sh 約 367–401 行跳過 +++/--- 行)。收件匣那一頁卻是「紅了但沒有歸因 / 紅榜是空的」,去哪看指向 reports/t89/<apply 那一輪>/status.json(kind apply、rc 0、紅 0 條)—— 實測:那一輪目錄只有 apply 的 status.json,閘門那一輪沒有任何狀態檔。\n【根因(讀 code + 現場對過)】gate.sh 機械格四個 exit 4(preflight 約 431 行 raise SystemExit(4)、約 441 code-map、約 470 記憶 lint)都在 status_start 之前,不寫狀態檔;auto-fix round_once 閘門紅後 read_status 取最新判決 → 沒有 gate 那筆就退回 apply 那筆 → S_FAILS=0 → 走「沒有歸因」exit 4(auto-fix.sh 約 1470 行;開場那條路約 668 行同形)。\n【設計取捨】狀態檔沿用 status.py 既有 start/done + note 欄,不加鍵;auto-fix 靠 gate status 的 kind/rc/note 裡的 `機械格不合 —— ` 認出這一種,不靠 rc==4 單獨判(既有『沒有歸因』案例的替身 rc 也可能是 4);退出碼不新增,頁的狀態格分得出;歸因只分兩類:verify_strings / tags 是票面(開題者),其餘是交件(worker)。不自動改票、不自動派開題者(那是 #89 D-041 一類的事,不在本票)。接回三步就是主線手接 #89 那一套:改票面 → 轉 Running → 在分支副本重跑 gate.sh --branch --ticket(綠 → InReview → review.sh),不轉 Ready。\n【D-033 實測】釘舊行為的:tests/test_status.py assert_preflight_stopped_before_tests 的 assertFalse(exists reports) → A1 只准改那一句;tests/test_auto_fix.py 兩條「沒有歸因」案例不改仍綠(其狀態檔沒有機械格字樣,未實測)。tests/test_auto_fix.py 已有用真 apply.sh / 真 gate.sh 的 TheWholeLoop 類(約 1329 行),A2–A4 沿用;真閘門在 AutoFixBase 沙盒跑機械格那一條未實測。\n【needs_verifier=false】A 腳本票慣例;介面(頁狀態格、歸因字樣、note 形狀、接回三步字樣)全釘在票面,驗證者案例只會重演實作者自己案例的同一契約(DISPATCH-TEMPLATE §5.8 第 3 問);A5 文字由 opus 覆核審。\n【衝突】與 #89 同改 scripts/auto-fix.sh(區段不同);與 #88 同改 memory/role/opener.md(本票只動 D-031 那一句)。#89 若先落地,本票 base 跟著前進即可。\n【逾時 3600 秒(未實測)】①寫程式:gate.sh 四個退出點寫狀態 30–40 行 + auto-fix.sh 歸因分支與開場那條 40–60 行 + 三處文字 ~6 行 + 測試(test_status 改 2 句、新類 4–5 條約 150 行)≈ 230–260 行,43 行/分 ≈ 6 分;讀 gate preflight / status 函式、auto-fix read_status / round_once / post、TheWholeLoop 沙盒 15–20 分 → 21–26 分;②跑指定測試:GateWritesStatus、新類(真 gate 沙盒,三次)、兩條既有、TheWholeLoop、rules_delivery+templates、no_project_names → 10–14 分;③變異 4 條 × 1–1.5 分 → 4–6 分。合計 35–46 分,上緣 ×1.2 ≈ 55 分 → 3600。閘門回歸不計。",
+  "needs_verifier": false,
+  "interface_fixed": false,
+  "worker": {
+    "timeout_seconds": 3600
+  }
+}

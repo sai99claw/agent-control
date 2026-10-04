@@ -73,9 +73,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "8cbb6a5754fce49f2dcc765bdd5722748dfae6a4",
-  "state": "Ready",
-  "state_version": 6,
+  "base_sha": "849b6374b16bac74b11df9bc4ed7eac6f87d99b1",
+  "state": "Running",
+  "state_version": 13,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -100,11 +100,30 @@
     "sessions.json",
     "--resume",
     "TRIAGE: ",
-    "test_objection_triage"
+    "AcceptedResumesTheSameSessions"
   ],
   "needs_verifier": false,
   "interface_fixed": false,
   "worker": {
     "timeout_seconds": 4800
-  }
+  },
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 94,
+      "tokens_out": 96410,
+      "cache_write": 237536,
+      "cache_read": 8299818,
+      "wall_seconds": 1391,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-04T16:18:38+08:00"
+    }
+  ],
+  "branch": "t89",
+  "patch_ref": "../agent-control-wt/fix-t89/round1/patch-round1.diff",
+  "repair_round": 1,
+  "owner": "main"
 }
