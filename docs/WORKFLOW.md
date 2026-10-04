@@ -19,6 +19,11 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 
 ## 一票一分支一副本
 - worker 拿到 `base_sha` 的 `git archive` 副本(`work/`)與對照副本(`base/`),交 `diff -ruN base work > patch.diff`。
+- **auto-fix 派的 agent 在副本裡跑腳本,寫入落在拋棄式控制根**(#87 A9–A15):每次起 worker / 驗證者,
+  `auto-fix.sh` 都在 `<副本根>/control` 重開一顆(config + 這張票 + 派工文的複本),`AC_ROOT` 指它;
+  `AC_CONTROL_DIR`、`AC_TICKETS_DIR` 與任何值落在主 repo 底下的 `AC_*` 一律不帶。agent 跑腳本寫出的
+  事件、票、狀態檔、收件匣都落在這顆根,碰不到主 repo 的真看板;它在 `work/` 旁邊、不在裡面,
+  不會進 patch;副本收掉(`work/`、`base/`)時一起刪。開題者判反駁時不隔離(它要改真票)。
 - **套 patch → 開 `t<票號>` 分支與 worktree → commit 走 `scripts/apply.sh <票號> <patch> [<patch-verify>]`**
   (2026-09-21,D-015)。它在 `git apply` 之前擋檔頭(只准 `base/…` / `work/…` 或 `/dev/null`,
   絕對路徑拒、`diff -ruN` 的刪檔沒改 `+++` 也拒),在 `git apply` 之後比對每個 `+++` 目標
@@ -122,8 +127,10 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
    `AC_WT`(這張票的 worktree)、`AC_ROUND`(本輪)與 `AC_TICKET`(票號)。
    **綠了轉 `InReview`,再叫 `scripts/review.sh <票號>` 派覆核**(`--no-review` 關;#42,D-025 ②)。
 4. **三輪耗盡不是一句話,是一個狀態轉換**:`round` 在第 `retry_limit+1` 輪仍紅時把票轉 **Blocked**、`owner` 設成 `main`,並發 `ticket.attempt.failed`。舊規則只寫「報主線」,而「報了」與「沒報」在票上長得一樣。
-5. 停下來報主線的**三種**情況,每一種都寫一則收件匣(kind=decision;綠了只寫事件、不發頁,D-032):worker 判斷**票寫錯 / 需要裁示**
-   (它在 EVIDENCE 寫一行 `OBJECTION: <類別> <理由>`,`auto-fix.sh` 把它記成 `objections[]` 的一筆);
+5. 停下來報主線的**三種**情況,每一種都寫一則收件匣(kind=decision;綠了只寫事件、不發頁,D-032):worker 的**反駁升級**
+   (它在 EVIDENCE 寫一行 `OBJECTION: <類別> <理由>`,`auto-fix.sh` 把它記成 `objections[]` 的一筆;
+   `ticket-wrong` / `blocking` 先由開題者判,判得出 accepted / rejected 就接回原 session 續做、不停,
+   只有下面「實作者的反駁怎麼被收下」列的四種才停;`test_defect` 照舊派驗證者);
    三輪耗盡;**failures 沒有歸因**(rc 非零卻一條紅都解析不出來 —— 那一種最像「沒有紅」,
    而派下去的 worker 會拿著空紅榜去猜)。
    > ⛔ **「紅在票沒動到的檔 → 疑似他票」這一條拿掉了**(D-014)。`failures.file` 取的是 traceback 最後一個檔案,經常是既有測試或共用 helper;而產品改壞行為,本來就會紅在完全沒修改的測試檔。歸責改用**同條件的 baseline / candidate 對照**(`scripts/verify-case.py check`:同一份案例在乾淨主線與 candidate 上各跑一次)。**未完成歸因前,票由原 owner 持有** —— 不因為某個檔沒被這張票改過就轉成別人的問題。
@@ -138,6 +145,25 @@ worker 說「這張票寫錯了」以前只是一句話:沒有結構化類別、
                 "disposition": "", "follow_up": ""}]
 ```
 `category` 是 `ticket-wrong` / `blocking`(或 `blocking: true`)就是阻擋項;`disposition` 空著 → **land 拒絕、`close` 拒絕**。處置寫 `accepted` / `rejected` / `deferred` / `fixed`,要有 owner,建議附後續票號。
+
+### 誰判、什麼時候才進主線(2026-10-04,D-041,#89)
+`ticket-wrong` / `blocking` **不再直接轉 Blocked 等主線**:
+1. auto-fix 發 `objection.triage.start`,起一個**開題者**判(`board/config.json` 的 `opener.command`,時限
+   `opener.timeout_seconds`;cwd 與 `AC_ROOT` 是主 repo 根 —— 它要改真票)。派工文的 `## 判反駁` 段給它
+   反駁行、EVIDENCE 與票號;判決寫進 `reports/t<n>/triage-round<r>.md` 第一行
+   `TRIAGE: <accepted|rejected|escalate> <一句理由>`。accepted 時它只改這張票的票面。
+2. 判 accepted / rejected:auto-fix 發 `objection.triage.done`(帶 verdict),並把那一筆的 `disposition`
+   與 `triage` 子格(`{verdict, reason, round, by}`)寫上 —— **只有 auto-fix 寫這兩格**(單一寫入者)。
+   接著用 `reports/t<n>/sessions.json` 記的 session 接回(`--resume`),同一輪、原副本、不發頁:
+   accepted 先接回這一輪平行起的驗證者依票面差異改案例,再接回 worker 照新票面做;rejected 附理由接回
+   worker 照原票做。第一段的 EVIDENCE / patch 改名成 `*-objection.*` 留著。接回的驗證者沒交件 →
+   票轉 Blocked、發頁「驗證者沒交出 patch-verify」。
+3. **只有四種進主線收件匣**(票轉 Blocked、owner=main、decision 頁;也發 `objection.triage.done`,
+   verdict=escalate;副本與 session 都留著,頁上寫 session id 與副本給主線手接回;`auto-fix.sh` 退出碼 3):
+   開題者判需要裁示(escalate)、**同票第二次反駁**(票上已有一筆帶 `triage` 的)、開題者沒判出來
+   (命令缺、規則包產不出來、退出非零、逾時、沒交判決行)、session **不能接回**(`sessions.json` 那一列
+   `resumable` 不是 true)。這四種的 `disposition` 由主線處置。
+`test_defect` 那條路照舊(下一節)。
 
 ## 交接類型:`test_defect`(2026-09-21,D-014)
 票是對的、程式也是對的,**錯的是案例本身**(oracle 或 fixture 寫錯)時:worker **不准**放寬斷言、不准改 oracle。它交一筆 `objections[{"category": "test_defect", …}]` 附反例,auto-fix 立即派**新的 role=verifier worker**(規則包 + 紅榜 + 反駁行 + 案例檔路徑)。驗證者交 `patch-verify.diff`,腳本併入同一分支後續跑閘門;綠了只寫事件,仍紅主線從 inbox 看「案例已修,第 N 輪仍紅」。需求本身有爭議才退回開題者。

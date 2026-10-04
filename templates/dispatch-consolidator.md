@@ -1,6 +1,12 @@
 # 派工文範本 —— 整理者(consolidator;D-006 / D-007 / D-013;#29 A8,2026-09-23)
 
-**怎麼用**:整份複製,把 `<…>` 換掉,**兩個模型各開一個 session、各貼一次**。
+**怎麼用**:
+- **自動(#87 A39–A41)**:主線開場由 `scripts/new-session.sh` 對每張 role=consolidator、Ready、沒有有效租約的
+  整理票背景叫 `scripts/consolidate-memory.sh`;它依 `board/config.json` 的 `memory.consolidators` 每個模型起一個
+  session,這一份由它逐格填好、接在規則包之後從 stdin 餵。同一張票**租約排他**:先拿到租約的那一組才起,另一個
+  主線開場不再起。命令缺、規則包產不出來、範本找不到、session 退出非零、逾時 → 票轉 NeedsDecision、租約清空,
+  收件匣一頁 decision。下面的 `<…>` 是它填的佔位,名字一個都不要改(改了它就填不到)。
+- **人工**:整份複製,把 `<…>` 換掉,**兩個模型各開一個 session、各貼一次**。
 前言用 `python3 scripts/rules.py pack consolidator --model <模型>` 產(≤ 4 KB);它非零就**不派**,照 stderr 補缺項,不要手寫前言代替(#74)。
 
 > ⚠️ **一個 session 自己整理不算數**(D-013)。一個 session 刪自己的記憶時,最先刪掉的是

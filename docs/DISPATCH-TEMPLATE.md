@@ -25,6 +25,10 @@ python3 scripts/rules.py roles                         # 哪個角色要哪幾�
 節錄不是全文:被派的 agent 開場自己讀 `memory/role/<角色>.md` 與這一份,前言只負責指路與
 留住會被擋到的那幾句。
 
+**`rules.py pack` rc=2、stderr 說「低於 routing 下限」**(#87 A8:`--model` 在 `board/config.json`
+的 `model_tiers` 裡排在該角色 `routing` 那一格之前):派工方不起 agent;agent 自己跑 pack 撞到時
+**停下**,回報逐字「模型低於這個角色的 routing 下限」,不自行繼續、不換一個角色或模型重跑。
+
 ---
 
 ## 0. 派工路由:哪一種工作找誰
@@ -75,6 +79,12 @@ commit 的內容,worktree 裡沒 commit 的東西一個字都不會進去,而**�
 📏 套 patch 的人要看 `patch.diff` 第一行 `---` 的路徑決定 `-p` 幾:前綴是
 `base/<子目錄>/…` 就是 `-p1`。**用錯會刪檔**。套完檢查
 `find . -name "*.rej" -o -name "*.orig"`。
+
+**worker 只跑派工文「## 只准跑的測試」段列的測試**(#87 A18;那一段由 `auto-fix.sh` 逐字抄票的
+`test_plan`):不跑全套(unittest discover 整組、gate.sh --full)、不跑 verify.py 全部回歸 ——
+回歸是閘門的事,閘門紅由 auto-fix 下一輪派 worker 處理,全套只在 land 跑一次。票沒有 `test_plan`
+時那一段寫「只跑你改到的 tests/ 檔,不跑全套」,照它做。驗證者同一條規矩,寫在
+`templates/dispatch-verifier.md`。
 
 ---
 
@@ -310,6 +320,10 @@ Chrome 完全不管。分支閘門收窄成 chrome 全綠,一路藏到 land 的�
 
 ## 6. 查證
 
+**查實作位置先問 repo map**:`python3 scripts/repo-map.py query <主題>`(入口、主守衛、來源、文件);
+查不到(rc 1)或 `python3 scripts/repo-map.py check` 非零(索引過期)才對來源針對性 grep。
+三個子命令與索引歸誰,見 `docs/CODE-MAP.md` §0。
+
 ### 6.3 🩸 要數某條規則會抓到多少東西,就用**那條規則本身**去數
 
 近似的搜尋條件數出來的是**假的下界**,而它看起來是一個**精確的數字**,不是一個估計 ——
@@ -372,7 +386,7 @@ Chrome 完全不管。分支閘門收窄成 chrome 全綠,一路藏到 land 的�
 ## 7. 「票寫錯就說出來」
 
 派工文最後一段固定要求:**發現票或驗收計畫哪裡與現在的程式對不上、或哪一條要求做不到
-/ 做了會壞別的東西,直接說出來,不要硬做。**
+/ 做了會壞別的東西,直接說出來,不要硬做。** 怎麼說、說了之後誰接手,見 §8 第 7 點。
 
 📏 這一條當天回收率很高:一張票查出「圖示本來就是對的,問題在別的表面」因而沒有動任何
 產品碼;一張查出票面那句「畫面上一個字都沒有」是照一行**讀了不存在節點**的失敗訊息
@@ -404,10 +418,14 @@ Chrome 完全不管。分支閘門收窄成 chrome 全綠,一路藏到 land 的�
 6. **最小重現**:一句可以直接貼的指令 + 預期輸出(2026-09-21)。
    5 與 6 是給**下一輪那個新的人**的:少了它們,三輪可能把同一段 code 查三次
    —— 而每一次都是整份上下文重付一遍。**有長度上限,不搬整段聊天。**
-7. 票寫錯、發現的別的問題、**案例本身錯**(oracle 或 fixture):寫成票的 `objections[]`
-   一筆(`category` / `body` / `evidence` / `owner`;阻擋就 `blocking: true`),
+7. 票寫錯、發現的別的問題、**案例本身錯**(oracle 或 fixture):在 EVIDENCE 寫一行
+   `OBJECTION: <ticket-wrong|test_defect|blocking> <一句話>`,收件的那一手(`apply.sh` /
+   `auto-fix.sh`)把它記成票的 `objections[]` 一筆(`category` / `body` / `evidence` / `owner`),
    不要只寫在回報裡 —— **沒被收進票的反駁,與沒有反駁長得一樣**。
-   案例錯是 `category: test_defect`:**你不准放寬斷言、不准改 oracle**,主線會派獨立的
+   `ticket-wrong` / `blocking` 由 auto-fix 起開題者判;判 accepted / rejected 會把你接回同一個
+   session 在原副本續做(續做的規矩在實作者角色卡),只有四種情況才進主線收件匣 —— 流程正文在
+   `docs/WORKFLOW.md`「實作者的反駁怎麼被收下」。
+   案例錯是 `category: test_defect`:**你不准放寬斷言、不准改 oracle**,auto-fix 會派獨立的
    驗證者修案例。
 8. **記憶**:有寫就列 `memory.py note` 的那幾行(層 / 名 / 那一句 / 票號),沒寫就寫「無」
    (2026-09-22)。**沒列的回寫,與亂寫長得一樣** —— 主線靠這一段 grep 誰動了哪一層。

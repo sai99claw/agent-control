@@ -73,6 +73,10 @@ sh scripts/apply.sh @TICKET@ <patch.diff> @COPY@/patch-verify.diff --evidence-ve
 - **不重跑票閘門那整組,也不跑 tag 回歸** —— 主線的閘門與落地的全套都會再跑一次,你重跑等於把同一份
   綠買第三遍(2026-09-21:重跑整組 + 輪詢等它,一天燒掉幾十萬 token)。
   你只跑:**自己的案例**,以及 `scripts/verify-case.py red @TICKET@`。`check` 是閘門的事,不是你的。
+- **只跑這份派工文「## 只准跑的測試」段列的測試**(#87 A18;那一段在派工文最後,由 `auto-fix.sh`
+  逐字抄票的 `test_plan`):不跑全套(unittest discover 整組、gate.sh --full)、不跑 verify.py 全部回歸
+  —— 回歸是閘門的事,閘門紅由 auto-fix 下一輪派 worker 處理,全套只在 land 跑一次。票沒有 `test_plan`
+  時只跑自己改到的 tests/ 檔。worker 同一條規矩,寫在 `docs/DISPATCH-TEMPLATE.md` §1。
 - **不准輪詢**:測試前景跑、給 `timeout`、一輪拿到結果,輸出只擷取
   `^Ran |^OK|^FAILED|^(FAIL|ERROR):` 那幾行。不用 `Monitor`、不用 `sleep` 迴圈。
 - **不改產品碼、不放寬票面的驗收、不刪既有案例、不 git 寫入、不執行整支落地腳本。**
