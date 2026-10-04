@@ -32,7 +32,9 @@
 只准自己那張票檔、只准 `land.sh docs` 這一個入口(鎖與前綴白名單都在它裡面),裸 commit 照舊禁止。
 
 ## 票面的機械格要能被機器驗
-- `verify_strings` 是落地時 `git grep` 的**內容**字串,檔名不算。
+- `verify_strings` 比的是改動內文(diff 的增刪行與新檔全文),diff 檔頭與檔名不算 —— 閘門
+  preflight 與落地時的 `git grep` 都只認內容;新檔就挑檔內一定會有的字(類名、函式名),
+  不要寫新檔的檔名。
 - `tags` 只能用 `verify/TAGS.md`(與 `verify/TAGS.d/`)登記過的。
 - 票面引用的指令**先 `--help` 一次再寫** —— 寫錯一個旗標,worker 會照著打到禁區埠。
 - `decision_refs` 指到 `docs/DECISIONS.md` 真的存在的那幾條。

@@ -6,6 +6,7 @@
     scripts/memory.py harvest EVIDENCE.md      # 收割「記憶」段的 note 指令
     scripts/memory.py snapshot memory/model/opus.md   # 討論檔頭要抄的兩行
     scripts/memory.py lint [--file <記憶檔>]… [--json]   # 分層 lint(唯讀):錯層內容逐條點名
+    scripts/memory.py lint --base main --file <記憶檔>…  # 閘門那一手:只量本分支新增行與超上限
     scripts/memory.py consolidate memory/model/opus.md --candidate <新版> \
         --discussion discussions/2026-09-12-memory-opus-fable.md \
         --discussion discussions/2026-09-12-memory-opus-opus.md \
@@ -54,7 +55,9 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
+import tempfile
 import time
 from datetime import date, datetime
 
@@ -96,7 +99,8 @@ USAGE = {
     "snapshot": "scripts/memory.py snapshot <記憶檔>             # 印 source_lines / source_sha256",
     "note": "scripts/memory.py note <model|role|project> <名> \"<一行>\" [--ticket N] [--by <role>@<model>]",
     "harvest": "scripts/memory.py harvest <EVIDENCE.md>",
-    "lint": "scripts/memory.py lint [--file <記憶檔>]… [--json]   # 唯讀;空掃描不算過",
+    "lint": ("scripts/memory.py lint [--file <記憶檔>]… [--base <ref>] [--json]   # 唯讀;空掃描不算過;"
+             "--base 只量相對 merge-base(ref, HEAD) 的新增行與本分支讓卡超上限"),
     "consolidate": ("scripts/memory.py consolidate <記憶檔> --candidate <檔> --discussion <A> "
                     "--discussion <B> [--new-cap N --reason …] [--by …]"),
 }
@@ -444,8 +448,62 @@ def print_lint(bad, out=sys.stderr):
                      "(%s)" % row["why"] if row.get("why") else "", row["destination"]))
 
 
+# ------------------------------------------------------- lint --base(D-042)
+#
+# 閘門問的是**這條分支加了什麼**,不是這張卡整份乾不乾淨:既有正文的命中與早已超標的卡
+# 歸整理票(`check` 開的那一張),拿來擋一個只在卡尾加一行的分支,等於要每張票順手整理
+# 整張卡。改前 = 該卡在 merge-base(ref, HEAD) 的內容;改後 = 工作樹;改前不存在的卡
+# (含未追蹤)整份都算新增。
+
+
+def git_out(root, *args):
+    done = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True)
+    return done.stdout if done.returncode == 0 else None
+
+
+def text_at(root, ref, rel):
+    """`ref` 上那一份的全文;那一版沒有這個檔 → None。"""
+    return git_out(root, "show", "%s:%s" % (ref, rel.replace(os.sep, "/")))
+
+
+HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+
+def added_lines(root, before, after):
+    """改後相對改前的 `+` 行行號(改後的行號;新增與改寫都算)。比法是 git diff。"""
+    if before is None:
+        return set(range(1, len(after.splitlines()) + 1))
+    with tempfile.TemporaryDirectory() as tmp:
+        old, new = os.path.join(tmp, "before"), os.path.join(tmp, "after")
+        for path, text in ((old, before), (new, after)):
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(text)
+        out = subprocess.run(["git", "-C", root, "diff", "--no-index", "--no-color",
+                              "--unified=0", old, new], capture_output=True, text=True).stdout
+    lines = set()
+    for row in out.splitlines():
+        found = HUNK.match(row)
+        if found:
+            start, count = int(found.group(1)), int(found.group(2) or 1)
+            lines.update(range(start, start + count))
+    return lines
+
+
+def over_cap_by_branch(rel, before, after, watched):
+    """`(改前, 改後, 上限)` —— 只在改前 ≤ 上限 < 改後時回;其餘回 None。量法與量哪幾張
+    (`watched` = `watched_files()`)同 `check`。"""
+    if rel not in watched:
+        return None
+    front, body = split_front_matter(after)
+    cap, _ = cap_of(front, int(memory_config().get("cap_chars") or DEFAULT_CAP))
+    old = body_chars(before) if before is not None else 0
+    if old <= cap < len(body):
+        return old, len(body), cap
+    return None
+
+
 def cmd_lint(argv):
-    files, as_json, index = [], False, 0
+    files, as_json, base, index = [], False, None, 0
     while index < len(argv):
         flag = argv[index]
         if flag == "--json":
@@ -454,24 +512,47 @@ def cmd_lint(argv):
         elif flag == "--file" and index + 1 < len(argv):
             files.append(argv[index + 1])
             index += 2
+        elif flag == "--base" and index + 1 < len(argv):
+            base = argv[index + 1]
+            index += 2
         else:
             return unknown_flag(flag)
     root = ticket.root()
     decisions = decisions_text(root)
     targets = [os.path.relpath(os.path.join(root, rel), root) for rel in files] \
         if files else lint_targets(root)
-    bad, allowed, scanned = [], [], []
+    fork, watched = None, []
+    if base is not None:
+        fork = (git_out(root, "merge-base", base, "HEAD") or "").strip()
+        if not fork:
+            sys.stderr.write("memory: lint --base 問不到 merge-base(%s, HEAD)—— 量不了新增行\n"
+                             % base)
+            return 2
+        watched = watched_files()
+    bad, allowed, scanned, over = [], [], [], []
     for rel in targets:
         try:
             more, ok = lint_file(root, rel, decisions)
+            after = read(os.path.join(root, rel)) if fork else None
         except OSError as exc:
             sys.stderr.write("memory: lint 讀不到 %s —— %s\n" % (rel, exc))
             return 2
+        if fork:
+            before = text_at(root, fork, rel)
+            fresh = added_lines(root, before, after)
+            more = [row for row in more if row["line"] in fresh]
+            ok = [row for row in ok if row["line"] in fresh]
+            crossed = over_cap_by_branch(rel, before, after, watched)
+            if crossed:
+                over.append({"file": rel, "before": crossed[0], "after": crossed[1],
+                             "cap": crossed[2]})
         scanned.append(rel)
         bad.extend(more)
         allowed.extend(ok)
     data = {"scanned": len(scanned), "files": scanned, "violations": bad, "allowed": allowed,
-            "ok": bool(scanned) and not bad}
+            "ok": bool(scanned) and not bad and not over}
+    if fork:
+        data["over_cap"] = over
     if as_json:
         sys.stdout.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
     else:
@@ -482,10 +563,13 @@ def cmd_lint(argv):
         sys.stdout.write("memory: lint 掃了 %d 份、命中 %d 條、例外 %d 條\n"
                          % (len(scanned), len(bad), len(allowed)))
     print_lint(bad)
+    for row in over:
+        sys.stderr.write("memory: cap %s %d -> %d / %d\n"
+                         % (row["file"], row["before"], row["after"], row["cap"]))
     if not scanned:
         sys.stderr.write("memory: lint 一份都沒掃到 —— 空掃描不算過\n")
         return 2
-    return 1 if bad else 0
+    return 1 if bad or over else 0
 
 
 def cmd_note(argv):

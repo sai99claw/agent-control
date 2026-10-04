@@ -548,7 +548,9 @@ class GateWritesStatus(Sandbox):
         self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
         self.assertFalse(os.path.exists(self.log), "機械格紅了之後仍啟動測試")
         self.assertNotIn("gate.start", self.kinds())
-        self.assertFalse(self.exists("reports"), "機械格紅了之後仍建立測試狀態")
+        gate = self.status_of(7, kind="gate")
+        self.assertEqual(gate["rc"], 4, gate)
+        self.assertIn("機械格不合", gate["note"])
 
     def test_verify_string_must_be_in_patch_content_not_its_filename(self):
         self.make_ticket(7, allowed_write_paths=["tests/*"], verify_strings=["filename-token"])
@@ -557,6 +559,8 @@ class GateWritesStatus(Sandbox):
         self.assert_preflight_stopped_before_tests(done)
         self.assertIn("filename-token", done.stderr)
         self.assertIn("內容", done.stderr)
+        self.assertIn("verify_strings: 'filename-token' 不在 patch 內容裡",
+                      self.status_of(7, kind="gate")["note"])
 
     def test_an_unregistered_ticket_tag_stops_before_tests(self):
         self.install_test_marker()

@@ -32,6 +32,8 @@
 # 3. **failures 沒有歸因** —— rc 非零卻一條紅都解析不出來(log 壞了、跑都沒跑起來)。
 #    這一種**最危險**:它看起來像「沒有紅」,而自動派下去的 worker 會拿著一份空紅榜
 #    去猜。所以這裡當場停,不派。
+#    **閘門機械格不合**(#90)不是這一種:測試沒起所以紅榜空,但 gate 狀態檔的 note 寫著
+#    是哪一條 —— 頁的狀態格是「閘門機械格不合」,歸因到票面(verify_strings / tags)或交件。
 #
 # **覆核由 `review.sh` 派**(#42,D-025 ②):綠了之後票轉 `InReview`(`ticket.state` 事件)、
 # 再叫 `sh scripts/review.sh <票號>` —— reviewer pass 由它寫 `review`,fail 由它轉 Blocked 回主線
@@ -41,7 +43,8 @@
 #
 # ## 退出碼
 #   0 綠了(覆核交給 review.sh)   1 三輪耗盡仍紅   2 用法 / 沒有狀態檔而票不是 Ready
-#   3 worker 提反駁       4 failures 沒有歸因   5 worker 沒交出可用的 patch
+#   3 worker 提反駁       4 failures 沒有歸因,或閘門機械格不合(頁的狀態格分得出)
+#   5 worker 沒交出可用的 patch
 #   6 規則包產不出來(#74):worker / 驗證者一個都沒起;缺項在 rules.py 送的 decision 頁
 #   7 codex 額度用完(#87 A23):票已改派 opus / claude-code、回 Ready;這一次不重派
 set -u
@@ -448,6 +451,11 @@ out("S_STATE", data.get("state") or "")
 out("S_KIND", data.get("kind") or "")
 out("S_RC", "" if data.get("rc") is None else data.get("rc"))
 out("S_FAILS", len(data.get("failures") or []))
+# 閘門機械格不合(#90):gate 那一筆 rc 4、note 帶 `機械格不合 —— ` 原文。**不靠 rc==4 單獨判**
+# —— 測試紅也可能是 4;認的是 gate 自己寫下的那幾行。
+mech = [line for line in str(data.get("note") or "").splitlines() if "機械格不合 —— " in line] \
+    if data.get("kind") == "gate" and data.get("rc") == 4 else []
+out("S_MECH", "\n".join(mech))
 out("S_ROUND", (ctx.get("round") or 1))
 out("S_BASE", ctx.get("base_sha") or "")
 out("S_PATCH", patch)
@@ -462,6 +470,65 @@ out("S_ENV_ENGINE", first.get("engine") or "?")
 out("S_ENV_WHY", first.get("why") or "?")
 PY
 )"
+}
+
+# 閘門機械格不合(#90 A2–A4):測試沒起,紅榜本來就是空的 —— 那不是「沒有歸因」,歸因就寫在
+# gate 狀態檔的 note 裡。逐條點名、分兩類(verify_strings / tags 是票面,其餘是交件),給主線
+# 接回的確切步驟;不派 worker、不轉 Ready(轉 Ready 會從頭派第 1 輪),patch 留在分支上。
+mechanical_stop() {   # uses S_MECH / S_RUN;票轉 Blocked、一頁、exit 4
+    echo "auto-fix: 閘門機械格不合(rc 4,測試沒起)—— 不派 worker:" >&2
+    printf '%s\n' "$S_MECH" | sed 's/^/auto-fix:   /' >&2
+    block "#$ID 閘門機械格不合:$S_MECH"
+    mech_page=$(python3 - "$ROOT" "$ID" "$S_RUN" "$S_MECH" "$TF" <<'PY'
+import json, os, sys
+root, ident, run_id, lines, tf = sys.argv[1:6]
+sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
+import status
+
+TICKET_FIELDS = ("verify_strings: ", "tags: ")
+try:
+    with open(tf, encoding="utf-8") as handle:
+        branch = json.load(handle).get("branch") or "t%s" % ident
+except (OSError, ValueError):
+    branch = "t%s" % ident
+wt = ((status.read(root, ident, run_id) or {}).get("repair_context") or {}).get("worktree") \
+    or "<票 %s 的 worktree>" % ident
+rows = [line for line in lines.splitlines() if line.strip()]
+ticket_rows = [line for line in rows
+               if line.split("機械格不合 —— ", 1)[-1].startswith(TICKET_FIELDS)]
+work_rows = [line for line in rows if line not in ticket_rows]
+out = ["閘門機械格不合(rc 4,測試沒起,所以紅榜是空的 —— 歸因在下面)。", ""]
+if ticket_rows:
+    out.append("**歸因到票面(開題者)**:")
+    out += ["- %s" % line for line in ticket_rows]
+    out += ["", "verify_strings 比的是改動內文(diff 的增刪行與新檔全文),diff 檔頭與檔名不算;"
+            "新檔就挑檔內一定會有的字(類名、函式名)。tags 要先登記在 verify/TAGS.md 或 verify/TAGS.d/。",
+            ""]
+if work_rows:
+    out.append("**歸因到交件(worker)**:")
+    out += ["- %s" % line for line in work_rows]
+    out += ["", "交件本身不合:拿掉 out_of_scope / protected_paths 的改動、重生 code-map、"
+            "把記憶卡新增的錯層內容或超出上限的部分改掉 —— 在分支 %s 上修。" % branch, ""]
+out.append("接回(patch 留在分支 %s 上;**不要轉 Ready** —— 那會從頭派第 1 輪):" % branch)
+step = 1
+if ticket_rows:
+    out.append("%d. 改票面:`python3 scripts/ticket.py set %s verify_strings '<JSON 陣列>'`"
+               "(tags 不合就改 tags / verify)" % (step, ident))
+    step += 1
+if work_rows:
+    out.append("%d. 修分支 %s 上的交件並 commit(或主線決定重派)" % (step, branch))
+    step += 1
+out.append("%d. `python3 scripts/ticket.py set %s state Running`" % (step, ident))
+out.append("%d. 在分支副本重跑閘門:`cd %s && sh scripts/gate.sh --branch --ticket %s`"
+           "(綠 → InReview → review.sh)" % (step + 1, wt, ident))
+print("\n".join(out))
+PY
+)
+    python3 "$AC/inbox.py" post --ticket "$ID" --run-id "${RUN_ID:-}" \
+        --kind decision --state "閘門機械格不合" --what "$mech_page" \
+        --where "reports/t$ID/$S_RUN/status.json" \
+        || echo "auto-fix: inbox 寫不出來(閘門機械格不合)" >&2
+    exit 4
 }
 
 # 規則包(#74):**先產、成功才組派工文**。產不出來(缺章節、空正文、放不下)時 rules.py
@@ -748,6 +815,8 @@ fi
 # worker 會拿著空紅榜去猜 —— 猜出來的修法會改到沒有壞的地方。
 # 第 1 輪(#40)沒有上一輪:環境嫌疑 0 條、rc 是空的、S_ROUND=0,前後三格本來就不成立;
 # 只有這一格要明著跳過 —— 不然「還沒有紅榜」會被讀成「紅了但沒有歸因」。
+# 閘門機械格不合(#90 A4)排在它前面:紅榜空是因為測試沒起,歸因在 gate 的 note 裡。
+[ -z "${S_MECH:-}" ] || mechanical_stop
 if [ -n "${S_RUN:-}" ] && [ "$S_FAILS" -eq 0 ]; then
     echo "auto-fix: rc=${S_RC:-?} 卻一條紅都解析不出來 —— **沒有歸因**,不派 worker" >&2
     block "#$ID rc=${S_RC:-?} 但 failures 是空的:紅榜解析不出案例,要人看 log"
@@ -1831,6 +1900,7 @@ while :; do
     ROUND_RC=0
     if round_once "$r"; then
         # 還紅,而且沒有停下來的理由 —— 看還有沒有下一輪。
+        [ -z "${S_MECH:-}" ] || mechanical_stop
         if [ "$S_FAILS" -eq 0 ]; then
             echo "auto-fix: 第 $r 輪 rc 非零卻解析不出紅榜 —— 沒有歸因,停" >&2
             block "#$ID 第 $r 輪 rc 非零但 failures 是空的"
