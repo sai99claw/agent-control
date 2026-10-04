@@ -325,11 +325,23 @@ MAIN_TICKET_PY
     fi
 fi
 
+# 機械格(#90 A1):每一條不合都印 `gate: 機械格不合 —— <原文>` 並記進 MECH_LOG,全部量完才
+# 退 4 —— 退之前寫一份**自己的**狀態檔(kind gate、rc 4、note 是那幾行原文,見 status_nothing
+# 之後那一段)。以前四個 exit 4 都在狀態檔之前,auto-fix 讀到的最新一筆是 apply 那一輪
+# (rc 0、紅 0 條),發的是「紅了但沒有歸因」。
+MECH_LOG=$LOG.mechanical
+MECH_NOTE=""
+mech() {   # $1 = 原文
+    echo "gate: 機械格不合 —— $1" >&2
+    echo "gate: 機械格不合 —— $1" >> "$MECH_LOG"
+}
+
 if [ -n "$TICKET" ]; then
-    python3 - "$ROOT" "$TICKET" "$MAIN" <<'PREFLIGHT_PY'
+    : > "$MECH_LOG"
+    python3 - "$ROOT" "$TICKET" "$MAIN" "$MECH_LOG" <<'PREFLIGHT_PY'
 import json, os, re, subprocess, sys
 
-root, ident, main = sys.argv[1:4]
+root, ident, main, mech_log = sys.argv[1:5]
 sys.path.insert(0, os.path.join(root, "scripts"))
 import event
 import ticket as ticket_mod
@@ -426,19 +438,20 @@ for name, field, pattern in ticket_mod.write_scope(ticket, root, changed)[0]:
     errors.append("%s:%s 命中 `%s`" % (field, name, pattern))
 
 if errors:
-    for error in errors:
-        print("gate: 機械格不合 —— " + error, file=sys.stderr)
+    with open(mech_log, "a", encoding="utf-8") as handle:
+        for error in errors:
+            print("gate: 機械格不合 —— " + error, file=sys.stderr)
+            handle.write("gate: 機械格不合 —— %s\n" % error)
     raise SystemExit(4)
 PREFLIGHT_PY
     preflight_rc=$?
-    [ "$preflight_rc" -eq 0 ] || exit "$preflight_rc"
+    case "$preflight_rc" in 0|4) ;; *) exit "$preflight_rc" ;; esac
     # 候選樹的 code-map 索引要是新的(#87 A32):新增 / 改名 / 刪除已管理的檔而沒重生,
     # 查得到的就是一份說謊的地圖。量的是**這一棵**(`--root "$ROOT"`),不是 `AC_ROOT`
     # 指的主 repo;沒有地圖的 repo(沒有 catalog)不量。與機械格同一個退出碼,不跑測試。
     if [ -f "$ROOT/scripts/repo-map.py" ] && [ -f "$ROOT/code-map/catalog.json" ]; then
         if ! python3 "$ROOT/scripts/repo-map.py" --root "$ROOT" check >/dev/null; then
-            echo "gate: 機械格不合 —— code-map 索引過期(上面 repo-map: 那幾行);重生:python3 scripts/repo-map.py build,連同產出物一起 commit" >&2
-            exit 4
+            mech "code-map 索引過期(上面 repo-map: 那幾行);重生:python3 scripts/repo-map.py build,連同產出物一起 commit"
         fi
     fi
     # 分支改到的記憶檔過分層 lint(#87 A35/A36):只量這條分支動到的那幾份 —— 既有卡正文的
@@ -462,14 +475,26 @@ for args in (("diff", "--name-only", "%s...HEAD" % main), ("diff", "--name-only"
 print("\n".join(seen))
 MEM_PY
 )
+    # `--base`(D-042,#90 A7/A8):只 lint 這條分支**新增**的行(既有正文的命中歸整理票),
+    # 並量本分支有沒有讓卡從上限內推到上限外 —— 比法在 memory.py,這裡只分兩種印。
     if [ -n "$MEM_CHANGED" ] && [ -f "$ROOT/scripts/memory.py" ]; then
         set --
         for f in $MEM_CHANGED; do set -- "$@" --file "$f"; done
-        if ! AC_ROOT=$ROOT python3 "$ROOT/scripts/memory.py" lint "$@" >/dev/null; then
-            echo "gate: 機械格不合 —— 分支改到的記憶檔有錯層內容(上面 memory: lint 那幾行:檔、行、rule、建議去處)" >&2
-            exit 4
+        MEM_ERR=$LOG.memory
+        AC_ROOT=$ROOT python3 "$ROOT/scripts/memory.py" lint --base "$MAIN" "$@" \
+            >/dev/null 2>"$MEM_ERR"
+        mem_rc=$?
+        cat "$MEM_ERR" >&2
+        if [ "$mem_rc" -ne 0 ]; then
+            if grep -v '^memory: cap ' "$MEM_ERR" | grep -q . || ! grep -q '^memory: cap ' "$MEM_ERR"; then
+                mech "分支改到的記憶檔有錯層內容(上面 memory: lint 那幾行:檔、行、rule、建議去處)"
+            fi
+            if grep -q '^memory: cap ' "$MEM_ERR"; then
+                mech "本分支讓記憶卡超上限(上面 memory: cap 那幾行:檔 改前 -> 改後 / 上限);刪減或整理到上限內,不是提高上限"
+            fi
         fi
     fi
+    [ -s "$MECH_LOG" ] && MECH_NOTE=$(cat "$MECH_LOG")
 fi
 
 SHA=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo "")
@@ -676,6 +701,13 @@ status_nothing() {   # $1 = rc  $2 = 為什麼
         || echo "gate: 狀態檔寫不出來(不擋閘門)" >&2
     inbox_post "$1"
 }
+
+# 機械格不合(見 preflight 那一段):不起測試、不發 gate.start,只留終態 —— 狀態檔的 note
+# 是 stderr 上那幾行 `機械格不合 —— ` 原文(多條全列),auto-fix 靠它歸因(#90 A1/A2)。
+if [ -n "$MECH_NOTE" ]; then
+    status_nothing 4 "$MECH_NOTE"
+    exit 4
+fi
 
 # 票的 `verify.tags` 併 `tags`。**票是唯一的工作單位**,所以要跑哪幾個回歸標籤這件事
 # 住在票裡,不住在呼叫者的記憶裡。

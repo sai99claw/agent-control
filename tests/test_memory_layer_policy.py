@@ -245,6 +245,128 @@ class TheGateLintsTheChangedMemory(LintBase):
         self.assertIn("建議去處", line[0])
         self.assertFalse(os.path.exists(self.log), "錯層記憶卻跑了測試")
 
+    # D-042(#90 A7/A8):閘門只量**這條分支加了什麼** —— 新增行才 lint;本分支讓卡從上限內
+    # 推到上限外才擋。主線上 commit 卡 → worktree t7 改卡並 commit → 真 gate.sh。
+
+    OLD_HIT = "- 舊句用 os.kill(pid)\n"
+    CARD = "memory/model/opus.md"
+
+    def branch_gate(self, on_main, on_branch, config=None):
+        """`on_main` / `on_branch`:{相對路徑: 全文}。回 gate 的 CompletedProcess。"""
+        if config is not None:
+            self.write("board/config.json", json.dumps(config, ensure_ascii=False, indent=2))
+        for rel, text in on_main.items():
+            self.write(rel, text)
+        self.make_ticket(7, allowed_write_paths=["memory/*/*.md"], state="Running")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "沙盒的記憶卡與票 #7")
+        wt = self.worktree("t7")
+        for rel, text in on_branch.items():
+            self.write(rel, text, where=wt)
+        self.git("add", "-A", cwd=wt)
+        self.git("commit", "-q", "-m", "#7 改了記憶卡", cwd=wt)
+        return self.run_sh(os.path.join(wt, "scripts", "gate.sh"), "--branch", "--ticket", "7",
+                           "--no-auto-fix", cwd=wt)
+
+    @staticmethod
+    def body(chars):
+        """正文恰 `chars` 個字元的一條(`- ` + 字… + 換行)。"""
+        return "- " + "字" * (chars - 3) + "\n"
+
+    @staticmethod
+    def capped(body, cap=100):
+        return "---\ncap_chars: %d\n---\n%s" % (cap, body)
+
+    def lint_lines(self, done):
+        return [l for l in done.stderr.splitlines() if l.startswith("memory: lint ")]
+
+    def test_only_lines_added_on_the_branch_are_linted(self):
+        """A7(a):主線上的卡已有一行命中,分支只在卡尾加一行乾淨原則 → 不擋。
+        **變異 M5**:gate 對改到的卡整檔 lint(不看改前)→ 這一條紅。"""
+        main = "- 原則一條\n" + self.OLD_HIT
+        done = self.branch_gate({self.CARD: main}, {self.CARD: main + "- 新的乾淨原則\n"})
+        self.assertNotIn("記憶檔有錯層內容", done.stderr, done.stdout + done.stderr)
+        self.assertNotIn("memory: lint", done.stderr)
+
+    def test_a_new_hit_is_named_and_the_old_one_is_not(self):
+        """A7(b):同一張主線卡,分支另加一行呼叫(第 3 行)→ rc 4,恰一條 lint 行指名第 3 行。"""
+        main = "- 原則一條\n" + self.OLD_HIT
+        done = self.branch_gate({self.CARD: main},
+                                {self.CARD: main + "- 新句用 subprocess.run(x)\n"})
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        lines = self.lint_lines(done)
+        self.assertEqual(len(lines), 1, done.stderr)
+        self.assertIn("memory/model/opus.md:3 ", lines[0])
+        self.assertFalse([l for l in lines if "memory/model/opus.md:2 " in l], done.stderr)
+
+    def test_a_rewritten_old_hit_is_named(self):
+        """A7(c):分支改寫舊命中那一行(仍含呼叫)→ rc 4,第 2 行被點名(改到的行就要乾淨)。"""
+        done = self.branch_gate({self.CARD: "- 原則一條\n" + self.OLD_HIT},
+                                {self.CARD: "- 原則一條\n- 舊句改寫後仍用 os.kill(pid)\n"})
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        lines = self.lint_lines(done)
+        self.assertEqual(len(lines), 1, done.stderr)
+        self.assertIn("memory/model/opus.md:2 ", lines[0])
+
+    def test_a_card_pushed_over_its_cap_by_the_branch_reds_the_gate(self):
+        """A8(a):改前 90、改後 110(上限 100)→ 擋,那一行三個數字逐字對。
+        **變異 M6**:只看改後 > 上限 → (b) 紅;**M7**:拿掉超上限那一手 → 這一條紅。"""
+        done = self.branch_gate({self.CARD: self.capped(self.body(90))},
+                                {self.CARD: self.capped(self.body(90) + self.body(20))})
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        self.assertIn("機械格不合 —— 本分支讓記憶卡超上限", done.stderr)
+        self.assertIn("memory: cap memory/model/opus.md 90 -> 110 / 100\n", done.stderr)
+        self.assertFalse(os.path.exists(self.log), "超上限卻跑了測試")
+
+    def test_a_card_already_over_its_cap_is_not_the_gates_to_stop(self):
+        """A8(b):改前 120、改後 125 → 不擋(改前已超標的卡歸整理票)。"""
+        done = self.branch_gate({self.CARD: self.capped(self.body(120))},
+                                {self.CARD: self.capped(self.body(120) + self.body(5))})
+        self.assertNotIn("本分支讓記憶卡超上限", done.stderr, done.stdout + done.stderr)
+        self.assertNotIn("memory: cap ", done.stderr)
+
+    def test_a_card_landing_exactly_on_its_cap_passes(self):
+        """A8(c):改前 90、改後恰 100 → 不擋(上限是「不得超過」)。"""
+        done = self.branch_gate({self.CARD: self.capped(self.body(90))},
+                                {self.CARD: self.capped(self.body(90) + self.body(10))})
+        self.assertNotIn("本分支讓記憶卡超上限", done.stderr, done.stdout + done.stderr)
+
+    def test_a_new_card_over_the_configured_cap_counts_from_zero(self):
+        """A8(d):分支新增一張沒有 cap_chars 的卡、正文超過沙盒設定的上限 → 擋,改前 0。"""
+        cap = self.config_extra["memory"]["cap_chars"]
+        done = self.branch_gate({}, {"memory/role/fresh.md": self.body(cap + 1)})
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        self.assertIn("memory: cap memory/role/fresh.md 0 -> %d / %d\n" % (cap + 1, cap),
+                      done.stderr)
+
+    def test_inbox_and_project_cards_are_not_measured(self):
+        """A8(e):*.inbox.md 與 memory/project/ 卡寫到超過 → 不擋(check 不量它們)。
+        project 這一半要有意義:沙盒的 applies_to 也列 memory/project/(同真設定)。"""
+        conf = json.loads(self.read("board/config.json"))
+        conf["memory"]["applies_to"] = ["memory/model/*.md", "memory/role/*.md",
+                                        "memory/project/*.md"]
+        cap = conf["memory"]["cap_chars"]
+        done = self.branch_gate({}, {"memory/model/opus.inbox.md": self.body(cap + 50),
+                                     "memory/project/pipeline.md": self.body(cap + 50)},
+                                config=conf)
+        self.assertNotIn("本分支讓記憶卡超上限", done.stderr, done.stdout + done.stderr)
+        self.assertNotIn("memory: cap ", done.stderr)
+
+    def test_a_new_hit_and_a_cap_crossing_are_both_listed(self):
+        """A8(f):同一分支新增行命中 + 超上限 → 兩行 `機械格不合 —— ` 都在 stderr,
+        gate 狀態檔的 note 兩行全列(A1)。"""
+        done = self.branch_gate({self.CARD: self.capped(self.body(90))},
+                                {self.CARD: self.capped(self.body(90)
+                                                        + "- 新句用 subprocess.run(x)\n")})
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        mech = [l for l in done.stderr.splitlines() if "機械格不合 —— " in l]
+        self.assertEqual(len(mech), 2, done.stderr)
+        self.assertTrue(any("錯層內容" in l for l in mech), mech)
+        self.assertTrue(any("本分支讓記憶卡超上限" in l for l in mech), mech)
+        note = self.status_of(7, kind="gate")["note"]
+        for line in mech:
+            self.assertIn(line, note)
+
 
 if __name__ == "__main__":
     unittest.main()

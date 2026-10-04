@@ -1474,6 +1474,157 @@ echo "rerun $AC_ROUND ticket=$AC_TICKET" >> "$AC_TEST_LOG"
         self.assertIn("三輪耗盡", rows[0]["state"])
 
 
+# 新檔的檔名就是 needle,檔內沒有 —— #89 第 1 輪那一種票面(verify_strings 寫了新檔檔名)。
+FILENAME_TOKEN_FILE = """import unittest
+
+
+class T(unittest.TestCase):
+    def test_ok(self):
+        pass
+"""
+
+WORKER_NAMES_THE_FILE = """#!/bin/sh
+set -e
+echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+cd "$AC_WORK"
+mkdir -p work/tests
+cat > work/tests/test_filename-token.py <<'CASE'
+%sCASE
+diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+printf '# 第 %%s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
+""" % FILENAME_TOKEN_FILE
+
+
+def new_file_patch(rel, text):
+    lines = text.splitlines()
+    return ("diff -ruN base/%s work/%s\n--- base/%s\t1970-01-01 08:00:00\n"
+            "+++ work/%s\t2026-10-04 10:00:00\n@@ -0,0 +1,%d @@\n%s\n"
+            % (rel, rel, rel, rel, len(lines), "\n".join("+" + line for line in lines)))
+
+
+class MechanicalRedIsAttributed(AutoFixBase):
+    """#90:閘門機械格不合(rc 4)不再報「紅了但沒有歸因」。
+
+    🩸 #89 第 1 輪:verify_strings 寫的是新檔檔名(只出現在 diff 檔頭),閘門 preflight 退 4
+    卻不寫狀態檔,auto-fix 讀到的最新一筆是 apply 那一輪(rc 0、紅 0 條),發一頁「紅了但沒有
+    歸因」、去哪看指向 apply —— 主線只能自己挖 worker log。這裡用**真的** apply.sh 與真的
+    gate.sh(同 TheWholeLoop):要問的是 gate 寫下的那一筆 auto-fix 接不接得住。
+    """
+
+    TICKET_SIDE = "verify_strings: 'filename-token' 不在 patch 內容裡"
+
+    def page_of(self, row):
+        with open(os.path.join(self.repo, row["page"]), encoding="utf-8") as handle:
+            return handle.read()
+
+    def assert_the_page_points_at_the_gate_run(self, row):
+        where = row["where"]
+        self.assertRegex(where, r"^reports/t1/[^/]+/status\.json$")
+        with open(os.path.join(self.repo, where), encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["kind"], "gate", "去哪看指向的不是閘門那一輪")
+
+    def assert_ticket_side(self, page):
+        for text in (self.TICKET_SIDE, "歸因到票面(開題者)", "比的是改動內文",
+                     "ticket.py set 1 verify_strings", "ticket.py set 1 state Running",
+                     "gate.sh --branch --ticket 1", "不要轉 Ready"):
+            self.assertIn(text, page)
+
+    def applied_and_gated(self, patch_text, out_of_scope_edit=False):
+        """真 apply.sh 套 patch,(選擇性)在分支上再 commit 一筆碰 out_of_scope 的改動 ——
+        apply.sh 自己會以 rc 5 擋 out_of_scope,所以那一手只能是分支上另一個 commit ——
+        再在 worktree 跑真 gate.sh(--no-auto-fix),最後由 auto-fix 從開場那條路讀它。"""
+        patch = self.write("p1.diff", patch_text, where=self.home)
+        done = self.run_sh("scripts/apply.sh", "1", patch)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        wt = os.path.join(self.home, "repo-wt", "t1")
+        if out_of_scope_edit:
+            self.write("scripts/land.sh", self.read("scripts/land.sh") + "\n# out of scope\n",
+                       where=wt)
+            self.git("commit", "-q", "-am", "#1 分支上碰到 out_of_scope", cwd=wt)
+        gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
+                           "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
+                           env=self.env(AC_ROOT=self.repo))
+        self.assertEqual(gate.returncode, 4, gate.stdout + gate.stderr)
+        return self.auto_fix()
+
+    def test_the_loop_attributes_a_filename_needle_to_the_ticket(self):
+        """A2:第 1 輪由 auto-fix 起 → worker 交新檔 → 真 apply / 真 gate rc 4 → 一頁歸因到票面。
+        **變異 M2**:auto-fix 不看 note、rc 非零紅 0 條一律走「沒有歸因」→ 這一條紅。
+        **變異 M1**(gate 機械格退出前不寫 status)→ GateWritesStatus 那幾條紅。"""
+        self.set_worker(WORKER_NAMES_THE_FILE)
+        self.ticket_ready(verify_strings=["filename-token"])
+        done = self.auto_fix()
+        out = done.stdout + done.stderr
+        self.assertEqual(done.returncode, 4, out)
+        ticket = self.load_ticket("1")
+        self.assertEqual(ticket["state"], "Blocked")
+        self.assertEqual(ticket["owner"], "main")
+        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "1", out)
+        self.assertEqual(self.git("show", "t1:tests/test_filename-token.py"),
+                         FILENAME_TOKEN_FILE, "分支頭要是套 patch 後那個 commit")
+        rows = self.inbox_rows()
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]["state"], "閘門機械格不合")
+        page = self.page_of(rows[0])
+        self.assert_ticket_side(page)
+        self.assert_the_page_points_at_the_gate_run(rows[0])
+        for text in (page, done.stdout, done.stderr):
+            self.assertNotIn("沒有歸因", text)
+        asked = [row for row in self.events() if row["kind"] == "decision.asked"]
+        self.assertTrue(asked and "機械格不合" in (asked[-1].get("note") or ""), asked)
+        self.assertEqual(self.worker_rounds(), ["worker ran round 1"])
+
+    def test_the_opening_path_reads_a_mechanical_gate_status(self):
+        """A4:auto-fix 起跑時最新一輪就是 gate 的機械格 status → 同一頁,不起 worker。
+        **變異 M4**:只改迴圈內那條、開場那條路不認 → 這一條紅(走「沒有歸因」)。"""
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready(verify_strings=["filename-token"])
+        done = self.applied_and_gated(new_file_patch("tests/test_filename-token.py",
+                                                     FILENAME_TOKEN_FILE))
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        rows = self.inbox_rows()
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]["state"], "閘門機械格不合")
+        page = self.page_of(rows[0])
+        self.assert_ticket_side(page)
+        self.assert_the_page_points_at_the_gate_run(rows[0])
+        self.assertNotIn("沒有歸因", page + done.stdout + done.stderr)
+        self.assertEqual(self.worker_rounds(), [])
+
+    def test_an_out_of_scope_hit_is_attributed_to_the_handin(self):
+        """A3:out_of_scope 命中(verify_strings 合格)→ 歸因到交件,不歸票面。
+        **變異 M3**:所有機械格行一律歸因到票面 → 這一條紅。"""
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready(verify_strings=["scope-token"], out_of_scope=["scripts/land.sh"])
+        done = self.applied_and_gated(new_file_patch("tests/test_scope.py",
+                                                     "# scope-token\n" + FILENAME_TOKEN_FILE),
+                                      out_of_scope_edit=True)
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        page = self.page_of(self.inbox_rows()[-1])
+        self.assertIn("out_of_scope", page)
+        self.assertIn("scripts/land.sh", page)
+        self.assertIn("歸因到交件(worker)", page)
+        self.assertNotIn("歸因到票面", page)
+        self.assertNotIn("沒有歸因", page + done.stdout + done.stderr)
+
+    def test_both_kinds_at_once_are_listed_with_both_attributions(self):
+        """A3:verify_strings 與 out_of_scope 同時不合 → 兩組各自列、兩個歸因字樣都在。"""
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready(verify_strings=["filename-token"], out_of_scope=["scripts/land.sh"])
+        done = self.applied_and_gated(new_file_patch("tests/test_filename-token.py",
+                                                     FILENAME_TOKEN_FILE),
+                                      out_of_scope_edit=True)
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        page = self.page_of(self.inbox_rows()[-1])
+        self.assertIn(self.TICKET_SIDE, page)
+        self.assertIn("歸因到票面(開題者)", page)
+        self.assertIn("scripts/land.sh", page)
+        self.assertIn("歸因到交件(worker)", page)
+        ticket_part, _, work_part = page.partition("歸因到交件(worker)")
+        self.assertIn(self.TICKET_SIDE, ticket_part, "票面那一組要列在票面歸因底下")
+        self.assertIn("out_of_scope", work_part, "交件那一組要列在交件歸因底下")
+
+
 class TheResultBlockAtTheEndOfEvidence(AutoFixBase):
     """EVIDENCE 尾端那一塊 `result`,由這一支在**收 patch 的同一手**抽成
     `reports/t<票號>/<run_id>/result-round<輪>.json`(D-017,#20)。
