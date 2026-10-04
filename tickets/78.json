@@ -1,14 +1,14 @@
 {
   "id": "78",
-  "subject": "整理 opener / implementer / verifier 三張角色卡正文:消既有 lint 命中、騰出 #88 要的字數、改掉與 D-041 / #87 A18 衝突的舊句(兩模型,D-007 / D-013;D-042)",
+  "subject": "整理 opener / implementer / verifier 三張角色卡正文:消既有 lint 命中、騰出 #88 要的字數、改掉與 D-041 / #87 A18 衝突的舊句(fable 單模型,D-013 / D-043;D-042)",
   "created": "2026-09-30T17:24:14+08:00",
   "objective": "D-042(2026-10-04):#88 第 1 輪反駁 —— 閘門對改到的角色卡 lint,opener / implementer / verifier 三張卡的舊正文已有 60 條命中(16 / 30 / 14,#88 新增 0 條);implementer 2700/2700 到頂,#88 P14 一句就超標;implementer 兩條舊句與 #88 P4 / P16 的新規矩衝突。做完的樣子:三張卡只留通用原則(D-013 3),指令、旗標、路徑、行號、sha 移到 reference,案例只留票號;lint 0 條;implementer、verifier、opener 都在上限內且留出 #88 P13–P15 的空間;卡上沒有與 D-041 及 #87 A18 衝突的句子。範圍收斂為這三張卡(與它們的 inbox),原票的模型卡、專案卡、其他角色卡整理不在本票(要做另開)。",
   "acceptance": [
     "B1 [lint 0] python3 scripts/memory.py lint --json --file memory/role/opener.md --file memory/role/implementer.md --file memory/role/verifier.md → violations 為空(改前 opener 16 / implementer 30 / verifier 14,實測 2026-10-04)。memory-allow 例外以 0 條為目標,真要留的每條在處置表寫理由與 D 編號。閘門(#90 後只量本分支新增行)的記憶那一格不擋。",
-    "B2 [字數,不提高上限] python3 scripts/memory.py check --read-only:implementer 正文 ≤ 2550(上限 2700 不動,留 ≥ 150 給 #88 P14);verifier ≤ 1850(上限 2000,留 ≥ 150 給 #88 P15);opener ≤ 1800(上限 2000,改前 2449 超標;回到上限內並留 ≥ 200 給 #88 P13)。三張卡的 cap_chars / cap_history 一字不動,不用 --new-cap。EVIDENCE 列三張卡改前 / 改後的正文字元與行數。兩位討論後認定某條原則放不下,不刪原則:寫進兩份討論的分歧欄並提 OBJECTION(ticket-wrong)。",
+    "B2 [字數,不提高上限] python3 scripts/memory.py check --read-only:implementer 正文 ≤ 2550(上限 2700 不動,留 ≥ 150 給 #88 P14);verifier ≤ 1850(上限 2000,留 ≥ 150 給 #88 P15);opener ≤ 1800(上限 2000,改前 2449 超標;回到上限內並留 ≥ 200 給 #88 P13)。三張卡的 cap_chars / cap_history 一字不動,不用 --new-cap。EVIDENCE 列三張卡改前 / 改後的正文字元與行數。認定某條原則放不下時不刪原則:在該卡處置檔寫明理由並提 OBJECTION(ticket-wrong)。",
     "B3 [與新規矩衝突的舊句,改寫方向與依據] (a) implementer.md「交付前的回歸」那一條(改前第 14 行:交付前必跑依標籤回歸、整支瀏覽器模組、負載下跑三次)改成:只跑派工文「只准跑的測試」段列的測試;回歸是閘門的事,全套只在落地跑一次;負載重跑只在票的 test_plan 列了才做。依據:#87 A18 已落地(auto-fix 派工文那一段逐字抄票的 test_plan),不需要等 #88 —— #88 P4 是同一條規矩的流程文字,照本票改後的卡對齊。(b) implementer.md「票寫錯 / 需要裁示 / 案例本身錯」那一條(改前第 17 行:停、寫反駁、報主線)改成:寫一筆反駁後交件停下,不報主線 —— 反駁由 auto-fix 起開題者判、判完接回(D-041,#89 已落地);保留 test_defect 那一半(不准放寬斷言、不准改 oracle,案例由驗證者修)與「太複雜提反駁開票、不准繞路」(D-018)。不寫「被接回時從原副本續做」(#88 P14 的字樣,寫了就重複)。(c) opener.md、verifier.md 裡與 D-041 衝突的句子(反駁 → 停下等主線 / 報主線那一類)同樣改,不寫 #88 P13「判反駁」、P15「被接回時只改受票面差異影響的案例」那兩節。每一條改寫在處置表列原句、新句、依據。",
     "B4 [opener D-031 那一句,承接 #90 A5(c)] opener.md 票面四格自檢那一條的 verify_strings 說法改成與閘門實際比法一致,逐字含「比的是改動內文」(diff 的增刪行與新檔全文,diff 檔頭與檔名不算;新檔就挑檔內一定會有的字,如類名、函式名);同一行的自檢指令移到 reference。說法與 #90 落地後的 templates/dispatch-opener.md、ticket.py create --help 的 --verify-string 說明一致。",
-    "B5 [兩模型、逐條處置 —— D-007 / D-013] 每張卡各走一次 templates/dispatch-consolidator.md 的三段(各自寫 → 互讀寫分歧 → 一人落筆)。每張卡兩份討論檔,檔頭 model 一份 fable、一份 gpt-6-astra,source_lines / source_sha256 照 memory.py snapshot <卡> 抄;對該卡正文與 inbox 每一行寫 `L<n>: <保留|升格|移至 reference|歸檔|重複>` 與理由;分歧保留不硬合。每張卡以 memory.py consolidate <卡> --candidate … --discussion … --discussion … 合入,三次都 rc 0(它自己擋少討論、同模型、快照不符、缺處置、超上限、候選有錯層內容)。處置總表 docs/review/memory-remediation-a.md:原句 → 處置 → 去處(卡內 / reference 哪一節 / 票號)。",
+    "B5 [逐條處置 —— fable 單模型,D-043] 整理原則照 D-013 3:卡上只留原則、行為準則、思考方式,不寫案例,可引票號當來源。每張卡一份處置檔 discussions/<YYYY-MM-DD>-memory-remediation-<卡>-fable.md:檔頭 model: fable,source_lines / source_sha256 照 python3 scripts/memory.py snapshot <卡> 抄(改前那一版);對該卡正文與 inbox 每一行寫 `L<n>: <保留|升格|移至 reference|歸檔|重複>` 與理由。不跑 memory.py consolidate(它要兩個不同模型的討論檔,D-043 改為單模型,不適用);直接改卡,cap_chars / cap_history 一字不動。處置總表 docs/review/memory-remediation-a.md:原句 → 處置 → 去處(卡內 / reference 哪一節 / 票號)。",
     "B6 [移出去的細節有地方住] 從卡上移出的指令、旗標、路徑、行號、sha 寫進 docs/reference/role-procedures.md(新檔,依角色分節,節名含「角色操作細節」);卡上指路寫節名,不寫檔路徑(路徑寫在角色卡就是 lint 命中)。案例只留票號(D-013 3)。",
     "B7 [規則包與來源] python3 scripts/rules.py inspect opener --model fable --json、inspect implementer --model opus --json、inspect verifier --model opus --json:三張卡正文都被包入,不是只剩標題。python3 scripts/memory.py check-stale --read-only --file <卡> 三張:沒有未處置的 closed-source 條目。",
     "B8 [既有守衛不改仍綠] python3 -m unittest tests.test_memory tests.test_rules_delivery tests.test_sync_to_project tests.test_no_project_names(閘門對 memory/role/*.md 排到的組)不改一行仍綠。本票不改 tests/、scripts/、board/。"
@@ -64,17 +64,14 @@
     "docs/review/memory-remediation-a.md",
     "discussions/*-memory-remediation-*.md"
   ],
-  "role": "consolidator",
+  "role": "worker",
   "model": "fable",
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "234d4451d1ae5d07ad3c6f393e055198fdd43d2c",
   "state": "Ready",
-  "state_version": 26,
-  "lease": {
-    "holder": "main(手派,D-042;consolidate-memory.sh 只認第一個檔,不讓開場自動起)",
-    "until": "2026-10-18T00:00:00+08:00"
-  },
+  "state_version": 36,
+  "lease": null,
   "retry_limit": 2,
   "verify": {
     "files": [],
@@ -82,8 +79,8 @@
     "run": "",
     "notes": ""
   },
-  "outline": "【D-042(2026-10-04)】解凍。順序 #90 → #78 → #88:#90 讓閘門只 lint 新增行並改超上限判準,本票整理三張卡正文、騰字數,#88 再把 P13–P15 加在整理後的卡上。實測 2026-10-04:opener 2449/2000、implementer 2700/2700(卡上 cap)、verifier 1788/2000;lint 命中 16 / 30 / 14;inbox 7 / 14 / 4 行。#90 A5(c)(opener D-031 那一句)移交本票 B4:那一行有 9 條命中,#90 改它會被自己的新閘門擋。【怎麼跑 —— 主線手派,不用 consolidate-memory.sh】該腳本只整理票面第一個檔(三張卡不合),且 new-session 開場對 Ready 的整理票不看 depends_on 就起;所以票上掛主線租約擋自動起。兩個模型照 board/config.json memory.consolidators:fable(claude-code)與 codex:gpt-6-astra(codex)。#90 落地後主線:建副本(base/ 與 work/,同手派 worker),兩個 session 平行起、都在 work/ 跑;前言各用 python3 scripts/rules.py pack consolidator --model fable / --model codex:gpt-6-astra;起命令 python3 scripts/ticket.py agent-command --model fable --tool claude-code --base \"claude -p --model opus\" --swap-model 與 --model codex:gpt-6-astra --tool codex;派工文 = templates/dispatch-consolidator.md,三張卡各填一組(討論檔 discussions/<date>-memory-remediation-<卡>-<模型>.md,候選 …-<卡>.candidate.md)。第三段落筆指定 fable(決定性,不搶先寫完),它跑三次 memory.py consolidate、寫 reference 與處置表,交 patch.diff + EVIDENCE。主線 apply.sh 78 <patch> → 閘門 → land.sh t78(role=consolidator 走 apply 未實測;不收就改 role 再套,不改流程)。【逾時 4200 秒(未實測;不含閘門回歸)】① 第零、一段:三卡 snapshot、各自逐行處置約 45 行 → 15–20 分;② 互讀寫分歧(含等對方)→ 8–12 分;③ 落筆:三份候選 + reference + 處置表 + consolidate ×3 + lint/check/inspect → 15–20 分;④ B8 四支守衛與 patch → 5 分。合計 43–57 分 ×1.2 ≈ 68 分 → 4200。",
-  "test_plan": "兩個整理 session 只跑本段列的:python3 scripts/memory.py snapshot / check-stale --read-only / lint --json --file / check --read-only / consolidate(B1、B2、B5、B7);python3 scripts/rules.py inspect(B7);落筆者交件前一次:python3 -m unittest tests.test_memory tests.test_rules_delivery tests.test_sync_to_project tests.test_no_project_names(B8)。不跑全套(unittest discover 整組、gate.sh --full)、不跑 verify.py —— 回歸是閘門的事,全套只在落地跑一次。四問:不新增測試 —— 守的是既有容量、lint、pack 守衛與 consolidate 的拒收條件,語意去向由兩模型逐條處置。變異:無。",
+  "outline": "【D-043】fable 單模型整理 opener / implementer / verifier 三卡(D-013 3:只留原則、行為準則、思考方式,不寫案例,可引票號);不跑 consolidate(要兩模型)。順序 #90 → #78 → #88。實測 2026-10-04:opener 2449/2000、implementer 2700/2700、verifier 1788/2000;lint 16 / 30 / 14;inbox 7 / 14 / 4 行。needs_verifier=false:不改程式與測試,驗收全是既有腳本(lint / check / inspect / 四支守衛)的輸出,閘門與覆核照量。怎麼起見 handoff(auto-fix 對 claude-code 票不換模型)。逾時 4200 秒(未實測,不含回歸):逐行處置 15–20 分 + 改寫三卡與 reference / 總表 15–20 + 自檢修到 lint 0 8–12 + 守衛與交件 5 = 43–57 分 ×1.2 ≈ 70 分。",
+  "test_plan": "worker 只跑本段列的:python3 scripts/memory.py snapshot / check-stale --read-only / lint --json --file / check --read-only(B1、B2、B5、B7);python3 scripts/rules.py inspect(B7);交件前一次:python3 -m unittest tests.test_memory tests.test_rules_delivery tests.test_sync_to_project tests.test_no_project_names(B8)。不跑全套(unittest discover 整組、gate.sh --full)、不跑 verify.py —— 回歸是閘門的事,全套只在落地跑一次。四問:不新增測試 —— 守的是既有容量、lint、pack 守衛;語意去向由處置檔逐條交代,覆核(opus)拿處置檔對原句抽查。變異:無(不改程式與測試)。",
   "feature": "記憶治理",
   "decision_refs": [
     "D-006",
@@ -92,7 +89,8 @@
     "D-018",
     "D-031",
     "D-041",
-    "D-042"
+    "D-042",
+    "D-043"
   ],
   "verify_strings": [
     "比的是改動內文",
@@ -101,7 +99,7 @@
     "source_sha256"
   ],
   "needs_verifier": false,
-  "handoff": "解凍(2026-10-04,開題者,D-042):範圍收斂為三張角色卡;主線手派兩模型(見 outline),不走 consolidate-memory.sh;租約由主線持有,擋 new-session 自動起。",
+  "handoff": "D-043(2026-10-04,開題者):role=worker、model=fable、tool=claude-code;主線租約拿掉 —— 它只用來擋 new-session 自動起 role=consolidator 的整理票,改 worker 後不會被自動起,auto-fix / apply / gate / land 都不看租約。卡點:auto-fix.sh 只對 codex:* 依票換命令(#87 A19–A20);claude-code 票一律照 board/config.json worker.command 起 opus,規則包也用 routing.implement —— 票上 model=fable 不生效。要讓 sh scripts/auto-fix.sh 78 真起 fable,需先另開 code 票:非 codex 路徑也走 ticket.py agent-command --model <票> --tool claude-code --base <worker.command> --swap-model,並以票的 model 產規則包與記事件。否則照 D-043 備案主線手派:副本 base/ + work/ 取 #90 落地後的主線;起命令 = ticket.py agent-command --model fable --tool claude-code --base <worker.command> --swap-model;交件後 apply.sh 78 <patch> --evidence <EVIDENCE> → gate.sh --branch --base --ticket 78 --no-auto-fix(紅了不讓 auto-fix 改派 opus 下一輪)→ 綠由閘門叫 review.sh(opus)→ land.sh t78。base_sha 在派工前改成 #90 落地後的主線頭。",
   "frozen": null,
   "worker": {
     "timeout_seconds": 4200
