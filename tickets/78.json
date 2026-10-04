@@ -68,9 +68,9 @@
   "model": "fable",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "234d4451d1ae5d07ad3c6f393e055198fdd43d2c",
+  "base_sha": "2fc23186ced0903538be1e2c5ea672b63d7caf30",
   "state": "Ready",
-  "state_version": 36,
+  "state_version": 37,
   "lease": null,
   "retry_limit": 2,
   "verify": {
