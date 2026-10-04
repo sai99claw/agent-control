@@ -54,9 +54,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "849b6374b16bac74b11df9bc4ed7eac6f87d99b1",
-  "state": "Ready",
-  "state_version": 15,
+  "base_sha": "bbfb45101d53b41c32d7c5416dda9be1bfeeb480",
+  "state": "Done",
+  "state_version": 24,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -90,5 +90,63 @@
   "interface_fixed": false,
   "worker": {
     "timeout_seconds": 5400
+  },
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 124,
+      "tokens_out": 65689,
+      "cache_write": 211643,
+      "cache_read": 9338151,
+      "wall_seconds": 898,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-04T17:54:59+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 18,
+      "tokens_out": 8353,
+      "cache_write": 76257,
+      "cache_read": 537368,
+      "wall_seconds": 85,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-04T18:03:52+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 752,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-10-04T18:16:25+08:00"
+    }
+  ],
+  "branch": "t90",
+  "patch_ref": "../agent-control-wt/fix-t90/round1/patch-round1.diff",
+  "gate": {
+    "rc": 0,
+    "sha": "a083ec18dbd175d0e4a9823a1cc9f4d5cd276e61",
+    "run_id": "20261004-175501-48173",
+    "at": "2026-10-04T18:02:26+08:00"
+  },
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "16228d8cb6efdddc64ccfb4583355689d45b62c3",
+    "note": "reports/t90/20261004-175501-48173/REVIEW.md",
+    "at": "2026-10-04T18:16:25+08:00",
+    "state_version": 24
   }
 }

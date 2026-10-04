@@ -283,3 +283,7 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 使用者裁示(#88 worker 反駁經 #89 自動判反駁升級):答「先整理卡片再做 #88(建議)」。
 - 起因:gate 對改到的角色卡整檔 lint,opener/implementer/verifier 三張卡舊正文已有 60 條命中(#88 新增 0 條);implementer.md 2700/2700 到頂,#88 P14 一句即超標。
 - 落實:#90 加「閘門對記憶卡只 lint 分支新增行」;#78 解凍(兩模型整理三張卡正文、騰出字數,D-007/D-013),depends_on #90;#88 depends_on #78,其反駁 disposition=accepted。
+
+## D-043(2026-10-04)#78 角色卡整理由 fable 單獨進行
+使用者原話:「照建議 這題用fable 處理」(主線建議:D-013 原話允許「或一個高階模型」,fable 為最高階;避開 codex:gpt-6-astra 額度上限風險與兩模型手動協調)。
+- 落實:#78 改為 fable 單一模型整理三張角色卡;走一般 worker 管線(auto-fix / apply / gate / review / land)為優先,不行再由主線手派。
