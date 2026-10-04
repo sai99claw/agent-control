@@ -6,8 +6,8 @@
   "reports_dir": "reports",
   "health_urls": {},
   "routing": {
-    "main": "fable",
-    "open": "fable",
+    "main": "opus",
+    "open": "opus",
     "design": "fable",
     "bug": "fable",
     "implement": "opus",
@@ -38,6 +38,12 @@
     "land": 1800,
     "worker": 7200
   },
+  "model_tiers": [
+    "haiku",
+    "sonnet",
+    "opus",
+    "fable"
+  ],
   "flaky_threshold": 3,
   "flake_auto_single_runs": 5,
   "flake_auto_group_runs": 1,

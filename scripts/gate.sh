@@ -146,13 +146,14 @@ map() {
         .gitignore) add test_no_project_names ;;
         # ticket.py import event.py:動 event 的人要連票那一側一起跑。
         scripts/event.py) add test_event test_ticket test_land ;;
-        scripts/ticket.py) add test_ticket test_land ;;
+        # `agent-command`(依 model/tool 起什麼,#87)住在 ticket.py,codex 那一組守它。
+        scripts/ticket.py) add test_ticket test_land test_auto_fix_codex ;;
         scripts/land.sh) add test_land ;;
         scripts/gate.sh|scripts/gate.example.sh) add test_gate test_status ;;
         scripts/apply.sh) add test_apply ;;
         # 派工的三個入口與規則包本身(#74):`test_rules_delivery` 是「agent 收到合法規則
         # 或完全不起動」的主守衛,四支都要過它。
-        scripts/auto-fix.sh) add test_auto_fix test_rules_delivery ;;
+        scripts/auto-fix.sh) add test_auto_fix test_auto_fix_codex test_rules_delivery ;;
         scripts/review.sh) add test_review test_rules_delivery ;;
         # 副本根的唯一來源(#46):四支都 source 它。
         scripts/wtbase.sh) add test_apply test_auto_fix test_land test_review ;;
@@ -166,7 +167,10 @@ map() {
         scripts/session-hook.sh|.claude/settings.json) add test_session_hook ;;
         # PreToolUse 守衛(#63)。
         scripts/guard-main.sh) add test_guard_main ;;
-        scripts/memory.py) add test_memory test_memory_note_names test_memory_lifecycle ;;
+        # 整理票的啟動器(#87):自己的契約測試 + 開場叫它的那一支。
+        scripts/consolidate-memory.sh) add test_consolidate_memory test_new_session ;;
+        scripts/memory.py) add test_memory test_memory_note_names test_memory_lifecycle \
+                               test_memory_layer_policy ;;
         # 回歸層的執行器與它的登記檔:動它就是動「哪些案例會被跑到」。
         scripts/verify.py|verify/TAGS.md|verify/TAGS.d/*) add test_verify_runner test_verify_case ;;
         scripts/verify-case.py) add test_verify_case ;;
@@ -179,12 +183,17 @@ map() {
         # 靜悄悄地變成三欄空白。
         scripts/metrics.py) add test_metrics test_board ;;
         # 記憶檔既受上限守衛管(test_memory),也在「不准出現專案名」那一掃裡。
-        memory/model/*.md) add test_memory test_no_project_names ;;
+        # routing 每個值都要有卡(#87):刪一張卡就是動那一條守衛。
+        memory/model/*.md) add test_memory test_no_project_names test_routing_cards ;;
         memory/role/*.md) add test_memory test_sync_to_project test_no_project_names ;;
         board/board.py) add test_board ;;
         # 設定檔:看板讀它,事件與落地也讀它(埠、票目錄、事件檔、租約)。
-        board/config.json) add test_board test_event test_heartbeat test_memory ;;
+        board/config.json) add test_board test_event test_heartbeat test_memory \
+                               test_routing_cards ;;
         code-map/check-stale.py|code-map/cards/*) add test_check_stale ;;
+        # repo 地圖(#87):手寫的 catalog、兩份產出物與產生器,同一組契約測試守。
+        scripts/repo-map.py|code-map/catalog.json|code-map/index.json|code-map/INDEX.md)
+            add test_repo_map_contract ;;
         tickets/*.json|tickets/SCHEMA.md) add test_ticket ;;
         # 形狀的唯一真實來源:`test_status` 有一條把它的七個鍵與 `status.py` 釘在
         # 一起,所以改它就是改那一格的規格 —— 要連 code 那一側一起跑。
@@ -240,6 +249,61 @@ while [ $# -gt 0 ]; do
     shift
 done
 [ "$ARGC" -ge 1 ] || { echo "gate: 要 --branch / --base / --full 或一串檔名" >&2; exit 2; }
+
+# `--branch --ticket <n>` 在主線上空比(#87 A3):主 repo 的 HEAD 是主線、票在、而除了
+# 票庫底下的 *.json 之外**什麼改動都沒有** —— `main...HEAD` 是空的,能比的只剩主工作樹
+# 裡的票檔,而它會讓 verify_strings 假命中、狀態檔記一個「綠」。扣的是票庫裡**每一張**
+# 票檔(別張票、已追蹤或未追蹤):`ticket.py set` 寫票不 commit,真主線上常躺著別張票的
+# 未提交票檔,只扣本票那一張,這一段在真主線上幾乎不觸發。那不是這張票的閘門,是跑錯地方:
+# 拒跑、指出該去的 worktree(`wtbase.sh` 同一條規則),不寫狀態檔、不動票、不發事件。
+# 主線上帶著真改動跑的(沙盒、指定檔)照舊走下面那一路。
+if [ "$want_branch" = 1 ] && [ -n "$TICKET" ]; then
+    python3 - "$ROOT" "$TICKET" "$MAIN" <<'ON_MAIN_PY' || exit 2
+import json, os, subprocess, sys
+
+root, ident, main = sys.argv[1:4]
+sys.path.insert(0, os.path.join(root, "scripts"))
+import event
+
+def git(*args):
+    done = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True)
+    return done.stdout.strip() if done.returncode == 0 else None
+
+if git("symbolic-ref", "--short", "-q", "HEAD") != main:
+    raise SystemExit(0)
+common = git("rev-parse", "--git-common-dir")
+if common is None or os.path.normpath(os.path.join(root, common)) != os.path.join(
+        os.path.normpath(root), ".git"):
+    raise SystemExit(0)
+ticket_file = os.path.join(event.tickets_dir(root), "%s.json" % ident)
+if not os.path.isfile(ticket_file):
+    raise SystemExit(0)
+tickets_rel = os.path.relpath(event.tickets_dir(root), root)
+changed = set()
+for args in (("diff", "--name-only", "%s...HEAD" % main), ("diff", "--name-only", "HEAD"),
+             ("ls-files", "--others", "--exclude-standard")):
+    changed.update(name for name in (git(*args) or "").splitlines() if name)
+changed = {name for name in changed if not (
+    name.endswith(".json") and os.path.normpath(name).startswith(tickets_rel + os.sep))}
+if changed:
+    raise SystemExit(0)
+try:
+    with open(os.path.join(root, "board", "config.json"), encoding="utf-8") as handle:
+        conf = json.load(handle)
+except (OSError, ValueError):
+    conf = {}
+base = os.environ.get("AC_WORKTREE_DIR") or conf.get("worktree_dir") or ""
+if not base:
+    base = os.path.join(root, "..", os.path.basename(root) + "-wt")
+elif not os.path.isabs(base):
+    base = os.path.join(root, base)
+target = os.path.normpath(os.path.join(base, "t%s" % ident))
+sys.stderr.write("gate: --branch 不在主線上跑 —— %s 的 HEAD 是 %s,除了票檔沒有任何改動可比;"
+                 "到票的 worktree 跑:cd %s && sh scripts/gate.sh --branch --ticket %s\n"
+                 % (root, main, target, ident))
+raise SystemExit(1)
+ON_MAIN_PY
+fi
 
 # 手跑在票 worktree 裡、沒帶 `AC_ROOT`(#53,同 review.sh 那一段):`event.repo_root()`
 # 會找到 worktree 自己的 board/config.json,票與狀態就寫進副本那一份。主 repo 有這張票
@@ -300,10 +364,21 @@ for ticket_file in (path, os.path.join(event.tickets_dir(root), "%s.json" % iden
     if ticket_rel and not ticket_rel.startswith(".." + os.sep):
         changed = [name for name in changed if name != ticket_rel]
 
+# verify_strings 比的是**這張票的 patch**(#87 A4):分支相對主線的 diff 加未提交的改動。
+# 票檔不論在哪一側都不算 —— 票面本來就寫著那幾個 needle,算進去就是自己命中自己。
+ticket_rels = []
+for ticket_file in (path, os.path.join(event.tickets_dir(root), "%s.json" % ident)):
+    try:
+        ticket_rel = os.path.relpath(ticket_file, root)
+    except ValueError:
+        continue
+    if not ticket_rel.startswith(".." + os.sep) and ticket_rel not in ticket_rels:
+        ticket_rels.append(ticket_rel)
+not_ticket = ["--", "."] + [":(exclude)%s" % rel for rel in ticket_rels]
 content = []
 for args in (("diff", "--no-ext-diff", "--unified=0", "%s...HEAD" % main),
              ("diff", "--no-ext-diff", "--unified=0", "HEAD")):
-    for line in git(*args).decode("utf-8", "replace").splitlines():
+    for line in git(*args, *not_ticket).decode("utf-8", "replace").splitlines():
         if line.startswith(("+++ ", "--- ")):
             continue
         if line.startswith(("+", "-")):
@@ -357,6 +432,44 @@ if errors:
 PREFLIGHT_PY
     preflight_rc=$?
     [ "$preflight_rc" -eq 0 ] || exit "$preflight_rc"
+    # 候選樹的 code-map 索引要是新的(#87 A32):新增 / 改名 / 刪除已管理的檔而沒重生,
+    # 查得到的就是一份說謊的地圖。量的是**這一棵**(`--root "$ROOT"`),不是 `AC_ROOT`
+    # 指的主 repo;沒有地圖的 repo(沒有 catalog)不量。與機械格同一個退出碼,不跑測試。
+    if [ -f "$ROOT/scripts/repo-map.py" ] && [ -f "$ROOT/code-map/catalog.json" ]; then
+        if ! python3 "$ROOT/scripts/repo-map.py" --root "$ROOT" check >/dev/null; then
+            echo "gate: 機械格不合 —— code-map 索引過期(上面 repo-map: 那幾行);重生:python3 scripts/repo-map.py build,連同產出物一起 commit" >&2
+            exit 4
+        fi
+    fi
+    # 分支改到的記憶檔過分層 lint(#87 A35/A36):只量這條分支動到的那幾份 —— 既有卡正文的
+    # 整理是另一張票的事,全 repo 的結果不當這裡的判準。量的是這一棵(`AC_ROOT=$ROOT`)。
+    MEM_CHANGED=$(python3 - "$ROOT" "$MAIN" <<'MEM_PY'
+import os, subprocess, sys
+root, main = sys.argv[1:3]
+
+def names(*args):
+    done = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True)
+    return [name for name in done.stdout.splitlines() if name] if done.returncode == 0 else []
+
+seen = []
+for args in (("diff", "--name-only", "%s...HEAD" % main), ("diff", "--name-only", "HEAD"),
+             ("ls-files", "--others", "--exclude-standard")):
+    for name in names(*args):
+        if (name.startswith("memory/") and name.endswith(".md")
+                and os.path.basename(name) != "README.md"
+                and os.path.isfile(os.path.join(root, name)) and name not in seen):
+            seen.append(name)
+print("\n".join(seen))
+MEM_PY
+)
+    if [ -n "$MEM_CHANGED" ] && [ -f "$ROOT/scripts/memory.py" ]; then
+        set --
+        for f in $MEM_CHANGED; do set -- "$@" --file "$f"; done
+        if ! AC_ROOT=$ROOT python3 "$ROOT/scripts/memory.py" lint "$@" >/dev/null; then
+            echo "gate: 機械格不合 —— 分支改到的記憶檔有錯層內容(上面 memory: lint 那幾行:檔、行、rule、建議去處)" >&2
+            exit 4
+        fi
+    fi
 fi
 
 SHA=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo "")

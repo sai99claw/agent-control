@@ -624,10 +624,40 @@ def known_role(name):
     return role
 
 
+# 角色 → 路由表的鍵(#87 A8):這幾個角色的模型不准低於 `routing` 那一格。其餘角色不比。
+ROUTING_KEYS = {"opener": "open", "worker": "implement", "verifier": "verify",
+                "main": "main", "design": "design"}
+
+
+def below_floor(root, role, model):
+    """`--model` 低於該角色的 routing 下限就回一句給 stderr 的話;不比 / 沒低回 ""。
+    `board/config.json` 沒有 `model_tiers` 時整段不動 —— 行為與以前逐字相同。"""
+    conf = event.config(root)
+    tiers = conf.get("model_tiers")
+    key = ROUTING_KEYS.get(role)
+    if not isinstance(tiers, list) or not tiers or not key or not model:
+        return ""
+    floor = (conf.get("routing") or {}).get(key)
+    if not floor:
+        return ""
+    if model not in tiers or floor not in tiers:
+        sys.stderr.write("rules: %s 的模型 %s / routing.%s=%s 不在 model_tiers,不比\n"
+                         % (role, model, key, floor))
+        return ""
+    if tiers.index(model) < tiers.index(floor):
+        return ("rules: %s 的模型 %s 低於 routing 下限 %s(routing.%s)—— 不產規則包;"
+                "改派 %s 或更高\n" % (role, model, floor, key, floor))
+    return ""
+
+
 def cmd_pack(args):
     root = event.repo_root()
     role = known_role(args.role)
     if not role:
+        return 2
+    low = below_floor(root, role, args.model)
+    if low:
+        sys.stderr.write(low)
         return 2
     done = build(root, role, args.model, args.max_bytes, args.source)
     if done["problems"]:

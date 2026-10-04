@@ -388,6 +388,21 @@ class SyncToProject(unittest.TestCase):
                 f.write("#!/bin/sh\n")
             self.assertIn("scripts/land.sh", sync(d).stdout)
 
+    def test_the_landing_entry_line_uses_the_same_rule_as_apply(self):
+        """#87 A27:`落地入口:` 那一行 —— 有 land-ticket.sh 指它,否則指 land.sh。"""
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "scripts"), exist_ok=True)
+            with open(os.path.join(d, "scripts/land.sh"), "w") as f:
+                f.write("#!/bin/sh\n")
+            lines = [l for l in sync(d).stdout.splitlines() if l.startswith("落地入口:")]
+            self.assertEqual(len(lines), 1, lines)
+            self.assertTrue(lines[0].startswith("落地入口:sh scripts/land.sh "), lines[0])
+            with open(os.path.join(d, "scripts/land-ticket.sh"), "w") as f:
+                f.write("#!/bin/sh\n")
+            lines = [l for l in sync(d).stdout.splitlines() if l.startswith("落地入口:")]
+            self.assertEqual(len(lines), 1, lines)
+            self.assertTrue(lines[0].startswith("落地入口:sh scripts/land-ticket.sh "), lines[0])
+
     def test_dry_run_changes_nothing(self):
         with tempfile.TemporaryDirectory() as d:
             write_config(d)

@@ -301,18 +301,63 @@ rm -f "$RUNDIR/reviewer.json"
 RSTART=$(date +%s)
 RRC=$(python3 - "$REVIEWER_CMD" "$DISPATCH" "$CWD" "$REVIEWER_TIMEOUT" "$ID" "$ROUND" \
         "$REVIEW" "$RLOG" <<'PY'
-import os, subprocess, sys
+import os, signal, subprocess, sys, time
 cmd, dispatch, cwd, timeout, ident, r, out_path, log_path = sys.argv[1:9]
 env = dict(os.environ)
 env.update({"AC_DISPATCH": dispatch, "AC_TICKET": ident, "AC_ROUND": r,
             "AC_WORK": cwd, "AC_ROLE": "reviewer"})
+
+
+def descendants(top):
+    done = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True)
+    kids = {}
+    for line in done.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            kids.setdefault(int(parts[1]), []).append(int(parts[0]))
+    found, stack = [], [top]
+    while stack:
+        for child in kids.get(stack.pop(), []):
+            if child not in found:
+                found.append(child)
+                stack.append(child)
+    return found
+
+
+def kill_tree(proc):
+    # 逾時收整棵樹(#87 A14,與 auto-fix.sh 的 `run_agent` 同一手):`setsid()` 自開 session
+    # 的後代不在 reviewer 的行程群組裡,`killpg` 碰不到 —— 先拍下子孫樹再一個一個送。
+    tree = descendants(proc.pid)
+    for sig, grace in ((signal.SIGTERM, 5), (signal.SIGKILL, None)):
+        tree += [pid for pid in descendants(proc.pid) if pid not in tree]
+        try:
+            os.killpg(proc.pid, sig)
+        except OSError:
+            pass
+        for pid in tree:
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                pass
+        try:
+            proc.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            pass
+        if grace:
+            time.sleep(0.2)
+
+
 try:
     with open(dispatch, encoding="utf-8") as handle, \
             open(out_path, "w", encoding="utf-8") as out, \
             open(log_path, "w", encoding="utf-8") as log:
-        done = subprocess.run(cmd, shell=True, cwd=cwd, env=env, stdin=handle,
-                              stdout=out, stderr=log, timeout=float(timeout))
-    rc = done.returncode
+        proc = subprocess.Popen(cmd, shell=True, cwd=cwd, env=env, stdin=handle,
+                                stdout=out, stderr=log, start_new_session=True)
+        try:
+            rc = proc.wait(timeout=float(timeout))
+        except subprocess.TimeoutExpired:
+            kill_tree(proc)
+            raise
 except subprocess.TimeoutExpired:
     sys.stderr.write("review: reviewer 超過 %s 秒還沒回來 —— 當它沒交\n" % timeout)
     rc = 124

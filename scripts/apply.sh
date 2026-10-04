@@ -84,6 +84,37 @@ case $TICKETS in /*) TDIR=$TICKETS ;; *) TDIR=$ROOT/$TICKETS ;; esac
 . "$AC/wtbase.sh"
 WTBASE=$(wtbase)
 
+# 收件的 patch 記進票的 `patch_ref`(#87 A26):相對主 repo 根(repo 外以 `../` 開頭)——
+# 票檔進 git,家目錄的絕對路徑不該跟著進去。**不動 `state_version`**(同 `ticket.py cost`):
+# 這是收件記的帳,不是票面改了;動了它,這一手之後的覆核與遲到回報的比對都會跟著漂。
+# 記不進去出聲,不擋收件。
+record_patch_ref() {   # $1 = 票號  $2 = patch 路徑
+    python3 - "$AC" "$1" "$2" "$(main_root)" <<'PY' || echo "apply: #$1 的 patch_ref 寫不進票 —— 不擋" >&2
+import os, sys
+sys.path.insert(0, sys.argv[1])
+import event
+import ticket
+ident, patch, main = sys.argv[2:5]
+ref = os.path.relpath(os.path.realpath(patch), os.path.realpath(main))
+with ticket.Lock():
+    fresh = ticket.load(ident)
+    fresh["patch_ref"] = ref
+    ticket.save(fresh)
+event.emit("ticket.state", ticket=str(ident), field="patch_ref", to=ref)
+print("apply: #%s patch_ref = %s" % (ident, ref))
+PY
+}
+
+# 收尾提示指**真正的**落地入口(#87 A27,與 sync-to-project.sh 同一條判準):專案根有
+# `scripts/land-ticket.sh` 就是它,否則是 `scripts/land.sh`。
+land_entry() {   # $1 = 專案根  $2 = 分支
+    if [ -f "$1/scripts/land-ticket.sh" ]; then
+        echo "落地入口:sh scripts/land-ticket.sh $2"
+    else
+        echo "落地入口:sh scripts/land.sh $2"
+    fi
+}
+
 sha256_of() {
     python3 - "$1" <<'PY'
 import hashlib, sys
@@ -327,6 +358,7 @@ PY
         exit 4
     fi
     echo "apply: 乾淨的 diff -> $out"
+    record_patch_ref "$ident" "$out"
     echo "apply: 下一步 —— sh scripts/apply.sh $ident $out"
     exit 0
 }
@@ -658,6 +690,7 @@ round: ${AC_ROUND:-1}"
 git -C "$WT" commit -q -m "$MSG" || die 2 "git commit 失敗"
 SHA=$(git -C "$WT" rev-parse --short HEAD)
 echo "apply: #$ID -> $BR $SHA 已 commit($(git -C "$WT" rev-list --count "$MAIN..HEAD") 個 commit)"
+record_patch_ref "$ID" "$PATCH"
 ROUND=${AC_ROUND:-1}
 REPORTS=$ROOT/$(cfg reports_dir reports)/t$ID/$RUN_ID
 if [ -f "$EVIDENCE" ]; then
@@ -794,5 +827,6 @@ if [ -f "$EVIDENCE" ] && grep -q '^OBJECTION:' "$EVIDENCE"; then
 fi
 status_done 0 "套好並 commit 成 $SHA"
 echo "apply: 下一步 —— (cd $WT && sh scripts/gate.sh --branch --ticket $ID)"
-echo "apply:       閘門綠了主線覆核記 review,再 sh scripts/land.sh $BR"
+echo "apply:       閘門綠了主線覆核記 review,再落地:"
+land_entry "$(main_root)" "$BR"
 exit 0

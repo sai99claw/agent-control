@@ -103,7 +103,7 @@ CTRL=$DEST/scripts/control
 CTRL_MANIFEST=$CTRL/.sync-manifest
 NEW_SCRIPTS=""
 # 專案端要用到的那幾支 + 它們 import 的。順序無所謂,名單本身要進 code review。
-SCRIPT_LIST="status.py verify-case.py apply.sh auto-fix.sh review.sh inbox.py rules.py memory.py event.py ticket.py verify.py new-session.sh heartbeat.sh session-hook.sh wtbase.sh guard-main.sh"
+SCRIPT_LIST="status.py verify-case.py apply.sh auto-fix.sh review.sh inbox.py rules.py memory.py event.py ticket.py verify.py new-session.sh heartbeat.sh session-hook.sh wtbase.sh guard-main.sh repo-map.py"
 # 這兩支**不是入口**,是被上面那幾支 `import` 的(見檔頭)。查「接了沒」時要把它們挑掉
 # —— 對一支本來就沒有人直接叫的檔說「沒有呼叫點」,是一句假話,而假警報會讓真的那幾條
 # 被一起跳過(`docs/DISPATCH-TEMPLATE.md` §5.7)。
@@ -303,9 +303,11 @@ done
 # 專案端有什麼:說得出對**這個**專案成立的下一句。
 echo "sync: 完成(來源 $SRC_SHA)。"
 if [ -x "$DEST/scripts/land-ticket.sh" ] || [ -f "$DEST/scripts/land-ticket.sh" ]; then
-  echo "sync: 專案端落地:sh scripts/land-ticket.sh docs \"sync agent-control $SRC_SHA\" docs/roles/*.md docs/roles/model/*.md"
+  # 「落地入口:」那一行與 apply.sh 的收尾同一條判準(#87 A27):有 land-ticket.sh 就是它。
+  echo "落地入口:sh scripts/land-ticket.sh docs \"sync agent-control $SRC_SHA\" docs/roles/*.md docs/roles/model/*.md"
 elif [ -f "$DEST/scripts/land.sh" ]; then
-  echo "sync: 專案端落地:開一張 docs 票、一條 t<票號>-sync-roles 分支,commit 後 sh scripts/land.sh t<票號>-sync-roles"
+  echo "sync: 專案端落地:開一張 docs 票、一條 t<票號>-sync-roles 分支,commit 後落地"
+  echo "落地入口:sh scripts/land.sh t<票號>-sync-roles"
 else
   echo "sync: 這個專案沒有 scripts/land.sh 也沒有 scripts/land-ticket.sh —— **它還沒有 docs 通道**。"
   echo "sync:   同步出來的檔現在只是工作樹裡的改動;要進它的主線,專案得先有一條落地入口。"

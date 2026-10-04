@@ -475,6 +475,24 @@ class StatusFile(Sandbox):
         ])
         self.assertNotIn("regression_case", made[0])
 
+    def test_the_auto_ticket_model_falls_back_to_routing_implement(self):
+        """#87 A7:config 沒有 routing.verify → 開出的票 model 是 routing.implement,
+        不是寫死的低階模型。期望值是這裡寫進 config 的那一格(fable,與預設 opus 不同)。
+
+        **變異 M5**:status.py 退回 `or "sonnet"` → 這一條紅。
+        """
+        conf = json.loads(self.read("board/config.json"))
+        conf["routing"] = {"implement": "fable"}
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False))
+        log = self.write("gate.log", LOG)
+        for index in range(3):
+            self.status("done", "--ticket", "7", "--run-id", "r%d" % index, "--rc", "1",
+                        "--log", log, "--suspected-flaky", "test_zz_red.T.test_it_is_red")
+        made = [row for row in self.tickets_on_disk()
+                if row.get("flaky_case") == "test_zz_red.T.test_it_is_red"]
+        self.assertEqual(len(made), 1)
+        self.assertEqual(made[0]["model"], "fable")
+
     def test_a_fourth_flake_does_not_open_a_second_ticket(self):
         """誤判那一半用「同一條案例只開一張」擋住 —— 開著的還在就不再開。"""
         log = self.write("gate.log", LOG)

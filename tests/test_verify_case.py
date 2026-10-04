@@ -352,6 +352,41 @@ class VerifyCase(CaseSandbox):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(sorted(os.listdir(out)), ["logs"], "base/candidate 該砍掉了")
 
+    def test_the_baseline_paths_are_relative_to_the_main_repo(self):
+        """#87 A2:票檔進 git,`candidate`、`baseline.log`、`candidate_run.log` 三格是
+        相對主 repo 根的路徑 —— worktree 在主 repo 外時以 `../` 開頭,不含沙盒的絕對路徑。
+        期望值由測試自己拼(worktree 在 `<home>/wt/t1`,主 repo 在 `<home>/repo`)。
+
+        **變異**:`portable()` 原樣回傳 record → 這一條紅。
+        """
+        path, _ = self.a_branch()
+        out = os.path.join(path, "gate.log.verify-case.d")
+        done = self.tool("check", "1", "--candidate", path, "--out-dir", out)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        base = self.load_ticket("1")["verify"]["baseline"]
+        wt = os.path.join("..", "wt", "t1")
+        logs = os.path.join(wt, "gate.log.verify-case.d", "logs")
+        self.assertEqual(base["candidate"], wt)
+        self.assertEqual(base["baseline"]["log"], os.path.join(logs, "baseline.log"))
+        self.assertEqual(base["candidate_run"]["log"], os.path.join(logs, "candidate.log"))
+        text = self.read(os.path.join("tickets", "1.json"))
+        for where in {self.home, os.path.realpath(self.home)}:
+            self.assertNotIn(where, text)
+
+    def test_the_red_record_paths_are_relative_to_the_main_repo(self):
+        """#87 A2 同一條:`red` 印出的 baseline-red.json 不含沙盒根。"""
+        self.a_ticket()
+        out = os.path.join(self.repo, "vc-red")
+        done = self.tool("red", "1", "--out-dir", out)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        record = self.red_record(done)
+        self.assertEqual(record["candidate"], ".")
+        self.assertEqual(record["baseline"]["log"],
+                         os.path.join("vc-red", "logs", "baseline.log"))
+        text = json.dumps(record, ensure_ascii=False)
+        for where in {self.home, os.path.realpath(self.home)}:
+            self.assertNotIn(where, text)
+
     def test_red_leaves_only_logs_behind_in_the_out_dir(self):
         """`red`(驗證者交件那一趟)共用同一支 `clean_base`,一樣的殘留與一樣的修法。
         多留的那一份是 `red` 的證據檔(#36:它不寫票,證據落在 `--out-dir`)。"""

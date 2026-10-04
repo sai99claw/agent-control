@@ -2504,5 +2504,254 @@ class TheFirstRoundBaseFollowsMain(AutoFixBase):
         self.assertEqual(self.base_sha_events(), [])
 
 
+# #87 A9–A13:agent 在副本裡跑會寫看板的三支入口 + 自己的閘門,再照 `FIRST_ROUND_PAIR`
+# 交件。每個角色把自己收到的 `AC_*` 與四支的輸出寫進 @OUT@/<角色>/。超過上限的模型卡放在
+# 副本裡、量完就刪(留著它會變成 patch 的一部分);`rules.py pack` 在控制根上找不到規則來源
+# —— 那是刻意的:它失敗時要送一頁 decision,而那一頁不准落在主 repo。
+AGENT_PROBES = """out="@OUT@/$AC_ROLE"
+mkdir -p "$out"
+env | grep '^AC_' > "$out/env.txt" || true
+(
+    cd "$AC_WORK/work"
+    python3 -c "print('探' * 3000)" > memory/model/huge-probe.md
+    python3 scripts/memory.py check > "$out/memory.txt" 2>&1
+    rm -f memory/model/huge-probe.md
+    python3 scripts/ticket.py create --subject 外洩探針 --objective 探針 --acceptance 探針 \\
+        --allowed-write-path src/probe.txt --role worker --model opus --tool claude-code \\
+        > "$out/ticket.txt" 2>&1
+    python3 scripts/rules.py pack worker --model opus > "$out/rules.txt" 2>&1
+    sh scripts/gate.sh --branch --ticket 1 > "$out/gate.txt" 2>&1
+    ls -R "$AC_ROOT" > "$out/control.txt" 2>&1
+) || true"""
+
+# #87 A14:一個 `setsid()` 自開 session 的孫行程,每 0.2 秒往 heartbeat 檔追加一行;
+# 起它的那一層等它把 pid 寫好就 `exec sleep 60`(睡過逾時)。
+SETSID_GRANDCHILD = """python3 - "@HB@" "@PIDF@" > /dev/null 2>&1 <<'GRAND' &
+import os, sys, time
+os.setsid()
+heartbeat, pid_file = sys.argv[1:3]
+with open(pid_file + ".tmp", "w") as handle:
+    handle.write(str(os.getpid()))
+os.rename(pid_file + ".tmp", pid_file)
+while True:
+    with open(heartbeat, "a") as handle:
+        handle.write("beat\\n")
+    time.sleep(0.2)
+GRAND
+while [ ! -s "@PIDF@" ]; do sleep 0.1; done
+exec sleep 60"""
+
+
+def heartbeat_lines(path):
+    if not os.path.exists(path):
+        return 0
+    with open(path, encoding="utf-8") as handle:
+        return len(handle.read().splitlines())
+
+
+class TheAgentRunsAgainstAThrowawayControlRoot(AutoFixBase):
+    """#87 A9–A13:auto-fix 起的 worker / 驗證者寫不進真看板。
+
+    期望值全部是**起跑前自己數的**(票檔數、收件匣頁數)或寫死的字(事件種類、主 repo 根),
+    不從被測腳本算。主 repo 根比對 `self.repo` 與它的 realpath 兩種寫法(macOS 的
+    `/var` → `/private/var`)。
+    """
+
+    vcalls = TheFirstRoundVerifierRunsAlongside.vcalls
+    vfix = TheFirstRoundVerifierRunsAlongside.vfix
+    vsaw = TheFirstRoundVerifierRunsAlongside.vsaw
+    arm = TheFirstRoundVerifierRunsAlongside.arm
+    set_worker = TheTicketSetsTheTimeout.set_worker
+    conf_timeout = 120
+
+    def setUp(self):
+        super().setUp()
+        self.out = os.path.join(self.home, "probe")
+        self.pre = AGENT_PROBES.replace("@OUT@", self.out)
+        self.mains = {self.repo, os.path.realpath(self.repo)}
+
+    def inbox_pages(self):
+        return sorted(glob.glob(os.path.join(self.repo, "reports", "inbox", "*.md")))
+
+    def probe(self, role, name):
+        return self.read(name, where=os.path.join(self.out, role))
+
+    def under_main(self, value):
+        return any(value == main or value.startswith(main + os.sep) for main in self.mains)
+
+    def assert_the_board_is_untouched(self, tickets_before, pages_before):
+        kinds = self.kinds()
+        self.assertNotIn("memory.over_cap", kinds, "agent 的記憶檢查寫進了主 repo 的事件")
+        self.assertNotIn("ticket.created", kinds, "agent 開的票寫進了主 repo 的事件")
+        self.assertEqual(len(self.tickets_on_disk()), tickets_before, "主 repo 多了票")
+        self.assertEqual(self.inbox_pages(), pages_before, "主 repo 的收件匣多了頁")
+        for path in glob.glob(os.path.join(self.repo, "reports", "t1", "*", "status.json")):
+            with open(path, encoding="utf-8") as handle:
+                where = (json.load(handle).get("repair_context") or {}).get("worktree") or ""
+            self.assertNotIn("-t1" + os.sep + "round", where,
+                             "副本裡那一趟閘門的狀態檔落在主 repo:%s" % path)
+
+    def assert_the_agent_env(self, role):
+        rows = dict(line.split("=", 1) for line in
+                    self.probe(role, "env.txt").splitlines() if "=" in line)
+        for key in ("AC_DISPATCH", "AC_TICKET", "AC_ROUND", "AC_WORK", "AC_ROLE"):
+            self.assertIn(key, rows, "%s 的環境少了 %s" % (role, key))
+        self.assertEqual(rows["AC_ROLE"], role)
+        leaked = ["%s=%s" % (key, value) for key, value in sorted(rows.items())
+                  if self.under_main(value)]
+        self.assertEqual(leaked, [], "%s 收到指向主 repo 的 AC_*" % role)
+
+    def assert_the_copy_gate_read_the_ticket(self, role):
+        gate = self.probe(role, "gate.txt")
+        self.assertNotIn("讀不到", gate, gate)
+        self.assertNotIn("找不到票", gate, gate)
+        self.assertIn("status.json", self.probe(role, "control.txt"),
+                      "副本裡那一趟閘門的狀態檔沒有落在控制根")
+
+    def assert_the_patch_is_clean(self, path):
+        with open(path, encoding="utf-8") as handle:
+            heads = [line for line in handle if line.startswith("+++ ")]
+        self.assertTrue(heads, "patch 是空的 —— 這一條什麼都沒驗")
+        bad = [line for line in heads
+               if re.match(r"\+\+\+ work/(board/events\.jsonl|tickets/|reports/)", line)]
+        self.assertEqual(bad, [], "副作用跑進了 patch")
+
+    def test_a9_a10_a11_a13_the_worker_leaves_the_real_board_alone(self):
+        """**變異 M7**(A17 a):worker 的環境改回繼承主 repo 的 AC_ROOT → ticket.created /
+        票檔數 / env 那幾格紅。**變異 A17 c**:AC_CONTROL_DIR 留在 agent 環境 → env 那一格紅。"""
+        self.arm(needs_verifier=False)
+        tickets_before = len(self.tickets_on_disk())
+        pages_before = self.inbox_pages()
+
+        done = self.auto_fix("--no-review")
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue(os.path.exists(os.path.join(self.out, "worker", "ticket.txt")),
+                        "worker 的探針沒跑:" + done.stdout + done.stderr)
+        self.assert_the_board_is_untouched(tickets_before, pages_before)
+        self.assert_the_patch_is_clean(
+            os.path.join(self.home, "repo-wt", "fix-t1", "round1", "patch-round1.diff"))
+        self.assert_the_copy_gate_read_the_ticket("worker")
+        self.assert_the_agent_env("worker")
+
+    def test_a12_a13_the_verifier_leaves_it_alone_too(self):
+        self.arm(needs_verifier=True)
+        tickets_before = len(self.tickets_on_disk())
+        pages_before = self.inbox_pages()
+
+        done = self.auto_fix("--no-review")
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue(os.path.exists(os.path.join(self.out, "verifier", "ticket.txt")),
+                        "驗證者的探針沒跑:" + done.stdout + done.stderr)
+        self.assert_the_board_is_untouched(tickets_before, pages_before)
+        self.assert_the_copy_gate_read_the_ticket("verifier")
+        self.assert_the_agent_env("verifier")
+        self.assert_the_agent_env("worker")
+
+
+class ATimeoutReapsTheWholeTree(AutoFixBase):
+    """#87 A14:逾時收整棵子孫樹 —— 包括 `setsid()` 自開 session、不在 agent 行程群組裡的
+    孫行程。返回後等 2 秒,heartbeat 不再長、孫行程 `kill -0` 失敗。"""
+
+    vcalls = TheFirstRoundVerifierRunsAlongside.vcalls
+    vfix = TheFirstRoundVerifierRunsAlongside.vfix
+    vsaw = TheFirstRoundVerifierRunsAlongside.vsaw
+    arm = TheFirstRoundVerifierRunsAlongside.arm
+    set_worker = TheTicketSetsTheTimeout.set_worker
+    conf_timeout = 120
+
+    def setUp(self):
+        super().setUp()
+        self.hb = os.path.join(self.home, "heartbeat.log")
+        self.pidf = os.path.join(self.home, "grandchild.pid")
+
+    def hang_as(self, role):
+        body = SETSID_GRANDCHILD.replace("@HB@", self.hb).replace("@PIDF@", self.pidf)
+        self.pre = 'if [ "$AC_ROLE" = %s ]; then\n%s\nfi' % (role, body)
+
+    def assert_the_tree_is_gone(self):
+        self.assertTrue(os.path.exists(self.pidf), "孫行程沒起來 —— 這一條什麼都沒驗")
+        with open(self.pidf, encoding="utf-8") as handle:
+            pid = int(handle.read())
+        self.addCleanup(ATimedOutWorkerLeavesItsWorkBehind.reap, pid)
+        time.sleep(2)
+        before = heartbeat_lines(self.hb)
+        time.sleep(1)
+        self.assertEqual(heartbeat_lines(self.hb), before, "逾時之後 heartbeat 還在長")
+        self.assertFalse(ATimedOutWorkerLeavesItsWorkBehind.alive(pid),
+                         "自開 session 的孫行程 %d 還活著" % pid)
+
+    def test_a14_the_worker_grandchild_in_its_own_session_is_reaped(self):
+        """**變異 M8**(A17 b):逾時只 killpg agent 那一組 → 這一條紅。"""
+        self.hang_as("worker")
+        self.arm(needs_verifier=False, worker={"timeout_seconds": 3})
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        self.assert_the_tree_is_gone()
+
+    def test_a14_the_verifier_grandchild_in_its_own_session_is_reaped(self):
+        self.hang_as("verifier")
+        self.arm(needs_verifier=True, interface_fixed=True, worker={"timeout_seconds": 3})
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        self.assertIn("驗證者超過 3 秒", done.stderr)
+        self.assert_the_tree_is_gone()
+
+
+class ThePacketSaysWhichTestsToRun(AutoFixBase):
+    """#87 A18:worker 與驗證者的派工文都有 `## 只准跑的測試`,其後逐字是票的 test_plan,
+    再一行固定字。期望的字寫死在這裡(票面原文),不從 auto-fix.sh 讀。"""
+
+    vcalls = TheFirstRoundVerifierRunsAlongside.vcalls
+    vfix = TheFirstRoundVerifierRunsAlongside.vfix
+    vsaw = TheFirstRoundVerifierRunsAlongside.vsaw
+    arm = TheFirstRoundVerifierRunsAlongside.arm
+
+    PLAN = "G1:python3 -m unittest discover -s tests -p 'test_thing.py'\n收尾:只跑改到的檔"
+    FIXED = ("不跑全套(unittest discover 整組、gate.sh --full)、不跑 verify.py 全部回歸 —— "
+             "回歸是閘門的事,閘門紅由 auto-fix 下一輪處理")
+    EMPTY = "票沒有 test_plan:只跑你改到的 tests/ 檔,不跑全套"
+
+    def packets(self, name):
+        found = self.result_files(name)
+        self.assertTrue(found, "沒有 %s" % name)
+        with open(found[-1], encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_a18_both_packets_carry_the_test_plan_and_the_fixed_line(self):
+        """**變異 M9**:派工文拿掉只准跑段(`only_tests_section` 不叫)→ 這一條紅。"""
+        self.arm(needs_verifier=True, test_plan=self.PLAN)
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        want = "## 只准跑的測試\n%s\n%s\n" % (self.PLAN, self.FIXED)
+        for name in ("dispatch-round1.md", "dispatch-verifier-round1.md"):
+            with self.subTest(name):
+                self.assertIn(want, self.packets(name))
+
+    def test_a18_the_repair_round_packet_carries_it_too(self):
+        self.set_worker(WORKER_FIXES)
+        self.ticket_ready(test_plan=self.PLAN)
+        self.status(1, RED_LOG)
+        done = self.auto_fix("--dry-run")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("## 只准跑的測試\n%s\n%s\n" % (self.PLAN, self.FIXED),
+                      self.packets("dispatch-round2.md"))
+
+    def test_a18_a_ticket_without_a_test_plan_says_so(self):
+        for plan in (None, "  "):
+            with self.subTest(plan=plan):
+                fields = {"needs_verifier": True}
+                if plan is not None:
+                    fields["test_plan"] = plan
+                self.arm(**fields)
+                done = self.auto_fix("--dry-run", "--round", "1")
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                for name in ("dispatch-round1.md", "dispatch-verifier-round1.md"):
+                    text = self.packets(name)
+                    self.assertIn("## 只准跑的測試\n%s\n" % self.EMPTY, text)
+                    self.assertNotIn(self.FIXED, text)
+
+
 if __name__ == "__main__":
     unittest.main()

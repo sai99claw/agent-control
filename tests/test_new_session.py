@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import sys
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -134,6 +135,46 @@ class NewSession(Sandbox):
         done = self.start("main", "fable", "--no-evnet")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertEqual(self.events(), [])
+
+
+class TheMainLineStartsTheConsolidators(Sandbox):
+    """#87 A41:主線開場對每張 role=consolidator、Ready、沒有有效租約的整理票叫一次
+    consolidate-memory.sh;短命角色開場不叫。替身只記「被叫到了」與票號。"""
+
+    STUB = '#!/bin/sh\necho "consolidate $*" >> "%s"\n'
+
+    def setUp(self):
+        super().setUp()
+        self.calls = os.path.join(self.home, "consolidate-calls.log")
+        path = os.path.join(self.repo, "scripts", "consolidate-memory.sh")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(self.STUB % self.calls)
+        self.make_ticket(7, role="consolidator", state="Ready",
+                         allowed_write_paths=["memory/model/opus.md"])
+        self.make_ticket(8, role="consolidator", state="Ready",
+                         allowed_write_paths=["memory/model/fable.md"],
+                         lease={"holder": "someone", "until": "2999-01-01T00:00:00+08:00"})
+        self.make_ticket(9, role="worker", state="Ready")
+
+    def called(self, wait):
+        deadline = time.time() + wait
+        while time.time() < deadline and not os.path.exists(self.calls):
+            time.sleep(0.1)
+        time.sleep(0.3)
+        if not os.path.exists(self.calls):
+            return []
+        with open(self.calls, encoding="utf-8") as handle:
+            return [line.strip() for line in handle if line.strip()]
+
+    def test_a41_main_starts_it_and_a_worker_does_not(self):
+        """**變異**:拿掉 new-session.sh 那一段的 `ROLE = main` 條件 → worker 那一半紅。"""
+        worker = self.run_sh("scripts/new-session.sh", "worker", "opus")
+        self.assertEqual(worker.returncode, 0, worker.stdout + worker.stderr)
+        self.assertEqual(self.called(2), [], "短命角色開場叫了整理")
+        main = self.run_sh("scripts/new-session.sh", "main", "opus")
+        self.assertEqual(main.returncode, 0, main.stdout + main.stderr)
+        self.assertEqual(self.called(10), ["consolidate 7"],
+                         "只該叫 Ready、沒有有效租約的整理票那一張")
 
 
 class A7ItMovesWithTheSync(Sandbox):

@@ -784,7 +784,10 @@ def open_flaky_ticket(root, case, seen, threshold, log, from_ticket):
     conf = event.config(root)
     if conf.get("flaky_auto_ticket") is False:
         return ""
-    model = (conf.get("routing") or {}).get("verify") or "sonnet"
+    # 下限照路由表:verify 缺就退 implement,再退 opus(#87 A7)—— 寫死一個比路由表
+    # 低的模型,等於讓自動開的票繞過 `rules.py pack` 的 routing 下限。
+    routing = conf.get("routing") or {}
+    model = routing.get("verify") or routing.get("implement") or "opus"
     argv = [
         "--subject", "把 %s 修穩 —— 疑似 flaky 累計 %d 次" % (case, seen),
         "--objective",

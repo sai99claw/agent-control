@@ -302,6 +302,44 @@ VERIFIER_EVIDENCE_WITH_RED = """# EVIDENCE-verifier
 """
 
 
+class ThePatchRefAndTheLandingEntry(ApplyBase):
+    """#87 A26 / A27:收件把 patch 路徑記進票的 `patch_ref`(相對主 repo 根);收尾那一行
+    以 `落地入口:` 起頭,指真正存在的入口。期望的路徑由測試自己拼(patch 放在沙盒根的
+    兄弟位置 = `../p.diff`)。"""
+
+    def test_apply_records_patch_ref_relative_to_the_repo(self):
+        """**變異 M12**:`record_patch_ref` 不叫 → 票上沒有 patch_ref,紅。"""
+        self.make("1")
+        done = self.apply("1", self.patch_file("p.diff", CHANGE))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1").get("patch_ref"), os.path.join("..", "p.diff"))
+        inside = self.write(os.path.join("reports", "t1", "p2.diff"), CREATE)
+        done = self.apply("1", inside)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        ticket = self.read(os.path.join("tickets", "1.json"))
+        self.assertEqual(self.load_ticket("1")["patch_ref"],
+                         os.path.join("reports", "t1", "p2.diff"))
+        for where in {self.home, os.path.realpath(self.home)}:
+            self.assertNotIn(where, ticket)
+
+    def test_the_last_line_names_land_sh_when_there_is_no_land_ticket(self):
+        self.make("1")
+        done = self.apply("1", self.patch_file("p.diff", CHANGE))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual([l for l in done.stdout.splitlines() if l.startswith("落地入口:")],
+                         ["落地入口:sh scripts/land.sh t1"])
+
+    def test_the_last_line_names_land_ticket_when_the_project_has_it(self):
+        self.write(os.path.join("scripts", "land-ticket.sh"), "#!/bin/sh\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "專案自己的落地入口")
+        self.make("1")
+        done = self.apply("1", self.patch_file("p.diff", CHANGE))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual([l for l in done.stdout.splitlines() if l.startswith("落地入口:")],
+                         ["落地入口:sh scripts/land-ticket.sh t1"])
+
+
 class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
     """#29 A4 / G4:第 1 輪走 `apply.sh`,而 `apply.sh` 以前只跑 `memory.py harvest`
     —— 於是**第一輪永遠沒有 `result-round1.json`**,看板對那一輪只印得出「沒交結構化
@@ -699,6 +737,15 @@ class Rebase(ApplyBase):
         out = os.path.join(self.repo, "reports", "t%s" % ident, "patch-rebased.diff")
         with open(out, encoding="utf-8") as handle:
             return out, handle.read()
+
+    def test_rebase_records_the_rebased_patch_as_the_patch_ref(self):
+        """#87 A26:`apply.sh rebase` 那條路也寫 patch_ref(相對主 repo 根)。"""
+        self.make("1")
+        self.main_moves_near_the_patch()
+        done = self.apply("rebase", "1", self.patch_file("p.diff", WIDE_CHANGE))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1").get("patch_ref"),
+                         os.path.join("reports", "t1", "patch-rebased.diff"))
 
     def test_a_ticket_without_base_sha_names_the_missing_field(self):
         self.make("1", base_sha="")

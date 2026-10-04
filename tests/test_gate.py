@@ -976,6 +976,106 @@ class TheHandRunGateWritesTheTicketGate(Sandbox):
         self.assertEqual(gate["sha"], self.git("rev-parse", "t7").strip())
 
 
+    # ----------------------- #87 A4:票檔不論在哪一側都不算 patch 內容
+
+    def test_a4_the_ticket_file_is_not_patch_content_on_either_side(self):
+        """#87 A4:票面寫著 needle,票檔的改動(分支已提交、副本未提交)不能讓它命中。
+
+        **變異 M4**:preflight 的 content diff 拿掉票檔的 exclude → 這一條紅(不報)。
+        """
+        self.make_ticket(7, allowed_write_paths=["tests/*"], state="Running",
+                         verify_strings=["needle-a4-branch", "needle-a4-dirty"])
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "票 #7")
+        wt = self.worktree("t7")
+        self.write(os.path.join("tests", "test_zz_green.py"), PASSING % "test_zz_green",
+                   where=wt)
+        row = json.loads(self.read(os.path.join("tickets", "7.json"), where=wt))
+        row["notes"] = "needle-a4-branch"
+        self.write(os.path.join("tickets", "7.json"), json.dumps(row, ensure_ascii=False),
+                   where=wt)
+        self.git("add", "-A", cwd=wt)
+        self.git("commit", "-q", "-m", "#7 的改動(票檔也動了)", cwd=wt)
+        row["notes"] = "needle-a4-branch needle-a4-dirty"
+        self.write(os.path.join("tickets", "7.json"), json.dumps(row, ensure_ascii=False),
+                   where=wt)
+        done = self.gate_in(wt, "--no-auto-fix")
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        for needle in ("needle-a4-branch", "needle-a4-dirty"):
+            self.assertIn("verify_strings: %r 不在 patch 內容裡" % needle, done.stderr)
+
+    def test_a4_a_needle_in_the_branch_diff_still_counts(self):
+        """#87 A4 回歸:needle 在分支的 diff 裡 → 不報。"""
+        self.set_reviewer(REVIEWER_PASS)
+        self.make_ticket(7, allowed_write_paths=["tests/*"], state="Running",
+                         verify_strings=["needle-a4-real"])
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "票 #7")
+        wt = self.worktree("t7")
+        self.write(os.path.join("tests", "test_zz_green.py"),
+                   PASSING % "test_zz_green" + "# needle-a4-real\n", where=wt)
+        self.git("add", "-A", cwd=wt)
+        self.git("commit", "-q", "-m", "#7 的改動", cwd=wt)
+        done = self.gate_in(wt, "--no-auto-fix")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("verify_strings", done.stderr)
+
+
+class BranchGateRefusesAnEmptyCompareOnMain(Sandbox):
+    """#87 A3:主 repo 的 HEAD 在主線、除了票檔什麼改動都沒有時跑
+    `gate.sh --branch --ticket <n>` → rc=2,指出該去的 worktree;不寫狀態檔、不動票、
+    不發事件。提示路徑的期望值由測試照 `wtbase.sh` 那一條自己拼。"""
+
+    REFUSAL = "gate: --branch 不在主線上跑"
+
+    def setUp(self):
+        super().setUp()
+        self.make_ticket(7, allowed_write_paths=["tests/*"], verify_strings=["x"])
+
+    def refused(self, expected, **env):
+        ticket_before = self.read(os.path.join("tickets", "7.json"))
+        events_before = self.events()
+        done = self.run_sh("scripts/gate.sh", "--branch", "--ticket", "7",
+                           env=self.env(**env))
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        line = [l for l in done.stderr.splitlines() if self.REFUSAL in l]
+        self.assertEqual(len(line), 1, done.stderr)
+        self.assertIn(expected, line[0])
+        self.assertFalse(self.exists(os.path.join("reports", "t7")), "拒跑卻寫了狀態檔")
+        self.assertEqual(self.read(os.path.join("tickets", "7.json")), ticket_before)
+        self.assertEqual(self.events(), events_before, "拒跑卻發了事件")
+        self.assertFalse(os.path.exists(self.log), "拒跑卻跑了測試")
+
+    def test_a3_the_default_worktree_dir_is_named(self):
+        """**變異 M3**:拿掉 HEAD==main 那一段 → 這一條紅(走 preflight、rc 不是 2)。"""
+        self.refused(os.path.join(os.path.dirname(self.repo), "repo-wt", "t7"))
+
+    def test_a3_the_env_worktree_dir_wins(self):
+        where = os.path.join(self.home, "elsewhere-wt")
+        self.refused(os.path.join(where, "t7"), AC_WORKTREE_DIR=where)
+
+    def test_a3_the_config_worktree_dir_is_used(self):
+        conf = json.loads(self.read("board/config.json"))
+        conf["worktree_dir"] = "../custom-wt"
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        self.git("add", "board/config.json")
+        self.git("commit", "-q", "-m", "worktree_dir")
+        self.refused(os.path.join(self.home, "custom-wt", "t7"))
+
+    def test_a3_other_dirty_ticket_files_still_refuse(self):
+        """**變異 M3b**:判準退回只扣本票票檔 → 這一條紅。真主線上 `ticket.py set` 寫票
+        不 commit,別張票的未提交票檔是常態(已追蹤改了、或根本沒追蹤),它們不是改動。"""
+        self.make_ticket(8)
+        self.git("add", "tickets")
+        self.git("commit", "-q", "-m", "tickets")
+        self.make_ticket(7, allowed_write_paths=["tests/*"], verify_strings=["x"], attempt=2)
+        self.make_ticket(8, attempt=2)
+        self.make_ticket(9)
+        self.assertEqual(sorted(self.git("status", "--porcelain").splitlines()),
+                         [" M tickets/7.json", " M tickets/8.json", "?? tickets/9.json"])
+        self.refused(os.path.join(os.path.dirname(self.repo), "repo-wt", "t7"))
+
+
 class GateExample(unittest.TestCase):
     """範例那一份要**自己的語法是對的** —— 一份 `sh -n` 過不了的範本,照抄的人第一
     件事是修語法,不是讀理由。
