@@ -6,7 +6,7 @@
   "acceptance": [
     "A1 [原 #83] ticket.py cost --from-envelope:單元(tests/test_ticket.py,沿用該檔 cost 案例的沙盒)。沙盒 repo 根下造 reports/t1/worker-round1.log(內容 'not json'),以它的絕對路徑跑 `ticket.py cost 1 --from-envelope`;票 cost[-1].note 逐字等於 'reports/t1/worker-round1.log 裡沒有 JSON 信封'(期望值由測試自拼相對路徑 + 既有原因字樣),且不含沙盒根的絕對路徑。信封放在沙盒根的兄弟目錄(repo 外)→ note 以 '../' 開頭;'讀不到' 與 '的信封沒有 usage' 兩種原因各一條同形斷言。讀得到信封的 note 照舊 null、沒帶 --from-envelope 照舊 '沒帶 --from-envelope'。既有 oracle 查過不衝突、不改仍綠:tests/test_ticket.py test_a_null_row_says_why_in_its_note、tests/test_auto_fix.py 約 2186 行 assertIn '沒有 JSON 信封'。",
     "A2 [新;2026-10-03 #76 verify.baseline 實例] verify-case.py check 寫進票 verify.baseline 的 candidate、baseline.log、candidate_run.log 三格是相對主 repo 根的路徑(worktree 在 ../<repo>-wt/t<n> 時以 '../' 開頭),不含絕對路徑。單元 tests/test_verify_case.py:沙盒以絕對路徑跑 check 後讀票,assertNotIn 沙盒根;red 印出的 baseline-red.json 同一條。tests/test_no_project_names 的 tickets/*.json 一級不再因這兩格紅。",
-    "A3 [新 (b)] gate.sh --branch 拒在主線 HEAD 跑:主 repo HEAD 在 main、沒有 worktree 時跑 `sh scripts/gate.sh --branch --ticket <n>` → rc=2,stderr 一行逐字含 `gate: --branch 不在主線上跑` 與提示路徑 `<worktree_dir>/t<n>`(worktree_dir 取 apply.sh 同一條規則:環境變數 > board/config.json worktree_dir > ../<repo 名>-wt);不寫 reports/t<n>/ 任何狀態檔、不改票的 gate 欄、不發事件。在 t<n> worktree 裡跑照舊走 preflight(tests/test_gate.py 既有案例一條不改仍綠)。單元 tests/test_gate.py。",
+    "A3 [新 (b);第 1 輪反駁後收窄,D-041] gate.sh --branch --ticket <n> 拒在主線空比上跑:主 repo(不是 worktree)HEAD 在 main、票檔存在、而且除了**票庫目錄(event.tickets_dir,預設 tickets/)底下的 *.json —— 不論本票或別張票、已追蹤或未追蹤**之外沒有任何改動(`main...HEAD`、`git diff HEAD`、未追蹤檔三者扣掉票庫檔後皆空)→ rc=2,stderr 一行逐字含 `gate: --branch 不在主線上跑` 與提示路徑 `<worktree_dir>/t<n>`(worktree_dir 取 apply.sh 同一條規則:環境變數 > board/config.json worktree_dir > ../<repo 名>-wt);不寫 reports/t<n>/ 任何狀態檔、不改票的 gate 欄、不發事件。主線上同時躺著別張票的未提交票檔(ticket.py set 寫票不 commit 的常態)**仍要拒** —— 只扣本票票檔的判準在真主線上幾乎永遠不觸發,假紅照舊。主線上帶著票庫以外的真改動跑(沙盒、指定檔)、主線上沒有這張票、以及在 t<n> worktree 裡跑,照舊走 preflight:tests/test_gate.py 327/539 行與 tests/test_status.py 559/569/583/722 行等既有案例一條不改仍綠。單元 tests/test_gate.py 的 BranchGateRefusesAnEmptyCompareOnMain 第 1 輪三條沿用,另加 test_a3_other_dirty_ticket_files_still_refuse:沙盒主線上 tickets/7.json 有未提交改動、另有一張 tickets/8.json 未提交改動(或未追蹤)、別無改動 → 跑 `--branch --ticket 7` rc=2、stderr 含上述字樣、reports/t7/ 不存在。",
     "A4 [新 (d)] verify_strings 比對的內容只來自分支相對主線的 diff 加副本自己未提交的改動;票檔 tickets/<n>.json 不論在哪一側都不算:票檔未提交內容含 needle、分支 diff 不含 → preflight 報 `verify_strings: … 不在 patch 內容裡`;分支 diff 含 → 不報(回歸)。單元 tests/test_gate.py。",
     "A5 [新 (a),D-039] board/config.json 的 routing.main 與 routing.open 為 \"opus\";design / bug 不動(D-039 未裁)。tests/test_session_hook.py 既有案例不改仍綠。",
     "A6 [新 (g);拆:文字半(memory/model/README.md 卡名清單與命名規則句)在 #88 P1] 新單元 tests/test_routing_cards.py:board/config.json routing 的每個值經 rules.model_card(root, value) 得到的檔都存在 —— 現在 agy:gemini-3.8-flash-high 沒有卡,本票補 memory/model/gemini-3.8-flash-high.md,內容釘死、實作者不自由發揮:front matter `cap_chars: 2000`,正文一行「用於 routing.second_opinion / discuss」(這個模型怎麼錯的準則等有實測再由記憶整理寫,不在本票)。案例在補卡前紅(變異 M18:刪卡 → 紅)。這張卡放本票而不放 #88 的理由:守衛與它守的檔要同一份 patch 才綠,放 #88 會變成 code 票等 prompt 票、prompt 票等 code 票的環。",
@@ -39,7 +39,7 @@
     "A34 [原 #79-2] 同測試經 note、consolidate 真入口確認拒絕發生在寫檔/發 noted 或 consolidated 之前。",
     "A35 [原 #79-3] `python3 scripts/memory.py lint --json` 對本分支改到的記憶檔為 0,輸出明列掃描檔數及允許例外,不容許空掃描成功;全 repo 的 lint 結果印出但**不當驗收**(既有卡正文的整理是 #78,凍結中),gate.sh 只對分支改到的記憶檔跑 lint。本票不改任何既有記憶卡正文(out_of_scope 硬擋)。",
     "A36 [原 #79-4] 在拋棄式候選記憶插入一條函式呼叫後執行 `sh scripts/gate.sh --branch --ticket <本票>` 必紅,診斷含檔、行、rule 及建議目的地。",
-    "A37 [原 #79-5] `python3 scripts/memory.py check --read-only` 與 `python3 scripts/repo-map.py check` 為 0,既有 cap 未提高。",
+    "A37 [原 #79-5;第 1 輪反駁後改量法,D-041] `python3 scripts/repo-map.py check` rc=0。`python3 scripts/memory.py check --read-only` **不以 rc=0 當驗收**:base add5256 上同一指令已是 rc=1,原因全在 out_of_scope 的檔(memory/role/opener.md 2449/2000 超標、五份 *.inbox.md 的 needs-review 條目),整理排 #78(opener 超標與記憶錯層),本票不准動。改驗「本分支不新增超標」:EVIDENCE 貼 base 與分支各跑一次的輸出,分支比 base 只多本分支新增/改到的記憶檔那幾行(本票為 memory/model/gemini-3.8-flash-high.md),且那幾行都在上限內、不帶「超過」;沒有新的 needs-review 行;本分支 diff 不改任何記憶檔 front matter 的 cap_chars(既有 cap 未提高)。",
     "A38 [新 (i),#76 開題者提醒;拆:文件半在 #88 P9] memory.py check 的「已有整理票」判定擴成「開著(state 不在 CLOSED_STATES)且 allowed_write_paths 覆蓋該檔(ticket.first_match glob 語意)的任何票」:role=consolidator 的 → 字樣照 #76 A3 不變;其他 role → stdout `已經有一張開著的票 #<n>(role=<role>)覆蓋 <檔>`、不開新票;該票 Cancelled 後再跑 → 開 1 張。單元 tests/test_memory_lifecycle.py 新案例 test_a3_any_open_ticket_covering_the_card_blocks_a_new_one。docs/MEMORY.md 的判準句屬 #88 P9,本票不改。",
     "A39 [原 #84] 新 scripts/consolidate-memory.sh <票號>:只對 role=consolidator、state=Ready、沒有有效 lease 的票起;先 `ticket.py set <n> lease` 取租約(holder=consolidate-memory@<pid>,until=now+worker.timeout_seconds),再依 board/config.json memory.consolidators 的每個模型用 auto-fix 同一條依 model/tool 起命令的路徑(A19:codex:* → codex exec;其餘 → config worker.command 換 --model)起**兩個**獨立 session,派工文照 templates/dispatch-consolidator.md 從 stdin 餵;每個 session 發 agent.start / agent.done,model 欄記實際起的那個。單元 tests/test_consolidate_memory.py:替身命令記 argv 與 stdin 到檔;連續跑兩次與同時跑兩次 → 同一張票只取得一個租約、只起一組(替身被叫起恰好 2 次)。 templates/dispatch-consolidator.md 照現有 `<…>` 佔位填、不改範本(範本「怎麼用」段在 #88 P10)。",
     "A40 [原 #84] 啟動失敗三態:模型命令缺(command -v 找不到)、替身退出非零、逾時(票 worker.timeout_seconds 小值,替身睡過)→ 票 state=NeedsDecision、owner=main、lease 清空,reports/inbox/ 多一頁 kind=decision 標題含票號與原因字樣(`命令缺` / `退出 <rc>` / `逾時`);沒有任何一態把票留在 Running。",
@@ -135,9 +135,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "50819be56b7bfa8c061e37b1835f4c932b73eec1",
-  "state": "Ready",
-  "state_version": 32,
+  "base_sha": "add52562cb597b568564ffb8ea1f7e786cbed676",
+  "state": "Running",
+  "state_version": 42,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -147,7 +147,7 @@
     "notes": ""
   },
   "outline": "【裁示】使用者 2026-10-03:「把86切成2張 一張是改code 一張是改prompt 分別跑的測試照前面說的 一邊跑regression 一邊跑llm review (opus)」。本票是 code 那一張:#86 的 41 條去掉 A16(整條是文件)= 40 條,其中 A6 A8 A18 A25 A26 A38 A39 七條的文字半移到 #88(對照表 docs/review/20261003-a-reticket.md「#86 拆票」)。\n【依賴】depends_on #76 落地(A38/A39 改 #76 動過的 memory.py / new-session.sh;落地後主線 set base_sha 再派)。#88 depends_on 本票:#88 的文字指向本票新增的入口,#88 的覆核要在分支上看到本票的程式。\n【寫入範圍不重疊】#88 的 12 個文字檔列在本票 out_of_scope 硬擋;本票的 scripts/* tests/* board/* code-map/* 與 gemini 卡列在 #88 的 out_of_scope。動到文件才能綠的情況(守衛釘住某段文字)→ 不改文件,寫 OBJECTION(ticket-wrong)。\n【施工順序】同 #86:G1 A1–A2 → G2 A3–A4 → G3 A5–A8 → G4 A9–A15+A17 → G5 A18 → G6 A19–A25 → G7 A26–A27 → G8 A28–A32 → G9 A33–A37 → G10 A38 → G11 A39–A41。前三組是後面每組都會踩到的守衛;G4 先於 G5/G6/G11(四組都改 auto-fix.sh 起命令那段,隔離先定)。\n【逾時 10800 秒:只計 worker 自己的三段,不含回歸(未實測;依 #74 與閘門 log)】使用者 2026-10-03 追加:worker 做完才跑回歸、回歸紅由 auto-fix 發新 worker → 兩段時間切開計。①寫程式:#86 估 3,000–3,500 行/45 檔,扣掉移到 #88 的文字約 250–350 行/12 檔 → 本票約 2,700–3,200 行/33 檔;#74 速率 1,294 行/30 分 ≈ 43 行/分,加 11 組各自讀碼定位 → 75–95 分。②跑指定測試(test_plan 列的模組,不含全套與 verify.py):相關模組整輪約 400–450 秒,每組做完跑該組 + 收尾一輪 ≈ 15 分,開發中單條紅綠 10–15 分 → 25–30 分。③變異自證:18 條,每條只跑守它的那一條案例(10–30 秒)+ 改回 ≈ 1–1.5 分/條 → 20–25 分。合計 120–150 分,上限 ×1.2 = 180 分 → 10800。#74 的 3,000 秒是 worker 自己在副本裡跑全套(不是閘門),本票的派工文與 test_plan 已禁;#86 原估 3 小時的大頭是①寫程式(75–100 分,約佔 2–2.5 小時估值的六成),不是跑測試。閘門回歸(對照表模組 + verify.py)由 auto-fix 在 worker 返回後跑,不吃 worker 的時限。retry_limit 2。\n【needs_verifier=false】A 腳本票慣例;每條驗收的介面(指令、旗標、字樣、檔名)都釘在票面,實作者變異自證、EVIDENCE 每條貼紅的第一行;回歸靠閘門的對照表模組 + verify.py。\n【D-033 實測】沿用 #86 outline 的 ①–⑥(gate.sh 289–305 blob 未濾票檔、status.py:787 \"sonnet\"、gemini 卡缺、auto-fix 不讀票的 model/tool、apply.sh:797 固定印 land.sh、normalise_verify 三種認法)。新增:templates/dispatch-worker.md 不存在(ls templates 實測),A18 不新建;tests/test_dispatch_template.py 與 test_templates.py 只釘段落存在,不在本票範圍。",
-  "test_plan": "worker 只寫程式 + 跑本段列的測試檔(+ 變異自證只跑守它的那一條案例);不跑全套(unittest discover 整組、gate.sh --full)、不跑 verify.py 全部回歸 —— 回歸是閘門的事:auto-fix 收 patch 後跑閘門,閘門紅由 auto-fix 下一輪派 worker 處理。全套只在 land 跑一次。\nworker 在副本**只跑下面這些、每組做完跑一次、最後把改到的檔再跑一次**;G4 做完之前每條都前綴 `env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR`(否則測試寫進主線票庫與事件,#74 第 1 輪事故)。**不跑** `python3 -m unittest discover -s tests -p 'test_*.py'`、不跑 `sh scripts/gate.sh --full`、不跑 `python3 scripts/verify.py` 全部回歸、不跑 test_land / test_board / test_heartbeat / test_metrics —— 全套只在 land 跑一次。\nG1:python3 -m unittest discover -s tests -p 'test_ticket.py';-p 'test_verify_case.py'\nG2:-p 'test_gate.py'\nG3:-p 'test_routing_cards.py';-p 'test_status.py';-p 'test_rules.py';-p 'test_session_hook.py'\nG4/G5/G6:-p 'test_rules_delivery.py'(auto-fix.sh 的對照表模組);-p 'test_auto_fix.py'(最重的一支,整組跑一次就好;單條用 python3 -m unittest tests.test_auto_fix.<類>.<案例>);-p 'test_auto_fix_codex.py';-p 'test_review.py'\nG7:-p 'test_apply.py';-p 'test_sync_to_project.py'\nG8:-p 'test_repo_map_contract.py';python3 scripts/repo-map.py build 連跑兩次比 sha256;python3 scripts/repo-map.py check\nG9:-p 'test_memory_layer_policy.py';-p 'test_memory.py';python3 scripts/memory.py lint --json\nG10/G11:-p 'test_memory_lifecycle.py';-p 'test_consolidate_memory.py';-p 'test_new_session.py'(約 33 秒,改完 new-session.sh 跑一次)\n收尾:python3 -m unittest tests.test_no_project_names(0.2 秒,擋絕對路徑);-p 'test_rules_delivery.py'\n變異(實作者自證,**每條只跑守它的那一條案例** `python3 -m unittest tests.<模組>.<類>.<案例>`,不跑整支檔;EVIDENCE 貼紅的第一行):M1 cost note 改回原字串 → A1 紅;M2 verify-case 寫回絕對路徑 → A2 紅;M3 拿掉 HEAD==main 檢查 → A3 紅;M4 blob 不濾票檔 → A4 紅;M5 status.py 退回 \"sonnet\" → A7 紅;M6 pack 不比 tiers → A8 紅;M7 worker env 繼承主 repo AC_ROOT → A9 紅;M8 逾時只 killpg 一層 → A14 紅;M9 派工文拿掉只准跑段 → A18 紅;M10 tool 判斷恆走 claude → A19 紅;M11 429 判斷拿掉 → A23 紅;M12 patch_ref 不寫 → A26 紅;M13 repo-map 關 freshness → A32 紅;M14 lint 例外變全行豁免 → A33 紅;M15 已有票判定改回只認 consolidator → A38 紅;M16 consolidate-memory 不取租約 → A39 紅;M17 失敗態留 Running → A40 紅;M18 刪 memory/model/gemini-3.8-flash-high.md → A6 紅。\n每條新增/改動案例在 EVIDENCE 寫一行完整的 `四問:`(守什麼 / 可信回歸 / 既有測試為何不夠 / 不加測試專用縫)。\n閘門(auto-fix 收 patch 後跑、或手跑 gate.sh --branch):對照表模組 + verify.py 回歸案例,這是本票的 regression;worker 不跑 gate --full、不跑 verify.py。",
+  "test_plan": "worker 只寫程式 + 跑本段列的測試檔(+ 變異自證只跑守它的那一條案例);不跑全套(unittest discover 整組、gate.sh --full)、不跑 verify.py 全部回歸 —— 回歸是閘門的事:auto-fix 收 patch 後跑閘門,閘門紅由 auto-fix 下一輪派 worker 處理。全套只在 land 跑一次。\nworker 在副本**只跑下面這些、每組做完跑一次、最後把改到的檔再跑一次**;G4 做完之前每條都前綴 `env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR`(否則測試寫進主線票庫與事件,#74 第 1 輪事故)。**不跑** `python3 -m unittest discover -s tests -p 'test_*.py'`、不跑 `sh scripts/gate.sh --full`、不跑 `python3 scripts/verify.py` 全部回歸、不跑 test_land / test_board / test_heartbeat / test_metrics —— 全套只在 land 跑一次。\nG1:python3 -m unittest discover -s tests -p 'test_ticket.py';-p 'test_verify_case.py'\nG2:-p 'test_gate.py'\nG3:-p 'test_routing_cards.py';-p 'test_status.py';-p 'test_rules.py';-p 'test_session_hook.py'\nG4/G5/G6:-p 'test_rules_delivery.py'(auto-fix.sh 的對照表模組);-p 'test_auto_fix.py'(最重的一支,整組跑一次就好;單條用 python3 -m unittest tests.test_auto_fix.<類>.<案例>);-p 'test_auto_fix_codex.py';-p 'test_review.py'\nG7:-p 'test_apply.py';-p 'test_sync_to_project.py'\nG8:-p 'test_repo_map_contract.py';python3 scripts/repo-map.py build 連跑兩次比 sha256;python3 scripts/repo-map.py check\nG9:-p 'test_memory_layer_policy.py';-p 'test_memory.py';python3 scripts/memory.py lint --json;python3 scripts/memory.py check --read-only 在 base 與分支各跑一次、EVIDENCE 貼兩份的差(A37,不判 rc)\nG10/G11:-p 'test_memory_lifecycle.py';-p 'test_consolidate_memory.py';-p 'test_new_session.py'(約 33 秒,改完 new-session.sh 跑一次)\n收尾:python3 -m unittest tests.test_no_project_names(0.2 秒,擋絕對路徑);-p 'test_rules_delivery.py'\n變異(實作者自證,**每條只跑守它的那一條案例** `python3 -m unittest tests.<模組>.<類>.<案例>`,不跑整支檔;EVIDENCE 貼紅的第一行):M1 cost note 改回原字串 → A1 紅;M2 verify-case 寫回絕對路徑 → A2 紅;M3 拿掉 HEAD==main 檢查 → A3 紅;M3b 主線空比判準退回只扣本票票檔(別張票的未提交票檔算改動)→ test_a3_other_dirty_ticket_files_still_refuse 紅;M4 blob 不濾票檔 → A4 紅;M5 status.py 退回 \"sonnet\" → A7 紅;M6 pack 不比 tiers → A8 紅;M7 worker env 繼承主 repo AC_ROOT → A9 紅;M8 逾時只 killpg 一層 → A14 紅;M9 派工文拿掉只准跑段 → A18 紅;M10 tool 判斷恆走 claude → A19 紅;M11 429 判斷拿掉 → A23 紅;M12 patch_ref 不寫 → A26 紅;M13 repo-map 關 freshness → A32 紅;M14 lint 例外變全行豁免 → A33 紅;M15 已有票判定改回只認 consolidator → A38 紅;M16 consolidate-memory 不取租約 → A39 紅;M17 失敗態留 Running → A40 紅;M18 刪 memory/model/gemini-3.8-flash-high.md → A6 紅。\n每條新增/改動案例在 EVIDENCE 寫一行完整的 `四問:`(守什麼 / 可信回歸 / 既有測試為何不夠 / 不加測試專用縫)。\n閘門(auto-fix 收 patch 後跑、或手跑 gate.sh --branch):對照表模組 + verify.py 回歸案例,這是本票的 regression;worker 不跑 gate --full、不跑 verify.py。",
   "feature": "agent-control 工具鏈收尾(code)",
   "decision_refs": [
     "D-039",
@@ -169,11 +169,38 @@
     "--branch 不在主線上跑",
     "test_apply_records_patch_ref_relative_to_the_repo",
     "test_a3_any_open_ticket_covering_the_card_blocks_a_new_one",
-    "test_routing_cards"
+    "test_routing_cards",
+    "test_a3_other_dirty_ticket_files_still_refuse"
   ],
   "needs_verifier": false,
   "interface_fixed": false,
   "worker": {
     "timeout_seconds": 10800
-  }
+  },
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 332,
+      "tokens_out": 223565,
+      "cache_write": 512047,
+      "cache_read": 46383396,
+      "wall_seconds": 3487,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-04T14:47:24+08:00"
+    }
+  ],
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "A3 字面(主線 HEAD 一律拒)會讓 test_gate 327/539 與 test_status 559/569/583/722 六條既有案例紅,已改成「主線 HEAD 且除票檔外無任何改動才拒」;A37 的 memory.py check --read-only 在 base 就是 rc=1(out_of_scope 的 opener.md 2449/2000 與 inbox needs-review),本票改不動 —— 兩條請裁示。",
+      "evidence": "../agent-control-wt/fix-t87/round1/EVIDENCE-round1.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "開題者判(D-041,主線手派,2026-10-04):兩條都合理、票面已改。A3:收窄方向對(既有六條案例在主線帶真改動跑,字面一律拒會誤殺),但第 1 輪只扣本票票檔不夠 —— 真主線常態有別張票的未提交票檔(此刻 tickets/76.json 就是),判準不觸發、preflight 照舊對著別張票的 diff 假紅。A3 改成扣掉票庫目錄底下所有 *.json,加案例 test_a3_other_dirty_ticket_files_still_refuse(已進 verify_strings)與變異 M3b。A37:base 上就 rc=1、原因在 out_of_scope 檔,改驗「分支不新增超標、cap 未提高」(第 1 輪 EVIDENCE ② 已滿足),base 既有超標排 #78。第 1 輪 patch 沿用:套進 t87 後只剩 A3 收緊這一小段 delta(gate.sh 主線空比那段的 changed 扣票庫檔 + 一條案例 + M3b),其餘 39 條不重做。"
+    }
+  ],
+  "owner": "main"
 }

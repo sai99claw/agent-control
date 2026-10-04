@@ -48,8 +48,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "e746e868a6f775f0b498f47e0b9570b890570efd",
-  "state": "Blocked",
-  "state_version": 44,
+  "state": "Done",
+  "state_version": 48,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -202,6 +202,32 @@
       "by": "review.sh",
       "note": null,
       "at": "2026-10-03T20:02:14+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 22,
+      "tokens_out": 9112,
+      "cache_write": 78213,
+      "cache_read": 603081,
+      "wall_seconds": 103,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-04T13:38:41+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 635,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-10-04T13:49:16+08:00"
     }
   ],
   "branch": "t76",
@@ -215,10 +241,10 @@
   "review": {
     "verdict": "pass",
     "by": "reviewer@opus",
-    "sha": "1622a9a55cc87a3c9b9b4a1a040e32c0c34c6851",
-    "note": "reports/t76/20261003-195712-33506/REVIEW.md",
-    "at": "2026-10-03T20:02:14+08:00",
-    "state_version": 41
+    "sha": "add52562cb597b568564ffb8ea1f7e786cbed676",
+    "note": "reports/t76/20261003-202250-22168-gate/REVIEW.md",
+    "at": "2026-10-04T13:49:16+08:00",
+    "state_version": 48
   },
   "owner": "main"
 }
