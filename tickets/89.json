@@ -1,0 +1,110 @@
+{
+  "id": "89",
+  "subject": "auto-fix 反駁改由開題者自動判,接回同一個驗證者與實作者 session 在原副本續做(D-041,接在 #87 後)",
+  "created": "2026-10-04T12:04:59+08:00",
+  "objective": "D-041(2026-10-04):worker 交件帶反駁(ticket-wrong / blocking)時 auto-fix 不再轉 Blocked 等主線,改起一個開題者 session 判;accepted → 接回同一個驗證者 session 改案例、再接回同一個實作者 session 在原副本續做(不換輪、不丟 patch);rejected → 附理由接回實作者照原票做;只有開題者判需裁示、同票第二次反駁、開題者沒判出來、session 不能接回四種才進主線收件匣;實作者正常交件後兩個 session 與副本一起收掉。驗收全靠沙盒單元測試(假 claude),worker 只寫程式 + 跑本票 test_plan 列的測試 + 變異自證;回歸由閘門跑,不算 worker 時限。給模型讀的文字(角色卡、WORKFLOW 等)不在本票,在 #88 P13–P16。",
+  "acceptance": [
+    "A1 [D-041] session 先指定、記到交件(單元 tests/test_objection_triage.py,沿用 tests/test_auto_fix.py 的 AutoFixBase 沙盒與 #58 把假 `claude` 放 PATH 那一手):worker.command / verifier.command 第一個字是 `claude` 且不含 `--no-session-persistence` → auto-fix 起 worker 與驗證者(第 1 輪與 test_defect 那條路)時在 argv 補 `--session-id <uuid4>`,並寫 `reports/t<n>/sessions.json` = `{\"worker\": {…}, \"verifier\": {…}}`,每列逐格 `session_id`、`cwd`(該副本 work/ 相對主 repo 根,repo 外以 `../` 起頭)、`round`、`model`、`state`(\"open\")、`resumable`(true)。命令不是 `claude` 起頭(含 #87 A19 的 codex exec)或含 `--no-session-persistence` → 不補旗標,該列 `resumable: false` 並帶 `why`(字樣含 `不能接回`)。斷言:假 claude 記下的 argv 裡 `--session-id` 後一格 == sessions.json 該列 session_id 且 `uuid.UUID()` 解析得過;假 claude 記下的 os.getcwd() 經 realpath == 主 repo 根 join 該列 cwd 的 realpath;sessions.json 全文 assertNotIn 沙盒根的絕對路徑。",
+    "A2 [D-041] 反駁改由新開題者 session 判,不轉 Blocked(同沙盒;沙盒 board/config.json 有 `opener` 區塊,command 指向假 claude):worker 第 r 輪 EVIDENCE 有 `OBJECTION: ticket-wrong …`(`blocking` 走同一條路;`test_defect` 照既有那條路,本票不動)且 sessions.json worker 列 resumable → auto-fix 不呼叫 block / post,改起開題者:argv 取 config `opener.command`(本票在 board/config.json 寫死 `\"opener\": {\"command\": \"claude -p --model opus --permission-mode acceptEdits --allowedTools Read Glob Grep Bash Write --output-format stream-json --verbose\", \"timeout_seconds\": 1800}`),cwd = 主 repo 根、環境 AC_ROOT = 主 repo 根、AC_ROLE=opener(它要改真票;#87 A9 的拋棄式控制根只管 worker / 驗證者)。派工文(stdin)= `rules.py pack opener --model <opener.command 的 --model>` + 一段 `## 判反駁`,逐字含那一行 OBJECTION、EVIDENCE 相對路徑、票號,與交件契約一行 `把判決寫進 reports/t<n>/triage-round<r>.md,第一行 TRIAGE: <accepted|rejected|escalate> <一句理由>`。替身開題者在跑的當下記下三件事並斷言:票 state == \"Running\";worker 副本 work/ 與 base/ 仍在;(interface_fixed 票)驗證者副本仍在。events 依序:`objection.triage.start`(kv round、category)→ agent.start role=opener → agent.done role=opener → `objection.triage.done`(kv verdict)。",
+    "A3 [D-041] accepted → 接回同一個驗證者、再接回同一個實作者,在原副本續做(沙盒票 needs_verifier=true、interface_fixed=true,第 1 輪驗證者與 worker 平行跑過;替身開題者跑 `ticket.py set <n> acceptance '<改過的 list>'` 並寫 `TRIAGE: accepted 驗收第二條改照設計文件`):(1) 票 objections 那一筆 disposition == \"accepted\",多一格 `triage` == {verdict: \"accepted\", reason: \"驗收第二條改照設計文件\", round: r, by: \"auto-fix\"}(disposition 與 triage 由 auto-fix 依 TRIAGE 行寫,開題者不寫 —— 單一寫入者);(2) 下一個起的假 claude 是驗證者:argv 含 `--resume <sessions.json verifier.session_id>`、不含 `--session-id`,cwd == 驗證者列 cwd,stdin 含 `## 被接回`、欄位名 `acceptance` 與改過的那條驗收全文;驗證者替身第一段在副本留的標記檔還在;(3) 再下一個是 worker:argv 含 `--resume <worker.session_id>`,cwd == worker 列 cwd,stdin 含 `## 被接回`、`accepted`、理由原文、欄位名 `acceptance` 與新驗收全文;worker 替身第一段在 work/ 留的標記檔還在(同一份副本,不是重建);(4) 不換輪:票的 attempt 不變、worker_rounds() 兩筆都是 round r、events 沒有 reason=objection 的 ticket.attempt.failed;(5) 全程 reports/inbox/ 頁數與起跑前相同(期望值 = 起跑前自己數)、沒有 decision.asked、ticket.state 事件沒有任何一筆 to == \"Blocked\";(6) 接回前第一段的 EVIDENCE-round<r>.md 改名為 EVIDENCE-round<r>-objection.md(證據留著,不被續做那份蓋掉);(7) worker 接回後正常交 patch(EVIDENCE 無 OBJECTION)→ 之後照一般那一輪走,閘門替身綠時 rc 與既有綠路徑案例相同,stdout+stderr 不含 `這一筆不收`(開題者改票讓 state_version 前進,auto-fix 之後寫票要重讀版本)。",
+    "A4 [D-041] rejected → 附理由接回實作者照原票做:替身開題者寫 `TRIAGE: rejected 驗收第二條與設計文件一致,反駁不成立`、不改票 → objections 那一筆 disposition == \"rejected\"、triage.verdict == \"rejected\";除 objections 與 state_version 外,票面每一格與起跑前逐格相同;驗證者不被接回(假 claude 的呼叫紀錄裡沒有 verifier 列的 session_id 出現在 --resume 後);worker 以 `--resume <worker.session_id>` 在原 cwd 接回,stdin 含 `反駁不成立`、理由原文、`照原票做`;A3 的 (4)(5)(6) 三條同樣成立。",
+    "A5 [D-041;升級條件為主線預設、待使用者改] 只有下列幾種才轉 Blocked、寫收件匣(沿用既有反駁那一頁:rc=3、owner=main、decision.asked、一頁 kind=decision):(a) `TRIAGE: escalate <理由>` → 頁內容含 `開題者判需要裁示` 與理由;(b) 同票第二次反駁:票的 objections 已有一筆帶 triage(含同一次執行裡被接回的 worker 再交 OBJECTION)→ 不起開題者,頁含 `同票第二次反駁`;(c) 開題者沒判出來:config 沒有 opener 區塊或 command 找不到 → `開題者命令缺`;退出非零 → `開題者退出 <rc>`;超過 opener.timeout_seconds(替身睡過,票設小值)→ `開題者逾時`(收整棵子行程樹同 #87 A14);triage 檔不在或第一行不是 `TRIAGE: ` 起頭的三種之一 → `開題者沒交判決`;規則包產不出來 → 沿用既有規則包失敗字樣;(d) worker 列 resumable=false → 不起開題者,頁含 `不能接回` 與 why。每一種:那一筆 disposition 留空;worker 副本與驗證者副本不收、sessions.json 兩列 state 仍 \"open\";頁內容含 worker session_id 與副本相對路徑(主線手接回用);events 有 `objection.triage.done` verdict=escalate(只在 (a)(c) 有 start;(b)(d) 只發 done)。既有 tests/test_auto_fix.py 四條 —— test_an_objection_from_the_worker_becomes_a_row_on_the_ticket、test_the_objection_line_still_wins_and_the_disagreement_is_recorded、test_t60_a_worker_objection_leaves_the_verifier_unstarted_and_says_so、test_t60_an_interface_fixed_objection_page_does_not_claim_the_verifier_waited —— 沙盒 config 沒有 opener 區塊 → 走 (c) 命令缺,rc=3 / Blocked / 一頁 / 頁字樣的斷言不改仍綠;它們若有斷言副本被收,只准改那一句並在 EVIDENCE 寫一行理由(未實測有無)。",
+    "A6 [D-041] 收掉與逾時:(a) 接回的 worker 正常交件、patch 收進 reports/ 後,worker 副本(work/、base/)與驗證者副本刪除,sessions.json 兩列 state == \"closed\" 並帶 closed_at;同票再跑一次 auto-fix,假 claude 的 argv 不出現任何 closed 列的 session_id(新一輪新 --session-id)。(b) 沒有反駁的一般路徑:驗證者副本從「驗證者交件就刪」改成「worker 那一輪收件(或升級)時一起處置」—— 反駁要接回的驗證者副本必須還在;一般綠路徑兩份副本照既有那一手收,sessions.json 列同樣轉 closed;tests/test_auto_fix.py TheCopiesGetCollected 各案例不改仍綠。(c) 時限:接回的驗證者用驗證者時限、接回的 worker 用票的 worker.timeout_seconds,都從接回那一刻重新計;接回的 worker 逾時 → 走既有逾時頁(副本留、partial diff、Blocked),sessions.json worker 列仍 \"open\";接回的驗證者沒交件或逾時 → 走既有驗證者沒交件那一頁、不再接回 worker。",
+    "A7 [D-041] 事件種類:scripts/event.py KINDS 只加 `objection.triage.start`、`objection.triage.done` 兩個,其餘一字不動(tests/test_event.py 不改仍綠);objection.triage.done 的 kv 有 verdict(accepted / rejected / escalate),escalate 時多一格 reason(A5 那幾個字樣之一)。",
+    "A8 [D-041] 變異(實作者自證,每條只跑守它的那一條案例,EVIDENCE 貼紅的第一行):M19 接回改成新開 `--session-id`、不帶 --resume → A3 紅;M20 反駁分支前照舊 shed_copies → A3 紅(標記檔不在);M21 accepted 照舊 attempt_failed objection → A3 紅;M22 拿掉同票第二次反駁的判斷 → A5(b) 紅;M23 accepted 也 post 收件匣 → A3 紅;M24 正常交件後不收副本、sessions 不轉 closed → A6 紅。"
+  ],
+  "in_scope": [
+    "scripts/auto-fix.sh",
+    "scripts/event.py",
+    "scripts/ticket.py",
+    "board/config.json",
+    "tests/test_auto_fix.py",
+    "tests/test_objection_triage.py"
+  ],
+  "out_of_scope": [
+    "memory/role/opener.md",
+    "memory/role/implementer.md",
+    "memory/role/main.md",
+    "memory/role/verifier.md",
+    "memory/role/reviewer.md",
+    "memory/role/consolidator.md",
+    "memory/role/design.md",
+    "memory/model/opus.md",
+    "memory/model/fable.md",
+    "memory/model/gpt-5.6-sol.md",
+    "memory/model/gpt-6-astra.md",
+    "memory/*/*.inbox.md",
+    "memory/project/*.md",
+    "scripts/land.sh",
+    "tests/control_harness.py",
+    "tests/test_no_project_names.py",
+    "tests/test_land.py",
+    "docs/DECISIONS.md",
+    "docs/HANDOFF.md",
+    "CLAUDE.md",
+    "docs/CODE-MAP.md",
+    "docs/DISPATCH-TEMPLATE.md",
+    "docs/MEMORY.md",
+    "docs/SESSION-START.md",
+    "docs/WORKFLOW.md",
+    "memory/model/README.md",
+    "memory/project/README.md",
+    "memory/role/README.md",
+    "templates/dispatch-verifier.md",
+    "templates/dispatch-consolidator.md",
+    "tickets/SCHEMA.md",
+    "tests/test_event.py"
+  ],
+  "depends_on": [
+    {
+      "id": "87",
+      "condition": "落地(建在 #87 G4 隔離與 A19 起命令那一段上;落地後主線 set base_sha 再派)"
+    }
+  ],
+  "allowed_write_paths": [
+    "board/config.json",
+    "scripts/auto-fix.sh",
+    "scripts/event.py",
+    "scripts/ticket.py",
+    "tests/test_auto_fix.py",
+    "tests/test_objection_triage.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "8cbb6a5754fce49f2dcc765bdd5722748dfae6a4",
+  "state": "Ready",
+  "state_version": 6,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "feature": "agent-control auto-fix 反駁處置",
+  "decision_refs": [
+    "D-041",
+    "D-040",
+    "D-033"
+  ],
+  "test_plan": "worker 只寫程式 + 跑本段列的測試(+ 變異自證只跑守它的那一條案例);不跑全套(unittest discover 整組、gate.sh --full)、不跑 verify.py 全部回歸 —— 回歸是閘門的事,閘門紅由 auto-fix 下一輪處理。全套只在 land 跑一次。\n只跑:python3 -m unittest discover -s tests -p 'test_objection_triage.py'(新檔,沿用 tests/test_auto_fix.py 的 AutoFixBase 沙盒與假 claude);既有四條反駁案例各單跑一次 `python3 -m unittest tests.test_auto_fix.<類>.<案例>`(類名以檔內為準):test_an_objection_from_the_worker_becomes_a_row_on_the_ticket、test_the_objection_line_still_wins_and_the_disagreement_is_recorded、test_t60_a_worker_objection_leaves_the_verifier_unstarted_and_says_so、test_t60_an_interface_fixed_objection_page_does_not_claim_the_verifier_waited;`python3 -m unittest tests.test_auto_fix.TheCopiesGetCollected` 整類一次;-p 'test_event.py';收尾 python3 -m unittest tests.test_no_project_names。\n變異(EVIDENCE 貼紅的第一行):M19 接回改成新開 --session-id、不帶 --resume → A3 紅;M20 反駁分支前照舊 shed_copies → A3 紅;M21 accepted 照舊 attempt_failed objection → A3 紅;M22 拿掉同票第二次反駁判斷 → A5(b) 紅;M23 accepted 也 post 收件匣 → A3 紅;M24 正常交件後不收副本、sessions 不轉 closed → A6 紅。\n每條新增 / 改動案例在 EVIDENCE 寫一行完整的 `四問:`(守什麼 / 可信回歸 / 既有測試為何不夠 / 不加測試專用縫)。\n不准在測試裡起真的 claude / codex:沙盒 config 的 worker / verifier / opener 命令一律指向 PATH 上的假 claude。\n閘門(auto-fix 收 patch 後跑):對照表模組 + verify.py 回歸案例,這是本票的 regression。",
+  "outline": "【裁示】D-041(2026-10-04)使用者原話見 docs/DECISIONS.md;未裁部分(rejected 處置、四種升級條件)照主線預設寫進 A4 / A5,使用者改了就改票。使用者 2026-10-04 裁示拆成本票、接在 #87 後(原併在 #87 A42–A49,本票 A1–A8 逐字搬來,只改編號與對 #87 條目的指稱)。\n【依賴】depends_on #87 落地:建在 #87 G4 隔離(A9–A15,worker/驗證者的拋棄式控制根)與 A19 依 model/tool 起命令那一段之上;#87 落地後主線 set base_sha 再派。#88 P13–P16(三張角色卡與流程文字)depends_on 本票。\n【機制(實測 claude 2.1.288,scratch 目錄 haiku 三呼叫)】`claude -p --session-id <uuid>` 首起,stream-json 第一行 init 帶同一個 session_id;`claude -p --resume <uuid>`(stdin 新 prompt)接得回前文;從別的 cwd resume 也接得回(對話存檔不綁 cwd),但工具的 cwd 是當下目錄 → 必須在原副本 work/ 接回。`--no-session-persistence` 會讓 session 不能接回(--help 原文)。codex 有 `codex exec resume <id> -`,但 thread id 要從 --json 輸出撈,未實測 → 本票 codex 路徑 resumable=false 走升級。\n【設計取捨】session id 由 auto-fix 先指定(不從輸出撈,撈不到就沒得接);disposition/triage 只由 auto-fix 依 TRIAGE 行寫(單一寫入者);沙盒 config 沒 opener 區塊 = 命令缺 → 升級,既有四條反駁案例因此不用改斷言、測試也不會起真 claude;scripts/event.py 只准加兩個種類(事件表固定,不加就 rc=2;#87 把 event.py 列 out_of_scope,本票開放這一處)。test_defect 那條路(起新驗證者)不在本票:它本來就不進主線。\n【D-033 實測】auto-fix.sh 反駁分支前 shed_copies 會刪 work/(約 1112–1118 行,#87 前的行號)、驗證者副本交件即 rm -rf(約 710、768 行)—— 兩處都要改成留到交件。tests/test_auto_fix.py 釘舊行為的四條(rc=3 / Blocked / 一頁)在沙盒無 opener 區塊時走升級,斷言不改;TheCopiesGetCollected 走一般路徑,不改仍綠。\n【needs_verifier=false】A 腳本票慣例;介面(config 區塊與預設命令、sessions.json 欄位、TRIAGE 行格式、事件種類、升級字樣、派工文段名)全釘在票面,驗證者案例只會重演實作者自己案例的同一契約(DISPATCH-TEMPLATE §5.8 第 3 問);實作者自寫 tests/test_objection_triage.py、M19–M24 變異自證;回歸靠閘門。\n【逾時 4800 秒(未實測)】①寫程式:auto-fix.sh 約 200–300 行 + 新測試檔約 400–500 行 + event.py / config / ticket.py 少量 ≈ 700–850 行,43 行/分(#74)≈ 17–20 分,加讀 #87 落地後的 auto-fix.sh 反駁分支、副本收件、驗證者起停三段與沙盒 harness 15–20 分 → 32–40 分;②跑指定測試:新檔整支約 8–10 條沙盒案例跑三次 + 四條既有案例 + TheCopiesGetCollected + test_event + 單條紅綠 → 10–15 分;③變異 6 條 × 1–1.5 分 → 6–9 分。合計 48–64 分,上緣 ×1.2 ≈ 77 分 → 4800。閘門回歸不計。",
+  "shared_resources": [
+    "scripts/auto-fix.sh 反駁分支與副本收件(shed_copies、驗證者副本 rm -rf)那一段"
+  ],
+  "verify_strings": [
+    "objection.triage.done",
+    "sessions.json",
+    "--resume",
+    "TRIAGE: ",
+    "test_objection_triage"
+  ],
+  "needs_verifier": false,
+  "interface_fixed": false,
+  "worker": {
+    "timeout_seconds": 4800
+  }
+}

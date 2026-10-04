@@ -138,4 +138,4 @@ worker 時限只算「寫程式 + 跑 test_plan 列的測試 + 變異自證」;�
 
 tickets/86.json(handoff + Cancelled)、tickets/87.json(新)、tickets/88.json(新)、docs/review/20261003-a-reticket.md(本節)。`board/events.jsonl` 由 ticket.py 自動追加事件。
 
-D-041(2026-10-04,反駁改由開題者自動判、接回同一個驗證者 / 實作者 session 續做)去向:code 半併入 #87 A42–A49(timeout 改 14400),文字半併入 #88 P13–P16(三張角色卡移進寫入範圍,timeout 改 4800);開題者建議它自成一張 depends_on #87 的票,理由在 #87 outline【開題者意見】。
+D-041(2026-10-04,反駁改由開題者自動判、接回同一個驗證者 / 實作者 session 續做)去向:使用者 2026-10-04 裁示拆票 —— code 半自成 #89(A1–A8,原 #87 A42–A49 逐字搬來,depends_on #87,needs_verifier=false,timeout 4800);#87 還原到併入前(40 條、10800);文字半留在 #88 P13–P16(三張角色卡在寫入範圍,timeout 4800),depends_on 加 #89、條目指稱改指 #89。
