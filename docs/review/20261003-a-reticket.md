@@ -139,3 +139,5 @@ worker 時限只算「寫程式 + 跑 test_plan 列的測試 + 變異自證」;�
 tickets/86.json(handoff + Cancelled)、tickets/87.json(新)、tickets/88.json(新)、docs/review/20261003-a-reticket.md(本節)。`board/events.jsonl` 由 ticket.py 自動追加事件。
 
 D-041(2026-10-04,反駁改由開題者自動判、接回同一個驗證者 / 實作者 session 續做)去向:使用者 2026-10-04 裁示拆票 —— code 半自成 #89(A1–A8,原 #87 A42–A49 逐字搬來,depends_on #87,needs_verifier=false,timeout 4800);#87 還原到併入前(40 條、10800);文字半留在 #88 P13–P16(三張角色卡在寫入範圍,timeout 4800),depends_on 加 #89、條目指稱改指 #89。
+
+D-042(2026-10-04,#88 第 1 輪反駁經使用者裁「先整理卡片再做 #88」)去向:順序 #90 → #78 → #88。#90 加 A7(閘門對記憶卡只 lint 分支新增行,比法放 memory.py lint --base)、A8(本分支讓卡超上限才擋)、變異 M5–M7,A5(c) opener D-031 那一句移交 #78,逾時 5400;#78 解凍、範圍收斂為 opener / implementer / verifier 三張卡(lint 0、implementer ≤ 2550、verifier ≤ 1850、opener ≤ 1800、改掉與 D-041 / #87 A18 衝突的舊句),fable + gpt-6-astra 兩模型主線手派、掛主線租約擋開場自動起,depends_on #90,逾時 4200;#88 depends_on 加 #78、反駁 accepted(follow_up「D-042:先 #90、#78」)、P12 改指 #90 判準、轉 Ready,第 1 輪 patch 只當 P1–P12 / P16 參考稿。

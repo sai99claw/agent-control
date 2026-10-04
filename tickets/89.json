@@ -67,15 +67,17 @@
     "scripts/event.py",
     "scripts/ticket.py",
     "tests/test_auto_fix.py",
-    "tests/test_objection_triage.py"
+    "tests/test_objection_triage.py",
+    "code-map/index.json",
+    "code-map/INDEX.md"
   ],
   "role": "worker",
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "849b6374b16bac74b11df9bc4ed7eac6f87d99b1",
-  "state": "Running",
-  "state_version": 13,
+  "state": "Done",
+  "state_version": 21,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -120,10 +122,61 @@
       "by": "auto-fix.sh",
       "note": null,
       "at": "2026-10-04T16:18:38+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 18,
+      "tokens_out": 10128,
+      "cache_write": 79694,
+      "cache_read": 542847,
+      "wall_seconds": 105,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-04T16:36:47+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 690,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-10-04T16:48:18+08:00"
     }
   ],
   "branch": "t89",
-  "patch_ref": "../agent-control-wt/fix-t89/round1/patch-round1.diff",
+  "patch_ref": "../agent-control-wt/fix-t89/round2m/patch-round2.diff",
   "repair_round": 1,
-  "owner": "main"
+  "owner": "main",
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "#89 allowed_write_paths 缺 `code-map/index.json`(新增 / 改名 / 刪除已管理檔的票都要重生索引,#87 A32 守衛會擋);建議加 `code-map/index.json` 與 `code-map/INDEX.md`(build 兩支都寫,這次 INDEX.md 剛好沒變)。不阻擋,patch 照交。",
+      "evidence": "../agent-control-wt/fix-t89/round2m/EVIDENCE-round2.md",
+      "owner": "opener",
+      "disposition": "accepted",
+      "follow_up": "Opener (D-041) accepted: #89 adds tests/test_objection_triage.py, which matches the managed glob tests/test_*.py in code-map/catalog.json, so the #87 A32 gate guard (repo-map check) goes red unless the index is rebuilt. Added code-map/index.json and code-map/INDEX.md to allowed_write_paths. The round-2 patch carrying the rebuilt index.json stands; no re-dispatch needed. Checked #88 (docs only, no new/renamed scripts/ or tests/ files) and #90 (edits existing files only): neither needs the paths.",
+      "blocking": false
+    }
+  ],
+  "gate": {
+    "rc": 0,
+    "sha": "e7d99727e3c002c8883ac76a9fb6522450d116da",
+    "run_id": "20261004-162750-10752",
+    "at": "2026-10-04T16:35:01+08:00"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "1a8c60b7917d941210e3a0d05f565a7f51232e6f",
+    "note": "reports/t89/20261004-162750-10752/REVIEW.md",
+    "at": "2026-10-04T16:48:18+08:00",
+    "state_version": 21
+  }
 }
