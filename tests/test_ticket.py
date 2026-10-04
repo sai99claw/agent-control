@@ -1037,6 +1037,39 @@ class Cost(Sandbox):
         self.cost("--from-envelope", path)
         self.assertIsNone(self.load_ticket("1")["cost"][-1]["note"])
 
+    def test_the_note_names_the_envelope_relative_to_the_repo(self):
+        """#87 A1:票檔會進 git,note 裡的信封路徑是相對 repo 根的,不是沙盒的絕對路徑。
+
+        **變異**:原因字串改回 `% path` → 這一條紅。
+        """
+        rel = os.path.join("reports", "t1", "worker-round1.log")
+        inside = self.write(rel, "not json\n")
+        outside_dir = os.path.join(self.home, "elsewhere")
+        outside = self.write("worker-round1.log", "not json\n", where=outside_dir)
+        no_usage = self.write("no-usage.json", '{"type": "result", "result": "x"}',
+                              where=outside_dir)
+        missing = os.path.join(outside_dir, "nope.json")
+        cases = ((inside, rel + " 裡沒有 JSON 信封"),
+                 (outside, os.path.join("..", "elsewhere", "worker-round1.log")
+                  + " 裡沒有 JSON 信封"),
+                 (no_usage, os.path.join("..", "elsewhere", "no-usage.json")
+                  + " 的信封沒有 usage"),
+                 (missing, "讀不到 " + os.path.join("..", "elsewhere", "nope.json")))
+        roots = {self.repo, os.path.realpath(self.repo)}
+        for index, (path, expected) in enumerate(cases):
+            with self.subTest(expected):
+                done = self.cost("--from-envelope", path)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                note = self.load_ticket("1")["cost"][index]["note"] or ""
+                if index == 0:
+                    self.assertEqual(note, expected)
+                else:
+                    self.assertTrue(note.startswith(expected), note)
+                    self.assertTrue(note.startswith("../") or note.startswith("讀不到 ../"),
+                                    note)
+                for where in roots:
+                    self.assertNotIn(where, note)
+
     def test_cost_does_not_touch_state_version_or_review(self):
         """A3:review 綁 state_version;寫成本若讓覆核過期,land 就會拒。
 

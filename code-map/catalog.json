@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "managed": [
+    "scripts/*.py",
+    "scripts/*.sh",
+    "tests/test_*.py"
+  ],
+  "topics": {
+    "apply": {
+      "summary": "收 patch:驗檔頭與寫入範圍、開分支、commit(帶票號與 sha256)、記 patch_ref",
+      "match": ["apply"],
+      "entry": "scripts/apply.sh",
+      "guard": "tests/test_apply.py"
+    },
+    "auto-fix": {
+      "summary": "回歸紅了派新 worker;第 1 輪也由它起;依票的 model/tool 起命令",
+      "match": ["auto-fix", "auto_fix"],
+      "entry": "scripts/auto-fix.sh",
+      "guard": "tests/test_auto_fix.py"
+    },
+    "gate": {
+      "summary": "閘門:對照表挑測試模組、preflight 機械格、狀態檔、索引新鮮度",
+      "match": ["gate"],
+      "entry": "scripts/gate.sh",
+      "guard": "tests/test_gate.py",
+      "docs": ["docs/WORKFLOW.md"]
+    },
+    "land": {
+      "summary": "落地:只走這一支,拒 0 commit、過期基準、越界、過期覆核",
+      "match": ["land"],
+      "entry": "scripts/land.sh",
+      "guard": "tests/test_land.py",
+      "cards": ["code-map/cards/land-sh.md"]
+    },
+    "memory": {
+      "summary": "記憶分層:note / harvest / check / consolidate / lint,上限守衛與整理票",
+      "match": ["memory"],
+      "entry": "scripts/memory.py",
+      "guard": "tests/test_memory.py",
+      "docs": ["docs/MEMORY.md"]
+    },
+    "repo-map": {
+      "summary": "這份地圖本身:catalog → index.json / INDEX.md,check 量新鮮度",
+      "match": ["repo-map", "repo_map"],
+      "entry": "scripts/repo-map.py",
+      "guard": "tests/test_repo_map_contract.py",
+      "docs": ["docs/CODE-MAP.md"]
+    },
+    "review": {
+      "summary": "閘門綠之後派覆核者,收 REVIEW 的 result 區塊",
+      "match": ["review"],
+      "entry": "scripts/review.sh",
+      "guard": "tests/test_review.py"
+    },
+    "rules": {
+      "summary": "按角色裁切的規則包(派工文前言)與 routing 下限",
+      "match": ["rules", "routing"],
+      "entry": "scripts/rules.py",
+      "guard": "tests/test_rules_delivery.py",
+      "docs": ["docs/DISPATCH-TEMPLATE.md"]
+    },
+    "ticket": {
+      "summary": "票:唯一的工作單位(create / set / cost / agent-command …)",
+      "match": ["ticket"],
+      "entry": "scripts/ticket.py",
+      "guard": "tests/test_ticket.py",
+      "docs": ["tickets/SCHEMA.md"]
+    },
+    "verify": {
+      "summary": "回歸層執行器與驗證者案例的 red / check / lint",
+      "match": ["verify"],
+      "entry": "scripts/verify-case.py",
+      "guard": "tests/test_verify_case.py"
+    }
+  }
+}

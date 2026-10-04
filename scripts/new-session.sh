@@ -260,6 +260,38 @@ else
     sh -c "python3 \"$AC/memory.py\" check --read-only" \
         || echo "new-session: (超過上限,不停工;整理票由主線開場開,$ROLE 不開)"
 fi
+# 整理票自動起兩個模型(#87 A41):只有主線開場叫,短命角色不叫 —— 同一張票被每個開場各起
+# 一組,就是同一件事派好幾次。每張 role=consolidator、Ready、沒有有效租約的票叫一次
+# consolidate-memory.sh,背景跑(整理要幾十分鐘,不擋這一頁),輸出留在 reports/。
+if [ "$ROLE" = "main" ] && [ -f "$AC/consolidate-memory.sh" ]; then
+    for cid in $(python3 - "$AC" <<'PY'
+import sys
+from datetime import datetime
+sys.path.insert(0, sys.argv[1])
+import ticket
+
+
+def live(lease):
+    if not isinstance(lease, dict) or not lease.get("until"):
+        return False
+    try:
+        return datetime.fromisoformat(str(lease["until"])) > datetime.now().astimezone()
+    except ValueError:
+        return True
+
+
+for one in ticket.load_all():
+    if one.get("role") == "consolidator" and one.get("state") == "Ready" \
+            and not live(one.get("lease")):
+        print(one["id"])
+PY
+); do
+        clog=$ROOT/reports/t$cid/consolidate-memory-$SID.log
+        mkdir -p "$(dirname "$clog")"
+        echo "new-session: 整理票 #$cid 是 Ready —— 背景起兩個模型:sh $CTL/consolidate-memory.sh $cid(log $clog)"
+        nohup sh "$AC/consolidate-memory.sh" "$cid" > "$clog" 2>&1 < /dev/null &
+    done
+fi
 
 if [ "$ROLE" = "main" ]; then
     # 終態收件匣(D-015)。**開場印一次,之後只在被通知時讀** —— 主線不輪詢 status,

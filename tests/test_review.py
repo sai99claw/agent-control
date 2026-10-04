@@ -20,6 +20,7 @@ import json
 import os
 import re
 import sys
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -402,6 +403,76 @@ class ItOnlyReviewsWhatIsReadyForIt(ReviewBase):
         self.assertNotIn("不存在", done.stderr)
         self.assertEqual((self.load_ticket("2").get("review") or {}).get("sha"),
                          self.git("rev-parse", "t2-gaps").strip())
+
+
+# #87 A14:reviewer 起一個 `setsid()` 自開 session 的孫行程(每 0.2 秒往 heartbeat 追加一行),
+# 自己睡過 `reviewer.timeout_seconds`。
+REVIEWER_GRANDCHILD = """#!/bin/sh
+python3 - "@HB@" "@PIDF@" > /dev/null 2>&1 <<'GRAND' &
+import os, sys, time
+os.setsid()
+heartbeat, pid_file = sys.argv[1:3]
+with open(pid_file + ".tmp", "w") as handle:
+    handle.write(str(os.getpid()))
+os.rename(pid_file + ".tmp", pid_file)
+while True:
+    with open(heartbeat, "a") as handle:
+        handle.write("beat\\n")
+    time.sleep(0.2)
+GRAND
+while [ ! -s "@PIDF@" ]; do sleep 0.1; done
+exec sleep 60
+"""
+
+
+class ATimedOutReviewerIsReapedWithItsTree(ReviewBase):
+    """#87 A14 reviewer 路徑:逾時收整棵子孫樹。返回後等 2 秒,heartbeat 不再長、
+    孫行程 `kill -0` 失敗。
+
+    **變異**:reviewer 逾時只 killpg 那一組 → 這一條紅。
+    """
+
+    def test_a14_the_reviewer_grandchild_in_its_own_session_is_reaped(self):
+        hb = os.path.join(self.home, "heartbeat.log")
+        pidf = os.path.join(self.home, "grandchild.pid")
+        self.set_reviewer(REVIEWER_GRANDCHILD.replace("@HB@", hb).replace("@PIDF@", pidf),
+                          timeout=3)
+        done = self.review()
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertIn("reviewer 超過 3 秒", done.stderr)
+        self.assertTrue(os.path.exists(pidf), "孫行程沒起來 —— 這一條什麼都沒驗")
+        with open(pidf, encoding="utf-8") as handle:
+            pid = int(handle.read())
+        self.addCleanup(self.reap, pid)
+        time.sleep(2)
+        before = self.beats(hb)
+        time.sleep(1)
+        self.assertEqual(self.beats(hb), before, "逾時之後 heartbeat 還在長")
+        self.assertFalse(self.alive(pid), "自開 session 的孫行程 %d 還活著" % pid)
+
+    @staticmethod
+    def beats(path):
+        if not os.path.exists(path):
+            return 0
+        with open(path, encoding="utf-8") as handle:
+            return len(handle.read().splitlines())
+
+    @staticmethod
+    def alive(pid):
+        for _ in range(20):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return False
+            time.sleep(0.1)
+        return True
+
+    @staticmethod
+    def reap(pid):
+        try:
+            os.kill(pid, 9)
+        except ProcessLookupError:
+            pass
 
 
 if __name__ == "__main__":

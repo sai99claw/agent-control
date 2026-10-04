@@ -356,6 +356,35 @@ def resolve_tree(root, spec, where, label):
     return where, sha, ""
 
 
+def main_repo_root(root):
+    """主 repo 根:`git rev-parse --git-common-dir` 的上一層(`wtbase.sh` 的 `main_root`
+    同一條)。在票的 worktree 裡它指回主 repo;不在 git 裡就是 `root`。"""
+    common = git(["rev-parse", "--git-common-dir"], root).stdout.strip()
+    if not common:
+        return root
+    return os.path.dirname(os.path.join(root, common).rstrip(os.sep))
+
+
+def portable(record, root, candidate_spec):
+    """寫進票 / 證據檔之前,把三格路徑改成相對主 repo 根(#87 A2):`candidate`、
+    `baseline.log`、`candidate_run.log`。票檔進 git,家目錄的絕對路徑不該跟著進去;
+    worktree 在 `../<repo>-wt/t<n>` 時就是 `../` 開頭。`--candidate` 給的是分支名 / sha
+    就照原字串 —— 那不是路徑。"""
+    main = os.path.realpath(main_repo_root(root))
+
+    def rel(path):
+        return os.path.relpath(os.path.realpath(path), main)
+
+    out = dict(record)
+    if not candidate_spec or os.path.isdir(candidate_spec):
+        out["candidate"] = rel(candidate_spec or root)
+    for key in ("baseline", "candidate_run"):
+        run = out.get(key)
+        if isinstance(run, dict) and run.get("log"):
+            out[key] = dict(run, log=rel(run["log"]))
+    return out
+
+
 def unmeasured(ident, why, ref, verb="check"):
     """**量不到就不要在票上留一個長得像判決的紀錄。**
 
@@ -508,7 +537,7 @@ def cmd_red(args):
             "baseline": run,
             "candidate_run": None,
         }
-        path = write_red_record(args.ticket, record, where)
+        path = write_red_record(args.ticket, portable(record, root, args.candidate), where)
         if not path:
             return 2
         sys.stdout.write("verify-case: #%s 驗紅成立(stage=red,票沒有動;綠由閘門的 check 量)\n"
@@ -571,7 +600,8 @@ def cmd_check(args):
             "baseline": baseline,
             "candidate_run": cand,
         }
-        rc = write_baseline(args.ticket, record, "ok" if ok else "紅不起來")
+        rc = write_baseline(args.ticket, portable(record, root, args.candidate),
+                            "ok" if ok else "紅不起來")
         if rc:
             return rc
 

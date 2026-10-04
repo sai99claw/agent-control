@@ -15,6 +15,7 @@
     scripts/ticket.py import <舊票目錄>           # 轉成這份 schema,缺的留空並標 legacy
     scripts/ticket.py freeze 7 --reason … --criterion …
     scripts/ticket.py cost 7 --role worker --round 1 --from-envelope <信封>  # 不動 state_version
+    scripts/ticket.py agent-command --model codex:gpt-6-astra --tool codex  # 依 model/tool 起什麼
 
 **不要手改票檔**(`tickets/README.md`):`state_version` 是遲到的回報用來認出自己
 過期的那一格,而手改不會動它。
@@ -25,6 +26,7 @@ import fnmatch
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -299,6 +301,8 @@ USAGE = {
     "cost": ("scripts/ticket.py cost <id> --role worker|verifier|reviewer|land "
              "[--round N] [--model M] [--by <腳本>] [--from-envelope <信封檔>] "
              "[--wall-seconds N]"),
+    "agent-command": ("scripts/ticket.py agent-command --model M [--tool T] "
+                      "[--base \"<worker.command>\"] [--swap-model]"),
 }
 
 EXAMPLE = {
@@ -333,6 +337,9 @@ python3 scripts/ticket.py set 7 allowed_write_paths '["scripts/land.sh", "tests/
     "cost": ("python3 scripts/ticket.py cost 7 --role worker --round 1 --model opus \\\n"
              "  --by auto-fix.sh --from-envelope reports/t7/20260923-101500-1/worker-round1.log \\\n"
              "  --wall-seconds 412"),
+    "agent-command": ("python3 scripts/ticket.py agent-command --model codex:gpt-6-astra --tool codex\n"
+                      "python3 scripts/ticket.py agent-command --model fable --tool claude-code \\\n"
+                      "  --base \"claude -p --model opus\" --swap-model"),
 }
 
 
@@ -381,6 +388,11 @@ def known_flags(verb):
                 ("--from-envelope", "claude -p --output-format json 的信封檔(或混著它的 log)",
                  False, False),
                 ("--wall-seconds", "量到的秒數;沒給才取信封 duration_ms/1000", False, False)]
+    if verb == "agent-command":
+        return [("--model", "票的 model(`codex:` 前綴 = codex)", False, True),
+                ("--tool", "票的 tool;缺 = claude-code", False, False),
+                ("--base", "非 codex 時起的命令(board/config.json 的 worker.command)", False, False),
+                ("--swap-model", "非 codex 時把 --base 裡 --model 的值換成 --model", False, False)]
     return []
 
 
@@ -1423,15 +1435,23 @@ COST_USAGE = (("tokens_in", "input_tokens"), ("tokens_out", "output_tokens"),
 COST_FLAGS = ("--role", "--round", "--model", "--by", "--from-envelope", "--wall-seconds")
 
 
+def repo_relative(path):
+    """相對主 repo 根的路徑(repo 外以 `../` 開頭)。票檔會進 git、也會被同步到別台,
+    家目錄的絕對路徑寫進去就是把這台機器的形狀帶出去(#87 A1)。"""
+    return os.path.relpath(os.path.realpath(path), os.path.realpath(root()))
+
+
 def read_envelope(path):
     """`claude -p --output-format json` 的信封。整份是一個 JSON 就用它;不是的話
     (worker 的 log 是 stdout 與 stderr 混寫的)取**最後一行**以 `{` 開頭、讀得出
-    `type=result` 的那一行。讀不到回 `(None, 原因)` —— 不猜。"""
+    `type=result` 的那一行。讀不到回 `(None, 原因)` —— 不猜。原因裡的路徑是相對
+    repo 根的,它會進票的 `note`。"""
+    shown = repo_relative(path)
     try:
         with open(path, encoding="utf-8", errors="replace") as handle:
             text = handle.read()
     except OSError as exc:
-        return None, "讀不到 %s(%s)" % (path, exc.strerror or exc)
+        return None, "讀不到 %s(%s)" % (shown, exc.strerror or exc)
     try:
         data = json.loads(text)
     except ValueError:
@@ -1448,9 +1468,9 @@ def read_envelope(path):
                 data = row
                 break
     if not isinstance(data, dict):
-        return None, "%s 裡沒有 JSON 信封" % path
+        return None, "%s 裡沒有 JSON 信封" % shown
     if not isinstance(data.get("usage"), dict):
-        return None, "%s 的信封沒有 usage" % path
+        return None, "%s 的信封沒有 usage" % shown
     return data, ""
 
 
@@ -1517,6 +1537,62 @@ def cmd_cost(argv):
                tokens_out=row["tokens_out"], wall_seconds=wall)
     sys.stdout.write("ticket: #%s cost 記一筆 role=%s round=%s tokens_out=%s wall=%s\n"
                      % (ident, row["role"], rnd, row["tokens_out"], wall))
+    return 0
+
+
+# ------------------------------------------------------------ agent-command
+
+
+CODEX_PREFIX = "codex:"
+# 派工文從 stdin 進(`-`);副本是 `git archive` 展的,沒有 `.git`,codex 預設會拒跑。
+CODEX_COMMAND = "codex exec -m %s -s workspace-write --skip-git-repo-check -"
+
+
+def agent_command(model, tool, base, swap_model=False):
+    """依票的 `model` / `tool` 決定起什麼命令(#87 A19–A21)。回 `(命令, 錯誤)`。
+
+    `codex:<id>` ⇔ `tool=codex`:兩格說的是同一件事,不一致就不派 —— 照哪一格猜都可能
+    起錯模型,而起錯的那一輪花的錢與時間是真的。其餘一律是 `base`(config 的
+    `worker.command`);`swap_model` 時把它的 `--model` 換成這一格(整理票的兩個模型)。
+    """
+    model, tool = model or "", tool or ""
+    if model.startswith(CODEX_PREFIX) != (tool == "codex"):
+        return None, ("model=%s 與 tool=%s 不一致 —— `codex:` 前綴的模型要配 tool=codex,"
+                      "tool=codex 要配 `codex:` 前綴的模型" % (model or "(空)", tool or "(空)"))
+    if tool == "codex":
+        return CODEX_COMMAND % shlex.quote(model[len(CODEX_PREFIX):]), ""
+    if not swap_model or not model:
+        return base, ""
+    parts = shlex.split(base)
+    if "--model" in parts and parts.index("--model") + 1 < len(parts):
+        parts[parts.index("--model") + 1] = model
+    else:
+        parts += ["--model", model]
+    return " ".join(shlex.quote(part) for part in parts), ""
+
+
+def cmd_agent_command(argv):
+    got, index = {}, 0
+    while index < len(argv):
+        flag = argv[index]
+        if flag == "--swap-model":
+            got[flag] = True
+            index += 1
+            continue
+        if flag in ("--model", "--tool", "--base") and index + 1 < len(argv):
+            got[flag] = argv[index + 1]
+            index += 2
+            continue
+        return unknown_flag("agent-command", flag)
+    if not got.get("--model"):
+        sys.stderr.write("ticket: agent-command 要 --model\n")
+        return 2
+    cmd, why = agent_command(got["--model"], got.get("--tool"), got.get("--base") or "",
+                             bool(got.get("--swap-model")))
+    if why:
+        sys.stderr.write("ticket: %s\n" % why)
+        return 2
+    sys.stdout.write(cmd + "\n")
     return 0
 
 
@@ -1846,7 +1922,8 @@ def main(argv):
              "set": cmd_set, "inbox": cmd_inbox, "verify": cmd_verify,
              "close": cmd_close, "import": cmd_import, "freeze": cmd_freeze,
              "round": cmd_round, "result": cmd_result,
-             "objection": cmd_objection, "cost": cmd_cost}
+             "objection": cmd_objection, "cost": cmd_cost,
+             "agent-command": cmd_agent_command}
     if verb in ("--help", "-h", "help"):
         if rest and rest[0] in table:
             return help_for(rest[0])

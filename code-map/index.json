@@ -1,0 +1,200 @@
+{
+  "catalog": "code-map/catalog.json",
+  "generated_by": "python3 scripts/repo-map.py build",
+  "managed": [
+    "scripts/apply.sh",
+    "scripts/auto-fix.sh",
+    "scripts/consolidate-memory.sh",
+    "scripts/event.py",
+    "scripts/gate.example.sh",
+    "scripts/gate.sh",
+    "scripts/guard-main.sh",
+    "scripts/heartbeat.sh",
+    "scripts/inbox.py",
+    "scripts/land.sh",
+    "scripts/memory.py",
+    "scripts/metrics.py",
+    "scripts/new-session.sh",
+    "scripts/repo-map.py",
+    "scripts/review.sh",
+    "scripts/rules.py",
+    "scripts/session-hook.sh",
+    "scripts/status.py",
+    "scripts/sync-to-project.sh",
+    "scripts/ticket.py",
+    "scripts/verify-case.py",
+    "scripts/verify.py",
+    "scripts/wtbase.sh",
+    "tests/test_apply.py",
+    "tests/test_auto_fix.py",
+    "tests/test_auto_fix_codex.py",
+    "tests/test_board.py",
+    "tests/test_check_stale.py",
+    "tests/test_consolidate_memory.py",
+    "tests/test_dispatch_template.py",
+    "tests/test_event.py",
+    "tests/test_gate.py",
+    "tests/test_guard_main.py",
+    "tests/test_heartbeat.py",
+    "tests/test_inbox.py",
+    "tests/test_land.py",
+    "tests/test_memory.py",
+    "tests/test_memory_layer_policy.py",
+    "tests/test_memory_lifecycle.py",
+    "tests/test_memory_note_names.py",
+    "tests/test_metrics.py",
+    "tests/test_new_session.py",
+    "tests/test_no_project_names.py",
+    "tests/test_repo_map_contract.py",
+    "tests/test_review.py",
+    "tests/test_routing_cards.py",
+    "tests/test_rules.py",
+    "tests/test_rules_delivery.py",
+    "tests/test_session_hook.py",
+    "tests/test_status.py",
+    "tests/test_status_67.py",
+    "tests/test_sync_to_project.py",
+    "tests/test_templates.py",
+    "tests/test_ticket.py",
+    "tests/test_ticket_65.py",
+    "tests/test_verify_case.py",
+    "tests/test_verify_runner.py"
+  ],
+  "topics": {
+    "apply": {
+      "cards": [],
+      "docs": [],
+      "entry": "scripts/apply.sh",
+      "guard": "tests/test_apply.py",
+      "sources": [
+        "scripts/apply.sh",
+        "tests/test_apply.py"
+      ],
+      "summary": "收 patch:驗檔頭與寫入範圍、開分支、commit(帶票號與 sha256)、記 patch_ref"
+    },
+    "auto-fix": {
+      "cards": [],
+      "docs": [],
+      "entry": "scripts/auto-fix.sh",
+      "guard": "tests/test_auto_fix.py",
+      "sources": [
+        "scripts/auto-fix.sh",
+        "tests/test_auto_fix.py",
+        "tests/test_auto_fix_codex.py"
+      ],
+      "summary": "回歸紅了派新 worker;第 1 輪也由它起;依票的 model/tool 起命令"
+    },
+    "gate": {
+      "cards": [],
+      "docs": [
+        "docs/WORKFLOW.md"
+      ],
+      "entry": "scripts/gate.sh",
+      "guard": "tests/test_gate.py",
+      "sources": [
+        "scripts/gate.example.sh",
+        "scripts/gate.sh",
+        "tests/test_gate.py"
+      ],
+      "summary": "閘門:對照表挑測試模組、preflight 機械格、狀態檔、索引新鮮度"
+    },
+    "land": {
+      "cards": [
+        "code-map/cards/land-sh.md"
+      ],
+      "docs": [],
+      "entry": "scripts/land.sh",
+      "guard": "tests/test_land.py",
+      "sources": [
+        "scripts/land.sh",
+        "tests/test_land.py"
+      ],
+      "summary": "落地:只走這一支,拒 0 commit、過期基準、越界、過期覆核"
+    },
+    "memory": {
+      "cards": [],
+      "docs": [
+        "docs/MEMORY.md"
+      ],
+      "entry": "scripts/memory.py",
+      "guard": "tests/test_memory.py",
+      "sources": [
+        "scripts/consolidate-memory.sh",
+        "scripts/memory.py",
+        "tests/test_consolidate_memory.py",
+        "tests/test_memory.py",
+        "tests/test_memory_layer_policy.py",
+        "tests/test_memory_lifecycle.py",
+        "tests/test_memory_note_names.py"
+      ],
+      "summary": "記憶分層:note / harvest / check / consolidate / lint,上限守衛與整理票"
+    },
+    "repo-map": {
+      "cards": [],
+      "docs": [
+        "docs/CODE-MAP.md"
+      ],
+      "entry": "scripts/repo-map.py",
+      "guard": "tests/test_repo_map_contract.py",
+      "sources": [
+        "scripts/repo-map.py",
+        "tests/test_repo_map_contract.py"
+      ],
+      "summary": "這份地圖本身:catalog → index.json / INDEX.md,check 量新鮮度"
+    },
+    "review": {
+      "cards": [],
+      "docs": [],
+      "entry": "scripts/review.sh",
+      "guard": "tests/test_review.py",
+      "sources": [
+        "scripts/review.sh",
+        "tests/test_review.py"
+      ],
+      "summary": "閘門綠之後派覆核者,收 REVIEW 的 result 區塊"
+    },
+    "rules": {
+      "cards": [],
+      "docs": [
+        "docs/DISPATCH-TEMPLATE.md"
+      ],
+      "entry": "scripts/rules.py",
+      "guard": "tests/test_rules_delivery.py",
+      "sources": [
+        "scripts/rules.py",
+        "tests/test_routing_cards.py",
+        "tests/test_rules.py",
+        "tests/test_rules_delivery.py"
+      ],
+      "summary": "按角色裁切的規則包(派工文前言)與 routing 下限"
+    },
+    "ticket": {
+      "cards": [],
+      "docs": [
+        "tickets/SCHEMA.md"
+      ],
+      "entry": "scripts/ticket.py",
+      "guard": "tests/test_ticket.py",
+      "sources": [
+        "scripts/ticket.py",
+        "tests/test_ticket.py",
+        "tests/test_ticket_65.py"
+      ],
+      "summary": "票:唯一的工作單位(create / set / cost / agent-command …)"
+    },
+    "verify": {
+      "cards": [],
+      "docs": [],
+      "entry": "scripts/verify-case.py",
+      "guard": "tests/test_verify_case.py",
+      "sources": [
+        "scripts/verify-case.py",
+        "scripts/verify.py",
+        "tests/test_verify_case.py",
+        "tests/test_verify_runner.py"
+      ],
+      "summary": "回歸層執行器與驗證者案例的 red / check / lint"
+    }
+  },
+  "version": 1
+}

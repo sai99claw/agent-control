@@ -571,7 +571,8 @@ class T(unittest.TestCase):
 class TheGatePicksThisGuard(Sandbox):
     """驗收 6 的一半:閘門的對照表動到這幾支時選得到這一組(替身模組只記名字)。"""
 
-    MODULES = ("test_rules_delivery", "test_rules", "test_auto_fix", "test_review",
+    MODULES = ("test_rules_delivery", "test_rules", "test_auto_fix", "test_auto_fix_codex",
+               "test_review",
                "test_new_session", "test_templates", "test_dispatch_template",
                "test_no_project_names")
 

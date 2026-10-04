@@ -214,6 +214,26 @@ class A3OneConsolidationTicket(Lifecycle):
         done = self.memory("check")
         self.assertEqual(len(self.new_tickets(before)), 1, done.stdout + done.stderr)
 
+    def test_a3_any_open_ticket_covering_the_card_blocks_a_new_one(self):
+        """#87 A38:開著、allowed_write_paths(glob)蓋住這份檔的**任何 role** 的票都擋;
+        整理票的字樣照舊,別的 role 點名票號與 role;那張票 Cancelled 後再跑 → 開 1 張。
+
+        **變異 M15**:判定改回只認 role=consolidator → 第一段開了新票,紅。
+        """
+        self.make_ticket(7, state="Running", role="worker",
+                         allowed_write_paths=["memory/role/*.md", "scripts/x.py"])
+        before = self.ticket_ids()
+        done = self.memory("check")
+        self.assertIn("已經有一張開著的票 #7(role=worker)覆蓋 memory/role/opener.md",
+                      done.stdout, done.stdout + done.stderr)
+        self.assertNotIn(ALREADY % 7, done.stdout)
+        self.assertEqual(self.ticket_ids(), before, "已有覆蓋的票還是開了新票")
+
+        self.make_ticket(7, state="Cancelled", role="worker",
+                         allowed_write_paths=["memory/role/*.md", "scripts/x.py"])
+        done = self.memory("check")
+        self.assertEqual(len(self.new_tickets(before)), 1, done.stdout + done.stderr)
+
     def test_a3_two_checks_at_once_open_exactly_one(self):
         """A3 無覆蓋票時兩個 check 同時跑 → tickets/ 恰好多 1 張。"""
         before = self.ticket_ids()

@@ -40,6 +40,7 @@
 #   0 綠了(覆核交給 review.sh)   1 三輪耗盡仍紅   2 用法 / 沒有狀態檔而票不是 Ready
 #   3 worker 提反駁       4 failures 沒有歸因   5 worker 沒交出可用的 patch
 #   6 規則包產不出來(#74):worker / 驗證者一個都沒起;缺項在 rules.py 送的 decision 頁
+#   7 codex 額度用完(#87 A23):票已改派 opus / claude-code、回 Ready;這一次不重派
 set -u
 # `AC_ROOT` 優先:被 `gate.sh` 的 auto-fix 叫到時,這支檔案住在**副本**裡,
 # 而票、reports 與收件匣住在主 repo。照 `$0` 算根會把它們寫進一個等一下會被
@@ -129,7 +130,10 @@ print(cmd)
 PY
 }
 
-WORKER_CMD=$(with_envelope "$(cfg worker.command "claude -p --model opus")")
+# config 的 worker.command(claude 那一句)。驗證者沒設 verifier.command 時跟它同一支 ——
+# 票是 codex 的時候,codex 只換 worker 那一支(`WORKER_CMD`,下面依票決定)。
+BASE_WORKER_CMD=$(with_envelope "$(cfg worker.command "claude -p --model opus")")
+WORKER_CMD=$BASE_WORKER_CMD
 RERUN_CMD=$(cfg gate.rerun_cmd "")
 TF=$TDIR/$ID.json
 # 主 repo 根與副本根 **只有一種定義**(#38,#46,D-018):`scripts/wtbase.sh`。
@@ -174,6 +178,29 @@ PY
 )
 WORKER_TIMEOUT=${TIMEOUT_LINE%% *}
 TIMEOUT_SRC=${TIMEOUT_LINE#* }
+# 票的 model / tool 決定 worker 起什麼(#87 A19–A21):`codex:<id>` ⇔ `tool=codex` 走
+# `codex exec`,其餘照 config 的 worker.command。兩格不一致就在動票之前停 —— 照哪一格猜
+# 都可能起錯模型。命令只由 `ticket.py agent-command` 決定(consolidate-memory.sh 同一支)。
+eval "$(python3 - "$TF" <<'PY'
+import json, shlex, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        ticket = json.load(handle)
+except (OSError, ValueError):
+    ticket = {}
+print("T_MODEL=%s" % shlex.quote(str(ticket.get("model") or "")))
+print("T_TOOL=%s" % shlex.quote(str(ticket.get("tool") or "")))
+PY
+)"
+IS_CODEX=""
+case "$T_MODEL" in codex:*) IS_CODEX=1 ;; esac
+[ "$T_TOOL" = codex ] && IS_CODEX=1
+if [ -n "$IS_CODEX" ]; then
+    WORKER_CMD=$(python3 "$AC/ticket.py" agent-command --model "$T_MODEL" --tool "$T_TOOL") || {
+        echo "auto-fix: #$ID 票的 model=$T_MODEL 與 tool=$T_TOOL 對不起來 —— 不派、票不動" >&2
+        exit 2
+    }
+fi
 # 副本/worktree 的根:環境變數 > board/config.json 的 `worktree_dir` > 預設 `../<主 repo>-wt`;
 # 相對路徑一律以**主 repo 根**解析(#38)。以前用 `$ROOT` 拼:在票 worktree 裡跑時 `$ROOT`
 # 是 worktree,副本開到 `x-wt/x-wt/` 底下(9/23 實際開在 `agent-control-wt/agent-control-wt/`)。
@@ -245,7 +272,8 @@ shed_copies() {   # $1 = 副本根(fix-t<n>/round<r> 或 verify-t<n>/round<r>)
     # (2026-09-16 某個下游專案的副本 14 GB 塞滿磁碟,整台機器 disk I/O error)。
     [ -n "${1:-}" ] || return 0
     [ -d "$1/work" ] || [ -d "$1/base" ] || return 0
-    rm -rf "$1/work" "$1/base"
+    # `control/` 是起 agent 時開的拋棄式控制根(`run_agent`):agent 的副作用在那裡,一起收。
+    rm -rf "$1/work" "$1/base" "$1/control"
     echo "auto-fix: 收掉副本 $1/{work,base}(patch 與 EVIDENCE 留著)"
 }
 
@@ -364,6 +392,28 @@ rules_pack() {   # $1 = 派工文寫到哪(失敗就刪掉,不留半份)  $2 = �
     return 1
 }
 
+# 派工文的「只准跑的測試」段(#87 A18):worker 與驗證者兩份都帶,逐字抄票的 `test_plan`。
+# worker 的時限與回歸切開計(使用者 2026-10-03):agent 只跑票上列的測試,回歸是閘門的事,
+# 閘門紅由 auto-fix 下一輪處理 —— 不寫在派工文裡,agent 就會自己跑全套把時限吃掉。
+only_tests_section() {
+    python3 - "$TF" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        plan = json.load(handle).get("test_plan")
+except (OSError, ValueError):
+    plan = None
+print("")
+print("## 只准跑的測試")
+if isinstance(plan, str) and plan.strip():
+    print(plan)
+    print("不跑全套(unittest discover 整組、gate.sh --full)、不跑 verify.py 全部回歸 —— "
+          "回歸是閘門的事,閘門紅由 auto-fix 下一輪處理")
+else:
+    print("票沒有 test_plan:只跑你改到的 tests/ 檔,不跑全套")
+PY
+}
+
 first_round_packet() {   # $1 = 派工文寫到哪  $2 = 模型
     # **第 1 輪的派工文也由工具產**(#29 A3,G3)。以前第 1 輪是主線手寫、只有
     # `docs/DISPATCH-TEMPLATE.md` §8 的散文可抄,第 2 輪起才有 `dispatch-round<r>.md`
@@ -432,6 +482,7 @@ print("## 票寫錯 / 需要裁示怎麼說")
 print("在 EVIDENCE 裡寫**一行**:`OBJECTION: <ticket-wrong|test_defect|blocking> <一句話>`。")
 print("**不准**放寬既有斷言、不准把期望值改成程式現在印的東西(那是假綠家族)。")
 PY
+        only_tests_section
     } > "$1"
 }
 
@@ -477,6 +528,7 @@ PY
             echo "你是在 worker 第 1 輪交出 patch 之後才起的:介面以分支上的實作為準(worker 的 patch 在 \`$5\`,讀它、不要套進你的 work/)。"
             echo "票面寫法與實作衝突時照實作、在 EVIDENCE 記一行(票面怎麼寫、實作怎麼做、你照哪個寫了案例)。"
         fi
+        only_tests_section
     } > "$1"
 }
 
@@ -630,10 +682,16 @@ if [ "$S_ROUND" -ge "$S_LIMIT" ]; then
     exit 1
 fi
 
+# codex 不在 PATH(#87 A22):起 worker 之前停,票留著原狀態、不發 agent.start、不記 cost。
+if [ -n "$IS_CODEX" ] && [ -z "$DRY" ] && ! command -v codex >/dev/null 2>&1; then
+    echo "auto-fix: #$ID 票 tool=codex(model=$T_MODEL),但 codex 不在 PATH —— 不起 worker;裝好 codex 或把票改成 claude-code 再跑" >&2
+    exit 2
+fi
+
 # --------------------------------------------------------------- 一輪的動作
 MODEL=$(cfg routing.implement opus)
 VERIFIER_MODEL=$(cfg routing.verify "$MODEL")
-VERIFIER_CMD=$(with_envelope "$(cfg verifier.command "$WORKER_CMD")")
+VERIFIER_CMD=$(with_envelope "$(cfg verifier.command "$BASE_WORKER_CMD")")
 # `MODEL`(routing.implement)只是路由標籤;`agent.start`/`agent.done` 的 model 欄要記
 # **實際起的那個** —— 也就是 `worker.command` 裡 `--model`後面那個值。兩者不一致時
 # 舊版只印 routing 那個標籤,events.jsonl 就記著一個從沒跑過的模型(#21)。
@@ -652,7 +710,11 @@ for i, tok in enumerate(parts):
 print(model)
 PY
 )
-if [ "$WORKER_MODEL" != "$MODEL" ]; then
+if [ -n "$IS_CODEX" ]; then
+    # codex 那一支起的就是票上那個模型;規則包也照它挑模型卡。
+    MODEL=$T_MODEL
+    WORKER_MODEL=$T_MODEL
+elif [ "$WORKER_MODEL" != "$MODEL" ]; then
     echo "auto-fix: 警告:routing.implement=$MODEL,但 worker.command 實際起的是 $WORKER_MODEL —— agent.start/done/failed 的 model 記後者"
 fi
 # 票的分支名**只有一個來源:票的 `branch` 欄**(#53,D-018;`apply.sh` 開分支時填)。
@@ -670,25 +732,158 @@ PY
 }
 WT=$WTBASE/$(ticket_branch)
 
-run_verifier() {   # $1 = 派工文  $2 = 副本根  $3 = 第幾輪  $4 = log;印出 rc
-    python3 - "$VERIFIER_CMD" "$1" "$2" "$WORKER_TIMEOUT" "$ID" "$3" "$4" <<'PY'
-import os, subprocess, sys
-cmd, dispatch, cwd, timeout, ident, r, log_path = sys.argv[1:8]
-env = dict(os.environ)
-env.update({"AC_DISPATCH": dispatch, "AC_TICKET": ident, "AC_ROUND": r,
-            "AC_WORK": cwd, "AC_ROLE": "verifier"})
+# 起一個 agent(worker / 驗證者)**只有這一條路**(#87 A9–A14)。
+#
+# ## 隔離:agent 寫不進真看板
+# 以前 agent 繼承 auto-fix 的環境 —— `AC_ROOT` / `AC_CONTROL_DIR` 指著主 repo。它在副本裡跑
+# `memory.py check`、`ticket.py create`、`rules.py pack`,事件、票、收件匣就寫進主 repo 的
+# 真看板,而且不報錯。現在每一次起 agent 都在 `<副本根>/control` 開一顆**拋棄式控制根**
+# (config + 這張票 + 派工文的複本),`AC_ROOT` 指它;`AC_CONTROL_DIR`、`AC_TICKETS_DIR` 與
+# 任何值落在主 repo 底下的 `AC_*` 一律不帶。控制根在 `work/` 旁邊、不在裡面 —— 副作用
+# 不會變成 patch 的一部分。agent 在副本跑 `gate.sh --branch --ticket <n>` 讀得到票(那份
+# 複本),狀態檔與收件匣落在控制根。auto-fix 自己起的閘門照舊帶主 repo 的 `AC_ROOT`。
+#
+# ## 逾時收整棵樹
+# 自己一個行程群組不夠:agent 的後代可以 `setsid()` 自開 session,`killpg` 碰不到它。
+# 所以逾時那一刻先拍下整棵子孫樹(`ps` 的 pid/ppid),群組與樹上每一個都送 TERM,
+# 寬限後再全部 KILL —— 先死的父行程不代表後代也走了。
+run_agent() {   # $1 = 命令 $2 = 派工文 $3 = 副本根 $4 = 角色 $5 = 第幾輪 $6 = log $7 = 1:tee+pid 檔;印出 rc
+    python3 - "$1" "$2" "$3" "$WORKER_TIMEOUT" "$ID" "$5" "$6" "$4" "${7:-}" \
+        "$ROOT" "$MAINROOT" "$TF" <<'PY'
+import json, os, shutil, signal, subprocess, sys, threading, time
+(cmd, dispatch, cwd, timeout, ident, r, log_path, role, tee_flag,
+ root, mainroot, ticket_file) = sys.argv[1:13]
+LABEL = {"worker": "worker ", "verifier": "驗證者"}.get(role, role + " ")
+# 指著控制面的三格一律不帶;其餘 `AC_*` 只要值是主 repo 根或它底下的絕對路徑也不帶。
+CONTROL_KEYS = ("AC_ROOT", "AC_CONTROL_DIR", "AC_TICKETS_DIR")
+RELATIVE_DEFAULTS = (("tickets_dir", "tickets"), ("events_file", "board/events.jsonl"),
+                     ("answers_file", "board/answers.jsonl"), ("reports_dir", "reports"))
+
+
+def control_root():
+    where = os.path.join(cwd, "control")
+    shutil.rmtree(where, ignore_errors=True)
+    try:
+        with open(os.path.join(root, "board", "config.json"), encoding="utf-8") as handle:
+            conf = json.load(handle)
+    except (OSError, ValueError):
+        conf = {}
+    for key, default in RELATIVE_DEFAULTS:
+        if os.path.isabs(str(conf.get(key) or "")):
+            conf[key] = default
+    os.makedirs(os.path.join(where, "board"))
+    with open(os.path.join(where, "board", "config.json"), "w", encoding="utf-8") as handle:
+        json.dump(conf, handle, ensure_ascii=False, indent=2)
+    tickets = os.path.join(where, conf.get("tickets_dir") or "tickets")
+    os.makedirs(tickets, exist_ok=True)
+    shutil.copy(ticket_file, os.path.join(tickets, "%s.json" % ident))
+    copy = os.path.join(where, os.path.basename(dispatch))
+    shutil.copy(dispatch, copy)
+    return where, copy
+
+
+def agent_env(where, copy):
+    mains = [os.path.realpath(path) for path in (root, mainroot) if path]
+
+    def under_main(value):
+        if not os.path.isabs(value):
+            return False
+        real = os.path.realpath(value)
+        return any(real == main or real.startswith(main + os.sep) for main in mains)
+
+    env = {key: value for key, value in os.environ.items()
+           if not (key.startswith("AC_") and (key in CONTROL_KEYS or under_main(value)))}
+    env.update({"AC_ROOT": where, "AC_DISPATCH": copy, "AC_TICKET": ident, "AC_ROUND": r,
+                "AC_WORK": cwd, "AC_ROLE": role, "PYTHONUNBUFFERED": "1"})
+    return env
+
+
+def descendants(top):
+    done = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True)
+    kids = {}
+    for line in done.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            kids.setdefault(int(parts[1]), []).append(int(parts[0]))
+    found, stack = [], [top]
+    while stack:
+        for child in kids.get(stack.pop(), []):
+            if child not in found:
+                found.append(child)
+                stack.append(child)
+    return found
+
+
+def kill_tree(proc):
+    tree = descendants(proc.pid)
+    for sig, grace in ((signal.SIGTERM, 5), (signal.SIGKILL, None)):
+        tree += [pid for pid in descendants(proc.pid) if pid not in tree]
+        try:
+            os.killpg(proc.pid, sig)
+        except OSError:
+            pass
+        for pid in tree:
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                pass
+        try:
+            proc.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            pass
+        if grace:
+            time.sleep(0.2)
+
+
+def tee(stream, log):
+    # **邊跑邊寫**(#57):以前 log 是 worker 的 stdout 本身,被砍的那一刻還在它緩衝裡的
+    # 全部丟掉 —— 逾時的那一輪偏偏是最需要看它做到哪的那一輪。一行一 flush,並抄一份到
+    # stderr 給叫這一支的人即時看(stdout 是 rc 那一行)。
+    for chunk in iter(stream.readline, b""):
+        log.write(chunk)
+        log.flush()
+        if tee_flag:
+            sys.stderr.buffer.write(chunk)
+            sys.stderr.buffer.flush()
+
+
+# `worker.pid` 住在副本根(#46):下一輪收前幾輪副本之前先問它還活著沒有。回來了就刪掉,
+# 留著的那一份只會是「auto-fix 被砍了、worker 還在跑」的那一種。
+pid_path = os.path.join(cwd, "worker.pid") if tee_flag else ""
 try:
-    with open(dispatch, encoding="utf-8") as handle, open(log_path, "w", encoding="utf-8") as log:
-        done = subprocess.run(cmd, shell=True, cwd=cwd, env=env, stdin=handle,
-                              stdout=log, stderr=subprocess.STDOUT, timeout=float(timeout))
-    rc = done.returncode
+    where, copy = control_root()
+    env = agent_env(where, copy)
+    with open(dispatch, encoding="utf-8") as handle, open(log_path, "wb") as log:
+        # 自己一個行程群組:只砍 `sh -c` 那一層的話,孫行程還拿著 pipe,tee 等不到 EOF。
+        proc = subprocess.Popen(cmd, shell=True, cwd=cwd, env=env, stdin=handle,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                start_new_session=True)
+        reader = threading.Thread(target=tee, args=(proc.stdout, log), daemon=True)
+        reader.start()
+        if pid_path:
+            with open(pid_path, "w", encoding="utf-8") as pid_file:
+                pid_file.write("%d\n" % proc.pid)
+        try:
+            rc = proc.wait(timeout=float(timeout))
+        except subprocess.TimeoutExpired:
+            kill_tree(proc)
+            raise
+        finally:
+            reader.join(timeout=10)
+            if pid_path:
+                os.remove(pid_path)
 except subprocess.TimeoutExpired:
-    sys.stderr.write("auto-fix: 驗證者超過 %s 秒還沒回來 —— 當它沒交\n" % timeout)
+    sys.stderr.write("auto-fix: %s超過 %s 秒還沒回來 —— 當它沒交\n" % (LABEL, timeout))
     rc = 124
-except OSError:
+except OSError as exc:
+    sys.stderr.write("auto-fix: %s起不來 —— %s\n" % (LABEL, exc))
     rc = 127
 print(rc)
 PY
+}
+
+run_verifier() {   # $1 = 派工文  $2 = 副本根  $3 = 第幾輪  $4 = log;印出 rc
+    run_agent "$VERIFIER_CMD" "$1" "$2" verifier "$3" "$4"
 }
 
 verifier_done() {   # $1 = rc  $2 = 第幾輪  $3 = log  $4 = 起跑秒;事件 + cost
@@ -955,6 +1150,7 @@ print("看到這一行,這支腳本會把它記成票的 `objections[]`、把票
       "**不會**再派下一輪。")
 print("**不准**放寬既有斷言、不准把期望值改成程式現在印的東西(那是假綠家族)。")
 PY
+            only_tests_section
         } > "$DISPATCH"
     fi
     echo "auto-fix: 派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$DISPATCH" "$ROOT")"
@@ -984,6 +1180,7 @@ PY
     fi
 
     if [ -n "$DRY" ]; then
+        echo "auto-fix: worker 命令 —— $WORKER_CMD"
         echo "auto-fix: --dry-run —— 不起 worker 也不起驗證者。派工文在上面那一份。"
         ROUND_RC=0
         return 1
@@ -1004,67 +1201,7 @@ PY
     ev agent.start --ticket "$ID" --model "$WORKER_MODEL" \
         --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix
     WSTART=$(date +%s)
-    WRC=$(python3 - "$WORKER_CMD" "$DISPATCH" "$FIX" "$WORKER_TIMEOUT" "$ID" "$r" "$WORKER_LOG" <<'PY'
-import signal, subprocess, sys, threading
-cmd, dispatch, cwd, timeout, ident, r, log_path = sys.argv[1:8]
-env_extra = {"AC_DISPATCH": dispatch, "AC_TICKET": ident, "AC_ROUND": r,
-             "AC_WORK": cwd, "AC_ROLE": "worker", "PYTHONUNBUFFERED": "1"}
-import os
-env = dict(os.environ)
-env.update(env_extra)
-# `worker.pid` 住在副本根(#46):下一輪收前幾輪副本之前先問它還活著沒有。回來了就刪掉,
-# 留著的那一份只會是「auto-fix 被砍了、worker 還在跑」的那一種。
-pid_path = os.path.join(cwd, "worker.pid")
-
-
-def tee(stream, log):
-    # **邊跑邊寫**(#57):以前 log 是 worker 的 stdout 本身,被砍的那一刻還在它緩衝裡的
-    # 全部丟掉 —— 逾時的那一輪偏偏是最需要看它做到哪的那一輪。一行一 flush,並抄一份到
-    # stderr 給叫這一支的人即時看(stdout 是 rc 那一行)。
-    for chunk in iter(stream.readline, b""):
-        log.write(chunk)
-        log.flush()
-        sys.stderr.buffer.write(chunk)
-        sys.stderr.buffer.flush()
-
-
-try:
-    with open(dispatch, encoding="utf-8") as handle, open(log_path, "wb") as log:
-        # 自己一個行程群組:逾時要砍的是 worker **整棵**,不是 `sh -c` 那一層 ——
-        # 只砍那一層的話,孫行程還拿著 pipe,tee 那條線永遠等不到 EOF。
-        proc = subprocess.Popen(cmd, shell=True, cwd=cwd, env=env, stdin=handle,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                start_new_session=True)
-        reader = threading.Thread(target=tee, args=(proc.stdout, log), daemon=True)
-        reader.start()
-        with open(pid_path, "w", encoding="utf-8") as pid_file:
-            pid_file.write("%d\n" % proc.pid)
-        try:
-            rc = proc.wait(timeout=float(timeout))
-        except subprocess.TimeoutExpired:
-            # 先 TERM 給它收尾的機會,再 KILL 整個群組(先死的 `sh` 不代表孫行程也走了)。
-            for sig, grace in ((signal.SIGTERM, 5), (signal.SIGKILL, None)):
-                try:
-                    os.killpg(proc.pid, sig)
-                except OSError:
-                    pass
-                try:
-                    proc.wait(timeout=grace)
-                except subprocess.TimeoutExpired:
-                    pass
-            raise
-        finally:
-            reader.join(timeout=10)
-            os.remove(pid_path)
-except subprocess.TimeoutExpired:
-    sys.stderr.write("auto-fix: worker 超過 %s 秒還沒回來 —— 當它沒交\n" % timeout)
-    rc = 124
-except OSError as exc:
-    sys.stderr.write("auto-fix: worker 起不來 —— %s\n" % exc)
-    rc = 127
-print(rc)
-PY
-)
+    WRC=$(run_agent "$WORKER_CMD" "$DISPATCH" "$FIX" worker "$r" "$WORKER_LOG" 1)
     if [ "$WRC" -eq 0 ]; then
         ev agent.done --ticket "$ID" --model "$WORKER_MODEL" \
             --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix
@@ -1076,6 +1213,26 @@ PY
     [ "$WRC" -eq 0 ] || echo "auto-fix: worker 自己回非零 —— 還是看它交了什麼,不看它說什麼"
     # worker 回來了才收驗證者(#51 C2)—— 它比 worker 早回來的話這一手不用等。
     [ -z "$VPID" ] || wait_verifier
+
+    # codex 額度 / 429(#87 A23):不是這張票的錯,是這個模型此刻不能用。票改派 opus /
+    # claude-code、回 Ready,送一頁;這一次不自動重派(再起一個 worker 的錢要人點頭)。
+    if [ -n "$IS_CODEX" ] && [ "$WRC" -ne 0 ] \
+            && grep -qiE '429|rate limit|usage limit' "$WORKER_LOG" 2>/dev/null; then
+        echo "auto-fix: #$ID 的 codex worker($T_MODEL)撞到額度 / 429 —— 改派 opus(原 model $T_MODEL),票回 Ready"
+        python3 "$AC/ticket.py" set "$ID" model '"opus"' >/dev/null 2>&1 \
+            || echo "auto-fix: 票的 model 改不動" >&2
+        python3 "$AC/ticket.py" set "$ID" tool '"claude-code"' >/dev/null 2>&1 \
+            || echo "auto-fix: 票的 tool 改不動" >&2
+        python3 "$AC/ticket.py" set "$ID" state Ready >/dev/null 2>&1 \
+            || echo "auto-fix: 票狀態改不動(Ready)" >&2
+        attempt_failed codex-quota
+        shed_copies "$FIX"
+        post "codex 額度用完,已改 opus" \
+             "#$ID codex 額度用完,已改 opus,重跑 auto-fix:sh scripts/auto-fix.sh $ID(原 model $T_MODEL)" \
+             "$WORKER_LOG"
+        ROUND_RC=7
+        return 1
+    fi
 
     collect_from_copy "$FIX" "patch-round$r.diff" "EVIDENCE-round$r.md"
     PATCH_OUT=$FIX/patch-round$r.diff

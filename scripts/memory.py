@@ -5,6 +5,7 @@
     scripts/memory.py check-stale --read-only [--file <主檔或 inbox>]   # 逐條分類來源
     scripts/memory.py harvest EVIDENCE.md      # 收割「記憶」段的 note 指令
     scripts/memory.py snapshot memory/model/opus.md   # 討論檔頭要抄的兩行
+    scripts/memory.py lint [--file <記憶檔>]… [--json]   # 分層 lint(唯讀):錯層內容逐條點名
     scripts/memory.py consolidate memory/model/opus.md --candidate <新版> \
         --discussion discussions/2026-09-12-memory-opus-fable.md \
         --discussion discussions/2026-09-12-memory-opus-opus.md \
@@ -49,6 +50,7 @@ import errno
 import glob as globmod
 import hashlib
 import io
+import json
 import os
 import re
 import shlex
@@ -94,6 +96,7 @@ USAGE = {
     "snapshot": "scripts/memory.py snapshot <記憶檔>             # 印 source_lines / source_sha256",
     "note": "scripts/memory.py note <model|role|project> <名> \"<一行>\" [--ticket N] [--by <role>@<model>]",
     "harvest": "scripts/memory.py harvest <EVIDENCE.md>",
+    "lint": "scripts/memory.py lint [--file <記憶檔>]… [--json]   # 唯讀;空掃描不算過",
     "consolidate": ("scripts/memory.py consolidate <記憶檔> --candidate <檔> --discussion <A> "
                     "--discussion <B> [--new-cap N --reason …] [--by …]"),
 }
@@ -102,6 +105,7 @@ EXAMPLE = {
     "check": "python3 scripts/memory.py check",
     "check-stale": "python3 scripts/memory.py check-stale --read-only --file memory/role/worker.md",
     "snapshot": "python3 scripts/memory.py snapshot memory/model/opus.md",
+    "lint": "python3 scripts/memory.py lint --file memory/role/implementer.md --json",
     "note": ('python3 scripts/memory.py note role implementer '
              '"變異後先確認替換真的生效" --ticket 17 --by worker@opus'),
     "consolidate": ('python3 scripts/memory.py consolidate memory/model/opus.md \\\n'
@@ -270,6 +274,220 @@ def already_noted(path, text, tag):
     return False
 
 
+# ------------------------------------------------------------------- lint
+#
+# 記憶分層(#87 A33–A37,原 #79;裁示原話 Q2 / Q3):角色與模型記憶只留通用原則與自身反思,
+# 專案記憶留設計理由與不變條件;具體的路徑、行號、呼叫、旗標、commit 指紋去 repo map /
+# reference / 票。這是**可測的語法近似**,不宣稱判斷得了所有語意錯層 —— 抽象過的專案限定
+# 說法仍要覆核者看。rule ID 是穩定的介面(note / consolidate / 閘門共用這一份判斷)。
+#
+# 誤判的例外寫在**同一行**、只豁免一條規則的一個逐字值,要有理由與存在的裁示引用:
+#   <!-- memory-allow rule=path value="docs/ROLES.md" reason="navigation-only" ref="D-013" -->
+# 沒有整檔、萬用字元的豁免;例外全部列在輸出裡,覆核者看得到。
+
+LINT_RULES = ("path", "line", "call", "flag", "sha")
+# 專案記憶可以引用模組 / 設計文件的路徑;其餘四條各層都擋。
+LAYER_ALLOWS = {"project": ("path",)}
+LINT_PATTERNS = {
+    "path": re.compile(r"(?:[\w.-]+/)*[\w.-]+\.(?:py|sh|js|ts|tsx|jsx|json|ya?ml|toml|sql"
+                       r"|md|html|css)\b", re.ASCII),
+    # 前一個字是數字就是時間(10:30),不是行號。
+    "line": re.compile(r"(?<![\d\s:]):\d+\b|#L\d+\b|\bline \d+\b", re.ASCII | re.IGNORECASE),
+    "call": re.compile(r"\b[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\s*\([^()\n]*\)", re.ASCII),
+    "flag": re.compile(r"(?<![\w-])--[A-Za-z][\w-]*", re.ASCII),
+    "sha": re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,64}(?![0-9A-Za-z])", re.ASCII),
+}
+CODE_SPAN = re.compile(r"`([^`\n]+)`")
+SHORT_FLAG = re.compile(r"(?:^|(?<=\s))-[A-Za-z][A-Za-z0-9]*\b", re.ASCII)
+LINT_DEST = {
+    "path": "專案記憶(memory/project/)只寫設計理由;定位交給 repo map(repo-map.py query <主題>)",
+    "line": "repo map / 票 —— 行號會過期,哪一層記憶都不存",
+    "call": "reference / repo map —— 精確 API 不進記憶,記憶只留原則",
+    "flag": "reference / repo map —— 指令旗標不進記憶",
+    "sha": "票 / review 歷史 —— commit 指紋是事件,不是原則",
+    "marker": "改正這一行的 memory-allow(rule、逐字 value、reason、存在的 ref),或拿掉它",
+}
+ALLOW_MARKER = re.compile(r"<!--\s*memory-allow\b(.*?)-->")
+ALLOW_FIELD = re.compile(r'(\w+)=(?:"([^"]*)"|(\S+))')
+WILDCARD = re.compile(r"[*?\[\]]")
+
+
+def lint_layer(rel):
+    """這份檔在哪一層:`memory/project/` → project;其餘(角色卡、模型卡、暫存區、
+    同步到專案的角色目錄)一律按 role / model 的嚴格那一套。"""
+    parts = rel.replace(os.sep, "/").split("/")
+    if parts[:2] == ["memory", "project"]:
+        return "project"
+    rules = event.config(ticket.root()).get("rules") or {}
+    for layer, key, default in (("model", "models_dir", "memory/model"),
+                                ("role", "roles_dir", "memory/role")):
+        where = (rules.get(key) or default).rstrip("/") + "/"
+        if rel.replace(os.sep, "/").startswith(where):
+            return layer
+    return "role"
+
+
+def lint_hits(text):
+    """一行文字的命中:`[(rule, 逐字值)]`。"""
+    hits = []
+    for rule in LINT_RULES:
+        for found in LINT_PATTERNS[rule].finditer(text):
+            value = found.group(0)
+            if rule == "sha" and not re.search(r"[a-f]", value):
+                continue
+            hits.append((rule, value))
+    for span in CODE_SPAN.finditer(text):
+        hits.extend(("flag", found.group(0)) for found in SHORT_FLAG.finditer(span.group(1)))
+    return hits
+
+
+def parse_marker(raw, decisions):
+    """一個 memory-allow → `(dict, 問題)`;問題非空就是無效的例外。"""
+    fields = {key: (quoted if quoted is not None and quoted != "" else bare or "")
+              for key, quoted, bare in ALLOW_FIELD.findall(raw)}
+    rule, value = fields.get("rule", ""), fields.get("value", "")
+    if rule not in LINT_RULES:
+        return fields, "rule=%r 不是 %s 之一" % (rule, " / ".join(LINT_RULES))
+    if not value or WILDCARD.search(value):
+        return fields, "value 要是一個逐字值(不准空的、不准萬用字元):%r" % value
+    if not fields.get("reason"):
+        return fields, "沒有 reason"
+    ref = fields.get("ref", "")
+    if not ref or not re.search(r"(?<![\w-])%s(?![\w-])" % re.escape(ref), decisions):
+        return fields, "ref=%r 在 docs/DECISIONS.md 找不到" % ref
+    return fields, ""
+
+
+def lint_text(text, layer, decisions, first_line=1, note_meta=False):
+    """一段正文 → `(violations, allowed)`;每筆帶 `line`(從 `first_line` 起算)。
+
+    `note_meta`:暫存區那一種 `- <正文> (#票, 日期, 誰)` 只量正文,括號裡的來源是
+    中繼資料,不是記憶的內容。
+    """
+    allows = LAYER_ALLOWS.get(layer, ())
+    bad, allowed = [], []
+    for offset, line in enumerate(text.splitlines()):
+        number = first_line + offset
+        markers = []
+        for found in ALLOW_MARKER.finditer(line):
+            fields, problem = parse_marker(found.group(1), decisions)
+            if problem:
+                bad.append({"line": number, "rule": "marker", "value": found.group(0),
+                            "why": problem})
+            else:
+                markers.append(fields)
+        body = ALLOW_MARKER.sub("", line)
+        if note_meta:
+            matched = NOTE_LINE.match(body.rstrip())
+            if matched:
+                body = matched.group(1)
+        used = set()
+        for rule, value in lint_hits(body):
+            if rule in allows:
+                continue
+            exact = [n for n, row in enumerate(markers)
+                     if row["rule"] == rule and row["value"] == value]
+            if exact:
+                used.update(exact)
+                row = markers[exact[0]]
+                allowed.append({"line": number, "rule": rule, "value": value,
+                                "reason": row.get("reason", ""), "ref": row.get("ref", "")})
+                continue
+            bad.append({"line": number, "rule": rule, "value": value, "why": ""})
+        for n, row in enumerate(markers):
+            if n not in used:
+                bad.append({"line": number, "rule": "marker", "value": row["value"],
+                            "why": "這一行沒有 rule=%s value=%r 的命中 —— 例外沒有豁免到任何東西"
+                                   % (row["rule"], row["value"])})
+    for row in bad:
+        row["destination"] = LINT_DEST[row["rule"]]
+    return bad, allowed
+
+
+def decisions_text(root):
+    try:
+        return read(os.path.join(root, "docs", "DECISIONS.md"))
+    except OSError:
+        return ""
+
+
+def lint_file(root, rel, decisions):
+    text = read(os.path.join(root, rel))
+    front, body = split_front_matter(text)
+    first = text[:len(text) - len(body)].count("\n") + 1
+    suffix = memory_config().get("inbox_suffix") or DEFAULT_INBOX_SUFFIX
+    bad, allowed = lint_text(body, lint_layer(rel), decisions, first_line=first,
+                             note_meta=rel.endswith(suffix))
+    for row in bad + allowed:
+        row["file"] = rel
+    return bad, allowed
+
+
+def lint_targets(root):
+    """全 repo 的記憶檔:三層的主卡與暫存區、同步過去的角色目錄;README 是契約文件,不掃。"""
+    rules = event.config(root).get("rules") or {}
+    dirs = ["memory/role", "memory/model", "memory/project"]
+    dirs += [rules[key] for key in ("roles_dir", "models_dir") if rules.get(key)]
+    out = []
+    for where in dirs:
+        for path in sorted(globmod.glob(os.path.join(root, where, "*.md"))):
+            rel = os.path.relpath(path, root)
+            if os.path.basename(rel) != NOT_A_MEMORY and rel not in out:
+                out.append(rel)
+    return out
+
+
+def print_lint(bad, out=sys.stderr):
+    for row in bad:
+        out.write("memory: lint %s:%d rule=%s %r%s —— 建議去處:%s\n"
+                  % (row.get("file", "<正文>"), row["line"], row["rule"], row["value"],
+                     "(%s)" % row["why"] if row.get("why") else "", row["destination"]))
+
+
+def cmd_lint(argv):
+    files, as_json, index = [], False, 0
+    while index < len(argv):
+        flag = argv[index]
+        if flag == "--json":
+            as_json = True
+            index += 1
+        elif flag == "--file" and index + 1 < len(argv):
+            files.append(argv[index + 1])
+            index += 2
+        else:
+            return unknown_flag(flag)
+    root = ticket.root()
+    decisions = decisions_text(root)
+    targets = [os.path.relpath(os.path.join(root, rel), root) for rel in files] \
+        if files else lint_targets(root)
+    bad, allowed, scanned = [], [], []
+    for rel in targets:
+        try:
+            more, ok = lint_file(root, rel, decisions)
+        except OSError as exc:
+            sys.stderr.write("memory: lint 讀不到 %s —— %s\n" % (rel, exc))
+            return 2
+        scanned.append(rel)
+        bad.extend(more)
+        allowed.extend(ok)
+    data = {"scanned": len(scanned), "files": scanned, "violations": bad, "allowed": allowed,
+            "ok": bool(scanned) and not bad}
+    if as_json:
+        sys.stdout.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+    else:
+        for row in allowed:
+            sys.stdout.write("memory: lint 例外 %s:%d rule=%s %r(reason=%s ref=%s)\n"
+                             % (row["file"], row["line"], row["rule"], row["value"],
+                                row["reason"], row["ref"]))
+        sys.stdout.write("memory: lint 掃了 %d 份、命中 %d 條、例外 %d 條\n"
+                         % (len(scanned), len(bad), len(allowed)))
+    print_lint(bad)
+    if not scanned:
+        sys.stderr.write("memory: lint 一份都沒掃到 —— 空掃描不算過\n")
+        return 2
+    return 1 if bad else 0
+
+
 def cmd_note(argv):
     if len(argv) < 3:
         sys.stderr.write("memory: %s\n" % USAGE["note"])
@@ -314,6 +532,13 @@ def cmd_note(argv):
     if any(word in text for word in ("當時", "那次")):
         sys.stderr.write("memory: 警告:這句像案例;記憶只留原則,案例請用票號指路\n")
     root = ticket.root()
+    # 分層 lint 在寫檔、發 noted **之前**(#87 A34):錯層的那一行一個位元組都不落地。
+    bad, _ = lint_text(text, layer, decisions_text(root))
+    if bad:
+        print_lint(bad)
+        sys.stderr.write("memory: note 拒絕寫入 %s/%s —— 錯層內容(見上面 lint 那幾行)\n"
+                         % (layer, name))
+        return 2
     if layer == "project":
         path = os.path.join(root, "memory", layer, name + ".md")
     else:
@@ -413,21 +638,27 @@ def watched_files():
 
 
 def open_consolidation(rel):
-    """已經有一張開著的整理票?**不重複開。**
+    """已經有一張開著的票蓋住這份記憶檔?**不重複開。** 回 `(票號, role)` 或 `(None, None)`。
 
     判準是那張票自己的 `allowed_write_paths` 蓋不蓋得到這份記憶檔 —— 不是另記一格
     「開過了」。另記的那一格會跟事實分岔(票被取消了、被關了),而分岔的那天沒有
     人會知道。蓋不蓋得到用 `ticket.first_match`,與 land 判寫入範圍同一支:逐字比對
     認不得 `memory/role/*.md`,主線開場就會為一份已經有人在整理的檔再開一張(#81)。
+
+    **任何 role 都算**(#87 A38):一張開著的 worker 票正在改這份檔時再開一張整理票,
+    兩張票會同時寫同一份檔。整理票優先回報(字樣照舊);沒有才回別的 role 那一張。
     """
+    other = (None, None)
     for one in ticket.load_all():
         if not ticket.is_open(one):
             continue
-        if one.get("role") != CONSOLIDATOR_ROLE:
+        if not ticket.first_match(rel, one.get("allowed_write_paths") or []):
             continue
-        if ticket.first_match(rel, one.get("allowed_write_paths") or []):
-            return one["id"]
-    return None
+        if one.get("role") == CONSOLIDATOR_ROLE:
+            return one["id"], CONSOLIDATOR_ROLE
+        if other[0] is None:
+            other = (one["id"], one.get("role") or "?")
+    return other
 
 
 def consolidators(conf):
@@ -651,10 +882,14 @@ def cmd_check(argv):
         # 鎖外各開一張就是兩張。
         with MemoryLock(root):
             for rel, reasons in pending.items():
-                already = open_consolidation(rel)
-                if already:
+                already, role = open_consolidation(rel)
+                if already and role == CONSOLIDATOR_ROLE:
                     sys.stdout.write("memory:   %s 已經有一張開著的整理票 #%s,沒有再開\n"
                                      % (rel, already))
+                    continue
+                if already:
+                    sys.stdout.write("memory:   已經有一張開著的票 #%s(role=%s)覆蓋 %s,"
+                                     "沒有再開\n" % (already, role, rel))
                     continue
                 open_ticket_for(rel, reasons, sys.stdout)
     # 退出碼 1 是給 session 開頭看的:`new-session.sh` 跑這一支,紅了那個 session
@@ -768,6 +1003,32 @@ def read_discussion(root, name):
     return talk, None
 
 
+def launcher_mismatch(root, rel, talks):
+    """討論檔頭的 `model:` 與整理票 attempt_history 記的模型不一致 → 一句點名;一致或沒有
+    啟動端紀錄(人手派的)→ ""。模型名比全名或去掉工具前綴的那一半。"""
+    ident, role = open_consolidation(rel)
+    if not ident or role != CONSOLIDATOR_ROLE:
+        return ""
+    try:
+        rows = ticket.load(ident).get("attempt_history") or []
+    except (OSError, ValueError):
+        return ""
+    for talk in talks:
+        name = talk["name"]
+        where = os.path.normpath(os.path.relpath(
+            name if os.path.isabs(name) else os.path.join(root, name), root))
+        for row in rows:
+            if not isinstance(row, dict) or not row.get("discussion"):
+                continue
+            if os.path.normpath(row["discussion"]) != where:
+                continue
+            recorded = str(row.get("model") or "")
+            if talk["model"] not in (recorded, recorded.split(":")[-1]):
+                return ("討論檔 %s 的 model: %s 與啟動端記的 %s 不一致(整理票 #%s 的 "
+                        "attempt_history)" % (name, talk["model"], recorded, ident))
+    return ""
+
+
 def refuse(message):
     sys.stderr.write("memory: %s\n" % message)
     return 2
@@ -851,6 +1112,20 @@ def cmd_consolidate(argv):
         return refuse("讀不到候選 %s —— %s" % (candidate, exc))
     path = os.path.join(root, rel) if not os.path.isabs(rel) else rel
     rel = os.path.relpath(path, root)
+    # 候選要先過分層 lint(#87 A34),在拿鎖、寫主檔、消耗 inbox、發 consolidated 之前。
+    bad, _ = lint_text(candidate_body, lint_layer(rel), decisions_text(root))
+    if bad:
+        for row in bad:
+            row["file"] = candidate
+        print_lint(bad)
+        return refuse("候選 %s 有錯層內容(見上面 lint 那幾行)—— 主檔沒有動" % candidate)
+    # 討論的模型身份由**啟動端**記(#87 A41):consolidate-memory.sh 把每個 session 交出的
+    # 討論檔與它實際起的模型寫進整理票的 attempt_history。檔頭的 `model:` 是 session 自己
+    # 寫的 —— 對不上就是有一份不是它說的那個模型寫的,D-013 的「兩個不同模型」就不成立。
+    mismatch = launcher_mismatch(root, rel, talks)
+    if mismatch:
+        sys.stderr.write("memory: %s —— 主檔沒有動\n" % mismatch)
+        return 1
     conf = memory_config()
     suffix = conf.get("inbox_suffix") or DEFAULT_INBOX_SUFFIX
     default_cap = int(conf.get("cap_chars") or DEFAULT_CAP)
@@ -916,7 +1191,7 @@ def main(argv):
     verb, rest = argv[0], argv[1:]
     verbs = {"check": cmd_check, "check-stale": cmd_check_stale, "note": cmd_note,
              "harvest": cmd_harvest, "snapshot": cmd_snapshot,
-             "consolidate": cmd_consolidate}
+             "consolidate": cmd_consolidate, "lint": cmd_lint}
     if verb in ("--help", "-h", "help"):
         if rest and rest[0] in verbs:
             return help_for(rest[0])
