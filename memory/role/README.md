@@ -12,7 +12,21 @@ session 開場讀兩份:`memory/model/<model>.md`(這個模型會怎麼錯)與 `
 自己),不同時這個 repo 是專案,規則包會把專案的 `memory/role/<role>.md` 與 `<role>.inbox.md`
 的最後幾行疊在正本角色卡之後(細節見 `docs/MEMORY.md`)。
 
-角色卡不受 2K 上限管(它是規範不是經驗),但每張 ≤ 40 行;超過就是把流程文件抄進來了。
+## 分層契約(唯一一份正文;`CLAUDE.md`、`docs/MEMORY.md`、`memory/project/README.md` 只指路到這裡)
+- **role / model 層**(角色卡、模型卡與各自的 `.inbox.md`):只存**通用原則與自身反思** —— 這個角色做什麼、不做什麼,這個模型會怎麼錯。
+- **project 層**(`memory/project/`):只存**專案的設計理由與不變條件**。
+- **具體命令、函式與符號、路徑、行號、旗標、易變事實** → repo map(`python3 scripts/repo-map.py query <主題>`)或 reference 文件;記憶裡至多留一句指路。
+- **事故經過** → 票與 review 歷史(`docs/review/`);記憶只留由它得出的原則,用票號當來源。
+
+**機械檢查**:`python3 scripts/memory.py lint [--file <記憶檔>]… [--base <ref>] [--json]`(唯讀;一份都沒掃到 rc 2)。rule id 五條:`path` / `line` / `call` / `flag` / `sha`;project 層放行 `path`,其餘各層五條都擋;`README.md` 是契約文件,不掃。誤判的例外寫在**同一行**、只豁免一條規則的一個逐字值:
+`<!-- memory-allow rule=<rule id> value="<逐字值>" reason="<理由>" ref="<docs/DECISIONS.md 裡找得到的編號>" -->` —— 不准萬用字元、不准整檔豁免,例外會列在輸出裡。閘門帶票跑時只對**分支改到的**記憶檔(不含 `README.md`)跑 `lint --base`:只量本分支**新增**的行(既有正文的命中歸整理票),另擋本分支讓卡從上限內推到上限外(D-042,#90);非零就擋。lint 是語法近似:抽象過的錯層它抓不到,仍由覆核者看。
+
+**容量**(程式現值;D-006 / D-013 / D-021):
+- 角色卡與模型卡主檔:正文 ≤ 2000 字元(`board/config.json` 的 `memory.cap_chars`;front matter 不算)。要提高只能經兩個模型討論、寫進該檔 front matter 的 `cap_chars` / `cap_history`(流程見 `docs/MEMORY.md`);`memory.py check` 量。
+- `.inbox.md`:非空行 ≤ 20 行(`memory.inbox_max_lines`,沒設就是 20)。
+- `memory/project/`:不設上限、`check` 不量(D-013 補註);按需讀(grep 或整份讀);專案的規則包不貼它的內容,只給一個速查入口(有 `docs/CODE-MAP.md` 指它,沒有就指 grep `memory/project/`)。
+- 規則包(`rules.py pack`):≤ 4096 bytes;專案端暫存區的尾巴在包裡 ≤ 600 B(D-021)。
+- 角色卡每張 ≤ 40 行:文字規矩,程式不量;超過就是把流程文件抄進來了。
 
 原則:**每個主張只被證明一次**,載體是實作者的證據帳 `EVIDENCE.md`;上游不重做下游已證明的事。
 來源:tabby_pool D-G114(2026-09-13),Astra 效率審 `docs/review/20260913-efficiency/`。

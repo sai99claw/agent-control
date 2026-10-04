@@ -28,7 +28,8 @@
   `<rules.roles_dir>/contract.md`,缺了那一頁會說。票(Draft 只計數)與收件匣各列最多 20 行,
   沒列的說數字與全文指令;整頁要在 hook 輸出上限 10,000 字元內(`session-hook.sh` 超過就截中間)。
 - 看**終態收件匣** `python3 scripts/inbox.py list`:只有兩種頁(D-032)—— **decision**(要你裁:
-  反駁、三輪紅、覆核退回、環境可疑、worker 沒交件 / patch 套不上、land 拒收或紅、關不掉的票)
+  反駁升級 —— 只有開題者判需要裁示、同票第二次反駁、開題者沒判出來、session 不能接回四種,其餘反駁由
+  auto-fix 起開題者判、接回原 session 續做,不發頁(`docs/WORKFLOW.md`「實作者的反駁怎麼被收下」);三輪紅、覆核退回、環境可疑、worker 沒交件 / patch 套不上、land 拒收或紅、關不掉的票)
   與 **done**(整票完成簡報:subject、落地 sha、做了什麼、覆核結論、cost 表)。一頁答四句
   (哪張票、什麼狀態、要你做什麼、去哪看);閘門綠、覆核通過這類腳本接著會做的事只寫事件。
   收下用 `inbox.py ack <票號>`。
@@ -53,8 +54,11 @@
   (#40:Ready 票打 `sh scripts/auto-fix.sh <n>` 就起第 1 輪、發 `--attempt 1`、票轉 Running)。
   為什麼不是你發:副本是 `git archive | tar -x` 展出來的,`event.py` 往上找到的是
   **副本自己那份** `board/config.json`,事件會寫進一個等一下會被刪掉的檔,**而且不報錯** ——
-  發出去了與沒發出去因此長得一樣。真的要從副本裡發就帶 `AC_ROOT=<主 repo 根>`;
-  沒帶的話 `event.py emit` 會拒收(rc=3)並說出這一句。
+  發出去了與沒發出去因此長得一樣。沒帶 `AC_ROOT` 的話 `event.py emit` 會拒收(rc=3)並說出這一句。
+  - **auto-fix 派的**:不再帶主 repo 的 `AC_ROOT`。`AC_ROOT` 指 `auto-fix.sh` 在 `<副本根>/control` 開的
+    **拋棄式控制根**,你在副本裡跑腳本的事件、票、收件匣落在那裡,隨副本一起收(`docs/WORKFLOW.md`
+    「一票一分支一副本」)—— 那些不是發給控制台的,派工方照舊代發。
+  - **手派的**:派工的人照舊可以自帶 `AC_ROOT=<主 repo 根>`,那時發的事件才進真看板。
 
 ## 結束前(所有角色)
 - 交接:主線寫 `docs/HANDOFF.md`;worker 的交接寫在回報裡。

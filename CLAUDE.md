@@ -29,5 +29,8 @@
 - `docs/HANDOFF.md` 加一節(寫給下一個 session 的人,不是寫給自己)。
 - 開著的票狀態要對得上事實(`scripts/ticket.py verify` 會檢查 Done 的票真的在主線)。
 
+## 記憶
+每一層記憶放什麼(分層契約)只有一份正文,在 `memory/role/README.md`;這裡不另寫。
+
 ## 語言
 回覆用使用者的語言;code、commit、檔案內容用英文。

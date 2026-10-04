@@ -3,6 +3,14 @@
 ## 判斷:先不要建整套 wiki
 tabby_pool 三天的實測:agent 讀整份設計文件並沒有出大錯;出錯的是**文件裡的行號過期**這種小事,以及**票面用近似條件盤點、數出假的下界**。所以第一版只做兩件事,都便宜、都可驗證:
 
+## 0. repo map(`scripts/repo-map.py`,#87)
+查「X 在哪、誰守它」先問它,查不到再針對性 grep。三個子命令:
+- `build`:依手寫的 `code-map/catalog.json` 重生產出物 `code-map/index.json` 與 `code-map/INDEX.md`。新增 / 改名 / 刪除已管理的檔之後跑,產出物連同改動一起 commit。
+- `check`:唯讀;索引過期或 entry / guard 連結斷了 rc 1。閘門帶票跑時(`gate.sh --ticket`)對候選樹跑它,**過期必擋**(機械格,不跑測試)。
+- `query <主題>`:印那個主題的入口、主守衛、來源、文件、人工卡;**查不到 rc 1** 並列出認得的主題。只認 catalog 的主題名,不查符號。
+
+專案的 `code-map/catalog.json`、`code-map/index.json` 與人工卡**歸專案所有**:`sync-to-project.sh` 只把 `repo-map.py` 同步進專案的 `scripts/control/`,不覆蓋專案的 `code-map/`。
+
 ## 1. 模組卡片(只在查找失敗過的地方建)
 `code-map/cards/<module>.md`,每張:
 ```
