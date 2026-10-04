@@ -53,6 +53,10 @@
     "command": "claude -p --model opus --permission-mode acceptEdits --allowedTools Read Edit Write Glob Grep Bash --output-format stream-json --verbose",
     "timeout_seconds": 3600
   },
+  "opener": {
+    "command": "claude -p --model opus --permission-mode acceptEdits --allowedTools Read Glob Grep Bash Write --output-format stream-json --verbose",
+    "timeout_seconds": 1800
+  },
   "reviewer": {
     "command": "claude -p --model opus --allowedTools Read Glob Grep Bash --output-format json",
     "timeout_seconds": 1800

@@ -48,6 +48,8 @@ KINDS = (
     "release.start", "release.pass", "release.fail",
     # 決策收件匣:問出去、答回來。
     "decision.asked", "decision.answered",
+    # worker 的反駁由開題者判(D-041,#89):done 的 kv 帶 verdict(escalate 時多一格 reason)。
+    "objection.triage.start", "objection.triage.done",
     # 覆核:review.sh 的四種結局。只有 fail 發頁(decision),其餘三種只寫事件(D-032)。
     "review.pass", "review.fail", "review.missing", "review.refused",
     # 終態叫醒主線(D-015):一則事件 + `reports/inbox/` 一頁。主線不輪詢 status。
