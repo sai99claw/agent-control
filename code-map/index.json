@@ -45,6 +45,7 @@
     "tests/test_metrics.py",
     "tests/test_new_session.py",
     "tests/test_no_project_names.py",
+    "tests/test_objection_triage.py",
     "tests/test_repo_map_contract.py",
     "tests/test_review.py",
     "tests/test_routing_cards.py",
