@@ -29,7 +29,7 @@ source_sha256: 677bd8c64191a3160ffcd21408a1e567c6a1922da3940ceeed4f9c21eb4f6e31
 - L5: 保留 —— front matter 結束,一字不動。
 - L6: 保留 —— 標題;刪尾巴 `(84864f3,2026-09-13,實測)`(lint sha):指紋進 reference「歷史來源」。
 - L7: 保留 —— 空行。
-- L8: 保留(改寫,票 B3(a) 的一半) —— 「照票面做 / 變異四步 / 票面是規格現況是事實」原樣;「跑票閘門對照表挑到的那一組」改「只跑派工文『只准跑的測試』段列的測試(票沒有 test_plan 就只跑自己改到的測試檔)」(#87 A18 落地的派工文段名);`--branch` 空閘門改白話「分支形式的閘門是空閘門(用檔名形式叫)」;把原 L18 的 #28/#49(base 複本對照證明紅來自環境)與 inbox L14 的 #89(副本沒有 git、靠 git 清單的測試必紅)併成一句放這裡 —— 它們是「怎麼跑測試」的同一題;sha / 日期刪。
+- L8: 保留(改寫,票 B3(a) 的一半) —— 「照票面做 / 變異四步 / 票面是規格現況是事實」原樣;「跑票閘門對照表挑到的那一組」改「只跑派工文『只准跑的測試』段列的測試(票沒有 test_plan 就只跑自己改到的測試檔)」(#87 A18 落地的派工文段名);`--branch` 空閘門改白話「分支形式的閘門是空閘門(用檔名形式叫)」;把原 L18 的 #28/#49(base 複本對照證明紅來自環境)與 inbox L14 的 #89(副本沒有 git、靠 git 清單的測試必紅)併成一句;sha / 日期刪。第 2 輪:那一句從「做」移到「副本環境」那一條的尾巴(字一個不改、正文字元不變)—— 規則包緊預算時每格只留第一個正文單位,「做」是 implementer 卡的第一個單位,513 B 讓 worker 包的下限 3575 B 超過 `test_rules` 緊預算 3500 B;移後「做」302 B。
 - L9: 保留 —— 寫入範圍(D-H38),原樣。
 - L10: 保留 —— 不做;sha / 日期刪;`CLAUDE.md`(lint path)改「專案規範」;`verify/**` 改「verify 目錄」;「反向查夾具預設值」併入 inbox L7 後半(#70:grep 有沒有案例靠「沒設就退回」)。
 - L11: 保留 —— 交付物;`patch.diff` / `EVIDENCE.md`(lint path、sha)改「patch 檔」「EVIDENCE」;「檔頭只准 base/… / work/… 的相對形式」改白話「檔頭只准 base 與 work 的相對形式」。
@@ -39,7 +39,7 @@ source_sha256: 677bd8c64191a3160ffcd21408a1e567c6a1922da3940ceeed4f9c21eb4f6e31
 - L15: 保留 —— 不准輪詢;sha 刪;`^Ran |^OK|…` 擷取 regex 與 `claude -p`(lint flag)移至 reference,卡上改「只擷取 Ran / OK / FAILED / FAIL / ERROR 那幾行」「非互動 session 不會再醒」;併入 inbox L7 前半(#70 全套超過前景時限就逐模組分批)。
 - L16: 保留 —— 紅了誰修;sha 刪;`reports/t<票號>/<run_id>/status.json`(lint path)改「那一輪的狀態檔」,路徑進 reference「交付物的形狀」;併入 inbox L11(#72 同一輪被重派、副本已重展的重放與對照)。
 - L17: 保留(改寫,票 B3(b)) —— 原句「停,寫成票的 objections[] 一筆(…)再報主線」改為「寫成票的 objections 一筆(category、body、evidence、owner;阻擋就 blocking)後交件停下,不報主線 —— 反駁由自動派工起開題者判、判完接回(D-041,#89)」。依據:D-041(2026-10-04)反駁不進主線收件匣,#89 已落地 auto-fix 起開題者判。保留:「沒被收進票的反駁與沒有反駁長得一樣」、test_defect 那一半(不准放寬斷言、不准改 oracle,案例由驗證者修)、「太複雜提反駁開票、不准繞路」(D-018)。不寫「被接回時從原副本續做」(#88 P14)。併入 inbox L3(#53 反駁行不准有絕對家目錄路徑或專案名)。sha / 日期刪。
-- L18: 保留(改寫) —— 副本環境的原則句保留(派工帶著 AC 環境變數、重現對不上先看它們 #7、base 一字不動、交件前列出只在 work 有的檔);所有指令(`env | grep ^AC_`、`env -u …`、`git ls-files`、`cp -R work` + `git init`、`PYTHONDONTWRITEBYTECODE=1`、`diff -rq … | grep '^Only in work'`、`.env-suspect.json`、「交完刪掉 work/ 與 base/」;lint flag ×5、path ×1、call ×2、sha ×1)移至 reference「副本環境」;#28/#49 那句移到 L8;併入 inbox L2(#53 會發事件的腳本在暫存拷貝跑)、L5(#59)、L8(#71)、L9(#71 子行程釘根目錄);卡上指路「指令見 reference『實作者角色操作細節』」。
+- L18: 保留(改寫) —— 副本環境的原則句保留(派工帶著 AC 環境變數、重現對不上先看它們 #7、base 一字不動、交件前列出只在 work 有的檔);所有指令(`env | grep ^AC_`、`env -u …`、`git ls-files`、`cp -R work` + `git init`、`PYTHONDONTWRITEBYTECODE=1`、`diff -rq … | grep '^Only in work'`、`.env-suspect.json`、「交完刪掉 work/ 與 base/」;lint flag ×5、path ×1、call ×2、sha ×1)移至 reference「副本環境」;#28/#49 那句第 1 輪移到 L8、第 2 輪併回這一條尾巴;併入 inbox L2(#53 會發事件的腳本在暫存拷貝跑)、L5(#59)、L8(#71)、L9(#71 子行程釘根目錄);卡上指路「指令見 reference『實作者角色操作細節』」。
 - L19: 保留 —— 測試與 patch 的寫法;`diff(舊 work, 新 work)`(lint call)改白話「以新舊 work 的 diff 反向核對」;併入 inbox L4(#57)、L10(#72 恆真斷言)、L12(#73 合併案例);日期刪。
 
 ## 結論

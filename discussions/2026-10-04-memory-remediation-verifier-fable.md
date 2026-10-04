@@ -17,8 +17,8 @@ source_sha256: b4702621163bc87279de3685aa2f561c0f0e51bc7e884d3f81956983bc7d920b
 - 判準:D-013 3;指令、路徑移到 `docs/reference/role-procedures.md`「驗證者角色操作細節」。
 
 ## 第 1 輪 — fable
-- 主張:17 行壓成 13 行、1529 字元;工具名與路徑全部出卡,卡上以「驗紅工具 / 對勾工具 / 套 patch 的腳本 / 自動派工」稱呼;D-041 衝突兩句(L14「不回到驗證者」、L16「退回開題者」)改寫;inbox 4 條:2 升格、1 重複、1 歸檔。
-- 證據等級:實測(`memory.py lint` 0 條、`check` 1529 / 2000、`rules.py inspect verifier --model opus` ok、四支守衛綠)。
+- 主張:17 行壓成 13 行、1532 字元;工具名與路徑全部出卡,卡上以「驗紅工具 / 對勾工具 / 套 patch 的腳本 / 自動派工」稱呼;D-041 衝突兩句(L14「不回到驗證者」、L16「退回開題者」)改寫;inbox 4 條:2 升格、1 重複、1 歸檔。
+- 證據等級:實測(`memory.py lint` 0 條、`check` 1532 / 2000、`rules.py inspect verifier --model opus` ok、四支守衛綠)。
 - 什麼會讓我改變主意:覆核指出某個被我改成通稱的工具名在派工文裡**沒有**出現(驗證者會找不到工具)→ 加回卡上並寫 memory-allow 理由。
 
 ## 正文逐行處置(memory/role/verifier.md,改前行號)
@@ -31,7 +31,7 @@ source_sha256: b4702621163bc87279de3685aa2f561c0f0e51bc7e884d3f81956983bc7d920b
 - L7: 移至 reference「案例與交付物 / 收件」—— 整行是 `sh scripts/apply.sh … --evidence-verifier …` 指令(lint path ×2、flag ×1)。
 - L8: 移至 reference「案例與交付物 / 收件」—— `reports/t<票號>/<run_id>/result-verifier-round<輪>.json` 路徑;原則「看板畫的就是那一份」留在卡上。
 - L9: 保留 —— 「沒有人收的交付物不要交」原樣,併入 L6 那段。
-- L10: 保留 —— 誰派;`auto-fix.sh`、`apply.sh`(lint path ×2)改稱「自動派工」「套 patch 的腳本」;`patch-round1` 改「第 1 輪 patch」;#51 / #60 票號與「介面以分支上的實作為準」原則保留。
+- L10: 保留 —— 誰派;`auto-fix.sh`、`apply.sh`(lint path ×2)改稱「自動派工」「套 patch 的腳本」;`patch-round1` 改「第 1 輪 patch」;#51 / #60 票號與「非平行時介面照 worker 的 patch」原則保留;第 2 輪改寫成「介面照那份 patch,票面與它衝突時照 patch」—— 原字樣是 #60 派工文那一節的標題,`test_auto_fix` 的 interface_fixed=true 案例斷言平行派工文不含它,卡被包進每一份派工文,逐字留著就紅。
 - L11: 保留 —— 四問;「§5.8」補「派工範本」;`verify/` 去斜線;反例 T #681 的 `from === 當月-01` 改白話「起點等於當月 1 日」(判準句不變)。
 - L12: 保留 —— 不做,原樣。
 - L13: 保留 —— 不跑 tag 回歸;`verify-case.py check`(lint path)改「閘門用的那支對勾工具」;刪日期。
@@ -41,8 +41,8 @@ source_sha256: b4702621163bc87279de3685aa2f561c0f0e51bc7e884d3f81956983bc7d920b
 - L17: 保留 —— import 失敗不算紅,原樣(去反引號)。
 
 ## 結論
-- 結論:verifier 正文 1788 → 1529 字元(17 → 13 行),lint 14 → 0,D-041 衝突兩句改寫;inbox 4 行全部處置、清空。
-- 採用的證據:實測 `memory.py lint --json` ok、`check --read-only` 1529 / 2000、`check-stale` rc 0、`rules.py inspect` 角色卡 4 個正文單位被包入、四支守衛 Ran 87 OK。
+- 結論:verifier 正文 1788 → 1532 字元(17 → 13 行),lint 14 → 0,D-041 衝突兩句改寫;inbox 4 行全部處置、清空。
+- 採用的證據:實測 `memory.py lint --json` ok、`check --read-only` 1532 / 2000、`check-stale` rc 0、`rules.py inspect` 角色卡 4 個正文單位被包入、四支守衛 Ran 87 OK。
 - 保留的分歧:無(單模型,D-043)。
 - 產出:memory/role/verifier.md 新版;docs/reference/role-procedures.md「驗證者角色操作細節」;docs/review/memory-remediation-a.md。
 - 這次討論教了誰什麼:
