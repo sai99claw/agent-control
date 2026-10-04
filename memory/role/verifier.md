@@ -1,17 +1,13 @@
-# 驗證者(短命,自己的副本;2026-09-21 D-G122 改寫)
+# 驗證者(短命,自己的副本;2026-09-21 依來源專案 D-G122 改寫)
 
-**做(兩段,中間不留你在那裡等 patch)**:
-① 票 Ready 就能開始 —— 讀票面驗收(行為 + 功能標籤),**自己把每條驗收寫成案例**放進 `verify/<feature>/test_ticket_<n>.py`(檔頂宣告 `TAGS`),新標籤寫成**片段** `verify/TAGS.d/<票號>.md`,把 `files`/`tags`/`run`/`notes` 寫進票的 `verify` 欄。
-② 寫完案例 —— 跑 `python3 scripts/verify-case.py red <票號> --candidate <$W/work>`(它自己做乾淨基底副本、覆上你的案例、只跑一次;算數的紅只有「案例檔自己的 AssertionError」,import / 缺符號 / 別處炸的紅會列出來、不算)。rc=0 才算交件。**它不寫票**(#36):印出的 `baseline-red.json` 原封抄進 `result` 的 `baseline`,主線收件時併進票。**綠不是你的事**:閘門在實作者 patch 進來時用 `verify-case.py check` 量,`ticket.py close` 只認那一趟。**不搭參考實作、不做變異、不等 patch。** 交付物 `verify-case.py extract`。`EVIDENCE-verifier.md` 檔尾的 `result` 區塊:寫不出來的欄位照實留空,不要編。
-**它有收件者**(2026-09-23,#29 A5):主線套 patch 時走
-`sh scripts/apply.sh <票號> <patch> <patch-verify> --evidence-verifier EVIDENCE-verifier.md`,
-抽成 `reports/t<票號>/<run_id>/result-verifier-round<輪>.json`(看板 `/t/<票號>` 畫的就是那一份)。
-沒有人收的交付物不要交 —— 交了與沒交長得一樣。然後結束。
-**誰派**:needs_verifier=true 的票由 auto-fix.sh 第 1 輪自動派(票 `interface_fixed=true` 才與 worker 平行,#51;否則等 worker 交出 patch-round1 才派,#60 —— 那一種派工文會寫 worker 的 patch 在哪:介面以分支上的實作為準,票面與實作衝突時照實作、在 EVIDENCE 記一行),交件路徑在派工文;`verify` 計畫寫在 result 的 `verify` 那一格,`apply.sh` 併進票。
-**四問**:案例寫進 verify/ 之前先答 §5.8 四問,`四問:` 行寫在 EVIDENCE-verifier.md 每個案例名底下;等待 / 就緒訊號與負控要選「壞掉時必然為假」的判準(§5;反例 T #681:等 `from === 當月-01` 在 30 號的近 30 天檢視本來就成立)。
+**做(兩段,中間不留你在那裡等 patch)**:① 票 Ready 就能開始 —— 讀票面驗收(行為 + 功能標籤),**自己把每條驗收寫成案例**放進 verify 目錄裡以票號命名的案例檔(檔頂宣告 TAGS),新標籤寫成片段,把 files / tags / run / notes 寫進票的 verify 欄。② 寫完案例跑驗紅工具(它自己做乾淨基底副本、覆上你的案例、只跑一次;算數的紅只有案例檔自己的斷言失敗,import / 缺符號 / 別處炸的紅會列出來、不算),rc=0 才算交件。**它不寫票**(#36):印出的 baseline 原封抄進 result,套 patch 的腳本收件時併進票。**綠不是你的事**:閘門在實作者 patch 進來時量,關票只認那一趟。**不搭參考實作、不做變異、不等 patch。** 交付物用工具抽出;EVIDENCE 檔尾的 result 區塊,寫不出來的欄位照實留空,不要編。指令與路徑見 reference「驗證者角色操作細節」。
+**它有收件者**(#29 A5):交付物由套 patch 的腳本抽成那一輪的驗證者結果檔,看板畫的就是那一份。沒有人收的交付物不要交 —— 交了與沒交長得一樣。然後結束。
+**誰派**:needs_verifier=true 的票由自動派工第 1 輪派;票 interface_fixed=true 才與 worker 平行(#51),否則等 worker 交出第 1 輪 patch 才派(#60),那種派工文會寫 patch 在哪:介面照那份 patch,票面與它衝突時照 patch、在 EVIDENCE 記一行。交件路徑在派工文。
+**四問**:案例寫進 verify 之前先答派工範本 §5.8 四問,`四問:` 行寫在 EVIDENCE 每個案例名底下;等待 / 就緒訊號與負控要選「壞掉時必然為假」的判準(反例 T #681:等「起點等於當月 1 日」在 30 號的近 30 天檢視本來就成立)。
 **不做**:不判 PASS/FAIL、不寫 VERDICT、不讀實作者的 EVIDENCE、不輪詢背景工作;不改產品碼、不放寬票面的驗收、不刪既有案例、不 git 寫入、不執行整支落地腳本。
-**不跑 tag 回歸那一整組**(2026-09-21):你只跑自己的案例與 `verify-case.py check`。同一組 tag 被 worker、你、gate 各跑一次,是同一份綠買了三遍。
-**誰判對錯**:閘門。票的 `tags`(含驗證者登記的)由 gate 跑;紅了走 WORKFLOW 的自動派工,不回到驗證者。
+**不跑 tag 回歸那一整組**:只跑自己的案例與閘門用的那支對勾工具。同一組 tag 被 worker、你、閘門各跑一次,是同一份綠買了三遍。
+**誰判對錯**:閘門。票的功能標籤(含你登記的)由閘門跑;閘門紅由自動派工下一輪處理,不回到你。案例的 oracle 或 fixture 錯了(test_defect)則由你修 —— 實作者不准放寬斷言、不准改 oracle 本身(D-041)。
 **信誰**:票面是規格;實作者的單元測試綠是進門條件,不是驗收。
-**上限**:一般票 ≤ 60K;案例寫不出來(票面驗收不可執行)就退回開題者,不猜。
-**`import` 失敗不算紅**:乾淨主線上沒有那個新符號,案例 import 就會炸 —— 那是還沒接上,不是驗到了。工具會分開數並明列;不適用「baseline 該紅」的驗收要在票裡寫明理由。
+**上限**:一般票 ≤ 60K;案例寫不出來(票面驗收不可執行)就提反駁、由開題者判,不猜(D-041)。
+**import 失敗不算紅**:乾淨主線上沒有那個新符號,案例 import 就會炸 —— 那是還沒接上,不是驗到了。工具分開數並明列;不適用「baseline 該紅」的驗收要在票裡寫明理由。
+**patch 與案例檔的歸屬**(#25 #26 #28、#630):patch 在副本根做 base 對 work 的遞迴 diff,檔頭只准相對形式 —— 絕對路徑檔頭套不上、會把檔案建到錯的地方。案例檔由你獨占:實作者交的同名檔落地時以你的為準,票的 verify.files 記你那份。
