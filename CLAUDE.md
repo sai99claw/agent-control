@@ -1,8 +1,10 @@
 # Agent Control — session 契約
 
 你是這個系統的**主線**(跟人互動的那個 session),除非使用者明說你是別的角色(`docs/ROLES.md`)。
+**短命角色**(worker / 驗證者 / 開題者 / 覆核者 / 整理者 / 設計 session)**不照這一份開場**:開場只讀「角色卡 + 票」,
+正文在 `memory/role/README.md`。這一份進了版控、`git archive` 出來的副本裡也有,但它寫的是主線的事。
 
-## 開 session 的第一件事(不要跳過)
+## 開 session 的第一件事(主線才做;不要跳過)
 1. 讀 `docs/HANDOFF.md` 最後三節——上一個 session 留給你的。
 2. 讀 `docs/SESSION-START.md` 你這個角色那一節,照做。
 3. `python3 scripts/inbox.py list` 看跑完的事在等你什麼;
@@ -11,16 +13,17 @@
 
 ## 不可違反的
 - **票是唯一的工作單位。** 沒有票的工作不派、不落地。票的契約在 `tickets/SCHEMA.md`。
-- **每個動作要發事件**(`scripts/event.py emit`),控制台只認事件。沒發事件的事,對系統而言沒發生。
-- **套 patch 只走 `scripts/apply.sh`**(它先驗檔頭與寫入範圍,commit 訊息帶票號與 patch sha256);
-  **落地只走 `scripts/land.sh`**,它會拒絕該拒絕的(0 commit、基準版本過期、寫入範圍越界、覆核過期、
-  `verify.files` 沒帶進來)。不准手動 merge 進主線。
-- **不准輪詢 status**:跑完的事會寫進 `reports/inbox/`,開場 `python3 scripts/inbox.py list` 一次,
-  之後被通知時再讀。每看一次背景工作就是整份上下文重送一輪。
-- **實作 agent 在副本裡工作、交 patch**,禁一切 git 寫入;規矩在 `docs/DISPATCH-TEMPLATE.md`。
-  **派工 prompt 只指路,不整份貼**(與 `memory/role/README.md`、`docs/SESSION-START.md` 同一句話):
-  短命角色開場自己讀 `memory/role/<role>.md` + `memory/model/<model>.md` + `docs/DISPATCH-TEMPLATE.md`;
-  prompt 裡只給**這張票獨有的四件事**(票號與票庫路徑、base sha、副本路徑、回報對象)。
+- **主線的每個動作要發事件**(`scripts/event.py emit`),控制台只認事件。沒發事件的事,對系統而言沒發生。
+  副本裡的短命角色不發事件,由派工方代發(`docs/SESSION-START.md` Worker / 驗證者那一節)。
+- **套 patch 只走 `scripts/apply.sh`**(它先驗檔頭與硬擋範圍,commit 訊息帶票號與 patch sha256);
+  **落地只走 `scripts/land.sh`**,它會拒絕該拒絕的(0 commit、基準版本過期、越過 `out_of_scope` / `protected_paths`、
+  覆核過期、`verify.files` 沒帶進來)。`allowed_write_paths` 是預期不是限制(D-H38 ①):越出不擋,只列進 `extra_paths`。
+  不准手動 merge 進主線。
+- **不准輪詢 status**(主線的正文;短命角色的在 `docs/DISPATCH-TEMPLATE.md` §3):跑完的事會寫進 `reports/inbox/`,
+  開場 `python3 scripts/inbox.py list` 一次,之後被通知時再讀。每看一次背景工作就是整份上下文重送一輪。
+- **實作 agent 在副本裡工作、交 patch**,禁一切 git 寫入;共用規矩在 `docs/DISPATCH-TEMPLATE.md`,**按需查、不整份讀**。
+  **派工 prompt 只指路,不整份貼**:短命角色開場只讀「角色卡 + 票」(正文在 `memory/role/README.md`;
+  規則包 `rules.py pack` 已帶模型卡與會被擋到的那幾節);prompt 裡只給**這張票獨有的四件事**(票號與票庫路徑、base sha、副本路徑、回報對象)。
   全域交接(`docs/HANDOFF.md`)、事件流、開票清單**是主線的**,短命角色不讀 —— 每貼一份就是每一個 agent 各付一次。
 - **發版永遠是人授權、主線執行**;worker 與驗證者不碰。
 - **裁示進 `docs/DECISIONS.md`**,一列一條,附來源原話。半成品、未驗證、讀 code 推的,都要標出來。

@@ -1,17 +1,17 @@
 # 開 session 的固定動作
 
 ## 所有角色
-1. `git log --oneline -1 main` 與 `git status --short`:知道自己站在哪個版本、工作樹乾不乾淨。
-2. **發一筆事件**:`scripts/event.py emit session.start --role <role> --model <model>`。控制台從此看得到你。
-3. 讀 `memory/model/<你的模型>.md` 與 `memory/role/<你的角色>.md`。
+1. `git log --oneline -1 main` 與 `git status --short`:知道自己站在哪個版本、工作樹乾不乾淨(副本裡沒有 `.git`,短命角色看派工文給的 base sha)。
+2. **主線發一筆事件**:`scripts/event.py emit session.start --role <role> --model <model>`。控制台從此看得到你。短命角色在副本裡不發,由派工方代發(下面 Worker / 驗證者那一節)。
+3. 主線讀 `memory/model/<你的模型>.md` 與 `memory/role/main.md`(hook 那一頁已帶);**短命角色開場只讀「角色卡 + 票」**,正文在 `memory/role/README.md`,規則包已帶模型卡。
 
-## 第 1 步之外,誰讀什麼(2026-09-21 對齊 `CLAUDE.md` 與 `memory/role/README.md`)
-| | 主線 | 短命角色(開題者 / 實作者 / 驗證者) |
+## 第 1 步之外,誰讀什麼(對齊 `CLAUDE.md` 與 `memory/role/README.md`;正文在 README)
+| | 主線 | 短命角色(開題者 / 實作者 / 驗證者 / 覆核者 / 整理者 / 設計) |
 |---|---|---|
 | `docs/HANDOFF.md` 現況(舊的在 `docs/handoff/`) | ✓ | ✗ —— 那是主線的交接 |
 | `event.py tail 20`、`ticket.py list --open` | ✓ | ✗ |
 | 自己那張票 + 票的 `decision_refs` | — | ✓ |
-| `docs/DISPATCH-TEMPLATE.md` | ✓ | ✓ |
+| `docs/DISPATCH-TEMPLATE.md` | 派工前查 §0、§0.5 | **按需查 §**:規則包標題列指名的節、角色卡「遇到就查」指的節;不整份讀 |
 | 其他文件 | **grep 定位,讀那幾行** | **grep 定位,讀那幾行** |
 
 理由:每一份「所有角色都要讀」的檔案,成本是**乘以 agent 數**的。全域交接留給主線。
@@ -46,9 +46,9 @@
 - 讀派工文裡指定的副本路徑;先 `ls` 確認 `work/`、`base/` 都在。
 - 派工文的前言是 `rules.py pack` 產的規則包:角色卡、模型卡、每一節都至少帶一段正文,標題列就是
   全文路徑。產不出來(缺節、空正文、放不下)時 pack 非零、送 decision 頁,派工方**不起 agent**(#74)。
-- needs_verifier=true 的票由 auto-fix.sh 第 1 輪自動派驗證者(與 worker 平行,#51),交件路徑在派工文
+- 驗證者什麼時候起:正文只在 `tickets/SCHEMA.md` 的 `needs_verifier` 與 `interface_fixed` 兩列;交件路徑在派工文
   (`<副本根>/patch-verify.diff` 與 `EVIDENCE-verifier.md`)。
-- 讀 `docs/DISPATCH-TEMPLATE.md` §禁區與 §假綠家族。
+- 共用規矩按需查:角色卡「遇到就查」那一行說遇到什麼查 `docs/DISPATCH-TEMPLATE.md` 哪一節,grep 那一節讀,不整份讀。
 - **副本裡不發事件,由派工方代發**(2026-09-23,#29 A9)。`ticket.attempt.start` /
   `ticket.attempt.done` 由派工的那一側發:`auto-fix.sh` 自己發,第 1 輪由 auto-fix 發
   (#40:Ready 票打 `sh scripts/auto-fix.sh <n>` 就起第 1 輪、發 `--attempt 1`、票轉 Running)。
@@ -66,6 +66,6 @@
 - **關票前**:`scripts/ticket.py verify <id>`(它會 `git show main:<檔> | grep` 那張票獨有的字串)。
 
 ## 角色卡(2026-09-13 起)
-開場除了模型記憶,再讀 `memory/role/<role>.md`。派工 prompt 不重貼規則,只指路 + 四件票獨有的事。
+短命角色開場只讀「角色卡 + 票」(正文 `memory/role/README.md`;模型記憶由規則包帶)。派工 prompt 不重貼規則,只指路 + 四件票獨有的事。
 主線是溝通者(不查 code、不改票面、不驗證、不逐則轉述),順序也由它決定(**沒有調度員這個角色**,D-010);
 開題者可派子工作者搜集;驗證者只寫案例、證明案例是對的、登記標籤,不判 PASS/FAIL。細節見 `memory/role/README.md`。

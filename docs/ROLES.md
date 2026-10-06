@@ -6,11 +6,11 @@
 | 角色 | 誰 | 責任 | 必須交付 | 權限牆 |
 |---|---|---|---|---|
 | **產品負責人** | 人 | 方向、取捨、必要決策 | 目標、優先序、裁示 | 可暫停、取消、重排;不逐步批准例行工作 |
-| **主線** | 跟人互動的 session(Fable) | 接需求、派開題者、裁示、**覆核退回時裁示**(覆核由 `review.sh` 派 reviewer,主線不讀 patch)、決定落地順序、發版、維持脈絡 | 裁示(含覆核退回的反駁處置)、交接、發版紀錄 | 不放寬驗收;不跳過閘門;不自己查 code、不自己改票面;不替人做產品決策 |
-| **開題者** | 短命 session(Fable;簡單題可 Opus,不派 Sonnet,D-023) | 把使用者一句話寫成**完整票面**(含測試計畫) | 票 JSON;**摘要與建議順序寫進票的 `outline` 欄**(`ticket.py create --outline`),不只回在對話裡 | 不改檔、不 git 寫入、不執行整支腳本;不替實作者先做一遍 |
-| **設計 session** | 短命 session(Fable) | 設計題先設計再開題(D-019):決定形狀、比較方案、每個取捨附「未來每票省/多花」(D-018) | `docs/DESIGN-<題>.md`(固定段見 `docs/DESIGN.md` §設計文件的固定段) + 回主線 ≤ 300 字摘要 | 不開票、不改產品碼、不 git 寫入、不跑閘門 / 落地;量測派子工作者,自己只讀結論 |
+| **主線** | 跟人互動的 session(`routing.main`,D-039 起 opus 或以上) | 接需求、派開題者、裁示、**覆核退回時裁示**(覆核由 `review.sh` 派 reviewer,主線不讀 patch)、決定落地順序、發版、維持脈絡 | 裁示(含覆核退回的反駁處置)、交接、發版紀錄 | 不放寬驗收;不跳過閘門;不自己查 code、不自己改票面;不替人做產品決策 |
+| **開題者** | 短命 session(`routing.open`,D-039 起 opus 或以上;低於下限 `rules.py pack` 會擋,D-023) | 把使用者一句話寫成**完整票面**(含測試計畫) | 票 JSON;**摘要與建議順序寫進票的 `outline` 欄**(`ticket.py create --outline`),不只回在對話裡;交票前 `ticket.py lint` | 不改產品碼與 repo 檔(票檔、triage 檔、暫存目錄可寫);不 git 寫入(docs 通道落地自己那張票檔例外,別的檔 land 會擋);不替實作者先做一遍 |
+| **設計 session** | 短命 session(`routing.design`) | 設計題先設計再開題(D-019):決定形狀、比較方案、每個取捨附「未來每票省/多花」(D-018) | `docs/DESIGN-<題>.md`(固定段見 `docs/DESIGN.md` §設計文件的固定段) + 回主線 ≤ 300 字摘要 | 不開票、不改產品碼、不 git 寫入、不跑閘門 / 落地;量測派子工作者,自己只讀結論 |
 | **Worker / 實作者** | 短命(預設 Opus;機械、規格逐字的票可派 Codex sol) | 在副本裡實作與局部驗證 | `patch.diff`(含自己的單元測試)、`EVIDENCE.md`、變異驗紅 | 只寫自己的副本;禁 git 寫入;範圍擴大要回報不准自己做 |
-| **驗證者** | 短命、獨立上下文(Opus / Codex sol) | 把票面驗收寫成回歸案例;`verify-case.py check` **證明案例是對的**(乾淨主線紅、candidate 綠),登記片段 `verify/TAGS.d/<n>.md`,把怎麼跑寫進票的 `verify` 欄 | `verify/<feature>/test_ticket_<n>.py` + 票的 `verify`(含 `baseline`)+ `patch-verify.diff`(`verify-case.py extract` 出的) | **不判 PASS/FAIL、不寫 VERDICT**;不讀實作者的 `EVIDENCE.md`;**不跑 tag 回歸那一整組**(只跑自己的案例與 `verify-case.py check`);不輪詢;不改產品碼 |
+| **驗證者** | 短命、獨立上下文(Opus / Codex sol) | 把票面驗收寫成回歸案例;`verify-case.py red` **證明案例在乾淨基底上紅**(綠由閘門用 `check` 量,D-020),登記片段 `verify/TAGS.d/<n>.md`,把怎麼跑寫進 result 的 `verify` 格(收件併進票) | `verify/<feature>/test_ticket_<n>.py` + 票的 `verify`(含 `baseline`)+ `patch-verify.diff`(`verify-case.py extract` 出的) | **不判 PASS/FAIL、不寫 VERDICT**;不讀實作者的 `EVIDENCE.md`;**不跑 tag 回歸那一整組**(只跑自己的案例與 `verify-case.py red`);不改產品碼 |
 | **覆核者** | 短命(Opus;D-022;`scripts/review.sh` 派,D-025 ②) | 閘門綠、票轉 `InReview` 後讀**分支上的 code** 對票面驗收 | `verdict(pass\|fail)` + 逐條驗收 → code 位置 + 疑慮清單;`fail` 寫成 objection | 不重跑測試、不改檔、不 git 寫入、不判落地順序(`review.sh` 依檔尾 `## result` 把 pass 寫進票的 `review` 格;fail 轉 Blocked 回主線) |
 | **整理者** | 短命 × 2(`memory.consolidators` 兩個不同的模型) | 記憶超上限時壓縮(D-006 / D-007 / D-013);範本 `templates/dispatch-consolidator.md` | 壓縮後的記憶檔或提高上限 + `cap_history` 一列、兩份討論檔、`memory.consolidated` 事件 | 沒有討論檔不准 consolidate;不直接寫案例(用票號指路);不改 `docs/DECISIONS.md` |
 | **落地器** | `scripts/land.sh`(程式) | 閘門 → 合併 → push;紅了寫紅榜 | 事件、退出碼、`reports/t<n>/<run_id>/status.json` | 0 commit / 基準過期 / 越界 / **覆核缺或過期** / **未處置的阻擋反駁** / 閘門紅,一律拒絕;land 期間持一把互斥鎖。它**沒有判斷** |
@@ -35,8 +35,8 @@
 ## 模型路由(2026-09-20,D-011;可調的那一份在 `board/config.json` 的 `routing`)
 | 工作 | 預設 | 為什麼 |
 |---|---|---|
-| 主線、設計、查 bug 根因、驗收計畫、審稿 | **Fable** | 判斷題,不是打字題 |
-| 開題 | **Fable**(短命;簡單題可 Opus,**不派 Sonnet**,D-023) | 票面的品質決定下游要不要重做 |
+| 主線、開題 | **Opus 或以上**(D-039;`routing.main` / `routing.open`;低於該格 `rules.py pack` 不產包,D-023) | 判斷題;10/03 實測 opus 可用,下限放寬 |
+| 設計、查 bug 根因 | **Fable**(`routing.design` / `routing.bug`,D-039 未裁、維持) | 會影響之後每一張票的形狀 |
 | 實作 | **Opus**(`worker.command` 實際起的那個);機械、規格逐字的票可選 Codex `gpt-5.6-sol` | `board/config.json` 的 `routing.implement` 只是路由標籤,事件記的是 `worker.command` 真的起的模型 |
 | 實作(要起 server / 瀏覽器實跑) | **Opus** | Codex 在 `workspace-write` 綁不了埠、起不了瀏覽器(`-s danger-full-access` **不設**) |
 | 驗證(寫回歸案例) | **Opus**(預設)或 Codex sol | 驗證者是判斷工作(使用者 2026-10-03 裁示) |
@@ -63,7 +63,6 @@
 流程與狀態檔格式:`docs/WORKFLOW.md`。
 
 ## 並行上限與不准輪詢
-- 任何 agent 都不准用 Monitor / sleep 迴圈等背景工作。要跑的測試**前景跑、給 timeout、一輪拿結果**,
-  只擷取 `^Ran |^OK|^FAILED|^(FAIL|ERROR):` 那幾行。每看一次背景結果 = 整份上下文重送一次。
+- 不准輪詢的正文:主線在 `CLAUDE.md`「不可違反的」,短命角色在 `docs/DISPATCH-TEMPLATE.md` §3;這裡不重抄。
 - **同時最多兩個會起瀏覽器的 agent**;全套並跑時不再起瀏覽器型 agent。
 - **優先序改變時把低優先的 agent 停掉**,不要讓它自己滾完。
