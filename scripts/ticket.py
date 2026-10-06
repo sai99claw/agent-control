@@ -331,7 +331,7 @@ USAGE = {
                   "--evidence <EVIDENCE>"),
     "cost": ("scripts/ticket.py cost <id> --role worker|verifier|reviewer|land "
              "[--round N] [--model M] [--by <腳本>] [--from-envelope <信封檔>] "
-             "[--wall-seconds N]"),
+             "[--wall-seconds N] [--outcome <登記的字>] [--run-id <字>]"),
     "agent-command": ("scripts/ticket.py agent-command --model M [--tool T] "
                       "[--base \"<worker.command>\"] [--swap-model]"),
     "lint": "scripts/ticket.py lint <id>  # 唯讀:needs_verifier / verify_strings / 標籤",
@@ -368,7 +368,7 @@ python3 scripts/ticket.py set 7 allowed_write_paths '["scripts/land.sh", "tests/
                   '  --evidence reports/t7/EVIDENCE.md'),
     "cost": ("python3 scripts/ticket.py cost 7 --role worker --round 1 --model opus \\\n"
              "  --by auto-fix.sh --from-envelope reports/t7/20260923-101500-1/worker-round1.log \\\n"
-             "  --wall-seconds 412"),
+             "  --wall-seconds 412 --outcome handed-in --run-id 20260923-101500-1"),
     "agent-command": ("python3 scripts/ticket.py agent-command --model codex:gpt-6-astra --tool codex\n"
                       "python3 scripts/ticket.py agent-command --model fable --tool claude-code \\\n"
                       "  --base \"claude -p --model opus\" --swap-model"),
@@ -420,7 +420,10 @@ def known_flags(verb):
                 ("--by", "哪一支腳本寫的", False, False),
                 ("--from-envelope", "claude -p --output-format json 的信封檔(或混著它的 log)",
                  False, False),
-                ("--wall-seconds", "量到的秒數;沒給才取信封 duration_ms/1000", False, False)]
+                ("--wall-seconds", "量到的秒數;沒給才取信封 duration_ms/1000", False, False),
+                ("--outcome", "這一次的結局;只收登記表的字(tickets/SCHEMA.md 成本那一列)",
+                 False, False),
+                ("--run-id", "這一次的 run_id(land 是那一次的戳記)", False, False)]
     if verb == "agent-command":
         return [("--model", "票的 model(`codex:` 前綴 = codex)", False, True),
                 ("--tool", "票的 tool;缺 = claude-code", False, False),
@@ -811,6 +814,8 @@ def cmd_set(argv):
             if field in CARRY_REVIEW_FIELDS and isinstance(ticket.get("review"), dict):
                 ticket["review"]["state_version"] = ticket["state_version"]
                 carried = True
+            if field == "state" and value == "Done":
+                ticket["cost_total"] = cost_total(ticket)
             save(ticket)
     except RuntimeError as exc:
         sys.stderr.write("ticket: %s\n" % exc)
@@ -1411,13 +1416,15 @@ def cmd_close(argv):
             # 讀到的會是一張「覆核過期」的已完成票,而那句話是假的。
             if isinstance(ticket.get("review"), dict):
                 ticket["review"]["state_version"] = ticket["state_version"]
+            ticket["cost_total"] = cost_total(ticket)
             save(ticket)
     except RuntimeError as exc:
         sys.stderr.write("ticket: %s\n" % exc)
         return 5
     event.emit("ticket.closed", ticket=ident,
                hits=sum(row["hits"] for row in rows),
-               weak=1 if weak else 0, state_version=ticket["state_version"])
+               weak=1 if weak else 0, state_version=ticket["state_version"],
+               cost_total=ticket["cost_total"])
     sys.stdout.write("ticket: #%s -> Done(state_version %d)\n"
                      % (ident, ticket["state_version"]))
     return 0
@@ -1485,7 +1492,25 @@ def cmd_round(argv):
 COST_USAGE = (("tokens_in", "input_tokens"), ("tokens_out", "output_tokens"),
               ("cache_write", "cache_creation_input_tokens"),
               ("cache_read", "cache_read_input_tokens"))
-COST_FLAGS = ("--role", "--round", "--model", "--by", "--from-envelope", "--wall-seconds")
+# 信封有 `modelUsage`(一模型一格)就取它的加總(#94 C3):子 agent 換了模型,`usage`
+# 只算得到主模型那一份。
+COST_MODEL_USAGE = (("tokens_in", "inputTokens"), ("tokens_out", "outputTokens"),
+                    ("cache_write", "cacheCreationInputTokens"),
+                    ("cache_read", "cacheReadInputTokens"))
+COST_FLAGS = ("--role", "--round", "--model", "--by", "--from-envelope", "--wall-seconds",
+              "--outcome", "--run-id")
+# 一列的形狀唯一(D-018,#94 C1):寫的人只有 `cmd_cost`,鍵就是這幾個、這個順序。
+COST_KEYS = ("role", "round", "model", "tokens_in", "tokens_out", "cache_write", "cache_read",
+             "wall_seconds", "outcome", "run_id", "session_id", "by", "note", "at")
+# `--outcome` 的登記表(#94 C2;正文在 tickets/SCHEMA.md 成本那一列)。表外的字不收:
+# 各寫各的同義字(`passed` / `pass`),加總那一刻就分成兩格。
+COST_OUTCOMES = (
+    ("worker / verifier", ("handed-in", "no-patch", "apply-failed", "timeout",
+                           "objection", "error")),
+    ("reviewer", ("pass", "fail", "missing")),
+    ("opener", ("accepted", "rejected", "escalate", "undecided")),
+    ("land / gate", ("pass", "fail", "refused")),
+)
 
 
 def repo_relative(path):
@@ -1522,9 +1547,38 @@ def read_envelope(path):
                 break
     if not isinstance(data, dict):
         return None, "%s 裡沒有 JSON 信封" % shown
-    if not isinstance(data.get("usage"), dict):
+    if not isinstance(data.get("usage"), dict) and not isinstance(data.get("modelUsage"), dict):
         return None, "%s 的信封沒有 usage" % shown
     return data, ""
+
+
+def whole(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def envelope_tokens(envelope):
+    """信封的四種 token,`{欄: 值}`。`modelUsage` 各模型加總;某模型缺某鍵算 0,四鍵全缺
+    的模型不算。**一欄**沒有任何一個模型帶那個鍵(或沒有 `modelUsage`)才退回 `usage`
+    的那一欄 —— 只帶 inputTokens / outputTokens 的 modelUsage 不該把 cache 兩欄量成 0。"""
+    seen, totals = set(), {}
+    models = envelope.get("modelUsage")
+    for usage in (models.values() if isinstance(models, dict) else ()):
+        if not isinstance(usage, dict):
+            continue
+        values = [whole(usage.get(key)) for _, key in COST_MODEL_USAGE]
+        if all(value is None for value in values):
+            continue
+        for (field, _), value in zip(COST_MODEL_USAGE, values):
+            totals[field] = totals.get(field, 0) + (value or 0)
+            if value is not None:
+                seen.add(field)
+    usage = envelope.get("usage") if isinstance(envelope.get("usage"), dict) else {}
+    return {field: totals[field] if field in seen else whole(usage.get(key))
+            for field, key in COST_USAGE}
+
+
+def outcome_table():
+    return "\n".join("  %s:%s" % (who, " / ".join(words)) for who, words in COST_OUTCOMES)
 
 
 def cmd_cost(argv):
@@ -1549,6 +1603,11 @@ def cmd_cost(argv):
     if not got.get("--role"):
         sys.stderr.write("ticket: cost 要 --role\n")
         return 2
+    outcome = got.get("--outcome") or None
+    if outcome is not None and not any(outcome in words for _, words in COST_OUTCOMES):
+        sys.stderr.write("ticket: --outcome %r 不在登記表裡(tickets/SCHEMA.md 成本那一列):\n%s\n"
+                         % (outcome, outcome_table()))
+        return 2
     try:
         rnd = int(got["--round"]) if got.get("--round") else None
         wall = int(round(float(got["--wall-seconds"]))) \
@@ -1560,15 +1619,18 @@ def cmd_cost(argv):
     envelope, why = None, "沒帶 --from-envelope"
     if got.get("--from-envelope"):
         envelope, why = read_envelope(got["--from-envelope"])
-    usage = envelope["usage"] if envelope else {}
-    for field, key in COST_USAGE:
-        value = usage.get(key)
-        row[field] = value if isinstance(value, int) and not isinstance(value, bool) else None
+    tokens = envelope_tokens(envelope) if envelope else {}
+    for field, _ in COST_USAGE:
+        row[field] = tokens.get(field)
     if wall is None and envelope and isinstance(envelope.get("duration_ms"), (int, float)):
         wall = int(round(envelope["duration_ms"] / 1000.0))
     # token 欄是 null 的那一列,原因寫在 `note`(#58):「沒量」與「量了但信封不見」
     # 都是 null,只看數字分不出來。
-    row.update({"wall_seconds": wall, "by": got.get("--by") or None,
+    session = envelope.get("session_id") if envelope else None
+    row.update({"wall_seconds": wall, "outcome": outcome,
+                "run_id": got.get("--run-id") or None,
+                "session_id": session if isinstance(session, str) and session else None,
+                "by": got.get("--by") or None,
                 "note": None if envelope else why, "at": now()})
     if envelope is None:
         sys.stderr.write("ticket: #%s cost 的信封讀不到(%s)—— token 欄記 null\n"
@@ -1586,11 +1648,55 @@ def cmd_cost(argv):
     except RuntimeError as exc:
         sys.stderr.write("ticket: %s\n" % exc)
         return 5
-    event.emit("ticket.cost", ticket=ident, role=row["role"], round=rnd,
-               tokens_out=row["tokens_out"], wall_seconds=wall)
+    # 事件帶整列(#94 C4),`at` 除外 —— 事件自己有 `ts`。
+    event.emit("ticket.cost", ticket=ident,
+               **{key: row[key] for key in COST_KEYS if key != "at"})
     sys.stdout.write("ticket: #%s cost 記一筆 role=%s round=%s tokens_out=%s wall=%s\n"
                      % (ident, row["role"], rnd, row["tokens_out"], wall))
     return 0
+
+
+def seconds_between(start, end):
+    try:
+        return int((datetime.fromisoformat(end)
+                    - datetime.fromisoformat(start)).total_seconds())
+    except (TypeError, ValueError):
+        return None
+
+
+def add_up(values):
+    """非 null 的加總;一個都沒有就是 null —— 不是 0(0 與「全都沒量」長得一樣)。"""
+    values = [value for value in values if whole(value) is not None]
+    return sum(values) if values else None
+
+
+def cost_total(ticket):
+    """整票加總(#94 C6),關票那一次存檔寫。形狀唯一,正文在 tickets/SCHEMA.md。"""
+    at = now()
+    rows = [row for row in (ticket.get("cost") if isinstance(ticket.get("cost"), list) else [])
+            if isinstance(row, dict)]
+    by_role = {}
+    for role in dict.fromkeys(str(row.get("role")) for row in rows):
+        mine = [row for row in rows if str(row.get("role")) == role]
+        part = {"runs": len(mine),
+                "wall_seconds": add_up(row.get("wall_seconds") for row in mine)}
+        for field, _ in COST_USAGE:
+            part[field] = add_up(row.get(field) for row in mine)
+        part["unknown_token_runs"] = sum(1 for row in mine if whole(row.get("tokens_in")) is None)
+        outcomes = {}
+        for row in mine:
+            key = row.get("outcome") if row.get("outcome") is not None else "null"
+            outcomes[key] = outcomes.get(key, 0) + 1
+        part["outcomes"] = outcomes
+        by_role[role] = part
+    rounds = [whole(row.get("round")) for row in rows if row.get("role") == "worker"]
+    objections = ticket.get("objections")
+    return {"calendar_seconds": seconds_between(ticket.get("created"), at),
+            "wall_seconds": add_up(row.get("wall_seconds") for row in rows),
+            "runs": len(rows),
+            "worker_rounds": max([n for n in rounds if n is not None], default=None),
+            "objections": len(objections) if isinstance(objections, list) else 0,
+            "by_role": by_role, "at": at}
 
 
 # ------------------------------------------------------------ agent-command

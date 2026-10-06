@@ -271,6 +271,19 @@ class TheReviewerCostGoesOnTheTicket(ReviewBase):
         self.assertIn("ticket.cost", self.kinds())
 
 
+class TheReviewerRowSaysHowItEnded(ReviewBase):
+    """#94 C5(d):reviewer 列的 outcome 與它發的 review.* 同字,run_id 是 review 的 RUN_ID。"""
+
+    def test_c5d_a_pass_is_outcome_pass_with_the_run_id(self):
+        """**變異**:review.sh 的 pass 路 `write_cost pass` 改成 `write_cost fail` → 這一條紅。"""
+        self.set_reviewer(REVIEWER_PASS_ENVELOPE)
+        done = self.review()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row, = self.load_ticket("1").get("cost") or []
+        self.assertEqual(row["outcome"], "pass")
+        passed = [e for e in self.events() if e["kind"] == "review.pass"][-1]
+        self.assertEqual(row["run_id"], passed["run_id"])
+
 class ItLeavesEarlierPagesAlone(ReviewBase):
     """D-032 之後沒有「等覆核」頁可收:review.sh 不再 ack 任何一頁,舊頁留給主線收。"""
 

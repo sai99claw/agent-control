@@ -1091,6 +1091,30 @@ class EveryRoundCostsARowAndClosesItsAttempt(AutoFixBase):
                          "沒交 patch 也派過一次,成本照記")
 
 
+class EveryWorkerRowSaysHowTheRoundEnded(AutoFixBase):
+    """#94 C5(a):worker 那一列帶該輪結局與 RUN_ID,一輪仍只一列。"""
+
+    def test_a_worker_that_hands_in_a_patch_is_handed_in_with_a_run_id(self):
+        """**變異**:apply 綠之後那一手 `worker_cost handed-in` 拿掉 → 這一條紅(0 列)。"""
+        self.set_worker(WORKER_ROUND_ONE_COSTS.replace("@ENVELOPE@", "not an envelope"))
+        self.ticket_ready()
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        rows = self.load_ticket("1").get("cost") or []
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]["outcome"], "handed-in")
+        self.assertTrue(rows[0]["run_id"])
+
+    def test_a_worker_that_hands_in_nothing_is_no_patch(self):
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready()
+        done = self.auto_fix()
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        rows = self.load_ticket("1").get("cost") or []
+        self.assertEqual([(row["role"], row["outcome"]) for row in rows],
+                         [("worker", "no-patch")])
+        self.assertTrue(rows[0]["run_id"])
+
 class WhichRoundIsTheLatestOne(AutoFixBase):
     """#29 第 4 輪:「最新一輪」不准靠同一秒的運氣。
 

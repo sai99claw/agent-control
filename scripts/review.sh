@@ -431,20 +431,21 @@ PY
 )"
 REL_REVIEW=$(rel "$REVIEW")
 
-write_cost() {   # 覆核者的 token 與時鐘進票的 `cost[]`(D-032)。pass / fail / 沒交件都寫;
+write_cost() {   # $1 = 結局 pass|fail|missing(與 review.* 同字,#94 C5d)
+    # 覆核者的 token 與時鐘進票的 `cost[]`(D-032)。pass / fail / 沒交件都寫;
     # pass 那條路要寫在 `set review` **之後** —— cost 不動 state_version,先寫後寫都不會讓
     # review 過期,但順序照事實:覆核先落,成本後記。
     _attempt=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("attempt") or 0)' "$TF" 2>/dev/null || echo 0)
     python3 "$AC/ticket.py" cost "$ID" --role reviewer --round "$_attempt" --model "$MODEL" \
         --by review.sh --from-envelope "$RUNDIR/reviewer.json" --wall-seconds "$RSECS" \
-        >/dev/null 2>&1 || echo "review: #$ID 的 cost 寫不進票 —— 不擋覆核" >&2
+        --outcome "$1" --run-id "$RUN_ID" >/dev/null 2>&1 || echo "review: #$ID 的 cost 寫不進票 —— 不擋覆核" >&2
 }
 
 if [ -z "$VERDICT" ]; then
     echo "review: #$ID 覆核沒交件 —— $WHY;不寫 review,票留 InReview" >&2
     ev review.missing --ticket "$ID" --kv run_id="$RUN_ID" \
         --note "沒交不是 pass($WHY):看 $(rel "$RLOG") 與 $REL_REVIEW,再重派 sh scripts/review.sh $ID"
-    write_cost
+    write_cost missing
     exit 3
 fi
 
@@ -455,7 +456,7 @@ if [ "$VERDICT" = "pass" ]; then
         echo "review: #$ID 的 review 寫不進票" >&2
         exit 4
     }
-    write_cost
+    write_cost pass
     echo "review: #$ID 覆核通過($BY,sha $(echo "$SHA" | cut -c1-12))—— review 已寫進票"
     ev review.pass --ticket "$ID" --kv run_id="$RUN_ID" --kv by="$BY" \
         --kv sha="$(echo "$SHA" | cut -c1-12)" --note "$REL_REVIEW"
@@ -499,7 +500,7 @@ print(len(bodies) if done.returncode == 0 else -1)
 PY
 )
 [ "${COUNT:--1}" -ge 0 ] || { echo "review: #$ID 的反駁寫不進票" >&2; exit 4; }
-write_cost
+write_cost fail
 python3 "$AC/ticket.py" set "$ID" state Blocked >/dev/null 2>&1 \
     || echo "review: 票狀態改不動(Blocked)" >&2
 python3 "$AC/ticket.py" set "$ID" owner main >/dev/null 2>&1 || true

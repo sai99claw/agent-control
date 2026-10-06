@@ -1089,6 +1089,278 @@ class Cost(Sandbox):
         self.assertNotIn("ticket.state", kinds)
 
 
+
+# #94 C1:一列恰是這 14 鍵。期望值抄票面字面,不從 ticket.COST_KEYS 讀回來。
+COST_ROW_KEYS = {"role", "round", "model", "tokens_in", "tokens_out", "cache_write",
+                 "cache_read", "wall_seconds", "outcome", "run_id", "session_id", "by",
+                 "note", "at"}
+# #94 C2 的登記表(票面字面)。
+REGISTERED_OUTCOMES = ("handed-in", "no-patch", "apply-failed", "timeout", "objection",
+                       "error", "pass", "fail", "missing", "accepted", "rejected",
+                       "escalate", "undecided", "refused")
+
+
+class CostLedgerRow(Sandbox):
+    """#94 C1–C4、C7:`ticket.py cost` 一列一形、outcome 只收登記的字、token 取
+    modelUsage 全模型加總、ticket.cost 事件帶整列。"""
+
+    def setUp(self):
+        super().setUp()
+        self.make_ticket(1, state="InReview", state_version=4,
+                         review={"verdict": "pass", "by": "reviewer@opus",
+                                 "sha": "abc1234", "state_version": 4})
+
+    def envelope_file(self, data):
+        return self.write("envelope.json", json.dumps(data), where=self.home)
+
+    def cost(self, *args):
+        return self.ticket("cost", "1", "--role", "worker", "--round", "1",
+                           "--model", "opus", "--by", "auto-fix.sh", *args)
+
+    def test_c1_the_row_has_exactly_the_fourteen_keys_and_the_three_new_ones_are_filled(self):
+        """C1。**變異 m1**:cost 列不寫 outcome 鍵 → 這一條紅。"""
+        path = self.envelope_file({"type": "result", "session_id": "s-1",
+                                   "usage": {"input_tokens": 5, "output_tokens": 77,
+                                             "cache_creation_input_tokens": 0,
+                                             "cache_read_input_tokens": 9}})
+        done = self.cost("--from-envelope", path, "--outcome", "handed-in", "--run-id", "r-1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("1")["cost"][-1]
+        self.assertEqual(set(row), COST_ROW_KEYS)
+        self.assertEqual((row["outcome"], row["run_id"], row["session_id"]),
+                         ("handed-in", "r-1", "s-1"))
+
+    def test_c1_without_the_flags_and_the_envelope_the_new_keys_are_null(self):
+        done = self.cost()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("1")["cost"][-1]
+        self.assertEqual(set(row), COST_ROW_KEYS)
+        for key in ("outcome", "run_id", "session_id",
+                    "tokens_in", "tokens_out", "cache_write", "cache_read"):
+            self.assertIsNone(row[key], key)
+
+    def test_c2_every_registered_outcome_is_accepted(self):
+        for index, word in enumerate(REGISTERED_OUTCOMES):
+            with self.subTest(word):
+                done = self.cost("--outcome", word)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertEqual(self.load_ticket("1")["cost"][index]["outcome"], word)
+
+    def test_c2_a_word_outside_the_table_is_refused_and_nothing_is_written(self):
+        """C2 反例。**變異 m2**:--outcome 不驗登記表 → 這一條紅。"""
+        self.cost("--outcome", "pass")
+        rows_before = len(self.load_ticket("1")["cost"])
+        costs_before = self.kinds().count("ticket.cost")
+        done = self.cost("--outcome", "passed")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        for word in REGISTERED_OUTCOMES:
+            self.assertIn(word, done.stderr)
+        self.assertEqual(len(self.load_ticket("1")["cost"]), rows_before)
+        self.assertEqual(self.kinds().count("ticket.cost"), costs_before)
+
+    def test_c3_model_usage_is_summed_over_every_model(self):
+        """C3。**變異 m3**:只讀 usage 不讀 modelUsage → 這一條紅。"""
+        path = self.envelope_file({
+            "type": "result",
+            "usage": {"input_tokens": 5, "output_tokens": 77,
+                      "cache_creation_input_tokens": 0, "cache_read_input_tokens": 9},
+            "modelUsage": {
+                "m-a": {"inputTokens": 5, "outputTokens": 77,
+                        "cacheCreationInputTokens": 0, "cacheReadInputTokens": 9},
+                "m-b": {"inputTokens": 3, "outputTokens": 20,
+                        "cacheCreationInputTokens": 4, "cacheReadInputTokens": 100}}})
+        done = self.cost("--from-envelope", path)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("1")["cost"][-1]
+        self.assertEqual((row["tokens_in"], row["tokens_out"], row["cache_write"],
+                          row["cache_read"]), (8, 97, 4, 109))
+        self.assertEqual(row["model"], "opus", "model 欄仍是 --model")
+
+    def test_c3_usage_only_envelope_is_todays_behaviour(self):
+        path = self.envelope_file({"type": "result",
+                                   "usage": {"input_tokens": 5, "output_tokens": 77,
+                                             "cache_creation_input_tokens": 0,
+                                             "cache_read_input_tokens": 9}})
+        self.cost("--from-envelope", path)
+        row = self.load_ticket("1")["cost"][-1]
+        self.assertEqual((row["tokens_in"], row["tokens_out"], row["cache_write"],
+                          row["cache_read"]), (5, 77, 0, 9))
+
+    def test_c3_a_missing_key_counts_zero_and_an_empty_model_is_skipped(self):
+        path = self.envelope_file({
+            "type": "result",
+            "usage": {"input_tokens": 1, "output_tokens": 1,
+                      "cache_creation_input_tokens": 1, "cache_read_input_tokens": 1},
+            "modelUsage": {
+                "m-a": {"inputTokens": 5, "outputTokens": 7,
+                        "cacheCreationInputTokens": 2, "cacheReadInputTokens": 9},
+                "m-b": {"inputTokens": 3, "outputTokens": 20},
+                "m-c": {"costUSD": 0.5}}})
+        self.cost("--from-envelope", path)
+        row = self.load_ticket("1")["cost"][-1]
+        self.assertEqual((row["tokens_in"], row["tokens_out"], row["cache_write"],
+                          row["cache_read"]), (8, 27, 2, 9))
+
+    def test_c3_a_column_no_model_carries_falls_back_to_usage(self):
+        """C3(第 1 輪反駁裁示)。**變異 m3b**:逐欄退回改成「缺鍵一律 0」→ 這一條紅。"""
+        cases = (
+            ({"input_tokens": 5, "output_tokens": 77, "cache_creation_input_tokens": 34,
+              "cache_read_input_tokens": 218},
+             {"m-a": {"inputTokens": 5, "outputTokens": 77}}, (5, 77, 34, 218)),
+            ({"input_tokens": 0, "output_tokens": 0, "cache_creation_input_tokens": 7,
+              "cache_read_input_tokens": 0},
+             {"m-a": {"inputTokens": 1, "outputTokens": 2, "cacheReadInputTokens": 10},
+              "m-b": {"inputTokens": 3, "outputTokens": 4}}, (4, 6, 7, 10)),
+        )
+        for index, (usage, models, expected) in enumerate(cases):
+            with self.subTest(expected):
+                path = self.envelope_file({"type": "result", "usage": usage,
+                                           "modelUsage": models})
+                done = self.cost("--from-envelope", path)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                row = self.load_ticket("1")["cost"][index]
+                self.assertEqual((row["tokens_in"], row["tokens_out"], row["cache_write"],
+                                  row["cache_read"]), expected)
+
+    def test_c4_the_event_carries_the_whole_row_but_at(self):
+        """C4。**變異 m4**:事件只帶 tokens_out → 這一條紅。"""
+        path = self.envelope_file({
+            "type": "result", "session_id": "s-1", "duration_ms": 4000,
+            "usage": {"input_tokens": 5, "output_tokens": 77,
+                      "cache_creation_input_tokens": 3, "cache_read_input_tokens": 9}})
+        done = self.cost("--from-envelope", path, "--outcome", "handed-in", "--run-id", "r-1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("1")["cost"][-1]
+        event = [e for e in self.events() if e["kind"] == "ticket.cost"][-1]
+        self.assertEqual(event["ticket"], "1")
+        for key in row:
+            if key in ("at", "note"):
+                continue
+            self.assertEqual(event[key], row[key], key)
+        self.assertEqual(event.get("note"), row["note"])
+        self.assertNotIn("at", event)
+
+    def test_c7_cost_still_leaves_state_version_and_review_alone(self):
+        before = self.load_ticket("1")
+        self.cost("--outcome", "handed-in", "--run-id", "r-1")
+        after = self.load_ticket("1")
+        self.assertEqual(after["state_version"], before["state_version"])
+        self.assertEqual(after["review"], before["review"])
+        self.assertNotIn("cost_total", after)
+
+
+class CostTotalOnClose(Sandbox):
+    """#94 C6:關票的那一次存檔寫 cost_total。期望值照票面手算。"""
+
+    ROWS = [
+        {"role": "worker", "round": 1, "model": "opus", "tokens_in": 10, "tokens_out": 100,
+         "cache_write": 1000, "cache_read": 5000, "wall_seconds": 60,
+         "outcome": "handed-in", "run_id": "r1", "session_id": None, "by": "auto-fix.sh",
+         "note": None, "at": "2026-09-12T10:10:00+08:00"},
+        {"role": "worker", "round": 2, "model": "opus", "tokens_in": 5, "tokens_out": 50,
+         "cache_write": 200, "cache_read": 3000, "wall_seconds": 40,
+         "outcome": "handed-in", "run_id": "r2", "session_id": None, "by": "auto-fix.sh",
+         "note": None, "at": "2026-09-12T10:20:00+08:00"},
+        {"role": "reviewer", "round": 2, "model": "opus", "tokens_in": 1, "tokens_out": 10,
+         "cache_write": 20, "cache_read": 300, "wall_seconds": 9, "outcome": "fail",
+         "run_id": "r2", "session_id": None, "by": "review.sh", "note": None,
+         "at": "2026-09-12T10:30:00+08:00"},
+        {"role": "reviewer", "round": 2, "model": "opus", "tokens_in": 1, "tokens_out": 12,
+         "cache_write": 20, "cache_read": 310, "wall_seconds": 8, "outcome": "pass",
+         "run_id": "r3", "session_id": None, "by": "review.sh", "note": None,
+         "at": "2026-09-12T10:40:00+08:00"},
+        {"role": "land", "round": 2, "model": None, "tokens_in": None, "tokens_out": None,
+         "cache_write": None, "cache_read": None, "wall_seconds": 30, "outcome": "pass",
+         "run_id": "l1", "session_id": None, "by": "land.sh", "note": None,
+         "at": "2026-09-12T10:50:00+08:00"},
+        # 舊格式:#94 以前的列沒有 outcome / run_id / session_id 鍵。
+        {"role": "verifier", "round": 1, "model": "opus", "tokens_in": None,
+         "tokens_out": None, "cache_write": None, "cache_read": None, "wall_seconds": None,
+         "by": "auto-fix.sh", "note": "沒帶 --from-envelope",
+         "at": "2026-09-12T10:05:00+08:00"},
+    ]
+
+    def land_a_file(self, path, text):
+        self.write(path, text)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "把 %s 放進主線" % path)
+
+    def closable(self, **extra):
+        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
+        fields = {"allowed_write_paths": ["src/*"],
+                  "verify_strings": ["src/nav.py:def size_nav"],
+                  "test_evidence": [{"cmd": "gate --branch", "rc": 0}],
+                  "cost": [dict(row) for row in self.ROWS],
+                  "objections": [{"category": "ticket-wrong", "owner": "main",
+                                  "body": "x", "disposition": "rejected"}]}
+        fields.update(extra)
+        self.make_ticket(1, **fields)
+        self.ticket("set", "1", "review",
+                    json.dumps({"verdict": "pass", "by": "main", "sha": "deadbeef"}))
+
+    def check_total(self, total, created):
+        from datetime import datetime
+        self.assertEqual(total["by_role"]["worker"],
+                         {"runs": 2, "wall_seconds": 100, "tokens_in": 15, "tokens_out": 150,
+                          "cache_write": 1200, "cache_read": 8000, "unknown_token_runs": 0,
+                          "outcomes": {"handed-in": 2}})
+        land = total["by_role"]["land"]
+        for field in ("tokens_in", "tokens_out", "cache_write", "cache_read"):
+            self.assertIsNone(land[field], field)
+        self.assertEqual(land["unknown_token_runs"], 1)
+        self.assertEqual(total["by_role"]["verifier"]["outcomes"], {"null": 1})
+        self.assertIsNone(total["by_role"]["verifier"]["wall_seconds"])
+        self.assertEqual(total["by_role"]["reviewer"]["outcomes"], {"fail": 1, "pass": 1})
+        self.assertEqual(total["wall_seconds"], 147)
+        self.assertEqual(total["runs"], 6)
+        self.assertEqual(total["worker_rounds"], 2)
+        self.assertEqual(total["objections"], 1)
+        self.assertEqual(total["calendar_seconds"],
+                         int((datetime.fromisoformat(total["at"])
+                              - datetime.fromisoformat(created)).total_seconds()))
+        self.assertEqual(set(total), {"calendar_seconds", "wall_seconds", "runs",
+                                      "worker_rounds", "objections", "by_role", "at"})
+
+    def test_c6_close_writes_cost_total_in_the_same_save_and_on_the_event(self):
+        """C6。**變異 m5**:全 null 的欄加總成 0 → land 那幾條斷言紅。"""
+        self.closable()
+        before = self.load_ticket("1")["state_version"]
+        done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        self.assertEqual(row["state"], "Done")
+        self.assertEqual(row["state_version"], before + 1, "cost_total 不另外 bump")
+        self.check_total(row["cost_total"], row["created"])
+        closed = [e for e in self.events() if e["kind"] == "ticket.closed"][-1]
+        self.assertEqual(closed["cost_total"], row["cost_total"])
+        self.assertEqual(closed["state_version"], row["state_version"])
+        self.assertIn("hits", closed)
+
+    def test_c6_set_state_done_writes_it_too(self):
+        self.closable()
+        done = self.ticket("set", "1", "state", "Done")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        self.check_total(row["cost_total"], row["created"])
+
+    def test_c6_a_refused_close_writes_no_cost_total(self):
+        """C6 反例。**變異 m6**:cost_total 寫在關票拒絕檢查之前 → 這一條紅。"""
+        self.closable(test_evidence=[])
+        done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertNotIn("cost_total", self.load_ticket("1"))
+        self.assertNotIn("ticket.closed", self.kinds())
+        done = self.ticket("set", "1", "state", "Done")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertNotIn("cost_total", self.load_ticket("1"))
+
+    def test_c6_no_worker_rows_and_no_cost_at_all(self):
+        self.closable(cost=[])
+        self.ticket("close", "1")
+        total = self.load_ticket("1")["cost_total"]
+        self.assertEqual((total["runs"], total["wall_seconds"], total["worker_rounds"],
+                          total["by_role"]), (0, None, None, {}))
+
 def ticket_bytes(case, ident):
     with open(os.path.join(case.repo, "tickets", "%s.json" % ident), "rb") as handle:
         return handle.read()
