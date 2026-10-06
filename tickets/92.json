@@ -5,7 +5,7 @@
   "objective": "docs/review/20261004-a-spec-audit.md 所有「改文字」的發現(原建議 P1+P2 合一)做完:給模型讀的文字與程式、裁示、SCHEMA 一致,同一規則一處正文。核心照使用者 2026-10-05 原話「Agent 在開始執行之前不容易知道自己是不是短命,通常agent 開始之前應該要讀角色卡+票,其他需要的他會自己去找」:短命角色開場只讀角色卡 + 票,DISPATCH-TEMPLATE(33KB)改成按需查的參考,角色卡寫「遇到 X 去查 §Y」。內容不刪原則、去重、案例移出(D-013)。使用者裁示:「改prompt 一張票 改工具一張票」—— 本票是 prompt 那張,code 半是 #91。",
   "acceptance": [
     "Q1 [核心;使用者 2026-10-05 原話「Agent 在開始執行之前不容易知道自己是不是短命,通常agent 開始之前應該要讀角色卡+票,其他需要的他會自己去找」;F14 F15] 短命角色(worker、verifier、opener、reviewer、consolidator、design)的開場只寫「角色卡 + 票」(派工文已帶的規則包照帶,不另指定讀整份文件);CLAUDE.md:22 一帶、docs/SESSION-START.md(含表格第 13 行的 ✓)、templates/dispatch-*.md、templates/project-CLAUDE.md 不再有任何一處要短命角色開場讀整份 docs/DISPATCH-TEMPLATE.md、HANDOFF、事件流或開票清單。正文只在 memory/role/README.md 一處(逐字含「角色卡 + 票」),其他處一句指路。CLAUDE.md 開場四步與「每個動作要發事件」標明主線限定(F15)。覆核:在上述檔 grep「DISPATCH-TEMPLATE」,每一處命中都是「按需查 §X」或規則包說明,不是開場必讀。",
-    "Q2 [F14 F2 F8 F9 F23 F24 F26 F27 F28] docs/DISPATCH-TEMPLATE.md 改成按需查的參考:開頭一段逐字含「不整份讀」,附一張「情境 → §」索引;scripts/rules.py WANTED 引用的每個節號都保留、各節切得出非空正文(不改節號 —— 改了規則包就切不出來;非改不可就寫 OBJECTION ticket-wrong);原則一條不刪,只去重:「只准跑的測試」只留 §1(F23)、短命角色的不准輪詢只留這裡(F24)、patch 檔頭縮成「apply 會拒」(F26);案例敘事改成票號指路(D-013);§1 手工套 patch / archive 步驟縮成一句派工方的事(F9);§3 範例改中性指令、§8 第 4 點標 worker 限定(F2 F8);§8 第 1 點改相對副本根的路徑(F28);result 表補 `verify`、`verdict` 兩鍵,與 tickets/SCHEMA.md 的表同步(F27)。檔案 bytes 小於改前(改前 33029,EVIDENCE 記前後 wc -c)。",
+    "Q2 [F14 F2 F8 F9 F23 F24 F26 F27 F28] docs/DISPATCH-TEMPLATE.md 改成按需查的參考:開頭一段逐字含「不整份讀」,附一張「情境 → §」索引;scripts/rules.py WANTED 引用的每個節號都保留、各節切得出非空正文(不改節號 —— 改了規則包就切不出來;非改不可就寫 OBJECTION ticket-wrong);原則一條不刪,只去重:「只准跑的測試」只留 §1(F23)、短命角色的不准輪詢只留這裡(F24)、patch 檔頭縮成「apply 會拒」(F26);案例敘事改成票號指路(D-013);§1 手工套 patch / archive 步驟縮成一句派工方的事(F9);§3 範例改中性指令、§8 第 4 點標 worker 限定(F2 F8);§8 第 1 點改相對副本根的路徑(F28);兩張 result 鍵表(§8.5 與 tickets/SCHEMA.md)的鍵不動 —— test_dispatch_template 把鍵集合寫死成 12 鍵,依 Q9 不改測試;改在兩張表下各一段文字點名 `verify`、`verdict` 兩格與各自的收件端,兩處說法一致(F27 文字半;補列連測試一起改,歸後續 code 票)。檔案 bytes 小於改前(改前 33029,EVIDENCE 記前後 wc -c)。",
     "Q3 [角色卡指路] 每張短命角色卡(implementer、verifier、opener、reviewer、consolidator、design)有「遇到 X → 查 DISPATCH-TEMPLATE §Y / reference『<角色>角色操作細節』」的指路,X 是這個角色真的會遇到的情境(至少涵蓋:交件格式、反駁、測試範圍、禁區);卡上不抄指令、路徑、行號(D-036)。容量:每張卡不超過現行上限、上限數字不改(opener 改前 1984/2000、implementer 2425/2700);`memory.py check --read-only` 超標的卡數不比改前多(改前先跑一次記下)。",
     "Q4 [W 類,照審查報告各條「處置」欄做] F1(驗證者跑 verify-case red,不跑 check;reference 與 verifier 卡各只寫一次)、F3 文字半(verify_strings 形狀以 tickets/SCHEMA.md 為準:純字串或 `路徑:字`,不手寫 dict;手寫自檢那一行改成指到 #91 的 `ticket.py lint`,寫在 docs/reference/role-procedures.md,逐字含「ticket.py lint」)、F4(不改產品碼與 repo 檔,票檔 / triage 檔 / 暫存目錄可寫,唯讀指令與 --help 可跑;子工作者限互動 session)、F6(fable 卡不教裸 commit,改指 docs 通道)、F7(實作者不跑全套,分批跑全套那條限定或刪)、F12(整理者卡只留原則,指令指到範本)、F19(main.inbox 過期條目處置掉)。",
     "Q5 [T 類,照各條「處置」欄做] F5(開題者模型標示跟上 D-039,「不准派 Sonnet」改指路到 routing 下限)、F10(覆核者卡與 SCHEMA 覆核列改成 review.sh 寫 review,不是主線)、F11(覆核者反駁形狀指到範本)、F13(整理者卡寫明兩條路:兩模型 consolidate,或單一高階模型走 worker 管線 —— 後者靠 #91 C7 照票 model 起)、F16(寫入範圍硬擋只有 out_of_scope 與 protected_paths)、F18(刪掉不存在的落地順序提案腳本那半句)、F25(驗證者何時起只留 SCHEMA 一處正文)、F29(副本環境變數的理由改成拋棄式控制根)。",
@@ -84,9 +84,9 @@
   "model": "fable",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "dceaea95e2aea2da435ad0d8c7fc3427061c761e",
-  "state": "Ready",
-  "state_version": 5,
+  "base_sha": "50af0c029ea062014be11f62aa0ad4a0e8d6e76e",
+  "state": "Done",
+  "state_version": 22,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -125,5 +125,113 @@
   "interface_fixed": false,
   "worker": {
     "timeout_seconds": 12600
+  },
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "fable",
+      "tokens_in": 1444,
+      "tokens_out": 113656,
+      "cache_write": 282866,
+      "cache_read": 8063219,
+      "wall_seconds": 1891,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-06T16:50:58+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "fable",
+      "tokens_in": 98,
+      "tokens_out": 6525,
+      "cache_write": 17818,
+      "cache_read": 1216108,
+      "wall_seconds": 155,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-06T16:54:11+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 50,
+      "tokens_out": 14349,
+      "cache_write": 142654,
+      "cache_read": 2725729,
+      "wall_seconds": 215,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-06T17:00:43+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 24,
+      "tokens_out": 6345,
+      "cache_write": 81329,
+      "cache_read": 808102,
+      "wall_seconds": 69,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-06T17:10:27+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 771,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-10-06T17:24:00+08:00"
+    }
+  ],
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "Q2 F27 要在 DISPATCH-TEMPLATE §8.5 與 SCHEMA 的 result 鍵表補 verify、verdict 兩鍵,但 tests/test_dispatch_template.py 把鍵集合寫死成 12 鍵(assertEqual),Q9 又不准改任何 tests 檔;本輪兩張表鍵不動、改在表下一段文字點名兩格與各自的收件端,補列要連測試一起改,建議歸 code 票",
+      "evidence": "../agent-control-wt/fix-t92/round1/EVIDENCE-round1-objection.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "",
+      "triage": {
+        "verdict": "accepted",
+        "reason": "Q2 F27 asks to add result-table keys that tests/test_dispatch_template.py:78-83 pins to an exact 12-key set, while Q9 forbids touching tests — the two acceptance lines cannot both pass.",
+        "round": 1,
+        "by": "auto-fix"
+      }
+    },
+    {
+      "category": "blocking",
+      "body": "F24 left no-polling with no body for short-lived roles: cards, CLAUDE.md:22, ROLES.md:66 and dispatch-verifier.md:76 all say it lives in DISPATCH-TEMPLATE §3, but §3 (and the whole file) has zero mentions of polling/Monitor/sleep, and the verifier card dropped its 不輪詢 clause, so the verifier no longer sees the rule anywhere it reads.",
+      "evidence": "reports/t92/20261006-165531-16297/REVIEW.md",
+      "owner": "reviewer@opus",
+      "disposition": "accepted",
+      "follow_up": "第 2 輪補正文:五處指標指向 DISPATCH-TEMPLATE §3,但 §3 沒有不准輪詢的正文(指標指向不存在的正文);在 §3 末尾補唯一正文,reference 實作者節改成指路。"
+    }
+  ],
+  "branch": "t92",
+  "patch_ref": "../agent-control-wt/fix-t92/round2/patch-round2.diff",
+  "gate": {
+    "rc": 0,
+    "sha": "4426ec97da1a19a033f9d699f79d2e023f6f6983",
+    "run_id": "20261006-170740-22685",
+    "at": "2026-10-06T17:09:17+08:00"
+  },
+  "owner": "main",
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "a6bf3ba076be58bf7a58830d3f9261b5ebb7ad5c",
+    "note": "reports/t92/20261006-170740-22685/REVIEW.md",
+    "at": "2026-10-06T17:24:00+08:00",
+    "state_version": 22
   }
 }

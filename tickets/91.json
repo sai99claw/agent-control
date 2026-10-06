@@ -4,11 +4,11 @@
   "created": "2026-10-05T09:27:39+08:00",
   "objective": "docs/review/20261004-a-spec-audit.md 所有「改程式」的發現(R1、R2、R3+F3 的工具半、R4、F33)加上使用者 2026-10-05 指定的「auto-fix 對 claude-code 票照票上 model 起,規則包與事件也用票的 model」做成程式並由測試證明:只寫在文字上的規則改由工具擋;verify_strings 的形狀以 tickets/SCHEMA.md 為準,工具(create 與 lint)與之一致。使用者裁示原話:「改prompt 一張票 改工具一張票」。",
   "acceptance": [
-    "C1 [R2,needs_verifier 必填真的擋] `ticket.py set <id> state Ready`:role 是 worker(或 role 空)而 needs_verifier 不是 JSON 布林(缺、字串 \"true\"、null)→ rc!=0、stderr 含 `needs_verifier` 與票號、票檔位元組不變(state_version 不動、不發 ticket.state 事件);needs_verifier 是 true / false → 照舊轉 Ready(rc 0、state_version+1)。role 是 verifier / consolidator / opener 的票不查(needs_verifier 只對實作票有意義;memory.py 開整理票、status.py 開 flaky 票兩條路行為不變)。層:tests/test_ticket.py 沙盒票庫。怎麼驗:造四張 Draft 票(缺、\"true\" 字串、true、role=consolidator 缺)各轉一次 Ready,期望 rc 與 state_version 寫死在測試裡(來源:本條)。變異:拿掉這段檢查 → 「缺」那條紅。",
+    "C1 [R2,needs_verifier 必填真的擋] `ticket.py set <id> state Ready`:role 是 worker(或 role 空)而 needs_verifier 不是 JSON 布林(缺、字串 \"true\"、null)→ rc!=0、stderr 含 `needs_verifier` 與票號、票檔位元組不變(state_version 不動、不發 ticket.state 事件);needs_verifier 是 true / false → 照舊轉 Ready(rc 0、state_version+1)。目前狀態是 Running 的票轉 Ready 不查(auto-fix 的 codex 額度改派是已派出的票改派回來,不是規格閘;否則 test_auto_fix_codex A23 紅、與 C8 衝突 —— #91 第 1 輪反駁 accepted);Draft、Blocked 等其他狀態轉 Ready 照查。role 是 verifier / consolidator / opener 的票不查(needs_verifier 只對實作票有意義;memory.py 開整理票、status.py 開 flaky 票兩條路行為不變)。層:tests/test_ticket.py 沙盒票庫。怎麼驗:造四張 Draft 票(缺、\"true\" 字串、true、role=consolidator 缺)各轉一次 Ready,期望 rc 與 state_version 寫死在測試裡(來源:本條)。變異:拿掉這段檢查 → 「缺」那條紅。",
     "C2 [R2,create 也走同一條] `ticket.py create` 新增 `--needs-verifier true|false` 與 `--interface-fixed true|false`,存成 JSON 布林;其他值 rc=2 並點名該旗標;`create --help` 列出兩個旗標。`create --state Ready` 走 C1 同一個檢查(role=worker 沒給 --needs-verifier → rc!=0、tickets/ 底下不多出檔)。status.py regression-red 開修復票改成在 create 就帶 `--needs-verifier false --interface-fixed false`(不再 create 完才補,否則它會被本條擋下);test_status / test_status_67 對修復票欄位的既有斷言不改仍綠。層:tests/test_ticket.py + 既有 test_status*。變異:create 不跑檢查 → 「Ready 缺 needs_verifier 不出檔」那條紅。",
     "C3 [R3+F3,ticket.py lint;形狀以 tickets/SCHEMA.md 為準] 新子命令 `python3 scripts/ticket.py lint <id>`,usage 與 `--help` 逐字列出 `scripts/ticket.py lint <id>`。唯讀:票檔位元組、state_version 不變、不發事件。逐格查:(a) needs_verifier 是 JSON 布林(範圍同 C1);(b) verify_strings 是非空串列,每筆是非空字串、或恰為 {path, contains} 兩鍵且都是非空字串的 dict(= `--verify-string` 經 normalise_verify 產得出的兩種形狀);其他形狀(缺 contains、多鍵、數字、巢狀串列)點名第幾筆;(c) 票的 `tags` 與 `verify.tags` 每個都已登記 —— 讀法沿用 scripts/verify.py 的 registered_tags,不另寫第二份解析。全過 rc 0、stdout 一行含 `ok`;任一格不過 rc 1、stderr 每格一行含欄位名。用 `ticket.py create --verify-string 'scripts/x.sh:某字' --needs-verifier false` 剛開出來的票 lint rc 0(工具產的形狀不被自己的 lint 擋 —— 這是 F3 的病根)。層:tests/test_ticket.py。變異:拿掉 dict 形狀的放行 → 「工具產的票 rc 0」那條紅;拿掉 (a) → 缺 needs_verifier 那條紅。",
     "C4 [R1,反駁行換掉家目錄路徑] `ticket.py objection <id> --line \"OBJECTION: ticket-wrong … <家目錄絕對路徑>/x/y …\" --evidence <檔>` 之後,票上那一筆的 body 裡家目錄前綴換成 `~/`:執行當下的家目錄(os.path.expanduser 的值)與 tests/test_no_project_names.py 的 ABSOLUTE_HOME 常數那種前綴後接一段帳號名的路徑,都換;不含家目錄的 body 一字不變。同一句反駁第二次送來(不論換前換後的寫法)仍判同一筆(rc 3 / rc 4 的去重照舊)。所有收反駁的入口(auto-fix、apply.sh)都經 record_objection,所以只改這一處。層:tests/test_ticket.py(或 test_objection_triage.py);測試裡家目錄字面照 test_no_project_names 的慣例用常數拼,不照抄字面。變異:拿掉替換 → 「body 不含家目錄前綴」那條紅。",
-    "C5 [F33] `python3 scripts/rules.py pack main --model opus` 的 stdout 含逐字「接需求、決定順序、發版」,且那一句不含「覆核」(D-022:覆核由 review.sh 派 reviewer)。層:tests/test_rules.py。變異:改回舊句 → 紅。",
+    "C5 [F33] `python3 scripts/rules.py pack main --model opus` rc 0,且 `python3 scripts/rules.py roles` 的 main 那一行含逐字「接需求、決定順序、發版」、不含「覆核」(那一句只有 roles 印,pack 不印 —— #91 第 1 輪反駁 accepted)(D-022:覆核由 review.sh 派 reviewer)。層:tests/test_rules.py。變異:改回舊句 → 紅。",
     "C6 [R4,低優先] `AC_ROLE=opener AC_TICKET=<n> sh scripts/land.sh docs \"<訊息>\" <檔…>`:檔清單恰為 `tickets/<n>.json` → 照舊落地;含任何別的檔(別張票檔、docs/ 或 memory/ 底下的檔)→ rc 2、不 commit、stderr 含逐字「開題者只收自己那張票檔」並逐一點名被拒的檔;AC_ROLE=opener 而 AC_TICKET 空 → 全拒 rc 2。AC_ROLE 不是 opener 或沒設 → 行為不變(TheDocsChannel 既有案例不改仍綠)。層:tests/test_land.py 的 docs 通道沙盒。變異:拿掉 opener 分支 → 「別張票檔被拒」那條紅。",
     "C7 [auto-fix 照票上 model 起 claude-code worker;#78 只能手派的原因] 票 tool=claude-code、model 非空時:(1) 起的 worker 命令 = config 的 worker.command 把 `--model` 換成票的 model(沒有就補上),換法只由 `ticket.py agent-command --swap-model` 決定,auto-fix 不另寫一份;(2) 規則包用票的 model 產(`rules.py pack worker --model <票的 model>`),派工文帶的是那張模型卡;(3) agent.start / agent.done / agent.failed 事件與 cost[] 那一筆的 model 欄都是票的 model;(4) stdout 一行含「照票的 model=<票的 model>」。怎麼驗:沙盒 config worker.command 是 `sh <假 worker> --model opus …`,票 model=fable、tool=claude-code;假 worker 記下的 argv 含 `--model fable`、不含 `--model opus`;派工文含沙盒 memory/model/fable.md 的一句獨有字、不含 opus 卡的獨有字;events 與 cost 的 model 都是 \"fable\"。不變:codex 票的路徑(一致性拒派、額度改派 opus)照舊,test_auto_fix_codex 不改仍綠;驗證者仍照 routing.verify 起;票的 model 低於 routing 下限沿用 rules.py 既有的 below_floor(rc 2、不起 agent),不另寫檢查。層:tests/test_auto_fix.py。既有 TheEventModelIsTheOneThatActuallyRan(約 676–715 行)釘的是「事件記 worker.command 的 --model」,本票之後實際起的是票的 model:改寫成斷言事件記實際起的那個(= 票的 model),#21 的意圖(記實際起的、不記 routing 標籤)保留。變異:拿掉換 model → argv 那條紅;規則包改回用 routing 的 model → 派工文那條紅。",
     "C8 [回歸] 交件前只跑 test_plan 列的模組,全綠;除 C7 點名改寫的那一條外,既有斷言一行不改。查過的 oracle:tests/test_ticket.py、test_status.py(修復票欄位)、test_land.py(TheDocsChannel)、test_rules.py、test_auto_fix.py(TheEventModelIsTheOneThatActuallyRan)、scripts/memory.py 與 scripts/status.py 以 --state Ready 開票的兩處。"
@@ -48,9 +48,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "dceaea95e2aea2da435ad0d8c7fc3427061c761e",
-  "state": "Ready",
-  "state_version": 5,
+  "base_sha": "7ad04baed97ae620b1eec826dc1f675e4cb7d7b8",
+  "state": "Done",
+  "state_version": 17,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -96,5 +96,92 @@
   "interface_fixed": false,
   "worker": {
     "timeout_seconds": 10800
+  },
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 142,
+      "tokens_out": 55456,
+      "cache_write": 176991,
+      "cache_read": 8732968,
+      "wall_seconds": 1069,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-06T15:46:18+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 6,
+      "tokens_out": 2002,
+      "cache_write": 6626,
+      "cache_read": 577324,
+      "wall_seconds": 23,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-06T15:47:35+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 22,
+      "tokens_out": 8057,
+      "cache_write": 59099,
+      "cache_read": 613189,
+      "wall_seconds": 83,
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-06T15:56:06+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 716,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-10-06T16:19:05+08:00"
+    }
+  ],
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "C1 字面「任何 set state Ready 都查」會讓 test_auto_fix_codex A23 紅(codex 額度改派 Running→Ready 被擋,實測),已改成 Running→Ready 不查;C5 那一句只有 `rules.py roles` 印、`pack main` 不印(實測),測試改從 roles 讀 —— 兩處偏離票面字面,請主線裁示",
+      "evidence": "../agent-control-wt/fix-t91/round1/EVIDENCE-round1-objection.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "",
+      "triage": {
+        "verdict": "accepted",
+        "reason": "both deviations verified on base 7ad04ba — C1 literal contradicts C8 (A23 asserts Running->Ready on codex reroute), and `rules.py pack main` never prints the WANTED sentence (only `roles` does)",
+        "round": 1,
+        "by": "auto-fix"
+      }
+    }
+  ],
+  "branch": "t91",
+  "patch_ref": "../agent-control-wt/fix-t91/round1/patch-round1.diff",
+  "gate": {
+    "rc": 0,
+    "sha": "9661f85e9ba1ded62e0140183b8d4229611e076d",
+    "run_id": "20261006-154736-69971",
+    "at": "2026-10-06T15:54:43+08:00"
+  },
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "50af0c029ea062014be11f62aa0ad4a0e8d6e76e",
+    "note": "reports/t91/20261006-154736-69971/REVIEW.md",
+    "at": "2026-10-06T16:19:05+08:00",
+    "state_version": 17
   }
 }
