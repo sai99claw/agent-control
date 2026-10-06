@@ -302,3 +302,9 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - 起因:T #711 在獨立副本做完、閘門綠、覆核 pass 之後,#700 先落地(兩票改 docs/RUNBOOK.md 相鄰行),#711 land 時累積 patch 套不上,另派人手對齊。
 - 落實:#93 —— auto-fix 產的 worker 派工文加「交件前看主線」(唯讀 rev-parse / diff --stat base..main);碰到的檔被主線動過就在副本內三向對齊、重跑票測試,result 記 `aligned_main`,收件時換 base_sha。
 - 限制(寫進 DISPATCH-TEMPLATE §1 理由):只擋「worker 工作期間主線動了」;交件後主線才動(#711 正是這種)要靠 T #712(gate --redo 用 git apply --3way)。
+
+## D-045(2026-10-06)每次執行記一列成本;關票加總
+使用者原話(在 tabby_pool 說):「如果以前的記錄查不出來就算了，我希望接下來有相關的紀錄， 角色：票：model:time:token， 我能想到的要涵蓋這些資訊你看這樣子夠不夠，這件事情應該會是一張a票吧」
+- 主線補充(使用者五項之外):第幾輪、token 拆四種(input / output / cache_write / cache_read —— cache_read 是大宗)、outcome(算白花的)、關票加總、主線與 Agent 工具派的子 agent 也要有紀錄。不補歷史。
+- 欄位形狀定案(#94):cost[] 每列 14 鍵 role, round, model, tokens_in, tokens_out, cache_write, cache_read, wall_seconds, outcome, run_id, session_id, by, note, at;拿不到填 null 不填 0;outcome 只收登記表的字。關票寫 `cost_total` 並帶進 `ticket.closed`。
+- #95(依賴 #94):SubagentStop / SessionEnd hook 讀 transcript 寫 `agent.cost` 事件(同鍵 + ticket、agent_id),歸票靠猜所以不進 cost_total;互動 transcript 的 output 多半只有串流開頭值,記 null。

@@ -1,0 +1,93 @@
+{
+  "id": "94",
+  "subject": "成本帳一列一形:cost[] 每列加 outcome / run_id / session_id、token 取信封 modelUsage 全模型加總、ticket.cost 事件帶整列、判反駁的開題者也記一列、關票寫 cost_total 整票加總",
+  "created": "2026-10-06T22:25:00+08:00",
+  "objective": "使用者原話(2026-10-06,在 tabby_pool 說):「如果以前的記錄查不出來就算了,我希望接下來有相關的紀錄, 角色:票:model:time:token, 我能想到的要涵蓋這些資訊你看這樣子夠不夠,這件事情應該會是一張a票吧」。做完的樣子:腳本派出的每一次 agent 執行(worker / verifier / 判反駁的開題者 / reviewer)與每一次 land 在票的 cost[] 各一列,列裡有角色、輪、模型、四種 token、秒數、結局(outcome)、run_id、session_id;事件流的 ticket.cost 帶同一整列(今天只帶 tokens_out);票關掉的那一刻在票上與 ticket.closed 事件寫一份整票加總 cost_total(日曆秒、機器秒、各角色四種 token 與結局次數、輪數、反駁數)。不補歷史。",
+  "acceptance": [
+    "C1 [列的形狀唯一,D-018] `ticket.py cost` 寫進票 cost[] 的每一列,鍵集合恰為 {role, round, model, tokens_in, tokens_out, cache_write, cache_read, wall_seconds, outcome, run_id, session_id, by, note, at}:既有鍵一個都不改名;新三鍵由新旗標 `--outcome <字>`、`--run-id <字>` 給,session_id 取信封頂層的 `session_id`;沒給 / 拿不到 → JSON null(不是空字串、不是 0)。驗(tests/test_ticket.py,單元層):信封含 session_id=\"s-1\" + `--outcome handed-in --run-id r-1` → 該列鍵集合等於上列 14 鍵、outcome==\"handed-in\"、run_id==\"r-1\"、session_id==\"s-1\";另一次三旗標都不給、不帶信封 → 三鍵皆 None、token 四欄皆 None。期望值取自本條字面。",
+    "C2 [outcome 只收登記的字] 登記表(本票裁定,唯一一份,寫進 tickets/SCHEMA.md 成本那一列):handed-in、no-patch、apply-failed、timeout、objection、error(worker / verifier;error = 其餘非零結局);pass、fail、missing(reviewer;與 review.* 事件同字);accepted、rejected、escalate、undecided(判反駁的開題者;undecided = 沒寫出 TRIAGE 行);pass、fail、refused(land / gate 這類腳本步)。表外的字(例 `passed`)→ rc=2、stderr 印出整張表、票的 cost[] 長度不變、events 不多一筆 ticket.cost。驗:tests/test_ticket.py 一條正例(每個登記字各寫一列都 rc=0)+ 一條反例(passed)。",
+    "C3 [token 取全模型加總] 信封有 `modelUsage`(dict,一或多個模型)時,四欄 = 各模型 inputTokens / outputTokens / cacheCreationInputTokens / cacheReadInputTokens 的加總(子 agent 換了模型也算進來);信封沒有 modelUsage 才退回 `usage` 的四鍵(今天的行為);某模型缺某鍵視為 0 但四鍵全缺的模型不計。列的 model 欄仍是派工時給的 `--model`。驗(tests/test_ticket.py):usage={input 5, output 77, cache_creation 0, cache_read 9}、modelUsage={\"m-a\":{5,77,0,9}, \"m-b\":{inputTokens 3, outputTokens 20, cacheCreationInputTokens 4, cacheReadInputTokens 100}} → 列 (tokens_in, tokens_out, cache_write, cache_read) == (8, 97, 4, 109);只有 usage 的信封 → (5, 77, 0, 9)(既有 test_ticket.py 信封案例不改照綠)。",
+    "C4 [事件帶整列] 每寫一列,同一手發的 `ticket.cost` 事件 = ticket + 該列除 `at` 以外的每一鍵、值相同(今天只帶 role/round/tokens_out/wall_seconds)。驗(tests/test_ticket.py):寫一列後讀 events.jsonl 最後一筆 ticket.cost,對列的每個鍵(除 at)斷言 event[key] == row[key],含 model、tokens_in、cache_write、cache_read、outcome、run_id、session_id。",
+    "C5 [每個派工點都填 outcome 與 run_id] (a) auto-fix.sh 的 worker 列:outcome 是該輪結局 —— 收到 patch = handed-in、沒交 = no-patch、套不上 = apply-failed、逾時 = timeout、EVIDENCE 有 OBJECTION: 行 = objection、其餘非零 = error;run_id = 該次 RUN_ID;**一輪仍只一列**(tests/test_auto_fix.py 既有「只一列」斷言照綠;寫入時機可延到結局確定之後,實作者定)。(b) verifier 列同一組字(handed-in / no-patch / timeout / error)。(c) auto-fix 判反駁起的開題者(D-041)每次起跑後寫一列 role=opener、model=開題者模型、round=當輪、outcome = TRIAGE 判決 accepted / rejected / escalate,TRIAGE 檔不在或第一行不合 = undecided —— 今天這條路一列都不寫。(d) review.sh 的 reviewer 列 outcome = pass / fail / missing(與它發的 review.* 同字),run_id = review 的 RUN_ID。(e) land.sh 的 land 列:綠路照舊每票一列、outcome=pass;跑了且紅(發 land.fail 的那幾條路)也每票寫一列 outcome=fail、wall_seconds = land.start 到紅的秒數(今天紅路一列都不寫,白花的時間看不到);refused(還沒開始就退)不寫;run_id = 該次 land 的戳記。驗:tests/test_auto_fix.py 假 worker 交 patch → worker 列 outcome==handed-in 且 run_id 非空;假 worker 不交 → no-patch;tests/test_objection_triage.py 開題者判 accepted → 票上多一列 role==opener、outcome==accepted,開題者不寫 TRIAGE → outcome==undecided;tests/test_review.py pass 路 → reviewer 列 outcome==pass;tests/test_land.py 綠路 → land 列 outcome==pass;全套紅那條路 → 票上有一列 role==land、outcome==fail、wall_seconds 非 null。",
+    "C6 [關票寫 cost_total] `ticket.py close`(以及走同一關的 close-landed、`set <n> state Done`)在把 state 改成 Done 的同一次存檔裡寫票的 `cost_total`,形狀唯一:{calendar_seconds: cost_total.at − created(整數秒), wall_seconds: 各列 wall_seconds 非 null 的加總(全 null → null), runs: 列數, worker_rounds: role=worker 各列 round 最大值(沒有 worker 列 → null), objections: 票 objections 的筆數, by_role: {<role>: {runs, wall_seconds, tokens_in, tokens_out, cache_write, cache_read, unknown_token_runs, outcomes: {<outcome 字,或 \"null\">: 次數}}}, at}。每角色 token 四欄 = 該角色非 null 值加總,該欄該角色全是 null(或缺鍵)→ null,**不是 0**;unknown_token_runs = tokens_in 為 null 或缺鍵的列數;舊列沒有 outcome 鍵算進 \"null\"。`ticket.closed` 事件多帶 cost_total(與票上同一物件),hits / weak / state_version 照舊。關不掉(既有四種拒絕)→ 票上沒有 cost_total、沒有 ticket.closed。驗(tests/test_ticket.py,手算期望值):cost[] 預放 worker r1 (10,100,1000,5000, wall 60, handed-in)、worker r2 (5,50,200,3000, wall 40, handed-in)、reviewer (1,10,20,300, wall 9, fail)、reviewer (1,12,20,310, wall 8, pass)、land (四 null, wall 30, pass)、一筆舊格式 verifier 列(無 outcome / run_id / session_id 鍵,四 null, wall null)→ by_role.worker == {runs 2, wall 100, 15, 150, 1200, 8000, unknown 0, outcomes {handed-in: 2}};by_role.land 四 token 欄皆 None、unknown 1;by_role.verifier.outcomes == {\"null\": 1}、wall_seconds None;wall_seconds == 147;runs == 6;worker_rounds == 2;calendar_seconds == 由 cost_total.at 與 created 算的差。",
+    "C7 [不動 state_version / review] `ticket.py cost` 照舊不動 state_version、不動 review(既有案例照綠);cost_total 只在關票那一次存檔寫,不另外 bump state_version。",
+    "C8 [登記] tickets/SCHEMA.md「成本」那一列改成 C1 的 14 鍵、C2 的 outcome 登記表、C3 的取數規則;新增一列 `cost_total`(C6 形狀,寫的人 = ticket.py close)。scripts/event.py KINDS 註解:ticket.cost 改為「帶整列」、ticket.closed 加「帶 cost_total」。`ticket.py cost` 的用法字串(USAGE 與 --help 例子)列出 --outcome、--run-id。SCHEMA 與程式裡不寫專案名(tests/test_no_project_names.py 照綠)。",
+    "C9 [原路不變] tests/test_ticket.py、test_ticket_65.py、test_auto_fix.py、test_auto_fix_codex.py、test_objection_triage.py、test_review.py、test_land.py、test_inbox.py、test_event.py、test_no_project_names.py 既有斷言不改照綠。開題者查過:既有 cost 案例只斷言個別鍵的值(test_ticket.py:961–1039、test_review.py:257–354、test_land.py:635–640、test_auto_fix.py:780/1055–1090/2348–2417),沒有斷言列的完整鍵集合;inbox.py 的 cost_table 只讀固定欄,新鍵不影響。若遇到釘死完整鍵集合的斷言,列為 ticket-wrong。"
+  ],
+  "in_scope": [
+    "scripts/ticket.py",
+    "scripts/auto-fix.sh",
+    "scripts/review.sh",
+    "scripts/land.sh",
+    "scripts/event.py",
+    "tickets/SCHEMA.md"
+  ],
+  "out_of_scope": [
+    "memory/*",
+    "docs/DECISIONS.md",
+    "board/*",
+    "scripts/metrics.py",
+    "scripts/sync-to-project.sh",
+    ".claude/*"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/ticket.py",
+    "scripts/auto-fix.sh",
+    "scripts/review.sh",
+    "scripts/land.sh",
+    "scripts/event.py",
+    "tickets/SCHEMA.md",
+    "tests/test_ticket.py",
+    "tests/test_auto_fix.py",
+    "tests/test_objection_triage.py",
+    "tests/test_review.py",
+    "tests/test_land.py",
+    "tests/test_cost_ledger.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "2c7f842dab224ac27730d7c102c12ceb91f954f2",
+  "state": "Ready",
+  "state_version": 4,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [
+      "tests/test_cost_ledger.py"
+    ],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-032",
+    "D-018",
+    "D-041"
+  ],
+  "verify_strings": [
+    {
+      "path": "scripts/ticket.py",
+      "contains": "cost_total"
+    },
+    {
+      "path": "scripts/ticket.py",
+      "contains": "modelUsage"
+    },
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "--outcome"
+    },
+    {
+      "path": "tickets/SCHEMA.md",
+      "contains": "undecided"
+    }
+  ],
+  "feature": "agent-control 工具鏈:成本帳",
+  "test_plan": "只跑:cd tests && python3 -m unittest test_ticket test_ticket_65 test_review test_land test_inbox test_event test_objection_triage test_auto_fix_codex test_no_project_names;test_auto_fix 只跑改到與新增的類。前景跑加 timeout,不跑全套。驗證者案例寫在 tests/test_cost_ledger.py(本 repo 驗證者案例住 tests/,票 verify.tags 留空)。變異(各自驗紅、貼紅的第一行):m1 cost 列不寫 outcome 鍵 → C1 紅;m2 --outcome 不驗登記表 → C2 反例紅;m3 只讀 usage 不讀 modelUsage → C3 多模型案例紅;m4 事件只帶 tokens_out → C4 紅;m5 cost_total 全 null 的欄加總成 0 → C6 land 斷言紅;m6 cost_total 寫在關票拒絕檢查之前 → C6 反例紅;m7 auto-fix 判反駁那條路不寫 cost → C5(c) 紅。",
+  "outline": "【現況(開題者實測)】票的 cost[] 自 D-032 已有 role/round/model/四種 token/wall(T 207 列,worker 缺 token 的 20 列全在 2026-09-29 以前:17 列是 #58 前沒 note、3 列 log 無信封;之後零缺)。主線看到的「只有 tokens_out」是**事件** ticket.cost 只帶子集。真缺口:每列無 outcome / run_id / session_id、事件不帶整列、判反駁的開題者不記、關票無加總、主線 Agent 工具派的子 agent 與主線本身全無(→ A2 另票)。【取數】headless 信封 usage 與 modelUsage(T #712 worker 實測四數相同 62/30718/77946/1965237,且與該 run transcript 以 message.id 去重加總一致);多模型信封樣本 0 份(未實測差異),取 modelUsage 加總兩種情況都對。【不在本票】A2 hook;apply.sh 計時(秒級、在 auto-fix 輪內);consolidate-memory 的 agent(無票);看板 / inbox 顯示;T 的 land-ticket.sh 給 gate/land 列帶 --outcome(同步後另開 T 票;不帶時 outcome=null,不壞);補歷史。needs_verifier=true:null≠0 與加總規則是驗證者獨立案例最值錢的地方;interface_fixed=true:純後端,旗標、鍵、字表、cost_total 形狀全在票面釘死。建議 A1 先落,A2 依賴它的列形狀。",
+  "needs_verifier": true,
+  "interface_fixed": true
+}
