@@ -814,7 +814,7 @@ def open_repair_ticket(case, keys, argv, fields):
     查重只認**開著的**票、而且 `keys` 裡任一格等於 `case`;找到就回 `("", 那張票)`,
     **不寫它** —— 覆核綁的 `state_version` 不能因為同一條又紅一次而過期。
     開好了回 `(票號, None)`;開不出來回 `("", None)`。
-    `fields` 是 `cmd_create` 沒有旗標的那幾格(`flaky_*` / `regression_*` / 布林),
+    `fields` 是 `cmd_create` 沒有旗標的那幾格(`flaky_*` / `regression_*`),
     在同一把鎖裡補進去。
     """
     try:
@@ -929,11 +929,13 @@ def cmd_regression_red(args):
                 argv += ["--allowed-write-path", str(path)]
             if rerun:
                 argv += ["--verify-run", rerun]
+            # 兩格布林在 create 就帶(#91 C2):`--state Ready` 的實作票缺 needs_verifier
+            # 開不出來,create 完才補就會被那一關擋下。
             argv += ["--role", "worker", "--model", str(model), "--tool", "claude-code",
+                     "--needs-verifier", "false", "--interface-fixed", "false",
                      "--state", "Ready"]
             ident, reused = open_repair_ticket(
                 case, ("regression_case", "flaky_case"), argv, {
-                    "needs_verifier": False, "interface_fixed": False,
                     "regression_case": case, "regression_source": args.source,
                     "regression_log": logs.get(case, ""),
                     "regression_from_ticket": args.from_ticket})

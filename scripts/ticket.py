@@ -16,6 +16,7 @@
     scripts/ticket.py freeze 7 --reason … --criterion …
     scripts/ticket.py cost 7 --role worker --round 1 --from-envelope <信封>  # 不動 state_version
     scripts/ticket.py agent-command --model codex:gpt-6-astra --tool codex  # 依 model/tool 起什麼
+    scripts/ticket.py lint <id>                   # 票面機械檢查;唯讀,不動 state_version
 
 **不要手改票檔**(`tickets/README.md`):`state_version` 是遲到的回報用來認出自己
 過期的那一格,而手改不會動它。
@@ -194,6 +195,28 @@ def missing_fields(ticket):
     return bad
 
 
+# needs_verifier 只對實作票有意義(D-028):整理票(memory.py)、flaky 票(status.py,
+# role=verifier)、開題票沒有「要不要起驗證者」這一問,硬擋會壞那兩條自動開票的路。
+NEEDS_VERIFIER_ROLES = ("worker", "")
+
+
+def needs_verifier_problem(ticket):
+    """實作票的 `needs_verifier` 不是 JSON 布林就回一句話,否則回空字串(#91 C1)。
+
+    缺、字串 `"true"`、`null` 都不算:`auto-fix.sh` 讀到那幾種一律當「沒寫」,第 1 輪
+    不起驗證者 —— 而那與「寫了 false」在派工那一刻長得一樣。"""
+    if (ticket.get("role") or "") not in NEEDS_VERIFIER_ROLES:
+        return ""
+    value = ticket.get("needs_verifier")
+    if isinstance(value, bool):
+        return ""
+    shown = "(沒有這一格)" if "needs_verifier" not in ticket \
+        else json.dumps(value, ensure_ascii=False)
+    return ("#%s 的 needs_verifier 要是 JSON 布林(true / false),現在是 %s —— "
+            "實作票轉 Ready 前要寫明(D-028):set %s needs_verifier false"
+            % (ticket.get("id", ""), shown, ticket.get("id", "<id>")))
+
+
 def git(args, cwd=None, check=False, text=True):
     done = subprocess.run(["git", *args], cwd=cwd or root(), capture_output=True,
                           text=text, timeout=GIT_TIMEOUT)
@@ -225,6 +248,9 @@ CREATE_REPEATED = {
     "--verify-string": "verify_strings", "--shared-resource": "shared_resources",
     "--verify-file": "verify.files", "--verify-tag": "verify.tags",
 }
+# 存成 JSON 布林的旗標:值只收 `true` / `false`,其他一律 rc=2 —— 存成字串的 `"true"`
+# 在 Ready 那一關(`needs_verifier_problem`)會被擋,不如在開票這一手就說。
+CREATE_BOOLS = {"--needs-verifier": "needs_verifier", "--interface-fixed": "interface_fixed"}
 # 旗標 → 一句話說明。**名單不在這裡** —— `--help` 要印哪幾個是從 `CREATE_FLAGS` /
 # `CREATE_REPEATED` 自己數出來的,這裡只補說明。兩份名單會分岔,一份不會。
 FLAG_NOTE = {
@@ -247,6 +273,9 @@ FLAG_NOTE = {
     "--verify-run": "怎麼跑那幾個案例(一句可以直接貼的指令)",
     "--verify-note": "跑的時候要知道的事(前置、已知 flaky、為什麼這樣驗)",
     "--shared-resource": "共用的執行資源(同一顆 DB、同一個埠);一個一個給",
+    "--needs-verifier": ("true / false:第 1 輪要不要起驗證者(D-028);role=worker 的票"
+                         "要轉 Ready 就得寫明"),
+    "--interface-fixed": "true / false:介面定了沒(定了驗證者才與 worker 平行起)",
     "--role": "角色:worker / verifier / opener / consolidator",
     "--model": "模型",
     "--tool": "工具:claude-code / codex / …",
@@ -305,6 +334,7 @@ USAGE = {
              "[--wall-seconds N]"),
     "agent-command": ("scripts/ticket.py agent-command --model M [--tool T] "
                       "[--base \"<worker.command>\"] [--swap-model]"),
+    "lint": "scripts/ticket.py lint <id>  # 唯讀:needs_verifier / verify_strings / 標籤",
 }
 
 EXAMPLE = {
@@ -342,6 +372,7 @@ python3 scripts/ticket.py set 7 allowed_write_paths '["scripts/land.sh", "tests/
     "agent-command": ("python3 scripts/ticket.py agent-command --model codex:gpt-6-astra --tool codex\n"
                       "python3 scripts/ticket.py agent-command --model fable --tool claude-code \\\n"
                       "  --base \"claude -p --model opus\" --swap-model"),
+    "lint": "python3 scripts/ticket.py lint 7",
 }
 
 
@@ -351,8 +382,8 @@ def known_flags(verb):
     if verb == "create":
         out = []
         blank = blank_ticket()
-        for flag in sorted(set(CREATE_FLAGS) | set(CREATE_REPEATED)):
-            field = CREATE_FLAGS.get(flag) or CREATE_REPEATED[flag]
+        for flag in sorted(set(CREATE_FLAGS) | set(CREATE_REPEATED) | set(CREATE_BOOLS)):
+            field = CREATE_FLAGS.get(flag) or CREATE_REPEATED.get(flag) or CREATE_BOOLS[flag]
             # 標 [必填] 的判準是「不給就開不出票」,不是「schema 有這一格」:
             # `--role` / `--tool` / `--state` 空白票就有預設值,`--base-sha` 不給會
             # 自己去取主線 —— 把這四個標成必填,新來的人會以為少一個就開不了票。
@@ -544,12 +575,18 @@ def cmd_create(argv, stdin=sys.stdin, stdout=sys.stdout):
     interactive = not argv
     while index < len(argv):
         flag = argv[index]
-        if flag in CREATE_FLAGS or flag in CREATE_REPEATED:
+        if flag in CREATE_FLAGS or flag in CREATE_REPEATED or flag in CREATE_BOOLS:
             index += 1
             if index >= len(argv):
                 sys.stderr.write("ticket: %s 少了值\n" % flag)
                 return 2
-            if flag in CREATE_FLAGS:
+            if flag in CREATE_BOOLS:
+                if argv[index] not in ("true", "false"):
+                    sys.stderr.write("ticket: %s 只收 true / false,拿到 %r\n"
+                                     % (flag, argv[index]))
+                    return 2
+                ticket[CREATE_BOOLS[flag]] = argv[index] == "true"
+            elif flag in CREATE_FLAGS:
                 put_field(ticket, CREATE_FLAGS[flag], argv[index])
             else:
                 put_field(ticket, CREATE_REPEATED[flag], argv[index], repeated=True)
@@ -580,6 +617,13 @@ def cmd_create(argv, stdin=sys.stdin, stdout=sys.stdout):
             for line in bad:
                 sys.stderr.write("  %s\n" % line)
             sys.stderr.write("(契約見 tickets/SCHEMA.md)\n")
+            return 2
+        # `--state Ready` 走 `set … state Ready` 同一個檢查(#91 C2):開票的那一手繞過它,
+        # 那一關就只擋手動轉的人。
+        unready = needs_verifier_problem(ticket) if ticket.get("state") == "Ready" else ""
+        if unready:
+            sys.stderr.write("ticket: 開不出 Ready 的票 —— %s(或給 --needs-verifier)\n"
+                             % unready)
             return 2
         path = save(ticket)
     event.emit("ticket.created", ticket=ticket["id"], role=ticket["role"],
@@ -741,6 +785,13 @@ def cmd_set(argv):
                 missing = done_blockers(ticket)
                 if missing:
                     print_done_blockers(ident, missing)
+                    return 1
+            # Running → Ready 不查:那是已派出的票改派回來(auto-fix 的 codex 額度改派),
+            # 規格那一關在它第一次轉 Ready 時就過了;擋它,票就卡在 Running。
+            if field == "state" and value == "Ready" and ticket.get("state") != "Running":
+                unready = needs_verifier_problem(ticket)
+                if unready:
+                    sys.stderr.write("ticket: 不轉 Ready —— %s\n" % unready)
                     return 1
             before = ticket.get(field)
             ticket[field] = value
@@ -1598,6 +1649,68 @@ def cmd_agent_command(argv):
     return 0
 
 
+# --------------------------------------------------------------------- lint
+
+
+def verify_string_problems(rows):
+    """`verify_strings` 的形狀:非空串列,每筆是非空字串、或恰為 `{path, contains}` 兩鍵
+    且都是非空字串的 dict —— 也就是 `normalise_verify` 產得出的兩種(tickets/SCHEMA.md)。
+    只認字串的檢查會把工具自己產的票擋下來(F3)。"""
+    if not isinstance(rows, list) or not rows:
+        return ["verify_strings 要是非空串列,現在是 %s"
+                % json.dumps(rows, ensure_ascii=False)]
+    bad = []
+    for at, row in enumerate(rows, 1):
+        if isinstance(row, str) and row.strip():
+            continue
+        if isinstance(row, dict) and set(row) == {"path", "contains"} \
+                and all(isinstance(row[k], str) and row[k].strip() for k in row):
+            continue
+        bad.append("verify_strings 第 %d 筆形狀不對(要非空字串或恰為 {path, contains} "
+                   "兩個非空字串):%s" % (at, json.dumps(row, ensure_ascii=False)))
+    return bad
+
+
+def tag_problems(ticket):
+    """票的 `tags` 與 `verify.tags` 每個都要已登記。讀法就是 `verify.py` 的
+    `registered_tags`(TAGS.md + TAGS.d/),不另寫一份。"""
+    import verify as verify_tool                          # noqa: PLC0415
+    known = verify_tool.registered_tags()
+    plan = ticket.get("verify") if isinstance(ticket.get("verify"), dict) else {}
+    bad = []
+    for field, tags in (("tags", ticket.get("tags")), ("verify.tags", plan.get("tags"))):
+        unknown = [tag for tag in (tags or []) if tag not in known]
+        if unknown:
+            bad.append("%s 有沒登記的標籤:%s(登記在 verify/TAGS.md 或 verify/TAGS.d/)"
+                       % (field, ", ".join(str(tag) for tag in unknown)))
+    return bad
+
+
+def cmd_lint(argv):
+    """票面機械檢查(#91 C3)。**唯讀**:不寫票、不動 state_version、不發事件。"""
+    if len(argv) != 1:
+        sys.stderr.write("ticket: %s\n" % USAGE["lint"])
+        return 2
+    ident = argv[0].lstrip("#")
+    try:
+        ticket = load(ident)
+    except (OSError, ValueError) as exc:
+        sys.stderr.write("ticket: 讀不到 #%s —— %s\n" % (ident, exc))
+        return 2
+    bad = []
+    unready = needs_verifier_problem(ticket)
+    if unready:
+        bad.append(unready)
+    bad += verify_string_problems(ticket.get("verify_strings"))
+    bad += tag_problems(ticket)
+    if bad:
+        for line in bad:
+            sys.stderr.write("ticket: lint #%s %s\n" % (ident, line))
+        return 1
+    sys.stdout.write("ticket: lint #%s ok\n" % ident)
+    return 0
+
+
 # ------------------------------------------------------------------- import
 
 
@@ -1819,6 +1932,20 @@ def cmd_result(argv):
 # ------------------------------------------------------------------ objection
 
 
+# macOS 家目錄的前綴後接一段帳號名;拆開拼,這份檔自己才不帶那一串字面(test_no_project_names)。
+HOME_PREFIX = re.compile(r"/Us" r"ers/[\w.-]+")
+
+
+def without_home(text):
+    """反駁 body 裡的家目錄前綴換成 `~`(#91 C4,R1):票檔是文件級(test_no_project_names),
+    一句帶著絕對路徑的反駁一記進去,那張票就落不了地。執行當下的家目錄與
+    「`/Us` `ers/<帳號>`」那種前綴都換;不含家目錄的 body 一字不變。"""
+    home = os.path.expanduser("~").rstrip("/")
+    if len(home) > 1:
+        text = re.sub(re.escape(home) + r"(?![\w.-])", "~", text)
+    return HOME_PREFIX.sub("~", text)
+
+
 def record_objection(ident, line, evidence):
     """把 EVIDENCE 裡那一行 `OBJECTION:` 記成票的 `objections[]` 一筆。
 
@@ -1827,13 +1954,14 @@ def record_objection(ident, line, evidence):
     分不出哪一筆是哪一輪的。回 `(類別, 是不是新的, 票上那一筆處置過了沒有)`。
     """
     category, body = objection_parts(line)
+    body = without_home(body)
     where = os.path.relpath(evidence, root()) if evidence else ""
     with Lock():
         ticket = load(ident)
         rows = ticket.get("objections") or []
         for row in rows:
             if isinstance(row, dict) and row.get("category") == category \
-                    and (row.get("body") or "") == body:
+                    and without_home(row.get("body") or "") == body:
                 return category, False, disposed(row)
         rows.append({"category": category, "body": body, "evidence": where,
                      "owner": "verifier" if category == "test_defect" else "main",
@@ -1925,7 +2053,7 @@ def main(argv):
              "close": cmd_close, "import": cmd_import, "freeze": cmd_freeze,
              "round": cmd_round, "result": cmd_result,
              "objection": cmd_objection, "cost": cmd_cost,
-             "agent-command": cmd_agent_command}
+             "agent-command": cmd_agent_command, "lint": cmd_lint}
     if verb in ("--help", "-h", "help"):
         if rest and rest[0] in table:
             return help_for(rest[0])

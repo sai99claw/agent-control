@@ -13,6 +13,7 @@ from control_harness import SCRIPTS, TIMEOUT, Sandbox, envelope  # noqa: E402
 
 sys.path.insert(0, SCRIPTS)
 from ticket import normalise_verify  # noqa: E402
+from test_no_project_names import ABSOLUTE_HOME  # noqa: E402
 
 MIN = ("--subject", "land 對 0 commit 整批拒絕",
        "--objective", "任一支 0 commit 時 land 秒退並點名",
@@ -1086,6 +1087,256 @@ class Cost(Sandbox):
         kinds = self.kinds()
         self.assertIn("ticket.cost", kinds)
         self.assertNotIn("ticket.state", kinds)
+
+
+def ticket_bytes(case, ident):
+    with open(os.path.join(case.repo, "tickets", "%s.json" % ident), "rb") as handle:
+        return handle.read()
+
+
+class ReadyNeedsABooleanNeedsVerifier(Sandbox):
+    """#91 C1(R2):實作票轉 Ready 前 `needs_verifier` 要是 JSON 布林。文字上寫「必填」
+    擋不住任何一張票;擋下的票位元組不變、不發 ticket.state。"""
+
+    MISSING = object()
+
+    def draft(self, ident, needs_verifier, role="worker"):
+        fields = {"state": "Draft", "role": role, "attempt": 0}
+        if needs_verifier is not self.MISSING:
+            fields["needs_verifier"] = needs_verifier
+        self.make_ticket(ident, **fields)
+
+    def test_four_drafts_go_to_ready_or_not(self):
+        """**變異**:拿掉 `cmd_set` 裡的 needs_verifier 檢查 → 「缺」那條紅。"""
+        cases = (("1", self.MISSING, "worker", 1, 1),
+                 ("2", "true", "worker", 1, 1),
+                 ("3", True, "worker", 0, 2),
+                 ("4", self.MISSING, "consolidator", 0, 2),
+                 ("5", None, "", 1, 1),
+                 ("6", False, "worker", 0, 2))
+        for ident, value, role, rc, version in cases:
+            self.draft(ident, value, role)
+        for ident, value, role, rc, version in cases:
+            with self.subTest(ident=ident, value=value, role=role):
+                before = ticket_bytes(self, ident)
+                done = self.ticket("set", ident, "state", "Ready")
+                self.assertEqual(done.returncode, rc, done.stdout + done.stderr)
+                self.assertEqual(self.load_ticket(ident)["state_version"], version)
+                if rc:
+                    self.assertIn("needs_verifier", done.stderr)
+                    self.assertIn("#%s" % ident, done.stderr)
+                    self.assertEqual(ticket_bytes(self, ident), before)
+                    self.assertFalse([row for row in self.events()
+                                      if row.get("kind") == "ticket.state"
+                                      and row.get("ticket") == ident])
+                else:
+                    self.assertEqual(self.load_ticket(ident)["state"], "Ready")
+
+    def test_blocked_back_to_ready_is_checked_running_back_to_ready_is_not(self):
+        """Running → Ready 是已派出的票改派回來(auto-fix codex 額度改派,
+        test_auto_fix_codex A23);其他狀態轉 Ready 照查。"""
+        self.make_ticket("1", state="Blocked")
+        self.make_ticket("2", state="Running")
+        blocked = self.ticket("set", "1", "state", "Ready")
+        self.assertEqual(blocked.returncode, 1, blocked.stdout + blocked.stderr)
+        running = self.ticket("set", "2", "state", "Ready")
+        self.assertEqual(running.returncode, 0, running.stdout + running.stderr)
+
+    def test_verifier_and_opener_tickets_are_not_checked(self):
+        for ident, role in (("1", "verifier"), ("2", "opener")):
+            self.draft(ident, self.MISSING, role)
+            done = self.ticket("set", ident, "state", "Ready")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+
+class CreateTakesTheTwoBooleans(Sandbox):
+    """#91 C2:`create --needs-verifier / --interface-fixed` 存成 JSON 布林;
+    `create --state Ready` 走 C1 同一個檢查。"""
+
+    def test_true_and_false_are_stored_as_json_booleans(self):
+        done = self.ticket("create", *MIN, "--needs-verifier", "true",
+                           "--interface-fixed", "false")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        self.assertIs(row["needs_verifier"], True)
+        self.assertIs(row["interface_fixed"], False)
+
+    def test_any_other_value_is_rc_2_and_names_the_flag(self):
+        for flag in ("--needs-verifier", "--interface-fixed"):
+            for value in ("yes", "True", "1", ""):
+                with self.subTest(flag=flag, value=value):
+                    done = self.ticket("create", *MIN, flag, value)
+                    self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+                    self.assertIn(flag, done.stderr)
+        self.assertEqual(self.tickets_on_disk(), [])
+
+    def test_help_lists_both_flags(self):
+        printed = self.ticket("create", "--help").stdout
+        self.assertIn("--needs-verifier", printed)
+        self.assertIn("--interface-fixed", printed)
+
+    def test_ready_without_needs_verifier_does_not_make_a_file(self):
+        """**變異**:create 不跑 needs_verifier 檢查 → 這一條紅。"""
+        done = self.ticket("create", *MIN, "--state", "Ready")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("needs_verifier", done.stderr)
+        self.assertEqual(self.tickets_on_disk(), [])
+        self.assertNotIn("ticket.created", self.kinds())
+
+    def test_ready_with_needs_verifier_opens(self):
+        done = self.ticket("create", *MIN, "--state", "Ready", "--needs-verifier", "false")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["state"], "Ready")
+
+
+class Lint(Sandbox):
+    """#91 C3(R3+F3):`ticket.py lint <id>` 逐格查票面,形狀以 tickets/SCHEMA.md 為準。"""
+
+    def lint(self, ident="1"):
+        before = ticket_bytes(self, ident)
+        events = len(self.events())
+        done = self.ticket("lint", ident)
+        self.assertEqual(ticket_bytes(self, ident), before, "lint 是唯讀的")
+        self.assertEqual(len(self.events()), events, "lint 不發事件")
+        return done
+
+    def good(self, **fields):
+        row = {"needs_verifier": False,
+               "verify_strings": ["純字串", {"path": "scripts/x.sh", "contains": "某字"}]}
+        row.update(fields)
+        return self.make_ticket(1, **row)
+
+    def test_usage_and_help_name_the_verb(self):
+        for args in (("lint",), ("lint", "--help")):
+            done = self.ticket(*args)
+            self.assertIn("scripts/ticket.py lint <id>", done.stdout + done.stderr)
+
+    def test_a_ticket_the_tool_made_passes_its_own_lint(self):
+        """F3 的病根。**變異**:拿掉 dict 形狀的放行 → 這一條紅。"""
+        made = self.ticket("create", *MIN, "--verify-string", "scripts/x.sh:某字",
+                           "--needs-verifier", "false")
+        self.assertEqual(made.returncode, 0, made.stdout + made.stderr)
+        self.assertIsInstance(self.load_ticket("1")["verify_strings"][0], dict)
+        done = self.lint()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(len(done.stdout.splitlines()), 1, done.stdout)
+        self.assertIn("ok", done.stdout)
+
+    def test_missing_needs_verifier_is_named(self):
+        """**變異**:拿掉 (a) → 這一條紅。"""
+        row = self.good()
+        del row["needs_verifier"]
+        self.write(os.path.join("tickets", "1.json"),
+                   json.dumps(row, ensure_ascii=False, indent=2) + "\n")
+        done = self.lint()
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("needs_verifier", done.stderr)
+
+    def test_consolidator_ticket_without_needs_verifier_passes(self):
+        row = self.good(role="consolidator")
+        del row["needs_verifier"]
+        self.write(os.path.join("tickets", "1.json"),
+                   json.dumps(row, ensure_ascii=False, indent=2) + "\n")
+        done = self.lint()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def test_bad_verify_string_shapes_are_named_by_position(self):
+        bad = (({"path": "scripts/x.sh"}, 2),
+               ({"path": "scripts/x.sh", "contains": "a", "extra": 1}, 2),
+               (3, 2),
+               (["nested"], 2),
+               ("", 2))
+        for shape, at in bad:
+            with self.subTest(shape=shape):
+                self.good(verify_strings=["好的", shape])
+                done = self.lint()
+                self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+                lines = [l for l in done.stderr.splitlines() if "verify_strings" in l]
+                self.assertEqual(len(lines), 1, done.stderr)
+                self.assertIn("第 %d 筆" % at, lines[0])
+
+    def test_empty_or_missing_verify_strings_is_named(self):
+        for value in ([], None, "字串不是串列"):
+            with self.subTest(value=value):
+                self.good(verify_strings=value)
+                done = self.lint()
+                self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+                self.assertIn("verify_strings", done.stderr)
+
+    def test_unregistered_tags_are_named_per_field(self):
+        self.good(tags=["example", "nope-a"],
+                  verify={"files": [], "tags": ["nope-b"], "run": "", "notes": ""})
+        done = self.lint()
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        lines = done.stderr.splitlines()
+        self.assertTrue([l for l in lines if "verify.tags" in l and "nope-b" in l], lines)
+        self.assertTrue([l for l in lines if " tags " in l and "nope-a" in l
+                         and "example" not in l], lines)
+
+    def test_registered_tags_pass(self):
+        self.good(tags=["example"],
+                  verify={"files": [], "tags": ["example"], "run": "", "notes": ""})
+        done = self.lint()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def test_every_bad_cell_gets_its_own_line(self):
+        row = self.good(verify_strings=[], tags=["nope"])
+        del row["needs_verifier"]
+        self.write(os.path.join("tickets", "1.json"),
+                   json.dumps(row, ensure_ascii=False, indent=2) + "\n")
+        done = self.lint()
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        lines = done.stderr.splitlines()
+        for field in ("needs_verifier", "verify_strings", " tags "):
+            self.assertEqual(len([l for l in lines if field in l]), 1, (field, lines))
+
+
+class ObjectionBodyDropsTheHomeDirectory(Sandbox):
+    """#91 C4(R1):票檔是文件級(test_no_project_names),反駁 body 帶家目錄絕對路徑
+    記進去,那張票就落不了地。所有收反駁的入口都經 `record_objection`。"""
+
+    ACCOUNT_HOME = ABSOLUTE_HOME + "someone"
+
+    def body(self):
+        return self.load_ticket("1")["objections"][0]["body"]
+
+    def test_both_home_forms_become_tilde(self):
+        """**變異**:拿掉 `record_objection` 的替換 → 這一條紅。"""
+        for home in (self.home, self.ACCOUNT_HOME):
+            with self.subTest(home=home):
+                self.make_ticket(1)
+                line = "OBJECTION: ticket-wrong 驗收 A3 指的 %s/x/y 不存在" % home
+                done = self.ticket("objection", "1", "--line", line)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertEqual(self.body(), "驗收 A3 指的 ~/x/y 不存在")
+                self.assertNotIn(ABSOLUTE_HOME, self.body())
+                self.assertNotIn(self.home, self.body())
+
+    def test_a_body_without_home_is_unchanged(self):
+        self.make_ticket(1)
+        line = "OBJECTION: ticket-wrong 驗收 A3 指的 /tmp/x/y 與 ~/z 不存在"
+        self.ticket("objection", "1", "--line", line)
+        self.assertEqual(self.body(), "驗收 A3 指的 /tmp/x/y 與 ~/z 不存在")
+
+    def test_the_same_objection_in_either_spelling_is_one_row(self):
+        self.make_ticket(1)
+        raw = "OBJECTION: ticket-wrong 指的 %s/x/y 不存在" % self.ACCOUNT_HOME
+        first = self.ticket("objection", "1", "--line", raw)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        for line in (raw, "OBJECTION: ticket-wrong 指的 ~/x/y 不存在",
+                     "OBJECTION: ticket-wrong 指的 %s/x/y 不存在" % self.home):
+            with self.subTest(line=line):
+                again = self.ticket("objection", "1", "--line", line)
+                self.assertEqual(again.returncode, 3, again.stdout + again.stderr)
+        self.assertEqual(len(self.load_ticket("1")["objections"]), 1)
+
+    def test_an_old_row_with_the_raw_path_still_dedupes(self):
+        self.make_ticket(1, objections=[{
+            "category": "ticket-wrong", "body": "指的 %s/x/y 不存在" % self.ACCOUNT_HOME,
+            "evidence": "", "owner": "main", "disposition": "deferred", "follow_up": ""}])
+        again = self.ticket("objection", "1", "--line",
+                            "OBJECTION: ticket-wrong 指的 ~/x/y 不存在")
+        self.assertEqual(again.returncode, 4, again.stdout + again.stderr)
 
 
 if __name__ == "__main__":

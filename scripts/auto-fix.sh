@@ -866,6 +866,18 @@ if [ -n "$IS_CODEX" ]; then
     # codex 那一支起的就是票上那個模型;規則包也照它挑模型卡。
     MODEL=$T_MODEL
     WORKER_MODEL=$T_MODEL
+elif [ -n "$T_MODEL" ] && [ "${T_TOOL:-claude-code}" = claude-code ]; then
+    # claude-code 票也照票上的 model 起(#91 C7;#78 只能手派的原因):worker.command 的
+    # `--model` 換成票的,換法只由 `ticket.py agent-command --swap-model` 決定
+    # (consolidate-memory.sh 同一支)。規則包、事件、cost 跟著記票的 model。
+    WORKER_CMD=$(python3 "$AC/ticket.py" agent-command --model "$T_MODEL" --tool "$T_TOOL" \
+            --base "$WORKER_CMD" --swap-model) || {
+        echo "auto-fix: #$ID 票的 model=$T_MODEL 換不進 worker.command —— 不派、票不動" >&2
+        exit 2
+    }
+    MODEL=$T_MODEL
+    WORKER_MODEL=$T_MODEL
+    echo "auto-fix: #$ID 照票的 model=$T_MODEL 起 worker(worker.command 的 --model 換成它)"
 elif [ "$WORKER_MODEL" != "$MODEL" ]; then
     echo "auto-fix: 警告:routing.implement=$MODEL,但 worker.command 實際起的是 $WORKER_MODEL —— agent.start/done/failed 的 model 記後者"
 fi
