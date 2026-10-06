@@ -1,6 +1,8 @@
 # <專案名>
 
-本專案使用 Agent Control(`../agent-control`)。**先讀 `../agent-control/CLAUDE.md`**,再讀下面的專案特有部分。
+本專案使用 Agent Control(`../agent-control`)。**主線**先讀 `../agent-control/CLAUDE.md`,再讀下面的專案特有部分。
+**短命角色**(worker / 驗證者 / 開題者 / 覆核者)開場只讀「角色卡 + 票」(正文 `../agent-control/memory/role/README.md`),
+這一份只看「專案特有」那一節 —— 禁區與陷阱是你會被擋到的;共用規矩按角色卡指的節去查,不整份讀。
 
 ## 專案特有
 - 閘門:`scripts/gate.sh --branch|--base|--full`(對照表在裡面;對不到要出聲)。

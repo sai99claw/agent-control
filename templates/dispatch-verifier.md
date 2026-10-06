@@ -4,7 +4,7 @@
      (#51,D-032 ③);規則包(`rules.py pack verifier`)在這一份之前。`@…@` 是它的佔位:
      派工文裡還看得到任何一個,就是腳本漏填了。人手派時一樣整份複製、把 `@…@` 換掉;
      `<feature>` / `<tag>` 這類角括號是驗證者自己決定的名字,不是佔位。這一份**不重貼
-     規則**(規則在角色卡與 `docs/DISPATCH-TEMPLATE.md`),只指路 + 這張票獨有的那幾件事。 -->
+     規則**(規則在角色卡;共用規矩 `docs/DISPATCH-TEMPLATE.md` 按角色卡指的節查,不整份讀),只指路 + 這張票獨有的那幾件事。 -->
 
 > ⚠️ **驗證者不判 PASS/FAIL、不寫 `VERDICT.md`。** 2026-09-21 起對錯由閘門判
 > (`docs/DECISIONS.md` D-010)。看到舊派工文要求「寫 VERDICT / 判通過退回」,那是
@@ -12,9 +12,8 @@
 
 ---
 
-你是 **role=verifier** 的驗證者,**短命**:交件那一回合結束。先讀上面規則包
-標題列的**角色卡**(你做什麼、不做什麼)與**模型記憶**(你這個模型在這裡踩過什麼)—— 路徑是 pack
-解析過的那一份,不要自己拼。
+你是 **role=verifier** 的驗證者,**短命**:交件那一回合結束。開場只讀**角色卡**(上面規則包
+標題列的那個路徑,pack 解析過的,不要自己拼)+ **這張票**;模型記憶規則包已帶。其他要查的照角色卡「遇到就查」那一行。
 
 **票**:#@TICKET@(`@TICKET_FILE@`)。驗收那一段就是你的規格。
 **base**:`@BASE@`(票的 `base_sha`;副本就是從它展開的)。
@@ -35,7 +34,7 @@
    (它自己做乾淨基底副本、覆上你的案例、只跑一次;算數的紅只有「案例檔自己的
    `AssertionError`」,import / 缺符號 / 別處炸的紅會列出來、不算)。rc=0 才算交件。
    **它不寫票**(#36):證據落在 `--out-dir` 的 `baseline-red.json`,路徑印在 stdout ——
-   把那份 JSON 原封抄進 `result` 區塊的 `baseline` 那一格,主線收件時在鎖裡併進票的 `verify.baseline`。
+   把那份 JSON 原封抄進 `result` 區塊的 `baseline` 那一格,收件的 `apply.sh --evidence-verifier`(auto-fix 跑)在鎖裡併進票的 `verify.baseline`。
    **綠不是你的事**:閘門在實作者 patch 進來時用 `verify-case.py check` 量,`ticket.py close`
    只認那一趟。**不搭參考實作、不做變異、不等 patch。** 交付物 `verify-case.py extract`。
 3. **標籤登記**:新標籤寫成**自己的片段** `verify/TAGS.d/@TICKET@.md`(格式 `` - `tag` — 說明(#@TICKET@) ``)。
@@ -59,7 +58,7 @@
 
 ## 第五樣:`@COPY@/EVIDENCE-verifier.md`(有收件者才交)
 五段散文照舊給人看,檔尾再加一段 `## result`(鍵見 `tickets/SCHEMA.md` §result,`role` 寫 `verifier`)。
-**收件者是 `apply.sh`**(2026-09-23,#29 A5):主線套 patch 那一手跑
+**收件者是 `apply.sh`**(2026-09-23,#29 A5):auto-fix 收件那一手跑(人手派時由派工的人跑)
 ```sh
 sh scripts/apply.sh @TICKET@ <patch.diff> @COPY@/patch-verify.diff --evidence-verifier @COPY@/EVIDENCE-verifier.md
 ```
@@ -73,12 +72,8 @@ sh scripts/apply.sh @TICKET@ <patch.diff> @COPY@/patch-verify.diff --evidence-ve
 - **不重跑票閘門那整組,也不跑 tag 回歸** —— 主線的閘門與落地的全套都會再跑一次,你重跑等於把同一份
   綠買第三遍(2026-09-21:重跑整組 + 輪詢等它,一天燒掉幾十萬 token)。
   你只跑:**自己的案例**,以及 `scripts/verify-case.py red @TICKET@`。`check` 是閘門的事,不是你的。
-- **只跑這份派工文「## 只准跑的測試」段列的測試**(#87 A18;那一段在派工文最後,由 `auto-fix.sh`
-  逐字抄票的 `test_plan`):不跑全套(unittest discover 整組、gate.sh --full)、不跑 verify.py 全部回歸
-  —— 回歸是閘門的事,閘門紅由 auto-fix 下一輪派 worker 處理,全套只在 land 跑一次。票沒有 `test_plan`
-  時只跑自己改到的 tests/ 檔。worker 同一條規矩,寫在 `docs/DISPATCH-TEMPLATE.md` §1。
-- **不准輪詢**:測試前景跑、給 `timeout`、一輪拿到結果,輸出只擷取
-  `^Ran |^OK|^FAILED|^(FAIL|ERROR):` 那幾行。不用 `Monitor`、不用 `sleep` 迴圈。
+- **只跑這份派工文「## 只准跑的測試」段列的測試**(那一段在派工文最後);正文與理由在 `docs/DISPATCH-TEMPLATE.md` §1,
+  判綠與不准輪詢在 §3,這裡不重抄。
 - **不改產品碼、不放寬票面的驗收、不刪既有案例、不 git 寫入、不執行整支落地腳本。**
 - 交完刪掉自己的副本,只留 `patch-verify.diff` 與上面那一份 EVIDENCE
   (票的 `verify.baseline` 是機器可讀的證據;那一份是給人與看板看的)。
