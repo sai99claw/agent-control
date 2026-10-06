@@ -308,3 +308,9 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - 主線補充(使用者五項之外):第幾輪、token 拆四種(input / output / cache_write / cache_read —— cache_read 是大宗)、outcome(算白花的)、關票加總、主線與 Agent 工具派的子 agent 也要有紀錄。不補歷史。
 - 欄位形狀定案(#94):cost[] 每列 14 鍵 role, round, model, tokens_in, tokens_out, cache_write, cache_read, wall_seconds, outcome, run_id, session_id, by, note, at;拿不到填 null 不填 0;outcome 只收登記表的字。關票寫 `cost_total` 並帶進 `ticket.closed`。
 - #95(依賴 #94):SubagentStop / SessionEnd hook 讀 transcript 寫 `agent.cost` 事件(同鍵 + ticket、agent_id),歸票靠猜所以不進 cost_total;互動 transcript 的 output 多半只有串流開頭值,記 null。
+
+## D-046(2026-10-06)成本審查後的排票:開浪費票、凍結省不到 token 的、#93 延後
+使用者在 tabby_pool 的裁示(AskUserQuestion 原選項):「全開，依浪費量排(建議)」「延後，#712 落地後觀察一週(建議)」「凍結(建議)」「記成裁示(建議)」。全文與排票三原則見 tabby_pool D-G144。
+- A 側:#96(dry-run 不清 round 副本)、#97(needs_verifier 票的寫入範圍不得含驗證者案例檔)、#98(覆核綁 patch 內容而非分支 sha)。
+- #93 凍結至 2026-10-13 後,看 T #712 落地以來的 redo 次數再決定。
+- 開題者交票前自查 objective / acceptance / test_plan 三處一致(近期 10 條反駁 4 條是票面自相矛盾)→ memory/role/opener.inbox.md。

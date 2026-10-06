@@ -1,0 +1,54 @@
+{
+  "id": "97",
+  "subject": "ticket.py 拒收「驗證者案例檔也在實作者 allowed_write_paths 裡」:needs_verifier=true 的票,寫入範圍不得含 verify.files 或驗證者慣例路徑(兩份 patch 撞檔 → apply rc=3,T #709)",
+  "created": "2026-10-06T22:35:12+08:00",
+  "objective": "needs_verifier=true 的實作票,allowed_write_paths 的任一 glob 只要命中 verify.files 的任一檔、或命中驗證者慣例路徑 verify/**/test_ticket_<票號>.py / verify/TAGS.d/<票號>.md,ticket.py 在 create、set allowed_write_paths、set verify、set needs_verifier true、set state Ready 與 lint 這幾手都拒絕並點名重疊的路徑;角色操作細節裡那條相反的舊規則一併改掉。",
+  "acceptance": [
+    "A1 create 擋:ticket.py create … --needs-verifier true --allowed-write-path 'verify/x/test_ticket_<新票號>.py' 或 --verify-file 與某條 --allowed-write-path 相同 → rc≠0、不建檔,stderr 點名那條路徑與「驗證者案例檔不列進實作者的 allowed_write_paths」",
+    "A2 set 擋:既有 needs_verifier=true 的票,set <n> allowed_write_paths '[\"verify/**\"]'(glob 命中 verify.files 或慣例路徑)rc≠0、票不動、state_version 不變;set <n> state Ready 在重疊時 rc≠0;ticket.py lint <n> 印出同一條問題",
+    "A3 不誤擋:needs_verifier=false 的票寫入範圍含 verify/x/test_ticket_<n>.py → 照收(實作者自己寫案例);needs_verifier=true 但寫入範圍是別張票的案例(verify/x/test_ticket_<別號>.py,改舊案例是常態)→ 照收",
+    "A4 收件路徑不受影響:apply.sh --evidence-verifier 把驗證者的 verify.files 併進票(它直接 ticket.save,不走 cmd_set)不因這條規則失敗;既有 tests/test_ticket.py 與 tests/test_apply.py 照綠",
+    "A5 文件一致:docs/reference/role-procedures.md「寫入範圍」那條「allowed_write_paths 要含驗證者會建立的案例檔(#23)」改成相反的規則並附來源(#709 / 本票);tickets/SCHEMA.md 的 allowed_write_paths 說明加一句同義的話"
+  ],
+  "in_scope": [
+    "scripts/ticket.py",
+    "tests/test_ticket.py",
+    "docs/reference/role-procedures.md",
+    "tickets/SCHEMA.md"
+  ],
+  "out_of_scope": [
+    "docs/DECISIONS.md",
+    "scripts/apply.sh"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/ticket.py",
+    "tests/test_ticket.py",
+    "docs/reference/role-procedures.md",
+    "tickets/SCHEMA.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "d236cdc8942e2bc1ddec0d8c38e51b4a365cd532",
+  "state": "Ready",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "verify_strings": [
+    "驗證者案例檔不列進實作者的 allowed_write_paths"
+  ],
+  "feature": "agent-control 工具鏈:票面守衛",
+  "needs_verifier": false,
+  "interface_fixed": true,
+  "test_plan": "單元層,tests/test_ticket.py 既有的拋棄式票庫夾具(AC_TICKETS_DIR 指暫存目錄):A1 對 create 兩種重疊各一條,斷言 rc≠0、票檔不存在、stderr 含那條路徑;A2 先建一張不重疊的 needs_verifier=true 票,再 set allowed_write_paths 成命中慣例路徑的 glob → rc≠0 且讀回票 state_version 不變,set state Ready 同樣;lint 輸出含那條路徑;A3 needs_verifier=false 與別張票的案例路徑各一條 → rc=0;A4 以 apply.sh 收件那段同樣的寫法(ticket.load / save)併入 verify.files 不拋例外,並跑 tests/test_apply.py 照綠;A5 grep 兩份文件。期望路徑都由測試自己寫死,不從被測程式算。變異(自證紅,貼紅的第一行):m1 只比 verify.files 不比慣例路徑 → A1 慣例那條紅;m2 不看 needs_verifier → A3 紅;m3 檢查放進 save() 而非 cmd_create/cmd_set → A4 紅。只跑:python3 -m unittest tests.test_ticket tests.test_apply;不跑全套。",
+  "outline": "【T 成本審查 #6,源頭在 A,幾乎零成本】T #709 開題者把驗證者案例檔 verify/board_sampler/test_ticket_709.py 與 verify/TAGS.d/709.md 列進實作者 allowed_write_paths,兩份 patch 撞檔、apply rc=3 白跑一輪(T HANDOFF 待開工具票⑤)。根在 docs/reference/role-procedures.md:41 的舊規則「allowed_write_paths 要含驗證者會建立的案例檔(#23)」—— D-H38 ① 後寫入範圍已不硬擋,那條反而誘導撞檔。開題時 verify.files 通常還是空的(驗證者後寫),所以只比 verify.files 抓不到 #709,要連 templates/dispatch-verifier.md 的慣例路徑一起比。T 的 scripts/control/ticket.py 是同步本,落地後要排 A→T 同步才生效。開題者角色卡的對應一行走 memory/role/opener.inbox.md,不在本票。needs_verifier=false:純票面守衛,tests/test_ticket.py 夾具可自證。",
+  "priority": "P2"
+}

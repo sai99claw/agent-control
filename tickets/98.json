@@ -1,0 +1,59 @@
+{
+  "id": "98",
+  "subject": "覆核綁 patch 內容而非分支 sha / 票版本:review.sh 記 patch_id(git patch-id --stable)與票面指紋,重套到新主線但內容不變、或只改了票的運行格(base_sha、gate、branch…)時覆核照樣有效",
+  "created": "2026-10-06T22:35:44+08:00",
+  "objective": "review.sh 判 pass 時,在 review 格多寫 patch_id(git diff <merge-base main 分支> <分支> | git patch-id --stable 的第一欄)與 face(票面欄位的 sha256 指紋);ticket.review_problems(ticket, tip, patch_id) 在 review 帶這兩格時,改以「face 與現票相同 且(tip 對得上 review.sha 或 patch_id 相同)」判有效,不再因 state_version 或分支頭改變就失效;land.sh 改叫 ticket.review_problems(不再自帶一份重抄的判準)並傳入當下分支的 patch_id。沒有這兩格的舊 review 行為不變。",
+  "acceptance": [
+    "A1 重套不失效:拋棄式 git 夾具,分支 t<n> 覆核 pass 後,把同一份改動重套到前進後的 main(分支頭換了、票的 base_sha / gate 被 set 過、state_version 增加)→ land.sh 不再印「覆核之後又 commit 過」或「覆核之後票被改過」,照常往下走",
+    "A2 內容變了照擋:重套後分支多改一行(patch-id 不同)→ land.sh 照舊拒絕,訊息點名 patch_id 對不上(印兩邊前 12 碼)",
+    "A3 票面變了照擋:覆核 pass 後 set <n> acceptance(或 objective / allowed_write_paths / verify_strings / test_plan / in_scope / out_of_scope / needs_verifier)→ land 拒絕,訊息點名「覆核之後票面被改過」;只 set base_sha / gate / branch / workspace / patch_ref / lease / cost 這類運行格 → 不失效",
+    "A4 舊 review 不變:review 沒有 patch_id / face 兩格時,review_problems 與 land.sh 的判法與訊息與現在逐字相同(tests/test_review.py、tests/test_ticket.py、tests/test_land.py 既有案例照綠)",
+    "A5 單一判準:land.sh 裡那段內嵌的 review 判法(現 :423-470 的 python heredoc)改成 import scripts/ticket.py 的 review_problems / objection_problems;tests 斷言 land.sh 不再含字串「覆核之後又 commit 過」的第二份實作(以 grep 該句只出現在 ticket.py 為準)"
+  ],
+  "in_scope": [
+    "scripts/review.sh",
+    "scripts/ticket.py",
+    "scripts/land.sh",
+    "tickets/SCHEMA.md"
+  ],
+  "out_of_scope": [
+    "docs/DECISIONS.md"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/review.sh",
+    "scripts/ticket.py",
+    "scripts/land.sh",
+    "tests/test_review.py",
+    "tests/test_ticket.py",
+    "tests/test_land.py",
+    "tickets/SCHEMA.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "d236cdc8942e2bc1ddec0d8c38e51b4a365cd532",
+  "state": "Ready",
+  "state_version": 5,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [
+      "tests/test_review_patch_id.py"
+    ],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "verify_strings": [
+    "patch-id --stable",
+    "patch_id"
+  ],
+  "feature": "agent-control 工具鏈:覆核綁定",
+  "needs_verifier": true,
+  "interface_fixed": false,
+  "test_plan": "整合層(拋棄式 git repo + 拋棄式票庫,沿用 tests/test_land.py / tests/test_review.py 的夾具;review.sh 的 LLM 以既有替身給 verdict=pass):A1 造 main→分支 t<n>(改 a.txt)→ 跑 review.sh 得 pass → main 進一個只改 b.txt 的 commit → 以同一份 diff 在新 main 上重建分支、set base_sha/gate → 跑 land.sh 斷言沒有覆核那兩句拒絕;A2 重建時 a.txt 多一行 → 拒絕且含 patch_id;A3 對每個票面欄各 set 一次 → 拒絕;運行格各 set 一次 → 不拒;A4 舊形 review(無 patch_id/face)跑既有案例;A5 grep。期望值:patch-id 由測試自己用 git patch-id --stable 算(與被測程式各算各的),票面欄位清單以票面這條為準。驗證者案例寫在新檔 tests/test_review_patch_id.py(本 repo 慣例住 tests/,verify.tags 留空),不寫進實作者寫入範圍裡的既有測試檔 —— 兩份 patch 撞同一檔會 apply rc=3(T #709)。變異(指定紅):m1 review_problems 忽略 patch_id 回到比 tip → A1 紅;m2 face 不含 acceptance → A3 紅;m3 land.sh 保留舊內嵌判法 → A1/A5 紅。只跑:python3 -m unittest tests.test_review tests.test_ticket tests.test_land;不跑全套。",
+  "outline": "【T 成本審查 #2 的 A 半邊】T 兩週約 12 次 redo + 重新覆核;T 票(land-ticket.sh 不重疊照算)消掉大部分,剩下真重疊而走 --redo 的那一類,分支頭與 state_version 必變,現在的 review 綁 sha 前綴 + state_version 相等(scripts/ticket.py review_problems:835-856;land.sh:423-470 另抄一份),所以內容相同也要重新覆核(T #654 先例:覆核者手比「redo 換基底 diff 逐位元相同」)。改用 git patch-id --stable(忽略行號與上下文)+ 票面指紋。【判定】review.sh / ticket.py 是 A 的同步來源,land.sh 是 A 自用,開 A。T 端接上(land-ticket.sh do_land:1773-1802 呼叫 review_problems 時傳 patch_id)要等 A→T 同步後另開 T 小票或併入同步票,不在本票。needs_verifier=true(覆核是落地的關卡,判準放寬要有獨立案例);interface_fixed=false(face 欄位清單與 review 格形狀由實作定)。優先低於 T 不重疊那張。",
+  "priority": "P2"
+}

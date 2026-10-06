@@ -1,0 +1,50 @@
+{
+  "id": "96",
+  "subject": "auto-fix --dry-run 不得清掉既有的 round 副本:round_once 的 rm -rf $FIX(與 dispatch_verifier 的 rm -rf $VFIX)在 dry-run 時不動手",
+  "created": "2026-10-06T22:34:49+08:00",
+  "objective": "sh scripts/auto-fix.sh <n> --dry-run 只印派工文與命令,不刪、不重建 <wtbase>/fix-t<n>/round<r> 與 verify-t<n>/round<r>;已有的 worker / 驗證者產出(patch、EVIDENCE、work/)原封不動。",
+  "acceptance": [
+    "A1 worker 副本留著:<wtbase>/fix-t<n>/round1/ 先放一個 patch-round1.diff 與 work/marker(內容任意)、票 Ready 且沒有 status → sh scripts/auto-fix.sh <n> --dry-run rc=0 且照舊印派工文;跑完後那兩個檔仍在、內容逐位元相同",
+    "A2 驗證者副本留著:needs_verifier=true 的票,<wtbase>/verify-t<n>/round1/ 先放一個 marker → --dry-run 之後 marker 仍在",
+    "A3 dry-run 之外不變:不帶 --dry-run 時 round 副本照舊清掉重建(既有 tests/test_auto_fix.py 照綠);--dry-run --round 1(first_round_dispatch)行為不變"
+  ],
+  "in_scope": [
+    "scripts/auto-fix.sh",
+    "tests/test_auto_fix.py"
+  ],
+  "out_of_scope": [
+    "docs/DECISIONS.md"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "tests/test_auto_fix.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "d236cdc8942e2bc1ddec0d8c38e51b4a365cd532",
+  "state": "Ready",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "verify_strings": [
+    {
+      "path": "tests/test_auto_fix.py",
+      "contains": "test_dry_run_keeps_the_round_copies"
+    }
+  ],
+  "feature": "agent-control 工具鏈:auto-fix",
+  "needs_verifier": false,
+  "interface_fixed": true,
+  "test_plan": "整合層,沿用 tests/test_auto_fix.py 既有的 auto_fix(\"--dry-run\") 夾具(test_dry_run_writes_the_packet_and_does_not_start_a_worker 那一型),新增 test_dry_run_keeps_the_round_copies:A1 事先在夾具的 wtbase 下寫 fix-t<n>/round1/patch-round1.diff 與 work/marker,跑 --dry-run,斷言兩檔仍在且內容等於事先寫的字串;A2 同法對 verify-t<n>/round1/marker;A3 跑既有 dry-run 與非 dry-run 案例照綠。變異(自證紅,貼紅的第一行):m1 把 rm -rf $FIX 的 dry-run 守衛拿掉 → A1 紅;m2 拿掉 $VFIX 的守衛 → A2 紅。只跑:python3 -m unittest tests.test_auto_fix;不跑全套。",
+  "outline": "【T 成本審查 #4(b),源頭在 A】T 的 auto-fix --dry-run 會清掉 fix-t<n>/round1(T HANDOFF 待開工具票②)。讀碼:scripts/auto-fix.sh round_once:1478-1481 先 rm -rf \"$FIX\",dry-run 的出口在 :1637;dispatch_verifier:1143 同樣先 rm -rf \"$VFIX\"。T 的 scripts/control/auto-fix.sh 是 sync-to-project 產出物(T 現存那份同樣在 :815),修在 A、同步到 T。T 端另有 T 票收 (a) 閘門不寫 status.json 與 (c) 沒記 patch 拒跑。needs_verifier=false:單一腳本契約、tests/test_auto_fix.py 既有夾具可自證,驗證者只會重演同一夾具。注意 T 的同步本落後 A 很多(約 958 行 diff),本票落地後要排一次 A→T 腳本同步才生效。",
+  "priority": "P1"
+}

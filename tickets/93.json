@@ -37,8 +37,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "eca7254d444a17e6d5785ca42295e955a1c8da96",
-  "state": "Ready",
-  "state_version": 2,
+  "state": "Blocked",
+  "state_version": 4,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -57,5 +57,9 @@
   "test_plan": "只跑:cd tests && python3 -m unittest test_dispatch_template test_apply test_rules test_rules_delivery test_auto_fix_codex;test_auto_fix 只跑改到與新增的類。前景跑加 timeout,不跑全套。變異(各自驗紅、貼紅的第一行):m1 first_round_packet 拿掉那一節 → C1/C2 紅;m2 修復輪那節改成也叫重新展開 base/ → C3 紅;m3 收件不換 base_sha → C4 正例紅;m4 換 base_sha 不查祖先 → C4 反例紅;m5 aligned_main 只加 SCHEMA 不加 §8.5 → C5 紅。",
   "outline": "【源頭判定】worker 派工文由 A 的 scripts/auto-fix.sh 產(first_round_packet、修復輪那段),T 的 scripts/control/auto-fix.sh 是 sync-to-project 產出物 → 開 A。T 的 DISPATCH-COMMON-RULES / DISPATCH-TEMPLATE 是 T 自有(T 的規則包讀 COMMON-RULES)→ 落地後主線同步到 T,並走 T docs 通道在「工作區」補「交件前重新展開 base/ 是唯一例外」,否則規則包與派工文互相矛盾。【限制】只擋 worker 工作期間主線動;#711 是交件後才動,由 T #712(gate --redo 三向)補。【為何換 base_sha】apply.sh rebase 以票 base_sha 當祖先,不換就套不回。【實測】git merge-file 在無 .git 目錄可用;未實測:codex 沙盒讀主 repo .git(第 1 輪已靠 git archive 讀,推定可)。needs_verifier=false:工具鏈單元測試+五變異自證。",
   "needs_verifier": false,
-  "interface_fixed": false
+  "interface_fixed": false,
+  "frozen": {
+    "reason": "使用者 2026-10-06 裁示延後(不派):#712 落地後觀察一週(至 2026-10-13 後)再決定",
+    "criterion": "2026-10-13 之後,看 T #712 落地以來因主線前進而 redo 的次數,再由主線決定派或關"
+  }
 }
