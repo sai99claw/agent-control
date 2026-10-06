@@ -128,6 +128,21 @@ cmd_docs() {   # $1 = commit 訊息  $2… = 檔案(repo 相對路徑)
         echo "land:   產品碼走一票一分支:sh scripts/apply.sh <票號> <patch>,再 sh scripts/land.sh t<票號>" >&2
         exit 2
     fi
+    # 開題者(AC_ROLE=opener)只收 `tickets/<AC_TICKET>.json` 一個檔(#91 C6,R4):它的交付
+    # 就是那張票面;別張票檔、docs/、memory/ 是主線的,文字上的禁令擋不住一次手滑。
+    if [ "${AC_ROLE:-}" = opener ]; then
+        own=""
+        [ -n "${AC_TICKET:-}" ] && own="tickets/$AC_TICKET.json"
+        bad=""
+        for f in "$@"; do
+            [ -n "$own" ] && [ "$f" = "$own" ] || bad="$bad $f"
+        done
+        if [ -n "$bad" ]; then
+            echo "land: 開題者只收自己那張票檔(${own:-AC_TICKET 沒設,一個都不收})—— 這幾個不收:" >&2
+            for one in $bad; do echo "land:   $one" >&2; done
+            exit 2
+        fi
+    fi
     here=$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
     if [ "$here" != "$MAIN" ]; then
         echo "land: docs 通道要在 $MAIN 上跑,現在在 $here —— 進錯分支的 commit 沒有人看得出來" >&2

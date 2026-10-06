@@ -118,6 +118,22 @@ class WhatItPacks(RulesBase):
         self.assertTrue(verifier.strip(), "驗證者的包是空的")
         self.assertNotIn("§1 副本 + patch", verifier)
 
+    def test_the_main_line_does_not_review(self):
+        """#91 C5(F33):D-022 之後覆核由 review.sh 派 reviewer,主線那一句不再寫「覆核」。
+
+        那一句(`WANTED["main"]` 第三格)只有 `rules.py roles` 印,`pack` 不印(實測
+        2026-10-06),所以從 `roles` 讀;`pack main` 只驗它照常產得出來。
+
+        **變異**:把 `WANTED["main"]` 那一句改回「接需求、覆核、決定順序、發版」→ 這一條紅。
+        """
+        self.assertEqual(self.rules("pack", "main", "--model", "opus").returncode, 0)
+        done = self.rules("roles")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        lines = [l for l in done.stdout.splitlines() if l.split()[:1] == ["main"]]
+        self.assertEqual(len(lines), 1, done.stdout)
+        self.assertIn("接需求、決定順序、發版", lines[0])
+        self.assertNotIn("覆核", lines[0])
+
     def test_it_names_the_version_it_was_cut_from(self):
         """規則包會被貼進派工文,而**一份不知道自己是哪一版的規則包**沒辦法被追。"""
         done = self.rules("pack", "worker", "--model", "opus")

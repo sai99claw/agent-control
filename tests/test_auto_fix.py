@@ -674,12 +674,13 @@ class ThingsThatStopIt(AutoFixBase):
 
 
 class TheEventModelIsTheOneThatActuallyRan(AutoFixBase):
-    """`routing.implement` 只是路由標籤;`worker.command` 才是真的起的那個(#21)。
-    `agent.start`/`agent.done`/`agent.failed` 的 `model` 欄要記後者,兩者不一致時
-    還要印一行警告 —— 不然 events.jsonl 會記著一個從沒跑過的模型。
+    """`routing.implement` 只是路由標籤;事件要記**實際起的那個**(#21)。#91 C7 之後
+    claude-code 票起的是票上的 model(worker.command 的 `--model` 被換掉),所以
+    `agent.start`/`agent.done`/`agent.failed` 的 `model` 欄記票的 model —— 不記 routing
+    標籤,也不記被換掉的 worker.command 那一個。
 
     **變異**:把 `round_once` 裡三個 `ev agent.*` 的 `--model "$WORKER_MODEL"` 改回
-    `--model "$MODEL"` → 這一條紅(`row["model"]` 變回 routing 那個標籤)。
+    `--model "$MODEL"` 並拿掉照票換 model → 這一條紅(`row["model"]` 變回 routing 那個標籤)。
     """
 
     def set_worker_with_model(self, body, worker_model, routing_model):
@@ -696,22 +697,103 @@ class TheEventModelIsTheOneThatActuallyRan(AutoFixBase):
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
         return path
 
-    def test_events_record_the_worker_command_model_not_the_routing_label(self):
+    def test_events_record_the_model_that_actually_ran(self):
         self.set_worker_with_model(WORKER_NEVER, "claude-opus-x", "codex:gpt-5.6-sol")
         self.ticket_ready()
         self.status(1, RED_LOG)
 
         done = self.auto_fix()
 
-        self.assertIn("警告", done.stdout, done.stdout + done.stderr)
-        self.assertIn("routing.implement=codex:gpt-5.6-sol", done.stdout)
-        self.assertIn("claude-opus-x", done.stdout)
+        self.assertIn("照票的 model=opus", done.stdout, done.stdout + done.stderr)
         agent_events = [row for row in self.events()
                         if row["kind"].startswith("agent.")]
         self.assertTrue(agent_events, "沒有 agent 事件可以查")
         for row in agent_events:
-            self.assertEqual(row["model"], "claude-opus-x",
+            self.assertEqual(row["model"], "opus",
                              "events.jsonl 記著一個從沒跑過的模型 —— 這正是 #21 要擋的事")
+
+
+# 假 worker(#91 C7):記下自己被叫的 argv 與 stdin 餵進來的派工文,不交件。
+WORKER_RECORDS_ARGV = """#!/bin/sh
+printf '%s\\n' "$@" > "@ARGV@"
+cat > "@STDIN@"
+echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+exit 0
+"""
+
+
+class TheTicketModelPicksTheClaudeWorker(AutoFixBase):
+    """#91 C7:tool=claude-code、model 非空的票,worker 照票上的 model 起 —— 以前只有
+    codex 票照票,claude-code 票寫 fable 也起 worker.command 的 opus(#78 只能手派)。"""
+
+    FABLE_ONLY = "沙盒fable卡獨有字:藍鯨"
+    OPUS_ONLY = "沙盒opus卡獨有字:紅隼"
+
+    def setUp(self):
+        super().setUp()
+        self.argv_file = os.path.join(self.home, "worker-argv.txt")
+        self.stdin_file = os.path.join(self.home, "worker-stdin.md")
+        self.write(os.path.join("memory", "model", "fable.md"), "- %s\n" % self.FABLE_ONLY)
+        self.write(os.path.join("memory", "model", "opus.md"), "- %s\n" % self.OPUS_ONLY)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "沙盒:兩張可分辨的模型卡")
+        path = os.path.join(self.home, "fake-worker.sh")
+        write_executable(path, WORKER_RECORDS_ARGV.replace("@ARGV@", self.argv_file)
+                         .replace("@STDIN@", self.stdin_file))
+        conf = dict(DEFAULT_CONFIG)
+        conf["worker"] = {"command": "sh %s --model opus --permission-mode acceptEdits" % path,
+                          "timeout_seconds": 120}
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+
+    def argv(self):
+        with open(self.argv_file, encoding="utf-8") as handle:
+            return handle.read().splitlines()
+
+    def test_the_worker_runs_the_ticket_model(self):
+        """**變異**:拿掉 auto-fix 的照票換 model → argv 那一格紅。"""
+        self.ticket_ready(model="fable", tool="claude-code")
+        done = self.auto_fix("--no-review")
+        argv = self.argv()
+        self.assertEqual(argv[argv.index("--model") + 1], "fable", argv)
+        self.assertEqual(argv.count("--model"), 1, argv)
+        self.assertNotIn("opus", argv)
+        self.assertIn("照票的 model=fable", done.stdout, done.stdout + done.stderr)
+
+    def test_the_rules_pack_is_cut_for_the_ticket_model(self):
+        """**變異**:規則包改回用 routing 的 model → 這一條紅。"""
+        self.ticket_ready(model="fable", tool="claude-code")
+        done = self.auto_fix("--no-review")
+        with open(self.stdin_file, encoding="utf-8") as handle:
+            packet = handle.read()
+        self.assertIn(self.FABLE_ONLY, packet, done.stdout + done.stderr)
+        self.assertNotIn(self.OPUS_ONLY, packet)
+        self.assertIn("memory/model/fable.md", packet)
+
+    def test_events_and_cost_record_the_ticket_model(self):
+        self.ticket_ready(model="fable", tool="claude-code")
+        done = self.auto_fix("--no-review")
+        agent_events = [row for row in self.events() if row["kind"].startswith("agent.")]
+        self.assertTrue(agent_events, done.stdout + done.stderr)
+        self.assertIn("agent.start", [row["kind"] for row in agent_events])
+        for row in agent_events:
+            self.assertEqual(row["model"], "fable", row)
+        cost = [row for row in self.load_ticket("1").get("cost") or []
+                if row["role"] == "worker"]
+        self.assertEqual([row["model"] for row in cost], ["fable"], cost)
+
+    def test_a_model_below_the_routing_floor_starts_nothing(self):
+        """下限沿用 rules.py 的 below_floor,auto-fix 不另寫一份。"""
+        conf = json.loads(self.read("board/config.json"))
+        conf["model_tiers"] = ["sonnet", "opus", "fable"]
+        conf["routing"] = {"implement": "opus"}
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        self.write(os.path.join("memory", "model", "sonnet.md"), "- 沙盒 sonnet 卡\n")
+        self.ticket_ready(model="sonnet", tool="claude-code")
+        done = self.auto_fix("--no-review")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("低於 routing 下限", done.stderr)
+        self.assertFalse(os.path.exists(self.argv_file), "不該起 worker")
+        self.assertEqual([row for row in self.events() if row["kind"] == "agent.start"], [])
 
 
 class TheDispatchPacket(AutoFixBase):

@@ -506,6 +506,50 @@ class TheDocsChannel(LandBase):
             self.assertIn(prefix, done.stderr)
 
 
+class TheOpenerLandsOnlyItsOwnTicket(LandBase):
+    """#91 C6(R4):`AC_ROLE=opener` 走 docs 通道時只收 `tickets/<AC_TICKET>.json`。"""
+
+    def docs(self, ticket, *args):
+        return self.run_sh("scripts/land.sh", "docs", *args,
+                           env=self.env(AC_ROLE="opener", AC_TICKET=ticket))
+
+    def test_its_own_ticket_file_lands(self):
+        self.make_ticket(7)
+        before = self.git("rev-parse", "main").strip()
+        done = self.docs("7", "tickets: #7 開票", "tickets/7.json")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotEqual(self.git("rev-parse", "main").strip(), before)
+        self.assertEqual(self.git("show", "--name-only", "--format=", "main").split(),
+                         ["tickets/7.json"])
+
+    def test_any_other_file_is_refused_by_name(self):
+        """**變異**:拿掉 land.sh 的 opener 分支 → 這一條紅。"""
+        self.make_ticket(7)
+        self.make_ticket(8)
+        self.write("docs/X.md", "x\n")
+        self.write("memory/role/implementer.inbox.md", "- 一條 (#7)\n")
+        before = self.git("rev-parse", "main").strip()
+        for extra in ("tickets/8.json", "docs/X.md", "memory/role/implementer.inbox.md"):
+            with self.subTest(extra=extra):
+                done = self.docs("7", "順手", "tickets/7.json", extra)
+                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+                self.assertIn("開題者只收自己那張票檔", done.stderr)
+                named = [l for l in done.stderr.splitlines() if l.strip().endswith(extra)]
+                self.assertTrue(named, done.stderr)
+                self.assertNotIn("land:   tickets/7.json", done.stderr.splitlines(),
+                                 "自己那張不在被拒名單上")
+                self.assertEqual(self.git("rev-parse", "main").strip(), before)
+
+    def test_no_ticket_number_refuses_everything(self):
+        self.make_ticket(7)
+        before = self.git("rev-parse", "main").strip()
+        done = self.docs("", "tickets: #7", "tickets/7.json")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("開題者只收自己那張票檔", done.stderr)
+        self.assertIn("tickets/7.json", done.stderr)
+        self.assertEqual(self.git("rev-parse", "main").strip(), before)
+
+
 class LeftoverCopiesAreNamed(LandBase):
     """#29 A6 / G6:落地成功之後,**唸出還躺在 worktree 基底下的修復 / 驗證副本**。
 
