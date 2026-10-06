@@ -1,0 +1,129 @@
+{
+  "id": "92",
+  "subject": "A 規格審查 prompt 半:短命角色開場只讀「角色卡 + 票」、DISPATCH-TEMPLATE 改按需查的參考、角色卡 / 主線卡 / 模型卡 / 三份 inbox / reference / 範本 / CLAUDE.md 對齊(opus 覆核照 #88 P11)",
+  "created": "2026-10-05T09:28:36+08:00",
+  "objective": "docs/review/20261004-a-spec-audit.md 所有「改文字」的發現(原建議 P1+P2 合一)做完:給模型讀的文字與程式、裁示、SCHEMA 一致,同一規則一處正文。核心照使用者 2026-10-05 原話「Agent 在開始執行之前不容易知道自己是不是短命,通常agent 開始之前應該要讀角色卡+票,其他需要的他會自己去找」:短命角色開場只讀角色卡 + 票,DISPATCH-TEMPLATE(33KB)改成按需查的參考,角色卡寫「遇到 X 去查 §Y」。內容不刪原則、去重、案例移出(D-013)。使用者裁示:「改prompt 一張票 改工具一張票」—— 本票是 prompt 那張,code 半是 #91。",
+  "acceptance": [
+    "Q1 [核心;使用者 2026-10-05 原話「Agent 在開始執行之前不容易知道自己是不是短命,通常agent 開始之前應該要讀角色卡+票,其他需要的他會自己去找」;F14 F15] 短命角色(worker、verifier、opener、reviewer、consolidator、design)的開場只寫「角色卡 + 票」(派工文已帶的規則包照帶,不另指定讀整份文件);CLAUDE.md:22 一帶、docs/SESSION-START.md(含表格第 13 行的 ✓)、templates/dispatch-*.md、templates/project-CLAUDE.md 不再有任何一處要短命角色開場讀整份 docs/DISPATCH-TEMPLATE.md、HANDOFF、事件流或開票清單。正文只在 memory/role/README.md 一處(逐字含「角色卡 + 票」),其他處一句指路。CLAUDE.md 開場四步與「每個動作要發事件」標明主線限定(F15)。覆核:在上述檔 grep「DISPATCH-TEMPLATE」,每一處命中都是「按需查 §X」或規則包說明,不是開場必讀。",
+    "Q2 [F14 F2 F8 F9 F23 F24 F26 F27 F28] docs/DISPATCH-TEMPLATE.md 改成按需查的參考:開頭一段逐字含「不整份讀」,附一張「情境 → §」索引;scripts/rules.py WANTED 引用的每個節號都保留、各節切得出非空正文(不改節號 —— 改了規則包就切不出來;非改不可就寫 OBJECTION ticket-wrong);原則一條不刪,只去重:「只准跑的測試」只留 §1(F23)、短命角色的不准輪詢只留這裡(F24)、patch 檔頭縮成「apply 會拒」(F26);案例敘事改成票號指路(D-013);§1 手工套 patch / archive 步驟縮成一句派工方的事(F9);§3 範例改中性指令、§8 第 4 點標 worker 限定(F2 F8);§8 第 1 點改相對副本根的路徑(F28);result 表補 `verify`、`verdict` 兩鍵,與 tickets/SCHEMA.md 的表同步(F27)。檔案 bytes 小於改前(改前 33029,EVIDENCE 記前後 wc -c)。",
+    "Q3 [角色卡指路] 每張短命角色卡(implementer、verifier、opener、reviewer、consolidator、design)有「遇到 X → 查 DISPATCH-TEMPLATE §Y / reference『<角色>角色操作細節』」的指路,X 是這個角色真的會遇到的情境(至少涵蓋:交件格式、反駁、測試範圍、禁區);卡上不抄指令、路徑、行號(D-036)。容量:每張卡不超過現行上限、上限數字不改(opener 改前 1984/2000、implementer 2425/2700);`memory.py check --read-only` 超標的卡數不比改前多(改前先跑一次記下)。",
+    "Q4 [W 類,照審查報告各條「處置」欄做] F1(驗證者跑 verify-case red,不跑 check;reference 與 verifier 卡各只寫一次)、F3 文字半(verify_strings 形狀以 tickets/SCHEMA.md 為準:純字串或 `路徑:字`,不手寫 dict;手寫自檢那一行改成指到 #91 的 `ticket.py lint`,寫在 docs/reference/role-procedures.md,逐字含「ticket.py lint」)、F4(不改產品碼與 repo 檔,票檔 / triage 檔 / 暫存目錄可寫,唯讀指令與 --help 可跑;子工作者限互動 session)、F6(fable 卡不教裸 commit,改指 docs 通道)、F7(實作者不跑全套,分批跑全套那條限定或刪)、F12(整理者卡只留原則,指令指到範本)、F19(main.inbox 過期條目處置掉)。",
+    "Q5 [T 類,照各條「處置」欄做] F5(開題者模型標示跟上 D-039,「不准派 Sonnet」改指路到 routing 下限)、F10(覆核者卡與 SCHEMA 覆核列改成 review.sh 寫 review,不是主線)、F11(覆核者反駁形狀指到範本)、F13(整理者卡寫明兩條路:兩模型 consolidate,或單一高階模型走 worker 管線 —— 後者靠 #91 C7 照票 model 起)、F16(寫入範圍硬擋只有 out_of_scope 與 protected_paths)、F18(刪掉不存在的落地順序提案腳本那半句)、F25(驗證者何時起只留 SCHEMA 一處正文)、F29(副本環境變數的理由改成拋棄式控制根)。",
+    "Q6 [C 類與記憶整理;F20 F21 F21b F22 F24 F30 F31 F32] main.md、reviewer.md、consolidator.md、design.md、fable.md、opus.md 與 main.inbox、fable.inbox、opus.inbox 三份 inbox:依 D-007 / D-013 整理(本票由 fable 單模型,比照 D-043),inbox 逐條處置(收進卡 / 搬 reference / 刪,刪的寫理由進 EVIDENCE),重複與測試殘留清掉(F22);案例改原則 + 票號(F21 F21b);gemini 卡改「尚無條目」(F32);F30 F31 照處置欄改字。`memory.py lint --file <檔> --json` 對這九份為 0 條(或每條有 memory-allow 且理由成立);改前數字見審查報告 F20。",
+    "Q7 [指向 #91 做出來的行為;覆核 (b) 要在分支上 grep 得到] 開題者卡 / reference 的票面自檢指到 `ticket.py lint`(#91 C3);needs_verifier 必填寫成「Ready 會擋」(#91 C1 C2);實作者卡的不准帶家目錄路徑那句改成「收件時會換成佔位,仍不要寫」(#91 C4);tickets/SCHEMA.md 執行列寫明 claude-code 票照票上 model 起、規則包與事件同(#91 C7);開題者 docs 通道只收自己票檔寫成「land 會擋」(#91 C6);docs/ROLES.md 與主線卡的主線職責不含「覆核」,與 rules.py 主線句一致(#91 C5)。",
+    "Q8 [主驗收;review.sh 的 opus 覆核者照 #88 P11 清單逐檔判] 本票改到的每個檔、每段新增或改寫的文字:(a) 與 docs/DECISIONS.md 現行裁示、tickets/SCHEMA.md、memory/role/README.md 分層契約無矛盾,矛盾即 fail 並並列兩邊原文;(b) 點名的每個腳本、子命令、旗標、設定鍵、檔名、輸出字樣在分支上存在且行為如文所述(檔:行),不在即 fail;(c) 只寫在文字上、可由程式強制的「必須 / 不准」句逐條列出,#91 已做的不准再只寫文字,範圍外的列「可之後再說」並建議歸屬;(d) 無家目錄絕對路徑、無專案名;(e) 命令、函式、行號、sha、事故敘事不進角色卡 / 模型卡正文;(f) 同一規則只有一處正文,出現兩種說法即 fail。REVIEW.md 逐條表「驗收 → 文字檔:行 → 程式檔:行」;本票無新測試,「守它的案例」寫「無(文字票,依 Q8 判)」不因此 fail。",
+    "Q9 [既有守衛,不寫新測試] test_no_project_names、test_memory、test_dispatch_template(兩張 result 表一致、每個角色的包切得出節)、test_rules_delivery、test_rules、test_templates、test_sync_to_project、test_routing_cards 不改一行仍綠;閘門對本分支改到的記憶檔跑的 lint(只量新增行)為 0。本票不新增、不修改任何 tests/ 檔;守衛釘住必須改的段落 → 不改測試,寫 OBJECTION(ticket-wrong)。"
+  ],
+  "in_scope": [
+    "CLAUDE.md",
+    "memory/role/README.md",
+    "memory/role/opener.md",
+    "memory/role/implementer.md",
+    "memory/role/verifier.md",
+    "memory/role/reviewer.md",
+    "memory/role/consolidator.md",
+    "memory/role/design.md",
+    "memory/role/main.md",
+    "memory/role/main.inbox.md",
+    "memory/model/fable.md",
+    "memory/model/opus.md",
+    "memory/model/gemini-3.8-flash-high.md",
+    "memory/model/fable.inbox.md",
+    "memory/model/opus.inbox.md",
+    "docs/reference/*",
+    "docs/DISPATCH-TEMPLATE.md",
+    "docs/SESSION-START.md",
+    "docs/ROLES.md",
+    "tickets/SCHEMA.md",
+    "templates/dispatch-*.md",
+    "templates/project-CLAUDE.md"
+  ],
+  "out_of_scope": [
+    "scripts/*",
+    "tests/*",
+    "verify/*",
+    "board/*",
+    "code-map/*",
+    "docs/DECISIONS.md",
+    "docs/HANDOFF.md",
+    "memory/project/*",
+    "memory/model/gpt-5.6-sol.md",
+    "memory/model/gpt-6-astra.md"
+  ],
+  "depends_on": [
+    {
+      "id": "91",
+      "condition": "落地(Q7 的文字指向 #91 做出來的 ticket.py lint、Ready 擋 needs_verifier、反駁換佔位、land docs 開題者限定、照票 model 起 worker;覆核 Q8 (b) 要在分支上 grep 得到;本票 model=fable 也要 #91 C7 才能由 auto-fix 起)"
+    }
+  ],
+  "allowed_write_paths": [
+    "CLAUDE.md",
+    "memory/role/README.md",
+    "memory/role/opener.md",
+    "memory/role/implementer.md",
+    "memory/role/verifier.md",
+    "memory/role/reviewer.md",
+    "memory/role/consolidator.md",
+    "memory/role/design.md",
+    "memory/role/main.md",
+    "memory/role/main.inbox.md",
+    "memory/model/fable.md",
+    "memory/model/opus.md",
+    "memory/model/gemini-3.8-flash-high.md",
+    "memory/model/fable.inbox.md",
+    "memory/model/opus.inbox.md",
+    "docs/reference/*",
+    "docs/DISPATCH-TEMPLATE.md",
+    "docs/SESSION-START.md",
+    "docs/ROLES.md",
+    "tickets/SCHEMA.md",
+    "templates/dispatch-*.md",
+    "templates/project-CLAUDE.md"
+  ],
+  "role": "worker",
+  "model": "fable",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "dceaea95e2aea2da435ad0d8c7fc3427061c761e",
+  "state": "Ready",
+  "state_version": 5,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "feature": "agent-control 規格文字:角色卡與派工參考",
+  "decision_refs": [
+    "D-007",
+    "D-013",
+    "D-022",
+    "D-025",
+    "D-036",
+    "D-039",
+    "D-043"
+  ],
+  "verify_strings": [
+    {
+      "path": "docs/DISPATCH-TEMPLATE.md",
+      "contains": "不整份讀"
+    },
+    {
+      "path": "memory/role/README.md",
+      "contains": "角色卡 + 票"
+    },
+    {
+      "path": "docs/reference/role-procedures.md",
+      "contains": "ticket.py lint"
+    }
+  ],
+  "test_plan": "只寫文字 + 跑本段列的守衛;不跑全套(unittest discover 整組、gate.sh --full)、不跑 verify.py —— 回歸是閘門的事。不寫、不改任何 tests/ 檔。\n改前先跑一次記下:python3 scripts/memory.py check --read-only;對 Q6 九份檔各跑 python3 scripts/memory.py lint --file <檔> --json;wc -c docs/DISPATCH-TEMPLATE.md。\n交件前只跑:python3 -m unittest tests.test_no_project_names;cd tests && python3 -m unittest test_memory test_dispatch_template test_rules_delivery test_rules test_templates test_sync_to_project test_routing_cards;再跑一次上面三組量測,前後數字寫進 EVIDENCE。\n自檢(給覆核者的對照起點):EVIDENCE 列「文字檔:行 → 程式檔:行」表,寫進文字的每個入口、旗標、設定鍵、輸出字樣各 grep 一次;grep 不到的不准寫。\n變異:無(沒有新測試);EVIDENCE result 的 mutations 留 []。主驗收是 review.sh(opus)照 Q8 判。",
+  "outline": "【來源】審查報告建議的 P1 + P2 合一張(使用者:改 prompt 一張、改工具一張)。收:F1 F2 F3文字 F4 F5 F6 F7 F8 F9 F10 F11 F12 F13 F14 F15 F16 F18 F19 F20 F21 F21b F22 F23 F24 F25 F26 F27 F28 F29 F30 F31 F32。不收:F17 與 F10 後半(DECISIONS,主線自己走 docs 通道)、R5–R9(報告判不處置)。code 半全在 #91。\n【依賴】depends_on #91 落地:Q7 的文字指向 #91 的行為;且本票 model=fable,auto-fix 要 #91 C7 才照票起 fable(現在對 claude-code 票一律起 worker.command 的 opus)。#91 Running 時可先寫 Q1–Q6,覆核必等 #91 落地。\n【設計裁示】開場只讀角色卡 + 票(使用者原話);DISPATCH-TEMPLATE 留原則、改索引式參考,不刪原則;rules.py 的節號不改(改了規則包切不出來,test_dispatch_template 會紅)。verify_strings 形狀以 SCHEMA 為準(與 #91 C3 一致)。整理由 fable 單模型(D-013「或一個高階模型」,D-043 前例)。\n【needs_verifier=false】文字票,沒有可寫成單元案例的行為;正確性是文字與程式、裁示、契約一致,由 opus 覆核者照 Q8(= #88 P11)判,回歸靠既有守衛(Q9)。比照 #88。\n【容量】字數上限不提高:opener 1984/2000、implementer 2425/2700 只能減字;閘門只 lint 新增行(D-042),新句子不帶路徑或指令。\n【時限 12600 秒,分段,不含回歸(未實測)】DISPATCH-TEMPLATE 重整 40–55 分;七張角色卡 + 三張模型卡指路與 W/T/C 修正 35–50;三份 inbox 逐條處置 15–20;CLAUDE.md / README / SESSION-START / ROLES / SCHEMA / reference / 範本 20–30;自檢 grep + 量測 + 守衛兩輪 20–25;變異 0。合計 130–180 分 ×1.15 ≈ 210 分。覆核讀約 25 檔,config 的 reviewer.timeout_seconds 1800 可能不夠,主線派覆核前看一下。",
+  "needs_verifier": false,
+  "interface_fixed": false,
+  "worker": {
+    "timeout_seconds": 12600
+  }
+}

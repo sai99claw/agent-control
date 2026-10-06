@@ -1,0 +1,100 @@
+{
+  "id": "91",
+  "subject": "A 規格審查 code 半:ticket.py lint 與 Ready 擋 needs_verifier、反駁行換家目錄、rules.py 主線句、land docs 開題者只收自己票檔、auto-fix 照票 model 起 claude-code worker",
+  "created": "2026-10-05T09:27:39+08:00",
+  "objective": "docs/review/20261004-a-spec-audit.md 所有「改程式」的發現(R1、R2、R3+F3 的工具半、R4、F33)加上使用者 2026-10-05 指定的「auto-fix 對 claude-code 票照票上 model 起,規則包與事件也用票的 model」做成程式並由測試證明:只寫在文字上的規則改由工具擋;verify_strings 的形狀以 tickets/SCHEMA.md 為準,工具(create 與 lint)與之一致。使用者裁示原話:「改prompt 一張票 改工具一張票」。",
+  "acceptance": [
+    "C1 [R2,needs_verifier 必填真的擋] `ticket.py set <id> state Ready`:role 是 worker(或 role 空)而 needs_verifier 不是 JSON 布林(缺、字串 \"true\"、null)→ rc!=0、stderr 含 `needs_verifier` 與票號、票檔位元組不變(state_version 不動、不發 ticket.state 事件);needs_verifier 是 true / false → 照舊轉 Ready(rc 0、state_version+1)。role 是 verifier / consolidator / opener 的票不查(needs_verifier 只對實作票有意義;memory.py 開整理票、status.py 開 flaky 票兩條路行為不變)。層:tests/test_ticket.py 沙盒票庫。怎麼驗:造四張 Draft 票(缺、\"true\" 字串、true、role=consolidator 缺)各轉一次 Ready,期望 rc 與 state_version 寫死在測試裡(來源:本條)。變異:拿掉這段檢查 → 「缺」那條紅。",
+    "C2 [R2,create 也走同一條] `ticket.py create` 新增 `--needs-verifier true|false` 與 `--interface-fixed true|false`,存成 JSON 布林;其他值 rc=2 並點名該旗標;`create --help` 列出兩個旗標。`create --state Ready` 走 C1 同一個檢查(role=worker 沒給 --needs-verifier → rc!=0、tickets/ 底下不多出檔)。status.py regression-red 開修復票改成在 create 就帶 `--needs-verifier false --interface-fixed false`(不再 create 完才補,否則它會被本條擋下);test_status / test_status_67 對修復票欄位的既有斷言不改仍綠。層:tests/test_ticket.py + 既有 test_status*。變異:create 不跑檢查 → 「Ready 缺 needs_verifier 不出檔」那條紅。",
+    "C3 [R3+F3,ticket.py lint;形狀以 tickets/SCHEMA.md 為準] 新子命令 `python3 scripts/ticket.py lint <id>`,usage 與 `--help` 逐字列出 `scripts/ticket.py lint <id>`。唯讀:票檔位元組、state_version 不變、不發事件。逐格查:(a) needs_verifier 是 JSON 布林(範圍同 C1);(b) verify_strings 是非空串列,每筆是非空字串、或恰為 {path, contains} 兩鍵且都是非空字串的 dict(= `--verify-string` 經 normalise_verify 產得出的兩種形狀);其他形狀(缺 contains、多鍵、數字、巢狀串列)點名第幾筆;(c) 票的 `tags` 與 `verify.tags` 每個都已登記 —— 讀法沿用 scripts/verify.py 的 registered_tags,不另寫第二份解析。全過 rc 0、stdout 一行含 `ok`;任一格不過 rc 1、stderr 每格一行含欄位名。用 `ticket.py create --verify-string 'scripts/x.sh:某字' --needs-verifier false` 剛開出來的票 lint rc 0(工具產的形狀不被自己的 lint 擋 —— 這是 F3 的病根)。層:tests/test_ticket.py。變異:拿掉 dict 形狀的放行 → 「工具產的票 rc 0」那條紅;拿掉 (a) → 缺 needs_verifier 那條紅。",
+    "C4 [R1,反駁行換掉家目錄路徑] `ticket.py objection <id> --line \"OBJECTION: ticket-wrong … <家目錄絕對路徑>/x/y …\" --evidence <檔>` 之後,票上那一筆的 body 裡家目錄前綴換成 `~/`:執行當下的家目錄(os.path.expanduser 的值)與 tests/test_no_project_names.py 的 ABSOLUTE_HOME 常數那種前綴後接一段帳號名的路徑,都換;不含家目錄的 body 一字不變。同一句反駁第二次送來(不論換前換後的寫法)仍判同一筆(rc 3 / rc 4 的去重照舊)。所有收反駁的入口(auto-fix、apply.sh)都經 record_objection,所以只改這一處。層:tests/test_ticket.py(或 test_objection_triage.py);測試裡家目錄字面照 test_no_project_names 的慣例用常數拼,不照抄字面。變異:拿掉替換 → 「body 不含家目錄前綴」那條紅。",
+    "C5 [F33] `python3 scripts/rules.py pack main --model opus` 的 stdout 含逐字「接需求、決定順序、發版」,且那一句不含「覆核」(D-022:覆核由 review.sh 派 reviewer)。層:tests/test_rules.py。變異:改回舊句 → 紅。",
+    "C6 [R4,低優先] `AC_ROLE=opener AC_TICKET=<n> sh scripts/land.sh docs \"<訊息>\" <檔…>`:檔清單恰為 `tickets/<n>.json` → 照舊落地;含任何別的檔(別張票檔、docs/ 或 memory/ 底下的檔)→ rc 2、不 commit、stderr 含逐字「開題者只收自己那張票檔」並逐一點名被拒的檔;AC_ROLE=opener 而 AC_TICKET 空 → 全拒 rc 2。AC_ROLE 不是 opener 或沒設 → 行為不變(TheDocsChannel 既有案例不改仍綠)。層:tests/test_land.py 的 docs 通道沙盒。變異:拿掉 opener 分支 → 「別張票檔被拒」那條紅。",
+    "C7 [auto-fix 照票上 model 起 claude-code worker;#78 只能手派的原因] 票 tool=claude-code、model 非空時:(1) 起的 worker 命令 = config 的 worker.command 把 `--model` 換成票的 model(沒有就補上),換法只由 `ticket.py agent-command --swap-model` 決定,auto-fix 不另寫一份;(2) 規則包用票的 model 產(`rules.py pack worker --model <票的 model>`),派工文帶的是那張模型卡;(3) agent.start / agent.done / agent.failed 事件與 cost[] 那一筆的 model 欄都是票的 model;(4) stdout 一行含「照票的 model=<票的 model>」。怎麼驗:沙盒 config worker.command 是 `sh <假 worker> --model opus …`,票 model=fable、tool=claude-code;假 worker 記下的 argv 含 `--model fable`、不含 `--model opus`;派工文含沙盒 memory/model/fable.md 的一句獨有字、不含 opus 卡的獨有字;events 與 cost 的 model 都是 \"fable\"。不變:codex 票的路徑(一致性拒派、額度改派 opus)照舊,test_auto_fix_codex 不改仍綠;驗證者仍照 routing.verify 起;票的 model 低於 routing 下限沿用 rules.py 既有的 below_floor(rc 2、不起 agent),不另寫檢查。層:tests/test_auto_fix.py。既有 TheEventModelIsTheOneThatActuallyRan(約 676–715 行)釘的是「事件記 worker.command 的 --model」,本票之後實際起的是票的 model:改寫成斷言事件記實際起的那個(= 票的 model),#21 的意圖(記實際起的、不記 routing 標籤)保留。變異:拿掉換 model → argv 那條紅;規則包改回用 routing 的 model → 派工文那條紅。",
+    "C8 [回歸] 交件前只跑 test_plan 列的模組,全綠;除 C7 點名改寫的那一條外,既有斷言一行不改。查過的 oracle:tests/test_ticket.py、test_status.py(修復票欄位)、test_land.py(TheDocsChannel)、test_rules.py、test_auto_fix.py(TheEventModelIsTheOneThatActuallyRan)、scripts/memory.py 與 scripts/status.py 以 --state Ready 開票的兩處。"
+  ],
+  "in_scope": [
+    "scripts/ticket.py",
+    "scripts/status.py",
+    "scripts/rules.py",
+    "scripts/land.sh",
+    "scripts/auto-fix.sh"
+  ],
+  "out_of_scope": [
+    "memory/*",
+    "docs/*",
+    "templates/*",
+    "CLAUDE.md",
+    "verify/*",
+    "board/*",
+    "tickets/SCHEMA.md"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/ticket.py",
+    "scripts/status.py",
+    "scripts/rules.py",
+    "scripts/land.sh",
+    "scripts/auto-fix.sh",
+    "tests/test_ticket.py",
+    "tests/test_status.py",
+    "tests/test_status_67.py",
+    "tests/test_rules.py",
+    "tests/test_land.py",
+    "tests/test_auto_fix.py",
+    "tests/test_objection_triage.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "dceaea95e2aea2da435ad0d8c7fc3427061c761e",
+  "state": "Ready",
+  "state_version": 5,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "feature": "agent-control 工具鏈:票面機械檢查與派工模型",
+  "decision_refs": [
+    "D-028",
+    "D-031",
+    "D-022",
+    "D-025",
+    "D-043",
+    "D-018"
+  ],
+  "verify_strings": [
+    {
+      "path": "scripts/ticket.py",
+      "contains": "scripts/ticket.py lint <id>"
+    },
+    {
+      "path": "scripts/ticket.py",
+      "contains": "--needs-verifier"
+    },
+    {
+      "path": "scripts/rules.py",
+      "contains": "接需求、決定順序、發版"
+    },
+    {
+      "path": "scripts/land.sh",
+      "contains": "開題者只收自己那張票檔"
+    },
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "照票的 model="
+    }
+  ],
+  "test_plan": "只跑本段列的測試;不跑全套(unittest discover 整組、gate.sh --full)、不跑 verify.py 全部回歸 —— 回歸是閘門的事,全套只在 land 跑一次。\n交件前只跑:cd tests && python3 -m unittest test_ticket test_ticket_65 test_status test_status_67 test_land test_rules test_rules_delivery test_objection_triage test_auto_fix_codex;test_auto_fix 只跑改到與新增的類(python3 -m unittest test_auto_fix.<類名>);python3 -m unittest tests.test_no_project_names。\n變異自證(needs_verifier=false,實作者自證):C1–C7 每條票面點名的變異各做一次,記「變異 → 哪條案例紅 → 紅的第一行」,做完還原;EVIDENCE result 的 mutations 逐筆填。\n測試裡的家目錄字面一律用 test_no_project_names 的常數拼(C4)。",
+  "outline": "【來源】審查 docs/review/20261004-a-spec-audit.md 建議的 C1 全收(R1 R2 R3+F3 R4 F33)+ 使用者加的 auto-fix 照票 model(#78 只能手派:auto-fix 對 claude-code 票只用 worker.command 的 --model,票寫 fable 也起 opus)。prompt 半另一張票,depends_on 本票。\n【設計裁示】verify_strings 以 SCHEMA 為準:字串或 {path, contains} 兩種都合法,lint 兩種都收,手寫自檢那一行由 lint 取代(卡的改字在 prompt 票)。Ready 檢查只管 role=worker/空:整理票、flaky 票沒有驗證者語意,硬擋會壞 memory.py / status.py 兩條自動開票路;status.py regression 那條原本 create 完才補 needs_verifier,本票改成 create 時帶旗標。換 model 只走 agent_command 的 swap(consolidate-memory.sh 已用同一支),不在 auto-fix 再寫一份。\n【實測】讀過 ticket.py REQUIRED(47–50 無 needs_verifier)、normalise_verify、record_objection、agent_command;auto-fix 844–870 只在 codex 票才用票的 model;rules.py 105 主線句;land.sh docs 只查前綴;verify.py 有 registered_tags。memory.py:805、status.py:803/933 以 --state Ready 開票(C1/C2 的範圍因此這樣切)。未實測:auto-fix 1657 codex 改派時 set Ready 遇到缺 needs_verifier 的舊票會被拒,錯誤已有 || echo 一行,不在本票處理。\n【needs_verifier=false】框架腳本票,tests/ 的單元測試就是驗收,實作者自證變異紅(A #43/#48/#56–#61 慣例;使用者要求「能被測試證明、變異自證」)。interface_fixed 無作用。\n【時限 10800 秒,分段,不含回歸(未實測)】C1–C3 ticket.py+status.py+測試 30–40 分;C4 10–15;C5 3–5;C6 10–15;C7 auto-fix+沙盒假 worker 25–35;指定測試兩輪 10–15;變異自證七條 ≈15。合計 103–140 分 ×1.25 ≈ 180 分。\n【不在本票】角色卡、DISPATCH-TEMPLATE、SCHEMA 文字(prompt 票);驗證者照票 model;單模型整理走 memory.py consolidate(F13,交主線裁);rules.py WANTED 名單(F2 先以改文字處理)。",
+  "needs_verifier": false,
+  "interface_fixed": false,
+  "worker": {
+    "timeout_seconds": 10800
+  }
+}
