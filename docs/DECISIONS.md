@@ -314,3 +314,4 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - A 側:#96(dry-run 不清 round 副本)、#97(needs_verifier 票的寫入範圍不得含驗證者案例檔)、#98(覆核綁 patch 內容而非分支 sha)。
 - #93 凍結至 2026-10-13 後,看 T #712 落地以來的 redo 次數再決定。
 - 開題者交票前自查 objective / acceptance / test_plan 三處一致(近期 10 條反駁 4 條是票面自相矛盾)→ memory/role/opener.inbox.md。
+- (補 2026-10-06)使用者問:「重新產生程式碼索引 可以改到gate 裡面去coding做嗎？」主線答放在套用 patch 那一步、不放 gate(閘門只判交件、不改交件),提兩條路,使用者回「2 ok」→ 併進 #96:apply.sh 套上分支後自動 repo-map build,有變併進同一個 commit(trailer `regen: repo-map build`)。

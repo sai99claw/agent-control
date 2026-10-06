@@ -1,24 +1,35 @@
 {
   "id": "96",
-  "subject": "auto-fix --dry-run 不得清掉既有的 round 副本:round_once 的 rm -rf $FIX(與 dispatch_verifier 的 rm -rf $VFIX)在 dry-run 時不動手",
+  "subject": "auto-fix --dry-run 不清 round 副本;apply.sh 套上 patch 後自動重產 code-map 索引並併進同一個 commit(gate 照舊只檢查)",
   "created": "2026-10-06T22:34:49+08:00",
-  "objective": "sh scripts/auto-fix.sh <n> --dry-run 只印派工文與命令,不刪、不重建 <wtbase>/fix-t<n>/round<r> 與 verify-t<n>/round<r>;已有的 worker / 驗證者產出(patch、EVIDENCE、work/)原封不動。",
+  "objective": "(一)sh scripts/auto-fix.sh <n> --dry-run 只印派工文與命令,不刪、不重建 <wtbase>/fix-t<n>/round<r> 與 verify-t<n>/round<r>;已有的 worker / 驗證者產出(patch、EVIDENCE、work/)原封不動。(二)scripts/apply.sh 把交件 patch 套上 t<n> 分支後、commit 之前,候選樹有 repo-map.py 與 code-map/catalog.json 就自動跑一次 repo-map build;產出物(code-map/index.json、code-map/INDEX.md)有變就併進同一個 commit,commit 訊息多一行以 `regen: repo-map build` 開頭的 trailer。交件漏重生索引不再讓閘門機械格擋下一整輪;重產失敗(build 非零)不擋套用、照樣 commit 交件並印一行,攔它是閘門的事;gate.sh 的機械格照舊只檢查、不改交件。",
   "acceptance": [
     "A1 worker 副本留著:<wtbase>/fix-t<n>/round1/ 先放一個 patch-round1.diff 與 work/marker(內容任意)、票 Ready 且沒有 status → sh scripts/auto-fix.sh <n> --dry-run rc=0 且照舊印派工文;跑完後那兩個檔仍在、內容逐位元相同",
     "A2 驗證者副本留著:needs_verifier=true 的票,<wtbase>/verify-t<n>/round1/ 先放一個 marker → --dry-run 之後 marker 仍在",
-    "A3 dry-run 之外不變:不帶 --dry-run 時 round 副本照舊清掉重建(既有 tests/test_auto_fix.py 照綠);--dry-run --round 1(first_round_dispatch)行為不變"
+    "A3 dry-run 之外不變:不帶 --dry-run 時 round 副本照舊清掉重建(既有 tests/test_auto_fix.py 照綠);--dry-run --round 1(first_round_dispatch)行為不變",
+    "A4 交件漏重生 → 套用後索引是新的:沙盒主線有 scripts/repo-map.py、code-map/catalog.json 與新鮮的索引;交件 patch 新增一支已管理檔(例 tests/test_memory_new.py)、不含 code-map/ 的改動 → sh scripts/apply.sh <n> <patch> rc=0;分支 t<n> 上 python3 scripts/repo-map.py --root <t<n> 副本> check rc=0,code-map/index.json 的 managed 含那支新檔;git rev-list --count main..t<n> 是 1(重產併進同一個 commit,不多開一個);該 commit 訊息有一行以 `regen: repo-map build` 開頭;重產出的 code-map/ 兩檔不列進 result 的 extra_paths(它們不是交件改的)",
+    "A5 閘門照舊只檢查、而且這回是綠的:A4 那條分支跑 sh scripts/gate.sh --branch --ticket <n> --no-auto-fix(副本內),stderr 不含「code-map 索引過期」、rc 不是 4;scripts/gate.sh 一行不改(列 out_of_scope)",
+    "A6 沒變就不動:交件不改已管理檔集合 → commit 訊息沒有 `regen:` 行、分支 diff 不多出 code-map/ 的檔;候選樹沒有 repo-map.py 或 code-map/catalog.json(既有 tests/test_apply.py 的沙盒就是這樣)→ 整步略過,既有 tests/test_apply.py 全綠",
+    "A7 重產失敗不擋套用:交件把 catalog 改成指向不存在的檔(repo-map build rc≠0、索引沒寫)→ apply.sh 仍 rc=0、照樣 commit 交件,輸出有一行含「索引沒重產」;擋它是閘門機械格的事,apply 不判對錯"
   ],
   "in_scope": [
     "scripts/auto-fix.sh",
-    "tests/test_auto_fix.py"
+    "tests/test_auto_fix.py",
+    "scripts/apply.sh",
+    "tests/test_apply.py",
+    "docs/WORKFLOW.md"
   ],
   "out_of_scope": [
-    "docs/DECISIONS.md"
+    "docs/DECISIONS.md",
+    "scripts/gate.sh"
   ],
   "depends_on": [],
   "allowed_write_paths": [
     "scripts/auto-fix.sh",
-    "tests/test_auto_fix.py"
+    "tests/test_auto_fix.py",
+    "scripts/apply.sh",
+    "tests/test_apply.py",
+    "docs/WORKFLOW.md"
   ],
   "role": "worker",
   "model": "opus",
@@ -26,7 +37,7 @@
   "attempt": 0,
   "base_sha": "d236cdc8942e2bc1ddec0d8c38e51b4a365cd532",
   "state": "Ready",
-  "state_version": 3,
+  "state_version": 16,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -39,12 +50,20 @@
     {
       "path": "tests/test_auto_fix.py",
       "contains": "test_dry_run_keeps_the_round_copies"
+    },
+    {
+      "path": "tests/test_apply.py",
+      "contains": "test_a_stale_code_map_is_rebuilt_into_the_same_commit"
+    },
+    {
+      "path": "scripts/apply.sh",
+      "contains": "regen: repo-map build"
     }
   ],
-  "feature": "agent-control 工具鏈:auto-fix",
+  "feature": "agent-control 工具鏈:auto-fix / apply",
   "needs_verifier": false,
   "interface_fixed": true,
-  "test_plan": "整合層,沿用 tests/test_auto_fix.py 既有的 auto_fix(\"--dry-run\") 夾具(test_dry_run_writes_the_packet_and_does_not_start_a_worker 那一型),新增 test_dry_run_keeps_the_round_copies:A1 事先在夾具的 wtbase 下寫 fix-t<n>/round1/patch-round1.diff 與 work/marker,跑 --dry-run,斷言兩檔仍在且內容等於事先寫的字串;A2 同法對 verify-t<n>/round1/marker;A3 跑既有 dry-run 與非 dry-run 案例照綠。變異(自證紅,貼紅的第一行):m1 把 rm -rf $FIX 的 dry-run 守衛拿掉 → A1 紅;m2 拿掉 $VFIX 的守衛 → A2 紅。只跑:python3 -m unittest tests.test_auto_fix;不跑全套。",
-  "outline": "【T 成本審查 #4(b),源頭在 A】T 的 auto-fix --dry-run 會清掉 fix-t<n>/round1(T HANDOFF 待開工具票②)。讀碼:scripts/auto-fix.sh round_once:1478-1481 先 rm -rf \"$FIX\",dry-run 的出口在 :1637;dispatch_verifier:1143 同樣先 rm -rf \"$VFIX\"。T 的 scripts/control/auto-fix.sh 是 sync-to-project 產出物(T 現存那份同樣在 :815),修在 A、同步到 T。T 端另有 T 票收 (a) 閘門不寫 status.json 與 (c) 沒記 patch 拒跑。needs_verifier=false:單一腳本契約、tests/test_auto_fix.py 既有夾具可自證,驗證者只會重演同一夾具。注意 T 的同步本落後 A 很多(約 958 行 diff),本票落地後要排一次 A→T 腳本同步才生效。",
+  "test_plan": "【一 dry-run】整合層,沿用 tests/test_auto_fix.py 既有的 auto_fix(\"--dry-run\") 夾具(test_dry_run_writes_the_packet_and_does_not_start_a_worker 那一型),新增 test_dry_run_keeps_the_round_copies:A1 事先在夾具的 wtbase 下寫 fix-t<n>/round1/patch-round1.diff 與 work/marker,跑 --dry-run,斷言兩檔仍在且內容等於事先寫的字串;A2 同法對 verify-t<n>/round1/marker;A3 跑既有 dry-run 與非 dry-run 案例照綠。【二 自動重產】整合層,tests/test_apply.py 新增一個類,setUp 照 tests/test_repo_map_contract.py 的 TheGateRefusesAStaleIndex(A32)那一型:複製真的 scripts/repo-map.py 進沙盒、寫 catalog(managed 含 tests/test_*.py)、build、commit 進主線、開票。test_a_stale_code_map_is_rebuilt_into_the_same_commit(A4):patch 只新增 tests/test_memory_new.py → apply rc=0;在 t<n> 副本跑 repo-map.py --root <副本> check 斷 rc=0;讀副本的 code-map/index.json 斷 managed 含新檔(期望值 = patch 新增的檔名,不從 repo-map 算);rev-list --count main..t<n> 斷 1;git log -1 --format=%B 斷有行以 `regen: repo-map build` 開頭;帶 --evidence 時 result 的 extra_paths 不含 code-map/。A5 同一分支在副本內跑 gate.sh --branch --ticket <n> --no-auto-fix(A32 的 gate_in 寫法),斷 stderr 不含「code-map 索引過期」且 rc≠4。A6 patch 只改一支既有已管理檔的內文 → 斷 commit 訊息無 `regen:`、git diff --name-only main..t<n> 不含 code-map/;既有 tests/test_apply.py 照綠即證「沒有 repo-map.py 就略過」。A7 patch 在 catalog 加一個 entry 指向不存在的檔 → apply rc=0、rev-list 為 1、輸出含「索引沒重產」。變異(自證紅,EVIDENCE 貼紅的第一行):m1 拿掉 rm -rf $FIX 的 dry-run 守衛 → A1 紅;m2 拿掉 $VFIX 的守衛 → A2 紅;m3 拿掉 apply.sh 的自動重產那一步 → A4、A5 紅;m4 重產失敗時改成 die → A7 紅。只跑:python3 -m unittest tests.test_auto_fix tests.test_apply tests.test_repo_map_contract;不跑全套。",
+  "outline": "兩件併一張。【一】T 成本審查 #4(b):round_once 先 rm -rf \"$FIX\"(:1478)才到 dry-run 出口(:1637);dispatch_verifier :1143 同理清 $VFIX。【二】使用者 10-06 要「重產索引改到 coding 那段做」,源於 A #94 第 1 輪被機械格以「code-map 索引過期」擋下(inbox 唯一一次)。不放 gate:閘門判交件、不改交件,改了樹它量的就不是交件那一份;apply.sh 本來就是套 patch→commit,每輪經 auto-fix(:1800/:1804)叫它。位置:步驟 6 之後、步驟 7 git add 之前(寫入範圍只判交件,重產物不進 extra_paths);條件比照 gate.sh:452,用候選樹那份 repo-map.py(與 AC 同相對路徑)--root <WT> build;rebase 的 apply.regen_cmd 不動。實測:A 副本加一支 scripts/*.py → check rc=1,build 後 rc=0;m3 紅讀碼推定、未實測。needs_verifier=false:單一腳本契約,既有夾具可自證。T 端:apply.sh/auto-fix.sh 是同步本,靠 T #690 同步才生效;T 尚無 code-map/catalog.json 與 scripts/control/repo-map.py,同步後這步在 T 略過。",
   "priority": "P1"
 }
