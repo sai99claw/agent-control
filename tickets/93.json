@@ -1,0 +1,61 @@
+{
+  "id": "93",
+  "subject": "worker 交件前看主線:派工文加「比對 main 與 base_sha,碰到的檔被動過就在副本對齊到新 main、重跑票測試、記 aligned_main」;收件以 aligned_main 更新票 base_sha;修復輪只記不對齊",
+  "created": "2026-10-06T21:18:17+08:00",
+  "objective": "使用者原話(2026-10-06):「每個worker 再做的時候都是 獨立資料夾的對吧？ Worker 要收工提交之前 加prompt 去檢查一下主線」。worker 在副本做事期間主線前進、且動到 worker 也改的檔時,由 worker 在交件前自己(唯讀)發現並在副本對齊到新 main、重跑票相關測試,交出的 patch 對當下 main 直接套得上;EVIDENCE 與 result 記「交件時對齊的 main sha」,收件時票的 base_sha 跟著換成那個 sha。worker 仍禁一切主 repo 與副本的 git 寫入。",
+  "acceptance": [
+    "C1 [第 1 輪派工文有這一段] auto-fix.sh <n> --dry-run --round 1 產的派工文含標題「交件前看主線」一節,內有:可直接貼的唯讀指令 git -C <主 repo 根> rev-parse <main_branch> 與 git -C <主 repo 根> diff --stat <票 base_sha>..<main_branch> -- <你 patch 動到的檔>(<主 repo 根>、base_sha 由腳本填實值;<main_branch> 取 board/config.json 的 main_branch —— 測試把 main_branch 設成 trunk,派工文出現 trunk 而不是 main);一句「禁止主 repo 與副本的一切 git 寫入」;交件要在 EVIDENCE 寫一行 ALIGNED_MAIN: <sha> 並在 result 填 aligned_main。",
+    "C2 [對齊步驟寫實] 同一節寫明:diff --stat 為空 → 照交、aligned_main 填 rev-parse 的 sha;不為空 → (1) base/ 改由新 sha 重新 git archive 展開(並明說這是「base/ 一個字都不准動」的唯一例外)(2) work/ = 新 main + 自己的改動,雙方都動的檔以 git merge-file 三向合併(副本沒有 .git,不准 git init)(3) 重跑票 test_plan 的測試(4) 合併衝突若是與別張票的意圖相牴觸 → EVIDENCE 寫 OBJECTION: blocking,不自行取捨。測試斷言派工文含 git merge-file、ALIGNED_MAIN:、OBJECTION: blocking 三個字串。",
+    "C3 [修復輪只記不對齊] 第 2 輪起的派工文(修復輪那段)也有「交件前看主線」一節,但寫明 base/ 是分支內容、**不要重新展開 base/**,只在 EVIDENCE 記 ALIGNED_MAIN: <當下 main sha> 與重疊檔清單,result 的 aligned_main 填 null;對齊交給 apply.sh rebase / 閘門重套。測試斷言第 2 輪派工文含「不要重新展開 base/」且不含 git merge-file。",
+    "C4 [收件換 base_sha] 第 1 輪收件(auto-fix 收 patch 那一手,或 apply.sh --evidence;實作者擇一,另一處不重複做):result 的 aligned_main 是 commit X、X 是 main 的祖先或等於 main、X != 票 base_sha → 收件後票 base_sha == X,stdout 一行含舊 sha 與新 sha;X 不是 commit 或不是 main 的祖先 → base_sha 不變、stderr 點名 aligned_main 與那個值、退出碼與不填時相同;aligned_main 缺或 null → base_sha 不變、輸出與今天相同。三種各一條案例。",
+    "C5 [result 鍵登記] aligned_main 進 tickets/SCHEMA.md 的 result 鍵表與 docs/DISPATCH-TEMPLATE.md §8.5,tests/test_dispatch_template.py 的期望集合同步加上(兩份同集合;只加一份 → 既有那條紅)。",
+    "C6 [理由與限制] docs/DISPATCH-TEMPLATE.md §1 加一段 🩸「交件前看主線」:規則一句 + 它擋住過什麼(T #711:base 1b1555b,兩票改 docs/RUNBOOK.md 相鄰行)+ 明寫限制「只擋 worker 工作期間主線動;交件後才動的擋不住,由閘門重套的三向合併處理(T #712、A 的 apply.sh rebase)」。rules.py pack worker 照舊不超上限(tests/test_rules.py、test_rules_delivery.py 綠)。",
+    "C7 [原路不變] tests/test_auto_fix.py、test_auto_fix_codex.py、test_dispatch_template.py、test_apply.py、test_rules.py、test_rules_delivery.py 既有斷言不改照綠(開題者查過:test_auto_fix 的派工文案例只斷言既有段落字串存在,不斷言段落總數或全文 —— 實作者若遇到全文快照,列為 ticket-wrong)。"
+  ],
+  "in_scope": [
+    "scripts/auto-fix.sh",
+    "docs/DISPATCH-TEMPLATE.md",
+    "tickets/SCHEMA.md"
+  ],
+  "out_of_scope": [
+    "memory/*",
+    "docs/DECISIONS.md",
+    "board/*"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/apply.sh",
+    "docs/DISPATCH-TEMPLATE.md",
+    "tickets/SCHEMA.md",
+    "tests/test_auto_fix.py",
+    "tests/test_apply.py",
+    "tests/test_dispatch_template.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "eca7254d444a17e6d5785ca42295e955a1c8da96",
+  "state": "Ready",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "feature": "agent-control 工具鏈:派工文與收件",
+  "verify_strings": [
+    "交件前看主線",
+    "ALIGNED_MAIN:",
+    "aligned_main",
+    "不要重新展開 base/"
+  ],
+  "test_plan": "只跑:cd tests && python3 -m unittest test_dispatch_template test_apply test_rules test_rules_delivery test_auto_fix_codex;test_auto_fix 只跑改到與新增的類。前景跑加 timeout,不跑全套。變異(各自驗紅、貼紅的第一行):m1 first_round_packet 拿掉那一節 → C1/C2 紅;m2 修復輪那節改成也叫重新展開 base/ → C3 紅;m3 收件不換 base_sha → C4 正例紅;m4 換 base_sha 不查祖先 → C4 反例紅;m5 aligned_main 只加 SCHEMA 不加 §8.5 → C5 紅。",
+  "outline": "【源頭判定】worker 派工文由 A 的 scripts/auto-fix.sh 產(first_round_packet、修復輪那段),T 的 scripts/control/auto-fix.sh 是 sync-to-project 產出物 → 開 A。T 的 DISPATCH-COMMON-RULES / DISPATCH-TEMPLATE 是 T 自有(T 的規則包讀 COMMON-RULES)→ 落地後主線同步到 T,並走 T docs 通道在「工作區」補「交件前重新展開 base/ 是唯一例外」,否則規則包與派工文互相矛盾。【限制】只擋 worker 工作期間主線動;#711 是交件後才動,由 T #712(gate --redo 三向)補。【為何換 base_sha】apply.sh rebase 以票 base_sha 當祖先,不換就套不回。【實測】git merge-file 在無 .git 目錄可用;未實測:codex 沙盒讀主 repo .git(第 1 輪已靠 git archive 讀,推定可)。needs_verifier=false:工具鏈單元測試+五變異自證。",
+  "needs_verifier": false,
+  "interface_fixed": false
+}

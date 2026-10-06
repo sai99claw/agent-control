@@ -296,3 +296,9 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 ## D-043(2026-10-04)#78 角色卡整理由 fable 單獨進行
 使用者原話:「照建議 這題用fable 處理」(主線建議:D-013 原話允許「或一個高階模型」,fable 為最高階;避開 codex:gpt-6-astra 額度上限風險與兩模型手動協調)。
 - 落實:#78 改為 fable 單一模型整理三張角色卡;走一般 worker 管線(auto-fix / apply / gate / review / land)為優先,不行再由主線手派。
+
+## D-044(2026-10-06)worker 交件前唯讀比對主線
+使用者原話(在 tabby_pool 說):「每個worker 再做的時候都是 獨立資料夾的對吧？  Worker 要收工提交之前 加prompt 去檢查一下主線」
+- 起因:T #711 在獨立副本做完、閘門綠、覆核 pass 之後,#700 先落地(兩票改 docs/RUNBOOK.md 相鄰行),#711 land 時累積 patch 套不上,另派人手對齊。
+- 落實:#93 —— auto-fix 產的 worker 派工文加「交件前看主線」(唯讀 rev-parse / diff --stat base..main);碰到的檔被主線動過就在副本內三向對齊、重跑票測試,result 記 `aligned_main`,收件時換 base_sha。
+- 限制(寫進 DISPATCH-TEMPLATE §1 理由):只擋「worker 工作期間主線動了」;交件後主線才動(#711 正是這種)要靠 T #712(gate --redo 用 git apply --3way)。
