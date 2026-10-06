@@ -26,11 +26,13 @@ from datetime import datetime
 KINDS = (
     # session:誰在線上。heartbeat.sh 拿 start 沒有配對的 end 去對租約。
     "session.start", "session.end",
-    # 票的生命:建立、任一欄位變更、凍結、關閉。
+    # 票的生命:建立、任一欄位變更、凍結、關閉。closed 帶 cost_total(與票上同一物件,#94)。
     "ticket.created", "ticket.state", "ticket.frozen", "ticket.closed",
     # 一次派工的三種結局。attempt 對不上的遲到回報要能被認出來(SCHEMA §執行)。
     "ticket.attempt.start", "ticket.attempt.done", "ticket.attempt.failed",
     # 一次 headless 派工的 token 與時鐘進了票的 cost[](D-032);不動 state_version。
+    # 帶整列(除 `at`,#94):role / round / model / 四種 token / wall_seconds / outcome /
+    # run_id / session_id / by / note;null 的鍵照 emit 的規矩不寫。
     "ticket.cost",
     # 機器派出的 agent:看板用 ticket + ts 與主線採樣到的 agent 對上。
     "agent.start", "agent.done", "agent.failed",

@@ -257,12 +257,21 @@ harvest_result() {   # $1 = EVIDENCE(可以不存在) $2 = 輸出 json $3 = 角�
         || echo "auto-fix: result 抽不出來($1)—— 不擋流程" >&2
 }
 
-write_cost() {   # $1 = 角色  $2 = 第幾輪  $3 = 模型  $4 = 信封(log)  $5 = 量到的秒數
+write_cost() {   # $1 = 角色  $2 = 第幾輪  $3 = 模型  $4 = 信封(log)  $5 = 量到的秒數  $6 = 結局
     # 一次 headless 派工的 token 與時鐘進票的 `cost[]`(D-032)。信封在 log 裡:stdout 與
     # stderr 混寫,`ticket.py cost` 取最後一行 `type=result` 的那一行;讀不到就記 null。
+    # 結局只收登記表的字(#94 C2,tickets/SCHEMA.md 成本那一列)。
     python3 "$AC/ticket.py" cost "$ID" --role "$1" --round "$2" --model "$3" \
-        --by auto-fix.sh --from-envelope "$4" --wall-seconds "$5" >/dev/null \
+        --by auto-fix.sh --from-envelope "$4" --wall-seconds "$5" \
+        --outcome "$6" --run-id "$RUN_ID" >/dev/null \
         || echo "auto-fix: #$ID 的 cost 寫不進票($1 第 $2 輪)—— 不擋流程" >&2
+}
+
+worker_cost() {   # $1 = 結局;run_worker 記下的那一次 worker 寫一列(一次一列,寫過就清掉)
+    # worker 的結局要等收件才知道(#94 C5a),所以 run_worker 只記秒數,這裡才寫。
+    [ -n "${W_COST_LOG:-}" ] || return 0
+    write_cost worker "$r" "$WORKER_MODEL" "$W_COST_LOG" "$W_COST_SECS" "$1"
+    W_COST_LOG=""
 }
 
 attempt_failed() {   # $1 = no-patch | apply-failed | timeout | objection | verifier-no-patch
@@ -1065,6 +1074,15 @@ run_verifier() {   # $1 = 派工文  $2 = 副本根  $3 = 第幾輪  $4 = log  $
 }
 
 verifier_done() {   # $1 = rc  $2 = 第幾輪  $3 = log  $4 = 起跑秒;事件 + cost
+    if [ "$1" -eq 124 ]; then
+        v_outcome=timeout
+    elif [ "$1" -ne 0 ]; then
+        v_outcome=error
+    elif [ -f "$VFIX/patch-verify.diff" ] || [ -f "$VFIX/work/patch-verify.diff" ]; then
+        v_outcome=handed-in
+    else
+        v_outcome=no-patch
+    fi
     if [ "$1" -eq 0 ]; then
         ev agent.done --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
             --kv run_id="$RUN_ID" --kv round="$2" --kv rc="$1" --kv agent=auto-fix-verifier
@@ -1072,7 +1090,7 @@ verifier_done() {   # $1 = rc  $2 = 第幾輪  $3 = log  $4 = 起跑秒;事件 +
         ev agent.failed --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
             --kv run_id="$RUN_ID" --kv round="$2" --kv rc="$1" --kv agent=auto-fix-verifier
     fi
-    write_cost verifier "$2" "$VERIFIER_MODEL" "$3" "$(( $(date +%s) - $4 ))"
+    write_cost verifier "$2" "$VERIFIER_MODEL" "$3" "$(( $(date +%s) - $4 ))" "$v_outcome"
 }
 
 # **與 worker 平行**(#51 C2)只在票 `interface_fixed=true`(#60):驗證者不等 patch(D-020),
@@ -1213,7 +1231,8 @@ run_worker() {   # $1 = 命令  $2 = 派工文;設定 WRC、WORKER_LOG 由呼叫
         ev agent.failed --ticket "$ID" --model "$WORKER_MODEL" \
             --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix
     fi
-    write_cost worker "$r" "$WORKER_MODEL" "$WORKER_LOG" "$(( $(date +%s) - WSTART ))"
+    W_COST_LOG=$WORKER_LOG
+    W_COST_SECS=$(( $(date +%s) - WSTART ))
     [ "$WRC" -eq 0 ] || echo "auto-fix: worker 自己回非零 —— 還是看它交了什麼,不看它說什麼"
 }
 
@@ -1223,7 +1242,14 @@ run_worker() {   # $1 = 命令  $2 = 派工文;設定 WRC、WORKER_LOG 由呼叫
 # 再接回同一個 worker 在原副本續做;rejected → 附理由接回 worker 照原票做。兩種都不換輪、
 # 不丟副本、不發頁。只有四種進主線收件匣:開題者判 escalate、同票第二次反駁、開題者沒判
 # 出來、session 接不回。objections 那一筆的 disposition / triage **只由這裡**依 TRIAGE 行寫。
+opener_cost() {   # 開題者那一列(#94 C5c)。接回的 worker 跑完才寫:它讀到的票要與開題者讀到的同一份
+    [ -n "${O_COST:-}" ] || return 0
+    write_cost opener "$r" "$O_MODEL" "$OLOG" "$OSECS" "$O_COST"
+    O_COST=""
+}
+
 escalate_objection() {   # $1 = 字樣  $2 = 細節;票轉 Blocked、一頁、ROUND_RC=3,副本與 session 都留著
+    opener_cost
     ev objection.triage.done --ticket "$ID" --kv round="$r" --kv verdict=escalate --kv reason="$1"
     w_sid=$(session_field worker session_id)
     w_cwd=$(session_field worker cwd)
@@ -1259,6 +1285,7 @@ PY
 }
 
 triage_objection() {   # uses r/line/category/EVIDENCE/FIX/PATCH_OUT/DISPATCH;接回了回 0,停下來回 1(ROUND_RC 已設)
+    O_COST=""
     # (b) 同票第二次反駁:票上已經有一筆帶 triage 的(含同一次執行裡被接回的 worker 再交的)。
     if python3 - "$TF" <<'PY'
 import json, sys
@@ -1340,7 +1367,11 @@ PY
     echo "auto-fix: 反駁交給開題者判 —— $OPENER_CMD(cwd $ROOT,時限 $O_TIMEOUT 秒)"
     ev agent.start --ticket "$ID" --role opener --model "$O_MODEL" \
         --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix-opener
+    OSTART=$(date +%s)
     ORC=$(run_agent "$OPENER_CMD" "$ODISPATCH" "$ROOT" opener "$r" "$OLOG" "" "$O_TIMEOUT")
+    OSECS=$(( $(date +%s) - OSTART ))
+    # 沒正常退出、或沒寫出 TRIAGE 行的開題者記 undecided(#94 C5c)。
+    O_COST=undecided
     if [ "$ORC" -eq 0 ]; then
         ev agent.done --ticket "$ID" --role opener --model "$O_MODEL" \
             --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$ORC" --kv agent=auto-fix-opener
@@ -1368,6 +1399,7 @@ print("TRIAGE_VERDICT=%s" % shlex.quote(hit.group(1) if hit else ""))
 print("TRIAGE_REASON=%s" % shlex.quote((hit.group(2) or "").strip() if hit else ""))
 PY
 )"
+    O_COST=${TRIAGE_VERDICT:-undecided}
     case "$TRIAGE_VERDICT" in
         "")
             escalate_objection "開題者沒交判決" \
@@ -1444,6 +1476,7 @@ PY
             post "驗證者沒交出 patch-verify" \
                  "接回的驗證者(rc=$VWRC)沒交件,worker 沒有接回;讀它的 log $VLOG 與副本,不要讓主線自己改案例" \
                  "$VFIX"
+            opener_cost
             attempt_failed verifier-no-patch
             ROUND_RC=5
             return 1
@@ -1472,6 +1505,7 @@ PY
     WORKER_LOG=$(dirname "$DISPATCH")/worker-resume-round$r.log
     echo "auto-fix: 接回第 $r 輪的 worker(session $(session_field worker session_id),cwd $(session_field worker cwd))"
     run_worker "$WORKER_CMD --resume $(session_field worker session_id)" "$RDISPATCH"
+    opener_cost
     return 0
 }
 
@@ -1668,6 +1702,7 @@ PY
             || echo "auto-fix: 票的 tool 改不動" >&2
         python3 "$AC/ticket.py" set "$ID" state Ready >/dev/null 2>&1 \
             || echo "auto-fix: 票狀態改不動(Ready)" >&2
+        worker_cost error
         attempt_failed codex-quota
         shed_copies "$FIX"
         post "codex 額度用完,已改 opus" \
@@ -1706,6 +1741,7 @@ PY
         post "worker 逾時(${WORKER_TIMEOUT} 秒),副本留著" \
              "讀 $WORKER_LOG 看它做到哪;${partial_note}。要嘛拆票或加 worker.timeout_seconds 重派,要嘛人從副本接手${V_HELD}" \
              "$FIX"
+        worker_cost timeout
         attempt_failed timeout
         ROUND_RC=5
         return 1
@@ -1726,6 +1762,7 @@ PY
     if [ -f "$EVIDENCE" ] && grep -q '^OBJECTION:' "$EVIDENCE"; then
         line=$(grep -m1 '^OBJECTION:' "$EVIDENCE")
         echo "auto-fix: worker 提了反駁 —— $line"
+        worker_cost objection
         # **與 `apply.sh` 共用同一支收件**(#29 A4):實作在 `ticket.py objection`,
         # 它記過的同一筆不會再記第二次 —— 兩邊各記一次的話,同一句話會在票上長成兩筆,
         # 而處置的人分不出哪一筆是哪一輪的。
@@ -1769,7 +1806,13 @@ PY
         echo "auto-fix: 第 $r 輪的 worker 沒有交出 patch-round$r.diff" >&2
         block "#$ID 第 $r 輪的 worker 沒交出 patch"
         post "worker 沒交出 patch" "自己看副本裡有什麼;要嘛重派,要嘛人下場${V_HELD}" "$FIX"
-        if [ "$WRC" -eq 124 ]; then attempt_failed timeout; else attempt_failed no-patch; fi
+        if [ "$WRC" -eq 124 ]; then
+            worker_cost timeout
+            attempt_failed timeout
+        else
+            worker_cost no-patch
+            attempt_failed no-patch
+        fi
         ROUND_RC=5
         return 1
     fi
@@ -1790,6 +1833,7 @@ PY
         post "驗證者沒交出 patch-verify" \
              "讀驗證者派工文與它的 log;worker 的 patch 已收在 reports,不要讓主線自己寫案例" \
              "${VDISPATCH:-$(dirname "$DISPATCH")}"
+        worker_cost handed-in
         attempt_failed verifier-no-patch
         ROUND_RC=5
         return 1
@@ -1809,10 +1853,12 @@ PY
         post "第 $r 輪的 patch 套不上(apply rc=$arc)" \
              "看 apply 的輸出:檔頭不合格、主線走遠(走 apply.sh rebase),還是越界" \
              "$PATCH_OUT"
+        worker_cost apply-failed
         attempt_failed apply-failed
         ROUND_RC=5
         return 1
     fi
+    worker_cost handed-in
     if [ -n "$CASE_FIXED" ]; then
         python3 - "$TF" "$ID" "$PATCH_OUT" <<'PY'
 import json, os, subprocess, sys

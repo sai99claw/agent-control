@@ -576,6 +576,20 @@ if [ -n "$STOP" ]; then
     exit "$RC_REFUSE"
 fi
 
+# 跑了且紅的那幾條路(發 land.fail 的)每票也寫一列成本(#94 C5e):land.start 到紅的
+# 秒數就是白花的那一段。refused 是還沒開始就退,不寫。
+land_cost_all() {   # $1 = 結局 pass|fail
+    LAND_SECS=$(( $(date +%s) - LAND_T0 ))
+    for i in $IDS; do
+        _attempt=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("attempt") or 0)' \
+            "$ROOT/$TICKETS/$i.json" 2>/dev/null || echo 0)
+        python3 "$ROOT/scripts/ticket.py" cost "$i" --role land --round "$_attempt" --by land.sh \
+            --wall-seconds "$LAND_SECS" --outcome "$1" --run-id "${LAND_RUN:-$STAMP-$$}" \
+            >/dev/null 2>&1 \
+            || echo "land: #$i 的 cost 寫不進票(不擋落地)" >&2
+    done
+}
+
 # ------------------------------------------------------------------- 第 5 步
 # 副本根與 `auto-fix.sh` **同一種解析**(#38):環境變數 > `worktree_dir` > `../<主 repo>-wt`,
 # 相對路徑以主 repo 根(`wtbase.sh` 的 `main_root`)拼。各算各的那一天,auto-fix 開副本的
@@ -590,6 +604,7 @@ MAIN_BEFORE=$(git -C "$ROOT" rev-parse "$MAIN")
 mkdir -p "$WTBASE"
 git -C "$ROOT" worktree add -q -b "$BR" "$WT" "$MAIN" || {
     ev land.fail --note "worktree add 失敗" --kv "stamp=$STAMP"
+    land_cost_all fail
     status_done_all 2 "worktree add 失敗"
     exit 2
 }
@@ -597,6 +612,7 @@ for b in "$@"; do
     if ! git -C "$WT" merge -q --no-ff "$b" -m "Merge $b (land $STAMP)"; then
         echo "land: 合 $b 時衝突 —— worktree 留在 $WT,自己看"
         ev land.fail --note "合 $b 時衝突" --kv "stamp=$STAMP"
+        land_cost_all fail
         status_start_all
         status_phase_all merge 3 "串 $b 時衝突"
         status_done_all 3 "串接時衝突,一條都沒進主線"
@@ -619,6 +635,7 @@ if ! (cd "$WT" && AC_ROOT="$ROOT" AC_GATE_TICKET="$GATE_TICKET" \
     echo "land: 紅榜逐條在 reports/t<票號>/<run_id>/status.json 的 failures(案例、檔、行、log、excerpt)"
     ev gate.fail --kv mode=full --kv "sha=$SHA"
     ev land.fail --note "閘門紅" --kv "stamp=$STAMP"
+    land_cost_all fail
     status_phase_all gate 1 "全套紅"
     status_done_all 1 "閘門紅,沒有 merge、沒有 push"
     inbox_all "落地時全套紅" \
@@ -639,6 +656,7 @@ MERGE_ERR=$(git -C "$ROOT" merge -q --ff-only "$BR" 2>&1 >/dev/null) || {
     if [ "$MAIN_NOW" != "$MAIN_BEFORE" ]; then
         echo "land: $MAIN 在這中間動了($(git -C "$ROOT" rev-parse --short "$MAIN_BEFORE") -> $(git -C "$ROOT" rev-parse --short "$MAIN_NOW")),ff-only 進不去 —— worktree 留在 $WT"
         ev land.fail --note "ff-only 進不去(主線動了)" --kv "stamp=$STAMP"
+        land_cost_all fail
         status_phase_all merge 1 "ff-only 進不去:主線動了"
         status_done_all 1 "閘門綠了但沒合進主線"
         inbox_all "閘門綠了但沒合進主線" "主線在這中間動了 —— rebase 後重跑閘門" "$WT"
@@ -648,6 +666,7 @@ MERGE_ERR=$(git -C "$ROOT" merge -q --ff-only "$BR" 2>&1 >/dev/null) || {
     echo "land: git 的原話:"
     echo "$MERGE_ERR" | sed 's/^/land:   /'
     ev land.fail --note "ff-only 進不去(主線沒動,git 拒絕)" --kv "stamp=$STAMP"
+    land_cost_all fail
     status_phase_all merge 1 "ff-only 進不去,主線沒動,git 的原話:$MERGE_ERR"
     status_done_all 1 "閘門綠了但沒合進主線"
     inbox_all "閘門綠了但沒合進主線" \
@@ -659,6 +678,7 @@ if git -C "$ROOT" remote get-url origin >/dev/null 2>&1; then
     git -C "$ROOT" push -q origin "$MAIN" || {
         echo "land: 合進 $MAIN 了,但 push 沒成功 —— 自己推一次"
         ev land.fail --note "push 沒成功" --kv "stamp=$STAMP"
+        land_cost_all fail
         status_phase_all push 1 "push 沒成功"
         status_done_all 1 "已合進主線,push 沒成功,票還沒關"
         inbox_all "已合進主線,push 沒成功" "自己推一次:git push origin $MAIN" "$ROOT"
@@ -678,14 +698,7 @@ LANDED=$(git -C "$ROOT" rev-parse "$MAIN")
 status_done_all 0 "已合併、已推上;關票由 ticket.py close --landed 判(結果看 stdout 與收件匣)"
 # 每張票一筆 role=land 的成本(D-032):land 沒有 LLM,model 與 token 欄是 null,只有
 # land.start 到 push 的秒數。寫在 close 之前;cost 不看 state、不動 state_version。
-LAND_SECS=$(( $(date +%s) - LAND_T0 ))
-for i in $IDS; do
-    _attempt=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("attempt") or 0)' \
-        "$ROOT/$TICKETS/$i.json" 2>/dev/null || echo 0)
-    python3 "$ROOT/scripts/ticket.py" cost "$i" --role land --round "$_attempt" --by land.sh \
-        --wall-seconds "$LAND_SECS" >/dev/null 2>&1 \
-        || echo "land: #$i 的 cost 寫不進票(不擋落地)" >&2
-done
+land_cost_all pass
 for i in $IDS; do
     CLOSE_OUT=$(python3 "$ROOT/scripts/ticket.py" close "$i" --landed "$LANDED" 2>&1)
     CLOSE_RC=$?

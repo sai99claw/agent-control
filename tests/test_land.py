@@ -672,6 +672,40 @@ class GateRed(LandBase):
         self.assertNotIn("land.pass", kinds)
 
 
+class EveryLandCostsARowWithItsOutcome(LandBase):
+    """#94 C5(e):綠路每票一列 outcome=pass;全套紅也每票一列 outcome=fail(以前一列都不寫)。"""
+
+    def landed_rows(self):
+        return [row for row in self.load_ticket("1").get("cost") or []
+                if row.get("role") == "land"]
+
+    def test_c5e_a_green_land_is_outcome_pass(self):
+        good = self.branch_for(1, "t1-good")
+        self.commit_in(good, "src/g1", "有 commit 的那一張")
+        self.approve(1, "t1-good")
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        rows = self.landed_rows()
+        self.assertEqual([row["outcome"] for row in rows], ["pass"])
+        self.assertTrue(rows[0]["run_id"])
+
+
+class ARedLandCostsARowToo(LandBase):
+    gate_stub = GATE_STUB_RED
+
+    def test_c5e_a_red_gate_is_one_land_row_with_outcome_fail(self):
+        """**變異**:閘門紅那條路的 `land_cost_all fail` 拿掉 → 這一條紅。"""
+        good = self.branch_for(1, "t1-good")
+        self.commit_in(good, "src/g1", "有 commit 的那一張")
+        self.approve(1, "t1-good")
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        rows = [row for row in self.load_ticket("1").get("cost") or []
+                if row.get("role") == "land"]
+        self.assertEqual([row["outcome"] for row in rows], ["fail"], rows)
+        self.assertIsNotNone(rows[0]["wall_seconds"])
+        self.assertTrue(rows[0]["run_id"])
+
 class TripwireCatchesARealClaude(unittest.TestCase):
     """#70 A3:沙盒漏了 `worker.command` 替身,紅的單票 land(預設 auto-fix)起的
     `claude` 是 PATH 最前那支絆線 —— 而那條測試**自己紅**,不是靠認證失敗靜靜綠。

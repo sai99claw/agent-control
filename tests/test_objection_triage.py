@@ -643,3 +643,37 @@ class ClosingAndTimeouts(TriageBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheOpenerCostsARow(TriageBase):
+    """#94 C5(c):判反駁起的開題者每次起跑後寫一列 role=opener,outcome 是 TRIAGE 判決;
+    沒寫出 TRIAGE 行 → undecided。"""
+
+    def opener_rows(self):
+        return [row for row in self.load_ticket("1").get("cost") or []
+                if row.get("role") == "opener"]
+
+    def test_c5c_an_accepted_verdict_is_a_row(self):
+        """四問:守 accepted 那一列 / 可信回歸:TRIAGE 行是替身寫死的 / 既有測試這條路一列都
+        沒有 / 不加縫:同一支假 claude。**變異 m7**:判反駁那條路不寫 cost → 這一條紅。"""
+        self.arm(needs_verifier=True, interface_fixed=True)
+        self.play(worker_resume="fix", opener="accept")
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        rows = self.opener_rows()
+        self.assertEqual([(row["outcome"], row["round"], row["by"]) for row in rows],
+                         [("accepted", 1, "auto-fix.sh")], rows)
+        self.assertTrue(rows[0]["model"])
+        self.assertTrue(rows[0]["run_id"])
+        workers = [row["outcome"] for row in self.load_ticket("1")["cost"]
+                   if row["role"] == "worker"]
+        self.assertEqual(workers, ["objection", "handed-in"])
+
+    def test_c5c_an_opener_without_a_triage_line_is_undecided(self):
+        """四問:守 undecided / 可信回歸:替身第一行不是 TRIAGE: / 既有 a5c 只看升級字樣 /
+        不加縫:同一支假 claude。"""
+        self.arm()
+        self.play(opener="garbage")
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertEqual([row["outcome"] for row in self.opener_rows()], ["undecided"])
