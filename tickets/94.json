@@ -6,7 +6,7 @@
   "acceptance": [
     "C1 [列的形狀唯一,D-018] `ticket.py cost` 寫進票 cost[] 的每一列,鍵集合恰為 {role, round, model, tokens_in, tokens_out, cache_write, cache_read, wall_seconds, outcome, run_id, session_id, by, note, at}:既有鍵一個都不改名;新三鍵由新旗標 `--outcome <字>`、`--run-id <字>` 給,session_id 取信封頂層的 `session_id`;沒給 / 拿不到 → JSON null(不是空字串、不是 0)。驗(tests/test_ticket.py,單元層):信封含 session_id=\"s-1\" + `--outcome handed-in --run-id r-1` → 該列鍵集合等於上列 14 鍵、outcome==\"handed-in\"、run_id==\"r-1\"、session_id==\"s-1\";另一次三旗標都不給、不帶信封 → 三鍵皆 None、token 四欄皆 None。期望值取自本條字面。",
     "C2 [outcome 只收登記的字] 登記表(本票裁定,唯一一份,寫進 tickets/SCHEMA.md 成本那一列):handed-in、no-patch、apply-failed、timeout、objection、error(worker / verifier;error = 其餘非零結局);pass、fail、missing(reviewer;與 review.* 事件同字);accepted、rejected、escalate、undecided(判反駁的開題者;undecided = 沒寫出 TRIAGE 行);pass、fail、refused(land / gate 這類腳本步)。表外的字(例 `passed`)→ rc=2、stderr 印出整張表、票的 cost[] 長度不變、events 不多一筆 ticket.cost。驗:tests/test_ticket.py 一條正例(每個登記字各寫一列都 rc=0)+ 一條反例(passed)。",
-    "C3 [token 取全模型加總] 信封有 `modelUsage`(dict,一或多個模型)時,四欄 = 各模型 inputTokens / outputTokens / cacheCreationInputTokens / cacheReadInputTokens 的加總(子 agent 換了模型也算進來);信封沒有 modelUsage 才退回 `usage` 的四鍵(今天的行為);某模型缺某鍵視為 0 但四鍵全缺的模型不計。列的 model 欄仍是派工時給的 `--model`。驗(tests/test_ticket.py):usage={input 5, output 77, cache_creation 0, cache_read 9}、modelUsage={\"m-a\":{5,77,0,9}, \"m-b\":{inputTokens 3, outputTokens 20, cacheCreationInputTokens 4, cacheReadInputTokens 100}} → 列 (tokens_in, tokens_out, cache_write, cache_read) == (8, 97, 4, 109);只有 usage 的信封 → (5, 77, 0, 9)(既有 test_ticket.py 信封案例不改照綠)。",
+    "C3 [token 取全模型加總] 信封有 `modelUsage`(dict,一或多個模型)時,四欄 = 各模型 inputTokens / outputTokens / cacheCreationInputTokens / cacheReadInputTokens 的加總(子 agent 換了模型也算進來);信封沒有 modelUsage 才退回 `usage` 的四鍵(今天的行為);逐欄取數:某一欄若沒有任何模型帶該鍵,該欄退回 `usage` 的對應鍵;只要有一個模型帶該鍵,其餘缺該鍵的模型在該欄算 0(四鍵全缺的模型自然不貢獻)(第 1 輪反駁裁示:既有夾具 envelope() 的 modelUsage 只帶 inputTokens/outputTokens,照舊字面 cache 兩欄會變 0)。列的 model 欄仍是派工時給的 `--model`。驗(tests/test_ticket.py):usage={input 5, output 77, cache_creation 0, cache_read 9}、modelUsage={\"m-a\":{5,77,0,9}, \"m-b\":{inputTokens 3, outputTokens 20, cacheCreationInputTokens 4, cacheReadInputTokens 100}} → 列 (tokens_in, tokens_out, cache_write, cache_read) == (8, 97, 4, 109);只有 usage 的信封 → (5, 77, 0, 9);modelUsage={\"m-a\":{inputTokens 5, outputTokens 77}}(無 cache 兩鍵)、usage 的 cache_creation 34、cache_read 218 → (5, 77, 34, 218)(cache 兩欄退回 usage);modelUsage={\"m-a\":{inputTokens 1, outputTokens 2, cacheReadInputTokens 10}, \"m-b\":{inputTokens 3, outputTokens 4}}、usage cache_creation 7 → (4, 6, 7, 10)(cache_write 無模型帶 → 退回 usage 7;cache_read 有 m-a 帶 → m-b 缺算 0)。既有 test_ticket.py / test_review.py / test_auto_fix.py 信封案例不改照綠。",
     "C4 [事件帶整列] 每寫一列,同一手發的 `ticket.cost` 事件 = ticket + 該列除 `at` 以外的每一鍵、值相同(今天只帶 role/round/tokens_out/wall_seconds)。驗(tests/test_ticket.py):寫一列後讀 events.jsonl 最後一筆 ticket.cost,對列的每個鍵(除 at)斷言 event[key] == row[key],含 model、tokens_in、cache_write、cache_read、outcome、run_id、session_id。",
     "C5 [每個派工點都填 outcome 與 run_id] (a) auto-fix.sh 的 worker 列:outcome 是該輪結局 —— 收到 patch = handed-in、沒交 = no-patch、套不上 = apply-failed、逾時 = timeout、EVIDENCE 有 OBJECTION: 行 = objection、其餘非零 = error;run_id = 該次 RUN_ID;**一輪仍只一列**(tests/test_auto_fix.py 既有「只一列」斷言照綠;寫入時機可延到結局確定之後,實作者定)。(b) verifier 列同一組字(handed-in / no-patch / timeout / error)。(c) auto-fix 判反駁起的開題者(D-041)每次起跑後寫一列 role=opener、model=開題者模型、round=當輪、outcome = TRIAGE 判決 accepted / rejected / escalate,TRIAGE 檔不在或第一行不合 = undecided —— 今天這條路一列都不寫。(d) review.sh 的 reviewer 列 outcome = pass / fail / missing(與它發的 review.* 同字),run_id = review 的 RUN_ID。(e) land.sh 的 land 列:綠路照舊每票一列、outcome=pass;跑了且紅(發 land.fail 的那幾條路)也每票寫一列 outcome=fail、wall_seconds = land.start 到紅的秒數(今天紅路一列都不寫,白花的時間看不到);refused(還沒開始就退)不寫;run_id = 該次 land 的戳記。驗:tests/test_auto_fix.py 假 worker 交 patch → worker 列 outcome==handed-in 且 run_id 非空;假 worker 不交 → no-patch;tests/test_objection_triage.py 開題者判 accepted → 票上多一列 role==opener、outcome==accepted,開題者不寫 TRIAGE → outcome==undecided;tests/test_review.py pass 路 → reviewer 列 outcome==pass;tests/test_land.py 綠路 → land 列 outcome==pass;全套紅那條路 → 票上有一列 role==land、outcome==fail、wall_seconds 非 null。",
     "C6 [關票寫 cost_total] `ticket.py close`(以及走同一關的 close-landed、`set <n> state Done`)在把 state 改成 Done 的同一次存檔裡寫票的 `cost_total`,形狀唯一:{calendar_seconds: cost_total.at − created(整數秒), wall_seconds: 各列 wall_seconds 非 null 的加總(全 null → null), runs: 列數, worker_rounds: role=worker 各列 round 最大值(沒有 worker 列 → null), objections: 票 objections 的筆數, by_role: {<role>: {runs, wall_seconds, tokens_in, tokens_out, cache_write, cache_read, unknown_token_runs, outcomes: {<outcome 字,或 \"null\">: 次數}}}, at}。每角色 token 四欄 = 該角色非 null 值加總,該欄該角色全是 null(或缺鍵)→ null,**不是 0**;unknown_token_runs = tokens_in 為 null 或缺鍵的列數;舊列沒有 outcome 鍵算進 \"null\"。`ticket.closed` 事件多帶 cost_total(與票上同一物件),hits / weak / state_version 照舊。關不掉(既有四種拒絕)→ 票上沒有 cost_total、沒有 ticket.closed。驗(tests/test_ticket.py,手算期望值):cost[] 預放 worker r1 (10,100,1000,5000, wall 60, handed-in)、worker r2 (5,50,200,3000, wall 40, handed-in)、reviewer (1,10,20,300, wall 9, fail)、reviewer (1,12,20,310, wall 8, pass)、land (四 null, wall 30, pass)、一筆舊格式 verifier 列(無 outcome / run_id / session_id 鍵,四 null, wall null)→ by_role.worker == {runs 2, wall 100, 15, 150, 1200, 8000, unknown 0, outcomes {handed-in: 2}};by_role.land 四 token 欄皆 None、unknown 1;by_role.verifier.outcomes == {\"null\": 1}、wall_seconds None;wall_seconds == 147;runs == 6;worker_rounds == 2;calendar_seconds == 由 cost_total.at 與 created 算的差。",
@@ -49,9 +49,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "2c7f842dab224ac27730d7c102c12ceb91f954f2",
-  "state": "Ready",
-  "state_version": 4,
+  "base_sha": "d236cdc8942e2bc1ddec0d8c38e51b4a365cd532",
+  "state": "Done",
+  "state_version": 21,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -59,8 +59,117 @@
       "tests/test_cost_ledger.py"
     ],
     "tags": [],
-    "run": "",
-    "notes": ""
+    "run": "cd tests && python3 -m unittest test_cost_ledger",
+    "notes": "本 repo 驗證者案例住 tests/(票 test_plan 指定),verify.tags 留空、沒有 TAGS.d 片段。C1-C8 各一組;C9(既有斷言照綠)在基底上本來就綠,沒有案例,由閘門跑既有十支守。沿用 test_auto_fix / test_objection_triage / test_review / test_land 的 base 類與替身,那幾支的夾具改了這裡會跟著動。C4 比 event.get(key):event.emit 不寫值為 None 的鍵。C2 正例每個登記字配它所屬的角色寫。整組約 25 秒。",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-06T23:25:23+08:00",
+      "files": [
+        "tests/test_cost_ledger.py"
+      ],
+      "base_ref": "d236cdc8942e2bc1ddec0d8c38e51b4a365cd532",
+      "base_sha": "d236cdc8942e2bc1ddec0d8c38e51b4a365cd532",
+      "candidate": "../agent-control-wt/t94",
+      "candidate_sha": "e608519baaa1a9cfb6ba046f97a1a5926d708bd5",
+      "baseline": {
+        "red": [
+          "tests.test_cost_ledger.AutoFixRowsHaveOutcome.test_c5a_a_worker_that_hands_in_is_handed_in_with_a_run_id",
+          "tests.test_cost_ledger.AutoFixRowsHaveOutcome.test_c5a_a_worker_that_hands_in_nothing_is_no_patch",
+          "tests.test_cost_ledger.CloseWritesCostTotal.test_c6_a_refused_close_writes_no_cost_total",
+          "tests.test_cost_ledger.CloseWritesCostTotal.test_c6_close_writes_cost_total_and_the_closed_event_carries_it",
+          "tests.test_cost_ledger.CloseWritesCostTotal.test_c6_set_state_done_goes_through_the_same_write",
+          "tests.test_cost_ledger.LandGreenRow.test_c5e_a_green_land_writes_pass",
+          "tests.test_cost_ledger.LandRedRow.test_c5e_a_red_land_still_writes_a_fail_row",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_an_unregistered_word_is_refused_and_writes_nothing",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted",
+          "tests.test_cost_ledger.ReviewRowsHaveOutcome.test_c5d_a_fail_is_fail",
+          "tests.test_cost_ledger.ReviewRowsHaveOutcome.test_c5d_a_pass_is_pass_with_the_review_run_id",
+          "tests.test_cost_ledger.TheContractIsWrittenDown.test_c8_schema_event_kinds_and_usage_name_the_new_shape",
+          "tests.test_cost_ledger.TheEventCarriesTheWholeRow.test_c4_ticket_cost_event_equals_the_row_minus_at",
+          "tests.test_cost_ledger.TheRowHasOneShape.test_c1_missing_values_are_json_null",
+          "tests.test_cost_ledger.TheRowHasOneShape.test_c1_new_keys_come_from_flags_and_the_envelope",
+          "tests.test_cost_ledger.TokensSumEveryModel.test_c3_model_usage_is_summed_over_every_model",
+          "tests.test_cost_ledger.TriageAndVerifierRows.test_c5b_a_verifier_that_hands_in_is_handed_in",
+          "tests.test_cost_ledger.TriageAndVerifierRows.test_c5c_an_accepted_triage_writes_an_opener_row",
+          "tests.test_cost_ledger.TriageAndVerifierRows.test_c5c_an_opener_without_a_triage_line_is_undecided",
+          "tests.test_cost_ledger.VersionsDoNotMove.test_c7_cost_leaves_state_version_and_review_alone_and_close_bumps_once"
+        ],
+        "red_lines": [
+          "tests.test_cost_ledger.AutoFixRowsHaveOutcome.test_c5a_a_worker_that_hands_in_is_handed_in_with_a_run_id: AssertionError: None != 'handed-in'",
+          "tests.test_cost_ledger.AutoFixRowsHaveOutcome.test_c5a_a_worker_that_hands_in_nothing_is_no_patch: AssertionError: None != 'no-patch'",
+          "tests.test_cost_ledger.CloseWritesCostTotal.test_c6_a_refused_close_writes_no_cost_total: AssertionError: 'cost_total' not found in {'id': '1', 'subject': '第 1 張', 'created': '2026-09-12T10:00:00+08:00', 'objective': '做完某件事', 'acceptance': ['會紅的斷言一條'], 'in_scope': [], 'out_of_scope': [], 'depends_on': [], 'allowed_write_paths': ['src/*'], 'role': 'worker', 'model': 'opus', 'tool': 'claude-code', 'attempt': 1, 'base_sha': '215ef5fbe39026e789618d223079f7012b7f193b', 'state': 'Done', 'state_version': 3, 'lease': None, 'retry_limit': 2, 'verify_strings': ['src/nav.py:def size_nav'], 'test_evidence': [{'cmd': 'gate --branch', 'rc': 0}], 'objections': [{'category': 'nit', 'body': '變數名可以短一點', 'evidence': '', 'owner': 'main', 'disposition': ''}], 'cost': [{'role': 'worker', 'round': 1, 'model': 'opus', 'wall_seconds': 60, 'outcome': 'handed-in', 'run_id': 'r-worker-1', 'session_id': None, 'by': 'fixture', 'note': None, 'at': '2026-09-12T11:00:00+08:00', 'tokens_in': 10, 'tokens_out': 100, 'cache_write': 1000, 'cache_read': 5000}, {'role': 'worker', 'round': 2, 'model': 'opus', 'wall_seconds': 40, 'outcome': 'handed-in', 'run_id': 'r-worker-2', 'session_id': None, 'by': 'fixture', 'note': None, 'at': '2026-09-12T11:00:00+08:00', 'tokens_in': 5, 'tokens_out': 50, 'cache_write': 200, 'cache_read': 3000}, {'role': 'reviewer', 'round': 2, 'model': 'opus', 'wall_seconds': 9, 'outcome': 'fail', 'run_id': 'r-reviewer-2', 'session_id': None, 'by': 'fixture', 'note': None, 'at': '2026-09-12T11:00:00+08:00', 'tokens_in': 1, 'tokens_out': 10, 'cache_write': 20, 'cache_read': 300}, {'role': 'reviewer', 'round': 2, 'model': 'opus', 'wall_seconds': 8, 'outcome': 'pass', 'run_id': 'r-reviewer-2', 'session_id': None, 'by': 'fixture', 'note': None, 'at': '2026-09-12T11:00:00+08:00', 'tokens_in': 1, 'tokens_out': 12, 'cache_write': 20, 'cache_read': 310}, {'role': 'land', 'round': None, 'model': None, 'wall_seconds': 30, 'outcome': 'pass', 'run_id': 'r-land-None', 'session_id': None, 'by': 'fixture', 'note': None, 'at': '2026-09-12T11:00:00+08:00', 'tokens_in': None, 'tokens_out': None, 'cache_write': None, 'cache_read': None}, {'role': 'verifier', 'round': 1, 'model': 'opus', 'tokens_in': None, 'tokens_out': None, 'cache_write': None, 'cache_read': None, 'wall_seconds': None, 'by': 'fixture', 'note': '沒帶 --from-envelope', 'at': '2026-09-12T11:00:00+08:00'}], 'review': {'verdict': 'pass', 'by': 'main', 'sha': 'deadbeef', 'at': '2026-10-06T23:24:41+08:00', 'state_version': 3}}",
+          "tests.test_cost_ledger.CloseWritesCostTotal.test_c6_close_writes_cost_total_and_the_closed_event_carries_it: AssertionError: 'cost_total' not found in {'id': '1', 'subject': '第 1 張', 'created': '2026-09-12T10:00:00+08:00', 'objective': '做完某件事', 'acceptance': ['會紅的斷言一條'], 'in_scope': [], 'out_of_scope': [], 'depends_on': [], 'allowed_write_paths': ['src/*'], 'role': 'worker', 'model': 'opus', 'tool': 'claude-code', 'attempt': 1, 'base_sha': '52db1d2e316e5d60c410031cf87d65b854ae0ec4', 'state': 'Done', 'state_version': 3, 'lease': None, 'retry_limit': 2, 'verify_strings': ['src/nav.py:def size_nav'], 'test_evidence': [{'cmd': 'gate --branch', 'rc': 0}], 'objections': [{'category': 'nit', 'body': '變數名可以短一點', 'evidence': '', 'owner': 'main', 'disposition': ''}], 'cost': [{'role': 'worker', 'round': 1, 'model': 'opus', 'wall_seconds': 60, 'outcome': 'handed-in', 'run_id': 'r-worker-1', 'session_id': None, 'by': 'fixture', 'note': None, 'at': '2026-09-12T11:00:00+08:00', 'tokens_in': 10, 'tokens_out': 100, 'cache_write': 1000, 'cache_read': 5000}, {'role': 'worker', 'round': 2, 'model': 'opus', 'wall_seconds': 40, 'outcome': 'handed-in', 'run_id': 'r-worker-2', 'session_id': None, 'by': 'fixture', 'note': None, 'at': '2026-09-12T11:00:00+08:00', 'tokens_in': 5, 'tokens_out': 50, 'cache_write': 200, 'cache_read': 3000}, {'role': 'reviewer', 'round': 2, 'model': 'opus', 'wall_seconds': 9, 'outcome': 'fail', 'run_id': 'r-reviewer-2', 'session_id': None, 'by': 'fixture', 'note': None, 'at': '2026-09-12T11:00:00+08:00', 'tokens_in': 1, 'tokens_out': 10, 'cache_write': 20, 'cache_read': 300}, {'role': 'reviewer', 'round': 2, 'model': 'opus', 'wall_seconds': 8, 'outcome': 'pass', 'run_id': 'r-reviewer-2', 'session_id': None, 'by': 'fixture', 'note': None, 'at': '2026-09-12T11:00:00+08:00', 'tokens_in': 1, 'tokens_out': 12, 'cache_write': 20, 'cache_read': 310}, {'role': 'land', 'round': None, 'model': None, 'wall_seconds': 30, 'outcome': 'pass', 'run_id': 'r-land-None', 'session_id': None, 'by': 'fixture', 'note': None, 'at': '2026-09-12T11:00:00+08:00', 'tokens_in': None, 'tokens_out': None, 'cache_write': None, 'cache_read': None}, {'role': 'verifier', 'round': 1, 'model': 'opus', 'tokens_in': None, 'tokens_out': None, 'cache_write': None, 'cache_read': None, 'wall_seconds': None, 'by': 'fixture', 'note': '沒帶 --from-envelope', 'at': '2026-09-12T11:00:00+08:00'}], 'review': {'verdict': 'pass', 'by': 'main', 'sha': 'deadbeef', 'at': '2026-10-06T23:24:41+08:00', 'state_version': 3}}",
+          "tests.test_cost_ledger.CloseWritesCostTotal.test_c6_set_state_done_goes_through_the_same_write: AssertionError: 'cost_total' not found in {'id': '1', 'subject': '第 1 張', 'created': '2026-09-12T10:00:00+08:00', 'objective': '做完某件事', 'acceptance': ['會紅的斷言一條'], 'in_scope': [], 'out_of_scope': [], 'depends_on': [], 'allowed_write_paths': ['src/*'], 'role': 'worker', 'model': 'opus', 'tool': 'claude-code', 'attempt': 1, 'base_sha': '127ab3d0b0f1e598b3d013d75e028eb910fc4699', 'state': 'Done', 'state_version': 3, 'lease': None, 'retry_limit': 2, 'verify_strings': ['src/nav.py:def size_nav'], 'test_evidence': [{'cmd': 'gate --branch', 'rc': 0}], 'objections': [{'category': 'nit', 'body': '變數名可以短一點', 'evidence': '', 'owner': 'main', 'disposition': ''}], 'cost': [{'role': 'worker', 'round': 1, 'model': 'opus', 'wall_seconds': 60, 'outcome': 'handed-in', 'run_id': 'r-worker-1', 'session_id': None, 'by': 'fixture', 'note': None, 'at': '2026-09-12T11:00:00+08:00', 'tokens_in': 10, 'tokens_out': 100, 'cache_write': 1000, 'cache_read': 5000}, {'role': 'worker', 'round': 2, 'model': 'opus', 'wall_seconds': 40, 'outcome': 'handed-in', 'run_id': 'r-worker-2', 'session_id': None, 'by': 'fixture', 'note': None, 'at': '2026-09-12T11:00:00+08:00', 'tokens_in': 5, 'tokens_out': 50, 'cache_write': 200, 'cache_read': 3000}, {'role': 'reviewer', 'round': 2, 'model': 'opus', 'wall_seconds': 9, 'outcome': 'fail', 'run_id': 'r-reviewer-2', 'session_id': None, 'by': 'fixture', 'note': None, 'at': '2026-09-12T11:00:00+08:00', 'tokens_in': 1, 'tokens_out': 10, 'cache_write': 20, 'cache_read': 300}, {'role': 'reviewer', 'round': 2, 'model': 'opus', 'wall_seconds': 8, 'outcome': 'pass', 'run_id': 'r-reviewer-2', 'session_id': None, 'by': 'fixture', 'note': None, 'at': '2026-09-12T11:00:00+08:00', 'tokens_in': 1, 'tokens_out': 12, 'cache_write': 20, 'cache_read': 310}, {'role': 'land', 'round': None, 'model': None, 'wall_seconds': 30, 'outcome': 'pass', 'run_id': 'r-land-None', 'session_id': None, 'by': 'fixture', 'note': None, 'at': '2026-09-12T11:00:00+08:00', 'tokens_in': None, 'tokens_out': None, 'cache_write': None, 'cache_read': None}, {'role': 'verifier', 'round': 1, 'model': 'opus', 'tokens_in': None, 'tokens_out': None, 'cache_write': None, 'cache_read': None, 'wall_seconds': None, 'by': 'fixture', 'note': '沒帶 --from-envelope', 'at': '2026-09-12T11:00:00+08:00'}], 'review': {'verdict': 'pass', 'by': 'main', 'sha': 'deadbeef', 'at': '2026-10-06T23:24:42+08:00', 'state_version': 2}}",
+          "tests.test_cost_ledger.LandGreenRow.test_c5e_a_green_land_writes_pass: AssertionError: None != 'pass'",
+          "tests.test_cost_ledger.LandRedRow.test_c5e_a_red_land_still_writes_a_fail_row: AssertionError: 0 != 1 : []",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_an_unregistered_word_is_refused_and_writes_nothing: AssertionError: 'accepted' not found in \"ticket: cost 不認得 '--outcome'\\nticket: cost 認得的是:--role  --round  --model  --by  --from-envelope  --wall-seconds\\nticket: 看範例:python3 scripts/ticket.py cost --help\\n\" : stderr 沒印出登記字 accepted",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted: AssertionError: 2 != 0 : ticket: cost 不認得 '--outcome'",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted: AssertionError: 2 != 0 : ticket: cost 不認得 '--outcome'",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted: AssertionError: 2 != 0 : ticket: cost 不認得 '--outcome'",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted: AssertionError: 2 != 0 : ticket: cost 不認得 '--outcome'",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted: AssertionError: 2 != 0 : ticket: cost 不認得 '--outcome'",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted: AssertionError: 2 != 0 : ticket: cost 不認得 '--outcome'",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted: AssertionError: 2 != 0 : ticket: cost 不認得 '--outcome'",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted: AssertionError: 2 != 0 : ticket: cost 不認得 '--outcome'",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted: AssertionError: 2 != 0 : ticket: cost 不認得 '--outcome'",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted: AssertionError: 2 != 0 : ticket: cost 不認得 '--outcome'",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted: AssertionError: 2 != 0 : ticket: cost 不認得 '--outcome'",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted: AssertionError: 2 != 0 : ticket: cost 不認得 '--outcome'",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted: AssertionError: 2 != 0 : ticket: cost 不認得 '--outcome'",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted: AssertionError: 2 != 0 : ticket: cost 不認得 '--outcome'",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted: AssertionError: 2 != 0 : ticket: cost 不認得 '--outcome'",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted: AssertionError: 2 != 0 : ticket: cost 不認得 '--outcome'",
+          "tests.test_cost_ledger.OutcomeIsRegistered.test_c2_every_registered_word_is_accepted: AssertionError: 0 != 16",
+          "tests.test_cost_ledger.ReviewRowsHaveOutcome.test_c5d_a_fail_is_fail: AssertionError: None != 'fail'",
+          "tests.test_cost_ledger.ReviewRowsHaveOutcome.test_c5d_a_pass_is_pass_with_the_review_run_id: AssertionError: None != 'pass'",
+          "tests.test_cost_ledger.TheContractIsWrittenDown.test_c8_schema_event_kinds_and_usage_name_the_new_shape: AssertionError: 'note' not found in '| 成本 | `cost` (list of {role, round, model, tokens_in, tokens_out, cache_write, cache_read, wall_seconds, by, at}) | 自動 | 每次 headless 派工一筆,由 `auto-fix.sh`(worker / verifier)、`review.sh`(reviewer)、`land.sh`(land)經 `ticket.py cost` 寫(D-032)。token 四欄取信封 `usage` 的 `input_tokens` / `output_tokens` / `cache_creation_input_tokens` / `cache_read_input_tokens`;`wall_seconds` 是腳本量的秒數。**`null` 的意思是拿不到,不是 0**(land 沒有 LLM,model 與 token 欄都是 null)。**不動 `state_version`、不動 `review`** —— 落地前寫一筆成本不會讓覆核過期。不存費用:同一模型的單價會變 |' : SCHEMA 成本列缺 note",
+          "tests.test_cost_ledger.TheEventCarriesTheWholeRow.test_c4_ticket_cost_event_equals_the_row_minus_at: AssertionError: 2 != 0 : ticket: cost 不認得 '--outcome'",
+          "tests.test_cost_ledger.TheRowHasOneShape.test_c1_missing_values_are_json_null: AssertionError: Items in the second set but not the first:",
+          "tests.test_cost_ledger.TheRowHasOneShape.test_c1_new_keys_come_from_flags_and_the_envelope: AssertionError: 2 != 0 : ticket: cost 不認得 '--outcome'",
+          "tests.test_cost_ledger.TokensSumEveryModel.test_c3_model_usage_is_summed_over_every_model: AssertionError: Tuples differ: (5, 77, 0, 9) != (8, 97, 4, 109)",
+          "tests.test_cost_ledger.TriageAndVerifierRows.test_c5b_a_verifier_that_hands_in_is_handed_in: AssertionError: None != 'handed-in'",
+          "tests.test_cost_ledger.TriageAndVerifierRows.test_c5c_an_accepted_triage_writes_an_opener_row: AssertionError: 0 != 1 : [{'role': 'worker', 'round': 1, 'model': 'opus', 'tokens_in': 1, 'tokens_out': 1, 'cache_write': None, 'cache_read': None, 'wall_seconds': 0, 'by': 'auto-fix.sh', 'note': None, 'at': '2026-10-06T23:24:54+08:00'}, {'role': 'verifier', 'round': 1, 'model': 'opus', 'tokens_in': 1, 'tokens_out': 1, 'cache_write': None, 'cache_read': None, 'wall_seconds': 0, 'by': 'auto-fix.sh', 'note': None, 'at': '2026-10-06T23:24:54+08:00'}, {'role': 'verifier', 'round': 1, 'model': 'opus', 'tokens_in': 1, 'tokens_out': 1, 'cache_write': None, 'cache_read': None, 'wall_seconds': 0, 'by': 'auto-fix.sh', 'note': None, 'at': '2026-10-06T23:24:55+08:00'}, {'role': 'worker', 'round': 1, 'model': 'opus', 'tokens_in': 1, 'tokens_out': 1, 'cache_write': None, 'cache_read': None, 'wall_seconds': 1, 'by': 'auto-fix.sh', 'note': None, 'at': '2026-10-06T23:24:56+08:00'}]",
+          "tests.test_cost_ledger.TriageAndVerifierRows.test_c5c_an_opener_without_a_triage_line_is_undecided: AssertionError: 0 != 1 : [{'role': 'worker', 'round': 1, 'model': 'opus', 'tokens_in': 1, 'tokens_out': 1, 'cache_write': None, 'cache_read': None, 'wall_seconds': 1, 'by': 'auto-fix.sh', 'note': None, 'at': '2026-10-06T23:24:59+08:00'}]",
+          "tests.test_cost_ledger.VersionsDoNotMove.test_c7_cost_leaves_state_version_and_review_alone_and_close_bumps_once: AssertionError: 2 != 0 : ticket: cost 不認得 '--outcome'"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 20,
+        "skipped": 0,
+        "log": "../agent-control-wt/t94/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 20,
+        "skipped": 0,
+        "log": "../agent-control-wt/t94/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "decision_refs": [
     "D-032",
@@ -89,5 +198,170 @@
   "test_plan": "只跑:cd tests && python3 -m unittest test_ticket test_ticket_65 test_review test_land test_inbox test_event test_objection_triage test_auto_fix_codex test_no_project_names;test_auto_fix 只跑改到與新增的類。前景跑加 timeout,不跑全套。驗證者案例寫在 tests/test_cost_ledger.py(本 repo 驗證者案例住 tests/,票 verify.tags 留空)。變異(各自驗紅、貼紅的第一行):m1 cost 列不寫 outcome 鍵 → C1 紅;m2 --outcome 不驗登記表 → C2 反例紅;m3 只讀 usage 不讀 modelUsage → C3 多模型案例紅;m4 事件只帶 tokens_out → C4 紅;m5 cost_total 全 null 的欄加總成 0 → C6 land 斷言紅;m6 cost_total 寫在關票拒絕檢查之前 → C6 反例紅;m7 auto-fix 判反駁那條路不寫 cost → C5(c) 紅。",
   "outline": "【現況(開題者實測)】票的 cost[] 自 D-032 已有 role/round/model/四種 token/wall(T 207 列,worker 缺 token 的 20 列全在 2026-09-29 以前:17 列是 #58 前沒 note、3 列 log 無信封;之後零缺)。主線看到的「只有 tokens_out」是**事件** ticket.cost 只帶子集。真缺口:每列無 outcome / run_id / session_id、事件不帶整列、判反駁的開題者不記、關票無加總、主線 Agent 工具派的子 agent 與主線本身全無(→ A2 另票)。【取數】headless 信封 usage 與 modelUsage(T #712 worker 實測四數相同 62/30718/77946/1965237,且與該 run transcript 以 message.id 去重加總一致);多模型信封樣本 0 份(未實測差異),取 modelUsage 加總兩種情況都對。【不在本票】A2 hook;apply.sh 計時(秒級、在 auto-fix 輪內);consolidate-memory 的 agent(無票);看板 / inbox 顯示;T 的 land-ticket.sh 給 gate/land 列帶 --outcome(同步後另開 T 票;不帶時 outcome=null,不壞);補歷史。needs_verifier=true:null≠0 與加總規則是驗證者獨立案例最值錢的地方;interface_fixed=true:純後端,旗標、鍵、字表、cost_total 形狀全在票面釘死。建議 A1 先落,A2 依賴它的列形狀。",
   "needs_verifier": true,
-  "interface_fixed": true
+  "interface_fixed": true,
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 114,
+      "tokens_out": 54631,
+      "cache_write": 166434,
+      "cache_read": 6617544,
+      "wall_seconds": 1078,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-06T22:45:03+08:00"
+    },
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 76,
+      "tokens_out": 37621,
+      "cache_write": 148626,
+      "cache_read": 3767433,
+      "wall_seconds": 1078,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-06T22:45:03+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 18,
+      "tokens_out": 10784,
+      "cache_write": 18036,
+      "cache_read": 1685553,
+      "wall_seconds": 399,
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-06T22:52:27+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 34,
+      "tokens_out": 9368,
+      "cache_write": 77636,
+      "cache_read": 1104969,
+      "wall_seconds": 105,
+      "outcome": "pass",
+      "run_id": "20261006-231609-70306",
+      "session_id": "4c46d2b3-2136-48c5-96b7-37eb01cf6b36",
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-06T23:27:09+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 751,
+      "outcome": null,
+      "run_id": null,
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-10-06T23:40:05+08:00"
+    }
+  ],
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "C3「某模型缺某鍵視為 0」照字面會讓既有夾具 envelope()(modelUsage 只帶 inputTokens/outputTokens)的 cache 兩欄變 0、既有信封案例紅(與 C9 衝突);本 patch 改為「某欄沒有任何模型帶該鍵才退回 usage 的該欄,否則缺鍵算 0」,請裁示是否接受此規則並同步到 SCHEMA / 驗證者案例。",
+      "evidence": "../agent-control-wt/fix-t94/round1/EVIDENCE-round1-objection.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "",
+      "triage": {
+        "verdict": "accepted",
+        "reason": "C3's literal \"missing key = 0\" zeroes cache columns for the shared fixture envelope() (modelUsage has only inputTokens/outputTokens), contradicting C9; per-column fallback to usage is the right rule.",
+        "round": 1,
+        "by": "auto-fix"
+      }
+    }
+  ],
+  "branch": "t94",
+  "patch_ref": "../agent-control-wt/fix-t94/round1/patch-round1.diff",
+  "repair_round": 1,
+  "owner": "main",
+  "gate": {
+    "rc": 0,
+    "sha": "e608519baaa1a9cfb6ba046f97a1a5926d708bd5",
+    "run_id": "20261006-231609-70306",
+    "at": "2026-10-06T23:25:23+08:00"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "c17f1d300425ae79f6ef876893c13d3c663f11a7",
+    "note": "reports/t94/20261006-231609-70306/REVIEW.md",
+    "at": "2026-10-06T23:40:05+08:00",
+    "state_version": 21
+  },
+  "cost_total": {
+    "calendar_seconds": 4505,
+    "wall_seconds": 3411,
+    "runs": 5,
+    "worker_rounds": 1,
+    "objections": 1,
+    "by_role": {
+      "worker": {
+        "runs": 2,
+        "wall_seconds": 1477,
+        "tokens_in": 132,
+        "tokens_out": 65415,
+        "cache_write": 184470,
+        "cache_read": 8303097,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "null": 2
+        }
+      },
+      "verifier": {
+        "runs": 1,
+        "wall_seconds": 1078,
+        "tokens_in": 76,
+        "tokens_out": 37621,
+        "cache_write": 148626,
+        "cache_read": 3767433,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "null": 1
+        }
+      },
+      "reviewer": {
+        "runs": 1,
+        "wall_seconds": 105,
+        "tokens_in": 34,
+        "tokens_out": 9368,
+        "cache_write": 77636,
+        "cache_read": 1104969,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 751,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "null": 1
+        }
+      }
+    },
+    "at": "2026-10-06T23:40:05+08:00"
+  }
 }

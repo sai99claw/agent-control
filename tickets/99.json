@@ -1,0 +1,55 @@
+{
+  "id": "99",
+  "subject": "worker 逾時後能在同一份副本接著收尾:auto-fix.sh <n> --finish 不 rm -rf 副本、接回同一個 worker session(接不回才起新的)只補 patch / EVIDENCE,交了就照一般一輪的後半段 apply → gate → InReview(T #674 #675 #719 三次都是主線手派收尾者、手跑 apply)",
+  "created": "2026-10-07T19:07:37+08:00",
+  "objective": "worker 逾時(rc=124)的那一輪,副本已經留著(#57),但 auto-fix 沒有接續的入口:round_once 一開頭 rm -rf \"$FIX\" 從頭展開,主線只能手派收尾者、手跑 apply.sh。做完的樣子:逾時頁給一行 `sh scripts/auto-fix.sh <n> --finish`;--finish 在原副本接回同一個 worker session(sessions.json 有 resumable 的 session_id 時 --resume,否則新 worker 同一個 cwd),派工文只叫它補交件、不重做;交件後走與一般一輪相同的後半段;輪數不加一;收尾逾時就停,不繞圈。",
+  "acceptance": [
+    "F1【逾時頁給接續指令】沿用 #57 的逾時夾具(tests/test_auto_fix.py 的 test_the_copy_the_log_and_a_partial_patch_survive_the_timeout 那一型):worker 逾時後副本 work/ 與 base/ 照舊留著、patch-partial 照舊寫;另外 stderr 與那一頁 inbox 都含一行可直接貼的 `sh scripts/auto-fix.sh <n> --finish`。",
+    "F2【不從頭展開】F1 之後跑 sh scripts/auto-fix.sh <n> --finish:副本不刪不重展 —— 假 worker 在逾時前寫進 work/ 的記號檔,收尾者起跑時還在(假收尾者把它讀到的內容寫進 log,測試斷言);同一個 run 目錄多一份 dispatch-finish-round<r>.md,內容含「不要重做」、patch-partial 的路徑、以及這一輪還缺哪幾樣(patch-round<r>.diff / EVIDENCE-round<r>.md 各自在不在,照實寫)。",
+    "F3【接回同一個 session】sessions.json 的 worker 那一列 resumable=true → 收尾用的命令是 `<worker.command> --resume <那一列的 session_id>`、cwd 是原副本的 work/(假 worker 記下 argv 與 cwd,測試斷言);resumable=false → 改起一個新的 worker、cwd 同一個 work/,派工文多附原 worker log 的路徑;兩種都印一行說明走了哪一條。",
+    "F4【接回原本的後半段】收尾者交出 patch-round<r>.diff 與 EVIDENCE-round<r>.md → 照一般一輪的後半段走(收 result、apply.sh、gate.rerun_cmd、綠了轉 InReview;夾具用 --no-review 停在 InReview)。輪數不加一:票的 attempt 與 ticket.py round 計數與逾時那一刻相同,status 記的是第 r 輪。票在收尾起跑時由 Blocked 轉 Running(發 ticket.state 事件)。",
+    "F5【只接逾時那一種】最新一輪不是 worker 逾時(綠、紅有歸因、反駁、沒有任何一輪)→ --finish rc=2,訊息點名實際狀態,不起任何 worker、不刪任何東西;是逾時但副本 work/ 已不在 → rc=2 並點名那個路徑。",
+    "F6【收尾也逾時就停】收尾者超過 worker.finish_timeout_seconds(config,預設 1200)→ 與 F1 同一種停法(副本留著、頁、rc=5),但頁上寫「收尾也逾時」且不再給 --finish 那一行(不自己繞圈);finish_timeout_seconds 非正數 → 退回預設並點名那一格(同 #64 的寫法)。"
+  ],
+  "in_scope": [
+    "scripts/auto-fix.sh"
+  ],
+  "out_of_scope": [
+    "scripts/apply.sh",
+    "scripts/gate.sh",
+    "docs/DECISIONS.md"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "tests/test_auto_fix.py",
+    "docs/WORKFLOW.md",
+    "board/config.json"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "c17f1d300425ae79f6ef876893c13d3c663f11a7",
+  "state": "Ready",
+  "state_version": 6,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "feature": "auto-fix:逾時接續收尾",
+  "verify_strings": [
+    "--finish",
+    "dispatch-finish-round"
+  ],
+  "test_plan": "全部在 tests/test_auto_fix.py 的 AutoFixBase 夾具裡(假 worker 命令 = 小 shell 腳本,記 argv / cwd / 讀到的記號檔;逾時用小的 worker.timeout_seconds 造)。F1 擴充既有 #57 逾時案例的斷言;F2–F4 一條「逾時 → --finish → 假收尾者交件 → InReview」的整合案例,另一條 resumable=false 的變體;F5 三種非逾時狀態 + work/ 被刪各一條;F6 讓假收尾者也睡過 finish_timeout。期望值來自夾具自己寫的記號檔、session_id 與輪數,不從被測程式算。變異(自證紅,貼紅的第一行):m1 --finish 照走 round_once(會 rm -rf)→ F2 紅(記號檔不見);m2 不帶 --resume → F3 紅;m3 收尾後 ticket.py round 加一 → F4 紅;m4 收尾逾時又給 --finish → F6 紅。只跑 tests/test_auto_fix.py 相關 class;不跑全套。",
+  "outline": "來源:T(tabby_pool)#719 2026-10-07:worker 跑滿 3600 秒逾時,實作與全部測試已綠,只差負載重跑 3 次與寫 patch/EVIDENCE;主線手派收尾者、手跑 apply.sh。同型第三次:T #674、#675(2026-09-29,同樣副本留著、主線從 patch-partial 接手)。D-G144 ① 夠格(撞 3 次)。session 接回沿用 #89 的 sessions.json(--session-id 預配、resumable/why),逾時不會讓 session 檔消失 —— 未實測 --resume 一個被 SIGKILL 的 claude -p session,實作者先驗一次,接不回就走 F3 的新 worker 分支。T 拿到要等 T #690(同步 scripts/control/)。【撞一次,再撞再做】auto-fix 自己被系統收掉(T #719 第一次起跑被 Claude Code memory pressure 收掉)時票留在 Running、沒有狀態檔,重起 rc=2「沒有狀態檔而票不是 Ready」,主線手動 set Ready;候選做法:起跑記 runner_pid,重起時 pid 已死且沒有狀態檔就視同 Ready 並發事件 —— 不在本票。needs_verifier=false:夾具內自證的腳本契約,驗證者只會重演同一夾具。",
+  "branch": "t99-autofix-finish",
+  "priority": "P1",
+  "needs_verifier": false,
+  "tags": []
+}
