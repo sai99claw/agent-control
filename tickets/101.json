@@ -1,0 +1,108 @@
+{
+  "id": "101",
+  "subject": "票面從檔案白名單/黑名單改為「資訊放哪裡」:allowed_write_paths / out_of_scope 降選填、out_of_scope 不再硬擋、提示清單外改動逐檔交代理由(D-H43 ①)",
+  "created": "2026-10-09T12:32:27+08:00",
+  "objective": "T 使用者裁示 D-H43 ①(2026-10-09):票面不再以 allowed_write_paths / out_of_scope 硬限檔案,改寫「本票的新資訊放哪個檔」(新字、常數、斷點、token、錯誤訊息),對照表由專案提供(T 是 docs/ARCHITECTURE.md 的新節,路徑走專案設定)。清單外的改動不擋:worker 在 EVIDENCE 逐檔交代理由,覆核者判。依據 T 的 Fable 審票報告(tabby_pool_ctl/reports/ticket-audit-20261009 任務三):out_of_scope 真擋下弱化守衛 0 次、擋錯正當修改 3 次(全是整片 verify/**),116 張非空 out_of_scope 有 69 張是散文命中不了任何檔;真正守住「別改弱守衛」的是 worker 主動反駁與覆核者逐檔看 extra_paths。做完的樣子:(1) SCHEMA 兩格降選填、舊票照讀;新增 info_homes 格與專案設定 info_map;(2) apply / gate / land 不再因 out_of_scope 擋,protected_paths 照擋;(3) 提示清單(allowed_write_paths ∪ info_homes 的檔 ∪ verify.files)外的改動,apply.sh 讀 EVIDENCE 新段落逐檔對理由,缺理由印警告;覆核派工文列出這些檔與理由給 reviewer 判;(4) 開題者角色卡、DISPATCH-TEMPLATE 與相關規矩文字改成這套說法,過渡期禁止整片 glob。",
+  "acceptance": [
+    "A1【兩格降選填,舊票照讀】tests/test_ticket.py 夾具(拋棄式 AC_TICKETS_DIR):(i) ticket.py create 其餘必填給齊、不給 --allowed-write-path 也不給 --out-of-scope → rc=0;set <n> needs_verifier false 後 set <n> state Ready → rc=0;ticket.py lint <n> 不因這兩格空而報錯。(ii) 舊形狀票(兩格都有值、沒有 info_homes)→ show / lint / set state Ready 的 rc 與輸出與改前相同。(iii) 兩格與 info_homes 全空、也沒有 verify_strings 的票,ticket.py verify 明說「沒有提示清單,弱檢查做不了」(不是靜默通過)。期望值寫死在夾具,不從被測程式算。變異 m1:把 allowed_write_paths 放回 NOT_EMPTY → (i) 紅。",
+    "A2【新格 info_homes 與專案設定 info_map】tickets/SCHEMA.md 新增 info_homes 列(list of {what, home}:本票新增的資訊各放哪個檔,home 是相對專案根的檔路徑)。ticket.py create --info-home '<資訊>=<檔>' 可重複,存成 {what, home};set <n> info_homes '<json>' 收同形;缺 what / home、home 是絕對路徑或含 * → rc=2 並點名第幾筆。專案對照表的位置讀 board/config.json 的 info_map(字串,相對專案根,可帶 #節名):ticket.py lint <n> 與 auto-fix.sh 產的 worker 派工文印一行「對照表:<info_map>」並列出本票 info_homes;config 沒設 → 印「專案沒設 info_map(board/config.json)」,不擋。夾具:有 / 沒有 info_map 兩種 config 各一輪,斷言輸出含夾具寫死的字。變異 m2:create 不收 --info-home → 紅。",
+    "A3【out_of_scope 不再硬擋;protected_paths 照擋】整合層夾具(tests/test_apply.py、tests/test_gate.py、tests/test_land.py 既有的寫入範圍夾具):票 out_of_scope=[\"docs/x.md\"]、patch 改 docs/x.md → apply.sh rc=0(改前 5)、gate preflight 不因它 rc=4、land 不拒;apply 輸出把該檔列在「提示清單外的改動」並標「命中票的 out_of_scope `docs/x.md`(不擋)」。同一夾具改成 board/config.json protected_paths=[\"docs/x.md\"] → apply rc=5、gate rc=4、land 拒絕,輸出與改前一致。變異 m3:write_scope 的 fences 放回 out_of_scope → 前半紅。",
+    "A4【提示清單外逐檔交代理由】提示清單 = allowed_write_paths ∪ info_homes[].home ∪ verify.files。apply.sh 讀實作者 EVIDENCE 的「## 提示清單外的改動」段,每行 `- `<路徑>` — <理由>`(理由去空白後非空才算)。夾具:patch 動到清單外的 a、b、c 三檔,EVIDENCE 只交代 a(b 有行但理由空、c 沒行)→ apply rc=0(不擋);輸出對 b、c 各一行,含「警告」、該路徑、「沒交代理由」;a 不印警告。result-round<r>.json 的 extra_paths 照舊 = [a,b,c],新鍵 extra_reasons = {a: \"<理由原文>\", b: null, c: null}(SCHEMA 與 DISPATCH-TEMPLATE §8.5 對 apply 補的格各補一句)。全在提示清單內 → 不印這段、extra_reasons = {}。期望值取自夾具 EVIDENCE。變異 m4:拿掉理由解析(一律當沒理由)→ a 也被警告 → 紅。",
+    "A5【覆核派工文列給 reviewer 判】review.sh 產的派工文,現在的「## 白名單外改動」段改成「## 提示清單外的改動」:清單外每個檔一行,帶 worker 的理由或「(EVIDENCE 沒交代理由)」,命中 out_of_scope 的再標一句;要求 reviewer 逐檔判「與票面目標相關、測試沒改弱」,沒理由的檔要自己寫判斷,無關或改弱 = fail。夾具(tests/test_review.py 既有派工文夾具):分支改了 a(有理由)、c(沒理由)→ 派工文含兩行與期望字;全在清單內 → 不出現這一段。templates/dispatch-reviewer.md 的範圍那幾行同步改。變異 m5:拿掉這一段 → 紅。",
+    "A6【過渡期禁整片 glob】out_of_scope 的一格是整片 glob(含 **、以 /* 結尾、或就是 *)→ ticket.py create / set out_of_scope rc=2,ticket.py lint 報錯(不印 ok),訊息點名該格並指向 info_homes;allowed_write_paths 的整片 glob 只在 lint 印一行提醒、不判失敗(status.py regression-red 自動開的票用 tests/*、verify/*,不能因此壞)。夾具:verify/**、demo/web/*、* 三格各一輪 → 拒;scripts/land.sh、verify/nav/test_ticket_7.py → 收。變異 m6:拿掉判斷 → 紅。",
+    "A7【規矩文字改成這套說法】memory/role/opener.md、memory/role/implementer.md、memory/role/reviewer.md、docs/DISPATCH-TEMPLATE.md(§7.1 那兩行;§8 回報格式加一條「提示清單外的改動」與行格式)、docs/reference/role-procedures.md「寫入範圍」、templates/dispatch-opener.md、templates/dispatch-reviewer.md、tickets/SCHEMA.md(依賴與衝突那列、最小範例)、docs/WORKFLOW.md(Ready 條件、apply 第 4 點)、CLAUDE.md 第 18–20 行、auto-fix.sh 交件不合那句:不再出現「硬擋只有 out_of_scope 與 protected_paths」「out_of_scope 才擋」這類說法;out_of_scope 只剩「舊欄位、選填、不擋」語境。開題者卡寫明「票面寫資訊放哪(info_homes + 專案對照表),不列檔案白名單 / 黑名單;過渡期不准整片 glob」。與 #97 撞的那條(role-procedures 寫入範圍首行)以 #97 落地後的文字為底改。python3 scripts/memory.py lint --file memory/role/opener.md rc=0。驗法:測試 grep 這幾份檔(與 tests/test_dispatch_template.py 同形),舊說法出現即紅。",
+    "A8【T 端靠同步票帶過去】本票只改 A。落地後由 A→T 同步票(sync-to-project.sh)把 apply.sh、ticket.py、review.sh、auto-fix.sh(都在 SCRIPT_LIST)、templates/dispatch-reviewer.md、角色卡帶進 T;T 的 docs/ARCHITECTURE.md 新節、T board/config.json 的 info_map、T 自己的 docs/DISPATCH-TEMPLATE.md 改寫走 T 票,不在本票。可驗紅的部分(tests/test_sync_to_project.py 夾具):拋棄式專案跑 sh scripts/sync-to-project.sh <拋棄式專案> 後,在該專案用 sh scripts/control/apply.sh 套一份命中 out_of_scope 的 patch → rc=0(改前 5),且輸出含「提示清單外的改動」。"
+  ],
+  "in_scope": [
+    "tickets/SCHEMA.md",
+    "scripts/ticket.py",
+    "scripts/apply.sh",
+    "scripts/review.sh",
+    "scripts/gate.sh",
+    "scripts/land.sh",
+    "scripts/auto-fix.sh",
+    "templates/dispatch-reviewer.md",
+    "templates/dispatch-opener.md",
+    "docs/DISPATCH-TEMPLATE.md",
+    "memory/role/opener.md"
+  ],
+  "out_of_scope": [
+    "board/config.json 的 protected_paths 語意(照擋,不改)",
+    "T 的任何檔:scripts/control/ 由同步票帶;T 的 ARCHITECTURE 新節、info_map 設定、T 的 DISPATCH-TEMPLATE 走 T 票",
+    "allowed_write_paths 欄位本身改名或刪除(只降選填,排順序判平行照用)"
+  ],
+  "depends_on": [
+    {
+      "id": "97",
+      "condition": "落地(同改 role-procedures「寫入範圍」與 allowed_write_paths 相關檢查)"
+    }
+  ],
+  "allowed_write_paths": [
+    "tickets/SCHEMA.md",
+    "scripts/ticket.py",
+    "scripts/apply.sh",
+    "scripts/review.sh",
+    "scripts/gate.sh",
+    "scripts/land.sh",
+    "scripts/auto-fix.sh",
+    "scripts/guard-main.sh",
+    "templates/dispatch-reviewer.md",
+    "templates/dispatch-opener.md",
+    "docs/DISPATCH-TEMPLATE.md",
+    "docs/WORKFLOW.md",
+    "docs/reference/role-procedures.md",
+    "memory/role/opener.md",
+    "memory/role/implementer.md",
+    "memory/role/reviewer.md",
+    "CLAUDE.md",
+    "tests/test_ticket.py",
+    "tests/test_apply.py",
+    "tests/test_gate.py",
+    "tests/test_land.py",
+    "tests/test_review.py",
+    "tests/test_auto_fix.py",
+    "tests/test_status.py",
+    "tests/test_guard_main.py",
+    "tests/control_harness.py",
+    "tests/test_dispatch_template.py",
+    "tests/test_sync_to_project.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "950fe859eb1986bb94b235eee96f5fa48dd8f015",
+  "state": "Draft",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "feature": "票規格與收件:寫入範圍",
+  "decision_refs": [
+    "D-H43",
+    "D-H38"
+  ],
+  "verify_strings": [
+    {
+      "path": "scripts/apply.sh",
+      "contains": "提示清單外的改動"
+    },
+    {
+      "path": "scripts/ticket.py",
+      "contains": "info_homes"
+    },
+    {
+      "path": "tickets/SCHEMA.md",
+      "contains": "info_map"
+    }
+  ],
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "outline": "D-H43 ① 的 A 半。碼位置(讀碼,未實測):ticket.py write_scope(約 1160 行)是 apply / gate / land / review 四處共用的唯一判準,拿掉 out_of_scope 那道 fence 一次改四處;REQUIRED / NOT_EMPTY(約 48–54 行)與 create 的必填、602 行 in_scope→allowed 的補值;apply.sh 約 612–630 行擋 / 列 extra、721–736 行寫 extra_paths;review.sh 約 270–285 行白名單外段。guard-main.sh FACE 有 out_of_scope(票面欄位清單,加 info_homes)。介面已釘:EVIDENCE 段名「## 提示清單外的改動」、行格式、result 新鍵 extra_reasons、config 鍵 info_map、票欄 info_homes、輸出字「警告」「沒交代理由」。needs_verifier=true:拿掉一道擋是放寬,要獨立案例證 protected_paths 照擋、四個入口一致;interface_fixed=true(上列已釘)。撞檔:#96 #100 改 apply.sh,#98 改 review.sh / land.sh / SCHEMA,#95 改 SCHEMA;語意依賴 #97(寫在 depends_on)。建議順序:#97 → 本票 → 同步票。T 側另需:ARCHITECTURE 新節「什麼資訊住哪個檔」(草稿在 Fable 報告 §2.1)、board/config.json info_map、T 的 DISPATCH-TEMPLATE。",
+  "test_plan": "單元 + 整合層,全在 tests/,拋棄式 AC_ROOT + AC_TICKETS_DIR。A1/A2/A6:tests/test_ticket.py 的 create / set / lint / verify 夾具。A3:apply / gate / land 三支各一組同一份夾具(out_of_scope 命中 → 放行;protected_paths 命中 → 照擋)。A4:造 EVIDENCE(a 有理由、b 空理由、c 沒行)跑 apply.sh,讀 stdout/stderr 與 result-round1.json。A5:review.sh 產派工文不起 reviewer(既有夾具的做法)。A7:grep 規矩檔舊說法。A8:test_sync_to_project 的拋棄式專案。變異 m1–m6 照驗收各條;worker 只跑相關測試類,不跑全套。A 側指令一律帶 env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR。"
+}

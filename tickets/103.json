@@ -1,0 +1,49 @@
+{
+  "id": "103",
+  "subject": "sync-to-project.sh 每次同步把 A 的 HEAD 寫進專案的 scripts/control/.synced-from(一行 40 位 sha),專案端 verify 案例改讀它就不必每次同步逐支改釘",
+  "created": "2026-10-09T12:54:28+08:00",
+  "objective": "跑 sh scripts/sync-to-project.sh <專案根> 之後,<專案根>/scripts/control/.synced-from 恰一行 = 這一次同步來源 agent-control 的 git rev-parse HEAD(40 位小寫 hex,結尾換行);--dry-run 不寫;同步的控制腳本在 A 工作樹裡有未提交改動時不寫(記號會說謊),印一行原因、rc 不變。記號不進 .sync-manifest,manifest 的退場邏輯碰不到它。",
+  "acceptance": [
+    "S1【tests/test_sync_to_project.py,拋棄式 A 與專案目錄】同步後專案 scripts/control/.synced-from 內容 == A 的 git rev-parse HEAD + 換行;再 commit 一次 A、再同步 → 記號跟著換成新 HEAD。",
+    "S2【同上】--dry-run → 記號檔不建立、不改(先放一個舊值,dry-run 後逐位元組相同)。",
+    "S3【同上】A 工作樹裡某一支被同步的控制腳本有未提交改動 → 記號不寫(舊值保留),輸出一行含「.synced-from」與「未提交」的說明;同步本身照舊完成、rc 與今天相同。",
+    "S4【同上】.synced-from 不出現在 scripts/control/.sync-manifest;專案端先有一個 manifest 之外的檔時照舊不被刪(既有斷言照綠)。"
+  ],
+  "in_scope": [
+    "scripts/sync-to-project.sh",
+    "tests/test_sync_to_project.py"
+  ],
+  "out_of_scope": [
+    "專案端讀記號的案例(專案 T #747 做;跨 repo,不寫 depends_on)"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/sync-to-project.sh",
+    "tests/test_sync_to_project.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "950fe859eb1986bb94b235eee96f5fa48dd8f015",
+  "state": "Ready",
+  "state_version": 4,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "verify_strings": [
+    {
+      "path": "scripts/sync-to-project.sh",
+      "contains": ".synced-from"
+    }
+  ],
+  "test_plan": "層次:shell 整合(tests/test_sync_to_project.py 既有拋棄式 A / 專案夾具,git init 在 tempdir)。期望值:記號內容由案例自己 git rev-parse HEAD 取,不從被測腳本算。只跑:python3 -m unittest tests.test_sync_to_project;收尾照 A 的閘門。變異:m1 不寫記號 → S1 紅;m2 dry-run 也寫 → S2 紅;m3 不查未提交 → S3 紅;m4 記號寫進 manifest → S4 紅。",
+  "outline": "來源:專案 T 的 verify-audit-20261009 A6 / C1(control_sync 五支案例寫死 A sha,每次同步改釘,撞過三次)。T #747 先放記號檔(值 fa74b59,開題者實測 16 支 == A@fa74b59)並讓案例讀它;本票是另一半:同步自己維護記號。needs_verifier=false:單一腳本的整合夾具 + 四變異即驗收。估 25–35 分。",
+  "needs_verifier": false,
+  "priority": "P3"
+}

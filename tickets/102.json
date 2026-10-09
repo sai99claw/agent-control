@@ -1,0 +1,68 @@
+{
+  "id": "102",
+  "subject": "verify-case.py lint 新增 F7–F12:介面名單與底線名字、釘整數或 sha、時間取兩次與模組層 today(擋,先以警告+白名單上線);固定睡後正向斷言、等待與斷言脫鉤、切字串(只印)",
+  "created": "2026-10-09T12:32:32+08:00",
+  "objective": "依 T 的 Fable 稽核(tabby_pool_ctl/reports/verify-audit-20261009 的 lint 規則段):verify/ 回歸層的脆弱案例七型裡,耦合私有實作、精確快照、時間取兩次可以在 lint 層擋住,時序三型先印。做完的樣子:verify-case.py lint 多 F7–F12;F7/F8/F9 是可擋規則、F10–F12 只印;哪幾條真的擋、哪些既有檔豁免,由專案的 board/config.json verify_lint 決定(介面名單由專案提供:T 的 T-a 票會在 test_browsers.py 等檔宣告 VERIFY_API)。上線時預設全部只印 + 白名單機制,專案產生白名單後再自己打開擋,不讓既有違規一上就擋住所有票。F1–F6 不動。",
+  "acceptance": [
+    "B1【設定與擋 / 印】lint 讀 board/config.json 的 verify_lint 三個新鍵:api({模組名: 相對專案根的檔路徑})、block(要擋的規則,只收 F7 / F8 / F9;沒設 = [] = 全部只印)、allow(白名單,每筆 \"<案例檔相對路徑>:<規則>\")。F7–F12 命中一律印 `verify-case lint: <檔>:<行> F<n> …`;只有規則在 block 且「檔:規則」不在 allow 才算擋(rc=1);在 allow 的那行尾巴印「(白名單,不擋)」;block 寫了 F10–F12 → 印一行「F10–F12 只印不擋,block 忽略」。F1–F6 行為與輸出不變:tests/test_verify_case.py 既有 lint 案例一字不改全綠。夾具:同一份 F8 違規檔 × 三種 config(沒設 / block=[F8] / block=[F8] 且 allow 該檔:F8)→ rc 0 / 1 / 0,三次輸出都含那行 F8。變異 m1:忽略 allow → 第三種紅。",
+    "B2【F7 介面名單與底線名字】(i) `from <M> import <X>` 或 `<M 或其別名>.<X>`(例 import test_browsers as tb),M 在 verify_lint.api、X 不在那支檔頂層 VERIFY_API(lint 用 ast 讀字面 tuple / list of str,不 import)→ 命中;(ii) 案例 class 繼承自 M 的類別時,`self.<X>(…)` 的 X 不是案例檔自己定義的、不是 unittest.TestCase 的屬性、也不在 VERIFY_API → 命中;(iii) 底線名字不看名單一律命中:`from <任何模組> import _x`、`<任何>._x` 屬性存取(單底線開頭、非 dunder),除非 _x 是案例檔自己定義的(def、class 屬性、self._x = 賦值)。api 裡的檔沒宣告 VERIFY_API 或檔不在 → 對那個模組 (i)(ii) 不查,印一行「F7 <M> 沒宣告 VERIFY_API,名單檢查略過」,(iii) 照查。夾具:假專案 demo/test_browsers.py 宣告 VERIFY_API=(\"http\", \"BrowserCase\");案例 tb.http(過)、tb.step(中 i)、繼承 tb.BrowserCase 的 class 裡 self.ready()(中 ii)、self.assertEqual(過)、driver._call(中 iii)、self._mine 且案例自己 def _mine(過)。期望行號夾具寫死。變異 m2:不解別名 → tb.step 不中 → 紅;m3:(iii) 不排除案例自定義 → self._mine 中 → 紅。",
+    "B3【F8 釘整數或 sha,留 # pin: 逃生口】命中:assertEqual(len(…), <整數字面>)(參數對調也算)、`<…>.count(…) == <整數字面>`、assertEqual(<…>.count(…), <整數字面>);字串字面整串符合 [0-9a-f]{7,40} 且同一函式(或模組層)出現 git show / sha256 / hexdigest 任一字。該語句的首行或末行有 `# pin:<理由>` 且理由去空白非空 → 不命中;`# pin:` 後空著 → 照命中並註明「pin 沒寫理由」。夾具:assertEqual(len(x), 3)(中)、assertEqual(3, len(x))(中)、s.count(\"a\") == 2(中)、sha 字面配 hexdigest(中)、同一行加 `# pin: 釘 base 原文`(過)、`# pin:`(中)、assertGreaterEqual(len(x), 3)(過,下限不算釘)。變異 m4:拿掉 pin 逃生口 → 紅。",
+    "B4【F9 時間取兩次與模組層 today】(i) 同一個函式內 date.today() / datetime.now()(含 datetime.datetime.now、utcnow)/ time.strftime( / time.localtime( / iso( 叫兩次以上,且至少一次在 assert 語句(assert … 或 self.assert*(…))裡 → 命中;(ii) 模組層或 class 本體(不在任何 def 裡)叫上述任一 → 命中。夾具:模組層 TODAY = date.today()(中 ii)、class 本體 DAY = time.strftime(\"%Y-%m-%d\")(中 ii)、setUp 取一次再比(過)、同函式種資料取一次又在 assertEqual 裡再取(中 i)。變異 m5:(ii) 只看 module body 不看 class body → class 層夾具紅。",
+    "B5【F10–F12 只印】不論 block 怎麼設都不擋(rc=0):F10 time.sleep( 之後 5 行內有正向 assert(不是 assertNot* / assertFalse / assertIsNone,也沒引用名字含 before 的變數);F11 wait_until(<字串字面>) 之後同一區塊的下一個 assert 裡,長度 ≥3 的字串字面沒有一個出現在那段字面裡(對照 T 的 verify/wait_signals/test_ticket_643.py L125–226 掃描器,行為以本條為準);F12 對名字 src、*_CODE、*_SRC 或 read(…) / .read_text() 的結果呼叫 .index(。各一份夾具,命中行印出、rc=0;負向形狀各一份不印。變異 m6:F10 改成擋 → 紅。",
+    "B6【白名單產生】verify-case.py lint --baseline <檔…> 對給的檔跑 F7–F12,stdout 印 JSON 陣列 [\"<路徑>:<規則>\", …](排序、去重),可直接貼進 verify_lint.allow;rc 恆 0,檔讀不到 rc=2。夾具:兩檔各中 F7、F8(其中一檔中兩次 F8)→ 輸出等於夾具寫死的陣列。變異 m7:不去重 → 紅。",
+    "B7【文件】docs/DESIGN-VERIFY-CASES.md §四 lint 表加 F7–F12(擋 / 印、逃生口、設定鍵),專案自備那張表加 VERIFY_API 與 verify_lint.api / block / allow;verify-case.py 檔頭「lint 的六條」改成十二條;verify-case.py lint --help(或 usage)提到 --baseline。驗法:測試 grep DESIGN-VERIFY-CASES.md 含 F7 到 F12 六個編號與 verify_lint.allow。"
+  ],
+  "in_scope": [
+    "scripts/verify-case.py",
+    "tests/test_verify_case.py",
+    "docs/DESIGN-VERIFY-CASES.md"
+  ],
+  "out_of_scope": [
+    "F1–F6 的判準與輸出",
+    "T 的任何檔:VERIFY_API 宣告走 T 的 T-a 票,T board/config.json 的 verify_lint 設定與白名單走 T 票,scripts/control/verify-case.py 由同步票帶",
+    "修既有 verify 案例(T 的 #638 / T-a–T-e)"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/verify-case.py",
+    "tests/test_verify_case.py",
+    "docs/DESIGN-VERIFY-CASES.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "950fe859eb1986bb94b235eee96f5fa48dd8f015",
+  "state": "Ready",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "feature": "驗證者案例格式 lint",
+  "decision_refs": [
+    "D-H43"
+  ],
+  "verify_strings": [
+    {
+      "path": "scripts/verify-case.py",
+      "contains": "VERIFY_API"
+    },
+    {
+      "path": "scripts/verify-case.py",
+      "contains": "# pin:"
+    },
+    {
+      "path": "docs/DESIGN-VERIFY-CASES.md",
+      "contains": "F12"
+    }
+  ],
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "outline": "照 verify-audit-20261009 的 lint 段,依主線指示改兩處:F9 的模組層 today 也算可擋(報告原寫印);逃生口只給 F8 的 # pin:。碼位置(讀碼):verify-case.py lint_one(約 683 行)、cmd_lint(約 754)、forbidden_patterns 讀 event.config(root)['verify_lint'](約 630),新鍵照同一條路讀。閘門只 lint 該票 verify.files(gate.sh 約 908 行;T 是 land-ticket.sh 約 247 行),所以既有違規只在「票去碰舊案例」時才會撞到。T 既有 verify/ 違規估計(讀報告估,未實跑):F7 底線名字約 17 檔(574/578/584/585/586/613/719 的 _call/_wait_for、658/659 _monthly_detail、662/663/664 _model_arithmetic、698 _cache、625、573、645),VERIFY_API 宣告後名單外另估 10–20 檔(32 支 BrowserCase 案例,視 T-a 名單);F8 約 20 檔 / 30–40 處(A1–A11、S5;#638 會先修掉約 9 處);F9 約 8–12 檔(B1–B3、B2 模組層、551、696);F10 約 10 檔 / 14 處;F11 約 18 檔 / 27 處;F12 約 8 檔。所以上線預設全只印,T 跑 --baseline 產白名單後再設 block。needs_verifier=true:lint 判準邊界多(別名、繼承、多行語句),獨立夾具值得;interface_fixed=true(輸出前綴、config 鍵、--baseline 形狀已釘)。撞檔:#100 也列 verify-case.py(不同段),無語意依賴。T-a 是跨 repo,不寫 depends_on。 後續項目(10-09 主線裁,不改本票驗收):verify-audit F4 —— T 的 verify/wait_signals/test_ticket_643.py 全 repo 掃描「載入後只等 #/home 沒接 ready()」(L125–226、L252–268)其實是 lint,紅在案例 e 段;之後搬進 verify-case.py lint(即 F11 的規則),案例只留一條「規則有生效」的自測。",
+  "test_plan": "單元層 tests/test_verify_case.py:每條規則一個 class,拋棄式專案根(board/config.json + demo/test_browsers.py 假檔 + verify/x/test_ticket_9.py 夾具)跑 verify-case.py lint,斷言 rc 與指名行號的輸出。B1 三種 config;B2 六種寫法;B3 七種;B4 四種;B5 正負各一;B6 --baseline 陣列。變異 m1–m7 照驗收。只跑本檔新類 + 既有 lint 類,不跑全套。A 側指令一律帶 env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR。"
+}
