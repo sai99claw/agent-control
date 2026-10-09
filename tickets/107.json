@@ -1,0 +1,44 @@
+{
+  "id": "107",
+  "subject": "auto-fix test_defect 路徑漏套 worker 的 patch:驗證者副本改從「分支 + 本輪 worker patch」建,apply 兩份依序套,套完守衛 worker patch 的每個檔都在分支上(專案 #751 事故)",
+  "created": "2026-10-09T23:59:42+08:00",
+  "objective": "worker 交了 patch-round<r>.diff 又寫 OBJECTION: test_defect 時,auto-fix 派的驗證者在「分支 + 這份 worker patch」的副本上修案例,收件時 apply.sh 依序套 worker patch 與 patch-verify,分支上兩份都在;副本建不出來就停、不起驗證者;apply 之後若 worker patch 的任一 +++ 目標不在分支相對 base_sha 的改動裡,停在閘門之前並點名那個檔。worker 沒交 patch 的 test_defect 照現行(只套驗證者那份)。",
+  "acceptance": [
+    "W1【兩份都進分支】tests/test_auto_fix.py 新替身 worker:第 2 輪在 work/ 新增一支產品檔(例 src/worker_change.py)、照規矩 diff -ruN base work 出 patch-round2.diff,並寫 OBJECTION: test_defect;替身驗證者只改 tests/test_thing.py 出 patch-verify.diff。沿用 test_a_test_defect_dispatches_a_new_verifier_and_resumes_the_gate 的前置(apply RED_CASE、gate --no-auto-fix 紅)→ auto-fix 跑完後 git ls-tree -r t1 同時有 src/worker_change.py 與修過的 tests/test_thing.py(內容 assertEqual(1, 1))。期望值來自替身寫的檔,不從 auto-fix 算。現況(開題者 10-09 實測):rc=0 但分支沒有 src/worker_change.py。變異 m1:dispatch_verifier 收件後照舊只把 PATCH_OUT 換成 patch-verify 單獨套 → 本條紅。",
+    "W2【副本不靠 worker 留下的 base/】同 W1 但替身 worker 交件後自己 rm -rf work base(專案 #751 的 worker 真的這樣收副本)→ 驗證者起跑時副本根下 base/ 與 work/ 都在,且 base/src/worker_change.py 存在(替身驗證者把 ls 結果寫進 AC_TEST_LOG,案例讀它);auto-fix 結果與 W1 相同。現況(實測):cp 喊 No such file 但照跑,驗證者拿到空目錄,apply rc=3。變異 m2:副本照舊 cp -R $FIX/base → 本條紅。",
+    "W3【副本建不出來就停】worker patch 套不上分支(替身交一份 --- 側內容與分支不符的 patch)→ 不起驗證者(事件流沒有 role=verifier 的 agent.start)、票 Blocked、收件匣一頁點名是副本建不出來、auto-fix rc=5;不再有『cp 失敗照跑』。",
+    "W4【套完守衛】apply 成功後、閘門之前,比對 worker patch 的每個 +++ 目標(刪檔看 --- 側)是否出現在 git diff --name-only <base_sha>..t<n>;缺任何一個 → 印一行含『worker 的 patch 沒全進分支』與缺的檔名、不跑閘門、attempt 記 apply-failed、rc=5。守衛做成可單獨餵輸入的切法(實作者定:函式或子命令),案例餵一個缺檔的分支斷言訊息與 rc;另把 m1 變異實跑一次,記進 EVIDENCE:m1 下守衛先擋、閘門沒跑。",
+    "W5【派工文說實話】test_defect 那段附加文字(現在印『副本是**分支上**那一版(前幾輪的 patch 都在)』)改成說明副本 = 分支 + 本輪 worker 的 patch、patch-verify 要對這份副本的 base/ 出(增量);案例讀 reports/t1/<run>/dispatch-verifier-round2.md 斷言含『本輪 worker 的 patch』。",
+    "W6【原路不變】worker 沒交 patch 的 test_defect(既有 WORKER_REPORTS_TEST_DEFECT、WORKER_TEST_DEFECT_THEN_FIXES_PRODUCT、WORKER_TEST_DEFECT_VERIFIER_RESULT 三組)照只套驗證者那份;tests/test_auto_fix.py 既有案例斷言一字不改全綠。"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "tests/test_auto_fix.py",
+    "docs/WORKFLOW.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "d737828f491ba1e25d8997d4a607e0652535a48c",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "verify_strings": [
+    "worker 的 patch 沒全進分支",
+    "本輪 worker 的 patch"
+  ],
+  "needs_verifier": false,
+  "test_plan": "層次:單元(tests/test_auto_fix.py,沿用 AutoFixBase 的替身 worker / 驗證者)。W1–W5 各一條新案例,期望值來自替身寫進副本的檔與 AC_TEST_LOG,不從 auto-fix 算。開題者 10-09 實測:既有 ThingsThatStopIt.test_a_test_defect_dispatches_a_new_verifier_and_resumes_the_gate 單跑 4.5 秒綠;用暫存探針(AutoFixBase 子類、替身 worker 交 src/worker_change.py + test_defect)在現行 main d737828 上跑:W1 情境 rc=0 而 t1 沒有 src/worker_change.py;W2 情境 cp 報 fix-t1/round2/base No such file、驗證者副本空、apply rc=3 —— 兩條都重現了。m1/m2 是把修好的那一段改回現行寫法,現行即紅(實測)。只跑 tests/test_auto_fix.py(前景、給 timeout);A 側指令一律 env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR。不跑全套。",
+  "outline": "專案 T #751(2026-10-09)事故,opus 診斷:dispatch_verifier(現行約 1146–1220 行)把驗證者副本 cp 自 $FIX/base(分支、不含本輪 worker 改動),收件後 PATCH_OUT 改指 patch-verify,round_once 約 1844 行 apply 只拿到驗證者那份 → 分支只剩驗證者 patch,閘門剛好綠就會把殘缺的票落地。#751 另撞第二層:worker 自己 rm -rf 了 work/base,cp 失敗沒檢查,驗證者拿到空目錄。修法方向:副本 = git archive 分支(不存在退 base_sha)+ patch -p1 本輪 worker patch,base/ 與 work/ 都從它來;記住 worker patch 路徑(新變數,不再覆寫成 patch-verify),apply.sh 本來就收 <patch> <patch-verify> 兩份並依序套。專案端稽核(10/09):自 09-23 這條路進 T 以來走過 3 次(T #659 第 2 輪、#676 第 1 輪、#751 第 1 輪);#659 主線手動合成 diff 落地、#676 第 2 輪 worker 重交整份,main 都不缺;#751 未落地、主線重做分支。資訊放哪裡:副本怎麼建、守衛 → scripts/auto-fix.sh dispatch_verifier 與 apply 呼叫後;流程描述 → docs/WORKFLOW.md 驗證者 / test_defect 那一段。與 #104(反駁分級,同改 auto-fix.sh 收件段)可能撞行,誰後落誰 rebase。不併專案 T #715 (a):那條是 T 的 test-for.sh 不寫 status.json、auto-fix 讀到 apply 那份 → 『解析不出紅榜』,源頭在 T 不在這支(#751 也撞了一次,記在 T #715)。落地後 T 由同步票帶進(T 的 scripts/control/auto-fix.sh 同病,約 757–758、794、1164–1170 行)。needs_verifier=false:驗證者只會重演同一組替身夾具的同一契約。"
+}
