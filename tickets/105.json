@@ -1,0 +1,61 @@
+{
+  "id": "105",
+  "subject": "秒退自動重派一次:worker / 覆核者在門檻秒數內(預設 60)rc≠0 而且什麼都沒交,auto-fix / review.sh 自己再派一次同一份派工文;第二次才照現行停下(專案 flow-efficiency-20261009 §1-2)",
+  "created": "2026-10-09T23:29:55+08:00",
+  "objective": "專案端 10-09 #459:worker 6 秒空回(主線手動重派);覆核者 7 秒 rc=1、log 空 → review.missing → land 因沒有 review 拒收,佇列空轉 115 分。這類是瞬時失敗(連線、啟動),同一份派工文再派一次就過。做完的樣子:worker 或覆核者在門檻秒數內以非 0 結束、且沒有任何產出時,腳本記一筆 agent.retry 事件後立刻重派一次(同一輪、同一份派工文、新的子行程);重派成功就照常往下走,第二次仍秒退才走今天的停下路徑。逾時(rc=124)、有產出、超過門檻、rc=0 一律不重派。",
+  "acceptance": [
+    "F1【worker 秒退重派】tests/test_auto_fix.py 替身 worker 第一次 rc=1 立即結束、不寫 patch 也不寫 EVIDENCE,第二次正常交件 → 事件流恰一筆 agent.retry(kv:role=worker、round=1、rc=1、elapsed=<整數秒>、attempt=2);接著與「一次就交件」那一趟相同的 apply → 閘門序;票的 cost[] 兩列 worker(第一列 outcome=error、第二列照常);輪數不加一(round 仍 1)。",
+    "F2【第二次仍秒退 → 照現行】替身兩次都 rc=1 秒退 → 恰一筆 agent.retry,之後的事件、收件匣頁、票 state、auto-fix rc 與今天「worker 沒交出 patch」那條路相同(以既有案例的斷言為準)。",
+    "F3【不該重派的五種】各一條案例、斷言沒有 agent.retry 且行為與今天相同:(a) rc=124 逾時;(b) rc=1 但寫了 EVIDENCE(內容任意);(c) rc=1 但交了 patch;(d) rc=1 但結束時已過門檻(替身 sleep 超過把門檻設成 1 秒的 config);(e) rc=0 沒產出(那是「沒交件」,不是瞬時失敗)。",
+    "F4【覆核者秒退重派】tests/test_review.py:替身覆核者第一次 rc=1 秒退、沒寫 REVIEW.md(或 REVIEW.md 沒有 result 塊)、第二次交 pass → 恰一筆 agent.retry(role=reviewer)、之後 review.pass 與今天相同、cost 兩列 reviewer(第一列 outcome=missing);兩次都秒退 → 恰一筆 agent.retry、之後 review.missing 與今天相同(rc 3)。",
+    "F5【門檻可設】board/config.json 新鍵 retry.fast_fail_seconds(整數,預設 60;0 = 關閉重派);缺鍵 = 60。案例:設 0 時 F1 的替身只派一次、沒有 agent.retry。tickets/SCHEMA.md 或 docs/WORKFLOW.md(現在講 board/config.json 鍵的那一處)登記這個鍵。",
+    "F6【事件登記】scripts/event.py KINDS 加 agent.retry 與一行註解;tests/test_event.py 既有斷言照綠(若它比對 KINDS 全表,照新表改,並在 EVIDENCE 說明)。",
+    "F7【變異自證】m1 拿掉「沒有產出」條件 → F3(b)(c) 紅;m2 門檻比較反向 → F3(d) 紅;m3 重派不限一次 → F2 紅(替身被叫第三次)。"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [
+    {
+      "id": "104",
+      "condition": "落地(同改 auto-fix.sh 收件段與 review.sh;先落反駁分級)"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/review.sh",
+    "scripts/event.py",
+    "tests/test_auto_fix.py",
+    "tests/test_review.py",
+    "tests/test_event.py",
+    "docs/WORKFLOW.md",
+    "tickets/SCHEMA.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "ba84c88da750b0e03b087b65f2f3e3d90d990045",
+  "state": "Ready",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "test_plan": "層次:單元(tests/test_auto_fix.py、test_review.py 的替身,沿用 control_harness.py)。期望值以「一次就交件 / 今天的停下路徑」既有案例為對照。開題者 10-09 讀碼:auto-fix.sh 的 worker 由一段 python 包 timeout 起(約 976–990 行),逾時 rc=124 另有 attempt_failed timeout 路徑(約 1745 行);review.sh 沒交件 → review.missing rc 3(約 444–450 行)。重派判準只用 rc、牆鐘、產出檔是否存在,不讀 log 內容。只跑:tests/test_auto_fix.py、test_review.py、test_event.py(逐支前景、各給 timeout)。A 側指令一律 env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR。不跑全套。",
+  "outline": "flow-efficiency-20261009 §1-2;D-H46 ① 的同一件事的另一半(主線指示「同票或另票」,拆開:與反駁分級是兩條獨立的狀態轉移,合在一張票驗收太大)。資訊放哪裡:門檻 → board/config.json retry.fast_fail_seconds;事件 → event.py KINDS 的 agent.retry;重派邏輯在 auto-fix.sh 起 worker 那段與 review.sh 起覆核者那段。驗證者那一路(auto-fix 起的驗證者)不在本票,先看 worker / 覆核者兩路一週的 agent.retry 次數再議。撞檔:#104(反駁分級)同改 auto-fix.sh / review.sh,本票排在它之後、rebase。needs_verifier=false:重派條件是五個布林的組合,案例就是 F1–F4 的替身夾具,驗證者只會重演同一契約。估 40–60 分。",
+  "needs_verifier": false,
+  "verify_strings": [
+    {
+      "path": "scripts/event.py",
+      "contains": "agent.retry"
+    },
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "fast_fail_seconds"
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "id": "106",
+  "subject": "開題實跑:票多一格 plan_ran {sha, cmd, rc, at},由 ticket.py plan <n> --run '<指令>' 在主線頭上真的跑過才寫;實作票轉 Ready 沒有它、或 sha 不是主線現在的頭就擋;lint 一併查;開題者卡寫明(專案 D-H46 ③)",
+  "created": "2026-10-09T23:30:38+08:00",
+  "objective": "專案端 10-09 的 6 次反駁有 5 次是開題者寫了沒跑(test_plan 在基底 errors=7、改前變異實測綠、grep 一次就看得到的撞案例、目標寫不到、做不到的限制)。驗證者有「驗紅才算」,開題者沒有同一條。做完的樣子:開題者用 python3 scripts/ticket.py plan <n> --run '<票面測試指令或改前會紅的變異>' 在 repo 根、主線頭上真的跑一次,工具自己記下 sha / 指令 / rc / 時間;role=worker 的票 set state Ready(與 create --state Ready)時沒有 plan_ran、或 plan_ran.sha 不等於主線現在的頭就拒收並印怎麼補;ticket.py lint 印同一條;開題者卡寫明這一步與「grep 要改的守衛 / 測試名,把會撞的既有案例列進票」。",
+  "acceptance": [
+    "P1【ticket.py plan】拋棄式 repo(tests 既有做法:git init、board/config.json main_branch=main、tickets/)上,工作樹 HEAD == main 時 ticket.py plan 7 --run 'exit 3' → 工具 rc 0、印那個指令的 rc 3 與輸出末 20 行;票多一格 plan_ran = {sha: git rev-parse main, cmd: \"exit 3\", rc: 3, at: ISO 時間};再跑一次 --run 'true' → plan_ran 被覆寫成 rc 0(只留最後一次)。指令在 repo 根以 sh -c 執行、繼承環境;rc 不論多少都照記(改前會紅的變異本來就該非 0)。",
+    "P2【不在主線頭上不記】HEAD 不是 main 的頭(切到別的分支或 detached 在舊 commit)→ plan rc 2、不執行指令、不寫票,印一行「不在 main 的頭上」加兩顆 sha。工作樹有未提交改動 → 照記,但 plan_ran 多一格 dirty: true,且 P3 的 Ready 關把 dirty 當沒跑(變異實驗要在拋棄式副本做,不是主線工作樹)。",
+    "P3【Ready 關】role=worker 的票:(a) 沒有 plan_ran → set <n> state Ready rc 非 0、state 不變,訊息含 ticket.py plan <n> --run;(b) plan_ran.sha ≠ main 現在的頭(主線之後又進了 commit)→ 拒收,訊息印兩顆 sha 與 main 多了幾顆 commit;(c) plan_ran.dirty 為 true → 拒收;(d) 齊全且 sha == main 頭 → 照今天的其餘檢查(needs_verifier 等)。create --state Ready 對 role=worker 同一關。role ≠ worker(整理票、flaky 票、opener)不查。已是 Ready 的舊票不追溯(只管轉入 Ready 那一刻)。",
+    "P4【lint】ticket.py lint <n> 對 P3 的 (a)(b)(c) 各印一行(與 needs_verifier / verify_strings 的行同格式),全過仍印 ok;lint 唯讀、不動 state_version(既有契約)。",
+    "P5【SCHEMA 與開題者文件】tickets/SCHEMA.md 加 plan_ran 一列(形狀、誰寫 —— 只有 ticket.py plan、Ready 關的三條、dirty 的意思)。memory/role/opener.md 加兩件事:開題實跑(ticket.py plan,沒跑 Ready 擋)、grep 要改的守衛 / 測試名把會撞的既有案例列進票(現有 D-033 那句可改寫合併);卡的字數不得因本票超過它的上限(閘門的卡上限檢查照綠)。docs/reference/role-procedures.md「開題者角色操作細節」加 plan 的指令與例子;templates/dispatch-opener.md 若列交票前步驟,同步加一步。",
+    "P6【變異自證】m1 Ready 關不比 sha → P3(b) 紅;m2 plan 不檢查 HEAD == main → P2 紅;m3 plan 不記非 0 的 rc(只記成功)→ P1 第一段紅。",
+    "P7【原路不變】tests/test_ticket.py、test_ticket_65.py、test_routing_cards.py、test_memory_layer_policy.py、test_templates.py 既有斷言照綠;既有測試裡把實作票轉 Ready 的夾具,若因新關而紅,改夾具先跑 plan(EVIDENCE 列出改了哪幾處、為什麼不是放寬關卡)。"
+  ],
+  "in_scope": [],
+  "out_of_scope": [],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/ticket.py",
+    "tickets/SCHEMA.md",
+    "memory/role/opener.md",
+    "docs/reference/role-procedures.md",
+    "templates/dispatch-opener.md",
+    "tests/test_ticket.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "ba84c88da750b0e03b087b65f2f3e3d90d990045",
+  "state": "Ready",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "test_plan": "層次:單元(tests/test_ticket.py 新 class,拋棄式 git repo)。期望值來自票面(sha 用 git rev-parse 現取,不從 ticket.py 算)。開題者 10-09 讀碼:Ready 關現在在 ticket.py needs_verifier_problem(約 203 行)與 set / create 兩處呼叫(約 626、795、1807 行);main_branch() 讀 board/config.json(約 84 行);opener.md 現 4253 字元,卡上限由 memory 層政策檢查(tests/test_memory_layer_policy.py)。只跑:tests/test_ticket.py、test_ticket_65.py、test_routing_cards.py、test_memory_layer_policy.py、test_templates.py(逐支前景、各給 timeout)。A 側指令一律 env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR。不跑全套。",
+  "outline": "專案 D-H46 ③(開題實跑,沒跑過擋 Ready)與 flow-efficiency-20261009 §4。資訊放哪裡:欄位 → tickets/SCHEMA.md;指令 → scripts/ticket.py plan;開題者該做什麼 → memory/role/opener.md(短)與 docs/reference/role-procedures.md(細節)。設計取捨:plan_ran 由工具執行指令後寫,不開放 set 手寫 —— 手寫等於沒跑;sha 要等於主線頭(裁示原話「沒跑過擋 Ready」+ 主線指示「sha≠base 擋」),代價是主線前進後要重跑一次。報告另列的 touches_existing 欄位不做:撞案例寫進驗收與 outline 已足,不再加第二個形狀(D-018)。#96 --dry-run 無依賴。撞檔:#104 同改 ticket.py / SCHEMA,後落者 rebase。下游專案要等同步(T 的同步票)才生效;T 的 ticket.py 現在連 lint 都還沒有。needs_verifier=true:Ready 關的邊界(dirty、非 worker、舊票不追溯、create 直達)值得獨立案例;interface_fixed=true(指令形狀、欄位、拒收條件已釘)。估 40–60 分。",
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "verify_strings": [
+    {
+      "path": "scripts/ticket.py",
+      "contains": "plan_ran"
+    },
+    {
+      "path": "tickets/SCHEMA.md",
+      "contains": "plan_ran"
+    }
+  ]
+}

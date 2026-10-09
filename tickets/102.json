@@ -34,7 +34,7 @@
   "attempt": 0,
   "base_sha": "950fe859eb1986bb94b235eee96f5fa48dd8f015",
   "state": "Ready",
-  "state_version": 3,
+  "state_version": 4,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -63,6 +63,6 @@
   ],
   "needs_verifier": true,
   "interface_fixed": true,
-  "outline": "照 verify-audit-20261009 的 lint 段,依主線指示改兩處:F9 的模組層 today 也算可擋(報告原寫印);逃生口只給 F8 的 # pin:。碼位置(讀碼):verify-case.py lint_one(約 683 行)、cmd_lint(約 754)、forbidden_patterns 讀 event.config(root)['verify_lint'](約 630),新鍵照同一條路讀。閘門只 lint 該票 verify.files(gate.sh 約 908 行;T 是 land-ticket.sh 約 247 行),所以既有違規只在「票去碰舊案例」時才會撞到。T 既有 verify/ 違規估計(讀報告估,未實跑):F7 底線名字約 17 檔(574/578/584/585/586/613/719 的 _call/_wait_for、658/659 _monthly_detail、662/663/664 _model_arithmetic、698 _cache、625、573、645),VERIFY_API 宣告後名單外另估 10–20 檔(32 支 BrowserCase 案例,視 T-a 名單);F8 約 20 檔 / 30–40 處(A1–A11、S5;#638 會先修掉約 9 處);F9 約 8–12 檔(B1–B3、B2 模組層、551、696);F10 約 10 檔 / 14 處;F11 約 18 檔 / 27 處;F12 約 8 檔。所以上線預設全只印,T 跑 --baseline 產白名單後再設 block。needs_verifier=true:lint 判準邊界多(別名、繼承、多行語句),獨立夾具值得;interface_fixed=true(輸出前綴、config 鍵、--baseline 形狀已釘)。撞檔:#100 也列 verify-case.py(不同段),無語意依賴。T-a 是跨 repo,不寫 depends_on。 後續項目(10-09 主線裁,不改本票驗收):verify-audit F4 —— T 的 verify/wait_signals/test_ticket_643.py 全 repo 掃描「載入後只等 #/home 沒接 ready()」(L125–226、L252–268)其實是 lint,紅在案例 e 段;之後搬進 verify-case.py lint(即 F11 的規則),案例只留一條「規則有生效」的自測。",
+  "outline": "照 verify-audit-20261009 的 lint 段,依主線指示改兩處:F9 的模組層 today 也算可擋(報告原寫印);逃生口只給 F8 的 # pin:。碼位置(讀碼):verify-case.py lint_one(約 683 行)、cmd_lint(約 754)、forbidden_patterns 讀 event.config(root)['verify_lint'](約 630),新鍵照同一條路讀。閘門只 lint 該票 verify.files(gate.sh 約 908 行;T 是 land-ticket.sh 約 247 行),所以既有違規只在「票去碰舊案例」時才會撞到。T 既有 verify/ 違規估計(讀報告估,未實跑):F7 底線名字約 17 檔(574/578/584/585/586/613/719 的 _call/_wait_for、658/659 _monthly_detail、662/663/664 _model_arithmetic、698 _cache、625、573、645),VERIFY_API 宣告後名單外另估 10–20 檔(32 支 BrowserCase 案例,視 T-a 名單);F8 約 20 檔 / 30–40 處(A1–A11、S5;#638 會先修掉約 9 處);F9 約 8–12 檔(B1–B3、B2 模組層、551、696);F10 約 10 檔 / 14 處;F11 約 18 檔 / 27 處;F12 約 8 檔。所以上線預設全只印,T 跑 --baseline 產白名單後再設 block。needs_verifier=true:lint 判準邊界多(別名、繼承、多行語句),獨立夾具值得;interface_fixed=true(輸出前綴、config 鍵、--baseline 形狀已釘)。撞檔:#100 也列 verify-case.py(不同段),無語意依賴。T-a 是跨 repo,不寫 depends_on。 後續項目(10-09 主線裁,不改本票驗收):verify-audit F4 —— T 的 verify/wait_signals/test_ticket_643.py 全 repo 掃描「載入後只等 #/home 沒接 ready()」(L125–226、L252–268)其實是 lint,紅在案例 e 段;之後搬進 verify-case.py lint(即 F11 的規則),案例只留一條「規則有生效」的自測。 【10-09 開題者查證(主線轉來 flow-efficiency-20261009 §3 的「加一條:案例不得執行期讀 tickets/*.json 決定受測集合」)】不加。前提不成立:#613 第一趟 e 段紅的是 store_fd/731 test_b1_case_and_assertion_counts_unchanged —— 它把 test_browsers 的 (案例數, 斷言數) 釘在 eba2689 的模組層常數 BASE_COUNTS = {…: (101, 863)},#613 加了一條案例就紅(land log 原文:{'test_browsers': {'base': (101, 863), 'now': (102, 872)}});它沒有讀票 JSON。T 的 verify/ 全部 grep 過,讀 tickets 的只有夾具自造的暫存票庫(654、704 等),沒有一支讀真票庫。所以那條規則今天命中 0、而對夾具有誤判風險。真形狀屬本票 F8(釘整數),但 B3 的三種語法(len(…) == 整數、.count(…) == 整數、sha 字面)抓不到「模組層整數常數組 + 迴圈比對」—— 列為 F8 的已知漏網,不在本票擴(要資料流);那支案例已由 #613 改掉。",
   "test_plan": "單元層 tests/test_verify_case.py:每條規則一個 class,拋棄式專案根(board/config.json + demo/test_browsers.py 假檔 + verify/x/test_ticket_9.py 夾具)跑 verify-case.py lint,斷言 rc 與指名行號的輸出。B1 三種 config;B2 六種寫法;B3 七種;B4 四種;B5 正負各一;B6 --baseline 陣列。變異 m1–m7 照驗收。只跑本檔新類 + 既有 lint 類,不跑全套。A 側指令一律帶 env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR。"
 }
