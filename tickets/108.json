@@ -1,0 +1,79 @@
+{
+  "id": "108",
+  "subject": "批次修復 ①:auto-fix.sh --batch <整合分支> <票號…> 派一輪批次 worker(紅榜 + 整批 diff + N 張票面,寫入範圍 = 各票 allowed_write_paths 聯集),patch 由 apply.sh --batch 疊上整合分支(刪斷言 / 加 skip 的「放寬測試」硬擋),fix 由 review.sh --batch 覆核;紀錄全在 reports/batch/<stamp>/、不碰票檔(專案 D-H51 ②)",
+  "created": "2026-10-10T23:45:57+08:00",
+  "objective": "land.sh 在 N≥2 張一批全套紅時能叫一句 sh scripts/auto-fix.sh --batch <land 分支> <id…> 派一輪批次修復:worker 在整合分支的副本上修紅榜(不猜哪張票弄紅,D-H51 ②);patch 以 apply.sh --batch 作為一個 commit 疊在整合分支頭上(各票分支與票檔都不動,覆核不過期);review.sh --batch 覆核那個 fix diff;rc 0 = fix 已 commit 且覆核 pass,呼叫端(land.sh,下一張票)接著重跑全套。單票路徑 auto-fix.sh <n> 一字不變。",
+  "acceptance": [
+    "A1 派工文:拋棄式 repo 裡 sh scripts/auto-fix.sh --batch land/X 1 2(env AC_BATCH_RUN_ID=<run>)寫出 reports/batch/<stamp>/dispatch-round1.md,內含 ① 票 1 與票 2 的 subject / objective / acceptance / allowed_write_paths 快照;② 紅榜逐條(case、file、excerpt;來源 = reports/t1/<AC_BATCH_RUN_ID>/status.json 的 failures[],取第一張票那份);③ git diff --stat main...land/X 的輸出與整批 diff 檔路徑;④ 寫入範圍聯集逐條;⑤ 一句含「不得放寬測試」與「OBJECTION: test_defect」的規則。缺任一項 → 紅",
+    "A2 apply.sh --batch land/X 1 2 <patch>:patch 成為 land/X 頭上恰一個新 commit(訊息含 batch fix round 1 與 #1 #2);t1-… 與 t2-… 的 sha 不變;1.json / 2.json 的 state_version 與 review 不變(全程不呼叫 ticket.py set)",
+    "A3 硬擋 = board/config.json protected_paths ∪(各票 out_of_scope 聯集 − 各票 allowed_write_paths 聯集):命中 rc=5、stderr 點名檔與哪一格;聯集外的檔不擋,列進 reports/batch/<stamp>/result-round<r>.json 的 extra_paths",
+    "A4 放寬測試硬擋:patch 在測試檔(board/config.json batch_fix.test_globs,預設 tests/**、verify/**、**/test_*.py)刪掉含 assert 的行、或新增含 skip / expectedFailure 的行 → apply rc=5,stderr 逐條「<檔>:<行> 放寬測試」;EVIDENCE 有 OBJECTION: test_defect <案例> 且該檔就是那條案例的檔 → 不擋、照既有 triage 走(開題者判)",
+    "A5 review.sh --batch land/X 1 2 --run-id <stamp>:reviewer 派工文 = fix commit 前後的 git diff + N 張票面;pass → reports/batch/<stamp>/review.json {verdict, sha=land/X 頭, by, at, note};fail → 不寫票、收件匣一頁 kind=decision 掛票 1、內文列 #2、rc≠0",
+    "A6 成本:worker 與 reviewer 各一列 ticket.py cost 只記在第一張票(note 含 batch <stamp> 與全部票號;run_id = AC_BATCH_RUN_ID),其餘票的 cost 不變",
+    "A7 worker 沒交 patch / 逾時 / 阻擋反駁 / 覆核 fail → rc 與單票同表(5 / 3 / 非 0),一頁 decision 掛第一張票並列整批;副本的 patch 與 EVIDENCE 留在 reports/batch/<stamp>/",
+    "A8 單票路徑不變:tests/test_auto_fix.py 既有 92 條、tests/test_apply.py 46 條、tests/test_review.py 17 條照綠"
+  ],
+  "in_scope": [
+    "scripts/auto-fix.sh",
+    "scripts/apply.sh",
+    "scripts/review.sh"
+  ],
+  "out_of_scope": [
+    "scripts/land.sh",
+    "scripts/gate.sh",
+    "tickets/*.json"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/apply.sh",
+    "scripts/review.sh",
+    "scripts/status.py",
+    "templates/dispatch-reviewer.md",
+    "tests/test_auto_fix.py",
+    "tests/test_apply.py",
+    "tests/test_review.py",
+    "docs/WORKFLOW.md",
+    "tickets/SCHEMA.md",
+    "board/config.json"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "5cd04238f1a3501b7da6d92ced2f66c0c5217474",
+  "state": "Ready",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-H51",
+    "D-H38",
+    "D-H46"
+  ],
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "verify_strings": [
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "AC_BATCH_RUN_ID"
+    },
+    {
+      "path": "scripts/apply.sh",
+      "contains": "放寬測試"
+    },
+    {
+      "path": "scripts/review.sh",
+      "contains": "--batch"
+    }
+  ],
+  "outline": "needs_verifier=true:放寬測試硬擋(A4)與票檔零寫入(A2)是安全守衛,值得獨立案例;interface_fixed=true:三支的 CLI 形狀、env、reports/batch/<stamp>/ 的檔名都在本票釘死,驗證者可與 worker 平行。介面(釘死):auto-fix.sh --batch <整合分支> <id…>(env AC_BATCH_RUN_ID 必給,= land 那一輪的 run_id;紅榜讀第一張票 reports/t<id>/<run_id>/status.json);apply.sh --batch <整合分支> <id…> <patch> [--evidence <檔>];review.sh --batch <整合分支> <id…> --run-id <stamp>;紀錄目錄 reports/batch/<stamp>/(dispatch-round<r>.md、patch-round<r>.diff、EVIDENCE-round<r>.md、result-round<r>.json、review.json);config 鍵 batch_fix.test_globs(list)。設計取捨:(1) 不猜哪張票弄紅,一個 worker 看整批(D-H51 ②);(2) fix 疊在整合分支、不拆回各票分支 —— 拆回要歸因,而覆核綁分支 sha,動分支就要重覆核;(3) 所有紀錄不經 ticket.py set 寫票(會 +1 state_version 讓 N 張覆核同時過期),只用 ticket.py cost(不動版本);(4) 放寬測試用機械守衛擋,不靠派工文的一句話;案例真的錯走既有 OBJECTION: test_defect → 開題者 triage。建議順序:本票 → A 下一張(land.sh 批次迴圈,它的測試用替身可先開工)→ #104(反駁分級,同改 auto-fix.sh / review.sh,落地後 rebase)。改前會紅(2026-10-10 基底 5cd0423 拋棄式副本實跑):sh scripts/auto-fix.sh --batch 1 2 → 「不認得 1(--dry-run / --round <n> / --no-review)」rc=2。基底實跑:tests.test_auto_fix 92 條 259 s、tests.test_land 60 條 66 s(閘門逾時預算要 ≥ 10 分)。",
+  "test_plan": "L1 單元(tests/test_auto_fix.py 新類 BatchFix、tests/test_apply.py 新類 ApplyBatch、tests/test_review.py 新類 ReviewBatch;拋棄式 repo 夾具照各檔既有 setUp:主線 + t1-a、t2-b 分支 + land/X 整合分支(兩條已 merge)+ 1.json 2.json(含 allowed_write_paths / out_of_scope / review)+ reports/t1/<run>/status.json 帶 failures 2 條;worker 用替身寫定 patch 進副本的 work/、reviewer 替身回 pass 或 fail):a) 派工文含 A1 五項(逐字 grep;期望值從票檔與 status.json 取,不從腳本算);b) apply --batch 後 git rev-parse land/X 前進恰一個 commit、t1-a / t2-b 不變、1.json state_version 不變;c) patch 動到 1.json out_of_scope 且不在 2.json allowed 的檔 → rc 5、stderr 含該檔名;同名檔在 2.json allowed 內 → 不擋;d) patch 刪 tests/test_x.py 一行 self.assertEqual → rc 5、stderr 含 tests/test_x.py:<行> 放寬測試;EVIDENCE 加 OBJECTION: test_defect tests.test_x.T.test_one → 不擋;e) reviewer 替身 fail → review.json 不存在、inbox 一頁 decision ticket=1 內文含 #2、rc≠0;pass → review.json.sha == land/X 頭;f) 1.json cost 多兩列(role worker / reviewer,note 含 batch)、2.json cost 不變;g) worker 替身不交 patch → rc 5、一頁 decision。L2 閘門:python3 -m unittest tests.test_auto_fix tests.test_apply tests.test_review(基底 2026-10-10:test_auto_fix 92 條 259 s)。變異(指定哪條紅):① apply --batch 的放寬測試守衛改成只印不擋 → d 紅;② apply --batch 對票 1 跑一次 ticket.py set 1 patch_ref → b 紅;③ 派工文不帶寫入範圍聯集 → a 紅;④ review --batch 把 sha 寫成票 1 分支頭 → e 紅。改前會紅:今天 auto-fix.sh --batch 1 2 印「不認得 1」rc=2(基底 5cd0423 實跑)→ a–g 全紅。",
+  "priority": "P0"
+}

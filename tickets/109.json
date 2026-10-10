@@ -1,0 +1,80 @@
+{
+  "id": "109",
+  "subject": "批次落地 ②:land.sh N≥2 張全套紅不再「不猜是誰紅的」—— 直接起 auto-fix.sh --batch、每輪重跑全套、最多 batch_fix.rounds(預設 2)輪;仍紅才用紅榜檔 ↔ 票寫入範圍踢出嫌疑票、其餘自動重 land 一次;gate.sh 全套狀態檔寫給批次每張票(專案 D-H51)",
+  "created": "2026-10-10T23:46:41+08:00",
+  "objective": "sh scripts/land.sh t1-a t2-b … 全套紅時,照 D-H51 ② 不找是誰弄紅:在同一把 .land.lock 下叫 auto-fix.sh --batch land/<stamp> <id…>(#108),rc 0 就在同一個 land worktree 重跑 gate.sh --full,綠了照既有路 ff-only + push + 逐張 close --landed;修滿 batch_fix.rounds 輪仍紅,用紅榜的 failures[].file 對各票的 allowed_write_paths / verify.files / 分支改動檔找嫌疑票:恰有部分票命中 → 踢出(各一頁 decision)、其餘自動重 land 一次(不再踢);對不到或全中 → 停、worktree 留、一頁 decision。全套每輪的 status.json 寫給批次每一張票(AC_GATE_TICKETS)。",
+  "acceptance": [
+    "B1 兩張票一批、閘門替身第 1 次紅、auto-fix 替身回 0 並在 $AC_FIX_SOURCE 疊一個 commit、閘門替身第 2 次綠 → main 前進到含那個 commit 的頭、兩張票都 close --landed 成 Done、stdout 不含「不猜是誰紅的」;auto-fix 替身被叫恰 1 次、參數逐字 = --batch land/<stamp> 1 2、env AC_BATCH_RUN_ID = 這次 land 的 run_id",
+    "B2 閘門替身連紅 rounds+1 次(預設 3)→ 不再派 auto-fix;紅榜 failures[].file 命中票 2 的 allowed_write_paths 或 verify.files 或分支改動檔、未命中票 1 → 票 2 被踢:收件匣一頁 decision(ticket=2,內文含「踢出」「單張 land」與紅榜 case 名)、events 一筆 land.fail kv kicked=2;接著自動 land t1-a(stdout 含「重 land」,env AC_LAND_DEPTH=1),第二次不再踢人(再紅只留一頁 decision、rc 1)",
+    "B3 紅榜對不到任何票、或對到全部票 → 不踢、不重 land:一頁 decision 掛第一張票並列整批、worktree 留著、rc 1",
+    "B4 --no-auto-fix → 行為同今天(紅就停、一頁 decision、不派);一張票一批 → 走既有單票 auto-fix(AutoFixHook 既有三條照綠;test_a_batch_with_two_tickets_refuses_to_guess_who_is_red 改寫成 B1)",
+    "B5 gate.sh --full 在 AC_GATE_TICKETS=\"1 2\" 時對每張票各寫一份 kind=gate 的 status.json(同 run_id、failures 相同);AC_GATE_TICKET 單張照舊",
+    "B6 每一輪 events gate.start / gate.pass / gate.fail 帶 kv mode=full round=<r> batch=<stamp>;status.json phase gate 每輪一筆、note 含第 r 輪;.land.lock 整段(worker、覆核、重跑)不放,docs 通道在後面等(test_it_waits_behind_the_same_lock 照綠)",
+    "B7 auto-fix --batch rc≠0 → 不重跑全套、rc 1;AC_NO_INBOX 外只補一頁「批次修復停了」掛第一張票(auto-fix 自己發過的那頁不重發)",
+    "B8 docs/WORKFLOW.md §落地 第 11 條與能力表「一批多張票時歸責:未實作」改成新行為,並寫明 batch_fix.rounds 與踢人規則"
+  ],
+  "in_scope": [
+    "scripts/land.sh",
+    "scripts/gate.sh"
+  ],
+  "out_of_scope": [
+    "scripts/auto-fix.sh",
+    "scripts/apply.sh",
+    "scripts/review.sh",
+    "tickets/*.json"
+  ],
+  "depends_on": [
+    {
+      "id": "108",
+      "condition": "落地進主線(auto-fix.sh --batch 存在;本票測試用替身,可先開工、落地要等它)"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/land.sh",
+    "scripts/gate.sh",
+    "scripts/status.py",
+    "tests/test_land.py",
+    "tests/test_gate.py",
+    "docs/WORKFLOW.md",
+    "board/config.json"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "5cd04238f1a3501b7da6d92ced2f66c0c5217474",
+  "state": "Ready",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-H51",
+    "D-H38",
+    "D-H46"
+  ],
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "verify_strings": [
+    {
+      "path": "scripts/land.sh",
+      "contains": "batch_fix"
+    },
+    {
+      "path": "scripts/gate.sh",
+      "contains": "AC_GATE_TICKETS"
+    },
+    {
+      "path": "scripts/land.sh",
+      "contains": "AC_LAND_DEPTH"
+    }
+  ],
+  "outline": "needs_verifier=true:踢人規則(B2/B3)與鎖(B6)判錯會讓沒壞的票被退或 main 被兩個寫入者動;interface_fixed=true:env 名(AC_GATE_TICKETS、AC_BATCH_RUN_ID、AC_LAND_DEPTH)、config 鍵 batch_fix.rounds、auto-fix --batch 參數形狀都釘死。設計:(1) land.sh 自己迴圈(紅 → auto-fix --batch → 重跑 --full),不另做 --resume:鎖整段持著,ff-only 不會因主線中途動了白跑;代價是 docs 通道最多等 2 × (全套 + worker + 覆核);(2) 嫌疑票只在輪數用完才找,規則純機械(failures[].file 對 allowed_write_paths glob / verify.files / git diff --name-only main...t<n>);(3) 重 land 只一次(AC_LAND_DEPTH),避免遞迴;(4) 批次每輪的全套 status.json 寫給每張票 —— auto-fix --batch 讀第一張那份,主線與看板按票看得到;(5) 踢出的票不改 state(改票會讓 review 過期),只留一頁 decision 說「單張 land 它」。依賴 #108(介面見其 outline)。改前會紅(2026-10-10 基底 5cd0423 拋棄式副本實跑 tests.test_land.AutoFixHook 4 條綠,其中 test_a_batch_with_two_tickets_refuses_to_guess_who_is_red 釘的正是舊行為「不猜是誰紅的、auto-fix 0 次」)→ B1 紅。基底實跑 tests.test_land 60 條 66 s。",
+  "test_plan": "L1 單元 tests/test_land.py 擴充 AutoFixHook(閘門替身改成可設定「第 k 次紅 / 綠」:GATE_STUB 讀計數檔決定 rc;auto-fix 替身在 $AC_FIX_SOURCE 上 commit 一個檔並把參數與 AC_BATCH_RUN_ID 印進 AC_TEST_LOG):a) B1:紅→batch→綠:main 頭含替身 commit、1.json 2.json state=Done、auto-fix 行恰一條且逐字 --batch land/… 1 2、AC_BATCH_RUN_ID 等於 reports/t1 下那一輪 run_id;b) B2:三次紅、status.json failures 一條 file=src/b(票 2 的 allowed)→ inbox 有 ticket=2 的 decision 頁含「踢出」、AC_TEST_LOG 看得到第二次 land 參數只剩 t1-a、events 有 land.fail kicked=2;子情境 b2:file 只命中票 2 的 verify.files;b3:只命中票 2 分支改動檔;c) B3:file=src/zzz 對不到 → 無踢出頁、worktree 仍在、rc 1;file 同時命中 1 與 2 → 同上;d) B4:--no-auto-fix 不派;單張照舊;e) B6:land 跑批次修復中另起 land.sh docs → 等鎖(既有案例形狀);f) B7:auto-fix 替身 rc 5 → 閘門替身只被叫 1 次、rc 1。tests/test_gate.py 新案例 g) AC_GATE_TICKETS=\"1 2\" 跑 --full 紅 → reports/t1 與 reports/t2 各一份 status.json、failures 相同、run_id 相同。期望值從票檔、替身與 status.json 取。L2 閘門:python3 -m unittest tests.test_land tests.test_gate(基底 2026-10-10 test_land 60 條 66 s)。變異:① rounds 寫死 1 → b 在第二次紅就踢 → b 紅;② 踢人只比 allowed_write_paths → b2 紅;③ gate.sh 只寫第一張票的 status → g 紅;④ 重 land 不帶 AC_LAND_DEPTH → b 的「第二次不再踢」紅。改前會紅:今天兩張紅印「不猜是誰紅的」、auto-fix 0 次(基底 5cd0423 實跑既有案例綠)→ a 紅。",
+  "priority": "P0"
+}
