@@ -5,13 +5,13 @@
   "objective": "專案端 10-09 的 16 次派工有 6 次反駁,6 次 worker 都已交出綠 patch(票面指令寫錯、與別票測試衝突、照先例多做一步、目標沒全達),但每一次都讓佇列停下等主線,夜間停到早上;覆核者 0 次退回。做完的樣子:worker 在 EVIDENCE 寫 `OBJECTION: note <一句話>` 而且交了 patch → auto-fix 記進 objections[](category note)後照一般收件往下走,不起開題者、不停;覆核派工文逐字列出這些 note,覆核者在 result 塊逐條回 agree / disagree 加理由;全同意才寫 review pass 並把那幾筆處置成 accepted,任一不同意走既有的覆核退回,漏回任何一條就不寫 review(review.refused);review pass 之後發一頁通知(不是裁示頁)給主線,附一行退回指令,跑了之後 land 拒收。沒交 patch 的反駁(ticket-wrong / blocking / 寫 note 卻沒 patch)照現行 D-041 的開題者判。",
   "acceptance": [
     "N1【文法與收件】`OBJECTION: note <一句話>` 由 ticket.py objection 記成一筆 {category: \"note\", blocking: false, disposition: \"\", …}(其餘鍵照現行);ticket-wrong / test_defect / blocking 三種收件一字不變。auto-fix 判類別那段(現在只認三種、其餘當 ticket-wrong)多認 note。tickets/SCHEMA.md 反駁那一列加 note 的語意與誰處置。tests/test_ticket.py 或 test_objection_triage.py:四種各收一次,斷言 category / blocking。",
-    "N2【note + patch 不停線】tests/test_auto_fix.py 的替身 worker 交 patch-round1.diff 與 EVIDENCE(含一行 OBJECTION: note …)→ 事件流沒有 objection.triage.start;接下來 apply → 閘門 → 覆核的事件序與「同一份 patch、沒有反駁」那一趟相同;auto-fix rc 與票最後 state 也相同;objections[] 恰一筆 note。變異 m1:note 照舊走 triage_objection → 本條紅。",
+    "N2【note + patch 不停線】tests/test_auto_fix.py 的替身 worker 交 patch-round1.diff 與 EVIDENCE(含一行 OBJECTION: note …)→ 事件流沒有 objection.triage.start;接下來 apply → 閘門 → 覆核的事件序與「同一份 patch、沒有反駁」那一趟相同;auto-fix rc 與票最後 state 也相同;objections[] 恰一筆 note。變異 m1:note 照舊走 triage_objection → 本條紅。 實測(Fable 10-10 探針 A/m104):只把 note 加進 ticket.py 的 OBJECTION_CATEGORIES,apply.sh 對含 `OBJECTION: note …` 的交件仍 rc=6 —— apply.sh 尾段 case $orc 的 0 與 3 兩支一律 exit 6、不看類別(auto-fix 先記一筆,apply 再收到同一筆是 3);auto-fix 把 apply rc≠0 當 apply-failed 停下。所以 apply.sh 收反駁那段要對 note 放行(rc 0、照記一筆),tests/test_apply.py 加一條 note → rc 0 且 objections 恰一筆 category=note;既有 ticket-wrong 兩條 rc=6 案例照綠。",
     "N3【note 卻沒 patch → 照現行】同上但沒有 patch-round1.diff → 走 ticket-wrong 的路(objection.triage.start 出現、開題者替身被叫),與今天寫 ticket-wrong 的事件序相同。",
     "N4【覆核派工文】review.sh 給覆核者的派工文(templates/dispatch-reviewer.md 經 review.sh 填)在票有 disposition 為空的 note 時多一節,逐筆列出 index(objections[] 的位置)與 body 原文;沒有 note 時這一節不出現。dispatch-reviewer.md 的 result 塊說明多一格 objection_replies:[{\"index\": <int>, \"verdict\": \"agree\"|\"disagree\", \"reason\": \"…\"}]。tests/test_review.py 以替身覆核者讀派工文斷言兩種情況。",
     "N5【沒逐條回 → 不是 pass】覆核者 verdict pass,但 objection_replies 少了任一個待回的 index、或 verdict 不是 agree / disagree、或 reason 去空白為空 → review.sh 不寫 review、票留原 state、發 review.refused(note 點名缺哪幾個 index)、rc 與 review.missing 相同(3);cost 列 outcome 用 missing(不新增登記字)。tests/test_review.py 三種缺法各一條。",
     "N6【全同意 / 有不同意】全 agree 且 verdict pass → 照現行寫 review pass,且每一筆 note 的 disposition=accepted、triage={verdict: accepted, reason: 覆核者的 reason, round, by: reviewer}(只寫這幾筆,不動其他 objections);任一 disagree → 不論 verdict 寫什麼都走既有 fail 路(票轉 Blocked、decision 頁、review.fail),那一筆 note 的 blocking 改 true、disposition 留空。",
     "N7【主線通知與退回】N6 全同意那條另發一頁收件匣,kind=done(不是 decision,不要主線裁示),內容列每筆 note 的 body 與覆核者的回覆,以及一行退回指令(子命令名字由實作者定,寫進 SCHEMA 與頁面)。跑那一行之後:該筆 blocking=true、disposition 清空、triage 加 overruled_by=main、票 state 轉 Blocked;scripts/land.sh 對這張票拒收(既有「阻擋項沒處置」那一條)。tests/test_land.py 或 test_ticket.py 斷言退回前 land 不因 note 擋、退回後 land rc 非 0 並點名那一筆。",
-    "N8【land 對 note】disposition 為空的 note(覆核還沒回)land 拒收並點名;accepted 的 note 不擋。ticket.objection_problems 同一個判準(下游專案的 land 也 import 它)。",
+    "N8【land 對 note】disposition 為空的 note(覆核還沒回)land 拒收並點名;accepted 的 note 不擋。ticket.objection_problems 同一個判準(下游專案的 land 也 import 它)。 注意:A 的 scripts/land.sh 現在沒有 import ticket.objection_problems,而是內嵌一份同判準(約 425–448 行的 heredoc);兩處都要認 note(或改成 import —— #98 A5 也要做這件事,誰後落誰 rebase)。",
     "N9【worker 派工文】auto-fix 印 OBJECTION 文法的兩處(現在約 641 與 1637 行)加 note 一句:patch 已交、自己跑的測試綠、只是與票面不同 → note;做不出綠 patch → blocking 或 ticket-wrong。docs/WORKFLOW.md「實作者的反駁怎麼被收下」加 note 那條路。tests/test_templates.py / test_dispatch_template.py 既有斷言照綠,新增一條斷言派工文含 `OBJECTION: note`。",
     "N10【原路不變】tests/test_objection_triage.py、test_review.py、test_land.py、test_auto_fix.py 既有案例斷言一字不改全綠。"
   ],
@@ -22,6 +22,7 @@
     "scripts/auto-fix.sh",
     "scripts/review.sh",
     "scripts/ticket.py",
+    "scripts/apply.sh",
     "scripts/land.sh",
     "templates/dispatch-reviewer.md",
     "tickets/SCHEMA.md",
@@ -30,7 +31,8 @@
     "tests/test_review.py",
     "tests/test_objection_triage.py",
     "tests/test_land.py",
-    "tests/test_ticket.py"
+    "tests/test_ticket.py",
+    "tests/test_apply.py"
   ],
   "role": "worker",
   "model": "opus",
@@ -38,7 +40,7 @@
   "attempt": 0,
   "base_sha": "ba84c88da750b0e03b087b65f2f3e3d90d990045",
   "state": "Ready",
-  "state_version": 2,
+  "state_version": 6,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -48,7 +50,7 @@
     "notes": ""
   },
   "test_plan": "層次:單元(tests/ 的替身 worker / 覆核者 / 開題者,沿用 control_harness.py)。期望值來自票面(事件序以「無反駁」那一趟為對照,不從 auto-fix 算)。開題者 10-09 讀碼:auto-fix.sh 收件約 1760–1800 行先判反駁再判 patch,category 只認三種(其餘當 ticket-wrong)、非 test_defect 一律 triage_objection;review.sh 的 fail 每行 OBJECTION 記一筆 blocking;land.sh 約 425–446 行對沒處置的阻擋項拒收;event.py 已有 review.refused(現在的意思是「沒派成」,本票沿用為「覆核不算數」,KINDS 不加新字)。只跑:tests/test_auto_fix.py、test_objection_triage.py、test_review.py、test_land.py、test_ticket.py、test_templates.py、test_dispatch_template.py(逐支前景、各給 timeout;test_auto_fix 單支約 270 秒)。A 側指令一律 env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR。不跑全套。",
-  "outline": "專案 D-H46 ①(反駁分級、不停線)與 flow-efficiency-20261009 §1-1。資訊放哪裡:note 的語意與退回指令 → tickets/SCHEMA.md 反駁列;worker 怎麼寫 → auto-fix.sh 派工文那兩處;覆核者怎麼回 → templates/dispatch-reviewer.md;流程 → docs/WORKFLOW.md。風險(報告):覆核者全史 87 pass / 3 fail 幾乎不擋 —— 所以逐條回是硬條件(N5)且主線留一行退回(N7)。撞檔:秒退重派那張(同日開)同改 auto-fix.sh / review.sh,先落本票;plan_ran 那張同改 ticket.py / SCHEMA。#101(Draft)改 apply.sh 與 SCHEMA,無語意依賴。needs_verifier=true:跨 auto-fix / review / land 三支的狀態機,獨立案例值得;interface_fixed=false(退回子命令名字未定)。下游專案(T)要等同步才生效。估 60–90 分。",
+  "outline": "專案 D-H46 ①(反駁分級、不停線)與 flow-efficiency-20261009 §1-1。資訊放哪裡:note 的語意與退回指令 → tickets/SCHEMA.md 反駁列;worker 怎麼寫 → auto-fix.sh 派工文那兩處;覆核者怎麼回 → templates/dispatch-reviewer.md;流程 → docs/WORKFLOW.md。風險(報告):覆核者全史 87 pass / 3 fail 幾乎不擋 —— 所以逐條回是硬條件(N5)且主線留一行退回(N7)。撞檔:秒退重派那張(同日開)同改 auto-fix.sh / review.sh,先落本票;plan_ran 那張同改 ticket.py / SCHEMA。#101(Draft)改 apply.sh 與 SCHEMA,無語意依賴。needs_verifier=true:跨 auto-fix / review / land 三支的狀態機,獨立案例值得;interface_fixed=false(退回子命令名字未定)。下游專案(T)要等同步才生效。估 60–90 分。 Fable 審票 2026-10-10:base ba84c88→main deaac54 之間只有票檔 commit,行號 641/1637/1760–1800、land 425–446 仍對;test_plan 七支在 A 基底實跑全綠(auto_fix 92 條 293s、objection_triage 17、review 17、land 60、ticket 116、templates 2、dispatch_template 2);探針實測 apply.sh 對 note 仍 rc=6 → allowed_write_paths 補 scripts/apply.sh、tests/test_apply.py,N2/N8 補寫法;worker.timeout_seconds 7200。",
   "needs_verifier": true,
   "interface_fixed": false,
   "verify_strings": [
@@ -60,5 +62,8 @@
       "path": "scripts/auto-fix.sh",
       "contains": "OBJECTION: note"
     }
-  ]
+  ],
+  "worker": {
+    "timeout_seconds": 7200
+  }
 }

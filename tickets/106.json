@@ -29,7 +29,7 @@
   "attempt": 0,
   "base_sha": "ba84c88da750b0e03b087b65f2f3e3d90d990045",
   "state": "Ready",
-  "state_version": 2,
+  "state_version": 4,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -38,8 +38,8 @@
     "run": "",
     "notes": ""
   },
-  "test_plan": "層次:單元(tests/test_ticket.py 新 class,拋棄式 git repo)。期望值來自票面(sha 用 git rev-parse 現取,不從 ticket.py 算)。開題者 10-09 讀碼:Ready 關現在在 ticket.py needs_verifier_problem(約 203 行)與 set / create 兩處呼叫(約 626、795、1807 行);main_branch() 讀 board/config.json(約 84 行);opener.md 現 4253 字元,卡上限由 memory 層政策檢查(tests/test_memory_layer_policy.py)。只跑:tests/test_ticket.py、test_ticket_65.py、test_routing_cards.py、test_memory_layer_policy.py、test_templates.py(逐支前景、各給 timeout)。A 側指令一律 env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR。不跑全套。",
-  "outline": "專案 D-H46 ③(開題實跑,沒跑過擋 Ready)與 flow-efficiency-20261009 §4。資訊放哪裡:欄位 → tickets/SCHEMA.md;指令 → scripts/ticket.py plan;開題者該做什麼 → memory/role/opener.md(短)與 docs/reference/role-procedures.md(細節)。設計取捨:plan_ran 由工具執行指令後寫,不開放 set 手寫 —— 手寫等於沒跑;sha 要等於主線頭(裁示原話「沒跑過擋 Ready」+ 主線指示「sha≠base 擋」),代價是主線前進後要重跑一次。報告另列的 touches_existing 欄位不做:撞案例寫進驗收與 outline 已足,不再加第二個形狀(D-018)。#96 --dry-run 無依賴。撞檔:#104 同改 ticket.py / SCHEMA,後落者 rebase。下游專案要等同步(T 的同步票)才生效;T 的 ticket.py 現在連 lint 都還沒有。needs_verifier=true:Ready 關的邊界(dirty、非 worker、舊票不追溯、create 直達)值得獨立案例;interface_fixed=true(指令形狀、欄位、拒收條件已釘)。估 40–60 分。",
+  "test_plan": "層次:單元(tests/test_ticket.py 新 class,拋棄式 git repo)。期望值來自票面(sha 用 git rev-parse 現取,不從 ticket.py 算)。開題者 10-09 讀碼:Ready 關現在在 ticket.py needs_verifier_problem(約 203 行)與 set / create 兩處呼叫(約 626、795、1807 行);main_branch() 讀 board/config.json(約 84 行);opener.md 正文現 2000 字、上限 2000(memory.py check 實測;4253 是位元組數)—— 加字必須同量刪併;超上限由 gate.sh 機械格「本分支讓記憶卡超上限」擋(tests/test_memory_layer_policy.py 釘那一格)。只跑:tests/test_ticket.py、test_ticket_65.py、test_routing_cards.py、test_memory_layer_policy.py、test_templates.py(逐支前景、各給 timeout)。A 側指令一律 env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR。不跑全套。",
+  "outline": "專案 D-H46 ③(開題實跑,沒跑過擋 Ready)與 flow-efficiency-20261009 §4。資訊放哪裡:欄位 → tickets/SCHEMA.md;指令 → scripts/ticket.py plan;開題者該做什麼 → memory/role/opener.md(短)與 docs/reference/role-procedures.md(細節)。設計取捨:plan_ran 由工具執行指令後寫,不開放 set 手寫 —— 手寫等於沒跑;sha 要等於主線頭(裁示原話「沒跑過擋 Ready」+ 主線指示「sha≠base 擋」),代價是主線前進後要重跑一次。報告另列的 touches_existing 欄位不做:撞案例寫進驗收與 outline 已足,不再加第二個形狀(D-018)。#96 --dry-run 無依賴。撞檔:#104 同改 ticket.py / SCHEMA,後落者 rebase。下游專案要等同步(T 的同步票)才生效;T 的 ticket.py 現在連 lint 都還沒有。needs_verifier=true:Ready 關的邊界(dirty、非 worker、舊票不追溯、create 直達)值得獨立案例;interface_fixed=true(指令形狀、欄位、拒收條件已釘)。估 40–60 分。 Fable 審票 2026-10-10:test_plan 五支在 A 基底實跑全綠(ticket 116、ticket_65 4、routing_cards 2、memory_layer_policy 23、templates 2);行號 84/203/626/795/1807 仍對。opener.md 正文 2000/2000 字(上限 2000)→ test_plan 改寫。探針(A/m106:needs_verifier_problem 開頭加「沒有 plan_ran 就擋」)實測:test_status_67 13 條紅 —— status.py regression-red 用 create --role worker --state Ready 開回歸票,開不出來;test_ticket 11 條紅(P7 預期的夾具);test_auto_fix_codex、test_status、test_memory_lifecycle 綠(Running→Ready 本來就不查)。回歸票要不要過 plan 關、plan_ran 只留最後一次是否夠記「測試指令 + 變異」兩樣,待主線裁;未裁前 P3 照現寫會弄壞 status.py regression-red。",
   "needs_verifier": true,
   "interface_fixed": true,
   "verify_strings": [

@@ -4,8 +4,8 @@
   "created": "2026-10-09T05:10:18+08:00",
   "objective": "三件(T #731 與 #622 撞到,T #706 也撞過 tags 被蓋):(1) apply.sh 收驗證者 EVIDENCE,result 區塊解析不到時要出聲(原因 + 『verify 計畫與驗紅沒有併進票』),能解析的寫法就解析,不在 apply.sh 另抄一份 regex。#731 驗證者的 EVIDENCE 有 result 區塊,收件卻記 result-verifier-round1.json present:false reason:no-block,verify 沒併進票,落地後 close 被拒『沒有回歸證據,verify.baseline 缺』。(2) 併入驗證者的 verify 時不覆蓋票上既有項目:現在 merged.update(keep) 把 verify.tags 整組換成驗證者給的(#706:log-period+report-period+report-rows+log-filter-button 變成只剩 log-period,回歸層少跑 P6);改成 tags/files 取聯集,run/notes 既有非空保留。(3) ticket.py baseline_next_step 印的補量指令寫死 scripts/verify-case.py,但 A 同步到專案後 verify-case.py 住在 scripts/control/(T 就是),貼了跑不起來;路徑改由 ticket.py 所在位置相對專案根算出。落地後由同步票帶進 T,T 的 #715 不再收這三件。",
   "acceptance": [
-    "A7【驗證者 result 區塊解析不到要出聲】拋棄式夾具(票庫 AC_TICKETS_DIR 指拋棄式),跑 sh scripts/apply.sh --evidence-verifier <檔> 並帶驗證者 EVIDENCE,該檔有 result 區塊但解不開的樣子各造一份:(i) 沒有 ```result 區塊(只有散文);(ii) 區塊的 JSON 壞掉;(iii) 區塊存在但開頭柵欄是 RESULT_OPEN 認不得的寫法(例:``` result 前面多縮排以外的字、柵欄長度不一、整塊包在更外層的 ```markdown 裡——#731 驗證者的 EVIDENCE 就是『有 result 區塊、寫了 verify files/tags/run,卻被記成 present:false reason:no-block』,重現不出來的變體不用硬造,但要在 EVIDENCE 現場檔的 ```result 附近實際看一次它長什麼樣再決定列哪幾種)。每一份:apply.sh 的輸出(stdout 或 stderr 皆可,但要在一行裡)含『驗證者』『result』與原因字(no-block / bad-json / no-evidence 其中之一)、並明說『verify 計畫與驗紅沒有併進票』;退出碼與現在相同(不擋 apply);reports/t<n>/<run_id>/result-verifier-round<r>.json 照舊寫 present:false 與同一個 reason。期望字串取自夾具自己造的 EVIDENCE,不從被測程式算",
-    "A8【能解析的格式就要解析】A7 (iii) 這些變體裡,凡 docs/DISPATCH-TEMPLATE.md §8.5 與 tickets/SCHEMA.md 的 result 區塊寫法允許的(柵欄長度 ≥3 的 ``` 或 ~~~、後面可有空白、區塊前後有其他散文),ticket.py 的 result_block 必須解得出來:present:true,且 apply.sh 併進票的 verify 與 verify.baseline 與 EVIDENCE 一致;不允許的寫法走 A7 的出聲路徑。兩邊判準是同一份(result_block / RESULT_OPEN),不在 apply.sh 另抄一份 regex。落地後關票不再因此被拒『沒有回歸證據,verify.baseline 缺』——用夾具:驗證者 EVIDENCE 含 stage=red 的 baseline 與 verify 計畫,apply.sh 跑完 → ticket.py show 該票的 verify.baseline 在、ticket.py close 的 done_blockers 不含『沒有回歸證據』這一條",
+    "A7【驗證者 result 區塊解析不到要出聲】拋棄式夾具(票庫 AC_TICKETS_DIR 指拋棄式),跑 sh scripts/apply.sh --evidence-verifier <檔> 並帶驗證者 EVIDENCE,該檔有 result 區塊但解不開的樣子各造一份:(i) 沒有 ```result 區塊(只有散文);(ii) 區塊的 JSON 壞掉;(iii) `## result` 小標底下用 ```json 柵欄(不是 ```result)—— 這就是 #731 的實際寫法:Fable 10-10 讀 T 的 tabby_pool_ctl/reports/t731/20261009-023652-8347/verifier-round1.log,驗證者用 python 寫出 `## result` + 空行 + ```json + JSON + ```;RESULT_OPEN 只認語言標記 result,所以記成 no-block。另:柵欄長度 ≥3、~~~、前置縮排、``` 與 result 之間有空白、整塊包在外層 ```markdown 裡,現行 result_block 都解得出來(實測),不是 no-block 的成因,不必再造。每一份:apply.sh 的輸出(stdout 或 stderr 皆可,但要在一行裡)含『驗證者』『result』與原因字(no-block / bad-json / no-evidence 其中之一)、並明說『verify 計畫與驗紅沒有併進票』;退出碼與現在相同(不擋 apply);reports/t<n>/<run_id>/result-verifier-round<r>.json 照舊寫 present:false 與同一個 reason。期望字串取自夾具自己造的 EVIDENCE,不從被測程式算",
+    "A8【能解析的格式就要解析】(現況:RESULT_OPEN 早已收 ≥3 的 ``` 或 ~~~、前後空白,這半是回歸鎖;`## result` + ```json 依本條規則不屬 §8.5 允許的寫法 → 走 A7 出聲路徑)A7 (iii) 這些變體裡,凡 docs/DISPATCH-TEMPLATE.md §8.5 與 tickets/SCHEMA.md 的 result 區塊寫法允許的(柵欄長度 ≥3 的 ``` 或 ~~~、後面可有空白、區塊前後有其他散文),ticket.py 的 result_block 必須解得出來:present:true,且 apply.sh 併進票的 verify 與 verify.baseline 與 EVIDENCE 一致;不允許的寫法走 A7 的出聲路徑。兩邊判準是同一份(result_block / RESULT_OPEN),不在 apply.sh 另抄一份 regex。落地後關票不再因此被拒『沒有回歸證據,verify.baseline 缺』——用夾具:驗證者 EVIDENCE 含 stage=red 的 baseline 與 verify 計畫,apply.sh 跑完 → ticket.py show 該票的 verify.baseline 在、ticket.py close 的 done_blockers 不含『沒有回歸證據』這一條",
     "A9【併入 verify 不蓋掉既有項目】夾具票先有 verify.tags=[a,b,c,d]、verify.files=[f1]、run、notes 非空;驗證者 result 的 verify 給 tags=[a]、files=[f2]、run 與 notes 不同值 → apply.sh 之後票上 verify.tags 仍含 a b c d(取聯集,既有的在前、新的接後面、去重)、files 為 [f1,f2];run 與 notes 既有的非空就保留不蓋,並印一行說明『驗證者給的 run/notes 與票上不同,保留票上』(帶兩個值的頭幾個字);既有 run/notes 為空才採驗證者給的。聯集本身不動 verify 的其他鍵(baseline 等);state_version 只 +1;印出的『併進票』那行要分得出『新增了哪幾項』與『保留了哪幾項』。期望值寫死在夾具,不從被測程式算。事故:#706 第 1 輪 tags 從 log-period+report-period+report-rows+log-filter-button 變成只剩 log-period,回歸層少跑 P6;#731 同型",
     "A10【落地後補量提示照貼就跑】scripts/ticket.py 的 baseline_next_step(close 被拒與落地後印的『貼這一句』)印出的指令,路徑要由 ticket.py 自己所在位置相對於專案根算出,而不是寫死 scripts/verify-case.py:ticket.py 住 <根>/scripts/ 時印 `python3 scripts/verify-case.py check <票號> --ref <base_sha> --candidate <sha>`;住 <根>/scripts/control/ 時(同步到 T 之後的形狀)印 `python3 scripts/control/verify-case.py check …`。夾具:拋棄式 git 副本(AC_ROOT 指它),把 ticket.py 與其同伴腳本(event.py、verify-case.py 等)複製成 scripts/ 與 scripts/control/ 兩種形狀各一個副本,票有 base_sha、review.sha 在副本主線歷史裡、verify.baseline 缺;對每種形狀跑 ticket.py close,取輸出裡 `python3 …verify-case.py check …` 那一行,在副本根目錄用 sh -c 原樣執行,斷言輸出不含 No such file / can't open file,且不是因路徑不存在而失敗(期望路徑字面由夾具寫死,不從被測程式算)。同一檔內 done_blockers 兩句說明文字(原寫『scripts/verify-case.py check <票號>』兩處)一起走同一個算法,不留舊路徑。變異:把算路徑拿掉改回硬字串 scripts/verify-case.py → scripts/control/ 形狀那一輪 A10 紅。"
   ],
@@ -33,7 +33,7 @@
   "attempt": 0,
   "base_sha": "950fe859eb1986bb94b235eee96f5fa48dd8f015",
   "state": "Ready",
-  "state_version": 3,
+  "state_version": 6,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -44,16 +44,16 @@
   },
   "feature": "落地管線:驗證者交件併入",
   "needs_verifier": false,
-  "outline": "從 T #715 的 A7–A10 拆來(T 的 land 不能 commit ../agent-control 的檔;scripts/control/ 是同步產出物,在 T 改會被下次同步蓋掉)。碼位置(以 A 現況為準,未重現):scripts/apply.sh 約 750–790 行驗證者 verify 併入段(result_block 失敗或 raw 為 None 時 data={} 靜默略過 = 不出聲的位置;merged.update(keep) 約 771 行 = 蓋掉的位置);scripts/ticket.py RESULT_OPEN(約 1891 行,只認開頭柵欄 ```result 單獨一行)、baseline_next_step(約 982–1003 行)、done_blockers 兩句說明文字(約 959、967 行寫 scripts/verify-case.py)。no-block 成因假設(未排除):H1 柵欄寫法/外層柵欄包住 → 證偽法:拿 docs/DISPATCH-TEMPLATE.md §8.5 允許的各寫法餵 result_block;H2 EVIDENCE 路徑指到別份。#731 的 EVIDENCE 已不在,現場檔只剩 T 的 reports/t731/20261009-023652-8347/result-verifier-round1.json(present:false、reason:no-block、五段散文 sections 多數 true)。A 的 apply.sh 與 T 同步版有差異,以 A 現檔最小 diff 為準。needs_verifier=false:夾具內可自證的腳本契約,驗證者只會重演同一夾具。同步到 T 後,T 側驗收看 T #715 的 A1–A6 不受影響。",
+  "outline": "從 T #715 的 A7–A10 拆來(T 的 land 不能 commit ../agent-control 的檔;scripts/control/ 是同步產出物,在 T 改會被下次同步蓋掉)。碼位置(以 A 現況為準,未重現):scripts/apply.sh 約 750–790 行驗證者 verify 併入段(result_block 失敗或 raw 為 None 時 data={} 靜默略過 = 不出聲的位置;merged.update(keep) 約 771 行 = 蓋掉的位置);scripts/ticket.py RESULT_OPEN(約 1891 行,只認開頭柵欄 ```result 單獨一行)、baseline_next_step(約 982–1003 行)、done_blockers 兩句說明文字(約 959、967 行寫 scripts/verify-case.py)。no-block 成因假設(未排除):H1 柵欄寫法/外層柵欄包住 → 證偽法:拿 docs/DISPATCH-TEMPLATE.md §8.5 允許的各寫法餵 result_block;H2 EVIDENCE 路徑指到別份。#731 的 EVIDENCE 已不在,現場檔只剩 T 的 reports/t731/20261009-023652-8347/result-verifier-round1.json(present:false、reason:no-block、五段散文 sections 多數 true)。A 的 apply.sh 與 T 同步版有差異,以 A 現檔最小 diff 為準。needs_verifier=false:夾具內可自證的腳本契約,驗證者只會重演同一夾具。同步到 T 後,T 側驗收看 T #715 的 A1–A6 不受影響。 Fable 審票 2026-10-10:test_plan 涉及三支實跑綠(apply 45、ticket 116、verify_case 50);行號 757/771、1891、982–1003、959/967 仍對。成因查到:#731 驗證者 EVIDENCE 是 `## result` + ```json(T reports/t731/…/verifier-round1.log),不是柵欄長度 / ~~~ —— 那些現行 RESULT_OPEN 早就收(實測 result_block);H1 排除、H2 不成立。templates/dispatch-verifier.md 只說「加一段 ## result」又在旁邊示範 ```json,是誘因(改不改範本待裁)。A7(iii) / A8 改寫;verify_strings 原兩條 main 上已存在 → 換成 A7、A9 指定的新字。",
   "test_plan": "整合層夾具:拋棄式 AC_ROOT + AC_TICKETS_DIR(測試自己的暫存目錄),造 EVIDENCE-verifier.md 與票 JSON,跑 sh scripts/apply.sh --evidence-verifier …(參數照 tests/test_apply.py 現有夾具),再 ticket.py show / close 讀票。A7 三種缺漏各一份 EVIDENCE;A8 以柵欄變體表驅動;A9 先造票 verify 再跑;A10 取輸出那行 python3 原樣 sh -c 執行,scripts/ 與 scripts/control/ 兩種形狀各一輪。變異:m6 result_block 認不得 ~~~ 或較長柵欄 → A8 紅;m7 apply.sh 併入改回 merged.update(keep) 整組換 → A9 紅;m8 解析失敗不印出聲那行 → A7 紅;m9 提示改回硬字串 scripts/verify-case.py → A10 紅。測試放 tests/test_apply.py(新類,類名由實作者定)與 tests/test_ticket.py(A10)。只跑這兩檔的新類,不跑全套。A 側指令一律帶 env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR,避免寫進 T 的票庫。",
   "verify_strings": [
     {
       "path": "scripts/apply.sh",
-      "contains": "沒有併進票"
+      "contains": "verify 計畫與驗紅沒有併進票"
     },
     {
-      "path": "scripts/ticket.py",
-      "contains": "verify-case.py check %s"
+      "path": "scripts/apply.sh",
+      "contains": "保留票上"
     }
   ]
 }

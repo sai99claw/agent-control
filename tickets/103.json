@@ -7,7 +7,8 @@
     "S1【tests/test_sync_to_project.py,拋棄式 A 與專案目錄】同步後專案 scripts/control/.synced-from 內容 == A 的 git rev-parse HEAD + 換行;再 commit 一次 A、再同步 → 記號跟著換成新 HEAD。",
     "S2【同上】--dry-run → 記號檔不建立、不改(先放一個舊值,dry-run 後逐位元組相同)。",
     "S3【同上】A 工作樹裡某一支被同步的控制腳本有未提交改動 → 記號不寫(舊值保留),輸出一行含「.synced-from」與「未提交」的說明;同步本身照舊完成、rc 與今天相同。",
-    "S4【同上】.synced-from 不出現在 scripts/control/.sync-manifest;專案端先有一個 manifest 之外的檔時照舊不被刪(既有斷言照綠)。"
+    "S4【同上】.synced-from 不出現在 scripts/control/.sync-manifest;專案端先有一個 manifest 之外的檔時照舊不被刪(既有斷言照綠)。",
+    "S5【A 不是 git repo】把 A 複製成沒有 .git 的目錄再跑同步(auto-fix 的 worker 副本就是 git archive 出來的,上層也不在任何 git repo 裡)→ 同步照舊完成、rc 與今天相同、記號不寫(舊值保留),印一行含「.synced-from」與原因;tests/test_sync_to_project.py 既有案例在這種副本裡照綠。實測(Fable 10-10,A/m103):在 sync-to-project.sh 開頭加一行 SYNCED_SHA=$(git -C \"$HERE\" rev-parse HEAD)(set -eu 下)→ 非 git 副本裡 test_sync_to_project 35 條全紅。"
   ],
   "in_scope": [
     "scripts/sync-to-project.sh",
@@ -27,7 +28,7 @@
   "attempt": 0,
   "base_sha": "950fe859eb1986bb94b235eee96f5fa48dd8f015",
   "state": "Ready",
-  "state_version": 4,
+  "state_version": 7,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -42,8 +43,8 @@
       "contains": ".synced-from"
     }
   ],
-  "test_plan": "層次:shell 整合(tests/test_sync_to_project.py 既有拋棄式 A / 專案夾具,git init 在 tempdir)。期望值:記號內容由案例自己 git rev-parse HEAD 取,不從被測腳本算。只跑:python3 -m unittest tests.test_sync_to_project;收尾照 A 的閘門。變異:m1 不寫記號 → S1 紅;m2 dry-run 也寫 → S2 紅;m3 不查未提交 → S3 紅;m4 記號寫進 manifest → S4 紅。",
-  "outline": "來源:專案 T 的 verify-audit-20261009 A6 / C1(control_sync 五支案例寫死 A sha,每次同步改釘,撞過三次)。T #747 先放記號檔(值 fa74b59,開題者實測 16 支 == A@fa74b59)並讓案例讀它;本票是另一半:同步自己維護記號。needs_verifier=false:單一腳本的整合夾具 + 四變異即驗收。估 25–35 分。",
+  "test_plan": "層次:shell 整合(tests/test_sync_to_project.py 既有拋棄式 A / 專案夾具,git init 在 tempdir)。期望值:記號內容由案例自己 git rev-parse HEAD 取,不從被測腳本算。只跑:python3 -m unittest tests.test_sync_to_project;收尾照 A 的閘門。變異:m1 不寫記號 → S1 紅;m2 dry-run 也寫 → S2 紅;m3 不查未提交 → S3 紅;m4 記號寫進 manifest → S4 紅;m5 rev-parse 失敗不接住 → S5 紅(既有案例在無 .git 副本一起紅)。",
+  "outline": "來源:專案 T 的 verify-audit-20261009 A6 / C1(control_sync 五支案例寫死 A sha,每次同步改釘,撞過三次)。T #747 先放記號檔(值 fa74b59,開題者實測 16 支 == A@fa74b59)並讓案例讀它;本票是另一半:同步自己維護記號。needs_verifier=false:單一腳本的整合夾具 + 四變異即驗收。估 25–35 分。 Fable 審票 2026-10-10:test_sync_to_project 實跑 35 條綠;T #747 已 Done,T 的 scripts/control/.synced-from 現為一行 fa74b59…(40 碼),格式與 S1 一致。探針實測:worker 副本(無 .git)裡 sync 在 set -eu 下叫 git rev-parse 會整支中止、35 條全紅 → 補 S5 與 m5。",
   "needs_verifier": false,
   "priority": "P3"
 }

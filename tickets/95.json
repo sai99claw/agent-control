@@ -24,9 +24,7 @@
   "out_of_scope": [
     "memory/*",
     "docs/DECISIONS.md",
-    "board/*",
-    "scripts/ticket.py",
-    "scripts/auto-fix.sh"
+    "board/*"
   ],
   "depends_on": [
     {
@@ -42,7 +40,10 @@
     "tickets/SCHEMA.md",
     "tests/test_agent_cost_hook.py",
     "tests/test_sync_to_project.py",
-    "tests/fixtures/agent_cost/*"
+    "tests/fixtures/agent_cost/*",
+    "scripts/auto-fix.sh",
+    "scripts/ticket.py",
+    "tests/test_cost_ledger.py"
   ],
   "role": "worker",
   "model": "opus",
@@ -50,7 +51,7 @@
   "attempt": 0,
   "base_sha": "2c7f842dab224ac27730d7c102c12ceb91f954f2",
   "state": "Ready",
-  "state_version": 4,
+  "state_version": 8,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -82,7 +83,7 @@
     }
   ],
   "feature": "agent-control 工具鏈:成本帳",
-  "test_plan": "只跑:cd tests && python3 -m unittest test_agent_cost_hook test_sync_to_project test_session_hook test_guard_main test_event test_no_project_names test_ticket。前景跑加 timeout,不跑全套。變異(各自驗紅、貼紅的第一行):m1 不以 message.id 去重 → D2 fixture A tokens_in 紅;m2 tokens_out 直接加總不看 stop_reason → D2 fixture A 的 None 斷言紅;m3 拿掉 agent_transcript_path 缺時的推導 → D3 推導那條紅;m4 拿掉 AC_ROLE 不觸發 → D5 第三條紅;m5 成功時往 stdout 印一行 → D5 stdout 斷言紅;m6 SCRIPT_LIST 不加 → D6 紅。",
-  "outline": "【為什麼另一張】#94 是腳本內 headless 派工(信封可信);這張是 Claude Code hook + transcript 解析,接線點在 settings.json、會同步到專案,兩者寫入範圍不重疊,一起做 worker 上下文太大。依賴 #94 的列形狀(D-018 同名唯一)。【開題者實測】互動 session 的子 agent 有 `<session>/subagents/agent-<id>.jsonl` + `.meta.json`(description、agentType、model 別名);transcript 的 output_tokens 多半是串流開頭值、沒有 stop_reason → 只有收尾齊全才算,否則 null;input / cache 三欄在 headless transcript 與信封四數對得上,互動的未對帳(未實測,依 API message_start 語意推定可信)。完成通知的 usage 只有 totalTokens(像是最後一輪的上下文大小),不拆四種,不採用。【未實測】SubagentStop stdin 是否帶 agent_transcript_path / agent_id(版本相依)→ D3 定推導路徑當後備;實作者第一步把一次真實 stdin 的鍵印進 EVIDENCE。【限制】歸票靠描述 / prompt 的 #號,跨 repo 同號會撞(約定:跨 repo 不寫裸 #);主線 session 當掉沒有 SessionEnd 就沒有那一筆;不進票、不進 #94 的 cost_total。【同步】落地後主線 sync-to-project,照 sync 印的那一筆貼進 T 的 .claude/settings.json(比照 #63 守衛)。needs_verifier=false:契約全是 fixture 的解析規則,驗證者案例只會重演同一 fixture 契約,由 worker 六變異自證(D-028)。 【10-09】D9 由專案流程稽核 §5 併入:逾時那一趟的 token 與互動 session 用同一支 transcript 取數;報告要的「逾時記 partial:true」不加新鍵(D-018 一列 14 鍵),outcome=timeout 即是。",
+  "test_plan": "只跑:cd tests && python3 -m unittest test_agent_cost_hook test_sync_to_project test_session_hook test_guard_main test_event test_no_project_names test_ticket test_cost_ledger。test_no_project_names 要在有 git index 的樹裡跑(git archive 出來的副本沒有 .git,test_the_scan_sees_something_at_all 必紅,與本票無關;閘門的 worktree 照綠)。前景跑加 timeout,不跑全套。變異(各自驗紅、貼紅的第一行):m1 不以 message.id 去重 → D2 fixture A tokens_in 紅;m2 tokens_out 直接加總不看 stop_reason → D2 fixture A 的 None 斷言紅;m3 拿掉 agent_transcript_path 缺時的推導 → D3 推導那條紅;m4 拿掉 AC_ROLE 不觸發 → D5 第三條紅;m5 成功時往 stdout 印一行 → D5 stdout 斷言紅;m6 SCRIPT_LIST 不加 → D6 紅;m7 D9 不讀 transcript → test_cost_ledger 的 D9 案例紅。",
+  "outline": "【為什麼另一張】#94 是腳本內 headless 派工(信封可信);這張是 Claude Code hook + transcript 解析,接線點在 settings.json、會同步到專案,兩者寫入範圍不重疊,一起做 worker 上下文太大。依賴 #94 的列形狀(D-018 同名唯一)。【開題者實測】互動 session 的子 agent 有 `<session>/subagents/agent-<id>.jsonl` + `.meta.json`(description、agentType、model 別名);transcript 的 output_tokens 多半是串流開頭值、沒有 stop_reason → 只有收尾齊全才算,否則 null;input / cache 三欄在 headless transcript 與信封四數對得上,互動的未對帳(未實測,依 API message_start 語意推定可信)。完成通知的 usage 只有 totalTokens(像是最後一輪的上下文大小),不拆四種,不採用。【未實測】SubagentStop stdin 是否帶 agent_transcript_path / agent_id(版本相依)→ D3 定推導路徑當後備;實作者第一步把一次真實 stdin 的鍵印進 EVIDENCE。【限制】歸票靠描述 / prompt 的 #號,跨 repo 同號會撞(約定:跨 repo 不寫裸 #);主線 session 當掉沒有 SessionEnd 就沒有那一筆;不進票、不進 #94 的 cost_total。【同步】落地後主線 sync-to-project,照 sync 印的那一筆貼進 T 的 .claude/settings.json(比照 #63 守衛)。needs_verifier=false:契約全是 fixture 的解析規則,驗證者案例只會重演同一 fixture 契約,由 worker 六變異自證(D-028)。 【10-09】D9 由專案流程稽核 §5 併入:逾時那一趟的 token 與互動 session 用同一支 transcript 取數;報告要的「逾時記 partial:true」不加新鍵(D-018 一列 14 鍵),outcome=timeout 即是。 Fable 審票 2026-10-10:#94 已 Done(v21),依賴成立;base 2c7f842 之後 #94 落地改過 auto-fix.sh / ticket.py / event.py / SCHEMA。test_plan 指令照寫法 cd tests 實跑:test_sync_to_project/test_session_hook/test_guard_main/test_event 85 條綠、test_ticket 116 綠;test_no_project_names 在無 .git 的基底紅 1 條、git init 後 6 條綠(環境);test_agent_cost_hook 是新檔。D9(10-09 併入)要改 auto-fix.sh / ticket.py,但兩支原列 out_of_scope(A 的 apply 會 rc=5)→ 移出 out_of_scope、補進 allowed_write_paths 與 tests/test_cost_ledger.py,test_plan 補 m7。",
   "needs_verifier": false
 }

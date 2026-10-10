@@ -73,7 +73,7 @@
   "attempt": 0,
   "base_sha": "950fe859eb1986bb94b235eee96f5fa48dd8f015",
   "state": "Draft",
-  "state_version": 1,
+  "state_version": 2,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -103,6 +103,6 @@
   ],
   "needs_verifier": true,
   "interface_fixed": true,
-  "outline": "D-H43 ① 的 A 半。碼位置(讀碼,未實測):ticket.py write_scope(約 1160 行)是 apply / gate / land / review 四處共用的唯一判準,拿掉 out_of_scope 那道 fence 一次改四處;REQUIRED / NOT_EMPTY(約 48–54 行)與 create 的必填、602 行 in_scope→allowed 的補值;apply.sh 約 612–630 行擋 / 列 extra、721–736 行寫 extra_paths;review.sh 約 270–285 行白名單外段。guard-main.sh FACE 有 out_of_scope(票面欄位清單,加 info_homes)。介面已釘:EVIDENCE 段名「## 提示清單外的改動」、行格式、result 新鍵 extra_reasons、config 鍵 info_map、票欄 info_homes、輸出字「警告」「沒交代理由」。needs_verifier=true:拿掉一道擋是放寬,要獨立案例證 protected_paths 照擋、四個入口一致;interface_fixed=true(上列已釘)。撞檔:#96 #100 改 apply.sh,#98 改 review.sh / land.sh / SCHEMA,#95 改 SCHEMA;語意依賴 #97(寫在 depends_on)。建議順序:#97 → 本票 → 同步票。T 側另需:ARCHITECTURE 新節「什麼資訊住哪個檔」(草稿在 Fable 報告 §2.1)、board/config.json info_map、T 的 DISPATCH-TEMPLATE。",
+  "outline": "D-H43 ① 的 A 半。碼位置(讀碼,未實測):ticket.py write_scope(約 1160 行)是 apply / gate / land / review 四處共用的唯一判準,拿掉 out_of_scope 那道 fence 一次改四處;REQUIRED / NOT_EMPTY(約 48–54 行)與 create 的必填、602 行 in_scope→allowed 的補值;apply.sh 約 612–630 行擋 / 列 extra、721–736 行寫 extra_paths;review.sh 約 270–285 行白名單外段。guard-main.sh FACE 有 out_of_scope(票面欄位清單,加 info_homes)。介面已釘:EVIDENCE 段名「## 提示清單外的改動」、行格式、result 新鍵 extra_reasons、config 鍵 info_map、票欄 info_homes、輸出字「警告」「沒交代理由」。needs_verifier=true:拿掉一道擋是放寬,要獨立案例證 protected_paths 照擋、四個入口一致;interface_fixed=true(上列已釘)。撞檔:#96 #100 改 apply.sh,#98 改 review.sh / land.sh / SCHEMA,#95 改 SCHEMA;語意依賴 #97(寫在 depends_on)。建議順序:#97 → 本票 → 同步票。T 側另需:ARCHITECTURE 新節「什麼資訊住哪個檔」(草稿在 Fable 報告 §2.1)、board/config.json info_map、T 的 DISPATCH-TEMPLATE。 Fable 審票 2026-10-10:仍 Draft,轉 Ready 前缺:(1) depends_on #97 未落地(A7 要以它的文字為底);(2) memory/role/opener.md 正文已 2000/2000 字(上限 2000,memory.py check 實測),A7 要加字必須同量刪併 —— memory.py lint 不量字數,擋的是 gate 機械格「本分支讓記憶卡超上限」;(3) needs_verifier=true 而實作者寫入範圍含 tests/test_ticket、test_apply、test_gate、test_land、test_review、test_auto_fix 等,驗證者案例要放新檔並先寫進 verify.files(#98 的 tests/test_review_patch_id.py 那種),否則兩份 patch 撞檔 apply rc=3(T #709);(4) 與 Ready 票重疊:apply.sh(#96 #100 #104)、review.sh(#98 #104 #105)、land.sh(#98 #104)、auto-fix.sh(#107 #104 #105 #96 #99)、ticket.py(#97 #98 #100 #104 #106)、SCHEMA(#95 #98 #104 #105 #106)、test_sync_to_project(#95 #103)—— 排在這些之後;(5) 規模(8 條驗收、28 檔、10 支測試模組一輪約 9 分)是否拆票待裁。行號 48–54、602、1160、apply 612–630 / 721–736、review.sh 272–278、guard-main FACE、CLAUDE.md 18–20 實測仍對。",
   "test_plan": "單元 + 整合層,全在 tests/,拋棄式 AC_ROOT + AC_TICKETS_DIR。A1/A2/A6:tests/test_ticket.py 的 create / set / lint / verify 夾具。A3:apply / gate / land 三支各一組同一份夾具(out_of_scope 命中 → 放行;protected_paths 命中 → 照擋)。A4:造 EVIDENCE(a 有理由、b 空理由、c 沒行)跑 apply.sh,讀 stdout/stderr 與 result-round1.json。A5:review.sh 產派工文不起 reviewer(既有夾具的做法)。A7:grep 規矩檔舊說法。A8:test_sync_to_project 的拋棄式專案。變異 m1–m6 照驗收各條;worker 只跑相關測試類,不跑全套。A 側指令一律帶 env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR。"
 }
