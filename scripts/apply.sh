@@ -4,6 +4,8 @@
 #   sh scripts/apply.sh <票號> <patch> [<patch-verify>] [--evidence <檔>]
 #       [--evidence-verifier <檔>]                    # 套進 t<票號> 分支並 commit
 #   sh scripts/apply.sh rebase <票號> <patch> [-o <輸出>] # 套到**當前主線**的副本,出一份乾淨 diff
+#   sh scripts/apply.sh --batch <整合分支> <票號…> <patch> [--evidence <檔>]
+#                                                     # 批次修復:疊成整合分支頭上一個 commit(#108)
 #
 # 這一手以前是主線手動做的(`docs/ROLES.md` 的引言框:落地器**不**套 patch)。手動的
 # 問題不是慢,是**每一次都重新決定要不要檢查那五件事** —— 而 2026-09-10 的事故裡,
@@ -200,6 +202,17 @@ sys.stdout.write("\n".join(out) + "\n")
 PY
 }
 
+# 套完逐一比對:該在的在、該刪的不在。單票與批次共用;`$WT` 由呼叫端設好。
+verify_targets() {   # $1 = headers 印出來的清單
+    echo "$1" | while read -r mark path; do
+        [ -n "${path:-}" ] || continue
+        case "$mark" in
+            T) [ -f "$WT/$path" ] || echo "該在卻不在:$path" ;;
+            D) [ ! -e "$WT/$path" ] || echo "該刪卻還在:$path" ;;
+        esac
+    done
+}
+
 # ------------------------------------------------------------------ rebase
 #
 # 連續落地幾張票,**幾乎一定**撞到所有票都往尾端附加的登記檔與自動產生的清單
@@ -363,11 +376,294 @@ PY
     exit 0
 }
 
+# ------------------------------------------------------------------ batch
+#
+# 批次修復(#108,D-H51 ②):land 一批 N 張、全套紅時,`auto-fix.sh --batch` 派的那一個
+# worker 在**整合分支**的副本上修紅榜;它的 patch 由這裡疊成整合分支頭上**恰一個** commit。
+# 與單票那一支不同的三件事:
+# 1. **不寫票**:不 `ticket.py set`、不記 patch_ref / branch / objection。任何一張票的
+#    `state_version` 動一下,N 張的覆核同時過期;各票分支也不動(覆核綁的是它們的 sha)。
+#    紀錄全在 `reports/batch/<stamp>/`。
+# 2. 硬擋 = `protected_paths` ∪(各票 `out_of_scope` 聯集 − 各票 `allowed_write_paths` 聯集):
+#    票 1 不准碰、票 2 本來就要改的檔,一起修的時候不擋。在 `git apply` **之前**看檔頭量,
+#    擋下來的那一手整合分支的工作樹一個位元都沒動。
+# 3. **放寬測試**硬擋:測試檔(`batch_fix.test_globs`)裡刪掉含 assert 的行、或加了含 skip /
+#    expectedFailure 的行 → rc 5。修一批紅最便宜的路就是把紅的案例弄啞,派工文的一句話擋不住它。
+#    案例真的錯走 `OBJECTION: test_defect <案例>`:那條案例的檔不擋,交開題者判。
+# stamp:`AC_BATCH_STAMP` > patch 就住在 `reports/batch/<stamp>/` > 現在時間。
+# 退出碼同單票那一張表;6 = 套好也 commit 了,但 EVIDENCE 有 `OBJECTION:`(記在 result,不記進票)。
+cmd_batch() {
+    [ $# -ge 3 ] || { echo "apply: --batch <整合分支> <票號…> <patch> [--evidence <檔>]" >&2; exit 2; }
+    B_BR=$1
+    shift
+    B_IDS=""; B_PATCH=""; B_EVIDENCE=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --evidence)
+                shift
+                [ $# -ge 1 ] || { echo "apply: --evidence 後面要路徑" >&2; exit 2; }
+                B_EVIDENCE=$1 ;;
+            -*) echo "apply: --batch 不認得 $1" >&2; exit 2 ;;
+            *)  [ -z "$B_PATCH" ] || B_IDS="$B_IDS $B_PATCH"
+                B_PATCH=$1 ;;
+        esac
+        shift
+    done
+    B_IDS=${B_IDS# }
+    [ -n "$B_IDS" ] || { echo "apply: --batch 至少要一張票號,最後一個參數是 patch" >&2; exit 2; }
+    for b_id in $B_IDS; do
+        [ -f "$TDIR/$b_id.json" ] || { echo "apply: 找不到票 #$b_id($TDIR/$b_id.json)" >&2; exit 2; }
+    done
+    [ -f "$B_PATCH" ] || { echo "apply: 找不到 patch $B_PATCH" >&2; exit 2; }
+    B_PATCH=$(cd "$(dirname "$B_PATCH")" && pwd)/$(basename "$B_PATCH")
+    [ -n "$B_EVIDENCE" ] || B_EVIDENCE=$(dirname "$B_PATCH")/EVIDENCE.md
+    git -C "$ROOT" rev-parse -q --verify "$B_BR^{commit}" >/dev/null \
+        || { echo "apply: 整合分支 $B_BR 不存在" >&2; exit 2; }
+    B_TAGS=$(for b_id in $B_IDS; do printf '#%s ' "$b_id"; done)
+    B_TAGS=${B_TAGS% }
+    B_ROOT=$ROOT/$(cfg reports_dir reports)/batch
+    B_STAMP=${AC_BATCH_STAMP:-$(python3 -c 'import os,sys; d=os.path.realpath(os.path.dirname(sys.argv[1])); print(os.path.basename(d) if os.path.dirname(d)==os.path.realpath(sys.argv[2]) else "")' "$B_PATCH" "$B_ROOT")}
+    [ -n "$B_STAMP" ] || B_STAMP=$(date +%Y%m%d-%H%M%S)-$$
+    B_DIR=$B_ROOT/$B_STAMP
+    B_ROUND=${AC_ROUND:-1}
+    mkdir -p "$B_DIR"
+    B_SHA=$(sha256_of "$B_PATCH")
+    echo "apply: 批次 $B_TAGS -> $B_BR  patch $(basename "$B_PATCH")  sha256 ${B_SHA%"${B_SHA#??????????}"}…  紀錄 $B_DIR"
+
+    B_TARGETS=$(headers "$B_PATCH") || { echo "apply: patch 檔頭不合格(見上面逐條)" >&2; exit 3; }
+
+    # 兩道硬擋都只看 patch 本身:印 `B <檔>\t<哪一格>\t<glob>`(寫入範圍)、
+    # `R <檔>:<行>\t<那一行>`(放寬測試)、`E <檔>`(聯集外,不擋)、`X <檔>\t<案例>`(反駁豁免)。
+    B_OUT=$(python3 - "$AC" "$ROOT" "$TDIR" "$B_PATCH" "$B_EVIDENCE" $B_IDS <<'PY'
+import json, os, re, sys
+ac, root, tdir, patch, evidence = sys.argv[1:6]
+ids = sys.argv[6:]
+sys.path.insert(0, ac)
+import ticket as ticket_mod
+
+rows = {}
+for ident in ids:
+    with open(os.path.join(tdir, "%s.json" % ident), encoding="utf-8") as handle:
+        rows[ident] = json.load(handle)
+try:
+    with open(os.path.join(root, "board", "config.json"), encoding="utf-8") as handle:
+        conf = json.load(handle)
+except (OSError, ValueError):
+    conf = {}
+conf = conf if isinstance(conf, dict) else {}
+protected = conf.get("protected_paths") or []
+test_globs = (conf.get("batch_fix") or {}).get("test_globs") \
+    or ["tests/**", "verify/**", "**/test_*.py"]
+allowed = []
+for ident in ids:
+    for pattern in rows[ident].get("allowed_write_paths") or []:
+        if pattern not in allowed:
+            allowed.append(pattern)
+fences = [("#%s 的 out_of_scope" % ident, rows[ident].get("out_of_scope") or []) for ident in ids]
+
+
+def is_test(name):
+    # `**/test_*.py` 也要蓋到根目錄的 test_x.py:fnmatch 的 `**/` 要求前面至少一層。
+    return ticket_mod.first_match(name, test_globs) is not None or ticket_mod.first_match(
+        name, [pattern[3:] for pattern in test_globs if pattern.startswith("**/")]) is not None
+
+
+def case_files(case):
+    case = case.split("::", 1)[0]
+    if case.endswith(".py"):
+        return {case}
+    parts = case.split(".")
+    return {"/".join(parts[:k]) + ".py" for k in range(1, len(parts) + 1)}
+
+
+exempt = {}
+try:
+    with open(evidence, encoding="utf-8", errors="replace") as handle:
+        for line in handle.read().splitlines():
+            found = re.match(r"^OBJECTION:\s*test_defect\s+(\S+)", line)
+            if found:
+                for name in case_files(found.group(1).strip("`")):
+                    exempt.setdefault(name, found.group(1).strip("`"))
+except OSError:
+    pass
+
+HUNK = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+with open(patch, encoding="utf-8", errors="replace") as handle:
+    lines = handle.read().splitlines()
+sections, current = [], None
+for line in lines:
+    if line.startswith("--- "):
+        current = {"old": line[4:].split("\t")[0].strip(), "new": "", "removed": [], "added": []}
+        sections.append(current)
+        old_no = new_no = 0
+    elif line.startswith("+++ ") and current is not None and not current["new"]:
+        current["new"] = line[4:].split("\t")[0].strip()
+    elif line.startswith("@@") and current is not None:
+        found = HUNK.match(line)
+        if found:
+            old_no, new_no = int(found.group(1)), int(found.group(2))
+    elif current is None or line.startswith("\\"):
+        continue
+    elif line.startswith("-"):
+        current["removed"].append((old_no, line[1:]))
+        old_no += 1
+    elif line.startswith("+"):
+        current["added"].append((new_no, line[1:]))
+        new_no += 1
+    elif line.startswith(" "):
+        old_no += 1
+        new_no += 1
+
+for row in sections:
+    gone = row["new"] == "/dev/null"
+    name = (row["old"] if gone else row["new"]).split("/", 1)[1]
+    pattern = ticket_mod.first_match(name, protected)
+    if pattern is not None:
+        print("B %s\tboard/config.json 的 protected_paths\t%s" % (name, pattern))
+    elif not ticket_mod.matches_any(name, allowed):
+        for field, globs in fences:
+            pattern = ticket_mod.first_match(name, globs)
+            if pattern is not None:
+                print("B %s\t%s\t%s" % (name, field, pattern))
+                break
+        else:
+            print("E %s" % name)
+    if not is_test(name):
+        continue
+    # 搬位置不算刪:同一份檔裡原樣加回來的那一行(去掉縮排比)抵掉一次。
+    kept = [text.strip() for _, text in row["added"]]
+    hits = []
+    for number, text in row["removed"]:
+        if "assert" not in text.lower():
+            continue
+        if text.strip() in kept:
+            kept.remove(text.strip())
+            continue
+        hits.append((number, text))
+    for number, text in row["added"]:
+        if re.search(r"skip|expectedfailure", text, re.I):
+            hits.append((number, text))
+    if hits and name in exempt:
+        print("X %s\t%s" % (name, exempt[name]))
+        continue
+    for number, text in hits:
+        print("R %s:%d\t%s" % (name, number, text.strip()))
+PY
+) || { echo "apply: 批次的寫入範圍 / 放寬測試量不出來(票讀不動?)" >&2; exit 2; }
+    B_BLOCKED=$(echo "$B_OUT" | sed -n 's/^B //p')
+    B_RELAX=$(echo "$B_OUT" | sed -n 's/^R //p')
+    B_EXTRA=$(echo "$B_OUT" | sed -n 's/^E //p')
+    echo "$B_OUT" | sed -n 's/^X //p' | awk -F '\t' '{ printf "apply: %s 的測試改動不擋 —— EVIDENCE 有 OBJECTION: test_defect %s(交開題者判)\n", $1, $2 }'
+    if [ -n "$B_BLOCKED" ]; then
+        echo "apply: 動到這一批硬擋的檔(protected_paths ∪ out_of_scope 聯集 − allowed_write_paths 聯集):" >&2
+        echo "$B_BLOCKED" | awk -F '\t' '{ printf "apply:   %s —— 命中%s(`%s`)\n", $1, $2, $3 }' >&2
+    fi
+    if [ -n "$B_RELAX" ]; then
+        echo "apply: patch 在測試檔裡刪了斷言或加了 skip —— 修紅不准把案例弄啞:" >&2
+        echo "$B_RELAX" | awk -F '\t' '{ printf "apply:   %s 放寬測試 —— %s\n", $1, $2 }' >&2
+        echo "apply:   案例本身錯就在 EVIDENCE 寫 OBJECTION: test_defect <案例>,交開題者判" >&2
+    fi
+    if [ -n "$B_BLOCKED" ] || [ -n "$B_RELAX" ]; then
+        echo "apply: 批次 patch 被硬擋,$B_BR 沒動(沒有套、沒有 commit)" >&2
+        exit 5
+    fi
+
+    # 整合分支的工作樹:land 開的那一個就用它(同一條分支 git 只准一個 worktree),沒有才開。
+    WT=$(git -C "$ROOT" worktree list --porcelain | awk -v ref="branch refs/heads/$B_BR" '
+        /^worktree / { here = substr($0, 10) } $0 == ref { print here; exit }')
+    if [ -z "$WT" ]; then
+        WT=$WTBASE/batch-$(echo "$B_BR" | tr '/' '-')
+        mkdir -p "$WTBASE"
+        git -C "$ROOT" worktree add -q "$WT" "$B_BR" || { echo "apply: worktree add $B_BR 失敗" >&2; exit 2; }
+        echo "apply: 開了整合分支 $B_BR 的副本 $WT"
+    else
+        echo "apply: 沿用整合分支的副本 $WT"
+    fi
+    B_RESIDUE=$(git -C "$WT" ls-files --others --exclude-standard -- 'gate.log*')
+    B_DIRTY=$(git -C "$WT" status --porcelain --untracked-files=all | grep -v '^?? gate\.log')
+    if [ -n "$B_DIRTY" ]; then
+        echo "$B_DIRTY" | sed 's/^/apply:   /' >&2
+        echo "apply: 整合分支的工作樹 $WT 有沒 commit 的改動 —— 疊上去會把它們一起 commit,停" >&2
+        exit 2
+    fi
+    if ! git -C "$WT" apply -p1 --check "$B_PATCH" 2>/tmp/ac-apply-$$.err; then
+        sed 's/^/apply:   /' /tmp/ac-apply-$$.err >&2
+        rm -f /tmp/ac-apply-$$.err
+        echo "apply: git apply --check 不過 —— 這份 patch 不是對 $B_BR 的頭做的" >&2
+        exit 3
+    fi
+    rm -f /tmp/ac-apply-$$.err
+    git -C "$WT" apply -p1 "$B_PATCH" || { echo "apply: git apply 失敗(--check 過了卻套不進去)" >&2; exit 3; }
+    B_BAD=$(verify_targets "$B_TARGETS")
+    [ -z "$B_BAD" ] || { echo "$B_BAD" | sed 's/^/apply:   /' >&2; echo "apply: 套完的檔案與 patch 說的對不上" >&2; exit 4; }
+    git -C "$WT" apply -p1 --reverse --check "$B_PATCH" 2>/dev/null \
+        || { echo "apply: 反著套回不去 —— 工作樹上的改動不等於這份 patch" >&2; exit 4; }
+    git -C "$WT" add -A || { echo "apply: git add 失敗" >&2; exit 2; }
+    for name in $B_RESIDUE; do
+        git -C "$WT" reset -q -- "$name" || { echo "apply: git reset $name 失敗" >&2; exit 2; }
+    done
+    if git -C "$WT" diff --cached --quiet; then
+        echo "apply: 套完之後工作樹沒有任何改動 —— 這份 patch 等於什麼都沒做" >&2
+        exit 4
+    fi
+    git -C "$WT" commit -q -m "batch fix round $B_ROUND $B_TAGS ($B_BR)
+
+batch: $B_STAMP
+tickets: $B_TAGS
+patch: $(basename "$B_PATCH") sha256=$B_SHA
+round: $B_ROUND" || { echo "apply: git commit 失敗" >&2; exit 2; }
+    echo "apply: 批次 $B_TAGS -> $B_BR $(git -C "$WT" rev-parse --short HEAD) 已 commit(各票分支與票檔都沒動)"
+    if [ -f "$B_EVIDENCE" ]; then
+        python3 "$AC/memory.py" harvest "$B_EVIDENCE" \
+            || echo "apply: EVIDENCE 記憶收割失敗($B_EVIDENCE)—— 不擋 apply" >&2
+    else
+        echo "apply: 找不到 EVIDENCE $B_EVIDENCE —— 記憶 0 筆" >&2
+    fi
+    B_FIRST=${B_IDS%% *}
+    B_RESULT=$B_DIR/result-round$B_ROUND.json
+    python3 "$AC/ticket.py" result "$B_EVIDENCE" "$B_RESULT" --ticket "$B_FIRST" \
+        --role worker --round "$B_ROUND" \
+        || echo "apply: result 抽不出來($B_EVIDENCE)—— 不擋 apply" >&2
+    # 反駁只留在 EVIDENCE 與這一份 result(A4):`ticket.py objection` 會 +1 state_version,N 張覆核同時過期。
+    python3 - "$B_RESULT" "$B_EXTRA" "$B_EVIDENCE" <<'PY'
+import json, sys
+path, extra = sys.argv[1], [line for line in sys.argv[2].splitlines() if line]
+try:
+    with open(sys.argv[3], encoding="utf-8", errors="replace") as handle:
+        objections = [line for line in handle.read().splitlines() if line.startswith("OBJECTION:")]
+except OSError:
+    objections = []
+try:
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+except (OSError, ValueError) as exc:
+    sys.stderr.write("apply: result 讀不到(%s)—— extra_paths 沒寫進去:%s\n" % (path, exc))
+    raise SystemExit(0)
+data["extra_paths"] = extra
+data["objections"] = objections
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, ensure_ascii=False, indent=2)
+    handle.write("\n")
+PY
+    if [ -n "$B_EXTRA" ]; then
+        echo "apply: 聯集外的改動(不擋,記進 $(basename "$B_RESULT") 的 extra_paths、交覆核者逐檔看):"
+        echo "$B_EXTRA" | sed 's/^/apply:   /'
+    fi
+    if [ -f "$B_EVIDENCE" ] && grep -q '^OBJECTION:' "$B_EVIDENCE"; then
+        echo "apply: EVIDENCE 裡有反駁 —— $(grep -m1 '^OBJECTION:' "$B_EVIDENCE")" >&2
+        echo "apply:   批次不寫票:反駁沒有記進任何一張票的 objections[],由開題者 / 主線照 EVIDENCE 判" >&2
+        exit 6
+    fi
+    echo "apply: 下一步 —— sh scripts/review.sh --batch $B_BR $B_IDS --run-id $B_STAMP"
+    exit 0
+}
+
 # ------------------------------------------------------------------ apply
 usage() {   # $1 = 出去的檔案描述子(1 = 有人問 --help,2 = 用錯了)
     {
         echo "用法:sh scripts/apply.sh <票號> <patch> [<patch-verify>] [旗標…]"
         echo "      sh scripts/apply.sh rebase <票號> <patch> [-o <輸出>]"
+        echo "      sh scripts/apply.sh --batch <整合分支> <票號…> <patch> [--evidence <檔>]"
         echo ""
         echo "認得的旗標:"
         echo "  --evidence <檔>            實作者的 EVIDENCE:收記憶、抽 result-round<輪>.json、"
@@ -397,6 +693,10 @@ if [ "$1" = "rebase" ]; then
         shift
     done
     cmd_rebase "$R_ID" "$R_PATCH" "$R_OUT"
+fi
+if [ "$1" = "--batch" ]; then
+    shift
+    cmd_batch "$@"
 fi
 
 [ $# -ge 2 ] || { echo "apply: 要 <票號> 與 <patch>" >&2; exit 2; }
@@ -559,15 +859,6 @@ git -C "$WT" apply -p1 "$PATCH" || die 3 "git apply 失敗(--check 過了卻套�
 
 # 4. 套完逐一比對:該在的在、該刪的不在,而且整份 patch 反著套回得去。
 #    **`git apply` 的 0 只說它沒有喊叫**,不說套進去的與 patch 說的是同一件事。
-verify_targets() {   # $1 = headers 印出來的清單
-    echo "$1" | while read -r mark path; do
-        [ -n "${path:-}" ] || continue
-        case "$mark" in
-            T) [ -f "$WT/$path" ] || echo "該在卻不在:$path" ;;
-            D) [ ! -e "$WT/$path" ] || echo "該刪卻還在:$path" ;;
-        esac
-    done
-}
 BAD=$(verify_targets "$TARGETS")
 [ -z "$BAD" ] || { echo "$BAD" | sed 's/^/apply:   /' >&2; die 4 "套完的檔案與 patch 說的對不上"; }
 git -C "$WT" apply -p1 --reverse --check "$PATCH" 2>/dev/null \

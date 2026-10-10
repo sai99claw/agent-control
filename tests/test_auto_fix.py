@@ -3010,5 +3010,175 @@ class ThePacketSaysWhichTestsToRun(AutoFixBase):
                     self.assertNotIn(self.FIXED, text)
 
 
+
+# 批次修復的假 worker(#108):在副本 work/ 改一個檔、照規矩出 patch 與 EVIDENCE。
+BATCH_WORKER_FIXES = """#!/bin/sh
+set -e
+echo "worker ran batch round $AC_ROUND" >> "$AC_TEST_LOG"
+cd "$AC_WORK"
+printf 'one fixed by the batch\\n' > work/src/one.txt
+diff -ruN base work > patch-round1.diff || true
+printf '# EVIDENCE\\n修了 src/one.txt\\n' > EVIDENCE-round1.md
+"""
+
+BATCH_WORKER_OBJECTS = """#!/bin/sh
+set -e
+echo "worker ran batch round $AC_ROUND" >> "$AC_TEST_LOG"
+cd "$AC_WORK"
+printf 'one fixed by the batch\\n' > work/src/one.txt
+diff -ruN base work > patch-round1.diff || true
+printf '# EVIDENCE\\nOBJECTION: ticket-wrong 票 2 的驗收與票 1 互斥\\n' > EVIDENCE-round1.md
+"""
+
+BATCH_REVIEW_FAIL = """#!/bin/sh
+echo "reviewer ran $AC_TICKET" >> "$AC_TEST_LOG"
+cat > /dev/null
+cat <<'EOF'
+# 覆核
+① verdict:fail
+OBJECTION: blocking 修法把票 2 的 B1 修壞了
+
+## result
+
+```result
+{"ticket": "1", "role": "reviewer", "round": 1, "verdict": "fail",
+ "rc": null, "patch_sha256": null, "gate": null, "mutations": [],
+ "objection": null, "excluded": [], "repro": null, "memory": []}
+```
+EOF
+"""
+
+
+class BatchFix(AutoFixBase):
+    """#108 A1 / A6 / A7:`AC_BATCH_RUN_ID=<run> auto-fix.sh --batch land/X 1 2` 派一輪批次 worker。
+    worker 與 reviewer 都是替身;期望值從夾具寫下的票檔與 status.json 讀,不從腳本算。"""
+
+    def setUp(self):
+        super().setUp()
+        self.batch = self.make_batch()
+        self.before = {ident: self.load_ticket(ident) for ident in ("1", "2")}
+
+    def run_batch(self, *extra, env_run=True):
+        env = self.env(AC_BATCH_RUN_ID=self.batch["run_id"]) if env_run else self.env()
+        return self.run_sh("scripts/auto-fix.sh", "--batch", "land/X", "1", "2", *extra, env=env)
+
+    def record(self, name):
+        dirs = self.batch_dirs()
+        self.assertEqual(len(dirs), 1, dirs)
+        return os.path.join(dirs[0], name)
+
+    def decisions(self):
+        return [row for row in self.inbox_rows() if row.get("kind") == "decision"]
+
+    def assert_one_page_for_the_batch(self):
+        rows = self.decisions()
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(str(rows[0]["ticket"]), "1")
+        self.assertIn("#2", rows[0]["what"])
+
+    def assert_tickets_kept(self):
+        for ident, row in self.before.items():
+            now = self.load_ticket(ident)
+            for key in ("state_version", "review", "state", "objections", "attempt"):
+                self.assertEqual(now.get(key), row.get(key), "#%s 的 %s 被寫了" % (ident, key))
+
+    def test_the_packet_carries_all_five_parts(self):
+        """A1(a)。四問:量派工文逐字含 ① 兩張票的 subject / objective / acceptance / allowed;
+        ② 紅榜每條 case / file / excerpt;③ git diff --stat main...land/X 與整批 diff 檔路徑;
+        ④ 寫入範圍聯集逐條;⑤ 不得放寬測試 + OBJECTION: test_defect。紅 = 少任一項;
+        期望值 = 票檔、status.json、測試自己跑的 git diff --stat。
+
+        **變異 ③**:派工文不帶寫入範圍聯集 → ④ 那幾條紅。
+        """
+        self.set_worker(WORKER_NEVER)
+        self.run_batch()
+        text = self.read(self.record("dispatch-round1.md"))
+        union = []
+        for ident in ("1", "2"):
+            row = self.before[ident]
+            for value in (row["subject"], row["objective"], *row["acceptance"]):
+                self.assertIn(value, text)
+            self.assertIn(json.dumps(row["allowed_write_paths"], ensure_ascii=False), text)
+            union += [item for item in row["allowed_write_paths"] if item not in union]
+        for row in self.batch["failures"]:
+            for key in ("case", "file", "excerpt"):
+                self.assertIn(row[key], text)
+        stat = self.git("diff", "--stat", "main...land/X").rstrip("\n")
+        self.assertTrue(stat)
+        self.assertIn(stat, text)
+        self.assertIn(self.record("batch.diff"), text)
+        self.assertTrue(os.path.exists(self.record("batch.diff")))
+        for item in union:
+            self.assertIn("- `%s`" % item, text)
+        self.assertIn("不得放寬測試", text)
+        self.assertIn("OBJECTION: test_defect", text)
+
+    def test_green_path_commits_one_fix_reviews_it_and_costs_two_rows_on_ticket_one(self):
+        """A2 / A5 / A6 一條龍。四問:量 rc 0、land/X 前進一個 batch commit、review.json.sha = land/X 頭、
+        票 1 cost 多 worker / reviewer 兩列(note 帶 batch、run_id = AC_BATCH_RUN_ID)、票 2 cost 不變、
+        兩張票的版本與覆核不動;紅 = 任一格漂;期望值 = 夾具 rev-parse 與票檔。"""
+        self.set_worker(BATCH_WORKER_FIXES)
+        self.set_reviewer(REVIEWER_PASS)
+        done = self.run_batch()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("rev-parse", "land/X^").strip(), self.batch["land"])
+        self.assertIn("batch fix round 1", self.git("log", "-1", "--format=%s", "land/X"))
+        with open(self.record("review.json"), encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["sha"], self.git("rev-parse", "land/X").strip())
+        rows = self.load_ticket("1").get("cost") or []
+        self.assertEqual(sorted(row["role"] for row in rows), ["reviewer", "worker"], rows)
+        for row in rows:
+            self.assertIn("batch", row["note"])
+            self.assertIn("#1 #2", row["note"])
+            self.assertEqual(row["run_id"], self.batch["run_id"])
+        self.assertEqual(self.load_ticket("2").get("cost"), self.before["2"].get("cost"))
+        for branch, sha in self.batch["shas"].items():
+            self.assertEqual(self.git("rev-parse", branch).strip(), sha)
+        self.assert_tickets_kept()
+        self.assertFalse(self.decisions())
+
+    def test_a_failed_review_pages_ticket_one_and_returns_non_zero(self):
+        """A7 覆核 fail(e)。四問:量 rc≠0、review.json 不在、一頁 decision ticket=1 內文 #2;
+        紅 = 寫了 review.json 或沒發頁;期望值 = 命令列的票號。"""
+        self.set_worker(BATCH_WORKER_FIXES)
+        self.set_reviewer(BATCH_REVIEW_FAIL)
+        done = self.run_batch()
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertFalse(os.path.exists(self.record("review.json")))
+        self.assert_one_page_for_the_batch()
+        self.assert_tickets_kept()
+
+    def test_no_patch_is_rc5_with_one_page(self):
+        """A7(g)。四問:量 rc 5、一頁 decision 掛票 1 列整批、land/X 不動、票不動;
+        紅 = 照套或沒發頁;期望值 = 單票那一張表的 5。"""
+        self.set_worker(WORKER_NEVER)
+        done = self.run_batch()
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        self.assert_one_page_for_the_batch()
+        self.assertEqual(self.git("rev-parse", "land/X").strip(), self.batch["land"])
+        self.assert_tickets_kept()
+
+    def test_an_objection_stops_with_rc3_and_keeps_patch_and_evidence(self):
+        """A7 反駁。四問:量 rc 3、一頁、patch / EVIDENCE 留在 reports/batch/<stamp>/、land/X 不動、
+        票的 objections 不動;紅 = 照套或記進票;期望值 = 單票那一張表的 3。"""
+        self.set_worker(BATCH_WORKER_OBJECTS)
+        done = self.run_batch()
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assert_one_page_for_the_batch()
+        self.assertIn("apply.sh --batch", self.decisions()[0]["what"],
+                      "頁上要附判完後要跑的那一句(A4 改版)")
+        self.assertTrue(os.path.exists(self.record("patch-round1.diff")))
+        self.assertIn("OBJECTION:", self.read(self.record("EVIDENCE-round1.md")))
+        self.assertEqual(self.git("rev-parse", "land/X").strip(), self.batch["land"])
+        self.assert_tickets_kept()
+
+    def test_it_needs_the_land_run_id(self):
+        """介面:沒有 AC_BATCH_RUN_ID 就不知道讀哪一份紅榜 ⇒ rc 2、worker 不起。"""
+        self.set_worker(BATCH_WORKER_FIXES)
+        done = self.run_batch(env_run=False)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("AC_BATCH_RUN_ID", done.stderr)
+        self.assertEqual(self.worker_rounds(), [])
+
 if __name__ == "__main__":
     unittest.main()

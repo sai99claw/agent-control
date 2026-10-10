@@ -6,6 +6,8 @@
 #   sh scripts/auto-fix.sh <票號> --dry-run             # 只印派工文,不起 worker
 #   sh scripts/auto-fix.sh <票號> --dry-run --round 1   # 第 1 輪的派工文(還沒有狀態檔時)
 #   sh scripts/auto-fix.sh <票號> --no-review           # 綠了票停在 InReview,不叫 review.sh
+#   AC_BATCH_RUN_ID=<run> sh scripts/auto-fix.sh --batch <整合分支> <票號…> [--dry-run] [--no-review]
+#                                                       # 批次修復一輪(#108;見檔尾 batch_main)
 #
 # 閘門與單票落地預設會叫這一支;`--no-auto-fix` 才停給人處理。
 #
@@ -84,6 +86,29 @@ PY
 }
 
 [ $# -ge 1 ] || { echo "用法:sh scripts/auto-fix.sh <票號> [--dry-run] [--round 1] [--no-review]"; exit 2; }
+# `--batch <整合分支> <票號…>`:票號收進 B_IDS,第一張當 `ID`(票檔、模型、逾時、成本都照它),
+# 旗標交回底下同一段解析。
+BATCH=""
+if [ "$1" = "--batch" ]; then
+    shift
+    [ $# -ge 2 ] || { echo "用法:AC_BATCH_RUN_ID=<run> sh scripts/auto-fix.sh --batch <整合分支> <票號…> [--dry-run] [--no-review]" >&2; exit 2; }
+    BATCH=1
+    B_BR=$1
+    shift
+    B_IDS=""
+    B_FLAGS=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dry-run|--no-review) B_FLAGS="$B_FLAGS $1" ;;
+            -*) echo "auto-fix: --batch 不認得 $1(--dry-run / --no-review)" >&2; exit 2 ;;
+            *) B_IDS="$B_IDS $1" ;;
+        esac
+        shift
+    done
+    B_IDS=${B_IDS# }
+    [ -n "$B_IDS" ] || { echo "auto-fix: --batch 至少要一張票號" >&2; exit 2; }
+    set -- "${B_IDS%% *}" $B_FLAGS
+fi
 ID=$1
 shift
 DRY=""
@@ -752,6 +777,8 @@ first_round_dispatch() {
     return 0
 }
 
+# 批次修復(#108)不讀單票的狀態檔:紅榜在 land 那一輪,底下到「一輪的動作」整段跳過。
+if [ -z "$BATCH" ]; then
 read_status
 if [ "${WANT_ROUND:-}" = "1" ]; then
     [ -z "${S_RUN:-}" ] || echo "auto-fix: #$ID 已經有 $S_RUN 這一輪,你要的是第 1 輪的派工文 —— 照給" >&2
@@ -847,6 +874,7 @@ fi
 if [ -n "$IS_CODEX" ] && [ -z "$DRY" ] && ! command -v codex >/dev/null 2>&1; then
     echo "auto-fix: #$ID 票 tool=codex(model=$T_MODEL),但 codex 不在 PATH —— 不起 worker;裝好 codex 或把票改成 claude-code 再跑" >&2
     exit 2
+fi
 fi
 
 # --------------------------------------------------------------- 一輪的動作
@@ -1934,6 +1962,228 @@ print(json.dumps({"rc": 0, "sha": sys.argv[1], "run_id": sys.argv[2],
     ROUND_RC=1
     return 0
 }
+
+# --------------------------------------------------------------- 批次修復(#108)
+# land 一批 N 張、全套紅 → `AC_BATCH_RUN_ID=<land 那一輪的 run_id> sh scripts/auto-fix.sh --batch
+# <整合分支> <id…>`。**不猜哪張票弄紅**(D-H51 ②):一個 worker 拿整批 —— 紅榜(第一張票的
+# `reports/t<id>/<AC_BATCH_RUN_ID>/status.json`)、整批 diff、N 張票面、寫入範圍聯集 —— 在整合分支的
+# 副本上修;patch 由 `apply.sh --batch` 疊成整合分支頭上一個 commit,`review.sh --batch` 覆核它。
+# 只跑一輪:rc 0 之後呼叫端重跑全套,紅了再叫一次就是下一輪。
+# **不寫票**:不 set state / attempt / objections —— 任何一張票的 state_version 一動,N 張的覆核同時
+# 過期。只有 worker 的成本一列記在第一張票(`ticket.py cost` 不動版本)。紀錄全在 reports/batch/<stamp>/。
+# 退出碼同單票那一張表:0 fix 已 commit 且覆核 pass(`--no-review` 是已 commit);3 worker 提反駁;
+# 4 紅榜讀不到或是空的;5 沒交 / 逾時 / 套不上;6 規則包產不出來;覆核不是 pass 就是 review.sh 的 rc。
+batch_main() {
+    [ -n "${AC_BATCH_RUN_ID:-}" ] || {
+        echo "auto-fix: --batch 要 env AC_BATCH_RUN_ID(land 那一輪的 run_id;紅榜從 reports/t$ID/<它>/status.json 讀)" >&2
+        exit 2
+    }
+    for b_id in $B_IDS; do
+        [ -f "$TDIR/$b_id.json" ] || { echo "auto-fix: 找不到票 #$b_id($TDIR/$b_id.json)" >&2; exit 2; }
+    done
+    git -C "$ROOT" rev-parse -q --verify "$B_BR^{commit}" >/dev/null \
+        || { echo "auto-fix: 整合分支 $B_BR 不存在" >&2; exit 2; }
+    B_TAGS=$(for b_id in $B_IDS; do printf '#%s ' "$b_id"; done)
+    B_TAGS=${B_TAGS% }
+    B_STAMP=${AC_BATCH_STAMP:-$(date +%Y%m%d-%H%M%S)-$$}
+    RUN_ID=$AC_BATCH_RUN_ID
+    r=1
+    BDIR=$ROOT/$(cfg reports_dir reports)/batch/$B_STAMP
+    mkdir -p "$BDIR"
+    B_STATUS=$ROOT/$(cfg reports_dir reports)/t$ID/$RUN_ID/status.json
+    B_FAILS=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1],encoding="utf-8")).get("failures") or []))' "$B_STATUS" 2>/dev/null || echo "")
+    if [ -z "$B_FAILS" ] || [ "$B_FAILS" -eq 0 ]; then
+        b_why=讀不到
+        [ -z "$B_FAILS" ] || b_why=是空的
+        echo "auto-fix: 批次 $B_TAGS 的紅榜${b_why}($B_STATUS)—— 沒有歸因,不派" >&2
+        post "批次紅了但沒有歸因($B_TAGS)" \
+             "整批 $B_TAGS 在 $B_BR 上的紅榜${b_why}:自己看那一輪的 log,不要讓 worker 拿空紅榜去猜" \
+             "$(rel_root "$B_STATUS")"
+        exit 4
+    fi
+    FIX=$WTBASE/fix-batch-$B_STAMP/round$r
+    rm -rf "$FIX"
+    mkdir -p "$FIX/base"
+    if ! git -C "$ROOT" archive "$B_BR" 2>/dev/null | tar -x -C "$FIX/base"; then
+        echo "auto-fix: 取不出 $B_BR 的副本" >&2
+        exit 2
+    fi
+    cp -R "$FIX/base" "$FIX/work"
+    B_DIFF=$BDIR/batch.diff
+    git -C "$ROOT" diff "$MAIN...$B_BR" > "$B_DIFF"
+    DISPATCH=$BDIR/dispatch-round$r.md
+    rules_pack "$DISPATCH" worker "$MODEL" || exit 6
+    {
+        printf '%s\n' "$RULES_TEXT"
+        python3 - "$ROOT" "$TDIR" "$B_STATUS" "$B_BR" "$FIX" "$B_DIFF" \
+            "$(git -C "$ROOT" diff --stat "$MAIN...$B_BR")" "$MAIN" $B_IDS <<'PY'
+import json, os, sys
+root, tdir, status_file, branch, fix, diff_file, stat, main = sys.argv[1:9]
+ids = sys.argv[9:]
+tags = " ".join("#%s" % ident for ident in ids)
+rows = []
+for ident in ids:
+    with open(os.path.join(tdir, "%s.json" % ident), encoding="utf-8") as handle:
+        rows.append(json.load(handle))
+with open(status_file, encoding="utf-8") as handle:
+    failures = json.load(handle).get("failures") or []
+print("")
+print("# 這一輪:批次修復 %s 第 1 輪(整合分支 `%s`)" % (tags, branch))
+print("")
+print("你是 **role=worker** 的實作者,**短命**:交付那一回合結束,不會再被叫醒。")
+print("這 %d 張票各自綠過、覆核過,合在 `%s` 上跑全套卻紅了。**不要猜是哪一張弄紅的** —— "
+      "照紅榜修整合分支;修法會成為整合分支頭上一個 commit,各票分支與票檔都不動。" % (len(ids), branch))
+print("")
+print("## 票面(%d 張快照;`tickets/<id>.json` 是現況)" % len(ids))
+for row in rows:
+    print("")
+    print("### #%s %s" % (row.get("id"), row.get("subject") or ""))
+    print("- objective:%s" % (row.get("objective") or "(空)"))
+    print("- acceptance:")
+    for item in row.get("acceptance") or []:
+        print("  - %s" % item)
+    print("- allowed_write_paths:%s" % json.dumps(row.get("allowed_write_paths") or [], ensure_ascii=False))
+    print("- out_of_scope:%s" % json.dumps(row.get("out_of_scope") or [], ensure_ascii=False))
+print("")
+print("## 紅榜(逐條;來源 `%s`)" % os.path.relpath(status_file, root))
+for row in failures:
+    print("")
+    print("### %s %s" % (row.get("kind") or "FAIL", row.get("case") or "?"))
+    print("- file:%s:%s" % (row.get("file") or "?", row.get("line") or "?"))
+    print("```")
+    print(row.get("excerpt") or "(沒有 excerpt)")
+    print("```")
+print("")
+print("## 整批 diff(`git diff --stat %s...%s`)" % (main, branch))
+print("```")
+print(stat.rstrip("\n") or "(空的)")
+print("```")
+print("整批 diff 檔:`%s`" % diff_file)
+print("")
+print("## 寫入範圍(各票 allowed_write_paths 聯集)")
+seen = []
+for row in rows:
+    for pattern in row.get("allowed_write_paths") or []:
+        if pattern not in seen:
+            seen.append(pattern)
+for pattern in seen:
+    print("- `%s`" % pattern)
+print("聯集外的檔要改就改(不擋,覆核者逐檔看);硬擋的是 board/config.json 的 protected_paths "
+      "與各票 out_of_scope 聯集扣掉上面這份聯集。")
+print("")
+print("## 規則")
+print("**不得放寬測試**:測試檔裡不刪含 assert 的行、不加 skip / expectedFailure —— `apply.sh --batch` "
+      "會硬擋(rc 5)。案例本身錯就在 EVIDENCE 寫一行 `OBJECTION: test_defect <案例>`(例 "
+      "`tests.test_x.T.test_one`),不要自己改案例。")
+print("")
+print("## 副本")
+print("- `%s/work` —— 改這個(整合分支 `%s` 的內容)" % (fix, branch))
+print("- `%s/base` —— 一個字都不准動,它是 diff 的對照組" % fix)
+print("")
+print("## 你要交的兩樣(放在 `%s`)" % fix)
+print("1. `patch-round1.diff` —— `cd %s && diff -ruN -x __pycache__ -x '*.pyc' base work > patch-round1.diff`"
+      % fix)
+print("   檔頭只准 `base/…` / `work/…` 的相對形式;刪檔的 `+++` 側要改成 `/dev/null`。")
+print("2. `EVIDENCE-round1.md` —— 必備五段(見角色卡)+ 記憶段 + 檔尾一塊 ```result` JSON。")
+print("")
+print("## 票寫錯 / 需要裁示怎麼說")
+print("在 EVIDENCE 裡寫**一行**:`OBJECTION: <ticket-wrong|test_defect|blocking> <一句話>`。"
+      "看到這一行,這一輪停下、整批交主線(批次不寫票)。")
+print("")
+print("## 只准跑的測試")
+print("紅榜上那幾條(照 case 名單跑);不跑全套 —— 全套是呼叫端在 fix commit 之後重跑的事。")
+PY
+    } > "$DISPATCH"
+    echo "auto-fix: 批次 $B_TAGS 派工文 -> $(rel_root "$DISPATCH")"
+    if [ -n "$DRY" ]; then
+        echo "auto-fix: worker 命令 —— $WORKER_CMD"
+        echo "auto-fix: --dry-run —— 不起 worker。派工文在上面那一份。"
+        exit 0
+    fi
+
+    batch_cost() {   # $1 = 結局
+        python3 "$AC/ticket.py" cost "$ID" --role worker --round "$r" --model "$WORKER_MODEL" \
+            --by auto-fix.sh --from-envelope "$WORKER_LOG" --wall-seconds "$W_COST_SECS" \
+            --outcome "$1" --run-id "$RUN_ID" --note "batch $B_STAMP $B_TAGS" >/dev/null \
+            || echo "auto-fix: #$ID 的 cost 寫不進票(批次 worker)—— 不擋流程" >&2
+    }
+    keep() {   # 副本的 patch / EVIDENCE 收進紀錄目錄(不論交得怎樣都留)
+        collect_from_copy "$FIX" "patch-round$r.diff" "EVIDENCE-round$r.md"
+        for name in "patch-round$r.diff" "EVIDENCE-round$r.md"; do
+            [ ! -f "$FIX/$name" ] || cp "$FIX/$name" "$BDIR/$name"
+        done
+    }
+    echo "auto-fix: 起批次 $B_TAGS 的 worker —— $WORKER_CMD(cwd $FIX,派工文從 stdin 餵)"
+    echo "auto-fix: 逾時來源=$TIMEOUT_SRC $WORKER_TIMEOUT 秒" >&2
+    WORKER_LOG=$BDIR/worker-round$r.log
+    ev agent.start --ticket "$ID" --model "$WORKER_MODEL" \
+        --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix --kv batch="$B_TAGS"
+    WSTART=$(date +%s)
+    WRC=$(run_agent "$WORKER_CMD" "$DISPATCH" "$FIX" worker "$r" "$WORKER_LOG" 1)
+    W_COST_SECS=$(( $(date +%s) - WSTART ))
+    if [ "$WRC" -eq 0 ]; then
+        ev agent.done --ticket "$ID" --model "$WORKER_MODEL" \
+            --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix --kv batch="$B_TAGS"
+    else
+        ev agent.failed --ticket "$ID" --model "$WORKER_MODEL" \
+            --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix --kv batch="$B_TAGS"
+    fi
+    keep
+    PATCH_OUT=$BDIR/patch-round$r.diff
+    EVIDENCE=$BDIR/EVIDENCE-round$r.md
+    harvest_result "$EVIDENCE" "$BDIR/result-round$r.json" worker "$r"
+
+    if [ "$WRC" -eq 124 ]; then
+        PARTIAL=$BDIR/patch-partial-round$r.diff
+        ( cd "$FIX" && diff -ruN -x __pycache__ -x '*.pyc' base work ) > "$PARTIAL"
+        echo "auto-fix: 批次 $B_TAGS 的 worker 逾時(${WORKER_TIMEOUT} 秒)—— 副本 $FIX 留著" >&2
+        post "批次 worker 逾時($B_TAGS)" \
+             "整批 $B_TAGS 在 $B_BR 上的修復 worker 逾時(${WORKER_TIMEOUT} 秒);半成品 diff 在 $(rel_root "$PARTIAL")。重派或人從副本 $FIX 接手" \
+             "$(rel_root "$BDIR")"
+        batch_cost timeout
+        exit 5
+    fi
+    shed_copies "$FIX"
+    if [ -f "$EVIDENCE" ] && grep -q '^OBJECTION:' "$EVIDENCE"; then
+        line=$(grep -m1 '^OBJECTION:' "$EVIDENCE")
+        echo "auto-fix: 批次 worker 提了反駁 —— $line" >&2
+        post "批次 worker 提了反駁($B_TAGS)" \
+             "整批 ${B_TAGS}:${line}。批次不寫票,這一筆沒有記進任何一張票的 objections[] —— 開題者 / 主線判;判 test_defect 成立、patch 照收就跑 sh scripts/apply.sh --batch $B_BR $B_IDS $(rel_root "$PATCH_OUT") --evidence $(rel_root "$EVIDENCE")" \
+             "$(rel_root "$EVIDENCE")"
+        batch_cost objection
+        exit 3
+    fi
+    if [ ! -f "$PATCH_OUT" ]; then
+        echo "auto-fix: 批次 $B_TAGS 的 worker 沒有交出 patch-round$r.diff" >&2
+        post "批次 worker 沒交出 patch($B_TAGS)" \
+             "整批 $B_TAGS 在 $B_BR 上的修復 worker 沒交 patch(worker rc=$WRC);看 $(rel_root "$WORKER_LOG"),重派或人下場" \
+             "$(rel_root "$BDIR")"
+        batch_cost no-patch
+        exit 5
+    fi
+    AC_ROUND=$r AC_BATCH_STAMP=$B_STAMP sh "$AC/apply.sh" --batch "$B_BR" $B_IDS "$PATCH_OUT" \
+        --evidence "$EVIDENCE"
+    arc=$?
+    if [ "$arc" -ne 0 ]; then
+        echo "auto-fix: 批次 $B_TAGS 的 patch 套不上(apply rc=$arc)" >&2
+        post "批次 patch 套不上($B_TAGS,apply rc=$arc)" \
+             "整批 $B_TAGS:看 apply 的輸出 —— 檔頭不合格、整合分支走遠、越界,還是放寬測試" \
+             "$(rel_root "$PATCH_OUT")"
+        batch_cost apply-failed
+        exit 5
+    fi
+    batch_cost handed-in
+    if [ -n "$NO_REVIEW" ]; then
+        echo "auto-fix: 批次 $B_TAGS 的 fix 已 commit —— --no-review,覆核不派:sh scripts/review.sh --batch $B_BR $B_IDS --run-id $B_STAMP"
+        exit 0
+    fi
+    sh "$AC/review.sh" --batch "$B_BR" $B_IDS --run-id "$B_STAMP"
+    rrc=$?
+    [ "$rrc" -eq 0 ] || echo "auto-fix: 批次覆核沒過(review rc=$rrc)—— 看 reports/inbox/ 那一頁" >&2
+    exit "$rrc"
+}
+rel_root() { python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$1" "$ROOT"; }
+[ -z "$BATCH" ] || batch_main
 
 # 迴圈從 `S_ROUND+1` 起,碰不到前面那幾輪的副本 —— 主線用 Agent 手建的第 1 輪就在這裡
 # (#38 A4)。派下一輪之前一併收;先撿再刪,同 `round_once`。`--dry-run` 不刪東西。

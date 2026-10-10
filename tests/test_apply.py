@@ -907,5 +907,151 @@ class TheGateResidueOfTheLastRound(ApplyBase):
                         "殘留是上一輪的證據,不刪")
 
 
+
+def batch_patch(*files):
+    """`(路徑, 舊內容, 新內容)` 逐檔組成 `diff -ruN base work` 形狀的 patch(舊內容 None = 新檔)。"""
+    import difflib
+    out = []
+    for path, old, new in files:
+        out.append("diff -ruN base/%s work/%s\n" % (path, path))
+        out.extend(difflib.unified_diff((old or "").splitlines(True), new.splitlines(True),
+                                        "base/" + path, "work/" + path))
+    return "".join(out)
+
+
+TEST_X = ("import unittest\n\n\nclass T(unittest.TestCase):\n"
+          "    def test_one(self):\n        self.assertEqual(1, 1)\n")
+
+
+class ApplyBatch(ApplyBase):
+    """#108 A2–A4:`apply.sh --batch land/X 1 2 <patch>` 疊成整合分支頭上恰一個 commit,
+    各票分支與票檔一個位元都不動;硬擋 = protected ∪(out_of_scope 聯集 − allowed 聯集);
+    測試檔裡刪斷言 / 加 skip 是「放寬測試」,rc 5 —— 除非 EVIDENCE 對那條案例提了 test_defect。
+    期望值從夾具寫下的票檔與 `git rev-parse` 讀,不從 apply.sh 算。"""
+
+    def setUp(self):
+        super().setUp()
+        self.batch = self.make_batch()
+        self.tickets_before = {ident: self.read("tickets/%s.json" % ident) for ident in ("1", "2")}
+
+    def run_batch(self, body, evidence=None, ids=("1", "2")):
+        patch = self.patch_file("batch.diff", body)
+        args = ["--batch", "land/X", *ids, patch]
+        if evidence is not None:
+            args += ["--evidence", self.patch_file("EVIDENCE.md", evidence)]
+        return self.apply(*args)
+
+    def head(self, name="land/X"):
+        return self.git("rev-parse", name).strip()
+
+    def result_round1(self):
+        found = glob.glob(os.path.join(self.repo, "reports", "batch", "*", "result-round1.json"))
+        self.assertEqual(len(found), 1, found)
+        with open(found[0], encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_the_fix_is_exactly_one_commit_on_land_and_touches_no_ticket(self):
+        """A2。四問:量什麼 = land/X 前進恰一個 commit、訊息帶 batch fix round 1 與 #1 #2、
+        t1-a / t2-b 與 1.json / 2.json 位元不變;為什麼會紅 = 疊到別處、多 commit、寫了票;
+        期望值來源 = 夾具的 rev-parse 與票檔原文;不測 = 閘門。
+
+        **變異 ②**:apply --batch 對票 1 跑一次 `ticket.py set 1 patch_ref` → 票檔那一條紅。
+        """
+        done = self.run_batch(batch_patch(("src/one.txt", "one by #1\n", "one fixed\n"),
+                                          ("src/two.txt", "two by #2\n", "two fixed\n")))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("rev-parse", "land/X^").strip(), self.batch["land"])
+        self.assertEqual(self.git("rev-list", "--count", "%s..land/X" % self.batch["land"]).strip(), "1")
+        self.assertEqual(self.git("show", "land/X:src/one.txt"), "one fixed\n")
+        message = self.git("log", "-1", "--format=%B", "land/X")
+        self.assertIn("batch fix round 1", message)
+        self.assertIn("#1 #2", message)
+        for branch, sha in self.batch["shas"].items():
+            self.assertEqual(self.head(branch), sha, "%s 被動了" % branch)
+        for ident, text in self.tickets_before.items():
+            self.assertEqual(self.read("tickets/%s.json" % ident), text,
+                             "#%s 的票檔被寫了(state_version / review 會跟著漂)" % ident)
+        self.assertEqual(self.result_round1()["extra_paths"], [])
+
+    def test_an_out_of_scope_file_of_one_ticket_not_allowed_by_any_is_blocked(self):
+        """A3。四問:量 rc 5 + stderr 點名檔與格、land/X 不動;紅 = 硬擋沒算或沒擋;
+        期望值 = 票 1 的 out_of_scope(夾具);不測 = 單票那一條硬擋。"""
+        done = self.run_batch(batch_patch(("docs/guarded.md", "guarded\n", "touched\n")))
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        self.assertIn("docs/guarded.md", done.stderr)
+        self.assertIn("#1 的 out_of_scope", done.stderr)
+        self.assertEqual(self.head(), self.batch["land"])
+
+    def test_a_file_another_ticket_is_allowed_to_write_is_not_blocked(self):
+        """A3 聯集扣除。四問:量 rc 0;紅 = 只看單一張票的 out_of_scope;
+        期望值 = docs/shared.md 同時在票 1 out_of_scope 與票 2 allowed(夾具)。"""
+        done = self.run_batch(batch_patch(("docs/shared.md", "shared\n", "shared fixed\n")))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("show", "land/X:docs/shared.md"), "shared fixed\n")
+
+    def test_protected_paths_block_even_what_a_ticket_allows(self):
+        """A3 的 protected 那一格。四問:量 rc 5 + 「protected_paths」;紅 = 被 allowed 聯集抵掉;
+        期望值 = 測試寫進 config 的 protected_paths。"""
+        conf = json.loads(self.read("board/config.json"))
+        conf["protected_paths"] = ["src/two.txt"]
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        done = self.run_batch(batch_patch(("src/two.txt", "two by #2\n", "two fixed\n")))
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        self.assertIn("src/two.txt", done.stderr)
+        self.assertIn("protected_paths", done.stderr)
+
+    def test_files_outside_the_union_go_into_extra_paths(self):
+        """A3 的 extra_paths。四問:量 result-round1.json 的 extra_paths;紅 = 沒寫或擋了;
+        期望值 = patch 新增的那一個檔名。"""
+        done = self.run_batch(batch_patch(("notes/new.md", None, "new\n")))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.result_round1()["extra_paths"], ["notes/new.md"])
+
+    def test_deleting_an_assert_in_a_test_file_is_blocked(self):
+        """A4。四問:量 rc 5 + 「tests/test_x.py:6 放寬測試」+ land/X 不動;紅 = 守衛只印不擋;
+        期望值 = 夾具 test_x.py 第 6 行就是那一行 assertEqual。
+
+        **變異 ①**:放寬測試守衛改成只印不擋 → 這一條 rc 紅。
+        """
+        done = self.run_batch(batch_patch(
+            ("tests/test_x.py", TEST_X, TEST_X.replace("self.assertEqual(1, 1)", "pass"))))
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        self.assertIn("tests/test_x.py:6 放寬測試", done.stderr)
+        self.assertEqual(self.head(), self.batch["land"])
+
+    def test_adding_a_skip_in_a_test_file_is_blocked(self):
+        """A4 的 skip 那一半。四問:量 rc 5 + 新增那一行的行號;紅 = 只看刪掉的行;
+        期望值 = skip 插在第 5 行(def 之前)。"""
+        body = TEST_X.replace("    def test_one", "    @unittest.skip(\"紅的先關掉\")\n    def test_one")
+        done = self.run_batch(batch_patch(("tests/test_x.py", TEST_X, body)))
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        self.assertIn("tests/test_x.py:5 放寬測試", done.stderr)
+
+    def test_a_test_defect_objection_on_that_case_lets_it_through(self):
+        """A4 的豁免。四問:量 stderr 沒有「放寬測試」、land/X 前進、rc 6(反駁沒收進票);
+        紅 = 豁免沒認案例檔或反駁寫進票;期望值 = 案例 tests.test_x.T.test_one ⇒ tests/test_x.py、
+        result-round1.json 的 objections 就是 EVIDENCE 那一行(A4 改版)。"""
+        done = self.run_batch(
+            batch_patch(("tests/test_x.py", TEST_X, TEST_X.replace("self.assertEqual(1, 1)", "pass"))),
+            evidence="# EVIDENCE\nOBJECTION: test_defect tests.test_x.T.test_one 斷言本身錯\n")
+        self.assertEqual(done.returncode, 6, done.stdout + done.stderr)
+        self.assertNotIn("放寬測試 ——", done.stderr)
+        self.assertEqual(self.git("rev-parse", "land/X^").strip(), self.batch["land"])
+        for ident, text in self.tickets_before.items():
+            self.assertEqual(self.read("tickets/%s.json" % ident), text)
+        self.assertEqual(self.result_round1()["objections"],
+                         ["OBJECTION: test_defect tests.test_x.T.test_one 斷言本身錯"],
+                         "反駁要留在 result-round1.json(不記進票)")
+
+    def test_a_test_defect_objection_on_another_case_does_not(self):
+        """A4 豁免只對那條案例的檔。四問:量 rc 5;紅 = 有任何 test_defect 就全放;
+        期望值 = 反駁點名的是 tests/test_other.py。"""
+        done = self.run_batch(
+            batch_patch(("tests/test_x.py", TEST_X, TEST_X.replace("self.assertEqual(1, 1)", "pass"))),
+            evidence="# EVIDENCE\nOBJECTION: test_defect tests.test_other.T.test_one 別的案例\n")
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        self.assertIn("tests/test_x.py:6 放寬測試", done.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

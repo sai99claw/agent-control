@@ -331,7 +331,7 @@ USAGE = {
                   "--evidence <EVIDENCE>"),
     "cost": ("scripts/ticket.py cost <id> --role worker|verifier|reviewer|land "
              "[--round N] [--model M] [--by <腳本>] [--from-envelope <信封檔>] "
-             "[--wall-seconds N] [--outcome <登記的字>] [--run-id <字>]"),
+             "[--wall-seconds N] [--outcome <登記的字>] [--run-id <字>] [--note <字>]"),
     "agent-command": ("scripts/ticket.py agent-command --model M [--tool T] "
                       "[--base \"<worker.command>\"] [--swap-model]"),
     "lint": "scripts/ticket.py lint <id>  # 唯讀:needs_verifier / verify_strings / 標籤",
@@ -423,7 +423,8 @@ def known_flags(verb):
                 ("--wall-seconds", "量到的秒數;沒給才取信封 duration_ms/1000", False, False),
                 ("--outcome", "這一次的結局;只收登記表的字(tickets/SCHEMA.md 成本那一列)",
                  False, False),
-                ("--run-id", "這一次的 run_id(land 是那一次的戳記)", False, False)]
+                ("--run-id", "這一次的 run_id(land 是那一次的戳記)", False, False),
+                ("--note", "附註(批次修復記 batch <stamp> 與整批票號)", False, False)]
     if verb == "agent-command":
         return [("--model", "票的 model(`codex:` 前綴 = codex)", False, True),
                 ("--tool", "票的 tool;缺 = claude-code", False, False),
@@ -1498,7 +1499,7 @@ COST_MODEL_USAGE = (("tokens_in", "inputTokens"), ("tokens_out", "outputTokens")
                     ("cache_write", "cacheCreationInputTokens"),
                     ("cache_read", "cacheReadInputTokens"))
 COST_FLAGS = ("--role", "--round", "--model", "--by", "--from-envelope", "--wall-seconds",
-              "--outcome", "--run-id")
+              "--outcome", "--run-id", "--note")
 # 一列的形狀唯一(D-018,#94 C1):寫的人只有 `cmd_cost`,鍵就是這幾個、這個順序。
 COST_KEYS = ("role", "round", "model", "tokens_in", "tokens_out", "cache_write", "cache_read",
              "wall_seconds", "outcome", "run_id", "session_id", "by", "note", "at")
@@ -1631,7 +1632,9 @@ def cmd_cost(argv):
                 "run_id": got.get("--run-id") or None,
                 "session_id": session if isinstance(session, str) and session else None,
                 "by": got.get("--by") or None,
-                "note": None if envelope else why, "at": now()})
+                "note": ";".join(part for part in (got.get("--note"), None if envelope else why)
+                                 if part) or None,
+                "at": now()})
     if envelope is None:
         sys.stderr.write("ticket: #%s cost 的信封讀不到(%s)—— token 欄記 null\n"
                          % (ident, why))

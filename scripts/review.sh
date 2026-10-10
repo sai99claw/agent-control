@@ -3,6 +3,8 @@
 #
 #   sh scripts/review.sh <票號>                  # 票要是 InReview / AwaitingReview、分支 t<票號> 要在
 #   sh scripts/review.sh <票號> --run-id <id>    # 派工文與 REVIEW.md 落在那一輪的目錄
+#   sh scripts/review.sh --batch <整合分支> <票號…> --run-id <stamp>
+#                                                # 批次修復的 fix commit(#108;見下面 batch 那一段)
 #
 # 閘門綠、票轉 `InReview` 之後由兩處叫這一支:`auto-fix.sh` 第 r 輪綠(`--no-review` 關)
 # 與手跑 `gate.sh --branch --ticket <n>` 綠。主線不再組派工文、不再讀 patch、不再手抄 sha。
@@ -64,6 +66,32 @@ PY
 }
 
 [ $# -ge 1 ] || { echo "用法:sh scripts/review.sh <票號> [--run-id <id>]" >&2; exit 2; }
+BATCH=""
+if [ "$1" = "--batch" ]; then
+    # 批次修復的覆核(#108):sh scripts/review.sh --batch <整合分支> <票號…> --run-id <stamp>
+    shift
+    [ $# -ge 2 ] || { echo "用法:sh scripts/review.sh --batch <整合分支> <票號…> --run-id <stamp>" >&2; exit 2; }
+    BATCH=1
+    B_BR=$1
+    shift
+    B_IDS=""
+    RUN_ID=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --run-id)
+                shift
+                [ $# -ge 1 ] || { echo "review: --run-id 後面要一個 stamp" >&2; exit 2; }
+                RUN_ID=$1 ;;
+            -*) echo "review: --batch 不認得 $1(--run-id <stamp>)" >&2; exit 2 ;;
+            *) B_IDS="$B_IDS $1" ;;
+        esac
+        shift
+    done
+    B_IDS=${B_IDS# }
+    [ -n "$B_IDS" ] || { echo "review: --batch 至少要一張票號" >&2; exit 2; }
+    [ -n "$RUN_ID" ] || { echo "review: --batch 要 --run-id <stamp>(reports/batch/<stamp>/ 那一格)" >&2; exit 2; }
+    ID=${B_IDS%% *}
+else
 ID=$1
 shift
 RUN_ID=""
@@ -77,6 +105,7 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+fi
 
 TICKETS=${AC_TICKETS_DIR:-$(cfg tickets_dir tickets)}
 case $TICKETS in /*) TDIR=$TICKETS ;; *) TDIR=$ROOT/$TICKETS ;; esac
@@ -113,16 +142,6 @@ PY
 )
 BY=reviewer@$MODEL
 
-if [ -z "$RUN_ID" ]; then
-    RUN_ID=$(python3 -c 'import os,sys; sys.path.insert(0, sys.argv[1]); import status; print(status.latest_run(sys.argv[2], sys.argv[3]))' \
-        "$AC" "$ROOT" "$ID" 2>/dev/null || echo "")
-    [ -n "$RUN_ID" ] || RUN_ID=$(date +%Y%m%d-%H%M%S)-$$
-fi
-RUNDIR=$ROOT/$(cfg reports_dir reports)/t$ID/$RUN_ID
-mkdir -p "$RUNDIR"
-DISPATCH=$RUNDIR/dispatch-reviewer.md
-REVIEW=$RUNDIR/REVIEW.md
-RLOG=$RUNDIR/reviewer.log
 rel() { python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$1" "$ROOT"; }
 
 ev() {
@@ -141,6 +160,302 @@ refuse() {   # $1 = 為什麼沒派成  $2 = 下一步;只發事件(D-032),rc=2
     ev review.refused --ticket "$ID" --kv run_id="$RUN_ID" --note "$1;$2"
     exit 2
 }
+
+# stdin / timeout / rc 與 `auto-fix.sh` 起 headless worker 那一段同形:派工文從 stdin 餵、
+# 逾時 124、起不來 127。stdout 是交付物(REVIEW.md),stderr 另存 reviewer.log。單票與批次共用。
+run_reviewer() {   # $1 = 命令 $2 = 派工文 $3 = cwd $4 = 時限 $5 = 票號 $6 = 第幾輪 $7 = REVIEW.md $8 = log;印出 rc
+    python3 - "$@" <<'PY'
+import os, signal, subprocess, sys, time
+cmd, dispatch, cwd, timeout, ident, r, out_path, log_path = sys.argv[1:9]
+env = dict(os.environ)
+env.update({"AC_DISPATCH": dispatch, "AC_TICKET": ident, "AC_ROUND": r,
+            "AC_WORK": cwd, "AC_ROLE": "reviewer"})
+
+
+def descendants(top):
+    done = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True)
+    kids = {}
+    for line in done.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            kids.setdefault(int(parts[1]), []).append(int(parts[0]))
+    found, stack = [], [top]
+    while stack:
+        for child in kids.get(stack.pop(), []):
+            if child not in found:
+                found.append(child)
+                stack.append(child)
+    return found
+
+
+def kill_tree(proc):
+    # 逾時收整棵樹(#87 A14,與 auto-fix.sh 的 `run_agent` 同一手):`setsid()` 自開 session
+    # 的後代不在 reviewer 的行程群組裡,`killpg` 碰不到 —— 先拍下子孫樹再一個一個送。
+    tree = descendants(proc.pid)
+    for sig, grace in ((signal.SIGTERM, 5), (signal.SIGKILL, None)):
+        tree += [pid for pid in descendants(proc.pid) if pid not in tree]
+        try:
+            os.killpg(proc.pid, sig)
+        except OSError:
+            pass
+        for pid in tree:
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                pass
+        try:
+            proc.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            pass
+        if grace:
+            time.sleep(0.2)
+
+
+try:
+    with open(dispatch, encoding="utf-8") as handle, \
+            open(out_path, "w", encoding="utf-8") as out, \
+            open(log_path, "w", encoding="utf-8") as log:
+        proc = subprocess.Popen(cmd, shell=True, cwd=cwd, env=env, stdin=handle,
+                                stdout=out, stderr=log, start_new_session=True)
+        try:
+            rc = proc.wait(timeout=float(timeout))
+        except subprocess.TimeoutExpired:
+            kill_tree(proc)
+            raise
+except subprocess.TimeoutExpired:
+    sys.stderr.write("review: reviewer 超過 %s 秒還沒回來 —— 當它沒交\n" % timeout)
+    rc = 124
+except OSError as exc:
+    sys.stderr.write("review: reviewer 起不來 —— %s\n" % exc)
+    rc = 127
+print(rc)
+PY
+}
+
+# `--output-format json` 的 stdout 是一個信封 `{"type":"result","result":"<全文>",…}`:
+# 全文拆出來放回 REVIEW.md(`## result` 那一塊才看得到行首),信封原樣留在 reviewer.json
+# (token 用量在裡面)。不是信封就原樣。
+unwrap_envelope() {   # $1 = REVIEW.md  $2 = 信封留在哪(reviewer.json)
+    python3 - "$1" "$2" <<'PY'
+import json, sys
+path, envelope = sys.argv[1:3]
+with open(path, encoding="utf-8", errors="replace") as handle:
+    raw = handle.read()
+try:
+    data = json.loads(raw)
+except ValueError:
+    data = None
+if isinstance(data, dict) and isinstance(data.get("result"), str):
+    with open(envelope, "w", encoding="utf-8") as handle:
+        handle.write(raw)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(data["result"])
+PY
+}
+
+# 判 verdict(單票與批次共用):沒交件的四種樣子都**不是 pass**(§5.5)。
+read_verdict() {   # $1 = result json  $2 = REVIEW.md  $3 = reviewer rc;設定 VERDICT / WHY
+    VERDICT=""; WHY=""
+    eval "$(python3 - "$1" "$2" "$3" "$REVIEWER_TIMEOUT" <<'PY'
+import json, shlex, sys
+result, review, rc, timeout = sys.argv[1:5]
+try:
+    with open(result, encoding="utf-8") as handle:
+        data = json.load(handle)
+except (OSError, ValueError):
+    data = {}
+try:
+    with open(review, encoding="utf-8", errors="replace") as handle:
+        lines = [line for line in handle.read().splitlines() if line.startswith("OBJECTION:")]
+except OSError:
+    lines = []
+verdict, why = "", ""
+if rc == "124":
+    why = "逾時(reviewer.timeout_seconds=%s)" % timeout
+elif not data.get("present"):
+    why = "%s(reviewer rc=%s)" % (data.get("reason") or "沒有 result", rc)
+else:
+    said = str(data.get("verdict") or "").strip().lower()
+    if said not in ("pass", "fail"):
+        why = "verdict=%r 不是 pass|fail" % data.get("verdict")
+    elif said == "pass" and lines:
+        verdict, why = "fail", "verdict 說 pass,但有 %d 行 OBJECTION:—— 以那幾行為準" % len(lines)
+    else:
+        verdict = said
+print("VERDICT=%s" % shlex.quote(verdict))
+print("WHY=%s" % shlex.quote(why))
+PY
+)"
+}
+
+# ------------------------------------------------------------------ batch
+# 批次修復的覆核(#108,D-H51 ②):`apply.sh --batch` 在整合分支頭上疊的那一個 fix commit。
+# 與單票那一條不同:**不寫票**(不 `set review`、不記反駁、不轉 Blocked —— 任何一張票的
+# `state_version` 一動,N 張的覆核同時過期);pass 寫 `reports/batch/<stamp>/review.json`,
+# sha 是派工那一刻的整合分支頭(不是哪一張票的分支頭);fail / 沒交件一頁 decision 掛第一張票、
+# 內文列整批。成本一列只記在第一張票(note 帶 batch <stamp> 與全部票號)。
+# 退出碼同單票:0 pass、1 fail、2 用法 / 前提、3 沒交件。
+if [ -n "$BATCH" ]; then
+    for b_id in $B_IDS; do
+        [ -f "$TDIR/$b_id.json" ] || { echo "review: 找不到票 #$b_id($TDIR/$b_id.json)" >&2; exit 2; }
+    done
+    B_TAGS=$(for b_id in $B_IDS; do printf '#%s ' "$b_id"; done)
+    B_TAGS=${B_TAGS% }
+    RUNDIR=$ROOT/$(cfg reports_dir reports)/batch/$RUN_ID
+    mkdir -p "$RUNDIR"
+    DISPATCH=$RUNDIR/dispatch-reviewer.md
+    REVIEW=$RUNDIR/REVIEW.md
+    RLOG=$RUNDIR/reviewer.log
+    RESULT_JSON=$RUNDIR/result-reviewer.json
+    SHA=$(git -C "$ROOT" rev-parse -q --verify "$B_BR^{commit}" 2>/dev/null || echo "")
+    [ -n "$SHA" ] || refuse "整合分支 $B_BR 不存在" "先 sh scripts/apply.sh --batch $B_BR $B_IDS <patch>"
+    case "$(git -C "$ROOT" log -1 --format=%s "$SHA")" in
+        "batch fix round "*) ;;
+        *) refuse "整合分支 $B_BR 的頭不是批次修復的 commit(apply.sh --batch 疊的那一個)" \
+                  "先 sh scripts/apply.sh --batch $B_BR $B_IDS <patch>,再覆核" ;;
+    esac
+    TEMPLATE=""
+    for candidate in "$ROOT/templates/dispatch-reviewer.md" "$AC/../templates/dispatch-reviewer.md"; do
+        [ -f "$candidate" ] && { TEMPLATE=$candidate; break; }
+    done
+    [ -n "$TEMPLATE" ] || refuse "找不到 templates/dispatch-reviewer.md" \
+        "從 agent-control 複製 templates/dispatch-reviewer.md 到 $ROOT/templates/"
+    CWD=$(git -C "$ROOT" worktree list --porcelain | awk -v ref="branch refs/heads/$B_BR" '
+        /^worktree / { here = substr($0, 10) } $0 == ref { print here; exit }')
+    CWD=${CWD:-$ROOT}
+    RULES_MODEL=$MODEL
+    [ "$RULES_MODEL" != "unknown" ] || RULES_MODEL=""
+    RULES_TEXT=$(AC_TICKET=$ID python3 "$AC/rules.py" pack reviewer --model "$RULES_MODEL") \
+        || refuse "規則包產不出來(模型 ${RULES_MODEL:-未指定})" \
+                  "補齊 rules.py 列的缺項(decision 頁)再跑 sh scripts/review.sh --batch $B_BR $B_IDS --run-id $RUN_ID"
+    {
+        printf '%s\n' "$RULES_TEXT"
+        python3 - "$TEMPLATE" "$TDIR" "$ROOT" "$B_BR" "$SHA" "$REVIEW" "$MODEL" "$RUN_ID" $B_IDS <<'PY'
+import json, os, subprocess, sys
+template, tdir, root, branch, sha, review, model, stamp = sys.argv[1:9]
+ids = sys.argv[9:]
+tags = " ".join("#%s" % ident for ident in ids)
+print("")
+print("# 批次修復的覆核:%s(整合分支 `%s`)" % (tags, branch))
+print("")
+print("這一批 land 時全套紅了;一個 worker 在整合分支上修了紅榜,修法是整合分支頭上**一個** commit "
+      "`%s`。你覆核的是**這個 commit 的 diff**:有沒有把這批票各自的驗收修壞、有沒有放寬測試、"
+      "有沒有碰不該碰的檔。各票分支已各自覆核過,不重看。" % sha[:12])
+print("")
+print("## 這一批獨有的四件事")
+print("1. **票號**:%s(票面在下面;不寫任何一張票)" % tags)
+print("2. **sha**:`%s`(整合分支 `%s` 的頭 = fix commit)" % (sha, branch))
+print("3. **紀錄目錄**:`%s`(worker 的 patch / EVIDENCE / result 都在這裡)"
+      % os.path.relpath(os.path.dirname(review), root))
+print("4. **交付**:你的整份回覆就是 REVIEW.md,存到 `%s`" % review)
+print("")
+print("## 票面(%d 張)" % len(ids))
+for ident in ids:
+    with open(os.path.join(tdir, "%s.json" % ident), encoding="utf-8") as handle:
+        row = json.load(handle)
+    print("")
+    print("### #%s %s" % (ident, row.get("subject") or ""))
+    print("- objective:%s" % (row.get("objective") or "(空)"))
+    print("- acceptance:")
+    for item in row.get("acceptance") or []:
+        print("  - %s" % item)
+    print("- allowed_write_paths:%s" % json.dumps(row.get("allowed_write_paths") or [], ensure_ascii=False))
+    print("- out_of_scope:%s" % json.dumps(row.get("out_of_scope") or [], ensure_ascii=False))
+diff = subprocess.run(["git", "-C", root, "diff", "%s^" % sha, sha],
+                      capture_output=True, text=True).stdout
+print("")
+print("## fix commit 前後的 diff(`git diff %s^ %s`)" % (sha[:12], sha[:12]))
+print("```diff")
+print(diff.rstrip("\n") or "(空的 diff)")
+print("```")
+with open(template, encoding="utf-8") as handle:
+    text = handle.read()
+start = text.find("## 交付:固定格式")
+end = text.find("## 之後誰做什麼")
+section = text[start:end if end > start else len(text)] if start >= 0 else ""
+for key, value in (("@REVIEW@", review), ("@TICKET@", ids[0]), ("@ROUND@", "1"),
+                   ("@MODEL@", model), ("@SHA@", sha)):
+    section = section.replace(key, value)
+print("")
+print(section.rstrip("\n"))
+print("")
+print("## 之後誰做什麼(你不用做)")
+print("`scripts/review.sh --batch` 讀這一塊:`pass` ⇒ 寫 `reports/batch/%s/review.json`"
+      "(sha `%s`),呼叫端重跑全套;`fail` ⇒ 一頁 decision 給主線裁示。**兩條都不寫票。**"
+      % (stamp, sha[:12]))
+PY
+    } > "$DISPATCH"
+    echo "review: 批次 $B_TAGS 派覆核 —— $REVIEWER_CMD(cwd $CWD,$B_BR @ $(echo "$SHA" | cut -c1-12),派工文 $(rel "$DISPATCH"))"
+    ev agent.start --ticket "$ID" --role reviewer --model "$MODEL" \
+        --kv run_id="$RUN_ID" --kv round=1 --kv agent=review --kv batch="$B_TAGS"
+    rm -f "$RUNDIR/reviewer.json" "$RUNDIR/review.json"
+    RSTART=$(date +%s)
+    RRC=$(run_reviewer "$REVIEWER_CMD" "$DISPATCH" "$CWD" "$REVIEWER_TIMEOUT" "$ID" 1 "$REVIEW" "$RLOG")
+    RSECS=$(( $(date +%s) - RSTART ))
+    if [ "$RRC" -eq 0 ]; then
+        ev agent.done --ticket "$ID" --role reviewer --model "$MODEL" \
+            --kv run_id="$RUN_ID" --kv round=1 --kv rc="$RRC" --kv agent=review --kv batch="$B_TAGS"
+    else
+        ev agent.failed --ticket "$ID" --role reviewer --model "$MODEL" \
+            --kv run_id="$RUN_ID" --kv round=1 --kv rc="$RRC" --kv agent=review --kv batch="$B_TAGS"
+    fi
+    unwrap_envelope "$REVIEW" "$RUNDIR/reviewer.json"
+    python3 "$AC/ticket.py" result "$REVIEW" "$RESULT_JSON" --ticket "$ID" --role reviewer \
+        --round 1 >/dev/null || echo "review: result 抽不出來($REVIEW)" >&2
+    read_verdict "$RESULT_JSON" "$REVIEW" "$RRC"
+    REL_REVIEW=$(rel "$REVIEW")
+    batch_cost() {   # $1 = 結局 pass|fail|missing
+        _attempt=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("attempt") or 0)' "$TF" 2>/dev/null || echo 0)
+        python3 "$AC/ticket.py" cost "$ID" --role reviewer --round "$_attempt" --model "$MODEL" \
+            --by review.sh --from-envelope "$RUNDIR/reviewer.json" --wall-seconds "$RSECS" \
+            --outcome "$1" --run-id "${AC_BATCH_RUN_ID:-$RUN_ID}" --note "batch $RUN_ID $B_TAGS" \
+            >/dev/null 2>&1 || echo "review: #$ID 的 cost 寫不進票 —— 不擋覆核" >&2
+    }
+    if [ -z "$VERDICT" ]; then
+        echo "review: 批次 $B_TAGS 覆核沒交件 —— $WHY;review.json 不寫" >&2
+        ev review.missing --ticket "$ID" --kv run_id="$RUN_ID" --kv batch="$B_TAGS" --note "沒交不是 pass($WHY)"
+        batch_cost missing
+        post "批次覆核沒交件($B_TAGS)" \
+             "整批 $B_TAGS 的 fix commit $(echo "$SHA" | cut -c1-12) 在 $B_BR 上沒有覆核結論($WHY):看 $(rel "$RLOG") 與 $REL_REVIEW,再重派 sh scripts/review.sh --batch $B_BR $B_IDS --run-id $RUN_ID" \
+             "$REL_REVIEW"
+        exit 3
+    fi
+    if [ "$VERDICT" = "pass" ]; then
+        python3 - "$RUNDIR/review.json" "$BY" "$SHA" "$REL_REVIEW" <<'PY' || { echo "review: review.json 寫不出來" >&2; exit 4; }
+import datetime, json, sys
+path, by, sha, note = sys.argv[1:5]
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump({"verdict": "pass", "sha": sha, "by": by,
+               "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+               "note": note}, handle, ensure_ascii=False, indent=2)
+    handle.write("\n")
+PY
+        batch_cost pass
+        echo "review: 批次 $B_TAGS 覆核通過($BY,$B_BR @ $(echo "$SHA" | cut -c1-12))—— $(rel "$RUNDIR/review.json")"
+        ev review.pass --ticket "$ID" --kv run_id="$RUN_ID" --kv by="$BY" \
+            --kv sha="$(echo "$SHA" | cut -c1-12)" --kv batch="$B_TAGS" --note "$REL_REVIEW"
+        exit 0
+    fi
+    batch_cost fail
+    ev review.fail --ticket "$ID" --kv run_id="$RUN_ID" --kv by="$BY" --kv batch="$B_TAGS" --note "$REL_REVIEW"
+    ev decision.asked --ticket "$ID" --note "批次 $B_TAGS 覆核退回($BY)"
+    echo "review: 批次 $B_TAGS 覆核退回($BY)—— 票檔沒動,一頁 decision 掛 #$ID${WHY:+;$WHY}" >&2
+    post "批次覆核退回($B_TAGS)" \
+         "裁示:整批 $B_TAGS 的 fix commit $(echo "$SHA" | cut -c1-12) 在 $B_BR 上被覆核退回;讀 $REL_REVIEW 的 OBJECTION: 行,決定重派批次修復或拆批。各票分支與票檔都沒動" \
+         "$REL_REVIEW"
+    exit 1
+fi
+
+if [ -z "$RUN_ID" ]; then
+    RUN_ID=$(python3 -c 'import os,sys; sys.path.insert(0, sys.argv[1]); import status; print(status.latest_run(sys.argv[2], sys.argv[3]))' \
+        "$AC" "$ROOT" "$ID" 2>/dev/null || echo "")
+    [ -n "$RUN_ID" ] || RUN_ID=$(date +%Y%m%d-%H%M%S)-$$
+fi
+RUNDIR=$ROOT/$(cfg reports_dir reports)/t$ID/$RUN_ID
+mkdir -p "$RUNDIR"
+DISPATCH=$RUNDIR/dispatch-reviewer.md
+REVIEW=$RUNDIR/REVIEW.md
+RLOG=$RUNDIR/reviewer.log
 
 # 只在 InReview / AwaitingReview 派:Running 的票還在改、Blocked 的票在等裁示 —— 在哪一種
 # 上蓋一張 pass 都是替一份還沒定案的東西作保。AwaitingReview 是下游專案閘門綠寫的字面值
@@ -294,79 +609,11 @@ echo "review: #$ID 派覆核 —— $REVIEWER_CMD(cwd $CWD,分支 $BR @ $(echo "
 
 ev agent.start --ticket "$ID" --role reviewer --model "$MODEL" \
     --kv run_id="$RUN_ID" --kv round="$ROUND" --kv agent=review
-# stdin / timeout / rc 與 `auto-fix.sh` 起 headless worker 那一段同形:派工文從 stdin 餵、
-# 逾時 124、起不來 127。stdout 是交付物(REVIEW.md),stderr 另存 reviewer.log。
 # 上一次派(同一個 run_id 重派)留下的信封不准被這一次的成本讀到。
 rm -f "$RUNDIR/reviewer.json"
 RSTART=$(date +%s)
-RRC=$(python3 - "$REVIEWER_CMD" "$DISPATCH" "$CWD" "$REVIEWER_TIMEOUT" "$ID" "$ROUND" \
-        "$REVIEW" "$RLOG" <<'PY'
-import os, signal, subprocess, sys, time
-cmd, dispatch, cwd, timeout, ident, r, out_path, log_path = sys.argv[1:9]
-env = dict(os.environ)
-env.update({"AC_DISPATCH": dispatch, "AC_TICKET": ident, "AC_ROUND": r,
-            "AC_WORK": cwd, "AC_ROLE": "reviewer"})
-
-
-def descendants(top):
-    done = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True)
-    kids = {}
-    for line in done.stdout.splitlines():
-        parts = line.split()
-        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-            kids.setdefault(int(parts[1]), []).append(int(parts[0]))
-    found, stack = [], [top]
-    while stack:
-        for child in kids.get(stack.pop(), []):
-            if child not in found:
-                found.append(child)
-                stack.append(child)
-    return found
-
-
-def kill_tree(proc):
-    # 逾時收整棵樹(#87 A14,與 auto-fix.sh 的 `run_agent` 同一手):`setsid()` 自開 session
-    # 的後代不在 reviewer 的行程群組裡,`killpg` 碰不到 —— 先拍下子孫樹再一個一個送。
-    tree = descendants(proc.pid)
-    for sig, grace in ((signal.SIGTERM, 5), (signal.SIGKILL, None)):
-        tree += [pid for pid in descendants(proc.pid) if pid not in tree]
-        try:
-            os.killpg(proc.pid, sig)
-        except OSError:
-            pass
-        for pid in tree:
-            try:
-                os.kill(pid, sig)
-            except OSError:
-                pass
-        try:
-            proc.wait(timeout=grace)
-        except subprocess.TimeoutExpired:
-            pass
-        if grace:
-            time.sleep(0.2)
-
-
-try:
-    with open(dispatch, encoding="utf-8") as handle, \
-            open(out_path, "w", encoding="utf-8") as out, \
-            open(log_path, "w", encoding="utf-8") as log:
-        proc = subprocess.Popen(cmd, shell=True, cwd=cwd, env=env, stdin=handle,
-                                stdout=out, stderr=log, start_new_session=True)
-        try:
-            rc = proc.wait(timeout=float(timeout))
-        except subprocess.TimeoutExpired:
-            kill_tree(proc)
-            raise
-except subprocess.TimeoutExpired:
-    sys.stderr.write("review: reviewer 超過 %s 秒還沒回來 —— 當它沒交\n" % timeout)
-    rc = 124
-except OSError as exc:
-    sys.stderr.write("review: reviewer 起不來 —— %s\n" % exc)
-    rc = 127
-print(rc)
-PY
-)
+RRC=$(run_reviewer "$REVIEWER_CMD" "$DISPATCH" "$CWD" "$REVIEWER_TIMEOUT" "$ID" "$ROUND" \
+        "$REVIEW" "$RLOG")
 RSECS=$(( $(date +%s) - RSTART ))
 if [ "$RRC" -eq 0 ]; then
     ev agent.done --ticket "$ID" --role reviewer --model "$MODEL" \
@@ -376,59 +623,12 @@ else
         --kv run_id="$RUN_ID" --kv round="$ROUND" --kv rc="$RRC" --kv agent=review
 fi
 
-# `--output-format json` 的 stdout 是一個信封 `{"type":"result","result":"<全文>",…}`:
-# 全文拆出來放回 REVIEW.md(`## result` 那一塊才看得到行首),信封原樣留在 reviewer.json
-# (token 用量在裡面)。不是信封就原樣。
-python3 - "$REVIEW" "$RUNDIR/reviewer.json" <<'PY'
-import json, sys
-path, envelope = sys.argv[1:3]
-with open(path, encoding="utf-8", errors="replace") as handle:
-    raw = handle.read()
-try:
-    data = json.loads(raw)
-except ValueError:
-    data = None
-if isinstance(data, dict) and isinstance(data.get("result"), str):
-    with open(envelope, "w", encoding="utf-8") as handle:
-        handle.write(raw)
-    with open(path, "w", encoding="utf-8") as handle:
-        handle.write(data["result"])
-PY
+unwrap_envelope "$REVIEW" "$RUNDIR/reviewer.json"
 
 python3 "$AC/ticket.py" result "$REVIEW" "$RESULT_JSON" --ticket "$ID" --role reviewer \
     --round "$ROUND" >/dev/null || echo "review: result 抽不出來($REVIEW)" >&2
 
-VERDICT=""; WHY=""
-eval "$(python3 - "$RESULT_JSON" "$REVIEW" "$RRC" "$REVIEWER_TIMEOUT" <<'PY'
-import json, shlex, sys
-result, review, rc, timeout = sys.argv[1:5]
-try:
-    with open(result, encoding="utf-8") as handle:
-        data = json.load(handle)
-except (OSError, ValueError):
-    data = {}
-try:
-    with open(review, encoding="utf-8", errors="replace") as handle:
-        lines = [line for line in handle.read().splitlines() if line.startswith("OBJECTION:")]
-except OSError:
-    lines = []
-verdict, why = "", ""
-if rc == "124":
-    why = "逾時(reviewer.timeout_seconds=%s)" % timeout
-elif not data.get("present"):
-    why = "%s(reviewer rc=%s)" % (data.get("reason") or "沒有 result", rc)
-else:
-    said = str(data.get("verdict") or "").strip().lower()
-    if said not in ("pass", "fail"):
-        why = "verdict=%r 不是 pass|fail" % data.get("verdict")
-    elif said == "pass" and lines:
-        verdict, why = "fail", "verdict 說 pass,但有 %d 行 OBJECTION:—— 以那幾行為準" % len(lines)
-    else:
-        verdict = said
-print("VERDICT=%s" % shlex.quote(verdict))
-print("WHY=%s" % shlex.quote(why))
-PY
-)"
+read_verdict "$RESULT_JSON" "$REVIEW" "$RRC"
 REL_REVIEW=$(rel "$REVIEW")
 
 write_cost() {   # $1 = 結局 pass|fail|missing(與 review.* 同字,#94 C5d)
