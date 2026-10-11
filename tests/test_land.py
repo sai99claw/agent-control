@@ -176,6 +176,9 @@ AUTO_FIX_STUB = """#!/bin/sh
 echo "autofix $* source=$AC_FIX_SOURCE batch_run=${AC_BATCH_RUN_ID:-}" >> "$AC_TEST_LOG"
 [ "$1" = "--batch" ] || exit 0
 dir=$(dirname "$AC_TEST_LOG")
+python3 -c 'import json, sys; print("autofix-reads " + " ".join(
+    row["case"] for row in json.load(open(sys.argv[1])).get("failures") or []))' \\
+    "reports/t$3/$AC_BATCH_RUN_ID/status.json" >> "$AC_TEST_LOG" 2>/dev/null
 [ -f "$dir/fix-hook.sh" ] && sh "$dir/fix-hook.sh"
 rc=$(cat "$dir/fix-rc" 2>/dev/null || echo 0)
 [ "$rc" = 0 ] || exit "$rc"
@@ -272,11 +275,12 @@ class AutoFixHook(LandBase):
         fixes = self.auto_fix_lines()
         self.assertEqual(len(fixes), 1, fixes)
         self.assertEqual(fixes[0].split(" source=")[0], "autofix --batch land/%s 1 2" % stamp)
-        first_run = self.gate_lines()[0].split(" run=")[1].split(" ")[0]
-        self.assertEqual(fixes[0].split("batch_run=")[1], first_run)
-        with open(os.path.join(self.repo, "reports", "t1", first_run, "status.json"),
-                  encoding="utf-8") as handle:
-            self.assertEqual(json.load(handle)["run_id"], first_run)
+        self.assertEqual(fixes[0].split("batch_run=")[1], self.status_of(1, kind="land")["run_id"],
+                         "AC_BATCH_RUN_ID 是這次 land 的 run_id(票面 B1)")
+        with open(self.log, encoding="utf-8") as handle:
+            reads = [line.strip() for line in handle if line.startswith("autofix-reads ")]
+        self.assertEqual(reads, ["autofix-reads tests.test_red.T.test_round_1"],
+                         "auto-fix --batch 從 reports/t1/<AC_BATCH_RUN_ID>/status.json 讀得到第 1 輪的紅榜")
         self.assertIn("batch fix 1", self.main_log(), "主線要前進到含批次修復那個 commit 的頭")
         self.assertEqual(len(self.gate_lines()), 2)
         for ident in (1, 2):

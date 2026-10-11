@@ -50,7 +50,8 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 10. 綠了、push 成功之後 land 對每張票試 `scripts/ticket.py close <n> --landed <合併後主線的 sha>`(#43):關得掉印「#n 已合併、已關票」;關得掉再發一頁 done 簡報(`inbox.py done`:subject、落地 sha、做了什麼、覆核結論、cost 表;不自動 ack);關不掉印「#n 已合併、尚未關票」+ `ticket.py close` 的理由原文,並寫一頁 decision —— Done 的條件一條不放,沒有放行旗標,land 的 rc 不因關不掉而變。
 11. 每一步發事件。全套紅時預設派下一輪 worker(`--no-auto-fix` 才關:紅就停、每張一頁 decision、不派)。
    一張票一批 → 那張票的 `auto-fix.sh <n>`。**一批 N≥2 張(#109,D-H51 ②)不找是誰弄紅的**:同一把
-   `.land.lock` 下叫 `AC_BATCH_RUN_ID=<那一輪全套的 run_id> sh scripts/auto-fix.sh --batch land/<stamp> <id…>`,
+   `.land.lock` 下叫 `AC_BATCH_RUN_ID=<這次 land 的 run_id> sh scripts/auto-fix.sh --batch land/<stamp> <id…>`
+   (每輪全套紅,land 把那一輪的紅榜抄進 land 自己的 `status.json`,auto-fix 從那裡讀),
    rc 0 就在同一個 land worktree 重跑全套,綠了照第 6 步 ff-only + push + 逐張 close;最多
    `board/config.json` 的 `batch_fix.rounds` 輪(預設 2)。auto-fix --batch rc≠0 → 不重跑、rc 1、一頁「批次修復停了」
    掛第一張票。鎖整段不放(worker、覆核、重跑),docs 通道在後面等。全套每一輪:事件 `gate.start` / `gate.pass` /

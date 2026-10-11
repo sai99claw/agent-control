@@ -250,12 +250,15 @@ status_start_all() {
 
 # gate / merge / push **各記一筆**。混成一格的 `done` 會說謊:舊版在 merge 與 push
 # 之前就寫 `done, rc=0`,於是「閘門綠了但沒合進去」在狀態檔上與「已經落地」一樣。
-status_phase_all() {   # $1 = gate|merge|push  $2 = rc  $3 = 說明
+status_phase_all() {   # $1 = gate|merge|push  $2 = rc  $3 = 說明  [$4 = 抄紅榜的全套 run_id]
     [ -n "$IDS" ] || return 0
     [ -n "$LAND_RUN" ] || return 0
     for i in $IDS; do
+        from=""
+        [ -z "${4:-}" ] || from=$(python3 "$ROOT/scripts/status.py" rundir --ticket "$i" \
+            --run-id "$4" 2>/dev/null)/status.json
         python3 "$ROOT/scripts/status.py" phase --ticket "$i" --run-id "$LAND_RUN" \
-            --phase "$1" --rc "$2" --note "$3" >/dev/null 2>&1 \
+            --phase "$1" --rc "$2" --note "$3" --failures-from "$from" >/dev/null 2>&1 \
             || echo "land: #$i 的 $1 狀態寫不出來(不擋落地)" >&2
     done
 }
@@ -670,7 +673,7 @@ run_gate() {
         ev gate.pass --kv mode=full --kv "round=$ROUND" --kv "batch=$STAMP" --kv "sha=$SHA"
         return 0
     fi
-    status_phase_all gate 1 "全套第 $ROUND 輪紅"
+    status_phase_all gate 1 "全套第 $ROUND 輪紅" "$GATE_RUN"
     ev gate.fail --kv mode=full --kv "round=$ROUND" --kv "batch=$STAMP" --kv "sha=$SHA"
     return 1
 }
@@ -695,9 +698,10 @@ batch_fix() {
     fixed=0
     while [ "$fixed" -lt "$rounds" ]; do
         fixed=$((fixed + 1))
-        echo "land: 全套第 $ROUND 輪紅 —— 批次修復第 $fixed/$rounds 輪:AC_BATCH_RUN_ID=$GATE_RUN sh scripts/auto-fix.sh --batch $BR $GATE_TICKETS"
+        echo "land: 全套第 $ROUND 輪紅 —— 批次修復第 $fixed/$rounds 輪:AC_BATCH_RUN_ID=$LAND_RUN sh scripts/auto-fix.sh --batch $BR $GATE_TICKETS"
+        # 紅榜已由 run_gate 抄進 land 這一輪的狀態檔(reports/t<第一張>/$LAND_RUN/status.json)。
         # shellcheck disable=SC2086
-        AC_BATCH_RUN_ID="$GATE_RUN" AC_FIX_SOURCE="$BR" sh "$ROOT/scripts/auto-fix.sh" --batch "$BR" $IDS
+        AC_BATCH_RUN_ID="$LAND_RUN" AC_FIX_SOURCE="$BR" sh "$ROOT/scripts/auto-fix.sh" --batch "$BR" $IDS
         frc=$?
         if [ "$frc" -ne 0 ]; then
             echo "land: 批次修復停了(auto-fix --batch rc=$frc)—— 不重跑全套,$MAIN 沒動;worktree 留在 $WT"

@@ -704,6 +704,14 @@ def cmd_phase(args):
         "phase": args.phase, "rc": args.rc, "at": at,
         "seconds": seconds_between(since, at),
         "note": args.note or ""})
+    # land 批次修復(#109):全套那一輪的紅榜抄進 land 這一輪,`auto-fix --batch` 拿
+    # land 的 run_id(AC_BATCH_RUN_ID)就讀得到 —— 不必知道全套另開的 run 目錄。
+    if args.failures_from:
+        try:
+            with open(args.failures_from, encoding="utf-8") as handle:
+                data["failures"] = json.load(handle).get("failures") or []
+        except (OSError, ValueError) as exc:
+            sys.stderr.write("status: 紅榜抄不過來(%s):%s\n" % (args.failures_from, exc))
     write(root, args.ticket, run_id, data)
     print("status: #%s %s %s rc=%d" % (args.ticket, run_id, args.phase, args.rc))
     return 0
@@ -1171,6 +1179,7 @@ def main(argv):
     phase.add_argument("--phase", required=True, choices=PHASES)
     phase.add_argument("--rc", type=int, required=True)
     phase.add_argument("--note", default="")
+    phase.add_argument("--failures-from", default="")
     phase.set_defaults(run=cmd_phase)
 
     done = subs.add_parser("done")
