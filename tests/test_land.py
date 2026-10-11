@@ -150,20 +150,91 @@ class ProductTicketsNeedVerifierCases(LandBase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
 
-class AutoFixHook(LandBase):
-    """land 預設 auto-fix:**但只在這一批剛好一張票的時候**。"""
+# 閘門的替身(#109):第 n 次被叫寫一份紅榜給 AC_GATE_TICKETS / AC_GATE_TICKET 每張票(檔名讀
+# `gate-fail-<n>`,沒有就讀 `gate-fail`,再沒有是 src/zzz),叫到第 `gate-red` 次之後轉綠(沒設 = 一直紅)。
+GATE_STUB_ROUNDS = """#!/bin/sh
+dir=$(dirname "$AC_TEST_LOG")
+n=$(( $(cat "$dir/gate-count" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "$dir/gate-count"
+echo "gate $* $(git rev-parse --short HEAD) run=$AC_GATE_RUN_ID tickets=$AC_GATE_TICKETS depth=${AC_LAND_DEPTH:-}" >> "$AC_TEST_LOG"
+fail=$(cat "$dir/gate-fail-$n" 2>/dev/null || cat "$dir/gate-fail" 2>/dev/null || echo src/zzz)
+for t in $AC_GATE_TICKETS $AC_GATE_TICKET; do
+    mkdir -p "$AC_ROOT/reports/t$t/$AC_GATE_RUN_ID"
+    printf '{"ticket": "%s", "kind": "gate", "run_id": "%s", "rc": 1, "failures": [{"kind": "FAIL", "case": "tests.test_red.T.test_round_%s", "file": "%s", "line": 1, "excerpt": "AssertionError: fake red"}]}\\n' \\
+        "$t" "$AC_GATE_RUN_ID" "$n" "$fail" > "$AC_ROOT/reports/t$t/$AC_GATE_RUN_ID/status.json"
+done
+red=$(cat "$dir/gate-red" 2>/dev/null || echo 99)
+[ "$n" -le "$red" ] || exit 0
+echo "FAILED (假的紅)"
+exit 1
+"""
 
-    gate_stub = GATE_STUB_RED
+# auto-fix 的替身:參數與 AC_BATCH_RUN_ID 記進 AC_TEST_LOG;`--batch` 時 rc 讀 `fix-rc`(預設 0),
+# 0 就在整合分支($2,land 開的那個 worktree)上疊一個 commit —— 同 `apply.sh --batch` 的形狀。
+# `fix-hook.sh` 存在就在修復當中跑它(land 持鎖時另起 docs 通道)。
+AUTO_FIX_STUB = """#!/bin/sh
+echo "autofix $* source=$AC_FIX_SOURCE batch_run=${AC_BATCH_RUN_ID:-}" >> "$AC_TEST_LOG"
+[ "$1" = "--batch" ] || exit 0
+dir=$(dirname "$AC_TEST_LOG")
+[ -f "$dir/fix-hook.sh" ] && sh "$dir/fix-hook.sh"
+rc=$(cat "$dir/fix-rc" 2>/dev/null || echo 0)
+[ "$rc" = 0 ] || exit "$rc"
+wt=$(git worktree list --porcelain | awk -v ref="branch refs/heads/$2" '
+    /^worktree / { here = substr($0, 10) } $0 == ref { print here; exit }')
+n=$(grep -c '^autofix --batch' "$AC_TEST_LOG")
+echo "fix $n" > "$wt/batch-fix-$n.txt"
+git -C "$wt" add "batch-fix-$n.txt" && git -C "$wt" commit -q -m "batch fix $n"
+"""
+
+
+class AutoFixHook(LandBase):
+    """land 預設 auto-fix:一張票派那張票;一批 N≥2 張派 `auto-fix.sh --batch`(#109,D-H51 ②)。"""
+
+    gate_stub = GATE_STUB_ROUNDS
 
     def setUp(self):
         super(AutoFixHook, self).setUp()
-        write_executable(os.path.join(self.repo, "scripts", "auto-fix.sh"), """#!/bin/sh
-echo "autofix $1 source=$AC_FIX_SOURCE" >> "$AC_TEST_LOG"
-""")
+        write_executable(os.path.join(self.repo, "scripts", "auto-fix.sh"), AUTO_FIX_STUB)
+
+    def put(self, name, text):
+        self.write(name, "%s\n" % text, where=self.home)
 
     def auto_fix_lines(self):
+        if not os.path.exists(self.log):
+            return []
         with open(self.log, encoding="utf-8") as handle:
             return [line.strip() for line in handle if line.startswith("autofix ")]
+
+    def gate_lines(self):
+        if not os.path.exists(self.log):
+            return []
+        with open(self.log, encoding="utf-8") as handle:
+            return [line.strip() for line in handle if line.startswith("gate ")]
+
+    def inbox_pages(self, ident):
+        where = os.path.join(self.repo, "reports", "inbox")
+        pages = []
+        for name in sorted(os.listdir(where)) if os.path.isdir(where) else []:
+            if name.startswith("%s-" % ident) and name.endswith(".md"):
+                with open(os.path.join(where, name), encoding="utf-8") as handle:
+                    pages.append(handle.read())
+        return pages
+
+    def batch_of_two(self, first=None, second=None):
+        """票 1 動 src/a、票 2 動 src/b,各自的 allowed 只有自己那一個檔;verify_strings + baseline 照 `CLOSABLE`,綠了關得掉。"""
+        one = self.branch_for(1, "t1-a", **dict({
+            "allowed_write_paths": ["src/a"],
+            "verify_strings": [{"path": "src/a", "contains": "第一張"}],
+            "verify": dict(CLOSABLE["verify"])}, **(first or {})))
+        self.commit_in(one, "src/a", "第一張")
+        two = self.branch_for(2, "t2-b", **dict({
+            "allowed_write_paths": ["src/b"],
+            "verify_strings": [{"path": "src/b", "contains": "第二張"}],
+            "verify": dict(CLOSABLE["verify"])}, **(second or {})))
+        self.commit_in(two, "src/b", "第二張")
+        self.approve(1, "t1-a")
+        self.approve(2, "t2-b")
+        return one, two
 
     def test_a_single_ticket_dispatches_by_default_from_the_land_tree(self):
         branch = self.branch_for(1, "t1-a")
@@ -186,18 +257,200 @@ echo "autofix $1 source=$AC_FIX_SOURCE" >> "$AC_TEST_LOG"
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertEqual(self.auto_fix_lines(), [])
 
-    def test_a_batch_with_two_tickets_refuses_to_guess_who_is_red(self):
-        """一批裡哪一條紅對到哪一張票,要有票↔案例的對照才判得出來 ——
-        **猜錯的歸責比不歸責更貴**:它會讓新 worker 去修一張沒有壞的票。"""
-        first = self.branch_for(1, "t1-a")
-        self.commit_in(first, "src/a", "第一張")
-        second = self.branch_for(2, "t2-b")
-        self.commit_in(second, "src/b", "第二張")
-        self.approve(1, "t1-a")
-        self.approve(2, "t2-b")
+    def test_a_red_batch_is_fixed_as_a_batch_and_lands_when_the_rerun_is_green(self):
+        """B1:紅 → `auto-fix.sh --batch land/<stamp> 1 2` → 同一個 worktree 重跑全套綠 → 進主線、兩張關票。
+
+        **改前會紅**:舊版印「不猜是誰紅的」、auto-fix 0 次、rc 1。"""
+        self.batch_of_two()
+        self.put("gate-red", 1)
+
         done = self.land("t1-a", "t2-b")
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("不猜是誰紅的", done.stdout)
+        stamp = [row for row in self.events() if row["kind"] == "land.start"][0]["stamp"]
+        fixes = self.auto_fix_lines()
+        self.assertEqual(len(fixes), 1, fixes)
+        self.assertEqual(fixes[0].split(" source=")[0], "autofix --batch land/%s 1 2" % stamp)
+        first_run = self.gate_lines()[0].split(" run=")[1].split(" ")[0]
+        self.assertEqual(fixes[0].split("batch_run=")[1], first_run)
+        with open(os.path.join(self.repo, "reports", "t1", first_run, "status.json"),
+                  encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["run_id"], first_run)
+        self.assertIn("batch fix 1", self.main_log(), "主線要前進到含批次修復那個 commit 的頭")
+        self.assertEqual(len(self.gate_lines()), 2)
+        for ident in (1, 2):
+            self.assertEqual(self.load_ticket(ident)["state"], "Done")
+
+    def test_every_round_names_its_round_in_events_and_status(self):
+        """B6:每一輪 gate.start / gate.fail / gate.pass 帶 mode=full round=<r> batch=<stamp>;
+        land 狀態檔每輪一筆 gate phase,note 寫第 r 輪。"""
+        self.batch_of_two()
+        self.put("gate-red", 1)
+
+        done = self.land("t1-a", "t2-b")
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        stamp = [row for row in self.events() if row["kind"] == "land.start"][0]["stamp"]
+        rows = [(row["kind"], row.get("mode"), row.get("round"), row.get("batch"))
+                for row in self.events() if row["kind"].startswith("gate.")]
+        self.assertEqual(rows, [("gate.start", "full", "1", stamp), ("gate.fail", "full", "1", stamp),
+                                ("gate.start", "full", "2", stamp), ("gate.pass", "full", "2", stamp)])
+        gates = [row for row in self.status_of(1, kind="land")["phases"] if row["phase"] == "gate"]
+        self.assertEqual([row["rc"] for row in gates], [1, 0])
+        self.assertIn("第 1 輪", gates[0]["note"])
+        self.assertIn("第 2 輪", gates[1]["note"])
+
+    def kicked_land(self, first=None, second=None, fail="src/b"):
+        self.batch_of_two(first, second)
+        self.put("gate-fail", fail)
+        return self.land("t1-a", "t2-b")
+
+    def assert_ticket_two_was_kicked(self, done):
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertIn("不猜是誰紅的", done.stdout)
+        self.assertEqual(len([line for line in self.auto_fix_lines()
+                              if line.startswith("autofix --batch")]), 2,
+                         "batch_fix.rounds 預設 2:修兩輪,第三次紅才找嫌疑票")
+        pages = self.inbox_pages(2)
+        kicked = [page for page in pages if "踢出" in page]
+        self.assertEqual(len(kicked), 1, pages)
+        self.assertIn("單張 land", kicked[0])
+        self.assertIn("tests.test_red.T.test_round_3", kicked[0], "紅榜的 case 名要在頁上")
+        self.assertFalse([page for page in self.inbox_pages(1) if "踢出" in page])
+        fails = [row for row in self.events() if row["kind"] == "land.fail" and row.get("kicked")]
+        self.assertEqual([row["kicked"] for row in fails], ["2"])
+        self.assertIn("重 land", done.stdout)
+        starts = [row["note"] for row in self.events() if row["kind"] == "land.start"]
+        self.assertEqual(starts, ["t1-a t2-b", "t1-a"])
+        relanded = self.gate_lines()[3:]
+        self.assertTrue(relanded, "重 land 要再跑全套")
+        for line in relanded:
+            self.assertIn("depth=1", line)
+        self.assertEqual(self.load_ticket(2)["state"], "Ready", "踢出的票不改 state")
+
+    def test_three_reds_kick_the_ticket_whose_allowed_paths_the_red_file_hits(self):
+        """B2:連紅 rounds+1 次、紅榜檔只命中票 2 的 allowed_write_paths → 踢 2、自動重 land t1-a。
+
+        **變異 ①**:rounds 寫死 1 → 第二次紅就踢,auto-fix 只 1 次 → 這一條紅。"""
+        self.assert_ticket_two_was_kicked(self.kicked_land())
+
+    def test_a_red_file_named_only_in_verify_files_kicks_that_ticket(self):
+        """B2 子情境:檔只在票 2 的 verify.files(主線上就有、不在分支改動、不在 allowed)。
+
+        **變異 ②**:踢人只比 allowed_write_paths → 對不到 → 這一條紅。"""
+        case = "verify/example/test_example.py"
+        self.assert_ticket_two_was_kicked(self.kicked_land(
+            second={"verify": {"files": [case], "tags": ["example"], "run": "", "notes": ""}},
+            fail=case))
+
+    def test_a_red_file_only_changed_on_the_branch_kicks_that_ticket(self):
+        """B2 子情境:檔只在票 2 的分支改動裡(不在 allowed、不在 verify.files)。"""
+        self.batch_of_two()
+        two = os.path.join(self.home, "wt", "t2-b")
+        self.commit_in(two, "lib/b2", "allowed 外的改動")
+        self.approve(2, "t2-b")
+        self.put("gate-fail", "lib/b2")
+        self.assert_ticket_two_was_kicked(self.land("t1-a", "t2-b"))
+
+    def test_the_reland_does_not_kick_again(self):
+        """B2:重 land 那一層(AC_LAND_DEPTH=1)紅了只留一頁 decision、rc 1,不再踢。
+        三張一批:先踢 2,重 land t1-a t3-c 時紅榜換成只命中票 3 —— 第二層要是會踢就會踢 3。
+
+        **變異 ④**:重 land 不帶 AC_LAND_DEPTH → 這一條紅。"""
+        one = self.branch_for(1, "t1-a", allowed_write_paths=["src/a"])
+        self.commit_in(one, "src/a", "第一張")
+        two = self.branch_for(2, "t2-b", allowed_write_paths=["src/b"])
+        self.commit_in(two, "src/b", "第二張")
+        three = self.branch_for(3, "t3-c", allowed_write_paths=["src/c"])
+        self.commit_in(three, "src/c", "第三張")
+        for ident, branch in ((1, "t1-a"), (2, "t2-b"), (3, "t3-c")):
+            self.approve(ident, branch)
+        self.put("gate-fail", "src/c")
+        for n in (1, 2, 3):
+            self.put("gate-fail-%s" % n, "src/b")
+
+        done = self.land("t1-a", "t2-b", "t3-c")
+
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        kicked = [row["kicked"] for row in self.events()
+                  if row["kind"] == "land.fail" and row.get("kicked")]
+        self.assertEqual(kicked, ["2"], "第二層不准再踢")
+        starts = [row["note"] for row in self.events() if row["kind"] == "land.start"]
+        self.assertEqual(starts, ["t1-a t2-b t3-c", "t1-a t3-c"], "重 land 只一次")
+        self.assertFalse([page for page in self.inbox_pages(3) if "踢出" in page])
+        stop = [page for page in self.inbox_pages(1) if "不再踢" in page]
+        self.assertEqual(len(stop), 1, self.inbox_pages(1))
+        self.assertIn("AC_LAND_DEPTH=1", done.stdout)
+
+    def assert_nobody_is_kicked(self, done):
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertFalse([row for row in self.events()
+                          if row["kind"] == "land.fail" and row.get("kicked")])
+        for ident in (1, 2):
+            self.assertFalse([page for page in self.inbox_pages(ident) if "踢出" in page])
+        self.assertEqual(len([row for row in self.events() if row["kind"] == "land.start"]), 1,
+                         "不重 land")
+        self.assertEqual(self.inbox_pages(2), [], "一頁就好,掛第一張票")
+        pages = self.inbox_pages(1)
+        self.assertEqual(len(pages), 1, pages)
+        for branch in ("t1-a", "t2-b"):
+            self.assertIn(branch, pages[0], "整批要列在那一頁")
+        stamp = [row for row in self.events() if row["kind"] == "land.start"][0]["stamp"]
+        self.assertTrue(os.path.isdir(os.path.join(self.wt_base(), "land-%s" % stamp)),
+                        "worktree 要留著給人看")
+
+    def test_a_red_file_that_hits_no_ticket_kicks_nobody(self):
+        """B3:紅榜對不到任何票 → 不踢、不重 land、一頁 decision 掛第一張、worktree 留。"""
+        self.assert_nobody_is_kicked(self.kicked_land(fail="src/zzz"))
+
+    def test_a_red_file_that_hits_every_ticket_kicks_nobody(self):
+        """B3:紅榜對到全部票 → 同上。"""
+        self.assert_nobody_is_kicked(self.kicked_land(
+            first={"allowed_write_paths": ["src/a", "src/shared"]},
+            second={"allowed_write_paths": ["src/b", "src/shared"]}, fail="src/shared"))
+
+    def test_no_auto_fix_on_a_batch_stops_like_before(self):
+        """B4:--no-auto-fix → 紅就停、每張一頁 decision、不派。"""
+        self.batch_of_two()
+        done = self.land("t1-a", "t2-b", "--no-auto-fix")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(self.auto_fix_lines(), [])
+        self.assertEqual(len(self.gate_lines()), 1)
+        for ident in (1, 2):
+            self.assertEqual(len(self.inbox_pages(ident)), 1)
+
+    def test_a_batch_fix_that_stops_does_not_rerun_the_gate(self):
+        """B7:auto-fix --batch rc≠0 → 不重跑全套、rc 1、一頁「批次修復停了」掛第一張票。"""
+        self.batch_of_two()
+        self.put("fix-rc", 5)
+
+        done = self.land("t1-a", "t2-b")
+
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(len(self.gate_lines()), 1, "修復停了就不重跑全套")
+        self.assertEqual(len(self.auto_fix_lines()), 1)
+        pages = self.inbox_pages(1)
+        self.assertEqual(len(pages), 1, pages)
+        self.assertIn("批次修復停了", pages[0])
+        self.assertEqual(self.inbox_pages(2), [])
+
+    def test_the_docs_channel_waits_while_a_batch_is_being_fixed(self):
+        """B6:批次修復當中鎖不放 —— 這時候另起的 docs 通道撞鎖、退 2,說得出誰在落地。"""
+        self.batch_of_two()
+        self.put("gate-red", 1)
+        self.make_ticket(7)
+        self.put("fix-hook.sh", 'sh "%s" docs "擠進去" tickets/7.json > "%s" 2>&1; echo "rc=$?" >> "%s"'
+                 % (os.path.join(self.repo, "scripts", "land.sh"),
+                    os.path.join(self.home, "docs-out"), os.path.join(self.home, "docs-out")))
+
+        done = self.land("t1-a", "t2-b")
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        out = self.read("docs-out", where=self.home)
+        self.assertIn("rc=2", out)
+        self.assertIn("已經有一個 land 在跑", out)
+        self.assertIn("t1-a t2-b", out, "說得出現在是誰在落地")
+        self.assertNotIn("擠進去", self.main_log())
 
     def test_an_unknown_flag_is_named(self):
         self.branch_for(1, "t1-a")

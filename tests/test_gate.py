@@ -361,6 +361,21 @@ class GateSh(Sandbox):
         self.assertIn("FAILED", done.stdout)
         self.assertIn("紅了", done.stdout)
 
+    def test_full_writes_one_status_per_ticket_of_a_batch(self):
+        """#109 B5:`AC_GATE_TICKETS="1 2"` 跑 --full 紅 → 每張票各一份 kind=gate 的狀態檔,
+        同 run_id、failures 相同(`auto-fix.sh --batch` 讀第一張,看板按票看)。
+
+        **變異 ③**:只寫第一張票的狀態檔 → 這一條紅。"""
+        self.write("tests/test_zz_red.py", FAILING)
+        done = self.run_sh("scripts/gate.sh", "--full", "--no-auto-fix",
+                           env=self.env(AC_GATE_TICKETS="1 2"))
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        one, two = self.status_of(1, kind="gate"), self.status_of(2, kind="gate")
+        self.assertEqual(one["run_id"], two["run_id"])
+        self.assertTrue(one["failures"], "紅榜不該是空的")
+        self.assertEqual(one["failures"], two["failures"])
+        self.assertIn("test_zz_red", json.dumps(one["failures"]))
+
     # ------------------------------------------------- 環境壞了要當場停(#7)
 
     def test_same_safari_failure_shape_stops_the_segment_and_alerts(self):

@@ -250,6 +250,16 @@ while [ $# -gt 0 ]; do
 done
 [ "$ARGC" -ge 1 ] || { echo "gate: 要 --branch / --base / --full 或一串檔名" >&2; exit 2; }
 
+# 批次落地的全套(#109,D-H51 ②):`AC_GATE_TICKETS="1 2"` 時狀態檔**每張票各寫一份**
+# (同 run_id、同一份 log 剖出的 failures)。只管狀態檔:`TICKET` 不跟著設 —— 它還會打開
+# 機械格、flake 重跑、票的 gate 欄,而那些是一張票的事。`auto-fix.sh --batch` 讀第一張那份。
+STATUS_IDS=$TICKET
+if [ "$want_full" -eq 1 ]; then
+    for t in ${AC_GATE_TICKETS:-}; do
+        case " $STATUS_IDS " in *" $t "*) ;; *) STATUS_IDS="$STATUS_IDS $t" ;; esac
+    done
+fi
+
 # `--branch --ticket <n>` 在主線上空比(#87 A3):主 repo 的 HEAD 是主線、票在、而除了
 # 票庫底下的 *.json 之外**什麼改動都沒有** —— `main...HEAD` 是空的,能比的只剩主工作樹
 # 裡的票檔,而它會讓 verify_strings 假命中、狀態檔記一個「綠」。扣的是票庫裡**每一張**
@@ -561,28 +571,32 @@ env_suspect_note() {
 # 狀態檔發不出去要出聲,但**不擋閘門** —— 同 land.sh 的事件:寫不出來的那一刻正是
 # 最需要紀錄的那一刻,而讓它擋住測試會把一個紀錄問題升級成一個交付問題。
 status_start() {
-    [ -n "$TICKET" ] || return 0
-    python3 "$ROOT/scripts/status.py" start --ticket "$TICKET" --kind gate \
-        --run-id "$RUN_ID" --sha "$SHA" --base-sha "$BASE_SHA" \
-        --worktree "$ROOT" --round "${AC_ROUND:-1}" \
-        --patch "${AC_PATCH:-}" --verify-patch "${AC_VERIFY_PATCH:-}" \
-        --prev-evidence "${AC_PREV_EVIDENCE:-}" \
-        --repro "sh scripts/gate.sh $ALL_ARGS" --cwd "$ROOT" \
-        >/dev/null 2>&1 || echo "gate: 狀態檔寫不出來(不擋閘門)" >&2
+    [ -n "$STATUS_IDS" ] || return 0
+    for t in $STATUS_IDS; do
+        python3 "$ROOT/scripts/status.py" start --ticket "$t" --kind gate \
+            --run-id "$RUN_ID" --sha "$SHA" --base-sha "$BASE_SHA" \
+            --worktree "$ROOT" --round "${AC_ROUND:-1}" \
+            --patch "${AC_PATCH:-}" --verify-patch "${AC_VERIFY_PATCH:-}" \
+            --prev-evidence "${AC_PREV_EVIDENCE:-}" \
+            --repro "sh scripts/gate.sh $ALL_ARGS" --cwd "$ROOT" \
+            >/dev/null 2>&1 || echo "gate: #$t 的狀態檔寫不出來(不擋閘門)" >&2
+    done
 }
 
 status_done() {   # $1 = rc
-    [ -n "$TICKET" ] || return 0
+    [ -n "$STATUS_IDS" ] || return 0
     state_args=""
     if [ "$ENV_SUSPECT" -eq 1 ]; then
         state_args="--state env_suspect --environment-log $SUSPECT_FILE"
     fi
-    # shellcheck disable=SC2086
-    python3 "$ROOT/scripts/status.py" done --ticket "$TICKET" --kind gate \
-        --run-id "$RUN_ID" --sha "$SHA" --rc "$1" --note "$NOTE" \
-        --log "$LOG" $state_args $VERIFY_LOG_ARGS $CHECK_LOG_ARGS $EXTRA_LOG_ARGS $FLAKY_ARGS \
-        $AUTO_FLAKY_ARGS $ORDER_ARGS \
-        || echo "gate: 狀態檔寫不出來(不擋閘門)" >&2
+    for t in $STATUS_IDS; do
+        # shellcheck disable=SC2086
+        python3 "$ROOT/scripts/status.py" done --ticket "$t" --kind gate \
+            --run-id "$RUN_ID" --sha "$SHA" --rc "$1" --note "$NOTE" \
+            --log "$LOG" $state_args $VERIFY_LOG_ARGS $CHECK_LOG_ARGS $EXTRA_LOG_ARGS $FLAKY_ARGS \
+            $AUTO_FLAKY_ARGS $ORDER_ARGS \
+            || echo "gate: #$t 的狀態檔寫不出來(不擋閘門)" >&2
+    done
     inbox_post "$1"
 }
 
