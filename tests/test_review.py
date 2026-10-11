@@ -595,7 +595,9 @@ class ReviewBatch(Sandbox):
     def test_a_head_that_is_not_a_batch_fix_is_refused(self):
         """前提:頭不是 apply --batch 疊的 commit ⇒ rc 2、reviewer 不起。"""
         self.set_reviewer(REVIEWER_PASS)
-        self.commit_in(os.path.join(self.home, "wt", "land-X"), "other.txt", "someone else on land")
+        land = os.path.join(self.home, "wt", "land-X")
+        side = self.git("commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "side", cwd=land).strip()
+        self.git("merge", "-q", "--no-ff", "-m", "merge side", side, cwd=land)
         done = self.review()
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertFalse(os.path.exists(self.log), "reviewer 不該被起")

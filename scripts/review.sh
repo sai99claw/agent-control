@@ -309,11 +309,9 @@ if [ -n "$BATCH" ]; then
     RESULT_JSON=$RUNDIR/result-reviewer.json
     SHA=$(git -C "$ROOT" rev-parse -q --verify "$B_BR^{commit}" 2>/dev/null || echo "")
     [ -n "$SHA" ] || refuse "整合分支 $B_BR 不存在" "先 sh scripts/apply.sh --batch $B_BR $B_IDS <patch>"
-    case "$(git -C "$ROOT" log -1 --format=%s "$SHA")" in
-        "batch fix round "*) ;;
-        *) refuse "整合分支 $B_BR 的頭不是批次修復的 commit(apply.sh --batch 疊的那一個)" \
-                  "先 sh scripts/apply.sh --batch $B_BR $B_IDS <patch>,再覆核" ;;
-    esac
+    [ "$(git -C "$ROOT" rev-list --parents -n 1 "$SHA" | wc -w)" -le 2 ] \
+        || refuse "整合分支 $B_BR 的頭是 merge,不是批次修復的 commit(apply.sh --batch 疊的那一個)" \
+                  "先 sh scripts/apply.sh --batch $B_BR $B_IDS <patch>,再覆核"
     TEMPLATE=""
     for candidate in "$ROOT/templates/dispatch-reviewer.md" "$AC/../templates/dispatch-reviewer.md"; do
         [ -f "$candidate" ] && { TEMPLATE=$candidate; break; }
