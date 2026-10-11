@@ -18,6 +18,7 @@ tempdir 裡的 bare repo —— 所以這一組碰不到這台機器上任何一
 受測腳本的來源走 `AC_TEST_SCRIPTS`,好讓變異驗紅把一份改壞的複本餵給同一組測試。
 """
 
+import glob
 import json
 import os
 import shutil
@@ -461,3 +462,67 @@ class Sandbox(unittest.TestCase):
             for name in sorted(os.listdir(src)):
                 if name.endswith(".md"):
                     shutil.copy(os.path.join(src, name), os.path.join(dst, name))
+
+    # ------------------------------------------------------- 批次修復的那一批(#108)
+
+    def make_batch(self, run_id="20261010-120000-1"):
+        """批次修復的真實形狀:主線 + `t1-a`、`t2-b` 兩條票分支 + 兩條都 `--no-ff` merge 進去的
+        整合分支 `land/X`;票 1 / 票 2 已覆核(review 綁各自分支頭)、帶 allowed_write_paths /
+        out_of_scope;`reports/t1/<run_id>/status.json` 是 land 那一輪全套紅的兩條紅榜。
+
+        `docs/shared.md` 在票 1 的 out_of_scope、也在票 2 的 allowed —— 聯集扣掉後**不擋**;
+        `docs/guarded.md` 只在票 1 的 out_of_scope —— 擋。期望值一律從這裡寫下的檔讀回。"""
+        self.write("src/one.txt", "one\n")
+        self.write("src/two.txt", "two\n")
+        self.write("docs/guarded.md", "guarded\n")
+        self.write("docs/shared.md", "shared\n")
+        self.write("tests/test_x.py", "import unittest\n\n\nclass T(unittest.TestCase):\n"
+                                      "    def test_one(self):\n        self.assertEqual(1, 1)\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "主線上先有這一批要動的檔")
+        shas = {}
+        for branch, name, text in (("t1-a", "src/one.txt", "one by #1\n"),
+                                   ("t2-b", "src/two.txt", "two by #2\n")):
+            self.git("branch", branch, "main")
+            path = self.worktree_of(branch)
+            self.commit_in(path, name, text.strip())
+            shas[branch] = self.git("rev-parse", branch).strip()
+        self.make_ticket("1", subject="批次 A:票 1 的題目", objective="票 1 的目標:one 要對",
+                         acceptance=["A1 one.txt 寫著 one by #1", "A2 票 1 的第二條"],
+                         allowed_write_paths=["src/one.txt", "tests/*"],
+                         out_of_scope=["docs/guarded.md", "docs/shared.md"],
+                         branch="t1-a", state="InReview", state_version=3,
+                         review={"verdict": "pass", "by": "main", "sha": shas["t1-a"],
+                                 "note": "沙盒"})
+        self.make_ticket("2", subject="批次 B:票 2 的題目", objective="票 2 的目標:two 要對",
+                         acceptance=["B1 two.txt 寫著 two by #2"],
+                         allowed_write_paths=["src/two.txt", "docs/shared.md"],
+                         out_of_scope=["scripts/land.sh"],
+                         branch="t2-b", state="InReview", state_version=5,
+                         review={"verdict": "pass", "by": "main", "sha": shas["t2-b"],
+                                 "note": "沙盒"})
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "開票 #1 #2")
+        self.git("branch", "land/X", "main")
+        land = self.worktree_of("land/X")
+        for branch in ("t1-a", "t2-b"):
+            self.git("merge", "-q", "--no-ff", "-m", "merge %s" % branch, branch, cwd=land)
+        self.git("worktree", "remove", "--force", land)
+        failures = [{"kind": "FAIL", "case": "tests.test_x.T.test_one", "file": "tests/test_x.py",
+                     "line": 6, "excerpt": "AssertionError: 批次紅榜第一條"},
+                    {"kind": "ERROR", "case": "tests.test_y.T.test_two", "file": "tests/test_y.py",
+                     "line": 3, "excerpt": "NameError: 批次紅榜第二條"}]
+        self.write(os.path.join("reports", "t1", run_id, "status.json"),
+                   json.dumps({"ticket": "1", "kind": "land", "run_id": run_id, "rc": 1,
+                               "failures": failures}, ensure_ascii=False, indent=2))
+        return {"run_id": run_id, "failures": failures, "shas": shas,
+                "land": self.git("rev-parse", "land/X").strip()}
+
+    def worktree_of(self, branch):
+        """已經存在的分支開一個 worktree(`worktree()` 是連分支一起開)。"""
+        path = os.path.join(self.home, "wt", branch.replace("/", "-"))
+        self.git("worktree", "add", "-q", path, branch)
+        return path
+
+    def batch_dirs(self):
+        return sorted(glob.glob(os.path.join(self.repo, "reports", "batch", "*")))

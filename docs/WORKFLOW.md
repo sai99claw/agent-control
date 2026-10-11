@@ -135,6 +135,18 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
    而派下去的 worker 會拿著空紅榜去猜)。
    > ⛔ **「紅在票沒動到的檔 → 疑似他票」這一條拿掉了**(D-014)。`failures.file` 取的是 traceback 最後一個檔案,經常是既有測試或共用 helper;而產品改壞行為,本來就會紅在完全沒修改的測試檔。歸責改用**同條件的 baseline / candidate 對照**(`scripts/verify-case.py check`:同一份案例在乾淨主線與 candidate 上各跑一次)。**未完成歸因前,票由原 owner 持有** —— 不因為某個檔沒被這張票改過就轉成別人的問題。
 6. 覆核由 `review.sh` 派(auto-fix 第 r 輪綠、手跑 `gate.sh --branch --ticket` 綠兩處觸發,主線不讀 patch):reviewer pass ⇒ 腳本 `ticket.py set review`(by `reviewer@<模型>`、sha 分支頭,`state_version` 工具自動蓋),land 才收;fail ⇒ 每條理由一筆 blocking 反駁、票轉 Blocked、inbox 一頁 decision「覆核退回,裁示」;沒交件(沒有 `## result` / JSON 壞 / 逾時 / verdict 不是 pass|fail)⇒ 不寫 review、票留 InReview、只發事件 `review.missing`。pass / 沒派成也只發事件(`review.pass` / `review.refused`)。
+7. **一批 N 張全套紅(批次修復,#108,D-H51 ②)**:`AC_BATCH_RUN_ID=<land 那一輪的 run_id> sh scripts/auto-fix.sh --batch <整合分支> <id…>`。
+   不猜哪張票弄紅:**一個** worker 拿派工文 `reports/batch/<stamp>/dispatch-round1.md`(N 張票面快照、
+   紅榜 = 第一張票 `reports/t<id>/<run_id>/status.json` 的 failures、`git diff --stat main...<整合分支>` 與整批 diff 檔、
+   寫入範圍聯集、「不得放寬測試」),在整合分支的副本上修。patch 走 `apply.sh --batch <整合分支> <id…> <patch>`:
+   疊成整合分支頭上**一個** commit(訊息 `batch fix round <r> #1 #2 …`),硬擋 = `protected_paths` ∪(各票
+   `out_of_scope` 聯集 − 各票 `allowed_write_paths` 聯集),測試檔(`batch_fix.test_globs`,預設 `tests/**`、
+   `verify/**`、`**/test_*.py`)刪含 assert 的行或加 skip / expectedFailure ⇒ rc 5「<檔>:<行> 放寬測試」
+   (EVIDENCE 有 `OBJECTION: test_defect <案例>` 且是那條案例的檔才不擋)。覆核走 `review.sh --batch <整合分支> <id…>
+   --run-id <stamp>`:pass 寫 `reports/batch/<stamp>/review.json`(sha = 整合分支頭),fail 一頁 decision 掛第一張票、
+   內文列整批。**全程不寫票**(不 `ticket.py set`;任何一張票的 `state_version` 一動,N 張的覆核同時過期),
+   各票分支不動;worker / reviewer 的成本各一列只記在第一張票(`ticket.py cost --note "batch <stamp> #1 #2"`)。
+   只跑一輪:rc 0 = fix 已 commit 且覆核 pass,呼叫端接著重跑全套。退出碼同單票(3 反駁 / 4 紅榜空 / 5 沒交、逾時、套不上)。
 
 ## 實作者的反駁怎麼被收下(2026-09-21,D-014)
 worker 說「這張票寫錯了」以前只是一句話:沒有結構化類別、沒有收件者、沒有處置期限,而**沒有人收的反駁與沒有反駁長得一樣**。現在它是票上的一格:

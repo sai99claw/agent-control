@@ -488,5 +488,120 @@ class ATimedOutReviewerIsReapedWithItsTree(ReviewBase):
             pass
 
 
+
+class ReviewBatch(Sandbox):
+    """#108 A5 / A6:`review.sh --batch land/X 1 2 --run-id <stamp>` 覆核整合分支頭上那一個
+    fix commit。pass 寫 `reports/batch/<stamp>/review.json`(sha = land/X 頭,不是哪一張票的
+    分支頭);fail 不寫票、收件匣一頁 decision 掛票 1、內文列 #2。成本一列只記在票 1。
+    期望的 sha 由夾具 `git rev-parse land/X` 取,不從 review.sh 算。"""
+
+    STAMP = "20261010-130000-9"
+    RUN = "20261010-120000-1"
+
+    def setUp(self):
+        super().setUp()
+        self.install_rules_sources()
+        self.write(os.path.join("memory", "model", "fixture-model.md"),
+                   "- 沙盒替身模型:照派工文做,不猜。\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "沙盒:規則包的來源")
+        self.batch = self.make_batch(run_id=self.RUN)
+        land = self.worktree_of("land/X")
+        self.write("src/one.txt", "one fixed by the batch\n", where=land)
+        self.git("add", "-A", cwd=land)
+        self.git("commit", "-q", "-m", "batch fix round 1 #1 #2 (land/X)", cwd=land)
+        self.fix = self.git("rev-parse", "land/X").strip()
+        self.before = {ident: self.load_ticket(ident) for ident in ("1", "2")}
+
+    def review(self, *ids):
+        return self.run_sh("scripts/review.sh", "--batch", "land/X", *(ids or ("1", "2")),
+                           "--run-id", self.STAMP, env=self.env(AC_BATCH_RUN_ID=self.RUN))
+
+    def record(self, name):
+        return os.path.join(self.repo, "reports", "batch", self.STAMP, name)
+
+    def inbox_rows(self):
+        path = os.path.join(self.repo, "reports", "inbox", "index.jsonl")
+        if not os.path.exists(path):
+            return []
+        with open(path, encoding="utf-8") as handle:
+            return [json.loads(line) for line in handle if line.strip()]
+
+    def assert_tickets_kept(self):
+        for ident, row in self.before.items():
+            now = self.load_ticket(ident)
+            for key in ("state_version", "review", "state", "objections"):
+                self.assertEqual(now.get(key), row.get(key), "#%s 的 %s 被寫了" % (ident, key))
+
+    def test_pass_writes_review_json_bound_to_the_land_head(self):
+        """A5 pass。四問:量 review.json 的 verdict / sha / by / at / note、票不動;
+        紅 = sha 寫成票分支頭或寫進票;期望值 = 夾具 rev-parse land/X 與設定的 --model。
+
+        **變異 ④**:review --batch 把 sha 寫成票 1 分支頭 → sha 那一條紅。
+        """
+        model = self.set_reviewer(REVIEWER_PASS)
+        done = self.review()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        with open(self.record("review.json"), encoding="utf-8") as handle:
+            data = json.load(handle)
+        self.assertEqual(data["verdict"], "pass")
+        self.assertEqual(data["sha"], self.fix)
+        self.assertNotEqual(data["sha"], self.batch["shas"]["t1-a"])
+        self.assertEqual(data["by"], "reviewer@%s" % model)
+        self.assertTrue(data["at"])
+        self.assertIn("REVIEW.md", data["note"])
+        self.assert_tickets_kept()
+
+    def test_the_packet_is_the_fix_diff_plus_every_ticket(self):
+        """A5 派工文。四問:量派工文帶 fix commit 的 diff 行與兩張票的 subject / acceptance;
+        紅 = 只帶第一張票或帶整批 diff;期望值 = 夾具寫的那一行與票檔。"""
+        self.set_reviewer(REVIEWER_PASS)
+        self.assertEqual(self.review().returncode, 0)
+        text = self.read(self.record("dispatch-reviewer.md"))
+        self.assertIn("+one fixed by the batch", text)
+        self.assertNotIn("+two by #2", text, "派工文帶的該是 fix commit 前後,不是整批 diff")
+        for ident in ("1", "2"):
+            row = self.before[ident]
+            self.assertIn(row["subject"], text)
+            for item in row["acceptance"]:
+                self.assertIn(item, text)
+
+    def test_fail_pages_ticket_one_listing_the_batch_and_writes_nothing(self):
+        """A5 fail。四問:量 rc≠0、review.json 不在、恰一頁 decision ticket=1 且內文有 #2、票不動;
+        紅 = 寫票轉 Blocked 或沒發頁;期望值 = 票號來自命令列。"""
+        self.set_reviewer(REVIEW_FAIL)
+        done = self.review()
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertFalse(os.path.exists(self.record("review.json")))
+        rows = [row for row in self.inbox_rows() if row.get("kind") == "decision"]
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(str(rows[0]["ticket"]), "1")
+        self.assertIn("#2", rows[0]["what"])
+        self.assert_tickets_kept()
+
+    def test_the_cost_row_lands_on_ticket_one_only(self):
+        """A6。四問:量票 1 多一列 role=reviewer、note 帶 batch <stamp> 與 #1 #2、run_id = AC_BATCH_RUN_ID;
+        票 2 的 cost 不變;紅 = 每張各記一列或沒標批次;期望值 = 測試給的 stamp / run。"""
+        self.set_reviewer(REVIEWER_PASS)
+        self.assertEqual(self.review().returncode, 0)
+        rows = self.load_ticket("1").get("cost") or []
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]["role"], "reviewer")
+        self.assertIn("batch %s" % self.STAMP, rows[0]["note"])
+        self.assertIn("#1 #2", rows[0]["note"])
+        self.assertEqual(rows[0]["run_id"], self.RUN)
+        self.assertEqual(self.load_ticket("2").get("cost"), self.before["2"].get("cost"))
+
+    def test_a_head_that_is_not_a_batch_fix_is_refused(self):
+        """前提:頭不是 apply --batch 疊的 commit ⇒ rc 2、reviewer 不起。"""
+        self.set_reviewer(REVIEWER_PASS)
+        land = os.path.join(self.home, "wt", "land-X")
+        side = self.git("commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "side", cwd=land).strip()
+        self.git("merge", "-q", "--no-ff", "-m", "merge side", side, cwd=land)
+        done = self.review()
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertFalse(os.path.exists(self.log), "reviewer 不該被起")
+
+
 if __name__ == "__main__":
     unittest.main()
