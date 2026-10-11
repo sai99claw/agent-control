@@ -46,9 +46,17 @@
 # 每一條要人動手的退出路徑(拒收 / 串接衝突 / 全套紅 / 沒合進主線 / push 沒成功 / 關不掉)
 # 除了狀態檔,還寫一則 `reports/inbox/<票號>-<run_id>.md`(kind=decision,D-032):哪張票、
 # 什麼狀態、要主線做什麼、去哪看。關票成功寫一頁 done 簡報。主線因此不必輪詢。
-# 全套紅時預設派下一輪 worker(`--no-auto-fix` 才關),**但只在這一批剛好一張票的時候** ——
-# 一批裡哪一條紅對到哪一張票,要有票↔案例的對照才判得出來(能力表列著這一條未實作),
-# 而**猜錯的歸責比不歸責更貴**:它會讓一個新 worker 去修一張沒有壞的票。
+# 全套紅時預設派下一輪 worker(`--no-auto-fix` 才關):一張票就是那張票的 auto-fix。
+#
+# ## 一批 N≥2 張全套紅(#109,D-H51 ②)
+# **不找是誰弄紅的**:同一把鎖下叫 `auto-fix.sh --batch land/<stamp> <id…>`(一個 worker 拿整批),
+# rc 0 就在同一個 land worktree 重跑全套;最多 `batch_fix.rounds`(預設 2)輪。鎖整段不放,所以
+# ff-only 不會因為主線中途動了而白跑;代價是 docs 通道最多等 rounds × (全套 + worker + 覆核)。
+# 修滿仍紅才找嫌疑票,規則純機械:最後一輪紅榜 `failures[].file` 對各票的 `allowed_write_paths`
+# (glob)、`verify.files`、`git diff --name-only main...<分支>`。**恰有部分票命中** → 那幾張踢出
+# (各一頁 decision,票不改 state —— 改票會讓覆核過期)、其餘自動重 land 一次(`AC_LAND_DEPTH`,
+# 重 land 那一層不再踢);對不到或全中 → 停、worktree 留、一頁 decision 掛第一張票。
+# 全套每一輪的 status.json 寫給這一批每張票(`AC_GATE_TICKETS`),`auto-fix.sh --batch` 讀第一張那份。
 #
 # ## push 之後試關票(2026-09-26,#43;D-025 ①)
 # push 成功後對這一批每張票試一次 `ticket.py close <票號> --landed <合併後主線的 sha>`。
@@ -79,9 +87,16 @@ TICKETS=$(cfg tickets_dir tickets)
 
 LOCK=${AC_LAND_LOCK:-$ROOT/.land.lock}
 HELD=""
+# 重 land 的深度(#109):批次踢人之後自動重 land 其餘那一次是 1;那一層不再踢、不再重 land。
+DEPTH=${AC_LAND_DEPTH:-0}
 release() { [ -n "$HELD" ] && rm -rf "$LOCK"; }
 trap 'release' EXIT INT TERM
 take_lock() {   # $1 = 這一次在做什麼(寫進 holder,給撞上的人看)
+    # 重 land 是持鎖的那一個 land 叫起來的子行程:沿用它的鎖(它結束時才放),不另搶。
+    if [ "$DEPTH" -gt 0 ] && [ -f "$LOCK/holder" ] && grep -q "^pid=$PPID " "$LOCK/holder"; then
+        echo "land: 重 land(AC_LAND_DEPTH=$DEPTH)—— 沿用上一層 land(pid=$PPID)的鎖"
+        return 0
+    fi
     if ! mkdir "$LOCK" 2>/dev/null; then
         echo "land: 已經有一個 land 在跑 —— 同時只准一個(docs/WORKFLOW.md)"
         [ -f "$LOCK/holder" ] && sed 's/^/land:   /' "$LOCK/holder"
@@ -209,6 +224,8 @@ set -- $REBUILT
 take_lock "$*"
 
 STAMP=$(date +%Y%m%d-%H%M%S)
+# 重 land 常在同一秒內開跑:worktree 與 land/<stamp> 分支不能撞上一層留著的那一個。
+[ "$DEPTH" -eq 0 ] || STAMP=$STAMP-d$DEPTH
 IDS=""
 ALL_BRANCHES="$*"
 LAND_T0=$(date +%s)
@@ -233,12 +250,15 @@ status_start_all() {
 
 # gate / merge / push **各記一筆**。混成一格的 `done` 會說謊:舊版在 merge 與 push
 # 之前就寫 `done, rc=0`,於是「閘門綠了但沒合進去」在狀態檔上與「已經落地」一樣。
-status_phase_all() {   # $1 = gate|merge|push  $2 = rc  $3 = 說明
+status_phase_all() {   # $1 = gate|merge|push  $2 = rc  $3 = 說明  [$4 = 抄紅榜的全套 run_id]
     [ -n "$IDS" ] || return 0
     [ -n "$LAND_RUN" ] || return 0
     for i in $IDS; do
+        from=""
+        [ -z "${4:-}" ] || from=$(python3 "$ROOT/scripts/status.py" rundir --ticket "$i" \
+            --run-id "$4" 2>/dev/null)/status.json
         python3 "$ROOT/scripts/status.py" phase --ticket "$i" --run-id "$LAND_RUN" \
-            --phase "$1" --rc "$2" --note "$3" >/dev/null 2>&1 \
+            --phase "$1" --rc "$2" --note "$3" --failures-from "$from" >/dev/null 2>&1 \
             || echo "land: #$i 的 $1 狀態寫不出來(不擋落地)" >&2
     done
 }
@@ -278,15 +298,20 @@ inbox_all() {   # $1 = 狀態  $2 = 要主線做什麼  $3 = 去哪看
     done
 }
 
-# 全套紅了自動派下一輪 —— **只在剛好一張票的時候**(見檔頭)。
+# 一頁 decision 只掛第一張票(批次的終態:整批列在內文裡,不是 N 頁一樣的)。
+inbox_first() {   # $1 = 狀態  $2 = 要主線做什麼  $3 = 去哪看
+    [ -n "$IDS" ] || return 0
+    [ -z "${AC_NO_INBOX:-}" ] || return 0
+    first=$(echo $IDS | cut -d' ' -f1)
+    python3 "$ROOT/scripts/inbox.py" post --ticket "$first" \
+        --run-id "${LAND_RUN:-$STAMP-$$}" --kind decision \
+        --state "$1" --what "$2" --where "$3" >/dev/null 2>&1 \
+        || echo "land: #$first 的收件匣寫不出來(不擋落地)" >&2
+}
+
+# 全套紅了自動派下一輪 —— 一張票的那一條路;一批 N≥2 張走 `batch_fix`(見檔頭)。
 auto_fix_all() {
     [ "$AUTOFIX" -eq 1 ] || return 0
-    count=$(echo "$IDS" | wc -w | tr -d " ")
-    if [ "$count" != "1" ]; then
-        echo "land: auto-fix 這一批有 $count 張票 —— 不猜是誰紅的,留給主線"
-        echo "land:   (票↔案例的對照還沒有;猜錯的歸責會讓新 worker 去修沒壞的票。)"
-        return 0
-    fi
     for i in $IDS; do
         echo "land: auto-fix —— sh scripts/auto-fix.sh $i(base=$BR)"
         AC_FIX_SOURCE="$BR" sh "$ROOT/scripts/auto-fix.sh" "$i" \
@@ -621,31 +646,201 @@ for b in "$@"; do
     fi
 done
 COUNT=$(git -C "$WT" log --oneline "$MAIN..HEAD" | wc -l | tr -d ' ')
-SHA=$(git -C "$WT" rev-parse --short HEAD)
 echo "land: $COUNT 個 commit 串好,跑全套 -> $WT/gate.log"
-ev gate.start --kv mode=full --kv "sha=$SHA"
 status_start_all
+NIDS=$(echo "$IDS" | wc -w | tr -d ' ')
 GATE_TICKET=""
-if [ "$(echo "$IDS" | wc -w | tr -d ' ')" = "1" ]; then
+GATE_TICKETS=""
+if [ "$NIDS" = "1" ]; then
     for i in $IDS; do GATE_TICKET=$i; done
+else
+    GATE_TICKETS=$(echo $IDS)
 fi
-if ! (cd "$WT" && AC_ROOT="$ROOT" AC_GATE_TICKET="$GATE_TICKET" \
-    AC_GATE_RUN_ID="$LAND_RUN-gate" AC_NO_INBOX=1 sh scripts/gate.sh --full --no-auto-fix); then
-    echo "land: 全套紅,$MAIN 沒動;worktree 留在 $WT"
-    echo "land: 紅榜逐條在 reports/t<票號>/<run_id>/status.json 的 failures(案例、檔、行、log、excerpt)"
-    ev gate.fail --kv mode=full --kv "sha=$SHA"
-    ev land.fail --note "閘門紅" --kv "stamp=$STAMP"
+
+# 全套一輪(#109 B6):事件帶 mode / round / batch,狀態檔每輪一筆 gate phase。
+# 第 1 輪的 run_id 照舊是 `<land run>-gate`;批次修復之後的第 r 輪是 `<land run>-gate-r<r>`。
+ROUND=0
+GATE_RUN=""
+run_gate() {
+    ROUND=$((ROUND + 1))
+    SHA=$(git -C "$WT" rev-parse --short HEAD)
+    GATE_RUN=$LAND_RUN-gate
+    [ "$ROUND" -eq 1 ] || GATE_RUN=$LAND_RUN-gate-r$ROUND
+    ev gate.start --kv mode=full --kv "round=$ROUND" --kv "batch=$STAMP" --kv "sha=$SHA"
+    if (cd "$WT" && AC_ROOT="$ROOT" AC_GATE_TICKET="$GATE_TICKET" AC_GATE_TICKETS="$GATE_TICKETS" \
+        AC_GATE_RUN_ID="$GATE_RUN" AC_NO_INBOX=1 sh scripts/gate.sh --full --no-auto-fix); then
+        status_phase_all gate 0 "全套第 $ROUND 輪綠"
+        ev gate.pass --kv mode=full --kv "round=$ROUND" --kv "batch=$STAMP" --kv "sha=$SHA"
+        return 0
+    fi
+    status_phase_all gate 1 "全套第 $ROUND 輪紅" "$GATE_RUN"
+    ev gate.fail --kv mode=full --kv "round=$ROUND" --kv "batch=$STAMP" --kv "sha=$SHA"
+    return 1
+}
+
+# 批次修復的輪數:`board/config.json` 的 `batch_fix.rounds`,預設 2。
+batch_rounds() {
+    python3 - "$ROOT" <<'ROUNDS_PY'
+import json, os, sys
+try:
+    with open(os.path.join(sys.argv[1], "board", "config.json"), encoding="utf-8") as handle:
+        value = int((json.load(handle).get("batch_fix") or {}).get("rounds", 2))
+except (OSError, ValueError, TypeError, AttributeError):
+    value = 2
+print(max(0, value))
+ROUNDS_PY
+}
+
+# 一批 N≥2 張全套紅(D-H51 ②,見檔頭):紅 → auto-fix --batch → 重跑全套,最多 rounds 輪;
+# 綠了 return 0 走第 6 步;其餘每一條路都在這裡收尾、退出。$@ = 這一批的分支。
+batch_fix() {
+    rounds=$(batch_rounds)
+    fixed=0
+    while [ "$fixed" -lt "$rounds" ]; do
+        fixed=$((fixed + 1))
+        echo "land: 全套第 $ROUND 輪紅 —— 批次修復第 $fixed/$rounds 輪:AC_BATCH_RUN_ID=$LAND_RUN sh scripts/auto-fix.sh --batch $BR $GATE_TICKETS"
+        # 紅榜已由 run_gate 抄進 land 這一輪的狀態檔(reports/t<第一張>/$LAND_RUN/status.json)。
+        # shellcheck disable=SC2086
+        AC_BATCH_RUN_ID="$LAND_RUN" AC_FIX_SOURCE="$BR" sh "$ROOT/scripts/auto-fix.sh" --batch "$BR" $IDS
+        frc=$?
+        if [ "$frc" -ne 0 ]; then
+            echo "land: 批次修復停了(auto-fix --batch rc=$frc)—— 不重跑全套,$MAIN 沒動;worktree 留在 $WT"
+            ev land.fail --note "批次修復停了(rc=$frc)" --kv "stamp=$STAMP"
+            land_cost_all fail
+            status_done_all 1 "批次修復停了(auto-fix --batch rc=$frc),沒有 merge、沒有 push"
+            inbox_first "批次修復停了(auto-fix --batch rc=$frc)" \
+                "整批 $ALL_BRANCHES 第 $fixed 輪修復沒交出 commit:先看 auto-fix 自己發的那一頁與 reports/batch/,處理完重跑 land" \
+                "$WT/gate.log 與 reports/t<票號>/$GATE_RUN/status.json"
+            exit 1
+        fi
+        if run_gate; then
+            echo "land: 批次修復第 $fixed 輪之後全套綠"
+            return 0
+        fi
+    done
+    echo "land: 全套連紅 $ROUND 輪(批次修復 $fixed 輪)—— 找嫌疑票"
+    STATUS_FILE=$(python3 "$ROOT/scripts/status.py" rundir --ticket "$(echo $IDS | cut -d' ' -f1)" \
+        --run-id "$GATE_RUN" 2>/dev/null)/status.json
+    # 第一行:嫌疑票號(空白分隔,可能是空的);其餘:逐條「案例(檔)—— 命中哪張票的哪一格」。
+    SUSPECT_OUT=$(python3 - "$ROOT" "$MAIN" "$TICKETS" "$STATUS_FILE" "$@" <<'SUSPECT_PY'
+import json, os, re, subprocess, sys
+root, main, tickets, status = sys.argv[1:5]
+branches = sys.argv[5:]
+sys.path.insert(0, os.path.join(root, "scripts"))
+import ticket as ticket_mod
+try:
+    with open(status, encoding="utf-8") as handle:
+        failures = json.load(handle).get("failures") or []
+except (OSError, ValueError):
+    failures = []
+rows = []
+for branch in branches:
+    ident = re.sub(r"^t([0-9]+)([-.].*)?$", r"\1", branch)
+    try:
+        with open(os.path.join(root, tickets, ident + ".json"), encoding="utf-8") as handle:
+            row = json.load(handle)
+    except (OSError, ValueError):
+        row = {}
+    plan = row.get("verify") if isinstance(row.get("verify"), dict) else {}
+    done = subprocess.run(["git", "-C", root, "diff", "--name-only", "%s...%s" % (main, branch)],
+                          capture_output=True, text=True)
+    rows.append((ident, row.get("allowed_write_paths") or [], plan.get("files") or [],
+                 [name for name in done.stdout.splitlines() if name]))
+hit, lines = [], []
+for failure in failures:
+    name = (failure or {}).get("file") or ""
+    case = (failure or {}).get("case") or "?"
+    if not name:
+        lines.append("%s —— 紅榜沒有檔名,對不到票" % case)
+        continue
+    owners = []
+    for ident, allowed, files, changed in rows:
+        why = []
+        if ticket_mod.matches_any(name, allowed):
+            why.append("allowed_write_paths")
+        if name in files:
+            why.append("verify.files")
+        if name in changed:
+            why.append("分支改動檔")
+        if why:
+            owners.append(ident)
+            lines.append("%s(%s)—— 命中 #%s 的 %s" % (case, name, ident, "、".join(why)))
+            if ident not in hit:
+                hit.append(ident)
+    if not owners:
+        lines.append("%s(%s)—— 對不到任何一張票" % (case, name))
+print(" ".join(ident for ident, _, _, _ in rows if ident in hit))
+for line in lines:
+    print(line)
+SUSPECT_PY
+)
+    SUSPECTS=$(echo "$SUSPECT_OUT" | sed -n 1p)
+    DETAIL=$(echo "$SUSPECT_OUT" | sed 1d)
+    [ -z "$DETAIL" ] || echo "$DETAIL" | sed 's/^/land:   /'
+    WHY=$(echo "$DETAIL" | awk 'NF { printf "%s%s", sep, $0; sep = " ／ " }')
+    NSUS=$(echo "$SUSPECTS" | wc -w | tr -d ' ')
+    if [ "$DEPTH" -gt 0 ] || [ "$NSUS" -eq 0 ] || [ "$NSUS" -ge "$NIDS" ]; then
+        if [ "$DEPTH" -gt 0 ]; then
+            why_not="這已經是踢人之後的重 land(AC_LAND_DEPTH=$DEPTH),不再踢"
+        elif [ "$NSUS" -eq 0 ]; then
+            why_not="紅榜對不到任何一張票"
+        else
+            why_not="紅榜對到這一批每一張票"
+        fi
+        echo "land: 不踢、不重 land —— $why_not;$MAIN 沒動,worktree 留在 $WT"
+        ev land.fail --note "批次全套連紅 $ROUND 輪,不踢($why_not)" --kv "stamp=$STAMP"
+        land_cost_all fail
+        status_done_all 1 "批次全套連紅 $ROUND 輪,不踢:$why_not"
+        inbox_first "批次全套連紅 $ROUND 輪(整批 $ALL_BRANCHES)" \
+            "$why_not —— 批次修復 $fixed 輪仍紅,留給主線:看紅榜與 worktree,決定拆批或改票。${WHY:+紅榜:$WHY}" \
+            "$WT/gate.log 與 reports/t<票號>/$GATE_RUN/status.json"
+        exit 1
+    fi
+    REST=""
+    for b in "$@"; do
+        id=$(echo "$b" | sed -n 's/^t\([0-9][0-9]*\)\([-.].*\)\{0,1\}$/\1/p')
+        case " $SUSPECTS " in
+            *" $id "*)
+                echo "land: 踢出 #$id($b)—— 紅榜對到它;這張票不改 state,之後單張 land 它"
+                if [ -z "${AC_NO_INBOX:-}" ]; then
+                    python3 "$ROOT/scripts/inbox.py" post --ticket "$id" \
+                        --run-id "$LAND_RUN-kick" --kind decision \
+                        --state "批次落地踢出(全套連紅 $ROUND 輪)" \
+                        --what "紅榜對到這張票,已從整批 $ALL_BRANCHES 踢出、其餘自動重 land;修好後單張 land:sh scripts/land.sh ${b}。紅榜:$WHY" \
+                        --where "$WT/gate.log 與 reports/t<票號>/$GATE_RUN/status.json" >/dev/null 2>&1 \
+                        || echo "land: #$id 的收件匣寫不出來(不擋落地)" >&2
+                fi
+                ;;
+            *) REST="$REST $b" ;;
+        esac
+    done
+    ev land.fail --note "批次全套連紅 $ROUND 輪,踢出 #$(echo "$SUSPECTS" | sed 's/ / #/g')" \
+        --kv "stamp=$STAMP" --kv "kicked=$(echo "$SUSPECTS" | tr ' ' ',')"
     land_cost_all fail
-    status_phase_all gate 1 "全套紅"
-    status_done_all 1 "閘門紅,沒有 merge、沒有 push"
-    inbox_all "落地時全套紅" \
-        "預設已自動派下一輪 worker;--no-auto-fix 才留給人處理" \
-        "$WT/gate.log 與 reports/t<票號>/$LAND_RUN/status.json"
-    auto_fix_all
-    exit 1
+    status_done_all 1 "批次全套連紅 $ROUND 輪,踢出 #$(echo "$SUSPECTS" | sed 's/ / #/g'),其餘重 land"
+    echo "land: 重 land 其餘:sh scripts/land.sh$REST(AC_LAND_DEPTH=$((DEPTH + 1)));這一批的 worktree 留在 $WT"
+    # shellcheck disable=SC2086
+    AC_LAND_DEPTH=$((DEPTH + 1)) sh "$ROOT/scripts/land.sh" $REST
+    relanded=$?
+    exit "$relanded"
+}
+
+if ! run_gate; then
+    if [ "$AUTOFIX" -eq 1 ] && [ "$NIDS" -ge 2 ]; then
+        batch_fix "$@"
+    else
+        echo "land: 全套紅,$MAIN 沒動;worktree 留在 $WT"
+        echo "land: 紅榜逐條在 reports/t<票號>/<run_id>/status.json 的 failures(案例、檔、行、log、excerpt)"
+        ev land.fail --note "閘門紅" --kv "stamp=$STAMP"
+        land_cost_all fail
+        status_done_all 1 "閘門紅,沒有 merge、沒有 push"
+        inbox_all "落地時全套紅" \
+            "預設已自動派下一輪 worker;--no-auto-fix 才留給人處理" \
+            "$WT/gate.log 與 reports/t<票號>/$LAND_RUN/status.json"
+        auto_fix_all
+        exit 1
+    fi
 fi
-status_phase_all gate 0 "全套綠"
-ev gate.pass --kv mode=full --kv "sha=$SHA"
 
 # ------------------------------------------------------------------- 第 6 步
 # ff-only 進不去有兩種,下一步差很多(#69):主線真的動了 → rebase 後重跑閘門;主線沒動、

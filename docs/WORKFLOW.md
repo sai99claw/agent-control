@@ -48,8 +48,20 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 9. **gate / merge / push 各記一筆**(狀態檔的 `phases`),而且**每一條退出路徑都寫終態**,
    要人動手的(拒收 / 串接衝突 / 全套紅 / 沒合進主線 / push 沒成功)同時寫一則 `reports/inbox/<票號>-<run_id>.md`,kind=decision(D-015 / D-032:終態去叫醒主線,主線不輪詢)。
 10. 綠了、push 成功之後 land 對每張票試 `scripts/ticket.py close <n> --landed <合併後主線的 sha>`(#43):關得掉印「#n 已合併、已關票」;關得掉再發一頁 done 簡報(`inbox.py done`:subject、落地 sha、做了什麼、覆核結論、cost 表;不自動 ack);關不掉印「#n 已合併、尚未關票」+ `ticket.py close` 的理由原文,並寫一頁 decision —— Done 的條件一條不放,沒有放行旗標,land 的 rc 不因關不掉而變。
-11. 每一步發事件。全套紅時預設派下一輪 worker,**只在這一批剛好一張票的時候**
-   (一批裡哪一條紅對到哪一張票,要有票↔案例的對照才判得出來)。
+11. 每一步發事件。全套紅時預設派下一輪 worker(`--no-auto-fix` 才關:紅就停、每張一頁 decision、不派)。
+   一張票一批 → 那張票的 `auto-fix.sh <n>`。**一批 N≥2 張(#109,D-H51 ②)不找是誰弄紅的**:同一把
+   `.land.lock` 下叫 `AC_BATCH_RUN_ID=<這次 land 的 run_id> sh scripts/auto-fix.sh --batch land/<stamp> <id…>`
+   (每輪全套紅,land 把那一輪的紅榜抄進 land 自己的 `status.json`,auto-fix 從那裡讀),
+   rc 0 就在同一個 land worktree 重跑全套,綠了照第 6 步 ff-only + push + 逐張 close;最多
+   `board/config.json` 的 `batch_fix.rounds` 輪(預設 2)。auto-fix --batch rc≠0 → 不重跑、rc 1、一頁「批次修復停了」
+   掛第一張票。鎖整段不放(worker、覆核、重跑),docs 通道在後面等。全套每一輪:事件 `gate.start` / `gate.pass` /
+   `gate.fail` 帶 `mode=full round=<r> batch=<stamp>`,land 狀態檔每輪一筆 gate phase;`gate.sh` 收 `AC_GATE_TICKETS`,
+   把那一輪的 status.json 寫給這一批每一張票(同 run_id、同 failures;第 1 輪 `<land run>-gate`,之後 `-gate-r<r>`)。
+   **踢人規則**(修滿 rounds 輪仍紅才用,純機械):最後一輪紅榜的 `failures[].file` 對各票的 `allowed_write_paths`
+   (glob)、`verify.files`、`git diff --name-only main...<分支>`,任一格命中就是嫌疑票。**恰有部分票命中** → 那幾張踢出
+   (各一頁 decision:「踢出」、紅榜 case 名、「單張 land」它的指令;事件 `land.fail kicked=<id,…>`;票不改 state ——
+   改票會讓覆核過期),其餘自動重 land 一次(`AC_LAND_DEPTH=1`,沿用同一把鎖);重 land 那一層不再踢、不再重 land,
+   再紅只留一頁 decision、rc 1。**對不到任何票、或對到全部票** → 不踢、不重 land、worktree 留著、一頁 decision 掛第一張票並列整批、rc 1。
 
 ## 票檔 / `memory` / `docs` 進主線的入口(2026-09-23,#29 A10)
 
@@ -216,7 +228,8 @@ worker 說「這張票寫錯了」以前只是一句話:沒有結構化類別、
 | **驗證者只證紅**:`verify-case.py red <n> --candidate <樹>`,四類紅分開數,`red_lines` 給覆核看 | **已落地**(D-020,#26) | `scripts/verify-case.py red` 只印 `<out-dir>/baseline-red.json` → 驗證者抄進 result 的 `baseline` → `apply.sh --evidence-verifier` 併進票的 `verify.baseline{stage:"red"}` |
 | **案例格式 lint**(F1–F6:模組 docstring 四段、`TAGS`、每個 `test_` 的驗收編號…) | **已落地**(D-020,#26) | `scripts/verify-case.py lint <檔…> --ticket <n>`;閘門自己叫 |
 | **閘門接線**:回歸層之後 `lint` → `check`,`stage` 由 `red` 升成 `check`,紅榜收進 `status.json` | **已落地**(D-020,#27) | `scripts/gate.sh --ticket <n>`;`ticket.py close` 只認 `stage=="check"` |
-| `land.sh` 那一側自己判 flake / 一批多張票時歸責 | **未實作,而且是刻意的** —— 一批裡哪一條紅對到哪一張票,要有票↔案例的對照才判得出來;land 因此只在**剛好一張票**時派下一輪,多張就留給主線 | `scripts/land.sh` 的 `auto_fix_all` |
+| `land.sh` 那一側自己判 flake | **未實作,而且是刻意的** —— flake 判定在 `gate.sh`(單票的那一條路) | `scripts/gate.sh` 的 `flake_rerun` |
+| `land.sh` 一批 N≥2 張全套紅 | **已實作**(#109,D-H51 ②)—— 不歸責:先 `auto-fix.sh --batch` 整批修、每輪重跑全套,最多 `batch_fix.rounds`(預設 2)輪;仍紅才用紅榜檔 ↔ 各票 `allowed_write_paths` / `verify.files` / 分支改動檔機械地找嫌疑票,恰部分命中才踢、其餘重 land 一次(`AC_LAND_DEPTH`);對不到或全中就停給主線 | `scripts/land.sh` 的 `batch_fix` |
 
 ## 驗證者的案例怎麼進閘門
 票的 `verify.tags` 併進 `tags`,由 `gate.sh --ticket <n>` **真的呼叫** `scripts/verify.py --tag …`(原始輸出存檔)。`--full` 跑全部回歸。驗證者不出 VERDICT;紅了照上一節走。

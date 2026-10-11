@@ -64,5 +64,8 @@
   "apply": {
     "regen_cmd": ""
   },
-  "worktree_dir": "../agent-control-wt"
+  "worktree_dir": "../agent-control-wt",
+  "batch_fix": {
+    "rounds": 2
+  }
 }
