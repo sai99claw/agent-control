@@ -192,6 +192,8 @@ worker 說「這張票寫錯了」以前只是一句話:沒有結構化類別、
 ## 交接類型:`test_defect`(2026-09-21,D-014)
 票是對的、程式也是對的,**錯的是案例本身**(oracle 或 fixture 寫錯)時:worker **不准**放寬斷言、不准改 oracle。它交一筆 `objections[{"category": "test_defect", …}]` 附反例,auto-fix 立即派**新的 role=verifier worker**(規則包 + 紅榜 + 反駁行 + 案例檔路徑)。驗證者交 `patch-verify.diff`,腳本併入同一分支後續跑閘門;綠了只寫事件,仍紅主線從 inbox 看「案例已修,第 N 輪仍紅」。需求本身有爭議才退回開題者。
 
+worker 同一輪**也交了** `patch-round<r>.diff`(#107,專案 #751 事故):驗證者的副本 = 分支(還沒有分支退 base_sha)`git archive` + `patch -p1` 本輪 worker 的 patch,`base/` 與 `work/` 都從它來 —— 不從 worker 的副本拷(那份不含 worker 的改動,而且 worker 可能已經刪了它)。worker 的 patch 套不上就停:票 Blocked、一頁「驗證者的副本建不出來」、驗證者不起、rc=5。收件時 `apply.sh <票> <worker 的 patch> <patch-verify>` 依序套(patch-verify 是對副本 `base/` 出的增量);套完、閘門之前,worker 那份的每個 `+++` 目標(刪檔看 `---` 側)都要在 `git diff --name-only <base_sha>..<分支>` 裡,缺一個就印「worker 的 patch 沒全進分支」與缺的檔、不跑閘門、attempt 記 apply-failed、rc=5(單獨跑:`sh scripts/auto-fix.sh --landed-check <base_sha> <分支> <patch>`)。worker 沒交 patch 的 test_defect 照舊只套驗證者那份。
+
 ### 這一段哪些已經是程式,哪些還只是規格(2026-09-21 逐項對照真實入口重寫)
 **這張表以前漏列了四項重大未實作**,而一張漏列的能力表比沒有能力表更糟:它讓人以為那幾件事有程式在守。以下每一列都對著一個真的入口。
 
