@@ -42,15 +42,9 @@
    執行器認片段,所以片段寫好就不會紅;合併由 `verify-case.py tags-merge` 做。
 4. **票的 `verify` 欄**——怎麼跑,寫給下一個不認識這張票的人。**寫在 `result` 區塊的
    `verify` 那一格**(你在副本裡,改不到活票;收件的 `apply.sh --evidence-verifier` 在鎖裡把
-   `files` / `tags` / `run` / `notes` 併進票,與 `baseline` 同一手):
-   ```json
-   "verify": {
-     "files": ["verify/<feature>/test_ticket_@TICKET@.py"],
-     "tags":  ["<tag>"],
-     "run":   "python3 scripts/verify.py --tag <tag>",
-     "notes": "<跑之前要知道的事:前置、已知不穩、為什麼這樣驗>"
-   }
-   ```
+   `files` / `tags` / `run` / `notes` 併進票,與 `baseline` 同一手)。形狀見下面「第五樣」那一塊
+   完整的 `result` 範例 —— 不單獨貼一段 `verify` 片段:照抄片段的人會連柵欄一起抄成 `json`,
+   收件端只認 `result`(#731/#772/#775 三次 `no-block`)。
    交付物本身是 `@COPY@/patch-verify.diff`:`cd @COPY@ && diff -ruN base work > patch-verify.diff`
    (`work/` 裡只有你寫的案例與片段,所以它就只含那幾個檔;票上已經有 `verify.files` 時
    `python3 scripts/verify-case.py extract @TICKET@` 出的是同一份)。檔頭是 `--- base/…` /
@@ -58,6 +52,30 @@
 
 ## 第五樣:`@COPY@/EVIDENCE-verifier.md`(有收件者才交)
 五段散文照舊給人看,檔尾再加一段 `## result`(鍵見 `tickets/SCHEMA.md` §result,`role` 寫 `verifier`)。
+小標底下那一塊的柵欄語言標記**是 `result`,不是 `json`**;整塊長這樣(`<…>` 換成你的,
+`baseline` 那一格整份換成 `verify-case.py red` 印出的 `baseline-red.json`):
+```result
+{
+  "ticket": "@TICKET@",
+  "role": "verifier",
+  "round": @ROUND@,
+  "rc": 0,
+  "verify": {
+    "files": ["verify/<feature>/test_ticket_@TICKET@.py"],
+    "tags": ["<tag>"],
+    "run": "python3 scripts/verify.py --tag <tag>",
+    "notes": "<跑之前要知道的事:前置、已知不穩、為什麼這樣驗>"
+  },
+  "baseline": {"stage": "red"},
+  "objection": null
+}
+```
+**交件前自檢**(收件端用的是同一支、同一份判準):
+```sh
+python3 scripts/ticket.py result @COPY@/EVIDENCE-verifier.md <暫存>/r.json --ticket @TICKET@ --role verifier --round @ROUND@
+```
+`<暫存>/r.json` 裡的 `present` 必須是 `true`。`present: false` + `reason: no-block` 多半是柵欄
+語言標記寫成了 `json`(要寫 `result`);`bad-json` 是那一塊解不開(多半是抄範例時漏了逗號或括號)。
 **收件者是 `apply.sh`**(2026-09-23,#29 A5):auto-fix 收件那一手跑(人手派時由派工的人跑)
 ```sh
 sh scripts/apply.sh @TICKET@ <patch.diff> @COPY@/patch-verify.diff --evidence-verifier @COPY@/EVIDENCE-verifier.md
