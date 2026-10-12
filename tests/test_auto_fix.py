@@ -802,6 +802,78 @@ class AWorkerPatchWithATestDefectReachesTheBranch(AutoFixBase):
         self.assertNotIn("副本是**分支上**那一版", packet)
 
 
+# 假 worker(#112 P4):第 2 輪說 test_defect;@WORKER_PATCH@ 換成 1 時同時交一份產品檔的 patch
+# (#107 那一種),0 時只交反駁。驗證者修案例、出 patch-verify,EVIDENCE 帶 verify 計畫與驗紅。
+TEST_DEFECT_VERIFIER_WITH_PLAN = """#!/bin/sh
+set -e
+echo "$AC_ROLE ran round $AC_ROUND" >> "$AC_TEST_LOG"
+cd "$AC_WORK"
+if [ "$AC_ROLE" = worker ]; then
+    if [ "@WORKER_PATCH@" = 1 ]; then
+        mkdir -p work/src
+        printf 'CHANGED = True\\n' > work/src/worker_change.py
+        diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+    fi
+    printf 'OBJECTION: test_defect fixture 把正確結果寫成 2\\n' \\
+        > "EVIDENCE-round$AC_ROUND.md"
+    exit 0
+fi
+cat > work/tests/test_thing.py <<'CASE'
+import unittest
+
+
+class T(unittest.TestCase):
+    def test_thing(self):
+        self.assertEqual(1, 1)
+CASE
+diff -ruN base work > patch-verify.diff || true
+cat > EVIDENCE-verifier.md <<'EV'
+# verifier
+案例已修。
+
+## result
+
+```result
+{"ticket": "1", "role": "verifier", "round": 2, "rc": 0, "patch_sha256": null,
+ "gate": null, "mutations": [], "objection": null, "excluded": [], "repro": null,
+ "memory": [],
+ "verify": {"files": ["tests/test_thing.py"]},
+ "baseline": {"stage": "red", "ok": true, "why": "", "files": ["tests/test_thing.py"]}}
+```
+EV
+"""
+
+
+class ASerialTestDefectMergesTheVerifierPlan(AutoFixBase):
+    """#112 P4:票 interface_fixed 不是 true(#107 的沙盒)。test_defect 收件以前不帶
+    `--evidence-verifier`,驗證者的 verify 計畫與驗紅永遠不進票,落地後 close 被「沒有回歸
+    證據」擋。期望值是替身 EVIDENCE 裡寫死的那兩格。
+
+    不斷言 rc:計畫併進票之後閘門會 lint tests/test_thing.py(替身的案例沒有驗證者案例的
+    docstring / TAGS),紅在那裡是沙盒案例的樣子,不是收件的行為;收件本身看「沒有套不上」。
+    """
+
+    def run_it(self, worker_patch):
+        self.set_worker(TEST_DEFECT_VERIFIER_WITH_PLAN.replace("@WORKER_PATCH@", worker_patch))
+        self.ticket_ready(in_scope=["src/app.py"])
+        self.first_round()
+        done = self.auto_fix()
+        self.assertNotIn("套不上", done.stdout + done.stderr)
+        self.assertIn("assertEqual(1, 1)", self.git("show", "t1:tests/test_thing.py"))
+        plan = self.load_ticket("1").get("verify") or {}
+        self.assertIn("tests/test_thing.py", plan.get("files") or [], plan)
+        self.assertEqual((plan.get("baseline") or {}).get("stage"), "red", plan)
+        return done
+
+    def test_p4_with_a_worker_patch_the_verifier_plan_reaches_the_ticket(self):
+        """**變異 m3**:WPATCH 那一支收件拿掉 --evidence-verifier → 這一條紅。"""
+        self.run_it("1")
+        self.assertEqual(self.git("show", "t1:src/worker_change.py"), "CHANGED = True\n")
+
+    def test_p4_without_a_worker_patch_the_verifier_plan_reaches_the_ticket(self):
+        self.run_it("0")
+
+
 class TheEventModelIsTheOneThatActuallyRan(AutoFixBase):
     """`routing.implement` 只是路由標籤;事件要記**實際起的那個**(#21)。#91 C7 之後
     claude-code 票起的是票上的 model(worker.command 的 `--model` 被換掉),所以
@@ -2392,6 +2464,229 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
         pages = self.inbox_rows()
         self.assertEqual(len(pages), 1, pages)
         self.assertNotIn("驗證者沒起", json.dumps(pages[0], ensure_ascii=False))
+
+
+# 假 worker / 驗證者(#112,專案 #775):票 interface_fixed=true,同一支可執行檔以 AC_ROLE 分流;
+# 驗證者以 @VCOUNT@ 計數分辨第幾次被叫。第 1 次是平行驗證者 v1:交 verify/example/test_ticket_1.py
+# 的 patch-verify 與帶 verify / 驗紅的 EVIDENCE,另抄一份到 @COPIES@(期望值來源);
+# @VERIFIER_HANDS_IN@ 換成 0 時 v1 什麼都不交。worker 交 tests/test_thing.py 又說 test_defect。
+# 第 2 次是 test_defect 驗證者 v2:把它副本裡三個檔在不在記進 @V2LOG@,再交 test_fix_1.py。
+PARALLEL_VERIFIER_THEN_TEST_DEFECT = '''#!/bin/sh
+set -e
+cd "$AC_WORK"
+if [ "$AC_ROLE" = verifier ]; then
+    n=$(cat "@VCOUNT@" 2>/dev/null || echo 0)
+    n=$((n + 1))
+    echo "$n" > "@VCOUNT@"
+    if [ "$n" = 1 ]; then
+        [ "@VERIFIER_HANDS_IN@" = 1 ] || exit 0
+        mkdir -p work/verify/example
+        cat > work/verify/example/test_ticket_1.py <<'CASE'
+"""#1 平行驗證者的案例:worker 交的 tests/test_thing.py 要在候選樹上。
+
+## 驗收表(期望值來源獨立於被測程式)
+C4 | sandbox | 看 tests/test_thing.py 在不在 | 在 | 票面 C4:乾淨基底上沒有這個檔
+
+## 介面字串
+(沒有;這一條不斷言任何字串)
+
+## 怎麼做假
+不上真埠、不起真服務、不殺行程。
+
+## 不做
+不改產品碼;不放寬任何票面驗收。
+"""
+import os
+import unittest
+
+TAGS = ["example"]
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+class T(unittest.TestCase):
+    def test_worker_case_is_there(self):
+        """C4 worker 交的案例檔在候選樹上。"""
+        self.assertTrue(os.path.exists(os.path.join(ROOT, "tests", "test_thing.py")))
+CASE
+        diff -ruN base work > patch-verify.diff || true
+        cat > EVIDENCE-verifier.md <<'EV'
+# verifier v1
+案例一個,基底紅。
+
+## result
+
+```result
+{"ticket": "1", "role": "verifier", "round": 1, "rc": 0, "patch_sha256": null,
+ "gate": null, "mutations": [], "objection": null, "excluded": [], "repro": null,
+ "memory": [],
+ "verify": {"files": ["verify/example/test_ticket_1.py"], "tags": ["example"]},
+ "baseline": {"stage": "red", "ok": true, "why": "",
+              "files": ["verify/example/test_ticket_1.py"]}}
+```
+EV
+        cp patch-verify.diff "@COPIES@/v1-patch-verify.diff"
+        cp EVIDENCE-verifier.md "@COPIES@/v1-EVIDENCE-verifier.md"
+        exit 0
+    fi
+    for path in base/tests/test_thing.py work/verify/example/test_ticket_1.py \\
+            base/verify/example/test_ticket_1.py; do
+        if [ -e "$path" ]; then echo "$path yes"; else echo "$path no"; fi >> "@V2LOG@"
+    done
+    mkdir -p work/verify/example
+    cat > work/verify/example/test_fix_1.py <<'CASE'
+"""#1 test_defect 驗證者的案例:worker 交的 tests/test_thing.py 照樣在。
+
+## 驗收表(期望值來源獨立於被測程式)
+C5 | sandbox | 看 tests/test_thing.py 在不在 | 在 | 票面 C5:乾淨基底上沒有這個檔
+
+## 介面字串
+(沒有;這一條不斷言任何字串)
+
+## 怎麼做假
+不上真埠、不起真服務、不殺行程。
+
+## 不做
+不改產品碼;不放寬任何票面驗收。
+"""
+import os
+import unittest
+
+TAGS = ["example"]
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+class T(unittest.TestCase):
+    def test_worker_case_is_still_there(self):
+        """C5 worker 交的案例檔在候選樹上。"""
+        self.assertTrue(os.path.exists(os.path.join(ROOT, "tests", "test_thing.py")))
+CASE
+    diff -ruN base work > patch-verify.diff || true
+    cat > EVIDENCE-verifier.md <<'EV'
+# verifier v2
+案例已修。
+
+## result
+
+```result
+{"ticket": "1", "role": "verifier", "round": 1, "rc": 0, "patch_sha256": null,
+ "gate": null, "mutations": [], "objection": null, "excluded": [], "repro": null,
+ "memory": [],
+ "verify": {"files": ["verify/example/test_fix_1.py"], "tags": ["example"]},
+ "baseline": {"stage": "red", "ok": true, "why": "",
+              "files": ["verify/example/test_fix_1.py"]}}
+```
+EV
+    exit 0
+fi
+echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+mkdir -p work/tests
+cat > work/tests/test_thing.py <<'CASE'
+import unittest
+
+
+class T(unittest.TestCase):
+    def test_thing(self):
+        self.assertEqual(1, 1)
+CASE
+diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+printf 'OBJECTION: test_defect fixture 把正確結果寫成 2\\n' > "EVIDENCE-round$AC_ROUND.md"
+'''
+
+
+class AParallelVerifierThenATestDefect(AutoFixBase):
+    """#112(專案 #775):interface_fixed=true 的票第 1 輪,平行驗證者 v1 已交件、worker 交 patch
+    又說 test_defect。以前 test_defect 驗證者 v2 的 dispatch 第一手 `rm -rf` 同一個副本(v1 的
+    交付沒了),收件又因 VPATCH 先判把 v2 的 patch-verify 給 apply 兩次(rc=3,worker 的 patch
+    沒進)。期望檔名、紀錄行寫死在這裡與替身裡,不從 auto-fix 算。
+    """
+
+    def copies(self):
+        return os.path.join(self.home, "v1-copies")
+
+    def v2log(self):
+        return os.path.join(self.home, "v2-saw.log")
+
+    def arm(self, hands_in=True):
+        os.makedirs(self.copies())
+        self.set_worker(PARALLEL_VERIFIER_THEN_TEST_DEFECT
+                        .replace("@VCOUNT@", os.path.join(self.home, "verifier-count"))
+                        .replace("@COPIES@", self.copies())
+                        .replace("@V2LOG@", self.v2log())
+                        .replace("@VERIFIER_HANDS_IN@", "1" if hands_in else "0"))
+        # 同 TheFirstRoundVerifierRunsAlongside.arm:`verify/*` 的改動在閘門對到 test_verify_runner。
+        self.write(os.path.join("tests", "test_verify_runner.py"),
+                   "import unittest\n\n\nclass T(unittest.TestCase):\n"
+                   "    def test_there(self):\n        self.assertTrue(True)\n")
+        self.make_ticket("1", needs_verifier=True, interface_fixed=True,
+                         allowed_write_paths=["tests/*", "verify/*"])
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "開票 #1")
+        self.git("push", "-q", "origin", "main")
+        return self.auto_fix("--no-review")
+
+    def v2_saw(self):
+        self.assertTrue(os.path.exists(self.v2log()), "test_defect 驗證者沒起")
+        with open(self.v2log(), encoding="utf-8") as handle:
+            return [line.strip() for line in handle if line.strip()]
+
+    def test_p1_worker_v1_and_v2_are_all_on_the_branch(self):
+        """**變異 m2**:收件回到 `if [ -n "$VPATCH" ]` 先判 → apply 收同一份兩次 → 這一條紅。"""
+        done = self.arm()
+        said = done.stdout + done.stderr
+        self.assertNotIn("套不上(apply rc=3)", said)
+        self.assertTrue(self.git("branch", "--list", "t1").strip(), said)
+        tree = self.git("ls-tree", "-r", "--name-only", "t1").splitlines()
+        for name in ("tests/test_thing.py", "verify/example/test_ticket_1.py",
+                     "verify/example/test_fix_1.py"):
+            self.assertIn(name, tree, said)
+        self.assertEqual(self.v2_saw(), ["base/tests/test_thing.py yes",
+                                         "work/verify/example/test_ticket_1.py yes",
+                                         "base/verify/example/test_ticket_1.py no"])
+
+    def test_p2_the_parallel_verifier_deliverables_survive(self):
+        """**變異 m1**:dispatch_verifier 不先保留就 `rm -rf "$VFIX"` → 這一條紅。"""
+        done = self.arm()
+        said = done.stdout + done.stderr
+        for kept, original in (("patch-verify-round1-parallel.diff", "v1-patch-verify.diff"),
+                               ("EVIDENCE-verifier-round1-parallel.md",
+                                "v1-EVIDENCE-verifier.md")):
+            found = self.result_files(kept)
+            self.assertEqual(len(found), 1, "%s:%s" % (kept, said))
+            with open(found[0], "rb") as one, \
+                    open(os.path.join(self.copies(), original), "rb") as two:
+                self.assertEqual(one.read(), two.read(), kept)
+        lines = [text for text in said.splitlines() if "平行驗證者" in text
+                 and ("patch-verify-round1-parallel.diff" in text
+                      or "EVIDENCE-verifier-round1-parallel.md" in text)]
+        self.assertTrue(lines, said)
+
+    def test_p2_without_a_parallel_hand_in_the_test_defect_path_is_unchanged(self):
+        """v1 沒交件:沒有保留檔、不報錯,v2 的副本 = 分支 + worker patch(#107)。"""
+        done = self.arm(hands_in=False)
+        said = done.stdout + done.stderr
+        self.assertEqual(self.result_files("patch-verify-round1-parallel.diff"), [])
+        self.assertEqual(self.result_files("EVIDENCE-verifier-round1-parallel.md"), [])
+        self.assertNotIn("驗證者沒交出 patch-verify", said)
+        self.assertNotIn("套不上", said)
+        self.assertEqual(self.v2_saw(), ["base/tests/test_thing.py yes",
+                                         "work/verify/example/test_ticket_1.py no",
+                                         "base/verify/example/test_ticket_1.py no"])
+        tree = self.git("ls-tree", "-r", "--name-only", "t1").splitlines()
+        self.assertIn("tests/test_thing.py", tree, said)
+        self.assertIn("verify/example/test_fix_1.py", tree, said)
+
+    def test_p3_both_verifier_plans_reach_the_ticket(self):
+        """v1 的計畫在前、v2 的在後;併法是 #100 A9 的聯集。baseline 收件時併進 red,
+        這一輪閘門綠了 `verify-case.py check` 把它升成 check(同 C4 收兩種)。"""
+        done = self.arm()
+        plan = self.load_ticket("1").get("verify") or {}
+        files = plan.get("files") or []
+        self.assertIn("verify/example/test_ticket_1.py", files, done.stdout + done.stderr)
+        self.assertIn("verify/example/test_fix_1.py", files, plan)
+        self.assertLess(files.index("verify/example/test_ticket_1.py"),
+                        files.index("verify/example/test_fix_1.py"), plan)
+        self.assertIn("example", plan.get("tags") or [], plan)
+        self.assertIn((plan.get("baseline") or {}).get("stage"), ("red", "check"), plan)
 
 
 # 假 worker(#57 b):在 work/ 改了一個檔、印一行,然後卡住直到被砍。印的那一行走 Python

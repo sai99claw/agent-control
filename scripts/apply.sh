@@ -2,7 +2,7 @@
 # 套 patch → 建分支 → commit:**一個程式入口** — `docs/WORKFLOW.md` §patch 管線(D-012、D-015)。
 #
 #   sh scripts/apply.sh <票號> <patch> [<patch-verify>] [--evidence <檔>]
-#       [--evidence-verifier <檔>]                    # 套進 t<票號> 分支並 commit
+#       [--evidence-verifier <檔>]…                   # 套進 t<票號> 分支並 commit
 #   sh scripts/apply.sh rebase <票號> <patch> [-o <輸出>] # 套到**當前主線**的副本,出一份乾淨 diff
 #   sh scripts/apply.sh --batch <整合分支> <票號…> <patch> [--evidence <檔>]
 #                                                     # 批次修復:疊成整合分支頭上一個 commit(#108)
@@ -24,7 +24,8 @@
 # (rc=4)。**退出碼 0 只證明 `git apply` 沒有喊叫。**
 #
 # ## 退出碼
-#   0 套好、commit 好了      2 用法 / 票的問題(找不到票、沒有 base_sha;反駁記不進票)
+#   0 套好、commit 好了      2 用法 / 票的問題(找不到票、沒有 base_sha;反駁記不進票;
+#                              兩個 patch 槽是同一份)
 #   3 檔頭不合格或 `--check` 不過(rebase 那一支的三向合併衝突也是 3)
 #   4 套完的比對不過(rebase 那一支的 **0 byte diff** 也是 4)
 #   5 動到票的 `out_of_scope` 或 `board/config.json` 的 `protected_paths`(D-H38 ①;
@@ -669,6 +670,7 @@ usage() {   # $1 = 出去的檔案描述子(1 = 有人問 --help,2 = 用錯了)
         echo "  --evidence <檔>            實作者的 EVIDENCE:收記憶、抽 result-round<輪>.json、"
         echo "                             收 ^OBJECTION: 那一行(不給就找 patch 旁邊的 EVIDENCE.md)"
         echo "  --evidence-verifier <檔>   驗證者的 EVIDENCE-verifier.md:抽 result-verifier-round<輪>.json"
+        echo "                             (可重複給:verify 計畫與驗紅依給的順序逐份併進票)"
         echo ""
         echo "例:"
         echo "  sh scripts/apply.sh 7 patch.diff patch-verify.diff \\"
@@ -705,6 +707,7 @@ PATCH=$2
 VPATCH=""
 EVIDENCE=""
 VEVIDENCE=""
+VEVIDENCES=""
 shift 2
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -713,9 +716,12 @@ while [ $# -gt 0 ]; do
             [ $# -ge 1 ] || { echo "apply: --evidence 後面要路徑" >&2; exit 2; }
             EVIDENCE=$1 ;;
         --evidence-verifier)
+            # 可重複給(#112):平行驗證者與 test_defect 驗證者各一份,依給的順序逐份併進票。
             shift
             [ $# -ge 1 ] || { echo "apply: --evidence-verifier 後面要路徑" >&2; exit 2; }
-            VEVIDENCE=$1 ;;
+            VEVIDENCE=$1
+            VEVIDENCES=${VEVIDENCES:+$VEVIDENCES
+}$1 ;;
         --help|-h)
             usage 1; exit 0 ;;
         -*)
@@ -736,6 +742,12 @@ fi
 if [ -n "$VPATCH" ]; then
     [ -f "$VPATCH" ] || { echo "apply: 找不到 patch-verify $VPATCH" >&2; exit 2; }
     VPATCH=$(cd "$(dirname "$VPATCH")" && pwd)/$(basename "$VPATCH")
+    # 兩個槽是同一份(同一路徑,或內容逐 byte 相同)就拒(#112,專案 #775):第二份套的是
+    # 已經套過的改動,`--check` 只會說「不過」,看不出是收件端把同一檔給了兩次。
+    if [ "$VPATCH" = "$PATCH" ] || [ "$(sha256_of "$VPATCH")" = "$(sha256_of "$PATCH")" ]; then
+        echo "apply: $PATCH 與 $VPATCH 是同一份 patch —— 兩個槽要一份 worker 的、一份 patch-verify;分支沒動" >&2
+        exit 2
+    fi
 fi
 
 BASE=$(python3 - "$TF" <<'PY'
@@ -1036,8 +1048,10 @@ fi
 # (`AC_RESULT_DONE`,auto-fix 第 1 輪)時那一份落在別的 run 目錄,以前整段因此被跳過,
 # 票的 `verify` 一格都沒併進去,閘門的驗證者那一層就量不到案例(#51 實測)。
 # 只收 `stage=red` —— 驗證者量不到綠,一份自稱 `check` 的會讓 `close` 放行。
-if [ -n "$VEVIDENCE" ]; then
-    python3 - "$AC" "$ID" "$VEVIDENCE" <<'PY' >&2
+# 給了幾份 `--evidence-verifier` 就依給的順序逐份併(#112)。
+printf '%s\n' "$VEVIDENCES" | while IFS= read -r VEV; do
+    [ -n "$VEV" ] || continue
+    python3 - "$AC" "$ID" "$VEV" <<'PY' >&2
 import json, sys
 sys.path.insert(0, sys.argv[1])
 import event
@@ -1143,7 +1157,7 @@ except (OSError, ValueError, RuntimeError) as exc:
 print("apply: 驗證者的驗紅(stage=red)併進票 #%s 的 verify.baseline(state_version=%s)"
       % (ident, version))
 PY
-fi
+done
 # **反駁放在最後**:patch 已經 commit 了(那是事實),但這一手沒有結束 ——
 # 一個「票寫錯了」的說法沒有人收,與沒有那個說法長得一樣(§7)。
 # 狀態檔只寫**最後那一個** rc:先寫 0 再改 6 的那一段空檔裡,讀的人看到的是綠(#36)。
