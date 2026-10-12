@@ -1232,13 +1232,27 @@ subprocess.run([sys.executable, os.path.join(os.environ["AC_CONTROL_DIR"], "tick
                 json.dumps(allowed, ensure_ascii=False)], check=False)
 PY
     VFIX=$WTBASE/verify-t$ID/round$r
+    # 平行驗證者(interface_fixed,#51)已經在**同一個**副本交過件(專案 #775):先把它那兩份
+    # 收進 reports 再清副本 —— 以前這裡第一手就 `rm -rf`,它的案例與驗紅一起沒了。
+    # 它的案例由底下的 work/ 帶著走,收件時隨這一輪的 patch-verify 進分支;計畫由收件併進票。
+    VKEPT_PATCH=""
+    VKEPT_EVIDENCE=""
+    if [ -n "$VPATCH" ] && [ -f "$VPATCH" ]; then
+        VKEPT_PATCH=$(dirname "$DISPATCH")/patch-verify-round$r-parallel.diff
+        VKEPT_EVIDENCE=$(dirname "$DISPATCH")/EVIDENCE-verifier-round$r-parallel.md
+        cp "$VPATCH" "$VKEPT_PATCH"
+        cp "$VEVIDENCE" "$VKEPT_EVIDENCE" 2>/dev/null || VKEPT_EVIDENCE=""
+        echo "auto-fix: 平行驗證者的交付先收進 reports —— $(basename "$VKEPT_PATCH")、$(basename "${VKEPT_EVIDENCE:-(沒有 EVIDENCE)}")"
+    fi
     rm -rf "$VFIX"
     mkdir -p "$VFIX/base"
     # **副本 = 分支 + 本輪 worker 的 patch**(#107)。不從 `$FIX/base` 拷:那一份不含 worker 的
     # 改動(案例要照的實作不在),而且 worker 收副本時可能已經刪了它(專案 #751)。
     # worker 的 diff 是對 `$SRC`(round_once 展副本用的那一版)出的,所以從同一版展。
+    # 平行驗證者交過件的話 work/ 再加它的案例(#112):patch-verify 對 base/ 出,自然帶著它們。
     WPATCH=""
     [ ! -f "$PATCH_OUT" ] || WPATCH=$PATCH_OUT
+    vfix_next="讀 worker 的 patch 與 EVIDENCE:patch 要對分支 $SRC 出;要嘛重派 worker,要嘛人下場"
     if ! git -C "$ROOT" archive "$SRC" 2>/dev/null | tar -x -C "$VFIX/base"; then
         vfix_why="取不出 $SRC"
     elif [ -n "$WPATCH" ] && ! ( cd "$VFIX/base" \
@@ -1246,26 +1260,29 @@ PY
         vfix_why="worker 的 patch($WPATCH)套不上 $SRC"
     else
         vfix_why=""
+        cp -R "$VFIX/base" "$VFIX/work"
+        if [ -n "$VKEPT_PATCH" ] && ! ( cd "$VFIX/work" \
+                && patch -p1 -E -f -F 0 --no-backup-if-mismatch -s -i "$VKEPT_PATCH" </dev/null ) >&2; then
+            vfix_why="平行驗證者的 patch-verify($VKEPT_PATCH)套不上分支 + worker 的 patch"
+            vfix_next="對照它與 worker 的 patch 哪幾個檔撞了;要嘛人下場併,要嘛重派"
+        fi
     fi
     if [ -n "$vfix_why" ]; then
         echo "auto-fix: 驗證者的副本建不出來 —— $vfix_why;驗證者不起" >&2
-        rm -rf "$VFIX/base"
+        rm -rf "$VFIX/base" "$VFIX/work"
         shed_copies "$FIX"
         block "#$ID 第 $r 輪驗證者的副本建不出來($vfix_why)"
-        post "驗證者的副本建不出來" \
-             "$vfix_why,驗證者沒起。讀 worker 的 patch 與 EVIDENCE:patch 要對分支 $SRC 出;要嘛重派 worker,要嘛人下場" \
-             "${WPATCH:-$FIX}"
+        post "驗證者的副本建不出來" "$vfix_why,驗證者沒起。$vfix_next" "${WPATCH:-$FIX}"
         return 1
     fi
-    cp -R "$VFIX/base" "$VFIX/work"
     VDISPATCH=$(dirname "$DISPATCH")/dispatch-verifier-round$r.md
     if ! verifier_packet "$VDISPATCH" "$r" "$VFIX" "$S_BASE"; then
         shed_copies "$VFIX"
         return 1
     fi
-    python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "$line" "$WPATCH" >> "$VDISPATCH" <<'PY'
+    python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "$line" "$WPATCH" "$VKEPT_PATCH" >> "$VDISPATCH" <<'PY'
 import os, sys
-root, ident, run_id, r, objection, wpatch = sys.argv[1:7]
+root, ident, run_id, r, objection, wpatch, kept = sys.argv[1:8]
 sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import status
 
@@ -1279,6 +1296,9 @@ if wpatch:
     print("patch-verify 要對這份副本的 base/ 出(增量:只有你改的案例);收件時依序套 worker 那份與你這份。")
 else:
     print("副本是**分支上**那一版(前幾輪的 patch 都在);只修案例,不改產品程式。")
+if kept:
+    print("work/ 另含本輪平行驗證者交的案例(`%s`,base/ 沒有):它們隨你的 patch-verify 進分支,"
+          "留著、不要刪。" % kept)
 print("\n## 紅榜")
 for row in data.get("failures") or []:
     path = row.get("file") or ""
@@ -1928,7 +1948,8 @@ PY
 
     # 驗證者沒交件(#51 C6):worker 的 patch **先收進 reports**(下一輪或人下場還用得到,
     # 不浪費那一趟),再停下來問主線 —— 只套 worker 那一份等於沒有案例就量綠。
-    if [ -n "$V_WANT" ] && [ -z "$VPATCH" ]; then
+    # test_defect 的驗證者交了件(CASE_FIXED)就不算沒交:平行那一位沒交也照 #107 的路收。
+    if [ -n "$V_WANT" ] && [ -z "$VPATCH" ] && [ -z "$CASE_FIXED" ]; then
         cp "$PATCH_OUT" "$(dirname "$DISPATCH")/" 2>/dev/null
         [ ! -f "$EVIDENCE" ] || cp "$EVIDENCE" "$(dirname "$DISPATCH")/"
         echo "auto-fix: 第 $r 輪的驗證者沒交出 patch-verify —— worker 的 patch 收在 $(dirname "$DISPATCH")/" >&2
@@ -1942,14 +1963,22 @@ PY
         return 1
     fi
 
-    if [ -n "$VPATCH" ]; then
+    # test_defect 先判(#112):平行驗證者交過件時 VPATCH 還指著它在 verify-t<n>/round<r> 的那份,
+    # 而那個副本已經是 test_defect 驗證者的 —— 先判 VPATCH 就是把同一份 patch-verify 收兩次。
+    # 驗證者的計畫兩條路都併進票:平行那一位保留下來的那份在前,test_defect 那一位的在後。
+    if [ -n "$CASE_FIXED" ] && [ -n "$WPATCH" ]; then
+        # test_defect 而 worker 也交了 patch(#107):驗證者的 patch-verify 是疊在它上面的增量。
+        AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 AC_RESULT_JSON=$RESULT_JSON \
+            sh "$AC/apply.sh" "$ID" "$WPATCH" "$PATCH_OUT" --evidence "$EVIDENCE" \
+            ${VKEPT_EVIDENCE:+--evidence-verifier "$VKEPT_EVIDENCE"} --evidence-verifier "$EVIDENCE"
+    elif [ -n "$CASE_FIXED" ]; then
+        AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 AC_RESULT_JSON=$RESULT_JSON \
+            sh "$AC/apply.sh" "$ID" "$PATCH_OUT" --evidence "$EVIDENCE" \
+            ${VKEPT_EVIDENCE:+--evidence-verifier "$VKEPT_EVIDENCE"} --evidence-verifier "$EVIDENCE"
+    elif [ -n "$VPATCH" ]; then
         AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 AC_RESULT_JSON=$RESULT_JSON \
             sh "$AC/apply.sh" "$ID" "$PATCH_OUT" "$VPATCH" --evidence "$EVIDENCE" \
             --evidence-verifier "$VEVIDENCE"
-    elif [ -n "$WPATCH" ]; then
-        # test_defect 而 worker 也交了 patch(#107):驗證者的 patch-verify 是疊在它上面的增量。
-        AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 AC_RESULT_JSON=$RESULT_JSON \
-            sh "$AC/apply.sh" "$ID" "$WPATCH" "$PATCH_OUT" --evidence "$EVIDENCE"
     else
         AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 AC_RESULT_JSON=$RESULT_JSON \
             sh "$AC/apply.sh" "$ID" "$PATCH_OUT" --evidence "$EVIDENCE"

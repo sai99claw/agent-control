@@ -514,6 +514,32 @@ class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
         self.assertNotIn("baseline", self.load_ticket("1")["verify"])
         self.assertIn("不是 stage=red", done.stderr)
 
+    def test_every_verifier_evidence_given_is_merged_in_order(self):
+        """#112 P3:`--evidence-verifier` 可重複給,逐份併進票 —— 平行驗證者與 test_defect
+        驗證者各一份。兩份給的是不同格(files+驗紅 / tags),誰被漏掉都看得出來。
+
+        **變異**:只併最後一份(迴圈換回單一個 VEVIDENCE)→ files 與 baseline 那兩條紅。
+        """
+        self.make("1")
+        first = self.patch_file("EV1.md", (
+            "# v1\n\n## result\n\n```result\n"
+            '{"ticket": "1", "role": "verifier", "round": 1, "rc": 0,\n'
+            ' "verify": {"files": ["verify/example/test_ticket_1.py"]},\n'
+            ' "baseline": {"stage": "red", "ok": true, "why": "",\n'
+            '              "files": ["verify/example/test_ticket_1.py"]}}\n```\n'))
+        second = self.patch_file("EV2.md", (
+            "# v2\n\n## result\n\n```result\n"
+            '{"ticket": "1", "role": "verifier", "round": 1, "rc": 0,\n'
+            ' "verify": {"tags": ["example"]}}\n```\n'))
+        done = self.apply("1", self.patch_file("p.diff", CHANGE),
+                          "--evidence", self.patch_file("EVIDENCE.md", FULL_EVIDENCE),
+                          "--evidence-verifier", first, "--evidence-verifier", second)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        plan = self.load_ticket("1")["verify"]
+        self.assertEqual(plan.get("files"), ["verify/example/test_ticket_1.py"], plan)
+        self.assertEqual(plan.get("tags"), ["example"], plan)
+        self.assertEqual((plan.get("baseline") or {}).get("stage"), "red", plan)
+
 
 # #100:驗證者的 result 那一塊。計畫與驗紅寫死在這裡,期望值從這裡讀,不從被測程式算。
 PLAN_RUN = "python3 -m unittest verify.nav.test_ticket_1"
@@ -756,6 +782,35 @@ class ThingsItRefuses(ApplyBase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         listed = self.git("ls-tree", "-r", "--name-only", "t1")
         self.assertNotIn("src/a.txt", listed.split())
+
+    def test_the_same_patch_in_both_slots_is_refused_by_name(self):
+        """#112 P5(專案 #775):收件端把同一份 patch-verify 給了兩次,以前 rc=3「--check 不過」,
+        看不出是哪裡錯。同一路徑 → rc=2、點名、分支不建。
+
+        **變異**:同檔檢查拿掉 → rc 變 3、沒有「同一份 patch」→ 紅。
+        """
+        self.make("1")
+        patch = self.patch_file("patch-verify.diff", CREATE)
+        done = self.apply("1", patch, patch)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        line = [text for text in done.stderr.splitlines() if "同一份 patch" in text]
+        self.assertEqual(len(line), 1, done.stderr)
+        self.assertIn(patch, line[0])
+        self.assertFalse(self.branch_exists("t1"), "拒絕要發生在開分支之前")
+
+    def test_two_paths_with_the_same_bytes_are_the_same_patch(self):
+        """#112 P5:兩個路徑、sha256 相同 → 同一份;已經在的分支不動。"""
+        self.make("1")
+        self.assertEqual(self.apply("1", self.patch_file("p.diff", CHANGE)).returncode, 0)
+        before = self.git("rev-parse", "--verify", "t1")
+        one = self.patch_file("one.diff", CREATE)
+        two = self.patch_file("two.diff", CREATE)
+        done = self.run_sh("scripts/apply.sh", "1", one, two, env=self.env(AC_RUN_ID="second"))
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        line = [text for text in done.stderr.splitlines() if "同一份 patch" in text]
+        self.assertEqual(len(line), 1, done.stderr)
+        self.assertIn(two, line[0])
+        self.assertEqual(self.git("rev-parse", "--verify", "t1"), before)
 
 
 class TheWriteScope(ApplyBase):
