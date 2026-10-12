@@ -4,6 +4,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import unittest
@@ -618,6 +619,69 @@ class TheNextStepAfterLanding(Sandbox):
         # 比對 `--ref`:`done_blockers()` 本來就有一句提到 `verify-case.py check <票號>`,
         # 而**兩句都出現時分不出是誰印的** —— 這一行要問的是那句「可以直接貼」的。
         self.assertNotIn("--ref ", done.stdout, done.stdout)
+
+
+class TheNextStepRunsWhereverTicketPyLives(Sandbox):
+    """#100 A10:同步到專案之後這幾支住在 `scripts/control/`,而補量那一句寫死
+    `scripts/verify-case.py` —— 照貼就是 `can't open file`。兩種形狀各一輪,取輸出裡
+    那一行**原樣**在副本根跑。期望路徑寫死在這裡,不從被測程式算。
+
+    **變異 m9**:`baseline_next_step` 改回硬字串 `scripts/verify-case.py` → `scripts/control/`
+    那一輪紅。
+    """
+
+    def install(self, rel):
+        where = os.path.join(self.repo, rel)
+        os.makedirs(where, exist_ok=True)
+        for name in os.listdir(os.path.join(self.repo, "scripts")):
+            src = os.path.join(self.repo, "scripts", name)
+            if os.path.isfile(src):
+                shutil.copy(src, os.path.join(where, name))
+        return rel
+
+    def landed(self, **extra):
+        base = self.git("rev-parse", "main").strip()
+        self.write("src/nav.py", "def size_nav():\n    return 42\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "把 #1 的東西放進主線")
+        tip = self.git("rev-parse", "main").strip()
+        self.make_ticket(1, allowed_write_paths=["src/*"],
+                         verify_strings=["src/nav.py:def size_nav"], base_sha=base,
+                         review={"verdict": "pass", "by": "main", "sha": tip}, **extra)
+        return base, tip
+
+    def test_the_pasted_line_runs_in_both_shapes(self):
+        base, tip = self.landed()
+        for rel in ("scripts", self.install(os.path.join("scripts", "control"))):
+            with self.subTest(rel):
+                env = self.env(AC_ROOT=self.repo)
+                done = self.run_py(os.path.join(rel, "ticket.py"), "close", "1", env=env)
+                self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+                want = "python3 %s/verify-case.py check 1 --ref %s --candidate %s" % (
+                    rel, base, tip)
+                lines = [line.strip() for line in done.stdout.splitlines()
+                         if re.match(r"\s*python3 \S*verify-case\.py check ", line)]
+                self.assertEqual(lines, [want], done.stdout)
+                self.assertIn("`%s/verify-case.py check <票號>`" % rel, done.stdout,
+                              "done_blockers 那一句也要走同一個路徑")
+                ran = subprocess.run(["sh", "-c", lines[0]], cwd=self.repo, env=env,
+                                     capture_output=True, text=True, timeout=TIMEOUT)
+                said = ran.stdout + ran.stderr
+                self.assertNotIn("No such file", said)
+                self.assertNotIn("can't open file", said)
+                self.assertIn("verify-case:", said, "要是那一支真的跑起來說的話")
+
+    def test_the_stage_hint_uses_the_same_path(self):
+        """done_blockers 第二句(stage 不是 check)也不留舊路徑。"""
+        self.landed(verify={"files": [], "baseline": {"ok": True, "stage": "red",
+                                                      "why": ""}})
+        rel = self.install(os.path.join("scripts", "control"))
+        done = self.run_py(os.path.join(rel, "ticket.py"), "close", "1",
+                           env=self.env(AC_ROOT=self.repo))
+        self.assertIn("`scripts/control/verify-case.py check <票號> --candidate <分支>`",
+                      done.stdout, done.stdout + done.stderr)
+        self.assertNotIn("`scripts/verify-case.py", done.stdout)
+        self.assertNotIn(" scripts/verify-case.py", done.stdout)
 
 
 class WaiverAndLanded(Sandbox):

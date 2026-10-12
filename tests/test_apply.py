@@ -515,6 +515,159 @@ class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
         self.assertIn("不是 stage=red", done.stderr)
 
 
+# #100:驗證者的 result 那一塊。計畫與驗紅寫死在這裡,期望值從這裡讀,不從被測程式算。
+PLAN_RUN = "python3 -m unittest verify.nav.test_ticket_1"
+PLAN_NOTES = "驗證者的備註:P6 要開著篩選鈕"
+RED = {"stage": "red", "ok": True, "why": "",
+       "files": ["verify/nav/test_ticket_1.py"], "candidate_run": None,
+       "baseline": {"cases": 1, "red": ["verify.nav.test_ticket_1.T.test_x"]}}
+PLAN_RESULT = json.dumps(
+    {"ticket": "1", "role": "verifier", "round": 1, "rc": 0, "baseline": RED,
+     "verify": {"files": ["verify/nav/test_ticket_1.py"], "tags": ["log-period"],
+                "run": PLAN_RUN, "notes": PLAN_NOTES}},
+    ensure_ascii=False)
+
+# A7:解析不到的三種樣子。(iii) 是 #731 的實際寫法:`## result` + 空行 + ```json。
+UNPARSABLE = (
+    ("prose-only", "no-block",
+     "# EVIDENCE-verifier\n\n驗紅做了,案例在 verify/nav/test_ticket_1.py。\n"),
+    ("broken-json", "bad-json",
+     "# EVIDENCE-verifier\n\n## result\n\n```result\n{\"ticket\": \"1\", \"verify\": \n```\n"),
+    ("json-fence", "no-block",
+     "# EVIDENCE-verifier\n\n## result\n\n```json\n" + PLAN_RESULT + "\n```\n"),
+)
+
+# A8:§8.5 / SCHEMA 允許的寫法(柵欄長度 ≥3 的 ``` 或 ~~~、後面可有空白、前後有散文)。
+PARSABLE = (
+    ("three-backticks", "```result", "```"),
+    ("four-backticks", "````result", "````"),
+    ("tildes", "~~~result", "~~~"),
+    ("long-tildes", "~~~~~result", "~~~~~"),
+    ("trailing-space", "```result   ", "```  "),
+    ("space-before-word", "``` result", "```"),
+)
+
+
+class TheVerifierResultIsParsedOrSaysWhyNot(ApplyBase):
+    """#100 A7–A9:收驗證者 EVIDENCE 的那一手。
+
+    #731:result 那一塊寫成 `## result` + ```json,收件記成 `no-block`,而 apply 一聲
+    不吭 —— verify 與驗紅沒進票,要到落地後 close 被拒「沒有回歸證據」才看得出來。
+    #706:併入時 `merged.update(keep)` 把 tags 整組換掉,回歸層少跑 P6。
+    """
+
+    def apply_verifier(self, text, run_id="r1"):
+        return self.run_sh("scripts/apply.sh", "1", self.patch_file("p.diff", CHANGE),
+                           "--evidence", self.patch_file("EVIDENCE.md", FULL_EVIDENCE),
+                           "--evidence-verifier", self.patch_file("EV.md", text),
+                           env=self.env(AC_RUN_ID=run_id))
+
+    def drop_branch(self):
+        """表驅動的下一列從乾淨的主線重來:收掉這一列套出來的 worktree 與分支。"""
+        self.git("worktree", "remove", "--force", self.wt())
+        self.git("branch", "-D", "t1")
+
+    def verifier_result(self, run_id):
+        with open(os.path.join(self.repo, "reports", "t1", run_id,
+                               "result-verifier-round1.json"), encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_an_unparsable_result_says_so_on_one_line(self):
+        """A7。**變異 m8**:把 apply.sh 解析失敗那一行 `print(...)` 拿掉 → 這一條紅。"""
+        for name, reason, text in UNPARSABLE:
+            with self.subTest(name):
+                self.make("1", verify={"files": [], "tags": [], "run": "", "notes": ""})
+                before = self.load_ticket("1")
+                done = self.apply_verifier(text, run_id=name)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                said = [line for line in (done.stdout + done.stderr).splitlines()
+                        if "驗證者" in line and "result" in line and reason in line
+                        and "verify 計畫與驗紅沒有併進票" in line]
+                self.assertEqual(len(said), 1, done.stdout + done.stderr)
+                row = self.verifier_result(name)
+                self.assertFalse(row["present"])
+                self.assertEqual(row["reason"], reason)
+                after = self.load_ticket("1")
+                self.assertEqual(after["verify"], before["verify"])
+                self.assertEqual(after["state_version"], before["state_version"])
+                self.drop_branch()
+
+    def test_every_allowed_fence_is_parsed_and_merged(self):
+        """A8。**變異 m6**:`RESULT_OPEN` / `RESULT_CLOSE` 改回只認三個反引號 → 這一條紅。"""
+        for name, opening, closing in PARSABLE:
+            with self.subTest(name):
+                self.make("1")
+                text = ("# EVIDENCE-verifier\n\n前面的散文。\n\n## result\n\n"
+                        + opening + "\n" + PLAN_RESULT + "\n" + closing
+                        + "\n\n後面還有一段散文。\n")
+                done = self.apply_verifier(text, run_id=name)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertNotIn("沒有併進票", done.stdout + done.stderr)
+                self.assertTrue(self.verifier_result(name)["present"])
+                plan = self.load_ticket("1")["verify"]
+                self.assertEqual(plan["files"], ["verify/nav/test_ticket_1.py"])
+                self.assertEqual(plan["tags"], ["log-period"])
+                self.assertEqual(plan["run"], PLAN_RUN)
+                self.assertEqual(plan["notes"], PLAN_NOTES)
+                self.assertEqual(plan["baseline"], RED)
+                shown = self.ticket("show", "1")
+                self.assertIn('"baseline"', shown.stdout, shown.stdout + shown.stderr)
+                closed = self.ticket("close", "1")
+                self.assertNotIn("沒有回歸證據", closed.stdout + closed.stderr)
+                self.drop_branch()
+
+    def test_the_merge_keeps_what_the_ticket_already_had(self):
+        """A9(#706)。**變異 m7**:併入改回 `merged.update(given)` 整組換 → 這一條紅。"""
+        mine = {"stage": "check", "ok": False, "why": "票上原本那一格"}
+        self.make("1", verify={"files": ["verify/f1.py"],
+                               "tags": ["log-period", "report-period", "report-rows",
+                                        "log-filter-button"],
+                               "run": "python3 -m unittest verify.票上的",
+                               "notes": "票上的備註,不能被蓋",
+                               "baseline": mine})
+        before = self.load_ticket("1")["state_version"]
+        given = json.dumps({"ticket": "1", "role": "verifier", "round": 1, "rc": 0,
+                            "verify": {"files": ["verify/f2.py"], "tags": ["log-period"],
+                                       "run": "python3 -m unittest verify.驗證者的",
+                                       "notes": "驗證者的備註"}}, ensure_ascii=False)
+        done = self.apply_verifier("# EVIDENCE-verifier\n\n## result\n\n```result\n"
+                                   + given + "\n```\n")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        after = self.load_ticket("1")
+        self.assertEqual(after["verify"]["tags"],
+                         ["log-period", "report-period", "report-rows", "log-filter-button"])
+        self.assertEqual(after["verify"]["files"], ["verify/f1.py", "verify/f2.py"])
+        self.assertEqual(after["verify"]["run"], "python3 -m unittest verify.票上的")
+        self.assertEqual(after["verify"]["notes"], "票上的備註,不能被蓋")
+        self.assertEqual(after["verify"]["baseline"], mine)
+        self.assertEqual(after["state_version"], before + 1)
+        out = done.stdout + done.stderr
+        differ = [line for line in out.splitlines()
+                  if "驗證者給的 run/notes 與票上不同,保留票上" in line]
+        self.assertEqual(len(differ), 1, out)
+        for text in ("verify.票上的", "verify.驗證者的", "票上的備註", "驗證者的備註"):
+            self.assertIn(text, differ[0])
+        merged = [line for line in out.splitlines() if "併進票" in line]
+        self.assertEqual(len(merged), 1, out)
+        self.assertIn("新增 files:verify/f2.py", merged[0])
+        self.assertIn("保留", merged[0])
+        self.assertIn("tags:log-filter-button", merged[0].split("保留", 1)[1])
+
+    def test_empty_run_and_notes_take_the_verifier_values(self):
+        """A9 的另一半:票上 run / notes 空著才採驗證者給的。"""
+        self.make("1", verify={"files": ["verify/f1.py"], "tags": ["a"],
+                               "run": "", "notes": ""})
+        done = self.apply_verifier("# EVIDENCE-verifier\n\n## result\n\n```result\n"
+                                   + PLAN_RESULT + "\n```\n")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        plan = self.load_ticket("1")["verify"]
+        self.assertEqual(plan["run"], PLAN_RUN)
+        self.assertEqual(plan["notes"], PLAN_NOTES)
+        self.assertEqual(plan["tags"], ["a", "log-period"])
+        self.assertEqual(plan["files"], ["verify/f1.py", "verify/nav/test_ticket_1.py"])
+        self.assertNotIn("保留票上", done.stdout + done.stderr)
+
+
 class TheCopyRootComesFromTheMainRepo(ApplyBase):
     """#46 C1:副本根以**主 repo 根**解析(`scripts/wtbase.sh`),與 auto-fix / land / review
     同一個來源。以前 apply.sh 用 `$ROOT` 拼:在票分支的 worktree 裡手跑時 `$ROOT` 是
