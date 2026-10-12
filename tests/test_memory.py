@@ -465,5 +465,20 @@ class TheProjectSideIsWhatGetsWatched(Sandbox):
                          "# 正本角色卡\n")
 
 
+
+class TheModelTiersAllHaveCards(unittest.TestCase):
+    """#111:`model_tiers` 上的每個名字都要有卡 —— 少一張,`rules.py pack --model <name>`
+    就以「模型卡 檔案不存在」拒派。讀的是這個 repo 自己的設定與卡,不是沙盒。"""
+
+    def test_every_tier_has_a_card_in_memory_model(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "board", "config.json"), encoding="utf-8") as fh:
+            tiers = json.load(fh)["model_tiers"]
+        self.assertTrue(tiers, "model_tiers 是空的,這一條什麼都沒量")
+        missing = [name for name in tiers
+                   if not os.path.isfile(os.path.join(root, "memory", "model", "%s.md" % name))]
+        self.assertEqual(missing, [], "model_tiers 上這些名字在 memory/model/ 沒有卡")
+
+
 if __name__ == "__main__":
     unittest.main()
