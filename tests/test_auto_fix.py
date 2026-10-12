@@ -309,6 +309,53 @@ cat > EVIDENCE-verifier.md <<'EV'
 EV
 """
 
+# 假 worker(#107):第 2 輪**交了 patch 又說 test_defect** —— 新增一支產品檔、照規矩出
+# `diff -ruN base work`;`@AFTER@` 是交件後它還做什麼(W2 換成 `rm -rf work base`,專案 #751
+# 的 worker 真的這樣收副本)。驗證者把它看到的副本寫進 AC_TEST_LOG,再只改案例出 patch-verify。
+WORKER_PATCH_AND_TEST_DEFECT = """#!/bin/sh
+set -e
+echo "$AC_ROLE ran round $AC_ROUND" >> "$AC_TEST_LOG"
+cd "$AC_WORK"
+if [ "$AC_ROLE" = worker ]; then
+    mkdir -p work/src
+    printf 'CHANGED = True\\n' > work/src/worker_change.py
+    diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+    printf 'OBJECTION: test_defect fixture 把正確結果寫成 2\\n' \\
+        > "EVIDENCE-round$AC_ROUND.md"
+    @AFTER@
+    exit 0
+fi
+for path in base work base/src/worker_change.py work/src/worker_change.py; do
+    if [ -e "$path" ]; then echo "verifier saw $path" >> "$AC_TEST_LOG"; fi
+done
+cat > work/tests/test_thing.py <<'CASE'
+import unittest
+
+
+class T(unittest.TestCase):
+    def test_thing(self):
+        self.assertEqual(1, 1)
+CASE
+diff -ruN base work > patch-verify.diff || true
+printf '# verifier\\n案例已修\\n' > EVIDENCE-verifier.md
+"""
+
+# 假 worker(#107 W3):交一份 `---` 側與分支不符的 patch(分支上的案例沒有那一行)。
+WORKER_STALE_PATCH_AND_TEST_DEFECT = """#!/bin/sh
+set -e
+echo "$AC_ROLE ran round $AC_ROUND" >> "$AC_TEST_LOG"
+cd "$AC_WORK"
+cat > "patch-round$AC_ROUND.diff" <<'DIFF'
+diff -ruN base/tests/test_thing.py work/tests/test_thing.py
+--- base/tests/test_thing.py\t2026-10-09 10:00:00
++++ work/tests/test_thing.py\t2026-10-09 10:00:00
+@@ -1,1 +1,1 @@
+-import nothing_like_this
++import unittest
+DIFF
+printf 'OBJECTION: test_defect fixture 把正確結果寫成 2\\n' > "EVIDENCE-round$AC_ROUND.md"
+"""
+
 GREEN_LOG = """test_ok (test_thing.T.test_ok) ... ok
 
 ----------------------------------------------------------------------
@@ -671,6 +718,88 @@ class ThingsThatStopIt(AutoFixBase):
                              ["worker ran round 2", "verifier ran round 2",
                               "worker ran round 3"])
         self.assertIn("案例已修,第 2 輪仍紅", self.inbox_list())
+
+
+class AWorkerPatchWithATestDefectReachesTheBranch(AutoFixBase):
+    """#107(專案 #751 事故):worker 交了 patch-round<r>.diff 又說 test_defect —— 驗證者的副本
+    是「分支 + 本輪 worker 的 patch」,收件時兩份依序套,分支上兩份都在。以前驗證者的副本
+    拷自 worker 副本的 base/(不含 worker 的改動),收件只套 patch-verify:分支少了 worker
+    那份,閘門剛好綠就把殘缺的票落地。期望值來自替身寫的檔與它記下的副本,不從 auto-fix 算。
+    """
+
+    def red_branch(self, worker):
+        self.set_worker(worker)
+        self.ticket_ready(in_scope=["src/app.py"])
+        self.first_round()
+
+    def assert_both_on_the_branch(self, done):
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        tree = self.git("ls-tree", "-r", "--name-only", "t1").splitlines()
+        self.assertIn("src/worker_change.py", tree, "worker 那份沒進分支")
+        self.assertIn("tests/test_thing.py", tree)
+        self.assertEqual(self.git("show", "t1:src/worker_change.py"), "CHANGED = True\n")
+        self.assertIn("assertEqual(1, 1)", self.git("show", "t1:tests/test_thing.py"))
+
+    def test_w1_the_worker_patch_and_the_verifier_patch_both_land_on_the_branch(self):
+        """**變異 m1**:收件照舊只把 PATCH_OUT 換成 patch-verify 單獨套 → 這一條紅。"""
+        self.red_branch(WORKER_PATCH_AND_TEST_DEFECT.replace("@AFTER@", ":"))
+        done = self.auto_fix()
+        self.assert_both_on_the_branch(done)
+
+    def test_w2_the_verifier_copy_does_not_need_the_base_the_worker_left_behind(self):
+        """**變異 m2**:副本照舊 `cp -R $FIX/base` → 這一條紅(worker 已刪了它)。"""
+        self.red_branch(WORKER_PATCH_AND_TEST_DEFECT.replace("@AFTER@", "rm -rf work base"))
+        done = self.auto_fix()
+        with open(self.log, encoding="utf-8") as handle:
+            seen = [line.strip() for line in handle if line.startswith("verifier saw")]
+        self.assertEqual(seen, ["verifier saw base", "verifier saw work",
+                                "verifier saw base/src/worker_change.py",
+                                "verifier saw work/src/worker_change.py"],
+                         done.stdout + done.stderr)
+        self.assert_both_on_the_branch(done)
+
+    def test_w3_a_worker_patch_that_does_not_apply_stops_before_the_verifier(self):
+        self.red_branch(WORKER_STALE_PATCH_AND_TEST_DEFECT)
+        done = self.auto_fix()
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        self.assertEqual([row for row in self.events() if row["kind"] == "agent.start"
+                          and row.get("role") == "verifier"], [], "副本建不出來就不起驗證者")
+        self.assertEqual(self.load_ticket("1")["state"], "Blocked")
+        self.assertIn("驗證者的副本建不出來", self.inbox_list())
+        with open(self.log, encoding="utf-8") as handle:
+            self.assertEqual(handle.read().splitlines(), ["worker ran round 2"])
+
+    def test_w4_the_guard_names_the_worker_file_missing_from_the_branch(self):
+        """守衛單獨餵:分支只有案例那一個檔,worker 的 patch 還有一支產品檔。"""
+        self.set_worker(WORKER_NEVER)
+        base = self.ticket_ready()["base_sha"]
+        self.first_round()
+        patch = self.write("worker.diff", (
+            "diff -ruN base/src/worker_change.py work/src/worker_change.py\n"
+            "--- base/src/worker_change.py\t1970-01-01 08:00:00\n"
+            "+++ work/src/worker_change.py\t2026-10-09 10:00:00\n"
+            "@@ -0,0 +1 @@\n+CHANGED = True\n") + RED_CASE, where=self.home)
+        done = self.run_sh("scripts/auto-fix.sh", "--landed-check", base, "t1", patch)
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        line = [text for text in done.stderr.splitlines() if "worker 的 patch 沒全進分支" in text]
+        self.assertEqual(len(line), 1, done.stderr)
+        self.assertIn("src/worker_change.py", line[0])
+        self.assertNotIn("tests/test_thing.py", line[0])
+
+        whole = self.write("worker-ok.diff", RED_CASE, where=self.home)
+        done = self.run_sh("scripts/auto-fix.sh", "--landed-check", base, "t1", whole)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def test_w5_the_verifier_packet_says_the_copy_has_this_rounds_worker_patch(self):
+        self.red_branch(WORKER_PATCH_AND_TEST_DEFECT.replace("@AFTER@", ":"))
+        self.auto_fix()
+        packets = glob.glob(os.path.join(self.repo, "reports", "t1", "*",
+                                         "dispatch-verifier-round2.md"))
+        self.assertEqual(len(packets), 1)
+        with open(packets[0], encoding="utf-8") as handle:
+            packet = handle.read()
+        self.assertIn("本輪 worker 的 patch", packet)
+        self.assertNotIn("副本是**分支上**那一版", packet)
 
 
 class TheEventModelIsTheOneThatActuallyRan(AutoFixBase):

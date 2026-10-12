@@ -85,6 +85,52 @@ print(data if data not in (None, "") else default)
 PY
 }
 
+# ## test_defect 收件後的守衛(#107)
+# worker 交了 patch 又說 test_defect:apply 收兩份(worker 的、patch-verify)。套完之後 worker
+# 那一份的每個 `+++` 目標(刪檔看 `---` 側)都要出現在 `<base_sha>..<分支>` 的改動裡 ——
+# 少一個就是殘缺的票,閘門剛好綠就會把它落地(專案 #751)。缺檔印一行、回 5。
+# 可單獨跑:`sh scripts/auto-fix.sh --landed-check <base_sha> <分支> <worker 的 patch>`。
+landed_check() {   # $1 = base sha  $2 = 分支  $3 = worker 的 patch
+    python3 - "$ROOT" "$1" "$2" "$3" <<'PY'
+import subprocess, sys
+root, base, branch, patch = sys.argv[1:5]
+
+
+def side(text):
+    name = text.split("\t")[0].strip()
+    return "" if name == "/dev/null" else name.split("/", 1)[-1]
+
+
+wanted, old = [], ""
+with open(patch, encoding="utf-8", errors="replace") as handle:
+    for line in handle:
+        if line.startswith("--- "):
+            old = side(line[4:])
+        elif line.startswith("+++ "):
+            name = side(line[4:]) or old
+            if name and name not in wanted:
+                wanted.append(name)
+done = subprocess.run(["git", "-C", root, "diff", "--name-only", "%s..%s" % (base, branch)],
+                      capture_output=True, text=True)
+if done.returncode != 0:
+    sys.stderr.write("auto-fix: worker 的 patch 沒全進分支 —— 問不到 %s..%s 的改動:%s\n"
+                     % (base, branch, done.stderr.strip()))
+    raise SystemExit(5)
+changed = set(done.stdout.splitlines())
+missing = [name for name in wanted if name not in changed]
+if missing:
+    sys.stderr.write("auto-fix: worker 的 patch 沒全進分支(%s 相對 %s 沒有改到):%s\n"
+                     % (branch, base, " ".join(missing)))
+    raise SystemExit(5)
+PY
+}
+
+if [ "${1:-}" = "--landed-check" ]; then
+    [ $# -eq 4 ] || { echo "用法:sh scripts/auto-fix.sh --landed-check <base_sha> <分支> <worker 的 patch>" >&2; exit 2; }
+    landed_check "$2" "$3" "$4"
+    exit $?
+fi
+
 [ $# -ge 1 ] || { echo "用法:sh scripts/auto-fix.sh <票號> [--dry-run] [--round 1] [--no-review]"; exit 2; }
 # `--batch <整合分支> <票號…>`:票號收進 B_IDS,第一張當 `ID`(票檔、模型、逾時、成本都照它),
 # 旗標交回底下同一段解析。
@@ -1187,17 +1233,39 @@ subprocess.run([sys.executable, os.path.join(os.environ["AC_CONTROL_DIR"], "tick
 PY
     VFIX=$WTBASE/verify-t$ID/round$r
     rm -rf "$VFIX"
-    mkdir -p "$VFIX"
-    cp -R "$FIX/base" "$VFIX/base"
-    cp -R "$FIX/base" "$VFIX/work"
+    mkdir -p "$VFIX/base"
+    # **副本 = 分支 + 本輪 worker 的 patch**(#107)。不從 `$FIX/base` 拷:那一份不含 worker 的
+    # 改動(案例要照的實作不在),而且 worker 收副本時可能已經刪了它(專案 #751)。
+    # worker 的 diff 是對 `$SRC`(round_once 展副本用的那一版)出的,所以從同一版展。
+    WPATCH=""
+    [ ! -f "$PATCH_OUT" ] || WPATCH=$PATCH_OUT
+    if ! git -C "$ROOT" archive "$SRC" 2>/dev/null | tar -x -C "$VFIX/base"; then
+        vfix_why="取不出 $SRC"
+    elif [ -n "$WPATCH" ] && ! ( cd "$VFIX/base" \
+            && patch -p1 -E -f -F 0 --no-backup-if-mismatch -s -i "$WPATCH" </dev/null ) >&2; then
+        vfix_why="worker 的 patch($WPATCH)套不上 $SRC"
+    else
+        vfix_why=""
+    fi
+    if [ -n "$vfix_why" ]; then
+        echo "auto-fix: 驗證者的副本建不出來 —— $vfix_why;驗證者不起" >&2
+        rm -rf "$VFIX/base"
+        shed_copies "$FIX"
+        block "#$ID 第 $r 輪驗證者的副本建不出來($vfix_why)"
+        post "驗證者的副本建不出來" \
+             "$vfix_why,驗證者沒起。讀 worker 的 patch 與 EVIDENCE:patch 要對分支 $SRC 出;要嘛重派 worker,要嘛人下場" \
+             "${WPATCH:-$FIX}"
+        return 1
+    fi
+    cp -R "$VFIX/base" "$VFIX/work"
     VDISPATCH=$(dirname "$DISPATCH")/dispatch-verifier-round$r.md
     if ! verifier_packet "$VDISPATCH" "$r" "$VFIX" "$S_BASE"; then
         shed_copies "$VFIX"
         return 1
     fi
-    python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "$line" >> "$VDISPATCH" <<'PY'
+    python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "$line" "$WPATCH" >> "$VDISPATCH" <<'PY'
 import os, sys
-root, ident, run_id, r, objection = sys.argv[1:6]
+root, ident, run_id, r, objection, wpatch = sys.argv[1:7]
 sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import status
 
@@ -1205,7 +1273,12 @@ data = status.read(root, ident, run_id)
 files = []
 print("\n# 這一輪多的一件事:test_defect(第 %s 輪,修案例)" % r)
 print("\n產品 worker 提出:`%s`" % objection)
-print("副本是**分支上**那一版(前幾輪的 patch 都在);只修案例,不改產品程式。")
+if wpatch:
+    print("副本 = **分支上那一版 + 本輪 worker 的 patch**(`%s`;base/ 與 work/ 都已含它);"
+          "只修案例,不改產品程式。" % wpatch)
+    print("patch-verify 要對這份副本的 base/ 出(增量:只有你改的案例);收件時依序套 worker 那份與你這份。")
+else:
+    print("副本是**分支上**那一版(前幾輪的 patch 都在);只修案例,不改產品程式。")
 print("\n## 紅榜")
 for row in data.get("failures") or []:
     path = row.get("file") or ""
@@ -1775,7 +1848,8 @@ PY
         return 1
     fi
 
-    # 有反駁就先留著副本:`test_defect` 那條路要拿 `base/` 做驗證者的副本,其餘的反駁要
+    # 有反駁就先留著副本:`test_defect` 那條路由 dispatch_verifier 收(驗證者的副本自己從分支 +
+    # worker 的 patch 展,#107),其餘的反駁要
     # 在原副本接回 worker / 驗證者(#89)。用**與底下那一段同一個判準**問一次,不是「反正
     # 留著」—— 留著的那一份就是沒人收的那一份。沒有反駁 = 這一輪收件,兩份副本一起收。
     if [ -f "$EVIDENCE" ] && grep -q '^OBJECTION:' "$EVIDENCE"; then
@@ -1786,6 +1860,7 @@ PY
     fi
 
     CASE_FIXED=""
+    WPATCH=""
     # 反駁比 patch 先看:worker 說「這張票寫錯了」而東西照樣落地,那句話等於沒人收。
     if [ -f "$EVIDENCE" ] && grep -q '^OBJECTION:' "$EVIDENCE"; then
         line=$(grep -m1 '^OBJECTION:' "$EVIDENCE")
@@ -1871,6 +1946,10 @@ PY
         AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 AC_RESULT_JSON=$RESULT_JSON \
             sh "$AC/apply.sh" "$ID" "$PATCH_OUT" "$VPATCH" --evidence "$EVIDENCE" \
             --evidence-verifier "$VEVIDENCE"
+    elif [ -n "$WPATCH" ]; then
+        # test_defect 而 worker 也交了 patch(#107):驗證者的 patch-verify 是疊在它上面的增量。
+        AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 AC_RESULT_JSON=$RESULT_JSON \
+            sh "$AC/apply.sh" "$ID" "$WPATCH" "$PATCH_OUT" --evidence "$EVIDENCE"
     else
         AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 AC_RESULT_JSON=$RESULT_JSON \
             sh "$AC/apply.sh" "$ID" "$PATCH_OUT" --evidence "$EVIDENCE"
@@ -1881,6 +1960,18 @@ PY
         post "第 $r 輪的 patch 套不上(apply rc=$arc)" \
              "看 apply 的輸出:檔頭不合格、主線走遠(走 apply.sh rebase),還是越界" \
              "$PATCH_OUT"
+        worker_cost apply-failed
+        attempt_failed apply-failed
+        ROUND_RC=5
+        return 1
+    fi
+    if [ -n "$WPATCH" ] && ! landed_check "$(python3 -c '
+import json, sys
+print(json.load(open(sys.argv[1], encoding="utf-8")).get("base_sha") or sys.argv[2])
+' "$TF" "$S_BASE")" "$(ticket_branch)" "$WPATCH"; then
+        post "worker 的 patch 沒全進分支" \
+             "閘門沒跑。缺的檔見 auto-fix 的輸出;對照 worker 的 patch 與分支 $(ticket_branch),補齊再跑閘門" \
+             "$WPATCH"
         worker_cost apply-failed
         attempt_failed apply-failed
         ROUND_RC=5
