@@ -551,6 +551,66 @@ class TheSectionFloor(RulesBase):
         self.assertIn("1800", done.stderr)
 
 
+class TheSyncHeaderIsNotContent(RulesBase):
+    """同步檔頭與 front matter 不算正文(#110)。
+
+    `sync-to-project.sh` 在專案端每張卡的第 1 行寫 `<!-- 由 agent-control … 同步產生 -->`,
+    front matter 因此從第 2 行開始 —— `units()` 只在第 1 行是 `---` 時剝 front matter,
+    於是專案端卡的第一個單位是那行註解、第二個是 cap_history;worker 包的角色卡格只剩註解。
+
+    **變異**:把 `units()` 裡跳過開頭註解行的那個 `while` 拿掉 → 這一組兩條都紅。
+    """
+
+    config_extra = {"rules": {"roles_dir": os.path.join("docs", "roles"),
+                              "models_dir": os.path.join("docs", "roles", "model")}}
+    HEADER = ("<!-- 由 agent-control deadbeef 的 memory/role/implementer.md 同步產生;"
+              "請到 agent-control 改,不要改這一份 -->\n")
+    FRONT = ("---\ncap_chars: 2700\ncap_history:\n"
+             "  - {date: 2026-09-30, from: 2400, to: 2700, ticket: \"#99\"}\n---\n")
+    ROLE_FIRST = "SYNC-ROLE-1 角色卡正文的第一句。"
+    ROLE_SECOND = "SYNC-ROLE-2 角色卡正文的第二句。"
+    MODEL_FIRST = "SYNC-MODEL-1 模型卡正文的第一句。"
+    MODEL_SECOND = "SYNC-MODEL-2 模型卡正文的第二句。"
+
+    def synced(self, first, second):
+        return self.HEADER + self.FRONT + "%s\n%s\n" % (first, second)
+
+    def test_units_start_at_the_first_sentence(self):
+        """A1:fixture 卡 = 同步檔頭 + front matter + 兩句正文。"""
+        rules = rules_module(ROOT)
+        path = os.path.join(self.repo, "docs", "roles", "implementer.md")
+        self.write(os.path.join("docs", "roles", "implementer.md"),
+                   self.synced(self.ROLE_FIRST, self.ROLE_SECOND))
+        found = rules.units(rules.read_text(path))
+        self.assertEqual(found[0], self.ROLE_FIRST, found)
+        for one in found:
+            self.assertNotIn("<!--", one, found)
+            self.assertNotIn("cap_chars", one, found)
+
+    def test_a_project_pack_starts_each_card_at_its_first_sentence(self):
+        """A2:專案形狀的根(roles_dir=docs/roles),角色卡與模型卡都帶同步檔頭。"""
+        self.write(os.path.join("docs", "roles", "implementer.md"),
+                   self.synced(self.ROLE_FIRST, self.ROLE_SECOND))
+        self.write(os.path.join("docs", "roles", "model", "opus.md"),
+                   self.synced(self.MODEL_FIRST, self.MODEL_SECOND))
+        self.write(os.path.join("memory", "role", "implementer.inbox.md"),
+                   "- 暫存的一行 SYNC-INBOX。\n")
+        rules = rules_module(ROOT)
+        built = rules.build(self.repo, "worker", "opus", 4096)
+        self.assertEqual(built["problems"], [], built["problems"])
+        text = built["text"]
+        self.assertNotIn("<!--", text)
+        self.assertNotIn("cap_history", text)
+        cells = dict((one["item"], one) for one in built["stats"]["sections"])
+        for item, heading, first in (
+                ("角色卡", "## 角色卡 `docs/roles/implementer.md`\n", self.ROLE_FIRST),
+                ("模型卡", "## 模型記憶 `docs/roles/model/opus.md`\n", self.MODEL_FIRST)):
+            self.assertGreaterEqual(cells[item]["content_units"], 1, cells[item])
+            self.assertIn(heading, text)
+            rendered = text[text.index(heading) + len(heading):]
+            self.assertTrue(rendered.startswith(first), "%s 格的開頭:%r" % (item, rendered[:120]))
+
+
 def rules_module(repo):
     sys.path.insert(0, os.path.join(repo, "scripts"))
     try:
