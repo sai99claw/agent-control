@@ -31,9 +31,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "950fe859eb1986bb94b235eee96f5fa48dd8f015",
-  "state": "Ready",
-  "state_version": 6,
+  "base_sha": "15070a2d6cdb4d2961b47ca150006220ff7c8e02",
+  "state": "Done",
+  "state_version": 15,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -55,5 +55,118 @@
       "path": "scripts/apply.sh",
       "contains": "保留票上"
     }
-  ]
+  ],
+  "branch": "t100",
+  "patch_ref": "../agent-control-wt/fix-t100/round1/patch-round1.diff",
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 60,
+      "tokens_out": 29106,
+      "cache_write": 102624,
+      "cache_read": 2331454,
+      "wall_seconds": 315,
+      "outcome": "handed-in",
+      "run_id": "20261012-211306-25154",
+      "session_id": "ca0e6549-23c6-40dc-bf33-50c32696039e",
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-12T21:18:23+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 10,
+      "tokens_out": 3797,
+      "cache_write": 43208,
+      "cache_read": 188915,
+      "wall_seconds": 42,
+      "outcome": "pass",
+      "run_id": "20261012-211823-34891",
+      "session_id": "ef273bc9-5748-43f0-83dd-e7d692a2e723",
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-12T21:22:53+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 895,
+      "outcome": "pass",
+      "run_id": "20261012-214713-26887",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-10-12T22:02:08+08:00"
+    }
+  ],
+  "gate": {
+    "rc": 0,
+    "sha": "06395aca11bae037b82889215d2fb721fa32e5bf",
+    "run_id": "20261012-211823-34891",
+    "at": "2026-10-12T21:22:10+08:00"
+  },
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "b65e8a0441ead0010ccc448f9d967c91fcbbac5a",
+    "note": "reports/t100/20261012-211823-34891/REVIEW.md",
+    "at": "2026-10-12T22:02:08+08:00",
+    "state_version": 15
+  },
+  "cost_total": {
+    "calendar_seconds": 319910,
+    "wall_seconds": 1252,
+    "runs": 3,
+    "worker_rounds": 1,
+    "objections": 0,
+    "by_role": {
+      "worker": {
+        "runs": 1,
+        "wall_seconds": 315,
+        "tokens_in": 60,
+        "tokens_out": 29106,
+        "cache_write": 102624,
+        "cache_read": 2331454,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 1
+        }
+      },
+      "reviewer": {
+        "runs": 1,
+        "wall_seconds": 42,
+        "tokens_in": 10,
+        "tokens_out": 3797,
+        "cache_write": 43208,
+        "cache_read": 188915,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 895,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-12T22:02:08+08:00"
+  }
 }

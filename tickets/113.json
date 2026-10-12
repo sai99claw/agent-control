@@ -26,9 +26,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "f9fe660a586a45e4a74e5adde3d31c2a2c42e63c",
-  "state": "Ready",
-  "state_version": 3,
+  "base_sha": "15070a2d6cdb4d2961b47ca150006220ff7c8e02",
+  "state": "Done",
+  "state_version": 12,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -50,5 +50,118 @@
   "needs_verifier": false,
   "outline": "根因票。專案 #731、#772、#775 三次驗證者把 result 寫成 `## result` + ```json,ticket.result_block 只認 ```result → no-block,verify 計畫與驗紅沒併進票(#772 落地後才靠人補)。#100 A7/A8 只讓收件端『出聲』,並把『範本示範 ```json 是誘因、改不改待裁』留著;本票就是那一半:範本第 46 行就是 ```json。開題者實測(A f9fe660):grep -cE '^\\s*```json' templates/dispatch-verifier.md = 1;ticket.result_block(範本) = None;ticket.py result 對 `## result`+```json 的 EVIDENCE 印 no-block、present:false。needs_verifier=false:純範本文字 + 一條讀範本的單元案例,驗證者只會重演同一個 grep。可與 #100 平行(不同檔);#112 之後同步進專案。",
   "test_plan": "層次:單元。tests/test_templates.py 加 T2、T3 案例(讀範本檔,期望字面寫死在案例裡)。只跑 tests/test_templates.py 與 tests/test_dispatch_template.py(前景、給 timeout);A 側指令一律 env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR。開題者先跑過(f9fe660):grep 數 1、result_block=None,即 T1/T2 現況紅。",
-  "priority": "P1"
+  "priority": "P1",
+  "branch": "t113",
+  "patch_ref": "../agent-control-wt/fix-t113/round1/patch-round1.diff",
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 36,
+      "tokens_out": 14204,
+      "cache_write": 51082,
+      "cache_read": 859103,
+      "wall_seconds": 132,
+      "outcome": "handed-in",
+      "run_id": "20261012-212254-64505",
+      "session_id": "96148100-c43f-4467-bc33-21fff93692bd",
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-12T21:25:07+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 6,
+      "tokens_out": 2924,
+      "cache_write": 30254,
+      "cache_read": 87372,
+      "wall_seconds": 31,
+      "outcome": "pass",
+      "run_id": "20261012-212507-85091",
+      "session_id": "a4d6aabf-5245-498c-b4b7-891b3271ea34",
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-12T21:25:58+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 890,
+      "outcome": "pass",
+      "run_id": "20261012-220208-21243",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-10-12T22:16:58+08:00"
+    }
+  ],
+  "gate": {
+    "rc": 0,
+    "sha": "9be1aa569806a45b2bcf2ed7bff89ff742d37700",
+    "run_id": "20261012-212507-85091",
+    "at": "2026-10-12T21:25:26+08:00"
+  },
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "42301b3cc1708946221c34a8e09d9cf954e70331",
+    "note": "reports/t113/20261012-212507-85091/REVIEW.md",
+    "at": "2026-10-12T22:16:58+08:00",
+    "state_version": 12
+  },
+  "cost_total": {
+    "calendar_seconds": 3886,
+    "wall_seconds": 1053,
+    "runs": 3,
+    "worker_rounds": 1,
+    "objections": 0,
+    "by_role": {
+      "worker": {
+        "runs": 1,
+        "wall_seconds": 132,
+        "tokens_in": 36,
+        "tokens_out": 14204,
+        "cache_write": 51082,
+        "cache_read": 859103,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 1
+        }
+      },
+      "reviewer": {
+        "runs": 1,
+        "wall_seconds": 31,
+        "tokens_in": 6,
+        "tokens_out": 2924,
+        "cache_write": 30254,
+        "cache_read": 87372,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 890,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-12T22:16:58+08:00"
+  }
 }
