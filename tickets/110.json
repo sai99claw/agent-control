@@ -1,0 +1,162 @@
+{
+  "id": "110",
+  "subject": "rules.py 規則包:同步檔頭註解與 front matter 不算正文 —— 專案端(roles_dir=docs/roles)角色卡與模型卡第一個正文單位今天是「<!-- 由 agent-control … 同步產生 -->」,第二個是 cap_history;worker 包裡角色卡格只剩那一行註解",
+  "created": "2026-10-12T14:20:53+08:00",
+  "objective": "在專案根跑 rules.py pack / inspect,角色卡與模型卡格從卡的第一句正文開始;HTML 註解行與 front matter(即使前面有一行註解)既不是正文單位也不進任何一格;units() / is_content() 的切法有單元測試釘住。",
+  "acceptance": [
+    "A1 tests/test_rules.py 新類別 TheSyncHeaderIsNotContent:fixture 卡第一行為 <!-- 由 agent-control deadbeef 的 memory/role/implementer.md 同步產生;請到 agent-control 改,不要改這一份 -->,第二行起 ---/cap_chars: 2700/cap_history:/  - {date: …}/---,再接兩句正文;斷言 rules.units(rules.read_text(path))[0] 是第一句正文,且任何單位都不含 '<!--' 或 'cap_chars'",
+    "A2 同類別第二條:專案形狀的 fixture 根(board/config.json rules.roles_dir=docs/roles、models_dir=docs/roles/model,角色卡與模型卡都帶同步檔頭 + front matter,memory/ 下有一行 inbox),rules.build(root,'worker','opus',4096) 回的 text 不含 '<!--' 與 'cap_history',stats.sections 中「角色卡」與「模型卡」兩格 content_units ≥1 且 rendered 文字以正文第一句開頭;變異:把 units() 的新判斷還原 → 兩條皆紅,紅訊息貼 EVIDENCE",
+    "A3 python3 -m unittest tests.test_rules tests.test_rules_delivery tests.test_sync_to_project 綠(開票時實測 test_rules + test_rules_delivery 57 條 OK);A 自己(roles_dir == memory/role,無檔頭)的 pack 位元組數對 7 個角色 × {opus, fable} 與改前逐字相同(改前先存一份 inspect --json 做對照)",
+    "A4 EVIDENCE 記一行實測(不當斷言):在 tabby_pool 根以 AC_ROOT 指向一份套了本修正 rules.py 的副本跑 inspect worker --model fable --max-bytes 1 --json,floor 比套用前小(開票時 4099;scratchpad 模擬去掉檔頭與 front matter 後角色卡格 155 B/1 單位 → 443 B/3 單位)"
+  ],
+  "in_scope": [],
+  "out_of_scope": [
+    "scripts/sync-to-project.sh",
+    "memory/**",
+    "docs/MEMORY.md"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/rules.py",
+    "tests/test_rules.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "bc5bfdb06aecfaba13dbc155dfed9c1d9a7a252b",
+  "state": "Done",
+  "state_version": 10,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-021",
+    "D-013"
+  ],
+  "needs_verifier": false,
+  "verify_strings": [
+    "TheSyncHeaderIsNotContent",
+    "同步檔頭"
+  ],
+  "test_plan": "T1 cd <A 根> && python3 -m unittest tests.test_rules tests.test_rules_delivery tests.test_sync_to_project;T2 改前/改後 inspect --json 對 A 自己 7 角色 × 2 模型 diff 為空(A3);T3 變異一次(A2);T4 對 T 的副本量 floor(A4,記錄用)。期望值:正文第一句由 fixture 自己給;A 自身不變由改前快照給,不從改後程式算。",
+  "outline": "為什麼:units() 只在 lines[0]=='---' 時剝 front matter;sync-to-project.sh 把「<!-- 由 agent-control <sha> 的 <path> 同步產生 -->」寫在第 1 行(copy_dir, 第 141 行 printf),於是專案端每張卡的 front matter 都成了正文:T 實測 docs/roles/implementer.md 15 單位,前兩個是註解(155 B)與 cap_history(510 B);docs/roles/model/opus.md 第一單位 156 B = 註解 + '---'。worker 包的角色卡格 weight=3 卻只放得下 1 單位,agent 拿到的是那行註解。修法建議在 rules.py(不動同步檔頭:T 的 control_sync 案例靠第 1 行認同步產出):units() 先跳過開頭連續的 <!-- … --> 行再判 front matter;is_content() 把只含 HTML 註解的單位視為非正文(保險)。不改 4096 / 1024 / 600 三個預算。needs_verifier=false:守衛是 units() 的單元測試,驗證者案例只會重演同一契約。模型 opus:rules.py 的預算算式與 test_rules 57 條互相牽制(DESIGN-MEMORY-INBOX 97 行同一理由)。",
+  "branch": "t110",
+  "patch_ref": "../agent-control-wt/fix-t110/round1/patch-round1.diff",
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 68,
+      "tokens_out": 20699,
+      "cache_write": 73675,
+      "cache_read": 2130814,
+      "wall_seconds": 257,
+      "outcome": "handed-in",
+      "run_id": "20261012-150516-72007",
+      "session_id": "8119b171-adca-467d-a198-bc7158f08da9",
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-12T15:09:34+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 12,
+      "tokens_out": 3979,
+      "cache_write": 34920,
+      "cache_read": 200038,
+      "wall_seconds": 43,
+      "outcome": "pass",
+      "run_id": "20261012-150935-95030",
+      "session_id": "b9b19552-0b7c-410b-849a-30b341d89ce8",
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-12T15:10:46+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 874,
+      "outcome": "pass",
+      "run_id": "20261012-161624-92938",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-10-12T16:30:58+08:00"
+    }
+  ],
+  "gate": {
+    "rc": 0,
+    "sha": "a1036cc4d12c881b4e8264c1f44008f9614d29f1",
+    "run_id": "20261012-150935-95030",
+    "at": "2026-10-12T15:10:02+08:00"
+  },
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "7cac67d4f1c22e0046e939f508a44053bf2c4737",
+    "note": "reports/t110/20261012-150935-95030/REVIEW.md",
+    "at": "2026-10-12T16:30:58+08:00",
+    "state_version": 10
+  },
+  "cost_total": {
+    "calendar_seconds": 7805,
+    "wall_seconds": 1174,
+    "runs": 3,
+    "worker_rounds": 1,
+    "objections": 0,
+    "by_role": {
+      "worker": {
+        "runs": 1,
+        "wall_seconds": 257,
+        "tokens_in": 68,
+        "tokens_out": 20699,
+        "cache_write": 73675,
+        "cache_read": 2130814,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 1
+        }
+      },
+      "reviewer": {
+        "runs": 1,
+        "wall_seconds": 43,
+        "tokens_in": 12,
+        "tokens_out": 3979,
+        "cache_write": 34920,
+        "cache_read": 200038,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 874,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-12T16:30:58+08:00"
+  }
+}

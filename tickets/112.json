@@ -1,0 +1,71 @@
+{
+  "id": "112",
+  "subject": "auto-fix 平行驗證者遇上 test_defect:第二個驗證者 rm -rf 毀了第一個的交付、apply 收到同一份 patch-verify 兩次(rc=3,worker 的 patch 沒進);test_defect 收件不帶 --evidence-verifier(專案 #775)",
+  "created": "2026-10-12T21:11:42+08:00",
+  "objective": "interface_fixed=true 的票第 1 輪,平行驗證者已交件、worker 交 patch 又說 test_defect 時:平行驗證者的 patch 與 EVIDENCE 原封留在 reports;test_defect 驗證者的副本 base/ = 分支 + worker patch、work/ 再加平行驗證者的案例;收件 apply 依序收 worker patch 與 test_defect 驗證者的 patch-verify 各一次,三份改動都在分支上;兩個驗證者的 verify 計畫與驗紅都併進票。序列(非平行)的 test_defect 收件也帶 --evidence-verifier。apply.sh 兩個 patch 槽是同一份時直接拒、點名。",
+  "acceptance": [
+    "P1【三份都進分支、apply 不再收同一份兩次】tests/test_auto_fix.py 新替身(沿用 TheFirstRoundVerifierRunsAlongside 沙盒):票 needs_verifier=true、interface_fixed=true、allowed_write_paths=[tests/*, verify/*];假可執行檔以 home 下計數檔分辨第幾次以 verifier 身分被叫。第 1 次(平行驗證者 v1)在 work/ 寫 verify/example/test_ticket_1.py、diff -ruN base work > patch-verify.diff、EVIDENCE-verifier.md 帶 ```result(verify.files=[該檔]、baseline stage=red);worker 在 work/ 寫 tests/test_thing.py、出 patch-round1.diff、EVIDENCE 寫 `OBJECTION: test_defect …`;第 2 次(test_defect 驗證者 v2)把「base/tests/test_thing.py 在不在」「work/verify/example/test_ticket_1.py 在不在」「base/verify/example/test_ticket_1.py 在不在」各記一行,再在 work/ 寫 verify/example/test_fix_1.py、出 patch-verify.diff。跑 auto-fix.sh 1 --no-review 之後:輸出不含『套不上(apply rc=3)』;git ls-tree -r --name-only t1 同時含 tests/test_thing.py、verify/example/test_ticket_1.py、verify/example/test_fix_1.py;v2 的紀錄是 base 有 worker 檔、work 有 v1 案例、base 沒有 v1 案例(v1 的案例由 v2 的 patch-verify 帶進去,apply 只收 worker patch 與 v2 patch-verify 兩份,依序)。期望檔名寫死在替身,不從 auto-fix 算。現況(main f9fe660 實測):apply 收到 `patch-verify.diff patch-verify.diff`、『error: verify/example/test_fix_1.py: patch does not apply』『第 1 輪的 patch 套不上(apply rc=3)』、auto-fix rc=5,t1 一個檔都沒有",
+    "P2【v1 的交付不被毀】同 P1 夾具;v1 交件後替身另抄一份 patch-verify.diff 與 EVIDENCE-verifier.md 到 home(期望值來源)。auto-fix 跑完,reports/t1/<run_id>/patch-verify-round1-parallel.diff 與 EVIDENCE-verifier-round1-parallel.md 存在且與 home 那兩份逐 byte 相同;auto-fix 輸出有一行同時含這兩個檔名之一與『平行驗證者』。v1 沒交件(@VERIFIER_HANDS_IN@=0 那一種)→ 這兩個檔不存在、不報錯、v2 照 #107 的路走(副本 = 分支 + worker patch)。現況:dispatch_verifier 第一手 `rm -rf \"$VFIX\"`(scripts/auto-fix.sh 約 1235 行,與 v1 同一個 verify-t<n>/round<r>)—— 沙盒逐檔掃 home 找不到任何一份與 v1 patch 相同的檔",
+    "P3【兩個驗證者的 verify 計畫都進票】同 P1 夾具:auto-fix 跑完 ticket.py show 1 的 verify.files 含 verify/example/test_ticket_1.py 與 verify/example/test_fix_1.py(v1 在前)、verify.tags 含 example、verify.baseline.stage == red。做法定死:apply.sh 的 --evidence-verifier 可重複給、依給的順序逐份併(併法用 #100 A9 的聯集,不另寫一份);auto-fix 在 v1 有交件時先給 v1 保留下來那份、再給 v2 那份。現況:票的 verify 是 null",
+    "P4【序列 test_defect 收件也併驗證者的計畫】interface_fixed 不是 true 的票(#107 的 AWorkerPatchWithATestDefectReachesTheBranch 沙盒):worker 交 patch 又說 test_defect,驗證者 EVIDENCE 帶 ```result(verify.files=[tests/test_thing.py]、baseline stage=red)→ auto-fix 跑完票的 verify.files 含 tests/test_thing.py、verify.baseline.stage == red;worker 沒交 patch 的 test_defect(else 分支)同一條斷言再一組。現況(實測):auto-fix rc=0 一路綠到 review,票的 verify 是 null —— scripts/auto-fix.sh 約 1950–1955 行 WPATCH 分支與 else 分支都沒帶 --evidence-verifier,落地後 close 會被『沒有回歸證據』擋",
+    "P5【apply 兩槽同一份就拒、說人話】sh scripts/apply.sh 1 <X> <X>(同一路徑),以及兩個不同路徑但 sha256 相同 → rc=2、分支 t1 不建也不動(git rev-parse --verify t1 前後一致)、stderr 一行含『同一份 patch』與該路徑。現況:rc=3『patch-verify 的 --check 不過』,看不出是收件端把同一檔給了兩次",
+    "P6【原路不變】既有 tests/test_auto_fix.py 的 AWorkerPatchWithATestDefectReachesTheBranch(W1–W6)、TheFirstRoundVerifierRunsAlongside 全部(含 test_t60_an_interface_fixed_objection_page_does_not_claim_the_verifier_waited)、ThingsThatStopIt 的 test_defect 案例、tests/test_apply.py 全部照綠;查過的 oracle:上述三個類與 test_apply.py 的 --evidence-verifier 案例(grep evidence-verifier),沒有一條釘著『只收一份 --evidence-verifier』或『test_defect 收件不帶 --evidence-verifier』",
+    "變異(實作者自證):m1 dispatch_verifier 回到不先保留就 rm -rf \"$VFIX\" → P2 紅;m2 收件分支回到 `if [ -n \"$VPATCH\" ]` 先判(VPATCH 仍指 verify-t<n>/round<r>/patch-verify.diff)→ P1 紅;m3 WPATCH 分支拿掉 --evidence-verifier → P4 紅;m4 apply.sh 同檔檢查拿掉 → P5 紅"
+  ],
+  "in_scope": [
+    "scripts/auto-fix.sh",
+    "scripts/apply.sh"
+  ],
+  "out_of_scope": [
+    "scripts/ticket.py",
+    "templates/dispatch-verifier.md"
+  ],
+  "depends_on": [
+    {
+      "id": "100",
+      "condition": "落地(apply.sh 併入 verify 改聯集,A9)"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/apply.sh",
+    "tests/test_auto_fix.py",
+    "tests/test_apply.py",
+    "docs/WORKFLOW.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "f9fe660a586a45e4a74e5adde3d31c2a2c42e63c",
+  "state": "Ready",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-014",
+    "D-020",
+    "D-032",
+    "D-H38"
+  ],
+  "verify_strings": [
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "-parallel.diff"
+    },
+    {
+      "path": "scripts/apply.sh",
+      "contains": "同一份 patch"
+    }
+  ],
+  "needs_verifier": false,
+  "outline": "專案 #775(T scripts/control 同步於 A #107 之前)現場:interface_fixed=true,平行驗證者 v1 已交 patch+EVIDENCE+baseline,worker 交 patch 又說 test_defect。A HEAD f9fe660 仍三處壞:①dispatch_verifier 對同一個 verify-t<n>/round<r> rm -rf,v1 交付被毀;②wait_verifier 設的 VPATCH 仍指那個路徑,收件 `if [ -n \"$VPATCH\" ]` 先於 #107 的 WPATCH 分支 → apply 收到 v2 的 patch-verify 兩次 rc=3、worker patch 沒進(#107 只修了等 patch 才起的那一種);③test_defect 收件(WPATCH / else 分支)不帶 --evidence-verifier,驗證者的 verify/baseline 永不進票。開題者在 A main 以暫存探針(AutoFixBase 子類,沙盒)重現 P1–P4 全紅,見 test_plan。needs_verifier=false:契約全在 tests/test_auto_fix.py 替身沙盒可自證,驗證者只會重演同一組替身(同 #107)。順序:#100(apply 併入改聯集)→ 本票 → #113。與 #97 無重疊:#97 擋寫入範圍與案例檔重疊造成兩份 patch 撞檔 rc=3,本票的 rc=3 是同一檔給兩次,#97 擋不到。",
+  "test_plan": "層次:單元。tests/test_auto_fix.py 新類(P1–P4,沿用 TheFirstRoundVerifierRunsAlongside / AWorkerPatchWithATestDefectReachesTheBranch 的沙盒與替身寫法)、tests/test_apply.py(P5)。期望值來自替身寫進副本與 home 的檔、計數檔與紀錄行,不從 auto-fix / apply 算。開題者 2026-10-12 實測(A main f9fe660,未改任何檔):探針放在暫存目錄、import A 的 tests/test_auto_fix.py,指令 `cd <暫存>/probe && env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR timeout 600 python3 -m unittest -v probe_tdefect.ParallelVerifierThenTestDefect.test_p1_worker_v1_v2_all_on_branch_and_apply_not_rc3 probe_tdefect.ParallelVerifierThenTestDefect.test_p2_v1_deliverables_survive probe_tdefect.ParallelVerifierThenTestDefect.test_p3_ticket_verify_has_both_files probe_tdefect.SerialTestDefectMergesVerifierPlan.test_s1_verify_plan_of_test_defect_verifier_reaches_ticket` → Ran 4, FAILED (failures=4), 14.5 秒:P1 apply rc=3(『apply: 票 #1 patch patch-verify.diff』+『verify/example/test_fix_1.py: patch does not apply』),v2 只記到『v2 base has worker file』;P2 找不到 v1 patch 的任何副本;P3 票 verify=null;P4(序列)auto-fix rc=0 但票 verify=null。只跑 tests/test_auto_fix.py 與 tests/test_apply.py(前景、給 timeout;test_auto_fix 單模組約 270 秒);A 側指令一律 env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR。不跑全套。",
+  "priority": "P0"
+}

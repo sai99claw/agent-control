@@ -1,0 +1,227 @@
+{
+  "id": "111",
+  "subject": "memory/model/ 補 sonnet.md 與 haiku.md:board/config.json model_tiers 上每個模型都要有卡,否則 rules.py pack --model sonnet 直接「模型卡 檔案不存在」拒派(T 用 sonnet 派窄票;A 自己 reviewer/consolidator 不受 routing 下限管)",
+  "created": "2026-10-12T14:20:53+08:00",
+  "objective": "model_tiers(haiku / sonnet / opus / fable)四個名字各有一張 memory/model/<name>.md;sonnet 卡只寫屬於這個模型的原則(內容已在 outline),haiku 卡一句「目前不派任何角色」;測試釘住「model_tiers 每個名字有卡」;rules.py inspect <role> --model sonnet 對 reviewer / consolidator 在 A 根 ok(worker 等角色在 A 由 rules.py pack 被 routing 下限擋是預期;inspect 不檢查下限)。",
+  "acceptance": [
+    "A1 memory/model/sonnet.md 與 memory/model/haiku.md 存在、正文各 ≤2000 字元,python3 scripts/memory.py lint --file memory/model/sonnet.md --file memory/model/haiku.md 0 條,python3 scripts/memory.py check --read-only 列出兩檔且在上限內",
+    "A2 python3 scripts/rules.py inspect reviewer --model sonnet --json 與 inspect consolidator --model sonnet --json 皆 ok=true(開票時:模型卡 memory/model/sonnet.md 檔案不存在);python3 scripts/rules.py pack worker --model sonnet 仍被 routing 下限擋:rc=2 並印「低於 routing 下限」(不是檔案不存在;inspect 不檢查下限,下限只在 pack 檢查,rules.py:659)",
+    "A3 tests/test_memory.py(或 tests/test_rules.py)新案例 TheModelTiersAllHaveCards:讀 board/config.json model_tiers,每個名字在 memory/model/ 有卡;變異:暫時改名 haiku.md → 紅,還原綠",
+    "A4 memory/model/README.md 第一行的卡名清單加上 sonnet.md、haiku.md;python3 -m unittest tests.test_memory tests.test_rules 綠"
+  ],
+  "in_scope": [],
+  "out_of_scope": [
+    "board/config.json",
+    "scripts/rules.py",
+    "memory/model/opus.md",
+    "memory/model/fable.md"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "memory/model/sonnet.md",
+    "memory/model/haiku.md",
+    "memory/model/README.md",
+    "tests/test_memory.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "bc5bfdb06aecfaba13dbc155dfed9c1d9a7a252b",
+  "state": "Done",
+  "state_version": 15,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-023",
+    "D-039",
+    "D-013"
+  ],
+  "needs_verifier": false,
+  "verify_strings": [
+    "只接窄票",
+    "TheModelTiersAllHaveCards"
+  ],
+  "test_plan": "T1 lint / check 兩道(A1);T2 inspect 兩條 + pack worker 一條(A2;期望值「低於 routing 下限」來自 rules.py below_floor 的字面);T3 單元測試 + 一次變異(A3);T4 A 全套 python3 -m unittest discover -s tests 綠。",
+  "outline": "sonnet.md 建議正文(每條一行、原則不寫案例):「- 只接窄票:一兩個檔、修法已定、驗收是 grep 得到的字;跨十幾個檔的整合票比 opus 貴(專案實測:500K token / 238 次工具呼叫做完一張同步票)。」「- 不開題、不當主線(D-023 / D-039)。」「- 票面引用的指令要照字面能跑;遇到票面與現況不合就反駁,不自行改形狀。」haiku.md:「- 目前不派任何角色;只是 model_tiers 的下限刻度。」模型層的 note 規則「只能由同模型寫入」管的是 memory.py note;本票由 worker 直接建檔,屬維護者行為。模型 opus 而非 sonnet:A 的 routing.implement=opus 是下限,sonnet worker 在 A 會被 rules.py 拒派;內容已在票上,opus 一輪結束。",
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 38,
+      "tokens_out": 10547,
+      "cache_write": 45606,
+      "cache_read": 826616,
+      "wall_seconds": 119,
+      "outcome": "objection",
+      "run_id": "20261012-151047-6050",
+      "session_id": "65b8dab5-cf3c-4c1d-b2d4-4a0dac1b5bc4",
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-12T15:12:46+08:00"
+    },
+    {
+      "role": "opener",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 12,
+      "tokens_out": 2503,
+      "cache_write": 25282,
+      "cache_read": 191069,
+      "wall_seconds": 27,
+      "outcome": "accepted",
+      "run_id": "20261012-151047-6050",
+      "session_id": "a03a0883-1085-4af7-b650-688e794b14d5",
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-12T15:14:17+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 48,
+      "tokens_out": 15547,
+      "cache_write": 53225,
+      "cache_read": 1133182,
+      "wall_seconds": 63,
+      "outcome": "handed-in",
+      "run_id": "20261012-151047-6050",
+      "session_id": "65b8dab5-cf3c-4c1d-b2d4-4a0dac1b5bc4",
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-12T15:14:18+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 10,
+      "tokens_out": 2875,
+      "cache_write": 29050,
+      "cache_read": 159501,
+      "wall_seconds": 34,
+      "outcome": "pass",
+      "run_id": "20261012-151418-40291",
+      "session_id": "d8faf58a-785e-4b72-a7a1-5a8481a79de8",
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-12T15:15:02+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 880,
+      "outcome": "pass",
+      "run_id": "20261012-163058-85048",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "at": "2026-10-12T16:45:38+08:00"
+    }
+  ],
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "A2 third clause: `rules.py inspect worker --model sonnet` never prints \"低於 routing 下限\" — `cmd_inspect` does not call `below_floor` (only `cmd_pack` does, rules.py:659); the floor sentence is reachable via `rules.py pack worker --model sonnet` (measured rc=2 with that sentence); rules.py is out_of_scope so not changed.",
+      "evidence": "../agent-control-wt/fix-t111/round1/EVIDENCE-round1-objection.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "",
+      "triage": {
+        "verdict": "accepted",
+        "reason": "A2's third clause is unreachable as written — `rules.py inspect` never calls `below_floor` (only `cmd_pack` does, scripts/rules.py:659), so the floor sentence only appears via `rules.py pack worker --model sonnet`.",
+        "round": 1,
+        "by": "auto-fix"
+      }
+    }
+  ],
+  "branch": "t111",
+  "patch_ref": "../agent-control-wt/fix-t111/round1/patch-round1.diff",
+  "gate": {
+    "rc": 0,
+    "sha": "a4fcf7b6cbf34126ec28e420fc2a81dbbc0d1922",
+    "run_id": "20261012-151418-40291",
+    "at": "2026-10-12T15:14:27+08:00"
+  },
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "f9fe660a586a45e4a74e5adde3d31c2a2c42e63c",
+    "note": "reports/t111/20261012-151418-40291/REVIEW.md",
+    "at": "2026-10-12T16:45:38+08:00",
+    "state_version": 15
+  },
+  "cost_total": {
+    "calendar_seconds": 8685,
+    "wall_seconds": 1123,
+    "runs": 5,
+    "worker_rounds": 1,
+    "objections": 1,
+    "by_role": {
+      "worker": {
+        "runs": 2,
+        "wall_seconds": 182,
+        "tokens_in": 86,
+        "tokens_out": 26094,
+        "cache_write": 98831,
+        "cache_read": 1959798,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "objection": 1,
+          "handed-in": 1
+        }
+      },
+      "opener": {
+        "runs": 1,
+        "wall_seconds": 27,
+        "tokens_in": 12,
+        "tokens_out": 2503,
+        "cache_write": 25282,
+        "cache_read": 191069,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "accepted": 1
+        }
+      },
+      "reviewer": {
+        "runs": 1,
+        "wall_seconds": 34,
+        "tokens_in": 10,
+        "tokens_out": 2875,
+        "cache_write": 29050,
+        "cache_read": 159501,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 880,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-12T16:45:38+08:00"
+  }
+}

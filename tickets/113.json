@@ -1,0 +1,54 @@
+{
+  "id": "113",
+  "subject": "驗證者派工範本不再示範 ```json:verify 片段改在完整 ```result 範例裡示範,交件前用 ticket.py result 自檢 present:true(專案 #731/#772/#775 三次記成 no-block)",
+  "created": "2026-10-12T21:12:12+08:00",
+  "objective": "照 templates/dispatch-verifier.md 寫的驗證者交出來的 EVIDENCE,result 區塊一定是 ```result 柵欄、ticket.result_block 解得出來;驗證者交件前自己跑一句指令就知道收件端讀不讀得到。",
+  "acceptance": [
+    "T1【範本不再示範 ```json】templates/dispatch-verifier.md 沒有任何一行符合 ^\\s*```json(現況 1 行,第 46 行 verify 片段);verify 那一段改成在一塊完整的 ```result 範例裡示範(含 ticket/role/round/rc/verify/baseline 鍵)",
+    "T2【範例本身解得出來】tests/test_templates.py 新案例:讀 templates/dispatch-verifier.md,把每個 @[A-Z_]+@ 換成 1,用 scripts/ticket.py 的 result_block(同一份判準,不另抄 regex)取出內文 → json.loads 成功、是 dict、role == verifier、含 verify 與 baseline 兩鍵。現況(實測 f9fe660):result_block 對範本回 None",
+    "T3【交件前自檢寫進第五樣】『第五樣:EVIDENCE-verifier.md』那一節含一句可直接貼的自檢指令 `python3 scripts/ticket.py result @COPY@/EVIDENCE-verifier.md <暫存>/r.json --ticket @TICKET@ --role verifier --round @ROUND@`,並明說輸出 present 必須是 true、no-block 多半是柵欄語言標記寫成 json(要寫 result)。案例斷言這一節同時含『ticket.py result』『present』『```result』三個字面。現況:0 處 ticket.py result",
+    "T4【原路不變】tests/test_templates.py、tests/test_dispatch_template.py 既有案例照綠;查過的 oracle:test_templates.py(只釘 reviewer 範本的 ```result 與 verdict)、test_dispatch_template.py(§8.5 鍵表與 SCHEMA 同一組鍵)—— 本票不動鍵表,不衝突",
+    "變異:把範例改回 ```json 柵欄 → T1、T2 紅;刪掉自檢那一句 → T3 紅"
+  ],
+  "in_scope": [
+    "templates/dispatch-verifier.md"
+  ],
+  "out_of_scope": [
+    "scripts/ticket.py",
+    "scripts/apply.sh"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "templates/dispatch-verifier.md",
+    "tests/test_templates.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "f9fe660a586a45e4a74e5adde3d31c2a2c42e63c",
+  "state": "Ready",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "decision_refs": [
+    "D-017",
+    "D-020"
+  ],
+  "verify_strings": [
+    {
+      "path": "templates/dispatch-verifier.md",
+      "contains": "ticket.py result"
+    }
+  ],
+  "needs_verifier": false,
+  "outline": "根因票。專案 #731、#772、#775 三次驗證者把 result 寫成 `## result` + ```json,ticket.result_block 只認 ```result → no-block,verify 計畫與驗紅沒併進票(#772 落地後才靠人補)。#100 A7/A8 只讓收件端『出聲』,並把『範本示範 ```json 是誘因、改不改待裁』留著;本票就是那一半:範本第 46 行就是 ```json。開題者實測(A f9fe660):grep -cE '^\\s*```json' templates/dispatch-verifier.md = 1;ticket.result_block(範本) = None;ticket.py result 對 `## result`+```json 的 EVIDENCE 印 no-block、present:false。needs_verifier=false:純範本文字 + 一條讀範本的單元案例,驗證者只會重演同一個 grep。可與 #100 平行(不同檔);#112 之後同步進專案。",
+  "test_plan": "層次:單元。tests/test_templates.py 加 T2、T3 案例(讀範本檔,期望字面寫死在案例裡)。只跑 tests/test_templates.py 與 tests/test_dispatch_template.py(前景、給 timeout);A 側指令一律 env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR。開題者先跑過(f9fe660):grep 數 1、result_block=None,即 T1/T2 現況紅。",
+  "priority": "P1"
+}
