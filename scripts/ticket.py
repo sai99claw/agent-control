@@ -957,16 +957,17 @@ def done_blockers(ticket):
         baseline = plan.get("baseline") if isinstance(plan.get("baseline"), dict) else None
         if not ticket.get("test_evidence") and not baseline:
             out.append("沒有回歸證據:票上既沒有 test_evidence,verify 也沒有 baseline"
-                       "(`scripts/verify-case.py check <票號>` 會寫那一格;"
-                       "或補一條誠實的 verify_waiver{by,reason} 且 review.sha 在主線歷史裡)")
+                       "(`%s check <票號>` 會寫那一格;"
+                       "或補一條誠實的 verify_waiver{by,reason} 且 review.sha 在主線歷史裡)"
+                       % verify_case_path())
         elif baseline and not baseline.get("ok"):
             out.append("verify.baseline 說驗紅沒過:%s"
                        % (baseline.get("why") or "乾淨主線上沒有紅"))
         elif baseline and str(baseline.get("stage") or "") != "check":
             out.append("verify.baseline 的 stage 是 %s,還缺閘門那一趟 check —— "
                        "驗證者只量了「乾淨基底該紅」,候選該綠由閘門量"
-                       "(`scripts/verify-case.py check <票號> --candidate <分支>`,D-020)"
-                       % (baseline.get("stage") or "空的"))
+                       "(`%s check <票號> --candidate <分支>`,D-020)"
+                       % (baseline.get("stage") or "空的", verify_case_path()))
     out.extend(review_problems(ticket))
     out.extend(objection_problems(ticket))
     return out
@@ -978,6 +979,18 @@ def on_main(sha):
         return False
     done = git(["merge-base", "--is-ancestor", sha, main_branch()])
     return done.returncode == 0
+
+
+def verify_case_path():
+    """`verify-case.py` 相對 repo 根的路徑 —— 從**這一支所在的目錄**算,不寫死。
+
+    同步到專案之後這幾支住在 `scripts/control/`(`scripts/sync-to-project.sh`),而寫死的
+    `scripts/verify-case.py` 在那裡貼了跑不起來(#100 A10):照貼就跑的那一句,貼了
+    `can't open file` 比沒有那一句更糟(§5.7)。不在 repo 根底下就給絕對路徑。
+    """
+    here = os.path.join(os.path.dirname(os.path.realpath(__file__)), "verify-case.py")
+    rel = os.path.relpath(here, os.path.realpath(root()))
+    return shlex.quote(here if rel.split(os.sep)[0] == os.pardir else rel)
 
 
 def baseline_next_step(ticket):
@@ -1001,8 +1014,8 @@ def baseline_next_step(ticket):
     base = str(ticket.get("base_sha") or "")
     if not sha or not base or not on_main(sha):
         return None
-    return ("python3 scripts/verify-case.py check %s --ref %s --candidate %s"
-            % (ticket.get("id"), base, sha))
+    return ("python3 %s check %s --ref %s --candidate %s"
+            % (verify_case_path(), ticket.get("id"), base, sha))
 
 
 def print_baseline_next_step(ident, ticket):

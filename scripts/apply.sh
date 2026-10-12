@@ -1043,33 +1043,92 @@ sys.path.insert(0, sys.argv[1])
 import event
 import ticket
 ident, path = sys.argv[2], sys.argv[3]
+# 解析不到要出聲(#100 A7):以前三種樣子都靜靜變成 `{}`,票上的 verify 與 baseline 一格
+# 都沒併進去,要到落地後 close 被拒「沒有回歸證據」才看得出來。判準與 `ticket.py result`
+# 同一份(`result_block` / `RESULT_OPEN`),原因字也同一組,不在這裡另抄 regex。
+WHY = {"no-evidence": "讀不到這份 EVIDENCE",
+       "no-block": "沒有語言標記是 result 的那一塊(`## result` 底下用 ```json 也算沒有)",
+       "bad-json": "那一塊的 JSON 解不開或不是物件"}
+reason = None
 try:
     with open(path, encoding="utf-8") as handle:
         raw = ticket.result_block(handle.read().splitlines())
-    data = json.loads(raw) if raw is not None else {}
-except (OSError, ValueError):
-    data = {}
-if not isinstance(data, dict):
-    data = {}
+except OSError:
+    reason = "no-evidence"
+else:
+    if raw is None:
+        reason = "no-block"
+    else:
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            reason = "bad-json"
+if reason:
+    print("apply: 驗證者的 result 解析不到(%s:%s;%s)—— verify 計畫與驗紅沒有併進票"
+          % (reason, WHY[reason], path))
+    sys.exit(0)
+
+
+def head(value):
+    text = str(value)
+    return text if len(text) <= 40 else text[:40] + "…"
+
+
+# 併進票**不蓋掉票上既有的**(#100 A9):以前 `merged.update(keep)` 把 tags 整組換成
+# 驗證者給的(#706 四個標籤剩一個,回歸層少跑 P6)。files / tags 取聯集(既有的在前、
+# 新的接後面、去重);run / notes 既有非空就保留,空的才採驗證者給的。
 plan = data.get("verify")
 if isinstance(plan, dict):
-    keep = {key: plan[key] for key in ("files", "tags", "run", "notes") if plan.get(key)}
-    if keep:
+    given = {key: plan[key] for key in ("files", "tags", "run", "notes") if plan.get(key)}
+    if given:
+        added, kept, differ = [], [], []
         try:
             with ticket.Lock():
                 fresh = ticket.load(ident)
                 merged = dict(fresh.get("verify") if isinstance(fresh.get("verify"), dict) else {})
-                merged.update(keep)
-                fresh["verify"] = merged
-                fresh["state_version"] = int(fresh.get("state_version") or 0) + 1
-                ticket.save(fresh)
+                for key in ("files", "tags"):
+                    if key not in given:
+                        continue
+                    have = merged.get(key) if isinstance(merged.get(key), list) else []
+                    more = given[key] if isinstance(given[key], list) else [given[key]]
+                    union = list(have)
+                    for item in more:
+                        if item not in union:
+                            union.append(item)
+                    kept.extend("%s:%s" % (key, item) for item in have)
+                    added.extend("%s:%s" % (key, item) for item in union[len(have):])
+                    merged[key] = union
+                for key in ("run", "notes"):
+                    if key not in given:
+                        continue
+                    if not merged.get(key):
+                        merged[key] = given[key]
+                        added.append(key)
+                    else:
+                        kept.append(key)
+                        if merged[key] != given[key]:
+                            differ.append("%s 票上「%s」/ 驗證者「%s」"
+                                          % (key, head(merged[key]), head(given[key])))
+                if added:
+                    fresh["verify"] = merged
+                    fresh["state_version"] = int(fresh.get("state_version") or 0) + 1
+                    ticket.save(fresh)
         except (OSError, ValueError, RuntimeError) as exc:
             print("apply: 驗證者的 verify 計畫併不進票 #%s —— %s(不擋 apply)" % (ident, exc))
         else:
-            event.emit("ticket.state", ticket=str(ident), field="verify",
-                       **{"to": ",".join(sorted(keep)), "state_version": fresh["state_version"]})
-            print("apply: 驗證者的 verify(%s)併進票 #%s(state_version=%s)"
-                  % ("、".join(sorted(keep)), ident, fresh["state_version"]))
+            if differ:
+                print("apply: 驗證者給的 run/notes 與票上不同,保留票上 —— %s" % ";".join(differ))
+            if added:
+                event.emit("ticket.state", ticket=str(ident), field="verify",
+                           **{"to": ",".join(added), "state_version": fresh["state_version"]})
+                print("apply: 驗證者的 verify 併進票 #%s(state_version=%s)—— 新增 %s;保留 %s"
+                      % (ident, fresh["state_version"], "、".join(added),
+                         "、".join(kept) or "(票上原本沒有)"))
+            else:
+                print("apply: 驗證者的 verify 票上都已經有了(保留 %s)—— 票沒有動"
+                      % "、".join(kept))
 record = data.get("baseline")
 if record is None:
     sys.exit(0)
