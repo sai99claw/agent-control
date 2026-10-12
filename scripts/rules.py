@@ -256,11 +256,14 @@ TABLE_RULE = re.compile(r"^\s*\|?[\s:|-]+\|?\s*$")
 SOURCE_FIELD = re.compile(r"^(?:[-*+]\s+)?(?:\*\*)?(?:來源|Source)(?:\*\*)?\s*[::]", re.I)
 SENTENCE_END = re.compile(r"[。!?!?][)」』)\]]*$")
 POINTER_NOISE = re.compile(r"\[[^\]]*\]\([^)]*\)|`[^`]*`|全文見|詳見|參見|見|see\b|->|→")
+HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
+COMMENT_LINE = re.compile(r"^\s*<!--.*-->\s*$")
 
 
 def is_content(unit):
-    """正文 = 至少一行不是來源欄、不是截斷記號、不是只有連結的指路行(#74 第 4 點)。"""
-    for line in unit.splitlines():
+    """正文 = 至少一行不是來源欄、不是截斷記號、不是只有連結的指路行(#74 第 4 點)。
+    HTML 註解不算字:只剩註解的單位不是正文(#110)。"""
+    for line in HTML_COMMENT.sub("", unit).splitlines():
         bare = line.strip()
         if not bare or bare.startswith(MARK) or SOURCE_FIELD.match(bare):
             continue
@@ -274,6 +277,10 @@ def units(text):
     """把一段 markdown 切成**正文單位**:段落、清單的一條(連它的續行)、表的一列、
     一整塊 code。front matter、標題、空行不算 —— 它們是固定成本,不是正文。"""
     lines = text.splitlines()
+    # 同步檔頭(`sync-to-project.sh` 寫在第 1 行的 `<!-- … -->`)壓在 front matter 上面:
+    # 不先跳過,專案端每張卡的第一個單位是那行註解、第二個是 cap_history(#110)。
+    while lines and (not lines[0].strip() or COMMENT_LINE.match(lines[0])):
+        lines = lines[1:]
     if lines and lines[0].strip() == "---":
         for index in range(1, len(lines)):
             if lines[index].strip() == "---":
