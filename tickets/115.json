@@ -1,0 +1,90 @@
+{
+  "id": "115",
+  "subject": "codex worker 與 claude worker 同權限(D-048):拿掉 codex 沙盒 + 兩種 worker 共用事後越界檢查",
+  "created": "2026-10-14T00:48:47+08:00",
+  "objective": "D-048:codex worker 與 claude worker 同權限。codex 不再套自己的 workspace-write 沙盒(改 `-s danger-full-access`、approval 不問、工作根明指 cwd = run_agent 給的同一個副本 work/),規則包 / 禁區 / 禁 git 寫入照 claude 同一套;另加兩種 worker(含驗證者、批次 worker)共用的事後越界檢查:那一輪結束後主 repo 的 HEAD / 分支 / 工作樹與專案 config 列的副本外保護目錄有被動過 → 那一輪判失敗(rc 8)、票 Blocked、送 decision 頁、副本留著。codex 額度改派 opus 的路徑(#87 A23 / #114 A10)行為不變。",
+  "acceptance": [
+    "A1 `ticket.py agent-command --model codex:gpt-5.6-sol --tool codex` rc 0,stdout 恰為一行 `codex exec -m gpt-5.6-sol -s danger-full-access -c 'approval_policy=\"never\"' -C . --skip-git-repo-check -`(開題時 base_sha 上實跑是 `codex exec -m gpt-5.6-sol -s workspace-write --skip-git-repo-check -`)",
+    "A2 同上加 `--effort high` → stdout 恰為 `codex exec -m gpt-5.6-sol -c 'model_reasoning_effort=\"high\"' -s danger-full-access -c 'approval_policy=\"never\"' -C . --skip-git-repo-check -`;effort 不合法(例 `--effort bogus`)照 #114 rc 2、不印命令",
+    "A3 claude-code 那一支逐字不變:`agent-command --model opus --tool claude-code --base \"<board/config.json worker.command>\"` stdout 恰為 `claude -p --model opus --permission-mode acceptEdits --allowedTools Read Edit Write Glob Grep Bash --output-format stream-json --verbose`;swap / effort 的 #114 案例全綠不改期望值",
+    "A4 `scripts/ticket.py` 與 `scripts/auto-fix.sh` 內不再有字串 `workspace-write`(grep 0 命中);`docs/ROLES.md` 第 41 行附近那列(Codex 綁不了埠、danger-full-access 不設)改寫成 D-048 現況,伺服器 / 瀏覽器能力標「待 T 冒煙實證」",
+    "A5 auto-fix 起 codex worker(沙盒 + PATH 最前面的 codex 替身記 argv / cwd / env / stdin):argv 為 `exec -m <m> -s danger-full-access -c approval_policy=\"never\" -C . --skip-git-repo-check -`(shell 剝引號後),cwd 與同一張票改 tool=claude-code 時 claude 替身拿到的 cwd 相同(副本的 work/),env 的 AC_ROLE=worker、AC_ROOT=<副本>/control 兩者相同",
+    "A6 規則包同一套:同一張票 tool=codex(model codex:gpt-5.6-sol)與 tool=claude-code(model opus)各跑 `auto-fix.sh <n> --dry-run --round 1`,兩份派工文除了模型卡那一段(rules.py pack 依 --model 挑的那一節)與印出的 worker 命令行之外逐字相同;§2 禁區、禁 git 寫入那幾段兩份都在",
+    "A7 事後檢查 —— 主 repo 新檔:worker 替身(claude 與 codex 各一案)在主 repo 根寫一個未追蹤檔 → auto-fix rc 8;事件 `ticket.attempt.failed` reason=guard-violation;票 state Blocked、owner main;收件匣一筆 kind=decision,what 或 where 含那個檔的 repo 相對路徑;副本 work/ 仍在;patch 沒套(票分支不存在或沒有新 commit)",
+    "A8 事後檢查 —— 已髒的檔再被改:起跑前主 repo 有一個已修改未提交的追蹤檔,worker 替身再改它的內容(porcelain 那一行不變)→ 一樣 rc 8 並點名該檔",
+    "A9 事後檢查 —— HEAD:worker 替身在主 repo `git commit` → rc 8 點名 HEAD 前後 sha;同一輪的時窗內事件檔有 `land.start`(落地管線的 commit)時 HEAD 前進不算違反,工作樹那一半照查",
+    "A10 事後檢查 —— 控制面路徑不算:worker 跑的期間 board/config.json 的 tickets_dir / events_file / answers_file / reports_dir 底下被寫(auto-fix 與事件本來就會寫)不算違反;乾淨的一輪(替身只在副本裡寫、交 patch)rc 與今天相同、不多送頁",
+    "A11 副本外保護目錄:board/config.json 新鍵 `guarded_dirs`(字串 list;`~` 展開、相對路徑以主 repo 根解析)列的目錄,worker 替身在其中新增 / 改 / 刪一個檔 → rc 8 點名;鍵不存在或空 → 只查主 repo;寫進沒列的副本外目錄不偵測(限制寫進 auto-fix.sh 檔頭)",
+    "A12 驗證者與批次 worker 同一套:驗證者替身在主 repo 寫檔 → 那一輪 rc 8 同 A7 的頁;batch 模式的 worker 替身同",
+    "A13 codex 額度路徑不變:codex 替身 rc≠0 且 log 含 `usage limit` → rc 7、票 model opus / tool claude-code / effort 照 #114 A10、回 Ready、送「codex 額度用完,已改 opus」那一頁 —— 額度判斷排在事後檢查之前;tests/test_auto_fix_codex.py 既有額度案例期望值不改照綠",
+    "A14 auto-fix.sh 檔頭退出碼表多一行 `8 worker / 驗證者越界(事後檢查):…`;docs/WORKFLOW.md 記 `guarded_dirs` 鍵與事後檢查的範圍與限制"
+  ],
+  "in_scope": [],
+  "out_of_scope": [
+    "docs/DECISIONS.md",
+    "board/config.json",
+    "scripts/sync-to-project.sh"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/ticket.py",
+    "scripts/auto-fix.sh",
+    "tests/test_ticket.py",
+    "tests/test_auto_fix_codex.py",
+    "tests/test_auto_fix.py",
+    "tests/test_consolidate_memory.py",
+    "docs/ROLES.md",
+    "docs/WORKFLOW.md"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "6813b86845e829e90dc203953e72c55e813c4426",
+  "state": "Ready",
+  "state_version": 5,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [
+      "verify/dispatch/test_ticket_115.py",
+      "verify/dispatch/test_ticket_114.py",
+      "verify/TAGS.d/115.md"
+    ],
+    "tags": [],
+    "run": "python3 scripts/verify.py --tag worker-guard",
+    "notes": "A 的案例:沙盒借 tests/control_harness.Sandbox;外層 AC_* 環境清掉再跑。codex / claude 都用 PATH 最前面的替身,不打真模型。真 codex 吃 -s danger-full-access / approval_policy 的實跑效果不在 A 驗(T 同步票的冒煙)。verify/dispatch/test_ticket_114.py 釘了舊 codex 命令字面(A3 與 297 行附近),由本票驗證者改成新字面。 標籤 worker-guard 由驗證者在 verify/TAGS.d/115.md 登記、交件時併進本欄(開題時未登記,lint 不收未登記標籤)。"
+  },
+  "effort": "high",
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "feature": "派工:worker 權限與越界守衛",
+  "test_plan": "期望值一律抄票面字面(A1–A3 的命令逐字;A3 基準句是開題時在 base_sha 實跑的輸出),不從 ticket.CODEX_COMMAND / agent_command 讀回來。驗證者案例標籤 `worker-guard`(驗證者自己在 verify/TAGS.d/<票號>.md 登記)。\nT1(A1–A3)CLI 表格:subprocess 跑 `python3 scripts/ticket.py agent-command …`:codex 無 effort / high / 不合法;claude-code 帶 config 的 worker.command 原樣、swap、effort。斷言 rc 與 stdout 全句相等。\nT2(A4)grep 檔內文字:scripts/ticket.py、scripts/auto-fix.sh 無 `workspace-write`;docs/ROLES.md 那一列不含「danger-full-access` **不設**」。\nT3(A5、A6)整合:tests/control_harness.Sandbox + PATH 最前面的 codex / claude 替身(記 argv、os.getcwd()、AC_ROLE、AC_ROOT、stdin 到檔)。A6 用兩次 `--dry-run --round 1` 的輸出比對;模型卡那一段的界線照 rules.py pack 的標題列切。\nT4(A7–A12)整合:同一沙盒跑真的 `auto-fix.sh <n>`(不 dry-run),替身依案例做:在沙盒主 repo 根寫檔 / 改已髒追蹤檔 / git commit / 寫 guarded_dirs 目錄 / 只在副本寫。主 repo 路徑由案例寫死進替身腳本(worker 環境裡指主 repo 的 AC_* 本來就被剝掉)。斷言 auto-fix rc、events.jsonl 的 reason、票 JSON 的 state/owner、inbox 那一筆的 what/where、副本 work/ 存在。A9 的豁免案:替身 commit 前先用 event.py 對沙盒主 repo 的事件檔 emit land.start(模擬落地管線同時 commit)。A12 驗證者案:needs_verifier=true 的沙盒票,驗證者替身越界;batch 案照 tests/test_auto_fix.py 既有 batch 案例的起法。\nT5(A13)回歸:tests/test_auto_fix_codex.py 既有額度案例只改 argv 期望(workspace-write → 新命令),額度那幾條斷言不動。\nT6 回歸:tests/test_ticket.py、tests/test_consolidate_memory.py 釘舊命令字串的地方改成 A1 字面;其餘斷言不變(已查:這兩檔只有 1703/1730 與 104 行釘 codex 命令)。\n變異(未實測,實作者 / 驗證者自己驗紅):M1 CODEX_COMMAND 改回 workspace-write → T1 A1/A2 紅;M2 事後檢查只包 worker 不包 verifier → A12 紅;M3 快照只比 porcelain 不比檔大小 / mtime → A8 紅;M4 拿掉 land.start 豁免 → A9 豁免案紅;M5 額度判斷挪到事後檢查之後且替身也越界 → A13 紅。\n只准跑:上面點名的測試檔 + `python3 scripts/verify.py --tag worker-guard`;全套留給 --checkin。",
+  "outline": "D-048 落實。開題實測:codex-cli 0.153.4,`codex exec -a never` rc 2(-a 只在 exec 之前),approval 改用 exec 內的 `-c approval_policy=\"never\"`;新命令 `codex exec … -s danger-full-access -c … -C . --skip-git-repo-check --help` 解析 rc 0;真跑效果未實測(T 冒煙驗)。A 今天沒有任何「主 repo 被 worker 動過」的守衛(auto-fix.sh 無 porcelain/HEAD 比對;protected_paths 只管 patch 內容)→ 新做,放 run_agent(worker/驗證者/批次同一處)。順序:命令 → 事後檢查 → 文件。needs_verifier=true:越界判定是新行為、偽陽性邊界(已髒檔、落地同時 commit、控制面路徑)要獨立案例;interface_fixed=true:命令字面、rc 8、reason、頁、鍵名都釘死。model codex sol high:D-047 偏好,A 測試不需綁埠 / 瀏覽器。T 同步票另開:同步後 codex sol 在乾淨副本實跑冒煙。",
+  "verify_strings": [
+    {
+      "path": "scripts/ticket.py",
+      "contains": "danger-full-access"
+    },
+    {
+      "path": "scripts/ticket.py",
+      "contains": "approval_policy"
+    },
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "guarded_dirs"
+    },
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "guard-violation"
+    }
+  ],
+  "decision_refs": [
+    "D-048",
+    "D-047",
+    "D-018",
+    "D-028",
+    "D-H38"
+  ],
+  "priority": "P1"
+}
