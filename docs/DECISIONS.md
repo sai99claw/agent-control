@@ -320,3 +320,9 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - 起因:使用者原話「接下來改code 的session 優先交給codex sol high」「要讓推理強度可以指定，…claude 跟agy現在都行」。主線查證:三個工具本身都支援(claude --effort、codex -c model_reasoning_effort、agy 經 ai-hub 的 effort),派工腳本都沒帶。
 - #114 落地(9bf6020):票加獨立欄位 `effort`(不用 model 後綴,D-018:model 格被多處當模型 id 讀);claude-code → `--effort`,codex → `-c model_reasoning_effort="…"`;取值順序 票 > board/config.json `effort.implement` > 不帶(與今天逐字相同);不合法值 rc 2 不派。agy 本票只記不做。
 - **推翻 D-045 / #94「cost[] 每列 14 鍵」**:改為 15 鍵,多 `effort`(未指定為 null);worker 的 agent.start/done/failed 事件也帶 effort。
+
+## D-048(2026-10-14)claude worker 與 codex worker 同權限
+- 原話:「claude worker 跟codex worker 有一樣的權限 用這個原則去做 agemt control 可能要寫進去」。
+- 起因:使用者要改 code 的工作優先交 codex sol high(D-047);codex 自己的沙盒(-s workspace-write)擋 127.0.0.1 bind 與 Chrome 啟動(Seatbelt),跑不了伺服器 / 瀏覽器案例(T #461 起的老問題;2026-10-13 astra 調查確認,且在 codex 沙盒內無法驗證任何放寬設定)。
+- 現況對照:claude worker 在副本資料夾(git archive 展開、無 .git)裡跑,沒有 OS 層沙盒,靠規則包禁區、禁 git 寫入、閘門與覆核把關。
+- 原則:codex worker 比照 —— 同樣的副本資料夾、同樣的禁區規矩、不另加也不少一層;不再套 codex 自己的 workspace-write 沙盒。開票實作(A),T 端同步後生效。
