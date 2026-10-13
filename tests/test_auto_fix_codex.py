@@ -233,5 +233,110 @@ class OtherCodexFailuresKeepTheOldPages(CodexBase):
                                                 "patch-round1.diff")), [])
 
 
+class EffortBase(CodexBase):
+    """#114:票的 `effort` > config 的 `effort.implement` > 無。期望句抄票面字面。"""
+
+    def config_effort(self, value):
+        conf = dict(DEFAULT_CONFIG)
+        conf["worker"] = {"command": CLAUDE_COMMAND, "timeout_seconds": 120}
+        if value:
+            conf["effort"] = {"implement": value}
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+
+    def dry_lines(self, done):
+        lines = done.stdout.splitlines()
+        return ([l for l in lines if l.startswith("auto-fix: worker 命令 —— ")],
+                [l for l in lines if l.startswith("auto-fix: effort 來源=")])
+
+
+class AutoFixPicksTheEffort(EffortBase):
+
+    def test_a7_dry_run_shows_the_effort_and_where_it_came_from(self):
+        """T3 四種情境 + 票沒寫 model 的 claude-code 票。**變異 M3**:取值順序顛倒(config
+        蓋票)→「兩者都有」那一列印 low,紅。"""
+        envelope_tail = " --output-format stream-json --verbose"
+        rows = (
+            ("票", dict(model="fable", tool="claude-code", effort="high"), None,
+             "claude -p --model fable --effort high --permission-mode acceptEdits" + envelope_tail,
+             "auto-fix: effort 來源=票 high"),
+            ("config", dict(model=CODEX_MODEL, tool="codex"), "medium",
+             "codex exec -m gpt-6-astra -c 'model_reasoning_effort=\"medium\"' "
+             "-s workspace-write --skip-git-repo-check -",
+             "auto-fix: effort 來源=config medium"),
+            ("兩者", dict(model=CODEX_MODEL, tool="codex", effort="xhigh"), "low",
+             "codex exec -m gpt-6-astra -c 'model_reasoning_effort=\"xhigh\"' "
+             "-s workspace-write --skip-git-repo-check -",
+             "auto-fix: effort 來源=票 xhigh"),
+            ("都沒有", dict(model="fable", tool="claude-code"), None,
+             "claude -p --model fable --permission-mode acceptEdits" + envelope_tail, None),
+            ("票沒 model", dict(model="", tool="claude-code"), "high",
+             "claude -p --model opus --effort high --permission-mode acceptEdits" + envelope_tail,
+             "auto-fix: effort 來源=config high"),
+        )
+        self.fake_codex()
+        for name, fields, conf, want, source in rows:
+            with self.subTest(case=name):
+                self.config_effort(conf)
+                self.make_ticket("1", allowed_write_paths=["tests/*"], **fields)
+                done = self.auto_fix("--dry-run")
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                worker, sources = self.dry_lines(done)
+                self.assertEqual(worker, ["auto-fix: worker 命令 —— " + want], done.stdout)
+                self.assertEqual(sources, [source] if source else [], done.stdout)
+
+
+class AnIllegalEffortIsNotDispatched(EffortBase):
+
+    def test_a8_an_illegal_effort_stops_before_the_ticket_moves(self):
+        """T4:票 ultra(claude-code)、config turbo(codex)→ exit 2,票不動、不起、不記。
+        **變異**:auto-fix 拿掉早停 → 票轉 Running / 有 agent.start,紅。"""
+        self.fake_codex()
+        rows = (("票", "ultra", dict(tool="claude-code", effort="ultra"), None),
+                ("config", "turbo", dict(model=CODEX_MODEL, tool="codex"), "turbo"))
+        for source, value, fields, conf in rows:
+            for args in (("--no-review",), ("--dry-run",)):
+                with self.subTest(source=source, args=args):
+                    self.config_effort(conf)
+                    self.make_ticket("1", allowed_write_paths=["tests/*"], **fields)
+                    before = self.load_ticket("1")
+                    done = self.auto_fix(*args)
+                    self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+                    named = [l for l in done.stderr.splitlines()
+                             if "effort=%s" % value in l and source in l]
+                    self.assertTrue(named, done.stderr)
+                    after = self.load_ticket("1")
+                    self.assertEqual(after["state"], "Ready")
+                    self.assertEqual(after["state_version"], before["state_version"])
+                    self.assertEqual(after.get("cost") or [], [])
+                    self.assertEqual(self.agent_events("agent.start"), [])
+                    self.assertFalse(os.path.exists(self.argv_file))
+
+
+class CodexQuotaKeepsOrDropsTheEffort(EffortBase):
+
+    def test_a10_a_claude_legal_effort_survives_the_reassignment(self):
+        self.fake_codex("quota")
+        self.codex_ticket(effort="high")
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 7, done.stdout + done.stderr)
+        ticket = self.load_ticket("1")
+        self.assertEqual((ticket["tool"], ticket["effort"]), ("claude-code", "high"))
+        self.assertIn("-c\nmodel_reasoning_effort=\"high\"\n", "\n".join(self.argv()) + "\n")
+        self.assertNotIn("原 effort", self.read(self.inbox_rows()[0]["page"]))
+
+    def test_a10_an_effort_claude_does_not_take_becomes_null_and_is_named(self):
+        """**變異**:改派時不清 effort → 票留 ultra(下一次 auto-fix 會被 A8 擋),紅。"""
+        self.fake_codex("quota")
+        self.codex_ticket(effort="ultra")
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 7, done.stdout + done.stderr)
+        ticket = self.load_ticket("1")
+        self.assertIn("effort", ticket)
+        self.assertIsNone(ticket["effort"])
+        pages = self.inbox_rows()
+        self.assertEqual(len(pages), 1, pages)
+        self.assertIn("原 effort ultra", self.read(pages[0]["page"]))
+
+
 if __name__ == "__main__":
     unittest.main()

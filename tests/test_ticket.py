@@ -1154,10 +1154,10 @@ class Cost(Sandbox):
 
 
 
-# #94 C1:一列恰是這 14 鍵。期望值抄票面字面,不從 ticket.COST_KEYS 讀回來。
+# #94 C1:一列恰是這 15 鍵(#114 A9 加 `effort`)。期望值抄票面字面,不從 ticket.COST_KEYS 讀回來。
 COST_ROW_KEYS = {"role", "round", "model", "tokens_in", "tokens_out", "cache_write",
                  "cache_read", "wall_seconds", "outcome", "run_id", "session_id", "by",
-                 "note", "at"}
+                 "note", "effort", "at"}
 # #94 C2 的登記表(票面字面)。
 REGISTERED_OUTCOMES = ("handed-in", "no-patch", "apply-failed", "timeout", "objection",
                        "error", "pass", "fail", "missing", "accepted", "rejected",
@@ -1292,7 +1292,8 @@ class CostLedgerRow(Sandbox):
             "type": "result", "session_id": "s-1", "duration_ms": 4000,
             "usage": {"input_tokens": 5, "output_tokens": 77,
                       "cache_creation_input_tokens": 3, "cache_read_input_tokens": 9}})
-        done = self.cost("--from-envelope", path, "--outcome", "handed-in", "--run-id", "r-1")
+        done = self.cost("--from-envelope", path, "--outcome", "handed-in", "--run-id", "r-1",
+                         "--effort", "high")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         row = self.load_ticket("1")["cost"][-1]
         event = [e for e in self.events() if e["kind"] == "ticket.cost"][-1]
@@ -1673,6 +1674,138 @@ class ObjectionBodyDropsTheHomeDirectory(Sandbox):
         again = self.ticket("objection", "1", "--line",
                             "OBJECTION: ticket-wrong 指的 ~/x/y 不存在")
         self.assertEqual(again.returncode, 4, again.stdout + again.stderr)
+
+
+# #114:期望值一律抄票面字面(A1–A5 的命令逐字、合法值清單),不從 ticket.EFFORT_LEVELS 讀回來。
+CLAUDE_BASE = "claude -p --model opus --permission-mode acceptEdits"
+CLAUDE_EFFORTS = "low medium high xhigh max"
+CODEX_EFFORTS = "low medium high xhigh max ultra"
+
+
+class AgentCommandEffort(Sandbox):
+    """#114 A1–A5(T1):`agent-command --effort` 依 tool 轉成旗標;缺省逐字同今天。"""
+
+    def command(self, *args):
+        done = self.ticket("agent-command", *args)
+        return done.returncode, done.stdout, done.stderr
+
+    def test_a1_a3_a_legal_effort_becomes_the_tools_flag(self):
+        """**變異 M1**:agent_command 忽略 effort → 三句都少了旗標,紅。"""
+        rows = (
+            (("--model", "opus", "--tool", "claude-code", "--base", CLAUDE_BASE,
+              "--swap-model", "--effort", "high"),
+             "claude -p --model opus --effort high --permission-mode acceptEdits"),
+            (("--model", "fable", "--tool", "claude-code", "--base", CLAUDE_BASE,
+              "--swap-model", "--effort", "high"),
+             "claude -p --model fable --effort high --permission-mode acceptEdits"),
+            (("--model", "codex:gpt-5.6-sol", "--tool", "codex", "--effort", "high"),
+             "codex exec -m gpt-5.6-sol -c 'model_reasoning_effort=\"high\"' "
+             "-s workspace-write --skip-git-repo-check -"),
+        )
+        for args, want in rows:
+            with self.subTest(args=args):
+                rc, out, err = self.command(*args)
+                self.assertEqual(rc, 0, err)
+                self.assertEqual(out, want + "\n")
+
+    def test_a2_an_existing_effort_is_replaced_and_no_model_appends_at_the_end(self):
+        base = "claude -p --model opus --effort low --permission-mode acceptEdits"
+        rc, out, err = self.command("--model", "fable", "--tool", "claude-code", "--base", base,
+                                    "--swap-model", "--effort", "high")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out, "claude -p --model fable --effort high --permission-mode acceptEdits\n")
+        self.assertEqual(out.split().count("--effort"), 1, out)
+        rc, out, err = self.command("--model", "opus", "--tool", "claude-code",
+                                    "--base", "claude -p --permission-mode acceptEdits",
+                                    "--effort", "high")
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out, "claude -p --permission-mode acceptEdits --effort high\n")
+
+    def test_a4_no_effort_or_an_empty_one_is_todays_command_verbatim(self):
+        for extra in ((), ("--effort", "")):
+            with self.subTest(extra=extra):
+                rc, out, err = self.command("--model", "codex:gpt-5.6-sol", "--tool", "codex",
+                                            *extra)
+                self.assertEqual(rc, 0, err)
+                self.assertEqual(out, "codex exec -m gpt-5.6-sol -s workspace-write "
+                                      "--skip-git-repo-check -\n")
+                rc, out, err = self.command("--model", "fable", "--tool", "claude-code",
+                                            "--base", CLAUDE_BASE, "--swap-model", *extra)
+                self.assertEqual(rc, 0, err)
+                self.assertEqual(out, "claude -p --model fable --permission-mode acceptEdits\n")
+
+    def test_a5_an_illegal_effort_or_tool_prints_no_command(self):
+        """**變異 M2**:合法值檢查拿掉 → ultra / turbo 印出命令、rc=0,紅。"""
+        rows = (
+            (("--model", "opus", "--tool", "claude-code", "--base", CLAUDE_BASE,
+              "--swap-model", "--effort", "ultra"), ("effort=ultra", CLAUDE_EFFORTS)),
+            (("--model", "codex:gpt-5.6-sol", "--tool", "codex", "--effort", "turbo"),
+             ("effort=turbo", CODEX_EFFORTS)),
+            (("--model", "opus", "--tool", "agy", "--base", "agy run", "--effort", "high"),
+             ("tool=agy", "不支援 effort")),
+        )
+        for args, words in rows:
+            with self.subTest(args=args):
+                rc, out, err = self.command(*args)
+                self.assertEqual(rc, 2, out + err)
+                self.assertEqual(out, "")
+                for word in words:
+                    self.assertIn(word, err)
+
+
+class CreateTakesAnEffort(Sandbox):
+    """#114 A6(T2):`create --effort` 寫進票;不合法不寫檔;不給就沒有這個鍵。"""
+
+    def test_a6_a_legal_effort_is_written(self):
+        done = self.ticket("create", *MIN, "--effort", "high")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["effort"], "high")
+
+    def test_a6_no_effort_means_no_key(self):
+        done = self.ticket("create", *MIN)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("effort", self.load_ticket("1"))
+
+    def test_a6_an_effort_outside_the_tools_table_writes_no_ticket(self):
+        """tool 空視為 claude-code:ultra 只有 codex 收。"""
+        no_tool = list(MIN[:-2])
+        for args in ((*MIN, "--effort", "ultra"), (*no_tool, "--tool", "", "--effort", "ultra"),
+                     (*no_tool, "--tool", "agy", "--effort", "high")):
+            with self.subTest(args=args[-4:]):
+                done = self.ticket("create", *args)
+                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+                self.assertIn("effort=", done.stderr)
+                self.assertFalse(self.exists("tickets/1.json"), "沒開成的票不該留下檔案")
+        done = self.ticket("create", *no_tool, "--tool", "codex", "--model", "codex:gpt-5.6-sol",
+                           "--effort", "ultra")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["effort"], "ultra")
+
+
+class CostTakesAnEffort(Sandbox):
+    """#114 A9(T5 單跑、T7):`cost --effort` 進列與事件;SCHEMA 寫明。"""
+
+    def test_a9_cost_records_effort_or_null(self):
+        """**變異 M4**:cost 不寫 effort 鍵 → 鍵集合紅。"""
+        self.make_ticket("1")
+        for extra, want in ((("--effort", "high"), "high"), ((), None)):
+            done = self.ticket("cost", "1", "--role", "worker", "--wall-seconds", "1", *extra)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            row = self.load_ticket("1")["cost"][-1]
+            self.assertEqual(set(row), COST_ROW_KEYS)
+            self.assertEqual(row["effort"], want)
+            event = [r for r in self.events() if r["kind"] == "ticket.cost"][-1]
+            self.assertEqual(event.get("effort"), want)
+
+    def test_t7_schema_names_effort_and_the_15_keys(self):
+        with open(os.path.join(SCRIPTS, "..", "tickets", "SCHEMA.md"), encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+        self.assertTrue([line for line in lines if line.startswith("|") and "`effort`" in line
+                         and "low" in line and "ultra" in line], "SCHEMA 沒有 effort 那一列")
+        cost = [line for line in lines if line.startswith("| 成本 |")]
+        self.assertEqual(len(cost), 1)
+        self.assertIn("effort", cost[0])
+        self.assertIn("15 鍵", cost[0])
 
 
 if __name__ == "__main__":

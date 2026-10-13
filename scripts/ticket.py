@@ -237,6 +237,7 @@ CREATE_FLAGS = {
     "--model": "model", "--tool": "tool", "--base-sha": "base_sha",
     "--state": "state", "--feature": "feature", "--outline": "outline",
     "--test-plan": "test_plan", "--branch": "branch", "--workspace": "workspace",
+    "--effort": "effort",
     # `verify` 那一格是**驗證者**寫的(D-010):它交的不是判決,是「案例在哪、
     # 怎麼跑」。帶點的名字寫進巢狀的 `verify` 底下,見 `put_field`。
     "--verify-run": "verify.run", "--verify-note": "verify.notes",
@@ -279,6 +280,7 @@ FLAG_NOTE = {
     "--role": "角色:worker / verifier / opener / consolidator",
     "--model": "模型",
     "--tool": "工具:claude-code / codex / …",
+    "--effort": "推理強度;合法值依票的 tool(表在 `EFFORT_LEVELS`,不合法 rc=2);不給 = 不帶旗標",
     "--base-sha": "基準 sha;不給就自己取主線的 HEAD",
     "--state": "初始狀態,預設 Draft(%s)" % " / ".join(STATES),
     "--feature": "對到哪個產品功能",
@@ -331,9 +333,10 @@ USAGE = {
                   "--evidence <EVIDENCE>"),
     "cost": ("scripts/ticket.py cost <id> --role worker|verifier|reviewer|land "
              "[--round N] [--model M] [--by <腳本>] [--from-envelope <信封檔>] "
-             "[--wall-seconds N] [--outcome <登記的字>] [--run-id <字>] [--note <字>]"),
+             "[--wall-seconds N] [--outcome <登記的字>] [--run-id <字>] [--note <字>] "
+             "[--effort E]"),
     "agent-command": ("scripts/ticket.py agent-command --model M [--tool T] "
-                      "[--base \"<worker.command>\"] [--swap-model]"),
+                      "[--base \"<worker.command>\"] [--swap-model] [--effort E]"),
     "lint": "scripts/ticket.py lint <id>  # 唯讀:needs_verifier / verify_strings / 標籤",
 }
 
@@ -424,12 +427,15 @@ def known_flags(verb):
                 ("--outcome", "這一次的結局;只收登記表的字(tickets/SCHEMA.md 成本那一列)",
                  False, False),
                 ("--run-id", "這一次的 run_id(land 是那一次的戳記)", False, False),
-                ("--note", "附註(批次修復記 batch <stamp> 與整批票號)", False, False)]
+                ("--note", "附註(批次修復記 batch <stamp> 與整批票號)", False, False),
+                ("--effort", "這一次派工的推理強度;沒給 = null", False, False)]
     if verb == "agent-command":
         return [("--model", "票的 model(`codex:` 前綴 = codex)", False, True),
                 ("--tool", "票的 tool;缺 = claude-code", False, False),
                 ("--base", "非 codex 時起的命令(board/config.json 的 worker.command)", False, False),
-                ("--swap-model", "非 codex 時把 --base 裡 --model 的值換成 --model", False, False)]
+                ("--swap-model", "非 codex 時把 --base 裡 --model 的值換成 --model", False, False),
+                ("--effort", "推理強度;claude-code 轉 --effort、codex 轉 -c model_reasoning_effort",
+                 False, False)]
     return []
 
 
@@ -599,6 +605,13 @@ def cmd_create(argv, stdin=sys.stdin, stdout=sys.stdout):
         index += 1
     if interactive:
         ask_interactive(ticket, stdin, stdout)
+    if not ticket.get("effort"):
+        ticket.pop("effort", None)
+    else:
+        why = effort_problem(ticket.get("tool"), ticket["effort"])
+        if why:
+            sys.stderr.write("ticket: %s\n" % why)
+            return 2
     ticket["depends_on"] = normalise_depends(ticket.get("depends_on") or [])
     if not ticket.get("allowed_write_paths") and ticket.get("in_scope"):
         ticket["allowed_write_paths"] = list(ticket["in_scope"])
@@ -1512,10 +1525,10 @@ COST_MODEL_USAGE = (("tokens_in", "inputTokens"), ("tokens_out", "outputTokens")
                     ("cache_write", "cacheCreationInputTokens"),
                     ("cache_read", "cacheReadInputTokens"))
 COST_FLAGS = ("--role", "--round", "--model", "--by", "--from-envelope", "--wall-seconds",
-              "--outcome", "--run-id", "--note")
+              "--outcome", "--run-id", "--note", "--effort")
 # 一列的形狀唯一(D-018,#94 C1):寫的人只有 `cmd_cost`,鍵就是這幾個、這個順序。
 COST_KEYS = ("role", "round", "model", "tokens_in", "tokens_out", "cache_write", "cache_read",
-             "wall_seconds", "outcome", "run_id", "session_id", "by", "note", "at")
+             "wall_seconds", "outcome", "run_id", "session_id", "by", "note", "effort", "at")
 # `--outcome` 的登記表(#94 C2;正文在 tickets/SCHEMA.md 成本那一列)。表外的字不收:
 # 各寫各的同義字(`passed` / `pass`),加總那一刻就分成兩格。
 COST_OUTCOMES = (
@@ -1647,6 +1660,7 @@ def cmd_cost(argv):
                 "by": got.get("--by") or None,
                 "note": ";".join(part for part in (got.get("--note"), None if envelope else why)
                                  if part) or None,
+                "effort": got.get("--effort") or None,
                 "at": now()})
     if envelope is None:
         sys.stderr.write("ticket: #%s cost 的信封讀不到(%s)—— token 欄記 null\n"
@@ -1720,29 +1734,60 @@ def cost_total(ticket):
 
 CODEX_PREFIX = "codex:"
 # 派工文從 stdin 進(`-`);副本是 `git archive` 展的,沒有 `.git`,codex 預設會拒跑。
-CODEX_COMMAND = "codex exec -m %s -s workspace-write --skip-git-repo-check -"
+CODEX_COMMAND = "codex exec -m %s%s -s workspace-write --skip-git-repo-check -"
+# 推理強度的合法值表只在這裡(D-018,#114):claude-code 抄自 `claude --help`。
+EFFORT_LEVELS = {"claude-code": ("low", "medium", "high", "xhigh", "max"),
+                 "codex": ("low", "medium", "high", "xhigh", "max", "ultra")}
 
 
-def agent_command(model, tool, base, swap_model=False):
+def effort_problem(tool, effort):
+    """`effort` 對這個 tool 合不合法;合法回空字串。tool 空 = claude-code。"""
+    tool = tool or "claude-code"
+    if tool not in EFFORT_LEVELS:
+        return "tool=%s 不支援 effort(effort=%s);支援的 tool:%s" \
+            % (tool, effort, " ".join(sorted(EFFORT_LEVELS)))
+    if effort not in EFFORT_LEVELS[tool]:
+        return "effort=%s 不在 tool=%s 的合法值裡:%s" \
+            % (effort, tool, " ".join(EFFORT_LEVELS[tool]))
+    return ""
+
+
+def agent_command(model, tool, base, swap_model=False, effort=""):
     """依票的 `model` / `tool` 決定起什麼命令(#87 A19–A21)。回 `(命令, 錯誤)`。
 
     `codex:<id>` ⇔ `tool=codex`:兩格說的是同一件事,不一致就不派 —— 照哪一格猜都可能
     起錯模型,而起錯的那一輪花的錢與時間是真的。其餘一律是 `base`(config 的
     `worker.command`);`swap_model` 時把它的 `--model` 換成這一格(整理票的兩個模型)。
+    `effort`(#114)空 = 命令與沒有這一格時逐字相同;不在該 tool 的合法值表就不派。
     """
-    model, tool = model or "", tool or ""
+    model, tool, effort = model or "", tool or "", effort or ""
     if model.startswith(CODEX_PREFIX) != (tool == "codex"):
         return None, ("model=%s 與 tool=%s 不一致 —— `codex:` 前綴的模型要配 tool=codex,"
                       "tool=codex 要配 `codex:` 前綴的模型" % (model or "(空)", tool or "(空)"))
+    if effort:
+        why = effort_problem(tool, effort)
+        if why:
+            return None, why
     if tool == "codex":
-        return CODEX_COMMAND % shlex.quote(model[len(CODEX_PREFIX):]), ""
-    if not swap_model or not model:
+        extra = (" -c " + shlex.quote('model_reasoning_effort="%s"' % effort)) if effort else ""
+        return CODEX_COMMAND % (shlex.quote(model[len(CODEX_PREFIX):]), extra), ""
+    if not effort and (not swap_model or not model):
         return base, ""
     parts = shlex.split(base)
-    if "--model" in parts and parts.index("--model") + 1 < len(parts):
-        parts[parts.index("--model") + 1] = model
-    else:
-        parts += ["--model", model]
+    if swap_model and model:
+        if "--model" in parts and parts.index("--model") + 1 < len(parts):
+            parts[parts.index("--model") + 1] = model
+        else:
+            parts += ["--model", model]
+    if effort:
+        # 已有 `--effort` 就原位換值;沒有就接在 `--model <m>` 之後,再沒有就接句尾。
+        if "--effort" in parts and parts.index("--effort") + 1 < len(parts):
+            parts[parts.index("--effort") + 1] = effort
+        elif "--model" in parts and parts.index("--model") + 1 < len(parts):
+            at = parts.index("--model") + 2
+            parts[at:at] = ["--effort", effort]
+        else:
+            parts += ["--effort", effort]
     return " ".join(shlex.quote(part) for part in parts), ""
 
 
@@ -1754,7 +1799,7 @@ def cmd_agent_command(argv):
             got[flag] = True
             index += 1
             continue
-        if flag in ("--model", "--tool", "--base") and index + 1 < len(argv):
+        if flag in ("--model", "--tool", "--base", "--effort") and index + 1 < len(argv):
             got[flag] = argv[index + 1]
             index += 2
             continue
@@ -1763,7 +1808,7 @@ def cmd_agent_command(argv):
         sys.stderr.write("ticket: agent-command 要 --model\n")
         return 2
     cmd, why = agent_command(got["--model"], got.get("--tool"), got.get("--base") or "",
-                             bool(got.get("--swap-model")))
+                             bool(got.get("--swap-model")), got.get("--effort") or "")
     if why:
         sys.stderr.write("ticket: %s\n" % why)
         return 2
