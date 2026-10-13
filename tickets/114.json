@@ -1,0 +1,88 @@
+{
+  "id": "114",
+  "subject": "票可指定推理強度 effort:claude-code 轉 --effort、codex 轉 -c model_reasoning_effort",
+  "created": "2026-10-13T22:57:22+08:00",
+  "objective": "票多一格 `effort`(推理強度;缺省 = 不帶旗標,派工命令與今天逐字相同)。`ticket.py agent-command --effort <e>` 依 tool 轉成旗標:claude-code 在 `--model <m>` 之後加 `--effort <e>`(swap-model 路徑也帶)、codex 在 `-m <id>` 之後加 `-c 'model_reasoning_effort=\"<e>\"'`;值不在該 tool 的合法值表 → rc=2 明確錯誤、不印命令。auto-fix 起 worker 取值順序:票的 `effort` > `board/config.json` 的 `effort.implement` > 無;不合法就在動票之前停(不派)。worker 的 agent.start/done/failed 事件帶 `effort`,cost 列多一鍵 `effort`(15 鍵,沒指定 = null)。",
+  "acceptance": [
+    "A1 claude-code 加 effort:`agent-command --model opus --tool claude-code --base \"claude -p --model opus --permission-mode acceptEdits\" --swap-model --effort high` → rc=0,stdout 恰為 `claude -p --model opus --effort high --permission-mode acceptEdits`;`--model fable` 同一句 → `claude -p --model fable --effort high --permission-mode acceptEdits`",
+    "A2 claude-code 邊界:base 已有 `--effort low` → 原位換成 high、全句只出現一次 `--effort`;base 沒有 `--model` 且不 swap → `--effort high` 接在句尾",
+    "A3 codex 加 effort:`agent-command --model codex:gpt-5.6-sol --tool codex --effort high` → rc=0,stdout 恰為 `codex exec -m gpt-5.6-sol -c 'model_reasoning_effort=\"high\"' -s workspace-write --skip-git-repo-check -`",
+    "A4 缺省逐字不變:不給 `--effort`(或給空字串)→ 輸出與今天逐字相同:`codex exec -m gpt-5.6-sol -s workspace-write --skip-git-repo-check -`、`claude -p --model fable --permission-mode acceptEdits`(swap 自 opus);既有 agent-command / consolidate 案例不改照綠",
+    "A5 不合法值不派:claude-code + `ultra`、codex + `turbo` → rc=2、stdout 空、stderr 含 `effort=<值>` 與該 tool 的合法值清單(claude-code `low medium high xhigh max`;codex `low medium high xhigh max ultra`);tool 不是 claude-code / codex / 空(例 `agy`)且帶 effort → rc=2、stderr 說這個 tool 不支援 effort",
+    "A6 開票:`ticket.py create … --effort high` 票檔 `effort` = \"high\";值不在該票 tool 的合法表(tool 空視為 claude-code)→ rc=2、不寫票檔;不給 `--effort` → 票檔沒有 `effort` 這個鍵(與今天同形)",
+    "A7 auto-fix 取值與乾跑:`--dry-run` 的 `auto-fix: worker 命令 —— ` 那一行帶上取到的 effort(claude-code 票 `--model <票 model> --effort <e>`;codex 票 `-c 'model_reasoning_effort=\"<e>\"'`),另印一行 `auto-fix: effort 來源=<票|config> <e>`;取值順序 票 `effort` > `board/config.json` 的 `effort.implement` > 無;票沒寫 model 的 claude-code 票也帶 `--effort`;兩處都沒有 → 那一行與今天逐字相同、不印來源行",
+    "A8 auto-fix 不合法就停:票或 config 的 effort 不在該 tool 的合法表 → exit 2、stderr 含 `effort=<值>` 與來源(票/config);票留在 Ready、`state_version` 不變、不發 agent.start、不寫 cost(乾跑同樣 rc=2)",
+    "A9 事件與成本:有 effort 時 worker 的 agent.start / agent.done / agent.failed 多一格 `effort=<e>`,沒有就不帶這格;`ticket.py cost` 認 `--effort <e>`,cost 每列恰 15 鍵(原 14 鍵 + `effort`,沒給 = null),`ticket.cost` 事件同列;tickets/SCHEMA.md 的票欄位表有 `effort`,成本列寫 15 鍵",
+    "A10 codex 額度改派:codex 票撞 429 改派 opus / claude-code 時,票的 effort 在 claude-code 合法表內就保留;不在(例 `ultra`)→ 設成 null,decision 頁那一句多 `原 effort ultra`"
+  ],
+  "in_scope": [
+    "scripts/ticket.py",
+    "scripts/auto-fix.sh",
+    "tickets/SCHEMA.md",
+    "tests/test_ticket.py",
+    "tests/test_cost_ledger.py",
+    "tests/test_auto_fix_codex.py",
+    "tests/test_auto_fix.py"
+  ],
+  "out_of_scope": [
+    "scripts/review.sh",
+    "scripts/consolidate-memory.sh",
+    "board/config.json",
+    "docs/DECISIONS.md"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/ticket.py",
+    "scripts/auto-fix.sh",
+    "tickets/SCHEMA.md",
+    "tests/test_ticket.py",
+    "tests/test_cost_ledger.py",
+    "tests/test_auto_fix_codex.py",
+    "tests/test_auto_fix.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "0b6cb31ccd2204c92577d6c4a49591fd51e448f9",
+  "state": "Ready",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": "A 的案例:沙盒借 tests/control_harness.Sandbox;外層 AC_* 環境要清掉再跑。codex 與 claude 都用 PATH 最前面的替身,不打真的模型。真 codex 吃 `-c 'model_reasoning_effort=\"high\"'` 的實跑未測(codex -c 值照 TOML 解析,`\"high\"` 是 TOML 字串);claude `--effort` 合法值抄自 `claude --help`。"
+  },
+  "outline": "使用者 2026-10-13:「要讓推理強度可以指定」「接下來改 code 的 session 優先交給 codex sol high」。開題實測:`ticket.py agent-command --effort high` 今天 rc=2(不認得);scripts/ board/ SCHEMA grep effort 零命中;基準輸出 `codex exec -m gpt-5.6-sol -s workspace-write --skip-git-repo-check -`、`claude -p --model fable --permission-mode acceptEdits`(swap 自 opus)。\n介面裁示(D-018):**獨立欄位 `effort`**,不用 model 後綴 `codex:gpt-5.6-sol:high`。model 今天被當模型 id 讀(rules.py pack 挑卡、cost/事件 model、`codex:` 前綴判 tool、swap 進 `--model`、consolidate),加後綴就是改形狀,每個讀者都要學剝後綴;effort 與 tool 正交(claude、codex 都要),一格一張合法值表。合法值表只在 ticket.py 一處:claude-code = low medium high xhigh max(`claude --help`);codex = low medium high xhigh max ultra。其他 tool(agy)帶 effort = 錯誤,本票只記不做。config 預設放新頂層鍵 `effort: {\"implement\": …}`(鍵名對 routing),不塞 routing(那裡的值是模型標籤)。取值:票 > config > 無;無 = 命令逐字同今天。\ncost 列 14 → 15 鍵(多 `effort`,沒指定 null):改 #94 定案,主線落地時在 DECISIONS 補一行,本票不改 DECISIONS。\nneeds_verifier=true:旗標、值表、取值順序、cost 新鍵都是新契約。interface_fixed=true:純後端,命令逐字、錯誤字、來源行已釘。\n順序:① ticket.py ② auto-fix ③ SCHEMA 與舊 14 鍵案例。落地後 tabby_pool 要 sync(ticket.py、auto-fix.sh 在同步名單),T 同步票另開;config 要不要設 high、改碼票改派 codex 由主線另決。",
+  "test_plan": "期望值一律抄票面字面(A1–A10 的命令逐字、合法值清單照 `claude --help` 與票面),不從 ticket.EFFORT_LEVELS / agent_command 讀回來。標籤:驗證者案例 `effort`(驗證者自己在 verify/TAGS.d/<票號>.md 登記)。\nT1(A1–A5)unit/CLI 表格:subprocess 跑 `python3 scripts/ticket.py agent-command …`,三工具(claude-code / codex / agy)× 無 effort / 合法 effort / 不合法 effort,再加 claude-code 的 swap 與不 swap、base 有/無 `--model`、base 已有 `--effort low`;斷言 rc、stdout 全句相等、stderr 含字。A4 的兩條基準句是開題時在 base_sha 上實跑的輸出。\nT2(A6)CLI:沙盒(tests/control_harness.Sandbox)跑 `ticket.py create`,讀回票檔 JSON 斷言 `effort` 值 / 不存在;不合法 → rc=2 且 tickets/ 下沒有多一張。\nT3(A7)整合:沙盒 + `auto-fix.sh <n> --dry-run`(照 tests/test_auto_fix_codex.py 的 test_a19 / test_a20 做法:假 codex、`claude` 絆線),四種情境:票 effort / 只有 config `effort.implement` / 兩者都有(票贏)/ 都沒有;斷言 `auto-fix: worker 命令 —— ` 那一行與 `auto-fix: effort 來源=` 那一行。\nT4(A8)整合:Ready 票 effort=ultra、tool=claude-code,不帶 --dry-run 跑 auto-fix → rc=2;讀票 state=Ready、state_version 與跑之前相同、cost 長度不變;events 檔沒有這張票的 agent.start。\nT5(A9)整合:沙盒假 claude worker 交件一輪(照 test_auto_fix 的交件替身),讀 events 檔的 agent.start / agent.done 列含 `effort`;無 effort 的對照組沒有這一鍵;票的 cost 最後一列鍵集合 == 15 鍵字面、`effort` 值對上;`ticket.py cost … --effort high` 單跑一次再讀列。\nT6(A10)整合:照 test_a23(假 codex MODE=quota)兩次:effort=high → 改派後票 effort 仍 high;effort=ultra → 票 effort 為 null、inbox decision 頁含 `原 effort ultra`。\nT7 文字:tickets/SCHEMA.md 有 `effort` 欄的列、成本列含 `effort` 與「15 鍵」。\n既有案例要跟著改的(釘住 14 鍵舊行為):tests/test_cost_ledger.py 的 ROW_KEYS 與 C1/C8、tests/test_ticket.py 約 1157 行的 14 鍵集合。查過不衝突的:tests/test_auto_fix_codex.py test_a19/test_a20(無 effort 時輸出不變)、tests/test_consolidate_memory.py(不帶 effort)。\n變異(worker 自證紅,未實測):M1 agent_command 忽略 effort → T1 A1/A3 紅;M2 合法值檢查拿掉 → T1 A5 紅;M3 auto-fix 取值順序顛倒(config 蓋票)→ T3 「兩者都有」紅;M4 cost 不寫 effort 鍵 → T5 鍵集合紅。",
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "feature": "派工:agent-command / auto-fix 起 worker 的命令",
+  "decision_refs": [
+    "D-018",
+    "D-028",
+    "D-032",
+    "D-H38"
+  ],
+  "verify_strings": [
+    {
+      "path": "scripts/ticket.py",
+      "contains": "model_reasoning_effort"
+    },
+    {
+      "path": "scripts/ticket.py",
+      "contains": "--effort"
+    },
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "effort 來源="
+    },
+    {
+      "path": "tickets/SCHEMA.md",
+      "contains": "15 鍵"
+    }
+  ],
+  "priority": "P1"
+}
