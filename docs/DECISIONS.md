@@ -315,3 +315,8 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - #93 凍結至 2026-10-13 後,看 T #712 落地以來的 redo 次數再決定。
 - 開題者交票前自查 objective / acceptance / test_plan 三處一致(近期 10 條反駁 4 條是票面自相矛盾)→ memory/role/opener.inbox.md。
 - (補 2026-10-06)使用者問:「重新產生程式碼索引 可以改到gate 裡面去coding做嗎？」主線答放在套用 patch 那一步、不放 gate(閘門只判交件、不改交件),提兩條路,使用者回「2 ok」→ 併進 #96:apply.sh 套上分支後自動 repo-map build,有變併進同一個 commit(trailer `regen: repo-map build`)。
+
+## D-047(2026-10-14)票可指定推理強度 effort(#114)
+- 起因:使用者原話「接下來改code 的session 優先交給codex sol high」「要讓推理強度可以指定，…claude 跟agy現在都行」。主線查證:三個工具本身都支援(claude --effort、codex -c model_reasoning_effort、agy 經 ai-hub 的 effort),派工腳本都沒帶。
+- #114 落地(9bf6020):票加獨立欄位 `effort`(不用 model 後綴,D-018:model 格被多處當模型 id 讀);claude-code → `--effort`,codex → `-c model_reasoning_effort="…"`;取值順序 票 > board/config.json `effort.implement` > 不帶(與今天逐字相同);不合法值 rc 2 不派。agy 本票只記不做。
+- **推翻 D-045 / #94「cost[] 每列 14 鍵」**:改為 15 鍵,多 `effort`(未指定為 null);worker 的 agent.start/done/failed 事件也帶 effort。
