@@ -1,8 +1,8 @@
-"""#94 成本帳一列一形:cost[] 每列 14 鍵、outcome 只收登記字、token 取 modelUsage 全模型加總、
+"""#94 成本帳一列一形:cost[] 每列 15 鍵(#114 A9 加 effort)、outcome 只收登記字、token 取 modelUsage 全模型加總、
 ticket.cost 事件帶整列、每個派工點填 outcome / run_id、關票寫 cost_total。
 
 ## 驗收表(票面每一條一列;期望值全部取自票面字面或手算,不從被測程式算回來)
-C1 | unit   | cost 帶信封 session_id=s-1 + --outcome handed-in --run-id r-1   | 列鍵集合 == 14 鍵、三新鍵值對上      | 票面 C1 字面
+C1 | unit   | cost 帶信封 session_id=s-1 + --outcome handed-in --run-id r-1   | 列鍵集合 == 15 鍵、三新鍵值對上      | 票面 C1 字面
 C1 | unit   | cost 三旗標都不給、不帶信封                                    | 三新鍵與 token 四欄皆 None            | 票面 C1 字面
 C2 | unit   | 每個登記字(配它所屬的角色)各寫一列                            | 都 rc=0                               | 票面 C2 登記表
 C2 | unit   | --outcome passed                                               | rc=2、stderr 印整張表、cost/事件不多  | 票面 C2 字面
@@ -12,7 +12,7 @@ C4 | unit   | 寫一列後讀最後一筆 ticket.cost                           
 C5 | script | auto-fix 假 worker 交 / 不交;驗證者交;開題者判 accepted / 不寫 TRIAGE;review pass;land 綠 / 全套紅 | 各列 outcome / run_id | 票面 C5 字面
 C6 | unit   | 預放六列後 close / set state Done;close 被拒                  | cost_total 逐格 == 手算;拒絕時沒有    | 票面 C6 手算(本檔 Close 類 docstring)
 C7 | unit   | cost 不動 state_version / review;close 只 +1                  | 版本差 0 / 1                          | 票面 C7 字面 + 既有 close 契約(+1)
-C8 | text   | SCHEMA / event.py / ticket.py cost --help                      | 含 14 鍵、登記字、cost_total、新旗標  | 票面 C8 字面
+C8 | text   | SCHEMA / event.py / ticket.py cost --help                      | 含 15 鍵、登記字、cost_total、新旗標  | 票面 C8 字面
 
 C9(既有斷言照綠)沒有案例:它在乾淨基底上本來就綠,不是「基底該紅」的驗收,由閘門跑既有那十支守。
 
@@ -45,7 +45,7 @@ from test_review import REVIEW_FAIL, ReviewBase  # noqa: E402
 TAGS = []
 
 ROW_KEYS = {"role", "round", "model", "tokens_in", "tokens_out", "cache_write", "cache_read",
-            "wall_seconds", "outcome", "run_id", "session_id", "by", "note", "at"}
+            "wall_seconds", "outcome", "run_id", "session_id", "by", "note", "effort", "at"}
 TOKENS = ("tokens_in", "tokens_out", "cache_write", "cache_read")
 # C2 登記表,照票面逐字抄;每個字配它所屬的角色(驗不驗角色是實作者的事,配對了兩種都過)。
 REGISTERED = (("worker", "handed-in"), ("worker", "no-patch"), ("worker", "apply-failed"),
@@ -110,7 +110,7 @@ class CostBase(Sandbox):
 class TheRowHasOneShape(CostBase):
 
     def test_c1_new_keys_come_from_flags_and_the_envelope(self):
-        """C1 信封 session_id=s-1 + --outcome handed-in --run-id r-1 → 14 鍵、三新鍵對上。"""
+        """C1 信封 session_id=s-1 + --outcome handed-in --run-id r-1 → 15 鍵、三新鍵對上。"""
         path = self.envelope_file(envelope("x", 1, 2, 3, 4, duration_ms=1000)
                                   .replace("00000000-0000-0000-0000-000000000000", "s-1"))
         done = self.cost("--from-envelope", path, "--outcome", "handed-in", "--run-id", "r-1")
@@ -219,6 +219,40 @@ class AutoFixRowsHaveOutcome(AutoFixBase):
         self.assertEqual(len(rows), 1, rows)
         self.assertEqual(rows[0].get("outcome"), "no-patch")
         self.assertTrue(rows[0].get("run_id"), rows[0])
+
+
+class AutoFixWorkerCarriesTheEffort(AutoFixBase):
+    """#114 A9(T5):有 effort 時 worker 的 agent.start / agent.done 帶 `effort`、cost 列
+    15 鍵且 `effort` 對上;沒有 effort 的對照組事件沒有這一鍵、cost 列 `effort` 是 null。"""
+
+    def run_one(self, **fields):
+        self.set_worker(WORKER_ROUND_ONE_COSTS.replace(
+            "@ENVELOPE@", envelope("done", 21, 4242, 1000, 50000, duration_ms=9000)))
+        self.ticket_ready(**fields)
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        rows = [row for row in self.load_ticket("1").get("cost") or []
+                if row.get("role") == "worker"]
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(set(rows[-1]), ROW_KEYS)
+        agents = {row["kind"]: row for row in self.events()
+                  if row["kind"] in ("agent.start", "agent.done")
+                  and row.get("role", "worker") == "worker"}
+        self.assertEqual(sorted(agents), ["agent.done", "agent.start"], self.events())
+        return rows[-1], agents
+
+    def test_a9_with_effort_the_events_and_the_row_carry_it(self):
+        """**變異 M4**:auto-fix 不把 effort 交給 cost → 列 effort 是 null,紅。"""
+        row, agents = self.run_one(effort="high")
+        self.assertEqual(row["effort"], "high")
+        for kind, event in agents.items():
+            self.assertEqual(event.get("effort"), "high", kind)
+
+    def test_a9_without_effort_there_is_no_event_key_and_the_row_is_null(self):
+        row, agents = self.run_one()
+        self.assertIsNone(row["effort"])
+        for kind, event in agents.items():
+            self.assertNotIn("effort", event, kind)
 
 
 class TriageAndVerifierRows(TriageBase):
@@ -473,7 +507,7 @@ class VersionsDoNotMove(ClosableTicket, CostBase):
 class TheContractIsWrittenDown(CostBase):
 
     def test_c8_schema_event_kinds_and_usage_name_the_new_shape(self):
-        """C8 SCHEMA 成本列有 14 鍵與登記表、有 cost_total 列;event.py 註解;cost --help 列新旗標。"""
+        """C8 SCHEMA 成本列有 15 鍵與登記表、有 cost_total 列;event.py 註解;cost --help 列新旗標。"""
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         with open(os.path.join(root, "tickets", "SCHEMA.md"), encoding="utf-8") as handle:
             schema = handle.read()

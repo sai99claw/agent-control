@@ -267,6 +267,7 @@ except (OSError, ValueError):
     ticket = {}
 print("T_MODEL=%s" % shlex.quote(str(ticket.get("model") or "")))
 print("T_TOOL=%s" % shlex.quote(str(ticket.get("tool") or "")))
+print("TK_EFFORT=%s" % shlex.quote(str(ticket.get("effort") or "")))
 PY
 )"
 IS_CODEX=""
@@ -277,6 +278,27 @@ if [ -n "$IS_CODEX" ]; then
         echo "auto-fix: #$ID 票的 model=$T_MODEL 與 tool=$T_TOOL 對不起來 —— 不派、票不動" >&2
         exit 2
     }
+fi
+# worker 的推理強度(#114):票的 `effort` > `board/config.json` 的 `effort.implement` > 無。
+# 無 = 命令與今天逐字相同。不在該 tool 的合法值表就在動票之前停 —— 表只在 ticket.py。
+T_EFFORT=$TK_EFFORT
+EFFORT_SRC=票
+if [ -z "$T_EFFORT" ]; then
+    T_EFFORT=$(cfg effort.implement "")
+    EFFORT_SRC=config
+fi
+if [ -n "$T_EFFORT" ]; then
+    _emodel=opus
+    [ -z "$IS_CODEX" ] || _emodel=$T_MODEL
+    python3 "$AC/ticket.py" agent-command --model "$_emodel" --tool "$T_TOOL" --base claude \
+            --effort "$T_EFFORT" >/dev/null || {
+        echo "auto-fix: #$ID effort=$T_EFFORT(來源 $EFFORT_SRC)不合 tool=${T_TOOL:-claude-code} —— 不派、票不動" >&2
+        exit 2
+    }
+    if [ -n "$IS_CODEX" ]; then
+        WORKER_CMD=$(python3 "$AC/ticket.py" agent-command --model "$T_MODEL" --tool "$T_TOOL" \
+                --effort "$T_EFFORT") || exit 2
+    fi
 fi
 # 副本/worktree 的根:環境變數 > board/config.json 的 `worktree_dir` > 預設 `../<主 repo>-wt`;
 # 相對路徑一律以**主 repo 根**解析(#38)。以前用 `$ROOT` 拼:在票 worktree 裡跑時 `$ROOT`
@@ -328,20 +350,20 @@ harvest_result() {   # $1 = EVIDENCE(可以不存在) $2 = 輸出 json $3 = 角�
         || echo "auto-fix: result 抽不出來($1)—— 不擋流程" >&2
 }
 
-write_cost() {   # $1 = 角色  $2 = 第幾輪  $3 = 模型  $4 = 信封(log)  $5 = 量到的秒數  $6 = 結局
+write_cost() {   # $1 = 角色  $2 = 第幾輪  $3 = 模型  $4 = 信封(log)  $5 = 量到的秒數  $6 = 結局  $7 = effort(可空)
     # 一次 headless 派工的 token 與時鐘進票的 `cost[]`(D-032)。信封在 log 裡:stdout 與
     # stderr 混寫,`ticket.py cost` 取最後一行 `type=result` 的那一行;讀不到就記 null。
     # 結局只收登記表的字(#94 C2,tickets/SCHEMA.md 成本那一列)。
     python3 "$AC/ticket.py" cost "$ID" --role "$1" --round "$2" --model "$3" \
         --by auto-fix.sh --from-envelope "$4" --wall-seconds "$5" \
-        --outcome "$6" --run-id "$RUN_ID" >/dev/null \
+        --outcome "$6" --run-id "$RUN_ID" --effort "${7:-}" >/dev/null \
         || echo "auto-fix: #$ID 的 cost 寫不進票($1 第 $2 輪)—— 不擋流程" >&2
 }
 
 worker_cost() {   # $1 = 結局;run_worker 記下的那一次 worker 寫一列(一次一列,寫過就清掉)
     # worker 的結局要等收件才知道(#94 C5a),所以 run_worker 只記秒數,這裡才寫。
     [ -n "${W_COST_LOG:-}" ] || return 0
-    write_cost worker "$r" "$WORKER_MODEL" "$W_COST_LOG" "$W_COST_SECS" "$1"
+    write_cost worker "$r" "$WORKER_MODEL" "$W_COST_LOG" "$W_COST_SECS" "$1" "$T_EFFORT"
     W_COST_LOG=""
 }
 
@@ -954,7 +976,7 @@ elif [ -n "$T_MODEL" ] && [ "${T_TOOL:-claude-code}" = claude-code ]; then
     # `--model` 換成票的,換法只由 `ticket.py agent-command --swap-model` 決定
     # (consolidate-memory.sh 同一支)。規則包、事件、cost 跟著記票的 model。
     WORKER_CMD=$(python3 "$AC/ticket.py" agent-command --model "$T_MODEL" --tool "$T_TOOL" \
-            --base "$WORKER_CMD" --swap-model) || {
+            --base "$WORKER_CMD" --swap-model --effort "$T_EFFORT") || {
         echo "auto-fix: #$ID 票的 model=$T_MODEL 換不進 worker.command —— 不派、票不動" >&2
         exit 2
     }
@@ -963,6 +985,11 @@ elif [ -n "$T_MODEL" ] && [ "${T_TOOL:-claude-code}" = claude-code ]; then
     echo "auto-fix: #$ID 照票的 model=$T_MODEL 起 worker(worker.command 的 --model 換成它)"
 elif [ "$WORKER_MODEL" != "$MODEL" ]; then
     echo "auto-fix: 警告:routing.implement=$MODEL,但 worker.command 實際起的是 $WORKER_MODEL —— agent.start/done/failed 的 model 記後者"
+fi
+# 票沒寫 model 的 claude-code 票:不換 --model,只帶 --effort(#114 A7)。
+if [ -z "$IS_CODEX" ] && [ -z "$T_MODEL" ] && [ -n "$T_EFFORT" ]; then
+    WORKER_CMD=$(python3 "$AC/ticket.py" agent-command --model "$WORKER_MODEL" --tool "$T_TOOL" \
+            --base "$WORKER_CMD" --effort "$T_EFFORT") || exit 2
 fi
 # 票的分支名**只有一個來源:票的 `branch` 欄**(#53,D-018;`apply.sh` 開分支時填)。
 # 空著才退回 `t<n>` —— 下游專案用 `t<n>-<slug>` 的票,寫死 `t$ID` 就找不到分支。
@@ -1342,15 +1369,17 @@ PY
 
 run_worker() {   # $1 = 命令  $2 = 派工文;設定 WRC、WORKER_LOG 由呼叫端先給
     ev agent.start --ticket "$ID" --model "$WORKER_MODEL" \
-        --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix
+        --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix ${T_EFFORT:+--kv effort=$T_EFFORT}
     WSTART=$(date +%s)
     WRC=$(run_agent "$1" "$2" "$FIX" worker "$r" "$WORKER_LOG" 1)
     if [ "$WRC" -eq 0 ]; then
         ev agent.done --ticket "$ID" --model "$WORKER_MODEL" \
-            --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix
+            --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix \
+            ${T_EFFORT:+--kv effort=$T_EFFORT}
     else
         ev agent.failed --ticket "$ID" --model "$WORKER_MODEL" \
-            --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix
+            --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix \
+            ${T_EFFORT:+--kv effort=$T_EFFORT}
     fi
     W_COST_LOG=$WORKER_LOG
     W_COST_SECS=$(( $(date +%s) - WSTART ))
@@ -1791,12 +1820,14 @@ PY
 
     if [ -n "$DRY" ]; then
         echo "auto-fix: worker 命令 —— $WORKER_CMD"
+        [ -z "$T_EFFORT" ] || echo "auto-fix: effort 來源=$EFFORT_SRC $T_EFFORT"
         echo "auto-fix: --dry-run —— 不起 worker 也不起驗證者。派工文在上面那一份。"
         ROUND_RC=0
         return 1
     fi
 
     echo "auto-fix: 起第 $r 輪的 worker —— $WORKER_CMD(cwd $FIX,派工文從 stdin 餵)"
+    [ -z "$T_EFFORT" ] || echo "auto-fix: effort 來源=$EFFORT_SRC $T_EFFORT"
     # 第 1 輪:票 Ready → Running(#40)。擺在 `--dry-run` 那一手**之後**(dry-run 不動票)、
     # 起 worker **之前**(worker 跑的時候票就該是 Running)。第 2 輪起票已經不是 Ready 了。
     if [ "$r" -eq 1 ]; then
@@ -1821,13 +1852,21 @@ PY
             || echo "auto-fix: 票的 model 改不動" >&2
         python3 "$AC/ticket.py" set "$ID" tool '"claude-code"' >/dev/null 2>&1 \
             || echo "auto-fix: 票的 tool 改不動" >&2
+        # 票的 effort 在 claude-code 的合法值表內就留著;不在(例 ultra)設成 null(#114 A10)。
+        Q_EFFORT=""
+        if [ -n "$TK_EFFORT" ] && ! python3 "$AC/ticket.py" agent-command --model opus \
+                --tool claude-code --base claude --effort "$TK_EFFORT" >/dev/null 2>&1; then
+            python3 "$AC/ticket.py" set "$ID" effort null >/dev/null 2>&1 \
+                || echo "auto-fix: 票的 effort 改不動" >&2
+            Q_EFFORT=",原 effort $TK_EFFORT"
+        fi
         python3 "$AC/ticket.py" set "$ID" state Ready >/dev/null 2>&1 \
             || echo "auto-fix: 票狀態改不動(Ready)" >&2
         worker_cost error
         attempt_failed codex-quota
         shed_copies "$FIX"
         post "codex 額度用完,已改 opus" \
-             "#$ID codex 額度用完,已改 opus,重跑 auto-fix:sh scripts/auto-fix.sh $ID(原 model $T_MODEL)" \
+             "#$ID codex 額度用完,已改 opus,重跑 auto-fix:sh scripts/auto-fix.sh $ID(原 model $T_MODEL$Q_EFFORT)" \
              "$WORKER_LOG"
         ROUND_RC=7
         return 1
@@ -2217,6 +2256,7 @@ PY
     echo "auto-fix: 批次 $B_TAGS 派工文 -> $(rel_root "$DISPATCH")"
     if [ -n "$DRY" ]; then
         echo "auto-fix: worker 命令 —— $WORKER_CMD"
+        [ -z "$T_EFFORT" ] || echo "auto-fix: effort 來源=$EFFORT_SRC $T_EFFORT"
         echo "auto-fix: --dry-run —— 不起 worker。派工文在上面那一份。"
         exit 0
     fi
@@ -2224,7 +2264,8 @@ PY
     batch_cost() {   # $1 = 結局
         python3 "$AC/ticket.py" cost "$ID" --role worker --round "$r" --model "$WORKER_MODEL" \
             --by auto-fix.sh --from-envelope "$WORKER_LOG" --wall-seconds "$W_COST_SECS" \
-            --outcome "$1" --run-id "$RUN_ID" --note "batch $B_STAMP $B_TAGS" >/dev/null \
+            --outcome "$1" --run-id "$RUN_ID" --note "batch $B_STAMP $B_TAGS" \
+            --effort "$T_EFFORT" >/dev/null \
             || echo "auto-fix: #$ID 的 cost 寫不進票(批次 worker)—— 不擋流程" >&2
     }
     keep() {   # 副本的 patch / EVIDENCE 收進紀錄目錄(不論交得怎樣都留)
@@ -2237,16 +2278,19 @@ PY
     echo "auto-fix: 逾時來源=$TIMEOUT_SRC $WORKER_TIMEOUT 秒" >&2
     WORKER_LOG=$BDIR/worker-round$r.log
     ev agent.start --ticket "$ID" --model "$WORKER_MODEL" \
-        --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix --kv batch="$B_TAGS"
+        --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix --kv batch="$B_TAGS" \
+        ${T_EFFORT:+--kv effort=$T_EFFORT}
     WSTART=$(date +%s)
     WRC=$(run_agent "$WORKER_CMD" "$DISPATCH" "$FIX" worker "$r" "$WORKER_LOG" 1)
     W_COST_SECS=$(( $(date +%s) - WSTART ))
     if [ "$WRC" -eq 0 ]; then
         ev agent.done --ticket "$ID" --model "$WORKER_MODEL" \
-            --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix --kv batch="$B_TAGS"
+            --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix --kv batch="$B_TAGS" \
+            ${T_EFFORT:+--kv effort=$T_EFFORT}
     else
         ev agent.failed --ticket "$ID" --model "$WORKER_MODEL" \
-            --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix --kv batch="$B_TAGS"
+            --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix --kv batch="$B_TAGS" \
+            ${T_EFFORT:+--kv effort=$T_EFFORT}
     fi
     keep
     PATCH_OUT=$BDIR/patch-round$r.diff
