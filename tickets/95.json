@@ -32,12 +32,12 @@
     "tests/test_guard_main.py"
   ],
   "role": "worker",
-  "model": "codex:gpt-5.6-sol",
-  "tool": "codex",
+  "model": "opus",
+  "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "ec1468647e892efc4349ad122a7649bae57d292b",
-  "state": "Ready",
-  "state_version": 36,
+  "base_sha": "470137fcef98f2d65468987078e0889cd208435a",
+  "state": "Done",
+  "state_version": 55,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -102,5 +102,168 @@
   },
   "interface_fixed": true,
   "effort": "high",
-  "priority": "P2"
+  "priority": "P2",
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "codex:gpt-5.6-sol",
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 4,
+      "outcome": "error",
+      "run_id": "20261017-222100-67392",
+      "session_id": null,
+      "by": "auto-fix.sh",
+      "note": "reports/t95/20261017-222100-67392/worker-round1.log 裡沒有 JSON 信封",
+      "effort": "high",
+      "at": "2026-10-17T22:21:05+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 84,
+      "tokens_out": 53954,
+      "cache_write": 134126,
+      "cache_read": 3872196,
+      "wall_seconds": 551,
+      "outcome": "handed-in",
+      "run_id": "20261017-222106-67594",
+      "session_id": "54e63e8c-f512-46f3-b76c-c7f7446e2f52",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-17T22:30:18+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 14,
+      "tokens_out": 6255,
+      "cache_write": 52264,
+      "cache_read": 321665,
+      "wall_seconds": 65,
+      "outcome": "pass",
+      "run_id": "20261017-223045-78133",
+      "session_id": "f84431e2-6dd6-451b-b238-0a138aaac05b",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-17T22:34:27+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 14,
+      "tokens_out": 6175,
+      "cache_write": 55221,
+      "cache_read": 317086,
+      "wall_seconds": 63,
+      "outcome": "pass",
+      "run_id": "20261017-regen",
+      "session_id": "9b7838e0-34a4-497c-b934-27491e0b3e85",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-17T22:35:31+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1261,
+      "outcome": "pass",
+      "run_id": "20261017-223531-99988",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-17T22:56:32+08:00"
+    }
+  ],
+  "branch": "t95",
+  "patch_ref": "reports/t95/regen-20261017/regen.diff",
+  "repair_round": 1,
+  "owner": "main",
+  "gate": {
+    "rc": 0,
+    "sha": "f8dc8b45f4b515ce82580a9f1dbf879605406d80",
+    "run_id": "20261017-223045-78133",
+    "at": "2026-10-17T22:33:21+08:00"
+  },
+  "review_request": {
+    "run_id": "20261017-regen",
+    "owner_id": "review.sh",
+    "attempt": 0,
+    "state_version": 52,
+    "face": "442480fa8282e43742e6a2116fd0d61ba292d5d3c99733dff7bb75ca05d7313a",
+    "patch_id": "50d9c274798fef03f2d4c8ab5eee4a5b394fbc60",
+    "sha": "f8dc8b45f4b515ce82580a9f1dbf879605406d80"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "029182e8600d75ea226f54188df69ed46004bb22",
+    "note": "reports/t95/20261017-regen/REVIEW.md",
+    "at": "2026-10-17T22:56:32+08:00",
+    "state_version": 55,
+    "patch_id": "50d9c274798fef03f2d4c8ab5eee4a5b394fbc60",
+    "face": "442480fa8282e43742e6a2116fd0d61ba292d5d3c99733dff7bb75ca05d7313a"
+  },
+  "cost_total": {
+    "calendar_seconds": 952221,
+    "wall_seconds": 1944,
+    "runs": 5,
+    "worker_rounds": 1,
+    "objections": 0,
+    "by_role": {
+      "worker": {
+        "runs": 2,
+        "wall_seconds": 555,
+        "tokens_in": 84,
+        "tokens_out": 53954,
+        "cache_write": 134126,
+        "cache_read": 3872196,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "error": 1,
+          "handed-in": 1
+        }
+      },
+      "reviewer": {
+        "runs": 2,
+        "wall_seconds": 128,
+        "tokens_in": 28,
+        "tokens_out": 12430,
+        "cache_write": 107485,
+        "cache_read": 638751,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 2
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 1261,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-17T22:56:32+08:00"
+  }
 }

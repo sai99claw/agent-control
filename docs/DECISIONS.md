@@ -349,3 +349,8 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - ③ 開題實跑證據有效性,原話(選項)「相關檔沒變就算(建議)」:sha 是 main 祖先、且本票寫入範圍與 test_plan 指到的測試自該 sha 無變動即有效;證明不了才補跑。
 - ④ #93,原話(選項)「繼續凍結到 DAG 排程落地(建議)」。
 - codex 在 main 工作樹留下的 auto-fix.sh / test_auto_fix_codex.py 兩處修正存為 reports/t115/main-wt-fix-20261016.diff,附給 #115(N1);main 工作樹已還原。
+
+## D-051(2026-10-17)code-map 重產歸腳本,不歸 worker 也不歸主線
+- 起因:#116、#95 閘門都因 code-map 索引過期(rc 4,機械格不合)停下,主線在副本跑 `repo-map.py build`、經 apply.sh 收進分支(reports/t116、t95 的 regen-20261017)。
+- 原話:「應該要改到 完工後要執行的腳本內，或是改到 測試全綠後 上主線的腳本內」
+- 落實:#96(已落地)apply 單票路同 commit 重產;#129 補 apply --batch 與 land.sh 合併後過期自動重產(只動 code-map/,其他差異照擋)。順序 #101 → #129。

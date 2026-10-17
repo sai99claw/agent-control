@@ -33,19 +33,69 @@
     "docs/WORKFLOW.md"
   ],
   "role": "worker",
-  "model": "codex:gpt-5.6-sol",
-  "tool": "codex",
+  "model": "opus",
+  "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "ec1468647e892efc4349ad122a7649bae57d292b",
-  "state": "Ready",
-  "state_version": 38,
+  "base_sha": "029182e8600d75ea226f54188df69ed46004bb22",
+  "state": "Done",
+  "state_version": 55,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
-    "tags": [],
-    "run": "",
-    "notes": ""
+    "files": [
+      "verify/dispatch/test_ticket_96.py"
+    ],
+    "tags": [
+      "dry-run-keeps-copies",
+      "apply-regen-index"
+    ],
+    "run": "python3 scripts/verify.py --tag dry-run-keeps-copies --tag apply-regen-index",
+    "notes": "Integration cases on throwaway sandboxes (tests/control_harness.Sandbox; outer AC_* stripped). A1-A3 reuse tests/test_auto_fix.AutoFixBase with fake worker shells; A4-A7 reuse tests/test_apply.ApplyBase plus a copy of the real scripts/repo-map.py, catalog and fresh index committed to the sandbox main (TheGateRefusesAStaleIndex shape). Patches are built with diff -ruN base work in a scratch dir. Red on base: A1, A4, A5, A7. A2, A3 (both cases) and A6 are already green on base and serve as regression locks. A5 runs the worktree's own gate.sh; each case takes a few seconds.",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-17T23:34:31+08:00",
+      "files": [
+        "verify/dispatch/test_ticket_96.py"
+      ],
+      "base_ref": "029182e8600d75ea226f54188df69ed46004bb22",
+      "base_sha": "029182e8600d75ea226f54188df69ed46004bb22",
+      "candidate": "../agent-control-wt/t96",
+      "candidate_sha": "3264058f048e0382a738ca5663cc6d022162b5cc",
+      "baseline": {
+        "red": [
+          "verify.dispatch.test_ticket_96.ApplyRebuildsTheCodeMap.test_a4_a_stale_code_map_is_rebuilt_into_the_same_commit",
+          "verify.dispatch.test_ticket_96.ApplyRebuildsTheCodeMap.test_a5_the_gate_on_that_branch_does_not_refuse_a_stale_index",
+          "verify.dispatch.test_ticket_96.ApplyRebuildsTheCodeMap.test_a7_a_failed_rebuild_does_not_block_the_apply",
+          "verify.dispatch.test_ticket_96.DryRunKeepsTheRoundCopies.test_a1_a_dry_run_keeps_the_worker_patch_and_work_marker"
+        ],
+        "red_lines": [
+          "verify.dispatch.test_ticket_96.ApplyRebuildsTheCodeMap.test_a4_a_stale_code_map_is_rebuilt_into_the_same_commit: AssertionError: 1 != 0 : 副本的索引仍過期:repo-map: 新增的已管理檔沒進索引:tests/test_memory_new.py",
+          "verify.dispatch.test_ticket_96.ApplyRebuildsTheCodeMap.test_a5_the_gate_on_that_branch_does_not_refuse_a_stale_index: AssertionError: 'code-map 索引過期' unexpectedly found in 'repo-map: 新增的已管理檔沒進索引:tests/test_memory_new.py\\nrepo-map: code-map/INDEX.md 與重生出來的不一樣\\nrepo-map: code-map 索引過期 —— 重生:python3 scripts/repo-map.py build,連同產出物一起 commit\\ngate: 機械格不合 —— code-map 索引過期(上面 repo-map: 那幾行);重生:python3 scripts/repo-map.py build,連同產出物一起 commit\\n'",
+          "verify.dispatch.test_ticket_96.ApplyRebuildsTheCodeMap.test_a7_a_failed_rebuild_does_not_block_the_apply: AssertionError: '索引沒重產' not found in 'apply: 票 #1  patch ghost.diff  sha256 40a37b1ce3…\\napply: 開了分支 t1 與副本 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpv16a11gt/repo/../repo-wt/t1(從 main)\\napply: 白名單外的改動(不擋,記進 result 的 extra_paths、交覆核者逐檔看):\\napply:   code-map/catalog.json\\napply: #1 -> t1 919b4fd 已 commit(1 個 commit)\\napply: #1 patch_ref = ../ghost.diff\\nticket: result 抽不出來(no-evidence)—— /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpv16a11gt/EVIDENCE.md;不擋流程\\nticket: EVIDENCE 少了這幾段:excluded、gate、mutations、patch_sha256、repro(不擋;見角色卡「必備五段」)\\nticket: result -> /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpv16a11gt/repo/reports/t1/20261017-233414-4916/result-round1.json\\napply: 下一步 —— (cd /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpv16a11gt/repo/../repo-wt/t1 && sh scripts/gate.sh --branch --ticket 1)\\napply:       閘門綠了主線覆核記 review,再落地:\\n落地入口:sh scripts/land.sh t1\\napply: 找不到 EVIDENCE /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpv16a11gt/EVIDENCE.md —— 記憶 0 筆\\n'",
+          "verify.dispatch.test_ticket_96.DryRunKeepsTheRoundCopies.test_a1_a_dry_run_keeps_the_worker_patch_and_work_marker: AssertionError: False is not true : --dry-run 刪了 worker 交的 patch-round1.diff"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 8,
+        "skipped": 0,
+        "log": "../agent-control-wt/t96/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 8,
+        "skipped": 0,
+        "log": "../agent-control-wt/t96/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "verify_strings": [
     {
@@ -80,5 +130,196 @@
     "D-031",
     "D-046",
     "D-050"
-  ]
+  ],
+  "cost": [
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 56,
+      "tokens_out": 27473,
+      "cache_write": 103174,
+      "cache_read": 2276154,
+      "wall_seconds": 322,
+      "outcome": "handed-in",
+      "run_id": "20261017-225633-34370",
+      "session_id": "0c41a1a8-6517-415d-8eda-15b9fbea34bb",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-17T23:01:56+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "codex:gpt-5.6-sol",
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 4,
+      "outcome": "error",
+      "run_id": "20261017-225633-34370",
+      "session_id": null,
+      "by": "auto-fix.sh",
+      "note": "reports/t96/20261017-225633-34370/worker-round1.log 裡沒有 JSON 信封",
+      "effort": "high",
+      "at": "2026-10-17T23:01:57+08:00"
+    },
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 74,
+      "tokens_out": 24626,
+      "cache_write": 97837,
+      "cache_read": 3128806,
+      "wall_seconds": 1373,
+      "outcome": "handed-in",
+      "run_id": "20261017-230157-38085",
+      "session_id": "8e837274-99d9-486b-84c5-7f4533210e95",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-17T23:24:51+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 102,
+      "tokens_out": 44191,
+      "cache_write": 150819,
+      "cache_read": 5595255,
+      "wall_seconds": 1373,
+      "outcome": "handed-in",
+      "run_id": "20261017-230157-38085",
+      "session_id": "46d0ea97-41c0-4ec2-a24d-cd0f5e5b65f0",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-17T23:24:52+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 20,
+      "tokens_out": 5765,
+      "cache_write": 55938,
+      "cache_read": 508545,
+      "wall_seconds": 78,
+      "outcome": "pass",
+      "run_id": "20261017-232452-45732",
+      "session_id": "0d98959d-7693-45f0-aec3-ed970306290d",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-17T23:35:51+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1327,
+      "outcome": "pass",
+      "run_id": "20261017-233551-7239",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-17T23:57:58+08:00"
+    }
+  ],
+  "branch": "t96",
+  "patch_ref": "../agent-control-wt/fix-t96/round1/patch-round1.diff",
+  "gate": {
+    "rc": 0,
+    "sha": "3264058f048e0382a738ca5663cc6d022162b5cc",
+    "run_id": "20261017-232452-45732",
+    "at": "2026-10-17T23:34:31+08:00"
+  },
+  "repair_round": 1,
+  "review_request": {
+    "run_id": "20261017-232452-45732",
+    "owner_id": "review.sh",
+    "attempt": 0,
+    "state_version": 52,
+    "face": "3d74937036a41e416be044297ecd194127fcd518e62ca8786da567a42bd228dd",
+    "patch_id": "1d49cbe9d57cd473c619d3bd87f17102514f01db",
+    "sha": "3264058f048e0382a738ca5663cc6d022162b5cc"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "38bbd1bc972204225db1144b3e713fa74bc34fe4",
+    "note": "reports/t96/20261017-232452-45732/REVIEW.md",
+    "at": "2026-10-17T23:57:58+08:00",
+    "state_version": 55,
+    "patch_id": "1d49cbe9d57cd473c619d3bd87f17102514f01db",
+    "face": "3d74937036a41e416be044297ecd194127fcd518e62ca8786da567a42bd228dd"
+  },
+  "cost_total": {
+    "calendar_seconds": 955389,
+    "wall_seconds": 4477,
+    "runs": 6,
+    "worker_rounds": 1,
+    "objections": 0,
+    "by_role": {
+      "verifier": {
+        "runs": 2,
+        "wall_seconds": 1695,
+        "tokens_in": 130,
+        "tokens_out": 52099,
+        "cache_write": 201011,
+        "cache_read": 5404960,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 2
+        }
+      },
+      "worker": {
+        "runs": 2,
+        "wall_seconds": 1377,
+        "tokens_in": 102,
+        "tokens_out": 44191,
+        "cache_write": 150819,
+        "cache_read": 5595255,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "error": 1,
+          "handed-in": 1
+        }
+      },
+      "reviewer": {
+        "runs": 1,
+        "wall_seconds": 78,
+        "tokens_in": 20,
+        "tokens_out": 5765,
+        "cache_write": 55938,
+        "cache_read": 508545,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 1327,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-17T23:57:58+08:00"
+  }
 }

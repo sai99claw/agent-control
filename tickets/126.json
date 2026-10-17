@@ -38,19 +38,86 @@
     "docs/WORKFLOW.md"
   ],
   "role": "worker",
-  "model": "codex:gpt-5.6-sol",
-  "tool": "codex",
+  "model": "opus",
+  "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "4df848f4254ae20e4796c2a2206c93eddddb45fb",
-  "state": "Ready",
-  "state_version": 5,
+  "base_sha": "8bba3a475a2f84e4b9972cfcf2c068feed85b1d5",
+  "state": "Done",
+  "state_version": 21,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
-    "tags": [],
-    "run": "",
-    "notes": ""
+    "files": [
+      "verify/dispatch/test_ticket_126.py"
+    ],
+    "tags": [
+      "verifier-gap"
+    ],
+    "run": "python3 scripts/verify.py --tag verifier-gap",
+    "notes": "Sandbox-only (tests/control_harness.Sandbox, fake sh agents, no real model); outer AC_* are stripped by Sandbox.env. ~40s. Gate cases (A1-A3) rebuild VerifierCasesAtTheGate's fixture; A2 fallback commits a fake scripts/verify-case.py in the sandbox. A5/A7 cases run first_round() for a real branch + gate, then overwrite that gate status.json failures[] with hand-written LINT rows of the A1 shape. Worker agent.start carries no role field, so 'role=worker' is matched as role absent or 'worker'. Not covered: verifier hand-in + gate rerun after an all-LINT round (existing test_defect path tests own it).",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-17T18:01:13+08:00",
+      "files": [
+        "verify/dispatch/test_ticket_126.py"
+      ],
+      "base_ref": "8bba3a475a2f84e4b9972cfcf2c068feed85b1d5",
+      "base_sha": "8bba3a475a2f84e4b9972cfcf2c068feed85b1d5",
+      "candidate": "../agent-control-wt/t126",
+      "candidate_sha": "2de88d95d29cd1a4544f59cf2e7ac55d56bab428",
+      "baseline": {
+        "red": [
+          "verify.dispatch.test_ticket_126.AnAllLintRoundOnlyDispatchesTheVerifier.test_a5_a_mixed_red_list_dispatches_the_worker_and_marks_the_lint_row",
+          "verify.dispatch.test_ticket_126.AnAllLintRoundOnlyDispatchesTheVerifier.test_a5_a_no_cases_row_alone_sends_only_the_verifier",
+          "verify.dispatch.test_ticket_126.AnAllLintRoundOnlyDispatchesTheVerifier.test_a5_all_lint_with_a_baseline_takes_the_test_defect_packet",
+          "verify.dispatch.test_ticket_126.AnAllLintRoundOnlyDispatchesTheVerifier.test_a5_all_lint_with_no_baseline_sends_only_the_plain_verifier",
+          "verify.dispatch.test_ticket_126.EveryRoundDispatchesTheMissingVerifier.test_a4_needs_verifier_missing_starts_none_and_names_d028",
+          "verify.dispatch.test_ticket_126.EveryRoundDispatchesTheMissingVerifier.test_a4_round_two_starts_exactly_one_verifier_and_says_so",
+          "verify.dispatch.test_ticket_126.LintRedEntersTheRedList.test_a1_an_f1_case_is_one_lint_row_naming_file_line_and_log",
+          "verify.dispatch.test_ticket_126.LintRedEntersTheRedList.test_a3_rows_equal_the_blocking_count_and_hints_are_not_rows",
+          "verify.dispatch.test_ticket_126.MissingCasesEnterTheRedList.test_a2_a_missing_case_file_is_a_relative_line_zero_row",
+          "verify.dispatch.test_ticket_126.MissingCasesEnterTheRedList.test_a2_an_unmatched_lint_failure_still_writes_exactly_one_row",
+          "verify.dispatch.test_ticket_126.MissingCasesEnterTheRedList.test_a2_declared_but_empty_files_is_one_no_cases_row",
+          "verify.dispatch.test_ticket_126.TheWorkflowDocSaysSo.test_a8_any_round_dispatches_the_missing_verifier",
+          "verify.dispatch.test_ticket_126.TheWorkflowDocSaysSo.test_a8_lint_red_is_a_lint_row_in_failures"
+        ],
+        "red_lines": [
+          "verify.dispatch.test_ticket_126.AnAllLintRoundOnlyDispatchesTheVerifier.test_a5_a_mixed_red_list_dispatches_the_worker_and_marks_the_lint_row: AssertionError: [] is not true : LINT 列旁邊沒有「驗證者的」:",
+          "verify.dispatch.test_ticket_126.AnAllLintRoundOnlyDispatchesTheVerifier.test_a5_a_no_cases_row_alone_sends_only_the_verifier: AssertionError: Lists differ: [{'ts': '2026-10-17T18:00:02+08:00', 'kind[141 chars]ix'}] != []",
+          "verify.dispatch.test_ticket_126.AnAllLintRoundOnlyDispatchesTheVerifier.test_a5_all_lint_with_a_baseline_takes_the_test_defect_packet: AssertionError: Lists differ: [{'ts': '2026-10-17T18:00:06+08:00', 'kind[141 chars]ix'}] != []",
+          "verify.dispatch.test_ticket_126.AnAllLintRoundOnlyDispatchesTheVerifier.test_a5_all_lint_with_no_baseline_sends_only_the_plain_verifier: AssertionError: Lists differ: [{'ts': '2026-10-17T18:00:09+08:00', 'kind[141 chars]ix'}] != []",
+          "verify.dispatch.test_ticket_126.EveryRoundDispatchesTheMissingVerifier.test_a4_needs_verifier_missing_starts_none_and_names_d028: AssertionError: 'D-028' not found in 'auto-fix: 逾時來源=config 120 秒\\nticket: #1 cost 的信封讀不到(reports/t1/20260921-100000-1/worker-round2.log 裡沒有 JSON 信封)—— token 欄記 null\\nauto-fix: 警告:沒有設 gate.rerun_cmd —— 退回 sh scripts/gate.sh --branch --ticket 1\\nauto-fix: 第 2 輪 rc 非零卻解析不出紅榜 —— 沒有歸因,停\\n' : auto-fix: #1 最新一輪 20260921-100000-1(gate)state=done rc=1 紅 1 條,第 1 輪(上限 3)",
+          "verify.dispatch.test_ticket_126.EveryRoundDispatchesTheMissingVerifier.test_a4_round_two_starts_exactly_one_verifier_and_says_so: AssertionError: 0 != 1 : auto-fix: #1 最新一輪 20260921-100000-1(gate)state=done rc=1 紅 1 條,第 1 輪(上限 3)",
+          "verify.dispatch.test_ticket_126.LintRedEntersTheRedList.test_a1_an_f1_case_is_one_lint_row_naming_file_line_and_log: AssertionError: 0 != 1 : failures[] 沒有 F1 那一列:[]",
+          "verify.dispatch.test_ticket_126.LintRedEntersTheRedList.test_a3_rows_equal_the_blocking_count_and_hints_are_not_rows: AssertionError: 0 != 1 : []",
+          "verify.dispatch.test_ticket_126.MissingCasesEnterTheRedList.test_a2_a_missing_case_file_is_a_relative_line_zero_row: AssertionError: 0 != 1 : []",
+          "verify.dispatch.test_ticket_126.MissingCasesEnterTheRedList.test_a2_an_unmatched_lint_failure_still_writes_exactly_one_row: AssertionError: 0 != 1 : []",
+          "verify.dispatch.test_ticket_126.MissingCasesEnterTheRedList.test_a2_declared_but_empty_files_is_one_no_cases_row: AssertionError: 0 != 1 : []",
+          "verify.dispatch.test_ticket_126.TheWorkflowDocSaysSo.test_a8_any_round_dispatches_the_missing_verifier: AssertionError: [] is not true : docs/WORKFLOW.md 沒有寫 needs_verifier 時任一輪都先派驗證者",
+          "verify.dispatch.test_ticket_126.TheWorkflowDocSaysSo.test_a8_lint_red_is_a_lint_row_in_failures: AssertionError: [] is not true : docs/WORKFLOW.md 沒有寫 LINT 列進 failures[]"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 21,
+        "skipped": 0,
+        "log": "../agent-control-wt/t126/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 21,
+        "skipped": 0,
+        "log": "../agent-control-wt/t126/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "feature": "auto-fix / gate",
   "effort": "high",
@@ -73,5 +140,185 @@
       "contains": "案例還沒交"
     },
     "verify-case-lint:(no-cases)"
-  ]
+  ],
+  "cost": [
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 106,
+      "tokens_out": 43268,
+      "cache_write": 156557,
+      "cache_read": 6194182,
+      "wall_seconds": 481,
+      "outcome": "handed-in",
+      "run_id": "20261017-170817-3492",
+      "session_id": "c1fe8236-3ab1-425f-8d30-cc7a1b62c37c",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-17T17:16:19+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "codex:gpt-5.6-sol",
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 5,
+      "outcome": "error",
+      "run_id": "20261017-170817-3492",
+      "session_id": null,
+      "by": "auto-fix.sh",
+      "note": "reports/t126/20261017-170817-3492/worker-round1.log 裡沒有 JSON 信封",
+      "effort": "high",
+      "at": "2026-10-17T17:16:20+08:00"
+    },
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 88,
+      "tokens_out": 46055,
+      "cache_write": 140023,
+      "cache_read": 5312635,
+      "wall_seconds": 1962,
+      "outcome": "handed-in",
+      "run_id": "20261017-171620-12356",
+      "session_id": "4bc40539-2c82-4f6a-8a58-6fdf7902b93a",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-17T17:49:03+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 126,
+      "tokens_out": 78443,
+      "cache_write": 266389,
+      "cache_read": 11785977,
+      "wall_seconds": 1961,
+      "outcome": "handed-in",
+      "run_id": "20261017-171620-12356",
+      "session_id": "fe2f392a-f63d-4ceb-b3b6-b44dc5c9c6b5",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-17T17:49:04+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 28,
+      "tokens_out": 11569,
+      "cache_write": 92839,
+      "cache_read": 963417,
+      "wall_seconds": 134,
+      "outcome": "pass",
+      "run_id": "20261017-174905-52305",
+      "session_id": "f5e8ba99-7d8c-4e5b-a371-db1197b98940",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-17T18:03:27+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1196,
+      "outcome": "pass",
+      "run_id": "20261017-180328-30129",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-17T18:23:24+08:00"
+    }
+  ],
+  "branch": "t126",
+  "patch_ref": "../agent-control-wt/fix-t126/round1/patch-round1.diff",
+  "gate": {
+    "rc": 0,
+    "sha": "2de88d95d29cd1a4544f59cf2e7ac55d56bab428",
+    "run_id": "20261017-174905-52305",
+    "at": "2026-10-17T18:01:13+08:00"
+  },
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "00077fcadfe36083a652f8be82f4a83a0c93c336",
+    "note": "reports/t126/20261017-174905-52305/REVIEW.md",
+    "at": "2026-10-17T18:23:24+08:00",
+    "state_version": 21
+  },
+  "cost_total": {
+    "calendar_seconds": 13768,
+    "wall_seconds": 5739,
+    "runs": 6,
+    "worker_rounds": 1,
+    "objections": 0,
+    "by_role": {
+      "verifier": {
+        "runs": 2,
+        "wall_seconds": 2443,
+        "tokens_in": 194,
+        "tokens_out": 89323,
+        "cache_write": 296580,
+        "cache_read": 11506817,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 2
+        }
+      },
+      "worker": {
+        "runs": 2,
+        "wall_seconds": 1966,
+        "tokens_in": 126,
+        "tokens_out": 78443,
+        "cache_write": 266389,
+        "cache_read": 11785977,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "error": 1,
+          "handed-in": 1
+        }
+      },
+      "reviewer": {
+        "runs": 1,
+        "wall_seconds": 134,
+        "tokens_in": 28,
+        "tokens_out": 11569,
+        "cache_write": 92839,
+        "cache_read": 963417,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 1196,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-17T18:23:24+08:00"
+  }
 }
