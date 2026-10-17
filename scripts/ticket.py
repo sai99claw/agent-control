@@ -253,7 +253,7 @@ CREATE_FLAGS = {
     "--model": "model", "--tool": "tool", "--base-sha": "base_sha",
     "--state": "state", "--feature": "feature", "--outline": "outline",
     "--test-plan": "test_plan", "--branch": "branch", "--workspace": "workspace",
-    "--effort": "effort",
+    "--effort": "effort", "--complexity": "complexity",
     # `verify` 那一格是**驗證者**寫的(D-010):它交的不是判決,是「案例在哪、
     # 怎麼跑」。帶點的名字寫進巢狀的 `verify` 底下,見 `put_field`。
     "--verify-run": "verify.run", "--verify-note": "verify.notes",
@@ -297,6 +297,7 @@ FLAG_NOTE = {
     "--model": "模型",
     "--tool": "工具:claude-code / codex / …",
     "--effort": "推理強度;合法值依票的 tool(表在 `EFFORT_LEVELS`,不合法 rc=2);不給 = 不帶旗標",
+    "--complexity": "simple / complex(選填,#116):選路器據它挑鏈與升級 effort;其他值 rc=2",
     "--base-sha": "基準 sha;不給就自己取主線的 HEAD",
     "--state": "初始狀態,預設 Draft(%s)" % " / ".join(STATES),
     "--feature": "對到哪個產品功能",
@@ -651,6 +652,11 @@ def cmd_create(argv, stdin=sys.stdin, stdout=sys.stdout):
         if why:
             sys.stderr.write("ticket: %s\n" % why)
             return 2
+    if not ticket.get("complexity"):
+        ticket.pop("complexity", None)
+    elif ticket["complexity"] not in COMPLEXITY:
+        sys.stderr.write("ticket: %s\n" % complexity_problem(ticket["complexity"]))
+        return 2
     ticket["depends_on"] = normalise_depends(ticket.get("depends_on") or [])
     if not ticket.get("allowed_write_paths") and ticket.get("in_scope"):
         ticket["allowed_write_paths"] = list(ticket["in_scope"])
@@ -823,6 +829,9 @@ def cmd_set(argv):
         return 2
     if field == "state" and value not in STATES:
         sys.stderr.write("ticket: 沒有 %r 這個狀態(%s)\n" % (value, "/".join(STATES)))
+        return 2
+    if field == "complexity" and value is not None and value not in COMPLEXITY:
+        sys.stderr.write("ticket: %s\n" % complexity_problem(value))
         return 2
     # 讀、比對、寫回**在同一把鎖裡**:中間放別人進來,`state_version` 就會有兩個人
     # 同時讀到 v3、各自寫回 v4,而後寫的那一份整份蓋掉先寫的。
@@ -1827,6 +1836,12 @@ CODEX_COMMAND = ("codex exec -m %s%s -s danger-full-access -c 'approval_policy=\
 # 推理強度的合法值表只在這裡(D-018,#114):claude-code 抄自 `claude --help`。
 EFFORT_LEVELS = {"claude-code": ("low", "medium", "high", "xhigh", "max"),
                  "codex": ("low", "medium", "high", "xhigh", "max", "ultra")}
+# 票的「簡單 / 複雜」標記只有這一格(#116 A7):`scripts/role-models.py` 據它挑鏈與升級 effort。
+COMPLEXITY = ("simple", "complex")
+
+
+def complexity_problem(value):
+    return "complexity=%r 不合法;只收 %s(或不給)" % (value, "|".join(COMPLEXITY))
 
 
 def effort_problem(tool, effort):

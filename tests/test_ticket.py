@@ -1783,6 +1783,37 @@ class CreateTakesAnEffort(Sandbox):
         self.assertEqual(self.load_ticket("1")["effort"], "ultra")
 
 
+class TicketTakesAComplexity(Sandbox):
+    """#116 A7:票的 `complexity` 是選填的 simple|complex;其他值 create / set 都 rc=2。"""
+
+    def test_a7_create_writes_a_legal_complexity_and_nothing_when_absent(self):
+        """四問:釘什麼 = create 收 simple/complex、不給就沒有鍵;為何會紅 = 旗標沒接;
+        oracle = A7 原文;變異:CREATE_FLAGS 拿掉 --complexity → rc=2「不認得」紅。"""
+        done = self.ticket("create", *MIN, "--complexity", "complex")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["complexity"], "complex")
+        done = self.ticket("create", *MIN)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("complexity", self.load_ticket("2"))
+
+    def test_a7_any_other_complexity_is_refused(self):
+        """四問:釘什麼 = 表外值 create 不留檔、set 不改票;為何會紅 = 多收一種值(例 medium
+        被當成第二套 profile);oracle = A7「其他值 rc=2」;變異:拿掉 set 的檢查 → set 那列紅。"""
+        done = self.ticket("create", *MIN, "--complexity", "medium")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("complexity=", done.stderr)
+        self.assertFalse(self.exists("tickets/1.json"), "沒開成的票不該留下檔案")
+        self.assertEqual(self.ticket("create", *MIN).returncode, 0)
+        done = self.ticket("set", "1", "complexity", "hard")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertNotIn("complexity", self.load_ticket("1"))
+        for value in ("simple", "null"):
+            with self.subTest(value=value):
+                done = self.ticket("set", "1", "complexity", value)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIsNone(self.load_ticket("1")["complexity"])
+
+
 class CostTakesAnEffort(Sandbox):
     """#114 A9(T5 單跑、T7):`cost --effort` 進列與事件;SCHEMA 寫明。"""
 
