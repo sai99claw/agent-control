@@ -611,5 +611,128 @@ class TheContractIsSynced(unittest.TestCase):
             self.assertNotIn("規則甲", second)
 
 
+class TheSourceVersionIsRecorded(unittest.TestCase):
+    """#103:`scripts/control/.synced-from` 一行 = 這一次同步來源 A 的 `git rev-parse HEAD`。
+    用一顆**拋棄式的 A**(自己 `git init`、只放 sync 要的那幾份),oracle 是夾具自己的 HEAD;
+    真的 A 一個字都不動。"""
+
+    GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+           "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"]
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.a = os.path.join(self.tmp.name, "a")
+        self.d = os.path.join(self.tmp.name, "project")
+        os.makedirs(os.path.join(self.a, "scripts"))
+        os.makedirs(os.path.join(self.a, "memory", "role"))
+        os.makedirs(self.d)
+        with open(os.path.join(HERE, "scripts", "sync-to-project.sh"), encoding="utf-8") as f:
+            script = f.read()
+        self.put("scripts/sync-to-project.sh", script)
+        self.put("scripts/status.py", "print('v1')\n")
+        self.put("memory/role/main.md", "# 主線\n")
+        self.put("CLAUDE.md", "# A\n\n## 不可違反的\n- 規則\n")
+        self.git("init", "-q")
+        self.commit("one")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def put(self, rel, text):
+        with open(os.path.join(self.a, rel), "w", encoding="utf-8") as f:
+            f.write(text)
+
+    def git(self, *args):
+        return subprocess.run(self.GIT + ["-C", self.a, *args], capture_output=True,
+                              text=True, check=True, timeout=60).stdout
+
+    def commit(self, msg):
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", msg)
+        return self.git("rev-parse", "HEAD").strip()
+
+    def run_sync(self, *extra, a=None):
+        return subprocess.run(["sh", os.path.join(a or self.a, "scripts", "sync-to-project.sh"),
+                               self.d, *extra], capture_output=True, text=True, timeout=120)
+
+    @property
+    def marker(self):
+        return os.path.join(self.d, "scripts", "control", ".synced-from")
+
+    def read_marker(self):
+        with open(self.marker, "rb") as f:
+            return f.read()
+
+    def plant_old(self):
+        os.makedirs(os.path.dirname(self.marker), exist_ok=True)
+        old = b"0" * 40 + b"\n"
+        with open(self.marker, "wb") as f:
+            f.write(old)
+        return old
+
+    def test_s1_marker_is_head_and_follows_a_new_commit(self):
+        r = self.run_sync()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.read_marker(), (self.git("rev-parse", "HEAD").strip() + "\n").encode())
+        self.put("scripts/status.py", "print('v2')\n")
+        second = self.commit("two")
+        r = self.run_sync()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.read_marker(), (second + "\n").encode())
+        self.assertRegex(second, r"^[0-9a-f]{40}$")
+
+    def test_s2_dry_run_neither_creates_nor_changes_the_marker(self):
+        """**變異** M2:dry-run 也寫記號 → 這一條紅。"""
+        write_config(self.d)
+        r = self.run_sync("--dry-run")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse(os.path.exists(self.marker), "dry-run 建了記號")
+        old = self.plant_old()
+        r = self.run_sync("--dry-run")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.read_marker(), old)
+
+    def test_s3_an_uncommitted_control_script_keeps_the_old_marker(self):
+        """**變異** M1:拿掉 dirty 判斷 → 記號被寫成 HEAD,這一條紅。"""
+        before = self.run_sync()
+        old = self.plant_old()
+        self.put("scripts/status.py", "print('dirty')\n")
+        r = self.run_sync()
+        self.assertEqual(r.returncode, before.returncode, r.stdout + r.stderr)
+        self.assertEqual(self.read_marker(), old, "替一份未提交的腳本背書成 HEAD")
+        lines = [x for x in (r.stdout + r.stderr).splitlines()
+                 if ".synced-from" in x and "未提交" in x]
+        self.assertEqual(len(lines), 1, r.stdout + r.stderr)
+        with open(os.path.join(self.d, "scripts", "control", "status.py")) as f:
+            self.assertEqual(f.read(), "print('dirty')\n", "同步本身要照舊完成")
+
+    def test_s4_marker_is_not_in_the_manifest_and_a_stranger_survives(self):
+        ctrl = os.path.join(self.d, "scripts", "control")
+        os.makedirs(ctrl)
+        stranger = os.path.join(ctrl, "mine.sh")
+        with open(stranger, "w") as f:
+            f.write("echo mine\n")
+        for _ in range(2):
+            r = self.run_sync()
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        with open(os.path.join(ctrl, ".sync-manifest")) as f:
+            self.assertNotIn(".synced-from", f.read().splitlines())
+        self.assertTrue(os.path.exists(self.marker))
+        self.assertTrue(os.path.exists(stranger))
+
+    def test_s5_a_copy_without_git_syncs_and_keeps_the_old_marker(self):
+        """**變異** M3:開頭無條件 `git rev-parse HEAD`(set -eu)→ 這一條紅。"""
+        bare = os.path.join(self.tmp.name, "a-archive")
+        self.git("checkout-index", "-a", "--prefix=" + bare + os.sep)
+        self.assertFalse(os.path.exists(os.path.join(bare, ".git")))
+        old = self.plant_old()
+        r = self.run_sync(a=bare)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.read_marker(), old)
+        self.assertTrue(os.path.exists(os.path.join(self.d, "scripts", "control", "status.py")))
+        lines = [x for x in r.stdout.splitlines() if ".synced-from" in x and "git" in x]
+        self.assertEqual(len(lines), 1, r.stdout + r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
