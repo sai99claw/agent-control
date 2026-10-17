@@ -116,6 +116,14 @@
 | F4 | 原始碼不含受保護埠字面(專案 config;T 是 `1890[3-5]\|18889\|15349`)、不含 `os.kill` / `killpg` / `pkill` / `kill -`、不含 `TABBY_BROWSER_ENGINES=`(T) | 正則掃原始碼(不是 ast,字串裡也要抓) | 派工文鐵律搬進機器(D-001) |
 | F5 | 每一顆 `tempfile.mkdtemp` / `TemporaryDirectory` 同一個語句或下一行有 `addCleanup` | ast(#647 D1 那條規則的形狀,它已經掃全 repo;lint 只掃這一檔) | #647 的起因 |
 | F6 | 模組頂層不 `import` 票面新增的符號(拿不到票時 lint 不查;拿得到票就對 `verify_strings` 裡 `def <name>(` 的名字查頂層 import) | ast `Import`/`ImportFrom` 對名字 | 「import 失敗不算紅」那條 🩸 的預防版:與其事後不算,不如寫的時候就擋 |
+| F7 | 只碰專案宣告的介面:`from <M> import <X>` / `<M 或別名>.<X>` 的 X 在 M 的 `VERIFY_API`;繼承 M 的類別後 `self.<X>()`(案例自己定義的、`unittest.TestCase` 有的除外)的 `"<類別>.<X>"` 在 `VERIFY_API`;底線名字(非 dunder)不看名單一律命中,案例自己定義的除外。**可擋**(`verify_lint.block`),逃生口是 `verify_lint.allow` | ast 讀 `verify_lint.api` 指的檔頂層 `VERIFY_API` 字面(不 import);那支檔沒宣告 → 印一行、名單檢查略過,底線照查 | 耦合私有實作:專案改一個內部名字,一批無關案例一起紅(#102) |
+| F8 | 不釘整數或 sha:`assertEqual(len(…) / <…>.count(…), <整數>)`(對調也算)、`<…>.count(…) == <整數>`、同一函式(或模組層)提到 `git show` / `sha256` / `hexdigest` 時的 `[0-9a-f]{7,40}` 字面。**可擋**;逃生口:語句首行或末行 `# pin:<理由>`(理由空著照命中並註明),或 `verify_lint.allow` | ast;`assertGreaterEqual` 這種下限不算 | 精確快照:無關的新增一筆就紅(#102) |
+| F9 | 時間只取一次:同一函式 `date.today()` / `datetime.now()`(含 `utcnow`)/ `time.strftime(` / `time.localtime(` / `iso(` 兩次以上且至少一次在斷言裡;模組層或 class 本體(不在 def 裡)取任一。**可擋**;逃生口 `verify_lint.allow` | ast | 跨日 / 跨秒才紅,紅在別人的票上(#102) |
+| F10 | `time.sleep(` 之後 5 行內有正向斷言(`assertNot*` / `assertFalse` / `assertIsNone`、引用名字含 `before` 的不算)。**只印不擋**,`block` 寫了也忽略 | ast | 睡夠沒有看機器快慢;誤報率還沒量,先印 |
+| F11 | `wait_until(<字串字面>)` 之後同一區塊的下一個斷言裡,長度 ≥3 的字串字面沒有一個出現在等的那段字面裡。**只印不擋** | ast | 等到的訊號不是要驗的那件事 |
+| F12 | 對 `src` / `*_CODE` / `*_SRC` 或 `read(…)` / `.read_text()` 的結果呼叫 `.index(`。**只印不擋** | ast | 釘了原始碼的位置,改排版就紅 |
+
+F7–F12 的設定都在 `board/config.json` 的 `verify_lint`:`api`(`{模組名: 相對專案根的檔路徑}`)、`block`(要擋的規則,只收 F7 / F8 / F9;沒設 = `[]` = 全部只印)、`allow`(白名單,每筆 `"<案例檔相對路徑>:<規則>"`,命中那行尾巴印「(白名單,不擋)」)。上線時全部只印;專案用 `verify-case.py lint --baseline <檔…>` 產生既有違規的陣列貼進 `verify_lint.allow`,再自己打開 `block` —— 一上線就擋,等於逼每一張票先修別人的檔。
 
 不做的規則(否決):案例檔長度上限(#647 21 條 996 行是合理的密度)、強制 `_common.py`(小票不需要)、強制每條一個 class(形狀自由)。
 
@@ -192,6 +200,8 @@ class TheBehaviourUnderTest(unittest.TestCase):
 | `verify-case.py red` / `lint` / `check` 的 `stage` 與 `red_lines` | 放(`SCRIPT_LIST` 已含 `verify-case.py`) | 自動到 `scripts/control/verify-case.py` |
 | 閘門接線 | `scripts/gate.sh --ticket` 兩行 | **自備**:`scripts/land-ticket.sh gate` 兩行(它是專案腳本) |
 | lint 禁字清單 | `board/config.json` `verify_lint.forbid`(預設:kill 家族) | **自備**:加五個埠 + `TABBY_BROWSER_ENGINES=` |
+| F7 介面名單 `VERIFY_API` | lint 只讀(ast,不 import) | **自備**:在 `test_browsers.py` 等底座檔頂層宣告字面 tuple(`"名字"` 或 `"類別.方法"`) |
+| lint F7–F12 設定 | `verify_lint.api` / `block` / `allow` 的形狀與預設(沒設 = 全部只印) | **自備**:`api` 指到宣告了 `VERIFY_API` 的檔;`lint --baseline` 產生 `allow`;要擋時才寫 `block` |
 | 角色卡 `verifier.md`、`templates/dispatch-verifier.md`、`docs/VERIFICATION.md`、`tickets/SCHEMA.md` 的 `verify.baseline` 段、`docs/DECISIONS.md` 新條 | 放 | 角色卡由 sync 帶到 `docs/roles/`;`docs/DISPATCH-COMMON-RULES.md` §133「驗證者交付 = … + VERDICT」**過期,自備改** |
 | `rules.py WANTED["verifier"]` | 不動(已經沒有 §5);但 **`docs/DISPATCH-TEMPLATE.md` §9 加一行「驗證者一律 `rules.py pack verifier`,不准用 worker 包」** | 同步 |
 | fixture / `_common.py` / 假 bin | — | 自備(專案知識) |
