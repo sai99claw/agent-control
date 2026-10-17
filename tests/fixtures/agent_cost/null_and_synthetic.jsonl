@@ -1,0 +1,8 @@
+{"type": "user", "message": {"role": "user", "content": "列出檔案"}}
+{"type": "assistant", "message": {"id": "msg_c1", "type": "message", "role": "assistant", "model": "model-b", "stop_reason": "end_turn", "usage": {"input_tokens": 7, "output_tokens": 1}}}
+{"type": "assistant", "message": {"id": "msg_c2", "type": "message", "role": "assistant", "model": "model-a", "stop_reason": "end_turn", "usage": {"input_tokens": 5, "output_tokens": 2}}}
+{"type": "assistant", "message": {"id": "msg_c3", "type": "message", "role": "assistant", "model": "<synthetic>", "stop_reason": "stop_sequence", "usage": {"input_tokens": 0, "output_tokens": 0}}}
+{"type": "assistant", "message": {"id": "msg_c4", "type": "message", "role": "assistant", "model": "<synthetic>", "stop_reason": "stop_sequence", "usage": {"input_tokens": 0, "output_tokens": 0}}}
+{"type": "assistant", "message": {"id": "msg_c5", "type": "message", "role": "assistant", "model": "<synthetic>", "stop_reason": "stop_sequence", "usage": {"input_tokens": 0, "output_tokens": 0}}}
+{"type": "assistant", "message": {"id": "msg_c6", "type": "message", "role": "assistant", "model": "model-a", "stop_reason": "end_turn", "usage": {"input_tokens": 3, "output_tokens": 4}}}
+{"type": "assistant", "message": {"id": "msg_c7", "type": "message", "role": "assistant", "model": "model-b", "stop_reason": "end_turn", "usage": {"input_tokens": 1}}}

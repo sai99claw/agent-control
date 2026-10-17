@@ -103,7 +103,7 @@ CTRL=$DEST/scripts/control
 CTRL_MANIFEST=$CTRL/.sync-manifest
 NEW_SCRIPTS=""
 # 專案端要用到的那幾支 + 它們 import 的。順序無所謂,名單本身要進 code review。
-SCRIPT_LIST="status.py verify-case.py apply.sh auto-fix.sh review.sh inbox.py rules.py memory.py event.py ticket.py verify.py new-session.sh heartbeat.sh session-hook.sh wtbase.sh guard-main.sh repo-map.py"
+SCRIPT_LIST="status.py verify-case.py apply.sh auto-fix.sh review.sh inbox.py rules.py memory.py event.py ticket.py verify.py new-session.sh heartbeat.sh session-hook.sh wtbase.sh guard-main.sh repo-map.py agent-cost-hook.py transcript-cost.py"
 # 這兩支**不是入口**,是被上面那幾支 `import` 的(見檔頭)。查「接了沒」時要把它們挑掉
 # —— 對一支本來就沒有人直接叫的檔說「沒有呼叫點」,是一句假話,而假警報會讓真的那幾條
 # 被一起跳過(`docs/DISPATCH-TEMPLATE.md` §5.7)。
@@ -112,7 +112,8 @@ SCRIPT_LIST="status.py verify-case.py apply.sh auto-fix.sh review.sh inbox.py ru
 # 那個分岔,既有測試還把「不准點名它」釘死了。
 # `heartbeat.sh` 由 `new-session.sh` 叫、`new-session.sh` 由 `session-hook.sh` 叫(#39):
 # 專案要接的只有 hook 那一支(接在 `.claude/settings.json`),另外兩支是它帶進來的。
-DEPENDENCY_ONLY="event.py ticket.py heartbeat.sh new-session.sh"
+# `transcript-cost.py` 由 `agent-cost-hook.py` 載入(#95),專案要接的只有 hook 那一支。
+DEPENDENCY_ONLY="event.py ticket.py heartbeat.sh new-session.sh transcript-cost.py"
 # 派工範本(D-032):`review.sh` 逐字讀 `templates/dispatch-reviewer.md`,驗證者派工讀
 # `dispatch-verifier.md`。以前要專案自己從 A 複製一份 —— 複製的那一份從此不會跟著 A 改。
 TPL=$DEST/templates
@@ -419,6 +420,18 @@ case " $UNCALLED " in
 sync: 專案的 .claude/settings.json 沒接 PreToolUse 守衛 —— hooks.PreToolUse 要貼的那一筆:
 sync:        {"matcher": "Bash|Read", "hooks": [{"type": "command", "command": "sh \"$CLAUDE_PROJECT_DIR/scripts/control/guard-main.sh\"", "timeout": 10}]}
 sync:      主線自寫票面 / 讀 worker log / 裸 commit 會被擋;子代理人與副本裡不觸發,AC_MAIN_OVERRIDE=1 放行並記事件。
+EOF
+    ;;
+esac
+
+# 互動成本(#95):同一種 —— 呼叫點在專案的 `.claude/settings.json`,只印該貼的兩筆。
+case " $UNCALLED " in
+  *" agent-cost-hook.py "*)
+    cat <<'EOF'
+sync: 專案的 .claude/settings.json 沒接互動成本 hook —— hooks.SubagentStop 與 hooks.SessionEnd 各貼一筆:
+sync:        "SubagentStop": [{"hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/control/agent-cost-hook.py\"", "timeout": 10}]}]
+sync:        "SessionEnd": [{"hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/control/agent-cost-hook.py\"", "timeout": 10}]}]
+sync:      主線與子 agent 的 token 寫成 agent.cost 事件(不進票 cost[]);副本裡與 AC_ROLE 非 main 不觸發。
 EOF
     ;;
 esac

@@ -36,6 +36,10 @@ KINDS = (
     "ticket.cost",
     # 機器派出的 agent:看板用 ticket + ts 與主線採樣到的 agent 對上。
     "agent.start", "agent.done", "agent.failed",
+    # 主線互動 session 與它用 Agent 工具派的子 agent 的 token 與時鐘(#95,
+    # agent-cost-hook.py 寫):成本列除 `at` 的 14 鍵 + ticket / agent_id,**null 照寫**。
+    # 不進票 cost[]、不進 cost_total —— ticket 是從描述 / prompt 猜的。
+    "agent.cost",
     # 排順序只是提案(docs/ROLES.md:沒有調度員這個角色),所以它只有這一種事件。
     "schedule.proposed",
     # 閘門。綠是對某一個 base_sha 說的,所以 kv 要帶 sha。
@@ -168,11 +172,14 @@ def relative_cwd(root=None):
     return os.path.relpath(here, root) or "."
 
 
-def emit(kind, root=None, **fields):
+def emit(kind, root=None, keep_null=False, **fields):
     """append 一行。`O_APPEND` 一次 write,不讀回、不重寫。
 
     同一台機器上會有好幾條線同時發事件(主線、land、worker),而拿暫存檔重寫一份
     只加不改的檔,會把別人在那中間 append 的那一行整行吃掉。
+
+    `keep_null`:None 的鍵照寫成 null(`agent.cost`,#95)—— 鍵集合固定,讀的人分得出
+    「拿不到」與「沒寫這一格」。預設照舊不寫。
     """
     if kind not in KINDS:
         raise ValueError(kind)
@@ -180,7 +187,7 @@ def emit(kind, root=None, **fields):
     row = {"ts": datetime.now().astimezone().isoformat(timespec="seconds"),
            "kind": kind, "pid": os.getpid(), "cwd": relative_cwd(root)}
     for key, value in fields.items():
-        if value is not None and value != "":
+        if (value is not None and value != "") or (keep_null and value is None):
             row[key] = value
     path = events_path(root)
     parent = os.path.dirname(path)
