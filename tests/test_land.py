@@ -18,8 +18,8 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import (GATE_STUB_GREEN, GATE_STUB_RED, Sandbox,
-                             write_executable)  # noqa: E402
+from control_harness import (GATE_STUB_GREEN, GATE_STUB_RED, Sandbox,  # noqa: E402
+                             fixture_patch_id, oracle_face, write_executable)
 
 
 class LandBase(Sandbox):
@@ -1300,6 +1300,103 @@ class ReviewIsAHardGate(LandBase):
         self.approve(1, "t1-good")
         done = self.land("t1-good")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+
+class TheReviewIsBoundToThePatchAndTheFace(LandBase):
+    """#98 A1 / A5(T1 的 land 那一半):review 帶 patch_id + face 時,land 經 `ticket.py` 的
+    `review_problems` 比的是**那一份改動與那一張票面**,不是 sha 與 state_version。
+
+    review 由夾具蓋:patch_id 夾具自己 `git diff main...<分支> | git patch-id --stable`、face 由
+    票面 A2 的 oracle 算(`control_harness`),都不從 ticket.py 拿。"""
+
+    def bind(self, ident=1, branch="t1-good"):
+        row = self.load_ticket(str(ident))
+        sha = self.git("rev-parse", branch).strip()
+        done = self.ticket("set", str(ident), "review", json.dumps(
+            {"verdict": "pass", "by": "reviewer@fixture-model", "sha": sha,
+             "patch_id": fixture_patch_id(self.env(), self.repo, branch),
+             "face": oracle_face(row), "note": "沙盒的覆核"}, ensure_ascii=False))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        return sha
+
+    def ready(self):
+        wt = self.branch_for(1, "t1-good")
+        self.commit_in(wt, "src/g1", "做完的那一張")
+        return wt
+
+    def test_a1_the_same_patch_rebased_onto_a_newer_main_still_lands(self):
+        """四問:量 land 的 rc 與主線上有沒有那個 commit;紅 = 新式 review 照舊比 sha;期望值 =
+        夾具 rebase 前後自己算的 patch-id 相同(前提)。
+
+        **變異 M1**:新式 review 的 patch_id 那一段改回比 sha → 這一條紅(「覆核之後又 commit 過」)。"""
+        wt = self.ready()
+        before = self.bind()
+        self.write("src/other", "主線往前走\n")
+        self.git("add", "src/other")
+        self.git("commit", "-q", "-m", "主線上別的票")
+        self.git("push", "-q", "origin", "main")
+        self.git("rebase", "-q", "main", cwd=wt)
+        self.assertNotEqual(self.git("rev-parse", "t1-good").strip(), before, "前提:sha 換了")
+        self.assertEqual(fixture_patch_id(self.env(), self.repo, "t1-good"),
+                         self.load_ticket("1")["review"]["patch_id"], "前提:patch 沒換")
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("做完的那一張", self.main_log())
+
+    def test_a1_one_changed_line_is_refused_as_a_patch_id_difference(self):
+        """四問:量 rc 與拒絕訊息的種類;紅 = 改了內容照樣落地,或訊息說不出是 patch_id;期望值 =
+        票面 A1「印差異種類」。"""
+        wt = self.ready()
+        self.bind()
+        self.commit_in(wt, "src/g1", "做完的那一張,改了一行")
+        before = self.main_log()
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("patch_id 不同", done.stdout)
+        self.assertNotIn("face 不同", done.stdout)
+        self.assertNotIn("覆核之後又 commit 過", done.stdout, "新式 review 不走舊訊息")
+        self.assertEqual(self.main_log(), before)
+        self.assertFalse(self.gate_ran())
+
+    def test_a1_a_face_field_change_is_refused_as_a_face_difference(self):
+        """四問:量 rc 與訊息種類;紅 = 改了驗收照樣落地;期望值 = 票面 A1。"""
+        self.ready()
+        self.bind()
+        done = self.ticket("set", "1", "acceptance", json.dumps(["蓋完章之後改的驗收"],
+                                                                 ensure_ascii=False))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("face 不同", done.stdout)
+        self.assertNotIn("patch_id 不同", done.stdout)
+        self.assertNotIn("覆核之後票被改過", done.stdout)
+
+    def test_a1_a5_runtime_field_changes_still_land(self):
+        """四問:量逐格 `set` 運行欄之後 land 的 rc;紅 = land 自己抄一份判準(舊的 state_version
+        比對)或 face 收了運行欄;期望值 = 票面 A2 列的不入 face 那幾格。
+
+        **變異 M4**:land.sh 換回自己那一份 review 判準 → 這一條紅(「覆核之後票被改過」)。"""
+        self.ready()
+        sha = self.bind()
+        main = self.git("rev-parse", "main").strip()
+        for field, value in (("state", "InReview"), ("attempt", "2"),
+                             ("lease", json.dumps({"holder": "auto-fix@fixture",
+                                                   "until": "2099-01-01T00:00:00+08:00"})),
+                             ("gate", json.dumps({"rc": 0, "sha": sha})),
+                             ("base_sha", main), ("branch", "t1-good"),
+                             ("workspace", "../wt/t1-good"),
+                             ("patch_ref", "reports/t1/r1/patch-round1.diff")):
+            done = self.ticket("set", "1", field, value)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        done = self.ticket("cost", "1", "--role", "reviewer", "--round", "1",
+                           "--model", "fixture-model", "--outcome", "pass")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        self.assertNotEqual(row["review"]["state_version"], row["state_version"],
+                            "前提:舊判準在這裡會說票被改過")
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("做完的那一張", self.main_log())
 
 
 class OnlyOneLandAtATime(LandBase):

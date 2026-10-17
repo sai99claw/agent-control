@@ -19,6 +19,7 @@ tempdir 裡的 bare repo —— 所以這一組碰不到這台機器上任何一
 """
 
 import glob
+import hashlib
 import json
 import os
 import shutil
@@ -194,6 +195,28 @@ EOF
                ' "objection": null, "excluded": [], "repro": null, "memory": []}\n```\n',
                input_tokens=12, output_tokens=3601, cache_write=34386,
                cache_read=218504, duration_ms=35590)
+
+
+# #98 的兩個夾具 oracle(test_review / test_land 共用),**不 import ticket.py 的那一份** ——
+# 同一張表拿來比自己,漏一格也是綠的。face:票面 A2 原文的 13 格、缺值依欄位空值正規化、
+# JSON sort_keys 後 SHA256;patch_id:夾具自己 `git diff main...<tip> | git patch-id --stable`。
+FACE_ORACLE = (("subject", ""), ("objective", ""), ("acceptance", []), ("in_scope", []),
+               ("out_of_scope", []), ("allowed_write_paths", []), ("info_homes", []),
+               ("needs_verifier", False), ("interface_fixed", False), ("verify_strings", []),
+               ("test_plan", ""), ("depends_on", []), ("decision_refs", []))
+
+
+def oracle_face(row):
+    fields = {name: empty if row.get(name) is None else row[name] for name, empty in FACE_ORACLE}
+    return hashlib.sha256(json.dumps(fields, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def fixture_patch_id(env, repo, tip):
+    diff = subprocess.run(["git", "diff", "main...%s" % tip], cwd=repo, env=env,
+                          capture_output=True, timeout=TIMEOUT, check=True).stdout
+    out = subprocess.run(["git", "patch-id", "--stable"], cwd=repo, env=env, input=diff,
+                         capture_output=True, timeout=TIMEOUT, check=True).stdout
+    return out.decode("utf-8").split()[0]
 
 
 def write_executable(path, body):

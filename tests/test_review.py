@@ -19,15 +19,20 @@ import glob
 import json
 import os
 import re
+import subprocess
 import sys
+import tempfile
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import (REVIEWER_PASS, REVIEWER_PASS_ENVELOPE,  # noqa: E402
-                             SCRIPTS, Sandbox)
+from control_harness import (FACE_ORACLE, REVIEWER_PASS,  # noqa: E402
+                             REVIEWER_PASS_ENVELOPE, SCRIPTS, TIMEOUT, Sandbox,
+                             fixture_patch_id, oracle_face)
 
 sys.path.insert(0, SCRIPTS)
+import ticket as ticket_mod  # noqa: E402
 from ticket import review_problems  # noqa: E402
 
 
@@ -601,6 +606,383 @@ class ReviewBatch(Sandbox):
         done = self.review()
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertFalse(os.path.exists(self.log), "reviewer 不該被起")
+
+
+# ------------------------------------------------------- #98:覆核綁內容與票面
+
+RECEIPT_KEYS = ["attempt", "face", "patch_id", "run_id", "sha", "state_version"]
+
+
+class TheReviewBindsThePatchAndTheFace(ReviewBase):
+    """#98 A1 / A3:pass 的 review 記 patch_id 與 face;收件單是 review_request 的不可變副本。
+    期望的 patch_id 由夾具自己 `git diff main...t1 | git patch-id --stable`,face 由票面 A2 的
+    oracle 算(`control_harness`),都不從 ticket.py 拿。"""
+
+    RUN = "20261017-120000-1"
+
+    def receipt_path(self, run=RUN):
+        return os.path.join(self.repo, "reports", "t1", run, "review-receipt.json")
+
+    def test_a1_a3_a_pass_binds_patch_id_and_face_and_leaves_an_accepted_receipt(self):
+        """四問:量 review 的 patch_id / face / sha 與收件單的鍵、值、result;紅 = 沒記新鍵、
+        收件單多帶 owner_id 或與票上 review_request 不同、版本沒綁收件那一版;期望值 = 夾具
+        patch-id 與 A2 oracle。"""
+        self.set_reviewer(REVIEWER_PASS)
+        done = self.review("--run-id", self.RUN)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        ticket = self.load_ticket("1")
+        review = ticket["review"]
+        self.assertEqual(review["patch_id"], fixture_patch_id(self.env(), self.repo, "t1"))
+        self.assertEqual(review["face"], oracle_face(ticket))
+        self.assertEqual(review["sha"], self.sha)
+        with open(self.receipt_path(), encoding="utf-8") as handle:
+            receipt = json.load(handle)
+        self.assertEqual(sorted(receipt["request"]), RECEIPT_KEYS)
+        asked = ticket["review_request"]
+        self.assertEqual(asked["owner_id"], "review.sh", "沒有租約 = 派工的那一支")
+        self.assertEqual(receipt["request"], {key: asked[key] for key in RECEIPT_KEYS})
+        self.assertEqual(receipt["request"]["run_id"], self.RUN)
+        self.assertEqual(receipt["request"]["attempt"], 1)
+        self.assertEqual(receipt["request"]["patch_id"], review["patch_id"])
+        self.assertEqual(receipt["request"]["face"], review["face"])
+        self.assertEqual(receipt["request"]["state_version"] + 1, review["state_version"],
+                         "派工那一手 +1、收件那一手再 +1")
+        self.assertEqual(review["state_version"], ticket["state_version"])
+        self.assertEqual(receipt["result"], {"accepted": True, "reason": ""})
+        self.assertEqual(review_problems(ticket, self.sha), [])
+
+    def test_a3_the_owner_is_the_existing_lease_holder_and_the_lease_is_left_alone(self):
+        """四問:量 review_request.owner_id 與收件後的 lease;紅 = owner 取別的來源或覆核改寫租約;
+        期望值 = 夾具寫進去的那一份租約。"""
+        lease = {"holder": "auto-fix@fixture", "until": "2099-01-01T00:00:00+08:00"}
+        done = self.ticket("set", "1", "lease", json.dumps(lease))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.set_reviewer(REVIEWER_PASS)
+        done = self.review("--run-id", self.RUN)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        ticket = self.load_ticket("1")
+        self.assertEqual(ticket["lease"], lease)
+        self.assertEqual(ticket["review_request"]["owner_id"], "auto-fix@fixture")
+        self.assertEqual(ticket["review"]["verdict"], "pass")
+
+    def test_a3_reviewing_a_run_again_keeps_its_finished_receipt_verbatim(self):
+        """同一個 run_id 收過件之後再派一次:舊單改名留著、一個位元組都不改,新單另寫。
+        四問:量舊單的位元組與新單的版本;紅 = 舊單被蓋掉;期望值 = 第一次讀到的位元組。"""
+        self.set_reviewer(REVIEWER_PASS)
+        self.assertEqual(self.review("--run-id", self.RUN).returncode, 0)
+        with open(self.receipt_path(), "rb") as handle:
+            first = handle.read()
+        version = json.loads(first.decode("utf-8"))["request"]["state_version"]
+        done = self.review("--run-id", self.RUN)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        with open(self.receipt_path()[:-len(".json")] + "-v%d.json" % version, "rb") as handle:
+            self.assertEqual(handle.read(), first)
+        with open(self.receipt_path(), encoding="utf-8") as handle:
+            second = json.load(handle)
+        self.assertGreater(second["request"]["state_version"], version)
+        self.assertTrue(second["result"]["accepted"])
+
+
+# 假 reviewer(#98 T2):給了 `FAKE_HOLD` 就先在那個目錄寫 started、等測試放 go 才交件 ——
+# 雙向會合:測試等它真的起來了(收件單已記)才動票,它等測試動完票才交。
+REVIEWER_HELD = """#!/bin/sh
+echo "reviewer ran $AC_TICKET" >> "$AC_TEST_LOG"
+cat > /dev/null
+if [ -n "${FAKE_HOLD:-}" ]; then
+    : > "$FAKE_HOLD/started"
+    i=0
+    while [ ! -f "$FAKE_HOLD/go" ] && [ $i -lt 2400 ]; do sleep 0.05; i=$((i+1)); done
+fi
+if [ "${FAKE_VERDICT:-pass}" = fail ]; then
+cat <<'EOF'
+%s
+EOF
+else
+cat <<'EOF'
+%s
+EOF
+fi
+""" % ("# 覆核\n① verdict:fail\nOBJECTION: blocking 遲到的那一條\n\n"
+       + result_block("fail", json.dumps({"category": "blocking", "body": "遲到的那一條"},
+                                         ensure_ascii=False)),
+       "# 覆核\n① verdict:pass\n\n" + result_block("pass"))
+
+
+class ALateReviewIsStale(ReviewBase):
+    """#98 A3 / A4(T2):reviewer A 先派、停在交件前;測試動票(又派一次覆核 / 新 attempt /
+    改票面)之後才放行 A。A 交 pass 或 fail 都是 rc=4 stale:review、objections、state、
+    state_version、租約、review_request 一格不動(零覆蓋),只多一則 review.stale、A 自己的
+    收件單記 accepted=false(request 一字不改);成本照記 A 真的跑過的那一列。"""
+
+    RUN_A = "20261017-120000-1"
+    RUN_B = "20261017-120000-2"
+    KEPT = ("review", "objections", "state", "state_version", "lease", "review_request", "owner")
+
+    def setUp(self):
+        super().setUp()
+        self.set_reviewer(REVIEWER_HELD)
+
+    def receipt(self, run):
+        path = os.path.join(self.repo, "reports", "t1", run, "review-receipt.json")
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def start_held(self, verdict):
+        hold = tempfile.mkdtemp(dir=self.home)
+        proc = subprocess.Popen(
+            ["sh", os.path.join(self.repo, "scripts", "review.sh"), "1", "--run-id", self.RUN_A],
+            cwd=self.repo, env=self.env(FAKE_HOLD=hold, FAKE_VERDICT=verdict),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(self.release, proc, hold)
+        deadline = time.time() + TIMEOUT
+        while not os.path.exists(os.path.join(hold, "started")):
+            if proc.poll() is not None:
+                self.fail("reviewer A 沒等到就結束了:\n" + "".join(proc.communicate()))
+            self.assertLess(time.time(), deadline, "reviewer A 一直沒起來")
+            time.sleep(0.05)
+        self.asked = self.receipt(self.RUN_A)["request"]
+        return proc, hold
+
+    @staticmethod
+    def release(proc, hold):
+        if proc.returncode is not None:
+            return proc.returncode, ""
+        with open(os.path.join(hold, "go"), "w", encoding="utf-8"):
+            pass
+        out, err = proc.communicate(timeout=TIMEOUT)
+        return proc.returncode, out + err
+
+    def assert_nothing_written(self, before, rc, said, why):
+        self.assertEqual(rc, 4, said)
+        self.assertIn("stale", said)
+        now = self.load_ticket("1")
+        for key in self.KEPT:
+            self.assertEqual(now.get(key), before.get(key), "遲到的 A 動了 %s" % key)
+        late = self.receipt(self.RUN_A)
+        self.assertEqual(late["request"], self.asked, "收件單的 request 一字不改")
+        self.assertFalse(late["result"]["accepted"])
+        self.assertIn(why, late["result"]["reason"])
+        self.assertEqual(self.last_event("review.stale")["run_id"], self.RUN_A)
+        rows = [row for row in now.get("cost") or [] if row.get("run_id") == self.RUN_A]
+        self.assertEqual(len(rows), 1, "成本照記 A 真的跑過的那一列")
+        self.assertIn("stale", rows[0]["note"])
+        return now, rows[0]
+
+    def test_t2_a_pass_finishing_after_a_second_dispatch_is_stale(self):
+        """四問:量 A 的 rc、票七格、A 的收件單、事件、A 的成本列;紅 = A 蓋掉 B 的 review;
+        期望值 = B 收件後的票(夾具讀檔)。
+
+        **變異 M3**:收件改拿票上現在的 review_request 當收件單(完成時重讀新版)→ 這一條紅。"""
+        proc, hold = self.start_held("pass")
+        done = self.review("--run-id", self.RUN_B)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        before = self.load_ticket("1")
+        self.assertEqual(before["review_request"]["run_id"], self.RUN_B, "前提:票上是 B 那一份")
+        rc, said = self.release(proc, hold)
+        _now, row = self.assert_nothing_written(before, rc, said, "又派了一次覆核")
+        self.assertEqual(row["outcome"], "pass")
+        self.assertEqual([e["run_id"] for e in self.events() if e["kind"] == "review.pass"],
+                         [self.RUN_B])
+        self.assertTrue(self.receipt(self.RUN_B)["result"]["accepted"])
+
+    def test_t2_a_fail_finishing_after_a_second_dispatch_is_stale(self):
+        """四問:同上,另量 objections / state / inbox / review.fail;紅 = 遲到的 fail 記了反駁、
+        轉 Blocked 或發頁;期望值 = B 收件後的票。"""
+        proc, hold = self.start_held("fail")
+        done = self.review("--run-id", self.RUN_B)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        before = self.load_ticket("1")
+        rc, said = self.release(proc, hold)
+        now, row = self.assert_nothing_written(before, rc, said, "又派了一次覆核")
+        self.assertEqual(now.get("objections") or [], [])
+        self.assertEqual(now["state"], "InReview")
+        self.assertEqual(now["review"]["verdict"], "pass")
+        self.assertEqual(self.inbox_rows(), [], "遲到的 fail 不發頁")
+        self.assertNotIn("review.fail", self.kinds())
+        self.assertEqual(row["outcome"], "fail")
+
+    def test_a4_a_new_attempt_makes_the_late_pass_stale(self):
+        """四問:量 rc、review、A 成本列的 round;紅 = 收下舊 attempt 的 pass,或成本記成票現在的
+        attempt;期望值 = 夾具的 attempt 1 → 2。"""
+        proc, hold = self.start_held("pass")
+        done = self.ticket("set", "1", "attempt", "2")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        before = self.load_ticket("1")
+        rc, said = self.release(proc, hold)
+        now, row = self.assert_nothing_written(before, rc, said, "第 1 次派工")
+        self.assertIsNone(now.get("review"))
+        self.assertEqual(row["round"], 1, "成本記的是 A 真的跑的那一次,不是票現在的 attempt")
+
+    def test_a4_a_ticket_edit_makes_the_late_fail_stale(self):
+        """四問:量 rc、objections、state、inbox;紅 = 改票之後遲到的 fail 照記;期望值 = 改票後的票。"""
+        proc, hold = self.start_held("fail")
+        done = self.ticket("set", "1", "objective", "派覆核之後改的目標")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        before = self.load_ticket("1")
+        rc, said = self.release(proc, hold)
+        now, _row = self.assert_nothing_written(before, rc, said, "派工之後票被改過")
+        self.assertEqual(now.get("objections") or [], [])
+        self.assertEqual(now["state"], "InReview")
+        self.assertEqual(self.inbox_rows(), [])
+
+    def test_a3_the_same_run_id_is_not_dispatched_twice_while_one_is_out(self):
+        """四問:量第二次的 rc、reviewer 被叫幾次、票版本、A 交件後的 review;紅 = 第二份蓋掉
+        A 的收件單(A 回來就拿著別人的單);期望值 = A 派工後的票版本。"""
+        proc, hold = self.start_held("pass")
+        version = self.load_ticket("1")["state_version"]
+        again = self.review("--run-id", self.RUN_A)
+        self.assertEqual(again.returncode, 2, again.stdout + again.stderr)
+        self.assertIn("還有一份沒收件的覆核", again.stderr)
+        self.assertEqual(self.reviewer_calls(), ["reviewer ran 1"], "第二份不起 reviewer")
+        self.assertEqual(self.load_ticket("1")["state_version"], version, "不派的那一手不動票")
+        rc, said = self.release(proc, hold)
+        self.assertEqual(rc, 0, said)
+        self.assertEqual(self.load_ticket("1")["review"]["verdict"], "pass")
+
+
+class TheFaceIsThirteenFields(unittest.TestCase):
+    """#98 A1 / A2(T1、T3)的純函式那一半:`ticket.face` 對票面 A2 的 oracle、逐一改 face 欄 →
+    「face 不同」、改運行欄 → 照樣有效;舊 review(缺新鍵)三種錯誤照舊。頭給的是 review 綁的
+    那個 sha,這幾條不問 git(patch_id 那一半在 test_land 走真的分支)。"""
+
+    SHA = "a" * 40
+    FACE_CHANGES = {"subject": "換了標題", "objective": "換了目標", "acceptance": ["只剩一條"],
+                    "in_scope": ["scripts/x.py"], "out_of_scope": ["docs/y.md"],
+                    "allowed_write_paths": ["scripts/*"],
+                    "info_homes": [{"what": "規則", "home": "docs/h.md"}],
+                    "needs_verifier": True, "interface_fixed": True,
+                    "verify_strings": ["scripts/x.py:新字"], "test_plan": "T9",
+                    "depends_on": ["7"], "decision_refs": ["D-001"]}
+
+    def make(self, **extra):
+        row = {"id": "1", "subject": "第 1 張", "objective": "做完某件事",
+               "acceptance": ["會紅的斷言一條", "第二條:中文也進指紋"], "in_scope": [],
+               "out_of_scope": [], "depends_on": [], "allowed_write_paths": ["src/*"],
+               "role": "worker", "state": "InReview", "state_version": 7, "attempt": 1,
+               "lease": None, "base_sha": "b" * 40}
+        row.update(extra)
+        row["review"] = {"verdict": "pass", "by": "reviewer@fixture-model", "sha": self.SHA,
+                         "state_version": 7, "patch_id": "c" * 40, "face": oracle_face(row)}
+        return row
+
+    def test_a2_face_is_the_oracle_of_the_thirteen_fields(self):
+        row = self.make(needs_verifier=True, decision_refs=["D-049"],
+                        verify_strings=[{"path": "scripts/x.py", "contains": "審"}])
+        self.assertEqual(ticket_mod.face(row), oracle_face(row))
+        self.assertEqual(review_problems(row, self.SHA), [])
+
+    def test_a2_missing_and_null_normalise_to_the_empty_value_of_the_field(self):
+        """#101 的 info_homes 還沒落地:缺這一格與寫成空 list 要是同一個指紋。"""
+        bare = self.make()
+        filled = dict(bare, info_homes=[], needs_verifier=None, interface_fixed=False,
+                      verify_strings=[], test_plan="", decision_refs=None)
+        self.assertEqual(ticket_mod.face(filled), ticket_mod.face(bare))
+        self.assertEqual(review_problems(filled, self.SHA), [])
+
+    def test_a1_a2_each_face_field_changed_is_refused_as_a_face_difference(self):
+        """review 的 face 用 `ticket.face` 自己蓋(oracle 那一條另外比):漏掉的那一格改了,
+        自己比自己就看不出來。**變異 M2**:FACE_FIELDS 漏 acceptance → acceptance 那一格紅。"""
+        self.assertEqual(sorted(self.FACE_CHANGES), sorted(name for name, _ in FACE_ORACLE))
+        for name, value in self.FACE_CHANGES.items():
+            with self.subTest(name):
+                row = self.make()
+                row["review"]["face"] = ticket_mod.face(row)
+                self.assertEqual(review_problems(row, self.SHA), [], "前提:沒改之前有效")
+                row[name] = value
+                out = review_problems(row, self.SHA)
+                self.assertEqual(len(out), 1, out)
+                self.assertTrue(out[0].startswith("face 不同"), out)
+
+    def test_a1_runtime_fields_changed_keep_the_review(self):
+        """**變異**:新式 review 照舊比 state_version → 這一條紅。"""
+        row = self.make()
+        row.update({"state": "IntegrationQueued", "state_version": 42, "attempt": 3,
+                    "lease": {"holder": "someone", "until": "2099-01-01T00:00:00+08:00"},
+                    "cost": [{"role": "reviewer", "round": 1}], "base_sha": "d" * 40,
+                    "gate": {"rc": 0, "sha": self.SHA}, "branch": "t1-x",
+                    "workspace": "../wt/t1-x", "patch_ref": "reports/t1/r/patch.diff",
+                    "review_request": {"run_id": "r"}})
+        self.assertEqual(review_problems(row, self.SHA), [])
+        self.assertEqual(review_problems(row), [])
+
+    def test_t3_an_old_review_keeps_its_three_oracles(self):
+        """缺 patch_id 或 face 的 review 照舊比 state_version / sha,訊息照舊(A1 後半)。
+
+        **變異**:`bound_to_content` 改成只看 face → 「只缺 patch_id」那一格紅。"""
+        for label, drop in (("兩格都缺", ("patch_id", "face")), ("只缺 patch_id", ("patch_id",)),
+                            ("只缺 face", ("face",))):
+            with self.subTest(label):
+                def old(**extra):
+                    row = self.make(**extra)
+                    for key in drop:
+                        row["review"].pop(key)
+                    return row
+                unbound = old()
+                unbound["review"].pop("state_version")
+                self.assertIn("沒有綁票版本", "".join(review_problems(unbound, self.SHA)))
+                self.assertIn("覆核之後票被改過",
+                              "".join(review_problems(old(state_version=8), self.SHA)))
+                self.assertIn("覆核之後又 commit 過", "".join(review_problems(old(), "e" * 40)))
+                self.assertEqual(review_problems(old(), self.SHA), [])
+
+
+class TheReceiptIsComparedNotReread(unittest.TestCase):
+    """#98 A3:收件比的是收件單對票上的 review_request 與 attempt / 租約 / 版本。"""
+
+    def test_a3_a_changed_lease_holder_alone_is_stale(self):
+        """版本、attempt 都對得上,只有租約換了人 —— 只有「派工 owner」那一條擋得住。"""
+        claimed = {"run_id": "r1", "attempt": 1, "state_version": 5, "face": "f",
+                   "patch_id": "p", "sha": "s"}
+        row = {"attempt": 1, "state_version": 5, "lease": {"holder": "someone-else"},
+               "review_request": dict(claimed, owner_id="auto-fix@a")}
+        self.assertIn("換手", ticket_mod.request_problem(row, claimed))
+        row["lease"] = {"holder": "auto-fix@a"}
+        self.assertEqual(ticket_mod.request_problem(row, claimed), "")
+        row["review_request"]["patch_id"] = "q"
+        self.assertIn("patch_id", ticket_mod.request_problem(row, claimed))
+
+    def test_a3_a_lease_taken_after_a_leaseless_dispatch_is_stale(self):
+        """沒有租約時派工 owner 是 review.sh;收件前有人取了租約 —— 換手,版本沒動也擋。"""
+        claimed = {"run_id": "r1", "attempt": 1, "state_version": 5, "face": "f",
+                   "patch_id": "p", "sha": "s"}
+        row = {"attempt": 1, "state_version": 5, "lease": None,
+               "review_request": dict(claimed, owner_id="review.sh")}
+        self.assertEqual(ticket_mod.request_problem(row, claimed), "")
+        row["lease"] = {"holder": "auto-fix@a"}
+        self.assertIn("換手", ticket_mod.request_problem(row, claimed))
+
+
+class TheReceiveHasASameLockSeam(ReviewBase):
+    """#98 A6:`receive_review(extend=…)` 在同一把鎖裡、驗過收件單之後、存檔之前叫 extend;
+    回一句話就整筆不收、票不動;回空字串則它對票的改動與 review 同一次存檔。"""
+
+    def test_a6_extend_runs_inside_the_lock_and_can_veto_or_join_the_save(self):
+        """**變異**:`receive_review` 不叫 extend → 這一條紅。"""
+        receipt = os.path.join(self.repo, "reports", "t1", "r1", "review-receipt.json")
+        lock = os.path.join(self.repo, "tickets", ticket_mod.LOCK_NAME)
+        seen = []
+
+        def veto(row, claimed):
+            seen.append((os.path.isdir(lock), claimed["run_id"]))
+            return "#104 的格子對不上"
+
+        def join(row, claimed):
+            row["seam"] = claimed["run_id"]
+            return ""
+
+        with mock.patch.dict(os.environ, {"AC_ROOT": self.repo}):
+            _request, busy = ticket_mod.request_review("1", "r1", self.sha, receipt)
+            self.assertEqual(busy, "")
+            self.assertEqual(ticket_mod.receive_review("1", receipt, "pass", by="x", extend=veto),
+                             (False, "#104 的格子對不上"))
+            self.assertEqual(seen, [(True, "r1")], "extend 在鎖裡、拿的是收件單")
+            self.assertIsNone(self.load_ticket("1").get("review"), "被否決的那一筆不存檔")
+            self.assertEqual(ticket_mod.receive_review("1", receipt, "pass", by="x", extend=join),
+                             (True, ""))
+        row = self.load_ticket("1")
+        self.assertEqual(row["seam"], "r1")
+        self.assertEqual(row["review"]["verdict"], "pass")
+        self.assertEqual(row["review"]["state_version"], row["state_version"])
 
 
 if __name__ == "__main__":
