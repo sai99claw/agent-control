@@ -29,6 +29,9 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
   絕對路徑拒、`diff -ruN` 的刪檔沒改 `+++` 也拒),在 `git apply` 之後比對每個 `+++` 目標
   並 `--reverse --check`(rc=4),再檢查 `allowed_write_paths`(rc=5),commit 訊息帶票號與
   **patch 的 sha256**。主線走遠了先 `scripts/apply.sh rebase <票號> <patch>` 重生一份乾淨 diff。
+  候選樹有 `scripts/repo-map.py` 與 `code-map/catalog.json` 時,commit 之前跑一次 `repo-map.py build`(#96):
+  `code-map/index.json` / `INDEX.md` 有變就併進同一個 commit、訊息多一行 `regen: repo-map build …`,
+  不算 `extra_paths`;build 非零不擋套用、印一行「索引沒重產」,攔它是 `gate.sh` 機械格的事。
   **`land.sh` 收的還是已經有 commit 的分支** —— 它不套 patch(`docs/ROLES.md`)。
 - **同時只准一個 `land.sh`**:`land.sh` 自己用一把 `mkdir` 鎖擋(`.land.lock`),拿不到就指名現在是誰在落地。land 期間主線不得往主線提交。發版期間不開 land。
 
@@ -243,7 +246,7 @@ worker 同一輪**也交了** `patch-round<r>.diff`(#107,專案 #751 事故):驗
 | **兩種頁**:`inbox.py post` 只收 `--kind decision / done`(其餘 rc=2、什麼都不寫);腳本接著會做的終態(閘門綠 / 可歸因的紅 / 覆核通過 / 覆核沒交件)只寫事件;done 簡報由 land.sh 關票後 `inbox.py done` 發,不自動 ack。取代 #43 C4 的「腳本 ack」:`ack --by / --state` 留著收舊頁 | **已實作**(2026-09-26,#50,D-032) | `scripts/inbox.py`(`INBOX_KINDS`、`done`);`auto-fix.sh`、`gate.sh`、`review.sh`、`land.sh` |
 | land 前檢查 `verify.files` 都在分支上 | **已實作**(2026-09-21,D-015) | `scripts/land.sh` 第 5 步,缺了 rc=4 |
 | 用 headless `claude -p` **自動起新 worker**(三輪上限) | **已實作**(2026-09-22;gate / 單票 land 預設開,`--no-auto-fix` 關) | `scripts/auto-fix.sh <票號>`;`gate.sh`、`land.sh` |
-| **第 1 輪自動**:票 Ready 且沒有狀態檔 → 起第 1 輪 worker(發 `ticket.attempt.start`、轉 Running),apply → gate → InReview → review.sh 與第 2 輪起同一段;非 Ready 指名 state 停下 | **已實作**(2026-09-26,#40,D-025 C1) | `scripts/auto-fix.sh <票號>`(`round_once 1`);只看派工文 `--dry-run --round 1` |
+| **第 1 輪自動**:票 Ready 且沒有狀態檔 → 起第 1 輪 worker(發 `ticket.attempt.start`、轉 Running),apply → gate → InReview → review.sh 與第 2 輪起同一段;非 Ready 指名 state 停下 | **已實作**(2026-09-26,#40,D-025 C1) | `scripts/auto-fix.sh <票號>`(`round_once 1`);只看派工文 `--dry-run --round 1`;`--dry-run` 碰到已經在的 `fix-t<n>/round<r>` / `verify-t<n>/round<r>` 原封不動(#96) |
 | **第 1 輪驗證者自動**(#126 起**任一輪**,不只第 1 輪):票 `needs_verifier` 是 JSON `true` 且 `verify.baseline` 空(案例還沒交,D-018)→ 任一輪都先派驗證者(含從舊狀態檔接著跑的第 2 輪以後,stdout「案例還沒交,第 N 輪先派驗證者」);`interface_fixed=true` 時派 worker **之前**起背景驗證者(副本 = 票的 `base_sha`,派工文 = `rules.py pack verifier` + `templates/dispatch-verifier.md` 填好),worker 回來後才收;兩份 patch 一起 `apply.sh`、閘門量套了兩份的樹;沒交件 → worker 的 patch 先收進 reports、Blocked + decision 頁;`false` / 缺 → 不派(缺的 stderr 說一聲) | **已實作**(#51,D-032 ③) | `scripts/auto-fix.sh`(`start_verifier_bg` / `wait_verifier`);`--dry-run --round 1` 印兩份派工文路徑 |
 | **reviewer 自動**:閘門綠、票轉 InReview → headless reviewer(`reviewer.command`,唯讀白名單);pass 由腳本寫 `review`,fail 逐條 blocking 反駁 + Blocked,沒交件不算 pass | **已實作**(2026-09-26,#42,D-025 ②) | `scripts/review.sh <票號>`;`auto-fix.sh` 綠(`--no-review` 關)與 `gate.sh --branch --ticket` 手跑綠 |
 | **終態叫醒主線**(要人裁的 decision 頁 + 整票 done 頁;其餘終態只寫事件)+ 禁止輪詢 | **已實作**(2026-09-21,D-015) | `scripts/inbox.py post\|done\|list\|show\|ack`;`reports/inbox/<票號>-<run_id>.md`;`new-session.sh` 開場印 |

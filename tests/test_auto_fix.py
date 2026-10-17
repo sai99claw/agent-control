@@ -1028,6 +1028,33 @@ class TheDispatchPacket(AutoFixBase):
         self.assertIn("memory/role/implementer.md", packet, "角色卡指路")
         self.assertIn("規則包", packet, "指向規則包,不是整份貼")
 
+    def test_dry_run_keeps_the_round_copies(self):
+        """#96 A1 / A2:`--dry-run` 只印 —— 已經在的 worker 副本(交的 patch、work/)與驗證者
+        副本原封不動。期望值是這裡事先寫進去的字串,不從被測腳本讀回來。
+
+        **變異 m1**:拿掉 round_once 的 dry-run 守衛(照舊 `rm -rf "$FIX"`)→ A1 紅。
+        A2 改前就綠(`rm -rf "$VFIX"` 在 dry-run 走不到),只當回歸鎖。
+        """
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready(needs_verifier=True, interface_fixed=True)
+        fix = os.path.join(self.home, "repo-wt", "fix-t1", "round1")
+        vfix = os.path.join(self.home, "repo-wt", "verify-t1", "round1")
+        kept = {
+            os.path.join(fix, "patch-round1.diff"): "worker 交的 patch\n",
+            os.path.join(fix, "work", "marker"): "worker 改到一半\n",
+            os.path.join(vfix, "marker"): "驗證者的案例\n",
+        }
+        for path, text in kept.items():
+            self.write(os.path.basename(path), text, where=os.path.dirname(path))
+        done = self.auto_fix("--dry-run")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(len(self.result_files("dispatch-round1.md")), 1, "照舊印派工文")
+        self.assertEqual(self.worker_rounds(), [])
+        for path, text in kept.items():
+            self.assertTrue(os.path.isfile(path), "--dry-run 刪了 %s\n%s" % (path, done.stdout))
+            with open(path, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), text, path)
+
     def test_the_second_round_copy_comes_from_the_ticket_branch(self):
         """#53 D3(D-018):分支名**只有一個來源 —— 票的 `branch` 欄**。票面 branch=t1-gaps
         (下游專案的形狀),第 2 輪副本的 base 要取自那一條,不是退回 base_sha。夾具在
@@ -3993,6 +4020,28 @@ class TheMissingCasesSendAVerifierEveryRound(AutoFixBase):
         self.assertIn("這一輪多的一件事:test_defect", packet)
         red = packet.split("## 紅榜", 1)[1]
         self.assertIn("LINT verify-case-lint:verify/example/test_ticket_1.py", red)
+
+    def test_a_lint_dry_run_keeps_the_round_copies(self):
+        """#96:只派驗證者那一輪的 `--dry-run` 也走 dispatch_verifier —— 已經在的第 2 輪
+        worker 副本與驗證者副本原封不動(以前前者被 `shed_copies`、後者被 `rm -rf`)。
+
+        **變異 m2**:拿掉 dispatch_verifier 的 dry-run 守衛 → 驗證者副本那一格紅。
+        """
+        self.arm(needs_verifier=True, interface_fixed=True, verify=A_BASELINE)
+        self.lint_status(LINT_RED)
+        kept = {
+            os.path.join(self.home, "repo-wt", "fix-t1", "round2", "work", "marker"): "w\n",
+            os.path.join(self.home, "repo-wt", "verify-t1", "round2", "marker"): "v\n",
+        }
+        for path, text in kept.items():
+            self.write(os.path.basename(path), text, where=os.path.dirname(path))
+        done = self.auto_fix("--dry-run")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(len(self.result_files("dispatch-verifier-round2.md")), 1, done.stdout)
+        for path, text in kept.items():
+            self.assertTrue(os.path.isfile(path), "--dry-run 刪了 %s\n%s" % (path, done.stdout))
+            with open(path, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), text, path)
 
     def test_a5_a_no_cases_gap_round_sends_only_the_verifier(self):
         """A2 缺口列與 lint 列同走 A5:上一輪只有 (no-cases) 那一列 → 這一輪只起驗證者。"""
