@@ -1,0 +1,66 @@
+{
+  "id": "128",
+  "subject": "越界守衛不把主線那一邊的寫入與 push 失敗的落地判越界:主線可寫前綴只記不擋、push 失敗的 land.fail 算一段合法落地",
+  "created": "2026-10-17T15:45:27+08:00",
+  "objective": "agent 跑的期間,主線 session 在主 repo 工作樹改 docs/、memory/(與 tickets/)底下的檔,或一次 land / docs 通道已 commit 進本機 main 但 push 失敗,auto-fix 的越界守衛都不判越界(rc 不變成 8、票不轉 Blocked),改在 guard.json 與那一輪的結果裡記下來給主線看;其他路徑的改動與歸屬不上的 HEAD 前進照 #115 / #127 判 8。",
+  "acceptance": [
+    "A1 主線可寫前綴:board/config.json 新鍵 `guard_main_paths`(字串 list,主 repo 相對前綴,結尾 `/`);缺鍵 = `[\"tickets/\", \"docs/\", \"memory/\"]`(= land.sh 的 DOCS_PREFIXES,現 land.sh:116),`[]` = 不豁免;不是字串 list → stderr 點名、照缺鍵處理(同 guarded_dirs 的寫法,現 auto-fix.sh:1212–1215)。agent 跑的期間主 repo 工作樹在這些前綴底下新增 / 修改 / 刪除(含已髒檔再改)→ 不擋:auto-fix rc 照 agent 的結局(假 agent 正常交件 = 0)、沒有 guard-violation、沒有 decision 頁;`<log 去 .log>.guard.json` 仍寫出,`violations` 為空、`main_side` 列出每一個路徑與前後雜湊",
+    "A2 豁免不外溢:同一輪另有一個前綴以外的改動(例:scripts/x.sh 或根目錄新檔)→ 照 #115 rc 8、Blocked、恰一頁 decision,violations 只列前綴以外那一個,main_side 照列;`guard_main_paths: []` 時 docs/ 的改動 → rc 8(證明豁免來自設定,不是寫死);前綴以 `/` 為界,`docs-x/a.md` 不算 docs/ 底下 → rc 8",
+    "A3 已確認、不改的部分(本票只加回歸斷言):`ticket.py set` 改票狀態、寫 objections 處置走 tickets/<n>.json 的 tmp + os.replace(ticket.py:160–171)與 tickets/.ticket.lock,都在 config 的 tickets_dir 底下,#115 的控制面豁免(RELATIVE_DEFAULTS,auto-fix.sh:1093–1094)已排除;.land.lock/ 在 .gitignore。斷言:agent 跑的期間對另一張票跑真的 `python3 scripts/ticket.py set <n> state Blocked` 與寫一筆 objection 處置 → 不擋,guard.json 不存在",
+    "A4 push 失敗的落地:land.sh 兩個 push 失敗出口 —— 票 land(現 land.sh:873–875)與 docs 通道(現 land.sh:193–196)—— 的 land.fail 帶 `stage=push`、`sha=<本機 main 的短 sha>`、`main_before`(同 #127 A1 的定義)與 stamp;守衛把帶 stage=push 且 sha / main_before / stamp 齊全的 land.fail 當作與 land.pass 同等的一段(#127 的首尾相接規則不變)。agent 跑的期間一次 docs 通道 commit 成功但 push 被拒(origin 裝 pre-receive hook exit 1)→ 不擋,rc 0;notes 有那一段的 stamp 與「push 失敗」字樣。其他 land.fail(閘門紅、ff-only 拒絕、衝突)不算一段,它們本來就不動 main",
+    "A5 文件:docs/WORKFLOW.md §8 越界守衛那段寫明 guard_main_paths(預設、`[]` 的意思、只記不擋)與 push 失敗的 land.fail 形狀(stage=push + sha + main_before),並註明專案端 land 包裝的 push 失敗出口要照發"
+  ],
+  "in_scope": [
+    "scripts/auto-fix.sh 守衛(guard_conf / guard_verdict / land 歸屬)",
+    "scripts/land.sh 兩個 push 失敗出口"
+  ],
+  "out_of_scope": [
+    "docs/DECISIONS.md",
+    "scripts/event.py"
+  ],
+  "depends_on": [
+    {
+      "id": "127",
+      "condition": ""
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/land.sh",
+    "tests/test_auto_fix.py",
+    "tests/test_land.py",
+    "docs/WORKFLOW.md"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "ed80bd65574d5fa42b7f3ac6e9b472716414a138",
+  "state": "Draft",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [
+      "verify/dispatch/test_ticket_128.py"
+    ],
+    "tags": [
+      "worker-guard"
+    ],
+    "run": "python3 scripts/verify.py --tag worker-guard",
+    "notes": "沙盒借 tests/control_harness.Sandbox;外層 AC_* 清掉再跑。標籤 worker-guard 已在 verify/TAGS.d/115.md 登記。"
+  },
+  "outline": "依賴 #127(同檔 auto-fix.sh / land.sh,沿用它的首尾相接切段)。開題查證:ticket.py 寫入早已被控制面豁免(A3),真正會誤判的是主線改 docs/ memory/ 的工作樹檔與 push 失敗。裁示:主線可寫前綴只記不擋(預設 = docs 通道三前綴,T 之後在 config 設 docs/ memory/);push 失敗的 land.fail 帶 stage=push 才算一段。T 端照發是另一張 T 票。needs_verifier=true:跨程序(真 ticket.py、真 push 失敗)邊界要獨立案例;interface_fixed=true:鍵名與 guard.json 欄位已釘。",
+  "test_plan": "T1(A1–A3)tests/test_auto_fix.py 的 TheGuardCatchesAgentsOutsideTheirCopy(AGENT_STRAYS 慣例)新增;A3 的假 agent 以 `AC_ROOT=\"$REPO\" python3 \"$REPO/scripts/ticket.py\" set …` 真跑(agent 環境的 AC_ROOT 指副本,不覆寫會寫到副本)。驗證者案例 verify/dispatch/test_ticket_128.py 照 test_ticket_115.py 的 GuardBase / assert_stopped / assert_not_stopped 慣例。\nT2(A4)tests/test_land.py 的 TheDocsChannel 加 push 被拒那條:origin 的 hooks/pre-receive exit 1,斷言 land.fail 的 stage=push、sha = 本機 main、main_before = 跑之前的 main;守衛那條在 T1 / 驗證者案例裡真跑 land.sh docs。\nT3 只跑(外層 env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR):`cd tests && python3 -m unittest test_land test_auto_fix.TheGuardCatchesAgentsOutsideTheirCopy`、`python3 scripts/verify.py --tag worker-guard`。不跑全套。\n變異(未實測):M1 前綴寫死不讀 config → A2 的 [] 那條紅;M2 前綴豁免用 startswith 不帶 `/`(docsX/ 也被豁免)→ 案例要有 `docs-x/` 路徑仍判 8 的那一條紅;M3 land.fail 一律算一段 → 閘門紅的 land.fail + 裸 commit 那條紅;M4 push 失敗出口不帶 stage → A4 紅。\n不在本票:T 的 board/config.json 設 guard_main_paths 與 land-ticket.sh push 失敗出口照發(T 票)。",
+  "effort": "high",
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "decision_refs": [
+    "D-048"
+  ],
+  "verify_strings": [
+    "guard_main_paths",
+    "main_side",
+    "stage=push"
+  ]
+}
