@@ -524,6 +524,8 @@ ENV_SUSPECT=0
 # 驗證者那一層的 rc(`verify_case` 設它);`VRC` 之於回歸層是什麼,它之於這一層就是
 # 什麼 —— 兩層各自的 rc 分開留著,合併在呼叫的那一行做。
 CRC=0
+# 驗證者案例的 lint 紅(#126):給 `status.py done` 的 `--lint-log …`,紅榜列 kind=LINT。
+LINT_ARGS=""
 LINT_LOG=$LOG.lint
 CHECK_LOG=$LOG.verify-case
 CHECK_DIR=$LOG.verify-case.d
@@ -593,7 +595,7 @@ status_done() {   # $1 = rc
         # shellcheck disable=SC2086
         python3 "$ROOT/scripts/status.py" done --ticket "$t" --kind gate \
             --run-id "$RUN_ID" --sha "$SHA" --rc "$1" --note "$NOTE" \
-            --log "$LOG" $state_args $VERIFY_LOG_ARGS $CHECK_LOG_ARGS $EXTRA_LOG_ARGS $FLAKY_ARGS \
+            --log "$LOG" $state_args $VERIFY_LOG_ARGS $CHECK_LOG_ARGS $EXTRA_LOG_ARGS $LINT_ARGS $FLAKY_ARGS \
             $AUTO_FLAKY_ARGS $ORDER_ARGS \
             || echo "gate: #$t 的狀態檔寫不出來(不擋閘門)" >&2
     done
@@ -878,6 +880,7 @@ CAND_PY
 # 「verify-case 回了 1」。
 verify_case() {
     CRC=0
+    LINT_ARGS=""
     [ -n "$TICKET" ] || return 0
     if [ ! -f "$ROOT/scripts/verify-case.py" ]; then
         # 同 `regression()` 的態度:沒有這一層要**說出來**,不要讓「沒驗」穿著
@@ -912,9 +915,16 @@ verify_case() {
                 NOTE="$NOTE 票沒有宣告 verify 這一格,驗證者那一層沒跑。"
                 return 0 ;;
         esac
-        echo "gate: 這張票沒有驗證者案例(#$TICKET 的 verify.files 是空的)—— 那是缺口,不是綠。"
-        echo "gate:   (要嘛派驗證者補案例,要嘛在票上補一條誠實的 verify_waiver{by,reason}"
-        echo "gate:    或 needs_verifier=false。)"
+        {
+            echo "gate: 這張票沒有驗證者案例(#$TICKET 的 verify.files 是空的)—— 那是缺口,不是綠。"
+            echo "gate:   (要嘛派驗證者補案例,要嘛在票上補一條誠實的 verify_waiver{by,reason}"
+            echo "gate:    或 needs_verifier=false。)"
+        } > "$LINT_LOG"
+        cat "$LINT_LOG"
+        # 缺口也是驗證者的紅(#126 A2):紅榜恰一列 `verify-case-lint:(no-cases)`,不然 rc 3 而
+        # failures[] 空,auto-fix 讀成「紅了但沒有歸因」轉 Blocked —— 而下一步明明是派驗證者。
+        EXTRA_LOG_ARGS="$EXTRA_LOG_ARGS --extra-log $LINT_LOG"
+        LINT_ARGS="--lint-log $LINT_LOG --lint-root $ROOT --lint-no-cases"
         NOTE="$NOTE 票宣告了 verify 卻沒有案例、也沒有 waiver = 缺口。"
         CRC=3
         return 0
@@ -930,6 +940,8 @@ verify_case() {
     if [ "$lrc" -ne 0 ]; then
         echo "gate: 案例格式沒過(rc=$lrc)—— 停在這裡,不跑 check;上面指名了是哪一行"
         NOTE="$NOTE 驗證者案例的 lint 沒過,check 沒跑。"
+        # 退件的理由進紅榜(#126 A1):`--extra-log` 只留檔、不解析,只靠它的話 failures[] 是空的。
+        LINT_ARGS="--lint-log $LINT_LOG --lint-root $ROOT"
         CRC=$lrc
         return 0
     fi

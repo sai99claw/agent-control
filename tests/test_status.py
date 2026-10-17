@@ -1207,5 +1207,87 @@ class TheShapeHasExactlyOneSourceOfTruth(unittest.TestCase):
         self.assertEqual(strays, [], "這幾份自己定義了一套形狀:%s" % strays)
 
 
+# 手寫一份 `verify-case.py lint` 不過的輸出(形狀抄 `cmd_lint`:提示、擋的、不擋的、總結)。
+# 擋的兩條(F1、F5)在前;F3 與白名單 / 非 block 的 F10 是不擋的,形狀同樣是 `<檔>:<行> <規則>`。
+LINT_LOG = """verify-case lint: F10–F12 只印不擋,block 忽略 ['F10']
+verify-case lint: verify/nav/test_ticket_7.py:1 F1 模組沒有 docstring —— 要有 ## 驗收表
+verify-case lint: verify/nav/test_ticket_7.py:14 F5 mkdtemp() 同一語句或下一行沒有 addCleanup
+verify-case lint: verify/nav/test_ticket_7.py:9 F3 test_a1 的 docstring 首行不是驗收編號(不擋)
+verify-case lint: verify/nav/test_ticket_7.py:20 F10 time.sleep() 之後 5 行內就正向斷言
+verify-case lint: 1 個檔,驗收編號 (一條都沒宣告)
+verify-case lint: **不過**(2 條)
+"""
+
+
+class LintRowsInTheRedList(Sandbox):
+    """#126 A1–A3:`done --lint-log` 把 lint 不過的那幾行變成 kind=LINT 的紅榜列。期望值
+    (列數 2、case 前綴、行號)抄票面與上面那份手寫 log,不從 status.py 讀回來。"""
+
+    def done(self, lint_text, *extra):
+        lint = self.write("gate.log.lint", lint_text, where=self.home)
+        log = self.write("gate.log", LOG, where=self.home)
+        done = self.run_py("scripts/status.py", "done", "--ticket", "7", "--kind", "gate",
+                           "--rc", "1", "--log", log, "--lint-log", lint,
+                           "--lint-root", self.repo, *extra)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        return self.status_of("7")["failures"], lint
+
+    def test_one_row_per_blocking_line_and_the_unittest_rows_are_unchanged(self):
+        """列數 == 「不過(N 條)」的 N;unittest 那一列與不帶 lint log 時一模一樣。
+
+        **變異 M4**:帶位置的行全收(不照 N 截)→ 4 列 → 紅。
+        """
+        rows, lint = self.done(LINT_LOG)
+        plain = status_module.parse_failures(os.path.join(self.home, "gate.log"))
+        for row in plain:
+            row.update({"flaky": "", "order_dependent": False})
+        self.assertEqual(rows[:1], plain)
+        lint_rows = [row for row in rows if row["kind"] == "LINT"]
+        self.assertEqual(len(lint_rows), 2, lint_rows)
+        self.assertEqual([(row["case"], row["file"], row["line"]) for row in lint_rows],
+                         [("verify-case-lint:verify/nav/test_ticket_7.py",
+                           "verify/nav/test_ticket_7.py", 1),
+                          ("verify-case-lint:verify/nav/test_ticket_7.py",
+                           "verify/nav/test_ticket_7.py", 14)])
+        self.assertIn("verify-case lint: verify/nav/test_ticket_7.py:1 F1 模組沒有 docstring",
+                      lint_rows[0]["excerpt"])
+        self.assertEqual({row["log"] for row in lint_rows}, {lint})
+        self.assertEqual(set(lint_rows[0]), set(rows[0]), "LINT 列與 FAIL 列的鍵不同")
+
+    def test_an_unreadable_case_is_relative_to_the_gate_root(self):
+        """讀不到檔那一行印的是閘門傳的絕對路徑;file 要換回相對 `--lint-root`。"""
+        spec = os.path.join(self.repo, "verify", "nav", "gone.py")
+        text = "verify-case lint: 讀不到 %s —— [Errno 2] No such file or directory\n" % spec
+        rows, _ = self.done(text)
+        lint_rows = [row for row in rows if row["kind"] == "LINT"]
+        self.assertEqual(len(lint_rows), 1, lint_rows)
+        self.assertEqual((lint_rows[0]["file"], lint_rows[0]["line"]),
+                         ("verify/nav/gone.py", 0))
+        self.assertEqual(lint_rows[0]["excerpt"], text.strip())
+
+    def test_a_red_lint_with_nothing_to_point_at_still_writes_one_row(self):
+        """保底:一行都對不上 → 恰一列 `verify-case-lint:`、file 空、line 0、excerpt = 最後一個非空行。"""
+        rows, _ = self.done("verify-case: 讀不到票 #7 —— no such ticket\n\n")
+        lint_rows = [row for row in rows if row["kind"] == "LINT"]
+        self.assertEqual([(row["case"], row["file"], row["line"], row["excerpt"])
+                          for row in lint_rows],
+                         [("verify-case-lint:", "", 0, "verify-case: 讀不到票 #7 —— no such ticket")])
+
+    def test_the_no_cases_gap_is_one_row(self):
+        rows, _ = self.done("gate: 這張票沒有驗證者案例(#7 的 verify.files 是空的)—— 那是缺口,不是綠。\n",
+                            "--lint-no-cases")
+        lint_rows = [row for row in rows if row["kind"] == "LINT"]
+        self.assertEqual([(row["case"], row["file"], row["line"]) for row in lint_rows],
+                         [("verify-case-lint:(no-cases)", "", 0)])
+        self.assertIn("這張票沒有驗證者案例", lint_rows[0]["excerpt"])
+
+    def test_without_a_lint_log_there_is_no_lint_row(self):
+        log = self.write("gate.log", LOG, where=self.home)
+        done = self.run_py("scripts/status.py", "done", "--ticket", "7", "--kind", "gate",
+                           "--rc", "1", "--log", log)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual([row["kind"] for row in self.status_of("7")["failures"]], ["FAIL"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -605,6 +605,10 @@ out("S_STATE", data.get("state") or "")
 out("S_KIND", data.get("kind") or "")
 out("S_RC", "" if data.get("rc") is None else data.get("rc"))
 out("S_FAILS", len(data.get("failures") or []))
+# 紅榜全是驗證者案例的 lint 列(#126 A5):這一輪只派驗證者,不派 worker。
+fails = data.get("failures") or []
+out("S_LINT_ONLY", "1" if fails and all(row.get("kind") == status.LINT_KIND for row in fails)
+    else "")
 # 閘門機械格不合(#90):gate 那一筆 rc 4、note 帶 `機械格不合 —— ` 原文。**不靠 rc==4 單獨判**
 # —— 測試紅也可能是 4;認的是 gate 自己寫下的那幾行。
 mech = [line for line in str(data.get("note") or "").splitlines() if "機械格不合 —— " in line] \
@@ -832,19 +836,21 @@ PY
         if [ -n "${5:-}" ]; then
             echo ""
             echo "## 介面以分支上的實作為準(#60:這張票 interface_fixed 不是 true)"
-            echo "你是在 worker 第 1 輪交出 patch 之後才起的:介面以分支上的實作為準(worker 的 patch 在 \`$5\`,讀它、不要套進你的 work/)。"
+            echo "你是在 worker 第 $2 輪交出 patch 之後才起的:介面以分支上的實作為準(worker 的 patch 在 \`$5\`,讀它、不要套進你的 work/)。"
             echo "票面寫法與實作衝突時照實作、在 EVIDENCE 記一行(票面怎麼寫、實作怎麼做、你照哪個寫了案例)。"
         fi
         only_tests_section
     } > "$1"
 }
 
-# 第 1 輪要不要起驗證者(#51,D-032 ③):票 `needs_verifier` 是 JSON `true`、而且 `verify.baseline`
-# 還是空的。**缺這一格不擋**,只說一聲:開題端的自檢(D-031)已經擋,既有的票多半沒有這一格。
+# 這一輪要不要起驗證者(#51,D-032 ③;#126 起任一輪,不只第 1 輪):票 `needs_verifier` 是 JSON
+# `true`、而且 `verify.baseline` 還是空的(D-018:案例還沒交)。**缺這一格不擋**,只說一聲:
+# 開題端的自檢(D-031)已經擋,既有的票多半沒有這一格。
 # 設定 V_WANT(1 / 空)、V_BASE(票的 base_sha,驗證者副本從它展開)與 V_PARALLEL:
 # 票 `interface_fixed` 是 JSON `true` 才與 worker 平行起(#60,D-H38 ②);false / 缺 ⇒ 等 worker
 # 第 1 輪交出 patch 才起 —— 介面沒釘死的票,驗證者照票面猜的介面寫案例,worker 做出來的是另一個。
-verifier_wanted() {
+verifier_wanted() {   # $1 = 第幾輪(預設 1)
+    vw_round=${1:-1}
     eval "$(python3 - "$TF" <<'PY'
 import json, shlex, sys
 try:
@@ -869,12 +875,12 @@ PY
     case "$V_FLAG" in
         true)
             if [ -n "$V_HAS_BASELINE" ]; then
-                echo "auto-fix: #$ID needs_verifier=true,但 verify.baseline 已經有了 —— 第 1 輪不再起驗證者"
+                echo "auto-fix: #$ID needs_verifier=true,但 verify.baseline 已經有了 —— 第 $vw_round 輪不再起驗證者"
             else
                 V_WANT=1
             fi ;;
         missing)
-            echo "auto-fix: #$ID 票面沒寫 needs_verifier(D-028)—— 第 1 輪不起驗證者" >&2 ;;
+            echo "auto-fix: #$ID 票面沒寫 needs_verifier(D-028)—— 第 $vw_round 輪不起驗證者" >&2 ;;
     esac
 }
 
@@ -1485,8 +1491,9 @@ wait_verifier() {   # 設定 VPATCH / VEVIDENCE(沒交就是空字串)
     echo "auto-fix: 第 $r 輪的驗證者回來了(rc=$VWRC)—— patch-verify ${VPATCH:-沒交}"
 }
 
-dispatch_verifier() {   # uses r/FIX/DISPATCH/line; sets PATCH_OUT/EVIDENCE/CASE_FIXED
-    python3 - "$TF" "$ID" <<'PY'
+dispatch_verifier() {   # uses r/FIX/DISPATCH/line/LINT_ROUND; sets PATCH_OUT/EVIDENCE/CASE_FIXED
+    # 只派驗證者的那一輪(#126 A5)沒有 worker 的反駁、也沒有 worker 的 patch:不放寬寫入範圍。
+    [ -n "${LINT_ROUND:-}" ] || python3 - "$TF" "$ID" <<'PY'
 import json, os, subprocess, sys
 path, ident = sys.argv[1:3]
 with open(path, encoding="utf-8") as handle:
@@ -1548,16 +1555,28 @@ PY
         shed_copies "$VFIX"
         return 1
     fi
-    python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "$line" "$WPATCH" "$VKEPT_PATCH" >> "$VDISPATCH" <<'PY'
+    python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "${line:-}" "$WPATCH" "$VKEPT_PATCH" \
+            "${LINT_ROUND:+lint}" "${V_HAS_BASELINE:-}" >> "$VDISPATCH" <<'PY'
 import os, sys
-root, ident, run_id, r, objection, wpatch, kept = sys.argv[1:8]
+root, ident, run_id, r, objection, wpatch, kept, mode, has_baseline = sys.argv[1:10]
 sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import status
 
 data = status.read(root, ident, run_id)
 files = []
+if mode == "lint" and not has_baseline:
+    # 案例還沒交(baseline 空,D-018):一般驗證者派工文就是上面那一份,這裡只補上一輪 lint 擋了哪幾行。
+    print("\n## 上一輪閘門擋下的驗證者案例(kind=LINT,第 %s 輪只派你、不派 worker)" % r)
+    for row in data.get("failures") or []:
+        print("- %s %s (%s:%s)" % (row.get("kind") or "LINT", row.get("case") or "?",
+                                     row.get("file") or "?", row.get("line") or 0))
+        print("  " + ((row.get("excerpt") or "(沒有 excerpt)").splitlines() or [""])[0])
+    raise SystemExit(0)
 print("\n# 這一輪多的一件事:test_defect(第 %s 輪,修案例)" % r)
-print("\n產品 worker 提出:`%s`" % objection)
+if mode == "lint":
+    print("\n上一輪閘門的紅榜全是驗證者案例的 lint 列(kind=LINT):這一輪不派 worker,只派你修案例。")
+else:
+    print("\n產品 worker 提出:`%s`" % objection)
 if wpatch:
     print("副本 = **分支上那一版 + 本輪 worker 的 patch**(`%s`;base/ 與 work/ 都已含它);"
           "只修案例,不改產品程式。" % wpatch)
@@ -1581,7 +1600,17 @@ for path in files:
 if not files:
     print("- `(紅榜沒有 file;從 case 名定位,不猜 oracle)`")
 PY
-    echo "auto-fix: test_defect —— 起第 $r 輪的新驗證者 worker"
+    if [ -n "${LINT_ROUND:-}" ] && [ -n "$DRY" ]; then
+        echo "auto-fix: 驗證者派工文 -> $(rel_root "$VDISPATCH")"
+        echo "auto-fix: --dry-run —— 不起驗證者。派工文在上面那一份。"
+        shed_copies "$VFIX"
+        return 2
+    fi
+    if [ -n "${LINT_ROUND:-}" ]; then
+        echo "auto-fix: lint —— 起第 $r 輪的驗證者(這一輪不派 worker)"
+    else
+        echo "auto-fix: test_defect —— 起第 $r 輪的新驗證者 worker"
+    fi
     VLOG=$(dirname "$DISPATCH")/verifier-round$r.log
     ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
         --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix-verifier
@@ -1932,6 +1961,11 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
 
     DISPATCH=$ROOT/$(cfg reports_dir reports)/t$ID/$RUN_ID/dispatch-round$r.md
     mkdir -p "$(dirname "$DISPATCH")"
+    LINT_ROUND=""
+    if [ "$r" -gt 1 ] && [ -n "${S_LINT_ONLY:-}" ]; then
+        lint_round
+        return $?
+    fi
     if [ "$r" -eq 1 ]; then
         # 第 1 輪沒有紅榜、沒有上一輪:派工文就是 `--dry-run --round 1` 那一份(#40)。
         if ! first_round_packet "$DISPATCH" "$MODEL"; then
@@ -1991,6 +2025,9 @@ for row in data.get("failures") or []:
         bits.append("%s:%s" % (row["file"], row.get("line") or "?"))
     if row.get("suspected_flaky"):
         bits.append("**疑似 flaky**(單跑綠,但紅榜與 rc 都不動)")
+    if row.get("kind") == status.LINT_KIND:
+        # 驗證者案例的格式紅(#126 A5,D-014):這一輪的驗證者修,worker 動了會與它的 patch-verify 打架。
+        bits.append("**驗證者的,你不修、不寫 verify/**")
     if bits:
         print("- " + ";".join(bits))
     print("```")
@@ -2042,28 +2079,29 @@ PY
     fi
     echo "auto-fix: 派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$DISPATCH" "$ROOT")"
 
-    # 第 1 輪的驗證者(#51):只看第 1 輪;第 2 輪起的驗證者只有 test_defect 那一條路。
+    # 案例還沒交的驗證者(#51;#126 A4 起**任一輪**):第 2 輪起接著跑的票(舊狀態檔)以前只剩
+    # test_defect 那一條路派得到驗證者,needs_verifier=true 而 baseline 空的票就一路沒有案例。
+    # 同一輪 worker 回 test_defect 時只走那一條路的驗證者(A6,底下 V_HELD / dispatch_verifier)。
     V_WANT=""
     VPID=""
     VPATCH=""
     VEVIDENCE=""
     V_HELD=""
-    if [ "$r" -eq 1 ]; then
-        verifier_wanted
-        if [ -n "$V_WANT" ]; then
-            VFIX=$WTBASE/verify-t$ID/round$r
-            VDISPATCH=$(dirname "$DISPATCH")/dispatch-verifier-round$r.md
-            # 等 patch 才起的那一種(#60):底下 worker 沒走到交 patch 的每一頁都要說驗證者沒起,
-            # 不然「沒起」與「起了、沒交」在 inbox 長得一樣。
-            [ -n "$V_PARALLEL" ] \
-                || V_HELD="。驗證者沒起:票 interface_fixed 不是 true,要等 worker 第 1 輪交出 patch 才起"
-            if ! verifier_packet "$VDISPATCH" "$r" "$VFIX" "$V_BASE" \
-                    "${V_HELD:+$FIX/patch-round$r.diff}"; then
-                ROUND_RC=6
-                return 1
-            fi
-            echo "auto-fix: 驗證者派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$VDISPATCH" "$ROOT")"
+    verifier_wanted "$r"
+    if [ -n "$V_WANT" ]; then
+        [ "$r" -eq 1 ] || echo "auto-fix: #$ID needs_verifier=true 而 verify.baseline 是空的 —— 案例還沒交,第 $r 輪先派驗證者"
+        VFIX=$WTBASE/verify-t$ID/round$r
+        VDISPATCH=$(dirname "$DISPATCH")/dispatch-verifier-round$r.md
+        # 等 patch 才起的那一種(#60):底下 worker 沒走到交 patch 的每一頁都要說驗證者沒起,
+        # 不然「沒起」與「起了、沒交」在 inbox 長得一樣。
+        [ -n "$V_PARALLEL" ] \
+            || V_HELD="。驗證者沒起:票 interface_fixed 不是 true,要等 worker 第 $r 輪交出 patch 才起"
+        if ! verifier_packet "$VDISPATCH" "$r" "$VFIX" "$V_BASE" \
+                "${V_HELD:+$FIX/patch-round$r.diff}"; then
+            ROUND_RC=6
+            return 1
         fi
+        echo "auto-fix: 驗證者派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$VDISPATCH" "$ROOT")"
     fi
 
     if [ -n "$DRY" ]; then
@@ -2265,6 +2303,63 @@ PY
         return 1
     fi
 
+    round_receive
+}
+
+# 只派驗證者的那一輪(#126 A5,D-014):上一輪閘門的紅榜**全是** kind=LINT(驗證者案例的格式紅,
+# 含「宣告了 verify 卻沒有案例」那一列)。那是驗證者的紅,worker 修不動也不該碰 —— 派 worker
+# 等於付一整輪去修一個沒有壞掉的東西。副本是分支上那一版;baseline 空用一般驗證者派工文、
+# 非空走 test_defect 那一份(紅榜列出 LINT 列);交件後照 test_defect 那條路收件、重跑閘門。
+# 照樣算一輪(A7):attempt 照發、`ticket.py round` 照記、上限照算,不歸零。
+lint_round() {   # uses r/SRC/FIX/DISPATCH;設定 ROUND_RC
+    LINT_ROUND=1
+    V_WANT=""
+    VPID=""
+    VPATCH=""
+    VEVIDENCE=""
+    VKEPT_EVIDENCE=""
+    V_HELD=""
+    W_COST_LOG=""
+    WPATCH=""
+    CASE_FIXED=""
+    PATCH_OUT=""
+    line=""
+    verifier_wanted "$r" >/dev/null 2>&1
+    V_WANT=""
+    echo "auto-fix: 上一輪的紅榜全是驗證者案例的 lint 列(kind=LINT)—— 第 $r 輪不派 worker,只派驗證者"
+    [ -n "$DRY" ] || ev ticket.attempt.start --ticket "$ID" --attempt "$r" \
+        --note "auto-fix 第 $r 輪(只派驗證者)"
+    dispatch_verifier
+    lr_rc=$?
+    if [ "$lr_rc" -eq 2 ]; then
+        shed_copies "$FIX"
+        ROUND_RC=0
+        return 1
+    fi
+    if [ "$lr_rc" -ne 0 ]; then
+        # 越界(G_STOPPED)已由 guard_stop 收;規則包產不出來是 6,其餘是驗證者沒交(5)。
+        [ -z "${G_STOPPED:-}" ] || return 1
+        attempt_failed verifier-no-patch
+        if [ -n "${RULES_FAILED:-}" ]; then ROUND_RC=6; else ROUND_RC=5; fi
+        return 1
+    fi
+    # 這一輪只有它那一份:空的 patch-verify 就是案例沒修,套下去只會得到 apply 的「空的 patch 不是綠」。
+    if [ ! -s "$PATCH_OUT" ]; then
+        echo "auto-fix: 第 $r 輪的驗證者交了一份空的 patch-verify —— lint 擋的案例沒修,不套" >&2
+        block "#$ID 第 $r 輪的驗證者交了空的 patch-verify"
+        post "驗證者沒交出 patch-verify" \
+             "上一輪 lint 擋的案例沒修(patch-verify 是空的);讀驗證者派工文與它的 log,不要讓主線自己改案例" \
+             "$(dirname "$DISPATCH")"
+        attempt_failed verifier-no-patch
+        ROUND_RC=5
+        return 1
+    fi
+    RESULT_JSON=$(dirname "$DISPATCH")/result-verifier-round$r.json
+    round_receive
+}
+
+# 收件 → apply → 閘門:round_once 的後半,只派驗證者的那一輪(lint_round)也走這裡。
+round_receive() {   # uses r/CASE_FIXED/WPATCH/PATCH_OUT/EVIDENCE/RESULT_JSON/VPATCH/LINT_ROUND;設定 ROUND_RC
     # test_defect 先判(#112):平行驗證者交過件時 VPATCH 還指著它在 verify-t<n>/round<r> 的那份,
     # 而那個副本已經是 test_defect 驗證者的 —— 先判 VPATCH 就是把同一份 patch-verify 收兩次。
     # 驗證者的計畫兩條路都併進票:平行那一位保留下來的那份在前,test_defect 那一位的在後。
@@ -2309,7 +2404,8 @@ print(json.load(open(sys.argv[1], encoding="utf-8")).get("base_sha") or sys.argv
         return 1
     fi
     worker_cost handed-in
-    if [ -n "$CASE_FIXED" ]; then
+    # 只派驗證者的那一輪沒有 worker 的反駁可以結(#126):別把一筆不相干的 test_defect 標成 fixed。
+    if [ -n "$CASE_FIXED" ] && [ -z "${LINT_ROUND:-}" ]; then
         python3 - "$TF" "$ID" "$PATCH_OUT" <<'PY'
 import json, os, subprocess, sys
 path, ident, patch = sys.argv[1:4]

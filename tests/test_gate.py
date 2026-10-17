@@ -145,6 +145,14 @@ class TheValue(unittest.TestCase):
             self.assertEqual(handle.read().strip(), "2")
 """
 
+# #126 A3:lint 只印、不擋的兩種提示 —— F3(`test_` 沒有 docstring)與 F10(sleep 完就正向
+# 斷言,`verify_lint.block` 沒列就只印)。四段 docstring 在,所以 lint 過。
+HINTS_ONLY_CASE = VERIFIER_CASE.replace("import unittest\n\nTAGS", "import time\nimport unittest\n\nTAGS", 1) \
+    .replace('        """A1 src/value.txt 的值是 2。"""\n',
+             "        time.sleep(0)\n", 1)
+# 同兩條提示,外加一條擋的 F1(模組 docstring 一段都沒有)。
+HINTS_AND_F1_CASE = HINTS_ONLY_CASE.split('"""\n', 1)[1]
+
 
 class GateSh(Sandbox):
 
@@ -835,6 +843,132 @@ class VerifierCasesAtTheGate(Sandbox):
         self.assertNotIn("驗證者案例的綠", done.stdout, "lint 紅了還往下跑 check")
         self.assertNotIn("baseline", self.load_ticket("7")["verify"],
                          "lint 紅了卻仍然在票上寫了一格判決")
+
+    # ------------------------------- lint 紅進 failures[](#126 A1–A3,kind=LINT)
+
+    def lint_rows(self):
+        return [row for row in self.status_of("7", kind="gate")["failures"]
+                if row.get("kind") == "LINT"]
+
+    def test_t126_a1_a_lint_red_lands_in_the_red_list_with_file_and_line(self):
+        """A1:lint 擋的 F1 → 既有行為不變,而 failures[] 有一列 kind=LINT,鍵照票面字面。
+
+        **變異 M1**:gate 的 lint 分支不設 `LINT_ARGS` → failures[] 空 → 紅。
+        """
+        self.a_ticket(UNLINTED_CASE)
+        self.implement()
+        done = self.gate()
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("不跑 check", done.stdout)
+        self.assertNotIn("驗證者案例的綠", done.stdout)
+        rows = self.lint_rows()
+        self.assertEqual(len(rows), 1, self.status_of("7", kind="gate")["failures"])
+        row = rows[0]
+        self.assertEqual(row["case"], "verify-case-lint:verify/nav/test_ticket_7.py")
+        self.assertEqual(row["file"], "verify/nav/test_ticket_7.py")
+        self.assertEqual(row["line"], 1)
+        # lint 印的位置相對它自己的根(macOS 上 `/var` 與 `/private/var` 會讓它長出 `../`),
+        # 所以認的是那一行的尾巴;file / case 那兩格則要是換回來的相對路徑(上面兩句)。
+        f1 = [line for line in done.stdout.splitlines()
+              if line.startswith("verify-case lint: ")
+              and "verify/nav/test_ticket_7.py:1 F1 " in line]
+        self.assertEqual(len(f1), 1, done.stdout)
+        self.assertIn(f1[0], row["excerpt"])
+        self.assertTrue(row["log"].endswith(".lint"), row["log"])
+        with open(row["log"], encoding="utf-8") as handle:
+            self.assertIn(f1[0], handle.read())
+
+    def test_t126_a2_a_missing_case_file_is_a_relative_lint_row(self):
+        """A2:verify.files 列了一個不存在的檔 → 一列 LINT,file 相對 repo 根、line 0。
+
+        **變異 M5**:`parse_lint` 的 file 寫 lint 印的原樣(絕對路徑)→ 紅。
+        """
+        self.make_ticket(7, allowed_write_paths=["verify/*", "src/*", "tests/*"],
+                         verify={"files": ["verify/nav/test_ticket_gone.py"],
+                                 "tags": [], "run": "", "notes": ""})
+        done = self.gate()
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        rows = self.lint_rows()
+        self.assertEqual(len(rows), 1, self.status_of("7", kind="gate")["failures"])
+        row = rows[0]
+        self.assertEqual(row["file"], "verify/nav/test_ticket_gone.py")
+        self.assertFalse(row["file"].startswith("/"), row)
+        self.assertNotIn(self.home, row["file"])
+        self.assertEqual(row["line"], 0)
+        unreadable = [line for line in done.stdout.splitlines() if "讀不到" in line]
+        self.assertEqual(len(unreadable), 1, done.stdout)
+        self.assertIn(unreadable[0], row["excerpt"])
+
+    def test_t126_a2_the_no_cases_gap_is_one_lint_row(self):
+        """A2 缺口列:needs_verifier=true、verify 宣告了而 files 空 → rc 仍 3,恰一列 (no-cases)。
+
+        **變異 M6**:CRC=3 那條路不設 `LINT_ARGS` → failures[] 空 → 紅。
+        """
+        self.make_ticket(7, allowed_write_paths=["tests/*", "src/*"], needs_verifier=True,
+                         verify={"files": [], "tags": [], "run": "", "notes": ""})
+        done = self.gate()
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        rows = self.lint_rows()
+        self.assertEqual(len(rows), 1, self.status_of("7", kind="gate")["failures"])
+        self.assertEqual((rows[0]["case"], rows[0]["file"], rows[0]["line"]),
+                         ("verify-case-lint:(no-cases)", "", 0))
+        self.assertIn("這張票沒有驗證者案例", rows[0]["excerpt"])
+
+    def test_t126_a2_the_three_exceptions_write_no_lint_row(self):
+        """A2 的三個例外:waiver / needs_verifier=false / 沒宣告 verify → 0 列 LINT。
+
+        **變異 M7**:三個例外那幾格也設 `LINT_ARGS` → 紅。
+        """
+        empty = {"files": [], "tags": [], "run": "", "notes": ""}
+        for label, fields in (
+                ("waiver", {"verify": empty,
+                            "verify_waiver": {"by": "main", "reason": "純文字,沒有邏輯可紅"}}),
+                ("needs_verifier=false", {"verify": empty, "needs_verifier": False}),
+                ("沒有 verify 格", {})):
+            with self.subTest(label):
+                self.make_ticket(7, allowed_write_paths=["tests/*", "src/*"], **fields)
+                done = self.gate()
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertEqual(self.lint_rows(), [])
+
+    def test_t126_a3_hints_that_do_not_block_are_not_rows(self):
+        """A3:F3 / F10 只印不擋 —— lint 過時 0 列;lint 因 F1 不過時列數 == 「不過(N 條)」的 N,
+        提示行不成列。
+
+        **變異 M4**:`parse_lint` 不照 N 截、帶位置的行全收 → 後半紅(3 列)。
+        """
+        self.a_ticket(HINTS_ONLY_CASE)
+        self.implement()
+        done = self.gate()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("F3", done.stdout)
+        self.assertIn("F10", done.stdout)
+        self.assertIn("verify-case lint: 過", done.stdout)
+        self.assertEqual(self.lint_rows(), [])
+
+        self.a_ticket(HINTS_AND_F1_CASE)
+        done = self.gate()
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        counted = [line for line in done.stdout.splitlines() if "**不過**(1 條)" in line]
+        self.assertEqual(len(counted), 1, done.stdout)
+        rows = self.lint_rows()
+        self.assertEqual(len(rows), 1, rows)
+        self.assertIn(" F1 ", rows[0]["excerpt"])
+        hints = [line for line in done.stdout.splitlines()
+                 if line.startswith("verify-case lint: ") and (" F3 " in line or " F10 " in line)]
+        self.assertEqual(len(hints), 2, done.stdout)
+        for hint in hints:
+            self.assertNotIn(hint, rows[0]["excerpt"])
+
+    def test_t126_a3_the_rerun_ids_do_not_carry_lint_rows(self):
+        """A3:`status.py failures --log <gate log>` 印的可重跑 id 不含 LINT 列。"""
+        self.a_ticket(UNLINTED_CASE)
+        self.gate()
+        gate = self.status_of("7", kind="gate")
+        self.assertEqual(len(self.lint_rows()), 1)
+        ids = self.run_py("scripts/status.py", "failures", "--log", gate["logs"][0])
+        self.assertEqual(ids.returncode, 0, ids.stderr)
+        self.assertNotIn("verify-case-lint:", ids.stdout)
 
     # --------------------------------------------- lint 過了才量「候選該綠」
 
