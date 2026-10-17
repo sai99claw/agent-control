@@ -307,6 +307,54 @@ class TheSessionHookIsSynced(unittest.TestCase):
             self.assertIn("session-hook.sh", self.uncalled(r.stdout))
 
 
+class TheAgentCostHookIsSynced(unittest.TestCase):
+    """#95 A4:parser 與 hook 跟著同步;沒接 SubagentStop / SessionEnd 的專案印要貼的那兩筆。"""
+
+    LINE = '"command": "python3 \\"$CLAUDE_PROJECT_DIR/scripts/control/agent-cost-hook.py\\""'
+    WIRED = json.dumps({"hooks": {name: [{"hooks": [{
+        "type": "command", "timeout": 10,
+        "command": 'python3 "$CLAUDE_PROJECT_DIR/scripts/control/agent-cost-hook.py"'}]}]
+        for name in ("SubagentStop", "SessionEnd")}})
+
+    def project(self, dest, settings=None):
+        write_config(dest)
+        if settings is not None:
+            os.makedirs(os.path.join(dest, ".claude"))
+            with open(os.path.join(dest, ".claude", "settings.json"), "w") as handle:
+                handle.write(settings)
+
+    def test_a4_parser_and_hook_land_and_the_missing_wiring_is_printed(self):
+        """四問:A4 同步與接線提示;SCRIPT_LIST 少一支或提示段拿掉會紅;字面;新案例。"""
+        with tempfile.TemporaryDirectory() as d:
+            self.project(d)
+            r = sync(d)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            control = os.path.join(d, "scripts", "control")
+            with open(os.path.join(control, ".sync-manifest")) as handle:
+                manifest = handle.read().splitlines()
+            for name in ("agent-cost-hook.py", "transcript-cost.py"):
+                self.assertTrue(os.path.isfile(os.path.join(control, name)), name)
+                self.assertIn(name, manifest)
+            for hook in ("SubagentStop", "SessionEnd"):
+                lines = [x for x in r.stdout.splitlines()
+                         if self.LINE in x and '"%s"' % hook in x]
+                self.assertTrue(lines, hook + "\n" + r.stdout)
+            uncalled = [x for x in r.stdout.splitlines() if "同步了但專案端沒有呼叫點" in x]
+            self.assertTrue(uncalled, r.stdout)
+            self.assertNotIn("transcript-cost.py", uncalled[0], "parser 是被 hook 載入的,不是入口")
+            self.assertFalse(os.path.exists(os.path.join(d, ".claude", "settings.json")),
+                             "sync 不自己改專案的 settings.json")
+
+    def test_a4_a_wired_project_is_not_told_again(self):
+        """四問:A4 反方向;只看名單不看 settings 的版本會紅;字面;新案例。"""
+        with tempfile.TemporaryDirectory() as d:
+            self.project(d, self.WIRED)
+            r = sync(d)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertFalse([x for x in r.stdout.splitlines() if self.LINE in x], r.stdout)
+            self.assertNotIn("沒接互動成本 hook", r.stdout)
+
+
 class ASameNamedForkInTheProjectIsNamed(unittest.TestCase):
     """#35 A2:專案自己有一支 `scripts/verify.py`,與同步過去的 `scripts/control/verify.py`
     內容不同 —— 專案的閘門跑的是前者,後者再新也用不到,而兩份讀起來都像規格。"""
