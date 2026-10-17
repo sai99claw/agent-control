@@ -1,6 +1,6 @@
 {
   "id": "103",
-  "subject": "sync-to-project.sh 每次同步把 A 的 HEAD 寫進專案的 scripts/control/.synced-from(一行 40 位 sha),專案端 verify 案例改讀它就不必每次同步逐支改釘",
+  "subject": "同步記錄來源版本且不替髒來源背書",
   "created": "2026-10-09T12:54:28+08:00",
   "objective": "跑 sh scripts/sync-to-project.sh <專案根> 之後,<專案根>/scripts/control/.synced-from 恰一行 = 這一次同步來源 agent-control 的 git rev-parse HEAD(40 位小寫 hex,結尾換行);--dry-run 不寫;同步的控制腳本在 A 工作樹裡有未提交改動時不寫(記號會說謊),印一行原因、rc 不變。記號不進 .sync-manifest,manifest 的退場邏輯碰不到它。",
   "acceptance": [
@@ -11,11 +11,10 @@
     "S5【A 不是 git repo】把 A 複製成沒有 .git 的目錄再跑同步(auto-fix 的 worker 副本就是 git archive 出來的,上層也不在任何 git repo 裡)→ 同步照舊完成、rc 與今天相同、記號不寫(舊值保留),印一行含「.synced-from」與原因;tests/test_sync_to_project.py 既有案例在這種副本裡照綠。實測(Fable 10-10,A/m103):在 sync-to-project.sh 開頭加一行 SYNCED_SHA=$(git -C \"$HERE\" rev-parse HEAD)(set -eu 下)→ 非 git 副本裡 test_sync_to_project 35 條全紅。"
   ],
   "in_scope": [
-    "scripts/sync-to-project.sh",
-    "tests/test_sync_to_project.py"
+    "跑 sh scripts/sync-to-project.sh <專案根> 之後,<專案根>/scripts/control/.synced-from 恰一行 = 這一次同步來源 agent-control 的 git rev-parse HEAD(40 位小寫 hex,結尾換行);--dry-run 不寫;同步的控制腳本在 A 工作樹裡有未提交改動時不寫(記號會說謊),印一行原因、rc 不變。記號不進 .sync-manifest,manifest 的退場邏輯碰不到它。"
   ],
   "out_of_scope": [
-    "專案端讀記號的案例(專案 T #747 做;跨 repo,不寫 depends_on)"
+    "docs/DECISIONS.md"
   ],
   "depends_on": [],
   "allowed_write_paths": [
@@ -23,12 +22,12 @@
     "tests/test_sync_to_project.py"
   ],
   "role": "worker",
-  "model": "opus",
+  "model": "sonnet",
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "950fe859eb1986bb94b235eee96f5fa48dd8f015",
-  "state": "Ready",
-  "state_version": 7,
+  "state": "Draft",
+  "state_version": 20,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -38,13 +37,24 @@
     "notes": ""
   },
   "verify_strings": [
-    {
-      "path": "scripts/sync-to-project.sh",
-      "contains": ".synced-from"
-    }
+    ".synced-from"
   ],
-  "test_plan": "層次:shell 整合(tests/test_sync_to_project.py 既有拋棄式 A / 專案夾具,git init 在 tempdir)。期望值:記號內容由案例自己 git rev-parse HEAD 取,不從被測腳本算。只跑:python3 -m unittest tests.test_sync_to_project;收尾照 A 的閘門。變異:m1 不寫記號 → S1 紅;m2 dry-run 也寫 → S2 紅;m3 不查未提交 → S3 紅;m4 記號寫進 manifest → S4 紅;m5 rev-parse 失敗不接住 → S5 紅(既有案例在無 .git 副本一起紅)。",
-  "outline": "來源:專案 T 的 verify-audit-20261009 A6 / C1(control_sync 五支案例寫死 A sha,每次同步改釘,撞過三次)。T #747 先放記號檔(值 fa74b59,開題者實測 16 支 == A@fa74b59)並讓案例讀它;本票是另一半:同步自己維護記號。needs_verifier=false:單一腳本的整合夾具 + 四變異即驗收。估 25–35 分。 Fable 審票 2026-10-10:test_sync_to_project 實跑 35 條綠;T #747 已 Done,T 的 scripts/control/.synced-from 現為一行 fa74b59…(40 碼),格式與 S1 一致。探針實測:worker 副本(無 .git)裡 sync 在 set -eu 下叫 git rev-parse 會整支中止、35 條全紅 → 補 S5 與 m5。",
+  "test_plan": "T1 test_sync_to_project 固定五情境：乾淨來源、再次同步、dry-run、被同步檔有未提交變更、來源無 .git；以夾具來源 SHA 當 oracle。\nM1 移除 dirty 判斷使 S3 紅；M2 dry-run 寫 marker 使 S2 紅；M3 在 set -eu 下無條件 rev-parse 使 S5 紅。所有執行都留待實作期拋棄式環境。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n實作者以本票固定夾具與指定變異自證，不另建驗證者案例。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
+  "outline": "本票只負責同步記錄來源版本且不替髒來源背書。前置：無。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=false：輸入輸出契約以固定夾具可完整自證，另派只會重演。",
   "needs_verifier": false,
-  "priority": "P3"
+  "priority": "P2",
+  "interface_contracts": {
+    "synced_from": "scripts/control/.synced-from 一行 40 位小寫 SHA 加換行；不是 .sync-manifest 成員。",
+    "deploy_boundary": "本票只改 A 同步工具與拋棄式專案案例，真正 T 同步／部署由主線另行執行。"
+  },
+  "interface_fixed": true,
+  "effort": "medium",
+  "decision_refs": [
+    "D-049",
+    "D-016",
+    "D-018",
+    "D-028",
+    "D-031",
+    "D-050"
+  ]
 }

@@ -1,0 +1,101 @@
+{
+  "id": "117",
+  "subject": "session 生命週期、結構化交接與看板可見性",
+  "created": "2026-10-15T03:13:56+08:00",
+  "objective": "以現有 events、sessions.json 與看板為基礎，讓中途死亡、待接手與新 session 已接手能區分；本票保存事實與原子 claim，不決定何時自動重派。",
+  "acceptance": [
+    "A1 sessions.json 新版固定 schema_version=2、runs 以 run_id 索引、handoffs 以 handoff_id 索引；同角色多次執行不覆蓋，內部 session_id 與 provider_session_id 分開。舊 role→row 檔只讀正規化，首次 host 寫入在鎖內遷移，無兩份可寫真相。",
+    "A2 host 記 start/heartbeat/end/crashed，心跳預設 30 秒；超過 90 秒只標 stale，不能憑 stale 或 PID 存在就宣稱存活／死亡。保留 pid 與 process_start identity 供 #120 對帳。worker 只交觀察與檔案，不自行寫正式 registry。",
+    "A3 handoff 有摘要、下一步、artifact_refs、來源 run、接收角色、可空接手 run 與 pending/claimed/completed/superseded 狀態；缺 artifact 可顯示但禁止宣稱可直接 resume。記錄已完成與已排除假設，不能把整份歷史 prompt 再貼給接手者。",
+    "A4 claim 先以 ticket+attempt 取得單一派工 owner，既有票 lease holder=owner_id；同 owner 在 registry 鎖內按 role 領取唯一 active run。worker/verifier 可平行且不互搶票租約，同 role 雙 claim 只有一個成功，失敗不啟動程序；不同 owner 不得接管仍有效票租約，未知交 #120 對帳。",
+    "A5 board/board.py 使用同一 reducer 顯示 role/model/effort、執行狀態、最後心跳、交接摘要及接手連結；舊事件只有 PID 時標 legacy，不將 compact/resume 當新 session start。接手完成不等於票 Done。",
+    "A6 auto-fix/review 與 session hook 送新版生命週期資料；程序死在沒有 EVIDENCE 時也能由 host 以現有副本、部分 patch、log 產生交接事實；內容未知填 null，不虛構進度。receipt 接受仍交 #98，不另造 review 欄。",
+    "A7 worker/verifier 收件在同一票鎖驗派工 attempt、role active run、owner、捕獲版本及 #98 face；舊 run 或外部改票 rc=4 零覆蓋。平行角色先收 artifact 再序列化 apply；只有可追溯為同 owner 的已接受同伴收件造成版本前進，且 face 未變，才允許依該連續版本鏈前推 CAS；未知版本跳躍拒收。finish 保持 attempt 也不能接收舊 run。",
+    "A8 提供唯一程序 slot acquire/release API，#119 呼叫時可設容量，未設時沿用現有執行數；每個實際 worker/verifier/reviewer 都持一 slot。worker 結束即釋 slot，再等待 verifier；禁止持有最後一 slot 等待尚未啟動的 verifier。",
+    "A9 新 session-state helper 與 schema 讀端一併列入 sync-to-project；拋棄式已同步專案可跑新 auto-fix 的 session 路徑，不會缺 helper。"
+  ],
+  "in_scope": [
+    "以現有 events、sessions.json 與看板為基礎，讓中途死亡、待接手與新 session 已接手能區分；本票保存事實與原子 claim，不決定何時自動重派。"
+  ],
+  "out_of_scope": [
+    "docs/DECISIONS.md"
+  ],
+  "depends_on": [
+    {
+      "id": "98",
+      "condition": "landed"
+    },
+    {
+      "id": "121",
+      "condition": "landed"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/session-state.py",
+    "scripts/auto-fix.sh",
+    "scripts/review.sh",
+    "scripts/session-hook.sh",
+    "scripts/event.py",
+    "scripts/heartbeat.sh",
+    "board/board.py",
+    "tests/test_session_state.py",
+    "tests/test_session_hook.py",
+    "tests/test_board.py",
+    "tests/test_event.py",
+    "tickets/SCHEMA.md",
+    "docs/WORKFLOW.md",
+    "scripts/sync-to-project.sh",
+    "tests/test_sync_to_project.py"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "fac9173633ebcd697c71a69d23d148b89a15fae1",
+  "state": "Draft",
+  "state_version": 55,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [
+      "agent-output",
+      "board-reads"
+    ],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "本票只負責session 生命週期、結構化交接與看板可見性。前置：#98、#121。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。",
+  "effort": "high",
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "feature": "agent-control：session 生命週期與交接",
+  "test_plan": "T1 純 reducer 事件夾具測同 role 多 run、重複事件、亂序 end、stale、legacy 及舊檔遷移；oracle 為固定狀態轉移表。\nT2 fake worker 被控制退出且無 EVIDENCE；核對 host 產交接保留原副本路徑；兩個 claim barrier 驗一個成功。\nT3 test_board/test_session_hook：看板可辨 stale/接手/closed，compact 無新 start。M1 按 role 覆寫使 A1 紅；M2 stale 直接准新 claim 使 A4 紅；M3 交接完成設 Done 使 A5 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例置於 tests/test_ticket_<正式票號>_verify.py，不列入 worker 的 allowed_write_paths；由驗證者設定 verify.files/run，verify.tags=[]（A 的 tests/ 案例不冒用未登記的 verify 標籤）。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。\nT4 雙角色同 owner 平行均可收件、同 role 雙派拒絕、外部改票使遲到結果拒收；容量=1 時 worker 先釋 slot 再起 verifier，不能死鎖。",
+  "verify_strings": [
+    "handoff_id",
+    "provider_session_id",
+    "last_heartbeat"
+  ],
+  "problem": null,
+  "hypotheses": null,
+  "interface_contracts": {
+    "run": "{run_id,session_id,provider_session_id,ticket_id,attempt,state_version,face,owner_id,role,model,effort,cwd,status,last_heartbeat,pid,process_start,artifact_refs}；無票欄為 null，artifact_refs 永為 list[str]。",
+    "handoff": "{handoff_id,from_run,to_role,to_run,summary,next_action,artifact_refs,status,supersedes}；to_run/supersedes 可 null。",
+    "registry": "有票 reports/t<id>/sessions.json；無票 reports/sessions.json，同一 schema/reducer；handoff 僅此處可寫，票 handoff 留引用。",
+    "claim": "既有 ticket lease 的 holder/until 形狀不變，holder=派工 owner_id；同 owner 的 role claim 只在 sessions registry 唯一 active run 表示，不另設各自到期租約。review 角色以 #98 review_request 的 run_id 為當前收件身分。"
+  },
+  "non_goals": null,
+  "duplicate_analysis": null,
+  "assignment_reason": null,
+  "planning_evidence": null,
+  "supersedes_contract": null,
+  "priority": "P1",
+  "decision_refs": [
+    "D-049",
+    "D-016",
+    "D-018",
+    "D-028",
+    "D-031",
+    "D-050"
+  ]
+}

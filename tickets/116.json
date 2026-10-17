@@ -1,0 +1,221 @@
+{
+  "id": "116",
+  "subject": "唯一角色模型順序表與共用選路器",
+  "created": "2026-10-15T00:35:17+08:00",
+  "objective": "取代 #116 的大 AgentSpec 提案，將 D-049 ②（含 10-17 補）各角色的有序模型、effort、effort 升級值與每次派工份量上限放進 board/role-models.json；所有後續派工呼叫同一個純選路器，不建立 provider plugin/broker 平台。",
+  "acceptance": [
+    "A1 建立唯一 board/role-models.json，初值完整採 interface_contracts.initial_table（D-049 ② 與 10-17 補已確認，無待確認格）；每角色非空有序 list，每候選恰五鍵 model/tool/effort/effort_escalated/dispatch_cap，模型與 tool 相符、effort 與 effort_escalated 依既有 ticket.py 表驗證、dispatch_cap 是正整數或 null。未知角色、空鏈、非法 effort、非法 cap rc=2 不派。",
+    "A2 resolve 只在候選被可信的 quota_exhausted/provider_unavailable 證據標記後取下一個；一般 rc!=0、測試紅、timeout、no-patch、patch 文字裡的 429 不能視為 quota。CLI 缺失、經 provider 錯誤信封確認的模型不可用才算 unavailable；認證設定錯誤停下顯示具體設定問題，不盲試所有角色。",
+    "A3 verifier 鏈固定 sol → opus，不看 worker 模型（D-049 補：不強制異模型；表內 verifier_prefer_different_model=false 只是記錄裁示，選路不讀它）。effort 取法：預設候選 effort；票 complexity=complex、或 repair_round ≥ 2 且上一輪紅 → 取候選 effort_escalated（null 則沿用 effort）；修補輪沿用原 worker 的 model 與 effort（除上述升級）；opus 接手取其候選 effort=high，不是 null；sonnet 走 worker_simple medium。票明寫 effort 仍優先於表（A5）。",
+    "A4 全鏈耗盡回 exhausted，不回任意 Opus；消費端須停並發一次 decision。整串內無效設定不能默默跳過。選路結果含角色、原鏈 index、model/tool/effort、選擇原因與耗盡資訊。",
+    "A5 票 effort 可覆寫被選候選的預設，沿用 D-047 獨立欄位；換 provider 時不合法的票 effort 不跨工具硬套，記原因並採下一候選 effort。model 格為該次選擇的實際模型，不以字尾藏 effort。",
+    "A6 本票先交可用 CLI 與純 helper；舊入口在 #121/#122 逐一切換，切換後該角色只讀新表，舊 routing/memory 模型值不得再競爭。表中 main 僅為開 session 時建議，不熱切已在跑的互動 session。",
+    "A7 票的 complexity 為可選字串 simple|complex（取代提案的 dispatch_profile，不另加第二個欄位）：role=worker 時 simple → worker_simple 鏈、complex → worker 鏈且 effort 升級、缺 → worker 鏈預設；開題派工帶 --complexity complex → opener_complex 鏈，缺 → opener。其他值 rc=2。所有現有票的 model 是本輪具體派工建議，遷移到表後不拿舊 model 跳過有序候選；明確指定表外模型必須先改表或由主線裁示，不靜默覆蓋。",
+    "A8 每次派工的份量上限：resolve 輸出含 dispatch_cap；呼叫者帶 --items N（這次要交幾張票／幾個項目）時 N > cap → rc=2 並印「超過 <model> 的每次派工上限 <cap>，請切成 ≤<cap> 的批」；worker/verifier/reviewer 候選 cap 固定 1，--items 缺視為 1；astra 候選初值 5（主線建議，可改表）；null 不擋。cap 只在派工前擋，不改票。"
+  ],
+  "in_scope": [
+    "取代 #116 的大 AgentSpec 提案，將 D-049 各角色模型與 effort 放進 board/role-models.json；所有後續派工呼叫同一個純選路器，不建立 provider plugin/broker 平台。"
+  ],
+  "out_of_scope": [
+    "docs/DECISIONS.md"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "board/role-models.json",
+    "scripts/role-models.py",
+    "scripts/ticket.py",
+    "tests/test_role_models.py",
+    "tests/test_ticket.py",
+    "docs/ROLES.md",
+    "tickets/SCHEMA.md"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "fac9173633ebcd697c71a69d23d148b89a15fae1",
+  "state": "Draft",
+  "state_version": 70,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [
+      "agent-output"
+    ],
+    "run": "",
+    "notes": ""
+  },
+  "feature": "agent-control：角色路由與派工入口",
+  "decision_refs": [
+    "D-049",
+    "D-016",
+    "D-018",
+    "D-028",
+    "D-031",
+    "D-043",
+    "D-047",
+    "D-050"
+  ],
+  "outline": "本票只負責唯一角色模型順序表與共用選路器。前置：無。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。",
+  "test_plan": "T1 test_role_models：逐一角色比對固定初值；verifier 不論 worker 是 sol/opus/fable 都是 sol→opus；effort 三案：預設 high、complexity=complex → xhigh、repair_round=2 且上一輪紅 → xhigh、修補輪其他情況沿用；opus 接手 effort=high；單一 fable 整理、簡單 sonnet medium 不降級；--items 6 對 astra rc=2、--items 5 過、fable null 不擋。\nT2 fake provider 錯誤信封/缺 CLI/普通測試 log/字面 429，驗 quota 與一般錯誤分類；效能只量模型選擇，無真 LLM。\nT3 M1 全角色 sol 使 A1 紅；M2 任意非零即 fallback 使 A2 紅；M3 全耗回 opus 使 A4 紅；M4 直接沿用 ultra 給 Claude 使 A5 紅；M5 verifier 依 worker 換序使 A3 紅；M6 cap 不擋使 A8 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例置於 tests/test_ticket_<正式票號>_verify.py，不列入 worker 的 allowed_write_paths；由驗證者設定 verify.files/run，verify.tags=[]（A 的 tests/ 案例不冒用未登記的 verify 標籤）。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
+  "verify_strings": [
+    "dispatch_cap",
+    "effort_escalated",
+    "opener_complex"
+  ],
+  "effort": "high",
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "interface_contracts": {
+    "initial_table": {
+      "schema_version": 1,
+      "candidate_keys": [
+        "model",
+        "tool",
+        "effort",
+        "effort_escalated",
+        "dispatch_cap"
+      ],
+      "roles": {
+        "main": [
+          {
+            "model": "opus",
+            "tool": "claude-code",
+            "effort": null,
+            "effort_escalated": null,
+            "dispatch_cap": null
+          }
+        ],
+        "worker": [
+          {
+            "model": "codex:gpt-5.6-sol",
+            "tool": "codex",
+            "effort": "high",
+            "effort_escalated": "xhigh",
+            "dispatch_cap": 1
+          },
+          {
+            "model": "opus",
+            "tool": "claude-code",
+            "effort": "high",
+            "effort_escalated": null,
+            "dispatch_cap": 1
+          }
+        ],
+        "worker_simple": [
+          {
+            "model": "sonnet",
+            "tool": "claude-code",
+            "effort": "medium",
+            "effort_escalated": null,
+            "dispatch_cap": 1
+          }
+        ],
+        "opener_complex": [
+          {
+            "model": "codex:gpt-6-astra",
+            "tool": "codex",
+            "effort": null,
+            "effort_escalated": null,
+            "dispatch_cap": 5
+          },
+          {
+            "model": "fable",
+            "tool": "claude-code",
+            "effort": null,
+            "effort_escalated": null,
+            "dispatch_cap": null
+          }
+        ],
+        "opener": [
+          {
+            "model": "opus",
+            "tool": "claude-code",
+            "effort": null,
+            "effort_escalated": null,
+            "dispatch_cap": null
+          }
+        ],
+        "verifier": [
+          {
+            "model": "codex:gpt-5.6-sol",
+            "tool": "codex",
+            "effort": "high",
+            "effort_escalated": null,
+            "dispatch_cap": 1
+          },
+          {
+            "model": "opus",
+            "tool": "claude-code",
+            "effort": null,
+            "effort_escalated": null,
+            "dispatch_cap": 1
+          }
+        ],
+        "reviewer": [
+          {
+            "model": "opus",
+            "tool": "claude-code",
+            "effort": null,
+            "effort_escalated": null,
+            "dispatch_cap": 1
+          }
+        ],
+        "consolidator": [
+          {
+            "model": "fable",
+            "tool": "claude-code",
+            "effort": null,
+            "effort_escalated": null,
+            "dispatch_cap": null
+          }
+        ],
+        "design": [
+          {
+            "model": "codex:gpt-6-astra",
+            "tool": "codex",
+            "effort": null,
+            "effort_escalated": null,
+            "dispatch_cap": 5
+          },
+          {
+            "model": "fable",
+            "tool": "claude-code",
+            "effort": null,
+            "effort_escalated": null,
+            "dispatch_cap": null
+          }
+        ]
+      },
+      "policies": {
+        "fallback": "next_candidate_only_on_quota_or_unavailable",
+        "exhausted": "stop_and_decision",
+        "scope": "dispatched_agents",
+        "escalate_effort_when": [
+          "ticket.complexity == complex",
+          "repair_round >= 2 and previous round red"
+        ],
+        "repair_round_keeps_worker_model_and_effort": true,
+        "verifier_prefer_different_model": false
+      },
+      "confirmed": {
+        "source": "D-049 ② + D-049 補（2026-10-17 使用者確認）",
+        "reviewer": "opus（確認）",
+        "verifier": "sol → opus，不強制與 worker 異模型（確認）",
+        "worker_effort": "sol 預設 high；票標 complexity=complex 或修補第 2 輪仍紅 → xhigh；opus 接手 high；sonnet medium；修補輪沿用原 worker 模型與強度（主線建議，使用者授權）",
+        "exhausted": "整串用完 → 停、發 decision 頁（確認）",
+        "dispatch_cap": "每次派工最多幾張票：worker/verifier/reviewer 固定 1；astra（開題/設計）初值 5，主線可改；null = 不限（D-049 補：派給 astra 的工作要切小批）",
+        "scope": "表只管派出去的 agent；互動主線模型由開 session 時決定"
+      }
+    },
+    "location_reason": "選獨立 board/role-models.json：角色順序是一份可檢視的政策；避免改 board/config.json routing 字串成陣列破壞尚未遷移的讀端。#122 完成時移除被替代角色的舊預設，無雙寫。",
+    "resolve_result": "{role:string,candidate_index:int|null,model:string|null,tool:string|null,effort:string|null,dispatch_cap:int|null,reason:string,exhausted:bool}",
+    "new_cli": "擬新增 python3 scripts/role-models.py resolve --role <角色> [--complexity simple|complex] [--repair-round N] [--last-red] [--items N] [--exhausted-index I]；本次未存在，實作需補 --help 與固定 JSON 輸出。",
+    "complexity": "票的 complexity:simple|complex（選填）是唯一的「簡單／複雜」標記；worker 與 opener 都讀它。effort 升級條件寫在表的 policies.escalate_effort_when，選路器實作、消費端（#121）只傳 repair_round 與上一輪紅否。",
+    "dispatch_cap": "候選欄 dispatch_cap:int|null = 這個模型一次派工最多處理幾張票；開題/設計/整理按批內票數算，worker/verifier/reviewer 永遠 1。#122 的開題/設計派工與 #118 的 PlanningBatch 發批都以它擋超量。"
+  },
+  "priority": "P1",
+  "problem": null,
+  "planning_evidence": null
+}

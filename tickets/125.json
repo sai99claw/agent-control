@@ -1,0 +1,87 @@
+{
+  "id": "125",
+  "subject": "閘門與落地全套紅預設自動修補，統一三輪上限",
+  "created": "2026-10-17T13:07:40+08:00",
+  "objective": "補完既有 gate/land 預設開 auto-fix 的缺口：可歸因紅、無歸因紅與環境可疑先走有界診斷修補，不把一般技術失敗直接送回主線。",
+  "acceptance": [
+    "A1 gate 與單票/多票 land 全套紅預設開修補；--no-auto-fix 仍是明確停用。紅的原 gate rc 不偽裝綠，修補產生新候選後重新量 gate/review/full suite。",
+    "A2 D-050 ② 已裁 repair.max_rounds=3：首次紅之後最多 3 次修補嘗試（不是總共三次 worker）；技術診斷若啟 LLM 也算一次；跨重啟、換模型不歸零。既有 retry_limit 與 batch_fix.rounds 讀端正規化為同一 repair.max_rounds=3，衝突新值優先並警告；無重置、無 off-by-one。",
+    "A3 一般測試紅／missing result／不可歸因／environment_suspect 都提供現成 log 與失敗證據給 auto-fix。環境可疑不得盲目改產品碼或調弱測試，先診斷；只需既有授權內環境修復可續做，需產品/權限取捨才 decision。",
+    "A4 第 3 次修補後仍紅（D-050 ②）、明確 worker 反駁或產品取捨才對本修復流程發 decision；中間只寫事件。角色全耗與 #115 越界是各自既有停止理由，不被本票吞掉，也不冒充一般測試紅重試。",
+    "A5 同一 land 批次只一個 incident/預算，呼叫既有 auto-fix --batch；不得各票重複三輪。#120 處理進程失敗，本票處理測試修補輪數；同一 root_run_id 在重啟與換模型後仍延續預算。",
+    "A6 修補結果與新 base/patch 不匹配則重新 gate/review，未通過不能合併或發布；批次紅的 main 保持未變，修好後仍走原 land 授權與檢查。",
+    "A7 本票接上 #120 repair_needed 並消化等待中的 incident；單票與批次共用 #120 已定 ticket_ids/attempts/batch_id/root_run_id 形狀，第三輪紅只發一頁，不另建 batch repair ledger。",
+    "A8 status.py regression-red 建出的 Draft 票（#106 A4 沒有完整 gate 證據那種），由本票的修補流程在同一 incident 預算內呼叫 ticket.py plan <id> --run <該 gate 命令> 實跑一次；rc 任何值都寫 plan_ran，綠才轉 Ready 並進既有派工；紅則留 Draft 並在 incident 記 next_action；不另寫第二種證據欄。"
+  ],
+  "in_scope": [
+    "補完既有 gate/land 預設開 auto-fix 的缺口：可歸因紅、無歸因紅與環境可疑先走有界診斷修補，不把一般技術失敗直接送回主線。"
+  ],
+  "out_of_scope": [
+    "docs/DECISIONS.md"
+  ],
+  "depends_on": [
+    {
+      "id": "120",
+      "condition": "landed"
+    },
+    {
+      "id": "106",
+      "condition": "landed"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/gate.sh",
+    "scripts/land.sh",
+    "scripts/auto-fix.sh",
+    "scripts/controller.py",
+    "scripts/status.py",
+    "scripts/ticket.py",
+    "scripts/inbox.py",
+    "tests/test_gate.py",
+    "tests/test_land.py",
+    "tests/test_auto_fix.py",
+    "tests/test_controller.py",
+    "tests/test_status_67.py",
+    "board/config.json",
+    "docs/WORKFLOW.md"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "dfaa05c0c87d5011a31872614c2c7a01d2176d25",
+  "state": "Draft",
+  "state_version": 7,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "effort": "high",
+  "outline": "本票只負責閘門與落地全套紅預設自動修補，統一三輪上限。前置：#120、#106。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。\nD-050 ②：修補上限 3 輪，跨重啟與換模型不歸零，第 3 次仍紅才發 decision 頁。",
+  "test_plan": "T1 假 gate 首紅第二修綠、三次仍紅；單票與多票各測，斷言修補啟動次數、原 rc、decision 只有上限後一頁。\nT2 無法解析失敗、環境可疑、review missing、產品反駁四種，核對診斷／decision 分界，禁止用環境旗標自動判綠。\nT3 跨重啟及 quota 換模型仍僅三次；--no-auto-fix 零自動派工；M1 第三次後再派使 A2 紅；M2 紅後立即 decision 使 A4 紅；M3 批次每票各起修復使 A5 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例置於 tests/test_ticket_<正式票號>_verify.py，不列入 worker 的 allowed_write_paths；由驗證者設定 verify.files/run，verify.tags=[]（A 的 tests/ 案例不冒用未登記的 verify 標籤）。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "decision_refs": [
+    "D-049",
+    "D-016",
+    "D-018",
+    "D-028",
+    "D-031",
+    "D-050"
+  ],
+  "verify_strings": [
+    "max_rounds",
+    "repair"
+  ],
+  "interface_contracts": {
+    "repair_policy": "board/config.json repair={enabled:true,max_rounds:3}；唯一新寫入處。#120 incident.retry_count.repair 記已耗輪數；不增加另一個 ticket repair budget。",
+    "compatibility": "票 repair_round 保持顯示用途；新策略啟用時停止以 ticket.py round 的舊 retry_limit+1 另判終止，該入口委派共用策略。",
+    "regression_ready": "Draft 回歸票轉 Ready 的唯一入口是 #106 的 recorder（ticket.py plan）；本票只負責觸發與預算，不自寫 plan_ran。",
+    "decided": "D-050 ② 已裁 N=3（repair.max_rounds=3），跨重啟、換模型不歸零，第 3 次仍紅才發 decision 頁；D-049 ③ 已裁預設開。"
+  },
+  "priority": "P1"
+}

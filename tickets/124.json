@@ -1,0 +1,75 @@
+{
+  "id": "124",
+  "subject": "逾時或中斷的 headless 成本補讀同一 transcript 解析器",
+  "created": "2026-10-17T13:07:40+08:00",
+  "objective": "承接 #95 D9 與 #116 cost 讀端；沒有完整信封時才用 #95 parser 與 #117 session 參照，補可知的 token，不增第二份成本 ledger。",
+  "acceptance": [
+    "A1 正常完整信封維持 D-047 的 modelUsage→usage 逐欄回退；只在 timeout／中斷且無可用信封時，host 以該 run 的可信 transcript 參照呼叫 #95 parser。無路徑或讀不到欄位就 null，不猜零。",
+    "A2 worker/verifier 每次實際 run 恰一列既有 15 鍵 cost；以(ticket,run_id,role,round)冪等，Controller 重送收尾事件不重記。resume 與新 session 各記自己的 run，不將原 session 累積 transcript 重複加兩次；重複列被拒時 stderr 含「同一 run_id 已記過成本」、rc=0、票不變。",
+    "A3 resume 共用累積 transcript 時以啟動前已見 message.id 的最後版本為基線，只記這次新增／增量 usage；不能取得可靠分界則相關欄 null 並 note 原因，不能用整份累計充作本次用量。",
+    "A4 by/outcome/run_id/session_id/effort 為實際執行資料，quota/error/timeout 沿用原 outcome 登記；不寫 partial 新鍵，不補過去歷史、不把 agent.cost 推測資料納入 cost_total。"
+  ],
+  "in_scope": [
+    "承接 #95 D9 與 #116 cost 讀端；沒有完整信封時才用 #95 parser 與 #117 session 參照，補可知的 token，不增第二份成本 ledger。"
+  ],
+  "out_of_scope": [
+    "docs/DECISIONS.md"
+  ],
+  "depends_on": [
+    {
+      "id": "95",
+      "condition": "landed"
+    },
+    {
+      "id": "123",
+      "condition": "landed"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/ticket.py",
+    "scripts/transcript-cost.py",
+    "tests/test_cost_ledger.py",
+    "tests/test_agent_cost_hook.py",
+    "tickets/SCHEMA.md"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "dfaa05c0c87d5011a31872614c2c7a01d2176d25",
+  "state": "Draft",
+  "state_version": 9,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "effort": "high",
+  "outline": "本票只負責逾時或中斷的 headless 成本補讀同一 transcript 解析器。前置：#95、#123。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=false：輸入輸出契約以固定夾具可完整自證，另派只會重演。",
+  "test_plan": "T1 test_cost_ledger 假 worker/verifier 寫兩則 assistant usage 後逾時；以手算 token 斷言；無 transcript/null 欄保持 null。\nT2 原 session 兩則、resume 新增一則，重送相同結束事件兩次；共兩列，合計只計三則。\nM1 timeout 全填零使 A1 紅；M2 resume 累積全加使 A3 紅；M3 去掉唯一 run 去重使 A2 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n實作者以本票固定夾具與指定變異自證，不另建驗證者案例。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
+  "needs_verifier": false,
+  "interface_fixed": true,
+  "decision_refs": [
+    "D-049",
+    "D-016",
+    "D-018",
+    "D-028",
+    "D-031",
+    "D-045",
+    "D-047",
+    "D-050"
+  ],
+  "verify_strings": [
+    "同一 run_id 已記過成本",
+    "transcript-cost.py"
+  ],
+  "interface_contracts": {
+    "cost": "完全沿用 #95 的 15 鍵；唯一 writer=ticket.py cost，去重不變更 state_version 或 review。",
+    "transcript_boundary": "以 host run 啟動時的 message.id/usage 基線計增量，檔案切換或無基線時 null；不靠時間猜歸屬。"
+  },
+  "priority": "P1"
+}

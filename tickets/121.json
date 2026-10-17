@@ -1,0 +1,84 @@
+{
+  "id": "121",
+  "subject": "worker、驗證者與覆核者依同一角色表派工",
+  "created": "2026-10-17T13:07:40+08:00",
+  "objective": "讓 auto-fix/review 的所有實際執行採 #116 選路，取代 #87 A23/#114 A10 硬編碼 quota 改 Opus；選模型與啟動解耦，重派時機仍交 #120。",
+  "acceptance": [
+    "A1 auto-fix 第一輪、修復輪、批次 worker、test_defect verifier、平行及晚起 verifier 與 review 入口都呼叫 #116；實際 argv/model/effort、rules pack、agent 事件、cost[] 相符。只有票 complexity=simple 才選 worker_simple（sonnet medium）。",
+    "A2 Codex quota 後保留副本與交接資料；取得下一候選才依表換 tool/model/effort，不能硬寫 opus 或刪副本。CLI 已知不可用可於啟動前選下一候選；普通無交件不換模型。",
+    "A3 一次啟動回報結構化 quota/unavailable/exhausted，沒有 Controller 時以有限本地驅動接下一候選；有 Controller 時只交同一 action 記錄，由 Controller 接續，禁止兩邊各重派。整串用完 Blocked + 一頁 decision，沒有候選則不再起程序。",
+    "A4 每次實際執行都記既有 15 鍵 cost；quota 用既有 outcome=error 並 note 記原因，不新增 cost 鍵。event/result 帶實際 role/model/effort；越界仍依 #115 優先阻止收件。",
+    "A5 review 仍採 #98 receipt/CAS；切模型不能跳過 gate、覆核、原票 attempt 檢查。文件與測試移除舊「quota 固定改 opus 然後只發頁」預期；新表首選改為 fable 的夾具能實際起 fable。",
+    "A6 普通入口 gate=green 但 review=fail/missing/stale 時，auto-fix 最終分別保留失敗／未完成狀態，不能被 ROUND_RC=0 蓋成成功；--no-review 可返回既有技術 rc=0，但明示 awaiting_review，後續不能當可落地。測試固定 gate-pass/review-fail、missing、stale 三案的 rc 與終態。",
+    "A7 effort 照表：第一輪 sol high；票 complexity=complex 或修補第 2 輪起且上一輪紅 → 傳 --repair-round/--last-red 給 #116 取 xhigh；修補輪沿用原 worker 的 model 與 effort（只有上述升級）；quota 改派 opus 時 effort 取表的 high，不再寫 null。agent.start/done/failed 與 cost[].effort 記實際值；舊「codex 改派 claude-code 時 effort 設 null」的 SCHEMA 文字與測試一併改。"
+  ],
+  "in_scope": [
+    "讓 auto-fix/review 的所有實際執行採 #116 選路，取代 #87 A23/#114 A10 硬編碼 quota 改 Opus；選模型與啟動解耦，重派時機仍交 #120。"
+  ],
+  "out_of_scope": [
+    "docs/DECISIONS.md"
+  ],
+  "depends_on": [
+    {
+      "id": "115",
+      "condition": "landed"
+    },
+    {
+      "id": "98",
+      "condition": "landed"
+    },
+    {
+      "id": "116",
+      "condition": "landed"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/review.sh",
+    "scripts/event.py",
+    "tests/test_auto_fix_codex.py",
+    "tests/test_auto_fix.py",
+    "tests/test_review.py",
+    "tests/test_cost_ledger.py",
+    "tests/test_event.py",
+    "tickets/SCHEMA.md",
+    "docs/WORKFLOW.md"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "dfaa05c0c87d5011a31872614c2c7a01d2176d25",
+  "state": "Draft",
+  "state_version": 9,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "effort": "high",
+  "outline": "本票只負責worker、驗證者與覆核者依同一角色表派工。前置：#115、#98、#116。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。",
+  "test_plan": "T1 fake codex 先 quota、fake opus 交件；再改表先 fable、測命令與 cost 不硬編碼。覆蓋 worker/verifier/reviewer 三路與批次。\nT2 timeout/測試紅/no-patch 不換模型；修補第 2 輪紅 → 命令含 xhigh、第 1 輪與第 2 輪綠後不升級；quota 改 opus 的命令含 --effort high；全部 unavailable 只出一頁；有/無 Controller owner 各測一次且總啟動數相同。\nT3 M1 保留原硬編碼 opus 使 A5 紅；M2 quota 刪副本使 A2 紅；M3 event 的 effort 與 argv 不同使 A4 紅；M4 兩個驅動者均起程序使 A3 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例置於 tests/test_ticket_<正式票號>_verify.py，不列入 worker 的 allowed_write_paths；由驗證者設定 verify.files/run，verify.tags=[]（A 的 tests/ 案例不冒用未登記的 verify 標籤）。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "decision_refs": [
+    "D-049",
+    "D-016",
+    "D-018",
+    "D-028",
+    "D-031",
+    "D-050"
+  ],
+  "verify_strings": [
+    "role-models.py"
+  ],
+  "interface_contracts": {
+    "launch": "#116 只選路；本票起程序和記結果；#120 才決定跨事件恢復。",
+    "routing_mode": "無 Controller 的單次呼叫仍可完成有限候選鏈；同一 ticket/attempt 的 owner 鎖確保只有一個驅動者。",
+    "controller_seam": "本票只定 recovery_needed 事件與單一 owner 驅動接縫，以 fake consumer 驗證；#120 才整合常駐 Controller，不依賴尚未存在的 #120 程式才能落地。"
+  },
+  "priority": "P1"
+}

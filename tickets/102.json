@@ -1,6 +1,6 @@
 {
   "id": "102",
-  "subject": "verify-case.py lint 新增 F7–F12:介面名單與底線名字、釘整數或 sha、時間取兩次與模組層 today(擋,先以警告+白名單上線);固定睡後正向斷言、等待與斷言脫鉤、切字串(只印)",
+  "subject": "案例 lint F7–F12：預設警告、明確啟用擋規則",
   "created": "2026-10-09T12:32:32+08:00",
   "objective": "依 T 的 Fable 稽核(tabby_pool_ctl/reports/verify-audit-20261009 的 lint 規則段):verify/ 回歸層的脆弱案例七型裡,耦合私有實作、精確快照、時間取兩次可以在 lint 層擋住,時序三型先印。做完的樣子:verify-case.py lint 多 F7–F12;F7/F8/F9 是可擋規則、F10–F12 只印;哪幾條真的擋、哪些既有檔豁免,由專案的 board/config.json verify_lint 決定(介面名單由專案提供:T 的 T-a 票會在 test_browsers.py 等檔宣告 VERIFY_API)。上線時預設全部只印 + 白名單機制,專案產生白名單後再自己打開擋,不讓既有違規一上就擋住所有票。F1–F6 不動。",
   "acceptance": [
@@ -13,14 +13,10 @@
     "B7【文件】docs/DESIGN-VERIFY-CASES.md §四 lint 表加 F7–F12(擋 / 印、逃生口、設定鍵),專案自備那張表加 VERIFY_API 與 verify_lint.api / block / allow;verify-case.py 檔頭「lint 的六條」改成十二條;verify-case.py lint --help(或 usage)提到 --baseline。驗法:測試 grep DESIGN-VERIFY-CASES.md 含 F7 到 F12 六個編號與 verify_lint.allow。"
   ],
   "in_scope": [
-    "scripts/verify-case.py",
-    "tests/test_verify_case.py",
-    "docs/DESIGN-VERIFY-CASES.md"
+    "依 T 的 Fable 稽核(tabby_pool_ctl/reports/verify-audit-20261009 的 lint 規則段):verify/ 回歸層的脆弱案例七型裡,耦合私有實作、精確快照、時間取兩次可以在 lint 層擋住,時序三型先印。做完的樣子:verify-case.py lint 多 F7–F12;F7/F8/F9 是可擋規則、F10–F12 只印;哪幾條真的擋、哪些既有檔豁免,由專案的 board/config.json verify_lint 決定(介面名單由專案提供:T 的 T-a 票會在 test_browsers.py 等檔宣告 VERIFY_API)。上線時預設全部只印 + 白名單機制,專案產生白名單後再自己打開擋,不讓既有違規一上就擋住所有票。F1–F6 不動。"
   ],
   "out_of_scope": [
-    "F1–F6 的判準與輸出",
-    "T 的任何檔:VERIFY_API 宣告走 T 的 T-a 票,T board/config.json 的 verify_lint 設定與白名單走 T 票,scripts/control/verify-case.py 由同步票帶",
-    "修既有 verify 案例(T 的 #638 / T-a–T-e)"
+    "docs/DECISIONS.md"
   ],
   "depends_on": [],
   "allowed_write_paths": [
@@ -29,12 +25,12 @@
     "docs/DESIGN-VERIFY-CASES.md"
   ],
   "role": "worker",
-  "model": "opus",
-  "tool": "claude-code",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
   "attempt": 0,
   "base_sha": "950fe859eb1986bb94b235eee96f5fa48dd8f015",
-  "state": "Ready",
-  "state_version": 6,
+  "state": "Draft",
+  "state_version": 19,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -45,24 +41,27 @@
   },
   "feature": "驗證者案例格式 lint",
   "decision_refs": [
-    "D-H43"
+    "D-049",
+    "D-016",
+    "D-018",
+    "D-028",
+    "D-031",
+    "D-050"
   ],
   "verify_strings": [
-    {
-      "path": "scripts/verify-case.py",
-      "contains": "VERIFY_API"
-    },
-    {
-      "path": "scripts/verify-case.py",
-      "contains": "# pin:"
-    },
-    {
-      "path": "docs/DESIGN-VERIFY-CASES.md",
-      "contains": "F12"
-    }
+    "F12",
+    "--baseline",
+    "verify_lint.allow"
   ],
   "needs_verifier": true,
   "interface_fixed": true,
-  "outline": "照 verify-audit-20261009 的 lint 段,依主線指示改兩處:F9 的模組層 today 也算可擋(報告原寫印);逃生口只給 F8 的 # pin:。碼位置(讀碼):verify-case.py lint_one(約 683 行)、cmd_lint(約 754)、forbidden_patterns 讀 event.config(root)['verify_lint'](約 630),新鍵照同一條路讀。閘門只 lint 該票 verify.files(gate.sh 約 908 行;T 是 land-ticket.sh 約 247 行),所以既有違規只在「票去碰舊案例」時才會撞到。T 既有 verify/ 違規估計(讀報告估,未實跑):F7 底線名字約 17 檔(574/578/584/585/586/613/719 的 _call/_wait_for、658/659 _monthly_detail、662/663/664 _model_arithmetic、698 _cache、625、573、645),VERIFY_API 宣告後名單外另估 10–20 檔(32 支 BrowserCase 案例,視 T-a 名單);F8 約 20 檔 / 30–40 處(A1–A11、S5;#638 會先修掉約 9 處);F9 約 8–12 檔(B1–B3、B2 模組層、551、696);F10 約 10 檔 / 14 處;F11 約 18 檔 / 27 處;F12 約 8 檔。所以上線預設全只印,T 跑 --baseline 產白名單後再設 block。needs_verifier=true:lint 判準邊界多(別名、繼承、多行語句),獨立夾具值得;interface_fixed=true(輸出前綴、config 鍵、--baseline 形狀已釘)。撞檔:#100 也列 verify-case.py(不同段),無語意依賴。T-a 是跨 repo,不寫 depends_on。 後續項目(10-09 主線裁,不改本票驗收):verify-audit F4 —— T 的 verify/wait_signals/test_ticket_643.py 全 repo 掃描「載入後只等 #/home 沒接 ready()」(L125–226、L252–268)其實是 lint,紅在案例 e 段;之後搬進 verify-case.py lint(即 F11 的規則),案例只留一條「規則有生效」的自測。 【10-09 開題者查證(主線轉來 flow-efficiency-20261009 §3 的「加一條:案例不得執行期讀 tickets/*.json 決定受測集合」)】不加。前提不成立:#613 第一趟 e 段紅的是 store_fd/731 test_b1_case_and_assertion_counts_unchanged —— 它把 test_browsers 的 (案例數, 斷言數) 釘在 eba2689 的模組層常數 BASE_COUNTS = {…: (101, 863)},#613 加了一條案例就紅(land log 原文:{'test_browsers': {'base': (101, 863), 'now': (102, 872)}});它沒有讀票 JSON。T 的 verify/ 全部 grep 過,讀 tickets 的只有夾具自造的暫存票庫(654、704 等),沒有一支讀真票庫。所以那條規則今天命中 0、而對夾具有誤判風險。真形狀屬本票 F8(釘整數),但 B3 的三種語法(len(…) == 整數、.count(…) == 整數、sha 字面)抓不到「模組層整數常數組 + 迴圈比對」—— 列為 F8 的已知漏網,不在本票擴(要資料流);那支案例已由 #613 改掉。 Fable 審票 2026-10-10:test_verify_case 實跑 50 條綠;行號 630/683/754、gate.sh 910 仍對。T-a1(T #736)已 Done:T 的 demo/test_browsers.py、demo/browsers.py 已宣告 VERIFY_API,格式是「名字」或「類別.方法」(BrowserCase.http),T 另有守衛 demo/test_verify_api.py 擋名單外名字與底線私有屬性(含 KNOWN_PRIVATE 債務表)—— 與 F7 同功能。B2 改成認「類別.方法」;F7 要不要在 A 留、留的話與 T 守衛怎麼分工,待主線裁。",
-  "test_plan": "單元層 tests/test_verify_case.py:每條規則一個 class,拋棄式專案根(board/config.json + demo/test_browsers.py 假檔 + verify/x/test_ticket_9.py 夾具)跑 verify-case.py lint,斷言 rc 與指名行號的輸出。B1 三種 config;B2 六種寫法;B3 七種;B4 四種;B5 正負各一;B6 --baseline 陣列。變異 m1–m7 照驗收。只跑本檔新類 + 既有 lint 類,不跑全套。A 側指令一律帶 env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR。"
+  "outline": "本票只負責案例 lint F7–F12：預設警告、明確啟用擋規則。前置：無。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。",
+  "test_plan": "單元層 tests/test_verify_case.py:每條規則一個 class,拋棄式專案根(board/config.json + demo/test_browsers.py 假檔 + verify/x/test_ticket_9.py 夾具)跑 verify-case.py lint,斷言 rc 與指名行號的輸出。B1 三種 config;B2 六種寫法;B3 七種;B4 四種;B5 正負各一;B6 --baseline 陣列。變異 m1–m7 照驗收。只跑本檔新類 + 既有 lint 類,不跑全套。A 側指令一律帶 env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR。\n本次僅讀既有 test_verify_case.py；原票所載歷史 50 綠不是本次測試結果。B1–B7 的固定 AST 夾具與 m1–m7 須由實作期實跑。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例置於 tests/test_ticket_<正式票號>_verify.py，不列入 worker 的 allowed_write_paths；由驗證者設定 verify.files/run，verify.tags=[]（A 的 tests/ 案例不冒用未登記的 verify 標籤）。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
+  "interface_contracts": {
+    "verify_lint": "保留 api:dict[module,path]、block:list[F7|F8|F9]、allow:list[path:rule]；F10–F12 永不阻擋。",
+    "F7分工": "A 提供通用 AST lint；T 已有 VERIFY_API 守衛仍為專案 oracle。A 不刪改 T 守衛，也不複製 T 專屬 KNOWN_PRIVATE 債務表。",
+    "known_gap": "不加讀真票庫的新規則，沒有事故證據；F8 不做資料流追蹤整數常數組。"
+  },
+  "effort": "high",
+  "priority": "P2"
 }

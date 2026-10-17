@@ -1,39 +1,25 @@
 {
   "id": "95",
-  "subject": "主線互動 session 與它用 Agent 工具派的子 agent 記成本:SubagentStop / SessionEnd hook 讀 transcript 發 agent.cost 事件(與 #94 的 cost 列同形)",
+  "subject": "互動 session 與子 agent 成本共用 15 鍵解析",
   "created": "2026-10-06T22:26:11+08:00",
-  "objective": "使用者原話(2026-10-06):「我希望接下來有相關的紀錄, 角色:票:model:time:token」。#94 只蓋到腳本 headless 派出的 agent(有信封)。主線互動 session 本身、以及主線用 Agent 工具派的開題者 / 調查者 / 手派覆核者今天一筆紀錄都沒有。做完的樣子:這兩種在專案事件流各留一筆 `agent.cost`,鍵與 #94 的 cost 列同形,多 ticket(從派工描述 / prompt 猜,猜不到 null)與 agent_id;不進票的 cost[](歸票是猜的)。",
+  "objective": "保留 #95 的互動成本能力，修正 D-047 之後的鍵數；提供 #124 共用 transcript 解析，不把推測歸票寫進 cost_total。",
   "acceptance": [
-    "D1 [新事件種類] scripts/event.py KINDS 加 `agent.cost`,註解一句:主線互動 session 與它用 Agent 工具派的子 agent 的 token 與時鐘(hook 寫,不進票 cost[],ticket 是從描述 / prompt 猜的)。事件的 kv = #94 cost 列除 at 外的 13 鍵(role, round, model, tokens_in, tokens_out, cache_write, cache_read, wall_seconds, outcome, run_id, session_id, by, note)+ ticket + agent_id;round、outcome、run_id 恆為 null;by == \"agent-cost-hook\"。驗(tests/test_agent_cost_hook.py):任一 fixture 跑完讀 events.jsonl 最後一筆,鍵集合等於上述 15 鍵 + 事件自帶的 ts/kind/pid/cwd。",
-    "D2 [token 取數:以 message.id 去重、output 只信收尾的] 新腳本 scripts/agent-cost-hook.py 讀 transcript(jsonl):只看 type==assistant 且 message.usage 存在的列,同一 message.id 取**最後一列**;tokens_in / cache_write / cache_read = 去重後 usage 的 input_tokens / cache_creation_input_tokens / cache_read_input_tokens 加總;**tokens_out 只有在每個去重後的訊息最後一列都有非 null 的 message.stop_reason 時才加總,否則 null**,並在 note 寫明「互動 transcript 的 output_tokens 是串流開頭值」。model = 去重後 message.model 出現最多的那個(略過 \"<synthetic>\");wall_seconds = transcript 第一列與最後一列 timestamp 的差(整數秒)。開題者實測:互動 session 的子 agent transcript 每個 message.id 平均 1.5–2 列、多數沒有 stop_reason、output_tokens 是 2–16 這種串流開頭值(同一份 headless worker transcript 去重加總則與信封四數完全相同)。驗:fixture A = 同一 id 三列(output 3/8/8、stop_reason 全 null)+ 另一 id 一列 → tokens_in 是兩個 id 各一次的和(不是四列的和)、tokens_out is None、note 含「串流開頭值」;fixture B = 每個 id 最後一列都有 stop_reason → tokens_out == 各 id 最後一列 output 的和。期望值由 fixture 字面手算。",
-    "D3 [兩個事件、各讀哪份] stdin 是 Claude Code hook 的 JSON。hook_event_name==SubagentStop:讀子 agent 的 transcript —— stdin 有 agent_transcript_path 就用它;沒有就用 `<transcript_path 去掉 .jsonl>/subagents/agent-<agent_id>.jsonl`;同目錄同名的 `.meta.json` 給 description 與 agentType;session_id = stdin 的 session_id,agent_id = stdin 的 agent_id。hook_event_name==SessionEnd:讀 stdin 的 transcript_path(主線本身),role==\"main\"、ticket 與 agent_id 為 null(子 agent 在 subagents/ 另一份,不重複算)。其他 hook_event_name → 不發事件、rc 0。驗:SubagentStop 兩條(有 agent_transcript_path / 只有 transcript_path + agent_id 走推導路徑,兩者讀到同一份 fixture、事件相同)+ SessionEnd 一條。",
-    "D4 [歸票與角色] ticket = meta 的 description 裡第一個 `#<數字>` 的數字字串;description 沒有就找第一則 user 訊息前 300 字;都沒有 → null。role = 在 description 裡找(沒命中再找 prompt 前 300 字)最早出現的關鍵字:覆核 / reviewer → reviewer;驗證者 / verifier → verifier;實作者 / worker → worker;開題者 / opener → opener;調查 / investigat → investigator;都沒有 → meta 的 agentType;meta 不在 → \"subagent\"。驗:description \"#655 reviewer\" → (\"655\", reviewer);description \"調查 flaky\" + prompt \"你是 #12 的實作者…\" → (\"12\", investigator);description \"A93 opener\"(沒有 #)+ prompt 無 # → (null, opener);meta 缺、prompt 無關鍵字 → role \"subagent\"。",
-    "D5 [永不擋、副本不記] 不論輸入如何:rc 恆為 0、**stdout 一個位元組都不印**(SubagentStop 的 stdout JSON 會被當成 decision,印錯字會擋住子 agent 結束)。transcript 讀不到 / 解析失敗 → 不發事件、stderr 一行點名哪個鍵或哪個檔。與 scripts/session-hook.sh 同一組不觸發條件:AC_ROLE 設了且不是 main、cwd 有一層的 basename 等於 board/config.json worktree_dir 的 basename → 不發事件(headless worker 的子 agent 已由 #94 的信封 modelUsage 算進去,再記就是重複)。驗:四條 —— 壞 JSON stdin、transcript 路徑不存在、AC_ROLE=worker、cwd 在 `<x>-wt/` 底下 —— 各斷言 rc==0、stdout==\"\"、events 沒多一筆。",
-    "D6 [接線] A 自己的 .claude/settings.json hooks 加 SubagentStop 與 SessionEnd 各一筆:command `python3 \"$CLAUDE_PROJECT_DIR/scripts/agent-cost-hook.py\"`、timeout 10(既有 SessionStart / PreToolUse 不動)。scripts/sync-to-project.sh 的 SCRIPT_LIST 加 agent-cost-hook.py,並比照 PreToolUse 守衛那段(#63):專案 .claude/settings.json 沒接 SubagentStop / SessionEnd 這一支就印 `sync:` 開頭、含要貼的那一筆 JSON(路徑用 scripts/control/)。驗:tests/test_sync_to_project.py 一條 —— 假專案 settings 沒接 → 輸出含 agent-cost-hook.py 與 SubagentStop;接了 → 不印那段;SCRIPT_LIST 少了它 → 既有「名單」案例形狀的斷言紅。",
-    "D7 [登記與限制寫明] tickets/SCHEMA.md 成本那一列後加一句 `agent.cost`:誰寫、不進票、ticket 是猜的、tokens_out 在互動 transcript 多半是 null、role=main 那列是該 session 到結束為止的累計(同一 session_id resume 後再結束會再記一筆,讀的人取同 session_id 最後一筆)、跨 repo 派工請在描述裡不要用裸 `#<n>`(否則歸到本專案同號票)。測試與 fixture 不得含家目錄絕對路徑與專案名(tests/test_no_project_names.py 照綠)。",
-    "D8 [原路不變] tests/test_session_hook.py、test_guard_main.py、test_sync_to_project.py、test_event.py、test_no_project_names.py 既有斷言不改照綠;#94 的 test_ticket.py 照綠。",
-    "D9【headless 逾時那一列補 token】(專案 flow-efficiency-20261009 §5 併入)auto-fix 的 worker / 驗證者逾時(outcome=timeout)那一列今天 token 四欄全 null(沒有信封)。改成:那一趟的 session_id 拿得到(派工時指定或 sessions.json 有記)且 transcript 檔在 → 用 D2 同一支取數函式(message.id 去重、output 只信收尾的)填 tokens_in / cache_write / cache_read / tokens_out,讀不到就照舊 null;不新增鍵(一列恰 14 鍵,outcome=timeout 本身就表示這是部分量)。tests/test_cost_ledger.py:替身 worker 寫一份兩則 assistant usage 的 transcript 後被逾時殺掉 → 那一列四欄 == 夾具手算值;transcript 不在 → 四欄 null。"
+    "A1 成本正規形是 D-047 的 15 鍵（含 effort）；agent.cost 事件資料為同列除 at 的 14 鍵加 ticket/agent_id，缺料明確 null；加上既有事件 envelope，不把 null 換成 0。只有 ticket.py cost 可寫票 cost[]。",
+    "A2 assistant message.id 去重取最後一列，input/cache_write/cache_read 逐欄加總；只有全部最後列帶非 null stop_reason 才加總 output，否則 output=null 並說明串流開頭值。effort 無可靠來源時 null。model 取非 synthetic 訊息最多者，同票數以首次出現者為準。",
+    "A3 SubagentStop 先取 agent_transcript_path，否則按 transcript_path/agent_id 推導；SessionEnd 只讀主線 transcript，role=main、ticket/agent_id=null，不重算子 agent。描述第一個 #數字優先、否則 prompt 前 300 字猜票；角色關鍵字沿原 #95 D4，猜不到用 meta.agentType 或 subagent。",
+    "A4 hook 永遠 rc=0 且 stdout 為空；壞 stdin/缺 transcript/非 main AC_ROLE/工作副本均不發事件，錯誤只到 stderr。settings 加 SubagentStop/SessionEnd，不移除原 hooks。同步腳本送 parser 與 hook，未接 hook 的專案印具體接線提示。",
+    "A5 讀端對同 session_id 的主線累計取最後一筆；子 agent 以(session_id,agent_id)取最後一筆，不與 headless cost[] 相加。無 SessionEnd 就不虛構成本。不補歷史、不存費用。"
   ],
   "in_scope": [
-    "scripts/agent-cost-hook.py",
-    "scripts/event.py",
-    "scripts/sync-to-project.sh",
-    ".claude/settings.json",
-    "tickets/SCHEMA.md"
+    "保留 #95 的互動成本能力，修正 D-047 之後的鍵數；提供 #124 共用 transcript 解析，不把推測歸票寫進 cost_total。"
   ],
   "out_of_scope": [
-    "memory/*",
-    "docs/DECISIONS.md",
-    "board/*"
+    "docs/DECISIONS.md"
   ],
-  "depends_on": [
-    {
-      "id": "94",
-      "condition": "Done(cost 列 14 鍵與事件帶整列先定;agent.cost 照同一組鍵)"
-    }
-  ],
+  "depends_on": [],
   "allowed_write_paths": [
     "scripts/agent-cost-hook.py",
+    "scripts/transcript-cost.py",
     "scripts/event.py",
     "scripts/sync-to-project.sh",
     ".claude/settings.json",
@@ -41,17 +27,15 @@
     "tests/test_agent_cost_hook.py",
     "tests/test_sync_to_project.py",
     "tests/fixtures/agent_cost/*",
-    "scripts/auto-fix.sh",
-    "scripts/ticket.py",
-    "tests/test_cost_ledger.py"
+    "tests/test_event.py"
   ],
   "role": "worker",
-  "model": "opus",
-  "tool": "claude-code",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
   "attempt": 0,
   "base_sha": "2c7f842dab224ac27730d7c102c12ceb91f954f2",
-  "state": "Ready",
-  "state_version": 8,
+  "state": "Draft",
+  "state_version": 30,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -61,29 +45,46 @@
     "notes": ""
   },
   "decision_refs": [
-    "D-032",
-    "D-018"
+    "D-049",
+    "D-016",
+    "D-018",
+    "D-028",
+    "D-031",
+    "D-045",
+    "D-047",
+    "D-050"
   ],
   "verify_strings": [
-    {
-      "path": "scripts/event.py",
-      "contains": "agent.cost"
-    },
-    {
-      "path": "scripts/agent-cost-hook.py",
-      "contains": "agent_transcript_path"
-    },
-    {
-      "path": "scripts/sync-to-project.sh",
-      "contains": "agent-cost-hook.py"
-    },
-    {
-      "path": ".claude/settings.json",
-      "contains": "SubagentStop"
-    }
+    "agent.cost",
+    "agent_transcript_path",
+    "stop_reason"
   ],
   "feature": "agent-control 工具鏈:成本帳",
-  "test_plan": "只跑:cd tests && python3 -m unittest test_agent_cost_hook test_sync_to_project test_session_hook test_guard_main test_event test_no_project_names test_ticket test_cost_ledger。test_no_project_names 要在有 git index 的樹裡跑(git archive 出來的副本沒有 .git,test_the_scan_sees_something_at_all 必紅,與本票無關;閘門的 worktree 照綠)。前景跑加 timeout,不跑全套。變異(各自驗紅、貼紅的第一行):m1 不以 message.id 去重 → D2 fixture A tokens_in 紅;m2 tokens_out 直接加總不看 stop_reason → D2 fixture A 的 None 斷言紅;m3 拿掉 agent_transcript_path 缺時的推導 → D3 推導那條紅;m4 拿掉 AC_ROLE 不觸發 → D5 第三條紅;m5 成功時往 stdout 印一行 → D5 stdout 斷言紅;m6 SCRIPT_LIST 不加 → D6 紅;m7 D9 不讀 transcript → test_cost_ledger 的 D9 案例紅。",
-  "outline": "【為什麼另一張】#94 是腳本內 headless 派工(信封可信);這張是 Claude Code hook + transcript 解析,接線點在 settings.json、會同步到專案,兩者寫入範圍不重疊,一起做 worker 上下文太大。依賴 #94 的列形狀(D-018 同名唯一)。【開題者實測】互動 session 的子 agent 有 `<session>/subagents/agent-<id>.jsonl` + `.meta.json`(description、agentType、model 別名);transcript 的 output_tokens 多半是串流開頭值、沒有 stop_reason → 只有收尾齊全才算,否則 null;input / cache 三欄在 headless transcript 與信封四數對得上,互動的未對帳(未實測,依 API message_start 語意推定可信)。完成通知的 usage 只有 totalTokens(像是最後一輪的上下文大小),不拆四種,不採用。【未實測】SubagentStop stdin 是否帶 agent_transcript_path / agent_id(版本相依)→ D3 定推導路徑當後備;實作者第一步把一次真實 stdin 的鍵印進 EVIDENCE。【限制】歸票靠描述 / prompt 的 #號,跨 repo 同號會撞(約定:跨 repo 不寫裸 #);主線 session 當掉沒有 SessionEnd 就沒有那一筆;不進票、不進 #94 的 cost_total。【同步】落地後主線 sync-to-project,照 sync 印的那一筆貼進 T 的 .claude/settings.json(比照 #63 守衛)。needs_verifier=false:契約全是 fixture 的解析規則,驗證者案例只會重演同一 fixture 契約,由 worker 六變異自證(D-028)。 【10-09】D9 由專案流程稽核 §5 併入:逾時那一趟的 token 與互動 session 用同一支 transcript 取數;報告要的「逾時記 partial:true」不加新鍵(D-018 一列 14 鍵),outcome=timeout 即是。 Fable 審票 2026-10-10:#94 已 Done(v21),依賴成立;base 2c7f842 之後 #94 落地改過 auto-fix.sh / ticket.py / event.py / SCHEMA。test_plan 指令照寫法 cd tests 實跑:test_sync_to_project/test_session_hook/test_guard_main/test_event 85 條綠、test_ticket 116 綠;test_no_project_names 在無 .git 的基底紅 1 條、git init 後 6 條綠(環境);test_agent_cost_hook 是新檔。D9(10-09 併入)要改 auto-fix.sh / ticket.py,但兩支原列 out_of_scope(A 的 apply 會 rc=5)→ 移出 out_of_scope、補進 allowed_write_paths 與 tests/test_cost_ledger.py,test_plan 補 m7。",
-  "needs_verifier": false
+  "test_plan": "T1 test_agent_cost_hook 的重複 id、收尾缺失、null、meta 缺失夾具；預期 token 用手算常數。覆蓋 #95 D4 的三個角色歸屬例子。\nT2 subprocess stdin 兩種 hook、四種跳過，核對 stdout 空、rc=0、事件鍵集合（含 effort）與路徑來源。\nT3 test_sync_to_project/test_session_hook/test_guard_main/test_event；新 parser 測純函式無副作用。M1 不去重使 A2 紅；M2 output 無收尾也加總使 A2 紅；M3 把 agent.cost 進 cost_total 使 A5 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n實作者以本票固定夾具與指定變異自證，不另建驗證者案例。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
+  "outline": "本票只負責互動 session 與子 agent 成本共用 15 鍵解析。前置：無（與 #103 共檔 sync-to-project.sh，由排程串行）。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=false：輸入輸出契約以固定夾具可完整自證，另派只會重演。",
+  "needs_verifier": false,
+  "interface_contracts": {
+    "cost_keys": [
+      "role",
+      "round",
+      "model",
+      "tokens_in",
+      "tokens_out",
+      "cache_write",
+      "cache_read",
+      "wall_seconds",
+      "outcome",
+      "run_id",
+      "session_id",
+      "by",
+      "note",
+      "effort",
+      "at"
+    ],
+    "parser": "scripts/transcript-cost.py：純讀取 transcript，回成本取數結果，hook 與 #124 共用；不自行寫票。",
+    "split": "#95 D9 逾時成本接線唯一由 #124 承接，本票無 auto-fix 修改。"
+  },
+  "interface_fixed": true,
+  "effort": "high",
+  "priority": "P2"
 }

@@ -32,8 +32,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "d236cdc8942e2bc1ddec0d8c38e51b4a365cd532",
-  "state": "Ready",
-  "state_version": 3,
+  "state": "Cancelled",
+  "state_version": 5,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -49,6 +49,6 @@
   "needs_verifier": false,
   "interface_fixed": true,
   "test_plan": "單元層,tests/test_ticket.py 既有的拋棄式票庫夾具(AC_TICKETS_DIR 指暫存目錄):A1 對 create 兩種重疊各一條,斷言 rc≠0、票檔不存在、stderr 含那條路徑;A2 先建一張不重疊的 needs_verifier=true 票,再 set allowed_write_paths 成命中慣例路徑的 glob → rc≠0 且讀回票 state_version 不變,set state Ready 同樣;lint 輸出含那條路徑;A3 needs_verifier=false 與別張票的案例路徑各一條 → rc=0;A4 以 apply.sh 收件那段同樣的寫法(ticket.load / save)併入 verify.files 不拋例外,並跑 tests/test_apply.py 照綠;A5 grep 兩份文件。期望路徑都由測試自己寫死,不從被測程式算。變異(自證紅,貼紅的第一行):m1 只比 verify.files 不比慣例路徑 → A1 慣例那條紅;m2 不看 needs_verifier → A3 紅;m3 檢查放進 save() 而非 cmd_create/cmd_set → A4 紅。只跑:python3 -m unittest tests.test_ticket tests.test_apply;不跑全套。",
-  "outline": "【T 成本審查 #6,源頭在 A,幾乎零成本】T #709 開題者把驗證者案例檔 verify/board_sampler/test_ticket_709.py 與 verify/TAGS.d/709.md 列進實作者 allowed_write_paths,兩份 patch 撞檔、apply rc=3 白跑一輪(T HANDOFF 待開工具票⑤)。根在 docs/reference/role-procedures.md:41 的舊規則「allowed_write_paths 要含驗證者會建立的案例檔(#23)」—— D-H38 ① 後寫入範圍已不硬擋,那條反而誘導撞檔。開題時 verify.files 通常還是空的(驗證者後寫),所以只比 verify.files 抓不到 #709,要連 templates/dispatch-verifier.md 的慣例路徑一起比。T 的 scripts/control/ticket.py 是同步本,落地後要排 A→T 同步才生效。開題者角色卡的對應一行走 memory/role/opener.inbox.md,不在本票。needs_verifier=false:純票面守衛,tests/test_ticket.py 夾具可自證。",
+  "outline": "併入 #101(D-050 整併)。\n【T 成本審查 #6,源頭在 A,幾乎零成本】T #709 開題者把驗證者案例檔 verify/board_sampler/test_ticket_709.py 與 verify/TAGS.d/709.md 列進實作者 allowed_write_paths,兩份 patch 撞檔、apply rc=3 白跑一輪(T HANDOFF 待開工具票⑤)。根在 docs/reference/role-procedures.md:41 的舊規則「allowed_write_paths 要含驗證者會建立的案例檔(#23)」—— D-H38 ① 後寫入範圍已不硬擋,那條反而誘導撞檔。開題時 verify.files 通常還是空的(驗證者後寫),所以只比 verify.files 抓不到 #709,要連 templates/dispatch-verifier.md 的慣例路徑一起比。T 的 scripts/control/ticket.py 是同步本,落地後要排 A→T 同步才生效。開題者角色卡的對應一行走 memory/role/opener.inbox.md,不在本票。needs_verifier=false:純票面守衛,tests/test_ticket.py 夾具可自證。",
   "priority": "P2"
 }

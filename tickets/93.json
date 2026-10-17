@@ -1,6 +1,6 @@
 {
   "id": "93",
-  "subject": "worker 交件前看主線:派工文加「比對 main 與 base_sha,碰到的檔被動過就在副本對齊到新 main、重跑票測試、記 aligned_main」;收件以 aligned_main 更新票 base_sha;修復輪只記不對齊",
+  "subject": "交件前主線對齊（D-050 ④ 凍到 DAG 排程落地後量 redo）",
   "created": "2026-10-06T21:18:17+08:00",
   "objective": "使用者原話(2026-10-06):「每個worker 再做的時候都是 獨立資料夾的對吧？ Worker 要收工提交之前 加prompt 去檢查一下主線」。worker 在副本做事期間主線前進、且動到 worker 也改的檔時,由 worker 在交件前自己(唯讀)發現並在副本對齊到新 main、重跑票相關測試,交出的 patch 對當下 main 直接套得上;EVIDENCE 與 result 記「交件時對齊的 main sha」,收件時票的 base_sha 跟著換成那個 sha。worker 仍禁一切主 repo 與副本的 git 寫入。",
   "acceptance": [
@@ -13,16 +13,27 @@
     "C7 [原路不變] tests/test_auto_fix.py、test_auto_fix_codex.py、test_dispatch_template.py、test_apply.py、test_rules.py、test_rules_delivery.py 既有斷言不改照綠(開題者查過:test_auto_fix 的派工文案例只斷言既有段落字串存在,不斷言段落總數或全文 —— 實作者若遇到全文快照,列為 ticket-wrong)。"
   ],
   "in_scope": [
-    "scripts/auto-fix.sh",
-    "docs/DISPATCH-TEMPLATE.md",
-    "tickets/SCHEMA.md"
+    "使用者原話(2026-10-06):「每個worker 再做的時候都是 獨立資料夾的對吧？ Worker 要收工提交之前 加prompt 去檢查一下主線」。worker 在副本做事期間主線前進、且動到 worker 也改的檔時,由 worker 在交件前自己(唯讀)發現並在副本對齊到新 main、重跑票相關測試,交出的 patch 對當下 main 直接套得上;EVIDENCE 與 result 記「交件時對齊的 main sha」,收件時票的 base_sha 跟著換成那個 sha。worker 仍禁一切主 repo 與副本的 git 寫入。"
   ],
   "out_of_scope": [
     "memory/*",
     "docs/DECISIONS.md",
     "board/*"
   ],
-  "depends_on": [],
+  "depends_on": [
+    {
+      "id": "96",
+      "condition": "landed"
+    },
+    {
+      "id": "98",
+      "condition": "landed"
+    },
+    {
+      "id": "119",
+      "condition": "landed"
+    }
+  ],
   "allowed_write_paths": [
     "scripts/auto-fix.sh",
     "scripts/apply.sh",
@@ -33,12 +44,12 @@
     "tests/test_dispatch_template.py"
   ],
   "role": "worker",
-  "model": "opus",
-  "tool": "claude-code",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
   "attempt": 0,
   "base_sha": "eca7254d444a17e6d5785ca42295e955a1c8da96",
   "state": "Blocked",
-  "state_version": 4,
+  "state_version": 20,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -50,16 +61,31 @@
   "feature": "agent-control 工具鏈:派工文與收件",
   "verify_strings": [
     "交件前看主線",
-    "ALIGNED_MAIN:",
-    "aligned_main",
-    "不要重新展開 base/"
+    "aligned_main"
   ],
-  "test_plan": "只跑:cd tests && python3 -m unittest test_dispatch_template test_apply test_rules test_rules_delivery test_auto_fix_codex;test_auto_fix 只跑改到與新增的類。前景跑加 timeout,不跑全套。變異(各自驗紅、貼紅的第一行):m1 first_round_packet 拿掉那一節 → C1/C2 紅;m2 修復輪那節改成也叫重新展開 base/ → C3 紅;m3 收件不換 base_sha → C4 正例紅;m4 換 base_sha 不查祖先 → C4 反例紅;m5 aligned_main 只加 SCHEMA 不加 §8.5 → C5 紅。",
-  "outline": "【源頭判定】worker 派工文由 A 的 scripts/auto-fix.sh 產(first_round_packet、修復輪那段),T 的 scripts/control/auto-fix.sh 是 sync-to-project 產出物 → 開 A。T 的 DISPATCH-COMMON-RULES / DISPATCH-TEMPLATE 是 T 自有(T 的規則包讀 COMMON-RULES)→ 落地後主線同步到 T,並走 T docs 通道在「工作區」補「交件前重新展開 base/ 是唯一例外」,否則規則包與派工文互相矛盾。【限制】只擋 worker 工作期間主線動;#711 是交件後才動,由 T #712(gate --redo 三向)補。【為何換 base_sha】apply.sh rebase 以票 base_sha 當祖先,不換就套不回。【實測】git merge-file 在無 .git 目錄可用;未實測:codex 沙盒讀主 repo .git(第 1 輪已靠 git archive 讀,推定可)。needs_verifier=false:工具鏈單元測試+五變異自證。",
+  "test_plan": "只跑:cd tests && python3 -m unittest test_dispatch_template test_apply test_rules test_rules_delivery test_auto_fix_codex;test_auto_fix 只跑改到與新增的類。前景跑加 timeout,不跑全套。變異(各自驗紅、貼紅的第一行):m1 first_round_packet 拿掉那一節 → C1/C2 紅;m2 修復輪那節改成也叫重新展開 base/ → C3 紅;m3 收件不換 base_sha → C4 正例紅;m4 換 base_sha 不查祖先 → C4 反例紅;m5 aligned_main 只加 SCHEMA 不加 §8.5 → C5 紅。\n原票的 git merge-file 歷史實測不是本次證據；目前不執行，所有變異留待解凍後在拋棄式環境驗。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n實作者以本票固定夾具與指定變異自證，不另建驗證者案例。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
+  "outline": "本票只負責交件前主線對齊（維持凍結，等觀察裁示）。前置：#96、#98、#119。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=false：輸入輸出契約以固定夾具可完整自證，另派只會重演。\nD-050 ④ 凍到 DAG 排程落地後量一週 redo ≥3 才派（DAG 排程 = #119）。",
   "needs_verifier": false,
-  "interface_fixed": false,
+  "interface_fixed": true,
   "frozen": {
-    "reason": "使用者 2026-10-06 裁示延後(不派):#712 落地後觀察一週(至 2026-10-13 後)再決定",
-    "criterion": "2026-10-13 之後,看 T #712 落地以來因主線前進而 redo 的次數,再由主線決定派或關"
-  }
+    "reason": "D-050 ④:繼續凍結到 DAG 排程(#119)落地",
+    "criterion": "#119 落地後量一週因主線前進而 redo 的次數,≥3 次才派,否則由主線決定關"
+  },
+  "interface_contracts": {
+    "aligned_main": "result.aligned_main 為 commit SHA 字串或 null；首輪可對齊，修復輪只記不改 base。",
+    "freeze": "D-050 ④：凍到 DAG 排程（#119）落地後量一週 redo，≥3 次才派；日期過了不等於解凍。",
+    "ordering": "#119 先量 DAG 之後剩餘 rebase 需求，避免先做與排程串行重複的 token 成本；跨 repo 不放 depends_on。"
+  },
+  "effort": "high",
+  "priority": "P3",
+  "decision_refs": [
+    "D-049",
+    "D-016",
+    "D-018",
+    "D-028",
+    "D-031",
+    "D-044",
+    "D-046",
+    "D-050"
+  ]
 }

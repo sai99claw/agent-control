@@ -1,0 +1,85 @@
+{
+  "id": "122",
+  "subject": "開題、設計與整理派工統一取表，整理只派 Fable",
+  "created": "2026-10-17T13:07:40+08:00",
+  "objective": "完成角色表其餘消費端與專案同步；修正目前 consolidate-memory.sh 強制兩模型的舊路，落實 D-043/D-049 的單一 Fable。",
+  "acceptance": [
+    "A1 一般 opener=opus；明確複雜開題=astra→fable；design/想一下=astra→fable；consolidator 只啟動一個 fable，沒有雙模型互讀門檻。前者不可用才換下一個，Fable 整理不可用即耗盡停。 開題/設計派工帶這次要交的票數（--items），超過候選 dispatch_cap（astra 初值 5）就 rc=2、印切批建議，不起程序；fable/opus 候選 cap=null 不擋。",
+    "A2 auto-fix 判反駁的 opener、獨立開題/設計派工與 consolidate-memory 都走 #116；new-session 的互動 main 仍由啟動指定模型，僅顯示表中建議，不熱切。rules.py 下限檢查讀共同選路角色，不用舊 routing 字串誤擋 codex。",
+    "A3 受本票替代的 config.routing main/open/implement/implement_browser/verify/design/bug 與 memory.consolidator/consolidators 不再作選路來源；工具警告舊衝突設定並提供一次明確遷移，second_opinion/discuss 未有 D-049 裁示的用途維持原有設定，不冒充新角色。",
+    "A4 sync-to-project 同步共用選路器及 board/role-models.json；不存在時安裝初表，專案已有合法自訂表則保留並提示差異，非法表拒絕派工而非靜默用舊設定。同步來源版本仍由 #103 記錄，不能宣稱只同步腳本即已同步政策。",
+    "A5 ROLES、整理者/開題者操作文件、範本一致描述單一模型與 D-049 補已確認的 effort / dispatch_cap 規則；角色卡通用規則變更送 inbox，由整理流程消化，不讓每個 worker 自改模型政策。"
+  ],
+  "in_scope": [
+    "完成角色表其餘消費端與專案同步；修正目前 consolidate-memory.sh 強制兩模型的舊路，落實 D-043/D-049 的單一 Fable。"
+  ],
+  "out_of_scope": [
+    "docs/DECISIONS.md"
+  ],
+  "depends_on": [
+    {
+      "id": "116",
+      "condition": "landed"
+    },
+    {
+      "id": "121",
+      "condition": "landed"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/consolidate-memory.sh",
+    "scripts/new-session.sh",
+    "scripts/rules.py",
+    "scripts/sync-to-project.sh",
+    "board/config.json",
+    "tests/test_consolidate_memory.py",
+    "tests/test_new_session.py",
+    "tests/test_rules.py",
+    "tests/test_sync_to_project.py",
+    "docs/ROLES.md",
+    "docs/reference/role-procedures.md",
+    "templates/dispatch-consolidator.md",
+    "templates/dispatch-opener.md",
+    "memory/role/consolidator.inbox.md"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "dfaa05c0c87d5011a31872614c2c7a01d2176d25",
+  "state": "Draft",
+  "state_version": 7,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "effort": "high",
+  "outline": "本票只負責開題、設計與整理派工統一取表，整理只派 Fable。前置：#116、#121（#103 只是共檔 sync-to-project.sh，由排程串行）。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。",
+  "test_plan": "T1 test_consolidate_memory 假 Claude 計數恰一次、model=fable；刪除原要求兩模型的 oracle，新增不可用停與成本證據。\nT2 test_new_session/test_rules：opener 複雜與一般、設計、main 實際模型未變；fake codex quota 才換 fable。\nT3 test_sync_to_project：空專案安裝表、合法自訂不覆蓋、非法表報錯與 source marker；M1 仍派兩個整理者使 A1 紅；M2 只改 Claude 設定使 A2/A4 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例置於 tests/test_ticket_<正式票號>_verify.py，不列入 worker 的 allowed_write_paths；由驗證者設定 verify.files/run，verify.tags=[]（A 的 tests/ 案例不冒用未登記的 verify 標籤）。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "decision_refs": [
+    "D-049",
+    "D-016",
+    "D-018",
+    "D-028",
+    "D-031",
+    "D-043",
+    "D-050"
+  ],
+  "verify_strings": [
+    "role-models.py",
+    "role-models.json"
+  ],
+  "interface_contracts": {
+    "dispatch": "獨立開題/設計命令使用 role-models.py 的解析輸出再交既有 agent-command；不引進第二個 AgentSpec。",
+    "rollout": "#121/#122 完成才算 D-049②全部角色接線完成，#116 單獨落地不宣稱全域已生效。",
+    "dispatch_cap": "開題/設計/整理派工是 dispatch_cap 的消費端：切批由派工者（主線）做，本票只擋超量並印建議；不自動把一批拆成多次派工。"
+  },
+  "priority": "P1"
+}

@@ -31,8 +31,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "c17f1d300425ae79f6ef876893c13d3c663f11a7",
-  "state": "Ready",
-  "state_version": 6,
+  "state": "Cancelled",
+  "state_version": 8,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -47,7 +47,7 @@
     "dispatch-finish-round"
   ],
   "test_plan": "全部在 tests/test_auto_fix.py 的 AutoFixBase 夾具裡(假 worker 命令 = 小 shell 腳本,記 argv / cwd / 讀到的記號檔;逾時用小的 worker.timeout_seconds 造)。F1 擴充既有 #57 逾時案例的斷言;F2–F4 一條「逾時 → --finish → 假收尾者交件 → InReview」的整合案例,另一條 resumable=false 的變體;F5 三種非逾時狀態 + work/ 被刪各一條;F6 讓假收尾者也睡過 finish_timeout。期望值來自夾具自己寫的記號檔、session_id 與輪數,不從被測程式算。變異(自證紅,貼紅的第一行):m1 --finish 照走 round_once(會 rm -rf)→ F2 紅(記號檔不見);m2 不帶 --resume → F3 紅;m3 收尾後 ticket.py round 加一 → F4 紅;m4 收尾逾時又給 --finish → F6 紅。只跑 tests/test_auto_fix.py 相關 class;不跑全套。",
-  "outline": "來源:T(tabby_pool)#719 2026-10-07:worker 跑滿 3600 秒逾時,實作與全部測試已綠,只差負載重跑 3 次與寫 patch/EVIDENCE;主線手派收尾者、手跑 apply.sh。同型第三次:T #674、#675(2026-09-29,同樣副本留著、主線從 patch-partial 接手)。D-G144 ① 夠格(撞 3 次)。session 接回沿用 #89 的 sessions.json(--session-id 預配、resumable/why),逾時不會讓 session 檔消失 —— 未實測 --resume 一個被 SIGKILL 的 claude -p session,實作者先驗一次,接不回就走 F3 的新 worker 分支。T 拿到要等 T #690(同步 scripts/control/)。【撞一次,再撞再做】auto-fix 自己被系統收掉(T #719 第一次起跑被 Claude Code memory pressure 收掉)時票留在 Running、沒有狀態檔,重起 rc=2「沒有狀態檔而票不是 Ready」,主線手動 set Ready;候選做法:起跑記 runner_pid,重起時 pid 已死且沒有狀態檔就視同 Ready 並發事件 —— 不在本票。needs_verifier=false:夾具內自證的腳本契約,驗證者只會重演同一夾具。",
+  "outline": "併入 #123(D-050 整併)。\n來源:T(tabby_pool)#719 2026-10-07:worker 跑滿 3600 秒逾時,實作與全部測試已綠,只差負載重跑 3 次與寫 patch/EVIDENCE;主線手派收尾者、手跑 apply.sh。同型第三次:T #674、#675(2026-09-29,同樣副本留著、主線從 patch-partial 接手)。D-G144 ① 夠格(撞 3 次)。session 接回沿用 #89 的 sessions.json(--session-id 預配、resumable/why),逾時不會讓 session 檔消失 —— 未實測 --resume 一個被 SIGKILL 的 claude -p session,實作者先驗一次,接不回就走 F3 的新 worker 分支。T 拿到要等 T #690(同步 scripts/control/)。【撞一次,再撞再做】auto-fix 自己被系統收掉(T #719 第一次起跑被 Claude Code memory pressure 收掉)時票留在 Running、沒有狀態檔,重起 rc=2「沒有狀態檔而票不是 Ready」,主線手動 set Ready;候選做法:起跑記 runner_pid,重起時 pid 已死且沒有狀態檔就視同 Ready 並發事件 —— 不在本票。needs_verifier=false:夾具內自證的腳本契約,驗證者只會重演同一夾具。",
   "branch": "t99-autofix-finish",
   "priority": "P1",
   "needs_verifier": false,
