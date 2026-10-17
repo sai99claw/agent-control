@@ -326,3 +326,16 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - 起因:使用者要改 code 的工作優先交 codex sol high(D-047);codex 自己的沙盒(-s workspace-write)擋 127.0.0.1 bind 與 Chrome 啟動(Seatbelt),跑不了伺服器 / 瀏覽器案例(T #461 起的老問題;2026-10-13 astra 調查確認,且在 codex 沙盒內無法驗證任何放寬設定)。
 - 現況對照:claude worker 在副本資料夾(git archive 展開、無 .git)裡跑,沒有 OS 層沙盒,靠規則包禁區、禁 git 寫入、閘門與覆核把關。
 - 原則:codex worker 比照 —— 同樣的副本資料夾、同樣的禁區規矩、不另加也不少一層;不再套 codex 自己的 workspace-write 沙盒。開票實作(A),T 端同步後生效。
+
+## D-049(2026-10-17)角色模型表、閘門紅自動修補、DAG 排程;codex 改寫票的處置與整併
+- 起因:主線停機三天期間,使用者用 codex 在 A 改了 auto-fix.sh 並把 #115 改寫成 provider-neutral runtime、另開 #116–#120(英文票面,無裁示依據;改寫版另存 reports/t115/proposal-20261016/)。主線派 opus 唯讀審查後向使用者提題。
+- ① #115:原話(選項)「回到 D-048 原票(建議)」→ tickets/115.json 已還原為 v5(D-048:codex danger-full-access + 兩種 worker 共用事後越界檢查);t115 分支不落地。
+- ② 角色模型表(每個角色一串有順序的模型,前一個額度用完 / 不可用才用下一個)。使用者原話:「新做法裡面有個jason 是紀錄每個角色的預設模型的，這我覺得不錯 每個角色的模型我們加個預設順序。主線:opus, worker: sol,opus, 複雜任務開題者：astra, fable, 一般認為開題者：opus, 驗證者：sol, opus.」補充原話:「記憶整理者 改成fable」「設計 / 想一下 astra, fable」「簡單工作worker, sonnet」。主線整理成表:
+  - 主線 opus;worker sol → opus;簡單工作的 worker sonnet;複雜開題者 astra → fable;一般開題者 opus;驗證者 sol → opus;記憶整理者 fable(單一高階模型路,D-043);設計 / 想一下 astra → fable。
+  - 主線提、待使用者確認:覆核者 opus(現行);驗證者優先選與該票 worker 不同的模型(worker 是 sol 時驗證者先 opus),避免同模型自驗;sol 預設 effort high;整串都用完 → 停下發 decision 頁,不硬跑;表只管被派出去的 agent,主線 session 的模型由開 session 時決定。
+  - codex 額度用完改派(#87 A23 / #114 A10)由這張表的順序取代;#116 的「絕不 fallback 到 Opus」不採。
+- ③ 閘門紅 / 落地全套紅的診斷與修補由 auto-fix 自動處理,不回主線。使用者原話:「閘門紅時的診斷、修補, 這理論上不需要送到主線判斷？ 應該是autofix 要解決的事情吧？」主線轉述:預設開自動修補;只有 worker 反駁、產品取捨、修 N 輪仍紅才發 decision 頁給主線。
+- ④ DAG 排程:原話「DAG 排程 是我想要的， 我希望開題者 開完之後直接把票放到合適的執行順序上」。開題者一次交一批票附依賴,排程器依依賴與寫入範圍重疊決定先後與並行(在 queue.sh 的 depends_on / --batch 上長)。
+- ⑤ #117(session 生命週期與交接)、#120(不用 LLM 的常駐 Controller,自動恢復):原話「117 120 的內容也要做」。
+- ⑥ 票整併:原話「現在好像有很多票 請你把重疊 或相關的票做整合，這邊討論的東西都要寫到agent control 裡面去，不要只改claude本身的設定」。A 的開著的票(#93–#106 與 #116–#120 提案)整併成一套,票面一律中文(A 慣例);整併交複雜開題者(依 ② 為 astra → fable)。
+- 另:codex 在 main 工作樹留下的 auto-fix.sh 兩處修正(權威票面快照、codex --add-dir)經審查正確、測試綠,併入 D-048 實作或整併後的對應票,不以未 commit 形式留在 main。
