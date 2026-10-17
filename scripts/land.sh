@@ -35,7 +35,8 @@
 # 票要有一格**綁著票版本與分支 sha** 的 `review`(主線讀 patch 記的),否則拒絕:
 # 舊版的 review 只有 verdict / by / at / note,重套一次 patch 之後它還是長得有效,
 # 而 land 根本沒讀它。票的 `objections[]` 裡還有沒處置的阻擋項,也拒絕 ——
-# 實作者說「這張票寫錯了」而東西照樣落地,那句話等於沒有人收。
+# 實作者說「這張票寫錯了」而東西照樣落地,那句話等於沒有人收。判準只有 `ticket.py` 那一份
+# (#98):`review_problems` / `objection_problems`,close 問的也是它們。
 #
 # 做法:從主線開一個 land-<時間> worktree,逐條 --no-ff merge(衝突就停、留著
 # worktree 給人看),在那個 worktree 跑 `scripts/gate.sh --full`;綠才
@@ -451,52 +452,24 @@ PY
         STOP=1
         continue
     fi
-    # 覆核與反駁。**覆核要綁被覆核的那個版本**:舊版的 `review` 只有 verdict/by/at/
+    # 覆核與反駁。**覆核要綁被覆核的那一份**:舊版的 `review` 只有 verdict/by/at/
     # note,重套一次 patch、改一次票面之後它仍然長得有效,而 land 從來沒有讀它。
     # 反駁(`objections[]`)同理:實作者說「這張票寫錯了」而東西照樣落地,那句話等於沒人收。
-    out=$(python3 - "$tf" "$(git -C "$ROOT" rev-parse "$b")" <<'PY'
-import json, sys
-path, tip = sys.argv[1], sys.argv[2]
-PASS = ("pass", "approved", "ok", "通過")
-DISPOSED = ("accepted", "rejected", "deferred", "fixed", "已處置")
+    # 判準只有一份,在 `ticket.py` 的 review_problems / objection_problems(#98 A5):
+    # 綁 patch_id + face 的 review 重套到新主線仍有效,舊的照舊比 state_version / sha。
+    out=$(python3 - "$ROOT" "$tf" "$(git -C "$ROOT" rev-parse "$b")" <<'PY'
+import json, os, sys
+root, path, tip = sys.argv[1:4]
+sys.path.insert(0, os.path.join(root, "scripts"))
+import ticket as ticket_mod
 try:
     with open(path, encoding="utf-8") as handle:
         ticket = json.load(handle)
 except (OSError, ValueError) as exc:
     print("票讀不動:%s" % exc)
     raise SystemExit(0)
-
-for index, row in enumerate(ticket.get("objections") or []):
-    if not isinstance(row, dict):
-        print("objections[%d] 不是 {category, body, evidence, owner, disposition}" % index)
-        continue
-    blocking = row.get("blocking")
-    if blocking is None:
-        blocking = str(row.get("category") or "").lower() in ("blocking", "阻擋", "ticket-wrong")
-    if blocking and str(row.get("disposition") or "").strip().lower() not in DISPOSED:
-        print("反駁 objections[%d](%s / owner=%s)還沒處置:%s"
-              % (index, row.get("category") or "?", row.get("owner") or "沒人",
-                 (row.get("body") or "")[:60]))
-
-review = ticket.get("review")
-if not isinstance(review, dict) or not review.get("verdict"):
-    print("票上沒有 review —— 覆核是主線讀 patch 記進票的那一格,land 不替它判")
-    raise SystemExit(0)
-if str(review.get("verdict")).lower() not in PASS:
-    print("review.verdict=%r 不是通過" % review.get("verdict"))
-bound = review.get("state_version")
-current = ticket.get("state_version")
-if bound is None:
-    print("review 沒有綁票版本(state_version)—— 票改過之後它還是長得有效")
-elif str(bound) != str(current):
-    print("review 綁的是票 v%s,票現在是 v%s —— 覆核之後票被改過"
-          % (bound, current))
-sha = str(review.get("sha") or "")
-if not sha:
-    print("review 沒有綁最終 patch / 分支的 sha")
-elif not (tip.startswith(sha) or sha.startswith(tip)):
-    print("review 綁的是 %s,這條分支的頭是 %s —— 覆核之後又 commit 過"
-          % (sha[:12], tip[:12]))
+for line in ticket_mod.objection_problems(ticket) + ticket_mod.review_problems(ticket, tip):
+    print(line)
 PY
 )
     if [ -n "$out" ]; then

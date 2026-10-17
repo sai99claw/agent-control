@@ -52,8 +52,9 @@ KINDS = (
     "decision.asked", "decision.answered",
     # worker 的反駁由開題者判(D-041,#89):done 的 kv 帶 verdict(escalate 時多一格 reason)。
     "objection.triage.start", "objection.triage.done",
-    # 覆核:review.sh 的四種結局。只有 fail 發頁(decision),其餘三種只寫事件(D-032)。
-    "review.pass", "review.fail", "review.missing", "review.refused",
+    # 覆核:review.sh 的五種結局。只有 fail 發頁(decision),其餘只寫事件(D-032)。
+    # stale = 交件時已不是派給現在這張票的(新 attempt / 又派了覆核 / 票被改過,#98):不收。
+    "review.pass", "review.fail", "review.missing", "review.refused", "review.stale",
     # 終態叫醒主線(D-015):一則事件 + `reports/inbox/` 一頁。主線不輪詢 status。
     "inbox.posted",
     # 記憶:量到超過上限、整理完成(docs/MEMORY.md「容量與整理」,D-006)。

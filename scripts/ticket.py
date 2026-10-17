@@ -17,6 +17,8 @@
     scripts/ticket.py cost 7 --role worker --round 1 --from-envelope <信封>  # 不動 state_version
     scripts/ticket.py agent-command --model codex:gpt-6-astra --tool codex  # 依 model/tool 起什麼
     scripts/ticket.py lint <id>                   # 票面機械檢查;唯讀,不動 state_version
+    scripts/ticket.py review-request 7 --run-id … --sha … --receipt …   # 派覆核那一刻的收件單
+    scripts/ticket.py review-receive 7 --receipt … --verdict pass|fail|missing  # 鎖裡比收件單才收
 
 **不要手改票檔**(`tickets/README.md`):`state_version` 是遲到的回報用來認出自己
 過期的那一格,而手改不會動它。
@@ -24,6 +26,7 @@
 
 import errno
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -66,6 +69,18 @@ DISPOSED = ("accepted", "rejected", "deferred", "fixed", "已處置")
 # 處置一筆反駁),不是重新審過一次票面 —— `set` 這幾格時把 review 的版本跟著蓋上去,
 # 不讓它因此過期(#15)。
 CARRY_REVIEW_FIELDS = ("verify_waiver", "verify_strings", "objections")
+# 覆核綁內容與票面(#98):`review.face` 是這幾格的指紋,`review.patch_id` 是那一份改動的
+# `git patch-id --stable`。兩格都在的 review 不再比 state_version / sha —— 同一份 patch 重套到
+# 新主線、只改運行欄(state、lease、cost、base_sha、gate、branch、workspace、patch_ref…)仍有效。
+# 缺格與 null 正規化成該欄的空值:新加的欄位(#101 的 info_homes)出現時是空的,不該讓既有的
+# 覆核過期。
+FACE_FIELDS = (("subject", ""), ("objective", ""), ("acceptance", []), ("in_scope", []),
+               ("out_of_scope", []), ("allowed_write_paths", []), ("info_homes", []),
+               ("needs_verifier", False), ("interface_fixed", False), ("verify_strings", []),
+               ("test_plan", ""), ("depends_on", []), ("decision_refs", []))
+# 派覆核那一刻記進票 `review_request` 的鍵(另有 owner_id);`review-receipt.json` 的 request
+# 恰是這幾格,是它的不可變副本。
+REQUEST_KEYS = ("run_id", "attempt", "state_version", "face", "patch_id", "sha")
 LOCK_NAME = ".ticket.lock"
 LOCK_TIMEOUT = 10.0
 
@@ -338,6 +353,11 @@ USAGE = {
     "agent-command": ("scripts/ticket.py agent-command --model M [--tool T] "
                       "[--base \"<worker.command>\"] [--swap-model] [--effort E]"),
     "lint": "scripts/ticket.py lint <id>  # 唯讀:needs_verifier / verify_strings / 標籤",
+    "review-request": ("scripts/ticket.py review-request <id> --run-id <run_id> --sha <分支頭> "
+                       "--receipt <reports/t<id>/<run_id>/review-receipt.json>"),
+    "review-receive": ("scripts/ticket.py review-receive <id> --receipt <收件單> "
+                       "--verdict pass|fail|missing [--by B] [--note N] [--evidence <REVIEW.md>] "
+                       "[--objection <理由>]… [--reason <沒交件的原因>]  # stale rc=4"),
 }
 
 EXAMPLE = {
@@ -376,6 +396,11 @@ python3 scripts/ticket.py set 7 allowed_write_paths '["scripts/land.sh", "tests/
                       "python3 scripts/ticket.py agent-command --model fable --tool claude-code \\\n"
                       "  --base \"claude -p --model opus\" --swap-model"),
     "lint": "python3 scripts/ticket.py lint 7",
+    "review-request": ("python3 scripts/ticket.py review-request 7 --run-id 20261017-101500-1 \\\n"
+                       "  --sha a1b2c3d --receipt reports/t7/20261017-101500-1/review-receipt.json"),
+    "review-receive": ("python3 scripts/ticket.py review-receive 7 \\\n"
+                       "  --receipt reports/t7/20261017-101500-1/review-receipt.json \\\n"
+                       "  --verdict pass --by reviewer@opus --note reports/t7/20261017-101500-1/REVIEW.md"),
 }
 
 
@@ -436,6 +461,19 @@ def known_flags(verb):
                 ("--swap-model", "非 codex 時把 --base 裡 --model 的值換成 --model", False, False),
                 ("--effort", "推理強度;claude-code 轉 --effort、codex 轉 -c model_reasoning_effort",
                  False, False)]
+    if verb == "review-request":
+        return [("--run-id", "這一次覆核的 run_id", False, True),
+                ("--sha", "派工那一刻的分支頭(review 綁的 sha,patch_id 從它算)", False, True),
+                ("--receipt", "收件單寫到哪(reports/t<id>/<run_id>/review-receipt.json)",
+                 False, True)]
+    if verb == "review-receive":
+        return [("--receipt", "派工那一刻寫的收件單;收件只比它,不重讀新版", False, True),
+                ("--verdict", "pass / fail / missing(missing 只記收件單,票不動)", False, True),
+                ("--by", "reviewer@<模型>", False, False),
+                ("--note", "review.note(REVIEW.md 的相對路徑)", False, False),
+                ("--evidence", "fail 的反駁證據檔(REVIEW.md)", False, False),
+                ("--objection", "fail 的一條阻擋理由", True, False),
+                ("--reason", "missing 的原因", False, False)]
     return []
 
 
@@ -851,14 +889,61 @@ def cmd_set(argv):
 # --------------------------------------------------------- 進 Done 的必要條件
 
 
+def face(ticket):
+    """票面指紋(#98 A2):`FACE_FIELDS` 那幾格正規化之後 `json.dumps(sort_keys=True)` 的 SHA256。"""
+    fields = {name: empty if ticket.get(name) is None else ticket.get(name)
+              for name, empty in FACE_FIELDS}
+    return hashlib.sha256(json.dumps(fields, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def patch_id(tip):
+    """`tip` 相對主線那一份改動(`main...tip`)的 `git patch-id --stable`。同一份 patch 重套到
+    新主線,sha 換了、patch_id 不變。算不出來回空字串 —— 答不出來不等於答是。"""
+    if not tip:
+        return ""
+    diff = git(["diff", "--no-color", "--no-ext-diff", "%s...%s" % (main_branch(), tip)],
+               text=False)
+    if diff.returncode != 0 or not diff.stdout.strip():
+        return ""
+    done = subprocess.run(["git", "patch-id", "--stable"], cwd=root(), input=diff.stdout,
+                          capture_output=True, timeout=GIT_TIMEOUT)
+    words = done.stdout.decode("utf-8", "replace").split() if done.returncode == 0 else []
+    return words[0] if words else ""
+
+
+def bound_to_content(review):
+    """這張 review 有沒有 #98 的兩格(`patch_id`、`face` 都是非空字串)。缺任一格就是舊的
+    review:照舊比 state_version / sha,訊息也照舊(A1)。"""
+    return all(isinstance(review.get(key), str) and review.get(key)
+               for key in ("patch_id", "face"))
+
+
 def review_problems(ticket, tip=""):
-    """覆核那一格過不過得了。`tip` 給了就一起比分支 / patch 的 sha。"""
+    """覆核那一格過不過得了。`tip` 給了就一起比分支 / patch。
+
+    **land 與 close 都只問這一支**(#98 A5):`review_request` 與收件單(`review-receipt.json`)
+    只用在收件,不是另一份 review 的真相。"""
     out = []
     review = ticket.get("review")
     if not isinstance(review, dict) or not review.get("verdict"):
-        return ["沒有 review —— 覆核是主線讀 patch 記進票的那一格"]
+        return ["票上沒有 review —— 覆核是主線讀 patch 記進票的那一格,land / close 不替它判"]
     if str(review.get("verdict")).lower() not in REVIEW_PASS:
         out.append("review.verdict=%r 不是通過" % review.get("verdict"))
+    if bound_to_content(review):
+        current = face(ticket)
+        if review["face"] != current:
+            out.append("face 不同:review 綁的票面指紋是 %s,票現在是 %s —— 覆核之後票面改過"
+                       "(%s 其中之一)" % (review["face"][:12], current[:12],
+                                         "/".join(name for name, _ in FACE_FIELDS)))
+        sha = str(review.get("sha") or "")
+        # 同一個 commit 就是同一份改動,不必問 git;頭換了(重套、rebase、又 commit)才比 patch_id。
+        if tip and not (sha and (tip.startswith(sha) or sha.startswith(tip))):
+            current = patch_id(tip)
+            if current != review["patch_id"]:
+                out.append("patch_id 不同:review 綁的是 %s,分支頭 %s 的是 %s —— 覆核之後改動的"
+                           "內容變了" % (review["patch_id"][:12], tip[:12],
+                                        current[:12] or "(算不出來)"))
+        return out
     bound = review.get("state_version")
     if bound is None:
         out.append("review 沒有綁票版本(state_version)—— 票改過之後它還是長得有效")
@@ -869,7 +954,8 @@ def review_problems(ticket, tip=""):
     if not sha:
         out.append("review 沒有綁最終 patch / 分支的 sha")
     elif tip and not (tip.startswith(sha) or sha.startswith(tip)):
-        out.append("review 綁的是 %s,現在的頭是 %s" % (sha[:12], tip[:12]))
+        out.append("review 綁的是 %s,這條分支的頭是 %s —— 覆核之後又 commit 過"
+                   % (sha[:12], tip[:12]))
     return out
 
 
@@ -2185,6 +2271,250 @@ def cmd_objection(argv):
     return rc
 
 
+# ------------------------------------------------------ 覆核的收件單(#98)
+#
+# 派覆核那一刻(`request_review`)在票鎖裡記一份 `review_request`,同時寫出它的不可變副本
+# `reports/t<id>/<run_id>/review-receipt.json`;reviewer 回來時(`receive_review`)拿那一份
+# 副本在票鎖裡比,對得上才寫一次 review(或反駁 + Blocked)。舊 attempt、又派了一次覆核、
+# 派工之後票被改過的回報一律不收(rc=4 stale),票一格不動,只在自己那份收件單記一句為什麼。
+
+
+def read_receipt(path):
+    """收件單;不在回 None。"""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except FileNotFoundError:
+        return None
+    return data if isinstance(data, dict) else {}
+
+
+def write_receipt(path, data):
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    tmp = path + ".tmp%d" % os.getpid()
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    os.replace(tmp, path)
+
+
+def lease_holder(ticket):
+    lease = ticket.get("lease")
+    return str(lease.get("holder") or "") if isinstance(lease, dict) else ""
+
+
+def request_review(ident, run_id, sha, receipt):
+    """派覆核那一刻的 `review_request`(A3)。回 `(request, 不派的理由)`。
+
+    `state_version` +1 之後的那一版就是收件時要對上的版本:同一張票再派一次覆核、改一次票,
+    舊的那一份就對不上。`owner_id` 是**既有** `lease.holder`(沒有租約是空字串),這裡不寫租約。
+    同一個 run_id 已有一份還沒收件的收件單就不派 —— 那一份的 reviewer 可能還在跑,蓋掉它,
+    它回來時就拿著別人的收件單;收過件的舊單改名留著(`review-receipt-v<版>.json`),一字不改。
+    """
+    pid = patch_id(sha)
+    with Lock():
+        ticket = load(ident)
+        old = read_receipt(receipt)
+        if old is not None and old.get("result") is None:
+            return None, ("%s 還有一份沒收件的覆核(run %s)—— 同一個 run_id 不派第二份;"
+                          "另派就給新的 --run-id,確定那一份死了就刪掉這份收件單"
+                          % (receipt, run_id))
+        ticket["state_version"] = int(ticket.get("state_version") or 0) + 1
+        request = {"run_id": run_id, "owner_id": lease_holder(ticket),
+                   "attempt": ticket.get("attempt"), "state_version": ticket["state_version"],
+                   "face": face(ticket), "patch_id": pid, "sha": sha}
+        ticket["review_request"] = request
+        if old is not None:
+            stem, ext = os.path.splitext(receipt)
+            os.replace(receipt, "%s-v%s%s" % (stem, (old.get("request") or {}).get("state_version"),
+                                              ext))
+        save(ticket)
+        write_receipt(receipt, {"request": {key: request[key] for key in REQUEST_KEYS},
+                                "result": None})
+    event.emit("ticket.state", ticket=str(ident), field="review_request",
+               **{"to": json.dumps(request, ensure_ascii=False),
+                  "state_version": ticket["state_version"]})
+    return request, ""
+
+
+def request_problem(ticket, claimed):
+    """這份收件單還是不是派給**現在這張票**的(A3 / A4):回一句話,或空字串。
+
+    比的是收件單(派工那一刻的副本)對票上的 `review_request` 與 attempt / 租約 / 版本 ——
+    **不在收件時重讀新版替舊結果蓋章**。"""
+    live = ticket.get("review_request")
+    if not isinstance(live, dict):
+        return "票上沒有 review_request —— 這份覆核不是對現在這張票派的"
+    if str(live.get("run_id")) != str(claimed.get("run_id")):
+        return ("票上的 review_request 是 run %s,這份是 run %s 的 —— 之後又派了一次覆核"
+                % (live.get("run_id"), claimed.get("run_id")))
+    if str(ticket.get("attempt")) != str(claimed.get("attempt")):
+        return ("這份覆核是第 %s 次派工的,票現在在第 %s 次 —— 遲到了"
+                % (claimed.get("attempt"), ticket.get("attempt")))
+    if lease_holder(ticket) != str(live.get("owner_id") or ""):
+        return ("派覆核時租約在 %r 手上,現在是 %r —— 換手了"
+                % (live.get("owner_id") or "", lease_holder(ticket)))
+    if str(ticket.get("state_version")) != str(claimed.get("state_version")):
+        return ("這份覆核是對票 v%s 派的,票現在是 v%s —— 派工之後票被改過"
+                % (claimed.get("state_version"), ticket.get("state_version")))
+    for key in REQUEST_KEYS:
+        if live.get(key) != claimed.get(key):
+            return "收件單的 %s 與票上的 review_request 對不上 —— 不是同一次派工" % key
+    return ""
+
+
+def reviewer_objections(rows, bodies, owner, evidence):
+    """覆核 fail 的逐條理由併進 `objections[]`:每條一筆 blocking、owner 是提的那個 reviewer。
+    同一句已經在票上就不記第二筆(`record_objection` 同一條),沒處置的那一筆改記這個 owner。"""
+    where = os.path.relpath(evidence, root()) if evidence else ""
+    for body in bodies:
+        body = without_home(body)
+        same = [row for row in rows if isinstance(row, dict) and row.get("category") == "blocking"
+                and without_home(row.get("body") or "") == body]
+        if not same:
+            rows.append({"category": "blocking", "body": body, "evidence": where,
+                         "owner": owner, "disposition": "", "follow_up": ""})
+        for row in same:
+            if not row.get("disposition"):
+                row["owner"] = owner
+    return rows
+
+
+def receive_review(ident, receipt, verdict, by="", note="", evidence="", bodies=(),
+                   extend=None):
+    """覆核的原子收件(A3 / A4)。回 `(收了沒有, 不收的理由)`。
+
+    同一把鎖裡:比收件單(`request_problem`)→ 對得上才寫,而且只寫一次 —— pass 寫 `review`
+    (sha / patch_id / face 取自收件單),fail 寫逐條 blocking 反駁 + 票轉 Blocked。不收的那一筆
+    票一格不動。不管收不收,收件單記一格 `result{accepted, reason}`,request 一字不改。
+
+    `extend(ticket, claimed)` 是同一把鎖裡的擴充接縫(A6):收件單驗過、寫票之前叫,可以改
+    `ticket`,回一句話就整筆不收、不存檔。#104 從這裡接 note / objection_replies 的驗證與更新;
+    本票不認那兩格。"""
+    data = read_receipt(receipt)
+    claimed = data.get("request") if data else None
+    if not isinstance(claimed, dict):
+        raise ValueError("收件單 %s 讀不到 request" % receipt)
+    with Lock():
+        ticket = load(ident)
+        why = request_problem(ticket, claimed)
+        if not why and extend is not None:
+            why = extend(ticket, claimed) or ""
+        if not why:
+            before = {key: ticket.get(key) for key in ("review", "state")}
+            ticket["state_version"] = int(ticket.get("state_version") or 0) + 1
+            if verdict == "pass":
+                ticket["review"] = {"verdict": "pass", "by": by, "sha": claimed.get("sha"),
+                                    "note": note, "at": now(),
+                                    "state_version": ticket["state_version"],
+                                    "patch_id": claimed.get("patch_id"),
+                                    "face": claimed.get("face")}
+            else:
+                ticket["objections"] = reviewer_objections(ticket.get("objections") or [],
+                                                           bodies, by, evidence)
+                ticket["state"] = "Blocked"
+                ticket["owner"] = "main"
+            save(ticket)
+        data["result"] = {"accepted": not why, "reason": why}
+        write_receipt(receipt, data)
+    if why:
+        return False, why
+    if verdict == "pass":
+        event.emit("ticket.state", ticket=str(ident), field="review",
+                   **{"from": json.dumps(before["review"], ensure_ascii=False),
+                      "to": json.dumps(ticket["review"], ensure_ascii=False),
+                      "state_version": ticket["state_version"]})
+    else:
+        event.emit("ticket.state", ticket=str(ident), field="objections",
+                   note="blocking", state_version=ticket["state_version"])
+        event.emit("ticket.state", ticket=str(ident), field="state",
+                   **{"from": json.dumps(before["state"], ensure_ascii=False),
+                      "to": json.dumps("Blocked"), "state_version": ticket["state_version"]})
+    return True, ""
+
+
+def take_flags(verb, argv, names, repeated=()):
+    """`--旗標 值` 逐對讀進 dict;`repeated` 的那幾個收成 list。不認得的回 None(已印說明)。"""
+    opts = {name: [] if name in repeated else "" for name in names}
+    index = 0
+    while index < len(argv):
+        flag = argv[index]
+        if flag in opts and index + 1 < len(argv):
+            if flag in repeated:
+                opts[flag].append(argv[index + 1])
+            else:
+                opts[flag] = argv[index + 1]
+            index += 2
+            continue
+        unknown_flag(verb, flag)
+        return None
+    return opts
+
+
+def cmd_review_request(argv):
+    opts = take_flags("review-request", argv[1:], ("--run-id", "--sha", "--receipt")) \
+        if argv else None
+    if opts is None or not all(opts.values()):
+        sys.stderr.write("ticket: %s\n" % USAGE["review-request"])
+        return 2
+    ident = argv[0].lstrip("#")
+    try:
+        request, busy = request_review(ident, opts["--run-id"], opts["--sha"], opts["--receipt"])
+    except RuntimeError as exc:
+        sys.stderr.write("ticket: %s\n" % exc)
+        return 5
+    except (OSError, ValueError) as exc:
+        sys.stderr.write("ticket: #%s 的 review_request 存不進去 —— %s\n" % (ident, exc))
+        return 2
+    if busy:
+        sys.stderr.write("ticket: #%s 不派 —— %s\n" % (ident, busy))
+        return 3
+    if not request["patch_id"]:
+        sys.stderr.write("ticket: #%s 的 patch_id 算不出來(%s 相對 %s)—— 這份覆核收下來是舊式的,"
+                         "land 照舊比 state_version / sha\n" % (ident, opts["--sha"][:12],
+                                                               main_branch()))
+    sys.stdout.write("ticket: #%s review_request -> run %s(state_version %d,patch_id %s)"
+                     "—— 收件單 %s\n" % (ident, request["run_id"], request["state_version"],
+                                        request["patch_id"][:12] or "(空)", opts["--receipt"]))
+    return 0
+
+
+def cmd_review_receive(argv):
+    opts = take_flags("review-receive", argv[1:],
+                      ("--receipt", "--verdict", "--by", "--note", "--evidence", "--objection",
+                       "--reason"), repeated=("--objection",)) if argv else None
+    if opts is None or not opts["--receipt"] \
+            or opts["--verdict"] not in ("pass", "fail", "missing"):
+        sys.stderr.write("ticket: %s\n" % USAGE["review-receive"])
+        return 2
+    ident, receipt = argv[0].lstrip("#"), opts["--receipt"]
+    try:
+        if opts["--verdict"] == "missing":
+            data = read_receipt(receipt)
+            if not data:
+                raise ValueError("收件單 %s 不在或是空的" % receipt)
+            data["result"] = {"accepted": False, "reason": "沒交件:%s" % opts["--reason"]}
+            write_receipt(receipt, data)
+            sys.stdout.write("ticket: #%s 覆核沒交件,票不動 —— 記在 %s\n" % (ident, receipt))
+            return 0
+        accepted, why = receive_review(ident, receipt, opts["--verdict"], by=opts["--by"],
+                                       note=opts["--note"], evidence=opts["--evidence"],
+                                       bodies=opts["--objection"])
+    except RuntimeError as exc:
+        sys.stderr.write("ticket: %s\n" % exc)
+        return 5
+    except (OSError, ValueError) as exc:
+        sys.stderr.write("ticket: #%s 的覆核收不進來 —— %s\n" % (ident, exc))
+        return 2
+    if not accepted:
+        sys.stderr.write("ticket: #%s 這一筆不收 —— stale:%s\n" % (ident, why))
+        return 4
+    sys.stdout.write("ticket: #%s 覆核 %s 收下了 —— 收件單 %s\n" % (ident, opts["--verdict"], receipt))
+    return 0
+
+
 # ------------------------------------------------------------ verify.baseline
 
 
@@ -2222,7 +2552,8 @@ def main(argv):
              "close": cmd_close, "import": cmd_import, "freeze": cmd_freeze,
              "round": cmd_round, "result": cmd_result,
              "objection": cmd_objection, "cost": cmd_cost,
-             "agent-command": cmd_agent_command, "lint": cmd_lint}
+             "agent-command": cmd_agent_command, "lint": cmd_lint,
+             "review-request": cmd_review_request, "review-receive": cmd_review_receive}
     if verb in ("--help", "-h", "help"):
         if rest and rest[0] in table:
             return help_for(rest[0])
