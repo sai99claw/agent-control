@@ -762,6 +762,52 @@ class TheDocsChannel(LandBase):
         for prefix in ("tickets/", "docs/", "memory/"):
             self.assertIn(prefix, done.stderr)
 
+    def land_rows_of(self, *args):
+        """跑一次 docs 通道,回 (結果, 這一次發的 land.* 事件)。"""
+        seen = len(self.events())
+        done = self.docs(*args)
+        return done, [row for row in self.events()[seen:] if row["kind"].startswith("land.")]
+
+    def assert_one_docs_stamp(self, rows, kinds):
+        self.assertEqual([row["kind"] for row in rows], kinds)
+        stamps = {row.get("stamp") for row in rows}
+        self.assertEqual(len(stamps), 1, rows)
+        self.assertRegex(stamps.pop() or "", r"^docs-\d{8}-\d{6}-\d+$")
+        self.assertEqual([row.get("channel") for row in rows], ["docs"] * len(rows))
+        return rows[0]["stamp"]
+
+    def test_127_a1b_a_docs_commit_carries_its_stamp_channel_and_main_before(self):
+        """#127 A1(b):一次呼叫一個 stamp、四種 kind 都帶它與 channel=docs;有 commit 的那筆 pass
+        帶 sha 與 main_before = 跑之前的 main(40 位)。四問:量事件檔;紅 = docs 通道不帶 stamp
+        (M3)/ main_before 取 commit 之後;值 = 跑之前自己 `git rev-parse main`。"""
+        self.make_ticket(7)
+        before = self.git("rev-parse", "main").strip()
+        done, rows = self.land_rows_of("tickets: #7", "tickets/7.json")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        first = self.assert_one_docs_stamp(rows, ["land.start", "land.pass"])
+        self.assertEqual(rows[-1].get("main_before"), before)
+        self.assertTrue(self.git("rev-parse", "main").strip().startswith(rows[-1].get("sha")))
+
+        again, rows = self.land_rows_of("第二次", "tickets/7.json")
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertNotEqual(self.assert_one_docs_stamp(rows, ["land.start", "land.pass"]), first,
+                            "一次呼叫一個 stamp")
+        self.assertNotIn("sha", rows[-1], "已在主線上、沒有新的 commit")
+        self.assertNotIn("main_before", rows[-1], "已在主線上、沒有新的 commit")
+
+    def test_127_a1b_refused_and_failed_docs_runs_carry_the_stamp_too(self):
+        """#127 A1(b):land.refused(git add 收不下)與 land.fail(push 沒成功)也帶 stamp 與
+        channel=docs。四問:量事件檔;紅 = 那兩筆沒帶;值 = 票面 A1(b)。"""
+        done, rows = self.land_rows_of("打錯路徑", "docs/nope.md")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assert_one_docs_stamp(rows, ["land.start", "land.refused"])
+
+        self.make_ticket(7)
+        self.git("remote", "set-url", "origin", os.path.join(self.home, "no-such-origin"))
+        done, rows = self.land_rows_of("推不上去", "tickets/7.json")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assert_one_docs_stamp(rows, ["land.start", "land.fail"])
+
 
 class TheOpenerLandsOnlyItsOwnTicket(LandBase):
     """#91 C6(R4):`AC_ROLE=opener` 走 docs 通道時只收 `tickets/<AC_TICKET>.json`。"""
@@ -900,6 +946,11 @@ class HappyPath(LandBase):
         kinds = self.kinds()
         for kind in ("land.start", "gate.start", "gate.pass", "land.pass"):
             self.assertIn(kind, kinds)
+        # #127 A1(a):land.pass 帶 main_before = land worktree 開出來時的 main(40 位,跑之前自己取),
+        # 不帶 channel。**變異**:拿掉 `--kv "main_before=…"` → 這一段紅。
+        landed = [row for row in self.events() if row["kind"] == "land.pass"][-1]
+        self.assertEqual(landed.get("main_before"), before)
+        self.assertNotIn("channel", landed)
         phases = [(row["phase"], row["rc"]) for row in self.status_of("1", kind="land")["phases"]]
         self.assertEqual(phases, [("gate", 0), ("merge", 0), ("push", 0)])
         listed = self.run_py("scripts/inbox.py", "list", "--all").stdout

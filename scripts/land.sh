@@ -164,10 +164,13 @@ cmd_docs() {   # $1 = commit 訊息  $2… = 檔案(repo 相對路徑)
         exit 2
     fi
     take_lock "docs: $msg"
-    ev land.start --note "docs $msg"
+    # 一次呼叫一個 stamp、每一筆 land.* 都帶 `channel=docs`(#127 A1(b)):越界守衛靠 stamp 把
+    # land.start 與 land.pass 配成一次落地,靠 pass 的 main_before 把它接在上一段的終點後面。
+    DSTAMP=docs-$(date +%Y%m%d-%H%M%S)-$$
+    ev land.start --note "docs $msg" --kv "stamp=$DSTAMP" --kv channel=docs
     git -C "$ROOT" add -- "$@" || {
         echo "land: git add 收不下這幾個檔(打錯路徑?)" >&2
-        ev land.refused --note "docs add 失敗"
+        ev land.refused --note "docs add 失敗" --kv "stamp=$DSTAMP" --kv channel=docs
         exit 2
     }
     if git -C "$ROOT" diff --cached --quiet -- "$@"; then
@@ -178,12 +181,13 @@ cmd_docs() {   # $1 = commit 訊息  $2… = 檔案(repo 相對路徑)
         # 它說的是「已經在主線上」,不是「已 commit」,而且不會多出一個 commit。
         echo "land: docs —— 這幾個檔已經在 $MAIN 上了,沒有新的 commit(沒有東西要落地)"
         echo "land:   (與「剛剛落地了」的差別在這一行,不在退出碼:上面沒有 -> $MAIN 那一句。)"
-        ev land.pass --note "docs 沒有改動(已在主線上)"
+        ev land.pass --note "docs 沒有改動(已在主線上)" --kv "stamp=$DSTAMP" --kv channel=docs
         exit 0
     fi
+    docs_before=$(git -C "$ROOT" rev-parse HEAD)
     git -C "$ROOT" commit -q -m "$msg" -- "$@" || {
         echo "land: git commit 失敗" >&2
-        ev land.fail --note "docs commit 失敗"
+        ev land.fail --note "docs commit 失敗" --kv "stamp=$DSTAMP" --kv channel=docs
         exit 2
     }
     sha=$(git -C "$ROOT" rev-parse --short HEAD)
@@ -192,11 +196,13 @@ cmd_docs() {   # $1 = commit 訊息  $2… = 檔案(repo 相對路徑)
     if git -C "$ROOT" remote get-url origin >/dev/null 2>&1; then
         git -C "$ROOT" push -q origin "$MAIN" || {
             echo "land: 已 commit,但 push 沒成功 —— 自己推一次:git push origin $MAIN" >&2
-            ev land.fail --note "docs push 沒成功" --kv "sha=$sha"
+            ev land.fail --note "docs push 沒成功" --kv "sha=$sha" --kv "stamp=$DSTAMP" \
+                --kv channel=docs
             exit 1
         }
     fi
-    ev land.pass --note "docs $msg" --kv "sha=$sha"
+    ev land.pass --note "docs $msg" --kv "sha=$sha" --kv "stamp=$DSTAMP" --kv channel=docs \
+        --kv "main_before=$docs_before"
     exit 0
 }
 
@@ -633,6 +639,9 @@ git -C "$ROOT" worktree add -q -b "$BR" "$WT" "$MAIN" || {
     status_done_all 2 "worktree add 失敗"
     exit 2
 }
+# 這一次落地接在哪一個 commit 後面(#127 A1(a)):land.pass 帶它,越界守衛拿它把這一段
+# 接在 agent 起跑時的 HEAD(或上一段的終點)後面。
+LAND_BASE=$(git -C "$WT" rev-parse HEAD)
 for b in "$@"; do
     if ! git -C "$WT" merge -q --no-ff "$b" -m "Merge $b (land $STAMP)"; then
         echo "land: 合 $b 時衝突 —— worktree 留在 $WT,自己看"
@@ -885,7 +894,7 @@ else
 fi
 echo "land: $MAIN -> $(git -C "$ROOT" rev-parse --short HEAD) 已推上"
 ev land.pass --note "$*" --kv "stamp=$STAMP" \
-    --kv "sha=$(git -C "$ROOT" rev-parse --short HEAD)"
+    --kv "sha=$(git -C "$ROOT" rev-parse --short HEAD)" --kv "main_before=$LAND_BASE"
 # **已合併、已關票**與**已合併、尚未關票**要分開講(2026-09-21 外部審查:能力表誤稱
 # land 會關票)。關票仍是 `scripts/ticket.py close` 判:它自己再問一次「改動真的在主線嗎」
 # 與 Done 的四條件(done_blockers),這裡只是換成 land 來打(#43,見檔頭)。
