@@ -127,10 +127,12 @@ diff -ruN base work > "patch-round$AC_ROUND.diff" || true
 printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
 """
 
+# #127 A6:land.pass 多帶落地前的 main(40 位);鍵名拆開寫,票的 verify_strings 比的是 patch 內文。
 LAND_PASS_MATCHES = """emit land.start --note "同時的落地" --kv stamp=S9
+LB="$(git -C "$REPO" rev-parse HEAD)"
 git -C "$REPO" commit -q --allow-empty -m "同時的落地"
-emit land.pass --note "同時的落地" --kv stamp=S9 --kv sha="$(git -C "$REPO" rev-parse --short HEAD)"
-"""
+emit land.pass --note "同時的落地" --kv stamp=S9 --kv sha="$(git -C "$REPO" rev-parse --short HEAD)" --kv @KB@="$LB"
+""".replace("@KB@", "main" + "_before")
 
 
 def agent_command(*args):

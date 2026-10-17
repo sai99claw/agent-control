@@ -390,7 +390,9 @@ for log in sys.argv[1:]:
         report = json.load(handle)
     rows = report.get("violations") or []
     said.append("%s:%s" % (report.get("role") or "?", ";".join(
-        "%s(前 %s → 後 %s)" % (row.get("path"), row.get("before"), row.get("after"))
+        "%s(前 %s → 後 %s%s)" % (row.get("path"), row.get("before"), row.get("after"),
+                                "、歸屬不上 %s" % row["unattributed"][:12]
+                                if row.get("unattributed") else "")
         for row in rows[:5]) + (" 等 %d 處" % len(rows) if len(rows) > 5 else "")))
     where.append(path)
 if not said:
@@ -1201,8 +1203,11 @@ def tee(stream, log):
 # HEAD、分支、`git status` 列得出的每一個路徑加內容雜湊(已髒的檔再被改一次,porcelain 一樣、
 # 雜湊不一樣),與 config `guarded_dirs` 底下每一個檔。對不上的就是越界,除了兩種:控制面
 # (config 解析出的 tickets / events / answers / reports)與這一個 agent 自己的副本;HEAD 前進
-# 而期間的事件裡有同一個 stamp 的 land.start + land.pass、pass 的 sha 就是新的 HEAD、舊 HEAD
-# 是它的祖先 —— 那是同時的合法落地,工作樹照查。越界寫 `<log 去掉 .log>.guard.json`、rc 印 8。
+# 時 `git rev-list --first-parent 舊..新` 的每一個 commit 都要歸屬到一次合法落地(#127):一筆
+# land.pass 帶 stamp、sha、40 位的 main_before,事件檔裡在它之前(可以早於起跑)有同 stamp 的
+# land.start,就是 main_before..sha 那一段;從舊 HEAD 起一段接一段首尾相接到新 HEAD 才算數,
+# 接不上的第一個 commit 記成 `unattributed`。票的 land 與 docs 通道(channel=docs)同一套,工作樹照查。
+# 越界寫 `<log 去掉 .log>.guard.json`、rc 印 8。
 # **只查列出來的地方**:主 repo 被 .gitignore 掉的檔與 guarded_dirs 以外,這裡不宣稱看過。
 guard_path = os.path.splitext(log_path)[0] + ".guard.json"
 
@@ -1247,10 +1252,10 @@ def git_out(repo, *args):
     return done.stdout if done.returncode == 0 else None
 
 
-def guard_snapshot(repo, dirs, events):
+def guard_snapshot(repo, dirs):
     top = git_out(repo, "rev-parse", "--show-toplevel")
     snap = {"top": top.decode().strip() if top else None, "tree": None, "dirs": {},
-            "head": None, "branch": None, "events_at": 0}
+            "head": None, "branch": None}
     if snap["top"]:
         head = git_out(repo, "rev-parse", "-q", "--verify", "HEAD")
         branch = git_out(repo, "symbolic-ref", "-q", "HEAD")
@@ -1278,23 +1283,20 @@ def guard_snapshot(repo, dirs, events):
                 path = os.path.join(where, name)
                 files[path] = file_digest(path)
         snap["dirs"][top] = files
-    try:
-        snap["events_at"] = os.path.getsize(events)
-    except OSError:
-        pass
     return snap
 
 
-def land_rows(events, start):
+def land_rows(events):
+    # 整份讀(#127 A2):land 跑全套要幾分鐘,land.start 常早於 agent 起跑。只在 HEAD 動過時讀一次。
     try:
         with open(events, "rb") as handle:
-            if os.path.getsize(events) >= start:
-                handle.seek(start)
             lines = handle.read().decode("utf-8", "replace").splitlines()
     except OSError:
         return []
     rows = []
     for line in lines:
+        if '"land.' not in line:
+            continue
         try:
             row = json.loads(line)
         except ValueError:
@@ -1304,23 +1306,54 @@ def land_rows(events, start):
     return rows
 
 
-def land_explains(repo, old, new, rows):
-    """新的 HEAD 是不是這段時間裡一次合法落地的結果;是就回那一次的識別。"""
-    starts = [row.get("stamp") for row in rows if row.get("kind") == "land.start"]
+def land_segments(rows):
+    """每一次合法落地的 (main_before, sha, stamp)。缺 stamp、sha、40 位 main_before 任一格,或在它之前
+    沒有同 stamp 的 land.start,就不是一段 —— 識別不靠缺欄(None 配 None 不是配對)。"""
+    starts, segments = set(), []
     for row in rows:
-        sha = str(row.get("sha") or "")
-        if row.get("kind") != "land.pass" or len(sha) < 7 or not new.startswith(sha):
+        stamp = row.get("stamp")
+        if not isinstance(stamp, str) or not stamp:
             continue
-        if row.get("stamp") not in starts:
-            continue
-        if subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", old, new],
-                          capture_output=True).returncode == 0:
-            return "land stamp=%s sha=%s" % (row.get("stamp"), sha)
-    return ""
+        if row.get("kind") == "land.start":
+            starts.add(stamp)
+        elif row.get("kind") == "land.pass" and stamp in starts:
+            sha, before = str(row.get("sha") or ""), str(row.get("main_before") or "")
+            if len(sha) >= 7 and len(before) == 40 and all(c in "0123456789abcdef" for c in before):
+                segments.append((before, sha, stamp))
+    return segments
+
+
+def land_attribution(repo, old, new, rows):
+    """從舊 HEAD 沿 first-parent 往新 HEAD 走:每一步找 main_before 恰是目前終點、sha 在鏈上更後面的
+    那一段(多段取走得最遠的)接上去。回 (接上的各段, 第一個歸屬不上的 commit);全接上第二格是 None。
+    鏈本身不經過舊 HEAD(改寫、倒退)就一段都不算,第一格空。"""
+    listed = git_out(repo, "log", "--first-parent", "--format=%H %P", "%s..%s" % (old, new))
+    chain = [line.split() for line in (listed or b"").decode().splitlines() if line.strip()][::-1]
+    if not chain or len(chain[0]) < 2 or chain[0][1] != old:
+        return [], chain[0][0] if chain else None
+    order = [old] + [item[0] for item in chain]
+    segments = land_segments(rows)
+    at, said = 0, []
+    while at < len(order) - 1:
+        best = None
+        for before, sha, stamp in segments:
+            if before != order[at]:
+                continue
+            for end in range(at + 1, len(order)):
+                if order[end].startswith(sha):
+                    if best is None or end > best[0]:
+                        best = (end, stamp, sha)
+                    break
+        if best is None:
+            return said, order[at + 1]
+        said.append("land stamp=%s sha=%s(%s..%s)" % (best[1], best[2], order[at][:12],
+                                                      order[best[0]][:12]))
+        at = best[0]
+    return said, None
 
 
 def guard_verdict(before, repo, exempt, dirs, events, agent_rc):
-    after = guard_snapshot(repo, dirs, events)
+    after = guard_snapshot(repo, dirs)
 
     def exempted(path):
         real = os.path.realpath(path)
@@ -1337,13 +1370,15 @@ def guard_verdict(before, repo, exempt, dirs, events, agent_rc):
     if before["branch"] != after["branch"]:
         found.append({"path": "HEAD(分支)", "before": before["branch"], "after": after["branch"]})
     elif before["head"] != after["head"]:
-        why = land_explains(repo, before["head"], after["head"] or "",
-                            land_rows(events, before["events_at"]))
-        if why:
-            notes.append("HEAD %s -> %s 歸屬於同時的 %s" % (before["head"][:12],
-                                                          (after["head"] or "")[:12], why))
+        said, stray = land_attribution(repo, before["head"], after["head"] or "",
+                                       land_rows(events))
+        if said and stray is None:
+            notes.extend("HEAD %s -> %s 歸屬於同時的 %s" % (before["head"][:12],
+                                                          (after["head"] or "")[:12], why)
+                         for why in said)
         else:
-            found.append({"path": "HEAD", "before": before["head"], "after": after["head"]})
+            found.append({"path": "HEAD", "before": before["head"], "after": after["head"],
+                          "unattributed": stray})
     for top in dirs:
         was, now = before["dirs"].get(top, {}), after["dirs"].get(top, {})
         for path in sorted(set(was) | set(now)):
@@ -1368,7 +1403,7 @@ if role != "opener":
     if os.path.exists(guard_path):
         os.remove(guard_path)
     guard_repo, guard_exempt, guard_dirs, guard_events = guard_conf()
-    guarded = guard_snapshot(guard_repo, guard_dirs, guard_events)
+    guarded = guard_snapshot(guard_repo, guard_dirs)
 
 # `worker.pid` 住在副本根(#46):下一輪收前幾輪副本之前先問它還活著沒有。回來了就刪掉,
 # 留著的那一份只會是「auto-fix 被砍了、worker 還在跑」的那一種。

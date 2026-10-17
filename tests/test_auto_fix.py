@@ -3646,8 +3646,22 @@ printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-rou
 """
 
 FAKE_LAND = """emit land.start --note "同時的落地" --kv stamp=S1
+MB=$(git -C "$REPO" rev-parse HEAD)
 git -C "$REPO" commit -q --allow-empty -m "同時的落地"
-emit land.pass --note "同時的落地" --kv stamp=S1 --kv sha="$(git -C "$REPO" rev-parse --short HEAD)"
+emit land.pass --note "同時的落地" --kv stamp=S1 --kv sha="$(git -C "$REPO" rev-parse --short HEAD)" \
+    --kv main_before="$MB"
+"""
+
+# #127 A3:agent 跑的期間真跑一次沙盒裡的 docs 通道(AC_ROOT 不覆寫的話事件寫進副本、守衛看不到)。
+REAL_DOCS = """echo "docs 通道" > "$REPO/docs/T127.md"
+AC_ROOT="$REPO" sh "$REPO/scripts/land.sh" docs "docs: #127 同時的 docs 通道" docs/T127.md >/dev/null
+"""
+
+# #127 A2 / A5:一次假的票 land,`@START@` 是 land.start(空 = 不發),`@PASS@` 是 pass 多帶的 kv。
+SHAPED_LAND = """@START@
+OLD=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" commit -q --allow-empty -m "同時的落地"
+emit land.pass --note "同時的落地" --kv sha="$(git -C "$REPO" rev-parse --short HEAD)" @PASS@
 """
 
 
@@ -3767,6 +3781,72 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
         """同時有合法落地,工作樹照查:多出來的檔仍是越界。"""
         self.arm(FAKE_LAND + 'echo stray > "$REPO/stray.txt"')
         self.assert_stopped(self.auto_fix("--no-review"), "stray.txt")
+
+    def guard_report(self):
+        with open(self.guard_reports()[0], encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_127_a2_a_land_start_before_the_agent_started_still_counts(self):
+        """#127 A2:land.start 在起跑**之前**就在事件檔裡(重疊的形狀),期間只看得到 pass。
+        四問:量 rc 0、沒有 guard.json;紅 = M1(start 只找起跑之後);值 = 票面 A2。"""
+        self.arm(SHAPED_LAND.replace("@START@", "")
+                 .replace("@PASS@", '--kv stamp=S2 --kv main_before="$OLD"'))
+        emitted = self.run_py("scripts/event.py", "emit", "land.start", "--note", "早開跑的 land",
+                              "--kv", "stamp=S2", env=self.env(AC_ROOT=self.repo))
+        self.assertEqual(emitted.returncode, 0, emitted.stderr)
+        self.assert_not_stopped(self.auto_fix("--no-review"))
+
+    def test_127_a3_a_real_docs_channel_run_is_a_legal_head_move(self):
+        """#127 A3:agent 跑的期間真跑一次 `land.sh docs` ⇒ 不擋。四問:量 rc 0、沒有 guard.json;
+        紅 = M3(docs 通道不帶 stamp);值 = 票面 A3。"""
+        self.arm(REAL_DOCS)
+        before = self.git("rev-parse", "main").strip()
+        self.assert_not_stopped(self.auto_fix("--no-review"))
+        self.assertNotEqual(self.git("rev-parse", "main").strip(), before, "docs 通道真的落了")
+
+    def test_127_a3_docs_then_a_ticket_land_end_to_end_both_count(self):
+        """#127 A3:先 docs 通道、再一次票 land(首尾相接)⇒ HEAD 不算越界,notes 兩筆各點名 stamp。
+        notes 只在有越界時寫得出來,所以另放一個多出來的檔讓 guard.json 落地,再看 HEAD 那一格。
+        四問:量 violations 只有 stray.txt、notes 兩筆;紅 = 只認一段;值 = 票面 A3。"""
+        self.arm(REAL_DOCS + FAKE_LAND + 'echo stray > "$REPO/stray.txt"')
+        self.assert_stopped(self.auto_fix("--no-review"), "stray.txt")
+        report = self.guard_report()
+        self.assertEqual([os.path.basename(row["path"]) for row in report["violations"]],
+                         ["stray.txt"])
+        heads = [note for note in report["notes"] if note.startswith("HEAD ")]
+        self.assertEqual(len(heads), 2, report["notes"])
+        self.assertRegex(heads[0], r"stamp=docs-\d{8}-\d{6}-\d+ ")
+        self.assertIn("stamp=S1 ", heads[1])
+
+    def test_127_a4_a_bare_commit_before_a_legal_land_is_named(self):
+        """#127 A4:窗內先一個沒有 land 事件的 commit X,再一次合法 land(main_before = X)⇒ 越界,
+        guard.json 點名 X、頁上看得到 X 的前 7 位。四問:量 rc 8 / 票 / 事件 / 頁 / guard.json;
+        紅 = M2(退回「新 HEAD = pass sha 且舊 HEAD 是祖先」);值 = X 由案例自己在 git 上取。"""
+        self.arm('git -C "$REPO" commit -q --allow-empty -m "裸 commit X"\n' + FAKE_LAND)
+        old = self.git("rev-parse", "main").strip()
+        page = self.assert_stopped(self.auto_fix("--no-review"), "HEAD")
+        new = self.git("rev-parse", "main").strip()
+        bare = self.git("rev-parse", "main^").strip()
+        self.assertEqual(self.git("log", "-1", "--format=%s", bare).strip(), "裸 commit X")
+        rows = [row for row in self.guard_report()["violations"] if row["path"] == "HEAD"]
+        self.assertEqual(rows, [{"path": "HEAD", "before": old, "after": new,
+                                 "unattributed": bare}])
+        self.assertIn(bare[:7], page["what"])
+
+    def test_127_a5_identity_does_not_rest_on_missing_fields(self):
+        """#127 A5:(a) start / pass 都沒有 stamp;(b) pass 沒有 main_before;(c) 整個事件檔沒有同
+        stamp 的 start;(d) main_before 不是上一段的終點(= 舊 HEAD 的父)⇒ 全部 rc 8。
+        四問:量 rc 8 與 HEAD 那一格;紅 = M4(None 也算配上)只紅 (a);值 = 票面 A5。"""
+        start = 'emit land.start --note "同時的落地" --kv stamp=S1'
+        rows = (("a", 'emit land.start --note "同時的落地"', '--kv main_before="$OLD"'),
+                ("b", start, "--kv stamp=S1"),
+                ("c", "", '--kv stamp=S1 --kv main_before="$OLD"'),
+                ("d", start, '--kv stamp=S1 --kv main_before="$(git -C "$REPO" rev-parse HEAD~2)"'))
+        for name, emit_start, kv in rows:
+            with self.subTest(name):
+                self.setUp()
+                self.arm(SHAPED_LAND.replace("@START@", emit_start).replace("@PASS@", kv))
+                self.assert_stopped(self.auto_fix("--no-review"), "HEAD")
 
 
 # 上一輪閘門的 lint 擋了一條(形狀抄 `verify-case.py lint`;#126 T3 手寫同形 status.json)。

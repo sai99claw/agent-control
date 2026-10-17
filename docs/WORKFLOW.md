@@ -164,9 +164,16 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
    沙盒擋,改由 `run_agent` 在 worker / 驗證者 / 批次 worker 起跑前後各拍一次快照:主 repo 的 HEAD、分支、
    `git status` 列得出的每個路徑**加內容雜湊**(已髒的檔再被改一次也看得到),以及 `board/config.json` 的
    `guarded_dirs`(字串 list,`~` 展開、相對主 repo 解析;缺或 `[]` 只查主 repo)底下每一個檔。豁免只有
-   config 解析出的 tickets / events / answers / reports 路徑與這個 agent 自己的副本;HEAD 前進只在期間有同一
-   stamp 的 `land.start` + `land.pass`、pass 的 sha 就是新 HEAD、舊 HEAD 是它的祖先時算同時的合法落地 ——
-   工作樹照查,只有 `land.start` 不算數。其餘改動 ⇒ `reports/t<n>/<run_id>/<角色>-round<r>.guard.json`(前後證據)、
+   config 解析出的 tickets / events / answers / reports 路徑與這個 agent 自己的副本;HEAD 前進時
+   `git rev-list --first-parent 舊..新` 的**每一個 commit** 都要歸屬到一次合法落地(#127):一筆 `land.pass`
+   帶 `stamp`、`sha`、40 位的 `main_before`,而整份事件檔裡在它之前有同一 stamp 的 `land.start`(可以早於
+   agent 起跑),就是 `main_before..sha` 那一段;從舊 HEAD 起一段接一段首尾相接到新 HEAD 才算同時的合法落地
+   (notes 逐段列 stamp)。接不上 ⇒ 越界,HEAD 那一格的 `unattributed` 是第一個歸屬不上的 commit。工作樹照查,
+   只有 `land.start` 不算數。**事件形狀是契約**,專案端的 land 包裝照發:票 land 的 `land.pass` 帶
+   `stamp`、`sha`(短)、`main_before`(land worktree 開出來時的 HEAD),不帶 `channel`;docs 通道一次呼叫一個
+   `stamp=docs-<YYYYmmdd-HHMMSS>-<pid>`,它的 `land.start` / `land.refused` / `land.fail` / `land.pass` 都帶這個
+   stamp 與 `channel=docs`,有 commit 的那筆 pass 帶 `sha` 與 `main_before`(commit 之前的 HEAD)。缺 stamp
+   或 `main_before` 的落地會被判越界。其餘改動 ⇒ `reports/t<n>/<run_id>/<角色>-round<r>.guard.json`(前後證據)、
    `auto-fix.sh` rc=8、票 Blocked / owner=main、`ticket.attempt.failed reason=guard-violation`、一頁 decision
    列路徑與前後;patch 不套、副本留著。**排在 codex 額度那一手之前**:同一輪又撞額度仍是 8,不回 Ready。
    批次越界時整批票轉 Blocked(唯一會寫票的批次結局)、不發 attempt.failed(批次沒有 attempt.start)。
