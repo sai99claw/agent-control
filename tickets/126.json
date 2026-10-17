@@ -1,0 +1,77 @@
+{
+  "id": "126",
+  "subject": "閘門 lint 失敗進 failures[],且任一輪缺案例都先派驗證者",
+  "created": "2026-10-17T14:33:56+08:00",
+  "objective": "驗證者案例的 lint 不過(含案例檔不存在)時,status.json 的 failures[] 帶檔名與 lint 那一行,auto-fix 不再報「紅了但沒有歸因」;needs_verifier=true 而案例還沒交時,auto-fix 任一輪(含從舊狀態檔接著跑的第 2 輪以後)都先派驗證者。",
+  "acceptance": [
+    "A1 lint 擋的格式錯進紅榜:票 verify.files 指向一份 lint 擋的案例(例 F1 模組沒有 docstring),跑 gate.sh --ticket <n> → rc 仍非零、stdout 仍有「不跑 check」且沒有「驗證者案例的綠」(既有行為不變);該輪 kind=gate 的 status.json 的 failures[] 至少一列,其中一列 kind==\"LINT\"、case==\"verify-case-lint:<案例檔相對 repo 根的路徑>\"、file==同一相對路徑、line==lint 那一行印的行號(F1 那條是 1)、excerpt 含 lint 印出的那一整行原文(含規則代號 F1)、log 指向 lint 的 log。",
+    "A2 案例檔不存在也進紅榜:verify.files 列了一個不存在的檔 → gate rc 非零;failures[] 有一列 kind==\"LINT\"、file==那個檔相對 repo 根的路徑(不得是絕對路徑、不得含家目錄)、line==0、excerpt 含「讀不到」那一行原文。保底:lint rc 非零而一行都對不上時,仍寫恰一列 case==\"verify-case-lint:\"、file==\"\"、line==0、excerpt==lint log 最後一個非空行 —— lint rc 非零時 failures[] 永不為空。 同類的洞併進本條(主線裁示):票 needs_verifier=true、沒有 verify_waiver、宣告了 verify 而 verify.files 是空的(gate.sh 印「這張票沒有驗證者案例」、CRC=3 那條路)→ gate rc 仍為 3,failures[] 恰一列 kind==\"LINT\"、case==\"verify-case-lint:(no-cases)\"、file==\"\"、line==0、excerpt 含「這張票沒有驗證者案例」;waiver / needs_verifier=false / 沒宣告 verify 三個例外照舊不寫列。這一列與 lint 列同走 A5(全 LINT → 只派驗證者)。",
+    "A3 不擋的不進紅榜、其餘紅榜不變:lint 過(rc 0)時 failures[] 沒有 kind==\"LINT\" 的列;lint 不過時,lint 印的不擋行(白名單「不擋」、非 block 規則的提示)不成列,列數 == lint 印的「不過(N 條)」的 N(讀不到檔那種除外,一檔一列);`status.py failures --log <gate log>` 印的可重跑 id 不含 LINT 列(lint log 不當 --log 解析);既有 unittest 紅榜的列(FAIL/ERROR)形狀與筆數不變。",
+    "A4 任一輪都先派驗證者:票 needs_verifier 是 JSON true、verify.baseline 空,狀態檔是上一輪 gate 紅(一般 FAIL 列,repair_round=1)→ auto-fix 從第 2 輪接著跑時,該輪恰起一個驗證者(events 有一筆 agent.start role=verifier round=2),stdout 有「案例還沒交,第 2 輪先派驗證者」;與 worker 平行或等 patch 照 interface_fixed(同第 1 輪 #60 規則)。對照:baseline 非空 → 第 2 輪不起;needs_verifier false / 缺 → 不起(缺的照舊 stderr 點名 D-028)。",
+    "A5 全是 LINT 列的那一輪只派驗證者:上一輪 gate 的 failures[] 全是 kind==LINT → 這一輪不起 worker(events 沒有該輪 role=worker 的 agent.start),只起驗證者,副本是分支上那一版;baseline 空 → 用一般驗證者派工文(verifier_packet),baseline 非空 → 走 test_defect 那條路的派工文、紅榜段列出這些 LINT 列;驗證者交件後照 test_defect 那條路收件、重跑閘門。混合(LINT + FAIL)→ worker 照常派,worker 派工文的紅榜把 LINT 列標成「驗證者的,你不修、不寫 verify/**」。",
+    "A6 一輪最多一個新派的驗證者:同一輪 worker 回 test_defect 反駁時,只走 test_defect 那條路的驗證者,A4 的那一位不重複起;既有 AParallelVerifierThenATestDefect(p2/p3)、TheFirstRoundVerifierRunsAlongside(c1–c6、t60)的斷言不變。",
+    "A7 輪數與停下來的理由不變:只派驗證者的那一輪照樣算一輪、計入 retry_limit+1 上限,不歸零;failures[] 真的空(例 NO_ATTRIBUTION_LOG)時開場與迴圈內兩處「紅了但沒有歸因」照舊 exit 4、轉 Blocked、一頁(既有 test_a_red_with_no_attribution_is_not_handed_to_a_new_worker 不變);機械格不合(#90)那一頁不變。",
+    "A8 文件:docs/WORKFLOW.md 寫明 (a) 驗證者案例 lint 不過會以 kind=LINT 進 status.json 的 failures[]、由驗證者修;(b) needs_verifier=true 且 verify.baseline 空時任一輪都先派驗證者,不只第 1 輪。"
+  ],
+  "in_scope": [
+    "scripts/gate.sh",
+    "scripts/status.py",
+    "scripts/auto-fix.sh"
+  ],
+  "out_of_scope": [
+    "docs/DECISIONS.md",
+    "scripts/land.sh",
+    "scripts/controller.py"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/gate.sh",
+    "scripts/status.py",
+    "scripts/auto-fix.sh",
+    "scripts/verify-case.py",
+    "tests/test_gate.py",
+    "tests/test_status.py",
+    "tests/test_auto_fix.py",
+    "tests/test_verify_case.py",
+    "verify/dispatch/test_ticket_126.py",
+    "verify/TAGS.d/126.md",
+    "docs/WORKFLOW.md"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "4df848f4254ae20e4796c2a2206c93eddddb45fb",
+  "state": "Ready",
+  "state_version": 5,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "feature": "auto-fix / gate",
+  "effort": "high",
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "outline": "#115 實況(已讀其最後兩筆狀態檔):needs_verifier=true、baseline 空,接到第 2 輪起驗證者沒派(round_once 只在 r==1 叫 verifier_wanted);gate lint 讀不到案例檔只寫 NOTE,lint log 走 --extra-log 不解析,failures[] 空 → 報「沒有歸因」轉 Blocked。裁示:LINT 是驗證者的紅(D-014),全 LINT 輪只派驗證者;判準沿用 baseline 空(D-018)。needs_verifier=true:跨三支的失敗邊界;interface_fixed=true:列形狀與字面已釘。順序:本票先於 #120、#125;#117 只共檔;#115 落地後重跑 auto-fix。worker sol high,額度用完既有改派 opus(D-049)。範圍是建議(D-050 ①)。",
+  "test_plan": "期望值一律抄票面字面(kind \"LINT\"、case 前綴 \"verify-case-lint:\"、stdout「案例還沒交,第 N 輪先派驗證者」),不從 status.py / auto-fix.sh 讀回來。外層 AC_ROOT / AC_TICKETS_DIR / AC_CONTROL_DIR 先清掉;全用 tests/control_harness.Sandbox,不打真模型。\nT1(A1–A3)整合,tests/test_gate.py:照既有 test_a_case_that_fails_lint_stops_the_gate_and_names_the_line(UNLINTED_CASE)造票、跑 gate,讀 reports/t<n>/<run>/status.json 的 failures[] 斷言 A1 各鍵;另造 verify.files 指向不存在的檔(A2,斷言 file 不以 / 開頭);再造一份只觸發不擋提示的案例(A3,斷言 0 列 LINT);A2 缺口列:needs_verifier=True、verify 宣告但 files 空跑 gate,斷言 rc==3 且恰一列 case==\"verify-case-lint:(no-cases)\",三個例外(verify_waiver / needs_verifier=False / 沒有 verify 格)各一條斷言 0 列 LINT。T3 另加一條:上一輪是這種缺口列 → 該輪只起驗證者。lint 解析若放在 scripts/status.py,單元層補在 tests/test_status.py(餵一份手寫 lint log,斷言列數與鍵)。\nT2(A4)整合,tests/test_auto_fix.py:needs_verifier=True、baseline 空,先用既有 self.status(1, RED_LOG) 那種手法造一筆上一輪 gate 紅(repair_round=1),跑 auto-fix --no-review;斷言 role=verifier 的 agent.start 恰一筆且 round==\"2\"、stdout 含那句字面;對照組 baseline 非空 / needs_verifier=False 各一條,斷言 0 筆。\nT3(A5)整合,tests/test_auto_fix.py:上一輪 gate 狀態檔的 failures 全是 LINT 列(用 A2 的 gate 實跑產出,或手寫同形 status.json),斷言該輪沒有 role=worker 的 agent.start、有一筆 role=verifier;baseline 空 / 非空各一條,讀該輪派工文斷言用的是哪一份(一般驗證者範本的標題 vs「這一輪多的一件事:test_defect」);混合列一條,讀 worker 派工文斷言 LINT 列帶「驗證者的」字樣。\nT4(A6、A7)回歸:跑既有 tests/test_auto_fix.py 的 TheFirstRoundVerifierRunsAlongside、AParallelVerifierThenATestDefect、ThingsThatStopIt、#90 機械格那一組(類名以檔內為準),全綠且未改斷言。\nT5(A8)文字:grep docs/WORKFLOW.md 有 LINT 與「任一輪」那兩句。\n只准跑:tests/test_gate.py、tests/test_status.py、tests/test_auto_fix.py、tests/test_verify_case.py(若動了 verify-case.py)逐模組前景跑(`cd tests && python3 -m unittest test_gate` 這種形狀,每批 <590s);全套留給閘門。\n變異(worker 自證紅,未實測):M1 gate 的 lint 分支不把 lint 結果交給 status.py → T1 A1/A2 紅;M2 auto-fix 把驗證者條件改回只看第 1 輪(`[ \"$r\" -eq 1 ]`)→ T2 紅;M3 全 LINT 那一輪照樣起 worker → T3 紅;M4 不擋的提示行也成列 → T1 A3 紅;M5 file 寫絕對路徑 → T1 A2 紅;M6 CRC=3 缺口那條路不寫列 → T1 A2 缺口列紅(failures 空);M7 三個例外也寫列 → T1 例外那幾條紅。\n驗證者案例:verify/dispatch/test_ticket_126.py,標籤由驗證者在 verify/TAGS.d/126.md 登記(照 #114 先例),交件時寫 verify.files/tags/run。",
+  "decision_refs": [
+    "D-014",
+    "D-018",
+    "D-020",
+    "D-028",
+    "D-049",
+    "D-050"
+  ],
+  "verify_strings": [
+    "verify-case-lint:",
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "案例還沒交"
+    },
+    "verify-case-lint:(no-cases)"
+  ]
+}

@@ -31,21 +31,22 @@
     "docs/WORKFLOW.md"
   ],
   "role": "worker",
-  "model": "codex:gpt-5.6-sol",
-  "tool": "codex",
+  "model": "opus",
+  "tool": "claude-code",
   "attempt": 0,
   "base_sha": "6813b86845e829e90dc203953e72c55e813c4426",
-  "state": "Draft",
-  "state_version": 18,
+  "state": "Blocked",
+  "state_version": 29,
   "lease": null,
   "retry_limit": 2,
   "verify": {
     "files": [
       "verify/dispatch/test_ticket_115.py",
-      "verify/dispatch/test_ticket_114.py",
-      "verify/TAGS.d/115.md"
+      "verify/dispatch/test_ticket_114.py"
     ],
-    "tags": [],
+    "tags": [
+      "worker-guard"
+    ],
     "run": "python3 scripts/verify.py --tag worker-guard",
     "notes": "A 的案例:沙盒借 tests/control_harness.Sandbox;外層 AC_* 環境清掉再跑。codex / claude 都用 PATH 最前面的替身,不打真模型。真 codex 吃 -s danger-full-access / approval_policy 的實跑效果不在 A 驗(T 同步票的冒煙)。verify/dispatch/test_ticket_114.py 釘了舊 codex 命令字面(A3 與 297 行附近),由本票驗證者改成新字面。 標籤 worker-guard 由驗證者在 verify/TAGS.d/115.md 登記、交件時併進本欄(開題時未登記,lint 不收未登記標籤)。"
   },
@@ -77,5 +78,101 @@
     "guarded_dirs": "board/config.json 的 list[str]；本票只實作讀取，不改正式目錄設定。",
     "guard_result": "維持 rc=8、reason=guard-violation 與既有 Blocked/decision 形狀。",
     "scope": "D-048 事後偵測；不建立 OS 沙盒、權限 broker 或通用效果系統。"
-  }
+  },
+  "cost": [
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "codex:gpt-5.6-sol",
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 4,
+      "outcome": "error",
+      "run_id": "20261016-221216-90624",
+      "session_id": null,
+      "by": "auto-fix.sh",
+      "note": "reports/t115/20261016-221216-90624/worker-round2.log 裡沒有 JSON 信封",
+      "effort": "high",
+      "at": "2026-10-17T13:09:49+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 64,
+      "tokens_out": 27084,
+      "cache_write": 50785,
+      "cache_read": 2074743,
+      "wall_seconds": 431,
+      "outcome": "objection",
+      "run_id": "20261016-221216-90624",
+      "session_id": "fddca2ed-3ade-4e3d-8f09-7d71ce91aeee",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-17T13:17:37+08:00"
+    },
+    {
+      "role": "opener",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 10,
+      "tokens_out": 2930,
+      "cache_write": 28624,
+      "cache_read": 156198,
+      "wall_seconds": 39,
+      "outcome": "accepted",
+      "run_id": "20261016-221216-90624",
+      "session_id": "a44bc35e-5833-4a6c-b285-038c35e82939",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-17T13:42:15+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 252,
+      "tokens_out": 118358,
+      "cache_write": 257969,
+      "cache_read": 21941053,
+      "wall_seconds": 1439,
+      "outcome": "handed-in",
+      "run_id": "20261016-221216-90624",
+      "session_id": "fddca2ed-3ade-4e3d-8f09-7d71ce91aeee",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-17T13:42:16+08:00"
+    }
+  ],
+  "objections": [
+    {
+      "category": "blocking",
+      "body": "The repair copy did not contain the candidate (work == base == fac9173, previous patch \"(none)\"), the red-list worktree `agent-control-wt/t115` and branch no longer exist (only `archive/t115-codex-broker-20261016` @ fa8147d), and the live `tickets/115.json` (main @ eb5a6cd and `round2/control/tickets/115.json`) is now a different ticket (state_version 22, base 6813b86, \"兩種 worker 同權限與共同事後越界檢查\") — main must decide which ticket/branch this fix lands on before apply.",
+      "evidence": "../agent-control-wt/fix-t115/round2/EVIDENCE-round2-objection.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "",
+      "triage": {
+        "verdict": "accepted",
+        "reason": "The round-2 repair targets the abandoned codex-broker candidate (archive/t115-codex-broker-20261016 @ fa8147d), which D-050 ① already ruled \"t115 分支不落地\"; the live #115 is the restored D-048 v5 ticket, so patch-round2.diff must not be applied under #115.",
+        "round": 2,
+        "by": "auto-fix"
+      }
+    }
+  ],
+  "branch": "t115",
+  "patch_ref": "../agent-control-wt/fix-t115/round2/patch-round2.diff",
+  "gate": {
+    "rc": 2,
+    "sha": "f5f573550d6f5e101d9076a8ae9e493f94901200",
+    "run_id": "20261017-134217-44613",
+    "at": "2026-10-17T13:50:49+08:00"
+  },
+  "repair_round": 2,
+  "owner": "main"
 }

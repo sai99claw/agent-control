@@ -27,6 +27,10 @@
     {
       "id": "106",
       "condition": "landed"
+    },
+    {
+      "id": "126",
+      "condition": "landed"
     }
   ],
   "allowed_write_paths": [
@@ -51,7 +55,7 @@
   "attempt": 0,
   "base_sha": "dfaa05c0c87d5011a31872614c2c7a01d2176d25",
   "state": "Draft",
-  "state_version": 7,
+  "state_version": 8,
   "lease": null,
   "retry_limit": 2,
   "verify": {
