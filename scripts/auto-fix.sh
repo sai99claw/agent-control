@@ -667,7 +667,7 @@ if ticket_rows:
 if work_rows:
     out.append("**歸因到交件(worker)**:")
     out += ["- %s" % line for line in work_rows]
-    out += ["", "交件本身不合:拿掉 out_of_scope / protected_paths 的改動、重生 code-map、"
+    out += ["", "交件本身不合:拿掉 protected_paths 的改動、重生 code-map、"
             "把記憶卡新增的錯層內容或超出上限的部分改掉 —— 在分支 %s 上修。" % branch, ""]
 out.append("接回(patch 留在分支 %s 上;**不要轉 Ready** —— 那會從頭派第 1 輪):" % branch)
 step = 1
@@ -700,6 +700,58 @@ rules_pack() {   # $1 = 派工文寫到哪(失敗就刪掉,不留半份)  $2 = �
     RULES_FAILED=1
     echo "auto-fix: #$ID 的 $2 規則包產不出來(模型 $3)—— 不起任何 agent;缺項見上面 rules: 那幾行與 decision 頁" >&2
     return 1
+}
+
+# 派工文的「寫入範圍與資訊歸屬」段(#101 A5 / A8):worker 每一輪都帶。提示範圍只有一種算法
+# (`ticket.hint_scope`),`out_of_scope` 是建議範圍、`protected_paths` 才硬擋;資訊位置是
+# board/config.json 的 `info_map`(相對文件路徑,可帶 `#節名`;沒設只提示)與票的 `info_homes`。
+scope_section() {
+    python3 - "$ROOT" "$TF" <<'PY'
+import json, os, re, sys
+root, tf = sys.argv[1:3]
+sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
+import ticket as ticket_mod
+try:
+    with open(tf, encoding="utf-8") as handle:
+        ticket = json.load(handle)
+except (OSError, ValueError):
+    ticket = {}
+try:
+    with open(os.path.join(root, "board", "config.json"), encoding="utf-8") as handle:
+        conf = json.load(handle)
+except (OSError, ValueError):
+    conf = {}
+info_map = conf.get("info_map") if isinstance(conf, dict) else None
+print("")
+print("## 寫入範圍與資訊歸屬")
+scope = ticket_mod.hint_scope(ticket)
+print("提示範圍(allowed_write_paths ∪ info_homes[].home ∪ verify.files;建議範圍,不是限制):%s"
+      % (" ".join("`%s`" % glob for glob in scope) or "(空)"))
+print("out_of_scope(建議範圍,D-050 ①):%s" % json.dumps(ticket.get("out_of_scope") or [],
+                                                     ensure_ascii=False))
+print("改到提示範圍外、或命中 out_of_scope 的檔:照改,在 EVIDENCE 加一段 `## 提示清單外的改動`,"
+      "一行一檔 `- `<檔>` — <理由>`(apply 抽成 result 的 extra_reasons;out_of_scope 命中缺理由 "
+      "land 會拒絕)。硬擋只有 board/config.json 的 protected_paths。")
+if not info_map:
+    print("資訊地圖:board/config.json 沒設 `info_map` —— 只看底下票面的 info_homes"
+          "(要全域地圖就在 config 加 `info_map`,例 `docs/INFO-MAP.md#節名`)")
+elif not isinstance(info_map, str) or info_map.startswith(("/", "~")) \
+        or ".." in re.split(r"[\\/]", info_map.split("#", 1)[0]):
+    print("資訊地圖:board/config.json 的 `info_map` 不是相對文件路徑(%s)—— 不採用"
+          % json.dumps(info_map, ensure_ascii=False))
+else:
+    doc = info_map.split("#", 1)[0]
+    print("資訊地圖:`%s`%s" % (info_map, "" if os.path.isfile(os.path.join(root, doc))
+                               else "(主 repo 沒有這個檔)"))
+homes = ticket.get("info_homes") if isinstance(ticket.get("info_homes"), list) else []
+homes = [row for row in homes if isinstance(row, dict)]
+if homes:
+    print("這張票的資訊位置(info_homes;說明資訊住在哪,不是寫入權限):")
+    for row in homes:
+        print("- %s → `%s`" % (row.get("what") or "?", row.get("home") or "?"))
+else:
+    print("這張票的資訊位置:票面沒有 info_homes")
+PY
 }
 
 # 派工文的「只准跑的測試」段(#87 A18):worker 與驗證者兩份都帶,逐字抄票的 `test_plan`。
@@ -795,6 +847,7 @@ print("## 票寫錯 / 需要裁示怎麼說")
 print("在 EVIDENCE 裡寫**一行**:`OBJECTION: <ticket-wrong|test_defect|blocking> <一句話>`。")
 print("**不准**放寬既有斷言、不准把期望值改成程式現在印的東西(那是假綠家族)。")
 PY
+        scope_section
         only_tests_section
     } > "$1"
 }
@@ -2124,6 +2177,7 @@ print("看到這一行,這支腳本會把它記成票的 `objections[]`、交給
       "原副本續做;判不了才轉 Blocked 指派主線),**不會**再派下一輪。")
 print("**不准**放寬既有斷言、不准把期望值改成程式現在印的東西(那是假綠家族)。")
 PY
+            scope_section
             only_tests_section
         } > "$DISPATCH"
     fi
@@ -2636,8 +2690,9 @@ for row in rows:
             seen.append(pattern)
 for pattern in seen:
     print("- `%s`" % pattern)
-print("聯集外的檔要改就改(不擋,覆核者逐檔看);硬擋的是 board/config.json 的 protected_paths "
-      "與各票 out_of_scope 聯集扣掉上面這份聯集。")
+print("聯集外的檔要改就改(不擋,覆核者逐檔看);各票 out_of_scope 聯集扣掉上面這份聯集也是建議範圍"
+      "(D-050 ①):命中不擋,在 EVIDENCE「提示清單外的改動」逐檔寫 `- `<檔>` — <理由>`。"
+      "硬擋只剩 board/config.json 的 protected_paths。")
 print("")
 print("## 規則")
 print("**不得放寬測試**:測試檔裡不刪含 assert 的行、不加 skip / expectedFailure —— `apply.sh --batch` "

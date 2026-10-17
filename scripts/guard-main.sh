@@ -71,7 +71,7 @@ if guard and guard in os.path.abspath(cwd).split(os.sep):
 OVERRIDE = "AC_MAIN_OVERRIDE=1"
 # SCHEMA「目標與範圍」那一群:開題者寫的票面。流程欄(state、objections、base_sha…)照放。
 FACE = ("subject", "objective", "acceptance", "in_scope", "out_of_scope",
-        "allowed_write_paths", "verify_strings", "test_plan")
+        "allowed_write_paths", "info_homes", "verify_strings", "test_plan")
 READERS = ("cat", "head", "tail", "less", "more", "sed", "awk", "grep", "rg")
 # 前面帶一格參數的 git 全域選項:`git -C . merge` 的子指令是 merge,不是 `.`。
 GIT_ARG_OPTS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace")

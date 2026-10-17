@@ -298,8 +298,9 @@ grep -aE "^Ran |^OK|^FAILED" run.log      # 給人看的
 - **驗收條目驗的是使用者看到的結果**。DOM 結構、樣式掛在哪個元素、金額帶不帶幣別,票面沒說要改的一律
   **照產品既有慣例** —— 驗證者照慣例斷言,實作者照慣例寫;票面字面與慣例衝突時照慣例做、EVIDENCE 記一行
   `OBJECTION: ticket-wrong`,不要兩份各寫一份。
-- **釘著舊行為的測試 / 期望檔 / lib 腳本跟著改,不是越界**:`allowed_write_paths` 是預期不是限制(D-H38 ①),
-  漏列的照改,`apply.sh` 會列進 `extra_paths`;硬擋只有 `out_of_scope` 與 `protected_paths`。
+- **釘著舊行為的測試 / 期望檔 / lib 腳本跟著改,不是越界**:`allowed_write_paths` 與 `out_of_scope` 都是建議範圍
+  (D-H38 ①、D-050 ①),漏列的照改,`apply.sh` 會列進 `extra_paths`、EVIDENCE 逐檔寫理由(§8 第 9 點);
+  硬擋只剩 `protected_paths`。
 - **票面寫「其餘斷言不變」卻沒列查過哪幾個檔**,那一句是沒驗過的假設:撞到既有 oracle 就照 §7 說出來,
   不准把舊斷言放寬成新行為印的東西。
 
@@ -326,6 +327,10 @@ grep -aE "^Ran |^OK|^FAILED" run.log      # 給人看的
    反駁行裡的家目錄路徑收件時會換成佔位(#91 C4),仍不要寫。
 8. **記憶**:有寫就列 `memory.py note` 的那幾行(層 / 名 / 那一句 / 票號),沒寫就寫「無」。
    **沒列的回寫,與亂寫長得一樣** —— 主線靠這一段 grep 誰動了哪一層。
+9. **提示清單外的改動**(worker;D-050 ①,#101):改到提示範圍(`allowed_write_paths` ∪ `info_homes[].home` ∪
+   `verify.files`)外、或命中 `out_of_scope` 的檔,在 EVIDENCE 加一段 `## 提示清單外的改動`,一行一檔
+   `` - `<檔>` — <理由> ``。`apply.sh` 抽成 result 的 `extra_reasons`;**out_of_scope 命中缺理由 land 拒絕**,
+   只是提示範圍外的缺理由是警告;覆核派工文逐檔印檔名、命中的 glob 與理由,由覆核判。
 
 改到使用者看得到的文字時,**把「舊 → 新」的完整對照表列出來** —— 那是使用者會逐句看的東西。
 

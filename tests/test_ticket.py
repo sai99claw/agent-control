@@ -1840,5 +1840,185 @@ class CostTakesAnEffort(Sandbox):
         self.assertIn("15 鍵", cost[0])
 
 
+class InfoHomes(Sandbox):
+    """#101 A2:`info_homes` 恰為 `list[{what, home}]`;home 是相對根路徑,不准 glob、`..`、絕對
+    路徑。create(`--info-home` 可重複,一個 JSON 物件)、set、lint 同一個判準;拒收不寫票。"""
+
+    BAD = (("glob", {"what": "說明", "home": "docs/*"}),
+           ("上一層", {"what": "說明", "home": "docs/../secret"}),
+           ("絕對", {"what": "說明", "home": "/etc/passwd"}),
+           ("what 空", {"what": " ", "home": "docs/a.md"}),
+           ("多一格", {"what": "說明", "home": "docs/a.md", "extra": 1}),
+           ("少一格", {"home": "docs/a.md"}))
+
+    def test_create_takes_the_flag_more_than_once(self):
+        """四問:量票上的 info_homes;紅 = 不認旗標或只留最後一個;期望值 = 給的兩個 JSON;不測 = 權限。
+        **變異**:`--info-home` 不放進 CREATE_REPEATED → 這一條紅。"""
+        done = self.ticket("create", *MIN,
+                           "--info-home", '{"what": "寫入範圍規則", "home": "tickets/SCHEMA.md"}',
+                           "--info-home", '{"what": "角色操作", "home": "docs/reference"}')
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["info_homes"],
+                         [{"what": "寫入範圍規則", "home": "tickets/SCHEMA.md"},
+                          {"what": "角色操作", "home": "docs/reference"}])
+        self.assertEqual(self.load_ticket("1")["allowed_write_paths"], ["scripts/land.sh"],
+                         "資訊歸屬不是第二組寫入權限")
+
+    def test_create_refuses_each_bad_shape_without_a_file(self):
+        """四問:量 rc 2、沒有票檔、stderr 點名;紅 = 收了;期望值 = BAD 表;不測 = set。
+        **變異**:`info_home_problems` 不查 `..` → 「上一層」那一格紅。"""
+        for name, row in self.BAD + (("不是 JSON", "what=home"),):
+            with self.subTest(name):
+                raw = row if isinstance(row, str) else json.dumps(row, ensure_ascii=False)
+                done = self.ticket("create", *MIN, "--info-home", raw)
+                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+                self.assertIn("info_homes", done.stderr)
+                self.assertEqual(self.tickets_on_disk(), [])
+
+    def test_set_and_lint_use_the_same_rule(self):
+        """四問:量 set 的 rc、票位元組與 state_version、lint 的 rc;紅 = set 收了或 lint 放過;
+        期望值 = BAD 表;不測 = create。"""
+        self.make_ticket("1", needs_verifier=False, verify_strings=["x"])
+        for name, row in self.BAD:
+            with self.subTest(name):
+                before = ticket_bytes(self, "1")
+                done = self.ticket("set", "1", "info_homes", json.dumps([row], ensure_ascii=False))
+                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+                self.assertEqual(ticket_bytes(self, "1"), before)
+                self.make_ticket("1", needs_verifier=False, verify_strings=["x"], info_homes=[row])
+                linted = self.ticket("lint", "1")
+                self.assertEqual(linted.returncode, 1, linted.stdout + linted.stderr)
+                self.assertIn("info_homes", linted.stderr)
+                self.make_ticket("1", needs_verifier=False, verify_strings=["x"])
+        good = [{"what": "說明", "home": "docs/a.md"}]
+        done = self.ticket("set", "1", "info_homes", json.dumps(good, ensure_ascii=False))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["info_homes"], good)
+        self.assertEqual(self.ticket("lint", "1").returncode, 0)
+
+
+class TheVerifierCasesAreNotTheWorkers(Sandbox):
+    """#101 A3:needs_verifier=true 的票,worker 的 allowed_write_paths 不准蓋到本票的
+    verify.files 或本票驗證者慣例路徑(verify/**/test_ticket_<id>.py、verify/TAGS.d/<id>.md);
+    create / set allowed_write_paths / set verify / set needs_verifier / 轉 Ready / lint 都擋。
+    拒收訊息含「是本票驗證者的案例檔」並點名 glob 與檔;拒收不改票、不動 state_version;
+    needs_verifier=false 與別票的案例可收。"""
+
+    WORD = "是本票驗證者的案例檔"
+
+    def assert_refused(self, done, glob, name, ident="1", before=None):
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        line = [row for row in done.stderr.splitlines() if self.WORD in row]
+        self.assertTrue(line, done.stderr)
+        self.assertTrue([row for row in line if "`%s`" % glob in row and "`%s`" % name in row],
+                        line)
+        if before is not None:
+            self.assertEqual(ticket_bytes(self, ident), before, "拒收不改票")
+
+    def test_create_refuses_the_convention_path_of_its_own_number(self):
+        """四問:量 rc 2、沒有票檔、訊息;紅 = 收了;期望值 = 慣例路徑(票號 1 是第一張);不測 = set。
+        **變異 M2**:慣例路徑漏掉 `verify/**/test_ticket_<id>.py` → 這一條紅。"""
+        done = self.ticket("create", *MIN, "--needs-verifier", "true",
+                           "--allowed-write-path", "verify/write_scope/test_ticket_1.py")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn(self.WORD, done.stderr)
+        self.assertIn("`verify/write_scope/test_ticket_1.py`", done.stderr)
+        self.assertEqual(self.tickets_on_disk(), [])
+        tags = self.ticket("create", *MIN, "--needs-verifier", "true",
+                           "--allowed-write-path", "verify/TAGS.d/*")
+        self.assertEqual(tags.returncode, 2, tags.stdout + tags.stderr)
+        self.assertIn("`verify/TAGS.d/1.md`", tags.stderr)
+
+    def test_every_set_path_refuses_and_leaves_the_ticket_alone(self):
+        """四問:量 rc 1、票位元組、state_version、不發 ticket.state;紅 = 哪一條路收了;期望值 =
+        夾具的 verify.files 與慣例路徑;不測 = apply 的驗證者收件(test_apply A4)。
+        **變異**:`cmd_set` 只在 allowed_write_paths 那一格查 → set verify / needs_verifier / Ready 紅。"""
+        files = {"files": ["verify/nav/test_ticket_1.py"], "tags": [], "run": "", "notes": ""}
+        cases = (
+            ("allowed", {"needs_verifier": True},
+             ("allowed_write_paths", '["src/*", "verify/*"]'), "verify/*", "verify/TAGS.d/1.md"),
+            ("verify", {"needs_verifier": True, "allowed_write_paths": ["src/*", "verify/nav/*"]},
+             ("verify", json.dumps(files)), "verify/nav/*", "verify/nav/test_ticket_1.py"),
+            ("needs_verifier", {"needs_verifier": False, "verify": files,
+                                "allowed_write_paths": ["verify/nav/test_ticket_1.py"]},
+             ("needs_verifier", "true"), "verify/nav/test_ticket_1.py",
+             "verify/nav/test_ticket_1.py"),
+            ("Ready", {"needs_verifier": True, "state": "Draft",
+                       "allowed_write_paths": ["src/*", "verify/**/test_ticket_1.py"]},
+             ("state", "Ready"), "verify/**/test_ticket_1.py", "verify/**/test_ticket_1.py"),
+        )
+        for name, fields, (field, value), glob, target in cases:
+            with self.subTest(name):
+                self.make_ticket("1", **fields)
+                before = ticket_bytes(self, "1")
+                done = self.ticket("set", "1", field, value)
+                self.assert_refused(done, glob, target, before=before)
+                self.assertFalse([row for row in self.events() if row.get("kind") == "ticket.state"])
+
+    def test_lint_names_it_too(self):
+        self.make_ticket("1", needs_verifier=True, verify_strings=["x"],
+                         allowed_write_paths=["src/*", "verify/TAGS.d/1.md"])
+        done = self.ticket("lint", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn(self.WORD, done.stderr)
+        self.assertIn("`verify/TAGS.d/1.md`", done.stderr)
+
+    def test_false_and_another_tickets_cases_are_accepted(self):
+        """四問:量 rc 0 與寫進票的值;紅 = 誤擋(不分票號或不看 needs_verifier);期望值 = 夾具;
+        不測 = 慣例路徑以外的 glob 語意。"""
+        self.make_ticket("1", needs_verifier=False)
+        done = self.ticket("set", "1", "allowed_write_paths", '["src/*", "verify/*"]')
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.make_ticket("2", needs_verifier=True)
+        other = ["src/*", "verify/batch_fix/test_ticket_108.py", "verify/TAGS.d/108.md"]
+        done = self.ticket("set", "2", "allowed_write_paths", json.dumps(other))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("2")["allowed_write_paths"], other)
+        self.assertNotIn(self.WORD, self.ticket("lint", "2").stderr)
+
+
+class TheSchedulerScopeHelper(unittest.TestCase):
+    """#101 A7:排程用的純 scope helper(`scope_conflict`,不讀檔):提示範圍重疊 → 串行;
+    新檔、glob 都要認得;未知 / 空值一律串行。"""
+
+    def setUp(self):
+        from ticket import scope_conflict  # noqa: PLC0415
+        self.conflict = scope_conflict
+
+    def test_disjoint_scopes_run_in_parallel(self):
+        self.assertEqual(self.conflict({"id": "1", "allowed_write_paths": ["src/*"]},
+                                       {"id": "2", "allowed_write_paths": ["docs/*"]}), "")
+
+    def test_a_new_file_under_a_glob_and_two_globs_are_overlaps(self):
+        """**變異**:`globs_overlap` 只比字面相等 → 這一條紅。"""
+        for left, right in ((["scripts/*"], ["scripts/brand_new.py"]),
+                            (["tests/*"], ["tests/test_x*.py"]),
+                            (["docs"], ["docs/a.md"])):
+            with self.subTest(left=left, right=right):
+                said = self.conflict({"id": "1", "allowed_write_paths": left},
+                                     {"id": "2", "allowed_write_paths": right})
+                self.assertIn("串行", said)
+
+    def test_info_homes_and_verify_files_count_as_scope(self):
+        said = self.conflict({"id": "1", "allowed_write_paths": ["src/*"],
+                              "info_homes": [{"what": "x", "home": "docs/MAP.md"}]},
+                             {"id": "2", "allowed_write_paths": ["docs/MAP.md"]})
+        self.assertIn("docs/MAP.md", said)
+        said = self.conflict({"id": "1", "allowed_write_paths": ["src/*"],
+                              "verify": {"files": ["verify/a/test_ticket_1.py"]}},
+                             {"id": "2", "allowed_write_paths": ["verify/*"]})
+        self.assertIn("串行", said)
+
+    def test_unknown_or_empty_must_be_serial(self):
+        """**變異**:未知當成「沒有重疊」→ 這一條紅。"""
+        for unknown in ({"id": "2"}, {"id": "2", "allowed_write_paths": []},
+                        {"id": "2", "allowed_write_paths": "src/*"},
+                        {"id": "2", "allowed_write_paths": [""]}):
+            with self.subTest(unknown=unknown):
+                said = self.conflict({"id": "1", "allowed_write_paths": ["src/*"]}, unknown)
+                self.assertIn("未知", said)
+                self.assertIn("串行", said)
+
+
 if __name__ == "__main__":
     unittest.main()

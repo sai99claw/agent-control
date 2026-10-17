@@ -443,9 +443,13 @@ for tag in tags:
     if tag not in registered:
         errors.append("tags: %r 未登記(登記在 verify/TAGS.md 或 verify/TAGS.d/)" % tag)
 
-# 寫入範圍(D-H38 ①):`allowed_write_paths` 以外不擋(覆核者逐檔看),只擋硬擋那兩格。
+# 寫入範圍(D-H38 ①、D-050 ①):提示範圍外與命中 `out_of_scope` 都不擋(列出來,覆核者逐檔看、
+# land 查理由),只擋 `protected_paths`。
 for name, field, pattern in ticket_mod.write_scope(ticket, root, changed)[0]:
     errors.append("%s:%s 命中 `%s`" % (field, name, pattern))
+for name, (field, pattern) in ticket_mod.out_of_scope_hits([ticket], changed).items():
+    print("gate: %s 命中%s(`%s`)—— 建議範圍,不擋;EVIDENCE「提示清單外的改動」要逐檔寫理由,"
+          "缺理由 land 拒絕" % (name, field, pattern), file=sys.stderr)
 
 if errors:
     with open(mech_log, "a", encoding="utf-8") as handle:
