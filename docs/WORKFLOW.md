@@ -158,7 +158,21 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
    --run-id <stamp>`:pass 寫 `reports/batch/<stamp>/review.json`(sha = 整合分支頭),fail 一頁 decision 掛第一張票、
    內文列整批。**全程不寫票**(不 `ticket.py set`;任何一張票的 `state_version` 一動,N 張的覆核同時過期),
    各票分支不動;worker / reviewer 的成本各一列只記在第一張票(`ticket.py cost --note "batch <stamp> #1 #2"`)。
-   只跑一輪:rc 0 = fix 已 commit 且覆核 pass,呼叫端接著重跑全套。退出碼同單票(3 反駁 / 4 紅榜空 / 5 沒交、逾時、套不上)。
+   只跑一輪:rc 0 = fix 已 commit 且覆核 pass,呼叫端接著重跑全套。退出碼同單票(3 反駁 / 4 紅榜空 / 5 沒交、逾時、套不上 / 8 越界)。
+8. **agent 越界守衛(#115,D-048 現況)**:codex 與 claude worker 同權限(codex 起 `-s danger-full-access
+   -c 'approval_policy="never"' -C .`,外加 `--add-dir <副本根>` 恰一次,cwd 與 claude 同是副本的 `work/`),不靠
+   沙盒擋,改由 `run_agent` 在 worker / 驗證者 / 批次 worker 起跑前後各拍一次快照:主 repo 的 HEAD、分支、
+   `git status` 列得出的每個路徑**加內容雜湊**(已髒的檔再被改一次也看得到),以及 `board/config.json` 的
+   `guarded_dirs`(字串 list,`~` 展開、相對主 repo 解析;缺或 `[]` 只查主 repo)底下每一個檔。豁免只有
+   config 解析出的 tickets / events / answers / reports 路徑與這個 agent 自己的副本;HEAD 前進只在期間有同一
+   stamp 的 `land.start` + `land.pass`、pass 的 sha 就是新 HEAD、舊 HEAD 是它的祖先時算同時的合法落地 ——
+   工作樹照查,只有 `land.start` 不算數。其餘改動 ⇒ `reports/t<n>/<run_id>/<角色>-round<r>.guard.json`(前後證據)、
+   `auto-fix.sh` rc=8、票 Blocked / owner=main、`ticket.attempt.failed reason=guard-violation`、一頁 decision
+   列路徑與前後;patch 不套、副本留著。**排在 codex 額度那一手之前**:同一輪又撞額度仍是 8,不回 Ready。
+   批次越界時整批票轉 Blocked(唯一會寫票的批次結局)、不發 attempt.failed(批次沒有 attempt.start)。
+   **只查列出來的地方**:被 `.gitignore` 掉的檔、`guarded_dirs` 以外的整部電腦都沒看過;平行的兩個 agent
+   時間重疊時,同一處改動會記在兩者名下(守衛分不出是哪一個行程改的)。開題者改真票是它的工作,不在守衛裡。
+   server / 瀏覽器在真 codex 上的效果**待專案同步後冒煙實證**。
 
 ## 實作者的反駁怎麼被收下(2026-09-21,D-014)
 worker 說「這張票寫錯了」以前只是一句話:沒有結構化類別、沒有收件者、沒有處置期限,而**沒有人收的反駁與沒有反駁長得一樣**。現在它是票上的一格:

@@ -3596,6 +3596,20 @@ class BatchFix(AutoFixBase):
         self.assertEqual(self.git("rev-parse", "land/X").strip(), self.batch["land"])
         self.assert_tickets_kept()
 
+    def test_115_a4_a_batch_worker_outside_its_copy_stops_with_rc8(self):
+        """#115 A4:批次 worker 也走同一份守衛。四問:量 rc 8、一頁(掛第一張、列整批)、
+        land/X 不動、兩張票 Blocked / owner=main;紅 = 批次不收守衛報告(照套);值 = A4。"""
+        self.set_worker(BATCH_WORKER_FIXES.replace(
+            'cd "$AC_WORK"', 'echo stray > "%s/stray.txt"\ncd "$AC_WORK"' % self.repo))
+        done = self.run_batch()
+        self.assertEqual(done.returncode, 8, done.stdout + done.stderr)
+        self.assert_one_page_for_the_batch()
+        self.assertIn("stray.txt", self.decisions()[0]["what"])
+        self.assertEqual(self.git("rev-parse", "land/X").strip(), self.batch["land"])
+        for ident in ("1", "2"):
+            row = self.load_ticket(ident)
+            self.assertEqual((row["state"], row.get("owner")), ("Blocked", "main"), ident)
+
     def test_it_needs_the_land_run_id(self):
         """介面:沒有 AC_BATCH_RUN_ID 就不知道讀哪一份紅榜 ⇒ rc 2、worker 不起。"""
         self.set_worker(BATCH_WORKER_FIXES)
@@ -3603,6 +3617,157 @@ class BatchFix(AutoFixBase):
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("AC_BATCH_RUN_ID", done.stderr)
         self.assertEqual(self.worker_rounds(), [])
+
+
+# 假 agent(#115 A4–A6):`@WHO@` 那個角色在交件前跑 `@STRAY@`(副本外的動作,`$REPO` 是主 repo、
+# `$SANDBOX` 是沙盒的家),其餘照常交一份會綠的 patch。守衛該不該抓,由每一條案例寫死。
+AGENT_STRAYS = """#!/bin/sh
+set -e
+echo "$AC_ROLE ran round $AC_ROUND" >> "$AC_TEST_LOG"
+REPO="@REPO@"
+SANDBOX="@SANDBOX@"
+emit() { AC_ROOT="$REPO" python3 "$REPO/scripts/event.py" emit "$@" >/dev/null; }
+if [ "$AC_ROLE" = "@WHO@" ]; then
+@STRAY@
+fi
+cd "$AC_WORK"
+[ "$AC_ROLE" = worker ] || exit 0
+mkdir -p work/tests
+cat > work/tests/test_thing.py <<'CASE'
+import unittest
+
+
+class T(unittest.TestCase):
+    def test_thing(self):
+        self.assertEqual(1, 1)
+CASE
+diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
+"""
+
+FAKE_LAND = """emit land.start --note "同時的落地" --kv stamp=S1
+git -C "$REPO" commit -q --allow-empty -m "同時的落地"
+emit land.pass --note "同時的落地" --kv stamp=S1 --kv sha="$(git -C "$REPO" rev-parse --short HEAD)"
+"""
+
+
+class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
+    """#115 A4–A6(T2):worker / 驗證者與 claude 同權限,越界靠起跑前後的快照抓。抓到 ⇒ rc 8、
+    票 Blocked / owner=main、attempt.failed reason=guard-violation、恰一頁 decision(路徑 + 前後)、
+    patch 不套、副本留著。期望值(rc、reason、路徑)寫死在這裡,不從被測腳本算回去。"""
+
+    def fix_dir(self):
+        return os.path.join(self.home, "repo-wt", "fix-t1", "round1")
+
+    def arm(self, stray, who="worker", guarded=None, **fields):
+        self.set_worker(AGENT_STRAYS.replace("@REPO@", self.repo)
+                        .replace("@SANDBOX@", self.home).replace("@WHO@", who)
+                        .replace("@STRAY@", stray))
+        if guarded is not None:
+            conf = json.loads(self.read("board/config.json"))
+            conf["guarded_dirs"] = guarded
+            self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        self.ticket_ready(subject="守衛", **fields)
+
+    def guard_reports(self):
+        return sorted(glob.glob(os.path.join(self.repo, "reports", "t1", "*", "*.guard.json")))
+
+    def failed_reasons(self):
+        return [row.get("reason") for row in self.events()
+                if row["kind"] == "ticket.attempt.failed"]
+
+    def assert_stopped(self, done, *paths):
+        self.assertEqual(done.returncode, 8, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        self.assertEqual((row["state"], row.get("owner")), ("Blocked", "main"))
+        self.assertEqual(self.failed_reasons(), ["guard-violation"])
+        pages = [row for row in self.inbox_rows() if row.get("kind") == "decision"]
+        self.assertEqual(len(pages), 1, pages)
+        for path in paths:
+            self.assertIn(path, pages[0]["what"])
+        self.assertIn("前 ", pages[0]["what"], "頁上要有前後證據")
+        self.assertEqual(len(self.guard_reports()), 1, self.guard_reports())
+        self.assertEqual(self.git("branch", "--list", "t1").strip(), "", "越界的 patch 不套")
+        return pages[0]
+
+    def assert_not_stopped(self, done):
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.guard_reports(), [])
+        self.assertNotIn("guard-violation", self.failed_reasons())
+
+    def test_a4_new_deleted_and_modified_files_in_the_main_repo_stop_the_round(self):
+        """四問:量 rc / 票 / 事件 / 頁 / 副本;紅 = 守衛不拍工作樹;值 = A4;真跑 auto-fix + 真 git。"""
+        rows = (("新增", 'echo stray > "$REPO/stray.txt"', "stray.txt"),
+                ("刪除", 'rm "$REPO/docs/REHEARSAL.md"', "docs/REHEARSAL.md"),
+                ("修改", 'echo changed >> "$REPO/README"', "README"))
+        for name, stray, path in rows:
+            with self.subTest(name):
+                self.setUp()
+                self.arm(stray)
+                done = self.auto_fix("--no-review")
+                self.assert_stopped(done, path)
+                self.assertTrue(os.path.isdir(os.path.join(self.fix_dir(), "work")), "副本留著")
+
+    def test_a4_a_dirty_file_changed_again_is_caught_by_its_content(self):
+        """**M2**:只比 porcelain(` M` 前後都一樣)→ 不停,紅。四問:量 rc 8;值 = A4 已髒檔。"""
+        self.arm('echo again >> "$REPO/README"')
+        self.write("README", "main\n開工前就髒了\n")
+        done = self.auto_fix("--no-review")
+        self.assert_stopped(done, "README")
+
+    def test_a4_a_serial_verifier_is_guarded_too(self):
+        """**M3**:驗證者不拍快照 → 不停,紅。等 patch 才起的驗證者與 worker 時間不重疊,
+        所以抓到的只能是驗證者自己那一次。"""
+        self.arm('echo stray > "$REPO/verifier-stray.txt"', who="verifier", needs_verifier=True)
+        done = self.auto_fix("--no-review")
+        page = self.assert_stopped(done, "verifier-stray.txt")
+        self.assertIn("verifier:", page["what"])
+        self.assertTrue(os.path.isdir(os.path.join(self.home, "repo-wt", "verify-t1", "round1",
+                                                   "work")), "驗證者的副本留著")
+
+    def test_a5_control_plane_writes_are_not_violations(self):
+        """config 解析出的 tickets/ 是控制面。紅 = 豁免拿掉(變成越界)。"""
+        self.arm('echo note > "$REPO/tickets/zz-note.txt"')
+        self.assert_not_stopped(self.auto_fix("--no-review"))
+
+    def test_a5_guarded_dirs_expand_home_and_resolve_against_the_main_repo(self):
+        """`~/guarded` 展開成沙盒的家(HOME);`../outside` 對主 repo 解析。兩處都抓。"""
+        for rel, stray, path in (
+                ("~/guarded", 'echo changed >> "$SANDBOX/guarded/a.txt"', "guarded/a.txt"),
+                ("../outside", 'echo new > "$SANDBOX/outside/b.txt"', "outside/b.txt")):
+            with self.subTest(rel):
+                self.setUp()
+                for name in ("guarded", "outside"):
+                    os.makedirs(os.path.join(self.home, name))
+                self.write("guarded/a.txt", "原本\n", where=self.home)
+                self.arm(stray, guarded=[rel])
+                self.assert_stopped(self.auto_fix("--no-review"), path)
+
+    def test_a5_without_guarded_dirs_only_the_main_repo_is_watched(self):
+        """缺 guarded_dirs 與 [] 都只查主 repo:主 repo 外的寫入不算(也不宣稱看過)。"""
+        for guarded in (None, []):
+            with self.subTest(guarded=guarded):
+                self.setUp()
+                os.makedirs(os.path.join(self.home, "elsewhere"))
+                self.arm('echo x > "$SANDBOX/elsewhere/c.txt"', guarded=guarded)
+                self.assert_not_stopped(self.auto_fix("--no-review"))
+
+    def test_a6_a_concurrent_land_with_matching_evidence_is_not_a_violation(self):
+        """land.start + 同 stamp 的 land.pass、sha 就是新的 HEAD ⇒ 歸屬於那一次落地。"""
+        self.arm(FAKE_LAND)
+        self.assert_not_stopped(self.auto_fix("--no-review"))
+
+    def test_a6_a_land_start_alone_does_not_excuse_a_head_change(self):
+        """**M4**:有 land.start 就豁免 → 不停,紅。只有開始事件、沒有對應的 pass。"""
+        self.arm('emit land.start --note "假的" --kv stamp=S1\n'
+                 'git -C "$REPO" commit -q --allow-empty -m "不是落地"')
+        self.assert_stopped(self.auto_fix("--no-review"), "HEAD")
+
+    def test_a6_a_legal_land_does_not_hide_an_unattributed_worktree_change(self):
+        """同時有合法落地,工作樹照查:多出來的檔仍是越界。"""
+        self.arm(FAKE_LAND + 'echo stray > "$REPO/stray.txt"')
+        self.assert_stopped(self.auto_fix("--no-review"), "stray.txt")
+
 
 if __name__ == "__main__":
     unittest.main()
