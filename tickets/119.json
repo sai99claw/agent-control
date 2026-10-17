@@ -57,7 +57,7 @@
   "attempt": 0,
   "base_sha": "fac9173633ebcd697c71a69d23d148b89a15fae1",
   "state": "Draft",
-  "state_version": 56,
+  "state_version": 57,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -77,8 +77,9 @@
   "feature": "agent-control：DAG 排程",
   "verify_strings": [
     "--plan-batch",
-    "landed",
-    "waiting"
+    "land_command",
+    "max_workers",
+    "marker_capability"
   ],
   "problem": null,
   "goal": null,

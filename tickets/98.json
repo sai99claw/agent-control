@@ -31,9 +31,9 @@
   "model": "codex:gpt-5.6-sol",
   "tool": "codex",
   "attempt": 0,
-  "base_sha": "d236cdc8942e2bc1ddec0d8c38e51b4a365cd532",
-  "state": "Draft",
-  "state_version": 24,
+  "base_sha": "ec1468647e892efc4349ad122a7649bae57d292b",
+  "state": "Ready",
+  "state_version": 30,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -45,15 +45,21 @@
     "notes": ""
   },
   "verify_strings": [
-    "patch_id",
-    "review_request",
+    {
+      "path": "scripts/ticket.py",
+      "contains": "review_request"
+    },
+    {
+      "path": "scripts/ticket.py",
+      "contains": "patch_id"
+    },
     "review-receipt.json"
   ],
   "feature": "agent-control 工具鏈:覆核綁定",
   "needs_verifier": true,
   "interface_fixed": true,
-  "test_plan": "T1 test_review/test_land：夾具自行算 git patch-id --stable，分別同 patch rebase、改一行、逐一改 face 欄、改純運行欄，斷言接受或具體拒絕。\nT2 兩個 fake reviewer 以 barrier 控制完成順序；第二個派工後才放行第一個；核對 A3–A4 零覆蓋。這是未來拋棄式測試，不是本次執行 git。\nT3 保留舊 review 的三種錯誤 oracle；M1 仍比 sha 使 A1 紅；M2 face 漏 acceptance 使 A2 紅；M3 完成時重讀版本使 A4 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例置於 tests/test_ticket_<正式票號>_verify.py，不列入 worker 的 allowed_write_paths；由驗證者設定 verify.files/run，verify.tags=[]（A 的 tests/ 案例不冒用未登記的 verify 標籤）。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
-  "outline": "本票只負責覆核綁內容與票面，拒收遲到覆核。前置：無。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。",
+  "test_plan": "T1 test_review/test_land：夾具自行算 git patch-id --stable，分別同 patch rebase、改一行、逐一改 face 欄、改純運行欄，斷言接受或具體拒絕。\nT2 兩個 fake reviewer 以 barrier 控制完成順序；第二個派工後才放行第一個；核對 A3–A4 零覆蓋。這是未來拋棄式測試，不是本次執行 git。\nT3 保留舊 review 的三種錯誤 oracle；M1 仍比 sha 使 A1 紅；M2 face 漏 acceptance 使 A2 紅；M3 完成時重讀版本使 A4 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例照 A 慣例（templates/dispatch-verifier.md）放 verify/<feature>/test_ticket_<票號>.py，新標籤寫 verify/TAGS.d/<票號>.md；由驗證者設定 verify.files/tags/run，不列入 worker 的 allowed_write_paths。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
+  "outline": "本票只負責覆核綁內容與票面，拒收遲到覆核。前置：無。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。\n2026-10-17 Ready 前檢查(opener):base 換 ec14686(#102/#103/#115 已落地)。對過:ticket.py 的 review_problems / objection_problems 仍在;land.sh 仍自己讀 review.state_version / sha(A5 要改成呼叫 ticket.py);review.sh 經 ticket.py set review 寫 pass。face 的 info_homes 由 #101 新增,#101 排在本票之後(依賴),本票照「缺值依欄位空值正規化」處理。複雜(CAS + 兩個 fake reviewer 的完成順序)→ effort xhigh(D-049 補)。",
   "priority": "P1",
   "interface_contracts": {
     "review": "沿用 review 物件，新增 patch_id:string、face:string，不另造 approval 欄位。",
@@ -61,7 +67,7 @@
     "ownership": "#117 的 session、#104 的 objection、#120 的 Controller 均呼叫本票 CAS 收件，不能各寫 review 判準。",
     "review_request": "票的 review_request={run_id,owner_id,attempt,state_version,face,patch_id,sha}；在同一次派工存檔捕獲，receipt 是其不可變副本。既有 lease.holder=owner_id，不由每個平行角色覆寫。"
   },
-  "effort": "high",
+  "effort": "xhigh",
   "decision_refs": [
     "D-049",
     "D-016",

@@ -55,7 +55,7 @@
   "attempt": 0,
   "base_sha": "dfaa05c0c87d5011a31872614c2c7a01d2176d25",
   "state": "Draft",
-  "state_version": 8,
+  "state_version": 9,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -78,8 +78,14 @@
     "D-050"
   ],
   "verify_strings": [
-    "max_rounds",
-    "repair"
+    {
+      "path": "board/config.json",
+      "contains": "\"max_rounds\""
+    },
+    {
+      "path": "board/config.json",
+      "contains": "\"repair\""
+    }
   ],
   "interface_contracts": {
     "repair_policy": "board/config.json repair={enabled:true,max_rounds:3}；唯一新寫入處。#120 incident.retry_count.repair 記已耗輪數；不增加另一個 ticket repair budget。",

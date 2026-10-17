@@ -4,11 +4,11 @@
   "created": "2026-10-09T12:32:27+08:00",
   "objective": "吸收 #97 與 #101，照 D-050 ①：allowed_write_paths 與 out_of_scope 都是建議範圍，不硬擋 worker；改到範圍外要在 EVIDENCE 逐檔寫理由、交覆核看 —— apply／閘門／land 對 out_of_scope 的硬擋改成列出＋要理由；board/config.json 的 protected_paths 是安全邊界，仍硬擋，不在本票放寬。另以一份提示範圍計算供排程／覆核共用，保留 worker/verifier 產物分離；info_homes 說明資訊位置。",
   "acceptance": [
-    "A1 allowed_write_paths 維持非空 list[str]、只是建議範圍。out_of_scope 改為建議範圍（D-050 ①）：命中 out_of_scope 不再 apply rc=5／gate preflight rc=4／land 拒絕，改成列進 result.extra_paths 並標明命中哪條 out_of_scope glob。protected_paths 維持現有 apply rc=5／gate rc=4／land 拒絕、點名檔與格，不在本票放寬。新增 info_homes 不改權限。",
+    "A1 allowed_write_paths 維持非空 list[str]、只是建議範圍。out_of_scope 改為建議範圍（D-050 ①）：命中 out_of_scope 不再 apply rc=5（單票與 --batch 兩條路；批次路現行硬擋 = protected ∪（out_of_scope 聯集 − allowed 聯集））／gate preflight rc=4（scripts/gate.sh 呼叫 ticket.write_scope 那一段）／land 拒絕，改成列進 result.extra_paths 並標明命中哪條 out_of_scope glob。protected_paths 維持現有 apply rc=5／gate rc=4／land 拒絕、點名檔與格，不在本票放寬。新增 info_homes 不改權限。#115 的 agent 越界守衛（auto-fix rc=8，主 repo／guarded_dirs）是另一層，不在本票。",
     "A2 info_homes 恰為 list[{what:str,home:str}]，what/home 非空，home 是相對根路徑且無 glob、.. 或絕對路徑；create --info-home 可重複、set/lint 同判準。config.info_map 是相對文件路徑，可帶 #節名，無設定只提示。",
-    "A3 needs_verifier=true 的 create/set allowed_write_paths/set verify/set needs_verifier/轉 Ready/lint，均拒絕 worker glob 命中本票 verify.files 或本票驗證者慣例路徑（verify/**/test_ticket_<id>.py、verify/TAGS.d/<id>.md、tests/test_ticket_<id>_verify.py）。拒收不改票或 state_version；false 與別票案例可收。",
+    "A3 needs_verifier=true 的 create/set allowed_write_paths/set verify/set needs_verifier/轉 Ready/lint，均拒絕 worker glob 命中本票 verify.files 或本票驗證者慣例路徑（verify/**/test_ticket_<id>.py、verify/TAGS.d/<id>.md，即 templates/dispatch-verifier.md 的慣例）。拒收訊息含「是本票驗證者的案例檔」並點名 glob 與檔；拒收不改票或 state_version；false 與別票案例可收。",
     "A4 apply 的驗證者收件依既有角色管道合併 verify.files，不被 A3 的 worker 宣告檢查擋；驗證者檔不加入 worker allowed_write_paths。",
-    "A5 提示範圍唯一算法為 allowed_write_paths ∪ info_homes[].home ∪ verify.files；result.extra_paths 維持 list[str]。新增 result.extra_reasons 恰為 {path:非空理由或 null}，從 EVIDENCE「提示清單外的改動」逐檔抽取。命中 out_of_scope 的檔缺理由（null 或空字串）→ land 拒絕並點名檔與缺理由（這是原硬擋改成的「列出＋要理由」）；只是不在 allowed_write_paths 的檔缺理由 → 警告、不擋。覆核派工文逐檔顯示檔名、命中的 glob 與理由，由覆核判斷。",
+    "A5 提示範圍唯一算法為 allowed_write_paths ∪ info_homes[].home ∪ verify.files；result.extra_paths 維持 list[str]。新增 result.extra_reasons 恰為 {path:非空理由或 null}，從 EVIDENCE「提示清單外的改動」逐檔抽取。命中 out_of_scope 的檔缺理由（null 或空字串）→ land 拒絕，訊息含「out_of_scope 命中缺理由」並點名檔（這是原硬擋改成的「列出＋要理由」）；只是不在 allowed_write_paths 的檔缺理由 → 警告、不擋。覆核派工文逐檔顯示檔名、命中的 glob 與理由，由覆核判斷。",
     "A6 SCHEMA、DISPATCH-TEMPLATE、角色操作 reference 與 worker/reviewer 範本同步更新（含 SCHEMA／WORKFLOW 的「硬擋只有兩格」改成只剩 protected_paths、out_of_scope 是建議範圍），刪掉「把本票驗證者檔加入 worker 範圍」的反向指示；通用角色卡只送 opener.inbox，由 D-043 指定整理角色處理，不超卡片上限。",
     "A7 排程可用提示範圍判重疊但未知/空值必須串行；本票提供純 scope helper，#119 負責真正排程。不能把資訊歸屬另存成第二組可寫的權限欄位。",
     "A8 guard-main 的票面欄位守衛納入 info_homes；派工文顯示 info_map/info_homes 的真入口是 auto-fix.sh，test_auto_fix 覆蓋有設定與缺設定兩案。"
@@ -22,6 +22,18 @@
   "depends_on": [
     {
       "id": "115",
+      "condition": "landed"
+    },
+    {
+      "id": "96",
+      "condition": "landed"
+    },
+    {
+      "id": "98",
+      "condition": "landed"
+    },
+    {
+      "id": "126",
       "condition": "landed"
     }
   ],
@@ -44,15 +56,18 @@
     "tests/test_guard_main.py",
     "scripts/land.sh",
     "tests/test_land.py",
-    "docs/WORKFLOW.md"
+    "docs/WORKFLOW.md",
+    "scripts/gate.sh",
+    "tests/test_status.py",
+    "verify/batch_fix/test_ticket_108.py"
   ],
   "role": "worker",
   "model": "codex:gpt-5.6-sol",
   "tool": "codex",
   "attempt": 0,
-  "base_sha": "950fe859eb1986bb94b235eee96f5fa48dd8f015",
-  "state": "Draft",
-  "state_version": 20,
+  "base_sha": "ec1468647e892efc4349ad122a7649bae57d292b",
+  "state": "Ready",
+  "state_version": 32,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -71,20 +86,37 @@
     "D-050"
   ],
   "verify_strings": [
-    "info_homes",
-    "驗證者案例檔不列進實作者",
-    "extra_reasons"
+    {
+      "path": "scripts/ticket.py",
+      "contains": "info_homes"
+    },
+    {
+      "path": "scripts/apply.sh",
+      "contains": "extra_reasons"
+    },
+    {
+      "path": "scripts/ticket.py",
+      "contains": "是本票驗證者的案例檔"
+    },
+    {
+      "path": "scripts/land.sh",
+      "contains": "out_of_scope 命中缺理由"
+    }
   ],
   "needs_verifier": true,
   "interface_fixed": true,
-  "outline": "本票只負責統一寫入範圍與資訊歸屬，分開 worker 和驗證者案例。前置：#115。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。\nD-050 ①：寫入範圍是建議範圍；越出要逐檔理由交覆核；protected_paths 仍硬擋（不在本票放寬）。",
-  "test_plan": "T1 對 A1–A4：test_ticket/test_apply/test_land 的拋棄式票庫（out_of_scope 命中有理由照收、protected_paths 命中照擋），測空值、同票驗證者 glob、別票例外與 verifier 收件，失敗前後檔案/版本必相同。\nT2 對 A5：固定 patch 動 a/b/c，理由只有 a、b 空字串；期望 extra_paths=[a,b,c]、extra_reasons={a:理由,b:null,c:null}，review 派工逐檔可見。\nT3 對 A6–A7：文件契約測試及 scope helper 的新檔、glob、unknown 夾具；先查 test_dispatch_template 與 write-scope 的實際引用。\nM1 移除 protected_paths 擋應使 A1 紅；M2 漏慣例檔應使 A3 紅；M3 在通用 save() 擋驗證者收件應使 A4 紅；M4 把 null 當已有理由應使 A5 紅；M5 out_of_scope 命中仍 apply rc=5 或 land 拒絕（有理由時）應使 A1 紅；M6 land 對缺理由的 out_of_scope 命中照落應使 A5 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例置於 tests/test_ticket_<正式票號>_verify.py，不列入 worker 的 allowed_write_paths；由驗證者設定 verify.files/run，verify.tags=[]（A 的 tests/ 案例不冒用未登記的 verify 標籤）。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
+  "outline": "本票只負責統一寫入範圍與資訊歸屬，分開 worker 和驗證者案例。前置：#115。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。\nD-050 ①：寫入範圍是建議範圍；越出要逐檔理由交覆核；protected_paths 仍硬擋（不在本票放寬）。\n2026-10-17 Ready 前檢查(opener):base 換 ec14686(#102/#103/#115 已落地)。#115 加了 agent 越界守衛(rc=8)與「權威票面快照」派工標題,沒動 write_scope / apply / land 的硬擋;out_of_scope 硬擋的真入口:ticket.py write_scope(單票 apply、gate.sh preflight、land 共用)與 apply.sh 批次路自己的聯集算法,auto-fix.sh 的批次派工文與「歸因到交件」那段也寫著 out_of_scope 是硬擋。docs/reference/role-procedures.md「allowed_write_paths 要含驗證者會建立的案例檔」就是 A6 要刪的反向指示。建議範圍補 gate.sh、test_status.py、verify/batch_fix/test_ticket_108.py。排在 #96、#98 之後(同改 apply.sh / auto-fix.sh 與 review.sh / land.sh / ticket.py)。跨 7 支腳本 → effort xhigh。\n主線裁示 2026-10-17:#126 先落地(同改 gate.sh / auto-fix.sh / test_status.py / test_auto_fix.py)。",
+  "test_plan": "T1 對 A1–A4：先翻釘住舊硬擋的既有 oracle（ec14686 查過）：tests/test_apply.py 的 test_a_file_named_by_out_of_scope_is_refused_by_name_and_field 與（批次）test_an_out_of_scope_file_of_one_ticket_not_allowed_by_any_is_blocked、tests/test_land.py 的 test_writing_into_out_of_scope_is_refused_and_the_files_are_named、tests/test_status.py 的 test_a_patch_touching_out_of_scope_stops_before_tests（gate preflight）、tests/test_auto_fix.py 的 test_an_out_of_scope_hit_is_attributed_to_the_handin 與 test_both_kinds_at_once_are_listed_with_both_attributions、verify/batch_fix/test_ticket_108.py 的 test_a3_first_tickets_out_of_scope_not_allowed_elsewhere_is_blocked（#108 驗證者案例，改它在 EVIDENCE 逐條寫理由）；protected_paths 那半的斷言保留。test_ticket/test_apply/test_land 的拋棄式票庫（out_of_scope 命中有理由照收、protected_paths 命中照擋），測空值、同票驗證者 glob、別票例外與 verifier 收件，失敗前後檔案/版本必相同。\nT2 對 A5：固定 patch 動 a/b/c，理由只有 a、b 空字串；期望 extra_paths=[a,b,c]、extra_reasons={a:理由,b:null,c:null}，review 派工逐檔可見。\nT3 對 A6–A7：文件契約測試及 scope helper 的新檔、glob、unknown 夾具；先查 test_dispatch_template 與 write-scope 的實際引用。\nM1 移除 protected_paths 擋應使 A1 紅；M2 漏慣例檔應使 A3 紅；M3 在通用 save() 擋驗證者收件應使 A4 紅；M4 把 null 當已有理由應使 A5 紅；M5 out_of_scope 命中仍 apply rc=5 或 land 拒絕（有理由時）應使 A1 紅；M6 land 對缺理由的 out_of_scope 命中照落應使 A5 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例照 A 慣例（templates/dispatch-verifier.md）放 verify/<feature>/test_ticket_<票號>.py，新標籤寫 verify/TAGS.d/<票號>.md；由驗證者設定 verify.files/tags/run，不列入 worker 的 allowed_write_paths。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
   "interface_contracts": {
     "info_homes": "list[{what:string,home:string}]；唯一資訊位置說明，不替代 allowed_write_paths。",
     "extra_reasons": "dict[path,string|null]；只由 apply 收件抽取，與 extra_paths 同來源。",
     "scope_helper": "擴充既有 scripts/ticket.py write_scope 與其共用提示範圍函式，不新建平行 write-scope 引擎；worker 派工文在 auto-fix.sh，不新增不存在的 dispatch-worker.md。",
-    "scope_policy": "D-050 ① 已裁：allowed_write_paths／out_of_scope 都是建議範圍，不硬擋 worker；out_of_scope 命中改為列出＋要理由（land 對缺理由的命中拒絕）；protected_paths 仍硬擋。allowed_write_paths 仍必填（開題寫建議範圍），選填不在本票。"
+    "scope_policy": "D-050 ① 已裁：allowed_write_paths／out_of_scope 都是建議範圍，不硬擋 worker；out_of_scope 命中改為列出＋要理由（land 對缺理由的命中拒絕）；protected_paths 仍硬擋。allowed_write_paths 仍必填（開題寫建議範圍），選填不在本票。",
+    "messages": {
+      "A3": "是本票驗證者的案例檔",
+      "A5_land": "out_of_scope 命中缺理由"
+    }
   },
-  "effort": "high",
+  "effort": "xhigh",
   "priority": "P1"
 }

@@ -19,7 +19,12 @@
     "docs/DECISIONS.md",
     "scripts/gate.sh"
   ],
-  "depends_on": [],
+  "depends_on": [
+    {
+      "id": "126",
+      "condition": "landed"
+    }
+  ],
   "allowed_write_paths": [
     "scripts/auto-fix.sh",
     "tests/test_auto_fix.py",
@@ -31,9 +36,9 @@
   "model": "codex:gpt-5.6-sol",
   "tool": "codex",
   "attempt": 0,
-  "base_sha": "d236cdc8942e2bc1ddec0d8c38e51b4a365cd532",
-  "state": "Draft",
-  "state_version": 30,
+  "base_sha": "ec1468647e892efc4349ad122a7649bae57d292b",
+  "state": "Ready",
+  "state_version": 38,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -43,14 +48,24 @@
     "notes": ""
   },
   "verify_strings": [
-    "regen: repo-map build",
-    "索引沒重產"
+    {
+      "path": "scripts/apply.sh",
+      "contains": "regen: repo-map build"
+    },
+    {
+      "path": "scripts/apply.sh",
+      "contains": "索引沒重產"
+    },
+    {
+      "path": "tests/test_auto_fix.py",
+      "contains": "test_dry_run_keeps_the_round_copies"
+    }
   ],
   "feature": "agent-control 工具鏈:auto-fix / apply",
-  "needs_verifier": false,
+  "needs_verifier": true,
   "interface_fixed": true,
-  "test_plan": "【一 dry-run】整合層,沿用 tests/test_auto_fix.py 既有的 auto_fix(\"--dry-run\") 夾具(test_dry_run_writes_the_packet_and_does_not_start_a_worker 那一型),新增 test_dry_run_keeps_the_round_copies:A1 事先在夾具的 wtbase 下寫 fix-t<n>/round1/patch-round1.diff 與 work/marker,跑 --dry-run,斷言兩檔仍在且內容等於事先寫的字串;A2 同法對 verify-t<n>/round1/marker;A3 跑既有 dry-run 與非 dry-run 案例照綠。【二 自動重產】整合層,tests/test_apply.py 新增一個類,setUp 照 tests/test_repo_map_contract.py 的 TheGateRefusesAStaleIndex(A32)那一型:複製真的 scripts/repo-map.py 進沙盒、寫 catalog(managed 含 tests/test_*.py)、build、commit 進主線、開票。test_a_stale_code_map_is_rebuilt_into_the_same_commit(A4):patch 只新增 tests/test_memory_new.py → apply rc=0;在 t<n> 副本跑 repo-map.py --root <副本> check 斷 rc=0;讀副本的 code-map/index.json 斷 managed 含新檔(期望值 = patch 新增的檔名,不從 repo-map 算);rev-list --count main..t<n> 斷 1;git log -1 --format=%B 斷有行以 `regen: repo-map build` 開頭;帶 --evidence 時 result 的 extra_paths 不含 code-map/。A5 同一分支在副本內跑 gate.sh --branch --ticket <n> --no-auto-fix(A32 的 gate_in 寫法),斷 stderr 不含「code-map 索引過期」且 rc≠4。A6 patch 只改一支既有已管理檔的內文 → 斷 commit 訊息無 `regen:`、git diff --name-only main..t<n> 不含 code-map/;既有 tests/test_apply.py 照綠即證「沒有 repo-map.py 就略過」。A7 patch 在 catalog 加一個 entry 指向不存在的檔 → apply rc=0、rev-list 為 1、輸出含「索引沒重產」。變異(自證紅,EVIDENCE 貼紅的第一行):m1 拿掉 rm -rf $FIX 的 dry-run 守衛 → A1 紅;(A2 改前即綠,只當回歸鎖,不做變異);m3 拿掉 apply.sh 的自動重產那一步 → A4、A5 紅;m4 重產失敗時改成 die → A7 紅。只跑:python3 -m unittest tests.test_auto_fix tests.test_apply tests.test_repo_map_contract;不跑全套。\n既有驗證者 dry-run 保留是歷史證據，本次未重跑；只把 worker 保留與索引重產當新增變異目標。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n實作者以本票固定夾具與指定變異自證，不另建驗證者案例。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
-  "outline": "本票只負責dry-run 保留副本，apply 同次重產 repo-map。前置：無。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=false：輸入輸出契約以固定夾具可完整自證，另派只會重演。",
+  "test_plan": "【一 dry-run】整合層,沿用 tests/test_auto_fix.py 既有的 auto_fix(\"--dry-run\") 夾具(test_dry_run_writes_the_packet_and_does_not_start_a_worker 那一型),新增 test_dry_run_keeps_the_round_copies:A1 事先在夾具的 wtbase 下寫 fix-t<n>/round1/patch-round1.diff 與 work/marker,跑 --dry-run,斷言兩檔仍在且內容等於事先寫的字串;A2 同法對 verify-t<n>/round1/marker;A3 跑既有 dry-run 與非 dry-run 案例照綠。【二 自動重產】整合層,tests/test_apply.py 新增一個類,setUp 照 tests/test_repo_map_contract.py 的 TheGateRefusesAStaleIndex(A32)那一型:複製真的 scripts/repo-map.py 進沙盒、寫 catalog(managed 含 tests/test_*.py)、build、commit 進主線、開票。test_a_stale_code_map_is_rebuilt_into_the_same_commit(A4):patch 只新增 tests/test_memory_new.py → apply rc=0;在 t<n> 副本跑 repo-map.py --root <副本> check 斷 rc=0;讀副本的 code-map/index.json 斷 managed 含新檔(期望值 = patch 新增的檔名,不從 repo-map 算);rev-list --count main..t<n> 斷 1;git log -1 --format=%B 斷有行以 `regen: repo-map build` 開頭;帶 --evidence 時 result 的 extra_paths 不含 code-map/。A5 同一分支在副本內跑 gate.sh --branch --ticket <n> --no-auto-fix(A32 的 gate_in 寫法),斷 stderr 不含「code-map 索引過期」且 rc≠4。A6 patch 只改一支既有已管理檔的內文 → 斷 commit 訊息無 `regen:`、git diff --name-only main..t<n> 不含 code-map/;既有 tests/test_apply.py 照綠即證「沒有 repo-map.py 就略過」。A7 patch 在 catalog 加一個 entry 指向不存在的檔 → apply rc=0、rev-list 為 1、輸出含「索引沒重產」。變異(自證紅,EVIDENCE 貼紅的第一行):m1 拿掉 rm -rf $FIX 的 dry-run 守衛 → A1 紅;(A2 改前即綠,只當回歸鎖,不做變異);m3 拿掉 apply.sh 的自動重產那一步 → A4、A5 紅;m4 重產失敗時改成 die → A7 紅。只跑:python3 -m unittest tests.test_auto_fix tests.test_apply tests.test_repo_map_contract;不跑全套。\n既有驗證者 dry-run 保留是歷史證據，本次未重跑；只把 worker 保留與索引重產當新增變異目標。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例照 A 慣例（templates/dispatch-verifier.md）放 verify/<feature>/test_ticket_<票號>.py，新標籤寫 verify/TAGS.d/<票號>.md；由驗證者設定 verify.files/tags/run，不列入 worker 的 allowed_write_paths。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
+  "outline": "本票只負責dry-run 保留副本，apply 同次重產 repo-map。前置：無。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true（主線裁示 2026-10-17）：apply.sh 新增重產行為，屬產品碼新行為，要獨立案例。\n2026-10-17 Ready 前檢查(opener):base 換 ec14686(#102/#103/#115 已落地)。對過:auto-fix.sh round_once 開頭的 rm -rf \"$FIX\" 仍在 --dry-run 返回之前(A1 改前紅成立);rm -rf \"$VFIX\" 只在 start_verifier_bg / dispatch_verifier(A2 照舊);批次路 --batch --dry-run 也先 rm -rf \"$FIX\",不在本票。apply.sh 現無 repo-map 步驟;gate.sh「code-map 索引過期」字樣仍在;test_repo_map_contract.TheGateRefusesAStaleIndex.gate_in 仍在。與已 Ready 的 #126 同改 auto-fix.sh / tests/test_auto_fix.py,建議 #126 先落地或落地時 rebase。\n主線裁示 2026-10-17:#126 先落地(同改 auto-fix.sh / tests/test_auto_fix.py)。",
   "priority": "P1",
   "interface_contracts": {
     "ownership": "本票獨佔 dry-run 非破壞及 apply 重產索引；session 接續不得再實作第二個 dry-run 或索引重產器。",

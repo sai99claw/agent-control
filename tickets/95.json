@@ -27,15 +27,17 @@
     "tests/test_agent_cost_hook.py",
     "tests/test_sync_to_project.py",
     "tests/fixtures/agent_cost/*",
-    "tests/test_event.py"
+    "tests/test_event.py",
+    "tests/test_session_hook.py",
+    "tests/test_guard_main.py"
   ],
   "role": "worker",
   "model": "codex:gpt-5.6-sol",
   "tool": "codex",
   "attempt": 0,
-  "base_sha": "2c7f842dab224ac27730d7c102c12ceb91f954f2",
-  "state": "Draft",
-  "state_version": 30,
+  "base_sha": "ec1468647e892efc4349ad122a7649bae57d292b",
+  "state": "Ready",
+  "state_version": 36,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -55,13 +57,26 @@
     "D-050"
   ],
   "verify_strings": [
-    "agent.cost",
-    "agent_transcript_path",
-    "stop_reason"
+    {
+      "path": "scripts/event.py",
+      "contains": "\"agent.cost\""
+    },
+    {
+      "path": "scripts/agent-cost-hook.py",
+      "contains": "agent_transcript_path"
+    },
+    {
+      "path": "scripts/transcript-cost.py",
+      "contains": "stop_reason"
+    },
+    {
+      "path": ".claude/settings.json",
+      "contains": "SubagentStop"
+    }
   ],
   "feature": "agent-control 工具鏈:成本帳",
   "test_plan": "T1 test_agent_cost_hook 的重複 id、收尾缺失、null、meta 缺失夾具；預期 token 用手算常數。覆蓋 #95 D4 的三個角色歸屬例子。\nT2 subprocess stdin 兩種 hook、四種跳過，核對 stdout 空、rc=0、事件鍵集合（含 effort）與路徑來源。\nT3 test_sync_to_project/test_session_hook/test_guard_main/test_event；新 parser 測純函式無副作用。M1 不去重使 A2 紅；M2 output 無收尾也加總使 A2 紅；M3 把 agent.cost 進 cost_total 使 A5 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n實作者以本票固定夾具與指定變異自證，不另建驗證者案例。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
-  "outline": "本票只負責互動 session 與子 agent 成本共用 15 鍵解析。前置：無（與 #103 共檔 sync-to-project.sh，由排程串行）。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=false：輸入輸出契約以固定夾具可完整自證，另派只會重演。",
+  "outline": "本票只負責互動 session 與子 agent 成本共用 15 鍵解析。前置：無（#103 已落地，sync-to-project.sh 以 ec14686 現況為準）。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=false：輸入輸出契約以固定夾具可完整自證，另派只會重演。\n2026-10-17 Ready 前檢查(opener):base 換 ec14686(#102/#103/#115 已落地)。對過:event.py KINDS 尚無 agent.cost;.claude/settings.json 現只有 SessionStart / PreToolUse;sync-to-project.sh 的 SCRIPT_LIST 與「沒接 PreToolUse 守衛」提示段是接線提示的範本;agent-cost-hook.py、transcript-cost.py 是新檔。test_session_hook / test_guard_main 會解析 settings.json,列進建議範圍。",
   "needs_verifier": false,
   "interface_contracts": {
     "cost_keys": [
@@ -82,7 +97,8 @@
       "at"
     ],
     "parser": "scripts/transcript-cost.py：純讀取 transcript，回成本取數結果，hook 與 #124 共用；不自行寫票。",
-    "split": "#95 D9 逾時成本接線唯一由 #124 承接，本票無 auto-fix 修改。"
+    "split": "#95 D9 逾時成本接線唯一由 #124 承接，本票無 auto-fix 修改。",
+    "hook": "scripts/agent-cost-hook.py：SubagentStop / SessionEnd 的 hook 入口；讀 stdin、呼叫 transcript-cost.py、發 agent.cost 事件（scripts/event.py 的 KINDS 新增這一種）。"
   },
   "interface_fixed": true,
   "effort": "high",

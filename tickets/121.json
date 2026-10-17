@@ -10,7 +10,8 @@
     "A4 每次實際執行都記既有 15 鍵 cost；quota 用既有 outcome=error 並 note 記原因，不新增 cost 鍵。event/result 帶實際 role/model/effort；越界仍依 #115 優先阻止收件。",
     "A5 review 仍採 #98 receipt/CAS；切模型不能跳過 gate、覆核、原票 attempt 檢查。文件與測試移除舊「quota 固定改 opus 然後只發頁」預期；新表首選改為 fable 的夾具能實際起 fable。",
     "A6 普通入口 gate=green 但 review=fail/missing/stale 時，auto-fix 最終分別保留失敗／未完成狀態，不能被 ROUND_RC=0 蓋成成功；--no-review 可返回既有技術 rc=0，但明示 awaiting_review，後續不能當可落地。測試固定 gate-pass/review-fail、missing、stale 三案的 rc 與終態。",
-    "A7 effort 照表：第一輪 sol high；票 complexity=complex 或修補第 2 輪起且上一輪紅 → 傳 --repair-round/--last-red 給 #116 取 xhigh；修補輪沿用原 worker 的 model 與 effort（只有上述升級）；quota 改派 opus 時 effort 取表的 high，不再寫 null。agent.start/done/failed 與 cost[].effort 記實際值；舊「codex 改派 claude-code 時 effort 設 null」的 SCHEMA 文字與測試一併改。"
+    "A7 effort 照表：第一輪 sol high；票 complexity=complex 或修補第 2 輪起且上一輪紅 → 傳 --repair-round/--last-red 給 #116 取 xhigh；修補輪沿用原 worker 的 model 與 effort（只有上述升級）；quota 改派 opus 時 effort 取表的 high，不再寫 null。agent.start/done/failed 與 cost[].effort 記實際值；舊「codex 改派 claude-code 時 effort 設 null」的 SCHEMA 文字與測試一併改。",
+    "A8 rules.py 的 routing 下限（below_floor：board/config.json routing + model_tiers）整段拆除，pack 不再以 routing 字串擋任何角色；模型合不合法只由 #116 選路器判（表外模型先改表，#116 A7），rules.py 不另判。本票落地即 complexity=simple 的票選到 sonnet、rules.py pack --model sonnet 照產規則包，不留中間被擋的窗（主線裁示 2026-10-17，原屬 #122 A2）。"
   ],
   "in_scope": [
     "讓 auto-fix/review 的所有實際執行採 #116 選路，取代 #87 A23/#114 A10 硬編碼 quota 改 Opus；選模型與啟動解耦，重派時機仍交 #120。"
@@ -42,7 +43,11 @@
     "tests/test_cost_ledger.py",
     "tests/test_event.py",
     "tickets/SCHEMA.md",
-    "docs/WORKFLOW.md"
+    "docs/WORKFLOW.md",
+    "scripts/rules.py",
+    "tests/test_rules.py",
+    "docs/ROLES.md",
+    "memory/role/opener.inbox.md"
   ],
   "role": "worker",
   "model": "codex:gpt-5.6-sol",
@@ -50,7 +55,7 @@
   "attempt": 0,
   "base_sha": "dfaa05c0c87d5011a31872614c2c7a01d2176d25",
   "state": "Draft",
-  "state_version": 9,
+  "state_version": 15,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -60,8 +65,8 @@
     "notes": ""
   },
   "effort": "high",
-  "outline": "本票只負責worker、驗證者與覆核者依同一角色表派工。前置：#115、#98、#116。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。",
-  "test_plan": "T1 fake codex 先 quota、fake opus 交件；再改表先 fable、測命令與 cost 不硬編碼。覆蓋 worker/verifier/reviewer 三路與批次。\nT2 timeout/測試紅/no-patch 不換模型；修補第 2 輪紅 → 命令含 xhigh、第 1 輪與第 2 輪綠後不升級；quota 改 opus 的命令含 --effort high；全部 unavailable 只出一頁；有/無 Controller owner 各測一次且總啟動數相同。\nT3 M1 保留原硬編碼 opus 使 A5 紅；M2 quota 刪副本使 A2 紅；M3 event 的 effort 與 argv 不同使 A4 紅；M4 兩個驅動者均起程序使 A3 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例置於 tests/test_ticket_<正式票號>_verify.py，不列入 worker 的 allowed_write_paths；由驗證者設定 verify.files/run，verify.tags=[]（A 的 tests/ 案例不冒用未登記的 verify 標籤）。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
+  "outline": "本票只負責worker、驗證者與覆核者依同一角色表派工。前置：#115、#98、#116。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。\n主線裁示 2026-10-17:rules.py 下限拆除從 #122 搬進本票(A8);ROLES 與 opener 卡提到「低於下限規則包會擋」的地方一併改(卡片走 inbox)。",
+  "test_plan": "T1 fake codex 先 quota、fake opus 交件；再改表先 fable、測命令與 cost 不硬編碼。覆蓋 worker/verifier/reviewer 三路與批次。\nT2 timeout/測試紅/no-patch 不換模型；修補第 2 輪紅 → 命令含 xhigh、第 1 輪與第 2 輪綠後不升級；quota 改 opus 的命令含 --effort high；全部 unavailable 只出一頁；有/無 Controller owner 各測一次且總啟動數相同。\nT3 M1 保留原硬編碼 opus 使 A5 紅；M2 quota 刪副本使 A2 紅；M3 event 的 effort 與 argv 不同使 A4 紅；M4 兩個驅動者均起程序使 A3 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例照 A 慣例（templates/dispatch-verifier.md）放 verify/<feature>/test_ticket_<票號>.py，新標籤寫 verify/TAGS.d/<票號>.md；由驗證者設定 verify.files/tags/run，不列入 worker 的 allowed_write_paths。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。\nT4 對 A8：tests/test_rules.py 的 test_a_model_below_the_floor_is_refused_with_an_empty_stdout 是舊下限的 oracle，改為 test_a_worker_below_the_old_floor_still_gets_a_pack：夾具 config routing.implement=opus、model_tiers 含 sonnet，rules.py pack --role worker --model sonnet → rc=0、stdout 非空；M5 留著 below_floor 呼叫使 A8 紅。",
   "needs_verifier": true,
   "interface_fixed": true,
   "decision_refs": [
@@ -73,7 +78,22 @@
     "D-050"
   ],
   "verify_strings": [
-    "role-models.py"
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "role-models.py"
+    },
+    {
+      "path": "scripts/review.sh",
+      "contains": "role-models.py"
+    },
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "awaiting_review"
+    },
+    {
+      "path": "tests/test_rules.py",
+      "contains": "test_a_worker_below_the_old_floor_still_gets_a_pack"
+    }
   ],
   "interface_contracts": {
     "launch": "#116 只選路；本票起程序和記結果；#120 才決定跨事件恢復。",

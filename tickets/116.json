@@ -33,9 +33,9 @@
   "model": "codex:gpt-5.6-sol",
   "tool": "codex",
   "attempt": 0,
-  "base_sha": "fac9173633ebcd697c71a69d23d148b89a15fae1",
-  "state": "Draft",
-  "state_version": 70,
+  "base_sha": "ec1468647e892efc4349ad122a7649bae57d292b",
+  "state": "Ready",
+  "state_version": 75,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -57,12 +57,25 @@
     "D-047",
     "D-050"
   ],
-  "outline": "本票只負責唯一角色模型順序表與共用選路器。前置：無。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。",
-  "test_plan": "T1 test_role_models：逐一角色比對固定初值；verifier 不論 worker 是 sol/opus/fable 都是 sol→opus；effort 三案：預設 high、complexity=complex → xhigh、repair_round=2 且上一輪紅 → xhigh、修補輪其他情況沿用；opus 接手 effort=high；單一 fable 整理、簡單 sonnet medium 不降級；--items 6 對 astra rc=2、--items 5 過、fable null 不擋。\nT2 fake provider 錯誤信封/缺 CLI/普通測試 log/字面 429，驗 quota 與一般錯誤分類；效能只量模型選擇，無真 LLM。\nT3 M1 全角色 sol 使 A1 紅；M2 任意非零即 fallback 使 A2 紅；M3 全耗回 opus 使 A4 紅；M4 直接沿用 ultra 給 Claude 使 A5 紅；M5 verifier 依 worker 換序使 A3 紅；M6 cap 不擋使 A8 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例置於 tests/test_ticket_<正式票號>_verify.py，不列入 worker 的 allowed_write_paths；由驗證者設定 verify.files/run，verify.tags=[]（A 的 tests/ 案例不冒用未登記的 verify 標籤）。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
+  "outline": "本票只負責唯一角色模型順序表與共用選路器。前置：無。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。\n2026-10-17 Ready 前檢查(opener):base 換 ec14686(#102/#103/#115 已落地)。對過:EFFORT_LEVELS 仍只在 ticket.py(role-models.py 讀它,不另抄);board/ 尚無 role-models.json;ticket.py 尚無 complexity 欄。注意:worker_simple 的 sonnet 在 #122 改 rules.py 下限前會被 routing.implement=opus 擋,本票只交表與選路器,不受影響。",
+  "test_plan": "T1 test_role_models：逐一角色比對固定初值；verifier 不論 worker 是 sol/opus/fable 都是 sol→opus；effort 三案：預設 high、complexity=complex → xhigh、repair_round=2 且上一輪紅 → xhigh、修補輪其他情況沿用；opus 接手 effort=high；單一 fable 整理、簡單 sonnet medium 不降級；--items 6 對 astra rc=2、--items 5 過、fable null 不擋。\nT2 fake provider 錯誤信封/缺 CLI/普通測試 log/字面 429，驗 quota 與一般錯誤分類；效能只量模型選擇，無真 LLM。\nT3 M1 全角色 sol 使 A1 紅；M2 任意非零即 fallback 使 A2 紅；M3 全耗回 opus 使 A4 紅；M4 直接沿用 ultra 給 Claude 使 A5 紅；M5 verifier 依 worker 換序使 A3 紅；M6 cap 不擋使 A8 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例照 A 慣例（templates/dispatch-verifier.md）放 verify/<feature>/test_ticket_<票號>.py，新標籤寫 verify/TAGS.d/<票號>.md；由驗證者設定 verify.files/tags/run，不列入 worker 的 allowed_write_paths。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
   "verify_strings": [
-    "dispatch_cap",
-    "effort_escalated",
-    "opener_complex"
+    {
+      "path": "board/role-models.json",
+      "contains": "\"opener_complex\""
+    },
+    {
+      "path": "scripts/role-models.py",
+      "contains": "effort_escalated"
+    },
+    {
+      "path": "scripts/role-models.py",
+      "contains": "dispatch_cap"
+    },
+    {
+      "path": "scripts/role-models.py",
+      "contains": "的每次派工上限"
+    }
   ],
   "effort": "high",
   "needs_verifier": true,
