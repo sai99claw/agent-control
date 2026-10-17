@@ -823,6 +823,326 @@ class LintIsTheFormatRuleInMachineForm(CaseSandbox):
         self.assertIn("解不開", done.stdout)
 
 
+# F7–F12 的夾具都接在 GOOD_CASE(29 行,F1–F6 全過)後面,所以第一個字在第 30 行;
+# 每一行尾巴的行號是數出來的,不是跑一次記下來的 —— 測試斷言的就是這些號碼。
+F7_CASE = GOOD_CASE + '''
+
+import test_browsers as tb
+
+
+class Uses(tb.BrowserCase):
+
+    def _mine(self):
+        return 1
+
+    def test_b2_shapes(self):
+        """B2 介面名單與底線名字。"""
+        tb.http("/")
+        tb.step("x")
+        self.step()
+        self.ready()
+        self.assertEqual(self._mine(), 1)
+        driver = object()
+        driver._call()
+'''
+# 43 tb.step(中 i)、45 self.ready()(中 ii)、48 driver._call(中 iii);
+# 35 tb.BrowserCase、42 tb.http、44 self.step()、46 self.assertEqual / self._mine 都過。
+
+F8_CASE = GOOD_CASE + '''
+
+class Pins(unittest.TestCase):
+
+    def test_b3_counts(self):
+        """B3 精確快照。"""
+        x, s = [1, 2, 3], "aa"
+        self.assertEqual(len(x), 3)
+        self.assertEqual(3, len(x))
+        self.assertTrue(s.count("a") == 2)
+        self.assertEqual(s.count("a"), 2)
+        self.assertEqual(len(x), 3)  # pin: 釘 base 原文
+        self.assertEqual(len(x), 3)  # pin:
+        self.assertGreaterEqual(len(x), 3)
+
+    def test_b3_sha(self):
+        """B3 sha 字面配 hexdigest。"""
+        digest = hashlib.sha256(b"x").hexdigest()
+        self.assertNotEqual(digest, "deadbeef1")
+
+    def test_b3_hex_without_a_digest_nearby(self):
+        """B3 同一函式沒有雜湊字眼,十六進位字面不算。"""
+        self.assertTrue("abcdef12")
+'''
+# 37 len 對整數、38 參數對調、39 count == 整數、40 assertEqual(count, 整數)、
+# 42 `# pin:` 空著、48 sha 字面配 hexdigest 都中;41 有理由的 pin、43 下限、52 都過。
+
+F9_CASE = GOOD_CASE + '''
+
+import time
+from datetime import date
+
+TODAY = date.today()
+
+
+class Clock(unittest.TestCase):
+    DAY = time.strftime("%Y-%m-%d")
+
+    def setUp(self):
+        self.day = date.today()
+
+    def test_b4_once_in_setup(self):
+        """B4 setUp 取一次再比。"""
+        self.assertEqual(self.day, self.day)
+
+    def test_b4_twice(self):
+        """B4 種資料取一次、斷言裡再取一次。"""
+        seeded = date.today()
+        self.assertEqual(seeded, date.today())
+'''
+# 35 模組層(中 ii)、39 class 本體(中 ii)、51 斷言裡第二次取(中 i);42 setUp 那一次過。
+
+TIMING_CASE = GOOD_CASE + '''
+
+import time
+
+
+class Timing(unittest.TestCase):
+
+    def test_b5_sleep(self):
+        """B5 sleep 完就正向斷言。"""
+        time.sleep(0.1)
+        self.assertTrue(self.ready)
+
+    def test_b5_wait(self):
+        """B5 等的訊號與斷言字串對不上。"""
+        out = wait_until("server ready")
+        self.assertIn("finished", out)
+
+    def test_b5_index(self):
+        """B5 對原始碼字串 index。"""
+        src = open(__file__).read()
+        self.assertTrue(src.index("a"))
+        self.assertTrue(PAGE_CODE.index("x"))
+        self.assertTrue(open(__file__).read().index("x"))
+'''
+# 39 F10、44 F11、50 / 51 / 52 F12。
+
+CALM_CASE = GOOD_CASE + '''
+
+import time
+
+
+class Calm(unittest.TestCase):
+
+    def test_b5_sleep_then_only_negative(self):
+        """B5 sleep 後只做反向斷言、或比 before。"""
+        count_before = 1
+        time.sleep(0.1)
+        self.assertFalse(self.ready)
+        self.assertEqual(count_before, 1)
+
+    def test_b5_wait_matches(self):
+        """B5 斷言的字串就在等的訊號裡。"""
+        out = wait_until("server ready")
+        self.assertIn("ready", out)
+
+    def test_b5_index_elsewhere(self):
+        """B5 不是原始碼字串的 index、原始碼字串的 find。"""
+        src = "abc"
+        self.assertEqual([1, 2].index(2), 1)
+        self.assertTrue(src.find("b"))
+'''
+
+API_FILE = '''"""假專案的瀏覽器測試底座:案例准碰的只有 VERIFY_API。"""
+import unittest
+
+VERIFY_API = ("http", "BrowserCase", "BrowserCase.step")
+
+
+def http(path):
+    return path
+
+
+def step(name):
+    return name
+
+
+class BrowserCase(unittest.TestCase):
+
+    def step(self):
+        return None
+
+    def ready(self):
+        return True
+'''
+
+
+class FragileSandbox(CaseSandbox):
+    """F7–F12 的拋棄式專案根:`board/config.json` + `demo/test_browsers.py` +
+    `verify/x/test_ticket_9.py`。票 #9 不存在,所以 F6 照設計不查。"""
+
+    REL = "verify/x/test_ticket_9.py"
+
+    def setUp(self):
+        super().setUp()
+        self.write(os.path.join("demo", "test_browsers.py"), API_FILE)
+
+    def configure(self, **lint):
+        conf = json.loads(self.read("board/config.json"))
+        conf["verify_lint"] = lint
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+
+    def lint(self, case, *args):
+        self.write(self.REL, case)
+        return self.tool("lint", self.REL, *args)
+
+    def hit_lines(self, done, rule):
+        """`<檔>:<行> F<n> ` 的行號集合 —— 尾巴的空白讓 F1 不會吃到 F10。"""
+        return {int(no) for no in re.findall(
+            r"verify-case lint: %s:(\d+) %s " % (re.escape(self.REL), rule), done.stdout)}
+
+
+class LintBlocksOnlyWhatTheProjectTurnedOn(FragileSandbox):
+    """B1:F7–F12 一律印;只有 `verify_lint.block` 有、`allow` 沒有的才擋(#102)。"""
+
+    def test_b1_same_f8_file_under_three_configs_is_0_1_0(self):
+        """B1 沒設 / block=[F8] / block=[F8] 且 allow 該檔:F8 → rc 0 / 1 / 0,三次都印那行。"""
+        rcs = []
+        for lint in ({}, {"block": ["F8"]},
+                     {"block": ["F8"], "allow": ["%s:F8" % self.REL]}):
+            self.configure(**lint)
+            done = self.lint(F8_CASE)
+            rcs.append(done.returncode)
+            self.assertIn(37, self.hit_lines(done, "F8"),
+                          "config=%r 也要印那行 F8:%s" % (lint, done.stdout))
+        self.assertEqual(rcs, [0, 1, 0], done.stdout + done.stderr)
+        self.assertIn("%s:37 F8 " % self.REL, done.stdout)
+        self.assertRegex(done.stdout, r"%s:37 F8 .*(白名單,不擋)" % re.escape(self.REL))
+        self.assertIn("lint: 過", done.stdout)
+
+    def test_b1_f10_to_f12_in_block_are_ignored_with_one_line(self):
+        """B1 block 寫了 F10–F12 → 印一行「F10–F12 只印不擋,block 忽略」。"""
+        self.configure(block=["F11"])
+        done = self.lint(GOOD_CASE)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.stdout.count("F10–F12 只印不擋,block 忽略"), 1, done.stdout)
+
+
+class LintF7OnlyTouchesTheDeclaredInterface(FragileSandbox):
+    """B2:F7 介面名單(VERIFY_API)與底線名字。"""
+
+    def test_b2_six_shapes_hit_exactly_the_three_named_lines(self):
+        """B2 tb.step(i)、self.ready()(ii)、driver._call(iii)中;tb.http、self.step()、
+        self.assertEqual、self._mine 過。"""
+        self.configure(api={"test_browsers": "demo/test_browsers.py"})
+        done = self.lint(F7_CASE)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.hit_lines(done, "F7"), {43, 45, 48}, done.stdout)
+        self.assertNotIn("沒宣告 VERIFY_API", done.stdout)
+
+    def test_b2_block_f7_makes_those_lines_block(self):
+        """B2 block=[F7] 時同一份檔 rc=1。"""
+        self.configure(api={"test_browsers": "demo/test_browsers.py"}, block=["F7"])
+        done = self.lint(F7_CASE)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("**不過**(3 條)", done.stdout)
+
+    def test_b2_a_module_without_verify_api_skips_the_list_but_not_underscores(self):
+        """B2 api 指的檔不在 → 印「F7 <M> 沒宣告 VERIFY_API,名單檢查略過」,(iii) 照查。"""
+        self.configure(api={"test_browsers": "demo/missing.py"})
+        done = self.lint(F7_CASE)
+        self.assertIn("F7 test_browsers 沒宣告 VERIFY_API,名單檢查略過", done.stdout)
+        self.assertEqual(self.hit_lines(done, "F7"), {48}, done.stdout)
+
+
+class LintF8PinsNeedAReason(FragileSandbox):
+    """B3:F8 釘整數或 sha,`# pin:<理由>` 是逃生口。"""
+
+    def test_b3_seven_shapes_and_the_pin_escape(self):
+        """B3 len / 對調 / count== / assertEqual(count) / 空 pin / sha 中;有理由的 pin、下限過。"""
+        done = self.lint(F8_CASE)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.hit_lines(done, "F8"), {37, 38, 39, 40, 42, 48}, done.stdout)
+        self.assertRegex(done.stdout, r"%s:42 F8 .*pin 沒寫理由" % re.escape(self.REL))
+        self.assertNotRegex(done.stdout, r"%s:37 F8 .*pin 沒寫理由" % re.escape(self.REL))
+
+
+class LintF9TakesTheClockOnce(FragileSandbox):
+    """B4:F9 時間取兩次與模組層 / class 本體取時間。"""
+
+    def test_b4_module_class_body_and_twice_in_one_function(self):
+        """B4 TODAY(ii)、class 本體 DAY(ii)、斷言裡第二次取(i)中;setUp 取一次過。"""
+        done = self.lint(F9_CASE)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.hit_lines(done, "F9"), {35, 39, 51}, done.stdout)
+
+
+class LintF10ToF12OnlyPrint(FragileSandbox):
+    """B5:F10–F12 不論 block 怎麼設都不擋。"""
+
+    def test_b5_each_shape_prints_its_line_and_never_blocks(self):
+        """B5 F10 39、F11 44、F12 50 / 51 / 52 印出來,block 全開 rc 仍是 0。"""
+        self.configure(block=["F7", "F8", "F9", "F10", "F11", "F12"])
+        done = self.lint(TIMING_CASE)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.hit_lines(done, "F10"), {39}, done.stdout)
+        self.assertEqual(self.hit_lines(done, "F11"), {44}, done.stdout)
+        self.assertEqual(self.hit_lines(done, "F12"), {50, 51, 52}, done.stdout)
+        self.assertIn("F10–F12 只印不擋,block 忽略", done.stdout)
+
+    def test_b5_negative_shapes_print_nothing(self):
+        """B5 反向斷言 / before、斷言字串在訊號裡、非原始碼的 index 與 find:都不印。"""
+        done = self.lint(CALM_CASE)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotRegex(done.stdout, r" F1[0-2] ", done.stdout)
+
+
+class LintBaselineIsThePasteableAllowList(FragileSandbox):
+    """B6:`lint --baseline` 印可以直接貼進 `verify_lint.allow` 的陣列。"""
+
+    OTHER = "verify/x/test_ticket_8.py"
+
+    def test_b6_sorted_and_deduplicated(self):
+        """B6 兩檔各中 F7、F8(一檔中兩次 F8)→ 四筆,排序去重。"""
+        twice = ("import unittest\n\n\nclass A(unittest.TestCase):\n"
+                 "    def test_a(self):\n        x = [1]\n        driver._call()\n"
+                 "        self.assertEqual(len(x), 1)\n        self.assertEqual(len(x), 1)\n")
+        once = twice.replace("        self.assertEqual(len(x), 1)\n", "", 1)
+        self.write(self.REL, twice)
+        self.write(self.OTHER, once)
+        done = self.tool("lint", "--baseline", self.REL, self.OTHER)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(json.loads(done.stdout), [
+            "verify/x/test_ticket_8.py:F7", "verify/x/test_ticket_8.py:F8",
+            "verify/x/test_ticket_9.py:F7", "verify/x/test_ticket_9.py:F8"])
+
+    def test_b6_an_unreadable_file_is_rc_2(self):
+        """B6 檔讀不到 rc=2。"""
+        done = self.tool("lint", "--baseline", "verify/x/nope.py")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+
+
+class LintRulesAreDocumented(FragileSandbox):
+    """B7:§四 lint 表有 F7–F12 與 `verify_lint.allow`;`lint --help` 提到 `--baseline`。"""
+
+    DOC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "docs", "DESIGN-VERIFY-CASES.md")
+
+    def test_b7_the_lint_table_names_f7_to_f12_and_the_allow_key(self):
+        """B7 只量 §四 那一段,不量整份。"""
+        with open(self.DOC, encoding="utf-8") as handle:
+            text = handle.read()
+        section = text[text.index("## 四、"):text.index("## 五、")]
+        for rule in ("F7", "F8", "F9", "F10", "F11", "F12"):
+            self.assertIn("| %s |" % rule, section)
+        self.assertIn("verify_lint.allow", section)
+
+    def test_b7_lint_help_mentions_baseline(self):
+        """B7 lint --help 提到 --baseline。"""
+        done = self.tool("lint", "--help")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("--baseline", done.stdout)
+
+
 class CloseOnlyCountsTheGateRun(Sandbox):
     """`ticket.py close` 只認 `verify.baseline.stage == "check"`(#26 / D-020 C5)。
 
