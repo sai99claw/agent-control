@@ -639,7 +639,7 @@ class TheReviewBindsThePatchAndTheFace(ReviewBase):
             receipt = json.load(handle)
         self.assertEqual(sorted(receipt["request"]), RECEIPT_KEYS)
         asked = ticket["review_request"]
-        self.assertEqual(asked["owner_id"], "", "沒有租約 = 空字串")
+        self.assertEqual(asked["owner_id"], "review.sh", "沒有租約 = 派工的那一支")
         self.assertEqual(receipt["request"], {key: asked[key] for key in RECEIPT_KEYS})
         self.assertEqual(receipt["request"]["run_id"], self.RUN)
         self.assertEqual(receipt["request"]["attempt"], 1)
@@ -940,6 +940,16 @@ class TheReceiptIsComparedNotReread(unittest.TestCase):
         self.assertEqual(ticket_mod.request_problem(row, claimed), "")
         row["review_request"]["patch_id"] = "q"
         self.assertIn("patch_id", ticket_mod.request_problem(row, claimed))
+
+    def test_a3_a_lease_taken_after_a_leaseless_dispatch_is_stale(self):
+        """沒有租約時派工 owner 是 review.sh;收件前有人取了租約 —— 換手,版本沒動也擋。"""
+        claimed = {"run_id": "r1", "attempt": 1, "state_version": 5, "face": "f",
+                   "patch_id": "p", "sha": "s"}
+        row = {"attempt": 1, "state_version": 5, "lease": None,
+               "review_request": dict(claimed, owner_id="review.sh")}
+        self.assertEqual(ticket_mod.request_problem(row, claimed), "")
+        row["lease"] = {"holder": "auto-fix@a"}
+        self.assertIn("換手", ticket_mod.request_problem(row, claimed))
 
 
 class TheReceiveHasASameLockSeam(ReviewBase):

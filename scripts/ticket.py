@@ -81,6 +81,7 @@ FACE_FIELDS = (("subject", ""), ("objective", ""), ("acceptance", []), ("in_scop
 # 派覆核那一刻記進票 `review_request` 的鍵(另有 owner_id);`review-receipt.json` 的 request
 # 恰是這幾格,是它的不可變副本。
 REQUEST_KEYS = ("run_id", "attempt", "state_version", "face", "patch_id", "sha")
+REVIEW_DISPATCHER = "review.sh"
 LOCK_NAME = ".ticket.lock"
 LOCK_TIMEOUT = 10.0
 
@@ -2305,11 +2306,17 @@ def lease_holder(ticket):
     return str(lease.get("holder") or "") if isinstance(lease, dict) else ""
 
 
+def dispatch_owner(ticket):
+    """派工 owner:**既有** `lease.holder`(不覆寫);沒有租約時是派覆核的那一支 `review.sh`
+    (`review-request` 只有它叫)。收件時再算一次,與 `review_request.owner_id` 不同就是換手了。"""
+    return lease_holder(ticket) or REVIEW_DISPATCHER
+
+
 def request_review(ident, run_id, sha, receipt):
     """派覆核那一刻的 `review_request`(A3)。回 `(request, 不派的理由)`。
 
     `state_version` +1 之後的那一版就是收件時要對上的版本:同一張票再派一次覆核、改一次票,
-    舊的那一份就對不上。`owner_id` 是**既有** `lease.holder`(沒有租約是空字串),這裡不寫租約。
+    舊的那一份就對不上。`owner_id` 是 `dispatch_owner`,這裡不寫租約。
     同一個 run_id 已有一份還沒收件的收件單就不派 —— 那一份的 reviewer 可能還在跑,蓋掉它,
     它回來時就拿著別人的收件單;收過件的舊單改名留著(`review-receipt-v<版>.json`),一字不改。
     """
@@ -2322,7 +2329,7 @@ def request_review(ident, run_id, sha, receipt):
                           "另派就給新的 --run-id,確定那一份死了就刪掉這份收件單"
                           % (receipt, run_id))
         ticket["state_version"] = int(ticket.get("state_version") or 0) + 1
-        request = {"run_id": run_id, "owner_id": lease_holder(ticket),
+        request = {"run_id": run_id, "owner_id": dispatch_owner(ticket),
                    "attempt": ticket.get("attempt"), "state_version": ticket["state_version"],
                    "face": face(ticket), "patch_id": pid, "sha": sha}
         ticket["review_request"] = request
@@ -2353,9 +2360,9 @@ def request_problem(ticket, claimed):
     if str(ticket.get("attempt")) != str(claimed.get("attempt")):
         return ("這份覆核是第 %s 次派工的,票現在在第 %s 次 —— 遲到了"
                 % (claimed.get("attempt"), ticket.get("attempt")))
-    if lease_holder(ticket) != str(live.get("owner_id") or ""):
-        return ("派覆核時租約在 %r 手上,現在是 %r —— 換手了"
-                % (live.get("owner_id") or "", lease_holder(ticket)))
+    if dispatch_owner(ticket) != str(live.get("owner_id") or ""):
+        return ("派覆核時的 owner 是 %r,現在是 %r —— 換手了"
+                % (live.get("owner_id") or "", dispatch_owner(ticket)))
     if str(ticket.get("state_version")) != str(claimed.get("state_version")):
         return ("這份覆核是對票 v%s 派的,票現在是 v%s —— 派工之後票被改過"
                 % (claimed.get("state_version"), ticket.get("state_version")))
