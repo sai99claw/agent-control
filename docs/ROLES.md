@@ -43,6 +43,17 @@
 | 帳務 / 資料遷移類的票 | 加派**第二家模型**(agy gemini 或 Codex)做**機器可驗**的獨立驗證 | 同一家模型的兩個 session 會犯同一種錯 |
 | 討論、找靈感 | 另一家模型(agy / Codex) | 要第二個腦袋,不是第二雙手;**它的回答提到產品功能一律 grep 一次再用** |
 
+**角色 → 有序模型候選(#116,D-049 ②)**:唯一的一張表在 `board/role-models.json`,每個角色一串
+`{model, tool, effort, effort_escalated, dispatch_cap}`;所有派工呼叫同一個選路器
+`python3 scripts/role-models.py resolve --role <角色> [--complexity simple|complex] [--repair-round N]
+[--last-red] [--worker-model M] [--ticket-effort E] [--items N] [--exhausted-index I [--evidence LOG --evidence-rc RC]]`,
+印一行 JSON(rc 0 選到、3 整串耗盡 → 停、發一次 decision,2 不派)。只有 provider 錯誤信封說額度用完 /
+模型不可用、或 CLI 不在(rc=127)才換下一個候選(`--exhausted-index` 不帶 `--evidence` 時,呼叫端要先用
+`role-models.py classify` 判);一般失敗、測試紅、逾時、字面 `429` 不換,認證錯停下。
+verifier 鏈固定 sol → opus,不看 worker 模型;每次派工上限 `dispatch_cap` 由 `--items` 擋。
+舊入口(上表、`board/config.json` 的 `routing`)在 #121/#122 逐一切換;切換後該角色只讀新表。
+表中 `main` 只是開 session 時的建議,不熱切已在跑的互動 session。
+
 額度政策:Codex 的五小時桶**一次派三張就會用盡**,別再多;用完**退 Opus 一張並報主線**。
 **等、換、或送進收件匣;不准默默改走付費通道。**
 
