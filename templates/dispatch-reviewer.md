@@ -27,7 +27,7 @@
 |---|---|---|---|
 每一條驗收一列;對不上的那一列說差在哪。
 ### ③ 範圍
-改動的檔是否都在提示範圍(`allowed_write_paths` ∪ `info_homes[].home` ∪ `verify.files`);`out_of_scope` 有沒有被碰。
+改動的檔是否都在提示範圍(`allowed_write_paths` ∪ `info_homes[].home` ∪ `verify.files`);命中 `out_of_scope` 的檔看的是理由,不是碰了沒有。
 兩者都是建議範圍(D-050 ①):範圍外的檔(有的話派工文另有一段逐檔列出)逐檔看命中的 glob 與理由 —— 理由站不住、與票面目標
 無關就是 `fail`;沒寫理由的 out_of_scope 命中 land 會拒絕,照樣寫進疑慮。
 ### ④ 疑慮
