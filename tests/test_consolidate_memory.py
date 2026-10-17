@@ -101,8 +101,8 @@ class OneLeaseOnePair(ConsolidateBase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         calls = self.session_calls()
         self.assertEqual(len(calls), 2, calls)
-        self.assertIn("session exec -m gpt-6-astra -s workspace-write --skip-git-repo-check -",
-                      calls)
+        self.assertIn("session exec -m gpt-6-astra -s danger-full-access "
+                      "-c approval_policy=\"never\" -C . --skip-git-repo-check -", calls)
         self.assertTrue([c for c in calls if "--model fixture-a" in c], calls)
         for kind in ("agent.start", "agent.done"):
             self.assertEqual(sorted(row["model"] for row in self.agent_rows(kind)),

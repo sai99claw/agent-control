@@ -24,12 +24,19 @@ CLAUDE_COMMAND = "claude -p --model opus --permission-mode acceptEdits"
 
 FAKE_CODEX = """#!/bin/sh
 printf '%s\\n' "$@" > "@ARGV@"
+printf '%s\\n%s\\n%s\\n' "$(pwd -P)" "$AC_ROLE" "$AC_ROOT" > "@ARGV@.where"
+cp "$AC_ROOT/tickets/1.json" "@ARGV@.control-ticket" 2>/dev/null || true
+cp "$AC_WORK/work/tickets/1.json" "@ARGV@.work-ticket" 2>/dev/null || true
 cat > "@STDIN@"
 echo "codex ran $AC_ROLE round $AC_ROUND" >> "$AC_TEST_LOG"
 case "@MODE@" in
     quota)
         echo "ERROR: stream error: 429 Too Many Requests"
         echo "You've hit your usage limit." >&2
+        exit 1 ;;
+    quota-stray)
+        echo stray > "$(dirname "$AC_TEST_LOG")/repo/stray.txt"
+        echo "ERROR: stream error: 429 Too Many Requests"
         exit 1 ;;
     other)
         echo "ERROR: something unrelated broke" >&2
@@ -95,14 +102,38 @@ class TheCodexPathStartsCodex(CodexBase):
         self.codex_ticket()
         done = self.auto_fix("--no-review")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.argv()[:5], ["exec", "-m", "gpt-6-astra", "-s", "workspace-write"])
-        self.assertIn("codex exec -m gpt-6-astra -s workspace-write", done.stderr + done.stdout)
+        # #115 A1/A2:與 claude 同權限;`--add-dir <副本根>` 恰一次,接在 `-` 之前。
+        delivery_root = os.path.realpath(os.path.join(
+            self.home, "repo-wt", "fix-t1", "round1"))
+        argv = self.argv()
+        self.assertEqual(argv.count("--add-dir"), 1, argv)
+        add_dir = argv.index("--add-dir")
+        self.assertEqual(os.path.realpath(argv[add_dir + 1]), delivery_root,
+                         "Codex 要能寫副本根的 patch 與 EVIDENCE")
+        self.assertEqual(argv[:add_dir] + argv[add_dir + 2:],
+                         ["exec", "-m", "gpt-6-astra", "-s", "danger-full-access",
+                          "-c", 'approval_policy="never"', "-C", ".",
+                          "--skip-git-repo-check", "-"])
+        self.assertNotIn("workspace-write", argv)
+        with open(self.argv_file + ".where", encoding="utf-8") as handle:
+            cwd, role, control = handle.read().splitlines()
+        self.assertEqual(cwd, os.path.join(delivery_root, "work"), "codex 與 claude 同一個 cwd")
+        self.assertEqual(role, "worker")
+        self.assertEqual(os.path.realpath(control), os.path.join(delivery_root, "control"),
+                         "AC_ROOT 是拋棄式控制根,不是主 repo")
+        self.assertIn("codex exec -m gpt-6-astra -s danger-full-access", done.stderr + done.stdout)
         sent = [path for path in self.result_files("dispatch-round1.md")
                 if os.path.exists(os.path.join(os.path.dirname(path), "worker-round1.log"))]
         self.assertEqual(len(sent), 1, self.result_files("dispatch-round1.md"))
         with open(sent[0], encoding="utf-8") as handle, \
                 open(self.stdin_file, encoding="utf-8") as fed:
             self.assertEqual(fed.read(), handle.read(), "派工文沒有原樣從 stdin 進 codex")
+        with open(sent[0], encoding="utf-8") as handle:
+            packet = handle.read()
+        self.assertIn("## 權威票面快照", packet)
+        self.assertIn("$AC_ROOT/tickets/1.json", packet)
+        self.assertIn("work/tickets/1.json", packet)
+        self.assertIn("不能用它推翻本快照", packet)
         for kind in ("agent.start", "agent.done"):
             rows = self.agent_events(kind)
             self.assertEqual([row["model"] for row in rows], [CODEX_MODEL], kind)
@@ -112,6 +143,28 @@ class TheCodexPathStartsCodex(CodexBase):
         self.assertIn("test_thing.py", self.git("ls-tree", "-r", "--name-only", "t1"),
                       "codex 交的 patch 沒有照既有那一手收進分支")
 
+    def test_115_a3_the_snapshot_comes_from_the_live_store_not_the_base_copy(self):
+        """#115 A3。base_sha 上的票寫舊 objective、權威票庫寫新的:派工文的快照與控制根的票副本
+        是新的,work/ 那一份是舊的,派工文明說舊檔不能推翻快照。**變異**:快照改讀
+        work/tickets → 派工文出現舊值,紅。"""
+        self.fake_codex()
+        row = self.codex_ticket(objective="OLD-objective-from-base")
+        row.update(objective="NEW-objective-from-store",
+                   base_sha=self.git("rev-parse", "main").strip())
+        self.write("tickets/1.json", json.dumps(row, ensure_ascii=False, indent=2) + "\n")
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        with open(self.stdin_file, encoding="utf-8") as handle:
+            packet = handle.read()
+        self.assertIn("NEW-objective-from-store", packet)
+        self.assertNotIn("OLD-objective-from-base", packet)
+        self.assertIn("不能用它推翻本快照", packet)
+        with open(self.argv_file + ".control-ticket", encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["objective"], "NEW-objective-from-store")
+        with open(self.argv_file + ".work-ticket", encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["objective"], "OLD-objective-from-base",
+                             "夾具要讓 work/ 真的拿到舊版,不然這一條什麼都沒比")
+
     def test_a19_dry_run_prints_the_codex_command(self):
         self.fake_codex()
         self.codex_ticket()
@@ -120,7 +173,7 @@ class TheCodexPathStartsCodex(CodexBase):
         line = [l for l in done.stdout.splitlines() if l.startswith("auto-fix: worker 命令 —— ")]
         self.assertEqual(len(line), 1, done.stdout)
         self.assertTrue(line[0].split(" —— ", 1)[1].startswith(
-            "codex exec -m gpt-6-astra -s workspace-write"), line[0])
+            "codex exec -m gpt-6-astra -s danger-full-access"), line[0])
         self.assertFalse(os.path.exists(self.argv_file), "--dry-run 不起 codex")
 
 
@@ -200,6 +253,22 @@ class CodexQuotaGoesBackToOpus(CodexBase):
         self.assertIn("#1 codex 額度用完,已改 opus,重跑 auto-fix", self.read(pages[0]["page"]))
         self.assertEqual(len(self.codex_calls()), 1, "這一次不准自動重派第二個 worker")
 
+    def test_115_a7_quota_and_a_violation_together_keep_the_violation(self):
+        """#115 A7。**M5**:額度那一手排在守衛前面(提早返回)→ rc 7、票回 Ready 改 opus,紅。
+        四問:量 rc / 票 / attempt reason / 頁;值 = A7(越界 decision 不被吞)。"""
+        self.fake_codex("quota-stray")
+        self.codex_ticket()
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 8, done.stdout + done.stderr)
+        ticket = self.load_ticket("1")
+        self.assertEqual((ticket["model"], ticket["tool"], ticket["state"], ticket.get("owner")),
+                         (CODEX_MODEL, "codex", "Blocked", "main"))
+        failed = [row for row in self.events() if row["kind"] == "ticket.attempt.failed"]
+        self.assertEqual([row.get("reason") for row in failed], ["guard-violation"])
+        pages = self.inbox_rows()
+        self.assertEqual(len(pages), 1, pages)
+        self.assertIn("stray.txt", pages[0]["what"])
+
 
 class OtherCodexFailuresKeepTheOldPages(CodexBase):
 
@@ -261,11 +330,11 @@ class AutoFixPicksTheEffort(EffortBase):
              "auto-fix: effort 來源=票 high"),
             ("config", dict(model=CODEX_MODEL, tool="codex"), "medium",
              "codex exec -m gpt-6-astra -c 'model_reasoning_effort=\"medium\"' "
-             "-s workspace-write --skip-git-repo-check -",
+             "-s danger-full-access -c 'approval_policy=\"never\"' -C . --skip-git-repo-check -",
              "auto-fix: effort 來源=config medium"),
             ("兩者", dict(model=CODEX_MODEL, tool="codex", effort="xhigh"), "low",
              "codex exec -m gpt-6-astra -c 'model_reasoning_effort=\"xhigh\"' "
-             "-s workspace-write --skip-git-repo-check -",
+             "-s danger-full-access -c 'approval_policy=\"never\"' -C . --skip-git-repo-check -",
              "auto-fix: effort 來源=票 xhigh"),
             ("都沒有", dict(model="fable", tool="claude-code"), None,
              "claude -p --model fable --permission-mode acceptEdits" + envelope_tail, None),

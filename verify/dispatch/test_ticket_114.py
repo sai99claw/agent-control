@@ -3,8 +3,8 @@
 ## 驗收表(票面每一條一列;期望值來源獨立於被測程式:票面 acceptance 字面 / 開題在 base_sha 上實跑的基準句 / 既有案例 test_a20 的 golden)
 A1  | cli   | agent-command --model opus|fable --tool claude-code --base "claude -p --model opus --permission-mode acceptEdits" --swap-model --effort high | rc 0;stdout 恰為 `claude -p --model <m> --effort high --permission-mode acceptEdits` | 票面 A1 原話
 A2  | cli   | base 已有 `--effort low`;base 沒有 --model 且不 swap;base 有 --model 不 swap | 原位換 high、只一次 --effort;句尾接 `--effort high`;接在 --model opus 之後 | 票面 A2 原話;objective「在 --model <m> 之後加」
-A3  | cli   | agent-command --model codex:gpt-5.6-sol --tool codex --effort high | stdout 恰為 `codex exec -m gpt-5.6-sol -c 'model_reasoning_effort="high"' -s workspace-write --skip-git-repo-check -` | 票面 A3 原話
-A4  | cli   | 不給 --effort / 給 --effort "" | 與今天逐字同:兩條基準句 | 票面 A4(開題在 base_sha 實跑)
+A3  | cli   | agent-command --model codex:gpt-5.6-sol --tool codex --effort high | stdout 恰為 `codex exec -m gpt-5.6-sol -c 'model_reasoning_effort="high"' -s danger-full-access -c 'approval_policy="never"' -C . --skip-git-repo-check -` | 票面 A3 原話;沙盒旗標依 #115 A1 換新
+A4  | cli   | 不給 --effort / 給 --effort "" | 與今天逐字同:兩條基準句 | 票面 A4(開題在 base_sha 實跑);codex 那一句依 #115 A1 換新
 A5  | cli   | claude-code+ultra、codex+turbo、agy+high | rc 2、stdout 空、stderr 含 effort=<值> 與合法值清單 / 點名 agy | 票面 A5 原話(清單抄 `claude --help` 與票面)
 A6  | cli   | ticket.py create … --effort high / 不合法 / 不給 | 票檔 effort="high";rc 2 不寫檔;沒有 effort 鍵 | 票面 A6 原話
 A7  | integ | auto-fix --dry-run:票 effort / 只有 config effort.implement / 兩者都有 / 都沒有;codex 票;沒 model 的 claude-code 票 | worker 命令那一行與 `auto-fix: effort 來源=<票|config> <e>` 那一行 | 票面 A7 原話;無 effort 那一句抄 tests/test_auto_fix_codex.py test_a20
@@ -141,12 +141,13 @@ class AgentCommandTurnsEffortIntoAFlag(unittest.TestCase):
         done = agent_command("--model", "codex:gpt-5.6-sol", "--tool", "codex", "--effort", "high")
         self.assert_prints(
             done, "codex exec -m gpt-5.6-sol -c 'model_reasoning_effort=\"high\"' "
-                  "-s workspace-write --skip-git-repo-check -")
+                  "-s danger-full-access -c 'approval_policy=\"never\"' -C . --skip-git-repo-check -")
 
     def test_a4_no_effort_is_byte_for_byte_today(self):
         """A4 不給 `--effort` → 兩條基準句逐字不變(開題在 base_sha 實跑)。"""
         self.assert_prints(agent_command("--model", "codex:gpt-5.6-sol", "--tool", "codex"),
-                           "codex exec -m gpt-5.6-sol -s workspace-write --skip-git-repo-check -")
+                           "codex exec -m gpt-5.6-sol -s danger-full-access "
+                           "-c 'approval_policy=\"never\"' -C . --skip-git-repo-check -")
         self.assert_prints(agent_command("--model", "fable", "--tool", "claude-code",
                                          "--base", BASE_CLAUDE, "--swap-model"),
                            "claude -p --model fable --permission-mode acceptEdits")
@@ -155,7 +156,8 @@ class AgentCommandTurnsEffortIntoAFlag(unittest.TestCase):
         """A4 `--effort ""` → 與不給逐字相同。"""
         self.assert_prints(agent_command("--model", "codex:gpt-5.6-sol", "--tool", "codex",
                                          "--effort", ""),
-                           "codex exec -m gpt-5.6-sol -s workspace-write --skip-git-repo-check -")
+                           "codex exec -m gpt-5.6-sol -s danger-full-access "
+                           "-c 'approval_policy=\"never\"' -C . --skip-git-repo-check -")
         self.assert_prints(agent_command("--model", "fable", "--tool", "claude-code",
                                          "--base", BASE_CLAUDE, "--swap-model", "--effort", ""),
                            "claude -p --model fable --permission-mode acceptEdits")
@@ -294,7 +296,7 @@ class AutoFixPicksTheEffort(EffortBase):
         self.codex_ticket(effort="high")
         done = self.dry()
         self.assertTrue(self.worker_line(done).startswith(
-            "codex exec -m gpt-6-astra -c 'model_reasoning_effort=\"high\"' -s workspace-write"),
+            "codex exec -m gpt-6-astra -c 'model_reasoning_effort=\"high\"' -s danger-full-access"),
             self.worker_line(done))
         self.assertEqual(self.source_lines(done), [SOURCE_LINE + "票 high"])
         self.assertFalse(os.path.exists(self.argv_file), "--dry-run 不起 codex")

@@ -49,6 +49,8 @@
 #   5 worker 沒交出可用的 patch
 #   6 規則包產不出來(#74):worker / 驗證者一個都沒起;缺項在 rules.py 送的 decision 頁
 #   7 codex 額度用完(#87 A23):票已改派 opus / claude-code、回 Ready;這一次不重派
+#   8 agent 越界(#115,D-048):主 repo / guarded_dirs 有不屬於控制面、也歸屬不到同時 land 的改動;
+#     票轉 Blocked、owner=main,一頁 decision,patch 不套、副本留著(與額度同時發生也是 8)
 set -u
 # `AC_ROOT` 優先:被 `gate.sh` 的 auto-fix 叫到時,這支檔案住在**副本**裡,
 # 而票、reports 與收件匣住在主 repo。照 `$0` 算根會把它們寫進一個等一下會被
@@ -373,6 +375,56 @@ attempt_failed() {   # $1 = no-patch | apply-failed | timeout | objection | veri
     ev ticket.attempt.failed --ticket "$ID" --attempt "$r" --kv reason="$1"
 }
 
+# 越界守衛的收件(#115):`run_agent` 寫了 `<log 去掉 .log>.guard.json` 就是越界。這一輪
+# 每一個 agent 的報告併成**一頁**;票轉 Blocked、owner=main、attempt 以 guard-violation 收;
+# 不套 patch、副本不收(下一個人要從它看做了什麼)。額度那一手排在它後面(A7)。
+guard_stop() {   # $1… = 這一輪 agent 的 log(空字串略過);有越界回 0(ROUND_RC=8),沒有回 1
+    G_OUT=$(python3 - "$@" <<'PY'
+import json, os, sys
+said, where = [], []
+for log in sys.argv[1:]:
+    path = os.path.splitext(log)[0] + ".guard.json" if log else ""
+    if not path or not os.path.exists(path):
+        continue
+    with open(path, encoding="utf-8") as handle:
+        report = json.load(handle)
+    rows = report.get("violations") or []
+    said.append("%s:%s" % (report.get("role") or "?", ";".join(
+        "%s(前 %s → 後 %s)" % (row.get("path"), row.get("before"), row.get("after"))
+        for row in rows[:5]) + (" 等 %d 處" % len(rows) if len(rows) > 5 else "")))
+    where.append(path)
+if not said:
+    raise SystemExit(1)
+print(" | ".join(said))
+print(" ".join(where))
+PY
+) || return 1
+    G_WHAT=$(printf '%s\n' "$G_OUT" | sed -n 1p)
+    G_WHERE=$(printf '%s\n' "$G_OUT" | sed -n 2p)
+    echo "auto-fix: #$ID 第 $r 輪 agent 越界 —— $G_WHAT;patch 不套、副本留著" >&2
+    G_SCOPE=""
+    if [ -n "${BATCH:-}" ]; then
+        G_SCOPE="整批 ${B_TAGS}:"
+        # 批次平常不寫票;越界是例外:整批每一張都轉 Blocked 回主線。批次沒有 attempt.start,
+        # 所以不發 attempt.failed(沒配對的那一筆會讓 heartbeat 以為有一輪)。
+        for b_id in $B_IDS; do
+            python3 "$AC/ticket.py" set "$b_id" state Blocked >/dev/null 2>&1 \
+                || echo "auto-fix: #$b_id 的狀態改不動(Blocked)" >&2
+            python3 "$AC/ticket.py" set "$b_id" owner main >/dev/null 2>&1 || true
+        done
+        ev decision.asked --ticket "$ID" --note "批次 $B_TAGS 的 worker 越界(guard-violation)"
+    else
+        block "#$ID 第 $r 輪 agent 越界(guard-violation)"
+    fi
+    post "agent 越界(guard-violation),副本留著" \
+         "${G_SCOPE}改到守衛範圍內的東西:${G_WHAT}。patch 沒套;前後證據在 ${G_WHERE}。查清楚、還原或認可後再派" \
+         "$G_WHERE"
+    [ -n "${BATCH:-}" ] || attempt_failed guard-violation
+    G_STOPPED=1
+    ROUND_RC=8
+    return 0
+}
+
 shed_copies() {   # $1 = 副本根(fix-t<n>/round<r> 或 verify-t<n>/round<r>)
     # **副本自己收**(#29 A6,G6):`patch` / `EVIDENCE` / `dispatch` / `result` 留著,
     # `work/` 與 `base/` 刪掉。以前它們只在**下一輪開始**才 `rm -rf`,綠了停 InReview
@@ -693,7 +745,10 @@ print("# 這一輪:#%s 第 1 輪(第一次實作)" % ident)
 print("")
 print("你是 **role=worker** 的實作者,**短命**:交付那一回合結束,不會再被叫醒。")
 print("")
-print("## 票面(`%s` 是現況)" % os.path.join("tickets", "%s.json" % ident))
+print("## 權威票面快照")
+print("以下 JSON 與 `$AC_ROOT/%s` 是這一輪現況；`work/%s` 來自 base_sha，可能是歷史版本，不能用它推翻本快照。"
+      % (os.path.join("tickets", "%s.json" % ident),
+         os.path.join("tickets", "%s.json" % ident)))
 print("```json")
 print(json.dumps(ticket, ensure_ascii=False, indent=2))
 print("```")
@@ -1029,7 +1084,7 @@ WT=$WTBASE/$(ticket_branch)
 run_agent() {   # $1 = 命令 $2 = 派工文 $3 = 副本根 $4 = 角色 $5 = 第幾輪 $6 = log $7 = 1:tee+pid 檔 $8 = 時限;印出 rc
     python3 - "$1" "$2" "$3" "${8:-$WORKER_TIMEOUT}" "$ID" "$5" "$6" "$4" "${7:-}" \
         "$ROOT" "$MAINROOT" "$TF" <<'PY'
-import json, os, shutil, signal, subprocess, sys, threading, time
+import hashlib, json, os, shlex, shutil, signal, subprocess, sys, threading, time
 (cmd, dispatch, cwd, timeout, ident, r, log_path, role, tee_flag,
  root, mainroot, ticket_file) = sys.argv[1:13]
 LABEL = {"worker": "worker ", "verifier": "驗證者", "opener": "開題者"}.get(role, role + " ")
@@ -1075,6 +1130,15 @@ def agent_env(where, copy):
     env.update({"AC_ROOT": where, "AC_DISPATCH": copy, "AC_TICKET": ident, "AC_ROUND": r,
                 "AC_WORK": cwd, "AC_ROLE": role, "PYTHONUNBUFFERED": "1"})
     return env
+
+
+def command_with_delivery_root(command):
+    parts = shlex.split(command)
+    if parts[:2] != ["codex", "exec"] or "--add-dir" in parts:
+        return command
+    at = len(parts) - 1 if parts[-1:] == ["-"] else len(parts)
+    parts[at:at] = ["--add-dir", cwd]
+    return shlex.join(parts)
 
 
 def descendants(top):
@@ -1126,6 +1190,180 @@ def tee(stream, log):
             sys.stderr.buffer.flush()
 
 
+# ## 越界守衛(#115,D-048 的事後檢查)
+# worker / 驗證者 / 批次 worker 與 claude 同權限,不靠沙盒擋;起跑前後各拍一次快照:主 repo 的
+# HEAD、分支、`git status` 列得出的每一個路徑加內容雜湊(已髒的檔再被改一次,porcelain 一樣、
+# 雜湊不一樣),與 config `guarded_dirs` 底下每一個檔。對不上的就是越界,除了兩種:控制面
+# (config 解析出的 tickets / events / answers / reports)與這一個 agent 自己的副本;HEAD 前進
+# 而期間的事件裡有同一個 stamp 的 land.start + land.pass、pass 的 sha 就是新的 HEAD、舊 HEAD
+# 是它的祖先 —— 那是同時的合法落地,工作樹照查。越界寫 `<log 去掉 .log>.guard.json`、rc 印 8。
+# **只查列出來的地方**:主 repo 被 .gitignore 掉的檔與 guarded_dirs 以外,這裡不宣稱看過。
+guard_path = os.path.splitext(log_path)[0] + ".guard.json"
+
+
+def guard_conf():
+    try:
+        with open(os.path.join(root, "board", "config.json"), encoding="utf-8") as handle:
+            conf = json.load(handle)
+    except (OSError, ValueError):
+        conf = {}
+    repo = mainroot or root
+    exempt = [os.path.realpath(os.path.join(root, str(conf.get(key) or default)))
+              for key, default in RELATIVE_DEFAULTS] + [os.path.realpath(cwd)]
+    dirs = conf.get("guarded_dirs") or []
+    if not isinstance(dirs, list) or not all(isinstance(item, str) for item in dirs):
+        sys.stderr.write("auto-fix: guarded_dirs 不是字串 list(%r)—— 這一次只查主 repo\n" % (dirs,))
+        dirs = []
+    dirs = [os.path.realpath(os.path.join(repo, os.path.expanduser(item))) for item in dirs]
+    events = os.path.join(root, str(conf.get("events_file") or "board/events.jsonl"))
+    return repo, exempt, dirs, events
+
+
+def file_digest(path):
+    if os.path.islink(path):
+        return "link:" + os.readlink(path)
+    if os.path.isdir(path):
+        return "dir"
+    if not os.path.exists(path):
+        return None
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        return "unreadable:%s" % exc.strerror
+    return digest.hexdigest()[:16]
+
+
+def git_out(repo, *args):
+    done = subprocess.run(["git", "-C", repo, *args], capture_output=True)
+    return done.stdout if done.returncode == 0 else None
+
+
+def guard_snapshot(repo, dirs, events):
+    top = git_out(repo, "rev-parse", "--show-toplevel")
+    snap = {"top": top.decode().strip() if top else None, "tree": None, "dirs": {},
+            "head": None, "branch": None, "events_at": 0}
+    if snap["top"]:
+        head = git_out(repo, "rev-parse", "-q", "--verify", "HEAD")
+        branch = git_out(repo, "symbolic-ref", "-q", "HEAD")
+        snap["head"] = head.decode().strip() if head else "(no commit)"
+        snap["branch"] = branch.decode().strip() if branch else "(detached)"
+        listed = git_out(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+        if listed is not None:
+            snap["tree"] = {}
+            entries = listed.split(b"\0")
+            at = 0
+            while at < len(entries):
+                entry = entries[at].decode("utf-8", "surrogateescape")
+                at += 1
+                if len(entry) < 4:
+                    continue
+                if entry[0] in "RC":
+                    at += 1   # rename / copy:下一格是原路徑
+                path = os.path.join(snap["top"], entry[3:])
+                snap["tree"][path] = "%s %s" % (entry[:2].strip(), file_digest(path))
+    for top in dirs:
+        files = {}
+        for where, subdirs, names in os.walk(top):
+            for name in names + [item for item in subdirs
+                                 if os.path.islink(os.path.join(where, item))]:
+                path = os.path.join(where, name)
+                files[path] = file_digest(path)
+        snap["dirs"][top] = files
+    try:
+        snap["events_at"] = os.path.getsize(events)
+    except OSError:
+        pass
+    return snap
+
+
+def land_rows(events, start):
+    try:
+        with open(events, "rb") as handle:
+            if os.path.getsize(events) >= start:
+                handle.seek(start)
+            lines = handle.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return []
+    rows = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and str(row.get("kind") or "").startswith("land."):
+            rows.append(row)
+    return rows
+
+
+def land_explains(repo, old, new, rows):
+    """新的 HEAD 是不是這段時間裡一次合法落地的結果;是就回那一次的識別。"""
+    starts = [row.get("stamp") for row in rows if row.get("kind") == "land.start"]
+    for row in rows:
+        sha = str(row.get("sha") or "")
+        if row.get("kind") != "land.pass" or len(sha) < 7 or not new.startswith(sha):
+            continue
+        if row.get("stamp") not in starts:
+            continue
+        if subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", old, new],
+                          capture_output=True).returncode == 0:
+            return "land stamp=%s sha=%s" % (row.get("stamp"), sha)
+    return ""
+
+
+def guard_verdict(before, repo, exempt, dirs, events, agent_rc):
+    after = guard_snapshot(repo, dirs, events)
+
+    def exempted(path):
+        real = os.path.realpath(path)
+        return any(real == item or real.startswith(item + os.sep) for item in exempt)
+
+    found, notes = [], []
+    if before["tree"] is not None and after["tree"] is not None:
+        for path in sorted(set(before["tree"]) | set(after["tree"])):
+            was, now = before["tree"].get(path, "clean"), after["tree"].get(path, "clean")
+            if was != now and not exempted(path):
+                found.append({"path": path, "before": was, "after": now})
+    elif before["top"]:
+        notes.append("主 repo 的 git status 拍不到 —— 工作樹這一次沒有比")
+    if before["branch"] != after["branch"]:
+        found.append({"path": "HEAD(分支)", "before": before["branch"], "after": after["branch"]})
+    elif before["head"] != after["head"]:
+        why = land_explains(repo, before["head"], after["head"] or "",
+                            land_rows(events, before["events_at"]))
+        if why:
+            notes.append("HEAD %s -> %s 歸屬於同時的 %s" % (before["head"][:12],
+                                                          (after["head"] or "")[:12], why))
+        else:
+            found.append({"path": "HEAD", "before": before["head"], "after": after["head"]})
+    for top in dirs:
+        was, now = before["dirs"].get(top, {}), after["dirs"].get(top, {})
+        for path in sorted(set(was) | set(now)):
+            if was.get(path, "absent") != now.get(path, "absent") and not exempted(path):
+                found.append({"path": path, "before": was.get(path, "absent"),
+                              "after": now.get(path, "absent")})
+    if not found:
+        return agent_rc
+    with open(guard_path, "w", encoding="utf-8") as handle:
+        json.dump({"ticket": ident, "round": r, "role": role, "agent_rc": agent_rc,
+                   "monitored": {"repo": before["top"], "guarded_dirs": dirs},
+                   "exempt": exempt, "violations": found, "notes": notes},
+                  handle, ensure_ascii=False, indent=2)
+    sys.stderr.write("auto-fix: %s越界 %d 處(第一處 %s)—— 報告 %s\n"
+                     % (LABEL, len(found), found[0]["path"], guard_path))
+    return 8
+
+
+# 開題者改真票是它的工作(#89),不在守衛裡。
+guarded = None
+if role != "opener":
+    if os.path.exists(guard_path):
+        os.remove(guard_path)
+    guard_repo, guard_exempt, guard_dirs, guard_events = guard_conf()
+    guarded = guard_snapshot(guard_repo, guard_dirs, guard_events)
+
 # `worker.pid` 住在副本根(#46):下一輪收前幾輪副本之前先問它還活著沒有。回來了就刪掉,
 # 留著的那一份只會是「auto-fix 被砍了、worker 還在跑」的那一種。
 pid_path = os.path.join(cwd, "worker.pid") if tee_flag else ""
@@ -1141,6 +1379,7 @@ try:
         start_in = os.path.join(cwd, "work")
         if not os.path.isdir(start_in):
             start_in = cwd
+        cmd = command_with_delivery_root(cmd)
     with open(dispatch, encoding="utf-8") as handle, open(log_path, "wb") as log:
         # 自己一個行程群組:只砍 `sh -c` 那一層的話,孫行程還拿著 pipe,tee 等不到 EOF。
         proc = subprocess.Popen(cmd, shell=True, cwd=start_in, env=env, stdin=handle,
@@ -1166,6 +1405,8 @@ except subprocess.TimeoutExpired:
 except OSError as exc:
     sys.stderr.write("auto-fix: %s起不來 —— %s\n" % (LABEL, exc))
     rc = 127
+if guarded is not None:
+    rc = guard_verdict(guarded, guard_repo, guard_exempt, guard_dirs, guard_events, rc)
 print(rc)
 PY
 }
@@ -1349,6 +1590,9 @@ PY
         "$(session_open verifier "$VERIFIER_CMD" "$VFIX" "$r" "$VERIFIER_MODEL")")
     verifier_done "$VWRC" "$r" "$VLOG" "$VSTART"
     collect_from_copy "$VFIX" patch-verify.diff EVIDENCE-verifier.md
+    if guard_stop "$VLOG"; then
+        return 1
+    fi
     PATCH_OUT=$VFIX/patch-verify.diff
     EVIDENCE=$VFIX/EVIDENCE-verifier.md
     # 驗證者那條路也要留痕跡,**而且在「沒交 patch 就回去」之前** —— 沒交的那一次
@@ -1615,6 +1859,10 @@ PY
         collect_from_copy "$VFIX" patch-verify.diff EVIDENCE-verifier.md
         harvest_result "$VFIX/EVIDENCE-verifier.md" \
             "$(dirname "$DISPATCH")/result-verifier-round$r.json" verifier "$r"
+        if guard_stop "$VLOG"; then
+            opener_cost
+            return 1
+        fi
         VPATCH=""
         VEVIDENCE=""
         if [ "$VWRC" -eq 0 ] && [ -f "$VFIX/patch-verify.diff" ]; then
@@ -1843,6 +2091,12 @@ PY
     # worker 回來了才收驗證者(#51 C2)—— 它比 worker 早回來的話這一手不用等。
     [ -z "$VPID" ] || wait_verifier
 
+    # 越界先收(#115 A7):額度那一手會提早返回,排在前面就把同一輪的越界吞掉。
+    if guard_stop "$WORKER_LOG" "${VLOG:-}"; then
+        worker_cost error
+        return 1
+    fi
+
     # codex 額度 / 429(#87 A23):不是這張票的錯,是這個模型此刻不能用。票改派 opus /
     # claude-code、回 Ready,送一頁;這一次不自動重派(再起一個 worker 的錢要人點頭)。
     if [ -n "$IS_CODEX" ] && [ "$WRC" -ne 0 ] \
@@ -1874,6 +2128,10 @@ PY
 
     # 反駁判完接回的 worker(#89)交件後從這裡再走一次:同一輪、同一份副本。
     while :; do
+    if guard_stop "$WORKER_LOG"; then
+        worker_cost error
+        return 1
+    fi
     collect_from_copy "$FIX" "patch-round$r.diff" "EVIDENCE-round$r.md"
     PATCH_OUT=$FIX/patch-round$r.diff
     EVIDENCE=$FIX/EVIDENCE-round$r.md
@@ -1945,6 +2203,7 @@ PY
                 V_WANT=""
             fi
             if ! dispatch_verifier; then
+                [ -z "${G_STOPPED:-}" ] || return 1
                 if [ -n "${RULES_FAILED:-}" ]; then
                     # 驗證者的規則包產不出來:驗證者沒起,這一輪停在 worker 的反駁上。
                     attempt_failed objection
@@ -1982,6 +2241,10 @@ PY
     # 等 patch 才起的那一種(#60):worker 的 patch 在了,現在起、起了就收。
     if [ -n "$V_WANT" ] && [ -n "$V_HELD" ]; then
         if start_verifier_bg; then wait_verifier; fi
+        if guard_stop "${VLOG:-}"; then
+            worker_cost handed-in
+            return 1
+        fi
         shed_copies "$VFIX"
     fi
 
@@ -2296,6 +2559,10 @@ PY
     PATCH_OUT=$BDIR/patch-round$r.diff
     EVIDENCE=$BDIR/EVIDENCE-round$r.md
     harvest_result "$EVIDENCE" "$BDIR/result-round$r.json" worker "$r"
+    if guard_stop "$WORKER_LOG"; then
+        batch_cost error
+        exit 8
+    fi
 
     if [ "$WRC" -eq 124 ]; then
         PARTIAL=$BDIR/patch-partial-round$r.diff

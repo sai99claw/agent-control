@@ -1700,7 +1700,7 @@ class AgentCommandEffort(Sandbox):
              "claude -p --model fable --effort high --permission-mode acceptEdits"),
             (("--model", "codex:gpt-5.6-sol", "--tool", "codex", "--effort", "high"),
              "codex exec -m gpt-5.6-sol -c 'model_reasoning_effort=\"high\"' "
-             "-s workspace-write --skip-git-repo-check -"),
+             "-s danger-full-access -c 'approval_policy=\"never\"' -C . --skip-git-repo-check -"),
         )
         for args, want in rows:
             with self.subTest(args=args):
@@ -1727,7 +1727,8 @@ class AgentCommandEffort(Sandbox):
                 rc, out, err = self.command("--model", "codex:gpt-5.6-sol", "--tool", "codex",
                                             *extra)
                 self.assertEqual(rc, 0, err)
-                self.assertEqual(out, "codex exec -m gpt-5.6-sol -s workspace-write "
+                self.assertEqual(out, "codex exec -m gpt-5.6-sol -s danger-full-access "
+                                      "-c 'approval_policy=\"never\"' -C . "
                                       "--skip-git-repo-check -\n")
                 rc, out, err = self.command("--model", "fable", "--tool", "claude-code",
                                             "--base", CLAUDE_BASE, "--swap-model", *extra)

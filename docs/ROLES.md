@@ -38,7 +38,7 @@
 | 主線、開題 | **Opus 或以上**(D-039;`routing.main` / `routing.open`;低於該格 `rules.py pack` 不產包,D-023) | 判斷題;10/03 實測 opus 可用,下限放寬 |
 | 設計、查 bug 根因 | **Fable**(`routing.design` / `routing.bug`,D-039 未裁、維持) | 會影響之後每一張票的形狀 |
 | 實作 | **Opus**(`worker.command` 實際起的那個);機械、規格逐字的票可選 Codex `gpt-5.6-sol` | `board/config.json` 的 `routing.implement` 只是路由標籤,事件記的是 `worker.command` 真的起的模型 |
-| 實作(要起 server / 瀏覽器實跑) | **Opus** | Codex 在 `workspace-write` 綁不了埠、起不了瀏覽器(`-s danger-full-access` **不設**) |
+| 實作(要起 server / 瀏覽器實跑) | **Opus**;Codex 待專案同步後冒煙實證 | D-048 現況(#115):codex worker 與 claude 同權限,`ticket.py agent-command` 起 `-s danger-full-access -c 'approval_policy="never"' -C .`,不再用 `workspace-write`;越界由 auto-fix 的事後守衛抓(rc=8,見 `docs/WORKFLOW.md`)。server / 瀏覽器在真 codex 上能不能跑**還沒實證**(待專案同步後冒煙) |
 | 驗證(寫回歸案例) | **Opus**(預設)或 Codex sol | 驗證者是判斷工作(使用者 2026-10-03 裁示) |
 | 帳務 / 資料遷移類的票 | 加派**第二家模型**(agy gemini 或 Codex)做**機器可驗**的獨立驗證 | 同一家模型的兩個 session 會犯同一種錯 |
 | 討論、找靈感 | 另一家模型(agy / Codex) | 要第二個腦袋,不是第二雙手;**它的回答提到產品功能一律 grep 一次再用** |

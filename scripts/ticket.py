@@ -1734,7 +1734,9 @@ def cost_total(ticket):
 
 CODEX_PREFIX = "codex:"
 # 派工文從 stdin 進(`-`);副本是 `git archive` 展的,沒有 `.git`,codex 預設會拒跑。
-CODEX_COMMAND = "codex exec -m %s%s -s workspace-write --skip-git-repo-check -"
+# 權限與 claude 那一支相同(D-048):不設沙盒、不停下來問;越界由 auto-fix 的事後守衛抓。
+CODEX_COMMAND = ("codex exec -m %s%s -s danger-full-access -c 'approval_policy=\"never\"' "
+                 "-C . --skip-git-repo-check -")
 # 推理強度的合法值表只在這裡(D-018,#114):claude-code 抄自 `claude --help`。
 EFFORT_LEVELS = {"claude-code": ("low", "medium", "high", "xhigh", "max"),
                  "codex": ("low", "medium", "high", "xhigh", "max", "ultra")}
