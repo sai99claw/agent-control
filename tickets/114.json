@@ -44,16 +44,107 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "0b6cb31ccd2204c92577d6c4a49591fd51e448f9",
-  "state": "Ready",
-  "state_version": 3,
+  "base_sha": "6df6122030c4a6b005d5000a42bac352889583cb",
+  "state": "Done",
+  "state_version": 15,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
-    "tags": [],
-    "run": "",
-    "notes": "A 的案例:沙盒借 tests/control_harness.Sandbox;外層 AC_* 環境要清掉再跑。codex 與 claude 都用 PATH 最前面的替身,不打真的模型。真 codex 吃 `-c 'model_reasoning_effort=\"high\"'` 的實跑未測(codex -c 值照 TOML 解析,`\"high\"` 是 TOML 字串);claude `--effort` 合法值抄自 `claude --help`。"
+    "files": [
+      "verify/dispatch/test_ticket_114.py"
+    ],
+    "tags": [
+      "effort"
+    ],
+    "run": "python3 scripts/verify.py --tag effort",
+    "notes": "A 的案例:沙盒借 tests/control_harness.Sandbox;外層 AC_* 環境要清掉再跑。codex 與 claude 都用 PATH 最前面的替身,不打真的模型。真 codex 吃 `-c 'model_reasoning_effort=\"high\"'` 的實跑未測(codex -c 值照 TOML 解析,`\"high\"` 是 TOML 字串);claude `--effort` 合法值抄自 `claude --help`。",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-13T23:26:44+08:00",
+      "files": [
+        "verify/dispatch/test_ticket_114.py"
+      ],
+      "base_ref": "6df6122030c4a6b005d5000a42bac352889583cb",
+      "base_sha": "6df6122030c4a6b005d5000a42bac352889583cb",
+      "candidate": "../agent-control-wt/t114",
+      "candidate_sha": "5b50db00cf3b9a2ab4147473cc3798afa42f74c2",
+      "baseline": {
+        "red": [
+          "verify.dispatch.test_ticket_114.AgentCommandTurnsEffortIntoAFlag.test_a1_claude_code_swap_model_adds_effort_after_model",
+          "verify.dispatch.test_ticket_114.AgentCommandTurnsEffortIntoAFlag.test_a1_claude_code_swap_model_adds_effort_after_model",
+          "verify.dispatch.test_ticket_114.AgentCommandTurnsEffortIntoAFlag.test_a2_an_existing_effort_is_replaced_in_place",
+          "verify.dispatch.test_ticket_114.AgentCommandTurnsEffortIntoAFlag.test_a2_with_model_and_without_swap_effort_follows_the_model",
+          "verify.dispatch.test_ticket_114.AgentCommandTurnsEffortIntoAFlag.test_a2_without_model_and_without_swap_effort_goes_to_the_end",
+          "verify.dispatch.test_ticket_114.AgentCommandTurnsEffortIntoAFlag.test_a3_codex_effort_is_a_reasoning_config_after_the_model",
+          "verify.dispatch.test_ticket_114.AgentCommandTurnsEffortIntoAFlag.test_a4_an_empty_effort_is_the_same_as_none",
+          "verify.dispatch.test_ticket_114.AgentCommandTurnsEffortIntoAFlag.test_a5_a_tool_without_effort_support_is_refused",
+          "verify.dispatch.test_ticket_114.AgentCommandTurnsEffortIntoAFlag.test_a5_a_value_outside_the_tool_table_is_refused_with_the_table",
+          "verify.dispatch.test_ticket_114.AgentCommandTurnsEffortIntoAFlag.test_a5_a_value_outside_the_tool_table_is_refused_with_the_table",
+          "verify.dispatch.test_ticket_114.AutoFixPicksTheEffort.test_a7_a_claude_ticket_without_model_still_gets_effort",
+          "verify.dispatch.test_ticket_114.AutoFixPicksTheEffort.test_a7_a_codex_ticket_gets_the_reasoning_config",
+          "verify.dispatch.test_ticket_114.AutoFixPicksTheEffort.test_a7_only_the_config_effort_is_used_when_the_ticket_has_none",
+          "verify.dispatch.test_ticket_114.AutoFixPicksTheEffort.test_a7_the_ticket_effort_reaches_the_claude_command",
+          "verify.dispatch.test_ticket_114.AutoFixPicksTheEffort.test_a7_the_ticket_wins_over_the_config",
+          "verify.dispatch.test_ticket_114.AutoFixStopsOnAnIllegalEffort.test_a8_an_illegal_config_effort_stops_before_the_ticket_moves",
+          "verify.dispatch.test_ticket_114.AutoFixStopsOnAnIllegalEffort.test_a8_an_illegal_ticket_effort_stops_before_the_ticket_moves",
+          "verify.dispatch.test_ticket_114.AutoFixStopsOnAnIllegalEffort.test_a8_the_dry_run_is_refused_too",
+          "verify.dispatch.test_ticket_114.CodexQuotaKeepsOrDropsTheEffort.test_a10_an_effort_claude_does_not_take_is_nulled_and_named",
+          "verify.dispatch.test_ticket_114.CreateTakesEffort.test_a6_a_legal_effort_is_written_to_the_ticket",
+          "verify.dispatch.test_ticket_114.EventsAndCostCarryTheEffort.test_a9_a_delivered_round_records_effort_on_events_and_cost",
+          "verify.dispatch.test_ticket_114.EventsAndCostCarryTheEffort.test_a9_a_failed_round_records_effort_on_agent_failed",
+          "verify.dispatch.test_ticket_114.EventsAndCostCarryTheEffort.test_a9_ticket_cost_takes_effort",
+          "verify.dispatch.test_ticket_114.EventsAndCostCarryTheEffort.test_a9_without_effort_events_have_no_effort_and_cost_has_null",
+          "verify.dispatch.test_ticket_114.SchemaDocumentsEffort.test_a9_schema_has_the_effort_field_and_fifteen_cost_keys"
+        ],
+        "red_lines": [
+          "verify.dispatch.test_ticket_114.AgentCommandTurnsEffortIntoAFlag.test_a1_claude_code_swap_model_adds_effort_after_model: AssertionError: 2 != 0 : ticket: agent-command 不認得 '--effort'",
+          "verify.dispatch.test_ticket_114.AgentCommandTurnsEffortIntoAFlag.test_a1_claude_code_swap_model_adds_effort_after_model: AssertionError: 2 != 0 : ticket: agent-command 不認得 '--effort'",
+          "verify.dispatch.test_ticket_114.AgentCommandTurnsEffortIntoAFlag.test_a2_an_existing_effort_is_replaced_in_place: AssertionError: 2 != 0 : ticket: agent-command 不認得 '--effort'",
+          "verify.dispatch.test_ticket_114.AgentCommandTurnsEffortIntoAFlag.test_a2_with_model_and_without_swap_effort_follows_the_model: AssertionError: 2 != 0 : ticket: agent-command 不認得 '--effort'",
+          "verify.dispatch.test_ticket_114.AgentCommandTurnsEffortIntoAFlag.test_a2_without_model_and_without_swap_effort_goes_to_the_end: AssertionError: 2 != 0 : ticket: agent-command 不認得 '--effort'",
+          "verify.dispatch.test_ticket_114.AgentCommandTurnsEffortIntoAFlag.test_a3_codex_effort_is_a_reasoning_config_after_the_model: AssertionError: 2 != 0 : ticket: agent-command 不認得 '--effort'",
+          "verify.dispatch.test_ticket_114.AgentCommandTurnsEffortIntoAFlag.test_a4_an_empty_effort_is_the_same_as_none: AssertionError: 2 != 0 : ticket: agent-command 不認得 '--effort'",
+          "verify.dispatch.test_ticket_114.AgentCommandTurnsEffortIntoAFlag.test_a5_a_tool_without_effort_support_is_refused: AssertionError: 'agy' not found in \"ticket: agent-command 不認得 '--effort'\\nticket: agent-command 認得的是:--model  --tool  --base  --swap-model\\nticket: 看範例:python3 scripts/ticket.py agent-command --help\\n\"",
+          "verify.dispatch.test_ticket_114.AgentCommandTurnsEffortIntoAFlag.test_a5_a_value_outside_the_tool_table_is_refused_with_the_table: AssertionError: 'effort=ultra' not found in \"ticket: agent-command 不認得 '--effort'\\nticket: agent-command 認得的是:--model  --tool  --base  --swap-model\\nticket: 看範例:python3 scripts/ticket.py agent-command --help\\n\"",
+          "verify.dispatch.test_ticket_114.AgentCommandTurnsEffortIntoAFlag.test_a5_a_value_outside_the_tool_table_is_refused_with_the_table: AssertionError: 'effort=turbo' not found in \"ticket: agent-command 不認得 '--effort'\\nticket: agent-command 認得的是:--model  --tool  --base  --swap-model\\nticket: 看範例:python3 scripts/ticket.py agent-command --help\\n\"",
+          "verify.dispatch.test_ticket_114.AutoFixPicksTheEffort.test_a7_a_claude_ticket_without_model_still_gets_effort: AssertionError: '--model opus --effort high' not found in 'claude -p --model opus --permission-mode acceptEdits --output-format stream-json --verbose'",
+          "verify.dispatch.test_ticket_114.AutoFixPicksTheEffort.test_a7_a_codex_ticket_gets_the_reasoning_config: AssertionError: False is not true : codex exec -m gpt-6-astra -s workspace-write --skip-git-repo-check -",
+          "verify.dispatch.test_ticket_114.AutoFixPicksTheEffort.test_a7_only_the_config_effort_is_used_when_the_ticket_has_none: AssertionError: 'clau[16 chars]us --permission-mode acceptEdits --output-form[20 chars]bose' != 'clau[16 chars]us --effort medium --permission-mode acceptEdi[36 chars]bose'",
+          "verify.dispatch.test_ticket_114.AutoFixPicksTheEffort.test_a7_the_ticket_effort_reaches_the_claude_command: AssertionError: 'clau[16 chars]us --permission-mode acceptEdits --output-form[20 chars]bose' != 'clau[16 chars]us --effort high --permission-mode acceptEdits[34 chars]bose'",
+          "verify.dispatch.test_ticket_114.AutoFixPicksTheEffort.test_a7_the_ticket_wins_over_the_config: AssertionError: '--model opus --effort high' not found in 'claude -p --model opus --permission-mode acceptEdits --output-format stream-json --verbose'",
+          "verify.dispatch.test_ticket_114.AutoFixStopsOnAnIllegalEffort.test_a8_an_illegal_config_effort_stops_before_the_ticket_moves: AssertionError: 5 != 2 : auto-fix: #1 的 base_sha d98c7ba66d18cee736eeb1c150ff26f911ffced7 落後 main —— 還沒有分支,換成 main 的頭 08f955149145ecfd761c2e238b3193191014ff42",
+          "verify.dispatch.test_ticket_114.AutoFixStopsOnAnIllegalEffort.test_a8_an_illegal_ticket_effort_stops_before_the_ticket_moves: AssertionError: 5 != 2 : auto-fix: #1 的 base_sha ad89e0405df72a33ff804fc0ced4a84dd29125af 落後 main —— 還沒有分支,換成 main 的頭 44272f4a5bd139160b44f42d4338900be387c69e",
+          "verify.dispatch.test_ticket_114.AutoFixStopsOnAnIllegalEffort.test_a8_the_dry_run_is_refused_too: AssertionError: 0 != 2 : auto-fix: #1 的 base_sha 2bac28a259be15fe9ebd5d01c775cc4a55880f9d 落後 main(35793364ef5eb7218cc97c78e40652cb329f3b4b)—— 真的起跑時會換成 main 的頭(--dry-run 不動票)",
+          "verify.dispatch.test_ticket_114.CodexQuotaKeepsOrDropsTheEffort.test_a10_an_effort_claude_does_not_take_is_nulled_and_named: AssertionError: 'ultra' is not None",
+          "verify.dispatch.test_ticket_114.CreateTakesEffort.test_a6_a_legal_effort_is_written_to_the_ticket: AssertionError: 2 != 0 : ticket: create 不認得 '--effort'",
+          "verify.dispatch.test_ticket_114.EventsAndCostCarryTheEffort.test_a9_a_delivered_round_records_effort_on_events_and_cost: AssertionError: None != 'high' : ('agent.start', {'ts': '2026-10-13T23:26:14+08:00', 'kind': 'agent.start', 'pid': 12900, 'cwd': '.', 'ticket': '1', 'model': 'opus', 'run_id': '20261013-232614-12792', 'round': '1', 'agent': 'auto-fix'})",
+          "verify.dispatch.test_ticket_114.EventsAndCostCarryTheEffort.test_a9_a_failed_round_records_effort_on_agent_failed: AssertionError: None != 'high' : {'ts': '2026-10-13T23:26:17+08:00', 'kind': 'agent.failed', 'pid': 13616, 'cwd': '.', 'ticket': '1', 'model': 'opus', 'run_id': '20261013-232616-13499', 'round': '1', 'rc': '1', 'agent': 'auto-fix'}",
+          "verify.dispatch.test_ticket_114.EventsAndCostCarryTheEffort.test_a9_ticket_cost_takes_effort: AssertionError: 2 != 0 : ticket: cost 不認得 '--effort'",
+          "verify.dispatch.test_ticket_114.EventsAndCostCarryTheEffort.test_a9_without_effort_events_have_no_effort_and_cost_has_null: AssertionError: Items in the second set but not the first:",
+          "verify.dispatch.test_ticket_114.SchemaDocumentsEffort.test_a9_schema_has_the_effort_field_and_fifteen_cost_keys: AssertionError: [] is not true : 票欄位表沒有 `effort` 那一列"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 28,
+        "skipped": 0,
+        "log": "../agent-control-wt/t114/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 28,
+        "skipped": 0,
+        "log": "../agent-control-wt/t114/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "outline": "使用者 2026-10-13:「要讓推理強度可以指定」「接下來改 code 的 session 優先交給 codex sol high」。開題實測:`ticket.py agent-command --effort high` 今天 rc=2(不認得);scripts/ board/ SCHEMA grep effort 零命中;基準輸出 `codex exec -m gpt-5.6-sol -s workspace-write --skip-git-repo-check -`、`claude -p --model fable --permission-mode acceptEdits`(swap 自 opus)。\n介面裁示(D-018):**獨立欄位 `effort`**,不用 model 後綴 `codex:gpt-5.6-sol:high`。model 今天被當模型 id 讀(rules.py pack 挑卡、cost/事件 model、`codex:` 前綴判 tool、swap 進 `--model`、consolidate),加後綴就是改形狀,每個讀者都要學剝後綴;effort 與 tool 正交(claude、codex 都要),一格一張合法值表。合法值表只在 ticket.py 一處:claude-code = low medium high xhigh max(`claude --help`);codex = low medium high xhigh max ultra。其他 tool(agy)帶 effort = 錯誤,本票只記不做。config 預設放新頂層鍵 `effort: {\"implement\": …}`(鍵名對 routing),不塞 routing(那裡的值是模型標籤)。取值:票 > config > 無;無 = 命令逐字同今天。\ncost 列 14 → 15 鍵(多 `effort`,沒指定 null):改 #94 定案,主線落地時在 DECISIONS 補一行,本票不改 DECISIONS。\nneeds_verifier=true:旗標、值表、取值順序、cost 新鍵都是新契約。interface_fixed=true:純後端,命令逐字、錯誤字、來源行已釘。\n順序:① ticket.py ② auto-fix ③ SCHEMA 與舊 14 鍵案例。落地後 tabby_pool 要 sync(ticket.py、auto-fix.sh 在同步名單),T 同步票另開;config 要不要設 high、改碼票改派 codex 由主線另決。",
   "test_plan": "期望值一律抄票面字面(A1–A10 的命令逐字、合法值清單照 `claude --help` 與票面),不從 ticket.EFFORT_LEVELS / agent_command 讀回來。標籤:驗證者案例 `effort`(驗證者自己在 verify/TAGS.d/<票號>.md 登記)。\nT1(A1–A5)unit/CLI 表格:subprocess 跑 `python3 scripts/ticket.py agent-command …`,三工具(claude-code / codex / agy)× 無 effort / 合法 effort / 不合法 effort,再加 claude-code 的 swap 與不 swap、base 有/無 `--model`、base 已有 `--effort low`;斷言 rc、stdout 全句相等、stderr 含字。A4 的兩條基準句是開題時在 base_sha 上實跑的輸出。\nT2(A6)CLI:沙盒(tests/control_harness.Sandbox)跑 `ticket.py create`,讀回票檔 JSON 斷言 `effort` 值 / 不存在;不合法 → rc=2 且 tickets/ 下沒有多一張。\nT3(A7)整合:沙盒 + `auto-fix.sh <n> --dry-run`(照 tests/test_auto_fix_codex.py 的 test_a19 / test_a20 做法:假 codex、`claude` 絆線),四種情境:票 effort / 只有 config `effort.implement` / 兩者都有(票贏)/ 都沒有;斷言 `auto-fix: worker 命令 —— ` 那一行與 `auto-fix: effort 來源=` 那一行。\nT4(A8)整合:Ready 票 effort=ultra、tool=claude-code,不帶 --dry-run 跑 auto-fix → rc=2;讀票 state=Ready、state_version 與跑之前相同、cost 長度不變;events 檔沒有這張票的 agent.start。\nT5(A9)整合:沙盒假 claude worker 交件一輪(照 test_auto_fix 的交件替身),讀 events 檔的 agent.start / agent.done 列含 `effort`;無 effort 的對照組沒有這一鍵;票的 cost 最後一列鍵集合 == 15 鍵字面、`effort` 值對上;`ticket.py cost … --effort high` 單跑一次再讀列。\nT6(A10)整合:照 test_a23(假 codex MODE=quota)兩次:effort=high → 改派後票 effort 仍 high;effort=ultra → 票 effort 為 null、inbox decision 頁含 `原 effort ultra`。\nT7 文字:tickets/SCHEMA.md 有 `effort` 欄的列、成本列含 `effort` 與「15 鍵」。\n既有案例要跟著改的(釘住 14 鍵舊行為):tests/test_cost_ledger.py 的 ROW_KEYS 與 C1/C8、tests/test_ticket.py 約 1157 行的 14 鍵集合。查過不衝突的:tests/test_auto_fix_codex.py test_a19/test_a20(無 effort 時輸出不變)、tests/test_consolidate_memory.py(不帶 effort)。\n變異(worker 自證紅,未實測):M1 agent_command 忽略 effort → T1 A1/A3 紅;M2 合法值檢查拿掉 → T1 A5 紅;M3 auto-fix 取值順序顛倒(config 蓋票)→ T3 「兩者都有」紅;M4 cost 不寫 effort 鍵 → T5 鍵集合紅。",
@@ -84,5 +175,147 @@
       "contains": "15 鍵"
     }
   ],
-  "priority": "P1"
+  "priority": "P1",
+  "cost": [
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 68,
+      "tokens_out": 33570,
+      "cache_write": 124449,
+      "cache_read": 3271075,
+      "wall_seconds": 1032,
+      "outcome": "handed-in",
+      "run_id": "20261013-225801-19920",
+      "session_id": "84eb43d6-459b-4ee7-8e1d-95e4881b45ba",
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-13T23:15:14+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 80,
+      "tokens_out": 51122,
+      "cache_write": 136117,
+      "cache_read": 4065390,
+      "wall_seconds": 1032,
+      "outcome": "handed-in",
+      "run_id": "20261013-225801-19920",
+      "session_id": "ec43aa49-8ab6-43c8-b3e0-b2b83d758d86",
+      "by": "auto-fix.sh",
+      "note": null,
+      "at": "2026-10-13T23:15:16+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 24,
+      "tokens_out": 7852,
+      "cache_write": 66903,
+      "cache_read": 673700,
+      "wall_seconds": 81,
+      "outcome": "pass",
+      "run_id": "20261013-231516-51592",
+      "session_id": "a9ca590a-799c-4ef5-86a8-0e7fef812359",
+      "by": "review.sh",
+      "note": null,
+      "at": "2026-10-13T23:28:07+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1069,
+      "outcome": "pass",
+      "run_id": "20261013-234523-93525",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-14T00:03:13+08:00"
+    }
+  ],
+  "branch": "t114",
+  "patch_ref": "../agent-control-wt/fix-t114/round1/patch-round1.diff",
+  "gate": {
+    "rc": 0,
+    "sha": "5b50db00cf3b9a2ab4147473cc3798afa42f74c2",
+    "run_id": "20261013-231516-51592",
+    "at": "2026-10-13T23:26:45+08:00"
+  },
+  "repair_round": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "9bf602062de240993f163f7e23d2d0b0652edd47",
+    "note": "reports/t114/20261013-231516-51592/REVIEW.md",
+    "at": "2026-10-14T00:03:13+08:00",
+    "state_version": 15
+  },
+  "cost_total": {
+    "calendar_seconds": 3951,
+    "wall_seconds": 3214,
+    "runs": 4,
+    "worker_rounds": 1,
+    "objections": 0,
+    "by_role": {
+      "verifier": {
+        "runs": 1,
+        "wall_seconds": 1032,
+        "tokens_in": 68,
+        "tokens_out": 33570,
+        "cache_write": 124449,
+        "cache_read": 3271075,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 1
+        }
+      },
+      "worker": {
+        "runs": 1,
+        "wall_seconds": 1032,
+        "tokens_in": 80,
+        "tokens_out": 51122,
+        "cache_write": 136117,
+        "cache_read": 4065390,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 1
+        }
+      },
+      "reviewer": {
+        "runs": 1,
+        "wall_seconds": 81,
+        "tokens_in": 24,
+        "tokens_out": 7852,
+        "cache_write": 66903,
+        "cache_read": 673700,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 1069,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-14T00:03:13+08:00"
+  }
 }
