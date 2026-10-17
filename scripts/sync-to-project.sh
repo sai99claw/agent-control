@@ -278,6 +278,33 @@ if [ -f "$CTRL_MANIFEST" ]; then
 fi
 [ "$DRY" = "--dry-run" ] || printf '%s' "$NEW_SCRIPTS" > "$CTRL_MANIFEST"
 
+# 來源版本記號(#103):`scripts/control/.synced-from` 一行 = A 的 `git rev-parse HEAD`。
+# **不進 manifest**,所以上面的退場碰不到它。寫不出一個說得準的版本就不寫、唸出原因、rc 不變:
+# A 不是自己的 git repo(auto-fix 的副本是 `git archive` 出來的),或被同步的控制腳本有未提交
+# 改動 —— 那時專案拿到的不是 HEAD 那一份,記號會說謊。舊值留著,不替髒來源背書。
+write_synced_from() {
+  [ "$DRY" = "--dry-run" ] && return 0
+  top=$(git -C "$HERE" rev-parse --show-toplevel 2>/dev/null || true)
+  if [ -z "$top" ] || [ "$top" != "$(cd "$HERE" && pwd -P)" ]; then
+    echo "sync: 不寫 $CTRL/.synced-from(agent-control 這一份不是自己的 git repo,說不出來源版本)"
+    return 0
+  fi
+  sha=$(git -C "$HERE" rev-parse HEAD 2>/dev/null || true)
+  paths=$(printf '%s' "$NEW_SCRIPTS" | sed 's|^|scripts/|')
+  # shellcheck disable=SC2086
+  if [ -z "$sha" ] || ! dirty=$(git -C "$HERE" status --porcelain -- $paths 2>/dev/null); then
+    echo "sync: 不寫 $CTRL/.synced-from(讀不到 agent-control 的 HEAD 或工作樹狀態)"
+    return 0
+  fi
+  if [ -n "$dirty" ]; then
+    echo "sync: 不寫 $CTRL/.synced-from(agent-control 有未提交改動的控制腳本:$(printf '%s\n' "$dirty" | sed 's|^...scripts/||' | tr '\n' ' ')—— 同步過去的不是 $sha 那一份)"
+    return 0
+  fi
+  printf '%s\n' "$sha" > "$CTRL/.synced-from"
+  echo "sync: $CTRL/.synced-from = $sha"
+}
+write_synced_from
+
 # 退場的範本同理:**唸出來再刪**。
 if [ -f "$TPL_MANIFEST" ]; then
   while IFS= read -r old; do
