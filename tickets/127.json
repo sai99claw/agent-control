@@ -1,0 +1,65 @@
+{
+  "id": "127",
+  "subject": "越界守衛認得同時的落地與 docs 通道:land.* 事件帶 stamp / channel=docs / main_before,守衛沿 first-parent 逐 commit 歸屬、往回找 land.start,只把歸屬不上的 HEAD 前進判越界",
+  "created": "2026-10-17T15:40:59+08:00",
+  "objective": "worker / 驗證者 / 批次 worker 跑的期間主線 HEAD 前進時,auto-fix.sh 的越界守衛把 `git rev-list --first-parent old..new` 的每一個 commit 歸屬到一次合法落地(票的 land 或 docs 通道);全部歸屬得上 → 不擋(notes 逐次列 stamp);任一個歸屬不上 → 照 #115 rc=8、票 Blocked,guard.json 點名第一個歸屬不上的 commit。land.start 可以早於 agent 起跑(往回找)。land.sh 兩條路發的 land.* 事件形狀在本票釘死,專案端的 land 包裝(T 的 land-ticket.sh)照發。",
+  "acceptance": [
+    "A1 事件形狀(本票釘死,專案端照抄):(a) 票 land(land.sh 主流程)的 land.pass 多帶 `main_before=<40 位 sha>`,值 = land worktree 在 `worktree add`(現 land.sh:630)之後、第一次 merge 之前的 HEAD;stamp、sha(短)與其餘 kv 照舊,不帶 channel 鍵。(b) docs 通道(cmd_docs,現 land.sh:118–201)一次呼叫產生一個 stamp,形狀 `docs-<YYYYmmdd-HHMMSS>-<pid>`,它發的 land.start / land.refused / land.fail / land.pass 每一筆都帶這個 stamp 與 `channel=docs`;有 commit 的那一筆 land.pass 帶 sha(短,照舊)與 `main_before` = `git commit` 之前的 HEAD 40 位;「已在主線上、沒有新的 commit」那一筆 pass 不帶 sha 也不帶 main_before。驗:tests/test_land.py 真跑 docs 通道與一次單票綠 land,讀 board/events.jsonl;期望的 main_before 由測試在跑之前自己 `git rev-parse main` 取得,不從 land.sh 算回去",
+    "A2 往回找 land.start(T queue.sh 2a 重疊的形狀):agent 起跑**之前**事件檔已有 land.start stamp=S,agent 跑的期間主線前進一個 commit 並發 land.pass stamp=S、sha=新 HEAD、main_before=舊 HEAD → 不擋:auto-fix rc 0、沒有 guard.json、沒有 guard-violation。land.start 的搜尋範圍是整個事件檔裡、在那一筆 pass 之前的列,不限 agent 起跑之後",
+    "A3 docs 通道是合法的 HEAD 前進:agent 跑的期間真的跑一次 `sh scripts/land.sh docs \"<訊息>\" docs/<檔>`(產生 commit、發 A1(b) 的事件)→ 不擋,rc 0、沒有 guard.json。同一段期間先 docs 通道一次、再一次票 land(兩段首尾相接)→ 也不擋,notes 兩筆",
+    "A4 逐 commit 歸屬(堵 #115 的洞:今天只比「新 HEAD = 某筆 pass 的 sha 且舊 HEAD 是祖先」,中間的 commit 不看):agent 跑的期間先有一個沒有任何 land 事件的 commit X 進 main,之後一次合法 land(land.start + land.pass,main_before = X、sha = 新 HEAD)→ rc 8、票 Blocked / owner=main、attempt.failed reason=guard-violation、恰一頁 decision;guard.json 的 violations 有一列 path=HEAD、before=舊 HEAD、after=新 HEAD,並有 `unattributed` = X 的 40 位 sha;decision 頁上看得到 X 的前 7 位",
+    "A5 識別不靠缺欄:(a) land.start 與 land.pass 都沒有 stamp(今天 T land-ticket.sh 與 A docs 通道的舊形狀,None==None 碰巧配對)→ rc 8;(b) pass 有 stamp 與 sha 但沒有 main_before → rc 8;(c) pass 有 stamp、整個事件檔找不到同 stamp 的 land.start → rc 8;(d) pass 的 main_before 不等於上一段的終點(例:= 舊 HEAD 的父)→ rc 8",
+    "A6 其餘守衛行為不變:#115 的 A4–A7(工作樹逐檔雜湊、guarded_dirs、控制面豁免、只有 land.start 不算數、合法 land 不藏工作樹改動、額度與越界同時仍是 8)照綠。唯一要改的舊斷言是兩份「同時的合法落地」夾具 —— tests/test_auto_fix.py 的 FAKE_LAND(現 3648 行)與 verify/dispatch/test_ticket_115.py 的 LAND_PASS_MATCHES(現 130 行)—— 補上 `--kv main_before=<舊 HEAD>`;查過 tests/test_land.py、tests/test_heartbeat.py、tests/test_auto_fix.py、verify/dispatch/test_ticket_115.py,沒有其他斷言釘住 docs 通道事件的欄位或 land.pass 的鍵集",
+    "A7 文件與檔頭:docs/WORKFLOW.md §8「agent 越界守衛」那一句(現寫「HEAD 前進只在期間有同一 stamp 的 land.start + land.pass、pass 的 sha 就是新 HEAD…」)改成本票規則,並寫明 A1 的事件形狀是專案端 land 包裝要照發的契約(缺 stamp 或 main_before 的落地會被判越界);auto-fix.sh 守衛那段檔頭註解(現 1193–1201 行)同步"
+  ],
+  "in_scope": [
+    "scripts/auto-fix.sh 的 land_rows / land_explains / guard_verdict(現 1282–1341 行)改成逐 commit 歸屬",
+    "scripts/land.sh:cmd_docs 的事件帶 stamp / channel=docs / main_before;主流程 land.pass 帶 main_before"
+  ],
+  "out_of_scope": [
+    "docs/DECISIONS.md",
+    "scripts/event.py",
+    "scripts/heartbeat.sh"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/land.sh",
+    "tests/test_auto_fix.py",
+    "tests/test_land.py",
+    "docs/WORKFLOW.md"
+  ],
+  "role": "worker",
+  "model": "codex:gpt-5.6-sol",
+  "tool": "codex",
+  "attempt": 0,
+  "base_sha": "f9dbea55b898c2af7dce20c34ff34caa6cfe23dd",
+  "state": "Ready",
+  "state_version": 4,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [
+      "verify/dispatch/test_ticket_127.py",
+      "verify/dispatch/test_ticket_115.py"
+    ],
+    "tags": [
+      "worker-guard"
+    ],
+    "run": "python3 scripts/verify.py --tag worker-guard",
+    "notes": "驗證者寫 verify/dispatch/test_ticket_127.py(新,登記進 verify.files),並把 verify/dispatch/test_ticket_115.py 的 LAND_PASS_MATCHES 補 main_before(A6;那份是 #115 驗證者的案例,不給 worker 改)。沙盒借 tests/control_harness.Sandbox;外層 AC_* 清掉再跑。標籤 worker-guard 已在 verify/TAGS.d/115.md 登記。"
+  },
+  "outline": "A 也有同樣的洞(實測見 test_plan 首段)。裁示:不加事件種類,docs 用 channel=docs;land.pass 帶 main_before 供首尾相接切段;start 往回找。順序:本票 → T 照 A1 發事件的票 → 才把本票 auto-fix.sh 同步進 T(反過來 T 的每次落地都判越界)。跨 repo 不寫 depends_on。needs_verifier=true:land.sh 真跑 + 守衛的跨程序邊界要獨立案例;interface_fixed=true:鍵名與 rc / guard.json 欄位已釘。",
+  "test_plan": "開題實測(scratchpad,抽 auto-fix.sh 的 land_explains 原文對假 repo 實跑):① start 在起跑前、只看得到 pass → 回空 = 越界(A 的 land 跑全套要幾分鐘,同時派 worker 就會撞);② docs 通道 start/pass 都沒 stamp → 回 'land stamp=None'(碰巧配上;T 的 run_id-only 形狀同樣、且任一筆無 stamp 的 start 配任一筆無 stamp 的 pass);③ 窗內裸 commit X 再一次 land → 回 'land stamp=S1'(X 被藏)。事件檔實測 A 2.7MB、T 6MB,往回找只在 HEAD 動過時讀一次。docs 通道帶 stamp 後 heartbeat.sh 的 stamp 配對也對得上。\nT1(A1)tests/test_land.py:TheDocsChannel 加 docs 事件的 stamp 形狀(`^docs-\\d{8}-\\d{6}-\\d+$`)、四種 kind 同一個 stamp、channel=docs、有 commit 時 main_before = 跑之前 `git rev-parse main`、「已在主線上」那筆沒有 sha / main_before;單票綠 land 那條(現約 901 行,斷言 land.pass 在 kinds 裡)加 main_before = 跑之前 main 的 40 位、沒有 channel 鍵。\nT2(A2–A5)tests/test_auto_fix.py 的 TheGuardCatchesAgentsOutsideTheirCopy(現 3654 行,AGENT_STRAYS + emit() 慣例)新增案例;起跑前的 land.start 用 AC_ROOT=<沙盒 repo> python3 scripts/event.py emit 在呼叫 auto-fix 之前發。驗證者案例 verify/dispatch/test_ticket_127.py 照 verify/dispatch/test_ticket_115.py 的 GuardBase / arm / assert_stopped 慣例(真 auto-fix + 真 git、PATH 前面的假 agent),A3 的假 agent 要以 `AC_ROOT=\"$REPO\" sh \"$REPO/scripts/land.sh\" docs …` 真跑沙盒裡的 land.sh(agent 環境的 AC_ROOT 指副本,不覆寫的話事件寫進副本、守衛看不到);期望值(rc 8、reason、X 的 sha)由案例自己在 git 上取,不從守衛算回去。\nT3 回歸,只跑這幾個(外層先 env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR):`cd tests && python3 -m unittest test_land test_heartbeat test_auto_fix.TheGuardCatchesAgentsOutsideTheirCopy`、`python3 scripts/verify.py --tag worker-guard`。不跑全套。\n變異(未實測,實作者在拋棄式樹驗紅):M1 start 只找 events_at 之後 → A2 紅;M2 退回「新 HEAD = pass sha 且舊 HEAD 是祖先」→ A4 紅;M3 docs 通道不帶 stamp → A3 紅;M4 stamp 用 row.get 比、None 也算配上 → A5(a) 紅。\n不在本票:land / docs 的 push 失敗(main 本機已前進、只有 land.fail)仍判越界;主線 session 在 agent 跑的期間改主 repo 工作樹未 commit 的檔仍判越界(T #829 也點到,另裁)。",
+  "effort": "high",
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "decision_refs": [
+    "D-048"
+  ],
+  "verify_strings": [
+    "main_before",
+    "channel=docs",
+    "first-parent"
+  ]
+}
