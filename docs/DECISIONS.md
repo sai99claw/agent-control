@@ -341,3 +341,11 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - 另:codex 在 main 工作樹留下的 auto-fix.sh 兩處修正(權威票面快照、codex --add-dir)經審查正確、測試綠,併入 D-048 實作或整併後的對應票,不以未 commit 形式留在 main。
 - D-049 補(2026-10-17,使用者確認待確認格):原話「覆核者維持opus， 驗證者照我的排序開 跟 worker 一樣模型沒關係 worker 的推理強度給你建議」。→ 覆核者 opus;驗證者 sol → opus,不強制與 worker 異模型。worker 推理強度(主線建議,使用者授權):sol 預設 high、票標「複雜」或修補第 2 輪仍紅時 xhigh;opus 接手時 high;sonnet(簡單工作)medium;閘門紅修補輪沿用原 worker 的模型與強度。整串用完 → 停、發 decision 頁(主線提,使用者未反對)。
 - D-049 補:原話「astra 已寫完20張草稿 不能一次給他這麼多工作，他會一下就用光光token」。→ 派給 gpt-6-astra 的工作要切小批(一次一小塊、可在一輪內交件);角色模型表要能表達每次派工的份量上限。
+
+## D-050(2026-10-17)A 票整併的四題(Fable 接手 astra 的整併計畫 N1–N20)
+- 計畫:reports/t115/proposal-20261016/ 之外,整併草稿在主線 scratchpad astra-consolidate/(PLAN.md、drafts/N1–N20.json);20 張、合計約 1.2M token、全部中文;D-049 ①–⑥ 全有票承接。
+- ① 寫入範圍:原話「這是在說 票上面要定義有哪些檔案可以被改動嗎？ 我覺得在開票的階段是沒辦法完整定義的，如果要寫的話就是寫一個建議的改動範圍，他應該不會是一個對工作者的硬限制」→ allowed_write_paths / out_of_scope 都是建議範圍,不硬擋 worker;改到範圍外要逐檔寫理由、交覆核看。主線補:protected_paths(裁示文件、發版腳本、prod 資料)是安全邊界,仍硬擋,不在本條。
+- ② 閘門紅 / 落地全套紅自動修補上限,原話(選項)「3 輪(建議)」:首次紅後最多 3 次修補,跨重啟、換模型不歸零;第 3 次仍紅才發 decision 頁。
+- ③ 開題實跑證據有效性,原話(選項)「相關檔沒變就算(建議)」:sha 是 main 祖先、且本票寫入範圍與 test_plan 指到的測試自該 sha 無變動即有效;證明不了才補跑。
+- ④ #93,原話(選項)「繼續凍結到 DAG 排程落地(建議)」。
+- codex 在 main 工作樹留下的 auto-fix.sh / test_auto_fix_codex.py 兩處修正存為 reports/t115/main-wt-fix-20261016.diff,附給 #115(N1);main 工作樹已還原。
