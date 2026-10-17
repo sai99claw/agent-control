@@ -17,11 +17,12 @@
 import glob
 import json
 import os
+import shutil
 import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import Sandbox  # noqa: E402
+from control_harness import SCRIPTS, Sandbox  # noqa: E402
 
 CHANGE = """diff -ruN base/src/a.txt work/src/a.txt
 --- base/src/a.txt\t2026-09-21 10:00:00
@@ -1259,6 +1260,104 @@ class ApplyBatch(ApplyBase):
             evidence="# EVIDENCE\nOBJECTION: test_defect tests.test_other.T.test_one 別的案例\n")
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         self.assertIn("tests/test_x.py:6 放寬測試", done.stderr)
+
+
+MAP_CATALOG = {"version": 1, "managed": ["scripts/*.py", "tests/test_*.py"],
+               "topics": {"memory": {"summary": "沙盒", "match": ["memory"],
+                                     "entry": "scripts/memory.py"}}}
+
+
+class TheCodeMapIsRebuiltIntoTheSameCommit(ApplyBase):
+    """#96:候選樹有 `scripts/repo-map.py` 與 `code-map/catalog.json` ⇒ apply 在 commit 之前跑一次
+    `repo-map.py build`,產出物有變就併進同一個 commit(訊息一行 `regen: repo-map build`)。
+    沙盒照 test_repo_map_contract 的 A32:複製真的 repo-map.py、寫 catalog、build、commit 進主線。
+    期望值(新檔名、commit 數、字樣)抄票面,不從 repo-map 算回來。
+    """
+
+    def setUp(self):
+        super(TheCodeMapIsRebuiltIntoTheSameCommit, self).setUp()
+        shutil.copy(os.path.join(SCRIPTS, "repo-map.py"),
+                    os.path.join(self.repo, "scripts", "repo-map.py"))
+        self.write(os.path.join("code-map", "catalog.json"),
+                   json.dumps(MAP_CATALOG, ensure_ascii=False, indent=2) + "\n")
+        # gate.sh 把 code-map/* 的改動對到 test_repo_map_contract;沙盒放一支會綠的替身。
+        self.write(os.path.join("tests", "test_repo_map_contract.py"), TEST_X)
+        self.write(os.path.join("tests", "test_kept.py"), TEST_X)
+        done = self.run_py("scripts/repo-map.py", "build")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.make("1", allowed_write_paths=["tests/*"], state="Running")
+
+    def result_json(self):
+        found = sorted(glob.glob(os.path.join(self.repo, "reports", "t1", "*",
+                                              "result-round1.json")))
+        self.assertEqual(len(found), 1, found)
+        with open(found[0], encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def regen_lines(self):
+        return [line for line in self.git("log", "-1", "--format=%B", "t1").splitlines()
+                if line.startswith("regen:")]
+
+    def apply_a_new_managed_file(self, *args):
+        """交件只新增一支已管理的檔、不含 code-map/ 的改動(漏重生)。"""
+        done = self.apply("1", self.patch_file("p.diff", batch_patch(
+            ("tests/test_memory_new.py", None, TEST_X))), *args)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def test_a_stale_code_map_is_rebuilt_into_the_same_commit(self):
+        """A4。四問:量 check rc、managed、commit 數、regen 行、extra_paths;
+        紅 = 拿掉重產那一步(m3)時 check rc=1、managed 沒有新檔;
+        期望值 = patch 新增的檔名 tests/test_memory_new.py。
+        """
+        self.apply_a_new_managed_file("--evidence", self.patch_file("EVIDENCE.md", FULL_EVIDENCE))
+        wt = self.wt()
+        check = self.run_py(os.path.join(wt, "scripts", "repo-map.py"), "--root", wt, "check",
+                            cwd=wt)
+        self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+        with open(os.path.join(wt, "code-map", "index.json"), encoding="utf-8") as handle:
+            self.assertIn("tests/test_memory_new.py", json.load(handle)["managed"])
+        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "1")
+        self.assertEqual(len(self.regen_lines()), 1, self.git("log", "-1", "--format=%B", "t1"))
+        self.assertTrue(self.regen_lines()[0].startswith("regen: repo-map build"))
+        self.assertEqual([name for name in self.result_json()["extra_paths"]
+                          if name.startswith("code-map/")], [],
+                         "重產出來的索引不是交件改的,不列 extra_paths")
+
+    def test_the_gate_takes_the_rebuilt_branch(self):
+        """A5:同一條分支,閘門機械格照舊只檢查,而這回不擋。四問:量閘門 rc 與 stderr;
+        紅 = 拿掉重產那一步(m3)時 rc=4、stderr 有「code-map 索引過期」;期望值抄票面字樣。
+        """
+        self.apply_a_new_managed_file()
+        wt = self.wt()
+        gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"), "--branch", "--ticket", "1",
+                           "--no-auto-fix", cwd=wt)
+        self.assertNotIn("code-map 索引過期", gate.stderr)
+        self.assertNotEqual(gate.returncode, 4, gate.stdout + gate.stderr)
+
+    def test_an_unchanged_map_adds_no_regen_line_and_no_code_map_diff(self):
+        """A6。四問:量 regen 行與分支 diff 的檔名;紅 = 不比對前後、每次都加 regen 行;
+        期望值 = 只改既有檔內文時分支 diff 只有 tests/test_kept.py。
+        """
+        done = self.apply("1", self.patch_file("p.diff", batch_patch(
+            ("tests/test_kept.py", TEST_X, TEST_X.replace("test_one", "test_two")))))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.regen_lines(), [])
+        self.assertEqual(self.git("diff", "--name-only", "main..t1").split(),
+                         ["tests/test_kept.py"])
+
+    def test_a_failed_rebuild_does_not_block_the_apply(self):
+        """A7。四問:量 rc、commit 數、輸出字樣;紅 = 重產失敗改成 die(m4)時 rc≠0、分支沒 commit;
+        期望值 = 票面字樣「索引沒重產」。
+        """
+        broken = dict(MAP_CATALOG, topics=dict(MAP_CATALOG["topics"], ghost={
+            "summary": "指到不存在的檔", "match": ["ghost"], "entry": "scripts/ghost.py"}))
+        old = json.dumps(MAP_CATALOG, ensure_ascii=False, indent=2) + "\n"
+        new = json.dumps(broken, ensure_ascii=False, indent=2) + "\n"
+        done = self.apply("1", self.patch_file("p.diff", batch_patch(
+            ("code-map/catalog.json", old, new))))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "1")
+        self.assertIn("索引沒重產", done.stdout + done.stderr)
 
 
 if __name__ == "__main__":

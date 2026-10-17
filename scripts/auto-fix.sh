@@ -1554,33 +1554,40 @@ PY
         cp "$VEVIDENCE" "$VKEPT_EVIDENCE" 2>/dev/null || VKEPT_EVIDENCE=""
         echo "auto-fix: 平行驗證者的交付先收進 reports —— $(basename "$VKEPT_PATCH")、$(basename "${VKEPT_EVIDENCE:-(沒有 EVIDENCE)}")"
     fi
-    rm -rf "$VFIX"
-    mkdir -p "$VFIX/base"
     # **副本 = 分支 + 本輪 worker 的 patch**(#107)。不從 `$FIX/base` 拷:那一份不含 worker 的
     # 改動(案例要照的實作不在),而且 worker 收副本時可能已經刪了它(專案 #751)。
     # worker 的 diff 是對 `$SRC`(round_once 展副本用的那一版)出的,所以從同一版展。
     # 平行驗證者交過件的話 work/ 再加它的案例(#112):patch-verify 對 base/ 出,自然帶著它們。
+    # `--dry-run`(只派驗證者的那一輪走得到)同 round_once(#96):副本已經在就原封不動。
     WPATCH=""
     [ ! -f "$PATCH_OUT" ] || WPATCH=$PATCH_OUT
     vfix_next="讀 worker 的 patch 與 EVIDENCE:patch 要對分支 $SRC 出;要嘛重派 worker,要嘛人下場"
-    if ! git -C "$ROOT" archive "$SRC" 2>/dev/null | tar -x -C "$VFIX/base"; then
-        vfix_why="取不出 $SRC"
-    elif [ -n "$WPATCH" ] && ! ( cd "$VFIX/base" \
-            && patch -p1 -E -f -F 0 --no-backup-if-mismatch -s -i "$WPATCH" </dev/null ) >&2; then
-        vfix_why="worker 的 patch($WPATCH)套不上 $SRC"
+    VFIX_KEPT=""
+    vfix_why=""
+    if [ -n "$DRY" ] && [ -e "$VFIX" ]; then
+        VFIX_KEPT=1
+        echo "auto-fix: --dry-run —— 驗證者副本 $VFIX 已經在,不刪、不重建"
     else
-        vfix_why=""
-        cp -R "$VFIX/base" "$VFIX/work"
-        if [ -n "$VKEPT_PATCH" ] && ! ( cd "$VFIX/work" \
-                && patch -p1 -E -f -F 0 --no-backup-if-mismatch -s -i "$VKEPT_PATCH" </dev/null ) >&2; then
-            vfix_why="平行驗證者的 patch-verify($VKEPT_PATCH)套不上分支 + worker 的 patch"
-            vfix_next="對照它與 worker 的 patch 哪幾個檔撞了;要嘛人下場併,要嘛重派"
+        rm -rf "$VFIX"
+        mkdir -p "$VFIX/base"
+        if ! git -C "$ROOT" archive "$SRC" 2>/dev/null | tar -x -C "$VFIX/base"; then
+            vfix_why="取不出 $SRC"
+        elif [ -n "$WPATCH" ] && ! ( cd "$VFIX/base" \
+                && patch -p1 -E -f -F 0 --no-backup-if-mismatch -s -i "$WPATCH" </dev/null ) >&2; then
+            vfix_why="worker 的 patch($WPATCH)套不上 $SRC"
+        else
+            cp -R "$VFIX/base" "$VFIX/work"
+            if [ -n "$VKEPT_PATCH" ] && ! ( cd "$VFIX/work" \
+                    && patch -p1 -E -f -F 0 --no-backup-if-mismatch -s -i "$VKEPT_PATCH" </dev/null ) >&2; then
+                vfix_why="平行驗證者的 patch-verify($VKEPT_PATCH)套不上分支 + worker 的 patch"
+                vfix_next="對照它與 worker 的 patch 哪幾個檔撞了;要嘛人下場併,要嘛重派"
+            fi
         fi
     fi
     if [ -n "$vfix_why" ]; then
         echo "auto-fix: 驗證者的副本建不出來 —— $vfix_why;驗證者不起" >&2
         rm -rf "$VFIX/base" "$VFIX/work"
-        shed_copies "$FIX"
+        [ -n "${FIX_KEPT:-}" ] || shed_copies "$FIX"
         block "#$ID 第 $r 輪驗證者的副本建不出來($vfix_why)"
         post "驗證者的副本建不出來" "$vfix_why,驗證者沒起。$vfix_next" "${WPATCH:-$FIX}"
         return 1
@@ -1638,7 +1645,7 @@ PY
     if [ -n "${LINT_ROUND:-}" ] && [ -n "$DRY" ]; then
         echo "auto-fix: 驗證者派工文 -> $(rel_root "$VDISPATCH")"
         echo "auto-fix: --dry-run —— 不起驗證者。派工文在上面那一份。"
-        shed_copies "$VFIX"
+        [ -n "$VFIX_KEPT" ] || shed_copies "$VFIX"
         return 2
     fi
     if [ -n "${LINT_ROUND:-}" ]; then
@@ -1974,25 +1981,33 @@ PY
 round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
     r=$1
     FIX=$WTBASE/fix-t$ID/round$r
-    rm -rf "$FIX"
-    mkdir -p "$FIX/base"
     # **`base/` 是目前分支上的內容,不是 base_sha 的內容。**
     # worker 交的 diff 下一步要餵給 `apply.sh` 套在**分支上**,而分支已經有前幾輪了
     # —— 拿 base_sha 當對照組的話,第二輪的 patch 會宣稱自己在新建一個已經存在的檔,
     # 而 `git apply --check` 會在那裡整輪停住。分支還不存在(第一輪就紅)才退回 base_sha。
     SRC=${AC_FIX_SOURCE:-$(ticket_branch)}
     git -C "$ROOT" rev-parse -q --verify "$SRC^{commit}" >/dev/null || SRC=$S_BASE
-    if ! git -C "$ROOT" archive "$SRC" 2>/dev/null | tar -x -C "$FIX/base"; then
-        echo "auto-fix: 取不出 $SRC 的副本 —— 這張票的 base 對不上這顆 repo" >&2
-        ROUND_RC=2
-        return 1
+    # `--dry-run` 只印(#96):這一輪的副本已經在 —— worker 交的 patch、EVIDENCE、改到一半的
+    # work/ 都在裡面 —— 就原封不動,不刪、不重建。還沒有才照常展。
+    FIX_KEPT=""
+    if [ -n "$DRY" ] && [ -e "$FIX" ]; then
+        FIX_KEPT=1
+        echo "auto-fix: --dry-run —— 副本 $FIX 已經在,不刪、不重建"
+    else
+        rm -rf "$FIX"
+        mkdir -p "$FIX/base"
+        if ! git -C "$ROOT" archive "$SRC" 2>/dev/null | tar -x -C "$FIX/base"; then
+            echo "auto-fix: 取不出 $SRC 的副本 —— 這張票的 base 對不上這顆 repo" >&2
+            ROUND_RC=2
+            return 1
+        fi
+        cp -R "$FIX/base" "$FIX/work"
+        if [ "$SRC" = "$S_BASE" ] && [ -n "$S_PATCH" ] && [ -f "$S_PATCH" ]; then
+            ( cd "$FIX/work" && patch -p1 -F 2 --no-backup-if-mismatch -i "$S_PATCH" ) \
+                >/dev/null 2>&1 || echo "auto-fix: 上一輪的 patch 有幾塊沒套進副本(worker 要自己看)"
+        fi
+        echo "auto-fix: 副本 $FIX(base = $SRC)"
     fi
-    cp -R "$FIX/base" "$FIX/work"
-    if [ "$SRC" = "$S_BASE" ] && [ -n "$S_PATCH" ] && [ -f "$S_PATCH" ]; then
-        ( cd "$FIX/work" && patch -p1 -F 2 --no-backup-if-mismatch -i "$S_PATCH" ) \
-            >/dev/null 2>&1 || echo "auto-fix: 上一輪的 patch 有幾塊沒套進副本(worker 要自己看)"
-    fi
-    echo "auto-fix: 副本 $FIX(base = $SRC)"
 
     DISPATCH=$ROOT/$(cfg reports_dir reports)/t$ID/$RUN_ID/dispatch-round$r.md
     mkdir -p "$(dirname "$DISPATCH")"
@@ -2367,7 +2382,7 @@ lint_round() {   # uses r/SRC/FIX/DISPATCH;設定 ROUND_RC
     dispatch_verifier
     lr_rc=$?
     if [ "$lr_rc" -eq 2 ]; then
-        shed_copies "$FIX"
+        [ -n "$FIX_KEPT" ] || shed_copies "$FIX"
         ROUND_RC=0
         return 1
     fi

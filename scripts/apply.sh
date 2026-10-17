@@ -962,7 +962,25 @@ if missing:
     print("apply:   不在 patch 裡就不會在分支上,而那要等到 close 才會說話 —— 先看一眼。")
 PY
 
-# 7. commit。訊息帶票號與 patch 的 sha256 —— 下一個人要答得出「分支上這一手是哪一份
+# 7. code-map 索引重產(#96)。候選樹有地圖(與 gate.sh 的新鮮度格同一個判準)就跑一次
+#    `repo-map.py build`:交件新增 / 改名 / 刪掉已管理的檔而沒重生,以前要閘門擋下一整輪。
+#    產出物有變才併進同一個 commit、訊息多一行 `regen:`;它們不是交件改的,不算 extra_paths
+#    (範圍在上面第 5 步已經量完)。build 非零**不擋**:印一行、照樣 commit,攔它是閘門的事。
+#    `-B`:跑完緊接著 `git add -A`,不留位元組碼。
+REGEN=""
+if [ -f "$WT/scripts/repo-map.py" ] && [ -f "$WT/code-map/catalog.json" ]; then
+    MAP_BEFORE=$(cat "$WT/code-map/index.json" "$WT/code-map/INDEX.md" 2>/dev/null | cksum)
+    if python3 -B "$WT/scripts/repo-map.py" --root "$WT" build >/dev/null; then
+        if [ "$(cat "$WT/code-map/index.json" "$WT/code-map/INDEX.md" 2>/dev/null | cksum)" != "$MAP_BEFORE" ]; then
+            REGEN="regen: repo-map build (code-map/index.json, code-map/INDEX.md)"
+            echo "apply: code-map 索引重產了,併進同一個 commit"
+        fi
+    else
+        echo "apply: code-map 索引沒重產(repo-map build 非零,上面 repo-map: 那幾行)—— 不擋套用,閘門的機械格會攔" >&2
+    fi
+fi
+
+# 8. commit。訊息帶票號與 patch 的 sha256 —— 下一個人要答得出「分支上這一手是哪一份
 #    patch 做的」,而路徑答不出來(重套過的那一份路徑一樣、內容不一樣)。
 SUBJECT=$(python3 - "$TF" <<'PY'
 import json, sys
@@ -990,6 +1008,8 @@ patch-verify: $(basename "$VPATCH") sha256=$(sha256_of "$VPATCH")"
 fi
 MSG="$MSG
 round: ${AC_ROUND:-1}"
+[ -z "$REGEN" ] || MSG="$MSG
+$REGEN"
 git -C "$WT" commit -q -m "$MSG" || die 2 "git commit 失敗"
 SHA=$(git -C "$WT" rev-parse --short HEAD)
 echo "apply: #$ID -> $BR $SHA 已 commit($(git -C "$WT" rev-list --count "$MAIN..HEAD") 個 commit)"
