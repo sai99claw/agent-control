@@ -3769,5 +3769,175 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
         self.assert_stopped(self.auto_fix("--no-review"), "stray.txt")
 
 
+# 上一輪閘門的 lint 擋了一條(形狀抄 `verify-case.py lint`;#126 T3 手寫同形 status.json)。
+LINT_RED = """verify-case lint: verify/example/test_ticket_1.py:1 F1 模組沒有 docstring —— 要有 ## 驗收表
+verify-case lint: 1 個檔,驗收編號 (一條都沒宣告)
+verify-case lint: **不過**(1 條)
+"""
+NO_CASES = ("gate: 這張票沒有驗證者案例(#1 的 verify.files 是空的)—— 那是缺口,不是綠。\n")
+A_BASELINE = {"files": ["verify/example/test_ticket_1.py"], "tags": ["example"], "run": "",
+              "notes": "", "baseline": {"stage": "red", "ok": True, "why": "",
+                                        "files": ["verify/example/test_ticket_1.py"]}}
+
+
+class TheMissingCasesSendAVerifierEveryRound(AutoFixBase):
+    """#126 A4–A7:needs_verifier=true 而 verify.baseline 空 ⇒ 第 2 輪起接著跑也先派驗證者;
+    上一輪紅榜全是 kind=LINT ⇒ 這一輪只派驗證者、不派 worker。期望值(字面「案例還沒交,
+    第 2 輪先派驗證者」、round "2"、派工文標題)抄票面,不從 auto-fix.sh 讀回來。"""
+
+    def vcalls(self):
+        return os.path.join(self.home, "verifier-calls.log")
+
+    def arm(self, **fields):
+        """FIRST_ROUND_PAIR 的替身(驗證者交一條案例、worker 交 tests/test_thing.py),路徑換成第 2 輪。"""
+        self.write("verifier-calls.log", "", where=self.home)
+        fix = os.path.join(self.home, "repo-wt", "fix-t1", "round2")
+        self.set_worker(FIRST_ROUND_PAIR
+                        .replace("@VCALLS@", self.vcalls())
+                        .replace("@VSAW@", os.path.join(self.home, "verifier-saw-patch"))
+                        .replace("@WPATCH@", os.path.join(fix, "patch-round2.diff"))
+                        .replace("@WORKER_MODE@", "patch")
+                        .replace("@VMARK@", os.path.join(self.home, "repo-wt", "verify-t1",
+                                                         "round2", "started"))
+                        .replace("@WMARK@", os.path.join(fix, "worker-started"))
+                        .replace("@WAIT@", "0")
+                        .replace("@VERIFIER_HANDS_IN@", "1"))
+        self.write(os.path.join("tests", "test_verify_runner.py"),
+                   "import unittest\n\n\nclass T(unittest.TestCase):\n"
+                   "    def test_there(self):\n        self.assertTrue(True)\n")
+        fields.setdefault("allowed_write_paths", ["tests/*", "verify/*"])
+        # 一輪就停(上限 2):對照組量的只是第 2 輪,不讓第 3 輪的事混進來。
+        fields.setdefault("retry_limit", 1)
+        self.make_ticket("1", **fields)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "開票 #1")
+        self.git("push", "-q", "origin", "main")
+
+    def lint_status(self, lint_text, *extra, log_text=None):
+        """上一輪(第 1 輪)gate 紅的狀態檔:紅榜由 `--lint-log` 來(可再加一份 unittest log)。"""
+        lint = self.write("round.log.lint", lint_text, where=self.home)
+        base = self.git("rev-parse", "main").strip()
+        run_id = "20260921-100000-1"
+        self.run_py("scripts/status.py", "start", "--ticket", "1", "--kind", "gate",
+                    "--run-id", run_id, "--base-sha", base, "--round", "1",
+                    "--worktree", self.repo)
+        args = ["done", "--ticket", "1", "--kind", "gate", "--run-id", run_id, "--rc", "1",
+                "--lint-log", lint, "--lint-root", self.repo] + list(extra)
+        if log_text is not None:
+            args += ["--log", self.write("round.log", log_text, where=self.home)]
+        done = self.run_py("scripts/status.py", *args)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def starts(self, role, round_no="2"):
+        return [row for row in self.events() if row["kind"] == "agent.start"
+                and (row.get("role") == "verifier") == (role == "verifier")
+                and str(row.get("round")) == round_no]
+
+    def packet(self, name):
+        found = self.result_files(name)
+        self.assertEqual(len(found), 1, "%s:%s" % (name, found))
+        with open(found[0], encoding="utf-8") as handle:
+            return handle.read()
+
+    # ------------------------------------------------ A4:任一輪都先派驗證者
+
+    def test_a4_round_two_sends_the_verifier_when_no_case_was_handed_in(self):
+        """A4:上一輪一般 FAIL 紅(repair_round=1)→ 第 2 輪恰一個驗證者、stdout 有那句字面。
+
+        **變異 M2**:驗證者條件改回 `[ "$r" -eq 1 ]` → 0 筆 → 紅。
+        """
+        self.arm(needs_verifier=True, interface_fixed=True)
+        self.status(1, RED_LOG)
+        done = self.auto_fix("--no-review")
+        said = done.stdout + done.stderr
+        starts = self.starts("verifier")
+        self.assertEqual(len(starts), 1, said)
+        self.assertEqual(starts[0].get("agent"), "auto-fix-verifier")
+        self.assertIn("案例還沒交,第 2 輪先派驗證者", done.stdout)
+        self.assertEqual(len(self.starts("worker")), 1, "A4 的驗證者與 worker 平行,worker 照派")
+
+    def test_a4_a_ticket_with_a_baseline_sends_no_verifier_in_round_two(self):
+        """A4 對照:baseline 非空 → 第 2 輪不起。"""
+        self.arm(needs_verifier=True, interface_fixed=True, verify=A_BASELINE)
+        self.status(1, RED_LOG)
+        done = self.auto_fix("--no-review")
+        self.assertEqual(self.starts("verifier"), [], done.stdout + done.stderr)
+        self.assertNotIn("案例還沒交", done.stdout)
+
+    def test_a4_needs_verifier_false_sends_no_verifier(self):
+        """A4 對照:needs_verifier false → 不起。"""
+        self.arm(needs_verifier=False)
+        self.status(1, RED_LOG)
+        done = self.auto_fix("--no-review")
+        self.assertEqual(self.starts("verifier"), [], done.stdout + done.stderr)
+
+    def test_a4_needs_verifier_missing_sends_no_verifier_and_names_d028(self):
+        """A4 對照:needs_verifier 缺 → 不起;stderr 照舊點名 D-028。"""
+        self.arm()
+        self.status(1, RED_LOG)
+        done = self.auto_fix("--no-review")
+        self.assertEqual(self.starts("verifier"), [], done.stdout + done.stderr)
+        self.assertIn("D-028", done.stderr)
+
+    # --------------------------------------------- A5:全 LINT 那一輪只派驗證者
+
+    def test_a5_an_all_lint_round_sends_only_the_verifier(self):
+        """A5 baseline 空:沒有 worker 的 agent.start、恰一個驗證者、派工文是一般驗證者那一份。
+
+        **變異 M3**:全 LINT 那一輪照樣起 worker(拿掉 round_once 的 lint_round 分支)→ 紅。
+        """
+        self.arm(needs_verifier=True, interface_fixed=True)
+        self.lint_status(LINT_RED)
+        done = self.auto_fix("--no-review")
+        said = done.stdout + done.stderr
+        self.assertEqual(self.starts("worker"), [], said)
+        self.assertEqual(len(self.starts("verifier")), 1, said)
+        self.assertEqual(self.worker_rounds(), [], said)
+        packet = self.packet("dispatch-verifier-round2.md")
+        self.assertIn("# 派工:驗證者 —— #1 第 2 輪", packet)
+        self.assertNotIn("這一輪多的一件事:test_defect", packet)
+        self.assertIn("verify-case-lint:verify/example/test_ticket_1.py", packet)
+        # A7:照樣算一輪 —— attempt 照發。
+        attempts = [str(row.get("attempt")) for row in self.events()
+                    if row["kind"] == "ticket.attempt.start"]
+        self.assertIn("2", attempts, said)
+
+    def test_a5_an_all_lint_round_with_a_baseline_uses_the_test_defect_packet(self):
+        """A5 baseline 非空:走 test_defect 那條路的派工文,紅榜段列出 LINT 列(--dry-run 只產派工文)。"""
+        self.arm(needs_verifier=True, interface_fixed=True, verify=A_BASELINE)
+        self.lint_status(LINT_RED)
+        done = self.auto_fix("--dry-run")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.starts("verifier") + self.starts("worker"), [])
+        packet = self.packet("dispatch-verifier-round2.md")
+        self.assertIn("這一輪多的一件事:test_defect", packet)
+        red = packet.split("## 紅榜", 1)[1]
+        self.assertIn("LINT verify-case-lint:verify/example/test_ticket_1.py", red)
+
+    def test_a5_a_no_cases_gap_round_sends_only_the_verifier(self):
+        """A2 缺口列與 lint 列同走 A5:上一輪只有 (no-cases) 那一列 → 這一輪只起驗證者。"""
+        self.arm(needs_verifier=True, interface_fixed=True,
+                 verify={"files": [], "tags": [], "run": "", "notes": ""})
+        self.lint_status(NO_CASES, "--lint-no-cases")
+        done = self.auto_fix("--no-review")
+        said = done.stdout + done.stderr
+        self.assertEqual(self.starts("worker"), [], said)
+        self.assertEqual(len(self.starts("verifier")), 1, said)
+
+    def test_a5_a_mixed_round_marks_the_lint_rows_in_the_worker_packet(self):
+        """A5 混合(LINT + FAIL):worker 照常派,它的派工文把 LINT 列標成驗證者的。"""
+        self.arm(needs_verifier=False)
+        self.lint_status(LINT_RED, log_text=RED_LOG)
+        done = self.auto_fix("--dry-run")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        packet = self.packet("dispatch-round2.md")
+        lint = packet.split("### LINT verify-case-lint:verify/example/test_ticket_1.py", 1)
+        self.assertEqual(len(lint), 2, packet)
+        self.assertIn("驗證者的,你不修、不寫 verify/**", lint[1].split("###", 1)[0])
+        fail = packet.split("### FAIL test_thing.T.test_thing", 1)
+        self.assertEqual(len(fail), 2, packet)
+        self.assertNotIn("驗證者的", fail[1].split("###", 1)[0])
+
+
 if __name__ == "__main__":
     unittest.main()
