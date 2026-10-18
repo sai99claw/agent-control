@@ -5,7 +5,7 @@ A1  | cli   | agent-command --model opus|fable --tool claude-code --base "claude
 A2  | cli   | base 已有 `--effort low`;base 沒有 --model 且不 swap;base 有 --model 不 swap | 原位換 high、只一次 --effort;句尾接 `--effort high`;接在 --model opus 之後 | 票面 A2 原話;objective「在 --model <m> 之後加」
 A3  | cli   | agent-command --model codex:gpt-5.6-sol --tool codex --effort high | stdout 恰為 `codex exec -m gpt-5.6-sol -c 'model_reasoning_effort="high"' -s danger-full-access -c 'approval_policy="never"' -C . --skip-git-repo-check -` | 票面 A3 原話;沙盒旗標依 #115 A1 換新
 A4  | cli   | 不給 --effort / 給 --effort "" | 與今天逐字同:兩條基準句 | 票面 A4(開題在 base_sha 實跑);codex 那一句依 #115 A1 換新
-A5  | cli   | claude-code+ultra、codex+turbo、agy+high | rc 2、stdout 空、stderr 含 effort=<值> 與合法值清單 / 點名 agy | 票面 A5 原話(清單抄 `claude --help` 與票面)
+A5  | cli   | claude-code+ultra、codex+turbo、表外 tool(other)+high | rc 2、stdout 空、stderr 含 effort=<值> 與合法值清單 / 點名那個 tool | 票面 A5 原話(清單抄 `claude --help` 與票面);#131 A2 讓 agy 進合法值表,「不支援 effort 的 tool」改用表外的 other
 A6  | cli   | ticket.py create … --effort high / 不合法 / 不給 | 票檔 effort="high";rc 2 不寫檔;沒有 effort 鍵 | 票面 A6 原話
 A7  | integ | auto-fix --dry-run:票 effort / 只有 config effort.implement / 兩者都有 / 都沒有;codex 票;沒 model 的 claude-code 票 | worker 命令那一行與 `auto-fix: effort 來源=<票|config> <e>` 那一行 | 票面 A7 原話;無 effort 那一句抄 tests/test_auto_fix_codex.py test_a20
 A8  | integ | 票 effort=ultra(claude-code)/ config effort.implement=ultra;另乾跑一次 | rc 2、stderr 含 effort=ultra 與來源;票 Ready、state_version 與 cost 不變、沒有 agent.start | 票面 A8 原話
@@ -177,13 +177,16 @@ class AgentCommandTurnsEffortIntoAFlag(unittest.TestCase):
                 self.assertIn(levels, done.stderr)
 
     def test_a5_a_tool_without_effort_support_is_refused(self):
-        """A5 tool=agy 帶 effort → rc 2、stdout 空、stderr 說 agy 不支援 effort。"""
-        done = agent_command("--model", "opus", "--tool", "agy", "--base", BASE_CLAUDE,
+        """A5 表外 tool(other)帶 effort → rc 2、stdout 空、stderr 說 tool=other 不支援 effort。
+
+        #131 A2 起 agy 有合法值表,不再是「不支援 effort 的 tool」;改用表外的 tool。
+        """
+        done = agent_command("--model", "opus", "--tool", "other", "--base", BASE_CLAUDE,
                              "--effort", "high")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertEqual(done.stdout, "")
-        self.assertIn("agy", done.stderr)
-        self.assertIn("effort", done.stderr)
+        self.assertIn("tool=other", done.stderr)
+        self.assertIn("不支援 effort", done.stderr)
 
 
 MIN = ("--subject", "推理強度開票",

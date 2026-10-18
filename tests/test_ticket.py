@@ -1680,6 +1680,7 @@ class ObjectionBodyDropsTheHomeDirectory(Sandbox):
 CLAUDE_BASE = "claude -p --model opus --permission-mode acceptEdits"
 CLAUDE_EFFORTS = "low medium high xhigh max"
 CODEX_EFFORTS = "low medium high xhigh max ultra"
+AGY_EFFORTS = "low medium high xhigh max"
 
 
 class AgentCommandEffort(Sandbox):
@@ -1742,8 +1743,8 @@ class AgentCommandEffort(Sandbox):
               "--swap-model", "--effort", "ultra"), ("effort=ultra", CLAUDE_EFFORTS)),
             (("--model", "codex:gpt-5.6-sol", "--tool", "codex", "--effort", "turbo"),
              ("effort=turbo", CODEX_EFFORTS)),
-            (("--model", "opus", "--tool", "agy", "--base", "agy run", "--effort", "high"),
-             ("tool=agy", "不支援 effort")),
+            (("--model", "opus", "--tool", "other", "--base", "other run", "--effort", "high"),
+             ("tool=other", "不支援 effort")),
         )
         for args, words in rows:
             with self.subTest(args=args):
@@ -1752,6 +1753,59 @@ class AgentCommandEffort(Sandbox):
                 self.assertEqual(out, "")
                 for word in words:
                     self.assertIn(word, err)
+
+
+class AgyAgentCommand(Sandbox):
+    """#131 A1 / A2:agy 前綴、命令與 effort 契約。"""
+
+    def command(self, *args):
+        return self.ticket("agent-command", *args)
+
+    def test_a1_the_agy_command_is_literal_and_has_no_directory_or_sandbox_flag(self):
+        """四問:量逐字命令;值來自票面 A1;舊值是不認 agy;不靠 fallback。"""
+        done = self.command("--model", "agy:gemini-3.8-flash-high", "--tool", "agy",
+                            "--effort", "high")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.stdout,
+                         "agy --model gemini-3.8-flash-high --effort high "
+                         "--dangerously-skip-permissions --output-format stream-json\n")
+        self.assertNotIn("--add-dir", done.stdout)
+        self.assertNotIn("--sandbox", done.stdout)
+        done = self.command("--model", "agy:gemini-3.8-flash-high", "--tool", "agy")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("--effort", done.stdout)
+
+    def test_a1_each_agy_prefix_mismatch_names_both_fields_and_prints_nothing(self):
+        """四問:量四種不一致 rc/stderr;值來自 A1;舊值會放行;不改 oracle。"""
+        rows = (("agy:gemini-3.8-flash-high", "codex"),
+                ("agy:gemini-3.8-flash-high", "claude-code"),
+                ("codex:gpt-5.6-sol", "agy"), ("opus", "agy"))
+        for model, tool in rows:
+            with self.subTest(model=model, tool=tool):
+                done = self.command("--model", model, "--tool", tool)
+                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+                self.assertEqual(done.stdout, "")
+                self.assertIn("model=%s" % model, done.stderr)
+                self.assertIn("tool=%s" % tool, done.stderr)
+
+    def test_a2_agy_effort_values_and_model_suffix_conflicts_are_refused(self):
+        """四問:量合法表與 suffix 衝突;值抄 agy help/A2;舊值不支援 agy;不靠程式回算。"""
+        for effort in AGY_EFFORTS.split():
+            model = "agy:gemini-3.8-flash-%s" % effort if effort in ("low", "medium", "high") \
+                else "agy:gemini-3.8-flash"
+            done = self.command("--model", model, "--tool", "agy", "--effort", effort)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertIn("--effort %s" % effort, done.stdout)
+        for model, effort in (("agy:gemini-3.8-flash-high", "max"),
+                              ("agy:gemini-3.8-flash-low", "high")):
+            done = self.command("--model", model, "--tool", "agy", "--effort", effort)
+            self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+            self.assertEqual(done.stdout, "")
+            self.assertIn("衝突", done.stderr)
+        done = self.command("--model", "agy:gemini-3.8-flash", "--tool", "agy",
+                            "--effort", "ultra")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn(AGY_EFFORTS, done.stderr)
 
 
 class CreateTakesAnEffort(Sandbox):
@@ -1771,7 +1825,7 @@ class CreateTakesAnEffort(Sandbox):
         """tool 空視為 claude-code:ultra 只有 codex 收。"""
         no_tool = list(MIN[:-2])
         for args in ((*MIN, "--effort", "ultra"), (*no_tool, "--tool", "", "--effort", "ultra"),
-                     (*no_tool, "--tool", "agy", "--effort", "high")):
+                     (*no_tool, "--tool", "other", "--effort", "high")):
             with self.subTest(args=args[-4:]):
                 done = self.ticket("create", *args)
                 self.assertEqual(done.returncode, 2, done.stdout + done.stderr)

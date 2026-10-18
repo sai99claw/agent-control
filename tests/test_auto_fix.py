@@ -927,8 +927,8 @@ exit 0
 
 
 class TheTableModelPicksTheClaudeWorker(AutoFixBase):
-    """#121(取代 #91 C7 的「照票」):worker 照角色表選的 model 起;票上的 model 只是建議
-    (#116 A7)。夾具的表首選 fable、票寫 opus —— 起的、規則包、事件、cost 都要是 fable。"""
+    """#121:票沒寫 model 時 worker 照角色表選的 model 起。夾具的表首選 fable ——
+    起的、規則包、事件、cost 都要是 fable。"""
 
     FABLE_ONLY = "沙盒fable卡獨有字:藍鯨"
     OPUS_ONLY = "沙盒opus卡獨有字:紅隼"
@@ -956,18 +956,17 @@ class TheTableModelPicksTheClaudeWorker(AutoFixBase):
 
     def test_the_worker_runs_the_table_model(self):
         """**變異**:拿掉 auto-fix 的照表換 model → argv 那一格紅。"""
-        self.ticket_ready(model="opus", tool="claude-code")
+        self.ticket_ready(model="", tool="")
         done = self.auto_fix("--no-review")
         argv = self.argv()
         self.assertEqual(argv[argv.index("--model") + 1], "fable", argv)
         self.assertEqual(argv.count("--model"), 1, argv)
         self.assertNotIn("opus", argv)
         self.assertIn("照角色表起 worker:fable", done.stdout, done.stdout + done.stderr)
-        self.assertIn("票的 model=opus 只是建議", done.stdout)
 
     def test_the_rules_pack_is_cut_for_the_table_model(self):
         """**變異**:規則包改回用 routing 的 model → 這一條紅。"""
-        self.ticket_ready(model="opus", tool="claude-code")
+        self.ticket_ready(model="", tool="")
         done = self.auto_fix("--no-review")
         with open(self.stdin_file, encoding="utf-8") as handle:
             packet = handle.read()
@@ -976,7 +975,7 @@ class TheTableModelPicksTheClaudeWorker(AutoFixBase):
         self.assertIn("memory/model/fable.md", packet)
 
     def test_events_and_cost_record_the_table_model(self):
-        self.ticket_ready(model="opus", tool="claude-code")
+        self.ticket_ready(model="", tool="")
         done = self.auto_fix("--no-review")
         agent_events = [row for row in self.events() if row["kind"].startswith("agent.")]
         self.assertTrue(agent_events, done.stdout + done.stderr)
@@ -997,7 +996,7 @@ class TheTableModelPicksTheClaudeWorker(AutoFixBase):
         conf["routing"] = {"implement": "opus"}
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
         self.write(os.path.join("memory", "model", "sonnet.md"), "- 沙盒 sonnet 卡\n")
-        self.ticket_ready(model="opus", tool="claude-code", complexity="simple")
+        self.ticket_ready(model="", tool="", complexity="simple")
         done = self.auto_fix("--no-review")
         self.assertNotIn("下限", done.stderr)
         argv = self.argv()
@@ -1925,7 +1924,7 @@ class RepairRoundsEscalateOnlyWhenRed(AutoFixBase):
         return argv[argv.index("--model") + 1], argv[argv.index("--effort") + 1]
 
     def test_round_one_takes_the_table_effort(self):
-        self.ticket_ready()
+        self.ticket_ready(model="", tool="")
         self.auto_fix("--no-review")
         self.assertEqual(self.effort_of(), ("fable", "high"))
 

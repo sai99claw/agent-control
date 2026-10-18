@@ -31,6 +31,7 @@
     "tests/test_agent_cost_hook.py",
     "tests/test_apply.py",
     "tests/test_auto_fix.py",
+    "tests/test_auto_fix_agy.py",
     "tests/test_auto_fix_codex.py",
     "tests/test_board.py",
     "tests/test_check_stale.py",
@@ -87,6 +88,7 @@
       "sources": [
         "scripts/auto-fix.sh",
         "tests/test_auto_fix.py",
+        "tests/test_auto_fix_agy.py",
         "tests/test_auto_fix_codex.py"
       ],
       "summary": "回歸紅了派新 worker;第 1 輪也由它起;依票的 model/tool 起命令"

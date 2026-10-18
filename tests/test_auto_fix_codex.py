@@ -468,7 +468,7 @@ class AutoFixPicksTheEffort(EffortBase):
         fable = [fixture_candidate("fable")]
         codex = [fixture_candidate(CODEX_MODEL, "codex", "medium", "xhigh")]
         rows = (
-            ("票", fable, dict(model="opus", tool="claude-code", effort="high"),
+            ("票", fable, dict(model="", tool="", effort="high"),
              "claude -p --model fable --effort high --permission-mode acceptEdits" + envelope_tail,
              "auto-fix: effort 來源=票 high"),
             ("表", codex, dict(model=CODEX_MODEL, tool="codex"),
@@ -483,7 +483,7 @@ class AutoFixPicksTheEffort(EffortBase):
              "codex exec -m gpt-6-astra -c 'model_reasoning_effort=\"xhigh\"' "
              "-s danger-full-access -c 'approval_policy=\"never\"' -C . --skip-git-repo-check -",
              "auto-fix: effort 來源=表 xhigh"),
-            ("都沒有", fable, dict(model="opus", tool="claude-code"),
+            ("都沒有", fable, dict(model="", tool=""),
              "claude -p --model fable --permission-mode acceptEdits" + envelope_tail, None),
         )
         self.fake_codex()
@@ -507,7 +507,7 @@ class AutoFixPicksTheEffort(EffortBase):
         conf["worker"] = {"command": "sh %s --model opus" % path, "timeout_seconds": 120}
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
         self.set_role_models(worker=[fixture_candidate("fable", effort="high")])
-        self.ticket_ready(model="opus", tool="claude-code")
+        self.ticket_ready(model="", tool="")
         done = self.auto_fix("--no-review")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         with open(opus_argv, encoding="utf-8") as handle:

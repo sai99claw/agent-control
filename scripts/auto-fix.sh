@@ -187,7 +187,7 @@ esac
 MAIN=$(cfg main_branch main)
 TICKETS=${AC_TICKETS_DIR:-$(cfg tickets_dir tickets)}
 case $TICKETS in /*) TDIR=$TICKETS ;; *) TDIR=$ROOT/$TICKETS ;; esac
-with_envelope() {   # $1 = 命令;`claude` 起頭而沒指定 --output-format 的,補 `--output-format stream-json --verbose`
+with_envelope() {   # $1 = 命令;`claude` / `agy` 起頭而沒指定 --output-format 的,補 stream-json
     # 信封是 `cost[]` 的 token 唯一來源(#58):純文字輸出沒有 usage,那一輪的 token 只能記
     # null —— 下游設定沒帶這一格的票,worker / verifier 的 token 全是 null。已經指定格式
     # (json / stream-json)的照用;不是 `claude` 的命令(替身、別家 CLI)不動。
@@ -203,10 +203,11 @@ try:
 except ValueError:
     parts = cmd.split()
 head = next((tok for tok in parts if "=" not in tok), "")
-if os.path.basename(head) == "claude" \
+name = os.path.basename(head)
+if name in ("claude", "agy") \
         and not any(tok.split("=", 1)[0] == "--output-format" for tok in parts):
     cmd += " --output-format stream-json"
-    if "--verbose" not in parts:
+    if name == "claude" and "--verbose" not in parts:
         cmd += " --verbose"
 print(cmd)
 PY
@@ -260,7 +261,7 @@ PY
 )
 WORKER_TIMEOUT=${TIMEOUT_LINE%% *}
 TIMEOUT_SRC=${TIMEOUT_LINE#* }
-# 票的 model / tool 只是本輪派工建議(#116 A7):真正起什麼由角色表選(#121,底下 `route`)。
+# worker 票的 model / tool 是本票第一候選(#131),後接角色表並去重;沒寫才照原角色鏈。
 # 兩格不一致仍在動票之前停(#87 A21)—— 票面自相矛盾,照哪一格猜都可能起錯。
 eval "$(python3 - "$TF" <<'PY'
 import json, shlex, sys
@@ -290,7 +291,8 @@ print(str(worker[-1].get("model") or "") if worker else "")
 PY
 }
 T_LAST_WORKER=$(last_worker)
-if [ "$T_TOOL" = codex ] || [ "${T_MODEL#codex:}" != "$T_MODEL" ]; then
+if [ "$T_TOOL" = codex ] || [ "${T_MODEL#codex:}" != "$T_MODEL" ] \
+        || [ "$T_TOOL" = agy ] || [ "${T_MODEL#agy:}" != "$T_MODEL" ]; then
     python3 "$AC/ticket.py" agent-command --model "$T_MODEL" --tool "$T_TOOL" >/dev/null || {
         echo "auto-fix: #$ID 票的 model=$T_MODEL 與 tool=$T_TOOL 對不起來 —— 不派、票不動" >&2
         exit 2
@@ -983,10 +985,13 @@ route_worker() {   # $@ = 額外旗標(--exhausted-index …);照 W_ROUTE 選 wo
     # shellcheck disable=SC2086
     set -- ${W_ROUTE:-} $_extra
     IFS=$_old_ifs
+    if [ -z "$BATCH" ] && [ -n "$T_MODEL" ]; then
+        set -- --ticket-model "$T_MODEL" ${T_TOOL:+--ticket-tool "$T_TOOL"} "$@"
+    fi
     route worker "$@"
 }
 
-use_worker() {   # route 的結果 → WORKER_CMD / WORKER_MODEL / MODEL / T_EFFORT / IS_CODEX / W_INDEX
+use_worker() {   # route 的結果 → WORKER_CMD / WORKER_MODEL / MODEL / T_EFFORT / provider flags / W_INDEX
     WORKER_MODEL=$R_MODEL
     MODEL=$R_MODEL
     W_TOOL=$R_TOOL
@@ -999,16 +1004,16 @@ use_worker() {   # route 的結果 → WORKER_CMD / WORKER_MODEL / MODEL / T_EFF
         EFFORT_SRC=config
     fi
     IS_CODEX=""
+    IS_AGY=""
     [ "$W_TOOL" != codex ] || IS_CODEX=1
+    [ "$W_TOOL" != agy ] || IS_AGY=1
     WORKER_CMD=$(python3 "$AC/ticket.py" agent-command --model "$R_MODEL" --tool "$R_TOOL" \
             --base "$BASE_WORKER_CMD" --swap-model --effort "$T_EFFORT") || {
         echo "auto-fix: #$ID 角色表選的 worker $R_MODEL(tool $R_TOOL)組不出命令 —— 不派" >&2
         return 2
     }
     echo "auto-fix: #$ID 照角色表起 worker:$R_MODEL(tool $R_TOOL${T_EFFORT:+,effort $T_EFFORT};鏈第 $R_INDEX 格:$R_REASON)"
-    if [ -n "$T_MODEL" ] && [ "$T_MODEL" != "$R_MODEL" ]; then
-        echo "auto-fix: #$ID 票的 model=$T_MODEL 只是建議(#116 A7),不跳過表的候選 —— 起的是 $R_MODEL"
-    fi
+    [ -z "$T_MODEL" ] || echo "auto-fix: #$ID 票的 model=$T_MODEL 是第一候選;本次起 $R_MODEL"
 }
 
 chain_exhausted() {   # $1 = 角色;整串候選都用不了:票 Blocked、一頁 decision,不再起程序(A3)
@@ -1026,8 +1031,10 @@ pick_worker() {
         2) exit 2 ;;
         3) chain_exhausted worker; exit 7 ;;
     esac
-    while [ "$R_TOOL" = codex ] && [ -z "$DRY" ] && ! command -v codex >/dev/null 2>&1; do
-        echo "auto-fix: #$ID 角色表第 $R_INDEX 格是 $R_MODEL,但 codex 不在 PATH —— 這一格標記不可用,換下一個候選" >&2
+    while [ "$R_TOOL" = codex ] || [ "$R_TOOL" = agy ]; do
+        [ -z "$DRY" ] || break
+        command -v "$R_TOOL" >/dev/null 2>&1 && break
+        echo "auto-fix: #$ID 候選第 $R_INDEX 格是 $R_MODEL,但 $R_TOOL 不在 PATH —— 這一格標記不可用,換下一個候選" >&2
         route_worker --exhausted-index "$R_INDEX"
         case $R_RC in
             2) exit 2 ;;
@@ -1058,8 +1065,10 @@ pick_verifier() {
         2) exit 2 ;;
         3) chain_exhausted verifier; exit 7 ;;
     esac
-    while [ "$R_TOOL" = codex ] && [ -z "$DRY" ] && ! command -v codex >/dev/null 2>&1; do
-        echo "auto-fix: #$ID 驗證者第 $R_INDEX 格是 $R_MODEL,但 codex 不在 PATH —— 換下一個候選" >&2
+    while [ "$R_TOOL" = codex ] || [ "$R_TOOL" = agy ]; do
+        [ -z "$DRY" ] || break
+        command -v "$R_TOOL" >/dev/null 2>&1 && break
+        echo "auto-fix: #$ID 驗證者第 $R_INDEX 格是 $R_MODEL,但 $R_TOOL 不在 PATH —— 換下一個候選" >&2
         route verifier --exhausted-index "$R_INDEX"
         case $R_RC in
             2) exit 2 ;;
@@ -1099,8 +1108,8 @@ first_round_dispatch() {
     return 0
 }
 
-# 起什麼 agent **只由角色表選**(#121,#116):`role-models.py resolve` 給 model / tool / effort /
-# 鏈上第幾格,這裡只負責起程序與記結果。票的 model 是建議(#116 A7),不拿它跳過候選;
+# 起什麼 agent 由 `role-models.py resolve` 給 model / tool / effort / 鏈上第幾格;
+# worker 的明確票 model 是第一候選(#131),其他角色與沒寫 model 的票照 #121 角色鏈;
 # 票明寫的 effort 由 resolve 自己排優先(#116 A5)。`routing.*` 不再參與(#116 A6)。
 # 這次派工的 worker 選路旗標:修補輪(第 2 輪起,上一輪紅)帶 --repair-round / --last-red 與
 # 原 worker 的模型(票 cost[] 最後一列沒撞額度的 worker),由 resolve 決定沿用與升級(A7)。
@@ -1306,13 +1315,15 @@ def agent_env(where, copy):
     return env
 
 
-def command_with_delivery_root(command):
+def command_for_agent(command, copy):
     parts = shlex.split(command)
-    if parts[:2] != ["codex", "exec"] or "--add-dir" in parts:
-        return command
-    at = len(parts) - 1 if parts[-1:] == ["-"] else len(parts)
-    parts[at:at] = ["--add-dir", cwd]
-    return shlex.join(parts)
+    head = os.path.basename(parts[0]) if parts else ""
+    if parts[:2] == ["codex", "exec"] and "--add-dir" not in parts:
+        at = len(parts) - 1 if parts[-1:] == ["-"] else len(parts)
+        parts[at:at] = ["--add-dir", cwd]
+    if head == "agy" and not any(part.startswith("-p=") for part in parts):
+        parts.append("-p=Read %s and follow it." % copy)
+    return shlex.join(parts), head == "agy"
 
 
 def descendants(top):
@@ -1615,8 +1626,9 @@ try:
         start_in = os.path.join(cwd, "work")
         if not os.path.isdir(start_in):
             start_in = cwd
-        cmd = command_with_delivery_root(cmd)
-    with open(dispatch, encoding="utf-8") as handle, open(log_path, "wb") as log:
+        cmd, agy = command_for_agent(cmd, copy)
+    input_path = os.devnull if role != "opener" and agy else dispatch
+    with open(input_path, encoding="utf-8") as handle, open(log_path, "wb") as log:
         # 自己一個行程群組:只砍 `sh -c` 那一層的話,孫行程還拿著 pipe,tee 等不到 EOF。
         proc = subprocess.Popen(cmd, shell=True, cwd=start_in, env=env, stdin=handle,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -2393,7 +2405,11 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
         return 1
     fi
 
-    echo "auto-fix: 起第 $r 輪的 worker —— $WORKER_CMD(cwd $FIX,派工文從 stdin 餵)"
+    if [ -n "$IS_AGY" ]; then
+        echo "auto-fix: 起第 $r 輪的 worker —— $WORKER_CMD(cwd $FIX,stdin=/dev/null,提示指向派工文)"
+    else
+        echo "auto-fix: 起第 $r 輪的 worker —— $WORKER_CMD(cwd $FIX,派工文從 stdin 餵)"
+    fi
     [ -z "$T_EFFORT" ] || echo "auto-fix: effort 來源=$EFFORT_SRC $T_EFFORT"
     # 第 1 輪:票 Ready → Running(#40)。擺在 `--dry-run` 那一手**之後**(dry-run 不動票)、
     # 起 worker **之前**(worker 跑的時候票就該是 Running)。第 2 輪起票已經不是 Ready 了。
