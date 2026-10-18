@@ -81,6 +81,14 @@ AGY_EFFORT = ('{"status":"ERROR","error":"invalid model selection gemini-3.8-fla
 AGY_429 = '{"status":"ERROR","error":"429"}\n'
 AGY_QUOTA = ('{"event":"result","result":{"status":"ERROR",'
              '"error":"RESOURCE_EXHAUSTED: 429 Too Many Requests"}}\n')
+# 真 codex(不帶 --json)撞額度的那一句,逐字取自
+# reports/t122/20261018-231201-28931/verifier-round1.log 末兩行(#133 的 oracle,不從被測程式算)。
+REAL_CODEX_QUOTA = ("ERROR: You've hit your usage limit. Upgrade to Pro "
+                    "(https://chatgpt.com/explore/pro), visit "
+                    "https://chatgpt.com/codex/settings/usage to purchase more credits or try "
+                    "again at 11:50 PM.")
+CODEX_PREAMBLE = ("OpenAI Codex v0.153.4\n--------\nworkdir: /tmp/w/work\nmodel: gpt-5.6-sol\n"
+                  "--------\nuser\n# 規則包:worker @ a97df99\n照票面做。\n\n")
 
 
 def env(**extra):
@@ -378,6 +386,56 @@ class Fallback(RoleModels):
                                       self.evidence("429 rate limit\n"), "--rc", "1")
         self.assertEqual(code, 0, out + err)
         self.assertEqual(json.loads(out)["kind"], "other")
+
+    def classified(self, log, rc=1):
+        code, out, err = self.run_cli("classify", "--evidence", self.evidence(log), "--rc", str(rc))
+        self.assertEqual(code, 0, out + err)
+        return json.loads(out)
+
+    def test_133_a1_the_plain_codex_usage_limit_line_at_the_end_is_quota(self):
+        """T1 / A1。四問:量 classify 的 kind / detail;值 = 真 log 抄來的那一句(oracle 在檔頭);
+        舊值 other(只認 JSON 信封)會紅;**M1**(刪掉結尾 ERROR: 段的判讀)→ 本案紅;
+        **M5**(拿掉 tokens used 收尾段的略過)→ 收尾那一列紅(真 log 形狀:t115 worker-round1.log 末四行)。"""
+        twice = REAL_CODEX_QUOTA + "\n" + REAL_CODEX_QUOTA + "\n"
+        for log in (CODEX_PREAMBLE + twice, REAL_CODEX_QUOTA + "\n", REAL_CODEX_QUOTA + "\n\n",
+                    CODEX_PREAMBLE + twice + "tokens used\n189,715\n"):
+            with self.subTest(log=log[:30]):
+                got = self.classified(log)
+                self.assertEqual(got["kind"], "quota_exhausted")
+                self.assertIn("usage limit", got["detail"])
+                self.assertIn("try again at 11:50 PM", got["detail"])
+        _, got = self.resolve(*self.after("worker", 0, CODEX_PREAMBLE + REAL_CODEX_QUOTA + "\n"))
+        self.assertEqual((got["candidate_index"], got["model"]), (1, "opus"))
+
+    def test_133_a3_other_plain_text_still_does_not_move(self):
+        """T2 / A3。四問:量 kind;值 = A3 (a)–(d);(b) 的 tokens used 收尾略過後最後一行是
+        Traceback 段,仍 other;**M2**(掃整份 log 的 ERROR: 行)→ (b) 紅;
+        **M3**(結尾不要求 ERROR: 前綴)→ (c) 紅;**M4**(不拿掉字面 429)→ (c) stdout only 紅
+        (review.sh 把 stdout 單獨判,#132 B4 覆核者那一案就是這個形狀)。"""
+        rows = (("a reconnect",
+                 CODEX_PREAMBLE + "ERROR: Reconnecting... 3/5\nERROR: Reconnecting... 4/5\n", 1),
+                ("a unrelated", "ERROR: something unrelated broke\n", 1),
+                ("b unittest", CODEX_PREAMBLE + "ERROR: test_quota_fallback (tests.test_x.Y)\n"
+                 "Traceback (most recent call last):\n  File \"x.py\", line 1\n"
+                 "QuotaError: usage limit\ntokens used\n1234\n", 1),
+                ("c text429",
+                 "ERROR: stream error: 429 Too Many Requests\nYou've hit your usage limit.\n", 1),
+                ("c text429 stdout only", "ERROR: stream error: 429 Too Many Requests\n", 1),
+                ("c 429 rate limit", "429 rate limit\n", 1),
+                ("d rc 0", CODEX_PREAMBLE + REAL_CODEX_QUOTA + "\n", 0))
+        for name, log, rc in rows:
+            with self.subTest(name):
+                self.assertEqual(self.classified(log, rc)["kind"], "other")
+                if rc:
+                    self.assertIn("不換候選", self.refused(*self.after("worker", 0, log, rc)))
+
+    def test_133_a4_a_top_level_envelope_still_wins_over_the_plain_tail(self):
+        """T3 / A4。四問:量 kind;值 = 信封說的「模型不存在」;純文字先判的實作 → quota,紅。"""
+        log = ('{"type":"error","message":"model gpt-x does not exist"}\n'
+               + REAL_CODEX_QUOTA + "\n")
+        got = self.classified(log)
+        self.assertEqual(got["kind"], "provider_unavailable")
+        self.assertIn("provider 錯誤信封", got["detail"])
 
 
 class ExplicitTicketCandidate(RoleModels):
