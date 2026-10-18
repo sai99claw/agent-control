@@ -1075,11 +1075,16 @@ pick_verifier() {
             3) chain_exhausted verifier; exit 7 ;;
         esac
     done
+    use_verifier || exit 2
+}
+
+use_verifier() {   # route 的結果 → VERIFIER_MODEL / V_EFFORT / V_INDEX / VERIFIER_CMD
     VERIFIER_MODEL=$R_MODEL
     V_EFFORT=$R_EFFORT
+    V_INDEX=$R_INDEX
     VERIFIER_CMD=$(python3 "$AC/ticket.py" agent-command --model "$R_MODEL" --tool "$R_TOOL" \
             --base "$(with_envelope "$(cfg verifier.command "$BASE_WORKER_CMD")")" --swap-model \
-            --effort "$V_EFFORT") || exit 2
+            --effort "$V_EFFORT")
 }
 
 first_round_dispatch() {
@@ -1664,7 +1669,13 @@ run_verifier() {   # $1 = 派工文  $2 = 副本根  $3 = 第幾輪  $4 = log  $
     run_agent "${5:-$VERIFIER_CMD}" "$1" "$2" verifier "$3" "$4"
 }
 
-verifier_done() {   # $1 = rc  $2 = 第幾輪  $3 = log  $4 = 起跑秒;事件 + cost
+verifier_done() {   # $1 = rc  $2 = 第幾輪  $3 = log  $4 = 起跑秒;事件 + cost;撞額度 / 不可用設 V_QUOTA(#132)
+    V_QUOTA=""
+    v_note=""
+    if [ "$1" -ne 0 ] && [ "$1" -ne 124 ] && fallback_wanted verifier "$3" "$1"; then
+        V_QUOTA=1
+        v_note="$Q_KIND:$Q_DETAIL"
+    fi
     if [ "$1" -eq 124 ]; then
         v_outcome=timeout
     elif [ "$1" -ne 0 ]; then
@@ -1681,7 +1692,77 @@ verifier_done() {   # $1 = rc  $2 = 第幾輪  $3 = log  $4 = 起跑秒;事件 +
         ev agent.failed --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" ${V_EFFORT:+--kv effort=$V_EFFORT} \
             --kv run_id="$RUN_ID" --kv round="$2" --kv rc="$1" --kv agent=auto-fix-verifier
     fi
-    write_cost verifier "$2" "$VERIFIER_MODEL" "$3" "$(( $(date +%s) - $4 ))" "$v_outcome" "${V_EFFORT:-}"
+    write_cost verifier "$2" "$VERIFIER_MODEL" "$3" "$(( $(date +%s) - $4 ))" "$v_outcome" "${V_EFFORT:-}" \
+        "$v_note"
+}
+
+# 驗證者執行中撞額度 / 不可用(#132 B1,與 worker 的 #121 A2/A3 同一手):判讀只在 verifier_done
+# 用 `role-models.py classify`(逾時、一般失敗、沒交件不換)。可換 → 這一次的 cost 已照記(outcome=error,
+# note 記原因),副本留著,依表取下一個候選、照新模型重組派工文($1),在同一份副本、同一輪重起;
+# 有 Controller 只發 `agent.recovery_needed`(role=verifier)、不自己起;整串用完 → Blocked + 一頁。
+# 越界照樣先收(#115 A7):呼叫端先 guard_stop 上一次的 log,重起的那一次這裡收。
+verifier_fallback() {   # $1 = 重組派工文的函式;回 0 = 不用換或已換好(VWRC / VLOG 是最後那一次),回 1 = 停(V_STOP)
+    V_STOP=""
+    V_SWAPPED=""
+    while [ -n "${VWRC:-}" ] && [ "$VWRC" -ne 0 ] && [ -n "${V_QUOTA:-}" ]; do
+        route verifier --exhausted-index "$V_INDEX" --evidence "$VLOG" --evidence-rc "$VWRC"
+        case $R_RC in
+            2) V_STOP=refused; return 1 ;;
+            3) chain_exhausted verifier; V_STOP=exhausted; return 1 ;;
+        esac
+        if ! mkdir "$(dirname "$VDISPATCH")/recovery-verifier-round$r-c$R_INDEX.owner" 2>/dev/null; then
+            echo "auto-fix: #$ID 第 $r 輪驗證者第 $R_INDEX 格已有別的驅動者接手 —— 這裡不再起" >&2
+            V_STOP=handed
+            return 1
+        fi
+        if [ "${AC_RECOVERY_OWNER:-}" = controller ]; then
+            ev agent.recovery_needed --ticket "$ID" --role verifier --model "$R_MODEL" --kv run_id="$RUN_ID" \
+                --kv round="$r" --kv tool="$R_TOOL" --kv candidate_index="$R_INDEX" \
+                ${R_EFFORT:+--kv effort=$R_EFFORT} --kv copy="$VFIX" --kv dispatch="$VDISPATCH" --note "$Q_KIND"
+            echo "auto-fix: #$ID 第 $r 輪驗證者 $VERIFIER_MODEL 撞到 $Q_KIND —— 下一個候選 $R_MODEL 交給 Controller 接續(副本 $VFIX 留著)"
+            V_STOP=handed
+            return 1
+        fi
+        echo "auto-fix: #$ID 第 $r 輪驗證者 $VERIFIER_MODEL 撞到 $Q_KIND —— 依表換第 $R_INDEX 格 $R_MODEL,副本 $VFIX 留著、同一輪重起"
+        use_verifier || { V_STOP=refused; return 1; }
+        "$1" || { V_STOP=packet; return 1; }
+        VLOG=$(dirname "$VDISPATCH")/verifier-round$r-c$V_INDEX.log
+        ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" ${V_EFFORT:+--kv effort=$V_EFFORT} \
+            --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix-verifier
+        VSTART=$(date +%s)
+        VWRC=$(run_verifier "$VDISPATCH" "$VFIX" "$r" "$VLOG" \
+            "$(session_open verifier "$VERIFIER_CMD" "$VFIX" "$r" "$VERIFIER_MODEL")")
+        verifier_done "$VWRC" "$r" "$VLOG" "$VSTART"
+        V_SWAPPED=1
+        if guard_stop "$VLOG"; then
+            V_STOP=guard
+            return 1
+        fi
+    done
+    return 0
+}
+
+# 驗證者那一手停下(V_STOP)而 worker 這一輪已經跑過:它的交付先收進 reports、cost 照記,副本留著;
+# 設定 ROUND_RC。交給 Controller 的不轉 Blocked、不發頁(同 worker 那一支,接續的是它)。
+verifier_halt() {
+    collect_from_copy "$FIX" "patch-round$r.diff" "EVIDENCE-round$r.md"
+    for name in "patch-round$r.diff" "EVIDENCE-round$r.md"; do
+        [ ! -f "$FIX/$name" ] || cp "$FIX/$name" "$(dirname "$DISPATCH")/"
+    done
+    if [ -f "$FIX/patch-round$r.diff" ]; then worker_cost handed-in; else worker_cost error; fi
+    case $V_STOP in
+        guard) ;;
+        exhausted) attempt_failed quota-exhausted; ROUND_RC=7 ;;
+        handed)
+            echo "auto-fix: 第 $r 輪的驗證者交給 Controller 接續 —— worker 的交付收在 $(dirname "$DISPATCH")/,副本 $FIX 留著"
+            ROUND_RC=7 ;;
+        packet) attempt_failed verifier-no-patch; ROUND_RC=6 ;;
+        *) attempt_failed route-refused; ROUND_RC=2 ;;
+    esac
+}
+
+v_packet() {   # 這一輪(平行 / 等 patch)驗證者的派工文;換候選重起時照新模型重組
+    verifier_packet "$VDISPATCH" "$r" "$VFIX" "$V_BASE" "${V_HELD:+$FIX/patch-round$r.diff}"
 }
 
 # **與 worker 平行**(#51 C2)只在票 `interface_fixed=true`(#60):驗證者不等 patch(D-020),
@@ -1719,6 +1800,10 @@ wait_verifier() {   # 設定 VPATCH / VEVIDENCE(沒交就是空字串)
     [ -n "$VWRC" ] || VWRC=127
     rm -f "$VRC_FILE"
     verifier_done "$VWRC" "$r" "$VLOG" "$VSTART"
+    verifier_collect
+}
+
+verifier_collect() {   # 設定 VPATCH / VEVIDENCE;換候選重起之後再收一次
     collect_from_copy "$VFIX" patch-verify.diff EVIDENCE-verifier.md
     # 沒交的那一次一樣留一份 result(`no-evidence` / `no-block`)—— 最需要它的就是那一次。
     harvest_result "$VFIX/EVIDENCE-verifier.md" \
@@ -1750,6 +1835,7 @@ subprocess.run([sys.executable, os.path.join(os.environ["AC_CONTROL_DIR"], "tick
                 json.dumps(allowed, ensure_ascii=False)], check=False)
 PY
     VFIX=$WTBASE/verify-t$ID/round$r
+    V_STOP=""
     # 平行驗證者(interface_fixed,#51)已經在**同一個**副本交過件(專案 #775):先把它那兩份
     # 收進 reports 再清副本 —— 以前這裡第一手就 `rm -rf`,它的案例與驗紅一起沒了。
     # 它的案例由底下的 work/ 帶著走,收件時隨這一輪的 patch-verify 進分支;計畫由收件併進票。
@@ -1801,10 +1887,57 @@ PY
         return 1
     fi
     VDISPATCH=$(dirname "$DISPATCH")/dispatch-verifier-round$r.md
-    if ! verifier_packet "$VDISPATCH" "$r" "$VFIX" "$S_BASE"; then
+    if ! vd_packet; then
         shed_copies "$VFIX"
         return 1
     fi
+    if [ -n "${LINT_ROUND:-}" ] && [ -n "$DRY" ]; then
+        echo "auto-fix: 驗證者派工文 -> $(rel_root "$VDISPATCH")"
+        echo "auto-fix: --dry-run —— 不起驗證者。派工文在上面那一份。"
+        [ -n "$VFIX_KEPT" ] || shed_copies "$VFIX"
+        return 2
+    fi
+    if [ -n "${LINT_ROUND:-}" ]; then
+        echo "auto-fix: lint —— 起第 $r 輪的驗證者(這一輪不派 worker)"
+    else
+        echo "auto-fix: test_defect —— 起第 $r 輪的新驗證者 worker"
+    fi
+    VLOG=$(dirname "$DISPATCH")/verifier-round$r.log
+    ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" ${V_EFFORT:+--kv effort=$V_EFFORT} \
+        --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix-verifier
+    VSTART=$(date +%s)
+    VWRC=$(run_verifier "$VDISPATCH" "$VFIX" "$r" "$VLOG" \
+        "$(session_open verifier "$VERIFIER_CMD" "$VFIX" "$r" "$VERIFIER_MODEL")")
+    verifier_done "$VWRC" "$r" "$VLOG" "$VSTART"
+    collect_from_copy "$VFIX" patch-verify.diff EVIDENCE-verifier.md
+    if guard_stop "$VLOG"; then
+        return 1
+    fi
+    # 執行中撞額度(#132 B1):同一份副本換下一個候選;停下(V_STOP)由呼叫端設 ROUND_RC,副本留著。
+    verifier_fallback vd_packet || return 1
+    collect_from_copy "$VFIX" patch-verify.diff EVIDENCE-verifier.md
+    PATCH_OUT=$VFIX/patch-verify.diff
+    EVIDENCE=$VFIX/EVIDENCE-verifier.md
+    # 驗證者那條路也要留痕跡,**而且在「沒交 patch 就回去」之前** —— 沒交的那一次
+    # 正是最需要一份「沒交」的檔的那一次。
+    harvest_result "$EVIDENCE" \
+        "$(dirname "$DISPATCH")/result-verifier-round$r.json" verifier "$r"
+    shed_copies "$VFIX"
+    shed_copies "$FIX"
+    if [ "$VWRC" -ne 0 ] || [ ! -f "$PATCH_OUT" ]; then
+        block "#$ID 第 $r 輪的驗證者沒交出 patch-verify"
+        post "驗證者沒交出 patch-verify" \
+             "讀驗證者派工文與副本;不要讓主線自己改案例" "$VFIX"
+        return 1
+    fi
+    CASE_FIXED=1
+    return 0
+}
+
+# test_defect / lint 那一輪驗證者的派工文:一般那一份 + 這一輪多的那一段(紅榜、案例檔路徑)。
+# 換候選重起時照新模型重組(#132)。
+vd_packet() {
+    verifier_packet "$VDISPATCH" "$r" "$VFIX" "$S_BASE" || return 1
     python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "${line:-}" "$WPATCH" "$VKEPT_PATCH" \
             "${LINT_ROUND:+lint}" "${V_HAS_BASELINE:-}" >> "$VDISPATCH" <<'PY'
 import os, sys
@@ -1850,43 +1983,6 @@ for path in files:
 if not files:
     print("- `(紅榜沒有 file;從 case 名定位,不猜 oracle)`")
 PY
-    if [ -n "${LINT_ROUND:-}" ] && [ -n "$DRY" ]; then
-        echo "auto-fix: 驗證者派工文 -> $(rel_root "$VDISPATCH")"
-        echo "auto-fix: --dry-run —— 不起驗證者。派工文在上面那一份。"
-        [ -n "$VFIX_KEPT" ] || shed_copies "$VFIX"
-        return 2
-    fi
-    if [ -n "${LINT_ROUND:-}" ]; then
-        echo "auto-fix: lint —— 起第 $r 輪的驗證者(這一輪不派 worker)"
-    else
-        echo "auto-fix: test_defect —— 起第 $r 輪的新驗證者 worker"
-    fi
-    VLOG=$(dirname "$DISPATCH")/verifier-round$r.log
-    ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" ${V_EFFORT:+--kv effort=$V_EFFORT} \
-        --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix-verifier
-    VSTART=$(date +%s)
-    VWRC=$(run_verifier "$VDISPATCH" "$VFIX" "$r" "$VLOG" \
-        "$(session_open verifier "$VERIFIER_CMD" "$VFIX" "$r" "$VERIFIER_MODEL")")
-    verifier_done "$VWRC" "$r" "$VLOG" "$VSTART"
-    collect_from_copy "$VFIX" patch-verify.diff EVIDENCE-verifier.md
-    if guard_stop "$VLOG"; then
-        return 1
-    fi
-    PATCH_OUT=$VFIX/patch-verify.diff
-    EVIDENCE=$VFIX/EVIDENCE-verifier.md
-    # 驗證者那條路也要留痕跡,**而且在「沒交 patch 就回去」之前** —— 沒交的那一次
-    # 正是最需要一份「沒交」的檔的那一次。
-    harvest_result "$EVIDENCE" \
-        "$(dirname "$DISPATCH")/result-verifier-round$r.json" verifier "$r"
-    shed_copies "$VFIX"
-    shed_copies "$FIX"
-    if [ "$VWRC" -ne 0 ] || [ ! -f "$PATCH_OUT" ]; then
-        block "#$ID 第 $r 輪的驗證者沒交出 patch-verify"
-        post "驗證者沒交出 patch-verify" \
-             "讀驗證者派工文與副本;不要讓主線自己改案例" "$VFIX"
-        return 1
-    fi
-    CASE_FIXED=1
     return 0
 }
 
@@ -2194,13 +2290,14 @@ review_outcome() {   # $1 = review.sh 的 rc;設定 ROUND_RC
         1) echo "auto-fix: 終態=review_fail(票留在 review.sh 轉的狀態,等主線裁示)"; ROUND_RC=9 ;;
         3) echo "auto-fix: 終態=review_missing(reviewer 沒交件,票停在 InReview)"; ROUND_RC=10 ;;
         4) echo "auto-fix: 終態=review_stale(覆核過期或寫不進票,票沒動)"; ROUND_RC=10 ;;
+        7) echo "auto-fix: 終態=review_exhausted(覆核者候選整串耗盡,或交給 Controller 接續)"; ROUND_RC=7 ;;
         *) echo "auto-fix: 終態=review_unfinished(review.sh rc=$1)"; ROUND_RC=10 ;;
     esac
     [ "$1" -eq 0 ] || echo "auto-fix: 覆核停下來了(rc=$1)—— 看 reports/inbox/ 那一頁"
 }
 
-worker_fallback_wanted() {   # uses WORKER_LOG/WRC;provider 說額度用完 / 不可用才回 0,設定 Q_KIND / Q_DETAIL
-    eval "$(python3 "$AC/role-models.py" classify --evidence "$WORKER_LOG" --rc "$WRC" 2>/dev/null \
+fallback_wanted() {   # $1 = 角色  $2 = log  $3 = rc;provider 說額度用完 / 不可用才回 0,設定 Q_KIND / Q_DETAIL
+    eval "$(python3 "$AC/role-models.py" classify --evidence "$2" --rc "$3" 2>/dev/null \
         | python3 -c 'import json, shlex, sys
 try:
     got = json.load(sys.stdin)
@@ -2210,7 +2307,7 @@ print("Q_KIND=%s" % shlex.quote(str(got.get("kind") or "other")))
 print("Q_DETAIL=%s" % shlex.quote(str(got.get("detail") or "")))')"
     case $Q_KIND in
         quota_exhausted|provider_unavailable) return 0 ;;
-        auth_config) echo "auto-fix: #$ID worker 的認證設定有問題,不換候選:$Q_DETAIL" >&2 ;;
+        auth_config) echo "auto-fix: #$ID $1 的認證設定有問題,不換候選:$Q_DETAIL" >&2 ;;
     esac
     return 1
 }
@@ -2380,6 +2477,10 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
     VPATCH=""
     VEVIDENCE=""
     V_HELD=""
+    VWRC=""
+    V_QUOTA=""
+    V_HANDED=""
+    V_SWAPPED=""
     verifier_wanted "$r"
     if [ -n "$V_WANT" ]; then
         [ "$r" -eq 1 ] || echo "auto-fix: #$ID needs_verifier=true 而 verify.baseline 是空的 —— 案例還沒交,第 $r 輪先派驗證者"
@@ -2389,8 +2490,7 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
         # 不然「沒起」與「起了、沒交」在 inbox 長得一樣。
         [ -n "$V_PARALLEL" ] \
             || V_HELD="。驗證者沒起:票 interface_fixed 不是 true,要等 worker 第 $r 輪交出 patch 才起"
-        if ! verifier_packet "$VDISPATCH" "$r" "$VFIX" "$V_BASE" \
-                "${V_HELD:+$FIX/patch-round$r.diff}"; then
+        if ! v_packet; then
             ROUND_RC=6
             return 1
         fi
@@ -2432,13 +2532,25 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
         return 1
     fi
 
+    # 平行驗證者執行中撞額度(#132 B1):worker 那一手之前判。交給 Controller 的那一種(V_HANDED)
+    # 先讓 worker 那一手也判完(它也撞了就一起交出去),這一輪才停。
+    if [ -n "$V_PARALLEL" ] && ! verifier_fallback v_packet; then
+        if [ "$V_STOP" = handed ]; then
+            V_HANDED=1
+        else
+            verifier_halt
+            return 1
+        fi
+    fi
+    [ -z "${V_SWAPPED:-}" ] || verifier_collect
+
     # 額度 / 不可用(#121 A2/A3,取代 #87 A23 / #114 A10 的「改派 opus、刪副本、只發頁」):
     # 判讀只用 `role-models.py`(D-018;以前這裡 grep 429 會把 patch 裡的字當額度)。可換 →
     # 這一次照記 cost(outcome=error,note 記原因)、副本與交接資料留著,依表取下一個候選、
     # 在同一份副本、同一輪重起;整串用完 → Blocked + 一頁,不再起。一般失敗、逾時、沒交件不換。
     # 有 Controller(`AC_RECOVERY_OWNER=controller`)就只發 `agent.recovery_needed`、不自己起;
     # 同一輪的接續由 owner 鎖保證只有一個驅動者(A3)。
-    while [ "$WRC" -ne 0 ] && worker_fallback_wanted; do
+    while [ "$WRC" -ne 0 ] && fallback_wanted worker "$WORKER_LOG" "$WRC"; do
         worker_cost error "$Q_KIND:$Q_DETAIL"
         route_worker --exhausted-index "$W_INDEX" --evidence "$WORKER_LOG" --evidence-rc "$WRC"
         case $R_RC in
@@ -2451,9 +2563,9 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
             return 1
         fi
         if [ "${AC_RECOVERY_OWNER:-}" = controller ]; then
-            ev agent.recovery_needed --ticket "$ID" --model "$R_MODEL" --kv run_id="$RUN_ID" \
+            ev agent.recovery_needed --ticket "$ID" --role worker --model "$R_MODEL" --kv run_id="$RUN_ID" \
                 --kv round="$r" --kv tool="$R_TOOL" --kv candidate_index="$R_INDEX" \
-                ${R_EFFORT:+--kv effort=$R_EFFORT} --kv copy="$FIX" --note "$Q_KIND"
+                ${R_EFFORT:+--kv effort=$R_EFFORT} --kv copy="$FIX" --kv dispatch="$DISPATCH" --note "$Q_KIND"
             echo "auto-fix: #$ID 第 $r 輪 $WORKER_MODEL 撞到 $Q_KIND —— 下一個候選 $R_MODEL 交給 Controller 接續(副本 $FIX 留著)"
             ROUND_RC=7
             return 1
@@ -2468,6 +2580,11 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
             return 1
         fi
     done
+    if [ -n "$V_HANDED" ]; then
+        V_STOP=handed
+        verifier_halt
+        return 1
+    fi
 
     # 反駁判完接回的 worker(#89)交件後從這裡再走一次:同一輪、同一份副本。
     while :; do
@@ -2547,6 +2664,7 @@ PY
             fi
             if ! dispatch_verifier; then
                 [ -z "${G_STOPPED:-}" ] || return 1
+                [ -z "${V_STOP:-}" ] || { verifier_halt; return 1; }
                 if [ -n "${RULES_FAILED:-}" ]; then
                     # 驗證者的規則包產不出來:驗證者沒起,這一輪停在 worker 的反駁上。
                     attempt_failed objection
@@ -2588,6 +2706,11 @@ PY
             worker_cost handed-in
             return 1
         fi
+        if ! verifier_fallback v_packet; then
+            verifier_halt
+            return 1
+        fi
+        [ -z "${V_SWAPPED:-}" ] || verifier_collect
         shed_copies "$VFIX"
     fi
 
@@ -2644,6 +2767,7 @@ lint_round() {   # uses r/SRC/FIX/DISPATCH;設定 ROUND_RC
     if [ "$lr_rc" -ne 0 ]; then
         # 越界(G_STOPPED)已由 guard_stop 收;規則包產不出來是 6,其餘是驗證者沒交(5)。
         [ -z "${G_STOPPED:-}" ] || return 1
+        [ -z "${V_STOP:-}" ] || { verifier_halt; return 1; }
         attempt_failed verifier-no-patch
         if [ -n "${RULES_FAILED:-}" ]; then ROUND_RC=6; else ROUND_RC=5; fi
         return 1
@@ -2883,11 +3007,12 @@ batch_main() {
     B_DIFF=$BDIR/batch.diff
     git -C "$ROOT" diff "$MAIN...$B_BR" > "$B_DIFF"
     DISPATCH=$BDIR/dispatch-round$r.md
-    rules_pack "$DISPATCH" worker "$MODEL" || exit 6
-    {
-        printf '%s\n' "$RULES_TEXT"
-        python3 - "$ROOT" "$TDIR" "$B_STATUS" "$B_BR" "$FIX" "$B_DIFF" \
-            "$(git -C "$ROOT" diff --stat "$MAIN...$B_BR")" "$MAIN" $B_IDS <<'PY'
+    batch_packet() {   # 規則包照 MODEL 挑模型卡;換候選(#132 B3)時重組一次
+        rules_pack "$DISPATCH" worker "$MODEL" || return 1
+        {
+            printf '%s\n' "$RULES_TEXT"
+            python3 - "$ROOT" "$TDIR" "$B_STATUS" "$B_BR" "$FIX" "$B_DIFF" \
+                "$(git -C "$ROOT" diff --stat "$MAIN...$B_BR")" "$MAIN" $B_IDS <<'PY'
 import json, os, sys
 root, tdir, status_file, branch, fix, diff_file, stat, main = sys.argv[1:9]
 ids = sys.argv[9:]
@@ -2965,7 +3090,9 @@ print("")
 print("## 只准跑的測試")
 print("紅榜上那幾條(照 case 名單跑);不跑全套 —— 全套是呼叫端在 fix commit 之後重跑的事。")
 PY
-    } > "$DISPATCH"
+        } > "$DISPATCH"
+    }
+    batch_packet || exit 6
     echo "auto-fix: 批次 $B_TAGS 派工文 -> $(rel_root "$DISPATCH")"
     if [ -n "$DRY" ]; then
         echo "auto-fix: worker 命令 —— $WORKER_CMD"
@@ -2974,10 +3101,10 @@ PY
         exit 0
     fi
 
-    batch_cost() {   # $1 = 結局
+    batch_cost() {   # $1 = 結局  $2 = 原因(可空,換候選那一次記 quota 種類)
         python3 "$AC/ticket.py" cost "$ID" --role worker --round "$r" --model "$WORKER_MODEL" \
             --by auto-fix.sh --from-envelope "$WORKER_LOG" --wall-seconds "$W_COST_SECS" \
-            --outcome "$1" --run-id "$RUN_ID" --note "batch $B_STAMP $B_TAGS" \
+            --outcome "$1" --run-id "$RUN_ID" --note "batch $B_STAMP $B_TAGS${2:+;$2}" \
             --effort "$T_EFFORT" >/dev/null \
             || echo "auto-fix: #$ID 的 cost 寫不進票(批次 worker)—— 不擋流程" >&2
     }
@@ -2987,32 +3114,67 @@ PY
             [ ! -f "$FIX/$name" ] || cp "$FIX/$name" "$BDIR/$name"
         done
     }
+    batch_run() {   # 起一次批次 worker(WORKER_CMD / WORKER_LOG);設定 WRC / W_COST_SECS,交付收進紀錄目錄
+        ev agent.start --ticket "$ID" --role worker --model "$WORKER_MODEL" \
+            --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix --kv batch="$B_TAGS" \
+            ${T_EFFORT:+--kv effort=$T_EFFORT}
+        WSTART=$(date +%s)
+        WRC=$(run_agent "$WORKER_CMD" "$DISPATCH" "$FIX" worker "$r" "$WORKER_LOG" 1)
+        W_COST_SECS=$(( $(date +%s) - WSTART ))
+        if [ "$WRC" -eq 0 ]; then
+            ev agent.done --ticket "$ID" --role worker --model "$WORKER_MODEL" \
+                --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix --kv batch="$B_TAGS" \
+                ${T_EFFORT:+--kv effort=$T_EFFORT}
+        else
+            ev agent.failed --ticket "$ID" --role worker --model "$WORKER_MODEL" \
+                --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix --kv batch="$B_TAGS" \
+                ${T_EFFORT:+--kv effort=$T_EFFORT}
+        fi
+        keep
+        harvest_result "$EVIDENCE" "$BDIR/result-round$r.json" worker "$r"
+    }
     echo "auto-fix: 起批次 $B_TAGS 的 worker —— $WORKER_CMD(cwd $FIX,派工文從 stdin 餵)"
     echo "auto-fix: 逾時來源=$TIMEOUT_SRC $WORKER_TIMEOUT 秒" >&2
     WORKER_LOG=$BDIR/worker-round$r.log
-    ev agent.start --ticket "$ID" --role worker --model "$WORKER_MODEL" \
-        --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix --kv batch="$B_TAGS" \
-        ${T_EFFORT:+--kv effort=$T_EFFORT}
-    WSTART=$(date +%s)
-    WRC=$(run_agent "$WORKER_CMD" "$DISPATCH" "$FIX" worker "$r" "$WORKER_LOG" 1)
-    W_COST_SECS=$(( $(date +%s) - WSTART ))
-    if [ "$WRC" -eq 0 ]; then
-        ev agent.done --ticket "$ID" --role worker --model "$WORKER_MODEL" \
-            --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix --kv batch="$B_TAGS" \
-            ${T_EFFORT:+--kv effort=$T_EFFORT}
-    else
-        ev agent.failed --ticket "$ID" --role worker --model "$WORKER_MODEL" \
-            --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix --kv batch="$B_TAGS" \
-            ${T_EFFORT:+--kv effort=$T_EFFORT}
-    fi
-    keep
     PATCH_OUT=$BDIR/patch-round$r.diff
     EVIDENCE=$BDIR/EVIDENCE-round$r.md
-    harvest_result "$EVIDENCE" "$BDIR/result-round$r.json" worker "$r"
+    batch_run
     if guard_stop "$WORKER_LOG"; then
         batch_cost error
         exit 8
     fi
+    # 額度 / 不可用(#132 B3,照 round_once 的 #121 A2/A3 那一手):這一次照記 cost,同一份副本換下一個
+    # 候選重起;有 Controller 只發 `agent.recovery_needed`;整串用完 → 一頁、rc 7。cost 與事件只掛
+    # 第一張票(批次一向如此),其他批次票不動。
+    while [ "$WRC" -ne 0 ] && fallback_wanted worker "$WORKER_LOG" "$WRC"; do
+        batch_cost error "$Q_KIND:$Q_DETAIL"
+        route_worker --exhausted-index "$W_INDEX" --evidence "$WORKER_LOG" --evidence-rc "$WRC"
+        case $R_RC in
+            2) exit 2 ;;
+            3) chain_exhausted worker; exit 7 ;;
+        esac
+        if ! mkdir "$BDIR/recovery-round$r-c$R_INDEX.owner" 2>/dev/null; then
+            echo "auto-fix: 批次 $B_TAGS 第 $R_INDEX 格已有別的驅動者接手 —— 這裡不再起" >&2
+            exit 7
+        fi
+        if [ "${AC_RECOVERY_OWNER:-}" = controller ]; then
+            ev agent.recovery_needed --ticket "$ID" --role worker --model "$R_MODEL" --kv run_id="$RUN_ID" \
+                --kv round="$r" --kv tool="$R_TOOL" --kv candidate_index="$R_INDEX" \
+                ${R_EFFORT:+--kv effort=$R_EFFORT} --kv copy="$FIX" --kv dispatch="$DISPATCH" \
+                --kv batch="$B_TAGS" --note "$Q_KIND"
+            echo "auto-fix: 批次 $B_TAGS 的 $WORKER_MODEL 撞到 $Q_KIND —— 下一個候選 $R_MODEL 交給 Controller 接續(副本 $FIX 留著)"
+            exit 7
+        fi
+        echo "auto-fix: 批次 $B_TAGS 的 $WORKER_MODEL 撞到 $Q_KIND —— 依表換第 $R_INDEX 格 $R_MODEL,副本 $FIX 留著、重起"
+        use_worker || exit 2
+        batch_packet || exit 6
+        WORKER_LOG=$BDIR/worker-round$r-c$W_INDEX.log
+        batch_run
+        if guard_stop "$WORKER_LOG"; then
+            batch_cost error
+            exit 8
+        fi
+    done
 
     if [ "$WRC" -eq 124 ]; then
         PARTIAL=$BDIR/patch-partial-round$r.diff

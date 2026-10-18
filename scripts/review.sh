@@ -41,6 +41,8 @@
 #   0 pass(review 已寫)   1 fail(票 Blocked,等主線裁示)   2 用法 / 前提不成立
 #     (含規則包產不出來 —— reviewer 沒起,#74)
 #   3 沒交件               4 review 或反駁寫不進票;或 stale(見上,票沒動)
+#   7 reviewer 執行中撞額度 / 不可用而候選整串耗盡(票 Blocked + 一頁;批次只發頁),
+#     或下一個候選交給 Controller(`AC_RECOVERY_OWNER=controller`)接續(#132)
 set -u
 # 根的找法與 `auto-fix.sh` 同一套:`AC_ROOT` 優先;往上找 `board/config.json`;
 # 在票的 worktree 裡找不到票就改問主 repo(`wtbase.sh` 的 `main_root`)。
@@ -131,39 +133,54 @@ if [ ! -f "$TF" ] && [ -z "${AC_TICKETS_DIR:-}" ]; then
 fi
 [ -f "$TF" ] || { echo "review: 找不到票 #$ID($TF)" >&2; exit 2; }
 
-REVIEWER_CMD=$(cfg reviewer.command "claude -p --model opus --allowedTools Read Glob Grep Bash --output-format json")
+REVIEWER_BASE_CMD=$(cfg reviewer.command "claude -p --model opus --allowedTools Read Glob Grep Bash --output-format json")
 REVIEWER_TIMEOUT=$(cfg reviewer.timeout_seconds 1800)
 # 覆核者也查角色表(#121 A1,#116):model / tool / effort 只由 `role-models.py resolve
 # --role reviewer` 選,`reviewer.command` 的 `--model` 換成表選的那一個(codex 候選走
 # codex exec);BY、規則包、事件、cost 記的都是實際起的那一個。選不出就不派。
 # CLI 已知不在(codex 不在 PATH)就在啟動前標記那一格、取下一個候選(A2);整串沒了不派。
-pick_reviewer() {   # $@ = 給 resolve 的額外旗標;設定 MODEL / R_TOOL / R_EFFORT / R_INDEX
+# 執行中撞額度 / 不可用的換候選在 `reviewer_fallback`(#132)。
+pick_reviewer() {   # $@ = 給 resolve 的額外旗標;設定 R_RC 與 MODEL / R_TOOL / R_EFFORT / R_INDEX / R_REASON
     R_OUT=$(python3 "$AC/role-models.py" --table "$ROOT/board/role-models.json" resolve \
-            --role reviewer "$@") || {
-        echo "review: #$ID 角色表選不出 reviewer(role-models.py rc=$?)—— 不派" >&2
-        exit 2
-    }
+            --role reviewer "$@")
+    R_RC=$?
+    [ "$R_RC" -eq 0 ] || [ "$R_RC" -eq 3 ] || return 1
     eval "$(python3 - "$R_OUT" <<'PY'
 import json, shlex, sys
 got = json.loads(sys.argv[1])
 for key, name in (("model", "MODEL"), ("tool", "R_TOOL"), ("effort", "R_EFFORT"),
-                  ("candidate_index", "R_INDEX")):
+                  ("candidate_index", "R_INDEX"), ("reason", "R_REASON")):
     value = got.get(key)
     print("%s=%s" % (name, shlex.quote("" if value is None else str(value))))
 PY
 )"
+    [ "$R_RC" -eq 0 ]
 }
-pick_reviewer
-while [ "$R_TOOL" = codex ] && ! command -v codex >/dev/null 2>&1; do
-    echo "review: #$ID 角色表第 $R_INDEX 格是 $MODEL,但 codex 不在 PATH —— 這一格標記不可用,換下一個候選" >&2
-    pick_reviewer --exhausted-index "$R_INDEX"
-done
-REVIEWER_CMD=$(python3 "$AC/ticket.py" agent-command --model "$MODEL" --tool "$R_TOOL" \
-        --base "$REVIEWER_CMD" --swap-model --effort "$R_EFFORT") || {
-    echo "review: #$ID 角色表選的 reviewer $MODEL(tool $R_TOOL)組不出命令 —— 不派" >&2
+use_reviewer() {   # pick_reviewer 的結果 → REVIEWER_CMD / BY
+    REVIEWER_CMD=$(python3 "$AC/ticket.py" agent-command --model "$MODEL" --tool "$R_TOOL" \
+            --base "$REVIEWER_BASE_CMD" --swap-model --effort "$R_EFFORT") || {
+        echo "review: #$ID 角色表選的 reviewer $MODEL(tool $R_TOOL)組不出命令 —— 不派" >&2
+        return 1
+    }
+    BY=reviewer@$MODEL
+}
+review_rules() {   # 規則包照 MODEL 挑模型卡(命令裡沒寫 `--model` 的 unknown 不指定);設定 RULES_MODEL / RULES_TEXT
+    RULES_MODEL=$MODEL
+    [ "$RULES_MODEL" != "unknown" ] || RULES_MODEL=""
+    RULES_TEXT=$(AC_TICKET=$ID python3 "$AC/rules.py" pack reviewer --model "$RULES_MODEL")
+}
+pick_reviewer || {
+    echo "review: #$ID 角色表選不出 reviewer(role-models.py rc=$R_RC)—— 不派" >&2
     exit 2
 }
-BY=reviewer@$MODEL
+while [ "$R_TOOL" = codex ] && ! command -v codex >/dev/null 2>&1; do
+    echo "review: #$ID 角色表第 $R_INDEX 格是 $MODEL,但 codex 不在 PATH —— 這一格標記不可用,換下一個候選" >&2
+    pick_reviewer --exhausted-index "$R_INDEX" || {
+        echo "review: #$ID 角色表選不出 reviewer(role-models.py rc=$R_RC)—— 不派" >&2
+        exit 2
+    }
+done
+use_reviewer || exit 2
 
 rel() { python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$1" "$ROOT"; }
 
@@ -255,6 +272,88 @@ print(rc)
 PY
 }
 
+reviewer_run() {   # $1 = 第幾輪  $2… = 事件多帶的旗標;起一次 reviewer(REVIEWER_CMD → REVIEW / RLOG),設定 RRC / RSECS
+    rr_round=$1
+    shift
+    ev agent.start --ticket "$ID" --role reviewer --model "$MODEL" ${R_EFFORT:+--kv effort=$R_EFFORT} \
+        --kv run_id="$RUN_ID" --kv round="$rr_round" --kv agent=review "$@"
+    # 上一次派(同一個 run_id 重派、或換候選前那一次)留下的信封不准被這一次的成本讀到。
+    rm -f "$RUNDIR/reviewer.json"
+    RSTART=$(date +%s)
+    RRC=$(run_reviewer "$REVIEWER_CMD" "$DISPATCH" "$CWD" "$REVIEWER_TIMEOUT" "$ID" "$rr_round" \
+            "$REVIEW" "$RLOG")
+    RSECS=$(( $(date +%s) - RSTART ))
+    if [ "$RRC" -eq 0 ]; then
+        ev agent.done --ticket "$ID" --role reviewer --model "$MODEL" \
+            --kv run_id="$RUN_ID" --kv round="$rr_round" --kv rc="$RRC" --kv agent=review "$@"
+    else
+        ev agent.failed --ticket "$ID" --role reviewer --model "$MODEL" \
+            --kv run_id="$RUN_ID" --kv round="$rr_round" --kv rc="$RRC" --kv agent=review "$@"
+    fi
+}
+
+fallback_wanted() {   # uses RRC / REVIEW / RLOG;provider 說額度用完 / 不可用才回 0,設定 Q_KIND / Q_DETAIL / Q_FILE
+    # stdout(REVIEW.md,codex / claude 的錯誤信封在這裡)與 stderr(reviewer.log)各判一次。
+    [ "$RRC" -ne 0 ] && [ "$RRC" -ne 124 ] || return 1
+    for Q_FILE in "$REVIEW" "$RLOG"; do
+        [ -f "$Q_FILE" ] || continue
+        eval "$(python3 "$AC/role-models.py" classify --evidence "$Q_FILE" --rc "$RRC" 2>/dev/null \
+            | python3 -c 'import json, shlex, sys
+try:
+    got = json.load(sys.stdin)
+except ValueError:
+    got = {}
+print("Q_KIND=%s" % shlex.quote(str(got.get("kind") or "other")))
+print("Q_DETAIL=%s" % shlex.quote(str(got.get("detail") or "")))')"
+        case $Q_KIND in
+            quota_exhausted|provider_unavailable) return 0 ;;
+            auth_config) echo "review: #$ID reviewer 的認證設定有問題,不換候選:$Q_DETAIL" >&2; return 1 ;;
+        esac
+    done
+    return 1
+}
+
+# 執行中撞額度 / 不可用(#132 B2,與 auto-fix 的 worker 同一套 #121):判讀只用 `role-models.py classify`
+# (逾時、一般失敗、字面 429 不換)。可換 → 這一次照記 cost(outcome=missing,note 記原因)、輸出與 log
+# 改名留著,依表取下一個候選、規則包照新模型重組派工文($2),同一輪重起。**收件單不重開**:#98 的
+# receipt / CAS 照舊收最後那一次的結論 —— 第一次跑的時候票動過,換來的結論一樣 stale。
+# 有 Controller 只發 `agent.recovery_needed`(收件單留著給它);整串耗盡由呼叫端停(RF_STOP)。
+reviewer_fallback() {   # $1 = 寫 cost 的函式  $2 = 重組派工文的函式  $3 = 第幾輪  $4… = 事件多帶的旗標;回 1 = 停(RF_STOP)
+    rf_cost=$1
+    rf_packet=$2
+    rf_round=$3
+    shift 3
+    RF_STOP=""
+    while fallback_wanted; do
+        "$rf_cost" missing "$Q_KIND:$Q_DETAIL"
+        rf_was=$MODEL
+        rf_kind=$Q_KIND
+        rf_index=$R_INDEX
+        pick_reviewer --exhausted-index "$R_INDEX" --evidence "$Q_FILE" --evidence-rc "$RRC"
+        case $R_RC in
+            0) ;;
+            3) RF_STOP=exhausted; return 1 ;;
+            *) RF_STOP=refused; return 1 ;;
+        esac
+        if [ "${AC_RECOVERY_OWNER:-}" = controller ]; then
+            ev agent.recovery_needed --ticket "$ID" --role reviewer --model "$MODEL" --kv run_id="$RUN_ID" \
+                --kv round="$rf_round" --kv tool="$R_TOOL" --kv candidate_index="$R_INDEX" \
+                ${R_EFFORT:+--kv effort=$R_EFFORT} --kv copy="$CWD" --kv dispatch="$DISPATCH" \
+                ${RECEIPT:+--kv receipt="$RECEIPT"} "$@" --note "$rf_kind"
+            echo "review: #$ID reviewer $rf_was 撞到 $rf_kind —— 下一個候選 $MODEL 交給 Controller 接續"
+            RF_STOP=handed
+            return 1
+        fi
+        echo "review: #$ID reviewer $rf_was 撞到 $rf_kind —— 依表換第 $R_INDEX 格 $MODEL,同一張收件單重起"
+        use_reviewer || { RF_STOP=refused; return 1; }
+        mv "$REVIEW" "$RUNDIR/REVIEW-c$rf_index.md" 2>/dev/null
+        mv "$RLOG" "$RUNDIR/reviewer-c$rf_index.log" 2>/dev/null
+        "$rf_packet" || { RF_STOP=refused; return 1; }
+        reviewer_run "$rf_round" "$@"
+    done
+    return 0
+}
+
 # `--output-format json` 的 stdout 是一個信封 `{"type":"result","result":"<全文>",…}`:
 # 全文拆出來放回 REVIEW.md(`## result` 那一塊才看得到行首),信封原樣留在 reviewer.json
 # (token 用量在裡面)。不是信封就原樣。
@@ -344,14 +443,13 @@ if [ -n "$BATCH" ]; then
     CWD=$(git -C "$ROOT" worktree list --porcelain | awk -v ref="branch refs/heads/$B_BR" '
         /^worktree / { here = substr($0, 10) } $0 == ref { print here; exit }')
     CWD=${CWD:-$ROOT}
-    RULES_MODEL=$MODEL
-    [ "$RULES_MODEL" != "unknown" ] || RULES_MODEL=""
-    RULES_TEXT=$(AC_TICKET=$ID python3 "$AC/rules.py" pack reviewer --model "$RULES_MODEL") \
+    review_rules \
         || refuse "規則包產不出來(模型 ${RULES_MODEL:-未指定})" \
                   "補齊 rules.py 列的缺項(decision 頁)再跑 sh scripts/review.sh --batch $B_BR $B_IDS --run-id $RUN_ID"
-    {
-        printf '%s\n' "$RULES_TEXT"
-        python3 - "$TEMPLATE" "$TDIR" "$ROOT" "$B_BR" "$SHA" "$REVIEW" "$MODEL" "$RUN_ID" $B_IDS <<'PY'
+    batch_packet() {   # 派工文 = 規則包 + 這一批的那一段;換候選(#132)時先重產規則包再組一次
+        {
+            printf '%s\n' "$RULES_TEXT"
+            python3 - "$TEMPLATE" "$TDIR" "$ROOT" "$B_BR" "$SHA" "$REVIEW" "$MODEL" "$RUN_ID" $B_IDS <<'PY'
 import json, os, subprocess, sys
 template, tdir, root, branch, sha, review, model, stamp = sys.argv[1:9]
 ids = sys.argv[9:]
@@ -421,34 +519,41 @@ print("`scripts/review.sh --batch` 讀這一塊:`pass` ⇒ 寫 `reports/batch/%s
       "(sha `%s`),呼叫端重跑全套;`fail` ⇒ 一頁 decision 給主線裁示。**兩條都不寫票。**"
       % (stamp, sha[:12]))
 PY
-    } > "$DISPATCH"
+        } > "$DISPATCH"
+    }
+    batch_repack() { review_rules && batch_packet; }
+    batch_packet
     echo "review: 批次 $B_TAGS 派覆核 —— $REVIEWER_CMD(cwd $CWD,$B_BR @ $(echo "$SHA" | cut -c1-12),派工文 $(rel "$DISPATCH"))"
-    ev agent.start --ticket "$ID" --role reviewer --model "$MODEL" ${R_EFFORT:+--kv effort=$R_EFFORT} \
-        --kv run_id="$RUN_ID" --kv round=1 --kv agent=review --kv batch="$B_TAGS"
-    rm -f "$RUNDIR/reviewer.json" "$RUNDIR/review.json"
-    RSTART=$(date +%s)
-    RRC=$(run_reviewer "$REVIEWER_CMD" "$DISPATCH" "$CWD" "$REVIEWER_TIMEOUT" "$ID" 1 "$REVIEW" "$RLOG")
-    RSECS=$(( $(date +%s) - RSTART ))
-    if [ "$RRC" -eq 0 ]; then
-        ev agent.done --ticket "$ID" --role reviewer --model "$MODEL" \
-            --kv run_id="$RUN_ID" --kv round=1 --kv rc="$RRC" --kv agent=review --kv batch="$B_TAGS"
-    else
-        ev agent.failed --ticket "$ID" --role reviewer --model "$MODEL" \
-            --kv run_id="$RUN_ID" --kv round=1 --kv rc="$RRC" --kv agent=review --kv batch="$B_TAGS"
+    batch_cost() {   # $1 = 結局 pass|fail|missing  $2 = 原因(可空,換候選那一次記 quota 種類)
+        _attempt=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("attempt") or 0)' "$TF" 2>/dev/null || echo 0)
+        python3 "$AC/ticket.py" cost "$ID" --role reviewer --round "$_attempt" --model "$MODEL" \
+            --by review.sh --from-envelope "$RUNDIR/reviewer.json" --wall-seconds "$RSECS" \
+            --outcome "$1" --run-id "${AC_BATCH_RUN_ID:-$RUN_ID}" --note "batch $RUN_ID $B_TAGS${2:+;$2}" \
+            --effort "$R_EFFORT" \
+            >/dev/null 2>&1 || echo "review: #$ID 的 cost 寫不進票 —— 不擋覆核" >&2
+    }
+    rm -f "$RUNDIR/review.json"
+    reviewer_run 1 --kv batch="$B_TAGS"
+    if ! reviewer_fallback batch_cost batch_repack 1 --kv batch="$B_TAGS"; then
+        case $RF_STOP in
+            exhausted)
+                echo "review: 批次 $B_TAGS 的 reviewer 候選整串耗盡($R_REASON)—— 不再起" >&2
+                ev review.missing --ticket "$ID" --kv run_id="$RUN_ID" --kv batch="$B_TAGS" \
+                    --note "reviewer 候選整串耗盡($R_REASON)"
+                post "批次 reviewer 候選整串耗盡($B_TAGS)" \
+                     "整批 $B_TAGS 的 reviewer 候選都撞到額度 / 不可用($R_REASON);改表或等額度恢復後重派 sh scripts/review.sh --batch $B_BR $B_IDS --run-id $RUN_ID" \
+                     "board/role-models.json"
+                exit 7 ;;
+            handed) exit 7 ;;
+            *) refuse "換候選後的 reviewer $MODEL 組不出命令或規則包產不出來" \
+                      "改表或補規則包後重派 sh scripts/review.sh --batch $B_BR $B_IDS --run-id $RUN_ID" ;;
+        esac
     fi
     unwrap_envelope "$REVIEW" "$RUNDIR/reviewer.json"
     python3 "$AC/ticket.py" result "$REVIEW" "$RESULT_JSON" --ticket "$ID" --role reviewer \
         --round 1 >/dev/null || echo "review: result 抽不出來($REVIEW)" >&2
     read_verdict "$RESULT_JSON" "$REVIEW" "$RRC"
     REL_REVIEW=$(rel "$REVIEW")
-    batch_cost() {   # $1 = 結局 pass|fail|missing
-        _attempt=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("attempt") or 0)' "$TF" 2>/dev/null || echo 0)
-        python3 "$AC/ticket.py" cost "$ID" --role reviewer --round "$_attempt" --model "$MODEL" \
-            --by review.sh --from-envelope "$RUNDIR/reviewer.json" --wall-seconds "$RSECS" \
-            --outcome "$1" --run-id "${AC_BATCH_RUN_ID:-$RUN_ID}" --note "batch $RUN_ID $B_TAGS" \
-            --effort "$R_EFFORT" \
-            >/dev/null 2>&1 || echo "review: #$ID 的 cost 寫不進票 —— 不擋覆核" >&2
-    }
     if [ -z "$VERDICT" ]; then
         echo "review: 批次 $B_TAGS 覆核沒交件 —— $WHY;review.json 不寫" >&2
         ev review.missing --ticket "$ID" --kv run_id="$RUN_ID" --kv batch="$B_TAGS" --note "沒交不是 pass($WHY)"
@@ -573,9 +678,7 @@ RESULT_JSON=$RUNDIR/result-reviewer-round$ROUND.json
 # 規則包先產、成功才組派工文(#74):產不出來時 rules.py 已經非零、stdout 沒有半包、送了
 # decision 頁 —— 這裡不准 fallback 起 reviewer。命令裡沒寫 `--model`(MODEL=unknown)就不指定
 # 模型卡:指定一張不存在的卡是錯,而「不知道是哪個模型」不是指定。
-RULES_MODEL=$MODEL
-[ "$RULES_MODEL" != "unknown" ] || RULES_MODEL=""
-RULES_TEXT=$(AC_TICKET=$ID python3 "$AC/rules.py" pack reviewer --model "$RULES_MODEL") \
+review_rules \
     || refuse "規則包產不出來(模型 ${RULES_MODEL:-未指定})" \
               "補齊 rules.py 列的缺項(decision 頁)再跑 sh scripts/review.sh $ID"
 # 收件單在寫派工文之前記:同一個 run_id 還有一份在途時這裡就停,那一份的派工文不被蓋掉。
@@ -584,10 +687,11 @@ python3 "$AC/ticket.py" review-request "$ID" --run-id "$RUN_ID" --sha "$SHA" \
         --receipt "$RECEIPT" >/dev/null \
     || refuse "review_request 記不進票(上面是 ticket.py 的原話)" \
               "照那一句處理;要另派一份就給新的 run_id:sh scripts/review.sh $ID --run-id <新的>"
-{
-    printf '%s\n' "$RULES_TEXT"
-    python3 - "$TEMPLATE" "$ID" "$SHA" "$WT" "$EVIDENCE" "$STATUS_FILE" "$REVIEW" \
-        "$MODEL" "$ROUND" "$(rel "$TF")" "$TF" "$AC" "$ROOT" "$(cfg main_branch main)" <<'PY'
+review_packet() {   # 派工文 = 規則包 + 範本四件事填好;換候選(#132)時先重產規則包再組一次
+    {
+        printf '%s\n' "$RULES_TEXT"
+        python3 - "$TEMPLATE" "$ID" "$SHA" "$WT" "$EVIDENCE" "$STATUS_FILE" "$REVIEW" \
+            "$MODEL" "$ROUND" "$(rel "$TF")" "$TF" "$AC" "$ROOT" "$(cfg main_branch main)" <<'PY'
 import json, subprocess, sys
 template, ident, sha, wt, evidence, state_file, review, model, rnd, ticket_file, tf = sys.argv[1:12]
 ac, root, main = sys.argv[12:15]
@@ -654,32 +758,11 @@ for key, value in slots.items():
     text = text.replace(key, value)
 sys.stdout.write("\n" + text)
 PY
-} > "$DISPATCH"
+    } > "$DISPATCH"
+}
+review_repack() { review_rules && review_packet; }
+review_packet
 echo "review: #$ID 派覆核 —— $REVIEWER_CMD(cwd $CWD,分支 $BR @ $(echo "$SHA" | cut -c1-12),派工文 $(rel "$DISPATCH"))"
-
-ev agent.start --ticket "$ID" --role reviewer --model "$MODEL" ${R_EFFORT:+--kv effort=$R_EFFORT} \
-    --kv run_id="$RUN_ID" --kv round="$ROUND" --kv agent=review
-# 上一次派(同一個 run_id 重派)留下的信封不准被這一次的成本讀到。
-rm -f "$RUNDIR/reviewer.json"
-RSTART=$(date +%s)
-RRC=$(run_reviewer "$REVIEWER_CMD" "$DISPATCH" "$CWD" "$REVIEWER_TIMEOUT" "$ID" "$ROUND" \
-        "$REVIEW" "$RLOG")
-RSECS=$(( $(date +%s) - RSTART ))
-if [ "$RRC" -eq 0 ]; then
-    ev agent.done --ticket "$ID" --role reviewer --model "$MODEL" \
-        --kv run_id="$RUN_ID" --kv round="$ROUND" --kv rc="$RRC" --kv agent=review
-else
-    ev agent.failed --ticket "$ID" --role reviewer --model "$MODEL" \
-        --kv run_id="$RUN_ID" --kv round="$ROUND" --kv rc="$RRC" --kv agent=review
-fi
-
-unwrap_envelope "$REVIEW" "$RUNDIR/reviewer.json"
-
-python3 "$AC/ticket.py" result "$REVIEW" "$RESULT_JSON" --ticket "$ID" --role reviewer \
-    --round "$ROUND" >/dev/null || echo "review: result 抽不出來($REVIEW)" >&2
-
-read_verdict "$RESULT_JSON" "$REVIEW" "$RRC"
-REL_REVIEW=$(rel "$REVIEW")
 
 write_cost() {   # $1 = 結局 pass|fail|missing(與 review.* 同字,#94 C5d) $2 = 附註(可省)
     # 覆核者的 token 與時鐘進票的 `cost[]`(D-032)。pass / fail / 沒交件都寫;
@@ -695,6 +778,38 @@ write_cost() {   # $1 = 結局 pass|fail|missing(與 review.* 同字,#94 C5d) $2
         --effort "$R_EFFORT" --outcome "$@" --run-id "$RUN_ID" >/dev/null 2>&1 \
         || echo "review: #$ID 的 cost 寫不進票 —— 不擋覆核" >&2
 }
+
+reviewer_run "$ROUND"
+# 執行中撞額度(#132 B2):停在這裡的每一種都先把收件單記成沒交件(交給 Controller 的除外 ——
+# 收件單留給它接續的那一份),票的 review 一格不動。
+if ! reviewer_fallback write_cost review_repack "$ROUND"; then
+    case $RF_STOP in
+        handed) exit 7 ;;
+        exhausted) RF_WHY="reviewer 候選整串耗盡($R_REASON)" ;;
+        *) RF_WHY="換候選後的 reviewer $MODEL 組不出命令或規則包產不出來" ;;
+    esac
+    python3 "$AC/ticket.py" review-receive "$ID" --receipt "$RECEIPT" --verdict missing \
+        --reason "$RF_WHY" >/dev/null || echo "review: 收件單記不進去($(rel "$RECEIPT"))" >&2
+    [ "$RF_STOP" = exhausted ] || refuse "$RF_WHY" "改表或補規則包後重派 sh scripts/review.sh $ID --run-id <新的>"
+    echo "review: #$ID 的 $RF_WHY —— 不再起,票轉 Blocked" >&2
+    python3 "$AC/ticket.py" set "$ID" state Blocked >/dev/null 2>&1 \
+        || echo "review: 票狀態改不動(Blocked)" >&2
+    python3 "$AC/ticket.py" set "$ID" owner main >/dev/null 2>&1 || true
+    ev review.missing --ticket "$ID" --kv run_id="$RUN_ID" --note "$RF_WHY"
+    ev decision.asked --ticket "$ID" --note "#$ID 的 $RF_WHY"
+    post "reviewer 候選整串耗盡" \
+         "#$ID 的 reviewer 候選都撞到額度 / 不可用($R_REASON);改表或等額度恢復後重派 sh scripts/review.sh $ID --run-id <新的>" \
+         "board/role-models.json"
+    exit 7
+fi
+
+unwrap_envelope "$REVIEW" "$RUNDIR/reviewer.json"
+
+python3 "$AC/ticket.py" result "$REVIEW" "$RESULT_JSON" --ticket "$ID" --role reviewer \
+    --round "$ROUND" >/dev/null || echo "review: result 抽不出來($REVIEW)" >&2
+
+read_verdict "$RESULT_JSON" "$REVIEW" "$RRC"
+REL_REVIEW=$(rel "$REVIEW")
 
 stale() {   # $1 = reviewer 交的 pass|fail  $2 = ticket.py 說的不收理由;rc=4,票沒動
     echo "review: #$ID 這份覆核($1)不收 —— $2" >&2
