@@ -364,8 +364,8 @@ class AgentOutputHarness(Sandbox):
         self.assertNotEqual(gate.returncode, 0, gate.stdout + gate.stderr)
         return wt
 
-    def auto_fix(self):
-        return self.run_sh("scripts/auto-fix.sh", "1")
+    def auto_fix(self, *args):
+        return self.run_sh("scripts/auto-fix.sh", "1", *args)
 
     def result_files(self, name):
         return sorted(glob.glob(os.path.join(self.repo, "reports", "t1", "*", name)))
@@ -396,7 +396,8 @@ class ANormalRoundShipsTheWholeBlockAndDoesNotDoubleWriteMemory(AgentOutputHarne
         self.first_red_round()
         before = self.memory_inbox_lines()
 
-        done = self.auto_fix()
+        # 沙盒的 reviewer 什麼都不交:不帶 --no-review 就是 review_missing、rc≠0(#121 A6)。
+        done = self.auto_fix("--no-review")
 
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         found = self.result_files("result-round2.json")

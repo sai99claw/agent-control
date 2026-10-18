@@ -11,14 +11,14 @@ A7  | integ | auto-fix --dry-run:票 effort / 只有 config effort.implement / �
 A8  | integ | 票 effort=ultra(claude-code)/ config effort.implement=ultra;另乾跑一次 | rc 2、stderr 含 effort=ultra 與來源;票 Ready、state_version 與 cost 不變、沒有 agent.start | 票面 A8 原話
 A9  | integ | 假 claude worker 交件一輪 / 失敗一輪;ticket.py cost --effort high | agent.start/done/failed 帶 effort=high、無 effort 不帶;cost 列恰 15 鍵、effort 對上;ticket.cost 事件帶 effort | 票面 A9 原話;15 鍵 = #94 的 14 鍵字面 + effort
 A9b | doc   | 讀 tickets/SCHEMA.md | 票欄位表有 `effort` 那一列;成本列含 effort 與「15 鍵」 | 票面 A9 末句
-A10 | integ | 假 codex 撞 429:票 effort=high / effort=ultra | 改派後 effort 仍 high;ultra → null 且 decision 頁含「原 effort ultra」 | 票面 A10 原話
+A10 | integ | 表 worker = [codex astra, opus];假 codex 回額度信封:票 effort=high(opus 表值 medium)/ effort=ultra(opus 表值 high) | 同一次接著起 opus:high → `--effort high`(票贏);ultra → `--effort high`(取表值,不寫 null);票的 model / tool / effort 都不改 | 票面 A10;#121 A2 / A7 取代「改派 opus、票 effort 設 null」(tickets/SCHEMA.md effort 列)
 
 ## 介面字串(全部出自票面 acceptance / objective,不從 ticket.py / auto-fix.sh 讀回來)
 CLAUDE_LEVELS = "low medium high xhigh max"           ← A5 claude-code 合法值清單
 CODEX_LEVELS  = "low medium high xhigh max ultra"     ← A5 codex 合法值清單
 WORKER_LINE   = "auto-fix: worker 命令 —— "           ← A7 乾跑那一行(既有字串)
 SOURCE_LINE   = "auto-fix: effort 來源="              ← A7 來源行
-ORIGINAL      = "原 effort ultra"                     ← A10 decision 頁那一句多的字
+ORIGINAL      = "原 effort ultra"                     ← 舊 A10 decision 頁那一句(#121 起沒有改派頁,不再斷言)
 COST_KEYS_15  = #94 的 14 鍵 + "effort"               ← A9
 
 ## 怎麼做假(不上真埠、不起真服務、不打真的模型)
@@ -42,7 +42,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 TESTS_DIR = os.path.join(ROOT, "tests")
 sys.path.insert(0, TESTS_DIR)
-from control_harness import DEFAULT_CONFIG, Sandbox, write_executable  # noqa: E402
+from control_harness import DEFAULT_CONFIG, Sandbox, fixture_candidate, write_executable  # noqa: E402
 from test_auto_fix import AutoFixBase  # noqa: E402
 from test_auto_fix_codex import CodexBase  # noqa: E402
 
@@ -447,35 +447,44 @@ class SchemaDocumentsEffort(unittest.TestCase):
 
 
 class CodexQuotaKeepsOrDropsTheEffort(EffortBase):
-    """A10:codex 撞 429 改派 opus / claude-code 時 effort 的去留。"""
+    """A10:codex 撞額度後依角色表接下一個候選(opus / claude-code)時 effort 的去留(#121 A2 / A7)。"""
+
+    def quota_then_opus(self, opus_effort, ticket_effort):
+        """表 worker = [codex astra, opus(opus_effort)];假 codex 回額度信封,假 claude worker 記 argv 後交件。"""
+        self.set_role_models(worker=[fixture_candidate(CODEX_TICKET_MODEL, "codex"),
+                                     fixture_candidate("opus", "claude-code", effort=opus_effort)])
+        argv = os.path.join(self.home, "claude-argv.txt")
+        path = os.path.join(self.home, "fake-worker.sh")
+        write_executable(path, WORKER_DELIVERS.replace(
+            "#!/bin/sh\n", '#!/bin/sh\nprintf \'%%s\\n\' "$*" >> "%s"\n' % argv, 1))
+        conf = json.loads(self.read("board/config.json"))
+        conf["worker"] = {"command": "sh %s --model opus --permission-mode acceptEdits" % path,
+                          "timeout_seconds": 120}
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        self.fake_codex("quota")
+        self.codex_ticket(effort=ticket_effort)
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue(os.path.exists(self.argv_file), "codex 要先起過一次")
+        with open(argv, encoding="utf-8") as handle:
+            runs = handle.read().splitlines()
+        self.assertEqual(len(runs), 1, runs)
+        ticket = self.load_ticket("1")
+        self.assertEqual((ticket["model"], ticket["tool"], ticket.get("effort")),
+                         (CODEX_TICKET_MODEL, "codex", ticket_effort), "票上的 model / tool / effort 不被改寫")
+        return runs[0]
 
     def test_a10_a_claude_legal_effort_is_kept(self):
-        """A10 effort=high → 改派後票 effort 仍 high,頁上沒有「原 effort」。"""
-        self.fake_codex("quota")
-        self.codex_ticket(effort="high")
-        done = self.auto_fix("--no-review")
-        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        ticket = self.load_ticket("1")
-        self.assertEqual((ticket["model"], ticket["tool"], ticket["state"]),
-                         ("opus", "claude-code", "Ready"))
-        self.assertEqual(ticket.get("effort"), "high")
-        pages = self.inbox_rows()
-        self.assertEqual(len(pages), 1, pages)
-        self.assertNotIn("原 effort", self.read(pages[0]["page"]))
+        """A10 票 effort=high、opus 表值 medium → 接著起的 opus 帶 `--effort high`(票贏),票 effort 仍 high。"""
+        argv = self.quota_then_opus("medium", "high")
+        self.assertIn("--model opus --effort high", argv)
+        self.assertEqual(argv.split().count("--effort"), 1, argv)
 
-    def test_a10_an_effort_claude_does_not_take_is_nulled_and_named(self):
-        """A10 effort=ultra → 票 effort 變 null,decision 頁那一句含「原 effort ultra」。"""
-        self.fake_codex("quota")
-        self.codex_ticket(effort="ultra")
-        done = self.auto_fix("--no-review")
-        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        ticket = self.load_ticket("1")
-        self.assertEqual((ticket["model"], ticket["tool"], ticket["state"]),
-                         ("opus", "claude-code", "Ready"))
-        self.assertIsNone(ticket.get("effort"))
-        pages = self.inbox_rows()
-        self.assertEqual(len(pages), 1, pages)
-        self.assertIn(ORIGINAL, self.read(pages[0]["page"]))
+    def test_a10_an_effort_claude_does_not_take_falls_back_to_the_table(self):
+        """A10 票 effort=ultra(claude-code 不收)、opus 表值 high → opus 帶 `--effort high`(不寫 null),票 effort 仍 ultra。"""
+        argv = self.quota_then_opus("high", "ultra")
+        self.assertIn("--model opus --effort high", argv)
+        self.assertNotIn("ultra", argv)
 
 
 if __name__ == "__main__":

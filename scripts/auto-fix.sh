@@ -41,16 +41,19 @@
 # 再叫 `sh scripts/review.sh <票號>` —— reviewer pass 由它寫 `review`,fail 由它轉 Blocked 回主線
 # 裁示。這一支自己不碰 `review` 那一格;`--no-review` 停在 InReview(主線手跑 review.sh)。
 # 綠了**不發頁**(D-032):接著的事是腳本做的,收件匣只收 decision / done。
-# 覆核的結果看 review.sh 的事件與頁,不改這一支的退出碼。
+# 覆核的結局**改**這一支的退出碼(#121 A6):fail 9、沒交件 / stale 10;`--no-review` 回 0 並印
+# `終態=awaiting_review` —— 閘門綠、還沒覆核,不是可落地。
 #
 # ## 退出碼
-#   0 綠了(覆核交給 review.sh)   1 三輪耗盡仍紅   2 用法 / 沒有狀態檔而票不是 Ready
+#   0 綠了且覆核 pass(或 --no-review:awaiting_review)   1 三輪耗盡仍紅   2 用法 / 沒有狀態檔而票不是 Ready
 #   3 worker 提反駁       4 failures 沒有歸因,或閘門機械格不合(頁的狀態格分得出)
 #   5 worker 沒交出可用的 patch
 #   6 規則包產不出來(#74):worker / 驗證者一個都沒起;缺項在 rules.py 送的 decision 頁
-#   7 codex 額度用完(#87 A23):票已改派 opus / claude-code、回 Ready;這一次不重派
+#   7 角色表的候選整串耗盡(#121 A3:票 Blocked、一頁 decision、不再起程序),或額度後的
+#     下一個候選交給 Controller / 別的驅動者接續(副本留著)
 #   8 agent 越界(#115,D-048):主 repo / guarded_dirs 有不屬於控制面、也歸屬不到同時 land 的改動;
 #     票轉 Blocked、owner=main,一頁 decision,patch 不套、副本留著(與額度同時發生也是 8)
+#   9 閘門綠、覆核 fail   10 閘門綠、覆核沒交件 / stale / 沒完成(#121 A6)
 set -u
 # `AC_ROOT` 優先:被 `gate.sh` 的 auto-fix 叫到時,這支檔案住在**副本**裡,
 # 而票、reports 與收件匣住在主 repo。照 `$0` 算根會把它們寫進一個等一下會被
@@ -257,9 +260,8 @@ PY
 )
 WORKER_TIMEOUT=${TIMEOUT_LINE%% *}
 TIMEOUT_SRC=${TIMEOUT_LINE#* }
-# 票的 model / tool 決定 worker 起什麼(#87 A19–A21):`codex:<id>` ⇔ `tool=codex` 走
-# `codex exec`,其餘照 config 的 worker.command。兩格不一致就在動票之前停 —— 照哪一格猜
-# 都可能起錯模型。命令只由 `ticket.py agent-command` 決定(consolidate-memory.sh 同一支)。
+# 票的 model / tool 只是本輪派工建議(#116 A7):真正起什麼由角色表選(#121,底下 `route`)。
+# 兩格不一致仍在動票之前停(#87 A21)—— 票面自相矛盾,照哪一格猜都可能起錯。
 eval "$(python3 - "$TF" <<'PY'
 import json, shlex, sys
 try:
@@ -270,37 +272,29 @@ except (OSError, ValueError):
 print("T_MODEL=%s" % shlex.quote(str(ticket.get("model") or "")))
 print("T_TOOL=%s" % shlex.quote(str(ticket.get("tool") or "")))
 print("TK_EFFORT=%s" % shlex.quote(str(ticket.get("effort") or "")))
+print("T_COMPLEXITY=%s" % shlex.quote(str(ticket.get("complexity") or "")))
 PY
 )"
-IS_CODEX=""
-case "$T_MODEL" in codex:*) IS_CODEX=1 ;; esac
-[ "$T_TOOL" = codex ] && IS_CODEX=1
-if [ -n "$IS_CODEX" ]; then
-    WORKER_CMD=$(python3 "$AC/ticket.py" agent-command --model "$T_MODEL" --tool "$T_TOOL") || {
+# 原 worker 的模型 = 票 cost[] 最後一列沒撞額度的 worker(修補輪沿用,A7)。迴圈每接一輪重讀一次。
+last_worker() {
+    python3 - "$TF" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        ticket = json.load(handle)
+except (OSError, ValueError):
+    ticket = {}
+worker = [row for row in ticket.get("cost") or []
+          if isinstance(row, dict) and row.get("role") == "worker" and row.get("outcome") != "error"]
+print(str(worker[-1].get("model") or "") if worker else "")
+PY
+}
+T_LAST_WORKER=$(last_worker)
+if [ "$T_TOOL" = codex ] || [ "${T_MODEL#codex:}" != "$T_MODEL" ]; then
+    python3 "$AC/ticket.py" agent-command --model "$T_MODEL" --tool "$T_TOOL" >/dev/null || {
         echo "auto-fix: #$ID 票的 model=$T_MODEL 與 tool=$T_TOOL 對不起來 —— 不派、票不動" >&2
         exit 2
     }
-fi
-# worker 的推理強度(#114):票的 `effort` > `board/config.json` 的 `effort.implement` > 無。
-# 無 = 命令與今天逐字相同。不在該 tool 的合法值表就在動票之前停 —— 表只在 ticket.py。
-T_EFFORT=$TK_EFFORT
-EFFORT_SRC=票
-if [ -z "$T_EFFORT" ]; then
-    T_EFFORT=$(cfg effort.implement "")
-    EFFORT_SRC=config
-fi
-if [ -n "$T_EFFORT" ]; then
-    _emodel=opus
-    [ -z "$IS_CODEX" ] || _emodel=$T_MODEL
-    python3 "$AC/ticket.py" agent-command --model "$_emodel" --tool "$T_TOOL" --base claude \
-            --effort "$T_EFFORT" >/dev/null || {
-        echo "auto-fix: #$ID effort=$T_EFFORT(來源 $EFFORT_SRC)不合 tool=${T_TOOL:-claude-code} —— 不派、票不動" >&2
-        exit 2
-    }
-    if [ -n "$IS_CODEX" ]; then
-        WORKER_CMD=$(python3 "$AC/ticket.py" agent-command --model "$T_MODEL" --tool "$T_TOOL" \
-                --effort "$T_EFFORT") || exit 2
-    fi
 fi
 # 副本/worktree 的根:環境變數 > board/config.json 的 `worktree_dir` > 預設 `../<主 repo>-wt`;
 # 相對路徑一律以**主 repo 根**解析(#38)。以前用 `$ROOT` 拼:在票 worktree 裡跑時 `$ROOT`
@@ -370,20 +364,20 @@ raise SystemExit(0 if given else 1)
 PY
 }
 
-write_cost() {   # $1 = 角色  $2 = 第幾輪  $3 = 模型  $4 = 信封(log)  $5 = 量到的秒數  $6 = 結局  $7 = effort(可空)
+write_cost() {   # $1 = 角色  $2 = 第幾輪  $3 = 模型  $4 = 信封(log)  $5 = 量到的秒數  $6 = 結局  $7 = effort(可空)  $8 = note(可空)
     # 一次 headless 派工的 token 與時鐘進票的 `cost[]`(D-032)。信封在 log 裡:stdout 與
     # stderr 混寫,`ticket.py cost` 取最後一行 `type=result` 的那一行;讀不到就記 null。
     # 結局只收登記表的字(#94 C2,tickets/SCHEMA.md 成本那一列)。
     python3 "$AC/ticket.py" cost "$ID" --role "$1" --round "$2" --model "$3" \
         --by auto-fix.sh --from-envelope "$4" --wall-seconds "$5" \
-        --outcome "$6" --run-id "$RUN_ID" --effort "${7:-}" >/dev/null \
+        --outcome "$6" --run-id "$RUN_ID" --effort "${7:-}" ${8:+--note "$8"} >/dev/null \
         || echo "auto-fix: #$ID 的 cost 寫不進票($1 第 $2 輪)—— 不擋流程" >&2
 }
 
-worker_cost() {   # $1 = 結局;run_worker 記下的那一次 worker 寫一列(一次一列,寫過就清掉)
+worker_cost() {   # $1 = 結局  $2 = note(可空);run_worker 記下的那一次 worker 寫一列(一次一列,寫過就清掉)
     # worker 的結局要等收件才知道(#94 C5a),所以 run_worker 只記秒數,這裡才寫。
     [ -n "${W_COST_LOG:-}" ] || return 0
-    write_cost worker "$r" "$WORKER_MODEL" "$W_COST_LOG" "$W_COST_SECS" "$1" "$T_EFFORT"
+    write_cost worker "$r" "$WORKER_MODEL" "$W_COST_LOG" "$W_COST_SECS" "$1" "$T_EFFORT" "${2:-}"
     W_COST_LOG=""
 }
 
@@ -960,17 +954,140 @@ PY
     esac
 }
 
+route() {   # $1 = 角色,其餘照傳 resolve;設定 R_RC 與 R_MODEL / R_TOOL / R_EFFORT / R_INDEX / R_REASON
+    R_ROLE=$1
+    shift
+    R_OUT=$(python3 "$AC/role-models.py" --table "$ROOT/board/role-models.json" resolve \
+            --role "$R_ROLE" ${T_COMPLEXITY:+--complexity "$T_COMPLEXITY"} "$@")
+    R_RC=$?
+    R_MODEL="" R_TOOL="" R_EFFORT="" R_INDEX="" R_REASON=""
+    [ "$R_RC" -ne 2 ] || return 2
+    eval "$(python3 - "$R_OUT" <<'PY'
+import json, shlex, sys
+got = json.loads(sys.argv[1])
+for key, name in (("model", "R_MODEL"), ("tool", "R_TOOL"), ("effort", "R_EFFORT"),
+                  ("candidate_index", "R_INDEX"), ("reason", "R_REASON")):
+    value = got.get(key)
+    print("%s=%s" % (name, shlex.quote("" if value is None else str(value))))
+PY
+)"
+    return "$R_RC"
+}
+
+
+route_worker() {   # $@ = 額外旗標(--exhausted-index …);照 W_ROUTE 選 worker
+    _extra=$(for arg in "$@"; do printf '%s\n' "$arg"; done)
+    _old_ifs=$IFS
+    IFS='
+'
+    # shellcheck disable=SC2086
+    set -- ${W_ROUTE:-} $_extra
+    IFS=$_old_ifs
+    route worker "$@"
+}
+
+use_worker() {   # route 的結果 → WORKER_CMD / WORKER_MODEL / MODEL / T_EFFORT / IS_CODEX / W_INDEX
+    WORKER_MODEL=$R_MODEL
+    MODEL=$R_MODEL
+    W_TOOL=$R_TOOL
+    W_INDEX=$R_INDEX
+    T_EFFORT=$R_EFFORT
+    case "$R_REASON" in *票明寫\ effort*) EFFORT_SRC=票 ;; *) EFFORT_SRC=表 ;; esac
+    # 票與表都沒給才退回 config 的 effort.implement(#114 的第二層);表有值就是表的。
+    if [ -z "$T_EFFORT" ]; then
+        T_EFFORT=$(cfg effort.implement "")
+        EFFORT_SRC=config
+    fi
+    IS_CODEX=""
+    [ "$W_TOOL" != codex ] || IS_CODEX=1
+    WORKER_CMD=$(python3 "$AC/ticket.py" agent-command --model "$R_MODEL" --tool "$R_TOOL" \
+            --base "$BASE_WORKER_CMD" --swap-model --effort "$T_EFFORT") || {
+        echo "auto-fix: #$ID 角色表選的 worker $R_MODEL(tool $R_TOOL)組不出命令 —— 不派" >&2
+        return 2
+    }
+    echo "auto-fix: #$ID 照角色表起 worker:$R_MODEL(tool $R_TOOL${T_EFFORT:+,effort $T_EFFORT};鏈第 $R_INDEX 格:$R_REASON)"
+    if [ -n "$T_MODEL" ] && [ "$T_MODEL" != "$R_MODEL" ]; then
+        echo "auto-fix: #$ID 票的 model=$T_MODEL 只是建議(#116 A7),不跳過表的候選 —— 起的是 $R_MODEL"
+    fi
+}
+
+chain_exhausted() {   # $1 = 角色;整串候選都用不了:票 Blocked、一頁 decision,不再起程序(A3)
+    echo "auto-fix: #$ID 的 $1 候選整串耗盡($R_REASON)—— 不再起程序,票轉 Blocked" >&2
+    block "#$ID 的 $1 候選整串耗盡:$R_REASON"
+    post "$1 候選整串耗盡" \
+         "#$ID 的 $1 候選都撞到額度 / 不可用($R_REASON);改表或等額度恢復後重跑 auto-fix:sh scripts/auto-fix.sh $ID" \
+         "${1:+board/role-models.json}"
+}
+
+# 啟動前就知道 CLI 不在(#87 A22 → A2):不起它,標記這一格、取下一個候選;整串沒了就停。
+pick_worker() {
+    route_worker "$@"
+    case $R_RC in
+        2) exit 2 ;;
+        3) chain_exhausted worker; exit 7 ;;
+    esac
+    while [ "$R_TOOL" = codex ] && [ -z "$DRY" ] && ! command -v codex >/dev/null 2>&1; do
+        echo "auto-fix: #$ID 角色表第 $R_INDEX 格是 $R_MODEL,但 codex 不在 PATH —— 這一格標記不可用,換下一個候選" >&2
+        route_worker --exhausted-index "$R_INDEX"
+        case $R_RC in
+            2) exit 2 ;;
+            3) chain_exhausted worker; exit 7 ;;
+        esac
+    done
+    # 票明寫的 effort 不合第一個候選的 tool 就在動票之前停(#114 A8);換 provider 才由 resolve 換掉。
+    if [ -n "$TK_EFFORT" ] && ! python3 "$AC/ticket.py" agent-command --model "$R_MODEL" \
+            --tool "$R_TOOL" --base claude --effort "$TK_EFFORT" >/dev/null; then
+        echo "auto-fix: #$ID effort=$TK_EFFORT(來源 票)不合 tool=$R_TOOL —— 不派、票不動" >&2
+        exit 2
+    fi
+    pw_cfg=""
+    [ -n "$TK_EFFORT" ] || [ -n "$R_EFFORT" ] || pw_cfg=$(cfg effort.implement "")
+    if [ -n "$pw_cfg" ] && ! python3 "$AC/ticket.py" agent-command --model "$R_MODEL" \
+            --tool "$R_TOOL" --base claude --effort "$pw_cfg" >/dev/null; then
+        echo "auto-fix: #$ID effort=$pw_cfg(來源 config)不合 tool=$R_TOOL —— 不派、票不動" >&2
+        exit 2
+    fi
+    use_worker || exit 2
+}
+
+# 驗證者也查同一張表(A1):verifier 鏈不看 worker 模型(#116 A3)。命令是 `verifier.command`
+# (沒設跟 worker.command 同一支)換上表選的 model / effort;codex 候選走 codex exec。
+pick_verifier() {
+    route verifier
+    case $R_RC in
+        2) exit 2 ;;
+        3) chain_exhausted verifier; exit 7 ;;
+    esac
+    while [ "$R_TOOL" = codex ] && [ -z "$DRY" ] && ! command -v codex >/dev/null 2>&1; do
+        echo "auto-fix: #$ID 驗證者第 $R_INDEX 格是 $R_MODEL,但 codex 不在 PATH —— 換下一個候選" >&2
+        route verifier --exhausted-index "$R_INDEX"
+        case $R_RC in
+            2) exit 2 ;;
+            3) chain_exhausted verifier; exit 7 ;;
+        esac
+    done
+    VERIFIER_MODEL=$R_MODEL
+    V_EFFORT=$R_EFFORT
+    VERIFIER_CMD=$(python3 "$AC/ticket.py" agent-command --model "$R_MODEL" --tool "$R_TOOL" \
+            --base "$(with_envelope "$(cfg verifier.command "$BASE_WORKER_CMD")")" --swap-model \
+            --effort "$V_EFFORT") || exit 2
+}
+
 first_round_dispatch() {
     # `--round 1`:只產、只印,不起 worker、不動票。要起第 1 輪就不帶 `--round`。
     fr_run=${AC_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}
     fr_dispatch=$ROOT/$(cfg reports_dir reports)/t$ID/$fr_run/dispatch-round1.md
-    first_round_packet "$fr_dispatch" "$(cfg routing.implement opus)" || return 6
+    route_worker
+    case $R_RC in 2) return 2 ;; 3) echo "auto-fix: #$ID worker 候選整串耗盡:$R_REASON" >&2; return 7 ;; esac
+    first_round_packet "$fr_dispatch" "$R_MODEL" || return 6
     cat "$fr_dispatch"
     echo "auto-fix: 第 1 輪派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$fr_dispatch" "$ROOT")" >&2
     # 驗證者那一份也在這裡產、只印路徑(#51 C3):人要看得到第 1 輪會派出去的**兩份**。
     verifier_wanted >&2
     if [ -n "$V_WANT" ]; then
-        VERIFIER_MODEL=$(cfg routing.verify "$(cfg routing.implement opus)")
+        route verifier
+        case $R_RC in 2) return 2 ;; 3) echo "auto-fix: #$ID 驗證者候選整串耗盡:$R_REASON" >&2; return 7 ;; esac
+        VERIFIER_MODEL=$R_MODEL
         fr_vdispatch=$(dirname "$fr_dispatch")/dispatch-verifier-round1.md
         fr_after=""
         [ -n "$V_PARALLEL" ] || fr_after=$WTBASE/fix-t$ID/round1/patch-round1.diff
@@ -980,6 +1097,25 @@ first_round_dispatch() {
     fi
     echo "auto-fix: --round 1 只印派工文;票是 Ready 時不帶 --round 就由這一支起第 1 輪:sh scripts/auto-fix.sh $ID" >&2
     return 0
+}
+
+# 起什麼 agent **只由角色表選**(#121,#116):`role-models.py resolve` 給 model / tool / effort /
+# 鏈上第幾格,這裡只負責起程序與記結果。票的 model 是建議(#116 A7),不拿它跳過候選;
+# 票明寫的 effort 由 resolve 自己排優先(#116 A5)。`routing.*` 不再參與(#116 A6)。
+# 這次派工的 worker 選路旗標:修補輪(第 2 輪起,上一輪紅)帶 --repair-round / --last-red 與
+# 原 worker 的模型(票 cost[] 最後一列沒撞額度的 worker),由 resolve 決定沿用與升級(A7)。
+# 同一程序裡迴圈接下一輪也從這裡重選 —— 與重新起程序讀狀態檔走同一條路。
+route_round() {   # $1 = 要派的是第幾輪;讀 S_RC / T_LAST_WORKER,設 W_ROUTE 並選 worker
+    W_ROUND=$1
+    set --
+    [ -z "$TK_EFFORT" ] || set -- "$@" --ticket-effort "$TK_EFFORT"
+    if [ "$W_ROUND" -ge 2 ]; then
+        set -- "$@" --repair-round "$W_ROUND"
+        [ "${S_RC:-1}" = "0" ] || set -- "$@" --last-red
+        [ -z "$T_LAST_WORKER" ] || set -- "$@" --worker-model "$T_LAST_WORKER"
+    fi
+    W_ROUTE=$(for arg in "$@"; do printf '%s\n' "$arg"; done)
+    pick_worker
 }
 
 # 批次修復(#108)不讀單票的狀態檔:紅榜在 land 那一輪,底下到「一輪的動作」整段跳過。
@@ -1011,6 +1147,9 @@ PY
         echo "auto-fix:   已經派過第 1 輪、要修紅的:先跑 sh scripts/gate.sh --branch --ticket $ID" >&2
         exit 2
     fi
+    # 先選第 1 輪的 worker:票 / config 的 effort 不合候選的 tool 要在動票之前停(#114 A8),
+    # 而底下換 base_sha 就是動票。
+    route_round 1
     # **base 落後主線就換成主線的頭**(#57)。第 1 輪的 patch 由 `apply.sh` 套在**從主線開**
     # 的分支上;副本卻從票的舊 base_sha 展開的話,worker 對著舊樹寫、`git apply --check`
     # 在主線上整輪停住。只在「還沒有分支、還沒有任何一輪」時換 —— 有分支就有人在上面
@@ -1075,59 +1214,12 @@ if [ "$S_ROUND" -ge "$S_LIMIT" ]; then
     exit 1
 fi
 
-# codex 不在 PATH(#87 A22):起 worker 之前停,票留著原狀態、不發 agent.start、不記 cost。
-if [ -n "$IS_CODEX" ] && [ -z "$DRY" ] && ! command -v codex >/dev/null 2>&1; then
-    echo "auto-fix: #$ID 票 tool=codex(model=$T_MODEL),但 codex 不在 PATH —— 不起 worker;裝好 codex 或把票改成 claude-code 再跑" >&2
-    exit 2
-fi
 fi
 
 # --------------------------------------------------------------- 一輪的動作
-MODEL=$(cfg routing.implement opus)
-VERIFIER_MODEL=$(cfg routing.verify "$MODEL")
-VERIFIER_CMD=$(with_envelope "$(cfg verifier.command "$BASE_WORKER_CMD")")
-# `MODEL`(routing.implement)只是路由標籤;`agent.start`/`agent.done` 的 model 欄要記
-# **實際起的那個** —— 也就是 `worker.command` 裡 `--model`後面那個值。兩者不一致時
-# 舊版只印 routing 那個標籤,events.jsonl 就記著一個從沒跑過的模型(#21)。
-WORKER_MODEL=$(python3 - "$WORKER_CMD" "$MODEL" <<'PY'
-import shlex, sys
-cmd, default = sys.argv[1], sys.argv[2]
-try:
-    parts = shlex.split(cmd)
-except ValueError:
-    parts = cmd.split()
-model = default
-for i, tok in enumerate(parts):
-    if tok == "--model" and i + 1 < len(parts):
-        model = parts[i + 1]
-        break
-print(model)
-PY
-)
-if [ -n "$IS_CODEX" ]; then
-    # codex 那一支起的就是票上那個模型;規則包也照它挑模型卡。
-    MODEL=$T_MODEL
-    WORKER_MODEL=$T_MODEL
-elif [ -n "$T_MODEL" ] && [ "${T_TOOL:-claude-code}" = claude-code ]; then
-    # claude-code 票也照票上的 model 起(#91 C7;#78 只能手派的原因):worker.command 的
-    # `--model` 換成票的,換法只由 `ticket.py agent-command --swap-model` 決定
-    # (consolidate-memory.sh 同一支)。規則包、事件、cost 跟著記票的 model。
-    WORKER_CMD=$(python3 "$AC/ticket.py" agent-command --model "$T_MODEL" --tool "$T_TOOL" \
-            --base "$WORKER_CMD" --swap-model --effort "$T_EFFORT") || {
-        echo "auto-fix: #$ID 票的 model=$T_MODEL 換不進 worker.command —— 不派、票不動" >&2
-        exit 2
-    }
-    MODEL=$T_MODEL
-    WORKER_MODEL=$T_MODEL
-    echo "auto-fix: #$ID 照票的 model=$T_MODEL 起 worker(worker.command 的 --model 換成它)"
-elif [ "$WORKER_MODEL" != "$MODEL" ]; then
-    echo "auto-fix: 警告:routing.implement=$MODEL,但 worker.command 實際起的是 $WORKER_MODEL —— agent.start/done/failed 的 model 記後者"
-fi
-# 票沒寫 model 的 claude-code 票:不換 --model,只帶 --effort(#114 A7)。
-if [ -z "$IS_CODEX" ] && [ -z "$T_MODEL" ] && [ -n "$T_EFFORT" ]; then
-    WORKER_CMD=$(python3 "$AC/ticket.py" agent-command --model "$WORKER_MODEL" --tool "$T_TOOL" \
-            --base "$WORKER_CMD" --effort "$T_EFFORT") || exit 2
-fi
+# 第 1 輪在上面已經選過(要趕在換 base_sha 之前);其餘照狀態檔的輪數選。
+[ -n "${W_ROUND:-}" ] || route_round $(( ${S_ROUND:-0} + 1 ))
+pick_verifier
 # 票的分支名**只有一個來源:票的 `branch` 欄**(#53,D-018;`apply.sh` 開分支時填)。
 # 空著才退回 `t<n>` —— 下游專案用 `t<n>-<slug>` 的票,寫死 `t$ID` 就找不到分支。
 ticket_branch() {
@@ -1571,13 +1663,13 @@ verifier_done() {   # $1 = rc  $2 = 第幾輪  $3 = log  $4 = 起跑秒;事件 +
         v_outcome=no-patch
     fi
     if [ "$1" -eq 0 ]; then
-        ev agent.done --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
+        ev agent.done --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" ${V_EFFORT:+--kv effort=$V_EFFORT} \
             --kv run_id="$RUN_ID" --kv round="$2" --kv rc="$1" --kv agent=auto-fix-verifier
     else
-        ev agent.failed --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
+        ev agent.failed --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" ${V_EFFORT:+--kv effort=$V_EFFORT} \
             --kv run_id="$RUN_ID" --kv round="$2" --kv rc="$1" --kv agent=auto-fix-verifier
     fi
-    write_cost verifier "$2" "$VERIFIER_MODEL" "$3" "$(( $(date +%s) - $4 ))" "$v_outcome"
+    write_cost verifier "$2" "$VERIFIER_MODEL" "$3" "$(( $(date +%s) - $4 ))" "$v_outcome" "${V_EFFORT:-}"
 }
 
 # **與 worker 平行**(#51 C2)只在票 `interface_fixed=true`(#60):驗證者不等 patch(D-020),
@@ -1601,7 +1693,7 @@ start_verifier_bg() {   # uses r/VFIX/VDISPATCH;設定 VPID/VLOG/VRC_FILE/VSTART
         echo "auto-fix: needs_verifier —— worker 交了 patch-round$r.diff,第 $r 輪的驗證者現在起跑(副本 $VFIX)"
     fi
     VCMD=$(session_open verifier "$VERIFIER_CMD" "$VFIX" "$r" "$VERIFIER_MODEL")
-    ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
+    ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" ${V_EFFORT:+--kv effort=$V_EFFORT} \
         --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix-verifier
     VSTART=$(date +%s)
     run_verifier "$VDISPATCH" "$VFIX" "$r" "$VLOG" "$VCMD" > "$VRC_FILE" &
@@ -1758,7 +1850,7 @@ PY
         echo "auto-fix: test_defect —— 起第 $r 輪的新驗證者 worker"
     fi
     VLOG=$(dirname "$DISPATCH")/verifier-round$r.log
-    ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
+    ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" ${V_EFFORT:+--kv effort=$V_EFFORT} \
         --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix-verifier
     VSTART=$(date +%s)
     VWRC=$(run_verifier "$VDISPATCH" "$VFIX" "$r" "$VLOG" \
@@ -1787,16 +1879,16 @@ PY
 }
 
 run_worker() {   # $1 = 命令  $2 = 派工文;設定 WRC、WORKER_LOG 由呼叫端先給
-    ev agent.start --ticket "$ID" --model "$WORKER_MODEL" \
+    ev agent.start --ticket "$ID" --role worker --model "$WORKER_MODEL" \
         --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix ${T_EFFORT:+--kv effort=$T_EFFORT}
     WSTART=$(date +%s)
     WRC=$(run_agent "$1" "$2" "$FIX" worker "$r" "$WORKER_LOG" 1)
     if [ "$WRC" -eq 0 ]; then
-        ev agent.done --ticket "$ID" --model "$WORKER_MODEL" \
+        ev agent.done --ticket "$ID" --role worker --model "$WORKER_MODEL" \
             --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix \
             ${T_EFFORT:+--kv effort=$T_EFFORT}
     else
-        ev agent.failed --ticket "$ID" --model "$WORKER_MODEL" \
+        ev agent.failed --ticket "$ID" --role worker --model "$WORKER_MODEL" \
             --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix \
             ${T_EFFORT:+--kv effort=$T_EFFORT}
     fi
@@ -2025,7 +2117,7 @@ PY
         [ ! -f "$VFIX/EVIDENCE-verifier.md" ] || mv "$VFIX/EVIDENCE-verifier.md" "$VFIX/EVIDENCE-verifier-objection.md"
         VLOG=$(dirname "$DISPATCH")/verifier-resume-round$r.log
         echo "auto-fix: 接回第 $r 輪的驗證者(session $(session_field verifier session_id))"
-        ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" \
+        ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" ${V_EFFORT:+--kv effort=$V_EFFORT} \
             --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix-verifier
         VSTART=$(date +%s)
         VWRC=$(run_verifier "$VRDISPATCH" "$VFIX" "$r" "$VLOG" \
@@ -2082,44 +2174,37 @@ PY
     return 0
 }
 
-round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
-    r=$1
-    FIX=$WTBASE/fix-t$ID/round$r
-    # **`base/` 是目前分支上的內容,不是 base_sha 的內容。**
-    # worker 交的 diff 下一步要餵給 `apply.sh` 套在**分支上**,而分支已經有前幾輪了
-    # —— 拿 base_sha 當對照組的話,第二輪的 patch 會宣稱自己在新建一個已經存在的檔,
-    # 而 `git apply --check` 會在那裡整輪停住。分支還不存在(第一輪就紅)才退回 base_sha。
-    SRC=${AC_FIX_SOURCE:-$(ticket_branch)}
-    git -C "$ROOT" rev-parse -q --verify "$SRC^{commit}" >/dev/null || SRC=$S_BASE
-    # `--dry-run` 只印(#96):這一輪的副本已經在 —— worker 交的 patch、EVIDENCE、改到一半的
-    # work/ 都在裡面 —— 就原封不動,不刪、不重建。還沒有才照常展。
-    FIX_KEPT=""
-    if [ -n "$DRY" ] && [ -e "$FIX" ]; then
-        FIX_KEPT=1
-        echo "auto-fix: --dry-run —— 副本 $FIX 已經在,不刪、不重建"
-    else
-        rm -rf "$FIX"
-        mkdir -p "$FIX/base"
-        if ! git -C "$ROOT" archive "$SRC" 2>/dev/null | tar -x -C "$FIX/base"; then
-            echo "auto-fix: 取不出 $SRC 的副本 —— 這張票的 base 對不上這顆 repo" >&2
-            ROUND_RC=2
-            return 1
-        fi
-        cp -R "$FIX/base" "$FIX/work"
-        if [ "$SRC" = "$S_BASE" ] && [ -n "$S_PATCH" ] && [ -f "$S_PATCH" ]; then
-            ( cd "$FIX/work" && patch -p1 -F 2 --no-backup-if-mismatch -i "$S_PATCH" ) \
-                >/dev/null 2>&1 || echo "auto-fix: 上一輪的 patch 有幾塊沒套進副本(worker 要自己看)"
-        fi
-        echo "auto-fix: 副本 $FIX(base = $SRC)"
-    fi
+# 覆核的結局決定這一支的退出碼(#121 A6):閘門綠只是一半,review fail / missing / stale
+# 不能被 ROUND_RC=0 蓋成成功。review.sh 的 rc:0 pass、1 fail、3 沒交件、4 stale 或寫不進票。
+review_outcome() {   # $1 = review.sh 的 rc;設定 ROUND_RC
+    case $1 in
+        0) echo "auto-fix: 終態=review_pass"; ROUND_RC=0 ;;
+        1) echo "auto-fix: 終態=review_fail(票留在 review.sh 轉的狀態,等主線裁示)"; ROUND_RC=9 ;;
+        3) echo "auto-fix: 終態=review_missing(reviewer 沒交件,票停在 InReview)"; ROUND_RC=10 ;;
+        4) echo "auto-fix: 終態=review_stale(覆核過期或寫不進票,票沒動)"; ROUND_RC=10 ;;
+        *) echo "auto-fix: 終態=review_unfinished(review.sh rc=$1)"; ROUND_RC=10 ;;
+    esac
+    [ "$1" -eq 0 ] || echo "auto-fix: 覆核停下來了(rc=$1)—— 看 reports/inbox/ 那一頁"
+}
 
-    DISPATCH=$ROOT/$(cfg reports_dir reports)/t$ID/$RUN_ID/dispatch-round$r.md
-    mkdir -p "$(dirname "$DISPATCH")"
-    LINT_ROUND=""
-    if [ "$r" -gt 1 ] && [ -n "${S_LINT_ONLY:-}" ]; then
-        lint_round
-        return $?
-    fi
+worker_fallback_wanted() {   # uses WORKER_LOG/WRC;provider 說額度用完 / 不可用才回 0,設定 Q_KIND / Q_DETAIL
+    eval "$(python3 "$AC/role-models.py" classify --evidence "$WORKER_LOG" --rc "$WRC" 2>/dev/null \
+        | python3 -c 'import json, shlex, sys
+try:
+    got = json.load(sys.stdin)
+except ValueError:
+    got = {}
+print("Q_KIND=%s" % shlex.quote(str(got.get("kind") or "other")))
+print("Q_DETAIL=%s" % shlex.quote(str(got.get("detail") or "")))')"
+    case $Q_KIND in
+        quota_exhausted|provider_unavailable) return 0 ;;
+        auth_config) echo "auto-fix: #$ID worker 的認證設定有問題,不換候選:$Q_DETAIL" >&2 ;;
+    esac
+    return 1
+}
+
+worker_packet() {   # uses r/DISPATCH/MODEL/FIX;組這一輪 worker 的派工文,規則包照 MODEL 挑模型卡
+    # 換候選(額度 / 不可用)時重組一次:規則包要跟實際起的模型相符(#121 A1)。
     if [ "$r" -eq 1 ]; then
         # 第 1 輪沒有紅榜、沒有上一輪:派工文就是 `--dry-run --round 1` 那一份(#40)。
         if ! first_round_packet "$DISPATCH" "$MODEL"; then
@@ -2232,6 +2317,47 @@ PY
             only_tests_section
         } > "$DISPATCH"
     fi
+}
+
+round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
+    r=$1
+    FIX=$WTBASE/fix-t$ID/round$r
+    # **`base/` 是目前分支上的內容,不是 base_sha 的內容。**
+    # worker 交的 diff 下一步要餵給 `apply.sh` 套在**分支上**,而分支已經有前幾輪了
+    # —— 拿 base_sha 當對照組的話,第二輪的 patch 會宣稱自己在新建一個已經存在的檔,
+    # 而 `git apply --check` 會在那裡整輪停住。分支還不存在(第一輪就紅)才退回 base_sha。
+    SRC=${AC_FIX_SOURCE:-$(ticket_branch)}
+    git -C "$ROOT" rev-parse -q --verify "$SRC^{commit}" >/dev/null || SRC=$S_BASE
+    # `--dry-run` 只印(#96):這一輪的副本已經在 —— worker 交的 patch、EVIDENCE、改到一半的
+    # work/ 都在裡面 —— 就原封不動,不刪、不重建。還沒有才照常展。
+    FIX_KEPT=""
+    if [ -n "$DRY" ] && [ -e "$FIX" ]; then
+        FIX_KEPT=1
+        echo "auto-fix: --dry-run —— 副本 $FIX 已經在,不刪、不重建"
+    else
+        rm -rf "$FIX"
+        mkdir -p "$FIX/base"
+        if ! git -C "$ROOT" archive "$SRC" 2>/dev/null | tar -x -C "$FIX/base"; then
+            echo "auto-fix: 取不出 $SRC 的副本 —— 這張票的 base 對不上這顆 repo" >&2
+            ROUND_RC=2
+            return 1
+        fi
+        cp -R "$FIX/base" "$FIX/work"
+        if [ "$SRC" = "$S_BASE" ] && [ -n "$S_PATCH" ] && [ -f "$S_PATCH" ]; then
+            ( cd "$FIX/work" && patch -p1 -F 2 --no-backup-if-mismatch -i "$S_PATCH" ) \
+                >/dev/null 2>&1 || echo "auto-fix: 上一輪的 patch 有幾塊沒套進副本(worker 要自己看)"
+        fi
+        echo "auto-fix: 副本 $FIX(base = $SRC)"
+    fi
+
+    DISPATCH=$ROOT/$(cfg reports_dir reports)/t$ID/$RUN_ID/dispatch-round$r.md
+    mkdir -p "$(dirname "$DISPATCH")"
+    LINT_ROUND=""
+    if [ "$r" -gt 1 ] && [ -n "${S_LINT_ONLY:-}" ]; then
+        lint_round
+        return $?
+    fi
+    worker_packet || return 1
     echo "auto-fix: 派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$DISPATCH" "$ROOT")"
 
     # 案例還沒交的驗證者(#51;#126 A4 起**任一輪**):第 2 輪起接著跑的票(舊狀態檔)以前只剩
@@ -2290,34 +2416,42 @@ PY
         return 1
     fi
 
-    # codex 額度 / 429(#87 A23):不是這張票的錯,是這個模型此刻不能用。票改派 opus /
-    # claude-code、回 Ready,送一頁;這一次不自動重派(再起一個 worker 的錢要人點頭)。
-    if [ -n "$IS_CODEX" ] && [ "$WRC" -ne 0 ] \
-            && grep -qiE '429|rate limit|usage limit' "$WORKER_LOG" 2>/dev/null; then
-        echo "auto-fix: #$ID 的 codex worker($T_MODEL)撞到額度 / 429 —— 改派 opus(原 model $T_MODEL),票回 Ready"
-        python3 "$AC/ticket.py" set "$ID" model '"opus"' >/dev/null 2>&1 \
-            || echo "auto-fix: 票的 model 改不動" >&2
-        python3 "$AC/ticket.py" set "$ID" tool '"claude-code"' >/dev/null 2>&1 \
-            || echo "auto-fix: 票的 tool 改不動" >&2
-        # 票的 effort 在 claude-code 的合法值表內就留著;不在(例 ultra)設成 null(#114 A10)。
-        Q_EFFORT=""
-        if [ -n "$TK_EFFORT" ] && ! python3 "$AC/ticket.py" agent-command --model opus \
-                --tool claude-code --base claude --effort "$TK_EFFORT" >/dev/null 2>&1; then
-            python3 "$AC/ticket.py" set "$ID" effort null >/dev/null 2>&1 \
-                || echo "auto-fix: 票的 effort 改不動" >&2
-            Q_EFFORT=",原 effort $TK_EFFORT"
+    # 額度 / 不可用(#121 A2/A3,取代 #87 A23 / #114 A10 的「改派 opus、刪副本、只發頁」):
+    # 判讀只用 `role-models.py`(D-018;以前這裡 grep 429 會把 patch 裡的字當額度)。可換 →
+    # 這一次照記 cost(outcome=error,note 記原因)、副本與交接資料留著,依表取下一個候選、
+    # 在同一份副本、同一輪重起;整串用完 → Blocked + 一頁,不再起。一般失敗、逾時、沒交件不換。
+    # 有 Controller(`AC_RECOVERY_OWNER=controller`)就只發 `agent.recovery_needed`、不自己起;
+    # 同一輪的接續由 owner 鎖保證只有一個驅動者(A3)。
+    while [ "$WRC" -ne 0 ] && worker_fallback_wanted; do
+        worker_cost error "$Q_KIND:$Q_DETAIL"
+        route_worker --exhausted-index "$W_INDEX" --evidence "$WORKER_LOG" --evidence-rc "$WRC"
+        case $R_RC in
+            2) attempt_failed route-refused; ROUND_RC=2; return 1 ;;
+            3) attempt_failed quota-exhausted; chain_exhausted worker; ROUND_RC=7; return 1 ;;
+        esac
+        if ! mkdir "$(dirname "$DISPATCH")/recovery-round$r-c$R_INDEX.owner" 2>/dev/null; then
+            echo "auto-fix: #$ID 第 $r 輪第 $R_INDEX 格已有別的驅動者接手 —— 這裡不再起" >&2
+            ROUND_RC=7
+            return 1
         fi
-        python3 "$AC/ticket.py" set "$ID" state Ready >/dev/null 2>&1 \
-            || echo "auto-fix: 票狀態改不動(Ready)" >&2
-        worker_cost error
-        attempt_failed codex-quota
-        shed_copies "$FIX"
-        post "codex 額度用完,已改 opus" \
-             "#$ID codex 額度用完,已改 opus,重跑 auto-fix:sh scripts/auto-fix.sh $ID(原 model $T_MODEL$Q_EFFORT)" \
-             "$WORKER_LOG"
-        ROUND_RC=7
-        return 1
-    fi
+        if [ "${AC_RECOVERY_OWNER:-}" = controller ]; then
+            ev agent.recovery_needed --ticket "$ID" --model "$R_MODEL" --kv run_id="$RUN_ID" \
+                --kv round="$r" --kv tool="$R_TOOL" --kv candidate_index="$R_INDEX" \
+                ${R_EFFORT:+--kv effort=$R_EFFORT} --kv copy="$FIX" --note "$Q_KIND"
+            echo "auto-fix: #$ID 第 $r 輪 $WORKER_MODEL 撞到 $Q_KIND —— 下一個候選 $R_MODEL 交給 Controller 接續(副本 $FIX 留著)"
+            ROUND_RC=7
+            return 1
+        fi
+        echo "auto-fix: #$ID 第 $r 輪 $WORKER_MODEL 撞到 $Q_KIND —— 依表換第 $R_INDEX 格 $R_MODEL,副本 $FIX 留著、同一輪重起"
+        use_worker || { attempt_failed route-refused; ROUND_RC=2; return 1; }
+        worker_packet || return 1
+        WORKER_LOG=$(dirname "$DISPATCH")/worker-round$r-c$W_INDEX.log
+        run_worker "$(session_open worker "$WORKER_CMD" "$FIX" "$r" "$WORKER_MODEL")" "$DISPATCH"
+        if guard_stop "$WORKER_LOG"; then
+            worker_cost error
+            return 1
+        fi
+    done
 
     # 反駁判完接回的 worker(#89)交件後從這裡再走一次:同一輪、同一份副本。
     while :; do
@@ -2661,14 +2795,15 @@ print(json.dumps({"rc": 0, "sha": sys.argv[1], "run_id": sys.argv[2],
         else
             echo "auto-fix: 問不到分支 $(ticket_branch) 的頭 —— 票的 gate 欄不寫" >&2
         fi
+        ROUND_RC=0
         if [ -n "$NO_REVIEW" ]; then
             echo "auto-fix: 第 $r 輪綠了 —— --no-review,覆核不派,票停在 InReview:sh scripts/review.sh $ID"
+            echo "auto-fix: 終態=awaiting_review(閘門綠、還沒覆核 —— 不是可落地)"
         else
             echo "auto-fix: 第 $r 輪綠了 —— 覆核交給 review.sh(sh scripts/review.sh $ID)"
-            sh "$AC/review.sh" "$ID" --run-id "$RUN_ID" \
-                || echo "auto-fix: 覆核停下來了(rc=$?)—— 看 reports/inbox/ 那一頁"
+            sh "$AC/review.sh" "$ID" --run-id "$RUN_ID"
+            review_outcome $?
         fi
-        ROUND_RC=0
         return 1
     fi
     python3 "$AC/ticket.py" round "$ID" "$r" --red || true
@@ -2839,18 +2974,18 @@ PY
     echo "auto-fix: 起批次 $B_TAGS 的 worker —— $WORKER_CMD(cwd $FIX,派工文從 stdin 餵)"
     echo "auto-fix: 逾時來源=$TIMEOUT_SRC $WORKER_TIMEOUT 秒" >&2
     WORKER_LOG=$BDIR/worker-round$r.log
-    ev agent.start --ticket "$ID" --model "$WORKER_MODEL" \
+    ev agent.start --ticket "$ID" --role worker --model "$WORKER_MODEL" \
         --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix --kv batch="$B_TAGS" \
         ${T_EFFORT:+--kv effort=$T_EFFORT}
     WSTART=$(date +%s)
     WRC=$(run_agent "$WORKER_CMD" "$DISPATCH" "$FIX" worker "$r" "$WORKER_LOG" 1)
     W_COST_SECS=$(( $(date +%s) - WSTART ))
     if [ "$WRC" -eq 0 ]; then
-        ev agent.done --ticket "$ID" --model "$WORKER_MODEL" \
+        ev agent.done --ticket "$ID" --role worker --model "$WORKER_MODEL" \
             --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix --kv batch="$B_TAGS" \
             ${T_EFFORT:+--kv effort=$T_EFFORT}
     else
-        ev agent.failed --ticket "$ID" --model "$WORKER_MODEL" \
+        ev agent.failed --ticket "$ID" --role worker --model "$WORKER_MODEL" \
             --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix --kv batch="$B_TAGS" \
             ${T_EFFORT:+--kv effort=$T_EFFORT}
     fi
@@ -2953,6 +3088,8 @@ while :; do
             exit 1
         fi
         r=$((r + 1))
+        T_LAST_WORKER=$(last_worker)
+        route_round "$r"
         continue
     fi
     exit "$ROUND_RC"

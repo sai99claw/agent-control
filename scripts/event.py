@@ -36,6 +36,9 @@ KINDS = (
     "ticket.cost",
     # 機器派出的 agent:看板用 ticket + ts 與主線採樣到的 agent 對上。
     "agent.start", "agent.done", "agent.failed",
+    # 額度 / 不可用後的下一個候選交給 Controller 接續(#121 A3):model / tool / effort /
+    # candidate_index / copy(留著的副本)。auto-fix 發了就不自己再起。
+    "agent.recovery_needed",
     # 主線互動 session 與它用 Agent 工具派的子 agent 的 token 與時鐘(#95,
     # agent-cost-hook.py 寫):成本列除 `at` 的 14 鍵 + ticket / agent_id,**null 照寫**。
     # 不進票 cost[]、不進 cost_total —— ticket 是從描述 / prompt 猜的。

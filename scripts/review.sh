@@ -34,7 +34,7 @@
 # 逾時先判、不看內容:被砍之前它可能已經印了一塊像樣的 pass。verdict 說 pass 卻有
 # `OBJECTION:` 行時以那幾行為準(同 §8.5「以 OBJECTION 行為準」),走 fail。
 #
-# ## 模型名取自 `reviewer.command` 的 `--model`,不是 routing 標籤(#21)
+# ## 模型名取自角色表(#121;以前取 `reviewer.command` 的 `--model`,#21),不是 routing 標籤
 # `review.by` 與事件的 model 欄記**實際起的那個**;命令裡沒有 `--model` 就記 `unknown`,不猜。
 #
 # ## 退出碼
@@ -133,20 +133,36 @@ fi
 
 REVIEWER_CMD=$(cfg reviewer.command "claude -p --model opus --allowedTools Read Glob Grep Bash --output-format json")
 REVIEWER_TIMEOUT=$(cfg reviewer.timeout_seconds 1800)
-MODEL=$(python3 - "$REVIEWER_CMD" <<'PY'
-import shlex, sys
-try:
-    parts = shlex.split(sys.argv[1])
-except ValueError:
-    parts = sys.argv[1].split()
-model = "unknown"
-for i, tok in enumerate(parts):
-    if tok == "--model" and i + 1 < len(parts):
-        model = parts[i + 1]
-        break
-print(model)
+# 覆核者也查角色表(#121 A1,#116):model / tool / effort 只由 `role-models.py resolve
+# --role reviewer` 選,`reviewer.command` 的 `--model` 換成表選的那一個(codex 候選走
+# codex exec);BY、規則包、事件、cost 記的都是實際起的那一個。選不出就不派。
+# CLI 已知不在(codex 不在 PATH)就在啟動前標記那一格、取下一個候選(A2);整串沒了不派。
+pick_reviewer() {   # $@ = 給 resolve 的額外旗標;設定 MODEL / R_TOOL / R_EFFORT / R_INDEX
+    R_OUT=$(python3 "$AC/role-models.py" --table "$ROOT/board/role-models.json" resolve \
+            --role reviewer "$@") || {
+        echo "review: #$ID 角色表選不出 reviewer(role-models.py rc=$?)—— 不派" >&2
+        exit 2
+    }
+    eval "$(python3 - "$R_OUT" <<'PY'
+import json, shlex, sys
+got = json.loads(sys.argv[1])
+for key, name in (("model", "MODEL"), ("tool", "R_TOOL"), ("effort", "R_EFFORT"),
+                  ("candidate_index", "R_INDEX")):
+    value = got.get(key)
+    print("%s=%s" % (name, shlex.quote("" if value is None else str(value))))
 PY
-)
+)"
+}
+pick_reviewer
+while [ "$R_TOOL" = codex ] && ! command -v codex >/dev/null 2>&1; do
+    echo "review: #$ID 角色表第 $R_INDEX 格是 $MODEL,但 codex 不在 PATH —— 這一格標記不可用,換下一個候選" >&2
+    pick_reviewer --exhausted-index "$R_INDEX"
+done
+REVIEWER_CMD=$(python3 "$AC/ticket.py" agent-command --model "$MODEL" --tool "$R_TOOL" \
+        --base "$REVIEWER_CMD" --swap-model --effort "$R_EFFORT") || {
+    echo "review: #$ID 角色表選的 reviewer $MODEL(tool $R_TOOL)組不出命令 —— 不派" >&2
+    exit 2
+}
 BY=reviewer@$MODEL
 
 rel() { python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$1" "$ROOT"; }
@@ -407,7 +423,7 @@ print("`scripts/review.sh --batch` 讀這一塊:`pass` ⇒ 寫 `reports/batch/%s
 PY
     } > "$DISPATCH"
     echo "review: 批次 $B_TAGS 派覆核 —— $REVIEWER_CMD(cwd $CWD,$B_BR @ $(echo "$SHA" | cut -c1-12),派工文 $(rel "$DISPATCH"))"
-    ev agent.start --ticket "$ID" --role reviewer --model "$MODEL" \
+    ev agent.start --ticket "$ID" --role reviewer --model "$MODEL" ${R_EFFORT:+--kv effort=$R_EFFORT} \
         --kv run_id="$RUN_ID" --kv round=1 --kv agent=review --kv batch="$B_TAGS"
     rm -f "$RUNDIR/reviewer.json" "$RUNDIR/review.json"
     RSTART=$(date +%s)
@@ -430,6 +446,7 @@ PY
         python3 "$AC/ticket.py" cost "$ID" --role reviewer --round "$_attempt" --model "$MODEL" \
             --by review.sh --from-envelope "$RUNDIR/reviewer.json" --wall-seconds "$RSECS" \
             --outcome "$1" --run-id "${AC_BATCH_RUN_ID:-$RUN_ID}" --note "batch $RUN_ID $B_TAGS" \
+            --effort "$R_EFFORT" \
             >/dev/null 2>&1 || echo "review: #$ID 的 cost 寫不進票 —— 不擋覆核" >&2
     }
     if [ -z "$VERDICT" ]; then
@@ -640,7 +657,7 @@ PY
 } > "$DISPATCH"
 echo "review: #$ID 派覆核 —— $REVIEWER_CMD(cwd $CWD,分支 $BR @ $(echo "$SHA" | cut -c1-12),派工文 $(rel "$DISPATCH"))"
 
-ev agent.start --ticket "$ID" --role reviewer --model "$MODEL" \
+ev agent.start --ticket "$ID" --role reviewer --model "$MODEL" ${R_EFFORT:+--kv effort=$R_EFFORT} \
     --kv run_id="$RUN_ID" --kv round="$ROUND" --kv agent=review
 # 上一次派(同一個 run_id 重派)留下的信封不准被這一次的成本讀到。
 rm -f "$RUNDIR/reviewer.json"
@@ -675,7 +692,8 @@ write_cost() {   # $1 = 結局 pass|fail|missing(與 review.* 同字,#94 C5d) $2
     fi
     python3 "$AC/ticket.py" cost "$ID" --role reviewer --round "$_attempt" --model "$MODEL" \
         --by review.sh --from-envelope "$RUNDIR/reviewer.json" --wall-seconds "$RSECS" \
-        --outcome "$@" --run-id "$RUN_ID" >/dev/null 2>&1 || echo "review: #$ID 的 cost 寫不進票 —— 不擋覆核" >&2
+        --effort "$R_EFFORT" --outcome "$@" --run-id "$RUN_ID" >/dev/null 2>&1 \
+        || echo "review: #$ID 的 cost 寫不進票 —— 不擋覆核" >&2
 }
 
 stale() {   # $1 = reviewer 交的 pass|fail  $2 = ticket.py 說的不收理由;rc=4,票沒動

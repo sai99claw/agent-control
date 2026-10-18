@@ -27,7 +27,11 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from control_harness import (DEFAULT_CONFIG, REVIEWER_PASS, Sandbox,  # noqa: E402
-                             envelope, write_executable)
+                             envelope, fixture_candidate, write_executable)
+
+# 沙盒預設 reviewer(`true`)什麼都不印 = 覆核沒交件。閘門綠 + review missing 的 auto-fix 退出碼
+# (#121 A6:不能被 ROUND_RC=0 蓋成成功;以前這些案例期望 0)。
+GREEN_REVIEW_MISSING_RC = 10
 
 RED_CASE = """diff -ruN base/tests/test_thing.py work/tests/test_thing.py
 --- base/tests/test_thing.py\t1970-01-01 08:00:00
@@ -641,7 +645,7 @@ class ThingsThatStopIt(AutoFixBase):
 
         done = self.auto_fix()
 
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
         self.assertIn("test_defect", done.stdout)
         with open(self.log, encoding="utf-8") as handle:
             self.assertEqual(handle.read().splitlines(),
@@ -712,7 +716,7 @@ class ThingsThatStopIt(AutoFixBase):
 
         done = self.auto_fix()
 
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
         with open(self.log, encoding="utf-8") as handle:
             self.assertEqual(handle.read().splitlines(),
                              ["worker ran round 2", "verifier ran round 2",
@@ -733,7 +737,7 @@ class AWorkerPatchWithATestDefectReachesTheBranch(AutoFixBase):
         self.first_round()
 
     def assert_both_on_the_branch(self, done):
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
         tree = self.git("ls-tree", "-r", "--name-only", "t1").splitlines()
         self.assertIn("src/worker_change.py", tree, "worker 那份沒進分支")
         self.assertIn("tests/test_thing.py", tree)
@@ -875,13 +879,12 @@ class ASerialTestDefectMergesTheVerifierPlan(AutoFixBase):
 
 
 class TheEventModelIsTheOneThatActuallyRan(AutoFixBase):
-    """`routing.implement` 只是路由標籤;事件要記**實際起的那個**(#21)。#91 C7 之後
-    claude-code 票起的是票上的 model(worker.command 的 `--model` 被換掉),所以
-    `agent.start`/`agent.done`/`agent.failed` 的 `model` 欄記票的 model —— 不記 routing
-    標籤,也不記被換掉的 worker.command 那一個。
+    """`routing.implement` 只是路由標籤;事件要記**實際起的那個**(#21)。#121 起起的是角色表
+    選的 model(worker.command 的 `--model` 被換掉),所以 `agent.start`/`agent.done`/`agent.failed`
+    的 `model` 欄記表選的那一個 —— 不記 routing 標籤,也不記被換掉的 worker.command 那一個。
 
-    **變異**:把 `round_once` 裡三個 `ev agent.*` 的 `--model "$WORKER_MODEL"` 改回
-    `--model "$MODEL"` 並拿掉照票換 model → 這一條紅(`row["model"]` 變回 routing 那個標籤)。
+    **變異**:把 `run_worker` 裡三個 `ev agent.*` 的 `--model "$WORKER_MODEL"` 改成記
+    worker.command 原本的 `--model` → 這一條紅。
     """
 
     def set_worker_with_model(self, body, worker_model, routing_model):
@@ -905,7 +908,7 @@ class TheEventModelIsTheOneThatActuallyRan(AutoFixBase):
 
         done = self.auto_fix()
 
-        self.assertIn("照票的 model=opus", done.stdout, done.stdout + done.stderr)
+        self.assertIn("照角色表起 worker:opus", done.stdout, done.stdout + done.stderr)
         agent_events = [row for row in self.events()
                         if row["kind"].startswith("agent.")]
         self.assertTrue(agent_events, "沒有 agent 事件可以查")
@@ -923,9 +926,9 @@ exit 0
 """
 
 
-class TheTicketModelPicksTheClaudeWorker(AutoFixBase):
-    """#91 C7:tool=claude-code、model 非空的票,worker 照票上的 model 起 —— 以前只有
-    codex 票照票,claude-code 票寫 fable 也起 worker.command 的 opus(#78 只能手派)。"""
+class TheTableModelPicksTheClaudeWorker(AutoFixBase):
+    """#121(取代 #91 C7 的「照票」):worker 照角色表選的 model 起;票上的 model 只是建議
+    (#116 A7)。夾具的表首選 fable、票寫 opus —— 起的、規則包、事件、cost 都要是 fable。"""
 
     FABLE_ONLY = "沙盒fable卡獨有字:藍鯨"
     OPUS_ONLY = "沙盒opus卡獨有字:紅隼"
@@ -945,24 +948,26 @@ class TheTicketModelPicksTheClaudeWorker(AutoFixBase):
         conf["worker"] = {"command": "sh %s --model opus --permission-mode acceptEdits" % path,
                           "timeout_seconds": 120}
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        self.set_role_models(worker=[fixture_candidate("fable")])
 
     def argv(self):
         with open(self.argv_file, encoding="utf-8") as handle:
             return handle.read().splitlines()
 
-    def test_the_worker_runs_the_ticket_model(self):
-        """**變異**:拿掉 auto-fix 的照票換 model → argv 那一格紅。"""
-        self.ticket_ready(model="fable", tool="claude-code")
+    def test_the_worker_runs_the_table_model(self):
+        """**變異**:拿掉 auto-fix 的照表換 model → argv 那一格紅。"""
+        self.ticket_ready(model="opus", tool="claude-code")
         done = self.auto_fix("--no-review")
         argv = self.argv()
         self.assertEqual(argv[argv.index("--model") + 1], "fable", argv)
         self.assertEqual(argv.count("--model"), 1, argv)
         self.assertNotIn("opus", argv)
-        self.assertIn("照票的 model=fable", done.stdout, done.stdout + done.stderr)
+        self.assertIn("照角色表起 worker:fable", done.stdout, done.stdout + done.stderr)
+        self.assertIn("票的 model=opus 只是建議", done.stdout)
 
-    def test_the_rules_pack_is_cut_for_the_ticket_model(self):
+    def test_the_rules_pack_is_cut_for_the_table_model(self):
         """**變異**:規則包改回用 routing 的 model → 這一條紅。"""
-        self.ticket_ready(model="fable", tool="claude-code")
+        self.ticket_ready(model="opus", tool="claude-code")
         done = self.auto_fix("--no-review")
         with open(self.stdin_file, encoding="utf-8") as handle:
             packet = handle.read()
@@ -970,8 +975,8 @@ class TheTicketModelPicksTheClaudeWorker(AutoFixBase):
         self.assertNotIn(self.OPUS_ONLY, packet)
         self.assertIn("memory/model/fable.md", packet)
 
-    def test_events_and_cost_record_the_ticket_model(self):
-        self.ticket_ready(model="fable", tool="claude-code")
+    def test_events_and_cost_record_the_table_model(self):
+        self.ticket_ready(model="opus", tool="claude-code")
         done = self.auto_fix("--no-review")
         agent_events = [row for row in self.events() if row["kind"].startswith("agent.")]
         self.assertTrue(agent_events, done.stdout + done.stderr)
@@ -982,19 +987,25 @@ class TheTicketModelPicksTheClaudeWorker(AutoFixBase):
                 if row["role"] == "worker"]
         self.assertEqual([row["model"] for row in cost], ["fable"], cost)
 
-    def test_a_model_below_the_routing_floor_starts_nothing(self):
-        """下限沿用 rules.py 的 below_floor,auto-fix 不另寫一份。"""
+    def test_a_simple_ticket_starts_sonnet_below_the_old_floor(self):
+        """T5 / A8:complexity=simple → worker_simple 鏈(sonnet medium);config 還帶舊的
+        routing.implement=opus 與 model_tiers,規則包照產、worker 照起。**M5**(rules.py 留著
+        below_floor)→ 規則包 rc=2、不起 worker,紅。四問:量 argv / 事件;值 = A1 + A8;
+        舊值(#87 A8 拒起)紅在 argv 檔不在;不靠沒設就退回(config 真的帶 tiers)。"""
         conf = json.loads(self.read("board/config.json"))
         conf["model_tiers"] = ["sonnet", "opus", "fable"]
         conf["routing"] = {"implement": "opus"}
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
         self.write(os.path.join("memory", "model", "sonnet.md"), "- 沙盒 sonnet 卡\n")
-        self.ticket_ready(model="sonnet", tool="claude-code")
+        self.ticket_ready(model="opus", tool="claude-code", complexity="simple")
         done = self.auto_fix("--no-review")
-        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("低於 routing 下限", done.stderr)
-        self.assertFalse(os.path.exists(self.argv_file), "不該起 worker")
-        self.assertEqual([row for row in self.events() if row["kind"] == "agent.start"], [])
+        self.assertNotIn("下限", done.stderr)
+        argv = self.argv()
+        self.assertEqual(argv[argv.index("--model") + 1], "sonnet", argv)
+        self.assertEqual(argv[argv.index("--effort") + 1], "medium", argv)
+        starts = [row for row in self.events() if row["kind"] == "agent.start"]
+        self.assertEqual([(row["model"], row.get("effort")) for row in starts],
+                         [("sonnet", "medium")])
 
 
 class TheDispatchPacket(AutoFixBase):
@@ -1219,7 +1230,7 @@ class TheFirstRoundStartsFromReady(AutoFixBase):
 
         done = self.auto_fix()
 
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
         self.assertNotIn("一輪都還沒跑過", done.stderr)
         self.assertEqual(self.worker_rounds(), ["worker ran round 1"])
         sent = [path for path in self.result_files("dispatch-round1.md")
@@ -1250,7 +1261,7 @@ class TheFirstRoundStartsFromReady(AutoFixBase):
 
         done = self.auto_fix()
 
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
         starts = [row for row in self.events() if row["kind"] == "ticket.attempt.start"]
         self.assertEqual(len(starts), 1, starts)
         self.assertEqual(str(starts[0].get("attempt")), "1", starts[0])
@@ -1611,7 +1622,7 @@ class TheCopiesGetCollected(AutoFixBase):
         self.ticket_ready()
         self.first_round()
         done = self.auto_fix()
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
         where = self.fix_dir()
         self.assertFalse(os.path.isdir(os.path.join(where, "work")), "work/ 沒被收掉")
         self.assertFalse(os.path.isdir(os.path.join(where, "base")), "base/ 沒被收掉")
@@ -1636,7 +1647,7 @@ class TheCopiesGetCollected(AutoFixBase):
         self.ticket_ready()
         self.first_round()
         done = self.auto_fix()
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
         where = self.fix_dir()
         self.assertTrue(os.path.isfile(os.path.join(where, "patch-round2.diff")),
                         done.stdout + done.stderr)
@@ -1657,7 +1668,7 @@ class TheCopiesGetCollected(AutoFixBase):
             self.write(os.path.join(sub, "README"), "main\n", where=where)
         self.write("patch-round1.diff", RED_CASE, where=where)
         done = self.auto_fix()
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
         self.assertFalse(os.path.isdir(os.path.join(where, "work")), "round1 的 work/ 沒被收掉")
         self.assertFalse(os.path.isdir(os.path.join(where, "base")), "round1 的 base/ 沒被收掉")
         self.assertTrue(os.path.isfile(os.path.join(where, "patch-round1.diff")),
@@ -1683,7 +1694,7 @@ class TheCopiesGetCollected(AutoFixBase):
         pid = os.getpid()
         where = self.round_one_copy_with_pid(pid)
         done = self.auto_fix()
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
         self.assertTrue(os.path.isdir(os.path.join(where, "work")),
                         "worker 還在跑,副本被從它腳下抽走了")
         self.assertIn("auto-fix: 第 1 輪的 worker(pid %d)還在跑,不收副本" % pid, done.stdout)
@@ -1694,7 +1705,7 @@ class TheCopiesGetCollected(AutoFixBase):
         gone.wait()
         where = self.round_one_copy_with_pid(gone.pid)
         done = self.auto_fix()
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
         self.assertFalse(os.path.isdir(os.path.join(where, "work")), "round1 的 work/ 沒被收掉")
         self.assertFalse(os.path.isdir(os.path.join(where, "base")), "round1 的 base/ 沒被收掉")
         self.assertNotIn("還在跑,不收副本", done.stdout)
@@ -1768,6 +1779,7 @@ class TheWholeLoop(AutoFixBase):
         with open(self.log, encoding="utf-8") as handle:
             self.assertNotIn("reviewer ran", handle.read())
         self.assertIn("--no-review", done.stdout)
+        self.assertIn("終態=awaiting_review", done.stdout, "#121 A6:明示還沒覆核、不是可落地")
         self.assertEqual(self.inbox_rows(), [])
 
     def test_a_configured_rerun_command_runs_after_apply_and_emits_an_event(self):
@@ -1781,7 +1793,8 @@ echo "rerun $AC_ROUND ticket=$AC_TICKET" >> "$AC_TEST_LOG"
         self.ticket_ready()
         self.first_round()
         done = self.auto_fix()
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        # 沙盒預設 reviewer 什麼都不印 = 覆核沒交件:#121 A6 起綠 + missing 是 rc=10,不是 0。
+        self.assertEqual(done.returncode, 10, done.stdout + done.stderr)
         self.assertEqual(self.worker_rounds(), ["worker ran round 2"])
         with open(self.log, encoding="utf-8") as handle:
             self.assertIn("rerun 2 ticket=1", handle.read())
@@ -1846,6 +1859,92 @@ echo "rerun $AC_ROUND ticket=$AC_TICKET" >> "$AC_TEST_LOG"
         self.assertEqual([row["kind"] for row in rows], ["decision"],
                          "三輪紅恰一頁 decision(auto-fix 那頁;ticket.py 只寫事件)")
         self.assertIn("三輪耗盡", rows[0]["state"])
+
+
+# 假 review.sh(#121 A6):只回指定的 rc,要測的是 auto-fix 怎麼讀它,不是覆核怎麼判。
+REVIEW_RC = """#!/bin/sh
+echo "review stub ran $*" >> "$AC_TEST_LOG"
+exit @RC@
+"""
+
+
+class TheReviewOutcomeIsTheExitCode(AutoFixBase):
+    """#121 A6:閘門綠但覆核 fail / missing / stale,auto-fix 的 rc 與終態分別保留,不被
+    ROUND_RC=0 蓋成成功。**變異**:`review_outcome` 恆設 ROUND_RC=0(舊行為)→ 三案 rc 都是 0,紅。
+    四問:量 rc、終態行、票 state;值 = A6;舊值紅在 rc;missing 用真的 review.sh(預設 reviewer
+    替身什麼都不印),fail / stale 用替身 rc —— 量的是 auto-fix 的對應,不是覆核本身。"""
+
+    def test_missing_with_the_real_review_sh_is_rc_10_and_stays_in_review(self):
+        self.set_worker(WORKER_FIXES)
+        self.ticket_ready()
+        self.first_round()
+        done = self.auto_fix()
+        self.assertEqual(done.returncode, 10, done.stdout + done.stderr)
+        self.assertIn("終態=review_missing", done.stdout)
+        self.assertEqual(self.load_ticket("1")["state"], "InReview")
+        self.assertIsNone(self.load_ticket("1").get("review"))
+
+    def test_fail_and_stale_keep_their_own_rc(self):
+        for rc, want_rc, word in (("1", 9, "review_fail"), ("4", 10, "review_stale"),
+                                  ("0", 0, "review_pass")):
+            with self.subTest(review_rc=rc):
+                self.setUp()
+                self.set_worker(WORKER_FIXES)
+                self.ticket_ready()
+                self.first_round()
+                write_executable(os.path.join(self.repo, "scripts", "review.sh"),
+                                 REVIEW_RC.replace("@RC@", rc))
+                done = self.auto_fix()
+                self.assertEqual(done.returncode, want_rc, done.stdout + done.stderr)
+                self.assertIn("終態=%s" % word, done.stdout)
+                self.assertEqual(self.load_ticket("1")["state"], "InReview")
+                with open(self.log, encoding="utf-8") as handle:
+                    self.assertIn("review stub ran 1", handle.read())
+
+
+class RepairRoundsEscalateOnlyWhenRed(AutoFixBase):
+    """#121 A7 / T2:第 1 輪取表的 effort;修補第 2 輪起且上一輪紅 → effort_escalated;
+    修補輪沿用原 worker 的模型。**變異**:auto-fix 不傳 --last-red → 第 2 輪命令沒有 xhigh,紅。"""
+
+    def setUp(self):
+        super().setUp()
+        self.argv_file = os.path.join(self.home, "worker-argv.txt")
+        self.stdin_file = os.path.join(self.home, "worker-stdin.md")
+        path = os.path.join(self.home, "fake-worker.sh")
+        write_executable(path, WORKER_RECORDS_ARGV.replace("@ARGV@", self.argv_file)
+                         .replace("@STDIN@", self.stdin_file))
+        conf = dict(DEFAULT_CONFIG)
+        conf["worker"] = {"command": "sh %s --model opus" % path, "timeout_seconds": 120}
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        self.set_role_models(worker=[fixture_candidate("fable", effort="high", escalated="xhigh"),
+                                     fixture_candidate("opus", effort="high")])
+
+    def effort_of(self):
+        with open(self.argv_file, encoding="utf-8") as handle:
+            argv = handle.read().splitlines()
+        return argv[argv.index("--model") + 1], argv[argv.index("--effort") + 1]
+
+    def test_round_one_takes_the_table_effort(self):
+        self.ticket_ready()
+        self.auto_fix("--no-review")
+        self.assertEqual(self.effort_of(), ("fable", "high"))
+
+    def test_a_red_repair_round_escalates_and_keeps_the_round_one_model(self):
+        """原 worker 是 fable(cost 列)→ 修補輪 fable xhigh;原 worker 是 opus → 沿用 opus
+        (表上 opus 沒有 effort_escalated,沿用 high)。"""
+        for first, want in (("fable", ("fable", "xhigh")), ("opus", ("opus", "high"))):
+            with self.subTest(first=first):
+                self.setUp()
+                self.ticket_ready(cost=[{"role": "worker", "round": 1, "model": first,
+                                         "tokens_in": None, "tokens_out": None,
+                                         "cache_write": None, "cache_read": None,
+                                         "wall_seconds": 1, "outcome": "handed-in",
+                                         "run_id": "x", "session_id": None, "by": "auto-fix.sh",
+                                         "note": None, "effort": "high",
+                                         "at": "2026-10-18T00:00:00+08:00"}])
+                self.first_round()
+                self.auto_fix("--no-review")
+                self.assertEqual(self.effort_of(), want)
 
 
 # 新檔的檔名就是 needle,檔內沒有 —— #89 第 1 輪那一種票面(verify_strings 寫了新檔檔名)。
@@ -2035,7 +2134,7 @@ class TheResultBlockAtTheEndOfEvidence(AutoFixBase):
 
         done = self.auto_fix()
 
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
         found = self.result_files("result-round2.json")
         self.assertEqual(len(found), 1, done.stdout)
         self.assertTrue(os.path.exists(os.path.join(os.path.dirname(found[0]),
@@ -2068,7 +2167,7 @@ class TheResultBlockAtTheEndOfEvidence(AutoFixBase):
 
         done = self.auto_fix()
 
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
         self.assertEqual(len(self.result_json()["memory"]), 2,
                          "鏡像那一格本身要抽得出來")
         self.assertEqual(self.memory_inbox_lines(), before,
@@ -3552,6 +3651,60 @@ EOF
 """
 
 
+class TheVerifierComesFromTheRoleTable(AutoFixBase):
+    """#121 A1 / A2 / T1:驗證者的 model / effort 由角色表選(verifier 鏈不看 worker);
+    表首選是 codex 而 codex 不在 PATH → 啟動前標記那一格、換下一個候選。夾具借
+    `TheFirstRoundVerifierRunsAlongside` 那一組(worker 與驗證者同一支替身,看 `AC_ROLE`),
+    另把每次被叫的 argv 記下來。**M1**(驗證者照舊用 worker 的 model)→ 驗證者 argv 的
+    `--model` 是 opus,紅。四問:量 argv / agent.start / cost;值 = A1、A2、A4;舊值
+    (routing.verify)紅在 model;不靠沒設就退回(表真的兩格、首選是 codex)。"""
+
+    vcalls = TheFirstRoundVerifierRunsAlongside.vcalls
+    vfix = TheFirstRoundVerifierRunsAlongside.vfix
+    vsaw = TheFirstRoundVerifierRunsAlongside.vsaw
+    arm = TheFirstRoundVerifierRunsAlongside.arm
+
+    def set_worker(self, body, rerun_cmd=None):
+        self.argv_log = os.path.join(self.home, "agent-argv.log")
+        body = body.replace("#!/bin/sh\nset -e\n",
+                            "#!/bin/sh\nset -e\necho \"$AC_ROLE $*\" >> %s\n" % self.argv_log, 1)
+        return super().set_worker(body, rerun_cmd)
+
+    def argv_of(self, role):
+        with open(self.argv_log, encoding="utf-8") as handle:
+            return [line.split()[1:] for line in handle if line.split()[0] == role]
+
+    def path_without_codex(self):
+        return os.pathsep.join([self.stub_bin] + [
+            where for where in os.environ.get("PATH", "").split(os.pathsep)
+            if where and not os.path.exists(os.path.join(where, "codex"))])
+
+    def test_the_verifier_runs_the_first_usable_table_candidate(self):
+        self.arm(needs_verifier=True)
+        self.write(os.path.join("memory", "model", "fable.md"), "- 沙盒 fable 卡\n")
+        self.set_role_models(
+            worker=[fixture_candidate("opus")],
+            verifier=[fixture_candidate("codex:gpt-6-astra", "codex", "high"),
+                      fixture_candidate("fable", effort="medium")])
+        done = self.run_sh("scripts/auto-fix.sh", "1", "--no-review",
+                           env=self.env(PATH=self.path_without_codex()))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("驗證者第 0 格是 codex:gpt-6-astra,但 codex 不在 PATH", done.stderr)
+        argv = self.argv_of("verifier")
+        self.assertEqual(len(argv), 1, argv)
+        self.assertEqual(argv[0][argv[0].index("--model") + 1], "fable")
+        self.assertEqual(argv[0][argv[0].index("--effort") + 1], "medium")
+        worker = self.argv_of("worker")
+        self.assertEqual(worker[0][worker[0].index("--model") + 1], "opus")
+        starts = [row for row in self.events() if row["kind"] == "agent.start"
+                  and row.get("role") == "verifier"]
+        self.assertEqual([(row["model"], row.get("effort")) for row in starts],
+                         [("fable", "medium")])
+        cost = [row for row in self.load_ticket("1")["cost"] if row["role"] == "verifier"]
+        self.assertEqual([(row["model"], row["effort"]) for row in cost], [("fable", "medium")])
+
+
+
 class BatchFix(AutoFixBase):
     """#108 A1 / A6 / A7:`AC_BATCH_RUN_ID=<run> auto-fix.sh --batch land/X 1 2` 派一輪批次 worker。
     worker 與 reviewer 都是替身;期望值從夾具寫下的票檔與 status.json 讀,不從腳本算。"""
@@ -3615,6 +3768,33 @@ class BatchFix(AutoFixBase):
             self.assertIn("- `%s`" % item, text)
         self.assertIn("不得放寬測試", text)
         self.assertIn("OBJECTION: test_defect", text)
+
+    def test_121_the_batch_worker_comes_from_the_role_table(self):
+        """#121 A1 / T1 批次:`--batch` 的 worker 照表選第一個可用候選(首選 codex 而 codex 不在
+        PATH → 換 fable high);`worker.command` 沒寫 model。**M1**(批次照舊起 worker.command、
+        不換 model)→ argv 沒有 `--model fable`,紅。四問:量 argv / agent.start / cost;值 = A1、A2;
+        舊值紅在 argv;表真的兩格。"""
+        argv_log = os.path.join(self.home, "batch-argv.log")
+        assert BATCH_WORKER_FIXES.startswith("#!/bin/sh\n")
+        self.set_worker(BATCH_WORKER_FIXES.replace(
+            "#!/bin/sh\n", "#!/bin/sh\necho \"$*\" >> %s\n" % argv_log, 1))
+        self.write(os.path.join("memory", "model", "fable.md"), "- 沙盒 fable 卡\n")
+        self.set_role_models(worker=[fixture_candidate("codex:gpt-6-astra", "codex", "high"),
+                                     fixture_candidate("fable", effort="high")])
+        path = os.pathsep.join([self.stub_bin] + [
+            where for where in os.environ.get("PATH", "").split(os.pathsep)
+            if where and not os.path.exists(os.path.join(where, "codex"))])
+        done = self.run_sh("scripts/auto-fix.sh", "--batch", "land/X", "1", "2", "--no-review",
+                           env=self.env(AC_BATCH_RUN_ID=self.batch["run_id"], PATH=path))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        with open(argv_log, encoding="utf-8") as handle:
+            argv = handle.read().split()
+        self.assertEqual(argv[argv.index("--model") + 1], "fable", argv)
+        self.assertEqual(argv[argv.index("--effort") + 1], "high", argv)
+        starts = [row for row in self.events() if row["kind"] == "agent.start"]
+        self.assertEqual([(row["model"], row.get("effort")) for row in starts], [("fable", "high")])
+        cost = [row for row in self.load_ticket("1").get("cost") or [] if row["role"] == "worker"]
+        self.assertEqual([(row["model"], row["effort"]) for row in cost], [("fable", "high")])
 
     def test_green_path_commits_one_fix_reviews_it_and_costs_two_rows_on_ticket_one(self):
         """A2 / A5 / A6 一條龍。四問:量 rc 0、land/X 前進一個 batch commit、review.json.sha = land/X 頭、

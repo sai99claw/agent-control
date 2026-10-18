@@ -7,7 +7,7 @@ A3 | integ | base_sha 上的票寫 OLD objective,權威票庫寫 NEW | 派工文
 A4 | integ | worker 在主 repo 新增 / 刪除 / 修改、已髒檔再改、HEAD 前進、切分支、guarded_dirs 新增 / 刪除 / 改動;驗證者越界;批次 worker 越界 | rc 8、票 Blocked / owner=main、attempt.failed reason=guard-violation、唯一 decision 指出路徑、guard 報告有前後;patch 不套、副本留著 | 票面 A4 原話 + interface_contracts.guard_result
 A5 | integ | 寫 tickets/(控制面)/ board/ 下非控制面檔;guarded_dirs ["~/g"] / ["../o"];缺 / [] 時寫主 repo 外 | 控制面不擋、board/ 其他檔擋;~ 展開與相對主 repo 都抓;缺 / [] 不抓 repo 外 | 票面 A5 原話
 A6 | integ | 同 stamp land.start + land.pass(sha = 新 HEAD);只有 land.start;pass 的 sha 對不上;合法 land + 多一個檔 | 第一種不擋,其餘三種 rc 8 | 票面 A6 原話
-A7 | integ | 假 codex 撞 429 且越界;只撞 429 | 前者 rc 8、票 Blocked 不改派、reason=guard-violation、頁指出路徑;後者照舊 rc 7、Ready、opus / claude-code | 票面 A7 原話
+A7 | integ | 假 codex 回額度信封且越界;只撞額度(表 worker = [codex astra, opus]) | 前者 rc 8、票 Blocked 不改派、reason=guard-violation、頁指出路徑;後者同一次接著起 claude worker、rc 0、票的 model / tool 不改、沒有 guard-violation | 票面 A7;#121 A2 / A4 取代「rc 7、Ready、改 opus」
 A8 | doc   | 讀 docs/ROLES.md、docs/WORKFLOW.md、scripts/ticket.py、scripts/auto-fix.sh;乾跑 codex 票 | 兩份文件有 D-048、rc=8、「待專案同步後冒煙實證」;兩支腳本與乾跑 worker 行沒有 workspace-write | 票面 A8 原話
 
 ## 介面字串(全部出自票面 acceptance / interface_contracts;票面沒定的照 t115 的 patch,EVIDENCE 記一行)
@@ -43,7 +43,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 TESTS_DIR = os.path.join(ROOT, "tests")
 sys.path.insert(0, TESTS_DIR)
-from control_harness import write_executable  # noqa: E402
+from control_harness import fixture_candidate, write_executable  # noqa: E402
 from test_auto_fix import AutoFixBase  # noqa: E402
 from test_auto_fix_codex import CodexBase  # noqa: E402
 
@@ -56,7 +56,6 @@ CLAUDE_BASE = "claude -p --model opus --permission-mode acceptEdits"
 SNAPSHOT = "權威票面快照"
 REASON = "guard-violation"
 GUARD_RC = 8
-QUOTA_RC = 7
 OLD_SANDBOX = "workspace-write"
 ADD_DIR = "--add-dir"
 WORKER_LINE = "auto-fix: worker 命令 —— "
@@ -94,8 +93,9 @@ diff -ruN base work > "patch-round$AC_ROUND.diff" || true
 printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
 """
 
-# 假 codex:argv 一行一格;@MODE@ = deliver / quota / quota-stray。429 那一行不以 `ERROR:` 起頭:
-# 斷言訊息帶著 stdout 時,行首的 `ERROR:` 會被驗紅工具當成 unittest 的 ERROR 標頭(紅在別處)。
+# 假 codex:argv 一行一格;@MODE@ = deliver / quota / quota-stray。額度是 provider 的錯誤信封(頂層 JSON;
+# #121 起純文字的 429 不算額度)。那一行不以 `ERROR:` 起頭:斷言訊息帶著 stdout 時,行首的 `ERROR:`
+# 會被驗紅工具當成 unittest 的 ERROR 標頭(紅在別處)。
 FAKE_CODEX = """#!/bin/sh
 SANDBOX="@SANDBOX@"
 printf '%s\\n' "$@" > "$SANDBOX/codex.argv"
@@ -104,13 +104,11 @@ cat > "$SANDBOX/codex.stdin"
 echo "codex ran $AC_ROLE round $AC_ROUND" >> "$AC_TEST_LOG"
 case "@MODE@" in
     quota)
-        echo "codex: stream error: 429 Too Many Requests"
-        echo "You've hit your usage limit." >&2
+        echo '{"type":"turn.failed","error":{"message":"You have hit your usage limit (429)."}}'
         exit 1 ;;
     quota-stray)
         echo stray > "@REPO@/codex-stray.txt"
-        echo "codex: stream error: 429 Too Many Requests"
-        echo "You've hit your usage limit." >&2
+        echo '{"type":"turn.failed","error":{"message":"You have hit your usage limit (429)."}}'
         exit 1 ;;
 esac
 cd "$AC_WORK"
@@ -499,7 +497,7 @@ class OnlyAnAttributedLandExplainsHead(GuardBase):
 
 
 class QuotaDoesNotSwallowAViolation(GuardBase):
-    """A7:額度與越界同時發生,守衛照做;只撞額度照舊 rc 7。"""
+    """A7:額度與越界同時發生,守衛照做、不接下一候選;只撞額度依角色表接下一候選(#121 A2)。"""
 
     def test_a7_quota_with_a_violation_is_still_a_violation(self):
         """A7 假 codex 越界又撞 429 → rc 8、票 Blocked / owner=main 不改派、reason=guard-violation、頁指路徑。"""
@@ -513,14 +511,20 @@ class QuotaDoesNotSwallowAViolation(GuardBase):
         self.assertEqual(len(pages), 1, pages)  # pin:票面 A4「唯一 decision」
         self.assertIn("codex-stray.txt", self.page_text(pages[0]))
 
-    def test_a7_quota_alone_keeps_rc7_ready_and_opus(self):
-        """A7 只撞 429、沒越界 → 照舊 rc 7、回 Ready、改派 opus / claude-code、沒有 guard-violation。"""
+    def test_a7_quota_alone_moves_to_the_next_candidate_without_a_violation(self):
+        """A7 只撞額度、沒越界 → 同一次接著起表上的 claude worker、rc 0、票的 model / tool 不改、沒有 guard-violation。"""
+        self.set_role_models(worker=[fixture_candidate(CODEX_MODEL, "codex"), fixture_candidate()])
+        self.set_worker(FAKE_AGENT.replace("@REPO@", self.repo).replace("@SANDBOX@", self.home)
+                        .replace("@WHO@", "worker").replace("@STRAY@", "true"))
         self.arm_codex("quota")
         done = self.auto_fix("--no-review")
-        self.assertEqual(done.returncode, QUOTA_RC, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue(os.path.exists(os.path.join(self.home, "codex.argv")), "codex 要先起過一次")
+        self.assertEqual(lines_of(os.path.join(self.home, "agent.where"))[1], "worker")
         row = self.load_ticket("1")
-        self.assertEqual((row["state"], row["model"], row["tool"]), ("Ready", "opus", "claude-code"))
+        self.assertEqual((row["model"], row["tool"]), (CODEX_MODEL, "codex"))
         self.assertNotIn(REASON, self.failed_reasons())
+        self.assertEqual(self.guard_rows(), [])
 
 
 class DocsAndScriptsSayD048(GuardBase):

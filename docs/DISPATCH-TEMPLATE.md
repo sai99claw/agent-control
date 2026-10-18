@@ -36,8 +36,8 @@ python3 scripts/rules.py roles                         # 哪個角色要哪幾�
 `pack` 從這一份抽那個角色真的會被擋到的幾節,接上角色卡與模型記憶,壓進 4 KB,砍掉的地方
 指名「全文見哪一節」。整份一萬多字,而**每派一次工、每個 agent 各付一次整份的錢**。
 
-`pack` rc=2、stderr 說「低於 routing 下限」(#87 A8):派工方不起 agent;agent 自己撞到時**停下**,
-逐字回報「模型低於這個角色的 routing 下限」,不換角色或模型重跑。
+`pack` 不判模型(#121 A8 拆掉舊的 routing 下限):派哪個模型只由 `scripts/role-models.py`
+選路器決定,表外模型先改表(#116 A7)。
 
 ---
 
