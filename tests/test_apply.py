@@ -1420,5 +1420,86 @@ class TheCodeMapIsRebuiltIntoTheSameCommit(ApplyBase):
         self.assertIn("索引沒重產", done.stdout + done.stderr)
 
 
+
+class TheBatchRebuildsTheCodeMap(ApplyBase):
+    """#129 A1–A2:`apply.sh --batch` 與單票那一支同一個判準(候選樹有 repo-map.py 與 catalog),
+    產出物有變就併進那一個 batch fix commit。沙盒照 #96 那一類:真的 repo-map.py + catalog +
+    新鮮索引進主線,再照 ApplyBatch 開整合分支 land/X(test_x.py 先寫好再 build,主線索引才是新的)。
+    期望值(新檔名、commit 數、字樣)抄票面,不從 repo-map 算回來。"""
+
+    def setUp(self):
+        super(TheBatchRebuildsTheCodeMap, self).setUp()
+        shutil.copy(os.path.join(SCRIPTS, "repo-map.py"),
+                    os.path.join(self.repo, "scripts", "repo-map.py"))
+        self.write(os.path.join("code-map", "catalog.json"),
+                   json.dumps(MAP_CATALOG, ensure_ascii=False, indent=2) + "\n")
+        self.write(os.path.join("tests", "test_kept.py"), TEST_X)
+        self.write(os.path.join("tests", "test_x.py"), TEST_X)
+        done = self.run_py("scripts/repo-map.py", "build")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "沙盒的地圖")
+        self.batch = self.make_batch()
+
+    def run_batch(self, body):
+        return self.apply("--batch", "land/X", "1", "2", self.patch_file("batch.diff", body))
+
+    def wt(self, name="batch-land-X"):
+        return os.path.join(self.home, "repo-wt", name)
+
+    def message(self):
+        return self.git("log", "-1", "--format=%B", "land/X")
+
+    def result_round1(self):
+        found = glob.glob(os.path.join(self.repo, "reports", "batch", "*", "result-round1.json"))
+        self.assertEqual(len(found), 1, found)
+        with open(found[0], encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_a1_a_stale_code_map_is_rebuilt_into_the_batch_commit(self):
+        """A1。四問:量 commit 數、regen 行、副本 check、managed、字樣、extra_paths;
+        紅 = **m1**(拿掉 --batch 的重產)時 check rc=1、沒有 regen 行;
+        期望值 = patch 新增的檔名 tests/test_batch_new.py。"""
+        done = self.run_batch(batch_patch(("tests/test_batch_new.py", None, TEST_X)))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("rev-list", "--count",
+                                  "%s..land/X" % self.batch["land"]).strip(), "1")
+        self.assertTrue(any(line.startswith("regen: repo-map build")
+                            for line in self.message().splitlines()), self.message())
+        wt = self.wt()
+        check = self.run_py(os.path.join(wt, "scripts", "repo-map.py"), "--root", wt, "check",
+                            cwd=wt)
+        self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
+        with open(os.path.join(wt, "code-map", "index.json"), encoding="utf-8") as handle:
+            self.assertIn("tests/test_batch_new.py", json.load(handle)["managed"])
+        self.assertIn("批次 code-map 索引重產", done.stdout + done.stderr)
+        self.assertEqual([name for name in self.result_round1()["extra_paths"]
+                          if name.startswith("code-map/")], [])
+
+    def test_a2_an_unchanged_map_adds_no_regen_line(self):
+        """A2 前半。四問:量 regen 行與那個 commit 的檔名;紅 = 每次都加 regen 行;
+        期望值 = 只改 tests/test_kept.py 的內文。"""
+        done = self.run_batch(batch_patch(
+            ("tests/test_kept.py", TEST_X, TEST_X.replace("test_one", "test_two"))))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertFalse(any(line.startswith("regen:") for line in self.message().splitlines()),
+                         self.message())
+        self.assertEqual(self.git("diff", "--name-only", "land/X^", "land/X").split(),
+                         ["tests/test_kept.py"])
+
+    def test_a2_a_failed_rebuild_does_not_block_the_batch(self):
+        """A2 後半。四問:量 rc、commit 數、字樣;紅 = build 失敗改成擋;
+        期望值 = 票面字樣「索引沒重產」。"""
+        broken = dict(MAP_CATALOG, topics=dict(MAP_CATALOG["topics"], ghost={
+            "summary": "指到不存在的檔", "match": ["ghost"], "entry": "scripts/ghost.py"}))
+        old = json.dumps(MAP_CATALOG, ensure_ascii=False, indent=2) + "\n"
+        new = json.dumps(broken, ensure_ascii=False, indent=2) + "\n"
+        done = self.run_batch(batch_patch(("code-map/catalog.json", old, new)))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("rev-list", "--count",
+                                  "%s..land/X" % self.batch["land"]).strip(), "1")
+        self.assertIn("索引沒重產", done.stdout + done.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

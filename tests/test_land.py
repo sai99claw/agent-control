@@ -10,15 +10,18 @@ land —— 中間漏了 `git commit`。腳本照樣開 worktree、照樣跑完�
 的 bug 的可觀察面。
 """
 
+import glob
 import json
 import os
 import re
 import shlex
+import shutil
+import subprocess
 import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import (GATE_STUB_GREEN, GATE_STUB_RED, Sandbox,  # noqa: E402
+from control_harness import (GATE_STUB_GREEN, GATE_STUB_RED, SCRIPTS, Sandbox,  # noqa: E402
                              fixture_patch_id, oracle_face, write_executable)
 
 
@@ -1666,6 +1669,256 @@ class PhasesAndClosing(LandBase):
         data = self.status_of("1", kind="land")
         self.assertEqual(data["state"], "done")
         self.assertEqual(data["rc"], 2)
+
+
+
+MAP_CATALOG = {"version": 1, "managed": ["scripts/*.py", "tests/test_*.py"],
+               "topics": {"memory": {"summary": "沙盒", "match": ["memory"],
+                                     "entry": "scripts/memory.py"}}}
+
+MAP_TEST = ("import unittest\n\n\nclass T(unittest.TestCase):\n"
+            "    def test_one(self):\n        self.assertEqual(1, 1)\n")
+
+# A5(b) 的假產生器:check 一律過期;build 寫兩支產出物,外加一支 code-map/ 以外的 stray.txt。
+FAKE_REPO_MAP = """import os, sys
+root = sys.argv[sys.argv.index("--root") + 1] if "--root" in sys.argv else os.getcwd()
+if "check" in sys.argv:
+    sys.exit(1)
+for name in ("code-map/index.json", "code-map/INDEX.md"):
+    with open(os.path.join(root, name), "w") as handle:
+        handle.write("fake build\\n")
+with open(os.path.join(root, "stray.txt"), "w") as handle:
+    handle.write("written by build\\n")
+"""
+
+MERGED_STALE = "合併後 code-map 索引過期"
+REGEN_FAILED = "合併後索引重產失敗"
+STRAY = "重產動到 code-map/ 以外"
+GATE_STALE = "code-map 索引過期"
+
+
+class TheMergedCodeMapIsRebuilt(LandBase):
+    """#129 A3–A7:合併結果的 code-map 索引過期 → land 自己重產、併進同一次落地。
+
+    沙盒照 test_repo_map_contract 的 A32:真的 scripts/repo-map.py + catalog(managed 含
+    tests/test_*.py)+ 新鮮索引 commit 進主線;**真的** gate.sh(機械格要量得到索引)。
+    期望值(檔名、commit 首行、字樣)抄票面與夾具寫下的檔名,不從 repo-map 算回來。"""
+    gate_stub = None
+
+    def setUp(self):
+        super(TheMergedCodeMapIsRebuilt, self).setUp()
+        shutil.copy(os.path.join(SCRIPTS, "repo-map.py"),
+                    os.path.join(self.repo, "scripts", "repo-map.py"))
+        self.write(os.path.join("code-map", "catalog.json"),
+                   json.dumps(MAP_CATALOG, ensure_ascii=False, indent=2) + "\n")
+        self.write(os.path.join("tests", "test_kept.py"), MAP_TEST)
+        self.build(self.repo)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "沙盒的地圖")
+        self.git("push", "-q", "origin", "main")
+
+    def map_cmd(self, tree, verb):
+        return self.run_py(os.path.join(tree, "scripts", "repo-map.py"), "--root", tree, verb,
+                           cwd=tree)
+
+    def build(self, tree):
+        done = self.map_cmd(tree, "build")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def managed(self, tree):
+        with open(os.path.join(tree, "code-map", "index.json"), encoding="utf-8") as handle:
+            return json.load(handle)["managed"]
+
+    def branch_adding(self, ident, name, rebuild=True):
+        """票 #ident 的分支新增一支已管理的檔,並帶自己 build 過的索引(分支自己 check 綠)。"""
+        branch = self.branch_for(ident, "t%s-map" % ident, allowed_write_paths=["tests/*"])
+        self.write(name, MAP_TEST, where=branch)
+        if rebuild:
+            self.build(branch)
+            check = self.map_cmd(branch, "check")
+            self.assertEqual(check.returncode, 0, "分支自己的索引就過期:" + check.stderr)
+        self.git("add", "-A", cwd=branch)
+        self.git("commit", "-q", "-m", "#%s 新增 %s" % (ident, name), cwd=branch)
+        return branch
+
+    def main_adds_without_rebuild(self, name):
+        """別條路進主線:新增一支已管理的檔、不重產索引(合併乾淨但過期)。"""
+        self.write(name, MAP_TEST)
+        self.git("add", "--", name)
+        self.git("commit", "-q", "-m", "主線新增 %s,沒重產" % name)
+        self.git("push", "-q", "origin", "main")
+
+    def subjects(self, rev_range):
+        return self.git("log", "--format=%H %s", rev_range).splitlines()
+
+    def regen_commits(self, rev_range):
+        return [line.split(" ", 1)[0] for line in self.subjects(rev_range)
+                if line.split(" ", 1)[1].startswith("regen:")]
+
+    def land_worktrees(self):
+        return glob.glob(os.path.join(self.wt_base(), "land-*"))
+
+    def test_a3_a_stale_merge_is_rebuilt_into_the_same_landing(self):
+        """A3 + A7。四問:量 rc、主線 check、managed、regen commit 首行與檔、字樣、land.pass 兩格;
+        紅 = **m2**(拿掉 land 合併後重產)時閘門機械格 rc 4、land rc 1;
+        期望值 = 兩邊新增的檔名 tests/test_a.py / tests/test_z.py、票面首行字面。"""
+        self.branch_adding(1, "tests/test_a.py")
+        self.main_adds_without_rebuild("tests/test_z.py")
+        self.approve(1, "t1-map")
+        before = self.git("rev-parse", "main").strip()
+
+        done = self.land("t1-map")
+        output = done.stdout + done.stderr
+        self.assertEqual(done.returncode, 0, output)
+        check = self.map_cmd(self.repo, "check")
+        self.assertEqual(check.returncode, 0, check.stderr)
+        managed = self.managed(self.repo)
+        self.assertIn("tests/test_a.py", managed)
+        self.assertIn("tests/test_z.py", managed)
+        regen = self.regen_commits("%s..main" % before)
+        self.assertEqual(len(regen), 1, self.subjects("%s..main" % before))
+        subject = self.git("log", "-1", "--format=%s", regen[0]).strip()
+        self.assertRegex(subject, r"^regen: repo-map build \(land \d{8}-\d{6}\)$")
+        files = self.git("show", "--name-only", "--format=", regen[0]).split()
+        self.assertTrue(files, "regen commit 是空的")
+        self.assertEqual([name for name in files
+                          if name not in ("code-map/index.json", "code-map/INDEX.md")], [], files)
+        self.assertIn(MERGED_STALE, output)
+        self.assertNotIn(GATE_STALE, output.replace(MERGED_STALE, ""),
+                         "全套閘門還是看到過期的索引")
+        self.assertIn("gate.pass", self.kinds())
+        # A7(#127):main_before 是合併前的主線頭、sha 是含 regen commit 的新主線頭;
+        # first-parent 一路從 main_before 接到新頭(越界守衛 land_attribution 走的那一條)。
+        landed = [row for row in self.events() if row["kind"] == "land.pass"][-1]
+        after = self.git("rev-parse", "main").strip()
+        self.assertEqual(landed.get("main_before"), before)
+        self.assertTrue(after.startswith(landed.get("sha") or "-"), (landed, after))
+        chain = self.git("log", "--first-parent", "--format=%H %P", "%s..main" % before).splitlines()[::-1]
+        self.assertEqual(chain[0].split()[1], before, chain)
+        self.assertEqual(chain[-1].split()[0], after)
+        self.assertIn(regen[0], [line.split()[0] for line in chain])
+
+    def test_a4_conflicts_only_in_the_outputs_are_rebuilt_away(self):
+        """A4。四問:量 rc、主線 check、managed、字樣;紅 = **m3**(衝突一律停)時 rc 3;
+        期望值 = 兩邊新增的相鄰檔名。前置先在拋棄式 worktree 手動 merge,自證衝突只落在 code-map/。"""
+        self.branch_adding(1, "tests/test_a1.py")
+        self.branch_adding(2, "tests/test_a2.py")
+        probe = os.path.join(self.home, "probe")
+        self.git("worktree", "add", "-q", "--detach", probe, "main")
+        self.git("merge", "-q", "--no-ff", "-m", "probe 1", "t1-map", cwd=probe)
+        self.run_git_allow_fail(probe, "merge", "--no-ff", "--no-commit", "t2-map")
+        conflicted = self.git("diff", "--name-only", "--diff-filter=U", cwd=probe).split()
+        self.assertTrue(conflicted, "這兩條分支合起來沒有衝突,A4 證不到東西")
+        self.assertEqual([name for name in conflicted if not name.startswith("code-map/")], [],
+                         conflicted)
+        self.run_git_allow_fail(probe, "merge", "--abort")
+        self.git("worktree", "remove", "--force", probe)
+        self.approve(1, "t1-map")
+        self.approve(2, "t2-map")
+
+        done = self.land("t1-map", "t2-map")
+        output = done.stdout + done.stderr
+        self.assertEqual(done.returncode, 0, output)
+        check = self.map_cmd(self.repo, "check")
+        self.assertEqual(check.returncode, 0, check.stderr)
+        managed = self.managed(self.repo)
+        self.assertIn("tests/test_a1.py", managed)
+        self.assertIn("tests/test_a2.py", managed)
+        self.assertIn(MERGED_STALE, output)
+
+    def run_git_allow_fail(self, cwd, *args):
+        return subprocess.run(["git", *args], cwd=cwd, env=self.env(), capture_output=True,
+                              text=True)
+
+    def test_a5a_a_conflict_outside_the_outputs_still_stops(self):
+        """A5(a)。四問:量 rc 3、land.fail、主線不動、worktree 留著、沒有 regen commit;
+        紅 = 衝突判準把 code-map/ 以外的檔也吞掉;期望值 = 兩邊各改 src/same.txt(夾具)。"""
+        self.write("src/same.txt", "base\n")
+        self.git("add", "--", "src/same.txt")
+        self.git("commit", "-q", "-m", "主線上先有 src/same.txt")
+        for ident, name, text in ((1, "tests/test_a1.py", "one\n"), (2, "tests/test_a2.py", "two\n")):
+            branch = self.branch_adding(ident, name)
+            self.write("src/same.txt", text, where=branch)
+            self.git("add", "-A", cwd=branch)
+            self.git("commit", "-q", "-m", "#%s 改 src/same.txt" % ident, cwd=branch)
+        self.approve(1, "t1-map")
+        self.approve(2, "t2-map")
+        before = self.git("rev-parse", "main").strip()
+
+        done = self.land("t1-map", "t2-map", "--no-auto-fix")
+        output = done.stdout + done.stderr
+        self.assertEqual(done.returncode, 3, output)
+        self.assertIn("衝突", output)
+        self.assertNotIn(MERGED_STALE, output)
+        self.assertEqual(self.git("rev-parse", "main").strip(), before)
+        self.assertIn("land.fail", self.kinds())
+        self.assertTrue(self.land_worktrees(), "worktree 要留著給人看")
+
+    def test_a5b_a_rebuild_that_writes_outside_code_map_is_refused(self):
+        """A5(b)。四問:量 rc 3、主線不動、worktree 留著、字樣、沒有 regen commit;
+        紅 = **m4**(land 重產改成 git add -A)時 stray.txt 跟著進 commit、rc 0;
+        期望值 = 假產生器寫的 stray.txt(夾具)。"""
+        self.write(os.path.join("scripts", "repo-map.py"), FAKE_REPO_MAP)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "假的 repo-map.py:check 一律過期、build 多寫一支檔")
+        self.git("push", "-q", "origin", "main")
+        branch = self.branch_for(1, "t1-map", allowed_write_paths=["src/*"])
+        self.commit_in(branch, "src/b1", "有 commit 的那一張")
+        self.approve(1, "t1-map")
+        before = self.git("rev-parse", "main").strip()
+
+        done = self.land("t1-map", "--no-auto-fix")
+        output = done.stdout + done.stderr
+        self.assertEqual(done.returncode, 3, output)
+        self.assertIn(STRAY, output)
+        self.assertIn("stray.txt", output)
+        self.assertEqual(self.git("rev-parse", "main").strip(), before)
+        worktrees = self.land_worktrees()
+        self.assertEqual(len(worktrees), 1, "worktree 要留著給人看")
+        land_branch = "land/" + os.path.basename(worktrees[0])[len("land-"):]
+        self.assertEqual(self.regen_commits("main..%s" % land_branch), [])
+        self.assertIn("land.fail", self.kinds())
+        self.assertNotIn("gate.start", self.kinds(), "動到 code-map/ 以外還去跑全套")
+
+    def test_a6_a_fresh_merge_adds_no_regen_commit(self):
+        """A6 前半。四問:量沒有 regen commit、沒有字樣;紅 = 不先 check、每次都重產;
+        期望值 = 分支只新增一支不受管理的 src/ 檔。"""
+        branch = self.branch_for(1, "t1-map", allowed_write_paths=["src/*"])
+        self.commit_in(branch, "src/b1", "不受管理的檔")
+        self.approve(1, "t1-map")
+        before = self.git("rev-parse", "main").strip()
+
+        done = self.land("t1-map")
+        output = done.stdout + done.stderr
+        self.assertEqual(done.returncode, 0, output)
+        self.assertEqual(self.regen_commits("%s..main" % before), [])
+        self.assertNotIn(MERGED_STALE, output)
+
+    def test_a6_a_failed_rebuild_is_left_to_the_gate(self):
+        """A6 後半。四問:量沒有 regen commit、字樣、閘門機械格紅;紅 = build 失敗卻 commit 或吞掉;
+        期望值 = 票面字樣「合併後索引重產失敗」與閘門的「code-map 索引過期」。"""
+        broken = dict(MAP_CATALOG, topics=dict(MAP_CATALOG["topics"], ghost={
+            "summary": "指到不存在的檔", "match": ["ghost"], "entry": "scripts/ghost.py"}))
+        branch = self.branch_for(1, "t1-map", allowed_write_paths=["code-map/*"])
+        self.write(os.path.join("code-map", "catalog.json"),
+                   json.dumps(broken, ensure_ascii=False, indent=2) + "\n", where=branch)
+        self.git("add", "-A", cwd=branch)
+        self.git("commit", "-q", "-m", "#1 catalog 指向不存在的檔", cwd=branch)
+        self.approve(1, "t1-map")
+        before = self.git("rev-parse", "main").strip()
+
+        done = self.land("t1-map", "--no-auto-fix")
+        output = done.stdout + done.stderr
+        self.assertEqual(done.returncode, 1, output)
+        self.assertIn(REGEN_FAILED, output)
+        self.assertNotIn(MERGED_STALE, output)
+        self.assertEqual(self.git("rev-parse", "main").strip(), before)
+        worktrees = self.land_worktrees()
+        self.assertEqual(len(worktrees), 1, output)
+        land_branch = "land/" + os.path.basename(worktrees[0])[len("land-"):]
+        self.assertEqual(self.regen_commits("main..%s" % land_branch), [])
+        # 閘門的機械格原文(gate.sh 印在 stderr、land 原樣轉出):行為同改前。
+        self.assertIn("機械格不合 —— " + GATE_STALE, output)
 
 
 if __name__ == "__main__":

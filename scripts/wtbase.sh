@@ -6,6 +6,9 @@
 # 清單的地方與 auto-fix 開副本的地方不是同一個目錄時,「沒有殘留」與「看錯地方」長得一樣。
 #
 # 呼叫端要先有 `$ROOT` 與 `cfg`(讀 `$ROOT/board/config.json`)。
+#
+# 檔尾另放 code-map 索引重產的唯一實作(#129):apply.sh 與 land.sh 本來就載入這一支,
+# 放這裡不必多一支要同步、要登記進閘門對照表的檔。
 
 # 主 repo 根:`git rev-parse --git-common-dir` 的上一層 —— 在票分支的 worktree 裡它也指回
 # 主 repo;不在 git 裡才退回 `$ROOT`。
@@ -28,4 +31,22 @@ wtbase() {
         /*) echo "$_wb" ;;
         *)  echo "$_mr/$_wb" ;;
     esac
+}
+
+# code-map 索引重產(#96、#129,D-018):apply 單票、`apply --batch` 與 land 合併後三處
+# **同一個判準、同一份動作**,不各寫一份。判準同 gate.sh 的新鮮度格:樹裡有
+# `scripts/repo-map.py` 與 `code-map/catalog.json`。只跑 `repo-map.py build`,不 stage、不 commit
+# —— 收不收、怎麼收是呼叫端的事。`-B`:呼叫端緊接著要看工作樹,不留位元組碼。
+# 退出碼:0 產出物變了;1 沒變;2 build 非零(它的 stderr 照印);3 樹裡沒有地圖。
+code_map_present() {   # $1 = 樹根
+    [ -f "$1/scripts/repo-map.py" ] && [ -f "$1/code-map/catalog.json" ]
+}
+
+code_map_regen() {   # $1 = 樹根
+    code_map_present "$1" || return 3
+    _cm_before=$(cat "$1/code-map/index.json" "$1/code-map/INDEX.md" 2>/dev/null | cksum)
+    python3 -B "$1/scripts/repo-map.py" --root "$1" build >/dev/null || return 2
+    [ "$(cat "$1/code-map/index.json" "$1/code-map/INDEX.md" 2>/dev/null | cksum)" != "$_cm_before" ] \
+        || return 1
+    return 0
 }
