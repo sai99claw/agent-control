@@ -1,0 +1,1 @@
+- 整理者卡「兩條路,擇一」已過時:整理只由角色表 consolidator 鏈(fable)起一個 session、沒有互讀;合併工具收啟動端記在 attempt_history 的那一份討論檔。「單一高階模型走 worker 管線、不叫合併工具」與「列得出雙方的分歧」整理時換掉 (#122, 2026-10-18, worker@opus)

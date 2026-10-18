@@ -1,28 +1,31 @@
 #!/bin/sh
-# 整理票自動起兩個模型的 session(#87 A39–A41,原 #84;D-007 / D-013)。
+# 整理票自動起角色表的整理者 —— 一個 session(#122,D-043 / D-049 ②;原 #87 A39–A41 的兩模型)。
 #
 #   sh scripts/consolidate-memory.sh <票號>
 #
 # `memory.py check` 開出整理票之後,以前要主線自己照 `templates/dispatch-consolidator.md`
-# 開兩個 session、各貼一次 —— 一張沒有人去派的整理票,與沒有開票長得一樣。主線開場
+# 開 session、貼派工文 —— 一張沒有人去派的整理票,與沒有開票長得一樣。主線開場
 # (`new-session.sh main …`)對每張符合條件的票叫這一支一次。
 #
-# ## 只起一組:租約排他
+# ## 只起一個:租約排他
 # 只對 role=consolidator、state=Ready、沒有有效 lease 的票起。先 `ticket.py set <n> lease`
 # 取租約(holder=consolidate-memory@<pid>,until=現在+逾時秒數),帶 `--expect-state-version`
 # —— 兩個主線同時開場,兩邊讀到的都是同一版,只有先寫的那一個收得進去;另一個不起。
 # 拿到了才把票轉 Running。
 #
-# ## 兩個 session、各自的模型、同一條起命令的路
-# `board/config.json` 的 `memory.consolidators` 每個模型起一個 session(平行:第二段要互讀)。
+# ## 誰整理:角色表 consolidator 鏈,一次一個(D-043 單一高階模型路)
+# 模型只由 `role-models.py resolve --role consolidator` 選;票上的 `model` 不帶進去(#131 A10
+# 只套與票 role 相同的 worker 鏈),`memory.consolidator(s)` 不再讀(#122 A3,與表衝突就警告)。
+# 前一個候選**額度用完 / 不可用**(provider 錯誤信封,或 CLI 不在)才換下一個;一般退出非零、
+# 逾時不換。表上的鏈只有 fable:它用不了就是整串耗盡,停下發 decision,不改派別的模型。
 # 命令由 `ticket.py agent-command` 決定 —— 與 auto-fix 同一支:`codex:*` 走 `codex exec`,
 # 其餘把 config 的 `worker.command` 換 `--model`。派工文 = `rules.py pack consolidator` +
-# 範本逐格填好,從 stdin 餵。每個 session 發 agent.start / agent.done(或 agent.failed),
-# model 欄記實際起的那個;交出的討論檔路徑與模型寫進票的 `attempt_history` ——
-# `memory.py consolidate` 拿它對討論檔頭的 `model:`,對不上就拒收。
+# 範本逐格填好,從 stdin 餵。每次起都發 agent.start / agent.done(或 agent.failed)、寫一列
+# cost(role=consolidator),model 欄記實際起的那個;交出的討論檔路徑與模型寫進票的
+# `attempt_history` —— `memory.py consolidate` 拿它認單一整理者的那一份討論檔。
 #
 # ## 起不來就問主線,不留在 Running
-# 命令缺(PATH 上找不到)、規則包產不出來、範本找不到、session 退出非零、逾時:票轉
+# 規則包產不出來、範本找不到、session 退出非零、逾時、整串候選耗盡(含命令缺):票轉
 # NeedsDecision、owner=main、租約清空,收件匣一頁 decision,標題帶票號與原因。
 #
 # ## 退出碼
@@ -44,7 +47,7 @@ export AC_ROOT=$ROOT AC_CONTROL_DIR=$AC
 [ $# -eq 1 ] || { echo "用法:sh scripts/consolidate-memory.sh <票號>" >&2; exit 2; }
 
 python3 - "$AC" "$ROOT" "${1#\#}" <<'PY'
-import json, os, shlex, shutil, signal, subprocess, sys, threading, time
+import json, os, shlex, shutil, signal, subprocess, sys, time
 from datetime import date, datetime, timedelta
 
 ac, root, ident = sys.argv[1:4]
@@ -54,6 +57,7 @@ import ticket  # noqa: E402
 
 ROLE = "consolidator"
 TEMPLATE = os.path.join("templates", "dispatch-consolidator.md")
+FALLBACK_KINDS = ("quota_exhausted", "provider_unavailable")
 
 
 def say(text, err=False):
@@ -69,13 +73,19 @@ def tk(*args):
                           capture_output=True, text=True)
 
 
+def role_models(*args):
+    return subprocess.run([sys.executable, os.path.join(ac, "role-models.py"), "--table",
+                           os.path.join(root, "board", "role-models.json"), *args],
+                          capture_output=True, text=True)
+
+
 def lease_is_live(lease):
     if not isinstance(lease, dict) or not lease.get("until"):
         return False
     try:
         return datetime.fromisoformat(str(lease["until"])) > now()
     except ValueError:
-        return True          # 讀不懂的租約當它還在:搶錯了是兩組 session 寫同一份檔
+        return True          # 讀不懂的租約當它還在:搶錯了是兩個 session 寫同一份檔
 
 
 try:
@@ -109,14 +119,19 @@ tk("set", ident, "state", "Running")
 say("#%s 取得租約(%s,到 %s),起整理 session" % (ident, holder, until))
 
 memory = conf.get("memory") if isinstance(conf.get("memory"), dict) else {}
-models = [str(m) for m in (memory.get("consolidators") or []) if m] \
-    or ([str(memory["consolidator"])] if memory.get("consolidator") else [])
+# 舊設定與表衝突才警告(判讀只在 role-models.py legacy 一處)。
+old = role_models("legacy", "--config", os.path.join(root, "board", "config.json"))
+for line in old.stdout.splitlines():
+    if "衝突 memory." in line:
+        say("%s;整理者只照角色表 consolidator 鏈,一次遷移:python3 scripts/role-models.py "
+            "legacy --write" % line.split(": ", 1)[-1], err=True)
 base = worker.get("command") or "claude -p --model opus"
 run_id = os.environ.get("AC_RUN_ID") or "%s-%d" % (now().strftime("%Y%m%d-%H%M%S"), os.getpid())
 rundir = os.path.join(root, conf.get("reports_dir") or "reports", "t%s" % ident, run_id)
 os.makedirs(rundir, exist_ok=True)
 target = next(iter(row.get("in_scope") or row.get("allowed_write_paths") or []), "")
 today = date.today().isoformat()
+history = list(row.get("attempt_history") or [])
 
 
 def short(model):
@@ -128,21 +143,21 @@ def discussion_of(model):
 
 
 def fail(reason):
+    if history != list(row.get("attempt_history") or []):
+        tk("set", ident, "attempt_history", json.dumps(history, ensure_ascii=False))
     tk("set", ident, "state", "NeedsDecision")
     tk("set", ident, "owner", "main")
     tk("set", ident, "lease", "null")
     title = "#%s 整理 session 起不來:%s" % (ident, reason)
     subprocess.run([sys.executable, os.path.join(ac, "inbox.py"), "post", "--ticket", ident,
                     "--run-id", run_id, "--kind", "decision", "--state", title,
-                    "--what", "整理票轉 NeedsDecision、租約清空;修好原因(命令、模型名單、"
-                              "逾時秒數)後把票改回 Ready,下次主線開場會再起",
+                    "--what", "整理票轉 NeedsDecision、租約清空;修好原因(命令、角色表 consolidator "
+                              "鏈、額度、逾時秒數)後把票改回 Ready,下次主線開場會再起",
                     "--where", os.path.relpath(rundir, root)], check=False)
     say(title, err=True)
     sys.exit(1)
 
 
-if len(models) < 2:
-    fail("memory.consolidators 只有 %d 個模型 —— 整理要兩個不同的模型(D-013)" % len(models))
 try:
     with open(os.path.join(root, TEMPLATE), encoding="utf-8") as handle:
         template = handle.read()
@@ -158,51 +173,6 @@ front_cap = [line.split(":", 1)[1].strip() for line in text.splitlines()[:10]
 cap = front_cap[0] if front_cap else str(memory.get("cap_chars") or 2000)
 chars = len(text.split("\n---\n", 1)[1]) if text.startswith("---\n") and "\n---\n" in text \
     else len(text)
-
-sessions = []
-for model in models:
-    made = tk("agent-command", "--model", model,
-              "--tool", "codex" if model.startswith("codex:") else "claude-code",
-              "--base", base, "--swap-model")
-    if made.returncode != 0:
-        fail("命令組不出來(%s):%s" % (model, made.stderr.strip()))
-    cmd = made.stdout.strip()
-    head = next((tok for tok in shlex.split(cmd) if "=" not in tok), "")
-    if not shutil.which(head):
-        fail("命令缺 %s(%s 不在 PATH)" % (model, head))
-    pack = subprocess.run([sys.executable, os.path.join(ac, "rules.py"), "pack", ROLE,
-                           "--model", model], capture_output=True, text=True,
-                          env=dict(os.environ, AC_TICKET=ident))
-    if pack.returncode != 0:
-        fail("規則包產不出來(%s):%s" % (model, pack.stderr.strip().splitlines()[0]
-                                         if pack.stderr.strip() else "rc=%d" % pack.returncode))
-    other = [m for m in models if m != model]
-    fill = {
-        "<票號>": ident,
-        "<票庫路徑>": os.path.relpath(event.tickets_dir(root), root),
-        "<memory/model/x.md 或 memory/role/x.md>": target,
-        "<要整理的檔>": target,
-        "<N>": str(chars),
-        "<cap>": cap,
-        "<date>": today,
-        "<你的模型>": short(model),
-        "<對方模型>": ", ".join(short(m) for m in other),
-        "<模型>": model,
-        "<模型 A>": short(models[0]),
-        "<模型 B>": short(models[1]),
-        "<主線 / session 名>": "consolidate-memory.sh(主線開場起的)",
-        "<先寫完的那一位>": "兩位中先寫完第二段的那一位",
-        "<候選檔>": os.path.join("discussions", "%s-memory-%s.candidate.md"
-                                 % (today, os.path.splitext(os.path.basename(target))[0])),
-    }
-    body = template
-    for key, value in fill.items():
-        body = body.replace(key, value)
-    dispatch = os.path.join(rundir, "dispatch-consolidator-%s.md" % short(model))
-    with open(dispatch, "w", encoding="utf-8") as handle:
-        handle.write(pack.stdout.rstrip("\n") + "\n\n" + body)
-    sessions.append((model, cmd, dispatch,
-                     os.path.join(rundir, "consolidator-%s.log" % short(model))))
 
 
 def descendants(top):
@@ -237,52 +207,107 @@ def kill_tree(proc):
             pass
 
 
-results = {}
-
-
-def run(model, cmd, dispatch, log_path):
+def run(model, effort, cmd, dispatch, log_path):
     env = dict(os.environ, AC_TICKET=ident, AC_ROLE=ROLE, AC_DISPATCH=dispatch,
                AC_MODEL=model, AC_DISCUSSION=discussion_of(model))
     event.emit("agent.start", ticket=ident, role=ROLE, model=model, run_id=run_id,
                agent="consolidate-memory")
+    started = time.time()
     try:
         with open(dispatch, encoding="utf-8") as stdin, open(log_path, "wb") as log:
             proc = subprocess.Popen(cmd, shell=True, cwd=root, env=env, stdin=stdin,
                                     stdout=log, stderr=subprocess.STDOUT,
                                     start_new_session=True)
             try:
-                results[model] = proc.wait(timeout=float(timeout))
+                rc = proc.wait(timeout=float(timeout))
             except subprocess.TimeoutExpired:
                 kill_tree(proc)
-                results[model] = 124
+                rc = 124
     except OSError:
-        results[model] = 127
-
-
-threads = [threading.Thread(target=run, args=one) for one in sessions]
-for thread in threads:
-    thread.start()
-for thread in threads:
-    thread.join()
-
-history = list(row.get("attempt_history") or [])
-for model, _, _, _ in sessions:
-    rc = results.get(model, 127)
+        rc = 127
     event.emit("agent.done" if rc == 0 else "agent.failed", ticket=ident, role=ROLE,
                model=model, run_id=run_id, rc=rc, agent="consolidate-memory")
+    outcome = "handed-in" if rc == 0 else "timeout" if rc == 124 else "error"
+    cost = tk("cost", ident, "--role", ROLE, "--round", "1", "--model", model,
+              "--by", "consolidate-memory.sh", "--from-envelope", log_path,
+              "--wall-seconds", str(int(round(time.time() - started))), "--outcome", outcome,
+              "--run-id", run_id, "--effort", effort or "")
+    if cost.returncode != 0:
+        say("#%s 的 cost 寫不進票(%s)—— 不擋流程" % (ident, cost.stderr.strip()), err=True)
     talk = discussion_of(model)
     history.append({"model": model,
                     "discussion": talk if os.path.isfile(os.path.join(root, talk)) else None,
                     "at": now().isoformat(timespec="seconds")})
-tk("set", ident, "attempt_history", json.dumps(history, ensure_ascii=False))
+    return rc
 
-late = [model for model, _, _, _ in sessions if results.get(model) == 124]
-if late:
-    fail("逾時(%s 超過 %s 秒)" % (", ".join(late), timeout))
-broken = [(model, results.get(model)) for model, _, _, _ in sessions if results.get(model)]
-if broken:
-    fail("、".join("%s 退出 %s" % (model, rc) for model, rc in broken))
+
+# 一次一個候選;只有額度 / 不可用證據才往下一格(D-049 ②),一般失敗停在這一格。
+exhausted, skipped = None, []
+while True:
+    flags = [] if exhausted is None else ["--exhausted-index", str(exhausted)]
+    picked = role_models("resolve", "--role", ROLE, *flags)
+    if picked.returncode == 2:
+        fail("角色表選不出整理者:%s" % (picked.stderr.strip() or "rc=2"))
+    choice = json.loads(picked.stdout)
+    if picked.returncode == 3:
+        fail("整理者候選整串耗盡(%s)—— 不改派別的模型" % ";".join(skipped or [choice["reason"]]))
+    model, tool, effort = choice["model"], choice["tool"], choice.get("effort") or ""
+    index = choice["candidate_index"]
+    made = tk("agent-command", "--model", model, "--tool", tool, "--base", base, "--swap-model",
+              "--effort", effort)
+    if made.returncode != 0:
+        fail("命令組不出來(%s):%s" % (model, made.stderr.strip()))
+    cmd = made.stdout.strip()
+    head = next((tok for tok in shlex.split(cmd) if "=" not in tok), "")
+    if not shutil.which(head):
+        # CLI 不在 = 這個候選此刻不能用(與 rc=127 同一種),標記它、換下一格。
+        skipped.append("%s 命令缺(%s 不在 PATH)" % (model, head))
+        say("候選第 %d 格 %s 命令缺(%s 不在 PATH)—— 換下一格" % (index, model, head), err=True)
+        exhausted = index
+        continue
+    pack = subprocess.run([sys.executable, os.path.join(ac, "rules.py"), "pack", ROLE,
+                           "--model", model], capture_output=True, text=True,
+                          env=dict(os.environ, AC_TICKET=ident))
+    if pack.returncode != 0:
+        fail("規則包產不出來(%s):%s" % (model, pack.stderr.strip().splitlines()[0]
+                                         if pack.stderr.strip() else "rc=%d" % pack.returncode))
+    fill = {
+        "<票號>": ident,
+        "<票庫路徑>": os.path.relpath(event.tickets_dir(root), root),
+        "<要整理的檔>": target,
+        "<N>": str(chars),
+        "<cap>": cap,
+        "<date>": today,
+        "<你的模型>": short(model),
+        "<主線 / session 名>": "consolidate-memory.sh(主線開場起的)",
+        "<候選檔>": os.path.join("discussions", "%s-memory-%s.candidate.md"
+                                 % (today, os.path.splitext(os.path.basename(target))[0])),
+    }
+    body = template
+    for key, value in fill.items():
+        body = body.replace(key, value)
+    dispatch = os.path.join(rundir, "dispatch-consolidator-%s.md" % short(model))
+    with open(dispatch, "w", encoding="utf-8") as handle:
+        handle.write(pack.stdout.rstrip("\n") + "\n\n" + body)
+    log_path = os.path.join(rundir, "consolidator-%s.log" % short(model))
+    say("#%s 照角色表起整理者 %s(tool %s;%s)" % (ident, model, tool, choice["reason"]))
+    rc = run(model, effort, cmd, dispatch, log_path)
+    if rc == 0:
+        break
+    if rc == 124:
+        fail("逾時(%s 超過 %s 秒)" % (model, timeout))
+    judged = role_models("classify", "--evidence", log_path, "--rc", str(rc))
+    kind, detail = "other", ""
+    if judged.returncode == 0:
+        verdict = json.loads(judged.stdout)
+        kind, detail = verdict["kind"], verdict["detail"]
+    if kind not in FALLBACK_KINDS:
+        fail("%s 退出 %s%s" % (model, rc, "(%s)" % detail if kind == "auth_config" else ""))
+    skipped.append("%s %s(%s)" % (model, kind, detail))
+    say("候選第 %d 格 %s 用不了(%s)—— 換下一格" % (index, model, detail), err=True)
+    exhausted = index
+
+tk("set", ident, "attempt_history", json.dumps(history, ensure_ascii=False))
 tk("set", ident, "lease", "null")
-say("#%s 兩個整理 session 都回來了(%s)—— 討論檔與模型記在 attempt_history"
-    % (ident, ", ".join(models)))
+say("#%s 整理 session 回來了(%s)—— 討論檔與模型記在 attempt_history" % (ident, model))
 PY
