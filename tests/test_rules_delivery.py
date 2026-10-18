@@ -28,7 +28,8 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import DEFAULT_CONFIG, ROOT, Sandbox, write_executable  # noqa: E402
+from control_harness import (DEFAULT_CONFIG, ROOT, Sandbox, fixture_candidate,  # noqa: E402
+                             write_executable)
 
 MAX_BYTES = 4096
 FIXED_MAX = 1024
@@ -313,15 +314,16 @@ class TheDispatchEntriesStartNothing(RulesBox):
         self.set_config()
         self.commit()
 
-    def set_config(self, routing_verify=None, agent=None):
+    def set_config(self, verifier_model=None, agent=None):
         conf = json.loads(self.read("board/config.json"))
         conf["worker"] = {"command": "sh %s" % (agent or self.agent), "timeout_seconds": 60}
         conf["reviewer"] = {"command": "sh %s --model fixture-model" % self.agent,
                             "timeout_seconds": 60}
         conf["routing"] = dict(DEFAULT_CONFIG["routing"])
-        if routing_verify:
-            conf["routing"]["verify"] = routing_verify
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        # 驗證者的模型由角色表的 verifier 鏈選(#121 A1),`routing.verify` 不再參與。
+        if verifier_model:
+            self.set_role_models(verifier=[fixture_candidate(verifier_model)])
 
     def started(self):
         if not os.path.exists(self.starts):
@@ -376,7 +378,7 @@ class TheDispatchEntriesStartNothing(RulesBox):
 
         **變異**:`round_once` 裡 `verifier_packet ... || { ROUND_RC=6; return 1; }` 拿掉 → 紅。
         """
-        self.set_config(routing_verify="ghost-model")
+        self.set_config(verifier_model="ghost-model")
         self.commit("驗證者的模型沒有卡")
         self.ready_ticket("1")
         done = self.run_sh("scripts/auto-fix.sh", "1")
@@ -408,7 +410,7 @@ class TheDispatchEntriesStartNothing(RulesBox):
         """
         script = os.path.join(self.home, "defect.sh")
         write_executable(script, COUNTING_TEST_DEFECT_WORKER % self.starts)
-        self.set_config(routing_verify="ghost-model", agent=script)
+        self.set_config(verifier_model="ghost-model", agent=script)
         self.commit("驗證者的模型沒有卡")
         self.red_round("2")
         done = self.run_sh("scripts/auto-fix.sh", "2")

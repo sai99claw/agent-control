@@ -29,7 +29,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from control_harness import (FACE_ORACLE, REVIEWER_PASS,  # noqa: E402
                              REVIEWER_PASS_ENVELOPE, SCRIPTS, TIMEOUT, Sandbox,
-                             fixture_patch_id, oracle_face)
+                             fixture_candidate, fixture_patch_id, oracle_face)
 
 sys.path.insert(0, SCRIPTS)
 import ticket as ticket_mod  # noqa: E402
@@ -241,6 +241,51 @@ class ThePassPath(ReviewBase):
             self.assertIn("## result", handle.read().splitlines())
         with open(self.one("reviewer.json"), encoding="utf-8") as handle:
             self.assertEqual(json.load(handle)["usage"]["output_tokens"], 42)
+
+
+class TheReviewerComesFromTheRoleTable(ReviewBase):
+    """#121 A1:覆核者的 model / effort 由角色表選;`reviewer.command` 的 `--model` 被換掉。
+    **M1**(model 照舊取 reviewer.command 的 `--model`)→ by 是 reviewer@fixture-model,紅。
+    四問:量 argv、by、agent.start、cost;值 = A1/A4;舊值紅在 by;表真的與命令不同。"""
+
+    def test_the_table_model_and_effort_run_and_are_recorded(self):
+        argv_file = os.path.join(self.home, "reviewer-argv.txt")
+        self.set_reviewer("#!/bin/sh\nprintf '%%s\\n' \"$@\" > %s\n" % argv_file
+                          + REVIEWER_PASS.split("\n", 1)[1])
+        self.write(os.path.join("memory", "model", "fable.md"), "- 沙盒 fable 卡\n")
+        self.set_role_models(reviewer=[fixture_candidate("fable", effort="high")])
+        done = self.review()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        with open(argv_file, encoding="utf-8") as handle:
+            argv = handle.read().splitlines()
+        self.assertEqual(argv[argv.index("--model") + 1], "fable", argv)
+        self.assertEqual(argv[argv.index("--effort") + 1], "high", argv)
+        ticket = self.load_ticket("1")
+        self.assertEqual(ticket["review"]["by"], "reviewer@fable")
+        starts = [row for row in self.events() if row["kind"] == "agent.start"]
+        self.assertEqual([(row["model"], row.get("effort")) for row in starts], [("fable", "high")])
+        cost = [row for row in ticket["cost"] if row["role"] == "reviewer"]
+        self.assertEqual([(row["model"], row["effort"]) for row in cost], [("fable", "high")])
+
+
+class AnUnavailableReviewerIsSkippedBeforeStarting(ReviewBase):
+    """#121 A2「CLI 已知不可用可於啟動前選下一候選(reviewer 亦然)」:表首選 codex、codex 不在
+    PATH → 換 fable,不起 codex。**變異**:拿掉 review.sh 的 PATH 檢查 → 命令是 codex exec,
+    替身 reviewer 不被叫、by 不是 reviewer@fable,紅。"""
+
+    def test_codex_missing_takes_the_next_reviewer(self):
+        self.set_reviewer(REVIEWER_PASS)
+        self.write(os.path.join("memory", "model", "fable.md"), "- 沙盒 fable 卡\n")
+        self.set_role_models(reviewer=[fixture_candidate("codex:gpt-6-astra", "codex"),
+                                       fixture_candidate("fable")])
+        path = os.pathsep.join([self.stub_bin] + [
+            where for where in os.environ.get("PATH", "").split(os.pathsep)
+            if where and not os.path.exists(os.path.join(where, "codex"))])
+        done = self.run_sh("scripts/review.sh", "1", env=self.env(PATH=path))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("codex 不在 PATH", done.stderr)
+        self.assertEqual(self.reviewer_calls(), ["reviewer ran 1"])
+        self.assertEqual(self.load_ticket("1")["review"]["by"], "reviewer@fable")
 
 
 class ThePacketOnlySaysTheGateRanWhenItDid(ReviewBase):

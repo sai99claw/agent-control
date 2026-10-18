@@ -45,8 +45,8 @@ class EveryRolePacks(unittest.TestCase):
         roles = re.findall(r"^  (\w+) ", done.stdout, re.M)
         self.assertLessEqual({"consolidator", "design", "main", "opener", "reviewer",
                               "verifier", "worker"}, set(roles), done.stdout)
-        # 每個角色用它 routing 那一格的模型(#87 A8:低於下限 `pack` 就 rc=2,例 design=fable);
-        # 沒有路由格的角色用 opus。
+        # 每個角色用它 routing 那一格的模型、沒有路由格的用 opus —— 只是挑一張存在的模型卡;
+        # `pack` 不再以 routing 擋模型(#121 A8),選模型是 `role-models.py` 的事。
         with open(os.path.join(ROOT, "board", "config.json"), encoding="utf-8") as handle:
             routing = json.load(handle).get("routing") or {}
         keys = {"opener": "open", "worker": "implement", "verifier": "verify",

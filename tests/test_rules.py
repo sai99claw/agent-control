@@ -620,52 +620,41 @@ def rules_module(repo):
         sys.path.pop(0)
 
 
-class TheRoutingFloor(RulesBase):
-    """#87 A8:`board/config.json` 有 `model_tiers` 時,`pack <角色> --model M` 擋低於該角色
-    routing 值的模型。期望值是這裡寫進 config 的 tiers 與 routing,不由 rules.py 算。"""
+class TheRoutingFloorIsGone(RulesBase):
+    """#121 A8(原 #87 A8 的下限拆除):`board/config.json` 還留著 `routing` 與 `model_tiers`,
+    `pack` 也不再拿它們擋任何角色 —— 模型合不合法只由 `role-models.py` 判。期望值是這裡
+    寫進 config 的 tiers 與 routing,不由 rules.py 算。"""
 
     TIERS = ["haiku", "sonnet", "opus", "fable"]
 
     def setUp(self):
-        super(TheRoutingFloor, self).setUp()
+        super(TheRoutingFloorIsGone, self).setUp()
         conf = json.loads(self.read("board/config.json"))
         conf["model_tiers"] = list(self.TIERS)
         conf["routing"] = {"implement": "opus", "verify": "opus", "open": "fable",
                            "main": "opus", "design": "fable"}
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        for model in ("haiku", "sonnet"):
+            self.write(os.path.join("memory", "model", "%s.md" % model),
+                       "- %s 的沙盒卡\n" % model)
 
-    def test_a_model_below_the_floor_is_refused_with_an_empty_stdout(self):
-        """**變異 M6**:cmd_pack 不叫 `below_floor` → 這一條紅(rc 不是 2)。"""
-        for role, model, floor in (("worker", "sonnet", "opus"),
-                                   ("opener", "opus", "fable"),
-                                   ("verifier", "haiku", "opus"),
-                                   ("design", "opus", "fable")):
+    def test_a_worker_below_the_old_floor_still_gets_a_pack(self):
+        """T4。**變異 M5**:cmd_pack 留著舊下限(sonnet < routing.implement=opus 就 rc=2)
+        → 這一條紅(rc 2、stdout 空)。四問:量 rc 與 stdout;值 = A8(simple 票選到 sonnet
+        照產包);舊值會在 rc=2 時紅;不靠沒設就退回(config 真的帶 routing + tiers)。"""
+        for role, model in (("worker", "sonnet"), ("opener", "opus"),
+                            ("verifier", "haiku"), ("design", "opus")):
             with self.subTest(role=role, model=model):
                 done = self.rules("pack", role, "--model", model)
-                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-                self.assertEqual(done.stdout, "")
-                line = [l for l in done.stderr.splitlines() if "低於 routing 下限" in l]
-                self.assertEqual(len(line), 1, done.stderr)
-                for word in (role, model, floor):
-                    self.assertIn(word, line[0])
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertTrue(done.stdout.strip(), done.stderr)
+                self.assertNotIn("下限", done.stderr)
 
-    def test_a_model_at_or_above_the_floor_packs(self):
-        for model in ("opus", "fable"):
-            with self.subTest(model=model):
-                done = self.rules("pack", "worker", "--model", model)
-                self.assertEqual(done.returncode, 0, done.stderr)
-                self.assertNotIn("低於 routing 下限", done.stderr)
-
-    def test_a_model_outside_the_tiers_is_not_compared(self):
+    def test_a_model_outside_the_tiers_is_not_mentioned(self):
         done = self.rules("pack", "worker", "--model", "codex:opus")
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn("不在 model_tiers,不比", done.stderr)
-        self.assertNotIn("低於 routing 下限", done.stderr)
-
-    def test_roles_without_a_routing_key_are_not_compared(self):
-        done = self.rules("pack", "reviewer", "--model", "haiku")
-        self.assertNotIn("低於 routing 下限", done.stderr)
-        self.assertNotIn("不在 model_tiers", done.stderr)
+        self.assertNotIn("model_tiers", done.stderr)
+        self.assertNotIn("下限", done.stderr)
 
     def test_without_model_tiers_nothing_changes(self):
         conf = json.loads(self.read("board/config.json"))

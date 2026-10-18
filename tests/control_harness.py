@@ -37,7 +37,7 @@ TIMEOUT = 180
 SCRIPT_FILES = ("event.py", "ticket.py", "memory.py", "status.py", "land.sh",
                 "gate.sh", "heartbeat.sh", "new-session.sh", "verify.py",
                 "verify-case.py", "apply.sh", "auto-fix.sh", "review.sh", "inbox.py",
-                "rules.py", "metrics.py", "wtbase.sh")
+                "rules.py", "metrics.py", "wtbase.sh", "role-models.py")
 # `review.sh` 逐字讀它(#42):沙盒少了它,覆核在「派工文組不出來」那一步就停,
 # 而那與「reviewer 沒交件」在收件匣上是兩頁不同的東西。`auto-fix.sh` 的驗證者派工文
 # 也是範本填出來的(#51):少了它,派工文裡只剩一行「範本找不到」。
@@ -99,6 +99,34 @@ echo "gate $* $(git rev-parse --short HEAD)" >> "$AC_TEST_LOG"
 echo "FAILED (假的紅)"
 exit 1
 """
+
+# 沙盒的角色模型表(#121):auto-fix / review 起什麼只由它選。預設每個角色一格 claude-code、
+# 不帶 effort —— 替身照 `worker.command` 起(換上 `--model <表的值>`),與沒有表時的派工同形。
+# 要測候選鏈、codex、effort 的案例用 `set_role_models()` 換掉它。
+def fixture_candidate(model="opus", tool="claude-code", effort=None, escalated=None, cap=1):
+    return {"model": model, "tool": tool, "effort": effort, "effort_escalated": escalated,
+            "dispatch_cap": cap}
+
+
+def fixture_role_models(**chains):
+    roles = {"main": [fixture_candidate(cap=None)], "worker": [fixture_candidate()],
+             "worker_simple": [fixture_candidate("sonnet", effort="medium")],
+             "opener": [fixture_candidate(cap=None)],
+             "opener_complex": [fixture_candidate("fable", cap=None)],
+             "verifier": [fixture_candidate()], "reviewer": [fixture_candidate()],
+             "consolidator": [fixture_candidate("fable", cap=None)],
+             "design": [fixture_candidate("fable", cap=None)]}
+    roles.update(chains)
+    return {"schema_version": 1,
+            "candidate_keys": ["model", "tool", "effort", "effort_escalated", "dispatch_cap"],
+            "roles": roles,
+            "policies": {"fallback": "next_candidate_only_on_quota_or_unavailable",
+                         "exhausted": "stop_and_decision", "scope": "dispatched_agents",
+                         "escalate_effort_when": ["ticket.complexity == complex",
+                                                  "repair_round >= 2 and previous round red"],
+                         "repair_round_keeps_worker_model_and_effort": True,
+                         "verifier_prefer_different_model": False}}
+
 
 DEFAULT_CONFIG = {
     "port": 0,
@@ -269,6 +297,8 @@ class Sandbox(unittest.TestCase):
         if self.config_extra:
             conf.update(self.config_extra)
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        self.write("board/role-models.json",
+                   json.dumps(fixture_role_models(), ensure_ascii=False, indent=2))
         self.write("docs/DECISIONS.md", "# 裁示\n\n| 編號 | 裁示 | 來源 | 日期 | 狀態 |\n")
         self.write("docs/REHEARSAL.md", "# 哪些保證還只在演練裡成立\n\n"
                                         "| 工具 | 第一次真跑 | 要看到什麼 |\n|---|---|---|\n")
@@ -324,15 +354,25 @@ class Sandbox(unittest.TestCase):
                                  % (self.id(), calls))
 
     def set_reviewer(self, body, model="fixture-model", timeout=60):
-        """`reviewer.command` 換成一支假的可執行檔;`--model` 放進命令,因為 `review.by`
-        的模型名取自那一格(#21)。回傳那個模型名,讓斷言自己拼 `reviewer@<模型>`。"""
+        """`reviewer.command` 換成一支假的可執行檔;`review.by` 的模型名取自角色表(#121),
+        所以表的 reviewer 鏈也換成這個模型。回傳那個模型名,讓斷言自己拼 `reviewer@<模型>`。"""
         path = os.path.join(self.home, "fake-reviewer.sh")
         write_executable(path, body)
         conf = json.loads(self.read("board/config.json"))
         conf["reviewer"] = {"command": "sh %s --model %s" % (path, model),
                             "timeout_seconds": timeout}
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        self.set_role_models(reviewer=[fixture_candidate(model)])
         return model
+
+    def set_role_models(self, **chains):
+        """換沙盒角色模型表裡的幾條鏈(其餘照現在的表);`chains` 是角色 → 候選 list
+        (`fixture_candidate`)。"""
+        with open(os.path.join(self.repo, "board", "role-models.json"), encoding="utf-8") as handle:
+            roles = json.load(handle)["roles"]
+        roles.update(chains)
+        self.write("board/role-models.json",
+                   json.dumps(fixture_role_models(**roles), ensure_ascii=False, indent=2))
 
     def git(self, *args, cwd=None):
         done = subprocess.run(["git", *args], cwd=cwd or self.repo, env=self.env(),

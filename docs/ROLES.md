@@ -7,7 +7,7 @@
 |---|---|---|---|---|
 | **產品負責人** | 人 | 方向、取捨、必要決策 | 目標、優先序、裁示 | 可暫停、取消、重排;不逐步批准例行工作 |
 | **主線** | 跟人互動的 session(`routing.main`,D-039 起 opus 或以上) | 接需求、派開題者、裁示、**覆核退回時裁示**(覆核由 `review.sh` 派 reviewer,主線不讀 patch)、決定落地順序、發版、維持脈絡 | 裁示(含覆核退回的反駁處置)、交接、發版紀錄 | 不放寬驗收;不跳過閘門;不自己查 code、不自己改票面;不替人做產品決策 |
-| **開題者** | 短命 session(`routing.open`,D-039 起 opus 或以上;低於下限 `rules.py pack` 會擋,D-023) | 把使用者一句話寫成**完整票面**(含測試計畫) | 票 JSON;**摘要與建議順序寫進票的 `outline` 欄**(`ticket.py create --outline`),不只回在對話裡;交票前 `ticket.py lint` | 不改產品碼與 repo 檔(票檔、triage 檔、暫存目錄可寫);不 git 寫入(docs 通道落地自己那張票檔例外,別的檔 land 會擋);不替實作者先做一遍 |
+| **開題者** | 短命 session(`routing.open`,D-039 起 opus 或以上;`rules.py pack` 不判模型,#121 A8) | 把使用者一句話寫成**完整票面**(含測試計畫) | 票 JSON;**摘要與建議順序寫進票的 `outline` 欄**(`ticket.py create --outline`),不只回在對話裡;交票前 `ticket.py lint` | 不改產品碼與 repo 檔(票檔、triage 檔、暫存目錄可寫);不 git 寫入(docs 通道落地自己那張票檔例外,別的檔 land 會擋);不替實作者先做一遍 |
 | **設計 session** | 短命 session(`routing.design`) | 設計題先設計再開題(D-019):決定形狀、比較方案、每個取捨附「未來每票省/多花」(D-018) | `docs/DESIGN-<題>.md`(固定段見 `docs/DESIGN.md` §設計文件的固定段) + 回主線 ≤ 300 字摘要 | 不開票、不改產品碼、不 git 寫入、不跑閘門 / 落地;量測派子工作者,自己只讀結論 |
 | **Worker / 實作者** | 短命(預設 Opus;機械、規格逐字的票可派 Codex sol) | 在副本裡實作與局部驗證 | `patch.diff`(含自己的單元測試)、`EVIDENCE.md`、變異驗紅 | 只寫自己的副本;禁 git 寫入;範圍擴大要回報不准自己做 |
 | **驗證者** | 短命、獨立上下文(Opus / Codex sol) | 把票面驗收寫成回歸案例;`verify-case.py red` **證明案例在乾淨基底上紅**(綠由閘門用 `check` 量,D-020),登記片段 `verify/TAGS.d/<n>.md`,把怎麼跑寫進 result 的 `verify` 格(收件併進票) | `verify/<feature>/test_ticket_<n>.py` + 票的 `verify`(含 `baseline`)+ `patch-verify.diff`(`verify-case.py extract` 出的) | **不判 PASS/FAIL、不寫 VERDICT**;不讀實作者的 `EVIDENCE.md`;**不跑 tag 回歸那一整組**(只跑自己的案例與 `verify-case.py red`);不改產品碼 |
@@ -35,7 +35,7 @@
 ## 模型路由(2026-09-20,D-011;可調的那一份在 `board/config.json` 的 `routing`)
 | 工作 | 預設 | 為什麼 |
 |---|---|---|
-| 主線、開題 | **Opus 或以上**(D-039;`routing.main` / `routing.open`;低於該格 `rules.py pack` 不產包,D-023) | 判斷題;10/03 實測 opus 可用,下限放寬 |
+| 主線、開題 | **Opus 或以上**(D-039;`routing.main` / `routing.open`;`rules.py pack` 不再以它擋,#121 A8) | 判斷題;10/03 實測 opus 可用,下限放寬 |
 | 設計、查 bug 根因 | **Fable**(`routing.design` / `routing.bug`,D-039 未裁、維持) | 會影響之後每一張票的形狀 |
 | 實作 | **Opus**(`worker.command` 實際起的那個);機械、規格逐字的票可選 Codex `gpt-5.6-sol` | `board/config.json` 的 `routing.implement` 只是路由標籤,事件記的是 `worker.command` 真的起的模型 |
 | 實作(要起 server / 瀏覽器實跑) | **Opus**;Codex 待專案同步後冒煙實證 | D-048 現況(#115):codex worker 與 claude 同權限,`ticket.py agent-command` 起 `-s danger-full-access -c 'approval_policy="never"' -C .`,不再用 `workspace-write`;越界由 auto-fix 的事後守衛抓(rc=8,見 `docs/WORKFLOW.md`)。server / 瀏覽器在真 codex 上能不能跑**還沒實證**(待專案同步後冒煙) |
@@ -52,6 +52,8 @@
 `role-models.py classify` 判);一般失敗、測試紅、逾時、字面 `429` 不換,認證錯停下。
 verifier 鏈固定 sol → opus,不看 worker 模型;每次派工上限 `dispatch_cap` 由 `--items` 擋。
 舊入口(上表、`board/config.json` 的 `routing`)在 #121/#122 逐一切換;切換後該角色只讀新表。
+#121 起 `auto-fix.sh` 的 worker / 驗證者與 `review.sh` 的覆核者只讀這張表(`routing.implement` / `routing.verify`
+與 `effort.implement` 不再參與);`rules.py pack` 不判模型。
 表中 `main` 只是開 session 時的建議,不熱切已在跑的互動 session。
 
 額度政策:Codex 的五小時桶**一次派三張就會用盡**,別再多;用完**退 Opus 一張並報主線**。
