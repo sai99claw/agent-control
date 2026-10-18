@@ -208,8 +208,14 @@ def kill_tree(proc):
 
 
 def run(model, effort, cmd, dispatch, log_path):
+    talk = discussion_of(model)
+    # 起 session 之前先記:session 在裡面跑 `memory.py consolidate --discussion <這一份>`,
+    # 那時 launcher_recorded 就要讀得到這一筆;退出後沒有檔再改成 None。
+    record = {"model": model, "discussion": talk, "at": now().isoformat(timespec="seconds")}
+    history.append(record)
+    tk("set", ident, "attempt_history", json.dumps(history, ensure_ascii=False))
     env = dict(os.environ, AC_TICKET=ident, AC_ROLE=ROLE, AC_DISPATCH=dispatch,
-               AC_MODEL=model, AC_DISCUSSION=discussion_of(model))
+               AC_MODEL=model, AC_DISCUSSION=talk)
     event.emit("agent.start", ticket=ident, role=ROLE, model=model, run_id=run_id,
                agent="consolidate-memory")
     started = time.time()
@@ -234,10 +240,8 @@ def run(model, effort, cmd, dispatch, log_path):
               "--run-id", run_id, "--effort", effort or "")
     if cost.returncode != 0:
         say("#%s 的 cost 寫不進票(%s)—— 不擋流程" % (ident, cost.stderr.strip()), err=True)
-    talk = discussion_of(model)
-    history.append({"model": model,
-                    "discussion": talk if os.path.isfile(os.path.join(root, talk)) else None,
-                    "at": now().isoformat(timespec="seconds")})
+    if not os.path.isfile(os.path.join(root, talk)):
+        record["discussion"] = None
     return rc
 
 

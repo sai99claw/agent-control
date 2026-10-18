@@ -252,6 +252,50 @@ class TheLauncherRecordsWhoTalked(ConsolidateBase):
                                          "consolidate-memory.sh")])
 
 
+IN_SESSION = """#!/bin/sh
+echo "session $*" >> "@CALLS@"
+cat > /dev/null
+snap=$(python3 scripts/memory.py snapshot memory/model/opus.md)
+mkdir -p "$(dirname "$AC_DISCUSSION")" candidates
+printf -- '---\\nmodel: %s\\n%s\\n---\\n\\n## 第 1 輪 — %s\\n- 主張:逐條處置\\n\\n## 結論\\n- L1: 保留\\n' \\
+    "$AC_MODEL" "$snap" "$AC_MODEL" > "$AC_DISCUSSION"
+printf -- '- 整理後的原則 (#10, 2026-10-01, fable@fable)\\n' > candidates/opus.md
+python3 scripts/memory.py consolidate memory/model/opus.md --candidate candidates/opus.md \\
+    --discussion "$AC_DISCUSSION" --by "$AC_MODEL" > "@OUT@" 2>&1
+echo "rc=$?" >> "@OUT@"
+exit 0
+"""
+
+
+class TheSessionConsolidatesWithItsOneDiscussion(ConsolidateBase):
+    """範本的時序:整理 session **在 session 裡**跑 `memory.py consolidate --discussion <一份>`;
+    那時啟動端的紀錄必須已經在票的 attempt_history,單一 fable 才合併得了(#122 round 2)。"""
+
+    def body(self, mode):
+        self.out = os.path.join(self.home, "in-session-consolidate.log")
+        return IN_SESSION.replace("@CALLS@", self.calls).replace("@OUT@", self.out)
+
+    def test_a1_the_in_session_consolidate_is_accepted_with_one_discussion(self):
+        """四問:守啟動端起 session 之前就記下討論檔 / 可信回歸:session 退出後才記 →
+        in-session consolidate rc=2「要兩份」紅 / 字面 rc=0、consolidated 1 筆、主檔換成候選 /
+        新案例(既有 OneRecordedDiscussionIsEnough 是 launcher 收完之後才跑,守不到時序)。"""
+        self.write("memory/model/opus.inbox.md",
+                   "- 待整理的一條 (#11, 2026-09-01, worker@opus)\n")
+        self.arm(legacy=False)
+        done = self.launch()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(len(self.session_calls()), 1)
+        with open(self.out, encoding="utf-8") as handle:
+            said = handle.read()
+        self.assertIn("rc=0", said, said)
+        consolidated = [row for row in self.events() if row["kind"] == "memory.consolidated"]
+        self.assertEqual(len(consolidated), 1, said)
+        self.assertIn("整理後的原則", self.read("memory/model/opus.md"))
+        rows = self.load_ticket("7")["attempt_history"]
+        self.assertEqual([row["model"] for row in rows], ["fable"], rows)
+        self.assertTrue(os.path.isfile(os.path.join(self.repo, rows[0]["discussion"])), rows)
+
+
 class ConsolidateChecksTheLauncherRecord(Consolidation):
     """A41 後半:`memory.py consolidate --discussion` 的檔頭 model 與啟動端記的不一致 → rc=1。"""
 
