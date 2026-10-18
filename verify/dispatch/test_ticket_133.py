@@ -1,9 +1,9 @@
 """#133 classify 認得真 codex CLI 結尾的純文字額度 ERROR 行。
 
 ## 驗收表(票面每一條一列;期望值來源獨立於被測程式:真 log / 票面 acceptance / 既有夾具表)
-A1 | cli   | 複製 #122 worker / verifier 真 log 末段，各以 rc=1 跑 classify | kind=quota_exhausted，detail 含 usage limit | 兩份 reports 真 log 末兩行 + 票面 A1
+A1 | cli   | 複製 #122 worker / verifier 與 #115 tokens-used 收尾真 log，各以 rc=1 跑 classify | kind=quota_exhausted，detail 含 usage limit | 三份 reports 真 log 末段 + 票面 A1
 A2 | integ | 假 codex 對 stderr 印兩次真額度行後 exit 1，worker 鏈 codex→opus | 下一候選在同副本啟動；argv / cost 末列 model=opus | 票面 A2 + FallbackBase 寫死的第二格
-A3 | cli   | unittest 中段 ERROR、text429、一般 ERROR、rc=0 與 #115 真 log | 全部 kind=other | 票面 A3 + 三份 reports 真 log
+A3 | cli   | unittest 中段 ERROR、text429、一般 ERROR、rc=0 與 #131 真 log 中段 ERROR: test_… 摘段 | 全部 kind=other | 票面 A3 + reports/t131 真 log
 A4 | cli   | 頂層 model 不存在信封後接真額度行，rc=1 | kind=provider_unavailable | 票面 A4「信封優先」
 
 ## 介面字串
@@ -43,7 +43,7 @@ T122_TAIL = ("不跑全套(unittest discover 整組、gate.sh --full)、不跑 v
 REPORT_LOGS = {
     "verifier": T122_TAIL,
     "worker": T122_TAIL,
-    "middle-error": (
+    "t115-footer": (
         'rc, out, err = self.command("--model", "fable", "--tool", "claude-code")\n\n'
         "ERROR: You've hit your usage limit. Upgrade to Pro "
         "(https://chatgpt.com/explore/pro), visit "
@@ -54,6 +54,25 @@ REPORT_LOGS = {
         "https://chatgpt.com/codex/settings/usage to purchase more credits or try again "
         "at 5:13 AM.\n"
         "tokens used\n189,715\n"),
+    # reports/t131/20261018-184925-46477/worker-round1.log 逐字摘段(第 1–3、25125–25131 行與末 9 行):
+    # 整份 log 唯一的 ERROR: 行是中段那一條 unittest 行，結尾是一般文字。整份不拿來跑 ——
+    # 第 25176 行是頂層 {"event":"result",...,"error":"authentication failed..."} 信封，信封優先會判 auth_config。
+    "t131-mid-unittest": (
+        "OpenAI Codex v0.153.4\n--------\n"
+        "workdir: /Users/franksai/ai_workspace/claude_workspace/agent-control-wt/fix-t131/round1/work\n"
+        " exited 1 in 91332ms:\nF..E..\n"
+        "======================================================================\n"
+        "ERROR: test_a8_an_agy_verifier_uses_the_same_prompt_cwd_and_devnull_shape "
+        "(tests.test_auto_fix_agy.AgyGuardAndRoles."
+        "test_a8_an_agy_verifier_uses_the_same_prompt_cwd_and_devnull_shape)\n"
+        "四問:量 verifier argv/cwd/stdin/cost;值=A8;舊值起 claude;真的交 patch-verify。\n"
+        "----------------------------------------------------------------------\n"
+        "Traceback (most recent call last):\n"
+        "5. 最小重現\n\n```sh\nenv -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR \\\n"
+        "  timeout 120 python3 -m unittest \\\n"
+        "  tests.test_auto_fix_agy.AgyInvocationAndCost."
+        "test_a3_a7_worker_uses_prompt_file_devnull_and_agy_usage\n```\n\n"
+        "預期：`Ran 1 test`、`OK`、rc=0。\n"),
 }
 PLAIN_QUOTA_CODEX = r'''#!/bin/sh
 printf '%s\n' "$@" > "@ARGV@"
@@ -96,8 +115,9 @@ class ClassifyRealCodexLogs(unittest.TestCase):
         return json.loads(done.stdout)
 
     def test_a1_both_real_t122_logs_are_quota_exhausted(self):
-        """A1 兩份 #122 真 log 的結尾純文字額度行都判 quota_exhausted。"""
+        """A1 #122 真額度尾段與 #115 tokens-used 收尾都判 quota_exhausted。"""
         paths = [self.copied_report(key) for key in ("verifier", "worker")]
+        paths.append(self.copied_report("t115-footer"))
         paths.append(self.evidence("single.log", REAL + "\n"))
         paths.append(self.evidence("dialogue.log", "OpenAI Codex v0.153.4\n對話幾行\n"
                                    + REAL + "\n" + REAL + "\n"))
@@ -123,7 +143,7 @@ class ClassifyRealCodexLogs(unittest.TestCase):
             with self.subTest(name=name):
                 got = self.classify(self.evidence(name, body), rc)
                 self.assertEqual(got["kind"], "other", got)
-        got = self.classify(self.copied_report("middle-error"))
+        got = self.classify(self.copied_report("t131-mid-unittest"))
         self.assertEqual(got["kind"], "other", got)
 
     def test_a4_provider_envelope_wins_over_the_plain_quota_tail(self):
