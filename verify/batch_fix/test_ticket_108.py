@@ -3,7 +3,7 @@
 ## 驗收表(票面每一條一列;期望值來源獨立於被測程式:票面原話 / 夾具自己寫的票檔與 status.json / git 自己算)
 A1 | unit | auto-fix.sh --batch land/X 1 2(AC_BATCH_RUN_ID=R)     | reports/batch/<stamp>/dispatch-round1.md 含五項                 | 票面 A1 原話;期望值取自夾具的 1.json / 2.json、reports/t1/R/status.json、`git diff --stat main...land/X`
 A2 | unit | apply.sh --batch land/X 1 2 <patch>                    | land/X 前進恰 1 個 commit、訊息含 batch fix round 1 / #1 / #2;t1-a t2-b 不動;票的 state_version / review 不動 | 票面 A2 原話;sha 由 git 自己算
-A3 | unit | patch 動 lib/other.txt / scripts/land.sh / secrets/k.txt / lib/core.txt / misc/n.txt | 前三個 rc=5 且 stderr 點名檔與格;lib/core.txt 不擋;misc/n.txt 進 result-round1.json 的 extra_paths | 票面 A3 的集合式:protected ∪ (oos 聯集 − allowed 聯集),手算
+A3 | unit | patch 動 lib/other.txt / scripts/land.sh / secrets/k.txt / lib/core.txt / misc/n.txt | secrets/k.txt rc=5 且 stderr 點名檔與格;lib/other.txt / scripts/land.sh 不擋、進 extra_paths 並點名命中的 out_of_scope(#101 D-050 ①);lib/core.txt 不擋;misc/n.txt 進 result-round1.json 的 extra_paths | 票面 A3 的集合式:protected ∪ (oos 聯集 − allowed 聯集),手算;#101 起 oos 那一半改成列出
 A4 | unit | patch 在測試檔刪 assert 行 / 加 skip / expectedFailure  | rc=5、stderr 含「<檔>:<行> 放寬測試」;OBJECTION: test_defect 指到同一檔 → 不擋 | 票面 A4 原話;行號從夾具手寫的檔數
 A5 | unit | review.sh --batch land/X 1 2 --run-id S                | pass → reports/batch/S/review.json(sha = land/X 頭);fail → 沒有 review.json、一頁 decision 掛 #1 內文有 #2、rc≠0 | 票面 A5 原話
 A6 | unit | 整條 auto-fix.sh --batch 綠到底                         | 1.json cost 多 worker / reviewer 各一列(note 含 batch <stamp> 與票號、run_id = R);2.json 一個 byte 不變 | 票面 A6 原話
@@ -423,14 +423,31 @@ class TheHardBlockIsTheUnionOfAllTickets(BatchWorld):
         self.assertIn(field, done.stderr)
         self.assertEqual(self.rev("land/X"), self.land_before, "擋下就不 commit")
 
+    def assert_listed(self, rel, field, text):
+        """#101(D-050 ①):out_of_scope 是建議範圍 —— 命中不擋,疊成 commit、列進 extra_paths、
+        stdout 點名檔與命中的格。"""
+        done = self.apply_batch(self.make_patch({rel: text}))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("rev-list", "--count", "%s..land/X" % self.land_before).strip(),
+                         "1")
+        self.assertTrue([line for line in done.stdout.splitlines()
+                         if rel in line and field in line], done.stdout)
+        found = [os.path.join(stamp, "result-round1.json") for stamp in self.batch_dirs()
+                 if os.path.isfile(os.path.join(stamp, "result-round1.json"))]
+        self.assertEqual(len(found), 1, "result-round1.json:%s" % found)
+        with open(found[0], encoding="utf-8") as handle:
+            self.assertIn(rel, json.load(handle).get("extra_paths"))
+
     def test_a3_first_tickets_out_of_scope_not_allowed_elsewhere_is_blocked(self):
-        """A3 lib/other.txt:票 1 out_of_scope、兩張票都不 allowed → rc 5、點名檔與 out_of_scope。"""
-        self.assert_blocked("lib/other.txt", "out_of_scope", "changed\n")
+        """A3 lib/other.txt:票 1 out_of_scope、兩張票都不 allowed。#101(D-050 ①)起 out_of_scope
+        不再硬擋:rc 0、列進 extra_paths、點名檔與「#1 的 out_of_scope」(名字留著對得上 #108 的
+        baseline 紀錄;原本是 rc 5)。"""
+        self.assert_listed("lib/other.txt", "#1 的 out_of_scope", "changed\n")
 
     def test_a3_second_tickets_out_of_scope_is_blocked_too(self):
-        """A3 scripts/land.sh:票 2 的 out_of_scope 也在聯集裡。"""
+        """A3 scripts/land.sh:票 2 的 out_of_scope 也在聯集裡 —— #101 起同上,列出不擋。"""
         original = self.git("show", "land/X:scripts/land.sh")
-        self.assert_blocked("scripts/land.sh", "out_of_scope", original + "# batch\n")
+        self.assert_listed("scripts/land.sh", "#2 的 out_of_scope", original + "# batch\n")
 
     def test_a3_protected_paths_win_over_allowed(self):
         """A3 secrets/k.txt:protected_paths 在聯集之外另加,票 2 allowed 也救不了。"""

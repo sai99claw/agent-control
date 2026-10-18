@@ -8,8 +8,8 @@
 - `diff -ruN` 的刪檔有沒有把 `+++` 側改成 `/dev/null` —— 不改的話 `git apply` 只會把
   檔案**清空**,而清空的檔在 diffstat 上看起來像「改過」。
 - 套完的樹與 patch 說的是不是同一件事(該在的在、該刪的不在、反著套回得去)。
-- 有沒有動到硬擋的檔(票的 `out_of_scope`、config 的 `protected_paths`);
-  `allowed_write_paths` 以外不擋,記進 result 的 `extra_paths`(D-H38 ①)。
+- 有沒有動到硬擋的檔(config 的 `protected_paths`);提示範圍外與命中 `out_of_scope` 不擋,
+  記進 result 的 `extra_paths` / `extra_reasons`(D-H38 ①、D-050 ①)。
 - commit 訊息答不答得出「分支上這一手是哪一份 patch 做的」—— 路徑答不出來,
   重套過的那一份路徑一樣、內容不一樣,所以要 sha256。
 """
@@ -875,9 +875,15 @@ class ThingsItRefuses(ApplyBase):
 
 
 class TheWriteScope(ApplyBase):
-    """D-H38 ①:`allowed_write_paths` 是**預期會動的檔,不是限制**。越出只記錄
-    (result 的 `extra_paths`),硬擋只剩票的 `out_of_scope` 與 config 的 `protected_paths`。
+    """D-H38 ①、D-050 ①(#101):`allowed_write_paths` 與 `out_of_scope` 都是**建議範圍**。越出只
+    記錄(result 的 `extra_paths` / `extra_reasons`),硬擋只剩 config 的 `protected_paths`。
     """
+
+    def evidence_with_reasons(self, *rows):
+        """FULL_EVIDENCE 加一段「提示清單外的改動」,一行一檔 `- `<檔>` — <理由>`。"""
+        section = "## 提示清單外的改動\n" + "".join("- `%s` — %s\n" % row for row in rows)
+        return self.patch_file("EVIDENCE.md",
+                               FULL_EVIDENCE.replace("## result", section + "\n## result", 1))
 
     def result_json(self):
         found = sorted(glob.glob(os.path.join(self.repo, "reports", "t1", "*",
@@ -927,18 +933,120 @@ class TheWriteScope(ApplyBase):
         self.assertEqual(glob.glob(os.path.join(self.repo, "reports", "t1", "*",
                                                 "result-round1.json")), [])
 
-    def test_a_file_named_by_out_of_scope_is_refused_by_name_and_field(self):
-        """**變異 M3**:硬擋不看 `out_of_scope` → 這一條紅。"""
+    def test_a_file_named_by_out_of_scope_goes_through_listed_with_its_glob(self):
+        """#101 A1(D-050 ①):out_of_scope 是建議範圍 —— 命中不再 rc 5,列進 extra_paths、點名
+        命中的 glob,理由從 EVIDENCE「提示清單外的改動」抽進 extra_reasons。舊版本條是「rc 5、
+        點名檔與格」(M3),D-050 ① 把它翻成這一條。
+        四問:量 rc、commit 數、result 的 extra_paths / extra_reasons、stdout 的命中行;紅 = 命中
+        照舊硬擋或沒列 glob;期望值 = 夾具票面的 out_of_scope 與 EVIDENCE 那一行理由;不測 = land。
+        **變異 M5**:out_of_scope 命中照舊 `die 5` → 這一條紅。"""
         self.make("1", allowed_write_paths=["src/*", "docs/*"], out_of_scope=["docs/*"])
-        done = self.apply("1", self.patch_file("p.diff", OUTSIDE))
+        evidence = self.evidence_with_reasons(("docs/secret.md", "A1 要的說明寫在這份文件"))
+        done = self.apply("1", self.patch_file("p.diff", OUTSIDE), "--evidence", evidence)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "1")
+        data = self.result_json()
+        self.assertEqual(sorted(data["extra_paths"]), ["config/private.ini", "docs/secret.md"],
+                         "out_of_scope 命中與提示範圍外都列進 extra_paths")
+        self.assertEqual(data["extra_reasons"], {"docs/secret.md": "A1 要的說明寫在這份文件",
+                                                 "config/private.ini": None})
+        line = [row for row in done.stdout.splitlines()
+                if "docs/secret.md" in row and "out_of_scope" in row]
+        self.assertEqual(len(line), 1, done.stdout)
+        self.assertIn("`docs/*`", line[0], "標明命中哪條 out_of_scope glob")
+        self.assertNotIn("硬擋", done.stderr)
+
+    def test_extra_reasons_are_per_file_and_blank_is_null(self):
+        """#101 T2 / A5:patch 動 a / b / c,理由只有 a、b 是空字串 → extra_paths 三個都在,
+        extra_reasons = {a: 理由, b: null, c: null}。四問:量 result 那兩格;紅 = 空字串被當成
+        理由、沒列的檔沒有鍵;期望值 = 夾具 EVIDENCE 那三行;不測 = land 怎麼用它。
+        **變異 M4**:抽取把空字串當成已有理由(`reason or None` 改成 `reason`)→ 這一條紅。"""
+        self.make("1", allowed_write_paths=["src/*"])
+        patch = "".join(
+            "diff -ruN base/x/%s.txt work/x/%s.txt\n--- base/x/%s.txt\t1970-01-01 08:00:00\n"
+            "+++ work/x/%s.txt\t2026-10-18 10:00:00\n@@ -0,0 +1 @@\n+%s\n" % (n, n, n, n, n)
+            for n in ("a", "b", "c"))
+        evidence = self.evidence_with_reasons(("x/a.txt", "a 是因為驗收 A5"), ("x/b.txt", ""))
+        done = self.apply("1", self.patch_file("p.diff", patch), "--evidence", evidence)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        data = self.result_json()
+        self.assertEqual(sorted(data["extra_paths"]), ["x/a.txt", "x/b.txt", "x/c.txt"])
+        self.assertEqual(data["extra_reasons"],
+                         {"x/a.txt": "a 是因為驗收 A5", "x/b.txt": None, "x/c.txt": None})
+        warned = [row for row in done.stdout.splitlines() if "沒寫理由" in row]
+        self.assertEqual(sorted(row.split()[1] for row in warned), ["x/b.txt", "x/c.txt"],
+                         "只是提示範圍外的缺理由 → 警告、不擋")
+
+    def test_info_homes_and_verify_files_are_inside_the_hint_scope(self):
+        """#101 A5:提示範圍 = allowed_write_paths ∪ info_homes[].home ∪ verify.files。
+        四問:量 extra_paths;紅 = 只拿 allowed_write_paths 算;期望值 = 夾具的 home 與 verify.files;
+        不測 = 權限(protected 那一條)。
+        **變異**:`hint_scope` 只回 allowed_write_paths → 這一條紅。"""
+        self.make("1", allowed_write_paths=["src/*"],
+                  info_homes=[{"what": "秘密的說明", "home": "docs"}],
+                  verify={"files": ["config/private.ini"], "tags": [], "run": "", "notes": ""})
+        evidence = self.patch_file("EVIDENCE.md", FULL_EVIDENCE)
+        done = self.apply("1", self.patch_file("p.diff", OUTSIDE), "--evidence", evidence)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.result_json()["extra_paths"], [])
+        self.assertEqual(self.result_json()["extra_reasons"], {})
+
+    def test_protected_paths_still_block_what_info_homes_and_a_reason_cover(self):
+        """#101 A1:protected_paths 是安全邊界,不在本票放寬;info_homes 不改權限,EVIDENCE 的
+        理由也救不了它。四問:量 rc 5、stderr 點名檔與格、0 commit;紅 = 提示範圍或理由抵掉了
+        硬擋;期望值 = 測試寫進 config 的 protected_paths。
+        **變異 M1**:write_scope 不看 protected_paths → 這一條紅。"""
+        self.protect("config/**")
+        self.make("1", allowed_write_paths=["src/*", "config/*"], out_of_scope=["config/*"],
+                  info_homes=[{"what": "設定", "home": "config/private.ini"}])
+        evidence = self.evidence_with_reasons(("config/private.ini", "我覺得該改"))
+        done = self.apply("1", self.patch_file("p.diff", OUTSIDE), "--evidence", evidence)
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
-        line = [row for row in done.stderr.splitlines() if "docs/secret.md" in row]
+        line = [row for row in done.stderr.splitlines() if "config/private.ini" in row]
         self.assertEqual(len(line), 1, done.stderr)
-        self.assertIn("out_of_scope", line[0])
-        self.assertIn("`docs/*`", line[0])
-        self.assertNotIn("config/private.ini", done.stderr, "白名單外但沒被硬擋的不點名成擋")
-        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "0",
-                         "硬擋的 patch 不該留下 commit")
+        self.assertIn("board/config.json 的 protected_paths", line[0])
+        self.assertIn("`config/**`", line[0])
+        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "0")
+
+    def test_the_verifier_hand_in_merges_verify_files_past_the_worker_declaration_check(self):
+        """#101 A4:驗證者收件照既有角色管道把 verify.files 併進票,**不經** A3 的 worker 宣告
+        檢查(這張舊票的 allowed_write_paths 蓋得到本票驗證者的案例檔 —— A3 會擋的宣告);
+        驗證者的檔不加進 worker 的 allowed_write_paths,也不算 worker 的 extra_paths。
+        四問:量票的 verify.files、allowed_write_paths、result 的 extra_paths;紅 = 驗證者收件
+        被擋或案例檔被塞進 worker 範圍;期望值 = 夾具的 PLAN_RESULT;不測 = set 那一關。
+        **變異 M3**:在通用 `save()` 擋 `verifier_case_problems` → 這一條紅。"""
+        self.make("1", allowed_write_paths=["src/*", "verify/*"], needs_verifier=True)
+        said = self.ticket("set", "1", "allowed_write_paths", '["src/*", "verify/*"]')
+        self.assertEqual(said.returncode, 1, "夾具前提:A3 擋這份宣告 —— " + said.stderr)
+        self.assertIn("是本票驗證者的案例檔", said.stderr)
+        vcase = VERIFY_CASE.replace("verify/example/test_ticket_1.py", "verify/nav/test_ticket_1.py")
+        done = self.apply("1", self.patch_file("p.diff", CHANGE), self.patch_file("pv.diff", vcase),
+                          "--evidence", self.patch_file("EVIDENCE.md", FULL_EVIDENCE),
+                          "--evidence-verifier",
+                          self.patch_file("EV.md", "# EV\n\n## result\n\n```result\n"
+                                          + PLAN_RESULT + "\n```\n"))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("併不進票", done.stdout + done.stderr)
+        ticket = self.load_ticket("1")
+        self.assertEqual(ticket["verify"]["files"], ["verify/nav/test_ticket_1.py"])
+        self.assertEqual(ticket["allowed_write_paths"], ["src/*", "verify/*"],
+                         "驗證者的檔不加進 worker 的 allowed_write_paths")
+        self.assertNotIn("verify/nav/test_ticket_1.py", self.result_json()["extra_paths"])
+
+    def test_the_patch_verify_files_are_not_the_workers_extra(self):
+        """#101 A4 / A5:patch-verify 帶進來的是驗證者的交付 —— worker 的寫入範圍不列它(A3),
+        它也不算 worker 的 extra_paths(否則每一張要驗證者的票都多一列「沒寫理由」)。
+        四問:量 result 的 extra_paths;紅 = 驗證者的案例檔被算成 worker 越出;期望值 = 夾具的
+        patch-verify 檔名;不測 = protected(兩份 patch 都量)。
+        **變異**:apply 第 5 步不扣 patch-verify 的檔 → 這一條紅。"""
+        self.make("1", allowed_write_paths=["src/*"], needs_verifier=True)
+        vcase = VERIFY_CASE.replace("verify/example/test_ticket_1.py", "verify/nav/test_ticket_1.py")
+        done = self.apply("1", self.patch_file("p.diff", CHANGE), self.patch_file("pv.diff", vcase),
+                          "--evidence", self.patch_file("EVIDENCE.md", FULL_EVIDENCE))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn('TAGS = ["example"]', self.git("show", "t1:verify/nav/test_ticket_1.py"),
+                      "夾具前提:驗證者的案例檔真的進了分支")
+        self.assertEqual(self.result_json()["extra_paths"], [])
 
     def test_a_file_in_config_protected_paths_is_refused_by_name_and_field(self):
         """**變異 M4**:硬擋不看 config 的 `protected_paths` → 這一條紅。"""
@@ -1242,14 +1350,25 @@ class ApplyBatch(ApplyBase):
                              "#%s 的票檔被寫了(state_version / review 會跟著漂)" % ident)
         self.assertEqual(self.result_round1()["extra_paths"], [])
 
-    def test_an_out_of_scope_file_of_one_ticket_not_allowed_by_any_is_blocked(self):
-        """A3。四問:量 rc 5 + stderr 點名檔與格、land/X 不動;紅 = 硬擋沒算或沒擋;
-        期望值 = 票 1 的 out_of_scope(夾具);不測 = 單票那一條硬擋。"""
-        done = self.run_batch(batch_patch(("docs/guarded.md", "guarded\n", "touched\n")))
-        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
-        self.assertIn("docs/guarded.md", done.stderr)
-        self.assertIn("#1 的 out_of_scope", done.stderr)
-        self.assertEqual(self.head(), self.batch["land"])
+    def test_an_out_of_scope_file_of_one_ticket_not_allowed_by_any_goes_through_listed(self):
+        """#101 A1(D-050 ①):批次路的 out_of_scope 也是建議範圍 —— 票 1 out_of_scope、兩張票都
+        不 allowed 的檔不再 rc 5,疊成 commit、列進 extra_paths、stdout 點名檔與命中的格與 glob,
+        理由抽進 extra_reasons。舊版本條是「rc 5 + 點名」(#108 A3),D-050 ① 把它翻成這一條。
+        四問:量 rc、land/X 前進、result 的 extra_paths / extra_reasons、stdout;紅 = 照舊硬擋;
+        期望值 = 票 1 的 out_of_scope(夾具)與 EVIDENCE 理由;不測 = 單票那一條。
+        **變異 M5**:批次的 out_of_scope 命中照舊印成 `B` → 這一條紅。"""
+        evidence = FULL_EVIDENCE.replace(
+            "## result", "## 提示清單外的改動\n- `docs/guarded.md` — 修紅要改這份\n\n## result", 1)
+        done = self.run_batch(batch_patch(("docs/guarded.md", "guarded\n", "touched\n")),
+                              evidence=evidence)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("show", "land/X:docs/guarded.md"), "touched\n")
+        line = [row for row in done.stdout.splitlines()
+                if "docs/guarded.md" in row and "#1 的 out_of_scope" in row]
+        self.assertEqual(len(line), 1, done.stdout)
+        data = self.result_round1()
+        self.assertEqual(data["extra_paths"], ["docs/guarded.md"])
+        self.assertEqual(data["extra_reasons"], {"docs/guarded.md": "修紅要改這份"})
 
     def test_a_file_another_ticket_is_allowed_to_write_is_not_blocked(self):
         """A3 聯集扣除。四問:量 rc 0;紅 = 只看單一張票的 out_of_scope;

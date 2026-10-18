@@ -1106,6 +1106,46 @@ class TheFirstRoundPacket(AutoFixBase):
         self.assertIn("前景跑", done.stdout, "G14:丟背景就結束回合 = 什麼都沒交")
         self.assertEqual(self.worker_rounds(), [], "第 1 輪不由這一支起 worker")
 
+    def scope_part(self, text):
+        self.assertIn("## 寫入範圍與資訊歸屬", text)
+        return text.split("## 寫入範圍與資訊歸屬")[1].split("\n## ")[0]
+
+    def test_the_packet_shows_the_info_map_and_the_info_homes_when_set(self):
+        """#101 A8(有設定):派工文的真入口是 auto-fix.sh —— config 的 info_map(相對文件路徑,
+        帶 #節名)與票的 info_homes 逐筆印出,提示範圍含 home,並說明 EVIDENCE 那一段怎麼寫。
+        四問:量那一段的字;紅 = 沒印或印錯來源;期望值 = 夾具寫的 config 與票面;不測 = 文件內容。
+        **變異**:`scope_section` 不印 info_homes 那幾行 → 這一條紅。"""
+        self.set_worker(WORKER_NEVER)
+        conf = json.loads(self.read("board/config.json"))
+        conf["info_map"] = "docs/INFO-MAP.md#寫入範圍"
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        self.write("docs/INFO-MAP.md", "# 資訊地圖\n\n## 寫入範圍\n")
+        self.ticket_ready(info_homes=[{"what": "角色操作細節", "home": "docs/reference"}],
+                          out_of_scope=["docs/DECISIONS.md"])
+        done = self.auto_fix("--dry-run", "--round", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        part = self.scope_part(done.stdout)
+        self.assertIn("資訊地圖:`docs/INFO-MAP.md#寫入範圍`", part)
+        self.assertNotIn("沒有這個檔", part)
+        self.assertIn("- 角色操作細節 → `docs/reference`", part)
+        self.assertIn("`tests/*` `docs/reference`", part, "提示範圍 = allowed ∪ home")
+        self.assertIn('["docs/DECISIONS.md"]', part)
+        self.assertIn("## 提示清單外的改動", part)
+        self.assertIn("protected_paths", part)
+
+    def test_the_packet_only_hints_when_nothing_is_set(self):
+        """#101 A8(缺設定):沒有 info_map → 只提示、不擋派工;票面沒有 info_homes 也說出來。
+        四問:量那一段的字與 rc 0;紅 = 缺設定時擋派工或一片空白;期望值 = 沙盒預設 config;
+        不測 = 有設定那一條。
+        **變異**:沒設 info_map 時不印提示(那一個 `if` 拿掉)→ 這一條紅。"""
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready()
+        done = self.auto_fix("--dry-run", "--round", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        part = self.scope_part(done.stdout)
+        self.assertIn("沒設 `info_map`", part)
+        self.assertIn("票面沒有 info_homes", part)
+
     def test_a_round_number_it_does_not_support_is_refused_by_name(self):
         """「不認得 X」只說了它不是什麼(§5.7)。"""
         self.set_worker(WORKER_NEVER)
@@ -1863,18 +1903,24 @@ class MechanicalRedIsAttributed(AutoFixBase):
                      "gate.sh --branch --ticket 1", "不要轉 Ready"):
             self.assertIn(text, page)
 
-    def applied_and_gated(self, patch_text, out_of_scope_edit=False):
-        """真 apply.sh 套 patch,(選擇性)在分支上再 commit 一筆碰 out_of_scope 的改動 ——
-        apply.sh 自己會以 rc 5 擋 out_of_scope,所以那一手只能是分支上另一個 commit ——
+    def protect(self, *globs):
+        """config 的 protected_paths(#101 起硬擋只剩它);在 ticket_ready 之前寫,隨開票進主線。"""
+        conf = json.loads(self.read("board/config.json"))
+        conf["protected_paths"] = list(globs)
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+
+    def applied_and_gated(self, patch_text, protected_edit=False):
+        """真 apply.sh 套 patch,(選擇性)在分支上再 commit 一筆碰 protected_paths 的改動 ——
+        apply.sh 自己會以 rc 5 擋 protected_paths,所以那一手只能是分支上另一個 commit ——
         再在 worktree 跑真 gate.sh(--no-auto-fix),最後由 auto-fix 從開場那條路讀它。"""
         patch = self.write("p1.diff", patch_text, where=self.home)
         done = self.run_sh("scripts/apply.sh", "1", patch)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         wt = os.path.join(self.home, "repo-wt", "t1")
-        if out_of_scope_edit:
-            self.write("scripts/land.sh", self.read("scripts/land.sh") + "\n# out of scope\n",
+        if protected_edit:
+            self.write("scripts/land.sh", self.read("scripts/land.sh") + "\n# protected\n",
                        where=wt)
-            self.git("commit", "-q", "-am", "#1 分支上碰到 out_of_scope", cwd=wt)
+            self.git("commit", "-q", "-am", "#1 分支上碰到 protected_paths", cwd=wt)
         gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
                            "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
                            env=self.env(AC_ROOT=self.repo))
@@ -1925,29 +1971,35 @@ class MechanicalRedIsAttributed(AutoFixBase):
         self.assertNotIn("沒有歸因", page + done.stdout + done.stderr)
         self.assertEqual(self.worker_rounds(), [])
 
-    def test_an_out_of_scope_hit_is_attributed_to_the_handin(self):
-        """A3:out_of_scope 命中(verify_strings 合格)→ 歸因到交件,不歸票面。
+    def test_a_protected_paths_hit_is_attributed_to_the_handin(self):
+        """A3:寫入範圍硬擋命中(verify_strings 合格)→ 歸因到交件,不歸票面。#101(D-050 ①)起
+        out_of_scope 不再是閘門機械格,硬擋只剩 protected_paths,夾具從 out_of_scope 換成它。
+        四問:量頁面的格名、檔名與兩個歸因字樣;紅 = 一律歸票面;期望值 = 夾具 config 的
+        protected_paths;不測 = out_of_scope(tests/test_status 那一條)。
         **變異 M3**:所有機械格行一律歸因到票面 → 這一條紅。"""
         self.set_worker(WORKER_NEVER)
-        self.ticket_ready(verify_strings=["scope-token"], out_of_scope=["scripts/land.sh"])
+        self.protect("scripts/land.sh")
+        self.ticket_ready(verify_strings=["scope-token"])
         done = self.applied_and_gated(new_file_patch("tests/test_scope.py",
                                                      "# scope-token\n" + FILENAME_TOKEN_FILE),
-                                      out_of_scope_edit=True)
+                                      protected_edit=True)
         self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
         page = self.page_of(self.inbox_rows()[-1])
-        self.assertIn("out_of_scope", page)
+        self.assertIn("protected_paths", page)
         self.assertIn("scripts/land.sh", page)
         self.assertIn("歸因到交件(worker)", page)
         self.assertNotIn("歸因到票面", page)
         self.assertNotIn("沒有歸因", page + done.stdout + done.stderr)
 
     def test_both_kinds_at_once_are_listed_with_both_attributions(self):
-        """A3:verify_strings 與 out_of_scope 同時不合 → 兩組各自列、兩個歸因字樣都在。"""
+        """A3:verify_strings 與寫入範圍硬擋同時不合 → 兩組各自列、兩個歸因字樣都在。#101 起
+        硬擋那一組是 protected_paths(out_of_scope 不再是機械格)。"""
         self.set_worker(WORKER_NEVER)
-        self.ticket_ready(verify_strings=["filename-token"], out_of_scope=["scripts/land.sh"])
+        self.protect("scripts/land.sh")
+        self.ticket_ready(verify_strings=["filename-token"])
         done = self.applied_and_gated(new_file_patch("tests/test_filename-token.py",
                                                      FILENAME_TOKEN_FILE),
-                                      out_of_scope_edit=True)
+                                      protected_edit=True)
         self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
         page = self.page_of(self.inbox_rows()[-1])
         self.assertIn(self.TICKET_SIDE, page)
@@ -1956,7 +2008,7 @@ class MechanicalRedIsAttributed(AutoFixBase):
         self.assertIn("歸因到交件(worker)", page)
         ticket_part, _, work_part = page.partition("歸因到交件(worker)")
         self.assertIn(self.TICKET_SIDE, ticket_part, "票面那一組要列在票面歸因底下")
-        self.assertIn("out_of_scope", work_part, "交件那一組要列在交件歸因底下")
+        self.assertIn("protected_paths", work_part, "交件那一組要列在交件歸因底下")
 
 
 class TheResultBlockAtTheEndOfEvidence(AutoFixBase):

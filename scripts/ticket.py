@@ -60,7 +60,7 @@ LIST_FIELDS = ("acceptance", "in_scope", "out_of_scope", "depends_on",
                "test_evidence", "attempt_history", "verify_strings",
                # 實作者的反駁(D-014):每筆 {category, body, evidence, owner,
                # disposition, blocking}。沒處置的阻擋項 land 會拒絕。
-               "objections", "tags")
+               "objections", "tags", "info_homes")
 
 # 覆核算通過的幾種寫法,與「算已經處置」的幾種 disposition。表在這裡,不在提示裡。
 REVIEW_PASS = ("pass", "approved", "ok", "通過")
@@ -264,6 +264,7 @@ CREATE_REPEATED = {
     "--depends-on": "depends_on", "--decision-ref": "decision_refs",
     "--verify-string": "verify_strings", "--shared-resource": "shared_resources",
     "--verify-file": "verify.files", "--verify-tag": "verify.tags",
+    "--info-home": "info_homes",
 }
 # 存成 JSON 布林的旗標:值只收 `true` / `false`,其他一律 rc=2 —— 存成字串的 `"true"`
 # 在 Ready 那一關(`needs_verifier_problem`)會被擋,不如在開票這一手就說。
@@ -275,8 +276,12 @@ FLAG_NOTE = {
     "--objective": "做完了的樣子",
     "--acceptance": "驗收;**一條一個旗標**,每條要能寫成一條會紅的斷言",
     "--in-scope": "範圍內的檔;一個一個給",
-    "--out-of-scope": "明說不要動的;一個一個給",
-    "--allowed-write-path": "預期會動的路徑 glob;**一個一個給**(排順序判平行、覆核者對照;不是限制,硬擋的是 out_of_scope,D-H38)",
+    "--out-of-scope": ("明說不要動的;一個一個給(建議範圍,D-050 ①:命中不擋,EVIDENCE 逐檔寫理由,"
+                       "land 對缺理由的拒絕)"),
+    "--allowed-write-path": ("預期會動的路徑 glob;**一個一個給**(排順序判平行、覆核者對照;建議範圍,"
+                             "不是限制 —— 硬擋只有 board/config.json 的 protected_paths,D-050 ①)"),
+    "--info-home": ("資訊位置:一個 JSON 物件 `{\"what\": \"…\", \"home\": \"相對路徑\"}`;一個一個給"
+                    "(home 不准 glob、`..`、絕對路徑;不是寫入權限)"),
     "--depends-on": "前置票號;`7` 或 `7:閘門綠`;一個一個給",
     "--decision-ref": "相關裁示編號(D-00x);一個一個給",
     "--verify-string": ("關票時要在主線上抓到的字;三種認法:`路徑:那串字`(冒號前像路徑"
@@ -354,7 +359,8 @@ USAGE = {
              "[--effort E]"),
     "agent-command": ("scripts/ticket.py agent-command --model M [--tool T] "
                       "[--base \"<worker.command>\"] [--swap-model] [--effort E]"),
-    "lint": "scripts/ticket.py lint <id>  # 唯讀:needs_verifier / verify_strings / 標籤",
+    "lint": ("scripts/ticket.py lint <id>  # 唯讀:needs_verifier / verify_strings / 標籤 / "
+             "info_homes / 本票驗證者案例檔"),
     "review-request": ("scripts/ticket.py review-request <id> --run-id <run_id> --sha <分支頭> "
                        "--receipt <reports/t<id>/<run_id>/review-receipt.json>"),
     "review-receive": ("scripts/ticket.py review-receive <id> --receipt <收件單> "
@@ -658,6 +664,19 @@ def cmd_create(argv, stdin=sys.stdin, stdout=sys.stdout):
         sys.stderr.write("ticket: %s\n" % complexity_problem(ticket["complexity"]))
         return 2
     ticket["depends_on"] = normalise_depends(ticket.get("depends_on") or [])
+    if "info_homes" in ticket:
+        homes = []
+        for raw in ticket["info_homes"]:
+            try:
+                homes.append(json.loads(raw))
+            except ValueError:
+                homes.append(raw)
+        ticket["info_homes"] = homes
+        bad = info_home_problems(homes)
+        if bad:
+            for line in bad:
+                sys.stderr.write("ticket: --info-home %s\n" % line)
+            return 2
     if not ticket.get("allowed_write_paths") and ticket.get("in_scope"):
         ticket["allowed_write_paths"] = list(ticket["in_scope"])
         if "tests/*" not in ticket["allowed_write_paths"]:
@@ -686,6 +705,12 @@ def cmd_create(argv, stdin=sys.stdin, stdout=sys.stdout):
         if unready:
             sys.stderr.write("ticket: 開不出 Ready 的票 —— %s(或給 --needs-verifier)\n"
                              % unready)
+            return 2
+        # 票號在這把鎖裡才定,本票驗證者的慣例路徑要等它(#101 A3)。
+        bad = verifier_case_problems(ticket)
+        if bad:
+            for line in bad:
+                sys.stderr.write("ticket: 開不出 #%s —— %s\n" % (ticket["id"], line))
             return 2
         path = save(ticket)
     event.emit("ticket.created", ticket=ticket["id"], role=ticket["role"],
@@ -833,6 +858,12 @@ def cmd_set(argv):
     if field == "complexity" and value is not None and value not in COMPLEXITY:
         sys.stderr.write("ticket: %s\n" % complexity_problem(value))
         return 2
+    if field == "info_homes":
+        bad = info_home_problems(value)
+        if bad:
+            for line in bad:
+                sys.stderr.write("ticket: %s\n" % line)
+            return 2
     # 讀、比對、寫回**在同一把鎖裡**:中間放別人進來,`state_version` 就會有兩個人
     # 同時讀到 v3、各自寫回 v4,而後寫的那一份整份蓋掉先寫的。
     try:
@@ -853,10 +884,19 @@ def cmd_set(argv):
                     return 1
             # Running → Ready 不查:那是已派出的票改派回來(auto-fix 的 codex 額度改派),
             # 規格那一關在它第一次轉 Ready 時就過了;擋它,票就卡在 Running。
-            if field == "state" and value == "Ready" and ticket.get("state") != "Running":
+            to_ready = field == "state" and value == "Ready" and ticket.get("state") != "Running"
+            if to_ready:
                 unready = needs_verifier_problem(ticket)
                 if unready:
                     sys.stderr.write("ticket: 不轉 Ready —— %s\n" % unready)
+                    return 1
+            # worker 的宣告不准蓋到本票驗證者的案例檔(#101 A3):先拿改完的樣子量,
+            # 不收就一個位元都不寫(票與 state_version 都不動)。
+            if to_ready or field in ("allowed_write_paths", "verify", "needs_verifier"):
+                bad = verifier_case_problems(dict(ticket, **{field: value}))
+                if bad:
+                    for line in bad:
+                        sys.stderr.write("ticket: #%s 這一筆不收 —— %s\n" % (ident, line))
                     return 1
             before = ticket.get(field)
             ticket[field] = value
@@ -1280,34 +1320,275 @@ def matches_any(path, globs):
     return first_match(path, globs) is not None
 
 
-def write_scope(row, root, names):
-    """寫入範圍(D-H38 ①):`allowed_write_paths` 是**預期會動的檔,不是限制**。
+PROTECTED_FIELD = "board/config.json 的 protected_paths"
 
-    回 `(blocked, extra)`:`blocked` 是 `(檔, 哪一格, 命中的 glob)`,只來自票的
-    `out_of_scope` 與 `board/config.json` 的 `protected_paths`(專案自訂,沒有就是空);
-    `extra` 是白名單外、沒被硬擋的檔 —— 不擋,交給 result 的 `extra_paths` 與覆核者。
-    apply / gate / land 共用這一支:三份各抄一份的那一天,擋的東西會不一樣。
-    """
+
+def protected_paths(root):
+    """`board/config.json` 的 `protected_paths`(專案自訂的 glob;沒有這一格就是空)。"""
     try:
         with open(os.path.join(root, "board", "config.json"), encoding="utf-8") as handle:
             conf = json.load(handle)
     except (OSError, ValueError):
         conf = {}
     protected = conf.get("protected_paths") if isinstance(conf, dict) else None
-    fences = (("票的 out_of_scope", row.get("out_of_scope") or []),
-              ("board/config.json 的 protected_paths", protected or []))
-    allowed = row.get("allowed_write_paths") or []
+    return protected if isinstance(protected, list) else []
+
+
+def hint_scope(ticket):
+    """提示範圍(#101 A5,**唯一算法**):`allowed_write_paths` ∪ `info_homes[].home` ∪
+    `verify.files`。建議範圍,不是權限:apply 拿它算 `extra_paths`、覆核者拿它對照、排程
+    拿它判重疊(`scope_conflict`)。驗證者的案例檔在這裡、不在 worker 的 `allowed_write_paths`
+    (A4):patch-verify 動它們不算越出,worker 的寫入範圍也不必列它們。"""
+    plan = ticket.get("verify") if isinstance(ticket.get("verify"), dict) else {}
+    parts = []
+    for value in (ticket.get("allowed_write_paths"), plan.get("files")):
+        if isinstance(value, list):
+            parts += value
+    for row in ticket.get("info_homes") if isinstance(ticket.get("info_homes"), list) else []:
+        if isinstance(row, dict):
+            parts.append(row.get("home"))
+    out = []
+    for item in parts:
+        if isinstance(item, str) and item and item not in out:
+            out.append(item)
+    return out
+
+
+def out_of_scope_hits(rows, names):
+    """命中 `out_of_scope` 的檔 → `{檔: (哪一格, glob)}`。D-050 ①:`out_of_scope` 是建議
+    範圍 —— 命中**不擋**,列進 `extra_paths`、要逐檔理由(land 對缺理由的拒絕)。
+
+    `rows` 一張是單票那條路(命中就算,不管 `allowed_write_paths` —— 兩格寫衝突時照舊以
+    out_of_scope 為準);多張是批次:各票 out_of_scope 聯集扣掉各票提示範圍聯集(票 1 不碰、
+    票 2 本來就要改的檔不算命中,#108)。"""
+    rows = list(rows)
+    spared = [] if len(rows) == 1 else [glob for row in rows for glob in hint_scope(row)]
+    hits = {}
+    for name in names:
+        if matches_any(name, spared):
+            continue
+        for row in rows:
+            pattern = first_match(name, row.get("out_of_scope") or [])
+            if pattern is not None:
+                field = "票的 out_of_scope" if len(rows) == 1 \
+                    else "#%s 的 out_of_scope" % row.get("id", "?")
+                hits[name] = (field, pattern)
+                break
+    return hits
+
+
+def write_scope(row, root, names):
+    """寫入範圍(D-H38 ①、D-050 ①):`allowed_write_paths` 與 `out_of_scope` 都是**建議範圍**。
+
+    回 `(blocked, extra)`:`blocked` 是 `(檔, 哪一格, 命中的 glob)`,**只來自**
+    `board/config.json` 的 `protected_paths`(安全邊界,硬擋);`extra` 是提示範圍
+    (`hint_scope`)外、或命中 `out_of_scope` 的檔 —— 不擋,交給 result 的 `extra_paths` /
+    `extra_reasons` 與覆核者(命中哪條 out_of_scope 問 `out_of_scope_hits`)。
+    apply / gate / land 共用這一支:三份各抄一份的那一天,擋的東西會不一樣。
+    """
+    protected = protected_paths(root)
+    hits = out_of_scope_hits([row], names)
+    scope = hint_scope(row)
     blocked, extra = [], []
     for name in names:
-        for field, globs in fences:
-            pattern = first_match(name, globs)
-            if pattern is not None:
-                blocked.append((name, field, pattern))
-                break
-        else:
-            if not matches_any(name, allowed):
-                extra.append(name)
+        pattern = first_match(name, protected)
+        if pattern is not None:
+            blocked.append((name, PROTECTED_FIELD, pattern))
+        elif name in hits or not matches_any(name, scope):
+            extra.append(name)
     return blocked, extra
+
+
+GLOB_CHARS = re.compile(r"[*?\[]")
+
+
+def globs_overlap(one, two):
+    """兩個寫入範圍 glob 會不會蓋到同一個檔。**寧可說會**:排程看到「會」只是串行,
+    說「不會」而其實會,兩個 worker 就改到同一個檔。"""
+    if first_match(one, [two]) is not None or first_match(two, [one]) is not None:
+        return True
+    if not (GLOB_CHARS.search(one) and GLOB_CHARS.search(two)):
+        return False
+    head_one = one[:GLOB_CHARS.search(one).start()]
+    head_two = two[:GLOB_CHARS.search(two).start()]
+    return head_one.startswith(head_two) or head_two.startswith(head_one)
+
+
+def scope_conflict(one, two):
+    """排程用的純函式(#101 A7;不讀檔、不寫票,真正排程是 #119):兩張票能不能平行。
+    回空字串 = 可以;否則一句為什麼要串行。判的是兩張票的提示範圍(`hint_scope`)有沒有
+    重疊;**未知或空**(`allowed_write_paths` 不是非空 list)一律串行 —— 不知道會動哪裡,
+    就不知道撞不撞。資訊歸屬只是提示範圍的一部分,不是另一組權限。"""
+    for row in (one, two):
+        globs = row.get("allowed_write_paths")
+        if not isinstance(globs, list) or not [g for g in globs if isinstance(g, str) and g]:
+            return ("#%s 的提示範圍未知(allowed_write_paths 空或不是 list)—— 串行"
+                    % row.get("id", "?"))
+    for left in hint_scope(one):
+        for right in hint_scope(two):
+            if globs_overlap(left, right):
+                return ("#%s 的 `%s` 與 #%s 的 `%s` 可能蓋到同一個檔 —— 串行"
+                        % (one.get("id", "?"), left, two.get("id", "?"), right))
+    return ""
+
+
+EXTRA_HEADING = "提示清單外的改動"
+
+
+def extra_reasons(text, extra):
+    """EVIDENCE「提示清單外的改動」那一段 → `{檔: 理由或 None}`(#101 A5),鍵恰為 `extra`。
+
+    那一段在任一層 `#` 標題底下,到下一個標題為止;一行一檔:`` - `<檔>` — <理由> ``
+    (檔名可不加反引號;分隔可用 —、-、:)。沒列的檔、理由是空字串 → `None`:land 只看
+    「有沒有一句理由」,而空字串與沒寫長得一樣。只由 apply 收件抽(與 `extra_paths` 同來源)。"""
+    found = {}
+    inside = False
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            inside = EXTRA_HEADING in stripped
+            continue
+        item = re.match(r"^[-*+]\s+(.*)$", stripped) if inside else None
+        if not item:
+            continue
+        body = item.group(1)
+        if body.startswith("`") and "`" in body[1:]:
+            name, rest = body[1:].split("`", 1)
+        else:
+            parts = re.split(r"[\s:：]", body, 1)
+            name, rest = parts[0], (parts[1] if len(parts) > 1 else "")
+        reason = rest.strip().lstrip("—–-:：|=").strip()
+        name = name.strip()
+        if name and not found.get(name):
+            found[name] = reason or None
+    return {name: found.get(name) for name in extra}
+
+
+def handin_union(paths):
+    """把幾份收件(`result-round<輪>.json`,舊的在前)的 `extra_paths` / `extra_reasons` 併成一份。
+    apply 每輪只量**這一輪的增量**,前幾輪寫過的理由要跨輪留著:同一檔後面那輪有理由就蓋過,
+    後面那輪沒寫(null / 空字串)不抹掉前面的。回 `(extra_paths, extra_reasons)`。"""
+    extra, reasons = [], {}
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        for name in data.get("extra_paths") or []:
+            if isinstance(name, str) and name not in extra:
+                extra.append(name)
+        said = data.get("extra_reasons")
+        if not isinstance(said, dict):
+            continue
+        for name, reason in said.items():
+            if str(reason or "").strip() or name not in reasons:
+                reasons[name] = reason
+    return extra, reasons
+
+
+def handin_rounds(where):
+    """`where` 底下 `result-round<輪>.json` 的路徑,依輪號由舊到新。"""
+    try:
+        names = os.listdir(where)
+    except OSError:
+        return []
+    rounds = [(int(m.group(1)), name) for name in names
+              for m in [re.match(r"^result-round(\d+)\.json$", name)] if m]
+    return [os.path.join(where, name) for _, name in sorted(rounds)]
+
+
+def handin_reasons(root, ident):
+    """這張票**各輪收件**(`apply.sh` 寫的 `result-round<輪>.json`)併起來的 `extra_reasons`
+    (`handin_union`;依 mtime 由舊到新,後面那輪蓋過同一檔),回 `(最近一份的路徑, extra_reasons)`;
+    一份都沒有回 `("", {})`。land 與覆核派工文讀它。"""
+    where = os.path.join(root, event.config(root).get("reports_dir") or "reports", "t%s" % ident)
+    found = []
+    try:
+        runs = sorted(os.listdir(where))
+    except OSError:
+        runs = []
+    for run in runs:
+        for at, path in enumerate(handin_rounds(os.path.join(where, run))):
+            found.append((os.path.getmtime(path), run, at, path))
+    paths = [row[-1] for row in sorted(found)]
+    if not paths:
+        return "", {}
+    return paths[-1], handin_union(paths)[1]
+
+
+def extra_line(name, hit, reason):
+    """覆核派工文「白名單外改動」的一列:檔名、命中的 out_of_scope glob、理由。"""
+    where = "命中%s `%s`" % hit if hit else "不在提示範圍"
+    said = str(reason or "").strip() or "(沒寫)"
+    return "- `%s` —— %s —— 理由:%s\n" % (name, where, said)
+
+
+# 驗證者案例的慣例路徑(`templates/dispatch-verifier.md`):`%s` 是票號。
+VERIFIER_CASE_GLOBS = ("verify/**/test_ticket_%s.py", "verify/TAGS.d/%s.md")
+
+
+def verifier_case_problems(ticket):
+    """`needs_verifier=true` 的票,worker 的 `allowed_write_paths` 不准蓋到**本票**驗證者的
+    案例檔(#101 A3):`verify.files` 與慣例路徑。兩份 patch 撞同一個檔,整輪白跑(#709)。
+    `false`、別票的案例檔照收。只查 worker 的宣告 —— 驗證者收件併 `verify.files` 走 apply 的
+    角色管道,不經這一關(A4),所以它不在 `save()` 裡。"""
+    if ticket.get("needs_verifier") is not True:
+        return []
+    ident = str(ticket.get("id") or "")
+    plan = ticket.get("verify") if isinstance(ticket.get("verify"), dict) else {}
+    files = [name for name in (plan.get("files") if isinstance(plan.get("files"), list) else [])
+             if isinstance(name, str) and name]
+    globs = ticket.get("allowed_write_paths")
+    bad = []
+    for glob in globs if isinstance(globs, list) else []:
+        if not isinstance(glob, str) or not glob:
+            continue
+        hits = [name for name in files if first_match(name, [glob]) is not None]
+        if ident:
+            # 慣例路徑本身是 glob:拿 worker 的 glob 自己、與照它的目錄造的樣本去比。
+            head = glob[len("verify/"):].split("/", 1)[0] if glob.startswith("verify/") else ""
+            feature = head if head and not GLOB_CHARS.search(head) else "x"
+            samples = (glob, "verify/%s/test_ticket_%s.py" % (feature, ident),
+                       VERIFIER_CASE_GLOBS[1] % ident)
+            for pattern in (case % ident for case in VERIFIER_CASE_GLOBS):
+                for sample in samples:
+                    if fnmatch.fnmatch(sample, pattern) and first_match(sample, [glob]) is not None:
+                        shown = pattern if GLOB_CHARS.search(sample) else sample
+                        if shown not in hits:
+                            hits.append(shown)
+                        break
+        for name in hits:
+            bad.append("allowed_write_paths 的 `%s` 蓋到 `%s` —— 是本票驗證者的案例檔"
+                       "(needs_verifier=true:驗證者自己建、交 patch-verify;worker 的寫入範圍"
+                       "不列它,兩份 patch 撞同一個檔整輪白跑)" % (glob, name))
+    return bad
+
+
+def info_home_problems(rows):
+    """`info_homes` 恰為 `list[{what, home}]`(#101 A2):兩格都是非空字串;`home` 是相對 repo
+    根的路徑,不准 glob、`..`、絕對路徑。它只說「這類資訊住在哪」,不是寫入權限。"""
+    if not isinstance(rows, list):
+        return ["info_homes 要是串列,現在是 %s" % json.dumps(rows, ensure_ascii=False)]
+    bad = []
+    for at, row in enumerate(rows, 1):
+        shown = json.dumps(row, ensure_ascii=False)
+        if not isinstance(row, dict) or set(row) != {"what", "home"}:
+            bad.append("info_homes 第 %d 筆要恰為 {what, home} 兩格:%s" % (at, shown))
+            continue
+        if not all(isinstance(row[k], str) and row[k].strip() for k in ("what", "home")):
+            bad.append("info_homes 第 %d 筆的 what / home 要是非空字串:%s" % (at, shown))
+            continue
+        home = row["home"].strip()
+        if home.startswith(("/", "~")) or re.match(r"^[A-Za-z]:[\\/]", home):
+            bad.append("info_homes 第 %d 筆的 home 是絕對路徑(要相對 repo 根):%s" % (at, shown))
+        elif ".." in re.split(r"[\\/]", home):
+            bad.append("info_homes 第 %d 筆的 home 不准有 `..`:%s" % (at, shown))
+        elif GLOB_CHARS.search(home):
+            bad.append("info_homes 第 %d 筆的 home 不准是 glob(一個確切的位置):%s" % (at, shown))
+    return bad
 
 
 def verify(ident):
@@ -1974,6 +2255,9 @@ def cmd_lint(argv):
         bad.append(unready)
     bad += verify_string_problems(ticket.get("verify_strings"))
     bad += tag_problems(ticket)
+    if "info_homes" in ticket:
+        bad += info_home_problems(ticket["info_homes"])
+    bad += verifier_case_problems(ticket)
     if bad:
         for line in bad:
             sys.stderr.write("ticket: lint #%s %s\n" % (ident, line))

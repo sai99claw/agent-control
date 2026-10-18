@@ -105,7 +105,7 @@ class B1B2TheTicketFace(GuardSandbox):
 
     def test_b2_set_on_a_face_field_is_denied(self):
         for field in ("subject", "objective", "acceptance", "in_scope", "out_of_scope",
-                      "allowed_write_paths", "verify_strings", "test_plan"):
+                      "allowed_write_paths", "info_homes", "verify_strings", "test_plan"):
             with self.subTest(field=field):
                 self.assert_denied(
                     self.guard("python3 scripts/ticket.py set 5 %s '[\"x\"]'" % field),

@@ -494,7 +494,7 @@ class Sandbox(unittest.TestCase):
         out_of_scope;`reports/t1/<run_id>/status.json` 是 land 那一輪全套紅的兩條紅榜。
 
         `docs/shared.md` 在票 1 的 out_of_scope、也在票 2 的 allowed —— 聯集扣掉後**不擋**;
-        `docs/guarded.md` 只在票 1 的 out_of_scope —— 擋。期望值一律從這裡寫下的檔讀回。"""
+        `docs/guarded.md` 只在票 1 的 out_of_scope —— 命中(#101 起不擋,列出要理由)。期望值一律從這裡寫下的檔讀回。"""
         self.write("src/one.txt", "one\n")
         self.write("src/two.txt", "two\n")
         self.write("docs/guarded.md", "guarded\n")

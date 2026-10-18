@@ -629,25 +629,99 @@ class TicketChecks(LandBase):
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("沒有 base_sha", done.stdout)
 
-    def test_writing_into_out_of_scope_is_refused_and_the_files_are_named(self):
-        """D-H38 ①:硬擋只剩票的 `out_of_scope` 與 config 的 `protected_paths`。
+    def handin(self, reasons, run_id="20261018-100000-1", rnd=1):
+        """apply 收件寫下的那一份 result(`extra_paths` / `extra_reasons`)—— land 讀各輪併起來的。"""
+        self.write(os.path.join("reports", "t1", run_id, "result-round%d.json" % rnd),
+                   json.dumps({"present": True, "extra_paths": sorted(reasons),
+                               "extra_reasons": reasons}, ensure_ascii=False))
 
-        **變異**:把硬擋那一段的 `if [ -n "$out" ]` 改成永遠不成立 → 這一條紅。
-        """
+    def wide_branch(self, **fields):
         branch = self.branch_for(1, "t1-wide", allowed_write_paths=["src/*"],
-                                 out_of_scope=["docs/*"])
+                                 out_of_scope=["docs/*"], **fields)
         self.commit_in(branch, "src/inside.py", "範圍內")
-        self.commit_in(branch, "docs/outside.md", "硬擋")
-        self.commit_in(branch, "lib/extra.py", "白名單外但沒被硬擋")
-        before = self.main_log()
+        self.commit_in(branch, "docs/outside.md", "out_of_scope 命中")
+        self.commit_in(branch, "lib/extra.py", "提示範圍外但沒命中 out_of_scope")
+        return branch
 
+    def test_writing_into_out_of_scope_is_refused_and_the_files_are_named(self):
+        """#101 A5(D-050 ①):out_of_scope 從硬擋改成「列出 + 要理由」—— 命中的檔在各輪
+        收件併起來的 extra_reasons 裡沒有理由(沒有那份、null、空字串)→ 拒絕,訊息含「out_of_scope
+        命中缺理由」並點名檔與 glob;只是提示範圍外的檔不點名成拒絕。
+        四問:量 rc 2、那一行、主線不動、閘門沒跑;紅 = land 照落;期望值 = 夾具的 out_of_scope
+        與 handin 理由;不測 = 有理由那一條(下一條)。
+        **變異 M6**:land 對缺理由的 out_of_scope 命中照落(R 那一段的 STOP 拿掉)→ 這一條紅。
+        **變異 M4**:把 null 當成已有理由(`str(reasons.get(name) or "")` 改成 `str(reasons.get(name))`)
+        → null 那一格紅。"""
+        self.wide_branch()
+        before = self.main_log()
+        for name, reasons in (("沒有收件", None),
+                              ("null", {"docs/outside.md": None, "lib/extra.py": "x"}),
+                              ("空字串", {"docs/outside.md": "  ", "lib/extra.py": "x"})):
+            with self.subTest(name):
+                if reasons is not None:
+                    self.handin(reasons, run_id="20261018-10000%d-1" % len(name))
+                done = self.land("t1-wide")
+                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+                self.assertIn("out_of_scope 命中缺理由", done.stdout)
+                self.assertIn("land:   docs/outside.md —— 命中票的 out_of_scope(`docs/*`)",
+                              done.stdout)
+                part = done.stdout.split("out_of_scope 命中缺理由")[-1]
+                self.assertNotIn("src/inside.py", part)
+                self.assertNotIn("lib/extra.py", part, "提示範圍外只記錄不擋")
+                self.assertEqual(self.main_log(), before)
+                self.assertFalse(self.gate_ran())
+
+    def test_an_out_of_scope_hit_with_a_reason_lands(self):
+        """#101 A1 / A5:命中 out_of_scope 而收件有理由 → 照落;只是提示範圍外又沒理由 → 警告、不擋。
+        四問:量 rc 0、檔在主線、警告那一行;紅 = 照舊硬擋或缺理由的警告變成拒絕;期望值 =
+        夾具的 handin 理由;不測 = 覆核者怎麼判理由。
+        **變異 M5**:land 對有理由的 out_of_scope 命中照舊拒絕(`continue` 前不看 reasons)→ 這一條紅。"""
+        self.wide_branch()
+        self.handin({"docs/outside.md": "說明 A1 的行為要寫在這份", "lib/extra.py": None})
+        self.approve(1, "t1-wide")
+        done = self.land("t1-wide")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("docs/outside.md", self.git("ls-tree", "-r", "--name-only", "main"))
+        lines = done.stdout.splitlines()
+        at = [i for i, line in enumerate(lines) if "提示範圍外、沒寫理由" in line]
+        self.assertEqual(len(at), 1, done.stdout)
+        self.assertEqual(lines[at[0] + 1], "land:   lib/extra.py")
+        self.assertNotIn("land:   docs/outside.md", done.stdout, "有理由的命中不再點名")
+        self.assertNotIn("命中缺理由", done.stdout)
+
+    def test_a_reason_given_in_round_one_survives_a_repair_round(self):
+        """#101 A5 覆核反駁:apply 每輪只量這一輪的增量 —— 第 1 輪改了 out_of_scope 的檔、寫了理由,
+        第 2 輪修紅沒再碰它(extra_paths 空、extra_reasons 空),land 要看各輪併起來的理由照落。
+        四問:量 rc 0、檔在主線、沒有「命中缺理由」;紅 = 只讀最近一份收件;期望值 = 夾具兩輪的
+        handin;不測 = 第 2 輪的 null 會不會抹掉第 1 輪(下一段 subTest 量)。
+        **變異**:`handin_reasons` 只回最近一份的 extra_reasons → 這一條紅。"""
+        self.wide_branch()
+        self.handin({"docs/outside.md": "說明 A1 的行為要寫在這份", "lib/extra.py": None})
+        self.handin({}, rnd=2)
+        self.handin({"docs/outside.md": None}, rnd=3)
+        self.approve(1, "t1-wide")
+        done = self.land("t1-wide")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("命中缺理由", done.stdout)
+        self.assertIn("docs/outside.md", self.git("ls-tree", "-r", "--name-only", "main"))
+
+    def test_writing_into_protected_paths_is_refused_whatever_the_reason(self):
+        """#101 A1:protected_paths 仍硬擋 —— 收件的理由與 info_homes 都救不了,點名檔與格。
+        四問:量 rc 2、點名、主線不動;紅 = 理由抵掉硬擋;期望值 = 測試寫進 config 的 protected_paths。
+        **變異 M1**:write_scope 不看 protected_paths → 這一條紅。"""
+        conf = json.loads(self.read("board/config.json"))
+        conf["protected_paths"] = ["secrets/*"]
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        branch = self.branch_for(1, "t1-wide", allowed_write_paths=["src/*", "secrets/*"],
+                                 info_homes=[{"what": "金鑰", "home": "secrets/k"}])
+        self.commit_in(branch, "secrets/k", "動了金鑰")
+        self.handin({"secrets/k": "理由寫得再好也一樣"})
+        self.approve(1, "t1-wide")
+        before = self.main_log()
         done = self.land("t1-wide")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        self.assertIn("land:   docs/outside.md —— 命中票的 out_of_scope(`docs/*`)",
+        self.assertIn("land:   secrets/k —— 命中board/config.json 的 protected_paths(`secrets/*`)",
                       done.stdout)
-        self.assertNotIn("src/inside.py", done.stdout.split("硬擋的檔")[-1])
-        self.assertNotIn("lib/extra.py", done.stdout.split("硬擋的檔")[-1],
-                         "白名單外只記錄不擋")
         self.assertEqual(self.main_log(), before)
         self.assertFalse(self.gate_ran())
 

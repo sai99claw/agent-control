@@ -426,12 +426,14 @@ PY
         continue
     fi
 
-    # 寫入範圍(D-H38 ①)。`allowed_write_paths` 是預期會動的檔:越出不擋(apply 記進
-    # result 的 `extra_paths`、覆核者逐檔看過了),硬擋只剩票的 `out_of_scope` 與
-    # `board/config.json` 的 `protected_paths`。
-    out=$(python3 - "$ROOT" "$MAIN" "$b" "$tf" <<'PY'
+    # 寫入範圍(D-H38 ①、D-050 ①)。`allowed_write_paths` 與 `out_of_scope` 都是建議範圍:越出
+    # 不擋(apply 記進 result 的 `extra_paths` / `extra_reasons`、覆核者逐檔看過了);硬擋只剩
+    # `board/config.json` 的 `protected_paths`。原本 out_of_scope 的硬擋改成「列出 + 要理由」:
+    # 命中的檔在各輪收件併起來的 `extra_reasons` 裡沒有理由(null / 空字串)→ 拒絕;只是提示
+    # 範圍外的檔缺理由 → 警告、不擋。印 `B`(硬擋)/ `R`(out_of_scope 命中缺理由)/ `W`(警告)。
+    out=$(python3 - "$ROOT" "$MAIN" "$b" "$tf" "$id" <<'PY'
 import json, os, subprocess, sys
-root, main, branch, path = sys.argv[1:5]
+root, main, branch, path, ident = sys.argv[1:6]
 sys.path.insert(0, os.path.join(root, "scripts"))
 import ticket as ticket_mod
 try:
@@ -443,15 +445,38 @@ done = subprocess.run(["git", "-C", root, "diff", "--name-only",
                        "%s...%s" % (main, branch)],
                       capture_output=True, text=True)
 names = [name for name in done.stdout.splitlines() if name]
-for name, field, pattern in ticket_mod.write_scope(row, root, names)[0]:
-    print("%s —— 命中%s(`%s`)" % (name, field, pattern))
+blocked, extra = ticket_mod.write_scope(row, root, names)
+for name, field, pattern in blocked:
+    print("B %s —— 命中%s(`%s`)" % (name, field, pattern))
+hits = ticket_mod.out_of_scope_hits([row], extra)
+reasons = ticket_mod.handin_reasons(root, ident)[1]
+for name in extra:
+    if str(reasons.get(name) or "").strip():
+        continue
+    if name in hits:
+        print("R %s —— 命中%s(`%s`)" % (name, hits[name][0], hits[name][1]))
+    else:
+        print("W %s" % name)
 PY
 )
-    if [ -n "$out" ]; then
+    fenced=$(echo "$out" | sed -n 's/^B //p')
+    if [ -n "$fenced" ]; then
         echo "land: $b —— 動到票 #$id 硬擋的檔:"
-        echo "$out" | sed 's/^/land:   /'
+        echo "$fenced" | sed 's/^/land:   /'
         STOP=1
         continue
+    fi
+    fenced=$(echo "$out" | sed -n 's/^R //p')
+    if [ -n "$fenced" ]; then
+        echo "land: $b —— 票 #$id 的 out_of_scope 命中缺理由(EVIDENCE「提示清單外的改動」逐檔寫理由,apply 收件抽進 result 的 extra_reasons;各輪收件都沒有):"
+        echo "$fenced" | sed 's/^/land:   /'
+        STOP=1
+        continue
+    fi
+    fenced=$(echo "$out" | sed -n 's/^W //p')
+    if [ -n "$fenced" ]; then
+        echo "land: $b —— 提示範圍外、沒寫理由(警告,不擋;覆核者逐檔看過):"
+        echo "$fenced" | sed 's/^/land:   /'
     fi
     # 覆核與反駁。**覆核要綁被覆核的那一份**:舊版的 `review` 只有 verdict/by/at/
     # note,重套一次 patch、改一次票面之後它仍然長得有效,而 land 從來沒有讀它。
