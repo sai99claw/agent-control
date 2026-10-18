@@ -4191,5 +4191,200 @@ class TheMissingCasesSendAVerifierEveryRound(AutoFixBase):
         self.assertNotIn("驗證者的", fail[1].split("###", 1)[0])
 
 
+# 假 worker / 驗證者(#130,#98 第 2 輪的形狀):驗證者沒改案例,patch-verify 是 0 byte(@VPATCH@=empty)
+# 或一行沒有檔頭的字(text);@PLAN@ 是 result 裡 verify 那一格(空字串 = 沒有計畫)。
+# worker:@WORKER_PATCH@=1 交一份產品檔的 patch,@WORKER_DEFECT@=1 說 test_defect。
+EMPTY_PATCH_VERIFY = """#!/bin/sh
+set -e
+echo "$AC_ROLE ran round $AC_ROUND" >> "$AC_TEST_LOG"
+cd "$AC_WORK"
+if [ "$AC_ROLE" = worker ]; then
+    if [ "@WORKER_PATCH@" = 1 ]; then
+        mkdir -p work/src
+        printf 'CHANGED = True\\n' > work/src/worker_change.py
+        diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+    fi
+    if [ "@WORKER_DEFECT@" = 1 ]; then
+        printf 'OBJECTION: test_defect fixture 把正確結果寫成 2\\n' > "EVIDENCE-round$AC_ROUND.md"
+    else
+        printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
+    fi
+    exit 0
+fi
+case "@VPATCH@" in
+    empty) : > patch-verify.diff ;;
+    text) echo "這一輪只改了 verify.files" > patch-verify.diff ;;
+esac
+{
+    printf '# verifier\\n案例沒改,只改 result 的 verify。\\n\\n## result\\n\\n```result\\n'
+    printf '{"ticket": "1", "role": "verifier", "round": %s, "rc": 0, @PLAN@ "objection": null}\\n' "$AC_ROUND"
+    printf '```\\n'
+} > EVIDENCE-verifier.md
+"""
+# 夾具自己寫的那一份計畫:期望值從這裡讀,不從 auto-fix / apply 算。
+PLAN_FILES = ["tests/test_thing.py"]
+WITH_PLAN = '"verify": {"files": %s},' % json.dumps(PLAN_FILES)
+
+
+class AnEmptyPatchVerifyIsNoChange(AutoFixBase):
+    """#130:驗證者交 0 byte 的 patch-verify = 這輪沒改案例。以前 round_receive 照樣把它當第二個
+    patch 給 apply(`headers` 對空檔 rc=3),整輪停在「套不上」;lint_round 則停在「交了空的
+    patch-verify」。閘門用替身 `true`(綠):這一組量的是收件,不是閘門。"""
+
+    def arm(self, worker_patch="0", worker_defect="0", vpatch="empty", plan=WITH_PLAN):
+        self.set_worker(EMPTY_PATCH_VERIFY
+                        .replace("@WORKER_PATCH@", worker_patch)
+                        .replace("@WORKER_DEFECT@", worker_defect)
+                        .replace("@VPATCH@", vpatch)
+                        .replace("@PLAN@", plan), rerun_cmd="true")
+
+    def head(self):
+        return self.git("rev-parse", "t1").strip()
+
+    def reruns(self, round_no):
+        return [row for row in self.events() if row["kind"] == "gate.rerun"
+                and str(row.get("round")) == round_no]
+
+    def assert_no_change_said(self, done):
+        said = done.stdout + done.stderr
+        self.assertIn("驗證者這輪沒有改動", done.stdout, said)
+        self.assertNotIn("套不上", said)
+
+    def assert_plan_on_ticket(self, done):
+        plan = self.load_ticket("1").get("verify") or {}
+        self.assertEqual(plan.get("files"), PLAN_FILES, done.stdout + done.stderr)
+
+    def assert_last_test_defect_fixed(self):
+        rows = [row for row in self.load_ticket("1").get("objections") or []
+                if row.get("category") == "test_defect"]
+        self.assertTrue(rows)
+        self.assertEqual(rows[-1].get("disposition"), "fixed", rows)
+
+    def lint_round_armed(self, **arm):
+        """上一輪(第 1 輪)紅榜全是 LINT(#98 的形狀),分支 t1 已經在(apply 開的)。"""
+        self.arm(**arm)
+        self.ticket_ready(needs_verifier=True, interface_fixed=True, retry_limit=1,
+                          verify={"files": [], "tags": [], "run": "", "notes": ""})
+        applied = self.run_sh("scripts/apply.sh", "1",
+                              self.write("p1.diff", RED_CASE, where=self.home))
+        self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+        lint = self.write("round.log.lint", LINT_RED, where=self.home)
+        base = self.git("rev-parse", "main").strip()
+        run_id = "20260921-100000-1"
+        self.run_py("scripts/status.py", "start", "--ticket", "1", "--kind", "gate",
+                    "--run-id", run_id, "--base-sha", base, "--round", "1",
+                    "--worktree", self.repo)
+        done = self.run_py("scripts/status.py", "done", "--ticket", "1", "--kind", "gate",
+                           "--run-id", run_id, "--rc", "1", "--lint-log", lint,
+                           "--lint-root", self.repo)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    # ------------------------------------------- A1 / A2:有 worker 的 patch 就只套它
+
+    def test_a1_a_test_defect_with_a_worker_patch_applies_only_the_worker_patch(self):
+        """T1。**變異 M1**:拿掉 VSLOT 的 0 byte 判斷 → 空檔照樣進 apply → rc=3「套不上」→ 紅。
+
+        四問:擋的是 #98 第 2 輪的 rc=3;期望值來自替身寫的檔名與 PLAN_FILES;
+        M1 關得掉;不靠 auto-fix 印的路徑推期望值。"""
+        self.arm(worker_patch="1", worker_defect="1")
+        self.ticket_ready(in_scope=["src/app.py"])
+        self.first_round()
+        done = self.auto_fix("--no-review")
+        self.assert_no_change_said(done)
+        self.assertEqual(self.git("show", "t1:src/worker_change.py"), "CHANGED = True\n")
+        self.assert_plan_on_ticket(done)
+        self.assert_last_test_defect_fixed()
+        self.assertEqual(len(self.reruns("2")), 1, done.stdout + done.stderr)
+
+    def test_a2_a_parallel_verifier_with_nothing_changed_lets_the_worker_patch_in(self):
+        """T2:interface_fixed=true 的平行驗證者交 0 byte(round_receive 帶 VPATCH)。
+
+        四問:擋的是平行那一位把空檔塞進第二個槽;期望值同 T1;**變異 M1** 關得掉;
+        閘門替身綠,不涉 #126 沒有案例那條路。"""
+        self.arm(worker_patch="1")
+        self.ticket_ready(needs_verifier=True, interface_fixed=True)
+        done = self.auto_fix("--no-review")
+        self.assert_no_change_said(done)
+        self.assertEqual(self.git("show", "t1:src/worker_change.py"), "CHANGED = True\n")
+        self.assert_plan_on_ticket(done)
+        self.assertEqual(len(self.reruns("1")), 1, done.stdout + done.stderr)
+
+    # ------------------------------------- A3:驗證者是唯一交件者 → 只併計畫、分支不動
+
+    def test_a3a_a_lint_round_with_only_a_plan_merges_it_and_reruns_the_gate(self):
+        """T3 (a)。**變異 M3**:只併計畫那條路照樣叫 apply.sh 套 PATCH_OUT → rc=3 → 紅。
+
+        四問:擋的是 lint_round 停在「空的 patch-verify」;期望值是 PLAN_FILES 與分支頭前後;
+        M3 關得掉;閘門替身綠 → InReview 是 auto-fix 綠的那條路本來的樣子。"""
+        self.lint_round_armed()
+        before = self.head()
+        done = self.auto_fix("--no-review")
+        said = done.stdout + done.stderr
+        self.assertEqual(done.returncode, 0, said)
+        self.assert_no_change_said(done)
+        self.assertIn("只併驗證者計畫", done.stdout, said)
+        self.assertEqual(self.head(), before, "只併計畫那一輪分支頭不准動")
+        self.assert_plan_on_ticket(done)
+        self.assertEqual(len(self.reruns("2")), 1, said)
+        self.assertEqual(self.load_ticket("1")["state"], "InReview", said)
+
+    def test_a3b_a_test_defect_without_a_worker_patch_merges_only_the_plan(self):
+        """T3 (b):worker 只交 test_defect 反駁,驗證者 0 byte + verify。**變異 M3** 同 (a)。
+
+        四問:同 (a),多一格 disposition=fixed(該筆反駁有人收)。"""
+        self.arm(worker_defect="1")
+        self.ticket_ready(in_scope=["src/app.py"])
+        self.first_round()
+        before = self.head()
+        done = self.auto_fix("--no-review")
+        said = done.stdout + done.stderr
+        self.assertEqual(done.returncode, 0, said)
+        self.assert_no_change_said(done)
+        self.assertIn("只併驗證者計畫", done.stdout, said)
+        self.assertEqual(self.head(), before, said)
+        self.assert_plan_on_ticket(done)
+        self.assert_last_test_defect_fixed()
+        self.assertEqual(len(self.reruns("2")), 1, said)
+        self.assertEqual(self.load_ticket("1")["state"], "InReview", said)
+
+    def test_a3_without_a_branch_copy_it_stops_before_the_gate(self):
+        """第 1 輪就 test_defect、還沒有分支:只併計畫沒有地方重跑閘門 → 停下、計畫不併。
+
+        **變異**:拿掉 plan_only_receive 的副本守衛 → 計畫併進票、閘門在不存在的目錄跑 → 紅。"""
+        self.arm(worker_defect="1")
+        self.ticket_ready(in_scope=["src/app.py"])
+        done = self.auto_fix("--no-review")
+        said = done.stdout + done.stderr
+        self.assertNotEqual(done.returncode, 0, said)
+        self.assertIn("閘門沒地方重跑", done.stderr)
+        self.assertEqual(self.load_ticket("1")["state"], "Blocked", said)
+        self.assertEqual(self.reruns("1"), [], said)
+        self.assertNotIn("verify", self.load_ticket("1"), said)
+
+    # ------------------------------------------------------ A5:真的什麼都沒交仍停
+
+    def test_a5_an_empty_patch_verify_without_a_plan_still_blocks_the_lint_round(self):
+        """T5 第一案。**變異 M5**:verifier_plan_given 恆真 → 走只併計畫 → 這一條紅。"""
+        self.lint_round_armed(plan="")
+        before = self.head()
+        done = self.auto_fix("--no-review")
+        said = done.stdout + done.stderr
+        self.assertNotEqual(done.returncode, 0, said)
+        self.assertIn("驗證者交了一份空的 patch-verify", done.stderr)
+        self.assertIn("驗證者沒交出 patch-verify", self.inbox_list())
+        self.assertEqual(self.load_ticket("1")["state"], "Blocked")
+        self.assertEqual(self.reruns("2"), [], said)
+        self.assertEqual(self.head(), before)
+
+    def test_a5_a_patch_verify_with_text_but_no_header_is_still_handed_to_apply(self):
+        """T5 第二案。**變異 M2**:判斷改成「沒有檔頭就略過」→ 不再「套不上」→ 這一條紅。"""
+        self.lint_round_armed(vpatch="text")
+        done = self.auto_fix("--no-review")
+        said = done.stdout + done.stderr
+        self.assertIn("套不上(apply rc=3)", said)
+        self.assertNotIn("驗證者這輪沒有改動", said)
+        self.assertEqual(self.reruns("2"), [], said)
+
+
 if __name__ == "__main__":
     unittest.main()

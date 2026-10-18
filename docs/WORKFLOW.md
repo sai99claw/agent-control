@@ -228,6 +228,8 @@ worker 同一輪**也交了** `patch-round<r>.diff`(#107,專案 #751 事故):驗
 
 票 `interface_fixed=true` 而第 1 輪的平行驗證者已經交件(#112,專案 #775):它與 test_defect 驗證者用同一個 `verify-t<n>/round<r>`,所以清副本之前先把它的兩份存成 `reports/t<n>/<run_id>/patch-verify-round<r>-parallel.diff` 與 `EVIDENCE-verifier-round<r>-parallel.md`;test_defect 驗證者的 `work/` = `base/` 再加平行那一份的案例(套不上就停,同「副本建不出來」那一頁),它的 patch-verify 帶著兩位的案例。收件 apply 只收 worker 的 patch 與這一份 patch-verify,`--evidence-verifier` 依序給平行那份、再給 test_defect 那份。`apply.sh` 兩個 patch 槽是同一份(同路徑或 sha256 相同)直接 rc=2、印「同一份 patch」、分支不動。
 
+驗證者的 `patch-verify.diff` 是 **0 byte** = 這輪沒改案例(#130,#98 第 2 輪):不交給 apply 當 patch。有 worker 的 patch 就只套它、`--evidence-verifier` 照給;驗證者是唯一交件者(只派驗證者的 lint 那一輪、test_defect 沒有 worker patch)而 result 帶 `verify` → 只併計畫(`sh scripts/apply.sh verify-plan <票號> --evidence-verifier <檔>…`,與 `--evidence-verifier` 同一段合併;不建分支、不 commit)、分支不動、直接重跑閘門,照樣算一輪。沒有 `verify` 照舊停;有內容卻沒有檔頭照舊 apply rc=3。
+
 ### 這一段哪些已經是程式,哪些還只是規格(2026-09-21 逐項對照真實入口重寫)
 **這張表以前漏列了四項重大未實作**,而一張漏列的能力表比沒有能力表更糟:它讓人以為那幾件事有程式在守。以下每一列都對著一個真的入口。
 

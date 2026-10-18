@@ -352,6 +352,24 @@ harvest_result() {   # $1 = EVIDENCE(可以不存在) $2 = 輸出 json $3 = 角�
         || echo "auto-fix: result 抽不出來($1)—— 不擋流程" >&2
 }
 
+verifier_plan_given() {   # $1 = EVIDENCE-verifier;result 的 verify 有 files/tags/run/notes 任一格才算有計畫(#130)
+    # 解析用 `ticket.py` 的 `result_block`(與 apply 併計畫那一段同一份判準);解析不到 = 沒有計畫。
+    python3 - "$AC" "$1" <<'PY'
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import ticket
+try:
+    with open(sys.argv[2], encoding="utf-8") as handle:
+        raw = ticket.result_block(handle.read().splitlines())
+    data = json.loads(raw) if raw is not None else None
+except (OSError, ValueError):
+    data = None
+plan = data.get("verify") if isinstance(data, dict) else None
+given = isinstance(plan, dict) and any(plan.get(key) for key in ("files", "tags", "run", "notes"))
+raise SystemExit(0 if given else 1)
+PY
+}
+
 write_cost() {   # $1 = 角色  $2 = 第幾輪  $3 = 模型  $4 = 信封(log)  $5 = 量到的秒數  $6 = 結局  $7 = effort(可空)
     # 一次 headless 派工的 token 與時鐘進票的 `cost[]`(D-032)。信封在 log 裡:stdout 與
     # stderr 混寫,`ticket.py cost` 取最後一行 `type=result` 的那一行;讀不到就記 null。
@@ -2427,7 +2445,8 @@ lint_round() {   # uses r/SRC/FIX/DISPATCH;設定 ROUND_RC
         return 1
     fi
     # 這一輪只有它那一份:空的 patch-verify 就是案例沒修,套下去只會得到 apply 的「空的 patch 不是綠」。
-    if [ ! -s "$PATCH_OUT" ]; then
+    # result 帶了 verify 計畫的不算(#130):round_receive 走只併計畫那條路。
+    if [ ! -s "$PATCH_OUT" ] && ! verifier_plan_given "$EVIDENCE"; then
         echo "auto-fix: 第 $r 輪的驗證者交了一份空的 patch-verify —— lint 擋的案例沒修,不套" >&2
         block "#$ID 第 $r 輪的驗證者交了空的 patch-verify"
         post "驗證者沒交出 patch-verify" \
@@ -2441,15 +2460,61 @@ lint_round() {   # uses r/SRC/FIX/DISPATCH;設定 ROUND_RC
     round_receive
 }
 
+# 只併驗證者計畫(#130):計畫由 `apply.sh verify-plan` 併進票(與 `--evidence-verifier` 同一段),
+# 不套 patch、不 commit;閘門在既有分支的副本上重跑。副本不在 = 沒有分支可重跑,停下。
+plan_only_receive() {   # uses r/WT/EVIDENCE/VKEPT_EVIDENCE;停下時設定 ROUND_RC
+    if [ ! -d "$WT" ]; then
+        echo "auto-fix: 只併驗證者計畫,但分支 $(ticket_branch) 的副本 $WT 不在 —— 閘門沒地方重跑" >&2
+        block "#$ID 第 $r 輪只併驗證者計畫,分支副本不在"
+        post "只併驗證者計畫,分支副本不在" \
+             "驗證者這輪沒有改動,計畫沒有併;$WT 不在,閘門沒地方重跑。要嘛重派,要嘛人下場" \
+             "$EVIDENCE"
+        attempt_failed verifier-no-patch
+        ROUND_RC=5
+        return 1
+    fi
+    if ! sh "$AC/apply.sh" verify-plan "$ID" \
+            ${VKEPT_EVIDENCE:+--evidence-verifier "$VKEPT_EVIDENCE"} --evidence-verifier "$EVIDENCE"; then
+        echo "auto-fix: 第 $r 輪的驗證者計畫併不進票(apply.sh verify-plan 非零)" >&2
+        block "#$ID 第 $r 輪的驗證者沒交出 patch-verify"
+        post "驗證者沒交出 patch-verify" \
+             "patch-verify 是 0 byte,而它的 result 併不進票(見 apply 的輸出);讀驗證者派工文與它的 log,不要讓主線自己改案例" \
+             "$EVIDENCE"
+        attempt_failed verifier-no-patch
+        ROUND_RC=5
+        return 1
+    fi
+}
+
 # 收件 → apply → 閘門:round_once 的後半,只派驗證者的那一輪(lint_round)也走這裡。
 round_receive() {   # uses r/CASE_FIXED/WPATCH/PATCH_OUT/EVIDENCE/RESULT_JSON/VPATCH/LINT_ROUND;設定 ROUND_RC
     # test_defect 先判(#112):平行驗證者交過件時 VPATCH 還指著它在 verify-t<n>/round<r> 的那份,
     # 而那個副本已經是 test_defect 驗證者的 —— 先判 VPATCH 就是把同一份 patch-verify 收兩次。
     # 驗證者的計畫兩條路都併進票:平行那一位保留下來的那份在前,test_defect 那一位的在後。
+    # 驗證者的 patch-verify **0 byte** = 這輪它沒改案例(#130,#98 第 2 輪):不當 patch 交給 apply
+    # (檔頭那一手對空檔 rc=3)。有 worker 的 patch 就只套它、計畫照併;驗證者是唯一交件者
+    # (lint_round、test_defect 沒有 worker patch)而 result 帶 verify → 只併計畫、分支不動。
+    # 只認 0 byte:有內容卻沒有檔頭照舊交 apply、照舊 rc=3。
+    VSLOT=""
+    PLAN_ONLY=""
     if [ -n "$CASE_FIXED" ] && [ -n "$WPATCH" ]; then
+        VSLOT=$PATCH_OUT
+    elif [ -z "$CASE_FIXED" ]; then
+        VSLOT=$VPATCH
+    elif [ ! -s "$PATCH_OUT" ] && verifier_plan_given "$EVIDENCE"; then
+        PLAN_ONLY=1
+        echo "auto-fix: 第 $r 輪的驗證者這輪沒有改動(patch-verify 0 byte)—— 只併驗證者計畫:不套 patch、分支不動,直接重跑閘門"
+    fi
+    if [ -n "$VSLOT" ] && [ ! -s "$VSLOT" ]; then
+        VSLOT=""
+        echo "auto-fix: 第 $r 輪的驗證者這輪沒有改動(patch-verify 0 byte)—— 只套 worker 的 patch,驗證者的計畫照併"
+    fi
+    if [ -n "$PLAN_ONLY" ]; then
+        plan_only_receive || return 1
+    elif [ -n "$CASE_FIXED" ] && [ -n "$WPATCH" ]; then
         # test_defect 而 worker 也交了 patch(#107):驗證者的 patch-verify 是疊在它上面的增量。
         AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 AC_RESULT_JSON=$RESULT_JSON \
-            sh "$AC/apply.sh" "$ID" "$WPATCH" "$PATCH_OUT" --evidence "$EVIDENCE" \
+            sh "$AC/apply.sh" "$ID" "$WPATCH" ${VSLOT:+"$VSLOT"} --evidence "$EVIDENCE" \
             ${VKEPT_EVIDENCE:+--evidence-verifier "$VKEPT_EVIDENCE"} --evidence-verifier "$EVIDENCE"
     elif [ -n "$CASE_FIXED" ]; then
         AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 AC_RESULT_JSON=$RESULT_JSON \
@@ -2457,7 +2522,7 @@ round_receive() {   # uses r/CASE_FIXED/WPATCH/PATCH_OUT/EVIDENCE/RESULT_JSON/VP
             ${VKEPT_EVIDENCE:+--evidence-verifier "$VKEPT_EVIDENCE"} --evidence-verifier "$EVIDENCE"
     elif [ -n "$VPATCH" ]; then
         AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 AC_RESULT_JSON=$RESULT_JSON \
-            sh "$AC/apply.sh" "$ID" "$PATCH_OUT" "$VPATCH" --evidence "$EVIDENCE" \
+            sh "$AC/apply.sh" "$ID" "$PATCH_OUT" ${VSLOT:+"$VSLOT"} --evidence "$EVIDENCE" \
             --evidence-verifier "$VEVIDENCE"
     else
         AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 AC_RESULT_JSON=$RESULT_JSON \
