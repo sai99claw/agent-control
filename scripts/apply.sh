@@ -6,6 +6,8 @@
 #   sh scripts/apply.sh rebase <票號> <patch> [-o <輸出>] # 套到**當前主線**的副本,出一份乾淨 diff
 #   sh scripts/apply.sh --batch <整合分支> <票號…> <patch> [--evidence <檔>]
 #                                                     # 批次修復:疊成整合分支頭上一個 commit(#108)
+#   sh scripts/apply.sh verify-plan <票號> --evidence-verifier <檔>…
+#                                                     # 只併驗證者計畫:不建分支、不 commit(#130)
 #
 # 這一手以前是主線手動做的(`docs/ROLES.md` 的引言框:落地器**不**套 patch)。手動的
 # 問題不是慢,是**每一次都重新決定要不要檢查那五件事** —— 而 2026-09-10 的事故裡,
@@ -25,7 +27,7 @@
 #
 # ## 退出碼
 #   0 套好、commit 好了      2 用法 / 票的問題(找不到票、沒有 base_sha;反駁記不進票;
-#                              兩個 patch 槽是同一份)
+#                              兩個 patch 槽是同一份;verify-plan 的驗證者 result 解析不到)
 #   3 檔頭不合格或 `--check` 不過(rebase 那一支的三向合併衝突也是 3)
 #   4 套完的比對不過(rebase 那一支的 **0 byte diff** 也是 4)
 #   5 動到票的 `out_of_scope` 或 `board/config.json` 的 `protected_paths`(D-H38 ①;
@@ -659,12 +661,168 @@ PY
     exit 0
 }
 
+# **驗證者的計畫與驗紅由這一手寫進票**(#36,FLOW G13;#51):`verify-case.py red` 只交證據檔,
+# 驗證者把它抄進 result 的 `baseline`、把 `files` / `tags` / `run` / `notes` 寫在 result 的
+# `verify`;這裡在鎖裡併進票。**直接讀 EVIDENCE 那一塊**,不讀抽出來的檔 —— 上游抽過
+# (`AC_RESULT_DONE`,auto-fix 第 1 輪)時那一份落在別的 run 目錄,以前整段因此被跳過,
+# 票的 `verify` 一格都沒併進去,閘門的驗證者那一層就量不到案例(#51 實測)。
+# 只收 `stage=red` —— 驗證者量不到綠,一份自稱 `check` 的會讓 `close` 放行。
+# 給了幾份 `--evidence-verifier` 就依給的順序逐份併(#112)。
+# `verify-plan` 子命令(#130)跑的就是這一段:不套 patch 的那一輪也走同一把鎖、同一份解析。
+merge_verifier_plans() {   # $1 = 票號  $2 = 換行分隔的 EVIDENCE-verifier;有一份解析不到 → rc 非零
+    printf '%s\n' "$2" | (
+    mrc=0
+    while IFS= read -r VEV; do
+        [ -n "$VEV" ] || continue
+        python3 - "$AC" "$1" "$VEV" <<'PY' >&2 || mrc=$?
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import event
+import ticket
+ident, path = sys.argv[2], sys.argv[3]
+# 解析不到要出聲(#100 A7):以前三種樣子都靜靜變成 `{}`,票上的 verify 與 baseline 一格
+# 都沒併進去,要到落地後 close 被拒「沒有回歸證據」才看得出來。判準與 `ticket.py result`
+# 同一份(`result_block` / `RESULT_OPEN`),原因字也同一組,不在這裡另抄 regex。
+WHY = {"no-evidence": "讀不到這份 EVIDENCE",
+       "no-block": "沒有語言標記是 result 的那一塊(`## result` 底下用 ```json 也算沒有)",
+       "bad-json": "那一塊的 JSON 解不開或不是物件"}
+reason = None
+try:
+    with open(path, encoding="utf-8") as handle:
+        raw = ticket.result_block(handle.read().splitlines())
+except OSError:
+    reason = "no-evidence"
+else:
+    if raw is None:
+        reason = "no-block"
+    else:
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            reason = "bad-json"
+if reason:
+    print("apply: 驗證者的 result 解析不到(%s:%s;%s)—— verify 計畫與驗紅沒有併進票"
+          % (reason, WHY[reason], path))
+    sys.exit(2)
+
+
+def head(value):
+    text = str(value)
+    return text if len(text) <= 40 else text[:40] + "…"
+
+
+# 併進票**不蓋掉票上既有的**(#100 A9):以前 `merged.update(keep)` 把 tags 整組換成
+# 驗證者給的(#706 四個標籤剩一個,回歸層少跑 P6)。files / tags 取聯集(既有的在前、
+# 新的接後面、去重);run / notes 既有非空就保留,空的才採驗證者給的。
+plan = data.get("verify")
+if isinstance(plan, dict):
+    given = {key: plan[key] for key in ("files", "tags", "run", "notes") if plan.get(key)}
+    if given:
+        added, kept, differ = [], [], []
+        try:
+            with ticket.Lock():
+                fresh = ticket.load(ident)
+                merged = dict(fresh.get("verify") if isinstance(fresh.get("verify"), dict) else {})
+                for key in ("files", "tags"):
+                    if key not in given:
+                        continue
+                    have = merged.get(key) if isinstance(merged.get(key), list) else []
+                    more = given[key] if isinstance(given[key], list) else [given[key]]
+                    union = list(have)
+                    for item in more:
+                        if item not in union:
+                            union.append(item)
+                    kept.extend("%s:%s" % (key, item) for item in have)
+                    added.extend("%s:%s" % (key, item) for item in union[len(have):])
+                    merged[key] = union
+                for key in ("run", "notes"):
+                    if key not in given:
+                        continue
+                    if not merged.get(key):
+                        merged[key] = given[key]
+                        added.append(key)
+                    else:
+                        kept.append(key)
+                        if merged[key] != given[key]:
+                            differ.append("%s 票上「%s」/ 驗證者「%s」"
+                                          % (key, head(merged[key]), head(given[key])))
+                if added:
+                    fresh["verify"] = merged
+                    fresh["state_version"] = int(fresh.get("state_version") or 0) + 1
+                    ticket.save(fresh)
+        except (OSError, ValueError, RuntimeError) as exc:
+            print("apply: 驗證者的 verify 計畫併不進票 #%s —— %s(不擋 apply)" % (ident, exc))
+        else:
+            if differ:
+                print("apply: 驗證者給的 run/notes 與票上不同,保留票上 —— %s" % ";".join(differ))
+            if added:
+                event.emit("ticket.state", ticket=str(ident), field="verify",
+                           **{"to": ",".join(added), "state_version": fresh["state_version"]})
+                print("apply: 驗證者的 verify 併進票 #%s(state_version=%s)—— 新增 %s;保留 %s"
+                      % (ident, fresh["state_version"], "、".join(added),
+                         "、".join(kept) or "(票上原本沒有)"))
+            else:
+                print("apply: 驗證者的 verify 票上都已經有了(保留 %s)—— 票沒有動"
+                      % "、".join(kept))
+record = data.get("baseline")
+if record is None:
+    sys.exit(0)
+if not isinstance(record, dict) or record.get("stage") != "red":
+    print("apply: 驗證者 result 的 baseline 不是 stage=red 的紀錄 —— 沒有併進票")
+    sys.exit(0)
+try:
+    version = ticket.save_baseline(ident, record, "red")
+except (OSError, ValueError, RuntimeError) as exc:
+    print("apply: 驗證者的驗紅併不進票 #%s —— %s(不擋 apply)" % (ident, exc))
+    sys.exit(0)
+print("apply: 驗證者的驗紅(stage=red)併進票 #%s 的 verify.baseline(state_version=%s)"
+      % (ident, version))
+PY
+    done
+    exit $mrc
+    )
+}
+
+# ------------------------------------------------------------- verify-plan(#130)
+# 驗證者這一輪 patch-verify 是 0 byte、只改了 result 的 verify(#98 第 2 輪):沒有 patch 可套,
+# 計畫照樣要進票。**只跑上面那一段合併** —— 不建分支、不 commit、不碰 patch。
+# 解析不到 rc=2:呼叫端(auto-fix 的只併計畫那條路)據此停下。
+cmd_verify_plan() {
+    [ $# -ge 1 ] || { echo "apply: verify-plan <票號> --evidence-verifier <檔>…" >&2; exit 2; }
+    P_ID=$1
+    P_EVIDENCES=""
+    shift
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --evidence-verifier)
+                shift
+                [ $# -ge 1 ] || { echo "apply: --evidence-verifier 後面要路徑" >&2; exit 2; }
+                P_EVIDENCES=${P_EVIDENCES:+$P_EVIDENCES
+}$1 ;;
+            *) echo "apply: verify-plan 不認得 $1" >&2; exit 2 ;;
+        esac
+        shift
+    done
+    [ -n "$P_EVIDENCES" ] || { echo "apply: verify-plan 要至少一份 --evidence-verifier" >&2; exit 2; }
+    [ -f "$TDIR/$P_ID.json" ] || { echo "apply: 找不到票 #$P_ID($TDIR/$P_ID.json)" >&2; exit 2; }
+    if ! merge_verifier_plans "$P_ID" "$P_EVIDENCES"; then
+        echo "apply: verify-plan #$P_ID —— 驗證者的計畫沒有全併進票(見上面那一行)" >&2
+        exit 2
+    fi
+    echo "apply: verify-plan #$P_ID —— 只併驗證者計畫,分支與 patch 都沒動"
+    exit 0
+}
+
 # ------------------------------------------------------------------ apply
 usage() {   # $1 = 出去的檔案描述子(1 = 有人問 --help,2 = 用錯了)
     {
         echo "用法:sh scripts/apply.sh <票號> <patch> [<patch-verify>] [旗標…]"
         echo "      sh scripts/apply.sh rebase <票號> <patch> [-o <輸出>]"
         echo "      sh scripts/apply.sh --batch <整合分支> <票號…> <patch> [--evidence <檔>]"
+        echo "      sh scripts/apply.sh verify-plan <票號> --evidence-verifier <檔>…"
+        echo "                             只把驗證者的 verify 計畫與驗紅併進票:不建分支、不 commit"
         echo ""
         echo "認得的旗標:"
         echo "  --evidence <檔>            實作者的 EVIDENCE:收記憶、抽 result-round<輪>.json、"
@@ -699,6 +857,10 @@ fi
 if [ "$1" = "--batch" ]; then
     shift
     cmd_batch "$@"
+fi
+if [ "$1" = "verify-plan" ]; then
+    shift
+    cmd_verify_plan "$@"
 fi
 
 [ $# -ge 2 ] || { echo "apply: 要 <票號> 與 <patch>" >&2; exit 2; }
@@ -1062,122 +1224,9 @@ with open(path, "w", encoding="utf-8") as handle:
     handle.write("\n")
 PY
 fi
-# **驗證者的計畫與驗紅由這一手寫進票**(#36,FLOW G13;#51):`verify-case.py red` 只交證據檔,
-# 驗證者把它抄進 result 的 `baseline`、把 `files` / `tags` / `run` / `notes` 寫在 result 的
-# `verify`;這裡在鎖裡併進票。**直接讀 EVIDENCE 那一塊**,不讀抽出來的檔 —— 上游抽過
-# (`AC_RESULT_DONE`,auto-fix 第 1 輪)時那一份落在別的 run 目錄,以前整段因此被跳過,
-# 票的 `verify` 一格都沒併進去,閘門的驗證者那一層就量不到案例(#51 實測)。
-# 只收 `stage=red` —— 驗證者量不到綠,一份自稱 `check` 的會讓 `close` 放行。
-# 給了幾份 `--evidence-verifier` 就依給的順序逐份併(#112)。
-printf '%s\n' "$VEVIDENCES" | while IFS= read -r VEV; do
-    [ -n "$VEV" ] || continue
-    python3 - "$AC" "$ID" "$VEV" <<'PY' >&2
-import json, sys
-sys.path.insert(0, sys.argv[1])
-import event
-import ticket
-ident, path = sys.argv[2], sys.argv[3]
-# 解析不到要出聲(#100 A7):以前三種樣子都靜靜變成 `{}`,票上的 verify 與 baseline 一格
-# 都沒併進去,要到落地後 close 被拒「沒有回歸證據」才看得出來。判準與 `ticket.py result`
-# 同一份(`result_block` / `RESULT_OPEN`),原因字也同一組,不在這裡另抄 regex。
-WHY = {"no-evidence": "讀不到這份 EVIDENCE",
-       "no-block": "沒有語言標記是 result 的那一塊(`## result` 底下用 ```json 也算沒有)",
-       "bad-json": "那一塊的 JSON 解不開或不是物件"}
-reason = None
-try:
-    with open(path, encoding="utf-8") as handle:
-        raw = ticket.result_block(handle.read().splitlines())
-except OSError:
-    reason = "no-evidence"
-else:
-    if raw is None:
-        reason = "no-block"
-    else:
-        try:
-            data = json.loads(raw)
-        except ValueError:
-            data = None
-        if not isinstance(data, dict):
-            reason = "bad-json"
-if reason:
-    print("apply: 驗證者的 result 解析不到(%s:%s;%s)—— verify 計畫與驗紅沒有併進票"
-          % (reason, WHY[reason], path))
-    sys.exit(0)
-
-
-def head(value):
-    text = str(value)
-    return text if len(text) <= 40 else text[:40] + "…"
-
-
-# 併進票**不蓋掉票上既有的**(#100 A9):以前 `merged.update(keep)` 把 tags 整組換成
-# 驗證者給的(#706 四個標籤剩一個,回歸層少跑 P6)。files / tags 取聯集(既有的在前、
-# 新的接後面、去重);run / notes 既有非空就保留,空的才採驗證者給的。
-plan = data.get("verify")
-if isinstance(plan, dict):
-    given = {key: plan[key] for key in ("files", "tags", "run", "notes") if plan.get(key)}
-    if given:
-        added, kept, differ = [], [], []
-        try:
-            with ticket.Lock():
-                fresh = ticket.load(ident)
-                merged = dict(fresh.get("verify") if isinstance(fresh.get("verify"), dict) else {})
-                for key in ("files", "tags"):
-                    if key not in given:
-                        continue
-                    have = merged.get(key) if isinstance(merged.get(key), list) else []
-                    more = given[key] if isinstance(given[key], list) else [given[key]]
-                    union = list(have)
-                    for item in more:
-                        if item not in union:
-                            union.append(item)
-                    kept.extend("%s:%s" % (key, item) for item in have)
-                    added.extend("%s:%s" % (key, item) for item in union[len(have):])
-                    merged[key] = union
-                for key in ("run", "notes"):
-                    if key not in given:
-                        continue
-                    if not merged.get(key):
-                        merged[key] = given[key]
-                        added.append(key)
-                    else:
-                        kept.append(key)
-                        if merged[key] != given[key]:
-                            differ.append("%s 票上「%s」/ 驗證者「%s」"
-                                          % (key, head(merged[key]), head(given[key])))
-                if added:
-                    fresh["verify"] = merged
-                    fresh["state_version"] = int(fresh.get("state_version") or 0) + 1
-                    ticket.save(fresh)
-        except (OSError, ValueError, RuntimeError) as exc:
-            print("apply: 驗證者的 verify 計畫併不進票 #%s —— %s(不擋 apply)" % (ident, exc))
-        else:
-            if differ:
-                print("apply: 驗證者給的 run/notes 與票上不同,保留票上 —— %s" % ";".join(differ))
-            if added:
-                event.emit("ticket.state", ticket=str(ident), field="verify",
-                           **{"to": ",".join(added), "state_version": fresh["state_version"]})
-                print("apply: 驗證者的 verify 併進票 #%s(state_version=%s)—— 新增 %s;保留 %s"
-                      % (ident, fresh["state_version"], "、".join(added),
-                         "、".join(kept) or "(票上原本沒有)"))
-            else:
-                print("apply: 驗證者的 verify 票上都已經有了(保留 %s)—— 票沒有動"
-                      % "、".join(kept))
-record = data.get("baseline")
-if record is None:
-    sys.exit(0)
-if not isinstance(record, dict) or record.get("stage") != "red":
-    print("apply: 驗證者 result 的 baseline 不是 stage=red 的紀錄 —— 沒有併進票")
-    sys.exit(0)
-try:
-    version = ticket.save_baseline(ident, record, "red")
-except (OSError, ValueError, RuntimeError) as exc:
-    print("apply: 驗證者的驗紅併不進票 #%s —— %s(不擋 apply)" % (ident, exc))
-    sys.exit(0)
-print("apply: 驗證者的驗紅(stage=red)併進票 #%s 的 verify.baseline(state_version=%s)"
-      % (ident, version))
-PY
-done
+# 驗證者的計畫與驗紅併進票(`merge_verifier_plans`,上面那一段的說明)。解析不到照樣出聲,
+# 但不擋 apply —— patch 已經 commit 了。
+merge_verifier_plans "$ID" "$VEVIDENCES"
 # **反駁放在最後**:patch 已經 commit 了(那是事實),但這一手沒有結束 ——
 # 一個「票寫錯了」的說法沒有人收,與沒有那個說法長得一樣(§7)。
 # 狀態檔只寫**最後那一個** rc:先寫 0 再改 6 的那一段空檔裡,讀的人看到的是綠(#36)。

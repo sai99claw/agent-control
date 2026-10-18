@@ -695,6 +695,66 @@ class TheVerifierResultIsParsedOrSaysWhyNot(ApplyBase):
         self.assertNotIn("保留票上", done.stdout + done.stderr)
 
 
+class VerifyPlanMergesWithoutAPatch(ApplyBase):
+    """#130 A4:`apply.sh verify-plan <票號> --evidence-verifier <檔>…` —— 驗證者這輪 patch-verify
+    0 byte、只改 result 的 verify。只跑 apply 既有的那一段合併(同鎖、同解析、只收 stage=red),
+    不建分支、不 commit、不碰 patch。期望值是這一檔上面寫死的 PLAN_RESULT / RED。"""
+
+    def refs(self):
+        return (self.git("branch", "--list").splitlines(), self.git("rev-parse", "HEAD").strip(),
+                self.git("worktree", "list", "--porcelain").count("worktree "))
+
+    def verify_plan(self, text, *extra):
+        return self.apply("verify-plan", "1", "--evidence-verifier",
+                          self.patch_file("EV.md", text), *extra)
+
+    def test_a4_the_plan_and_the_red_baseline_reach_the_ticket_and_git_does_not_move(self):
+        """**變異 M4a**:cmd_verify_plan 不呼叫 merge_verifier_plans(直接 exit 0)→ 這一條紅。"""
+        self.make("1", verify={"files": [], "tags": [], "run": "", "notes": ""})
+        before = self.refs()
+        version = self.load_ticket("1")["state_version"]
+        done = self.verify_plan("# EVIDENCE-verifier\n\n## result\n\n```result\n"
+                                + PLAN_RESULT + "\n```\n")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        plan = self.load_ticket("1")["verify"]
+        self.assertEqual(plan["files"], ["verify/nav/test_ticket_1.py"])
+        self.assertEqual(plan["tags"], ["log-period"])
+        self.assertEqual(plan["run"], PLAN_RUN)
+        self.assertEqual(plan["notes"], PLAN_NOTES)
+        self.assertEqual(plan["baseline"], RED)
+        self.assertGreater(self.load_ticket("1")["state_version"], version)
+        self.assertEqual(self.refs(), before, "verify-plan 不建分支、不 commit、不開 worktree")
+        self.assertFalse(self.branch_exists("t1"))
+
+    def test_a4_a_baseline_that_claims_check_is_not_merged(self):
+        """**變異 M4**:verify-plan 另寫一份合併、不收 stage 限制 → 這一條紅。"""
+        self.make("1", verify={"files": ["verify/nav/test_ticket_1.py"],
+                               "tags": ["example"], "run": "", "notes": ""})
+        done = self.verify_plan(VERIFIER_EVIDENCE_WITH_RED % "check")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("baseline", self.load_ticket("1")["verify"])
+        self.assertIn("不是 stage=red", done.stderr)
+
+    def test_a4_an_unparsable_result_is_loud_and_nonzero(self):
+        """**變異 M4b**:merge_verifier_plans 解析不到照舊 `sys.exit(0)` → rc 0 → 這一條紅。"""
+        self.make("1", verify={"files": [], "tags": [], "run": "", "notes": ""})
+        for name, reason, text in UNPARSABLE:
+            with self.subTest(name):
+                before = self.load_ticket("1")
+                done = self.verify_plan(text)
+                self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertIn("驗證者的 result 解析不到", done.stderr)
+                self.assertIn(reason, done.stderr)
+                after = self.load_ticket("1")
+                self.assertEqual(after["verify"], before["verify"])
+                self.assertEqual(after["state_version"], before["state_version"])
+
+    def test_a4_help_lists_verify_plan(self):
+        done = self.apply("--help")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("sh scripts/apply.sh verify-plan <票號> --evidence-verifier <檔>", done.stdout)
+
+
 class TheCopyRootComesFromTheMainRepo(ApplyBase):
     """#46 C1:副本根以**主 repo 根**解析(`scripts/wtbase.sh`),與 auto-fix / land / review
     同一個來源。以前 apply.sh 用 `$ROOT` 拼:在票分支的 worktree 裡手跑時 `$ROOT` 是
