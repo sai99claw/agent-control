@@ -470,6 +470,46 @@ class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
         self.assertNotIn("已經有了", done.stderr)
         self.assertIn("記不進票", done.stderr)
 
+    def test_104_a2_a_note_with_the_patch_is_recorded_once_and_does_not_stop(self):
+        """#104 A1 / A2 / T1:合格的 `OBJECTION: note`(patch 就是這一份)記一筆 note、rc=0、
+        狀態檔 0;同一份 EVIDENCE 再收一次仍一筆、仍 0。四問:守 apply 不再對合格 note rc=6 /
+        可信回歸:rc 與欄位寫死 / 既有反駁案例只有 ticket-wrong / 不加縫:同一支 apply.sh。
+        **變異**:apply.sh 的 `5)` 分支改成 exit 6 → 這一條紅。"""
+        self.make("1")
+        evidence = self.patch_file("EVIDENCE.md", "# EVIDENCE\n\nOBJECTION: note 照原驗收做完,"
+                                                  "順手補了一行註解\n")
+        done = self.apply("1", self.patch_file("p.diff", CHANGE), "--evidence", evidence)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("note 不阻擋", done.stderr)
+        second = self.run_sh("scripts/apply.sh", "1", self.patch_file("p2.diff", CREATE),
+                             "--evidence", evidence, env=self.env(AC_RUN_ID="second"))
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertEqual(self.status_file("second")["rc"], 0)
+        rows = self.load_ticket("1")["objections"]
+        self.assertEqual([(row["category"], row["blocking"]) for row in rows], [("note", False)])
+
+    def test_104_a1_a_note_asking_to_change_the_acceptance_still_stops(self):
+        """#104 A1:有 patch 的 note 要求改驗收 → 照阻擋收、rc=6。四問:守綠 patch 不降級 /
+        可信回歸:rc 與類別寫死 / 既有沒有 note / 不加縫。"""
+        self.make("1")
+        evidence = self.patch_file("EVIDENCE.md", "# EVIDENCE\n\nOBJECTION: note 建議改驗收 A2\n")
+        done = self.apply("1", self.patch_file("p.diff", CHANGE), "--evidence", evidence)
+        self.assertEqual(done.returncode, 6, done.stdout + done.stderr)
+        row, = self.load_ticket("1")["objections"]
+        self.assertEqual((row["category"], row["blocking"]), ("blocking", True))
+
+    def test_104_a_note_before_a_real_objection_does_not_hide_it(self):
+        """#104 A2:同一份 EVIDENCE 先寫 note、後寫 ticket-wrong —— 收 ticket-wrong、rc=6。
+        四問:守「先看到 note 就放行」那個洞 / 可信回歸:rc 與類別寫死 / 既有只收第一行 /
+        不加縫。**變異**:apply.sh 退回 `grep -m1 '^OBJECTION:'` → 這一條紅。"""
+        self.make("1")
+        evidence = self.patch_file("EVIDENCE.md", "# EVIDENCE\n\nOBJECTION: note 照原驗收做完\n"
+                                                  "OBJECTION: ticket-wrong 驗收 A3 的欄位不存在\n")
+        done = self.apply("1", self.patch_file("p.diff", CHANGE), "--evidence", evidence)
+        self.assertEqual(done.returncode, 6, done.stdout + done.stderr)
+        self.assertEqual([row["category"] for row in self.load_ticket("1")["objections"]],
+                         ["ticket-wrong"])
+
     def test_the_verifier_evidence_has_a_receiver_now(self):
         """#29 A5 / G5:`EVIDENCE-verifier.md` 以前是**一份沒有收件者的交付物**。"""
         self.make("1")

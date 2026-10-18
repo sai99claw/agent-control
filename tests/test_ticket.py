@@ -2074,5 +2074,133 @@ class TheSchedulerScopeHelper(unittest.TestCase):
                 self.assertIn("串行", said)
 
 
+
+class NoteIsSortedFromRealObjections(Sandbox):
+    """#104 A1:`OBJECTION: note` 只在**已交 patch** 且說明不要求改驗收 / 保護範圍 / 產品取捨時
+    才記成 `category=note, blocking=false`(rc=5,不停線);其餘照阻擋反駁收(rc=0,同一般反駁)。
+    期望值寫死在這裡(類別、blocking、owner、rc),不從 `note_blocker` 算回去。"""
+
+    def objection(self, line, patch=True):
+        args = ["objection", "1", "--line", line]
+        if patch:
+            args += ["--patch", self.write("p.diff", "--- base/x\n+++ work/x\n", where=self.home)]
+        return self.ticket(*args)
+
+    def rows(self):
+        return self.load_ticket("1")["objections"]
+
+    def test_a1_a_note_with_a_patch_is_one_non_blocking_row(self):
+        """四問:守 note+patch → 單筆 note、blocking=false、rc=5,第二次仍一筆 / 可信回歸:rc 與
+        欄位寫死 / 既有測試沒有 note / 不加縫:CLI。"""
+        self.make_ticket(1)
+        line = "OBJECTION: note 順手把 README 的錯字改了,照原驗收做完"
+        for _ in range(2):
+            done = self.objection(line)
+            self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        rows = self.rows()
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual((rows[0]["category"], rows[0]["blocking"], rows[0]["owner"],
+                          rows[0]["disposition"]), ("note", False, "reviewer", ""))
+        self.assertNotIn("demoted", rows[0])
+
+    def test_a1_a_note_without_a_patch_or_asking_for_a_change_blocks(self):
+        """四問:守缺 patch / 要求改驗收 / 保護範圍 / 產品取捨 → 阻擋、rc=0(同一般反駁)、demoted
+        說為什麼 / 可信回歸:四種各一張票 / 既有測試沒有 note / 不加縫:CLI。
+        **變異 M1**:`note_blocker` 不看 NOTE_ASKS(有 patch 一律降級為 note)→ 後三種紅。"""
+        cases = (("OBJECTION: note 照原驗收做完,另有一處想法", False, "沒交 patch"),
+                 ("OBJECTION: note 建議改驗收 A2 成三欄", True, "改驗收"),
+                 ("OBJECTION: note 需要動 protected_paths 的那一支", True, "protected_paths"),
+                 ("OBJECTION: note 兩種做法是產品取捨,我先選了 A", True, "取捨"))
+        for line, patch, why in cases:
+            with self.subTest(line=line):
+                self.make_ticket(1)
+                done = self.objection(line, patch=patch)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                row, = self.rows()
+                self.assertEqual((row["category"], row["blocking"], row["owner"]),
+                                 ("blocking", True, "main"))
+                self.assertIn(why, row["demoted"])
+                self.assertIn("照阻擋反駁收", done.stdout)
+
+    def test_a4_an_unanswered_note_is_an_objection_problem(self):
+        """四問:守 objection_problems 認未處置的 note、accepted 之後不認 / 可信回歸:直接呼叫
+        純函式 / 既有案例只有 blocking / 不加縫。"""
+        import ticket as ticket_mod
+        row = {"objections": [{"category": "note", "blocking": False, "body": "說明",
+                               "owner": "reviewer", "disposition": ""}]}
+        self.assertEqual(len(ticket_mod.objection_problems(row)), 1)
+        row["objections"][0]["disposition"] = "accepted"
+        self.assertEqual(ticket_mod.objection_problems(row), [])
+
+
+class ObjectionOverrule(Sandbox):
+    """#104 A5:`ticket.py objection-overrule <id> --index n --expect-attempt N
+    --expect-state-version V` 退回一筆 accepted 的 note:blocking=true、清 disposition、
+    overruled_by=main、票轉 Blocked。錯版本不動票。"""
+
+    NOTE = {"category": "note", "blocking": False, "owner": "reviewer", "body": "照原驗收",
+            "evidence": "", "disposition": "accepted", "follow_up": "",
+            "reply": {"verdict": "agree", "reason": "成立", "by": "reviewer@opus"}}
+
+    def overrule(self, index="0", attempt=None, version=None):
+        row = self.load_ticket("1")
+        return self.ticket("objection-overrule", "1", "--index", index,
+                           "--expect-attempt", str(row["attempt"] if attempt is None else attempt),
+                           "--expect-state-version",
+                           str(row["state_version"] if version is None else version))
+
+    def test_a5_it_turns_the_note_back_into_a_blocking_one(self):
+        """四問:守四格 + Blocked + 版本 +1 + 事件 / 可信回歸:期望值寫死 / 既有沒有這個子指令 /
+        不加縫:CLI。"""
+        self.make_ticket(1, state="InReview", objections=[dict(self.NOTE)])
+        before = self.load_ticket("1")["state_version"]
+        done = self.overrule()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        note = row["objections"][0]
+        self.assertEqual((note["blocking"], note["disposition"], note["overruled_by"]),
+                         (True, "", "main"))
+        self.assertEqual((row["state"], row["owner"], row["state_version"]),
+                         ("Blocked", "main", before + 1))
+        said = [e.get("note") for e in self.events() if e["kind"] == "ticket.state"]
+        self.assertIn("note-overruled index=0", said)
+        self.assertNotIn("decision.asked", self.kinds(), "退回是主線自己的動作,不發頁")
+
+    def test_a5_a_stale_version_or_attempt_leaves_the_ticket_alone(self):
+        """四問:守錯版本 / 錯 attempt → rc=4、票檔一位元組都不動 / 可信回歸:比對整份檔案文字 /
+        既有沒有這個子指令 / 不加縫:CLI。"""
+        self.make_ticket(1, state="InReview", objections=[dict(self.NOTE)])
+        path = os.path.join("tickets", "1.json")
+        before = self.read(path)
+        row = self.load_ticket("1")
+        for kwargs in ({"version": row["state_version"] - 1}, {"attempt": row["attempt"] + 1}):
+            with self.subTest(**kwargs):
+                done = self.overrule(**kwargs)
+                self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+                self.assertIn("stale", done.stderr)
+                self.assertEqual(self.read(path), before)
+
+    def test_a5_only_an_accepted_note_can_be_overruled(self):
+        """四問:守不是 accepted note(未處置的 note、blocking、超出範圍)→ rc=3、票不動 /
+        可信回歸:比對整份檔案文字 / 既有沒有這個子指令 / 不加縫:CLI。"""
+        rows = [dict(self.NOTE, disposition=""),
+                {"category": "blocking", "body": "x", "owner": "main", "disposition": "accepted"}]
+        self.make_ticket(1, state="InReview", objections=rows)
+        path = os.path.join("tickets", "1.json")
+        before = self.read(path)
+        for index in ("0", "1", "7"):
+            with self.subTest(index=index):
+                done = self.overrule(index=index)
+                self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+                self.assertEqual(self.read(path), before)
+
+    def test_a5_help_names_the_flags(self):
+        """四問:守 --help 列三個必填旗標 / 可信回歸:旗標名寫死 / 既有沒有 / 不加縫。"""
+        done = self.ticket("objection-overrule", "--help")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        for flag in ("--index", "--expect-attempt", "--expect-state-version"):
+            self.assertIn(flag, done.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

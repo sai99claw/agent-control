@@ -33,6 +33,13 @@
 ### ④ 疑慮
 - **阻擋**:每一條另寫一行 `OBJECTION: blocking <一句話>`(**行首、不縮排**)。有任何一行 ⇒ verdict 必須是 `fail`。
 - **不阻擋**:列在這裡就好,不寫 `OBJECTION:` 行。
+### ④.5 worker 的非阻擋 note(逐條回應)
+worker 交件時寫的 `OBJECTION: note`(已交 patch、說照原驗收做完的說明),票上還沒有人回應的:
+
+@NOTES@
+每一筆在檔尾 result 的 `objection_replies` 回一筆 `{"index": <上面的 index>, "verdict": "agree" 或 "disagree", "reason": "<一句理由>"}`
+—— 不漏、不重複、不多。`agree` = 說明成立、照原驗收不必停;`disagree` = 這一筆其實是阻擋(要改驗收 / 產品取捨 / 沒做完),
+那一筆轉阻擋、交主線裁示。格式不對整份覆核不收(review.refused)。
 ### ⑤ token
 這一趟你自己用了多少 token(估計就標「估」)。
 
@@ -43,7 +50,7 @@
 ```result
 {"ticket": "@TICKET@", "role": "reviewer", "round": @ROUND@, "verdict": "pass",
  "rc": null, "patch_sha256": null, "gate": null, "mutations": [],
- "objection": null, "excluded": [], "repro": null, "memory": []}
+ "objection": null, "objection_replies": [], "excluded": [], "repro": null, "memory": []}
 ```
 
 - `verdict` 只准 `pass` / `fail`。沒有這一塊、JSON 解不開、逾時、verdict 是別的字 —— 一律算**沒交件**,
@@ -52,4 +59,5 @@
 
 ## 之後誰做什麼(你不用做)
 `scripts/review.sh` 讀這一塊:`pass` ⇒ 寫票的 `review`(by `reviewer@@MODEL@`、sha `@SHA@`,票版本由
-`ticket.py set` 自己蓋);`fail` ⇒ 每行 `OBJECTION:` 記成一筆 blocking 反駁、票轉 Blocked、主線裁示。
+`ticket.py set` 自己蓋);`fail` ⇒ 每行 `OBJECTION:` 記成一筆 blocking 反駁、票轉 Blocked、主線裁示。`objection_replies` 與 review
+同一次收件:`agree` 的 note 記 accepted;任一 `disagree` ⇒ 那一筆轉阻擋、review 不寫、票轉 Blocked。

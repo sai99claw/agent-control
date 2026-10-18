@@ -19,6 +19,7 @@
     scripts/ticket.py lint <id>                   # 票面機械檢查;唯讀,不動 state_version
     scripts/ticket.py review-request 7 --run-id … --sha … --receipt …   # 派覆核那一刻的收件單
     scripts/ticket.py review-receive 7 --receipt … --verdict pass|fail|missing  # 鎖裡比收件單才收
+    scripts/ticket.py objection-overrule 7 --index 2 --expect-attempt 1 --expect-state-version 12
 
 **不要手改票檔**(`tickets/README.md`):`state_version` 是遲到的回報用來認出自己
 過期的那一格,而手改不會動它。
@@ -82,6 +83,10 @@ FACE_FIELDS = (("subject", ""), ("objective", ""), ("acceptance", []), ("in_scop
 # 恰是這幾格,是它的不可變副本。
 REQUEST_KEYS = ("run_id", "attempt", "state_version", "face", "patch_id", "sha")
 REVIEW_DISPATCHER = "review.sh"
+# reviewer result 的 `objection_replies`(#104 A3):一筆恰是這三鍵,verdict 只收這兩個字。
+REPLY_KEYS = ("index", "verdict", "reason")
+REPLY_VERDICTS = ("agree", "disagree")
+REPLIES_REFUSED = "objection_replies 不合格"
 LOCK_NAME = ".ticket.lock"
 LOCK_TIMEOUT = 10.0
 
@@ -352,7 +357,9 @@ USAGE = {
     "result": ("scripts/ticket.py result <EVIDENCE> <輸出.json> "
                "--ticket <id> --role worker|verifier|reviewer --round N"),
     "objection": ("scripts/ticket.py objection <id> --line \"OBJECTION: …\" "
-                  "--evidence <EVIDENCE>"),
+                  "--evidence <EVIDENCE> [--patch <patch.diff>]  # 非阻擋 note rc=5"),
+    "objection-overrule": ("scripts/ticket.py objection-overrule <id> --index <n> "
+                           "--expect-attempt N --expect-state-version V  # 版本不對 rc=4,票不動"),
     "cost": ("scripts/ticket.py cost <id> --role worker|verifier|reviewer|land "
              "[--round N] [--model M] [--by <腳本>] [--from-envelope <信封檔>] "
              "[--wall-seconds N] [--outcome <登記的字>] [--run-id <字>] [--note <字>] "
@@ -365,7 +372,8 @@ USAGE = {
                        "--receipt <reports/t<id>/<run_id>/review-receipt.json>"),
     "review-receive": ("scripts/ticket.py review-receive <id> --receipt <收件單> "
                        "--verdict pass|fail|missing [--by B] [--note N] [--evidence <REVIEW.md>] "
-                       "[--objection <理由>]… [--reason <沒交件的原因>]  # stale rc=4"),
+                       "[--objection <理由>]… [--reason <沒交件的原因>] [--replies '<JSON>']  "
+                       "# stale rc=4;objection_replies 不合格 rc=3"),
 }
 
 EXAMPLE = {
@@ -397,6 +405,8 @@ python3 scripts/ticket.py set 7 allowed_write_paths '["scripts/land.sh", "tests/
     "objection": ('python3 scripts/ticket.py objection 7 \\\n'
                   '  --line "OBJECTION: ticket-wrong 驗收 A3 指的欄位不存在" \\\n'
                   '  --evidence reports/t7/EVIDENCE.md'),
+    "objection-overrule": ("python3 scripts/ticket.py objection-overrule 7 --index 2 \\\n"
+                           "  --expect-attempt 1 --expect-state-version 12"),
     "cost": ("python3 scripts/ticket.py cost 7 --role worker --round 1 --model opus \\\n"
              "  --by auto-fix.sh --from-envelope reports/t7/20260923-101500-1/worker-round1.log \\\n"
              "  --wall-seconds 412 --outcome handed-in --run-id 20260923-101500-1"),
@@ -448,7 +458,12 @@ def known_flags(verb):
                 ("--round", "第幾輪", False, True)]
     if verb == "objection":
         return [("--line", "EVIDENCE 裡那一行 `OBJECTION: <類別> <理由>`", False, True),
-                ("--evidence", "那份 EVIDENCE 的路徑(記進票面當證據)", False, True)]
+                ("--evidence", "那份 EVIDENCE 的路徑(記進票面當證據)", False, True),
+                ("--patch", "這一輪交的 patch;`note` 沒有它就照阻擋反駁收(#104 A1)", False, False)]
+    if verb == "objection-overrule":
+        return [("--index", "objections[] 裡那一筆 accepted 的 note", False, True),
+                ("--expect-attempt", "主線看到的 attempt;對不上不動票", False, True),
+                ("--expect-state-version", "主線看到的 state_version;對不上不動票", False, True)]
     if verb == "cost":
         return [("--role", "worker / verifier / reviewer / land", False, True),
                 ("--round", "第幾輪", False, False),
@@ -481,7 +496,9 @@ def known_flags(verb):
                 ("--note", "review.note(REVIEW.md 的相對路徑)", False, False),
                 ("--evidence", "fail 的反駁證據檔(REVIEW.md)", False, False),
                 ("--objection", "fail 的一條阻擋理由", True, False),
-                ("--reason", "missing 的原因", False, False)]
+                ("--reason", "missing 的原因", False, False),
+                ("--replies", "reviewer result 的 objection_replies(JSON;沒有這一格就不給)",
+                 False, False)]
     return []
 
 
@@ -1026,7 +1043,8 @@ def objection_problems(ticket):
         if blocking is None:
             blocking = str(row.get("category") or "").lower() in ("blocking", "阻擋",
                                                                  "ticket-wrong")
-        if blocking and not disposed(row):
+        # 非阻擋的 note 不停線,但要等覆核逐條回應(#104 A4):沒回應的 note 與阻擋項一樣擋。
+        if (blocking or row.get("category") == "note") and not disposed(row):
             out.append("反駁 objections[%d](%s / owner=%s)還沒處置:%s"
                        % (index, row.get("category") or "?", row.get("owner") or "沒人",
                           (row.get("body") or "")[:60]))
@@ -2377,7 +2395,11 @@ def cmd_import(argv):
 RESULT_OPEN = re.compile(r"^\s*(?:`{3,}|~{3,})[ \t]*result[ \t]*$")
 RESULT_CLOSE = re.compile(r"^\s*(?:`{3,}|~{3,})[ \t]*$")
 RESULT_RAW_CAP = 500
-OBJECTION_CATEGORIES = ("ticket-wrong", "test_defect", "blocking")
+OBJECTION_CATEGORIES = ("ticket-wrong", "test_defect", "blocking", "note")
+# `OBJECTION: note` 只在**已交 patch** 且說明裡沒有這幾種字樣時才是非阻擋(#104 A1):要改驗收、
+# 碰保護範圍、要產品取捨的照阻擋反駁收 —— 綠 patch 不是降級的理由。比對不分大小寫。
+NOTE_ASKS = ("改驗收", "驗收改", "放寬", "acceptance", "out_of_scope", "protected_paths",
+             "保護範圍", "受保護", "取捨", "裁示", "產品決定")
 # 五段散文在不在 —— **人版**與機器版分開記(`tickets/SCHEMA.md` §result)。關鍵詞取
 # 角色卡那五段的標題字,一段給幾個同義詞:只認一個詞的話,換一種寫法就變成「沒交」,
 # 而**誤報缺段會讓人去補一段已經在那裡的東西**,比漏報更吵。
@@ -2538,15 +2560,32 @@ def without_home(text):
     return HOME_PREFIX.sub("~", text)
 
 
-def record_objection(ident, line, evidence):
+def note_blocker(body, patch):
+    """`OBJECTION: note` 為什麼不能當非阻擋(#104 A1);能就回空字串。"""
+    if not patch or not os.path.isfile(patch) or os.path.getsize(patch) == 0:
+        return "note 沒交 patch"
+    hit = next((word for word in NOTE_ASKS if word.lower() in body.lower()), "")
+    if hit:
+        return "note 提到「%s」—— 改驗收 / 保護範圍 / 產品取捨是阻擋反駁" % hit
+    return ""
+
+
+def record_objection(ident, line, evidence, patch=""):
     """把 EVIDENCE 裡那一行 `OBJECTION:` 記成票的 `objections[]` 一筆。
 
     **記過就不再記第二次**:`auto-fix.sh` 在叫 `apply.sh` 之前就先收過(`test_defect`
     那條路還會續跑),`apply.sh` 再收一次的話,同一句話會在票上長出兩筆,而處置的人
-    分不出哪一筆是哪一輪的。回 `(類別, 是不是新的, 票上那一筆處置過了沒有)`。
+    分不出哪一筆是哪一輪的。回 `(類別, 是不是新的, 票上那一筆處置過了沒有, 擋不擋,
+    note 降為阻擋的理由)`。
+
+    `note`(#104 A1)過得了 `note_blocker` 才記成 `category=note, blocking=false`、owner
+    reviewer(覆核逐條回應);過不了就照 `blocking` 收,`demoted` 記為什麼。
     """
     category, body = objection_parts(line)
     body = without_home(body)
+    demoted = note_blocker(body, patch) if category == "note" else ""
+    if demoted:
+        category = "blocking"
     where = os.path.relpath(evidence, root()) if evidence else ""
     with Lock():
         ticket = load(ident)
@@ -2554,10 +2593,17 @@ def record_objection(ident, line, evidence):
         for row in rows:
             if isinstance(row, dict) and row.get("category") == category \
                     and without_home(row.get("body") or "") == body:
-                return category, False, disposed(row)
-        rows.append({"category": category, "body": body, "evidence": where,
-                     "owner": "verifier" if category == "test_defect" else "main",
-                     "disposition": "", "follow_up": ""})
+                return (category, False, disposed(row),
+                        category != "note" or bool(row.get("blocking")), demoted)
+        fresh = {"category": category, "body": body, "evidence": where,
+                 "owner": {"test_defect": "verifier", "note": "reviewer"}.get(category, "main"),
+                 "disposition": "", "follow_up": ""}
+        if category == "note":
+            fresh["blocking"] = False
+        elif demoted:
+            fresh["blocking"] = True
+            fresh["demoted"] = demoted
+        rows.append(fresh)
         ticket["objections"] = rows
         ticket["state_version"] = int(ticket.get("state_version") or 0) + 1
         # 反駁是落地**之後**才補得上處置的那一格,不是重新審過一次票面:跟著把
@@ -2568,7 +2614,7 @@ def record_objection(ident, line, evidence):
         save(ticket)
     event.emit("ticket.state", ticket=str(ident), field="objections",
                note=category, state_version=ticket["state_version"])
-    return category, True, False
+    return category, True, False, category != "note", demoted
 
 
 def cmd_objection(argv):
@@ -2576,15 +2622,17 @@ def cmd_objection(argv):
         sys.stderr.write("ticket: %s\n" % USAGE["objection"])
         return 2
     ident = argv[0].lstrip("#")
-    line = evidence = ""
+    line = evidence = patch = ""
     index = 1
     while index < len(argv):
         flag = argv[index]
-        if flag in ("--line", "--evidence") and index + 1 < len(argv):
+        if flag in ("--line", "--evidence", "--patch") and index + 1 < len(argv):
             if flag == "--line":
                 line = argv[index + 1]
-            else:
+            elif flag == "--evidence":
                 evidence = argv[index + 1]
+            else:
+                patch = argv[index + 1]
             index += 2
             continue
         return unknown_flag("objection", flag)
@@ -2592,13 +2640,18 @@ def cmd_objection(argv):
         sys.stderr.write("ticket: objection 要 --line \"OBJECTION: <類別> <理由>\"\n")
         return 2
     try:
-        category, fresh, done = record_objection(ident, line, evidence)
+        category, fresh, done, blocks, demoted = record_objection(ident, line, evidence, patch)
     except (OSError, ValueError, RuntimeError) as exc:
         sys.stderr.write("ticket: 反駁記不進 #%s —— %s\n" % (ident, exc))
         return 2
     # **「已經有了」分兩種**(#36):還沒處置的那一筆第二次收到,與沒有收過一樣要擋
     # (rc=3);處置過的才放行(rc=4)。揉成同一個 rc 的時候,未處置的反駁第二輪就放行了。
-    if fresh:
+    # 非阻擋的 note(#104 A1)新記或已有都是 rc=5:不停線,等覆核逐條回應。
+    if demoted:
+        sys.stdout.write("ticket: #%s 的 note 照阻擋反駁收 —— %s\n" % (ident, demoted))
+    if not blocks and not done:
+        said, rc = ("記下了" if fresh else "已經有同一筆,沒有再記") + ",不阻擋;等覆核逐條回應", 5
+    elif fresh:
         said, rc = "記下了", 0
     elif done:
         said, rc = "已經有同一筆,已處置,沒有再記", 4
@@ -2725,8 +2778,64 @@ def reviewer_objections(rows, bodies, owner, evidence):
     return rows
 
 
+def pending_notes(ticket):
+    """等覆核逐條回應的 note(#104 A3):`category=note`、不阻擋、還沒處置。回 `[(index, row)]`。"""
+    return [(index, row) for index, row in enumerate(ticket.get("objections") or [])
+            if isinstance(row, dict) and row.get("category") == "note"
+            and not row.get("blocking") and not disposed(row)]
+
+
+def replies_problem(ticket, replies):
+    """reviewer 的 `objection_replies` 對不對得上票上待回應的 note(#104 A3);對得上回空字串。
+
+    恰是 `list[{index:int, verdict:agree|disagree, reason:非空字串}]`,每一筆待回應的 note 一筆、
+    不多不少不重複。`None` = result 沒有這一格:票上沒有待回應的 note 才算對得上。"""
+    want = [index for index, _row in pending_notes(ticket)]
+    if replies is None:
+        return ("%s:票上有待回應的 note(index %s),result 沒有 objection_replies"
+                % (REPLIES_REFUSED, want)) if want else ""
+    if not isinstance(replies, list):
+        return "%s:不是 list" % REPLIES_REFUSED
+    seen = []
+    for number, item in enumerate(replies):
+        if not isinstance(item, dict) or sorted(item) != sorted(REPLY_KEYS):
+            return "%s:第 %d 筆不是恰好 {index, verdict, reason}" % (REPLIES_REFUSED, number)
+        index = item["index"]
+        if not isinstance(index, int) or isinstance(index, bool):
+            return "%s:第 %d 筆的 index 不是整數" % (REPLIES_REFUSED, number)
+        if index in seen:
+            return "%s:index %d 回了兩次" % (REPLIES_REFUSED, index)
+        if index not in want:
+            return "%s:index %d 不是待回應的 note(待回應 %s)" % (REPLIES_REFUSED, index, want)
+        if item["verdict"] not in REPLY_VERDICTS:
+            return "%s:index %d 的 verdict 不是 agree|disagree" % (REPLIES_REFUSED, index)
+        if not isinstance(item["reason"], str) or not item["reason"].strip():
+            return "%s:index %d 沒有理由" % (REPLIES_REFUSED, index)
+        seen.append(index)
+    missing = [index for index in want if index not in seen]
+    if missing:
+        return "%s:漏回 index %s" % (REPLIES_REFUSED, missing)
+    return ""
+
+
+def apply_replies(ticket, replies, by):
+    """逐條回應寫進 note(與 review 同一次存檔):agree → `accepted`;disagree → 轉阻擋、
+    disposition 留空等主線。回 disagree 的 index。"""
+    against = []
+    rows = ticket.get("objections") or []
+    for item in replies or []:
+        row = rows[item["index"]]
+        row["reply"] = {"verdict": item["verdict"], "reason": item["reason"].strip(), "by": by}
+        if item["verdict"] == "agree":
+            row["disposition"] = "accepted"
+        else:
+            row["blocking"] = True
+            against.append(item["index"])
+    return against
+
+
 def receive_review(ident, receipt, verdict, by="", note="", evidence="", bodies=(),
-                   extend=None):
+                   extend=None, replies=None):
     """覆核的原子收件(A3 / A4)。回 `(收了沒有, 不收的理由)`。
 
     同一把鎖裡:比收件單(`request_problem`)→ 對得上才寫,而且只寫一次 —— pass 寫 `review`
@@ -2734,21 +2843,28 @@ def receive_review(ident, receipt, verdict, by="", note="", evidence="", bodies=
     票一格不動。不管收不收,收件單記一格 `result{accepted, reason}`,request 一字不改。
 
     `extend(ticket, claimed)` 是同一把鎖裡的擴充接縫(A6):收件單驗過、寫票之前叫,可以改
-    `ticket`,回一句話就整筆不收、不存檔。#104 從這裡接 note / objection_replies 的驗證與更新;
-    本票不認那兩格。"""
+    `ticket`,回一句話就整筆不收、不存檔。
+
+    `replies`(#104 A3 / A4)是 reviewer result 的 `objection_replies`:同一把鎖裡對票上待回應的
+    note 驗(`replies_problem`),不合格整筆不收(理由以 `REPLIES_REFUSED` 起頭);合格就與
+    review 同一次存檔寫 disposition。任一 disagree:那一筆轉阻擋、不寫 review、票轉 Blocked。"""
     data = read_receipt(receipt)
     claimed = data.get("request") if data else None
     if not isinstance(claimed, dict):
         raise ValueError("收件單 %s 讀不到 request" % receipt)
+    against = []
     with Lock():
         ticket = load(ident)
         why = request_problem(ticket, claimed)
         if not why and extend is not None:
             why = extend(ticket, claimed) or ""
         if not why:
+            why = replies_problem(ticket, replies)
+        if not why:
             before = {key: ticket.get(key) for key in ("review", "state")}
+            against = apply_replies(ticket, replies, by)
             ticket["state_version"] = int(ticket.get("state_version") or 0) + 1
-            if verdict == "pass":
+            if verdict == "pass" and not against:
                 ticket["review"] = {"verdict": "pass", "by": by, "sha": claimed.get("sha"),
                                     "note": note, "at": now(),
                                     "state_version": ticket["state_version"],
@@ -2764,7 +2880,13 @@ def receive_review(ident, receipt, verdict, by="", note="", evidence="", bodies=
         write_receipt(receipt, data)
     if why:
         return False, why
-    if verdict == "pass":
+    if replies:
+        # 看板認這一筆(#104 A5):note 的處置只發事件,不發整票 done 頁。
+        event.emit("ticket.state", ticket=str(ident), field="objections",
+                   note="note-replies agree=%d disagree=%d"
+                        % (len(replies) - len(against), len(against)),
+                   state_version=ticket["state_version"])
+    if verdict == "pass" and not against:
         event.emit("ticket.state", ticket=str(ident), field="review",
                    **{"from": json.dumps(before["review"], ensure_ascii=False),
                       "to": json.dumps(ticket["review"], ensure_ascii=False),
@@ -2827,12 +2949,19 @@ def cmd_review_request(argv):
 def cmd_review_receive(argv):
     opts = take_flags("review-receive", argv[1:],
                       ("--receipt", "--verdict", "--by", "--note", "--evidence", "--objection",
-                       "--reason"), repeated=("--objection",)) if argv else None
+                       "--reason", "--replies"), repeated=("--objection",)) if argv else None
     if opts is None or not opts["--receipt"] \
             or opts["--verdict"] not in ("pass", "fail", "missing"):
         sys.stderr.write("ticket: %s\n" % USAGE["review-receive"])
         return 2
     ident, receipt = argv[0].lstrip("#"), opts["--receipt"]
+    replies = None
+    if opts["--replies"]:
+        try:
+            replies = json.loads(opts["--replies"])
+        except ValueError:
+            # 解不開與「不是 list」同一種不合格:交給 replies_problem 在鎖裡記進收件單。
+            replies = opts["--replies"]
     try:
         if opts["--verdict"] == "missing":
             data = read_receipt(receipt)
@@ -2844,17 +2973,80 @@ def cmd_review_receive(argv):
             return 0
         accepted, why = receive_review(ident, receipt, opts["--verdict"], by=opts["--by"],
                                        note=opts["--note"], evidence=opts["--evidence"],
-                                       bodies=opts["--objection"])
+                                       bodies=opts["--objection"], replies=replies)
     except RuntimeError as exc:
         sys.stderr.write("ticket: %s\n" % exc)
         return 5
     except (OSError, ValueError) as exc:
         sys.stderr.write("ticket: #%s 的覆核收不進來 —— %s\n" % (ident, exc))
         return 2
+    if not accepted and why.startswith(REPLIES_REFUSED):
+        sys.stderr.write("ticket: #%s 這一筆不收 —— refused:%s\n" % (ident, why))
+        return 3
     if not accepted:
         sys.stderr.write("ticket: #%s 這一筆不收 —— stale:%s\n" % (ident, why))
         return 4
     sys.stdout.write("ticket: #%s 覆核 %s 收下了 —— 收件單 %s\n" % (ident, opts["--verdict"], receipt))
+    return 0
+
+
+def overrule_note(ident, index, attempt, version):
+    """主線退回一筆 accepted 的 note(#104 A5):`blocking=true`、清 disposition、
+    `overruled_by=main`、票轉 Blocked。attempt / state_version 對不上不動票。
+    回 `(rc, 不動的理由)`:0 動了、4 版本對不上、3 那一筆不是 accepted 的 note。"""
+    with Lock():
+        ticket = load(ident)
+        if str(ticket.get("attempt")) != str(attempt) \
+                or str(ticket.get("state_version")) != str(version):
+            return 4, ("票現在是 attempt %s / v%s,你看到的是 attempt %s / v%s —— 重讀票再下"
+                       % (ticket.get("attempt"), ticket.get("state_version"), attempt, version))
+        rows = ticket.get("objections") or []
+        row = rows[index] if 0 <= index < len(rows) else None
+        if not isinstance(row, dict) or row.get("category") != "note" \
+                or str(row.get("disposition") or "").lower() != "accepted":
+            return 3, "objections[%d] 不是一筆 accepted 的 note" % index
+        before = ticket.get("state")
+        row["blocking"] = True
+        row["disposition"] = ""
+        row["overruled_by"] = "main"
+        ticket["state"] = "Blocked"
+        ticket["owner"] = "main"
+        ticket["state_version"] = int(ticket.get("state_version") or 0) + 1
+        save(ticket)
+    event.emit("ticket.state", ticket=str(ident), field="objections",
+               note="note-overruled index=%d" % index, state_version=ticket["state_version"])
+    event.emit("ticket.state", ticket=str(ident), field="state",
+               **{"from": json.dumps(before, ensure_ascii=False), "to": json.dumps("Blocked"),
+                  "state_version": ticket["state_version"]})
+    return 0, ""
+
+
+def cmd_objection_overrule(argv):
+    opts = take_flags("objection-overrule", argv[1:],
+                      ("--index", "--expect-attempt", "--expect-state-version")) if argv else None
+    if opts is None or not all(opts.values()):
+        sys.stderr.write("ticket: %s\n" % USAGE["objection-overrule"])
+        return 2
+    ident = argv[0].lstrip("#")
+    try:
+        index = int(opts["--index"])
+    except ValueError:
+        sys.stderr.write("ticket: --index 要是數字\n")
+        return 2
+    try:
+        rc, why = overrule_note(ident, index, opts["--expect-attempt"],
+                                opts["--expect-state-version"])
+    except RuntimeError as exc:
+        sys.stderr.write("ticket: %s\n" % exc)
+        return 5
+    except (OSError, ValueError) as exc:
+        sys.stderr.write("ticket: #%s 退不回 note —— %s\n" % (ident, exc))
+        return 2
+    if rc:
+        sys.stderr.write("ticket: #%s 不動 —— %s%s\n" % (ident, "stale:" if rc == 4 else "", why))
+        return rc
+    sys.stdout.write("ticket: #%s objections[%d] 退回成阻擋(overruled_by=main),票轉 Blocked\n"
+                     % (ident, index))
     return 0
 
 
@@ -2894,7 +3086,8 @@ def main(argv):
              "set": cmd_set, "inbox": cmd_inbox, "verify": cmd_verify,
              "close": cmd_close, "import": cmd_import, "freeze": cmd_freeze,
              "round": cmd_round, "result": cmd_result,
-             "objection": cmd_objection, "cost": cmd_cost,
+             "objection": cmd_objection, "objection-overrule": cmd_objection_overrule,
+             "cost": cmd_cost,
              "agent-command": cmd_agent_command, "lint": cmd_lint,
              "review-request": cmd_review_request, "review-receive": cmd_review_receive}
     if verb in ("--help", "-h", "help"):

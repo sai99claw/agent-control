@@ -65,6 +65,7 @@
     "tests/test_sync_to_project.py",
     "tests/test_templates.py",
     "tests/test_ticket.py",
+    "tests/test_ticket_104_verify.py",
     "tests/test_ticket_65.py",
     "tests/test_verify_case.py",
     "tests/test_verify_runner.py"
@@ -189,6 +190,7 @@
       "sources": [
         "scripts/ticket.py",
         "tests/test_ticket.py",
+        "tests/test_ticket_104_verify.py",
         "tests/test_ticket_65.py"
       ],
       "summary": "票:唯一的工作單位(create / set / cost / agent-command …)"
@@ -201,6 +203,7 @@
       "sources": [
         "scripts/verify-case.py",
         "scripts/verify.py",
+        "tests/test_ticket_104_verify.py",
         "tests/test_verify_case.py",
         "tests/test_verify_runner.py"
       ],

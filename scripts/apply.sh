@@ -33,7 +33,7 @@
 #   5 動到 `board/config.json` 的 `protected_paths`(安全邊界;D-050 ①:`allowed_write_paths`
 #     以外與命中 `out_of_scope` 都**不擋**,列進 result 的 `extra_paths` / `extra_reasons`)
 #   6 patch 套好了,但 EVIDENCE 裡有一行 `OBJECTION:` —— 已記進票的 `objections[]`
-#     (記過的同一筆 disposition 還空著也是 6;處置過的才放行成 0)
+#     (記過的同一筆 disposition 還空著也是 6;處置過的才放行成 0;非阻擋的 `note` 是 0,#104)
 #
 # ## `--evidence` 收三樣(2026-09-23,#29 A4;以前只收第一樣)
 # 1. `memory.py harvest` —— EVIDENCE 記憶段那幾行;
@@ -1278,10 +1278,13 @@ merge_verifier_plans "$ID" "$VEVIDENCES"
 # **反駁放在最後**:patch 已經 commit 了(那是事實),但這一手沒有結束 ——
 # 一個「票寫錯了」的說法沒有人收,與沒有那個說法長得一樣(§7)。
 # 狀態檔只寫**最後那一個** rc:先寫 0 再改 6 的那一段空檔裡,讀的人看到的是綠(#36)。
+# 非阻擋的 `OBJECTION: note`(#104 A1/A2)只記一次、不回 6;同一份 EVIDENCE 另有阻擋類的那一行
+# 時收阻擋那一行 —— 先看到 note 就放行,後面那一句「票寫錯了」等於沒人收。
 if [ -f "$EVIDENCE" ] && grep -q '^OBJECTION:' "$EVIDENCE"; then
-    OLINE=$(grep -m1 '^OBJECTION:' "$EVIDENCE")
+    OLINE=$(grep '^OBJECTION:' "$EVIDENCE" | grep -Ev '^OBJECTION:[[:space:]]*note([[:space:]]|$)' | head -n 1)
+    [ -n "$OLINE" ] || OLINE=$(grep -m1 '^OBJECTION:' "$EVIDENCE")
     echo "apply: EVIDENCE 裡有一行反駁 —— $OLINE" >&2
-    python3 "$AC/ticket.py" objection "$ID" --line "$OLINE" --evidence "$EVIDENCE"
+    python3 "$AC/ticket.py" objection "$ID" --line "$OLINE" --evidence "$EVIDENCE" --patch "$PATCH"
     orc=$?
     case $orc in
         0)
@@ -1298,6 +1301,8 @@ if [ -f "$EVIDENCE" ] && grep -q '^OBJECTION:' "$EVIDENCE"; then
             exit 6 ;;
         4)
             echo "apply: #$ID 這一筆反駁票上已經有了,而且已處置 —— 沒有再記一次" >&2 ;;
+        5)
+            echo "apply: #$ID 的 note 不阻擋 —— 照常進閘門與覆核,覆核逐條回應(objection_replies)" >&2 ;;
         *)
             # 記不進票(rc=2)不是「已經有了」:沒人收的反駁,與沒有反駁長得一樣(§7)。
             echo "apply: #$ID 的反駁記不進票(ticket.py objection rc=$orc)—— 修好之後手動記:" >&2

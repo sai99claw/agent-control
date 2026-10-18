@@ -1422,6 +1422,49 @@ class ReviewIsAHardGate(LandBase):
         done = self.land("t1-good")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
+    NOTE = {"category": "note", "blocking": False, "owner": "reviewer",
+            "body": "順手把錯字改了,照原驗收", "evidence": "EVIDENCE.md:3", "follow_up": ""}
+
+    def test_104_a4_a_note_nobody_answered_is_refused(self):
+        """#104 A4:非阻擋 note 不停線,但沒有覆核回應(disposition 空)的 note 與阻擋項一樣擋。
+        四問:守 objection_problems 認 note / 可信回歸:同一夾具、同一句「還沒處置」/
+        既有兩條只有 ticket-wrong / 不加縫:只改票上的 objections。
+        **變異**:objection_problems 不認 category=note → 這一條紅。"""
+        self.ready()
+        self.ticket("set", "1", "objections",
+                    json.dumps([dict(self.NOTE, disposition="")], ensure_ascii=False))
+        self.approve(1, "t1-good")
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("還沒處置", done.stdout)
+
+    def test_104_t3_an_accepted_note_lands(self):
+        """#104 T3 overrule 之前:覆核 agree 的 note(accepted)不擋 land。四問:守 accepted 的
+        note 算處置過 / 可信回歸:與下一條同一個夾具 / 既有 land 守衛沒有 note / 不加縫。"""
+        self.ready()
+        self.ticket("set", "1", "objections",
+                    json.dumps([dict(self.NOTE, disposition="accepted")], ensure_ascii=False))
+        self.approve(1, "t1-good")
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def test_104_t3_an_overruled_note_is_refused(self):
+        """#104 A5 / T3 overrule 之後:主線 `objection-overrule` 退回那一筆 accepted note,同一個
+        land 守衛拒絕。四問:守 overrule 把 note 退回阻擋 / 可信回歸:與上一條同一個夾具、同一支
+        land.sh 的拒絕訊息 / 既有 land 守衛沒有 note / 不加縫:overrule 走 CLI。"""
+        self.ready()
+        self.ticket("set", "1", "objections",
+                    json.dumps([dict(self.NOTE, disposition="accepted")], ensure_ascii=False))
+        row = self.load_ticket("1")
+        done = self.ticket("objection-overrule", "1", "--index", "0",
+                           "--expect-attempt", str(row["attempt"]),
+                           "--expect-state-version", str(row["state_version"]))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.approve(1, "t1-good")
+        landed = self.land("t1-good")
+        self.assertEqual(landed.returncode, 2, landed.stdout + landed.stderr)
+        self.assertIn("還沒處置", landed.stdout)
+
 
 class TheReviewIsBoundToThePatchAndTheFace(LandBase):
     """#98 A1 / A5(T1 的 land 那一半):review 帶 patch_id + face 時,land 經 `ticket.py` 的

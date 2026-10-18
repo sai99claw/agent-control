@@ -1101,5 +1101,160 @@ class TheReceiveHasASameLockSeam(ReviewBase):
         self.assertEqual(row["review"]["state_version"], row["state_version"])
 
 
+
+def reviewer_replying(replies, verdict="pass", then=""):
+    """假 reviewer:result 帶 `objection_replies`(#104 A3)。"""
+    return reviewer_printing(
+        "# 覆核\n① verdict:%s\n\n## result\n\n```result\n%s\n```" % (verdict, json.dumps(
+            {"ticket": "1", "role": "reviewer", "round": 1, "verdict": verdict, "rc": None,
+             "patch_sha256": None, "gate": None, "mutations": [], "objection": None,
+             "objection_replies": replies, "excluded": [], "repro": None, "memory": []},
+            ensure_ascii=False)), then=then)
+
+
+def reply(index, verdict="agree", reason="照原驗收,說明成立"):
+    return {"index": index, "verdict": verdict, "reason": reason}
+
+
+class NotesGetAReplyEach(ReviewBase):
+    """#104 A3 / A4 / T2:派工文列待回應 note 的 index / body;result 的 `objection_replies`
+    恰一筆一個 index。漏 / 重複 / 不合法 → rc=3 review.refused、不寫 review、票不動;
+    全 agree → review 與 note disposition 同一次收件(同一個 state_version);任一 disagree →
+    轉阻擋、Blocked、decision;遲到的舊回報 stale,不處置派工之後才記的 note。
+
+    票上 index 0 是一筆已處置的 blocking、index 1 / 2 是待回應的 note —— index 不是「第幾筆
+    note」,而是 objections[] 的位置。期望值寫死在這裡。"""
+
+    NOTES = ["照原驗收做完,順手補了 README 一行", "A2 的案例用假 provider,沒有呼叫真 LLM"]
+
+    def setUp(self):
+        super().setUp()
+        rows = [{"category": "blocking", "body": "舊的,處置過", "owner": "main",
+                 "evidence": "", "disposition": "rejected", "follow_up": ""}]
+        rows += [{"category": "note", "blocking": False, "body": body, "owner": "reviewer",
+                  "evidence": "", "disposition": "", "follow_up": ""} for body in self.NOTES]
+        done = self.ticket("set", "1", "objections", json.dumps(rows, ensure_ascii=False))
+        self.assertEqual(done.returncode, 0, done.stderr)
+
+    def notes(self):
+        return self.load_ticket("1")["objections"][1:]
+
+    def assert_untouched(self, done, rc):
+        self.assertEqual(done.returncode, rc, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        self.assertIsNone(row.get("review"), "不收的那一份不寫 review")
+        self.assertEqual(row["state"], "InReview")
+        self.assertEqual([note["disposition"] for note in self.notes()], ["", ""])
+        self.assertTrue(all("reply" not in note for note in self.notes()))
+        self.assertEqual(self.inbox_rows(), [])
+
+    def test_t2_all_agree_writes_review_and_dispositions_in_one_save(self):
+        """四問:守全 agree → review pass + 兩筆 accepted + reply、同一個 state_version、只發事件
+        不發頁;派工文列出 index / body / 可信回歸:index 1 / 2 與 body 寫死 / 既有 pass 案例沒有
+        note / 不加縫:假 reviewer 印 result。"""
+        model = self.set_reviewer(reviewer_replying([reply(1), reply(2)]))
+        done = self.review()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        packet = self.read(self.one("dispatch-reviewer.md"))
+        for index, body in zip((1, 2), self.NOTES):
+            self.assertIn("- index %d:%s" % (index, body), packet)
+        self.assertNotIn("@NOTES@", packet)
+        row = self.load_ticket("1")
+        self.assertEqual(row["review"]["verdict"], "pass")
+        self.assertEqual(row["review"]["state_version"], row["state_version"])
+        for note in self.notes():
+            self.assertEqual(note["disposition"], "accepted")
+            self.assertEqual(note["reply"], {"verdict": "agree", "reason": "照原驗收,說明成立",
+                                             "by": "reviewer@%s" % model})
+        said = [e for e in self.events() if e["kind"] == "ticket.state"
+                and e.get("field") in ("objections", "review")
+                and e.get("state_version") == row["state_version"]]
+        self.assertEqual(sorted(e["field"] for e in said), ["objections", "review"],
+                         "disposition 與 review 是同一次存檔")
+        self.assertIn("note-replies agree=2 disagree=0", [e.get("note") for e in said])
+        self.assertEqual(self.inbox_rows(), [], "note 的處置只發事件,不發頁")
+
+    def test_t2_a_missing_index_is_refused(self):
+        """四問:守漏回一筆 → rc=3、review.refused、票不動 / 可信回歸:只回 index 1 /
+        既有沒有 objection_replies / 不加縫。**變異 M2**:replies_problem 不查漏回 → 這一條紅。"""
+        self.set_reviewer(reviewer_replying([reply(1)]))
+        self.assert_untouched(self.review(), 3)
+        refused = self.last_event("review.refused")
+        self.assertIn("漏回 index [2]", refused.get("note", ""))
+        receipt = json.loads(self.read(self.one("review-receipt.json")))
+        self.assertIs(receipt["result"]["accepted"], False)
+        self.assertIn("objection_replies 不合格", receipt["result"]["reason"])
+
+    def test_t2_a_repeated_index_is_refused(self):
+        """四問:守同一個 index 回兩次 → rc=3 / 可信回歸:1、1、2 / 既有沒有 / 不加縫。"""
+        self.set_reviewer(reviewer_replying([reply(1), reply(1, "disagree"), reply(2)]))
+        self.assert_untouched(self.review(), 3)
+        self.assertIn("回了兩次", self.last_event("review.refused").get("note", ""))
+
+    def test_t2_one_disagree_blocks_and_asks_the_main_line(self):
+        """四問:守 agree 那一筆 accepted、disagree 那一筆轉 blocking 且 disposition 空、review
+        不寫、Blocked、decision 一頁 / 可信回歸:index 2 disagree 寫死 / 既有沒有 / 不加縫。"""
+        self.set_reviewer(reviewer_replying([reply(1), reply(2, "disagree", "其實沒做完")]))
+        done = self.review()
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        self.assertIsNone(row.get("review"))
+        self.assertEqual((row["state"], row["owner"]), ("Blocked", "main"))
+        first, second = self.notes()
+        self.assertEqual(first["disposition"], "accepted")
+        self.assertEqual((second["blocking"], second["disposition"], second["reply"]["verdict"]),
+                         (True, "", "disagree"))
+        self.assertIn("decision.asked", self.kinds())
+        pages = self.inbox_rows()
+        self.assertEqual(len(pages), 1, pages)
+        self.assertEqual(pages[0]["kind"], "decision")
+        self.assertTrue(ticket_mod.objection_problems(row), "disagree 的那一筆要擋 land")
+
+    def test_t2_a_late_report_cannot_dispose_a_note_filed_after_dispatch(self):
+        """四問:守 reviewer 跑的當下又記了一筆 note → 回報 stale(rc=4)、票上三筆 note 都沒處置、
+        review 不寫 / 可信回歸:假 reviewer 自己走 ticket.py objection 記新 note / 既有 stale 案例
+        沒有 note / 不加縫。"""
+        late = ('python3 "$AC_CONTROL_DIR/ticket.py" objection 1 --line "OBJECTION: note 遲到的新說明" '
+                '--evidence "$AC_ROOT/board/config.json" --patch "$AC_ROOT/board/config.json" '
+                '>/dev/null 2>&1\n')
+        self.set_reviewer(reviewer_replying([reply(1), reply(2)], then=late))
+        done = self.review()
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        self.assertIsNone(row.get("review"))
+        notes = row["objections"][1:]
+        self.assertEqual([note["body"] for note in notes], self.NOTES + ["遲到的新說明"])
+        self.assertEqual([note["disposition"] for note in notes], ["", "", ""])
+        self.assertIn("review.stale", self.kinds())
+
+
+class TheRepliesShape(unittest.TestCase):
+    """#104 A3:`replies_problem` 的形狀判準(純函式;CLI 那一半在 NotesGetAReplyEach)。"""
+
+    TICKET = {"objections": [
+        {"category": "note", "blocking": False, "body": "a", "disposition": ""},
+        {"category": "note", "blocking": False, "body": "b", "disposition": "accepted"},
+        {"category": "ticket-wrong", "body": "c", "disposition": ""}]}
+
+    def test_shapes(self):
+        """四問:守恰 {index:int, verdict:agree|disagree, reason:非空字串}、只認待回應的 note /
+        可信回歸:每一種壞形狀寫死 / 既有沒有 / 不加縫。"""
+        good = [{"index": 0, "verdict": "agree", "reason": "成立"}]
+        self.assertEqual(ticket_mod.replies_problem(self.TICKET, good), "")
+        bad = {"沒有這一格": None, "不是 list": {"index": 0},
+               "多一鍵": [dict(good[0], extra=1)], "少一鍵": [{"index": 0, "verdict": "agree"}],
+               "index 是字串": [dict(good[0], index="0")], "index 是 bool": [dict(good[0], index=False)],
+               "verdict 錯字": [dict(good[0], verdict="ok")], "理由空白": [dict(good[0], reason="  ")],
+               "理由不是字串": [dict(good[0], reason=1)],
+               "已處置的 note": good + [{"index": 1, "verdict": "agree", "reason": "x"}],
+               "不是 note": good + [{"index": 2, "verdict": "agree", "reason": "x"}]}
+        for name, replies in bad.items():
+            with self.subTest(name):
+                self.assertTrue(ticket_mod.replies_problem(self.TICKET, replies)
+                                .startswith(ticket_mod.REPLIES_REFUSED))
+        self.assertEqual(ticket_mod.replies_problem({"objections": []}, None), "",
+                         "票上沒有待回應的 note,result 沒有這一格也收")
+
+
 if __name__ == "__main__":
     unittest.main()

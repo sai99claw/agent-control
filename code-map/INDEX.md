@@ -74,7 +74,7 @@
 
 - 入口:[`scripts/ticket.py`](../scripts/ticket.py)
 - 主守衛:[`tests/test_ticket.py`](../tests/test_ticket.py)
-- 來源:[`tests/test_ticket_65.py`](../tests/test_ticket_65.py)
+- 來源:[`tests/test_ticket_104_verify.py`](../tests/test_ticket_104_verify.py)、[`tests/test_ticket_65.py`](../tests/test_ticket_65.py)
 - 文件:[`tickets/SCHEMA.md`](../tickets/SCHEMA.md)
 
 ## verify
@@ -83,4 +83,4 @@
 
 - 入口:[`scripts/verify-case.py`](../scripts/verify-case.py)
 - 主守衛:[`tests/test_verify_case.py`](../tests/test_verify_case.py)
-- 來源:[`scripts/verify.py`](../scripts/verify.py)、[`tests/test_verify_runner.py`](../tests/test_verify_runner.py)
+- 來源:[`scripts/verify.py`](../scripts/verify.py)、[`tests/test_ticket_104_verify.py`](../tests/test_ticket_104_verify.py)、[`tests/test_verify_runner.py`](../tests/test_verify_runner.py)

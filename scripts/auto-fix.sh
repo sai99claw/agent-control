@@ -26,10 +26,9 @@
 #
 # ## 三種停下來(每一種都寫一則 inbox,kind=decision —— 不是印一行就算)
 # 1. worker 說**票寫錯 / 需要裁示** —— 它在 EVIDENCE 裡寫一行 `OBJECTION: <類別> <理由>`;
-#    這一支把它記成票的 `objections[]`;`ticket-wrong` / `blocking` 先交給開題者判(#89,
-#    D-041,見 `triage_objection`),判得出 accepted / rejected 就接回原 session 續做、不停;
-#    判需裁示、同票第二次、開題者沒判出來、session 接不回,才票轉 Blocked、owner=main,
-#    發 `decision.asked`。
+#    這一支把它記成票的 `objections[]`;`ticket-wrong` / `blocking` 票轉 Blocked、owner=main、
+#    發 `decision.asked`,停之前開題者只補分析(#104 A2,見 `triage_objection`)。非阻擋的
+#    `note`(已交 patch、不改驗收 / 保護範圍 / 產品取捨)不停,照常收件,由覆核逐條回應。
 # 2. **三輪仍紅** —— `ticket.py round` 在第 `retry_limit+1` 輪把票轉 Blocked、owner=main。
 # 3. **failures 沒有歸因** —— rc 非零卻一條紅都解析不出來(log 壞了、跑都沒跑起來)。
 #    這一種**最危險**:它看起來像「沒有紅」,而自動派下去的 worker 會拿著一份空紅榜
@@ -861,7 +860,9 @@ print("① patch 絕對路徑 + diffstat;② 閘門指令、`Ran N`、`rc=`(**�
 print("**測試一律前景跑加 timeout** —— 把整套丟背景後結束回合 = 什麼都沒交。")
 print("")
 print("## 票寫錯 / 需要裁示怎麼說")
-print("在 EVIDENCE 裡寫**一行**:`OBJECTION: <ticket-wrong|test_defect|blocking> <一句話>`。")
+print("在 EVIDENCE 裡寫**一行**:`OBJECTION: <ticket-wrong|test_defect|blocking|note> <一句話>`。")
+print("`note` = 已交 patch、照原驗收做完的非阻擋說明(不停線,覆核逐條回應);"
+      "要改驗收 / 保護範圍 / 產品取捨的寫 note 也照阻擋收。")
 print("**不准**放寬既有斷言、不准把期望值改成程式現在印的東西(那是假綠家族)。")
 PY
         scope_section
@@ -2005,13 +2006,12 @@ run_worker() {   # $1 = 命令  $2 = 派工文;設定 WRC、WORKER_LOG 由呼叫
     [ "$WRC" -eq 0 ] || echo "auto-fix: worker 自己回非零 —— 還是看它交了什麼,不看它說什麼"
 }
 
-# ## worker 的反駁由開題者判(#89,D-041)
-# `ticket-wrong` / `blocking` 不再直接轉 Blocked 等主線:起一個開題者判(cwd 與 `AC_ROOT` 是
-# 主 repo 根 —— 它要改真票)。accepted → 接回同一個驗證者(這一輪平行起的那一個)改案例、
-# 再接回同一個 worker 在原副本續做;rejected → 附理由接回 worker 照原票做。兩種都不換輪、
-# 不丟副本、不發頁。只有四種進主線收件匣:開題者判 escalate、同票第二次反駁、開題者沒判
-# 出來、session 接不回。objections 那一筆的 disposition / triage **只由這裡**依 TRIAGE 行寫。
-opener_cost() {   # 開題者那一列(#94 C5c)。接回的 worker 跑完才寫:它讀到的票要與開題者讀到的同一份
+# ## worker 的反駁停下等主線裁示,開題者只補分析(#104 A2,D-049 ③;取代 #89 / D-041 的自動接回)
+# `ticket-wrong` / `blocking`(含降為阻擋的 `note`)一律票轉 Blocked、發 decision 給主線。停之前
+# 起一個開題者寫分析(cwd 與 `AC_ROOT` 是主 repo 根),它的 TRIAGE 判決記進那一筆的 `triage`,
+# **disposition 留空** —— 沒有人裁示,auto-fix 不自寫 accepted、不接回 session 放行。同票第二次
+# 反駁、開題者沒判出來時不分析,直接停。副本與 session 留給主線裁示後接手。
+opener_cost() {   # 開題者那一列(#94 C5c)
     [ -n "${O_COST:-}" ] || return 0
     write_cost opener "$r" "$O_MODEL" "$OLOG" "$OSECS" "$O_COST"
     O_COST=""
@@ -2030,32 +2030,9 @@ escalate_objection() {   # $1 = 字樣  $2 = 細節;票轉 Blocked、一頁、RO
     ROUND_RC=3
 }
 
-ticket_changes() {   # $1 = 開題者起跑前的票;印出改過的欄位(現況全文)
-    python3 - "$1" "$TF" <<'PY'
-import json, sys
-with open(sys.argv[1], encoding="utf-8") as handle:
-    before = json.load(handle)
-with open(sys.argv[2], encoding="utf-8") as handle:
-    after = json.load(handle)
-changed = [key for key in after if key not in ("state_version", "objections", "cost")
-           and after.get(key) != before.get(key)]
-if not changed:
-    print("(開題者沒改票面任何一格)")
-for key in changed:
-    print("### `%s`(現況全文)" % key)
-    value = after[key]
-    if isinstance(value, list):
-        for item in value:
-            print("- %s" % (item if isinstance(item, str) else json.dumps(item, ensure_ascii=False)))
-    else:
-        print(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2))
-    print("")
-PY
-}
-
-triage_objection() {   # uses r/line/category/EVIDENCE/FIX/PATCH_OUT/DISPATCH;接回了回 0,停下來回 1(ROUND_RC 已設)
+triage_objection() {   # uses r/line/category/EVIDENCE/FIX/DISPATCH;一律停下(ROUND_RC 已設)
     O_COST=""
-    # (b) 同票第二次反駁:票上已經有一筆帶 triage 的(含同一次執行裡被接回的 worker 再交的)。
+    # (b) 同票第二次反駁:票上已經有一筆帶 triage 的(上一次已由開題者分析過)。
     if python3 - "$TF" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -2117,19 +2094,6 @@ print(next((tok for tok in parts if "=" not in tok), ""))' "$OPENER_CMD")
         return 1
     fi
     echo "auto-fix: #$ID 照角色表起開題者:$O_MODEL(tool $O_TOOL;鏈第 $O_INDEX 格:$R_REASON)"
-    # (d) session 接不回:worker 那一列(與這一輪平行起的驗證者那一列)resumable 不是 true。
-    if [ "$(session_field worker resumable)" != true ]; then
-        escalate_objection "不能接回" "worker:$(session_field worker why)"
-        return 1
-    fi
-    VRESUME=""
-    if [ -n "$V_WANT" ] && [ -n "$V_PARALLEL" ] && [ -d "$VFIX/work" ]; then
-        if [ "$(session_field verifier resumable)" != true ]; then
-            escalate_objection "不能接回" "驗證者:$(session_field verifier why)"
-            return 1
-        fi
-        VRESUME=1
-    fi
 
     ev objection.triage.start --ticket "$ID" --kv round="$r" --kv category="$category"
     ODISPATCH=$(dirname "$DISPATCH")/dispatch-opener-round$r.md
@@ -2149,15 +2113,14 @@ print(next((tok for tok in parts if "=" not in tok), ""))' "$OPENER_CMD")
         echo ""
         echo "$line"
         echo ""
-        echo "- 票號:#$ID(票檔 \`$TICKETS/$ID.json\`;改票只走 \`python3 scripts/ticket.py set $ID <欄位> '<JSON>'\`)"
+        echo "- 票號:#$ID(票檔 \`$TICKETS/$ID.json\`)"
         echo "- EVIDENCE:\`$EV_REL\`"
-        echo "- accepted = 反駁成立,票面照它改;rejected = 不成立,不改票;escalate = 要使用者裁示"
-        echo "- objections 那一筆的 disposition / triage 由 auto-fix 依你的判決行寫,你不要寫"
+        echo "- 你的判決是給主線的**分析**,不是裁示:**不改票**;票一律停下等主線裁示(#104)"
+        echo "- accepted = 你認為反駁成立(票面該怎麼改寫在判決檔);rejected = 不成立;escalate = 要使用者取捨"
+        echo "- objections 那一筆的 triage 由 auto-fix 依你的判決行寫;disposition 由主線寫,你不要寫"
         echo ""
         echo "把判決寫進 $TRIAGE_REL,第一行 TRIAGE: <accepted|rejected|escalate> <一句理由>"
     } > "$ODISPATCH"
-    BEFORE=$(dirname "$DISPATCH")/ticket-before-triage-round$r.json
-    cp "$TF" "$BEFORE"
     rm -f "$TRIAGE_FILE"
     O_TIMEOUT=$(cfg opener.timeout_seconds 1800)
     OLOG=$(dirname "$DISPATCH")/opener-round$r.log
@@ -2206,108 +2169,30 @@ PY
             escalate_objection "開題者判需要裁示" "$TRIAGE_REASON"
             return 1 ;;
     esac
-    ev objection.triage.done --ticket "$ID" --kv round="$r" --kv verdict="$TRIAGE_VERDICT"
-    echo "auto-fix: 開題者判 $TRIAGE_VERDICT —— $TRIAGE_REASON"
-
-    # 第一段的證據改名留著,續做那一份不蓋掉它。
-    OBJ_EVIDENCE=$FIX/EVIDENCE-round$r-objection.md
-    mv "$EVIDENCE" "$OBJ_EVIDENCE"
-    [ ! -f "$PATCH_OUT" ] || mv "$PATCH_OUT" "$FIX/patch-round$r-objection.diff"
-    # 開題者改了票(state_version 前進):重讀現況再寫,不帶舊版本。
-    python3 - "$TF" "$ID" "$line" "$TRIAGE_VERDICT" "$TRIAGE_REASON" "$r" "$OBJ_EVIDENCE" <<'PY'
+    # 開題者的判決只是分析(#104 A2):記進那一筆的 `triage`,disposition 留空 —— 沒有人裁示,
+    # auto-fix 不自寫 accepted / rejected、不接回 session;停下發 decision 給主線。
+    python3 - "$TF" "$ID" "$line" "$TRIAGE_VERDICT" "$TRIAGE_REASON" "$r" <<'PY'
 import json, os, subprocess, sys
-path, ident, line, verdict, reason, rnd, evidence = sys.argv[1:8]
+path, ident, line, verdict, reason, rnd = sys.argv[1:7]
 sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 from ticket import objection_parts
 
 category, body = objection_parts(line)
+category = "blocking" if category == "note" else category
 with open(path, encoding="utf-8") as handle:
     rows = json.load(handle).get("objections") or []
 for row in reversed(rows):
     if isinstance(row, dict) and row.get("category") == category \
             and (row.get("body") or "") == body:
-        row["disposition"] = verdict
         row["triage"] = {"verdict": verdict, "reason": reason, "round": int(rnd),
                          "by": "auto-fix"}
-        row["evidence"] = os.path.relpath(evidence, os.environ["AC_ROOT"])
         break
 subprocess.run([sys.executable, os.path.join(os.environ["AC_CONTROL_DIR"], "ticket.py"),
                 "set", ident, "objections", json.dumps(rows, ensure_ascii=False)],
                stdout=subprocess.DEVNULL, check=False)
 PY
-
-    if [ "$TRIAGE_VERDICT" = accepted ] && [ -n "$VRESUME" ]; then
-        VRDISPATCH=$(dirname "$DISPATCH")/dispatch-verifier-resume-round$r.md
-        {
-            echo "## 被接回"
-            echo "你是 #$ID 第 $r 輪**同一個**驗證者 session,被接回在原副本續做(\`$VFIX\`)。"
-            echo "worker 提了反駁:\`$line\`"
-            echo "開題者判 accepted:$TRIAGE_REASON"
-            echo ""
-            echo "票面改過的欄位(現況全文,照它改你的案例):"
-            echo ""
-            ticket_changes "$BEFORE"
-            echo "交件照原派工文:\`patch-verify.diff\` 與 \`EVIDENCE-verifier.md\` 放在 \`$VFIX\`(第一段那兩份已改名為 *-objection.*)。"
-        } > "$VRDISPATCH"
-        [ ! -f "$VFIX/patch-verify.diff" ] || mv "$VFIX/patch-verify.diff" "$VFIX/patch-verify-objection.diff"
-        [ ! -f "$VFIX/EVIDENCE-verifier.md" ] || mv "$VFIX/EVIDENCE-verifier.md" "$VFIX/EVIDENCE-verifier-objection.md"
-        VLOG=$(dirname "$DISPATCH")/verifier-resume-round$r.log
-        echo "auto-fix: 接回第 $r 輪的驗證者(session $(session_field verifier session_id))"
-        ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" ${V_EFFORT:+--kv effort=$V_EFFORT} \
-            --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix-verifier
-        VSTART=$(date +%s)
-        VWRC=$(run_verifier "$VRDISPATCH" "$VFIX" "$r" "$VLOG" \
-            "$VERIFIER_CMD --resume $(session_field verifier session_id)")
-        verifier_done "$VWRC" "$r" "$VLOG" "$VSTART"
-        collect_from_copy "$VFIX" patch-verify.diff EVIDENCE-verifier.md
-        harvest_result "$VFIX/EVIDENCE-verifier.md" \
-            "$(dirname "$DISPATCH")/result-verifier-round$r.json" verifier "$r"
-        if guard_stop "$VLOG"; then
-            opener_cost
-            return 1
-        fi
-        VPATCH=""
-        VEVIDENCE=""
-        if [ "$VWRC" -eq 0 ] && [ -f "$VFIX/patch-verify.diff" ]; then
-            VPATCH=$VFIX/patch-verify.diff
-            VEVIDENCE=$VFIX/EVIDENCE-verifier.md
-        else
-            echo "auto-fix: 接回的驗證者沒交出 patch-verify(rc=$VWRC)—— worker 不接回" >&2
-            block "#$ID 第 $r 輪接回的驗證者沒交出 patch-verify"
-            post "驗證者沒交出 patch-verify" \
-                 "接回的驗證者(rc=$VWRC)沒交件,worker 沒有接回;讀它的 log $VLOG 與副本,不要讓主線自己改案例" \
-                 "$VFIX"
-            opener_cost
-            attempt_failed verifier-no-patch
-            ROUND_RC=5
-            return 1
-        fi
-    fi
-
-    RDISPATCH=$(dirname "$DISPATCH")/dispatch-resume-round$r.md
-    {
-        echo "## 被接回"
-        echo "你是 #$ID 第 $r 輪**同一個** worker session,被接回在原副本續做(\`$FIX\`,不換輪)。"
-        echo "你的反駁:\`$line\`"
-        if [ "$TRIAGE_VERDICT" = accepted ]; then
-            echo "開題者判 accepted:$TRIAGE_REASON"
-            echo ""
-            echo "票面改過的欄位(現況全文):"
-            echo ""
-            ticket_changes "$BEFORE"
-            echo "照改過的票做。"
-        else
-            echo "開題者判 rejected,反駁不成立:$TRIAGE_REASON"
-            echo ""
-            echo "照原票做,不要再提同一條反駁(同票第二次反駁直接轉主線)。"
-        fi
-        echo "交件照原派工文:\`patch-round$r.diff\` 與 \`EVIDENCE-round$r.md\` 放在 \`$FIX\`(第一段的 EVIDENCE 已改名為 \`EVIDENCE-round$r-objection.md\`)。"
-    } > "$RDISPATCH"
-    WORKER_LOG=$(dirname "$DISPATCH")/worker-resume-round$r.log
-    echo "auto-fix: 接回第 $r 輪的 worker(session $(session_field worker session_id),cwd $(session_field worker cwd))"
-    run_worker "$WORKER_CMD --resume $(session_field worker session_id)" "$RDISPATCH"
-    opener_cost
-    return 0
+    escalate_objection "開題者已分析,待主線裁示" "開題者判 $TRIAGE_VERDICT:$TRIAGE_REASON(只是分析,disposition 由主線寫)"
+    return 1
 }
 
 # 覆核的結局決定這一支的退出碼(#121 A6):閘門綠只是一半,review fail / missing / stale
@@ -2445,9 +2330,10 @@ print("2. `EVIDENCE-round%s.md` —— 必備五段(見角色卡),其中**已排
 print("   決定下一輪的人要不要把你查過的路再查一次。")
 print("")
 print("## 票寫錯 / 需要裁示怎麼說")
-print("在 EVIDENCE 裡寫**一行**:`OBJECTION: <ticket-wrong|test_defect|blocking> <一句話>`。")
-print("看到這一行,這支腳本會把它記成票的 `objections[]`、交給開題者判(判完可能把你接回"
-      "原副本續做;判不了才轉 Blocked 指派主線),**不會**再派下一輪。")
+print("在 EVIDENCE 裡寫**一行**:`OBJECTION: <ticket-wrong|test_defect|blocking|note> <一句話>`。")
+print("看到這一行,這支腳本會把它記成票的 `objections[]`、票轉 Blocked 等主線裁示,"
+      "**不會**再派下一輪。`note` 只用在已交 patch、照原驗收做完的非阻擋說明:不停,"
+      "由覆核逐條回應;要改驗收 / 保護範圍 / 產品取捨的寫 note 也照阻擋收。")
 print("**不准**放寬既有斷言、不准把期望值改成程式現在印的東西(那是假綠家族)。")
 PY
             scope_section
@@ -2614,8 +2500,6 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
         return 1
     fi
 
-    # 反駁判完接回的 worker(#89)交件後從這裡再走一次:同一輪、同一份副本。
-    while :; do
     if guard_stop "$WORKER_LOG"; then
         worker_cost error
         return 1
@@ -2653,12 +2537,27 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
         return 1
     fi
 
-    # 有反駁就先留著副本:`test_defect` 那條路由 dispatch_verifier 收(驗證者的副本自己從分支 +
-    # worker 的 patch 展,#107),其餘的反駁要
-    # 在原副本接回 worker / 驗證者(#89)。用**與底下那一段同一個判準**問一次,不是「反正
-    # 留著」—— 留著的那一份就是沒人收的那一份。沒有反駁 = 這一輪收件,兩份副本一起收。
+    # 反駁先收(#104 A1/A2)。**與 `apply.sh` 共用同一支收件**(#29 A4):實作在 `ticket.py
+    # objection`,它記過的同一筆不會再記第二次 —— 兩邊各記一次的話,同一句話會在票上長成兩筆,
+    # 而處置的人分不出哪一筆是哪一輪的。同一份 EVIDENCE 有阻擋類的那一行就收那一行(同 apply.sh)。
+    # 非阻擋的 `note`(rc=5)與沒有反駁走同一條路:收件、閘門、覆核逐條回應 —— 不起開題者。
+    line=""
     if [ -f "$EVIDENCE" ] && grep -q '^OBJECTION:' "$EVIDENCE"; then
-        echo "auto-fix: 先留著副本 $FIX —— 反駁要從它接回,或拿它做驗證者的副本"
+        line=$(grep '^OBJECTION:' "$EVIDENCE" | grep -Ev '^OBJECTION:[[:space:]]*note([[:space:]]|$)' | head -n 1)
+        [ -n "$line" ] || line=$(grep -m1 '^OBJECTION:' "$EVIDENCE")
+        python3 "$AC/ticket.py" objection "$ID" --line "$line" --evidence "$EVIDENCE" \
+            --patch "$PATCH_OUT" >/dev/null 2>&1
+        if [ $? -eq 5 ]; then
+            echo "auto-fix: worker 交了非阻擋的 note —— $line(照常收件,覆核逐條回應)"
+            line=""
+        fi
+    fi
+
+    # 有阻擋類的反駁就先留著副本:`test_defect` 那條路由 dispatch_verifier 收(驗證者的副本自己
+    # 從分支 + worker 的 patch 展,#107),其餘的停下等主線裁示,副本留給接手的人。用**與底下
+    # 那一段同一個判準**($line)問一次,不是「反正留著」。沒有反駁 = 這一輪收件,兩份副本一起收。
+    if [ -n "$line" ]; then
+        echo "auto-fix: 先留著副本 $FIX —— 主線裁示後從它接手,或拿它做驗證者的副本"
     else
         shed_copies "$FIX"
         [ -z "$V_WANT" ] || [ -z "$V_PARALLEL" ] || shed_copies "$VFIX"
@@ -2667,20 +2566,16 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
     CASE_FIXED=""
     WPATCH=""
     # 反駁比 patch 先看:worker 說「這張票寫錯了」而東西照樣落地,那句話等於沒人收。
-    if [ -f "$EVIDENCE" ] && grep -q '^OBJECTION:' "$EVIDENCE"; then
-        line=$(grep -m1 '^OBJECTION:' "$EVIDENCE")
+    if [ -n "$line" ]; then
         echo "auto-fix: worker 提了反駁 —— $line"
         worker_cost objection
-        # **與 `apply.sh` 共用同一支收件**(#29 A4):實作在 `ticket.py objection`,
-        # 它記過的同一筆不會再記第二次 —— 兩邊各記一次的話,同一句話會在票上長成兩筆,
-        # 而處置的人分不出哪一筆是哪一輪的。
-        python3 "$AC/ticket.py" objection "$ID" --line "$line" --evidence "$EVIDENCE" \
-            >/dev/null 2>&1 || true
+        # 走到這裡的 `note` 都是降為阻擋的那一種(沒交 patch / 要改驗收或產品取捨)。
         category=$(python3 - "$line" <<'PY'
 import sys
 rest = sys.argv[1].split(":", 1)[1].strip() if ":" in sys.argv[1] else sys.argv[1].strip()
 parts = rest.split(None, 1)
-print(parts[0] if parts and parts[0] in ("ticket-wrong", "test_defect", "blocking")
+word = parts[0] if parts else ""
+print("blocking" if word == "note" else word if word in ("ticket-wrong", "test_defect", "blocking")
       else "ticket-wrong")
 PY
 )
@@ -2704,13 +2599,11 @@ PY
                 return 1
             fi
         else
-            # 開題者判完接回了 worker:回到收件那一手;其餘(升級、接回的驗證者沒交)停在這裡。
-            triage_objection && continue
+            # 真正的反駁停下發 decision 給主線(#104 A2,D-049 ③);開題者只補分析。
+            triage_objection
             return 1
         fi
     fi
-    break
-    done
 
     if [ ! -f "$PATCH_OUT" ]; then
         echo "auto-fix: 第 $r 輪的 worker 沒有交出 patch-round$r.diff" >&2

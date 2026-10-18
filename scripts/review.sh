@@ -19,6 +19,9 @@
 #   fail   → REVIEW.md 每一行 `OBJECTION:` 記成一筆 blocking 反駁(owner=reviewer@<模型>)、
 #            票轉 Blocked、inbox 一頁 decision「覆核退回,裁示」、事件 review.fail;
 #   沒交件 → 不寫 review、票留 InReview、事件 review.missing(不發頁)。
+#   note   → 票上待回應的 note(#104)列進派工文;result 的 `objection_replies` 逐條回,與 review
+#            同一次收件寫:agree → accepted;任一 disagree → 那一筆轉阻擋、review 不寫、票 Blocked、
+#            一頁 decision。漏、重複、不合法 → review.refused、rc=3、票不動。
 # pass 發 review.pass、沒派成發 review.refused,都不發頁:收件匣只收 decision / done(D-032)。
 # 三種都在收尾寫一筆 `ticket.py cost --role reviewer`(信封 reviewer.json;D-032)。
 #
@@ -40,7 +43,8 @@
 # ## 退出碼
 #   0 pass(review 已寫)   1 fail(票 Blocked,等主線裁示)   2 用法 / 前提不成立
 #     (含規則包產不出來 —— reviewer 沒起,#74)
-#   3 沒交件               4 review 或反駁寫不進票;或 stale(見上,票沒動)
+#   3 沒交件;或 `objection_replies` 不合格(review.refused,票沒動、review 不寫,#104 A3)
+#   4 review 或反駁寫不進票;或 stale(見上,票沒動)
 #   7 reviewer 執行中撞額度 / 不可用而候選整串耗盡(票 Blocked + 一頁;批次只發頁),
 #     或下一個候選交給 Controller(`AC_RECOVERY_OWNER=controller`)接續(#132)
 set -u
@@ -509,7 +513,8 @@ start = text.find("## 交付:固定格式")
 end = text.find("## 之後誰做什麼")
 section = text[start:end if end > start else len(text)] if start >= 0 else ""
 for key, value in (("@REVIEW@", review), ("@TICKET@", ids[0]), ("@ROUND@", "1"),
-                   ("@MODEL@", model), ("@SHA@", sha)):
+                   ("@MODEL@", model), ("@SHA@", sha),
+                   ("@NOTES@", "(批次覆核不回 note —— `objection_replies` 給 `[]`)\n")):
     section = section.replace(key, value)
 print("")
 print(section.rstrip("\n"))
@@ -731,6 +736,10 @@ slots = {
     "@REVIEW@": review,
     "@MODEL@": model,
     "@ROUND@": rnd,
+    # 待回應的 note(#104 A3):一筆一行 index + 原文;result 的 objection_replies 要逐條回。
+    "@NOTES@": "".join("- index %d:%s\n" % (index, (note.get("body") or "").strip())
+                       for index, note in ticket_mod.pending_notes(row))
+               or "(沒有 —— `objection_replies` 給 `[]`)\n",
 }
 # 白名單外改動(D-H38 ①、D-050 ①):提示範圍與 `out_of_scope` 都是建議範圍,越出不擋 —— 擋的是
 # 覆核者這一段:逐檔印檔名、命中的 out_of_scope glob、各輪收件併起來的理由(`extra_reasons`)。
@@ -811,6 +820,32 @@ python3 "$AC/ticket.py" result "$REVIEW" "$RESULT_JSON" --ticket "$ID" --role re
 read_verdict "$RESULT_JSON" "$REVIEW" "$RRC"
 REL_REVIEW=$(rel "$REVIEW")
 
+# reviewer 對 note 的逐條回應(#104 A3):result 有 `objection_replies` 這一格就原樣交給收件那一手,
+# 在票鎖裡對票上待回應的 note 驗;沒有這一格就不給(票上沒有待回應的 note 才收得下)。
+eval "$(python3 - "$RESULT_JSON" <<'PY'
+import json, shlex, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        data = json.load(handle)
+except (OSError, ValueError):
+    data = {}
+has = isinstance(data, dict) and "objection_replies" in data
+replies = data.get("objection_replies") if has else None
+against = [row for row in replies if isinstance(row, dict) and row.get("verdict") == "disagree"] \
+    if isinstance(replies, list) else []
+print("REPLIES=%s" % shlex.quote(json.dumps(replies, ensure_ascii=False) if has else ""))
+print("DISAGREE=%d" % len(against))
+PY
+)"
+
+refused() {   # $1 = reviewer 交的 pass|fail  $2 = ticket.py 說的不收理由;rc=3,票沒動、review 不寫
+    echo "review: #$ID 這份覆核($1)不收 —— $2" >&2
+    ev review.refused --ticket "$ID" --kv run_id="$RUN_ID" --kv by="$BY" --kv verdict="$1" \
+        --note "$2;重派 sh scripts/review.sh $ID --run-id <新的>"
+    write_cost missing "refused:objection_replies 不合格"
+    exit 3
+}
+
 stale() {   # $1 = reviewer 交的 pass|fail  $2 = ticket.py 說的不收理由;rc=4,票沒動
     echo "review: #$ID 這份覆核($1)不收 —— $2" >&2
     ev review.stale --ticket "$ID" --kv run_id="$RUN_ID" --kv by="$BY" --kv verdict="$1" \
@@ -830,15 +865,31 @@ if [ -z "$VERDICT" ]; then
 fi
 
 if [ "$VERDICT" = "pass" ]; then
+    if [ -n "$REPLIES" ]; then
+        set -- --replies "$REPLIES"
+    else
+        set --
+    fi
     SAID=$(python3 "$AC/ticket.py" review-receive "$ID" --receipt "$RECEIPT" --verdict pass \
-        --by "$BY" --note "$REL_REVIEW" 2>&1 >/dev/null)
+        --by "$BY" --note "$REL_REVIEW" "$@" 2>&1 >/dev/null)
     RCV=$?
+    [ "$RCV" -ne 3 ] || refused pass "$SAID"
     [ "$RCV" -ne 4 ] || stale pass "$SAID"
     [ "$RCV" -eq 0 ] || {
         echo "review: #$ID 的 review 寫不進票 —— $SAID" >&2
         exit 4
     }
     write_cost pass
+    if [ "$DISAGREE" -gt 0 ]; then
+        # 不同意 worker 的 note(#104 A3):那幾筆轉阻擋、review 不寫、票轉 Blocked(收件那一手已做),
+        # 交主線裁示。
+        echo "review: #$ID 覆核不同意 $DISAGREE 筆 note($BY)—— 轉阻擋,票轉 Blocked,review 沒寫" >&2
+        ev decision.asked --ticket "$ID" --note "#$ID 覆核不同意 $DISAGREE 筆 worker 的 note($BY)"
+        post "覆核不同意 note($DISAGREE 筆)" \
+             "裁示:讀 $REL_REVIEW 與票的 objections[](reply.verdict=disagree 那幾筆已轉 blocking),逐筆處置;沒處置的阻擋項 land 與 close 都會拒絕" \
+             "$REL_REVIEW"
+        exit 1
+    fi
     echo "review: #$ID 覆核通過($BY,sha $(echo "$SHA" | cut -c1-12))—— review 已寫進票"
     ev review.pass --ticket "$ID" --kv run_id="$RUN_ID" --kv by="$BY" \
         --kv sha="$(echo "$SHA" | cut -c1-12)" --note "$REL_REVIEW"
@@ -849,9 +900,9 @@ fi
 # `review-receive`、同一把鎖、一次存檔;一行都沒有也要有一筆 —— 「fail 但沒有阻擋項」會讓
 # land 以為沒有東西擋著。
 COUNT=-1; RCV=2; SAID=""
-eval "$(python3 - "$AC" "$ID" "$REVIEW" "$BY" "$RECEIPT" "$REL_REVIEW" <<'PY'
+eval "$(python3 - "$AC" "$ID" "$REVIEW" "$BY" "$RECEIPT" "$REL_REVIEW" "$REPLIES" <<'PY'
 import shlex, subprocess, sys
-ac, ident, review, owner, receipt, note = sys.argv[1:7]
+ac, ident, review, owner, receipt, note, replies = sys.argv[1:8]
 KNOWN = ("ticket-wrong", "test_defect", "blocking")
 with open(review, encoding="utf-8", errors="replace") as handle:
     lines = [line for line in handle.read().splitlines() if line.startswith("OBJECTION:")]
@@ -869,12 +920,15 @@ argv = [sys.executable, "%s/ticket.py" % ac, "review-receive", ident, "--receipt
         "--verdict", "fail", "--by", owner, "--note", note, "--evidence", review]
 for body in bodies:
     argv += ["--objection", body]
+if replies:
+    argv += ["--replies", replies]
 done = subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
 print("COUNT=%d" % len(bodies))
 print("RCV=%d" % done.returncode)
 print("SAID=%s" % shlex.quote(done.stderr.strip()))
 PY
 )"
+[ "$RCV" -ne 3 ] || refused fail "$SAID"
 [ "$RCV" -ne 4 ] || stale fail "$SAID"
 [ "$RCV" -eq 0 ] || { echo "review: #$ID 的反駁寫不進票 —— $SAID" >&2; exit 4; }
 write_cost fail

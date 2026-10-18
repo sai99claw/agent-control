@@ -155,8 +155,8 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
 4. **三輪耗盡不是一句話,是一個狀態轉換**:`round` 在第 `retry_limit+1` 輪仍紅時把票轉 **Blocked**、`owner` 設成 `main`,並發 `ticket.attempt.failed`。舊規則只寫「報主線」,而「報了」與「沒報」在票上長得一樣。
 5. 停下來報主線的**三種**情況,每一種都寫一則收件匣(kind=decision;綠了只寫事件、不發頁,D-032):worker 的**反駁升級**
    (它在 EVIDENCE 寫一行 `OBJECTION: <類別> <理由>`,`auto-fix.sh` 把它記成 `objections[]` 的一筆;
-   `ticket-wrong` / `blocking` 先由開題者判,判得出 accepted / rejected 就接回原 session 續做、不停,
-   只有下面「實作者的反駁怎麼被收下」列的四種才停;`test_defect` 照舊派驗證者);
+   `ticket-wrong` / `blocking` 一律停、發 decision 給主線,開題者只補分析(#104);非阻擋的 `note`
+   不停;`test_defect` 照舊派驗證者 —— 見下面「實作者的反駁怎麼被收下」);
    三輪耗盡;**failures 沒有歸因**(rc 非零卻一條紅都解析不出來 —— 那一種最像「沒有紅」,
    而派下去的 worker 會拿著空紅榜去猜)。
    > ⛔ **「紅在票沒動到的檔 → 疑似他票」這一條拿掉了**(D-014)。`failures.file` 取的是 traceback 最後一個檔案,經常是既有測試或共用 helper;而產品改壞行為,本來就會紅在完全沒修改的測試檔。歸責改用**同條件的 baseline / candidate 對照**(`scripts/verify-case.py check`:同一份案例在乾淨主線與 candidate 上各跑一次)。**未完成歸因前,票由原 owner 持有** —— 不因為某個檔沒被這張票改過就轉成別人的問題。
@@ -217,23 +217,35 @@ worker 說「這張票寫錯了」以前只是一句話:沒有結構化類別、
 ```
 `category` 是 `ticket-wrong` / `blocking`(或 `blocking: true`)就是阻擋項;`disposition` 空著 → **land 拒絕、`close` 拒絕**。處置寫 `accepted` / `rejected` / `deferred` / `fixed`,要有 owner,建議附後續票號。
 
-### 誰判、什麼時候才進主線(2026-10-04,D-041,#89)
-`ticket-wrong` / `blocking` **不再直接轉 Blocked 等主線**:
-1. auto-fix 發 `objection.triage.start`,起一個**開題者**判(`board/config.json` 的 `opener.command`,時限
-   `opener.timeout_seconds`;cwd 與 `AC_ROOT` 是主 repo 根 —— 它要改真票)。派工文的 `## 判反駁` 段給它
-   反駁行、EVIDENCE 與票號;判決寫進 `reports/t<n>/triage-round<r>.md` 第一行
-   `TRIAGE: <accepted|rejected|escalate> <一句理由>`。accepted 時它只改這張票的票面。
-2. 判 accepted / rejected:auto-fix 發 `objection.triage.done`(帶 verdict),並把那一筆的 `disposition`
-   與 `triage` 子格(`{verdict, reason, round, by}`)寫上 —— **只有 auto-fix 寫這兩格**(單一寫入者)。
-   接著用 `reports/t<n>/sessions.json` 記的 session 接回(`--resume`),同一輪、原副本、不發頁:
-   accepted 先接回這一輪平行起的驗證者依票面差異改案例,再接回 worker 照新票面做;rejected 附理由接回
-   worker 照原票做。第一段的 EVIDENCE / patch 改名成 `*-objection.*` 留著。接回的驗證者沒交件 →
-   票轉 Blocked、發頁「驗證者沒交出 patch-verify」。
-3. **只有四種進主線收件匣**(票轉 Blocked、owner=main、decision 頁;也發 `objection.triage.done`,
-   verdict=escalate;副本與 session 都留著,頁上寫 session id 與副本給主線手接回;`auto-fix.sh` 退出碼 3):
-   開題者判需要裁示(escalate)、**同票第二次反駁**(票上已有一筆帶 `triage` 的)、開題者沒判出來
-   (命令缺、規則包產不出來、退出非零、逾時、沒交判決行)、session **不能接回**(`sessions.json` 那一列
-   `resumable` 不是 true)。這四種的 `disposition` 由主線處置。
+### 誰判、什麼時候才進主線(#104,D-049 ③;取代 2026-10-04 D-041 / #89 的自動接回)
+`ticket-wrong` / `blocking`(含降為阻擋的 note)**一律停下等主線裁示**,不自動接回:
+1. auto-fix 發 `objection.triage.start`,起一個**開題者**補分析(`board/config.json` 的 `opener.command`,時限
+   `opener.timeout_seconds`;cwd 與 `AC_ROOT` 是主 repo 根)。派工文的 `## 判反駁` 段給它反駁行、EVIDENCE 與票號,
+   並寫明**不改票**;判決寫進 `reports/t<n>/triage-round<r>.md` 第一行 `TRIAGE: <accepted|rejected|escalate> <一句理由>`。
+2. 判 accepted / rejected:auto-fix 只把判決寫進那一筆的 `triage` 子格(`{verdict, reason, round, by}`),
+   **disposition 留空** —— 沒有人裁示,auto-fix 不自寫 accepted、不接回 session 放行。
+3. 一律進主線收件匣(票轉 Blocked、owner=main、decision 頁;發 `objection.triage.done` verdict=escalate;
+   副本與 session 都留著,頁上寫 session id 與副本給主線裁示後接手;`auto-fix.sh` 退出碼 3)。頁的字樣分得出:
+   開題者已分析(頁上附判決與理由)、開題者判需要裁示(escalate)、**同票第二次反駁**(票上已有一筆帶 `triage`
+   的,不再起開題者)、開題者沒判出來(命令缺、規則包產不出來、退出非零、逾時、沒交判決行)。
+   `disposition` 由主線處置。
+
+### 非阻擋的 note(#104)
+`OBJECTION: note <說明>` 是「已交 patch、照原驗收做完」的說明,不是反駁:
+1. 收件(`ticket.py objection --patch <這一輪的 patch>`,auto-fix 與 apply.sh 同一支)先分流:有 patch 且說明沒有
+   提到改驗收 / 保護範圍 / 產品取捨(`NOTE_ASKS`)→ 一筆 `category=note, blocking=false, owner=reviewer`,rc=5;
+   其餘照阻擋反駁收(`category=blocking`、`demoted` 記為什麼)走上一節。同一份 EVIDENCE 另有阻擋類的 `OBJECTION:`
+   行時收那一行 —— 先看到 note 就放行,後面那一句等於沒人收。
+2. note 不停線:auto-fix 照常收件、閘門、覆核,不起開題者;`apply.sh` 記一次、不回 rc=6(同一份再收仍一筆)。
+3. 覆核派工文列每一筆待回應 note 的 index / body;reviewer 在 result 的 `objection_replies` 逐條回。`review.sh`
+   交給 `ticket.py review-receive --replies`,在收件單那一把鎖裡驗(#98 同一次 CAS):漏、重複、不合法 → rc=3、
+   `review.refused`、review 不寫、票不動;agree → `disposition=accepted`、與 review 同一次存檔;任一 disagree →
+   那一筆 `blocking=true`、review 不寫、票轉 Blocked、一頁 decision。派覆核之後才記的 note 讓 state_version 前進,
+   遲到的回報 stale(rc=4),處置不到它。note 的處置只發 `ticket.state` 事件(看板),不發 done 頁。
+4. 沒有回應的 note 與阻擋項一樣,`objection_problems` 擋 land 與 close。主線要推翻一筆 accepted 的 note:
+   `python3 scripts/ticket.py objection-overrule <id> --index <n> --expect-attempt N --expect-state-version V`
+   (`blocking=true`、清 disposition、`overruled_by=main`、票轉 Blocked;版本對不上 rc=4、票一位元組不動)。
+
 `test_defect` 那條路照舊(下一節)。
 
 ## 交接類型:`test_defect`(2026-09-21,D-014)

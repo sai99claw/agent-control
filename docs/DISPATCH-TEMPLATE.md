@@ -318,11 +318,11 @@ grep -aE "^Ran |^OK|^FAILED" run.log      # 給人看的
    5 與 6 是給**下一輪那個新的人**的:少了它們,三輪可能把同一段 code 查三次 —— 每一次都是整份上下文
    重付一遍。**有長度上限,不搬整段聊天。**
 7. 票寫錯、發現的別的問題、**案例本身錯**(oracle 或 fixture):在 EVIDENCE 寫一行
-   `OBJECTION: <ticket-wrong|test_defect|blocking> <一句話>`,收件的那一手(`apply.sh` / `auto-fix.sh`)
+   `OBJECTION: <ticket-wrong|test_defect|blocking|note> <一句話>`,收件的那一手(`apply.sh` / `auto-fix.sh`)
    把它記成票的 `objections[]` 一筆(`category` / `body` / `evidence` / `owner`),不要只寫在回報裡 ——
-   **沒被收進票的反駁,與沒有反駁長得一樣**。`ticket-wrong` / `blocking` 由 auto-fix 起開題者判;
-   判 accepted / rejected 會把你接回同一個 session 在原副本續做(續做的規矩在實作者角色卡),只有四種情況
-   才進主線收件匣 —— 流程正文在 `docs/WORKFLOW.md`「實作者的反駁怎麼被收下」。
+   **沒被收進票的反駁,與沒有反駁長得一樣**。`ticket-wrong` / `blocking` 停下等主線裁示(開題者只補分析,
+   #104);`note` 只給已交 patch、照原驗收做完的非阻擋說明(不停線,覆核逐條回應;要改驗收 / 保護範圍 /
+   產品取捨的寫 note 也照阻擋收)—— 流程正文在 `docs/WORKFLOW.md`「實作者的反駁怎麼被收下」。
    案例錯是 `category: test_defect`:**你不准放寬斷言、不准改 oracle**,auto-fix 會派獨立的驗證者修案例。
    反駁行裡的家目錄路徑收件時會換成佔位(#91 C4),仍不要寫。
 8. **記憶**:有寫就列 `memory.py note` 的那幾行(層 / 名 / 那一句 / 票號),沒寫就寫「無」。
