@@ -4,6 +4,9 @@
 `docs/DISPATCH-TEMPLATE.md` 按角色卡指的節查,不整份讀),只指路 + 這張票獨有的那幾件事。
 前言請用 `python3 scripts/rules.py pack opener --model <模型>` 產(≤ 4 KB,**不要整份貼**共用規矩);
 它非零就**不派**,照 stderr 補缺項,不要手寫前言代替(#74)。
+**模型不在這裡選**(#122,D-049 ②):`<模型>` 是 `python3 scripts/role-models.py resolve --role opener [--complexity complex] --items <N>` 印的那個
+(一般開題 opus;明確複雜 astra → fable)。主線獨立派工用 `sh scripts/new-session.sh dispatch opener --items <N> --prompt <這份填好的派工文>
+[--complexity complex]`:`<N>` = 這次要交的票數,超過候選 `dispatch_cap`(astra 5)就 rc=2、印切批建議、不起程序 —— 切成小批再派。
 
 > ⚠️ 開題者**不改產品碼與 repo 檔**(票檔、triage 檔、暫存目錄裡的實測可以;唯讀指令與 `--help` 可以跑)、
 > **不 git 寫入**(只有 docs 通道落地自己那張票檔例外)。可行性只要一個小證據,不要完整解 ——

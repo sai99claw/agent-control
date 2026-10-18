@@ -7,30 +7,19 @@
   "health_urls": {},
   "routing": {
     "main": "opus",
-    "open": "opus",
-    "design": "fable",
-    "bug": "fable",
-    "implement": "opus",
-    "implement_browser": "opus",
-    "verify": "opus",
     "second_opinion": "agy:gemini-3.8-flash-high",
     "discuss": "agy:gemini-3.8-flash-high"
   },
   "memory": {
     "unit": "chars",
     "cap_chars": 2000,
-    "consolidator": "fable",
     "raise_allowed": true,
     "applies_to": [
       "memory/model/*.md",
       "memory/role/*.md",
       "memory/project/*.md"
     ],
-    "inbox_suffix": ".inbox.md",
-    "consolidators": [
-      "fable",
-      "codex:gpt-6-astra"
-    ]
+    "inbox_suffix": ".inbox.md"
   },
   "lease_seconds": {
     "opener": 900,

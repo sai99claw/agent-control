@@ -13,7 +13,7 @@ import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import SCRIPTS, Sandbox  # noqa: E402
+from control_harness import SCRIPTS, Sandbox, write_executable  # noqa: E402
 
 
 class NewSession(Sandbox):
@@ -466,6 +466,166 @@ class A8TheReadingList(OpeningPage):
         self.assertEqual([line.split()[0] for line in part.splitlines()[1:3]],
                          ["memory/role/main.md", "memory/model/fable.inbox.md"])
         self.assertNotIn("memory/role/main.inbox.md", part, "正本不印專案疊層")
+
+
+# #122:角色表的消費端。替身 agent 記 argv、留 stdin;@MODE@ = ok / fail(退 3)/
+# quota(印 codex 額度信封退 1)/ gone(印模型不存在信封退 1)。期望的模型名寫死在這裡。
+AGENT = """#!/bin/sh
+echo "agent $*" >> "@CALLS@"
+cat > /dev/null
+case "@MODE@" in
+    fail) exit 3 ;;
+    quota) echo '{"type":"error","message":"You have hit your usage limit"}'; exit 1 ;;
+    gone) echo '{"type":"error","error":{"type":"not_found_error","message":"model gone"}}'; exit 1 ;;
+esac
+exit 0
+"""
+ASTRA = {"model": "codex:gpt-6-astra", "tool": "codex", "effort": None,
+         "effort_escalated": None, "dispatch_cap": 5}
+FABLE = {"model": "fable", "tool": "claude-code", "effort": None,
+         "effort_escalated": None, "dispatch_cap": None}
+
+
+class TheTableIsOnlyASuggestion(OpeningPage):
+    """A2:互動 session 的模型是啟動時指定的那個;角色表只印成建議,不熱切。"""
+
+    def test_a2_main_keeps_its_launch_model_and_shows_the_table_s(self):
+        """四問:守 main 不熱切、表只顯示 / 可信回歸:把 session.start 改記表的模型 → model=opus 紅 /
+        字面 fable、opus / 新案例。"""
+        done = self.run_sh("scripts/new-session.sh", "main", "fable")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        part = section(done.stdout, "角色表的建議")
+        self.assertIn("main 建議 opus", part)
+        self.assertIn("與本 session 的 fable 不同,不熱切", part)
+        self.assertEqual([row["model"] for row in self.events() if row["kind"] == "session.start"],
+                         ["fable"])
+
+    def test_a2_an_opener_sees_both_opener_chains(self):
+        self.set_role_models(opener_complex=[ASTRA, FABLE])
+        done = self.run_sh("scripts/new-session.sh", "opener", "opus", "--no-event")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        part = section(done.stdout, "角色表的建議")
+        self.assertIn("opener 建議 opus", part)
+        self.assertIn("opener_complex 建議 codex:gpt-6-astra(tool codex,每次派工上限 5)",
+                      part)
+
+    def test_a3_main_is_warned_about_a_conflicting_legacy_setting(self):
+        """四問:守 A3 舊衝突設定要警告且給遷移 / 可信回歸:拿掉主線那段 legacy → 沒有「衝突」紅 /
+        字面 routing.design / 新案例。"""
+        conf = json.loads(self.read("board/config.json"))
+        conf["routing"] = {"implement": "opus", "design": "opus"}
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False))
+        part = section(self.main(), "角色表的建議")
+        clash = [line for line in part.splitlines() if "衝突" in line]
+        self.assertEqual(len(clash), 1, part)
+        self.assertIn("routing.design", clash[0])
+        self.assertIn("legacy --write", part)
+
+
+class IndependentOpenerAndDesignDispatch(Sandbox):
+    """A1:獨立開題 / 設計派工只照角色表選人、`--items` 超過 dispatch_cap 不起程序;
+    額度 / 不可用才換下一個候選。"""
+
+    def setUp(self):
+        super().setUp()
+        self.calls = os.path.join(self.home, "agent-calls.log")
+        self.prompt = self.write("prompt.md", "# 派工文\n開三張票\n")
+
+    def arm(self, claude="ok", codex="ok"):
+        body = AGENT.replace("@CALLS@", self.calls)
+        fake = os.path.join(self.home, "fake-agent.sh")
+        write_executable(fake, body.replace("@MODE@", claude))
+        write_executable(os.path.join(self.stub_bin, "codex"), body.replace("@MODE@", codex))
+        conf = json.loads(self.read("board/config.json"))
+        conf["opener"] = {"command": "sh %s --model opus" % fake, "timeout_seconds": 60}
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+
+    def dispatch(self, role, *flags):
+        return self.run_sh("scripts/new-session.sh", "dispatch", role, "--prompt", self.prompt,
+                           *flags)
+
+    def agent_calls(self):
+        if not os.path.exists(self.calls):
+            return []
+        with open(self.calls, encoding="utf-8") as handle:
+            return [line.strip() for line in handle if line.strip()]
+
+    def started(self):
+        return [(row["role"], row["model"]) for row in self.events()
+                if row["kind"] == "agent.start"]
+
+    def test_a1_a_plain_opener_is_opus(self):
+        self.set_role_models(opener_complex=[ASTRA, FABLE])
+        self.arm()
+        done = self.dispatch("opener", "--items", "3")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        calls = self.agent_calls()
+        self.assertEqual(len(calls), 1, calls)
+        self.assertIn("--model opus", calls[0])
+        self.assertEqual(self.started(), [("opener", "opus")])
+
+    def test_a1_a_complex_opener_is_astra(self):
+        self.set_role_models(opener_complex=[ASTRA, FABLE])
+        self.arm()
+        done = self.dispatch("opener", "--items", "3", "--complexity", "complex")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        calls = self.agent_calls()
+        self.assertEqual(len(calls), 1, calls)
+        self.assertIn("exec -m gpt-6-astra", calls[0])
+        self.assertEqual(self.started(), [("opener", "codex:gpt-6-astra")])
+
+    def test_a1_design_moves_to_fable_only_on_a_codex_quota(self):
+        """四問:守「前者不可用才換下一個」/ 可信回歸:不判信封 → 停在 astra、fable 沒起紅 /
+        字面 astra 一次、fable 一次 / 新案例。"""
+        self.set_role_models(design=[ASTRA, FABLE])
+        self.arm(codex="quota")
+        done = self.dispatch("design", "--items", "2")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        calls = self.agent_calls()
+        self.assertEqual(len(calls), 2, calls)
+        self.assertIn("exec -m gpt-6-astra", calls[0])
+        self.assertIn("--model fable", calls[1])
+        self.assertEqual(self.started(), [("design", "codex:gpt-6-astra"), ("design", "fable")])
+
+    def test_a1_an_ordinary_codex_failure_does_not_move_on(self):
+        """四問:守一般失敗不換 / 可信回歸:失敗一律換 → fable 被起紅 / 字面 rc 1、1 次 / 新案例。"""
+        self.set_role_models(design=[ASTRA, FABLE])
+        self.arm(codex="fail")
+        done = self.dispatch("design", "--items", "2")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(len(self.agent_calls()), 1)
+
+    def test_a1_every_candidate_gone_stops(self):
+        self.set_role_models(design=[ASTRA, FABLE])
+        self.arm(claude="gone", codex="quota")
+        done = self.dispatch("design", "--items", "1")
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertEqual(len(self.agent_calls()), 2)
+        self.assertIn("整串耗盡", done.stderr)
+
+    def test_a1_more_items_than_the_cap_starts_nothing(self):
+        """四問:守 dispatch_cap 由 --items 擋、印切批建議、不起程序 / 可信回歸:不傳 --items 給
+        resolve → rc 0、astra 被起紅 / 字面 ≤5 / 新案例。"""
+        self.set_role_models(opener_complex=[ASTRA, FABLE])
+        self.arm()
+        done = self.dispatch("opener", "--items", "6", "--complexity", "complex")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("請切成 ≤5 的批", done.stderr)
+        self.assertEqual(self.agent_calls(), [])
+        self.assertEqual(self.started(), [])
+
+    def test_a1_a_fable_candidate_has_no_cap(self):
+        self.set_role_models(opener_complex=[FABLE])
+        self.arm()
+        done = self.dispatch("opener", "--items", "40", "--complexity", "complex")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.started(), [("opener", "fable")])
+
+    def test_a1_items_is_required(self):
+        self.arm()
+        done = self.dispatch("opener")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertEqual(self.agent_calls(), [])
 
 
 if __name__ == "__main__":

@@ -2066,22 +2066,49 @@ PY
         escalate_objection "同票第二次反駁" "第一次已由開題者判過,這一次不再起開題者"
         return 1
     fi
-    OPENER_CMD=$(with_envelope "$(cfg opener.command "")")
-    eval "$(python3 - "$OPENER_CMD" "$MODEL" <<'PY'
-import shlex, sys
+    # 判反駁的開題者也查角色表(#122 A2):一般開題 opener 鏈,不帶票的 model(#131 A10 只套
+    # worker 鏈)、也不帶票的 complexity(那是 worker 工作的標記,不是這次開題)。命令照
+    # `ticket.py agent-command`,base 是 config 的 `opener.command`(權限與輸出格式在那裡)。
+    O_BASE=$(cfg opener.command "")
+    O_EXHAUSTED=""
+    while :; do
+        _tc=$T_COMPLEXITY
+        T_COMPLEXITY=""
+        route opener ${O_EXHAUSTED:+--exhausted-index "$O_EXHAUSTED"}
+        O_RC=$?
+        T_COMPLEXITY=$_tc
+        case $O_RC in
+            2) ev objection.triage.start --ticket "$ID" --kv round="$r" --kv category="$category"
+               escalate_objection "角色表選不出開題者" "role-models.py resolve --role opener rc=2"
+               return 1 ;;
+            3) ev objection.triage.start --ticket "$ID" --kv round="$r" --kv category="$category"
+               escalate_objection "開題者候選整串耗盡" "$R_REASON"
+               return 1 ;;
+        esac
+        O_MODEL=$R_MODEL
+        O_TOOL=$R_TOOL
+        O_INDEX=$R_INDEX
+        O_HEAD=""
+        OPENER_CMD=""
+        if [ -n "$O_BASE" ]; then
+            OPENER_CMD=$(python3 "$AC/ticket.py" agent-command --model "$R_MODEL" --tool "$R_TOOL" \
+                    --base "$(with_envelope "$O_BASE")" --swap-model --effort "$R_EFFORT") || OPENER_CMD=""
+            O_HEAD=$(python3 -c 'import shlex,sys
 try:
     parts = shlex.split(sys.argv[1])
 except ValueError:
     parts = sys.argv[1].split()
-model = sys.argv[2]
-for i, tok in enumerate(parts):
-    if tok == "--model" and i + 1 < len(parts):
-        model = parts[i + 1]
+print(next((tok for tok in parts if "=" not in tok), ""))' "$OPENER_CMD")
+        fi
+        # codex / agy 候選的 CLI 不在 = 這一格此刻不能用,換下一格(與 pick_worker 同一手)。
+        if [ -n "$O_HEAD" ] && ! command -v "$O_HEAD" >/dev/null 2>&1 \
+                && { [ "$O_TOOL" = codex ] || [ "$O_TOOL" = agy ]; }; then
+            echo "auto-fix: #$ID 開題者候選第 $O_INDEX 格 $O_MODEL 的 $O_HEAD 不在 PATH —— 換下一格" >&2
+            O_EXHAUSTED=$O_INDEX
+            continue
+        fi
         break
-print("O_HEAD=%s" % shlex.quote(next((tok for tok in parts if "=" not in tok), "")))
-print("O_MODEL=%s" % shlex.quote(model))
-PY
-)"
+    done
     # (c) 開題者命令缺:config 沒有 opener 區塊,或命令找不到。
     if [ -z "$O_HEAD" ] || ! command -v "$O_HEAD" >/dev/null 2>&1; then
         ev objection.triage.start --ticket "$ID" --kv round="$r" --kv category="$category"
@@ -2089,6 +2116,7 @@ PY
             "board/config.json 的 opener.command ${O_HEAD:+($O_HEAD)找不到}${O_HEAD:-沒設}"
         return 1
     fi
+    echo "auto-fix: #$ID 照角色表起開題者:$O_MODEL(tool $O_TOOL;鏈第 $O_INDEX 格:$R_REASON)"
     # (d) session 接不回:worker 那一列(與這一輪平行起的驗證者那一列)resumable 不是 true。
     if [ "$(session_field worker resumable)" != true ]; then
         escalate_objection "不能接回" "worker:$(session_field worker why)"

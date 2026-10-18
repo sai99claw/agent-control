@@ -8,6 +8,7 @@
     scripts/role-models.py resolve --role opener --complexity complex --items 5
     scripts/role-models.py classify --evidence <log> --rc 1
     scripts/role-models.py check
+    scripts/role-models.py legacy [--config board/config.json] [--write]
 
 ## 退出碼
 `resolve`:0 = 選到一個候選;3 = 整串耗盡(JSON 照印,`exhausted=true`,消費端停下發一次
@@ -22,6 +23,13 @@ decision,不回任意 Opus);2 = 不派(表無效、未知角色、旗標錯、�
 
 表只管派出去的 agent;`main` 那一列只是開 session 時的建議,不熱切已在跑的互動 session。
 這一支只讀表、不動票、不發事件 —— 純選路;派工、記帳、發 decision 是消費端的事(#121/#122)。
+
+## 舊設定(#122 A3)
+`board/config.json` 的 `routing.main/open/implement/implement_browser/verify/design/bug` 與
+`memory.consolidator/consolidators` 被這張表取代,不再是選路來源。`legacy` 列出還在的那幾格,
+與表的首選不同的標「衝突」;`legacy --write` 是那一次明確遷移:刪掉它們、別的一格不動。
+`routing.main` 例外留著 —— `session-hook.sh` 拿它當 session 的模型標籤(不是選路),刪了
+開場就記成 unknown。`routing.second_opinion / discuss` 沒有 D-049 裁示的角色,不在名單上。
 """
 
 import argparse
@@ -301,6 +309,81 @@ def resolve(table, role, complexity=None, repair_round=0, last_red=False, items=
     return 0, result(name, ";".join(why), index=start, row=row, effort=effort)
 
 
+# ------------------------------------------------------------------ 舊設定
+
+
+# 被表取代的設定格 → 表裡對應的角色(None = 表裡沒有這個角色,留著也沒人讀)。
+LEGACY_KEYS = (
+    (("routing", "main"), "main"),
+    (("routing", "open"), "opener"),
+    (("routing", "implement"), "worker"),
+    (("routing", "implement_browser"), "worker"),
+    (("routing", "verify"), "verifier"),
+    (("routing", "design"), "design"),
+    (("routing", "bug"), None),
+    (("memory", "consolidator"), "consolidator"),
+    (("memory", "consolidators"), "consolidator"),
+)
+# session-hook.sh 的模型標籤讀它;遷移不刪(見檔頭)。
+LEGACY_KEPT = (("routing", "main"),)
+
+
+def legacy_rows(conf, table):
+    """config 裡還在的舊選路格,一格一筆 `(鍵, 值, 表的首選, 衝突?)`。"""
+    rows = []
+    for path, role in LEGACY_KEYS:
+        section = conf.get(path[0]) if isinstance(conf, dict) else None
+        if not isinstance(section, dict) or path[1] not in section:
+            continue
+        value = section[path[1]]
+        chain = table["roles"].get(role) if role else None
+        first = chain[0]["model"] if chain else None
+        given = [str(m) for m in value] if isinstance(value, list) else [str(value)]
+        rows.append((".".join(path), value, first, first is None or given != [first]))
+    return rows
+
+
+def legacy(conf_path, table, write):
+    """`legacy` 的本體:印每一格,衝突的標出來;`write` 才刪(LEGACY_KEPT 除外)。回 rc。"""
+    try:
+        with open(conf_path, encoding="utf-8") as handle:
+            conf = json.load(handle)
+    except (OSError, ValueError) as exc:
+        return fail("讀不到 %s(%s)" % (conf_path, exc))
+    rows = legacy_rows(conf, table)
+    if not rows:
+        print("role-models: %s 沒有被角色表取代的舊選路設定" % conf_path)
+        return 0
+    for key, value, first, clash in rows:
+        said = json.dumps(value, ensure_ascii=False)
+        if tuple(key.split(".")) in LEGACY_KEPT and not clash:
+            print("role-models: %s=%s 只當 session-hook 的模型標籤,不選路 —— 遷移保留" % (key, said))
+        elif first is None:
+            print("role-models: 舊設定 %s=%s —— 角色表沒有對應角色,已不讀" % (key, said))
+        elif clash:
+            print("role-models: 舊設定衝突 %s=%s,角色表首選 %s —— 派工只照角色表" % (key, said, first))
+        else:
+            print("role-models: 舊設定 %s=%s 與角色表首選相同 —— 已不讀" % (key, said))
+    if not write:
+        print("role-models: 一次遷移:python3 scripts/role-models.py legacy --write"
+              "(刪掉上面那幾格;routing.main 留給 session-hook 當模型標籤)")
+        return 0
+    dropped = []
+    for key, _, _, _ in rows:
+        path = tuple(key.split("."))
+        if path in LEGACY_KEPT:
+            continue
+        del conf[path[0]][path[1]]
+        dropped.append(key)
+    tmp = conf_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(conf, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    os.replace(tmp, conf_path)
+    print("role-models: 已遷移 %s:刪掉 %s" % (conf_path, " ".join(dropped) or "(無)"))
+    return 0
+
+
 # ------------------------------------------------------------------ CLI
 
 
@@ -331,6 +414,10 @@ def parser():
     cls.add_argument("--evidence", required=True, metavar="LOG")
     cls.add_argument("--rc", type=int, required=True)
     verbs.add_parser("check", help="只驗表;壞了 rc=2 並逐條列出")
+    old = verbs.add_parser("legacy", help="列出 config 裡被角色表取代的舊選路設定;--write 一次遷移")
+    old.add_argument("--config", metavar="PATH",
+                     help="設定檔路徑(預設 <repo 根>/board/config.json)")
+    old.add_argument("--write", action="store_true", help="刪掉那幾格(routing.main 除外)")
     return top
 
 
@@ -360,6 +447,9 @@ def main(argv):
     if args.verb == "check":
         print("role-models: 表可用(%d 個角色)" % len(table["roles"]))
         return 0
+    if args.verb == "legacy":
+        return legacy(args.config or os.path.join(event.repo_root(), "board", "config.json"),
+                      table, args.write)
     detail = "第 %s 格由呼叫端標記(未附 --evidence;標記前要先用 classify 判)" % args.exhausted_index
     if args.evidence is not None:
         if args.exhausted_index is None or args.evidence_rc is None:

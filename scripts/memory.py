@@ -756,7 +756,20 @@ def consolidators(conf):
     if isinstance(many, list) and many:
         return [str(x) for x in many if x]
     one = conf.get("consolidator")
-    return [str(one)] if one else []
+    if one:
+        return [str(one)]
+    # 舊設定遷移掉之後(#122 A3)票面的名字照角色表 consolidator 鏈的首選;起誰仍由
+    # consolidate-memory.sh 當場 resolve,這一格只是票面寫給人看的。
+    import importlib.util                                  # noqa: PLC0415
+    spec = importlib.util.spec_from_file_location(
+        "role_models", os.path.join(os.path.dirname(os.path.abspath(__file__)), "role-models.py"))
+    role_models = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(role_models)
+        chain = role_models.load_table(role_models.table_path(ticket.root()))["roles"]
+    except (OSError, ValueError):
+        return []
+    return [row["model"] for row in chain.get(CONSOLIDATOR_ROLE, [])[:1]]
 
 
 def open_ticket_for(rel, reasons, out):
@@ -765,17 +778,35 @@ def open_ticket_for(rel, reasons, out):
     who = consolidators(conf)
     model = ", ".join(who)
     inbox = inbox_path(rel, suffix)
+    # 一個模型 = 單一高階整理者(D-043 / D-049 ②),consolidate-memory.sh 起一個 session。
+    if len(who) == 1:
+        who_says = "**%s 單獨整理**(D-043 / D-049 ②,角色表 consolidator 鏈);討論檔寫得出每一行處置的理由" % model
+        how = ("派工照 `templates/dispatch-consolidator.md`(主線開場由 `consolidate-memory.sh` 照角色表起"
+               "**一個** session;規則包 `python3 scripts/rules.py pack consolidator --model <模型>`,"
+               "角色卡 `memory/role/consolidator.md`)。"
+               "先 `python3 scripts/memory.py snapshot %s` 把兩行抄進討論檔頭,逐行寫處置,最後跑 "
+               "`python3 scripts/memory.py consolidate %s --candidate <新版> "
+               "--discussion <啟動端記下的那一份討論檔>`。" % (rel, rel))
+    else:
+        who_says = "**兩個不同的模型**參與討論(%s);討論檔列得出雙方的分歧" \
+                   % (model or "名單見 board/role-models.json 的 consolidator 鏈")
+        how = ("派工照 `templates/dispatch-consolidator.md`(兩個模型各開一個 session、各貼一次;"
+               "規則包 `python3 scripts/rules.py pack consolidator --model <模型>`,"
+               "角色卡 `memory/role/consolidator.md`)。"
+               "先 `python3 scripts/memory.py snapshot %s` 把兩行抄進各自的討論檔頭,"
+               "再互讀寫分歧,最後一位跑 "
+               "`python3 scripts/memory.py consolidate %s --candidate <新版> "
+               "--discussion <討論檔 A> --discussion <討論檔 B>`。" % (rel, rel))
     argv = [
         "--subject", "整理 %s(%s)" % (rel, ";".join(reasons)),
         "--objective",
         "由 %s 照 docs/DISCUSSION.md 的格式討論後壓縮 %s,或者寫出理由把上限提高"
-        "(D-006「老師帶學生」、D-007「沒有討論檔不准整理」、D-013「兩個模型、只留原則」);"
+        "(D-006「老師帶學生」、D-007「沒有討論檔不准整理」、D-013「兩個模型或一個高階模型、只留原則」);"
         "處置 %s 在 snapshot 那一刻的每一行" % (model or "兩個不同的模型", rel, inbox),
         "--acceptance", "`scripts/memory.py check` 對 %s 退出碼 0" % rel,
         "--acceptance", "`scripts/memory.py check-stale --read-only --file %s` 沒有 needs-review"
                         % rel,
-        "--acceptance", "**兩個不同的模型**參與討論(%s);討論檔列得出雙方的分歧"
-                        % (model or "名單見 board/config.json 的 memory.consolidators"),
+        "--acceptance", who_says,
         "--acceptance", "整理後只留**具體的原則、行為準則、思考方式**;**不直接寫案例**,"
                         "案例用票號當來源引用(例:「快照層只畫說得出處的畫面(#585)」)",
         "--acceptance", "案例原文留在紀錄類文件(DECISIONS 歸檔 / HANDOFF 歷史),記憶檔只留指路",
@@ -788,17 +819,10 @@ def open_ticket_for(rel, reasons, out):
         "--out-of-scope", "docs/DECISIONS.md",
         "--allowed-write-path", rel,
         "--allowed-write-path", inbox,
-        # 怎麼派這兩個 session:**一句可以貼的指令住在範本裡**(#29 A8,G8)。以前
+        # 怎麼派 session:**一句可以貼的指令住在範本裡**(#29 A8,G8)。以前
         # 票面只寫「由兩個模型討論」,而「兩個 session 怎麼被派、討論檔誰先寫」沒有
         # 任何一份檔說得出來 —— 一張沒有人知道怎麼執行的票,與沒有開票長得一樣。
-        "--outline",
-        "派工照 `templates/dispatch-consolidator.md`(兩個模型各開一個 session、各貼一次;"
-        "規則包 `python3 scripts/rules.py pack consolidator --model <模型>`,"
-        "角色卡 `memory/role/consolidator.md`)。"
-        "先 `python3 scripts/memory.py snapshot %s` 把兩行抄進各自的討論檔頭,"
-        "再互讀寫分歧,最後一位跑 "
-        "`python3 scripts/memory.py consolidate %s --candidate <新版> "
-        "--discussion <討論檔 A> --discussion <討論檔 B>`。" % (rel, rel),
+        "--outline", how,
         "--role", CONSOLIDATOR_ROLE,
         "--model", model,
         "--tool", "claude-code",
@@ -1113,6 +1137,26 @@ def launcher_mismatch(root, rel, talks):
     return ""
 
 
+def launcher_recorded(root, rel, talk):
+    """單一整理者的那一份討論檔(#122,D-043):整理票的 attempt_history 裡有一筆是
+    consolidate-memory.sh 記下的這個檔、模型與檔頭一致 → True。人手派的沒有這一筆。"""
+    ident, role = open_consolidation(rel)
+    if not ident or role != CONSOLIDATOR_ROLE:
+        return False
+    try:
+        rows = ticket.load(ident).get("attempt_history") or []
+    except (OSError, ValueError):
+        return False
+    name = talk["name"]
+    where = os.path.normpath(os.path.relpath(
+        name if os.path.isabs(name) else os.path.join(root, name), root))
+    return any(isinstance(row, dict) and row.get("discussion")
+               and os.path.normpath(row["discussion"]) == where
+               and talk["model"] in (str(row.get("model") or ""),
+                                     str(row.get("model") or "").split(":")[-1])
+               for row in rows)
+
+
 def refuse(message):
     sys.stderr.write("memory: %s\n" % message)
     return 2
@@ -1173,18 +1217,23 @@ def cmd_consolidate(argv):
         if problem:
             return refuse(problem)
         talks.append(talk)
-    if len(talks) != 2:
+    # 單一整理者(#122,D-043 / D-049 ②)只認啟動端記下的那一份;其餘照舊兩份兩模型。
+    single = len(talks) == 1 and launcher_recorded(
+        root, os.path.relpath(rel if os.path.isabs(rel) else os.path.join(root, rel), root),
+        talks[0])
+    if len(talks) != 2 and not single:
         return refuse("consolidate 要**兩份** --discussion(兩個不同的 model 各一份,D-013);"
-                      "這次給了 %d 份" % len(talks))
+                      "這次給了 %d 份(一份只收 consolidate-memory.sh 記在整理票 attempt_history 的那一份)"
+                      % len(talks))
     if not candidate.strip():
         return refuse("consolidate 要 --candidate <檔> —— 整理後的新版正文;"
                       "主檔只會被換成驗過的候選,不會被就地改")
     models = [talk["model"] for talk in talks]
-    if models[0] == models[1]:
+    if not single and models[0] == models[1]:
         return refuse("兩份討論檔的 model 都是 %s —— 一個模型自己整理不算數(D-013)"
                       % models[0])
     if (talks[0]["source_lines"], talks[0]["source_sha256"]) \
-            != (talks[1]["source_lines"], talks[1]["source_sha256"]):
+            != (talks[-1]["source_lines"], talks[-1]["source_sha256"]):
         return refuse("兩份討論檔的 source_lines / source_sha256 不同 —— 兩位討論的不是同一份"
                       "inbox 快照,重跑 `memory.py snapshot` 後對齊")
     count = talks[0]["source_lines"]

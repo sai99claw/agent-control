@@ -103,7 +103,7 @@ CTRL=$DEST/scripts/control
 CTRL_MANIFEST=$CTRL/.sync-manifest
 NEW_SCRIPTS=""
 # 專案端要用到的那幾支 + 它們 import 的。順序無所謂,名單本身要進 code review。
-SCRIPT_LIST="status.py verify-case.py apply.sh auto-fix.sh review.sh inbox.py rules.py memory.py event.py ticket.py verify.py new-session.sh heartbeat.sh session-hook.sh wtbase.sh guard-main.sh repo-map.py agent-cost-hook.py transcript-cost.py"
+SCRIPT_LIST="status.py verify-case.py apply.sh auto-fix.sh review.sh inbox.py rules.py memory.py event.py ticket.py verify.py new-session.sh heartbeat.sh session-hook.sh wtbase.sh guard-main.sh repo-map.py agent-cost-hook.py transcript-cost.py role-models.py"
 # 這兩支**不是入口**,是被上面那幾支 `import` 的(見檔頭)。查「接了沒」時要把它們挑掉
 # —— 對一支本來就沒有人直接叫的檔說「沒有呼叫點」,是一句假話,而假警報會讓真的那幾條
 # 被一起跳過(`docs/DISPATCH-TEMPLATE.md` §5.7)。
@@ -113,7 +113,8 @@ SCRIPT_LIST="status.py verify-case.py apply.sh auto-fix.sh review.sh inbox.py ru
 # `heartbeat.sh` 由 `new-session.sh` 叫、`new-session.sh` 由 `session-hook.sh` 叫(#39):
 # 專案要接的只有 hook 那一支(接在 `.claude/settings.json`),另外兩支是它帶進來的。
 # `transcript-cost.py` 由 `agent-cost-hook.py` 載入(#95),專案要接的只有 hook 那一支。
-DEPENDENCY_ONLY="event.py ticket.py heartbeat.sh new-session.sh transcript-cost.py"
+# `role-models.py` 是共用選路器(#116 / #122 A4):auto-fix / review / new-session 叫它,專案不直接叫。
+DEPENDENCY_ONLY="event.py ticket.py heartbeat.sh new-session.sh transcript-cost.py role-models.py"
 # 派工範本(D-032):`review.sh` 逐字讀 `templates/dispatch-reviewer.md`,驗證者派工讀
 # `dispatch-verifier.md`。以前要專案自己從 A 複製一份 —— 複製的那一份從此不會跟著 A 改。
 TPL=$DEST/templates
@@ -123,6 +124,51 @@ NEW_TEMPLATES=""
 # 明名單退場(D-010 調度員退場):這幾份**從沒進過 manifest**(manifest 比它們晚生),
 # 所以「不在名單上就退場」那一段永遠碰不到它們。名單以外、manifest 以外的檔一個都不碰。
 RETIRED_ROLES="dispatcher.md"
+
+# 角色表(#122 A4):`board/role-models.json` 是**政策**,不是產出物 —— 專案可以有自己的表。
+# 沒有就裝 A 的初表;有且合法就保留、說出與 A 不同的角色;不合法就**整個不同步**(一個檔都
+# 不寫、不記 .synced-from)—— 派工照樣會拒絕它,而同步若照常完成,「腳本同步了」會被讀成
+# 「政策也同步了」。驗表用 A 這一支 role-models.py,與同步過去的那一支是同一份。
+TABLE=$DEST/board/role-models.json
+TABLE_SRC=$HERE/board/role-models.json
+if [ ! -f "$TABLE_SRC" ] || [ ! -f "$HERE/scripts/role-models.py" ]; then
+  TABLE_SAID="沒處理(agent-control 缺 board/role-models.json 或 scripts/role-models.py)"
+  echo "sync: 主 repo 沒有 board/role-models.json 或 scripts/role-models.py —— 角色表不處理(先修主 repo)" >&2
+elif [ -f "$TABLE" ]; then
+  if ! TABLE_CHECK=$(python3 "$HERE/scripts/role-models.py" --table "$TABLE" check 2>&1); then
+    echo "sync: 專案的 board/role-models.json 無效 —— 不同步(派工會拒絕它,不會退回 config 的舊設定):" >&2
+    printf '%s\n' "$TABLE_CHECK" | sed 's/^/sync:   /' >&2
+    echo "sync:   修好它,或刪掉它讓這一支裝 agent-control 的初表;這一次沒有寫任何檔、沒有記 .synced-from" >&2
+    exit 2
+  fi
+  TABLE_DIFF=$(python3 - "$TABLE" "$TABLE_SRC" <<'PY'
+import json, sys
+mine, theirs = (json.load(open(path, encoding="utf-8")) for path in sys.argv[1:3])
+roles = sorted(set(mine["roles"]) | set(theirs["roles"]))
+diff = [role for role in roles if mine["roles"].get(role) != theirs["roles"].get(role)]
+if mine.get("policies") != theirs.get("policies"):
+    diff.append("policies")
+print(" ".join(diff))
+PY
+)
+  if [ -n "$TABLE_DIFF" ]; then
+    TABLE_SAID="專案自訂(與 agent-control 不同:$TABLE_DIFF)"
+    echo "sync: 保留專案自訂的 $TABLE(合法);與 agent-control 的表不同:$TABLE_DIFF"
+    echo "sync:   要換成 agent-control 的表:刪掉它再同步一次(這一支不覆蓋專案的政策)"
+  else
+    TABLE_SAID="與 agent-control 相同"
+    echo "sync: $TABLE 與 agent-control 的表相同,不動"
+  fi
+else
+  TABLE_SAID="安裝 agent-control 的初表"
+  if [ "$DRY" = "--dry-run" ]; then
+    echo "sync: (dry-run) $TABLE(安裝初表)"
+  else
+    mkdir -p "$DEST/board"
+    cp "$TABLE_SRC" "$TABLE"
+    echo "sync: $TABLE(安裝 agent-control 的初表)"
+  fi
+fi
 
 copy_dir() {  # $1 = 來源目錄  $2 = 目的目錄  $3 = manifest 前綴
   mkdir -p "$2"
@@ -330,6 +376,8 @@ done
 
 # 專案端有什麼:說得出對**這個**專案成立的下一句。
 echo "sync: 完成(來源 $SRC_SHA)。"
+# .synced-from 記的只是控制腳本的來源版本(#103);選路政策看角色表那一行,不看它。
+echo "sync: 角色表 board/role-models.json:$TABLE_SAID —— .synced-from 只代表腳本版本,不代表政策已同步"
 if [ -x "$DEST/scripts/land-ticket.sh" ] || [ -f "$DEST/scripts/land-ticket.sh" ]; then
   # 「落地入口:」那一行與 apply.sh 的收尾同一條判準(#87 A27):有 land-ticket.sh 就是它。
   echo "落地入口:sh scripts/land-ticket.sh docs \"sync agent-control $SRC_SHA\" docs/roles/*.md docs/roles/model/*.md"

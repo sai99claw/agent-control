@@ -10,6 +10,9 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 ## 開題者角色操作細節
 
 ### 票的欄位契約與派工範本
+- 誰起(#122):角色表 `opener`(opus);明確複雜的開題 `opener_complex`(astra → fable)。主線獨立派工:
+  `sh scripts/new-session.sh dispatch opener --items <這次要交的票數> --prompt <派工文> [--complexity complex]`;
+  超過候選 `dispatch_cap` rc=2、印切批建議、不起程序(切批由主線做);auto-fix 判反駁的開題者走 `opener` 鏈,不帶票的 model / complexity。
 - 欄位契約:`tickets/SCHEMA.md`;開題者派工範本:`templates/dispatch-opener.md`。
 - outline 欄:`python3 scripts/ticket.py create --outline '<≤300 字摘要與建議順序>'`。
 - 自己那張票檔的落地(D-025 ③,唯一的 git 例外):
@@ -148,16 +151,23 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 
 ## 整理者角色操作細節
 - 範本:`templates/dispatch-consolidator.md`(自動由 `scripts/consolidate-memory.sh` 填、`new-session.sh` 主線開場起;人工整份複製)。
+- 誰整理(#122,D-043 / D-049 ②):角色表 `consolidator` 鏈(`python3 scripts/role-models.py resolve --role consolidator`,現在只有 fable),
+  `consolidate-memory.sh` 只起**一個** session、沒有雙模型互讀;票上的 `model` 與 `memory.consolidator(s)` 都不參與。
+  候選額度用完 / 不可用才換下一格;fable 用不了 = 整串耗盡 → 票 NeedsDecision、一頁 decision,不改派別的模型。每次起都記一列 cost(role=consolidator)。
 - 開場快照:`python3 scripts/memory.py snapshot <檔>`;逐條來源分類:`python3 scripts/memory.py check-stale --read-only --file <檔>`。
-- 討論檔:`discussions/<date>-memory-<模型>.md`,格式 `docs/DISCUSSION.md`。
-- 合併(兩模型那條路):`python3 scripts/memory.py consolidate <檔> --candidate <候選檔> --discussion <A> --discussion <B>`;
-  少一份討論、兩份 model 相同、快照對不上、缺某一行的處置、候選超過上限都拒絕且不動檔(D-007 / D-013)。
-- 單一高階模型那條路(D-013 ②、D-043):開 role=worker 的整理票、`model` 寫那個模型,auto-fix 照票起(#91 C7),交 patch;不叫 `consolidate`。
+- 討論檔:`discussions/<date>-memory-<模型>.md`,格式 `docs/DISCUSSION.md`;啟動端把路徑與模型記進整理票 `attempt_history`。
+- 合併(單一整理者):`python3 scripts/memory.py consolidate <檔> --candidate <候選檔> --discussion <啟動端記下的那一份>`;
+  一份討論只收 `attempt_history` 有記、檔頭 model 一致的那一份。人工派(沒有啟動端紀錄)照舊要兩份不同 model:
+  `--discussion <A> --discussion <B>`。快照對不上、缺某一行的處置、候選超過上限都拒絕且不動檔(D-007 / D-013)。
+- 角色卡通用規則要改(例:卡上「單一高階模型走 worker 管線」那段):寫一行進 `memory/role/consolidator.inbox.md`,由整理流程消化;
+  worker 不自改模型政策(`board/role-models.json`、`docs/ROLES.md` 模型表)。
 - 收工檢查:`python3 scripts/memory.py check`(對那一份 rc 0);整理票 `ticket.py close <票號>`。
 - 分層契約與 lint:`memory/role/README.md`;`python3 scripts/memory.py lint --file <檔> --json`。
 - 討論檔目前不在 `land.sh docs` 的前綴白名單(`tickets/ docs/ memory/`),整理票的 `discussions/` 要走票的一般落地(#52)。
 
 ## 設計 session 操作細節
+- 誰起(#122):角色表 `design` 鏈 astra → fable。主線用 `sh scripts/new-session.sh dispatch design --items <這次要交的份數> --prompt <派工文>` 派;
+  超過候選 `dispatch_cap`(astra 5)rc=2、印切批建議、不起程序;astra 額度用完 / 不可用才換 fable;整串耗盡 rc=3 停下。
 - 讀:`docs/DECISIONS.md` 相關的那幾條、`docs/DESIGN.md`(總綱)與題目對到的 `docs/DESIGN-<題>.md`。
 - 交:一份 `docs/DESIGN-<題>.md`,固定段見 `docs/DESIGN.md` §設計文件的固定段。
 - 回報標記「實測 / 讀 code 推的」:`docs/DISPATCH-TEMPLATE.md` §6.4。

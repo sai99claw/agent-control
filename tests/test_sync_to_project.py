@@ -782,5 +782,89 @@ class TheSourceVersionIsRecorded(unittest.TestCase):
         self.assertEqual(len(lines), 1, r.stdout + r.stderr)
 
 
+class TheRoleTableIsSynced(unittest.TestCase):
+    """#122 A4:共用選路器與 `board/role-models.json` 跟著同步。沒有表 → 裝 A 的初表;專案的
+    合法自訂表 → 保留並說出差異;非法表 → 整個不同步(不寫檔、不動 .synced-from)。
+    oracle 是 A 這一份表的位元組與夾具自己寫的表。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.d = self.tmp.name
+        write_config(self.d)
+        with open(os.path.join(HERE, "board", "role-models.json"), "rb") as f:
+            self.a_table = f.read()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @property
+    def table(self):
+        return os.path.join(self.d, "board", "role-models.json")
+
+    def put_table(self, data):
+        with open(self.table, "w", encoding="utf-8") as f:
+            f.write(json.dumps(data, ensure_ascii=False, indent=2))
+        with open(self.table, "rb") as f:
+            return f.read()
+
+    def test_a4_an_empty_project_gets_the_table_and_the_router(self):
+        """四問:守沒有表就裝初表、選路器進 scripts/control / 可信回歸:M2 只同步腳本不裝表 →
+        表不在紅 / 字面 A 的位元組 / 新案例。"""
+        r = sync(self.d)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        with open(self.table, "rb") as f:
+            self.assertEqual(f.read(), self.a_table)
+        ctrl = os.path.join(self.d, "scripts", "control")
+        self.assertTrue(os.path.isfile(os.path.join(ctrl, "role-models.py")))
+        with open(os.path.join(ctrl, ".sync-manifest")) as f:
+            self.assertIn("role-models.py", f.read().splitlines())
+        said = [x for x in r.stdout.splitlines() if x.startswith("sync: 角色表")]
+        self.assertEqual(len(said), 1, r.stdout)
+        self.assertIn("安裝 agent-control 的初表", said[0])
+        self.assertIn("不代表政策已同步", said[0])
+
+    def test_a4_a_legal_custom_table_is_kept_and_its_difference_named(self):
+        """四問:守合法自訂表不覆蓋 / 可信回歸:無條件 cp → 位元組變成 A 的紅 / 字面 opener / 新案例。"""
+        data = json.loads(self.a_table)
+        data["roles"]["opener"] = [dict(data["roles"]["opener"][0], model="fable")]
+        mine = self.put_table(data)
+        r = sync(self.d)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        with open(self.table, "rb") as f:
+            self.assertEqual(f.read(), mine, "專案的合法自訂表被蓋掉")
+        kept = [x for x in r.stdout.splitlines() if "保留專案自訂" in x]
+        self.assertEqual(len(kept), 1, r.stdout)
+        self.assertIn("opener", kept[0])
+        self.assertNotIn("worker", kept[0], "只列不同的角色")
+
+    def test_a4_an_illegal_table_refuses_the_whole_sync(self):
+        """四問:守非法表報錯、不靜默同步、不動 source marker / 可信回歸:不驗表 → rc 0、腳本被寫紅 /
+        字面 rc 2、schema_version / 新案例。"""
+        data = json.loads(self.a_table)
+        data["schema_version"] = 9
+        mine = self.put_table(data)
+        ctrl = os.path.join(self.d, "scripts", "control")
+        os.makedirs(ctrl)
+        marker = os.path.join(ctrl, ".synced-from")
+        with open(marker, "wb") as f:
+            f.write(b"0" * 40 + b"\n")
+        r = sync(self.d)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("board/role-models.json 無效", r.stderr)
+        self.assertIn("schema_version", r.stderr)
+        with open(self.table, "rb") as f:
+            self.assertEqual(f.read(), mine)
+        with open(marker, "rb") as f:
+            self.assertEqual(f.read(), b"0" * 40 + b"\n", "source marker 被動了")
+        self.assertEqual(os.listdir(ctrl), [".synced-from"], "非法表還是寫了腳本")
+        self.assertFalse(os.path.exists(os.path.join(self.d, "docs", "roles")))
+
+    def test_a4_dry_run_does_not_install_the_table(self):
+        r = sync(self.d, "--dry-run")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse(os.path.exists(self.table))
+        self.assertIn("(dry-run) %s(安裝初表)" % self.table, r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
