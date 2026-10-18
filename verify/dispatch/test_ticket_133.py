@@ -59,7 +59,7 @@ REPORT_LOGS = {
     # 第 25176 行是頂層 {"event":"result",...,"error":"authentication failed..."} 信封，信封優先會判 auth_config。
     "t131-mid-unittest": (
         "OpenAI Codex v0.153.4\n--------\n"
-        "workdir: /Users/franksai/ai_workspace/claude_workspace/agent-control-wt/fix-t131/round1/work\n"
+        "workdir: ../agent-control-wt/fix-t131/round1/work\n"
         " exited 1 in 91332ms:\nF..E..\n"
         "======================================================================\n"
         "ERROR: test_a8_an_agy_verifier_uses_the_same_prompt_cwd_and_devnull_shape "
