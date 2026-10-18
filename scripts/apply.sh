@@ -601,6 +601,15 @@ PY
     [ -z "$B_BAD" ] || { echo "$B_BAD" | sed 's/^/apply:   /' >&2; echo "apply: 套完的檔案與 patch 說的對不上" >&2; exit 4; }
     git -C "$WT" apply -p1 --reverse --check "$B_PATCH" 2>/dev/null \
         || { echo "apply: 反著套回不去 —— 工作樹上的改動不等於這份 patch" >&2; exit 4; }
+    # code-map 索引重產(#129):與單票那一支第 7 步同一份 `code_map_regen`;產出物有變就併進
+    # 這一個 batch fix commit。範圍在 `git apply` 之前已經對 patch 量完,產出物不進 extra_paths。
+    B_REGEN=""
+    code_map_regen "$WT"
+    case $? in
+        0)  B_REGEN="regen: repo-map build (code-map/index.json, code-map/INDEX.md)"
+            echo "apply: 批次 code-map 索引重產了,併進同一個 batch fix commit" ;;
+        2)  echo "apply: 批次 code-map 索引沒重產(repo-map build 非零,上面 repo-map: 那幾行)—— 不擋套用,閘門的機械格會攔" >&2 ;;
+    esac
     git -C "$WT" add -A || { echo "apply: git add 失敗" >&2; exit 2; }
     for name in $B_RESIDUE; do
         git -C "$WT" reset -q -- "$name" || { echo "apply: git reset $name 失敗" >&2; exit 2; }
@@ -614,7 +623,8 @@ PY
 batch: $B_STAMP
 tickets: $B_TAGS
 patch: $(basename "$B_PATCH") sha256=$B_SHA
-round: $B_ROUND" || { echo "apply: git commit 失敗" >&2; exit 2; }
+round: $B_ROUND${B_REGEN:+
+$B_REGEN}" || { echo "apply: git commit 失敗" >&2; exit 2; }
     echo "apply: 批次 $B_TAGS -> $B_BR $(git -C "$WT" rev-parse --short HEAD) 已 commit(各票分支與票檔都沒動)"
     if [ -f "$B_EVIDENCE" ]; then
         python3 "$AC/memory.py" harvest "$B_EVIDENCE" \
@@ -1128,19 +1138,14 @@ PY
 #    `repo-map.py build`:交件新增 / 改名 / 刪掉已管理的檔而沒重生,以前要閘門擋下一整輪。
 #    產出物有變才併進同一個 commit、訊息多一行 `regen:`;它們不是交件改的,不算 extra_paths
 #    (範圍在上面第 5 步已經量完)。build 非零**不擋**:印一行、照樣 commit,攔它是閘門的事。
-#    `-B`:跑完緊接著 `git add -A`,不留位元組碼。
+#    判準與動作只有一份:`wtbase.sh` 的 `code_map_regen`(`--batch` 與 land 也叫它,#129)。
 REGEN=""
-if [ -f "$WT/scripts/repo-map.py" ] && [ -f "$WT/code-map/catalog.json" ]; then
-    MAP_BEFORE=$(cat "$WT/code-map/index.json" "$WT/code-map/INDEX.md" 2>/dev/null | cksum)
-    if python3 -B "$WT/scripts/repo-map.py" --root "$WT" build >/dev/null; then
-        if [ "$(cat "$WT/code-map/index.json" "$WT/code-map/INDEX.md" 2>/dev/null | cksum)" != "$MAP_BEFORE" ]; then
-            REGEN="regen: repo-map build (code-map/index.json, code-map/INDEX.md)"
-            echo "apply: code-map 索引重產了,併進同一個 commit"
-        fi
-    else
-        echo "apply: code-map 索引沒重產(repo-map build 非零,上面 repo-map: 那幾行)—— 不擋套用,閘門的機械格會攔" >&2
-    fi
-fi
+code_map_regen "$WT"
+case $? in
+    0)  REGEN="regen: repo-map build (code-map/index.json, code-map/INDEX.md)"
+        echo "apply: code-map 索引重產了,併進同一個 commit" ;;
+    2)  echo "apply: code-map 索引沒重產(repo-map build 非零,上面 repo-map: 那幾行)—— 不擋套用,閘門的機械格會攔" >&2 ;;
+esac
 
 # 8. commit。訊息帶票號與 patch 的 sha256 —— 下一個人要答得出「分支上這一手是哪一份
 #    patch 做的」,而路徑答不出來(重套過的那一份路徑一樣、內容不一樣)。

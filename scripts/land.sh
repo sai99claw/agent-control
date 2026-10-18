@@ -616,8 +616,52 @@ git -C "$ROOT" worktree add -q -b "$BR" "$WT" "$MAIN" || {
 # 這一次落地接在哪一個 commit 後面(#127 A1(a)):land.pass 帶它,越界守衛拿它把這一段
 # 接在 agent 起跑時的 HEAD(或上一段的終點)後面。
 LAND_BASE=$(git -C "$WT" rev-parse HEAD)
+
+# 合併結果的 code-map 索引重產(#129)。每條分支自己 build 過、各自 check 綠,合起來仍會過期
+# (兩邊各新增一支已管理的檔),以前要全套閘門的機械格退回一整輪。判準與 build 是 `wtbase.sh`
+# 的 `code_map_regen`(apply 那兩處同一份);這裡**只** stage 兩支產出物,stage 完工作樹還有
+# 別的差異(改動或新檔)= build 動到 code-map/ 以外 —— 不 commit、worktree 留著、rc 3。
+# 退出碼:0 產出物已 stage(可能沒變);1 build 非零(不 commit,交閘門的機械格攔)。
+land_regen() {
+    code_map_regen "$WT"
+    if [ $? -eq 2 ]; then
+        echo "land: 合併後索引重產失敗(repo-map build 非零,上面 repo-map: 那幾行)—— 沒有 regen commit,交全套閘門的機械格攔"
+        return 1
+    fi
+    git -C "$WT" add -- code-map/index.json code-map/INDEX.md
+    stray=$(git -C "$WT" diff --name-only; git -C "$WT" ls-files --others --exclude-standard)
+    [ -n "$stray" ] || return 0
+    echo "land: 重產動到 code-map/ 以外 —— repo-map build 寫了 code-map/index.json、INDEX.md 以外的檔,不 commit;worktree 留在 $WT:"
+    echo "$stray" | sed 's/^/land:   /'
+    ev land.fail --note "合併後重產動到 code-map/ 以外" --kv "stamp=$STAMP"
+    land_cost_all fail
+    status_start_all
+    status_phase_all merge 3 "合併後重產動到 code-map/ 以外"
+    status_done_all 3 "合併後重產動到 code-map/ 以外,一條都沒進主線"
+    inbox_all "合併後重產動到 code-map/ 以外" \
+        "repo-map build 寫了 code-map/index.json、INDEX.md 以外的檔:看 worktree 裡那幾個檔、修好產生器再重跑 land" "$WT"
+    exit 3
+}
+
+REGEN_FAILED=""
 for b in "$@"; do
     if ! git -C "$WT" merge -q --no-ff "$b" -m "Merge $b (land $STAMP)"; then
+        # 衝突**全部**落在兩支產出物裡:取主線那一側、重產、完成這一個 merge commit。
+        # 任何其他檔衝突照舊停 —— 產出物以外的衝突要人判。
+        unmerged=$(git -C "$WT" diff --name-only --diff-filter=U)
+        others=$(echo "$unmerged" | grep -vx -e code-map/index.json -e code-map/INDEX.md)
+        if [ -n "$unmerged" ] && [ -z "$others" ] && code_map_present "$WT" \
+            && git -C "$WT" checkout -q --ours -- $unmerged && git -C "$WT" add -- $unmerged; then
+            if land_regen; then
+                git -C "$WT" commit -q -m "Merge $b (land $STAMP)" \
+                    -m "regen: repo-map build (land $STAMP)" || exit 2
+                echo "land: 合併後 code-map 索引過期 —— 合 $b 時只有產出物衝突,重產進 merge commit $(git -C "$WT" rev-parse --short HEAD)"
+            else
+                REGEN_FAILED=1
+                git -C "$WT" commit -q -m "Merge $b (land $STAMP)" || exit 2
+            fi
+            continue
+        fi
         echo "land: 合 $b 時衝突 —— worktree 留在 $WT,自己看"
         ev land.fail --note "合 $b 時衝突" --kv "stamp=$STAMP"
         land_cost_all fail
@@ -628,6 +672,17 @@ for b in "$@"; do
         exit 3
     fi
 done
+# 合併結果過期 → 重產成 land 分支上一個 commit,跟著同一次 ff-only 進主線。LAND_BASE 留在合併之前,
+# land.pass 的 main_before..sha 涵蓋這一個 commit(#127 的越界守衛照樣接得上)。
+if [ -z "$REGEN_FAILED" ] && code_map_present "$WT" \
+    && ! python3 -B "$WT/scripts/repo-map.py" --root "$WT" check >/dev/null 2>&1; then
+    if land_regen && ! git -C "$WT" diff --cached --quiet; then
+        git -C "$WT" commit -q -m "regen: repo-map build (land $STAMP)" \
+            -m "Merged result's code-map index was stale; rebuilt by land.sh before the full gate." \
+            || exit 2
+        echo "land: 合併後 code-map 索引過期 —— 重產成 $BR 上一個 commit $(git -C "$WT" rev-parse --short HEAD),跟著這一次落地進 $MAIN"
+    fi
+fi
 COUNT=$(git -C "$WT" log --oneline "$MAIN..HEAD" | wc -l | tr -d ' ')
 echo "land: $COUNT 個 commit 串好,跑全套 -> $WT/gate.log"
 status_start_all

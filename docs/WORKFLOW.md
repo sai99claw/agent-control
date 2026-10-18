@@ -32,6 +32,8 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
   候選樹有 `scripts/repo-map.py` 與 `code-map/catalog.json` 時,commit 之前跑一次 `repo-map.py build`(#96):
   `code-map/index.json` / `INDEX.md` 有變就併進同一個 commit、訊息多一行 `regen: repo-map build …`,
   不算 `extra_paths`;build 非零不擋套用、印一行「索引沒重產」,攔它是 `gate.sh` 機械格的事。
+  `apply.sh --batch` 同一個判準、同一份實作(#129,`scripts/wtbase.sh` 的 `code_map_regen`):有變就併進那一個
+  batch fix commit(訊息多一行 `regen: repo-map build …`、輸出「批次 code-map 索引重產」),build 非零照樣 commit。
   **`land.sh` 收的還是已經有 commit 的分支** —— 它不套 patch(`docs/ROLES.md`)。
 - **同時只准一個 `land.sh`**:`land.sh` 自己用一把 `mkdir` 鎖擋(`.land.lock`),拿不到就指名現在是誰在落地。land 期間主線不得往主線提交。發版期間不開 land。
 
@@ -47,6 +49,12 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 7. **分支新增的路徑撞到主線工作樹的未追蹤檔** → 拒絕(#69,rc=2):判準是 git 自己的 —— `git diff --name-only --no-renames --diff-filter=A <main>...<branch>` 的路徑,丟給 `git ls-files --others --exclude-standard` 有輸出(未追蹤且未被 ignore);不擋的話 ff-only 會在九分鐘全套之後被 git 拒絕。
    下一步:逐一點名撞到的路徑,由人自己移走或 commit 進主線再重跑 land —— land **不替人搬、不刪**(那是使用者的檔)。
 8. 依序合到 `land/<ts>` worktree,跑全套(`scripts/gate.sh --full`),綠才 `--ff-only` 推主線;紅則主線不動、worktree 留著給人看。
+   **合併結果的 code-map 索引**(#129,判準同 apply 的 `code_map_regen`):合完、跑全套之前 `repo-map.py --root <worktree> check`
+   非零 → build,只把 `code-map/index.json`、`INDEX.md` 收成 land 分支上一個 commit(首行 `regen: repo-map build (land <stamp>)`,
+   印「合併後 code-map 索引過期」),跟著同一次 ff-only 進主線;`land.pass` 的 `main_before` 仍是合併前的主線頭。
+   merge 衝突**只**落在這兩支產出物 → 取主線那一側、build、完成那個 merge commit;含其他檔照舊 rc 3。
+   build 之後還有產出物以外的差異 → 不 commit、`land.fail`、rc 3、worktree 留著(「重產動到 code-map/ 以外」);
+   build 非零 → 不 commit、印「合併後索引重產失敗」,交全套閘門的機械格攔。
    ff-only 進不去分兩種話(#69):**主線動了**(HEAD 與開 worktree 前記的不同,印 `<前> -> <後>` 兩個短 sha,下一步 rebase 後重跑閘門)vs **主線沒動、git 拒絕**(git 的 stderr 逐行原話印進 stdout 與 status.json,rebase 是錯的下一步)。
 9. **gate / merge / push 各記一筆**(狀態檔的 `phases`),而且**每一條退出路徑都寫終態**,
    要人動手的(拒收 / 串接衝突 / 全套紅 / 沒合進主線 / push 沒成功)同時寫一則 `reports/inbox/<票號>-<run_id>.md`,kind=decision(D-015 / D-032:終態去叫醒主線,主線不輪詢)。
