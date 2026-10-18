@@ -115,9 +115,10 @@ if role == "worker":
         write(os.path.join(work, "work", "tests", "test_thing.py"),
               THING % ("2" if mode == "red" else "1"))
         handin("patch-round%s.diff" % r)
-        write(evidence, "# 第 %s 輪(%s)\n已排除的假設:沒有\n%s" % (
-            r, mode, {"note": plan.get("note", "") + "\n",
-                      "note-ask": plan.get("note_ask", "") + "\n"}.get(mode, "")))
+        write(evidence, "# 第 %s 輪(%s)\n已排除的假設:沒有\n" % (r, mode))
+        if mode in ("fix-note", "fix-note-ask"):
+            with open(evidence, "a", encoding="utf-8") as handle:
+                handle.write(plan["note" if mode == "fix-note" else "note_ask"] + "\n")
 elif role == "verifier":
     if mode == "handin":
         write(os.path.join(work, "work", "verify", "example", "test_ticket_1.py"), @CASE@)
@@ -427,7 +428,7 @@ class NotesDoNotStopTheLine(TriageBase):
     def test_t1_a_note_with_a_green_patch_goes_on_to_the_gate(self):
         """四問:守 note+patch → 一筆 note(blocking=false)、沒有開題者、閘門綠進 InReview、
         副本收掉 / 可信回歸:開題者呼叫數看替身自己記的 JSONL / 既有測試沒有 note / 不加縫。"""
-        self.arm(worker_first="note")
+        self.arm(worker_first="fix-note")
         done = self.auto_fix("--no-review")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertTrue(self.went_in_review())
@@ -459,7 +460,7 @@ class NotesDoNotStopTheLine(TriageBase):
         """四問:守有綠 patch 的 note 要產品取捨 → 照阻擋收、停下 / 可信回歸:替身交 fix 的
         patch / 既有沒有 note / 不加縫。**變異 M1**:`note_blocker` 不看 NOTE_ASKS(有 patch 一律
         降級)→ 這一條紅(rc=0)。"""
-        self.assert_demoted("note-ask", "取捨")
+        self.assert_demoted("fix-note-ask", "取捨")
 
 
 class OnlyTheseGoToTheMainLine(TriageBase):
