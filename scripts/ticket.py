@@ -17,6 +17,7 @@
     scripts/ticket.py cost 7 --role worker --round 1 --from-envelope <信封>  # 不動 state_version
     scripts/ticket.py agent-command --model codex:gpt-6-astra --tool codex  # 依 model/tool 起什麼
     scripts/ticket.py lint <id>                   # 票面機械檢查;唯讀,不動 state_version
+    scripts/ticket.py plan 7 --run "<test_plan 的命令>"  # 主線基底的拋棄式樹實跑,記 plan_ran
     scripts/ticket.py review-request 7 --run-id … --sha … --receipt …   # 派覆核那一刻的收件單
     scripts/ticket.py review-receive 7 --receipt … --verdict pass|fail|missing  # 鎖裡比收件單才收
     scripts/ticket.py objection-overrule 7 --index 2 --expect-attempt 1 --expect-state-version 12
@@ -32,10 +33,12 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import event  # noqa: E402  同一個目錄,共用 repo 根與設定的判讀
@@ -367,7 +370,9 @@ USAGE = {
     "agent-command": ("scripts/ticket.py agent-command --model M [--tool T] "
                       "[--base \"<worker.command>\"] [--swap-model] [--effort E]"),
     "lint": ("scripts/ticket.py lint <id>  # 唯讀:needs_verifier / verify_strings / 標籤 / "
-             "info_homes / 本票驗證者案例檔"),
+             "info_homes / 本票驗證者案例檔 / 還沒過 Ready 的票的 plan_ran"),
+    "plan": ("scripts/ticket.py plan <id> --run \"<命令>\" [--base <主線 sha>]  "
+             "# 拋棄式樹實跑,命令結束後記 plan_ran(非零照記)"),
     "review-request": ("scripts/ticket.py review-request <id> --run-id <run_id> --sha <分支頭> "
                        "--receipt <reports/t<id>/<run_id>/review-receipt.json>"),
     "review-receive": ("scripts/ticket.py review-receive <id> --receipt <收件單> "
@@ -414,6 +419,7 @@ python3 scripts/ticket.py set 7 allowed_write_paths '["scripts/land.sh", "tests/
                       "python3 scripts/ticket.py agent-command --model fable --tool claude-code \\\n"
                       "  --base \"claude -p --model opus\" --swap-model"),
     "lint": "python3 scripts/ticket.py lint 7",
+    "plan": "python3 scripts/ticket.py plan 7 --run \"python3 -m unittest tests.test_ticket\"",
     "review-request": ("python3 scripts/ticket.py review-request 7 --run-id 20261017-101500-1 \\\n"
                        "  --sha a1b2c3d --receipt reports/t7/20261017-101500-1/review-receipt.json"),
     "review-receive": ("python3 scripts/ticket.py review-receive 7 \\\n"
@@ -484,6 +490,9 @@ def known_flags(verb):
                 ("--swap-model", "非 codex 時把 --base 裡 --model 的值換成 --model", False, False),
                 ("--effort", "推理強度;claude-code 轉 --effort、codex 轉 -c model_reasoning_effort",
                  False, False)]
+    if verb == "plan":
+        return [("--run", "要實跑的命令(一支測試腳本可含基底與變異兩步);rc 照實記", False, True),
+                ("--base", "主線上的 sha;不給 = 主線的頭", False, False)]
     if verb == "review-request":
         return [("--run-id", "這一次覆核的 run_id", False, True),
                 ("--sha", "派工那一刻的分支頭(review 綁的 sha,patch_id 從它算)", False, True),
@@ -729,6 +738,12 @@ def cmd_create(argv, stdin=sys.stdin, stdout=sys.stdout):
             for line in bad:
                 sys.stderr.write("ticket: 開不出 #%s —— %s\n" % (ticket["id"], line))
             return 2
+        # 實作票開不成 Ready(#106 A3):票還沒有,`plan_ran` 就還沒跑過。
+        unready = plan_ran_problem(ticket) if ticket.get("state") == "Ready" else ""
+        if unready:
+            sys.stderr.write("ticket: 開不出 Ready 的票 —— %s(先開 Draft,實跑完再 set state Ready)\n"
+                             % unready)
+            return 2
         path = save(ticket)
     event.emit("ticket.created", ticket=ticket["id"], role=ticket["role"],
                model=ticket["model"], state=ticket["state"])
@@ -864,6 +879,9 @@ def cmd_set(argv):
     if field in ("id", "state_version"):
         sys.stderr.write("ticket: %s 不給改(id 是身分,state_version 是這支腳本自己數的)\n" % field)
         return 2
+    if field == "plan_ran":
+        sys.stderr.write("ticket: %s\n" % PLAN_REFUSED)
+        return 2
     try:
         value = parse_value(field, raw)
     except ValueError as exc:
@@ -915,6 +933,10 @@ def cmd_set(argv):
                     for line in bad:
                         sys.stderr.write("ticket: #%s 這一筆不收 —— %s\n" % (ident, line))
                     return 1
+            unready = plan_ran_problem(ticket) if to_ready else ""
+            if unready:
+                sys.stderr.write("ticket: 不轉 Ready —— %s\n" % unready)
+                return 1
             before = ticket.get(field)
             ticket[field] = value
             # **每次變更 +1**,不管改的是哪一格:遲到的回報拿舊的 state_version 回來,
@@ -976,6 +998,307 @@ def patch_id(tip):
                           capture_output=True, timeout=GIT_TIMEOUT)
     words = done.stdout.decode("utf-8", "replace").split() if done.returncode == 0 else []
     return words[0] if words else ""
+
+
+# ------------------------------------------------------- 開題實跑(#106)
+
+
+# `plan_ran` 恰這五鍵(#106 A1),唯一的票面證據欄;只有 `record_plan_ran` 寫,`set` 不收。
+PLAN_KEYS = ("sha", "cmd", "rc", "at", "dirty")
+PLAN_EVIDENCE_KEYS = ("schema_version", "plan_ran", "face", "input_digest", "inputs", "log_refs")
+PLAN_REFUSED = ("plan_ran 只由 `ticket.py plan <id> --run <命令>`(或 status.py regression-red 的"
+                "同一個 recorder)在命令跑完之後寫,不開放 set(#106 A1)")
+PLAN_PENDING = "待 plan 實跑"
+# 子行程不繼承這三格:繼承了,拋棄式樹裡的腳本讀寫的是正式票庫(#44)。
+PLAN_DROP_ENV = ("AC_ROOT", "AC_TICKETS_DIR", "AC_CONTROL_DIR")
+# test_plan 裡「指到測試」的寫法:`tests/test_x.py`、`test_x`、`test_x.T.test_y` 的模組那一段。
+TEST_REF = re.compile(r"(?<![\w./-])((?:[\w.-]+/)*test_\w+)(?:\.py)?(?![\w/])", re.ASCII)
+# 已經過了 Ready 那一關的狀態:lint 不追溯舊 Ready(#106 A3),其餘照 `set state Ready` 的判準。
+READY_OR_LATER = ("Ready", "Running", "InReview", "IntegrationQueued", "Integrating",
+                  "Done", "Cancelled")
+
+
+class PlanStale(Exception):
+    """CAS 對不上:實跑期間 `plan_ran` 或票面被別人改了。票不動,evidence 留著(不可變)。"""
+
+
+def planning_dir(ident):
+    reports = event.config(root()).get("reports_dir") or "reports"
+    return os.path.join(root(), reports, "t%s" % ident, "planning")
+
+
+def plan_evidence_path(ident, at):
+    """唯一 evidence 路徑:`reports/t<id>/planning/<sha256(at)>.json`。**不挑最近一份猜**。"""
+    return os.path.join(planning_dir(ident),
+                        "%s.json" % hashlib.sha256(at.encode("utf-8")).hexdigest())
+
+
+def full_sha(rev):
+    done = git(["rev-parse", "--verify", "-q", "%s^{commit}" % rev]) if rev else None
+    return done.stdout.strip() if done is not None and done.returncode == 0 else ""
+
+
+def tree_blobs(rev):
+    """`rev` 上每個檔 → blob id。`-z`:非 ASCII 路徑不被逃逸(同 `main_files`)。"""
+    done = git(["ls-tree", "-r", "-z", rev])
+    out = {}
+    if done.returncode != 0:
+        return out
+    for row in done.stdout.split("\0"):
+        meta, tab, name = row.partition("\t")
+        if tab:
+            out[name] = meta.split()[-1]
+    return out
+
+
+def test_refs(text, trees):
+    """test_plan 指到的測試 → `(路徑, 解析不出的引用)`。帶目錄的認那個確切路徑;裸名 `test_x`
+    認任一棵樹裡檔名是 `test_x.py` 的每一個。**解析不出不猜無關**(D-050 ③),交給呼叫的人當證明不了。"""
+    names = set()
+    for tree in trees:
+        names |= set(tree)
+    found, missing = [], []
+    for ref in TEST_REF.findall(text or ""):
+        if "/" in ref:
+            hits = [ref + ".py"] if ref + ".py" in names else []
+        else:
+            hits = sorted(name for name in names if name.rsplit("/", 1)[-1] == ref + ".py")
+        if not hits and ref not in missing:
+            missing.append(ref)
+        found += [hit for hit in hits if hit not in found]
+    return found, missing
+
+
+def plan_inputs(ticket, sha):
+    """比對範圍(#106 input_scope):`hint_scope(票)` ∪ test_plan 指到的測試。
+    回 `(inputs, test_plan 指到的測試, 解析不出的引用, sha 上的 blob 表)`。"""
+    blobs = tree_blobs(sha)
+    tests, missing = test_refs(ticket.get("test_plan"), [blobs, tree_blobs(main_branch())])
+    inputs = hint_scope(ticket)
+    inputs += [name for name in tests if name not in inputs]
+    return inputs, tests, missing, blobs
+
+
+def input_digest(inputs, blobs):
+    rows = sorted([name, blob] for name, blob in blobs.items() if matches_any(name, inputs))
+    return hashlib.sha256(json.dumps({"inputs": inputs, "files": rows}, sort_keys=True)
+                          .encode("utf-8")).hexdigest()
+
+
+def plan_shape_problem(plan):
+    if not isinstance(plan, dict) or set(plan) != set(PLAN_KEYS):
+        return "plan_ran 要恰為 {%s} 五鍵,現在是 %s" % (", ".join(PLAN_KEYS),
+                                                  json.dumps(plan, ensure_ascii=False))
+    if not all(isinstance(plan[key], str) and plan[key] for key in ("sha", "cmd", "at")):
+        return "plan_ran 的 sha / cmd / at 要是非空字串"
+    if not isinstance(plan["rc"], int) or isinstance(plan["rc"], bool):
+        return "plan_ran.rc 要是整數,現在是 %s" % json.dumps(plan["rc"])
+    if not isinstance(plan["dirty"], bool):
+        return "plan_ran.dirty 要是布林,現在是 %s" % json.dumps(plan["dirty"])
+    return ""
+
+
+def record_plan_ran(ident, sha, cmd, rc, dirty, logs, seen):
+    """**唯一**寫 `plan_ran` 的地方(#106 A1):命令跑完之後才叫,`ticket.py plan` 與
+    `status.py regression-red` 共用。`seen` 是實跑**前**讀到的票。先寫不可變 evidence(`O_EXCL`,
+    `at` 撞名就換一個),再在票鎖裡 CAS:鎖裡的 `plan_ran` 或票面指紋與 `seen` 不同,就
+    `PlanStale`,票一個位元都不動。回 `(plan_ran, evidence 路徑)`。"""
+    inputs, _, _, blobs = plan_inputs(seen, sha)
+    os.makedirs(planning_dir(ident), exist_ok=True)
+    while True:
+        at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+        path = plan_evidence_path(ident, at)
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            break
+        except FileExistsError:
+            time.sleep(0.001)
+    refs = []
+    for serial, log in enumerate(logs, 1):
+        target = "%s-%d.log" % (path[:-len(".json")], serial)
+        shutil.copyfile(log, target)
+        refs.append(os.path.relpath(target, root()))
+    plan = {"sha": sha, "cmd": cmd, "rc": int(rc), "at": at, "dirty": bool(dirty)}
+    evidence = {"schema_version": 1, "plan_ran": plan, "face": face(seen),
+                "input_digest": input_digest(inputs, blobs), "inputs": inputs, "log_refs": refs}
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(evidence, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    with Lock():
+        fresh = load(ident)
+        if fresh.get("plan_ran") != seen.get("plan_ran"):
+            raise PlanStale("#%s 的 plan_ran 在實跑期間被改過" % ident)
+        if face(fresh) != evidence["face"]:
+            raise PlanStale("#%s 的票面在實跑期間改過(face 不同)" % ident)
+        before = fresh.get("plan_ran")
+        fresh["plan_ran"] = plan
+        fresh["state_version"] = int(fresh.get("state_version") or 0) + 1
+        save(fresh)
+    event.emit("ticket.state", ticket=str(ident), field="plan_ran",
+               **{"from": json.dumps(before, ensure_ascii=False),
+                  "to": json.dumps(plan, ensure_ascii=False),
+                  "state_version": fresh["state_version"]})
+    return plan, path
+
+
+def plan_evidence(ident, plan):
+    """`plan_ran` 那一份 evidence:回 `(evidence, "")` 或 `(None, 為什麼無效)`。找不到、形狀不對、
+    五鍵與票上的不同、log 不在,都是無效。"""
+    path = plan_evidence_path(ident, plan["at"])
+    shown = os.path.relpath(path, root())
+    try:
+        with open(path, encoding="utf-8") as handle:
+            evidence = json.load(handle)
+    except OSError:
+        return None, "找不到 plan_ran 的 evidence(%s)" % shown
+    except ValueError:
+        return None, "plan_ran 的 evidence 讀不懂(%s)" % shown
+    if not isinstance(evidence, dict) or set(evidence) != set(PLAN_EVIDENCE_KEYS) \
+            or evidence.get("schema_version") != 1:
+        return None, "plan_ran 的 evidence 形狀不對(%s)" % shown
+    if evidence["plan_ran"] != plan:
+        return None, "plan_ran 的 evidence 與票上的五鍵不一致(%s)" % shown
+    lists = [evidence[key] for key in ("inputs", "log_refs")]
+    if not all(isinstance(rows, list) and all(isinstance(row, str) for row in rows)
+               for rows in lists) or not isinstance(evidence["input_digest"], str):
+        return None, "plan_ran 的 evidence 形狀不對(%s)" % shown
+    for ref in evidence["log_refs"]:
+        if not os.path.isfile(os.path.join(root(), ref)):
+            return None, "plan_ran 的 log 不在(%s)" % ref
+    return evidence, ""
+
+
+def plan_ran_problem(ticket):
+    """Ready 那一關的 `plan_ran` 判準(#106 A3);`set state Ready`、`create --state Ready`、`lint`
+    同一份。回一句話或空字串。只問實作票(`NEEDS_VERIFIER_ROLES`),**不因 regression_case 豁免**(A4)。
+
+    有效 = 五鍵形狀對、`dirty=false`、evidence 在且一致、票面指紋沒變、sha 是主線祖先、`landed`
+    的前置都在 sha 裡(A5),且主線自 sha 起沒動到 `plan_inputs`(D-050 ③)。主線沒動就不必比;
+    動了而 test_plan 指不到或解析不出測試,算證明不了。"""
+    if (ticket.get("role") or "") not in NEEDS_VERIFIER_ROLES:
+        return ""
+    ident = str(ticket.get("id") or "")
+    again = ("補跑:python3 scripts/ticket.py plan %s --run '<test_plan 的命令>'"
+             % (ident or "<id>"))
+    plan = ticket.get("plan_ran")
+    if plan is None:
+        return "#%s 沒有 plan_ran(%s,#106 A3)—— %s" % (ident, PLAN_PENDING, again)
+    why = plan_shape_problem(plan)
+    if not why and plan["dirty"]:
+        why = "plan_ran.dirty=true(實跑的樹不是所聲明的乾淨基底)"
+    evidence = None
+    if not why:
+        evidence, why = plan_evidence(ident, plan)
+    if not why and evidence["face"] != face(ticket):
+        why = "票面在實跑之後改過(evidence 的 face 不同)"
+    sha = full_sha(plan["sha"]) if not why else ""
+    head = head_sha(main_branch())
+    if not why and (not sha or not head or not on_main(sha)):
+        why = "plan_ran.sha %s 不是主線 %s 的祖先" % (plan["sha"][:12], main_branch())
+    if not why:
+        inputs, tests, missing, blobs = plan_inputs(ticket, sha)
+        if input_digest(evidence["inputs"], tree_blobs(sha)) != evidence["input_digest"]:
+            why = "evidence 的 input_digest 與 %s 上的檔對不上" % sha[:12]
+    if not why:
+        why = landed_after(ticket, sha)
+    if not why and sha != head:
+        changed = git(["diff", "--name-only", "--no-renames", "-z", sha, head])
+        hits = [name for name in changed.stdout.split("\0")
+                if name and matches_any(name, inputs)] if changed.returncode == 0 else []
+        if changed.returncode != 0:
+            why = "比對 %s..%s 失敗" % (sha[:12], head[:12])
+        elif missing:
+            why = "test_plan 指到的測試解析不出(%s),證明不了自 %s 起沒動" % (
+                ", ".join(missing), sha[:12])
+        elif not tests:
+            why = "test_plan 沒指到任何測試,證明不了自 %s 起沒動" % sha[:12]
+        elif hits:
+            why = "自 %s 起主線動了本票的輸入:%s" % (sha[:12], ", ".join(hits[:5]))
+    return "#%s 的 plan_ran 無效 —— %s;%s" % (ident, why, again) if why else ""
+
+
+def landed_after(ticket, sha):
+    """`landed` 前置在實跑之後才落地(#106 A5):前置票 Done 且 `review.sha` 在主線上、卻不在 `sha`
+    的歷史裡 → 回一句話。前置還沒落地不在這裡擋 —— 那張票可以留完整 Draft,落地後先補跑再 Ready。"""
+    for dep in ticket.get("depends_on") or []:
+        if not isinstance(dep, dict) or \
+                not str(dep.get("condition") or "").strip().startswith("landed"):
+            continue
+        try:
+            row = load(str(dep.get("id") or "").lstrip("#"))
+        except (OSError, ValueError):
+            continue
+        review = row.get("review") if isinstance(row.get("review"), dict) else {}
+        landed = str(review.get("sha") or "") if row.get("state") == "Done" else ""
+        if landed and on_main(landed) and not sha_on_branch(landed, sha):
+            return "前置 #%s 在實跑之後才落地(%s 不在 plan_ran.sha 裡)" % (row.get("id"), landed[:12])
+    return ""
+
+
+def cmd_plan(argv):
+    """`plan <id> --run <命令> [--base <sha>]`(#106 A2):在主線基底的拋棄式 worktree 實跑,命令結束後
+    由 `record_plan_ran` 記實際 sha / rc(非零照記)。**不在票鎖裡跑**:鎖只包最後那一手 CAS。"""
+    if not argv or argv[0].startswith("--"):
+        sys.stderr.write("ticket: %s\n" % USAGE["plan"])
+        return 2
+    ident = argv[0].lstrip("#")
+    opts = take_flags("plan", argv[1:], ("--run", "--base"))
+    if opts is None:
+        return 2
+    cmd = opts["--run"]
+    if not cmd.strip():
+        sys.stderr.write("ticket: plan 要 --run <命令>(%s)\n" % USAGE["plan"])
+        return 2
+    try:
+        seen = load(ident)
+    except (OSError, ValueError) as exc:
+        sys.stderr.write("ticket: 讀不到 #%s —— %s\n" % (ident, exc))
+        return 2
+    branch = main_branch()
+    base = full_sha(opts["--base"] or branch)
+    if not base or not on_main(base):
+        sys.stderr.write("ticket: 基底 %s 不是主線 %s 上的 commit —— plan 只在乾淨主線基底實跑\n"
+                         % (opts["--base"] or branch, branch))
+        return 2
+    scratch = tempfile.mkdtemp(prefix="plan-t%s-" % ident)
+    tree, log = os.path.join(scratch, "tree"), os.path.join(scratch, "plan.log")
+    try:
+        added = git(["worktree", "add", "--detach", "-q", tree, base])
+        if added.returncode != 0:
+            sys.stderr.write("ticket: 拋棄式樹開不出來 —— %s\n" % added.stderr.strip())
+            return 1
+        try:
+            env = {key: value for key, value in os.environ.items() if key not in PLAN_DROP_ENV}
+            with open(log, "wb") as handle:
+                rc = subprocess.run(cmd, shell=True, cwd=tree, env=env, stdin=subprocess.DEVNULL,
+                                    stdout=handle, stderr=subprocess.STDOUT).returncode
+            actual = git(["rev-parse", "HEAD"], cwd=tree).stdout.strip()
+            changed = git(["status", "--porcelain", "--untracked-files=no"], cwd=tree)
+            dirty = actual != base or changed.returncode != 0 or bool(changed.stdout.strip())
+        finally:
+            git(["worktree", "remove", "--force", tree])
+        try:
+            plan, path = record_plan_ran(ident, actual or base, cmd, rc, dirty, [log], seen)
+        except PlanStale as exc:
+            sys.stderr.write("ticket: 這一趟不記 —— %s(命令 rc=%d)\n" % (exc, rc))
+            return 4
+        except RuntimeError as exc:
+            sys.stderr.write("ticket: %s\n" % exc)
+            return 5
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    with open(path, encoding="utf-8") as handle:
+        refs = json.load(handle)["log_refs"]
+    sys.stdout.write("ticket: #%s plan 實跑:%s\n" % (ident, cmd))
+    sys.stdout.write("  基底 %s(拋棄式 worktree,跑完已收掉)rc=%d dirty=%s\n"
+                     % (base, rc, json.dumps(plan["dirty"])))
+    sys.stdout.write("  log: %s\n" % ", ".join(refs))
+    sys.stdout.write("  evidence: %s\n" % os.path.relpath(path, root()))
+    sys.stdout.write("  plan_ran: %s\n" % json.dumps(plan, ensure_ascii=False))
+    why = plan_ran_problem(load(ident))
+    sys.stdout.write("ticket: #%s %s\n" % (ident, "還不能轉 Ready —— %s" % why if why
+                                            else "plan_ran 有效,可以 set %s state Ready" % ident))
+    return 0
 
 
 def bound_to_content(review):
@@ -2313,6 +2636,11 @@ def cmd_lint(argv):
     if "info_homes" in ticket:
         bad += info_home_problems(ticket["info_homes"])
     bad += verifier_case_problems(ticket)
+    # 與 `set state Ready` 同一判準(#106 A6);已經過了那一關的票不追溯(A3)。
+    if ticket.get("state") not in READY_OR_LATER:
+        unready = plan_ran_problem(ticket)
+        if unready:
+            bad.append(unready)
     if bad:
         for line in bad:
             sys.stderr.write("ticket: lint #%s %s\n" % (ident, line))
@@ -3088,7 +3416,7 @@ def main(argv):
              "round": cmd_round, "result": cmd_result,
              "objection": cmd_objection, "objection-overrule": cmd_objection_overrule,
              "cost": cmd_cost,
-             "agent-command": cmd_agent_command, "lint": cmd_lint,
+             "agent-command": cmd_agent_command, "lint": cmd_lint, "plan": cmd_plan,
              "review-request": cmd_review_request, "review-receive": cmd_review_receive}
     if verb in ("--help", "-h", "help"):
         if rest and rest[0] in table:

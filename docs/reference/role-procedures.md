@@ -27,12 +27,16 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
   (diff 的增刪行與新檔全文),diff 檔頭與檔名不算;新檔就挑檔內一定會有的字(類名、函式名)。完整認法見
   `python3 scripts/ticket.py create --help` 的 `--verify-string` 說明與 `templates/dispatch-opener.md`「票面的機械格要能被機器驗」(#90 A5)。
 - `tags`:只能用 `verify/TAGS.md`(與 `verify/TAGS.d/`)登記過的;動到 `verify/` 案例的票一定要有。
+- `plan_ran`(#106):實作票轉 Ready 前實跑一次 `python3 scripts/ticket.py plan <n> --run '<test_plan 的命令>'`
+  (主線基底的拋棄式樹、記真 rc,非零照記;`set` 不收這一格)。主線之後只動到無關檔不必重跑;動到本票提示範圍或
+  test_plan 的測試、或 `landed` 前置在實跑之後才落地,Ready / lint 會說要補跑。測試要等前置落地才寫得出來的票留完整 Draft,
+  前置落地後先補跑再 Ready。判準正文在 `tickets/SCHEMA.md` 的 `plan_ran` 列。
 - 票面引用的指令先 `--help` 一次再寫。
 - 自檢(D-031 原話「要做成 `ticket.py lint`」;#91 C3 做出來了):
   ```
   python3 scripts/ticket.py lint <n>
   ```
-  唯讀、不動 `state_version`;逐條印 `needs_verifier` / `verify_strings` / 標籤的問題,全過印 `ok`。不再手寫 python 一行自檢。
+  唯讀、不動 `state_version`;逐條印 `needs_verifier` / `verify_strings` / 標籤 / 還沒過 Ready 的票的 `plan_ran` 問題,全過印 `ok`。不再手寫 python 一行自檢。
 
 ### needs_verifier 怎麼判
 - `docs/DISPATCH-TEMPLATE.md` §5.8 第 3 問:驗證者案例只會重演 worker 自己案例的同一契約就寫

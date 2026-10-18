@@ -1,6 +1,7 @@
 """`scripts/ticket.py`:票是唯一的工作單位,所以這一組釘的是「什麼樣的票開不出來、
 什麼樣的票關不掉」。"""
 
+import hashlib
 import json
 import os
 import re
@@ -10,7 +11,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import SCRIPTS, TIMEOUT, Sandbox, envelope  # noqa: E402
+from control_harness import SCRIPTS, TIMEOUT, Sandbox, envelope, oracle_face  # noqa: E402
 
 sys.path.insert(0, SCRIPTS)
 from ticket import normalise_verify  # noqa: E402
@@ -1444,15 +1445,20 @@ class ReadyNeedsABooleanNeedsVerifier(Sandbox):
         self.make_ticket(ident, **fields)
 
     def test_four_drafts_go_to_ready_or_not(self):
-        """**變異**:拿掉 `cmd_set` 裡的 needs_verifier 檢查 → 「缺」那條紅。"""
+        """**變異**:拿掉 `cmd_set` 裡的 needs_verifier 檢查 → 「缺」那條紅。
+        布林齊全的兩張實作票(3、6)先 `plan --run true` 實跑一次(#106 A3:轉 Ready 要有效
+        plan_ran),所以它們的版本是 plan +1、set +1 = 3。"""
         cases = (("1", self.MISSING, "worker", 1, 1),
                  ("2", "true", "worker", 1, 1),
-                 ("3", True, "worker", 0, 2),
+                 ("3", True, "worker", 0, 3),
                  ("4", self.MISSING, "consolidator", 0, 2),
                  ("5", None, "", 1, 1),
-                 ("6", False, "worker", 0, 2))
+                 ("6", False, "worker", 0, 3))
         for ident, value, role, rc, version in cases:
             self.draft(ident, value, role)
+            if version == 3:
+                planned = self.ticket("plan", ident, "--run", "true")
+                self.assertEqual(planned.returncode, 0, planned.stdout + planned.stderr)
         for ident, value, role, rc, version in cases:
             with self.subTest(ident=ident, value=value, role=role):
                 before = ticket_bytes(self, ident)
@@ -1520,8 +1526,16 @@ class CreateTakesTheTwoBooleans(Sandbox):
         self.assertEqual(self.tickets_on_disk(), [])
         self.assertNotIn("ticket.created", self.kinds())
 
-    def test_ready_with_needs_verifier_opens(self):
+    def test_ready_with_needs_verifier_passes_c1_and_stops_at_plan_ran(self):
+        """#106 A3:實作票 create 時還沒有 plan_ran,`--state Ready` 開不出來;needs_verifier 那一關
+        已經過了(訊息點名的是 plan_ran)。非實作票照開。"""
         done = self.ticket("create", *MIN, "--state", "Ready", "--needs-verifier", "false")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("plan_ran", done.stderr)
+        self.assertNotIn("needs_verifier 要是", done.stderr)
+        self.assertEqual(self.tickets_on_disk(), [])
+        done = self.ticket("create", *MIN[:-6], "--role", "verifier", "--model", "opus",
+                           "--tool", "claude-code", "--state", "Ready")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.load_ticket("1")["state"], "Ready")
 
@@ -1554,6 +1568,9 @@ class Lint(Sandbox):
                            "--needs-verifier", "false")
         self.assertEqual(made.returncode, 0, made.stdout + made.stderr)
         self.assertIsInstance(self.load_ticket("1")["verify_strings"][0], dict)
+        # Draft 的 lint 與轉 Ready 同判準(#106 A6):先實跑一次,這一條只看 F3。
+        planned = self.ticket("plan", "1", "--run", "true")
+        self.assertEqual(planned.returncode, 0, planned.stdout + planned.stderr)
         done = self.lint()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(len(done.stdout.splitlines()), 1, done.stdout)
@@ -2200,6 +2217,234 @@ class ObjectionOverrule(Sandbox):
         self.assertEqual(done.returncode, 0, done.stderr)
         for flag in ("--index", "--expect-attempt", "--expect-state-version"):
             self.assertIn(flag, done.stdout)
+
+
+
+PLAN_KEYS = {"sha", "cmd", "rc", "at", "dirty"}
+EVIDENCE_KEYS = {"schema_version", "plan_ran", "face", "input_digest", "inputs", "log_refs"}
+
+
+class PlanRanGate(Sandbox):
+    """#106 T1/T3:`ticket.py plan` 在主線基底的拋棄式樹實跑、記真 rc;Ready 只認有效 plan_ran
+    (D-050 ③:sha 是主線祖先,且 hint_scope ∪ test_plan 的測試自 sha 起沒動)。期望值來自票面
+    介面契約(五鍵、`reports/t<id>/planning/<sha256(at)>.json`),不從 ticket.py 算。"""
+
+    def setUp(self):
+        super().setUp()
+        self.commit_main({"src/a.py": "A = 1\n", "tests/test_x.py": "# x\n",
+                          "docs/home.md": "home\n", "verify/f/test_v.py": "# v\n"})
+
+    def commit_main(self, files, subject="主線又動了"):
+        for name, text in files.items():
+            self.write(name, text)
+            self.git("add", name)
+        self.git("commit", "-q", "-m", subject)
+        return self.git("rev-parse", "main").strip()
+
+    def draft(self, ident="1", **fields):
+        row = {"state": "Draft", "needs_verifier": False, "verify_strings": ["x"],
+               "test_plan": "T1 跑 tests/test_x.py"}
+        row.update(fields)
+        return self.make_ticket(ident, **row)
+
+    def plan(self, ident="1", cmd="true", *more):
+        return self.ticket("plan", ident, "--run", cmd, *more)
+
+    def evidence_of(self, ident, at):
+        name = hashlib.sha256(at.encode("utf-8")).hexdigest() + ".json"
+        path = os.path.join(self.repo, "reports", "t%s" % ident, "planning", name)
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def ready(self, ident="1"):
+        return self.ticket("set", ident, "state", "Ready")
+
+    def test_t1_a_nonzero_command_is_recorded_with_its_real_rc_and_sha(self):
+        """四問:量 plan_ran 五鍵與值、evidence 檔的六鍵、輸出的命令 / rc / log;紅 = 沒跑就記
+        (rc 0)、記成 list、多鍵或 evidence 不在約定路徑;期望值 = 命令自己的 exit 3 與 `git rev-parse
+        main`;不測 = 真 LLM。**變異 M2**:cmd_plan 不跑命令、直接記 rc=0 → rc 那一條紅。"""
+        self.draft()
+        head = self.git("rev-parse", "main").strip()
+        done = self.plan("1", "echo base-step; echo mutant-step; exit 3")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        plan = row["plan_ran"]
+        self.assertEqual(set(plan), PLAN_KEYS)
+        self.assertEqual(plan["rc"], 3)
+        self.assertEqual(plan["sha"], head)
+        self.assertEqual(plan["cmd"], "echo base-step; echo mutant-step; exit 3")
+        self.assertIs(plan["dirty"], False)
+        self.assertEqual(row["state"], "Draft", "plan 不改 state")
+        self.assertIn("echo base-step; echo mutant-step; exit 3", done.stdout)
+        self.assertIn("rc=3", done.stdout)
+        evidence = self.evidence_of("1", plan["at"])
+        self.assertEqual(set(evidence), EVIDENCE_KEYS)
+        self.assertEqual(evidence["schema_version"], 1)
+        self.assertEqual(evidence["plan_ran"], plan)
+        self.assertEqual(evidence["face"], oracle_face(row))
+        for name in ("src/*", "tests/test_x.py"):
+            self.assertIn(name, evidence["inputs"])
+        self.assertEqual(len(evidence["log_refs"]), 1)
+        self.assertIn(evidence["log_refs"][0], done.stdout)
+        self.assertIn("mutant-step", self.read(evidence["log_refs"][0]))
+        ready = self.ready()
+        self.assertEqual(ready.returncode, 0, ready.stdout + ready.stderr)
+        self.assertEqual(self.load_ticket("1")["state"], "Ready")
+
+    def test_t1_the_command_runs_in_a_throwaway_tree_without_the_control_env(self):
+        """四問:量命令看到的 cwd / HEAD / AC_* 與跑完後的 worktree 清單;紅 = 在主 repo 跑、繼承
+        AC_ROOT、樹沒收;期望值 = 沙盒 repo 路徑與 main sha;不測 = 長命令逾時。"""
+        self.draft()
+        cmd = 'echo "cwd=$(pwd -P)"; echo "head=$(git rev-parse HEAD)"; echo "ctl=${AC_CONTROL_DIR-unset}"'
+        done = self.ticket("plan", "1", "--run", cmd,
+                           env=self.env(AC_CONTROL_DIR=os.path.join(self.home, "ctl")))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        plan = self.load_ticket("1")["plan_ran"]
+        text = self.read(self.evidence_of("1", plan["at"])["log_refs"][0])
+        self.assertNotIn("cwd=%s\n" % os.path.realpath(self.repo), text)
+        self.assertIn("head=%s" % self.git("rev-parse", "main").strip(), text)
+        self.assertIn("ctl=unset", text)
+        self.assertEqual(self.git("worktree", "list", "--porcelain").count("worktree "), 1)
+
+    def test_t1_dirty_or_off_main_cannot_go_ready(self):
+        """四問:量 dirty 值與 set Ready 的 rc / 票位元組;紅 = 改了追蹤檔仍記 dirty=false、或 dirty
+        仍准 Ready、或不在主線的基底照跑;期望值 = 命令自己改了 src/a.py;不測 = untracked 檔(不算 dirty)。"""
+        self.draft()
+        done = self.plan("1", "echo dirty >> src/a.py; touch untracked.txt")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIs(self.load_ticket("1")["plan_ran"]["dirty"], True)
+        before = ticket_bytes(self, "1")
+        ready = self.ready()
+        self.assertEqual(ready.returncode, 1, ready.stdout + ready.stderr)
+        self.assertIn("dirty=true", ready.stderr)
+        self.assertEqual(ticket_bytes(self, "1"), before)
+        self.git("checkout", "-q", "-b", "side")
+        self.write("side.txt", "x\n")
+        self.git("add", "side.txt")
+        self.git("commit", "-q", "-m", "不在主線")
+        side = self.git("rev-parse", "side").strip()
+        self.git("checkout", "-q", "main")
+        off = self.plan("1", "true", "--base", side)
+        self.assertEqual(off.returncode, 2, off.stdout + off.stderr)
+        self.assertIn("不是主線", off.stderr)
+        self.assertEqual(ticket_bytes(self, "1"), before)
+
+    def test_t1_set_cannot_forge_and_a_hand_written_plan_ran_is_not_evidence(self):
+        """四問:量 set 的 rc 與票位元組、手寫 plan_ran / 偽造 evidence 後 Ready 的 rc;紅 = set 收了
+        plan_ran、或沒有對得上的 evidence 也准 Ready;期望值 = 介面契約的唯一 evidence 路徑;不測 = 檔案權限。"""
+        self.draft()
+        head = self.git("rev-parse", "main").strip()
+        fake = {"sha": head, "cmd": "true", "rc": 0, "at": "2026-10-19T00:00:00.000001+00:00",
+                "dirty": False}
+        before = ticket_bytes(self, "1")
+        done = self.ticket("set", "1", "plan_ran", json.dumps(fake))
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("plan_ran", done.stderr)
+        self.assertEqual(ticket_bytes(self, "1"), before)
+        self.draft(plan_ran=fake)
+        ready = self.ready()
+        self.assertEqual(ready.returncode, 1, ready.stdout + ready.stderr)
+        self.assertIn("evidence", ready.stderr)
+        self.assertEqual(self.plan("1", "exit 1").returncode, 0)
+        real = self.load_ticket("1")["plan_ran"]
+        self.assertEqual(real["rc"], 1, "實跑蓋掉手寫的 rc=0")
+        forged = dict(real, rc=0)
+        self.draft(plan_ran=forged)
+        ready = self.ready()
+        self.assertEqual(ready.returncode, 1, ready.stdout + ready.stderr)
+        self.assertIn("evidence", ready.stderr)
+        self.assertIn("不一致", ready.stderr)
+
+    def test_t1_an_unrelated_main_change_keeps_the_run_valid(self):
+        """四問:量主線動了不相關的檔之後 set Ready 的 rc;紅 = 主線一動就要重跑(舊 #106 的行為);
+        期望值 = 那個檔不在 hint_scope 也不是 test_plan 的測試;不測 = rename。"""
+        self.draft()
+        self.assertEqual(self.plan().returncode, 0)
+        self.commit_main({"docs/elsewhere.md": "無關\n"})
+        ready = self.ready()
+        self.assertEqual(ready.returncode, 0, ready.stdout + ready.stderr)
+
+    def test_t1_a_related_input_change_makes_it_stale_until_rerun(self):
+        """四問:量四種相關輸入各動一次後 set Ready 的 rc 與訊息、補跑後的 rc;紅 = 只比
+        allowed_write_paths(漏 info_homes / verify.files / test_plan 的測試)或任意祖先就准;期望值 =
+        hint_scope 的三個來源 + test_plan 指到的檔;不測 = 前置落地(下一條)。
+        **變異 M3**:plan_ran_problem 只問祖先、不比輸入 → 這一條紅。"""
+        rows = (("allowed_write_paths", "src/a.py", {}),
+                ("test_plan", "tests/test_x.py", {}),
+                ("info_homes", "docs/home.md",
+                 {"info_homes": [{"what": "說明", "home": "docs/home.md"}]}),
+                ("verify.files", "verify/f/test_v.py",
+                 {"verify": {"files": ["verify/f/test_v.py"], "tags": [], "run": "", "notes": ""}}))
+        for at, (name, path, extra) in enumerate(rows):
+            with self.subTest(name):
+                self.draft(**extra)
+                self.assertEqual(self.plan().returncode, 0)
+                self.commit_main({path: "changed %d\n" % at})
+                before = ticket_bytes(self, "1")
+                ready = self.ready()
+                self.assertEqual(ready.returncode, 1, ready.stdout + ready.stderr)
+                self.assertIn(path, ready.stderr)
+                self.assertEqual(ticket_bytes(self, "1"), before)
+                self.assertEqual(self.plan().returncode, 0)
+                ready = self.ready()
+                self.assertEqual(ready.returncode, 0, ready.stdout + ready.stderr)
+
+    def test_t1_an_unresolvable_test_plan_is_not_guessed_unrelated(self):
+        """四問:量 test_plan 指到不存在的測試、主線動了無關檔之後的 rc;紅 = 解析不出就當無關;
+        期望值 = 訊息點名那個引用;不測 = 主線沒動(那時不必比)。"""
+        self.draft(test_plan="T1 跑 tests/test_not_here.py")
+        self.assertEqual(self.plan().returncode, 0)
+        self.commit_main({"docs/elsewhere.md": "無關\n"})
+        ready = self.ready()
+        self.assertEqual(ready.returncode, 1, ready.stdout + ready.stderr)
+        self.assertIn("tests/test_not_here", ready.stderr)
+        self.assertIn("解析不出", ready.stderr)
+
+    def test_t3_a_dependency_landing_after_the_run_needs_a_rerun(self):
+        """四問:量前置落地前後 set Ready 的 rc、補跑後的 rc;紅 = 前置落地前的 plan_ran 落地後仍有效;
+        期望值 = 前置票 Done 且 review.sha 是主線上的新 commit;不測 = 前置還沒落地時擋 Ready(不擋)。"""
+        self.make_ticket("9", state="Ready")
+        self.draft(depends_on=[{"id": "9", "condition": "landed"}])
+        self.assertEqual(self.plan().returncode, 0)
+        self.assertEqual(self.load_ticket("1")["state"], "Draft")
+        landed = self.commit_main({"docs/dep.md": "前置的改動\n"}, "前置 #9 落地")
+        self.make_ticket("9", state="Done", review={"verdict": "pass", "by": "main", "sha": landed})
+        ready = self.ready()
+        self.assertEqual(ready.returncode, 1, ready.stdout + ready.stderr)
+        self.assertIn("前置 #9", ready.stderr)
+        self.assertEqual(self.plan().returncode, 0)
+        ready = self.ready()
+        self.assertEqual(ready.returncode, 0, ready.stdout + ready.stderr)
+
+    def test_a6_lint_uses_the_ready_rule_and_does_not_reach_back(self):
+        """四問:量 Draft 沒跑 / 跑過、舊 Ready 沒跑三種 lint rc;紅 = lint 與 Ready 分岔、或追溯舊 Ready;
+        期望值 = 票面 A3 / A6;不測 = 其他 lint 列。"""
+        self.draft()
+        done = self.ticket("lint", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("plan_ran", done.stderr)
+        self.assertIn("待 plan 實跑", done.stderr)
+        self.assertEqual(self.plan().returncode, 0)
+        self.assertEqual(self.ticket("lint", "1").returncode, 0)
+        self.make_ticket("2", needs_verifier=False, verify_strings=["x"])
+        old = self.ticket("lint", "2")
+        self.assertEqual(old.returncode, 0, old.stdout + old.stderr)
+
+    def test_the_face_changing_during_the_run_is_not_recorded(self):
+        """四問:量命令跑到一半改票面之後 plan 的 rc 與票上的 plan_ran;紅 = 鎖裡不 CAS;期望值 = rc 4、
+        plan_ran 仍不在;不測 = 兩個 plan 同時跑。"""
+        self.draft()
+        script = os.path.join(self.repo, "scripts", "ticket.py")
+        done = self.plan("1", "python3 %s set 1 subject 中途改了" % script)
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        self.assertEqual(row["subject"], "中途改了")
+        self.assertNotIn("plan_ran", row)
+
+    def test_plan_help_and_usage(self):
+        for args in (("plan",), ("plan", "--help"), ("plan", "1")):
+            done = self.ticket(*args)
+            self.assertIn("--run", done.stdout + done.stderr)
 
 
 if __name__ == "__main__":

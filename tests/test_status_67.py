@@ -7,9 +7,13 @@
   只認開著的);沿用時**不寫票** —— 覆核綁的 `state_version` 不能因為又紅一次而過期。
 - 票的驗收是**固定五條樣板**,逐字比;期望值從旗標與 log 文字來,不從 status.py 算。
 - 每一條案例一則 `regression.red`;`regression_auto_ticket: false` 只發事件不開票。
-- `--dispatch` 只對**這次新開的**票背景起 auto-fix,不等它。
+- `--dispatch` 只對**這次新開、轉成 Ready 的**票背景起 auto-fix,不等它。
+- #106 A4:票先開 Draft;**可核對的 gate 證據**(`--gate-cmd/--gate-rc/--gate-base` + 案例在 `--log`
+  的紅榜裡)經 ticket.py 同一個 recorder 寫 `plan_ran` 才轉 Ready;只有 case 就留 Draft「待 plan
+  實跑」,`ticket.py plan` 補跑後才 Ready。不因 role=worker 或 regression_case 豁免。
 """
 
+import hashlib
 import json
 import os
 import sys
@@ -58,6 +62,15 @@ OK
 """
 
 RERUN = "python3 -m unittest discover -s tests"
+PLAN_KEYS = {"sha", "cmd", "rc", "at", "dirty"}
+
+
+def one_red(case):
+    """只有一條紅的 unittest log(形狀同 LOG_TWO)。"""
+    method = case.rsplit(".", 1)[-1]
+    return ("%s (%s) ... FAIL\n\n" % (method, case) + "=" * 70 + "\n"
+            "FAIL: %s (%s)\n" % (method, case) + "-" * 70 + "\n"
+            "AssertionError: 假的紅\n\n" + "-" * 70 + "\nRan 1 test in 0.001s\n\nFAILED (failures=1)\n")
 
 
 def template(case, rerun):
@@ -88,6 +101,17 @@ class RegressionRed(Sandbox):
         conf.update(fields)
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
 
+    def gate(self, rc="1", base=None, cmd=RERUN):
+        """可核對的 gate 證據:跑出紅的命令、它的非零 rc、主線上的基底。"""
+        return ["--gate-cmd", cmd, "--gate-rc", rc,
+                "--gate-base", base or self.git("rev-parse", "main").strip()]
+
+    def evidence_of(self, ident, at):
+        name = hashlib.sha256(at.encode("utf-8")).hexdigest() + ".json"
+        with open(os.path.join(self.repo, "reports", "t%s" % ident, "planning", name),
+                  encoding="utf-8") as handle:
+            return json.load(handle)
+
     def regression_tickets(self):
         return [row for row in self.tickets_on_disk() if row.get("regression_case")]
 
@@ -108,14 +132,23 @@ class RegressionRed(Sandbox):
     # ------------------------------------------------------------ A1 / A2
 
     def test_a1_two_red_cases_open_two_ready_worker_tickets(self):
-        """A1。**變異**:拿掉 KINDS 的 `regression.red` → rc≠0,這一條紅。"""
+        """A1。**變異**:拿掉 KINDS 的 `regression.red` → rc≠0,這一條紅。
+        #106 T2:帶完整 gate 證據才 Ready,plan_ran 就是那一趟 gate 的 cmd / rc / base,log 留進 evidence。"""
         log = self.write("release.log", LOG_TWO)
-        done = self.red("--source", "release", "--log", log, "--rerun", RERUN)
+        main = self.git("rev-parse", "main").strip()
+        done = self.red("--source", "release", "--log", log, "--rerun", RERUN, *self.gate())
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         made = self.by_case()
         self.assertEqual(sorted(made), sorted([CASE_A, CASE_B]))
         for case, row in made.items():
             self.assertEqual(row["state"], "Ready")
+            plan = row["plan_ran"]
+            self.assertEqual(set(plan), PLAN_KEYS)
+            self.assertEqual((plan["sha"], plan["cmd"], plan["rc"], plan["dirty"]),
+                             (main, RERUN, 1, False))
+            evidence = self.evidence_of(row["id"], plan["at"])
+            self.assertEqual(evidence["plan_ran"], plan)
+            self.assertEqual(self.read(evidence["log_refs"][0]), LOG_TWO)
             self.assertEqual(row["role"], "worker")
             self.assertIs(row["needs_verifier"], False)
             self.assertIs(row["interface_fixed"], False)
@@ -164,7 +197,9 @@ class RegressionRed(Sandbox):
         opened = [row for row in self.regression_tickets() if row["id"] != "50"]
         self.assertEqual(len(opened), 1)
         self.assertEqual(opened[0]["regression_case"], CASE_A)
-        self.assertEqual(opened[0]["state"], "Ready")
+        # 只有 case、沒有 gate 證據(#106 A4):開 Draft,不是 Ready。
+        self.assertEqual(opened[0]["state"], "Draft")
+        self.assertIn("待 plan 實跑", opened[0]["outline"])
 
     # ------------------------------------------------------------ A4 來源與空集合
 
@@ -302,7 +337,7 @@ class RegressionRed(Sandbox):
         self.make_ticket(50, regression_case=CASE_A, state="Ready")
         log = self.write("release.log", LOG_TWO)
         done = self.red("--source", "release", "--log", log, "--rerun", RERUN,
-                        "--dispatch", env=env)
+                        "--dispatch", *self.gate(), env=env)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         new = self.by_case()[CASE_B]["id"]
         self.assertEqual(self.dispatched(1), [new])
@@ -320,10 +355,75 @@ class RegressionRed(Sandbox):
         self.assertNotIn("已起 auto-fix", done.stdout)
         # 下一趟帶 --dispatch 的新案例是會合點:它的那一行出現時,前一趟若有起替身,
         # 那一行早就寫進去了。
-        again = self.red("--source", "release", "--case", "a.B.c", "--rerun", RERUN,
-                         "--dispatch", env=env)
+        again = self.red("--source", "release", "--log", self.write("c.log", one_red("a.B.c")),
+                         "--rerun", RERUN, "--dispatch", *self.gate(), env=env)
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
         self.assertEqual(self.dispatched(1), [self.by_case()["a.B.c"]["id"]])
+
+
+    # ------------------------------------------------------------ #106 T2
+
+    def test_t2_case_only_is_draft_until_ticket_py_plan_runs(self):
+        """四問:量 state / outline / plan_ran、手轉 Ready 的 rc、`ticket.py plan` 補跑後的 state;紅 =
+        只有 case 也開 Ready、或 regression_case 被豁免;期望值 = 票面 A4;不測 = #125 的觸發流程。
+        **變異 M1**:plan_ran_problem 對任何 regression_case 放行 → 手轉 Ready 那一條紅。"""
+        done = self.red("--source", "release", "--case", "a.B.c", "--rerun", RERUN)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.by_case()["a.B.c"]
+        self.assertEqual(row["state"], "Draft")
+        self.assertNotIn("plan_ran", row)
+        self.assertIn("待 plan 實跑", row["outline"])
+        self.assertIn("ticket.py plan %s --run" % row["id"], row["outline"])
+        self.assertIn("Draft", done.stdout)
+        ready = self.run_py("scripts/ticket.py", "set", row["id"], "state", "Ready")
+        self.assertEqual(ready.returncode, 1, ready.stdout + ready.stderr)
+        self.assertIn("plan_ran", ready.stderr)
+        planned = self.run_py("scripts/ticket.py", "plan", row["id"], "--run", "exit 1")
+        self.assertEqual(planned.returncode, 0, planned.stdout + planned.stderr)
+        self.assertEqual(self.load_ticket(row["id"])["plan_ran"]["rc"], 1)
+        ready = self.run_py("scripts/ticket.py", "set", row["id"], "state", "Ready")
+        self.assertEqual(ready.returncode, 0, ready.stdout + ready.stderr)
+        self.assertEqual(self.load_ticket(row["id"])["state"], "Ready")
+
+    def test_t2_forged_or_incomplete_gate_evidence_stays_draft(self):
+        """四問:量每種壞證據的 state、plan_ran 不在、輸出點名原因;紅 = 對不上的證據也記 plan_ran;
+        期望值 = 對不上的那一格(rc=0、基底不在主線、缺格、案例不在 log);不測 = 證據檔被手改。"""
+        self.git("checkout", "-q", "-b", "side")
+        self.write("side.txt", "x\\n")
+        self.git("add", "side.txt")
+        self.git("commit", "-q", "-m", "不在主線")
+        side = self.git("rev-parse", "side").strip()
+        self.git("checkout", "-q", "main")
+        rows = (("rc0", "c1", self.gate(rc="0"), "--gate-rc=0"),
+                ("off-main", "c2", self.gate(base=side), "不是主線上的 commit"),
+                ("no-such-sha", "c3", self.gate(base="f" * 40), "不是主線上的 commit"),
+                ("partial", "c4", ["--gate-cmd", RERUN], "gate 證據不全"),
+                ("not-in-log", "c5", self.gate(), "不在任何一份 --log"))
+        for name, short, flags, word in rows:
+            with self.subTest(name):
+                case = "a.B.%s" % short
+                log = self.write("%s.log" % short, one_red("a.B.other_%s" % short))
+                args = ["--case", case] if name == "not-in-log" else []
+                if name != "not-in-log":
+                    log = self.write("%s.log" % short, one_red(case))
+                done = self.red("--source", "gate", "--log", log, *args, "--rerun", RERUN, *flags)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                row = self.by_case()[case]
+                self.assertEqual(row["state"], "Draft")
+                self.assertNotIn("plan_ran", row)
+                self.assertIn(word, done.stdout)
+                self.assertIn(word, row["outline"])
+
+    def test_t2_a_draft_is_not_dispatched(self):
+        env = self.dispatch_env()
+        done = self.red("--source", "release", "--case", "a.B.c", "--rerun", RERUN,
+                        "--dispatch", env=env)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("已起 auto-fix", done.stdout)
+        again = self.red("--source", "release", "--log", self.write("d.log", one_red("a.B.d")),
+                         "--rerun", RERUN, "--dispatch", *self.gate(), env=env)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertEqual(self.dispatched(1), [self.by_case()["a.B.d"]["id"]])
 
 
 if __name__ == "__main__":

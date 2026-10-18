@@ -44,6 +44,8 @@
 - `decision_refs` 指到 `docs/DECISIONS.md` 真的存在的那幾條。
 - 交票前 `python3 scripts/ticket.py lint <n>`(#91 C3;唯讀):`needs_verifier` 布林、`verify_strings` 形狀、標籤登記過,它逐條說;
   沒過不轉 Ready(轉了也會被擋,#91 C1)。
+- 實作票轉 Ready 前先實跑 `python3 scripts/ticket.py plan <n> --run '<test_plan 的命令>'`(#106;記真 rc,非零照記),
+  `lint` 與 `set state Ready` 同一判準;測試要等前置落地才寫得出來就留完整 Draft,前置落地後先補跑再 Ready。
 
 ## 設計題先派設計 session(D-019)
 題目要決定形狀、要比較方案、會影響之後每一張票 —— 那是設計題:**先有 `docs/DESIGN-<題>.md`**

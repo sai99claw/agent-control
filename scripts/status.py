@@ -15,7 +15,9 @@
     scripts/status.py rundir --ticket 7 --run-id …   # 這一輪的目錄(回歸快取住那裡)
     scripts/status.py regression-red --source release|gate [--log gate.log]… [--case id]…
                              [--from-ticket 7] [--model m] [--rerun "<全套指令>"] [--dispatch]
-                             # 回歸紅在既有案例上 → 每條開(或沿用)一張修復票(T D-G130)
+                             [--gate-cmd "<跑出紅的命令>" --gate-rc N --gate-base <主線 sha>]
+                             # 回歸紅在既有案例上 → 每條開(或沿用)一張修復票(T D-G130);
+                             # gate 證據可核對才記 plan_ran 轉 Ready,否則 Draft「待 plan 實跑」(#106)
 
 寫的是 `<reports_dir>/t<票號>/<run_id>/status.json`(`board/config.json` 的
 `reports_dir`,預設 `reports/`),**一輪一個目錄、不覆寫**,log 另外複製一份進
@@ -941,6 +943,60 @@ REGRESSION_ACCEPTANCE = (
 )
 
 
+def gate_evidence(ticket_mod, args, case, logs):
+    """這條案例的 gate 證據可不可核對(#106 A4):回 `((sha, cmd, rc, log), "")` 或 `(None, 為什麼)`。
+    四樣都要在而且對得上:案例出自 `--log` 的紅榜、`--gate-cmd` 非空、`--gate-rc` 是非零整數
+    (log 裡有紅,rc=0 就是對不上)、`--gate-base` 是主線上的 commit。"""
+    given = (args.gate_cmd, args.gate_rc, args.gate_base)
+    if not any(given):
+        return None, "只有 case,沒有 gate 證據(--gate-cmd / --gate-rc / --gate-base)"
+    if not all(given):
+        return None, "gate 證據不全:--gate-cmd / --gate-rc / --gate-base 要三樣都給"
+    log = logs.get(case)
+    if not log:
+        return None, "%s 不在任何一份 --log 的紅榜裡(只有 case)" % case
+    try:
+        rc = int(args.gate_rc)
+    except ValueError:
+        return None, "--gate-rc 不是整數(%r)" % args.gate_rc
+    if rc == 0:
+        return None, "--gate-rc=0 而 %s 在 log 裡是紅的 —— 對不上,gate 證據不收" % case
+    sha = ticket_mod.full_sha(args.gate_base)
+    if not sha or not ticket_mod.on_main(sha):
+        return None, "--gate-base %s 不是主線上的 commit,gate 證據不收" % args.gate_base
+    return (sha, args.gate_cmd, rc, log), ""
+
+
+def promote_repair_ticket(ticket_mod, ident, proof, why, rerun):
+    """剛開的 Draft 修復票:有可核對的 gate 證據 → 經 `ticket.record_plan_ran`(與 `ticket.py plan`
+    同一個 recorder)記 `plan_ran`,再走 `set state Ready` 同一關;任一步不過就留 Draft,outline 寫
+    「待 plan 實跑」與怎麼補。**不在票鎖裡跑任何測試**(#106 A4)。回 `("Ready" | "Draft", 為什麼)`。"""
+    if proof:
+        sha, cmd, rc, log = proof
+        try:
+            ticket_mod.record_plan_ran(ident, sha, cmd, rc, False, [log], ticket_mod.load(ident))
+        except (ticket_mod.PlanStale, OSError, ValueError, RuntimeError) as exc:
+            why = "plan_ran 記不進去:%s" % exc
+        else:
+            said = io.StringIO()
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(said):
+                moved = ticket_mod.cmd_set([ident, "state", "Ready"])
+            if moved == 0:
+                return "Ready", ""
+            why = said.getvalue().strip()
+    outline = ("%s:%s。補跑由主線 `python3 scripts/ticket.py plan %s --run %s` 或 #125 的修補流程"
+               "觸發,完成才 Ready(#106 A4)" % (ticket_mod.PLAN_PENDING, why, ident,
+                                              shlex.quote(rerun or "<全套指令>")))
+    try:
+        with ticket_mod.Lock():
+            data = ticket_mod.load(ident)
+            data["outline"] = outline
+            ticket_mod.save(data)
+    except (OSError, ValueError, RuntimeError):
+        pass
+    return "Draft", why
+
+
 def dispatch_command():
     """`--dispatch` 起的那一支。`AC_REGRESSION_DISPATCH_CMD` 給測試換成替身。"""
     raw = os.environ.get("AC_REGRESSION_DISPATCH_CMD")
@@ -951,8 +1007,10 @@ def dispatch_command():
 
 def cmd_regression_red(args):
     """發版 / 閘門的回歸紅在**既有案例**上 → 每一條案例開(或沿用)一張固定樣板的
-    修復票,直接 Ready 交 auto-fix(T D-G130)。**發版照擋** —— 這一支只開票,不改
-    呼叫者的退出碼。
+    修復票(T D-G130)。**發版照擋** —— 這一支只開票,不改呼叫者的退出碼。
+
+    票先開 Draft;有可核對的 gate 證據(`gate_evidence`)才記 `plan_ran` 轉 Ready,只有 case 就留
+    Draft「待 plan 實跑」(#106 A4)。`--dispatch` 只派轉成 Ready 的那幾張。
     """
     if args.source not in REGRESSION_SOURCES:
         sys.stderr.write("status: --source 要是 %s 之一(收到 %r)\n"
@@ -986,6 +1044,7 @@ def cmd_regression_red(args):
     if enabled and not rerun:
         sys.stderr.write("status: 沒有全套指令,verify.run 留空:"
                          "設 board/config.json 的 regression.rerun_cmd\n")
+    import ticket as ticket_mod                            # noqa: PLC0415
     rc = 0
     made = []
     for case in cases:
@@ -999,7 +1058,8 @@ def cmd_regression_red(args):
             ]
             for line in REGRESSION_ACCEPTANCE:
                 argv += ["--acceptance", line.format(case=case, rerun=rerun)]
-            argv += ["--in-scope", case]
+            argv += ["--in-scope", case,
+                     "--test-plan", "回歸案例 %s:`%s`" % (case, rerun or "<全套指令>")]
             for path in paths:
                 argv += ["--allowed-write-path", str(path)]
             if rerun:
@@ -1008,7 +1068,7 @@ def cmd_regression_red(args):
             # 開不出來,create 完才補就會被那一關擋下。
             argv += ["--role", "worker", "--model", str(model), "--tool", "claude-code",
                      "--needs-verifier", "false", "--interface-fixed", "false",
-                     "--state", "Ready"]
+                     "--state", "Draft"]
             ident, reused = open_repair_ticket(
                 case, ("regression_case", "flaky_case"), argv, {
                     "regression_case": case, "regression_source": args.source,
@@ -1018,8 +1078,14 @@ def cmd_regression_red(args):
                 ident = str(reused.get("id") or "")
                 print("status: %s 沿用 #%s(%s)" % (case, ident, reused.get("state", "?")))
             elif ident:
-                made.append(ident)
-                print("status: %s 開了修復票 #%s(role=worker,Ready)" % (case, ident))
+                proof, why = gate_evidence(ticket_mod, args, case, logs)
+                state, why = promote_repair_ticket(ticket_mod, ident, proof, why, rerun)
+                if state == "Ready":
+                    made.append(ident)
+                    print("status: %s 開了修復票 #%s(role=worker,Ready)" % (case, ident))
+                else:
+                    print("status: %s 開了修復票 #%s(role=worker,Draft —— %s:%s)"
+                          % (case, ident, ticket_mod.PLAN_PENDING, why))
             else:
                 sys.stderr.write("status: %s 修復票開不出來\n" % case)
                 rc = 1
@@ -1307,6 +1373,9 @@ def main(argv):
     red.add_argument("--model", default="")
     red.add_argument("--rerun", default="")
     red.add_argument("--dispatch", action="store_true")
+    red.add_argument("--gate-cmd", default="")
+    red.add_argument("--gate-rc", default="")
+    red.add_argument("--gate-base", default="")
     red.set_defaults(run=cmd_regression_red)
 
     show = subs.add_parser("show")
