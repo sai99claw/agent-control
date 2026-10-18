@@ -198,9 +198,10 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
    照判 8。其餘改動 ⇒ `reports/t<n>/<run_id>/<角色>-round<r>.guard.json`(前後證據)、
    `auto-fix.sh` rc=8、票 Blocked / owner=main、`ticket.attempt.failed reason=guard-violation`、一頁 decision
    列路徑與前後;patch 不套、副本留著。**排在額度那一手之前**:同一輪又撞額度仍是 8,不換候選、不重起。
-   **額度 / 不可用換候選(#121)**:判讀只由 `role-models.py classify`;可換時這一次記 cost(outcome=error、note 記原因)、
+   **額度 / 不可用換候選(#121/#131)**:worker 票明寫的 model/tool/effort 先於角色鏈(依 model 去重;其他角色不讀它);判讀只由 `role-models.py classify`;可換時這一次記 cost(outcome=error、note 記原因)、
    副本與交接資料留著,依 `board/role-models.json` 取下一個候選在同一輪重起(有 Controller 時只發 `agent.recovery_needed`);
    整串耗盡 → Blocked、一頁、rc=7。閘門綠後覆核 fail → rc=9、沒交件 / stale → rc=10;`--no-review` rc=0 且印 `終態=awaiting_review`。
+   agy 候選以副本 `work/` 為 cwd、stdin=`/dev/null`,用黏在 `-p=` 的短提示指向控制根內派工文絕對路徑;不帶 `--add-dir` 或 sandbox,權限與事後越界守衛同 Claude/Codex。
    批次越界時整批票轉 Blocked(唯一會寫票的批次結局)、不發 attempt.failed(批次沒有 attempt.start)。
    **只查列出來的地方**:被 `.gitignore` 掉的檔、`guarded_dirs` 以外的整部電腦都沒看過;平行的兩個 agent
    時間重疊時,同一處改動會記在兩者名下(守衛分不出是哪一個行程改的)。開題者改真票是它的工作,不在守衛裡。

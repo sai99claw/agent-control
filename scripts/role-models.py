@@ -38,6 +38,7 @@ TABLE_REL = os.path.join("board", "role-models.json")
 SCHEMA_VERSION = 1
 CANDIDATE_KEYS = ("model", "tool", "effort", "effort_escalated", "dispatch_cap")
 CODEX_PREFIX = "codex:"
+AGY_PREFIX = "agy:"
 # 一次只做一張票的角色:每次派工上限固定 1(A8)。
 SINGLE_ITEM_ROLES = ("worker", "worker_simple", "verifier", "reviewer")
 POLICY_VALUES = {"fallback": "next_candidate_only_on_quota_or_unavailable",
@@ -54,10 +55,12 @@ OTHER = "other"
 # 只對 provider 錯誤信封裡的字比對;順序就是判讀順序 —— 認證先判,它要停下不換人。
 ERROR_WORDS = (
     (AUTH, re.compile(r"authentication|permission_error|unauthori[sz]ed|invalid[ _.-]?api[ _.-]?key"
-                      r"|api key|\b40[13]\b|not logged in|log ?in", re.I)),
+                      r"|api key|\b40[13]\b|not logged in|log ?in|invalid --effort"
+                      r"|conflicts with --effort|has no .* effort", re.I)),
     ("quota_exhausted", re.compile(r"rate[ _.-]?limit|usage[ _.-]?limit|quota|\b429\b"
-                                   r"|too many requests", re.I)),
+                                   r"|resource exhausted|too many requests", re.I)),
     ("provider_unavailable", re.compile(r"not_found_error|model_not_found|\b404\b"
+                                        r"|not recognized as a known model"
                                         r"|model\b.*\b(not found|does not exist|not available"
                                         r"|not supported|unavailable)", re.I)),
 )
@@ -89,9 +92,11 @@ def candidate_problems(role, index, row):
         return ["%s 的 model / tool 要是非空字串" % where]
     if tool not in EFFORT_LEVELS:
         problems.append("%s 的 tool=%s 不在 %s" % (where, tool, " ".join(sorted(EFFORT_LEVELS))))
-    elif model.startswith(CODEX_PREFIX) != (tool == "codex"):
-        problems.append("%s 的 model=%s 與 tool=%s 不一致(`codex:` 前綴 ⇔ tool=codex)"
-                        % (where, model, tool))
+    else:
+        for prefix, paired_tool in ((CODEX_PREFIX, "codex"), (AGY_PREFIX, "agy")):
+            if model.startswith(prefix) != (tool == paired_tool):
+                problems.append("%s 的 model=%s 與 tool=%s 不一致(`%s` 前綴 ⇔ tool=%s)"
+                                % (where, model, tool, prefix, paired_tool))
     for key in ("effort", "effort_escalated"):
         if row[key] is not None:
             why = effort_problem(tool, row[key])
@@ -162,6 +167,10 @@ def provider_error(row):
     認得的形狀:`{"type":"error","error":{"type"|"code","message"}}` / `{"type":"error","message"}`
     (claude API 錯誤、`codex exec --json`)、`{"type":"turn.failed","error":{"message"}}`
     (codex)、`{"type":"result","is_error":true,"result"}`(claude -p 的信封)。"""
+    if row.get("event") == "result" and isinstance(row.get("result"), dict):
+        row = row["result"]
+    if row.get("status") == "ERROR" and row.get("error") is not None:
+        return "", str(row.get("error"))
     kind = row.get("type")
     if kind in ("error", "turn.failed"):
         err = row.get("error")
@@ -221,7 +230,8 @@ def result(role, reason, index=None, row=None, effort=None, exhausted=False):
 
 
 def resolve(table, role, complexity=None, repair_round=0, last_red=False, items=1,
-            ticket_effort=None, worker_model=None, exhausted_index=None):
+            ticket_effort=None, ticket_model=None, ticket_tool=None, worker_model=None,
+            exhausted_index=None):
     """選一個候選。回 `(rc, 結果)`;rc 2 時結果是一句為什麼不派。表要先過 `load_table`。
 
     `exhausted_index` = 已被可信證據標記用不了的那一格(含它之前的):鏈是有序的,走到第 I
@@ -236,6 +246,17 @@ def resolve(table, role, complexity=None, repair_round=0, last_red=False, items=
     chain = table["roles"].get(name)
     if chain is None:
         return 2, "未知角色 %s;表裡有 %s" % (name, " ".join(table["roles"]))
+    if role == "worker" and ticket_model:
+        same = next((row for row in chain if row["model"] == ticket_model), None)
+        explicit = dict(same) if same else {
+            "model": ticket_model, "tool": ticket_tool or "claude-code", "effort": None,
+            "effort_escalated": None, "dispatch_cap": 1}
+        explicit["tool"] = ticket_tool or explicit["tool"]
+        problems = candidate_problems("票", 0, dict(explicit, effort=ticket_effort)
+                                      if ticket_effort else explicit)
+        if problems:
+            return 2, ";".join(problems)
+        chain = [explicit] + [row for row in chain if row["model"] != ticket_model]
     policies = table["policies"]
     ask = {"complexity": complexity, "repair_round": repair_round or 0, "last_red": last_red}
     escalate = [cond for cond in policies["escalate_effort_when"] if ESCALATE_WHEN[cond](ask)]
@@ -298,6 +319,8 @@ def parser():
     res.add_argument("--worker-model", metavar="M",
                      help="修補輪原 worker 用的模型(只有 worker 鏈讀;verifier 不看)")
     res.add_argument("--ticket-effort", metavar="E", help="票明寫的 effort(優先於表,A5)")
+    res.add_argument("--ticket-model", metavar="M", help="worker 票明寫的 model(作為第一候選)")
+    res.add_argument("--ticket-tool", metavar="T", help="worker 票明寫 model 配對的 tool")
     res.add_argument("--items", type=int, default=1, metavar="N",
                      help="這次要交幾張票 / 幾個項目;不給 = 1")
     res.add_argument("--exhausted-index", type=int, metavar="I",
@@ -351,7 +374,8 @@ def main(argv):
             return fail("證據不是額度 / 不可用(%s),不換候選:%s" % (kind, detail))
     rc, got = resolve(table, args.role, complexity=args.complexity,
                       repair_round=args.repair_round, last_red=args.last_red, items=args.items,
-                      ticket_effort=args.ticket_effort, worker_model=args.worker_model,
+                      ticket_effort=args.ticket_effort, ticket_model=args.ticket_model,
+                      ticket_tool=args.ticket_tool, worker_model=args.worker_model,
                       exhausted_index=args.exhausted_index)
     if rc == 2:
         return fail(got)

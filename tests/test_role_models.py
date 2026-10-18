@@ -18,6 +18,7 @@ SCRIPT = os.path.join(SCRIPTS, "role-models.py")
 TABLE = os.path.join(BOARD_DIR, "role-models.json")
 RUN_TIMEOUT = 30
 SOL, ASTRA = "codex:gpt-5.6-sol", "codex:gpt-6-astra"
+AGY = "agy:gemini-3.8-flash-high"
 
 
 def cand(model, tool, effort=None, escalated=None, cap=None):
@@ -74,6 +75,12 @@ NESTED = ('{"type":"user","message":{"content":[{"type":"tool_result",'
           '{"type":"result","subtype":"success","is_error":false,'
           '"result":"done; saw a 429 in the test log"}\n')
 TIMEOUT_LOG = "auto-fix: worker 逾時 3600 秒\n"
+AGY_UNKNOWN = '{"status":"ERROR","error":"not recognized as a known model"}\n'
+AGY_EFFORT = ('{"status":"ERROR","error":"invalid model selection gemini-3.8-flash-high '
+              'conflicts with --effort=max"}\n')
+AGY_429 = '{"status":"ERROR","error":"429"}\n'
+AGY_QUOTA = ('{"event":"result","result":{"status":"ERROR",'
+             '"error":"RESOURCE_EXHAUSTED: 429 Too Many Requests"}}\n')
 
 
 def env(**extra):
@@ -203,6 +210,17 @@ class InitialTable(RoleModels):
                 rc, out, err = self.run_cli("check", table=path)
                 self.assertEqual(rc, 2, out + err)
         self.assertIn("未知角色 owner", self.refused("--role", "owner"))
+
+    def test_131_a1_an_agy_prefix_mismatch_invalidates_the_table(self):
+        """四問:量 agy 前綴/tool 對稱;值=A1;舊值放行;表真的含完整候選。"""
+        for model, tool in ((AGY, "codex"), ("opus", "agy")):
+            with self.subTest(model=model, tool=tool):
+                table = copy.deepcopy(self.table)
+                table["roles"]["worker"][0].update(model=model, tool=tool, effort="high",
+                                                    effort_escalated="high")
+                err = self.refused("--role", "worker", table=self.write_table(table))
+                self.assertIn("不一致", err)
+                self.assertIn("agy", err)
 
 
 class Effort(RoleModels):
@@ -345,6 +363,58 @@ class Fallback(RoleModels):
                 self.assertIn("耗盡", got["reason"])
         self.assertIn("不在 worker 鏈的範圍",
                       self.refused(*self.after("worker", 2, QUOTA_CLAUDE)))
+
+    def test_131_a6_agy_error_envelopes_are_classified_without_plain_text_guessing(self):
+        """四問:量 direct/stream 信封與純文字;值=A6;舊值全 other;只讀頂層 provider 信封。"""
+        rows = ((AGY_UNKNOWN, "provider_unavailable"), (AGY_EFFORT, "auth_config"),
+                (AGY_429, "quota_exhausted"), (AGY_QUOTA, "quota_exhausted"))
+        for log, want in rows:
+            with self.subTest(want=want):
+                code, out, err = self.run_cli("classify", "--evidence", self.evidence(log),
+                                              "--rc", "1")
+                self.assertEqual(code, 0, out + err)
+                self.assertEqual(json.loads(out)["kind"], want)
+        code, out, err = self.run_cli("classify", "--evidence",
+                                      self.evidence("429 rate limit\n"), "--rc", "1")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(json.loads(out)["kind"], "other")
+
+
+class ExplicitTicketCandidate(RoleModels):
+    """#131 A10:worker 票的明確 model 是第一候選,後接去重的角色鏈。"""
+
+    def explicit(self, model, tool="claude-code", effort="high", *more):
+        return self.resolve("--role", "worker", "--ticket-model", model,
+                            "--ticket-tool", tool, "--ticket-effort", effort, *more)
+
+    def test_a10_agy_is_first_then_the_unchanged_worker_chain(self):
+        """四問:量三格順序;值=A10 寫死;舊值忽略票 model;表有 sol/opus 兩格。"""
+        _, first = self.explicit(AGY, "agy")
+        _, second = self.explicit(AGY, "agy", "high", "--exhausted-index", "0")
+        _, third = self.explicit(AGY, "agy", "high", "--exhausted-index", "1")
+        self.assertEqual([(row["candidate_index"], row["model"], row["tool"], row["effort"])
+                          for row in (first, second, third)],
+                         [(0, AGY, "agy", "high"), (1, SOL, "codex", "high"),
+                          (2, "opus", "claude-code", "high")])
+
+    def test_a10_a_duplicate_explicit_model_is_removed_from_the_table_tail(self):
+        """四問:量 opus 只出現一次;值=A10;舊值先 sol;用耗盡 index 證鏈尾。"""
+        _, first = self.explicit("opus")
+        _, second = self.explicit("opus", "claude-code", "high", "--exhausted-index", "0")
+        rc, spent = self.explicit("opus", "claude-code", "high", "--exhausted-index", "1")
+        self.assertEqual((first["model"], second["model"]), ("opus", SOL))
+        self.assertEqual(rc, 3)
+        self.assertTrue(spent["exhausted"])
+
+    def test_a10_without_a_ticket_model_is_byte_for_byte_the_table_choice(self):
+        """四問:量無 model 的完整結果;值=既有表;變異 M5 只影響有 model;非 fallback。"""
+        _, plain = self.resolve("--role", "worker")
+        _, explicit = self.resolve("--role", "worker", "--ticket-model", SOL,
+                                   "--ticket-tool", "codex", "--ticket-effort", "high")
+        self.assertEqual((plain["candidate_index"], plain["model"], plain["tool"], plain["effort"],
+                          plain["dispatch_cap"]),
+                         (explicit["candidate_index"], explicit["model"], explicit["tool"],
+                          explicit["effort"], explicit["dispatch_cap"]))
 
 
 class DispatchCap(RoleModels):

@@ -173,6 +173,31 @@ class TokensSumEveryModel(CostBase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(tuple(self.rows()[-1].get(key) for key in TOKENS), (5, 77, 0, 9))
 
+    def test_131_a7_agy_stream_result_maps_usage_and_conversation_id(self):
+        """四問:量 agy 四 token/session/note;值=A7;舊值讀不到 event=result;thinking 不另加。"""
+        body = json.dumps({"event": "result", "result": {
+            "conversation_id": "agy-c-1", "status": "SUCCESS", "duration_seconds": 8,
+            "usage": {"input_tokens": 38177, "output_tokens": 745,
+                      "thinking_tokens": 470, "cache_read_tokens": 9,
+                      "total_tokens": 38922}}})
+        done = self.cost("--model", "agy:gemini-3.8-flash-high", "--from-envelope",
+                         self.envelope_file(body, name="agy.log"))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.rows()[-1]
+        self.assertEqual(tuple(row.get(key) for key in TOKENS), (38177, 745, None, 9))
+        self.assertEqual(row["session_id"], "agy-c-1")
+        self.assertIn("agy 信封不提供 cache_write", row["note"])
+
+    def test_131_a7_an_agy_stream_without_result_records_nulls_and_the_reason(self):
+        """四問:量被砍信封四 null/note;值=A7;舊值是泛稱 JSON;沒有補造 usage。"""
+        path = self.envelope_file('{"event":"init","model":"gemini"}\n'
+                                  '{"event":"step_update"}', name="agy-cut.log")
+        done = self.cost("--model", "agy:gemini-3.8-flash-high", "--from-envelope", path)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.rows()[-1]
+        self.assertEqual(tuple(row.get(key) for key in TOKENS), (None, None, None, None))
+        self.assertIn("agy 信封沒有 result 行", row["note"])
+
 
 class TheEventCarriesTheWholeRow(CostBase):
 

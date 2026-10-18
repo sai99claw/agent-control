@@ -1934,6 +1934,7 @@ def read_envelope(path):
             text = handle.read()
     except OSError as exc:
         return None, "讀不到 %s(%s)" % (shown, exc.strerror or exc)
+    agy_stream = False
     try:
         data = json.loads(text)
     except ValueError:
@@ -1946,11 +1947,21 @@ def read_envelope(path):
                 row = json.loads(line)
             except ValueError:
                 continue
-            if isinstance(row, dict) and row.get("type") == "result":
-                data = row
-                break
+            if isinstance(row, dict):
+                if row.get("type") == "result":
+                    data = row
+                    break
+                if row.get("event") == "result" and isinstance(row.get("result"), dict):
+                    data = row["result"]
+                    break
+                if row.get("event"):
+                    agy_stream = True
+    if isinstance(data, dict) and data.get("event") == "result" \
+            and isinstance(data.get("result"), dict):
+        data = data["result"]
     if not isinstance(data, dict):
-        return None, "%s 裡沒有 JSON 信封" % shown
+        return None, ("agy 信封沒有 result 行" if agy_stream
+                      else "%s 裡沒有 JSON 信封" % shown)
     if not isinstance(data.get("usage"), dict) and not isinstance(data.get("modelUsage"), dict):
         return None, "%s 的信封沒有 usage" % shown
     return data, ""
@@ -1964,6 +1975,12 @@ def envelope_tokens(envelope):
     """信封的四種 token,`{欄: 值}`。`modelUsage` 各模型加總;某模型缺某鍵算 0,四鍵全缺
     的模型不算。**一欄**沒有任何一個模型帶那個鍵(或沒有 `modelUsage`)才退回 `usage`
     的那一欄 —— 只帶 inputTokens / outputTokens 的 modelUsage 不該把 cache 兩欄量成 0。"""
+    base_usage = envelope.get("usage") if isinstance(envelope.get("usage"), dict) else {}
+    if isinstance(envelope.get("conversation_id"), str):
+        return {"tokens_in": whole(base_usage.get("input_tokens")),
+                "tokens_out": whole(base_usage.get("output_tokens")),
+                "cache_write": None,
+                "cache_read": whole(base_usage.get("cache_read_tokens"))}
     seen, totals = set(), {}
     models = envelope.get("modelUsage")
     for usage in (models.values() if isinstance(models, dict) else ()):
@@ -1976,8 +1993,7 @@ def envelope_tokens(envelope):
             totals[field] = totals.get(field, 0) + (value or 0)
             if value is not None:
                 seen.add(field)
-    usage = envelope.get("usage") if isinstance(envelope.get("usage"), dict) else {}
-    return {field: totals[field] if field in seen else whole(usage.get(key))
+    return {field: totals[field] if field in seen else whole(base_usage.get(key))
             for field, key in COST_USAGE}
 
 
@@ -2030,12 +2046,17 @@ def cmd_cost(argv):
         wall = int(round(envelope["duration_ms"] / 1000.0))
     # token 欄是 null 的那一列,原因寫在 `note`(#58):「沒量」與「量了但信封不見」
     # 都是 null,只看數字分不出來。
-    session = envelope.get("session_id") if envelope else None
+    agy = bool(envelope and isinstance(envelope.get("conversation_id"), str))
+    session = (envelope.get("conversation_id") if agy else envelope.get("session_id")) \
+        if envelope else None
+    note = got.get("--note")
+    if agy:
+        note = ";".join(part for part in (note, "agy 信封不提供 cache_write") if part)
     row.update({"wall_seconds": wall, "outcome": outcome,
                 "run_id": got.get("--run-id") or None,
                 "session_id": session if isinstance(session, str) and session else None,
                 "by": got.get("--by") or None,
-                "note": ";".join(part for part in (got.get("--note"), None if envelope else why)
+                "note": ";".join(part for part in (note, None if envelope else why)
                                  if part) or None,
                 "effort": got.get("--effort") or None,
                 "at": now()})
@@ -2110,13 +2131,16 @@ def cost_total(ticket):
 
 
 CODEX_PREFIX = "codex:"
+AGY_PREFIX = "agy:"
 # 派工文從 stdin 進(`-`);副本是 `git archive` 展的,沒有 `.git`,codex 預設會拒跑。
 # 權限與 claude 那一支相同(D-048):不設沙盒、不停下來問;越界由 auto-fix 的事後守衛抓。
 CODEX_COMMAND = ("codex exec -m %s%s -s danger-full-access -c 'approval_policy=\"never\"' "
                  "-C . --skip-git-repo-check -")
+AGY_COMMAND = "agy --model %s%s --dangerously-skip-permissions --output-format stream-json"
 # 推理強度的合法值表只在這裡(D-018,#114):claude-code 抄自 `claude --help`。
 EFFORT_LEVELS = {"claude-code": ("low", "medium", "high", "xhigh", "max"),
-                 "codex": ("low", "medium", "high", "xhigh", "max", "ultra")}
+                 "codex": ("low", "medium", "high", "xhigh", "max", "ultra"),
+                 "agy": ("low", "medium", "high", "xhigh", "max")}
 # 票的「簡單 / 複雜」標記只有這一格(#116 A7):`scripts/role-models.py` 據它挑鏈與升級 effort。
 COMPLEXITY = ("simple", "complex")
 
@@ -2146,9 +2170,13 @@ def agent_command(model, tool, base, swap_model=False, effort=""):
     `effort`(#114)空 = 命令與沒有這一格時逐字相同;不在該 tool 的合法值表就不派。
     """
     model, tool, effort = model or "", tool or "", effort or ""
-    if model.startswith(CODEX_PREFIX) != (tool == "codex"):
-        return None, ("model=%s 與 tool=%s 不一致 —— `codex:` 前綴的模型要配 tool=codex,"
-                      "tool=codex 要配 `codex:` 前綴的模型" % (model or "(空)", tool or "(空)"))
+    pairs = ((CODEX_PREFIX, "codex"), (AGY_PREFIX, "agy"))
+    for prefix, paired_tool in pairs:
+        if model.startswith(prefix) != (tool == paired_tool):
+            return None, ("model=%s 與 tool=%s 不一致 —— `%s` 前綴的模型要配 tool=%s,"
+                          "tool=%s 要配 `%s` 前綴的模型"
+                          % (model or "(空)", tool or "(空)", prefix, paired_tool,
+                             paired_tool, prefix))
     if effort:
         why = effort_problem(tool, effort)
         if why:
@@ -2156,6 +2184,15 @@ def agent_command(model, tool, base, swap_model=False, effort=""):
     if tool == "codex":
         extra = (" -c " + shlex.quote('model_reasoning_effort="%s"' % effort)) if effort else ""
         return CODEX_COMMAND % (shlex.quote(model[len(CODEX_PREFIX):]), extra), ""
+    if tool == "agy":
+        agy_model = model[len(AGY_PREFIX):]
+        suffix = next((level for level in ("low", "medium", "high")
+                       if agy_model.endswith("-" + level)), "")
+        if effort and suffix and effort != suffix:
+            return None, ("model=%s 的 -%s 後綴與 effort=%s 衝突"
+                          % (model, suffix, effort))
+        extra = " --effort %s" % shlex.quote(effort) if effort else ""
+        return AGY_COMMAND % (shlex.quote(agy_model), extra), ""
     if not effort and (not swap_model or not model):
         return base, ""
     parts = shlex.split(base)

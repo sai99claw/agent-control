@@ -16,7 +16,7 @@
 
 - 入口:[`scripts/auto-fix.sh`](../scripts/auto-fix.sh)
 - 主守衛:[`tests/test_auto_fix.py`](../tests/test_auto_fix.py)
-- 來源:[`tests/test_auto_fix_codex.py`](../tests/test_auto_fix_codex.py)
+- 來源:[`tests/test_auto_fix_agy.py`](../tests/test_auto_fix_agy.py)、[`tests/test_auto_fix_codex.py`](../tests/test_auto_fix_codex.py)
 
 ## gate
 
