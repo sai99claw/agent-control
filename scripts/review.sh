@@ -370,23 +370,13 @@ diff = subprocess.run(["git", "-C", root, "diff", "%s^" % sha, sha],
                       capture_output=True, text=True).stdout
 sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import ticket as ticket_mod
-handin = {}
-for name in sorted(os.listdir(os.path.dirname(review))):
-    if name.startswith("result-round") and name.endswith(".json"):
-        try:
-            with open(os.path.join(os.path.dirname(review), name), encoding="utf-8") as handle:
-                handin = json.load(handle)
-        except (OSError, ValueError):
-            handin = {}
-extra = [name for name in handin.get("extra_paths") or [] if isinstance(name, str)] \
-    if isinstance(handin, dict) else []
+extra, reasons = ticket_mod.handin_union(ticket_mod.handin_rounds(os.path.dirname(review)))
 if extra:
     rows = []
     for ident in ids:
         with open(os.path.join(tdir, "%s.json" % ident), encoding="utf-8") as handle:
             rows.append(json.load(handle))
     hits = ticket_mod.out_of_scope_hits(rows, extra)
-    reasons = handin.get("extra_reasons") if isinstance(handin.get("extra_reasons"), dict) else {}
     print("")
     print("## 白名單外改動")
     print("這幾個檔在各票提示範圍聯集外、或命中 out_of_scope(建議範圍,越出不擋);理由是 worker 在 "
@@ -622,7 +612,7 @@ slots = {
     "@ROUND@": rnd,
 }
 # 白名單外改動(D-H38 ①、D-050 ①):提示範圍與 `out_of_scope` 都是建議範圍,越出不擋 —— 擋的是
-# 覆核者這一段:逐檔印檔名、命中的 out_of_scope glob、最近一次收件的理由(`extra_reasons`)。
+# 覆核者這一段:逐檔印檔名、命中的 out_of_scope glob、各輪收件併起來的理由(`extra_reasons`)。
 # 沒有就不印,免得每一份派工文都多一段空話。
 changed = subprocess.run(["git", "-C", root, "diff", "--name-only", "%s...%s" % (main, sha)],
                          capture_output=True, text=True).stdout.splitlines()

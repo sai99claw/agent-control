@@ -428,7 +428,7 @@ PY
     # 寫入範圍(D-H38 ①、D-050 ①)。`allowed_write_paths` 與 `out_of_scope` 都是建議範圍:越出
     # 不擋(apply 記進 result 的 `extra_paths` / `extra_reasons`、覆核者逐檔看過了);硬擋只剩
     # `board/config.json` 的 `protected_paths`。原本 out_of_scope 的硬擋改成「列出 + 要理由」:
-    # 命中的檔在最近一次收件的 `extra_reasons` 裡沒有理由(null / 空字串)→ 拒絕;只是提示
+    # 命中的檔在各輪收件併起來的 `extra_reasons` 裡沒有理由(null / 空字串)→ 拒絕;只是提示
     # 範圍外的檔缺理由 → 警告、不擋。印 `B`(硬擋)/ `R`(out_of_scope 命中缺理由)/ `W`(警告)。
     out=$(python3 - "$ROOT" "$MAIN" "$b" "$tf" "$id" <<'PY'
 import json, os, subprocess, sys
@@ -467,7 +467,7 @@ PY
     fi
     fenced=$(echo "$out" | sed -n 's/^R //p')
     if [ -n "$fenced" ]; then
-        echo "land: $b —— 票 #$id 的 out_of_scope 命中缺理由(EVIDENCE「提示清單外的改動」逐檔寫理由,apply 收件抽進 result 的 extra_reasons;最近一次收件沒有):"
+        echo "land: $b —— 票 #$id 的 out_of_scope 命中缺理由(EVIDENCE「提示清單外的改動」逐檔寫理由,apply 收件抽進 result 的 extra_reasons;各輪收件都沒有):"
         echo "$fenced" | sed 's/^/land:   /'
         STOP=1
         continue

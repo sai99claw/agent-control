@@ -626,9 +626,9 @@ class TicketChecks(LandBase):
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("沒有 base_sha", done.stdout)
 
-    def handin(self, reasons, run_id="20261018-100000-1"):
-        """apply 收件寫下的那一份 result(`extra_paths` / `extra_reasons`)—— land 讀最近一次。"""
-        self.write(os.path.join("reports", "t1", run_id, "result-round1.json"),
+    def handin(self, reasons, run_id="20261018-100000-1", rnd=1):
+        """apply 收件寫下的那一份 result(`extra_paths` / `extra_reasons`)—— land 讀各輪併起來的。"""
+        self.write(os.path.join("reports", "t1", run_id, "result-round%d.json" % rnd),
                    json.dumps({"present": True, "extra_paths": sorted(reasons),
                                "extra_reasons": reasons}, ensure_ascii=False))
 
@@ -641,8 +641,8 @@ class TicketChecks(LandBase):
         return branch
 
     def test_writing_into_out_of_scope_is_refused_and_the_files_are_named(self):
-        """#101 A5(D-050 ①):out_of_scope 從硬擋改成「列出 + 要理由」—— 命中的檔在最近一次
-        收件的 extra_reasons 裡沒有理由(沒有那份、null、空字串)→ 拒絕,訊息含「out_of_scope
+        """#101 A5(D-050 ①):out_of_scope 從硬擋改成「列出 + 要理由」—— 命中的檔在各輪
+        收件併起來的 extra_reasons 裡沒有理由(沒有那份、null、空字串)→ 拒絕,訊息含「out_of_scope
         命中缺理由」並點名檔與 glob;只是提示範圍外的檔不點名成拒絕。
         四問:量 rc 2、那一行、主線不動、閘門沒跑;紅 = land 照落;期望值 = 夾具的 out_of_scope
         與 handin 理由;不測 = 有理由那一條(下一條)。
@@ -685,6 +685,22 @@ class TicketChecks(LandBase):
         self.assertEqual(lines[at[0] + 1], "land:   lib/extra.py")
         self.assertNotIn("land:   docs/outside.md", done.stdout, "有理由的命中不再點名")
         self.assertNotIn("命中缺理由", done.stdout)
+
+    def test_a_reason_given_in_round_one_survives_a_repair_round(self):
+        """#101 A5 覆核反駁:apply 每輪只量這一輪的增量 —— 第 1 輪改了 out_of_scope 的檔、寫了理由,
+        第 2 輪修紅沒再碰它(extra_paths 空、extra_reasons 空),land 要看各輪併起來的理由照落。
+        四問:量 rc 0、檔在主線、沒有「命中缺理由」;紅 = 只讀最近一份收件;期望值 = 夾具兩輪的
+        handin;不測 = 第 2 輪的 null 會不會抹掉第 1 輪(下一段 subTest 量)。
+        **變異**:`handin_reasons` 只回最近一份的 extra_reasons → 這一條紅。"""
+        self.wide_branch()
+        self.handin({"docs/outside.md": "說明 A1 的行為要寫在這份", "lib/extra.py": None})
+        self.handin({}, rnd=2)
+        self.handin({"docs/outside.md": None}, rnd=3)
+        self.approve(1, "t1-wide")
+        done = self.land("t1-wide")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("命中缺理由", done.stdout)
+        self.assertIn("docs/outside.md", self.git("ls-tree", "-r", "--name-only", "main"))
 
     def test_writing_into_protected_paths_is_refused_whatever_the_reason(self):
         """#101 A1:protected_paths 仍硬擋 —— 收件的理由與 info_homes 都救不了,點名檔與格。

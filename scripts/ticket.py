@@ -1464,9 +1464,46 @@ def extra_reasons(text, extra):
     return {name: found.get(name) for name in extra}
 
 
+def handin_union(paths):
+    """把幾份收件(`result-round<輪>.json`,舊的在前)的 `extra_paths` / `extra_reasons` 併成一份。
+    apply 每輪只量**這一輪的增量**,前幾輪寫過的理由要跨輪留著:同一檔後面那輪有理由就蓋過,
+    後面那輪沒寫(null / 空字串)不抹掉前面的。回 `(extra_paths, extra_reasons)`。"""
+    extra, reasons = [], {}
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        for name in data.get("extra_paths") or []:
+            if isinstance(name, str) and name not in extra:
+                extra.append(name)
+        said = data.get("extra_reasons")
+        if not isinstance(said, dict):
+            continue
+        for name, reason in said.items():
+            if str(reason or "").strip() or name not in reasons:
+                reasons[name] = reason
+    return extra, reasons
+
+
+def handin_rounds(where):
+    """`where` 底下 `result-round<輪>.json` 的路徑,依輪號由舊到新。"""
+    try:
+        names = os.listdir(where)
+    except OSError:
+        return []
+    rounds = [(int(m.group(1)), name) for name in names
+              for m in [re.match(r"^result-round(\d+)\.json$", name)] if m]
+    return [os.path.join(where, name) for _, name in sorted(rounds)]
+
+
 def handin_reasons(root, ident):
-    """這張票**最近一次收件**(`apply.sh` 寫的 `result-round<輪>.json`,有 `extra_reasons`
-    那一份)的 `(路徑, extra_reasons)`;一份都沒有回 `("", {})`。land 與覆核派工文讀它。"""
+    """這張票**各輪收件**(`apply.sh` 寫的 `result-round<輪>.json`)併起來的 `extra_reasons`
+    (`handin_union`;依 mtime 由舊到新,後面那輪蓋過同一檔),回 `(最近一份的路徑, extra_reasons)`;
+    一份都沒有回 `("", {})`。land 與覆核派工文讀它。"""
     where = os.path.join(root, event.config(root).get("reports_dir") or "reports", "t%s" % ident)
     found = []
     try:
@@ -1474,24 +1511,12 @@ def handin_reasons(root, ident):
     except OSError:
         runs = []
     for run in runs:
-        try:
-            names = sorted(os.listdir(os.path.join(where, run)))
-        except OSError:
-            continue
-        for name in names:
-            if re.match(r"^result-round\d+\.json$", name):
-                path = os.path.join(where, run, name)
-                found.append((os.path.getmtime(path), path))
-    for _, path in sorted(found, reverse=True):
-        try:
-            with open(path, encoding="utf-8") as handle:
-                data = json.load(handle)
-        except (OSError, ValueError):
-            continue
-        reasons = data.get("extra_reasons") if isinstance(data, dict) else None
-        if isinstance(reasons, dict):
-            return path, reasons
-    return "", {}
+        for at, path in enumerate(handin_rounds(os.path.join(where, run))):
+            found.append((os.path.getmtime(path), run, at, path))
+    paths = [row[-1] for row in sorted(found)]
+    if not paths:
+        return "", {}
+    return paths[-1], handin_union(paths)[1]
 
 
 def extra_line(name, hit, reason):
