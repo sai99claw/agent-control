@@ -197,8 +197,9 @@ cmd_docs() {   # $1 = commit 訊息  $2… = 檔案(repo 相對路徑)
     if git -C "$ROOT" remote get-url origin >/dev/null 2>&1; then
         git -C "$ROOT" push -q origin "$MAIN" || {
             echo "land: 已 commit,但 push 沒成功 —— 自己推一次:git push origin $MAIN" >&2
+            # commit 已在本機 main(#128 A4):stage=push + main_before,越界守衛把它當一段落地。
             ev land.fail --note "docs push 沒成功" --kv "sha=$sha" --kv "stamp=$DSTAMP" \
-                --kv channel=docs
+                --kv channel=docs --kv stage=push --kv "main_before=$docs_before"
             exit 1
         }
     fi
@@ -854,7 +855,9 @@ status_phase_all merge 0 "已 ff-only 合進 $MAIN"
 if git -C "$ROOT" remote get-url origin >/dev/null 2>&1; then
     git -C "$ROOT" push -q origin "$MAIN" || {
         echo "land: 合進 $MAIN 了,但 push 沒成功 —— 自己推一次"
-        ev land.fail --note "push 沒成功" --kv "stamp=$STAMP"
+        # 已合進本機 main(#128 A4):與 land.pass 同形狀再加 stage=push,越界守衛把它當一段落地。
+        ev land.fail --note "push 沒成功" --kv "stamp=$STAMP" --kv stage=push \
+            --kv "sha=$(git -C "$ROOT" rev-parse --short HEAD)" --kv "main_before=$LAND_BASE"
         land_cost_all fail
         status_phase_all push 1 "push 沒成功"
         status_done_all 1 "已合進主線,push 沒成功,票還沒關"

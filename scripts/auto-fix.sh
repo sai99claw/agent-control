@@ -375,7 +375,8 @@ attempt_failed() {   # $1 = no-patch | apply-failed | timeout | objection | veri
     ev ticket.attempt.failed --ticket "$ID" --attempt "$r" --kv reason="$1"
 }
 
-# 越界守衛的收件(#115):`run_agent` 寫了 `<log 去掉 .log>.guard.json` 就是越界。這一輪
+# 越界守衛的收件(#115):`run_agent` 寫的 `<log 去掉 .log>.guard.json` 裡 violations 不空就是越界
+# (只有 main_side 的那一份是主線那一邊的改動,只記不擋,#128)。這一輪
 # 每一個 agent 的報告併成**一頁**;票轉 Blocked、owner=main、attempt 以 guard-violation 收;
 # 不套 patch、副本不收(下一個人要從它看做了什麼)。額度那一手排在它後面(A7)。
 guard_stop() {   # $1… = 這一輪 agent 的 log(空字串略過);有越界回 0(ROUND_RC=8),沒有回 1
@@ -389,6 +390,8 @@ for log in sys.argv[1:]:
     with open(path, encoding="utf-8") as handle:
         report = json.load(handle)
     rows = report.get("violations") or []
+    if not rows:
+        continue
     said.append("%s:%s" % (report.get("role") or "?", ";".join(
         "%s(前 %s → 後 %s%s)" % (row.get("path"), row.get("before"), row.get("after"),
                                 "、歸屬不上 %s" % row["unattributed"][:12]
@@ -1207,9 +1210,13 @@ def tee(stream, log):
 # land.pass 帶 stamp、sha、40 位的 main_before,事件檔裡在它之前(可以早於起跑)有同 stamp 的
 # land.start,就是 main_before..sha 那一段;從舊 HEAD 起一段接一段首尾相接到新 HEAD 才算數,
 # 接不上的第一個 commit 記成 `unattributed`。票的 land 與 docs 通道(channel=docs)同一套,工作樹照查。
-# 越界寫 `<log 去掉 .log>.guard.json`、rc 印 8。
+# push 失敗的 land.fail 帶 stage=push 與齊全的 sha / main_before / stamp(#128 A4)也算一段:commit 已在本機 main。
+# 主線可寫前綴(config `guard_main_paths`,缺 = docs 通道三前綴,#128 A1)底下的改動只記不擋,列進 `main_side`。
+# 越界寫 `<log 去掉 .log>.guard.json`、rc 印 8;只有 main_side 或 push 失敗的那一段時 guard.json 照寫、
+# violations 空、rc 不動。
 # **只查列出來的地方**:主 repo 被 .gitignore 掉的檔與 guarded_dirs 以外,這裡不宣稱看過。
 guard_path = os.path.splitext(log_path)[0] + ".guard.json"
+MAIN_PATHS_DEFAULT = ["tickets/", "docs/", "memory/"]   # = land.sh 的 DOCS_PREFIXES
 
 
 def guard_conf():
@@ -1227,7 +1234,14 @@ def guard_conf():
         dirs = []
     dirs = [os.path.realpath(os.path.join(repo, os.path.expanduser(item))) for item in dirs]
     events = os.path.join(root, str(conf.get("events_file") or "board/events.jsonl"))
-    return repo, exempt, dirs, events
+    mains = conf.get("guard_main_paths", MAIN_PATHS_DEFAULT)
+    if not isinstance(mains, list) or not all(isinstance(item, str) for item in mains):
+        sys.stderr.write("auto-fix: guard_main_paths 不是字串 list(%r)—— 這一次照預設 %s\n"
+                         % (mains, MAIN_PATHS_DEFAULT))
+        mains = MAIN_PATHS_DEFAULT
+    # 前綴以 `/` 為界:`docs` 與 `docs/` 一樣,都不含 `docs-x/`。
+    mains = [item.strip("/") + "/" for item in mains if item.strip("/")]
+    return repo, exempt, dirs, events, mains
 
 
 def file_digest(path):
@@ -1316,10 +1330,12 @@ def land_segments(rows):
             continue
         if row.get("kind") == "land.start":
             starts.add(stamp)
-        elif row.get("kind") == "land.pass" and stamp in starts:
+        elif stamp in starts and (row.get("kind") == "land.pass" or (
+                row.get("kind") == "land.fail" and row.get("stage") == "push")):
             sha, before = str(row.get("sha") or ""), str(row.get("main_before") or "")
             if len(sha) >= 7 and len(before) == 40 and all(c in "0123456789abcdef" for c in before):
-                segments.append((before, sha, stamp))
+                segments.append((before, sha, stamp + ("(push 失敗)" if row["kind"] == "land.fail"
+                                                       else "")))
     return segments
 
 
@@ -1352,19 +1368,27 @@ def land_attribution(repo, old, new, rows):
     return said, None
 
 
-def guard_verdict(before, repo, exempt, dirs, events, agent_rc):
+def guard_verdict(before, repo, exempt, dirs, events, mains, agent_rc):
     after = guard_snapshot(repo, dirs)
 
     def exempted(path):
         real = os.path.realpath(path)
         return any(real == item or real.startswith(item + os.sep) for item in exempt)
 
-    found, notes = [], []
+    def main_side_path(path):
+        top = before["top"]
+        if not top or not path.startswith(top + os.sep):
+            return False
+        rel = path[len(top) + 1:].replace(os.sep, "/")
+        return any(rel.startswith(item) for item in mains)
+
+    found, notes, main_side = [], [], []
     if before["tree"] is not None and after["tree"] is not None:
         for path in sorted(set(before["tree"]) | set(after["tree"])):
             was, now = before["tree"].get(path, "clean"), after["tree"].get(path, "clean")
             if was != now and not exempted(path):
-                found.append({"path": path, "before": was, "after": now})
+                (main_side if main_side_path(path) else found).append(
+                    {"path": path, "before": was, "after": now})
     elif before["top"]:
         notes.append("主 repo 的 git status 拍不到 —— 工作樹這一次沒有比")
     if before["branch"] != after["branch"]:
@@ -1383,15 +1407,23 @@ def guard_verdict(before, repo, exempt, dirs, events, agent_rc):
         was, now = before["dirs"].get(top, {}), after["dirs"].get(top, {})
         for path in sorted(set(was) | set(now)):
             if was.get(path, "absent") != now.get(path, "absent") and not exempted(path):
-                found.append({"path": path, "before": was.get(path, "absent"),
-                              "after": now.get(path, "absent")})
-    if not found:
+                (main_side if main_side_path(path) else found).append(
+                    {"path": path, "before": was.get(path, "absent"),
+                     "after": now.get(path, "absent")})
+    # push 失敗的那一段不擋,但主線要自己推一次:guard.json 照寫,notes 帶它。
+    if not found and not main_side and not any("(push 失敗)" in note for note in notes):
         return agent_rc
     with open(guard_path, "w", encoding="utf-8") as handle:
         json.dump({"ticket": ident, "round": r, "role": role, "agent_rc": agent_rc,
-                   "monitored": {"repo": before["top"], "guarded_dirs": dirs},
-                   "exempt": exempt, "violations": found, "notes": notes},
+                   "monitored": {"repo": before["top"], "guarded_dirs": dirs,
+                                 "guard_main_paths": mains},
+                   "exempt": exempt, "violations": found, "main_side": main_side,
+                   "notes": notes},
                   handle, ensure_ascii=False, indent=2)
+    if not found:
+        sys.stderr.write("auto-fix: %s跑的期間主線那一邊改了 %d 處、落地 %d 段(只記不擋)—— 報告 %s\n"
+                         % (LABEL, len(main_side), len(notes), guard_path))
+        return agent_rc
     sys.stderr.write("auto-fix: %s越界 %d 處(第一處 %s)—— 報告 %s\n"
                      % (LABEL, len(found), found[0]["path"], guard_path))
     return 8
@@ -1402,7 +1434,7 @@ guarded = None
 if role != "opener":
     if os.path.exists(guard_path):
         os.remove(guard_path)
-    guard_repo, guard_exempt, guard_dirs, guard_events = guard_conf()
+    guard_repo, guard_exempt, guard_dirs, guard_events, guard_mains = guard_conf()
     guarded = guard_snapshot(guard_repo, guard_dirs)
 
 # `worker.pid` 住在副本根(#46):下一輪收前幾輪副本之前先問它還活著沒有。回來了就刪掉,
@@ -1447,7 +1479,8 @@ except OSError as exc:
     sys.stderr.write("auto-fix: %s起不來 —— %s\n" % (LABEL, exc))
     rc = 127
 if guarded is not None:
-    rc = guard_verdict(guarded, guard_repo, guard_exempt, guard_dirs, guard_events, rc)
+    rc = guard_verdict(guarded, guard_repo, guard_exempt, guard_dirs, guard_events, guard_mains,
+                       rc)
 print(rc)
 PY
 }

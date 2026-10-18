@@ -355,8 +355,9 @@ class TheGuardSeesTheMainRepo(GuardBase):
 
     def test_a4_a_deleted_tracked_file(self):
         """A4 刪掉主 repo 已追蹤檔 → rc 8 一整組。"""
-        self.arm('rm "$REPO/docs/REHEARSAL.md"')
-        self.assert_stopped(self.auto_fix("--no-review"), "REHEARSAL.md")
+        # 不用 docs/ 底下的檔:#128 的 guard_main_paths 預設豁免 tickets/ docs/ memory/。
+        self.arm('rm "$REPO/verify/TAGS.md"')
+        self.assert_stopped(self.auto_fix("--no-review"), "TAGS.md")
 
     def test_a4_a_modified_tracked_file(self):
         """A4 改主 repo 已追蹤檔 → rc 8 一整組。"""
@@ -365,9 +366,9 @@ class TheGuardSeesTheMainRepo(GuardBase):
 
     def test_a4_an_already_dirty_file_changed_again(self):
         """A4 開工前就髒的已追蹤檔被再改一次(porcelain 前後都是 ` M`)→ 仍 rc 8。"""
-        self.arm('echo again >> "$REPO/docs/DECISIONS.md"')
-        self.write("docs/DECISIONS.md", self.read("docs/DECISIONS.md") + "開工前就髒了\n")
-        self.assert_stopped(self.auto_fix("--no-review"), "DECISIONS.md")
+        self.arm('echo again >> "$REPO/README"')
+        self.write("README", self.read("README") + "開工前就髒了\n")
+        self.assert_stopped(self.auto_fix("--no-review"), "README")
 
     def test_a4_head_moved_without_a_land(self):
         """A4 worker 在主 repo commit(HEAD 前進、沒有 land 事件)→ rc 8,證據指 HEAD。"""

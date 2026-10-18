@@ -808,6 +808,25 @@ class TheDocsChannel(LandBase):
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assert_one_docs_stamp(rows, ["land.start", "land.fail"])
 
+    def test_128_a4_a_refused_push_is_a_land_fail_at_stage_push_with_its_segment(self):
+        """#128 A4:origin 的 pre-receive exit 1 ⇒ commit 留在本機 main、rc 1;land.fail 帶 stage=push、
+        sha = 本機 main 的短 sha、main_before = 跑之前的 main。四問:量事件檔與兩邊的 main;
+        紅 = **M4**(push 失敗出口不帶 stage)/ 不帶 main_before;值 = 跑之前自己取的 main。"""
+        self.make_ticket(7)
+        write_executable(os.path.join(self.origin, "hooks", "pre-receive"), "#!/bin/sh\nexit 1\n")
+        before = self.git("rev-parse", "main").strip()
+        done, rows = self.land_rows_of("推不上去", "tickets/7.json")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assert_one_docs_stamp(rows, ["land.start", "land.fail"])
+        after = self.git("rev-parse", "main").strip()
+        self.assertNotEqual(after, before, "commit 在本機 main")
+        self.assertEqual(self.git("rev-parse", "main", cwd=self.origin).strip(), before,
+                         "origin 沒收")
+        self.assertEqual(rows[-1].get("stage"), "push")
+        self.assertEqual(rows[-1].get("main_before"), before)
+        self.assertTrue(len(rows[-1].get("sha") or "") >= 7 and after.startswith(rows[-1]["sha"]),
+                        rows[-1])
+
 
 class TheOpenerLandsOnlyItsOwnTicket(LandBase):
     """#91 C6(R4):`AC_ROLE=opener` 走 docs 通道時只收 `tickets/<AC_TICKET>.json`。"""
@@ -1160,6 +1179,31 @@ class FastForwardRefusedByGit(LandBase):
         self.assertIn(("merge", 1), [(row["phase"], row["rc"]) for row
                                      in self.status_of("1", kind="land")["phases"]])
         self.assertIn("land.fail", self.kinds())
+
+
+class PushRefusedAfterTheMerge(LandBase):
+
+    def test_128_a4_the_land_fail_carries_stage_push_and_the_segment(self):
+        """#128 A4:票 land 已 ff-only 合進本機 main、origin 的 pre-receive 拒收 ⇒ rc 1;land.fail 帶
+        stage=push、sha = 本機 main 的短 sha、main_before = land worktree 開出來時的 main(同 land.pass)。
+        四問:量事件檔;紅 = **M4**;值 = 跑之前自己取的 main。"""
+        good = self.branch_for(1, "t1-good")
+        self.commit_in(good, "src/g1", "推不上去的那一張")
+        self.approve(1, "t1-good")
+        write_executable(os.path.join(self.origin, "hooks", "pre-receive"), "#!/bin/sh\nexit 1\n")
+        before = self.git("rev-parse", "main").strip()
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        after = self.git("rev-parse", "main").strip()
+        self.assertNotEqual(after, before, "已合進本機 main")
+        failed = [row for row in self.events() if row["kind"] == "land.fail"]
+        self.assertEqual(len(failed), 1, failed)
+        self.assertEqual(failed[0].get("stage"), "push")
+        self.assertEqual(failed[0].get("main_before"), before)
+        self.assertTrue(after.startswith(failed[0].get("sha") or "-"), failed[0])
+        starts = [row for row in self.events() if row["kind"] == "land.start"]
+        self.assertEqual(starts[-1].get("stamp"), failed[0].get("stamp"))
+        self.assertNotIn("land.pass", self.kinds())
 
 
 class LandStatus(LandBase):

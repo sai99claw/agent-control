@@ -3700,13 +3700,15 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
     def fix_dir(self):
         return os.path.join(self.home, "repo-wt", "fix-t1", "round1")
 
-    def arm(self, stray, who="worker", guarded=None, **fields):
+    def arm(self, stray, who="worker", guarded=None, config=None, **fields):
         self.set_worker(AGENT_STRAYS.replace("@REPO@", self.repo)
                         .replace("@SANDBOX@", self.home).replace("@WHO@", who)
                         .replace("@STRAY@", stray))
-        if guarded is not None:
+        if guarded is not None or config:
             conf = json.loads(self.read("board/config.json"))
-            conf["guarded_dirs"] = guarded
+            if guarded is not None:
+                conf["guarded_dirs"] = guarded
+            conf.update(config or {})
             self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
         self.ticket_ready(subject="守衛", **fields)
 
@@ -3739,7 +3741,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
     def test_a4_new_deleted_and_modified_files_in_the_main_repo_stop_the_round(self):
         """四問:量 rc / 票 / 事件 / 頁 / 副本;紅 = 守衛不拍工作樹;值 = A4;真跑 auto-fix + 真 git。"""
         rows = (("新增", 'echo stray > "$REPO/stray.txt"', "stray.txt"),
-                ("刪除", 'rm "$REPO/docs/REHEARSAL.md"', "docs/REHEARSAL.md"),
+                ("刪除", 'rm "$REPO/verify/TAGS.md"', "verify/TAGS.md"),
                 ("修改", 'echo changed >> "$REPO/README"', "README"))
         for name, stray, path in rows:
             with self.subTest(name):
@@ -3874,6 +3876,127 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
                 self.setUp()
                 self.arm(SHAPED_LAND.replace("@START@", emit_start).replace("@PASS@", kv))
                 self.assert_stopped(self.auto_fix("--no-review"), "HEAD")
+
+    def assert_main_side_only(self, done, *paths):
+        """#128 A1:不擋(rc 0、沒有 guard-violation、沒有 decision 頁),guard.json 照寫、violations 空、
+        main_side 恰是這幾個路徑(相對主 repo)且前後不同。回 guard.json。"""
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("guard-violation", self.failed_reasons())
+        self.assertEqual([row for row in self.inbox_rows() if row.get("kind") == "decision"], [])
+        self.assertEqual(len(self.guard_reports()), 1, self.guard_reports())
+        report = self.guard_report()
+        self.assertEqual(report["violations"], [])
+        top = report["monitored"]["repo"]
+        rows = report.get("main_side") or []
+        self.assertEqual(sorted(os.path.relpath(row["path"], top) for row in rows), sorted(paths))
+        for row in rows:
+            self.assertNotEqual(row["before"], row["after"], row)
+        return report
+
+    def test_128_a1_main_paths_are_recorded_not_stopped(self):
+        """#128 A1:預設前綴(tickets/ docs/ memory/)底下新增 / 修改 / 刪除 / 已髒檔再改 ⇒ 不擋,
+        main_side 列出那個路徑。四問:量 rc / 事件 / 頁 / guard.json;紅 = 前綴不豁免(rc 8)或
+        guard.json 不寫;值 = 票面 A1。"""
+        rows = (("新增", 'echo new > "$REPO/docs/T128.md"', "docs/T128.md"),
+                ("新增 memory", 'mkdir -p "$REPO/memory/main" && echo x > "$REPO/memory/main/n.md"',
+                 "memory/main/n.md"),
+                ("修改", 'echo more >> "$REPO/docs/DECISIONS.md"', "docs/DECISIONS.md"),
+                ("刪除", 'rm "$REPO/docs/REHEARSAL.md"', "docs/REHEARSAL.md"))
+        for name, stray, path in rows:
+            with self.subTest(name):
+                self.setUp()
+                self.arm(stray)
+                self.assert_main_side_only(self.auto_fix("--no-review"), path)
+        with self.subTest("已髒檔再改"):
+            self.setUp()
+            self.arm('echo again >> "$REPO/docs/DECISIONS.md"')
+            self.write("docs/DECISIONS.md", self.read("docs/DECISIONS.md") + "開工前就髒了\n")
+            report = self.assert_main_side_only(self.auto_fix("--no-review"), "docs/DECISIONS.md")
+            self.assertTrue(report["main_side"][0]["before"].startswith("M "), report)
+
+    def test_128_a1_a_malformed_guard_main_paths_is_named_and_falls_back(self):
+        """#128 A1:guard_main_paths 不是字串 list ⇒ stderr 點名、照缺鍵(預設三前綴)處理。
+        四問:量 stderr 與 rc 0;紅 = 壞值被當 [](docs/ 判 8);值 = 票面 A1。"""
+        self.arm('echo new > "$REPO/docs/T128.md"', config={"guard_main_paths": "docs/"})
+        done = self.auto_fix("--no-review")
+        self.assertIn("guard_main_paths 不是字串 list", done.stderr)
+        self.assert_main_side_only(done, "docs/T128.md")
+
+    def test_128_a2_the_exemption_does_not_spill_over(self):
+        """#128 A2:同一輪 docs/ 與 scripts/x.sh ⇒ rc 8,violations 只列 scripts/x.sh、main_side 照列。
+        四問:量 rc 8 一整組與兩格;紅 = 整輪因前綴豁免;值 = 票面 A2。"""
+        self.arm('echo new > "$REPO/docs/T128.md"\necho x > "$REPO/scripts/x.sh"')
+        self.assert_stopped(self.auto_fix("--no-review"), "scripts/x.sh")
+        report = self.guard_report()
+        top = report["monitored"]["repo"]
+        self.assertEqual([os.path.relpath(row["path"], top) for row in report["violations"]],
+                         ["scripts/x.sh"])
+        self.assertEqual([os.path.relpath(row["path"], top) for row in report["main_side"]],
+                         ["docs/T128.md"])
+
+    def test_128_a2_the_exemption_comes_from_config_and_ends_at_a_slash(self):
+        """#128 A2:`guard_main_paths: []` 時 docs/ ⇒ rc 8(**M1** 寫死不讀 config 紅);
+        `docs-x/a.md` 不在 docs/ 底下 ⇒ rc 8(**M2** startswith 不帶 `/` 紅)。值 = 票面 A2。"""
+        for name, stray, path, config in (
+                ("[]", 'echo new > "$REPO/docs/T128.md"', "docs/T128.md", {"guard_main_paths": []}),
+                ("docs-x", 'mkdir -p "$REPO/docs-x" && echo x > "$REPO/docs-x/a.md"', "docs-x/a.md",
+                 None)):
+            with self.subTest(name):
+                self.setUp()
+                self.arm(stray, config=config)
+                self.assert_stopped(self.auto_fix("--no-review"), path)
+
+    def test_128_a3_real_ticket_writes_on_another_ticket_are_control_plane(self):
+        """#128 A3:agent 期間真跑 `ticket.py set 2 state Blocked` 與寫一筆已處置的 objection ⇒
+        不擋、沒有 guard.json(控制面豁免早已排除)。四問:量 rc 0、guard.json 不存在、票 2 真被改了;
+        紅 = 控制面豁免拿掉;值 = 票面 A3。"""
+        self.make_ticket("2")
+        objection = json.dumps([{"category": "ticket-wrong", "owner": "main", "body": "對不上",
+                                 "evidence": "EVIDENCE.md:1", "disposition": "accepted",
+                                 "follow_up": ""}], ensure_ascii=False)
+        self.arm('AC_ROOT="$REPO" python3 "$REPO/scripts/ticket.py" set 2 state Blocked >/dev/null\n'
+                 "AC_ROOT=\"$REPO\" python3 \"$REPO/scripts/ticket.py\" set 2 objections '%s' >/dev/null"
+                 % objection)
+        self.assert_not_stopped(self.auto_fix("--no-review"))
+        row = self.load_ticket("2")
+        self.assertEqual(row["state"], "Blocked")
+        self.assertEqual(row["objections"][0]["disposition"], "accepted")
+
+    def refuse_pushes(self):
+        hook = os.path.join(self.origin, "hooks", "pre-receive")
+        write_executable(hook, "#!/bin/sh\nexit 1\n")
+
+    def test_128_a4_a_docs_land_whose_push_failed_is_a_legal_segment(self):
+        """#128 A4:agent 期間真跑 `land.sh docs`,commit 成功、origin 的 pre-receive 拒收 ⇒ 不擋,rc 0;
+        guard.json 的 notes 有那一段的 stamp 與「push 失敗」。四問:量 docs 通道 rc 1、rc 0、notes;
+        紅 = M4(push 失敗出口不帶 stage)與只認 land.pass;值 = 票面 A4、stamp 取自事件檔。"""
+        self.arm('echo "docs 通道" > "$REPO/docs/T128.md"\n'
+                 'AC_ROOT="$REPO" sh "$REPO/scripts/land.sh" docs "docs: #128 推不上去" docs/T128.md '
+                 '>/dev/null 2>&1 || echo "rc=$?" > "$SANDBOX/docs-rc"')
+        self.refuse_pushes()
+        before = self.git("rev-parse", "main").strip()
+        done = self.auto_fix("--no-review")
+        self.assertEqual(self.read("docs-rc", where=self.home).strip(), "rc=1", "push 真的被拒")
+        self.assertNotEqual(self.git("rev-parse", "main").strip(), before, "commit 在本機 main")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("guard-violation", self.failed_reasons())
+        failed = [row for row in self.events() if row["kind"] == "land.fail"]
+        self.assertEqual([row.get("stage") for row in failed], ["push"])
+        report = self.guard_report()
+        self.assertEqual(report["violations"], [])
+        notes = "\n".join(report["notes"])
+        self.assertIn("stamp=%s" % failed[0]["stamp"], notes)
+        self.assertIn("push 失敗", notes)
+
+    def test_128_a4_other_land_fails_are_not_a_segment(self):
+        """#128 A4:land.fail 不是 stage=push(閘門紅)、即使 sha / main_before 齊全 ⇒ 不算一段,裸 commit
+        rc 8。四問:量 rc 8 與 HEAD;紅 = **M3**(land.fail 一律算一段);值 = 票面 A4 末句。"""
+        self.arm('emit land.start --note "閘門紅" --kv stamp=S1\n'
+                 'OLD=$(git -C "$REPO" rev-parse HEAD)\n'
+                 'git -C "$REPO" commit -q --allow-empty -m "裸 commit"\n'
+                 'emit land.fail --note "閘門紅" --kv stamp=S1 --kv stage=gate '
+                 '--kv sha="$(git -C "$REPO" rev-parse --short HEAD)" --kv main_before="$OLD"')
+        self.assert_stopped(self.auto_fix("--no-review"), "HEAD")
 
 
 # 上一輪閘門的 lint 擋了一條(形狀抄 `verify-case.py lint`;#126 T3 手寫同形 status.json)。

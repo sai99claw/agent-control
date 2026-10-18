@@ -176,7 +176,15 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
    `stamp`、`sha`(短)、`main_before`(land worktree 開出來時的 HEAD),不帶 `channel`;docs 通道一次呼叫一個
    `stamp=docs-<YYYYmmdd-HHMMSS>-<pid>`,它的 `land.start` / `land.refused` / `land.fail` / `land.pass` 都帶這個
    stamp 與 `channel=docs`,有 commit 的那筆 pass 帶 `sha` 與 `main_before`(commit 之前的 HEAD)。缺 stamp
-   或 `main_before` 的落地會被判越界。其餘改動 ⇒ `reports/t<n>/<run_id>/<角色>-round<r>.guard.json`(前後證據)、
+   或 `main_before` 的落地會被判越界。**push 失敗也算一段**(#128):commit 已在本機 main,所以票 land 與
+   docs 通道的 push 失敗出口發的 `land.fail` 帶 `stage=push`、`sha`(本機 main 的短 sha)、`main_before`(同 pass
+   的定義)與 stamp;守衛把這種 `land.fail` 當作與 `land.pass` 同等的一段(notes 那一段標「push 失敗」,
+   guard.json 照寫、rc 不動),其他 `land.fail`(閘門紅、ff-only 拒絕、衝突)不算 —— 它們不動 main。
+   專案端 land 包裝的 push 失敗出口要照發這個形狀。**主線可寫前綴只記不擋**(#128):`board/config.json`
+   的 `guard_main_paths`(字串 list,主 repo 相對前綴,以 `/` 為界;缺鍵 = `["tickets/", "docs/", "memory/"]`
+   = land.sh 的 DOCS_PREFIXES;`[]` = 不豁免;不是字串 list ⇒ stderr 點名、照缺鍵)底下的工作樹改動不判越界,
+   列進 guard.json 的 `main_side`(路徑與前後雜湊),`violations` 空、rc 照 agent 的結局;同一輪前綴以外的改動
+   照判 8。其餘改動 ⇒ `reports/t<n>/<run_id>/<角色>-round<r>.guard.json`(前後證據)、
    `auto-fix.sh` rc=8、票 Blocked / owner=main、`ticket.attempt.failed reason=guard-violation`、一頁 decision
    列路徑與前後;patch 不套、副本留著。**排在 codex 額度那一手之前**:同一輪又撞額度仍是 8,不回 Ready。
    批次越界時整批票轉 Blocked(唯一會寫票的批次結局)、不發 attempt.failed(批次沒有 attempt.start)。
