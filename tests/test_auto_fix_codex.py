@@ -72,12 +72,23 @@ class CodexBase(AutoFixBase):
         conf = dict(DEFAULT_CONFIG)
         conf["worker"] = {"command": CLAUDE_COMMAND, "timeout_seconds": 120}
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
-        self.set_role_models(worker=[fixture_candidate(CODEX_MODEL, "codex")])
 
     def fake_codex(self, mode="deliver"):
         write_executable(os.path.join(self.stub_bin, "codex"),
                          FAKE_CODEX.replace("@ARGV@", self.argv_file)
                          .replace("@STDIN@", self.stdin_file).replace("@MODE@", mode))
+
+    def make_ticket(self, ident, **fields):
+        """票寫 codex(`tool=codex` 且 `codex:` 前綴)時表頭也換成它(#121:起什麼由表選)。
+        只在開票這一手換、不在 setUp:子類別(#114 / #115 的驗證案例)開的 claude 票要照
+        沙盒預設表起 opus —— setUp 一換,它們起的是 PATH 上真的 codex。案例自己先排好
+        codex 開頭的鏈就不動它。"""
+        model = str(fields.get("model") or "")
+        if fields.get("tool") == "codex" and model.startswith("codex:"):
+            roles = json.loads(self.read("board/role-models.json"))["roles"]
+            if (roles.get("worker") or [{}])[0].get("tool") != "codex":
+                self.set_role_models(worker=[fixture_candidate(model, "codex")])
+        return super().make_ticket(ident, **fields)
 
     def codex_ticket(self, **fields):
         fields.setdefault("model", CODEX_MODEL)

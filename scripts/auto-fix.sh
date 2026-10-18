@@ -993,6 +993,11 @@ use_worker() {   # route 的結果 → WORKER_CMD / WORKER_MODEL / MODEL / T_EFF
     W_INDEX=$R_INDEX
     T_EFFORT=$R_EFFORT
     case "$R_REASON" in *票明寫\ effort*) EFFORT_SRC=票 ;; *) EFFORT_SRC=表 ;; esac
+    # 票與表都沒給才退回 config 的 effort.implement(#114 的第二層);表有值就是表的。
+    if [ -z "$T_EFFORT" ]; then
+        T_EFFORT=$(cfg effort.implement "")
+        EFFORT_SRC=config
+    fi
     IS_CODEX=""
     [ "$W_TOOL" != codex ] || IS_CODEX=1
     WORKER_CMD=$(python3 "$AC/ticket.py" agent-command --model "$R_MODEL" --tool "$R_TOOL" \
@@ -1033,6 +1038,13 @@ pick_worker() {
     if [ -n "$TK_EFFORT" ] && ! python3 "$AC/ticket.py" agent-command --model "$R_MODEL" \
             --tool "$R_TOOL" --base claude --effort "$TK_EFFORT" >/dev/null; then
         echo "auto-fix: #$ID effort=$TK_EFFORT(來源 票)不合 tool=$R_TOOL —— 不派、票不動" >&2
+        exit 2
+    fi
+    pw_cfg=""
+    [ -n "$TK_EFFORT" ] || [ -n "$R_EFFORT" ] || pw_cfg=$(cfg effort.implement "")
+    if [ -n "$pw_cfg" ] && ! python3 "$AC/ticket.py" agent-command --model "$R_MODEL" \
+            --tool "$R_TOOL" --base claude --effort "$pw_cfg" >/dev/null; then
+        echo "auto-fix: #$ID effort=$pw_cfg(來源 config)不合 tool=$R_TOOL —— 不派、票不動" >&2
         exit 2
     fi
     use_worker || exit 2
@@ -1087,6 +1099,25 @@ first_round_dispatch() {
     return 0
 }
 
+# 起什麼 agent **只由角色表選**(#121,#116):`role-models.py resolve` 給 model / tool / effort /
+# 鏈上第幾格,這裡只負責起程序與記結果。票的 model 是建議(#116 A7),不拿它跳過候選;
+# 票明寫的 effort 由 resolve 自己排優先(#116 A5)。`routing.*` 不再參與(#116 A6)。
+# 這次派工的 worker 選路旗標:修補輪(第 2 輪起,上一輪紅)帶 --repair-round / --last-red 與
+# 原 worker 的模型(票 cost[] 最後一列沒撞額度的 worker),由 resolve 決定沿用與升級(A7)。
+# 同一程序裡迴圈接下一輪也從這裡重選 —— 與重新起程序讀狀態檔走同一條路。
+route_round() {   # $1 = 要派的是第幾輪;讀 S_RC / T_LAST_WORKER,設 W_ROUTE 並選 worker
+    W_ROUND=$1
+    set --
+    [ -z "$TK_EFFORT" ] || set -- "$@" --ticket-effort "$TK_EFFORT"
+    if [ "$W_ROUND" -ge 2 ]; then
+        set -- "$@" --repair-round "$W_ROUND"
+        [ "${S_RC:-1}" = "0" ] || set -- "$@" --last-red
+        [ -z "$T_LAST_WORKER" ] || set -- "$@" --worker-model "$T_LAST_WORKER"
+    fi
+    W_ROUTE=$(for arg in "$@"; do printf '%s\n' "$arg"; done)
+    pick_worker
+}
+
 # 批次修復(#108)不讀單票的狀態檔:紅榜在 land 那一輪,底下到「一輪的動作」整段跳過。
 if [ -z "$BATCH" ]; then
 read_status
@@ -1116,6 +1147,9 @@ PY
         echo "auto-fix:   已經派過第 1 輪、要修紅的:先跑 sh scripts/gate.sh --branch --ticket $ID" >&2
         exit 2
     fi
+    # 先選第 1 輪的 worker:票 / config 的 effort 不合候選的 tool 要在動票之前停(#114 A8),
+    # 而底下換 base_sha 就是動票。
+    route_round 1
     # **base 落後主線就換成主線的頭**(#57)。第 1 輪的 patch 由 `apply.sh` 套在**從主線開**
     # 的分支上;副本卻從票的舊 base_sha 展開的話,worker 對著舊樹寫、`git apply --check`
     # 在主線上整輪停住。只在「還沒有分支、還沒有任何一輪」時換 —— 有分支就有人在上面
@@ -1183,25 +1217,8 @@ fi
 fi
 
 # --------------------------------------------------------------- 一輪的動作
-# 起什麼 agent **只由角色表選**(#121,#116):`role-models.py resolve` 給 model / tool / effort /
-# 鏈上第幾格,這裡只負責起程序與記結果。票的 model 是建議(#116 A7),不拿它跳過候選;
-# 票明寫的 effort 由 resolve 自己排優先(#116 A5)。`routing.*` 不再參與(#116 A6)。
-# 這次派工的 worker 選路旗標:修補輪(第 2 輪起,上一輪紅)帶 --repair-round / --last-red 與
-# 原 worker 的模型(票 cost[] 最後一列沒撞額度的 worker),由 resolve 決定沿用與升級(A7)。
-# 同一程序裡迴圈接下一輪也從這裡重選 —— 與重新起程序讀狀態檔走同一條路。
-route_round() {   # $1 = 要派的是第幾輪;讀 S_RC / T_LAST_WORKER,設 W_ROUTE 並選 worker
-    W_ROUND=$1
-    set --
-    [ -z "$TK_EFFORT" ] || set -- "$@" --ticket-effort "$TK_EFFORT"
-    if [ "$W_ROUND" -ge 2 ]; then
-        set -- "$@" --repair-round "$W_ROUND"
-        [ "${S_RC:-1}" = "0" ] || set -- "$@" --last-red
-        [ -z "$T_LAST_WORKER" ] || set -- "$@" --worker-model "$T_LAST_WORKER"
-    fi
-    W_ROUTE=$(for arg in "$@"; do printf '%s\n' "$arg"; done)
-    pick_worker
-}
-route_round $(( ${S_ROUND:-0} + 1 ))
+# 第 1 輪在上面已經選過(要趕在換 base_sha 之前);其餘照狀態檔的輪數選。
+[ -n "${W_ROUND:-}" ] || route_round $(( ${S_ROUND:-0} + 1 ))
 pick_verifier
 # 票的分支名**只有一個來源:票的 `branch` 欄**(#53,D-018;`apply.sh` 開分支時填)。
 # 空著才退回 `t<n>` —— 下游專案用 `t<n>-<slug>` 的票,寫死 `t$ID` 就找不到分支。

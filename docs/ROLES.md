@@ -53,7 +53,7 @@
 verifier 鏈固定 sol → opus,不看 worker 模型;每次派工上限 `dispatch_cap` 由 `--items` 擋。
 舊入口(上表、`board/config.json` 的 `routing`)在 #121/#122 逐一切換;切換後該角色只讀新表。
 #121 起 `auto-fix.sh` 的 worker / 驗證者與 `review.sh` 的覆核者只讀這張表(`routing.implement` / `routing.verify`
-與 `effort.implement` 不再參與);`rules.py pack` 不判模型。
+不再參與;worker 的 `effort.implement` 只在票與被選候選都沒給 effort 時才補上);`rules.py pack` 不判模型。
 表中 `main` 只是開 session 時的建議,不熱切已在跑的互動 session。
 
 額度政策:Codex 的五小時桶**一次派三張就會用盡**,別再多;用完**退 Opus 一張並報主線**。
