@@ -13,7 +13,7 @@ A4 | unit | R1 停住 → R2 派且 pass → 放 R1(pass / fail) | R1 rc 4、輸
 A4 | unit | R1 停住 → 改 acceptance / 新 attempt → 放 R1   | 同上(票上沒有 review)                                 | 票面 A4
 A5 | unit | 沙盒 ticket.py 的 review_problems / objection_problems 換成哨兵 | land 與 close 說的就是哨兵那一句;回 [] 時沒有 review 也過 | 票面 A5「不各抄判準」
 A5 | unit | 票沒有 review、只有 review_request + accepted receipt | land 照拒「沒有 review」                            | 票面 A5「receipt 不能當 review 真相」
-A6 | unit | pass 的 result 帶 objection_replies / note    | 票上 objections 一格不動                                | 票面 A6「本票不認 note/objection_replies」
+A6 | unit | pass 的 result 帶 note + objection_replies=[](票上只有阻擋項、沒有待回應的 note) | rc 0、review 寫進票;票上 objections 一格不動 | 票面 A6 收件接縫;#104 A3 起 objection_replies 恰 {index,verdict,reason},舊式 disposition/reply 的斷言由 #104 接管
 
 ## 介面字串(全部出自票面 acceptance / interface_contracts,不從腳本抄)
 review.patch_id / review.face(string)                                 ← interface_contracts.review
@@ -526,20 +526,22 @@ class LandAndCloseAskTicketPy(ReviewBindingBase):
 
 
 class NoNoteOrRepliesYet(ReviewBindingBase):
-    """A6 本票的收件不認 note / objection_replies(#104 才接)。"""
+    """A6 #98 的收件接縫:note 處置由 #104 接(A3 的 objection_replies 形狀與 rc=3 歸 #104 的案例)。"""
 
     def test_a6_objection_replies_in_a_pass_do_not_touch_objections(self):
-        """A6 pass 的 result 帶 objection_replies / note,票上 objections 一格不動。"""
+        """A6 pass 的 result 帶 note 與空的 objection_replies(票上沒有待回應的 note),
+        review 照收、票上的阻擋項一格不動。"""
         rows = [{"category": "blocking", "owner": "main", "body": "還沒處置的阻擋",
                  "evidence": "EVIDENCE.md:1", "disposition": ""}]
         done = self.ticket("set", "1", "objections", json.dumps(rows, ensure_ascii=False))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         before = self.load_ticket("1")["objections"]
-        self.flag("extra", ', "note": "收件的備註", "objection_replies": '
-                  '[{"index": 0, "disposition": "accepted", "reply": "處置了"}]')
+        self.flag("extra", ', "note": "收件的備註", "objection_replies": []')
         done = self.review(RUN_1)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.load_ticket("1")["objections"], before)
+        ticket = self.load_ticket("1")
+        self.assertEqual(ticket["objections"], before)
+        self.assertEqual((ticket.get("review") or {}).get("verdict"), "pass")
 
 
 if __name__ == "__main__":

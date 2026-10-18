@@ -296,11 +296,12 @@ class TriageAndVerifierRows(TriageBase):
         self.assertEqual(rows[0].get("outcome"), "handed-in")
 
     def test_c5c_an_accepted_triage_writes_an_opener_row(self):
-        """C5(c) 開題者判 accepted → 票上多一列 role==opener、outcome==accepted、round 1。"""
+        """C5(c) 開題者判 accepted → 票上多一列 role==opener、outcome==accepted、round 1。
+        #104 A2:開題者只加分析、不能自行放行,auto-fix 停在 rc=3 等裁示。"""
         self.arm(needs_verifier=True, interface_fixed=True)
         self.play(worker_resume="fix", opener="accept")
         done = self.auto_fix("--no-review")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
         rows = self.rows_of("opener")
         self.assertEqual(len(rows), 1, self.load_ticket("1").get("cost"))
         self.assertEqual((rows[0].get("outcome"), rows[0].get("round"), rows[0].get("model")),
