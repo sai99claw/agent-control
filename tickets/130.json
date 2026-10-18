@@ -1,0 +1,364 @@
+{
+  "id": "130",
+  "subject": "驗證者交 0 byte 的 patch-verify 視為這輪沒有改動:有 worker patch 只套它,沒有就只併驗證者計畫、直接重跑閘門",
+  "created": "2026-10-18T00:04:28+08:00",
+  "objective": "auto-fix 收件時,驗證者的 patch-verify.diff 是 0 byte 就不交給 apply 當 patch:有 worker 的 patch 就只套它;驗證者是唯一交件者(#126 lint_round、test_defect 無 worker patch)就只併它的 verify 計畫、分支不動、直接重跑閘門。不再以 apply rc=3 或「交了空的 patch-verify」整輪停下(#98 第 2 輪實例)",
+  "acceptance": [
+    "A1 test_defect 且 worker 交了 patch:驗證者交 0 byte 的 patch-verify.diff、EVIDENCE 的 result 帶 verify(例:只改 verify.files)→ 不出「套不上(apply rc=3)」那一頁;stdout 含「驗證者這輪沒有改動」;只套 worker 的 patch、--evidence-verifier 照給;分支上有 worker patch 的檔;票的 verify.files 等於驗證者 result 寫的那一份;該筆 test_defect 反駁 disposition=fixed;閘門照跑(events 有該輪 gate.rerun)。",
+    "A2 平行 / 晚起驗證者(沒有 test_defect,round_receive 帶 VPATCH)交 0 byte → 同 A1:只套 worker 的 patch、--evidence-verifier 照給、閘門照跑;閘門若因沒有案例紅,照 #126 既有路線接手。",
+    "A3 只併計畫的收件路(新):驗證者是這一輪唯一交件者 —— (a) #126 只派驗證者的那一輪(lint_round)、(b) worker 說 test_defect 但沒交 patch —— 交 0 byte 的 patch-verify 且 result 帶 verify → 不套任何 patch、分支頭不動(git rev-parse t<id> 前後相同、沒有新 commit);票的 verify(files / tags / run / notes / baseline)照 apply 既有的併法併進(與 --evidence-verifier 同一段程式,不另抄);接著在分支上重跑閘門(events 有該輪 gate.rerun),綠 → 照綠的路(InReview / 覆核),紅 → 照紅的路進下一輪。stdout 含「驗證者這輪沒有改動」與「只併驗證者計畫」;(b) 的 test_defect 反駁 disposition=fixed。",
+    "A4 併計畫的入口是 apply.sh 的新子命令 `sh scripts/apply.sh verify-plan <票號> --evidence-verifier <檔>…`:只跑既有的驗證者計畫合併(同鎖、同解析、同「只收 stage=red」),不建分支、不 commit、不碰 patch;result 解析不到時照既有字樣出聲且 rc 非零(auto-fix 據此停下、出「驗證者沒交出 patch-verify」那一頁)。`--help` 列出這個子命令。",
+    "A5 真的什麼都沒交仍停:驗證者單獨交件那兩條路,0 byte 且 result 沒有 verify(或 result 解析不到)→ 照舊 block(lint_round 那一頁「驗證者交了空的 patch-verify」不變)。只認 0 byte:patch-verify 有內容但沒有檔頭 → 照舊 apply rc=3、「套不上」頁;worker 自己的 patch 0 byte → 照舊「空的 patch 不是綠」。",
+    "A6 其餘不變:既有 AWorkerPatchWithATestDefectReachesTheBranch、ASerialTestDefectMergesTheVerifierPlan 與 #126 的 lint_round 案例斷言不變;只併計畫那一輪照樣算一輪、計入 retry_limit+1 上限。docs/WORKFLOW.md 補一句:驗證者 patch-verify 0 byte = 這輪沒改案例,有 verify 計畫就只併計畫重跑閘門。"
+  ],
+  "in_scope": [
+    "scripts/auto-fix.sh 的 round_receive 與 lint_round 收件",
+    "scripts/apply.sh 新增 verify-plan 子命令(重用既有合併段)",
+    "tests/test_auto_fix.py、tests/test_apply.py"
+  ],
+  "out_of_scope": [
+    "docs/DECISIONS.md"
+  ],
+  "depends_on": [],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/apply.sh",
+    "tests/test_auto_fix.py",
+    "tests/test_apply.py",
+    "docs/WORKFLOW.md"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "583dc2f82cde96c66fa8a573d6914dd9321f34d6",
+  "state": "Done",
+  "state_version": 34,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [
+      "verify/autofix_receive/test_ticket_130.py"
+    ],
+    "tags": [
+      "verifier-empty-patch"
+    ],
+    "run": "python3 scripts/verify.py --tag verifier-empty-patch",
+    "notes": "執行前清除 AC_ROOT / AC_TICKETS_DIR / AC_CONTROL_DIR。全部在 tests/control_harness.Sandbox 拋棄式 repo 裡跑,worker / 驗證者是假 sh(AC_ROLE 分流),閘門替身是 gate.rerun_cmd(記 HEAD、exit 0),不打真模型。約 30 秒。A5 四條守舊行為,在基底上本來就綠(證明夾具走到既有路),算數的紅是其餘 10 條。A3(a) 的 verify.files 期望值是 #100 A9 既有併法的聯集 [舊的不存在檔, 新檔],不是取代。A6「既有斷言不變」由 tests/test_auto_fix.py / tests/test_apply.py 全檔守(T6,閘門跑),這裡不重抄。",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-18T10:52:28+08:00",
+      "files": [
+        "verify/autofix_receive/test_ticket_130.py"
+      ],
+      "base_ref": "583dc2f82cde96c66fa8a573d6914dd9321f34d6",
+      "base_sha": "583dc2f82cde96c66fa8a573d6914dd9321f34d6",
+      "candidate": "../agent-control-wt/t130",
+      "candidate_sha": "41199f276f41e312be3a0f55c81a5c90c1b85185",
+      "baseline": {
+        "red": [
+          "verify.autofix_receive.test_ticket_130.AWorkerPatchIsAppliedAlone.test_a1_a_test_defect_with_a_worker_patch_applies_only_the_worker_patch",
+          "verify.autofix_receive.test_ticket_130.AWorkerPatchIsAppliedAlone.test_a2_a_parallel_verifier_with_an_empty_patch_lets_the_worker_patch_through",
+          "verify.autofix_receive.test_ticket_130.TheVerifierAloneMergesOnlyItsPlan.test_a3a_an_all_lint_round_with_an_empty_patch_merges_the_plan_and_reruns",
+          "verify.autofix_receive.test_ticket_130.TheVerifierAloneMergesOnlyItsPlan.test_a3b_a_test_defect_without_a_worker_patch_merges_the_plan_and_reruns",
+          "verify.autofix_receive.test_ticket_130.TheVerifierAloneMergesOnlyItsPlan.test_a6_a_plan_only_round_still_counts_as_a_round",
+          "verify.autofix_receive.test_ticket_130.TheVerifyPlanSubcommand.test_a4_a_check_baseline_is_not_merged",
+          "verify.autofix_receive.test_ticket_130.TheVerifyPlanSubcommand.test_a4_help_lists_the_subcommand",
+          "verify.autofix_receive.test_ticket_130.TheVerifyPlanSubcommand.test_a4_no_result_block_says_so_and_fails",
+          "verify.autofix_receive.test_ticket_130.TheVerifyPlanSubcommand.test_a4_verify_plan_merges_the_plan_and_touches_no_branch",
+          "verify.autofix_receive.test_ticket_130.TheWorkflowDocSaysSo.test_a6_workflow_says_an_empty_patch_verify_merges_only_the_plan"
+        ],
+        "red_lines": [
+          "verify.autofix_receive.test_ticket_130.AWorkerPatchIsAppliedAlone.test_a1_a_test_defect_with_a_worker_patch_applies_only_the_worker_patch: AssertionError: '驗證者這輪沒有改動' not found in 'auto-fix: #1 最新一輪 20261018-105125-67497(gate)state=done rc=1 紅 1 條,第 1 輪(上限 2)\\nauto-fix: #1 照票的 model=opus 起 worker(worker.command 的 --model 換成它)\\nauto-fix: 副本 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmprw26fawl/repo-wt/fix-t1/round2(base = t1)\\nauto-fix: 派工文 -> reports/t1/20261018-105125-67497/dispatch-round2.md\\nauto-fix: 起第 2 輪的 worker —— sh /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmprw26fawl/fake-worker.sh --model opus(cwd /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmprw26fawl/repo-wt/fix-t1/round2,派工文從 stdin 餵)\\nticket: result 抽不出來(no-block)—— /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmprw26fawl/repo-wt/fix-t1/round2/EVIDENCE-round2.md;不擋流程\\nticket: EVIDENCE 少了這幾段:excluded、gate、mutations、patch_sha256、repro(不擋;見角色卡「必備五段」)\\nticket: result -> /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmprw26fawl/repo/reports/t1/20261018-105125-67497/result-round2.json\\nauto-fix: 結構化交付 -> result-round2.json\\nauto-fix: 先留著副本 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmprw26fawl/repo-wt/fix-t1/round2 —— 反駁要從它接回,或拿它做驗證者的副本\\nauto-fix: worker 提了反駁 —— OBJECTION: test_defect fixture 把正確結果寫成 2\\nticket: #1 allowed_write_paths: [\"tests/*\"] -> [\"tests/*\", \"src/app.py\"](state_version 4)\\nauto-fix: test_defect —— 起第 2 輪的新驗證者 worker\\nticket: EVIDENCE 少了這幾段:excluded、gate、mutations、patch_sha256、repro(不擋;見角色卡「必備五段」)\\nticket: result -> /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmprw26fawl/repo/reports/t1/20261018-105125-67497/result-verifier-round2.json\\nauto-fix: 收掉副本 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmprw26fawl/repo-wt/verify-t1/round2/{work,base}(patch 與 EVIDENCE 留著)\\nauto-fix: 收掉副本 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmprw26fawl/repo-wt/fix-t1/round2/{work,base}(patch 與 EVIDENCE 留著)\\napply: 票 #1  patch patch-round2.diff  sha256 20f4f4e06e…\\ninbox: reports/inbox/1-20261018-105125-67497.md\\n' : auto-fix: #1 最新一輪 20261018-105125-67497(gate)state=done rc=1 紅 1 條,第 1 輪(上限 2)",
+          "verify.autofix_receive.test_ticket_130.AWorkerPatchIsAppliedAlone.test_a2_a_parallel_verifier_with_an_empty_patch_lets_the_worker_patch_through: AssertionError: '驗證者這輪沒有改動' not found in 'auto-fix: #1 的 base_sha 95ba0539376d1b29b1acbdaf239916cf1ff54ff5 落後 main —— 還沒有分支,換成 main 的頭 0728ef7160d414bdc7492b7a17cbe14321a239fc\\nauto-fix: #1 是 Ready、還沒有狀態檔 —— 起第 1 輪(票的 base_sha 0728ef7160d414bdc7492b7a17cbe14321a239fc)\\nauto-fix: #1 照票的 model=opus 起 worker(worker.command 的 --model 換成它)\\nauto-fix: 副本 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpwn7zp4ft/repo-wt/fix-t1/round1(base = 0728ef7160d414bdc7492b7a17cbe14321a239fc)\\nauto-fix: 派工文 -> reports/t1/20261018-105128-68157/dispatch-round1.md\\nauto-fix: 驗證者派工文 -> reports/t1/20261018-105128-68157/dispatch-verifier-round1.md\\nauto-fix: 起第 1 輪的 worker —— sh /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpwn7zp4ft/fake-worker.sh --model opus(cwd /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpwn7zp4ft/repo-wt/fix-t1/round1,派工文從 stdin 餵)\\nauto-fix: needs_verifier + interface_fixed —— 第 1 輪的驗證者先起跑(背景,副本 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpwn7zp4ft/repo-wt/verify-t1/round1)\\nticket: EVIDENCE 少了這幾段:excluded、gate、mutations、patch_sha256、repro(不擋;見角色卡「必備五段」)\\nticket: result -> /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpwn7zp4ft/repo/reports/t1/20261018-105128-68157/result-verifier-round1.json\\nauto-fix: 第 1 輪的驗證者回來了(rc=0)—— patch-verify /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpwn7zp4ft/repo-wt/verify-t1/round1/patch-verify.diff\\nticket: result 抽不出來(no-block)—— /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpwn7zp4ft/repo-wt/fix-t1/round1/EVIDENCE-round1.md;不擋流程\\nticket: EVIDENCE 少了這幾段:gate、mutations、patch_sha256、repro(不擋;見角色卡「必備五段」)\\nticket: result -> /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpwn7zp4ft/repo/reports/t1/20261018-105128-68157/result-round1.json\\nauto-fix: 結構化交付 -> result-round1.json\\nauto-fix: 收掉副本 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpwn7zp4ft/repo-wt/fix-t1/round1/{work,base}(patch 與 EVIDENCE 留著)\\nauto-fix: 收掉副本 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpwn7zp4ft/repo-wt/verify-t1/round1/{work,base}(patch 與 EVIDENCE 留著)\\napply: 票 #1  patch patch-round1.diff  sha256 bafba2285a…\\ninbox: reports/inbox/1-20261018-105128-68157.md\\n' : auto-fix: #1 的 base_sha 95ba0539376d1b29b1acbdaf239916cf1ff54ff5 落後 main —— 還沒有分支,換成 main 的頭 0728ef7160d414bdc7492b7a17cbe14321a239fc",
+          "verify.autofix_receive.test_ticket_130.TheVerifierAloneMergesOnlyItsPlan.test_a3a_an_all_lint_round_with_an_empty_patch_merges_the_plan_and_reruns: AssertionError: '驗證者這輪沒有改動' not found in 'auto-fix: #1 最新一輪 20261018-105144-71057(gate)state=done rc=1 紅 1 條,第 1 輪(上限 2)\\nauto-fix: #1 照票的 model=opus 起 worker(worker.command 的 --model 換成它)\\nauto-fix: 副本 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmp7uvimjqw/repo-wt/fix-t1/round2(base = t1)\\nauto-fix: 上一輪的紅榜全是驗證者案例的 lint 列(kind=LINT)—— 第 2 輪不派 worker,只派驗證者\\nauto-fix: lint —— 起第 2 輪的驗證者(這一輪不派 worker)\\nticket: EVIDENCE 少了這幾段:excluded、gate、mutations、patch_sha256、repro(不擋;見角色卡「必備五段」)\\nticket: result -> /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmp7uvimjqw/repo/reports/t1/20261018-105144-71057/result-verifier-round2.json\\nauto-fix: 收掉副本 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmp7uvimjqw/repo-wt/verify-t1/round2/{work,base}(patch 與 EVIDENCE 留著)\\nauto-fix: 收掉副本 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmp7uvimjqw/repo-wt/fix-t1/round2/{work,base}(patch 與 EVIDENCE 留著)\\ninbox: reports/inbox/1-20261018-105144-71057.md\\n' : auto-fix: #1 最新一輪 20261018-105144-71057(gate)state=done rc=1 紅 1 條,第 1 輪(上限 2)",
+          "verify.autofix_receive.test_ticket_130.TheVerifierAloneMergesOnlyItsPlan.test_a3b_a_test_defect_without_a_worker_patch_merges_the_plan_and_reruns: AssertionError: '驗證者這輪沒有改動' not found in 'auto-fix: #1 最新一輪 20261018-105147-71614(gate)state=done rc=1 紅 1 條,第 1 輪(上限 2)\\nauto-fix: #1 照票的 model=opus 起 worker(worker.command 的 --model 換成它)\\nauto-fix: 副本 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpnnaw2xhz/repo-wt/fix-t1/round2(base = t1)\\nauto-fix: 派工文 -> reports/t1/20261018-105147-71614/dispatch-round2.md\\nauto-fix: 起第 2 輪的 worker —— sh /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpnnaw2xhz/fake-worker.sh --model opus(cwd /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpnnaw2xhz/repo-wt/fix-t1/round2,派工文從 stdin 餵)\\nticket: result 抽不出來(no-block)—— /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpnnaw2xhz/repo-wt/fix-t1/round2/EVIDENCE-round2.md;不擋流程\\nticket: EVIDENCE 少了這幾段:excluded、gate、mutations、patch_sha256、repro(不擋;見角色卡「必備五段」)\\nticket: result -> /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpnnaw2xhz/repo/reports/t1/20261018-105147-71614/result-round2.json\\nauto-fix: 結構化交付 -> result-round2.json\\nauto-fix: 先留著副本 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpnnaw2xhz/repo-wt/fix-t1/round2 —— 反駁要從它接回,或拿它做驗證者的副本\\nauto-fix: worker 提了反駁 —— OBJECTION: test_defect fixture 把正確結果寫成 2\\nticket: #1 allowed_write_paths: [\"tests/*\"] -> [\"tests/*\", \"src/app.py\"](state_version 4)\\nauto-fix: test_defect —— 起第 2 輪的新驗證者 worker\\nticket: EVIDENCE 少了這幾段:excluded、gate、mutations、patch_sha256、repro(不擋;見角色卡「必備五段」)\\nticket: result -> /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpnnaw2xhz/repo/reports/t1/20261018-105147-71614/result-verifier-round2.json\\nauto-fix: 收掉副本 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpnnaw2xhz/repo-wt/verify-t1/round2/{work,base}(patch 與 EVIDENCE 留著)\\nauto-fix: 收掉副本 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpnnaw2xhz/repo-wt/fix-t1/round2/{work,base}(patch 與 EVIDENCE 留著)\\napply: 票 #1  patch patch-verify.diff  sha256 e3b0c44298…\\ninbox: reports/inbox/1-20261018-105147-71614.md\\n' : auto-fix: #1 最新一輪 20261018-105147-71614(gate)state=done rc=1 紅 1 條,第 1 輪(上限 2)",
+          "verify.autofix_receive.test_ticket_130.TheVerifierAloneMergesOnlyItsPlan.test_a6_a_plan_only_round_still_counts_as_a_round: AssertionError: '只併驗證者計畫' not found in 'auto-fix: #1 最新一輪 20261018-105151-72314(gate)state=done rc=1 紅 1 條,第 1 輪(上限 2)\\nauto-fix: #1 照票的 model=opus 起 worker(worker.command 的 --model 換成它)\\nauto-fix: 副本 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpyb1l9nz7/repo-wt/fix-t1/round2(base = t1)\\nauto-fix: 上一輪的紅榜全是驗證者案例的 lint 列(kind=LINT)—— 第 2 輪不派 worker,只派驗證者\\nauto-fix: lint —— 起第 2 輪的驗證者(這一輪不派 worker)\\nticket: EVIDENCE 少了這幾段:excluded、gate、mutations、patch_sha256、repro(不擋;見角色卡「必備五段」)\\nticket: result -> /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpyb1l9nz7/repo/reports/t1/20261018-105151-72314/result-verifier-round2.json\\nauto-fix: 收掉副本 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpyb1l9nz7/repo-wt/verify-t1/round2/{work,base}(patch 與 EVIDENCE 留著)\\nauto-fix: 收掉副本 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpyb1l9nz7/repo-wt/fix-t1/round2/{work,base}(patch 與 EVIDENCE 留著)\\ninbox: reports/inbox/1-20261018-105151-72314.md\\n' : auto-fix: #1 最新一輪 20261018-105151-72314(gate)state=done rc=1 紅 1 條,第 1 輪(上限 2)",
+          "verify.autofix_receive.test_ticket_130.TheVerifyPlanSubcommand.test_a4_a_check_baseline_is_not_merged: AssertionError: 2 != 0 : apply: 找不到票 #verify-plan(/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmp5auhm16v/repo/tickets/verify-plan.json)",
+          "verify.autofix_receive.test_ticket_130.TheVerifyPlanSubcommand.test_a4_help_lists_the_subcommand: AssertionError: 'verify-plan' not found in '用法:sh scripts/apply.sh <票號> <patch> [<patch-verify>] [旗標…]\\n      sh scripts/apply.sh rebase <票號> <patch> [-o <輸出>]\\n      sh scripts/apply.sh --batch <整合分支> <票號…> <patch> [--evidence <檔>]\\n\\n認得的旗標:\\n  --evidence <檔>            實作者的 EVIDENCE:收記憶、抽 result-round<輪>.json、\\n                             收 ^OBJECTION: 那一行(不給就找 patch 旁邊的 EVIDENCE.md)\\n  --evidence-verifier <檔>   驗證者的 EVIDENCE-verifier.md:抽 result-verifier-round<輪>.json\\n                             (可重複給:verify 計畫與驗紅依給的順序逐份併進票)\\n\\n例:\\n  sh scripts/apply.sh 7 patch.diff patch-verify.diff \\\\\\n     --evidence EVIDENCE.md --evidence-verifier EVIDENCE-verifier.md\\n'",
+          "verify.autofix_receive.test_ticket_130.TheVerifyPlanSubcommand.test_a4_no_result_block_says_so_and_fails: AssertionError: '驗證者的 result 解析不到' not found in 'apply: 找不到票 #verify-plan(/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpd7bw09f3/repo/tickets/verify-plan.json)\\n' : apply: 找不到票 #verify-plan(/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpd7bw09f3/repo/tickets/verify-plan.json)",
+          "verify.autofix_receive.test_ticket_130.TheVerifyPlanSubcommand.test_a4_verify_plan_merges_the_plan_and_touches_no_branch: AssertionError: 2 != 0 : apply: 找不到票 #verify-plan(/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpk67ejeu0/repo/tickets/verify-plan.json)",
+          "verify.autofix_receive.test_ticket_130.TheWorkflowDocSaysSo.test_a6_workflow_says_an_empty_patch_verify_merges_only_the_plan: AssertionError: [] is not true : docs/WORKFLOW.md 沒有寫 patch-verify 0 byte 只併計畫重跑閘門"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 14,
+        "skipped": 0,
+        "log": "../agent-control-wt/t130/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 14,
+        "skipped": 0,
+        "log": "../agent-control-wt/t130/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
+  },
+  "verify_strings": [
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "驗證者這輪沒有改動"
+    },
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "只併驗證者計畫"
+    },
+    {
+      "path": "scripts/apply.sh",
+      "contains": "verify-plan"
+    }
+  ],
+  "effort": "high",
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "decision_refs": [
+    "D-049",
+    "D-018",
+    "D-028"
+  ],
+  "test_plan": "T1(A1,auto-fix 沙盒,tests/test_auto_fix.py):沿用 #107 的假 worker(第 2 輪交 patch 又說 test_defect),假驗證者 : > patch-verify.diff、EVIDENCE 帶 result.verify.files=[實際案例檔]。期望值取自夾具自己寫的 verify.files 與 worker patch 新增的檔名:stdout 含「驗證者這輪沒有改動」、不含「套不上」、t<id> 分支有 worker 的檔、票 verify.files 等於夾具值、objections 末筆 disposition=fixed。\nT2(A2):interface_fixed=true 的平行驗證者交 0 byte,觀察點同 T1。\nT3(A3):(a) 上一輪 failures[] 全是 LINT(verify.files 指向不存在的檔,#98 的真實形狀)→ lint_round 驗證者交 0 byte + result.verify.files 改對 → 分支頭 sha 前後相同、票 verify.files 等於夾具值、events 有 gate.rerun、閘門替身綠 → 票 InReview;(b) worker 只交 test_defect 反駁、驗證者 0 byte + verify → 同 (a) 的觀察點加 disposition=fixed。\nT4(A4,tests/test_apply.py):沙盒票 + EVIDENCE-verifier(result.verify 帶 files/tags/baseline stage=red)跑 verify-plan → rc 0、票 verify 併進、git 分支數與 HEAD 不變;stage=check 的 baseline 照既有規則不收;沒有 result 塊 → rc 非零、stderr 含「驗證者的 result 解析不到」。\nT5(A5):lint_round 0 byte 且 EVIDENCE 沒有 verify → 仍出「驗證者交了空的 patch-verify」頁;patch-verify 只有一行文字 → 仍「套不上(apply rc=3)」。T6:test_auto_fix、test_apply 全檔不新增紅。\n變異(未實測):M1 拿掉 0 byte 判斷 → T1、T2 紅;M2 判斷改成「檔頭為空就略過」→ T5 第二案紅;M3 只併計畫路照樣呼叫 apply.sh 套 patch → T3 紅(rc 3);M4 verify-plan 自己另寫一份合併(不收 stage 限制)→ T4 stage=check 案紅;M5 0 byte 無 verify 也走只併計畫 → T5 第一案紅。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR;假 provider、拋棄式控制根,不呼叫真 LLM。驗證者案例照 templates/dispatch-verifier.md 放 verify/<feature>/test_ticket_130.py,新標籤寫 verify/TAGS.d/130.md。",
+  "outline": "症狀:#98 第 2 輪驗證者只改 verify.files,patch-verify 0 byte;round_receive 仍當第二個 patch 給 apply → rc 3 整輪停。主線裁示(2026-10-18):併入「只併驗證者計畫、不套 patch、直接重跑閘門」收件路,涵蓋 #126 lint_round 與 test_defect 無 worker patch 兩條。入口 apply.sh verify-plan(重用既有合併段)。needs_verifier=true;interface_fixed=true(子命令與字樣已釘)。排在 #101→#129→#128 之後,派前重取 base_sha。",
+  "interface_contracts": {
+    "empty_rule": "只認 0 byte([ -s ] 為假);有內容但無檔頭照舊交 apply、rc=3。apply.sh 的空 patch 守衛不放寬。",
+    "verify_plan": "sh scripts/apply.sh verify-plan <票號> --evidence-verifier <檔>…:重用既有 VEVIDENCES 合併段(D-018,不另抄),不建分支、不 commit;解析不到 rc 非零。",
+    "plan_only_route": "驗證者單獨交件(lint_round、test_defect 無 worker patch)+ 0 byte + result 有 verify → verify-plan → 在既有分支 worktree 重跑閘門;0 byte 且沒有 verify → 照舊 block。",
+    "evidence": "#98 第 2 輪:reports/t98/20261017-201347-61183/result-round2.json(worker test_defect)、驗證者 EVIDENCE 自述 0 byte 是預期;apply.sh headers 對空檔 SystemExit(3)。"
+  },
+  "cost": [
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "cache_write": 0,
+      "cache_read": 0,
+      "wall_seconds": 6,
+      "outcome": "error",
+      "run_id": "20261018-012946-19825",
+      "session_id": "119baef7-585b-48be-a807-ae2058babf9a",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-18T01:29:54+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "codex:gpt-5.6-sol",
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 6,
+      "outcome": "error",
+      "run_id": "20261018-012946-19825",
+      "session_id": null,
+      "by": "auto-fix.sh",
+      "note": "reports/t130/20261018-012946-19825/worker-round1.log 裡沒有 JSON 信封",
+      "effort": "high",
+      "at": "2026-10-18T01:29:54+08:00"
+    },
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "cache_write": 0,
+      "cache_read": 0,
+      "wall_seconds": 3,
+      "outcome": "error",
+      "run_id": "20261018-012955-20419",
+      "session_id": "65c4bf6b-420b-4064-9b15-2913792c7608",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-18T01:30:00+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "cache_write": 0,
+      "cache_read": 0,
+      "wall_seconds": 3,
+      "outcome": "no-patch",
+      "run_id": "20261018-012955-20419",
+      "session_id": "3484821b-3e5e-4164-9195-3cc881af66c8",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-18T01:30:00+08:00"
+    },
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 62,
+      "tokens_out": 36635,
+      "cache_write": 170014,
+      "cache_read": 3749702,
+      "wall_seconds": 1374,
+      "outcome": "handed-in",
+      "run_id": "20261018-101707-21809",
+      "session_id": "3a6f54b8-7977-4c72-8704-1d5932f98252",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-18T10:40:03+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 96,
+      "tokens_out": 58943,
+      "cache_write": 179297,
+      "cache_read": 6137010,
+      "wall_seconds": 1374,
+      "outcome": "handed-in",
+      "run_id": "20261018-101707-21809",
+      "session_id": "91481247-8728-4534-87dc-031ec220c7cb",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-18T10:40:07+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 24,
+      "tokens_out": 7801,
+      "cache_write": 71514,
+      "cache_read": 656448,
+      "wall_seconds": 102,
+      "outcome": "pass",
+      "run_id": "20261018-104008-72502",
+      "session_id": "c5fad357-b87b-4493-9e71-a60bf737f831",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-18T10:54:14+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1609,
+      "outcome": "pass",
+      "run_id": "20261018-111711-91551",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-18T11:44:00+08:00"
+    }
+  ],
+  "owner": "main",
+  "branch": "t130",
+  "patch_ref": "../agent-control-wt/fix-t130/round1/patch-round1.diff",
+  "gate": {
+    "rc": 0,
+    "sha": "41199f276f41e312be3a0f55c81a5c90c1b85185",
+    "run_id": "20261018-104008-72502",
+    "at": "2026-10-18T10:52:28+08:00"
+  },
+  "repair_round": 1,
+  "review_request": {
+    "run_id": "20261018-104008-72502",
+    "owner_id": "review.sh",
+    "attempt": 0,
+    "state_version": 31,
+    "face": "bdde79d18927cb1099c5b502e70e131ae6ed53e9942f5463137fc26a2b353d18",
+    "patch_id": "aee64a7920ac098f28eff5095fec13bcce0f8090",
+    "sha": "41199f276f41e312be3a0f55c81a5c90c1b85185"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "91a5663e67df6df4c28f365c5bbdaaade2ae15ab",
+    "note": "reports/t130/20261018-104008-72502/REVIEW.md",
+    "at": "2026-10-18T11:44:02+08:00",
+    "state_version": 34,
+    "patch_id": "aee64a7920ac098f28eff5095fec13bcce0f8090",
+    "face": "bdde79d18927cb1099c5b502e70e131ae6ed53e9942f5463137fc26a2b353d18"
+  },
+  "cost_total": {
+    "calendar_seconds": 41974,
+    "wall_seconds": 4477,
+    "runs": 8,
+    "worker_rounds": 1,
+    "objections": 0,
+    "by_role": {
+      "verifier": {
+        "runs": 3,
+        "wall_seconds": 1383,
+        "tokens_in": 62,
+        "tokens_out": 36635,
+        "cache_write": 170014,
+        "cache_read": 3749702,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "error": 2,
+          "handed-in": 1
+        }
+      },
+      "worker": {
+        "runs": 3,
+        "wall_seconds": 1383,
+        "tokens_in": 96,
+        "tokens_out": 58943,
+        "cache_write": 179297,
+        "cache_read": 6137010,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "error": 1,
+          "no-patch": 1,
+          "handed-in": 1
+        }
+      },
+      "reviewer": {
+        "runs": 1,
+        "wall_seconds": 102,
+        "tokens_in": 24,
+        "tokens_out": 7801,
+        "cache_write": 71514,
+        "cache_read": 656448,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 1609,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-18T11:44:02+08:00"
+  }
+}

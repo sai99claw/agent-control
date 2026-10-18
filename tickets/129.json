@@ -37,16 +37,72 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "029182e8600d75ea226f54188df69ed46004bb22",
-  "state": "Draft",
-  "state_version": 2,
+  "base_sha": "91a5663e67df6df4c28f365c5bbdaaade2ae15ab",
+  "state": "Done",
+  "state_version": 25,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
-    "tags": [],
-    "run": "",
-    "notes": ""
+    "files": [
+      "verify/dispatch/test_ticket_129.py"
+    ],
+    "tags": [
+      "batch-regen-index",
+      "land-regen-index"
+    ],
+    "run": "python3 scripts/verify.py --tag batch-regen-index --tag land-regen-index",
+    "notes": "Integration only: tests/control_harness.Sandbox (throwaway git repo + origin, outer AC_* stripped). Apply cases reuse tests/test_apply.ApplyBase + Sandbox.make_batch; land cases reuse tests/test_land.LandBase with gate_stub=None (real gate.sh, so the mechanical cell sees the index). Each setUp copies the real scripts/repo-map.py, writes a catalog (managed scripts/*.py, tests/test_*.py), builds and commits. Patches are made with diff -ruN base work. A2(a), A5(a), A6(a) are regression locks and are green on base. A7 checks land.pass main_before/sha and the first-parent chain shape only; the auto-fix guard is not run end to end.",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-18T12:20:58+08:00",
+      "files": [
+        "verify/dispatch/test_ticket_129.py"
+      ],
+      "base_ref": "91a5663e67df6df4c28f365c5bbdaaade2ae15ab",
+      "base_sha": "91a5663e67df6df4c28f365c5bbdaaade2ae15ab",
+      "candidate": "../agent-control-wt/t129",
+      "candidate_sha": "9ea6a5a33a72d298fd9d2990697b061a144fd4f0",
+      "baseline": {
+        "red": [
+          "verify.dispatch.test_ticket_129.LandRebuildsAStaleMergedIndex.test_a3_a_clean_but_stale_merge_is_rebuilt_into_the_same_landing",
+          "verify.dispatch.test_ticket_129.LandRebuildsAStaleMergedIndex.test_a4_conflicts_only_in_the_outputs_are_rebuilt_away",
+          "verify.dispatch.test_ticket_129.LandRebuildsAStaleMergedIndex.test_a5b_a_rebuild_that_writes_outside_code_map_is_refused",
+          "verify.dispatch.test_ticket_129.LandRebuildsAStaleMergedIndex.test_a6_a_failed_rebuild_is_left_to_the_gate",
+          "verify.dispatch.test_ticket_129.LandRebuildsAStaleMergedIndex.test_a7_the_land_pass_still_spans_from_the_pre_merge_head",
+          "verify.dispatch.test_ticket_129.TheBatchFixRebuildsTheIndex.test_a1_a_new_managed_file_is_indexed_in_the_same_batch_commit",
+          "verify.dispatch.test_ticket_129.TheBatchFixRebuildsTheIndex.test_a2_a_failed_build_does_not_block_the_batch"
+        ],
+        "red_lines": [
+          "verify.dispatch.test_ticket_129.LandRebuildsAStaleMergedIndex.test_a3_a_clean_but_stale_merge_is_rebuilt_into_the_same_landing: AssertionError: 1 != 0 : land: t1-map —— 1 個 commit",
+          "verify.dispatch.test_ticket_129.LandRebuildsAStaleMergedIndex.test_a4_conflicts_only_in_the_outputs_are_rebuilt_away: AssertionError: 3 != 0 : land: t1-map —— 1 個 commit",
+          "verify.dispatch.test_ticket_129.LandRebuildsAStaleMergedIndex.test_a5b_a_rebuild_that_writes_outside_code_map_is_refused: AssertionError: 1 != 3 : land: t1-map —— 1 個 commit",
+          "verify.dispatch.test_ticket_129.LandRebuildsAStaleMergedIndex.test_a6_a_failed_rebuild_is_left_to_the_gate: AssertionError: '合併後索引重產失敗' not found in 'land: t1-map —— 1 個 commit\\nland:   de6fd76 #1 catalog 指向不存在的檔\\nland: 2 個 commit 串好,跑全套 -> /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpmdj69cj3/repo/../repo-wt/land-20261018-122029/gate.log\\nland: 全套紅,main 沒動;worktree 留在 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpmdj69cj3/repo/../repo-wt/land-20261018-122029\\nland: 紅榜逐條在 reports/t<票號>/<run_id>/status.json 的 failures(案例、檔、行、log、excerpt)\\nrepo-map: 主題 ghost 的 entry 指到不存在的 scripts/ghost.py\\nrepo-map: code-map/index.json 與 catalog 重生出來的不一樣(主題或連結改了)\\nrepo-map: code-map/INDEX.md 與重生出來的不一樣\\nrepo-map: code-map 索引過期 —— 重生:python3 scripts/repo-map.py build,連同產出物一起 commit\\ngate: 機械格不合 —— code-map 索引過期(上面 repo-map: 那幾行);重生:python3 scripts/repo-map.py build,連同產出物一起 commit\\n'",
+          "verify.dispatch.test_ticket_129.LandRebuildsAStaleMergedIndex.test_a7_the_land_pass_still_spans_from_the_pre_merge_head: AssertionError: 1 != 0 : land: t1-map —— 1 個 commit",
+          "verify.dispatch.test_ticket_129.TheBatchFixRebuildsTheIndex.test_a1_a_new_managed_file_is_indexed_in_the_same_batch_commit: AssertionError: False is not true : batch commit 訊息沒有 regen 行:batch fix round 1 #1 #2 (land/X)",
+          "verify.dispatch.test_ticket_129.TheBatchFixRebuildsTheIndex.test_a2_a_failed_build_does_not_block_the_batch: AssertionError: '索引沒重產' not found in 'apply: 批次 #1 #2 -> land/X  patch ghost.diff  sha256 d729662bc2…  紀錄 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpa7iue53_/repo/reports/batch/20261018-122037-57656\\napply: 開了整合分支 land/X 的副本 /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpa7iue53_/repo/../repo-wt/batch-land-X\\napply: 批次 #1 #2 -> land/X a45fb9a 已 commit(各票分支與票檔都沒動)\\nticket: result 抽不出來(no-evidence)—— /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpa7iue53_/EVIDENCE.md;不擋流程\\nticket: EVIDENCE 少了這幾段:excluded、gate、mutations、patch_sha256、repro(不擋;見角色卡「必備五段」)\\nticket: result -> /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpa7iue53_/repo/reports/batch/20261018-122037-57656/result-round1.json\\napply: 聯集外的改動(不擋,記進 result-round1.json 的 extra_paths、交覆核者逐檔看):\\napply:   code-map/catalog.json\\napply: 下一步 —— sh scripts/review.sh --batch land/X 1 2 --run-id 20261018-122037-57656\\napply: 找不到 EVIDENCE /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpa7iue53_/EVIDENCE.md —— 記憶 0 筆\\n'"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 10,
+        "skipped": 0,
+        "log": "../agent-control-wt/t129/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 10,
+        "skipped": 0,
+        "log": "../agent-control-wt/t129/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "decision_refs": [
     "使用者 2026-10-17 原話(主線將記入 DECISIONS)",
@@ -77,5 +133,180 @@
   "feature": "agent-control 工具鏈:apply / land",
   "effort": "high",
   "test_plan": "全部整合層,沙盒照 A 慣例(tests/control_harness.Sandbox;外層 AC_* 先清)。【apply --batch】tests/test_apply.py 的 ApplyBatch(ApplyBase)旁加一個類,setUp 照 tests/test_repo_map_contract.py 的 TheGateRefusesAStaleIndex(A32)與 verify/dispatch/test_ticket_96.py 的 ApplyRebuildsTheCodeMap:複製真的 scripts/repo-map.py、寫 catalog、build、commit 進主線,再照 ApplyBatch 既有寫法開整合分支;patch 用 diff -ruN base work 造。A1 斷 rev-list 數、git log -1 --format=%B 有 regen: 行、--root <wt> check rc=0、index.json managed 含新檔(期望值 = patch 新增的檔名)、輸出字串、result 的 extra_paths 不含 code-map/。A2 兩個子案例同 #96 的 A6/A7 寫法。【land】tests/test_land.py 新增 class TheMergedCodeMapIsRebuilt(LandBase),setUp 同樣把真的 repo-map.py + catalog + 新鮮索引 commit 進沙盒主線;票與分支照 LandBase 既有的開法(base_sha 是主線祖先、review 照既有案例怎麼蓋就怎麼蓋)。A3 分支先 build 再 commit,主線再直接 commit 一支新檔不 build,跑 land,斷主線 check rc=0、managed 兩檔都在、git log main 有 regen commit 且 git show --name-only 只列 code-map/index.json、code-map/INDEX.md。A4 前置自證衝突(git merge --no-commit 後 git diff --name-only --diff-filter=U 只列 code-map/),再跑 land。A5(b) 假 repo-map.py:check 一律 exit 1、build 寫 code-map 兩檔外加 stray.txt;斷 rc 3、主線 rev-parse 不變、輸出字串、無 regen commit。A6 既有 LandBase 案例全綠即證「沒有地圖略過」;catalog 壞掉案例斷 gate.log 含「code-map 索引過期」。A7 讀沙盒事件檔的 land.pass 一列比 main_before / sha(#127 的 test_land 案例怎麼讀就怎麼讀)。變異(自證紅,EVIDENCE 貼紅的第一行):m1 拿掉 apply --batch 的重產 → A1 紅;m2 拿掉 land 合併後重產 → A3 紅;m3 衝突一律停(拿掉產出物衝突的解法)→ A4 紅;m4 land 重產改成 git add -A → A5(b) 紅。只跑:python3 -m unittest tests.test_apply tests.test_land tests.test_repo_map_contract;不跑全套。驗證者案例照 templates/dispatch-verifier.md 放 verify/<feature>/test_ticket_<票號>.py、新標籤寫 verify/TAGS.d/<票號>.md,由驗證者設 verify.files/tags/run。不呼叫真 LLM、不碰正式票庫。開題時唯讀,以上案例與變異均未實測。",
-  "outline": "接 #96(已 InReview、review pass,票面不再動以免 face 變了 review 失效)的兩個缺口。對過 t96 分支 3264058:#96 的重產在 apply.sh 單票路第 7 步,auto-fix 修補輪(auto-fix.sh 2419-2431 呼叫 apply.sh <n> …)與驗證者 patch(apply.sh <n> <patch> <patch-verify>)都經過它、apply.sh rebase 的 diff 也回到單票路,這三條已涵蓋;apply.sh --batch(cmd_batch)在第 7 步之前就 exit,沒涵蓋 → 本票(一)。land.sh 合併(618 行 merge 迴圈)後直接 run_gate,合併結果過期就 rc 4 退 → 本票(二),插在 merge 迴圈之後、COUNT/run_gate 之前,LAND_BASE(#127)維持在迴圈前。與 #127(Done,已在主線)不同段、不衝突,只要守 A7。與 #101(Ready)同檔:#101 改 land.sh 合併前的寫入範圍硬擋段(約 427-470)與 apply.sh 第 5 步 / 批次 fence(388、463、559),本票改 land.sh merge 迴圈之後與 cmd_batch 的 commit 前(約 600-610),hunk 不重疊但同檔 —— 不平行,建議 #101 先落地或本票落地時 rebase。T(tabby_pool)的 land-ticket.sh 包裝是否同步不在本票。建議順序:#96 落地 → #101 → 本票。"
+  "outline": "接 #96(已 InReview、review pass,票面不再動以免 face 變了 review 失效)的兩個缺口。對過 t96 分支 3264058:#96 的重產在 apply.sh 單票路第 7 步,auto-fix 修補輪(auto-fix.sh 2419-2431 呼叫 apply.sh <n> …)與驗證者 patch(apply.sh <n> <patch> <patch-verify>)都經過它、apply.sh rebase 的 diff 也回到單票路,這三條已涵蓋;apply.sh --batch(cmd_batch)在第 7 步之前就 exit,沒涵蓋 → 本票(一)。land.sh 合併(618 行 merge 迴圈)後直接 run_gate,合併結果過期就 rc 4 退 → 本票(二),插在 merge 迴圈之後、COUNT/run_gate 之前,LAND_BASE(#127)維持在迴圈前。與 #127(Done,已在主線)不同段、不衝突,只要守 A7。與 #101(Ready)同檔:#101 改 land.sh 合併前的寫入範圍硬擋段(約 427-470)與 apply.sh 第 5 步 / 批次 fence(388、463、559),本票改 land.sh merge 迴圈之後與 cmd_batch 的 commit 前(約 600-610),hunk 不重疊但同檔 —— 不平行,建議 #101 先落地或本票落地時 rebase。T(tabby_pool)的 land-ticket.sh 包裝是否同步不在本票。建議順序:#96 落地 → #101 → 本票。",
+  "owner": "main",
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 0,
+      "tokens_out": 0,
+      "cache_write": 0,
+      "cache_read": 0,
+      "wall_seconds": 3,
+      "outcome": "no-patch",
+      "run_id": "20261018-012915-19005",
+      "session_id": "dc8cbd36-61ba-4135-8ac7-7e827fef020b",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-18T01:29:20+08:00"
+    },
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 78,
+      "tokens_out": 28062,
+      "cache_write": 125605,
+      "cache_read": 3977309,
+      "wall_seconds": 352,
+      "outcome": "handed-in",
+      "run_id": "20261018-114519-45677",
+      "session_id": "d7c85359-e930-469b-af44-d90207789c50",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-18T12:06:51+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 104,
+      "tokens_out": 56060,
+      "cache_write": 189490,
+      "cache_read": 7190401,
+      "wall_seconds": 925,
+      "outcome": "handed-in",
+      "run_id": "20261018-114519-45677",
+      "session_id": "1f16b7f8-e850-4337-aabd-083faf9ae544",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-18T12:06:59+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 14,
+      "tokens_out": 5670,
+      "cache_write": 51198,
+      "cache_read": 308945,
+      "wall_seconds": 88,
+      "outcome": "pass",
+      "run_id": "20261018-120659-78168",
+      "session_id": "d1394ea3-1452-413a-a150-1e3b254c12f5",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-18T12:22:29+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1643,
+      "outcome": "pass",
+      "run_id": "20261018-131039-92327",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-18T13:38:02+08:00"
+    }
+  ],
+  "branch": "t129",
+  "patch_ref": "../agent-control-wt/fix-t129/round1/patch-round1.diff",
+  "gate": {
+    "rc": 0,
+    "sha": "9ea6a5a33a72d298fd9d2990697b061a144fd4f0",
+    "run_id": "20261018-120659-78168",
+    "at": "2026-10-18T12:20:58+08:00"
+  },
+  "repair_round": 1,
+  "review_request": {
+    "run_id": "20261018-120659-78168",
+    "owner_id": "review.sh",
+    "attempt": 0,
+    "state_version": 22,
+    "face": "18ffba7870ff7b13e621764d4a1204feef4736c1a013511a9007766e16d844db",
+    "patch_id": "54dbe3343be60bcff1582c595dd2986ece665fbe",
+    "sha": "9ea6a5a33a72d298fd9d2990697b061a144fd4f0"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "6fac8ec2a25abcafe39715bf90b2e02a66bdb9cf",
+    "note": "reports/t129/20261018-120659-78168/REVIEW.md",
+    "at": "2026-10-18T13:38:02+08:00",
+    "state_version": 25,
+    "patch_id": "54dbe3343be60bcff1582c595dd2986ece665fbe",
+    "face": "18ffba7870ff7b13e621764d4a1204feef4736c1a013511a9007766e16d844db"
+  },
+  "cost_total": {
+    "calendar_seconds": 50232,
+    "wall_seconds": 3011,
+    "runs": 5,
+    "worker_rounds": 1,
+    "objections": 0,
+    "by_role": {
+      "worker": {
+        "runs": 2,
+        "wall_seconds": 928,
+        "tokens_in": 104,
+        "tokens_out": 56060,
+        "cache_write": 189490,
+        "cache_read": 7190401,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "no-patch": 1,
+          "handed-in": 1
+        }
+      },
+      "verifier": {
+        "runs": 1,
+        "wall_seconds": 352,
+        "tokens_in": 78,
+        "tokens_out": 28062,
+        "cache_write": 125605,
+        "cache_read": 3977309,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 1
+        }
+      },
+      "reviewer": {
+        "runs": 1,
+        "wall_seconds": 88,
+        "tokens_in": 14,
+        "tokens_out": 5670,
+        "cache_write": 51198,
+        "cache_read": 308945,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 1643,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-18T13:38:02+08:00"
+  }
 }

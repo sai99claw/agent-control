@@ -354,3 +354,9 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - 起因:#116、#95 閘門都因 code-map 索引過期(rc 4,機械格不合)停下,主線在副本跑 `repo-map.py build`、經 apply.sh 收進分支(reports/t116、t95 的 regen-20261017)。
 - 原話:「應該要改到 完工後要執行的腳本內，或是改到 測試全綠後 上主線的腳本內」
 - 落實:#96(已落地)apply 單票路同 commit 重產;#129 補 apply --batch 與 land.sh 合併後過期自動重產(只動 code-map/,其他差異照擋)。順序 #101 → #129。
+
+## D-052(2026-10-18)A 剩下的票串行疊加開發,做完一串再跑一次大驗證
+- 原話:「我不是要你同時寫 一人一個一個票開發 按照排好隊順序，我是要你做好幾張之後 再跑大驗證」;「現在opus worker 品質應該可以，也要讓token 使用有效率」
+- 做法:一次一個 opus worker,票 N 的分支從票 N-1 的分支頭開(主線先 `git branch t<N> t<N-1>`、base_sha 設成前票分支頭);每張只跑 `gate.sh --branch --ticket` 與覆核(覆核只審 `<base_sha>..t<n>`);整串綠了把 base_sha 改回鏈根、一次 `land.sh` 多票落地跑全套,紅了 auto-fix --batch。第一串 #131 → #132 → #122 → #104 → #106(開題者排序,depends_on 寫 stacked)。
+- 主線裁(開題者 Q1,未經使用者):#131 A10「票上 model 當第一候選」只套在與票 role 相同的角色鏈;verifier / reviewer / opener / consolidator 照各自角色鏈(否則整理票寫 opus 會違反 #122「只派 Fable」)。
+- 現有工具的缺口(開題者讀碼,未實測):apply 在分支不存在時從 main 開、land 拒絕 base_sha 不是 main 祖先的票 —— 目前靠主線手動建分支與改 base_sha 繞過;長期解另開票讓 apply / land 認得 stacked 依賴。

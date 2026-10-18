@@ -24,6 +24,10 @@
     {
       "id": "121",
       "condition": "landed"
+    },
+    {
+      "id": "122",
+      "condition": "stacked:base = t122 分支頭"
     }
   ],
   "allowed_write_paths": [
@@ -42,12 +46,12 @@
     "tests/test_land.py"
   ],
   "role": "worker",
-  "model": "codex:gpt-5.6-sol",
-  "tool": "codex",
+  "model": "opus",
+  "tool": "claude-code",
   "attempt": 0,
   "base_sha": "ba84c88da750b0e03b087b65f2f3e3d90d990045",
-  "state": "Draft",
-  "state_version": 26,
+  "state": "Ready",
+  "state_version": 32,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -56,8 +60,8 @@
     "run": "",
     "notes": ""
   },
-  "test_plan": "T1 note+patch+原驗收綠→單筆 note、無 opener、自動繼續；note 無 patch／要求改產品→decision；apply 不再對合格 note rc=6。\nT2 假 reviewer 少 index、重 index、disagree、全 agree、延遲舊回報五組；核對 disposition 與 review 一起 CAS。\nT3 overrule 前後跑既有 land 守衛夾具；M1 有 patch 一律降級使 A1 紅；M2 漏 note 仍 pass 使 A3 紅；M3 Controller 自寫 accepted 使 A2 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例置於 tests/test_ticket_<正式票號>_verify.py，不列入 worker 的 allowed_write_paths；由驗證者設定 verify.files/run，verify.tags=[]（A 的 tests/ 案例不冒用未登記的 verify 標籤）。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
-  "outline": "本票只負責反駁與非阻擋註記分流，覆核逐條回應。前置：#98、#121。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。",
+  "test_plan": "T1 note+patch+原驗收綠→單筆 note、無 opener、自動繼續；note 無 patch／要求改產品→decision；apply 不再對合格 note rc=6。\nT2 假 reviewer 少 index、重 index、disagree、全 agree、延遲舊回報五組；核對 disposition 與 review 一起 CAS。\nT3 overrule 前後跑既有 land 守衛夾具；M1 有 patch 一律降級使 A1 紅；M2 漏 note 仍 pass 使 A3 紅；M3 Controller 自寫 accepted 使 A2 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例置於 tests/test_ticket_104_verify.py，不列入 worker 的 allowed_write_paths；由驗證者設定 verify.files/run，verify.tags=[]（A 的 tests/ 案例不冒用未登記的 verify 標籤）。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
+  "outline": "本票只負責反駁與非阻擋註記分流，覆核逐條回應。前置：#98、#121。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。\nReady 前檢查(開題者 2026-10-18,讀 main cf6b991 + t121):F 在 —— ticket.py 無 objection-overrule、無 objection_replies;OBJECTION 只認 ticket-wrong|test_defect|blocking(t121 auto-fix 三處派工文與 ticket.py OBJECTION_CATEGORIES),沒有 note;apply.sh 對反駁一律 rc=6。model 改 opus。\n串行疊加(主線 2026-10-18 改,取代平行):順序 #131 → #132 → #122 → #104 → #106,一次一張;每張的 base = 前一張的分支頭(未落地),做完數張後一次全套、一次多票 land。理由:#132 的執行中換候選要用 #131 改過的 resolve(A10)與 agy classify;#122 的開題者/整理者選路同走 resolve,接在 #132 後;#104 改 triage_objection 後段與 review.sh 判讀,疊在 #122(triage 開頭)與 #132(review.sh)之上;#106 改 Ready 判準放最後,不在鏈中途改開票規則。覆核:分支相對 main 的 diff 含前序票,只審 `git diff <base_sha>..t<本票>` 那段。",
   "needs_verifier": true,
   "interface_fixed": true,
   "verify_strings": [

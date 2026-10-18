@@ -1,0 +1,78 @@
+{
+  "id": "132",
+  "subject": "verifier/reviewer/batch worker take the next #116 candidate when quota hits mid-run",
+  "created": "2026-10-18T12:57:08+08:00",
+  "objective": "verifier、reviewer 與 --batch worker 執行中撞額度/不可用時，與 #121 的 worker 路同一套：role-models.py classify 判讀、保留副本換下一候選、有 Controller 只交 action 記錄、整串耗盡 Blocked + 一頁",
+  "acceptance": [
+    "B1 run_verifier 執行中回報 quota → 同副本以下一候選重起 verifier；argv/model/effort、事件、cost[] 為新候選；不硬寫 opus、不刪副本",
+    "B2 review.sh run_reviewer 執行中 quota → 下一候選重起覆核；仍走 #98 receipt/CAS，不跳過 gate 與 attempt 檢查",
+    "B3 batch_main 的 worker 撞額度 → 同 #121 A2/A3 換候選；其他批次票不受影響",
+    "B4 timeout / 測試紅 / no-patch / 字面 429 不換模型（沿用 #121 classify）",
+    "B5 有/無 Controller owner 各跑一次，fake consumer 真的起下一候選，兩種 owner 的總啟動數相同"
+  ],
+  "in_scope": [
+    "auto-fix.sh 驗證者路(run_verifier/verifier_done/wait_verifier/dispatch_verifier)執行中撞額度或不可用 → role-models.py classify 判讀、同副本換下一候選或交 Controller",
+    "review.sh 覆核者執行中撞額度 → 下一候選重起,仍走 #98 receipt/CAS",
+    "batch_main 的修復 worker 執行中撞額度 → 照 #121 worker 主幹換候選",
+    "Controller owner(AC_RECOVERY_OWNER=controller)與無 Controller 兩種下總啟動數相同的案例"
+  ],
+  "out_of_scope": [
+    "docs/DECISIONS.md",
+    "board/role-models.json"
+  ],
+  "depends_on": [
+    {
+      "id": "121",
+      "condition": "landed"
+    },
+    {
+      "id": "131",
+      "condition": "stacked:base = t131 分支頭"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/review.sh",
+    "tests/test_auto_fix_fallback_midrun.py",
+    "tests/test_auto_fix_codex.py",
+    "tests/test_review.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "91a5663e67df6df4c28f365c5bbdaaade2ae15ab",
+  "state": "Ready",
+  "state_version": 15,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "complex",
+  "needs_verifier": true,
+  "test_plan": "新檔 tests/test_auto_fix_fallback_midrun.py,import #121 tests/test_auto_fix_codex.py 的 FallbackBase 夾具(不複製)：fake codex 先 quota、fake opus 交件，分別打 verifier/reviewer/batch 三路，斷言第二次 argv 與 cost 末列 model=表上下一候選（期望值取自夾具表，不從被測程式算）。B4 各失敗類型一案，斷言只起 1 次。B5 夾具 AC_RECOVERY_OWNER=controller + fake consumer 讀 agent.recovery_needed 起下一候選，數總啟動次數與無 Controller 相等。變異：M1 verifier 路回到不換候選使 B1 紅；M2 reviewer 換候選時跳過 receipt 使 B2 紅；M3 Controller 分支兩邊都起使 B5 紅。測試清 AC_ROOT/AC_TICKETS_DIR/AC_CONTROL_DIR，不呼叫真 LLM。\n獨立驗證者案例照 A 慣例(templates/dispatch-verifier.md)放 verify/<feature>/test_ticket_132.py,新標籤寫 verify/TAGS.d/132.md;由驗證者設定 verify.files/tags/run,不列入 worker 的 allowed_write_paths。",
+  "outline": "#121 第 1 輪反駁 accepted 切出：#121 只交 worker 主幹與 verifier/reviewer 啟動前換候選；本票補執行中撞額度的三路與 Controller 側總啟動數案例。依賴 #121 落地；B5 與 #120 A3 接縫相鄰，若 #120 先落地可改用真 Controller --once。\nReady 前檢查(開題者 2026-10-18,讀 t121 分支):F 在 —— verifier_done 只記 rc/cost、不叫 classify;review.sh run_reviewer 回來後沒有任何額度判讀;batch_main 的 worker 起跑段沒有 worker_fallback_wanted 迴圈。#120 尚未落地,B5 用 fake consumer。\n串行疊加(主線 2026-10-18 改,取代平行):順序 #131 → #132 → #122 → #104 → #106,一次一張;每張的 base = 前一張的分支頭(未落地),做完數張後一次全套、一次多票 land。理由:#132 的執行中換候選要用 #131 改過的 resolve(A10)與 agy classify;#122 的開題者/整理者選路同走 resolve,接在 #132 後;#104 改 triage_objection 後段與 review.sh 判讀,疊在 #122(triage 開頭)與 #132(review.sh)之上;#106 改 Ready 判準放最後,不在鏈中途改開票規則。覆核:分支相對 main 的 diff 含前序票,只審 `git diff <base_sha>..t<本票>` 那段。\nA10 範圍(開題者澄清,待主線確認):票的 model 只當「與票 role 相同的角色」的第一候選 —— worker 票只影響 worker 鏈;verifier/reviewer/opener/consolidator 的 resolve 呼叫不帶票的 model。\nout_of_scope 不列 #131 會動的檔(role-models.py/ticket.py/SCHEMA):疊加分支的 land 以 main...分支 比 out_of_scope,列了會被「out_of_scope 命中缺理由」擋。",
+  "effort": "high",
+  "interface_fixed": true,
+  "priority": "P1",
+  "decision_refs": [
+    "D-049",
+    "D-050",
+    "D-018",
+    "D-016"
+  ],
+  "verify_strings": [
+    {
+      "path": "scripts/review.sh",
+      "contains": "classify"
+    },
+    {
+      "path": "tests/test_auto_fix_fallback_midrun.py",
+      "contains": "AC_RECOVERY_OWNER"
+    }
+  ]
+}

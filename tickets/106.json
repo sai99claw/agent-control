@@ -6,7 +6,7 @@
   "acceptance": [
     "A1 plan_ran 恰為 {sha,cmd,rc,at,dirty}，dirty 永遠 bool；只有 ticket.py plan 或同一受控 evidence recorder 在實際命令結束後寫。非零測試結果也記，不開放 set 偽造。cmd 可是一支測試腳本含基底與變異兩步，不把 plan_ran 改成 list。",
     "A2 ticket.py plan <id> --run <cmd> 在指定乾淨主線基底的拋棄式樹實跑，記實際 sha/rc；不在所聲明基底或 dirty=true，不能轉 Ready。輸出顯示實際命令、rc 與 log 位置，不把「命令存在」當跑過。",
-    "A3 worker 新轉 Ready/create Ready 必有有效 plan_ran；舊 Ready 不追溯。有效性照 D-050 ③：plan_ran.sha 是目前 main 的祖先，且本票 allowed_write_paths 與 test_plan 指到的測試自該 sha 起在 main 上無變動，即有效；證明不了（不是祖先、test_plan 的測試解析不出、比對失敗）才補跑。證據的 face/input_digest/log_refs 放同一 run evidence 檔，票 plan_ran 維持五鍵。",
+    "A3 worker 新轉 Ready/create Ready 必有有效 plan_ran；舊 Ready 不追溯。有效性照 D-050 ③：plan_ran.sha 是目前 main 的祖先，且本票提示範圍(ticket.py hint_scope,#101 A5 唯一算法:allowed_write_paths ∪ info_homes[].home ∪ verify.files)與 test_plan 指到的測試自該 sha 起在 main 上無變動，即有效；證明不了（不是祖先、test_plan 的測試解析不出、比對失敗）才補跑。證據的 face/input_digest/log_refs 放同一 run evidence 檔，票 plan_ran 維持五鍵。",
     "A4 status.py regression-red 已有可核對的真 gate command/rc/base/log 時，透過同一 recorder 寫 plan_ran；不得只因 role=worker 或 regression_case 就豁免。只有 case 沒執行證據則建 Draft 並在票 outline 寫「待 plan 實跑」；補跑由主線 `ticket.py plan <id> --run` 或 #125 的修補流程觸發（本票不依賴 Controller 存在），完成才 Ready；不得在原 ticket lock 中啟 LLM 或長測試。",
     "A5 未落地依賴使未來測試尚不存在的票可保留完整 Draft 並入 PlanningBatch；依賴落地後先補跑再 Ready。不是對未來功能造假的 plan_ran。",
     "A6 lint 與 Ready/create 同判準；角色操作 reference/template 與 opener.inbox 提示流程，不直接加滿額角色卡。既有 test_status_67 回歸建票測試須釘住正確狀態與證據，不能用全豁免讓 13 條舊紅消失。"
@@ -25,6 +25,10 @@
     {
       "id": "98",
       "condition": "landed"
+    },
+    {
+      "id": "104",
+      "condition": "stacked:base = t104 分支頭"
     }
   ],
   "allowed_write_paths": [
@@ -38,12 +42,12 @@
     "memory/role/opener.inbox.md"
   ],
   "role": "worker",
-  "model": "codex:gpt-5.6-sol",
-  "tool": "codex",
+  "model": "opus",
+  "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "ba84c88da750b0e03b087b65f2f3e3d90d990045",
-  "state": "Draft",
-  "state_version": 25,
+  "base_sha": "583dc2f82cde96c66fa8a573d6914dd9321f34d6",
+  "state": "Ready",
+  "state_version": 38,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -52,17 +56,28 @@
     "run": "",
     "notes": ""
   },
-  "test_plan": "T1 拋棄式 test_ticket：命令 exit 3 仍有真 rc、dirty 擋、set 偽造擋；有效／無關主線變更／相關輸入變更三種 freshness。\nT2 test_status_67：完整 gate 證據可 Ready、只有 case 先 Draft、偽造 evidence 拒收；以 ticket.py plan 補跑後才 Ready（觸發者是主線或 #125，本票只測 recorder 與狀態）。\nT3 未落前置時 Draft，前置落地後補跑；M1 以任何 regression_case 豁免使 A4 紅；M2 未跑直接寫 rc=0 使 A1 紅；M3 任意 SHA 祖先就准而不比輸入使 A3 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例置於 tests/test_ticket_<正式票號>_verify.py，不列入 worker 的 allowed_write_paths；由驗證者設定 verify.files/run，verify.tags=[]（A 的 tests/ 案例不冒用未登記的 verify 標籤）。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
-  "outline": "本票只負責開題實跑證據與可用的 Ready 關，涵蓋機械回歸票。前置：#101、#98（不依賴 #120：Draft 回歸票的補跑由主線或 #125 觸發；#98 提供 face 算法）。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。\nD-050 ③：plan_ran 有效 = sha 是 main 祖先且本票寫入範圍與 test_plan 指到的測試自該 sha 無變動；證明不了才補跑。",
+  "test_plan": "T1 拋棄式 test_ticket：命令 exit 3 仍有真 rc、dirty 擋、set 偽造擋；有效／無關主線變更／相關輸入變更三種 freshness(info_homes.home、verify.files 變更也算相關輸入,hint_scope)。\nT2 test_status_67：完整 gate 證據可 Ready、只有 case 先 Draft、偽造 evidence 拒收；以 ticket.py plan 補跑後才 Ready（觸發者是主線或 #125，本票只測 recorder 與狀態）。\nT3 未落前置時 Draft，前置落地後補跑；M1 以任何 regression_case 豁免使 A4 紅；M2 未跑直接寫 rc=0 使 A1 紅；M3 任意 SHA 祖先就准而不比輸入使 A3 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例照 A 慣例（templates/dispatch-verifier.md）放 verify/<feature>/test_ticket_106.py，新標籤寫 verify/TAGS.d/106.md；由驗證者設定 verify.files/tags/run，不列入 worker 的 allowed_write_paths（#101 A3 會擋 worker glob 命中這兩條路）。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
+  "outline": "本票只負責開題實跑證據與可用的 Ready 關，涵蓋機械回歸票。前置：#101、#98（不依賴 #120：Draft 回歸票的補跑由主線或 #125 觸發；#98 提供 face 算法）。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。\nD-050 ③：plan_ran 有效 = sha 是 main 祖先且本票寫入範圍與 test_plan 指到的測試自該 sha 無變動；證明不了才補跑。\nReady 前檢查(583dc2f):F 都在(無 plan_ran;regression-red 仍建 Ready)。#101 已落地(cf6b991):input_scope 改用 ticket.py hint_scope(開題者 2026-10-18 改 A3 與 interface_contracts.input_scope)。\nReady 前檢查(開題者 2026-10-18,讀 main cf6b991):F 在 —— ticket.py/status.py 無 plan_ran;status.py regression-red 仍以 --state Ready 建票。model 改 opus。\n串行疊加(主線 2026-10-18 改,取代平行):順序 #131 → #132 → #122 → #104 → #106,一次一張;每張的 base = 前一張的分支頭(未落地),做完數張後一次全套、一次多票 land。理由:#132 的執行中換候選要用 #131 改過的 resolve(A10)與 agy classify;#122 的開題者/整理者選路同走 resolve,接在 #132 後;#104 改 triage_objection 後段與 review.sh 判讀,疊在 #122(triage 開頭)與 #132(review.sh)之上;#106 改 Ready 判準放最後,不在鏈中途改開票規則。覆核:分支相對 main 的 diff 含前序票,只審 `git diff <base_sha>..t<本票>` 那段。",
   "needs_verifier": true,
   "interface_fixed": true,
   "verify_strings": [
-    "plan_ran"
+    {
+      "path": "scripts/ticket.py",
+      "contains": "plan_ran"
+    },
+    {
+      "path": "tests/test_status_67.py",
+      "contains": "plan_ran"
+    },
+    {
+      "path": "scripts/status.py",
+      "contains": "待 plan 實跑"
+    }
   ],
   "interface_contracts": {
     "plan_ran": "{sha:string,cmd:string,rc:int,at:ISO8601,dirty:bool}；唯一票面證據欄，不另建 plan_runs 或 planning_evidence 作權威。",
     "validity": "D-050 ③ 已裁：sha 是 main 祖先、且本票寫入範圍與 test_plan 指到的測試自該 sha 無變動即有效；證明不了才補跑。取代舊 #106 的 main 每動一顆 commit 就全重跑。",
-    "input_scope": "比對範圍 = 本票 allowed_write_paths ∪ test_plan 指到的測試（D-050 ③）；解析不出完整引用就算證明不了、補跑，不能猜無關。",
+    "input_scope": "比對範圍 = ticket.py hint_scope(票)(#101 已落地的唯一提示範圍算法,不另寫一份聯集)∪ test_plan 指到的測試(D-050 ③);解析不出完整引用就算證明不了、補跑,不能猜無關。",
     "evidence": "唯一 evidence 路徑 reports/t<id>/planning/<sha256(plan_ran.at UTF-8)>.json，at 由 recorder 產唯一高精度 UTC timestamp。內容恰 {schema_version:1,plan_ran:<相同五鍵>,face:<沿用#98算法>,input_digest:string,inputs:list[str],log_refs:list[str]}；先寫不可變 evidence，再於同票鎖 CAS 更新 plan_ran。找不到或不一致即證據無效，不挑最近一份猜。"
   },
   "effort": "high",
