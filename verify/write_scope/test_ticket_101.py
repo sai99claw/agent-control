@@ -1,8 +1,8 @@
-"""#101 寫入範圍改為建議範圍(protected_paths 仍硬擋)、info_homes、worker / 驗證者案例分開。
+"""#101 寫入範圍改為建議範圍(hard_block.paths 仍硬擋)、info_homes、worker / 驗證者案例分開。
 
 ## 驗收表(票面每一條一列;期望值來源獨立於被測程式:票面原話 / 夾具自己寫的票檔與 patch / 手算)
 A1 | unit | apply 單票、apply --batch、gate --branch preflight、land:patch 命中 out_of_scope | rc 0 / 非 4、主線或分支前進、檔進 extra_paths、輸出同一行點名檔與 glob | 票面 A1 原話
-A1 | unit | 同上,命中 board/config.json 的 protected_paths                                 | apply rc 5 / gate rc 4 / land 拒絕、點名檔與格                            | 票面 A1「protected_paths 維持」
+A1 | unit | 同上,命中 board/config.json 的 hard_block.paths                                 | apply rc 5 / gate rc 4 / land 拒絕、點名檔與格                            | 票面 A1「hard_block.paths 維持」
 A2 | unit | set / lint / create --info-home                                                  | 合格的收;絕對路徑、glob、..、空字串、缺鍵、多鍵、非 list 拒收且票位元不變   | 票面 A2 原話
 A3 | unit | needs_verifier=true 的 create / set allowed_write_paths / set verify / set needs_verifier / 轉 Ready / lint | 拒收、訊息含 MSG_A3 並點名 glob 與檔、票位元不變;false 與別票案例照收 | 票面 A3 原話
 A4 | unit | apply <worker patch> <patch-verify> --evidence-verifier                          | verify.files 併進票、allowed_write_paths 不變、驗證者檔不在 extra_paths    | 票面 A4 + A5 的提示範圍算法
@@ -104,10 +104,10 @@ class World(Sandbox):
 
     def protect(self, *globs):
         conf = json.loads(self.read("board/config.json"))
-        conf["protected_paths"] = list(globs)
+        conf["hard_block"] = {"paths": list(globs), "dirs": [], "patterns": []}
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
         self.git("add", "-A")
-        self.git("commit", "-q", "-m", "protected_paths")
+        self.git("commit", "-q", "-m", "hard_block.paths")
         self.git("push", "-q", "origin", "main")
 
     def home_file(self, name, body):
@@ -158,15 +158,15 @@ class A1OutOfScopeIsAHintNotAFence(World):
         self.assertTrue(any("docs/*" in row for row in lines),
                         "要標明命中哪條 out_of_scope glob:%s" % lines)
 
-    def test_a1_single_apply_still_refuses_protected_paths(self):
-        """A1 protected_paths 維持 apply rc=5、點名檔與格(不在本票放寬;M1 移除它 → 紅)。"""
+    def test_a1_single_apply_still_refuses_hard_block_paths(self):
+        """A1 hard_block.paths 維持 apply rc=5、點名檔與格(不在本票放寬;M1 移除它 → 紅)。"""
         self.protect("docs/*")
         self.make("1", allowed_write_paths=["src/*", "docs/*"])
         done = self.apply("1", self.home_file("p.diff", patch(SRC, DOCS_B)))
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         line = [row for row in done.stderr.splitlines() if "docs/b.md" in row]
         self.assertEqual(len(line), 1, done.stderr)
-        self.assertIn("protected_paths", line[0])
+        self.assertIn("hard_block.paths", line[0])
         self.assertIn("`docs/*`", line[0])
         self.assertIn(self.commits_on_t1(), ("0", "沒有分支 t1"), "硬擋的 patch 不留 commit")
 
@@ -183,7 +183,7 @@ class A1OutOfScopeIsAHintNotAFence(World):
                             "land/X 要前進一個 commit")
         self.assertIn("docs/guarded.md", self.result_round1(("reports", "batch"))["extra_paths"])
 
-    def test_a1_batch_apply_still_refuses_protected_paths(self):
+    def test_a1_batch_apply_still_refuses_hard_block_paths(self):
         """A1 --batch 的 protected 那一半照擋(rc 5、點名檔)。"""
         batch = self.make_batch()
         self.protect("docs/guarded.md")
@@ -191,7 +191,7 @@ class A1OutOfScopeIsAHintNotAFence(World):
         done = self.apply("--batch", "land/X", "1", "2", self.home_file("b.diff", body))
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         self.assertIn("docs/guarded.md", done.stderr)
-        self.assertIn("protected_paths", done.stderr)
+        self.assertIn("hard_block.paths", done.stderr)
         self.assertEqual(self.git("rev-parse", "land/X").strip(), batch["land"])
 
 
@@ -217,19 +217,19 @@ class A1GatePreflight(Sandbox):
         self.assertNotEqual(done.returncode, 4, done.stdout + done.stderr)
         self.assertNotIn("機械格不合", done.stdout + done.stderr)
 
-    def test_a1_gate_preflight_still_stops_on_protected_paths(self):
-        """A1 gate preflight:protected_paths 命中照舊 rc=4、點名檔與格。"""
+    def test_a1_gate_preflight_still_stops_on_hard_block_paths(self):
+        """A1 gate preflight:hard_block.paths 命中照舊 rc=4、點名檔與格。"""
         conf = json.loads(self.read("board/config.json"))
-        conf["protected_paths"] = ["scripts/land.sh"]
+        conf["hard_block"] = {"paths": ["scripts/land.sh"], "dirs": [], "patterns": []}
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
         self.git("add", "-A")
-        self.git("commit", "-q", "-m", "protected_paths")
+        self.git("commit", "-q", "-m", "hard_block.paths")
         self.make_ticket(7, allowed_write_paths=["scripts/land.sh"])
         self.write("scripts/land.sh", self.read("scripts/land.sh") + "\n# protected\n")
         done = self.gate("--branch", "--ticket", "7")
         self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
         self.assertIn("scripts/land.sh", done.stderr)
-        self.assertIn("protected_paths", done.stderr)
+        self.assertIn("hard_block.paths", done.stderr)
 
 
 class LandWorld(World):
@@ -260,8 +260,8 @@ class A1LandTakesAReasonedOutOfScopeHit(LandWorld):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("docs/b.md", self.on_main())
 
-    def test_a1_land_still_refuses_protected_paths(self):
-        """A1 land:protected_paths 命中照拒、點名檔與格、主線不動。"""
+    def test_a1_land_still_refuses_hard_block_paths(self):
+        """A1 land:hard_block.paths 命中照拒、點名檔與格、主線不動。"""
         self.protect("docs/*")
         self.make("1", allowed_write_paths=["src/*", "docs/*"])
         branch = self.worktree("t1")
@@ -272,7 +272,7 @@ class A1LandTakesAReasonedOutOfScopeHit(LandWorld):
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         line = [row for row in done.stdout.splitlines() if "docs/b.md" in row]
         self.assertTrue(line, done.stdout)
-        self.assertTrue(any("protected_paths" in row for row in line), line)
+        self.assertTrue(any("hard_block.paths" in row for row in line), line)
         self.assertEqual(self.git("rev-parse", "main").strip(), before)
 
 
@@ -594,7 +594,7 @@ class A6DocsSayTheNewRule(unittest.TestCase):
         """A6 DISPATCH-TEMPLATE:worker 要寫的 EVIDENCE 小節名在;舊的「硬擋只有 out_of_scope 與…」不在。"""
         text = doc("docs/DISPATCH-TEMPLATE.md")
         self.assertIn("提示清單外的改動", text)
-        self.assertNotIn("硬擋只有 `out_of_scope` 與 `protected_paths`", text)
+        self.assertNotIn("硬擋只有 `out_of_scope` 與", text)
 
     def test_a6_reviewer_template_asks_for_the_reasons(self):
         """A6 reviewer 範本:out_of_scope 改成看理由,不再只問「有沒有被碰」。"""

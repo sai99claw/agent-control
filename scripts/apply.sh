@@ -30,7 +30,8 @@
 #                              兩個 patch 槽是同一份;verify-plan 的驗證者 result 解析不到)
 #   3 檔頭不合格或 `--check` 不過(rebase 那一支的三向合併衝突也是 3)
 #   4 套完的比對不過(rebase 那一支的 **0 byte diff** 也是 4)
-#   5 動到 `board/config.json` 的 `protected_paths`(安全邊界;D-050 ①:`allowed_write_paths`
+#   5 命中 `board/config.json` 的 `hard_block`(安全邊界:`paths` 的檔,或 tests/** verify/** 新增行
+#     命中 `patterns`;D-050 ①:`allowed_write_paths`
 #     以外與命中 `out_of_scope` 都**不擋**,列進 result 的 `extra_paths` / `extra_reasons`)
 #   6 patch 套好了,但 EVIDENCE 裡有一行 `OBJECTION:` —— 已記進票的 `objections[]`
 #     (記過的同一筆 disposition 還空著也是 6;處置過的才放行成 0)
@@ -387,7 +388,7 @@ PY
 # 1. **不寫票**:不 `ticket.py set`、不記 patch_ref / branch / objection。任何一張票的
 #    `state_version` 動一下,N 張的覆核同時過期;各票分支也不動(覆核綁的是它們的 sha)。
 #    紀錄全在 `reports/batch/<stamp>/`。
-# 2. 寫入範圍硬擋只剩 `protected_paths`(D-050 ①);各票 `out_of_scope` 聯集 − 各票提示範圍聯集
+# 2. 寫入範圍硬擋只剩 `hard_block`(D-050 ①、D-054 Q3);各票 `out_of_scope` 聯集 − 各票提示範圍聯集
 #    (票 1 不准碰、票 2 本來就要改的檔不算)命中**不擋**,與聯集外的檔一起列進 result 的
 #    `extra_paths` / `extra_reasons`,標明命中哪條 glob。在 `git apply` **之前**看檔頭量,
 #    擋下來的那一手整合分支的工作樹一個位元都沒動。
@@ -436,7 +437,7 @@ cmd_batch() {
 
     B_TARGETS=$(headers "$B_PATCH") || { echo "apply: patch 檔頭不合格(見上面逐條)" >&2; exit 3; }
 
-    # 兩道硬擋都只看 patch 本身:印 `B <檔>\t<哪一格>\t<glob>`(protected_paths)、
+    # 兩道硬擋都只看 patch 本身:印 `B <檔>\t<哪一格>\t<glob 或 regex>`(hard_block)、
     # `R <檔>:<行>\t<那一行>`(放寬測試)、`E <檔>`(聯集外,不擋)、`O <檔>\t<哪一格>\t<glob>`
     # (命中 out_of_scope,不擋、要理由)、`X <檔>\t<案例>`(反駁豁免)。
     B_OUT=$(python3 - "$AC" "$ROOT" "$TDIR" "$B_PATCH" "$B_EVIDENCE" $B_IDS <<'PY'
@@ -456,7 +457,6 @@ try:
 except (OSError, ValueError):
     conf = {}
 conf = conf if isinstance(conf, dict) else {}
-protected = conf.get("protected_paths") or []
 test_globs = (conf.get("batch_fix") or {}).get("test_globs") \
     or ["tests/**", "verify/**", "**/test_*.py"]
 scope = []
@@ -523,11 +523,13 @@ for row in sections:
     row["name"] = (row["old"] if gone else row["new"]).split("/", 1)[1]
 hits = ticket_mod.out_of_scope_hits([rows[ident] for ident in ids],
                                     [row["name"] for row in sections])
+blocked = {name: (field, pattern) for name, field, pattern in ticket_mod.hard_block_hits(
+    root, [row["name"] for row in sections],
+    {row["name"]: [text for _, text in row["added"]] for row in sections})}
 for row in sections:
     name = row["name"]
-    pattern = ticket_mod.first_match(name, protected)
-    if pattern is not None:
-        print("B %s\t%s\t%s" % (name, ticket_mod.PROTECTED_FIELD, pattern))
+    if name in blocked:
+        print("B %s\t%s\t%s" % (name, blocked[name][0], blocked[name][1]))
     elif name in hits:
         print("E %s" % name)
         print("O %s\t%s\t%s" % (name, hits[name][0], hits[name][1]))
@@ -561,7 +563,7 @@ PY
     B_FENCED=$(echo "$B_OUT" | sed -n 's/^O //p')
     echo "$B_OUT" | sed -n 's/^X //p' | awk -F '\t' '{ printf "apply: %s 的測試改動不擋 —— EVIDENCE 有 OBJECTION: test_defect %s(交開題者判)\n", $1, $2 }'
     if [ -n "$B_BLOCKED" ]; then
-        echo "apply: 動到這一批硬擋的檔(protected_paths):" >&2
+        echo "apply: 動到這一批硬擋的檔(hard_block):" >&2
         echo "$B_BLOCKED" | awk -F '\t' '{ printf "apply:   %s —— 命中%s(`%s`)\n", $1, $2, $3 }' >&2
     fi
     if [ -n "$B_RELAX" ]; then
@@ -1072,10 +1074,11 @@ fi
 # 5. 寫入範圍(D-H38 ①、D-050 ①)。`allowed_write_paths` 與 `out_of_scope` 都是**建議範圍**:
 #    提示範圍(`ticket.hint_scope`)外、或命中 `out_of_scope` 的檔**不擋**,記進 result 的
 #    `extra_paths` / `extra_reasons`、由覆核者逐檔看;out_of_scope 命中缺理由由 land 拒絕。
-#    硬擋只剩 `board/config.json` 的 `protected_paths`(安全邊界)。
-#    patch-verify 帶進來的檔是驗證者的交付(#101 A4),不算 worker 的 extra(protected 照樣量)。
-#    印 `B <檔>\t<哪一格>\t<glob>`(硬擋)、`E <檔>`(提示範圍外)、`O <檔>\t<哪一格>\t<glob>`(命中 out_of_scope)。
-OUT=$(python3 - "$ROOT" "$WT" "$TF" "$RESIDUE" "$TARGETS" "$VTARGETS" <<'PY'
+#    硬擋只剩 `board/config.json` 的 `hard_block`(安全邊界;`paths` 比檔名,`patterns` 比兩份
+#    patch 裡 tests/** verify/** 的新增行)。
+#    patch-verify 帶進來的檔是驗證者的交付(#101 A4),不算 worker 的 extra(hard_block 照樣量)。
+#    印 `B <檔>\t<哪一格>\t<glob 或 regex>`(硬擋)、`E <檔>`(提示範圍外)、`O <檔>\t<哪一格>\t<glob>`(命中 out_of_scope)。
+OUT=$(python3 - "$ROOT" "$WT" "$TF" "$RESIDUE" "$TARGETS" "$VTARGETS" "$PATCH" "$VPATCH" <<'PY'
 import json, os, subprocess, sys
 root, wt, path, residue = sys.argv[1:5]
 residue = set(residue.splitlines())
@@ -1100,7 +1103,14 @@ for item in done.stdout.split("\0"):
         continue
     if name:
         names.append(name)
-blocked, extra = ticket_mod.write_scope(row, root, names)
+added = {}
+for patch in sys.argv[7:9]:
+    if not patch:
+        continue
+    with open(patch, encoding="utf-8", errors="replace") as handle:
+        for name, lines in ticket_mod.added_lines(handle.read()).items():
+            added.setdefault(name, []).extend(lines)
+blocked, extra = ticket_mod.write_scope(row, root, names, added)
 extra = [name for name in extra if name not in theirs]
 for name, field, pattern in blocked:
     print("B %s\t%s\t%s" % (name, field, pattern))
@@ -1117,7 +1127,7 @@ if [ -n "$BLOCKED" ]; then
     echo "apply: 動到票 #$ID 硬擋的檔:" >&2
     echo "$BLOCKED" | awk -F '\t' '{ printf "apply:   %s —— 命中%s(`%s`)\n", $1, $2, $3 }' >&2
     echo "apply:   工作樹留在 $WT(沒有 commit)—— 改 patch;真要動它就先改 config" >&2
-    die 5 "寫入範圍命中硬擋(protected_paths)"
+    die 5 "寫入範圍命中硬擋(hard_block)"
 fi
 if [ -n "$EXTRA" ]; then
     echo "apply: 提示範圍外的改動(不擋,記進 result 的 extra_paths / extra_reasons、交覆核者逐檔看):"

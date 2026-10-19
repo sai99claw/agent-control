@@ -396,6 +396,7 @@ for ticket_file in (path, os.path.join(event.tickets_dir(root), "%s.json" % iden
         ticket_rels.append(ticket_rel)
 not_ticket = ["--", "."] + [":(exclude)%s" % rel for rel in ticket_rels]
 content = []
+added = {}   # 給 hard_block.patterns:同一份 diff 的新增行,依檔分(新檔整份算新增)
 for args in (("diff", "--no-ext-diff", "--unified=0", "%s...HEAD" % main),
              ("diff", "--no-ext-diff", "--unified=0", "HEAD")):
     for line in git(*args, *not_ticket).decode("utf-8", "replace").splitlines():
@@ -403,6 +404,10 @@ for args in (("diff", "--no-ext-diff", "--unified=0", "%s...HEAD" % main),
             continue
         if line.startswith(("+", "-")):
             content.append(line[1:])
+    text = git("-c", "core.quotePath=false", *args, "--src-prefix=a/", "--dst-prefix=b/",
+               *not_ticket).decode("utf-8", "replace")
+    for name, lines in ticket_mod.added_lines(text).items():
+        added.setdefault(name, []).extend(lines)
 tracked = set(names("ls-files", "-z"))
 for name in changed:
     if name in tracked:
@@ -411,7 +416,8 @@ for name in changed:
         with open(os.path.join(root, name), encoding="utf-8", errors="replace") as handle:
             content.append(handle.read())
     except OSError:
-        pass
+        continue
+    added.setdefault(name, []).extend(content[-1].splitlines())
 blob = "\n".join(content)
 
 errors = []
@@ -442,8 +448,8 @@ for tag in tags:
         errors.append("tags: %r 未登記(登記在 verify/TAGS.md 或 verify/TAGS.d/)" % tag)
 
 # 寫入範圍(D-H38 ①、D-050 ①):提示範圍外與命中 `out_of_scope` 都不擋(列出來,覆核者逐檔看、
-# land 查理由),只擋 `protected_paths`。
-for name, field, pattern in ticket_mod.write_scope(ticket, root, changed)[0]:
+# land 查理由),只擋 `hard_block`(`paths` 比檔名、`patterns` 比 tests/** verify/** 的新增行)。
+for name, field, pattern in ticket_mod.write_scope(ticket, root, changed, added)[0]:
     errors.append("%s:%s 命中 `%s`" % (field, name, pattern))
 for name, (field, pattern) in ticket_mod.out_of_scope_hits([ticket], changed).items():
     print("gate: %s 命中%s(`%s`)—— 建議範圍,不擋;EVIDENCE「提示清單外的改動」要逐檔寫理由,"

@@ -53,5 +53,19 @@
   "worktree_dir": "../agent-control-wt",
   "batch_fix": {
     "rounds": 2
+  },
+  "hard_block": {
+    "paths": [
+      "docs/DECISIONS.md",
+      "docs/VISION.md",
+      "scripts/sync-to-project.sh"
+    ],
+    "dirs": [],
+    "patterns": [
+      "os\\.kill",
+      "killpg",
+      "pkill",
+      "kill -"
+    ]
   }
 }

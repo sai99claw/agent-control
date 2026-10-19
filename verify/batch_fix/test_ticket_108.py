@@ -178,7 +178,7 @@ class BatchWorld(Sandbox):
                           ("lib/core.txt", "core\n"), ("lib/other.txt", "other\n"),
                           ("secrets/k.txt", "k\n")):
             self.write(rel, text)
-        self.configure(protected_paths=["secrets/*"])
+        self.configure(hard_block={"paths": ["secrets/*"], "dirs": [], "patterns": []})
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "主線的夾具")
         self.git("push", "-q", "origin", "main")
@@ -449,9 +449,9 @@ class TheHardBlockIsTheUnionOfAllTickets(BatchWorld):
         original = self.git("show", "land/X:scripts/land.sh")
         self.assert_listed("scripts/land.sh", "#2 的 out_of_scope", original + "# batch\n")
 
-    def test_a3_protected_paths_win_over_allowed(self):
-        """A3 secrets/k.txt:protected_paths 在聯集之外另加,票 2 allowed 也救不了。"""
-        self.assert_blocked("secrets/k.txt", "protected_paths", "leaked\n")
+    def test_a3_hard_block_paths_win_over_allowed(self):
+        """A3 secrets/k.txt:hard_block.paths 在聯集之外另加,票 2 allowed 也救不了。"""
+        self.assert_blocked("secrets/k.txt", "hard_block.paths", "leaked\n")
 
     def test_a3_out_of_scope_minus_allowed_lets_it_through(self):
         """A3 lib/core.txt:票 1 out_of_scope 但票 2 allowed → 不擋。"""
