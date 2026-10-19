@@ -1,19 +1,19 @@
 """#134 記憶整理由未整理暫存條目觸發，不再由固定字數上限觸發。
 
 ## 驗收表(期望值來源獨立於被測程式)
-A1 | unit | 30 字主檔 + 1 條 inbox note 跑 check | rc 1、逐字報數、1 票與 1 事件 | 票面 A1 / interface_contracts
+A1 | unit | 30 字主檔 + 4 條今天的 note,再加到 5 條跑 check | 4 條 rc 0 無票無事件;5 條 rc 1、逐字報數、1 票與 1 事件 | 票面 A1 / interface_contracts;#148 門檻 ≥5 條
 A2 | unit | 5000 字主檔無 note，再放 21 條 note | 前者不觸發，後者只開 1 票 | 票面 A2，字數與條數手算
-A3 | unit | memory_file(#137)/ 任意 role 覆蓋票、結案後、兩支併發 check | 查重訊息與票數 | 票面 A3
+A3 | unit | memory_file(#137)/ 任意 role 覆蓋票、結案後、兩支併發 check | 查重訊息與票數;結案的整理票 24 小時內不重開 | 票面 A3;#148 冷卻
 A4 | unit | worker / main 開場讀同一份待整理 inbox | worker 不開、main 開 1 票 | 票面 A4 / new_session 契約
 A5 | unit | snapshot 後以 5000 字候選 consolidate | 成功、消耗、事件無 cap 鍵、舊旗標拒絕 | 票面 A5
 A6 | gate | 分支把乾淨記憶卡 1990 推到 2500，再加錯層行 | 長度不擋、錯層仍擋 | 票面 A6
 A7 | unit | 讀整理票、兩份提示文字與填好的派工 stdin | 只有成本判準，沒有字數目標 | 票面 A7
 A8 | static | 跑票面釘死的 git grep | 0 行 | 票面 A8 原命令
-A9 | unit | 無 inbox / 有 1 條 inbox 的探針與 AGENT_PROBES 原文 | 前提會翻轉，事件名是 memory.pending | 票面 A9
+A9 | unit | 無 inbox / 有 1 條 3 天前 inbox 的探針與 AGENT_PROBES 原文 | 前提會翻轉，事件名是 memory.pending | 票面 A9;#148 最舊滿 3 天
 A10 | static | 文件記憶段與 project 層 inbox | 三句契約一致，project 不觸發 | 票面 A10
 
 ## 介面字串
-CHECK_ONE = "memory: memory/role/opener.md 30 字元 / 暫存區 1 條未整理"
+CHECK_BATCH = "memory: memory/role/opener.md 30 字元 / 暫存區 5 條未整理"
 CHECK_ZERO = "memory: memory/role/opener.md 5000 字元 / 暫存區 0 條未整理"
 CRITERION = "只留值得這個成本的"
 
@@ -33,6 +33,7 @@ import shutil
 import subprocess
 import sys
 import unittest
+from datetime import date, datetime, timedelta
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
@@ -41,10 +42,18 @@ from control_harness import (ROOT as SOURCE_ROOT, Sandbox, fixture_candidate,  #
 
 TAGS = ["memory-inbox-trigger"]
 
-CHECK_ONE = "memory: memory/role/opener.md 30 字元 / 暫存區 1 條未整理"
+CHECK_BATCH = "memory: memory/role/opener.md 30 字元 / 暫存區 5 條未整理"
 CHECK_ZERO = "memory: memory/role/opener.md 5000 字元 / 暫存區 0 條未整理"
 CRITERION = "只留值得這個成本的"
-NOTE = "- 一條原則 (#1, 2026-10-19, worker@opus)\n"
+
+
+def note(text, days=0):
+    """note 的日期由夾具算(今天往前 days 天),不從被測程式取(#148 最舊滿 3 天)。"""
+    return "- %s (#1, %s, worker@opus)\n" % (text, date.today() - timedelta(days=days))
+
+
+NOTE = note("一條原則")
+BATCH = "".join(note("第 %d 條" % n) for n in range(1, 6))  # #148:≥ 5 條才觸發
 PASSING = """import os
 import unittest
 
@@ -76,37 +85,47 @@ class MemoryInboxWorld(Sandbox):
     def pending_events(self):
         return [row for row in self.events() if row["kind"] == "memory.pending"]
 
-    def seed_opener(self, chars=30, inbox=NOTE):
+    def seed_opener(self, chars=30, inbox=BATCH):
         self.write("memory/role/opener.md", "坑" * chars)
         if inbox is not None:
             self.write("memory/role/opener.inbox.md", inbox)
 
-    def cancel_all_tickets(self):
+    def cancel_all_tickets(self, hours_ago=None):
         for row in self.tickets_on_disk():
             row["state"] = "Cancelled"
+            if hours_ago is not None:
+                row["created"] = (datetime.now().astimezone()
+                                  - timedelta(hours=hours_ago)).isoformat(timespec="seconds")
             self.write("tickets/%s.json" % row["id"],
                        json.dumps(row, ensure_ascii=False, indent=2) + "\n")
 
 
 class TriggerAndCounting(MemoryInboxWorld):
 
-    def test_a1_one_unknown_ticket_note_triggers_exactly_once(self):
-        """A1 一條 unknown-ticket note 也觸發逐字報數、整理票與 pending 事件。"""
-        self.seed_opener()
+    def test_a1_five_notes_trigger_exactly_once_and_four_do_not(self):
+        """A1 4 條今天的 note 不觸發;第 5 條才觸發逐字報數、整理票與 pending 事件(#148)。"""
+        self.seed_opener(inbox="".join(note("第 %d 條" % n) for n in range(1, 5)))
+        below = self.memory("check")
+        self.assertEqual(below.returncode, 0, below.stdout + below.stderr)
+        self.assertIn("30 字元 / 暫存區 4 條未整理", below.stdout)
+        self.assertEqual(self.tickets_on_disk(), [])
+        self.assertEqual(self.pending_events(), [])
+
+        self.write("memory/role/opener.inbox.md", BATCH)
         done = self.memory("check")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertIn(CHECK_ONE, done.stdout)
+        self.assertIn(CHECK_BATCH, done.stdout)
         rows = self.tickets_on_disk()
         self.assertEqual(len(rows), 1, rows)  # pin:A1 恰好開一張票
         row = rows[0]
         self.assertEqual(row["subject"],
-                         "整理 memory/role/opener.md(暫存區 1 條未整理)")
+                         "整理 memory/role/opener.md(暫存區 5 條未整理)")
         self.assertEqual((row["role"], row["state"], row.get("needs_verifier")),
                          ("consolidator", "Ready", False))
         events = self.pending_events()
         self.assertEqual(len(events), 1, self.events())  # pin:A1 恰好一筆 pending
         self.assertEqual((events[0]["file"], events[0]["entries"]),
-                         ("memory/role/opener.inbox.md", 1))
+                         ("memory/role/opener.inbox.md", 5))
 
     def test_a2_length_is_only_reported_and_twenty_one_notes_are_one_trigger(self):
         """A2 5000 字且 0 條不觸發；21 條仍只是同一種待整理觸發。"""
@@ -140,7 +159,8 @@ class TriggerAndCounting(MemoryInboxWorld):
 class Deduplication(MemoryInboxWorld):
 
     def test_a3_open_coverage_cancelled_tickets_and_concurrency_keep_one_ticket(self):
-        """A3 `memory_file`(#137)、任何 role、Cancelled 後重開與兩支併發都沿用既有查重。"""
+        """A3 `memory_file`(#137)、任何 role、Cancelled 後重開與兩支併發都沿用既有查重;
+        結案的整理票 created 在 24 小時內不重開(#148 冷卻),夾具把 created 推到 25 小時前才重開。"""
         self.seed_opener()
         self.make_ticket(7, state="Draft", role="consolidator",
                          memory_file="memory/role/opener.md")
@@ -166,10 +186,16 @@ class Deduplication(MemoryInboxWorld):
         self.assertEqual(self.ticket_ids(), before)
 
         self.cancel_all_tickets()
+        cooling = self.memory("check")
+        self.assertEqual(cooling.returncode, 0, cooling.stdout + cooling.stderr)
+        self.assertIn("小時內開過,這次不開(條目留著)", cooling.stdout)
+        self.assertEqual(self.ticket_ids(), before)
+
+        self.cancel_all_tickets(hours_ago=25)
         reopened = self.memory("check")
         self.assertEqual(reopened.returncode, 1, reopened.stdout + reopened.stderr)
         self.assertEqual(len(self.ticket_ids()), len(before) + 1)
-        self.cancel_all_tickets()
+        self.cancel_all_tickets(hours_ago=25)
 
         before = self.ticket_ids()
         command = ["python3", os.path.join(self.repo, "scripts", "memory.py"), "check"]
@@ -378,7 +404,7 @@ class StaticContracts(MemoryInboxWorld):
         self.assertEqual(done.stdout, "")
 
     def test_a9_the_probe_has_a_real_pending_precondition_and_names_the_new_event(self):
-        """A9 無 inbox 的負控不觸發；加一條 note 才發 pending，探針與守衛同名。"""
+        """A9 無 inbox 的負控不觸發；加一條 3 天前的 note 才發 pending(#148),探針與守衛同名。"""
         source = open(os.path.join(SOURCE_ROOT, "tests", "test_auto_fix.py"),
                       encoding="utf-8").read()
         probe = re.search(r'^AGENT_PROBES = """(.*?)"""', source, re.MULTILINE | re.DOTALL)
@@ -397,11 +423,11 @@ class StaticContracts(MemoryInboxWorld):
         self.assertNotIn("暫存區 1 條未整理", without.stdout)
         self.assertEqual(self.pending_events(), [])
 
-        self.write("memory/model/huge-probe.inbox.md", NOTE)
+        self.write("memory/model/huge-probe.inbox.md", note("探針的一條", days=3))
         with_note = self.memory("check")
         self.assertEqual(with_note.returncode, 1, with_note.stdout + with_note.stderr)
         self.assertIn("暫存區 1 條未整理", with_note.stdout)
-        self.assertEqual(len(self.pending_events()), 1, self.events())  # pin:A9 一條 note 一筆事件
+        self.assertEqual(len(self.pending_events()), 1, self.events())  # pin:A9 一條滿 3 天的 note 一筆事件
 
     def test_a10_docs_share_the_contract_and_project_memory_stays_out(self):
         """A10 十份文件同列三句契約；project 層有 inbox 仍不整理。"""
