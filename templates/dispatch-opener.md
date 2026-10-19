@@ -2,7 +2,7 @@
 
 **怎麼用**:整份複製,把 `<…>` 換掉。這一份**不重貼規則**(規則在角色卡;共用規矩
 `docs/DISPATCH-TEMPLATE.md` 按角色卡指的節查,不整份讀),只指路 + 這張票獨有的那幾件事。
-前言請用 `python3 scripts/rules.py pack opener --model <模型>` 產(≤ 4 KB,**不要整份貼**共用規矩);
+前言請用 `python3 scripts/rules.py pack opener --model <模型>` 產(**不要整份貼**共用規矩);
 它非零就**不派**,照 stderr 補缺項,不要手寫前言代替(#74)。
 **模型不在這裡選**(#122,D-049 ②):`<模型>` 是 `python3 scripts/role-models.py resolve --role opener [--complexity complex] --items <N>` 印的那個
 (一般開題 opus;明確複雜 astra → fable)。主線獨立派工用 `sh scripts/new-session.sh dispatch opener --items <N> --prompt <這份填好的派工文>

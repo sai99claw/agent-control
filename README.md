@@ -67,7 +67,7 @@ python3 scripts/ticket.py close 1
 | 這一步 | 入口 | 它擋住什麼 |
 |---|---|---|
 | 開票 | `scripts/ticket.py create` | 沒有驗收的票開不出來 |
-| 派工文前言 | `scripts/rules.py pack <角色>` | 整份共用規矩重複載入(≤ 4 KB,砍掉的會指名) |
+| 派工文前言 | `scripts/rules.py pack <角色>` | 整份共用規矩重複載入(各段原文串起來,不設位元組上限) |
 | 套 patch、建分支、commit | `scripts/apply.sh` | 絕對路徑檔頭、只清空不刪檔、命中 `hard_block`、套一半 |
 | 局部閘門 | `scripts/gate.sh --branch --ticket <n>` | 對不到模組不准印綠;票的 `verify.tags` 真的被呼叫 |
 | 紅了修 | `scripts/auto-fix.sh <n>`(或閘門 `--auto-fix`) | 三輪上限;反駁 / 沒有歸因會停下來報主線 |

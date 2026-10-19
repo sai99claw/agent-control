@@ -30,11 +30,10 @@
 ## 派工時**不要整份貼這一份**(D-015)
 
 ```sh
-python3 scripts/rules.py pack worker --model opus      # ≤ 4 KB 的派工文前言
+python3 scripts/rules.py pack worker --model opus      # 派工文前言
 python3 scripts/rules.py roles                         # 哪個角色要哪幾節
 ```
-`pack` 從這一份抽那個角色真的會被擋到的幾節,接上角色卡與模型記憶,壓進 4 KB,砍掉的地方
-指名「全文見哪一節」。整份一萬多字,而**每派一次工、每個 agent 各付一次整份的錢**。
+`pack` 從這一份抽那個角色真的會被擋到的幾節,接上角色卡與模型記憶,各段原文串起來(不設位元組上限、不截斷)。整份一萬多字,而**每派一次工、每個 agent 各付一次整份的錢**。
 
 `pack` 不判模型(#121 A8 拆掉舊的 routing 下限):派哪個模型只由 `scripts/role-models.py`
 選路器決定,表外模型先改表(#116 A7)。

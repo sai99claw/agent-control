@@ -274,7 +274,7 @@ worker 同一輪**也交了** `patch-round<r>.diff`(#107,專案 #751 事故):驗
 | **reviewer 自動**:閘門綠、complex 票轉 InReview → headless reviewer(#136 起只派 complex;`reviewer.command`,唯讀白名單);pass 由腳本寫 `review`,fail 逐條 blocking 反駁 + Blocked,沒交件不算 pass | **已實作**(2026-09-26,#42,D-025 ②) | `scripts/review.sh <票號>`;`auto-fix.sh` 綠(`--no-review` 關)與 `gate.sh --branch --ticket` 手跑綠 |
 | **終態叫醒主線**(要人裁的 decision 頁 + 整票 done 頁;其餘終態只寫事件)+ 禁止輪詢 | **已實作**(2026-09-21,D-015) | `scripts/inbox.py post\|done\|list\|show\|ack`;`reports/inbox/<票號>-<run_id>.md`;`new-session.sh` 開場印 |
 | 同一輪的回歸**只跑一次**(worker / 驗證者 / gate 共用) | **已實作**(2026-09-21,D-015) | `scripts/verify.py` 的 `reports/t<n>/<run_id>/verify-<雜湊>.log`(雜湊含標籤 + sha);`--no-cache` 關 |
-| **按角色裁切、帶版本的規則包** | **已實作**(2026-09-21,D-015) | `scripts/rules.py pack <角色> --model <模型>`(≤ 4 KB,砍掉的部分會指名) |
+| **按角色裁切、帶版本的規則包** | **已實作**(2026-09-21,D-015) | `scripts/rules.py pack <角色> --model <模型>`(各段原文串起來,不設位元組上限) |
 | 一個既有專案**接上這一套** | **已實作**(步驟 + 腳本;實際遷移還沒做) | `docs/TODO.md` §0;`scripts/sync-to-project.sh` 同步到專案的 `scripts/control/` 並印出接點 |
 | **驗證者只證紅**:`verify-case.py red <n> --candidate <樹>`,四類紅分開數,`red_lines` 給覆核看 | **已落地**(D-020,#26) | `scripts/verify-case.py red` 只印 `<out-dir>/baseline-red.json` → 驗證者抄進 result 的 `baseline` → `apply.sh --evidence-verifier` 併進票的 `verify.baseline{stage:"red"}` |
 | **案例格式 lint**(F1–F6:模組 docstring 四段、`TAGS`、每個 `test_` 的驗收編號…) | **已落地**(D-020,#26) | `scripts/verify-case.py lint <檔…> --ticket <n>`;閘門自己叫 |

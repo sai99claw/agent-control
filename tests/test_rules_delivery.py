@@ -31,8 +31,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from control_harness import (DEFAULT_CONFIG, ROOT, Sandbox, fixture_candidate,  # noqa: E402
                              write_executable)
 
-MAX_BYTES = 4096
-FIXED_MAX = 1024
 # 每個角色要的角色卡與節(票面 #74 規劃 3:「角色正本、指定模型卡、每個設定要求的共用章節」)。
 # 名單抄自 `rules.py WANTED` 的現況,**寫死在這裡**:名單被人刪掉一節時,這一組要紅。
 WANT = {
@@ -186,22 +184,18 @@ class NormalPacks(RulesBox):
         done = self.rules("pack", role, "--model", model)
         self.assertEqual(done.returncode, 0, done.stderr)
         size = len(done.stdout.encode("utf-8"))
-        self.assertLessEqual(size, MAX_BYTES, role)
-        self.assertLessEqual(data["fixed_bytes"], FIXED_MAX, role)
         self.assertEqual(data["total_bytes"], size, "%s:inspect 的 total 與 stdout 對不上" % role)
         self.assertEqual(data["fixed_bytes"] + sum(row["rendered_bytes"]
                                                    for row in data["sections"]),
                          size, "%s:固定成本 + 各格正文 ≠ 實際 bytes" % role)
         for row in data["sections"]:
-            self.assertGreaterEqual(row["content_units"], 1, "%s %s" % (role, row))
+            self.assertGreaterEqual(row["source_units"], 1, "%s %s" % (role, row))
             self.assertGreater(row["rendered_bytes"], 0, "%s %s" % (role, row))
         # 逐項:每一個必要來源至少有一行正文**原樣**出現在包裡。
         lines = set(line.strip() for line in done.stdout.splitlines())
         for rel, text in self.sources(role, model):
             candidates = body_lines(text)
             self.assertTrue(candidates, "夾具前提:%s 有正文" % rel)
-            if rel.endswith(".inbox.md"):
-                candidates = candidates[-1:]
             self.assertTrue([one for one in candidates if one in lines],
                             "%s 的 %s 在包裡沒有任何一行正文:\n%s" % (role, rel, done.stdout))
         return done.stdout
@@ -268,14 +262,6 @@ class BrokenSourcesStopThePack(RulesBox):
                    "- `docs/DISPATCH-TEMPLATE.md`\n來源:整理票 #12\n")
         self.assert_refused(self.rules("pack", "worker", "--model", "opus"),
                             "memory/model/opus.md", "沒有正文")
-
-    def test_an_unbreakable_unit_that_does_not_fit(self):
-        """四問:守「一段放不下又不能切半句的正文 → 不交」;回歸是舊版在行中間砍或整份
-        從尾巴砍;舊測試只看總長;不加測試專用 API。"""
-        self.write(os.path.join("memory", "role", "implementer.md"),
-                   "# 實作者\n" + "這一條規矩很長" * 300 + "。\n")
-        self.assert_refused(self.rules("pack", "worker", "--model", "opus"),
-                            "memory/role/implementer.md", "不可分")
 
     def test_a_page_that_cannot_be_written_is_still_nonzero(self):
         """四問:守「decision 頁寫不出來時照樣非零、說原因」;回歸是寫頁失敗被吞成 rc=0;
@@ -474,7 +460,7 @@ class ProjectPacketsPointAtRealFiles(RulesBox):
 
     def test_the_reviewer_packet_has_no_memory_write(self):
         """四問:守「reviewer 派工文的入口存在、而且沒有叫唯讀角色寫記憶」;回歸是包裡的
-        `memory.py note` 一段照給 reviewer;舊測試沒看這一格;不加測試專用 API。
+        「記憶回寫」固定段照給 reviewer;舊測試沒看這一格;不加測試專用 API。
 
         **變異**:`build()` 不分角色一律接 `MEMORY_NOTE` → 紅。
         """
@@ -490,7 +476,7 @@ class ProjectPacketsPointAtRealFiles(RulesBox):
         self.run_sh("scripts/review.sh", "1")
         text = read(stdin)
         self.assert_paths_exist(text, "docs/roles/reviewer.md")
-        self.assertNotIn("memory.py note", text)
+        self.assertNotIn("## 記憶回寫", text)
         self.assertIn("候選記憶", text)
 
 
