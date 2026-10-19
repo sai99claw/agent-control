@@ -165,8 +165,6 @@ map() {
         # SessionStart hook(#39):`test_session_hook` 兩個都讀 —— A1 解析
         # `.claude/settings.json` 的形狀,其餘案例跑 `session-hook.sh`。
         scripts/session-hook.sh|.claude/settings.json) add test_session_hook ;;
-        # PreToolUse 守衛(#63)。
-        scripts/guard-main.sh) add test_guard_main ;;
         # 整理票的啟動器(#87):自己的契約測試 + 開場叫它的那一支。
         scripts/consolidate-memory.sh) add test_consolidate_memory test_new_session ;;
         scripts/memory.py) add test_memory test_memory_note_names test_memory_lifecycle \
@@ -1110,7 +1108,7 @@ if [ "$want_branch" -eq 1 ]; then
                git -C "$ROOT" diff --name-only HEAD; \
                git -C "$ROOT" ls-files --others --exclude-standard); do
         map "$f"
-        case "$f" in tests/test_*.py) diff_tests="$diff_tests $(basename "$f" .py)" ;; esac
+        case "$f" in tests/test_*.py) [ -f "$ROOT/$f" ] && diff_tests="$diff_tests $(basename "$f" .py)" ;; esac
     done
     # 對照表沒列的檔(#45 B2):同一份 diff 改到的 tests/test_*.py 就是它的守衛 ——
     # 出聲、照那幾支跑、rc 照測試結果。推不到(diff 沒有 tests)才走下面退 3 那一段。
