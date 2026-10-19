@@ -1141,7 +1141,7 @@ class TheFirstRoundPacket(AutoFixBase):
         self.assertIn("`tests/*` `docs/reference`", part, "提示範圍 = allowed ∪ home")
         self.assertIn('["docs/DECISIONS.md"]', part)
         self.assertIn("## 提示清單外的改動", part)
-        self.assertIn("protected_paths", part)
+        self.assertIn("hard_block", part)
 
     def test_the_packet_only_hints_when_nothing_is_set(self):
         """#101 A8(缺設定):沒有 info_map → 只提示、不擋派工;票面沒有 info_homes 也說出來。
@@ -2002,14 +2002,14 @@ class MechanicalRedIsAttributed(AutoFixBase):
             self.assertIn(text, page)
 
     def protect(self, *globs):
-        """config 的 protected_paths(#101 起硬擋只剩它);在 ticket_ready 之前寫,隨開票進主線。"""
+        """config 的 hard_block.paths(D-054 Q3 起硬擋只剩 hard_block);在 ticket_ready 之前寫,隨開票進主線。"""
         conf = json.loads(self.read("board/config.json"))
-        conf["protected_paths"] = list(globs)
+        conf["hard_block"] = {"paths": list(globs), "dirs": [], "patterns": []}
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
 
     def applied_and_gated(self, patch_text, protected_edit=False):
-        """真 apply.sh 套 patch,(選擇性)在分支上再 commit 一筆碰 protected_paths 的改動 ——
-        apply.sh 自己會以 rc 5 擋 protected_paths,所以那一手只能是分支上另一個 commit ——
+        """真 apply.sh 套 patch,(選擇性)在分支上再 commit 一筆碰 hard_block.paths 的改動 ——
+        apply.sh 自己會以 rc 5 擋 hard_block,所以那一手只能是分支上另一個 commit ——
         再在 worktree 跑真 gate.sh(--no-auto-fix),最後由 auto-fix 從開場那條路讀它。"""
         patch = self.write("p1.diff", patch_text, where=self.home)
         done = self.run_sh("scripts/apply.sh", "1", patch)
@@ -2018,7 +2018,7 @@ class MechanicalRedIsAttributed(AutoFixBase):
         if protected_edit:
             self.write("scripts/land.sh", self.read("scripts/land.sh") + "\n# protected\n",
                        where=wt)
-            self.git("commit", "-q", "-am", "#1 分支上碰到 protected_paths", cwd=wt)
+            self.git("commit", "-q", "-am", "#1 分支上碰到 hard_block.paths", cwd=wt)
         gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
                            "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
                            env=self.env(AC_ROOT=self.repo))
@@ -2069,11 +2069,11 @@ class MechanicalRedIsAttributed(AutoFixBase):
         self.assertNotIn("沒有歸因", page + done.stdout + done.stderr)
         self.assertEqual(self.worker_rounds(), [])
 
-    def test_a_protected_paths_hit_is_attributed_to_the_handin(self):
+    def test_a_hard_block_paths_hit_is_attributed_to_the_handin(self):
         """A3:寫入範圍硬擋命中(verify_strings 合格)→ 歸因到交件,不歸票面。#101(D-050 ①)起
-        out_of_scope 不再是閘門機械格,硬擋只剩 protected_paths,夾具從 out_of_scope 換成它。
+        out_of_scope 不再是閘門機械格,硬擋只剩 hard_block(D-054 Q3),夾具從 out_of_scope 換成它。
         四問:量頁面的格名、檔名與兩個歸因字樣;紅 = 一律歸票面;期望值 = 夾具 config 的
-        protected_paths;不測 = out_of_scope(tests/test_status 那一條)。
+        hard_block.paths;不測 = out_of_scope(tests/test_status 那一條)。
         **變異 M3**:所有機械格行一律歸因到票面 → 這一條紅。"""
         self.set_worker(WORKER_NEVER)
         self.protect("scripts/land.sh")
@@ -2083,7 +2083,7 @@ class MechanicalRedIsAttributed(AutoFixBase):
                                       protected_edit=True)
         self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
         page = self.page_of(self.inbox_rows()[-1])
-        self.assertIn("protected_paths", page)
+        self.assertIn("hard_block", page)
         self.assertIn("scripts/land.sh", page)
         self.assertIn("歸因到交件(worker)", page)
         self.assertNotIn("歸因到票面", page)
@@ -2091,7 +2091,7 @@ class MechanicalRedIsAttributed(AutoFixBase):
 
     def test_both_kinds_at_once_are_listed_with_both_attributions(self):
         """A3:verify_strings 與寫入範圍硬擋同時不合 → 兩組各自列、兩個歸因字樣都在。#101 起
-        硬擋那一組是 protected_paths(out_of_scope 不再是機械格)。"""
+        硬擋那一組是 hard_block(out_of_scope 不再是機械格)。"""
         self.set_worker(WORKER_NEVER)
         self.protect("scripts/land.sh")
         self.ticket_ready(verify_strings=["filename-token"])
@@ -2106,7 +2106,7 @@ class MechanicalRedIsAttributed(AutoFixBase):
         self.assertIn("歸因到交件(worker)", page)
         ticket_part, _, work_part = page.partition("歸因到交件(worker)")
         self.assertIn(self.TICKET_SIDE, ticket_part, "票面那一組要列在票面歸因底下")
-        self.assertIn("protected_paths", work_part, "交件那一組要列在交件歸因底下")
+        self.assertIn("hard_block", work_part, "交件那一組要列在交件歸因底下")
 
 
 class TheResultBlockAtTheEndOfEvidence(AutoFixBase):
@@ -3945,7 +3945,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
         if guarded is not None or config:
             conf = json.loads(self.read("board/config.json"))
             if guarded is not None:
-                conf["guarded_dirs"] = guarded
+                conf["hard_block"] = {"paths": [], "dirs": guarded, "patterns": []}
             conf.update(config or {})
             self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
         self.ticket_ready(subject="守衛", **fields)
@@ -4011,7 +4011,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
         self.arm('echo note > "$REPO/tickets/zz-note.txt"')
         self.assert_not_stopped(self.auto_fix("--no-review"))
 
-    def test_a5_guarded_dirs_expand_home_and_resolve_against_the_main_repo(self):
+    def test_a5_hard_block_dirs_expand_home_and_resolve_against_the_main_repo(self):
         """`~/guarded` 展開成沙盒的家(HOME);`../outside` 對主 repo 解析。兩處都抓。"""
         for rel, stray, path in (
                 ("~/guarded", 'echo changed >> "$SANDBOX/guarded/a.txt"', "guarded/a.txt"),
@@ -4024,11 +4024,15 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
                 self.arm(stray, guarded=[rel])
                 self.assert_stopped(self.auto_fix("--no-review"), path)
 
-    def test_a5_without_guarded_dirs_only_the_main_repo_is_watched(self):
-        """缺 guarded_dirs 與 [] 都只查主 repo:主 repo 外的寫入不算(也不宣稱看過)。"""
+    def test_a5_without_hard_block_dirs_only_the_main_repo_is_watched(self):
+        """缺 hard_block.dirs 與 [] 都只查主 repo:主 repo 外的寫入不算(也不宣稱看過)。"""
         for guarded in (None, []):
             with self.subTest(guarded=guarded):
                 self.setUp()
+                if guarded is None:
+                    conf = json.loads(self.read("board/config.json"))
+                    conf.pop("hard_block")
+                    self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
                 os.makedirs(os.path.join(self.home, "elsewhere"))
                 self.arm('echo x > "$SANDBOX/elsewhere/c.txt"', guarded=guarded)
                 self.assert_not_stopped(self.auto_fix("--no-review"))

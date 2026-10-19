@@ -51,7 +51,7 @@
 #   6 規則包產不出來(#74):worker / 驗證者一個都沒起;缺項在 rules.py 送的 decision 頁
 #   7 角色表的候選整串耗盡(#121 A3:票 Blocked、一頁 decision、不再起程序),或額度後的
 #     下一個候選交給 Controller / 別的驅動者接續(副本留著)
-#   8 agent 越界(#115,D-048):主 repo / guarded_dirs 有不屬於控制面、也歸屬不到同時 land 的改動;
+#   8 agent 越界(#115,D-048):主 repo / hard_block.dirs 有不屬於控制面、也歸屬不到同時 land 的改動;
 #     票轉 Blocked、owner=main,一頁 decision,patch 不套、副本留著(與額度同時發生也是 8)
 #   9 閘門綠、覆核 fail   10 閘門綠、覆核沒交件 / stale / 沒完成(#121 A6)
 set -u
@@ -684,7 +684,7 @@ if ticket_rows:
 if work_rows:
     out.append("**歸因到交件(worker)**:")
     out += ["- %s" % line for line in work_rows]
-    out += ["", "交件本身不合:拿掉 protected_paths 的改動、重生 code-map、"
+    out += ["", "交件本身不合:拿掉命中 hard_block 的改動、重生 code-map、"
             "把記憶卡新增的錯層內容改掉 —— 在分支 %s 上修。" % branch, ""]
 out.append("接回(patch 留在分支 %s 上;**不要轉 Ready** —— 那會從頭派第 1 輪):" % branch)
 step = 1
@@ -720,7 +720,7 @@ rules_pack() {   # $1 = 派工文寫到哪(失敗就刪掉,不留半份)  $2 = �
 }
 
 # 派工文的「寫入範圍與資訊歸屬」段(#101 A5 / A8):worker 每一輪都帶。提示範圍只有一種算法
-# (`ticket.hint_scope`),`out_of_scope` 是建議範圍、`protected_paths` 才硬擋;資訊位置是
+# (`ticket.hint_scope`),`out_of_scope` 是建議範圍、`hard_block` 才硬擋;資訊位置是
 # board/config.json 的 `info_map`(相對文件路徑,可帶 `#節名`;沒設只提示)與票的 `info_homes`。
 scope_section() {
     python3 - "$ROOT" "$TF" <<'PY'
@@ -748,7 +748,7 @@ print("out_of_scope(建議範圍,D-050 ①):%s" % json.dumps(ticket.get("out_of_
                                                      ensure_ascii=False))
 print("改到提示範圍外、或命中 out_of_scope 的檔:照改,在 EVIDENCE 加一段 `## 提示清單外的改動`,"
       "一行一檔 `- `<檔>` — <理由>`(apply 抽成 result 的 extra_reasons;out_of_scope 命中缺理由 "
-      "land 會拒絕)。硬擋只有 board/config.json 的 protected_paths。")
+      "land 會拒絕)。硬擋只有 board/config.json 的 hard_block。")
 if not info_map:
     print("資訊地圖:board/config.json 沒設 `info_map` —— 只看底下票面的 info_homes"
           "(要全域地圖就在 config 加 `info_map`,例 `docs/INFO-MAP.md#節名`)")
@@ -1383,7 +1383,7 @@ def tee(stream, log):
 # ## 越界守衛(#115,D-048 的事後檢查)
 # worker / 驗證者 / 批次 worker 與 claude 同權限,不靠沙盒擋;起跑前後各拍一次快照:主 repo 的
 # HEAD、分支、`git status` 列得出的每一個路徑加內容雜湊(已髒的檔再被改一次,porcelain 一樣、
-# 雜湊不一樣),與 config `guarded_dirs` 底下每一個檔。對不上的就是越界,除了兩種:控制面
+# 雜湊不一樣),與 config `hard_block.dirs` 底下每一個檔。對不上的就是越界,除了兩種:控制面
 # (config 解析出的 tickets / events / answers / reports)與這一個 agent 自己的副本;HEAD 前進
 # 時 `git rev-list --first-parent 舊..新` 的每一個 commit 都要歸屬到一次合法落地(#127):一筆
 # land.pass 帶 stamp、sha、40 位的 main_before,事件檔裡在它之前(可以早於起跑)有同 stamp 的
@@ -1393,7 +1393,7 @@ def tee(stream, log):
 # 主線可寫前綴(config `guard_main_paths`,缺 = docs 通道三前綴,#128 A1)底下的改動只記不擋,列進 `main_side`。
 # 越界寫 `<log 去掉 .log>.guard.json`、rc 印 8;只有 main_side 或 push 失敗的那一段時 guard.json 照寫、
 # violations 空、rc 不動。
-# **只查列出來的地方**:主 repo 被 .gitignore 掉的檔與 guarded_dirs 以外,這裡不宣稱看過。
+# **只查列出來的地方**:主 repo 被 .gitignore 掉的檔與 hard_block.dirs 以外,這裡不宣稱看過。
 guard_path = os.path.splitext(log_path)[0] + ".guard.json"
 MAIN_PATHS_DEFAULT = ["tickets/", "docs/", "memory/"]   # = land.sh 的 DOCS_PREFIXES
 
@@ -1407,9 +1407,10 @@ def guard_conf():
     repo = mainroot or root
     exempt = [os.path.realpath(os.path.join(root, str(conf.get(key) or default)))
               for key, default in RELATIVE_DEFAULTS] + [os.path.realpath(cwd)]
-    dirs = conf.get("guarded_dirs") or []
+    block = conf.get("hard_block") if isinstance(conf.get("hard_block"), dict) else {}
+    dirs = block.get("dirs") or []
     if not isinstance(dirs, list) or not all(isinstance(item, str) for item in dirs):
-        sys.stderr.write("auto-fix: guarded_dirs 不是字串 list(%r)—— 這一次只查主 repo\n" % (dirs,))
+        sys.stderr.write("auto-fix: hard_block.dirs 不是字串 list(%r)—— 這一次只查主 repo\n" % (dirs,))
         dirs = []
     dirs = [os.path.realpath(os.path.join(repo, os.path.expanduser(item))) for item in dirs]
     events = os.path.join(root, str(conf.get("events_file") or "board/events.jsonl"))
@@ -1594,7 +1595,7 @@ def guard_verdict(before, repo, exempt, dirs, events, mains, agent_rc):
         return agent_rc
     with open(guard_path, "w", encoding="utf-8") as handle:
         json.dump({"ticket": ident, "round": r, "role": role, "agent_rc": agent_rc,
-                   "monitored": {"repo": before["top"], "guarded_dirs": dirs,
+                   "monitored": {"repo": before["top"], "hard_block_dirs": dirs,
                                  "guard_main_paths": mains},
                    "exempt": exempt, "violations": found, "main_side": main_side,
                    "notes": notes},
@@ -3094,7 +3095,7 @@ for pattern in seen:
     print("- `%s`" % pattern)
 print("聯集外的檔要改就改(不擋,覆核者逐檔看);各票 out_of_scope 聯集扣掉上面這份聯集也是建議範圍"
       "(D-050 ①):命中不擋,在 EVIDENCE「提示清單外的改動」逐檔寫 `- `<檔>` — <理由>`。"
-      "硬擋只剩 board/config.json 的 protected_paths。")
+      "硬擋只剩 board/config.json 的 hard_block。")
 print("")
 print("## 規則")
 print("**不得放寬測試**:測試檔裡不刪含 assert 的行、不加 skip / expectedFailure —— `apply.sh --batch` "

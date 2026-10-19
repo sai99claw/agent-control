@@ -8,7 +8,7 @@
 - `diff -ruN` 的刪檔有沒有把 `+++` 側改成 `/dev/null` —— 不改的話 `git apply` 只會把
   檔案**清空**,而清空的檔在 diffstat 上看起來像「改過」。
 - 套完的樹與 patch 說的是不是同一件事(該在的在、該刪的不在、反著套回得去)。
-- 有沒有動到硬擋的檔(config 的 `protected_paths`);提示範圍外與命中 `out_of_scope` 不擋,
+- 有沒有動到硬擋的檔(config 的 `hard_block`);提示範圍外與命中 `out_of_scope` 不擋,
   記進 result 的 `extra_paths` / `extra_reasons`(D-H38 ①、D-050 ①)。
 - commit 訊息答不答得出「分支上這一手是哪一份 patch 做的」—— 路徑答不出來,
   重套過的那一份路徑一樣、內容不一樣,所以要 sha256。
@@ -80,6 +80,17 @@ IGNORED = """diff -ruN base/junk/x.log work/junk/x.log
 @@ -0,0 +1 @@
 +ignored by .gitignore
 """
+
+# `hard_block.patterns` 的夾具:tests/** 的新增行帶 kill 家族。字面拆開寫 —— 這份測試檔自己的
+# 新增行也會被 A 的 hard_block.patterns 查。
+KILL_CALL = "os." + "kill(pid, 9)"
+KILLING_TEST = """diff -ruN base/tests/test_k.py work/tests/test_k.py
+--- base/tests/test_k.py\t1970-01-01 08:00:00
++++ work/tests/test_k.py\t2026-09-21 10:00:00
+@@ -0,0 +1 @@
++%s
+""" % KILL_CALL
+KILLING_SCRIPT = KILLING_TEST.replace("tests/test_k.py", "scripts/k.py")
 
 VERIFY_CASE = """diff -ruN base/verify/example/test_ticket_1.py work/verify/example/test_ticket_1.py
 --- base/verify/example/test_ticket_1.py\t1970-01-01 08:00:00
@@ -876,7 +887,7 @@ class ThingsItRefuses(ApplyBase):
 
 class TheWriteScope(ApplyBase):
     """D-H38 ①、D-050 ①(#101):`allowed_write_paths` 與 `out_of_scope` 都是**建議範圍**。越出只
-    記錄(result 的 `extra_paths` / `extra_reasons`),硬擋只剩 config 的 `protected_paths`。
+    記錄(result 的 `extra_paths` / `extra_reasons`),硬擋只剩 config 的 `hard_block`(D-054 Q3)。
     """
 
     def evidence_with_reasons(self, *rows):
@@ -892,9 +903,9 @@ class TheWriteScope(ApplyBase):
         with open(found[0], encoding="utf-8") as handle:
             return json.load(handle)
 
-    def protect(self, *globs):
+    def protect(self, *globs, patterns=()):
         conf = json.loads(self.read("board/config.json"))
-        conf["protected_paths"] = list(globs)
+        conf["hard_block"] = {"paths": list(globs), "dirs": [], "patterns": list(patterns)}
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
 
     def test_files_outside_the_allow_list_go_through_and_land_in_extra_paths(self):
@@ -991,11 +1002,11 @@ class TheWriteScope(ApplyBase):
         self.assertEqual(self.result_json()["extra_paths"], [])
         self.assertEqual(self.result_json()["extra_reasons"], {})
 
-    def test_protected_paths_still_block_what_info_homes_and_a_reason_cover(self):
-        """#101 A1:protected_paths 是安全邊界,不在本票放寬;info_homes 不改權限,EVIDENCE 的
+    def test_hard_block_paths_still_block_what_info_homes_and_a_reason_cover(self):
+        """#101 A1:hard_block.paths 是安全邊界,不在本票放寬;info_homes 不改權限,EVIDENCE 的
         理由也救不了它。四問:量 rc 5、stderr 點名檔與格、0 commit;紅 = 提示範圍或理由抵掉了
-        硬擋;期望值 = 測試寫進 config 的 protected_paths。
-        **變異 M1**:write_scope 不看 protected_paths → 這一條紅。"""
+        硬擋;期望值 = 測試寫進 config 的 hard_block.paths。
+        **變異 M1**:write_scope 不看 hard_block.paths → 這一條紅。"""
         self.protect("config/**")
         self.make("1", allowed_write_paths=["src/*", "config/*"], out_of_scope=["config/*"],
                   info_homes=[{"what": "設定", "home": "config/private.ini"}])
@@ -1004,7 +1015,7 @@ class TheWriteScope(ApplyBase):
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         line = [row for row in done.stderr.splitlines() if "config/private.ini" in row]
         self.assertEqual(len(line), 1, done.stderr)
-        self.assertIn("board/config.json 的 protected_paths", line[0])
+        self.assertIn("board/config.json 的 hard_block.paths", line[0])
         self.assertIn("`config/**`", line[0])
         self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "0")
 
@@ -1048,18 +1059,39 @@ class TheWriteScope(ApplyBase):
                       "夾具前提:驗證者的案例檔真的進了分支")
         self.assertEqual(self.result_json()["extra_paths"], [])
 
-    def test_a_file_in_config_protected_paths_is_refused_by_name_and_field(self):
-        """**變異 M4**:硬擋不看 config 的 `protected_paths` → 這一條紅。"""
+    def test_a_file_in_config_hard_block_paths_is_refused_by_name_and_field(self):
+        """**變異 M4**:硬擋不看 config 的 `hard_block.paths` → 這一條紅。"""
         self.protect("config/**", "docs/DECISIONS.md")
         self.make("1", allowed_write_paths=["config/*"])
         done = self.apply("1", self.patch_file("p.diff", OUTSIDE))
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         line = [row for row in done.stderr.splitlines() if "config/private.ini" in row]
         self.assertEqual(len(line), 1, done.stderr)
-        self.assertIn("board/config.json 的 protected_paths", line[0])
+        self.assertIn("board/config.json 的 hard_block.paths", line[0])
         self.assertIn("`config/**`", line[0])
         self.assertNotIn("docs/secret.md", done.stderr)
         self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "0")
+
+    def test_a_pattern_in_an_added_test_line_is_refused_by_name_and_field(self):
+        """D-054 Q3:tests/** 的新增行命中 `hard_block.patterns` → rc 5、點名檔、0 commit。
+        期望值 = 測試寫進 config 的 pattern。**變異**:apply 不把 patch 的新增行交給硬擋 → 紅。"""
+        self.protect(patterns=[r"os\.kill"])
+        self.make("1", allowed_write_paths=["tests/*"])
+        done = self.apply("1", self.patch_file("p.diff", KILLING_TEST))
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        line = [row for row in done.stderr.splitlines() if "tests/test_k.py" in row]
+        self.assertEqual(len(line), 1, done.stderr)
+        self.assertIn("hard_block.patterns", line[0])
+        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "0")
+
+    def test_the_same_pattern_outside_tests_and_verify_is_not_refused(self):
+        """patterns 只查 tests/** 與 verify/** 的新增行:scripts 自己合法用 kill。
+        **變異 M2**:patterns 對 scripts/** 也查 → 這一條紅。"""
+        self.protect(patterns=[r"os\.kill"])
+        self.make("1", allowed_write_paths=["scripts/*"])
+        done = self.apply("1", self.patch_file("p.diff", KILLING_SCRIPT))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "1")
 
     def test_a_patch_that_only_touches_ignored_files_is_not_a_green_apply(self):
         """套完之後 `git add -A` 一個位元都沒進 index —— **「套好了」與「什麼都沒做」
@@ -1377,16 +1409,16 @@ class ApplyBatch(ApplyBase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.git("show", "land/X:docs/shared.md"), "shared fixed\n")
 
-    def test_protected_paths_block_even_what_a_ticket_allows(self):
-        """A3 的 protected 那一格。四問:量 rc 5 + 「protected_paths」;紅 = 被 allowed 聯集抵掉;
-        期望值 = 測試寫進 config 的 protected_paths。"""
+    def test_hard_block_paths_block_even_what_a_ticket_allows(self):
+        """A3 的硬擋那一格。四問:量 rc 5 + 「hard_block」;紅 = 被 allowed 聯集抵掉;
+        期望值 = 測試寫進 config 的 hard_block.paths。"""
         conf = json.loads(self.read("board/config.json"))
-        conf["protected_paths"] = ["src/two.txt"]
+        conf["hard_block"] = {"paths": ["src/two.txt"], "dirs": [], "patterns": []}
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
         done = self.run_batch(batch_patch(("src/two.txt", "two by #2\n", "two fixed\n")))
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         self.assertIn("src/two.txt", done.stderr)
-        self.assertIn("protected_paths", done.stderr)
+        self.assertIn("hard_block", done.stderr)
 
     def test_files_outside_the_union_go_into_extra_paths(self):
         """A3 的 extra_paths。四問:量 result-round1.json 的 extra_paths;紅 = 沒寫或擋了;

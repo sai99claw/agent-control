@@ -97,6 +97,12 @@ archive 給的是 commit 的內容,worktree 裡沒 commit 的一個字都不進�
 這三格由專案填(`templates/project-CLAUDE.md`)。**空著的派工文不要發** —— 一份沒有
 禁區的派工文,跟一份禁區剛好是空的派工文長得一樣。
 
+**機器會擋的只有一份清單**:`board/config.json` 的 `hard_block`(D-054 Q3)。`paths`(repo 內 glob:
+裁示文件、發版腳本)動到 → `apply.sh` rc 5、`gate.sh` preflight rc 4、`land.sh` 拒收;`dirs`(repo 外
+目錄,`~` 展開、相對主 repo 解析)底下的檔被 agent 動到 → `auto-fix.sh` 的越界守衛 rc 8;`patterns`
+(改動內文禁字 regex)**只查 tests/** 與 verify/** 的新增行**,命中同 `paths` 三處擋 —— scripts 自己合法用
+kill,不查。沒設或三格皆空 = 不擋。
+
 🩸 **不准殺任何不是自己起的行程**;不准 `pkill -f`、不准 `killall`、不准照 `ps` 的輸出猜
 「這看起來像我的」。這台機器上同時有好幾條線在跑,殺錯一發是別人幾十分鐘的工作
 (2026-09-10:用 PID 殺掉另一條線正在跑的回歸)。測試卡住就用 `timeout` 包起來重跑,不獵行程。
@@ -300,7 +306,7 @@ grep -aE "^Ran |^OK|^FAILED" run.log      # 給人看的
   `OBJECTION: ticket-wrong`,不要兩份各寫一份。
 - **釘著舊行為的測試 / 期望檔 / lib 腳本跟著改,不是越界**:`allowed_write_paths` 與 `out_of_scope` 都是建議範圍
   (D-H38 ①、D-050 ①),漏列的照改,`apply.sh` 會列進 `extra_paths`、EVIDENCE 逐檔寫理由(§8 第 9 點);
-  硬擋只剩 `protected_paths`。
+  硬擋只剩 `hard_block`(§2)。
 - **票面寫「其餘斷言不變」卻沒列查過哪幾個檔**,那一句是沒驗過的假設:撞到既有 oracle 就照 §7 說出來,
   不准把舊斷言放寬成新行為印的東西。
 

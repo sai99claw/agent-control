@@ -45,7 +45,7 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
   `verify/**/test_ticket_<n>.py`、`verify/TAGS.d/<n>.md`):驗證者自己建、交 patch-verify,收件併進 `verify.files`;
   列了 create / set / 轉 Ready / lint 都拒收「是本票驗證者的案例檔」(#101 A3;舊的「要列進去」#23 已反轉)。
 - `allowed_write_paths` 與 `out_of_scope` 都是建議範圍(D-H38 ①、D-050 ①):越出不擋、列進 `extra_paths`,
-  實作者在 EVIDENCE「提示清單外的改動」逐檔寫理由,out_of_scope 命中缺理由 land 拒絕;硬擋只剩 `protected_paths`。
+  實作者在 EVIDENCE「提示清單外的改動」逐檔寫理由,out_of_scope 命中缺理由 land 拒絕;硬擋只剩 `hard_block`。
 - 資訊位置寫 `info_homes`(`--info-home '{"what": "…", "home": "相對路徑"}'`,可重複):只說明、不是權限。
 - 反例(舊測試 / 期望檔 / 版號釘著舊行為卻不在範圍裡):#658、#659、#661、#662;
   驗收寫實作細節而撞案例:#660(封閉鍵集)、#663(標籤、regex、「不在 DOM」、幣別);

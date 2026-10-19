@@ -27,7 +27,7 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 - **套 patch → 開 `t<票號>` 分支與 worktree → commit 走 `scripts/apply.sh <票號> <patch> [<patch-verify>]`**
   (2026-09-21,D-015)。它在 `git apply` 之前擋檔頭(只准 `base/…` / `work/…` 或 `/dev/null`,
   絕對路徑拒、`diff -ruN` 的刪檔沒改 `+++` 也拒),在 `git apply` 之後比對每個 `+++` 目標
-  並 `--reverse --check`(rc=4),再量寫入範圍(只有 `protected_paths` 擋,rc=5;提示範圍外與命中
+  並 `--reverse --check`(rc=4),再量寫入範圍(只有 `hard_block` 擋,rc=5;提示範圍外與命中
   `out_of_scope` 不擋,列進 result 的 `extra_paths` / `extra_reasons`,D-050 ①),commit 訊息帶票號與
   **patch 的 sha256**。主線走遠了先 `scripts/apply.sh rebase <票號> <patch>` 重生一份乾淨 diff。
   候選樹有 `scripts/repo-map.py` 與 `code-map/catalog.json` 時,commit 之前跑一次 `repo-map.py build`(#96):
@@ -42,9 +42,9 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 1. 先印每支分支的 commit 數與標題(**讓人看見它以為自己在做什麼**)。
 2. 任一支 0 commit → 整批拒絕(跳過會生出沒有人要求過的組合)。
 3. 任一支的 `base_sha` 有問題 → 拒絕,分兩種話講:**主線根本沒有那個 sha**(副本是拿錯的 ref 做的,回去查副本從哪來)vs **有但不是主線祖先**(主線走遠了,rebase 後重跑閘門)。兩者 `merge-base` 都非零,下一步差很多。
-4. 寫入範圍:動到 `protected_paths` → 拒絕(點名檔與格);命中 `out_of_scope` 而最近一次收件的 `extra_reasons`
+4. 寫入範圍:命中 `hard_block`(`paths` 的檔,或 tests/** verify/** 新增行命中 `patterns`)→ 拒絕(點名檔與格);命中 `out_of_scope` 而最近一次收件的 `extra_reasons`
    沒有理由 → 拒絕「out_of_scope 命中缺理由」;只是提示範圍外 → 警告、不擋(D-050 ①;兩者都是建議範圍,
-   硬擋只剩 `protected_paths`)。
+   硬擋只剩 `hard_block`)。
 5. **票的 `verify.files` 要真的在分支上**(#587 那把尺,D-015):票說「案例在這幾個檔」而分支上沒有,
    代表驗證者的交付沒有跟著進來 —— 而 `verify.tags` 照樣會被閘門呼叫、照樣一個案例都選不到、照樣印一行綠。
    缺了 **rc=4**(與其他拒收的 2 分開:呼叫者要分得出「票面沒填好」與「分支沒準備好」)。
@@ -165,7 +165,7 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
    不猜哪張票弄紅:**一個** worker 拿派工文 `reports/batch/<stamp>/dispatch-round1.md`(N 張票面快照、
    紅榜 = 第一張票 `reports/t<id>/<run_id>/status.json` 的 failures、`git diff --stat main...<整合分支>` 與整批 diff 檔、
    寫入範圍聯集、「不得放寬測試」),在整合分支的副本上修。patch 走 `apply.sh --batch <整合分支> <id…> <patch>`:
-   疊成整合分支頭上**一個** commit(訊息 `batch fix round <r> #1 #2 …`),寫入範圍硬擋只剩 `protected_paths`
+   疊成整合分支頭上**一個** commit(訊息 `batch fix round <r> #1 #2 …`),寫入範圍硬擋只剩 `hard_block`
    (各票 `out_of_scope` 聯集 − 各票提示範圍聯集命中不擋,列進 result 的 `extra_paths` / `extra_reasons`,D-050 ①),測試檔(`batch_fix.test_globs`,預設 `tests/**`、
    `verify/**`、`**/test_*.py`)刪含 assert 的行或加 skip / expectedFailure ⇒ rc 5「<檔>:<行> 放寬測試」
    (EVIDENCE 有 `OBJECTION: test_defect <案例>` 且是那條案例的檔才不擋)。覆核走 `review.sh --batch <整合分支> <id…>
@@ -177,7 +177,7 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
    -c 'approval_policy="never"' -C .`,外加 `--add-dir <副本根>` 恰一次,cwd 與 claude 同是副本的 `work/`),不靠
    沙盒擋,改由 `run_agent` 在 worker / 驗證者 / 批次 worker 起跑前後各拍一次快照:主 repo 的 HEAD、分支、
    `git status` 列得出的每個路徑**加內容雜湊**(已髒的檔再被改一次也看得到),以及 `board/config.json` 的
-   `guarded_dirs`(字串 list,`~` 展開、相對主 repo 解析;缺或 `[]` 只查主 repo)底下每一個檔。豁免只有
+   `hard_block.dirs`(字串 list,`~` 展開、相對主 repo 解析;缺或 `[]` 只查主 repo)底下每一個檔。豁免只有
    config 解析出的 tickets / events / answers / reports 路徑與這個 agent 自己的副本;HEAD 前進時
    `git rev-list --first-parent 舊..新` 的**每一個 commit** 都要歸屬到一次合法落地(#127):一筆 `land.pass`
    帶 `stamp`、`sha`、40 位的 `main_before`,而整份事件檔裡在它之前有同一 stamp 的 `land.start`(可以早於
@@ -203,7 +203,7 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
    整串耗盡 → Blocked、一頁、rc=7。閘門綠後覆核 fail → rc=9、沒交件 / stale → rc=10;`--no-review` rc=0 且印 `終態=awaiting_review`。
    agy 候選以副本 `work/` 為 cwd、stdin=`/dev/null`,用黏在 `-p=` 的短提示指向控制根內派工文絕對路徑;不帶 `--add-dir` 或 sandbox,權限與事後越界守衛同 Claude/Codex。
    批次越界時整批票轉 Blocked(唯一會寫票的批次結局)、不發 attempt.failed(批次沒有 attempt.start)。
-   **只查列出來的地方**:被 `.gitignore` 掉的檔、`guarded_dirs` 以外的整部電腦都沒看過;平行的兩個 agent
+   **只查列出來的地方**:被 `.gitignore` 掉的檔、`hard_block.dirs` 以外的整部電腦都沒看過;平行的兩個 agent
    時間重疊時,同一處改動會記在兩者名下(守衛分不出是哪一個行程改的)。開題者改真票是它的工作,不在守衛裡。
    server / 瀏覽器在真 codex 上的效果**待專案同步後冒煙實證**。
 

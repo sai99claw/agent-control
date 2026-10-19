@@ -4,8 +4,8 @@
 A1 | cli   | agent-command --model codex:gpt-5.6-sol --tool codex(不給 / high / turbo);claude-code 兩句 | 恰為票面那一句;high 只在 -m 後加 -c 'model_reasoning_effort="high"';turbo rc 2;claude 不變 | 票面 A1 原話;claude 句抄 #114 契約
 A2 | integ | auto-fix 真起假 codex 與假 claude worker,各記 argv / pwd / AC_ROLE / AC_ROOT | --add-dir 恰一次、值 = 副本根(不是主 repo);cwd 兩者都是副本根/work;AC_ROLE=worker;AC_ROOT 同一個隔離位置 | 票面 A2 原話
 A3 | integ | base_sha 上的票寫 OLD objective,權威票庫寫 NEW | 派工文有「權威票面快照」、含 NEW 不含 OLD、明說 work/tickets/1.json 不能推翻;控制根票副本 NEW;work/ 那份 OLD(夾具自證) | 票面 A3 原話
-A4 | integ | worker 在主 repo 新增 / 刪除 / 修改、已髒檔再改、HEAD 前進、切分支、guarded_dirs 新增 / 刪除 / 改動;驗證者越界;批次 worker 越界 | rc 8、票 Blocked / owner=main、attempt.failed reason=guard-violation、唯一 decision 指出路徑、guard 報告有前後;patch 不套、副本留著 | 票面 A4 原話 + interface_contracts.guard_result
-A5 | integ | 寫 tickets/(控制面)/ board/ 下非控制面檔;guarded_dirs ["~/g"] / ["../o"];缺 / [] 時寫主 repo 外 | 控制面不擋、board/ 其他檔擋;~ 展開與相對主 repo 都抓;缺 / [] 不抓 repo 外 | 票面 A5 原話
+A4 | integ | worker 在主 repo 新增 / 刪除 / 修改、已髒檔再改、HEAD 前進、切分支、hard_block.dirs 新增 / 刪除 / 改動;驗證者越界;批次 worker 越界 | rc 8、票 Blocked / owner=main、attempt.failed reason=guard-violation、唯一 decision 指出路徑、guard 報告有前後;patch 不套、副本留著 | 票面 A4 原話 + interface_contracts.guard_result
+A5 | integ | 寫 tickets/(控制面)/ board/ 下非控制面檔;hard_block.dirs ["~/g"] / ["../o"];缺 / [] 時寫主 repo 外 | 控制面不擋、board/ 其他檔擋;~ 展開與相對主 repo 都抓;缺 / [] 不抓 repo 外 | 票面 A5 原話
 A6 | integ | 同 stamp land.start + land.pass(sha = 新 HEAD);只有 land.start;pass 的 sha 對不上;合法 land + 多一個檔 | 第一種不擋,其餘三種 rc 8 | 票面 A6 原話
 A7 | integ | 假 codex 回額度信封且越界;只撞額度(表 worker = [codex astra, opus]) | 前者 rc 8、票 Blocked 不改派、reason=guard-violation、頁指出路徑;後者同一次接著起 claude worker、rc 0、票的 model / tool 不改、沒有 guard-violation | 票面 A7;#121 A2 / A4 取代「rc 7、Ready、改 opus」
 A8 | doc   | 讀 docs/ROLES.md、docs/WORKFLOW.md、scripts/ticket.py、scripts/auto-fix.sh;乾跑 codex 票 | 兩份文件有 D-048、rc=8、「待專案同步後冒煙實證」;兩支腳本與乾跑 worker 行沒有 workspace-write | 票面 A8 原話
@@ -185,7 +185,7 @@ class CodexCommandHasClaudesPermissions(unittest.TestCase):
 
 
 class GuardBase(CodexBase):
-    """共用的夾具:假 agent / 假 codex、guarded_dirs、越界之後該看到的那一整組。"""
+    """共用的夾具:假 agent / 假 codex、hard_block.dirs、越界之後該看到的那一整組。"""
 
     def copy_root(self, kind="fix"):
         return os.path.realpath(os.path.join(self.home, "repo-wt", "%s-t1" % kind, "round1"))
@@ -195,7 +195,7 @@ class GuardBase(CodexBase):
                         .replace("@WHO@", who).replace("@STRAY@", stray))
         if guarded is not None:
             conf = json.loads(self.read("board/config.json"))
-            conf["guarded_dirs"] = guarded
+            conf["hard_block"] = {"paths": [], "dirs": guarded, "patterns": []}
             self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
         fields.setdefault("subject", "守衛")
         return self.ticket_ready(**fields)
@@ -380,7 +380,7 @@ class TheGuardSeesTheMainRepo(GuardBase):
 
 
 class TheGuardSeesGuardedDirs(GuardBase):
-    """A4 + A5:guarded_dirs 的新增 / 刪除 / 改動;~ 展開、相對主 repo 解析。"""
+    """A4 + A5:hard_block.dirs 的新增 / 刪除 / 改動;~ 展開、相對主 repo 解析。"""
 
     def setUp(self):
         super().setUp()
@@ -390,22 +390,22 @@ class TheGuardSeesGuardedDirs(GuardBase):
         self.write("o/kept.txt", "原本\n", where=self.home)
 
     def test_a4_a_new_file_under_a_guarded_dir(self):
-        """A4 guarded_dirs ["~/g"] 底下新增檔 → rc 8(~ 展開成 HOME)。"""
+        """A4 hard_block.dirs ["~/g"] 底下新增檔 → rc 8(~ 展開成 HOME)。"""
         self.arm('echo new > "$SANDBOX/g/added.txt"', guarded=["~/g"])
         self.assert_stopped(self.auto_fix("--no-review"), "added.txt")
 
     def test_a4_a_deleted_file_under_a_guarded_dir(self):
-        """A4 guarded_dirs ["../o"](相對主 repo)底下刪檔 → rc 8。"""
+        """A4 hard_block.dirs ["../o"](相對主 repo)底下刪檔 → rc 8。"""
         self.arm('rm "$SANDBOX/o/kept.txt"', guarded=["../o"])
         self.assert_stopped(self.auto_fix("--no-review"), "o/kept.txt")
 
     def test_a4_a_modified_file_under_a_guarded_dir(self):
-        """A4 guarded_dirs ["~/g"] 底下改檔 → rc 8。"""
+        """A4 hard_block.dirs ["~/g"] 底下改檔 → rc 8。"""
         self.arm('echo changed >> "$SANDBOX/g/kept.txt"', guarded=["~/g"])
         self.assert_stopped(self.auto_fix("--no-review"), "g/kept.txt")
 
-    def test_a5_missing_or_empty_guarded_dirs_watch_only_the_main_repo(self):
-        """A5 guarded_dirs 缺 / [] → 寫主 repo 外的檔不擋(也不宣稱看過)。"""
+    def test_a5_missing_or_empty_hard_block_dirs_watch_only_the_main_repo(self):
+        """A5 hard_block.dirs 缺 / [] → 寫主 repo 外的檔不擋(也不宣稱看過)。"""
         for guarded in (None, []):
             with self.subTest(guarded=guarded):
                 self.setUp()

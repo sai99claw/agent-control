@@ -16,7 +16,7 @@
 - **主線的每個動作要發事件**(`scripts/event.py emit`),控制台只認事件。沒發事件的事,對系統而言沒發生。
   副本裡的短命角色不發事件,由派工方代發(`docs/SESSION-START.md` Worker / 驗證者那一節)。
 - **套 patch 只走 `scripts/apply.sh`**(它先驗檔頭與硬擋範圍,commit 訊息帶票號與 patch sha256);
-  **落地只走 `scripts/land.sh`**,它會拒絕該拒絕的(0 commit、基準版本過期、越過 `out_of_scope` / `protected_paths`、
+  **落地只走 `scripts/land.sh`**,它會拒絕該拒絕的(0 commit、基準版本過期、命中 `hard_block`、out_of_scope 缺理由、
   覆核過期、`verify.files` 沒帶進來)。`allowed_write_paths` 是預期不是限制(D-H38 ①):越出不擋,只列進 `extra_paths`。
   不准手動 merge 進主線。
 - **不准輪詢 status**(主線的正文;短命角色的在 `docs/DISPATCH-TEMPLATE.md` §3):跑完的事會寫進 `reports/inbox/`,

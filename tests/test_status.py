@@ -588,20 +588,45 @@ class GateWritesStatus(Sandbox):
         self.assertEqual(len(line), 1, done.stderr)
         self.assertIn("`scripts/land.sh`", line[0])
 
-    def test_a_patch_touching_protected_paths_stops_before_tests(self):
-        """#101 A1:protected_paths 仍是 preflight rc 4、測試沒起、點名檔與格(原 out_of_scope 那條
-        的 protected 一半)。四問:量 rc 4、測試標記、stderr;紅 = preflight 不看 blocked;期望值 =
-        測試寫進 config 的 protected_paths。
+    def hard_block(self, paths=(), patterns=()):
+        conf = json.loads(self.read("board/config.json"))
+        conf["hard_block"] = {"paths": list(paths), "dirs": [], "patterns": list(patterns)}
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+
+    def test_a_patch_touching_hard_block_paths_stops_before_tests(self):
+        """#101 A1:hard_block.paths 仍是 preflight rc 4、測試沒起、點名檔與格(原 out_of_scope 那條
+        的硬擋一半)。四問:量 rc 4、測試標記、stderr;紅 = preflight 不看 blocked;期望值 =
+        測試寫進 config 的 hard_block.paths。
         **變異 M1**:preflight 不看 `write_scope` 的 blocked → 這一條紅。"""
         self.install_test_marker()
-        conf = json.loads(self.read("board/config.json"))
-        conf["protected_paths"] = ["scripts/land.sh"]
-        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        self.hard_block(paths=["scripts/land.sh"])
         self.make_ticket(7, allowed_write_paths=["src/*", "scripts/*"])
         self.write("scripts/land.sh", self.read("scripts/land.sh") + "\n# outside scope\n")
         done = self.gate("--branch", "--ticket", "7")
         self.assert_preflight_stopped_before_tests(done)
-        self.assertIn("board/config.json 的 protected_paths:scripts/land.sh", done.stderr)
+        self.assertIn("board/config.json 的 hard_block.paths:scripts/land.sh", done.stderr)
+
+    def test_a_pattern_in_an_added_test_line_stops_before_tests(self):
+        """D-054 Q3:tests/** 的新增行命中 hard_block.patterns → preflight rc 4、測試沒起、點名檔。
+        字面拆開寫:這份測試檔自己的新增行也會被 A 的 patterns 查。
+        **變異**:preflight 不把 diff 的新增行交給硬擋 → 這一條紅。"""
+        self.install_test_marker()
+        self.hard_block(patterns=[r"os\.kill"])
+        self.make_ticket(7, allowed_write_paths=["src/*", "tests/*"])
+        self.write("tests/test_k.py", "os." + "kill(pid, 9)\n")
+        done = self.gate("--branch", "--ticket", "7")
+        self.assert_preflight_stopped_before_tests(done)
+        self.assertIn("hard_block.patterns:tests/test_k.py", done.stderr)
+
+    def test_the_same_pattern_in_scripts_does_not_stop_the_preflight(self):
+        """patterns 只查 tests/** 與 verify/** 的新增行(scripts 自己合法用 kill)。
+        **變異 M2**:patterns 對 scripts/** 也查 → 這一條紅。"""
+        self.hard_block(patterns=[r"os\.kill"])
+        self.make_ticket(7, allowed_write_paths=["src/*", "scripts/*"])
+        self.write("scripts/k.py", "os." + "kill(pid, 9)\n")
+        done = self.gate("--branch", "--ticket", "7")
+        self.assertNotEqual(done.returncode, 4, done.stdout + done.stderr)
+        self.assertNotIn("機械格不合", done.stderr)
 
     def test_a_patch_outside_allowed_write_paths_alone_does_not_stop_the_preflight(self):
         """白名單外只記錄不擋 —— preflight 照舊擋它,apply 放過的東西閘門永遠過不去。

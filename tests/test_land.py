@@ -705,13 +705,16 @@ class TicketChecks(LandBase):
         self.assertNotIn("命中缺理由", done.stdout)
         self.assertIn("docs/outside.md", self.git("ls-tree", "-r", "--name-only", "main"))
 
-    def test_writing_into_protected_paths_is_refused_whatever_the_reason(self):
-        """#101 A1:protected_paths 仍硬擋 —— 收件的理由與 info_homes 都救不了,點名檔與格。
-        四問:量 rc 2、點名、主線不動;紅 = 理由抵掉硬擋;期望值 = 測試寫進 config 的 protected_paths。
-        **變異 M1**:write_scope 不看 protected_paths → 這一條紅。"""
+    def hard_block(self, paths=(), patterns=()):
         conf = json.loads(self.read("board/config.json"))
-        conf["protected_paths"] = ["secrets/*"]
+        conf["hard_block"] = {"paths": list(paths), "dirs": [], "patterns": list(patterns)}
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+
+    def test_writing_into_hard_block_paths_is_refused_whatever_the_reason(self):
+        """#101 A1:hard_block.paths 仍硬擋 —— 收件的理由與 info_homes 都救不了,點名檔與格。
+        四問:量 rc 2、點名、主線不動;紅 = 理由抵掉硬擋;期望值 = 測試寫進 config 的 hard_block.paths。
+        **變異 M1**:write_scope 不看 hard_block.paths → 這一條紅。"""
+        self.hard_block(paths=["secrets/*"])
         branch = self.branch_for(1, "t1-wide", allowed_write_paths=["src/*", "secrets/*"],
                                  info_homes=[{"what": "金鑰", "home": "secrets/k"}])
         self.commit_in(branch, "secrets/k", "動了金鑰")
@@ -720,10 +723,37 @@ class TicketChecks(LandBase):
         before = self.main_log()
         done = self.land("t1-wide")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        self.assertIn("land:   secrets/k —— 命中board/config.json 的 protected_paths(`secrets/*`)",
+        self.assertIn("land:   secrets/k —— 命中board/config.json 的 hard_block.paths(`secrets/*`)",
                       done.stdout)
         self.assertEqual(self.main_log(), before)
         self.assertFalse(self.gate_ran())
+
+    def test_a_pattern_in_an_added_test_line_is_refused(self):
+        """D-054 Q3:分支在 tests/** 新增的行命中 hard_block.patterns → 拒收、點名檔、主線不動。
+        字面拆開寫:這份測試檔自己的新增行也會被 A 的 patterns 查。
+        **變異**:land 不把分支的新增行交給硬擋 → 這一條紅。"""
+        self.hard_block(patterns=[r"os\.kill"])
+        branch = self.branch_for(1, "t1-wide", allowed_write_paths=["src/*", "tests/*"])
+        self.commit_in(branch, "tests/test_k.py", "os." + "kill(pid, 9)")
+        self.approve(1, "t1-wide")
+        before = self.main_log()
+        done = self.land("t1-wide")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("land:   tests/test_k.py —— 命中board/config.json 的 hard_block.patterns",
+                      done.stdout)
+        self.assertEqual(self.main_log(), before)
+        self.assertFalse(self.gate_ran())
+
+    def test_the_same_pattern_in_scripts_lands(self):
+        """patterns 只查 tests/** 與 verify/** 的新增行(scripts 自己合法用 kill)。
+        **變異 M2**:patterns 對 scripts/** 也查 → 這一條紅。"""
+        self.hard_block(patterns=[r"os\.kill"])
+        branch = self.branch_for(1, "t1-wide", allowed_write_paths=["src/*", "scripts/*"])
+        self.commit_in(branch, "scripts/k.py", "os." + "kill(pid, 9)")
+        self.approve(1, "t1-wide")
+        done = self.land("t1-wide")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("scripts/k.py", self.git("ls-tree", "-r", "--name-only", "main"))
 
     def test_writing_outside_allowed_write_paths_alone_lands(self):
         """白名單外的檔 apply 放過、覆核者看過 —— land 照舊擋的話,這條路永遠走不完。

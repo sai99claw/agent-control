@@ -428,8 +428,8 @@ PY
 
     # 寫入範圍(D-H38 ①、D-050 ①)。`allowed_write_paths` 與 `out_of_scope` 都是建議範圍:越出
     # 不擋(apply 記進 result 的 `extra_paths` / `extra_reasons`、覆核者逐檔看過了);硬擋只剩
-    # `board/config.json` 的 `protected_paths`。原本 out_of_scope 的硬擋改成「列出 + 要理由」:
-    # 命中的檔在各輪收件併起來的 `extra_reasons` 裡沒有理由(null / 空字串)→ 拒絕;只是提示
+    # `board/config.json` 的 `hard_block`(`paths` 比檔名、`patterns` 比 tests/** verify/** 的新增行)。
+    # 原本 out_of_scope 的硬擋改成「列出 + 要理由」:命中的檔在各輪收件併起來的 `extra_reasons` 裡沒有理由(null / 空字串)→ 拒絕;只是提示
     # 範圍外的檔缺理由 → 警告、不擋。印 `B`(硬擋)/ `R`(out_of_scope 命中缺理由)/ `W`(警告)。
     out=$(python3 - "$ROOT" "$MAIN" "$b" "$tf" "$id" <<'PY'
 import json, os, subprocess, sys
@@ -445,7 +445,11 @@ done = subprocess.run(["git", "-C", root, "diff", "--name-only",
                        "%s...%s" % (main, branch)],
                       capture_output=True, text=True)
 names = [name for name in done.stdout.splitlines() if name]
-blocked, extra = ticket_mod.write_scope(row, root, names)
+done = subprocess.run(["git", "-c", "core.quotePath=false", "-C", root, "diff", "--no-ext-diff",
+                       "--unified=0", "--src-prefix=a/", "--dst-prefix=b/",
+                       "%s...%s" % (main, branch)],
+                      capture_output=True, text=True, errors="replace")
+blocked, extra = ticket_mod.write_scope(row, root, names, ticket_mod.added_lines(done.stdout))
 for name, field, pattern in blocked:
     print("B %s —— 命中%s(`%s`)" % (name, field, pattern))
 hits = ticket_mod.out_of_scope_hits([row], extra)

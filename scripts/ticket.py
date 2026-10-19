@@ -279,7 +279,7 @@ FLAG_NOTE = {
     "--out-of-scope": ("明說不要動的;一個一個給(建議範圍,D-050 ①:命中不擋,EVIDENCE 逐檔寫理由,"
                        "land 對缺理由的拒絕)"),
     "--allowed-write-path": ("預期會動的路徑 glob;**一個一個給**(排順序判平行、覆核者對照;建議範圍,"
-                             "不是限制 —— 硬擋只有 board/config.json 的 protected_paths,D-050 ①)"),
+                             "不是限制 —— 硬擋只有 board/config.json 的 hard_block,D-050 ①)"),
     "--info-home": ("資訊位置:一個 JSON 物件 `{\"what\": \"…\", \"home\": \"相對路徑\"}`;一個一個給"
                     "(home 不准 glob、`..`、絕對路徑;不是寫入權限)"),
     "--depends-on": "前置票號;`7` 或 `7:閘門綠`;一個一個給",
@@ -1320,18 +1320,90 @@ def matches_any(path, globs):
     return first_match(path, globs) is not None
 
 
-PROTECTED_FIELD = "board/config.json 的 protected_paths"
+HARD_BLOCK_FIELD = "board/config.json 的 hard_block"
+# `patterns` 只查這兩處的新增行:scripts 自己合法用 kill(auto-fix.sh 的 os.killpg 等),
+# 查全 patch 會誤擋每一張改到那幾行的票。
+HARD_BLOCK_TEXT_DIRS = ["tests", "verify"]
 
 
-def protected_paths(root):
-    """`board/config.json` 的 `protected_paths`(專案自訂的 glob;沒有這一格就是空)。"""
+def hard_block(root):
+    """`board/config.json` 的 `hard_block`(D-054 Q3,唯一一份硬擋清單):`paths`(repo 內
+    glob)、`dirs`(repo 外目錄,auto-fix 的越界守衛查)、`patterns`(改動內文禁字 regex,只查
+    tests/** 與 verify/** 的新增行)。缺這一段或哪一格不是 list 就是空 —— 沒設就不擋。"""
     try:
         with open(os.path.join(root, "board", "config.json"), encoding="utf-8") as handle:
             conf = json.load(handle)
     except (OSError, ValueError):
         conf = {}
-    protected = conf.get("protected_paths") if isinstance(conf, dict) else None
-    return protected if isinstance(protected, list) else []
+    block = conf.get("hard_block") if isinstance(conf, dict) else None
+    block = block if isinstance(block, dict) else {}
+    return {key: block[key] if isinstance(block.get(key), list) else []
+            for key in ("paths", "dirs", "patterns")}
+
+
+DIFF_HUNK = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+
+
+def added_lines(text):
+    """unified diff(`diff -ruN base work` 或 `git diff`)→ `{檔: [新增行]}`。檔名去掉第一層
+    (`work/`、`b/`,同 `-p1`);刪檔(`+++ /dev/null`)不列。照 hunk 的行數走,內文裡以
+    `+++ ` / `--- ` 開頭的行不會被當成檔頭。"""
+    out, name, old, new = {}, None, 0, 0
+    for line in text.splitlines():
+        if old > 0 or new > 0:
+            if line.startswith("\\"):
+                continue
+            if line.startswith("+"):
+                new -= 1
+                if name is not None:
+                    out[name].append(line[1:])
+            elif line.startswith("-"):
+                old -= 1
+            else:
+                old, new = old - 1, new - 1
+            continue
+        if line.startswith("+++ "):
+            target = line[4:].split("\t")[0].strip()
+            name = None if target == "/dev/null" else target.split("/", 1)[-1]
+            if name is not None:
+                out.setdefault(name, [])
+            continue
+        found = DIFF_HUNK.match(line)
+        if found:
+            old = 1 if found.group(1) is None else int(found.group(1))
+            new = 1 if found.group(2) is None else int(found.group(2))
+    return out
+
+
+def pattern_hit(pattern, line):
+    """`patterns` 一條命不命中這一行;不是合法 regex 的就當字面比 —— 寫壞一條不能讓整份清單失效。"""
+    try:
+        return re.search(pattern, line) is not None
+    except re.error:
+        return pattern in line
+
+
+def hard_block_hits(root, names, added=None):
+    """硬擋(apply / gate / land 共用這一支):`names` 命中 `hard_block.paths`,或 `added`
+    (`{檔: [新增行]}`)裡 tests/** 與 verify/** 的新增行命中 `hard_block.patterns`。
+    回 `[(檔, 哪一格, 命中的 glob 或 regex)]`,一檔一筆、paths 先。"""
+    block = hard_block(root)
+    hits, seen = [], set()
+    for name in names:
+        pattern = first_match(name, block["paths"])
+        if pattern is not None and name not in seen:
+            hits.append((name, HARD_BLOCK_FIELD + ".paths", pattern))
+            seen.add(name)
+    patterns = [pattern for pattern in block["patterns"] if isinstance(pattern, str) and pattern]
+    for name, lines in (added or {}).items():
+        if name in seen or not matches_any(name, HARD_BLOCK_TEXT_DIRS):
+            continue
+        pattern = next((pattern for pattern in patterns
+                        if any(pattern_hit(pattern, line) for line in lines)), None)
+        if pattern is not None:
+            hits.append((name, HARD_BLOCK_FIELD + ".patterns", pattern))
+            seen.add(name)
+    return hits
 
 
 def hint_scope(ticket):
@@ -1377,25 +1449,21 @@ def out_of_scope_hits(rows, names):
     return hits
 
 
-def write_scope(row, root, names):
+def write_scope(row, root, names, added=None):
     """寫入範圍(D-H38 ①、D-050 ①):`allowed_write_paths` 與 `out_of_scope` 都是**建議範圍**。
 
-    回 `(blocked, extra)`:`blocked` 是 `(檔, 哪一格, 命中的 glob)`,**只來自**
-    `board/config.json` 的 `protected_paths`(安全邊界,硬擋);`extra` 是提示範圍
+    回 `(blocked, extra)`:`blocked` 是 `(檔, 哪一格, 命中的 glob / regex)`,**只來自**
+    `board/config.json` 的 `hard_block`(`hard_block_hits`;安全邊界,硬擋);`extra` 是提示範圍
     (`hint_scope`)外、或命中 `out_of_scope` 的檔 —— 不擋,交給 result 的 `extra_paths` /
     `extra_reasons` 與覆核者(命中哪條 out_of_scope 問 `out_of_scope_hits`)。
     apply / gate / land 共用這一支:三份各抄一份的那一天,擋的東西會不一樣。
     """
-    protected = protected_paths(root)
+    blocked = hard_block_hits(root, names, added)
+    stopped = {name for name, _, _ in blocked}
     hits = out_of_scope_hits([row], names)
     scope = hint_scope(row)
-    blocked, extra = [], []
-    for name in names:
-        pattern = first_match(name, protected)
-        if pattern is not None:
-            blocked.append((name, PROTECTED_FIELD, pattern))
-        elif name in hits or not matches_any(name, scope):
-            extra.append(name)
+    extra = [name for name in names
+             if name not in stopped and (name in hits or not matches_any(name, scope))]
     return blocked, extra
 
 
