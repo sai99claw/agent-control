@@ -118,7 +118,6 @@ if got.returncode != 0:
 tk("set", ident, "state", "Running")
 say("#%s 取得租約(%s,到 %s),起整理 session" % (ident, holder, until))
 
-memory = conf.get("memory") if isinstance(conf.get("memory"), dict) else {}
 # 舊設定與表衝突才警告(判讀只在 role-models.py legacy 一處)。
 old = role_models("legacy", "--config", os.path.join(root, "board", "config.json"))
 for line in old.stdout.splitlines():
@@ -163,16 +162,6 @@ try:
         template = handle.read()
 except OSError:
     fail("範本 %s 找不到" % TEMPLATE)
-
-try:
-    text = open(os.path.join(root, target), encoding="utf-8").read() if target else ""
-except OSError:
-    text = ""
-front_cap = [line.split(":", 1)[1].strip() for line in text.splitlines()[:10]
-             if line.startswith("cap_chars:")]
-cap = front_cap[0] if front_cap else str(memory.get("cap_chars") or 2000)
-chars = len(text.split("\n---\n", 1)[1]) if text.startswith("---\n") and "\n---\n" in text \
-    else len(text)
 
 
 def descendants(top):
@@ -279,8 +268,6 @@ while True:
         "<票號>": ident,
         "<票庫路徑>": os.path.relpath(event.tickets_dir(root), root),
         "<要整理的檔>": target,
-        "<N>": str(chars),
-        "<cap>": cap,
         "<date>": today,
         "<你的模型>": short(model),
         "<主線 / session 名>": "consolidate-memory.sh(主線開場起的)",

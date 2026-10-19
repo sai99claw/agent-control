@@ -1,24 +1,29 @@
 #!/usr/bin/env python3
-"""記憶的容量與整理 — D-006(`docs/MEMORY.md`「容量與整理:老師帶學生」)。
+"""記憶的暫存區與整理 — D-053 ⑥(`docs/MEMORY.md`「整理:老師帶學生」)。
 
-    scripts/memory.py check [--read-only]      # session 開頭跑;超過上限 → 退出碼 1
+    scripts/memory.py check [--read-only]      # session 開頭跑;暫存區有未整理條目 → 退出碼 1
     scripts/memory.py check-stale --read-only [--file <主檔或 inbox>]   # 逐條分類來源
     scripts/memory.py harvest EVIDENCE.md      # 收割「記憶」段的 note 指令
     scripts/memory.py snapshot memory/model/opus.md   # 討論檔頭要抄的兩行
     scripts/memory.py lint [--file <記憶檔>]… [--json]   # 分層 lint(唯讀):錯層內容逐條點名
-    scripts/memory.py lint --base main --file <記憶檔>…  # 閘門那一手:只量本分支新增行與超上限
+    scripts/memory.py lint --base main --file <記憶檔>…  # 閘門那一手:只量本分支新增行
     scripts/memory.py consolidate memory/model/opus.md --candidate <新版> \
         --discussion discussions/2026-09-12-memory-opus-fable.md \
-        --discussion discussions/2026-09-12-memory-opus-opus.md \
-        --new-cap 2600 --reason "四條 land 事故的反例各不相同,合併會失去可辨識性"
+        --discussion discussions/2026-09-12-memory-opus-opus.md
 
-## 為什麼量字元
-**字元是唯一不需要 tokenizer 的決定性量法。** 用 token 量會讓「這份檔多大」取決於
-哪一個模型在問,而同一份檔在兩個 session 得到兩個答案的上限,不是上限。
+## 為什麼不設字數上限(D-053 ⑥)
+固定的字數上限會逼整理者為了湊數字壓掉有用的句子,而「超過才整理」讓暫存區的教訓
+一直等到累積夠多才進卡。整理者只拿一句判準:**每個 session 開場都會讀,只留值得這個
+成本的** —— 寫什麼、留多長由整理的 LLM 決定。`check` 照舊印正文字元數,只是報數,
+不跟任何數字比。
 
-## 為什麼只管模型私有記憶
-上限管的是**每個新 session 的第一口空氣**:`memory/model/<model>.md` 是同模型每個
-session 開頭都要讀的東西,多一個字就是每一個 session 都多讀一個字。專案共用層
+## 為什麼暫存區有一條就整理
+暫存區(`.inbox.md`)是還沒被 `consolidate` 消耗的教訓;它不進每個 session 的開場,
+所以留在那裡的每一條都還沒有生效。有一條非空行,它的主檔就待整理 —— 新的觸發條件
+取代舊的觸發條件,不擋任何東西。查重照舊:一份主檔任何時刻至多一張開著的票。
+
+## 為什麼只管 role / model 兩層
+角色卡與模型卡是同一角色、同一模型每個 session 開頭都要讀的東西。專案共用層
 (裁示、交接)有各自的形狀,不受這條管 —— 這是 D-006 的原話更正過的範圍。
 
 ## 為什麼沒有討論檔就不准整理(D-007)
@@ -39,12 +44,6 @@ inbox、事件一個位元組都不動。
 ## 為什麼 `--read-only`
 短命角色開場也量一次,但**不開票**:票是主線的,一個 worker 開場留下一張整理票,
 與主線開場開的那一張長得一樣,而兩張會被派兩次。唯讀的那一支不拿鎖、不發事件。
-
-## 為什麼提高上限要有理由
-上限可以被討論結果打破,但**提高是掙來的**。一個沒有理由的 `cap_chars: 4000` 與
-一場真的做過的討論長得一模一樣,而前者是把「還沒整理」重新命名成「上限比較高」。
-所以 `--new-cap` 沒有 `--reason` 直接拒絕,理由連同前後值寫進檔案的 front matter
-`cap_history` —— 寫在**那份檔自己身上**,下一個要再提高的人看得到上一次的理由。
 """
 
 import errno
@@ -65,19 +64,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import event      # noqa: E402
 import ticket     # noqa: E402
 
-DEFAULT_CAP = 2000
-# D-013:**任一層記憶**都受上限管,不只模型私有那一層 —— 角色卡與專案共識一樣是
-# 「每個 session 的第一口空氣」。紀錄類文件(DECISIONS / HANDOFF)不在這裡:
-# 它們是**用 grep 查的**,不是每次載入的。
+# D-013:角色卡與模型卡都是「每個 session 的第一口空氣」,不只模型私有那一層。
+# 紀錄類文件(DECISIONS / HANDOFF)不在這裡:它們是**用 grep 查的**,不是每次載入的。
 DEFAULT_APPLIES = ("memory/model/*.md", "memory/role/*.md")
 DEFAULT_INBOX_SUFFIX = ".inbox.md"
-DEFAULT_INBOX_MAX_LINES = 20
-NOT_A_MEMORY = "README.md"     # 說明檔不是誰的記憶 —— glob 抓得到它,上限不該管它
+NOT_A_MEMORY = "README.md"     # 說明檔不是誰的記憶 —— glob 抓得到它,check 不該管它
 CONSOLIDATOR_ROLE = "consolidator"
 LOCK_NAME = ".lock"
 LOCK_TIMEOUT = 10.0
 FENCE = "---"
-CAP_RE = re.compile(r"^cap_chars:\s*(\d+)\s*$", re.MULTILINE)
 
 
 DISPOSITIONS = ("保留", "升格", "移至 reference", "歸檔", "重複")
@@ -85,24 +80,22 @@ DISPOSITION_RE = re.compile(r"^- L(\d+):[ \t]*(%s)" % "|".join(DISPOSITIONS), re
 TICKET_TAG = re.compile(r"^#(\d+)$")
 
 CONSOLIDATE_FLAGS = (
-    ("--candidate", "整理後的新版正文(必填;正文不得超過上限 —— 新上限有給就量新上限)"),
+    ("--candidate", "整理後的新版正文(必填;寫什麼、留多長由整理者決定)"),
     ("--discussion", "討論檔路徑,**給兩次、兩個不同的 model**(D-007 / D-013;"
                      "格式見 docs/DISCUSSION.md)"),
-    ("--new-cap", "新的上限字元數;要配 --reason"),
-    ("--reason", "為什麼值得提高 —— 寫得出「多讀的那幾百字替每個未來 session 省了什麼」"),
     ("--by", "誰帶的討論;不給就用 config 的 memory.consolidator"),
 )
 
 USAGE = {
-    "check": "scripts/memory.py check [--read-only]         # 超過上限退出碼 1(不停工)",
+    "check": "scripts/memory.py check [--read-only]         # 暫存區有未整理條目退出碼 1(不停工)",
     "check-stale": "scripts/memory.py check-stale --read-only [--file <主檔或 inbox 相對路徑>]",
     "snapshot": "scripts/memory.py snapshot <記憶檔>             # 印 source_lines / source_sha256",
     "note": "scripts/memory.py note <model|role|project> <名> \"<一行>\" [--ticket N] [--by <role>@<model>]",
     "harvest": "scripts/memory.py harvest <EVIDENCE.md>",
     "lint": ("scripts/memory.py lint [--file <記憶檔>]… [--base <ref>] [--json]   # 唯讀;空掃描不算過;"
-             "--base 只量相對 merge-base(ref, HEAD) 的新增行與本分支讓卡超上限"),
+             "--base 只量相對 merge-base(ref, HEAD) 的新增行"),
     "consolidate": ("scripts/memory.py consolidate <記憶檔> --candidate <檔> --discussion <A> "
-                    "--discussion <B> [--new-cap N --reason …] [--by …]"),
+                    "--discussion <B> [--by …]"),
 }
 
 EXAMPLE = {
@@ -116,8 +109,7 @@ EXAMPLE = {
                     '  --candidate discussions/2026-09-12-memory-opus.candidate.md \\\n'
                     '  --discussion discussions/2026-09-12-memory-opus-fable.md \\\n'
                     '  --discussion discussions/2026-09-12-memory-opus-opus.md \\\n'
-                    '  --new-cap 2600 --by fable \\\n'
-                    '  --reason "四條 land 事故的反例各不相同,合併會失去可辨識性"'),
+                    '  --by fable'),
 }
 
 
@@ -149,9 +141,7 @@ def memory_config():
 def split_front_matter(text):
     """`---` 夾住的那一段,與正文。沒有 front matter 就回 `(None, 全文)`。
 
-    **量的是正文** —— front matter 是這份檔的中繼資料(上限、上限的歷史),不是
-    每個 session 要讀的內容。把它算進去會有一個很難看見的後果:**寫一次提高上限
-    的理由,就把自己往上限推近一步**,於是誠實記錄會被制度懲罰。
+    **量的是正文** —— front matter 是這份檔的中繼資料,不是每個 session 要讀的內容。
     """
     if not text.startswith(FENCE + "\n"):
         return None, text
@@ -159,13 +149,6 @@ def split_front_matter(text):
     if end < 0:
         return None, text
     return text[len(FENCE) + 1:end + 1], text[end + len(FENCE) + 2:]
-
-
-def cap_of(front, default):
-    if not front:
-        return default, False
-    found = CAP_RE.search(front)
-    return (int(found.group(1)), True) if found else (default, False)
 
 
 def body_chars(text):
@@ -450,8 +433,8 @@ def print_lint(bad, out=sys.stderr):
 
 # ------------------------------------------------------- lint --base(D-042)
 #
-# 閘門問的是**這條分支加了什麼**,不是這張卡整份乾不乾淨:既有正文的命中與早已超標的卡
-# 歸整理票(`check` 開的那一張),拿來擋一個只在卡尾加一行的分支,等於要每張票順手整理
+# 閘門問的是**這條分支加了什麼**,不是這張卡整份乾不乾淨:既有正文的命中歸整理票
+# (`check` 開的那一張),拿來擋一個只在卡尾加一行的分支,等於要每張票順手整理
 # 整張卡。改前 = 該卡在 merge-base(ref, HEAD) 的內容;改後 = 工作樹;改前不存在的卡
 # (含未追蹤)整份都算新增。
 
@@ -489,19 +472,6 @@ def added_lines(root, before, after):
     return lines
 
 
-def over_cap_by_branch(rel, before, after, watched):
-    """`(改前, 改後, 上限)` —— 只在改前 ≤ 上限 < 改後時回;其餘回 None。量法與量哪幾張
-    (`watched` = `watched_files()`)同 `check`。"""
-    if rel not in watched:
-        return None
-    front, body = split_front_matter(after)
-    cap, _ = cap_of(front, int(memory_config().get("cap_chars") or DEFAULT_CAP))
-    old = body_chars(before) if before is not None else 0
-    if old <= cap < len(body):
-        return old, len(body), cap
-    return None
-
-
 def cmd_lint(argv):
     files, as_json, base, index = [], False, None, 0
     while index < len(argv):
@@ -521,15 +491,14 @@ def cmd_lint(argv):
     decisions = decisions_text(root)
     targets = [os.path.relpath(os.path.join(root, rel), root) for rel in files] \
         if files else lint_targets(root)
-    fork, watched = None, []
+    fork = None
     if base is not None:
         fork = (git_out(root, "merge-base", base, "HEAD") or "").strip()
         if not fork:
             sys.stderr.write("memory: lint --base 問不到 merge-base(%s, HEAD)—— 量不了新增行\n"
                              % base)
             return 2
-        watched = watched_files()
-    bad, allowed, scanned, over = [], [], [], []
+    bad, allowed, scanned = [], [], []
     for rel in targets:
         try:
             more, ok = lint_file(root, rel, decisions)
@@ -542,17 +511,11 @@ def cmd_lint(argv):
             fresh = added_lines(root, before, after)
             more = [row for row in more if row["line"] in fresh]
             ok = [row for row in ok if row["line"] in fresh]
-            crossed = over_cap_by_branch(rel, before, after, watched)
-            if crossed:
-                over.append({"file": rel, "before": crossed[0], "after": crossed[1],
-                             "cap": crossed[2]})
         scanned.append(rel)
         bad.extend(more)
         allowed.extend(ok)
     data = {"scanned": len(scanned), "files": scanned, "violations": bad, "allowed": allowed,
-            "ok": bool(scanned) and not bad and not over}
-    if fork:
-        data["over_cap"] = over
+            "ok": bool(scanned) and not bad}
     if as_json:
         sys.stdout.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
     else:
@@ -563,13 +526,10 @@ def cmd_lint(argv):
         sys.stdout.write("memory: lint 掃了 %d 份、命中 %d 條、例外 %d 條\n"
                          % (len(scanned), len(bad), len(allowed)))
     print_lint(bad)
-    for row in over:
-        sys.stderr.write("memory: cap %s %d -> %d / %d\n"
-                         % (row["file"], row["before"], row["after"], row["cap"]))
     if not scanned:
         sys.stderr.write("memory: lint 一份都沒掃到 —— 空掃描不算過\n")
         return 2
-    return 1 if bad or over else 0
+    return 1 if bad else 0
 
 
 def cmd_note(argv):
@@ -689,7 +649,7 @@ def cmd_harvest(argv):
 
 
 def watched_files():
-    """`memory.applies_to` 展開。兩種檔不受上限管:
+    """`memory.applies_to` 展開。兩種檔不是主檔:
 
     - `.inbox.md`:整理期間的暫存區(docs/MEMORY.md 第 4 點)。
     - **`README.md`**:說明檔不是誰的記憶。它躺在同一個目錄裡、副檔名也對,所以
@@ -710,7 +670,7 @@ def watched_files():
         normalized = os.path.normpath(pattern)
         project = os.path.join("memory", "project")
         if normalized == project or normalized.startswith(project + os.sep):
-            sys.stdout.write("memory: %s 是 project 紀錄層,不做容量檢查 —— 已跳過\n"
+            sys.stdout.write("memory: %s 是 project 紀錄層,不做整理檢查 —— 已跳過\n"
                              % pattern)
             continue
         for path in sorted(globmod.glob(os.path.join(root, pattern))):
@@ -772,7 +732,7 @@ def consolidators(conf):
     return [row["model"] for row in chain.get(CONSOLIDATOR_ROLE, [])[:1]]
 
 
-def open_ticket_for(rel, reasons, out):
+def open_ticket_for(rel, entries, out):
     conf = memory_config()
     suffix = conf.get("inbox_suffix") or DEFAULT_INBOX_SUFFIX
     who = consolidators(conf)
@@ -798,20 +758,20 @@ def open_ticket_for(rel, reasons, out):
                "`python3 scripts/memory.py consolidate %s --candidate <新版> "
                "--discussion <討論檔 A> --discussion <討論檔 B>`。" % (rel, rel))
     argv = [
-        "--subject", "整理 %s(%s)" % (rel, ";".join(reasons)),
+        "--subject", "整理 %s(暫存區 %d 條未整理)" % (rel, entries),
         "--objective",
-        "由 %s 照 docs/DISCUSSION.md 的格式討論後壓縮 %s,或者寫出理由把上限提高"
-        "(D-006「老師帶學生」、D-007「沒有討論檔不准整理」、D-013「兩個模型或一個高階模型、只留原則」);"
-        "處置 %s 在 snapshot 那一刻的每一行" % (model or "兩個不同的模型", rel, inbox),
-        "--acceptance", "`scripts/memory.py check` 對 %s 退出碼 0" % rel,
-        "--acceptance", "`scripts/memory.py check-stale --read-only --file %s` 沒有 needs-review"
+        "由 %s 照 docs/DISCUSSION.md 的格式討論後整理 %s:處置 %s 在 snapshot 那一刻的每一行"
+        "(D-053 ⑥ 暫存區有未整理條目就整理)。判準只有一句:每個 session 開場都會讀，"
+        "只留值得這個成本的;寫什麼、留多長由你決定,沒有字數目標(D-053 ⑥)。"
+        "D-007「沒有討論檔不准整理」、D-013「兩個模型或一個高階模型、只留原則」、"
+        "D-043「單一高階整理者」" % (model or "兩個不同的模型", rel, inbox),
+        "--acceptance", "`memory.py consolidate %s` 退出碼 0(snapshot 那 K 行已移進 `.consumed`)"
                         % rel,
         "--acceptance", who_says,
         "--acceptance", "整理後只留**具體的原則、行為準則、思考方式**;**不直接寫案例**,"
                         "案例用票號當來源引用(例:「快照層只畫說得出處的畫面(#585)」)",
         "--acceptance", "案例原文留在紀錄類文件(DECISIONS 歸檔 / HANDOFF 歷史),記憶檔只留指路",
         "--acceptance", "保留的每一條仍帶日期 / 來源票號 / 實測或推論三個標記",
-        "--acceptance", "提高上限的話,`cap_history` 有一列寫得出多讀的那幾百字省了什麼",
         "--acceptance", "討論存成 discussions/<date>-memory-<model>.md(docs/DISCUSSION.md 的格式:"
                         "檔頭 model / source_lines / source_sha256,結論區逐條 `- L<n>: <處置>`)",
         "--in-scope", rel,
@@ -936,60 +896,45 @@ def cmd_check(argv):
             sys.stderr.write("memory: %s\n" % USAGE["check"])
             return 2
         read_only = True
-    conf = memory_config()
-    default_cap = int(conf.get("cap_chars") or DEFAULT_CAP)
-    over = 0
-    # 主檔 → 為什麼要整理。一份主檔一張票:字元超標、inbox 超行、needs-review 併成一句。
+    suffix = memory_config().get("inbox_suffix") or DEFAULT_INBOX_SUFFIX
+    root = ticket.root()
+    # 受管主檔 = applies_to 展開的那幾份,加上 memory/model、memory/role 底下有 inbox 的
+    # 每一份(主檔還不存在也算 —— 第一條 note 落地時只有 inbox)。
+    mains = watched_files()
+    inboxes = {}
+    for rel in inbox_files(suffix):
+        main_rel = rel[:-len(suffix)] + ".md"
+        inboxes[main_rel] = rel
+        if main_rel not in mains:
+            mains.append(main_rel)
+    flagged = 0
+    # 主檔 → 暫存區幾條未整理。只是報數,不跟任何數字比(D-053 ⑥)。
     pending = {}
-    for rel in watched_files():
-        path = os.path.join(ticket.root(), rel)
+    for rel in mains:
+        path = os.path.join(root, rel)
         try:
-            text = read(path)
+            chars = body_chars(read(path)) if os.path.exists(path) else 0
+            box = inboxes.get(rel)
+            entries = 0
+            if box:
+                with open(os.path.join(root, box), encoding="utf-8") as handle:
+                    entries = sum(1 for line in handle if line.strip())
         except OSError as exc:
             sys.stdout.write("memory: 讀不到 %s —— %s\n" % (rel, exc))
-            over += 1
+            flagged += 1
             continue
-        front, body = split_front_matter(text)
-        cap, from_file = cap_of(front, default_cap)
-        chars = len(body)
-        where = "檔上的" if from_file else "設定的"
-        if chars <= cap:
-            sys.stdout.write("memory: %s %d / %d(%s上限)\n" % (rel, chars, cap, where))
+        sys.stdout.write("memory: %s %d 字元 / 暫存區 %d 條未整理\n" % (rel, chars, entries))
+        if not entries:
             continue
-        over += 1
-        sys.stdout.write("memory: %s **%d / %d 超過**(%s上限)\n"
-                         % (rel, chars, cap, where))
+        flagged += 1
         if not read_only:
-            event.emit("memory.over_cap", file=rel, chars=chars, cap=cap)
-        pending.setdefault(rel, []).append("%d 字元,上限 %d" % (chars, cap))
-    suffix = conf.get("inbox_suffix") or DEFAULT_INBOX_SUFFIX
-    max_lines = int(conf.get("inbox_max_lines") or DEFAULT_INBOX_MAX_LINES)
-    root = ticket.root()
-    for rel in inbox_files(suffix):
-        path = os.path.join(root, rel)
-        main_rel = rel[:-len(suffix)] + ".md"
-        with open(path, encoding="utf-8") as handle:
-            lines = sum(1 for line in handle if line.strip())
-        if lines > max_lines:
-            over += 1
-            sys.stdout.write("memory: %s **%d / %d 行超過**\n"
-                             % (rel, lines, max_lines))
-            if not read_only:
-                event.emit("memory.over_cap", file=rel, lines=lines, cap=max_lines)
-            pending.setdefault(main_rel, []).append("inbox %d 行,上限 %d 行"
-                                                    % (lines, max_lines))
-        review = sum(1 for _, kind, _ in inbox_rows(path) if kind == "needs-review")
-        if review:
-            over += 1
-            sys.stdout.write("memory: %s %d 條 needs-review(來源票已結案;逐條:"
-                             "memory.py check-stale --read-only --file %s)\n"
-                             % (rel, review, rel))
-            pending.setdefault(main_rel, []).append("inbox %d 條 needs-review" % review)
+            event.emit("memory.pending", file=box, entries=entries)
+        pending[rel] = entries
     if pending and not read_only:
         # 查核與開票在同一把鎖裡:兩個主線同時開場,「沒有整理票」在兩邊都成立,
         # 鎖外各開一張就是兩張。
         with MemoryLock(root):
-            for rel, reasons in pending.items():
+            for rel, entries in pending.items():
                 already, role = open_consolidation(rel)
                 if already and role == CONSOLIDATOR_ROLE:
                     sys.stdout.write("memory:   %s 已經有一張開著的整理票 #%s,沒有再開\n"
@@ -999,37 +944,10 @@ def cmd_check(argv):
                     sys.stdout.write("memory:   已經有一張開著的票 #%s(role=%s)覆蓋 %s,"
                                      "沒有再開\n" % (already, role, rel))
                     continue
-                open_ticket_for(rel, reasons, sys.stdout)
+                open_ticket_for(rel, entries, sys.stdout)
     # 退出碼 1 是給 session 開頭看的:`new-session.sh` 跑這一支,紅了那個 session
-    # 就知道自己的記憶該整理了 —— **但不停工**(docs/MEMORY.md 第 1 點)。
-    return 1 if over else 0
-
-
-def add_cap_history(front, entry):
-    """`cap_history` 那一列 —— 三種既有形狀都要接得住:沒有這一格、`[]`、已經是
-    一串 `- {…}`。寫成一行 flow map(與 `docs/MEMORY.md` 的範例同形),不引入
-    YAML 函式庫(零依賴)。
-
-    `discussion:` 那一欄是 D-007 要的:上限提高的理由寫在這裡,而**支撐那個理由的
-    討論**在那個路徑上 —— 下一個想再提高的人翻得到上一次是怎麼談出來的。
-    """
-    line = ("  - {date: %s, from: %s, to: %s, by: %s, discussion: %s, reason: \"%s\"}"
-            % (entry["date"], entry["from"], entry["to"], entry["by"],
-               entry["discussion"], entry["reason"].replace('"', "'")))
-    front = front or ""
-    if re.search(r"^cap_history:\s*\[\s*\]\s*$", front, re.MULTILINE):
-        return re.sub(r"^cap_history:\s*\[\s*\]\s*$", "cap_history:\n" + line,
-                      front, count=1, flags=re.MULTILINE)
-    if re.search(r"^cap_history:\s*$", front, re.MULTILINE):
-        return re.sub(r"^cap_history:\s*$", "cap_history:\n" + line,
-                      front, count=1, flags=re.MULTILINE)
-    return front.rstrip("\n") + "\ncap_history:\n" + line + "\n"
-
-
-def set_cap(front, value):
-    if front and CAP_RE.search(front):
-        return CAP_RE.sub("cap_chars: %d" % value, front, count=1)
-    return "cap_chars: %d\n" % value + (front or "")
+    # 就知道有暫存區待整理 —— **但不停工**(docs/MEMORY.md 第 1 點)。
+    return 1 if flagged else 0
 
 
 def raw_lines(data):
@@ -1176,24 +1094,14 @@ def cmd_consolidate(argv):
         sys.stderr.write("memory: %s\n" % USAGE["consolidate"])
         return 2
     rel = argv[0]
-    new_cap = None
-    reason = ""
     by = ""
     candidate = ""
     discussions = []
     index = 1
     while index < len(argv):
         flag = argv[index]
-        if flag in ("--new-cap", "--reason", "--by", "--discussion", "--candidate") \
-                and index + 1 < len(argv):
-            if flag == "--new-cap":
-                try:
-                    new_cap = int(argv[index + 1])
-                except ValueError:
-                    return refuse("--new-cap 要一個數字")
-            elif flag == "--reason":
-                reason = argv[index + 1]
-            elif flag == "--discussion":
+        if flag in ("--by", "--discussion", "--candidate") and index + 1 < len(argv):
+            if flag == "--discussion":
                 discussions.append(argv[index + 1])
             elif flag == "--candidate":
                 candidate = argv[index + 1]
@@ -1205,11 +1113,6 @@ def cmd_consolidate(argv):
     if not [one for one in discussions if one.strip()]:
         return refuse("consolidate 要 --discussion <path> —— 整理是老師帶學生,而「討論過了」"
                       "與「沒討論就刪了」在結果檔案上長得一樣(D-007,格式見 docs/DISCUSSION.md)")
-    if new_cap is not None and not reason.strip():
-        # 提高是掙來的。沒有理由的提高,`check` 視為未整理 —— 所以這裡直接擋,
-        # 不要讓一個「看起來整理過了」的檔案存在。
-        return refuse("--new-cap 要 --reason —— 提高上限是掙來的,"
-                      "理由要寫得出「多讀的那幾百字替每個未來 session 省了什麼」(D-006)")
     root = ticket.root()
     talks = []
     for name in discussions:
@@ -1261,7 +1164,6 @@ def cmd_consolidate(argv):
         return 1
     conf = memory_config()
     suffix = conf.get("inbox_suffix") or DEFAULT_INBOX_SUFFIX
-    default_cap = int(conf.get("cap_chars") or DEFAULT_CAP)
     who = by or "+".join(models)
     inbox = inbox_path(path, suffix)
     consumed = ""
@@ -1274,11 +1176,6 @@ def cmd_consolidate(argv):
             return refuse("讀不到 %s —— %s" % (rel, exc))
         front, body = split_front_matter(text)
         before = len(body)
-        old_cap, _ = cap_of(front, default_cap)
-        cap = old_cap if new_cap is None else new_cap
-        if len(candidate_body) > cap:
-            return refuse("候選 %s 正文 %d 字元,超過上限 %d —— 還沒整理完;壓下來,或者"
-                          "--new-cap 配 --reason" % (candidate, len(candidate_body), cap))
         # 在鎖裡重算:討論是對那一刻的 inbox 做的,對不上就是有人動過前 K 行,
         # 或者這一份快照已經被上一輪消耗了。
         total, head, digest = snapshot_of(read_bytes(inbox), count)
@@ -1286,11 +1183,6 @@ def cmd_consolidate(argv):
             return refuse("inbox 的前 %d 行對不上討論檔的 source_sha256(現在 %d 行,sha256 %s)"
                           " —— 討論的不是這一份快照,重跑 `memory.py snapshot %s`"
                           % (count, total, digest, rel))
-        if new_cap is not None:
-            front = set_cap(front, new_cap)
-            front = add_cap_history(front, {
-                "date": date.today().isoformat(), "from": old_cap, "to": new_cap,
-                "by": who, "discussion": " + ".join(discussions), "reason": reason.strip()})
         out = FENCE + "\n" + front + FENCE + "\n" if front else ""
         write(path, out + candidate_body)
         if count:
@@ -1310,10 +1202,9 @@ def cmd_consolidate(argv):
     event.emit("memory.consolidated", file=rel, before=before, after=after,
                source_lines=count, source_sha256=expected,
                consumed=os.path.relpath(consumed, root) if consumed else "",
-               cap_from=old_cap, cap_to=cap, by=who, models=models,
-               discussions=discussions, candidate=candidate, note=reason.strip())
-    sys.stdout.write("memory: %s %d -> %d 字元、消耗 inbox 前 %d 行、上限 %d -> %d、討論 %s\n"
-                     % (rel, before, after, count, old_cap, cap, " + ".join(discussions)))
+               by=who, models=models, discussions=discussions, candidate=candidate)
+    sys.stdout.write("memory: %s %d -> %d 字元、消耗 inbox 前 %d 行、討論 %s\n"
+                     % (rel, before, after, count, " + ".join(discussions)))
     return 0
 
 

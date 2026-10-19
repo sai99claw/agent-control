@@ -11,9 +11,6 @@
     "discuss": "agy:gemini-3.8-flash-high"
   },
   "memory": {
-    "unit": "chars",
-    "cap_chars": 2000,
-    "raise_allowed": true,
     "applies_to": [
       "memory/model/*.md",
       "memory/role/*.md",

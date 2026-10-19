@@ -22,13 +22,13 @@
 - **事故經過** → 票與 review 歷史(`docs/review/`);記憶只留由它得出的原則,用票號當來源。
 
 **機械檢查**:`python3 scripts/memory.py lint [--file <記憶檔>]… [--base <ref>] [--json]`(唯讀;一份都沒掃到 rc 2)。rule id 五條:`path` / `line` / `call` / `flag` / `sha`;project 層放行 `path`,其餘各層五條都擋;`README.md` 是契約文件,不掃。誤判的例外寫在**同一行**、只豁免一條規則的一個逐字值:
-`<!-- memory-allow rule=<rule id> value="<逐字值>" reason="<理由>" ref="<docs/DECISIONS.md 裡找得到的編號>" -->` —— 不准萬用字元、不准整檔豁免,例外會列在輸出裡。閘門帶票跑時只對**分支改到的**記憶檔(不含 `README.md`)跑 `lint --base`:只量本分支**新增**的行(既有正文的命中歸整理票),另擋本分支讓卡從上限內推到上限外(D-042,#90);非零就擋。lint 是語法近似:抽象過的錯層它抓不到,仍由覆核者看。
+`<!-- memory-allow rule=<rule id> value="<逐字值>" reason="<理由>" ref="<docs/DECISIONS.md 裡找得到的編號>" -->` —— 不准萬用字元、不准整檔豁免,例外會列在輸出裡。閘門帶票跑時只對**分支改到的**記憶檔(不含 `README.md`)跑 `lint --base`:只量本分支**新增**的行(既有正文的命中歸整理票;卡多長不量,D-053 ⑥)(D-042,#90);非零就擋。lint 是語法近似:抽象過的錯層它抓不到,仍由覆核者看。
 `call` 那一條連 ASCII 字後面緊接的全形括號也算(例「排 land(不發頁)」):卡上在英文字與括號之間加一個中文字,或改用頓號。
 
-**容量**(程式現值;D-006 / D-013 / D-021):
-- 角色卡與模型卡主檔:正文 ≤ 2000 字元(`board/config.json` 的 `memory.cap_chars`;front matter 不算)。要提高只能經兩個模型討論、寫進該檔 front matter 的 `cap_chars` / `cap_history`(流程見 `docs/MEMORY.md`);`memory.py check` 量。
-- `.inbox.md`:非空行 ≤ 20 行(`memory.inbox_max_lines`,沒設就是 20)。
-- `memory/project/`:不設上限、`check` 不量(D-013 補註);按需讀(grep 或整份讀);專案的規則包不貼它的內容,只給一個速查入口(有 `docs/CODE-MAP.md` 指它,沒有就指 grep `memory/project/`)。
+**整理與長度**(程式現值;D-053 ⑥ / D-013 / D-021):
+- 角色卡與模型卡主檔:**不設固定字數上限**。判準只有一句:每個 session 開場都會讀，只留值得這個成本的;寫什麼、留多長由整理的 LLM 決定。`memory.py check` 每份主檔印一行 `<c> 字元 / 暫存區 <n> 條未整理`,只是報數。
+- `.inbox.md`:有一條非空行(還沒被 `consolidate` 消耗)就觸發整理 —— 主線開場的 `check` 為它的主檔開一張整理票(一份主檔至多一張開著的票);不設行數上限。
+- `memory/project/`:照舊不整理、`check` 不量(D-013 補註);按需讀(grep 或整份讀);專案的規則包不貼它的內容,只給一個速查入口(有 `docs/CODE-MAP.md` 指它,沒有就指 grep `memory/project/`)。
 - 規則包(`rules.py pack`):≤ 4096 bytes;專案端暫存區的尾巴在包裡 ≤ 600 B(D-021)。
 - 角色卡每張 ≤ 40 行:文字規矩,程式不量;超過就是把流程文件抄進來了。
 

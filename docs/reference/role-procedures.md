@@ -104,9 +104,9 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
   收進 patch,#29)。交完刪掉自己的 `work/` 與 `base/`,只留 patch 與 EVIDENCE。
 - 對真實專案根實跑 `new-session.sh` / session-hook 前,先把專案與它的 board 資料(`tickets_dir`、
   `events_file`、`reports_dir` 可能在根外)複製到 TMPDIR 再跑:`memory.py check` 在 `--no-event` 下仍會
-  emit `memory.over_cap`、還可能開整理票進專案票庫(#62)。
-- `control_harness` 沙盒 config 的 `memory.applies_to` 只有 `memory/model/*.md`:角色卡超標的案例要先把
-  `memory/role/*.md` 加進去,否則 check 不量那份檔、輸出是空的而不是紅的(#76)。
+  emit `memory.pending`、還可能開整理票進專案票庫(#62)。
+- `control_harness` 沙盒 config 的 `memory.applies_to` 只有 `memory/model/*.md`:角色卡的案例要先把
+  `memory/role/*.md` 加進去,否則 check 不列那份主檔的字元數(有 inbox 的主檔仍會列、仍會觸發,#76)。
 - 給 `control_harness` 的 `DEFAULT_CONFIG` 加預設值前先 grep `verify/` 與 `tests/` 有沒有靠「沒設就退回」的案例(#70)。
 
 ### 測試與 patch 的寫法(細節)
@@ -150,6 +150,8 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 - 上限的來源:#42 首跑 118K、#29 實測 35–118K(卡上 120K)。
 
 ## 整理者角色操作細節
+- 觸發與判準(D-053 ⑥):暫存區(`*.inbox.md`)有未整理條目,主線開場的 `memory.py check` 就開整理票;不設固定字數上限,
+  判準只有「每個 session 開場都會讀，只留值得這個成本的」,寫什麼、留多長由整理者決定。
 - 範本:`templates/dispatch-consolidator.md`(自動由 `scripts/consolidate-memory.sh` 填、`new-session.sh` 主線開場起;人工整份複製)。
 - 誰整理(#122,D-043 / D-049 ②):角色表 `consolidator` 鏈(`python3 scripts/role-models.py resolve --role consolidator`,現在只有 fable),
   `consolidate-memory.sh` 只起**一個** session、沒有雙模型互讀;票上的 `model` 與 `memory.consolidator(s)` 都不參與。
@@ -158,10 +160,10 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 - 討論檔:`discussions/<date>-memory-<模型>.md`,格式 `docs/DISCUSSION.md`;啟動端把路徑與模型記進整理票 `attempt_history`。
 - 合併(單一整理者):`python3 scripts/memory.py consolidate <檔> --candidate <候選檔> --discussion <啟動端記下的那一份>`;
   一份討論只收 `attempt_history` 有記、檔頭 model 一致的那一份。人工派(沒有啟動端紀錄)照舊要兩份不同 model:
-  `--discussion <A> --discussion <B>`。快照對不上、缺某一行的處置、候選超過上限都拒絕且不動檔(D-007 / D-013)。
+  `--discussion <A> --discussion <B>`。快照對不上、缺某一行的處置、候選有錯層內容都拒絕且不動檔(D-007 / D-013);候選多長不量(D-053 ⑥)。
 - 角色卡通用規則要改(例:卡上「單一高階模型走 worker 管線」那段):寫一行進 `memory/role/consolidator.inbox.md`,由整理流程消化;
   worker 不自改模型政策(`board/role-models.json`、`docs/ROLES.md` 模型表)。
-- 收工檢查:`python3 scripts/memory.py check`(對那一份 rc 0);整理票 `ticket.py close <票號>`。
+- 收工檢查:合併那一句 rc 0(snapshot 那 K 行已移進 `.consumed`);整理票 `ticket.py close <票號>`。
 - 分層契約與 lint:`memory/role/README.md`;`python3 scripts/memory.py lint --file <檔> --json`。
 - 討論檔目前不在 `land.sh docs` 的前綴白名單(`tickets/ docs/ memory/`),整理票的 `discussions/` 要走票的一般落地(#52)。
 

@@ -28,7 +28,7 @@ class NewSession(Sandbox):
         done = self.start("main", "fable")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         for step in ("站在哪個版本", "最近發生的事", "開著的票",
-                     "記憶有沒有超過上限", "接下來要讀的"):
+                     "記憶暫存區有沒有待整理", "接下來要讀的"):
             self.assertIn(step, done.stdout, "少跑了一段")
         self.assertIn("開著的那一張", done.stdout)
         rows = [row for row in self.events() if row["kind"] == "session.start"]
@@ -71,18 +71,32 @@ class NewSession(Sandbox):
         for noise in ("syntax error", "command not found", "command substitution"):
             self.assertNotIn(noise, done.stdout + done.stderr, "開場吐了 shell 的錯")
 
-    def test_memory_over_cap_does_not_stop_the_session(self):
-        """退出碼 1 只是讓這個 session 知道自己的記憶該整理了 —— **不停工**
-        (docs/MEMORY.md 第 1 點)。
+    def test_a_pending_inbox_does_not_stop_the_session(self):
+        """退出碼 1 只是讓這個 session 知道有暫存區待整理 —— **不停工**
+        (docs/MEMORY.md 第 1 點;#134 new_session 字樣)。
 
         **變異**:把那一行的 `|| echo …` 拿掉(讓 `set -e` 式的失敗傳出去)
         → 這一條紅。
         """
-        self.write("memory/model/opus.md", "坑" * 2500)
+        self.write("memory/model/opus.md", "短的\n")
+        self.write("memory/model/opus.inbox.md", "- 一條原則 (#1, 2026-10-19, worker@opus)\n")
         done = self.start("worker", "opus")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("不停工", done.stdout)
+        self.assertIn("4. 記憶暫存區有沒有待整理(D-053 ⑥)", done.stdout)
+        self.assertIn("new-session: (有待整理的暫存區,不停工;整理票由主線開場開,worker 不開)",
+                      done.stdout)
         self.assertIn("session.start", self.kinds())
+        self.assertNotIn("memory.pending", self.kinds())
+        self.assertEqual(self.tickets_on_disk(), [])
+
+    def test_the_main_line_opens_the_ticket_and_still_goes_on(self):
+        self.write("memory/model/opus.inbox.md", "- 一條原則 (#1, 2026-10-19, worker@opus)\n")
+        done = self.start("main", "fable")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("new-session: (有待整理的暫存區,不停工;整理票已開或沿用)", done.stdout)
+        self.assertEqual([one["subject"] for one in self.tickets_on_disk()
+                          if one.get("role") == "consolidator"],
+                         ["整理 memory/model/opus.md(暫存區 1 條未整理)"])
 
     def test_missing_arguments_is_a_usage_error_and_emits_nothing(self):
         done = self.start("main")

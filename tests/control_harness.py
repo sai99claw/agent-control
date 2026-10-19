@@ -135,8 +135,7 @@ DEFAULT_CONFIG = {
     "answers_file": "board/answers.jsonl",
     "main_branch": "main",
     "routing": {"implement": "opus"},
-    "memory": {"unit": "chars", "cap_chars": 2000, "consolidator": "fable",
-               "raise_allowed": True, "applies_to": ["memory/model/*.md"],
+    "memory": {"consolidator": "fable", "applies_to": ["memory/model/*.md"],
                "inbox_suffix": ".inbox.md"},
     "lease_seconds": {"opener": 900, "verifier": 3600, "land": 1800,
                       "worker": 7200},
@@ -513,8 +512,8 @@ class Sandbox(unittest.TestCase):
     def install_rules_sources(self):
         """`rules.py` 讀的三份:共用規矩、角色卡、模型記憶。
 
-        **只有要它們的測試才裝** —— 預設就複製進去的話,記憶上限那一組會量到這幾份,
-        而那一組問的是「超標會不會被發現」,不是「這個 repo 有幾份記憶」。
+        **只有要它們的測試才裝** —— 預設就複製進去的話,記憶整理那一組會量到這幾份(連暫存區),
+        而那一組問的是「待整理會不會被發現」,不是「這個 repo 有幾份記憶」。
         """
         shutil.copy(os.path.join(ROOT, "docs", "DISPATCH-TEMPLATE.md"),
                     os.path.join(self.repo, "docs", "DISPATCH-TEMPLATE.md"))

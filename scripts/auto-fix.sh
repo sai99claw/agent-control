@@ -685,7 +685,7 @@ if work_rows:
     out.append("**歸因到交件(worker)**:")
     out += ["- %s" % line for line in work_rows]
     out += ["", "交件本身不合:拿掉 protected_paths 的改動、重生 code-map、"
-            "把記憶卡新增的錯層內容或超出上限的部分改掉 —— 在分支 %s 上修。" % branch, ""]
+            "把記憶卡新增的錯層內容改掉 —— 在分支 %s 上修。" % branch, ""]
 out.append("接回(patch 留在分支 %s 上;**不要轉 Ready** —— 那會從頭派第 1 輪):" % branch)
 step = 1
 if ticket_rows:

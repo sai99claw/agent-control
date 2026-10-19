@@ -278,7 +278,7 @@ def units(text):
     一整塊 code。front matter、標題、空行不算 —— 它們是固定成本,不是正文。"""
     lines = text.splitlines()
     # 同步檔頭(`sync-to-project.sh` 寫在第 1 行的 `<!-- … -->`)壓在 front matter 上面:
-    # 不先跳過,專案端每張卡的第一個單位是那行註解、第二個是 cap_history(#110)。
+    # 不先跳過,專案端每張卡的第一個單位是那行註解、第二個是 front matter 的第一格(#110)。
     while lines and (not lines[0].strip() or COMMENT_LINE.match(lines[0])):
         lines = lines[1:]
     if lines and lines[0].strip() == "---":

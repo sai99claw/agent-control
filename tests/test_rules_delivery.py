@@ -264,7 +264,7 @@ class BrokenSourcesStopThePack(RulesBox):
         """四問:守「指定的模型卡只剩 front matter 與標題 = 缺項」;回歸是 #74 的模型卡
         被擠成只有標題;舊測試沒有這一格;不加測試專用 API。"""
         self.write(os.path.join("memory", "model", "opus.md"),
-                   "---\ncap_chars: 2000\ncap_history: []\n---\n# Opus 的行為準則\n\n"
+                   "---\nowner: opus\n---\n# Opus 的行為準則\n\n"
                    "- `docs/DISPATCH-TEMPLATE.md`\n來源:整理票 #12\n")
         self.assert_refused(self.rules("pack", "worker", "--model", "opus"),
                             "memory/model/opus.md", "沒有正文")
