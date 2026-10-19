@@ -45,9 +45,9 @@
   "model": "sonnet",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "fe0edb87cea058d9097b4065d200bb6fa5139246",
-  "state": "InReview",
-  "state_version": 10,
+  "base_sha": "1f1b0b10edf7e50ba4e575f7114e3d71b1c4ebe2",
+  "state": "Done",
+  "state_version": 24,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -75,7 +75,7 @@
     }
   ],
   "branch": "t148",
-  "patch_ref": "../agent-control-wt/fix-t148/round1/patch-round1.diff",
+  "patch_ref": "../agent-control-wt/verify-t148/landfix/patch-verify.diff",
   "cost": [
     {
       "role": "worker",
@@ -127,13 +127,47 @@
       "note": "沒帶 --from-envelope",
       "effort": null,
       "at": "2026-10-19T20:33:36+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2151,
+      "outcome": "fail",
+      "run_id": "20261019-210219-48870",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-19T21:38:10+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2306,
+      "outcome": "pass",
+      "run_id": "20261019-223810-84234",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-19T23:16:37+08:00"
     }
   ],
   "gate": {
     "rc": 0,
-    "sha": "1583a46b30956d8f051b1d2aa00c70dba09996fc",
-    "run_id": "20261019-120817-76585",
-    "at": "2026-10-19T12:23:52+08:00"
+    "sha": "0fc56c2fda71bda507435cd2a292f9f6d0ba36cc",
+    "run_id": "20261019-222345-15290",
+    "at": "2026-10-19T22:38:09+08:00"
   },
   "repair_round": 1,
   "review_request": {
@@ -148,11 +182,59 @@
   "review": {
     "verdict": "pass",
     "by": "reviewer@opus",
-    "sha": "1583a46b30956d8f051b1d2aa00c70dba09996fc",
+    "sha": "e9e842d1fef0f03b0e6ad4e0a3019cbfca9d4083",
     "note": "reports/t148/20261019-120817-76585/REVIEW.md",
-    "at": "2026-10-19T12:25:25+08:00",
+    "at": "2026-10-19T23:16:37+08:00",
     "state_version": 9,
     "patch_id": "6ba72af7b680c5f4388658487ff967d3b52cec0b",
     "face": "e23de194a0773554985bd299512c5ad9c6dcb4c1fed1802930db19f9451a264e"
+  },
+  "landed_sha": "e9e842d1fef0f03b0e6ad4e0a3019cbfca9d4083",
+  "cost_total": {
+    "calendar_seconds": 46476,
+    "wall_seconds": 4799,
+    "runs": 5,
+    "worker_rounds": 1,
+    "objections": 0,
+    "by_role": {
+      "worker": {
+        "runs": 1,
+        "wall_seconds": 248,
+        "tokens_in": 44,
+        "tokens_out": 16666,
+        "cache_write": 78550,
+        "cache_read": 1545943,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 1
+        }
+      },
+      "reviewer": {
+        "runs": 1,
+        "wall_seconds": 90,
+        "tokens_in": 14,
+        "tokens_out": 6508,
+        "cache_write": 47867,
+        "cache_read": 314134,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 1
+        }
+      },
+      "land": {
+        "runs": 3,
+        "wall_seconds": 4461,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 3,
+        "outcomes": {
+          "fail": 2,
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-19T23:16:37+08:00"
   }
 }

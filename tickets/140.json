@@ -43,9 +43,9 @@
   "model": "sonnet",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "fe0edb87cea058d9097b4065d200bb6fa5139246",
+  "base_sha": "1f1b0b10edf7e50ba4e575f7114e3d71b1c4ebe2",
   "state": "InReview",
-  "state_version": 10,
+  "state_version": 18,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -72,7 +72,7 @@
     }
   ],
   "branch": "t140",
-  "patch_ref": "../agent-control-wt/fix-t140/round1/patch-round1.diff",
+  "patch_ref": "../agent-control-wt/fix-t140/rebuild/patch.diff",
   "cost": [
     {
       "role": "worker",
@@ -124,13 +124,64 @@
       "note": "沒帶 --from-envelope",
       "effort": null,
       "at": "2026-10-19T20:33:36+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "sonnet",
+      "tokens_in": 8,
+      "tokens_out": 2611,
+      "cache_write": 31348,
+      "cache_read": 133867,
+      "wall_seconds": 48,
+      "outcome": "objection",
+      "run_id": "20261019-210219-48870",
+      "session_id": "ec022f13-e096-47bf-bfae-f180a137aa24",
+      "by": "auto-fix.sh",
+      "note": "batch 20261019-213718-27583 #140 #148",
+      "effort": "medium",
+      "at": "2026-10-19T21:38:10+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2151,
+      "outcome": "fail",
+      "run_id": "20261019-210219-48870",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-19T21:38:10+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2306,
+      "outcome": "pass",
+      "run_id": "20261019-223810-84234",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-19T23:16:36+08:00"
     }
   ],
   "gate": {
     "rc": 0,
-    "sha": "93bff57cbaa550b6d970cd20b45df4717eefccad",
-    "run_id": "20261019-115526-33129",
-    "at": "2026-10-19T12:00:53+08:00"
+    "sha": "d39b69908219d0a60f0626b3f3a1b64d8ebb1e2f",
+    "run_id": "20261019-204827-69756",
+    "at": "2026-10-19T20:49:44+08:00"
   },
   "repair_round": 1,
   "review_request": {
@@ -145,11 +196,12 @@
   "review": {
     "verdict": "pass",
     "by": "reviewer@opus",
-    "sha": "93bff57cbaa550b6d970cd20b45df4717eefccad",
+    "sha": "e9e842d1fef0f03b0e6ad4e0a3019cbfca9d4083",
     "note": "reports/t140/20261019-115526-33129/REVIEW.md",
-    "at": "2026-10-19T12:03:56+08:00",
+    "at": "2026-10-19T23:16:37+08:00",
     "state_version": 9,
     "patch_id": "042a7d728b87aca9ebc0cc56b7f3f9af7a26ddce",
     "face": "3db3f25bbd116a563acc2ce1c9a03487d9691603954378017aa9732fed4130bc"
-  }
+  },
+  "landed_sha": "e9e842d1fef0f03b0e6ad4e0a3019cbfca9d4083"
 }
