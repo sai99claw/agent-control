@@ -41,16 +41,67 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "91a5663e67df6df4c28f365c5bbdaaade2ae15ab",
-  "state": "Ready",
-  "state_version": 15,
+  "base_sha": "94d00c6de059144556f6a12ae6b0192d1fe89626",
+  "state": "Done",
+  "state_version": 34,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
-    "tags": [],
-    "run": "",
-    "notes": ""
+    "files": [
+      "verify/dispatch/test_ticket_132.py"
+    ],
+    "tags": [
+      "midrun-fallback"
+    ],
+    "run": "python3 scripts/verify.py --tag midrun-fallback",
+    "notes": "Sandbox via tests/test_auto_fix_codex.FallbackBase (verifier), tests/test_review.ReviewBase (reviewer), tests/test_auto_fix.AutoFixBase + make_batch (batch; BatchFix setUp/run_batch re-stated, not inherited, so its own test_ methods are not collected twice). Chain per role = [codex:gpt-6-astra high, fable medium]: next candidate deliberately not opus and a different effort, so a hard-coded opus or carried-over effort is red. Quota evidence = top-level provider JSON envelope; literal 429 text must not switch. Fake codex leaves a marker in $AC_WORK; the next candidate records whether it is still there (copy not deleted). B5 uses an in-test fake consumer reading agent.recovery_needed (model/effort/copy) + dispatch-verifier-round1.md (#120 not landed). B4 cases are negative guards and are green on base by nature. Clear AC_ROOT/AC_TICKETS_DIR/AC_CONTROL_DIR. ~45 s for 11 cases. Not covered: whole-chain-exhausted page for verifier/reviewer/batch (objective text, not an acceptance item).",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-18T22:32:08+08:00",
+      "files": [
+        "verify/dispatch/test_ticket_132.py"
+      ],
+      "base_ref": "df4bb66d8d9ca2e633b60c8ce011a554f843e940",
+      "base_sha": "df4bb66d8d9ca2e633b60c8ce011a554f843e940",
+      "candidate": "../agent-control-wt/t132",
+      "candidate_sha": "a82f920f4ecf036052b1cc6594ab387fd8ad73e0",
+      "baseline": {
+        "red": [
+          "verify.dispatch.test_ticket_132.B1TheVerifierTakesTheNextCandidate.test_b1_a_quota_verifier_restarts_fable_in_the_same_copy",
+          "verify.dispatch.test_ticket_132.B2TheReviewerTakesTheNextCandidate.test_b2_a_quota_reviewer_restarts_fable_under_the_receipt",
+          "verify.dispatch.test_ticket_132.B2TheReviewerTakesTheNextCandidate.test_b2_the_next_candidate_still_meets_the_attempt_check",
+          "verify.dispatch.test_ticket_132.B3TheBatchWorkerTakesTheNextCandidate.test_b3_a_quota_batch_worker_restarts_fable_and_leaves_ticket_2",
+          "verify.dispatch.test_ticket_132.B5ControllerOwnerKeepsTheLaunchCount.test_b5_controller_and_local_owner_start_the_same_number_of_agents"
+        ],
+        "red_lines": [
+          "verify.dispatch.test_ticket_132.B1TheVerifierTakesTheNextCandidate.test_b1_a_quota_verifier_restarts_fable_in_the_same_copy: AssertionError: Lists differ: ['codex'] != ['codex', 'agent']",
+          "verify.dispatch.test_ticket_132.B2TheReviewerTakesTheNextCandidate.test_b2_a_quota_reviewer_restarts_fable_under_the_receipt: AssertionError: Lists differ: ['codex'] != ['codex', 'agent']",
+          "verify.dispatch.test_ticket_132.B2TheReviewerTakesTheNextCandidate.test_b2_the_next_candidate_still_meets_the_attempt_check: AssertionError: Lists differ: ['codex'] != ['codex', 'agent']",
+          "verify.dispatch.test_ticket_132.B3TheBatchWorkerTakesTheNextCandidate.test_b3_a_quota_batch_worker_restarts_fable_and_leaves_ticket_2: AssertionError: Lists differ: ['codex'] != ['codex', 'agent']",
+          "verify.dispatch.test_ticket_132.B5ControllerOwnerKeepsTheLaunchCount.test_b5_controller_and_local_owner_start_the_same_number_of_agents: AssertionError: 0 != 1 : []"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 11,
+        "skipped": 0,
+        "log": "../agent-control-wt/t132/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 11,
+        "skipped": 0,
+        "log": "../agent-control-wt/t132/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "complexity": "complex",
   "needs_verifier": true,
@@ -74,5 +125,196 @@
       "path": "tests/test_auto_fix_fallback_midrun.py",
       "contains": "AC_RECOVERY_OWNER"
     }
-  ]
+  ],
+  "cost": [
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "codex:gpt-5.6-sol",
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 430,
+      "outcome": "error",
+      "run_id": "20261018-195854-91800",
+      "session_id": null,
+      "by": "auto-fix.sh",
+      "note": "reports/t132/20261018-195854-91800/verifier-round1.log 裡沒有 JSON 信封",
+      "effort": "high",
+      "at": "2026-10-18T20:06:08+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "codex:gpt-5.6-sol",
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 430,
+      "outcome": "error",
+      "run_id": "20261018-195854-91800",
+      "session_id": null,
+      "by": "auto-fix.sh",
+      "note": "quota_exhausted:provider 錯誤信封:You have hit your usage limit (429).;reports/t132/20261018-195854-91800/worker-round1.log 裡沒有 JSON 信封",
+      "effort": "high",
+      "at": "2026-10-18T20:06:08+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 168,
+      "tokens_out": 109048,
+      "cache_write": 278896,
+      "cache_read": 16736636,
+      "wall_seconds": 2620,
+      "outcome": "handed-in",
+      "run_id": "20261018-195854-91800",
+      "session_id": "135c5616-4ba5-4649-82f2-67a18f341d12",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-18T20:49:51+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 22,
+      "tokens_out": 8096,
+      "cache_write": 76308,
+      "cache_read": 657238,
+      "wall_seconds": 103,
+      "outcome": "pass",
+      "run_id": "20261018-221310-40277",
+      "session_id": "146e88e5-107e-4375-b20b-7d40ac2ce3da",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-18T22:33:55+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 24,
+      "tokens_out": 8552,
+      "cache_write": 66201,
+      "cache_read": 706102,
+      "wall_seconds": 114,
+      "outcome": "pass",
+      "run_id": "20261018-221310-40277",
+      "session_id": "f3adbca6-bd06-43ad-80f4-7b137d38fc68",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-18T22:35:52+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2055,
+      "outcome": "pass",
+      "run_id": "20261018-223622-40182",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-18T23:10:37+08:00"
+    }
+  ],
+  "owner": "main",
+  "branch": "t132",
+  "patch_ref": "reports/t132/20261018-195854-91800/patch-round1.diff",
+  "gate": {
+    "rc": 0,
+    "sha": "a82f920f4ecf036052b1cc6594ab387fd8ad73e0",
+    "run_id": "20261018-221310-40277",
+    "at": "2026-10-18T22:32:09+08:00"
+  },
+  "review_request": {
+    "run_id": "20261018-221310-40277",
+    "owner_id": "review.sh",
+    "attempt": 0,
+    "state_version": 30,
+    "face": "9f3d197ec95b1c395272e9d9e153b8e71dd5f3d6f9bd6787ec6b0a549e3f57d0",
+    "patch_id": "702528950ce161ecdfe507221fdef6328fdea881",
+    "sha": "a82f920f4ecf036052b1cc6594ab387fd8ad73e0"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "a97df9912bcf87dddaff581eee686b77eaaf47c8",
+    "note": "reports/t132/20261018-221310-40277/REVIEW.md",
+    "at": "2026-10-18T23:10:38+08:00",
+    "state_version": 34,
+    "patch_id": "702528950ce161ecdfe507221fdef6328fdea881",
+    "face": "9f3d197ec95b1c395272e9d9e153b8e71dd5f3d6f9bd6787ec6b0a549e3f57d0"
+  },
+  "cost_total": {
+    "calendar_seconds": 36810,
+    "wall_seconds": 5752,
+    "runs": 6,
+    "worker_rounds": 1,
+    "objections": 0,
+    "by_role": {
+      "verifier": {
+        "runs": 1,
+        "wall_seconds": 430,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "error": 1
+        }
+      },
+      "worker": {
+        "runs": 2,
+        "wall_seconds": 3050,
+        "tokens_in": 168,
+        "tokens_out": 109048,
+        "cache_write": 278896,
+        "cache_read": 16736636,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "error": 1,
+          "handed-in": 1
+        }
+      },
+      "reviewer": {
+        "runs": 2,
+        "wall_seconds": 217,
+        "tokens_in": 46,
+        "tokens_out": 16648,
+        "cache_write": 142509,
+        "cache_read": 1363340,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 2
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 2055,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-18T23:10:38+08:00"
+  }
 }

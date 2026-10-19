@@ -26,8 +26,8 @@
       "condition": "landed"
     },
     {
-      "id": "122",
-      "condition": "stacked:base = t122 分支頭"
+      "id": "133",
+      "condition": "stacked:base = t133 分支頭；t133 的 verify/dispatch/test_ticket_133.py:62 寫死家目錄路徑（test_no_project_names 紅），須由 #133 驗證者或主線在 t133 分支修掉，非 #104 worker 範圍"
     }
   ],
   "allowed_write_paths": [
@@ -49,16 +49,73 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "ba84c88da750b0e03b087b65f2f3e3d90d990045",
-  "state": "Ready",
-  "state_version": 32,
+  "base_sha": "8ffc1e334861390d484b31d9f393d360f50d8ae4",
+  "state": "Blocked",
+  "state_version": 68,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
+    "files": [
+      "tests/test_ticket_104_verify.py"
+    ],
     "tags": [],
-    "run": "",
-    "notes": ""
+    "run": "env -u AC_ROOT -u AC_TICKETS_DIR -u AC_CONTROL_DIR python3 -m unittest -v tests.test_ticket_104_verify",
+    "notes": "Uses fake providers and disposable control roots only. No real LLM or live ticket store. This ticket intentionally has no verify tag fragment.",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-19T07:02:18+08:00",
+      "files": [
+        "tests/test_ticket_104_verify.py"
+      ],
+      "base_ref": "8ffc1e334861390d484b31d9f393d360f50d8ae4",
+      "base_sha": "8ffc1e334861390d484b31d9f393d360f50d8ae4",
+      "candidate": "../agent-control-wt/t104",
+      "candidate_sha": "86920631324bd6eb80c53e1e593f923d831a1b07",
+      "baseline": {
+        "red": [
+          "tests.test_ticket_104_verify.Ticket104Verifier.test_a1_only_a_note_with_a_patch_that_keeps_acceptance_is_non_blocking",
+          "tests.test_ticket_104_verify.Ticket104Verifier.test_a2_apply_records_a_qualified_note_once_without_rc6_and_preserves_real_objections",
+          "tests.test_ticket_104_verify.Ticket104Verifier.test_a3_review_replies_are_complete_unique_valid_and_drive_each_disposition",
+          "tests.test_ticket_104_verify.Ticket104Verifier.test_a3_review_replies_are_complete_unique_valid_and_drive_each_disposition",
+          "tests.test_ticket_104_verify.Ticket104Verifier.test_a3_review_replies_are_complete_unique_valid_and_drive_each_disposition",
+          "tests.test_ticket_104_verify.Ticket104Verifier.test_a3_review_replies_are_complete_unique_valid_and_drive_each_disposition",
+          "tests.test_ticket_104_verify.Ticket104Verifier.test_a3_review_replies_are_complete_unique_valid_and_drive_each_disposition",
+          "tests.test_ticket_104_verify.Ticket104Verifier.test_a4_review_and_note_dispositions_share_one_cas_and_unresolved_notes_block_land",
+          "tests.test_ticket_104_verify.Ticket104Verifier.test_a5_main_can_overrule_an_accepted_note_with_version_guards_and_no_done_page"
+        ],
+        "red_lines": [
+          "tests.test_ticket_104_verify.Ticket104Verifier.test_a1_only_a_note_with_a_patch_that_keeps_acceptance_is_non_blocking: AssertionError: Tuples differ: ('ticket-wrong', None) != ('note', False)",
+          "tests.test_ticket_104_verify.Ticket104Verifier.test_a2_apply_records_a_qualified_note_once_without_rc6_and_preserves_real_objections: AssertionError: 6 != 0 : apply: 票 #1  patch note.diff  sha256 5b39214aed…",
+          "tests.test_ticket_104_verify.Ticket104Verifier.test_a3_review_replies_are_complete_unique_valid_and_drive_each_disposition: AssertionError: 0 != 3 : review: #1 派覆核 —— sh /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmp9jrgkt3l/fake-reviewer.sh --model fixture-model(cwd /private/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmp9jrgkt3l/wt/t1,分支 t1 @ 8447bdd7f05e,派工文 reports/t1/20261019-070143-6119/dispatch-reviewer.md)",
+          "tests.test_ticket_104_verify.Ticket104Verifier.test_a3_review_replies_are_complete_unique_valid_and_drive_each_disposition: AssertionError: 0 != 3 : review: #1 派覆核 —— sh /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmp_mtch2k5/fake-reviewer.sh --model fixture-model(cwd /private/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmp_mtch2k5/wt/t1,分支 t1 @ 19be8587e2b5,派工文 reports/t1/20261019-070144-6228/dispatch-reviewer.md)",
+          "tests.test_ticket_104_verify.Ticket104Verifier.test_a3_review_replies_are_complete_unique_valid_and_drive_each_disposition: AssertionError: 0 != 3 : review: #1 派覆核 —— sh /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmp2y7iiafn/fake-reviewer.sh --model fixture-model(cwd /private/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmp2y7iiafn/wt/t1,分支 t1 @ c830886fd250,派工文 reports/t1/20261019-070145-6336/dispatch-reviewer.md)",
+          "tests.test_ticket_104_verify.Ticket104Verifier.test_a3_review_replies_are_complete_unique_valid_and_drive_each_disposition: AssertionError: 0 != 3 : review: #1 派覆核 —— sh /var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpl1f9xpgy/fake-reviewer.sh --model fixture-model(cwd /private/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpl1f9xpgy/wt/t1,分支 t1 @ 1728595ceb8d,派工文 reports/t1/20261019-070146-6443/dispatch-reviewer.md)",
+          "tests.test_ticket_104_verify.Ticket104Verifier.test_a3_review_replies_are_complete_unique_valid_and_drive_each_disposition: AssertionError: Lists differ: ['', ''] != ['accepted', 'accepted']",
+          "tests.test_ticket_104_verify.Ticket104Verifier.test_a4_review_and_note_dispositions_share_one_cas_and_unresolved_notes_block_land: AssertionError: [] is not true : land/close 的共用守衛必須擋未處置 note",
+          "tests.test_ticket_104_verify.Ticket104Verifier.test_a5_main_can_overrule_an_accepted_note_with_version_guards_and_no_done_page: AssertionError: 2 != 0 : ticket: 不認得 'objection-overrule'(agent-command / close / cost / create / freeze / import / inbox / lint / list / objection / result / review-receive / review-request / round / set / show / verify)"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 5,
+        "skipped": 0,
+        "log": "../agent-control-wt/t104/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 5,
+        "skipped": 0,
+        "log": "../agent-control-wt/t104/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "test_plan": "T1 note+patch+原驗收綠→單筆 note、無 opener、自動繼續；note 無 patch／要求改產品→decision；apply 不再對合格 note rc=6。\nT2 假 reviewer 少 index、重 index、disagree、全 agree、延遲舊回報五組；核對 disposition 與 review 一起 CAS。\nT3 overrule 前後跑既有 land 守衛夾具；M1 有 patch 一律降級使 A1 紅；M2 漏 note 仍 pass 使 A3 紅；M3 Controller 自寫 accepted 使 A2 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例置於 tests/test_ticket_104_verify.py，不列入 worker 的 allowed_write_paths；由驗證者設定 verify.files/run，verify.tags=[]（A 的 tests/ 案例不冒用未登記的 verify 標籤）。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
   "outline": "本票只負責反駁與非阻擋註記分流，覆核逐條回應。前置：#98、#121。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。\nReady 前檢查(開題者 2026-10-18,讀 main cf6b991 + t121):F 在 —— ticket.py 無 objection-overrule、無 objection_replies;OBJECTION 只認 ticket-wrong|test_defect|blocking(t121 auto-fix 三處派工文與 ticket.py OBJECTION_CATEGORIES),沒有 note;apply.sh 對反駁一律 rc=6。model 改 opus。\n串行疊加(主線 2026-10-18 改,取代平行):順序 #131 → #132 → #122 → #104 → #106,一次一張;每張的 base = 前一張的分支頭(未落地),做完數張後一次全套、一次多票 land。理由:#132 的執行中換候選要用 #131 改過的 resolve(A10)與 agy classify;#122 的開題者/整理者選路同走 resolve,接在 #132 後;#104 改 triage_objection 後段與 review.sh 判讀,疊在 #122(triage 開頭)與 #132(review.sh)之上;#106 改 Ready 判準放最後,不在鏈中途改開票規則。覆核:分支相對 main 的 diff 含前序票,只審 `git diff <base_sha>..t<本票>` 那段。",
@@ -86,5 +143,259 @@
     "D-028",
     "D-031",
     "D-050"
-  ]
+  ],
+  "cost": [
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "codex:gpt-5.6-sol",
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2911,
+      "outcome": "handed-in",
+      "run_id": "20261019-022503-90307",
+      "session_id": null,
+      "by": "auto-fix.sh",
+      "note": "reports/t104/20261019-022503-90307/verifier-round1.log 裡沒有 JSON 信封",
+      "effort": "high",
+      "at": "2026-10-19T03:13:38+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 186,
+      "tokens_out": 111610,
+      "cache_write": 275152,
+      "cache_read": 17459101,
+      "wall_seconds": 2911,
+      "outcome": "handed-in",
+      "run_id": "20261019-022503-90307",
+      "session_id": "94a8997c-44e3-4ea0-b7b5-86875099109b",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-19T03:13:45+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 32,
+      "tokens_out": 11855,
+      "cache_write": 58107,
+      "cache_read": 864812,
+      "wall_seconds": 325,
+      "outcome": "objection",
+      "run_id": "20261019-031346-44798",
+      "session_id": "285402e1-65f8-4a5d-819b-b48c70fb2c30",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-19T03:37:23+08:00"
+    },
+    {
+      "role": "opener",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 18,
+      "tokens_out": 4271,
+      "cache_write": 42684,
+      "cache_read": 269122,
+      "wall_seconds": 61,
+      "outcome": "accepted",
+      "run_id": "20261019-031346-44798",
+      "session_id": "b270b75a-3a4f-47b6-98d7-7789a8f8f9e9",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-19T03:41:09+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 48,
+      "tokens_out": 16006,
+      "cache_write": 66498,
+      "cache_read": 1455943,
+      "wall_seconds": 164,
+      "outcome": "handed-in",
+      "run_id": "20261019-031346-44798",
+      "session_id": "285402e1-65f8-4a5d-819b-b48c70fb2c30",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-19T03:41:11+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 3,
+      "model": "opus",
+      "tokens_in": 14,
+      "tokens_out": 6267,
+      "cache_write": 39792,
+      "cache_read": 296120,
+      "wall_seconds": 203,
+      "outcome": "apply-failed",
+      "run_id": "20261019-034112-67271",
+      "session_id": "814aa70e-fa59-4c39-b171-03505a5bfee0",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-19T04:03:21+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 28,
+      "tokens_out": 12058,
+      "cache_write": 99299,
+      "cache_read": 979558,
+      "wall_seconds": 178,
+      "outcome": "pass",
+      "run_id": "20261019-051021-45902",
+      "session_id": "3d639f9a-04f5-4619-b1c7-e9f0016492ea",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-19T05:31:58+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 26,
+      "tokens_out": 10527,
+      "cache_write": 73160,
+      "cache_read": 842311,
+      "wall_seconds": 121,
+      "outcome": "pass",
+      "run_id": "20261019-051021-45902",
+      "session_id": "22996024-66bd-4404-95f0-7ce661b8699e",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-19T05:34:03+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2229,
+      "outcome": "fail",
+      "run_id": "20261019-055441-69113",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-19T06:31:50+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 32,
+      "tokens_out": 11307,
+      "cache_write": 83200,
+      "cache_read": 960113,
+      "wall_seconds": 172,
+      "outcome": "pass",
+      "run_id": "20261019-064301-1838",
+      "session_id": "4b5cbcb4-4f8b-4fc1-94a7-661347faff6d",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-19T07:05:14+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 16,
+      "tokens_out": 7084,
+      "cache_write": 43961,
+      "cache_read": 370487,
+      "wall_seconds": 102,
+      "outcome": "pass",
+      "run_id": "20261019-064301-1838",
+      "session_id": "1967cded-90fc-415d-8db8-c70b3163a510",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-19T07:07:00+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2428,
+      "outcome": "fail",
+      "run_id": "20261019-073437-35168",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-19T08:15:05+08:00"
+    }
+  ],
+  "branch": "t104",
+  "patch_ref": "reports/t104/batchfix2-20261019/patch.diff",
+  "gate": {
+    "rc": 0,
+    "sha": "86920631324bd6eb80c53e1e593f923d831a1b07",
+    "run_id": "20261019-064301-1838",
+    "at": "2026-10-19T07:02:18+08:00"
+  },
+  "repair_round": 2,
+  "objections": [
+    {
+      "category": "blocking",
+      "body": "紅榜的 test_no_project_names 紅在 verify/dispatch/test_ticket_133.py:62(寫死家目錄路徑),基底 8ffc1e3 就有、在驗證者的 verify 目錄,worker 不准寫,下一輪 worker 也修不了,要主線或 #133 的驗證者處置",
+      "evidence": "../agent-control-wt/fix-t104/round2/EVIDENCE-round2-objection.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "",
+      "triage": {
+        "verdict": "accepted",
+        "reason": "test_no_project_names red comes from verify/dispatch/test_ticket_133.py:62 on the stacked t133 base, not from the #104 patch, and only #133's verifier or mainline may fix it",
+        "round": 2,
+        "by": "auto-fix"
+      }
+    }
+  ],
+  "review_request": {
+    "run_id": "20261019-064301-1838",
+    "owner_id": "review.sh",
+    "attempt": 0,
+    "state_version": 64,
+    "face": "5dd9d7c6654504c0c5ee7ab34ebcfc6c6e8467f6dba0c460cf797384b25a35c4",
+    "patch_id": "93e680bac5c8a07e477f549410ecb5a807e9fc36",
+    "sha": "86920631324bd6eb80c53e1e593f923d831a1b07"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "86920631324bd6eb80c53e1e593f923d831a1b07",
+    "note": "reports/t104/20261019-064301-1838/REVIEW.md",
+    "at": "2026-10-19T07:07:00+08:00",
+    "state_version": 65,
+    "patch_id": "93e680bac5c8a07e477f549410ecb5a807e9fc36",
+    "face": "5dd9d7c6654504c0c5ee7ab34ebcfc6c6e8467f6dba0c460cf797384b25a35c4"
+  },
+  "frozen": {
+    "reason": "D-053 撤出:屬 VISION「明確不是我要的」①驗證層層疊加",
+    "criterion": "減法稽核交件、使用者在刪除/降級/保留清單裁定這一項之後"
+  }
 }
