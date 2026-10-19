@@ -1,0 +1,116 @@
+{
+  "id": "143",
+  "subject": "單一狀態:刪 metrics.py、收件匣 index/acked、ticket.state / ticket.cost / inbox.posted 鏡像事件與「主線每個動作要發事件」;看板改讀票 JSON 顯示 VISION 四個指標(D-054 Q5)",
+  "created": "2026-10-19T10:22:00+08:00",
+  "objective": "VISION「明確不是我要的 ③」與「看板與統計」:看板讀流程本來就留下的東西,一份狀態不是好幾份對帳。D-054 Q5 條件:刪 metrics.py 與 index.jsonl 跟「看板改讀票 JSON」同一張;看板要能從票 JSON 顯示四個指標;刪 ticket.state 事件前先查清沒有東西讀狀態轉換歷史。查清結果(讀碼,寫在 outline):生產碼沒有任何讀者重建 ticket.state 歷史,只有測試用它當探針 —— 一併改成讀票 JSON。本票:(1) 刪 scripts/metrics.py、tests/test_metrics.py、verify/metrics/、board.py 對 metrics 的呼叫與欄位;(2) 刪 reports/inbox/index.jsonl 與 acked.jsonl:inbox.py 的 publish 只寫頁、`ack` 把頁移到 reports/inbox/acked/、list / show / 看板讀目錄;rules.py post_decision 的去重改查兩個目錄的檔名指紋;new-session.sh 收件段改讀目錄;(3) 刪三種鏡像事件:ticket.py 不再對每次 set / cost / baseline 發 ticket.state 與 ticket.cost,inbox.py 不發 inbox.posted;event.py 登記表拿掉三種;land.* / agent.* / ticket.attempt.* / session.* / memory.* / review.* / decision.* 事件照舊(#115 守衛與看板時間線靠它們);(4) 刪規則原文「主線的每個動作要發事件」(CLAUDE.md:16-17、README.md:84、docs/SESSION-START.md:5、:52-62、docs/WORKFLOW.md:65、event.py 檔頭);(5) 看板第 ① 段從票 JSON 畫 VISION 四個指標:每張落地票的 token 與時間(cost_total / cost[] 加總;缺 → 未知)、一次就過測試的比例(Done 票中 worker 最大 round = 1 的比例;沒有 cost 列的票不計、全無 → 未知)、每張票需要我介入幾次(新格 `interventions`:ticket.py 在同一次存檔裡,每當 state 轉 Blocked / NeedsDecision 且 owner=main 就 +1;舊票沒這格 → 未知)、等我處理的事積了多少(state 為 NeedsDecision 或 Blocked 且 owner=main 的票數 + reports/inbox/ 未 ack 的頁數);拿不到的顯示「未知」不顯示 0。回答鈕留著。\nD-053 ④:改善 VISION「看板與統計」三條原話與「明確不是我要的 ③」;指標 = 看板本身第一次顯示四個指標、每張票需要我介入幾次(對帳不一致 0 筆 = 純複本,刪了少一份要維護)。拿掉的關卡:主線「每個動作要發事件」的規矩、收件匣 index 對帳。本票不新增事件種類、不新增檢查;`interventions` 是在既有 set 的同一次存檔多記一個數字,不是關卡。",
+  "acceptance": [
+    "grep 0:`git grep -nE 'metrics\\.py|metrics\\.collect|index\\.jsonl|acked\\.jsonl|acked_names|inbox\\.posted|ticket\\.state|ticket\\.cost\\b|每個動作要發事件|每個動作都是控制台上的一筆事件' -- scripts board templates tests verify docs/WORKFLOW.md docs/ROLES.md docs/DISPATCH-TEMPLATE.md docs/SESSION-START.md docs/reference docs/DESIGN.md docs/FLOW.html docs/REHEARSAL.md docs/MEMORY.md tickets/SCHEMA.md README.md CLAUDE.md AGENTS.md memory/role/*.md code-map/catalog.json` 輸出 0 行(tickets/*.json、*.inbox.md、docs/DECISIONS.md、docs/HANDOFF.md、docs/TODO.md、docs/review/**、docs/DESIGN-MAIN-TOUCHPOINTS.md 不算);scripts/metrics.py、tests/test_metrics.py、verify/metrics/ 刪除;event.py 登記表少三種、不多任何一種",
+    "行為(看板):沙盒三張票 —— A 票 Done 帶 cost_total 與 worker round 1、B 票 Done 帶 cost[] worker round 2、C 票 Blocked owner=main 沒有 cost —— `board.py` 的頁面與 /api/state 對 A 顯示 token 與 wall 秒數、對 C 顯示「未知」(不是 0);一次就過比例 = 1/2;C 的 interventions 顯示「未知」(舊票沒這格),經 `ticket.py set C state Blocked`(owner main)一次後顯示 1;等我處理 = C 的 1 張 + reports/inbox/ 未 ack 頁數;回答鈕(/api/answer)照現狀能存一筆",
+    "行為(收件匣):`inbox.py post` 只寫頁、不寫 index、不發事件;`inbox.py ack <頁>` 之後該頁不在待處理清單、檔在 reports/inbox/acked/;rules.py 同一指紋的 decision 頁第二次不重貼;`new-session.sh` 收件段列的是目錄裡未 ack 的頁",
+    "行為(事件):`ticket.py set` / `cost` / verify-case.py 寫 baseline 之後 events.jsonl 不多任何一筆;`ticket.py close` 的 ticket.closed、land.sh 的 land.*、auto-fix 的 ticket.attempt.* 與 agent.* 照發,#115 守衛的 land 歸因案例(tests/test_auto_fix.py :3941-4202 附近)照綠;既有測試用 ticket.state 當探針的(清單在 test_plan)改讀票 JSON",
+    "既有全套綠:`sh scripts/gate.sh --branch --ticket <本票號>` 綠;釘住舊行為的既有案例改掉或刪掉(清單在 test_plan),不留假綠、不加併發斷言"
+  ],
+  "in_scope": [],
+  "out_of_scope": [
+    "docs/DECISIONS.md",
+    "docs/VISION.md",
+    "tickets/134.json",
+    "scripts/auto-fix.sh",
+    "scripts/land.sh"
+  ],
+  "depends_on": [
+    {
+      "id": "137",
+      "condition": "落地(票 JSON 少掉範圍欄,看板與快照改讀的範圍小)"
+    },
+    {
+      "id": "139",
+      "condition": "落地(close 判準定案,cost_total / closed 事件的寫點不再動)"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/metrics.py",
+    "scripts/inbox.py",
+    "scripts/ticket.py",
+    "scripts/event.py",
+    "scripts/rules.py",
+    "scripts/new-session.sh",
+    "scripts/verify-case.py",
+    "scripts/apply.sh",
+    "scripts/heartbeat.sh",
+    "scripts/sync-to-project.sh",
+    "board/board.py",
+    "board/README.md",
+    "CLAUDE.md",
+    "README.md",
+    "AGENTS.md",
+    "docs/SESSION-START.md",
+    "docs/WORKFLOW.md",
+    "docs/DESIGN.md",
+    "docs/FLOW.html",
+    "docs/REHEARSAL.md",
+    "docs/ROLES.md",
+    "tickets/SCHEMA.md",
+    "templates/project-CLAUDE.md",
+    "code-map/catalog.json",
+    "code-map/index.json",
+    "code-map/INDEX.md",
+    "tests/control_harness.py",
+    "tests/test_metrics.py",
+    "tests/test_board.py",
+    "tests/test_inbox.py",
+    "tests/test_ticket.py",
+    "tests/test_event.py",
+    "tests/test_cost_ledger.py",
+    "tests/test_auto_fix.py",
+    "tests/test_objection_triage.py",
+    "tests/test_consolidate_memory.py",
+    "tests/test_new_session.py",
+    "tests/test_review.py",
+    "tests/test_land.py",
+    "tests/test_gate.py",
+    "tests/test_rules_delivery.py",
+    "tests/test_agent_cost_hook.py",
+    "tests/test_verify_case.py",
+    "verify/metrics/test_metrics_line.py",
+    "verify/TAGS.d/18.md",
+    "verify/board/test_ticket_19.py",
+    "verify/batch_fix/test_ticket_108.py",
+    "verify/batch_fix/test_ticket_109.py",
+    "verify/role_routing/test_ticket_122.py",
+    "verify/dispatch/test_ticket_114.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "b5e3e91b459fa89bd9a12d4add2f5deb1479d900",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "complex",
+  "needs_verifier": true,
+  "interface_fixed": false,
+  "feature": "agent-control 減法(D-054)",
+  "test_plan": "期望值來源:VISION「看板與統計」原話(每筆記 角色:票:model:time:token;拿不到顯示未知)、D-054 Q5 原話、本票 objective 釘的四個算法;數字由夾具手算,不從 board.py 算。夾具 tests/control_harness.Sandbox,board.py 用 test_board 既有的 in-process render 與 HTTP handler 寫法,不上真埠。\nworker 單元(就地改):tests/test_board.py —— :139,:167 metrics 兩條改成票 JSON 指標;SavingAnAnswer :186 三條留;:249,:268,:459,:462 index 改讀目錄;tests/test_inbox.py —— :41,:69,:153,:203,:308 index/acked 改目錄、:97 事件那條刪、:294 Blocked 探針改讀票;tests/test_ticket.py —— :306 事件計數改成只看 state_version、:764 已由 #136 刪、:1152-1153、:1217、:1299、:1883 ticket.cost 事件四條刪或改讀 cost[]、:1467 若仍在改探針;tests/test_cost_ledger.py :106,:153,:213;tests/test_auto_fix.py went_in_review :463 與 :672,:1272,:1745、base_sha_events :3330-3362 改讀票 JSON;tests/test_objection_triage.py :270 assert_not_stopped、:391;tests/test_consolidate_memory.py :94 leases_taken、:209 index;tests/test_new_session.py :373,:405 填充事件換種;tests/test_review.py :100,:361,:388,:614;tests/test_land.py :1582,:1589;tests/test_gate.py :190;tests/test_rules_delivery.py :121;tests/test_agent_cost_hook.py :113;tests/test_event.py 登記表。verify/board/test_ticket_19.py :89,:112,:237,:241、verify/batch_fix/test_ticket_108.py:299、test_ticket_109.py:174、verify/role_routing/test_ticket_122.py:253、verify/dispatch/test_ticket_114.py:424 改讀目錄 / cost[];verify/metrics/ 整目錄刪、verify/TAGS.d/18.md 的 metrics 標籤拿掉。\n驗證者(needs_verifier=true、interface_fixed=false,worker patch 後起):從 VISION 原話獨立寫 verify/board_metrics/test_ticket_143.py,標籤自登記 verify/TAGS.d/143.md(建議 `board-four-metrics`);重點:四個數字各自「拿不到 → 未知,不是 0」、一份票 JSON 改了看板就變、events.jsonl 刪掉看板四個指標仍在。\n變異(未實測,驗證者驗紅):M1 token 缺時畫 0 → 未知案例紅;M2 interventions 不在 set Blocked 時 +1 → 介入案例紅;M3 inbox post 仍寫 index → 收件匣案例紅。\n查過的 oracle:上列測試檔(行號見稽核 sweep);board.py render_tickets :616-651、render_inbox :718-744、inbox_rows :375-394、inbox_pages :945-968、state() :423-447、/api/answer :1157-1178、append_answer :1082。",
+  "outline": "摘要:稽核 draft-scope-memory.md §C:events.jsonl / 票 JSON / status.json / index / reports / metrics 六份存同一件事,對帳不一致 0 筆 = 純複本。D-054 Q5 的前提「沒有東西讀狀態轉換歷史」已讀碼查清(見下),有讀的全是測試探針,同票改。\nticket.state 讀者清單(讀碼,base b5e3e91)—— 生產碼:0 個(board.py:424 讀全部事件但只用 ticket.attempt.* / session.* / land.*;heartbeat.sh CLOSERS :55-58 只配 session / land / attempt;status.py、metrics.py 不讀事件;event.py tail/grep 與 new-session.sh:310-316 是泛用傾印,少三種只是少幾行)。測試探針:tests/test_ticket.py:306,:764,:1153,:1467,:2010;test_inbox.py:294;test_auto_fix.py:463(went_in_review,用於 :672,:1272,:1745)、:3330(base_sha_events);test_consolidate_memory.py:94(leases_taken);test_objection_triage.py:270,:391;test_new_session.py:373,:405(填充)。ticket.cost 讀者:0 個生產碼(transcript-cost.py:178-190 明確排除);測試 test_ticket :1152,:1217,:1299,:1883、test_cost_ledger :106,:153,:213、test_review :361、verify/dispatch/test_ticket_114.py:424、test_agent_cost_hook :113。inbox.posted 讀者:0 個(看板讀 index,不讀事件);測試 test_inbox:97。\n發射點:ticket.state —— ticket.py :925(cmd_set)、:1768(stamp_landed)、:1877(cmd_round)、:2569(record_objection)、:2880(save_baseline)、apply.sh :108,:783,:987;ticket.cost —— ticket.py:2080;inbox.posted —— inbox.py:181。metrics.py :182-230 measure、呼叫端只有 board.py :46,:446,:633-648 與 gate.sh:184 對照表、control_harness:40。index/acked:inbox.py :59-60,:75,:79,:112-125,:173,:288,:307,:352;board.py :63-64,:375-394,:945-968;new-session.sh:294;rules.py:594。看板現況:頭部 token 寫死「未知」(:447,:592),第 ① 段的 token / 返工輪來自 metrics(從 worker log 解析),wall 只在 /api/state;四個指標一個都沒畫。票 JSON 可用欄位:cost[] 15 鍵(SCHEMA:29)、cost_total(SCHEMA:31;#94 起 28 張 Done 有)、objections、owner、state。\n設計裁示(自己下):(1) 「介入」沒有欄位可推(歷史只在要刪的事件裡)→ 加 `interventions` 計數,在 cmd_set 轉 Blocked / NeedsDecision 且 owner=main 的同一次存檔 +1,舊票顯示未知 —— 這是記數不是關卡;若主線不要這格,拿掉後該欄永遠未知,票面照做、待裁格註明;(2) 一次就過 = Done 票 cost[] role=worker 最大 round = 1 的比例(與 cost_total.worker_rounds 同源);(3) 收件匣只剩檔案目錄,ack = 移到 acked/,不另記;(4) heartbeat.sh 不讀三種事件,不動邏輯只改字;(5) T 的 agent-cost-hook 未掛(T 0 筆 agent.cost)列進 #147 T 端清單;(6) 看板 REHEARSAL 段與其他小件由 #146 刪,本票不碰。\n建議順序:ticket.py(interventions、拿掉三處 emit)→ event.py → inbox.py / rules.py / new-session.sh → metrics.py 刪 → board.py 四指標 → 文件 → 測試探針逐檔換。complexity=complex:看板是使用者每天看的東西,四個算法要有人做完後對照原話檢查。model=opus。needs_verifier=true(理由在 test_plan)。\n待裁(不擋開工,照建議做):Q1 `interventions` 計數要不要加 —— 建議加(否則第三個指標永遠未知);不加則刪掉那段、看板顯示未知。",
+  "decision_refs": [
+    "D-053",
+    "D-054",
+    "D-045",
+    "D-017"
+  ],
+  "verify_strings": [
+    {
+      "path": "board/board.py",
+      "contains": "metrics"
+    }
+  ]
+}

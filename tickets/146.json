@@ -1,0 +1,92 @@
+{
+  "id": "146",
+  "subject": "票面欄位與小件:needs_verifier 缺 = true 不擋 Ready、interface_fixed 與變異表選填;刪看板 REHEARSAL 段、code-map/check-stale.py、budget 字句(D-054 Q10、Q11)",
+  "created": "2026-10-19T10:22:01+08:00",
+  "objective": "D-054 Q10:needs_verifier 沒寫當 true、不擋 Ready;interface_fixed 與實作者變異表改選填。Q11:REHEARSAL 看板段、check-stale、budget、info_map、scope_conflict 死碼一張清理票刪;看板回答鈕留著。info_map 與 scope_conflict 已在 #137 刪(同檔同判準),本票做其餘。本票:(1) ticket.py 刪 needs_verifier_problem 與三個呼叫點(create --state Ready :704-708、set 轉 Ready :885-892、lint :2290-2292);auto-fix.sh verifier_wanted :934-955 對缺 / 非布林的票一律當 true 起驗證者(不再只印 stderr 提示);gate.sh verify_plan 已是 `is False` 才免,不動;(2) interface_fixed:ticket.py 本來就不驗,只改 SCHEMA :21 與 opener.md:8 的說法為選填;(3) 變異表選填:docs/DISPATCH-TEMPLATE.md §5 :142-159 與 §8 第 4 點 :315、memory/role/implementer.md:9,:13、docs/reference/role-procedures.md:76-77、docs/ROLES.md:12、docs/WORKFLOW.md:12、auto-fix.sh:859-860 改成「有變異就寫、沒有不缺段」;ticket.py RESULT_SECTIONS :2385-2391 拿掉 mutations 那一組(sections 從五個 bool 變四個,SCHEMA :81 跟著改);(4) 看板 REHEARSAL 段:board.py render_rehearsal :747-762、rehearsal_rows :175-199、REHEARSAL_REL :52、state() :435 那格、NAV 項與 board/README.md:3 刪;docs/REHEARSAL.md 檔本身留(文件,不是看板);(5) code-map/check-stale.py 刪(讀碼:沒有呼叫端,只有 gate.sh:193 測試對照與 tests/control_harness.py:293 複製)、tests/test_check_stale.py 刪、docs/CODE-MAP.md §2 改;memory.py 的 check-stale 子命令是另一個東西、整理者在用,不動;(6) budget:tickets/SCHEMA.md:18「budget 建議」列、ticket.py:50 註解、docs/DESIGN.md:50 的字刪(沒有程式讀它;templates/discussion.md 的 stop.budget 是討論檔格式,不動)。\nD-053 ④:改善 VISION 流程 #2(開題者把需求寫完整 —— 不被欄位格式擋)與目的(token 有效);指標 = 每張票需要我介入幾次(needs_verifier 缺 Ready 擋 → 主線補格;稽核:沒寫與寫 false 分不出的問題,預設 true 就分得出)。拿掉的關卡:needs_verifier 的 Ready 關與 lint 條、變異表必填、REHEARSAL 段讀檔、check-stale 工具。本票不新增任何檢查。",
+  "acceptance": [
+    "行為:沙盒 worker 票沒有 needs_verifier 格 → `ticket.py create --state Ready` 與 `set state Ready` 都成功、`ticket.py lint` 不提它;auto-fix 第 1 輪對這張票起驗證者(與 needs_verifier=true 同一條路);needs_verifier=false 仍不起;EVIDENCE 沒有變異段時 result 的 sections 不報缺(sections 四鍵:patch_sha256 / gate / excluded / repro)",
+    "grep 0:`git grep -nE 'needs_verifier_problem|ReadyNeedsABooleanNeedsVerifier|render_rehearsal|rehearsal_rows|REHEARSAL_REL|check-stale\\.py|test_check_stale|\\bbudget\\b' -- scripts board tests verify templates/dispatch-*.md docs/WORKFLOW.md docs/ROLES.md docs/DISPATCH-TEMPLATE.md docs/CODE-MAP.md docs/DESIGN.md docs/reference tickets/SCHEMA.md README.md CLAUDE.md memory/role/*.md code-map/catalog.json code-map/index.json` 輸出 0 行(templates/discussion.md、discussions/**、docs/REHEARSAL.md、docs/DECISIONS.md、docs/HANDOFF.md、docs/TODO.md、tickets/*.json 不算);code-map/check-stale.py 與 tests/test_check_stale.py 刪除",
+    "看板:board.py 頁面與 /api/state 沒有 REHEARSAL 段與對應鍵,其餘段(含 #143 的四個指標、收件匣與回答鈕)不變;docs/REHEARSAL.md 不被任何程式讀",
+    "既有全套綠:`sh scripts/gate.sh --branch --ticket <本票號>` 綠;釘住舊行為的既有案例改掉或刪掉(清單在 test_plan),不留假綠、不加併發斷言"
+  ],
+  "in_scope": [],
+  "out_of_scope": [
+    "docs/DECISIONS.md",
+    "docs/VISION.md",
+    "tickets/134.json",
+    "scripts/memory.py",
+    "docs/REHEARSAL.md",
+    "templates/discussion.md"
+  ],
+  "depends_on": [
+    {
+      "id": "143",
+      "condition": "落地(同檔 board.py / ticket.py;看板先改讀票 JSON)"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/ticket.py",
+    "scripts/auto-fix.sh",
+    "board/board.py",
+    "board/README.md",
+    "code-map/check-stale.py",
+    "tests/test_check_stale.py",
+    "scripts/gate.sh",
+    "tests/control_harness.py",
+    "docs/CODE-MAP.md",
+    "docs/DISPATCH-TEMPLATE.md",
+    "docs/WORKFLOW.md",
+    "docs/ROLES.md",
+    "docs/reference/role-procedures.md",
+    "docs/DESIGN.md",
+    "docs/FLOW.html",
+    "tickets/SCHEMA.md",
+    "README.md",
+    "memory/role/implementer.md",
+    "memory/role/opener.md",
+    "templates/dispatch-opener.md",
+    "templates/dispatch-reviewer.md",
+    "code-map/catalog.json",
+    "code-map/index.json",
+    "code-map/INDEX.md",
+    "tests/test_ticket.py",
+    "tests/test_auto_fix.py",
+    "tests/test_board.py",
+    "tests/test_apply.py",
+    "tests/test_dispatch_template.py",
+    "verify/dispatch/test_ticket_128.py"
+  ],
+  "role": "worker",
+  "model": "sonnet",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "b5e3e91b459fa89bd9a12d4add2f5deb1479d900",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "simple",
+  "needs_verifier": false,
+  "interface_fixed": false,
+  "feature": "agent-control 減法(D-054)",
+  "test_plan": "期望值來源:D-054 Q10 / Q11 原話。夾具 tests/control_harness.Sandbox。\nworker 單元(就地改):tests/test_ticket.py ReadyNeedsABooleanNeedsVerifier :1467 類改成「缺也 Ready」、Lint 的 needs_verifier 條刪;tests/test_auto_fix.py :934-955 對應案例改成缺 → 起驗證者;tests/test_apply.py :367-386 sections 四鍵;tests/test_board.py :124,:133 REHEARSAL 兩條刪;tests/test_check_stale.py 整檔刪、gate.sh:193 對照刪、control_harness:293 複製刪;verify/dispatch/test_ticket_128.py:141 與 tests/test_auto_fix.py:4135 用 docs/REHEARSAL.md 當守衛目標的夾具改用別的檔。\nneeds_verifier=false:刪除與預設值翻轉,驗證者只會重演同一契約。變異(未實測,worker 驗紅一條):M1 auto-fix 對缺格仍不起驗證者 → 行為案例紅。\n查過的 oracle:上列檔;memory.py:839 open_ticket_for 補 needs_verifier=false(不動);status.py:1007 flaky 開票(不動)。",
+  "outline": "摘要:D-054 Q10 / Q11 的小件合一張。讀碼位置全在 objective。info_map 與 scope_conflict 在 #137 同檔刪掉(D-054 Q11 點名,結果相同),本票不重做。設計裁示:(1) needs_verifier 缺 = true 在 auto-fix 那一手判,不補寫票面;(2) sections 少 mutations 一鍵是機器版形狀改變,SCHEMA 與 DISPATCH-TEMPLATE §8.5 那兩張表同票同改(test_dispatch_template 釘兩表同鍵,#147 才刪,本票先讓它綠);(3) 看板 REHEARSAL 段刪、檔留。complexity=simple、model=sonnet:多檔小改,全是刪與翻預設。needs_verifier=false。不在本票:文件整併(#147)。",
+  "decision_refs": [
+    "D-053",
+    "D-054",
+    "D-028",
+    "D-H38"
+  ],
+  "verify_strings": [
+    {
+      "path": "scripts/ticket.py",
+      "contains": "needs_verifier_problem"
+    }
+  ]
+}

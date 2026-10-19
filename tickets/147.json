@@ -1,0 +1,144 @@
+{
+  "id": "147",
+  "subject": "文件整併:每條規則只留一處正文、刪 test_dispatch_template;整批減法後的殘留掃除;T 端配套清單(D-054 Q12)",
+  "created": "2026-10-19T10:22:01+08:00",
+  "objective": "D-054 Q12 原話:「每條規則只留一處正文、刪掉 test_dispatch_template,方向對。用測試釘住多份文件一致,本身就是『存好幾份』的症狀。」會改變 agent 行為的那幾刀已在各自票裡改掉規則原文(#136、#137、#138、#142、#144);本票做剩下的整併與最後掃除:(1) 刪 tests/test_dispatch_template.py(兩條:規則包節名對照 → rules.py 跑包時「缺節就不起」已在執行期擋;result 兩表同鍵 → 只留一表);(2) result 區塊的鍵表只留 tickets/SCHEMA.md 一份,docs/DISPATCH-TEMPLATE.md §8.5 改成一句指路(rules.py DELIVERY_NOTE :81-83 已是指路,不動);EVIDENCE 五段的正文只留 DISPATCH-TEMPLATE §8,implementer.md:13、docs/reference/role-procedures.md:76-78、templates/dispatch-reviewer.md:20、dispatch-verifier.md:54、auto-fix.sh:850-860 改指路;worker git 規則正文只留 DISPATCH-TEMPLATE §1,CLAUDE.md:24、AGENTS.md:6、ROLES.md:12、WORKFLOW.md:21、role-procedures.md、README.md 改成一句指路;(3) 殘留掃除:#135–#146 各自 grep 清單的聯集再對 docs/、README.md、AGENTS.md、CLAUDE.md、templates/、memory/role、code-map/catalog.json 跑一次 → 0;docs/reference/role-procedures.md:59「名單只十支」等過時句修正;docs/FLOW.html 刪掉已不存在的方框文字(不重畫);(4) 在本票 EVIDENCE 列出 T 端要配的改動清單(照 outline 那份,逐條核對 T 現況後補行號),不開 T 票 —— 使用者裁示 A 整個改好再改 T。\nD-053 ④:改善 VISION「明確不是我要的 ③」(同一件事存好幾份)與目的(token 有效);指標 = 每張落地票的 token(規則包與派工文少重複段;每個 agent 開場讀的字變少)。拿掉的關卡:test_dispatch_template 的文件一致性測試。本票不新增任何檢查、不改任何腳本行為(只改字句與指路)。",
+  "acceptance": [
+    "grep 0:tests/test_dispatch_template.py 刪除;`git grep -nE 'test_dispatch_template|protected_paths|guarded_dirs|FACE_FIELDS|patch_id|review-request|allowed_write_paths|in_scope|out_of_scope|info_homes|hint_scope|extra_paths|verify_strings|verify_waiver|四問|機械格|cap_chars|guard-main|metrics\\.py|index\\.jsonl|ticket\\.state|diff -ruN|禁一切 git|交 patch|needs_verifier_problem|render_rehearsal|check-stale\\.py' -- docs README.md AGENTS.md CLAUDE.md templates memory/role/*.md memory/model/*.md memory/project/*.md code-map/catalog.json tickets/SCHEMA.md ':!docs/DECISIONS.md' ':!docs/HANDOFF.md' ':!docs/TODO.md' ':!docs/VISION.md' ':!docs/review' ':!docs/DESIGN-MAIN-TOUCHPOINTS.md' ':!docs/DESIGN-MEMORY-INBOX.md' ':!docs/DESIGN-VERIFY-CASES.md'` 輸出 0 行(scripts/memory.py 的 check-stale 子命令與 docs/MEMORY.md 對它的說明不在此列)",
+    "一處正文:result 鍵表只在 tickets/SCHEMA.md 出現一次(DISPATCH-TEMPLATE §8.5 無表格);EVIDENCE 五段的段名清單只在 DISPATCH-TEMPLATE §8 出現一次;worker git 規則的動詞清單只在 DISPATCH-TEMPLATE §1 出現一次;其他檔對這三條各只有一句含「見」或「照」的指路(EVIDENCE 列出每條規則的那一處與指路檔)",
+    "行為不變:`python3 scripts/rules.py pack <每個角色> --model opus` 全部 rc 0(缺節不起 agent 的機制仍在,節名沒被改壞);`sh scripts/gate.sh --full` 綠",
+    "EVIDENCE 含「T 端配套清單」一節,逐條對應 outline 那 11 條,每條寫 T 現況(檔:行,讀 tabby_pool 確認)與要改成什麼,不改 T 任何檔"
+  ],
+  "in_scope": [],
+  "out_of_scope": [
+    "docs/DECISIONS.md",
+    "docs/VISION.md",
+    "tickets/134.json",
+    "docs/HANDOFF.md",
+    "docs/TODO.md"
+  ],
+  "depends_on": [
+    {
+      "id": "135",
+      "condition": "落地"
+    },
+    {
+      "id": "136",
+      "condition": "落地"
+    },
+    {
+      "id": "137",
+      "condition": "落地"
+    },
+    {
+      "id": "138",
+      "condition": "落地"
+    },
+    {
+      "id": "139",
+      "condition": "落地"
+    },
+    {
+      "id": "140",
+      "condition": "落地"
+    },
+    {
+      "id": "141",
+      "condition": "落地"
+    },
+    {
+      "id": "142",
+      "condition": "落地"
+    },
+    {
+      "id": "143",
+      "condition": "落地"
+    },
+    {
+      "id": "144",
+      "condition": "落地"
+    },
+    {
+      "id": "145",
+      "condition": "落地"
+    },
+    {
+      "id": "146",
+      "condition": "落地"
+    },
+    {
+      "id": "148",
+      "condition": "落地(記憶文件同檔)"
+    }
+  ],
+  "allowed_write_paths": [
+    "tests/test_dispatch_template.py",
+    "docs/DISPATCH-TEMPLATE.md",
+    "docs/WORKFLOW.md",
+    "docs/ROLES.md",
+    "docs/reference/role-procedures.md",
+    "docs/SESSION-START.md",
+    "docs/DESIGN.md",
+    "docs/FLOW.html",
+    "docs/MEMORY.md",
+    "docs/CODE-MAP.md",
+    "docs/VERIFICATION.md",
+    "tickets/SCHEMA.md",
+    "README.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "templates/dispatch-reviewer.md",
+    "templates/dispatch-verifier.md",
+    "templates/dispatch-opener.md",
+    "templates/dispatch-consolidator.md",
+    "templates/project-CLAUDE.md",
+    "memory/role/implementer.md",
+    "memory/role/verifier.md",
+    "memory/role/reviewer.md",
+    "memory/role/opener.md",
+    "memory/role/main.md",
+    "memory/role/consolidator.md",
+    "memory/role/design.md",
+    "memory/role/README.md",
+    "scripts/auto-fix.sh",
+    "scripts/rules.py",
+    "code-map/catalog.json",
+    "code-map/index.json",
+    "code-map/INDEX.md",
+    "tests/test_templates.py",
+    "tests/test_rules.py",
+    "tests/test_rules_delivery.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "b5e3e91b459fa89bd9a12d4add2f5deb1479d900",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "simple",
+  "needs_verifier": false,
+  "interface_fixed": false,
+  "feature": "agent-control 減法(D-054)",
+  "test_plan": "期望值來源:D-054 Q12 原話。本票不改腳本行為,oracle 是 `rules.py pack <role>` 全角色 rc 0(tests/test_rules_delivery.py NormalPacks 兩條會跑)、`gate.sh --full` 綠、兩條 grep。worker 單元:tests/test_dispatch_template.py 刪;tests/test_templates.py 若斷言 §8.5 表格存在,改;tests/test_rules*.py 若斷言某節字句,改。needs_verifier=false:只動字句。規則包節錄仍走 rules.py WANTED :93-118 的節名 —— 改小標要先看那張表,改壞一個節名 pack 就 rc 1(這就是刪 test_dispatch_template 之後靠的執行期擋)。",
+  "outline": "摘要:最後一張。各票已把會改 agent 行為的規則原文同票改掉(Q12 例外),本票做文件層的「一條規則一處」與殘留掃除。重複地圖(讀碼,base b5e3e91):(a) result 鍵表 DISPATCH-TEMPLATE :337-387 與 SCHEMA :53-92 互指「只有這兩份」;(b) worker git 規則 §1 :59-86、CLAUDE.md:24、AGENTS.md:6、ROLES.md:12、implementer.md:11、auto-fix.sh:842、WORKFLOW.md:21、role-procedures :66,:99(#144 改內容,本票收成一處);(c) EVIDENCE 五段 §8 :309-319、implementer.md:13、role-procedures :76-78、SCHEMA :56,:81-84、dispatch-reviewer.md:20、dispatch-verifier.md:54、auto-fix.sh:850,:859-860,:2442。tests/test_dispatch_template.py:32-60(規則包節名對照)、:70-83(兩表同鍵)。rules.py WANTED :93-118 是節錄名單,改小標要對它。\nT 端配套清單(A 全部落地後、sync 之後由主線做;T 現況讀碼於 2026-10-19:scripts/control/.synced-from = 990d739,落後 63 個 commit;T 自己的 land-ticket.sh / test-for.sh / land.sh 不在 sync 名單):1. board/config.json 加 `hard_block`(#135 形狀):paths = docs/DECISIONS.md、docs/VISION.md、scripts/build.sh、scripts/deploy-prod.sh;dirs = ~/tabby-data/prod/;patterns = 四條殺行程 + prod / staging / portal 埠(18903、18904、18889)—— 退役的 demo/data/** 不再列;land-ticket.sh / test-for.sh 的 protected_paths 檢查改叫 ticket.py 的 hard_block 檢查。2. land-ticket.sh:覆核只對 complexity=complex 要;刪覆核綁定(T 的 ticket.py 是同步品、本來就沒有 #98)。3. land-ticket.sh / test-for.sh:刪 verify_strings 比對(第五處)、verify.files 兩條、waiver、close 第二道。4. land-ticket.sh:收分支 commit 不收 patch(#144 / #145 的交件形式)。5. .claude/settings.json:拿掉 PreToolUse 的 scripts/control/guard-main.sh(sync manifest 會退役該檔);補 SubagentStop / SessionEnd 的 agent-cost-hook.py(T 目前 0 筆 agent.cost,看板 token 永遠未知)。6. docs/DISPATCH-COMMON-RULES.md(T 的 rules.py 優先讀它):§1 改成分支 commit 的規則原文 —— 必須與同步 #144 的 auto-fix.sh 同一刻,否則 T worker 讀到「禁 git 寫入」卻被要求 commit。7. board/config.json 的 memory 段拿掉 cap_chars / unit / raise_allowed(#134、#148 的 T 側)。8. T 開題者規矩:每張票標 complexity(#136);T 的 DISPATCH-TEMPLATE / roles 由 sync 帶到 docs/roles/,T 自己的 docs 要對一次。9. T 看板:確認 T 用什麼看板讀什麼(board/ 不在 sync 名單);若有 index.jsonl 讀者,照 #143 改讀 reports/inbox/ 目錄。10. 跑 `sync-to-project.sh` 本身並處理它對 T 自有 scripts/land.sh 的差異警告(:493)。11. T 的既有票:老票帶 allowed_write_paths / verify_strings / review 綁定格照歷史留,不洗。\ncomplexity=simple、model=opus(判哪一份是正文需要讀懂)。needs_verifier=false。",
+  "decision_refs": [
+    "D-053",
+    "D-054",
+    "D-025"
+  ],
+  "verify_strings": [
+    {
+      "path": "tests/test_dispatch_template.py",
+      "contains": "EveryRolePacks"
+    }
+  ]
+}

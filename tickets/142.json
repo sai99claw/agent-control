@@ -1,0 +1,77 @@
+{
+  "id": "142",
+  "subject": "反駁分流:worker 說票寫錯 → 腳本派開題者,一輪只兩種結果(改好票面接回 worker / 一題附建議的裁示題給主線)(D-054 Q8)",
+  "created": "2026-10-19T10:21:42+08:00",
+  "objective": "D-054 Q8 原話:「worker 說票寫錯,要有腳本直接派開題者(A、T 都一樣)。開題者一輪內只有兩種結果:改好票面接回 worker,或交一題附建議的裁示題給主線。」現狀(讀碼 auto-fix.sh triage_objection :2056-2312)已經是腳本直接派開題者,差在三處,本票只改這三處:(1) 判決有三種 accepted / rejected / escalate —— 刪 `rejected`:開題者認為 worker 讀錯票,就把澄清寫進票面、判 accepted 接回(下一個人才不會再讀錯);判決行只認 accepted / escalate,其他字樣走既有「沒交判決」處置(= escalate);(2) escalate 要帶「一題附建議」:開題者的判決檔(reports/t<n>/triage-round<r>.md)在判決行之後寫題目、選項、建議;escalate_objection 把這段原文放進給主線的收件頁與票的 objections[].follow_up,主線拿到的是一題選擇題不是一句「需要裁示」;(3) 規則原文同票改(Q12 例外):memory/role/opener.md 判反駁那段、docs/DISPATCH-TEMPLATE.md §7 / §8 第 7 點、docs/WORKFLOW.md「實作者的反駁怎麼被收下」、docs/reference/role-procedures.md 判反駁段、auto-fix.sh 內嵌的「## 判反駁」派工文。A、T 同一套:auto-fix.sh 由 sync 帶到 T,不另寫。「同票第二次反駁直接轉主線」(:2058-2067)與 test_defect → 驗證者(:2687-2705)不在原話範圍、照舊。\nD-053 ④:改善 VISION 流程 #8(新工作者…覺得票本身有問題才問主線)與原則 D-010 / D-049 ③(不經主線);指標 = 每張票需要我介入幾次(交到主線的只剩真的要裁的題,且附建議;2026-11-19 前後拿 T 的 escalate 比例回來看)。拿掉的關卡:rejected 判決(worker 被退回原票、同一條反駁再提就直接轉主線)。本票不新增任何檢查、不新增事件種類(objection.triage.* 既有)。",
+  "acceptance": [
+    "行為:沙盒 worker 交 `OBJECTION: ticket-wrong` → 開題者被派(現狀);開題者判 accepted 並 `ticket.py set` 改票面 → 同一輪、同一個 session 接回 worker 並附改了哪些格(現狀);開題者判 escalate 並在判決行後寫題目與建議 → 票 Blocked、owner main、收件頁與 objections[].follow_up 含開題者那段原文(含「建議」兩字之後的句子);判決行寫 `rejected` 或其他字 → 走與沒交判決相同的處置(escalate),不再接回 worker 做原票",
+    "grep 0:`git grep -nE 'rejected' -- scripts/auto-fix.sh scripts/ticket.py tests/test_objection_triage.py tests/test_auto_fix.py docs/DISPATCH-TEMPLATE.md docs/WORKFLOW.md docs/reference/role-procedures.md memory/role/opener.md templates/dispatch-opener.md tickets/SCHEMA.md` 輸出 0 行(ticket.py DISPOSED :67 若為了舊票讀得懂保留 `rejected` 字面,例外:寫在 EVIDENCE)",
+    "規則原文:memory/role/opener.md 判反駁段寫明兩種結果、escalate 要附一題與建議;DISPATCH-TEMPLATE §8 第 7 點與 WORKFLOW :210-238 同義;auto-fix.sh 內嵌派工文「## 判反駁」只列兩種判決與 escalate 的題目格式;templates/dispatch-opener.md 不另複製一份(規則留在派工文一處)",
+    "既有全套綠:`sh scripts/gate.sh --branch --ticket <本票號>` 綠;釘住舊行為的既有案例改掉或刪掉(清單在 test_plan),不留假綠、不加併發斷言"
+  ],
+  "in_scope": [],
+  "out_of_scope": [
+    "docs/DECISIONS.md",
+    "docs/VISION.md",
+    "tickets/134.json",
+    "scripts/review.sh"
+  ],
+  "depends_on": [
+    {
+      "id": "137",
+      "condition": "落地(同檔 auto-fix.sh 的範圍段先刪,派工文一次改定)"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/auto-fix.sh",
+    "scripts/ticket.py",
+    "scripts/inbox.py",
+    "memory/role/opener.md",
+    "docs/DISPATCH-TEMPLATE.md",
+    "docs/WORKFLOW.md",
+    "docs/reference/role-procedures.md",
+    "tickets/SCHEMA.md",
+    "templates/dispatch-opener.md",
+    "code-map/catalog.json",
+    "code-map/index.json",
+    "code-map/INDEX.md",
+    "tests/test_objection_triage.py",
+    "tests/test_auto_fix.py",
+    "tests/test_ticket.py",
+    "tests/control_harness.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "b5e3e91b459fa89bd9a12d4add2f5deb1479d900",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "simple",
+  "needs_verifier": false,
+  "interface_fixed": false,
+  "feature": "agent-control 減法(D-054)",
+  "test_plan": "期望值來源:D-054 Q8 原話、本票 objective。夾具沿用 tests/test_objection_triage.py 的假開題者命令(寫判決檔的 shell 假程式),真 auto-fix.sh 子行程,不起模型。\nworker 單元(就地改):tests/test_objection_triage.py —— RejectedResumesTheWorkerOnly :464 改成「rejected 字樣 = escalate」;OnlyTheseGoToTheMainLine :502 escalate 那條加斷言:收件頁與 follow_up 含假開題者寫的題目與建議原文;TheOpenerCostsARow :656 accepted 照留;其餘不動。tests/test_auto_fix.py :594,:2222,:2604,:2635,:3843 若夾具用 rejected,改 accepted;tests/test_ticket.py :987-993,:1631-1670 objections 形狀若斷言 disposition 可為 rejected,改掉。\nneeds_verifier=false:行為改一小處(判決集合)加一段原文轉貼,驗證者案例只會重演 test_objection_triage 同一契約。變異(未實測,worker 驗紅一條):M1 escalate 不轉貼題目 → 收件頁案例紅;M2 rejected 仍接回 worker → 判決案例紅。\n查過的 oracle:tests/test_objection_triage.py 全檔(類與行號見稽核 sweep B3)、tests/test_auto_fix.py 上列行、tests/test_ticket.py objections 形狀、docs/WORKFLOW.md:227「只有 auto-fix 寫這兩格」(不變)。",
+  "outline": "摘要:讀碼比對 D-054 Q8 與現狀 —— 腳本直接派開題者已經有(auto-fix.sh:2056-2312,D-041 / #89);差的是三種判決 vs 兩種結果、escalate 不帶題目與建議、規則原文。只改差的部分。\n讀碼(base b5e3e91):auto-fix.sh escalate_objection :2020-2031(block :324-329、post :318-322、attempt_failed objection、ROUND_RC=3)、triage_objection :2056-2312(:2058-2067 第二次反駁直送主線 —— 留;:2141-2158 內嵌派工文「## 判反駁」;:2188-2207 判決 regex `TRIAGE: (accepted|rejected|escalate)`;:2217-2237 set objections 的 disposition / triage;:2291-2311 resume worker:accepted 帶改動欄位、rejected 帶「照原票做」);ticket.py OBJECTION_CATEGORIES :2380、record_objection :2541(follow_up 初始化為空、沒人讀 —— 本票拿它裝開題者的題目)、DISPOSED :67、objection_problems :1018;templates/dispatch-opener.md 沒有判反駁文字(派工文在 auto-fix 內嵌,維持一處);opener.md:15;DISPATCH-TEMPLATE §7 :287-293、§7.1 :295-307、§8 第 7 點 :320-327;WORKFLOW :210-238;role-procedures :54-56。T 現況:tabby_pool/scripts/control/auto-fix.sh 是 2026-10-14 的同步品(triage 在 :1437),sync 之後同一套。\n設計裁示(自己下):(1) 刪 rejected 而不是改名:原話「只有兩種結果」;worker 讀錯票 = 票面不夠清楚,澄清進票面就是 accepted;(2) 題目與建議放 objections[].follow_up(既有空格,SCHEMA :25 已列)與收件頁,不加新欄位、不加新事件;(3) 第二次反駁直送主線保留 —— 它是迴圈保險,原話沒說要拿,拿了是新決定;(4) 一個月後 escalate 比例的量法:`cost[]` 裡 role=opener outcome=escalate 的列數 / objection 列數,主線到期自己算,本票不加統計。\ncomplexity=simple、model=opus(auto-fix.sh 3300 行內改一段邏輯與派工文,需判斷哪些文字留)。needs_verifier=false。不在本票:reviewer fail 的 blocking 反駁路徑(review.sh:855-871)、#104 的逐條處置(已 Cancelled)。",
+  "decision_refs": [
+    "D-053",
+    "D-054",
+    "D-041",
+    "D-010",
+    "D-049"
+  ],
+  "verify_strings": [
+    {
+      "path": "scripts/auto-fix.sh",
+      "contains": "rejected"
+    }
+  ]
+}

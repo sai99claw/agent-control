@@ -1,0 +1,96 @@
+{
+  "id": "136",
+  "subject": "覆核只派複雜票:開題者每張標 simple/complex,review.sh / land / close 只對 complex 要覆核;刪 #98 內容綁定(D-054 Q1)",
+  "created": "2026-10-19T10:21:42+08:00",
+  "objective": "VISION 流程 #9 原話:只有複雜的票做完後檢查一次。現狀 review.sh 不讀 complexity(讀碼:無任何 match),每張閘門綠的票都派 reviewer;land.sh :481-507 與 ticket.py close 的 done_blockers :1120 對每張票都要 review pass;134 張票只有 2 張標過 complex。本票:(1) 開題者每張票標 `complexity` simple / complex(沒標 = simple,不做做完後的檢查;**不加 Ready 關**);(2) review.sh 對非 complex 的票不派;auto-fix.sh :2967-2972 與 gate.sh review_after_green :695-707 對 simple 票閘門綠後不停在等覆核、不派;(3) land.sh 與 ticket.py close / set Done 只對 complex 要 review.verdict=pass;(4) 刪 #98 內容綁定與舊式綁定:face / patch_id / 收件單 review-request、review-receive / stale、review.state_version / review.sha 比對 —— review 格只剩 {verdict, by, sha, note, at} 給人看,verdict 不綁任何版本;review.stale 事件種類從 event.py 拿掉(不新增種類)。\nD-053 ④:改善 VISION 流程 #9(只有複雜的票做完後檢查)與「明確不是我要的 ①」(每張票都派 reviewer、#98 覆核綁內容);指標 = 每張落地票的 token(稽核:覆核佔 A 每票非 cache token 23.7%、T 30.2%,常態真抓 3.3%)與每張票需要我介入幾次(T 9 次綁定拒收全是重跑)。拿掉的關卡:每票覆核、face 13 格指紋、patch_id、收件單 / stale、state_version / sha 綁定。本票不新增任何檢查:complexity 沒標不擋、不在 lint 裡要求。",
+  "acceptance": [
+    "行為:沙盒票 complexity=complex → 閘門綠後 review.sh 照現狀派、land.sh 與 ticket.py close 在 review.verdict 不是 pass 時仍拒;complexity=simple 或沒有這一格 → review.sh 對它拒派(走既有 refuse 路徑,不是 crash)、auto-fix.sh 與 gate.sh 綠後不派覆核也不停在等覆核、land.sh 與 close 不因沒有 review 拒收;complex 票 review pass 之後再 `ticket.py set` 改票面或分支再 commit,land / close 仍收(綁定已刪)",
+    "grep 0:`git grep -nE 'review_request|review-request|review-receive|receive_review|request_review|request_problem|patch_id|FACE_FIELDS|REQUEST_KEYS|REVIEW_DISPATCHER|bound_to_content|review\\.stale|review-receipt|CARRY_REVIEW_FIELDS' -- scripts board templates tests verify docs/WORKFLOW.md docs/ROLES.md docs/DISPATCH-TEMPLATE.md docs/reference docs/FLOW.html tickets/SCHEMA.md README.md CLAUDE.md memory/role/*.md code-map/catalog.json` 輸出 0 行;verify/review_binding/ 與 verify/TAGS.d/98.md 刪除;event.py 登記表沒有 review.stale、也沒有新增的種類",
+    "規則原文同票改(Q12 例外):memory/role/opener.md、templates/dispatch-opener.md、docs/ROLES.md(reviewer 列與 land 列)、tickets/SCHEMA.md complexity 列、docs/reference/role-procedures.md 開題者與覆核者兩段 各一處寫明「開題者每張票標 simple / complex;只有 complex 做完後覆核;沒標 = simple」;memory/role/reviewer.md:5、:32 與 templates/dispatch-reviewer.md:13、:53-55、docs/ROLES.md:78 不再講綁票版本 / 分支頭 / 收件單",
+    "舊票不動:tickets/*.json 既有 review / review_request 格原樣保留(歷史),ticket.py load / show / set / close 對帶著舊格的票照常跑;#134 已標 complex、照舊走覆核",
+    "既有全套綠:`sh scripts/gate.sh --branch --ticket <本票號>` 綠;釘住舊行為的既有案例改掉或刪掉(清單在 test_plan),不留假綠、不加併發斷言"
+  ],
+  "in_scope": [],
+  "out_of_scope": [
+    "docs/DECISIONS.md",
+    "docs/VISION.md",
+    "tickets/134.json",
+    "tickets/104.json",
+    "tickets/106.json"
+  ],
+  "depends_on": [
+    {
+      "id": "135",
+      "condition": "落地(同檔 land.sh / ticket.py;硬擋清單先立)"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/ticket.py",
+    "scripts/review.sh",
+    "scripts/land.sh",
+    "scripts/auto-fix.sh",
+    "scripts/gate.sh",
+    "scripts/event.py",
+    "templates/dispatch-reviewer.md",
+    "templates/dispatch-opener.md",
+    "memory/role/opener.md",
+    "memory/role/reviewer.md",
+    "memory/role/main.md",
+    "docs/ROLES.md",
+    "docs/WORKFLOW.md",
+    "docs/DISPATCH-TEMPLATE.md",
+    "docs/reference/role-procedures.md",
+    "docs/FLOW.html",
+    "tickets/SCHEMA.md",
+    "README.md",
+    "CLAUDE.md",
+    "code-map/catalog.json",
+    "code-map/index.json",
+    "code-map/INDEX.md",
+    "tests/test_review.py",
+    "tests/test_land.py",
+    "tests/test_ticket.py",
+    "tests/test_auto_fix.py",
+    "tests/test_gate.py",
+    "tests/test_event.py",
+    "tests/test_templates.py",
+    "tests/control_harness.py",
+    "verify/review_binding/test_ticket_98.py",
+    "verify/TAGS.d/98.md",
+    "verify/batch_fix/test_ticket_108.py",
+    "verify/batch_fix/test_ticket_109.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "b5e3e91b459fa89bd9a12d4add2f5deb1479d900",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "complex",
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "feature": "agent-control 減法(D-054)",
+  "test_plan": "期望值來源:VISION 流程 #9 原話、D-054 Q1 原話、本票 objective;不從被測程式算。夾具 tests/control_harness.Sandbox,真 review.sh / land.sh / ticket.py 子行程,reviewer 命令用假程式(既有 test_review 寫法),不起模型。\nworker 單元(就地改):tests/test_review.py —— 刪 TheReviewBindsThePatchAndTheFace :732、ALateReviewIsStale :827、TheFaceIsThirteenFields :959、TheReceiptIsComparedNotReread :1045、TheReceiveHasASameLockSeam :1075;ItOnlyReviewsWhatIsReadyForIt :461 加「simple 票拒派」一條;ThePassPath :123 夾具標 complex、斷言 review 五格。tests/test_land.py —— ReviewIsAHardGate :1360 改成只對 complex、TheReviewIsBoundToThePatchAndTheFace :1426 刪、LandTriesToClose :1643/:1652 夾具標 complex。tests/test_ticket.py :464-519(close 的 review 判準改 complex 限定;:486 綁定過期那條刪)、:746/:767 carry 兩條刪、:1138/:1308 cost 不碰 review 照留。tests/test_auto_fix.py :1768(--no-review 停 InReview)夾具標 complex、新增一條 simple 綠後不派;tests/test_gate.py review_after_green 相關同理。tests/test_event.py 登記表少一種。verify/review_binding/test_ticket_98.py 整檔刪、TAGS.d/98.md 刪;verify/batch_fix/test_ticket_108.py / 109.py 若斷言 review 綁定,改掉。\n驗證者(needs_verifier=true、interface_fixed=true,平行起):從原話獨立寫 verify/review_complex/test_ticket_136.py,標籤自登記 verify/TAGS.d/136.md(建議 `review-complex-only`);重點:simple 票從閘門綠到 land 一路沒有覆核的身影;complex 票仍要 pass;沒標 = simple。\n變異(未實測):M1 review.sh 不看 complexity → simple 拒派案例紅;M2 land.sh 對每張票仍要 review → simple 落地案例紅;M3 close 仍比 review.state_version → 改票後仍收案例紅。\n查過的 oracle:tests/test_review.py、test_land.py、test_ticket.py、test_auto_fix.py、test_gate.py、test_templates.py、verify/review_binding/test_ticket_98.py。",
+  "outline": "摘要:覆核是 A 每票最大的單項 token(稽核 draft-review.md);VISION 只要複雜票做完後檢查。先刪讀票面指紋的綁定,再刪指紋裡的範圍欄(#137)—— 順序不能倒,否則已覆核的票 face 對不上全被 land 拒(稽核相依 2)。\n讀碼(base b5e3e91):ticket.py FACE_FIELDS :72-80(13 格)、REQUEST_KEYS :83、face() :942、patch_id() :949、bound_to_content :964、review_problems :971-1009(land 與 close 都只問這一支 —— 本票在這裡加 complexity 判斷:非 complex 回空串列)、request_review :2651、request_problem :2685、receive_review :2728(含「#104 從這裡接」死鉤,一併刪)、cmd_review_request :2799、cmd_review_receive :2827、CARRY_REVIEW_FIELDS :71 與 :907-918 carry 邏輯、stamp_landed :1737(保留:它只蓋 sha 給人看、land 靠它認 merge sha 在主線);review.sh :606-611 state 判準(加 complexity 判準,同一條 refuse 路徑)、:686 review-request、:814-820 stale()、:832-845 pass 改回 `ticket.py set review {...}`、:851-887 fail;land.sh :481-507;auto-fix.sh :2967-2972 與 review_outcome :2315-2324;gate.sh :695-707;event.py :62-65。complexity 現況:ticket.py COMPLEXITY :2145、create :661-664、set :858-859;role-models.py chain_role 已用它選鏈(不動)。\n設計裁示(自己下):(1) 沒標 = simple(VISION 待確認原話「沒標的票不做做完後的需求檢查」),不加 Ready 關、不進 lint;(2) simple 票閘門綠後進入的狀態 = complex 票覆核 pass 之後進入的那個狀態(讀碼:review.sh pass 不改 state,auto-fix 綠後票停 InReview 等 land;所以 simple 票也停 InReview,只是不派 reviewer —— land.sh 收 InReview 的分支),worker 讀碼確認後若發現 land 另有 state 要求,照 land 要的那個;(3) 兩種綁定一起刪(稽核 69/70:30 天 0 次真擋),review 只剩五格;(4) t104 / t106 分支依 D-054 Q4 留著不落地、不收。\n建議順序:ticket.py(review_problems 加 complexity 判準 → 刪綁定函式與子命令)→ review.sh → land.sh / auto-fix.sh / gate.sh → event.py → 範本與卡 → 文件 → 測試。\nneeds_verifier=true:這是整批減法最大的 token 項,「simple 票一路不覆核、complex 票照舊」要有人從原話獨立驗;interface_fixed=true:review 五格、complexity 兩個值、拒派路徑已釘。complexity=complex。model=opus。\n不在本票:刪 in_scope / out_of_scope / allowed_write_paths / info_homes 本身(#137)、reviewer 派工文「白名單外改動」段(#137)、覆核派工文整併(#147)。",
+  "decision_refs": [
+    "D-053",
+    "D-054",
+    "D-049",
+    "D-028"
+  ],
+  "verify_strings": [
+    {
+      "path": "scripts/ticket.py",
+      "contains": "FACE_FIELDS"
+    }
+  ]
+}

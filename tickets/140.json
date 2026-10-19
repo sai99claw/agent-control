@@ -1,0 +1,74 @@
+{
+  "id": "140",
+  "subject": "rules.py 刪位元組上限硬擋(規則包 4 KB、固定段 1 KB、暫存區 600 B 截斷),留「缺節就不起 agent」(D-054 Q6)",
+  "created": "2026-10-19T10:21:42+08:00",
+  "objective": "D-054 Q6:兩個上限都刪硬擋 —— 記憶上限由 #134 做;本票做 rules.py。刪:`DEFAULT_MAX` 4096 的「輸出超過上限 rc 1」(cmd_pack :653-656)、`FIXED_MAX` 1024 的固定段成本 problem(build :536-543)、floor > max 的 problem(:545-549)、`--max-bytes` 旗標、`grow()` :406-425 的預算分配與 `LOCAL_INBOX_BYTES` 600 B 暫存區尾巴截斷 —— 規則包就是各段原文串起來。留:required() 的檔缺 / 無正文、找不到想要的節、節無正文、模型卡缺 → problems、rc 1、post_decision、不起 agent(auto-fix rc 6、review.sh refuse、consolidate-memory fail 照舊)。\nD-053 ④:改善 VISION「記憶 · 留什麼」(不設固定字數上限,由整理的 LLM 決定 —— 規則包截掉暫存區尾巴就是另一個字數上限)與目的(token 用得有效 —— 稽核:11 張 decision 頁全是上限擋到自己);指標 = 每張票需要我介入幾次(上限 decision 頁 11 張)。拿掉的關卡:規則包位元組上限、固定段上限、暫存區 600 B 截斷。本票不新增任何檢查。",
+  "acceptance": [
+    "grep 0:`git grep -nE 'DEFAULT_MAX|FIXED_MAX|LOCAL_INBOX_BYTES|max-bytes|max_bytes|MAX_BYTES|4096|600 B|600B' -- scripts/rules.py tests/test_rules.py tests/test_rules_delivery.py templates docs/DISPATCH-TEMPLATE.md docs/WORKFLOW.md docs/MEMORY.md docs/SESSION-START.md memory/role/README.md README.md code-map/catalog.json` 輸出 0 行(docs/DECISIONS.md、docs/HANDOFF.md、docs/TODO.md、docs/DESIGN-MEMORY-INBOX.md 不算)",
+    "行為:沙盒角色卡 + 暫存區 inbox 合計 20 KB → `rules.py pack worker --model opus` rc 0、輸出含角色卡全文與 inbox 每一條(沒有被截掉的行、沒有省略標記);缺一節 / 卡無正文 / 模型卡缺 → rc 1、stdout 空、decision 頁一張(與現狀相同);`--max-bytes` 走既有未知旗標處置",
+    "auto-fix.sh / review.sh / consolidate-memory.sh 對 rules.py rc 1 的處置不變(tests/test_rules_delivery.py BrokenSourcesStopThePack 與 TheDispatchEntriesStartNothing 兩類照綠,`test_an_unbreakable_unit_that_does_not_fit` 刪)",
+    "既有全套綠:`sh scripts/gate.sh --branch --ticket <本票號>` 綠;釘住舊行為的既有案例改掉或刪掉(清單在 test_plan),不留假綠、不加併發斷言"
+  ],
+  "in_scope": [],
+  "out_of_scope": [
+    "docs/DECISIONS.md",
+    "docs/VISION.md",
+    "tickets/134.json",
+    "scripts/memory.py",
+    "memory/role/*.md"
+  ],
+  "depends_on": [
+    {
+      "id": "134",
+      "condition": "落地(同檔 scripts/rules.py :281 註解、tests/test_rules.py:568 夾具)"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/rules.py",
+    "tests/test_rules.py",
+    "tests/test_rules_delivery.py",
+    "templates/dispatch-consolidator.md",
+    "templates/dispatch-opener.md",
+    "docs/DISPATCH-TEMPLATE.md",
+    "docs/WORKFLOW.md",
+    "docs/MEMORY.md",
+    "docs/SESSION-START.md",
+    "memory/role/README.md",
+    "README.md",
+    "code-map/catalog.json",
+    "code-map/index.json",
+    "code-map/INDEX.md"
+  ],
+  "role": "worker",
+  "model": "sonnet",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "b5e3e91b459fa89bd9a12d4add2f5deb1479d900",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "simple",
+  "needs_verifier": false,
+  "interface_fixed": false,
+  "feature": "agent-control 減法(D-054)",
+  "test_plan": "期望值來源:D-054 Q6 原話、D-053 ⑥、本票 objective。夾具 tests/control_harness.Sandbox 或 test_rules 既有 tmp 佈局,真 rules.py 子行程。\nworker 單元(就地改):tests/test_rules.py —— :60、:91、:98、:255、:366、:425、:536 的 ≤ 4096 斷言刪或改成「全文在」;TheFixedSectionsAreSmall :312 刪;:380 只帶尾巴 → 改成整份 inbox 都在;:437 刪。tests/test_rules_delivery.py —— :34-35 常數與 :189-190 斷言刪;BrokenSourcesStopThePack :233 的 `test_an_unbreakable_unit_that_does_not_fit` 刪,其餘四條留;TheDispatchEntriesStartNothing :305 五條留。新增最少量:20 KB 卡 + inbox 全進包。\nneeds_verifier=false:純刪除。變異(未實測,worker 驗紅一條):M1 grow 仍截 inbox 600 B → 全進包案例紅。\n查過的 oracle:tests/test_rules.py、tests/test_rules_delivery.py;verify/ 沒有 rules 案例(讀碼)。文件:DISPATCH-TEMPLATE :33,:36、WORKFLOW :279、memory/role/README.md:32、MEMORY.md:22、README.md:71、dispatch-consolidator.md:13、dispatch-opener.md:5、SESSION-START :47-48(缺節不起 agent 那句留)。",
+  "outline": "摘要:#134 的 outline Q1 明說 4 KB / 600 B 不是 D-006、留給減法稽核;稽核裁「刪硬擋、留缺節不起」。同檔 rules.py 所以排在 #134 後。\n讀碼(base b5e3e91):rules.py 檔頭 :4,:18,:26-34;DEFAULT_MAX :53、FIXED_MAX :56、LOCAL_INBOX_BYTES :61;grow :406-425(:418 截斷);build :428-567(required :439-448、缺共用規則 :458-461、找不到節 :465-468、節無正文 :473-476、模型卡 :481-482 —— 這五種留;:536-549 兩種 problem 刪;:509-510 problems 先回);cmd_pack :639-663(:643 未知角色 rc 2 留、:649 problems rc 1 留、:653-656 超上限 rc 1 刪);:717 --max-bytes 預設;post_decision :587-613、fingerprint :571 留。\n設計裁示(自己下):規則包順序與段落不變,只拿掉預算;派工文變長的成本由 #148(暫存區批次整理)與整理者判準控制,不在包這端截。\ncomplexity=simple、model=sonnet:一支 737 行腳本刪一個預算分配器加改兩支測試,機械。needs_verifier=false。\n不在本票:memory.py 上限(#134)、暫存區何時整理(#148)、規則包節錄哪幾節(#147 文件整併時若改 WANTED 再動)。",
+  "decision_refs": [
+    "D-053",
+    "D-054",
+    "D-006"
+  ],
+  "verify_strings": [
+    {
+      "path": "scripts/rules.py",
+      "contains": "LOCAL_INBOX_BYTES"
+    }
+  ]
+}

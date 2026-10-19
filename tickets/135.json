@@ -1,0 +1,91 @@
+{
+  "id": "135",
+  "subject": "硬擋清單 hard_block:一段設定擋裁示文件、發版腳本、prod 資料與殺行程字樣(D-054 Q3)",
+  "created": "2026-10-19T10:21:41+08:00",
+  "objective": "VISION「待確認」已裁:拿掉寫入範圍之後只留一個硬擋清單 —— 裁示文件、發版腳本、prod 資料。本票把 board/config.json 現在**一條都沒設**的 `protected_paths`(ticket.py:1326 讀它、A 目前對任何檔都不擋)改成一段 `hard_block`:`paths`(repo 內 glob;A 填 docs/DECISIONS.md、docs/VISION.md、scripts/sync-to-project.sh)、`dirs`(repo 外目錄,由 #115 事後越界守衛查;A 填空)、`patterns`(改動內文禁字 regex,只查 tests/** 與 verify/** 新增行;A 填 verify-case.py:122 `DEFAULT_FORBID` 那四條殺行程字樣 —— 原案例 lint F4 的規則搬進來,lint 本身 #138 再刪)。三個既有執行點照舊、只換讀的清單:apply.sh 第 5 步 rc=5、gate.sh preflight rc=4、land.sh 拒收;#115 守衛的 `guarded_dirs` 改讀 `hard_block.dirs`。只有這一段設定,沒有第二份清單。\nD-053 ④:改善 VISION「明確不是我要的 ②」(寫入範圍那一整套 → 只留一個硬擋清單)與「待確認 · 拿掉寫入範圍之後要不要留硬擋」;指標 = 每張票需要我介入幾次(#137 刪掉範圍欄之後,唯一會擋的是這張清單,不再有範圍反駁與缺理由拒收)。拿掉的關卡:`protected_paths` / `guarded_dirs` / `verify_lint.forbid` 三個分散的設定鍵合成一段;本票不新增任何檢查 —— patterns 是 F4 既有規則換位置,VISION 已裁要留的那一道。",
+  "acceptance": [
+    "行為:沙盒 repo 設好 hard_block 後,一張票的改動動到 `hard_block.paths` 其中一檔 → apply.sh rc=5、gate.sh --branch --ticket 的 preflight rc=4、land.sh 拒收(三處輸出都看得出是哪個檔,路徑出現即可、不釘句子);tests/** 或 verify/** 新增行命中 `patterns` 其中一條(例 `os.kill(`)→ 同三處同樣擋;改動不碰清單 → 三處不擋;config 沒有 hard_block 或三個子清單皆空 → 三處都不擋(與現狀相同)",
+    "越界守衛:auto-fix.sh 的事後守衛(run_agent 內 guard_conf,讀碼 :1401-1423)改讀 `hard_block.dirs`,`dirs` 底下的檔被 agent 動到仍判 rc=8、沒設就不查(既有 tests/test_auto_fix.py:3941-4202 的 guarded_dirs 案例換鍵名後照綠)",
+    "grep 0:`git grep -nE 'protected_paths|guarded_dirs|PROTECTED_FIELD|verify_lint' -- scripts board tests verify templates docs/WORKFLOW.md docs/DISPATCH-TEMPLATE.md docs/ROLES.md docs/reference docs/DESIGN.md docs/FLOW.html tickets/SCHEMA.md README.md CLAUDE.md AGENTS.md memory/role/*.md code-map/catalog.json` 輸出 0 行(scripts/verify-case.py 的 F4 讀 `verify_lint.forbid` 那一處例外 —— lint 整支 #138 刪,本票不動 verify-case.py;docs/DECISIONS.md、tickets/*.json、*.inbox.md 不算)",
+    "board/config.json 的 `hard_block` 內容:paths 恰為 docs/DECISIONS.md、docs/VISION.md、scripts/sync-to-project.sh;dirs 為 [];patterns 為 verify-case.py:122 的四條(`os\\.kill`、`killpg`、`pkill`、`kill -`);tickets/SCHEMA.md 與 docs/DISPATCH-TEMPLATE.md §2 各一處寫出三個子清單各擋什麼、patterns 只查 tests/** verify/** 新增行",
+    "既有全套綠:`sh scripts/gate.sh --branch --ticket <本票號>` 綠;釘住舊行為的既有案例改掉或刪掉(清單在 test_plan),不留假綠、不加併發斷言"
+  ],
+  "in_scope": [],
+  "out_of_scope": [
+    "docs/DECISIONS.md",
+    "docs/VISION.md",
+    "tickets/134.json",
+    "scripts/verify-case.py"
+  ],
+  "depends_on": [
+    {
+      "id": "134",
+      "condition": "落地(同檔 scripts/gate.sh、scripts/auto-fix.sh、board/config.json)"
+    }
+  ],
+  "allowed_write_paths": [
+    "board/config.json",
+    "scripts/ticket.py",
+    "scripts/apply.sh",
+    "scripts/gate.sh",
+    "scripts/land.sh",
+    "scripts/auto-fix.sh",
+    "tickets/SCHEMA.md",
+    "docs/DISPATCH-TEMPLATE.md",
+    "docs/WORKFLOW.md",
+    "docs/ROLES.md",
+    "docs/reference/role-procedures.md",
+    "docs/DESIGN.md",
+    "docs/FLOW.html",
+    "README.md",
+    "CLAUDE.md",
+    "memory/role/implementer.md",
+    "memory/role/opener.md",
+    "memory/role/reviewer.md",
+    "code-map/catalog.json",
+    "code-map/index.json",
+    "code-map/INDEX.md",
+    "tests/control_harness.py",
+    "tests/test_apply.py",
+    "tests/test_status.py",
+    "tests/test_land.py",
+    "tests/test_auto_fix.py",
+    "tests/test_gate.py",
+    "tests/test_ticket.py",
+    "verify/write_scope/test_ticket_101.py",
+    "verify/batch_fix/test_ticket_108.py"
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "b5e3e91b459fa89bd9a12d4add2f5deb1479d900",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "complex",
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "feature": "agent-control 減法(D-054)",
+  "test_plan": "期望值來源:D-054 Q3 原話、VISION 待確認那一條、本票 objective 釘的設定形狀;不從被測程式算。夾具 tests/control_harness.Sandbox,apply.sh / gate.sh / land.sh 用子行程跑真腳本,不起模型、不上埠。\nworker 單元(就地改既有檔):tests/test_apply.py(16 處 protected_paths → hard_block.paths;TheWriteScope 的硬擋案例)、tests/test_status.py:591(preflight 硬擋停在測試前)、tests/test_land.py(6 處)、tests/test_auto_fix.py:3941-4202(guarded_dirs → hard_block.dirs,含 :4007 的 ~ 展開)、tests/control_harness.py DEFAULT_CONFIG。新增最少量案例:patterns 命中 tests/** 新增行 → 三處擋;命中 scripts/** 不擋(scripts/auto-fix.sh:1355 自己就用 os.killpg)。\n驗證者(needs_verifier=true、interface_fixed=true,與 worker 平行):從 D-054 Q3 原話獨立寫 verify/hard_block/test_ticket_135.py,標籤自登記 verify/TAGS.d/135.md(建議 `hard-block`);重點是「三處同一份清單」—— 設定只改一處,三個執行點同時變;以及「沒設就不擋」。\n變異(未實測,驗證者驗紅):M1 apply 仍讀舊鍵 protected_paths → 行為 A 紅;M2 patterns 對 scripts/** 也查 → 新增的 scripts 不擋案例紅;M3 guard_conf 仍讀 guarded_dirs → 守衛案例紅。\n既有 oracle 查過:tests/test_apply.py、test_status.py、test_land.py、test_auto_fix.py、verify/write_scope/test_ticket_101.py(18 處;整檔 #137 刪,本票只換鍵名)、verify/batch_fix/test_ticket_108.py(4 處)。",
+  "outline": "摘要:A 現在沒有任何硬擋(board/config.json 無 protected_paths 鍵,讀碼確認);這張票先立清單,#137 才敢刪寫入範圍 —— 否則中間連 DECISIONS 都沒人擋(稽核相依 4)。\n執行點(讀碼,base b5e3e91):ticket.py `protected_paths()` :1326-1334、`write_scope()` :1380-1399(回 blocked/extra 兩半,本票只動 blocked 那一半的來源;extra 那一半 #137 刪);apply.sh 單票第 5 步 :1072-1121(rc=5)、`cmd_batch` :459 自己讀 conf 的 protected_paths(改成同一支函式);gate.sh PREFLIGHT_PY :446-459(rc=4);land.sh :429-468(B 行 → 拒收);auto-fix.sh guard_conf :1401-1423 的 `guarded_dirs`(:1410)。F4 來源:verify-case.py:120-122 DEFAULT_FORBID、:645-659 forbidden_patterns 讀 verify_lint.forbid(本票不改 verify-case.py)。\n設計裁示(自己下):(1) 一段 `hard_block` 三個子清單,不留舊鍵、不做雙形狀(D-018);(2) patterns 只查 tests/** 與 verify/** 的新增行 —— scripts 自己合法用 kill(auto-fix.sh:1355、consolidate-memory.sh:201,讀碼 12 處),查全 patch 會誤擋每一張改那幾行的票;(3) 檢查函式放 ticket.py 一處(建議名 `hard_block_hits`),三個執行點都叫它;gate preflight 已有 diff 內文(讀碼 :389-423 為 verify_strings 算的 blob),拿同一份比 patterns;(4) A 的發版腳本只有 sync-to-project.sh(它寫進 T),列進 paths;prod 資料在 T,A 的 dirs 留空,T 那份清單在 #147 的 T 端清單。\n建議順序:config → ticket.py 檢查函式 → apply/gate/land 換呼叫 → auto-fix guard_conf → 測試 → SCHEMA / DISPATCH-TEMPLATE §2 / 角色卡那一句(implementer.md:10「硬擋只有 out_of_scope、protected_paths」改成「硬擋只有 hard_block」)。\nneeds_verifier=true:這是減法之後唯一留下的安全邊界,三個執行點讀同一份清單這件事要有人獨立驗;interface_fixed=true:設定形狀與三個 rc 已釘。complexity=complex:四支腳本 + 守衛 + 七支測試,做完值得一次需求檢查。model=opus。\n不在本票:刪 extra/out_of_scope 那一半(#137)、刪案例 lint 與 F4(#138)、T 端清單(#147 outline)。",
+  "decision_refs": [
+    "D-053",
+    "D-054",
+    "D-050",
+    "D-048"
+  ],
+  "verify_strings": [
+    {
+      "path": "scripts/ticket.py",
+      "contains": "hard_block"
+    }
+  ]
+}

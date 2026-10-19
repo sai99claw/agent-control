@@ -1,0 +1,77 @@
+{
+  "id": "148",
+  "subject": "記憶整理改批次觸發:一份暫存區 ≥5 條或最舊一條滿 3 天才開整理票;同一份記憶 24 小時內最多一次(D-055 ①)",
+  "created": "2026-10-19T10:22:01+08:00",
+  "objective": "D-055 ① 原話:「#134 讓它跑完,之後補一個小改動:整理改成批次觸發(每份記憶一天最多一次,或累積 N 條,N 你定),不要有 1 條就派 Fable。」主線定 N=5、加「最舊一條已放滿 3 天」免得條目少的暫存區永遠不整理、同一份記憶 24 小時內最多觸發一次。本票接在 #134 之後,只改 `memory.py check` 的觸發條件,其餘(查重、只由主線開、租約、整理者判準、`memory.pending` 事件)照 #134:一份 `*.inbox.md` 的非空行數 ≥ 5,或其中最舊一條的日期(note 括號裡的 YYYY-MM-DD,沒有可解析日期的條目不算進年齡)距今 ≥ 3 天 → 待整理;但這份主檔最近一張整理票(role=consolidator、對象是這份檔,任何 state)的 `created` 在 24 小時內 → 這次不開(條目留著,下次再看)。三個數字是 memory.py 的常數,不進 config、不進角色卡。\nD-053 ④:改善 VISION「記憶 · 整理」(記憶太長時由高階模型整理 —— 不是每一條都派一個 fable session)與目的(token 有效);指標 = 每張落地票的 token(每次整理是一個 fable session、角色卡上限 ≤ 40K token;稽核 #134 落地後第一次開場預計開 3 張)。拿掉的關卡:無(這是調整 #134 的觸發條件,同一道機制);本票不新增檢查、不新增事件種類、不加併發斷言。",
+  "acceptance": [
+    "行為(門檻):沙盒 `memory/role/opener.inbox.md` 4 條、日期皆今天、票庫空 → `memory.py check` 不開票、沒有 `memory.pending` 事件、rc 0;第 5 條加進去 → 恰開 1 張(subject / objective 照 #134 的形狀,不另釘字);另一份 inbox 只有 1 條但日期是 3 天前 → 恰開 1 張;1 條日期昨天 → 不開",
+    "行為(冷卻):沙盒 inbox 6 條,票庫已有一張對這份主檔的整理票 `created` 在 2 小時前且 state=Done → 不再開;把那張票的 created 改成 25 小時前(夾具直接改票 JSON)→ 開 1 張;開著的整理票仍走 #134 的查重、不重開",
+    "grep:`git grep -nE 'memory\\.pending' scripts/event.py` 恰 1 行(事件種類不多不少);`git grep -nE '暫存區 1 條|有任一條|任一條未整理' -- scripts docs/MEMORY.md memory/role/README.md templates/dispatch-consolidator.md` 輸出 0 行(#134 寫的「有一條就觸發」說法改成批次條件)",
+    "文件:docs/MEMORY.md 與 memory/role/README.md 的觸發段寫成「≥5 條或最舊滿 3 天;每份 24 小時最多一次」一處;new-session.sh 第 4 段的說明字跟著改(不釘整行);角色卡 memory/role/*.md 不寫數字",
+    "既有全套綠:`sh scripts/gate.sh --branch --ticket <本票號>` 綠;釘住舊行為的既有案例改掉或刪掉(清單在 test_plan),不留假綠、不加併發斷言"
+  ],
+  "in_scope": [],
+  "out_of_scope": [
+    "docs/DECISIONS.md",
+    "docs/VISION.md",
+    "tickets/134.json",
+    "memory/role/*.md",
+    "memory/model/*.md",
+    "memory/**/*.inbox.md",
+    "scripts/consolidate-memory.sh"
+  ],
+  "depends_on": [
+    {
+      "id": "134",
+      "condition": "落地(同檔 scripts/memory.py check;本票改的是它新寫的觸發條件)"
+    }
+  ],
+  "allowed_write_paths": [
+    "scripts/memory.py",
+    "scripts/new-session.sh",
+    "docs/MEMORY.md",
+    "memory/role/README.md",
+    "templates/dispatch-consolidator.md",
+    "code-map/catalog.json",
+    "code-map/index.json",
+    "code-map/INDEX.md",
+    "tests/test_memory.py",
+    "tests/test_memory_lifecycle.py",
+    "tests/test_new_session.py",
+    "tests/test_auto_fix.py",
+    "tests/control_harness.py"
+  ],
+  "role": "worker",
+  "model": "sonnet",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "b5e3e91b459fa89bd9a12d4add2f5deb1479d900",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "simple",
+  "needs_verifier": false,
+  "interface_fixed": false,
+  "feature": "agent-control 減法(D-054)",
+  "test_plan": "期望值來源:D-055 ① 原話與主線定的三個數(5 條 / 3 天 / 24 小時);日期由夾具寫死(note 括號 `(#1, 2026-10-16, worker@opus)` 形式,NOTE_LINE :236 解得出),今天用 memory.py 可注入的時鐘或夾具算相對日期;不從被測程式算。夾具 tests/control_harness.Sandbox,真 memory.py 子行程,不起模型。\nworker 單元(就地改):tests/test_memory_lifecycle.py —— #134 的 A1「1 條就觸發」改成 5 條 / 3 天兩種;A2 加「4 條皆新 → 不開」;A3 查重照留;新增冷卻兩條(2 小時前 Done 票 → 不開;25 小時前 → 開)。tests/test_memory.py MemoryCheck 若有 1 條觸發的斷言改門檻。tests/test_new_session.py 第 4 段字樣改。tests/test_auto_fix.py AGENT_PROBES(#134 A9 放一條 note 的探針)改成放 5 條或一條 3 天前的 note,探針仍發得出 memory.pending。不加併發斷言(#134 A3 的「兩支 check 同時跑」那條不複製)。\nneeds_verifier=false:門檻數字的契約就是 worker 自己改的那幾條單元;驗證者只會重演。變異(未實測,worker 驗紅一條):M1 冷卻查的是「開著的票」而不是 created 24 小時 → 冷卻案例紅。\n查過的 oracle:tests/test_memory_lifecycle.py、tests/test_memory.py、tests/test_new_session.py、tests/test_auto_fix.py(#134 改過的版本為準,開工時以主線 HEAD 為基)。",
+  "outline": "摘要:#134 把觸發改成「暫存區有任一條就開票」;D-055 ① 說不要一條就派 fable。本票只換門檻與冷卻,機制不動。\n讀碼(base b5e3e91,#134 落地後行號會變,worker 以 HEAD 為準):memory.py cmd_check :931-1005(#134 改寫中:inbox 非空行數 → pending)、open_consolidation :724-745(查重:用票的範圍欄認檔;#137 之後改認 `memory_file` —— 本票的「最近一張整理票」用與 open_consolidation 同一個匹配函式,不另寫一套,#137 換腳時兩處一起換)、open_ticket_for :775、inbox_rows :844(NOTE_LINE :236 解 `- 文 (tags)`,tags 以 `, ` 切、第二段是日期)、cmd_check_stale :895(不動)。冷卻的時鐘來源:整理票的 `created`(ticket.py 開票時寫),不讀 events.jsonl、不另記檔(Q5 單一狀態)。\n設計裁示(自己下):(1) 三個數字是 memory.py 常數,名字固定 BATCH_MIN_ENTRIES / BATCH_MAX_AGE_DAYS / BATCH_COOLDOWN_HOURS(票面 verify_strings 釘第一個),不進 config —— 進 config 就多一個要維護的旋鈕,T 要不同數再說;(2) 沒有日期的條目只算條數不算年齡(unparsed / no-source 行 #134 已分類);(3) 冷卻看任何 state 的整理票 created,包括 Cancelled —— 24 小時內取消過也算觸發過;(4) 不加冷卻以外的門檻。\ncomplexity=simple、model=sonnet:一支函式換條件 + 四支測試。needs_verifier=false。不在本票:整理者行為(consolidate-memory.sh)、規則包暫存區截斷(#140)。",
+  "decision_refs": [
+    "D-055",
+    "D-053",
+    "D-013",
+    "D-043"
+  ],
+  "verify_strings": [
+    {
+      "path": "scripts/memory.py",
+      "contains": "BATCH_MIN_ENTRIES"
+    }
+  ]
+}
