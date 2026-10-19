@@ -49,14 +49,10 @@ except (OSError, ValueError):
     config = {}
 rules = config.get("rules") or {}
 applies = (config.get("memory") or {}).get("applies_to")
-# 專案的落地入口由專案自己宣告(#66):guard-main.sh 擋裸 commit 時照這兩格印「該走哪」。
-land = config.get("land") if isinstance(config.get("land"), dict) else {}
 checks = (
     ("rules.roles_dir", rules.get("roles_dir") == "docs/roles"),
     ("rules.models_dir", rules.get("models_dir") == "docs/roles/model"),
     ("memory.applies_to", isinstance(applies, list)),
-    ("land.entry", isinstance(land.get("entry"), str) and bool(land.get("entry"))),
-    ("land.docs", isinstance(land.get("docs"), str) and bool(land.get("docs"))),
 )
 missing = [name for name, present in checks if not present]
 if missing:
@@ -103,7 +99,7 @@ CTRL=$DEST/scripts/control
 CTRL_MANIFEST=$CTRL/.sync-manifest
 NEW_SCRIPTS=""
 # 專案端要用到的那幾支 + 它們 import 的。順序無所謂,名單本身要進 code review。
-SCRIPT_LIST="status.py verify-case.py apply.sh auto-fix.sh review.sh inbox.py rules.py memory.py event.py ticket.py verify.py new-session.sh heartbeat.sh session-hook.sh wtbase.sh guard-main.sh repo-map.py agent-cost-hook.py transcript-cost.py role-models.py"
+SCRIPT_LIST="status.py verify-case.py apply.sh auto-fix.sh review.sh inbox.py rules.py memory.py event.py ticket.py verify.py new-session.sh heartbeat.sh session-hook.sh wtbase.sh repo-map.py agent-cost-hook.py transcript-cost.py role-models.py"
 # 這兩支**不是入口**,是被上面那幾支 `import` 的(見檔頭)。查「接了沒」時要把它們挑掉
 # —— 對一支本來就沒有人直接叫的檔說「沒有呼叫點」,是一句假話,而假警報會讓真的那幾條
 # 被一起跳過(`docs/DISPATCH-TEMPLATE.md` §5.7)。
@@ -459,18 +455,6 @@ if [ -n "$UNCALLED" ]; then
 else
   echo "sync: 專案端每一支都有呼叫點(排除只被別支 import / 呼叫的 $DEPENDENCY_ONLY)。"
 fi
-
-# 主線越界守衛(#63):與上面第 7 點同一種 —— 呼叫點在專案的 `.claude/settings.json`,
-# 這一支**不改它**(那是專案的設定,走專案自己的 docs 通道),只印出該貼的那一筆。
-case " $UNCALLED " in
-  *" guard-main.sh "*)
-    cat <<'EOF'
-sync: 專案的 .claude/settings.json 沒接 PreToolUse 守衛 —— hooks.PreToolUse 要貼的那一筆:
-sync:        {"matcher": "Bash|Read", "hooks": [{"type": "command", "command": "sh \"$CLAUDE_PROJECT_DIR/scripts/control/guard-main.sh\"", "timeout": 10}]}
-sync:      主線自寫票面 / 讀 worker log / 裸 commit 會被擋;子代理人與副本裡不觸發,AC_MAIN_OVERRIDE=1 放行並記事件。
-EOF
-    ;;
-esac
 
 # 互動成本(#95):同一種 —— 呼叫點在專案的 `.claude/settings.json`,只印該貼的兩筆。
 case " $UNCALLED " in

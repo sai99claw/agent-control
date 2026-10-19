@@ -66,9 +66,6 @@ KINDS = (
     "inbox.posted",
     # 記憶:暫存區有未整理條目、整理完成、記一條(docs/MEMORY.md「整理」,D-053 ⑥)。
     "memory.pending", "memory.consolidated", "memory.noted",
-    # 主線越界守衛(#63,guard-main.sh):擋了一次、放行一次越界。blocked 是分母 ——
-    # 只記 override 的話,遵循度算不出來。
-    "main.blocked", "main.override",
 )
 
 ENV_ROOT = "AC_ROOT"

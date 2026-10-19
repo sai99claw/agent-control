@@ -9,7 +9,7 @@ A4 | unit | apply <worker patch> <patch-verify> --evidence-verifier             
 A5 | unit | patch 動 lib/a.py(有理由)/ docs/b.md(空字串,命中 out_of_scope)/ etc/c.ini(沒寫) + notes/home.md(info home) | extra_paths=[a,b,c]、extra_reasons={a:理由,b:null,c:null};land 拒絕含 MSG_A5 點名 b;只缺理由不在 allowed 的照落;覆核派工文逐檔見檔名、glob、理由 | 票面 A5 + test_plan T2(手算)
 A6 | unit | 讀 SCHEMA / DISPATCH-TEMPLATE / role-procedures / dispatch-reviewer                | 舊句「硬擋只有兩格」與反向指示不在;新格 extra_reasons、EVIDENCE 小節名在   | 票面 A6 原話
 A7 | unit | set info_homes                                                                   | 票只多 info_homes 一格,沒有第二組權限欄                                    | 票面 A7「不能把資訊歸屬另存成第二組可寫的權限欄位」
-A8 | unit | guard-main 對 set <id> info_homes;auto-fix --dry-run --round 1                   | deny 指開題者;派工文含 config.info_map 的路徑與票的 info_homes.home;缺設定照印 | 票面 A8 原話
+A8 | unit | auto-fix --dry-run --round 1                   | 派工文含 config.info_map 的路徑與票的 info_homes.home;缺設定照印 | 票面 A8 原話
 
 ## 介面字串(票面定的照抄;票面沒定的在這裡定)
 MSG_A3 = "是本票驗證者的案例檔"          ← 票面 interface_contracts.messages.A3
@@ -604,28 +604,6 @@ class A6DocsSayTheNewRule(unittest.TestCase):
 
 
 # ------------------------------------------------------------------ A8
-
-
-class A8TheFaceGuardKnowsInfoHomes(Sandbox):
-    config_extra = {"worktree_dir": "../agent-control-wt"}
-
-    def test_a8_guard_main_denies_set_info_homes_from_the_main_line(self):
-        """A8 guard-main 的票面欄位守衛納入 info_homes(deny、指開題者)。"""
-        import shutil
-        import subprocess
-        target = os.path.join(self.repo, "scripts", "guard-main.sh")
-        shutil.copy(os.path.join(ROOT, "scripts", "guard-main.sh"), target)
-        payload = {"tool_name": "Bash", "cwd": self.repo, "hook_event_name": "PreToolUse",
-                   "tool_input": {"command": "python3 scripts/ticket.py set 5 info_homes "
-                                             "'[{\"what\":\"x\",\"home\":\"docs/a.md\"}]'"}}
-        done = subprocess.run(["sh", target], cwd=self.repo, env=self.env(),
-                              input=json.dumps(payload), capture_output=True, text=True,
-                              timeout=60)
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertTrue(done.stdout.strip(), "info_homes 是票面欄位,要 deny(stdout 空 = 放行)")
-        out = json.loads(done.stdout)["hookSpecificOutput"]
-        self.assertEqual(out["permissionDecision"], "deny")
-        self.assertIn("開題者", out["permissionDecisionReason"])
 
 
 class A8TheWorkerPacketShowsWhereInfoLives(Sandbox):

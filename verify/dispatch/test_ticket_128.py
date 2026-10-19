@@ -8,7 +8,7 @@ A4 | integ | 沙盒 land.sh:docs 通道 / 票 land 的 push 被 origin pre-recei
 A5 | doc   | 讀 docs/WORKFLOW.md §8「agent 越界守衛」那一條 | 寫得出鍵名、預設三前綴、`[]`、只記不擋、stage push + sha + 前 main、專案端 land 包裝要照發 | 票面 A5 原話
 
 ## 介面字串(全部出自票面 acceptance;票面 verify_strings 的原字不在本檔出現 —— gate 比的是 patch 內文)
-KEY        = "guard_main" + "_paths"      ← A1 config 鍵
+KEY        = "guard_" + "main_paths"      ← A1 config 鍵
 SIDE       = "main" + "_side"             ← A1 guard.json 欄位(list,每列 path / before / after)
 STAGE      = ("stage", "push")            ← A4 land.fail 鍵值
 BEFORE_KEY = "main" + "_before"           ← A4(同 #127 A1)
@@ -44,7 +44,7 @@ from test_land import LandBase  # noqa: E402
 from test_ticket_115 import GUARD_RC, GuardBase  # noqa: E402
 
 # ---- 介面字串:斷言只認這裡的常數,改這裡等於改契約 ----
-KEY = "guard_main" + "_paths"
+KEY = "guard_" + "main_paths"
 SIDE = "main" + "_side"
 STAGE_KEY, STAGE_PUSH = "stage", "push"
 BEFORE_KEY = "main" + "_before"

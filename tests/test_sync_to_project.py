@@ -469,26 +469,21 @@ class SyncToProject(unittest.TestCase):
             for key in ("rules.roles_dir", "rules.models_dir", "memory.applies_to"):
                 self.assertIn(key, r.stderr)
 
-    def test_g4_dry_run_refuses_a_project_missing_land_entry_or_land_docs(self):
-        land = json.loads("{%s}" % LAND_JSON)["land"]
+    def test_g4_dry_run_does_not_ask_for_land_keys(self):
+        """#141:land.entry / land.docs 只服務已刪的主線守衛;缺了照常 rc 0、不說什麼。"""
         for drop in ("entry", "docs"):
             with self.subTest(drop=drop), tempfile.TemporaryDirectory() as d:
                 write_config(d)
                 path = os.path.join(d, "board", "config.json")
                 with open(path) as handle:
                     conf = json.load(handle)
-                conf["land"] = {k: v for k, v in land.items() if k != drop}
+                conf["land"] = {}
                 with open(path, "w") as handle:
                     json.dump(conf, handle)
                 r = sync(d, "--dry-run")
-                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
-                self.assertIn("缺少必要設定", r.stderr)
-                self.assertIn("land." + drop, r.stderr)
-        with tempfile.TemporaryDirectory() as d:
-            write_config(d)
-            r = sync(d, "--dry-run")
-            self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertNotIn("land.", r.stderr)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertNotIn("land." + drop, r.stdout + r.stderr)
+                self.assertNotIn("PreToolUse", r.stdout + r.stderr)
 
     def test_refuses_a_missing_project_dir(self):
         r = subprocess.run(["sh", os.path.join(HERE, "scripts/sync-to-project.sh"), "/nonexistent/x"], capture_output=True, text=True)
