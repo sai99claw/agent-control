@@ -4,9 +4,16 @@
 A1 | integration | hard_block.paths 或 tests/**、verify/** 新增行命中 patterns | apply rc=5、gate preflight rc=4、land 拒收且點名路徑 | 票面驗收 1
 A1 | integration | scripts/** 新增行命中 patterns；未設定 hard_block | apply / gate / land 不因硬擋拒收 | 票面驗收 1
 A2 | integration | agent 改到 hard_block.dirs；未設定 dirs | auto-fix rc=8；未設定不查 repo 外 | 票面驗收 2
-A3 | contract | 對票面指定範圍跑舊鍵 grep | 除 verify-case.py 的既定例外外為 0 行 | 票面驗收 3
+A3 | contract | 對票面指定範圍跑三個舊鍵的 git grep | 0 行(*.inbox.md 不算；verify_lint 歸 #138) | 票面驗收 3
 A4 | contract | 讀 board/config.json、SCHEMA、DISPATCH-TEMPLATE | 三個子清單值與說明完全符合票面 | 票面驗收 4
 A5 | contract | 讀指定既有 oracle 與 Sandbox 預設設定 | 舊鍵已遷移且每份仍釘 hard_block | 票面驗收 5 的 test_plan
+
+## 介面字串(全部出自票面 objective / acceptance)
+HARD_BLOCK = board/config.json 的 "hard_block": {"paths": [...], "dirs": [...], "patterns": [...]}
+PATHS      = docs/DECISIONS.md、docs/VISION.md、scripts/sync-to-project.sh(票面驗收 4)
+PATTERNS   = verify-case.py DEFAULT_FORBID 那四條殺行程字樣(本檔 PATTERNS 常數拆字寫,避開 F4);只查 tests/**、verify/** 新增行
+RC         = apply.sh 5、gate.sh preflight 4、land.sh 拒收(既有拒收 rc 2)、auto-fix.sh 守衛 8
+A3 GREP    = 票面驗收 3 那條 git grep 的 regex 與路徑原樣;*.inbox.md 不算
 
 ## 怎麼做假
 tests/control_harness.Sandbox 建拋棄式真 git repo；apply.sh / gate.sh / land.sh / auto-fix.sh
@@ -16,9 +23,11 @@ tests/control_harness.Sandbox 建拋棄式真 git repo；apply.sh / gate.sh / la
 不起模型、不綁埠、不跑全套、不讀實作者產物、不從被測程式計算期望值。
 """
 import difflib
+import fnmatch
 import json
 import os
 import re
+import subprocess
 import sys
 import unittest
 
@@ -246,30 +255,39 @@ class RepositoryContract(unittest.TestCase):
             return handle.read()
 
     def test_a3_old_configuration_names_are_absent_from_the_declared_scope(self):
-        """A3 指定範圍 grep 舊鍵為 0 行，僅保留 verify-case.py 的既定例外。"""
-        paths = ["scripts", "board", "tests", "verify", "templates", "docs/reference",
-                 "memory/role"]
-        files = ["docs/WORKFLOW.md", "docs/DISPATCH-TEMPLATE.md", "docs/ROLES.md",
-                 "docs/DESIGN.md", "docs/FLOW.html", "tickets/SCHEMA.md", "README.md",
-                 "CLAUDE.md", "AGENTS.md", "code-map/catalog.json"]
-        for rel in paths:
-            for parent, _, names in os.walk(os.path.join(ROOT, rel)):
-                files.extend(os.path.relpath(os.path.join(parent, name), ROOT)
-                             for name in names)
-        old_names = ("protected" + "_paths", "guarded" + "_dirs",
-                     "PROTECTED" + "_FIELD", "verify" + "_lint")
+        """A3 票面那條 git grep 在指定路徑為 0 行；*.inbox.md 不算，verify_lint 歸 #138。"""
+        pattern = re.compile("protected" + "_paths|guarded" + "_dirs|PROTECTED" + "_FIELD")
+        pathspec = ["scripts", "board", "tests", "verify", "templates", "docs/WORKFLOW.md",
+                    "docs/DISPATCH-TEMPLATE.md", "docs/ROLES.md", "docs/reference",
+                    "docs/DESIGN.md", "docs/FLOW.html", "tickets/SCHEMA.md", "README.md",
+                    "CLAUDE.md", "AGENTS.md", "memory/role/*.md", "code-map/catalog.json"]
+        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=ROOT,
+                             capture_output=True, text=True, timeout=60)
+        listed = subprocess.run(["git", "ls-files", "-z", "--", *pathspec], cwd=ROOT,
+                                capture_output=True, text=True, timeout=60)
+        if top.returncode == 0 and os.path.realpath(top.stdout.strip()) == os.path.realpath(ROOT):
+            files = [rel for rel in listed.stdout.split("\0") if rel]
+        else:
+            files = []
+            for parent, dirs, names in os.walk(ROOT):
+                dirs[:] = [name for name in dirs if name not in (".git", "__pycache__")]
+                for name in names:
+                    rel = os.path.relpath(os.path.join(parent, name), ROOT)
+                    if any(rel == spec or rel.startswith(spec + "/") or fnmatch.fnmatch(rel, spec)
+                           for spec in pathspec):
+                        files.append(rel)
+        self.assertIn("scripts/ticket.py", files)
         unexpected = []
         for rel in sorted(set(files)):
+            if rel.endswith(".inbox.md"):
+                continue
             path = os.path.join(ROOT, rel)
             if not os.path.isfile(path):
                 continue
             with open(path, encoding="utf-8", errors="replace") as handle:
                 for number, line in enumerate(handle, 1):
-                    if not any(name in line for name in old_names):
-                        continue
-                    if rel == "scripts/verify-case.py" and old_names[-1] in line:
-                        continue
-                    unexpected.append("%s:%d:%s" % (rel, number, line.rstrip()))
+                    if pattern.search(line):
+                        unexpected.append("%s:%d:%s" % (rel, number, line.rstrip()))
         if unexpected:
             self.fail("舊設定鍵仍存在:\n" + "\n".join(unexpected[:12]))
 

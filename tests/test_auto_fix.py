@@ -4029,6 +4029,10 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
         for guarded in (None, []):
             with self.subTest(guarded=guarded):
                 self.setUp()
+                if guarded is None:
+                    conf = json.loads(self.read("board/config.json"))
+                    conf.pop("hard_block")
+                    self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
                 os.makedirs(os.path.join(self.home, "elsewhere"))
                 self.arm('echo x > "$SANDBOX/elsewhere/c.txt"', guarded=guarded)
                 self.assert_not_stopped(self.auto_fix("--no-review"))

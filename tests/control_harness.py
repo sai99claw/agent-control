@@ -150,6 +150,13 @@ DEFAULT_CONFIG = {
     # 同一支(這裡就是這支替身),而 `test_auto_fix` 與 `verify/agent-output` 的案例只蓋
     # `worker`、靠的正是「驗證者跟 worker 同一支」。
     "worker": {"command": "true"},
+    # 硬擋清單(#135,D-054 Q3)跟 board/config.json 同一份值:沙盒預設就是 prod 的形狀。
+    # 測「沒設就不擋」的案例要自己 `pop("hard_block")`,不能靠預設沒有。patterns 字面拆開
+    # 寫 —— 這一支在 tests/**,自己的新增行也會被 patterns 查。
+    "hard_block": {"paths": ["docs/DECISIONS.md", "docs/VISION.md",
+                             "scripts/sync-to-project.sh"],
+                   "dirs": [],
+                   "patterns": [r"os\." + "kill", "kill" + "pg", "p" + "kill", "kill" + " -"]},
 }
 
 # 絆線(#70):每個沙盒的 PATH 最前面放這一支 `claude`。**替身漏了哪一條路**,那條路
