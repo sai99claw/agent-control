@@ -509,7 +509,7 @@ class TheTableIsOnlyASuggestion(OpeningPage):
     """A2:互動 session 的模型是啟動時指定的那個;角色表只印成建議,不熱切。"""
 
     def test_a2_main_keeps_its_launch_model_and_shows_the_table_s(self):
-        """四問:守 main 不熱切、表只顯示 / 可信回歸:把 session.start 改記表的模型 → model=opus 紅 /
+        """守 main 不熱切、表只顯示 / 可信回歸:把 session.start 改記表的模型 → model=opus 紅 /
         字面 fable、opus / 新案例。"""
         done = self.run_sh("scripts/new-session.sh", "main", "fable")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -529,7 +529,7 @@ class TheTableIsOnlyASuggestion(OpeningPage):
                       part)
 
     def test_a3_main_is_warned_about_a_conflicting_legacy_setting(self):
-        """四問:守 A3 舊衝突設定要警告且給遷移 / 可信回歸:拿掉主線那段 legacy → 沒有「衝突」紅 /
+        """守 A3 舊衝突設定要警告且給遷移 / 可信回歸:拿掉主線那段 legacy → 沒有「衝突」紅 /
         字面 routing.design / 新案例。"""
         conf = json.loads(self.read("board/config.json"))
         conf["routing"] = {"implement": "opus", "design": "opus"}
@@ -594,7 +594,7 @@ class IndependentOpenerAndDesignDispatch(Sandbox):
         self.assertEqual(self.started(), [("opener", "codex:gpt-6-astra")])
 
     def test_a1_design_moves_to_fable_only_on_a_codex_quota(self):
-        """四問:守「前者不可用才換下一個」/ 可信回歸:不判信封 → 停在 astra、fable 沒起紅 /
+        """守「前者不可用才換下一個」/ 可信回歸:不判信封 → 停在 astra、fable 沒起紅 /
         字面 astra 一次、fable 一次 / 新案例。"""
         self.set_role_models(design=[ASTRA, FABLE])
         self.arm(codex="quota")
@@ -607,7 +607,7 @@ class IndependentOpenerAndDesignDispatch(Sandbox):
         self.assertEqual(self.started(), [("design", "codex:gpt-6-astra"), ("design", "fable")])
 
     def test_a1_an_ordinary_codex_failure_does_not_move_on(self):
-        """四問:守一般失敗不換 / 可信回歸:失敗一律換 → fable 被起紅 / 字面 rc 1、1 次 / 新案例。"""
+        """守一般失敗不換 / 可信回歸:失敗一律換 → fable 被起紅 / 字面 rc 1、1 次 / 新案例。"""
         self.set_role_models(design=[ASTRA, FABLE])
         self.arm(codex="fail")
         done = self.dispatch("design", "--items", "2")
@@ -623,7 +623,7 @@ class IndependentOpenerAndDesignDispatch(Sandbox):
         self.assertIn("整串耗盡", done.stderr)
 
     def test_a1_more_items_than_the_cap_starts_nothing(self):
-        """四問:守 dispatch_cap 由 --items 擋、印切批建議、不起程序 / 可信回歸:不傳 --items 給
+        """守 dispatch_cap 由 --items 擋、印切批建議、不起程序 / 可信回歸:不傳 --items 給
         resolve → rc 0、astra 被起紅 / 字面 ≤5 / 新案例。"""
         self.set_role_models(opener_complex=[ASTRA, FABLE])
         self.arm()

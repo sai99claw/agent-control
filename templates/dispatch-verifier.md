@@ -3,7 +3,7 @@
 <!-- 由 scripts/auto-fix.sh 逐格填好再從 stdin 餵給 board/config.json 的 verifier.command
      (#51,D-032 ③);規則包(`rules.py pack verifier`)在這一份之前。`@…@` 是它的佔位:
      派工文裡還看得到任何一個,就是腳本漏填了。人手派時一樣整份複製、把 `@…@` 換掉;
-     `<feature>` / `<tag>` 這類角括號是驗證者自己決定的名字,不是佔位。這一份**不重貼
+     `<…>` 這類角括號是驗證者自己填的,不是佔位。這一份**不重貼
      規則**(規則在角色卡;共用規矩 `docs/DISPATCH-TEMPLATE.md` 按角色卡指的節查,不整份讀),只指路 + 這張票獨有的那幾件事。 -->
 
 > ⚠️ **驗證者不判 PASS/FAIL、不寫 `VERDICT.md`。** 2026-09-21 起對錯由閘門判
@@ -21,15 +21,14 @@
 —— 兩份都是 `@BASE@` 的內容,**沒有實作者的 patch**(D-020:你只證基底紅)。
 **回報給**:@REPORT_TO@。
 
-> **你不等 patch**(D-020,2026-09-23):寫案例、宣告 `TAGS`、寫登記片段、填票的 `verify` 欄、跑
+> **你不等 patch**(D-020,2026-09-23):寫案例、填票的 `verify` 欄、跑
 > `verify-case.py red` 證明乾淨基底上紅 —— 這些票 Ready 就能做完,交件就結束。**綠由閘門在實作者
 > 的 patch 進來時用 `verify-case.py check` 量**,不是你的事,你不搭參考實作、不做變異、不等 patch。
 
 ## 你要交的四樣
-1. `verify/<feature>/test_ticket_@TICKET@.py` —— 票面**每一條驗收各一個案例**,檔頂宣告
-   `TAGS = [...]`(小寫 kebab)。期望值來源要獨立於被測程式:設計文件、手算、既有 golden。
-   **「跑一次記下來當期望」不算。** 照 `verify/_template_ticket.py` 的形狀,每個 `test_` 的
-   docstring 第一行是驗收編號。
+1. **案例** —— 票面**每一條驗收的行為斷言**,加進**最貼近的既有測試模組**(`tests/` 或既有
+   `verify/` 模組;D-056):**不為單張票新開以票號命名的案例檔**。期望值來源要獨立於被測程式:
+   設計文件、手算、既有 golden。**「跑一次記下來當期望」不算。**
 2. 寫完案例 —— 跑 `python3 scripts/verify-case.py red @TICKET@ --ref @BASE@ --candidate @COPY@/work`
    (它自己做乾淨基底副本、覆上你的案例、只跑一次;算數的紅只有「案例檔自己的
    `AssertionError`」,import / 缺符號 / 別處炸的紅會列出來、不算)。rc=0 才算交件。
@@ -37,16 +36,15 @@
    把那份 JSON 原封抄進 `result` 區塊的 `baseline` 那一格,收件的 `apply.sh --evidence-verifier`(auto-fix 跑)在鎖裡併進票的 `verify.baseline`。
    **綠不是你的事**:閘門在實作者 patch 進來時用 `verify-case.py check` 量,`ticket.py close`
    只認那一趟。**不搭參考實作、不做變異、不等 patch。** 交付物 `verify-case.py extract`。
-3. **標籤登記**:新標籤寫成**自己的片段** `verify/TAGS.d/@TICKET@.md`(格式 `` - `tag` — 說明(#@TICKET@) ``)。
-   不要直接改 `verify/TAGS.md` —— 所有票都往那一份的尾巴附加,等於每張票都要等前一張落地(D-012)。
-   執行器認片段,所以片段寫好就不會紅;合併由 `verify-case.py tags-merge` 做。
+3. **標籤**:不新增標籤、不寫登記片段。案例加進既有 `verify/` 模組就沿用那支模組已登記的標籤;
+   加進 `tests/` 模組時 `verify.tags` 留空(閘門的對照表會挑到那支模組)。
 4. **票的 `verify` 欄**——怎麼跑,寫給下一個不認識這張票的人。**寫在 `result` 區塊的
    `verify` 那一格**(你在副本裡,改不到活票;收件的 `apply.sh --evidence-verifier` 在鎖裡把
    `files` / `tags` / `run` / `notes` 併進票,與 `baseline` 同一手)。形狀見下面「第五樣」那一塊
    完整的 `result` 範例 —— 不單獨貼一段 `verify` 片段:照抄片段的人會連柵欄一起抄成 `json`,
    收件端只認 `result`(#731/#772/#775 三次 `no-block`)。
    交付物本身是 `@COPY@/patch-verify.diff`:`cd @COPY@ && diff -ruN base work > patch-verify.diff`
-   (`work/` 裡只有你寫的案例與片段,所以它就只含那幾個檔;票上已經有 `verify.files` 時
+   (`work/` 裡只有你改的案例,所以它就只含那幾個檔;票上已經有 `verify.files` 時
    `python3 scripts/verify-case.py extract @TICKET@` 出的是同一份)。檔頭是 `--- base/…` /
    `+++ work/…` 的相對形式。**不要手工挑檔**。
 
@@ -61,9 +59,9 @@
   "round": @ROUND@,
   "rc": 0,
   "verify": {
-    "files": ["verify/<feature>/test_ticket_@TICKET@.py"],
-    "tags": ["<tag>"],
-    "run": "python3 scripts/verify.py --tag <tag>",
+    "files": ["<你加進案例的那支既有模組,例 tests/test_x.py>"],
+    "tags": [],
+    "run": "python3 -m unittest <那支模組>",
     "notes": "<跑之前要知道的事:前置、已知不穩、為什麼這樣驗>"
   },
   "baseline": {"stage": "red"},

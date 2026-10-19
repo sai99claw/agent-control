@@ -188,7 +188,7 @@ class ThePassPath(ReviewBase):
 class TheReviewerComesFromTheRoleTable(ReviewBase):
     """#121 A1:覆核者的 model / effort 由角色表選;`reviewer.command` 的 `--model` 被換掉。
     **M1**(model 照舊取 reviewer.command 的 `--model`)→ by 是 reviewer@fixture-model,紅。
-    四問:量 argv、by、agent.start、cost;值 = A1/A4;舊值紅在 by;表真的與命令不同。"""
+    量 argv、by、agent.start、cost;值 = A1/A4;舊值紅在 by;表真的與命令不同。"""
 
     def test_the_table_model_and_effort_run_and_are_recorded(self):
         argv_file = os.path.join(self.home, "reviewer-argv.txt")
@@ -419,7 +419,7 @@ class ItOnlyReviewsWhatIsReadyForIt(ReviewBase):
         complexity 這一格的票都走既有的 refuse —— rc=2、review.refused、reviewer 沒被叫、
         review 不寫、不發頁,不是 crash。
 
-        四問:量 rc / reviewer 叫了幾次 / review 格 / 事件與頁;紅 = review.sh 不看 complexity
+        量 rc / reviewer 叫了幾次 / review 格 / 事件與頁;紅 = review.sh 不看 complexity
         (M1:reviewer 被叫、rc=0);期望值 = VISION 流程 #9 與 D-054 Q1 原話,不從 review.sh 算。
         """
         self.set_reviewer(REVIEWER_PASS)
@@ -588,7 +588,7 @@ class ReviewBatch(Sandbox):
                 self.assertEqual(now.get(key), row.get(key), "#%s 的 %s 被寫了" % (ident, key))
 
     def test_pass_writes_review_json_bound_to_the_land_head(self):
-        """A5 pass。四問:量 review.json 的 verdict / sha / by / at / note、票不動;
+        """A5 pass。量 review.json 的 verdict / sha / by / at / note、票不動;
         紅 = sha 寫成票分支頭或寫進票;期望值 = 夾具 rev-parse land/X 與設定的 --model。
 
         **變異 ④**:review --batch 把 sha 寫成票 1 分支頭 → sha 那一條紅。
@@ -607,7 +607,7 @@ class ReviewBatch(Sandbox):
         self.assert_tickets_kept()
 
     def test_the_packet_is_the_fix_diff_plus_every_ticket(self):
-        """A5 派工文。四問:量派工文帶 fix commit 的 diff 行與兩張票的 subject / acceptance;
+        """A5 派工文。量派工文帶 fix commit 的 diff 行與兩張票的 subject / acceptance;
         紅 = 只帶第一張票或帶整批 diff;期望值 = 夾具寫的那一行與票檔。"""
         self.set_reviewer(REVIEWER_PASS)
         self.assertEqual(self.review().returncode, 0)
@@ -621,7 +621,7 @@ class ReviewBatch(Sandbox):
                 self.assertIn(item, text)
 
     def test_fail_pages_ticket_one_listing_the_batch_and_writes_nothing(self):
-        """A5 fail。四問:量 rc≠0、review.json 不在、恰一頁 decision ticket=1 且內文有 #2、票不動;
+        """A5 fail。量 rc≠0、review.json 不在、恰一頁 decision ticket=1 且內文有 #2、票不動;
         紅 = 寫票轉 Blocked 或沒發頁;期望值 = 票號來自命令列。"""
         self.set_reviewer(REVIEW_FAIL)
         done = self.review()
@@ -634,7 +634,7 @@ class ReviewBatch(Sandbox):
         self.assert_tickets_kept()
 
     def test_the_cost_row_lands_on_ticket_one_only(self):
-        """A6。四問:量票 1 多一列 role=reviewer、note 帶 batch <stamp> 與 #1 #2、run_id = AC_BATCH_RUN_ID;
+        """A6。量票 1 多一列 role=reviewer、note 帶 batch <stamp> 與 #1 #2、run_id = AC_BATCH_RUN_ID;
         票 2 的 cost 不變;紅 = 每張各記一列或沒標批次;期望值 = 測試給的 stamp / run。"""
         self.set_reviewer(REVIEWER_PASS)
         self.assertEqual(self.review().returncode, 0)

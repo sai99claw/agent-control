@@ -4,14 +4,14 @@
 A1 | integration | hard_block.paths 或 tests/**、verify/** 新增行命中 patterns | apply rc=5、gate preflight rc=4、land 拒收且點名路徑 | 票面驗收 1
 A1 | integration | scripts/** 新增行命中 patterns；未設定 hard_block | apply / gate / land 不因硬擋拒收 | 票面驗收 1
 A2 | integration | agent 改到 hard_block.dirs；未設定 dirs | auto-fix rc=8；未設定不查 repo 外 | 票面驗收 2
-A3 | contract | 對票面指定範圍跑三個舊鍵的 git grep | 0 行(*.inbox.md 不算；verify_lint 歸 #138) | 票面驗收 3
+A3 | contract | 對票面指定範圍跑三個舊鍵的 git grep | 0 行(*.inbox.md 不算；案例 lint 的設定歸 #138) | 票面驗收 3
 A4 | contract | 讀 board/config.json、SCHEMA、DISPATCH-TEMPLATE | 三個子清單值與說明完全符合票面 | 票面驗收 4
 A5 | contract | 讀指定既有 oracle 與 Sandbox 預設設定 | 舊鍵已遷移且每份仍釘 hard_block | 票面驗收 5 的 test_plan
 
 ## 介面字串(全部出自票面 objective / acceptance)
 HARD_BLOCK = board/config.json 的 "hard_block": {"paths": [...], "dirs": [...], "patterns": [...]}
 PATHS      = docs/DECISIONS.md、docs/VISION.md、scripts/sync-to-project.sh(票面驗收 4)
-PATTERNS   = verify-case.py DEFAULT_FORBID 那四條殺行程字樣(本檔 PATTERNS 常數拆字寫,避開 F4);只查 tests/**、verify/** 新增行
+PATTERNS   = 原 verify-case.py 預設禁字那四條殺行程字樣(本檔 PATTERNS 常數拆字寫,避開 F4);只查 tests/**、verify/** 新增行
 RC         = apply.sh 5、gate.sh preflight 4、land.sh 拒收(既有拒收 rc 2)、auto-fix.sh 守衛 8
 A3 GREP    = 票面驗收 3 那條 git grep 的 regex 與路徑原樣;*.inbox.md 不算
 
@@ -255,7 +255,7 @@ class RepositoryContract(unittest.TestCase):
             return handle.read()
 
     def test_a3_old_configuration_names_are_absent_from_the_declared_scope(self):
-        """A3 票面那條 git grep 在指定路徑為 0 行；*.inbox.md 不算，verify_lint 歸 #138。"""
+        """A3 票面那條 git grep 在指定路徑為 0 行；*.inbox.md 不算，案例 lint 的設定歸 #138。"""
         pattern = re.compile("protected" + "_paths|guarded" + "_dirs|PROTECTED" + "_FIELD")
         pathspec = ["scripts", "board", "tests", "verify", "templates", "docs/WORKFLOW.md",
                     "docs/DISPATCH-TEMPLATE.md", "docs/ROLES.md", "docs/reference",

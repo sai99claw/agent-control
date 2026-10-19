@@ -24,16 +24,14 @@
 #    宣告了 tags 卻一個案例都選不到 = 非零(`verify.py` 的 rc=3):那是缺口,不是綠。
 # 3. **flake 重跑**:紅的案例各連續單跑設定次數,再以原順序整組重跑設定次數。
 #
-# ## 驗證者的案例:`lint` → `check`(D-020,`docs/DESIGN-VERIFY-CASES.md` §三)
+# ## 驗證者的案例:`check`(D-020,`docs/DESIGN-VERIFY-CASES.md` §三)
 # 回歸層之後還有一層:**驗證者寫的那幾條案例,在這一輪的樹上綠了沒有**。
 # `verify-case.py red`(驗證者交件那一趟)只證「乾淨基底上該紅」;候選該綠一直沒有人
 # 自動量 —— 而唯一被點名去量的那個人(驗證者)在時間上拿不到實作者的 patch,於是他
 # 只剩一條路:自己搭一份拋棄式參考實作(#23 那 340K 的來源)。
 #
-# 所以這一支在 `regression()` 之後多兩步:
-#   1. `verify-case.py lint <verify.files>` —— 格式六條(F1–F6),紅了**停在這裡**、
-#      不繼續跑 check:格式不合的案例跑出來的紅指向的是格式,不是實作。
-#   2. `verify-case.py check <票號> --ref <票的 base_sha> --candidate <這一輪的樹>`
+# 所以這一支在 `regression()` 之後多一步(只跑案例,不先驗案例的格式,D-054 Q4):
+#   `verify-case.py check <票號> --ref <票的 base_sha> --candidate <這一輪的樹>`
 #      —— 把票的 `verify.baseline.stage` 從 `red` 升成 `check`(`ticket.py close`
 #      只認 `check`)。`ok:false` 時 candidate 那一趟的原始輸出當成 `--log` 餵給
 #      狀態檔,紅榜因此落進 `failures[]`,走既有的 auto-fix 路(D-014,不重造)。
@@ -45,7 +43,7 @@
 # 「該有」的三個例外:票上有誠實的 `verify_waiver`、票上明著寫 `needs_verifier=false`
 # (`land.sh` 也認這一格,#8)、或**票上連 `verify` 這一格都沒有宣告**(那是「沒有宣告」,
 # 與「宣告了卻沒有案例」不同 —— 同一支腳本對回歸層就是這樣分的)。三個例外都只管
-# 「有沒有案例」那一格:`verify.files` 非空時,lint 與 check **一律照跑**,waiver 也不例外。
+# 「有沒有案例」那一格:`verify.files` 非空時,check **一律照跑**,waiver 也不例外。
 #
 # `check` 回非零的兩種要分開:**候選樹上真的有紅**才算這一輪(worker)的紅,紅榜進
 # `failures[]`、走 auto-fix;`ok:false` 但候選全綠(乾淨基底沒紅、兩邊案例數不同)是
@@ -251,7 +249,7 @@ done
 
 # 批次落地的全套(#109,D-H51 ②):`AC_GATE_TICKETS="1 2"` 時狀態檔**每張票各寫一份**
 # (同 run_id、同一份 log 剖出的 failures)。只管狀態檔:`TICKET` 不跟著設 —— 它還會打開
-# 機械格、flake 重跑、票的 gate 欄,而那些是一張票的事。`auto-fix.sh --batch` 讀第一張那份。
+# 硬擋、flake 重跑、票的 gate 欄,而那些是一張票的事。`auto-fix.sh --batch` 讀第一張那份。
 STATUS_IDS=$TICKET
 if [ "$want_full" -eq 1 ]; then
     for t in ${AC_GATE_TICKETS:-}; do
@@ -261,7 +259,7 @@ fi
 
 # `--branch --ticket <n>` 在主線上空比(#87 A3):主 repo 的 HEAD 是主線、票在、而除了
 # 票庫底下的 *.json 之外**什麼改動都沒有** —— `main...HEAD` 是空的,能比的只剩主工作樹
-# 裡的票檔,而它會讓 verify_strings 假命中、狀態檔記一個「綠」。扣的是票庫裡**每一張**
+# 裡的票檔,而它會讓狀態檔記一個「綠」。扣的是票庫裡**每一張**
 # 票檔(別張票、已追蹤或未追蹤):`ticket.py set` 寫票不 commit,真主線上常躺著別張票的
 # 未提交票檔,只扣本票那一張,這一段在真主線上幾乎不觸發。那不是這張票的閘門,是跑錯地方:
 # 拒跑、指出該去的 worktree(`wtbase.sh` 同一條規則),不寫狀態檔、不動票、不發事件。
@@ -334,23 +332,19 @@ MAIN_TICKET_PY
     fi
 fi
 
-# 機械格(#90 A1):每一條不合都印 `gate: 機械格不合 —— <原文>` 並記進 MECH_LOG,全部量完才
-# 退 4 —— 退之前寫一份**自己的**狀態檔(kind gate、rc 4、note 是那幾行原文,見 status_nothing
-# 之後那一段)。以前四個 exit 4 都在狀態檔之前,auto-fix 讀到的最新一筆是 apply 那一輪
-# (rc 0、紅 0 條),發的是「紅了但沒有歸因」。
-MECH_LOG=$LOG.mechanical
-MECH_NOTE=""
-mech() {   # $1 = 原文
-    echo "gate: 機械格不合 —— $1" >&2
-    echo "gate: 機械格不合 —— $1" >> "$MECH_LOG"
-}
+# 硬擋(#90 A1,D-054 Q4:preflight 只剩 `hard_block`):每一條命中都印 `gate: 硬擋命中 —— <原文>`
+# 並記進 HARD_LOG,全部量完才退 4 —— 退之前寫一份**自己的**狀態檔(kind gate、rc 4、note 是
+# 那幾行原文,見 status_nothing 之後那一段)。以前 exit 4 在狀態檔之前,auto-fix 讀到的最新
+# 一筆是 apply 那一輪(rc 0、紅 0 條),發的是「紅了但沒有歸因」。
+HARD_LOG=$LOG.hard-block
+HARD_NOTE=""
 
 if [ -n "$TICKET" ]; then
-    : > "$MECH_LOG"
-    python3 - "$ROOT" "$TICKET" "$MAIN" "$MECH_LOG" <<'PREFLIGHT_PY'
-import json, os, re, subprocess, sys
+    : > "$HARD_LOG"
+    python3 - "$ROOT" "$TICKET" "$MAIN" "$HARD_LOG" <<'PREFLIGHT_PY'
+import os, subprocess, sys
 
-root, ident, main, mech_log = sys.argv[1:5]
+root, ident, main, hard_log = sys.argv[1:5]
 sys.path.insert(0, os.path.join(root, "scripts"))
 import event
 import ticket as ticket_mod
@@ -385,8 +379,8 @@ for ticket_file in (path, os.path.join(event.tickets_dir(root), "%s.json" % iden
     if ticket_rel and not ticket_rel.startswith(".." + os.sep):
         changed = [name for name in changed if name != ticket_rel]
 
-# verify_strings 比的是**這張票的 patch**(#87 A4):分支相對主線的 diff 加未提交的改動。
-# 票檔不論在哪一側都不算 —— 票面本來就寫著那幾個 needle,算進去就是自己命中自己。
+# 硬擋比的是**這張票的 patch**(#87 A4):分支相對主線的 diff 加未提交的改動。
+# 票檔不論在哪一側都不算。
 ticket_rels = []
 for ticket_file in (path, os.path.join(event.tickets_dir(root), "%s.json" % ident)):
     try:
@@ -396,15 +390,9 @@ for ticket_file in (path, os.path.join(event.tickets_dir(root), "%s.json" % iden
     if not ticket_rel.startswith(".." + os.sep) and ticket_rel not in ticket_rels:
         ticket_rels.append(ticket_rel)
 not_ticket = ["--", "."] + [":(exclude)%s" % rel for rel in ticket_rels]
-content = []
 added = {}   # 給 hard_block.patterns:同一份 diff 的新增行,依檔分(新檔整份算新增)
 for args in (("diff", "--no-ext-diff", "--unified=0", "%s...HEAD" % main),
              ("diff", "--no-ext-diff", "--unified=0", "HEAD")):
-    for line in git(*args, *not_ticket).decode("utf-8", "replace").splitlines():
-        if line.startswith(("+++ ", "--- ")):
-            continue
-        if line.startswith(("+", "-")):
-            content.append(line[1:])
     text = git("-c", "core.quotePath=false", *args, "--src-prefix=a/", "--dst-prefix=b/",
                *not_ticket).decode("utf-8", "replace")
     for name, lines in ticket_mod.added_lines(text).items():
@@ -415,96 +403,25 @@ for name in changed:
         continue
     try:
         with open(os.path.join(root, name), encoding="utf-8", errors="replace") as handle:
-            content.append(handle.read())
+            added.setdefault(name, []).extend(handle.read().splitlines())
     except OSError:
         continue
-    added.setdefault(name, []).extend(content[-1].splitlines())
-blob = "\n".join(content)
 
 errors = []
-for row in ticket.get("verify_strings") or []:
-    needle = row.get("contains") if isinstance(row, dict) else row
-    if needle and str(needle) not in blob:
-        errors.append("verify_strings: %r 不在 patch 內容裡" % needle)
-
-registered = set()
-tag_paths = [os.path.join(root, "verify", "TAGS.md")]
-fragments = os.path.join(root, "verify", "TAGS.d")
-if os.path.isdir(fragments):
-    tag_paths += [os.path.join(fragments, name) for name in sorted(os.listdir(fragments))
-                  if name.endswith(".md")]
-for tag_path in tag_paths:
-    try:
-        with open(tag_path, encoding="utf-8") as handle:
-            registered.update(re.findall(r"^- `([a-z0-9-]+)`", handle.read(), re.M))
-    except OSError:
-        pass
-plan = ticket.get("verify") if isinstance(ticket.get("verify"), dict) else {}
-tags = []
-for tag in list(ticket.get("tags") or []) + list(plan.get("tags") or []):
-    if tag and tag not in tags:
-        tags.append(str(tag))
-for tag in tags:
-    if tag not in registered:
-        errors.append("tags: %r 未登記(登記在 verify/TAGS.md 或 verify/TAGS.d/)" % tag)
-
 # 硬擋(D-054 Q2):只擋 `hard_block`(`paths` 比檔名、`patterns` 比 tests/** verify/** 的新增行)。
 for name, field, pattern in ticket_mod.hard_block_hits(root, changed, added):
     errors.append("%s:%s 命中 `%s`" % (field, name, pattern))
 
 if errors:
-    with open(mech_log, "a", encoding="utf-8") as handle:
+    with open(hard_log, "a", encoding="utf-8") as handle:
         for error in errors:
-            print("gate: 機械格不合 —— " + error, file=sys.stderr)
-            handle.write("gate: 機械格不合 —— %s\n" % error)
+            print("gate: 硬擋命中 —— " + error, file=sys.stderr)
+            handle.write("gate: 硬擋命中 —— %s\n" % error)
     raise SystemExit(4)
 PREFLIGHT_PY
     preflight_rc=$?
     case "$preflight_rc" in 0|4) ;; *) exit "$preflight_rc" ;; esac
-    # 候選樹的 code-map 索引要是新的(#87 A32):新增 / 改名 / 刪除已管理的檔而沒重生,
-    # 查得到的就是一份說謊的地圖。量的是**這一棵**(`--root "$ROOT"`),不是 `AC_ROOT`
-    # 指的主 repo;沒有地圖的 repo(沒有 catalog)不量。與機械格同一個退出碼,不跑測試。
-    if [ -f "$ROOT/scripts/repo-map.py" ] && [ -f "$ROOT/code-map/catalog.json" ]; then
-        if ! python3 "$ROOT/scripts/repo-map.py" --root "$ROOT" check >/dev/null; then
-            mech "code-map 索引過期(上面 repo-map: 那幾行);重生:python3 scripts/repo-map.py build,連同產出物一起 commit"
-        fi
-    fi
-    # 分支改到的記憶檔過分層 lint(#87 A35/A36):只量這條分支動到的那幾份 —— 既有卡正文的
-    # 整理是另一張票的事,全 repo 的結果不當這裡的判準。量的是這一棵(`AC_ROOT=$ROOT`)。
-    MEM_CHANGED=$(python3 - "$ROOT" "$MAIN" <<'MEM_PY'
-import os, subprocess, sys
-root, main = sys.argv[1:3]
-
-def names(*args):
-    done = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True)
-    return [name for name in done.stdout.splitlines() if name] if done.returncode == 0 else []
-
-seen = []
-for args in (("diff", "--name-only", "%s...HEAD" % main), ("diff", "--name-only", "HEAD"),
-             ("ls-files", "--others", "--exclude-standard")):
-    for name in names(*args):
-        if (name.startswith("memory/") and name.endswith(".md")
-                and os.path.basename(name) != "README.md"
-                and os.path.isfile(os.path.join(root, name)) and name not in seen):
-            seen.append(name)
-print("\n".join(seen))
-MEM_PY
-)
-    # `--base`(D-042,#90 A7/A8):只 lint 這條分支**新增**的行(既有正文的命中歸整理票);
-    # 卡多長不量(D-053 ⑥)—— 比法在 memory.py。
-    if [ -n "$MEM_CHANGED" ] && [ -f "$ROOT/scripts/memory.py" ]; then
-        set --
-        for f in $MEM_CHANGED; do set -- "$@" --file "$f"; done
-        MEM_ERR=$LOG.memory
-        AC_ROOT=$ROOT python3 "$ROOT/scripts/memory.py" lint --base "$MAIN" "$@" \
-            >/dev/null 2>"$MEM_ERR"
-        mem_rc=$?
-        cat "$MEM_ERR" >&2
-        if [ "$mem_rc" -ne 0 ]; then
-            mech "分支改到的記憶檔有錯層內容(上面 memory: lint 那幾行:檔、行、rule、建議去處)"
-        fi
-    fi
-    [ -s "$MECH_LOG" ] && MECH_NOTE=$(cat "$MECH_LOG")
+    [ -s "$HARD_LOG" ] && HARD_NOTE=$(cat "$HARD_LOG")
 fi
 
 SHA=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo "")
@@ -524,9 +441,9 @@ ENV_SUSPECT=0
 # 驗證者那一層的 rc(`verify_case` 設它);`VRC` 之於回歸層是什麼,它之於這一層就是
 # 什麼 —— 兩層各自的 rc 分開留著,合併在呼叫的那一行做。
 CRC=0
-# 驗證者案例的 lint 紅(#126):給 `status.py done` 的 `--lint-log …`,紅榜列 kind=LINT。
-LINT_ARGS=""
-LINT_LOG=$LOG.lint
+# 宣告了 verify 卻沒有案例(#126 A2):給 `status.py done` 的 `--no-cases-log …`,紅榜恰一列缺口。
+CASES_ARGS=""
+CASES_LOG=$LOG.no-cases
 CHECK_LOG=$LOG.verify-case
 CHECK_DIR=$LOG.verify-case.d
 
@@ -595,7 +512,7 @@ status_done() {   # $1 = rc
         # shellcheck disable=SC2086
         python3 "$ROOT/scripts/status.py" done --ticket "$t" --kind gate \
             --run-id "$RUN_ID" --sha "$SHA" --rc "$1" --note "$NOTE" \
-            --log "$LOG" $state_args $VERIFY_LOG_ARGS $CHECK_LOG_ARGS $EXTRA_LOG_ARGS $LINT_ARGS $FLAKY_ARGS \
+            --log "$LOG" $state_args $VERIFY_LOG_ARGS $CHECK_LOG_ARGS $EXTRA_LOG_ARGS $CASES_ARGS $FLAKY_ARGS \
             $AUTO_FLAKY_ARGS $ORDER_ARGS \
             || echo "gate: #$t 的狀態檔寫不出來(不擋閘門)" >&2
     done
@@ -733,10 +650,10 @@ status_nothing() {   # $1 = rc  $2 = 為什麼
     inbox_post "$1"
 }
 
-# 機械格不合(見 preflight 那一段):不起測試、不發 gate.start,只留終態 —— 狀態檔的 note
-# 是 stderr 上那幾行 `機械格不合 —— ` 原文(多條全列),auto-fix 靠它歸因(#90 A1/A2)。
-if [ -n "$MECH_NOTE" ]; then
-    status_nothing 4 "$MECH_NOTE"
+# 硬擋命中(見 preflight 那一段):不起測試、不發 gate.start,只留終態 —— 狀態檔的 note
+# 是 stderr 上那幾行 `硬擋命中 —— ` 原文(多條全列),auto-fix 靠它歸因(#90 A1/A2)。
+if [ -n "$HARD_NOTE" ]; then
+    status_nothing 4 "$HARD_NOTE"
     exit 4
 fi
 
@@ -884,13 +801,13 @@ except Exception:                                      # noqa: BLE001
 CAND_PY
 }
 
-# 驗證者那一層:`lint` -> `check`(檔頭那一節;`docs/DESIGN-VERIFY-CASES.md` §三)。
+# 驗證者那一層:`check`(檔頭那一節;`docs/DESIGN-VERIFY-CASES.md` §三)。
 # 設定 `CRC`。**這一層與回歸層一樣不靠別人間接跑**:原始輸出各自存檔,candidate 那
 # 一份還要當成 `--log` 餵進狀態檔 —— 紅榜要指得到是哪一條案例紅,而不是只剩一個
 # 「verify-case 回了 1」。
 verify_case() {
     CRC=0
-    LINT_ARGS=""
+    CASES_ARGS=""
     [ -n "$TICKET" ] || return 0
     if [ ! -f "$ROOT/scripts/verify-case.py" ]; then
         # 同 `regression()` 的態度:沒有這一層要**說出來**,不要讓「沒驗」穿著
@@ -903,8 +820,8 @@ verify_case() {
     why=$(echo "$plan" | sed -n 1p)
     ticket_base=$(echo "$plan" | sed -n 2p)
     files=$(echo "$plan" | sed -n '3,$p')
-    # **只有「有沒有案例」這一格看 waiver**,lint 與 check 不看。第 2 輪把 waiver 寫成
-    # 短路整層,於是每一張帶 waiver 的票都不再被 lint / check —— 而票面的驗收 2 與 3
+    # **只有「有沒有案例」這一格看 waiver**,check 不看。第 2 輪把 waiver 寫成
+    # 短路整層,於是每一張帶 waiver 的票都不再被 check —— 而票面的驗收 2 與 3
     # 對「verify.files 非空」的票沒有例外(#27 第 3 輪:驗證者的 A2–A6 就是量這件事)。
     if [ -z "$files" ]; then
         case "$why" in
@@ -929,30 +846,14 @@ verify_case() {
             echo "gate: 這張票沒有驗證者案例(#$TICKET 的 verify.files 是空的)—— 那是缺口,不是綠。"
             echo "gate:   (要嘛派驗證者補案例,要嘛在票上補一條誠實的 verify_waiver{by,reason}"
             echo "gate:    或 needs_verifier=false。)"
-        } > "$LINT_LOG"
-        cat "$LINT_LOG"
-        # 缺口也是驗證者的紅(#126 A2):紅榜恰一列 `verify-case-lint:(no-cases)`,不然 rc 3 而
+        } > "$CASES_LOG"
+        cat "$CASES_LOG"
+        # 缺口也是驗證者的紅(#126 A2):紅榜恰一列 `verify-case:(no-cases)`,不然 rc 3 而
         # failures[] 空,auto-fix 讀成「紅了但沒有歸因」轉 Blocked —— 而下一步明明是派驗證者。
-        EXTRA_LOG_ARGS="$EXTRA_LOG_ARGS --extra-log $LINT_LOG"
-        LINT_ARGS="--lint-log $LINT_LOG --lint-root $ROOT --lint-no-cases"
+        EXTRA_LOG_ARGS="$EXTRA_LOG_ARGS --extra-log $CASES_LOG"
+        CASES_ARGS="--no-cases-log $CASES_LOG"
         NOTE="$NOTE 票宣告了 verify 卻沒有案例、也沒有 waiver = 缺口。"
         CRC=3
-        return 0
-    fi
-    echo "gate: 驗證者案例的格式 —— python3 scripts/verify-case.py lint$(echo " $files" | tr '\n' ' ' | sed 's/ *$//') --ticket $TICKET"
-    # shellcheck disable=SC2086
-    ( cd "$ROOT" && python3 scripts/verify-case.py lint $(echo "$files" | sed "s|^|$ROOT/|") --ticket "$TICKET" ) \
-        > "$LINT_LOG" 2>&1
-    lrc=$?
-    # lint 的產出就是**指名的那幾行**;把它吞進 log 裡等於把退件的理由藏起來。
-    cat "$LINT_LOG"
-    EXTRA_LOG_ARGS="$EXTRA_LOG_ARGS --extra-log $LINT_LOG"
-    if [ "$lrc" -ne 0 ]; then
-        echo "gate: 案例格式沒過(rc=$lrc)—— 停在這裡,不跑 check;上面指名了是哪一行"
-        NOTE="$NOTE 驗證者案例的 lint 沒過,check 沒跑。"
-        # 退件的理由進紅榜(#126 A1):`--extra-log` 只留檔、不解析,只靠它的話 failures[] 是空的。
-        LINT_ARGS="--lint-log $LINT_LOG --lint-root $ROOT"
-        CRC=$lrc
         return 0
     fi
     # `--ref` 是**票的 `base_sha`**,不是主線的頭:票一落地,主線上就已經有那份實作,

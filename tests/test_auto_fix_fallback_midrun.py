@@ -143,7 +143,7 @@ class VerifierTakesTheNextCandidate(VerifierFallbackBase):
 
     def test_b1_quota_restarts_the_verifier_in_the_same_copy(self):
         """B1。**M1**(verifier_done 不判額度 / 不換候選)→ 驗證者只起 1 次、rc 5,紅。
-        四問:量 rc、agent.start、cost、argv、cwd、派工文;值 = B1 與夾具表(fable / high);
+        量 rc、agent.start、cost、argv、cwd、派工文;值 = B1 與夾具表(fable / high);
         舊值紅在 rc 與第二次啟動;表真的兩格、第二格不是 opus。"""
         done = self.run_verifier_case("quota")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -176,23 +176,23 @@ class VerifierTakesTheNextCandidate(VerifierFallbackBase):
 
     def test_b4_an_unrelated_failure_does_not_change_model(self):
         """B4。**M5**(換候選的條件放寬成 rc≠0)→ 起 2 次,紅。
-        四問:量驗證者 agent.start / cost / 下一個候選的 argv;值 = B4(只起 1 次);舊值本來就 1 次,
+        量驗證者 agent.start / cost / 下一個候選的 argv;值 = B4(只起 1 次);舊值本來就 1 次,
         紅在 M5;表真的兩格(第二格在,只是不該起)。"""
         self.assert_no_verifier_fallback("other")
 
     def test_b4_literal_429_does_not_change_model(self):
         """B4:沒有 provider 信封、只有字面 429。文字 grep 429 的實作 → 起 2 次,紅。
-        四問:同上;值 = B4 字面 429;M5 紅;表真的兩格。"""
+        同上;值 = B4 字面 429;M5 紅;表真的兩格。"""
         self.assert_no_verifier_fallback("text429")
 
     def test_b4_no_patch_does_not_change_model(self):
         """B4:rc 0 沒交 patch-verify 不是不可用。
-        四問:同上;值 = B4 no-patch;rc 0 不進判讀,把沒交件當不可用的實作會紅;表真的兩格。"""
+        同上;值 = B4 no-patch;rc 0 不進判讀,把沒交件當不可用的實作會紅;表真的兩格。"""
         self.assert_no_verifier_fallback("deliver")
 
     def test_b4_timeout_does_not_change_model(self):
         """B4:逾時(rc 124)不換。
-        四問:同上,另量 cost outcome = timeout(真的走到 124 那一手);值 = B4 timeout;M5(連 124 也判)紅;
+        同上,另量 cost outcome = timeout(真的走到 124 那一手);值 = B4 timeout;M5(連 124 也判)紅;
         表真的兩格。假 codex 自己回 124(`TIMEOUT_CODEX`),launch 記號不跟牆鐘計時器賽跑。"""
         self.assert_no_verifier_fallback("timeout")
         self.assertEqual([row["outcome"] for row in self.verifier_cost()], ["timeout"])
@@ -225,7 +225,7 @@ class VerifierTakesTheNextCandidate(VerifierFallbackBase):
 
     def test_b5_controller_consumer_keeps_the_total_launch_count(self):
         """B5。**M3**(Controller 分支發了事件還照樣自己起)→ 有 Controller 那一次 rc 0 不是 7(總啟動 3),紅。
-        四問:量 auto-fix 與 fake consumer 的總啟動;值 = B5(兩種 owner 相等,= 表的兩格);
+        量 auto-fix 與 fake consumer 的總啟動;值 = B5(兩種 owner 相等,= 表的兩格);
         舊值(沒有 handoff)紅在 rc;owner 兩種都真的跑。"""
         local = self.run_with_owner(None)
         self.doCleanups()
@@ -239,7 +239,7 @@ class BatchWorkerTakesTheNextCandidate(FallbackBase):
 
     def test_b3_quota_restarts_only_the_batch_worker(self):
         """B3。**M4**(批次 worker 撞額度不換)→ rc 5、opus 沒起,紅。
-        四問:量 rc、agent.start、cost、argv、第二張票;值 = B3 與夾具表;舊值紅在 rc。"""
+        量 rc、agent.start、cost、argv、第二張票;值 = B3 與夾具表;舊值紅在 rc。"""
         batch = self.make_batch()
         before_two = self.load_ticket("2")
         self.fake_codex("quota")
@@ -266,7 +266,7 @@ class BatchWorkerTakesTheNextCandidate(FallbackBase):
 
     def test_b4_batch_unrelated_failure_does_not_change_model(self):
         """B4(批次):一般失敗不換 —— opus 不起。
-        四問:量假 codex / 假 opus 的呼叫數;值 = B4;換候選條件放寬成 rc≠0 會紅;表真的兩格。"""
+        量假 codex / 假 opus 的呼叫數;值 = B4;換候選條件放寬成 rc≠0 會紅;表真的兩格。"""
         batch = self.make_batch()
         self.fake_codex("other")
         self.run_sh("scripts/auto-fix.sh", "--batch", "land/X", "1", "2", "--no-review",
@@ -309,7 +309,7 @@ class ReviewerTakesTheNextCandidate(ReviewBase):
                 if row["role"] == "reviewer"]
 
     def test_b2_quota_restarts_in_the_same_round(self):
-        """B2。四問:量 rc、agent.start、cost、review.by / sha、argv、派工文;值 = B2 與
+        """B2。量 rc、agent.start、cost、review.by / sha、argv、派工文;值 = B2 與
         夾具表;舊值紅在 rc(沒交件 3);表真的兩格。"""
         self.arm()
         done = self.review()
@@ -331,7 +331,7 @@ class ReviewerTakesTheNextCandidate(ReviewBase):
 
     def test_b4_an_unrelated_provider_error_does_not_change_reviewer(self):
         """B4(覆核):provider 信封沒說額度 / 不可用 → 不換,fable 不起,沒交件 rc 3。
-        四問:量 rc、agent.start、fable 的 argv;值 = B4;換候選條件放寬會紅;表真的兩格。"""
+        量 rc、agent.start、fable 的 argv;值 = B4;換候選條件放寬會紅;表真的兩格。"""
         self.arm(said="something unrelated broke")
         done = self.review()
         self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
@@ -340,7 +340,7 @@ class ReviewerTakesTheNextCandidate(ReviewBase):
 
     def test_b5_with_a_controller_the_reviewer_is_handed_over(self):
         """B5(覆核):有 Controller 只發 `agent.recovery_needed`、自己不起 fable(rc 7)。
-        四問:量 rc、agent.start、recovery_needed 那一列、派工文;值 = B5;Controller 分支也自己起
+        量 rc、agent.start、recovery_needed 那一列、派工文;值 = B5;Controller 分支也自己起
         的實作紅在 rc 與 starts;表真的兩格。"""
         self.arm()
         done = self.run_sh("scripts/review.sh", "1", env=self.env(AC_RECOVERY_OWNER="controller"))
@@ -354,7 +354,7 @@ class ReviewerTakesTheNextCandidate(ReviewBase):
 
     def test_a3_the_whole_reviewer_chain_used_up_is_blocked_and_one_page(self):
         """整串耗盡(A3 同形):表只有 codex 一格 → rc 7、票 Blocked、一頁、不再起。
-        四問:量 rc、agent.start、票 state / owner / review、頁數;值 = #121 A3 同形;舊值紅在 rc(3);
+        量 rc、agent.start、票 state / owner / review、頁數;值 = #121 A3 同形;舊值紅在 rc(3);
         表真的只有一格(不靠沒設就退回)。"""
         self.arm()
         self.set_role_models(reviewer=[fixture_candidate(CODEX_MODEL, "codex", "high")])

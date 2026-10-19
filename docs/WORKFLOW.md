@@ -11,11 +11,11 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 | Ready | 可操作的驗收、依賴達成、`base_sha` |
 | InReview | patch、測試輸出逐字、變異驗紅、回報標明實測/推論 |
 | IntegrationQueued | 審查通過、局部閘門綠、無未解阻擋 |
-| Done | **同一份必要條件,`close` 與 `set state Done` 共用**(D-014):① `scripts/ticket.py verify` 證明改動真的在主線:`verify_strings` 每條都在主線抓得到,**或**(沒有 `verify_strings` 時)`close --landed` 蓋的 `landed_sha` 在主線歷史裡;② 有回歸證據(`test_evidence` 或 `verify.baseline`)——**或**票上有誠實的 `verify_waiver{by,reason}`(#8)且 review 記的 sha 真的在主線歷史裡(`git merge-base --is-ancestor`,不是逐字比對分支的頭,#15);③ **complex 的票**要有一格 `review.verdict` 通過(只有 complex 做完後覆核;沒標 = simple,不要 review;verdict 不綁任何版本,#136);④ `objections[]` 裡沒有未處置的阻擋項 |
+| Done | **同一份必要條件,`close` 與 `set state Done` 共用**(D-014):① `scripts/ticket.py verify` 證明改動真的在主線:`close --landed` 蓋的 `landed_sha` 在主線歷史裡(#137);② 有回歸證據(`test_evidence` 或 `verify.baseline`)——**或**票上有誠實的 `verify_waiver{by,reason}`(#8)且 review 記的 sha 真的在主線歷史裡(`git merge-base --is-ancestor`,不是逐字比對分支的頭,#15);③ **complex 的票**要有一格 `review.verdict` 通過(只有 complex 做完後覆核;沒標 = simple,不要 review;verdict 不綁任何版本,#136);④ `objections[]` 裡沒有未處置的阻擋項 |
 
 **exit code 0 不等於 Done;worker 說做完不等於 Done;閘門綠是對某個 `base_sha` 說的,基準走遠就過期。**
 
-**已落地的票關不掉(#15)**:落地之後補一條 `verify_strings`、記一筆 `verify_waiver`、或處置一筆 `objections`,都是**收尾**,不是重審票面 —— review 不綁票版本(#136),改哪一格都不讓它過期。落地那一手如果手上就是合併出來的 sha,`ticket.py close <n> --landed <merge sha>` 一步把它蓋進 `review.sha`(先確認在主線歷史裡)再走關票流程,不必先 `set review` 再 `close` 兩步。
+**已落地的票關不掉(#15)**:落地之後記一筆 `verify_waiver`、或處置一筆 `objections`,都是**收尾**,不是重審票面 —— review 不綁票版本(#136),改哪一格都不讓它過期。落地那一手如果手上就是合併出來的 sha,`ticket.py close <n> --landed <merge sha>` 一步把它蓋進 `review.sha`(先確認在主線歷史裡)再走關票流程,不必先 `set review` 再 `close` 兩步。
 
 ## 一票一分支一副本
 - worker 拿到 `base_sha` 的 `git archive` 副本(`work/`)與對照副本(`base/`),交 `diff -ruN base work > patch.diff`。
@@ -31,7 +31,7 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
   **patch 的 sha256**。主線走遠了先 `scripts/apply.sh rebase <票號> <patch>` 重生一份乾淨 diff。
   候選樹有 `scripts/repo-map.py` 與 `code-map/catalog.json` 時,commit 之前跑一次 `repo-map.py build`(#96):
   `code-map/index.json` / `INDEX.md` 有變就併進同一個 commit、訊息多一行 `regen: repo-map build …`;
-  build 非零不擋套用、印一行「索引沒重產」,攔它是 `gate.sh` 機械格的事。
+  build 非零不擋套用、印一行「索引沒重產」;閘門不量索引新鮮度(D-054 Q4),落地合併後 land 再重產一次(D-051)。
   `apply.sh --batch` 同一個判準、同一份實作(#129,`scripts/wtbase.sh` 的 `code_map_regen`):有變就併進那一個
   batch fix commit(訊息多一行 `regen: repo-map build …`、輸出「批次 code-map 索引重產」),build 非零照樣 commit。
   **`land.sh` 收的還是已經有 commit 的分支** —— 它不套 patch(`docs/ROLES.md`)。
@@ -55,7 +55,7 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
    印「合併後 code-map 索引過期」),跟著同一次 ff-only 進主線;`land.pass` 的 `main_before` 仍是合併前的主線頭。
    merge 衝突**只**落在這兩支產出物 → 取主線那一側、build、完成那個 merge commit;含其他檔照舊 rc 3。
    build 之後還有產出物以外的差異 → 不 commit、`land.fail`、rc 3、worktree 留著(「重產動到 code-map/ 以外」);
-   build 非零 → 不 commit、印「合併後索引重產失敗」,交全套閘門的機械格攔。
+   build 非零 → 不 commit regen、印「合併後索引重產失敗」,照常往下落地(閘門不量索引新鮮度,D-054 Q4)。
    ff-only 進不去分兩種話(#69):**主線動了**(HEAD 與開 worktree 前記的不同,印 `<前> -> <後>` 兩個短 sha,下一步 rebase 後重跑閘門)vs **主線沒動、git 拒絕**(git 的 stderr 逐行原話印進 stdout 與 status.json,rebase 是錯的下一步)。
 9. **gate / merge / push 各記一筆**(狀態檔的 `phases`),而且**每一條退出路徑都寫終態**,
    要人動手的(拒收 / 串接衝突 / 全套紅 / 沒合進主線 / push 沒成功)同時寫一則 `reports/inbox/<票號>-<run_id>.md`,kind=decision(D-015 / D-032:終態去叫醒主線,主線不輪詢)。
@@ -241,7 +241,7 @@ worker 同一輪**也交了** `patch-round<r>.diff`(#107,專案 #751 事故):驗
 
 票 `interface_fixed=true` 而第 1 輪的平行驗證者已經交件(#112,專案 #775):它與 test_defect 驗證者用同一個 `verify-t<n>/round<r>`,所以清副本之前先把它的兩份存成 `reports/t<n>/<run_id>/patch-verify-round<r>-parallel.diff` 與 `EVIDENCE-verifier-round<r>-parallel.md`;test_defect 驗證者的 `work/` = `base/` 再加平行那一份的案例(套不上就停,同「副本建不出來」那一頁),它的 patch-verify 帶著兩位的案例。收件 apply 只收 worker 的 patch 與這一份 patch-verify,`--evidence-verifier` 依序給平行那份、再給 test_defect 那份。`apply.sh` 兩個 patch 槽是同一份(同路徑或 sha256 相同)直接 rc=2、印「同一份 patch」、分支不動。
 
-驗證者的 `patch-verify.diff` 是 **0 byte** = 這輪沒改案例(#130,#98 第 2 輪):不交給 apply 當 patch。有 worker 的 patch 就只套它、`--evidence-verifier` 照給;驗證者是唯一交件者(只派驗證者的 lint 那一輪、test_defect 沒有 worker patch)而 result 帶 `verify` → 只併計畫(`sh scripts/apply.sh verify-plan <票號> --evidence-verifier <檔>…`,與 `--evidence-verifier` 同一段合併;不建分支、不 commit)、分支不動、直接重跑閘門,照樣算一輪。沒有 `verify` 照舊停;有內容卻沒有檔頭照舊 apply rc=3。
+驗證者的 `patch-verify.diff` 是 **0 byte** = 這輪沒改案例(#130,#98 第 2 輪):不交給 apply 當 patch。有 worker 的 patch 就只套它、`--evidence-verifier` 照給;驗證者是唯一交件者(只派驗證者的缺口那一輪、test_defect 沒有 worker patch)而 result 帶 `verify` → 只併計畫(`sh scripts/apply.sh verify-plan <票號> --evidence-verifier <檔>…`,與 `--evidence-verifier` 同一段合併;不建分支、不 commit)、分支不動、直接重跑閘門,照樣算一輪。沒有 `verify` 照舊停;有內容卻沒有檔頭照舊 apply rc=3。
 
 ### 這一段哪些已經是程式,哪些還只是規格(2026-09-21 逐項對照真實入口重寫)
 **這張表以前漏列了四項重大未實作**,而一張漏列的能力表比沒有能力表更糟:它讓人以為那幾件事有程式在守。以下每一列都對著一個真的入口。
@@ -260,7 +260,7 @@ worker 同一輪**也交了** `patch-round<r>.diff`(#107,專案 #751 事故):驗
 | 驗證產物抽成 `patch-verify.diff`;新 tag 一票一片段再合併 | **已實作** | `verify-case.py extract` / `tags-merge`;`verify/TAGS.d/<n>.md` |
 | **land 檢查 complex 票的 review.verdict 通過(#136 起不綁版本)、objections 未處置就拒絕** | **已實作**(以前漏列) | `scripts/land.sh` 第 5 步 |
 | **land 互斥鎖** | **已實作**(以前只寫在文件裡) | `scripts/land.sh` 的 `.land.lock`(mkdir) |
-| 進 Done 的必要條件 `close` 與 `set state Done` 共用;沒有 `verify_strings` 的票要 `landed_sha` 在主線歷史裡 | **已實作**(以前 `set state Done` 是一條旁路) | `ticket.py` 的 `done_blockers()` |
+| 進 Done 的必要條件 `close` 與 `set state Done` 共用;票要 `landed_sha` 在主線歷史裡(#137) | **已實作**(以前 `set state Done` 是一條旁路) | `ticket.py` 的 `done_blockers()` |
 | 遲到的回報拿 `attempt` / `state_version` 比對後拒收;寫入走同一把鎖 | **已實作**(SCHEMA 以前宣稱過但沒有實作) | `ticket.py set --expect-attempt / --expect-state-version`;`.ticket.lock` |
 | 三輪耗盡 → 票轉 Blocked 並指派主線 | **已實作** | `ticket.py round <n> <r> --red` |
 | **套 patch、建分支、commit** | **已實作**(2026-09-21,D-015) | `scripts/apply.sh <票號> <patch> [<patch-verify>]`;重套走 `scripts/apply.sh rebase` |
@@ -277,9 +277,8 @@ worker 同一輪**也交了** `patch-round<r>.diff`(#107,專案 #751 事故):驗
 | **按角色裁切、帶版本的規則包** | **已實作**(2026-09-21,D-015) | `scripts/rules.py pack <角色> --model <模型>`(各段原文串起來,不設位元組上限) |
 | 一個既有專案**接上這一套** | **已實作**(步驟 + 腳本;實際遷移還沒做) | `docs/TODO.md` §0;`scripts/sync-to-project.sh` 同步到專案的 `scripts/control/` 並印出接點 |
 | **驗證者只證紅**:`verify-case.py red <n> --candidate <樹>`,四類紅分開數,`red_lines` 給覆核看 | **已落地**(D-020,#26) | `scripts/verify-case.py red` 只印 `<out-dir>/baseline-red.json` → 驗證者抄進 result 的 `baseline` → `apply.sh --evidence-verifier` 併進票的 `verify.baseline{stage:"red"}` |
-| **案例格式 lint**(F1–F6:模組 docstring 四段、`TAGS`、每個 `test_` 的驗收編號…) | **已落地**(D-020,#26) | `scripts/verify-case.py lint <檔…> --ticket <n>`;閘門自己叫 |
-| **閘門接線**:回歸層之後 `lint` → `check`,`stage` 由 `red` 升成 `check`,紅榜收進 `status.json` | **已落地**(D-020,#27) | `scripts/gate.sh --ticket <n>`;`ticket.py close` 只認 `stage=="check"` |
-| **驗證者案例 lint 不過進紅榜**:lint 擋的每一行(含讀不到案例檔、與「宣告了 verify 卻沒有案例」那一列 `verify-case-lint:(no-cases)`)以 `kind=LINT`、`case=verify-case-lint:<相對路徑>` 進 `status.json` 的 `failures[]`(不擋的提示不成列;lint 不過而一行都對不上仍寫恰一列),**由驗證者修**(D-014);上一輪紅榜全是 LINT → auto-fix 這一輪只派驗證者、不派 worker(baseline 空用一般驗證者派工文,非空走 test_defect 那一份),混合時 worker 派工文把 LINT 列標成驗證者的;那一輪照樣算一輪 | **已實作**(#126) | `scripts/gate.sh`(`LINT_ARGS`)→ `scripts/status.py done --lint-log`(`parse_lint`);`scripts/auto-fix.sh`(`lint_round`) |
+| **閘門接線**:回歸層之後只跑 `check`(不先驗案例的格式,D-054 Q4),`stage` 由 `red` 升成 `check`,紅榜收進 `status.json` | **已落地**(D-020,#27) | `scripts/gate.sh --ticket <n>`;`ticket.py close` 只認 `stage=="check"` |
+| **閘門只跑案例;缺案例 = 缺口**:票宣告了 verify 卻沒有案例(也沒有 `verify_waiver`、不是 `needs_verifier=false`)→ 閘門 rc 3,紅榜恰一列 `kind=GAP`、`case=verify-case:(no-cases)` 進 `status.json` 的 `failures[]`,**由驗證者補**(D-014);上一輪紅榜只有缺口列 → auto-fix 這一輪只派驗證者、不派 worker(那一輪照樣算一輪),混合時 worker 派工文把那一列標成驗證者的 | **已實作**(#126;#138 起不經案例格式檢查) | `scripts/gate.sh`(`CASES_ARGS`)→ `scripts/status.py done --no-cases-log`(`no_cases_row`);`scripts/auto-fix.sh`(`gap_round`) |
 | `land.sh` 那一側自己判 flake | **未實作,而且是刻意的** —— flake 判定在 `gate.sh`(單票的那一條路) | `scripts/gate.sh` 的 `flake_rerun` |
 | `land.sh` 一批 N≥2 張全套紅 | **已實作**(#109,D-H51 ②)—— 不歸責:先 `auto-fix.sh --batch` 整批修、每輪重跑全套,最多 `batch_fix.rounds`(預設 2)輪;仍紅才用紅榜檔 ↔ 各票 `verify.files` / 分支改動檔機械地找嫌疑票,恰部分命中才踢、其餘重 land 一次(`AC_LAND_DEPTH`);對不到或全中就停給主線 | `scripts/land.sh` 的 `batch_fix` |
 
@@ -303,9 +302,9 @@ land 前檢查 `verify.files` 都在分支上(#587 那把尺)**已經實作**:�
 sha 變了就是不同的問題,快取一定失效;單獨跑的人(沒有 `AC_RUN_ID`)拿到的永遠是真的跑。
 
 ## patch 管線:多張票接連落地時會撞什麼(2026-09-21 實測)
-> **這一節的五條現在都有程式在守**(D-015):1、2、3 在 `scripts/apply.sh rebase`(三向合併、
-> 衝突與 **0 byte 的 diff** 一律非零、刪檔的 `+++` 側**由工具自己改成** `/dev/null`),4、5 在
-> `scripts/apply.sh`(`verify_strings` 對 patch 抓一次、檔頭只准相對形式)。下面留著的是**為什麼**。
+> **這一節的 1、2、3、5 現在都有程式在守**(D-015):1、2、3 在 `scripts/apply.sh rebase`(三向合併、
+> 衝突與 **0 byte 的 diff** 一律非零、刪檔的 `+++` 側**由工具自己改成** `/dev/null`),5 在
+> `scripts/apply.sh`(檔頭只准相對形式);4 已撤(D-054 Q4)。下面留著的是**為什麼**。
 
 連續落地幾張票,**幾乎一定**撞到兩個地方:所有票都往尾端附加的登記檔(`verify/TAGS.md` 那一類)
 與自動產生的清單(modulepreload 那一類)。所以:
@@ -325,8 +324,8 @@ sha 變了就是不同的問題,快取一定失效;單獨跑的人(沒有 `AC_RU
    **衝突指名到檔與行(rc=3)**、**0 byte 的 diff 一律非零(rc=4)**。
 3. **`diff -ruN` 對刪檔產生的 `+++` 側要手改成 `/dev/null`。** 不改的話 `git apply` 只會把檔案
    **清空**而不是刪掉,而清空的檔案在 diffstat 上看起來像是「改過」。
-4. **票的 `verify_strings` 在落地前先對 patch `grep` 一次。** 字串不在 patch 裡,就不會在分支上,
-   而那要等到 `land` 的最後一步才會說話。
+4. (已撤,D-054 Q4)票面字串在落地前先對 patch 比一次 —— 票面字串比對五處一起刪;改動在不在
+   主線改由 `close --landed` 蓋的 sha 判(#137)。
 5. **patch 檔頭只准 `base/…` / `work/…` 的相對形式;絕對路徑閘門要拒。** 🩸 真的發生過:
    檔頭帶著絕對路徑的 patch 套下去,檔案被寫進暫存目錄底下的同名路徑,而套用本身成功、
    閘門也綠 —— 因為被改的根本不是 repo 裡那一份。

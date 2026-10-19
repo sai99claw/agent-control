@@ -13,7 +13,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from control_harness import SCRIPTS, TIMEOUT, Sandbox, envelope  # noqa: E402
 
 sys.path.insert(0, SCRIPTS)
-from ticket import normalise_verify  # noqa: E402
 from test_no_project_names import ABSOLUTE_HOME  # noqa: E402
 
 MIN = ("--subject", "land 對 0 commit 整批拒絕",
@@ -156,29 +155,6 @@ class Help(Sandbox):
             self.assertIn(flag, printed)
             done = self.ticket("create", *MIN, flag, "x")
             self.assertEqual(done.returncode, 0, flag + ":" + done.stdout + done.stderr)
-
-
-class VerifyStringShapes(unittest.TestCase):
-    """`--verify-string` 的三種認法(#37):冒號前那段**像路徑**才切成 `{path, contains}`,
-    其餘一律是純字串。以前見冒號就切,本來就含半形冒號的字串被切成一個不存在的路徑,
-    關票時 grep 不到 —— 那看起來跟「這張票沒做」一樣。
-
-    **變異**:拿掉 `and looks_like_path(path)` → 純字串那兩條紅;`needle.strip()` 改回
-    `needle` → 路徑那一條紅。
-    """
-
-    def test_a_path_before_the_colon_is_split_and_the_needle_is_trimmed(self):
-        self.assertEqual(normalise_verify(["scripts/land.sh:沒有新的 commit"]),
-                         [{"path": "scripts/land.sh", "contains": "沒有新的 commit"}])
-        self.assertEqual(normalise_verify(["scripts/a.py: x "]),
-                         [{"path": "scripts/a.py", "contains": "x"}])
-
-    def test_a_plain_string_with_a_colon_is_not_split(self):
-        for text in ("D-G89: x", "http://x/y", "驗收:A1"):
-            self.assertEqual(normalise_verify([text]), [text], text)
-
-    def test_a_plain_string_without_a_colon_stays_plain(self):
-        self.assertEqual(normalise_verify(["沒有新的 commit"]), ["沒有新的 commit"])
 
 
 # 放大競態:`next_id()` 算完之後停一下再回去寫檔。沒有鎖的話,同時跑的幾個行程
@@ -349,8 +325,7 @@ class VerifyPlan(Sandbox):
                          {"files": [], "tags": [], "run": "", "notes": ""})
 
     def test_verify_prints_the_plan_so_the_next_person_can_run_it(self):
-        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"],
-                         verify={"files": ["verify/nav/test_ticket_1.py"],
+        self.make_ticket(1, verify={"files": ["verify/nav/test_ticket_1.py"],
                                  "tags": ["nav-size"],
                                  "run": "python3 scripts/verify.py --tag nav-size",
                                  "notes": ""})
@@ -375,23 +350,8 @@ class VerifyAndClose(Sandbox):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "把 %s 放進主線" % path)
 
-    def test_a_string_that_is_really_on_main_verifies(self):
-        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"])
-        done = self.ticket("verify", "1")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("在主線上", done.stdout)
-        self.assertIn("×1", done.stdout)
-
-    def test_a_string_that_never_reached_main_does_not_verify(self):
-        """**變異**:把 `verify` 的 `hits > 0` 改成 `hits >= 0` → 這一條紅。"""
-        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"])
-        done = self.ticket("verify", "1")
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertIn("**不在主線上**", done.stdout)
-
     def test_close_refuses_when_nothing_of_the_ticket_is_on_main(self):
-        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"])
+        self.make_ticket(1)
         done = self.ticket("close", "1")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("exit code 0 不等於 Done", done.stdout)
@@ -404,7 +364,7 @@ class VerifyAndClose(Sandbox):
         `close` 與 `set state Done` 共用同一份必要條件(D-014)—— 舊版兩條路各走各
         的,弱的那一條沒有人記得。
         """
-        fields = {"verify_strings": ["src/nav.py:def size_nav"],
+        fields = {"landed_sha": self.git("rev-parse", "main").strip(),
                   "test_evidence": [{"cmd": "gate --branch", "rc": 0}]}
         fields.update(extra)
         self.make_ticket(1, **fields)
@@ -431,7 +391,7 @@ class VerifyAndClose(Sandbox):
         `close` 也不問(2026-09-21 外部審查)。#136 起只問 complex 的票。
         """
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"],
+        self.make_ticket(1, landed_sha=self.git("rev-parse", "main").strip(),
                          test_evidence=[{"cmd": "gate", "rc": 0}], complexity="complex")
         done = self.ticket("close", "1")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
@@ -442,14 +402,14 @@ class VerifyAndClose(Sandbox):
         """#136(VISION 流程 #9:只有複雜的票做完後檢查一次;沒標 = simple):close 與
         `set state Done` 不因沒有 review 拒收。
 
-        四問:量 close / set Done 的 rc 與票的 state;紅 = done_blockers 對每張票仍要 review
+        量 close / set Done 的 rc 與票的 state;紅 = done_blockers 對每張票仍要 review
         (rc=1「沒有 review」);期望值 = VISION 流程 #9 與 D-054 Q1 原話。
         """
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
         for verb, fields in (("close", {"complexity": "simple"}), ("close", {}),
                              ("set", {"complexity": "simple"}), ("set", {})):
             with self.subTest(verb=verb, complexity=fields.get("complexity", "沒標")):
-                self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"],
+                self.make_ticket(1, landed_sha=self.git("rev-parse", "main").strip(),
                                  test_evidence=[{"cmd": "gate", "rc": 0}], **fields)
                 args = ("close", "1") if verb == "close" else ("set", "1", "state", "Done")
                 done = self.ticket(*args)
@@ -539,9 +499,9 @@ class VerifyAndClose(Sandbox):
         self.assertEqual(row["owner"], "main")
         self.assertIn("ticket.attempt.failed", self.kinds())
 
-    def test_without_verify_strings_close_landed_stamps_the_sha_and_verify_reads_it(self):
-        """#137 ②:沒有 verify_strings 的票,`verify` 看 `close --landed` 蓋進票的 sha 在不在
-        主線歷史裡。四問:量 close / verify 的 rc、票上的 landed_sha 與 state;紅 = 回退仍看
+    def test_close_landed_stamps_the_sha_and_verify_reads_it(self):
+        """#137 ②:`verify` 看 `close --landed` 蓋進票的 sha 在不在
+        主線歷史裡。量 close / verify 的 rc、票上的 landed_sha 與 state;紅 = 回退仍看
         票的範圍欄(新票沒那格 → 「不在主線上」rc=1);期望值 = 本票 objective (b)。
 
         **變異 M2**:`verify` 的回退改回比 base_sha..main 改動檔與範圍欄 → 這一條紅。"""
@@ -557,8 +517,8 @@ class VerifyAndClose(Sandbox):
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
         self.assertIn("在主線上", again.stdout)
 
-    def test_without_verify_strings_or_a_landed_sha_it_is_not_on_main(self):
-        """改動檔都在主線上了也不算:沒有 verify_strings、沒蓋過 landed_sha 的票說不出
+    def test_without_a_landed_sha_it_is_not_on_main(self):
+        """改動檔都在主線上了也不算:沒蓋過 landed_sha 的票說不出
         「哪一個 commit 是它」。close 不關、票不動。"""
         base = self.git("rev-parse", "main").strip()
         self.land_a_file("src/nav.py", "x = 1\n")
@@ -581,16 +541,6 @@ class VerifyAndClose(Sandbox):
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("不是 main 的祖先", done.stdout)
 
-    def test_a_bare_needle_is_looked_for_across_the_main_tree(self):
-        self.land_a_file("src/a.py", "SENTINEL = 1\n")
-        self.make_ticket(1, verify_strings=["SENTINEL"])
-        done = self.ticket("verify", "1")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("src/a.py×1", done.stdout)
-        self.make_ticket(2, verify_strings=["NOT-ON-MAIN-ANYWHERE"])
-        self.assertEqual(self.ticket("verify", "2").returncode, 1)
-
-
 class TheNextStepAfterLanding(Sandbox):
     """G7 / #29 A7:落地之後 `verify.baseline` 還缺閘門那一趟時,**印一句可以貼的指令**。
 
@@ -606,7 +556,7 @@ class TheNextStepAfterLanding(Sandbox):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "把 #1 的東西放進主線")
         tip = self.git("rev-parse", "main").strip()
-        fields = {"verify_strings": ["src/nav.py:def size_nav"],
+        fields = {"landed_sha": tip,
                   "base_sha": base}
         fields.update(extra)
         self.make_ticket(1, **fields)
@@ -673,7 +623,7 @@ class TheNextStepRunsWhereverTicketPyLives(Sandbox):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "把 #1 的東西放進主線")
         tip = self.git("rev-parse", "main").strip()
-        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"], base_sha=base,
+        self.make_ticket(1, landed_sha=tip, base_sha=base,
                          review={"verdict": "pass", "by": "main", "sha": tip}, **extra)
         return base, tip
 
@@ -713,7 +663,7 @@ class TheNextStepRunsWhereverTicketPyLives(Sandbox):
 
 class WaiverAndLanded(Sandbox):
     """#15:已落地的票關不掉 —— close 要認得 `verify_waiver`(#8),而 `set` 那幾格
-    (`verify_waiver` / `verify_strings` / `objections`)是落地後的收尾,不該讓既有
+    (`verify_waiver` / `objections`)是落地後的收尾,不該讓既有
     review 過期。"""
 
     def land_a_file(self, path, text):
@@ -725,7 +675,7 @@ class WaiverAndLanded(Sandbox):
         """**變異**:把 `waiver_covers_regression` 拿掉(改回舊的無條件檢查)
         → 這一條紅(沒有 test_evidence 就過不了)。"""
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"],
+        self.make_ticket(1, landed_sha=self.git("rev-parse", "main").strip(),
                          verify_waiver={"by": "main", "reason": "控制腳本票:無獨立驗證者"})
         self.approve(1, branch="main")  # review.sha = main 的頭,state_version 跟著綁上
         done = self.ticket("close", "1")
@@ -737,7 +687,7 @@ class WaiverAndLanded(Sandbox):
         """免驗**只在 review 綁的 sha 真的在主線歷史裡才生效**——票寫了 waiver,但
         review 蓋的章是另一條沒進主線的分支,不該就這樣免了回歸證據。"""
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"],
+        self.make_ticket(1, landed_sha=self.git("rev-parse", "main").strip(),
                          verify_waiver={"by": "main", "reason": "控制腳本票"})
         path = self.worktree("t1-unmerged")
         self.commit_in(path, "extra.txt", "沒有進主線的 commit")
@@ -750,7 +700,7 @@ class WaiverAndLanded(Sandbox):
     def test_a_waiver_missing_reason_does_not_count(self):
         """票面沒說清楚(`reason` 空著)不算誠實的 waiver。"""
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"],
+        self.make_ticket(1, landed_sha=self.git("rev-parse", "main").strip(),
                          verify_waiver={"by": "main", "reason": ""})
         self.approve(1, branch="main")
         done = self.ticket("close", "1")
@@ -758,7 +708,7 @@ class WaiverAndLanded(Sandbox):
         self.assertIn("沒有回歸證據", done.stdout)
 
     def done_ready(self, **extra):
-        fields = {"verify_strings": ["src/nav.py:def size_nav"],
+        fields = {"landed_sha": self.git("rev-parse", "main").strip(),
                   "test_evidence": [{"cmd": "gate --branch", "rc": 0}]}
         fields.update(extra)
         self.make_ticket(1, **fields)
@@ -772,7 +722,6 @@ class WaiverAndLanded(Sandbox):
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
         sha = self.git("rev-parse", "main").strip()
         self.make_ticket(1, complexity="complex",
-                         verify_strings=["src/nav.py:def size_nav"],
                          test_evidence=[{"cmd": "gate --branch", "rc": 0}])
         done = self.ticket("close", "1", "--landed", sha)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -787,8 +736,7 @@ class WaiverAndLanded(Sandbox):
         **變異**:`stamp_landed` 拿掉 `needs_review` 那一行 → 票上多出 review,這一條紅。"""
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
         sha = self.git("rev-parse", "main").strip()
-        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"],
-                         test_evidence=[{"cmd": "gate --branch", "rc": 0}])
+        self.make_ticket(1, test_evidence=[{"cmd": "gate --branch", "rc": 0}])
         done = self.ticket("close", "1", "--landed", sha)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         row = self.load_ticket("1")
@@ -821,7 +769,7 @@ class NeedsVerifierFalseCloses(Sandbox):
 
     def ready(self, branch="main", **fields):
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        row = {"verify_strings": ["src/nav.py:def size_nav"],
+        row = {"landed_sha": self.git("rev-parse", "main").strip(),
                "needs_verifier": False, "complexity": "complex"}
         row.update(fields)
         self.make_ticket(1, **row)
@@ -874,7 +822,7 @@ class NeedsVerifierFalseCloses(Sandbox):
     def test_a3_missing_needs_verifier_behaves_as_before(self):
         """**變異** M4:`is False` 改成 `not ticket.get("needs_verifier")` → 這一條紅。"""
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"])
+        self.make_ticket(1, landed_sha=self.git("rev-parse", "main").strip())
         self.approve(1, branch="main")
         self.assertIn("沒有回歸證據", self.refused())
 
@@ -1354,7 +1302,7 @@ class CostTotalOnClose(Sandbox):
 
     def closable(self, **extra):
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        fields = {"verify_strings": ["src/nav.py:def size_nav"],
+        fields = {"landed_sha": self.git("rev-parse", "main").strip(),
                   "test_evidence": [{"cmd": "gate --branch", "rc": 0}],
                   "cost": [dict(row) for row in self.ROWS],
                   "objections": [{"category": "ticket-wrong", "owner": "main",
@@ -1539,8 +1487,7 @@ class Lint(Sandbox):
         return done
 
     def good(self, **fields):
-        row = {"needs_verifier": False,
-               "verify_strings": ["純字串", {"path": "scripts/x.sh", "contains": "某字"}]}
+        row = {"needs_verifier": False}
         row.update(fields)
         return self.make_ticket(1, **row)
 
@@ -1548,17 +1495,6 @@ class Lint(Sandbox):
         for args in (("lint",), ("lint", "--help")):
             done = self.ticket(*args)
             self.assertIn("scripts/ticket.py lint <id>", done.stdout + done.stderr)
-
-    def test_a_ticket_the_tool_made_passes_its_own_lint(self):
-        """F3 的病根。**變異**:拿掉 dict 形狀的放行 → 這一條紅。"""
-        made = self.ticket("create", *MIN, "--verify-string", "scripts/x.sh:某字",
-                           "--needs-verifier", "false")
-        self.assertEqual(made.returncode, 0, made.stdout + made.stderr)
-        self.assertIsInstance(self.load_ticket("1")["verify_strings"][0], dict)
-        done = self.lint()
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(len(done.stdout.splitlines()), 1, done.stdout)
-        self.assertIn("ok", done.stdout)
 
     def test_missing_needs_verifier_is_named(self):
         """**變異**:拿掉 (a) → 這一條紅。"""
@@ -1578,29 +1514,6 @@ class Lint(Sandbox):
         done = self.lint()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
-    def test_bad_verify_string_shapes_are_named_by_position(self):
-        bad = (({"path": "scripts/x.sh"}, 2),
-               ({"path": "scripts/x.sh", "contains": "a", "extra": 1}, 2),
-               (3, 2),
-               (["nested"], 2),
-               ("", 2))
-        for shape, at in bad:
-            with self.subTest(shape=shape):
-                self.good(verify_strings=["好的", shape])
-                done = self.lint()
-                self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-                lines = [l for l in done.stderr.splitlines() if "verify_strings" in l]
-                self.assertEqual(len(lines), 1, done.stderr)
-                self.assertIn("第 %d 筆" % at, lines[0])
-
-    def test_empty_or_missing_verify_strings_is_named(self):
-        for value in ([], None, "字串不是串列"):
-            with self.subTest(value=value):
-                self.good(verify_strings=value)
-                done = self.lint()
-                self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-                self.assertIn("verify_strings", done.stderr)
-
     def test_unregistered_tags_are_named_per_field(self):
         self.good(tags=["example", "nope-a"],
                   verify={"files": [], "tags": ["nope-b"], "run": "", "notes": ""})
@@ -1618,14 +1531,14 @@ class Lint(Sandbox):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
     def test_every_bad_cell_gets_its_own_line(self):
-        row = self.good(verify_strings=[], tags=["nope"])
+        row = self.good(tags=["nope"])
         del row["needs_verifier"]
         self.write(os.path.join("tickets", "1.json"),
                    json.dumps(row, ensure_ascii=False, indent=2) + "\n")
         done = self.lint()
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         lines = done.stderr.splitlines()
-        for field in ("needs_verifier", "verify_strings", " tags "):
+        for field in ("needs_verifier", " tags "):
             self.assertEqual(len([l for l in lines if field in l]), 1, (field, lines))
 
 
@@ -1763,7 +1676,7 @@ class AgyAgentCommand(Sandbox):
         return self.ticket("agent-command", *args)
 
     def test_a1_the_agy_command_is_literal_and_has_no_directory_or_sandbox_flag(self):
-        """四問:量逐字命令;值來自票面 A1;舊值是不認 agy;不靠 fallback。"""
+        """量逐字命令;值來自票面 A1;舊值是不認 agy;不靠 fallback。"""
         done = self.command("--model", "agy:gemini-3.8-flash-high", "--tool", "agy",
                             "--effort", "high")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -1777,7 +1690,7 @@ class AgyAgentCommand(Sandbox):
         self.assertNotIn("--effort", done.stdout)
 
     def test_a1_each_agy_prefix_mismatch_names_both_fields_and_prints_nothing(self):
-        """四問:量四種不一致 rc/stderr;值來自 A1;舊值會放行;不改 oracle。"""
+        """量四種不一致 rc/stderr;值來自 A1;舊值會放行;不改 oracle。"""
         rows = (("agy:gemini-3.8-flash-high", "codex"),
                 ("agy:gemini-3.8-flash-high", "claude-code"),
                 ("codex:gpt-5.6-sol", "agy"), ("opus", "agy"))
@@ -1790,7 +1703,7 @@ class AgyAgentCommand(Sandbox):
                 self.assertIn("tool=%s" % tool, done.stderr)
 
     def test_a2_agy_effort_values_and_model_suffix_conflicts_are_refused(self):
-        """四問:量合法表與 suffix 衝突;值抄 agy help/A2;舊值不支援 agy;不靠程式回算。"""
+        """量合法表與 suffix 衝突;值抄 agy help/A2;舊值不支援 agy;不靠程式回算。"""
         for effort in AGY_EFFORTS.split():
             model = "agy:gemini-3.8-flash-%s" % effort if effort in ("low", "medium", "high") \
                 else "agy:gemini-3.8-flash"
@@ -1842,7 +1755,7 @@ class TicketTakesAComplexity(Sandbox):
     """#116 A7:票的 `complexity` 是選填的 simple|complex;其他值 create / set 都 rc=2。"""
 
     def test_a7_create_writes_a_legal_complexity_and_nothing_when_absent(self):
-        """四問:釘什麼 = create 收 simple/complex、不給就沒有鍵;為何會紅 = 旗標沒接;
+        """釘什麼 = create 收 simple/complex、不給就沒有鍵;為何會紅 = 旗標沒接;
         oracle = A7 原文;變異:CREATE_FLAGS 拿掉 --complexity → rc=2「不認得」紅。"""
         done = self.ticket("create", *MIN, "--complexity", "complex")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -1852,7 +1765,7 @@ class TicketTakesAComplexity(Sandbox):
         self.assertNotIn("complexity", self.load_ticket("2"))
 
     def test_a7_any_other_complexity_is_refused(self):
-        """四問:釘什麼 = 表外值 create 不留檔、set 不改票;為何會紅 = 多收一種值(例 medium
+        """釘什麼 = 表外值 create 不留檔、set 不改票;為何會紅 = 多收一種值(例 medium
         被當成第二套 profile);oracle = A7「其他值 rc=2」;變異:拿掉 set 的檢查 → set 那列紅。"""
         done = self.ticket("create", *MIN, "--complexity", "medium")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)

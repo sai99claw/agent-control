@@ -13,8 +13,8 @@ A8 | doc   | 讀 docs/ROLES.md、docs/WORKFLOW.md、scripts/ticket.py、scripts/
 ## 介面字串(全部出自票面 acceptance / interface_contracts;票面沒定的照 t115 的 patch,EVIDENCE 記一行)
 CODEX_BASE   = "codex exec -m gpt-5.6-sol -s danger-full-access -c 'approval_policy=\"never\"' -C . --skip-git-repo-check -"  ← A1 原話
 EFFORT_HIGH  = "-c 'model_reasoning_effort=\"high\"'"     ← A1「只在 -m 後加入」
-SNAPSHOT     = "權威票面快照"                                ← A3、verify_strings
-REASON       = "guard-violation"                             ← A4、verify_strings
+SNAPSHOT     = "權威票面快照"                                ← A3
+REASON       = "guard-violation"                             ← A4
 GUARD_RC     = 8                                             ← A4、interface_contracts.guard_result
 GUARD_REPORT = reports/t1/*/*.guard.json(patch 的形狀;docs/WORKFLOW.md 寫明)  ← A4「前後證據」
 OLD_SANDBOX  = "workspace-write"                             ← A8 不准再出現
@@ -27,7 +27,7 @@ OLD_SANDBOX  = "workspace-write"                             ← A8 不准再出
 A1 直接 subprocess 跑本 repo 的 scripts/ticket.py agent-command;外層 AC_* 清掉。
 
 ## 不做
-不改產品碼;不放寬票面驗收;不刪既有案例;不碰 verify_strings 的原字;不跑真的模型;
+不改產品碼;不放寬票面驗收;不刪既有案例;不跑真的模型;
 不驗真 codex 吃 danger-full-access 的實跑效果(T 同步票的冒煙)。
 """
 import glob
@@ -125,7 +125,7 @@ diff -ruN base work > "patch-round$AC_ROUND.diff" || true
 printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
 """
 
-# #127 A6:land.pass 多帶落地前的 main(40 位);鍵名拆開寫,票的 verify_strings 比的是 patch 內文。
+# #127 A6:land.pass 多帶落地前的 main(40 位);鍵名拆開寫(當時票面字串比對的是 patch 內文)。
 LAND_PASS_MATCHES = """emit land.start --note "同時的落地" --kv stamp=S9
 LB="$(git -C "$REPO" rev-parse HEAD)"
 git -C "$REPO" commit -q --allow-empty -m "同時的落地"

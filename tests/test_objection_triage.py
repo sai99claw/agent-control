@@ -325,7 +325,7 @@ class SessionsAreNamedUpFront(TriageBase):
     """A1 + A6(b):session 先指定、記到交件;一般綠路徑兩份副本收掉、兩列轉 closed。"""
 
     def test_a1_claude_agents_get_a_session_id_and_a_row(self):
-        """四問:守 worker / 驗證者起跑時 argv 補 --session-id、sessions.json 逐格、cwd 是 work/
+        """守 worker / 驗證者起跑時 argv 補 --session-id、sessions.json 逐格、cwd 是 work/
         相對主 repo 根 / 可信回歸:假 claude 記下自己的 argv 與 os.getcwd(),期望值是 uuid 解析與
         realpath 相等,不從腳本算 / 既有測試沒有 session 這個概念 / 不加縫:只換 PATH 上的 claude。"""
         self.arm(worker_first="fix", needs_verifier=True, interface_fixed=True)
@@ -353,7 +353,7 @@ class SessionsAreNamedUpFront(TriageBase):
                 self.assertFalse(os.path.isdir(os.path.join(self.copy(kind), sub)), (kind, sub))
 
     def test_a1_a_command_that_cannot_resume_gets_no_flag_and_says_why(self):
-        """四問:守非 claude 起頭 / --no-session-persistence → 不補旗標、resumable=false、why /
+        """守非 claude 起頭 / --no-session-persistence → 不補旗標、resumable=false、why /
         可信回歸:假 claude 的 argv 裡沒有 --session-id / 既有測試沒有 sessions.json /
         不加縫:`env X=1 claude` 讓命令頭不是 claude 而跑的仍是同一支假 claude。"""
         self.arm(worker_first="fix", needs_verifier=True, interface_fixed=True,
@@ -376,7 +376,7 @@ class SessionsAreNamedUpFront(TriageBase):
 class AcceptedResumesTheSameSessions(TriageBase):
 
     def test_a2_a3_accepted_resumes_the_verifier_then_the_worker_in_place(self):
-        """四問:守 A2 開題者的起法與當下事實、A3 (1)–(7)、A6(a) 收件後兩列 closed /
+        """守 A2 開題者的起法與當下事實、A3 (1)–(7)、A6(a) 收件後兩列 closed /
         可信回歸:替身開題者真的跑 ticket.py set 改驗收,接回的兩個替身各自檢查第一段的標記檔、
         回報 argv / cwd / stdin;頁數期望值是起跑前自己數的 / 既有四條只看「轉 Blocked」那一條路 /
         不加縫:三個角色都是 PATH 上同一支假 claude,劇本在沙盒的 scenario.json。"""
@@ -461,7 +461,7 @@ class AcceptedResumesTheSameSessions(TriageBase):
 class RejectedResumesTheWorkerOnly(TriageBase):
 
     def test_a4_rejected_resumes_the_worker_with_the_reason_and_leaves_the_ticket(self):
-        """四問:守 rejected → 票面不動、驗證者不接回、worker 帶理由接回 / 可信回歸:票面比對
+        """守 rejected → 票面不動、驗證者不接回、worker 帶理由接回 / 可信回歸:票面比對
         的兩端是替身開題者與接回的 worker 各自讀的票檔 / 既有測試沒有 rejected 這條路 /
         不加縫:同一支假 claude。"""
         self.arm(needs_verifier=True, interface_fixed=True)
@@ -499,7 +499,7 @@ class OnlyTheseGoToTheMainLine(TriageBase):
     """A5:四種升級。每一種 rc=3 / Blocked / 一頁 / disposition 留空 / 副本與 session 留著。"""
 
     def test_a5a_the_opener_says_escalate(self):
-        """四問:守 (a) 開題者判 escalate / 可信回歸:TRIAGE 行是替身寫死的 / 既有四條沒有開題者 /
+        """守 (a) 開題者判 escalate / 可信回歸:TRIAGE 行是替身寫死的 / 既有四條沒有開題者 /
         不加縫:同一支假 claude。"""
         self.arm(needs_verifier=True, interface_fixed=True)
         self.play(opener="escalate")
@@ -509,7 +509,7 @@ class OnlyTheseGoToTheMainLine(TriageBase):
         self.assertEqual(len(self.calls("worker")), 1, "升級了不該接回 worker")
 
     def test_a5b_a_second_objection_on_the_same_ticket(self):
-        """四問:守 (b) 被接回的 worker 再交 OBJECTION → 不再起開題者 / 可信回歸:開題者呼叫只有
+        """守 (b) 被接回的 worker 再交 OBJECTION → 不再起開題者 / 可信回歸:開題者呼叫只有
         一次、第二筆 disposition 留空 / 既有測試沒有接回 / 不加縫:同一支假 claude。"""
         self.arm()
         self.play(worker_resume="object-again", opener="reject")
@@ -522,7 +522,7 @@ class OnlyTheseGoToTheMainLine(TriageBase):
         self.assertIn("第三條", page + json.dumps(rows, ensure_ascii=False))
 
     def test_a5c_no_opener_block_in_config(self):
-        """四問:守 (c) config 沒有 opener 區塊 → 開題者命令缺 / 可信回歸:沒有任何 opener 呼叫 /
+        """守 (c) config 沒有 opener 區塊 → 開題者命令缺 / 可信回歸:沒有任何 opener 呼叫 /
         既有四條只斷言 rc=3 不看字樣 / 不加縫:config 少一塊。"""
         self.arm(opener=False)
         done = self.auto_fix("--no-review")
@@ -530,14 +530,14 @@ class OnlyTheseGoToTheMainLine(TriageBase):
         self.assertEqual(self.calls("opener"), [])
 
     def test_a5c_an_opener_command_that_is_not_there(self):
-        """四問:守 (c) opener.command 找不到 / 可信回歸:沒有任何 opener 呼叫 /
+        """守 (c) opener.command 找不到 / 可信回歸:沒有任何 opener 呼叫 /
         既有測試沒有這一格 / 不加縫:config 指一個不存在的命令。"""
         self.arm(opener={"command": "no-such-opener-xyz -p --model opus", "timeout_seconds": 60})
         done = self.auto_fix("--no-review")
         self.assert_escalated(done, ["開題者命令缺", "no-such-opener-xyz"], started=True)
 
     def test_a5c_the_opener_exits_non_zero(self):
-        """四問:守 (c) 退出非零 / 可信回歸:替身 exit 3,字樣含 3 / 既有測試沒有開題者 /
+        """守 (c) 退出非零 / 可信回歸:替身 exit 3,字樣含 3 / 既有測試沒有開題者 /
         不加縫:同一支假 claude。"""
         self.arm()
         self.play(opener="exit3")
@@ -545,7 +545,7 @@ class OnlyTheseGoToTheMainLine(TriageBase):
         self.assert_escalated(done, ["開題者退出 3"], started=True)
 
     def test_a5c_the_opener_runs_past_its_timeout(self):
-        """四問:守 (c) 逾時 + 收掉替身 / 可信回歸:替身睡 60 秒、時限 2 秒,量牆鐘與 pid /
+        """守 (c) 逾時 + 收掉替身 / 可信回歸:替身睡 60 秒、時限 2 秒,量牆鐘與 pid /
         既有逾時測試只量 worker / 不加縫:config 的 opener.timeout_seconds。"""
         self.arm(opener={"command": OPENER_COMMAND, "timeout_seconds": 2})
         self.play(opener="sleep")
@@ -558,7 +558,7 @@ class OnlyTheseGoToTheMainLine(TriageBase):
             os.kill(pid, 0)
 
     def test_a5c_the_opener_hands_in_no_verdict(self):
-        """四問:守 (c) 第一行不是 TRIAGE: 起頭(第二行才寫的不算)/ 可信回歸:替身寫死那兩行 /
+        """守 (c) 第一行不是 TRIAGE: 起頭(第二行才寫的不算)/ 可信回歸:替身寫死那兩行 /
         既有測試沒有 triage 檔 / 不加縫:同一支假 claude。"""
         self.arm()
         self.play(opener="garbage")
@@ -566,7 +566,7 @@ class OnlyTheseGoToTheMainLine(TriageBase):
         self.assert_escalated(done, ["開題者沒交判決"], started=True)
 
     def test_a5d_a_worker_session_that_cannot_resume(self):
-        """四問:守 (d) worker 列 resumable=false → 不起開題者、頁上帶 why / 可信回歸:沒有 opener
+        """守 (d) worker 列 resumable=false → 不起開題者、頁上帶 why / 可信回歸:沒有 opener
         呼叫、沒有 triage.start / 既有四條走的是 (c) / 不加縫:命令帶 --no-session-persistence。"""
         self.arm(worker_cmd="claude -p --model opus --no-session-persistence")
         done = self.auto_fix("--no-review")
@@ -578,7 +578,7 @@ class ClosingAndTimeouts(TriageBase):
     """A6:收掉與逾時。"""
 
     def test_a6a_a_closed_session_is_never_resumed_and_the_next_round_gets_a_new_one(self):
-        """四問:守收件後 sessions 轉 closed、下一輪新 --session-id、closed 的 id 不再出現 /
+        """守收件後 sessions 轉 closed、下一輪新 --session-id、closed 的 id 不再出現 /
         可信回歸:接回的 worker 交一份仍紅的 patch,auto-fix 自己進第 2 輪,第 2 輪的替身記下
         argv 與它看到的 sessions.json / 既有測試沒有 session / 不加縫:同一支假 claude。"""
         self.arm(needs_verifier=True, interface_fixed=True)
@@ -607,7 +607,7 @@ class ClosingAndTimeouts(TriageBase):
             self.assertEqual(set(call["argv"]) & closed, set(), call["argv"])
 
     def test_a6c_a_resumed_worker_that_times_out_leaves_its_copy_and_session_open(self):
-        """四問:守接回的 worker 用票的 worker.timeout_seconds、從接回那一刻重新計,逾時走既有頁 /
+        """守接回的 worker 用票的 worker.timeout_seconds、從接回那一刻重新計,逾時走既有頁 /
         可信回歸:第一段立刻交、接回那一段睡 60 秒,時限 3 秒 / 既有逾時案例沒有接回 /
         不加縫:票的 worker.timeout_seconds。"""
         self.arm(worker={"timeout_seconds": 3})
@@ -624,7 +624,7 @@ class ClosingAndTimeouts(TriageBase):
         self.assertEqual(self.sessions()["worker"]["state"], "open")
 
     def test_a6c_a_resumed_verifier_that_hands_in_nothing_stops_before_the_worker(self):
-        """四問:守接回的驗證者沒交件 → 既有「驗證者沒交出 patch-verify」頁、不接回 worker /
+        """守接回的驗證者沒交件 → 既有「驗證者沒交出 patch-verify」頁、不接回 worker /
         可信回歸:worker 呼叫只有第一段那一次 / 既有 C6 案例沒有接回 / 不加縫:同一支假 claude。"""
         self.arm(needs_verifier=True, interface_fixed=True)
         self.play(opener="accept", verifier_resume="nothing")
@@ -653,7 +653,7 @@ class TheOpenerCostsARow(TriageBase):
                 if row.get("role") == "opener"]
 
     def test_c5c_an_accepted_verdict_is_a_row(self):
-        """四問:守 accepted 那一列 / 可信回歸:TRIAGE 行是替身寫死的 / 既有測試這條路一列都
+        """守 accepted 那一列 / 可信回歸:TRIAGE 行是替身寫死的 / 既有測試這條路一列都
         沒有 / 不加縫:同一支假 claude。**變異 m7**:判反駁那條路不寫 cost → 這一條紅。"""
         self.arm(needs_verifier=True, interface_fixed=True)
         self.play(worker_resume="fix", opener="accept")
@@ -669,7 +669,7 @@ class TheOpenerCostsARow(TriageBase):
         self.assertEqual(workers, ["objection", "handed-in"])
 
     def test_c5c_an_opener_without_a_triage_line_is_undecided(self):
-        """四問:守 undecided / 可信回歸:替身第一行不是 TRIAGE: / 既有 a5c 只看升級字樣 /
+        """守 undecided / 可信回歸:替身第一行不是 TRIAGE: / 既有 a5c 只看升級字樣 /
         不加縫:同一支假 claude。"""
         self.arm()
         self.play(opener="garbage")

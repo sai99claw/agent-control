@@ -41,7 +41,7 @@ class NoteNames(Sandbox):
         return found
 
     def test_a_name_with_or_without_md_lands_in_the_one_file(self):
-        """四問:守實際落檔路徑(帶不帶 .md 同一份)與事件/stdout 的名稱;可信回歸是多接
+        """守實際落檔路徑(帶不帶 .md 同一份)與事件/stdout 的名稱;可信回歸是多接
         一個副檔名;既有案例只用不帶 .md 的名稱;無測試專用縫。
 
         **變異** M1:`note_name` 不去 `.md`(回 `name`)→ 這一條紅(落成
@@ -68,7 +68,7 @@ class NoteNames(Sandbox):
                          ["implementer"] * 2 + ["opus"] * 2 + ["gate"] * 2)
 
     def test_an_ambiguous_name_is_refused_and_nothing_moves(self):
-        """四問:守「不合法的名稱什麼都不寫」與錯誤訊息給可重試的名稱;可信回歸是放過
+        """守「不合法的名稱什麼都不寫」與錯誤訊息給可重試的名稱;可信回歸是放過
         inbox 後綴、寫出孤兒檔;既有案例沒有名稱規則;無測試專用縫。
 
         **變異** M3:`note_name` 不擋 `.inbox` 結尾 → `implementer.inbox` 與
@@ -87,7 +87,7 @@ class NoteNames(Sandbox):
                 self.assertEqual(self.snapshot(), before)
 
     def test_the_same_note_twice_is_written_once(self):
-        """四問:守來源可追溯(不同票各一行)與同來源不重寫;可信回歸是錯誤去重吞掉
+        """守來源可追溯(不同票各一行)與同來源不重寫;可信回歸是錯誤去重吞掉
         不同票、或 harvest 把重送記成拒絕;既有案例都是不同正文或單次寫入;無測試專用縫。
 
         **變異** M2:`already_noted` 恆回 False → 這一條紅(2 行 / 2 筆事件)。
@@ -118,7 +118,7 @@ class NoteNames(Sandbox):
         self.assertEqual(len(self.lines("memory/project/gate.md")), 1)
 
     def test_another_models_writer_is_still_refused(self):
-        """四問:守「model 層只寫自己的」不因正規化放寬;可信回歸是名稱去 `.md` 後作者
+        """守「model 層只寫自己的」不因正規化放寬;可信回歸是名稱去 `.md` 後作者
         檢查被繞過;既有案例只測不帶 .md 的名稱;無測試專用縫。
         """
         before = sorted(os.listdir(os.path.join(self.repo, "memory", "model")))

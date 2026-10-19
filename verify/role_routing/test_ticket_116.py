@@ -11,7 +11,7 @@ A6 | cli  | --help;main | rc 0;main → opus / claude-code | 票面 A6
 A7 | cli  | worker / opener 配 --complexity simple|complex|缺|其他 | 對應鏈;其他值 rc=2 | 票面 A7
 A8 | cli  | --items N 對各角色 | 超過 cap rc=2 並印上限句;astra 5 過 6 擋;fable null 不擋;worker 缺 --items 視為 1 | 票面 A8
 
-## 介面字串(票面 verify_strings 的原字不在本檔出現 —— 用拼接)
+## 介面字串
 CLI   = scripts/role-models.py resolve --role R [--complexity] [--repair-round N] [--last-red] [--items N] [--exhausted-index I]
 KEYS  = role / candidate_index / model / tool / effort / dispatch_cap / reason / exhausted   ← 票面 resolve_result
 CAP_MSG = "超過 <model> 的每次派工上限 <cap>" 與 "≤<cap> 的批"                              ← 票面 A8 原話
@@ -22,7 +22,7 @@ role-models.py(表靠腳本位置或 AC_ROOT 找都落在沙盒)。同一顆根�
 子行程的環境清掉 AC_ROOT / AC_TICKETS_DIR / AC_CONTROL_DIR(票面 test_plan)。
 
 ## 不做
-不改產品碼;不放寬票面驗收;不刪既有案例;不碰 verify_strings 的原字。
+不改產品碼;不放寬票面驗收;不刪既有案例。
 A2 的「錯誤分類」(provider 錯誤信封 / 缺 CLI / 普通 log / 字面 429)與 A5 的「票 effort 覆寫」票面沒定輸入介面
 (new_cli 沒有對應旗標或函式名),本檔不猜,在 EVIDENCE 提反駁。
 """

@@ -3,33 +3,32 @@
 ## 驗收表(票面每一條一列;期望值來源獨立於被測程式:票面 acceptance 字面 / 夾具自己寫下的檔名 / git 上取的 sha)
 A1 | integ | 沙盒主線有真 repo-map.py、catalog(managed 含 tests/test_*.py)、新鮮索引;整合分支 land/X 頭上 apply --batch land/X 1 2,patch 只新增 tests/test_batch_new.py | rc 0;land/X 只多 1 commit;訊息有行以 `regen: repo-map build` 開頭;副本 check rc 0;managed 含 tests/test_batch_new.py;輸出含批次重產字樣 | 票面 A1 原話;檔名 = patch 新增的那一支
 A2 | integ | (a) patch 只改既有已管理檔 tests/test_kept.py 內文 (b) patch 讓 catalog 指向不存在的 scripts/ghost.py | (a) 訊息無 `regen:` 行、該 commit diff 只有 tests/test_kept.py (b) rc 0、只多 1 commit、輸出含「索引沒重產」 | 票面 A2 原話;(a) 改前即綠(回歸鎖)
-A3 | integ | 分支 t1 新增 tests/test_a.py 並自己 build(分支 check 綠);主線再直接 commit tests/test_z.py 不 build;land t1-map | rc 0;主線 check rc 0;managed 含 test_a 與 test_z;主線多出的 commit 恰一個首行 `regen: repo-map build (land <stamp>)`(stamp = land.pass 的 stamp)、只動兩支產出物;輸出含合併後過期字樣;閘門沒報索引過期 | 票面 A3 原話
+A3 | integ | 分支 t1 新增 tests/test_a.py 並自己 build(分支 check 綠);主線再直接 commit tests/test_z.py 不 build;land t1-map | rc 0;主線 check rc 0;managed 含 test_a 與 test_z;主線多出的 commit 恰一個首行 `regen: repo-map build (land <stamp>)`(stamp = land.pass 的 stamp)、只動兩支產出物;輸出含合併後過期字樣 | 票面 A3 原話
 A4 | integ | 兩條分支各新增 tests/test_a1.py / tests/test_a2.py 且各自 build;前置在拋棄式 worktree 手動 merge 自證衝突只在 code-map/;land 兩條 | rc 0;主線 check rc 0;managed 含兩檔;輸出含合併後過期字樣 | 票面 A4 原話
 A5 | integ | (a) 兩條分支都改 src/same.txt(衝突在 code-map/ 以外)(b) 假 repo-map.py:check 一律 1、build 寫兩支產出物外加 stray.txt | (a) rc 3、land.fail、主線不動 (b) rc 3、主線不動、land worktree 留著、輸出含動到以外字樣、land 分支沒有 regen commit | 票面 A5 原話;(a) 改前即綠(回歸鎖)
-A6 | integ | (a) 分支只新增不受管理的 src/b1 (b) 分支把 catalog 改成指向不存在的檔 | (a) rc 0、沒有 regen commit、沒有合併後過期字樣 (b) rc≠0、主線不動、沒有 regen commit、輸出含「合併後索引重產失敗」與閘門的「code-map 索引過期」 | 票面 A6 原話;(a) 改前即綠(回歸鎖)
+A6 | integ | (a) 分支只新增不受管理的 src/b1 | (a) rc 0、沒有 regen commit、沒有合併後過期字樣 | 票面 A6 原話;(a) 改前即綠(回歸鎖)。(b)「閘門以索引過期攔」隨 #138 刪閘門那一格刪掉(D-054 Q4)
 A7 | integ | A3 那次落地 | land.pass 的 main_before = 跑 land 之前 `git rev-parse main`;sha 是新主線頭的前綴;first-parent 從 main_before 接到新頭、regen commit 在鏈上 | 票面 A7 原話;#127 讀事件檔的寫法
 
-## 介面字串(全部出自票面 acceptance;票面 verify_strings 的原字不在本檔出現 —— gate 比的是 patch 內文)
+## 介面字串(全部出自票面 acceptance)
 BATCH_REGEN   = "批次 " + "code-map 索引重產"        ← A1 apply 輸出
 NOT_REBUILT   = "索引沒重產"                          ← A2(b) apply 輸出
 REGEN_TRAILER = "regen: repo-map build"               ← A1 訊息某行開頭;A3 首行 + " (land <stamp>)"
 REGEN_PREFIX  = "regen:"                              ← A2(a) / A5(b) / A6 不該有
-STALE         = "code-map 索引過期"                    ← 閘門機械格的字樣(A3 不該有、A6(b) 該有)
+STALE         = "code-map 索引過期"
 MERGED_STALE  = "合併後 " + STALE                      ← A3 / A4 land 輸出
 STRAY         = "重產動到 " + "code-map/ 以外"          ← A5(b) land 輸出
-REGEN_FAILED  = "合併後索引重產失敗"                    ← A6(b) land 輸出
 OUTPUTS       = code-map/index.json、code-map/INDEX.md ← A3 regen commit 只准動這兩支
 
 ## 怎麼做假(不上真埠、不起真服務、不打真的模型)
 沙盒借 tests/control_harness.Sandbox(拋棄式真 git repo + origin、外層 AC_* 一律不進沙盒)。
 apply 那幾條借 tests/test_apply.ApplyBase + Sandbox.make_batch(整合分支 land/X 的真實形狀);
-land 那幾條借 tests/test_land.LandBase,`gate_stub = None` 用**真的** gate.sh(機械格要量得到索引)。
+land 那幾條借 tests/test_land.LandBase,`gate_stub = None` 用**真的** gate.sh。
 setUp 照 tests/test_repo_map_contract 的 A32:複製真的 scripts/repo-map.py、寫 catalog、build、commit 進主線。
 patch 用 `diff -ruN base work` 在拋棄式目錄裡現做(檔頭是相對形式),不手打 hunk。
 A5(b) 的假 repo-map.py 是夾具自己寫的一支 python,不碰真的那一支。
 
 ## 不做
-不改產品碼;不放寬票面驗收;不刪既有案例;不碰 verify_strings 的原字;
+不改產品碼;不放寬票面驗收;不刪既有案例;
 「沒有 repo-map.py 的既有 ApplyBatch / LandBase 沙盒全綠」由既有的 tests/test_apply.py、tests/test_land.py 守,本檔不重抄;
 A7「auto-fix 越界守衛判可歸屬」只量 land.pass 兩格與 first-parent 鏈的形狀(守衛 land_attribution 走的那一條),
 不端到端起 auto-fix(讀 code 推的,EVIDENCE 有標)。
@@ -60,7 +59,6 @@ REGEN_PREFIX = "regen:"
 STALE = "code-map 索引過期"
 MERGED_STALE = "合併後 " + STALE
 STRAY = "重產動到 " + "code-map/ 以外"
-REGEN_FAILED = "合併後索引重產失敗"
 OUTPUTS = ("code-map/index.json", "code-map/INDEX.md")
 
 CATALOG = {"version": 1, "managed": ["scripts/*.py", "tests/test_*.py"],
@@ -280,7 +278,6 @@ class LandRebuildsAStaleMergedIndex(MapMixin, LandBase):
         self.assertTrue(files, "regen commit 是空的")
         self.assertEqual([name for name in files if name not in OUTPUTS], [], files)
         self.assertIn(MERGED_STALE, output)
-        self.assertNotIn(STALE, output.replace(MERGED_STALE, ""), "全套閘門還是看到過期的索引")
         self.assertIn("gate.pass", self.kinds())
 
     def test_a4_conflicts_only_in_the_outputs_are_rebuilt_away(self):
@@ -361,25 +358,6 @@ class LandRebuildsAStaleMergedIndex(MapMixin, LandBase):
         self.assertEqual(done.returncode, 0, output)
         self.assertEqual(self.regen_commits("%s..main" % before), [])
         self.assertNotIn(MERGED_STALE, output)
-
-    def test_a6_a_failed_rebuild_is_left_to_the_gate(self):
-        """A6 catalog 壞掉(build rc≠0)→ 沒有 regen commit、輸出含「合併後索引重產失敗」、閘門以機械格紅、主線不動。"""
-        branch = self.branch_for(1, "t1-map")
-        self.write(os.path.join("code-map", "catalog.json"), catalog_text(BROKEN_CATALOG),
-                   where=branch)
-        self.git("add", "-A", cwd=branch)
-        self.git("commit", "-q", "-m", "#1 catalog 指向不存在的檔", cwd=branch)
-        self.approve(1, "t1-map")
-        before = self.git("rev-parse", "main").strip()
-        done = self.land("t1-map", "--no-auto-fix")
-        output = done.stdout + done.stderr
-        self.assertIn(REGEN_FAILED, output)
-        self.assertNotEqual(done.returncode, 0, output)
-        self.assertEqual(self.git("rev-parse", "main").strip(), before)
-        self.assertNotIn(MERGED_STALE, output)
-        for land in self.land_branches():
-            self.assertEqual(self.regen_commits("main..%s" % land), [], land)
-        self.assertIn(STALE, output, "閘門的機械格沒報索引過期(行為同改前)")
 
     def test_a7_the_land_pass_still_spans_from_the_pre_merge_head(self):
         """A7 A3 那次落地的 land.pass:main_before = 合併前主線頭、sha = 含 regen commit 的新主線頭;first-parent 鏈接得上。"""

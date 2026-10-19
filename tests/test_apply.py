@@ -894,7 +894,7 @@ class TheHardBlock(ApplyBase):
 
     def test_the_verifier_hand_in_merges_verify_files_with_a_patch_verify(self):
         """#101 A4:驗證者收件照既有角色管道把 verify.files 併進票(同一手帶 patch-verify)。
-        四問:量票的 verify.files;紅 = 驗證者收件併不進票;期望值 = 夾具的 PLAN_RESULT。"""
+        量票的 verify.files;紅 = 驗證者收件併不進票;期望值 = 夾具的 PLAN_RESULT。"""
         self.make("1", needs_verifier=True)
         vcase = VERIFY_CASE.replace("verify/example/test_ticket_1.py", "verify/nav/test_ticket_1.py")
         done = self.apply("1", self.patch_file("p.diff", CHANGE), self.patch_file("pv.diff", vcase),
@@ -959,13 +959,6 @@ class TheHardBlock(ApplyBase):
         done = self.apply("9", self.patch_file("p.diff", CHANGE))
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("#9", done.stderr)
-
-    def test_verify_strings_that_are_not_in_the_patch_are_called_out(self):
-        """字串不在 patch 裡就不會在分支上,而那要等到 `close` 才會說話(D-012 第 4 點)。"""
-        self.make("1", verify_strings=[{"path": "src/a.txt", "contains": "沒有這串"}])
-        done = self.apply("1", self.patch_file("p.diff", CHANGE))
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("verify_strings", done.stdout)
 
 
 class Rebase(ApplyBase):
@@ -1208,7 +1201,7 @@ class ApplyBatch(ApplyBase):
             return json.load(handle)
 
     def test_the_fix_is_exactly_one_commit_on_land_and_touches_no_ticket(self):
-        """A2。四問:量什麼 = land/X 前進恰一個 commit、訊息帶 batch fix round 1 與 #1 #2、
+        """A2。量什麼 = land/X 前進恰一個 commit、訊息帶 batch fix round 1 與 #1 #2、
         t1-a / t2-b 與 1.json / 2.json 位元不變;為什麼會紅 = 疊到別處、多 commit、寫了票;
         期望值來源 = 夾具的 rev-parse 與票檔原文;不測 = 閘門。
 
@@ -1230,7 +1223,7 @@ class ApplyBatch(ApplyBase):
                              "#%s 的票檔被寫了(state_version / review 會跟著漂)" % ident)
 
     def test_hard_block_paths_block_a_file_of_a_ticket_in_the_batch(self):
-        """A3 的硬擋那一格。四問:量 rc 5 + 「hard_block」;紅 = 批次路不量 hard_block;
+        """A3 的硬擋那一格。量 rc 5 + 「hard_block」;紅 = 批次路不量 hard_block;
         期望值 = 測試寫進 config 的 hard_block.paths。"""
         conf = json.loads(self.read("board/config.json"))
         conf["hard_block"] = {"paths": ["src/two.txt"], "dirs": [], "patterns": []}
@@ -1241,7 +1234,7 @@ class ApplyBatch(ApplyBase):
         self.assertIn("hard_block", done.stderr)
 
     def test_deleting_an_assert_in_a_test_file_is_blocked(self):
-        """A4。四問:量 rc 5 + 「tests/test_x.py:6 放寬測試」+ land/X 不動;紅 = 守衛只印不擋;
+        """A4。量 rc 5 + 「tests/test_x.py:6 放寬測試」+ land/X 不動;紅 = 守衛只印不擋;
         期望值 = 夾具 test_x.py 第 6 行就是那一行 assertEqual。
 
         **變異 ①**:放寬測試守衛改成只印不擋 → 這一條 rc 紅。
@@ -1253,7 +1246,7 @@ class ApplyBatch(ApplyBase):
         self.assertEqual(self.head(), self.batch["land"])
 
     def test_adding_a_skip_in_a_test_file_is_blocked(self):
-        """A4 的 skip 那一半。四問:量 rc 5 + 新增那一行的行號;紅 = 只看刪掉的行;
+        """A4 的 skip 那一半。量 rc 5 + 新增那一行的行號;紅 = 只看刪掉的行;
         期望值 = skip 插在第 5 行(def 之前)。"""
         body = TEST_X.replace("    def test_one", "    @unittest.skip(\"紅的先關掉\")\n    def test_one")
         done = self.run_batch(batch_patch(("tests/test_x.py", TEST_X, body)))
@@ -1261,7 +1254,7 @@ class ApplyBatch(ApplyBase):
         self.assertIn("tests/test_x.py:5 放寬測試", done.stderr)
 
     def test_a_test_defect_objection_on_that_case_lets_it_through(self):
-        """A4 的豁免。四問:量 stderr 沒有「放寬測試」、land/X 前進、rc 6(反駁沒收進票);
+        """A4 的豁免。量 stderr 沒有「放寬測試」、land/X 前進、rc 6(反駁沒收進票);
         紅 = 豁免沒認案例檔或反駁寫進票;期望值 = 案例 tests.test_x.T.test_one ⇒ tests/test_x.py、
         result-round1.json 的 objections 就是 EVIDENCE 那一行(A4 改版)。"""
         done = self.run_batch(
@@ -1277,7 +1270,7 @@ class ApplyBatch(ApplyBase):
                          "反駁要留在 result-round1.json(不記進票)")
 
     def test_a_test_defect_objection_on_another_case_does_not(self):
-        """A4 豁免只對那條案例的檔。四問:量 rc 5;紅 = 有任何 test_defect 就全放;
+        """A4 豁免只對那條案例的檔。量 rc 5;紅 = 有任何 test_defect 就全放;
         期望值 = 反駁點名的是 tests/test_other.py。"""
         done = self.run_batch(
             batch_patch(("tests/test_x.py", TEST_X, TEST_X.replace("self.assertEqual(1, 1)", "pass"))),
@@ -1322,7 +1315,7 @@ class TheCodeMapIsRebuiltIntoTheSameCommit(ApplyBase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
     def test_a_stale_code_map_is_rebuilt_into_the_same_commit(self):
-        """A4。四問:量 check rc、managed、commit 數、regen 行;
+        """A4。量 check rc、managed、commit 數、regen 行;
         紅 = 拿掉重產那一步(m3)時 check rc=1、managed 沒有新檔;
         期望值 = patch 新增的檔名 tests/test_memory_new.py。
         """
@@ -1337,19 +1330,8 @@ class TheCodeMapIsRebuiltIntoTheSameCommit(ApplyBase):
         self.assertEqual(len(self.regen_lines()), 1, self.git("log", "-1", "--format=%B", "t1"))
         self.assertTrue(self.regen_lines()[0].startswith("regen: repo-map build"))
 
-    def test_the_gate_takes_the_rebuilt_branch(self):
-        """A5:同一條分支,閘門機械格照舊只檢查,而這回不擋。四問:量閘門 rc 與 stderr;
-        紅 = 拿掉重產那一步(m3)時 rc=4、stderr 有「code-map 索引過期」;期望值抄票面字樣。
-        """
-        self.apply_a_new_managed_file()
-        wt = self.wt()
-        gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"), "--branch", "--ticket", "1",
-                           "--no-auto-fix", cwd=wt)
-        self.assertNotIn("code-map 索引過期", gate.stderr)
-        self.assertNotEqual(gate.returncode, 4, gate.stdout + gate.stderr)
-
     def test_an_unchanged_map_adds_no_regen_line_and_no_code_map_diff(self):
-        """A6。四問:量 regen 行與分支 diff 的檔名;紅 = 不比對前後、每次都加 regen 行;
+        """A6。量 regen 行與分支 diff 的檔名;紅 = 不比對前後、每次都加 regen 行;
         期望值 = 只改既有檔內文時分支 diff 只有 tests/test_kept.py。
         """
         done = self.apply("1", self.patch_file("p.diff", batch_patch(
@@ -1360,7 +1342,7 @@ class TheCodeMapIsRebuiltIntoTheSameCommit(ApplyBase):
                          ["tests/test_kept.py"])
 
     def test_a_failed_rebuild_does_not_block_the_apply(self):
-        """A7。四問:量 rc、commit 數、輸出字樣;紅 = 重產失敗改成 die(m4)時 rc≠0、分支沒 commit;
+        """A7。量 rc、commit 數、輸出字樣;紅 = 重產失敗改成 die(m4)時 rc≠0、分支沒 commit;
         期望值 = 票面字樣「索引沒重產」。
         """
         broken = dict(MAP_CATALOG, topics=dict(MAP_CATALOG["topics"], ghost={
@@ -1405,7 +1387,7 @@ class TheBatchRebuildsTheCodeMap(ApplyBase):
         return self.git("log", "-1", "--format=%B", "land/X")
 
     def test_a1_a_stale_code_map_is_rebuilt_into_the_batch_commit(self):
-        """A1。四問:量 commit 數、regen 行、副本 check、managed、字樣;
+        """A1。量 commit 數、regen 行、副本 check、managed、字樣;
         紅 = **m1**(拿掉 --batch 的重產)時 check rc=1、沒有 regen 行;
         期望值 = patch 新增的檔名 tests/test_batch_new.py。"""
         done = self.run_batch(batch_patch(("tests/test_batch_new.py", None, TEST_X)))
@@ -1423,7 +1405,7 @@ class TheBatchRebuildsTheCodeMap(ApplyBase):
         self.assertIn("批次 code-map 索引重產", done.stdout + done.stderr)
 
     def test_a2_an_unchanged_map_adds_no_regen_line(self):
-        """A2 前半。四問:量 regen 行與那個 commit 的檔名;紅 = 每次都加 regen 行;
+        """A2 前半。量 regen 行與那個 commit 的檔名;紅 = 每次都加 regen 行;
         期望值 = 只改 tests/test_kept.py 的內文。"""
         done = self.run_batch(batch_patch(
             ("tests/test_kept.py", TEST_X, TEST_X.replace("test_one", "test_two"))))
@@ -1434,7 +1416,7 @@ class TheBatchRebuildsTheCodeMap(ApplyBase):
                          ["tests/test_kept.py"])
 
     def test_a2_a_failed_rebuild_does_not_block_the_batch(self):
-        """A2 後半。四問:量 rc、commit 數、字樣;紅 = build 失敗改成擋;
+        """A2 後半。量 rc、commit 數、字樣;紅 = build 失敗改成擋;
         期望值 = 票面字樣「索引沒重產」。"""
         broken = dict(MAP_CATALOG, topics=dict(MAP_CATALOG["topics"], ghost={
             "summary": "指到不存在的檔", "match": ["ghost"], "entry": "scripts/ghost.py"}))

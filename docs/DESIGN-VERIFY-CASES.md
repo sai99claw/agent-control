@@ -15,8 +15,8 @@
 | C1 | **根因排序:主線派工文(a)> 沒把閘門接上 verify-case.py check(d)> 沒範本(b)> 格式不明確(c)**。使用者的假設(b)(c)成立但只占參考實作那筆帳的三分之一;三份派工文**明著或等於明著**要求「有實作時綠」,而拿不到 patch 的驗證者只剩一條路:自己寫實作。 | — |
 | C2 | **驗證者只證「乾淨基底紅、而且紅在自己的斷言」**,用工具量(`verify-case.py red <n>`,新子指令),寫進票的 `verify.baseline{stage:"red"}`。**不搭參考實作、不做產品變異、不證綠**。綠由閘門在實作者 patch 進來時用既有的 `verify-case.py check` 量(#22 做好的,現在沒人自動叫它)。 | 每票省 150–200K(參考實作 50–80K + 逐條變異 40–60K + 為了搭實作而多讀的產品檔 30–60K) |
 | C3 | **驗證者的變異驗紅整條拿掉**。oracle 不被騙的證據改成三件機器量的事:① 基底上紅在案例檔自己的 `AssertionError`(不是 import / AttributeError / 別的檔炸)② candidate 上綠(閘門量)③ 兩邊案例數相同。實作者對自己單元測試的變異照舊(D-009 那一半不動)。 | 每票省 40–60K;風險:一條「基底紅、候選綠、但判準選錯」的案例會漏過 —— 由 `red_lines`(每條紅的第一行寫進票)給主線覆核時看,成本 <1K |
-| C4 | **一份範本 `verify/_template_ticket.py`(A 正本、同步到 T)+ 機器 lint**(`verify-case.py lint`,閘門叫):模組 docstring 固定五欄、`TAGS` 字面、每個 `test_` 的 docstring 首行是驗收編號、禁受保護埠字面與 kill、fixture 只走 `addCleanup`。lint 紅 = 閘門 rc≠0 並指名行。 | 每票省 20–40K(不必讀 2–3 份既有案例檔猜形狀;#23 自報讀了 7 份);lint 每命中一次省一輪退件(~50K) |
-| C5 | **閘門接線**:`gate.sh --ticket <n>`(A)/ `land-ticket.sh gate`(T)在回歸層之後多兩步:`verify-case.py lint <verify.files>`、`verify-case.py check <n> --candidate <分支樹>`;`check` 把 `verify.baseline.stage` 從 `red` 升成 `check`。`ticket.py close` 只認 `stage=="check"`(或 `verify_waiver`)。 | 每票多花 0 agent token、閘門多 10–60 秒(案例檔在乾淨副本再跑一次);省掉的是「驗證者等 patch」那條路整個不存在 |
+| C4 | (lint 那一半已撤,#138,D-054 Q4:閘門只跑案例,不先驗案例的格式)**一份範本 `verify/_template_ticket.py`(A 正本、同步到 T)+ 機器 lint**(`verify-case.py lint`,閘門叫):模組 docstring 固定五欄、`TAGS` 字面、每個 `test_` 的 docstring 首行是驗收編號、禁受保護埠字面與 kill、fixture 只走 `addCleanup`。lint 紅 = 閘門 rc≠0 並指名行。 | 每票省 20–40K(不必讀 2–3 份既有案例檔猜形狀;#23 自報讀了 7 份);lint 每命中一次省一輪退件(~50K) |
+| C5 | **閘門接線**(lint 那一步已撤,#138,D-054 Q4;只剩 `check`):`gate.sh --ticket <n>`(A)/ `land-ticket.sh gate`(T)在回歸層之後多兩步:`verify-case.py lint <verify.files>`、`verify-case.py check <n> --candidate <分支樹>`;`check` 把 `verify.baseline.stage` 從 `red` 升成 `check`。`ticket.py close` 只認 `stage=="check"`(或 `verify_waiver`)。 | 每票多花 0 agent token、閘門多 10–60 秒(案例檔在乾淨副本再跑一次);省掉的是「驗證者等 patch」那條路整個不存在 |
 | C6 | **A 放:範本、lint、`red` 子指令、gate 接線、角色卡、`templates/dispatch-verifier.md`、VERIFICATION/SCHEMA 措辭。T 自備:`land-ticket.sh` 的兩行呼叫、`board/config.json` 的禁字清單(埠)、`verify/<feature>/_common.py` 之類的 fixture、`docs/DISPATCH-COMMON-RULES.md` §133 那段(它還在說 VERDICT,過期)。** | 同步一次 ~5K;不同步的話兩邊各長一種形狀(D-018 明禁) |
 | C7 | **四張票,順序:#25 文字(sonnet)→ #26 工具(opus)→ #27 閘門(opus)→ T#650 同步+接線(sonnet)**。#25 今天就能派,它是省最多的那一張;#26 沒落地前 #25 給一段過渡指令(貼 `^Ran\|^FAILED\|^(FAIL\|ERROR):` 與 rc,只准基底)。 | — |
 
@@ -89,8 +89,7 @@
 
 閘門。`gate.sh --ticket <n>`(與 T 的 `land-ticket.sh gate`)在 `regression()` 之後:
 1. `verify.files` 空 → 印「這張票沒有驗證者案例」(有 `verify_waiver` 才不算缺口),照 #619 那條「宣告了 tags 卻選不到案例 = 缺口」的精神處理;
-2. 非空 → `verify-case.py lint <files>`(rc≠0 就停,指名行);
-3. → `verify-case.py check <n> --ref <base_sha> --candidate <這一輪的分支樹>`,`stage` 升成 `check`;`ok:false` 就是閘門紅,紅榜寫進 status.json 的 `failures[]`,走 auto-fix 的路(worker 拿到的是「你的實作讓驗證者的第 k 條紅」,或反過來 `test_defect`——那條路 D-014 已有)。
+2. 非空 → `verify-case.py check <n> --ref <base_sha> --candidate <這一輪的分支樹>`,`stage` 升成 `check`;`ok:false` 就是閘門紅,紅榜寫進 status.json 的 `failures[]`,走 auto-fix 的路(worker 拿到的是「你的實作讓驗證者的第 k 條紅」,或反過來 `test_defect`——那條路 D-014 已有)。
 
 為什麼不在 land 量而在 gate:worker 三輪修復迴圈在 gate,量在 land 等於紅了才發現、多一整輪。
 
@@ -100,30 +99,17 @@
 - 它需要一份綠的實作當底,而綠的實作要嘛是實作者的(那時驗證者已經結束了)、要嘛是自己搭的(這就是題目)。
 - D-009 說驗證者的獨立性來自「案例是它自己從票面寫的」,變異是實作者證明「自己的單元測試有牙齒」的工具;兩邊本來就分開,是派工文把 §5 塞給了驗證者。
 - 「oracle 不能被騙」剩下的風險是「基底紅、候選綠、但判準選到壞掉時碰巧為真的那一個」(DISPATCH-TEMPLATE §5 第二個例子)。這種案例的特徵是**紅的訊息與驗收句對不上**——`red_lines` 把每條紅的第一行寫進票,主線覆核 patch 時順手掃一眼(<1K),比 40–60K 的變異便宜兩個數量級。
-- 想要更強:可以由**閘門**在 `check` 之後對 candidate 做一次「把票面 `verify_strings` 所在的那幾行註解掉」的粗變異再跑案例檔(機器做、零 agent token)。這一條**不在本設計裡開票**——它需要一個能安全還原的變異器,而 D-018 要求票寫全;等 C1–C7 落地、量到一次真的漏過再開。
+- 想要更強:可以由**閘門**在 `check` 之後對 candidate 做一次「把票面指定字串所在的那幾行註解掉」的粗變異再跑案例檔(機器做、零 agent token)。這一條**不在本設計裡開票**——它需要一個能安全還原的變異器,而 D-018 要求票寫全;等 C1–C7 落地、量到一次真的漏過再開。
 
 ---
 
 ## 四、案例格式規範與範本(C4)
 
-### 規範(lint 逐條對應;專案可在 `board/config.json` `verify_lint` 加禁字)
+### 規範(已撤,#138,D-054 Q4)
 
-| # | 規則 | lint 怎麼查 | 為什麼 |
-|---|---|---|---|
-| F1 | 模組 docstring 第一行 `#<票號> <一句話>`,底下固定四段:`## 驗收表`(每列 `A<k> \| 層 \| 輸入/步驟 \| 可觀察輸出 \| 期望值來源`)、`## 介面字串`、`## 怎麼做假`、`## 不做` | `ast.get_docstring` + 正則;四個 `## ` 標題缺一報一 | 期望值來源不從被測程式算(VERIFICATION §測試計畫);下一個人不用讀 code 就知道每條在驗什麼 |
-| F2 | `TAGS = [...]` 字面 list、已登記(`TAGS.md` 或 `TAGS.d/`) | 既有(`verify.py`) | — |
-| F3 | 每個 `test_*` 方法的 docstring 第一行以驗收編號開頭(`A3`、`D1-2`、`13` 都可,正則 `^[A-Z]{0,2}\d+(-\d+)?\b`);同一檔的編號集合印出來,與票的 `acceptance` 條數對照,缺的**印出來不擋** | ast 走 `FunctionDef`,名字 `test_` 開頭 | 「票面 13 條、案例宣告了 1–13」由機器說,#23 EVIDENCE 用了一段話手證這件事 |
-| F4 | 原始碼不含受保護埠字面(專案 config;T 是 `1890[3-5]\|18889\|15349`)、不含 `os.kill` / `killpg` / `pkill` / `kill -`、不含 `TABBY_BROWSER_ENGINES=`(T) | 正則掃原始碼(不是 ast,字串裡也要抓) | 派工文鐵律搬進機器(D-001) |
-| F5 | 每一顆 `tempfile.mkdtemp` / `TemporaryDirectory` 同一個語句或下一行有 `addCleanup` | ast(#647 D1 那條規則的形狀,它已經掃全 repo;lint 只掃這一檔) | #647 的起因 |
-| F6 | 模組頂層不 `import` 票面新增的符號(拿不到票時 lint 不查;拿得到票就對 `verify_strings` 裡 `def <name>(` 的名字查頂層 import) | ast `Import`/`ImportFrom` 對名字 | 「import 失敗不算紅」那條 🩸 的預防版:與其事後不算,不如寫的時候就擋 |
-| F7 | 只碰專案宣告的介面:`from <M> import <X>` / `<M 或別名>.<X>` 的 X 在 M 的 `VERIFY_API`;繼承 M 的類別後 `self.<X>()`(案例自己定義的、`unittest.TestCase` 有的除外)的 `"<類別>.<X>"` 在 `VERIFY_API`;底線名字(非 dunder)不看名單一律命中,案例自己定義的除外。**可擋**(`verify_lint.block`),逃生口是 `verify_lint.allow` | ast 讀 `verify_lint.api` 指的檔頂層 `VERIFY_API` 字面(不 import);那支檔沒宣告 → 印一行、名單檢查略過,底線照查 | 耦合私有實作:專案改一個內部名字,一批無關案例一起紅(#102) |
-| F8 | 不釘整數或 sha:`assertEqual(len(…) / <…>.count(…), <整數>)`(對調也算)、`<…>.count(…) == <整數>`、同一函式(或模組層)提到 `git show` / `sha256` / `hexdigest` 時的 `[0-9a-f]{7,40}` 字面。**可擋**;逃生口:語句首行或末行 `# pin:<理由>`(理由空著照命中並註明),或 `verify_lint.allow` | ast;`assertGreaterEqual` 這種下限不算 | 精確快照:無關的新增一筆就紅(#102) |
-| F9 | 時間只取一次:同一函式 `date.today()` / `datetime.now()`(含 `utcnow`)/ `time.strftime(` / `time.localtime(` / `iso(` 兩次以上且至少一次在斷言裡;模組層或 class 本體(不在 def 裡)取任一。**可擋**;逃生口 `verify_lint.allow` | ast | 跨日 / 跨秒才紅,紅在別人的票上(#102) |
-| F10 | `time.sleep(` 之後 5 行內有正向斷言(`assertNot*` / `assertFalse` / `assertIsNone`、引用名字含 `before` 的不算)。**只印不擋**,`block` 寫了也忽略 | ast | 睡夠沒有看機器快慢;誤報率還沒量,先印 |
-| F11 | `wait_until(<字串字面>)` 之後同一區塊的下一個斷言裡,長度 ≥3 的字串字面沒有一個出現在等的那段字面裡。**只印不擋** | ast | 等到的訊號不是要驗的那件事 |
-| F12 | 對 `src` / `*_CODE` / `*_SRC` 或 `read(…)` / `.read_text()` 的結果呼叫 `.index(`。**只印不擋** | ast | 釘了原始碼的位置,改排版就紅 |
-
-F7–F12 的設定都在 `board/config.json` 的 `verify_lint`:`api`(`{模組名: 相對專案根的檔路徑}`)、`block`(要擋的規則,只收 F7 / F8 / F9;沒設 = `[]` = 全部只印)、`allow`(白名單,每筆 `"<案例檔相對路徑>:<規則>"`,命中那行尾巴印「(白名單,不擋)」)。上線時全部只印;專案用 `verify-case.py lint --baseline <檔…>` 產生既有違規的陣列貼進 `verify_lint.allow`,再自己打開 `block` —— 一上線就擋,等於逼每一張票先修別人的檔。
+案例格式 lint F1–F12(`verify-case.py lint`)與閘門裡「lint 紅就不跑 check」那一手已整段刪除:閘門只跑案例,
+不先驗案例的格式;宣告了 verify 卻沒有案例仍是缺口(閘門 rc 3)。原表見 git 歷史(#26、#102);F4 的殺行程
+字樣在 #135 搬進 `board/config.json` 的 `hard_block.patterns`。
 
 不做的規則(否決):案例檔長度上限(#647 21 條 996 行是合理的密度)、強制 `_common.py`(小票不需要)、強制每條一個 class(形狀自由)。
 
@@ -149,7 +135,7 @@ NEW_FN  = "environment_suspects" ← A1 用 getattr 取,不在模組頂層 impor
 <例:PATH 前綴的假 df / 假 ioreg;沙盒 server 綁埠 0;斷線用假輸入模擬>
 
 ## 不做
-不改產品碼;不放寬票面驗收;不刪既有案例;不碰 verify_strings 的原字(落地 grep 會命中自己)
+不改產品碼;不放寬票面驗收;不刪既有案例
 """
 import os
 import shutil
@@ -197,11 +183,8 @@ class TheBehaviourUnderTest(unittest.TestCase):
 | 東西 | A(正本) | T(同步帶回 / 自備) |
 |---|---|---|
 | `verify/_template_ticket.py` | 放 | `sync-to-project.sh` 新增一條 copy(同路徑) |
-| `verify-case.py red` / `lint` / `check` 的 `stage` 與 `red_lines` | 放(`SCRIPT_LIST` 已含 `verify-case.py`) | 自動到 `scripts/control/verify-case.py` |
+| `verify-case.py red` / `check` 的 `stage` 與 `red_lines` | 放(`SCRIPT_LIST` 已含 `verify-case.py`) | 自動到 `scripts/control/verify-case.py` |
 | 閘門接線 | `scripts/gate.sh --ticket` 兩行 | **自備**:`scripts/land-ticket.sh gate` 兩行(它是專案腳本) |
-| lint 禁字清單 | `board/config.json` `verify_lint.forbid`(預設:kill 家族) | **自備**:加五個埠 + `TABBY_BROWSER_ENGINES=` |
-| F7 介面名單 `VERIFY_API` | lint 只讀(ast,不 import) | **自備**:在 `test_browsers.py` 等底座檔頂層宣告字面 tuple(`"名字"` 或 `"類別.方法"`) |
-| lint F7–F12 設定 | `verify_lint.api` / `block` / `allow` 的形狀與預設(沒設 = 全部只印) | **自備**:`api` 指到宣告了 `VERIFY_API` 的檔;`lint --baseline` 產生 `allow`;要擋時才寫 `block` |
 | 角色卡 `verifier.md`、`templates/dispatch-verifier.md`、`docs/VERIFICATION.md`、`tickets/SCHEMA.md` 的 `verify.baseline` 段、`docs/DECISIONS.md` 新條 | 放 | 角色卡由 sync 帶到 `docs/roles/`;`docs/DISPATCH-COMMON-RULES.md` §133「驗證者交付 = … + VERDICT」**過期,自備改** |
 | `rules.py WANTED["verifier"]` | 不動(已經沒有 §5);但 **`docs/DISPATCH-TEMPLATE.md` §9 加一行「驗證者一律 `rules.py pack verifier`,不准用 worker 包」** | 同步 |
 | fixture / `_common.py` / 假 bin | — | 自備(專案知識) |

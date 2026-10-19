@@ -9,7 +9,7 @@ A5 | integ | (a) start / pass 都沒 stamp (b) 沒有前 main (c) 整檔找不�
 A6 | integ | 新形狀的合法 land + 工作樹多一個檔 | rc 8 指那個檔、沒有 HEAD 那一列;#115 的其餘案例在 verify/dispatch/test_ticket_115.py(本票只補它的夾具) | 票面 A6 原話
 A7 | doc   | 讀 docs/WORKFLOW.md §8 守衛那一條、auto-fix.sh 守衛檔頭註解 | 兩處都寫得出新規則的鍵,舊句「pass 的 sha 就是新 HEAD」不在 | 票面 A7 原話
 
-## 介面字串(全部出自票面 acceptance;票面 verify_strings 的原字不在本檔出現 —— gate 比的是 patch 內文)
+## 介面字串(全部出自票面 acceptance)
 BEFORE_KEY = "main" + "_before"        ← A1 鍵名
 CHANNEL    = ("channel", "docs")       ← A1(b)
 DOCS_STAMP = ^docs-\\d{8}-\\d{6}-\\d+$  ← A1(b) 形狀
@@ -23,7 +23,7 @@ A2–A6 借 verify/dispatch/test_ticket_115.GuardBase(真 auto-fix + 真 git、c
 期望的 sha 一律由假 agent 當場 `git rev-parse` 寫進沙盒的家,不從守衛算回去。
 
 ## 不做
-不改產品碼;不放寬票面驗收;不刪既有案例;不碰 verify_strings 的原字;
+不改產品碼;不放寬票面驗收;不刪既有案例;
 「notes 兩筆」只在有 guard.json 時看得到(不擋時票面沒說 notes 落在哪),所以 A3 的 notes 用多一個工作樹檔的那一案驗。
 """
 import glob
@@ -52,7 +52,7 @@ LAND_KINDS = ("land.start", "land.refused", "land.fail", "land.pass")
 
 
 def shell(text):
-    """假 agent 的片段:`@KB@` 換成鍵名(verify_strings 的原字不進本檔)。"""
+    """假 agent 的片段:`@KB@` 換成鍵名。"""
     return text.replace("@KB@", BEFORE_KEY)
 
 

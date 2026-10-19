@@ -586,14 +586,14 @@ git -C "$ROOT" worktree add -q -b "$BR" "$WT" "$MAIN" || {
 LAND_BASE=$(git -C "$WT" rev-parse HEAD)
 
 # 合併結果的 code-map 索引重產(#129)。每條分支自己 build 過、各自 check 綠,合起來仍會過期
-# (兩邊各新增一支已管理的檔),以前要全套閘門的機械格退回一整輪。判準與 build 是 `wtbase.sh`
+# (兩邊各新增一支已管理的檔),以前要全套閘門退回一整輪。判準與 build 是 `wtbase.sh`
 # 的 `code_map_regen`(apply 那兩處同一份);這裡**只** stage 兩支產出物,stage 完工作樹還有
 # 別的差異(改動或新檔)= build 動到 code-map/ 以外 —— 不 commit、worktree 留著、rc 3。
-# 退出碼:0 產出物已 stage(可能沒變);1 build 非零(不 commit,交閘門的機械格攔)。
+# 退出碼:0 產出物已 stage(可能沒變);1 build 非零(不 commit regen;閘門不量索引,D-054 Q4,照常往下落地)。
 land_regen() {
     code_map_regen "$WT"
     if [ $? -eq 2 ]; then
-        echo "land: 合併後索引重產失敗(repo-map build 非零,上面 repo-map: 那幾行)—— 沒有 regen commit,交全套閘門的機械格攔"
+        echo "land: 合併後索引重產失敗(repo-map build 非零,上面 repo-map: 那幾行)—— 沒有 regen commit,照常落地(閘門不量索引);索引要人重產"
         return 1
     fi
     git -C "$WT" add -- code-map/index.json code-map/INDEX.md

@@ -13,7 +13,7 @@ NEW_FN  = "environment_suspects" ← A1 用 getattr 取,不在模組頂層 impor
 <例:PATH 前綴的假 df / 假 ioreg;沙盒 server 綁埠 0;斷線用假輸入模擬>
 
 ## 不做
-不改產品碼;不放寬票面驗收;不刪既有案例;不碰 verify_strings 的原字(落地 grep 會命中自己)
+不改產品碼;不放寬票面驗收;不刪既有案例
 """
 import os
 import shutil

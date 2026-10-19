@@ -19,7 +19,7 @@ DISPATCH = sh scripts/new-session.sh dispatch <opener|design> --items N --prompt
 LEGACY   = python3 scripts/role-models.py legacy --config <檔> [--write]
 QUOTA    = 一行頂層 JSON {"type":"turn.failed","error":{"message":"You have hit your usage limit (429)."}}(#121/#132 夾具同一個信封)
 CAP_HINT = "≤5"(#116 A8 的切批句)
-(票面 verify_strings 的原字在本檔用拼接,不讓落地 grep 命中自己)
+(票面字串在本檔用拼接)
 
 ## 怎麼做假(不上真埠、不起真服務、不打真的模型)
 control_harness.Sandbox 拋棄式 repo(PATH 最前面的 claude 是絆線)。claude-code 候選 = config 命令指向的假 agent

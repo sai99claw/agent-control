@@ -28,7 +28,7 @@ claude-code 的 worker 是 `board/config.json` 的 `worker.command` 指向的假
 A1–A5 直接用 subprocess 跑本 repo 的 scripts/ticket.py agent-command(不讀票、不寫東西);外層 AC_* 清掉。
 
 ## 不做
-不改產品碼;不放寬票面驗收;不刪既有案例;不碰 verify_strings 的原字;不跑真的模型。
+不改產品碼;不放寬票面驗收;不刪既有案例;不跑真的模型。
 """
 import json
 import os

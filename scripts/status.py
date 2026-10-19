@@ -9,7 +9,7 @@
                              --mode discover              # 跑測試,環境壞了當場中止(rc=86)
     scripts/status.py done   --ticket 7 --run-id … --rc 1 --log gate.log \
                              [--suspected-flaky test_x.Case.test_y …] \
-                             [--lint-log gate.log.lint --lint-root <閘門的根> [--lint-no-cases]]
+                             [--no-cases-log gate.log.no-cases]
     scripts/status.py show   --ticket 7 [--run-id …] [--runs]
     scripts/status.py suspects --ticket 7 [--run-id …] [--count]   # 環境可疑幾筆
     scripts/status.py rundir --ticket 7 --run-id …   # 這一輪的目錄(回歸快取住那裡)
@@ -118,14 +118,9 @@ SUSPECT_ENGINE = re.compile(r"^([a-z][a-z0-9_.-]*)(\s+|$)")
 # **那一份文件是形狀的唯一真實來源**,這裡只是它的可執行副本。
 SUSPECT_KEYS = ("source", "engine", "why", "count", "threshold", "log", "line")
 CLOSERS = {"(": ")", "[": "]"}
-# 驗證者案例的 lint(`verify-case.py lint`)不過那一輪的紅榜列(#126,D-014:LINT 是驗證者的紅)。
-# 行的形狀是 `cmd_lint` 印的:擋的在前、不擋的在後,最後一行 `**不過**(N 條)`。
-LINT_KIND = "LINT"
-LINT_CASE = "verify-case-lint:"
-LINT_NO_CASES = LINT_CASE + "(no-cases)"
-LINT_SPOT = re.compile(r"^verify-case lint: (.+?):(\d+) \S")
-LINT_UNREADABLE = re.compile(r"^verify-case lint: 讀不到 (.+?) —— ")
-LINT_COUNT = re.compile(r"^verify-case lint: \*\*不過\*\*\((\d+) 條\)")
+# 票宣告了 verify 卻沒有案例那一輪的紅榜列(#126 A2,D-014:缺口是驗證者的紅)。
+GAP_KIND = "GAP"
+NO_CASES = "verify-case:(no-cases)"
 
 
 def normalized_failure_message(error):
@@ -520,62 +515,20 @@ def parse_failures(log_path):
     return out
 
 
-def lint_row(case, where, line_no, excerpt, log_path):
-    """LINT 列與 `parse_failures` 的列同一組鍵 —— 讀紅榜的人不必分兩種形狀。"""
-    return {"case": case, "kind": LINT_KIND, "subtest": "", "file": where,
-            "line": line_no, "engine": "", "log": log_path, "excerpt": excerpt,
-            "suspected_flaky": False, "flaky": "", "order_dependent": False}
+def no_cases_row(log_path):
+    """閘門 CRC=3 那條路(票宣告了 verify 卻沒有案例)→ 恰一列缺口,log 是閘門那幾行說明。
 
-
-def parse_lint(log_path, lint_root, no_cases=False):
-    """一份 **rc 非零**的 lint log → LINT 列(#126)。呼叫的人只在 lint 不過時給這一份。
-
-    擋的行一行一列,列數照最後那一行 `**不過**(N 條)` 的 N:`cmd_lint` 先印擋的、再印不擋的
-    (F3、白名單、非 block 的 F7–F12 都長得像 `<檔>:<行> <規則>`),所以取前 N 行帶位置的。
-    讀不到檔那一行一檔一列(`line` 0)。`file` 是相對 `lint_root`(閘門的 `$ROOT`)的路徑:
-    lint 印的位置相對它自己的根(`event.repo_root()`,`AC_ROOT` 蓋得掉),讀不到那一行印的是
-    閘門傳進去的絕對路徑 —— 兩種都換回相對,絕對路徑會把家目錄抄進票與看板。
-    一列都對不上也**不回空的**:恰一列 `verify-case-lint:`,excerpt 是最後一個非空行 ——
-    rc 非零而紅榜是空的,auto-fix 會把它讀成「紅了但沒有歸因」。
-    `no_cases`:票宣告了 verify 卻沒有案例(閘門 CRC=3 那條路),log 是閘門那幾行說明。
+    與 `parse_failures` 的列同一組鍵 —— 讀紅榜的人不必分兩種形狀。rc 非零而紅榜是空的,
+    auto-fix 會把它讀成「紅了但沒有歸因」,而下一步明明是派驗證者。
     """
     try:
         with open(log_path, encoding="utf-8", errors="replace") as handle:
-            lines = handle.read().splitlines()
+            lines = [line for line in handle.read().splitlines() if line.strip()]
     except OSError:
         lines = []
-    if no_cases:
-        text = "\n".join(line for line in lines if line.strip())
-        return [lint_row(LINT_NO_CASES, "", 0, "\n".join(text.splitlines()[:EXCERPT_LINES]),
-                         log_path)]
-    own_root = event.repo_root()
-
-    def relative(path):
-        if not os.path.isabs(path):
-            path = os.path.join(own_root, path)
-        # realpath 兩邊:macOS 的 `/var` 是 `/private/var` 的捷徑,只比字串會長出一串 `../`。
-        return os.path.relpath(os.path.realpath(path), os.path.realpath(lint_root))
-
-    rows = []
-    for line in lines:
-        hit = LINT_UNREADABLE.match(line)
-        if hit:
-            where = relative(hit.group(1))
-            rows.append(lint_row(LINT_CASE + where, where, 0, line, log_path))
-    count = 0
-    for line in lines:
-        hit = LINT_COUNT.match(line)
-        if hit:
-            count = int(hit.group(1))
-    spots = [line for line in lines if LINT_SPOT.match(line)]
-    for line in spots[:count]:
-        hit = LINT_SPOT.match(line)
-        where = relative(hit.group(1))
-        rows.append(lint_row(LINT_CASE + where, where, int(hit.group(2)), line, log_path))
-    if not rows:
-        tail = [line for line in lines if line.strip()]
-        rows.append(lint_row(LINT_CASE, "", 0, tail[-1] if tail else "", log_path))
-    return rows
+    return {"case": NO_CASES, "kind": GAP_KIND, "subtest": "", "file": "", "line": 0,
+            "engine": "", "log": log_path, "excerpt": "\n".join(lines[:EXCERPT_LINES]),
+            "suspected_flaky": False, "flaky": "", "order_dependent": False}
 
 
 def parse_environment_suspects(log_path):
@@ -1055,11 +1008,10 @@ def cmd_done(args):
     suspected = [row for row in failures if row["suspected_flaky"]]
     automatic = [row for row in failures if row["flaky"] == "auto"]
     failures = [row for row in failures if row["flaky"] != "auto"]
-    # lint 的列接在 unittest 的列後面(#126);lint log 不當 `--log` 解析 —— `failures` 那個子命令
-    # 印的是可重跑的 id,而 LINT 列沒有一條餵得回 `python3 -m unittest`。
-    if args.lint_log:
-        failures.extend(parse_lint(args.lint_log, args.lint_root or root,
-                                   no_cases=args.lint_no_cases))
+    # 缺口列接在 unittest 的列後面(#126);那份 log 不當 `--log` 解析 —— `failures` 那個子命令
+    # 印的是可重跑的 id,而缺口列餵不回 `python3 -m unittest`。
+    if args.no_cases_log:
+        failures.append(no_cases_row(args.no_cases_log))
     finished = now()
     # 兩條來源收成同一個 list(`docs/DESIGN-ENV-SUSPECT.md`,D-019):環境檔的
     # `statistical` 在前,每一份 `--log` 的 `declared` 照傳進來的順序接在後面。
@@ -1256,9 +1208,7 @@ def main(argv):
     done.add_argument("--report", default="")
     done.add_argument("--log", action="append", default=[])
     done.add_argument("--extra-log", action="append", default=[])
-    done.add_argument("--lint-log", default="")
-    done.add_argument("--lint-root", default="")
-    done.add_argument("--lint-no-cases", action="store_true")
+    done.add_argument("--no-cases-log", default="")
     done.add_argument("--suspected-flaky", action="append", default=[])
     done.add_argument("--auto-flaky", action="append", default=[])
     done.add_argument("--order-dependent", action="append", default=[])

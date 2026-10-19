@@ -101,7 +101,7 @@ class ConsolidateBase(Sandbox):
 class OneLeaseOneFable(ConsolidateBase):
 
     def test_a1_one_fable_session_even_when_the_ticket_and_config_say_otherwise(self):
-        """四問:守 A1 整理只起一個 fable、A3 舊 consolidators 不選路 / 可信回歸:M1 起兩個
+        """守 A1 整理只起一個 fable、A3 舊 consolidators 不選路 / 可信回歸:M1 起兩個
         → calls=2 紅;A10 套到 consolidator → `--model opus` 紅 / 字面 fable、1 次 / 新案例
         (取代原 test_a39_two_sessions_each_with_its_own_model 的兩模型 oracle)。"""
         self.arm()
@@ -163,7 +163,7 @@ class OnlyUnavailableMovesOn(ConsolidateBase):
     """A1「前者不可用才換下一個,Fable 整理不可用即耗盡停」。"""
 
     def test_a1_a_quota_envelope_moves_to_the_next_candidate(self):
-        """四問:守額度信封才換下一格 / 可信回歸:不判信封就停在 codex → calls=1 紅 /
+        """守額度信封才換下一格 / 可信回歸:不判信封就停在 codex → calls=1 紅 /
         字面 codex 一次、fable 一次 / 新案例。"""
         self.set_role_models(consolidator=[fixture_candidate("codex:gpt-6-astra", tool="codex",
                                                              cap=None),
@@ -183,7 +183,7 @@ class OnlyUnavailableMovesOn(ConsolidateBase):
                           ("consolidator", "fable", "handed-in", "consolidate-memory.sh")])
 
     def test_a1_an_ordinary_failure_does_not_move_on(self):
-        """四問:守一般失敗不換 / 可信回歸:失敗一律換 → fable 也被起、calls=2 紅 / 字面 1 次 / 新案例。"""
+        """守一般失敗不換 / 可信回歸:失敗一律換 → fable 也被起、calls=2 紅 / 字面 1 次 / 新案例。"""
         self.set_role_models(consolidator=[fixture_candidate("codex:gpt-6-astra", tool="codex",
                                                              cap=None),
                                            fixture_candidate("fable", cap=None)])
@@ -194,7 +194,7 @@ class OnlyUnavailableMovesOn(ConsolidateBase):
         self.assertIn("退出 3", done.stderr)
 
     def test_a1_fable_unavailable_is_the_end_of_the_chain(self):
-        """四問:守 Fable 不可用 → 耗盡停、不改派 / 可信回歸:耗盡後退回 config 的模型或任意 opus
+        """守 Fable 不可用 → 耗盡停、不改派 / 可信回歸:耗盡後退回 config 的模型或任意 opus
         → calls>1 紅 / 字面 1 次、「整串耗盡」 / 新案例。"""
         self.arm(mode="gone")
         done = self.launch()
@@ -286,7 +286,7 @@ class TheSessionConsolidatesWithItsOneDiscussion(ConsolidateBase):
         return IN_SESSION.replace("@CALLS@", self.calls).replace("@OUT@", self.out)
 
     def test_a1_the_in_session_consolidate_is_accepted_with_one_discussion(self):
-        """四問:守啟動端起 session 之前就記下討論檔 / 可信回歸:session 退出後才記 →
+        """守啟動端起 session 之前就記下討論檔 / 可信回歸:session 退出後才記 →
         in-session consolidate rc=2「要兩份」紅 / 字面 rc=0、consolidated 1 筆、主檔換成候選 /
         新案例(既有 OneRecordedDiscussionIsEnough 是 launcher 收完之後才跑,守不到時序)。"""
         self.write("memory/model/opus.inbox.md",
@@ -355,7 +355,7 @@ class OneRecordedDiscussionIsEnough(Consolidation):
                                            "at": "x"}])
 
     def test_a1_the_recorded_discussion_alone_consolidates(self):
-        """四問:守單一整理者收得進去 / 可信回歸:仍要兩份 → rc 2 紅 / 字面 consolidated 1 筆 /
+        """守單一整理者收得進去 / 可信回歸:仍要兩份 → rc 2 紅 / 字面 consolidated 1 筆 /
         新案例。"""
         done = self.memory("consolidate", self.MAIN, "--candidate", self.CANDIDATE,
                            "--discussion", self.talk("d/fable.md", "fable", 2, self.sha))
@@ -363,7 +363,7 @@ class OneRecordedDiscussionIsEnough(Consolidation):
         self.assertEqual(len(self.consolidated()), 1)
 
     def test_a1_one_unrecorded_or_mismatched_discussion_is_still_refused(self):
-        """四問:守單一的那份只認啟動端紀錄 / 可信回歸:任何一份都收 → rc 0 紅 / 字面 rc≠0、
+        """守單一的那份只認啟動端紀錄 / 可信回歸:任何一份都收 → rc 0 紅 / 字面 rc≠0、
         主檔不變 / 新案例。"""
         main = self.raw(self.MAIN)
         for name, model in (("d/other.md", "fable"), ("d/fable.md", "opus")):

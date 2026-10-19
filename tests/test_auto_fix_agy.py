@@ -159,7 +159,7 @@ class AgyBase(AutoFixBase):
 class AgyInvocationAndCost(AgyBase):
 
     def test_a3_a7_worker_uses_prompt_file_devnull_and_agy_usage(self):
-        """四問:量 argv/cwd/stdin/cost/session;值=A3/A7;舊值 stdin 非零;不靠空集合。"""
+        """量 argv/cwd/stdin/cost/session;值=A3/A7;舊值 stdin 非零;不靠空集合。"""
         self.agy_ticket()
         done = self.run_agy("--no-review")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -207,7 +207,7 @@ class AgyFallbacks(AgyBase):
         self.set_role_models(worker=[fixture_candidate("opus", effort="high")])
 
     def test_a6_a_quota_envelope_takes_the_first_table_candidate(self):
-        """四問:量 agy→opus 起動/成本;值=A6/A10;舊值不認 agy 信封;表真的有下一格。"""
+        """量 agy→opus 起動/成本;值=A6/A10;舊值不認 agy 信封;表真的有下一格。"""
         self.agy_ticket()
         done = self.run_agy("--no-review", AGY_MODE="quota")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -219,7 +219,7 @@ class AgyFallbacks(AgyBase):
         self.assertIn("quota_exhausted", self.worker_cost()[0]["note"])
 
     def test_a5_missing_agy_is_skipped_before_agent_start_or_cost(self):
-        """四問:量 PATH 缺 CLI 時只起 fallback;值=A5/#121;舊值會記 agy rc127;有真下一格。"""
+        """量 PATH 缺 CLI 時只起 fallback;值=A5/#121;舊值會記 agy rc127;有真下一格。"""
         os.remove(os.path.join(self.stub_bin, "agy"))
         self.agy_ticket()
         path = os.pathsep.join(where for where in os.environ.get("PATH", "").split(os.pathsep)
@@ -235,7 +235,7 @@ class AgyFallbacks(AgyBase):
 class AgyGuardAndRoles(AgyBase):
 
     def test_a4_an_agy_write_in_the_main_tree_is_blocked_before_patch_application(self):
-        """四問:量 rc/Blocked/無分支;值=A4;舊值套 patch;守衛觀察主 repo 真工作樹。"""
+        """量 rc/Blocked/無分支;值=A4;舊值套 patch;守衛觀察主 repo 真工作樹。"""
         self.agy_ticket()
         done = self.run_agy("--no-review", AGY_MODE="stray", AGY_REPO=self.repo)
         self.assertEqual(done.returncode, 8, done.stdout + done.stderr)
@@ -247,7 +247,7 @@ class AgyGuardAndRoles(AgyBase):
         self.assertEqual(failed, ["guard-violation"])
 
     def test_a8_red_round_two_keeps_the_explicit_agy_model_and_effort(self):
-        """四問:量 round1/2 argv與事件;值=A8;舊值把表外 agy 拒掉;第一輪真紅。"""
+        """量 round1/2 argv與事件;值=A8;舊值把表外 agy 拒掉;第一輪真紅。"""
         self.agy_ticket(retry_limit=2)
         done = self.run_agy("--no-review", AGY_REPAIR="1")
         self.assertIn(done.returncode, (0, 7), done.stdout + done.stderr)
@@ -260,7 +260,7 @@ class AgyGuardAndRoles(AgyBase):
             self.assertEqual(argv[argv.index("--effort") + 1], "high")
 
     def test_a8_an_agy_verifier_uses_the_same_prompt_cwd_and_devnull_shape(self):
-        """四問:量 verifier argv/cwd/stdin/cost;值=A8;舊值起 claude;真的交 patch-verify。"""
+        """量 verifier argv/cwd/stdin/cost;值=A8;舊值起 claude;真的交 patch-verify。"""
         self.set_role_models(verifier=[fixture_candidate(AGY_MODEL, "agy", "high")])
         self.write("tests/test_verify_runner.py",
                    "import unittest\n\n\nclass T(unittest.TestCase):\n"
