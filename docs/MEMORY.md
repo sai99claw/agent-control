@@ -17,9 +17,9 @@
 
 | 目錄 | 誰寫 | 規則包(`rules.py pack`)怎麼疊 | 整理 |
 |---|---|---|---|
-| `memory/role/<role>.md` + `<role>.inbox.md` | 專案裡的任何 session(`memory.py note role …`) | 疊在 `roles_dir` 的正本角色卡**之後**;暫存區只帶**最後幾行**(≤ 600 B,砍了會點名) | 暫存區有一條就整理 |
+| `memory/role/<role>.md` + `<role>.inbox.md` | 專案裡的任何 session(`memory.py note role …`) | 疊在 `roles_dir` 的正本角色卡**之後**;暫存區整份帶 | 暫存區有一條就整理 |
 | `memory/model/<model>.md` + `<model>.inbox.md` | 該模型的 session(model 層只准寫自己) | 疊在 `models_dir` 的正本模型記憶**之後**;暫存區同上 | 暫存區有一條就整理 |
-| `memory/project/<主題>.md` | 任何 session(`note project …` 直接進主檔) | **不貼內容**,只給一個速查入口(見分層契約「整理與長度」)—— 貼進 4 KB 包會把別的擠掉,要看就 grep | 不整理 |
+| `memory/project/<主題>.md` | 任何 session(`note project …` 直接進主檔) | **不貼內容**,只給一個速查入口(見分層契約「整理與長度」)—— 貼進包會讓派工文跟著長,要看就 grep | 不整理 |
 
 `note` 的名稱寫 `X` 或 `X.md` 都落到同一份(只去一個 `.md`);空、`.`/`..`、含路徑分隔、多一個 `.md` 或帶 inbox 後綴(`.inbox.md`/`.inbox`)的名稱 rc 2 `名稱不合法`,推得出本意時附「改用 X」。同層、同名、同正文、同票號再送一次 rc 0 `已有同一條`、不追加;換票號照寫,兩行各帶自己的 `#票號`(#75)。
 

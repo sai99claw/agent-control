@@ -10,7 +10,7 @@
   decision。下面的 `<…>` 是它填的佔位,名字一個都不要改(改了它就填不到)。
 - **人工**:照 `python3 scripts/role-models.py resolve --role consolidator` 印的模型開一個 session,整份複製、把 `<…>` 換掉貼一次。
   人工派的討論檔沒有啟動端紀錄,`consolidate` 照舊要兩份不同模型的討論檔 —— 單一整理者的路只認 `consolidate-memory.sh` 記下的那一份。
-前言用 `python3 scripts/rules.py pack consolidator --model <模型>` 產(≤ 4 KB);它非零就**不派**,照 stderr 補缺項,不要手寫前言代替(#74)。
+前言用 `python3 scripts/rules.py pack consolidator --model <模型>` 產;它非零就**不派**,照 stderr 補缺項,不要手寫前言代替(#74)。
 
 > ⚠️ **同一個模型的 session 自己整理自己的記憶不算數**(D-013)。算數的是一個明確更高階的模型(D-013 ②「或一個高階模型」,
 > D-043:fable 單獨整理;D-049 ② 記憶整理者 fable)—— 它不是被整理那一層的作者,所以由角色表選、不由票選。

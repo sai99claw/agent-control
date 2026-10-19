@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """按角色裁切的規則包 —— 派工文的前言 — `docs/DISPATCH-TEMPLATE.md`(D-015)。
 
-    scripts/rules.py pack worker --model opus          # 印一份 ≤ 4 KB 的前言;產不出來就非零、不印
-    scripts/rules.py pack verifier --max-bytes 6000
+    scripts/rules.py pack worker --model opus          # 印前言(各段原文串起來);產不出來就非零、不印
+    scripts/rules.py pack verifier
     scripts/rules.py inspect worker --model opus --json # 唯讀:各節 bytes / 正文單位 / 缺項
     scripts/rules.py roles                             # 認得哪幾個角色、各要哪幾節
 
@@ -15,8 +15,7 @@
 所以這一支做三件事:
 1. 從共用規矩裡**抽該角色需要的那幾節**(名單在 `WANTED`,是一張表,不是一段判斷);
 2. 接上**角色卡**與**那個模型自己的記憶**;
-3. 全部**壓進一個位元組上限**(預設 4 KB),砍在正文單位的邊界,砍過的那一格留一個
-   `…` —— 砍掉而不說,與那一節不存在長得一樣。
+3. 各段原文串起來,不設位元組上限、不截斷(D-054 Q6)。
 
 ## 為什麼是「節錄 + 路徑」而不是「只有路徑」
 只有路徑的版本試過了(`CLAUDE.md` 的「prompt 只指路」),它解掉的是重複載入,沒有解掉
@@ -26,11 +25,9 @@
 #74 量到的:專案清單 1,121 B + 三段固定文字 1,228 B 吃掉 4 KiB 的 57%,worker 的角色卡、
 模型卡、暫存區只剩標題與「截斷」,reviewer 少五節 —— 而那一份 rc=0,派工照起。所以:
 - **必要項**:角色卡、指定的模型卡、名單上的每一節;存在且有正文的本專案主卡與暫存區。
-  每一項至少留一個完整的**正文單位**(段落、清單的一條、一張表的一列、一整塊 code;
-  暫存區是最後一條)。標題、front matter、來源欄、截斷記號、只有連結的指路行不算正文。
-- **固定成本**(標題、指路、截斷記號、固定說明)≤ `FIXED_MAX`。上限 4,096 與暫存區
-  600 B(D-015 / D-021)都不動 —— 這是組成預算,不是加大總額。
-- 少一節、空正文、放不下:**stdout 一個字都不印**、非零、stderr 列出缺項,並送一頁
+  每一項至少要有一個完整的**正文單位**(段落、清單的一條、一張表的一列、一整塊 code)。
+  標題、front matter、來源欄、只有連結的指路行不算正文。
+- 少一節、空正文:**stdout 一個字都不印**、非零、stderr 列出缺項,並送一頁
   decision(同一個缺項只送一頁)。呼叫端不准 fallback 起 agent。
 """
 
@@ -50,16 +47,7 @@ import event  # noqa: E402  共用 repo 根
 # `docs/DISPATCH-COMMON-RULES.md`,這個 repo 自己的等價檔是派工範本。
 SOURCES = (os.path.join("docs", "DISPATCH-COMMON-RULES.md"),
            os.path.join("docs", "DISPATCH-TEMPLATE.md"))
-DEFAULT_MAX = 4096
-# 固定成本的上限(#74):標題、指路、截斷記號與固定說明加起來。以前沒有這一格,
-# 固定文字吃掉 2,349 B,必要正文被擠到只剩標題。
-FIXED_MAX = 1024
-# 專案自己寫的暫存區在包裡的一格(D-021):**≤ 600 B**,4 KB 上限不變。
-# 為什麼要有這一格:`.inbox.md` 要累到 21 行才開整理票,在那之前寫下的教訓誰都讀不到,
-# 而少讀一次的代價是一輪重來。為什麼只給 600 B:塞整份的話 4 KB 包會把角色卡擠掉。
-# 每一格的最後一條是必要正文,不受這 600 B 擋;600 B 管的是再往前多帶幾條。
-LOCAL_INBOX_BYTES = 600
-# 砍過的那一格留這一個記號;它是什麼意思寫在包頭那一行(一次),不在每一格重寫一遍。
+# 來源欄與指路行的判斷用到的省略記號:含它開頭的行不算正文。
 MARK = "…"
 # decision 頁綁的票:有 `AC_TICKET` 綁那一張,沒有就是這個維護識別 —— 不偽造數字票號。
 RULES_TICKET = "rules"
@@ -360,28 +348,19 @@ def read_text(path):
 
 
 class Cell(object):
-    """包裡的一格必要項:標題(固定成本)+ 留下的正文單位。`tail` 的那一種從尾巴留
-    (暫存區:一行一條、越新越下面);`weight` 是每一輪多給幾個單位(角色卡最重)。"""
+    """包裡的一格必要項:標題 + 該來源的全部正文單位。"""
 
-    def __init__(self, item, heading, source, text, tail=False, weight=1, inbox=False):
+    def __init__(self, item, heading, source, text):
         self.item, self.heading, self.source = item, heading, source
         self.units = units(text)
         self.source_bytes = len(text.encode("utf-8"))
-        self.tail, self.weight, self.inbox = tail, weight, inbox
-        self.kept = 1
-
-    def shown(self):
-        return self.units[-self.kept:] if self.tail else self.units[:self.kept]
 
     def body(self):
-        return "\n".join(self.shown())
-
-    def cut(self):
-        return self.kept < len(self.units)
+        return "\n".join(self.units)
 
 
 def render(layout):
-    """組出整份,回 `[(格或 None, 字)]`:None 是固定成本,其餘是那一格的正文。
+    """組出整份,回 `[(格或 None, 字)]`:None 是固定文字,其餘是那一格的正文。
     統計與輸出是**同一份** —— 分開算的那一天,兩個數字會對不起來。"""
     out = []
     for entry in layout:
@@ -389,12 +368,8 @@ def render(layout):
             out.append((None, entry + "\n"))
             continue
         out.append((None, entry.heading + "\n"))
-        if entry.cut() and entry.tail:
-            out.append((None, MARK + "\n"))
         out.append((entry, entry.body()))
         out.append((None, "\n"))
-        if entry.cut() and not entry.tail:
-            out.append((None, MARK + "\n"))
     return out
 
 
@@ -403,29 +378,7 @@ def size(segments, owner=False):
                if owner is False or who is owner)
 
 
-def grow(cells, layout, limit):
-    """每一格先只有一個正文單位;照順序輪流多給(角色卡一輪多給幾個),放不下或暫存區
-    超過 600 B 的那一格就停在那裡。**只往後接連續的單位**:跳過一條長的去塞後面短的,
-    留下來的就不是原文的一段,而讀的人看不出中間少了一條。"""
-    def inbox_bytes():
-        return sum(len(cell.body().encode("utf-8")) for cell in cells if cell.inbox)
-
-    growing = [cell for cell in cells if cell.cut()]
-    while growing:
-        for cell in list(growing):
-            for _step in range(cell.weight):
-                cell.kept += 1
-                if (size(render(layout)) > limit
-                        or (cell.inbox and inbox_bytes() > LOCAL_INBOX_BYTES)):
-                    cell.kept -= 1
-                    growing.remove(cell)
-                    break
-                if not cell.cut():
-                    growing.remove(cell)
-                    break
-
-
-def build(root, role, model, max_bytes, override=""):
+def build(root, role, model, override=""):
     """組規則包;回 `{"text", "stats", "problems"}`。`problems` 非空 = 這一份不准交出去。"""
     card_name, default_wanted, _one_line = WANTED[role]
     wanted = wanted_sections(root, role, default_wanted)
@@ -454,7 +407,7 @@ def build(root, role, model, max_bytes, override=""):
         return cell if cell is not None and cell.units else None
 
     card_rel = os.path.join(roles_dir(root), card_name)
-    card = required("角色卡", "## 角色卡 `%s`" % card_rel, card_rel, weight=3)
+    card = required("角色卡", "## 角色卡 `%s`" % card_rel, card_rel)
 
     found = blocks(path)
     if not os.path.isfile(path):
@@ -474,12 +427,11 @@ def build(root, role, model, max_bytes, override=""):
         if not cell.units:
             problem(label, "%s §%s" % (rel, hit), "這一節沒有正文", cell.source_bytes)
             continue
-        cell.titled = "%s %s" % (label, short_title(title)) if NUMBER.match(title) else label
+        cell.heading = "%s %s" % (label, short_title(title)) if NUMBER.match(title) else label
         sections.append(cell)
 
     model_rel = model_card(root, model)
-    memory = required("模型卡", "## 模型記憶 `%s`" % model_rel, model_rel,
-                      weight=2) if model_rel else None
+    memory = required("模型卡", "## 模型記憶 `%s`" % model_rel, model_rel) if model_rel else None
 
     # 專案層(D-021):`roles_dir` 不是 `memory/role` 的時候,這個 repo 在讀**別人的**
     # 正本規矩,而它自己的教訓寫在 `memory/`。兩層都疊;同一個目錄時只讀一次 ——
@@ -490,7 +442,7 @@ def build(root, role, model, max_bytes, override=""):
     local_card = local_memory = None
     if local:
         one = os.path.join(local_dir("role"), card_name)
-        local_card = optional("本專案角色卡", "### 本專案 `%s`" % one, one, weight=2)
+        local_card = optional("本專案角色卡", "### 本專案 `%s`" % one, one)
         if model_name:
             one = os.path.join(local_dir("model"), model_name)
             local_memory = optional("本專案模型卡", "### 本專案 `%s`" % one, one)
@@ -503,15 +455,13 @@ def build(root, role, model, max_bytes, override=""):
                            if model_name else "")):
         if main_rel:
             one = main_rel[:-len(".md")] + suffix
-            inboxes[key] = optional("暫存 %s" % one, "### 暫存 `%s`" % one, one,
-                                    tail=True, inbox=True)
+            inboxes[key] = optional("暫存 %s" % one, "### 暫存 `%s`" % one, one)
 
     if problems:
         return {"text": "", "stats": None, "problems": problems}
 
     head = ["# 規則包:%s @ %s" % (role, short_sha(root)),
-            EFFICIENCY_NOTE,
-            "「%s」= 截斷,全文見標題的路徑。" % MARK]
+            EFFICIENCY_NOTE]
     entry = project_entry(root) if local else ""
     if entry:
         head.append(entry)
@@ -523,55 +473,27 @@ def build(root, role, model, max_bytes, override=""):
         layout += [""] + tail_cells
     layout += ["", DELIVERY_NOTE, "",
                READONLY_MEMORY_NOTE if role in READONLY_ROLES else MEMORY_NOTE]
-    # 預算順序 = 重要性順序:角色卡(你是誰)> 共用規矩(你會被擋在哪)> 模型記憶
-    # (你自己踩過什麼)> 暫存區。
     cells = [cell for cell in [card, local_card] + sections + [memory, local_memory,
                                                                inboxes.get("role"),
                                                                inboxes.get("model")] if cell]
-
-    # 節名放得下才放:先只有節號,再照名單順序一節一節補上節名,補到固定成本的上限為止
-    # (補不上的那幾節只少了名字,每節的正文下限照留)。
-    for cell in sections:
-        cell.heading = cell.titled
-        if size(render(layout), None) > FIXED_MAX:
-            cell.heading = cell.item
-            break
-    segments = render(layout)
-    fixed = size(segments, None)
-    if fixed > FIXED_MAX:
-        problem("固定成本", "rules.py", "標題、指路與固定說明 %d B > %d B" % (fixed, FIXED_MAX),
-                fixed)
-    floor = size(segments)
-    if floor > max_bytes:
-        worst = max(cells, key=lambda cell: len(cell.body().encode("utf-8")))
-        problem(worst.item, worst.source,
-                "每一項只留一個正文單位就要 %d B > 上限 %d B;最大的不可分單位在這一格(%d B)"
-                % (floor, max_bytes, len(worst.body().encode("utf-8"))), floor)
-    if problems:
-        return {"text": "", "stats": None, "problems": problems}
-
-    grow(cells, layout, max_bytes)
     segments = render(layout)
     text = "".join(piece for _who, piece in segments)
     stats = {
-        "role": role, "model": model, "max_bytes": max_bytes,
+        "role": role, "model": model,
         "total_bytes": size(segments), "fixed_bytes": size(segments, None),
-        "fixed_max": FIXED_MAX,
         "sections": [{"item": cell.item, "source": cell.source, "required": True,
                       "source_bytes": cell.source_bytes,
                       "rendered_bytes": size(segments, cell),
-                      "content_units": cell.kept, "source_units": len(cell.units),
-                      "truncated": cell.cut()} for cell in cells],
-        "truncated": [cell.source for cell in cells if cell.cut()],
+                      "source_units": len(cell.units)} for cell in cells],
         "missing": [],
     }
     return {"text": text, "stats": stats, "problems": []}
 
 
-def fingerprint(root, role, model, max_bytes, problems):
+def fingerprint(root, role, model, problems):
     """同一個角色、模型、同一份缺項內容 = 同一個指紋:重試不重送一頁。"""
     digest = hashlib.sha256()
-    digest.update(json.dumps([role, model, max_bytes], ensure_ascii=False).encode("utf-8"))
+    digest.update(json.dumps([role, model], ensure_ascii=False).encode("utf-8"))
     for row in problems:
         digest.update(json.dumps([row["item"], row["source"], row["problem"]],
                                  ensure_ascii=False).encode("utf-8"))
@@ -584,18 +506,18 @@ def fingerprint(root, role, model, max_bytes, problems):
     return digest.hexdigest()
 
 
-def post_decision(root, role, model, max_bytes, problems):
+def post_decision(root, role, model, problems):
     """送一頁 decision(D-032);同一個指紋已經送過就不送。回一句給 stderr 的話。
     寫不出來不吞:回的那一句說出原因,退出碼照樣非零。"""
     try:
         import inbox
         ticket = os.environ.get("AC_TICKET") or RULES_TICKET
-        run_id = "rules-%s-%s" % (role, fingerprint(root, role, model, max_bytes, problems)[:12])
+        run_id = "rules-%s-%s" % (role, fingerprint(root, role, model, problems)[:12])
         for row in inbox.read_jsonl(inbox.index_path(root)):
             if str(row.get("ticket")) == str(ticket) and row.get("run_id") == run_id:
                 return "同一個缺項已經送過 decision 頁(%s),這次不重送" % row.get("page")
         what = ("規則包產不出來,沒有起任何 agent。補齊下面的缺項再重派 —— 不要用 fallback 起 agent,"
-                "也不要調高上限蓋過去:\n" + "".join(
+                "\n" + "".join(
                     "- %s(`%s`):%s\n" % (row["item"], row["source"], row["problem"])
                     for row in problems))
         where = "`python3 scripts/rules.py inspect %s --model %s --json`" % (role, model or '""')
@@ -605,22 +527,21 @@ def post_decision(root, role, model, max_bytes, problems):
                 "ticket": ticket, "subject": inbox.subject_of(root, ticket), "state": state,
                 "run_id": run_id, "kind": "decision", "at": inbox.now(), "what": what,
                 "where": where,
-                "note": "\n## 補充\n角色 %s、模型 %s、上限 %d B\n" % (role, model or "(沒指定)",
-                                                              max_bytes)})
+                "note": "\n## 補充\n角色 %s、模型 %s\n" % (role, model or "(沒指定)")})
         return "已送 decision 頁(票 %s,%s)" % (ticket, run_id)
     except Exception as exc:  # noqa: BLE001  頁寫不出來要說出原因,不能讓它變成 rc=0
         return "decision 頁寫不出來 —— %s: %s" % (type(exc).__name__, exc)
 
 
-def report(role, model, max_bytes, problems):
-    sys.stderr.write("rules: %s 的規則包產不出來(模型 %s,上限 %d B)—— stdout 不印半包,"
-                     "呼叫端不准起 agent\n" % (role, model or "(沒指定)", max_bytes))
+def report(role, model, problems):
+    sys.stderr.write("rules: %s 的規則包產不出來(模型 %s)—— stdout 不印半包,"
+                     "呼叫端不准起 agent\n" % (role, model or "(沒指定)"))
     for row in problems:
         sys.stderr.write("rules:   %s `%s`:%s%s\n"
                          % (row["item"], row["source"], row["problem"],
                             "" if row["bytes"] is None else "(%d B)" % row["bytes"]))
     sys.stderr.write("rules: 修法:補上缺的章節或正文、建好指定的模型卡,或改 board/config.json 的"
-                     " rules.sections;不要調高上限。逐格數字:rules.py inspect %s --model %s --json\n"
+                     " rules.sections。逐格數字:rules.py inspect %s --model %s --json\n"
                      % (role, model or '""'))
 
 
@@ -641,24 +562,19 @@ def cmd_pack(args):
     role = known_role(args.role)
     if not role:
         return 2
-    done = build(root, role, args.model, args.max_bytes, args.source)
+    done = build(root, role, args.model, args.source)
     if done["problems"]:
-        report(role, args.model, args.max_bytes, done["problems"])
-        sys.stderr.write("rules: %s\n" % post_decision(root, role, args.model, args.max_bytes,
+        report(role, args.model, done["problems"])
+        sys.stderr.write("rules: %s\n" % post_decision(root, role, args.model,
                                                         done["problems"]))
         return 1
     text = done["text"]
     total = len(text.encode("utf-8"))
-    if total > args.max_bytes:
-        # 守衛自己要守得住:超過上限就是這一支壞了,不是「差一點」。
-        sys.stderr.write("rules: 壓不到 %d bytes(現在 %d)—— 這一支自己壞了\n"
-                         % (args.max_bytes, total))
-        return 1
     sys.stdout.write(text)
     if args.stats:
-        sys.stderr.write("rules: %s %d bytes(上限 %d;固定 %d bytes;不追求快 %d bytes;"
+        sys.stderr.write("rules: %s %d bytes(固定 %d bytes;不追求快 %d bytes;"
                          "結構化交付 %d bytes;記憶回寫 %d bytes)\n"
-                         % (role, total, args.max_bytes, done["stats"]["fixed_bytes"],
+                         % (role, total, done["stats"]["fixed_bytes"],
                             EFFICIENCY_NOTE_BYTES, DELIVERY_NOTE_BYTES, MEMORY_NOTE_BYTES))
     return 0
 
@@ -669,23 +585,20 @@ def cmd_inspect(args):
     role = known_role(args.role)
     if not role:
         return 2
-    done = build(root, role, args.model, args.max_bytes, args.source)
-    data = done["stats"] or {"role": role, "model": args.model, "max_bytes": args.max_bytes,
-                             "total_bytes": None, "fixed_bytes": None, "fixed_max": FIXED_MAX,
-                             "sections": [], "truncated": []}
+    done = build(root, role, args.model, args.source)
+    data = done["stats"] or {"role": role, "model": args.model,
+                             "total_bytes": None, "fixed_bytes": None, "sections": []}
     data["missing"] = done["problems"]
     data["ok"] = not done["problems"]
     if args.json:
         sys.stdout.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
     else:
-        sys.stdout.write("rules: %s total %s B、固定 %s B(上限 %d / %d)\n"
-                         % (role, data["total_bytes"], data["fixed_bytes"], args.max_bytes,
-                            FIXED_MAX))
+        sys.stdout.write("rules: %s total %s B、固定 %s B\n"
+                         % (role, data["total_bytes"], data["fixed_bytes"]))
         for row in data["sections"]:
-            sys.stdout.write("  %-28s %5d / %5d B  %d/%d 單位%s\n"
+            sys.stdout.write("  %-28s %5d / %5d B  %d 單位\n"
                              % (row["item"], row["rendered_bytes"], row["source_bytes"],
-                                row["content_units"], row["source_units"],
-                                "  (截斷)" if row["truncated"] else ""))
+                                row["source_units"]))
         for row in data["missing"]:
             sys.stdout.write("  缺:%s `%s`:%s\n" % (row["item"], row["source"], row["problem"]))
     return 0 if data["ok"] else 1
@@ -714,7 +627,6 @@ def main(argv):
         one = subs.add_parser(verb)
         one.add_argument("role")
         one.add_argument("--model", default="")
-        one.add_argument("--max-bytes", type=int, default=DEFAULT_MAX)
         one.add_argument("--source", default="")
         if verb == "pack":
             one.add_argument("--stats", action="store_true")

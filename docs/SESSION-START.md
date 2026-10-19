@@ -42,7 +42,7 @@
 ## Worker / 驗證者
 - 讀派工文裡指定的副本路徑;先 `ls` 確認 `work/`、`base/` 都在。
 - 派工文的前言是 `rules.py pack` 產的規則包:角色卡、模型卡、每一節都至少帶一段正文,標題列就是
-  全文路徑。產不出來(缺節、空正文、放不下)時 pack 非零、送 decision 頁,派工方**不起 agent**(#74)。
+  全文路徑。產不出來(缺節、空正文)時 pack 非零、送 decision 頁,派工方**不起 agent**(#74)。
 - 驗證者什麼時候起:正文只在 `tickets/SCHEMA.md` 的 `needs_verifier` 與 `interface_fixed` 兩列;交件路徑在派工文
   (`<副本根>/patch-verify.diff` 與 `EVIDENCE-verifier.md`)。
 - 共用規矩按需查:角色卡「遇到就查」那一行說遇到什麼查 `docs/DISPATCH-TEMPLATE.md` 哪一節,grep 那一節讀,不整份讀。
