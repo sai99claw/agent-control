@@ -1,6 +1,7 @@
 """#76 待整理與過期記憶:唯讀檢查不留痕、恰好一張整理票、整理成功前不消耗原文。
 
-#134(D-053 ⑥):觸發從「超過上限」換成「暫存區有一條未整理」,夾具跟著換;其餘契約不變。
+#134(D-053 ⑥):觸發從「超過上限」換成「暫存區有未整理條目」;#148(D-055 ①)再改成批次:
+≥ 5 條或最舊一條滿 3 天才開票,同一份主檔 24 小時內最多一次。其餘契約不變。
 
 ## 驗收表(票面每一條一列;期望值來源獨立於被測程式:票面原話 / 手算)
 A1 | unit | 待整理沙盒跑 check --read-only、check-stale --read-only | rc 1;tickets/ events memory/ reports/ 逐位元組不變 | 票面 A1 原話
@@ -36,6 +37,7 @@ import re
 import subprocess
 import sys
 import unittest
+from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from control_harness import ROOT, Sandbox  # noqa: E402
@@ -47,7 +49,16 @@ ALREADY = "已經有一張開著的整理票 #%s"
 INBOX_SUBJ = "整理 memory/role/worker.md(暫存區 21 條未整理)"
 GOES_ON = "不停工"
 FRONT = "---\nowner: opus\n---\n"
-ONE_NOTE = "- 一條原則 (#1, 2026-10-19, worker@opus)\n"
+
+def days_ago(days):
+    return (date.today() - timedelta(days=days)).isoformat()
+
+
+def note(text, days=0):
+    return "- %s (#1, %s, worker@opus)\n" % (text, days_ago(days))
+
+
+FIVE_NOTES = "".join(note("第 %d 條" % i) for i in range(5))
 BOTH_LAYERS = {"memory": {"consolidator": "fable",
                           "applies_to": ["memory/model/*.md", "memory/role/*.md"],
                           "inbox_suffix": ".inbox.md"}}
@@ -201,7 +212,7 @@ class A3OneConsolidationTicket(Lifecycle):
     def setUp(self):
         super().setUp()
         self.write("memory/role/opener.md", "規矩" * 15)
-        self.write("memory/role/opener.inbox.md", ONE_NOTE)
+        self.write("memory/role/opener.inbox.md", FIVE_NOTES)
 
     def test_a3_an_open_ticket_whose_memory_file_is_the_card_covers_it(self):
         """A3 開著的 Draft 整理票 `memory_file` 是這份檔 → 不開;改 Cancelled → 開 1 張(#137)。"""
@@ -231,7 +242,7 @@ class A3OneConsolidationTicket(Lifecycle):
         done = self.memory("check")
         opened = self.new_tickets(before)
         self.assertEqual([one["subject"] for one in opened],
-                         ["整理 memory/role/opener.md(暫存區 1 條未整理)"],
+                         ["整理 memory/role/opener.md(暫存區 5 條未整理)"],
                          done.stdout + done.stderr)
 
     def test_a3_any_open_ticket_covering_the_card_blocks_a_new_one(self):
@@ -281,11 +292,11 @@ class A4TicketContents(Lifecycle):
         self.assertEqual(row.get("memory_file"), "memory/role/worker.md")
         self.assertIs(row.get("needs_verifier"), False)
 
-    def test_a4_one_note_from_a_closed_ticket_opens_one_ticket(self):
-        """A4 一條來源已結案的 note 也開 1 張(needs-review 被「有任一條」涵蓋)。"""
+    def test_a4_one_old_note_from_a_closed_ticket_opens_one_ticket(self):
+        """A4 一條來源已結案、日期 3 天前的 note 開 1 張(needs-review 不影響門檻)。"""
         self.make_ticket(1, state="Done")
         self.write("memory/role/reviewer.md", "短短一句。\n")
-        self.write("memory/role/reviewer.inbox.md", self.entry("來源已結案", "#1"))
+        self.write("memory/role/reviewer.inbox.md", note("來源已結案", 3))
         before = self.ticket_ids()
         done = self.memory("check")
         opened = self.new_tickets(before)
@@ -300,6 +311,78 @@ class A4TicketContents(Lifecycle):
         done = self.memory("check")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.new_tickets(before), [], done.stdout + done.stderr)
+
+
+class BatchTrigger(Lifecycle):
+    """#148(D-055 ①):≥ 5 條或最舊滿 3 天才開;同一份主檔 24 小時內最多一次。"""
+
+    BOX = "memory/role/opener.inbox.md"
+
+    def pending_events(self):
+        return [row for row in self.events() if row["kind"] == "memory.pending"]
+
+    def run_check(self):
+        before = self.ticket_ids()
+        done = self.memory("check")
+        return done, self.new_tickets(before)
+
+    def test_four_fresh_notes_open_nothing_the_fifth_opens_one(self):
+        """4 條皆今天 → 不開、無 memory.pending、rc 0;第 5 條 → 恰開 1 張。"""
+        self.write(self.BOX, "".join(note("第 %d 條" % i) for i in range(4)))
+        done, opened = self.run_check()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(opened, [], done.stdout + done.stderr)
+        self.assertEqual(self.pending_events(), [])
+        self.write(self.BOX, "".join(note("第 %d 條" % i) for i in range(5)))
+        done, opened = self.run_check()
+        self.assertEqual(len(opened), 1, done.stdout + done.stderr)
+        self.assertEqual(len(self.pending_events()), 1)
+
+    def test_one_note_three_days_old_opens_one_yesterday_opens_none(self):
+        """1 條 3 天前 → 開 1 張;1 條昨天 → 不開。"""
+        self.write(self.BOX, note("放滿三天", 3))
+        done, opened = self.run_check()
+        self.assertEqual(len(opened), 1, done.stdout + done.stderr)
+        self.write("memory/role/other.inbox.md", note("昨天", 1))
+        done, opened = self.run_check()
+        self.assertEqual([one["subject"] for one in opened], [],
+                         done.stdout + done.stderr)
+
+    def test_undated_entries_count_but_have_no_age(self):
+        """沒有日期的條目只算條數:1 條無日期 → 不開。"""
+        self.write(self.BOX, "- 沒有日期 (#1, worker@opus)\n")
+        done, opened = self.run_check()
+        self.assertEqual(opened, [], done.stdout + done.stderr)
+
+    def set_created(self, ident, hours):
+        row = self.load_ticket(ident)
+        row["created"] = (datetime.now().astimezone()
+                          - timedelta(hours=hours)).isoformat(timespec="seconds")
+        self.write("tickets/%s.json" % ident, json.dumps(row, ensure_ascii=False, indent=2) + "\n")
+
+    def test_cooldown_blocks_within_24_hours_and_lifts_after(self):
+        """6 條;2 小時前的 Done 整理票 → 不開;改成 25 小時前 → 開 1 張。"""
+        self.write(self.BOX, "".join(note("第 %d 條" % i) for i in range(6)))
+        self.make_ticket(7, state="Done", role="consolidator",
+                         memory_file="memory/role/opener.md")
+        self.set_created(7, 2)
+        done, opened = self.run_check()
+        self.assertEqual(opened, [], done.stdout + done.stderr)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.pending_events(), [])
+        self.set_created(7, 25)
+        done, opened = self.run_check()
+        self.assertEqual(len(opened), 1, done.stdout + done.stderr)
+
+    def test_open_consolidation_ticket_still_dedupes(self):
+        """開著的整理票(25 小時前)仍走查重,不重開。"""
+        self.write(self.BOX, "".join(note("第 %d 條" % i) for i in range(6)))
+        self.make_ticket(7, state="Ready", role="consolidator",
+                         memory_file="memory/role/opener.md")
+        self.set_created(7, 25)
+        done, opened = self.run_check()
+        self.assertEqual(opened, [], done.stdout + done.stderr)
+        self.assertIn(ALREADY % 7, done.stdout)
 
 
 class Consolidation(Lifecycle):
@@ -424,7 +507,7 @@ class A7OnlyTheMainLineOpens(Lifecycle):
     def setUp(self):
         super().setUp()
         self.write("memory/model/opus.md", "坑" * 2500)
-        self.write("memory/model/opus.inbox.md", ONE_NOTE)
+        self.write("memory/model/opus.inbox.md", FIVE_NOTES)
 
     def test_a7_a_worker_goes_on_and_opens_nothing(self):
         """A7 worker 開場:rc 0、印不停工、tickets/ 不多票、沒有 memory.pending。"""

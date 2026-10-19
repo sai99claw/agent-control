@@ -3,8 +3,7 @@
 票面驗收(行為 + 功能標籤)由驗證者自己寫成案例(角色卡 D-G122),不讀實作者的
 EVIDENCE。這一組獨立問票面 `test_plan` 的九件事:
 
-1. `rules.py pack` 四個角色 + consolidator 都帶得到「結構化交付」那一段,單段
-   ≤600 bytes、總量仍 ≤4096 bytes;
+1. (已刪:#140 拿掉規則包 4096 B 上限,這條測的機制不在了,D-057 ①)
 2. 正常路徑:worker 交出合法的 `result` 區塊,`auto-fix.sh` 在收 patch 的同一手
    把它抽成 `reports/t<票號>/<run_id>/result-round<輪>.json`,十一個鍵一個不少;
 5. 同一次抽取不會把 `memory[]`(鏡像)又寫進記憶收件匣一次(#10 的邊界);
@@ -31,7 +30,6 @@ worker 用一支這個案例**自己的**假可執行檔(`board/config.json` 的
 import glob
 import json
 import os
-import re
 import subprocess
 import sys
 import unittest
@@ -43,32 +41,6 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 TESTS_DIR = os.path.join(ROOT, "tests")
 sys.path.insert(0, TESTS_DIR)
 from control_harness import DEFAULT_CONFIG, Sandbox, write_executable  # noqa: E402
-
-ROLES = ("worker", "verifier", "opener", "main", "consolidator")
-
-# ---------------------------------------------------------------- item 1
-
-class PackCarriesABoundedDeliverySection(unittest.TestCase):
-    """#20 驗收①:規則包每個角色都帶得到「結構化交付」,單段有自己的預算。"""
-
-    def test_every_role_and_consolidator_stay_within_budget(self):
-        for role in ROLES:
-            done = subprocess.run(
-                [sys.executable, os.path.join(ROOT, "scripts", "rules.py"),
-                 "pack", role, "--model", "opus", "--stats"],
-                cwd=ROOT, capture_output=True, text=True, timeout=60)
-            self.assertEqual(done.returncode, 0, role + "\n" + done.stdout + done.stderr)
-            self.assertIn("結構化交付", done.stderr, "%s 的 --stats 沒印那一段:%s"
-                          % (role, done.stderr))
-            total = len(done.stdout.encode("utf-8"))
-            self.assertLessEqual(total, 4096,
-                                 "%s 總量 %d bytes 超過 4096" % (role, total))
-            found = re.search(r"結構化交付 (\d+) bytes", done.stderr)
-            self.assertIsNotNone(found, "找不到那個數字:%s" % done.stderr)
-            self.assertLessEqual(int(found.group(1)), 600,
-                                 "%s 的結構化交付段 %s bytes 超過 600"
-                                 % (role, found.group(1)))
-
 
 # ---------------------------------------------------------------- item 7
 

@@ -74,6 +74,15 @@ cat > EVIDENCE-verifier.md <<'EOF'
 EOF
 """
 
+# 逾時案例的假 codex:記下 launch 後自己回 run_agent 逾時給的 124。不拿真的計時器砍它:
+# 計時器從 Popen 起算,行程還沒跑到記號那一行就可能被砍(負載高時 launch 數 0 的偶發紅),
+# 記號擺第一行也一樣。被測的是 verifier_done 拿到 124 之後換不換;run_agent 砍逾時見
+# test_auto_fix_codex 的 #87 A24。
+TIMEOUT_CODEX = """#!/bin/sh
+echo "codex ran $AC_ROLE round $AC_ROUND" >> "$AC_TEST_LOG"
+exit 124
+"""
+
 
 class VerifierFallbackBase(FallbackBase):
     """worker 是表上的 opus(假 opus 照交);驗證者鏈 = codex → fable,codex 那一格由 @MODE@ 決定。"""
@@ -95,6 +104,11 @@ class VerifierFallbackBase(FallbackBase):
             worker=[fixture_candidate("opus", "claude-code", "high")],
             verifier=[fixture_candidate(CODEX_MODEL, "codex", "high"),
                       fixture_candidate(NEXT_MODEL, "claude-code", NEXT_EFFORT)])
+
+    def fake_codex(self, mode="deliver"):
+        if mode != "timeout":
+            return super().fake_codex(mode)
+        write_executable(os.path.join(self.stub_bin, "codex"), TIMEOUT_CODEX)
 
     def run_verifier_case(self, mode, timeout=120, owner=None):
         self.fake_codex(mode)
@@ -178,8 +192,10 @@ class VerifierTakesTheNextCandidate(VerifierFallbackBase):
 
     def test_b4_timeout_does_not_change_model(self):
         """B4:逾時(rc 124)不換。
-        四問:同上;值 = B4 timeout;M5(連 124 也判)紅;表真的兩格。"""
-        self.assert_no_verifier_fallback("hang", timeout=1)
+        四問:同上,另量 cost outcome = timeout(真的走到 124 那一手);值 = B4 timeout;M5(連 124 也判)紅;
+        表真的兩格。假 codex 自己回 124(`TIMEOUT_CODEX`),launch 記號不跟牆鐘計時器賽跑。"""
+        self.assert_no_verifier_fallback("timeout")
+        self.assertEqual([row["outcome"] for row in self.verifier_cost()], ["timeout"])
 
     def run_with_owner(self, owner):
         """跑一次:有 Controller 時照 `agent.recovery_needed` 那一列當 consumer 起下一個候選。"""

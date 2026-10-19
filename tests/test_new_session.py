@@ -11,9 +11,14 @@ import shutil
 import sys
 import time
 import unittest
+from datetime import date, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from control_harness import SCRIPTS, Sandbox, write_executable  # noqa: E402
+
+
+# #148(D-055 ①):1 條要放滿 3 天才觸發
+OLD_NOTE = "- 一條原則 (#1, %s, worker@opus)\n" % (date.today() - timedelta(days=3)).isoformat()
 
 
 class NewSession(Sandbox):
@@ -79,7 +84,7 @@ class NewSession(Sandbox):
         → 這一條紅。
         """
         self.write("memory/model/opus.md", "短的\n")
-        self.write("memory/model/opus.inbox.md", "- 一條原則 (#1, 2026-10-19, worker@opus)\n")
+        self.write("memory/model/opus.inbox.md", OLD_NOTE)
         done = self.start("worker", "opus")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("4. 記憶暫存區有沒有待整理(D-053 ⑥)", done.stdout)
@@ -90,7 +95,7 @@ class NewSession(Sandbox):
         self.assertEqual(self.tickets_on_disk(), [])
 
     def test_the_main_line_opens_the_ticket_and_still_goes_on(self):
-        self.write("memory/model/opus.inbox.md", "- 一條原則 (#1, 2026-10-19, worker@opus)\n")
+        self.write("memory/model/opus.inbox.md", OLD_NOTE)
         done = self.start("main", "fable")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("new-session: (有待整理的暫存區,不停工;整理票已開或沿用)", done.stdout)
