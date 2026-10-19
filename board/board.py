@@ -75,7 +75,6 @@ NO_RUN_DIR = "沒有跑過"
 EMPTY_RUN_DIR = "有目錄、沒有結果"
 GREEN_RUN = "綠"
 NO_ROUND_JSON = "worker 沒交結構化輸出"
-STALE_REVIEW = "這份覆核已過期"
 UNREADABLE = "%s 讀不動"
 NOT_FOUND = "找不到\n"
 
@@ -399,13 +398,6 @@ def open_blocking(item):
     return bool(item.get("blocking")) and not str(item.get("disposition") or "").strip()
 
 
-def review_stale(one, review):
-    """覆核綁在被覆核的那個版本上(D-014)。票之後改過任何一次,它就過期了。"""
-    if not review:
-        return False
-    return review.get("state_version") != one.get("state_version")
-
-
 def ticket_boxes(one):
     """(c) 票自己的三格:`objections[]` / `review` / `verify`。
 
@@ -416,8 +408,7 @@ def ticket_boxes(one):
     items.sort(key=lambda row: 0 if open_blocking(row) else 1)
     review = one.get("review") if isinstance(one.get("review"), dict) else {}
     verify = one.get("verify") if isinstance(one.get("verify"), dict) else {}
-    return {"objections": items, "review": review, "verify": verify,
-            "review_stale": review_stale(one, review)}
+    return {"objections": items, "review": review, "verify": verify}
 
 
 def state():
@@ -992,17 +983,16 @@ def render_review(one, box):
     out = ["<section id=\"review\"><h2>覆核</h2>"]
     review = box["review"]
     if not review:
-        out.append("<p class=\"empty\">還沒有人覆核(land 會拒絕)</p></section>")
+        # 只有 complex 的票做完後覆核(#136;沒標 = simple,land 不要它的 review)。
+        said = ("還沒有人覆核(complex 票,land 會拒絕)" if one.get("complexity") == "complex"
+                else "不做做完後的覆核(simple 票)")
+        out.append("<p class=\"empty\">%s</p></section>" % esc(said))
         return "".join(out)
     out.append("<table>")
-    for key in ("verdict", "by", "sha", "state_version"):
+    for key in ("verdict", "by", "sha", "note", "at"):
         out.append("<tr><th>%s</th><td>%s</td></tr>"
                    % (esc(key), esc(review.get(key, "")) or "—"))
     out.append("</table>")
-    if box["review_stale"]:
-        out.append("<p class=\"bad\">%s —— 票現在是 v%s,這份覆核綁的是 v%s</p>"
-                   % (esc(STALE_REVIEW), esc(one.get("state_version", "")),
-                      esc(review.get("state_version", ""))))
     out.append("</section>")
     return "".join(out)
 

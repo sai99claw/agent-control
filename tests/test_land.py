@@ -22,7 +22,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from control_harness import (GATE_STUB_GREEN, GATE_STUB_RED, SCRIPTS, Sandbox,  # noqa: E402
-                             fixture_patch_id, oracle_face, write_executable)
+                             write_executable)
 
 
 class LandBase(Sandbox):
@@ -1388,44 +1388,73 @@ exit 1
 
 
 class ReviewIsAHardGate(LandBase):
-    """覆核與反駁從「寫在票上的一格」變成**land 會拒絕的條件**(D-014)。
+    """覆核與反駁從「寫在票上的一格」變成**land 會拒絕的條件**(D-014);#136 起覆核只對
+    complex 的票(VISION 流程 #9:只有複雜的票做完後檢查一次;沒標 = simple),而 verdict
+    不綁票版本、分支頭或內容 —— 反駁照舊對每一張票。
 
-    2026-09-21 外部審查:`review` 只有 verdict / by / at / note,修復或重新套 patch
-    之後舊 review 仍然長得有效,而 land 根本不讀它;實作者的反駁也沒有收件與處置的
-    契約 —— 「這張票寫錯了」講完之後東西照樣落地。
+    2026-09-21 外部審查:實作者的反駁沒有收件與處置的契約 —— 「這張票寫錯了」講完之後
+    東西照樣落地。
     """
 
-    def ready(self, ident=1, name="t1-good"):
-        branch = self.branch_for(ident, name)
-        self.commit_in(branch, "src/g1", "做完的那一張")
+    def ready(self, ident=1, name="t1-good", complexity="complex", said="做完的那一張"):
+        fields = {"complexity": complexity} if complexity else {}
+        branch = self.branch_for(ident, name, **fields)
+        self.commit_in(branch, "src/g%d" % ident, said)
         return branch
 
-    def test_a_branch_nobody_reviewed_is_refused(self):
+    def test_a_complex_branch_nobody_reviewed_is_refused(self):
         """**變異**:把 land 裡讀 review 的那一段拿掉 → 這一條紅。"""
         self.ready()
         before = self.main_log()
         done = self.land("t1-good")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        self.assertIn("票上沒有 review", done.stdout)
-        self.assertEqual(self.main_log(), before, "沒人覆核過的東西不該進主線")
+        self.assertIn("沒有 review", done.stdout)
+        self.assertEqual(self.main_log(), before, "沒人覆核過的 complex 票不該進主線")
         self.assertFalse(self.gate_ran(), "拒絕要發生在九分鐘的全套之前")
 
-    def test_a_review_bound_to_an_older_commit_is_refused(self):
-        """覆核綁的是**那一份** patch。蓋完章又 commit 一次,章就過期了。"""
+    def test_a_complex_review_that_is_not_a_pass_is_refused(self):
+        self.ready()
+        self.approve(1, "t1-good", verdict="fail")
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("不是通過", done.stdout)
+
+    def test_a_simple_or_unmarked_branch_lands_without_a_review(self):
+        """#136:simple 與沒有 complexity 這一格的票不做做完後的覆核 —— 沒有 review 照樣落地。
+
+        四問:量 land 的 rc 與主線上有沒有那個 commit;紅 = land 對每張票仍要 review(M2:
+        rc=2「沒有 review」);期望值 = VISION 流程 #9 與 D-054 Q1 原話,不從 land.sh 算。
+        """
+        for ident, complexity in ((1, "simple"), (2, None)):
+            with self.subTest(complexity or "沒標"):
+                name, said = "t%d-good" % ident, "沒有覆核的 #%d" % ident
+                self.ready(ident, name, complexity=complexity, said=said)
+                done = self.land(name)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertNotIn("沒有 review", done.stdout)
+                self.assertIn(said, self.main_log())
+
+    def test_a_complex_review_then_another_commit_still_lands(self):
+        """#136 刪了綁定:蓋完章又 commit 一次,章照樣算數。
+
+        **變異 M3 的 land 那一半**:review_problems 照舊比 review.sha 與分支頭 → 這一條紅
+        (rc=2「覆核之後又 commit 過」)。"""
         branch = self.ready()
         self.approve(1, "t1-good")
         self.commit_in(branch, "src/g2", "蓋完章之後又改的")
         done = self.land("t1-good")
-        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        self.assertIn("覆核之後又 commit 過", done.stdout)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("蓋完章之後又改的", self.main_log())
 
-    def test_a_review_stamped_before_a_ticket_edit_is_refused(self):
-        branch = self.ready()
+    def test_a_complex_review_then_a_ticket_edit_still_lands(self):
+        """**變異 M3**:review_problems 照舊比 review.state_version → 這一條紅
+        (rc=2「覆核之後票被改過」)。"""
+        self.ready()
         self.approve(1, "t1-good")
         self.ticket("set", "1", "objective", "蓋完章之後改的票面")
         done = self.land("t1-good")
-        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        self.assertIn("覆核之後票被改過", done.stdout)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("做完的那一張", self.main_log())
 
     def test_an_unresolved_blocking_objection_is_refused(self):
         """**變異**:把 objections 那一段拿掉 → 這一條紅。"""
@@ -1451,103 +1480,6 @@ class ReviewIsAHardGate(LandBase):
         self.approve(1, "t1-good")
         done = self.land("t1-good")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-
-
-class TheReviewIsBoundToThePatchAndTheFace(LandBase):
-    """#98 A1 / A5(T1 的 land 那一半):review 帶 patch_id + face 時,land 經 `ticket.py` 的
-    `review_problems` 比的是**那一份改動與那一張票面**,不是 sha 與 state_version。
-
-    review 由夾具蓋:patch_id 夾具自己 `git diff main...<分支> | git patch-id --stable`、face 由
-    票面 A2 的 oracle 算(`control_harness`),都不從 ticket.py 拿。"""
-
-    def bind(self, ident=1, branch="t1-good"):
-        row = self.load_ticket(str(ident))
-        sha = self.git("rev-parse", branch).strip()
-        done = self.ticket("set", str(ident), "review", json.dumps(
-            {"verdict": "pass", "by": "reviewer@fixture-model", "sha": sha,
-             "patch_id": fixture_patch_id(self.env(), self.repo, branch),
-             "face": oracle_face(row), "note": "沙盒的覆核"}, ensure_ascii=False))
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        return sha
-
-    def ready(self):
-        wt = self.branch_for(1, "t1-good")
-        self.commit_in(wt, "src/g1", "做完的那一張")
-        return wt
-
-    def test_a1_the_same_patch_rebased_onto_a_newer_main_still_lands(self):
-        """四問:量 land 的 rc 與主線上有沒有那個 commit;紅 = 新式 review 照舊比 sha;期望值 =
-        夾具 rebase 前後自己算的 patch-id 相同(前提)。
-
-        **變異 M1**:新式 review 的 patch_id 那一段改回比 sha → 這一條紅(「覆核之後又 commit 過」)。"""
-        wt = self.ready()
-        before = self.bind()
-        self.write("src/other", "主線往前走\n")
-        self.git("add", "src/other")
-        self.git("commit", "-q", "-m", "主線上別的票")
-        self.git("push", "-q", "origin", "main")
-        self.git("rebase", "-q", "main", cwd=wt)
-        self.assertNotEqual(self.git("rev-parse", "t1-good").strip(), before, "前提:sha 換了")
-        self.assertEqual(fixture_patch_id(self.env(), self.repo, "t1-good"),
-                         self.load_ticket("1")["review"]["patch_id"], "前提:patch 沒換")
-        done = self.land("t1-good")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("做完的那一張", self.main_log())
-
-    def test_a1_one_changed_line_is_refused_as_a_patch_id_difference(self):
-        """四問:量 rc 與拒絕訊息的種類;紅 = 改了內容照樣落地,或訊息說不出是 patch_id;期望值 =
-        票面 A1「印差異種類」。"""
-        wt = self.ready()
-        self.bind()
-        self.commit_in(wt, "src/g1", "做完的那一張,改了一行")
-        before = self.main_log()
-        done = self.land("t1-good")
-        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        self.assertIn("patch_id 不同", done.stdout)
-        self.assertNotIn("face 不同", done.stdout)
-        self.assertNotIn("覆核之後又 commit 過", done.stdout, "新式 review 不走舊訊息")
-        self.assertEqual(self.main_log(), before)
-        self.assertFalse(self.gate_ran())
-
-    def test_a1_a_face_field_change_is_refused_as_a_face_difference(self):
-        """四問:量 rc 與訊息種類;紅 = 改了驗收照樣落地;期望值 = 票面 A1。"""
-        self.ready()
-        self.bind()
-        done = self.ticket("set", "1", "acceptance", json.dumps(["蓋完章之後改的驗收"],
-                                                                 ensure_ascii=False))
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        done = self.land("t1-good")
-        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        self.assertIn("face 不同", done.stdout)
-        self.assertNotIn("patch_id 不同", done.stdout)
-        self.assertNotIn("覆核之後票被改過", done.stdout)
-
-    def test_a1_a5_runtime_field_changes_still_land(self):
-        """四問:量逐格 `set` 運行欄之後 land 的 rc;紅 = land 自己抄一份判準(舊的 state_version
-        比對)或 face 收了運行欄;期望值 = 票面 A2 列的不入 face 那幾格。
-
-        **變異 M4**:land.sh 換回自己那一份 review 判準 → 這一條紅(「覆核之後票被改過」)。"""
-        self.ready()
-        sha = self.bind()
-        main = self.git("rev-parse", "main").strip()
-        for field, value in (("state", "InReview"), ("attempt", "2"),
-                             ("lease", json.dumps({"holder": "auto-fix@fixture",
-                                                   "until": "2099-01-01T00:00:00+08:00"})),
-                             ("gate", json.dumps({"rc": 0, "sha": sha})),
-                             ("base_sha", main), ("branch", "t1-good"),
-                             ("workspace", "../wt/t1-good"),
-                             ("patch_ref", "reports/t1/r1/patch-round1.diff")):
-            done = self.ticket("set", "1", field, value)
-            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        done = self.ticket("cost", "1", "--role", "reviewer", "--round", "1",
-                           "--model", "fixture-model", "--outcome", "pass")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        row = self.load_ticket("1")
-        self.assertNotEqual(row["review"]["state_version"], row["state_version"],
-                            "前提:舊判準在這裡會說票被改過")
-        done = self.land("t1-good")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("做完的那一張", self.main_log())
 
 
 class OnlyOneLandAtATime(LandBase):
@@ -1671,10 +1603,9 @@ class LandTriesToClose(LandBase):
         self.assert_landed_but_not_closed(self.land("t1-good"), "只做得了弱檢查")
 
     def test_a_review_that_turns_to_fail_during_the_gate_is_not_closed(self):
-        """票面寫的是「review 過期」;過期那一種走不到 close(見 EVIDENCE 的 OBJECTION):
-        land 在合併之前就拒過期的 review,而 `close --landed` 會把 sha 與版本重蓋。
-        走得到 close 的 review 缺格是**閘門跑的時候覆核被改成不通過**。"""
-        self.ready(**CLOSABLE)
+        """走得到 close 的 review 缺格是**閘門跑的時候覆核被改成不通過**。只有 complex 的票
+        要 review(#136),所以夾具標 complex。"""
+        self.ready(complexity="complex", **CLOSABLE)
         self.during_gate("1", "review", json.dumps(
             {"verdict": "fail", "by": "main", "sha": "0000000"}))
         self.assert_landed_but_not_closed(self.land("t1-good"), "不是通過")
@@ -1766,8 +1697,9 @@ class PhasesAndClosing(LandBase):
                            "close 要在 push 成功(land.pass)之後")
 
     def test_a_refused_batch_still_leaves_a_terminal_status(self):
-        """拒絕也是一個結果 —— 停在 running 的狀態檔與還在跑的長得一樣。"""
-        branch = self.branch_for(1, "t1-good")
+        """拒絕也是一個結果 —— 停在 running 的狀態檔與還在跑的長得一樣。
+        拒絕的理由是 complex 票沒有 review(#136 起 simple 票不要 review)。"""
+        branch = self.branch_for(1, "t1-good", complexity="complex")
         self.commit_in(branch, "src/g1", "做完的那一張")
         self.assertEqual(self.land("t1-good").returncode, 2)
         data = self.status_of("1", kind="land")

@@ -15,6 +15,7 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
   超過候選 `dispatch_cap` rc=2、印切批建議、不起程序(切批由主線做);auto-fix 判反駁的開題者走 `opener` 鏈,不帶票的 model / complexity。
 - 欄位契約:`tickets/SCHEMA.md`;開題者派工範本:`templates/dispatch-opener.md`。
 - outline 欄:`python3 scripts/ticket.py create --outline '<≤300 字摘要與建議順序>'`。
+- complexity 欄(#136):開題者每張票標 simple / complex;只有 complex 做完後覆核;沒標 = simple(`ticket.py create --complexity simple|complex`;不加 Ready 關、不進 lint)。
 - 自己那張票檔的落地(D-025 ③,唯一的 git 例外):
   `sh scripts/land.sh docs "tickets: #<n> 開票" tickets/<n>.json`;`AC_ROLE=opener` 時它只收 `tickets/<AC_TICKET>.json`,
   別的檔 **land 會擋**(#91 C6)。裸 commit 與 land 的其他用法不做。
@@ -141,12 +142,14 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 - 反例 T #681:等 `from === 當月-01` 在 30 號的近 30 天檢視本來就成立 —— 判準要「壞掉時必然為假」(卡上只寫票號)。
 
 ## 覆核者角色操作細節
-- 誰派、怎麼派:`sh scripts/review.sh <票號>`(票要是 InReview / AwaitingReview、分支 `t<票號>` 要在);派工文逐字讀
+- 派不派(#136):開題者每張票標 simple / complex;只有 complex 做完後覆核;沒標 = simple。`review.sh` 對非 complex 的票走 refuse(rc=2、`review.refused`),
+  `auto-fix.sh` / `gate.sh` 綠後也不叫它;land / close 只對 complex 要 `review.verdict=pass`。
+- 誰派、怎麼派:`sh scripts/review.sh <票號>`(票要是 InReview / AwaitingReview、complex、分支 `t<票號>` 要在);派工文逐字讀
   `templates/dispatch-reviewer.md`,規則包 `rules.py pack reviewer` 在它之前;工具白名單在 `board/config.json` 的 `reviewer.command`
   (Read / Glob / Grep / Bash,沒有 Edit / Write)。
 - 交付物:整份回覆就是 REVIEW.md,存到派工文給的 `@REVIEW@` 路徑;檔尾 `## result` 多一格 `verdict`(`pass` / `fail`)。
 - 反駁形狀:擋落地的每一條寫成行首、不縮排的 `OBJECTION: blocking <一句話>`;`review.sh` 把每一行記成一筆 blocking 反駁、票轉 Blocked;
-  `pass` 由它 `ticket.py set <n> review …`(by `reviewer@<模型>`、sha 分支頭)。覆核者沒有 Write,寫不進票 —— 不要自己寫 objections JSON。
+  `pass` 由它 `ticket.py set <n> review …`(verdict、by `reviewer@<模型>`、sha、note、at 五格,給人看)。覆核者沒有 Write,寫不進票 —— 不要自己寫 objections JSON。
 - 上限的來源:#42 首跑 118K、#29 實測 35–118K(卡上 120K)。
 
 ## 整理者角色操作細節

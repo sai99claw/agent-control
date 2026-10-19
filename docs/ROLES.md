@@ -11,9 +11,9 @@
 | **設計 session** | 短命 session(角色表 `design` = astra → fable;「想一下」同一條) | 設計題先設計再開題(D-019):決定形狀、比較方案、每個取捨附「未來每票省/多花」(D-018) | `docs/DESIGN-<題>.md`(固定段見 `docs/DESIGN.md` §設計文件的固定段) + 回主線 ≤ 300 字摘要 | 不開票、不改產品碼、不 git 寫入、不跑閘門 / 落地;量測派子工作者,自己只讀結論 |
 | **Worker / 實作者** | 短命(預設 Opus;機械、規格逐字的票可派 Codex sol) | 在副本裡實作與局部驗證 | `patch.diff`(含自己的單元測試)、`EVIDENCE.md`、變異驗紅 | 只寫自己的副本;禁 git 寫入;範圍擴大要回報不准自己做 |
 | **驗證者** | 短命、獨立上下文(Opus / Codex sol) | 把票面驗收寫成回歸案例;`verify-case.py red` **證明案例在乾淨基底上紅**(綠由閘門用 `check` 量,D-020),登記片段 `verify/TAGS.d/<n>.md`,把怎麼跑寫進 result 的 `verify` 格(收件併進票) | `verify/<feature>/test_ticket_<n>.py` + 票的 `verify`(含 `baseline`)+ `patch-verify.diff`(`verify-case.py extract` 出的) | **不判 PASS/FAIL、不寫 VERDICT**;不讀實作者的 `EVIDENCE.md`;**不跑 tag 回歸那一整組**(只跑自己的案例與 `verify-case.py red`);不改產品碼 |
-| **覆核者** | 短命(Opus;D-022;`scripts/review.sh` 派,D-025 ②) | 閘門綠、票轉 `InReview` 後讀**分支上的 code** 對票面驗收 | `verdict(pass\|fail)` + 逐條驗收 → code 位置 + 疑慮清單;`fail` 寫成 objection | 不重跑測試、不改檔、不 git 寫入、不判落地順序(`review.sh` 依檔尾 `## result` 把 pass 寫進票的 `review` 格;fail 轉 Blocked 回主線) |
+| **覆核者** | 短命(Opus;D-022;`scripts/review.sh` 派,D-025 ②) | **開題者每張票標 simple / complex;只有 complex 做完後覆核;沒標 = simple**(#136):閘門綠、票轉 `InReview` 後讀**分支上的 code** 對票面驗收 | `verdict(pass\|fail)` + 逐條驗收 → code 位置 + 疑慮清單;`fail` 寫成 objection | 不重跑測試、不改檔、不 git 寫入、不判落地順序(`review.sh` 依檔尾 `## result` 把 pass 寫進票的 `review` 格;fail 轉 Blocked 回主線) |
 | **整理者** | 短命 × 1(角色表 `consolidator` = fable 單一高階模型,D-043 / D-049 ②;沒有雙模型互讀) | 記憶暫存區有未整理條目時整理(D-053 ⑥ / D-007 / D-013;判準「每個 session 開場都會讀，只留值得這個成本的」,不設固定字數上限);範本 `templates/dispatch-consolidator.md` | 整理後的記憶檔、一份討論檔(啟動端記在 `attempt_history`)、`memory.consolidated` 事件 | 沒有討論檔不准 consolidate;不直接寫案例(用票號指路);不改 `docs/DECISIONS.md` |
-| **落地器** | `scripts/land.sh`(程式) | 閘門 → 合併 → push;紅了寫紅榜 | 事件、退出碼、`reports/t<n>/<run_id>/status.json` | 0 commit / 基準過期 / 越界 / **覆核缺或過期** / **未處置的阻擋反駁** / 閘門紅,一律拒絕;land 期間持一把互斥鎖。它**沒有判斷** |
+| **落地器** | `scripts/land.sh`(程式) | 閘門 → 合併 → push;紅了寫紅榜 | 事件、退出碼、`reports/t<n>/<run_id>/status.json` | 0 commit / 基準過期 / 越界 / **complex 票缺 review pass**(開題者每張票標 simple / complex;只有 complex 做完後覆核;沒標 = simple,不要 review)/ **未處置的阻擋反駁** / 閘門紅,一律拒絕;land 期間持一把互斥鎖。它**沒有判斷** |
 
 > **落地器不做三件事,而角色表以前把它們藏掉了**(2026-09-21 外部審查;第 ①③ 兩條 D-015 起有自己的入口):
 > **① 套 patch、建分支、commit** —— 走 `scripts/apply.sh <票號> <patch> [<patch-verify>]`;
@@ -75,7 +75,7 @@ Fable 整理用不了就是 consolidator 鏈耗盡:停、送 decision,不改派�
 停下來報主線的三種情況:worker 判斷票寫錯 / 需要裁示(EVIDENCE 寫一行 `OBJECTION:`,
 工具記成 `objections[]`)、三輪耗盡、**failures 沒有歸因**。每一種都寫一則
 `reports/inbox/<票號>-<run_id>.md` 去叫醒主線 —— **主線不輪詢**。
-**覆核由 `review.sh` 派**(#42,D-025 ②):綠了票轉 `InReview`,`review.sh` 派 reviewer;pass 由腳本記 `review`(綁票版本與分支 sha)後 land 才收,fail 票轉 Blocked 等主線裁示,沒交件不算 pass。
+**覆核由 `review.sh` 派**(#42,D-025 ②),**只派 complex 的票**(#136;開題者每張票標 simple / complex,沒標 = simple):綠了票轉 `InReview`,complex 票 `review.sh` 派 reviewer;pass 由腳本記 `review`(verdict / by / sha / note / at,給人看)後 land 才收,fail 票轉 Blocked 等主線裁示,沒交件不算 pass。simple 票綠了停在 `InReview` 等 land,不派覆核。
 
 **歸責不看「這個檔有沒有被這張票改過」**(2026-09-21 取消這一條):`failures.file` 取的是 traceback 最後一個檔案,
 經常是既有測試或共用 helper,而產品改壞行為本來就會紅在沒修改過的測試檔。改用同條件的

@@ -457,24 +457,43 @@ class VerifyAndClose(Sandbox):
         row = self.load_ticket("1")
         self.assertEqual(row["state"], "Done")
         self.assertEqual(row["state_version"], before + 1)
-        self.assertEqual(row["review"]["state_version"], row["state_version"],
-                         "關票讓票往前一版,章要跟著蓋在新版本上")
+        self.assertNotIn("state_version", row["review"], "#136:review 不綁票版本")
         self.assertIn("ticket.closed", self.kinds())
 
-    def test_close_refuses_a_ticket_nobody_reviewed(self):
+    def test_close_refuses_a_complex_ticket_nobody_reviewed(self):
         """**變異**:把 `done_blockers` 裡的 `review_problems` 拿掉 → 這一條紅。
 
         覆核沒有被任何程式消費過:`review` 只有 verdict/by/at/note,land 不讀它,
-        `close` 也不問(2026-09-21 外部審查)。
+        `close` 也不問(2026-09-21 外部審查)。#136 起只問 complex 的票。
         """
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
         self.make_ticket(1, allowed_write_paths=["src/*"],
                          verify_strings=["src/nav.py:def size_nav"],
-                         test_evidence=[{"cmd": "gate", "rc": 0}])
+                         test_evidence=[{"cmd": "gate", "rc": 0}], complexity="complex")
         done = self.ticket("close", "1")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("沒有 review", done.stdout)
         self.assertEqual(self.load_ticket("1")["state"], "Ready")
+
+    def test_close_takes_a_simple_or_unmarked_ticket_without_a_review(self):
+        """#136(VISION 流程 #9:只有複雜的票做完後檢查一次;沒標 = simple):close 與
+        `set state Done` 不因沒有 review 拒收。
+
+        四問:量 close / set Done 的 rc 與票的 state;紅 = done_blockers 對每張票仍要 review
+        (rc=1「沒有 review」);期望值 = VISION 流程 #9 與 D-054 Q1 原話。
+        """
+        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
+        for verb, fields in (("close", {"complexity": "simple"}), ("close", {}),
+                             ("set", {"complexity": "simple"}), ("set", {})):
+            with self.subTest(verb=verb, complexity=fields.get("complexity", "沒標")):
+                self.make_ticket(1, allowed_write_paths=["src/*"],
+                                 verify_strings=["src/nav.py:def size_nav"],
+                                 test_evidence=[{"cmd": "gate", "rc": 0}], **fields)
+                args = ("close", "1") if verb == "close" else ("set", "1", "state", "Done")
+                done = self.ticket(*args)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertNotIn("沒有 review", done.stdout)
+                self.assertEqual(self.load_ticket("1")["state"], "Done")
 
     def test_close_refuses_when_there_is_no_regression_evidence(self):
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
@@ -483,17 +502,27 @@ class VerifyAndClose(Sandbox):
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("沒有回歸證據", done.stdout)
 
-    def test_a_review_stamped_before_a_later_edit_no_longer_counts(self):
-        """**變異**:把 `review_problems` 裡比 state_version 的那一段拿掉 → 這一條紅。
+    def test_a_complex_review_then_a_ticket_edit_still_closes(self):
+        """#136 刪了綁定:complex 票 review pass 之後再 `ticket.py set` 改票面,close 仍收。
 
-        修復或重新套 patch 之後,舊 review 仍然長得有效 —— 而它蓋的是另一份東西。
+        **變異 M3**:`review_problems` 照舊比 review.state_version → 這一條紅
+        (rc=1「覆核之後票被改過」)。
         """
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.done_ready()
+        self.done_ready(complexity="complex")
         self.ticket("set", "1", "objective", "改了票面")
         done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["state"], "Done")
+
+    def test_a_complex_review_that_is_not_a_pass_stops_done(self):
+        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
+        self.done_ready(complexity="complex")
+        self.ticket("set", "1", "review",
+                    json.dumps({"verdict": "fail", "by": "main", "sha": "deadbeef"}))
+        done = self.ticket("close", "1")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertIn("覆核之後票被改過", done.stdout)
+        self.assertIn("不是通過", done.stdout)
 
     def test_an_unresolved_blocking_objection_stops_done(self):
         """實作者的反駁要有**收件與處置的契約**:沒處置的阻擋項不得落地、不得 Done。"""
@@ -743,41 +772,25 @@ class WaiverAndLanded(Sandbox):
                     json.dumps({"verdict": "pass", "by": "main", "sha": "deadbeef"},
                                ensure_ascii=False))
 
-    def test_setting_verify_waiver_carries_the_review_version_forward(self):
-        """**變異**:把 `cmd_set` 裡「`field in CARRY_REVIEW_FIELDS` 跟著蓋
-        `review['state_version']`」那一段拿掉 → 這一條紅
-        (`覆核之後票被改過`,close 回 1)。"""
-        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.done_ready()
-        before_version = self.load_ticket("1")["review"]["state_version"]
-        set_done = self.ticket("set", "1", "verify_waiver",
-                               json.dumps({"by": "main", "reason": "後補"},
-                                          ensure_ascii=False))
-        self.assertEqual(set_done.returncode, 0, set_done.stdout + set_done.stderr)
-        row = self.load_ticket("1")
-        self.assertGreater(row["state_version"], before_version)
-        self.assertEqual(row["review"]["state_version"], row["state_version"],
-                         "review 該跟著蓋到新版本,不能停在舊的")
-        done = self.ticket("close", "1")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        carried = [r for r in self.events()
-                  if r.get("kind") == "ticket.state" and r.get("field") == "verify_waiver"]
-        self.assertTrue(carried and carried[-1].get("review_carried") == 1)
-
-    def test_setting_an_unrelated_field_still_lets_the_review_expire(self):
-        """只有那三格(`verify_waiver`/`verify_strings`/`objections`)算收尾;
-        改票面其他格(這裡改 `objective`)review 照舊規矩過期 —— 沒有把「所有 set
-        都跟著蓋」誤植進去。"""
-        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.done_ready()
-        self.ticket("set", "1", "objective", "改了票面")
-        done = self.ticket("close", "1")
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertIn("覆核之後票被改過", done.stdout)
-
     def test_close_landed_stamps_review_sha_and_closes_in_one_step(self):
         """**變異**:把 `stamp_landed` 裡 `sha_on_branch` 的檢查拿掉 → 下一條測試
         (拒收不在主線的 sha)會紅。這一條驗的是正常路徑:`--landed` 一步關票。"""
+        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
+        sha = self.git("rev-parse", "main").strip()
+        self.make_ticket(1, allowed_write_paths=["src/*"], complexity="complex",
+                         verify_strings=["src/nav.py:def size_nav"],
+                         test_evidence=[{"cmd": "gate --branch", "rc": 0}])
+        done = self.ticket("close", "1", "--landed", sha)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        self.assertEqual(row["state"], "Done")
+        self.assertEqual(row["review"]["sha"], sha)
+        self.assertEqual(row["review"]["verdict"], "pass")
+        self.assertNotIn("state_version", row["review"], "#136:review 不綁票版本")
+
+    def test_close_landed_on_an_unmarked_ticket_does_not_open_a_review(self):
+        """#136:沒標 = simple,不要 review —— `--landed` 照關,但不替它開一張 review。
+        **變異**:`stamp_landed` 拿掉 `needs_review` 那一行 → 票上多出 review,這一條紅。"""
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
         sha = self.git("rev-parse", "main").strip()
         self.make_ticket(1, allowed_write_paths=["src/*"],
@@ -787,9 +800,7 @@ class WaiverAndLanded(Sandbox):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         row = self.load_ticket("1")
         self.assertEqual(row["state"], "Done")
-        self.assertEqual(row["review"]["sha"], sha)
-        self.assertEqual(row["review"]["verdict"], "pass")
-        self.assertEqual(row["review"]["state_version"], row["state_version"])
+        self.assertNotIn("review", row)
 
     def test_close_landed_refuses_a_sha_that_never_reached_main(self):
         """**變異**:把 `sha_on_branch` 的 `merge-base --is-ancestor` 判斷改成永遠
@@ -805,9 +816,10 @@ class WaiverAndLanded(Sandbox):
 
 
 class NeedsVerifierFalseCloses(Sandbox):
-    """#48:票面明著寫 `needs_verifier=false` 且 review 有效(verdict pass、綁現版、
+    """#48:票面明著寫 `needs_verifier=false` 且 review 有效(verdict pass、
     sha 在主線歷史裡)時,review 頂上回歸證據那一格;缺、true、字串 "false" 逐字照舊,
-    其餘條件不放寬,`verify.baseline` 在就輪不到免驗。"""
+    其餘條件不放寬,`verify.baseline` 在就輪不到免驗。夾具標 complex:「沒有 review /
+    不是通過」那兩句只對 complex 的票印(#136)。"""
 
     def land_a_file(self, path, text):
         self.write(path, text)
@@ -818,7 +830,7 @@ class NeedsVerifierFalseCloses(Sandbox):
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
         row = {"allowed_write_paths": ["src/*"],
                "verify_strings": ["src/nav.py:def size_nav"],
-               "needs_verifier": False}
+               "needs_verifier": False, "complexity": "complex"}
         row.update(fields)
         self.make_ticket(1, **row)
         if branch:
@@ -849,7 +861,7 @@ class NeedsVerifierFalseCloses(Sandbox):
         self.assertIn("沒有回歸證據", out)
 
     def test_a2b_failed_review_is_not_regression_evidence(self):
-        """**變異** M2:新函式拿掉 `review_problems` 檢查 → 這一條紅
+        """**變異** M2:新函式拿掉 `review_passed` 檢查 → 這一條紅
         (review 沒過卻頂了回歸證據)。"""
         self.ready(branch=None)
         self.approve(1, branch="main", verdict="fail")

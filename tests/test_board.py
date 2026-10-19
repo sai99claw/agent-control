@@ -363,18 +363,24 @@ class ReadsWhatIsAlreadyOnDisk(BoardUp):
                              caught.exception.read().decode("utf-8"), raw)
             caught.exception.close()
 
-    def test_a_review_bound_to_an_older_version_of_the_ticket_is_called_out(self):
-        """覆核綁在被覆核的那個版本上(D-014)。票改過一次它就過期了,而一份過期的
-        覆核與一份還算數的覆核在畫面上長得一樣。"""
+    def test_a_review_is_not_called_stale_and_a_simple_ticket_needs_none(self):
+        """#136 刪了覆核綁定:verdict 不綁票版本,看板不再說「覆核已過期」—— 舊票上留著的
+        state_version 對不上也一樣(land / close 不看它)。沒有 review 的頁分得出 complex
+        (land 會拒)與 simple(不做做完後的覆核)。
+
+        **變異**:看板照舊比 review.state_version → 票 1 那一頁紅。"""
         self.make_ticket(1, state_version=4,
                          review={"verdict": "pass", "by": "main", "sha": "abc",
                                  "state_version": 3})
-        self.make_ticket(2, state_version=4,
-                         review={"verdict": "pass", "by": "main", "sha": "abc",
-                                 "state_version": 4})
+        self.make_ticket(2, state_version=4, complexity="complex")
+        self.make_ticket(3, state_version=4)
         self.up()
-        self.assertIn("這份覆核已過期", self.get("/t/1")[1])
-        self.assertNotIn("這份覆核已過期", self.get("/t/2")[1])
+        page = self.get("/t/1")[1]
+        self.assertNotIn("過期", page)
+        self.assertIn("abc", page)
+        self.assertIn("complex 票,land 會拒絕", self.get("/t/2")[1])
+        self.assertIn("simple 票", self.get("/t/3")[1])
+        self.assertNotIn("land 會拒絕", self.get("/t/3")[1])
 
     def test_the_three_kinds_of_nothing_do_not_share_one_sentence(self):
         """目錄不在 / 目錄在但沒有結果 / 跑完而且是綠的 —— 三件事的下一步完全不同。

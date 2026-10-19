@@ -2,7 +2,7 @@
 
 ## 驗收表(票面每一條一列;期望值來源獨立於被測程式:票面 acceptance 字面 / 本檔夾具寫下的角色表)
 B1 | integ | verifier 鏈 [codex high, fable medium];假 codex 回 provider 額度信封、假 fable 交件 | 同一次 auto-fix 接著起 fable,argv --model fable --effort medium、cwd 同一份副本且 codex 留下的記號還在;agent.start 與 verifier cost 依序 codex → fable;argv 不含 opus | 票面 B1 + 本檔 CHAIN
-B2 | integ | reviewer 鏈 [codex high, fable medium];假 codex 回額度信封;另一案 codex 跑的時候票的 attempt 被改 | 前者起 fable、pass 經同一張收件單 accepted(鍵 = #98 RECEIPT_KEYS);後者 fable 起了但結論 stale 不被收 | 票面 B2 + tests/test_review.RECEIPT_KEYS
+B2 | integ | reviewer 鏈 [codex high, fable medium];假 codex 回額度信封 | 起 fable、pass 寫進票的 review(sha = 分支頭)(#136 刪了 #98 的綁定與「票被改過就不收」那一案) | 票面 B2
 B3 | integ | 批次 worker 鏈 [codex high, fable medium];假 codex 回額度信封 | 同一份副本起 fable,argv 照表;票 #2 的 cost / state / review 一個字不動 | 票面 B3 + #121 A2/A3
 B4 | integ | verifier 的 codex 逾時 / 印測試紅 rc 1 / rc 0 沒交件 / 只印字面 429;覆核與批次各一案字面 429 | 每案只起 codex 一次,fable 不起 | 票面 B4「沿用 #121 classify」
 B5 | integ | 同 B1,一次無 owner、一次 AC_RECOVERY_OWNER=controller + 本檔的 fake consumer(讀 agent.recovery_needed 起下一候選) | 兩次的總啟動數相等(= 2,表兩格);controller 那次 auto-fix 自己只起 1 次 | 票面 B5
@@ -21,7 +21,6 @@ claude-code 候選 = worker.command / reviewer.command 指向的假 sh,記一行
 ## 不做
 不改產品碼;不放寬票面驗收;不刪既有案例;不呼叫真 LLM。
 """
-import glob
 import json
 import os
 import shlex
@@ -38,7 +37,7 @@ sys.path.insert(0, TESTS_DIR)
 from control_harness import DEFAULT_CONFIG, REVIEWER_PASS, fixture_candidate, write_executable  # noqa: E402
 from test_auto_fix import BATCH_WORKER_FIXES, FIRST_ROUND_PAIR, AutoFixBase  # noqa: E402
 from test_auto_fix_codex import CODEX_MODEL, FallbackBase  # noqa: E402
-from test_review import RECEIPT_KEYS, ReviewBase  # noqa: E402
+from test_review import ReviewBase  # noqa: E402
 
 FIRST_EFFORT = "high"
 NEXT_MODEL = "fable"
@@ -252,20 +251,13 @@ class ReviewFixture(MidrunCase, ReviewBase):
         self.set_reviewer(with_log(REVIEWER_PASS, self.calls), model=NEXT_MODEL)
         self.set_role_models(reviewer=CHAIN)
 
-    def receipts(self):
-        found = []
-        for path in glob.glob(os.path.join(self.repo, "reports", "t1", "*", "review-receipt*.json")):
-            with open(path, encoding="utf-8") as handle:
-                found.append(json.load(handle))
-        return found
-
 
 class B2TheReviewerTakesTheNextCandidate(ReviewFixture):
 
-    def test_b2_a_quota_reviewer_restarts_fable_under_the_receipt(self):
-        """B2 覆核者 codex 撞額度 → 起 fable medium;pass 經 #98 收件單 accepted。
+    def test_b2_a_quota_reviewer_restarts_fable(self):
+        """B2 覆核者 codex 撞額度 → 起 fable medium;pass 寫進票的 review。
 
-        四問:量 reviewer 啟動、argv、agent.start、收件單、review;值 = CHAIN + RECEIPT_KEYS;
+        四問:量 reviewer 啟動、argv、agent.start、review;值 = CHAIN;
         舊行為紅在 fable 沒起 / review 不是 pass。"""
         self.arm()
         done = self.review()
@@ -279,29 +271,6 @@ class B2TheReviewerTakesTheNextCandidate(ReviewFixture):
         ticket = self.load_ticket("1")
         self.assertEqual(ticket["review"]["verdict"], "pass")
         self.assertEqual(ticket["review"]["sha"], self.sha)
-        receipts = self.receipts()
-        self.assertEqual(len(receipts), 1, receipts)  # pin:換候選不另開收件單(B2)
-        self.assertEqual(sorted(receipts[0]["request"]), RECEIPT_KEYS)
-        self.assertEqual(receipts[0]["request"],
-                         {key: ticket["review_request"][key] for key in RECEIPT_KEYS})
-        self.assertEqual(receipts[0]["result"], {"accepted": True, "reason": ""})
-
-    def test_b2_the_next_candidate_still_meets_the_attempt_check(self):
-        """B2 不跳過 attempt 檢查:codex 跑的時候票的 attempt 被改 → fable 照起,但它的 pass 不被收。
-
-        四問:量 fable 有沒有起、rc、review、收件單 result;值 = #98 CAS(attempt 變了即 stale);
-        「換候選時另開收件單 / 跳過 CAS」紅在 review=pass 或 accepted=True。"""
-        bump = 'python3 "%s/scripts/ticket.py" set 1 attempt 7 >/dev/null 2>&1 || true' % self.repo
-        self.arm(before='cd "%s" && %s' % (self.repo, bump))
-        before = self.load_ticket("1").get("review")
-        done = self.review()
-        rows = calls_of(self.calls, "reviewer")
-        self.assertEqual([row[0] for row in rows], ["codex", "agent"], done.stdout + done.stderr)
-        self.assertEqual(self.load_ticket("1")["attempt"], 7, "夾具真的改到 attempt")
-        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.load_ticket("1").get("review"), before, "stale 的結論不寫進票")
-        self.assertTrue(self.receipts())
-        self.assertFalse(any(r.get("result", {}).get("accepted") for r in self.receipts()))
 
 
 class B4TheReviewerLiteral429KeepsTheModel(ReviewFixture):

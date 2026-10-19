@@ -371,7 +371,8 @@ class QuotaTakesTheNextCandidate(FallbackBase):
         failed = [row.get("reason") for row in self.events() if row["kind"] == "ticket.attempt.failed"]
         self.assertEqual(failed, [])
         self.assertIn("test_thing.py", self.git("ls-tree", "-r", "--name-only", "t1"))
-        self.assertIn("終態=awaiting_review", done.stdout)
+        # 票沒標 complexity = simple(#136):綠了不派覆核,終態不是「等覆核」。
+        self.assertIn("終態=green_no_review", done.stdout)
 
     def test_a7_a_codex_only_effort_is_not_carried_to_opus(self):
         """A7:票 effort=ultra(codex 合法、claude-code 不合法)→ opus 取表的 high;票的 effort 不改成 null。"""

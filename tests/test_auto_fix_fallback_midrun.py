@@ -6,7 +6,6 @@ argv / cwd / stdin 的假程式。期望的 model / effort 取自這裡排的角
 AC_ROOT / AC_TICKETS_DIR / AC_CONTROL_DIR(`control_harness.env` 不帶任何 `AC_*`),不叫真 LLM。
 """
 
-import glob
 import json
 import os
 import subprocess
@@ -293,11 +292,8 @@ class ReviewerTakesTheNextCandidate(ReviewBase):
         return [row for row in self.load_ticket("1").get("cost") or []
                 if row["role"] == "reviewer"]
 
-    def receipts(self):
-        return glob.glob(os.path.join(self.repo, "reports", "t1", "*", "review-receipt.json"))
-
-    def test_b2_quota_restarts_under_the_same_receipt(self):
-        """B2。四問:量 rc、agent.start、cost、review.by、收件單、argv、派工文;值 = B2 / #98 與
+    def test_b2_quota_restarts_in_the_same_round(self):
+        """B2。四問:量 rc、agent.start、cost、review.by / sha、argv、派工文;值 = B2 與
         夾具表;舊值紅在 rc(沒交件 3);表真的兩格。"""
         self.arm()
         done = self.review()
@@ -309,29 +305,13 @@ class ReviewerTakesTheNextCandidate(ReviewBase):
                          [(CODEX_MODEL, "missing"), (NEXT_MODEL, "pass")])
         self.assertIn("quota_exhausted", rows[0]["note"])
         self.assertEqual(self.load_ticket("1")["review"]["by"], "reviewer@" + NEXT_MODEL)
-        receipt, = self.receipts()
-        with open(receipt, encoding="utf-8") as handle:
-            data = json.load(handle)
-        self.assertEqual(data["request"]["sha"], self.sha)
-        self.assertTrue(data["result"]["accepted"], data)
+        self.assertEqual(self.load_ticket("1")["review"]["sha"], self.sha)
         with open(self.next_argv, encoding="utf-8") as handle:
             argv = handle.read().splitlines()
         self.assertEqual(argv[argv.index("--model") + 1], NEXT_MODEL)
         # REVIEWER_PASS 把 stdin(派工文)存在 reviewer-stdin.md。
         with open(os.path.join(self.home, "reviewer-stdin.md"), encoding="utf-8") as handle:
             self.assertIn(FABLE_CARD, handle.read(), "派工文的規則包要照實際起的模型重組")
-
-    def test_b2_the_next_candidate_still_goes_through_the_cas(self):
-        """B2「不跳過 attempt 檢查」。第一位 reviewer 跑的時候票換了 attempt:換來的 fable 交 pass
-        也要 stale(rc 4)、票的 review 一格不動。**M2**(換候選時重開一張收件單)→ rc 0、
-        review 寫進票,紅。四問:量 rc、agent.start、票的 review、收件單數;值 = B2 / #98 CAS;
-        舊值(不換候選)紅在 starts;表真的兩格。"""
-        self.arm(before='python3 "$AC_CONTROL_DIR/ticket.py" set 1 attempt 5 >/dev/null')
-        done = self.review()
-        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
-        self.assertEqual([row["model"] for row in self.starts()], [CODEX_MODEL, NEXT_MODEL])
-        self.assertIsNone(self.load_ticket("1").get("review"))
-        self.assertEqual(len(self.receipts()), 1)
 
     def test_b4_an_unrelated_provider_error_does_not_change_reviewer(self):
         """B4(覆核):provider 信封沒說額度 / 不可用 → 不換,fable 不起,沒交件 rc 3。
@@ -344,7 +324,7 @@ class ReviewerTakesTheNextCandidate(ReviewBase):
 
     def test_b5_with_a_controller_the_reviewer_is_handed_over(self):
         """B5(覆核):有 Controller 只發 `agent.recovery_needed`、自己不起 fable(rc 7)。
-        四問:量 rc、agent.start、recovery_needed 那一列、收件單;值 = B5;Controller 分支也自己起
+        四問:量 rc、agent.start、recovery_needed 那一列、派工文;值 = B5;Controller 分支也自己起
         的實作紅在 rc 與 starts;表真的兩格。"""
         self.arm()
         done = self.run_sh("scripts/review.sh", "1", env=self.env(AC_RECOVERY_OWNER="controller"))
@@ -354,7 +334,7 @@ class ReviewerTakesTheNextCandidate(ReviewBase):
         handed = [row for row in self.events() if row["kind"] == "agent.recovery_needed"]
         self.assertEqual([(row.get("role"), row["model"], row.get("effort")) for row in handed],
                          [("reviewer", NEXT_MODEL, NEXT_EFFORT)])
-        self.assertTrue(os.path.isfile(handed[0]["receipt"]), "收件單留給 Controller 接續")
+        self.assertTrue(os.path.isfile(handed[0]["dispatch"]), "派工文留給 Controller 接續")
 
     def test_a3_the_whole_reviewer_chain_used_up_is_blocked_and_one_page(self):
         """整串耗盡(A3 同形):表只有 codex 一格 → rc 7、票 Blocked、一頁、不再起。

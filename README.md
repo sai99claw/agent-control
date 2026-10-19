@@ -74,7 +74,7 @@ python3 scripts/ticket.py close 1
 | 紅了修 | `scripts/auto-fix.sh <n>`(或閘門 `--auto-fix`) | 三輪上限;反駁 / 沒有歸因會停下來報主線 |
 | 主線被叫醒 | `scripts/inbox.py list` | 輪詢(每看一次背景工作 = 整份上下文重送一輪) |
 | 覆核 | `scripts/ticket.py set <n> review …` | 沒有人讀過 patch 的票進主線 |
-| 落地 | `scripts/land.sh` | 0 commit、基準過期、越界、覆核過期、`verify.files` 沒帶進來、閘門紅 |
+| 落地 | `scripts/land.sh` | 0 commit、基準過期、越界、complex 票缺覆核 pass(只有 complex 做完後覆核,#136)、`verify.files` 沒帶進來、閘門紅 |
 | 關票 | `scripts/ticket.py close <n>` | 改動其實不在主線上的票被關成完成 |
 
 ## 設計上的三個決定

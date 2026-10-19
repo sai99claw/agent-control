@@ -423,8 +423,9 @@ class TheDispatchEntriesStartNothing(RulesBox):
 
         **變異**:`review.sh` 的 `|| refuse ...` 拿掉 → 紅。
         """
+        # complex:只有 complex 的票派覆核(#136),不標的話 5 號是因為 simple 被拒,不是包壞了。
         for ident in ("1", "5"):
-            self.make_ticket(ident, state="InReview")
+            self.make_ticket(ident, state="InReview", complexity="complex")
         self.commit("開票")
         for ident in ("1", "5"):
             self.commit_in(self.worktree("t%s" % ident), "thing%s.txt" % ident, "#%s" % ident)
@@ -483,7 +484,7 @@ class ProjectPacketsPointAtRealFiles(RulesBox):
         write_executable(agent, "#!/bin/sh\ncat > %s\n" % stdin)
         conf["reviewer"] = {"command": "sh %s --model opus" % agent, "timeout_seconds": 60}
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
-        self.make_ticket("1", state="InReview")
+        self.make_ticket("1", state="InReview", complexity="complex")
         self.commit("開票 #1")
         self.commit_in(self.worktree("t1"), "thing.txt", "#1")
         self.run_sh("scripts/review.sh", "1")
