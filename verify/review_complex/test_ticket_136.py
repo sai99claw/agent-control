@@ -125,8 +125,7 @@ class AManualGreenGateDoesNotDispatchSimpleTickets(Sandbox):
         self.write(os.path.join("memory", "model", "fixture-model.md"),
                    "- fixture reviewer\n")
         self.set_reviewer(REVIEWER_PASS)
-        self.make_ticket("7", state="Running", complexity="simple",
-                         allowed_write_paths=["tests/*"])
+        self.make_ticket("7", state="Running", complexity="simple")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "simple ticket #7")
         self.git("branch", "t7")

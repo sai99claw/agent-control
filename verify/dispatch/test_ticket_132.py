@@ -145,7 +145,6 @@ class VerifierFixture(MidrunCase, FallbackBase):
         self.write(os.path.join("tests", "test_verify_runner.py"),
                    "import unittest\n\n\nclass T(unittest.TestCase):\n"
                    "    def test_there(self):\n        self.assertTrue(True)\n")
-        fields.setdefault("allowed_write_paths", ["tests/*", "verify/*"])
         self.make_ticket("1", needs_verifier=True, interface_fixed=True, **fields)
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "開票 #1")

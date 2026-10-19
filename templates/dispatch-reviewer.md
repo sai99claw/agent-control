@@ -15,7 +15,7 @@
 4. **EVIDENCE 與狀態檔**:`@EVIDENCE@`;`@STATUS@`
 
 ## 讀什麼
-- 票面:`objective` / `acceptance` / `in_scope` / `out_of_scope` / `allowed_write_paths` / `info_homes` / `objections`
+- 票面:`objective` / `acceptance` / `objections`
 - 分支上的 code,**不只 diff**:先 `git diff main...@SHA@ --stat` 看動了哪些檔,再讀那幾段的整個函式
 - 實作者的 EVIDENCE(五段 + `## result`)—— 它是自述;與 code 衝突以 code 為準,落差寫進疑慮
 
@@ -27,9 +27,8 @@
 |---|---|---|---|
 每一條驗收一列;對不上的那一列說差在哪。
 ### ③ 範圍
-改動的檔是否都在提示範圍(`allowed_write_paths` ∪ `info_homes[].home` ∪ `verify.files`);命中 `out_of_scope` 的檔看的是理由,不是碰了沒有。
-兩者都是建議範圍(D-050 ①):範圍外的檔(有的話派工文另有一段逐檔列出)逐檔看命中的 glob 與理由 —— 理由站不住、與票面目標
-無關就是 `fail`;沒寫理由的 out_of_scope 命中 land 會拒絕,照樣寫進疑慮。
+票沒有寫入範圍(D-054):改動的檔逐檔看是否與票面目標相關、測試有沒有改弱 —— 無關或改弱就是 `fail`。
+唯一的硬擋是 `board/config.json` 的 `hard_block`,apply / land 會擋,不用你看。
 ### ④ 疑慮
 - **阻擋**:每一條另寫一行 `OBJECTION: blocking <一句話>`(**行首、不縮排**)。有任何一行 ⇒ verdict 必須是 `fail`。
 - **不阻擋**:列在這裡就好,不寫 `OBJECTION:` 行。

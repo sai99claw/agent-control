@@ -221,7 +221,7 @@ class AWorkerPatchIsAppliedAlone(ReceiveBase):
 
     def test_a1_a_test_defect_with_a_worker_patch_applies_only_the_worker_patch(self):
         """A1 worker 交產品檔 patch + test_defect、驗證者 0 byte + verify:只套 worker 那份,計畫併進票、反駁 fixed、閘門照跑。"""
-        self.arm(agent(worker="change", objects=True), in_scope=["src/app.py"])
+        self.arm(agent(worker="change", objects=True))
         self.first_round()
         done = self.auto_fix("--no-review")
         said = done.stdout + done.stderr
@@ -279,7 +279,7 @@ class TheVerifierAloneMergesOnlyItsPlan(ReceiveBase):
 
     def test_a3b_a_test_defect_without_a_worker_patch_merges_the_plan_and_reruns(self):
         """A3 (b) worker 只交 test_defect、驗證者 0 byte + verify:分支不動、計畫併進、反駁 fixed、重跑閘門。"""
-        self.arm(agent(worker="none", objects=True), in_scope=["src/app.py"])
+        self.arm(agent(worker="none", objects=True))
         self.first_round()
         before = self.branch_head()
         done = self.auto_fix("--no-review")

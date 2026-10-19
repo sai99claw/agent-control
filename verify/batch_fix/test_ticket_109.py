@@ -2,7 +2,7 @@
 
 ## 驗收表(票面每一條一列;期望值來源獨立於被測程式:票面原話 / 夾具自己寫的票檔、替身、紅榜 / git 自己算)
 B1 | unit | land t1-a t2-b;閘門替身 第 1 次紅、第 2 次綠;auto-fix 替身 rc 0、在整合分支疊一個 commit | rc 0;main 含替身 commit;1.json 2.json state=Done;stdout 無「不猜是誰紅的」;auto-fix 恰 1 次、參數 = --batch land/<land.start 的 stamp> 1 2;AC_BATCH_RUN_ID = reports/t1 那一輪 kind=land 的 run_id | 票面 B1 原話;stamp 取自 land.start 事件 kv
-B2 | unit | 閘門替身一律紅、紅榜 file 只命中票 2(allowed / verify.files / 分支改動檔 三種各一) | auto-fix --batch 恰 rounds 次(預設 2;config rounds=1 時 1 次);閘門(第一層)恰 rounds+1 次;收件匣 ticket=2 一頁含「踢出」「單張 land」與紅榜 case 名;events land.fail kicked=2;stdout 含「重 land」;第二次 land.start 只剩 t1-a、它的閘門 env AC_LAND_DEPTH=1;rc 1 | 票面 B2 原話;3 張票時重 land 的紅榜改指票 2 → 不再踢(只踢過 3)
+B2 | unit | 閘門替身一律紅、紅榜 file 只命中票 2(verify.files / 分支改動檔 兩種各一) | auto-fix --batch 恰 rounds 次(預設 2;config rounds=1 時 1 次);閘門(第一層)恰 rounds+1 次;收件匣 ticket=2 一頁含「踢出」「單張 land」與紅榜 case 名;events land.fail kicked=2;stdout 含「重 land」;第二次 land.start 只剩 t1-a、它的閘門 env AC_LAND_DEPTH=1;rc 1 | 票面 B2 原話;3 張票時重 land 的紅榜改指票 2 → 不再踢(只踢過 3)
 B3 | unit | 紅榜 file=src/zzz(對不到)或 src/a(票 1 與票 2 都中) | rc 1;沒有 kicked 事件、沒有「踢出」頁;land.start 只一筆;land worktree 還在;decision 只掛 #1 一頁且列得出 #2 | 票面 B3 原話
 B4 | unit | --no-auto-fix 兩張;單張一批 | 前者 auto-fix 0 次、閘門 1 次、rc 1、有 decision;後者 auto-fix 恰 1 次參數 = 1(沒有 --batch)、閘門 1 次、rc 1;tests/test_land.py 既有三條還在 | 票面 B4 原話
 B5 | unit | 真的 gate.sh --full 紅,AC_GATE_TICKETS="1 2" / AC_GATE_TICKET=1 | 前者 reports/t1 與 t2 各一份 kind=gate、run_id 都是給的那個、failures 相同且有那條紅;後者只有 t1 | 票面 B5 原話
@@ -136,10 +136,10 @@ class BatchLandWorld(Sandbox):
         return self.worktree(name)
 
     def two_tickets(self, first=None, second=None, second_extra=None):
-        """票 1 寫 src/a、票 2 寫 src/b(各自的 allowed);第二支可以多改一個檔。"""
-        one = self.branch_for(1, "t1-a", **(first or {"allowed_write_paths": ["src/a"]}))
+        """票 1 寫 src/a、票 2 寫 src/b;第二支可以多改一個檔。"""
+        one = self.branch_for(1, "t1-a", **(first or {}))
         self.commit_in(one, "src/a", "第一張")
-        two = self.branch_for(2, "t2-b", **(second or {"allowed_write_paths": ["src/b"]}))
+        two = self.branch_for(2, "t2-b", **(second or {}))
         self.commit_in(two, "src/b", "第二張")
         if second_extra:
             self.commit_in(two, second_extra, "第二張也動了 %s" % second_extra)
@@ -210,13 +210,12 @@ class B1RedThenBatchFixThenGreen(BatchLandWorld):
 
     def setUp(self):
         super().setUp()
-        closable = lambda path, text, allowed: {
-            "allowed_write_paths": allowed,
+        closable = lambda path, text: {
             "verify_strings": [{"path": path, "contains": text}],
             "verify": {"files": [], "tags": [], "run": "", "notes": "",
                        "baseline": {"ok": True, "stage": "check"}}}
-        self.two_tickets(first=closable("src/a", "第一張", ["src/a"]),
-                         second=closable("src/b", "第二張", ["src/b"]))
+        self.two_tickets(first=closable("src/a", "第一張"),
+                         second=closable("src/b", "第二張"))
         self.plan([1, 0])
 
     def test_b1_one_batch_fix_round_turns_it_green_and_both_tickets_close(self):
@@ -290,7 +289,7 @@ class B2KickTheSuspectAndRelandTheRest(BatchLandWorld):
         self.assertEqual(self.land_branches()[1:2], [["t1-a"]], out)
 
     def test_b2_red_rounds_plus_one_times_kicks_ticket_two_by_allowed_paths(self):
-        """B2 連紅 3 次(rounds 預設 2)→ 不再派;紅榜 file 命中票 2 的 allowed → 踢 2、重 land t1-a(AC_LAND_DEPTH=1)、rc 1。"""
+        """B2 連紅 3 次(rounds 預設 2)→ 不再派;紅榜 file 命中票 2 的分支改動檔 → 踢 2、重 land t1-a(AC_LAND_DEPTH=1)、rc 1。"""
         self.two_tickets()
         self.plan([1], files=[["src/b"]])
         done = self.land("t1-a", "t2-b")
@@ -308,13 +307,12 @@ class B2KickTheSuspectAndRelandTheRest(BatchLandWorld):
         self.assertEqual(len(self.ev("land.start")), 2, "重 land 只一次")
 
     def test_b2_verify_files_alone_is_enough_to_kick(self):
-        """B2 紅榜 file 只命中票 2 的 verify.files(不在 allowed、不是分支改動檔)→ 踢 2。"""
+        """B2 紅榜 file 只命中票 2 的 verify.files(不是分支改動檔)→ 踢 2。"""
         case = "verify/x/test_ticket_2.py"
         self.write(case, "TAGS = [\"example\"]\n")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "案例先在主線上")
-        self.two_tickets(second={"allowed_write_paths": ["src/b"],
-                                 "verify": {"files": [case], "tags": ["example"],
+        self.two_tickets(second={"verify": {"files": [case], "tags": ["example"],
                                             "run": "", "notes": ""}})
         self.plan([1], files=[[case]])
         done = self.land("t1-a", "t2-b")
@@ -322,7 +320,7 @@ class B2KickTheSuspectAndRelandTheRest(BatchLandWorld):
         self.assert_ticket_two_kicked(done)
 
     def test_b2_a_branch_changed_file_alone_is_enough_to_kick(self):
-        """B2 紅榜 file 只命中票 2 分支改動檔(在 allowed 外)→ 踢 2。"""
+        """B2 紅榜 file 只命中票 2 分支改動檔 → 踢 2。"""
         self.two_tickets(second_extra="lib/c")
         self.plan([1], files=[["lib/c"]])
         done = self.land("t1-a", "t2-b")
@@ -331,11 +329,11 @@ class B2KickTheSuspectAndRelandTheRest(BatchLandWorld):
 
     def test_b2_the_second_land_does_not_kick_again(self):
         """B2 重 land 不再踢:三張、先踢 3;重 land 的紅榜改指票 2 → 不踢、不再重 land、rc 1。"""
-        one = self.branch_for(1, "t1-a", allowed_write_paths=["src/a"])
+        one = self.branch_for(1, "t1-a")
         self.commit_in(one, "src/a", "第一張")
-        two = self.branch_for(2, "t2-b", allowed_write_paths=["src/b"])
+        two = self.branch_for(2, "t2-b")
         self.commit_in(two, "src/b", "第二張")
-        three = self.branch_for(3, "t3-c", allowed_write_paths=["src/c"])
+        three = self.branch_for(3, "t3-c")
         self.commit_in(three, "src/c", "第三張")
         for ident, name in ((1, "t1-a"), (2, "t2-b"), (3, "t3-c")):
             self.approve(ident, name)
@@ -389,8 +387,12 @@ class B3NoClearSuspectStops(BatchLandWorld):
         self.assert_stopped_without_kicking(self.land("t1-a", "t2-b"))
 
     def test_b3_a_red_file_every_ticket_owns_stops(self):
-        """B3 紅榜 file=src/a 同時命中票 1 與票 2 → 同上。"""
-        self.two_tickets(second={"allowed_write_paths": ["src/*"]})
+        """B3 紅榜 file=src/a 同時命中票 1(分支改動檔)與票 2(verify.files)→ 同上。"""
+        self.write("src/a", "主線上先有\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "src/a 先在主線上")
+        self.two_tickets(second={"verify": {"files": ["src/a"], "tags": ["example"],
+                                            "run": "", "notes": ""}})
         self.plan([1], files=[["src/a"]])
         self.assert_stopped_without_kicking(self.land("t1-a", "t2-b"))
 

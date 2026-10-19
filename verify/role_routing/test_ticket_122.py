@@ -240,8 +240,7 @@ class ConsolidatorFixture(FakeAgents, Sandbox):
         self.edit_config(worker={"command": "%s -p --model opus" % fake, "timeout_seconds": 600},
                          memory=memory)
         self.make_ticket(7, role="consolidator", state="Ready", model="opus",
-                         in_scope=[MEMORY_FILE, MEMORY_INBOX],
-                         allowed_write_paths=[MEMORY_FILE, MEMORY_INBOX])
+                         memory_file=MEMORY_FILE)
 
     def launch(self):
         return self.run_sh("scripts/consolidate-memory.sh", "7")

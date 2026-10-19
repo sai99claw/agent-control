@@ -145,7 +145,7 @@ class GateBase(Sandbox):
             self.write(os.path.join("verify", "nav", "__init__.py"), "")
             self.write(os.path.join("verify", "nav", "test_ticket_7.py"), case)
             fields.setdefault("verify", {"files": [CASE_REL], "tags": [], "run": "", "notes": ""})
-        return self.make_ticket(7, allowed_write_paths=["verify/*", "src/*", "tests/*"], **fields)
+        return self.make_ticket(7, **fields)
 
     def gate(self):
         return self.run_sh("scripts/gate.sh", "tests/test_land.py", "--ticket", "7",
@@ -419,8 +419,7 @@ class RoundsAndStopsStayTheSame(AutoFixBase126):
 
     def test_a6_a_test_defect_round_starts_one_verifier_not_two(self):
         """A6 第 2 輪 worker 回 test_defect(等 patch 的票):第 2 輪 verifier 的 agent.start 恰一筆。"""
-        self.arm(WORKER_REPORTS_TEST_DEFECT, needs_verifier=True, verify=dict(EMPTY_PLAN),
-                 in_scope=["src/app.py"])
+        self.arm(WORKER_REPORTS_TEST_DEFECT, needs_verifier=True, verify=dict(EMPTY_PLAN))
         self.first_round()
         done = self.auto_fix("--no-review")
         said = done.stdout + done.stderr

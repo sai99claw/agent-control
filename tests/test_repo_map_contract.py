@@ -250,7 +250,7 @@ class TheGateRefusesAStaleIndex(Sandbox):
         self.write(os.path.join("tests", "test_repo_map_contract.py"), PASSING)
         done = self.run_py("scripts/repo-map.py", "build")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.make_ticket(7, allowed_write_paths=["tests/*", "code-map/*"], state="Running")
+        self.make_ticket(7, state="Running")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "沙盒的地圖與票 #7")
 

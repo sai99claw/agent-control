@@ -122,7 +122,6 @@ class RegressionRed(Sandbox):
             self.assertEqual(row["regression_source"], "release")
             self.assertEqual(row["regression_log"], log)
             self.assertIn(case, row["subject"])
-            self.assertEqual(row["in_scope"], [case])
             self.assertEqual(row["verify"]["run"], RERUN)
             self.assertTrue(row["base_sha"])
 
@@ -236,15 +235,6 @@ class RegressionRed(Sandbox):
         self.assertEqual(self.by_case()["a.B.c"]["verify"]["run"], "")
         self.assertIn("沒有全套指令,verify.run 留空:設 board/config.json 的 "
                       "regression.rerun_cmd", done.stderr)
-
-    def test_a5_write_paths_from_config_or_the_default(self):
-        self.red("--source", "release", "--case", "a.B.c", "--rerun", RERUN)
-        self.set_config(regression={"write_paths": ["demo/test_*.py", "demo/web/**"]})
-        self.red("--source", "release", "--case", "a.B.d", "--rerun", RERUN)
-        made = self.by_case()
-        self.assertEqual(made["a.B.c"]["allowed_write_paths"], ["tests/*", "verify/*"])
-        self.assertEqual(made["a.B.d"]["allowed_write_paths"],
-                         ["demo/test_*.py", "demo/web/**"])
 
     # ------------------------------------------------------------ A6 開關與事件
 

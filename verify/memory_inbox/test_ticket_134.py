@@ -3,7 +3,7 @@
 ## 驗收表(期望值來源獨立於被測程式)
 A1 | unit | 30 字主檔 + 1 條 inbox note 跑 check | rc 1、逐字報數、1 票與 1 事件 | 票面 A1 / interface_contracts
 A2 | unit | 5000 字主檔無 note，再放 21 條 note | 前者不觸發，後者只開 1 票 | 票面 A2，字數與條數手算
-A3 | unit | glob / 任意 role 覆蓋票、結案後、兩支併發 check | 查重訊息與票數 | 票面 A3
+A3 | unit | memory_file(#137)/ 任意 role 覆蓋票、結案後、兩支併發 check | 查重訊息與票數 | 票面 A3
 A4 | unit | worker / main 開場讀同一份待整理 inbox | worker 不開、main 開 1 票 | 票面 A4 / new_session 契約
 A5 | unit | snapshot 後以 5000 字候選 consolidate | 成功、消耗、事件無 cap 鍵、舊旗標拒絕 | 票面 A5
 A6 | gate | 分支把乾淨記憶卡 1990 推到 2500，再加錯層行 | 長度不擋、錯層仍擋 | 票面 A6
@@ -140,10 +140,10 @@ class TriggerAndCounting(MemoryInboxWorld):
 class Deduplication(MemoryInboxWorld):
 
     def test_a3_open_coverage_cancelled_tickets_and_concurrency_keep_one_ticket(self):
-        """A3 glob、任何 role、Cancelled 後重開與兩支併發都沿用既有查重。"""
+        """A3 `memory_file`(#137)、任何 role、Cancelled 後重開與兩支併發都沿用既有查重。"""
         self.seed_opener()
         self.make_ticket(7, state="Draft", role="consolidator",
-                         allowed_write_paths=["memory/role/*.md"])
+                         memory_file="memory/role/opener.md")
         before = self.ticket_ids()
         covered = self.memory("check")
         self.assertEqual(covered.returncode, 1, covered.stdout + covered.stderr)
@@ -151,14 +151,14 @@ class Deduplication(MemoryInboxWorld):
         self.assertEqual(self.ticket_ids(), before)
 
         self.make_ticket(7, state="Cancelled", role="consolidator",
-                         allowed_write_paths=["memory/role/*.md"])
+                         memory_file="memory/role/opener.md")
         reopened = self.memory("check")
         self.assertEqual(reopened.returncode, 1, reopened.stdout + reopened.stderr)
         self.assertEqual(len(self.ticket_ids()), len(before) + 1)
 
         self.cancel_all_tickets()
         self.make_ticket(20, state="Running", role="worker",
-                         allowed_write_paths=["memory/role/*.md", "scripts/x.py"])
+                         memory_file="memory/role/opener.md")
         before = self.ticket_ids()
         other_role = self.memory("check")
         self.assertIn("已經有一張開著的票 #20(role=worker)覆蓋 "
@@ -296,8 +296,7 @@ class GateKeepsOnlyLayerPolicy(MemoryInboxWorld):
     def test_a6_length_growth_passes_but_a_new_wrong_layer_line_still_blocks(self):
         """A6 1990→2500 不再是 gate 關卡；新增錯層行仍由原 lint 關卡擋下。"""
         self.write("memory/model/opus.md", self.body(1990))
-        self.make_ticket(134, state="Running", role="worker",
-                         allowed_write_paths=["memory/model/opus.md"])
+        self.make_ticket(134, state="Running", role="worker")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "#134 的主線夾具")
 

@@ -34,8 +34,7 @@ class BinaryOnMain(Sandbox):
         self.git("commit", "-q", "-m", "web: icon + app")
 
     def verify(self, *needles):
-        self.make_ticket(1, allowed_write_paths=["web/**"],
-                         verify_strings=list(needles))
+        self.make_ticket(1, verify_strings=list(needles))
         return self.ticket("verify", "1")
 
     def test_b1_glob_over_a_png_still_counts_the_text_hit(self):
@@ -60,7 +59,7 @@ class BinaryOnMain(Sandbox):
         self.git("commit", "-q", "-m", "web: icon + app", cwd=path)
         self.git("merge", "-q", "--no-ff", "-m", "land t1-web", "t1-web")
         merge = self.git("rev-parse", "main").strip()
-        self.make_ticket(1, state="InReview", allowed_write_paths=["web/**"],
+        self.make_ticket(1, state="InReview",
                          verify_strings=["NEEDLE-65"], needs_verifier=False)
         self.approve(1, branch="t1-web")
         for attempt in (1, 2):

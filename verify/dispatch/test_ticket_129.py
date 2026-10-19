@@ -1,7 +1,7 @@
 """#129 code-map 索引重產補齊:`apply.sh --batch` 同一次重產;`land.sh` 合併後過期自動重產併進同一次落地。
 
 ## 驗收表(票面每一條一列;期望值來源獨立於被測程式:票面 acceptance 字面 / 夾具自己寫下的檔名 / git 上取的 sha)
-A1 | integ | 沙盒主線有真 repo-map.py、catalog(managed 含 tests/test_*.py)、新鮮索引;整合分支 land/X 頭上 apply --batch land/X 1 2,patch 只新增 tests/test_batch_new.py | rc 0;land/X 只多 1 commit;訊息有行以 `regen: repo-map build` 開頭;副本 check rc 0;managed 含 tests/test_batch_new.py;輸出含批次重產字樣;extra_paths 不含 code-map/ | 票面 A1 原話;檔名 = patch 新增的那一支
+A1 | integ | 沙盒主線有真 repo-map.py、catalog(managed 含 tests/test_*.py)、新鮮索引;整合分支 land/X 頭上 apply --batch land/X 1 2,patch 只新增 tests/test_batch_new.py | rc 0;land/X 只多 1 commit;訊息有行以 `regen: repo-map build` 開頭;副本 check rc 0;managed 含 tests/test_batch_new.py;輸出含批次重產字樣 | 票面 A1 原話;檔名 = patch 新增的那一支
 A2 | integ | (a) patch 只改既有已管理檔 tests/test_kept.py 內文 (b) patch 讓 catalog 指向不存在的 scripts/ghost.py | (a) 訊息無 `regen:` 行、該 commit diff 只有 tests/test_kept.py (b) rc 0、只多 1 commit、輸出含「索引沒重產」 | 票面 A2 原話;(a) 改前即綠(回歸鎖)
 A3 | integ | 分支 t1 新增 tests/test_a.py 並自己 build(分支 check 綠);主線再直接 commit tests/test_z.py 不 build;land t1-map | rc 0;主線 check rc 0;managed 含 test_a 與 test_z;主線多出的 commit 恰一個首行 `regen: repo-map build (land <stamp>)`(stamp = land.pass 的 stamp)、只動兩支產出物;輸出含合併後過期字樣;閘門沒報索引過期 | 票面 A3 原話
 A4 | integ | 兩條分支各新增 tests/test_a1.py / tests/test_a2.py 且各自 build;前置在拋棄式 worktree 手動 merge 自證衝突只在 code-map/;land 兩條 | rc 0;主線 check rc 0;managed 含兩檔;輸出含合併後過期字樣 | 票面 A4 原話
@@ -172,12 +172,6 @@ class TheBatchFixRebuildsTheIndex(MapMixin, ApplyBase):
     def new_commits(self):
         return self.git("rev-list", "--count", "%s..land/X" % self.batch["land"]).strip()
 
-    def result_round1(self):
-        found = glob.glob(os.path.join(self.repo, "reports", "batch", "*", "result-round1.json"))
-        self.assertEqual(len(found), 1, found)  # pin:一輪 batch 只寫一份 result-round1.json
-        with open(found[0], encoding="utf-8") as handle:
-            return json.load(handle)
-
     def test_a1_a_new_managed_file_is_indexed_in_the_same_batch_commit(self):
         """A1 patch 只新增 tests/test_batch_new.py → 同一個 batch commit 帶新索引、regen 行、批次字樣。"""
         done = self.run_batch(self.make_patch("new.diff", {"tests/test_batch_new.py": PASSING}))
@@ -191,8 +185,6 @@ class TheBatchFixRebuildsTheIndex(MapMixin, ApplyBase):
         self.assertEqual(check.returncode, 0, "整合分支的索引仍過期:" + check.stderr)
         self.assertIn("tests/test_batch_new.py", self.managed(wt))
         self.assertIn(BATCH_REGEN, output)
-        extra = self.result_round1().get("extra_paths") or []
-        self.assertEqual([rel for rel in extra if rel.startswith("code-map/")], [], extra)
 
     def test_a2_an_edit_inside_a_managed_file_adds_no_regen(self):
         """A2 patch 只改 tests/test_kept.py 內文 → 訊息無 regen: 行、那個 commit 只動 tests/test_kept.py。"""
@@ -232,7 +224,7 @@ class LandRebuildsAStaleMergedIndex(MapMixin, LandBase):
 
     def branch_adding(self, ident, name):
         """票 #ident 的分支新增一支已管理的檔,並帶自己 build 過的索引(分支自己 check 綠)。"""
-        branch = self.branch_for(ident, "t%s-map" % ident, allowed_write_paths=["tests/*", "src/*"])
+        branch = self.branch_for(ident, "t%s-map" % ident)
         self.write(name, PASSING, where=branch)
         self.build(branch)
         check = self.map_cmd(branch, "check")
@@ -344,7 +336,7 @@ class LandRebuildsAStaleMergedIndex(MapMixin, LandBase):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "假的 repo-map.py")
         self.git("push", "-q", "origin", "main")
-        branch = self.branch_for(1, "t1-map", allowed_write_paths=["src/*"])
+        branch = self.branch_for(1, "t1-map")
         self.commit_in(branch, "src/b1", "有 commit 的那一張")
         self.approve(1, "t1-map")
         before = self.git("rev-parse", "main").strip()
@@ -360,7 +352,7 @@ class LandRebuildsAStaleMergedIndex(MapMixin, LandBase):
 
     def test_a6_a_fresh_merge_adds_no_regen_commit(self):
         """A6 合併結果 check 綠(分支只新增不受管理的 src/b1)→ 沒有 regen commit、沒有合併後過期字樣。"""
-        branch = self.branch_for(1, "t1-map", allowed_write_paths=["src/*"])
+        branch = self.branch_for(1, "t1-map")
         self.commit_in(branch, "src/b1", "不受管理的檔")
         self.approve(1, "t1-map")
         before = self.git("rev-parse", "main").strip()
@@ -372,7 +364,7 @@ class LandRebuildsAStaleMergedIndex(MapMixin, LandBase):
 
     def test_a6_a_failed_rebuild_is_left_to_the_gate(self):
         """A6 catalog 壞掉(build rc≠0)→ 沒有 regen commit、輸出含「合併後索引重產失敗」、閘門以機械格紅、主線不動。"""
-        branch = self.branch_for(1, "t1-map", allowed_write_paths=["code-map/*"])
+        branch = self.branch_for(1, "t1-map")
         self.write(os.path.join("code-map", "catalog.json"), catalog_text(BROKEN_CATALOG),
                    where=branch)
         self.git("add", "-A", cwd=branch)

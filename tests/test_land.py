@@ -93,8 +93,7 @@ class VerifyFilesMustBeOnTheBranch(LandBase):
 
     def test_a_verify_file_that_is_there_lands_normally(self):
         """守衛要分得開「沒帶進來」與「帶進來了」—— 不然它擋的是所有帶 verify 的票。"""
-        branch = self.branch_for(1, "t1-x", allowed_write_paths=["src/*", "verify/*"],
-                                 verify={
+        branch = self.branch_for(1, "t1-x", verify={
             "files": ["verify/example/test_ticket_1.py"], "tags": ["example"],
             "run": "", "notes": ""})
         self.write("verify/example/test_ticket_1.py",
@@ -105,51 +104,6 @@ class VerifyFilesMustBeOnTheBranch(LandBase):
         self.git("commit", "-q", "-m", "案例跟著進來", cwd=branch)
         self.approve(1, "t1-x")
         done = self.land("t1-x")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-
-
-class ProductTicketsNeedVerifierCases(LandBase):
-
-    def test_a_product_ticket_without_verify_files_is_refused_and_names_the_action(self):
-        branch = self.branch_for(1, "t1-x", in_scope=["demo/app.py"],
-                                 allowed_write_paths=["demo/*"])
-        self.commit_in(branch, "demo/app.py", "產品改動")
-        self.approve(1, "t1-x")
-
-        done = self.land("t1-x")
-
-        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
-        self.assertIn("verify.files 是空的", done.stdout)
-        self.assertIn("派驗證者", done.stdout)
-        self.assertIn("驗證者", self.run_py(
-            "scripts/inbox.py", "show", "1").stdout)
-        self.assertFalse(self.gate_ran(), "拒絕要在全套門禁之前")
-
-    def test_needs_verifier_false_allows_a_product_ticket(self):
-        branch = self.branch_for(1, "t1-x", in_scope=["demo/app.py"],
-                                 allowed_write_paths=["demo/*"],
-                                 needs_verifier=False)
-        self.commit_in(branch, "demo/app.py", "明確不需要驗證者")
-        self.approve(1, "t1-x")
-
-        done = self.land("t1-x")
-
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-
-    def test_control_and_documentation_scopes_do_not_require_verifier_cases(self):
-        branches = []
-        for ident, scope in enumerate(("docs/guide.md", "board/config.json",
-                                       "scripts/control/tool.sh"), 1):
-            name = "t%s-x" % ident
-            branch = self.branch_for(ident, name, in_scope=[scope],
-                                     allowed_write_paths=[scope])
-            self.commit_in(branch, scope, "非產品範圍 %s" % ident)
-            branches.append(name)
-        for ident, branch in enumerate(branches, 1):
-            self.approve(ident, branch)
-
-        done = self.land(*branches)
-
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
 
@@ -227,14 +181,12 @@ class AutoFixHook(LandBase):
         return pages
 
     def batch_of_two(self, first=None, second=None):
-        """票 1 動 src/a、票 2 動 src/b,各自的 allowed 只有自己那一個檔;verify_strings + baseline 照 `CLOSABLE`,綠了關得掉。"""
+        """票 1 動 src/a、票 2 動 src/b;verify_strings + baseline 照 `CLOSABLE`,綠了關得掉。"""
         one = self.branch_for(1, "t1-a", **dict({
-            "allowed_write_paths": ["src/a"],
             "verify_strings": [{"path": "src/a", "contains": "第一張"}],
             "verify": dict(CLOSABLE["verify"])}, **(first or {})))
         self.commit_in(one, "src/a", "第一張")
         two = self.branch_for(2, "t2-b", **dict({
-            "allowed_write_paths": ["src/b"],
             "verify_strings": [{"path": "src/b", "contains": "第二張"}],
             "verify": dict(CLOSABLE["verify"])}, **(second or {})))
         self.commit_in(two, "src/b", "第二張")
@@ -335,26 +287,26 @@ class AutoFixHook(LandBase):
             self.assertIn("depth=1", line)
         self.assertEqual(self.load_ticket(2)["state"], "Ready", "踢出的票不改 state")
 
-    def test_three_reds_kick_the_ticket_whose_allowed_paths_the_red_file_hits(self):
-        """B2:連紅 rounds+1 次、紅榜檔只命中票 2 的 allowed_write_paths → 踢 2、自動重 land t1-a。
+    def test_three_reds_kick_the_ticket_the_red_file_hits(self):
+        """B2:連紅 rounds+1 次、紅榜檔只命中票 2(分支改動檔)→ 踢 2、自動重 land t1-a。
 
         **變異 ①**:rounds 寫死 1 → 第二次紅就踢,auto-fix 只 1 次 → 這一條紅。"""
         self.assert_ticket_two_was_kicked(self.kicked_land())
 
     def test_a_red_file_named_only_in_verify_files_kicks_that_ticket(self):
-        """B2 子情境:檔只在票 2 的 verify.files(主線上就有、不在分支改動、不在 allowed)。
+        """B2 子情境:檔只在票 2 的 verify.files(主線上就有、不在分支改動)。
 
-        **變異 ②**:踢人只比 allowed_write_paths → 對不到 → 這一條紅。"""
+        **變異 ②**:踢人不比 verify.files → 對不到 → 這一條紅。"""
         case = "verify/example/test_example.py"
         self.assert_ticket_two_was_kicked(self.kicked_land(
             second={"verify": {"files": [case], "tags": ["example"], "run": "", "notes": ""}},
             fail=case))
 
     def test_a_red_file_only_changed_on_the_branch_kicks_that_ticket(self):
-        """B2 子情境:檔只在票 2 的分支改動裡(不在 allowed、不在 verify.files)。"""
+        """B2 子情境:檔只在票 2 的分支改動裡(不在 verify.files)。"""
         self.batch_of_two()
         two = os.path.join(self.home, "wt", "t2-b")
-        self.commit_in(two, "lib/b2", "allowed 外的改動")
+        self.commit_in(two, "lib/b2", "另一個檔的改動")
         self.approve(2, "t2-b")
         self.put("gate-fail", "lib/b2")
         self.assert_ticket_two_was_kicked(self.land("t1-a", "t2-b"))
@@ -364,11 +316,11 @@ class AutoFixHook(LandBase):
         三張一批:先踢 2,重 land t1-a t3-c 時紅榜換成只命中票 3 —— 第二層要是會踢就會踢 3。
 
         **變異 ④**:重 land 不帶 AC_LAND_DEPTH → 這一條紅。"""
-        one = self.branch_for(1, "t1-a", allowed_write_paths=["src/a"])
+        one = self.branch_for(1, "t1-a")
         self.commit_in(one, "src/a", "第一張")
-        two = self.branch_for(2, "t2-b", allowed_write_paths=["src/b"])
+        two = self.branch_for(2, "t2-b")
         self.commit_in(two, "src/b", "第二張")
-        three = self.branch_for(3, "t3-c", allowed_write_paths=["src/c"])
+        three = self.branch_for(3, "t3-c")
         self.commit_in(three, "src/c", "第三張")
         for ident, branch in ((1, "t1-a"), (2, "t2-b"), (3, "t3-c")):
             self.approve(ident, branch)
@@ -411,10 +363,10 @@ class AutoFixHook(LandBase):
         self.assert_nobody_is_kicked(self.kicked_land(fail="src/zzz"))
 
     def test_a_red_file_that_hits_every_ticket_kicks_nobody(self):
-        """B3:紅榜對到全部票 → 同上。"""
-        self.assert_nobody_is_kicked(self.kicked_land(
-            first={"allowed_write_paths": ["src/a", "src/shared"]},
-            second={"allowed_write_paths": ["src/b", "src/shared"]}, fail="src/shared"))
+        """B3:紅榜對到全部票(兩張的 verify.files 都有那個檔)→ 同上。"""
+        case = "verify/example/test_example.py"
+        plan = {"verify": {"files": [case], "tags": ["example"], "run": "", "notes": ""}}
+        self.assert_nobody_is_kicked(self.kicked_land(first=plan, second=plan, fail=case))
 
     def test_no_auto_fix_on_a_batch_stops_like_before(self):
         """B4:--no-auto-fix → 紅就停、每張一頁 decision、不派。"""
@@ -470,7 +422,7 @@ class AutoFlakeOnLand(LandBase):
     gate_stub = None
 
     def test_a_single_ticket_land_auto_passes_a_confirmed_flake(self):
-        branch = self.branch_for(1, "t1-flake", allowed_write_paths=["tests/*"])
+        branch = self.branch_for(1, "t1-flake")
         marker = repr(os.path.join(self.home, "land-flake"))
         self.write("tests/test_one_time_flake.py",
                    "import os\nimport unittest\n\n\nclass T(unittest.TestCase):\n"
@@ -629,96 +581,18 @@ class TicketChecks(LandBase):
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("沒有 base_sha", done.stdout)
 
-    def handin(self, reasons, run_id="20261018-100000-1", rnd=1):
-        """apply 收件寫下的那一份 result(`extra_paths` / `extra_reasons`)—— land 讀各輪併起來的。"""
-        self.write(os.path.join("reports", "t1", run_id, "result-round%d.json" % rnd),
-                   json.dumps({"present": True, "extra_paths": sorted(reasons),
-                               "extra_reasons": reasons}, ensure_ascii=False))
-
-    def wide_branch(self, **fields):
-        branch = self.branch_for(1, "t1-wide", allowed_write_paths=["src/*"],
-                                 out_of_scope=["docs/*"], **fields)
-        self.commit_in(branch, "src/inside.py", "範圍內")
-        self.commit_in(branch, "docs/outside.md", "out_of_scope 命中")
-        self.commit_in(branch, "lib/extra.py", "提示範圍外但沒命中 out_of_scope")
-        return branch
-
-    def test_writing_into_out_of_scope_is_refused_and_the_files_are_named(self):
-        """#101 A5(D-050 ①):out_of_scope 從硬擋改成「列出 + 要理由」—— 命中的檔在各輪
-        收件併起來的 extra_reasons 裡沒有理由(沒有那份、null、空字串)→ 拒絕,訊息含「out_of_scope
-        命中缺理由」並點名檔與 glob;只是提示範圍外的檔不點名成拒絕。
-        四問:量 rc 2、那一行、主線不動、閘門沒跑;紅 = land 照落;期望值 = 夾具的 out_of_scope
-        與 handin 理由;不測 = 有理由那一條(下一條)。
-        **變異 M6**:land 對缺理由的 out_of_scope 命中照落(R 那一段的 STOP 拿掉)→ 這一條紅。
-        **變異 M4**:把 null 當成已有理由(`str(reasons.get(name) or "")` 改成 `str(reasons.get(name))`)
-        → null 那一格紅。"""
-        self.wide_branch()
-        before = self.main_log()
-        for name, reasons in (("沒有收件", None),
-                              ("null", {"docs/outside.md": None, "lib/extra.py": "x"}),
-                              ("空字串", {"docs/outside.md": "  ", "lib/extra.py": "x"})):
-            with self.subTest(name):
-                if reasons is not None:
-                    self.handin(reasons, run_id="20261018-10000%d-1" % len(name))
-                done = self.land("t1-wide")
-                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-                self.assertIn("out_of_scope 命中缺理由", done.stdout)
-                self.assertIn("land:   docs/outside.md —— 命中票的 out_of_scope(`docs/*`)",
-                              done.stdout)
-                part = done.stdout.split("out_of_scope 命中缺理由")[-1]
-                self.assertNotIn("src/inside.py", part)
-                self.assertNotIn("lib/extra.py", part, "提示範圍外只記錄不擋")
-                self.assertEqual(self.main_log(), before)
-                self.assertFalse(self.gate_ran())
-
-    def test_an_out_of_scope_hit_with_a_reason_lands(self):
-        """#101 A1 / A5:命中 out_of_scope 而收件有理由 → 照落;只是提示範圍外又沒理由 → 警告、不擋。
-        四問:量 rc 0、檔在主線、警告那一行;紅 = 照舊硬擋或缺理由的警告變成拒絕;期望值 =
-        夾具的 handin 理由;不測 = 覆核者怎麼判理由。
-        **變異 M5**:land 對有理由的 out_of_scope 命中照舊拒絕(`continue` 前不看 reasons)→ 這一條紅。"""
-        self.wide_branch()
-        self.handin({"docs/outside.md": "說明 A1 的行為要寫在這份", "lib/extra.py": None})
-        self.approve(1, "t1-wide")
-        done = self.land("t1-wide")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("docs/outside.md", self.git("ls-tree", "-r", "--name-only", "main"))
-        lines = done.stdout.splitlines()
-        at = [i for i, line in enumerate(lines) if "提示範圍外、沒寫理由" in line]
-        self.assertEqual(len(at), 1, done.stdout)
-        self.assertEqual(lines[at[0] + 1], "land:   lib/extra.py")
-        self.assertNotIn("land:   docs/outside.md", done.stdout, "有理由的命中不再點名")
-        self.assertNotIn("命中缺理由", done.stdout)
-
-    def test_a_reason_given_in_round_one_survives_a_repair_round(self):
-        """#101 A5 覆核反駁:apply 每輪只量這一輪的增量 —— 第 1 輪改了 out_of_scope 的檔、寫了理由,
-        第 2 輪修紅沒再碰它(extra_paths 空、extra_reasons 空),land 要看各輪併起來的理由照落。
-        四問:量 rc 0、檔在主線、沒有「命中缺理由」;紅 = 只讀最近一份收件;期望值 = 夾具兩輪的
-        handin;不測 = 第 2 輪的 null 會不會抹掉第 1 輪(下一段 subTest 量)。
-        **變異**:`handin_reasons` 只回最近一份的 extra_reasons → 這一條紅。"""
-        self.wide_branch()
-        self.handin({"docs/outside.md": "說明 A1 的行為要寫在這份", "lib/extra.py": None})
-        self.handin({}, rnd=2)
-        self.handin({"docs/outside.md": None}, rnd=3)
-        self.approve(1, "t1-wide")
-        done = self.land("t1-wide")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertNotIn("命中缺理由", done.stdout)
-        self.assertIn("docs/outside.md", self.git("ls-tree", "-r", "--name-only", "main"))
-
     def hard_block(self, paths=(), patterns=()):
         conf = json.loads(self.read("board/config.json"))
         conf["hard_block"] = {"paths": list(paths), "dirs": [], "patterns": list(patterns)}
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
 
-    def test_writing_into_hard_block_paths_is_refused_whatever_the_reason(self):
-        """#101 A1:hard_block.paths 仍硬擋 —— 收件的理由與 info_homes 都救不了,點名檔與格。
-        四問:量 rc 2、點名、主線不動;紅 = 理由抵掉硬擋;期望值 = 測試寫進 config 的 hard_block.paths。
-        **變異 M1**:write_scope 不看 hard_block.paths → 這一條紅。"""
+    def test_writing_into_hard_block_paths_is_refused_and_named(self):
+        """#101 A1:hard_block.paths 硬擋,點名檔與格。
+        四問:量 rc 2、點名、主線不動;紅 = land 照落;期望值 = 測試寫進 config 的 hard_block.paths。
+        **變異 M1**:hard_block_hits 不看 hard_block.paths → 這一條紅。"""
         self.hard_block(paths=["secrets/*"])
-        branch = self.branch_for(1, "t1-wide", allowed_write_paths=["src/*", "secrets/*"],
-                                 info_homes=[{"what": "金鑰", "home": "secrets/k"}])
+        branch = self.branch_for(1, "t1-wide")
         self.commit_in(branch, "secrets/k", "動了金鑰")
-        self.handin({"secrets/k": "理由寫得再好也一樣"})
         self.approve(1, "t1-wide")
         before = self.main_log()
         done = self.land("t1-wide")
@@ -733,7 +607,7 @@ class TicketChecks(LandBase):
         字面拆開寫:這份測試檔自己的新增行也會被 A 的 patterns 查。
         **變異**:land 不把分支的新增行交給硬擋 → 這一條紅。"""
         self.hard_block(patterns=[r"os\.kill"])
-        branch = self.branch_for(1, "t1-wide", allowed_write_paths=["src/*", "tests/*"])
+        branch = self.branch_for(1, "t1-wide")
         self.commit_in(branch, "tests/test_k.py", "os." + "kill(pid, 9)")
         self.approve(1, "t1-wide")
         before = self.main_log()
@@ -748,25 +622,12 @@ class TicketChecks(LandBase):
         """patterns 只查 tests/** 與 verify/** 的新增行(scripts 自己合法用 kill)。
         **變異 M2**:patterns 對 scripts/** 也查 → 這一條紅。"""
         self.hard_block(patterns=[r"os\.kill"])
-        branch = self.branch_for(1, "t1-wide", allowed_write_paths=["src/*", "scripts/*"])
+        branch = self.branch_for(1, "t1-wide")
         self.commit_in(branch, "scripts/k.py", "os." + "kill(pid, 9)")
         self.approve(1, "t1-wide")
         done = self.land("t1-wide")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("scripts/k.py", self.git("ls-tree", "-r", "--name-only", "main"))
-
-    def test_writing_outside_allowed_write_paths_alone_lands(self):
-        """白名單外的檔 apply 放過、覆核者看過 —— land 照舊擋的話,這條路永遠走不完。
-
-        **變異**:land 退回「不在 allowed_write_paths 就擋」→ 這一條紅。
-        """
-        branch = self.branch_for(1, "t1-wide", allowed_write_paths=["src/*"])
-        self.commit_in(branch, "src/inside.py", "範圍內")
-        self.commit_in(branch, "lib/extra.py", "白名單外")
-        self.approve(1, "t1-wide")
-        done = self.land("t1-wide")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("lib/extra.py", self.git("ls-tree", "-r", "--name-only", "main"))
 
 
 class TheDocsChannel(LandBase):
@@ -1519,7 +1380,7 @@ exit 0
 class LandTriesToClose(LandBase):
     """#43 A1/A2/A4:push 成功後 land 試 `ticket.py close <n> --landed <sha>`。
 
-    關不掉的四種各一條、同一組斷言:票不是 Done、沒有 ticket.closed、stdout 仍
+    關不掉的三種各一條、同一組斷言:票不是 Done、沒有 ticket.closed、stdout 仍
     「已合併、尚未關票」、rc 不變(0)、inbox 那頁 what 含 **ticket.py 印的原文**。
     期望的理由字串取自 `scripts/ticket.py` 既有的訊息(done_blockers / cmd_close),
     不從 land.sh 反推。
@@ -1596,11 +1457,19 @@ class LandTriesToClose(LandBase):
         self.assertIn("已合併、已關票", done.stdout)
         self.assertEqual(self.load_ticket("1")["state"], "Done", done.stdout)
 
-    # ------------------------------------------------------------ A2 四種
+    def test_no_verify_strings_closes_on_the_landed_sha(self):
+        """#137 (b):沒有 verify_strings 的票,`close --landed` 蓋的 landed_sha 在主線上 → 關得掉。
 
-    def test_no_verify_strings_only_a_weak_check_is_not_closed(self):
+        **變異**:verify() 沒有 verify_strings 就回 False(舊的弱檢查拒絕)→ 這一條紅。"""
         self.ready(verify=CLOSABLE["verify"])
-        self.assert_landed_but_not_closed(self.land("t1-good"), "只做得了弱檢查")
+        done = self.land("t1-good")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("已合併、已關票", done.stdout)
+        ticket = self.load_ticket("1")
+        self.assertEqual(ticket["state"], "Done", done.stdout)
+        self.assertEqual(ticket["landed_sha"], self.git("rev-parse", "main").strip())
+
+    # ------------------------------------------------------------ A2 三種
 
     def test_a_review_that_turns_to_fail_during_the_gate_is_not_closed(self):
         """走得到 close 的 review 缺格是**閘門跑的時候覆核被改成不通過**。只有 complex 的票
@@ -1767,7 +1636,7 @@ class TheMergedCodeMapIsRebuilt(LandBase):
 
     def branch_adding(self, ident, name, rebuild=True):
         """票 #ident 的分支新增一支已管理的檔,並帶自己 build 過的索引(分支自己 check 綠)。"""
-        branch = self.branch_for(ident, "t%s-map" % ident, allowed_write_paths=["tests/*"])
+        branch = self.branch_for(ident, "t%s-map" % ident)
         self.write(name, MAP_TEST, where=branch)
         if rebuild:
             self.build(branch)
@@ -1898,7 +1767,7 @@ class TheMergedCodeMapIsRebuilt(LandBase):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "假的 repo-map.py:check 一律過期、build 多寫一支檔")
         self.git("push", "-q", "origin", "main")
-        branch = self.branch_for(1, "t1-map", allowed_write_paths=["src/*"])
+        branch = self.branch_for(1, "t1-map")
         self.commit_in(branch, "src/b1", "有 commit 的那一張")
         self.approve(1, "t1-map")
         before = self.git("rev-parse", "main").strip()
@@ -1919,7 +1788,7 @@ class TheMergedCodeMapIsRebuilt(LandBase):
     def test_a6_a_fresh_merge_adds_no_regen_commit(self):
         """A6 前半。四問:量沒有 regen commit、沒有字樣;紅 = 不先 check、每次都重產;
         期望值 = 分支只新增一支不受管理的 src/ 檔。"""
-        branch = self.branch_for(1, "t1-map", allowed_write_paths=["src/*"])
+        branch = self.branch_for(1, "t1-map")
         self.commit_in(branch, "src/b1", "不受管理的檔")
         self.approve(1, "t1-map")
         before = self.git("rev-parse", "main").strip()
@@ -1935,7 +1804,7 @@ class TheMergedCodeMapIsRebuilt(LandBase):
         期望值 = 票面字樣「合併後索引重產失敗」與閘門的「code-map 索引過期」。"""
         broken = dict(MAP_CATALOG, topics=dict(MAP_CATALOG["topics"], ghost={
             "summary": "指到不存在的檔", "match": ["ghost"], "entry": "scripts/ghost.py"}))
-        branch = self.branch_for(1, "t1-map", allowed_write_paths=["code-map/*"])
+        branch = self.branch_for(1, "t1-map")
         self.write(os.path.join("code-map", "catalog.json"),
                    json.dumps(broken, ensure_ascii=False, indent=2) + "\n", where=branch)
         self.git("add", "-A", cwd=branch)

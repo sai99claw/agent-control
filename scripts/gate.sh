@@ -448,13 +448,9 @@ for tag in tags:
     if tag not in registered:
         errors.append("tags: %r 未登記(登記在 verify/TAGS.md 或 verify/TAGS.d/)" % tag)
 
-# 寫入範圍(D-H38 ①、D-050 ①):提示範圍外與命中 `out_of_scope` 都不擋(列出來,覆核者逐檔看、
-# land 查理由),只擋 `hard_block`(`paths` 比檔名、`patterns` 比 tests/** verify/** 的新增行)。
-for name, field, pattern in ticket_mod.write_scope(ticket, root, changed, added)[0]:
+# 硬擋(D-054 Q2):只擋 `hard_block`(`paths` 比檔名、`patterns` 比 tests/** verify/** 的新增行)。
+for name, field, pattern in ticket_mod.hard_block_hits(root, changed, added):
     errors.append("%s:%s 命中 `%s`" % (field, name, pattern))
-for name, (field, pattern) in ticket_mod.out_of_scope_hits([ticket], changed).items():
-    print("gate: %s 命中%s(`%s`)—— 建議範圍,不擋;EVIDENCE「提示清單外的改動」要逐檔寫理由,"
-          "缺理由 land 拒絕" % (name, field, pattern), file=sys.stderr)
 
 if errors:
     with open(mech_log, "a", encoding="utf-8") as handle:
@@ -821,14 +817,9 @@ regression() {   # $1 = ticket|full;設定 VRC
 # 票的 `verify.files` + 「這張票到底需不需要驗證者案例」。**一趟問完**:這幾件事住在
 # 同一張票裡,分三次起直譯器換不到任何新的資訊。
 #
-# 第一行是**為什麼不需要**(`waiver` / `needs-verifier-false` / `no-product`,都不是就
+# 第一行是**為什麼不需要**(`waiver` / `needs-verifier-false` / `undeclared`,都不是就
 # `required`)、第二行是票的 `base_sha`、其餘每行一個案例檔。讀不到票就**非零**
 # (同 preflight:沒有票檔的呼叫照舊,不要憑空長出一個缺口)。
-#
-# 「需不需要」那一格的判準**與 `land.sh` 的 `VERIFIER_PY` 同一份**(#8 / #587):
-# `needs_verifier is not False` 且 `in_scope` 含產品碼(不在 `docs/` / `board/` /
-# `scripts/control/` 這幾個前綴底下)才要求案例。兩支各自寫一份的那一刻,同一張票在
-# 閘門是缺口、在落地是放行 —— 而兩份規則都看起來像規格(D-018)。
 #
 # **verify_plan 與 candidate_reds 走同一條路**(#40):`ticketlib.load`,票的根由
 # `event.repo_root()`(`AC_ROOT` 蓋得掉)決定。以前這裡拿 `$ROOT` 拼票檔路徑,閘門在

@@ -164,9 +164,9 @@ class TheMainLineStartsTheConsolidators(Sandbox):
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(self.STUB % self.calls)
         self.make_ticket(7, role="consolidator", state="Ready",
-                         allowed_write_paths=["memory/model/opus.md"])
+                         memory_file="memory/model/opus.md")
         self.make_ticket(8, role="consolidator", state="Ready",
-                         allowed_write_paths=["memory/model/fable.md"],
+                         memory_file="memory/model/fable.md",
                          lease={"holder": "someone", "until": "2999-01-01T00:00:00+08:00"})
         self.make_ticket(9, role="worker", state="Ready")
 

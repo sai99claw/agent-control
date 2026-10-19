@@ -19,7 +19,6 @@ from test_no_project_names import ABSOLUTE_HOME  # noqa: E402
 MIN = ("--subject", "land 對 0 commit 整批拒絕",
        "--objective", "任一支 0 commit 時 land 秒退並點名",
        "--acceptance", "0 commit → rc!=0 且輸出含分支名",
-       "--allowed-write-path", "scripts/land.sh",
        "--role", "worker", "--model", "opus", "--tool", "claude-code")
 
 
@@ -34,7 +33,6 @@ class Create(Sandbox):
         row = self.load_ticket("1")
         self.assertEqual(row["state"], "Draft")
         self.assertEqual(row["state_version"], 1)
-        self.assertEqual(row["allowed_write_paths"], ["scripts/land.sh"])
         self.assertIn("ticket.created", self.kinds())
 
     def test_the_base_sha_is_filled_in_from_main_when_it_is_not_given(self):
@@ -55,34 +53,10 @@ class Create(Sandbox):
         self.assertIn("空的", done.stderr)
         self.assertFalse(self.exists("tickets/1.json"), "沒開成的票不該留下檔案")
 
-    def test_a_ticket_without_allowed_write_paths_is_refused(self):
-        args = [a for a in MIN]
-        at = args.index("--allowed-write-path")
-        del args[at:at + 2]
-        done = self.ticket("create", *args)
-        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        self.assertIn("allowed_write_paths", done.stderr)
-
-    def test_in_scope_becomes_the_default_allowed_write_paths(self):
-        args = [a for a in MIN]
-        at = args.index("--allowed-write-path")
-        del args[at:at + 2]
-        done = self.ticket("create", *args, "--in-scope", "scripts/a.py",
-                           "--in-scope", "docs/b.md")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.load_ticket("1")["allowed_write_paths"],
-                         ["scripts/a.py", "docs/b.md", "tests/*"])
-
-    def test_explicit_allowed_write_paths_override_the_in_scope_default(self):
-        done = self.ticket("create", *MIN, "--in-scope", "docs/b.md")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.load_ticket("1")["allowed_write_paths"],
-                         ["scripts/land.sh"])
-
     def test_it_can_be_asked_one_field_at_a_time(self):
         answers = "\n".join([
             "互動開的票", "把每一格問出來",
-            "驗收一", "", "src/a.py", "", "src/b.py", "", "src/*", "",
+            "驗收一", "",
             "3", "",
             "worker", "opus", "claude-code"]) + "\n"
         done = self.ticket("create", stdin=answers)
@@ -118,22 +92,20 @@ class Help(Sandbox):
                           verb + " 的範例不是這個子指令的")
 
     def test_create_help_shows_how_to_give_the_repeated_flags(self):
-        """`acceptance` 與 `allowed_write_paths` 是多值的,而**多值怎麼給**正是猜不
-        出來的那一格(猜出來的是複數形旗標)。"""
+        """`acceptance` 是多值的,而**多值怎麼給**正是猜不出來的那一格(猜出來的是
+        複數形旗標)。"""
         done = self.ticket("create", "--help")
-        self.assertIn("--allowed-write-path", done.stdout)
         self.assertIn("--acceptance", done.stdout)
         self.assertIn("[可重複]", done.stdout)
         example = done.stdout.split("例:\n", 1)[1]
         self.assertEqual(example.count("--acceptance "), 2,
                          "範例要真的示範同一個旗標給兩次")
-        self.assertEqual(example.count("--allowed-write-path "), 2)
 
     def test_the_example_in_create_help_really_opens_a_ticket(self):
         """一個貼上去開不了票的範例,跟沒有範例一樣 —— 而它讀起來像是對的。
         所以這一條**照著 `--help` 印的那段字真的跑一次**,不是抄一份在測試裡。
 
-        **變異**:把範例裡的 `--allowed-write-path` 改成複數 → 這一條紅。
+        **變異**:把範例裡的 `--acceptance` 改成複數 → 這一條紅。
         """
         import shlex
         printed = self.ticket("create", "--help").stdout
@@ -144,14 +116,12 @@ class Help(Sandbox):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         row = self.load_ticket("1")
         self.assertEqual(len(row["acceptance"]), 2)
-        self.assertEqual(len(row["allowed_write_paths"]), 2)
 
     def test_only_the_flags_you_really_cannot_omit_are_marked_required(self):
         """標 [必填] 的判準是「不給就開不出票」,不是「schema 有這一格」。這一條
         照著那個標記只給必填的那幾個,票要真的開得出來。"""
         done = self.ticket("create", "--subject", "只給必填的", "--objective", "看它開不開得出來",
-                           "--acceptance", "一條會紅的斷言", "--allowed-write-path", "src/*",
-                           "--model", "opus")
+                           "--acceptance", "一條會紅的斷言", "--model", "opus")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         row = self.load_ticket("1")
         self.assertEqual(row["state"], "Draft")
@@ -164,9 +134,9 @@ class Help(Sandbox):
 
         **變異**:把 `unknown_flag()` 裡列出名單那一行拿掉 → 這一條紅。
         """
-        done = self.ticket("create", "--allowed-write-paths", "scripts/land.sh")
+        done = self.ticket("create", "--decision-refs", "D-001")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        self.assertIn("--allowed-write-path", done.stderr, "沒有列出對的那一個")
+        self.assertIn("--decision-ref", done.stderr, "沒有列出對的那一個")
         self.assertIn("--acceptance", done.stderr)
         self.assertIn("--help", done.stderr, "沒有說下一步去哪看")
         self.assertFalse(self.exists("tickets/1.json"))
@@ -299,17 +269,16 @@ class Set(Sandbox):
         self.assertEqual(self.ticket("set", "1", "state", "Running").returncode, 0)
         self.assertEqual(self.load_ticket("1")["state_version"], 2)
         self.assertEqual(self.ticket(
-            "set", "1", "allowed_write_paths", '["src/*", "tests/*"]').returncode, 0)
+            "set", "1", "decision_refs", '["D-001", "D-014"]').returncode, 0)
         row = self.load_ticket("1")
         self.assertEqual(row["state_version"], 3)
-        self.assertEqual(row["allowed_write_paths"], ["src/*", "tests/*"])
+        self.assertEqual(row["decision_refs"], ["D-001", "D-014"])
         self.assertEqual(self.kinds().count("ticket.state"), 2)
 
     def test_a_list_field_given_one_word_becomes_a_one_element_list(self):
-        """字串形狀的 `allowed_write_paths` 會讓落地的 glob 比對逐字元跑過去,
-        而它不會出聲。"""
-        self.ticket("set", "1", "allowed_write_paths", "src/only.py")
-        self.assertEqual(self.load_ticket("1")["allowed_write_paths"], ["src/only.py"])
+        """字串形狀的 list 欄位會讓逐條讀它的人逐字元跑過去,而它不會出聲。"""
+        self.ticket("set", "1", "decision_refs", "D-001")
+        self.assertEqual(self.load_ticket("1")["decision_refs"], ["D-001"])
 
     def test_an_unknown_state_is_refused_and_nothing_moves(self):
         done = self.ticket("set", "1", "state", "Finished")
@@ -357,7 +326,7 @@ class VerifyPlan(Sandbox):
     def test_the_verifier_flags_write_into_the_nested_verify_field(self):
         done = self.ticket(
             "create", "--subject", "驗證者交件", "--objective", "案例進回歸層",
-            "--acceptance", "乾淨主線上紅", "--allowed-write-path", "verify/*",
+            "--acceptance", "乾淨主線上紅",
             "--role", "verifier", "--model", "sonnet", "--tool", "codex",
             "--verify-file", "verify/nav/test_ticket_7.py",
             "--verify-tag", "nav-size", "--verify-tag", "report",
@@ -374,14 +343,13 @@ class VerifyPlan(Sandbox):
         """空著是誠實的「還沒有人寫案例」 —— **不是沒有這一格**。缺了整格的票,
         下游分不出「這張票不用驗」與「沒人寫」。"""
         self.ticket("create", "--subject", "s", "--objective", "o",
-                    "--acceptance", "a", "--allowed-write-path", "src/*",
+                    "--acceptance", "a",
                     "--role", "worker", "--model", "opus", "--tool", "claude-code")
         self.assertEqual(self.load_ticket("1")["verify"],
                          {"files": [], "tags": [], "run": "", "notes": ""})
 
     def test_verify_prints_the_plan_so_the_next_person_can_run_it(self):
-        self.make_ticket(1, allowed_write_paths=["src/*"],
-                         verify_strings=["src/nav.py:def size_nav"],
+        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"],
                          verify={"files": ["verify/nav/test_ticket_1.py"],
                                  "tags": ["nav-size"],
                                  "run": "python3 scripts/verify.py --tag nav-size",
@@ -393,7 +361,7 @@ class VerifyPlan(Sandbox):
     def test_a_ticket_nobody_wrote_cases_for_says_so_instead_of_printing_blanks(self):
         """**變異**:把 `print_verify_plan` 的那一句「還沒有人寫」改成 `return`
         → 這一條紅。空白的輸出裡,「沒人寫」與「寫好了」長得一樣。"""
-        self.make_ticket(1, allowed_write_paths=["src/*"])
+        self.make_ticket(1)
         done = self.ticket("verify", "1")
         self.assertIn("還沒有人寫", done.stdout)
 
@@ -409,8 +377,7 @@ class VerifyAndClose(Sandbox):
 
     def test_a_string_that_is_really_on_main_verifies(self):
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.make_ticket(1, allowed_write_paths=["src/*"],
-                         verify_strings=["src/nav.py:def size_nav"])
+        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"])
         done = self.ticket("verify", "1")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("在主線上", done.stdout)
@@ -418,15 +385,13 @@ class VerifyAndClose(Sandbox):
 
     def test_a_string_that_never_reached_main_does_not_verify(self):
         """**變異**:把 `verify` 的 `hits > 0` 改成 `hits >= 0` → 這一條紅。"""
-        self.make_ticket(1, allowed_write_paths=["src/*"],
-                         verify_strings=["src/nav.py:def size_nav"])
+        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"])
         done = self.ticket("verify", "1")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("**不在主線上**", done.stdout)
 
     def test_close_refuses_when_nothing_of_the_ticket_is_on_main(self):
-        self.make_ticket(1, allowed_write_paths=["src/*"],
-                         verify_strings=["src/nav.py:def size_nav"])
+        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"])
         done = self.ticket("close", "1")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("exit code 0 不等於 Done", done.stdout)
@@ -439,8 +404,7 @@ class VerifyAndClose(Sandbox):
         `close` 與 `set state Done` 共用同一份必要條件(D-014)—— 舊版兩條路各走各
         的,弱的那一條沒有人記得。
         """
-        fields = {"allowed_write_paths": ["src/*"],
-                  "verify_strings": ["src/nav.py:def size_nav"],
+        fields = {"verify_strings": ["src/nav.py:def size_nav"],
                   "test_evidence": [{"cmd": "gate --branch", "rc": 0}]}
         fields.update(extra)
         self.make_ticket(1, **fields)
@@ -467,8 +431,7 @@ class VerifyAndClose(Sandbox):
         `close` 也不問(2026-09-21 外部審查)。#136 起只問 complex 的票。
         """
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.make_ticket(1, allowed_write_paths=["src/*"],
-                         verify_strings=["src/nav.py:def size_nav"],
+        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"],
                          test_evidence=[{"cmd": "gate", "rc": 0}], complexity="complex")
         done = self.ticket("close", "1")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
@@ -486,8 +449,7 @@ class VerifyAndClose(Sandbox):
         for verb, fields in (("close", {"complexity": "simple"}), ("close", {}),
                              ("set", {"complexity": "simple"}), ("set", {})):
             with self.subTest(verb=verb, complexity=fields.get("complexity", "沒標")):
-                self.make_ticket(1, allowed_write_paths=["src/*"],
-                                 verify_strings=["src/nav.py:def size_nav"],
+                self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"],
                                  test_evidence=[{"cmd": "gate", "rc": 0}], **fields)
                 args = ("close", "1") if verb == "close" else ("set", "1", "state", "Done")
                 done = self.ticket(*args)
@@ -539,7 +501,7 @@ class VerifyAndClose(Sandbox):
 
         舊版 `set state Done` 只檢查狀態名對不對 —— Done 的契約有一條旁路。
         """
-        self.make_ticket(1, allowed_write_paths=["src/*"])
+        self.make_ticket(1)
         done = self.ticket("set", "1", "state", "Done")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("進不了 Done", done.stdout)
@@ -577,18 +539,56 @@ class VerifyAndClose(Sandbox):
         self.assertEqual(row["owner"], "main")
         self.assertIn("ticket.attempt.failed", self.kinds())
 
-    def test_without_verify_strings_it_falls_back_and_says_the_check_is_weak(self):
+    def test_without_verify_strings_close_landed_stamps_the_sha_and_verify_reads_it(self):
+        """#137 ②:沒有 verify_strings 的票,`verify` 看 `close --landed` 蓋進票的 sha 在不在
+        主線歷史裡。四問:量 close / verify 的 rc、票上的 landed_sha 與 state;紅 = 回退仍看
+        票的範圍欄(新票沒那格 → 「不在主線上」rc=1);期望值 = 本票 objective (b)。
+
+        **變異 M2**:`verify` 的回退改回比 base_sha..main 改動檔與範圍欄 → 這一條紅。"""
+        self.land_a_file("src/nav.py", "x = 1\n")
+        sha = self.git("rev-parse", "main").strip()
+        self.make_ticket(1, test_evidence=[{"cmd": "gate", "rc": 0}])
+        done = self.ticket("close", "1", "--landed", sha)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        self.assertEqual(row["landed_sha"], sha)
+        self.assertEqual(row["state"], "Done")
+        again = self.ticket("verify", "1")
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn("在主線上", again.stdout)
+
+    def test_without_verify_strings_or_a_landed_sha_it_is_not_on_main(self):
+        """改動檔都在主線上了也不算:沒有 verify_strings、沒蓋過 landed_sha 的票說不出
+        「哪一個 commit 是它」。close 不關、票不動。"""
         base = self.git("rev-parse", "main").strip()
         self.land_a_file("src/nav.py", "x = 1\n")
-        self.make_ticket(1, base_sha=base, allowed_write_paths=["src/*"])
+        self.make_ticket(1, base_sha=base, test_evidence=[{"cmd": "gate", "rc": 0}])
+        done = self.ticket("verify", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("landed_sha", done.stdout)
+        self.assertIn("**不在主線上**", done.stdout)
+        closed = self.ticket("close", "1")
+        self.assertEqual(closed.returncode, 1, closed.stdout + closed.stderr)
+        self.assertEqual(self.load_ticket("1")["state"], "Ready")
+
+    def test_a_landed_sha_that_is_not_in_main_history_does_not_verify(self):
+        """蓋進票的 sha 不是主線的祖先(只在側分支上)→ 不在主線上。"""
+        path = self.worktree("t1-side")
+        self.commit_in(path, "src/side.py", "side = 1")
+        side = self.git("rev-parse", "t1-side").strip()
+        self.make_ticket(1, landed_sha=side)
+        done = self.ticket("verify", "1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("不是 main 的祖先", done.stdout)
+
+    def test_a_bare_needle_is_looked_for_across_the_main_tree(self):
+        self.land_a_file("src/a.py", "SENTINEL = 1\n")
+        self.make_ticket(1, verify_strings=["SENTINEL"])
         done = self.ticket("verify", "1")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("弱檢查", done.stdout)
-
-    def test_a_bare_needle_is_looked_for_across_the_allowed_paths(self):
-        self.land_a_file("src/a.py", "SENTINEL = 1\n")
-        self.make_ticket(1, allowed_write_paths=["src/*"], verify_strings=["SENTINEL"])
-        self.assertEqual(self.ticket("verify", "1").returncode, 0)
+        self.assertIn("src/a.py×1", done.stdout)
+        self.make_ticket(2, verify_strings=["NOT-ON-MAIN-ANYWHERE"])
+        self.assertEqual(self.ticket("verify", "2").returncode, 1)
 
 
 class TheNextStepAfterLanding(Sandbox):
@@ -606,8 +606,7 @@ class TheNextStepAfterLanding(Sandbox):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "把 #1 的東西放進主線")
         tip = self.git("rev-parse", "main").strip()
-        fields = {"allowed_write_paths": ["src/*"],
-                  "verify_strings": ["src/nav.py:def size_nav"],
+        fields = {"verify_strings": ["src/nav.py:def size_nav"],
                   "base_sha": base}
         fields.update(extra)
         self.make_ticket(1, **fields)
@@ -674,8 +673,7 @@ class TheNextStepRunsWhereverTicketPyLives(Sandbox):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "把 #1 的東西放進主線")
         tip = self.git("rev-parse", "main").strip()
-        self.make_ticket(1, allowed_write_paths=["src/*"],
-                         verify_strings=["src/nav.py:def size_nav"], base_sha=base,
+        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"], base_sha=base,
                          review={"verdict": "pass", "by": "main", "sha": tip}, **extra)
         return base, tip
 
@@ -727,8 +725,7 @@ class WaiverAndLanded(Sandbox):
         """**變異**:把 `waiver_covers_regression` 拿掉(改回舊的無條件檢查)
         → 這一條紅(沒有 test_evidence 就過不了)。"""
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.make_ticket(1, allowed_write_paths=["src/*"],
-                         verify_strings=["src/nav.py:def size_nav"],
+        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"],
                          verify_waiver={"by": "main", "reason": "控制腳本票:無獨立驗證者"})
         self.approve(1, branch="main")  # review.sha = main 的頭,state_version 跟著綁上
         done = self.ticket("close", "1")
@@ -740,8 +737,7 @@ class WaiverAndLanded(Sandbox):
         """免驗**只在 review 綁的 sha 真的在主線歷史裡才生效**——票寫了 waiver,但
         review 蓋的章是另一條沒進主線的分支,不該就這樣免了回歸證據。"""
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.make_ticket(1, allowed_write_paths=["src/*"],
-                         verify_strings=["src/nav.py:def size_nav"],
+        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"],
                          verify_waiver={"by": "main", "reason": "控制腳本票"})
         path = self.worktree("t1-unmerged")
         self.commit_in(path, "extra.txt", "沒有進主線的 commit")
@@ -754,8 +750,7 @@ class WaiverAndLanded(Sandbox):
     def test_a_waiver_missing_reason_does_not_count(self):
         """票面沒說清楚(`reason` 空著)不算誠實的 waiver。"""
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.make_ticket(1, allowed_write_paths=["src/*"],
-                         verify_strings=["src/nav.py:def size_nav"],
+        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"],
                          verify_waiver={"by": "main", "reason": ""})
         self.approve(1, branch="main")
         done = self.ticket("close", "1")
@@ -763,8 +758,7 @@ class WaiverAndLanded(Sandbox):
         self.assertIn("沒有回歸證據", done.stdout)
 
     def done_ready(self, **extra):
-        fields = {"allowed_write_paths": ["src/*"],
-                  "verify_strings": ["src/nav.py:def size_nav"],
+        fields = {"verify_strings": ["src/nav.py:def size_nav"],
                   "test_evidence": [{"cmd": "gate --branch", "rc": 0}]}
         fields.update(extra)
         self.make_ticket(1, **fields)
@@ -777,7 +771,7 @@ class WaiverAndLanded(Sandbox):
         (拒收不在主線的 sha)會紅。這一條驗的是正常路徑:`--landed` 一步關票。"""
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
         sha = self.git("rev-parse", "main").strip()
-        self.make_ticket(1, allowed_write_paths=["src/*"], complexity="complex",
+        self.make_ticket(1, complexity="complex",
                          verify_strings=["src/nav.py:def size_nav"],
                          test_evidence=[{"cmd": "gate --branch", "rc": 0}])
         done = self.ticket("close", "1", "--landed", sha)
@@ -793,8 +787,7 @@ class WaiverAndLanded(Sandbox):
         **變異**:`stamp_landed` 拿掉 `needs_review` 那一行 → 票上多出 review,這一條紅。"""
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
         sha = self.git("rev-parse", "main").strip()
-        self.make_ticket(1, allowed_write_paths=["src/*"],
-                         verify_strings=["src/nav.py:def size_nav"],
+        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"],
                          test_evidence=[{"cmd": "gate --branch", "rc": 0}])
         done = self.ticket("close", "1", "--landed", sha)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -805,7 +798,7 @@ class WaiverAndLanded(Sandbox):
     def test_close_landed_refuses_a_sha_that_never_reached_main(self):
         """**變異**:把 `sha_on_branch` 的 `merge-base --is-ancestor` 判斷改成永遠
         `True` → 這一條紅(不在主線的 sha 被誤蓋進 review)。"""
-        self.make_ticket(1, allowed_write_paths=["src/*"])
+        self.make_ticket(1)
         path = self.worktree("t1-x")
         self.commit_in(path, "x.txt", "沒進主線")
         off_main = self.git("rev-parse", "t1-x").strip()
@@ -828,8 +821,7 @@ class NeedsVerifierFalseCloses(Sandbox):
 
     def ready(self, branch="main", **fields):
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        row = {"allowed_write_paths": ["src/*"],
-               "verify_strings": ["src/nav.py:def size_nav"],
+        row = {"verify_strings": ["src/nav.py:def size_nav"],
                "needs_verifier": False, "complexity": "complex"}
         row.update(fields)
         self.make_ticket(1, **row)
@@ -882,8 +874,7 @@ class NeedsVerifierFalseCloses(Sandbox):
     def test_a3_missing_needs_verifier_behaves_as_before(self):
         """**變異** M4:`is False` 改成 `not ticket.get("needs_verifier")` → 這一條紅。"""
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.make_ticket(1, allowed_write_paths=["src/*"],
-                         verify_strings=["src/nav.py:def size_nav"])
+        self.make_ticket(1, verify_strings=["src/nav.py:def size_nav"])
         self.approve(1, branch="main")
         self.assertIn("沒有回歸證據", self.refused())
 
@@ -968,7 +959,6 @@ class Import(Sandbox):
         self.assertTrue(row["legacy"], "沒有標 legacy")
         self.assertEqual(row["state"], "Done")
         self.assertEqual(row["base_sha"], "", "舊票的 base_sha 要留空,不是猜一個")
-        self.assertEqual(row["allowed_write_paths"], [])
         self.assertIn("當時的描述", row["outline"])
         self.assertEqual(self.load_ticket("498")["state"], "Running")
         self.assertEqual(self.load_ticket("498")["depends_on"],
@@ -1364,8 +1354,7 @@ class CostTotalOnClose(Sandbox):
 
     def closable(self, **extra):
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        fields = {"allowed_write_paths": ["src/*"],
-                  "verify_strings": ["src/nav.py:def size_nav"],
+        fields = {"verify_strings": ["src/nav.py:def size_nav"],
                   "test_evidence": [{"cmd": "gate --branch", "rc": 0}],
                   "cost": [dict(row) for row in self.ROWS],
                   "objections": [{"category": "ticket-wrong", "owner": "main",
@@ -1906,185 +1895,3 @@ class CostTakesAnEffort(Sandbox):
         self.assertIn("15 鍵", cost[0])
 
 
-class InfoHomes(Sandbox):
-    """#101 A2:`info_homes` 恰為 `list[{what, home}]`;home 是相對根路徑,不准 glob、`..`、絕對
-    路徑。create(`--info-home` 可重複,一個 JSON 物件)、set、lint 同一個判準;拒收不寫票。"""
-
-    BAD = (("glob", {"what": "說明", "home": "docs/*"}),
-           ("上一層", {"what": "說明", "home": "docs/../secret"}),
-           ("絕對", {"what": "說明", "home": "/etc/passwd"}),
-           ("what 空", {"what": " ", "home": "docs/a.md"}),
-           ("多一格", {"what": "說明", "home": "docs/a.md", "extra": 1}),
-           ("少一格", {"home": "docs/a.md"}))
-
-    def test_create_takes_the_flag_more_than_once(self):
-        """四問:量票上的 info_homes;紅 = 不認旗標或只留最後一個;期望值 = 給的兩個 JSON;不測 = 權限。
-        **變異**:`--info-home` 不放進 CREATE_REPEATED → 這一條紅。"""
-        done = self.ticket("create", *MIN,
-                           "--info-home", '{"what": "寫入範圍規則", "home": "tickets/SCHEMA.md"}',
-                           "--info-home", '{"what": "角色操作", "home": "docs/reference"}')
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.load_ticket("1")["info_homes"],
-                         [{"what": "寫入範圍規則", "home": "tickets/SCHEMA.md"},
-                          {"what": "角色操作", "home": "docs/reference"}])
-        self.assertEqual(self.load_ticket("1")["allowed_write_paths"], ["scripts/land.sh"],
-                         "資訊歸屬不是第二組寫入權限")
-
-    def test_create_refuses_each_bad_shape_without_a_file(self):
-        """四問:量 rc 2、沒有票檔、stderr 點名;紅 = 收了;期望值 = BAD 表;不測 = set。
-        **變異**:`info_home_problems` 不查 `..` → 「上一層」那一格紅。"""
-        for name, row in self.BAD + (("不是 JSON", "what=home"),):
-            with self.subTest(name):
-                raw = row if isinstance(row, str) else json.dumps(row, ensure_ascii=False)
-                done = self.ticket("create", *MIN, "--info-home", raw)
-                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-                self.assertIn("info_homes", done.stderr)
-                self.assertEqual(self.tickets_on_disk(), [])
-
-    def test_set_and_lint_use_the_same_rule(self):
-        """四問:量 set 的 rc、票位元組與 state_version、lint 的 rc;紅 = set 收了或 lint 放過;
-        期望值 = BAD 表;不測 = create。"""
-        self.make_ticket("1", needs_verifier=False, verify_strings=["x"])
-        for name, row in self.BAD:
-            with self.subTest(name):
-                before = ticket_bytes(self, "1")
-                done = self.ticket("set", "1", "info_homes", json.dumps([row], ensure_ascii=False))
-                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-                self.assertEqual(ticket_bytes(self, "1"), before)
-                self.make_ticket("1", needs_verifier=False, verify_strings=["x"], info_homes=[row])
-                linted = self.ticket("lint", "1")
-                self.assertEqual(linted.returncode, 1, linted.stdout + linted.stderr)
-                self.assertIn("info_homes", linted.stderr)
-                self.make_ticket("1", needs_verifier=False, verify_strings=["x"])
-        good = [{"what": "說明", "home": "docs/a.md"}]
-        done = self.ticket("set", "1", "info_homes", json.dumps(good, ensure_ascii=False))
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.load_ticket("1")["info_homes"], good)
-        self.assertEqual(self.ticket("lint", "1").returncode, 0)
-
-
-class TheVerifierCasesAreNotTheWorkers(Sandbox):
-    """#101 A3:needs_verifier=true 的票,worker 的 allowed_write_paths 不准蓋到本票的
-    verify.files 或本票驗證者慣例路徑(verify/**/test_ticket_<id>.py、verify/TAGS.d/<id>.md);
-    create / set allowed_write_paths / set verify / set needs_verifier / 轉 Ready / lint 都擋。
-    拒收訊息含「是本票驗證者的案例檔」並點名 glob 與檔;拒收不改票、不動 state_version;
-    needs_verifier=false 與別票的案例可收。"""
-
-    WORD = "是本票驗證者的案例檔"
-
-    def assert_refused(self, done, glob, name, ident="1", before=None):
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        line = [row for row in done.stderr.splitlines() if self.WORD in row]
-        self.assertTrue(line, done.stderr)
-        self.assertTrue([row for row in line if "`%s`" % glob in row and "`%s`" % name in row],
-                        line)
-        if before is not None:
-            self.assertEqual(ticket_bytes(self, ident), before, "拒收不改票")
-
-    def test_create_refuses_the_convention_path_of_its_own_number(self):
-        """四問:量 rc 2、沒有票檔、訊息;紅 = 收了;期望值 = 慣例路徑(票號 1 是第一張);不測 = set。
-        **變異 M2**:慣例路徑漏掉 `verify/**/test_ticket_<id>.py` → 這一條紅。"""
-        done = self.ticket("create", *MIN, "--needs-verifier", "true",
-                           "--allowed-write-path", "verify/write_scope/test_ticket_1.py")
-        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        self.assertIn(self.WORD, done.stderr)
-        self.assertIn("`verify/write_scope/test_ticket_1.py`", done.stderr)
-        self.assertEqual(self.tickets_on_disk(), [])
-        tags = self.ticket("create", *MIN, "--needs-verifier", "true",
-                           "--allowed-write-path", "verify/TAGS.d/*")
-        self.assertEqual(tags.returncode, 2, tags.stdout + tags.stderr)
-        self.assertIn("`verify/TAGS.d/1.md`", tags.stderr)
-
-    def test_every_set_path_refuses_and_leaves_the_ticket_alone(self):
-        """四問:量 rc 1、票位元組、state_version、不發 ticket.state;紅 = 哪一條路收了;期望值 =
-        夾具的 verify.files 與慣例路徑;不測 = apply 的驗證者收件(test_apply A4)。
-        **變異**:`cmd_set` 只在 allowed_write_paths 那一格查 → set verify / needs_verifier / Ready 紅。"""
-        files = {"files": ["verify/nav/test_ticket_1.py"], "tags": [], "run": "", "notes": ""}
-        cases = (
-            ("allowed", {"needs_verifier": True},
-             ("allowed_write_paths", '["src/*", "verify/*"]'), "verify/*", "verify/TAGS.d/1.md"),
-            ("verify", {"needs_verifier": True, "allowed_write_paths": ["src/*", "verify/nav/*"]},
-             ("verify", json.dumps(files)), "verify/nav/*", "verify/nav/test_ticket_1.py"),
-            ("needs_verifier", {"needs_verifier": False, "verify": files,
-                                "allowed_write_paths": ["verify/nav/test_ticket_1.py"]},
-             ("needs_verifier", "true"), "verify/nav/test_ticket_1.py",
-             "verify/nav/test_ticket_1.py"),
-            ("Ready", {"needs_verifier": True, "state": "Draft",
-                       "allowed_write_paths": ["src/*", "verify/**/test_ticket_1.py"]},
-             ("state", "Ready"), "verify/**/test_ticket_1.py", "verify/**/test_ticket_1.py"),
-        )
-        for name, fields, (field, value), glob, target in cases:
-            with self.subTest(name):
-                self.make_ticket("1", **fields)
-                before = ticket_bytes(self, "1")
-                done = self.ticket("set", "1", field, value)
-                self.assert_refused(done, glob, target, before=before)
-                self.assertFalse([row for row in self.events() if row.get("kind") == "ticket.state"])
-
-    def test_lint_names_it_too(self):
-        self.make_ticket("1", needs_verifier=True, verify_strings=["x"],
-                         allowed_write_paths=["src/*", "verify/TAGS.d/1.md"])
-        done = self.ticket("lint", "1")
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertIn(self.WORD, done.stderr)
-        self.assertIn("`verify/TAGS.d/1.md`", done.stderr)
-
-    def test_false_and_another_tickets_cases_are_accepted(self):
-        """四問:量 rc 0 與寫進票的值;紅 = 誤擋(不分票號或不看 needs_verifier);期望值 = 夾具;
-        不測 = 慣例路徑以外的 glob 語意。"""
-        self.make_ticket("1", needs_verifier=False)
-        done = self.ticket("set", "1", "allowed_write_paths", '["src/*", "verify/*"]')
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.make_ticket("2", needs_verifier=True)
-        other = ["src/*", "verify/batch_fix/test_ticket_108.py", "verify/TAGS.d/108.md"]
-        done = self.ticket("set", "2", "allowed_write_paths", json.dumps(other))
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.load_ticket("2")["allowed_write_paths"], other)
-        self.assertNotIn(self.WORD, self.ticket("lint", "2").stderr)
-
-
-class TheSchedulerScopeHelper(unittest.TestCase):
-    """#101 A7:排程用的純 scope helper(`scope_conflict`,不讀檔):提示範圍重疊 → 串行;
-    新檔、glob 都要認得;未知 / 空值一律串行。"""
-
-    def setUp(self):
-        from ticket import scope_conflict  # noqa: PLC0415
-        self.conflict = scope_conflict
-
-    def test_disjoint_scopes_run_in_parallel(self):
-        self.assertEqual(self.conflict({"id": "1", "allowed_write_paths": ["src/*"]},
-                                       {"id": "2", "allowed_write_paths": ["docs/*"]}), "")
-
-    def test_a_new_file_under_a_glob_and_two_globs_are_overlaps(self):
-        """**變異**:`globs_overlap` 只比字面相等 → 這一條紅。"""
-        for left, right in ((["scripts/*"], ["scripts/brand_new.py"]),
-                            (["tests/*"], ["tests/test_x*.py"]),
-                            (["docs"], ["docs/a.md"])):
-            with self.subTest(left=left, right=right):
-                said = self.conflict({"id": "1", "allowed_write_paths": left},
-                                     {"id": "2", "allowed_write_paths": right})
-                self.assertIn("串行", said)
-
-    def test_info_homes_and_verify_files_count_as_scope(self):
-        said = self.conflict({"id": "1", "allowed_write_paths": ["src/*"],
-                              "info_homes": [{"what": "x", "home": "docs/MAP.md"}]},
-                             {"id": "2", "allowed_write_paths": ["docs/MAP.md"]})
-        self.assertIn("docs/MAP.md", said)
-        said = self.conflict({"id": "1", "allowed_write_paths": ["src/*"],
-                              "verify": {"files": ["verify/a/test_ticket_1.py"]}},
-                             {"id": "2", "allowed_write_paths": ["verify/*"]})
-        self.assertIn("串行", said)
-
-    def test_unknown_or_empty_must_be_serial(self):
-        """**變異**:未知當成「沒有重疊」→ 這一條紅。"""
-        for unknown in ({"id": "2"}, {"id": "2", "allowed_write_paths": []},
-                        {"id": "2", "allowed_write_paths": "src/*"},
-                        {"id": "2", "allowed_write_paths": [""]}):
-            with self.subTest(unknown=unknown):
-                said = self.conflict({"id": "1", "allowed_write_paths": ["src/*"]}, unknown)
-                self.assertIn("未知", said)
-                self.assertIn("串行", said)
-
-
-if __name__ == "__main__":
-    unittest.main()

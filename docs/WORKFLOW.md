@@ -8,10 +8,10 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 ```
 | 關卡 | 必須具備 |
 |---|---|
-| Ready | 範圍、可操作的驗收、依賴達成、`base_sha`、`allowed_write_paths` |
+| Ready | 可操作的驗收、依賴達成、`base_sha` |
 | InReview | patch、測試輸出逐字、變異驗紅、回報標明實測/推論 |
 | IntegrationQueued | 審查通過、局部閘門綠、無未解阻擋 |
-| Done | **同一份必要條件,`close` 與 `set state Done` 共用**(D-014):① `scripts/ticket.py verify` 證明改動真的在主線,**弱檢查不算過**(沒有 `verify_strings` 就補一條再關);② 有回歸證據(`test_evidence` 或 `verify.baseline`)——**或**票上有誠實的 `verify_waiver{by,reason}`(#8)且 review 記的 sha 真的在主線歷史裡(`git merge-base --is-ancestor`,不是逐字比對分支的頭,#15);③ **complex 的票**要有一格 `review.verdict` 通過(只有 complex 做完後覆核;沒標 = simple,不要 review;verdict 不綁任何版本,#136);④ `objections[]` 裡沒有未處置的阻擋項 |
+| Done | **同一份必要條件,`close` 與 `set state Done` 共用**(D-014):① `scripts/ticket.py verify` 證明改動真的在主線:`verify_strings` 每條都在主線抓得到,**或**(沒有 `verify_strings` 時)`close --landed` 蓋的 `landed_sha` 在主線歷史裡;② 有回歸證據(`test_evidence` 或 `verify.baseline`)——**或**票上有誠實的 `verify_waiver{by,reason}`(#8)且 review 記的 sha 真的在主線歷史裡(`git merge-base --is-ancestor`,不是逐字比對分支的頭,#15);③ **complex 的票**要有一格 `review.verdict` 通過(只有 complex 做完後覆核;沒標 = simple,不要 review;verdict 不綁任何版本,#136);④ `objections[]` 裡沒有未處置的阻擋項 |
 
 **exit code 0 不等於 Done;worker 說做完不等於 Done;閘門綠是對某個 `base_sha` 說的,基準走遠就過期。**
 
@@ -27,12 +27,11 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 - **套 patch → 開 `t<票號>` 分支與 worktree → commit 走 `scripts/apply.sh <票號> <patch> [<patch-verify>]`**
   (2026-09-21,D-015)。它在 `git apply` 之前擋檔頭(只准 `base/…` / `work/…` 或 `/dev/null`,
   絕對路徑拒、`diff -ruN` 的刪檔沒改 `+++` 也拒),在 `git apply` 之後比對每個 `+++` 目標
-  並 `--reverse --check`(rc=4),再量寫入範圍(只有 `hard_block` 擋,rc=5;提示範圍外與命中
-  `out_of_scope` 不擋,列進 result 的 `extra_paths` / `extra_reasons`,D-050 ①),commit 訊息帶票號與
+  並 `--reverse --check`(rc=4),再查 `hard_block`(唯一的硬擋,rc=5;沒有寫入範圍,D-054 Q2),commit 訊息帶票號與
   **patch 的 sha256**。主線走遠了先 `scripts/apply.sh rebase <票號> <patch>` 重生一份乾淨 diff。
   候選樹有 `scripts/repo-map.py` 與 `code-map/catalog.json` 時,commit 之前跑一次 `repo-map.py build`(#96):
-  `code-map/index.json` / `INDEX.md` 有變就併進同一個 commit、訊息多一行 `regen: repo-map build …`,
-  不算 `extra_paths`;build 非零不擋套用、印一行「索引沒重產」,攔它是 `gate.sh` 機械格的事。
+  `code-map/index.json` / `INDEX.md` 有變就併進同一個 commit、訊息多一行 `regen: repo-map build …`;
+  build 非零不擋套用、印一行「索引沒重產」,攔它是 `gate.sh` 機械格的事。
   `apply.sh --batch` 同一個判準、同一份實作(#129,`scripts/wtbase.sh` 的 `code_map_regen`):有變就併進那一個
   batch fix commit(訊息多一行 `regen: repo-map build …`、輸出「批次 code-map 索引重產」),build 非零照樣 commit。
   **`land.sh` 收的還是已經有 commit 的分支** —— 它不套 patch(`docs/ROLES.md`)。
@@ -42,9 +41,8 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 1. 先印每支分支的 commit 數與標題(**讓人看見它以為自己在做什麼**)。
 2. 任一支 0 commit → 整批拒絕(跳過會生出沒有人要求過的組合)。
 3. 任一支的 `base_sha` 有問題 → 拒絕,分兩種話講:**主線根本沒有那個 sha**(副本是拿錯的 ref 做的,回去查副本從哪來)vs **有但不是主線祖先**(主線走遠了,rebase 後重跑閘門)。兩者 `merge-base` 都非零,下一步差很多。
-4. 寫入範圍:命中 `hard_block`(`paths` 的檔,或 tests/** verify/** 新增行命中 `patterns`)→ 拒絕(點名檔與格);命中 `out_of_scope` 而最近一次收件的 `extra_reasons`
-   沒有理由 → 拒絕「out_of_scope 命中缺理由」;只是提示範圍外 → 警告、不擋(D-050 ①;兩者都是建議範圍,
-   硬擋只剩 `hard_block`)。
+4. 硬擋:命中 `hard_block`(`paths` 的檔,或 tests/** verify/** 新增行命中 `patterns`)→ 拒絕(點名檔與格)。
+   沒有寫入範圍(D-054 Q2),`hard_block` 是唯一的硬擋。
 5. **票的 `verify.files` 要真的在分支上**(#587 那把尺,D-015):票說「案例在這幾個檔」而分支上沒有,
    代表驗證者的交付沒有跟著進來 —— 而 `verify.tags` 照樣會被閘門呼叫、照樣一個案例都選不到、照樣印一行綠。
    缺了 **rc=4**(與其他拒收的 2 分開:呼叫者要分得出「票面沒填好」與「分支沒準備好」)。
@@ -71,8 +69,8 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
    掛第一張票。鎖整段不放(worker、覆核、重跑),docs 通道在後面等。全套每一輪:事件 `gate.start` / `gate.pass` /
    `gate.fail` 帶 `mode=full round=<r> batch=<stamp>`,land 狀態檔每輪一筆 gate phase;`gate.sh` 收 `AC_GATE_TICKETS`,
    把那一輪的 status.json 寫給這一批每一張票(同 run_id、同 failures;第 1 輪 `<land run>-gate`,之後 `-gate-r<r>`)。
-   **踢人規則**(修滿 rounds 輪仍紅才用,純機械):最後一輪紅榜的 `failures[].file` 對各票的 `allowed_write_paths`
-   (glob)、`verify.files`、`git diff --name-only main...<分支>`,任一格命中就是嫌疑票。**恰有部分票命中** → 那幾張踢出
+   **踢人規則**(修滿 rounds 輪仍紅才用,純機械):最後一輪紅榜的 `failures[].file` 對各票的
+   `verify.files`、`git diff --name-only main...<分支>`,任一格命中就是嫌疑票。**恰有部分票命中** → 那幾張踢出
    (各一頁 decision:「踢出」、紅榜 case 名、「單張 land」它的指令;事件 `land.fail kicked=<id,…>`;票不改 state ——
    改票會讓覆核過期),其餘自動重 land 一次(`AC_LAND_DEPTH=1`,沿用同一把鎖);重 land 那一層不再踢、不再重 land,
    再紅只留一頁 decision、rc 1。**對不到任何票、或對到全部票** → 不踢、不重 land、worktree 留著、一頁 decision 掛第一張票並列整批、rc 1。
@@ -113,7 +111,7 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
 主線執行、人事先授權;順序:tag → build → staging → 閘門 → prod → 健康檢查 → 記事件。**發版期間不開 land。**
 
 ## 衝突
-- 排順序的人(主線,或依 `allowed_write_paths` 算衝突圖的腳本)讀票的 `allowed_write_paths` 判平行;**不同檔不代表安全**,介面耦合要看票的 `interface_contracts`。
+- 排順序的人(主線)判平行;**不同檔不代表安全**,介面耦合要看票的 `interface_contracts`。
 - 兩支分支都往同一份文件尾巴附加(HANDOFF 那類)一定衝突:**先等對方進去再寫**,而不是寫完再解——解衝突時讀的是 diff,先等讀的是完整的檔。
 - 自動合成功不等於合對:land 輸出出現 `Auto-merging <文件>` 就把結果讀一遍。
 
@@ -142,7 +140,7 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
 2. 疑似 flaky 逐筆寫進 `reports/flaky.jsonl`(持久事件帳,不隨下一輪清空)。同一條累計到門檻(`board/config.json` 的 `flaky_threshold`,預設 3)發 `decision.asked`,**並自動開一張修不穩定的票**(role=verifier,票上留 `flaky_case`;同一條案例只開一張,`flaky_auto_ticket: false` 可關)。
    > 為什麼從「只發事件」改成「自動開票」(D-015):事件沒有 owner、沒有驗收,而**一則沒有人認領的事件比一張沒有人認領的票更容易被滑過去** —— 票至少每個 session 開場都出現在 `list --open` 裡。
 
-   **發版 / 閘門回歸紅在既有案例上(`regression-red`,T D-G130,#67)**:`python3 scripts/status.py regression-red --source <release|gate> --log <log> [--case <id>]… [--dispatch]`。每一條紅的案例(log 只認 `^FAIL:` / `^ERROR:`)開一張 role=worker、state=Ready、`needs_verifier=false` 的修復票,驗收是**固定五條樣板**(全套原順序綠 / 不准 sleep、放寬、刪、skip / 說得出原因 / 過時走 OBJECTION 等使用者裁 / 還原修法要紅),票上留 `regression_case` / `regression_source` / `regression_log` / `regression_from_ticket`。**查重**:已有開著的票且 `regression_case` 或 `flaky_case` 等於它 → 印「沿用 #n」、**不寫票**(覆核綁的 `state_version` 不因又紅一次而過期)。每條發一則 `regression.red`;`regression_auto_ticket: false` 只發事件不開票。`--dispatch` 對這次新開的票背景起 `auto-fix.sh`,不等。model:`--model` > `routing.implement` > opus;verify.run:`--rerun` > `regression.rerun_cmd` > `unit_cmd`;寫入範圍:`regression.write_paths` > `tests/*`、`verify/*`。**發版照擋** —— 這一支只開票。
+   **發版 / 閘門回歸紅在既有案例上(`regression-red`,T D-G130,#67)**:`python3 scripts/status.py regression-red --source <release|gate> --log <log> [--case <id>]… [--dispatch]`。每一條紅的案例(log 只認 `^FAIL:` / `^ERROR:`)開一張 role=worker、state=Ready、`needs_verifier=false` 的修復票,驗收是**固定五條樣板**(全套原順序綠 / 不准 sleep、放寬、刪、skip / 說得出原因 / 過時走 OBJECTION 等使用者裁 / 還原修法要紅),票上留 `regression_case` / `regression_source` / `regression_log` / `regression_from_ticket`。**查重**:已有開著的票且 `regression_case` 或 `flaky_case` 等於它 → 印「沿用 #n」、**不寫票**(覆核綁的 `state_version` 不因又紅一次而過期)。每條發一則 `regression.red`;`regression_auto_ticket: false` 只發事件不開票。`--dispatch` 對這次新開的票背景起 `auto-fix.sh`,不等。model:`--model` > `routing.implement` > opus;verify.run:`--rerun` > `regression.rerun_cmd` > `unit_cmd`。**發版照擋** —— 這一支只開票。
 3. 真紅 → 起**新** worker:`scripts/auto-fix.sh <票號>`。`gate.sh` 與單票 `land.sh`
    預設就會走 auto-fix;**要人下場才明寫 `--no-auto-fix`**。
    它讀最新狀態檔,組派工文 = **規則包**(`scripts/rules.py pack worker`)+ 票面快照 + `repair_context`
@@ -165,9 +163,8 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
 7. **一批 N 張全套紅(批次修復,#108,D-H51 ②)**:`AC_BATCH_RUN_ID=<land 那一輪的 run_id> sh scripts/auto-fix.sh --batch <整合分支> <id…>`。
    不猜哪張票弄紅:**一個** worker 拿派工文 `reports/batch/<stamp>/dispatch-round1.md`(N 張票面快照、
    紅榜 = 第一張票 `reports/t<id>/<run_id>/status.json` 的 failures、`git diff --stat main...<整合分支>` 與整批 diff 檔、
-   寫入範圍聯集、「不得放寬測試」),在整合分支的副本上修。patch 走 `apply.sh --batch <整合分支> <id…> <patch>`:
-   疊成整合分支頭上**一個** commit(訊息 `batch fix round <r> #1 #2 …`),寫入範圍硬擋只剩 `hard_block`
-   (各票 `out_of_scope` 聯集 − 各票提示範圍聯集命中不擋,列進 result 的 `extra_paths` / `extra_reasons`,D-050 ①),測試檔(`batch_fix.test_globs`,預設 `tests/**`、
+   「不得放寬測試」),在整合分支的副本上修。patch 走 `apply.sh --batch <整合分支> <id…> <patch>`:
+   疊成整合分支頭上**一個** commit(訊息 `batch fix round <r> #1 #2 …`),唯一的硬擋是 `hard_block`,測試檔(`batch_fix.test_globs`,預設 `tests/**`、
    `verify/**`、`**/test_*.py`)刪含 assert 的行或加 skip / expectedFailure ⇒ rc 5「<檔>:<行> 放寬測試」
    (EVIDENCE 有 `OBJECTION: test_defect <案例>` 且是那條案例的檔才不擋)。覆核走 `review.sh --batch <整合分支> <id…>
    --run-id <stamp>`:pass 寫 `reports/batch/<stamp>/review.json`(sha = 整合分支頭),fail 一頁 decision 掛第一張票、
@@ -263,7 +260,7 @@ worker 同一輪**也交了** `patch-round<r>.diff`(#107,專案 #751 事故):驗
 | 驗證產物抽成 `patch-verify.diff`;新 tag 一票一片段再合併 | **已實作** | `verify-case.py extract` / `tags-merge`;`verify/TAGS.d/<n>.md` |
 | **land 檢查 complex 票的 review.verdict 通過(#136 起不綁版本)、objections 未處置就拒絕** | **已實作**(以前漏列) | `scripts/land.sh` 第 5 步 |
 | **land 互斥鎖** | **已實作**(以前只寫在文件裡) | `scripts/land.sh` 的 `.land.lock`(mkdir) |
-| 進 Done 的必要條件 `close` 與 `set state Done` 共用;弱檢查不准自動關票 | **已實作**(以前 `set state Done` 是一條旁路) | `ticket.py` 的 `done_blockers()` |
+| 進 Done 的必要條件 `close` 與 `set state Done` 共用;沒有 `verify_strings` 的票要 `landed_sha` 在主線歷史裡 | **已實作**(以前 `set state Done` 是一條旁路) | `ticket.py` 的 `done_blockers()` |
 | 遲到的回報拿 `attempt` / `state_version` 比對後拒收;寫入走同一把鎖 | **已實作**(SCHEMA 以前宣稱過但沒有實作) | `ticket.py set --expect-attempt / --expect-state-version`;`.ticket.lock` |
 | 三輪耗盡 → 票轉 Blocked 並指派主線 | **已實作** | `ticket.py round <n> <r> --red` |
 | **套 patch、建分支、commit** | **已實作**(2026-09-21,D-015) | `scripts/apply.sh <票號> <patch> [<patch-verify>]`;重套走 `scripts/apply.sh rebase` |
@@ -284,7 +281,7 @@ worker 同一輪**也交了** `patch-round<r>.diff`(#107,專案 #751 事故):驗
 | **閘門接線**:回歸層之後 `lint` → `check`,`stage` 由 `red` 升成 `check`,紅榜收進 `status.json` | **已落地**(D-020,#27) | `scripts/gate.sh --ticket <n>`;`ticket.py close` 只認 `stage=="check"` |
 | **驗證者案例 lint 不過進紅榜**:lint 擋的每一行(含讀不到案例檔、與「宣告了 verify 卻沒有案例」那一列 `verify-case-lint:(no-cases)`)以 `kind=LINT`、`case=verify-case-lint:<相對路徑>` 進 `status.json` 的 `failures[]`(不擋的提示不成列;lint 不過而一行都對不上仍寫恰一列),**由驗證者修**(D-014);上一輪紅榜全是 LINT → auto-fix 這一輪只派驗證者、不派 worker(baseline 空用一般驗證者派工文,非空走 test_defect 那一份),混合時 worker 派工文把 LINT 列標成驗證者的;那一輪照樣算一輪 | **已實作**(#126) | `scripts/gate.sh`(`LINT_ARGS`)→ `scripts/status.py done --lint-log`(`parse_lint`);`scripts/auto-fix.sh`(`lint_round`) |
 | `land.sh` 那一側自己判 flake | **未實作,而且是刻意的** —— flake 判定在 `gate.sh`(單票的那一條路) | `scripts/gate.sh` 的 `flake_rerun` |
-| `land.sh` 一批 N≥2 張全套紅 | **已實作**(#109,D-H51 ②)—— 不歸責:先 `auto-fix.sh --batch` 整批修、每輪重跑全套,最多 `batch_fix.rounds`(預設 2)輪;仍紅才用紅榜檔 ↔ 各票 `allowed_write_paths` / `verify.files` / 分支改動檔機械地找嫌疑票,恰部分命中才踢、其餘重 land 一次(`AC_LAND_DEPTH`);對不到或全中就停給主線 | `scripts/land.sh` 的 `batch_fix` |
+| `land.sh` 一批 N≥2 張全套紅 | **已實作**(#109,D-H51 ②)—— 不歸責:先 `auto-fix.sh --batch` 整批修、每輪重跑全套,最多 `batch_fix.rounds`(預設 2)輪;仍紅才用紅榜檔 ↔ 各票 `verify.files` / 分支改動檔機械地找嫌疑票,恰部分命中才踢、其餘重 land 一次(`AC_LAND_DEPTH`);對不到或全中就停給主線 | `scripts/land.sh` 的 `batch_fix` |
 
 ## 驗證者的案例怎麼進閘門
 票的 `verify.tags` 併進 `tags`,由 `gate.sh --ticket <n>` **真的呼叫** `scripts/verify.py --tag …`(原始輸出存檔)。`--full` 跑全部回歸。驗證者不出 VERDICT;紅了照上一節走。

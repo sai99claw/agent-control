@@ -139,7 +139,6 @@ class AgyBase(AutoFixBase):
         fields.setdefault("model", AGY_MODEL)
         fields.setdefault("tool", "agy")
         fields.setdefault("effort", "high")
-        fields.setdefault("allowed_write_paths", ["tests/*"])
         row = self.make_ticket("1", **fields)
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "開票 #1")
@@ -266,8 +265,7 @@ class AgyGuardAndRoles(AgyBase):
         self.write("tests/test_verify_runner.py",
                    "import unittest\n\n\nclass T(unittest.TestCase):\n"
                    "    def test_there(self):\n        self.assertTrue(True)\n")
-        self.agy_ticket(needs_verifier=True, interface_fixed=False,
-                        allowed_write_paths=["tests/*", "verify/*"])
+        self.agy_ticket(needs_verifier=True, interface_fixed=False)
         done = self.run_agy("--no-review")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         argv = self.argv("verifier")

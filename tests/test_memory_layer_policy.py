@@ -229,7 +229,7 @@ class TheGateLintsTheChangedMemory(LintBase):
     def test_a36_a_call_in_a_changed_card_reds_the_gate(self):
         """**變異**:拿掉 gate.sh 的記憶 lint 那一段 → rc 不是 4,紅。"""
         self.write("memory/model/opus.md", "- 原則一條\n")
-        self.make_ticket(7, allowed_write_paths=["memory/model/*.md"], state="Running")
+        self.make_ticket(7, state="Running")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "沙盒的模型卡與票 #7")
         wt = self.worktree("t7")
@@ -257,7 +257,7 @@ class TheGateLintsTheChangedMemory(LintBase):
             self.write("board/config.json", json.dumps(config, ensure_ascii=False, indent=2))
         for rel, text in on_main.items():
             self.write(rel, text)
-        self.make_ticket(7, allowed_write_paths=["memory/*/*.md"], state="Running")
+        self.make_ticket(7, state="Running")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "沙盒的記憶卡與票 #7")
         wt = self.wt = self.worktree("t7")

@@ -684,19 +684,18 @@ def watched_files():
 def open_consolidation(rel):
     """已經有一張開著的票蓋住這份記憶檔?**不重複開。** 回 `(票號, role)` 或 `(None, None)`。
 
-    判準是那張票自己的 `allowed_write_paths` 蓋不蓋得到這份記憶檔 —— 不是另記一格
-    「開過了」。另記的那一格會跟事實分岔(票被取消了、被關了),而分岔的那天沒有
-    人會知道。蓋不蓋得到用 `ticket.first_match`,與 land 判寫入範圍同一支:逐字比對
-    認不得 `memory/role/*.md`,主線開場就會為一份已經有人在整理的檔再開一張(#81)。
+    判準是那張票自己的 `memory_file`(整理對象的 repo 相對路徑,逐字相等;#137)是不是
+    這份記憶檔 —— 不是另記一格「開過了」。另記的那一格會跟事實分岔(票被取消了、
+    被關了),而分岔的那天沒有人會知道。沒有 `memory_file` 的票(#137 之前開的)不算。
 
-    **任何 role 都算**(#87 A38):一張開著的 worker 票正在改這份檔時再開一張整理票,
-    兩張票會同時寫同一份檔。整理票優先回報(字樣照舊);沒有才回別的 role 那一張。
+    **任何 role 都算**(#87 A38):一張開著、`memory_file` 是這份檔的別的 role 的票
+    也擋。整理票優先回報(字樣照舊);沒有才回別的 role 那一張。
     """
     other = (None, None)
     for one in ticket.load_all():
         if not ticket.is_open(one):
             continue
-        if not ticket.first_match(rel, one.get("allowed_write_paths") or []):
+        if one.get("memory_file") != rel:
             continue
         if one.get("role") == CONSOLIDATOR_ROLE:
             return one["id"], CONSOLIDATOR_ROLE
@@ -774,11 +773,6 @@ def open_ticket_for(rel, entries, out):
         "--acceptance", "保留的每一條仍帶日期 / 來源票號 / 實測或推論三個標記",
         "--acceptance", "討論存成 discussions/<date>-memory-<model>.md(docs/DISCUSSION.md 的格式:"
                         "檔頭 model / source_lines / source_sha256,結論區逐條 `- L<n>: <處置>`)",
-        "--in-scope", rel,
-        "--in-scope", inbox,
-        "--out-of-scope", "docs/DECISIONS.md",
-        "--allowed-write-path", rel,
-        "--allowed-write-path", inbox,
         # 怎麼派 session:**一句可以貼的指令住在範本裡**(#29 A8,G8)。以前
         # 票面只寫「由兩個模型討論」,而「兩個 session 怎麼被派、討論檔誰先寫」沒有
         # 任何一份檔說得出來 —— 一張沒有人知道怎麼執行的票,與沒有開票長得一樣。
@@ -793,10 +787,12 @@ def open_ticket_for(rel, entries, out):
     out.write(said.getvalue())
     found = re.search(r"#(\S+) 開好了", said.getvalue())
     if done == 0 and found:
-        # `ticket.py create` 沒有這一格的旗標(#76 不改 ticket.py);開好再補。
+        # `ticket.py create` 沒有這兩格的旗標(#76 不改 ticket.py);開好再補。
+        # `memory_file` 是整理對象(#137),`open_consolidation` 與 consolidate-memory.sh 只認它。
         with ticket.Lock():
             row = ticket.load(found.group(1))
             row["needs_verifier"] = False
+            row["memory_file"] = rel
             ticket.save(row)
     return done
 

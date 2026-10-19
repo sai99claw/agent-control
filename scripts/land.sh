@@ -18,7 +18,7 @@
 # 它**不跑閘門**:這三個前綴不進產品碼,跑九分鐘全套換來的是同一份綠。
 #
 # 這一支**沒有判斷**(docs/ROLES.md:落地器是程式;順序是主線決定的)。它只會拒絕:
-# 0 commit、票對不上、`base_sha` 過期、寫入範圍命中硬擋、閘門紅。要它放寬的時候,
+# 0 commit、票對不上、`base_sha` 過期、命中 `hard_block`、閘門紅。要它放寬的時候,
 # 放寬的是規矩,不是這支腳本。
 #
 # 每一輪都寫 `reports/t<票號>/<run_id>/status.json`(D-010、D-014):跑完了沒、rc、
@@ -53,8 +53,8 @@
 # **不找是誰弄紅的**:同一把鎖下叫 `auto-fix.sh --batch land/<stamp> <id…>`(一個 worker 拿整批),
 # rc 0 就在同一個 land worktree 重跑全套;最多 `batch_fix.rounds`(預設 2)輪。鎖整段不放,所以
 # ff-only 不會因為主線中途動了而白跑;代價是 docs 通道最多等 rounds × (全套 + worker + 覆核)。
-# 修滿仍紅才找嫌疑票,規則純機械:最後一輪紅榜 `failures[].file` 對各票的 `allowed_write_paths`
-# (glob)、`verify.files`、`git diff --name-only main...<分支>`。**恰有部分票命中** → 那幾張踢出
+# 修滿仍紅才找嫌疑票,規則純機械:最後一輪紅榜 `failures[].file` 對各票的
+# `verify.files`、`git diff --name-only main...<分支>`。**恰有部分票命中** → 那幾張踢出
 # (各一頁 decision,票不改 state —— 改票會讓覆核過期)、其餘自動重 land 一次(`AC_LAND_DEPTH`,
 # 重 land 那一層不再踢);對不到或全中 → 停、worktree 留、一頁 decision 掛第一張票。
 # 全套每一輪的 status.json 寫給這一批每張票(`AC_GATE_TICKETS`),`auto-fix.sh --batch` 讀第一張那份。
@@ -426,21 +426,13 @@ PY
         continue
     fi
 
-    # 寫入範圍(D-H38 ①、D-050 ①)。`allowed_write_paths` 與 `out_of_scope` 都是建議範圍:越出
-    # 不擋(apply 記進 result 的 `extra_paths` / `extra_reasons`、覆核者逐檔看過了);硬擋只剩
-    # `board/config.json` 的 `hard_block`(`paths` 比檔名、`patterns` 比 tests/** verify/** 的新增行)。
-    # 原本 out_of_scope 的硬擋改成「列出 + 要理由」:命中的檔在各輪收件併起來的 `extra_reasons` 裡沒有理由(null / 空字串)→ 拒絕;只是提示
-    # 範圍外的檔缺理由 → 警告、不擋。印 `B`(硬擋)/ `R`(out_of_scope 命中缺理由)/ `W`(警告)。
-    out=$(python3 - "$ROOT" "$MAIN" "$b" "$tf" "$id" <<'PY'
-import json, os, subprocess, sys
-root, main, branch, path, ident = sys.argv[1:6]
+    # 硬擋(D-054 Q2):只剩 `board/config.json` 的 `hard_block`(`paths` 比檔名、`patterns` 比
+    # tests/** verify/** 的新增行)。印 `B`(硬擋)。
+    out=$(python3 - "$ROOT" "$MAIN" "$b" <<'PY'
+import os, subprocess, sys
+root, main, branch = sys.argv[1:4]
 sys.path.insert(0, os.path.join(root, "scripts"))
 import ticket as ticket_mod
-try:
-    with open(path, encoding="utf-8") as handle:
-        row = json.load(handle)
-except (OSError, ValueError):
-    row = {}
 done = subprocess.run(["git", "-C", root, "diff", "--name-only",
                        "%s...%s" % (main, branch)],
                       capture_output=True, text=True)
@@ -449,18 +441,8 @@ done = subprocess.run(["git", "-c", "core.quotePath=false", "-C", root, "diff", 
                        "--unified=0", "--src-prefix=a/", "--dst-prefix=b/",
                        "%s...%s" % (main, branch)],
                       capture_output=True, text=True, errors="replace")
-blocked, extra = ticket_mod.write_scope(row, root, names, ticket_mod.added_lines(done.stdout))
-for name, field, pattern in blocked:
+for name, field, pattern in ticket_mod.hard_block_hits(root, names, ticket_mod.added_lines(done.stdout)):
     print("B %s —— 命中%s(`%s`)" % (name, field, pattern))
-hits = ticket_mod.out_of_scope_hits([row], extra)
-reasons = ticket_mod.handin_reasons(root, ident)[1]
-for name in extra:
-    if str(reasons.get(name) or "").strip():
-        continue
-    if name in hits:
-        print("R %s —— 命中%s(`%s`)" % (name, hits[name][0], hits[name][1]))
-    else:
-        print("W %s" % name)
 PY
 )
     fenced=$(echo "$out" | sed -n 's/^B //p')
@@ -469,18 +451,6 @@ PY
         echo "$fenced" | sed 's/^/land:   /'
         STOP=1
         continue
-    fi
-    fenced=$(echo "$out" | sed -n 's/^R //p')
-    if [ -n "$fenced" ]; then
-        echo "land: $b —— 票 #$id 的 out_of_scope 命中缺理由(EVIDENCE「提示清單外的改動」逐檔寫理由,apply 收件抽進 result 的 extra_reasons;各輪收件都沒有):"
-        echo "$fenced" | sed 's/^/land:   /'
-        STOP=1
-        continue
-    fi
-    fenced=$(echo "$out" | sed -n 's/^W //p')
-    if [ -n "$fenced" ]; then
-        echo "land: $b —— 提示範圍外、沒寫理由(警告,不擋;覆核者逐檔看過):"
-        echo "$fenced" | sed 's/^/land:   /'
     fi
     # 覆核與反駁:complex 票要 review.verdict 是通過(simple / 沒標不要,#136);
     # 反駁(`objections[]`):實作者說「這張票寫錯了」而東西照樣落地,那句話等於沒人收。
@@ -512,35 +482,6 @@ PY
     # 票上寫著「案例在這幾個檔」而分支上沒有那幾個檔,代表**驗證者的交付沒有跟著進來**
     # —— 而 `verify.tags` 照樣會被閘門呼叫、照樣一個案例都選不到、照樣印一行綠。
     # 退出碼與其他拒收分開(4):呼叫者要分得出「票面沒填好」與「分支沒準備好」。
-    out=$(python3 - "$tf" <<'VERIFIER_PY'
-import json, sys
-path = sys.argv[1]
-try:
-    with open(path, encoding="utf-8") as handle:
-        ticket = json.load(handle)
-except (OSError, ValueError):
-    ticket = {}
-plan = ticket.get("verify") or {}
-files = (plan.get("files") or []) if isinstance(plan, dict) else []
-scope = ticket.get("in_scope") or []
-infra = ("docs/", "board/", "scripts/control/")
-product = [name for name in scope
-           if isinstance(name, str)
-           and not any(name == prefix[:-1] or name.startswith(prefix)
-                       for prefix in infra)]
-if ticket.get("needs_verifier") is not False and product and not files:
-    print(product[0])
-VERIFIER_PY
-)
-    if [ -n "$out" ]; then
-        echo "land: $b —— 票 #$id 的 verify.files 是空的,但 in_scope 含產品碼:"
-        echo "$out" | sed 's/^/land:   /'
-        echo "land:   先派驗證者寫回歸案例;若這張票明確不需要,在票面設 needs_verifier=false。"
-        STOP=1
-        RC_REFUSE=4
-        continue
-    fi
-
     out=$(python3 - "$ROOT" "$b" "$tf" <<'VFILES_PY'
 import json, subprocess, sys
 root, branch, path = sys.argv[1:4]
@@ -791,8 +732,6 @@ batch_fix() {
 import json, os, re, subprocess, sys
 root, main, tickets, status = sys.argv[1:5]
 branches = sys.argv[5:]
-sys.path.insert(0, os.path.join(root, "scripts"))
-import ticket as ticket_mod
 try:
     with open(status, encoding="utf-8") as handle:
         failures = json.load(handle).get("failures") or []
@@ -809,7 +748,7 @@ for branch in branches:
     plan = row.get("verify") if isinstance(row.get("verify"), dict) else {}
     done = subprocess.run(["git", "-C", root, "diff", "--name-only", "%s...%s" % (main, branch)],
                           capture_output=True, text=True)
-    rows.append((ident, row.get("allowed_write_paths") or [], plan.get("files") or [],
+    rows.append((ident, plan.get("files") or [],
                  [name for name in done.stdout.splitlines() if name]))
 hit, lines = [], []
 for failure in failures:
@@ -819,10 +758,8 @@ for failure in failures:
         lines.append("%s —— 紅榜沒有檔名,對不到票" % case)
         continue
     owners = []
-    for ident, allowed, files, changed in rows:
+    for ident, files, changed in rows:
         why = []
-        if ticket_mod.matches_any(name, allowed):
-            why.append("allowed_write_paths")
         if name in files:
             why.append("verify.files")
         if name in changed:
@@ -834,7 +771,7 @@ for failure in failures:
                 hit.append(ident)
     if not owners:
         lines.append("%s(%s)—— 對不到任何一張票" % (case, name))
-print(" ".join(ident for ident, _, _, _ in rows if ident in hit))
+print(" ".join(ident for ident, _, _ in rows if ident in hit))
 for line in lines:
     print(line)
 SUSPECT_PY

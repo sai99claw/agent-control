@@ -420,7 +420,7 @@ class ClosableTicket:
         self.git("commit", "-q", "-m", "把 src/nav.py 放進主線")
 
     def ready(self):
-        self.make_ticket(1, created=CREATED, allowed_write_paths=["src/*"],
+        self.make_ticket(1, created=CREATED,
                          verify_strings=["src/nav.py:def size_nav"],
                          test_evidence=[{"cmd": "gate --branch", "rc": 0}],
                          objections=[{"category": "nit", "body": "變數名可以短一點",
@@ -464,7 +464,7 @@ class ClosableTicket:
 class CloseWritesCostTotal(ClosableTicket, Sandbox):
 
     def test_c6_close_writes_cost_total_and_the_closed_event_carries_it(self):
-        """C6 close → 票上 cost_total 逐格 == 手算;ticket.closed 帶同一物件,hits / weak / state_version 照舊。"""
+        """C6 close → 票上 cost_total 逐格 == 手算;ticket.closed 帶同一物件,hits / state_version 照舊。"""
         self.land_a_file()
         self.ready()
         done = self.ticket("close", "1")
@@ -476,7 +476,7 @@ class CloseWritesCostTotal(ClosableTicket, Sandbox):
         closed = [row for row in self.events() if row["kind"] == "ticket.closed"]
         self.assertEqual(len(closed), 1, closed)
         self.assertEqual(closed[0].get("cost_total"), ticket["cost_total"])
-        for key in ("hits", "weak", "state_version"):
+        for key in ("hits", "state_version"):
             self.assertIn(key, closed[0])
 
     def test_c6_set_state_done_goes_through_the_same_write(self):

@@ -74,9 +74,7 @@ class ConsolidateBase(Sandbox):
                           "timeout_seconds": 600}
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
         self.make_ticket(7, role="consolidator", state="Ready", model="opus",
-                         in_scope=["memory/model/opus.md", "memory/model/opus.inbox.md"],
-                         allowed_write_paths=["memory/model/opus.md",
-                                              "memory/model/opus.inbox.md"],
+                         memory_file="memory/model/opus.md",
                          worker={"timeout_seconds": timeout})
 
     def launch(self):
@@ -319,7 +317,7 @@ class ConsolidateChecksTheLauncherRecord(Consolidation):
                      "--discussion", self.talk("d/a.md", "fixture-a", 2, sha)]
         self.sha = sha
         self.make_ticket(7, role="consolidator", state="Running",
-                         allowed_write_paths=[self.MAIN, self.INBOX],
+                         memory_file=self.MAIN,
                          attempt_history=[
                              {"model": "fixture-a", "discussion": "d/a.md", "at": "x"},
                              {"model": "codex:gpt-6-astra", "discussion": "d/b.md", "at": "x"}])
@@ -352,7 +350,7 @@ class OneRecordedDiscussionIsEnough(Consolidation):
         self.seed(2)
         self.sha = self.sha_of_first(2)
         self.make_ticket(7, role="consolidator", state="Running",
-                         allowed_write_paths=[self.MAIN, self.INBOX],
+                         memory_file=self.MAIN,
                          attempt_history=[{"model": "fable", "discussion": "d/fable.md",
                                            "at": "x"}])
 
