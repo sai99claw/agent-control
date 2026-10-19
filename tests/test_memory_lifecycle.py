@@ -203,24 +203,30 @@ class A3OneConsolidationTicket(Lifecycle):
         self.write("memory/role/opener.md", "規矩" * 15)
         self.write("memory/role/opener.inbox.md", ONE_NOTE)
 
-    def test_a3_a_glob_scoped_open_ticket_covers_the_card(self):
-        """A3 開著的 Draft 整理票 glob 蓋住 → 不開;改 Cancelled → 開 1 張。"""
+    def test_a3_an_open_ticket_whose_memory_file_is_the_card_covers_it(self):
+        """A3 開著的 Draft 整理票 `memory_file` 是這份檔 → 不開;改 Cancelled → 開 1 張(#137)。"""
         self.make_ticket(7, state="Draft", role="consolidator",
-                         allowed_write_paths=["memory/role/*.md"])
+                         memory_file="memory/role/opener.md")
         before = self.ticket_ids()
         done = self.memory("check")
         self.assertIn(ALREADY % 7, done.stdout, done.stdout + done.stderr)
         self.assertEqual(self.ticket_ids(), before, "已有整理票還是開了新票")
 
         self.make_ticket(7, state="Cancelled", role="consolidator",
-                         allowed_write_paths=["memory/role/*.md"])
+                         memory_file="memory/role/opener.md")
         done = self.memory("check")
+        opened = self.new_tickets(before)
+        self.assertEqual(len(opened), 1, done.stdout + done.stderr)
+        self.assertEqual(opened[0].get("memory_file"), "memory/role/opener.md")
+        # 新開的那一張自己也要被認得:再跑一次不再開。
+        done = self.memory("check")
+        self.assertIn(ALREADY % opened[0]["id"], done.stdout, done.stdout + done.stderr)
         self.assertEqual(len(self.new_tickets(before)), 1, done.stdout + done.stderr)
 
     def test_a3_after_the_covering_ticket_is_done_the_next_check_opens_one(self):
         """#134 A3:那張票 Done 之後、暫存區仍有條目 → 下一次 check 開 1 張。"""
         self.make_ticket(7, state="Done", role="consolidator",
-                         allowed_write_paths=["memory/role/*.md"])
+                         memory_file="memory/role/opener.md")
         before = self.ticket_ids()
         done = self.memory("check")
         opened = self.new_tickets(before)
@@ -229,13 +235,13 @@ class A3OneConsolidationTicket(Lifecycle):
                          done.stdout + done.stderr)
 
     def test_a3_any_open_ticket_covering_the_card_blocks_a_new_one(self):
-        """#87 A38:開著、allowed_write_paths(glob)蓋住這份檔的**任何 role** 的票都擋;
+        """#87 A38:開著、`memory_file` 是這份檔的**任何 role** 的票都擋;
         整理票的字樣照舊,別的 role 點名票號與 role;那張票 Cancelled 後再跑 → 開 1 張。
 
         **變異 M15**:判定改回只認 role=consolidator → 第一段開了新票,紅。
         """
         self.make_ticket(7, state="Running", role="worker",
-                         allowed_write_paths=["memory/role/*.md", "scripts/x.py"])
+                         memory_file="memory/role/opener.md")
         before = self.ticket_ids()
         done = self.memory("check")
         self.assertIn("已經有一張開著的票 #7(role=worker)覆蓋 memory/role/opener.md",
@@ -244,7 +250,7 @@ class A3OneConsolidationTicket(Lifecycle):
         self.assertEqual(self.ticket_ids(), before, "已有覆蓋的票還是開了新票")
 
         self.make_ticket(7, state="Cancelled", role="worker",
-                         allowed_write_paths=["memory/role/*.md", "scripts/x.py"])
+                         memory_file="memory/role/opener.md")
         done = self.memory("check")
         self.assertEqual(len(self.new_tickets(before)), 1, done.stdout + done.stderr)
 
@@ -272,8 +278,7 @@ class A4TicketContents(Lifecycle):
         row = opened[0]
         self.assertEqual(row["subject"], INBOX_SUBJ)
         self.assertNotIn("字元", row["subject"])
-        self.assertIn("memory/role/worker.md", row["allowed_write_paths"])
-        self.assertIn("memory/role/worker.inbox.md", row["allowed_write_paths"])
+        self.assertEqual(row.get("memory_file"), "memory/role/worker.md")
         self.assertIs(row.get("needs_verifier"), False)
 
     def test_a4_one_note_from_a_closed_ticket_opens_one_ticket(self):

@@ -451,14 +451,14 @@ class EffortFollowsTheTable(RoleTableBase):
     def test_a7_first_round_sol_is_high_not_xhigh(self):
         """A7 第一輪 sol → codex 命令 effort high(不是 xhigh、不是沒有)。"""
         self.default_worker_chain()
-        self.make_ticket("1", allowed_write_paths=["tests/*"], model=SOL, tool="codex")
+        self.make_ticket("1", model=SOL, tool="codex")
         done = self.auto_fix("--dry-run")
         self.assertEqual(codex_effort(self.dry_worker(done)), "high", self.says(done))
 
     def test_a7_a_complex_ticket_escalates_to_xhigh(self):
         """A7 票 complexity=complex → 第一輪就 xhigh。"""
         self.default_worker_chain()
-        self.make_ticket("1", allowed_write_paths=["tests/*"], model=SOL, tool="codex",
+        self.make_ticket("1", model=SOL, tool="codex",
                          complexity="complex")
         done = self.auto_fix("--dry-run")
         self.assertEqual(codex_effort(self.dry_worker(done)), "xhigh", self.says(done))

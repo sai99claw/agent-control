@@ -213,7 +213,7 @@ class TheClaudePathIsUnchanged(CodexBase):
         self.set_role_models(worker=[fixture_candidate("opus")])
         for drop_tool in (False, True):
             with self.subTest(drop_tool=drop_tool):
-                row = self.make_ticket("1", allowed_write_paths=["tests/*"], model="opus",
+                row = self.make_ticket("1", model="opus",
                                        tool="claude-code")
                 if drop_tool:
                     row.pop("tool")
@@ -231,7 +231,7 @@ class InconsistentFieldsAreNotDispatched(CodexBase):
         self.fake_codex()
         for model, tool in (("opus", "codex"), (CODEX_MODEL, "claude-code")):
             with self.subTest(model=model, tool=tool):
-                self.make_ticket("1", allowed_write_paths=["tests/*"], model=model, tool=tool)
+                self.make_ticket("1", model=model, tool=tool)
                 done = self.auto_fix("--no-review")
                 self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
                 named = [l for l in done.stderr.splitlines()
@@ -510,7 +510,7 @@ class AutoFixPicksTheEffort(EffortBase):
         for name, chain, fields, want, source in rows:
             with self.subTest(case=name):
                 self.set_role_models(worker=chain)
-                self.make_ticket("1", allowed_write_paths=["tests/*"], **fields)
+                self.make_ticket("1", **fields)
                 done = self.auto_fix("--dry-run")
                 self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
                 worker, sources = self.dry_lines(done)
@@ -548,7 +548,7 @@ class AnIllegalEffortIsNotDispatched(EffortBase):
         self.set_role_models(worker=[fixture_candidate("opus")])
         for args in (("--no-review",), ("--dry-run",)):
             with self.subTest(args=args):
-                self.make_ticket("1", allowed_write_paths=["tests/*"], tool="claude-code",
+                self.make_ticket("1", tool="claude-code",
                                  effort="ultra")
                 before = self.load_ticket("1")
                 done = self.auto_fix(*args)

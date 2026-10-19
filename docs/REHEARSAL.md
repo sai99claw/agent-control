@@ -11,7 +11,6 @@
 | 工具 | 第一次真跑是什麼時候 | 那時要看到什麼 |
 |---|---|---|
 | `scripts/land.sh` 的 `base_sha` 過期拒絕 | 下一次落地一條票上 `base_sha` 已經不是主線祖先的分支 | 印出那個 sha 並說「先 rebase 再重跑閘門」,`EXIT=2`,**沒有建 land worktree** |
-| `scripts/land.sh` 的寫入範圍拒絕 | 下一次有分支改到票的 `allowed_write_paths` 以外 | 逐條指名越界的檔,`EXIT=2`,整批都沒進去 |
 | `scripts/gate.sh` 的「對不到任何模組」 | 下一次有人加了一種新的檔而對照表還沒有那一格 | 指名那幾個檔、`EXIT=3`,而且**對得到的那些照樣跑完** |
 | `scripts/ticket.py verify` 擋下的關票 | 下一次有人想關一張東西沒進主線的票 | 逐條印出 `0`,拒絕關,票停在原狀態 |
 | `scripts/memory.py check` 開的整理票 | 下一次某份 `memory/model/<model>.inbox.md` 有一條未整理的 note(暫存區有未整理條目就整理、不設固定字數上限;判準「每個 session 開場都會讀，只留值得這個成本的」,D-053 ⑥) | 事件 `memory.pending`、票開出來一次(**第二次跑不再開第二張**) |

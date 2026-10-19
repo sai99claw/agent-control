@@ -327,7 +327,7 @@ class GateSh(Sandbox):
 
     def test_an_unmapped_file_with_a_red_test_in_the_diff_is_red_by_the_test(self):
         """推得的守衛紅了,rc 是測試的紅,不是 3;狀態檔 NOTE 記下推得的對照。"""
-        self.make_ticket(7, allowed_write_paths=["tests/*", "scripts/zzz.sh"])
+        self.make_ticket(7)
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "票 #7")
         self.write("scripts/zzz.sh", "echo zzz\n")
@@ -393,7 +393,7 @@ class GateSh(Sandbox):
         理由:`shouldStop` 停的是下一條測試方法,而這 12 條 subTest 跑在同一個方法
         裡面 —— 只設它,那一段還是會整組跑完,而「跑完再說」就是這張票要擋的事。"""
         self.write("tests/test_env_wave.py", ENVIRONMENT_WAVE)
-        self.make_ticket(7, allowed_write_paths=["tests/*"])
+        self.make_ticket(7)
         done = self.gate("tests/test_env_wave.py", "--ticket", "7", "--no-auto-fix")
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(len([row for row in self.ran() if row.startswith("safari-")]), 8,
@@ -438,7 +438,7 @@ class GateSh(Sandbox):
         裡每條紅例單跑 N 次只會把浪費加倍。所以這一段不准印出 flake 那幾句,狀態檔
         也不准留下 flaky 的判定。"""
         self.write("tests/test_env_wave.py", ENVIRONMENT_WAVE)
-        self.make_ticket(7, allowed_write_paths=["tests/*"])
+        self.make_ticket(7)
         done = self.gate("tests/test_env_wave.py", "--ticket", "7", "--no-auto-fix")
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("單獨重跑", done.stdout)
@@ -458,7 +458,7 @@ class GateSh(Sandbox):
         self.write("board/config.json", json.dumps(config, ensure_ascii=False, indent=2))
         self.git("add", "board/config.json")
         self.git("commit", "-q", "-m", "沙盒的環境門檻")
-        self.make_ticket(7, allowed_write_paths=["tests/*"])
+        self.make_ticket(7)
         done = self.gate("tests/test_env_wave.py", "--ticket", "7", "--no-auto-fix")
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(len([row for row in self.ran() if row.startswith("safari-")]), 3,
@@ -478,7 +478,7 @@ class GateSh(Sandbox):
         self.write("board/config.json", json.dumps(config, ensure_ascii=False, indent=2))
         self.git("add", "board/config.json")
         self.git("commit", "-q", "-m", "沙盒的環境門檻")
-        self.make_ticket(7, allowed_write_paths=["tests/*"])
+        self.make_ticket(7)
         done = self.run_sh("scripts/gate.sh", "tests/test_env_wave.py", "--ticket", "7",
                            "--no-auto-fix", env=self.env(AC_NO_FLAKE_RERUN="1"))
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -509,7 +509,7 @@ class GateSh(Sandbox):
         self.write("board/config.json", json.dumps(config, ensure_ascii=False, indent=2))
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "沙盒的假 worker")
-        self.make_ticket(7, allowed_write_paths=["tests/*"])
+        self.make_ticket(7)
         done = self.gate("tests/test_env_wave.py", "--ticket", "7")
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("環境可疑,不自動派", done.stdout)
@@ -540,7 +540,7 @@ class GateSh(Sandbox):
         self.write("board/config.json", json.dumps(config, ensure_ascii=False, indent=2))
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "沙盒的假 worker")
-        self.make_ticket(7, allowed_write_paths=["tests/*"])
+        self.make_ticket(7)
         done = self.gate("tests/test_zz_red.py", "--ticket", "7")
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("環境可疑,不自動派", done.stdout)
@@ -555,7 +555,7 @@ class GateSh(Sandbox):
         只有 complex 的票派覆核(#136),所以夾具標 complex。
         """
         model = self.set_reviewer(REVIEWER_PASS)
-        self.make_ticket(7, allowed_write_paths=["tests/*"], state="Running",
+        self.make_ticket(7, state="Running",
                          complexity="complex")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "沙盒的假 reviewer 與票 #7")
@@ -579,7 +579,7 @@ class GateSh(Sandbox):
             with self.subTest(name):
                 self.setUp()
                 self.set_reviewer(REVIEWER_PASS)
-                self.make_ticket(7, allowed_write_paths=["tests/*"], state="Running", **fields)
+                self.make_ticket(7, state="Running", **fields)
                 self.git("add", "-A")
                 self.git("commit", "-q", "-m", "沙盒的假 reviewer 與票 #7")
                 self.git("branch", "t7")
@@ -596,7 +596,7 @@ class GateSh(Sandbox):
     def test_a_green_file_run_does_not_call_review_sh(self):
         """指定檔(與 land 跑的 `--full`)不是「手跑票閘門」:不轉 InReview、不派覆核。"""
         self.set_reviewer(REVIEWER_PASS)
-        self.make_ticket(7, allowed_write_paths=["tests/*"], state="Running")
+        self.make_ticket(7, state="Running")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "沙盒的假 reviewer 與票 #7")
         self.git("branch", "t7")
@@ -645,8 +645,7 @@ class VerifierCasesAtTheGate(Sandbox):
         self.write(os.path.join("verify", "nav", "test_ticket_7.py"), case)
         fields.setdefault("verify", {"files": ["verify/nav/test_ticket_7.py"],
                                      "tags": [], "run": "", "notes": ""})
-        return self.make_ticket(7, allowed_write_paths=["verify/*", "src/*", "tests/*"],
-                                **fields)
+        return self.make_ticket(7, **fields)
 
     def implement(self):
         """實作者這一輪的改動:值變成 2(還沒 commit —— 閘門問的是現在手上這一份)。"""
@@ -664,8 +663,7 @@ class VerifierCasesAtTheGate(Sandbox):
         **變異**:把 `verify_case` 裡 `CRC=3` 那一行拿掉(退回只印一行)→ 這一條紅,
         因為退出碼變成 0 —— 而「沒有人驗過」與「驗過了都過」正是在那裡長得一樣。
         """
-        self.make_ticket(7, allowed_write_paths=["tests/*", "src/*"],
-                         verify={"files": [], "tags": [], "run": "", "notes": ""})
+        self.make_ticket(7, verify={"files": [], "tags": [], "run": "", "notes": ""})
         done = self.gate()
         self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
         self.assertIn("這張票沒有驗證者案例", done.stdout)
@@ -682,8 +680,7 @@ class VerifierCasesAtTheGate(Sandbox):
         **變異**:把 `waiver)` 那一格拿掉 → 前半紅(rc 變 3);把它從 `[ -z "$files" ]`
         裡面搬到外面(退回第 2 輪)→ 後半紅(lint 不會被叫到)。
         """
-        self.make_ticket(7, allowed_write_paths=["tests/*", "src/*"],
-                         verify={"files": [], "tags": [], "run": "", "notes": ""},
+        self.make_ticket(7, verify={"files": [], "tags": [], "run": "", "notes": ""},
                          verify_waiver={"by": "main", "reason": "純文字,沒有邏輯可紅"})
         done = self.gate()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -708,15 +705,14 @@ class VerifierCasesAtTheGate(Sandbox):
         **變異**:把 `undeclared)` 那一格拿掉 → 後半紅(rc 變 3);把
         `needs-verifier-false)` 那一格拿掉 → 前半紅。
         """
-        self.make_ticket(7, allowed_write_paths=["tests/*", "src/*"],
-                         needs_verifier=False,
+        self.make_ticket(7, needs_verifier=False,
                          verify={"files": [], "tags": [], "run": "", "notes": ""})
         done = self.gate()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("needs_verifier=false", done.stdout)
 
         # 票上連 `verify` 這一格都沒有(沙盒手寫票的形狀)。
-        self.make_ticket(7, allowed_write_paths=["tests/*", "src/*"])
+        self.make_ticket(7)
         done = self.gate()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("連 verify 這一格都沒有宣告", done.stdout)
@@ -730,8 +726,7 @@ class VerifierCasesAtTheGate(Sandbox):
         **變異 M3**:`verify_plan` 改回拿 `$ROOT` 拼票檔路徑 → 紅(讀到 worktree 那份
         舊票,rc=3「這張票沒有驗證者案例」)。
         """
-        self.make_ticket(7, allowed_write_paths=["tests/*", "src/*"],
-                         verify={"files": [], "tags": [], "run": "", "notes": ""})
+        self.make_ticket(7, verify={"files": [], "tags": [], "run": "", "notes": ""})
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "開票 #7(還沒有 needs_verifier)")
         marked = self.ticket("set", "7", "needs_verifier", "false")
@@ -769,19 +764,19 @@ class VerifierCasesAtTheGate(Sandbox):
         return self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
                            "--branch", "--ticket", "7", "--no-auto-fix", cwd=wt, env=env)
 
-    def test_preflight_in_the_ticket_worktree_reads_the_main_repo_allowed_paths(self):
-        """#53 D1(a):主 repo 那一份票的 `allowed_write_paths` 含 tests/*,worktree 那份只有
-        src/*。閘門只帶 `AC_ROOT`,preflight 要讀主 repo 那一份。
+    def test_preflight_in_the_ticket_worktree_reads_the_main_repo_ticket(self):
+        """#53 D1(a):worktree 那份票的 `verify_strings` 要一個 patch 裡沒有的字,主 repo 那一份
+        是空的。閘門只帶 `AC_ROOT`,preflight 要讀主 repo 那一份。
 
         **變異 M1**:preflight 改回 `event.tickets_dir(root)` 拼路徑 → 紅(rc 4)。
         """
-        wt = self.worktree_with_an_old_ticket({"allowed_write_paths": ["src/*"]},
-                                              {"allowed_write_paths": ["src/*", "tests/*"]})
+        wt = self.worktree_with_an_old_ticket({"verify_strings": ["patch 裡沒有這幾個字"]},
+                                              {"verify_strings": []})
         env = self.env(AC_ROOT=self.repo)
         self.assertNotIn("AC_TICKETS_DIR", env)
         done = self.gate_in(wt, env)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertNotIn("在允許範圍外", done.stdout + done.stderr)
+        self.assertNotIn("不在 patch 內容裡", done.stdout + done.stderr)
 
     def test_ticket_tags_in_the_ticket_worktree_come_from_the_main_repo(self):
         """#53 D1(b):主 repo 那一份 `verify.tags` 是 [],worktree 那份是未登記的 ["zzz"]。
@@ -789,7 +784,7 @@ class VerifierCasesAtTheGate(Sandbox):
 
         **變異 M2**:ticket_tags 改回 `event.tickets_dir(root)` 拼路徑 → 紅(回歸層選 zzz)。
         """
-        fields = {"allowed_write_paths": ["tests/*"], "needs_verifier": False}
+        fields = {"needs_verifier": False}
         wt = self.worktree_with_an_old_ticket(
             dict(fields, verify={"files": [], "tags": ["zzz"], "run": "", "notes": ""}),
             dict(fields, verify={"files": [], "tags": [], "run": "", "notes": ""}))
@@ -805,7 +800,7 @@ class VerifierCasesAtTheGate(Sandbox):
         **變異 M3**:拿掉 gate.sh 那段 `export AC_ROOT=<main_root>` → 紅(worktree 那份
         被寫成 InReview)。
         """
-        fields = {"allowed_write_paths": ["tests/*"], "state": "Running"}
+        fields = {"state": "Running"}
         wt = self.worktree_with_an_old_ticket(fields, fields)
         env = self.env()
         self.assertNotIn("AC_ROOT", env)
@@ -824,8 +819,7 @@ class VerifierCasesAtTheGate(Sandbox):
         **變異 M1**:verify.py 的 `_find_root()` 放回 `AC_ROOT` override 分支 → 紅
         (回歸層跑主 repo 那份綠案例,rc 0)。
         """
-        self.make_ticket(7, allowed_write_paths=["verify/*", "tests/*"],
-                         needs_verifier=False,
+        self.make_ticket(7, needs_verifier=False,
                          verify={"files": [], "tags": ["example"], "run": "", "notes": ""})
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "開票 #7(回歸層 example)")
@@ -910,8 +904,7 @@ class VerifierCasesAtTheGate(Sandbox):
 
         **變異 M5**:`parse_lint` 的 file 寫 lint 印的原樣(絕對路徑)→ 紅。
         """
-        self.make_ticket(7, allowed_write_paths=["verify/*", "src/*", "tests/*"],
-                         verify={"files": ["verify/nav/test_ticket_gone.py"],
+        self.make_ticket(7, verify={"files": ["verify/nav/test_ticket_gone.py"],
                                  "tags": [], "run": "", "notes": ""})
         done = self.gate()
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -931,7 +924,7 @@ class VerifierCasesAtTheGate(Sandbox):
 
         **變異 M6**:CRC=3 那條路不設 `LINT_ARGS` → failures[] 空 → 紅。
         """
-        self.make_ticket(7, allowed_write_paths=["tests/*", "src/*"], needs_verifier=True,
+        self.make_ticket(7, needs_verifier=True,
                          verify={"files": [], "tags": [], "run": "", "notes": ""})
         done = self.gate()
         self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
@@ -953,7 +946,7 @@ class VerifierCasesAtTheGate(Sandbox):
                 ("needs_verifier=false", {"verify": empty, "needs_verifier": False}),
                 ("沒有 verify 格", {})):
             with self.subTest(label):
-                self.make_ticket(7, allowed_write_paths=["tests/*", "src/*"], **fields)
+                self.make_ticket(7, **fields)
                 done = self.gate()
                 self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
                 self.assertEqual(self.lint_rows(), [])
@@ -1103,7 +1096,7 @@ class TheHandRunGateWritesTheTicketGate(Sandbox):
     def branch_with(self, name, body):
         # complex:手跑綠要派覆核,派工文才看得到「已對 <sha> 跑過閘門」(#136 起只派 complex)。
         self.set_reviewer(REVIEWER_PASS)
-        self.make_ticket(7, allowed_write_paths=["tests/*"], state="Running",
+        self.make_ticket(7, state="Running",
                          complexity="complex")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "沙盒的假 reviewer 與票 #7")
@@ -1161,7 +1154,7 @@ class TheHandRunGateWritesTheTicketGate(Sandbox):
 
         **變異 M4**:preflight 的 content diff 拿掉票檔的 exclude → 這一條紅(不報)。
         """
-        self.make_ticket(7, allowed_write_paths=["tests/*"], state="Running",
+        self.make_ticket(7, state="Running",
                          verify_strings=["needle-a4-branch", "needle-a4-dirty"])
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "票 #7")
@@ -1185,7 +1178,7 @@ class TheHandRunGateWritesTheTicketGate(Sandbox):
     def test_a4_a_needle_in_the_branch_diff_still_counts(self):
         """#87 A4 回歸:needle 在分支的 diff 裡 → 不報。"""
         self.set_reviewer(REVIEWER_PASS)
-        self.make_ticket(7, allowed_write_paths=["tests/*"], state="Running",
+        self.make_ticket(7, state="Running",
                          verify_strings=["needle-a4-real"])
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "票 #7")
@@ -1208,7 +1201,7 @@ class BranchGateRefusesAnEmptyCompareOnMain(Sandbox):
 
     def setUp(self):
         super().setUp()
-        self.make_ticket(7, allowed_write_paths=["tests/*"], verify_strings=["x"])
+        self.make_ticket(7, verify_strings=["x"])
 
     def refused(self, expected, **env):
         ticket_before = self.read(os.path.join("tickets", "7.json"))
@@ -1246,7 +1239,7 @@ class BranchGateRefusesAnEmptyCompareOnMain(Sandbox):
         self.make_ticket(8)
         self.git("add", "tickets")
         self.git("commit", "-q", "-m", "tickets")
-        self.make_ticket(7, allowed_write_paths=["tests/*"], verify_strings=["x"], attempt=2)
+        self.make_ticket(7, verify_strings=["x"], attempt=2)
         self.make_ticket(8, attempt=2)
         self.make_ticket(9)
         self.assertEqual(sorted(self.git("status", "--porcelain").splitlines()),

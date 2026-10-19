@@ -67,8 +67,7 @@ class MemoryCheck(Sandbox):
         self.assertEqual(row["subject"], "整理 memory/model/opus.md(暫存區 1 條未整理)")
         self.assertEqual(row["role"], "consolidator")
         self.assertEqual(row["model"], "fable", "整理要派給 config 指定的高階模型")
-        self.assertEqual(sorted(row["allowed_write_paths"]),
-                         ["memory/model/opus.inbox.md", "memory/model/opus.md"])
+        self.assertEqual(row.get("memory_file"), "memory/model/opus.md")
 
     def test_the_ticket_gives_the_criterion_and_no_length_target(self):
         """D-053 ⑥:整理者只拿判準一句,寫什麼、留多長由它決定。
@@ -449,8 +448,7 @@ class TheProjectSideIsWhatGetsWatched(Sandbox):
     專案**改不了**的整理票:那一層下一次同步就被蓋掉。所以這一條釘住:名單指
     `memory/role/*.md` 時,開出來的票寫得可以動的那個路徑。
 
-    **變異**:把 `open_ticket_for` 的 `--allowed-write-path rel` 換成 `docs/roles/…`
-    → 這一條紅。
+    **變異**:把 `open_ticket_for` 補的 `memory_file` 換成 `docs/roles/…` → 這一條紅。
     """
 
     config_extra = {"memory": {"consolidators": ["fable", "codex:astra"],
@@ -471,9 +469,8 @@ class TheProjectSideIsWhatGetsWatched(Sandbox):
         opened = [one for one in self.tickets_on_disk()
                   if one.get("role") == "consolidator"]
         self.assertEqual(len(opened), 1, opened)
-        paths = opened[0]["allowed_write_paths"]
-        self.assertIn(os.path.join("memory", "role", "implementer.md"), paths)
-        self.assertFalse([one for one in paths if one.startswith("docs/roles")],
+        self.assertEqual(opened[0].get("memory_file"),
+                         os.path.join("memory", "role", "implementer.md"),
                          "整理票不該指向同步產出物 —— 改了下一次同步就被蓋掉")
 
     def test_the_notes_land_in_the_project_memory_not_in_the_canon_dir(self):

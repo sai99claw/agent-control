@@ -276,7 +276,7 @@ class WhoWritesIntoIt(InboxBase):
         self.write("tests/test_land.py",
                    "import unittest\n\n\nclass T(unittest.TestCase):\n"
                    "    def test_ok(self):\n        pass\n")
-        self.make_ticket("7", allowed_write_paths=["tests/*"])
+        self.make_ticket("7")
         done = self.run_sh("scripts/gate.sh", "scripts/land.sh", "--ticket", "7")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.pages("7"), [])

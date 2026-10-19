@@ -128,7 +128,7 @@ base = worker.get("command") or "claude -p --model opus"
 run_id = os.environ.get("AC_RUN_ID") or "%s-%d" % (now().strftime("%Y%m%d-%H%M%S"), os.getpid())
 rundir = os.path.join(root, conf.get("reports_dir") or "reports", "t%s" % ident, run_id)
 os.makedirs(rundir, exist_ok=True)
-target = next(iter(row.get("in_scope") or row.get("allowed_write_paths") or []), "")
+target = row.get("memory_file") or ""
 today = date.today().isoformat()
 history = list(row.get("attempt_history") or [])
 

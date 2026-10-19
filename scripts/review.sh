@@ -453,7 +453,7 @@ print("# 批次修復的覆核:%s(整合分支 `%s`)" % (tags, branch))
 print("")
 print("這一批 land 時全套紅了;一個 worker 在整合分支上修了紅榜,修法是整合分支頭上**一個** commit "
       "`%s`。你覆核的是**這個 commit 的 diff**:有沒有把這批票各自的驗收修壞、有沒有放寬測試、"
-      "有沒有碰不該碰的檔。各票分支已各自覆核過,不重看。" % sha[:12])
+      "有沒有動到與修紅無關的檔。各票分支已各自覆核過,不重看。" % sha[:12])
 print("")
 print("## 這一批獨有的四件事")
 print("1. **票號**:%s(票面在下面;不寫任何一張票)" % tags)
@@ -472,26 +472,8 @@ for ident in ids:
     print("- acceptance:")
     for item in row.get("acceptance") or []:
         print("  - %s" % item)
-    print("- allowed_write_paths:%s" % json.dumps(row.get("allowed_write_paths") or [], ensure_ascii=False))
-    print("- out_of_scope:%s" % json.dumps(row.get("out_of_scope") or [], ensure_ascii=False))
 diff = subprocess.run(["git", "-C", root, "diff", "%s^" % sha, sha],
                       capture_output=True, text=True).stdout
-sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
-import ticket as ticket_mod
-extra, reasons = ticket_mod.handin_union(ticket_mod.handin_rounds(os.path.dirname(review)))
-if extra:
-    rows = []
-    for ident in ids:
-        with open(os.path.join(tdir, "%s.json" % ident), encoding="utf-8") as handle:
-            rows.append(json.load(handle))
-    hits = ticket_mod.out_of_scope_hits(rows, extra)
-    print("")
-    print("## 白名單外改動")
-    print("這幾個檔在各票提示範圍聯集外、或命中 out_of_scope(建議範圍,越出不擋);理由是 worker 在 "
-          "EVIDENCE「提示清單外的改動」寫的:")
-    for name in extra:
-        sys.stdout.write(ticket_mod.extra_line(name, hits.get(name), reasons.get(name)))
-    print("逐檔確認與修紅相關、理由站得住、測試沒改弱;無關或改弱 = fail。")
 print("")
 print("## fix commit 前後的 diff(`git diff %s^ %s`)" % (sha[:12], sha[:12]))
 print("```diff")
@@ -691,12 +673,9 @@ review_packet() {   # 派工文 = 規則包 + 範本四件事填好;換候選(#1
     {
         printf '%s\n' "$RULES_TEXT"
         python3 - "$TEMPLATE" "$ID" "$SHA" "$WT" "$EVIDENCE" "$STATUS_FILE" "$REVIEW" \
-            "$MODEL" "$ROUND" "$(rel "$TF")" "$TF" "$AC" "$ROOT" "$(cfg main_branch main)" <<'PY'
-import json, subprocess, sys
+            "$MODEL" "$ROUND" "$(rel "$TF")" "$TF" <<'PY'
+import json, sys
 template, ident, sha, wt, evidence, state_file, review, model, rnd, ticket_file, tf = sys.argv[1:12]
-ac, root, main = sys.argv[12:15]
-sys.path.insert(0, ac)
-import ticket as ticket_mod
 with open(template, encoding="utf-8") as handle:
     text = handle.read()
 # 「已對 <sha> 跑過閘門」只在票上 `gate.sha` 就是分支頭時說(#56,D-H38)。以前範本無條件
@@ -732,28 +711,6 @@ slots = {
     "@MODEL@": model,
     "@ROUND@": rnd,
 }
-# 白名單外改動(D-H38 ①、D-050 ①):提示範圍與 `out_of_scope` 都是建議範圍,越出不擋 —— 擋的是
-# 覆核者這一段:逐檔印檔名、命中的 out_of_scope glob、各輪收件併起來的理由(`extra_reasons`)。
-# 沒有就不印,免得每一份派工文都多一段空話。
-changed = subprocess.run(["git", "-C", root, "diff", "--name-only", "%s...%s" % (main, sha)],
-                         capture_output=True, text=True).stdout.splitlines()
-extra = ticket_mod.write_scope(row, root, [name for name in changed if name])[1]
-if extra:
-    hits = ticket_mod.out_of_scope_hits([row], extra)
-    reasons = ticket_mod.handin_reasons(root, ident)[1]
-    section = ("## 白名單外改動\n"
-               "這幾個檔在提示範圍(`allowed_write_paths` ∪ `info_homes[].home` ∪ `verify.files`)外、"
-               "或命中 `out_of_scope` —— 兩者都是建議範圍,不是限制,越出不擋;理由是實作者在 "
-               "EVIDENCE「提示清單外的改動」寫的(out_of_scope 命中缺理由 land 會拒絕):\n"
-               + "".join(ticket_mod.extra_line(name, hits.get(name), reasons.get(name))
-                         for name in extra)
-               + "\n逐檔確認與票面目標相關、理由站得住、測試沒改弱(斷言數不減、刪案例要有票面理由),"
-                 "無關或改弱 = fail。\n\n")
-    marker = "## 交付:固定格式"
-    if marker in text:
-        text = text.replace(marker, section + marker, 1)
-    else:
-        text = text.rstrip("\n") + "\n\n" + section
 for key, value in slots.items():
     text = text.replace(key, value)
 sys.stdout.write("\n" + text)

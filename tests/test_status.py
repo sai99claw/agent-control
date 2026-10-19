@@ -553,7 +553,7 @@ class GateWritesStatus(Sandbox):
         self.assertIn("機械格不合", gate["note"])
 
     def test_verify_string_must_be_in_patch_content_not_its_filename(self):
-        self.make_ticket(7, allowed_write_paths=["tests/*"], verify_strings=["filename-token"])
+        self.make_ticket(7, verify_strings=["filename-token"])
         self.write("tests/test_filename-token.py", "import unittest\n\nclass T(unittest.TestCase):\n    pass\n")
         done = self.gate("tests/test_filename-token.py", "--ticket", "7")
         self.assert_preflight_stopped_before_tests(done)
@@ -572,35 +572,19 @@ class GateWritesStatus(Sandbox):
         self.assertIn("not-registered", done.stderr)
         self.assertIn("未登記", done.stderr)
 
-    def test_a_patch_touching_out_of_scope_does_not_stop_the_preflight(self):
-        """#101 A1(D-050 ①):out_of_scope 是建議範圍 —— preflight 不再 rc 4,只列出命中的檔與
-        glob(要理由的是 land)。舊版本條是「rc 4、測試沒起」,D-050 ① 把它翻成這一條。
-        四問:量 rc 不是 4、沒有機械格不合、stderr 那一行;紅 = 命中照舊進 errors;期望值 =
-        夾具票面的 out_of_scope;不測 = land 的理由那一關。
-        **變異 M5**:preflight 把 out_of_scope 命中照舊 append 進 errors → 這一條紅。"""
-        self.make_ticket(7, allowed_write_paths=["src/*"], out_of_scope=["scripts/land.sh"])
-        self.write("scripts/land.sh", self.read("scripts/land.sh") + "\n# outside scope\n")
-        done = self.gate("--branch", "--ticket", "7")
-        self.assertNotEqual(done.returncode, 4, done.stdout + done.stderr)
-        self.assertNotIn("機械格不合", done.stderr)
-        line = [row for row in done.stderr.splitlines()
-                if "scripts/land.sh" in row and "out_of_scope" in row]
-        self.assertEqual(len(line), 1, done.stderr)
-        self.assertIn("`scripts/land.sh`", line[0])
-
     def hard_block(self, paths=(), patterns=()):
         conf = json.loads(self.read("board/config.json"))
         conf["hard_block"] = {"paths": list(paths), "dirs": [], "patterns": list(patterns)}
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
 
     def test_a_patch_touching_hard_block_paths_stops_before_tests(self):
-        """#101 A1:hard_block.paths 仍是 preflight rc 4、測試沒起、點名檔與格(原 out_of_scope 那條
-        的硬擋一半)。四問:量 rc 4、測試標記、stderr;紅 = preflight 不看 blocked;期望值 =
+        """#101 A1:hard_block.paths 是 preflight rc 4、測試沒起、點名檔與格(D-054:唯一的硬擋)。
+        四問:量 rc 4、測試標記、stderr;紅 = preflight 不看硬擋命中;期望值 =
         測試寫進 config 的 hard_block.paths。
-        **變異 M1**:preflight 不看 `write_scope` 的 blocked → 這一條紅。"""
+        **變異 M1**:preflight 不看 `hard_block_hits` 的命中 → 這一條紅。"""
         self.install_test_marker()
         self.hard_block(paths=["scripts/land.sh"])
-        self.make_ticket(7, allowed_write_paths=["src/*", "scripts/*"])
+        self.make_ticket(7)
         self.write("scripts/land.sh", self.read("scripts/land.sh") + "\n# outside scope\n")
         done = self.gate("--branch", "--ticket", "7")
         self.assert_preflight_stopped_before_tests(done)
@@ -612,7 +596,7 @@ class GateWritesStatus(Sandbox):
         **變異**:preflight 不把 diff 的新增行交給硬擋 → 這一條紅。"""
         self.install_test_marker()
         self.hard_block(patterns=[r"os\.kill"])
-        self.make_ticket(7, allowed_write_paths=["src/*", "tests/*"])
+        self.make_ticket(7)
         self.write("tests/test_k.py", "os." + "kill(pid, 9)\n")
         done = self.gate("--branch", "--ticket", "7")
         self.assert_preflight_stopped_before_tests(done)
@@ -622,25 +606,15 @@ class GateWritesStatus(Sandbox):
         """patterns 只查 tests/** 與 verify/** 的新增行(scripts 自己合法用 kill)。
         **變異 M2**:patterns 對 scripts/** 也查 → 這一條紅。"""
         self.hard_block(patterns=[r"os\.kill"])
-        self.make_ticket(7, allowed_write_paths=["src/*", "scripts/*"])
+        self.make_ticket(7)
         self.write("scripts/k.py", "os." + "kill(pid, 9)\n")
-        done = self.gate("--branch", "--ticket", "7")
-        self.assertNotEqual(done.returncode, 4, done.stdout + done.stderr)
-        self.assertNotIn("機械格不合", done.stderr)
-
-    def test_a_patch_outside_allowed_write_paths_alone_does_not_stop_the_preflight(self):
-        """白名單外只記錄不擋 —— preflight 照舊擋它,apply 放過的東西閘門永遠過不去。
-        **變異**:preflight 退回「不在 allowed_write_paths 就擋」→ 這一條紅。"""
-        self.make_ticket(7, allowed_write_paths=["src/*"])
-        self.write("scripts/land.sh", self.read("scripts/land.sh") + "\n# outside scope\n")
         done = self.gate("--branch", "--ticket", "7")
         self.assertNotEqual(done.returncode, 4, done.stdout + done.stderr)
         self.assertNotIn("機械格不合", done.stderr)
 
     def test_valid_mechanical_fields_allow_tests_to_start(self):
         self.install_test_marker()
-        self.make_ticket(7, allowed_write_paths=["scripts/land.sh"],
-                         verify_strings=["gate-preflight-token"],
+        self.make_ticket(7, verify_strings=["gate-preflight-token"],
                          verify={"files": ["verify/example/test_example.py"],
                                  "tags": ["example"], "run": "", "notes": ""})
         self.git("add", "tickets/7.json")

@@ -456,8 +456,7 @@ class Sandbox(unittest.TestCase):
         row = {"id": str(ident), "subject": "第 %s 張" % ident,
                "created": "2026-09-12T10:00:00+08:00",
                "objective": "做完某件事", "acceptance": ["會紅的斷言一條"],
-               "in_scope": [], "out_of_scope": [], "depends_on": [],
-               "allowed_write_paths": ["src/*"], "role": "worker",
+               "depends_on": [], "role": "worker",
                "model": "opus", "tool": "claude-code", "attempt": 1,
                "base_sha": self.git("rev-parse", "main").strip(),
                "state": "Ready", "state_version": 1, "lease": None,
@@ -513,11 +512,8 @@ class Sandbox(unittest.TestCase):
 
     def make_batch(self, run_id="20261010-120000-1"):
         """批次修復的真實形狀:主線 + `t1-a`、`t2-b` 兩條票分支 + 兩條都 `--no-ff` merge 進去的
-        整合分支 `land/X`;票 1 / 票 2 已覆核(review 綁各自分支頭)、帶 allowed_write_paths /
-        out_of_scope;`reports/t1/<run_id>/status.json` 是 land 那一輪全套紅的兩條紅榜。
-
-        `docs/shared.md` 在票 1 的 out_of_scope、也在票 2 的 allowed —— 聯集扣掉後**不擋**;
-        `docs/guarded.md` 只在票 1 的 out_of_scope —— 命中(#101 起不擋,列出要理由)。期望值一律從這裡寫下的檔讀回。"""
+        整合分支 `land/X`;票 1 / 票 2 已覆核(review 綁各自分支頭);`reports/t1/<run_id>/status.json`
+        是 land 那一輪全套紅的兩條紅榜。期望值一律從這裡寫下的檔讀回。"""
         self.write("src/one.txt", "one\n")
         self.write("src/two.txt", "two\n")
         self.write("docs/guarded.md", "guarded\n")
@@ -535,15 +531,11 @@ class Sandbox(unittest.TestCase):
             shas[branch] = self.git("rev-parse", branch).strip()
         self.make_ticket("1", subject="批次 A:票 1 的題目", objective="票 1 的目標:one 要對",
                          acceptance=["A1 one.txt 寫著 one by #1", "A2 票 1 的第二條"],
-                         allowed_write_paths=["src/one.txt", "tests/*"],
-                         out_of_scope=["docs/guarded.md", "docs/shared.md"],
                          branch="t1-a", state="InReview", state_version=3,
                          review={"verdict": "pass", "by": "main", "sha": shas["t1-a"],
                                  "note": "沙盒"})
         self.make_ticket("2", subject="批次 B:票 2 的題目", objective="票 2 的目標:two 要對",
                          acceptance=["B1 two.txt 寫著 two by #2"],
-                         allowed_write_paths=["src/two.txt", "docs/shared.md"],
-                         out_of_scope=["scripts/land.sh"],
                          branch="t2-b", state="InReview", state_version=5,
                          review={"verdict": "pass", "by": "main", "sha": shas["t2-b"],
                                  "note": "沙盒"})

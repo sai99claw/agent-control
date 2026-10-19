@@ -20,17 +20,16 @@ claude                                      # 開 Claude Code;CLAUDE.md 會告�
 python3 scripts/ticket.py create \
   --subject "…" --objective "…" \
   --acceptance "斷言一" --acceptance "斷言二" \
-  --in-scope "scripts/" --allowed-write-path "scripts/*" --allowed-write-path "tests/*" \
   --verify-string "只有這張票才有的字串" \
   --role worker --model opus --tool claude-code
 python3 scripts/ticket.py list --open
 python3 scripts/event.py tail 20
 ```
-`ticket.py verify <id>` 會對主線 `grep` 那些 `--verify-string`;沒給就只能弱檢查,它會明說。
+`ticket.py verify <id>` 會對主線 `grep` 那些 `--verify-string`;沒給就看 `close --landed` 蓋的 `landed_sha` 在不在主線歷史裡。
 
 票開好、worker 把 `patch.diff` 交回來之後,**一路到落地都有入口,不必手動套 patch**:
 ```sh
-sh scripts/apply.sh 1 /path/to/patch.diff          # 套進 t1 分支 + commit(檔頭與寫入範圍先驗過)
+sh scripts/apply.sh 1 /path/to/patch.diff          # 套進 t1 分支 + commit(檔頭與 hard_block 先驗過)
 (cd ../agent-control-wt/t1 && sh scripts/gate.sh --branch --ticket 1 --auto-fix)
                                                     # 閘門;紅了自動派下一輪 worker(三輪上限)
 python3 scripts/inbox.py list                       # 跑完的事在這裡等你(主線不輪詢)
@@ -67,9 +66,9 @@ python3 scripts/ticket.py close 1
 
 | 這一步 | 入口 | 它擋住什麼 |
 |---|---|---|
-| 開票 | `scripts/ticket.py create` | 沒有驗收、沒有寫入範圍的票開不出來 |
+| 開票 | `scripts/ticket.py create` | 沒有驗收的票開不出來 |
 | 派工文前言 | `scripts/rules.py pack <角色>` | 整份共用規矩重複載入(≤ 4 KB,砍掉的會指名) |
-| 套 patch、建分支、commit | `scripts/apply.sh` | 絕對路徑檔頭、只清空不刪檔、越界、套一半 |
+| 套 patch、建分支、commit | `scripts/apply.sh` | 絕對路徑檔頭、只清空不刪檔、命中 `hard_block`、套一半 |
 | 局部閘門 | `scripts/gate.sh --branch --ticket <n>` | 對不到模組不准印綠;票的 `verify.tags` 真的被呼叫 |
 | 紅了修 | `scripts/auto-fix.sh <n>`(或閘門 `--auto-fix`) | 三輪上限;反駁 / 沒有歸因會停下來報主線 |
 | 主線被叫醒 | `scripts/inbox.py list` | 輪詢(每看一次背景工作 = 整份上下文重送一輪) |
@@ -79,8 +78,8 @@ python3 scripts/ticket.py close 1
 
 ## 設計上的三個決定
 
-1. **規則住在程式裡,不住在提示裡。** 票的欄位、落地的拒絕條件、寫入範圍、租約,都由 `scripts/` 與 `board/` 執行;提示只負責解釋為什麼。
-2. **判斷與落地分開。** 順序由主線決定(或由腳本依 `allowed_write_paths` 算衝突圖提案);落地是純機械流程(`scripts/land.sh`),沒有判斷。**沒有調度員這個角色**(D-010)。
+1. **規則住在程式裡,不住在提示裡。** 票的欄位、落地的拒絕條件、硬擋清單、租約,都由 `scripts/` 與 `board/` 執行;提示只負責解釋為什麼。
+2. **判斷與落地分開。** 順序由主線決定;落地是純機械流程(`scripts/land.sh`),沒有判斷。**沒有調度員這個角色**(D-010)。
 3. **agent 的每個動作都是控制台上的一筆事件。** 派工、開始、patch 就緒、閘門結果、落地、關票,一律 `scripts/event.py emit …`;控制台只讀事件檔,不猜。
 
 ## 命名守衛

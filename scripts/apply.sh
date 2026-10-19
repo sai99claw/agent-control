@@ -31,8 +31,7 @@
 #   3 檔頭不合格或 `--check` 不過(rebase 那一支的三向合併衝突也是 3)
 #   4 套完的比對不過(rebase 那一支的 **0 byte diff** 也是 4)
 #   5 命中 `board/config.json` 的 `hard_block`(安全邊界:`paths` 的檔,或 tests/** verify/** 新增行
-#     命中 `patterns`;D-050 ①:`allowed_write_paths`
-#     以外與命中 `out_of_scope` 都**不擋**,列進 result 的 `extra_paths` / `extra_reasons`)
+#     命中 `patterns`;D-054 Q2:寫入範圍只剩這一道硬擋)
 #   6 patch 套好了,但 EVIDENCE 裡有一行 `OBJECTION:` —— 已記進票的 `objections[]`
 #     (記過的同一筆 disposition 還空著也是 6;處置過的才放行成 0)
 #
@@ -388,9 +387,7 @@ PY
 # 1. **不寫票**:不 `ticket.py set`、不記 patch_ref / branch / objection。任何一張票的
 #    `state_version` 動一下,N 張的覆核同時過期;各票分支也不動(覆核綁的是它們的 sha)。
 #    紀錄全在 `reports/batch/<stamp>/`。
-# 2. 寫入範圍硬擋只剩 `hard_block`(D-050 ①、D-054 Q3);各票 `out_of_scope` 聯集 − 各票提示範圍聯集
-#    (票 1 不准碰、票 2 本來就要改的檔不算)命中**不擋**,與聯集外的檔一起列進 result 的
-#    `extra_paths` / `extra_reasons`,標明命中哪條 glob。在 `git apply` **之前**看檔頭量,
+# 2. 寫入範圍硬擋只剩 `hard_block`(D-054 Q2、Q3)。在 `git apply` **之前**看檔頭量,
 #    擋下來的那一手整合分支的工作樹一個位元都沒動。
 # 3. **放寬測試**硬擋:測試檔(`batch_fix.test_globs`)裡刪掉含 assert 的行、或加了含 skip /
 #    expectedFailure 的行 → rc 5。修一批紅最便宜的路就是把紅的案例弄啞,派工文的一句話擋不住它。
@@ -438,8 +435,7 @@ cmd_batch() {
     B_TARGETS=$(headers "$B_PATCH") || { echo "apply: patch 檔頭不合格(見上面逐條)" >&2; exit 3; }
 
     # 兩道硬擋都只看 patch 本身:印 `B <檔>\t<哪一格>\t<glob 或 regex>`(hard_block)、
-    # `R <檔>:<行>\t<那一行>`(放寬測試)、`E <檔>`(聯集外,不擋)、`O <檔>\t<哪一格>\t<glob>`
-    # (命中 out_of_scope,不擋、要理由)、`X <檔>\t<案例>`(反駁豁免)。
+    # `R <檔>:<行>\t<那一行>`(放寬測試)、`X <檔>\t<案例>`(反駁豁免)。
     B_OUT=$(python3 - "$AC" "$ROOT" "$TDIR" "$B_PATCH" "$B_EVIDENCE" $B_IDS <<'PY'
 import json, os, re, sys
 ac, root, tdir, patch, evidence = sys.argv[1:6]
@@ -459,11 +455,6 @@ except (OSError, ValueError):
 conf = conf if isinstance(conf, dict) else {}
 test_globs = (conf.get("batch_fix") or {}).get("test_globs") \
     or ["tests/**", "verify/**", "**/test_*.py"]
-scope = []
-for ident in ids:
-    for pattern in ticket_mod.hint_scope(rows[ident]):
-        if pattern not in scope:
-            scope.append(pattern)
 
 
 def is_test(name):
@@ -521,8 +512,6 @@ for line in lines:
 for row in sections:
     gone = row["new"] == "/dev/null"
     row["name"] = (row["old"] if gone else row["new"]).split("/", 1)[1]
-hits = ticket_mod.out_of_scope_hits([rows[ident] for ident in ids],
-                                    [row["name"] for row in sections])
 blocked = {name: (field, pattern) for name, field, pattern in ticket_mod.hard_block_hits(
     root, [row["name"] for row in sections],
     {row["name"]: [text for _, text in row["added"]] for row in sections})}
@@ -530,11 +519,6 @@ for row in sections:
     name = row["name"]
     if name in blocked:
         print("B %s\t%s\t%s" % (name, blocked[name][0], blocked[name][1]))
-    elif name in hits:
-        print("E %s" % name)
-        print("O %s\t%s\t%s" % (name, hits[name][0], hits[name][1]))
-    elif not ticket_mod.matches_any(name, scope):
-        print("E %s" % name)
     if not is_test(name):
         continue
     # 搬位置不算刪:同一份檔裡原樣加回來的那一行(去掉縮排比)抵掉一次。
@@ -559,8 +543,6 @@ PY
 ) || { echo "apply: 批次的寫入範圍 / 放寬測試量不出來(票讀不動?)" >&2; exit 2; }
     B_BLOCKED=$(echo "$B_OUT" | sed -n 's/^B //p')
     B_RELAX=$(echo "$B_OUT" | sed -n 's/^R //p')
-    B_EXTRA=$(echo "$B_OUT" | sed -n 's/^E //p')
-    B_FENCED=$(echo "$B_OUT" | sed -n 's/^O //p')
     echo "$B_OUT" | sed -n 's/^X //p' | awk -F '\t' '{ printf "apply: %s 的測試改動不擋 —— EVIDENCE 有 OBJECTION: test_defect %s(交開題者判)\n", $1, $2 }'
     if [ -n "$B_BLOCKED" ]; then
         echo "apply: 動到這一批硬擋的檔(hard_block):" >&2
@@ -607,7 +589,7 @@ PY
     git -C "$WT" apply -p1 --reverse --check "$B_PATCH" 2>/dev/null \
         || { echo "apply: 反著套回不去 —— 工作樹上的改動不等於這份 patch" >&2; exit 4; }
     # code-map 索引重產(#129):與單票那一支第 7 步同一份 `code_map_regen`;產出物有變就併進
-    # 這一個 batch fix commit。範圍在 `git apply` 之前已經對 patch 量完,產出物不進 extra_paths。
+    # 這一個 batch fix commit。hard_block 在 `git apply` 之前已經對 patch 量完,產出物不再量。
     B_REGEN=""
     code_map_regen "$WT"
     case $? in
@@ -643,13 +625,11 @@ $B_REGEN}" || { echo "apply: git commit 失敗" >&2; exit 2; }
         --role worker --round "$B_ROUND" \
         || echo "apply: result 抽不出來($B_EVIDENCE)—— 不擋 apply" >&2
     # 反駁只留在 EVIDENCE 與這一份 result(A4):`ticket.py objection` 會 +1 state_version,N 張覆核同時過期。
-    python3 - "$B_RESULT" "$B_EXTRA" "$B_EVIDENCE" "$AC" <<'PY'
+    python3 - "$B_RESULT" "$B_EVIDENCE" <<'PY'
 import json, sys
-path, extra = sys.argv[1], [line for line in sys.argv[2].splitlines() if line]
-sys.path.insert(0, sys.argv[4])
-import ticket as ticket_mod
+path = sys.argv[1]
 try:
-    with open(sys.argv[3], encoding="utf-8", errors="replace") as handle:
+    with open(sys.argv[2], encoding="utf-8", errors="replace") as handle:
         text = handle.read()
 except OSError:
     text = ""
@@ -658,24 +638,14 @@ try:
     with open(path, encoding="utf-8") as handle:
         data = json.load(handle)
 except (OSError, ValueError) as exc:
-    sys.stderr.write("apply: result 讀不到(%s)—— extra_paths / extra_reasons 沒寫進去:%s\n"
+    sys.stderr.write("apply: result 讀不到(%s)—— objections 沒寫進去:%s\n"
                      % (path, exc))
     raise SystemExit(0)
-data["extra_paths"] = extra
-data["extra_reasons"] = ticket_mod.extra_reasons(text, extra)
 data["objections"] = objections
 with open(path, "w", encoding="utf-8") as handle:
     json.dump(data, handle, ensure_ascii=False, indent=2)
     handle.write("\n")
 PY
-    if [ -n "$B_EXTRA" ]; then
-        echo "apply: 聯集外的改動(不擋,記進 $(basename "$B_RESULT") 的 extra_paths / extra_reasons、交覆核者逐檔看):"
-        echo "$B_EXTRA" | sed 's/^/apply:   /'
-    fi
-    if [ -n "$B_FENCED" ]; then
-        echo "apply: 其中命中 out_of_scope 的(建議範圍,D-050 ①;EVIDENCE「提示清單外的改動」逐檔寫理由):"
-        echo "$B_FENCED" | awk -F '\t' '{ printf "apply:   %s —— 命中%s(`%s`)\n", $1, $2, $3 }'
-    fi
     if [ -f "$B_EVIDENCE" ] && grep -q '^OBJECTION:' "$B_EVIDENCE"; then
         echo "apply: EVIDENCE 裡有反駁 —— $(grep -m1 '^OBJECTION:' "$B_EVIDENCE")" >&2
         echo "apply:   批次不寫票:反駁沒有記進任何一張票的 objections[],由開題者 / 主線照 EVIDENCE 判" >&2
@@ -1071,26 +1041,15 @@ if [ -n "$VPATCH" ]; then
         || die 4 "patch-verify 反著套回不去"
 fi
 
-# 5. 寫入範圍(D-H38 ①、D-050 ①)。`allowed_write_paths` 與 `out_of_scope` 都是**建議範圍**:
-#    提示範圍(`ticket.hint_scope`)外、或命中 `out_of_scope` 的檔**不擋**,記進 result 的
-#    `extra_paths` / `extra_reasons`、由覆核者逐檔看;out_of_scope 命中缺理由由 land 拒絕。
-#    硬擋只剩 `board/config.json` 的 `hard_block`(安全邊界;`paths` 比檔名,`patterns` 比兩份
-#    patch 裡 tests/** verify/** 的新增行)。
-#    patch-verify 帶進來的檔是驗證者的交付(#101 A4),不算 worker 的 extra(hard_block 照樣量)。
-#    印 `B <檔>\t<哪一格>\t<glob 或 regex>`(硬擋)、`E <檔>`(提示範圍外)、`O <檔>\t<哪一格>\t<glob>`(命中 out_of_scope)。
-OUT=$(python3 - "$ROOT" "$WT" "$TF" "$RESIDUE" "$TARGETS" "$VTARGETS" "$PATCH" "$VPATCH" <<'PY'
-import json, os, subprocess, sys
-root, wt, path, residue = sys.argv[1:5]
+# 5. 寫入範圍硬擋只剩 `board/config.json` 的 `hard_block`(D-054 Q2;安全邊界;`paths` 比檔名,
+#    `patterns` 比兩份 patch 裡 tests/** verify/** 的新增行)。
+#    印 `B <檔>\t<哪一格>\t<glob 或 regex>`。
+OUT=$(python3 - "$ROOT" "$WT" "$RESIDUE" "$PATCH" "$VPATCH" <<'PY'
+import os, subprocess, sys
+root, wt, residue = sys.argv[1:4]
 residue = set(residue.splitlines())
-own = {line[2:] for line in sys.argv[5].splitlines() if len(line) > 2}
-theirs = {line[2:] for line in sys.argv[6].splitlines() if len(line) > 2} - own
 sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import ticket as ticket_mod
-try:
-    with open(path, encoding="utf-8") as handle:
-        row = json.load(handle)
-except (OSError, ValueError):
-    row = {}
 done = subprocess.run(["git", "-C", wt, "status", "--porcelain", "-z",
                        "--untracked-files=all"],
                       capture_output=True, text=True)
@@ -1104,38 +1063,22 @@ for item in done.stdout.split("\0"):
     if name:
         names.append(name)
 added = {}
-for patch in sys.argv[7:9]:
+for patch in sys.argv[4:6]:
     if not patch:
         continue
     with open(patch, encoding="utf-8", errors="replace") as handle:
         for name, lines in ticket_mod.added_lines(handle.read()).items():
             added.setdefault(name, []).extend(lines)
-blocked, extra = ticket_mod.write_scope(row, root, names, added)
-extra = [name for name in extra if name not in theirs]
-for name, field, pattern in blocked:
+for name, field, pattern in ticket_mod.hard_block_hits(root, names, added):
     print("B %s\t%s\t%s" % (name, field, pattern))
-for name in extra:
-    print("E %s" % name)
-for name, (field, pattern) in ticket_mod.out_of_scope_hits([row], extra).items():
-    print("O %s\t%s\t%s" % (name, field, pattern))
 PY
 )
 BLOCKED=$(echo "$OUT" | sed -n 's/^B //p')
-EXTRA=$(echo "$OUT" | sed -n 's/^E //p')
-FENCED=$(echo "$OUT" | sed -n 's/^O //p')
 if [ -n "$BLOCKED" ]; then
     echo "apply: 動到票 #$ID 硬擋的檔:" >&2
     echo "$BLOCKED" | awk -F '\t' '{ printf "apply:   %s —— 命中%s(`%s`)\n", $1, $2, $3 }' >&2
     echo "apply:   工作樹留在 $WT(沒有 commit)—— 改 patch;真要動它就先改 config" >&2
     die 5 "寫入範圍命中硬擋(hard_block)"
-fi
-if [ -n "$EXTRA" ]; then
-    echo "apply: 提示範圍外的改動(不擋,記進 result 的 extra_paths / extra_reasons、交覆核者逐檔看):"
-    echo "$EXTRA" | sed 's/^/apply:   /'
-fi
-if [ -n "$FENCED" ]; then
-    echo "apply: 其中命中 out_of_scope 的(建議範圍,D-050 ①;EVIDENCE「提示清單外的改動」缺理由的,land 會拒絕):"
-    echo "$FENCED" | awk -F '\t' '{ printf "apply:   %s —— 命中%s(`%s`)\n", $1, $2, $3 }'
 fi
 
 # 6. 票的 `verify_strings` 先對 patch 抓一次。**不擋**,但要現在說:
@@ -1170,8 +1113,8 @@ PY
 
 # 7. code-map 索引重產(#96)。候選樹有地圖(與 gate.sh 的新鮮度格同一個判準)就跑一次
 #    `repo-map.py build`:交件新增 / 改名 / 刪掉已管理的檔而沒重生,以前要閘門擋下一整輪。
-#    產出物有變才併進同一個 commit、訊息多一行 `regen:`;它們不是交件改的,不算 extra_paths
-#    (範圍在上面第 5 步已經量完)。build 非零**不擋**:印一行、照樣 commit,攔它是閘門的事。
+#    產出物有變才併進同一個 commit、訊息多一行 `regen:`;它們不是交件改的,不再量
+#    (hard_block 在上面第 5 步已經量完)。build 非零**不擋**:印一行、照樣 commit,攔它是閘門的事。
 #    判準與動作只有一份:`wtbase.sh` 的 `code_map_regen`(`--batch` 與 land 也叫它,#129)。
 REGEN=""
 code_map_regen "$WT"
@@ -1241,46 +1184,6 @@ if [ -n "$VEVIDENCE" ]; then
         --ticket "$ID" --role verifier --round "$ROUND" \
         || echo "apply: 驗證者的 result 抽不出來($VEVIDENCE)—— 不擋 apply" >&2
 fi
-fi
-# 提示範圍外的檔記進**這一輪那一份** result 的 `extra_paths`(D-H38 ①;空的也寫 `[]` ——
-# 沒有這一格與「量過、沒有」長得一樣),同一手從 EVIDENCE「提示清單外的改動」逐檔抽
-# `extra_reasons`(#101 A5;沒寫、空字串 → null)。上游抽過的那一份由它用 `AC_RESULT_JSON`
-# 指路;沒指路就不寫,不另開第二份 `result-round<r>.json`。
-if [ -n "${AC_RESULT_DONE:-}" ] && [ -z "${AC_RESULT_JSON:-}" ]; then
-    echo "apply: 上游抽過 result 但沒給 AC_RESULT_JSON —— extra_paths / extra_reasons 沒寫進去" >&2
-else
-    python3 - "${AC_RESULT_JSON:-$REPORTS/result-round$ROUND.json}" "$EXTRA" "$EVIDENCE" "$FENCED" <<'PY'
-import json, os, sys
-sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
-import ticket as ticket_mod
-path, extra = sys.argv[1], [line for line in sys.argv[2].splitlines() if line]
-fenced = [line.split("\t")[0] for line in sys.argv[4].splitlines() if line]
-try:
-    with open(path, encoding="utf-8") as handle:
-        data = json.load(handle)
-except (OSError, ValueError) as exc:
-    sys.stderr.write("apply: result 讀不到(%s)—— extra_paths / extra_reasons 沒寫進去:%s\n"
-                     % (path, exc))
-    raise SystemExit(0)
-try:
-    with open(sys.argv[3], encoding="utf-8", errors="replace") as handle:
-        text = handle.read()
-except OSError:
-    text = ""
-reasons = ticket_mod.extra_reasons(text, extra)
-data["extra_paths"] = extra
-data["extra_reasons"] = reasons
-with open(path, "w", encoding="utf-8") as handle:
-    json.dump(data, handle, ensure_ascii=False, indent=2)
-    handle.write("\n")
-missing = [name for name in extra if not reasons[name]]
-for name in missing:
-    if name in fenced:
-        print("apply: %s 命中 out_of_scope 而 EVIDENCE「提示清單外的改動」沒寫理由 —— land 會拒絕"
-              "(out_of_scope 命中缺理由);補一行 `- `%s` — <理由>` 再收件" % (name, name))
-    else:
-        print("apply: %s 在提示範圍外、沒寫理由 —— 警告,不擋(覆核者逐檔看)" % name)
-PY
 fi
 # 驗證者的計畫與驗紅併進票(`merge_verifier_plans`,上面那一段的說明)。解析不到照樣出聲,
 # 但不擋 apply —— patch 已經 commit 了。

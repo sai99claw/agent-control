@@ -192,7 +192,6 @@ class AgentCommandTurnsEffortIntoAFlag(unittest.TestCase):
 MIN = ("--subject", "推理強度開票",
        "--objective", "票帶 effort",
        "--acceptance", "effort 進票檔",
-       "--allowed-write-path", "scripts/ticket.py",
        "--role", "worker")
 
 

@@ -98,7 +98,7 @@ class VerifierFallbackBase(FallbackBase):
 
     def run_verifier_case(self, mode, timeout=120, owner=None):
         self.fake_codex(mode)
-        self.make_ticket("1", allowed_write_paths=["tests/*", "verify/*"], model="opus",
+        self.make_ticket("1", model="opus",
                          tool="claude-code", needs_verifier=True, interface_fixed=True,
                          worker={"timeout_seconds": timeout})
         self.git("add", "-A")

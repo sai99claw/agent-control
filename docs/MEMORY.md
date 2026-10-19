@@ -65,7 +65,7 @@
 所以要分辨「值得每次都讀」與「查得到就好」;但用固定數字逼它,會把有用的句子壓掉、讓暫存區的教訓等很久才進卡。
 
 ### 暫存區有條目時發生什麼
-1. `scripts/memory.py check`(主線開場跑)每份受管主檔印一行 `memory: <主檔> <c> 字元 / 暫存區 <n> 條未整理`(c = front matter 以外的正文字元數,只是報數,不跟任何數字比;n = 同名 `.inbox.md` 的非空行數)。`memory/model`、`memory/role` 底下任何一份 inbox 有至少一條(還沒被 consolidate 消耗)→ 發事件 `memory.pending`(`file` = inbox、`entries` = n)、為它的主檔開一張整理票。一份主檔一張票。**「已有整理票」的判準**:任何一張開著的票(state 不是 Done / Cancelled)、`allowed_write_paths` 蓋得到這份主檔(glob 也算,`ticket.first_match`)就算,**不只 role=consolidator** —— 有就不新開票(consolidator 那一張優先點名,其餘印出它的票號與 role);查核與開票在 `memory/.lock` 裡。**session 不因此停工**,只是知道有暫存區待整理。
+1. `scripts/memory.py check`(主線開場跑)每份受管主檔印一行 `memory: <主檔> <c> 字元 / 暫存區 <n> 條未整理`(c = front matter 以外的正文字元數,只是報數,不跟任何數字比;n = 同名 `.inbox.md` 的非空行數)。`memory/model`、`memory/role` 底下任何一份 inbox 有至少一條(還沒被 consolidate 消耗)→ 發事件 `memory.pending`(`file` = inbox、`entries` = n)、為它的主檔開一張整理票。一份主檔一張票。**「已有整理票」的判準**:任何一張開著的票(state 不是 Done / Cancelled)的 `memory_file`(整理票專用,`memory.py` 開票時寫)是這份主檔就算 —— 有就不新開票、印出它的票號;查核與開票在 `memory/.lock` 裡。**session 不因此停工**,只是知道有暫存區待整理。
    - 短命角色開場跑 `check --read-only`:同樣的量法與輸出,不開票、不發事件、不拿鎖(#76)。
    - `check-stale --read-only [--file <主檔或 inbox>]` 逐條印 `memory: <inbox>:<行號> <分類> <來源>`;分類 `needs-review`(`#N` 在本 repo 票庫且已 Done/Cancelled)、`fresh`、`unknown-ticket`、`no-source`、`foreign`(`#` 後不是純數字)、`unparsed`。有 needs-review 退出碼 1。整理者用它分類;它不是另一個觸發(任何一條都已觸發)。
 2. 整理者**討論,用 `docs/DISCUSSION.md` 的標準格式,存成 `discussions/<date>-memory-<model>.md`**:哪些要合併、哪些降級成「查得到就好」(搬去 `code-map/` 或 `docs/`,留一行指路)、哪些是反例必須留、哪些已經過期。這一步像老師帶學生:不是替它刪,是幫它分辨。

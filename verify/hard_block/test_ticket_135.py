@@ -62,9 +62,9 @@ class ScriptWorld(Sandbox):
             conf["hard_block"] = hard_block
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
 
-    def commit_config_and_ticket(self, hard_block, allowed):
+    def commit_config_and_ticket(self, hard_block):
         self.configure(hard_block)
-        self.make_ticket("1", allowed_write_paths=allowed)
+        self.make_ticket("1")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "hard_block fixture")
         self.git("push", "-q", "origin", "main")
@@ -103,7 +103,7 @@ class ApplyReadsTheSharedHardBlock(ScriptWorld):
         for name, config, body, expected, named in rows:
             with self.subTest(name):
                 self.setUp()
-                self.commit_config_and_ticket(config, ["docs/*", "tests/*", "verify/*", "scripts/*"])
+                self.commit_config_and_ticket(config)
                 done = self.apply(body)
                 self.assertEqual(done.returncode, expected, done.stdout + done.stderr)
                 if named:
@@ -146,7 +146,7 @@ class GateReadsTheSharedHardBlock(ScriptWorld):
                 self.configure(config)
                 self.git("add", "-A")
                 self.git("commit", "-q", "--allow-empty", "-m", "hard_block config")
-                self.make_ticket("1", allowed_write_paths=["scripts/*", "tests/*", "verify/*"])
+                self.make_ticket("1")
                 self.write(changed, self.read(changed) + addition)
                 done = self.gate(changed)
                 self.assertEqual(done.returncode, expected, done.stdout + done.stderr)
@@ -159,7 +159,7 @@ class LandReadsTheSharedHardBlock(ScriptWorld):
     gate_stub = GATE_STUB_GREEN
 
     def land_case(self, hard_block, path, content, expected):
-        self.commit_config_and_ticket(hard_block, ["docs/*", "tests/*", "verify/*", "scripts/*"])
+        self.commit_config_and_ticket(hard_block)
         branch = self.worktree("t1-hard-block")
         self.commit_in(branch, path, content)
         self.approve("1", "t1-hard-block")
@@ -227,7 +227,7 @@ class GuardReadsHardBlockDirs(ScriptWorld):
         if hard_block is not None:
             conf["hard_block"] = hard_block
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
-        self.make_ticket("1", allowed_write_paths=["tests/*"], needs_verifier=False)
+        self.make_ticket("1", needs_verifier=False)
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "guard fixture")
         self.git("push", "-q", "origin", "main")
@@ -306,7 +306,7 @@ class RepositoryContract(unittest.TestCase):
         """A5 指定既有 oracle 仍在且已改守 hard_block，Sandbox 預設也只有新形狀。"""
         files = ("tests/test_apply.py", "tests/test_status.py", "tests/test_land.py",
                  "tests/test_auto_fix.py", "tests/control_harness.py",
-                 "verify/write_scope/test_ticket_101.py", "verify/batch_fix/test_ticket_108.py")
+                 "verify/batch_fix/test_ticket_108.py")
         for rel in files:
             text = self.read(rel)
             self.assertTrue("hard_block" in text, "%s 缺 hard_block" % rel)

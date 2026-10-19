@@ -331,7 +331,7 @@ class AgentOutputHarness(Sandbox):
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
 
     def ticket_ready(self):
-        row = self.make_ticket("1", allowed_write_paths=["tests/*"])
+        row = self.make_ticket("1")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "開票 #1(agentout 夾具)")
         self.git("push", "-q", "origin", "main")

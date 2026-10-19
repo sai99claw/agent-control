@@ -5,7 +5,7 @@
 
 ## apply
 
-收 patch:驗檔頭與寫入範圍、開分支、commit(帶票號與 sha256)、記 patch_ref
+收 patch:驗檔頭與 hard_block、開分支、commit(帶票號與 sha256)、記 patch_ref
 
 - 入口:[`scripts/apply.sh`](../scripts/apply.sh)
 - 主守衛:[`tests/test_apply.py`](../tests/test_apply.py)
@@ -29,7 +29,7 @@
 
 ## land
 
-落地:只走這一支,拒 0 commit、過期基準、越界、過期覆核
+落地:只走這一支,拒 0 commit、過期基準、命中 hard_block、過期覆核
 
 - 入口:[`scripts/land.sh`](../scripts/land.sh)
 - 主守衛:[`tests/test_land.py`](../tests/test_land.py)

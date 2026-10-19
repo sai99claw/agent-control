@@ -1,9 +1,9 @@
 """#108 批次修復:auto-fix.sh / apply.sh / review.sh 的 --batch 一條路,紀錄只在 reports/batch/<stamp>/、不碰票檔。
 
 ## 驗收表(票面每一條一列;期望值來源獨立於被測程式:票面原話 / 夾具自己寫的票檔與 status.json / git 自己算)
-A1 | unit | auto-fix.sh --batch land/X 1 2(AC_BATCH_RUN_ID=R)     | reports/batch/<stamp>/dispatch-round1.md 含五項                 | 票面 A1 原話;期望值取自夾具的 1.json / 2.json、reports/t1/R/status.json、`git diff --stat main...land/X`
+A1 | unit | auto-fix.sh --batch land/X 1 2(AC_BATCH_RUN_ID=R)     | reports/batch/<stamp>/dispatch-round1.md 含五項(④ 寫入範圍聯集 #137 起不再列) | 票面 A1 原話;期望值取自夾具的 1.json / 2.json、reports/t1/R/status.json、`git diff --stat main...land/X`
 A2 | unit | apply.sh --batch land/X 1 2 <patch>                    | land/X 前進恰 1 個 commit、訊息含 batch fix round 1 / #1 / #2;t1-a t2-b 不動;票的 state_version / review 不動 | 票面 A2 原話;sha 由 git 自己算
-A3 | unit | patch 動 lib/other.txt / scripts/land.sh / secrets/k.txt / lib/core.txt / misc/n.txt | secrets/k.txt rc=5 且 stderr 點名檔與格;lib/other.txt / scripts/land.sh 不擋、進 extra_paths 並點名命中的 out_of_scope(#101 D-050 ①);lib/core.txt 不擋;misc/n.txt 進 result-round1.json 的 extra_paths | 票面 A3 的集合式:protected ∪ (oos 聯集 − allowed 聯集),手算;#101 起 oos 那一半改成列出
+A3 | unit | patch 動 secrets/k.txt | rc=5 且 stderr 點名檔與格 | 夾具寫進 config 的 hard_block.paths;#137(D-054 Q2)起寫入範圍只剩這一道
 A4 | unit | patch 在測試檔刪 assert 行 / 加 skip / expectedFailure  | rc=5、stderr 含「<檔>:<行> 放寬測試」;OBJECTION: test_defect 指到同一檔 → 不擋 | 票面 A4 原話;行號從夾具手寫的檔數
 A5 | unit | review.sh --batch land/X 1 2 --run-id S                | pass → reports/batch/S/review.json(sha = land/X 頭);fail → 沒有 review.json、一頁 decision 掛 #1 內文有 #2、rc≠0 | 票面 A5 原話
 A6 | unit | 整條 auto-fix.sh --batch 綠到底                         | 1.json cost 多 worker / reviewer 各一列(note 含 batch <stamp> 與票號、run_id = R);2.json 一個 byte 不變 | 票面 A6 原話
@@ -13,7 +13,6 @@ A8 | unit | 三支既有測試檔載入                                     | �
 ## 介面字串(每條斷言靠哪個字串;全部出自票面 acceptance / outline,不從腳本抄)
 BATCH_DIR   = reports/batch/<stamp>/       ← 所有 --batch 紀錄的家;<stamp> 由列目錄取(恰一個)
 DISPATCH    = dispatch-round1.md           ← A1
-RESULT      = result-round1.json           ← A3 extra_paths
 REVIEW_JSON = review.json                  ← A5 {verdict, sha, by, at, note}
 COMMIT_MSG  = "batch fix round 1"          ← A2
 LOOSENED    = "放寬測試"                   ← A4 stderr「<檔>:<行> 放寬測試」
@@ -175,7 +174,6 @@ class BatchWorld(Sandbox):
         for rel, text in (("src/a.txt", "old\n"), ("src/lib.py", SRC_LIB),
                           ("tests/test_x.py", TEST_X), ("tests/test_other.py", TEST_X),
                           ("pkg/test_y.py", TEST_Y), ("checks/c.py", CHECKS_C),
-                          ("lib/core.txt", "core\n"), ("lib/other.txt", "other\n"),
                           ("secrets/k.txt", "k\n")):
             self.write(rel, text)
         self.configure(hard_block={"paths": ["secrets/*"], "dirs": [], "patterns": []})
@@ -192,15 +190,12 @@ class BatchWorld(Sandbox):
         self.t1 = self.make_ticket(
             "1", subject="票一:把 A 接上", objective="票一的目標:A 能被讀到",
             acceptance=["票一驗收:讀得到 A"], branch="t1-a", state="InReview",
-            state_version=3, allowed_write_paths=["src/*", "tests/*", "alpha/*"],
-            out_of_scope=["lib/*"],
+            state_version=3,
             review={"verdict": "pass", "by": "main", "sha": self.sha_t1, "note": "夾具"})
         self.t2 = self.make_ticket(
             "2", subject="票二:把 B 接上", objective="票二的目標:B 能被寫入",
             acceptance=["票二驗收:寫得進 B"], branch="t2-b", state="InReview",
             state_version=4,
-            allowed_write_paths=["src/*", "lib/core.txt", "secrets/*", "beta/*"],
-            out_of_scope=["scripts/land.sh"],
             review={"verdict": "pass", "by": "main", "sha": self.sha_t2, "note": "夾具"})
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "開票 #1 #2")
@@ -339,10 +334,9 @@ class TheBatchDispatchCarriesFiveThings(BatchWorld):
             self.packet = handle.read()
 
     def test_a1_both_ticket_faces_are_in_the_packet(self):
-        """A1 ① 票 1 與票 2 的 subject / objective / acceptance / allowed_write_paths 快照。"""
+        """A1 ① 票 1 與票 2 的 subject / objective / acceptance 快照。"""
         for row in (self.t1, self.t2):
-            for text in [row["subject"], row["objective"]] + row["acceptance"] \
-                    + row["allowed_write_paths"]:
+            for text in [row["subject"], row["objective"]] + row["acceptance"]:
                 self.assertIn(text, self.packet, "#%s 的票面少了:%s" % (row["id"], text))
 
     def test_a1_the_red_list_is_the_first_tickets(self):
@@ -378,13 +372,6 @@ class TheBatchDispatchCarriesFiveThings(BatchWorld):
                         found = True
         self.assertTrue(found, "派工文裡沒有一條指得到整批 diff(含 t1-a 與 t2-b 的改動)的路徑")
 
-    def test_a1_the_write_scope_union_is_listed(self):
-        """A1 ④ 寫入範圍聯集逐條 —— 只屬於一張票的路徑要在快照之外再出現一次。"""
-        for path in ("alpha/*", "beta/*", "lib/core.txt", "secrets/*", "tests/*"):
-            self.assertGreaterEqual(self.packet.count(path), 2,
-                                    "%s 只出現 %d 次:票面快照一次、聯集一次"
-                                    % (path, self.packet.count(path)))
-
     def test_a1_the_no_loosening_rule(self):
         """A1 ⑤ 一句含「不得放寬測試」與「OBJECTION: test_defect」的規則。"""
         self.assertIn(RULE_NO_LOOSEN, self.packet)
@@ -414,7 +401,7 @@ class TheFixIsOneCommitOnTheIntegrationBranch(BatchWorld):
 
 # ================================================================== A3
 
-class TheHardBlockIsTheUnionOfAllTickets(BatchWorld):
+class OnlyTheConfigHardBlockStopsTheBatch(BatchWorld):
 
     def assert_blocked(self, rel, field, text):
         done = self.apply_batch(self.make_patch({rel: text}))
@@ -423,53 +410,9 @@ class TheHardBlockIsTheUnionOfAllTickets(BatchWorld):
         self.assertIn(field, done.stderr)
         self.assertEqual(self.rev("land/X"), self.land_before, "擋下就不 commit")
 
-    def assert_listed(self, rel, field, text):
-        """#101(D-050 ①):out_of_scope 是建議範圍 —— 命中不擋,疊成 commit、列進 extra_paths、
-        stdout 點名檔與命中的格。"""
-        done = self.apply_batch(self.make_patch({rel: text}))
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.git("rev-list", "--count", "%s..land/X" % self.land_before).strip(),
-                         "1")
-        self.assertTrue([line for line in done.stdout.splitlines()
-                         if rel in line and field in line], done.stdout)
-        found = [os.path.join(stamp, "result-round1.json") for stamp in self.batch_dirs()
-                 if os.path.isfile(os.path.join(stamp, "result-round1.json"))]
-        self.assertEqual(len(found), 1, "result-round1.json:%s" % found)
-        with open(found[0], encoding="utf-8") as handle:
-            self.assertIn(rel, json.load(handle).get("extra_paths"))
-
-    def test_a3_first_tickets_out_of_scope_not_allowed_elsewhere_is_blocked(self):
-        """A3 lib/other.txt:票 1 out_of_scope、兩張票都不 allowed。#101(D-050 ①)起 out_of_scope
-        不再硬擋:rc 0、列進 extra_paths、點名檔與「#1 的 out_of_scope」(名字留著對得上 #108 的
-        baseline 紀錄;原本是 rc 5)。"""
-        self.assert_listed("lib/other.txt", "#1 的 out_of_scope", "changed\n")
-
-    def test_a3_second_tickets_out_of_scope_is_blocked_too(self):
-        """A3 scripts/land.sh:票 2 的 out_of_scope 也在聯集裡 —— #101 起同上,列出不擋。"""
-        original = self.git("show", "land/X:scripts/land.sh")
-        self.assert_listed("scripts/land.sh", "#2 的 out_of_scope", original + "# batch\n")
-
-    def test_a3_hard_block_paths_win_over_allowed(self):
-        """A3 secrets/k.txt:hard_block.paths 在聯集之外另加,票 2 allowed 也救不了。"""
+    def test_a3_hard_block_paths_block_the_batch(self):
+        """A3 secrets/k.txt:命中 config 的 hard_block.paths → rc 5、點名檔與格、land/X 不動。"""
         self.assert_blocked("secrets/k.txt", "hard_block.paths", "leaked\n")
-
-    def test_a3_out_of_scope_minus_allowed_lets_it_through(self):
-        """A3 lib/core.txt:票 1 out_of_scope 但票 2 allowed → 不擋。"""
-        done = self.apply_batch(self.make_patch({"lib/core.txt": "core v2\n"}))
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-
-    def test_a3_files_outside_every_list_go_to_extra_paths(self):
-        """A3 misc/n.txt:聯集外不擋,列進 reports/batch/<stamp>/result-round1.json 的 extra_paths。"""
-        done = self.apply_batch(self.make_patch({"misc/n.txt": "n\n", "src/fix.txt": "f\n"}))
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        found = [os.path.join(stamp, "result-round1.json") for stamp in self.batch_dirs()
-                 if os.path.isfile(os.path.join(stamp, "result-round1.json"))]
-        self.assertEqual(len(found), 1, "result-round1.json:%s" % found)
-        with open(found[0], encoding="utf-8") as handle:
-            extra = json.load(handle).get("extra_paths")
-        self.assertIsInstance(extra, list)
-        self.assertIn("misc/n.txt", extra)
-        self.assertNotIn("src/fix.txt", extra, "src/* 在 allowed 聯集裡")
 
 
 # ================================================================== A4

@@ -14,7 +14,7 @@ Ran/OK,而**一份貼上來的輸出沒有辦法被機器比對** —— 票的 
 符號、紅在別處),它們與「驗到了」一樣讓 unittest 回非零。揉成同一句「N 條紅」的那一刻,
 驗證者交的紅與一份還沒接上的案例長得一樣。
 
-`close` 那幾條本來該住 `tests/test_ticket.py`,#26 的 `allowed_write_paths` 沒有它 ——
+`close` 那幾條本來該住 `tests/test_ticket.py`,#26 的寫入範圍沒有它 ——
 所以放在這一份的最後一個 class 裡(EVIDENCE 有記)。
 """
 
@@ -1149,7 +1149,7 @@ class CloseOnlyCountsTheGateRun(Sandbox):
     驗證者交的那一趟說的是「這條案例真的在驗東西」,不是「這張票的東西真的做出來了」
     —— 少了後半的票與做完的票在票面上長得一樣。
 
-    (這幾條本來該住 `tests/test_ticket.py`;#26 的 `allowed_write_paths` 沒有它。)
+    (這幾條本來該住 `tests/test_ticket.py`;#26 的寫入範圍沒有它。)
     """
 
     def a_closable(self, baseline=None, **extra):
@@ -1160,8 +1160,7 @@ class CloseOnlyCountsTheGateRun(Sandbox):
                 "run": "", "notes": ""}
         if baseline is not None:
             plan["baseline"] = baseline
-        fields = {"allowed_write_paths": ["src/*"],
-                  "verify_strings": ["src/nav.py:def size_nav"], "verify": plan}
+        fields = {"verify_strings": ["src/nav.py:def size_nav"], "verify": plan}
         fields.update(extra)
         self.make_ticket(1, **fields)
         self.ticket("set", "1", "review",

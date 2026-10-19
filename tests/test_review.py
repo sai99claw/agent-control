@@ -130,10 +130,6 @@ class ThePassPath(ReviewBase):
         - 原 test_the_packet_names_the_four_things_and_goes_in_on_stdin:派工文 = 規則包 +
           範本;四件事都填上、**一個佔位都不剩**,而 reviewer 從 stdin 拿到的就是寫在
           reports 裡的那一份。佔位沒填與填了長得一樣 —— 除非有人數。
-        - 原 test_files_outside_the_allow_list_get_their_own_section_in_the_packet:D-H38 ①:
-          白名單外不擋,擋的是覆核者這一段。票允許 `src/*`,分支改的是 `thing.txt`。
-          **變異**:不插這一段 → 這一條紅(負對照留在
-          test_no_files_outside_the_allow_list_means_no_such_section)。
         """
         model = self.set_reviewer(REVIEWER_PASS)
         done = self.review()
@@ -168,65 +164,9 @@ class ThePassPath(ReviewBase):
         self.assertTrue(os.path.exists(self.one("REVIEW.md")))
         self.assertTrue(os.path.exists(self.one("result-reviewer-round1.json")))
 
-        self.assertIn("## 白名單外改動", packet)
-        section = packet.split("## 白名單外改動")[1].split("\n## ")[0]
-        self.assertIn("- `thing.txt`", section)
-        self.assertIn("斷言數不減", section)
-        self.assertIn("無關或改弱 = fail", section)
-        self.assertLess(packet.index("## 白名單外改動"), packet.index("## 交付:固定格式"))
-
     def packet(self):
         with open(self.one("dispatch-reviewer.md"), encoding="utf-8") as handle:
             return handle.read()
-
-    def test_each_extra_file_shows_its_glob_and_reason(self):
-        """#101 T2 / A5:覆核派工文逐檔顯示檔名、命中的 out_of_scope glob 與理由(各輪收件併起來的
-        extra_reasons);沒寫理由的照列、標「沒寫」,由覆核判。
-        四問:量那兩列;紅 = 只列檔名、或理由讀錯一份;期望值 = 夾具票面的 out_of_scope 與 handin;
-        不測 = land 的拒絕。
-        **變異**:`extra_line` 不印 glob(`hit` 當成 None)→ 這一條紅。"""
-        self.make_ticket("1", state="InReview", out_of_scope=["docs/*"], complexity="complex")
-        self.commit_in(self.wt, "docs/x.md", "#1 動到 out_of_scope")
-        self.write(os.path.join("reports", "t1", "20261018-090000-1", "result-round1.json"),
-                   json.dumps({"extra_paths": ["docs/x.md", "thing.txt"],
-                               "extra_reasons": {"docs/x.md": "驗收 A1 的說明寫在這",
-                                                 "thing.txt": None}}, ensure_ascii=False))
-        self.set_reviewer(REVIEWER_PASS)
-        done = self.review()
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        section = self.packet().split("## 白名單外改動")[1].split("\n## ")[0]
-        self.assertIn("- `docs/x.md` —— 命中票的 out_of_scope `docs/*` —— 理由:驗收 A1 的說明寫在這",
-                      section)
-        self.assertIn("- `thing.txt` —— 不在提示範圍 —— 理由:(沒寫)", section)
-
-    def test_a_reason_given_in_round_one_is_still_shown_after_a_repair_round(self):
-        """#101 A5 覆核反駁:第 1 輪收件寫了理由,第 2 輪修紅只量增量(extra_paths / extra_reasons 空),
-        派工文仍要印第 1 輪的理由,不是「(沒寫)」。
-        **變異**:`handin_reasons` 只回最近一份 → 這一條紅。"""
-        self.make_ticket("1", state="InReview", out_of_scope=["docs/*"], complexity="complex")
-        self.commit_in(self.wt, "docs/x.md", "#1 動到 out_of_scope")
-        run = os.path.join("reports", "t1", "20261018-090000-1")
-        self.write(os.path.join(run, "result-round1.json"),
-                   json.dumps({"extra_paths": ["docs/x.md"],
-                               "extra_reasons": {"docs/x.md": "驗收 A1 的說明寫在這"}},
-                              ensure_ascii=False))
-        self.write(os.path.join(run, "result-round2.json"),
-                   json.dumps({"extra_paths": [], "extra_reasons": {}}))
-        self.set_reviewer(REVIEWER_PASS)
-        done = self.review()
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        section = self.packet().split("## 白名單外改動")[1].split("\n## ")[0]
-        self.assertIn("- `docs/x.md` —— 命中票的 out_of_scope `docs/*` —— 理由:驗收 A1 的說明寫在這",
-                      section)
-
-    def test_no_files_outside_the_allow_list_means_no_such_section(self):
-        """**變異**:不管有沒有都印 → 這一條紅。"""
-        self.assertEqual(self.ticket("set", "1", "allowed_write_paths",
-                                     '["thing.txt"]').returncode, 0)
-        self.set_reviewer(REVIEWER_PASS)
-        done = self.review()
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertNotIn("白名單外改動", self.packet())
 
     def test_the_default_json_envelope_is_unwrapped_before_the_result_is_read(self):
         """預設命令帶 `--output-format json`:stdout 是一個信封,全文在 `result` 裡、換行是
@@ -679,37 +619,6 @@ class ReviewBatch(Sandbox):
             self.assertIn(row["subject"], text)
             for item in row["acceptance"]:
                 self.assertIn(item, text)
-
-    def test_the_packet_lists_the_extra_files_with_glob_and_reason(self):
-        """#101 A5 批次路:apply --batch 寫的 result(extra_paths / extra_reasons)逐檔進覆核派工文,
-        命中的是哪一張票的 out_of_scope glob 也印出來。四問:量那兩列;紅 = 批次派工文不列;期望值 =
-        夾具的 result 與票 1 的 out_of_scope;不測 = apply 怎麼抽。"""
-        self.write(self.record("result-round1.json"),
-                   json.dumps({"extra_paths": ["docs/guarded.md", "misc/n.txt"],
-                               "extra_reasons": {"docs/guarded.md": "修紅要動它",
-                                                 "misc/n.txt": None}}, ensure_ascii=False))
-        self.set_reviewer(REVIEWER_PASS)
-        self.assertEqual(self.review().returncode, 0)
-        text = self.read(self.record("dispatch-reviewer.md"))
-        self.assertIn("- `docs/guarded.md` —— 命中#1 的 out_of_scope `docs/guarded.md` —— "
-                      "理由:修紅要動它", text)
-        self.assertIn("- `misc/n.txt` —— 不在提示範圍 —— 理由:(沒寫)", text)
-
-    def test_the_batch_packet_unions_the_extra_files_across_rounds(self):
-        """#101 A5 覆核反駁(批次路):第 2 輪收件只量增量,第 1 輪列的檔與理由仍要進派工文。
-        **變異**:只讀最後一份 result-round*.json → 這一條紅。"""
-        self.write(self.record("result-round1.json"),
-                   json.dumps({"extra_paths": ["docs/guarded.md"],
-                               "extra_reasons": {"docs/guarded.md": "修紅要動它"}},
-                              ensure_ascii=False))
-        self.write(self.record("result-round2.json"),
-                   json.dumps({"extra_paths": ["misc/n.txt"], "extra_reasons": {"misc/n.txt": None}}))
-        self.set_reviewer(REVIEWER_PASS)
-        self.assertEqual(self.review().returncode, 0)
-        text = self.read(self.record("dispatch-reviewer.md"))
-        self.assertIn("- `docs/guarded.md` —— 命中#1 的 out_of_scope `docs/guarded.md` —— "
-                      "理由:修紅要動它", text)
-        self.assertIn("- `misc/n.txt` —— 不在提示範圍 —— 理由:(沒寫)", text)
 
     def test_fail_pages_ticket_one_listing_the_batch_and_writes_nothing(self):
         """A5 fail。四問:量 rc≠0、review.json 不在、恰一頁 decision ticket=1 且內文有 #2、票不動;

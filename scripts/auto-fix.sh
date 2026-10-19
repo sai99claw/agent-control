@@ -721,58 +721,6 @@ rules_pack() {   # $1 = 派工文寫到哪(失敗就刪掉,不留半份)  $2 = �
     return 1
 }
 
-# 派工文的「寫入範圍與資訊歸屬」段(#101 A5 / A8):worker 每一輪都帶。提示範圍只有一種算法
-# (`ticket.hint_scope`),`out_of_scope` 是建議範圍、`hard_block` 才硬擋;資訊位置是
-# board/config.json 的 `info_map`(相對文件路徑,可帶 `#節名`;沒設只提示)與票的 `info_homes`。
-scope_section() {
-    python3 - "$ROOT" "$TF" <<'PY'
-import json, os, re, sys
-root, tf = sys.argv[1:3]
-sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
-import ticket as ticket_mod
-try:
-    with open(tf, encoding="utf-8") as handle:
-        ticket = json.load(handle)
-except (OSError, ValueError):
-    ticket = {}
-try:
-    with open(os.path.join(root, "board", "config.json"), encoding="utf-8") as handle:
-        conf = json.load(handle)
-except (OSError, ValueError):
-    conf = {}
-info_map = conf.get("info_map") if isinstance(conf, dict) else None
-print("")
-print("## 寫入範圍與資訊歸屬")
-scope = ticket_mod.hint_scope(ticket)
-print("提示範圍(allowed_write_paths ∪ info_homes[].home ∪ verify.files;建議範圍,不是限制):%s"
-      % (" ".join("`%s`" % glob for glob in scope) or "(空)"))
-print("out_of_scope(建議範圍,D-050 ①):%s" % json.dumps(ticket.get("out_of_scope") or [],
-                                                     ensure_ascii=False))
-print("改到提示範圍外、或命中 out_of_scope 的檔:照改,在 EVIDENCE 加一段 `## 提示清單外的改動`,"
-      "一行一檔 `- `<檔>` — <理由>`(apply 抽成 result 的 extra_reasons;out_of_scope 命中缺理由 "
-      "land 會拒絕)。硬擋只有 board/config.json 的 hard_block。")
-if not info_map:
-    print("資訊地圖:board/config.json 沒設 `info_map` —— 只看底下票面的 info_homes"
-          "(要全域地圖就在 config 加 `info_map`,例 `docs/INFO-MAP.md#節名`)")
-elif not isinstance(info_map, str) or info_map.startswith(("/", "~")) \
-        or ".." in re.split(r"[\\/]", info_map.split("#", 1)[0]):
-    print("資訊地圖:board/config.json 的 `info_map` 不是相對文件路徑(%s)—— 不採用"
-          % json.dumps(info_map, ensure_ascii=False))
-else:
-    doc = info_map.split("#", 1)[0]
-    print("資訊地圖:`%s`%s" % (info_map, "" if os.path.isfile(os.path.join(root, doc))
-                               else "(主 repo 沒有這個檔)"))
-homes = ticket.get("info_homes") if isinstance(ticket.get("info_homes"), list) else []
-homes = [row for row in homes if isinstance(row, dict)]
-if homes:
-    print("這張票的資訊位置(info_homes;說明資訊住在哪,不是寫入權限):")
-    for row in homes:
-        print("- %s → `%s`" % (row.get("what") or "?", row.get("home") or "?"))
-else:
-    print("這張票的資訊位置:票面沒有 info_homes")
-PY
-}
-
 # 派工文的「只准跑的測試」段(#87 A18):worker 與驗證者兩份都帶,逐字抄票的 `test_plan`。
 # worker 的時限與回歸切開計(使用者 2026-10-03):agent 只跑票上列的測試,回歸是閘門的事,
 # 閘門紅由 auto-fix 下一輪處理 —— 不寫在派工文裡,agent 就會自己跑全套把時限吃掉。
@@ -866,7 +814,6 @@ print("## 票寫錯 / 需要裁示怎麼說")
 print("在 EVIDENCE 裡寫**一行**:`OBJECTION: <ticket-wrong|test_defect|blocking> <一句話>`。")
 print("**不准**放寬既有斷言、不准把期望值改成程式現在印的東西(那是假綠家族)。")
 PY
-        scope_section
         only_tests_section
     } > "$1"
 }
@@ -1839,20 +1786,6 @@ verifier_collect() {   # 設定 VPATCH / VEVIDENCE;換候選重起之後再收�
 }
 
 dispatch_verifier() {   # uses r/FIX/DISPATCH/line/LINT_ROUND; sets PATCH_OUT/EVIDENCE/CASE_FIXED
-    # 只派驗證者的那一輪(#126 A5)沒有 worker 的反駁、也沒有 worker 的 patch:不放寬寫入範圍。
-    [ -n "${LINT_ROUND:-}" ] || python3 - "$TF" "$ID" <<'PY'
-import json, os, subprocess, sys
-path, ident = sys.argv[1:3]
-with open(path, encoding="utf-8") as handle:
-    ticket = json.load(handle)
-allowed = list(ticket.get("allowed_write_paths") or [])
-for item in list(ticket.get("in_scope") or []) + ["tests/*"]:
-    if item not in allowed:
-        allowed.append(item)
-subprocess.run([sys.executable, os.path.join(os.environ["AC_CONTROL_DIR"], "ticket.py"),
-                "set", ident, "allowed_write_paths",
-                json.dumps(allowed, ensure_ascii=False)], check=False)
-PY
     VFIX=$WTBASE/verify-t$ID/round$r
     V_STOP=""
     # 平行驗證者(interface_fixed,#51)已經在**同一個**副本交過件(專案 #775):先把它那兩份
@@ -2469,7 +2402,6 @@ print("看到這一行,這支腳本會把它記成票的 `objections[]`、交給
       "原副本續做;判不了才轉 Blocked 指派主線),**不會**再派下一輪。")
 print("**不准**放寬既有斷言、不准把期望值改成程式現在印的東西(那是假綠家族)。")
 PY
-            scope_section
             only_tests_section
         } > "$DISPATCH"
     fi
@@ -3011,7 +2943,7 @@ print(json.dumps({"rc": 0, "sha": sys.argv[1], "run_id": sys.argv[2],
 # --------------------------------------------------------------- 批次修復(#108)
 # land 一批 N 張、全套紅 → `AC_BATCH_RUN_ID=<land 那一輪的 run_id> sh scripts/auto-fix.sh --batch
 # <整合分支> <id…>`。**不猜哪張票弄紅**(D-H51 ②):一個 worker 拿整批 —— 紅榜(第一張票的
-# `reports/t<id>/<AC_BATCH_RUN_ID>/status.json`)、整批 diff、N 張票面、寫入範圍聯集 —— 在整合分支的
+# `reports/t<id>/<AC_BATCH_RUN_ID>/status.json`)、整批 diff、N 張票面 —— 在整合分支的
 # 副本上修;patch 由 `apply.sh --batch` 疊成整合分支頭上一個 commit,`review.sh --batch` 覆核它。
 # 只跑一輪:rc 0 之後呼叫端重跑全套,紅了再叫一次就是下一輪。
 # **不寫票**:不 set state / attempt / objections —— 任何一張票的 state_version 一動,N 張的覆核同時
@@ -3088,8 +3020,6 @@ for row in rows:
     print("- acceptance:")
     for item in row.get("acceptance") or []:
         print("  - %s" % item)
-    print("- allowed_write_paths:%s" % json.dumps(row.get("allowed_write_paths") or [], ensure_ascii=False))
-    print("- out_of_scope:%s" % json.dumps(row.get("out_of_scope") or [], ensure_ascii=False))
 print("")
 print("## 紅榜(逐條;來源 `%s`)" % os.path.relpath(status_file, root))
 for row in failures:
@@ -3105,18 +3035,6 @@ print("```")
 print(stat.rstrip("\n") or "(空的)")
 print("```")
 print("整批 diff 檔:`%s`" % diff_file)
-print("")
-print("## 寫入範圍(各票 allowed_write_paths 聯集)")
-seen = []
-for row in rows:
-    for pattern in row.get("allowed_write_paths") or []:
-        if pattern not in seen:
-            seen.append(pattern)
-for pattern in seen:
-    print("- `%s`" % pattern)
-print("聯集外的檔要改就改(不擋,覆核者逐檔看);各票 out_of_scope 聯集扣掉上面這份聯集也是建議範圍"
-      "(D-050 ①):命中不擋,在 EVIDENCE「提示清單外的改動」逐檔寫 `- `<檔>` — <理由>`。"
-      "硬擋只剩 board/config.json 的 hard_block。")
 print("")
 print("## 規則")
 print("**不得放寬測試**:測試檔裡不刪含 assert 的行、不加 skip / expectedFailure —— `apply.sh --batch` "

@@ -436,7 +436,7 @@ class AutoFixBase(Sandbox):
             return [line.strip() for line in handle if line.startswith("worker ran")]
 
     def ticket_ready(self, **fields):
-        row = self.make_ticket("1", allowed_write_paths=["tests/*"], **fields)
+        row = self.make_ticket("1", **fields)
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "開票 #1")
         self.git("push", "-q", "origin", "main")
@@ -636,7 +636,7 @@ class ThingsThatStopIt(AutoFixBase):
 
     def test_a_test_defect_dispatches_a_new_verifier_and_resumes_the_gate(self):
         self.set_worker(WORKER_REPORTS_TEST_DEFECT)
-        self.ticket_ready(in_scope=["src/app.py"])
+        self.ticket_ready()
         patch = self.write("p1.diff", RED_CASE, where=self.home)
         self.assertEqual(self.run_sh("scripts/apply.sh", "1", patch).returncode, 0)
         wt = os.path.join(self.home, "repo-wt", "t1")
@@ -661,7 +661,6 @@ class ThingsThatStopIt(AutoFixBase):
         objection = ticket["objections"][0]
         self.assertEqual(objection["owner"], "verifier")
         self.assertEqual(objection["disposition"], "fixed")
-        self.assertIn("tests/*", ticket["allowed_write_paths"])
         packets = glob.glob(os.path.join(self.repo, "reports", "t1", "*",
                                          "dispatch-verifier-round2.md"))
         self.assertEqual(len(packets), 1)
@@ -681,7 +680,7 @@ class ThingsThatStopIt(AutoFixBase):
         → 這一條紅。
         """
         self.set_worker(WORKER_REPORTS_TEST_DEFECT)
-        self.ticket_ready(in_scope=["src/app.py"])
+        self.ticket_ready()
         patch = self.write("p1.diff", RED_CASE_WITH_DOCSTRING, where=self.home)
         self.assertEqual(self.run_sh("scripts/apply.sh", "1", patch).returncode, 0)
         wt = os.path.join(self.home, "repo-wt", "t1")
@@ -735,7 +734,7 @@ class AWorkerPatchWithATestDefectReachesTheBranch(AutoFixBase):
 
     def red_branch(self, worker):
         self.set_worker(worker)
-        self.ticket_ready(in_scope=["src/app.py"])
+        self.ticket_ready()
         self.first_round()
 
     def assert_both_on_the_branch(self, done):
@@ -861,7 +860,7 @@ class ASerialTestDefectMergesTheVerifierPlan(AutoFixBase):
 
     def run_it(self, worker_patch):
         self.set_worker(TEST_DEFECT_VERIFIER_WITH_PLAN.replace("@WORKER_PATCH@", worker_patch))
-        self.ticket_ready(in_scope=["src/app.py"])
+        self.ticket_ready()
         self.first_round()
         done = self.auto_fix()
         self.assertNotIn("套不上", done.stdout + done.stderr)
@@ -1118,46 +1117,6 @@ class TheFirstRoundPacket(AutoFixBase):
         self.assertIn("前景跑", done.stdout, "G14:丟背景就結束回合 = 什麼都沒交")
         self.assertEqual(self.worker_rounds(), [], "第 1 輪不由這一支起 worker")
 
-    def scope_part(self, text):
-        self.assertIn("## 寫入範圍與資訊歸屬", text)
-        return text.split("## 寫入範圍與資訊歸屬")[1].split("\n## ")[0]
-
-    def test_the_packet_shows_the_info_map_and_the_info_homes_when_set(self):
-        """#101 A8(有設定):派工文的真入口是 auto-fix.sh —— config 的 info_map(相對文件路徑,
-        帶 #節名)與票的 info_homes 逐筆印出,提示範圍含 home,並說明 EVIDENCE 那一段怎麼寫。
-        四問:量那一段的字;紅 = 沒印或印錯來源;期望值 = 夾具寫的 config 與票面;不測 = 文件內容。
-        **變異**:`scope_section` 不印 info_homes 那幾行 → 這一條紅。"""
-        self.set_worker(WORKER_NEVER)
-        conf = json.loads(self.read("board/config.json"))
-        conf["info_map"] = "docs/INFO-MAP.md#寫入範圍"
-        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
-        self.write("docs/INFO-MAP.md", "# 資訊地圖\n\n## 寫入範圍\n")
-        self.ticket_ready(info_homes=[{"what": "角色操作細節", "home": "docs/reference"}],
-                          out_of_scope=["docs/DECISIONS.md"])
-        done = self.auto_fix("--dry-run", "--round", "1")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        part = self.scope_part(done.stdout)
-        self.assertIn("資訊地圖:`docs/INFO-MAP.md#寫入範圍`", part)
-        self.assertNotIn("沒有這個檔", part)
-        self.assertIn("- 角色操作細節 → `docs/reference`", part)
-        self.assertIn("`tests/*` `docs/reference`", part, "提示範圍 = allowed ∪ home")
-        self.assertIn('["docs/DECISIONS.md"]', part)
-        self.assertIn("## 提示清單外的改動", part)
-        self.assertIn("hard_block", part)
-
-    def test_the_packet_only_hints_when_nothing_is_set(self):
-        """#101 A8(缺設定):沒有 info_map → 只提示、不擋派工;票面沒有 info_homes 也說出來。
-        四問:量那一段的字與 rc 0;紅 = 缺設定時擋派工或一片空白;期望值 = 沙盒預設 config;
-        不測 = 有設定那一條。
-        **變異**:沒設 info_map 時不印提示(那一個 `if` 拿掉)→ 這一條紅。"""
-        self.set_worker(WORKER_NEVER)
-        self.ticket_ready()
-        done = self.auto_fix("--dry-run", "--round", "1")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        part = self.scope_part(done.stdout)
-        self.assertIn("沒設 `info_map`", part)
-        self.assertIn("票面沒有 info_homes", part)
-
     def test_a_round_number_it_does_not_support_is_refused_by_name(self):
         """「不認得 X」只說了它不是什麼(§5.7)。"""
         self.set_worker(WORKER_NEVER)
@@ -1289,7 +1248,7 @@ class TheFirstRoundStartsFromReady(AutoFixBase):
         self.set_worker(WORKER_NEVER)
         for state in ("Draft", "Running", "Blocked"):
             with self.subTest(state=state):
-                self.make_ticket("1", allowed_write_paths=["tests/*"], state=state)
+                self.make_ticket("1", state=state)
                 done = self.auto_fix()
                 self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
                 self.assertIn("state=%s" % state, done.stderr)
@@ -1505,7 +1464,7 @@ class RunFromInsideATicketWorktree(AutoFixBase):
     def test_a_ticket_that_is_not_in_version_control_yet_is_still_found(self):
         """**變異**:把 `TF` 那一段 `--git-common-dir` 的退路拿掉 → 這一條紅(rc=2 找不到票)。"""
         self.set_worker(WORKER_NEVER)
-        self.make_ticket("1", allowed_write_paths=["tests/*"])   # **故意不 commit**
+        self.make_ticket("1")   # **故意不 commit**
         wt = self.worktree("t1")
         self.assertFalse(os.path.exists(os.path.join(wt, "tickets", "1.json")),
                          "這一條問的正是「票檔還沒進版控」")
@@ -1579,7 +1538,7 @@ class TheCopyRootComesFromTheMainRepo(AutoFixBase):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "worktree_dir")
         wt = self.ticket_worktree()
-        self.make_ticket("1", allowed_write_paths=["tests/*"])   # 只在主 repo,不進版控
+        self.make_ticket("1")   # 只在主 repo,不進版控
         self.assertFalse(os.path.exists(os.path.join(wt, "tickets", "1.json")))
         done = self.run_sh(os.path.join(wt, "scripts", "auto-fix.sh"),
                            "1", "--dry-run", "--round", "1", cwd=wt,
@@ -2103,10 +2062,10 @@ class MechanicalRedIsAttributed(AutoFixBase):
         self.assertEqual(self.worker_rounds(), [])
 
     def test_a_hard_block_paths_hit_is_attributed_to_the_handin(self):
-        """A3:寫入範圍硬擋命中(verify_strings 合格)→ 歸因到交件,不歸票面。#101(D-050 ①)起
-        out_of_scope 不再是閘門機械格,硬擋只剩 hard_block(D-054 Q3),夾具從 out_of_scope 換成它。
+        """A3:hard_block 硬擋命中(verify_strings 合格)→ 歸因到交件,不歸票面。硬擋只剩
+        hard_block(D-054 Q3)。
         四問:量頁面的格名、檔名與兩個歸因字樣;紅 = 一律歸票面;期望值 = 夾具 config 的
-        hard_block.paths;不測 = out_of_scope(tests/test_status 那一條)。
+        hard_block.paths。
         **變異 M3**:所有機械格行一律歸因到票面 → 這一條紅。"""
         self.set_worker(WORKER_NEVER)
         self.protect("scripts/land.sh")
@@ -2123,8 +2082,7 @@ class MechanicalRedIsAttributed(AutoFixBase):
         self.assertNotIn("沒有歸因", page + done.stdout + done.stderr)
 
     def test_both_kinds_at_once_are_listed_with_both_attributions(self):
-        """A3:verify_strings 與寫入範圍硬擋同時不合 → 兩組各自列、兩個歸因字樣都在。#101 起
-        硬擋那一組是 hard_block(out_of_scope 不再是機械格)。"""
+        """A3:verify_strings 與 hard_block 硬擋同時不合 → 兩組各自列、兩個歸因字樣都在。"""
         self.set_worker(WORKER_NEVER)
         self.protect("scripts/land.sh")
         self.ticket_ready(verify_strings=["filename-token"])
@@ -2432,7 +2390,6 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
                                                          "round1", "worker-started"))
                         .replace("@WAIT@", "1" if wait else "0")
                         .replace("@VERIFIER_HANDS_IN@", "1" if hands_in else "0"))
-        fields.setdefault("allowed_write_paths", ["tests/*", "verify/*"])
         # `gate.sh --branch` 把 `verify/*` 的改動對到 `test_verify_runner`(真 repo 有這一支);
         # 沙盒少了它,閘門紅在「模組不存在」—— 那是沙盒與事實的差異,不是受測腳本的行為。
         self.write(os.path.join("tests", "test_verify_runner.py"),
@@ -2827,8 +2784,7 @@ class AParallelVerifierThenATestDefect(AutoFixBase):
         self.write(os.path.join("tests", "test_verify_runner.py"),
                    "import unittest\n\n\nclass T(unittest.TestCase):\n"
                    "    def test_there(self):\n        self.assertTrue(True)\n")
-        self.make_ticket("1", needs_verifier=True, interface_fixed=True,
-                         allowed_write_paths=["tests/*", "verify/*"])
+        self.make_ticket("1", needs_verifier=True, interface_fixed=True)
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "開票 #1")
         self.git("push", "-q", "origin", "main")
@@ -3411,7 +3367,7 @@ env | grep '^AC_' > "$out/env.txt" || true
     python3 scripts/event.py tail 50 > "$out/events.txt" 2>&1
     rm -f "$AC_ROOT/memory/model/huge-probe.inbox.md"
     python3 scripts/ticket.py create --subject 外洩探針 --objective 探針 --acceptance 探針 \\
-        --allowed-write-path src/probe.txt --role worker --model opus --tool claude-code \\
+        --role worker --model opus --tool claude-code \\
         > "$out/ticket.txt" 2>&1
     python3 scripts/rules.py pack worker --model opus > "$out/rules.txt" 2>&1
     sh scripts/gate.sh --branch --ticket 1 > "$out/gate.txt" 2>&1
@@ -3777,24 +3733,19 @@ class BatchFix(AutoFixBase):
             for key in ("state_version", "review", "state", "objections", "attempt"):
                 self.assertEqual(now.get(key), row.get(key), "#%s 的 %s 被寫了" % (ident, key))
 
-    def test_the_packet_carries_all_five_parts(self):
-        """A1(a)。四問:量派工文逐字含 ① 兩張票的 subject / objective / acceptance / allowed;
+    def test_the_packet_carries_all_four_parts(self):
+        """A1(a)。四問:量派工文逐字含 ① 兩張票的 subject / objective / acceptance;
         ② 紅榜每條 case / file / excerpt;③ git diff --stat main...land/X 與整批 diff 檔路徑;
-        ④ 寫入範圍聯集逐條;⑤ 不得放寬測試 + OBJECTION: test_defect。紅 = 少任一項;
+        ④ 不得放寬測試 + OBJECTION: test_defect。紅 = 少任一項;
         期望值 = 票檔、status.json、測試自己跑的 git diff --stat。
-
-        **變異 ③**:派工文不帶寫入範圍聯集 → ④ 那幾條紅。
         """
         self.set_worker(WORKER_NEVER)
         self.run_batch()
         text = self.read(self.record("dispatch-round1.md"))
-        union = []
         for ident in ("1", "2"):
             row = self.before[ident]
             for value in (row["subject"], row["objective"], *row["acceptance"]):
                 self.assertIn(value, text)
-            self.assertIn(json.dumps(row["allowed_write_paths"], ensure_ascii=False), text)
-            union += [item for item in row["allowed_write_paths"] if item not in union]
         for row in self.batch["failures"]:
             for key in ("case", "file", "excerpt"):
                 self.assertIn(row[key], text)
@@ -3803,8 +3754,6 @@ class BatchFix(AutoFixBase):
         self.assertIn(stat, text)
         self.assertIn(self.record("batch.diff"), text)
         self.assertTrue(os.path.exists(self.record("batch.diff")))
-        for item in union:
-            self.assertIn("- `%s`" % item, text)
         self.assertIn("不得放寬測試", text)
         self.assertIn("OBJECTION: test_defect", text)
 
@@ -4310,7 +4259,6 @@ class TheMissingCasesSendAVerifierEveryRound(AutoFixBase):
         self.write(os.path.join("tests", "test_verify_runner.py"),
                    "import unittest\n\n\nclass T(unittest.TestCase):\n"
                    "    def test_there(self):\n        self.assertTrue(True)\n")
-        fields.setdefault("allowed_write_paths", ["tests/*", "verify/*"])
         # 一輪就停(上限 2):對照組量的只是第 2 輪,不讓第 3 輪的事混進來。
         fields.setdefault("retry_limit", 1)
         self.make_ticket("1", **fields)
@@ -4562,7 +4510,7 @@ class AnEmptyPatchVerifyIsNoChange(AutoFixBase):
         四問:擋的是 #98 第 2 輪的 rc=3;期望值來自替身寫的檔名與 PLAN_FILES;
         M1 關得掉;不靠 auto-fix 印的路徑推期望值。"""
         self.arm(worker_patch="1", worker_defect="1")
-        self.ticket_ready(in_scope=["src/app.py"])
+        self.ticket_ready()
         self.first_round()
         done = self.auto_fix("--no-review")
         self.assert_no_change_said(done)
@@ -4608,7 +4556,7 @@ class AnEmptyPatchVerifyIsNoChange(AutoFixBase):
 
         四問:同 (a),多一格 disposition=fixed(該筆反駁有人收)。"""
         self.arm(worker_defect="1")
-        self.ticket_ready(in_scope=["src/app.py"])
+        self.ticket_ready()
         self.first_round()
         before = self.head()
         done = self.auto_fix("--no-review")
@@ -4627,7 +4575,7 @@ class AnEmptyPatchVerifyIsNoChange(AutoFixBase):
 
         **變異**:拿掉 plan_only_receive 的副本守衛 → 計畫併進票、閘門在不存在的目錄跑 → 紅。"""
         self.arm(worker_defect="1")
-        self.ticket_ready(in_scope=["src/app.py"])
+        self.ticket_ready()
         done = self.auto_fix("--no-review")
         said = done.stdout + done.stderr
         self.assertNotEqual(done.returncode, 0, said)

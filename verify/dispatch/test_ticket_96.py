@@ -4,7 +4,7 @@
 A1 | integ | Ready、沒有狀態檔;fix-t1/round1/ 先放 patch-round1.diff 與 work/marker;auto-fix --dry-run | rc 0、dispatch-round1.md 一份、兩檔仍在且逐位元等於事先寫的 bytes | 票面 A1 原話;內容是夾具自己寫的
 A2 | integ | needs_verifier=true、interface_fixed=true 的 Ready 票;verify-t1/round1/marker;--dry-run | rc 0、marker 仍在且內容不變(改前即綠,回歸鎖) | 票面 A2 原話
 A3 | integ | 不帶 --dry-run:fix-t1/round1/ 先放舊 patch 與 work/marker,假 worker 起跑那一刻記下看到什麼;--dry-run --round 1 | worker 看不到舊檔(清掉重建);--round 1 印規則包首行、不起 worker | 票面 A3 原話;既有 TheFirstRoundPacket 的首行字面
-A4 | integ | 沙盒主線有 repo-map.py、catalog(managed 含 tests/test_*.py)、新鮮索引;patch 只新增 tests/test_memory_new.py;apply --evidence | rc 0;副本 repo-map check rc 0;index.json managed 含 tests/test_memory_new.py;main..t1 恰 1;commit 訊息有行以 `regen: repo-map build` 開頭;result extra_paths 不含 code-map/ | 票面 A4 原話;檔名 = patch 新增的那一支
+A4 | integ | 沙盒主線有 repo-map.py、catalog(managed 含 tests/test_*.py)、新鮮索引;patch 只新增 tests/test_memory_new.py;apply --evidence | rc 0;副本 repo-map check rc 0;index.json managed 含 tests/test_memory_new.py;main..t1 恰 1;commit 訊息有行以 `regen: repo-map build` 開頭 | 票面 A4 原話;檔名 = patch 新增的那一支
 A5 | integ | A4 那條分支,副本內 gate.sh --branch --ticket 1 --no-auto-fix | stderr 不含「code-map 索引過期」、rc ≠ 4 | 票面 A5 原話;字面同 TheGateRefusesAStaleIndex
 A6 | integ | patch 只改既有已管理檔 tests/test_repo_map_contract.py 的內文 | rc 0;commit 訊息沒有 `regen:` 行;main..t1 的 diff 不含 code-map/ | 票面 A6 原話
 A7 | integ | patch 在 catalog 加一個 entry 指向不存在的 scripts/ghost.py | rc 0;main..t1 恰 1;輸出有一行含「索引沒重產」 | 票面 A7 原話
@@ -26,7 +26,6 @@ scripts/repo-map.py 進沙盒、寫 catalog、build、commit。patch 用 `diff -
 ## 不做
 不改產品碼;不放寬票面驗收;不刪既有案例;A2、A3、A6 改前即綠(回歸鎖),不做變異。
 """
-import glob
 import json
 import os
 import shutil
@@ -166,7 +165,7 @@ class ApplyRebuildsTheCodeMap(ApplyBase):
         self.write(os.path.join("tests", "test_repo_map_contract.py"), PASSING)
         built = self.run_py("scripts/repo-map.py", "build")
         self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
-        self.make("1", allowed_write_paths=["tests/*"])
+        self.make("1")
         self.git("push", "-q", "origin", "main")
 
     def make_patch(self, name, changes):
@@ -183,13 +182,6 @@ class ApplyRebuildsTheCodeMap(ApplyBase):
         self.assertEqual(made.returncode, 1, made.stderr)
         return self.patch_file(name, made.stdout)
 
-    def result_json(self):
-        found = sorted(glob.glob(os.path.join(self.repo, "reports", "t1", "*",
-                                              "result-round1.json")))
-        self.assertEqual(len(found), 1, found)
-        with open(found[0], encoding="utf-8") as handle:
-            return json.load(handle)
-
     def message(self):
         return self.git("log", "-1", "--format=%B", "t1")
 
@@ -200,7 +192,7 @@ class ApplyRebuildsTheCodeMap(ApplyBase):
         return done
 
     def test_a4_a_stale_code_map_is_rebuilt_into_the_same_commit(self):
-        """A4 交件漏重生 → 套用後索引是新的、併進同一個 commit、不列 extra_paths。"""
+        """A4 交件漏重生 → 套用後索引是新的、併進同一個 commit。"""
         done = self.apply_new_managed_file()
         wt = self.wt()
         check = subprocess.run(["python3", os.path.join(wt, "scripts", "repo-map.py"),
@@ -212,8 +204,6 @@ class ApplyRebuildsTheCodeMap(ApplyBase):
         self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "1")
         self.assertTrue(any(line.startswith(REGEN_TRAILER)
                             for line in self.message().splitlines()), self.message())
-        extra = self.result_json()["extra_paths"]
-        self.assertEqual([rel for rel in extra if rel.startswith("code-map/")], [], extra)
 
     def test_a5_the_gate_on_that_branch_does_not_refuse_a_stale_index(self):
         """A5 A4 那條分支跑 gate.sh --branch --ticket 1 --no-auto-fix:不再擋「索引過期」、rc 不是 4。"""

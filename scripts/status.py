@@ -701,7 +701,7 @@ def ticket_snapshot(root, ticket):
     except (OSError, ValueError):
         return None
     keep = ("id", "subject", "objective", "state", "state_version", "attempt",
-            "base_sha", "allowed_write_paths", "acceptance", "verify",
+            "base_sha", "acceptance", "verify",
             "objections", "review", "retry_limit")
     return {key: data[key] for key in keep if key in data}
 
@@ -871,9 +871,6 @@ def open_flaky_ticket(root, case, seen, threshold, log, from_ticket):
         "--acceptance", "原順序整組連跑 10 次,%s 沒有一次紅" % case,
         "--acceptance", "說得出它不穩的原因(共用狀態 / 時序 / 外部資源),寫進 EVIDENCE",
         "--acceptance", "不是靠放寬斷言或加 retry 讓它綠的",
-        "--in-scope", case,
-        "--allowed-write-path", "verify/*",
-        "--allowed-write-path", "tests/*",
         "--role", "verifier", "--model", str(model), "--tool", "claude-code",
         "--state", "Ready",
     ]
@@ -925,7 +922,6 @@ def open_repair_ticket(case, keys, argv, fields):
 
 
 REGRESSION_SOURCES = ("release", "gate")
-DEFAULT_REGRESSION_WRITE_PATHS = ["tests/*", "verify/*"]
 # 修復票的驗收是**固定樣板**(T D-G130):這類票的驗收就是案例本身,所以不驗證者、
 # 不讓開票的人各寫各的。`{case}` / `{rerun}` 代入。
 REGRESSION_ACCEPTANCE = (
@@ -980,9 +976,6 @@ def cmd_regression_red(args):
     enabled = conf.get("regression_auto_ticket") is not False
     model = args.model or (conf.get("routing") or {}).get("implement") or "opus"
     rerun = args.rerun or regression.get("rerun_cmd") or conf.get("unit_cmd") or ""
-    paths = regression.get("write_paths")
-    if not isinstance(paths, list) or not paths:
-        paths = DEFAULT_REGRESSION_WRITE_PATHS
     if enabled and not rerun:
         sys.stderr.write("status: 沒有全套指令,verify.run 留空:"
                          "設 board/config.json 的 regression.rerun_cmd\n")
@@ -999,9 +992,6 @@ def cmd_regression_red(args):
             ]
             for line in REGRESSION_ACCEPTANCE:
                 argv += ["--acceptance", line.format(case=case, rerun=rerun)]
-            argv += ["--in-scope", case]
-            for path in paths:
-                argv += ["--allowed-write-path", str(path)]
             if rerun:
                 argv += ["--verify-run", rerun]
             # 兩格布林在 create 就帶(#91 C2):`--state Ready` 的實作票缺 needs_verifier

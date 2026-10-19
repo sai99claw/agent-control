@@ -331,13 +331,13 @@ class TheDispatchEntriesStartNothing(RulesBox):
         return [line.strip() for line in read(self.starts).splitlines() if line.strip()]
 
     def ready_ticket(self, ident="1", verifier=True):
-        self.make_ticket(ident, allowed_write_paths=["tests/*"], needs_verifier=verifier,
+        self.make_ticket(ident, needs_verifier=verifier,
                          interface_fixed=True)
         self.commit("開票 #%s" % ident)
 
     def red_round(self, ident="2"):
         """第 1 輪已經紅過的票:狀態檔直接寫(要測的是 auto-fix 怎麼讀它)。"""
-        self.make_ticket(ident, allowed_write_paths=["tests/*"], state="Running",
+        self.make_ticket(ident, state="Running",
                          needs_verifier=False)
         self.commit("開票 #%s" % ident)
         log = self.write("round.log", RED_LOG, where=self.home)
@@ -460,7 +460,7 @@ class ProjectPacketsPointAtRealFiles(RulesBox):
     def test_the_first_round_worker_and_verifier_packets(self):
         """四問:守「worker / verifier 派工文的角色與模型入口存在」;回歸是範本寫死
         `memory/role/*.md`;舊測試只在正本版面跑;不加測試專用 API。"""
-        self.make_ticket("1", allowed_write_paths=["tests/*"], needs_verifier=True,
+        self.make_ticket("1", needs_verifier=True,
                          interface_fixed=True)
         self.commit("開票 #1")
         done = self.run_sh("scripts/auto-fix.sh", "1", "--dry-run", "--round", "1")
