@@ -21,6 +21,12 @@ from control_harness import DEFAULT_CONFIG, fixture_candidate, write_executable 
 from test_auto_fix import AutoFixBase  # noqa: E402
 
 CODEX_MODEL = "codex:gpt-6-astra"
+# 真 codex(不帶 --json)撞額度時 stderr 的那一句,逐字取自
+# reports/t122/20261018-231201-28931/verifier-round1.log 末兩行(#133)。
+REAL_QUOTA = ("ERROR: You've hit your usage limit. Upgrade to Pro "
+              "(https://chatgpt.com/explore/pro), visit "
+              "https://chatgpt.com/codex/settings/usage to purchase more credits or try again "
+              "at 11:50 PM.")
 CLAUDE_COMMAND = "claude -p --model opus --permission-mode acceptEdits"
 
 FAKE_CODEX = """#!/bin/sh
@@ -44,6 +50,10 @@ case "@MODE@" in
         exit 1 ;;
     other)
         echo "ERROR: something unrelated broke" >&2
+        exit 1 ;;
+    plainquota)
+        echo "@REAL_QUOTA@" >&2
+        echo "@REAL_QUOTA@" >&2
         exit 1 ;;
     hang)
         exec sleep 60 ;;
@@ -76,7 +86,8 @@ class CodexBase(AutoFixBase):
     def fake_codex(self, mode="deliver"):
         write_executable(os.path.join(self.stub_bin, "codex"),
                          FAKE_CODEX.replace("@ARGV@", self.argv_file)
-                         .replace("@STDIN@", self.stdin_file).replace("@MODE@", mode))
+                         .replace("@STDIN@", self.stdin_file).replace("@MODE@", mode)
+                         .replace("@REAL_QUOTA@", REAL_QUOTA))
 
     def make_ticket(self, ident, **fields):
         """票寫 codex(`tool=codex` 且 `codex:` 前綴)時表頭也換成它(#121:起什麼由表選)。
@@ -324,7 +335,15 @@ class QuotaTakesTheNextCandidate(FallbackBase):
         """T1:fake codex 先 quota、fake opus 交件。**M1**(保留舊的改派 opus + 回 Ready + rc 7)→
         rc 不是 0、opus 沒起,紅;**M2**(額度後 rm -rf 副本)→ opus 的 cwd 不在 / patch 沒進分支,紅。
         四問:量 rc、兩次啟動、cwd、cost、事件;值 = A2/A4;舊值紅在 rc 與 opus_calls。"""
-        self.fake_codex("quota")
+        self.assert_relaunched_opus("quota")
+
+    def test_133_a2_the_plain_codex_usage_limit_line_relaunches_opus(self):
+        """#133 T4 / A2:真 codex 不帶 --json,撞額度只在 stderr 印兩次純文字 ERROR: 行。同一組斷言。
+        **M1**(刪掉結尾 ERROR: 段的判讀)→ rc 5、opus 沒起,紅。"""
+        self.assert_relaunched_opus("plainquota")
+
+    def assert_relaunched_opus(self, mode):
+        self.fake_codex(mode)
         self.codex_ticket()
         done = self.auto_fix("--no-review")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)

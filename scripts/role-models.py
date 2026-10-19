@@ -60,7 +60,8 @@ ESCALATE_WHEN = {
 FALLBACK_KINDS = ("quota_exhausted", "provider_unavailable")
 AUTH = "auth_config"
 OTHER = "other"
-# 只對 provider 錯誤信封裡的字比對;順序就是判讀順序 —— 認證先判,它要停下不換人。
+# 只對 provider 錯誤信封、或 log 結尾 codex CLI 自己的 ERROR: 行裡的字比對;順序就是判讀順序 ——
+# 認證先判,它要停下不換人。
 ERROR_WORDS = (
     (AUTH, re.compile(r"authentication|permission_error|unauthori[sz]ed|invalid[ _.-]?api[ _.-]?key"
                       r"|api key|\b40[13]\b|not logged in|log ?in|invalid --effort"
@@ -73,6 +74,14 @@ ERROR_WORDS = (
                                         r"|not supported|unavailable)", re.I)),
 )
 EXIT_CLI_MISSING = 127
+# codex 不帶 --json 時撞額度只印純文字 `ERROR: …`(#133)。只認 log 結尾連續的這種行:
+# 中段的 `ERROR: test_…` 是 unittest 輸出,不是 CLI 在說話。純文字裡的字面 429 仍不算額度
+# (#121 / #132 B4:`ERROR: stream error: 429 Too Many Requests` 不換候選),判讀前先拿掉。
+# codex 有時在額度行後再印 `tokens used` + 一行數字收尾(t115 真 log),有才略過。
+CLI_ERROR_PREFIX = "ERROR:"
+LITERAL_429 = re.compile(r"\b429\b|too many requests", re.I)
+CODEX_FOOTER = "tokens used"
+CODEX_TOKENS = re.compile(r"\d[\d,]*")
 
 
 class TableError(ValueError):
@@ -214,7 +223,24 @@ def classify(rc, text):
             if words.search(said):
                 return verdict, "provider 錯誤信封:%s" % said
         return OTHER, "provider 錯誤信封沒說額度 / 不可用 / 認證:%s" % said
-    return OTHER, "log 裡沒有 provider 錯誤信封(rc=%s);一般失敗不換候選" % rc
+    lines = [line.strip() for line in text.splitlines()]
+    while lines and not lines[-1]:
+        lines.pop()
+    if len(lines) >= 2 and lines[-2] == CODEX_FOOTER and CODEX_TOKENS.fullmatch(lines[-1]):
+        del lines[-2:]
+    tail = []
+    for line in reversed(lines):
+        if not line:
+            continue
+        if not line.startswith(CLI_ERROR_PREFIX):
+            break
+        tail.append(line)
+    said = " ".join(reversed(tail))
+    for verdict, words in ERROR_WORDS:
+        if said and words.search(LITERAL_429.sub(" ", said)):
+            return verdict, "log 結尾的 CLI ERROR: 行:%s" % said
+    return OTHER, ("log 裡沒有 provider 錯誤信封、結尾也沒有說額度 / 不可用 / 認證的 ERROR: 行"
+                   "(rc=%s);一般失敗不換候選" % rc)
 
 
 # ------------------------------------------------------------------ 選路
