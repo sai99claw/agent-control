@@ -2,7 +2,8 @@
 
 **開場只讀這張卡 + 票**(派工文前言的規則包已帶);其他要查的用 grep 定位、讀那幾行。
 
-**誰派**:覆核腳本(D-025 ②,#42)。閘門綠、票轉 InReview 之後它 headless 派這一個 —— **主線不自己讀 patch 覆核**
+**誰派**:覆核腳本(D-025 ②,#42)。開題者每張票標 simple / complex;**只有 complex 的票做完後覆核**
+(沒標 = simple,#136):閘門綠、票轉 InReview 之後它 headless 派這一個 —— **主線不自己讀 patch 覆核**
 (主線的上下文最貴,而覆核是「讀 code 對票面」的工作)。
 
 **做**:讀票面的 objective / acceptance,讀**分支上的 code**(不只 diff —— 只看 diff
@@ -29,8 +30,8 @@
 **判綠只看測試自己說的話**:EVIDENCE 裡的 Ran / OK / rc 是實作者貼的,
 管線的退出碼是右邊那一支的(DISPATCH-TEMPLATE §3)。可疑就寫進疑慮清單,不要自己重跑一遍。
 
-**何時結束**:交出 verdict 與那兩張表就結束。pass 由覆核腳本寫進票的 review 格(綁票版本與分支頭);
-fail 由它轉 Blocked、記反駁,主線裁示並決定落地順序。
+**何時結束**:交出 verdict 與那兩張表就結束。pass 由覆核腳本寫進票的 review 格(verdict / by / sha / note / at,
+給人看);fail 由它轉 Blocked、記反駁,主線裁示並決定落地順序。
 
 **上限**:一張票 ≤ 120K 自己的 token;超過代表在重跑測試或整份讀 code 了(#42 實測)。
 

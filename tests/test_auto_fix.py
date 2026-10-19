@@ -6,7 +6,8 @@
 所以這一組問四件事:
 1. 紅了會不會**真的**起一個新 worker,而且它拿到的那一份夠不夠開工(交接包);
 2. 綠了會不會**轉 InReview 並把覆核交給 `review.sh`**(#42,D-025 ②;`--no-review` 才停在
-   InReview)—— auto-fix 自己不蓋覆核那一格,也不發頁(D-032:只寫事件);
+   InReview)—— auto-fix 自己不蓋覆核那一格,也不發頁(D-032:只寫事件);只有 complex 的票
+   派覆核(#136),simple / 沒標的票綠了就停在 InReview 等 land;
 3. 三種停下來(反駁 / 三輪耗盡 / 沒有歸因)會不會**留下票的狀態轉換 + 一頁 decision**,
    而不是印一行就算;
 4. **不該派的時候不派** —— 尤其是「rc 非零卻一條紅都解析不出來」那一種,它看起來
@@ -29,9 +30,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from control_harness import (DEFAULT_CONFIG, REVIEWER_PASS, Sandbox,  # noqa: E402
                              envelope, fixture_candidate, write_executable)
 
-# 沙盒預設 reviewer(`true`)什麼都不印 = 覆核沒交件。閘門綠 + review missing 的 auto-fix 退出碼
-# (#121 A6:不能被 ROUND_RC=0 蓋成成功;以前這些案例期望 0)。
-GREEN_REVIEW_MISSING_RC = 10
+# 沙盒的票沒標 complexity = simple(#136,VISION 流程 #9:只有複雜的票做完後檢查一次):閘門綠
+# 不派覆核、不停在等覆核,auto-fix rc=0。要覆核的案例自己標 complex(預設 reviewer `true` 什麼都
+# 不印 = 覆核沒交件,#121 A6 起那是 rc=10)。
+GREEN_SIMPLE_RC = 0
 
 RED_CASE = """diff -ruN base/tests/test_thing.py work/tests/test_thing.py
 --- base/tests/test_thing.py\t1970-01-01 08:00:00
@@ -645,7 +647,7 @@ class ThingsThatStopIt(AutoFixBase):
 
         done = self.auto_fix()
 
-        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
         self.assertIn("test_defect", done.stdout)
         with open(self.log, encoding="utf-8") as handle:
             self.assertEqual(handle.read().splitlines(),
@@ -716,7 +718,7 @@ class ThingsThatStopIt(AutoFixBase):
 
         done = self.auto_fix()
 
-        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
         with open(self.log, encoding="utf-8") as handle:
             self.assertEqual(handle.read().splitlines(),
                              ["worker ran round 2", "verifier ran round 2",
@@ -737,7 +739,7 @@ class AWorkerPatchWithATestDefectReachesTheBranch(AutoFixBase):
         self.first_round()
 
     def assert_both_on_the_branch(self, done):
-        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
         tree = self.git("ls-tree", "-r", "--name-only", "t1").splitlines()
         self.assertIn("src/worker_change.py", tree, "worker 那份沒進分支")
         self.assertIn("tests/test_thing.py", tree)
@@ -1229,7 +1231,7 @@ class TheFirstRoundStartsFromReady(AutoFixBase):
 
         done = self.auto_fix()
 
-        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
         self.assertNotIn("一輪都還沒跑過", done.stderr)
         self.assertEqual(self.worker_rounds(), ["worker ran round 1"])
         sent = [path for path in self.result_files("dispatch-round1.md")
@@ -1260,7 +1262,7 @@ class TheFirstRoundStartsFromReady(AutoFixBase):
 
         done = self.auto_fix()
 
-        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
         starts = [row for row in self.events() if row["kind"] == "ticket.attempt.start"]
         self.assertEqual(len(starts), 1, starts)
         self.assertEqual(str(starts[0].get("attempt")), "1", starts[0])
@@ -1621,7 +1623,7 @@ class TheCopiesGetCollected(AutoFixBase):
         self.ticket_ready()
         self.first_round()
         done = self.auto_fix()
-        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
         where = self.fix_dir()
         self.assertFalse(os.path.isdir(os.path.join(where, "work")), "work/ 沒被收掉")
         self.assertFalse(os.path.isdir(os.path.join(where, "base")), "base/ 沒被收掉")
@@ -1646,7 +1648,7 @@ class TheCopiesGetCollected(AutoFixBase):
         self.ticket_ready()
         self.first_round()
         done = self.auto_fix()
-        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
         where = self.fix_dir()
         self.assertTrue(os.path.isfile(os.path.join(where, "patch-round2.diff")),
                         done.stdout + done.stderr)
@@ -1667,7 +1669,7 @@ class TheCopiesGetCollected(AutoFixBase):
             self.write(os.path.join(sub, "README"), "main\n", where=where)
         self.write("patch-round1.diff", RED_CASE, where=where)
         done = self.auto_fix()
-        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
         self.assertFalse(os.path.isdir(os.path.join(where, "work")), "round1 的 work/ 沒被收掉")
         self.assertFalse(os.path.isdir(os.path.join(where, "base")), "round1 的 base/ 沒被收掉")
         self.assertTrue(os.path.isfile(os.path.join(where, "patch-round1.diff")),
@@ -1693,7 +1695,7 @@ class TheCopiesGetCollected(AutoFixBase):
         pid = os.getpid()
         where = self.round_one_copy_with_pid(pid)
         done = self.auto_fix()
-        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
         self.assertTrue(os.path.isdir(os.path.join(where, "work")),
                         "worker 還在跑,副本被從它腳下抽走了")
         self.assertIn("auto-fix: 第 1 輪的 worker(pid %d)還在跑,不收副本" % pid, done.stdout)
@@ -1704,7 +1706,7 @@ class TheCopiesGetCollected(AutoFixBase):
         gone.wait()
         where = self.round_one_copy_with_pid(gone.pid)
         done = self.auto_fix()
-        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
         self.assertFalse(os.path.isdir(os.path.join(where, "work")), "round1 的 work/ 沒被收掉")
         self.assertFalse(os.path.isdir(os.path.join(where, "base")), "round1 的 base/ 沒被收掉")
         self.assertNotIn("還在跑,不收副本", done.stdout)
@@ -1728,7 +1730,7 @@ class TheWholeLoop(AutoFixBase):
         只拿掉那一段不會紅:副本裡的 `gate.sh --branch --ticket` 也寫同一格(#73 實測)。"""
         self.set_worker(WORKER_FIXES)
         model = self.set_reviewer(REVIEWER_PASS)
-        self.ticket_ready()
+        self.ticket_ready(complexity="complex")
         wt = self.first_round()
         done = self.auto_fix()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -1765,10 +1767,11 @@ class TheWholeLoop(AutoFixBase):
         self.assertEqual(len(packets), 1, packets)
 
     def test_no_review_leaves_the_review_to_a_human(self):
-        """`--no-review`:綠了停在 InReview,reviewer 不被叫、auto-fix 不准自己蓋覆核那一格。"""
+        """`--no-review`:complex 票綠了停在 InReview,reviewer 不被叫、auto-fix 不准自己蓋
+        覆核那一格。"""
         self.set_worker(WORKER_FIXES)
         self.set_reviewer(REVIEWER_PASS)
-        self.ticket_ready()
+        self.ticket_ready(complexity="complex")
         self.first_round()
         done = self.auto_fix("--no-review")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -1781,6 +1784,36 @@ class TheWholeLoop(AutoFixBase):
         self.assertIn("終態=awaiting_review", done.stdout, "#121 A6:明示還沒覆核、不是可落地")
         self.assertEqual(self.inbox_rows(), [])
 
+    def test_a_simple_or_unmarked_ticket_goes_green_without_a_review(self):
+        """#136(VISION 流程 #9:只有複雜的票做完後檢查一次;沒標 = simple):綠了轉 InReview,
+        不派覆核、不停在等覆核 —— 帶不帶 `--no-review` 都一樣。
+
+        四問:量 rc、終態行、reviewer 叫了幾次、覆核派工文與 review.* 事件、票的 review 與
+        state;紅 = auto-fix 對每張票仍叫 review.sh(reviewer 被叫、review.pass);期望值 =
+        VISION 流程 #9 與 D-054 Q1 原話,不從 auto-fix 算。
+        """
+        for name, fields, args in (("simple", {"complexity": "simple"}, ()),
+                                   ("沒標", {}, ()),
+                                   ("沒標 --no-review", {}, ("--no-review",))):
+            with self.subTest(name):
+                self.setUp()
+                self.set_worker(WORKER_FIXES)
+                self.set_reviewer(REVIEWER_PASS)
+                self.ticket_ready(**fields)
+                self.first_round()
+                done = self.auto_fix(*args)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertIn("終態=green_no_review", done.stdout)
+                self.assertNotIn("awaiting_review", done.stdout)
+                ticket = self.load_ticket("1")
+                self.assertEqual(ticket["state"], "InReview")
+                self.assertIsNone(ticket.get("review"))
+                with open(self.log, encoding="utf-8") as handle:
+                    self.assertNotIn("reviewer ran", handle.read())
+                self.assertEqual(self.result_files("dispatch-reviewer.md"), [])
+                self.assertEqual([kind for kind in self.kinds() if kind.startswith("review.")], [])
+                self.assertEqual(self.inbox_rows(), [])
+
     def test_a_configured_rerun_command_runs_after_apply_and_emits_an_event(self):
         rerun = os.path.join(self.home, "fake-rerun.sh")
         write_executable(rerun, """#!/bin/sh
@@ -1792,8 +1825,7 @@ echo "rerun $AC_ROUND ticket=$AC_TICKET" >> "$AC_TEST_LOG"
         self.ticket_ready()
         self.first_round()
         done = self.auto_fix()
-        # 沙盒預設 reviewer 什麼都不印 = 覆核沒交件:#121 A6 起綠 + missing 是 rc=10,不是 0。
-        self.assertEqual(done.returncode, 10, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
         self.assertEqual(self.worker_rounds(), ["worker ran round 2"])
         with open(self.log, encoding="utf-8") as handle:
             self.assertIn("rerun 2 ticket=1", handle.read())
@@ -1868,14 +1900,15 @@ exit @RC@
 
 
 class TheReviewOutcomeIsTheExitCode(AutoFixBase):
-    """#121 A6:閘門綠但覆核 fail / missing / stale,auto-fix 的 rc 與終態分別保留,不被
+    """#121 A6:閘門綠但覆核 fail / missing / 寫不進票,auto-fix 的 rc 與終態分別保留,不被
     ROUND_RC=0 蓋成成功。**變異**:`review_outcome` 恆設 ROUND_RC=0(舊行為)→ 三案 rc 都是 0,紅。
     四問:量 rc、終態行、票 state;值 = A6;舊值紅在 rc;missing 用真的 review.sh(預設 reviewer
-    替身什麼都不印),fail / stale 用替身 rc —— 量的是 auto-fix 的對應,不是覆核本身。"""
+    替身什麼都不印),fail / 寫不進票用替身 rc —— 量的是 auto-fix 的對應,不是覆核本身。
+    只有 complex 的票派覆核(#136),所以夾具標 complex。"""
 
     def test_missing_with_the_real_review_sh_is_rc_10_and_stays_in_review(self):
         self.set_worker(WORKER_FIXES)
-        self.ticket_ready()
+        self.ticket_ready(complexity="complex")
         self.first_round()
         done = self.auto_fix()
         self.assertEqual(done.returncode, 10, done.stdout + done.stderr)
@@ -1883,13 +1916,13 @@ class TheReviewOutcomeIsTheExitCode(AutoFixBase):
         self.assertEqual(self.load_ticket("1")["state"], "InReview")
         self.assertIsNone(self.load_ticket("1").get("review"))
 
-    def test_fail_and_stale_keep_their_own_rc(self):
-        for rc, want_rc, word in (("1", 9, "review_fail"), ("4", 10, "review_stale"),
+    def test_fail_and_unwritten_keep_their_own_rc(self):
+        for rc, want_rc, word in (("1", 9, "review_fail"), ("4", 10, "review_unwritten"),
                                   ("0", 0, "review_pass")):
             with self.subTest(review_rc=rc):
                 self.setUp()
                 self.set_worker(WORKER_FIXES)
-                self.ticket_ready()
+                self.ticket_ready(complexity="complex")
                 self.first_round()
                 write_executable(os.path.join(self.repo, "scripts", "review.sh"),
                                  REVIEW_RC.replace("@RC@", rc))
@@ -2133,7 +2166,7 @@ class TheResultBlockAtTheEndOfEvidence(AutoFixBase):
 
         done = self.auto_fix()
 
-        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
         found = self.result_files("result-round2.json")
         self.assertEqual(len(found), 1, done.stdout)
         self.assertTrue(os.path.exists(os.path.join(os.path.dirname(found[0]),
@@ -2166,7 +2199,7 @@ class TheResultBlockAtTheEndOfEvidence(AutoFixBase):
 
         done = self.auto_fix()
 
-        self.assertEqual(done.returncode, GREEN_REVIEW_MISSING_RC, done.stdout + done.stderr)
+        self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
         self.assertEqual(len(self.result_json()["memory"]), 2,
                          "鏡像那一格本身要抽得出來")
         self.assertEqual(self.memory_inbox_lines(), before,

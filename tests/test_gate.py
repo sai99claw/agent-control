@@ -552,9 +552,11 @@ class GateSh(Sandbox):
         以前手跑綠沒有人轉 InReview:票停在 Running,與「還在修」長得一樣。
 
         **變異 M3**:拿掉 gate.sh 結尾那一手 `review_after_green` → 這一條紅。
+        只有 complex 的票派覆核(#136),所以夾具標 complex。
         """
         model = self.set_reviewer(REVIEWER_PASS)
-        self.make_ticket(7, allowed_write_paths=["tests/*"], state="Running")
+        self.make_ticket(7, allowed_write_paths=["tests/*"], state="Running",
+                         complexity="complex")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "沙盒的假 reviewer 與票 #7")
         self.git("branch", "t7")
@@ -565,6 +567,31 @@ class GateSh(Sandbox):
         ticket = self.load_ticket("7")
         self.assertEqual(ticket["state"], "InReview")
         self.assertEqual((ticket.get("review") or {}).get("by"), "reviewer@" + model)
+
+    def test_a_hand_run_green_simple_or_unmarked_ticket_is_not_reviewed(self):
+        """#136(VISION 流程 #9:只有複雜的票做完後檢查一次;沒標 = simple):手跑綠 → 票轉
+        InReview 等 land,不叫 review.sh、不起 reviewer。
+
+        四問:量 rc、票 state 與 review、reviewer 有沒有被叫、review.* 事件;紅 = gate.sh 對每張
+        票仍派覆核(reviewer ran 7);期望值 = VISION 流程 #9 與 D-054 Q1 原話。
+        """
+        for name, fields in (("simple", {"complexity": "simple"}), ("沒標", {})):
+            with self.subTest(name):
+                self.setUp()
+                self.set_reviewer(REVIEWER_PASS)
+                self.make_ticket(7, allowed_write_paths=["tests/*"], state="Running", **fields)
+                self.git("add", "-A")
+                self.git("commit", "-q", "-m", "沙盒的假 reviewer 與票 #7")
+                self.git("branch", "t7")
+                self.write("tests/test_zz_green.py", PASSING % "test_zz_green")
+                done = self.gate("--branch", "--ticket", "7")
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertIn("不派覆核", done.stdout)
+                self.assertNotIn("reviewer ran 7", self.ran())
+                ticket = self.load_ticket("7")
+                self.assertEqual(ticket["state"], "InReview")
+                self.assertIsNone(ticket.get("review"))
+                self.assertEqual([kind for kind in self.kinds() if kind.startswith("review.")], [])
 
     def test_a_green_file_run_does_not_call_review_sh(self):
         """指定檔(與 land 跑的 `--full`)不是「手跑票閘門」:不轉 InReview、不派覆核。"""
@@ -1074,8 +1101,10 @@ class TheHandRunGateWritesTheTicketGate(Sandbox):
                    "- 沙盒替身模型:照派工文做,不猜。\n")
 
     def branch_with(self, name, body):
+        # complex:手跑綠要派覆核,派工文才看得到「已對 <sha> 跑過閘門」(#136 起只派 complex)。
         self.set_reviewer(REVIEWER_PASS)
-        self.make_ticket(7, allowed_write_paths=["tests/*"], state="Running")
+        self.make_ticket(7, allowed_write_paths=["tests/*"], state="Running",
+                         complexity="complex")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "沙盒的假 reviewer 與票 #7")
         wt = self.worktree("t7")

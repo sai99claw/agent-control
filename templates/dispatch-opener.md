@@ -42,6 +42,8 @@
 - `tags` 只能用 `verify/TAGS.md`(與 `verify/TAGS.d/`)登記過的。
 - 票面引用的指令**先 `--help` 一次再寫** —— 寫錯一個旗標,worker 會照著打到禁區埠。
 - `decision_refs` 指到 `docs/DECISIONS.md` 真的存在的那幾條。
+- `complexity`(#136):開題者每張票標 simple / complex;只有 complex 做完後覆核;沒標 = simple —— `ticket.py create --complexity simple|complex`;
+  simple 票閘門綠就等 land,不派覆核。
 - 交票前 `python3 scripts/ticket.py lint <n>`(#91 C3;唯讀):`needs_verifier` 布林、`verify_strings` 形狀、標籤登記過,它逐條說;
   沒過不轉 Ready(轉了也會被擋,#91 C1)。
 

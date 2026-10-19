@@ -6,7 +6,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import Sandbox  # noqa: E402
+from control_harness import SCRIPTS, Sandbox  # noqa: E402
 
 
 class InsideACopy(Sandbox):
@@ -115,6 +115,17 @@ class Emit(Sandbox):
         self.assertIn("不認得的事件種類", done.stderr)
         self.assertIn("gate.fail", done.stderr, "沒有把表印出來")
         self.assertEqual(self.events(), [], "拒收的事件不該留下一行")
+
+    def test_review_has_exactly_four_endings(self):
+        """#136 刪了覆核綁定:「遲到不收」那一種從登記表拿掉、不新增種類 —— 覆核只剩
+        pass / fail / missing / refused 四種結局。
+
+        **變異**:KINDS 留著遲到那一種(或多登記一種)→ 這一條紅。
+        """
+        sys.path.insert(0, SCRIPTS)
+        import event as event_mod
+        self.assertEqual([kind for kind in event_mod.KINDS if kind.startswith("review.")],
+                         ["review.pass", "review.fail", "review.missing", "review.refused"])
 
     def test_kv_pairs_land_as_fields(self):
         done = self.event("emit", "land.pass", "--kv", "stamp=20260912-010101",

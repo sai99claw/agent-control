@@ -554,6 +554,8 @@ class A5ReasonsPerFile(LandWorld):
         done = self.apply_t2()
         self.assertEqual(done.returncode, 0, "apply 要收:\n" + done.stdout + done.stderr)
         self.assertEqual(self.ticket("set", "1", "state", "InReview").returncode, 0)
+        # 只有 complex 的票派覆核(#136);這一條量的是派工文,不是派不派。
+        self.assertEqual(self.ticket("set", "1", "complexity", "complex").returncode, 0)
         self.set_reviewer(REVIEWER_PASS)
         reviewed = self.run_sh("scripts/review.sh", "1")
         self.assertEqual(reviewed.returncode, 0, reviewed.stdout + reviewed.stderr)

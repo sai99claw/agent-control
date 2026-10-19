@@ -10,7 +10,7 @@
 #   sh scripts/gate.sh --branch --ticket 7              # 紅了預設派下一輪 worker
 #   sh scripts/gate.sh --branch --ticket 7 --no-auto-fix # 明說要人下場
 #   sh scripts/gate.sh --branch --ticket 7 --no-cache   # 不吃同一輪的回歸快取
-#   (`--branch --ticket` 手跑綠 → 票轉 InReview、叫 scripts/review.sh 派覆核;見下)
+#   (`--branch --ticket` 手跑綠 → 票轉 InReview;complex 票叫 scripts/review.sh 派覆核;見下)
 #
 # ## `--ticket <票號>`:狀態檔、票的回歸、flake 重跑(D-010 / D-014)
 # 給了票號,這一支會做三件多的事:
@@ -86,9 +86,10 @@
 # 這個 commit 對這一組測試就是紅的,而 auto-fix 產生的是**下一個** commit。
 # 修好了沒、停在哪一種,看 inbox 那一頁。
 #
-# ## 手跑綠:票轉 InReview、派覆核(#42,D-025 ②)
+# ## 手跑綠:票轉 InReview、complex 票派覆核(#42,D-025 ②;#136)
 # `--branch --ticket <n>` 綠、而且**不是** auto-fix 叫的(`AC_IN_AUTOFIX` 空)時,先
-# `ticket.py set <n> state InReview`,再叫 `scripts/review.sh <n>`。以前手跑綠沒有人轉
+# `ticket.py set <n> state InReview`,complex 票再叫 `scripts/review.sh <n>`;simple 或沒標
+# (= simple)的票不派覆核、停在 InReview 等 land(只有複雜的票做完後檢查)。以前手跑綠沒有人轉
 # InReview —— 票停在 Running,與「還在修」長得一樣。auto-fix 叫的那一趟由 auto-fix 自己
 # 轉、自己叫(免得同一個綠派兩次覆核);`--full`(land 跑的那一發)與指定檔不觸發。
 # **閘門自己的 rc 不動**:覆核的結果看 review.sh 那一頁。
@@ -689,7 +690,7 @@ print(json.dumps({"rc": int(sys.argv[1]), "sha": sys.argv[2], "run_id": sys.argv
         || echo "gate: 票的 gate 欄寫不進去(不擋閘門)—— review.sh 會說沒跑過閘門" >&2
 }
 
-# 手跑 `--branch --ticket` 綠 → 票轉 InReview → 派覆核(見檔頭)。**閘門自己的 rc 不動**。
+# 手跑 `--branch --ticket` 綠 → 票轉 InReview → complex 票派覆核(見檔頭)。**閘門自己的 rc 不動**。
 review_after_green() {   # $1 = rc
     [ "$1" -eq 0 ] || return 0
     [ -n "$TICKET" ] || return 0
@@ -700,6 +701,21 @@ review_after_green() {   # $1 = rc
     fi
     python3 "$ROOT/scripts/ticket.py" set "$TICKET" state InReview >/dev/null 2>&1 \
         || echo "gate: 票狀態改不動(InReview)" >&2
+    # 判準是 `ticket.py` 的 `needs_review`(#136;沒標 = simple),review.sh / land / close 同一支。
+    if ! python3 - "$ROOT/scripts" "$TICKET" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import ticket as ticket_mod
+try:
+    row = ticket_mod.load(sys.argv[2])
+except (OSError, ValueError):
+    row = {}
+sys.exit(0 if ticket_mod.needs_review(row) else 1)
+PY
+    then
+        echo "gate: 綠了 —— 票轉 InReview;票不是 complex(沒標 = simple),不派覆核,等 land"
+        return 0
+    fi
     echo "gate: 綠了 —— 票轉 InReview,派覆核:sh scripts/review.sh $TICKET"
     sh "$ROOT/scripts/review.sh" "$TICKET" --run-id "$RUN_ID" \
         || echo "gate: 覆核停下來了(rc=$?)—— 看 reports/inbox/ 那一頁"

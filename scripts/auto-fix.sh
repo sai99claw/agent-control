@@ -37,15 +37,17 @@
 #    **閘門機械格不合**(#90)不是這一種:測試沒起所以紅榜空,但 gate 狀態檔的 note 寫著
 #    是哪一條 —— 頁的狀態格是「閘門機械格不合」,歸因到票面(verify_strings / tags)或交件。
 #
-# **覆核由 `review.sh` 派**(#42,D-025 ②):綠了之後票轉 `InReview`(`ticket.state` 事件)、
-# 再叫 `sh scripts/review.sh <票號>` —— reviewer pass 由它寫 `review`,fail 由它轉 Blocked 回主線
-# 裁示。這一支自己不碰 `review` 那一格;`--no-review` 停在 InReview(主線手跑 review.sh)。
-# 綠了**不發頁**(D-032):接著的事是腳本做的,收件匣只收 decision / done。
-# 覆核的結局**改**這一支的退出碼(#121 A6):fail 9、沒交件 / stale 10;`--no-review` 回 0 並印
-# `終態=awaiting_review` —— 閘門綠、還沒覆核,不是可落地。
+# **覆核由 `review.sh` 派**(#42,D-025 ②),**只派 `complexity=complex` 的票**(#136,VISION
+# 流程 #9):綠了之後票轉 `InReview`(`ticket.state` 事件)、complex 票再叫 `sh scripts/review.sh
+# <票號>` —— reviewer pass 由它寫 `review`,fail 由它轉 Blocked 回主線裁示。simple 或沒標(= simple)
+# 的票不派覆核、不停在等覆核:停在 InReview 等 land(land 不要它的 review),印
+# `終態=green_no_review`。這一支自己不碰 `review` 那一格;`--no-review` 讓 complex 票停在
+# InReview(主線手跑 review.sh)。綠了**不發頁**(D-032):接著的事是腳本做的,收件匣只收
+# decision / done。覆核的結局**改**這一支的退出碼(#121 A6):fail 9、沒交件 10;complex 票
+# `--no-review` 回 0 並印 `終態=awaiting_review` —— 閘門綠、還沒覆核,不是可落地。
 #
 # ## 退出碼
-#   0 綠了且覆核 pass(或 --no-review:awaiting_review)   1 三輪耗盡仍紅   2 用法 / 沒有狀態檔而票不是 Ready
+#   0 綠了且覆核 pass(simple 票:綠了就是;或 --no-review:awaiting_review)   1 三輪耗盡仍紅   2 用法 / 沒有狀態檔而票不是 Ready
 #   3 worker 提反駁       4 failures 沒有歸因,或閘門機械格不合(頁的狀態格分得出)
 #   5 worker 沒交出可用的 patch
 #   6 規則包產不出來(#74):worker / 驗證者一個都沒起;缺項在 rules.py 送的 decision 頁
@@ -1201,7 +1203,7 @@ if [ "${S_ENV:-0}" != "0" ]; then
 fi
 
 if [ "${S_RC:-1}" = "0" ]; then
-    echo "auto-fix: 上一輪是綠的 —— 沒有東西要修。覆核由 review.sh 派:sh scripts/review.sh $ID"
+    echo "auto-fix: 上一輪是綠的 —— 沒有東西要修。complex 票的覆核由 review.sh 派:sh scripts/review.sh $ID"
     exit 0
 fi
 
@@ -1236,6 +1238,22 @@ fi
 pick_verifier
 # 票的分支名**只有一個來源:票的 `branch` 欄**(#53,D-018;`apply.sh` 開分支時填)。
 # 空著才退回 `t<n>` —— 下游專案用 `t<n>-<slug>` 的票,寫死 `t$ID` 就找不到分支。
+# 只有 complex 的票做完後覆核(#136;沒標 = simple)。判準是 `ticket.py` 的 `needs_review`,
+# review.sh / land / close 問的也是它。
+needs_review() {
+    python3 - "$AC" "$TF" <<'PY'
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import ticket as ticket_mod
+try:
+    with open(sys.argv[2], encoding="utf-8") as handle:
+        row = json.load(handle)
+except (OSError, ValueError):
+    row = {}
+sys.exit(0 if ticket_mod.needs_review(row) else 1)
+PY
+}
+
 ticket_branch() {
     python3 - "$TF" "t$ID" <<'PY'
 import json, sys
@@ -2311,14 +2329,14 @@ PY
     return 0
 }
 
-# 覆核的結局決定這一支的退出碼(#121 A6):閘門綠只是一半,review fail / missing / stale
-# 不能被 ROUND_RC=0 蓋成成功。review.sh 的 rc:0 pass、1 fail、3 沒交件、4 stale 或寫不進票。
+# 覆核的結局決定這一支的退出碼(#121 A6):閘門綠只是一半,review fail / missing
+# 不能被 ROUND_RC=0 蓋成成功。review.sh 的 rc:0 pass、1 fail、3 沒交件、4 寫不進票。
 review_outcome() {   # $1 = review.sh 的 rc;設定 ROUND_RC
     case $1 in
         0) echo "auto-fix: 終態=review_pass"; ROUND_RC=0 ;;
         1) echo "auto-fix: 終態=review_fail(票留在 review.sh 轉的狀態,等主線裁示)"; ROUND_RC=9 ;;
         3) echo "auto-fix: 終態=review_missing(reviewer 沒交件,票停在 InReview)"; ROUND_RC=10 ;;
-        4) echo "auto-fix: 終態=review_stale(覆核過期或寫不進票,票沒動)"; ROUND_RC=10 ;;
+        4) echo "auto-fix: 終態=review_unwritten(review 或反駁寫不進票)"; ROUND_RC=10 ;;
         7) echo "auto-fix: 終態=review_exhausted(覆核者候選整串耗盡,或交給 Controller 接續)"; ROUND_RC=7 ;;
         *) echo "auto-fix: 終態=review_unfinished(review.sh rc=$1)"; ROUND_RC=10 ;;
     esac
@@ -2965,7 +2983,10 @@ print(json.dumps({"rc": 0, "sha": sys.argv[1], "run_id": sys.argv[2],
             echo "auto-fix: 問不到分支 $(ticket_branch) 的頭 —— 票的 gate 欄不寫" >&2
         fi
         ROUND_RC=0
-        if [ -n "$NO_REVIEW" ]; then
+        if ! needs_review; then
+            echo "auto-fix: 第 $r 輪綠了 —— 票不是 complex(沒標 = simple),不派覆核;票停在 InReview 等 land"
+            echo "auto-fix: 終態=green_no_review(simple 票:閘門綠就可落地,不做做完後的覆核)"
+        elif [ -n "$NO_REVIEW" ]; then
             echo "auto-fix: 第 $r 輪綠了 —— --no-review,覆核不派,票停在 InReview:sh scripts/review.sh $ID"
             echo "auto-fix: 終態=awaiting_review(閘門綠、還沒覆核 —— 不是可落地)"
         else

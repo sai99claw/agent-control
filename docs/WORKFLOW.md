@@ -11,11 +11,11 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 | Ready | 範圍、可操作的驗收、依賴達成、`base_sha`、`allowed_write_paths` |
 | InReview | patch、測試輸出逐字、變異驗紅、回報標明實測/推論 |
 | IntegrationQueued | 審查通過、局部閘門綠、無未解阻擋 |
-| Done | **同一份必要條件,`close` 與 `set state Done` 共用**(D-014):① `scripts/ticket.py verify` 證明改動真的在主線,**弱檢查不算過**(沒有 `verify_strings` 就補一條再關);② 有回歸證據(`test_evidence` 或 `verify.baseline`)——**或**票上有誠實的 `verify_waiver{by,reason}`(#8)且 review 綁的 sha 真的在主線歷史裡(`git merge-base --is-ancestor`,不是逐字比對分支的頭,#15);③ 有一格**綁著票版本與分支 sha** 的 `review`;④ `objections[]` 裡沒有未處置的阻擋項 |
+| Done | **同一份必要條件,`close` 與 `set state Done` 共用**(D-014):① `scripts/ticket.py verify` 證明改動真的在主線,**弱檢查不算過**(沒有 `verify_strings` 就補一條再關);② 有回歸證據(`test_evidence` 或 `verify.baseline`)——**或**票上有誠實的 `verify_waiver{by,reason}`(#8)且 review 記的 sha 真的在主線歷史裡(`git merge-base --is-ancestor`,不是逐字比對分支的頭,#15);③ **complex 的票**要有一格 `review.verdict` 通過(只有 complex 做完後覆核;沒標 = simple,不要 review;verdict 不綁任何版本,#136);④ `objections[]` 裡沒有未處置的阻擋項 |
 
 **exit code 0 不等於 Done;worker 說做完不等於 Done;閘門綠是對某個 `base_sha` 說的,基準走遠就過期。**
 
-**已落地的票關不掉(#15)**:落地之後補一條 `verify_strings`、記一筆 `verify_waiver`、或處置一筆 `objections`,都是**收尾**,不是重審票面 —— `ticket.py set <n> verify_waiver|verify_strings|objections …` 會把既有 `review.state_version` 跟著蓋到新版本(不算讓 review 過期),改票面其他格照舊規矩過期。落地那一手如果手上就是合併出來的 sha,`ticket.py close <n> --landed <merge sha>` 一步把它蓋進 `review.sha`(先確認在主線歷史裡)再走關票流程,不必先 `set review` 再 `close` 兩步。
+**已落地的票關不掉(#15)**:落地之後補一條 `verify_strings`、記一筆 `verify_waiver`、或處置一筆 `objections`,都是**收尾**,不是重審票面 —— review 不綁票版本(#136),改哪一格都不讓它過期。落地那一手如果手上就是合併出來的 sha,`ticket.py close <n> --landed <merge sha>` 一步把它蓋進 `review.sha`(先確認在主線歷史裡)再走關票流程,不必先 `set review` 再 `close` 兩步。
 
 ## 一票一分支一副本
 - worker 拿到 `base_sha` 的 `git archive` 副本(`work/`)與對照副本(`base/`),交 `diff -ruN base work > patch.diff`。
@@ -48,7 +48,7 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 5. **票的 `verify.files` 要真的在分支上**(#587 那把尺,D-015):票說「案例在這幾個檔」而分支上沒有,
    代表驗證者的交付沒有跟著進來 —— 而 `verify.tags` 照樣會被閘門呼叫、照樣一個案例都選不到、照樣印一行綠。
    缺了 **rc=4**(與其他拒收的 2 分開:呼叫者要分得出「票面沒填好」與「分支沒準備好」)。
-6. **覆核與反駁是硬閘門**(D-014):票要有一格 `review`,`verdict` 通過、`state_version` 等於票現在的版本、`sha` 對得上這條分支的頭;`objections[]` 裡有未處置的阻擋項 → 拒絕。三者任一不成立都在**開 worktree、跑九分鐘全套之前**就退回。
+6. **覆核與反駁是硬閘門**(D-014):complex 的票要有一格 `review`、`verdict` 通過(simple / 沒標的票不要 review;verdict 不綁票版本或分支頭,#136);`objections[]` 裡有未處置的阻擋項 → 拒絕。任一不成立都在**開 worktree、跑九分鐘全套之前**就退回。
 7. **分支新增的路徑撞到主線工作樹的未追蹤檔** → 拒絕(#69,rc=2):判準是 git 自己的 —— `git diff --name-only --no-renames --diff-filter=A <main>...<branch>` 的路徑,丟給 `git ls-files --others --exclude-standard` 有輸出(未追蹤且未被 ignore);不擋的話 ff-only 會在九分鐘全套之後被 git 拒絕。
    下一步:逐一點名撞到的路徑,由人自己移走或 commit 進主線再重跑 land —— land **不替人搬、不刪**(那是使用者的檔)。
 8. 依序合到 `land/<ts>` worktree,跑全套(`scripts/gate.sh --full`),綠才 `--ff-only` 推主線;紅則主線不動、worktree 留著給人看。
@@ -151,7 +151,8 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
    再走 `apply.sh` → `gate.sh --branch --ticket`。每輪結束 `scripts/ticket.py round <n> <第幾輪> --red|--green`。
    專案自訂的 `gate.rerun_cmd` 會在 worktree 內執行,並收到 `AC_ROOT`(主 repo)、
    `AC_WT`(這張票的 worktree)、`AC_ROUND`(本輪)與 `AC_TICKET`(票號)。
-   **綠了轉 `InReview`,再叫 `scripts/review.sh <票號>` 派覆核**(`--no-review` 關;#42,D-025 ②)。
+   **綠了轉 `InReview`,complex 的票再叫 `scripts/review.sh <票號>` 派覆核**(`--no-review` 關;#42,D-025 ②;
+   simple / 沒標的票不派、停在 InReview 等 land,印 `終態=green_no_review`,#136)。
 4. **三輪耗盡不是一句話,是一個狀態轉換**:`round` 在第 `retry_limit+1` 輪仍紅時把票轉 **Blocked**、`owner` 設成 `main`,並發 `ticket.attempt.failed`。舊規則只寫「報主線」,而「報了」與「沒報」在票上長得一樣。
 5. 停下來報主線的**三種**情況,每一種都寫一則收件匣(kind=decision;綠了只寫事件、不發頁,D-032):worker 的**反駁升級**
    (它在 EVIDENCE 寫一行 `OBJECTION: <類別> <理由>`,`auto-fix.sh` 把它記成 `objections[]` 的一筆;
@@ -160,7 +161,7 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
    三輪耗盡;**failures 沒有歸因**(rc 非零卻一條紅都解析不出來 —— 那一種最像「沒有紅」,
    而派下去的 worker 會拿著空紅榜去猜)。
    > ⛔ **「紅在票沒動到的檔 → 疑似他票」這一條拿掉了**(D-014)。`failures.file` 取的是 traceback 最後一個檔案,經常是既有測試或共用 helper;而產品改壞行為,本來就會紅在完全沒修改的測試檔。歸責改用**同條件的 baseline / candidate 對照**(`scripts/verify-case.py check`:同一份案例在乾淨主線與 candidate 上各跑一次)。**未完成歸因前,票由原 owner 持有** —— 不因為某個檔沒被這張票改過就轉成別人的問題。
-6. 覆核由 `review.sh` 派(auto-fix 第 r 輪綠、手跑 `gate.sh --branch --ticket` 綠兩處觸發,主線不讀 patch):reviewer pass ⇒ 腳本 `ticket.py set review`(by `reviewer@<模型>`、sha 分支頭,`state_version` 工具自動蓋),land 才收;fail ⇒ 每條理由一筆 blocking 反駁、票轉 Blocked、inbox 一頁 decision「覆核退回,裁示」;沒交件(沒有 `## result` / JSON 壞 / 逾時 / verdict 不是 pass|fail)⇒ 不寫 review、票留 InReview、只發事件 `review.missing`。pass / 沒派成也只發事件(`review.pass` / `review.refused`)。
+6. 覆核由 `review.sh` 派(auto-fix 第 r 輪綠、手跑 `gate.sh --branch --ticket` 綠兩處觸發,主線不讀 patch),**只派 complex 的票**(開題者每張票標 simple / complex;只有 complex 做完後覆核;沒標 = simple,#136 —— 其他走 `review.refused`):reviewer pass ⇒ 腳本 `ticket.py set review`(verdict、by `reviewer@<模型>`、sha、note、at,給人看),land 才收;fail ⇒ 每條理由一筆 blocking 反駁、票轉 Blocked、inbox 一頁 decision「覆核退回,裁示」;沒交件(沒有 `## result` / JSON 壞 / 逾時 / verdict 不是 pass|fail)⇒ 不寫 review、票留 InReview、只發事件 `review.missing`。pass / 沒派成也只發事件(`review.pass` / `review.refused`)。
 7. **一批 N 張全套紅(批次修復,#108,D-H51 ②)**:`AC_BATCH_RUN_ID=<land 那一輪的 run_id> sh scripts/auto-fix.sh --batch <整合分支> <id…>`。
    不猜哪張票弄紅:**一個** worker 拿派工文 `reports/batch/<stamp>/dispatch-round1.md`(N 張票面快照、
    紅榜 = 第一張票 `reports/t<id>/<run_id>/status.json` 的 failures、`git diff --stat main...<整合分支>` 與整批 diff 檔、
@@ -200,7 +201,7 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
    列路徑與前後;patch 不套、副本留著。**排在額度那一手之前**:同一輪又撞額度仍是 8,不換候選、不重起。
    **額度 / 不可用換候選(#121/#131)**:worker 票明寫的 model/tool/effort 先於角色鏈(依 model 去重;其他角色不讀它);判讀只由 `role-models.py classify`;可換時這一次記 cost(outcome=error、note 記原因)、
    副本與交接資料留著,依 `board/role-models.json` 取下一個候選在同一輪重起(有 Controller 時只發 `agent.recovery_needed`);
-   整串耗盡 → Blocked、一頁、rc=7。閘門綠後覆核 fail → rc=9、沒交件 / stale → rc=10;`--no-review` rc=0 且印 `終態=awaiting_review`。
+   整串耗盡 → Blocked、一頁、rc=7。閘門綠後覆核 fail → rc=9、沒交件 / 寫不進票 → rc=10;complex 票 `--no-review` rc=0 且印 `終態=awaiting_review`;simple / 沒標的票綠了不派覆核,rc=0、印 `終態=green_no_review`。
    agy 候選以副本 `work/` 為 cwd、stdin=`/dev/null`,用黏在 `-p=` 的短提示指向控制根內派工文絕對路徑;不帶 `--add-dir` 或 sandbox,權限與事後越界守衛同 Claude/Codex。
    批次越界時整批票轉 Blocked(唯一會寫票的批次結局)、不發 attempt.failed(批次沒有 attempt.start)。
    **只查列出來的地方**:被 `.gitignore` 掉的檔、`hard_block.dirs` 以外的整部電腦都沒看過;平行的兩個 agent
@@ -260,20 +261,20 @@ worker 同一輪**也交了** `patch-round<r>.diff`(#107,專案 #751 事故):驗
 | **baseline 驗紅**(乾淨主線該紅、candidate 該綠),import 失敗不算紅 | **已實作**(以前漏列) | `scripts/verify-case.py check <n>` → 寫票的 `verify.baseline` |
 | baseline 的 **ref 預設是票的 `base_sha`**;`--ref` / `--candidate` 吃 worktree 路徑 / 分支名 / sha;**量不到就不動票**,改印下一步 | **已實作**(2026-09-22,#22) | `verify-case.py check <n> [--ref <base_sha>] [--candidate <分支/sha/路徑>]` |
 | 驗證產物抽成 `patch-verify.diff`;新 tag 一票一片段再合併 | **已實作** | `verify-case.py extract` / `tags-merge`;`verify/TAGS.d/<n>.md` |
-| **land 檢查 review 綁票版本與分支 sha、objections 未處置就拒絕** | **已實作**(以前漏列) | `scripts/land.sh` 第 5 步 |
+| **land 檢查 complex 票的 review.verdict 通過(#136 起不綁版本)、objections 未處置就拒絕** | **已實作**(以前漏列) | `scripts/land.sh` 第 5 步 |
 | **land 互斥鎖** | **已實作**(以前只寫在文件裡) | `scripts/land.sh` 的 `.land.lock`(mkdir) |
 | 進 Done 的必要條件 `close` 與 `set state Done` 共用;弱檢查不准自動關票 | **已實作**(以前 `set state Done` 是一條旁路) | `ticket.py` 的 `done_blockers()` |
 | 遲到的回報拿 `attempt` / `state_version` 比對後拒收;寫入走同一把鎖 | **已實作**(SCHEMA 以前宣稱過但沒有實作) | `ticket.py set --expect-attempt / --expect-state-version`;`.ticket.lock` |
 | 三輪耗盡 → 票轉 Blocked 並指派主線 | **已實作** | `ticket.py round <n> <r> --red` |
 | **套 patch、建分支、commit** | **已實作**(2026-09-21,D-015) | `scripts/apply.sh <票號> <patch> [<patch-verify>]`;重套走 `scripts/apply.sh rebase` |
-| **關票** | 由 land 試(下一列),主線補齊缺格後手跑同一句。誠實的 `verify_waiver` + review sha 在主線歷史裡可免回歸證據那格;`verify_waiver`/`verify_strings`/`objections` 的 `set` 不讓既有 review 過期 | `scripts/ticket.py close <n> [--landed <merge sha>]` |
+| **關票** | 由 land 試(下一列),主線補齊缺格後手跑同一句。誠實的 `verify_waiver` + review sha 在主線歷史裡可免回歸證據那格;review 不綁版本,改票面不讓它過期(#136) | `scripts/ticket.py close <n> [--landed <merge sha>]` |
 | **land 試關**:push 成功後對批次每張票試 `ticket.py close <n> --landed <sha>`;關得掉發一頁 done 簡報;關不掉照舊印「已合併、尚未關票」+ inbox 一頁 decision,what 是 close 的理由原文;不加 `--force`,rc 不變 | **已實作**(2026-09-26,#43,D-025 ①) | `scripts/land.sh` 第 6 步之後 |
 | **兩種頁**:`inbox.py post` 只收 `--kind decision / done`(其餘 rc=2、什麼都不寫);腳本接著會做的終態(閘門綠 / 可歸因的紅 / 覆核通過 / 覆核沒交件)只寫事件;done 簡報由 land.sh 關票後 `inbox.py done` 發,不自動 ack。取代 #43 C4 的「腳本 ack」:`ack --by / --state` 留著收舊頁 | **已實作**(2026-09-26,#50,D-032) | `scripts/inbox.py`(`INBOX_KINDS`、`done`);`auto-fix.sh`、`gate.sh`、`review.sh`、`land.sh` |
 | land 前檢查 `verify.files` 都在分支上 | **已實作**(2026-09-21,D-015) | `scripts/land.sh` 第 5 步,缺了 rc=4 |
 | 用 headless `claude -p` **自動起新 worker**(三輪上限) | **已實作**(2026-09-22;gate / 單票 land 預設開,`--no-auto-fix` 關) | `scripts/auto-fix.sh <票號>`;`gate.sh`、`land.sh` |
 | **第 1 輪自動**:票 Ready 且沒有狀態檔 → 起第 1 輪 worker(發 `ticket.attempt.start`、轉 Running),apply → gate → InReview → review.sh 與第 2 輪起同一段;非 Ready 指名 state 停下 | **已實作**(2026-09-26,#40,D-025 C1) | `scripts/auto-fix.sh <票號>`(`round_once 1`);只看派工文 `--dry-run --round 1`;`--dry-run` 碰到已經在的 `fix-t<n>/round<r>` / `verify-t<n>/round<r>` 原封不動(#96) |
 | **第 1 輪驗證者自動**(#126 起**任一輪**,不只第 1 輪):票 `needs_verifier` 是 JSON `true` 且 `verify.baseline` 空(案例還沒交,D-018)→ 任一輪都先派驗證者(含從舊狀態檔接著跑的第 2 輪以後,stdout「案例還沒交,第 N 輪先派驗證者」);`interface_fixed=true` 時派 worker **之前**起背景驗證者(副本 = 票的 `base_sha`,派工文 = `rules.py pack verifier` + `templates/dispatch-verifier.md` 填好),worker 回來後才收;兩份 patch 一起 `apply.sh`、閘門量套了兩份的樹;沒交件 → worker 的 patch 先收進 reports、Blocked + decision 頁;`false` / 缺 → 不派(缺的 stderr 說一聲) | **已實作**(#51,D-032 ③) | `scripts/auto-fix.sh`(`start_verifier_bg` / `wait_verifier`);`--dry-run --round 1` 印兩份派工文路徑 |
-| **reviewer 自動**:閘門綠、票轉 InReview → headless reviewer(`reviewer.command`,唯讀白名單);pass 由腳本寫 `review`,fail 逐條 blocking 反駁 + Blocked,沒交件不算 pass | **已實作**(2026-09-26,#42,D-025 ②) | `scripts/review.sh <票號>`;`auto-fix.sh` 綠(`--no-review` 關)與 `gate.sh --branch --ticket` 手跑綠 |
+| **reviewer 自動**:閘門綠、complex 票轉 InReview → headless reviewer(#136 起只派 complex;`reviewer.command`,唯讀白名單);pass 由腳本寫 `review`,fail 逐條 blocking 反駁 + Blocked,沒交件不算 pass | **已實作**(2026-09-26,#42,D-025 ②) | `scripts/review.sh <票號>`;`auto-fix.sh` 綠(`--no-review` 關)與 `gate.sh --branch --ticket` 手跑綠 |
 | **終態叫醒主線**(要人裁的 decision 頁 + 整票 done 頁;其餘終態只寫事件)+ 禁止輪詢 | **已實作**(2026-09-21,D-015) | `scripts/inbox.py post\|done\|list\|show\|ack`;`reports/inbox/<票號>-<run_id>.md`;`new-session.sh` 開場印 |
 | 同一輪的回歸**只跑一次**(worker / 驗證者 / gate 共用) | **已實作**(2026-09-21,D-015) | `scripts/verify.py` 的 `reports/t<n>/<run_id>/verify-<雜湊>.log`(雜湊含標籤 + sha);`--no-cache` 關 |
 | **按角色裁切、帶版本的規則包** | **已實作**(2026-09-21,D-015) | `scripts/rules.py pack <角色> --model <模型>`(≤ 4 KB,砍掉的部分會指名) |

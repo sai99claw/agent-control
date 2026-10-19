@@ -32,11 +32,11 @@
 # `mkdir` 一把鎖(mkdir 是原子的;`[ -e ]` 之後再建不是),拿不到就指名現在是誰在落地。
 #
 # ## 覆核與反駁是硬閘門(2026-09-21)
-# 票要有一格**綁著票版本與分支 sha** 的 `review`(主線讀 patch 記的),否則拒絕:
-# 舊版的 review 只有 verdict / by / at / note,重套一次 patch 之後它還是長得有效,
-# 而 land 根本沒讀它。票的 `objections[]` 裡還有沒處置的阻擋項,也拒絕 ——
-# 實作者說「這張票寫錯了」而東西照樣落地,那句話等於沒有人收。判準只有 `ticket.py` 那一份
-# (#98):`review_problems` / `objection_problems`,close 問的也是它們。
+# 只有 `complexity=complex` 的票要一格 `review.verdict` 是通過的 review(#136,VISION 流程 #9:
+# 只有複雜的票做完後檢查一次;沒標 = simple,不要 review),否則拒絕;verdict 不綁票版本、
+# 分支頭或內容。票的 `objections[]` 裡還有沒處置的阻擋項,也拒絕 ——
+# 實作者說「這張票寫錯了」而東西照樣落地,那句話等於沒有人收。判準只有 `ticket.py` 那一份:
+# `review_problems` / `objection_problems`,close 問的也是它們。
 #
 # 做法:從主線開一個 land-<時間> worktree,逐條 --no-ff merge(衝突就停、留著
 # worktree 給人看),在那個 worktree 跑 `scripts/gate.sh --full`;綠才
@@ -482,14 +482,12 @@ PY
         echo "land: $b —— 提示範圍外、沒寫理由(警告,不擋;覆核者逐檔看過):"
         echo "$fenced" | sed 's/^/land:   /'
     fi
-    # 覆核與反駁。**覆核要綁被覆核的那一份**:舊版的 `review` 只有 verdict/by/at/
-    # note,重套一次 patch、改一次票面之後它仍然長得有效,而 land 從來沒有讀它。
-    # 反駁(`objections[]`)同理:實作者說「這張票寫錯了」而東西照樣落地,那句話等於沒人收。
-    # 判準只有一份,在 `ticket.py` 的 review_problems / objection_problems(#98 A5):
-    # 綁 patch_id + face 的 review 重套到新主線仍有效,舊的照舊比 state_version / sha。
-    out=$(python3 - "$ROOT" "$tf" "$(git -C "$ROOT" rev-parse "$b")" <<'PY'
+    # 覆核與反駁:complex 票要 review.verdict 是通過(simple / 沒標不要,#136);
+    # 反駁(`objections[]`):實作者說「這張票寫錯了」而東西照樣落地,那句話等於沒人收。
+    # 判準只有一份,在 `ticket.py` 的 review_problems / objection_problems。
+    out=$(python3 - "$ROOT" "$tf" <<'PY'
 import json, os, sys
-root, path, tip = sys.argv[1:4]
+root, path = sys.argv[1:3]
 sys.path.insert(0, os.path.join(root, "scripts"))
 import ticket as ticket_mod
 try:
@@ -498,7 +496,7 @@ try:
 except (OSError, ValueError) as exc:
     print("票讀不動:%s" % exc)
     raise SystemExit(0)
-for line in ticket_mod.objection_problems(ticket) + ticket_mod.review_problems(ticket, tip):
+for line in ticket_mod.objection_problems(ticket) + ticket_mod.review_problems(ticket):
     print(line)
 PY
 )

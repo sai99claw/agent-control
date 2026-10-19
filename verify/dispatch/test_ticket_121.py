@@ -6,7 +6,7 @@ A2 | integ | 假 codex 回 provider 錯誤信封(429 / usage limit)、表 worker
 A3 | integ | 表 worker = [sol, astra],兩個都撞額度 | codex 恰起 2 次、不起 claude;票 Blocked;收件匣恰 1 頁;副本留著 | 票面 A3「整串用完 Blocked + 一頁 decision,沒有候選則不再起程序」
 A4 | integ | 同 A2 前者;額度 + 越界 | worker cost 兩列都恰 15 鍵、額度那列 outcome=error 且 note 非空;agent.start 帶 role=worker 與實際 model/effort(= argv);越界 rc 8、Blocked、不起下一候選 | 票面 A4 + tickets/SCHEMA.md 15 鍵
 A5 | integ+doc | 表 worker 首選只有 fable、票不寫 model;讀 tests/test_auto_fix_codex.py 與 tickets/SCHEMA.md | 起的是 fable;舊「已改 opus,重跑 auto-fix」/「改派 opus」預期不在 | 票面 A5
-A6 | integ | 第 1 輪閘門綠,reviewer 交 fail / 不交 / 交件前票被改(stale);--no-review | 三案 auto-fix rc≠0、fail 案票 Blocked;--no-review rc 0 且輸出含 awaiting_review | 票面 A6
+A6 | integ | 第 1 輪閘門綠(complex 票,#136 起只有它派覆核),reviewer 交 fail / 不交;--no-review | 兩案 auto-fix rc≠0、fail 案票 Blocked;--no-review rc 0 且輸出含 awaiting_review | 票面 A6(交件前票被改那一案隨 #136 刪綁定一起拿掉)
 A7 | integ+doc | 預設表 sol(high/xhigh) → opus(high):第一輪乾跑、complexity=complex 乾跑、第 1 輪紅後第 2 輪乾跑、額度後 opus 實跑;讀 SCHEMA | high / xhigh / xhigh / --effort high;SCHEMA 不再寫「effort 不在 claude-code 表內就設成 null」 | 票面 A7 + 表 board/role-models.json
 A8 | integ+doc | config model_tiers + routing.implement=opus:rules.py pack worker --model sonnet 等;complexity=simple 的票跑 auto-fix | pack rc 0 且 stdout 非空;worker 起 sonnet medium;rules.py 沒有 below_floor、DISPATCH-TEMPLATE 沒有「低於 routing 下限」 | 票面 A8 + test_plan T4/T5
 
@@ -298,7 +298,7 @@ class EveryEntryAsksTheTable(RoleTableBase):
         """A1 review 入口:表 reviewer 首選 fable → reviewer argv 的 --model 是 fable(不是 config 的 fixture-model)。"""
         self.set_table(reviewer=[cand("fable", "claude-code")])
         self.fake_reviewer("pass")
-        self.ticket_ready()
+        self.ticket_ready(complexity="complex")   # 只有 complex 的票派覆核(#136)
         done = self.auto_fix()
         reviewers = self.runs("reviewer")
         self.assertEqual(len(reviewers), 1, self.says(done))  # pin:一次派工恰起一次,多起即重派
@@ -417,7 +417,7 @@ class ReviewDecidesTheFinalState(RoleTableBase):
 
     def green_then_review(self, verdict):
         self.fake_reviewer(verdict)
-        self.ticket_ready()
+        self.ticket_ready(complexity="complex")   # 只有 complex 的票派覆核(#136)
         return self.auto_fix()
 
     def test_a6_gate_green_review_fail_is_not_success(self):
@@ -433,15 +433,9 @@ class ReviewDecidesTheFinalState(RoleTableBase):
         self.assertEqual(len(self.runs("reviewer")), 1, self.says(done))  # pin:一次派工恰起一次,多起即重派
         self.assertNotEqual(done.returncode, 0, self.says(done))
 
-    def test_a6_gate_green_review_stale_is_not_success(self):
-        """A6 gate 綠、review 交件前票面被改(stale)→ auto-fix rc≠0。"""
-        done = self.green_then_review("stale")
-        self.assertEqual(len(self.runs("reviewer")), 1, self.says(done))  # pin:一次派工恰起一次,多起即重派
-        self.assertNotEqual(done.returncode, 0, self.says(done))
-
     def test_a6_no_review_returns_zero_but_says_awaiting_review(self):
-        """A6 --no-review → rc 0,但明示 awaiting_review。"""
-        self.ticket_ready()
+        """A6 --no-review → rc 0,但明示 awaiting_review(complex 票;simple 票綠了不等覆核,#136)。"""
+        self.ticket_ready(complexity="complex")
         done = self.auto_fix("--no-review")
         self.assertEqual(len(self.runs("worker")), 1, self.says(done))  # pin:一次派工恰起一次,多起即重派
         self.assertEqual(done.returncode, 0, self.says(done))

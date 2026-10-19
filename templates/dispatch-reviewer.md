@@ -10,7 +10,7 @@
 
 ## 這張票獨有的四件事
 1. **票號**:#@TICKET@(票面 `@TICKET_FILE@`)
-2. **分支 `t@TICKET@` 的頭**:`@SHA@` —— 你覆核的就是這一個 sha;review 會綁在它上面
+2. **要覆核的 commit**:`@SHA@`(分支 `t@TICKET@`)—— 你覆核的就是這一個 sha
 3. **worktree 路徑**:`@WORKTREE@`(分支上的 code)
 4. **EVIDENCE 與狀態檔**:`@EVIDENCE@`;`@STATUS@`
 
@@ -51,5 +51,5 @@
 - `fail` 時 `objection` 寫第一條阻擋 `{"category": "blocking", "body": "…"}`;逐條仍以 `OBJECTION:` 行為準。
 
 ## 之後誰做什麼(你不用做)
-`scripts/review.sh` 讀這一塊:`pass` ⇒ 寫票的 `review`(by `reviewer@@MODEL@`、sha `@SHA@`,票版本由
-`ticket.py set` 自己蓋);`fail` ⇒ 每行 `OBJECTION:` 記成一筆 blocking 反駁、票轉 Blocked、主線裁示。
+`scripts/review.sh` 讀這一塊:`pass` ⇒ 寫票的 `review`(verdict、by `reviewer@@MODEL@`、sha `@SHA@`、note、at,
+給人看);`fail` ⇒ 每行 `OBJECTION:` 記成一筆 blocking 反駁、票轉 Blocked、主線裁示。

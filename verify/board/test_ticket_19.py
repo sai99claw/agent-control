@@ -187,17 +187,6 @@ class TicketPage(BoardReads):
             self.assertNotIn("verify19-secret-should-not-leak", leaked, raw)
             caught.exception.close()
 
-    def test_5_stale_review_sentence_only_when_versions_differ(self):
-        self.make_ticket(5, state_version=3,
-                         review={"verdict": "pass", "by": "main", "sha": "abc",
-                                 "state_version": 2})
-        self.make_ticket(6, state_version=3,
-                         review={"verdict": "pass", "by": "main", "sha": "abc",
-                                 "state_version": 3})
-        self.up()
-        self.assertIn("這份覆核已過期", self.get("/t/5")[1])
-        self.assertNotIn("這份覆核已過期", self.get("/t/6")[1])
-
 
 class ThreeKindsOfNothing(BoardReads):
 
