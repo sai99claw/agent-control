@@ -1108,7 +1108,7 @@ if [ "$want_branch" -eq 1 ]; then
                git -C "$ROOT" diff --name-only HEAD; \
                git -C "$ROOT" ls-files --others --exclude-standard); do
         map "$f"
-        case "$f" in tests/test_*.py) diff_tests="$diff_tests $(basename "$f" .py)" ;; esac
+        case "$f" in tests/test_*.py) [ -f "$ROOT/$f" ] && diff_tests="$diff_tests $(basename "$f" .py)" ;; esac
     done
     # 對照表沒列的檔(#45 B2):同一份 diff 改到的 tests/test_*.py 就是它的守衛 ——
     # 出聲、照那幾支跑、rc 照測試結果。推不到(diff 沒有 tests)才走下面退 3 那一段。
