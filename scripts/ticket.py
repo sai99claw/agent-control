@@ -1710,7 +1710,8 @@ def take_landed(argv):
 def stamp_landed(ident, sha):
     """`close --landed <sha>`(#15):落地是合併出一個**新**的 sha,不是分支審過的
     那個頭 —— 先確認它真的在主線歷史裡,再把它蓋進 review.sha,一步做完「補審 + 關」。
-    沒有既有 review 就開一張(verdict/by 給預設,主線隨時可以事後改)。"""
+    沒有既有 review 就開一張(verdict/by 給預設,主線隨時可以事後改)—— 只對 complex 的票;
+    simple / 沒標的票不要 review(#136),沒有就不開,只確認 sha 在主線再往下關。"""
     branch = main_branch()
     if not sha_on_branch(sha, branch):
         sys.stdout.write("ticket: #%s 沒關 —— %s 不在主線 %s 的歷史裡"
@@ -1725,6 +1726,8 @@ def stamp_landed(ident, sha):
                 sys.stderr.write("ticket: 讀不到 #%s —— %s\n" % (ident, exc))
                 return 2
             review = ticket.get("review")
+            if not isinstance(review, dict) and not needs_review(ticket):
+                return 0
             review = dict(review) if isinstance(review, dict) else {}
             before = json.dumps(ticket.get("review"), ensure_ascii=False)
             review.setdefault("verdict", "pass")

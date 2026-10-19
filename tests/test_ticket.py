@@ -777,7 +777,7 @@ class WaiverAndLanded(Sandbox):
         (拒收不在主線的 sha)會紅。這一條驗的是正常路徑:`--landed` 一步關票。"""
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
         sha = self.git("rev-parse", "main").strip()
-        self.make_ticket(1, allowed_write_paths=["src/*"],
+        self.make_ticket(1, allowed_write_paths=["src/*"], complexity="complex",
                          verify_strings=["src/nav.py:def size_nav"],
                          test_evidence=[{"cmd": "gate --branch", "rc": 0}])
         done = self.ticket("close", "1", "--landed", sha)
@@ -787,6 +787,20 @@ class WaiverAndLanded(Sandbox):
         self.assertEqual(row["review"]["sha"], sha)
         self.assertEqual(row["review"]["verdict"], "pass")
         self.assertNotIn("state_version", row["review"], "#136:review 不綁票版本")
+
+    def test_close_landed_on_an_unmarked_ticket_does_not_open_a_review(self):
+        """#136:沒標 = simple,不要 review —— `--landed` 照關,但不替它開一張 review。
+        **變異**:`stamp_landed` 拿掉 `needs_review` 那一行 → 票上多出 review,這一條紅。"""
+        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
+        sha = self.git("rev-parse", "main").strip()
+        self.make_ticket(1, allowed_write_paths=["src/*"],
+                         verify_strings=["src/nav.py:def size_nav"],
+                         test_evidence=[{"cmd": "gate --branch", "rc": 0}])
+        done = self.ticket("close", "1", "--landed", sha)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        self.assertEqual(row["state"], "Done")
+        self.assertNotIn("review", row)
 
     def test_close_landed_refuses_a_sha_that_never_reached_main(self):
         """**變異**:把 `sha_on_branch` 的 `merge-base --is-ancestor` 判斷改成永遠
