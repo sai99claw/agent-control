@@ -14,7 +14,7 @@
 | `scripts/land.sh` 的寫入範圍拒絕 | 下一次有分支改到票的 `allowed_write_paths` 以外 | 逐條指名越界的檔,`EXIT=2`,整批都沒進去 |
 | `scripts/gate.sh` 的「對不到任何模組」 | 下一次有人加了一種新的檔而對照表還沒有那一格 | 指名那幾個檔、`EXIT=3`,而且**對得到的那些照樣跑完** |
 | `scripts/ticket.py verify` 擋下的關票 | 下一次有人想關一張東西沒進主線的票 | 逐條印出 `0`,拒絕關,票停在原狀態 |
-| `scripts/memory.py check` 開的整理票 | 下一次某份 `memory/model/<model>.inbox.md` 有一條未整理的 note | 事件 `memory.pending`、票開出來一次(**第二次跑不再開第二張**) |
+| `scripts/memory.py check` 開的整理票 | 下一次某份 `memory/model/<model>.inbox.md` 有一條未整理的 note(暫存區有未整理條目就整理、不設固定字數上限;判準「每個 session 開場都會讀，只留值得這個成本的」,D-053 ⑥) | 事件 `memory.pending`、票開出來一次(**第二次跑不再開第二張**) |
 | `scripts/memory.py consolidate` 的討論檔必填(D-007) | 下一次真的要整理一份記憶 | 沒有 `--discussion` 直接拒絕;討論檔沒有結論區是**另一句話** |
 | `scripts/heartbeat.sh` 的租約到期 | 下一次有 session 或 land 真的死在半路 | 指名那一筆 start、已經幾秒、租約幾秒,並說出處置 |
 | `scripts/gate.sh --ticket` 的 flake 重跑 | 下一次真閘門紅在一條偶發的案例上 | 印「<案例> 單獨重跑是綠的 —— 標成 flaky」,`reports/t<n>-status.json` 的 `flaky` 有它、`failures` 沒有它;**全 flaky 時 rc 才是 0** |

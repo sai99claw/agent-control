@@ -150,6 +150,8 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 - 上限的來源:#42 首跑 118K、#29 實測 35–118K(卡上 120K)。
 
 ## 整理者角色操作細節
+- 觸發與判準(D-053 ⑥):暫存區(`*.inbox.md`)有未整理條目,主線開場的 `memory.py check` 就開整理票;不設固定字數上限,
+  判準只有「每個 session 開場都會讀，只留值得這個成本的」,寫什麼、留多長由整理者決定。
 - 範本:`templates/dispatch-consolidator.md`(自動由 `scripts/consolidate-memory.sh` 填、`new-session.sh` 主線開場起;人工整份複製)。
 - 誰整理(#122,D-043 / D-049 ②):角色表 `consolidator` 鏈(`python3 scripts/role-models.py resolve --role consolidator`,現在只有 fable),
   `consolidate-memory.sh` 只起**一個** session、沒有雙模型互讀;票上的 `model` 與 `memory.consolidator(s)` 都不參與。

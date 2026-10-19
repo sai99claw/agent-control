@@ -37,7 +37,7 @@
 
 ## memory
 
-記憶分層:note / harvest / check / consolidate / lint,暫存區整理票
+記憶分層:note / harvest / check / consolidate / lint,暫存區有未整理條目就開整理票、不設固定字數上限,判準只留值得這個成本的
 
 - 入口:[`scripts/memory.py`](../scripts/memory.py)
 - 主守衛:[`tests/test_memory.py`](../tests/test_memory.py)

@@ -45,6 +45,15 @@ CHECK_ONE = "memory: memory/role/opener.md 30 字元 / 暫存區 1 條未整理"
 CHECK_ZERO = "memory: memory/role/opener.md 5000 字元 / 暫存區 0 條未整理"
 CRITERION = "只留值得這個成本的"
 NOTE = "- 一條原則 (#1, 2026-10-19, worker@opus)\n"
+PASSING = """import os
+import unittest
+
+
+class T(unittest.TestCase):
+    def test_it_ran(self):
+        with open(os.environ["AC_TEST_LOG"], "a", encoding="utf-8") as handle:
+            handle.write("%s\\n")
+"""
 
 
 class MemoryInboxWorld(Sandbox):
@@ -261,6 +270,11 @@ class ConsolidationWithoutCaps(MemoryInboxWorld):
 
 
 class GateKeepsOnlyLayerPolicy(MemoryInboxWorld):
+
+    def setUp(self):
+        super().setUp()
+        for name in ("test_memory", "test_no_project_names", "test_routing_cards"):
+            self.write(os.path.join("tests", "%s.py" % name), PASSING % name)
 
     @staticmethod
     def body(chars):

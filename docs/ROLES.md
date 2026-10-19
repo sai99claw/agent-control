@@ -12,7 +12,7 @@
 | **Worker / 實作者** | 短命(預設 Opus;機械、規格逐字的票可派 Codex sol) | 在副本裡實作與局部驗證 | `patch.diff`(含自己的單元測試)、`EVIDENCE.md`、變異驗紅 | 只寫自己的副本;禁 git 寫入;範圍擴大要回報不准自己做 |
 | **驗證者** | 短命、獨立上下文(Opus / Codex sol) | 把票面驗收寫成回歸案例;`verify-case.py red` **證明案例在乾淨基底上紅**(綠由閘門用 `check` 量,D-020),登記片段 `verify/TAGS.d/<n>.md`,把怎麼跑寫進 result 的 `verify` 格(收件併進票) | `verify/<feature>/test_ticket_<n>.py` + 票的 `verify`(含 `baseline`)+ `patch-verify.diff`(`verify-case.py extract` 出的) | **不判 PASS/FAIL、不寫 VERDICT**;不讀實作者的 `EVIDENCE.md`;**不跑 tag 回歸那一整組**(只跑自己的案例與 `verify-case.py red`);不改產品碼 |
 | **覆核者** | 短命(Opus;D-022;`scripts/review.sh` 派,D-025 ②) | 閘門綠、票轉 `InReview` 後讀**分支上的 code** 對票面驗收 | `verdict(pass\|fail)` + 逐條驗收 → code 位置 + 疑慮清單;`fail` 寫成 objection | 不重跑測試、不改檔、不 git 寫入、不判落地順序(`review.sh` 依檔尾 `## result` 把 pass 寫進票的 `review` 格;fail 轉 Blocked 回主線) |
-| **整理者** | 短命 × 1(角色表 `consolidator` = fable 單一高階模型,D-043 / D-049 ②;沒有雙模型互讀) | 記憶暫存區有未整理條目時整理(D-053 ⑥ / D-007 / D-013;判準「每個 session 開場都會讀，只留值得這個成本的」,不設字數上限);範本 `templates/dispatch-consolidator.md` | 整理後的記憶檔、一份討論檔(啟動端記在 `attempt_history`)、`memory.consolidated` 事件 | 沒有討論檔不准 consolidate;不直接寫案例(用票號指路);不改 `docs/DECISIONS.md` |
+| **整理者** | 短命 × 1(角色表 `consolidator` = fable 單一高階模型,D-043 / D-049 ②;沒有雙模型互讀) | 記憶暫存區有未整理條目時整理(D-053 ⑥ / D-007 / D-013;判準「每個 session 開場都會讀，只留值得這個成本的」,不設固定字數上限);範本 `templates/dispatch-consolidator.md` | 整理後的記憶檔、一份討論檔(啟動端記在 `attempt_history`)、`memory.consolidated` 事件 | 沒有討論檔不准 consolidate;不直接寫案例(用票號指路);不改 `docs/DECISIONS.md` |
 | **落地器** | `scripts/land.sh`(程式) | 閘門 → 合併 → push;紅了寫紅榜 | 事件、退出碼、`reports/t<n>/<run_id>/status.json` | 0 commit / 基準過期 / 越界 / **覆核缺或過期** / **未處置的阻擋反駁** / 閘門紅,一律拒絕;land 期間持一把互斥鎖。它**沒有判斷** |
 
 > **落地器不做三件事,而角色表以前把它們藏掉了**(2026-09-21 外部審查;第 ①③ 兩條 D-015 起有自己的入口):

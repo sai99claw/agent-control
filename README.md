@@ -53,7 +53,7 @@ python3 scripts/ticket.py close 1
 | `docs/WORKFLOW.md` | 票的狀態機、閘門、落地、發版、回歸紅了之後 | 主線與落地 |
 | `docs/SESSION-START.md` | 開新 session 的固定動作(依角色) | 每個 session |
 | `docs/DISPATCH-TEMPLATE.md` | 派工範本:副本+patch、禁區、**假綠家族**、查證規矩 | 派工的人與被派的人 |
-| `docs/MEMORY.md` | 專案共用記憶 vs 模型私有記憶,整理政策 | 所有人 |
+| `docs/MEMORY.md` | 專案共用記憶 vs 模型私有記憶,整理政策(暫存區有未整理條目就整理、不設固定字數上限;判準「每個 session 開場都會讀，只留值得這個成本的」) | 所有人 |
 | `docs/CODE-MAP.md` | 讓 AI 追 code 的方案:模組卡片、驗證於哪個版本、過期偵測 | 讀 code 的人 |
 | `docs/TODO.md` | 還沒做的事與遷移計畫 | 主線 |
 | `tickets/` | 票的契約(schema)與票本身 | 控制台、排程、落地 |
