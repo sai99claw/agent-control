@@ -6,7 +6,7 @@
   "acceptance": [
     "行為:沙盒 repo 設好 hard_block 後,一張票的改動動到 `hard_block.paths` 其中一檔 → apply.sh rc=5、gate.sh --branch --ticket 的 preflight rc=4、land.sh 拒收(三處輸出都看得出是哪個檔,路徑出現即可、不釘句子);tests/** 或 verify/** 新增行命中 `patterns` 其中一條(例 `os.kill(`)→ 同三處同樣擋;改動不碰清單 → 三處不擋;config 沒有 hard_block 或三個子清單皆空 → 三處都不擋(與現狀相同)",
     "越界守衛:auto-fix.sh 的事後守衛(run_agent 內 guard_conf,讀碼 :1401-1423)改讀 `hard_block.dirs`,`dirs` 底下的檔被 agent 動到仍判 rc=8、沒設就不查(既有 tests/test_auto_fix.py:3941-4202 的 guarded_dirs 案例換鍵名後照綠)",
-    "grep 0:`git grep -nE 'protected_paths|guarded_dirs|PROTECTED_FIELD|verify_lint' -- scripts board tests verify templates docs/WORKFLOW.md docs/DISPATCH-TEMPLATE.md docs/ROLES.md docs/reference docs/DESIGN.md docs/FLOW.html tickets/SCHEMA.md README.md CLAUDE.md AGENTS.md memory/role/*.md code-map/catalog.json` 輸出 0 行(scripts/verify-case.py 的 F4 讀 `verify_lint.forbid` 那一處例外 —— lint 整支 #138 刪,本票不動 verify-case.py;docs/DECISIONS.md、tickets/*.json、*.inbox.md 不算)",
+    "grep 0:`git grep -nE 'protected_paths|guarded_dirs|PROTECTED_FIELD' -- scripts board tests verify templates docs/WORKFLOW.md docs/DISPATCH-TEMPLATE.md docs/ROLES.md docs/reference docs/DESIGN.md docs/FLOW.html tickets/SCHEMA.md README.md CLAUDE.md AGENTS.md memory/role/*.md code-map/catalog.json` 輸出 0 行(`verify_lint` 不在本票:它是 #102 案例 lint 的設定鍵(api / block / allow / forbid),讀它的 verify-case.py 與案例 tests/test_verify_case.py、verify/case_lint/test_ticket_102.py、verify/TAGS.d/102.md、tests/test_gate.py:149 註解都歸 #138 一起刪,grep 0 由 #138 驗(第 1 輪 worker 反駁,accepted);docs/DECISIONS.md、tickets/*.json、*.inbox.md 不算)",
     "board/config.json 的 `hard_block` 內容:paths 恰為 docs/DECISIONS.md、docs/VISION.md、scripts/sync-to-project.sh;dirs 為 [];patterns 為 verify-case.py:122 的四條(`os\\.kill`、`killpg`、`pkill`、`kill -`);tickets/SCHEMA.md 與 docs/DISPATCH-TEMPLATE.md §2 各一處寫出三個子清單各擋什麼、patterns 只查 tests/** verify/** 新增行",
     "既有全套綠:`sh scripts/gate.sh --branch --ticket <本票號>` 綠;釘住舊行為的既有案例改掉或刪掉(清單在 test_plan),不留假綠、不加併發斷言"
   ],
@@ -53,22 +53,90 @@
     "tests/test_gate.py",
     "tests/test_ticket.py",
     "verify/write_scope/test_ticket_101.py",
-    "verify/batch_fix/test_ticket_108.py"
+    "verify/batch_fix/test_ticket_108.py",
+    "tests/*"
   ],
   "role": "worker",
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "b5e3e91b459fa89bd9a12d4add2f5deb1479d900",
-  "state": "Ready",
-  "state_version": 1,
+  "base_sha": "959cd0e8340780f18bddf5b9524ba762782488a8",
+  "state": "Done",
+  "state_version": 32,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
-    "tags": [],
-    "run": "",
-    "notes": ""
+    "files": [
+      "verify/hard_block/test_ticket_135.py"
+    ],
+    "tags": [
+      "hard-block"
+    ],
+    "run": "python3 scripts/verify.py --tag hard-block",
+    "notes": "Uses tests/control_harness.Sandbox and real apply.sh, gate.sh, land.sh, and auto-fix.sh subprocesses; no model or port. The red tool used the dispatched base directory because this round's AC_ROOT control copy has no git ref.",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-19T15:48:29+08:00",
+      "files": [
+        "verify/hard_block/test_ticket_135.py"
+      ],
+      "base_ref": "959cd0e8340780f18bddf5b9524ba762782488a8",
+      "base_sha": "959cd0e8340780f18bddf5b9524ba762782488a8",
+      "candidate": "../agent-control-wt/t135",
+      "candidate_sha": "481fa74fe4cc8b2a3e08406348fd138b17b78619",
+      "baseline": {
+        "red": [
+          "verify.hard_block.test_ticket_135.ApplyReadsTheSharedHardBlock.test_a1_apply_uses_paths_and_scoped_patterns_from_one_setting",
+          "verify.hard_block.test_ticket_135.ApplyReadsTheSharedHardBlock.test_a1_apply_uses_paths_and_scoped_patterns_from_one_setting",
+          "verify.hard_block.test_ticket_135.ApplyReadsTheSharedHardBlock.test_a1_apply_uses_paths_and_scoped_patterns_from_one_setting",
+          "verify.hard_block.test_ticket_135.GateReadsTheSharedHardBlock.test_a1_gate_preflight_uses_paths_and_scoped_patterns_from_one_setting",
+          "verify.hard_block.test_ticket_135.GateReadsTheSharedHardBlock.test_a1_gate_preflight_uses_paths_and_scoped_patterns_from_one_setting",
+          "verify.hard_block.test_ticket_135.GateReadsTheSharedHardBlock.test_a1_gate_preflight_uses_paths_and_scoped_patterns_from_one_setting",
+          "verify.hard_block.test_ticket_135.GuardReadsHardBlockDirs.test_a2_guard_reads_dirs_and_missing_dirs_means_not_watched",
+          "verify.hard_block.test_ticket_135.LandReadsTheSharedHardBlock.test_a1_land_uses_paths_and_scoped_patterns_from_one_setting",
+          "verify.hard_block.test_ticket_135.LandReadsTheSharedHardBlock.test_a1_land_uses_paths_and_scoped_patterns_from_one_setting",
+          "verify.hard_block.test_ticket_135.LandReadsTheSharedHardBlock.test_a1_land_uses_paths_and_scoped_patterns_from_one_setting",
+          "verify.hard_block.test_ticket_135.RepositoryContract.test_a3_old_configuration_names_are_absent_from_the_declared_scope",
+          "verify.hard_block.test_ticket_135.RepositoryContract.test_a4_config_and_docs_define_the_three_lists_once",
+          "verify.hard_block.test_ticket_135.RepositoryContract.test_a5_existing_oracles_are_migrated_instead_of_silently_removed"
+        ],
+        "red_lines": [
+          "verify.hard_block.test_ticket_135.ApplyReadsTheSharedHardBlock.test_a1_apply_uses_paths_and_scoped_patterns_from_one_setting: AssertionError: 0 != 5 : apply: 票 #1  patch ticket.diff  sha256 09a342faf5…",
+          "verify.hard_block.test_ticket_135.ApplyReadsTheSharedHardBlock.test_a1_apply_uses_paths_and_scoped_patterns_from_one_setting: AssertionError: 0 != 5 : apply: 票 #1  patch ticket.diff  sha256 d0d05aae2a…",
+          "verify.hard_block.test_ticket_135.ApplyReadsTheSharedHardBlock.test_a1_apply_uses_paths_and_scoped_patterns_from_one_setting: AssertionError: 0 != 5 : apply: 票 #1  patch ticket.diff  sha256 21c387fb80…",
+          "verify.hard_block.test_ticket_135.GateReadsTheSharedHardBlock.test_a1_gate_preflight_uses_paths_and_scoped_patterns_from_one_setting: AssertionError: 0 != 4 : gate: python3 -m unittest test_land",
+          "verify.hard_block.test_ticket_135.GateReadsTheSharedHardBlock.test_a1_gate_preflight_uses_paths_and_scoped_patterns_from_one_setting: AssertionError: 0 != 4 : gate: python3 -m unittest test_land",
+          "verify.hard_block.test_ticket_135.GateReadsTheSharedHardBlock.test_a1_gate_preflight_uses_paths_and_scoped_patterns_from_one_setting: AssertionError: 0 != 4 : gate: python3 -m unittest test_verify_runner",
+          "verify.hard_block.test_ticket_135.GuardReadsHardBlockDirs.test_a2_guard_reads_dirs_and_missing_dirs_means_not_watched: AssertionError: 0 != 8 : auto-fix: #1 照角色表起 worker:opus(tool claude-code;鏈第 0 格:worker 鏈第 0 格)",
+          "verify.hard_block.test_ticket_135.LandReadsTheSharedHardBlock.test_a1_land_uses_paths_and_scoped_patterns_from_one_setting: AssertionError: 0 != 2 : land: t1-hard-block —— 1 個 commit",
+          "verify.hard_block.test_ticket_135.LandReadsTheSharedHardBlock.test_a1_land_uses_paths_and_scoped_patterns_from_one_setting: AssertionError: 0 != 2 : land: t1-hard-block —— 1 個 commit",
+          "verify.hard_block.test_ticket_135.LandReadsTheSharedHardBlock.test_a1_land_uses_paths_and_scoped_patterns_from_one_setting: AssertionError: 0 != 2 : land: t1-hard-block —— 1 個 commit",
+          "verify.hard_block.test_ticket_135.RepositoryContract.test_a3_old_configuration_names_are_absent_from_the_declared_scope: AssertionError: 舊設定鍵仍存在:",
+          "verify.hard_block.test_ticket_135.RepositoryContract.test_a4_config_and_docs_define_the_three_lists_once: AssertionError: None != {'paths': ['docs/DECISIONS.md', 'docs/VIS[102 chars] -']}",
+          "verify.hard_block.test_ticket_135.RepositoryContract.test_a5_existing_oracles_are_migrated_instead_of_silently_removed: AssertionError: False is not true : tests/test_apply.py 缺 hard_block"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 7,
+        "skipped": 0,
+        "log": "../agent-control-wt/t135/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 7,
+        "skipped": 0,
+        "log": "../agent-control-wt/t135/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "complexity": "complex",
   "needs_verifier": true,
@@ -87,5 +155,320 @@
       "path": "scripts/ticket.py",
       "contains": "hard_block"
     }
-  ]
+  ],
+  "cost": [
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "codex:gpt-5.6-sol",
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 839,
+      "outcome": "handed-in",
+      "run_id": "20261019-130200-59037",
+      "session_id": null,
+      "by": "auto-fix.sh",
+      "note": "reports/t135/20261019-130200-59037/verifier-round1.log 裡沒有 JSON 信封",
+      "effort": "high",
+      "at": "2026-10-19T13:16:05+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 2,
+      "tokens_out": 35,
+      "cache_write": 24658,
+      "cache_read": 12397,
+      "wall_seconds": 18,
+      "outcome": "no-patch",
+      "run_id": "20261019-130200-59037",
+      "session_id": "47fc7225-78b3-4e57-9f32-244061360cfc",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-19T13:16:07+08:00"
+    },
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "codex:gpt-5.6-sol",
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1847,
+      "outcome": "handed-in",
+      "run_id": "20261019-132207-69024",
+      "session_id": null,
+      "by": "auto-fix.sh",
+      "note": "reports/t135/20261019-132207-69024/verifier-round1.log 裡沒有 JSON 信封",
+      "effort": "high",
+      "at": "2026-10-19T13:52:59+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 106,
+      "tokens_out": 54098,
+      "cache_write": 154404,
+      "cache_read": 5771161,
+      "wall_seconds": 1847,
+      "outcome": "objection",
+      "run_id": "20261019-132207-69024",
+      "session_id": "060023a2-8e66-4775-90fa-d5cb360ba5be",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-19T13:52:59+08:00"
+    },
+    {
+      "role": "opener",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 12,
+      "tokens_out": 4025,
+      "cache_write": 35925,
+      "cache_read": 206763,
+      "wall_seconds": 57,
+      "outcome": "accepted",
+      "run_id": "20261019-132207-69024",
+      "session_id": "cdb2ec8b-265b-43c4-ad66-498215cb372c",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-19T13:54:51+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 118,
+      "tokens_out": 58008,
+      "cache_write": 163163,
+      "cache_read": 6813800,
+      "wall_seconds": 53,
+      "outcome": "handed-in",
+      "run_id": "20261019-132207-69024",
+      "session_id": "060023a2-8e66-4775-90fa-d5cb360ba5be",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-19T13:54:54+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 52,
+      "tokens_out": 19735,
+      "cache_write": 69359,
+      "cache_read": 1616934,
+      "wall_seconds": 795,
+      "outcome": "objection",
+      "run_id": "20261019-135454-13171",
+      "session_id": "222c1262-17d5-44d5-903a-6fd1313ced9c",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-19T14:27:53+08:00"
+    },
+    {
+      "role": "verifier",
+      "round": 2,
+      "model": "codex:gpt-5.6-sol",
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 25,
+      "outcome": "error",
+      "run_id": "20261019-135454-13171",
+      "session_id": null,
+      "by": "auto-fix.sh",
+      "note": "reports/t135/20261019-135454-13171/verifier-round2.log 裡沒有 JSON 信封",
+      "effort": "high",
+      "at": "2026-10-19T14:28:21+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 24,
+      "tokens_out": 8236,
+      "cache_write": 81738,
+      "cache_read": 755864,
+      "wall_seconds": 99,
+      "outcome": "pass",
+      "run_id": "20261019-152722-71210",
+      "session_id": "22cefc24-9050-4333-b04c-af9535bcb34e",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-19T15:50:10+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 20,
+      "tokens_out": 7281,
+      "cache_write": 66554,
+      "cache_read": 606445,
+      "wall_seconds": 81,
+      "outcome": "pass",
+      "run_id": "20261019-152722-71210",
+      "session_id": "55e6713e-346b-44b1-81f0-d6f9ecd47f08",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-19T15:51:36+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2230,
+      "outcome": "pass",
+      "run_id": "20261019-165149-71230",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-19T17:28:59+08:00"
+    }
+  ],
+  "owner": "main",
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "驗收 grep 0 的 `verify_lint` 做不到:verify-case.py 的 #102 lint(block/allow/api,不只 F4)與它的案例 tests/test_verify_case.py、verify/case_lint/test_ticket_102.py、verify/TAGS.d/102.md、tests/test_gate.py:149 仍讀這個鍵,本票不准動 verify-case.py,剩 26 行留給 #138。",
+      "evidence": "../agent-control-wt/fix-t135/round1/EVIDENCE-round1-objection.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "",
+      "triage": {
+        "verdict": "accepted",
+        "reason": "驗收 grep 0 把 `verify_lint` 列進去是開題錯:那是 #102 案例 lint 的設定鍵,26 行全在本票 out_of_scope 的 verify-case.py 與它的案例裡,整支歸 #138 刪",
+        "round": 1,
+        "by": "auto-fix"
+      }
+    },
+    {
+      "category": "test_defect",
+      "body": "verify/hard_block/test_ticket_135.py test_a3 os.walk-greps `verify_lint` across tests/ verify/ memory/role/ and only exempts scripts/verify-case.py, so it contradicts the accepted round-1 objection (verify_lint lines in tests/test_verify_case.py, tests/test_gate.py:149, verify/case_lint/test_ticket_102.py, verify/TAGS.d/102.md belong to #138) and the acceptance text (`*.inbox.md` 不算), and it also reads untracked `__pycache__/*.pyc`; it needs to exempt those (or use `git grep` over tracked files with the acceptance's exclusions).",
+      "evidence": "../agent-control-wt/fix-t135/round2/EVIDENCE-round2.md",
+      "owner": "verifier",
+      "disposition": "accepted",
+      "follow_up": "主線裁:test_defect 成立(a3 與已接受的反駁 0 衝突:verify_lint 26 行歸 #138);派獨立驗證者修 verify/hard_block/test_ticket_135.py a3,產品 patch-round2 照用"
+    }
+  ],
+  "branch": "t135",
+  "patch_ref": "../agent-control-wt/fix-t135/round2/patch-round2.diff",
+  "gate": {
+    "rc": 0,
+    "sha": "481fa74fe4cc8b2a3e08406348fd138b17b78619",
+    "run_id": "20261019-152722-71210",
+    "at": "2026-10-19T15:48:29+08:00"
+  },
+  "repair_round": 1,
+  "review_request": {
+    "run_id": "20261019-152722-71210",
+    "owner_id": "review.sh",
+    "attempt": 0,
+    "state_version": 28,
+    "face": "b39767a58570c0e5047bc2ad3e176dcbc01630b6484eea4d9787a7c115364775",
+    "patch_id": "91d72a9077042f055c98d44aa6f09ffaf5c8abe9",
+    "sha": "481fa74fe4cc8b2a3e08406348fd138b17b78619"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "70a9a9c946d2313f95964bf38f58166d1cf29237",
+    "note": "reports/t135/20261019-152722-71210/REVIEW.md",
+    "at": "2026-10-19T17:28:59+08:00",
+    "state_version": 32,
+    "patch_id": "91d72a9077042f055c98d44aa6f09ffaf5c8abe9",
+    "face": "b39767a58570c0e5047bc2ad3e176dcbc01630b6484eea4d9787a7c115364775"
+  },
+  "cost_total": {
+    "calendar_seconds": 25638,
+    "wall_seconds": 7891,
+    "runs": 11,
+    "worker_rounds": 2,
+    "objections": 2,
+    "by_role": {
+      "verifier": {
+        "runs": 3,
+        "wall_seconds": 2711,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 3,
+        "outcomes": {
+          "handed-in": 2,
+          "error": 1
+        }
+      },
+      "worker": {
+        "runs": 4,
+        "wall_seconds": 2713,
+        "tokens_in": 278,
+        "tokens_out": 131876,
+        "cache_write": 411584,
+        "cache_read": 14214292,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "no-patch": 1,
+          "objection": 2,
+          "handed-in": 1
+        }
+      },
+      "opener": {
+        "runs": 1,
+        "wall_seconds": 57,
+        "tokens_in": 12,
+        "tokens_out": 4025,
+        "cache_write": 35925,
+        "cache_read": 206763,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "accepted": 1
+        }
+      },
+      "reviewer": {
+        "runs": 2,
+        "wall_seconds": 180,
+        "tokens_in": 44,
+        "tokens_out": 15517,
+        "cache_write": 148292,
+        "cache_read": 1362309,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 2
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 2230,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-19T17:28:59+08:00"
+  }
 }

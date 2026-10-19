@@ -5,9 +5,7 @@
   "objective": "VISION「明確不是我要的 ②」:寫入範圍那一整套。D-054 Q2 裁全刪、只留硬擋清單(#135 已立)。本票刪六個欄位 / 設定與所有下游:ticket.py 的 hint_scope / write_scope(extra 那一半)/ out_of_scope_hits / globs_overlap / scope_conflict / EXTRA_HEADING / extra_reasons / handin_union / handin_reasons / extra_line / verifier_case_problems / info_home_problems 與 create 的 --in-scope --out-of-scope --allowed-write-path --info-home;apply.sh 的 extra_paths / extra_reasons 與批次聯集;land.sh 的 R / W 兩種拒收與警告、讀 in_scope 的 verify.files 規則 A(VERIFIER_PY :509-540);gate.sh preflight 的 out_of_scope 警告;auto-fix.sh 的 scope_section(「寫入範圍與資訊歸屬」段,含 info_map)、dispatch_verifier 擴 allowed_write_paths、批次派工文的範圍段;review.sh 與 templates/dispatch-reviewer.md 的「白名單外改動」段與範圍閱讀清單;status.py 快照與 flaky 開票帶的範圍旗標。兩處被這些欄位撐著的功能換腳:(a) 整理票改帶 `memory_file`(一格,整理對象的相對路徑),memory.py open_consolidation 與 consolidate-memory.sh:132 改讀它;(b) `ticket.py verify` 沒有 verify_strings 時的回退從「allowed_write_paths 有沒有動」改成「`close --landed` 蓋進票的 sha 在主線歷史裡」。硬擋只剩 hard_block。\nD-053 ④:改善 VISION「明確不是我要的 ②」與原則 D-050 ①(寫入範圍只是建議);指標 = 每張票需要我介入幾次(稽核:範圍欄每票被改 1.0 / 1.6 次、D-050 後 0 次真擋)與每張落地票的 token(派工文少一段、EVIDENCE 少「提示清單外的改動」)。拿掉的關卡:out_of_scope 命中缺理由的 land 拒收、提示範圍外警告、verifier_case_problems 的 Ready 拒收、land 讀 in_scope 的 verify.files 規則 A。本票不新增任何檢查。",
   "acceptance": [
     "grep 0:`git grep -nE '\\b(allowed_write_paths|in_scope|out_of_scope|info_homes|info_map|hint_scope|extra_paths|extra_reasons|scope_conflict|write_scope|out_of_scope_hits|handin_reasons|handin_union|verifier_case_problems|info_home_problems|allowed-write-path|in-scope|out-of-scope|info-home)\\b' -- scripts board templates tests verify docs/WORKFLOW.md docs/ROLES.md docs/DISPATCH-TEMPLATE.md docs/reference docs/DESIGN.md docs/FLOW.html docs/MEMORY.md docs/REHEARSAL.md docs/SESSION-START.md tickets/SCHEMA.md README.md CLAUDE.md AGENTS.md code-map/catalog.json memory/role/*.md memory/model/*.md memory/project/*.md` 輸出 0 行(tickets/*.json、*.inbox.md、docs/DECISIONS.md、docs/HANDOFF.md、docs/TODO.md、docs/review/**、discussions/** 不算);verify/write_scope/ 與 verify/TAGS.d/101.md 刪除",
-    "行為:`ticket.py create` 只給 subject / objective / acceptance / role / model / tool 就開得出票並能 `set state Ready`;worker、verifier、reviewer 的派工文(auto-fix.sh 單票與批次、review.sh)沒有範圍段;apply.sh 第 5 步、gate.sh preflight、land.sh 對改到任何非 hard_block 檔的改動不警告、不擋、result JSON 沒有 extra_* 兩格;帶著舊欄位的既有票照常 load / set / close",
-    "換腳:`memory.py check` 開出的整理票帶 `memory_file`,`open_consolidation` 查重與 consolidate-memory.sh 用它認檔(既有 tests/test_memory_lifecycle.py A3 查重案例換夾具後照綠);`ticket.py verify` 在沒有 verify_strings 時看 `close --landed` 蓋的 sha 是否在主線歷史,不再看範圍欄",
-    "文件同票改(Q12 例外:實作者卡與 DISPATCH-TEMPLATE §2 是規則包節錄):tickets/SCHEMA.md 刪那幾列、docs/DISPATCH-TEMPLATE.md §2 與 §8 寫「沒有寫入範圍;唯一硬擋是 board/config.json 的 hard_block」、memory/role/implementer.md:10、opener.md:12-13、reviewer.md:10,:38、CLAUDE.md:19-20、docs/ROLES.md:27、templates/dispatch-reviewer.md:18,:29-32 同義改掉;memory/role 新句子照卡上既有寫法(role 層不放路徑、指令)",
+    "換腳(worker 寫,斷言加進既有模組、不新開檔):`memory.py check` 開出的整理票帶 `memory_file`,`open_consolidation` 查重與 consolidate-memory.sh 用它認檔 —— 斷言放 tests/test_memory_lifecycle.py 既有 A3 查重案例(換夾具)與 tests/test_consolidate_memory.py;`ticket.py verify` 在沒有 verify_strings 時看 `close --landed` 蓋的 sha 是否在主線歷史、不再看範圍欄 —— 斷言放 tests/test_ticket.py 的 VerifyAndClose",
     "既有全套綠:`sh scripts/gate.sh --branch --ticket <本票號>` 綠;釘住舊行為的既有案例改掉或刪掉(清單在 test_plan),不留假綠、不加併發斷言"
   ],
   "in_scope": [],
@@ -109,9 +107,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "b5e3e91b459fa89bd9a12d4add2f5deb1479d900",
-  "state": "Ready",
-  "state_version": 1,
+  "base_sha": "70a9a9c946d2313f95964bf38f58166d1cf29237",
+  "state": "Done",
+  "state_version": 18,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -124,18 +122,228 @@
   "needs_verifier": false,
   "interface_fixed": false,
   "feature": "agent-control 減法(D-054)",
-  "test_plan": "期望值來源:D-054 Q2 原話、VISION ②、本票 objective;不從被測程式算。夾具 tests/control_harness.Sandbox,真腳本子行程。\nworker 單元(就地改,量大但全是刪):tests/test_ticket.py —— :66 / :76(in_scope 預設 awp)刪、TheSchedulerScopeHelper :2034-2070 刪、TheVerifierCasesAreNotTheWorkers :2010 刪、VerifyAndClose :401-559 的回退案例改成「landed sha 在主線」、Lint 的 info_homes 案例刪、其餘用 create 的夾具拿掉三個範圖旗標;tests/test_apply.py(extra_paths 35 處、out_of_scope 19 處、TheWriteScope 類)只留 hard_block 案例;tests/test_land.py(ProductTicketsNeedVerifierCases :111-139 刪、R/W 拒收案例刪);tests/test_review.py(白名單外 14 處)、tests/test_status.py(7 處)、tests/test_auto_fix.py(scope_section / info_map :1123,:1147 / dispatch_verifier 擴範圍)、tests/test_memory_lifecycle.py A3(夾具改 memory_file)、tests/test_consolidate_memory.py(target)、tests/control_harness.py DEFAULT_CONFIG 與 make_ticket。verify/write_scope/test_ticket_101.py 整檔刪;其餘 verify/ 案例只拿掉夾具旗標(逐檔見 allowed_write_paths)。\nneeds_verifier=false 的理由:純刪除為主;兩處換腳(memory_file、verify 回退)的契約就是 worker 自己改的那幾條單元案例,驗證者只會重演同一契約(D-028 第 3 問)。\n變異(未實測,worker 自己驗紅至少一條寫進 EVIDENCE):M1 open_consolidation 仍讀 allowed_write_paths → A3 查重案例紅(新票沒那格);M2 verify 回退仍看範圍欄 → 回退案例紅。\n查過的 oracle:上列測試檔與 verify/ 案例,hits 數見稽核 sweep(ticket.py 29 處 allowed_write_paths、apply.sh 13 處 out_of_scope、land.sh 5 處、review.sh 8 處、auto-fix.sh 6 處)。",
+  "test_plan": "D-056:不新開以票號命名的案例檔(`verify/<feature>/test_ticket_<n>.py` 與 `verify/TAGS.d/<n>.md` 都不建);行為斷言只加在下面點名的既有測試模組。原驗收 2(建票不要範圍欄、派工文沒有範圍段、不警告不擋)是刪除的結果,由 grep 0 與既有全套綠涵蓋,拿掉。\n期望值來源:D-054 Q2 原話、VISION ②、本票 objective;不從被測程式算。夾具 tests/control_harness.Sandbox,真腳本子行程。\nworker 單元(就地改,量大但全是刪):tests/test_ticket.py —— :66 / :76(in_scope 預設 awp)刪、TheSchedulerScopeHelper :2034-2070 刪、TheVerifierCasesAreNotTheWorkers :2010 刪、VerifyAndClose :401-559 的回退案例改成「landed sha 在主線」、Lint 的 info_homes 案例刪、其餘用 create 的夾具拿掉三個範圖旗標;tests/test_apply.py(extra_paths 35 處、out_of_scope 19 處、TheWriteScope 類)只留 hard_block 案例;tests/test_land.py(ProductTicketsNeedVerifierCases :111-139 刪、R/W 拒收案例刪);tests/test_review.py(白名單外 14 處)、tests/test_status.py(7 處)、tests/test_auto_fix.py(scope_section / info_map :1123,:1147 / dispatch_verifier 擴範圍)、tests/test_memory_lifecycle.py A3(夾具改 memory_file)、tests/test_consolidate_memory.py(target)、tests/control_harness.py DEFAULT_CONFIG 與 make_ticket。verify/write_scope/test_ticket_101.py 整檔刪;其餘 verify/ 案例只拿掉夾具旗標(逐檔見 allowed_write_paths)。\nneeds_verifier=false 的理由:純刪除為主;兩處換腳(memory_file、verify 回退)的契約就是 worker 自己改的那幾條單元案例,驗證者只會重演同一契約(D-028 第 3 問)。\n變異(未實測,worker 自己驗紅至少一條寫進 EVIDENCE):M1 open_consolidation 仍讀 allowed_write_paths → A3 查重案例紅(新票沒那格);M2 verify 回退仍看範圍欄 → 回退案例紅。\n查過的 oracle:上列測試檔與 verify/ 案例,hits 數見稽核 sweep(ticket.py 29 處 allowed_write_paths、apply.sh 13 處 out_of_scope、land.sh 5 處、review.sh 8 處、auto-fix.sh 6 處)。\n規則原文同票改(原驗收 4,移到這裡;不是驗收條,舊字由 grep 0 守):文件同票改(Q12 例外:實作者卡與 DISPATCH-TEMPLATE §2 是規則包節錄):tickets/SCHEMA.md 刪那幾列、docs/DISPATCH-TEMPLATE.md §2 與 §8 寫「沒有寫入範圍;唯一硬擋是 board/config.json 的 hard_block」、memory/role/implementer.md:10、opener.md:12-13、reviewer.md:10,:38、CLAUDE.md:19-20、docs/ROLES.md:27、templates/dispatch-reviewer.md:18,:29-32 同義改掉;memory/role 新句子照卡上既有寫法(role 層不放路徑、指令)",
   "outline": "摘要:VISION 點名不要的那一整套;稽核:D-050 後 0 次真擋,每票範圍欄改 1.0 / 1.6 次全是主線成本。#135 立好硬擋、#136 刪掉讀範圍欄的指紋、#141 刪掉讀範圍欄的 guard-main 之後,這一刀才不會讓別的東西壞(稽核相依 2、3、4)。\n讀碼(base b5e3e91)—— ticket.py:REQUIRED :51-54 / NOT_EMPTY :56 / LIST_FIELDS :58-63 / CREATE_REPEATED :262-267 / blank_ticket :525-534 / cmd_create :667-683(in_scope + tests/* 預設)/ cmd_set :861,:895 / first_match :1307、matches_any :1319(hard_block 與 memory 仍要用,留)/ hint_scope :1337-1354 / out_of_scope_hits :1357 / write_scope :1380-1399(只留 blocked)/ globs_overlap :1405 / scope_conflict :1417-1432(死碼,D-054 Q11 點名,在此刪)/ EXTRA_HEADING :1435 / extra_reasons :1438 / handin_union :1467 / handin_reasons :1503 / extra_line :1522 / VERIFIER_CASE_GLOBS :1530 / verifier_case_problems :1533 / info_home_problems :1570 / verify() :1594-1664(:1652-1664 回退)/ cmd_lint :2295-2296。apply.sh:cmd_batch :462-466,:524-535,:644-675;單票 :1072-1129;result :1235-1270。land.sh:B/R/W :429-480(只留 B)、VERIFIER_PY :509-540 刪、batch_fix suspect :795-830 的 awp 判準改成只看 verify.files。gate.sh:preflight :450-452、:806-816 那段對不上碼的註解一併刪。auto-fix.sh:scope_section :722-772、dispatch_verifier :1822-1836、batch_main :3069-3070,:3087-3097、:751 / :3097 「硬擋只有…」字句。review.sh:批次 :481-500、review_packet :735-756。status.py:ticket_snapshot :695-706、flaky 開票 :874-876,:1002-1004。memory.py:open_consolidation :724-745(first_match on awp → memory_file)、open_ticket_for :817-821(--in-scope / --allowed-write-path → 開好後補 memory_file,與 :811 補 needs_verifier 同一手)、launcher_mismatch :1117 / launcher_recorded :1143;consolidate-memory.sh:132。\n設計裁示(自己下):(1) 整理票的對象用一格 `memory_file`(確切相對路徑),不再靠範圍欄推,SCHEMA 加一列「consolidator 票專用」;#148 的 24 小時冷卻查同檔整理票也認這一格,#148 先落地時用的是舊匹配,本票一起換;(2) verify 的回退認 close --landed 蓋的 sha(land.sh:961 每次落地都給),弱檢查那條退出路徑一併拿掉 —— 這是 #144「票分支 commit 在主線」的前身;(3) 舊票欄位不洗,load 時忽略;(4) FLOW.html 13 處 allowed_write_paths 直接刪字、不重畫圖。\n建議順序:ticket.py → apply.sh → land.sh / gate.sh → auto-fix.sh / review.sh / status.py → memory.py + consolidate-memory.sh → 範本 / 卡 / 文件 → 測試。\ncomplexity=complex:十支腳本、三十多支測試檔、兩處換腳;做完值得一次需求檢查。model=opus。needs_verifier=false(理由在 test_plan)。\n不在本票:verify_strings / verify.files 規則 B / waiver / close 第二道(#138、#139)、needs_verifier 缺 = true(#146)、文件最後整併(#147)。",
   "decision_refs": [
     "D-053",
     "D-054",
     "D-050",
-    "D-H38"
+    "D-H38",
+    "D-056"
   ],
   "verify_strings": [
     {
-      "path": "scripts/ticket.py",
-      "contains": "hint_scope"
+      "path": "scripts/memory.py",
+      "contains": "memory_file"
     }
-  ]
+  ],
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 630,
+      "tokens_out": 196070,
+      "cache_write": 940368,
+      "cache_read": 29503405,
+      "wall_seconds": 1516,
+      "outcome": "objection",
+      "run_id": "20261019-182500-22134",
+      "session_id": "d1eebb1b-5fc1-4e55-932c-5e99c66b103d",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-19T18:50:20+08:00"
+    },
+    {
+      "role": "opener",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 12,
+      "tokens_out": 2425,
+      "cache_write": 38202,
+      "cache_read": 163874,
+      "wall_seconds": 44,
+      "outcome": "accepted",
+      "run_id": "20261019-182500-22134",
+      "session_id": "c05f4032-e8dd-4c7a-9c04-b2214580582a",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-19T18:52:01+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 640,
+      "tokens_out": 199616,
+      "cache_write": 951026,
+      "cache_read": 30704753,
+      "wall_seconds": 55,
+      "outcome": "handed-in",
+      "run_id": "20261019-182500-22134",
+      "session_id": "d1eebb1b-5fc1-4e55-932c-5e99c66b103d",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-19T18:52:03+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 38,
+      "tokens_out": 9806,
+      "cache_write": 83741,
+      "cache_read": 1277577,
+      "wall_seconds": 139,
+      "outcome": "pass",
+      "run_id": "20261019-185203-31192",
+      "session_id": "903984c6-7359-40c5-bca7-259b9b3a1198",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-19T19:17:13+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2346,
+      "outcome": "fail",
+      "run_id": "20261019-191829-61116",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-19T19:57:35+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2102,
+      "outcome": "pass",
+      "run_id": "20261019-195825-42795",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-19T20:33:27+08:00"
+    }
+  ],
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "verify_strings `scripts/ticket.py: hint_scope` contradicts acceptance 1 (grep 0 for hint_scope in scripts/) — after landing, `ticket.py close` will find 0 hits and refuse; replace it (e.g. `scripts/ticket.py:landed_sha`, `scripts/memory.py:memory_file`) or drop it so close uses the stamped landed_sha.",
+      "evidence": "../agent-control-wt/fix-t137/round1/EVIDENCE-round1-objection.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "",
+      "triage": {
+        "verdict": "accepted",
+        "reason": "verify_strings requires `hint_scope` in scripts/ticket.py while acceptance 1 requires grep 0 for `hint_scope` across scripts/ — the two cannot both hold, so the ticket is wrong.",
+        "round": 1,
+        "by": "auto-fix"
+      }
+    }
+  ],
+  "branch": "t137",
+  "patch_ref": "../agent-control-wt/fix-t137/round1/patch-round1.diff",
+  "gate": {
+    "rc": 0,
+    "sha": "d0908b6333bd438b18c3144ad1c3c599c08baaaa",
+    "run_id": "20261019-185203-31192",
+    "at": "2026-10-19T19:14:50+08:00"
+  },
+  "repair_round": 1,
+  "review_request": {
+    "run_id": "20261019-185203-31192",
+    "owner_id": "review.sh",
+    "attempt": 0,
+    "state_version": 14,
+    "face": "9d4908fe243b79987ac011f32fa1c8e0f155cfac68a0632cad98bc3dfe6d0ed2",
+    "patch_id": "58f9ed1835909b7f99ee6449029d90e7330b2523",
+    "sha": "d0908b6333bd438b18c3144ad1c3c599c08baaaa"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "87987f69b936c2352861ccf67549aa62e0bc5269",
+    "note": "reports/t137/20261019-185203-31192/REVIEW.md",
+    "at": "2026-10-19T20:33:27+08:00",
+    "state_version": 15,
+    "patch_id": "58f9ed1835909b7f99ee6449029d90e7330b2523",
+    "face": "9d4908fe243b79987ac011f32fa1c8e0f155cfac68a0632cad98bc3dfe6d0ed2"
+  },
+  "landed_sha": "87987f69b936c2352861ccf67549aa62e0bc5269",
+  "cost_total": {
+    "calendar_seconds": 36705,
+    "wall_seconds": 6202,
+    "runs": 6,
+    "worker_rounds": 1,
+    "objections": 1,
+    "by_role": {
+      "worker": {
+        "runs": 2,
+        "wall_seconds": 1571,
+        "tokens_in": 1270,
+        "tokens_out": 395686,
+        "cache_write": 1891394,
+        "cache_read": 60208158,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "objection": 1,
+          "handed-in": 1
+        }
+      },
+      "opener": {
+        "runs": 1,
+        "wall_seconds": 44,
+        "tokens_in": 12,
+        "tokens_out": 2425,
+        "cache_write": 38202,
+        "cache_read": 163874,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "accepted": 1
+        }
+      },
+      "reviewer": {
+        "runs": 1,
+        "wall_seconds": 139,
+        "tokens_in": 38,
+        "tokens_out": 9806,
+        "cache_write": 83741,
+        "cache_read": 1277577,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 1
+        }
+      },
+      "land": {
+        "runs": 2,
+        "wall_seconds": 4448,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 2,
+        "outcomes": {
+          "fail": 1,
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-19T20:33:27+08:00"
+  }
 }

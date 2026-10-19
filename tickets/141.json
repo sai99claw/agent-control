@@ -36,9 +36,9 @@
   "model": "sonnet",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "b5e3e91b459fa89bd9a12d4add2f5deb1479d900",
-  "state": "Ready",
-  "state_version": 1,
+  "base_sha": "fe0edb87cea058d9097b4065d200bb6fa5139246",
+  "state": "InReview",
+  "state_version": 23,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -57,10 +57,179 @@
     "D-053",
     "D-054"
   ],
-  "verify_strings": [
+  "verify_strings": [],
+  "cost": [
     {
-      "path": "scripts/sync-to-project.sh",
-      "contains": "guard-main.sh"
+      "role": "worker",
+      "round": 1,
+      "model": "sonnet",
+      "tokens_in": 20,
+      "tokens_out": 6813,
+      "cache_write": 42221,
+      "cache_read": 416628,
+      "wall_seconds": 127,
+      "outcome": "objection",
+      "run_id": "20261019-105331-8744",
+      "session_id": "f3148d9d-31c8-4e37-8511-bb8ff88f029c",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "medium",
+      "at": "2026-10-19T10:55:42+08:00"
+    },
+    {
+      "role": "opener",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 8,
+      "tokens_out": 1666,
+      "cache_write": 22043,
+      "cache_read": 114909,
+      "wall_seconds": 27,
+      "outcome": "accepted",
+      "run_id": "20261019-105331-8744",
+      "session_id": "6fb87d3f-688c-4b2b-a2b0-2621c1ec67eb",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-19T10:56:35+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "sonnet",
+      "tokens_in": 26,
+      "tokens_out": 8165,
+      "cache_write": 44992,
+      "cache_read": 585039,
+      "wall_seconds": 25,
+      "outcome": "objection",
+      "run_id": "20261019-105331-8744",
+      "session_id": "f3148d9d-31c8-4e37-8511-bb8ff88f029c",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "medium",
+      "at": "2026-10-19T10:56:35+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "sonnet",
+      "tokens_in": 26,
+      "tokens_out": 8185,
+      "cache_write": 48604,
+      "cache_read": 631468,
+      "wall_seconds": 421,
+      "outcome": "handed-in",
+      "run_id": "20261019-113229-12414",
+      "session_id": "2e9d2b55-cc89-4144-b65b-31d223c9dc69",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "medium",
+      "at": "2026-10-19T11:39:42+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "sonnet",
+      "tokens_in": 30,
+      "tokens_out": 6049,
+      "cache_write": 39748,
+      "cache_read": 629888,
+      "wall_seconds": 83,
+      "outcome": "handed-in",
+      "run_id": "20261019-113942-61870",
+      "session_id": "1bd45057-3044-4e18-80b7-c9fc677f5a83",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "medium",
+      "at": "2026-10-19T11:45:46+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 12,
+      "tokens_out": 4553,
+      "cache_write": 35211,
+      "cache_read": 224259,
+      "wall_seconds": 76,
+      "outcome": "pass",
+      "run_id": "20261019-114546-94558",
+      "session_id": "1bcb2f82-5e98-431e-b4e3-7a7b16871268",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-19T11:51:39+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2080,
+      "outcome": "pass",
+      "run_id": "20261019-122609-68185",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-19T13:00:49+08:00"
     }
-  ]
+  ],
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "verify_strings 要求 scripts/sync-to-project.sh 含 \"guard-main.sh\",與驗收 grep 0 互相矛盾(刪完必然不含);請主線拿掉該 verify_strings。",
+      "evidence": "../agent-control-wt/fix-t141/round1/EVIDENCE-round1-objection.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "",
+      "triage": {
+        "verdict": "accepted",
+        "reason": "verify_strings requires scripts/sync-to-project.sh to contain \"guard-main.sh\", which the acceptance grep-0 for `guard-main` forbids; the two cannot both hold after the deletion.",
+        "round": 1,
+        "by": "auto-fix"
+      }
+    },
+    {
+      "category": "ticket-wrong",
+      "body": "verify/dispatch/test_ticket_128.py 的 `\"guard_main\" + \"_paths\"` 會被票面 grep 的 `guard_main\\b` 命中(後接引號即詞界),該檔不在提示範圍,未動。",
+      "evidence": "../agent-control-wt/fix-t141/round1/EVIDENCE-round1.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "主線裁:寫入範圍只是建議(D-050 ①),照改 verify/dispatch/test_ticket_128.py,拿掉 guard_main 的引用(guard-main 整支刪,#128 那條案例對它的斷言一併退場),grep 0 照守"
+    }
+  ],
+  "owner": "main",
+  "branch": "t141",
+  "patch_ref": "../agent-control-wt/fix-t141/round2/patch-round2.diff",
+  "gate": {
+    "rc": 0,
+    "sha": "409e0585ffd7ff2a387f5fe5cf2159a9d95c2598",
+    "run_id": "20261019-114546-94558",
+    "at": "2026-10-19T11:50:20+08:00"
+  },
+  "repair_round": 2,
+  "review_request": {
+    "run_id": "20261019-114546-94558",
+    "owner_id": "review.sh",
+    "attempt": 0,
+    "state_version": 20,
+    "face": "9c3cc7c890556eeed3b913b5644d59b87c7b1592a5e40b74002629509ecb0a18",
+    "patch_id": "eee9e6137f9950838b3c3ba8dccf99ef238f64bc",
+    "sha": "409e0585ffd7ff2a387f5fe5cf2159a9d95c2598"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "959cd0e8340780f18bddf5b9524ba762782488a8",
+    "note": "reports/t141/20261019-114546-94558/REVIEW.md",
+    "at": "2026-10-19T13:00:49+08:00",
+    "state_version": 23,
+    "patch_id": "eee9e6137f9950838b3c3ba8dccf99ef238f64bc",
+    "face": "9c3cc7c890556eeed3b913b5644d59b87c7b1592a5e40b74002629509ecb0a18"
+  }
 }

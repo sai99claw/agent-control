@@ -97,15 +97,18 @@
     "tests/control_harness.py",
     "tests/test_consolidate_memory.py",
     "tests/test_rules.py",
-    "tests/test_rules_delivery.py"
+    "tests/test_rules_delivery.py",
+    "memory/model/*.md",
+    "tests/",
+    "tests/*"
   ],
   "role": "worker",
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "3a1856e428a4cbfb08a1bc6be3ecca466090f41b",
-  "state": "Running",
-  "state_version": 5,
+  "base_sha": "a36eb64ff22cfb23fbed33eebf9665cc7cfe1b5e",
+  "state": "Done",
+  "state_version": 24,
   "lease": null,
   "retry_limit": 2,
   "complexity": "complex",
@@ -150,10 +153,89 @@
   "test_plan": "期望值來源:D-053 ⑥ 原話、本票 interface_contracts 釘的字串、手算的字元數與條數;不從被測程式算。夾具一律 tests/control_harness.Sandbox 拋棄式 repo,memory.py / new-session.sh / gate.sh / consolidate-memory.sh 用子行程跑,不起真模型、不上埠。\n分層:worker 自己的單元改在 tests/(既有檔就地改,不新開檔);驗證者寫 verify/memory_inbox/test_ticket_134.py,標籤自己登記在 verify/TAGS.d/134.md(建議 `memory-inbox-trigger`;這兩個檔不列進 worker 範圍)。\nT1(A1,unit,trigger):沙盒 config applies_to [memory/role/*.md];opener.md 正文 30 個「坑」、opener.inbox.md 一行 `- 一條原則 (#1, 2026-10-19, worker@opus)`(#1 不存在於票庫 —— 分類 unknown-ticket 也要觸發);跑 check → 斷言 A1 的 rc、那一行 stdout 逐字、票數 1 與四格、事件 kind/file/entries。\nT2(A2,unit):opener.md 5000 個「坑」、沒有 inbox → rc 0、行逐字 `5000 字元 / 暫存區 0 條未整理`、不含「超過」、票 0、事件 0;再加一份 21 行 inbox → 只開 1 張、subject `暫存區 21 條未整理`。\nT3(A3,unit):沿用 tests/test_memory_lifecycle A3 的三種寫法(glob 蓋到、任何 role、併發兩支)把觸發夾具換成 1 條 note;外加 Cancelled 之後再開 1 張。\nT4(A4,unit):new-session.sh worker / main 在 T1 沙盒,斷言頁面兩句與票數。\nT5(A5,unit):snapshot → 夾具討論檔(沿用 tests/test_memory.py 的 talk/both 寫法或 consolidate-memory.sh 記下的單一討論)→ 5000 字元候選 → 斷言主檔、.consumed、事件鍵;再 check 一次 0 條、不開票;`--new-cap 4000 --reason x` rc 2、位元組不變。\nT6(A6,unit/gate):沿用 tests/test_memory_layer_policy.py 的 LintBase(主線 commit 卡 → worktree 分支改卡 → 真 gate.sh):1990→2500 乾淨新增行不擋;同分支加一條錯層行仍擋;lint --json 沒有 over_cap。\nT7(A7,unit):讀 T1 開出的票與兩份文字檔、tests/test_consolidate_memory 夾具記下的派工 stdin,斷言判準句在、`<cap>` / `<N>` / 提高上限不在。\nT8(A8,repo 靜態,worker 在 EVIDENCE 貼輸出):跑 A8 那條 git grep → 0 行。\nT9(A9):改 AGENT_PROBES 後,先用變異「探針不放 inbox」證明 assert 那一條的前提會變(探針輸出 memory.txt 不再有 `暫存區 1 條未整理`),避免空斷言。\n既有測試要跟著改(釘舊行為,已 grep):tests/test_memory.py(MemoryCheck 的 cap 類、Consolidate 的 new-cap 兩條與 still_over_the_cap、Note 的 inbox_over_twenty、TheProjectSideIsWhatGetsWatched 的 21 行、FRONT)、tests/test_memory_lifecycle.py(A1 OVER_LINE、A4 INBOX_SUBJ 與 chars subject、A5 candidate-over-cap 那一種拿掉、A7 夾具)、tests/test_memory_layer_policy.py(311–365 的 cap 五條刪、both_listed 改成只列錯層、config_extra 的 cap_chars)、tests/test_new_session.py(第 4 段字樣、over_cap 那條改成暫存區夾具)、tests/test_auto_fix.py(AGENT_PROBES 與 3442)、tests/test_routing_cards.py(gemini 卡 `cap_chars: 2000` 那一條改成只驗正文用途句)、tests/control_harness.py(DEFAULT_CONFIG 的 cap_chars/unit/raise_allowed)。只是惰性夾具、不必改但改了較乾淨:tests/test_consolidate_memory.py:60、tests/test_rules.py:568(front matter 換成中性鍵,仍驗 front matter 不進包)、tests/test_rules_delivery.py:267。verify/agent-output/test_ticket_20.py 與 verify/role_routing/test_ticket_122.py 只帶惰性 cap 設定,不改,跑一次確認綠。\n閘門:`sh scripts/gate.sh --branch --ticket 134`(對照格會帶 test_memory、test_memory_lifecycle、test_memory_layer_policy、test_new_session、test_consolidate_memory、test_auto_fix、test_event、test_routing_cards、test_rules_delivery 等)。\n變異(全部未實測,驗證者照這幾條驗紅):M1 check 改回 `n > 20` 才觸發 → T1 紅;M2 拿掉 open_consolidation 查重 → T3 紅;M3 consolidate 留「候選 > 2000 字元拒收」→ T5 紅;M4 lint --base 留 over_cap(gate 那一手照印)→ T6 紅;M5 check 對正文 > 2000 字元、inbox 空的主檔也開票 → T2 紅;M6 open_ticket_for 拿掉判準句 → T7 紅。",
   "outline": "摘要:D-053 ⑥ 推翻 D-006。把字數上限與「超過才整理」全拿掉(上限執行點 36 處:code/設定 16、文件 10、測試 10(另 2 支 verify 案例只帶惰性設定、不改),逐處見 acceptance A8/A10 與 test_plan),觸發改成暫存區有任一條未整理的 note;查重、只由主線開、租約排他照舊,整理者只拿判準一句。只減不加:三道關卡拿掉,沒有新關卡。\n建議順序:memory.py(check → consolidate → lint --base → open_ticket_for → 說明字串)→ event.py 改名 → gate.sh / auto-fix.sh / new-session.sh / consolidate-memory.sh → 範本與卡 → 文件 → 測試;code-map/catalog.json 的 memory.py 摘要改「暫存區整理票」,index/INDEX 由 apply 重產(D-051)。\n上限執行點(開票者讀碼,base 3a1856e):board/config.json:13-23(cap_chars/unit/raise_allowed);memory.py check 940-1005(字元比 cap、inbox_max_lines 20、needs-review 三種觸發)、consolidate 1205-1318(--new-cap/--reason、候選超上限、set_cap/add_cap_history、cap_from/cap_to)、lint --base 492-572(over_cap_by_branch)、open_ticket_for 799-815、模組說明 1-122(含「為什麼提高上限要有理由」);event.py:67-68;gate.sh:185、493-508;auto-fix.sh:688;new-session.sh:422-430;consolidate-memory.sh:171-175 與 fill 的 <N>/<cap>;rules.py:281 註解;templates/dispatch-consolidator.md:1/24/40/47/52;memory/role/consolidator.md:1/5/23-28;memory/model 六張與 implementer.md 的 front matter;文件 memory/role/README.md:25/28-30、docs/MEMORY.md:18-21/53-92/105、docs/ROLES.md:15、docs/DISCUSSION.md:8/35、docs/REHEARSAL.md:17、docs/FLOW.html:377/422/531、docs/reference/role-procedures.md:107/161/165、README.md:11、docs/DESIGN.md:62、code-map/catalog.json:36。\n觸發頻率與去重(沿用現狀,只換觸發條件):只有主線開場跑非唯讀 check(其他角色 --read-only,#76);一份主檔一張票;在 memory/.lock 裡,任何 role 的開著的票(含 NeedsDecision / Blocked)allowed_write_paths 蓋到主檔就不開(#81 / #87 A38);consolidate-memory.sh 用租約保證一張票只起一個 fable session。consolidate 只消耗 snapshot 那 K 行,inbox 清空就不再觸發;整理期間新記的第 K+1 行留著,等那張票關了、下一次主線開場才開下一張。所以每份主檔任何時刻至多一張整理票,不會每次開場各開一張。落地後第一次主線開場預計開 3 張(實測現況:consolidator.inbox 1 條、main.inbox 3 條、opener.inbox 4 條;opener.md 正好 2000/2000,今天這 4 條進不了卡)。本票開著時,它的 allowed_write_paths 蓋到的那幾份(consolidator.md、implementer.md、六張模型卡)照規則延後整理 —— 所以寫入範圍逐檔列、不用 memory/** glob。\n現況實測(F 在):`memory.py check --read-only` 對 opener.inbox 4 條、main.inbox 3 條都不觸發,只有 consolidator.inbox 因 needs-review 觸發。needs-review 不再是獨立觸發(被「有任一條」涵蓋);check-stale 指令保留給整理者分類用。\nneeds_verifier=true:改的是觸發行為與三個指令的契約,驗證者要從使用者原話獨立寫案例(尤其「長度不再觸發」「查重不退化」),不是重演 worker 單元。interface_fixed=true:輸出行、事件名與資料、subject、頁面字樣都釘在 interface_contracts。\ncomplexity=complex(開題者標,VISION「複雜的票做完後檢查一次」):邏輯是減法,但 36 處橫跨 code、閘門、範本、角色卡、文件、10 支測試,風險是漏掉殘留或留下空斷言(A9),做完值得一次需求檢查。\nworker 注意:改 memory/role/consolidator.md 時閘門會 lint 新增行(role 層不准路徑、指令、旗標、行號),新句子照卡上既有寫法;其餘角色卡(opener.md、main.md)與任何 *.inbox.md 不動 —— 那些是整理票的事。tabby_pool 的同步副本不在本票,之後同步。\n待裁(主線或使用者;不擋開工,照建議做):Q1 規則包 4 KB 與 inbox 尾巴 600 B 的截斷(rules.py,#74)不是 D-006,本票不動;卡變長後派工文只帶得進前段、全文路徑仍在 —— 建議留著、交減法稽核(D-053 ③)裁,整理者提示不提它(提了就是字數目標)。Q2 `memory.py note` 單行 300 字元的格式限制是暫存區條目格式、不是記憶長度 —— 建議本票不動,一併交減法稽核。Q3 觸發不加冷卻:一條 note 就開一張,成本是每次整理一個 fable session(角色卡上限 ≤ 40K token)—— 建議照原話不加冷卻或門檻(加了就是新的數字門檻),落地後看 consolidator 的 cost 列再議。",
   "verify": {
-    "files": [],
-    "tags": [],
-    "run": "",
-    "notes": ""
+    "files": [
+      "verify/memory_inbox/test_ticket_134.py"
+    ],
+    "tags": [
+      "memory-inbox-trigger"
+    ],
+    "run": "python3 scripts/verify.py --tag memory-inbox-trigger",
+    "notes": "Uses tests/control_harness.Sandbox throwaway repos; no service ports or real models. A6 invokes the real gate inside the sandbox. A8 uses the same ERE and paths with recursive grep because the red baseline is a git archive without .git.",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-19T10:51:16+08:00",
+      "files": [
+        "verify/memory_inbox/test_ticket_134.py"
+      ],
+      "base_ref": "3a1856e428a4cbfb08a1bc6be3ecca466090f41b",
+      "base_sha": "3a1856e428a4cbfb08a1bc6be3ecca466090f41b",
+      "candidate": "../agent-control-wt/t134",
+      "candidate_sha": "48b58bf5871e94561de2468ffea042b355adbb16",
+      "baseline": {
+        "red": [
+          "verify.memory_inbox.test_ticket_134.ConsolidationWithoutCaps.test_a5_a_long_candidate_consolidates_and_removed_flags_are_unknown",
+          "verify.memory_inbox.test_ticket_134.ConsolidatorInstructions.test_a7_ticket_cards_template_and_filled_dispatch_only_give_the_criterion",
+          "verify.memory_inbox.test_ticket_134.Deduplication.test_a3_open_coverage_cancelled_tickets_and_concurrency_keep_one_ticket",
+          "verify.memory_inbox.test_ticket_134.GateKeepsOnlyLayerPolicy.test_a6_length_growth_passes_but_a_new_wrong_layer_line_still_blocks",
+          "verify.memory_inbox.test_ticket_134.SessionOpening.test_a4_only_main_opens_the_pending_memory_ticket",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a10_docs_share_the_contract_and_project_memory_stays_out",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a10_docs_share_the_contract_and_project_memory_stays_out",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a10_docs_share_the_contract_and_project_memory_stays_out",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a10_docs_share_the_contract_and_project_memory_stays_out",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a10_docs_share_the_contract_and_project_memory_stays_out",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a10_docs_share_the_contract_and_project_memory_stays_out",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a10_docs_share_the_contract_and_project_memory_stays_out",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a10_docs_share_the_contract_and_project_memory_stays_out",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a10_docs_share_the_contract_and_project_memory_stays_out",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a10_docs_share_the_contract_and_project_memory_stays_out",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a8_the_removed_cap_execution_tokens_have_no_remaining_lines",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a9_the_probe_has_a_real_pending_precondition_and_names_the_new_event",
+          "verify.memory_inbox.test_ticket_134.TriggerAndCounting.test_a1_one_unknown_ticket_note_triggers_exactly_once",
+          "verify.memory_inbox.test_ticket_134.TriggerAndCounting.test_a2_length_is_only_reported_and_twenty_one_notes_are_one_trigger"
+        ],
+        "red_lines": [
+          "verify.memory_inbox.test_ticket_134.ConsolidationWithoutCaps.test_a5_a_long_candidate_consolidates_and_removed_flags_are_unknown: AssertionError: 2 != 0 : memory: 候選 candidates/opus.md 正文 5000 字元,超過上限 2000 —— 還沒整理完;壓下來,或者--new-cap 配 --reason",
+          "verify.memory_inbox.test_ticket_134.ConsolidatorInstructions.test_a7_ticket_cards_template_and_filled_dispatch_only_give_the_criterion: AssertionError: 0 != 1 : memory: memory/role/opener.md 30 / 2000(設定的上限)",
+          "verify.memory_inbox.test_ticket_134.Deduplication.test_a3_open_coverage_cancelled_tickets_and_concurrency_keep_one_ticket: AssertionError: 0 != 1 : memory: memory/role/opener.md 30 / 2000(設定的上限)",
+          "verify.memory_inbox.test_ticket_134.GateKeepsOnlyLayerPolicy.test_a6_length_growth_passes_but_a_new_wrong_layer_line_still_blocks: AssertionError: 1 != 0 : {",
+          "verify.memory_inbox.test_ticket_134.SessionOpening.test_a4_only_main_opens_the_pending_memory_ticket: AssertionError: False is not true : worker 開場缺新的第 4 段標題",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a10_docs_share_the_contract_and_project_memory_stays_out: AssertionError: False is not true : docs/MEMORY.md 缺不設固定字數上限",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a10_docs_share_the_contract_and_project_memory_stays_out: AssertionError: False is not true : memory/role/README.md 缺不設固定字數上限",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a10_docs_share_the_contract_and_project_memory_stays_out: AssertionError: False is not true : docs/ROLES.md 缺暫存區契約",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a10_docs_share_the_contract_and_project_memory_stays_out: AssertionError: False is not true : docs/DISCUSSION.md 缺暫存區契約",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a10_docs_share_the_contract_and_project_memory_stays_out: AssertionError: False is not true : docs/REHEARSAL.md 缺暫存區契約",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a10_docs_share_the_contract_and_project_memory_stays_out: AssertionError: False is not true : docs/FLOW.html 缺暫存區契約",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a10_docs_share_the_contract_and_project_memory_stays_out: AssertionError: False is not true : docs/reference/role-procedures.md 缺暫存區契約",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a10_docs_share_the_contract_and_project_memory_stays_out: AssertionError: False is not true : README.md 缺暫存區契約",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a10_docs_share_the_contract_and_project_memory_stays_out: AssertionError: False is not true : docs/DESIGN.md 缺暫存區契約",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a10_docs_share_the_contract_and_project_memory_stays_out: AssertionError: False is not true : code-map/catalog.json 缺暫存區契約",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a8_the_removed_cap_execution_tokens_have_no_remaining_lines: AssertionError: 0 != 1 : scripts/event.py:68:    \"memory.over_cap\", \"memory.consolidated\", \"memory.noted\",",
+          "verify.memory_inbox.test_ticket_134.StaticContracts.test_a9_the_probe_has_a_real_pending_precondition_and_names_the_new_event: AssertionError: False is not true : AGENT_PROBES 沒有建立 inbox 探針",
+          "verify.memory_inbox.test_ticket_134.TriggerAndCounting.test_a1_one_unknown_ticket_note_triggers_exactly_once: AssertionError: 0 != 1 : memory: memory/role/opener.md 30 / 2000(設定的上限)",
+          "verify.memory_inbox.test_ticket_134.TriggerAndCounting.test_a2_length_is_only_reported_and_twenty_one_notes_are_one_trigger: AssertionError: 1 != 0 : memory: memory/role/opener.md **5000 / 2000 超過**(設定的上限)"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 10,
+        "skipped": 0,
+        "log": "../agent-control-wt/t134/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 10,
+        "skipped": 0,
+        "log": "../agent-control-wt/t134/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "objections": [
     {
@@ -169,6 +251,14 @@
         "round": 1,
         "by": "auto-fix"
       }
+    },
+    {
+      "category": "test_defect",
+      "body": "verify/memory_inbox/test_ticket_134.py 的 A6 沙盒沒有 tests/ 底下任何模組(Sandbox 只建空的 tests/、git 不收空目錄,worktree 裡沒有 tests/),真 gate.sh 的單元層對照到 test_memory test_no_project_names test_routing_cards 時 status.py 在 os.chdir(<wt>/tests) 拋 FileNotFoundError、gate rc 1 —— 任何實作都綠不了;照 tests/test_gate.py GateSh.setUp 的做法在 A6 的 setUp 寫三支同名替身模組(PASSING)即可,實測補上後 A6 原斷言全綠(clean rc 0、bad rc 4)。",
+      "evidence": "../agent-control-wt/fix-t134/round2/EVIDENCE-round2.md",
+      "owner": "verifier",
+      "disposition": "fixed",
+      "follow_up": "../agent-control-wt/verify-t134/round2/patch-verify.diff"
     }
   ],
   "cost": [
@@ -205,6 +295,207 @@
       "note": null,
       "effort": "high",
       "at": "2026-10-19T09:38:08+08:00"
+    },
+    {
+      "role": "opener",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 10,
+      "tokens_out": 1959,
+      "cache_write": 23057,
+      "cache_read": 147309,
+      "wall_seconds": 34,
+      "outcome": "accepted",
+      "run_id": "20261019-085113-47980",
+      "session_id": "cd3fc4ea-337c-4d5a-bd1b-30264ed40fd8",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-19T09:59:14+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 234,
+      "tokens_out": 101711,
+      "cache_write": 276140,
+      "cache_read": 22339780,
+      "wall_seconds": 1231,
+      "outcome": "handed-in",
+      "run_id": "20261019-085113-47980",
+      "session_id": "5f08ba94-2960-4668-8459-b2829bbb0d17",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-19T09:59:22+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 64,
+      "tokens_out": 21335,
+      "cache_write": 105295,
+      "cache_read": 2801785,
+      "wall_seconds": 274,
+      "outcome": "objection",
+      "run_id": "20261019-095923-80548",
+      "session_id": "6f9d5c50-c28c-40b3-9112-8159b8e1691a",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-19T10:24:10+08:00"
+    },
+    {
+      "role": "verifier",
+      "round": 2,
+      "model": "codex:gpt-5.6-sol",
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 456,
+      "outcome": "handed-in",
+      "run_id": "20261019-095923-80548",
+      "session_id": null,
+      "by": "auto-fix.sh",
+      "note": "reports/t134/20261019-095923-80548/verifier-round2.log 裡沒有 JSON 信封",
+      "effort": "high",
+      "at": "2026-10-19T10:31:49+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 18,
+      "tokens_out": 6382,
+      "cache_write": 68406,
+      "cache_read": 499893,
+      "wall_seconds": 105,
+      "outcome": "pass",
+      "run_id": "20261019-103153-97111",
+      "session_id": "e53364c2-3add-44b4-ab7c-4e39062d853a",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-19T10:53:05+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2089,
+      "outcome": "pass",
+      "run_id": "20261019-105636-20087",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-19T11:31:25+08:00"
     }
-  ]
+  ],
+  "branch": "t134",
+  "patch_ref": "../agent-control-wt/fix-t134/round2/patch-round2.diff",
+  "gate": {
+    "rc": 0,
+    "sha": "48b58bf5871e94561de2468ffea042b355adbb16",
+    "run_id": "20261019-103153-97111",
+    "at": "2026-10-19T10:51:17+08:00"
+  },
+  "repair_round": 2,
+  "review_request": {
+    "run_id": "20261019-103153-97111",
+    "owner_id": "review.sh",
+    "attempt": 0,
+    "state_version": 20,
+    "face": "bb293bae50c1a217f3d9734af76369e7653f7640f3d77c9298253bb7344c8c31",
+    "patch_id": "8828f4ec8ebaa1e3c178f69d15f466c257fe9f12",
+    "sha": "48b58bf5871e94561de2468ffea042b355adbb16"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "fe0edb87cea058d9097b4065d200bb6fa5139246",
+    "note": "reports/t134/20261019-103153-97111/REVIEW.md",
+    "at": "2026-10-19T11:31:25+08:00",
+    "state_version": 24,
+    "patch_id": "8828f4ec8ebaa1e3c178f69d15f466c257fe9f12",
+    "face": "bb293bae50c1a217f3d9734af76369e7653f7640f3d77c9298253bb7344c8c31"
+  },
+  "cost_total": {
+    "calendar_seconds": 9779,
+    "wall_seconds": 9815,
+    "runs": 8,
+    "worker_rounds": 2,
+    "objections": 2,
+    "by_role": {
+      "verifier": {
+        "runs": 2,
+        "wall_seconds": 3269,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 2,
+        "outcomes": {
+          "handed-in": 2
+        }
+      },
+      "worker": {
+        "runs": 3,
+        "wall_seconds": 4318,
+        "tokens_in": 508,
+        "tokens_out": 216971,
+        "cache_write": 644914,
+        "cache_read": 44092521,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "objection": 2,
+          "handed-in": 1
+        }
+      },
+      "opener": {
+        "runs": 1,
+        "wall_seconds": 34,
+        "tokens_in": 10,
+        "tokens_out": 1959,
+        "cache_write": 23057,
+        "cache_read": 147309,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "accepted": 1
+        }
+      },
+      "reviewer": {
+        "runs": 1,
+        "wall_seconds": 105,
+        "tokens_in": 18,
+        "tokens_out": 6382,
+        "cache_write": 68406,
+        "cache_read": 499893,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 2089,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-19T11:31:25+08:00"
+  }
 }

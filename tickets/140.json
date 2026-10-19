@@ -43,9 +43,9 @@
   "model": "sonnet",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "b5e3e91b459fa89bd9a12d4add2f5deb1479d900",
-  "state": "Ready",
-  "state_version": 1,
+  "base_sha": "fe0edb87cea058d9097b4065d200bb6fa5139246",
+  "state": "InReview",
+  "state_version": 10,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -70,5 +70,86 @@
       "path": "scripts/rules.py",
       "contains": "LOCAL_INBOX_BYTES"
     }
-  ]
+  ],
+  "branch": "t140",
+  "patch_ref": "../agent-control-wt/fix-t140/round1/patch-round1.diff",
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "sonnet",
+      "tokens_in": 44,
+      "tokens_out": 20693,
+      "cache_write": 101755,
+      "cache_read": 1736856,
+      "wall_seconds": 216,
+      "outcome": "handed-in",
+      "run_id": "20261019-115140-27135",
+      "session_id": "17ed9dd0-36b5-4fd8-8bc7-e3f2cfead9c9",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "medium",
+      "at": "2026-10-19T11:55:26+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 26,
+      "tokens_out": 8551,
+      "cache_write": 62455,
+      "cache_read": 678284,
+      "wall_seconds": 174,
+      "outcome": "pass",
+      "run_id": "20261019-115526-33129",
+      "session_id": "70219477-ab00-44d3-89f7-9ff7b672996a",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-19T12:03:56+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 4,
+      "outcome": "fail",
+      "run_id": "20261019-203332-21427",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-19T20:33:36+08:00"
+    }
+  ],
+  "gate": {
+    "rc": 0,
+    "sha": "93bff57cbaa550b6d970cd20b45df4717eefccad",
+    "run_id": "20261019-115526-33129",
+    "at": "2026-10-19T12:00:53+08:00"
+  },
+  "repair_round": 1,
+  "review_request": {
+    "run_id": "20261019-115526-33129",
+    "owner_id": "review.sh",
+    "attempt": 0,
+    "state_version": 8,
+    "face": "3db3f25bbd116a563acc2ce1c9a03487d9691603954378017aa9732fed4130bc",
+    "patch_id": "042a7d728b87aca9ebc0cc56b7f3f9af7a26ddce",
+    "sha": "93bff57cbaa550b6d970cd20b45df4717eefccad"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "93bff57cbaa550b6d970cd20b45df4717eefccad",
+    "note": "reports/t140/20261019-115526-33129/REVIEW.md",
+    "at": "2026-10-19T12:03:56+08:00",
+    "state_version": 9,
+    "patch_id": "042a7d728b87aca9ebc0cc56b7f3f9af7a26ddce",
+    "face": "3db3f25bbd116a563acc2ce1c9a03487d9691603954378017aa9732fed4130bc"
+  }
 }
