@@ -46,8 +46,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "8ffc1e334861390d484b31d9f393d360f50d8ae4",
-  "state": "Blocked",
-  "state_version": 57,
+  "state": "Cancelled",
+  "state_version": 58,
   "lease": null,
   "retry_limit": 2,
   "verify": {

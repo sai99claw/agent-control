@@ -39,8 +39,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "8ffc1e334861390d484b31d9f393d360f50d8ae4",
-  "state": "InReview",
-  "state_version": 45,
+  "state": "Done",
+  "state_version": 47,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -413,6 +413,23 @@
       "note": "沒帶 --from-envelope",
       "effort": null,
       "at": "2026-10-19T08:15:05+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2094,
+      "outcome": "pass",
+      "run_id": "20261019-084044-80294",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-19T09:15:38+08:00"
     }
   ],
   "objections": [
@@ -468,11 +485,83 @@
   "review": {
     "verdict": "pass",
     "by": "reviewer@opus",
-    "sha": "a0a25ac255bf158977b67384d250c1c422cb4559",
+    "sha": "8e6c4832e587affdb2fa48d60a3bac48e1ffc7d2",
     "note": "reports/t133/20261019-050533-33085/REVIEW.md",
-    "at": "2026-10-19T05:10:19+08:00",
-    "state_version": 43,
+    "at": "2026-10-19T09:15:38+08:00",
+    "state_version": 47,
     "patch_id": "980c9162a932d6ba0341a978ecce3779c1674be3",
     "face": "158db6cacf173bc30afb1ee2a7a2b6f8c721c048f54744788fd289f52d30950c"
+  },
+  "cost_total": {
+    "calendar_seconds": 33754,
+    "wall_seconds": 13221,
+    "runs": 18,
+    "worker_rounds": 2,
+    "objections": 3,
+    "by_role": {
+      "verifier": {
+        "runs": 3,
+        "wall_seconds": 1546,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 3,
+        "outcomes": {
+          "handed-in": 3
+        }
+      },
+      "worker": {
+        "runs": 6,
+        "wall_seconds": 2446,
+        "tokens_in": 235,
+        "tokens_out": 98118,
+        "cache_write": 322347,
+        "cache_read": 8339814,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "objection": 5,
+          "handed-in": 1
+        }
+      },
+      "opener": {
+        "runs": 1,
+        "wall_seconds": 99,
+        "tokens_in": 14,
+        "tokens_out": 4525,
+        "cache_write": 35149,
+        "cache_read": 267867,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "accepted": 1
+        }
+      },
+      "reviewer": {
+        "runs": 4,
+        "wall_seconds": 296,
+        "tokens_in": 52,
+        "tokens_out": 18348,
+        "cache_write": 159598,
+        "cache_read": 982753,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 4
+        }
+      },
+      "land": {
+        "runs": 4,
+        "wall_seconds": 8834,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 4,
+        "outcomes": {
+          "fail": 3,
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-19T09:15:38+08:00"
   }
 }
