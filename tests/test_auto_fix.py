@@ -3352,7 +3352,7 @@ class TheFirstRoundBaseFollowsMain(AutoFixBase):
 
 
 # #87 A9–A13:agent 在副本裡跑會寫看板的三支入口 + 自己的閘門,再照 `FIRST_ROUND_PAIR`
-# 交件。每個角色把自己收到的 `AC_*` 與四支的輸出寫進 @OUT@/<角色>/。帶一條 note 的暫存區
+# 交件。每個角色把自己收到的 `AC_*` 與四支的輸出寫進 @OUT@/<角色>/。帶一條 3 天前 note 的暫存區(#148:1 條要放滿 3 天才觸發)
 # 放在 agent 的 `memory.py check` 真的會讀的地方 —— `$AC_ROOT`(拋棄式控制根;放在副本的
 # `memory/` 它看不到,斷言就是空的,#134 A9),量完就刪;`rules.py pack` 在控制根上找不到規則來源
 # —— 那是刻意的:它失敗時要送一頁 decision,而那一頁不准落在主 repo。
@@ -3362,7 +3362,8 @@ env | grep '^AC_' > "$out/env.txt" || true
 (
     cd "$AC_WORK/work"
     mkdir -p "$AC_ROOT/memory/model"
-    echo '- 探針的一條 (#1, 2026-10-19, worker@opus)' > "$AC_ROOT/memory/model/huge-probe.inbox.md"
+    old=$(python3 -c 'import datetime; print(datetime.date.today() - datetime.timedelta(days=3))')
+    echo "- 探針的一條 (#1, $old, worker@opus)" > "$AC_ROOT/memory/model/huge-probe.inbox.md"
     python3 scripts/memory.py check > "$out/memory.txt" 2>&1
     python3 scripts/event.py tail 50 > "$out/events.txt" 2>&1
     rm -f "$AC_ROOT/memory/model/huge-probe.inbox.md"

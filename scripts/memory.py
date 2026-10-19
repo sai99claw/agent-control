@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """記憶的暫存區與整理 — D-053 ⑥(`docs/MEMORY.md`「整理:老師帶學生」)。
 
-    scripts/memory.py check [--read-only]      # session 開頭跑;暫存區有未整理條目 → 退出碼 1
+    scripts/memory.py check [--read-only]      # session 開頭跑;暫存區達批次門檻 → 退出碼 1
     scripts/memory.py check-stale --read-only [--file <主檔或 inbox>]   # 逐條分類來源
     scripts/memory.py harvest EVIDENCE.md      # 收割「記憶」段的 note 指令
     scripts/memory.py snapshot memory/model/opus.md   # 討論檔頭要抄的兩行
@@ -17,10 +17,13 @@
 成本的** —— 寫什麼、留多長由整理的 LLM 決定。`check` 照舊印正文字元數,只是報數,
 不跟任何數字比。
 
-## 為什麼暫存區有一條就整理
+## 為什麼整理是批次觸發(D-055 ①)
 暫存區(`.inbox.md`)是還沒被 `consolidate` 消耗的教訓;它不進每個 session 的開場,
-所以留在那裡的每一條都還沒有生效。有一條非空行,它的主檔就待整理 —— 新的觸發條件
-取代舊的觸發條件,不擋任何東西。查重照舊:一份主檔任何時刻至多一張開著的票。
+所以留在那裡的每一條都還沒有生效。但「有 1 條就派一個 fable session」太貴:非空行
+≥ BATCH_MIN_ENTRIES,或最舊一條(note 括號裡的日期)距今 ≥ BATCH_MAX_AGE_DAYS 天
+(免得條目少的暫存區永遠不整理),主檔才待整理;同一份主檔最近一張整理票(任何 state)
+的 `created` 在 BATCH_COOLDOWN_HOURS 小時內,這次不開(條目留著,下次再看)。
+不擋任何東西。查重照舊:一份主檔任何時刻至多一張開著的票。
 
 ## 為什麼只管 role / model 兩層
 角色卡與模型卡是同一角色、同一模型每個 session 開頭都要讀的東西。專案共用層
@@ -70,6 +73,9 @@ DEFAULT_APPLIES = ("memory/model/*.md", "memory/role/*.md")
 DEFAULT_INBOX_SUFFIX = ".inbox.md"
 NOT_A_MEMORY = "README.md"     # 說明檔不是誰的記憶 —— glob 抓得到它,check 不該管它
 CONSOLIDATOR_ROLE = "consolidator"
+BATCH_MIN_ENTRIES = 5          # D-055 ①:暫存區累積幾條才開整理票
+BATCH_MAX_AGE_DAYS = 3         # 最舊一條放滿幾天也開(條目少的暫存區才不會永遠不整理)
+BATCH_COOLDOWN_HOURS = 24      # 同一份主檔最近一張整理票 created 在這之內 → 這次不開
 LOCK_NAME = ".lock"
 LOCK_TIMEOUT = 10.0
 FENCE = "---"
@@ -87,7 +93,7 @@ CONSOLIDATE_FLAGS = (
 )
 
 USAGE = {
-    "check": "scripts/memory.py check [--read-only]         # 暫存區有未整理條目退出碼 1(不停工)",
+    "check": "scripts/memory.py check [--read-only]         # 暫存區達批次門檻退出碼 1(不停工)",
     "check-stale": "scripts/memory.py check-stale --read-only [--file <主檔或 inbox 相對路徑>]",
     "snapshot": "scripts/memory.py snapshot <記憶檔>             # 印 source_lines / source_sha256",
     "note": "scripts/memory.py note <model|role|project> <名> \"<一行>\" [--ticket N] [--by <role>@<model>]",
@@ -681,6 +687,45 @@ def watched_files():
     return out
 
 
+def covers(rel, one):
+    """這張票的 `memory_file` 是不是這份記憶檔(#137;查重與冷卻共用同一個匹配)。"""
+    return one.get("memory_file") == rel
+
+
+def recent_consolidation(rel):
+    """這份主檔最近一張整理票(role=consolidator、`memory_file` 是它,**任何 state**)的 `created`,
+    在 BATCH_COOLDOWN_HOURS 小時內 → 回票號;否則 None。取消過的也算觸發過。"""
+    for one in ticket.load_all():
+        if one.get("role") != CONSOLIDATOR_ROLE or not covers(rel, one):
+            continue
+        try:
+            made = datetime.fromisoformat(one.get("created") or "")
+        except ValueError:
+            continue
+        if made.tzinfo is None:
+            made = made.astimezone()
+        age = datetime.now().astimezone() - made
+        if age.total_seconds() < BATCH_COOLDOWN_HOURS * 3600:
+            return one["id"]
+    return None
+
+
+def oldest_age_days(lines):
+    """最舊一條 note 的日期距今幾天;沒有可解析日期的條目不算進年齡。全沒有 → None。"""
+    ages = []
+    for line in lines:
+        found = NOTE_LINE.match(line)
+        if not found:
+            continue
+        for tag in found.group(2).split(", "):
+            try:
+                ages.append((date.today() - date.fromisoformat(tag.strip())).days)
+            except ValueError:
+                continue
+            break
+    return max(ages) if ages else None
+
+
 def open_consolidation(rel):
     """已經有一張開著的票蓋住這份記憶檔?**不重複開。** 回 `(票號, role)` 或 `(None, None)`。
 
@@ -695,7 +740,7 @@ def open_consolidation(rel):
     for one in ticket.load_all():
         if not ticket.is_open(one):
             continue
-        if one.get("memory_file") != rel:
+        if not covers(rel, one):
             continue
         if one.get("role") == CONSOLIDATOR_ROLE:
             return one["id"], CONSOLIDATOR_ROLE
@@ -760,7 +805,7 @@ def open_ticket_for(rel, entries, out):
         "--subject", "整理 %s(暫存區 %d 條未整理)" % (rel, entries),
         "--objective",
         "由 %s 照 docs/DISCUSSION.md 的格式討論後整理 %s:處置 %s 在 snapshot 那一刻的每一行"
-        "(D-053 ⑥ 暫存區有未整理條目就整理)。判準只有一句:每個 session 開場都會讀，"
+        "(D-053 ⑥ / D-055 ① 暫存區達批次門檻就整理)。判準只有一句:每個 session 開場都會讀，"
         "只留值得這個成本的;寫什麼、留多長由你決定,沒有字數目標(D-053 ⑥)。"
         "D-007「沒有討論檔不准整理」、D-013「兩個模型或一個高階模型、只留原則」、"
         "D-043「單一高階整理者」" % (model or "兩個不同的模型", rel, inbox),
@@ -904,7 +949,7 @@ def cmd_check(argv):
         if main_rel not in mains:
             mains.append(main_rel)
     flagged = 0
-    # 主檔 → 暫存區幾條未整理。只是報數,不跟任何數字比(D-053 ⑥)。
+    # 主檔 → 暫存區幾條未整理。報數照印;達批次門檻(D-055 ①)才發事件、開票。
     pending = {}
     for rel in mains:
         path = os.path.join(root, rel)
@@ -912,15 +957,24 @@ def cmd_check(argv):
             chars = body_chars(read(path)) if os.path.exists(path) else 0
             box = inboxes.get(rel)
             entries = 0
+            lines = []
             if box:
                 with open(os.path.join(root, box), encoding="utf-8") as handle:
-                    entries = sum(1 for line in handle if line.strip())
+                    lines = [line.rstrip("\n") for line in handle if line.strip()]
+                entries = len(lines)
         except OSError as exc:
             sys.stdout.write("memory: 讀不到 %s —— %s\n" % (rel, exc))
             flagged += 1
             continue
         sys.stdout.write("memory: %s %d 字元 / 暫存區 %d 條未整理\n" % (rel, chars, entries))
-        if not entries:
+        age = oldest_age_days(lines)
+        if entries < BATCH_MIN_ENTRIES and not (age is not None and age >= BATCH_MAX_AGE_DAYS):
+            continue
+        # 開著的票走下面的查重(字樣照 #134);冷卻只管已經關掉的那幾張。
+        recent = None if open_consolidation(rel)[0] else recent_consolidation(rel)
+        if recent:
+            sys.stdout.write("memory:   %s 的整理票 #%s 在 %d 小時內開過,這次不開(條目留著)\n"
+                             % (rel, recent, BATCH_COOLDOWN_HOURS))
             continue
         flagged += 1
         if not read_only:

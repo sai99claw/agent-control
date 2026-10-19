@@ -1,6 +1,6 @@
 """`scripts/memory.py`:記憶的暫存區與整理 — D-053 ⑥(取代 D-006 的字數上限)。
 
-這一組釘三件事:量的是正文不是整份檔(只是報數)、暫存區有一條未整理的 note 就開票
+這一組釘三件事:量的是正文不是整份檔(只是報數)、暫存區達批次門檻(≥5 條或最舊滿 3 天,D-055 ①)就開票
 而且只開一張、長度本身不觸發也不拒收。
 """
 
@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import unittest
+from datetime import date, timedelta
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -20,7 +21,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 import memory as memory_module  # noqa: E402
 
 FRONT = "---\nowner: opus\n---\n"
-ONE_NOTE = "- 一條原則 (#1, 2026-10-19, worker@opus)\n"
+# #148(D-055 ①):1 條要放滿 3 天才觸發,所以這一條的日期固定是 3 天前
+ONE_NOTE = "- 一條原則 (#1, %s, worker@opus)\n" % (date.today() - timedelta(days=3)).isoformat()
 
 
 class MemoryCheck(Sandbox):
@@ -51,8 +53,8 @@ class MemoryCheck(Sandbox):
         self.assertEqual(self.kinds(), [])
         self.assertFalse(self.exists("tickets/1.json"))
 
-    def test_one_note_emits_pending_and_opens_one_consolidation_ticket(self):
-        """**變異**:把觸發改回 `entries > 20` → 這一條紅。"""
+    def test_one_old_note_emits_pending_and_opens_one_consolidation_ticket(self):
+        """1 條放滿 3 天觸發。**變異**:把觸發改回 `entries > 20` → 這一條紅。"""
         self.note("opus", "短的\n")
         self.inbox("opus")
         done = self.memory("check")
@@ -458,14 +460,15 @@ class TheProjectSideIsWhatGetsWatched(Sandbox):
     def memory(self, *args):
         return self.run_py("scripts/memory.py", *args)
 
-    def test_one_note_opens_a_ticket_the_project_can_actually_write(self):
+    def test_five_notes_open_a_ticket_the_project_can_actually_write(self):
         self.write(os.path.join("memory", "role", "implementer.md"), "短短一句。\n")
-        done = self.memory("note", "role", "implementer", "第 1 條原則", "--ticket", "28",
-                           "--by", "worker@opus")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        for number in range(1, 6):
+            done = self.memory("note", "role", "implementer", "第 %d 條原則" % number,
+                               "--ticket", "28", "--by", "worker@opus")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         done = self.memory("check")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertIn("memory: memory/role/implementer.md 6 字元 / 暫存區 1 條未整理\n", done.stdout)
+        self.assertIn("memory: memory/role/implementer.md 6 字元 / 暫存區 5 條未整理\n", done.stdout)
         opened = [one for one in self.tickets_on_disk()
                   if one.get("role") == "consolidator"]
         self.assertEqual(len(opened), 1, opened)
