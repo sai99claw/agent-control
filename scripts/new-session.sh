@@ -419,15 +419,15 @@ else
     say "2–3. 略過:事件流與開票清單是主線的全域交接,$ROLE 不讀(docs/SESSION-START.md)"
 fi
 
-# 記憶的上限:D-006 要求每個 session 開頭量一次。**退出碼 1 不停工** ——
-# 它只是讓這個 session 知道自己的記憶該整理了(docs/MEMORY.md 第 1 點)。
+# 記憶的暫存區:D-053 ⑥ 有未整理的條目就整理,每個 session 開頭量一次。**退出碼 1 不停工** ——
+# 它只是讓這個 session 知道有暫存區待整理(docs/MEMORY.md 第 1 點)。
 # 整理票只由主線開(#76):短命角色量的是同一份記憶,各開一張就是同一件事派好幾次。
-say "4. 記憶有沒有超過上限(D-006)"
+say "4. 記憶暫存區有沒有待整理(D-053 ⑥)"
 if [ "$ROLE" = "main" ]; then
-    sh -c "python3 \"$AC/memory.py\" check" || echo "new-session: (超過上限,不停工;整理票已經開了)"
+    sh -c "python3 \"$AC/memory.py\" check" || echo "new-session: (有待整理的暫存區,不停工;整理票已開或沿用)"
 else
     sh -c "python3 \"$AC/memory.py\" check --read-only" \
-        || echo "new-session: (超過上限,不停工;整理票由主線開場開,$ROLE 不開)"
+        || echo "new-session: (有待整理的暫存區,不停工;整理票由主線開場開,$ROLE 不開)"
 fi
 # 整理票自動起角色表的整理者(#122,原 #87 A41 的兩模型):只有主線開場叫,短命角色不叫 ——
 # 同一張票被每個開場各起一次,就是同一件事派好幾次。每張 role=consolidator、Ready、沒有有效租約的票叫一次

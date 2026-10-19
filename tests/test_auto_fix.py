@@ -3363,17 +3363,20 @@ class TheFirstRoundBaseFollowsMain(AutoFixBase):
 
 
 # #87 A9–A13:agent 在副本裡跑會寫看板的三支入口 + 自己的閘門,再照 `FIRST_ROUND_PAIR`
-# 交件。每個角色把自己收到的 `AC_*` 與四支的輸出寫進 @OUT@/<角色>/。超過上限的模型卡放在
-# 副本裡、量完就刪(留著它會變成 patch 的一部分);`rules.py pack` 在控制根上找不到規則來源
+# 交件。每個角色把自己收到的 `AC_*` 與四支的輸出寫進 @OUT@/<角色>/。帶一條 note 的暫存區
+# 放在 agent 的 `memory.py check` 真的會讀的地方 —— `$AC_ROOT`(拋棄式控制根;放在副本的
+# `memory/` 它看不到,斷言就是空的,#134 A9),量完就刪;`rules.py pack` 在控制根上找不到規則來源
 # —— 那是刻意的:它失敗時要送一頁 decision,而那一頁不准落在主 repo。
 AGENT_PROBES = """out="@OUT@/$AC_ROLE"
 mkdir -p "$out"
 env | grep '^AC_' > "$out/env.txt" || true
 (
     cd "$AC_WORK/work"
-    python3 -c "print('探' * 3000)" > memory/model/huge-probe.md
+    mkdir -p "$AC_ROOT/memory/model"
+    echo '- 探針的一條 (#1, 2026-10-19, worker@opus)' > "$AC_ROOT/memory/model/huge-probe.inbox.md"
     python3 scripts/memory.py check > "$out/memory.txt" 2>&1
-    rm -f memory/model/huge-probe.md
+    python3 scripts/event.py tail 50 > "$out/events.txt" 2>&1
+    rm -f "$AC_ROOT/memory/model/huge-probe.inbox.md"
     python3 scripts/ticket.py create --subject 外洩探針 --objective 探針 --acceptance 探針 \\
         --allowed-write-path src/probe.txt --role worker --model opus --tool claude-code \\
         > "$out/ticket.txt" 2>&1
@@ -3437,9 +3440,13 @@ class TheAgentRunsAgainstAThrowawayControlRoot(AutoFixBase):
     def under_main(self, value):
         return any(value == main or value.startswith(main + os.sep) for main in self.mains)
 
-    def assert_the_board_is_untouched(self, tickets_before, pages_before):
+    def assert_the_board_is_untouched(self, tickets_before, pages_before, role="worker"):
+        # 下面「主 repo 沒有 memory.pending」要有對象:探針的 check 真的看到那一條、真的發了(#134 A9)。
+        self.assertIn("memory/model/huge-probe.md 0 字元 / 暫存區 1 條未整理",
+                      self.probe(role, "memory.txt"))
+        self.assertIn("memory.pending", self.probe(role, "events.txt"))
         kinds = self.kinds()
-        self.assertNotIn("memory.over_cap", kinds, "agent 的記憶檢查寫進了主 repo 的事件")
+        self.assertNotIn("memory.pending", kinds, "agent 的記憶檢查寫進了主 repo 的事件")
         self.assertNotIn("ticket.created", kinds, "agent 開的票寫進了主 repo 的事件")
         self.assertEqual(len(self.tickets_on_disk()), tickets_before, "主 repo 多了票")
         self.assertEqual(self.inbox_pages(), pages_before, "主 repo 的收件匣多了頁")
@@ -3502,7 +3509,7 @@ class TheAgentRunsAgainstAThrowawayControlRoot(AutoFixBase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertTrue(os.path.exists(os.path.join(self.out, "verifier", "ticket.txt")),
                         "驗證者的探針沒跑:" + done.stdout + done.stderr)
-        self.assert_the_board_is_untouched(tickets_before, pages_before)
+        self.assert_the_board_is_untouched(tickets_before, pages_before, "verifier")
         self.assert_the_copy_gate_read_the_ticket("verifier")
         self.assert_the_agent_env("verifier")
         self.assert_the_agent_env("worker")

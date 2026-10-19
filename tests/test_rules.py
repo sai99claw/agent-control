@@ -556,7 +556,7 @@ class TheSyncHeaderIsNotContent(RulesBase):
 
     `sync-to-project.sh` 在專案端每張卡的第 1 行寫 `<!-- 由 agent-control … 同步產生 -->`,
     front matter 因此從第 2 行開始 —— `units()` 只在第 1 行是 `---` 時剝 front matter,
-    於是專案端卡的第一個單位是那行註解、第二個是 cap_history;worker 包的角色卡格只剩註解。
+    於是專案端卡的第一個單位是那行註解、第二個是 front matter 的第一格;worker 包的角色卡格只剩註解。
 
     **變異**:把 `units()` 裡跳過開頭註解行的那個 `while` 拿掉 → 這一組兩條都紅。
     """
@@ -565,8 +565,8 @@ class TheSyncHeaderIsNotContent(RulesBase):
                               "models_dir": os.path.join("docs", "roles", "model")}}
     HEADER = ("<!-- 由 agent-control deadbeef 的 memory/role/implementer.md 同步產生;"
               "請到 agent-control 改,不要改這一份 -->\n")
-    FRONT = ("---\ncap_chars: 2700\ncap_history:\n"
-             "  - {date: 2026-09-30, from: 2400, to: 2700, ticket: \"#99\"}\n---\n")
+    FRONT = ("---\nowner: implementer\nhistory:\n"
+             "  - {date: 2026-09-30, ticket: \"#99\"}\n---\n")
     ROLE_FIRST = "SYNC-ROLE-1 角色卡正文的第一句。"
     ROLE_SECOND = "SYNC-ROLE-2 角色卡正文的第二句。"
     MODEL_FIRST = "SYNC-MODEL-1 模型卡正文的第一句。"
@@ -585,7 +585,7 @@ class TheSyncHeaderIsNotContent(RulesBase):
         self.assertEqual(found[0], self.ROLE_FIRST, found)
         for one in found:
             self.assertNotIn("<!--", one, found)
-            self.assertNotIn("cap_chars", one, found)
+            self.assertNotIn("owner:", one, found)
 
     def test_a_project_pack_starts_each_card_at_its_first_sentence(self):
         """A2:專案形狀的根(roles_dir=docs/roles),角色卡與模型卡都帶同步檔頭。"""
@@ -600,7 +600,7 @@ class TheSyncHeaderIsNotContent(RulesBase):
         self.assertEqual(built["problems"], [], built["problems"])
         text = built["text"]
         self.assertNotIn("<!--", text)
-        self.assertNotIn("cap_history", text)
+        self.assertNotIn("history:", text)
         cells = dict((one["item"], one) for one in built["stats"]["sections"])
         for item, heading, first in (
                 ("角色卡", "## 角色卡 `docs/roles/implementer.md`\n", self.ROLE_FIRST),

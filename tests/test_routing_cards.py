@@ -35,10 +35,9 @@ class EveryRoutingValueHasACard(unittest.TestCase):
         self.assertEqual(missing, [], "路由表指到沒有卡的模型:\n" + "\n".join(missing))
 
     def test_the_gemini_card_is_the_pinned_one(self):
-        """票面釘死的內容:front matter `cap_chars: 2000`、正文一行用途。"""
+        """票面釘死的內容:正文一行用途(#134 拿掉 front matter 的 cap_chars)。"""
         text = open(os.path.join(ROOT, "memory", "model", "gemini-3.8-flash-high.md"),
                     encoding="utf-8").read()
-        self.assertIn("cap_chars: 2000", text.split("---")[1])
         self.assertIn("用於 routing.second_opinion / discuss", text)
 
 

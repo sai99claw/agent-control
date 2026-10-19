@@ -138,7 +138,7 @@
         "tests/test_memory_lifecycle.py",
         "tests/test_memory_note_names.py"
       ],
-      "summary": "記憶分層:note / harvest / check / consolidate / lint,上限守衛與整理票"
+      "summary": "記憶分層:note / harvest / check / consolidate / lint,暫存區整理票"
     },
     "repo-map": {
       "cards": [],

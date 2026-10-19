@@ -1,20 +1,22 @@
-"""#76 超標與過期記憶:唯讀檢查不留痕、恰好一張整理票、整理成功前不消耗原文。
+"""#76 待整理與過期記憶:唯讀檢查不留痕、恰好一張整理票、整理成功前不消耗原文。
+
+#134(D-053 ⑥):觸發從「超過上限」換成「暫存區有一條未整理」,夾具跟著換;其餘契約不變。
 
 ## 驗收表(票面每一條一列;期望值來源獨立於被測程式:票面原話 / 手算)
-A1 | unit | 超標沙盒跑 check --read-only、check-stale --read-only | rc 1;tickets/ events memory/ reports/ 逐位元組不變 | 票面 A1 原話
+A1 | unit | 待整理沙盒跑 check --read-only、check-stale --read-only | rc 1;tickets/ events memory/ reports/ 逐位元組不變 | 票面 A1 原話
 A2 | unit | 票 #1 Done #2 Cancelled #3 Ready,inbox 七行             | 七行分類依序、rc 1/0;別的票庫的 #3 不算   | 票面 A2 原話
-A3 | unit | 開著的 consolidator 票 glob `memory/role/*.md`          | 不開新票、印票號;Cancelled 後開 1 張;併發 1 張 | 票面 A3 原話
-A4 | unit | 只有 worker.inbox.md 21 行;只因 needs-review           | subject 行數形、needs_verifier false;subject 含 needs-review | 票面 A4 原話
-A5 | unit | consolidate 七種不合格輸入                              | rc 非 0、stderr 非空、什麼都沒動            | 票面 A5 原話
+A3 | unit | 開著的 consolidator 票 glob `memory/role/*.md`          | 不開新票、印票號;Cancelled / Done 後開 1 張;併發 1 張 | 票面 A3 原話
+A4 | unit | 只有 worker.inbox.md 21 行;一條 needs-review;只有長度 | subject 條數形、needs_verifier false;只有長度不開票 | 票面 A4 原話;#134 A2
+A5 | unit | consolidate 七種不合格輸入(#134:超上限那種換成錯層候選)                             | rc 非 0、stderr 非空、什麼都沒動            | 票面 A5 原話
 A6 | unit | snapshot → 兩份討論 → note 第 4 條 → consolidate        | 主檔=候選、inbox 只剩第 4 條、consumed=前 3 行 | 票面 A6 原話;sha256 用 hashlib 手算
-A7 | unit | new-session worker / main 在超標沙盒                    | worker 不開票且不停工;main 開 1 張          | 票面 A7 原話
+A7 | unit | new-session worker / main 在待整理沙盒                  | worker 不開票且不停工;main 開 1 張          | 票面 A7 原話
 A8 | unit | 讀 scripts/gate.sh 與 tests/test_memory.py              | 對照格有 test_memory_lifecycle;舊案例改用 --candidate | 票面 A8 原話
 
 ## 介面字串(每條斷言靠哪個字串;全部抄自票面)
-OVER_LINE  = "memory/model/opus.md **2500 / 2000 超過**"   ← A1
+PENDING    = "memory: memory/role/worker.md 0 字元 / 暫存區 21 條未整理"   ← A1(#134 check_line)
 STALE_LINE = "memory: <inbox>:<行號> <分類> <來源>"          ← A2(逐行 assertEqual)
 ALREADY    = "已經有一張開著的整理票 #<票號>"               ← A3
-INBOX_SUBJ = "inbox 21 行,上限 20 行"                       ← A4
+INBOX_SUBJ = "整理 memory/role/worker.md(暫存區 21 條未整理)"   ← A4(#134 consolidation_ticket)
 SNAPSHOT   = "source_lines: K" / "source_sha256: <hex>"      ← A5 A6
 GOES_ON    = "不停工"                                         ← A7
 
@@ -40,13 +42,13 @@ from control_harness import ROOT, Sandbox  # noqa: E402
 
 TAGS = ["memory-lifecycle"]
 
-OVER_LINE = "memory/model/opus.md **2500 / 2000 超過**"
+PENDING = "memory: memory/role/worker.md 0 字元 / 暫存區 21 條未整理"
 ALREADY = "已經有一張開著的整理票 #%s"
-INBOX_SUBJ = "inbox 21 行,上限 20 行"
+INBOX_SUBJ = "整理 memory/role/worker.md(暫存區 21 條未整理)"
 GOES_ON = "不停工"
-FRONT = "---\ncap_chars: 2000\ncap_history: []\n---\n"
-BOTH_LAYERS = {"memory": {"unit": "chars", "cap_chars": 2000, "consolidator": "fable",
-                          "raise_allowed": True,
+FRONT = "---\nowner: opus\n---\n"
+ONE_NOTE = "- 一條原則 (#1, 2026-10-19, worker@opus)\n"
+BOTH_LAYERS = {"memory": {"consolidator": "fable",
                           "applies_to": ["memory/model/*.md", "memory/role/*.md"],
                           "inbox_suffix": ".inbox.md"}}
 
@@ -128,14 +130,14 @@ class A1ReadOnlyLeavesNoTrace(Lifecycle):
         after = self.world()
         self.assertEqual(check.returncode, 1, check.stdout + check.stderr)
         self.assertEqual(stale.returncode, 1, stale.stdout + stale.stderr)
-        self.assertIn(OVER_LINE, check.stdout)
+        self.assertIn(PENDING + "\n", check.stdout)
         self.assertNotIn(os.path.join("memory", ".lock"), after["memory"],
                          "唯讀指令留下了 memory/.lock")
         for key in ("tickets", "events", "memory", "reports"):
             self.assertEqual(before[key], after[key], "唯讀指令動了 %s" % key)
         full = self.memory("check")
-        mine = [line for line in check.stdout.splitlines() if OVER_LINE in line]
-        theirs = [line for line in full.stdout.splitlines() if OVER_LINE in line]
+        mine = [line for line in check.stdout.splitlines() if PENDING in line]
+        theirs = [line for line in full.stdout.splitlines() if PENDING in line]
         self.assertEqual(mine, theirs, "check --read-only 與 check 印的不是同一行")
 
 
@@ -198,7 +200,8 @@ class A3OneConsolidationTicket(Lifecycle):
 
     def setUp(self):
         super().setUp()
-        self.write("memory/role/opener.md", "規矩" * 1250)
+        self.write("memory/role/opener.md", "規矩" * 15)
+        self.write("memory/role/opener.inbox.md", ONE_NOTE)
 
     def test_a3_a_glob_scoped_open_ticket_covers_the_card(self):
         """A3 開著的 Draft 整理票 glob 蓋住 → 不開;改 Cancelled → 開 1 張。"""
@@ -213,6 +216,17 @@ class A3OneConsolidationTicket(Lifecycle):
                          allowed_write_paths=["memory/role/*.md"])
         done = self.memory("check")
         self.assertEqual(len(self.new_tickets(before)), 1, done.stdout + done.stderr)
+
+    def test_a3_after_the_covering_ticket_is_done_the_next_check_opens_one(self):
+        """#134 A3:那張票 Done 之後、暫存區仍有條目 → 下一次 check 開 1 張。"""
+        self.make_ticket(7, state="Done", role="consolidator",
+                         allowed_write_paths=["memory/role/*.md"])
+        before = self.ticket_ids()
+        done = self.memory("check")
+        opened = self.new_tickets(before)
+        self.assertEqual([one["subject"] for one in opened],
+                         ["整理 memory/role/opener.md(暫存區 1 條未整理)"],
+                         done.stdout + done.stderr)
 
     def test_a3_any_open_ticket_covering_the_card_blocks_a_new_one(self):
         """#87 A38:開著、allowed_write_paths(glob)蓋住這份檔的**任何 role** 的票都擋;
@@ -247,8 +261,8 @@ class A3OneConsolidationTicket(Lifecycle):
 
 class A4TicketContents(Lifecycle):
 
-    def test_a4_an_inbox_over_its_lines_opens_a_lines_shaped_ticket(self):
-        """A4 主卡不存在、inbox 21 行 → 1 張;subject 行數形;needs_verifier 是 false。"""
+    def test_a4_an_inbox_of_twenty_one_opens_a_count_shaped_ticket(self):
+        """A4 主卡不存在、inbox 21 行 → 1 張;subject 條數形;needs_verifier 是 false。"""
         self.write("memory/role/worker.inbox.md",
                    "".join(self.entry("第 %d 條" % i, "") for i in range(21)))
         before = self.ticket_ids()
@@ -256,31 +270,31 @@ class A4TicketContents(Lifecycle):
         opened = self.new_tickets(before)
         self.assertEqual(len(opened), 1, done.stdout + done.stderr)
         row = opened[0]
-        self.assertIn(INBOX_SUBJ, row["subject"])
+        self.assertEqual(row["subject"], INBOX_SUBJ)
         self.assertNotIn("字元", row["subject"])
         self.assertIn("memory/role/worker.md", row["allowed_write_paths"])
         self.assertIn("memory/role/worker.inbox.md", row["allowed_write_paths"])
         self.assertIs(row.get("needs_verifier"), False)
 
-    def test_a4_needs_review_alone_opens_one_ticket(self):
-        """A4 只因 needs-review(未超標)也開 1 張,subject 含 needs-review。"""
+    def test_a4_one_note_from_a_closed_ticket_opens_one_ticket(self):
+        """A4 一條來源已結案的 note 也開 1 張(needs-review 被「有任一條」涵蓋)。"""
         self.make_ticket(1, state="Done")
         self.write("memory/role/reviewer.md", "短短一句。\n")
         self.write("memory/role/reviewer.inbox.md", self.entry("來源已結案", "#1"))
         before = self.ticket_ids()
         done = self.memory("check")
         opened = self.new_tickets(before)
-        self.assertEqual(len(opened), 1, done.stdout + done.stderr)
-        self.assertIn("needs-review", opened[0]["subject"])
+        self.assertEqual([one["subject"] for one in opened],
+                         ["整理 memory/role/reviewer.md(暫存區 1 條未整理)"],
+                         done.stdout + done.stderr)
 
-    def test_a4_a_chars_over_subject_keeps_its_shape(self):
-        """A4 字元超標的 subject 維持 `整理 <檔>(N 字元,上限 M)`。"""
+    def test_a4_length_alone_opens_nothing(self):
+        """#134 A2:主檔 2500 字元、沒有 inbox → 不開票、rc 0。"""
         self.write("memory/model/opus.md", "坑" * 2500)
         before = self.ticket_ids()
         done = self.memory("check")
-        opened = self.new_tickets(before)
-        self.assertEqual(len(opened), 1, done.stdout + done.stderr)
-        self.assertIn("整理 memory/model/opus.md(2500 字元,上限 2000)", opened[0]["subject"])
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.new_tickets(before), [], done.stdout + done.stderr)
 
 
 class Consolidation(Lifecycle):
@@ -327,8 +341,9 @@ class A5RefusalsTouchNothing(Consolidation):
                                        "--discussion", self.talk("d/a.md", "fable", 2, sha),
                                        "--discussion", self.talk("d/b.md", "opus", 2, sha,
                                                                  verdicts={1: "保留"})],
-            "candidate-over-cap": lambda sha: [
-                "--candidate", self.write("candidates/big.md", "坑" * 2500) and "candidates/big.md",
+            "candidate-wrong-layer": lambda sha: [
+                "--candidate", self.write("candidates/bad.md", "- 改 scripts/x.py 那一行\n")
+                and "candidates/bad.md",
                 "--discussion", self.talk("d/a.md", "fable", 2, sha),
                 "--discussion", self.talk("d/b.md", "opus", 2, sha)],
             "no-conclusion": lambda sha: ["--candidate", self.CANDIDATE,
@@ -404,14 +419,17 @@ class A7OnlyTheMainLineOpens(Lifecycle):
     def setUp(self):
         super().setUp()
         self.write("memory/model/opus.md", "坑" * 2500)
+        self.write("memory/model/opus.inbox.md", ONE_NOTE)
 
     def test_a7_a_worker_goes_on_and_opens_nothing(self):
-        """A7 worker 開場:rc 0、印不停工、tickets/ 不多票。"""
+        """A7 worker 開場:rc 0、印不停工、tickets/ 不多票、沒有 memory.pending。"""
         before = self.ticket_ids()
         done = self.run_sh("scripts/new-session.sh", "worker", "opus")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("4. 記憶暫存區有沒有待整理(D-053 ⑥)", done.stdout)
         self.assertIn(GOES_ON, done.stdout)
         self.assertEqual(self.ticket_ids(), before, "短命角色開了票")
+        self.assertNotIn("memory.pending", self.kinds())
 
     def test_a7_the_main_line_opens_one(self):
         """A7 main 開場 → 開 1 張整理票。"""
@@ -439,8 +457,9 @@ class A8GateAndOldCases(unittest.TestCase):
         text = self.source("tests/test_memory.py")
         for name in ("test_the_inbox_is_merged_in_and_then_gone",
                      "test_a_note_during_consolidation_lands_in_a_new_inbox",
-                     "test_still_over_the_cap_after_consolidating_is_not_reported_as_done",
-                     "test_a_reasoned_raise_is_written_into_the_file_with_its_history"):
+                     # #134:釘上限的兩條換成「長候選照收」與「舊旗標不認得」,同樣走 --candidate。
+                     "test_a_long_candidate_is_taken_and_the_event_carries_no_cap",
+                     "test_the_old_cap_flags_are_unknown_and_touch_nothing"):
             with self.subTest(case=name):
                 found = re.search(r"    def %s\(.*?(?=\n    def |\nclass |\Z)" % name,
                                   text, re.DOTALL)

@@ -37,7 +37,7 @@
 
 ## memory
 
-記憶分層:note / harvest / check / consolidate / lint,上限守衛與整理票
+記憶分層:note / harvest / check / consolidate / lint,暫存區整理票
 
 - 入口:[`scripts/memory.py`](../scripts/memory.py)
 - 主守衛:[`tests/test_memory.py`](../tests/test_memory.py)

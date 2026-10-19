@@ -57,7 +57,7 @@ class ConsolidateBase(Sandbox):
         self.install_rules_sources()
         self.calls = os.path.join(self.home, "session-calls.log")
         self.stdin = os.path.join(self.home, "session-stdin.log")
-        self.write("memory/model/opus.md", "---\ncap_chars: 2000\n---\n" + "舊" * 2100)
+        self.write("memory/model/opus.md", "---\nowner: opus\n---\n" + "舊" * 2100)
 
     def body(self, mode):
         return SESSION.replace("@CALLS@", self.calls).replace("@STDIN@", self.stdin) \
@@ -127,6 +127,18 @@ class OneLeaseOneFable(ConsolidateBase):
         self.assertEqual(len(warned), 1, "舊設定與表衝突卻不說:" + done.stderr)
         self.assertIn("衝突", warned[0])
         self.assertIsNone(self.load_ticket("7").get("lease"), "回來之後租約沒清")
+
+    def test_the_dispatch_gives_the_criterion_and_no_length_target(self):
+        """#134 A7:填好的派工文(規則包前言 + 範本)帶判準一句,沒有字數目標。
+        **變異**:範本拿掉判準句,或 fill 留著 `<N>` / `<cap>` → 這一條紅。"""
+        self.arm()
+        done = self.launch()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        with open(self.stdin, encoding="utf-8") as handle:
+            fed = handle.read()
+        self.assertIn("只留值得這個成本的", fed.split("# 派工文範本", 1)[1])
+        for word in ("提高上限", "超過上限", "cap_history", "<cap>", "<N>"):
+            self.assertNotIn(word, fed)
 
     def test_a1_running_twice_in_a_row_starts_one(self):
         self.arm()

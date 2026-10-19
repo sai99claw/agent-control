@@ -1,8 +1,3 @@
----
-cap_chars: 2700
-cap_history:
-  - {date: 2026-09-27, from: 2000, to: 2700, by: fable, discussion: discussions/2026-09-27-memory-fable.md, reason: "多讀的 ~640 字元是「副本環境」與「測試與 patch 的寫法」兩段:#44(AC_* 寫回主 repo)、#26(背景跑 patch 沒生出來)、#29(gate.log 進 patch、變異存活)、#13(自動合併靜默掉行)、#40(base 長 __pycache__)各因缺一條多跑一輪,一輪重跑是整份上下文重送,遠大於每票多讀 ≤700 字元(推論;沒量過一輪 auto-fix 的 token)"}
----
 # 實作者(短命 session,沙盒副本;派哪個模型是派工者的事)
 
 **開場只讀這張卡 + 票**(派工文前言的規則包已帶);其他要查的用 grep 定位、讀那幾行。

@@ -64,8 +64,8 @@ KINDS = (
     "review.pass", "review.fail", "review.missing", "review.refused", "review.stale",
     # 終態叫醒主線(D-015):一則事件 + `reports/inbox/` 一頁。主線不輪詢 status。
     "inbox.posted",
-    # 記憶:量到超過上限、整理完成(docs/MEMORY.md「容量與整理」,D-006)。
-    "memory.over_cap", "memory.consolidated", "memory.noted",
+    # 記憶:暫存區有未整理條目、整理完成、記一條(docs/MEMORY.md「整理」,D-053 ⑥)。
+    "memory.pending", "memory.consolidated", "memory.noted",
     # 主線越界守衛(#63,guard-main.sh):擋了一次、放行一次越界。blocked 是分母 ——
     # 只記 override 的話,遵循度算不出來。
     "main.blocked", "main.override",

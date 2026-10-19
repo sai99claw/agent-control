@@ -182,7 +182,7 @@ map() {
         # 所以動它要連看板一起跑 —— 少了 test_board,「metrics 壞了」會在看板那一側
         # 靜悄悄地變成三欄空白。
         scripts/metrics.py) add test_metrics test_board ;;
-        # 記憶檔既受上限守衛管(test_memory),也在「不准出現專案名」那一掃裡。
+        # 記憶檔既受整理守衛管(test_memory),也在「不准出現專案名」那一掃裡。
         # routing 每個值都要有卡(#87):刪一張卡就是動那一條守衛。
         memory/model/*.md) add test_memory test_no_project_names test_routing_cards ;;
         memory/role/*.md) add test_memory test_sync_to_project test_no_project_names ;;
@@ -489,8 +489,8 @@ for args in (("diff", "--name-only", "%s...HEAD" % main), ("diff", "--name-only"
 print("\n".join(seen))
 MEM_PY
 )
-    # `--base`(D-042,#90 A7/A8):只 lint 這條分支**新增**的行(既有正文的命中歸整理票),
-    # 並量本分支有沒有讓卡從上限內推到上限外 —— 比法在 memory.py,這裡只分兩種印。
+    # `--base`(D-042,#90 A7/A8):只 lint 這條分支**新增**的行(既有正文的命中歸整理票);
+    # 卡多長不量(D-053 ⑥)—— 比法在 memory.py。
     if [ -n "$MEM_CHANGED" ] && [ -f "$ROOT/scripts/memory.py" ]; then
         set --
         for f in $MEM_CHANGED; do set -- "$@" --file "$f"; done
@@ -500,12 +500,7 @@ MEM_PY
         mem_rc=$?
         cat "$MEM_ERR" >&2
         if [ "$mem_rc" -ne 0 ]; then
-            if grep -v '^memory: cap ' "$MEM_ERR" | grep -q . || ! grep -q '^memory: cap ' "$MEM_ERR"; then
-                mech "分支改到的記憶檔有錯層內容(上面 memory: lint 那幾行:檔、行、rule、建議去處)"
-            fi
-            if grep -q '^memory: cap ' "$MEM_ERR"; then
-                mech "本分支讓記憶卡超上限(上面 memory: cap 那幾行:檔 改前 -> 改後 / 上限);刪減或整理到上限內,不是提高上限"
-            fi
+            mech "分支改到的記憶檔有錯層內容(上面 memory: lint 那幾行:檔、行、rule、建議去處)"
         fi
     fi
     [ -s "$MECH_LOG" ] && MECH_NOTE=$(cat "$MECH_LOG")

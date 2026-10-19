@@ -33,7 +33,7 @@
       "cards": ["code-map/cards/land-sh.md"]
     },
     "memory": {
-      "summary": "記憶分層:note / harvest / check / consolidate / lint,上限守衛與整理票",
+      "summary": "記憶分層:note / harvest / check / consolidate / lint,暫存區整理票",
       "match": ["memory"],
       "entry": "scripts/memory.py",
       "guard": "tests/test_memory.py",
