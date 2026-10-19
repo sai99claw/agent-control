@@ -1,0 +1,52 @@
+{
+  "id": "149",
+  "subject": "worker 鏈第一格加雲端候選 claude-cloud(`claude --cloud`):雲端在 GitHub 副本的 t<n> 分支 commit 並推回,腳本 fetch 後照 #144 分支流程跑閘門 / 落地;第一步是真雲端可行性 spike",
+  "created": "2026-10-20T10:00:00+08:00",
+  "feature": "派工:雲端 worker",
+  "objective": "使用者原話(2026-10-20):「claude --cloud 還有很多額度 你看接下來worker 能不能先派到這邊」。主線裁:做,排在 #144 之後 —— 雲端 worker 在 GitHub 副本上工作、把自己的分支推回去,正好是 #144 的交件形狀(分支有新 commit = 交件);現在的 patch 交件接不上雲端。agent-control 的 origin 是 GitHub(git@github.com:sai99claw/agent-control.git),land 會 push main(land.sh:197),開票時 origin/main == main。\n本票只動 worker(驗證者、覆核者、開題者的鏈不動):\n(0) 第一步 = 可行性 spike(見 acceptance 1),spike 不通就停在那裡回報,不做 (1)–(5)。\n(1) `board/role-models.json` 的 roles.worker 在現有兩格前面加一格:`{\"model\": \"cloud:opus\", \"tool\": \"claude-cloud\", \"effort\": <spike 證實 --effort 能配 --cloud 才填 \"high\",否則 null>, \"effort_escalated\": null, \"dispatch_cap\": 1}`。命名照既有慣例:tool 名一格、model 帶同名前綴(`codex:` ⇔ codex、`agy:` ⇔ agy;這裡 `cloud:` ⇔ claude-cloud),role-models.py candidate_problems 與 ticket.py agent_command 的前綴配對表、EFFORT_LEVELS 各加一列(EFFORT_LEVELS 只在 ticket.py 一處)。worker_simple 鏈不動。\n(2) 派工(auto-fix 起 worker,單票流程;批次 #145 不在本票):選到 claude-cloud 時,腳本(不是 worker、不是開題者)在起雲端之前做:`git fetch origin`;確認 `base_sha` 是 origin/main 的祖先、`git cat-file -e origin/main:tickets/<n>.json` 成立(票檔的規格部分由開題者 docs 通道落地時 land.sh 推上去;state / attempt 等執行期欄位不用推,派工文本來就帶「權威票面快照」);再 `git push origin t<n>`(#144 建好的票分支,推的是腳本)。任一不成立 → 這一格此刻不能用,照「CLI 不在 PATH」同一手(pick_worker 的迴圈)換下一個候選並在 stderr 點名原因;腳本不替人 push main。然後在 #144 的票分支 worktree 為 cwd 起 `claude --cloud <派工文>`(雲端 clone 的是 cwd 的 GitHub remote 的目前分支 —— 文件原話「clones your current directory's GitHub remote at your current branch, not your local checkout, so push first」),取 `--output-format json` 的 `{ok, session_id, url}`。派工文要求雲端在 t<n> 上 commit 並 `git push origin t<n>`,不碰 main、不動別的分支(#144 §1 新規則原文)。\n(3) 收件:完成訊號到(機制見 acceptance 1 與 outline 待裁題 1)→ 腳本 `git fetch origin t<n>`,本機 t<n> 快轉到 origin/t<n>(不能快轉 = 沒交,走 #144 既有處置);之後完全照 #144:分支相對派工前有新 commit 且工作樹乾淨 → 同一個 worktree 跑閘門;沒有新 commit → 既有「沒交」。EVIDENCE:雲端把 `EVIDENCE-round<r>.md` 放在哪、腳本怎麼搬到 #144 的輪次目錄,由 spike 結果定案寫進 EVIDENCE(建議:雲端在 commit 之外另推一個 ref 會動到別的分支、違反規則,所以 EVIDENCE 走 session 最後一則訊息或 teleport 取回,不進分支)。\n(4) cost:每次雲端派工一列,經 `ticket.py cost` 寫(唯一寫的人照舊),role=worker、model=實際起的 cloud:opus、session_id=雲端 session id、wall_seconds=腳本量的起到完成訊號的秒數、outcome 照登記表;拿不到 token 就四欄 null(不是 0),note 記「claude-cloud 不提供 token」;看板照既有對 null 的慣例顯示「未知」(VISION「看板與統計」:拿不到的數字顯示「未知」,不顯示 0)。不新增 outcome 字、不新增事件類型。\n(5) fallback:沿用 #121 / #132 的分類,判讀只由 `role-models.py classify`:`claude` 不在 PATH(rc 127)、`--cloud` 回的錯誤信封或 ok=false 帶額度 / 不可用字樣 → 這一次 cost outcome=error、note 記原因,換鏈上下一格(sol → opus)同一輪重起;認證錯誤停下不換;一般失敗、逾時、沒交件不換;整串耗盡照舊 Blocked + 一頁、rc 7。spike 拿到的真錯誤樣子才寫進 classify,沒拿到的不猜字。\nD-053 ④:改善 VISION「目的與成功指標」的「每張落地票的 token 與時間」(把 worker 的消耗移到使用者說還有很多的雲端額度,本機 sol / opus 額度留給驗證者、開題者;本機不跑 worker 也少一份記憶體壓力)與「一次就過的比例」不變為前提。代價照實寫:雲端那幾列 token 是「未知」,這個指標在雲端票上看不到 token,只看得到時間。本票不新增任何關卡:「已推上 origin」不是新的擋,是候選可不可用的判斷(不成立就換下一格,票照派),與「CLI 不在 PATH」同一手。",
+  "acceptance": [
+    "可行性 spike(worker 先做、真雲端、只做這一件):從 t<n> 的 worktree 起一個雲端 session,只要求它在 t<n> 加一行註解並 `git push origin t<n>`;EVIDENCE 記錄:實際下的命令與 `--output-format json` 回的 session_id / url、雲端推上去的 commit sha、本機 `git fetch origin t<n>` 後 `git rev-parse origin/t<n>` 等於那個 sha、完成訊號實際用的機制與它在 session 結束後多久到、雲端能不能推到名字是 t<n> 的分支(還是只能推 `claude/…`)、`--model` / `--effort` 能不能配 `--cloud`、40KB 量級的派工文能不能當 description 送進去、拿不拿得到 token。任一項不通(權限、push、fetch、完成訊號)→ 停在這裡、票轉 Blocked owner main、EVIDENCE 寫哪一步不通與原文錯誤;spike 那個註解 commit 不落地(spike 完 reset 分支到派工前的頭,連 origin/t<n> 一起還原)",
+    "表(worker 寫進既有 tests/test_role_models.py,改 INITIAL_ROLES 與 InitialTable,不新開案例檔):`python3 scripts/role-models.py check` rc 0;`resolve --role worker` 第一格是 model=cloud:opus、tool=claude-cloud,第二、三格是原本的 sol、opus 且值不變;其他角色的鏈逐格不變(期望值寫死在測試檔:本票 objective (1) + D-049 ② 原值);model 帶 `cloud:` 前綴而 tool 不是 claude-cloud(或反過來)→ check 不合",
+    "派工與收件(驗證者寫,斷言接在既有 verify/dispatch/test_ticket_121.py 檔尾、標籤沿用 role-dispatch,不新開以票號命名的檔、不新增標籤;沙盒 + PATH 前面放假 `claude` 腳本模擬 `--cloud`,假 origin 用本機 bare repo,不起真雲端):假雲端在 bare origin 的 t<n> 推一個 commit 後發完成訊號 → 輪後本機 t<n> 的頭 = bare origin 的 t<n> 頭、閘門在 #144 的同一個 worktree 跑、票 cost[] 多一列 role=worker、model=cloud:opus、tokens_in / tokens_out 為 null(不是 0)、session_id = 假腳本印的 id;起假 `claude --cloud` 那一刻 bare origin 已有 t<n> 且 origin/main 有 tickets/<n>.json;假雲端沒推新 commit → 走 #144 的「沒交」處置、本機分支頭不變",
+    "fallback(驗證者寫在同一支 verify/dispatch/test_ticket_121.py):假 `claude --cloud` 回額度錯誤信封、或 PATH 上沒有 claude、或派工前 base_sha 不在 bare origin 的 main 上 → 這一格不起或記一列 outcome=error(note 有原因),同一輪改起鏈上下一格(假 codex sol),票不 Blocked;假雲端回認證錯誤 → 停下、不換候選(照 #121 既有斷言的形狀);一般非零退出不換候選",
+    "既有全套綠:`sh scripts/gate.sh --branch --ticket 149` 綠;釘住舊 worker 鏈的既有案例(tests/test_role_models.py InitialTable、ExplicitTicketCandidate 的鏈尾斷言)改掉,不留假綠、不寫死 stdout 字串、不加併發斷言"
+  ],
+  "depends_on": [
+    {
+      "id": "144",
+      "condition": "落地(worker 在自己的 worktree / 分支 commit、腳本只檢查分支 —— 雲端交件就是這個形狀)"
+    }
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "a65de78de397ce570f0c8b37734496ce1a16831a",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "complexity": "complex",
+  "needs_verifier": true,
+  "interface_fixed": false,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "objections": [],
+  "decision_refs": [
+    "D-049",
+    "D-053",
+    "D-054",
+    "D-055",
+    "D-056",
+    "D-057"
+  ],
+  "verify_strings": [
+    "board/role-models.json:claude-cloud"
+  ],
+  "test_plan": "期望值來源:使用者 2026-10-20 原話、本票 objective (1)–(5)、D-049 ② 原值、Claude Code 文件(https://code.claude.com/docs/en/claude-code-on-the-web.md:--cloud 建 session 後立即返回、clone cwd 的 GitHub remote 目前分支、push first、算進方案額度)、spike 的實測紀錄;不從被測程式算。\nworker:spike(acceptance 1,真雲端,結果寫 EVIDENCE)→ tests/test_role_models.py 改 INITIAL_ROLES(worker 鏈前加 cand(\"cloud:opus\", \"claude-cloud\", <spike 定的 effort>, None, 1))、candidate_problems 的 `cloud:` 配對案例接在 InitialTable 既有 agy 配對案例旁;ticket.py agent-command 對 tool=claude-cloud 組出的命令含 `--cloud` 與 `--output-format json` 的斷言接進既有 tests/test_ticket.py(或 test_auto_fix_agy.py 的 AgyInvocationAndCost 同形狀處,擇一既有模組)。\n驗證者(needs_verifier=true、interface_fixed=false:命令形狀與完成訊號要等 spike 定案,worker 交出第一輪之後才起):斷言接在既有 verify/dispatch/test_ticket_121.py 檔尾,標籤沿用 role-dispatch;夾具 tests/control_harness.Sandbox + 本機 bare repo 當 origin + PATH 前置假 `claude`(認得 `--cloud`:往 bare origin 的 t<n> 推一個 commit、印 `{\"ok\":true,\"session_id\":\"fake-cloud-1\",\"url\":\"…\"}`、再用 spike 定案的完成訊號機制發一次訊號;另有額度錯、認證錯、不推 commit 三種變體)。真 auto-fix.sh 子行程,不起模型、不起真雲端。\n變異(未實測):M1 worker 鏈拿掉 cloud 格 → tests/test_role_models.py InitialTable 紅;M2 收件不 fetch(本機 t<n> 不前進)→ 派工與收件案例「頭 = bare origin 頭」紅;M3 classify 把一般非零退出也當額度 → fallback 案例「一般失敗不換」紅。\n查過的 oracle:tests/test_role_models.py(INITIAL_ROLES 寫死 worker 兩格,InitialTable 會紅,要改)、verify/dispatch/test_ticket_121.py / 131.py(fallback 與 agy 的既有形狀)、tests/test_cost_ledger.py(cost 一列 15 鍵,null 不是 0)。",
+  "outline": "摘要:使用者說雲端額度多,worker 先派雲端。雲端只能看到 GitHub 上的檔、交的是推回 origin 的分支 —— 這正是 #144 的交件形狀,所以排 #144 後。順序:spike(不通就停)→ 表與配對表 → 派工前推 t<n> 與檢查票檔在 origin → 起 --cloud → 完成訊號 → fetch + 快轉 → #144 閘門 → cost null → fallback。\n待裁題(交主線,每題附建議):\n1. 完成訊號(不准輪詢)。查過:`claude --help`(2.1.302)與文件 —— `--cloud` 建 session 後立即返回(只回 session_id / url),文件沒有阻塞等待、webhook、雲端 hook、雲端 token 的說明;`claude agents/attach/logs` 管的是本機 --bg session。建議由 spike 依序試、用第一個通的:(a) `claude --cloud <session_id>`(attach)或 `claude -p … --cloud <id> --output-format json` 是否阻塞到 session 結束 —— 若是,就跟本機 worker 一樣等行程結束,不算輪詢;(b) 雲端最後一步 `git push origin t<n>` 觸發的 GitHub push 事件,本機用 `gh webhook forward --events=push`(gh 擴充、事件推送)收;它是常駐收件程式,性質上屬 #120 Controller,做不做請主線裁;(c) 兩者都不通 → spike 停、交使用者選「接受低頻 `git ls-remote` 檢查(這就是輪詢)」或「票先凍結」。\n2. VISION「已經裁示過的原則」表寫的是 worker「sol→opus」(D-049 ②,使用者原話)。把雲端放第一格改了那條的順序;建議主線把 2026-10-20 原話記進 DECISIONS 新一條,VISION 那一格由使用者回寫(D-053 ①:只有使用者能改)。這不擋開工。\n3. 雲端的 token 拿不到 → 每張雲端票的 token 指標是「未知」。建議接受(VISION 允許未知),spike 若發現 session 頁或 API 有數字再開後續票,不在本票繞路。\n會跟著動的檔(grep 過):board/role-models.json、scripts/role-models.py(CODEX_PREFIX / AGY_PREFIX 配對 :47-49、:113)、scripts/ticket.py(AGY_PREFIX / AGY_COMMAND / EFFORT_LEVELS :1789-1798、agent_command 配對 :1828)、scripts/auto-fix.sh(pick_worker / use_worker :943-1000 的 codex|agy CLI 檢查迴圈、with_envelope :192-209、cost 寫入、round_once 收件)、tests/test_role_models.py(INITIAL_ROLES :29)、verify/dispatch/test_ticket_121.py。\nneeds_verifier=true:新派工路徑、驗證者案例(假雲端 + bare origin)不是重演 worker 的表測試;interface_fixed=false:命令與完成訊號等 spike 定。complexity=complex、model=opus:跨 GitHub、真雲端 spike、改派工主路。\n不在本票:驗證者 / 覆核者 / 開題者的鏈;批次路徑(#145);T 專案;Controller(#120);改 VISION。"
+}
