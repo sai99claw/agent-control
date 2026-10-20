@@ -103,6 +103,21 @@ class NewSession(Sandbox):
                           if one.get("role") == "consolidator"],
                          ["整理 memory/model/opus.md(暫存區 1 條未整理)"])
 
+    def test_a_cloud_copy_of_the_main_line_does_not_open_the_ticket(self):
+        """CLAUDE_CODE_REMOTE=true(雲端 session 的官方變數)時,主線開場的第 4 段走唯讀:
+        不開整理票、不發 memory.pending,其餘(session.start)照常(#150,D-057 ②)。
+
+        **變異**:拿掉 new-session.sh 第 4 段那個 CLAUDE_CODE_REMOTE 條件 → 這一條紅。
+        """
+        self.write("memory/model/opus.inbox.md", OLD_NOTE)
+        done = self.run_sh("scripts/new-session.sh", "main", "fable",
+                           env=self.env(CLAUDE_CODE_REMOTE="true"))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual([one for one in self.tickets_on_disk()
+                          if one.get("role") == "consolidator"], [])
+        self.assertNotIn("memory.pending", self.kinds())
+        self.assertIn("session.start", self.kinds())
+
     def test_missing_arguments_is_a_usage_error_and_emits_nothing(self):
         done = self.start("main")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
