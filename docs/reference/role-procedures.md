@@ -54,7 +54,7 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 
 ### 測試怎麼叫
 - 只准跑的測試:正文在 `docs/DISPATCH-TEMPLATE.md` §1(派工文「## 只准跑的測試」段由 `auto-fix.sh` 逐字抄票的 `test_plan`)。
-- 票閘門對照表挑到的那一組(`scripts/gate.sh`):副本裡沒有 `.git`,`--branch` 是空閘門;要用就用檔名形式叫,且只在 `test_plan` 列了才跑。
+- 票閘門對照表挑到的那一組(`scripts/gate.sh --branch --ticket <n>`):在自己的 worktree 裡量得到分支;只在 `test_plan` 列了才跑。
 - 負載下重跑(**只在票的 `test_plan` 列了才做**):`nice -n 19` + 4 支 `yes`,記 PID 只 kill 自己的,
   新案例跑 3 次;窗口要蓋得住負載下受測那一包的 parse/exec,前提不成立要大聲紅(#642,比照 #639)。
 - 全套(**只在票的 `test_plan` 明列全套時才跑**;#70 實測 878 條、單 `test_auto_fix` 270s):逐模組分批前景跑、每批 <590s,
@@ -62,14 +62,16 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 - 擷取測試輸出只看 `^Ran |^OK|^FAILED|^(FAIL|ERROR):`;前景跑、給 `timeout`(不准輪詢的正文在 `docs/DISPATCH-TEMPLATE.md` §3)。
 
 ### 交付物的形狀
-- `patch.diff`:在副本根 `diff -ruN base work > patch.diff`,檔頭只准 `base/…` / `work/…` 的相對形式;
-  絕對路徑檔頭 **`apply.sh` 會拒**(D-015 1;以前 `patch -p1` 會把檔案建到 `work/private/…`,#25 #26 #28)。驗證者的 `patch-verify.diff` 同一條。
-- `EVIDENCE.md` 五段:① patch sha256;② 測試指令、`Ran N`、rc;③ 變異表(編號 / 替換 count / 目標斷言 /
+- 票分支上的 commit(D-054 Q9,#144):cwd 是派工前建好的票分支 worktree,改完自己 `git add` / `git commit`
+  (訊息帶 `t<票號>`);交件 = 分支相對派工前多了至少一個 commit 而且工作樹乾淨,沒 commit 的不算(腳本不替你 commit)。
+  不碰 main、不 push、不 merge / rebase 進 main、不動別的分支、不 worktree add / remove(越界守衛 rc 8)。
+- `EVIDENCE-round<r>.md` 寫在派工文給的輪次目錄(worktree 外,不 commit)。五段:① 分支頭 sha 與
+  `git diff --stat <base_sha>..HEAD`;② 測試指令、`Ran N`、rc;③ 變異表(編號 / 替換 count / 目標斷言 /
   紅訊息首行 / 還原後 sha256);
   ④ 已排除的假設;⑤ 最小重現。`result` 塊的欄位見 `docs/DISPATCH-TEMPLATE.md` §8.5(#20 驗收⑦)。
 - 不寫 `verify/**`(驗證者的,同名檔落地會打架,#630)。
-- 紅了被重派時先讀 `reports/t<票號>/<run_id>/status.json`(票 + `repair_context` + 紅榜)。
-- 回報裡 patch 的路徑寫相對副本根的(例 `patch-round1.diff`),不寫家目錄絕對路徑。
+- 紅了被重派時先讀 `reports/t<票號>/<run_id>/status.json`(票 + `repair_context` + 紅榜);前幾輪的改動是分支上的 commit。
+- 回報寫票分支名與分支頭 sha,不寫家目錄絕對路徑。
 
 ### 反駁(objection)的形狀
 - 寫進票的 `objections[]` 一筆:`category`、`body`、`evidence`、`owner`;阻擋就 `blocking: true`。
@@ -78,21 +80,17 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 - OBJECTION 行會被原文抄進 `tickets/<n>.json`;`ticket.py objection` 收件時把家目錄前綴換成 `~`(#91 C4),
   專案名不換 —— `test_no_project_names` 會掃,兩種都不要寫(#53)。
 
-### 副本環境
-- auto-fix 派的 `AC_ROOT` 指 `<副本根>/control` 這個**拋棄式控制根**(`AC_TICKETS_DIR` / `AC_CONTROL_DIR` 已拿掉;
-  `docs/SESSION-START.md` Worker 那一節):副本裡跑 `scripts/*`(含 `memory.py check`)量到、寫到的是那個空控制根 ——
-  票、事件、記憶檢查都落在那裡,隨副本收掉。要量副本自己的檔就 `AC_ROOT=$PWD`(work 根);重現對不上紅榜先 `env | grep ^AC_`(#7)。
-  手派時派工的人若自帶主 repo 的 `AC_ROOT`,寫的才是主線(事件行收不回,#44、#59、#71)。
+### worktree 環境
+- auto-fix 派的 `AC_ROOT` 指輪次目錄 `<worktree_dir>/fix-t<n>/round<r>/control` 這個**拋棄式控制根**(`AC_TICKETS_DIR` /
+  `AC_CONTROL_DIR` 已拿掉;`docs/SESSION-START.md` Worker 那一節):worktree 裡跑 `scripts/*`(含 `memory.py check`)
+  量到、寫到的是那個空控制根 —— 票、事件、記憶檢查都落在那裡。要量 worktree 自己的檔就 `AC_ROOT=$PWD`;
+  重現對不上紅榜先 `env | grep ^AC_`(#7)。手派時派工的人若自帶主 repo 的 `AC_ROOT`,寫的才是主線(事件行收不回,#44、#59、#71)。
 - 測試子行程呼叫本樹腳本讀「真文件」時要傳 `env AC_ROOT=ROOT`:腳本經 `event.repo_root()` 吃環境裡的
-  `AC_ROOT`,不釘就讀錯樹,副本裡的變異驗不紅、案例假綠(#71)。
-- 會發事件的腳本(連 `memory.py check`)在 `base/` 或 `work/` 跑都會新建 `board/events.jsonl`:
-  要跑就在 base 的暫存拷貝裡跑,交件前拿 `git archive` 對 base 做一次 `diff -r`(#53)。
-- 副本無 `.git`:靠 `git ls-files` 的測試必紅(`test_no_project_names` 掃到 0 個檔、
-  `test_the_scan_sees_something_at_all` 必紅,其餘是空掃描 —— 改動檔要自己 grep 那四個字樣,#89)。
-  那幾個測試在 `cp -R work` + `git init` 的複本跑,用 base 複本同條對照證明紅來自環境(#28/#49)。
-- base 一字不動:對照那趟加 `PYTHONDONTWRITEBYTECODE=1` 或跑完刪 `__pycache__`(#40);
-  交付前 `diff -rq base work | grep '^Only in work'`(`gate.log`、`*.env-suspect.json` 會被 `diff -ruN`
-  收進 patch,#29)。交完刪掉自己的 `work/` 與 `base/`,只留 patch 與 EVIDENCE。
+  `AC_ROOT`,不釘就讀錯樹,變異驗不紅、案例假綠(#71)。
+- 會發事件的腳本(連 `memory.py check`)在 worktree 跑會新建 `board/events.jsonl`(.gitignore 掉的不會進 commit);
+  commit 前 `git status --short` 看一次,`gate.log`、`*.env-suspect.json` 這類執行產物不要 commit 進去(#29、#53)。
+- 對照組是 `base_sha`:對照那趟在 `git worktree` 以外的暫存拷貝(`git archive <base_sha>`)跑,加
+  `PYTHONDONTWRITEBYTECODE=1` 或跑完刪 `__pycache__`(#40)。
 - 對真實專案根實跑 `new-session.sh` / session-hook 前,先把專案與它的 board 資料(`tickets_dir`、
   `events_file`、`reports_dir` 可能在根外)複製到 TMPDIR 再跑:`memory.py check` 在 `--no-event` 下仍會
   emit `memory.pending`、還可能開整理票進專案票庫(#62)。
@@ -100,10 +98,10 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
   `memory/role/*.md` 加進去,否則 check 不列那份主檔的字元數(有 inbox 的主檔仍會列、仍會觸發,#76)。
 - 給 `control_harness` 的 `DEFAULT_CONFIG` 加預設值前先 grep `verify/` 與 `tests/` 有沒有靠「沒設就退回」的案例(#70)。
 
-### 測試與 patch 的寫法(細節)
+### 測試與交件的寫法(細節)
 - sh 腳本裡 `$var` 後面緊接全形字(。、,)時 bash 會把 UTF-8 位元組吃進變數名,`set -u` 下變成
   unbound variable;新增的變數一律寫成 `${var}`(#57)。
-- 同一輪被重派、副本已重展:先從上一次的 worker log 抽出逐字 replace(assert count==1)腳本重放,
+- 同一輪被重派、worktree 已重建:先從上一次的 worker log 抽出逐字 replace(assert count==1)腳本重放,
   再用 AST 方法數 / 斷言數 / 逐檔 diffstat 對上一次 EVIDENCE 證明重放一致(#72)。
 - 移植舊 patch 到新 base:逐檔 `patch`、讀 `.rej` 手解,並以 `diff <舊 work> <新 work>` 反向核對上游 delta(#13)。
 
@@ -121,9 +119,10 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 - **驗證者只跑自己的案例與 `verify-case.py red`**;`check`(乾淨主線紅、candidate 綠)是閘門 `gate.sh` 叫的、`ticket.py close` 只認那一趟,
   不是驗證者跑的(D-020;F1)。交付物 `verify-case.py extract`。
 - `EVIDENCE-verifier.md` 檔尾 `result` 區塊。
-- 收件(#29 A5;auto-fix 跑,人手派時由派工的人跑):`sh scripts/apply.sh <票號> <patch> <patch-verify> --evidence-verifier EVIDENCE-verifier.md`,
+- 收件(#29 A5;auto-fix 跑,人手派時由派工的人跑):`sh scripts/apply.sh <票號> <patch-verify> --evidence-verifier EVIDENCE-verifier.md`
+  (在票分支上補一個 commit),
   抽成 `reports/t<票號>/<run_id>/result-verifier-round<輪>.json`(看板 `/t/<票號>` 畫的就是那一份)。
-- `patch-verify`:在 `$W` 裡 `diff -ruN base work`;檔頭規矩同實作者「交付物的形狀」那一條(`apply.sh` 會拒)。
+- `patch-verify`:在 `$W` 裡 `diff -ruN base work`;檔頭只准 `base/…` / `work/…` 的相對形式(`apply.sh` 以 `git apply -p1 --check` 套不上就 rc 3)。
 - 案例檔由驗證者獨占:實作者交的同名檔落地時以驗證者的為準,票的 `verify.files` 記驗證者那份(#630)。
 
 ### 誰派、何時起

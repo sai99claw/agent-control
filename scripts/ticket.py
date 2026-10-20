@@ -1142,7 +1142,7 @@ DIFF_HUNK = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
 
 
 def added_lines(text):
-    """unified diff(`diff -ruN base work` 或 `git diff`)→ `{檔: [新增行]}`。檔名去掉第一層
+    """unified diff(批次的 `base/` `work/` 兩層 patch 或 `git diff`)→ `{檔: [新增行]}`。檔名去掉第一層
     (`work/`、`b/`,同 `-p1`);刪檔(`+++ /dev/null`)不列。照 hunk 的行數走,內文裡以
     `+++ ` / `--- ` 開頭的行不會被當成檔頭。"""
     out, name, old, new = {}, None, 0, 0

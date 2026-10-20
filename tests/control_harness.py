@@ -228,6 +228,21 @@ EOF
                cache_read=218504, duration_ms=35590)
 
 
+def files_of(diff_text):
+    """新增檔的 `diff -ruN` 夾具 → {相對路徑: 新內容}(#144:worker 交件改成票分支上的 commit,
+    舊夾具的 patch 文字照用,只把它換成要 commit 的檔)。只收整檔新增的那一種形狀。"""
+    files, name = {}, None
+    for line in diff_text.splitlines():
+        if line.startswith("+++ "):
+            name = line[4:].split("\t")[0].strip().split("/", 1)[1]
+            files[name] = []
+        elif line.startswith("@@") or line.startswith("--- ") or line.startswith("diff "):
+            continue
+        elif name is not None and line.startswith("+"):
+            files[name].append(line[1:])
+    return {name: "\n".join(lines) + "\n" for name, lines in files.items()}
+
+
 def write_executable(path, body):
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(body)
@@ -436,6 +451,29 @@ class Sandbox(unittest.TestCase):
         「忘了 commit」那一種正是東西躺在 worktree 裡。"""
         path = os.path.join(self.home, "wt", branch)
         self.git("worktree", "add", "-q", "-b", branch, path, "main")
+        return path
+
+    def ticket_branch_commit(self, ident, files, subject=None, branch=None):
+        """worker 交件的形狀(#144,D-054 Q9):票分支的 worktree(`<repo>-wt/<分支>`,auto-fix 派工前
+        建的那一個)上一個 commit。分支 / worktree 還沒有就從 main 開。`files` 是 {相對路徑: 內容},
+        內容 None = 刪檔。回 worktree 路徑。"""
+        branch = branch or "t%s" % ident
+        path = os.path.join(self.home, "repo-wt", branch)
+        if not os.path.exists(os.path.join(path, ".git")):
+            known = subprocess.run(["git", "-C", self.repo, "rev-parse", "-q", "--verify",
+                                    "refs/heads/%s" % branch],
+                                   capture_output=True, env=self.env()).returncode == 0
+            if known:
+                self.git("worktree", "add", "-q", path, branch)
+            else:
+                self.git("worktree", "add", "-q", "-b", branch, path, "main")
+        for rel, text in files.items():
+            if text is None:
+                os.remove(os.path.join(path, rel))
+            else:
+                self.write(rel, text, where=path)
+        self.git("add", "-A", cwd=path)
+        self.git("commit", "-q", "-m", subject or "t%s 交件" % ident, cwd=path)
         return path
 
     def commit_in(self, path, name, subject):

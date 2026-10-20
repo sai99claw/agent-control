@@ -6,7 +6,7 @@
 
 | 情境 | 查 |
 |---|---|
-| 交件:patch 怎麼產、base 不准動、只准跑哪些測試 | §1 |
+| 交件:在自己的 worktree / 分支 commit、只准跑哪些測試 | §1 |
 | 埠、目錄、不准跑的腳本、不准殺行程 | §2 |
 | 判綠:退出碼怎麼拿才是測試自己說的;等背景工作、不准輪詢 | §3 |
 | 瀏覽器引擎、平台、資料庫版本能不能收窄 | §4 |
@@ -55,23 +55,23 @@ python3 scripts/rules.py roles                         # 哪個角色要哪幾�
 
 ---
 
-## 1. 副本 + patch:實作 agent 不碰 git
+## 1. 在自己的 worktree / 分支 commit
 
-兩個目錄:`$W/work`(改這個)與 `$W/base`(**一個字都不准動**,它是 diff 的對照組)。
-展開是派工方的事(`auto-fix.sh` 用 `git archive <base_sha> | tar -x`;流程見 `docs/WORKFLOW.md`),
-所以副本裡沒有 `.git`,想寫也寫不了。交付:
+**worker**(D-054 Q9,VISION 流程 #5「git 由工作者自己處理」):派工方(`auto-fix.sh`)派工前建好
+票分支(`t<n>`,票的 `branch` 欄)的 git worktree `<worktree_dir>/<票分支>`,你的 cwd 就是它;
+閘門在同一個 worktree 跑,落地收的也是這條分支(流程見 `docs/WORKFLOW.md`)。
 
-```sh
-diff -ruN -x node_modules -x __pycache__ -x '*.pyc' base work > patch.diff
-```
+- **在自己的 worktree / 分支 commit**:改完 `git add` / `git commit`(可多個 commit,訊息帶 `t<n>`)。
+- **交件 = 分支相對派工前多了至少一個 commit,而且工作樹乾淨。** 沒 commit 的改動不算交件,
+  腳本不替你 commit;commit 了又留著未 commit 的改動,當作沒交。
+- EVIDENCE 寫在 worktree 外的輪次目錄(派工文給絕對路徑),不進 repo。
+- **不碰 main、不 push、不 merge / rebase 進 main、不動別的分支、不 worktree add / remove**。
+  主 repo 的 HEAD / 分支、`refs/heads` 底下別的分支、`hard_block.dirs` 動了 → `auto-fix.sh` 的越界守衛 rc 8。
+  **為什麼**:進主線只由 `land.sh` 在測試綠後做 —— 落地要決定分支順序、在 land 佇列裡排、處理與
+  別張票的衝突,而你看不到別張票。
 
-檔頭只准 `base/…` / `work/…` 的相對形式 —— 絕對路徑 **`apply.sh` 會拒**(D-015 1)。
-套 patch 只走 `scripts/apply.sh`(它用 `git apply`,D-012),沒有人手工 `patch -p`。
-
-**禁止一切 git 寫入動詞**(`add` / `commit` / `checkout` / `branch` / `worktree` /
-`push` / `stash` / `reset` / `merge` / `rebase` / `tag` / `clean`)。
-**為什麼**:落地要決定分支順序、在 land 佇列裡排、處理與別張票的衝突,而實作 agent 看不到
-別張票;它自己 commit 出來的東西,落地那一側還是得拆開重放一次。
+**驗證者**仍在 `git archive` 展的副本(`work/` 改、`base/` 是對照組)交 `patch-verify.diff`,不 git 寫入
+(規矩在它的角色卡與 `templates/dispatch-verifier.md`);收件時 `apply.sh` 在票分支上替它補一個 commit。
 
 🩸 **base 要對**:派工方 `git archive <ref>` 前先 `git log --oneline -1 <ref>` 對一眼標題 ——
 archive 給的是 commit 的內容,worktree 裡沒 commit 的一個字都不進去,**而且一聲不吭**
@@ -97,7 +97,7 @@ archive 給的是 commit 的內容,worktree 裡沒 commit 的一個字都不進�
 禁區的派工文,跟一份禁區剛好是空的派工文長得一樣。
 
 **沒有寫入範圍;機器會擋的只有一份清單**:`board/config.json` 的 `hard_block`(D-054 Q2、Q3)。`paths`(repo 內 glob:
-裁示文件、發版腳本)動到 → `apply.sh` rc 5、`gate.sh` preflight rc 4、`land.sh` 拒收;`dirs`(repo 外
+裁示文件、發版腳本)動到 → `apply.sh` rc 5(量票分支上的 commit 加 patch-verify)、`gate.sh` preflight rc 4、`land.sh` 拒收;`dirs`(repo 外
 目錄,`~` 展開、相對主 repo 解析)底下的檔被 agent 動到 → `auto-fix.sh` 的越界守衛 rc 8;`patterns`
 (改動內文禁字 regex)**只查 tests/** 與 verify/** 的新增行**,命中同 `paths` 三處擋 —— scripts 自己合法用
 kill,不查。沒設或三格皆空 = 不擋。
@@ -123,7 +123,7 @@ grep -aE "^Ran |^OK|^FAILED" run.log      # 給人看的
 [ "$rc" -eq 0 ] || { echo "紅了,看 run.log"; exit 1; }
 ```
 
-背景跑的一樣中招。副本裡沒有 `.git`,閘門的分支形式是空閘門 —— 不要在副本裡拿它量綠。
+背景跑的一樣中招。驗證者的 `git archive` 副本不是 git 樹,閘門的分支形式在那裡是空閘門 —— 不要在副本裡拿它量綠。
 
 **不准輪詢**(短命角色的唯一正文;主線的在 `CLAUDE.md`「不可違反的」):測試與指令一律**前景跑、
 加 `timeout`**,不用 Monitor、`sleep` 迴圈或反覆看狀態去等背景工作 —— 每看一次就是整份上下文重送一輪
@@ -303,7 +303,8 @@ grep -aE "^Ran |^OK|^FAILED" run.log      # 給人看的
 
 ## 8. 回報格式(派工文要明列)
 
-1. `patch.diff` **相對副本根的路徑**(例 `patch-round1.diff`)+ diffstat。不寫家目錄絕對路徑 ——
+1. 交件在哪:worker 寫票分支名與分支頭 sha + `git diff --stat <base_sha>..HEAD`;驗證者寫 `patch-verify.diff`
+   **相對副本根的路徑** + diffstat。不寫家目錄絕對路徑 ——
    回報與反駁行都會被抄進票與看板(`test_no_project_names` 會擋)。
 2. 做了什麼 —— **寫給不看 code 的人也讀得懂**(那份摘要會被轉給使用者)。
 3. 測試輸出**逐字**(含 `rc=` 與 `Ran … / OK`),skip 的原因**逐字**貼上來。
@@ -316,7 +317,7 @@ grep -aE "^Ran |^OK|^FAILED" run.log      # 給人看的
    `OBJECTION: <ticket-wrong|test_defect|blocking> <一句話>`,收件的那一手(`apply.sh` / `auto-fix.sh`)
    把它記成票的 `objections[]` 一筆(`category` / `body` / `evidence` / `owner`),不要只寫在回報裡 ——
    **沒被收進票的反駁,與沒有反駁長得一樣**。`ticket-wrong` / `blocking` 由 auto-fix 起開題者判;
-   判 accepted / rejected 會把你接回同一個 session 在原副本續做(續做的規矩在實作者角色卡),只有四種情況
+   判 accepted / rejected 會把你接回同一個 session 在原處續做(worker 的 worktree、驗證者的副本;續做的規矩在實作者角色卡),只有四種情況
    才進主線收件匣 —— 流程正文在 `docs/WORKFLOW.md`「實作者的反駁怎麼被收下」。
    案例錯是 `category: test_defect`:**你不准放寬斷言、不准改 oracle**,auto-fix 會派獨立的驗證者修案例。
    反駁行裡的家目錄路徑收件時會換成佔位(#91 C4),仍不要寫。
@@ -328,7 +329,7 @@ grep -aE "^Ran |^OK|^FAILED" run.log      # 給人看的
 ## 8.5 🩸 結構化交付:EVIDENCE 尾端那一塊 `result`
 
 §8 那八點是**寫給人看的**,照舊。同一份檔的**最後**再加一段 `## result`,底下一塊語言標記是 `result`
-的 fenced JSON 物件 —— **寫給機器看的**。`scripts/auto-fix.sh` 在收 patch 的同一手把它抽成
+的 fenced JSON 物件 —— **寫給機器看的**。`scripts/auto-fix.sh` 在收件的同一手把它抽成
 `reports/t<票號>/<run_id>/result-round<輪>.json`(驗證者 `result-verifier-round<輪>.json`),
 與那一輪的 `status.json` 同目錄;**抽取只讀 EVIDENCE,不改它**。看板的 `/t/<票號>` 畫的就是那一份。
 
@@ -343,7 +344,7 @@ grep -aE "^Ran |^OK|^FAILED" run.log      # 給人看的
 | `role` | 字串 | `worker` 或 `verifier` |
 | `round` | 整數 | 第幾輪 |
 | `rc` | 整數 | 你自己跑的那一組測試的退出碼 —— **判綠只看它**(§3) |
-| `patch_sha256` | 字串 | 交出去那份 patch 的 sha256 |
+| `patch_sha256` | 字串 | 交出去那份 patch 的 sha256(驗證者的 patch-verify;worker 交件是分支 commit,留空字串) |
 | `gate` | 物件 | `{cmd, ran, rc}`:指令逐字、`ran` 是 `Ran N` 的 N、`rc` 同上一格 |
 | `mutations` | 陣列 | 一條變異一項 `{id, count, case, red_first_line}`(§5;驗證者留 `[]`) |
 | `objection` | 物件或 `null` | `{category, body}`;`category` 是 `ticket-wrong` / `test_defect` / `blocking` |

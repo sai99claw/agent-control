@@ -84,14 +84,29 @@ class WhatItPacks(RulesBase):
         self.assertNotIn("memory/role/implementer.md", done.stdout)
 
     def test_a_verifier_gets_a_different_cut(self):
-        """驗證者不需要「副本 + patch」那一整節(它交的是案例,不是產品 patch)。"""
+        """驗證者不需要 worker 交件那一整節(§1:它交的是案例,不是分支上的 commit)。"""
         worker = self.rules("pack", "worker", "--model", "opus").stdout
         # #74:指定了卻沒有卡的模型(以前是 sonnet)現在是錯 —— 換一個有卡的。
         verifier = self.rules("pack", "verifier", "--model", "fable").stdout
         self.assertNotEqual(worker, verifier)
-        self.assertIn("副本 + patch", worker)
+        self.assertIn("在自己的 worktree / 分支 commit", worker)
         self.assertTrue(verifier.strip(), "驗證者的包是空的")
-        self.assertNotIn("§1 副本 + patch", verifier)
+        self.assertNotIn("§1 在自己的 worktree", verifier)
+
+    def test_the_worker_pack_says_commit_on_your_own_branch(self):
+        """#144(D-054 Q9、Q12 例外):worker 在自己的 worktree / 分支 commit;規則包還帶著「禁一切 git
+        寫入」的話,worker 會被兩邊矛盾的指令卡住,或乾脆不 commit。期望值 = 票面驗收 4 的片語
+        (`install_rules_sources` 裝的是真的 DISPATCH-TEMPLATE 與角色卡)。驗證者仍交 patch-verify、不 git 寫入。
+        **變異 M3**:§1 留「禁一切 git 寫入」→ 這一條紅。"""
+        worker = self.rules("pack", "worker", "--model", "opus")
+        self.assertEqual(worker.returncode, 0, worker.stdout + worker.stderr)
+        for gone in ("禁一切 git 寫入", "不碰 git", "交 patch", "副本裡沒有 .git", "副本裡沒有 `.git`"):
+            self.assertNotIn(gone, worker.stdout)
+        for said in ("在自己的 worktree / 分支 commit", "不碰 main", "不 push", "不動別的分支"):
+            self.assertIn(said, worker.stdout)
+        verifier = self.rules("pack", "verifier", "--model", "opus")
+        self.assertEqual(verifier.returncode, 0, verifier.stdout + verifier.stderr)
+        self.assertIn("不 git 寫入", verifier.stdout)
 
     def test_the_main_line_does_not_review(self):
         """#91 C5(F33):D-022 之後覆核由 review.sh 派 reviewer,主線那一句不再寫「覆核」。

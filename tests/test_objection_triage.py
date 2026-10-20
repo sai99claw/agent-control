@@ -33,7 +33,8 @@ ACCEPT_REASON = "驗收第二條改照設計文件"
 REJECT_REASON = "驗收第二條與設計文件一致,反駁不成立"
 ESCALATE_REASON = "兩份設計文件互相矛盾,要使用者選一份"
 
-# 假 `claude`:先記一筆(被砍的那一種也留得下),再照劇本演。標記檔不進 patch(`-x`)。
+# 假 `claude`:先記一筆(被砍的那一種也留得下),再照劇本演。驗證者的標記檔不進 patch(`-x`);
+# worker 在票分支的 worktree(cwd)改檔、自己 commit(#144),標記檔放輪次目錄、不進 commit。
 FAKE_CLAUDE = r'''#!/usr/bin/env python3
 import json, os, subprocess, sys, time
 
@@ -75,7 +76,7 @@ rec = {"role": role, "argv": argv, "cwd": os.getcwd(), "stdin": stdin, "resumed"
 if role == "worker":
     with open(os.environ["AC_TEST_LOG"], "a", encoding="utf-8") as handle:
         handle.write("worker ran round %s\n" % r)
-    mark = os.path.join(work, "work", "worker-mark")
+    mark = os.path.join(work, "worker-mark")
     if resumed:
         rec["mark_there"] = os.path.exists(mark)
         mode = plan.get("worker_resume", "fix")
@@ -91,8 +92,8 @@ elif role == "verifier":
         write(mark, "first segment\n")
         mode = "handin"
 else:
-    rec["worker_copy"] = [os.path.isdir(os.path.join(WTBASE, "fix-t1", "round" + r, sub))
-                          for sub in ("work", "base")]
+    rec["worker_copy"] = [os.path.isdir(os.path.join(WTBASE, "t1")),
+                          os.path.isdir(os.path.join(WTBASE, "fix-t1", "round" + r))]
     rec["verifier_copy"] = os.path.isdir(os.path.join(WTBASE, "verify-t1", "round" + r, "work"))
     mode = plan.get("opener", "accept")
 with open(CALLS, "a", encoding="utf-8") as handle:
@@ -108,9 +109,10 @@ if role == "worker":
     elif mode == "sleep":
         time.sleep(60)
     else:
-        write(os.path.join(work, "work", "tests", "test_thing.py"),
+        write(os.path.join(os.getcwd(), "tests", "test_thing.py"),
               THING % ("2" if mode == "red" else "1"))
-        handin("patch-round%s.diff" % r)
+        subprocess.run(["git", "add", "-A"], check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "t1 第 %s 輪" % r], check=False)
         write(evidence, "# 第 %s 輪(%s)\n已排除的假設:沒有\n" % (r, mode))
 elif role == "verifier":
     if mode == "handin":
@@ -301,11 +303,10 @@ class TriageBase(AutoFixBase):
         rows = self.sessions()
         if rows["worker"]["session_id"]:
             self.assertIn(rows["worker"]["session_id"], page)
-        self.assertIn("../repo-wt/fix-t1/round1/work", page)
+        self.assertIn("../repo-wt/t1", page)
         self.assertEqual(ticket["objections"][-1]["disposition"], "")
         self.assertNotIn("triage", ticket["objections"][-1])
-        for sub in ("work", "base"):
-            self.assertTrue(os.path.isdir(os.path.join(self.copy(), sub)), sub)
+        self.assertTrue(os.path.isdir(os.path.join(self.home, "repo-wt", "t1")), "worktree 留著")
         if verifier:
             self.assertTrue(os.path.isdir(os.path.join(self.copy("verify"), "work")))
         self.assertEqual({role: row["state"] for role, row in rows.items()},
@@ -619,8 +620,8 @@ class ClosingAndTimeouts(TriageBase):
         pages = self.inbox_rows()
         self.assertEqual(len(pages), 1, pages)
         self.assertIn("worker 逾時", json.dumps(pages[0], ensure_ascii=False))
-        self.assertTrue(os.path.isdir(os.path.join(self.copy(), "work")))
-        self.assertEqual(len(self.result_files("patch-partial-round1.diff")), 1)
+        self.assertTrue(os.path.isdir(os.path.join(self.home, "repo-wt", "t1")), "worktree 留著")
+        self.assertNotIn("gate.rerun", self.kinds(), "逾時的那一段不收件、不跑閘門")
         self.assertEqual(self.sessions()["worker"]["state"], "open")
 
     def test_a6c_a_resumed_verifier_that_hands_in_nothing_stops_before_the_worker(self):

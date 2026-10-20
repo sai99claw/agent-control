@@ -2,13 +2,15 @@
 
 ## 驗收表(票面每一條一列;期望值來源獨立於被測程式:票面 acceptance 字面 / interface_contracts / 夾具自己寫下的值)
 A1 | cli   | agent-command --model codex:gpt-5.6-sol --tool codex(不給 / high / turbo);claude-code 兩句 | 恰為票面那一句;high 只在 -m 後加 -c 'model_reasoning_effort="high"';turbo rc 2;claude 不變 | 票面 A1 原話;claude 句抄 #114 契約
-A2 | integ | auto-fix 真起假 codex 與假 claude worker,各記 argv / pwd / AC_ROLE / AC_ROOT | --add-dir 恰一次、值 = 副本根(不是主 repo);cwd 兩者都是副本根/work;AC_ROLE=worker;AC_ROOT 同一個隔離位置 | 票面 A2 原話
-A3 | integ | base_sha 上的票寫 OLD objective,權威票庫寫 NEW | 派工文有「權威票面快照」、含 NEW 不含 OLD、明說 work/tickets/1.json 不能推翻;控制根票副本 NEW;work/ 那份 OLD(夾具自證) | 票面 A3 原話
-A4 | integ | worker 在主 repo 新增 / 刪除 / 修改、已髒檔再改、HEAD 前進、切分支、hard_block.dirs 新增 / 刪除 / 改動;驗證者越界;批次 worker 越界 | rc 8、票 Blocked / owner=main、attempt.failed reason=guard-violation、唯一 decision 指出路徑、guard 報告有前後;patch 不套、副本留著 | 票面 A4 原話 + interface_contracts.guard_result
+A2 | integ | auto-fix 真起假 codex 與假 claude worker,各記 argv / pwd / branch / AC_ROLE / AC_ROOT | --add-dir 恰一次、值 = 輪次目錄(不是主 repo);cwd 兩者都是票分支 worktree;branch=t1;AC_ROLE=worker;AC_ROOT 同一個隔離位置 | #144 驗收 1
+A3 | integ | base_sha 上的票寫 OLD objective,權威票庫寫 NEW | 派工文有「權威票面快照」、含 NEW 不含 OLD、明說 worktree 的 tickets/1.json 不能推翻;控制根票副本 NEW;worktree 那份 OLD(夾具自證) | 票面 A3 原話
+A4 | integ | worker 在主 repo 新增 / 刪除 / 修改、已髒檔再改、HEAD 前進、切分支、hard_block.dirs 新增 / 刪除 / 改動;驗證者越界;批次 worker 越界 | rc 8、票 Blocked / owner=main、attempt.failed reason=guard-violation、唯一 decision 指出路徑、guard 報告有前後;票分支與 worktree 留著 | #144 驗收 3
 A5 | integ | 寫 tickets/(控制面)/ board/ 下非控制面檔;hard_block.dirs ["~/g"] / ["../o"];缺 / [] 時寫主 repo 外 | 控制面不擋、board/ 其他檔擋;~ 展開與相對主 repo 都抓;缺 / [] 不抓 repo 外 | 票面 A5 原話
 A6 | integ | 同 stamp land.start + land.pass(sha = 新 HEAD);只有 land.start;pass 的 sha 對不上;合法 land + 多一個檔 | 第一種不擋,其餘三種 rc 8 | 票面 A6 原話
 A7 | integ | 假 codex 回額度信封且越界;只撞額度(表 worker = [codex astra, opus]) | 前者 rc 8、票 Blocked 不改派、reason=guard-violation、頁指出路徑;後者同一次接著起 claude worker、rc 0、票的 model / tool 不改、沒有 guard-violation | 票面 A7;#121 A2 / A4 取代「rc 7、Ready、改 opus」
 A8 | doc   | 讀 docs/ROLES.md、docs/WORKFLOW.md、scripts/ticket.py、scripts/auto-fix.sh;乾跑 codex 票 | 兩份文件有 D-048、rc=8、「待專案同步後冒煙實證」;兩支腳本與乾跑 worker 行沒有 workspace-write | 票面 A8 原話
+A9 | integ | worker commit;只改不 commit;commit 後再留未 commit 改動 | 只有新 commit + 乾淨工作樹算交件;前兩種 rc 5、分支頭不變且未 commit 改動留下;腳本不替 worker commit | #144 驗收 1
+A10 | integ | worker 在自己的 t1 commit;worker `git update-ref` 建立別的分支 | 前者守衛無 violation、同一 worktree 跑 gate、gate.sha=t1 頭且 main 頭不動;後者 rc 8 | #144 驗收 1、3
 
 ## 介面字串(全部出自票面 acceptance / interface_contracts;票面沒定的照 t115 的 patch,EVIDENCE 記一行)
 CODEX_BASE   = "codex exec -m gpt-5.6-sol -s danger-full-access -c 'approval_policy=\"never\"' -C . --skip-git-repo-check -"  ← A1 原話
@@ -62,26 +64,9 @@ WORKER_LINE = "auto-fix: worker 命令 —— "
 CODEX_MODEL = "codex:gpt-6-astra"
 
 # 假 agent:`@WHO@` 那個角色在交件前做 `@STRAY@`(`$REPO` = 主 repo、`$SANDBOX` = 沙盒的家)。
-# worker 交一份會綠的 patch;別的角色什麼都不交。記下 pwd / AC_ROLE / AC_ROOT / stdin / 兩份票。
-FAKE_AGENT = """#!/bin/sh
-set -e
-REPO="@REPO@"
-SANDBOX="@SANDBOX@"
-echo "$AC_ROLE ran round $AC_ROUND" >> "$AC_TEST_LOG"
-emit() { AC_ROOT="$REPO" python3 "$REPO/scripts/event.py" emit "$@" >/dev/null; }
-if [ "$AC_ROLE" = worker ]; then
-    printf '%s\\n%s\\n%s\\n' "$(pwd -P)" "$AC_ROLE" "$AC_ROOT" > "$SANDBOX/agent.where"
-    cat > "$SANDBOX/agent.stdin"
-    cp "$AC_ROOT/tickets/1.json" "$SANDBOX/agent.control-ticket" 2>/dev/null || true
-    cp "$AC_WORK/work/tickets/1.json" "$SANDBOX/agent.work-ticket" 2>/dev/null || true
-fi
-if [ "$AC_ROLE" = "@WHO@" ]; then
-@STRAY@
-fi
-cd "$AC_WORK"
-[ "$AC_ROLE" = worker ] || exit 0
-mkdir -p work/tests
-cat > work/tests/test_thing.py <<'CASE'
+# worker 在派工 cwd 交 commit;別的角色什麼都不交。記下 pwd / branch / AC_ROLE / AC_ROOT / stdin / 兩份票。
+DELIVER_COMMIT = """mkdir -p tests
+cat > tests/test_thing.py <<'CASE'
 import unittest
 
 
@@ -89,8 +74,47 @@ class T(unittest.TestCase):
     def test_thing(self):
         self.assertEqual(1, 1)
 CASE
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
-printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
+git add tests/test_thing.py
+git commit -q -m "worker delivery"
+"""
+
+DELIVER_UNCOMMITTED = DELIVER_COMMIT.replace(
+    'git add tests/test_thing.py\ngit commit -q -m "worker delivery"\n', "")
+
+DELIVER_COMMIT_DIRTY = DELIVER_COMMIT + "printf '\\n# left dirty\\n' >> tests/test_thing.py\n"
+
+FAKE_AGENT = """#!/bin/sh
+set -e
+REPO="@REPO@"
+SANDBOX="@SANDBOX@"
+echo "$AC_ROLE ran round $AC_ROUND" >> "$AC_TEST_LOG"
+emit() { AC_ROOT="$REPO" python3 "$REPO/scripts/event.py" emit "$@" >/dev/null; }
+if [ "$AC_ROLE" = worker ]; then
+    printf '%s\\n%s\\n%s\\n%s\\n' "$(pwd -P)" "$AC_ROLE" "$AC_ROOT" \
+        "$(git symbolic-ref --short HEAD 2>/dev/null || true)" > "$SANDBOX/agent.where"
+    cat > "$SANDBOX/agent.stdin"
+    cp "$AC_ROOT/tickets/1.json" "$SANDBOX/agent.control-ticket" 2>/dev/null || true
+    cp "$(pwd -P)/tickets/1.json" "$SANDBOX/agent.work-ticket" 2>/dev/null || true
+fi
+if [ "$AC_ROLE" = "@WHO@" ]; then
+@STRAY@
+fi
+[ "$AC_ROLE" = worker ] || exit 0
+@DELIVERY@
+EVIDENCE="$SANDBOX/repo-wt/fix-t$AC_TICKET/round$AC_ROUND/EVIDENCE-round$AC_ROUND.md"
+mkdir -p "$(dirname "$EVIDENCE")"
+printf '%s\\n' "$EVIDENCE" > "$SANDBOX/evidence.where"
+sed "s/@R@/$AC_ROUND/g; s/@T@/$AC_TICKET/g" > "$EVIDENCE" <<'EV'
+# 第 @R@ 輪
+已排除的假設:沒有
+
+## result
+
+```result
+{"ticket":"@T@","role":"worker","round":@R@,"rc":0,"patch_sha256":null,
+ "gate":null,"mutations":[],"objection":null,"excluded":[],"repro":null,"memory":[]}
+```
+EV
 """
 
 # 假 codex:argv 一行一格;@MODE@ = deliver / quota / quota-stray。額度是 provider 的錯誤信封(頂層 JSON;
@@ -99,7 +123,8 @@ printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-rou
 FAKE_CODEX = """#!/bin/sh
 SANDBOX="@SANDBOX@"
 printf '%s\\n' "$@" > "$SANDBOX/codex.argv"
-printf '%s\\n%s\\n%s\\n' "$(pwd -P)" "$AC_ROLE" "$AC_ROOT" > "$SANDBOX/codex.where"
+printf '%s\\n%s\\n%s\\n%s\\n' "$(pwd -P)" "$AC_ROLE" "$AC_ROOT" \
+    "$(git symbolic-ref --short HEAD 2>/dev/null || true)" > "$SANDBOX/codex.where"
 cat > "$SANDBOX/codex.stdin"
 echo "codex ran $AC_ROLE round $AC_ROUND" >> "$AC_TEST_LOG"
 case "@MODE@" in
@@ -111,18 +136,20 @@ case "@MODE@" in
         echo '{"type":"turn.failed","error":{"message":"You have hit your usage limit (429)."}}'
         exit 1 ;;
 esac
-cd "$AC_WORK"
-mkdir -p work/tests
-cat > work/tests/test_thing.py <<'CASE'
-import unittest
+@DELIVERY@
+EVIDENCE="$SANDBOX/repo-wt/fix-t$AC_TICKET/round$AC_ROUND/EVIDENCE-round$AC_ROUND.md"
+mkdir -p "$(dirname "$EVIDENCE")"
+sed "s/@R@/$AC_ROUND/g; s/@T@/$AC_TICKET/g" > "$EVIDENCE" <<'EV'
+# 第 @R@ 輪
+已排除的假設:沒有
 
+## result
 
-class T(unittest.TestCase):
-    def test_thing(self):
-        self.assertEqual(1, 1)
-CASE
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
-printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
+```result
+{"ticket":"@T@","role":"worker","round":@R@,"rc":0,"patch_sha256":null,
+ "gate":null,"mutations":[],"objection":null,"excluded":[],"repro":null,"memory":[]}
+```
+EV
 """
 
 # #127 A6:land.pass 多帶落地前的 main(40 位);鍵名拆開寫(當時票面字串比對的是 patch 內文)。
@@ -190,9 +217,17 @@ class GuardBase(CodexBase):
     def copy_root(self, kind="fix"):
         return os.path.realpath(os.path.join(self.home, "repo-wt", "%s-t1" % kind, "round1"))
 
-    def arm(self, stray="true", who="worker", guarded=None, **fields):
+    def ticket_worktree(self):
+        return os.path.realpath(os.path.join(self.home, "repo-wt", "t1"))
+
+    def where(self, name):
+        cwd, role, control, branch = lines_of(os.path.join(self.home, name))
+        return os.path.realpath(cwd), role, os.path.realpath(control), branch
+
+    def arm(self, stray="true", who="worker", guarded=None, delivery=DELIVER_COMMIT, **fields):
         self.set_worker(FAKE_AGENT.replace("@REPO@", self.repo).replace("@SANDBOX@", self.home)
-                        .replace("@WHO@", who).replace("@STRAY@", stray))
+                        .replace("@WHO@", who).replace("@STRAY@", stray)
+                        .replace("@DELIVERY@", delivery))
         if guarded is not None:
             conf = json.loads(self.read("board/config.json"))
             conf["hard_block"] = {"paths": [], "dirs": guarded, "patterns": []}
@@ -203,7 +238,7 @@ class GuardBase(CodexBase):
     def arm_codex(self, mode="deliver", **fields):
         write_executable(os.path.join(self.stub_bin, "codex"),
                          FAKE_CODEX.replace("@SANDBOX@", self.home).replace("@REPO@", self.repo)
-                         .replace("@MODE@", mode))
+                         .replace("@MODE@", mode).replace("@DELIVERY@", DELIVER_COMMIT))
         return self.codex_ticket(**fields)
 
     def failed_reasons(self):
@@ -241,9 +276,9 @@ class GuardBase(CodexBase):
         self.assertEqual(len(pages), 1, pages)  # pin:票面 A4「唯一 decision」
         self.assertIn(path, self.page_text(pages[0]))
         self.assert_evidence(path)
-        self.assertEqual(self.git("branch", "--list", "t1").strip(), "", "越界的 patch 不准套")
-        kind = "verify" if who == "verifier" else "fix"
-        self.assertTrue(os.path.isdir(os.path.join(self.copy_root(kind), "work")), "副本要留著")
+        branch = self.git("branch", "--list", "t1").strip().lstrip("+* ")
+        self.assertEqual(branch, "t1", "票分支要留著")
+        self.assertTrue(os.path.isdir(self.ticket_worktree()), "票 worktree 要留著")
 
     def assert_not_stopped(self, done):
         self.assertNotEqual(done.returncode, GUARD_RC, done.stdout + done.stderr)
@@ -253,11 +288,7 @@ class GuardBase(CodexBase):
 
 
 class CodexStartsWhereClaudeStarts(GuardBase):
-    """A2:真起的 codex 與 claude 同 cwd / AC_ROLE / 隔離 AC_ROOT;codex 多一個交付根。"""
-
-    def where(self, name):
-        cwd, role, control = lines_of(os.path.join(self.home, name))
-        return os.path.realpath(cwd), role, os.path.realpath(control)
+    """A2:真起的 codex 與 claude 同 worktree / branch / AC_ROLE / 隔離 AC_ROOT。"""
 
     def test_a2_codex_gets_the_copy_root_as_add_dir_exactly_once(self):
         """A2 codex argv 裡 `--add-dir` 恰一次,值 = 當輪副本根,不是主 repo;其餘 = 票面那一句。"""
@@ -276,12 +307,11 @@ class CodexStartsWhereClaudeStarts(GuardBase):
                          .replace("'", "").split(), argv)
 
     def test_a2_codex_and_claude_share_cwd_role_and_isolated_root(self):
-        """A2 codex 與 claude worker:cwd 都是副本根/work、AC_ROLE=worker、AC_ROOT 同一個隔離位置。"""
+        """A2 codex 與 claude worker:cwd 都是票分支 worktree、branch=t1、控制根仍隔離。"""
         self.arm_codex()
         done = self.auto_fix("--no-review")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         codex = self.where("codex.where")
-        copy = self.copy_root()
         home = os.path.realpath(self.home)
         repo = os.path.realpath(self.repo)
 
@@ -291,10 +321,11 @@ class CodexStartsWhereClaudeStarts(GuardBase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         claude = self.where("agent.where")
         claude_home = os.path.realpath(self.home)
-        self.assertEqual(codex[0], os.path.join(copy, "work"))
+        self.assertEqual(codex[0], os.path.join(home, "repo-wt", "t1"))
         self.assertEqual(os.path.relpath(codex[0], home), os.path.relpath(claude[0], claude_home))
         self.assertEqual((codex[1], claude[1]), ("worker", "worker"))
         self.assertEqual(os.path.relpath(codex[2], home), os.path.relpath(claude[2], claude_home))
+        self.assertEqual((codex[3], claude[3]), ("t1", "t1"))
         self.assertFalse(codex[2] == repo or codex[2].startswith(repo + os.sep),
                          "AC_ROOT 是隔離的控制根,不是主 repo:%s" % codex[2])
 
@@ -312,8 +343,8 @@ class TheSnapshotComesFromTheLiveStore(GuardBase):
         self.assertIn("OBJ-NEW-from-store", packet)
         self.assertNotIn("OBJ-OLD-from-base", packet)
         said = [line for line in packet.splitlines()
-                if "work/tickets/1.json" in line and "推翻" in line]
-        self.assertTrue(said, "派工文要明說 work/tickets/1.json 不能推翻快照")
+                if "worktree" in line and "tickets/1.json" in line and "推翻" in line]
+        self.assertTrue(said, "派工文要明說 worktree 的 tickets/1.json 不能推翻快照")
         with open(control, encoding="utf-8") as handle:
             self.assertEqual(json.load(handle)["objective"], "OBJ-NEW-from-store")
         with open(work, encoding="utf-8") as handle:
@@ -321,9 +352,10 @@ class TheSnapshotComesFromTheLiveStore(GuardBase):
                              "夾具要讓 work/ 真的是舊版,不然什麼都沒比")
 
     def test_a3_the_claude_worker_sees_the_new_objective(self):
-        """A3 claude worker:派工文「權威票面快照」是 NEW、控制根票是 NEW、work/ 那份是 OLD。"""
+        """A3 claude worker:派工文「權威票面快照」是 NEW、控制根票是 NEW、worktree 那份是 OLD。"""
         self.set_worker(FAKE_AGENT.replace("@REPO@", self.repo).replace("@SANDBOX@", self.home)
-                        .replace("@WHO@", "nobody").replace("@STRAY@", "true"))
+                        .replace("@WHO@", "nobody").replace("@STRAY@", "true")
+                        .replace("@DELIVERY@", DELIVER_COMMIT))
         self.stale_base("OBJ-OLD-from-base", "OBJ-NEW-from-store")
         self.auto_fix("--no-review")
         self.assert_snapshot(self.read("agent.stdin", where=self.home),
@@ -334,7 +366,7 @@ class TheSnapshotComesFromTheLiveStore(GuardBase):
         """A3 codex worker:stdin 的派工文同樣是 NEW、不含 OLD。"""
         write_executable(os.path.join(self.stub_bin, "codex"),
                          FAKE_CODEX.replace("@SANDBOX@", self.home).replace("@REPO@", self.repo)
-                         .replace("@MODE@", "deliver"))
+                         .replace("@MODE@", "deliver").replace("@DELIVERY@", DELIVER_COMMIT))
         self.stale_base("OBJ-OLD-from-base", "OBJ-NEW-from-store", model=CODEX_MODEL, tool="codex")
         self.auto_fix("--no-review")
         packet = self.read("codex.stdin", where=self.home)
@@ -515,7 +547,8 @@ class QuotaDoesNotSwallowAViolation(GuardBase):
         """A7 只撞額度、沒越界 → 同一次接著起表上的 claude worker、rc 0、票的 model / tool 不改、沒有 guard-violation。"""
         self.set_role_models(worker=[fixture_candidate(CODEX_MODEL, "codex"), fixture_candidate()])
         self.set_worker(FAKE_AGENT.replace("@REPO@", self.repo).replace("@SANDBOX@", self.home)
-                        .replace("@WHO@", "worker").replace("@STRAY@", "true"))
+                        .replace("@WHO@", "worker").replace("@STRAY@", "true")
+                        .replace("@DELIVERY@", DELIVER_COMMIT))
         self.arm_codex("quota")
         done = self.auto_fix("--no-review")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -525,6 +558,89 @@ class QuotaDoesNotSwallowAViolation(GuardBase):
         self.assertEqual((row["model"], row["tool"]), (CODEX_MODEL, "codex"))
         self.assertNotIn(REASON, self.failed_reasons())
         self.assertEqual(self.guard_rows(), [])
+
+
+class ACommitOnTheTicketBranchIsTheDelivery(GuardBase):
+    """#144 驗收 1、3:commit + clean 才交件;自己的分支合法,其他 ref 仍越界。"""
+
+    def assert_missing_delivery(self, done):
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        self.assertEqual((row["state"], row.get("owner")), ("Blocked", "main"))
+        self.assertEqual(len(self.decisions()), 1, self.decisions())
+
+    def test_a9_a_clean_commit_is_received_and_gated_in_the_same_worktree(self):
+        """新 commit + clean → 從 EVIDENCE 抽 result、同一 t1 worktree 跑 gate、main 不動。"""
+        self.arm()
+        main_before = self.git("rev-parse", "main").strip()
+
+        done = self.auto_fix("--no-review")
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        worktree = self.ticket_worktree()
+        self.assertTrue(os.path.isdir(worktree), worktree)
+        cwd, role, control, branch = self.where("agent.where")
+        self.assertEqual((cwd, role, branch), (worktree, "worker", "t1"))
+        self.assertFalse(control == os.path.realpath(self.repo)
+                         or control.startswith(os.path.realpath(self.repo) + os.sep))
+        head = self.git("rev-parse", "t1").strip()
+        self.assertGreater(int(self.git("rev-list", "--count", "%s..t1" % main_before)), 0)
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all",
+                                  cwd=worktree), "")
+        self.assertEqual(self.git("rev-parse", "main").strip(), main_before)
+        self.assertEqual(self.guard_rows(), [])
+
+        row = self.load_ticket("1")
+        self.assertEqual((row["gate"]["rc"], row["gate"]["sha"]), (0, head))
+        status = self.status_of("1", "gate")
+        self.assertEqual(os.path.realpath(status["repair_context"]["worktree"]), worktree)
+
+        result = self.result_files("result-round1.json")
+        self.assertEqual(len(result), 1, done.stdout)
+        with open(result[0], encoding="utf-8") as handle:
+            self.assertIs(json.load(handle)["present"], True)
+        expected = os.path.join(self.copy_root(), "EVIDENCE-round1.md")
+        recorded = lines_of(os.path.join(self.home, "evidence.where"))
+        self.assertEqual([os.path.realpath(path) for path in recorded], [expected])
+        self.assertIn(recorded[0], self.read("agent.stdin", where=self.home))
+
+    def test_a9_an_uncommitted_change_is_not_a_delivery_or_auto_committed(self):
+        """只改不 commit → rc 5、t1 頭不變、髒檔留下,腳本沒有代替 worker commit。"""
+        self.arm(delivery=DELIVER_UNCOMMITTED)
+        main_before = self.git("rev-parse", "main").strip()
+
+        done = self.auto_fix("--no-review")
+
+        self.assert_missing_delivery(done)
+        worktree = self.ticket_worktree()
+        self.assertTrue(os.path.isdir(worktree), worktree)
+        self.assertEqual(self.git("rev-parse", "t1").strip(), main_before)
+        dirty = self.git("status", "--porcelain", "--untracked-files=all", cwd=worktree)
+        self.assertIn("tests/test_thing.py", dirty)
+        self.assertEqual(int(self.git("rev-list", "--count", "%s..t1" % main_before)), 0)
+
+    def test_a9_a_commit_plus_an_uncommitted_change_is_not_a_delivery(self):
+        """有新 commit 但工作樹仍髒 → rc 5、commit 與髒檔都留下,理由指出未 commit。"""
+        self.arm(delivery=DELIVER_COMMIT_DIRTY)
+        main_before = self.git("rev-parse", "main").strip()
+
+        done = self.auto_fix("--no-review")
+
+        self.assert_missing_delivery(done)
+        worktree = self.ticket_worktree()
+        self.assertTrue(os.path.isdir(worktree), worktree)
+        self.assertEqual(int(self.git("rev-list", "--count", "%s..t1" % main_before)), 1)
+        self.assertIn("tests/test_thing.py", self.git(
+            "status", "--porcelain", "--untracked-files=all", cwd=worktree))
+        said = done.stdout + done.stderr + "\n" + "\n".join(
+            self.page_text(row) for row in self.decisions())
+        self.assertRegex(said, r"未 commit|工作樹[^\n]*(?:不乾淨|髒)")
+
+    def test_a10_updating_another_branch_ref_is_still_a_guard_violation(self):
+        """worker 在 t1 裡 `git update-ref` 另一分支 → rc 8、t1 分支與 worktree 留著。"""
+        self.arm('git -C "$REPO" update-ref refs/heads/worker-other '
+                 '"$(git -C "$REPO" rev-parse main)"')
+        self.assert_stopped(self.auto_fix("--no-review"), "worker-other")
 
 
 class DocsAndScriptsSayD048(GuardBase):

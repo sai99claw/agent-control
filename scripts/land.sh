@@ -141,7 +141,7 @@ cmd_docs() {   # $1 = commit 訊息  $2… = 檔案(repo 相對路徑)
     if [ -n "$bad" ]; then
         echo "land: docs 通道只收 $DOCS_PREFIXES —— 這幾個不在裡面:" >&2
         for one in $bad; do echo "land:   $one" >&2; done
-        echo "land:   產品碼走一票一分支:sh scripts/apply.sh <票號> <patch>,再 sh scripts/land.sh t<票號>" >&2
+        echo "land:   產品碼走一票一分支:worker 在票分支 commit(sh scripts/auto-fix.sh <票號>),再 sh scripts/land.sh t<票號>" >&2
         exit 2
     fi
     # 開題者(AC_ROLE=opener)只收 `tickets/<AC_TICKET>.json` 一個檔(#91 C6,R4):它的交付
@@ -354,7 +354,7 @@ for b in "$@"; do
         continue
     fi
     # 分支名 `t<票號>-…` 對到票。對不到就停:沒有票的東西不落地(CLAUDE.md)。
-    # `t7` 與 `t7-那張票` 都認:`scripts/apply.sh` 預設開的就是 `t<票號>`,
+    # `t7` 與 `t7-那張票` 都認:`scripts/auto-fix.sh` 預設開的就是 `t<票號>`,
     # 而一條開得出來、land 卻對不到票的分支,是一個只會在最後一步才說話的陷阱。
     #
     # **這一步在數 commit 之前**:拒收也是終態,而終態要寫得出「是哪一張票被退回」。
@@ -504,7 +504,7 @@ VFILES_PY
         echo "land: $b —— 票 #$id 的 verify.files 有幾個不在這條分支上:"
         echo "$out" | sed 's/^/land:   /'
         echo "land:   驗證者的案例沒有跟著進來 —— 票的 tags 會被呼叫、卻一個案例都選不到。"
-        echo "land:   先把 patch-verify 套進這條分支:sh scripts/apply.sh $id <patch> <patch-verify>"
+        echo "land:   先把 patch-verify 套進這條分支:sh scripts/apply.sh $id <patch-verify>"
         STOP=1
         RC_REFUSE=4
         continue

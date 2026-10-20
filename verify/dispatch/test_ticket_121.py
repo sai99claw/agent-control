@@ -62,8 +62,9 @@ ASTRA = "codex:gpt-6-astra"
 COST_KEYS = {"role", "round", "model", "tokens_in", "tokens_out", "cache_write", "cache_read",
              "wall_seconds", "outcome", "run_id", "session_id", "by", "note", "effort", "at"}
 
-GREEN_PATCH = """mkdir -p work/tests
-cat > work/tests/test_thing.py <<'CASE'
+# worker 交件(#144):cwd 是票分支的 worktree($W),改完自己 commit;EVIDENCE 在 $AC_WORK。
+GREEN_PATCH = """mkdir -p "$W"/tests
+cat > "$W"/tests/test_thing.py <<'CASE'
 import unittest
 
 
@@ -71,7 +72,7 @@ class T(unittest.TestCase):
     def test_thing(self):
         self.assertEqual(1, 1)
 CASE
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+(cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
 printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
 """
 
@@ -81,6 +82,7 @@ if [ -f "@PARTIAL@" ]; then seen=partial; else seen=nopartial; fi
 printf 'agent\\t%s\\t%s\\t%s\\n' "$AC_ROLE" "$*" "$seen" >> "@CALLS@"
 cat > "@HOME@/stdin-$AC_ROLE-$AC_ROUND.md"
 [ "$AC_ROLE" = worker ] || exit 0
+W=$PWD
 cd "$AC_WORK"
 """ + GREEN_PATCH
 
@@ -90,8 +92,8 @@ printf 'codex\\t%s\\t%s\\t-\\n' "$AC_ROLE" "$*" >> "@CALLS@"
 cat > /dev/null
 case "@MODE@" in
     quota|quota-stray)
-        mkdir -p "$AC_WORK/work/tests"
-        echo "codex 做到一半" > "$AC_WORK/work/tests/codex_partial.txt"
+        mkdir -p tests
+        echo "codex 做到一半" > tests/codex_partial.txt
         [ "@MODE@" != quota-stray ] || echo stray > "@REPO@/codex-stray.txt"
         echo '{"type":"error","message":"429 Too Many Requests: You have hit your usage limit."}'
         exit 1 ;;
@@ -99,6 +101,7 @@ case "@MODE@" in
         echo "codex: fixture text mentions 429 and rate limit, but it is not a provider envelope"
         exit 1 ;;
 esac
+W=$PWD
 cd "$AC_WORK"
 """ + GREEN_PATCH
 
@@ -106,10 +109,11 @@ cd "$AC_WORK"
 FAKE_CODEX_RED_THEN_GREEN = """#!/bin/sh
 printf 'codex\\t%s\\t%s\\t-\\n' "$AC_ROLE" "$*" >> "@CALLS@"
 cat > /dev/null
+W=$PWD
 cd "$AC_WORK"
 if [ "$AC_ROUND" = 1 ]; then
-    mkdir -p work/tests
-    cat > work/tests/test_thing.py <<'CASE'
+    mkdir -p "$W"/tests
+    cat > "$W"/tests/test_thing.py <<'CASE'
 import unittest
 
 
@@ -117,7 +121,7 @@ class T(unittest.TestCase):
     def test_thing(self):
         self.assertEqual(1, 2, "第一輪是紅的")
 CASE
-    diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+    (cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
     printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
     exit 0
 fi
@@ -180,8 +184,7 @@ class RoleTableBase(AutoFixBase):
     def setUp(self):
         super().setUp()
         self.calls = os.path.join(self.home, "calls.tsv")
-        self.partial = os.path.join(self.home, "repo-wt", "fix-t1", "round1", "work", "tests",
-                                    "codex_partial.txt")
+        self.partial = os.path.join(self.home, "repo-wt", "t1", "tests", "codex_partial.txt")
         target = os.path.join(self.repo, "scripts", "role-models.py")
         if not os.path.exists(target):
             with open(os.path.join(SCRIPTS, "role-models.py"), encoding="utf-8") as src, \

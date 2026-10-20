@@ -26,9 +26,10 @@ python3 scripts/event.py tail 20
 ```
 `ticket.py verify <id>` 看 `close --landed` 蓋的 `landed_sha` 在不在主線歷史裡。
 
-票開好、worker 把 `patch.diff` 交回來之後,**一路到落地都有入口,不必手動套 patch**:
+票開好之後 `sh scripts/auto-fix.sh 1` 起第 1 輪:它開票分支 `t1` 的 worktree,worker 在裡面自己 commit
+(D-054 Q9),**一路到落地都有入口,不必手動合併**:
 ```sh
-sh scripts/apply.sh 1 /path/to/patch.diff          # 套進 t1 分支 + commit(檔頭與 hard_block 先驗過)
+sh scripts/apply.sh 1 --evidence <EVIDENCE>         # 收件:EVIDENCE、反駁;有 patch-verify 就在分支上補 commit
 (cd ../agent-control-wt/t1 && sh scripts/gate.sh --branch --ticket 1 --auto-fix)
                                                     # 閘門;紅了自動派下一輪 worker(三輪上限)
 python3 scripts/inbox.py list                       # 跑完的事在這裡等你(主線不輪詢)
@@ -36,7 +37,6 @@ python3 scripts/ticket.py set 1 review '{"verdict":"pass","by":"main","sha":"<�
 sh scripts/land.sh t1                               # 全套綠才進主線;land 不關票
 python3 scripts/ticket.py close 1
 ```
-主線走遠了先 `sh scripts/apply.sh rebase 1 <patch>` 重生一份乾淨 diff 再套。
 
 上面這兩段是在乾淨 clone 裡真的跑過一遍才寫的(2026-09-12 第一段;2026-09-21 連新入口
 再走一次:new-session → 開票 → apply → gate → inbox → review → land → close,全部走得通)。
@@ -50,7 +50,7 @@ python3 scripts/ticket.py close 1
 | `docs/ROLES.md` | 七種角色的責任、交付物、權限牆、模型路由 | 每個 agent |
 | `docs/WORKFLOW.md` | 票的狀態機、閘門、落地、發版、回歸紅了之後 | 主線與落地 |
 | `docs/SESSION-START.md` | 開新 session 的固定動作(依角色) | 每個 session |
-| `docs/DISPATCH-TEMPLATE.md` | 派工範本:副本+patch、禁區、**假綠家族**、查證規矩 | 派工的人與被派的人 |
+| `docs/DISPATCH-TEMPLATE.md` | 派工範本:worker 在自己的 worktree / 分支 commit、禁區、**假綠家族**、查證規矩 | 派工的人與被派的人 |
 | `docs/MEMORY.md` | 專案共用記憶 vs 模型私有記憶,整理政策(暫存區有未整理條目就整理、不設固定字數上限;判準「每個 session 開場都會讀，只留值得這個成本的」) | 所有人 |
 | `docs/CODE-MAP.md` | 讓 AI 追 code 的方案:模組卡片、驗證於哪個版本、過期偵測 | 讀 code 的人 |
 | `docs/TODO.md` | 還沒做的事與遷移計畫 | 主線 |
@@ -67,11 +67,11 @@ python3 scripts/ticket.py close 1
 |---|---|---|
 | 開票 | `scripts/ticket.py create` | 沒有驗收的票開不出來 |
 | 派工文前言 | `scripts/rules.py pack <角色>` | 整份共用規矩重複載入(各段原文串起來,不設位元組上限) |
-| 套 patch、建分支、commit | `scripts/apply.sh` | 絕對路徑檔頭、只清空不刪檔、命中 `hard_block`、套一半 |
+| 收件(分支上的 commit) | `scripts/auto-fix.sh` 判交件、`scripts/apply.sh` 收 EVIDENCE | 沒 commit 的改動當交件、patch-verify 套一半 |
 | 局部閘門 | `scripts/gate.sh --branch --ticket <n>` | 對不到模組不准印綠;票的 `verify.tags` 真的被呼叫 |
 | 紅了修 | `scripts/auto-fix.sh <n>`(或閘門 `--auto-fix`) | 三輪上限;反駁 / 沒有歸因會停下來報主線 |
 | 主線被叫醒 | `scripts/inbox.py list` | 輪詢(每看一次背景工作 = 整份上下文重送一輪) |
-| 覆核 | `scripts/ticket.py set <n> review …` | 沒有人讀過 patch 的票進主線 |
+| 覆核 | `scripts/ticket.py set <n> review …` | 沒有人讀過分支上 code 的 complex 票進主線 |
 | 落地 | `scripts/land.sh` | 0 commit、基準過期、越界、complex 票缺覆核 pass(只有 complex 做完後覆核,#136)、`verify.files` 沒帶進來、閘門紅 |
 | 關票 | `scripts/ticket.py close <n>` | 改動其實不在主線上的票被關成完成 |
 

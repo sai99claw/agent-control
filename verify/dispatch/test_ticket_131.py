@@ -3,7 +3,7 @@
 ## 驗收表(期望值來源獨立於被測程式:票面 acceptance、E1/E4/E5、既有命令 golden)
 A1  | cli     | agy model/tool 與四種不一致組合 | 逐字命令;不一致 rc=2 且點名兩格 | 票面 A1、E1/E4
 A2  | cli     | 五種 effort、後綴衝突、ultra | 合法值進命令;衝突與非法值 rc=2 | 票面 A2、E5
-A3  | integ   | PATH 前置假 agy 交件 | cwd=work、stdin=0、-p= 絕對派工文、無 add-dir/sandbox | 票面 A3
+A3  | integ   | PATH 前置假 agy 交件 | cwd=票分支 worktree(#144)、stdin=0、-p= 絕對派工文、無 add-dir/sandbox | 票面 A3
 A4  | integ   | 假 agy 在主 repo 寫檔 | rc=8、Blocked、guard-violation、不套 patch | 票面 A4、D-048
 A5  | integ   | PATH 沒有 agy、角色鏈下一格 opus | 不起 agy;只起 opus;無 agy cost | 票面 A5、#121
 A6  | integ   | direct/stream 錯誤信封及 429 實跑 | 三分類正確;429 後起 opus | 票面 A6、E5 原文
@@ -214,6 +214,7 @@ case "${AGY_MODE:-deliver}" in
     stray)
         echo stray > "$AGY_REPO/agy-stray.txt" ;;
 esac
+W=$PWD
 cd "$AC_WORK"
 if [ "$AC_ROLE" = verifier ]; then
     mkdir -p work/verify/dispatch
@@ -257,9 +258,9 @@ CASE
 ```
 EV
 else
-    mkdir -p work/tests
+    mkdir -p "$W"/tests
     if [ "${AGY_REPAIR:-}" = 1 ] && [ "$AC_ROUND" = 1 ]; then want=2; else want=1; fi
-    cat > work/tests/test_thing.py <<CASE
+    cat > "$W"/tests/test_thing.py <<CASE
 import unittest
 
 
@@ -267,7 +268,7 @@ class T(unittest.TestCase):
     def test_thing(self):
         self.assertEqual(1, $want)
 CASE
-    diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+    (cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
     printf '# 第 %s 輪\n已排除的假設:沒有\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
 fi
 echo '{"event":"result","result":{"conversation_id":"agy-conv","status":"SUCCESS","duration_seconds":1,"usage":{"input_tokens":31,"output_tokens":7,"thinking_tokens":3,"cache_read_tokens":2,"total_tokens":38}}}'
@@ -276,9 +277,10 @@ echo '{"event":"result","result":{"conversation_id":"agy-conv","status":"SUCCESS
 FAKE_FALLBACK = r'''#!/bin/sh
 echo "fallback $AC_ROLE $AC_ROUND" >> "$AC_TEST_LOG"
 cat >/dev/null
+W=$PWD
 cd "$AC_WORK"
-mkdir -p work/tests
-cat > work/tests/test_thing.py <<'CASE'
+mkdir -p "$W"/tests
+cat > "$W"/tests/test_thing.py <<'CASE'
 import unittest
 
 
@@ -286,7 +288,7 @@ class T(unittest.TestCase):
     def test_thing(self):
         self.assertEqual(1, 1)
 CASE
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+(cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
 printf '# fallback\n已排除的假設:沒有\n' > "EVIDENCE-round$AC_ROUND.md"
 '''
 
@@ -353,7 +355,8 @@ class AgyInvocation(AgyFlowBase):
         self.assertNotIn("--add-dir", argv)
         self.assertNotIn("--sandbox", argv)
         self.assertEqual(self.read("worker-1.stdin", where=self.obs).strip(), "0")
-        self.assertTrue(self.read("worker-1.cwd", where=self.obs).strip().endswith("/work"))
+        self.assertTrue(self.read("worker-1.cwd", where=self.obs).strip().endswith("/repo-wt/t1"),
+                        "worker 的 cwd 是票分支的 worktree(#144)")
 
     def test_a7_agy_result_maps_to_one_complete_cost_row_without_double_counting_thinking(self):
         """A7 成本列 15 鍵，output=7 不另加 thinking=3，cache_write null 並註明原因。"""
@@ -406,13 +409,13 @@ class AgyFallback(AgyFlowBase):
 class AgyGuardAndRoles(AgyFlowBase):
 
     def test_a4_main_tree_write_is_blocked_before_the_agy_patch_is_applied(self):
-        """A4 agy 在主 repo 寫檔時 rc=8、票 Blocked、沒有 t1 分支且失敗原因是 guard-violation。"""
+        """A4 agy 在主 repo 寫檔時 rc=8、票 Blocked、不收件(#144:分支派工前就開了,看閘門沒跑)且失敗原因是 guard-violation。"""
         self.agy_ticket()
         done = self.run_agy("--no-review", AGY_MODE="stray", AGY_REPO=self.repo)
         self.assertEqual(done.returncode, 8, done.stdout + done.stderr)
         ticket = self.load_ticket("1")
         self.assertEqual((ticket.get("state"), ticket.get("owner")), ("Blocked", "main"))
-        self.assertEqual(self.git("branch", "--list", "t1").strip(), "")
+        self.assertNotIn("gate.rerun", self.kinds(), "越界時不收件、不跑閘門")
         failed = [row.get("reason") for row in self.events()
                   if row["kind"] == "ticket.attempt.failed"]
         self.assertEqual(failed, ["guard-violation"])

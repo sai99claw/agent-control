@@ -33,7 +33,7 @@ FAKE_CODEX = """#!/bin/sh
 printf '%s\\n' "$@" > "@ARGV@"
 printf '%s\\n%s\\n%s\\n' "$(pwd -P)" "$AC_ROLE" "$AC_ROOT" > "@ARGV@.where"
 cp "$AC_ROOT/tickets/1.json" "@ARGV@.control-ticket" 2>/dev/null || true
-cp "$AC_WORK/work/tickets/1.json" "@ARGV@.work-ticket" 2>/dev/null || true
+cp tickets/1.json "@ARGV@.work-ticket" 2>/dev/null || true
 cat > "@STDIN@"
 echo "codex ran $AC_ROLE round $AC_ROUND" >> "$AC_TEST_LOG"
 case "@MODE@" in
@@ -58,9 +58,12 @@ case "@MODE@" in
     hang)
         exec sleep 60 ;;
 esac
+W=$PWD
 cd "$AC_WORK"
-mkdir -p work/tests
-cat > work/tests/test_thing.py <<'CASE'
+# 批次那一支(cwd 是副本、`work/` 在)還收 patch(#145);單票在票分支的 worktree commit(#144)。
+[ ! -d work ] || W=$AC_WORK/work
+mkdir -p "$W"/tests
+cat > "$W"/tests/test_thing.py <<'CASE'
 import unittest
 
 
@@ -68,7 +71,11 @@ class T(unittest.TestCase):
     def test_thing(self):
         self.assertEqual(1, 1)
 CASE
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+if [ -d work ]; then
+    diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+else
+    (cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
+fi
 printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
 """
 
@@ -136,7 +143,7 @@ class TheCodexPathStartsCodex(CodexBase):
         self.assertEqual(argv.count("--add-dir"), 1, argv)
         add_dir = argv.index("--add-dir")
         self.assertEqual(os.path.realpath(argv[add_dir + 1]), delivery_root,
-                         "Codex 要能寫副本根的 patch 與 EVIDENCE")
+                         "Codex 要能寫輪次目錄的 EVIDENCE(worktree 外)")
         self.assertEqual(argv[:add_dir] + argv[add_dir + 2:],
                          ["exec", "-m", "gpt-6-astra", "-s", "danger-full-access",
                           "-c", 'approval_policy="never"', "-C", ".",
@@ -144,7 +151,8 @@ class TheCodexPathStartsCodex(CodexBase):
         self.assertNotIn("workspace-write", argv)
         with open(self.argv_file + ".where", encoding="utf-8") as handle:
             cwd, role, control = handle.read().splitlines()
-        self.assertEqual(cwd, os.path.join(delivery_root, "work"), "codex 與 claude 同一個 cwd")
+        self.assertEqual(cwd, os.path.realpath(os.path.join(self.home, "repo-wt", "t1")),
+                         "codex 與 claude 同一個 cwd:票分支的 worktree(#144)")
         self.assertEqual(role, "worker")
         self.assertEqual(os.path.realpath(control), os.path.join(delivery_root, "control"),
                          "AC_ROOT 是拋棄式控制根,不是主 repo")
@@ -159,7 +167,7 @@ class TheCodexPathStartsCodex(CodexBase):
             packet = handle.read()
         self.assertIn("## 權威票面快照", packet)
         self.assertIn("$AC_ROOT/tickets/1.json", packet)
-        self.assertIn("work/tickets/1.json", packet)
+        self.assertIn("worktree 裡的 `tickets/1.json`", packet)
         self.assertIn("不能用它推翻本快照", packet)
         for kind in ("agent.start", "agent.done"):
             rows = self.agent_events(kind)
@@ -168,12 +176,12 @@ class TheCodexPathStartsCodex(CodexBase):
         self.assertEqual([row["model"] for row in cost if row["role"] == "worker"],
                          [CODEX_MODEL])
         self.assertIn("test_thing.py", self.git("ls-tree", "-r", "--name-only", "t1"),
-                      "codex 交的 patch 沒有照既有那一手收進分支")
+                      "codex 的 commit 沒有在票分支上")
 
     def test_115_a3_the_snapshot_comes_from_the_live_store_not_the_base_copy(self):
         """#115 A3。base_sha 上的票寫舊 objective、權威票庫寫新的:派工文的快照與控制根的票副本
-        是新的,work/ 那一份是舊的,派工文明說舊檔不能推翻快照。**變異**:快照改讀
-        work/tickets → 派工文出現舊值,紅。"""
+        是新的,worktree 那一份(分支上的版本)是舊的,派工文明說舊檔不能推翻快照。**變異**:快照改讀
+        worktree 的 tickets → 派工文出現舊值,紅。"""
         self.fake_codex()
         row = self.codex_ticket(objective="OLD-objective-from-base")
         row.update(objective="NEW-objective-from-store",
@@ -190,7 +198,7 @@ class TheCodexPathStartsCodex(CodexBase):
             self.assertEqual(json.load(handle)["objective"], "NEW-objective-from-store")
         with open(self.argv_file + ".work-ticket", encoding="utf-8") as handle:
             self.assertEqual(json.load(handle)["objective"], "OLD-objective-from-base",
-                             "夾具要讓 work/ 真的拿到舊版,不然這一條什麼都沒比")
+                             "夾具要讓 worktree 真的拿到舊版,不然這一條什麼都沒比")
 
     def test_a19_dry_run_prints_the_codex_command(self):
         self.fake_codex()
@@ -247,9 +255,12 @@ printf '%s\\n' "$@" > "@ARGV@"
 pwd -P > "@ARGV@.where"
 cat > "@ARGV@.stdin"
 echo "opus ran $AC_ROLE round $AC_ROUND" >> "$AC_TEST_LOG"
+W=$PWD
 cd "$AC_WORK"
-mkdir -p work/tests
-cat > work/tests/test_thing.py <<'CASE'
+# 批次那一支(cwd 是副本、`work/` 在)還收 patch(#145);單票在票分支的 worktree commit(#144)。
+[ ! -d work ] || W=$AC_WORK/work
+mkdir -p "$W"/tests
+cat > "$W"/tests/test_thing.py <<'CASE'
 import unittest
 
 
@@ -257,7 +268,11 @@ class T(unittest.TestCase):
     def test_thing(self):
         self.assertEqual(1, 1)
 CASE
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+if [ -d work ]; then
+    diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+else
+    (cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
+fi
 printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
 """
 
@@ -454,7 +469,7 @@ class OtherCodexFailuresKeepTheOldPages(FallbackBase):
                 self.assert_left_alone(done)
                 pages = self.inbox_rows()
                 self.assertTrue(pages)
-                self.assertIn("worker 沒交出 patch", self.read(pages[-1]["page"]))
+                self.assertIn("worker 沒交件", self.read(pages[-1]["page"]))
 
     def test_a24_a_timeout_is_the_timeout_page(self):
         self.fake_codex("hang")
@@ -465,8 +480,7 @@ class OtherCodexFailuresKeepTheOldPages(FallbackBase):
         pages = self.inbox_rows()
         self.assertEqual(len(pages), 1, pages)
         self.assertIn("逾時", self.read(pages[0]["page"]))
-        self.assertEqual(glob.glob(os.path.join(self.repo, "reports", "t1", "*",
-                                                "patch-round1.diff")), [])
+        self.assertNotIn("gate.rerun", self.kinds(), "逾時的那一輪不收件、不跑閘門")
 
 
 class EffortBase(CodexBase):
