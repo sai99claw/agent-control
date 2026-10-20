@@ -850,42 +850,6 @@ def sha_on_branch(sha, branch):
     return done.returncode == 0
 
 
-def has_valid_waiver(ticket):
-    """`verify_waiver` 有沒有把話說清楚(#8 開的那一格:`{by, reason}`)。**只問這一
-    格自己是不是誠實地填好了**,不問「誰有資格免驗」—— land.sh 才是把關落地的那一道,
-    這裡問的是關票。"""
-    waiver = ticket.get("verify_waiver")
-    if not isinstance(waiver, dict):
-        return False
-    return bool(str(waiver.get("by") or "").strip()) and bool(str(waiver.get("reason") or "").strip())
-
-
-def waiver_covers_regression(ticket):
-    """免驗只在**票上的 waiver 誠實** *且* **review 綁的 sha 真的在主線歷史裡**時才
-    生效 —— 少了後半,一張隨口寫的 waiver 配一個從沒進過主線的 sha 也會通過
-    (#15 acceptance①)。"""
-    if not has_valid_waiver(ticket):
-        return False
-    review = ticket.get("review")
-    if not isinstance(review, dict):
-        return False
-    return sha_on_branch(review.get("sha"), main_branch())
-
-
-def needs_verifier_false_covers_regression(ticket):
-    """票面**明著寫** `needs_verifier=false`(JSON false,不是缺、不是字串)*且* review
-    是通過 *且* review 記的 sha 真的在主線歷史裡時,review 就是回歸證據(#48)。
-    `verify.baseline` 一旦存在就不頂 —— 紅的證據永遠贏過免驗。"""
-    if ticket.get("needs_verifier") is not False:
-        return False
-    if not review_passed(ticket):
-        return False
-    plan = ticket.get("verify") if isinstance(ticket.get("verify"), dict) else {}
-    if isinstance(plan.get("baseline"), dict):
-        return False
-    return sha_on_branch(ticket["review"].get("sha"), main_branch())
-
-
 def done_blockers(ticket):
     """**進 Done 只有這一份必要條件**,`set state Done` 與 `close` 共用它。
 
@@ -893,94 +857,11 @@ def done_blockers(ticket):
     在主線」而且弱檢查也算過 —— 於是 Done 的契約有兩個不同的把關強度,而弱的那一個
     沒有人記得(2026-09-21 外部審查:Done 的契約可以繞過)。
 
-    #15:票有誠實的 `verify_waiver` **且** review 綁的 sha 真的在主線歷史裡,才免
-    `test_evidence` / `verify.baseline` 這一關 —— review 本身該不該過(§review_problems,
-    只問 complex 的票)
-    與 objections 是否處置完,不受這格豁免。#48:`needs_verifier=false` 配有效 review
-    也免這一關(§needs_verifier_false_covers_regression)。
-
-    D-020:`verify.baseline` 是**兩段**寫同一格 —— `verify-case.py red`(驗證者)只證
-    乾淨基底該紅(`stage="red"`),`verify-case.py check`(閘門)在實作者的 patch 進來
-    時才證候選該綠(`stage="check"`)。**close 只認 check**:驗證者交件的那一趟說的是
-    「這條案例真的在驗東西」,不是「這張票的東西真的做出來了」,而少了後半的票與做完
-    的票在票面上長得一樣。
+    只剩兩條:complex 票的 review 通過(§review_problems,#136)、阻擋性反駁已處置。
+    回歸證據不再查第二次(D-054 Q4,#139):閘門綠才落得了地,`close --landed` 的
+    sha 在主線歷史裡(§verify)就是那一組判準的結果。
     """
-    out = []
-    if not (waiver_covers_regression(ticket)
-            or needs_verifier_false_covers_regression(ticket)):
-        plan = ticket.get("verify") if isinstance(ticket.get("verify"), dict) else {}
-        baseline = plan.get("baseline") if isinstance(plan.get("baseline"), dict) else None
-        if not ticket.get("test_evidence") and not baseline:
-            out.append("沒有回歸證據:票上既沒有 test_evidence,verify 也沒有 baseline"
-                       "(`%s check <票號>` 會寫那一格;"
-                       "或補一條誠實的 verify_waiver{by,reason} 且 review.sha 在主線歷史裡)"
-                       % verify_case_path())
-        elif baseline and not baseline.get("ok"):
-            out.append("verify.baseline 說驗紅沒過:%s"
-                       % (baseline.get("why") or "乾淨主線上沒有紅"))
-        elif baseline and str(baseline.get("stage") or "") != "check":
-            out.append("verify.baseline 的 stage 是 %s,還缺閘門那一趟 check —— "
-                       "驗證者只量了「乾淨基底該紅」,候選該綠由閘門量"
-                       "(`%s check <票號> --candidate <分支>`,D-020)"
-                       % (baseline.get("stage") or "空的", verify_case_path()))
-    out.extend(review_problems(ticket))
-    out.extend(objection_problems(ticket))
-    return out
-
-
-def on_main(sha):
-    """這個 sha 在主線歷史裡嗎。取不到就回 False —— **答不出來不等於答是**。"""
-    if not sha:
-        return False
-    done = git(["merge-base", "--is-ancestor", sha, main_branch()])
-    return done.returncode == 0
-
-
-def verify_case_path():
-    """`verify-case.py` 相對 repo 根的路徑 —— 從**這一支所在的目錄**算,不寫死。
-
-    同步到專案之後這幾支住在 `scripts/control/`(`scripts/sync-to-project.sh`),而寫死的
-    `scripts/verify-case.py` 在那裡貼了跑不起來(#100 A10):照貼就跑的那一句,貼了
-    `can't open file` 比沒有那一句更糟(§5.7)。不在 repo 根底下就給絕對路徑。
-    """
-    here = os.path.join(os.path.dirname(os.path.realpath(__file__)), "verify-case.py")
-    rel = os.path.relpath(here, os.path.realpath(root()))
-    return shlex.quote(here if rel.split(os.sep)[0] == os.pardir else rel)
-
-
-def baseline_next_step(ticket):
-    """落地後 `verify.baseline` 還缺那一趟時,**印一句可以直接貼的指令**。
-
-    G7(#29 A7):`land.sh` 不自動補量,而 `ticket.py close` 擋下來的時候只說「缺
-    baseline」—— 一個守衛給錯了下一步,比沒有守衛更糟(§5.7):那個人會自己去猜
-    `--ref` 與 `--candidate` 該填什麼,而**對主線的頭量出來的「一條都沒紅」說的是
-    這一趟量錯了地方**,不是案例是假的(#19)。所以兩端都寫死:`--ref` 是票的
-    `base_sha`、`--candidate` 是覆核綁的那個 sha(它已經在主線歷史裡)。
-
-    回 `None` = 沒有東西要說。**它不改退出碼**:補量是主線的下一步,不是關票的條件
-    (條件在 `done_blockers()`)。
-    """
-    plan = ticket.get("verify") if isinstance(ticket.get("verify"), dict) else {}
-    baseline = plan.get("baseline") if isinstance(plan.get("baseline"), dict) else None
-    if baseline and baseline.get("ok") is True:
-        return None
-    review = ticket.get("review") if isinstance(ticket.get("review"), dict) else {}
-    sha = str(review.get("sha") or "")
-    base = str(ticket.get("base_sha") or "")
-    if not sha or not base or not on_main(sha):
-        return None
-    return ("python3 %s check %s --ref %s --candidate %s"
-            % (verify_case_path(), ticket.get("id"), base, sha))
-
-
-def print_baseline_next_step(ident, ticket):
-    line = baseline_next_step(ticket)
-    if not line:
-        return
-    sys.stdout.write("ticket: #%s 落地後的補量還沒做(verify.baseline %s)—— 貼這一句:\n"
-                     % (ident, "缺" if not (ticket.get("verify") or {}).get("baseline")
-                        else "的 ok 不是 true"))
-    sys.stdout.write("  %s\n" % line)
+    return review_problems(ticket) + objection_problems(ticket)
 
 
 def print_done_blockers(ident, missing):
@@ -1370,7 +1251,6 @@ def cmd_close(argv):
                          "exit code 0 不等於 Done,worker 說做完也不等於 Done"
                          "(docs/WORKFLOW.md)。\n" % ident)
         return 1
-    print_baseline_next_step(ident, ticket)
     missing = done_blockers(ticket)
     if missing:
         print_done_blockers(ident, missing)

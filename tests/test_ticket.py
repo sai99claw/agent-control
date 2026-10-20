@@ -4,7 +4,6 @@
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import unittest
@@ -417,12 +416,22 @@ class VerifyAndClose(Sandbox):
                 self.assertNotIn("沒有 review", done.stdout)
                 self.assertEqual(self.load_ticket("1")["state"], "Done")
 
-    def test_close_refuses_when_there_is_no_regression_evidence(self):
+    def test_a_landed_simple_ticket_with_no_verifier_and_no_review_closes(self):
+        """D-054 Q4(#139):close 不再查第二次回歸證據 —— simple、`needs_verifier=false`、
+        沒有 review、沒有 test_evidence / baseline 的票,`close --landed` 的 sha 在主線上
+        就關得掉(#150 的形狀:閘門綠才落得了地)。
+
+        **變異**:`done_blockers` 放回「沒有回歸證據」那一條 → 這一條紅(rc=1)。
+        """
         self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.done_ready(test_evidence=[])
-        done = self.ticket("close", "1")
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertIn("沒有回歸證據", done.stdout)
+        sha = self.git("rev-parse", "main").strip()
+        self.make_ticket(1, complexity="simple", needs_verifier=False)
+        done = self.ticket("close", "1", "--landed", sha)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        self.assertEqual(row["state"], "Done")
+        self.assertEqual(row["landed_sha"], sha)
+        self.assertNotIn("review", row)
 
     def test_a_complex_review_then_a_ticket_edit_still_closes(self):
         """#136 刪了綁定:complex 票 review pass 之後再 `ticket.py set` 改票面,close 仍收。
@@ -461,7 +470,7 @@ class VerifyAndClose(Sandbox):
 
         舊版 `set state Done` 只檢查狀態名對不對 —— Done 的契約有一條旁路。
         """
-        self.make_ticket(1)
+        self.make_ticket(1, complexity="complex")
         done = self.ticket("set", "1", "state", "Done")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("進不了 Done", done.stdout)
@@ -541,171 +550,13 @@ class VerifyAndClose(Sandbox):
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("不是 main 的祖先", done.stdout)
 
-class TheNextStepAfterLanding(Sandbox):
-    """G7 / #29 A7:落地之後 `verify.baseline` 還缺閘門那一趟時,**印一句可以貼的指令**。
-
-    以前 `close` 只說「缺 baseline」,而補量要主線自己打
-    `verify-case.py check <n> --ref … --candidate …` —— 兩端填錯一邊,量出來的
-    「一條都沒紅」說的是**這一趟量錯了地方**,不是案例是假的(#19)。
-    一個守衛給錯了下一步,比沒有守衛更糟(`docs/DISPATCH-TEMPLATE.md` §5.7)。
-    """
-
-    def landed(self, **extra):
-        base = self.git("rev-parse", "main").strip()
-        self.write("src/nav.py", "def size_nav():\n    return 42\n")
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "把 #1 的東西放進主線")
-        tip = self.git("rev-parse", "main").strip()
-        fields = {"landed_sha": tip,
-                  "base_sha": base}
-        fields.update(extra)
-        self.make_ticket(1, **fields)
-        self.ticket("set", "1", "review",
-                    json.dumps({"verdict": "pass", "by": "main", "sha": tip},
-                               ensure_ascii=False))
-        return base, tip
-
-    def test_close_prints_the_line_with_both_shas(self):
-        """**變異**:把 `cmd_close` 裡那一行 `print_baseline_next_step` 拿掉 → 這一條紅。"""
-        base, tip = self.landed()
-        done = self.ticket("close", "1")
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertIn("verify-case.py check 1", done.stdout)
-        self.assertIn("--ref %s" % base, done.stdout, "ref 要寫死票的 base_sha")
-        self.assertIn("--candidate %s" % tip, done.stdout, "candidate 要寫死覆核那個 sha")
-        self.assertEqual(self.load_ticket("1")["state"], "Ready", "它不改票的狀態")
-
-    def test_a_baseline_that_already_passed_says_nothing(self):
-        """**它不是每次都印**:量過了還叫人再量一次,下一次就沒有人看這一行了。"""
-        self.landed(verify={"files": ["verify/example/test_example.py"],
-                            "baseline": {"ok": True, "stage": "check"}},
-                    test_evidence=[{"cmd": "gate", "rc": 0}])
-        done = self.ticket("close", "1")
-        # 比對 `--ref`:`done_blockers()` 本來就有一句提到 `verify-case.py check <票號>`,
-        # 而**兩句都出現時分不出是誰印的** —— 這一行要問的是那句「可以直接貼」的。
-        self.assertNotIn("--ref ", done.stdout, done.stdout)
-
-    def test_a_review_sha_that_never_reached_main_says_nothing(self):
-        """**這一句的前提是「東西已經在主線上」** —— review 綁的 sha 還沒進主線時,
-        補量沒有東西可量,而印出來的那一句會被照著貼(§5.7:守衛的下一步要是對的)。
-        """
-        self.landed()
-        self.ticket("set", "1", "review",
-                    json.dumps({"verdict": "pass", "by": "main", "sha": "deadbeef"},
-                               ensure_ascii=False))
-        done = self.ticket("close", "1")
-        # 比對 `--ref`:`done_blockers()` 本來就有一句提到 `verify-case.py check <票號>`,
-        # 而**兩句都出現時分不出是誰印的** —— 這一行要問的是那句「可以直接貼」的。
-        self.assertNotIn("--ref ", done.stdout, done.stdout)
-
-
-class TheNextStepRunsWhereverTicketPyLives(Sandbox):
-    """#100 A10:同步到專案之後這幾支住在 `scripts/control/`,而補量那一句寫死
-    `scripts/verify-case.py` —— 照貼就是 `can't open file`。兩種形狀各一輪,取輸出裡
-    那一行**原樣**在副本根跑。期望路徑寫死在這裡,不從被測程式算。
-
-    **變異 m9**:`baseline_next_step` 改回硬字串 `scripts/verify-case.py` → `scripts/control/`
-    那一輪紅。
-    """
-
-    def install(self, rel):
-        where = os.path.join(self.repo, rel)
-        os.makedirs(where, exist_ok=True)
-        for name in os.listdir(os.path.join(self.repo, "scripts")):
-            src = os.path.join(self.repo, "scripts", name)
-            if os.path.isfile(src):
-                shutil.copy(src, os.path.join(where, name))
-        return rel
-
-    def landed(self, **extra):
-        base = self.git("rev-parse", "main").strip()
-        self.write("src/nav.py", "def size_nav():\n    return 42\n")
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "把 #1 的東西放進主線")
-        tip = self.git("rev-parse", "main").strip()
-        self.make_ticket(1, landed_sha=tip, base_sha=base,
-                         review={"verdict": "pass", "by": "main", "sha": tip}, **extra)
-        return base, tip
-
-    def test_the_pasted_line_runs_in_both_shapes(self):
-        base, tip = self.landed()
-        for rel in ("scripts", self.install(os.path.join("scripts", "control"))):
-            with self.subTest(rel):
-                env = self.env(AC_ROOT=self.repo)
-                done = self.run_py(os.path.join(rel, "ticket.py"), "close", "1", env=env)
-                self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-                want = "python3 %s/verify-case.py check 1 --ref %s --candidate %s" % (
-                    rel, base, tip)
-                lines = [line.strip() for line in done.stdout.splitlines()
-                         if re.match(r"\s*python3 \S*verify-case\.py check ", line)]
-                self.assertEqual(lines, [want], done.stdout)
-                self.assertIn("`%s/verify-case.py check <票號>`" % rel, done.stdout,
-                              "done_blockers 那一句也要走同一個路徑")
-                ran = subprocess.run(["sh", "-c", lines[0]], cwd=self.repo, env=env,
-                                     capture_output=True, text=True, timeout=TIMEOUT)
-                said = ran.stdout + ran.stderr
-                self.assertNotIn("No such file", said)
-                self.assertNotIn("can't open file", said)
-                self.assertIn("verify-case:", said, "要是那一支真的跑起來說的話")
-
-    def test_the_stage_hint_uses_the_same_path(self):
-        """done_blockers 第二句(stage 不是 check)也不留舊路徑。"""
-        self.landed(verify={"files": [], "baseline": {"ok": True, "stage": "red",
-                                                      "why": ""}})
-        rel = self.install(os.path.join("scripts", "control"))
-        done = self.run_py(os.path.join(rel, "ticket.py"), "close", "1",
-                           env=self.env(AC_ROOT=self.repo))
-        self.assertIn("`scripts/control/verify-case.py check <票號> --candidate <分支>`",
-                      done.stdout, done.stdout + done.stderr)
-        self.assertNotIn("`scripts/verify-case.py", done.stdout)
-        self.assertNotIn(" scripts/verify-case.py", done.stdout)
-
-
-class WaiverAndLanded(Sandbox):
-    """#15:已落地的票關不掉 —— close 要認得 `verify_waiver`(#8),而 `set` 那幾格
-    (`verify_waiver` / `objections`)是落地後的收尾,不該讓既有
-    review 過期。"""
+class CloseLanded(Sandbox):
+    """#15:`close --landed <merge sha>` 一步關票 —— 先確認 sha 在主線歷史裡再蓋。"""
 
     def land_a_file(self, path, text):
         self.write(path, text)
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "把 %s 放進主線" % path)
-
-    def test_a_waiver_with_a_review_sha_on_main_skips_the_regression_check(self):
-        """**變異**:把 `waiver_covers_regression` 拿掉(改回舊的無條件檢查)
-        → 這一條紅(沒有 test_evidence 就過不了)。"""
-        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.make_ticket(1, landed_sha=self.git("rev-parse", "main").strip(),
-                         verify_waiver={"by": "main", "reason": "控制腳本票:無獨立驗證者"})
-        self.approve(1, branch="main")  # review.sha = main 的頭,state_version 跟著綁上
-        done = self.ticket("close", "1")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.load_ticket("1")["state"], "Done")
-        self.assertNotIn("test_evidence", self.load_ticket("1"))
-
-    def test_a_waiver_does_not_cover_a_review_sha_that_never_reached_main(self):
-        """免驗**只在 review 綁的 sha 真的在主線歷史裡才生效**——票寫了 waiver,但
-        review 蓋的章是另一條沒進主線的分支,不該就這樣免了回歸證據。"""
-        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.make_ticket(1, landed_sha=self.git("rev-parse", "main").strip(),
-                         verify_waiver={"by": "main", "reason": "控制腳本票"})
-        path = self.worktree("t1-unmerged")
-        self.commit_in(path, "extra.txt", "沒有進主線的 commit")
-        self.approve(1, branch="t1-unmerged")
-        done = self.ticket("close", "1")
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertIn("沒有回歸證據", done.stdout)
-        self.assertEqual(self.load_ticket("1")["state"], "Ready")
-
-    def test_a_waiver_missing_reason_does_not_count(self):
-        """票面沒說清楚(`reason` 空著)不算誠實的 waiver。"""
-        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.make_ticket(1, landed_sha=self.git("rev-parse", "main").strip(),
-                         verify_waiver={"by": "main", "reason": ""})
-        self.approve(1, branch="main")
-        done = self.ticket("close", "1")
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertIn("沒有回歸證據", done.stdout)
 
     def done_ready(self, **extra):
         fields = {"landed_sha": self.git("rev-parse", "main").strip(),
@@ -756,11 +607,10 @@ class WaiverAndLanded(Sandbox):
         self.assertNotIn("review", self.load_ticket("1"))
 
 
-class NeedsVerifierFalseCloses(Sandbox):
-    """#48:票面明著寫 `needs_verifier=false` 且 review 有效(verdict pass、
-    sha 在主線歷史裡)時,review 頂上回歸證據那一格;缺、true、字串 "false" 逐字照舊,
-    其餘條件不放寬,`verify.baseline` 在就輪不到免驗。夾具標 complex:「沒有 review /
-    不是通過」那兩句只對 complex 的票印(#136)。"""
+class CloseDoesNotReadNeedsVerifier(Sandbox):
+    """D-054 Q4(#139):close 不看 `needs_verifier`,也不看回歸證據 —— 缺、true、false、
+    字串 "false" 一律照關;只剩 complex 票的 review 與阻擋性反駁擋得住。夾具標 complex:
+    「沒有 review / 不是通過」那兩句只對 complex 的票印(#136)。"""
 
     def land_a_file(self, path, text):
         self.write(path, text)
@@ -782,70 +632,36 @@ class NeedsVerifierFalseCloses(Sandbox):
         self.assertEqual(self.load_ticket("1")["state"], "Ready")
         return done.stdout
 
-    def test_a1_needs_verifier_false_with_a_valid_review_closes(self):
-        """**變異** M1:`done_blockers` 不呼叫 `needs_verifier_false_covers_regression`
-        → 這一條紅(沒有回歸證據)。"""
-        self.ready()
-        done = self.ticket("close", "1")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertNotIn("沒有回歸證據", done.stdout)
-        row = self.load_ticket("1")
-        self.assertEqual(row["state"], "Done")
-        self.assertNotIn("test_evidence", row)
-        self.assertNotIn("verify_waiver", row)
+    def test_any_needs_verifier_with_a_valid_review_closes(self):
+        """**變異**:`done_blockers` 放回 needs_verifier / 回歸證據那一條 → 至少一輪紅。"""
+        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
+        for value in ("缺", True, False, "false"):
+            with self.subTest(needs_verifier=value):
+                row = {"landed_sha": self.git("rev-parse", "main").strip(),
+                       "complexity": "complex"}
+                if value != "缺":
+                    row["needs_verifier"] = value
+                self.make_ticket(1, **row)
+                self.approve(1, branch="main")
+                done = self.ticket("close", "1")
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                row = self.load_ticket("1")
+                self.assertEqual(row["state"], "Done")
+                self.assertNotIn("test_evidence", row)
 
-    def test_a2a_no_review_is_not_regression_evidence(self):
+    def test_a_complex_ticket_without_a_review_is_refused(self):
         self.ready(branch=None)
-        out = self.refused()
-        self.assertIn("沒有 review", out)
-        self.assertIn("沒有回歸證據", out)
+        self.assertIn("沒有 review", self.refused())
 
-    def test_a2b_failed_review_is_not_regression_evidence(self):
-        """**變異** M2:新函式拿掉 `review_passed` 檢查 → 這一條紅
-        (review 沒過卻頂了回歸證據)。"""
+    def test_a_failed_review_is_refused(self):
         self.ready(branch=None)
         self.approve(1, branch="main", verdict="fail")
-        out = self.refused()
-        self.assertIn("不是通過", out)
-        self.assertIn("沒有回歸證據", out)
+        self.assertIn("不是通過", self.refused())
 
-    def test_a2c_review_sha_off_main_is_not_regression_evidence(self):
-        """**變異** M3:新函式拿掉「sha 在主線」檢查 → 這一條紅。"""
-        self.ready(branch=None)
-        path = self.worktree("t1-unmerged")
-        self.commit_in(path, "extra.txt", "沒有進主線的 commit")
-        self.approve(1, branch="t1-unmerged")
-        out = self.refused()
-        self.assertIn("review", out)
-        self.assertIn("沒有回歸證據", out)
-
-    def test_a3_missing_needs_verifier_behaves_as_before(self):
-        """**變異** M4:`is False` 改成 `not ticket.get("needs_verifier")` → 這一條紅。"""
-        self.land_a_file("src/nav.py", "def size_nav():\n    return 42\n")
-        self.make_ticket(1, landed_sha=self.git("rev-parse", "main").strip())
-        self.approve(1, branch="main")
-        self.assertIn("沒有回歸證據", self.refused())
-
-    def test_a3_needs_verifier_true_behaves_as_before(self):
-        self.ready(branch="main", needs_verifier=True)
-        self.assertIn("沒有回歸證據", self.refused())
-
-    def test_a3_needs_verifier_string_false_behaves_as_before(self):
-        self.ready(branch="main", needs_verifier="false")
-        self.assertIn("沒有回歸證據", self.refused())
-
-    def test_a4a_undisposed_blocking_objection_still_blocks(self):
+    def test_undisposed_blocking_objection_still_blocks(self):
         self.ready(objections=[{"category": "blocking", "body": "票面寫錯",
                                 "evidence": "x", "owner": "main"}])
         self.assertIn("還沒處置", self.refused())
-
-    def test_a4b_a_red_baseline_beats_needs_verifier_false(self):
-        """**變異** M5:新函式拿掉「`verify.baseline` 缺席」條件 → 這一條紅
-        (紅的 baseline 被免驗蓋掉)。"""
-        self.ready(verify={"files": [], "tags": [], "run": "", "notes": "",
-                           "baseline": {"ok": False, "stage": "check",
-                                        "why": "乾淨主線上沒有紅"}})
-        self.assertIn("verify.baseline 說驗紅沒過", self.refused())
 
 
 class Inbox(Sandbox):
@@ -1359,7 +1175,8 @@ class CostTotalOnClose(Sandbox):
 
     def test_c6_a_refused_close_writes_no_cost_total(self):
         """C6 反例。**變異 m6**:cost_total 寫在關票拒絕檢查之前 → 這一條紅。"""
-        self.closable(test_evidence=[])
+        self.closable(objections=[{"category": "ticket-wrong", "owner": "main",
+                                   "body": "x", "disposition": ""}])
         done = self.ticket("close", "1")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertNotIn("cost_total", self.load_ticket("1"))

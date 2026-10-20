@@ -645,32 +645,7 @@ class VerifierCasesAtTheGate(Sandbox):
         done = self.gate()
         self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
         self.assertIn("這張票沒有驗證者案例", done.stdout)
-        self.assertIn("verify_waiver", done.stdout, "下一步要寫在裡面")
-
-    def test_a_waiver_excuses_the_ticket_from_this_layer(self):
-        """驗收 1 的另一半:**有 waiver 就不是缺口**。守衛擋下所有沒有案例的票的
-        那一版,與 `verify_waiver` 這一格不存在長得一樣。
-
-        waiver 免的是**「有沒有案例」那一格**,不是整層:`verify.files` 非空時 check
-        照跑(票面驗收 2、3 對這一步沒有寫例外)。第 2 輪把它寫成短路整層,於是
-        帶 waiver 的票再也不會被量 —— 驗證者的 A2–A6 就是量到那件事(#27 第 3 輪)。
-
-        **變異**:把 `waiver)` 那一格拿掉 → 前半紅(rc 變 3);把它從 `[ -z "$files" ]`
-        裡面搬到外面(退回第 2 輪)→ 後半紅(check 不會被叫到)。
-        """
-        self.make_ticket(7, verify={"files": [], "tags": [], "run": "", "notes": ""},
-                         verify_waiver={"by": "main", "reason": "純文字,沒有邏輯可紅"})
-        done = self.gate()
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("verify_waiver", done.stdout)
-        self.assertNotIn("這張票沒有驗證者案例", done.stdout)
-
-        # 同一張票,這次**有**案例檔(而且在這一輪的樹上仍是紅的):waiver 不免 check。
-        self.a_ticket(verify_waiver={"by": "main", "reason": "純文字,沒有邏輯可紅"})
-        done = self.gate()
-        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("驗證者案例的綠", done.stdout,
-                      "有 waiver 的票,案例檔還是要跑 check")
+        self.assertIn("needs_verifier=false", done.stdout, "下一步要寫在裡面")
 
     def test_a_ticket_that_never_declared_verify_is_not_a_gap(self):
         """**沒有宣告**與**宣告了卻沒有案例**是兩件事,下一步也不同。
@@ -827,15 +802,13 @@ class VerifierCasesAtTheGate(Sandbox):
                          ("verify-case:(no-cases)", "", 0))
         self.assertIn("這張票沒有驗證者案例", rows[0]["excerpt"])
 
-    def test_t126_a2_the_three_exceptions_write_no_gap_row(self):
-        """A2 的三個例外:waiver / needs_verifier=false / 沒宣告 verify → 0 列 GAP。
+    def test_t126_a2_the_exceptions_write_no_gap_row(self):
+        """A2 的兩個例外:needs_verifier=false / 沒宣告 verify → 0 列 GAP。
 
-        **變異 M7**:三個例外那幾格也設 `CASES_ARGS` → 紅。
+        **變異 M7**:例外那幾格也設 `CASES_ARGS` → 紅。
         """
         empty = {"files": [], "tags": [], "run": "", "notes": ""}
         for label, fields in (
-                ("waiver", {"verify": empty,
-                            "verify_waiver": {"by": "main", "reason": "純文字,沒有邏輯可紅"}}),
                 ("needs_verifier=false", {"verify": empty, "needs_verifier": False}),
                 ("沒有 verify 格", {})):
             with self.subTest(label):
@@ -847,7 +820,7 @@ class VerifierCasesAtTheGate(Sandbox):
     # --------------------------------------------- 量「候選該綠」
 
     def test_check_runs_and_lifts_the_stage(self):
-        """驗收 3 與 4:`stage` 由 `red` 升成 `check`(`ticket.py close` 只認它)。
+        """驗收 3 與 4:`stage` 由 `red` 升成 `check`(閘門的證據;close 不讀)。
 
         **變異**:把 `verify_case` 裡 check 那一段拿掉 → 這一條紅(票上沒有
         `verify.baseline`)。

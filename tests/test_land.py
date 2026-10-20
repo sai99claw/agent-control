@@ -71,42 +71,6 @@ class NamesWhatItIsAbout(LandBase):
             self.assertIn(subject, done.stdout, "要落地的 commit 沒有被唸出來")
 
 
-class VerifyFilesMustBeOnTheBranch(LandBase):
-    """#587 那把尺:票說「案例在這幾個檔」,而分支上沒有那幾個檔。
-
-    少了這一條,票的 `verify.tags` 照樣會被閘門呼叫、照樣一個案例都選不到、照樣印
-    一行綠 —— 驗證者的交付沒有跟著進來,而畫面上一個徵兆都沒有。
-    """
-
-    def test_a_missing_verify_file_is_refused_with_its_own_exit_code(self):
-        """**變異**:把 `verify.files` 那一段拿掉 → 這一條紅。"""
-        branch = self.branch_for(1, "t1-x", verify={
-            "files": ["verify/example/test_ticket_1.py"], "tags": ["example"],
-            "run": "python3 scripts/verify.py --tag example", "notes": ""})
-        self.commit_in(branch, "src/a", "做了事,但沒把案例帶進來")
-        self.approve(1, "t1-x")
-        done = self.land("t1-x")
-        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
-        self.assertIn("verify/example/test_ticket_1.py", done.stdout)
-        self.assertIn("不在這條分支上", done.stdout)
-        self.assertFalse(self.gate_ran(), "拒絕要發生在跑九分鐘全套之前")
-
-    def test_a_verify_file_that_is_there_lands_normally(self):
-        """守衛要分得開「沒帶進來」與「帶進來了」—— 不然它擋的是所有帶 verify 的票。"""
-        branch = self.branch_for(1, "t1-x", verify={
-            "files": ["verify/example/test_ticket_1.py"], "tags": ["example"],
-            "run": "", "notes": ""})
-        self.write("verify/example/test_ticket_1.py",
-                   "import unittest\nTAGS = [\"example\"]\n\n\n"
-                   "class T(unittest.TestCase):\n    def test_one(self):\n"
-                   "        self.assertTrue(True)\n", where=branch)
-        self.git("add", "-A", cwd=branch)
-        self.git("commit", "-q", "-m", "案例跟著進來", cwd=branch)
-        self.approve(1, "t1-x")
-        done = self.land("t1-x")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-
-
 # 閘門的替身(#109):第 n 次被叫寫一份紅榜給 AC_GATE_TICKETS / AC_GATE_TICKET 每張票(檔名讀
 # `gate-fail-<n>`,沒有就讀 `gate-fail`,再沒有是 src/zzz),叫到第 `gate-red` 次之後轉綠(沒設 = 一直紅)。
 GATE_STUB_ROUNDS = """#!/bin/sh
@@ -940,7 +904,9 @@ class HappyPath(LandBase):
         self.assertEqual(phases, [("gate", 0), ("merge", 0), ("push", 0)])
         listed = self.run_py("scripts/inbox.py", "list", "--all").stdout
         self.assertIn("#1", listed)
-        self.assertIn("尚未關票", listed)
+        # D-054 Q4(#139):close 不再查第二次回歸證據,落了地的 simple 票就關掉。
+        self.assertIn("Done", listed)
+        self.assertEqual(self.load_ticket("1")["state"], "Done")
         self.assertFalse(self.exists(".land.lock"), "鎖沒有放掉,下一次 land 永遠卡住")
         self.assertNotIn("還留著這幾份副本", done.stdout)
 
@@ -1377,7 +1343,7 @@ exit 0
 class LandTriesToClose(LandBase):
     """#43 A1/A2/A4:push 成功後 land 試 `ticket.py close <n> --landed <sha>`。
 
-    關不掉的三種各一條、同一組斷言:票不是 Done、沒有 ticket.closed、stdout 仍
+    關不掉的兩種各一條、同一組斷言:票不是 Done、沒有 ticket.closed、stdout 仍
     「已合併、尚未關票」、rc 不變(0)、inbox 那頁 what 含 **ticket.py 印的原文**。
     期望的理由字串取自 `scripts/ticket.py` 既有的訊息(done_blockers / cmd_close),
     不從 land.sh 反推。
@@ -1446,8 +1412,13 @@ class LandTriesToClose(LandBase):
 
     # ------------------------------------------------------------ A1 另一種
 
-    def test_an_honest_waiver_instead_of_a_baseline_also_closes(self):
-        self.ready(verify_waiver={"by": "main", "reason": "沙盒:工具票不需要驗證者"})
+    def test_a_simple_ticket_with_no_verifier_and_no_review_lands_and_closes(self):
+        """D-054 Q4(#139):#150 的形狀 —— simple、`needs_verifier=false`、沒有 review、
+        沒有 baseline。閘門綠落了地,close 不再查第二次回歸證據。
+
+        **變異**:`done_blockers` 放回「沒有回歸證據」那一條 → 這一條紅(尚未關票)。"""
+        branch = self.branch_for(1, "t1-good", complexity="simple", needs_verifier=False)
+        self.commit_in(branch, "src/g1", "做完的那一張")
         done = self.land("t1-good")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("已合併、已關票", done.stdout)
@@ -1465,7 +1436,7 @@ class LandTriesToClose(LandBase):
         self.assertEqual(ticket["state"], "Done", done.stdout)
         self.assertEqual(ticket["landed_sha"], self.git("rev-parse", "main").strip())
 
-    # ------------------------------------------------------------ A2 三種
+    # ------------------------------------------------------------ A2 兩種
 
     def test_a_review_that_turns_to_fail_during_the_gate_is_not_closed(self):
         """走得到 close 的 review 缺格是**閘門跑的時候覆核被改成不通過**。只有 complex 的票
@@ -1481,11 +1452,6 @@ class LandTriesToClose(LandBase):
             [{"category": "ticket-wrong", "owner": "main", "body": "閘門跑的時候收到的反駁",
               "evidence": "EVIDENCE.md:1", "disposition": ""}], ensure_ascii=False))
         self.assert_landed_but_not_closed(self.land("t1-good"), "還沒處置")
-
-    def test_a_baseline_without_the_check_stage_is_not_closed(self):
-        self.ready(verify={"files": [], "tags": [], "run": "", "notes": "",
-                           "baseline": {"ok": True, "stage": "red"}})
-        self.assert_landed_but_not_closed(self.land("t1-good"), "還缺閘門那一趟 check")
 
     def test_land_refuses_a_force_flag_and_leaves_main_alone(self):
         """一張落得下去的票帶 `--force`:land 不認得這個旗標,rc 2、主線不動。

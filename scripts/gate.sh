@@ -32,18 +32,17 @@
 #
 # 所以這一支在 `regression()` 之後多一步(只跑案例,不先驗案例的格式,D-054 Q4):
 #   `verify-case.py check <票號> --ref <票的 base_sha> --candidate <這一輪的樹>`
-#      —— 把票的 `verify.baseline.stage` 從 `red` 升成 `check`(`ticket.py close`
-#      只認 `check`)。`ok:false` 時 candidate 那一趟的原始輸出當成 `--log` 餵給
+#      —— 把票的 `verify.baseline.stage` 從 `red` 升成 `check`(閘門的證據;
+#      `ticket.py close` 不讀它,D-054 Q4)。`ok:false` 時 candidate 那一趟的原始輸出當成 `--log` 餵給
 #      狀態檔,紅榜因此落進 `failures[]`,走既有的 auto-fix 路(D-014,不重造)。
 #
 # **量在閘門,不在 land**:worker 的三輪修復迴圈住在閘門,量在落地等於紅了才發現,
 # 而那是多一整輪的事。`verify.files` 是空的而這張票**該有**案例時,這一層印
 # 「這張票沒有驗證者案例」並且**非零** —— 同 #619 那條「宣告了卻選不到案例 = 缺口」
 # 的精神:一張沒有人驗的票與一張驗過的票,不該在退出碼上長得一樣。
-# 「該有」的三個例外:票上有誠實的 `verify_waiver`、票上明著寫 `needs_verifier=false`
-# (`land.sh` 也認這一格,#8)、或**票上連 `verify` 這一格都沒有宣告**(那是「沒有宣告」,
-# 與「宣告了卻沒有案例」不同 —— 同一支腳本對回歸層就是這樣分的)。三個例外都只管
-# 「有沒有案例」那一格:`verify.files` 非空時,check **一律照跑**,waiver 也不例外。
+# 「該有」的兩個例外:票上明著寫 `needs_verifier=false`、或**票上連 `verify` 這一格都
+# 沒有宣告**(那是「沒有宣告」,與「宣告了卻沒有案例」不同 —— 同一支腳本對回歸層就是
+# 這樣分的)。兩個例外都只管「有沒有案例」那一格:`verify.files` 非空時,check **一律照跑**。
 #
 # `check` 回非零的兩種要分開:**候選樹上真的有紅**才算這一輪(worker)的紅,紅榜進
 # `failures[]`、走 auto-fix;`ok:false` 但候選全綠(乾淨基底沒紅、兩邊案例數不同)是
@@ -734,13 +733,13 @@ regression() {   # $1 = ticket|full;設定 VRC
 # 票的 `verify.files` + 「這張票到底需不需要驗證者案例」。**一趟問完**:這幾件事住在
 # 同一張票裡,分三次起直譯器換不到任何新的資訊。
 #
-# 第一行是**為什麼不需要**(`waiver` / `needs-verifier-false` / `undeclared`,都不是就
+# 第一行是**為什麼不需要**(`needs-verifier-false` / `undeclared`,都不是就
 # `required`)、第二行是票的 `base_sha`、其餘每行一個案例檔。讀不到票就**非零**
 # (同 preflight:沒有票檔的呼叫照舊,不要憑空長出一個缺口)。
 #
 # **verify_plan 與 candidate_reds 走同一條路**(#40):`ticketlib.load`,票的根由
 # `event.repo_root()`(`AC_ROOT` 蓋得掉)決定。以前這裡拿 `$ROOT` 拼票檔路徑,閘門在
-# 票 worktree 裡跑時讀到的是 worktree 那一份舊票 —— 主 repo 上後來補的 `verify_waiver` /
+# 票 worktree 裡跑時讀到的是 worktree 那一份舊票 —— 主 repo 上後來補的
 # `needs_verifier=false` 看不到,要人手帶 `AC_TICKETS_DIR` 才對;沒帶的那一次,一張明說
 # 不要案例的票在這裡被判成缺口。
 verify_plan() {
@@ -753,11 +752,8 @@ try:
     data = ticketlib.load(ident)
 except (OSError, ValueError):
     raise SystemExit(3)
-waiver = data.get("verify_waiver")
 plan = data.get("verify") if isinstance(data.get("verify"), dict) else None
-if isinstance(waiver, dict) and waiver:
-    print("waiver")
-elif data.get("needs_verifier") is False:
+if data.get("needs_verifier") is False:
     print("needs-verifier-false")
 elif plan is None:
     # 票上連 `verify` 這一格都沒有 = **沒有宣告**,不是「宣告了卻沒有案例」。
@@ -820,15 +816,10 @@ verify_case() {
     why=$(echo "$plan" | sed -n 1p)
     ticket_base=$(echo "$plan" | sed -n 2p)
     files=$(echo "$plan" | sed -n '3,$p')
-    # **只有「有沒有案例」這一格看 waiver**,check 不看。第 2 輪把 waiver 寫成
-    # 短路整層,於是每一張帶 waiver 的票都不再被 check —— 而票面的驗收 2 與 3
-    # 對「verify.files 非空」的票沒有例外(#27 第 3 輪:驗證者的 A2–A6 就是量這件事)。
+    # 例外只管「有沒有案例」這一格,check 不看:`verify.files` 非空的票一律照跑
+    # (#27 第 3 輪:驗證者的 A2–A6 就是量這件事)。
     if [ -z "$files" ]; then
         case "$why" in
-            waiver)
-                echo "gate: 票 #$TICKET 有 verify_waiver —— 這一層不要求案例(理由寫在票上)"
-                NOTE="$NOTE 票有 verify_waiver,這一層不要求案例。"
-                return 0 ;;
             needs-verifier-false)
                 # `land.sh` 也認這一格(#8):兩支對同一張票不該給出不同的答案。
                 echo "gate: 票 #$TICKET 明著寫了 needs_verifier=false —— 這一層不要求案例"
@@ -844,15 +835,14 @@ verify_case() {
         esac
         {
             echo "gate: 這張票沒有驗證者案例(#$TICKET 的 verify.files 是空的)—— 那是缺口,不是綠。"
-            echo "gate:   (要嘛派驗證者補案例,要嘛在票上補一條誠實的 verify_waiver{by,reason}"
-            echo "gate:    或 needs_verifier=false。)"
+            echo "gate:   (要嘛派驗證者補案例,要嘛票上寫 needs_verifier=false。)"
         } > "$CASES_LOG"
         cat "$CASES_LOG"
         # 缺口也是驗證者的紅(#126 A2):紅榜恰一列 `verify-case:(no-cases)`,不然 rc 3 而
         # failures[] 空,auto-fix 讀成「紅了但沒有歸因」轉 Blocked —— 而下一步明明是派驗證者。
         EXTRA_LOG_ARGS="$EXTRA_LOG_ARGS --extra-log $CASES_LOG"
         CASES_ARGS="--no-cases-log $CASES_LOG"
-        NOTE="$NOTE 票宣告了 verify 卻沒有案例、也沒有 waiver = 缺口。"
+        NOTE="$NOTE 票宣告了 verify 卻沒有案例 = 缺口。"
         CRC=3
         return 0
     fi
@@ -887,11 +877,10 @@ verify_case() {
         # 要證的事,worker 這一輪修不動它 —— 把它算成 worker 的紅,下一輪的人會去修
         # 一個沒有壞掉的東西(D-014 §紅了誰修)。
         #
-        # **這不是把它吞掉**:票上那一格仍然是 `ok:false`,`ticket.py close` 照樣擋著
-        # (`done_blockers()` 讀 `baseline.ok`),而下面這一行與狀態檔的 note 都寫著。
+        # **這不是把它吞掉**:票上那一格仍然是 `ok:false`,下面這一行與狀態檔的 note 都寫著。
         echo "gate: 驗證者的案例在這一輪的樹上全綠,但 baseline 仍然不成立 —— 那是驗證者"
-        echo "gate:   那一趟(stage=red)的事,不算這一輪的紅;票上仍是 ok:false,close 會擋。"
-        NOTE="$NOTE 驗證者的案例候選全綠但 baseline 不成立(驗證者那一趟的事,close 仍擋)。"
+        echo "gate:   那一趟(stage=red)的事,不算這一輪的紅;票上仍是 ok:false。"
+        NOTE="$NOTE 驗證者的案例候選全綠但 baseline 不成立(驗證者那一趟的事)。"
         CRC=0
         return 0
     fi
