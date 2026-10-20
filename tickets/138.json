@@ -14,7 +14,7 @@
     "tickets/134.json",
     "tickets/104.json",
     "tickets/106.json",
-    "scripts/land.sh"
+    "scripts/land.sh 除 :589/:592/:596 三行的字樣外(VFILES_PY 規則 B 等歸 #139)"
   ],
   "depends_on": [
     {
@@ -82,9 +82,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "b5e3e91b459fa89bd9a12d4add2f5deb1479d900",
-  "state": "Ready",
-  "state_version": 7,
+  "base_sha": "a9ca4d0a89b87c8dc22ff909984d9c331b2be3f1",
+  "state": "Done",
+  "state_version": 28,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -97,7 +97,7 @@
   "needs_verifier": false,
   "interface_fixed": false,
   "feature": "agent-control 減法(D-054)",
-  "test_plan": "D-056:純刪除票,驗收只剩「grep 0」與「既有全套綠」;原本那條「刪掉之後不再擋 / 不再印」的行為斷言拿掉 —— 它由 grep 0 與既有全套綠涵蓋,不另寫案例、不新開以票號命名的案例檔。原驗收 2、3(preflight 不擋、lint 不再是子命令、status 沒有 LINT 列、沒有 lint 輪)拿掉;「缺案例仍走缺口派驗證者」由既有 verify/dispatch/test_ticket_126.py MissingCasesEnterTheRedList 守。\n期望值來源:D-054 Q4 原話、VISION ①、本票 objective;不從被測程式算。夾具 tests/control_harness.Sandbox,真 gate.sh / verify-case.py / ticket.py 子行程。\nworker 單元(就地改,幾乎全刪):tests/test_verify_case.py —— LintIsTheFormatRuleInMachineForm :723-820、LintBlocksOnlyWhatTheProjectTurnedOn :1004、LintF7… :1030、LintF8… :1057、LintF9… :1069、LintF10ToF12… :1079、LintBaseline… :1099、LintRulesAreDocumented :1124 刪;check / red / CloseOnlyCountsTheGateRun 留。tests/test_status.py LintRowsInTheRedList :1242 刪、GateWritesStatus :555,:565,:615 刪(:591 hard_block 那條留)。tests/test_gate.py :1130,:1156,:1214 刪、VerifierCasesAtTheGate 的 lint 相關 :917 刪。tests/test_ticket.py VerifyAndClose :401-559 strings 相關改成只剩 landed sha、Lint :1546-1619 verify_strings 三條刪;tests/test_ticket_65.py BinaryOnMain 刪。tests/test_apply.py :1083 刪。tests/test_auto_fix.py MechanicalRedIsAttributed :2028-2092 刪、TheMissingCasesSendAVerifierEveryRound :4335-4410 改成不經 lint。tests/test_repo_map_contract.py TheGateRefusesAStaleIndex :261 刪(D-051 重產留)。tests/test_memory_layer_policy.py TheGateLintsTheChangedMemory :291-355 刪,memory.py lint 本身的案例留。verify/case_lint/test_ticket_102.py 整檔刪;verify/dispatch/test_ticket_126.py LintRedEntersTheRedList :161-213、AnAllLintRoundOnlyDispatchesTheVerifier :376-403 刪,MissingCasesEnterTheRedList 留(改不經 lint);verify/dispatch/test_ticket_129.py:373 機械格那條刪。\nneeds_verifier=false 的理由:純刪除;驗證者案例只會重演「不再擋」這個同一契約。\n變異(worker 自證):留一處已刪的名字 → 驗收「grep 0」那條紅。\n查過的 oracle:上列測試檔;另 docs/DESIGN-VERIFY-CASES.md F 表 §四 :113-126 與 C4/C5 :18-19 改成歷史註記或刪。\n規則原文同票改(原驗收 4,移到這裡;不是驗收條):規則原文同票改(Q12 例外):DISPATCH-TEMPLATE §5.8 刪、§8 第 4 點不再要四問行;verifier.md:7、reviewer.md:24、implementer.md:13,:20、templates/dispatch-opener.md:38-45「票面的機械格要能被機器驗」節刪、opener.md:4,:10 verify_strings 那兩句刪;tickets/SCHEMA.md verify_strings 列刪、docs/WORKFLOW.md :14,:18,:35,:60,:272-284,:310,:330 改成「閘門只跑案例;缺案例 = 缺口」\n驗證者派工文範本同票改(D-054 Q12 例外,主線裁 2026-10-19;與 lint F1/F2 同一套,要在 #143 起驗證者之前落地):templates/dispatch-verifier.md :24「宣告 TAGS、寫登記片段」、:29-32 第 1 樣(新建 verify/<feature>/test_ticket_@TICKET@.py、檔頂 TAGS、照 _template_ticket 的 docstring)、:40-41 第 3 樣(TAGS.d 片段)、:64 result 範例的 files —— 照 D-056 改寫:行為斷言加進最貼近的既有測試模組(tests/ 或既有 verify/ 模組)、不為單張票新開以票號命名的案例檔、交件時 result 的 verify.files 指向那支既有模組(tests/ 模組 tags 留空)。verify/_template_ticket.py 檔本身不刪(sync-to-project.sh:248-262 同步到 T,歸 #147 T 端清單)。純文字改寫,不另加行為斷言。",
+  "test_plan": "D-056:純刪除票,驗收只剩「grep 0」與「既有全套綠」;原本那條「刪掉之後不再擋 / 不再印」的行為斷言拿掉 —— 它由 grep 0 與既有全套綠涵蓋,不另寫案例、不新開以票號命名的案例檔。原驗收 2、3(preflight 不擋、lint 不再是子命令、status 沒有 LINT 列、沒有 lint 輪)拿掉;「缺案例仍走缺口派驗證者」由既有 verify/dispatch/test_ticket_126.py MissingCasesEnterTheRedList 守。\n期望值來源:D-054 Q4 原話、VISION ①、本票 objective;不從被測程式算。夾具 tests/control_harness.Sandbox,真 gate.sh / verify-case.py / ticket.py 子行程。\nworker 單元(就地改,幾乎全刪):tests/test_verify_case.py —— LintIsTheFormatRuleInMachineForm :723-820、LintBlocksOnlyWhatTheProjectTurnedOn :1004、LintF7… :1030、LintF8… :1057、LintF9… :1069、LintF10ToF12… :1079、LintBaseline… :1099、LintRulesAreDocumented :1124 刪;check / red / CloseOnlyCountsTheGateRun 留。tests/test_status.py LintRowsInTheRedList :1242 刪、GateWritesStatus :555,:565,:615 刪(:591 hard_block 那條留)。tests/test_gate.py :1130,:1156,:1214 刪、VerifierCasesAtTheGate 的 lint 相關 :917 刪。tests/test_ticket.py VerifyAndClose :401-559 strings 相關改成只剩 landed sha、Lint :1546-1619 verify_strings 三條刪;tests/test_ticket_65.py BinaryOnMain 刪。tests/test_apply.py :1083 刪。tests/test_auto_fix.py MechanicalRedIsAttributed :2028-2092 刪、TheMissingCasesSendAVerifierEveryRound :4335-4410 改成不經 lint。tests/test_repo_map_contract.py TheGateRefusesAStaleIndex :261 刪(D-051 重產留)。tests/test_memory_layer_policy.py TheGateLintsTheChangedMemory :291-355 刪,memory.py lint 本身的案例留。verify/case_lint/test_ticket_102.py 整檔刪;verify/dispatch/test_ticket_126.py LintRedEntersTheRedList :161-213、AnAllLintRoundOnlyDispatchesTheVerifier :376-403 刪,MissingCasesEnterTheRedList 留(改不經 lint);verify/dispatch/test_ticket_129.py:373 機械格那條刪。\nneeds_verifier=false 的理由:純刪除;驗證者案例只會重演「不再擋」這個同一契約。\n變異(worker 自證):留一處已刪的名字 → 驗收「grep 0」那條紅。\n查過的 oracle:上列測試檔;另 docs/DESIGN-VERIFY-CASES.md F 表 §四 :113-126 與 C4/C5 :18-19 改成歷史註記或刪。\n規則原文同票改(原驗收 4,移到這裡;不是驗收條):規則原文同票改(Q12 例外):DISPATCH-TEMPLATE §5.8 刪、§8 第 4 點不再要四問行;verifier.md:7、reviewer.md:24、implementer.md:13,:20、templates/dispatch-opener.md:38-45「票面的機械格要能被機器驗」節刪、opener.md:4,:10 verify_strings 那兩句刪;tickets/SCHEMA.md verify_strings 列刪、docs/WORKFLOW.md :14,:18,:35,:60,:272-284,:310,:330 改成「閘門只跑案例;缺案例 = 缺口」\n驗證者派工文範本同票改(D-054 Q12 例外,主線裁 2026-10-19;與 lint F1/F2 同一套,要在 #143 起驗證者之前落地):templates/dispatch-verifier.md :24「宣告 TAGS、寫登記片段」、:29-32 第 1 樣(新建 verify/<feature>/test_ticket_@TICKET@.py、檔頂 TAGS、照 _template_ticket 的 docstring)、:40-41 第 3 樣(TAGS.d 片段)、:64 result 範例的 files —— 照 D-056 改寫:行為斷言加進最貼近的既有測試模組(tests/ 或既有 verify/ 模組)、不為單張票新開以票號命名的案例檔、交件時 result 的 verify.files 指向那支既有模組(tests/ 模組 tags 留空)。verify/_template_ticket.py 檔本身不刪(sync-to-project.sh:248-262 同步到 T,歸 #147 T 端清單)。純文字改寫,不另加行為斷言。\nland.sh 三行同票改(第 1 輪反駁 accepted):scripts/land.sh :589、:592 註解與 :596 echo 刪「機械格」並改成真話 —— build 非零時 land 不 commit regen、照常落地(閘門已不量索引;本票不新增任何檢查,land 不因此停);:596 保留前綴「合併後索引重產失敗」(tests/test_land.py:1600 REGEN_FAILED 認它)。只改字樣,不改 land_regen 的退出碼與流程,不另加行為斷言;驗收 1 的 grep 範圍不變(含 scripts/land.sh)。",
   "outline": "摘要:稽核 draft-verify.md —— lint 30 天只擋 2 次(都是補格式)、F7–F12 0 擋、四問 0 次機器檢查 0 筆引用、機械格 5 次全在 A(4 次 code-map 已自動重產)、verify_strings T 8 次拒收 7 次重跑 0 次真。全是 VISION ①。五處 verify_strings 同一張(稽核相依 6):只拿一部分 → F6 安靜失效、verify 退回看範圍欄。lint 與 --lint-log 同一張(相依 5)。\n讀碼(base b5e3e91):verify-case.py lint 常數 :114-135、forbidden_patterns :645、new_symbols :662、lint_one :698、lint_settings :769、verify_api :796、fragile_f7–f12 :875-1122、cmd_lint :1131-1195、lint_baseline :1198、argparse :1330-1336;gate.sh :27-48 檔頭、mech() :338-347、PREFLIGHT_PY :349-462(verify_strings :389-423、tags :425-444、hard_block :446-449 留)、code-map 格 :463-470、記憶錯層格 :471-505、:511 MECH_NOTE、:533 LINT_LOG、:602 LINT_ARGS 傳 status、verify_case :885-998(lint :936-950)、:725-730;status.py :12、:121-128、lint_row :523、parse_lint :530-578、:1068-1072、:1269-1271;auto-fix.sh S_LINT_ONLY :627-630、S_MECH :631-635、mechanical_stop :652-700(TICKET_FIELDS :665)、LINT_ROUND :1822-1901、:1937-1960、:2404-2406、:2492-2495、lint_round :2765-2815、:2846,:2912;ticket.py normalise_verify :583-600、create :684-685、set :794-795、verify :1594-1664、print_verify :1697、close 弱檢查 :1802-1808、verify_string_problems :2244、cmd_lint :2293、FLAG_NOTE :287 與例 :379;apply.sh :1131-1159。四問:DISPATCH-TEMPLATE :239-247、:13、:315;verifier.md:7;reviewer.md:24;implementer.md:13,:20;role-procedures :77,:132。\n設計裁示(自己下):(1) 記憶錯層由 memory.py lint 留著給整理者(稽核保留列 101),閘門那一格刪;(2) tags 未登記不再擋 —— 選不到案例本來就是「缺口」那條路;(3) mechanical_stop 保留處理 preflight rc=4(hard_block),只刪 verify_strings / tags 歸因;(4) verify/**/test_ticket_*.py 裡既有「四問:」docstring 不去動(約 230 處散文,動了只是 diff 噴量)。\n建議順序:verify-case.py → gate.sh → status.py → auto-fix.sh → ticket.py / apply.sh → 範本 / 卡 / 文件 → 測試。complexity=complex(六支腳本、十餘支測試、規則包節錄);model=opus。needs_verifier=false。\n不在本票:land.sh 的 verify.files 規則 B、waiver、close 第二道判準(#139);T 的 land-ticket.sh / test-for.sh(#147 清單)。",
   "decision_refs": [
     "D-053",
@@ -116,5 +116,236 @@
       "path": "scripts/gate.sh",
       "contains": "verify_strings"
     }
-  ]
+  ],
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 394,
+      "tokens_out": 168163,
+      "cache_write": 496982,
+      "cache_read": 61674838,
+      "wall_seconds": 3146,
+      "outcome": "objection",
+      "run_id": "20261019-231647-63947",
+      "session_id": "6304a0e7-915b-44b5-88f6-79888e643b75",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-20T00:09:16+08:00"
+    },
+    {
+      "role": "opener",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 14,
+      "tokens_out": 4326,
+      "cache_write": 41015,
+      "cache_read": 294734,
+      "wall_seconds": 64,
+      "outcome": "accepted",
+      "run_id": "20261019-231647-63947",
+      "session_id": "71d4f1e3-13ec-40b7-8fd2-2faa34a67dee",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-20T00:15:11+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 416,
+      "tokens_out": 181566,
+      "cache_write": 517359,
+      "cache_read": 67381263,
+      "wall_seconds": 290,
+      "outcome": "handed-in",
+      "run_id": "20261019-231647-63947",
+      "session_id": "6304a0e7-915b-44b5-88f6-79888e643b75",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-20T00:15:18+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 26,
+      "tokens_out": 7216,
+      "cache_write": 77965,
+      "cache_read": 864000,
+      "wall_seconds": 98,
+      "outcome": "pass",
+      "run_id": "20261020-001519-97771",
+      "session_id": "d201051b-4436-48c3-b1f1-c01cffa02d83",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-20T00:41:00+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1961,
+      "outcome": "fail",
+      "run_id": "20261020-095528-82450",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-20T10:28:09+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 34,
+      "tokens_out": 12757,
+      "cache_write": 60718,
+      "cache_read": 978701,
+      "wall_seconds": 255,
+      "outcome": "handed-in",
+      "run_id": "20261020-095528-82450-gate",
+      "session_id": "180a956f-a038-4031-8c80-c21b72813416",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-20T10:32:39+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 36,
+      "tokens_out": 10022,
+      "cache_write": 99283,
+      "cache_read": 1552040,
+      "wall_seconds": 143,
+      "outcome": "pass",
+      "run_id": "20261020-103241-52663",
+      "session_id": "d735c8af-87c1-47b9-ae4f-8adc57e5363f",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-20T10:57:28+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2019,
+      "outcome": "pass",
+      "run_id": "20261020-105903-d9-69647",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-20T11:32:42+08:00"
+    }
+  ],
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "驗收 1 的 grep 範圍含 scripts/,但 scripts/land.sh:589/592/596 的「機械格」三行在 out_of_scope 裡不能改,grep 0 做不到;且 596 那句「交全套閘門的機械格攔」在本票刪掉 code-map 格後成了假話(catalog 壞掉、build 非零時 land 不 regen 但照常落地,沒有人攔)—— 要嘛本票放行改 land.sh 那三行(並決定 build 失敗要不要由 land 自己停),要嘛驗收 1 排除 scripts/land.sh 並把這件事開進 #139。",
+      "evidence": "../agent-control-wt/fix-t138/round1/EVIDENCE-round1-objection.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "",
+      "triage": {
+        "verdict": "accepted",
+        "reason": "驗收 1 的 grep 範圍含 scripts/ 而 land.sh 列 out_of_scope,票面自相矛盾;且 :596 那句在本票刪掉 code-map 格後成了假話 —— 放行本票只改 land.sh 那三行字樣。",
+        "round": 1,
+        "by": "auto-fix"
+      }
+    }
+  ],
+  "branch": "t138",
+  "patch_ref": "../agent-control-wt/fix-t138/round2/patch-round2.diff",
+  "gate": {
+    "rc": 0,
+    "sha": "62bc372bbb03da9981407d5db06f34776cd29c9c",
+    "run_id": "20261020-103241-52663",
+    "at": "2026-10-20T10:55:02+08:00"
+  },
+  "repair_round": 2,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "95f25e0dae68ffad4e704901fc223b5745448ea8",
+    "note": "reports/t138/20261020-103241-52663/REVIEW.md",
+    "at": "2026-10-20T11:32:43+08:00"
+  },
+  "landed_sha": "95f25e0dae68ffad4e704901fc223b5745448ea8",
+  "cost_total": {
+    "calendar_seconds": 90661,
+    "wall_seconds": 7976,
+    "runs": 8,
+    "worker_rounds": 2,
+    "objections": 1,
+    "by_role": {
+      "worker": {
+        "runs": 3,
+        "wall_seconds": 3691,
+        "tokens_in": 844,
+        "tokens_out": 362486,
+        "cache_write": 1075059,
+        "cache_read": 130034802,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "objection": 1,
+          "handed-in": 2
+        }
+      },
+      "opener": {
+        "runs": 1,
+        "wall_seconds": 64,
+        "tokens_in": 14,
+        "tokens_out": 4326,
+        "cache_write": 41015,
+        "cache_read": 294734,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "accepted": 1
+        }
+      },
+      "reviewer": {
+        "runs": 2,
+        "wall_seconds": 241,
+        "tokens_in": 62,
+        "tokens_out": 17238,
+        "cache_write": 177248,
+        "cache_read": 2416040,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 2
+        }
+      },
+      "land": {
+        "runs": 2,
+        "wall_seconds": 3980,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 2,
+        "outcomes": {
+          "fail": 1,
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-20T11:32:43+08:00"
+  }
 }
