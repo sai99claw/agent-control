@@ -3,8 +3,8 @@
 ## 驗收表(票面每一條一列;期望值來源獨立於被測程式:票面 acceptance 字面 / interface_contracts / 夾具自己寫下的值)
 A1 | cli   | agent-command --model codex:gpt-5.6-sol --tool codex(不給 / high / turbo);claude-code 兩句 | 恰為票面那一句;high 只在 -m 後加 -c 'model_reasoning_effort="high"';turbo rc 2;claude 不變 | 票面 A1 原話;claude 句抄 #114 契約
 A2 | integ | auto-fix 真起假 codex 與假 claude worker,各記 argv / pwd / branch / AC_ROLE / AC_ROOT | --add-dir 恰一次、值 = 輪次目錄(不是主 repo);cwd 兩者都是票分支 worktree;branch=t1;AC_ROLE=worker;AC_ROOT 同一個隔離位置 | #144 驗收 1
-A3 | integ | base_sha 上的票寫 OLD objective,權威票庫寫 NEW | 派工文有「權威票面快照」、含 NEW 不含 OLD、明說 work/tickets/1.json 不能推翻;控制根票副本 NEW;work/ 那份 OLD(夾具自證) | 票面 A3 原話
-A4 | integ | worker 在主 repo 新增 / 刪除 / 修改、已髒檔再改、HEAD 前進、切分支、hard_block.dirs 新增 / 刪除 / 改動;驗證者越界;批次 worker 越界 | rc 8、票 Blocked / owner=main、attempt.failed reason=guard-violation、唯一 decision 指出路徑、guard 報告有前後;票分支頭不變 | #144 驗收 3
+A3 | integ | base_sha 上的票寫 OLD objective,權威票庫寫 NEW | 派工文有「權威票面快照」、含 NEW 不含 OLD、明說 worktree 的 tickets/1.json 不能推翻;控制根票副本 NEW;worktree 那份 OLD(夾具自證) | 票面 A3 原話
+A4 | integ | worker 在主 repo 新增 / 刪除 / 修改、已髒檔再改、HEAD 前進、切分支、hard_block.dirs 新增 / 刪除 / 改動;驗證者越界;批次 worker 越界 | rc 8、票 Blocked / owner=main、attempt.failed reason=guard-violation、唯一 decision 指出路徑、guard 報告有前後;票分支與 worktree 留著 | #144 驗收 3
 A5 | integ | 寫 tickets/(控制面)/ board/ 下非控制面檔;hard_block.dirs ["~/g"] / ["../o"];缺 / [] 時寫主 repo 外 | 控制面不擋、board/ 其他檔擋;~ 展開與相對主 repo 都抓;缺 / [] 不抓 repo 外 | 票面 A5 原話
 A6 | integ | 同 stamp land.start + land.pass(sha = 新 HEAD);只有 land.start;pass 的 sha 對不上;合法 land + 多一個檔 | 第一種不擋,其餘三種 rc 8 | 票面 A6 原話
 A7 | integ | 假 codex 回額度信封且越界;只撞額度(表 worker = [codex astra, opus]) | 前者 rc 8、票 Blocked 不改派、reason=guard-violation、頁指出路徑;後者同一次接著起 claude worker、rc 0、票的 model / tool 不改、沒有 guard-violation | 票面 A7;#121 A2 / A4 取代「rc 7、Ready、改 opus」
@@ -276,9 +276,9 @@ class GuardBase(CodexBase):
         self.assertEqual(len(pages), 1, pages)  # pin:票面 A4「唯一 decision」
         self.assertIn(path, self.page_text(pages[0]))
         self.assert_evidence(path)
-        self.assertEqual(self.git("branch", "--list", "t1").strip(), "t1", "票分支要留著")
-        self.assertEqual(self.git("rev-parse", "t1").strip(),
-                         self.git("rev-parse", "main").strip(), "越界後票分支頭要回到派工前")
+        branch = self.git("branch", "--list", "t1").strip().lstrip("+* ")
+        self.assertEqual(branch, "t1", "票分支要留著")
+        self.assertTrue(os.path.isdir(self.ticket_worktree()), "票 worktree 要留著")
 
     def assert_not_stopped(self, done):
         self.assertNotEqual(done.returncode, GUARD_RC, done.stdout + done.stderr)
@@ -343,8 +343,8 @@ class TheSnapshotComesFromTheLiveStore(GuardBase):
         self.assertIn("OBJ-NEW-from-store", packet)
         self.assertNotIn("OBJ-OLD-from-base", packet)
         said = [line for line in packet.splitlines()
-                if "work/tickets/1.json" in line and "推翻" in line]
-        self.assertTrue(said, "派工文要明說 work/tickets/1.json 不能推翻快照")
+                if "worktree" in line and "tickets/1.json" in line and "推翻" in line]
+        self.assertTrue(said, "派工文要明說 worktree 的 tickets/1.json 不能推翻快照")
         with open(control, encoding="utf-8") as handle:
             self.assertEqual(json.load(handle)["objective"], "OBJ-NEW-from-store")
         with open(work, encoding="utf-8") as handle:
@@ -352,7 +352,7 @@ class TheSnapshotComesFromTheLiveStore(GuardBase):
                              "夾具要讓 work/ 真的是舊版,不然什麼都沒比")
 
     def test_a3_the_claude_worker_sees_the_new_objective(self):
-        """A3 claude worker:派工文「權威票面快照」是 NEW、控制根票是 NEW、work/ 那份是 OLD。"""
+        """A3 claude worker:派工文「權威票面快照」是 NEW、控制根票是 NEW、worktree 那份是 OLD。"""
         self.set_worker(FAKE_AGENT.replace("@REPO@", self.repo).replace("@SANDBOX@", self.home)
                         .replace("@WHO@", "nobody").replace("@STRAY@", "true")
                         .replace("@DELIVERY@", DELIVER_COMMIT))
@@ -570,9 +570,9 @@ class ACommitOnTheTicketBranchIsTheDelivery(GuardBase):
         self.assertEqual(len(self.decisions()), 1, self.decisions())
 
     def test_a9_a_clean_commit_is_received_and_gated_in_the_same_worktree(self):
-        """新 commit + clean → 收 EVIDENCE/result、同一 t1 worktree 跑 gate、main 不動。"""
-        main_before = self.git("rev-parse", "main").strip()
+        """新 commit + clean → 從 EVIDENCE 抽 result、同一 t1 worktree 跑 gate、main 不動。"""
         self.arm()
+        main_before = self.git("rev-parse", "main").strip()
 
         done = self.auto_fix("--no-review")
 
@@ -585,28 +585,29 @@ class ACommitOnTheTicketBranchIsTheDelivery(GuardBase):
                          or control.startswith(os.path.realpath(self.repo) + os.sep))
         head = self.git("rev-parse", "t1").strip()
         self.assertGreater(int(self.git("rev-list", "--count", "%s..t1" % main_before)), 0)
-        self.assertEqual(self.git("status", "--porcelain", cwd=worktree), "")
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all",
+                                  cwd=worktree), "")
         self.assertEqual(self.git("rev-parse", "main").strip(), main_before)
         self.assertEqual(self.guard_rows(), [])
 
         row = self.load_ticket("1")
         self.assertEqual((row["gate"]["rc"], row["gate"]["sha"]), (0, head))
         status = self.status_of("1", "gate")
-        self.assertEqual(os.path.realpath(status["worktree"]), worktree)
+        self.assertEqual(os.path.realpath(status["repair_context"]["worktree"]), worktree)
 
-        evidence = self.result_files("EVIDENCE-round1.md")
         result = self.result_files("result-round1.json")
-        self.assertEqual((len(evidence), len(result)), (1, 1), done.stdout)
+        self.assertEqual(len(result), 1, done.stdout)
         with open(result[0], encoding="utf-8") as handle:
             self.assertIs(json.load(handle)["present"], True)
         expected = os.path.join(self.copy_root(), "EVIDENCE-round1.md")
-        self.assertEqual(lines_of(os.path.join(self.home, "evidence.where")), [expected])
-        self.assertIn(expected, self.read("agent.stdin", where=self.home))
+        recorded = lines_of(os.path.join(self.home, "evidence.where"))
+        self.assertEqual([os.path.realpath(path) for path in recorded], [expected])
+        self.assertIn(recorded[0], self.read("agent.stdin", where=self.home))
 
     def test_a9_an_uncommitted_change_is_not_a_delivery_or_auto_committed(self):
         """只改不 commit → rc 5、t1 頭不變、髒檔留下,腳本沒有代替 worker commit。"""
-        main_before = self.git("rev-parse", "main").strip()
         self.arm(delivery=DELIVER_UNCOMMITTED)
+        main_before = self.git("rev-parse", "main").strip()
 
         done = self.auto_fix("--no-review")
 
@@ -614,14 +615,14 @@ class ACommitOnTheTicketBranchIsTheDelivery(GuardBase):
         worktree = self.ticket_worktree()
         self.assertTrue(os.path.isdir(worktree), worktree)
         self.assertEqual(self.git("rev-parse", "t1").strip(), main_before)
-        dirty = self.git("status", "--porcelain", cwd=worktree)
+        dirty = self.git("status", "--porcelain", "--untracked-files=all", cwd=worktree)
         self.assertIn("tests/test_thing.py", dirty)
         self.assertEqual(int(self.git("rev-list", "--count", "%s..t1" % main_before)), 0)
 
     def test_a9_a_commit_plus_an_uncommitted_change_is_not_a_delivery(self):
         """有新 commit 但工作樹仍髒 → rc 5、commit 與髒檔都留下,理由指出未 commit。"""
-        main_before = self.git("rev-parse", "main").strip()
         self.arm(delivery=DELIVER_COMMIT_DIRTY)
+        main_before = self.git("rev-parse", "main").strip()
 
         done = self.auto_fix("--no-review")
 
@@ -629,13 +630,14 @@ class ACommitOnTheTicketBranchIsTheDelivery(GuardBase):
         worktree = self.ticket_worktree()
         self.assertTrue(os.path.isdir(worktree), worktree)
         self.assertEqual(int(self.git("rev-list", "--count", "%s..t1" % main_before)), 1)
-        self.assertIn("tests/test_thing.py", self.git("status", "--porcelain", cwd=worktree))
+        self.assertIn("tests/test_thing.py", self.git(
+            "status", "--porcelain", "--untracked-files=all", cwd=worktree))
         said = done.stdout + done.stderr + "\n" + "\n".join(
             self.page_text(row) for row in self.decisions())
         self.assertRegex(said, r"未 commit|工作樹[^\n]*(?:不乾淨|髒)")
 
     def test_a10_updating_another_branch_ref_is_still_a_guard_violation(self):
-        """worker 在 t1 裡 `git update-ref` 另一分支 → rc 8、t1 頭回到派工前。"""
+        """worker 在 t1 裡 `git update-ref` 另一分支 → rc 8、t1 分支與 worktree 留著。"""
         self.arm('git -C "$REPO" update-ref refs/heads/worker-other '
                  '"$(git -C "$REPO" rev-parse main)"')
         self.assert_stopped(self.auto_fix("--no-review"), "worker-other")
