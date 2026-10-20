@@ -51,7 +51,7 @@ TOKENS = ("tokens_in", "tokens_out", "cache_write", "cache_read")
 REGISTERED = (("worker", "handed-in"), ("worker", "no-patch"), ("worker", "apply-failed"),
               ("worker", "timeout"), ("worker", "objection"), ("worker", "error"),
               ("reviewer", "pass"), ("reviewer", "fail"), ("reviewer", "missing"),
-              ("opener", "accepted"), ("opener", "rejected"), ("opener", "escalate"),
+              ("opener", "accepted"), ("opener", "escalate"),
               ("opener", "undecided"),
               ("land", "pass"), ("land", "fail"), ("land", "refused"))
 REGISTERED_WORDS = sorted({word for _, word in REGISTERED})
