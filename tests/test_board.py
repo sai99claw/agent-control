@@ -441,6 +441,7 @@ class ReadsWhatIsAlreadyOnDisk(BoardUp):
         data = json.loads(body)
         self.assertEqual(data["ticket_runs"]["1"]["runs"][0]["rc"], 1)
         self.assertEqual(data["boxes"]["1"]["objections"][0]["category"], "test_defect")
+        self.assertTrue(data["inbox"]["entries"], "收件匣 entries 是空的")
         self.assertEqual(data["inbox"]["entries"][0]["name"], "1-a")
         self.assertEqual(data["tickets"][0]["id"], "1")
 

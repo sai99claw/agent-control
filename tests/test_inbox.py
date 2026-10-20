@@ -192,6 +192,31 @@ class ListAndAck(InboxBase):
         self.inbox("ack", "7")
         self.assertEqual(self.load_ticket("7")["state"], "Blocked")
 
+    def test_pages_acked_in_the_old_acked_jsonl_stay_acked_after_the_move(self):
+        """#143 第 2 輪:這張刪了 `acked.jsonl`,現場只在那裡記過 ack 的頁不能落地後全變回未讀。
+
+        **變異**:`entries` 不呼叫 `migrate_acked_jsonl` → 這一條紅(清單上又出現 #7)。
+        """
+        inbox = os.path.join("reports", "inbox")
+        self.write(os.path.join(inbox, "7-old.md"), "# #7 —— 閘門紅\n\n舊頁,沒有第一行 JSON\n")
+        self.write(os.path.join(inbox, "8-old.md"), "# #8 —— 覆核退回\n\n還沒 ack\n")
+        self.write(os.path.join(inbox, "acked.jsonl"),
+                   '{"name": "7-old", "at": "2026-10-01T00:00:00+00:00", "ticket": "7",'
+                   ' "by": "review.sh"}\n')
+        listed = self.inbox("list")
+        self.assertEqual(listed.returncode, 0, listed.stdout + listed.stderr)
+        self.assertNotIn("#7", listed.stdout)
+        self.assertIn("#8", listed.stdout)
+        self.assertFalse(self.exists(os.path.join(inbox, "acked.jsonl")))
+        self.assertTrue(self.exists(os.path.join(inbox, "acked", "7-old.md")))
+        self.assertEqual([(row["name"], row.get("by")) for row in self.pages("7")],
+                         [("7-old", "review.sh")])
+        again = self.inbox("list", "--all")
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn("#7", again.stdout)
+        self.assertNotIn("#7", self.inbox("list").stdout, "再跑一次又變回未讀")
+        self.assertIn("#8", self.inbox("list").stdout)
+
     def test_an_acked_page_is_still_readable_with_all(self):
         self.make_ticket("7")
         self.post()

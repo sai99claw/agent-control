@@ -60,6 +60,7 @@ INBOX_KINDS = ("decision", "done")
 DEFAULT_REPORTS = "reports"
 INBOX_REL = "inbox"
 ACKED_REL = "acked"
+LEGACY_ACKED = "acked.jsonl"  # #143 之前的 ack 帳,只剩 `migrate_acked_jsonl` 讀
 PAGE_SUFFIX = ".md"
 META = re.compile(r"^<!-- inbox (\{.*\}) -->$")
 TITLE = re.compile(r"^#\s+#?(\S+)\s+——\s+(.*)$")
@@ -132,8 +133,37 @@ def pages_in(where):
                   and os.path.isfile(os.path.join(where, name)))
 
 
+def migrate_acked_jsonl(root):
+    """一次性搬遷(#143 第 2 輪):#143 之前 ack 只記在 `acked.jsonl`,頁留在原處。
+    有那個檔就把裡面記過的頁搬進 `acked/`(保留當時的 `by` 與時間),再刪掉它;
+    沒有就什麼都不做。中途倒下時 `acked.jsonl` 還在,下一次再搬剩下的 —— 冪等。"""
+    legacy = os.path.join(inbox_dir(root), LEGACY_ACKED)
+    if not os.path.isfile(legacy):
+        return
+    acked = {}
+    with open(legacy, encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and row.get("name"):
+                acked[str(row["name"])] = row
+    for path in pages_in(inbox_dir(root)):
+        name = os.path.basename(path)[:-len(PAGE_SUFFIX)]
+        if name in acked:
+            row = read_page(root, path, False)
+            if row is not None:
+                row.pop("_mtime", None)
+                move_to_acked(root, row, str(acked[name].get("by") or "main"),
+                              acked[name].get("at"))
+    os.remove(legacy)
+
+
 def entries(root, include_acked=False):
     """收件匣的每一頁,舊的在前(`at`,同一秒再看檔的 mtime)。只讀兩個目錄,不讀任何索引。"""
+    # 每一個讀收件匣的入口(inbox.py 各指令、new-session.sh、看板)都經過這裡。
+    migrate_acked_jsonl(root)
     rows = []
     boxes = [(inbox_dir(root), False)] + ([(acked_dir(root), True)] if include_acked else [])
     for where, acked in boxes:
@@ -343,7 +373,7 @@ def cmd_show(args):
     return 0
 
 
-def move_to_acked(root, row, by):
+def move_to_acked(root, row, by, acked_at=None):
     """把一頁搬進 `acked/`,第一行補記誰收的、何時。先寫新檔再刪舊檔:中途倒下最多
     兩邊各一份,不會一份都不剩。"""
     src = os.path.join(root, row["page"])
@@ -351,7 +381,7 @@ def move_to_acked(root, row, by):
         meta, body = split_page(handle.read())
     meta = dict(meta or {key: row.get(key, "") for key in
                          ("ticket", "state", "what", "where", "at")})
-    meta.update({"acked_at": now(), "by": by})
+    meta.update({"acked_at": acked_at or now(), "by": by})
     dest_dir = acked_dir(root)
     os.makedirs(dest_dir, exist_ok=True)
     dest = os.path.join(dest_dir, row["name"] + PAGE_SUFFIX)
