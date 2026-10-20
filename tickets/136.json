@@ -65,8 +65,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "70a9a9c946d2313f95964bf38f58166d1cf29237",
-  "state": "InReview",
-  "state_version": 28,
+  "state": "Done",
+  "state_version": 30,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -296,10 +296,71 @@
   "review": {
     "verdict": "pass",
     "by": "reviewer@opus",
-    "sha": "87987f69b936c2352861ccf67549aa62e0bc5269",
+    "sha": "f9b8c7d1b99a91b441dfc76c432416dc08edb594",
     "note": "reports/t136/20261019-180145-2457/REVIEW.md",
-    "at": "2026-10-19T20:33:27+08:00",
+    "at": "2026-10-20T11:33:44+08:00",
     "state_version": 27
   },
-  "landed_sha": "87987f69b936c2352861ccf67549aa62e0bc5269"
+  "landed_sha": "f9b8c7d1b99a91b441dfc76c432416dc08edb594",
+  "cost_total": {
+    "calendar_seconds": 90722,
+    "wall_seconds": 12438,
+    "runs": 7,
+    "worker_rounds": 2,
+    "objections": 1,
+    "by_role": {
+      "verifier": {
+        "runs": 1,
+        "wall_seconds": 3604,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "handed-in": 1
+        }
+      },
+      "worker": {
+        "runs": 3,
+        "wall_seconds": 4269,
+        "tokens_in": 50,
+        "tokens_out": 14484,
+        "cache_write": 68931,
+        "cache_read": 1553956,
+        "unknown_token_runs": 2,
+        "outcomes": {
+          "timeout": 1,
+          "handed-in": 1,
+          "objection": 1
+        }
+      },
+      "reviewer": {
+        "runs": 1,
+        "wall_seconds": 117,
+        "tokens_in": 24,
+        "tokens_out": 7559,
+        "cache_write": 60805,
+        "cache_read": 666139,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 1
+        }
+      },
+      "land": {
+        "runs": 2,
+        "wall_seconds": 4448,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 2,
+        "outcomes": {
+          "fail": 1,
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-20T11:33:44+08:00"
+  }
 }

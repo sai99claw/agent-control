@@ -94,16 +94,111 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "b5e3e91b459fa89bd9a12d4add2f5deb1479d900",
-  "state": "Ready",
-  "state_version": 5,
+  "base_sha": "1648707de1a29a2eae6c52d3b5e975faf15b6d15",
+  "state": "Done",
+  "state_version": 26,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
-    "tags": [],
-    "run": "",
-    "notes": ""
+    "files": [
+      "verify/dispatch/test_ticket_115.py"
+    ],
+    "tags": [
+      "worker-guard"
+    ],
+    "run": "python3 scripts/verify.py --tag worker-guard",
+    "notes": "Commit plus a clean ticket worktree is the worker delivery. The suite also checks missing delivery, same-worktree gating, main isolation, and other-ref guard violations. Baseline red used an isolated control root because live verify.files is merged only on receipt.",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-21T00:57:35+08:00",
+      "files": [
+        "verify/dispatch/test_ticket_115.py"
+      ],
+      "base_ref": "1648707de1a29a2eae6c52d3b5e975faf15b6d15",
+      "base_sha": "1648707de1a29a2eae6c52d3b5e975faf15b6d15",
+      "candidate": "../agent-control-wt/t144",
+      "candidate_sha": "52b4d5ccb08506e8cb25b08b0cfeb2377b7beb4c",
+      "baseline": {
+        "red": [
+          "verify.dispatch.test_ticket_115.ACommitOnTheTicketBranchIsTheDelivery.test_a10_updating_another_branch_ref_is_still_a_guard_violation",
+          "verify.dispatch.test_ticket_115.ACommitOnTheTicketBranchIsTheDelivery.test_a9_a_clean_commit_is_received_and_gated_in_the_same_worktree",
+          "verify.dispatch.test_ticket_115.ACommitOnTheTicketBranchIsTheDelivery.test_a9_a_commit_plus_an_uncommitted_change_is_not_a_delivery",
+          "verify.dispatch.test_ticket_115.ACommitOnTheTicketBranchIsTheDelivery.test_a9_an_uncommitted_change_is_not_a_delivery_or_auto_committed",
+          "verify.dispatch.test_ticket_115.CodexStartsWhereClaudeStarts.test_a2_codex_and_claude_share_cwd_role_and_isolated_root",
+          "verify.dispatch.test_ticket_115.CodexStartsWhereClaudeStarts.test_a2_codex_gets_the_copy_root_as_add_dir_exactly_once",
+          "verify.dispatch.test_ticket_115.OnlyAnAttributedLandExplainsHead.test_a6_a_land_start_alone_does_not_excuse_head",
+          "verify.dispatch.test_ticket_115.OnlyAnAttributedLandExplainsHead.test_a6_a_legal_land_does_not_hide_a_worktree_change",
+          "verify.dispatch.test_ticket_115.OnlyAnAttributedLandExplainsHead.test_a6_a_matching_land_start_and_pass_is_not_a_violation",
+          "verify.dispatch.test_ticket_115.OnlyAnAttributedLandExplainsHead.test_a6_a_pass_whose_sha_is_not_the_new_head_does_not_excuse_it",
+          "verify.dispatch.test_ticket_115.OnlyTheControlPlaneIsExempt.test_a5_a_write_elsewhere_under_board_is_a_violation",
+          "verify.dispatch.test_ticket_115.OnlyTheControlPlaneIsExempt.test_a5_a_write_under_tickets_is_not_a_violation",
+          "verify.dispatch.test_ticket_115.QuotaDoesNotSwallowAViolation.test_a7_quota_alone_moves_to_the_next_candidate_without_a_violation",
+          "verify.dispatch.test_ticket_115.TheGuardCoversEveryAgent.test_a4_a_verifier_outside_its_copy_is_stopped",
+          "verify.dispatch.test_ticket_115.TheGuardSeesGuardedDirs.test_a4_a_deleted_file_under_a_guarded_dir",
+          "verify.dispatch.test_ticket_115.TheGuardSeesGuardedDirs.test_a4_a_modified_file_under_a_guarded_dir",
+          "verify.dispatch.test_ticket_115.TheGuardSeesGuardedDirs.test_a4_a_new_file_under_a_guarded_dir",
+          "verify.dispatch.test_ticket_115.TheGuardSeesGuardedDirs.test_a5_an_unlisted_dir_is_not_watched_when_another_is",
+          "verify.dispatch.test_ticket_115.TheGuardSeesGuardedDirs.test_a5_missing_or_empty_hard_block_dirs_watch_only_the_main_repo",
+          "verify.dispatch.test_ticket_115.TheGuardSeesGuardedDirs.test_a5_missing_or_empty_hard_block_dirs_watch_only_the_main_repo",
+          "verify.dispatch.test_ticket_115.TheGuardSeesTheMainRepo.test_a4_a_deleted_tracked_file",
+          "verify.dispatch.test_ticket_115.TheGuardSeesTheMainRepo.test_a4_a_modified_tracked_file",
+          "verify.dispatch.test_ticket_115.TheGuardSeesTheMainRepo.test_a4_a_new_file_in_the_main_repo",
+          "verify.dispatch.test_ticket_115.TheGuardSeesTheMainRepo.test_a4_an_already_dirty_file_changed_again",
+          "verify.dispatch.test_ticket_115.TheGuardSeesTheMainRepo.test_a4_head_moved_without_a_land",
+          "verify.dispatch.test_ticket_115.TheGuardSeesTheMainRepo.test_a4_the_branch_was_switched",
+          "verify.dispatch.test_ticket_115.TheSnapshotComesFromTheLiveStore.test_a3_the_claude_worker_sees_the_new_objective"
+        ],
+        "red_lines": [
+          "verify.dispatch.test_ticket_115.ACommitOnTheTicketBranchIsTheDelivery.test_a10_updating_another_branch_ref_is_still_a_guard_violation: AssertionError: 5 != 8 : auto-fix: #1 照角色表起 worker:opus(tool claude-code;鏈第 0 格:worker 鏈第 0 格)",
+          "verify.dispatch.test_ticket_115.ACommitOnTheTicketBranchIsTheDelivery.test_a9_a_clean_commit_is_received_and_gated_in_the_same_worktree: AssertionError: 5 != 0 : auto-fix: #1 照角色表起 worker:opus(tool claude-code;鏈第 0 格:worker 鏈第 0 格)",
+          "verify.dispatch.test_ticket_115.ACommitOnTheTicketBranchIsTheDelivery.test_a9_a_commit_plus_an_uncommitted_change_is_not_a_delivery: AssertionError: False is not true : /private/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmp8i96ypsh/repo-wt/t1",
+          "verify.dispatch.test_ticket_115.ACommitOnTheTicketBranchIsTheDelivery.test_a9_an_uncommitted_change_is_not_a_delivery_or_auto_committed: AssertionError: False is not true : /private/var/folders/zs/6kkmmpkd0p34fcs55sz8w_cr0000gn/T/tmpjtgii0a8/repo-wt/t1",
+          "verify.dispatch.test_ticket_115.CodexStartsWhereClaudeStarts.test_a2_codex_and_claude_share_cwd_role_and_isolated_root: AssertionError: 5 != 0 : auto-fix: #1 照角色表起 worker:codex:gpt-6-astra(tool codex;鏈第 0 格:worker 鏈第 0 格)",
+          "verify.dispatch.test_ticket_115.CodexStartsWhereClaudeStarts.test_a2_codex_gets_the_copy_root_as_add_dir_exactly_once: AssertionError: 5 != 0 : auto-fix: #1 照角色表起 worker:codex:gpt-6-astra(tool codex;鏈第 0 格:worker 鏈第 0 格)",
+          "verify.dispatch.test_ticket_115.OnlyAnAttributedLandExplainsHead.test_a6_a_land_start_alone_does_not_excuse_head: AssertionError: '' != 't1'",
+          "verify.dispatch.test_ticket_115.OnlyAnAttributedLandExplainsHead.test_a6_a_legal_land_does_not_hide_a_worktree_change: AssertionError: '' != 't1'",
+          "verify.dispatch.test_ticket_115.OnlyAnAttributedLandExplainsHead.test_a6_a_matching_land_start_and_pass_is_not_a_violation: AssertionError: 5 != 0 : auto-fix: #1 照角色表起 worker:opus(tool claude-code;鏈第 0 格:worker 鏈第 0 格)",
+          "verify.dispatch.test_ticket_115.OnlyAnAttributedLandExplainsHead.test_a6_a_pass_whose_sha_is_not_the_new_head_does_not_excuse_it: AssertionError: '' != 't1'",
+          "verify.dispatch.test_ticket_115.OnlyTheControlPlaneIsExempt.test_a5_a_write_elsewhere_under_board_is_a_violation: AssertionError: '' != 't1'",
+          "verify.dispatch.test_ticket_115.OnlyTheControlPlaneIsExempt.test_a5_a_write_under_tickets_is_not_a_violation: AssertionError: 5 != 0 : auto-fix: #1 照角色表起 worker:opus(tool claude-code;鏈第 0 格:worker 鏈第 0 格)",
+          "verify.dispatch.test_ticket_115.QuotaDoesNotSwallowAViolation.test_a7_quota_alone_moves_to_the_next_candidate_without_a_violation: AssertionError: 5 != 0 : auto-fix: #1 照角色表起 worker:codex:gpt-6-astra(tool codex;鏈第 0 格:worker 鏈第 0 格)",
+          "verify.dispatch.test_ticket_115.TheGuardCoversEveryAgent.test_a4_a_verifier_outside_its_copy_is_stopped: AssertionError: 5 != 8 : auto-fix: #1 照角色表起 worker:opus(tool claude-code;鏈第 0 格:worker 鏈第 0 格)",
+          "verify.dispatch.test_ticket_115.TheGuardSeesGuardedDirs.test_a4_a_deleted_file_under_a_guarded_dir: AssertionError: '' != 't1'",
+          "verify.dispatch.test_ticket_115.TheGuardSeesGuardedDirs.test_a4_a_modified_file_under_a_guarded_dir: AssertionError: '' != 't1'",
+          "verify.dispatch.test_ticket_115.TheGuardSeesGuardedDirs.test_a4_a_new_file_under_a_guarded_dir: AssertionError: '' != 't1'",
+          "verify.dispatch.test_ticket_115.TheGuardSeesGuardedDirs.test_a5_an_unlisted_dir_is_not_watched_when_another_is: AssertionError: 5 != 0 : auto-fix: #1 照角色表起 worker:opus(tool claude-code;鏈第 0 格:worker 鏈第 0 格)",
+          "verify.dispatch.test_ticket_115.TheGuardSeesGuardedDirs.test_a5_missing_or_empty_hard_block_dirs_watch_only_the_main_repo: AssertionError: 5 != 0 : auto-fix: #1 照角色表起 worker:opus(tool claude-code;鏈第 0 格:worker 鏈第 0 格)",
+          "verify.dispatch.test_ticket_115.TheGuardSeesGuardedDirs.test_a5_missing_or_empty_hard_block_dirs_watch_only_the_main_repo: AssertionError: 5 != 0 : auto-fix: #1 照角色表起 worker:opus(tool claude-code;鏈第 0 格:worker 鏈第 0 格)",
+          "verify.dispatch.test_ticket_115.TheGuardSeesTheMainRepo.test_a4_a_deleted_tracked_file: AssertionError: '' != 't1'",
+          "verify.dispatch.test_ticket_115.TheGuardSeesTheMainRepo.test_a4_a_modified_tracked_file: AssertionError: '' != 't1'",
+          "verify.dispatch.test_ticket_115.TheGuardSeesTheMainRepo.test_a4_a_new_file_in_the_main_repo: AssertionError: '' != 't1'",
+          "verify.dispatch.test_ticket_115.TheGuardSeesTheMainRepo.test_a4_an_already_dirty_file_changed_again: AssertionError: '' != 't1'",
+          "verify.dispatch.test_ticket_115.TheGuardSeesTheMainRepo.test_a4_head_moved_without_a_land: AssertionError: '' != 't1'",
+          "verify.dispatch.test_ticket_115.TheGuardSeesTheMainRepo.test_a4_the_branch_was_switched: AssertionError: '' != 't1'",
+          "verify.dispatch.test_ticket_115.TheSnapshotComesFromTheLiveStore.test_a3_the_claude_worker_sees_the_new_objective: AssertionError: [] is not true : 派工文要明說 worktree 的 tickets/1.json 不能推翻快照"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 35,
+        "skipped": 0,
+        "log": "../agent-control-wt/t144/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 35,
+        "skipped": 0,
+        "log": "../agent-control-wt/t144/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "complexity": "complex",
   "needs_verifier": true,
@@ -125,5 +220,203 @@
       "path": "scripts/apply.sh",
       "contains": "cmd_rebase"
     }
-  ]
+  ],
+  "branch": "t144",
+  "patch_ref": "../agent-control-wt/fix-t144/cloud1/patch-round1.diff",
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "驗收 2 的 grep 0 做不到字面:`headers\\(\\)` 會中 board.py 的 `end_headers()`、`patch-round` 會中每一個 `dispatch-round`;建議把 regex 改成 `\\bheaders\\(\\)` 與 `[^s]patch-round`(或把這兩類列為例外),其餘照票。",
+      "evidence": "../agent-control-wt/fix-t144/cloud1/EVIDENCE-round1.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "主線裁:驗收本意是刪掉那幾個函式,不是禁止字樣;grep 改用字邊界(\\bheaders\\(\\)、\\bpatch-round)判,end_headers / dispatch-round 不算命中"
+    },
+    {
+      "category": "test_defect",
+      "body": "verify/dispatch/test_ticket_115.py 的紅全在案例假設、產品照票面行為:(1) A9 三條在 arm() 之前取 main_before,而 ticket_ready 會在 main commit「開票 #1」;(2) assert_stopped 用 `git branch --list t1` 比 \"t1\",票分支掛在 worktree 上時 git 印 \"+ t1\"(127/128 共 15 條同源);(3) assert_stopped 要求越界後 t1 頭回到派工前,但驗收 3 只要既有 guard_stop 路徑(不收件、worktree 留著),腳本不回捲 worker 自己的 commit;(4) A3 要字面 work/tickets/1.json,#144 已沒有 work/ 副本;(5) A9 讀 status[\"worktree\"],既有結構在 status[\"repair_context\"][\"worktree\"];(6) A9 未追蹤檔要 `git status --porcelain --untracked-files=all`;(7) A9 要 reports/ 裡有 EVIDENCE-round1.md,base 與票面只在驗證者沒交那條路才複製 —— 若要,是 round_receive 一行 cp,請開題者裁。",
+      "evidence": "../agent-control-wt/fix-t144/round3/EVIDENCE-round3.md",
+      "owner": "verifier",
+      "disposition": "fixed",
+      "follow_up": "../agent-control-wt/verify-t144/round3/patch-verify.diff"
+    }
+  ],
+  "gate": {
+    "rc": 0,
+    "sha": "52b4d5ccb08506e8cb25b08b0cfeb2377b7beb4c",
+    "run_id": "20261021-003042-66986",
+    "at": "2026-10-21T00:57:36+08:00"
+  },
+  "cost": [
+    {
+      "role": "verifier",
+      "round": 2,
+      "model": "codex:gpt-5.6-sol",
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 749,
+      "outcome": "handed-in",
+      "run_id": "20261020-230029-16032",
+      "session_id": null,
+      "by": "auto-fix.sh",
+      "note": "reports/t144/20261020-230029-16032/verifier-round2.log 裡沒有 JSON 信封",
+      "effort": "high",
+      "at": "2026-10-20T23:35:15+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 56,
+      "tokens_out": 19131,
+      "cache_write": 104065,
+      "cache_read": 2558568,
+      "wall_seconds": 471,
+      "outcome": "handed-in",
+      "run_id": "20261020-230029-16032",
+      "session_id": "a54b163b-10b6-4df2-969a-90e2405a3f75",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-20T23:35:17+08:00"
+    },
+    {
+      "role": "worker",
+      "round": 3,
+      "model": "opus",
+      "tokens_in": 58,
+      "tokens_out": 28417,
+      "cache_write": 136878,
+      "cache_read": 3342205,
+      "wall_seconds": 719,
+      "outcome": "objection",
+      "run_id": "20261020-233518-56354",
+      "session_id": "d2c5cfe3-c92a-41e4-96ef-5be03eedf098",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-21T00:15:33+08:00"
+    },
+    {
+      "role": "verifier",
+      "round": 3,
+      "model": "codex:gpt-5.6-sol",
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 903,
+      "outcome": "handed-in",
+      "run_id": "20261020-233518-56354",
+      "session_id": null,
+      "by": "auto-fix.sh",
+      "note": "reports/t144/20261020-233518-56354/verifier-round3.log 裡沒有 JSON 信封",
+      "effort": "high",
+      "at": "2026-10-21T00:30:39+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 38,
+      "tokens_out": 8884,
+      "cache_write": 86781,
+      "cache_read": 1363222,
+      "wall_seconds": 128,
+      "outcome": "pass",
+      "run_id": "20261021-003042-66986",
+      "session_id": "f7b50b3c-4591-4997-ac12-5fdc1cb95293",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-21T00:59:50+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2226,
+      "outcome": "pass",
+      "run_id": "20261021-005950-d9-1154",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-21T01:36:56+08:00"
+    }
+  ],
+  "repair_round": 3,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "420ec30f62a4f14c7d4a7195f8b27e986b987f35",
+    "note": "reports/t144/20261021-003042-66986/REVIEW.md",
+    "at": "2026-10-21T01:36:56+08:00"
+  },
+  "landed_sha": "420ec30f62a4f14c7d4a7195f8b27e986b987f35",
+  "cost_total": {
+    "calendar_seconds": 141295,
+    "wall_seconds": 5196,
+    "runs": 6,
+    "worker_rounds": 3,
+    "objections": 2,
+    "by_role": {
+      "verifier": {
+        "runs": 2,
+        "wall_seconds": 1652,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 2,
+        "outcomes": {
+          "handed-in": 2
+        }
+      },
+      "worker": {
+        "runs": 2,
+        "wall_seconds": 1190,
+        "tokens_in": 114,
+        "tokens_out": 47548,
+        "cache_write": 240943,
+        "cache_read": 5900773,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 1,
+          "objection": 1
+        }
+      },
+      "reviewer": {
+        "runs": 1,
+        "wall_seconds": 128,
+        "tokens_in": 38,
+        "tokens_out": 8884,
+        "cache_write": 86781,
+        "cache_read": 1363222,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 2226,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-21T01:36:56+08:00"
+  }
 }

@@ -1,0 +1,37 @@
+{
+  "id": "150",
+  "subject": "雲端副本開場不開記憶整理票:CLAUDE_CODE_REMOTE=true 時 new-session.sh 第 4 段走唯讀(D-057 ②)",
+  "created": "2026-10-21T01:39:34+08:00",
+  "objective": "症狀(主線實測):雲端 routine 起的 Claude Code session 在 agent-control 的雲端 clone 開場,SessionStart hook(scripts/session-hook.sh → new-session.sh main)把它當主線,第 4 段跑 `memory.py check`(非唯讀),依 #134/#148 的批次門檻在副本裡開了整理票 tickets/150.json、151.json(未追蹤、沒推上來),該 session 收尾還被要求 commit 它們。整理票只該在主線本機的主 repo 開。\n做完的樣子:環境變數 CLAUDE_CODE_REMOTE=true 時,new-session.sh 第 4 段改跑 `memory.py check --read-only`(照報數、不開票、不發 memory.pending),同一段後面的「背景起 consolidate-memory.sh」也不跑;其餘(session.start 事件、其他各段、主線本機行為、worker/副本的既有跳過)一律不變。\nD-053 ④:改善 VISION「等我處理的事積了多少」(雲端副本不再留下未落地的孤兒整理票與要主線收拾的 commit 提示)與「每張落地票的 token」(不在雲端副本多起一次整理者 / 多一輪 commit 對話);指標 = 等我處理的事、每張票的 token。本票不加任何關卡,只多一個跳過條件。這張同時是 D-057 ② 的「#144 落地後拿一張真的小票從開題走到落地」驗證票。",
+  "acceptance": [
+    "行為(加進既有 tests/test_new_session.py,不開新檔):沙盒照 test_the_main_line_opens_the_ticket_and_still_goes_on 的夾具(memory/model/opus.inbox.md 寫 OLD_NOTE),`run_sh('scripts/new-session.sh','main','fable', env=self.env(CLAUDE_CODE_REMOTE='true'))` → rc 0、self.tickets_on_disk() 裡沒有 role=consolidator 的票、self.kinds() 不含 memory.pending、仍含 session.start;既有那條(不帶變數 → 恰開 1 張整理票)照綠。期望值來源:票面(本票)與 code.claude.com/docs/en/cloud-environments 的 CLAUDE_CODE_REMOTE 說明,不從被測程式算。不斷言 stdout 字樣。變異:拿掉 new-session.sh 那個 CLAUDE_CODE_REMOTE 條件 → 新案例紅。",
+    "既有全套綠:`python3 -m unittest discover -s tests`(含 test_new_session / test_session_hook / test_memory* / test_consolidate_memory),且外層 shell 設 CLAUDE_CODE_REMOTE=true 時同一指令也綠 —— tests/control_harness.py 的 Sandbox.env() 要把 CLAUDE_CODE_REMOTE 濾掉(與 AC_* 同理),否則 worker 在雲端跑全套時既有『主線開票』那條會被外層變數弄紅。",
+    "grep:`git grep -l CLAUDE_CODE_REMOTE -- scripts` 恰 1 檔 scripts/new-session.sh(判別只在一處;session-hook.sh、memory.py 不另加一份)。"
+  ],
+  "depends_on": [],
+  "role": "worker",
+  "model": "sonnet",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "420ec30f62a4f14c7d4a7195f8b27e986b987f35",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "摘要:雲端 clone 的開場被當成主線,memory.py check 在副本開整理票。改 new-session.sh 第 4 段一個條件,判別用 Claude Code 官方的 CLAUDE_CODE_REMOTE。\n讀碼(base 420ec30):開票的是 scripts/new-session.sh :422-428(ROLE=main → `memory.py check` 非唯讀 → cmd_check :932 達 D-055 ① 門檻就 open_ticket_for);:432-463 同樣只看 ROLE=main 就背景起 consolidate-memory.sh。上游 scripts/session-hook.sh 的副本跳過只有三條(AC_SESSION_HOOK=0 / AC_ROLE 非 main / cwd 在 worktree_dir basename 底下),雲端 clone 三條都不中:hook 沒有 AC_ROLE、cwd 是 clone 根不是 *-wt,所以以 main 叫 new-session.sh。.claude/settings.json 沒有 Stop hook —— 『收尾要 commit』是雲端 session 自己對未追蹤檔的提示,票不再產生它就消失,不用另處理。\n判別方式:CLAUDE_CODE_REMOTE=true(已讀文件確認:code.claude.com/docs/en/cloud-environments『the session VM's environment carries that variable as true, it's never true locally』,文件範例 SessionStart hook 就用 `[ \"$CLAUDE_CODE_REMOTE\" != \"true\" ]`;同頁另有 CLAUDE_CODE_REMOTE_SESSION_ID)。已排除:(a) AC_ROOT / cwd 形狀 —— 雲端是完整 clone,根路徑形狀與主 repo 無法可靠區分(雲端 clone 路徑未實測,推測 /home/user/<repo>);(b) AC_ROLE —— 雲端開場沒設;(c) git worktree 判別 —— clone 不是 linked worktree。\n設計裁示(自己下):(1) 條件只放 new-session.sh 一處,寫成 `[ \"$ROLE\" = main ] && [ \"${CLAUDE_CODE_REMOTE:-}\" != true ]` 走原路,否則走 --read-only 那一支;印的那一行字由 worker 定(現行唯讀那支印『$ROLE 不開』在雲端會寫成『main 不開』,可改成點名雲端),測試不釘字。(2) 背景起整理者那一段用同一條件:雲端副本也不起整理者(整理是主 repo 的事,與開票同一件)。(3) 不在 session-hook.sh 整頁跳過:雲端 session 仍要看到主線那一頁與 session.start(其餘行為不變)。(4) 不新增事件類型、不加 config 鍵、不加旗標。\n引用端(grep 過):test_new_session.py :79-104 兩條第 4 段斷言(worker 唯讀、main 開票)不變;:188 test_a41(main 起整理者)不變;control_harness.py :318 env() 要加濾 CLAUDE_CODE_REMOTE;gate.sh :163 new-session.sh → test_new_session test_rules_delivery。sync-to-project.sh 會把 new-session.sh 帶到 tabby,屬既有同步、本票不另處理。\nneeds_verifier=false:改動是一個環境變數條件,行為斷言就是 worker 自己那條案例(拿掉條件即紅),驗證者只會重演同一契約。\n不在本票:雲端 session 的 session.start / heartbeat 是否該記(另議);雲端副本已產生的 150/151 不在主 repo,不清理;memory.py 本身不認雲端。\n依賴:無(#144 已落地 420ec30)。",
+  "test_plan": "worker 單元:tests/test_new_session.py 加一條(驗收 1),夾具沿用 OLD_NOTE、self.env(CLAUDE_CODE_REMOTE='true');control_harness.Sandbox.env() 濾掉外層 CLAUDE_CODE_REMOTE。worker 自證變異:刪掉條件 → 新案例紅;貼紅的第一行。閘門:scripts/gate.sh(new-session.sh 對到 test_new_session test_rules_delivery)+ 落地全套。",
+  "decision_refs": [
+    "D-057",
+    "D-055",
+    "D-053",
+    "D-056"
+  ],
+  "complexity": "simple",
+  "needs_verifier": false
+}

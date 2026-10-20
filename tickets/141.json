@@ -37,8 +37,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "fe0edb87cea058d9097b4065d200bb6fa5139246",
-  "state": "InReview",
-  "state_version": 23,
+  "state": "Done",
+  "state_version": 25,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -227,9 +227,69 @@
     "by": "reviewer@opus",
     "sha": "959cd0e8340780f18bddf5b9524ba762782488a8",
     "note": "reports/t141/20261019-114546-94558/REVIEW.md",
-    "at": "2026-10-19T13:00:49+08:00",
+    "at": "2026-10-20T11:33:44+08:00",
     "state_version": 23,
     "patch_id": "eee9e6137f9950838b3c3ba8dccf99ef238f64bc",
     "face": "9c3cc7c890556eeed3b913b5644d59b87c7b1592a5e40b74002629509ecb0a18"
+  },
+  "landed_sha": "959cd0e8340780f18bddf5b9524ba762782488a8",
+  "cost_total": {
+    "calendar_seconds": 90722,
+    "wall_seconds": 2839,
+    "runs": 7,
+    "worker_rounds": 2,
+    "objections": 2,
+    "by_role": {
+      "worker": {
+        "runs": 4,
+        "wall_seconds": 656,
+        "tokens_in": 102,
+        "tokens_out": 29212,
+        "cache_write": 175565,
+        "cache_read": 2263023,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "objection": 2,
+          "handed-in": 2
+        }
+      },
+      "opener": {
+        "runs": 1,
+        "wall_seconds": 27,
+        "tokens_in": 8,
+        "tokens_out": 1666,
+        "cache_write": 22043,
+        "cache_read": 114909,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "accepted": 1
+        }
+      },
+      "reviewer": {
+        "runs": 1,
+        "wall_seconds": 76,
+        "tokens_in": 12,
+        "tokens_out": 4553,
+        "cache_write": 35211,
+        "cache_read": 224259,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 2080,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-20T11:33:44+08:00"
   }
 }
