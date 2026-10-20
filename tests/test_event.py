@@ -127,6 +127,48 @@ class Emit(Sandbox):
         self.assertEqual([kind for kind in event_mod.KINDS if kind.startswith("review.")],
                          ["review.pass", "review.fail", "review.missing", "review.refused"])
 
+    def test_the_three_mirror_kinds_are_gone_and_nothing_took_their_place(self):
+        """#143(D-054 Q5):票 JSON 是唯一的狀態 —— `ticket.state` / `ticket.cost` /
+        `inbox.posted` 三種鏡像事件從登記表拿掉,不多任何一種;發它們會被拒收。
+        land.* / agent.* / ticket.attempt.* / ticket.closed 照舊(#115 守衛靠它們)。
+
+        **變異**:KINDS 留著 `ticket.state` → 這一條紅。
+        """
+        sys.path.insert(0, SCRIPTS)
+        import event as event_mod
+        for gone in ("ticket.state", "ticket.cost", "inbox.posted"):
+            self.assertNotIn(gone, event_mod.KINDS)
+            done = self.event("emit", gone, "--ticket", "1")
+            self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertEqual(self.events(), [], "拒收的事件留下了一行")
+        self.assertEqual([kind for kind in event_mod.KINDS if kind.startswith("ticket.")],
+                         ["ticket.created", "ticket.frozen", "ticket.closed",
+                          "ticket.attempt.start", "ticket.attempt.done",
+                          "ticket.attempt.failed"])
+        for kept in ("land.start", "land.refused", "land.pass", "land.fail",
+                     "agent.start", "agent.done", "agent.failed"):
+            self.assertIn(kept, event_mod.KINDS)
+
+    def test_writing_a_baseline_adds_no_event(self):
+        """#143:`verify.baseline` 寫回票(verify-case.py check / apply.sh 共用的
+        `ticket.save_baseline`)只動票 JSON,events.jsonl 不多任何一筆。
+
+        **變異**:`save_baseline` 存檔後仍發一筆事件 → 這一條紅。
+        """
+        self.make_ticket(1)
+        before = self.events()
+        import subprocess
+        done = subprocess.run(
+            ["python3", "-c", "import sys; sys.path.insert(0, sys.argv[1]); import ticket; "
+             "print(ticket.save_baseline('1', {'stage': 'red', 'case': 'x'}))",
+             os.path.join(self.repo, "scripts")],
+            cwd=self.repo, env=self.env(), capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        data = self.load_ticket(1)
+        self.assertEqual(data["verify"]["baseline"], {"stage": "red", "case": "x"})
+        self.assertEqual(done.stdout.strip(), str(data["state_version"]))
+        self.assertEqual(self.events(), before, "寫 baseline 發了事件")
+
     def test_kv_pairs_land_as_fields(self):
         done = self.event("emit", "land.pass", "--kv", "stamp=20260912-010101",
                           "--kv", "sha=abc1234", "--note", "兩張一起進去")

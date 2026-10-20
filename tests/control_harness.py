@@ -36,7 +36,7 @@ TIMEOUT = 180
 SCRIPT_FILES = ("event.py", "ticket.py", "memory.py", "status.py", "land.sh",
                 "gate.sh", "heartbeat.sh", "new-session.sh", "verify.py",
                 "verify-case.py", "apply.sh", "auto-fix.sh", "review.sh", "inbox.py",
-                "rules.py", "metrics.py", "wtbase.sh", "role-models.py")
+                "rules.py", "wtbase.sh", "role-models.py")
 # `review.sh` 逐字讀它(#42):沙盒少了它,覆核在「派工文組不出來」那一步就停,
 # 而那與「reviewer 沒交件」在收件匣上是兩頁不同的東西。`auto-fix.sh` 的驗證者派工文
 # 也是範本填出來的(#51):少了它,派工文裡只剩一行「範本找不到」。
@@ -430,6 +430,31 @@ class Sandbox(unittest.TestCase):
 
     def kinds(self):
         return [row["kind"] for row in self.events()]
+
+    def inbox_rows(self, ticket=None, acked=None):
+        """收件匣的頁(`reports/inbox/*.md` 與 `acked/*.md`)第一行那份 JSON,加上
+        `name` / `page` / `acked`;舊的在前。`acked=None` 兩邊都要。只讀頁本身。"""
+        rows = []
+        for sub, flag in (("", False), ("acked", True)):
+            if acked is not None and acked != flag:
+                continue
+            where = os.path.join(self.repo, "reports", "inbox", sub)
+            if not os.path.isdir(where):
+                continue
+            for name in sorted(os.listdir(where)):
+                path = os.path.join(where, name)
+                if not name.endswith(".md") or not os.path.isfile(path):
+                    continue
+                with open(path, encoding="utf-8") as handle:
+                    head = handle.readline().strip()
+                meta = {}
+                if head.startswith("<!-- inbox ") and head.endswith(" -->"):
+                    meta = json.loads(head[len("<!-- inbox "):-len(" -->")])
+                meta.update({"name": name[:-3], "acked": flag,
+                             "page": os.path.relpath(path, self.repo)})
+                rows.append(meta)
+        rows.sort(key=lambda row: (str(row.get("at") or ""), row["name"]))
+        return [row for row in rows if ticket is None or str(row.get("ticket")) == str(ticket)]
 
     def tickets_on_disk(self):
         """票庫裡現在有哪幾張(含腳本自己開出來的)。"""

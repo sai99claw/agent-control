@@ -136,47 +136,6 @@ class Pages(BoardUp):
         section = body.split("id=\"rehearsal\"")[1].split("</section>")[0]
         self.assertIn("沒有欠確認的真跑", section)
 
-    def test_the_ticket_table_draws_the_metrics_without_touching_the_token_header(self):
-        """**變異**:把 `state()` 的 `metrics` 那一格拿掉 → 這一條紅。
-
-        抬頭那一句 `token 用量:未知` 問的是「這個看板知不知道整體用量」(不知道);
-        票表那一欄答的是「這一張票各自量到了什麼」。**兩件事不是同一格** —— 混成
-        一格的話,任何一張票量到了數字,抬頭就會變成一句它答不出來的話。
-        """
-        self.make_ticket(1, state="Ready", subject="有數字的那一張")
-        self.write(os.path.join("reports", "t1", "r1", "status.json"),
-                   json.dumps({"state": "done", "run_id": "r1", "kind": "gate",
-                               "ticket": "1", "rc": 1, "round": 2,
-                               "environment_suspect": [
-                                   {"source": "statistical", "engine": "safari",
-                                    "why": "storage empty", "count": 8,
-                                    "threshold": 8, "log": "gate.log",
-                                    "line": "AssertionError: storage empty"}],
-                               "duration_seconds": 12}, ensure_ascii=False))
-        self.up()
-        _, body = self.get("/")
-        section = body.split("id=\"tickets\"")[1].split("</section>")[0]
-        for header in ("返工輪", "紅(env/product)", "token"):
-            self.assertIn(header, section, "票表少了 %s 這一欄" % header)
-        self.assertIn("1 (1/0)", section, "紅的分類沒有畫出來")
-        # #72:原 test_the_five_sections_are_all_there 的「票的標題畫進頁面」搬到這裡;
-        # 五節錨點每一節都有別的測試切 section 時要用到,缺一節那幾條就 IndexError。
-        self.assertIn("有數字的那一張", section)
-        self.assertIn("token 用量:未知", body, "抬頭那一格不准被票表的數字改掉")
-
-    def test_the_state_api_carries_the_metrics_next_to_the_unknown_token_total(self):
-        """#72 併入原 test_the_state_api_answers_json 的 200 / JSON / tokens 未知(票 id 那一句
-        併進 ReadsWhatIsAlreadyOnDisk.test_the_state_api_carries_the_runs_the_boxes_and_the_inbox)。"""
-        self.make_ticket(1)
-        self.up()
-        status, body = self.get("/api/state")
-        self.assertEqual(status, 200)
-        data = json.loads(body)
-        self.assertEqual(data["tokens"], "未知")
-        self.assertIn("metrics", data, "/api/state 少了 metrics 這個頂層鍵")
-        self.assertEqual(data["metrics"]["1"]["tokens"], "未知",
-                         "一份 log 都沒有的票,token 是未知,不是 0")
-
     def test_the_css_and_js_are_served_from_the_same_origin(self):
         self.up()
         self.assertEqual(self.get("/board.css")[0], 200)
@@ -230,7 +189,7 @@ class SavingAnAnswer(BoardUp):
 
 
 class ReadsWhatIsAlreadyOnDisk(BoardUp):
-    """看板直接讀磁碟上已經結構化的那幾份:run 的 `status.json`、收件匣索引、票自己的
+    """看板直接讀磁碟上已經結構化的那幾份:run 的 `status.json`、收件匣的頁、票自己的
     `objections` / `review` / `verify`。**一行都不必有人抄進來** —— 抄進來的那一份
     沒有人可以覆核(D-017 ②)。
     """
@@ -246,9 +205,13 @@ class ReadsWhatIsAlreadyOnDisk(BoardUp):
                    json.dumps(row, ensure_ascii=False))
         return row
 
-    def inbox_file(self, rows, name="index.jsonl"):
-        self.write(os.path.join("reports", "inbox", name),
-                   "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
+    def inbox_page(self, name, acked=False, **meta):
+        """收件匣一頁(#143:沒有索引檔,頁的第一行就是 `list` 讀的那份 JSON)。"""
+        where = os.path.join("reports", "inbox", *(["acked"] if acked else []))
+        self.write(os.path.join(where, name + ".md"),
+                   "<!-- inbox %s -->\n# #%s —— %s\n"
+                   % (json.dumps(meta, ensure_ascii=False), meta.get("ticket", ""),
+                      meta.get("state", "")))
 
     def section(self, body, anchor):
         return body.split("id=\"%s\"" % anchor)[1].split("</section>")[0]
@@ -260,12 +223,10 @@ class ReadsWhatIsAlreadyOnDisk(BoardUp):
         self.status(1, "20260922-110000-2", rc=1, failures=[
             {"case": "tests.test_x.Case.test_y",
              "excerpt": "AssertionError: 少了一段\n第二行不該上畫面"}])
-        self.inbox_file([
-            {"name": "1-a", "ticket": "1", "state": "閘門紅",
-             "what": "讀 patch 記 review", "where": "reports/t1/x/status.json"},
-            {"name": "1-b", "ticket": "1", "state": "收下過的",
-             "what": "這一則 ack 過了", "where": "reports/t1/y/status.json"}])
-        self.inbox_file([{"name": "1-b", "ticket": "1"}], name="acked.jsonl")
+        self.inbox_page("1-a", ticket="1", state="閘門紅",
+                        what="讀 patch 記 review", where="reports/t1/x/status.json")
+        self.inbox_page("1-b", acked=True, ticket="1", state="收下過的",
+                        what="這一則 ack 過了", where="reports/t1/y/status.json")
         self.up()
         _, body = self.get("/")
         runs = self.section(body, "runs")
@@ -460,12 +421,8 @@ class ReadsWhatIsAlreadyOnDisk(BoardUp):
         self.status(1, "20260922-100000-1")
         self.write(os.path.join("reports", "t1", "20260922-110000-2",
                                 "status.json"), "{")
-        self.inbox_file([{"name": "1-a", "ticket": "1", "state": "閘門紅",
-                          "what": "看一下"}])
-        with open(os.path.join(self.repo, "reports", "inbox", "index.jsonl"),
-                  "a", encoding="utf-8") as handle:
-            handle.write("not-json\n")
-        self.assertFalse(self.exists("reports/inbox/acked.jsonl"))
+        self.inbox_page("1-a", ticket="1", state="閘門紅", what="看一下")
+        self.write(os.path.join("reports", "inbox", "1-b.md"), "<!-- inbox {壞掉 -->\n")
         self.up()
         for path in ("/", "/t/1", "/api/state"):
             status, body = self.get(path)
@@ -477,8 +434,7 @@ class ReadsWhatIsAlreadyOnDisk(BoardUp):
                                          "owner": "worker", "blocking": True,
                                          "disposition": ""}])
         self.status(1, "20260922-100000-1", rc=1)
-        self.inbox_file([{"name": "1-a", "ticket": "1", "state": "閘門紅",
-                          "what": "看一下"}])
+        self.inbox_page("1-a", ticket="1", state="閘門紅", what="看一下")
         self.up()
         status, body = self.get("/api/state")
         self.assertEqual(status, 200)

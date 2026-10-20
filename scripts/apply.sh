@@ -482,7 +482,6 @@ merge_verifier_plans() {   # $1 = 票號  $2 = 換行分隔的 EVIDENCE-verifier
         python3 - "$AC" "$1" "$VEV" <<'PY' >&2 || mrc=$?
 import json, sys
 sys.path.insert(0, sys.argv[1])
-import event
 import ticket
 ident, path = sys.argv[2], sys.argv[3]
 # 解析不到要出聲(#100 A7):以前三種樣子都靜靜變成 `{}`,票上的 verify 與 baseline 一格
@@ -563,8 +562,6 @@ if isinstance(plan, dict):
             if differ:
                 print("apply: 驗證者給的 run/notes 與票上不同,保留票上 —— %s" % ";".join(differ))
             if added:
-                event.emit("ticket.state", ticket=str(ident), field="verify",
-                           **{"to": ",".join(added), "state_version": fresh["state_version"]})
                 print("apply: 驗證者的 verify 併進票 #%s(state_version=%s)—— 新增 %s;保留 %s"
                       % (ident, fresh["state_version"], "、".join(added),
                          "、".join(kept) or "(票上原本沒有)"))
@@ -578,7 +575,7 @@ if not isinstance(record, dict) or record.get("stage") != "red":
     print("apply: 驗證者 result 的 baseline 不是 stage=red 的紀錄 —— 沒有併進票")
     sys.exit(0)
 try:
-    version = ticket.save_baseline(ident, record, "red")
+    version = ticket.save_baseline(ident, record)
 except (OSError, ValueError, RuntimeError) as exc:
     print("apply: 驗證者的驗紅併不進票 #%s —— %s(不擋 apply)" % (ident, exc))
     sys.exit(0)
@@ -715,7 +712,6 @@ fi
 BR=$(python3 - "$AC" "$TDIR" "$ID" "${AC_BRANCH:-}" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
-import event
 import ticket
 where, ident, wanted = sys.argv[2:5]
 
@@ -742,8 +738,6 @@ if name != have:
     except (OSError, ValueError, RuntimeError) as exc:
         print("apply: 票 #%s 的 branch 寫不回去 —— %s(不擋 apply)" % (ident, exc),
               file=sys.stderr)
-    else:
-        event.emit("ticket.state", ticket=str(ident), field="branch", to=name)
 print(name)
 PY
 ) || exit 2

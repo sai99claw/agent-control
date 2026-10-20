@@ -513,9 +513,10 @@ def post_decision(root, role, model, problems):
         import inbox
         ticket = os.environ.get("AC_TICKET") or RULES_TICKET
         run_id = "rules-%s-%s" % (role, fingerprint(root, role, model, problems)[:12])
-        for row in inbox.read_jsonl(inbox.index_path(root)):
-            if str(row.get("ticket")) == str(ticket) and row.get("run_id") == run_id:
-                return "同一個缺項已經送過 decision 頁(%s),這次不重送" % row.get("page")
+        # 指紋在檔名裡(`<票號>-<run_id>.md`):收件匣與 `acked/` 任一處有同名頁就是送過了。
+        stem = "%s-%s" % (ticket, run_id)
+        if inbox.taken(root, stem):
+            return "同一個缺項已經送過 decision 頁(%s.md),這次不重送" % stem
         what = ("規則包產不出來,沒有起任何 agent。補齊下面的缺項再重派 —— 不要用 fallback 起 agent,"
                 "\n" + "".join(
                     "- %s(`%s`):%s\n" % (row["item"], row["source"], row["problem"])

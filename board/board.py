@@ -5,10 +5,10 @@
     python3 board/board.py --port 0   # OS 給一個埠(測試用)
 
 七個畫面,一頁裡七段:
- ① 票與依賴 —— 狀態、凍結原因、`base_sha` 是不是還是主線的祖先
+ ① VISION 四個指標(讀票 JSON)+ 票與依賴 —— 狀態、凍結原因、`base_sha` 是不是還是主線的祖先
  ② agent 時間線 —— 從事件重建:誰、什麼票、第幾次、開始/結束、現在還活著嗎
  ③ 落地佇列與最近的 land 結果
- ④ 決策收件匣(可以填答案)+ 終態收件匣 —— 讀 `<reports_dir>/inbox/index.jsonl`
+ ④ 決策收件匣(可以填答案)+ 終態收件匣 —— 讀 `<reports_dir>/inbox/` 目錄(`scripts/inbox.py`)
  ⑤ 哪些保證還只在演練裡成立 —— 讀 `docs/REHEARSAL.md`
  ⑥ 每票最後一輪 —— 讀 `<reports_dir>/t<票號>/<run_id>/status.json`
  ⑦ 反駁 —— 讀票自己的 `objections[]`
@@ -20,10 +20,15 @@
 票自己也早就有 `objections` / `review` / `verify` 三格。所以這裡只加**讀**:
 一行都不必有人抄進看板 —— 而抄進來的那一份沒有人可以覆核(D-017 ②)。
 
-## token 用量顯示「未知」,不估
-`docs/DESIGN.md` §15:用量要區分「provider 回報」「估計」「無法取得」,而
-**未知不可顯示為零**。Claude Code 不給這份資料,所以這裡寫「未知」並說出為什麼 ——
-一個估出來的數字與一個量出來的數字在畫面上長得一樣,而只有後者可以拿來做決定。
+## 四個指標只讀票 JSON(D-054 Q5)
+VISION「目的與成功指標」的四個數字:每張落地票的 token 與時間(`cost_total` / `cost[]`)、
+一次就過測試的比例(Done 票 worker 最大 round = 1)、每張票需要主線介入幾次
+(`interventions`)、等主線處理的事(Blocked / NeedsDecision 且 owner=main 的票 + 收件匣
+未 ack 的頁)。**拿不到就顯示「未知」,不顯示 0**:舊票沒有那一格、cost 列全是 null,
+都是「未知」;一個補出來的 0 與一個量出來的 0 在畫面上長得一樣。
+
+舊的 metrics 欄(從 worker log 解析返工輪與 token)已刪:同一件事不再存第二份。
+抬頭那一格「token 用量:未知」問的是「看板自己知不知道整體用量」(不估),不是四個指標。
 
 ## 它只寫一種東西
 使用者在收件匣按下的那顆鈕,append 一行進 `answers.jsonl`,並發一筆事件。
@@ -43,7 +48,7 @@ from urllib.parse import unquote, urlparse
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
 import event    # noqa: E402
-import metrics  # noqa: E402
+import inbox    # noqa: E402  收件匣的目錄怎麼讀只有一份定義
 import status   # noqa: E402  `environment_suspect` 的正規化只有一份定義
 import ticket   # noqa: E402
 
@@ -59,9 +64,6 @@ SESSION_END = "session.end"
 UNKNOWN = "未知"
 
 DEFAULT_REPORTS = "reports"
-INBOX_REL = "inbox"
-INDEX_NAME = "index.jsonl"
-ACKED_NAME = "acked.jsonl"
 STATUS_NAME = "status.json"
 ROUND_FILE = re.compile(r"^result-round(\d+)\.json$")
 # 票號拿來接目錄名,所以它走白名單而不是黑名單:`/` 與 `..` 當然不在裡面,而**沒有
@@ -240,36 +242,6 @@ def read_json(path, broken):
     return data if isinstance(data, dict) else None
 
 
-def read_jsonl(path, broken):
-    """一行一筆。檔不在回 `None`(那不是壞掉,是還沒有人寫過)。
-
-    **壞掉的那一行只吃掉那一行**:為了一行壞 JSON 丟掉整份索引,等於讓一次寫到一半
-    的 append 把所有還沒 ack 的東西從畫面上抹掉 —— 而那時畫面上是一片乾淨的空白。
-    """
-    try:
-        with open(path, encoding="utf-8") as handle:
-            lines = handle.read().splitlines()
-    except OSError:
-        return None
-    rows, bad = [], 0
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            row = json.loads(line)
-        except ValueError:
-            bad += 1
-            continue
-        if isinstance(row, dict):
-            rows.append(row)
-        else:
-            bad += 1
-    if bad:
-        broken.append(UNREADABLE % rel_path(path))
-    return rows
-
-
 def round_file(where, broken):
     """這一趟的 `result-round<r>.json`(#20 的產出),輪數最大的那一份。
 
@@ -372,25 +344,99 @@ def run_rows(ident):
 
 
 def inbox_rows():
-    """(b) `<reports_dir>/inbox/index.jsonl` 減掉 `acked.jsonl`。
+    """(b) `<reports_dir>/inbox/` 裡還沒 ack 的頁(ack 過的搬進 `acked/`,不在這裡)。
 
-    ack 是「我收下了」不是「我做完了」,所以減掉的只是清單上那一列 —— 票的狀態由票
-    說了算(`scripts/inbox.py`)。`acked.jsonl` 不在是**一則都還沒 ack**,那是新裝
-    起來的樣子,不是壞掉:把它說成「讀不動」,每一台乾淨的機器都會看到一句假話。
+    ack 是「我收下了」不是「我做完了」 —— 票的狀態由票說了算(`scripts/inbox.py`)。
+    目錄不在是**一則都還沒寫過**,那是新裝起來的樣子,不是壞掉。
     """
-    where = os.path.join(reports_dir(), INBOX_REL)
-    box = {"dir": rel_path(where), "entries": [], "broken": [],
-           "index_missing": False, "acked_missing": False}
-    index = read_jsonl(os.path.join(where, INDEX_NAME), box["broken"])
-    if index is None:
-        box["index_missing"] = True
-        return box
-    acked = read_jsonl(os.path.join(where, ACKED_NAME), box["broken"])
-    box["acked_missing"] = acked is None
-    done = set(str(row.get("name") or "") for row in acked or [])
-    box["entries"] = [row for row in index
-                      if str(row.get("name") or "") not in done]
-    return box
+    where = root()
+    return {"dir": rel_path(inbox.inbox_dir(where)), "entries": inbox.entries(where),
+            "broken": []}
+
+
+# ---------------------------------------------- VISION 四個指標(只讀票 JSON)
+
+
+def whole(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def add_known(values):
+    """非 null 的加總;一個都沒有就是 None(未知),不是 0。"""
+    known = [v for v in (whole(x) for x in values) if v is not None]
+    return sum(known) if known else None
+
+
+def cost_rows(one):
+    return [row for row in (one.get("cost") if isinstance(one.get("cost"), list) else [])
+            if isinstance(row, dict)]
+
+
+def ticket_numbers(one):
+    """一張票的 token(非 cache = in + out + cache_write,cache 讀另列;D-056 ②)、
+    wall 秒數、worker 最大 round、介入次數。`cost_total` 在就讀它(關票那一刻的定本),
+    不在才從 `cost[]` 加。拿不到的格子是 None —— 畫面與 /api/state 印成「未知」。"""
+    total = one.get("cost_total") if isinstance(one.get("cost_total"), dict) else None
+    rows = cost_rows(one)
+    if total is not None:
+        parts = [part for part in (total.get("by_role") or {}).values()
+                 if isinstance(part, dict)]
+        tokens = add_known(add_known(part.get(k) for k in ("tokens_in", "tokens_out",
+                                                           "cache_write"))
+                           for part in parts)
+        cache_read = add_known(part.get("cache_read") for part in parts)
+        wall = whole(total.get("wall_seconds"))
+        rounds = whole(total.get("worker_rounds"))
+    else:
+        tokens = add_known(add_known(row.get(k) for k in ("tokens_in", "tokens_out",
+                                                          "cache_write"))
+                           for row in rows)
+        cache_read = add_known(row.get("cache_read") for row in rows)
+        wall = add_known(row.get("wall_seconds") for row in rows)
+        rounds = max([n for n in (whole(row.get("round")) for row in rows
+                                  if row.get("role") == "worker") if n is not None],
+                     default=None)
+    return {"has_cost": total is not None or bool(rows),
+            "tokens": tokens, "cache_read": cache_read, "wall_seconds": wall,
+            "worker_rounds": rounds, "interventions": whole(one.get("interventions"))}
+
+
+def waits_on_main(one):
+    return one.get("state") in ticket.INTERVENTION_STATES and one.get("owner") == "main"
+
+
+def shown(value):
+    return UNKNOWN if value is None else value
+
+
+def vision(tickets, box):
+    """四個指標。每一格拿不到就是「未知」(VISION「看板與統計」)。"""
+    per = {str(one.get("id", "")): ticket_numbers(one) for one in tickets}
+    done = [per[str(one.get("id", ""))] for one in tickets if one.get("state") == "Done"]
+    # 一次就過:有 cost 列、而且有 worker round 的 Done 票才計;一張都沒有就是未知。
+    counted = [row for row in done if row["has_cost"] and row["worker_rounds"] is not None]
+    first = sum(1 for row in counted if row["worker_rounds"] == 1)
+    recorded = [row["interventions"] for row in per.values() if row["interventions"] is not None]
+    waiting_tickets = sum(1 for one in tickets if waits_on_main(one))
+    pages = len(box.get("entries") or [])
+    landed = [row for row in done if row["tokens"] is not None or row["wall_seconds"] is not None]
+    return {
+        "tickets": {ident: {key: shown(row[key]) for key in
+                            ("tokens", "cache_read", "wall_seconds", "worker_rounds",
+                             "interventions")}
+                    for ident, row in per.items()},
+        "landed": {"count": len(done),
+                   "tokens": shown(add_known(row["tokens"] for row in done)),
+                   "wall_seconds": shown(add_known(row["wall_seconds"] for row in done)),
+                   "measured": len(landed)},
+        "first_pass": ({"passed": first, "counted": len(counted),
+                        "text": "%d/%d" % (first, len(counted))}
+                       if counted else {"passed": UNKNOWN, "counted": 0, "text": UNKNOWN}),
+        "interventions": ({"total": sum(recorded), "tickets": len(recorded)}
+                          if recorded else {"total": UNKNOWN, "tickets": 0}),
+        "waiting": {"tickets": waiting_tickets, "inbox_pages": pages,
+                    "total": waiting_tickets + pages},
+    }
 
 
 def open_blocking(item):
@@ -417,6 +463,7 @@ def state():
     ask = ancestor_cache()
     for one in tickets:
         one["_ancestor"] = ask(one.get("base_sha"))
+    box = inbox_rows()
     return {"generated_at": now_text(),
             "tickets": tickets,
             "events": rows,
@@ -430,11 +477,10 @@ def state():
             "ticket_runs": {str(one.get("id", "")): run_rows(one.get("id", ""))
                             for one in tickets},
             "boxes": {str(one.get("id", "")): ticket_boxes(one) for one in tickets},
-            "inbox": inbox_rows(),
-            # 每票一筆,鍵是票號。**這一格不是 `tokens` 的替身** —— 抬頭那一格問的
-            # 是「這個看板自己知不知道整體用量」(不知道),這一格答的是「每一張票
-            # 各自量到了什麼」,而其中一部分的答案照樣是「未知」。
-            "metrics": metrics.collect(root()),
+            "inbox": box,
+            # VISION 四個指標,只讀票 JSON 與收件匣目錄。**這一格不是 `tokens` 的替身**
+            # —— 抬頭那一格問的是「這個看板自己知不知道整體用量」(不知道)。
+            "vision": vision(tickets, box),
             "tokens": UNKNOWN}
 
 
@@ -594,18 +640,31 @@ def ancestor_cell(value):
     return "<span class=\"warn\">問不出來</span>"
 
 
-def red_cell(row):
-    """`紅(env/product)`。**三個數字一起印** —— 只印總數的話,「環境爛了四次」與
-    「程式錯了四次」長得一樣,而那兩件事的下一步完全不同(一個修機器,一個修 code)。
-    """
-    if not row:
-        return esc(UNKNOWN)
-    return "%s (%s/%s)" % (esc(row.get("red_runs", 0)), esc(row.get("env_runs", 0)),
-                           esc(row.get("product_runs", 0)))
+def render_vision(numbers):
+    """VISION 四個指標,一格一句;拿不到的格子寫「未知」。"""
+    landed, first = numbers["landed"], numbers["first_pass"]
+    told, waiting = numbers["interventions"], numbers["waiting"]
+    cells = (
+        ("每張落地票的 token 與時間",
+         "%s token・%s 秒(Done %d 張,有數字 %d 張)"
+         % (landed["tokens"], landed["wall_seconds"], landed["count"], landed["measured"])),
+        ("一次就過測試的比例", "%s" % first["text"]),
+        ("需要主線介入的次數",
+         "%s 次(有記數的 %d 張;轉 Blocked / NeedsDecision 且 owner=main 記一次)"
+         % (told["total"], told["tickets"])),
+        ("等主線處理的事",
+         "%d(票 %d 張 + 收件匣未 ack %d 頁)"
+         % (waiting["total"], waiting["tickets"], waiting["inbox_pages"])),
+    )
+    return ("<div class=\"counts vision\">%s</div>"
+            % "".join("<div data-metric=\"%d\"><b>%s</b>%s</div>"
+                      % (n, esc(value), esc(label))
+                      for n, (label, value) in enumerate(cells, 1)))
 
 
 def render_tickets(data):
-    out = ["<section id=\"tickets\"><h2>① 票與依賴</h2>"]
+    out = ["<section id=\"tickets\"><h2>① VISION 四個指標與票</h2>"]
+    out.append(render_vision(data["vision"]))
     tickets = data["tickets"]
     if not tickets:
         out.append("<p class=\"empty\">一張票都沒有</p></section>")
@@ -618,10 +677,10 @@ def render_tickets(data):
         out.append("<div><b>%d</b>%s</div>" % (count, esc(state_name)))
     out.append("</div>")
     out.append("<table><tr><th>票</th><th>狀態</th><th>v</th><th>前置</th>"
-               "<th>base_sha 還是主線祖先?</th><th>返工輪</th>"
-               "<th>紅(env/product)</th><th>token</th>"
+               "<th>base_sha 還是主線祖先?</th><th>token</th><th>cache 讀</th>"
+               "<th>wall 秒</th><th>worker 輪</th><th>介入</th>"
                "<th>凍結</th><th>標題</th></tr>")
-    numbers = data.get("metrics") or {}
+    numbers = data["vision"]["tickets"]
     for one in tickets:
         deps = ", ".join("#%s" % esc(d.get("id", "")) for d in (one.get("depends_on") or []))
         frozen = one.get("frozen") or {}
@@ -630,13 +689,13 @@ def render_tickets(data):
             "<tr><td class=\"id\">#%s</td>"
             "<td><span class=\"pill s-%s\">%s</span></td>"
             "<td>%s</td><td>%s</td><td>%s</td>"
-            "<td>%s</td><td>%s</td><td>%s</td>"
+            "<td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>"
             "<td>%s</td><td>%s</td></tr>"
             % (esc(one.get("id", "")), esc(one.get("state", "")),
                esc(one.get("state", "")), esc(one.get("state_version", "")),
                deps or "—", ancestor_cell(one.get("_ancestor")),
-               esc(row.get("fix_rounds", UNKNOWN)), red_cell(row),
-               esc(row.get("tokens", UNKNOWN)),
+               *(esc(row.get(key, UNKNOWN)) for key in
+                 ("tokens", "cache_read", "wall_seconds", "worker_rounds", "interventions")),
                esc(frozen.get("reason", "")) or "—", esc(one.get("subject", ""))))
     out.append("</table></section>")
     return "".join(out)
@@ -934,15 +993,12 @@ def render_objections(data):
 
 
 def inbox_pages(box, ident=None):
-    """終態收件匣:`index.jsonl` 減掉 `acked.jsonl`。ack 過的那幾則不在這裡。"""
+    """終態收件匣:`<reports_dir>/inbox/` 裡的頁。ack 過的搬進 `acked/`,不在這裡。"""
     out = ["<h2>終態收件匣(還沒 ack)</h2>"]
     rows = box.get("entries") or []
     if ident is not None:
         rows = [row for row in rows if str(row.get("ticket", "")) == str(ident)]
-    if box.get("index_missing"):
-        out.append("<p class=\"empty\">沒有 <code>%s/%s</code> —— 還沒有人寫過終態</p>"
-                   % (esc(box.get("dir", "")), esc(INDEX_NAME)))
-    elif not rows:
+    if not rows:
         out.append("<p class=\"empty\">收件匣是空的(ack 過的不算)</p>")
     else:
         out.append("<table><tr><th>票</th><th>狀態</th><th>要主線做什麼</th>"

@@ -15,17 +15,19 @@
 主線要知道一輪跑完了沒,只有兩條路 —— **輪詢**(每看一次背景工作 = 整份上下文重送
 一輪),或**等人來講**(而沒有人會來講,因為跑完的是一支腳本)。
 
-每一個**終態**都寫一則事件(控制台看得到);只有要主線動手的終態另寫**一頁**
-`reports/inbox/<票號>-<run_id>.md`(見下一節)。一頁只答四句:
-**哪張票、什麼狀態、要主線做什麼、去哪看**。多寫一句,讀它的人就得把它整份讀完。
+只有要主線動手的終態寫**一頁** `reports/inbox/<票號>-<run_id>.md`(見下一節)。
+一頁只答四句:**哪張票、什麼狀態、要主線做什麼、去哪看**。多寫一句,讀它的人就得
+把它整份讀完。
 
-## 為什麼 `list` 讀索引而不是掃 markdown
-掃 markdown 等於在解析自己寫的散文,而散文改一個字就會解析錯。索引(`index.jsonl`)
-是只加不改的一行一筆;markdown 那一頁是給人讀的,索引是給 `list` 讀的。
+## 一份狀態:目錄就是收件匣(D-054 Q5)
+沒有索引檔,也不發鏡像事件。`reports/inbox/*.md` 是還沒 ack 的,`reports/inbox/acked/*.md`
+是收下的 —— `list` / `show` / 看板 / `new-session.sh` 都讀這兩個目錄。每頁第一行是一行
+`<!-- inbox {...} -->`(票號、狀態、要做什麼、去哪看、時間),`list` 讀的是那一行 JSON,
+不解析散文;沒有那一行的頁(手寫的)退回檔名取票號、標題取狀態。
 
 ## ack 是「我收下了」,不是「我做完了」
-ack 只從清單上拿掉 —— 票的狀態由票說了算(`ticket.py`),不由收件匣說。兩者混在一起
-的話,一次 ack 會讓一張還沒處理的票在畫面上消失。
+ack 把頁搬進 `acked/`,只從清單上拿掉 —— 票的狀態由票說了算(`ticket.py`),不由收件匣說。
+兩者混在一起的話,一次 ack 會讓一張還沒處理的票在畫面上消失。
 
 ## 只有兩種頁(D-032;取代 #43 C4 的「腳本做掉的頁由腳本 ack」)
 `INBOX_KINDS = ("decision", "done")`,`post --kind` 不在其中就 rc=2、什麼都不寫 ——
@@ -36,15 +38,16 @@ ack 只從清單上拿掉 —— 票的狀態由票說了算(`ticket.py`),不由
 - **done**:整票完成簡報,`land.sh` 在 `ticket.py close` 成功後發 `inbox.py done`
   (subject、落地 sha、做了什麼、覆核結論、cost 表)。**不自動 ack**:主線讀完自己收。
 閘門綠 / 閘門紅(可歸因)/ 等覆核 / 覆核通過 / 覆核沒交件這類腳本接著會做的終態
-只寫 events.jsonl,不發頁。`ack --by` 與 `--state` 留著:D-032 之前的舊頁還在索引裡。
+不發頁。`ack --by` 與 `--state` 留著:D-032 之前的舊頁還在收件匣裡。
 
-`acked.jsonl` 每一筆記 `by`:不帶 `--by` 記 `main`,**不是空字串** —— 「沒寫是誰收的」
-與「主線收的」要分得開(`docs/DISPATCH-TEMPLATE.md` §5.5)。
+搬進 `acked/` 的那一頁,第一行補記 `by`:不帶 `--by` 記 `main`,**不是空字串** ——
+「沒寫是誰收的」與「主線收的」要分得開(`docs/DISPATCH-TEMPLATE.md` §5.5)。
 """
 
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime
 
@@ -56,8 +59,10 @@ INBOX_KINDS = ("decision", "done")
 
 DEFAULT_REPORTS = "reports"
 INBOX_REL = "inbox"
-INDEX = "index.jsonl"
-ACKED = "acked.jsonl"
+ACKED_REL = "acked"
+PAGE_SUFFIX = ".md"
+META = re.compile(r"^<!-- inbox (\{.*\}) -->$")
+TITLE = re.compile(r"^#\s+#?(\S+)\s+——\s+(.*)$")
 
 
 def now():
@@ -72,55 +77,71 @@ def inbox_dir(root):
     return os.path.join(reports_dir(root), INBOX_REL)
 
 
-def index_path(root):
-    return os.path.join(inbox_dir(root), INDEX)
+def acked_dir(root):
+    return os.path.join(inbox_dir(root), ACKED_REL)
 
 
-def acked_path(root):
-    return os.path.join(inbox_dir(root), ACKED)
+def meta_line(row):
+    return "<!-- inbox %s -->\n" % json.dumps(row, ensure_ascii=False)
 
 
-def read_jsonl(path):
-    rows = []
+def split_page(text):
+    """`(第一行的那份 dict 或 None, 去掉那一行之後給人讀的全文)`。"""
+    head, _, rest = text.partition("\n")
+    hit = META.match(head.strip())
+    if not hit:
+        return None, text
+    try:
+        row = json.loads(hit.group(1))
+    except ValueError:
+        return None, text
+    return (row if isinstance(row, dict) else None), rest
+
+
+def read_page(root, path, acked):
+    """一頁的那一列。讀不到回 None;沒有第一行 JSON 的頁退回檔名與標題。"""
     try:
         with open(path, encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(row, dict):
-                    rows.append(row)
+            text = handle.read()
+    except (OSError, UnicodeDecodeError):
+        return None
+    row, body = split_page(text)
+    name = os.path.basename(path)[:-len(PAGE_SUFFIX)]
+    if row is None:
+        title = TITLE.match(body.splitlines()[0]) if body.strip() else None
+        row = {"ticket": name.split("-", 1)[0],
+               "state": title.group(2) if title else "", "what": "", "where": "",
+               "at": datetime.fromtimestamp(os.path.getmtime(path)).astimezone()
+               .isoformat(timespec="seconds")}
+    row = dict(row)
+    row["name"] = name
+    row["acked"] = acked
+    row["page"] = os.path.relpath(path, root)
+    # 同一秒寫的幾頁,`at` 分不出先後:用檔的 mtime 排,不用檔名(`10-…` 排在 `9-…` 前)。
+    row["_mtime"] = os.stat(path).st_mtime_ns
+    return row
+
+
+def pages_in(where):
+    try:
+        names = os.listdir(where)
     except OSError:
         return []
-    return rows
-
-
-def append_jsonl(path, row):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    line = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
-    handle = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-    try:
-        os.write(handle, line)
-    finally:
-        os.close(handle)
-
-
-def acked_names(root):
-    return set(row.get("name") for row in read_jsonl(acked_path(root)))
+    return sorted(os.path.join(where, name) for name in names
+                  if name.endswith(PAGE_SUFFIX)
+                  and os.path.isfile(os.path.join(where, name)))
 
 
 def entries(root, include_acked=False):
-    done = acked_names(root)
+    """收件匣的每一頁,舊的在前(`at`,再來檔名)。只讀兩個目錄,不讀任何索引。"""
     rows = []
-    for row in read_jsonl(index_path(root)):
-        row["acked"] = row.get("name") in done
-        if row["acked"] and not include_acked:
-            continue
-        rows.append(row)
+    boxes = [(inbox_dir(root), False)] + ([(acked_dir(root), True)] if include_acked else [])
+    for where, acked in boxes:
+        for path in pages_in(where):
+            row = read_page(root, path, acked)
+            if row is not None:
+                rows.append(row)
+    rows.sort(key=lambda row: (str(row.get("at") or ""), row.pop("_mtime"), row["name"]))
     return rows
 
 
@@ -155,36 +176,29 @@ PAGE = """# #%(ticket)s —— %(state)s
 %(note)s"""
 
 
+def taken(root, name):
+    return any(os.path.exists(os.path.join(where, name + PAGE_SUFFIX))
+               for where in (inbox_dir(root), acked_dir(root)))
+
+
 def publish(root, ticket, run_id, kind, state, what, where, render):
-    """寫一頁 + 索引一列 + 一則事件。`render(run_id_shown)` 回那一頁的全文。"""
+    """只寫一頁(第一行是給 `list` 讀的那一行 JSON)。`render()` 回給人讀的全文。"""
     where_dir = inbox_dir(root)
     os.makedirs(where_dir, exist_ok=True)
     # 同一輪可以有兩個終態(閘門綠了,接著 auto-fix 說「停在等覆核」)。同名會讓
-    # 後面那一頁**蓋掉**前面那一頁,而索引上兩列還指著同一個檔 —— 讀的人看到兩列、
-    # 打開是同一頁,分不出哪一列是真的。所以撞名就加序號。
+    # 後面那一頁**蓋掉**前面那一頁 —— 所以撞名就加序號;ack 過搬走的那一頁也算撞名,
+    # 不然新的一頁會跟 `acked/` 裡的舊頁同名,ack 時互蓋。
     stem = "%s-%s" % (ticket, run_id or "no-run")
     name, serial = stem, 1
-    while os.path.exists(os.path.join(where_dir, "%s.md" % name)):
+    while taken(root, name):
         serial += 1
         name = "%s-%d" % (stem, serial)
-    path = os.path.join(where_dir, "%s.md" % name)
+    path = os.path.join(where_dir, name + PAGE_SUFFIX)
     with open(path, "w", encoding="utf-8") as handle:
+        handle.write(meta_line({"ticket": ticket, "run_id": run_id or "", "kind": kind,
+                                "state": state, "what": what, "where": where,
+                                "at": now()}))
         handle.write(render())
-    append_jsonl(index_path(root), {
-        "name": name, "ticket": ticket, "run_id": run_id or "",
-        "kind": kind, "state": state, "what": what,
-        "where": where, "at": now(),
-        "page": os.path.relpath(path, root)})
-    try:
-        # `kind=` 這個名字是 `event.emit` 的第一個位置參數 —— 拿它當欄位名會丟
-        # TypeError,而 except 會把它吞成「事件發不出去」。所以這一格叫 `run_kind`。
-        event.emit("inbox.posted", ticket=ticket, run_id=run_id or "",
-                   run_kind=kind, state=state,
-                   page=os.path.relpath(path, root))
-    except Exception:                                          # noqa: BLE001
-        # 事件發不出去要出聲,但不擋 —— 那一頁已經寫好了,而把紀錄問題升級成
-        # 交付問題會讓終態根本沒人收到。
-        sys.stderr.write("inbox: 事件發不出去(那一頁還是寫好了)\n")
     sys.stdout.write("inbox: %s\n" % os.path.relpath(path, root))
     return 0
 
@@ -322,11 +336,29 @@ def cmd_show(args):
     row = rows[-1]
     try:
         with open(os.path.join(root, row.get("page", "")), encoding="utf-8") as handle:
-            sys.stdout.write(handle.read())
+            sys.stdout.write(split_page(handle.read())[1])
     except OSError as exc:
-        sys.stderr.write("inbox: 索引上有這一則,那一頁卻讀不到 —— %s\n" % exc)
+        sys.stderr.write("inbox: 清單上有這一則,那一頁卻讀不到 —— %s\n" % exc)
         return 2
     return 0
+
+
+def move_to_acked(root, row, by):
+    """把一頁搬進 `acked/`,第一行補記誰收的、何時。先寫新檔再刪舊檔:中途倒下最多
+    兩邊各一份,不會一份都不剩。"""
+    src = os.path.join(root, row["page"])
+    with open(src, encoding="utf-8") as handle:
+        meta, body = split_page(handle.read())
+    meta = dict(meta or {key: row.get(key, "") for key in
+                         ("ticket", "state", "what", "where", "at")})
+    meta.update({"acked_at": now(), "by": by})
+    dest_dir = acked_dir(root)
+    os.makedirs(dest_dir, exist_ok=True)
+    dest = os.path.join(dest_dir, row["name"] + PAGE_SUFFIX)
+    with open(dest, "w", encoding="utf-8") as handle:
+        handle.write(meta_line(meta))
+        handle.write(body)
+    os.remove(src)
 
 
 def cmd_ack(args):
@@ -349,8 +381,7 @@ def cmd_ack(args):
                          % ("" if args.all else "(%s)" % args.which))
         return 0
     for row in rows:
-        append_jsonl(acked_path(root), {"name": row["name"], "at": now(),
-                                        "ticket": row.get("ticket", ""), "by": args.by})
+        move_to_acked(root, row, args.by)
         sys.stdout.write("inbox: ack %s(#%s %s)by=%s\n"
                          % (row["name"], row.get("ticket", "?"), row.get("state", ""),
                             args.by))
