@@ -66,7 +66,7 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 9. **gate / merge / push 各記一筆**(狀態檔的 `phases`),而且**每一條退出路徑都寫終態**,
    要人動手的(拒收 / 串接衝突 / 全套紅 / 沒合進主線 / push 沒成功)同時寫一則 `reports/inbox/<票號>-<run_id>.md`,kind=decision(D-015 / D-032:終態去叫醒主線,主線不輪詢)。
 10. 綠了、push 成功之後 land 對每張票試 `scripts/ticket.py close <n> --landed <合併後主線的 sha>`(#43):關得掉印「#n 已合併、已關票」;關得掉再發一頁 done 簡報(`inbox.py done`:subject、落地 sha、做了什麼、覆核結論、cost 表;不自動 ack);關不掉印「#n 已合併、尚未關票」+ `ticket.py close` 的理由原文,並寫一頁 decision —— Done 的條件一條不放,沒有放行旗標,land 的 rc 不因關不掉而變。
-11. 每一步發事件。全套紅時預設派下一輪 worker(`--no-auto-fix` 才關:紅就停、每張一頁 decision、不派)。
+11. 每一步發 `land.*` 事件。全套紅時預設派下一輪 worker(`--no-auto-fix` 才關:紅就停、每張一頁 decision、不派)。
    一張票一批 → 那張票的 `auto-fix.sh <n>`。**一批 N≥2 張(#109,D-H51 ②)不找是誰弄紅的**:同一把
    `.land.lock` 下叫 `AC_BATCH_RUN_ID=<這次 land 的 run_id> sh scripts/auto-fix.sh --batch land/<stamp> <id…>`
    (每輪全套紅,land 把那一輪的紅榜抄進 land 自己的 `status.json`,auto-fix 從那裡讀),
@@ -287,6 +287,7 @@ worker 同一輪**也 commit 了**(#107,專案 #751 事故;#144 起):驗證者�
 | **第 1 輪驗證者自動**(#126 起**任一輪**,不只第 1 輪):票 `needs_verifier` 是 JSON `true` 且 `verify.baseline` 空(案例還沒交,D-018)→ 任一輪都先派驗證者(含從舊狀態檔接著跑的第 2 輪以後,stdout「案例還沒交,第 N 輪先派驗證者」);`interface_fixed=true` 時派 worker **之前**起背景驗證者(副本 = 票的 `base_sha`,派工文 = `rules.py pack verifier` + `templates/dispatch-verifier.md` 填好),worker 回來後才收;兩份 patch 一起 `apply.sh`、閘門量套了兩份的樹;沒交件 → worker 的 patch 先收進 reports、Blocked + decision 頁;`false` / 缺 → 不派(缺的 stderr 說一聲) | **已實作**(#51,D-032 ③) | `scripts/auto-fix.sh`(`start_verifier_bg` / `wait_verifier`);`--dry-run --round 1` 印兩份派工文路徑 |
 | **reviewer 自動**:閘門綠、complex 票轉 InReview → headless reviewer(#136 起只派 complex;`reviewer.command`,唯讀白名單);pass 由腳本寫 `review`,fail 逐條 blocking 反駁 + Blocked,沒交件不算 pass | **已實作**(2026-09-26,#42,D-025 ②) | `scripts/review.sh <票號>`;`auto-fix.sh` 綠(`--no-review` 關)與 `gate.sh --branch --ticket` 手跑綠 |
 | **終態叫醒主線**(要人裁的 decision 頁 + 整票 done 頁;其餘終態只寫事件)+ 禁止輪詢 | **已實作**(2026-09-21,D-015) | `scripts/inbox.py post\|done\|list\|show\|ack`;`reports/inbox/<票號>-<run_id>.md`;`new-session.sh` 開場印 |
+| **一份狀態**(D-054 Q5):收件匣只有目錄(`reports/inbox/*.md`,ack = 搬進 `acked/`,頁的第一行是 `list` 讀的 JSON),沒有索引檔;票欄位變更、cost 列、發頁不另發鏡像事件;看板從票 JSON 畫 VISION 四個指標(拿不到 = 未知),`interventions` 在轉 Blocked / NeedsDecision 且 owner=main 的同一次存檔 +1 | **已實作**(#143) | `scripts/inbox.py`、`scripts/ticket.py`(`count_intervention`)、`board/board.py`(`vision`) |
 | 同一輪的回歸**只跑一次**(worker / 驗證者 / gate 共用) | **已實作**(2026-09-21,D-015) | `scripts/verify.py` 的 `reports/t<n>/<run_id>/verify-<雜湊>.log`(雜湊含標籤 + sha);`--no-cache` 關 |
 | **按角色裁切、帶版本的規則包** | **已實作**(2026-09-21,D-015) | `scripts/rules.py pack <角色> --model <模型>`(各段原文串起來,不設位元組上限) |
 | 一個既有專案**接上這一套** | **已實作**(步驟 + 腳本;實際遷移還沒做) | `docs/TODO.md` §0;`scripts/sync-to-project.sh` 同步到專案的 `scripts/control/` 並印出接點 |

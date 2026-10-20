@@ -235,12 +235,15 @@ class Set(Sandbox):
         super().setUp()
         self.make_ticket(1, state="Ready")
 
-    def test_every_change_bumps_state_version_and_emits(self):
+    def test_every_change_bumps_state_version_and_emits_nothing(self):
         """**每次變更 +1**,不管改的是哪一格 —— 只在改 state 時 +1 的版本擋不住
-        「改了範圍、版本沒動」那一種。
+        「改了範圍、版本沒動」那一種。#143(D-054 Q5):變更只寫在票 JSON,
+        events.jsonl 不多任何一筆(欄位變更的鏡像事件已刪)。
 
-        **變異**:把 `state_version` 那一行搬進 `if field == "state"` → 這一條紅。
+        **變異**:把 `state_version` 那一行搬進 `if field == "state"` → 這一條紅;
+        `cmd_set` 存檔後仍發一筆事件 → 這一條紅。
         """
+        before = self.events()
         self.assertEqual(self.ticket("set", "1", "state", "Running").returncode, 0)
         self.assertEqual(self.load_ticket("1")["state_version"], 2)
         self.assertEqual(self.ticket(
@@ -248,7 +251,37 @@ class Set(Sandbox):
         row = self.load_ticket("1")
         self.assertEqual(row["state_version"], 3)
         self.assertEqual(row["decision_refs"], ["D-001", "D-014"])
-        self.assertEqual(self.kinds().count("ticket.state"), 2)
+        self.assertEqual(self.events(), before, "set 發了事件")
+
+    def test_interventions_count_each_hand_over_to_main(self):
+        """#143(D-055 主線裁):票轉 Blocked / NeedsDecision 且 owner=main,同一次存檔
+        `interventions` +1。auto-fix / review 先 set state 再 set owner:兩步合起來算一次。
+        沒有這一格的舊票不補 0(看板顯示未知),第一次介入從 1 起算。
+
+        **變異**:`count_intervention` 不在 `cmd_set` 叫 → 這一條紅。
+        """
+        self.assertNotIn("interventions", self.load_ticket("1"))
+        self.assertEqual(self.ticket("set", "1", "decision_refs", '["D-001"]').returncode, 0)
+        self.assertNotIn("interventions", self.load_ticket("1"), "別的欄位不算介入")
+        self.assertEqual(self.ticket("set", "1", "state", "Blocked").returncode, 0)
+        self.assertNotIn("interventions", self.load_ticket("1"), "owner 還不是 main")
+        self.assertEqual(self.ticket("set", "1", "owner", "main").returncode, 0)
+        self.assertEqual(self.load_ticket("1")["interventions"], 1)
+        self.assertEqual(self.ticket("set", "1", "owner", "main").returncode, 0)
+        self.assertEqual(self.load_ticket("1")["interventions"], 1, "owner 沒變不再算")
+        self.assertEqual(self.ticket("set", "1", "state", "Running").returncode, 0)
+        self.assertEqual(self.ticket("set", "1", "state", "NeedsDecision").returncode, 0)
+        self.assertEqual(self.load_ticket("1")["interventions"], 2)
+        self.assertEqual(self.ticket("set", "1", "state", "Blocked").returncode, 0)
+        self.assertEqual(self.load_ticket("1")["interventions"], 3)
+
+    def test_running_out_of_rounds_counts_one_intervention(self):
+        """`ticket.py round` 第 retry_limit+1 輪仍紅:票轉 Blocked、owner=main,同一次存檔 +1。"""
+        self.make_ticket(2, state="Running", retry_limit=2)
+        self.assertEqual(self.ticket("round", "2", "3", "--red").returncode, 0)
+        data = self.load_ticket(2)
+        self.assertEqual((data["state"], data["owner"], data["interventions"]),
+                         ("Blocked", "main", 1))
 
     def test_a_list_field_given_one_word_becomes_a_one_element_list(self):
         """字串形狀的 list 欄位會讓逐條讀它的人逐字元跑過去,而它不會出聲。"""
@@ -904,9 +937,10 @@ class Cost(Sandbox):
     def test_cost_does_not_touch_state_version_or_review(self):
         """A3:review 綁 state_version;寫成本若讓覆核過期,land 就會拒。
 
-        **變異**:cost 走 `cmd_set` 的 +1 路 → 這一條紅。
+        **變異**:cost 走 `cmd_set` 的 +1 路 → 這一條紅;cost 仍發鏡像事件 → 這一條紅。
         """
         before = self.load_ticket("1")
+        events_before = self.events()
         done = self.ticket("cost", "1", "--role", "land", "--round", "1",
                            "--by", "land.sh", "--wall-seconds", "3")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -914,9 +948,7 @@ class Cost(Sandbox):
         self.assertEqual(after["state_version"], before["state_version"])
         self.assertEqual(after["review"], before["review"])
         self.assertIsNone(after["cost"][0]["model"])
-        kinds = self.kinds()
-        self.assertIn("ticket.cost", kinds)
-        self.assertNotIn("ticket.state", kinds)
+        self.assertEqual(self.events(), events_before, "cost 發了事件(#143:只寫票 cost[])")
 
 
 
@@ -932,7 +964,7 @@ REGISTERED_OUTCOMES = ("handed-in", "no-patch", "apply-failed", "timeout", "obje
 
 class CostLedgerRow(Sandbox):
     """#94 C1–C4、C7:`ticket.py cost` 一列一形、outcome 只收登記的字、token 取
-    modelUsage 全模型加總、ticket.cost 事件帶整列。"""
+    modelUsage 全模型加總。"""
 
     def setUp(self):
         super().setUp()
@@ -980,13 +1012,13 @@ class CostLedgerRow(Sandbox):
         """C2 反例。**變異 m2**:--outcome 不驗登記表 → 這一條紅。"""
         self.cost("--outcome", "pass")
         rows_before = len(self.load_ticket("1")["cost"])
-        costs_before = self.kinds().count("ticket.cost")
+        events_before = self.events()
         done = self.cost("--outcome", "passed")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         for word in REGISTERED_OUTCOMES:
             self.assertIn(word, done.stderr)
         self.assertEqual(len(self.load_ticket("1")["cost"]), rows_before)
-        self.assertEqual(self.kinds().count("ticket.cost"), costs_before)
+        self.assertEqual(self.events(), events_before)
 
     def test_c3_model_usage_is_summed_over_every_model(self):
         """C3。**變異 m3**:只讀 usage 不讀 modelUsage → 這一條紅。"""
@@ -1051,25 +1083,6 @@ class CostLedgerRow(Sandbox):
                 row = self.load_ticket("1")["cost"][index]
                 self.assertEqual((row["tokens_in"], row["tokens_out"], row["cache_write"],
                                   row["cache_read"]), expected)
-
-    def test_c4_the_event_carries_the_whole_row_but_at(self):
-        """C4。**變異 m4**:事件只帶 tokens_out → 這一條紅。"""
-        path = self.envelope_file({
-            "type": "result", "session_id": "s-1", "duration_ms": 4000,
-            "usage": {"input_tokens": 5, "output_tokens": 77,
-                      "cache_creation_input_tokens": 3, "cache_read_input_tokens": 9}})
-        done = self.cost("--from-envelope", path, "--outcome", "handed-in", "--run-id", "r-1",
-                         "--effort", "high")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        row = self.load_ticket("1")["cost"][-1]
-        event = [e for e in self.events() if e["kind"] == "ticket.cost"][-1]
-        self.assertEqual(event["ticket"], "1")
-        for key in row:
-            if key in ("at", "note"):
-                continue
-            self.assertEqual(event[key], row[key], key)
-        self.assertEqual(event.get("note"), row["note"])
-        self.assertNotIn("at", event)
 
     def test_c7_cost_still_leaves_state_version_and_review_alone(self):
         before = self.load_ticket("1")
@@ -1199,7 +1212,7 @@ def ticket_bytes(case, ident):
 
 class ReadyNeedsABooleanNeedsVerifier(Sandbox):
     """#91 C1(R2):實作票轉 Ready 前 `needs_verifier` 要是 JSON 布林。文字上寫「必填」
-    擋不住任何一張票;擋下的票位元組不變、不發 ticket.state。"""
+    擋不住任何一張票;擋下的票位元組不變。"""
 
     MISSING = object()
 
@@ -1229,9 +1242,6 @@ class ReadyNeedsABooleanNeedsVerifier(Sandbox):
                     self.assertIn("needs_verifier", done.stderr)
                     self.assertIn("#%s" % ident, done.stderr)
                     self.assertEqual(ticket_bytes(self, ident), before)
-                    self.assertFalse([row for row in self.events()
-                                      if row.get("kind") == "ticket.state"
-                                      and row.get("ticket") == ident])
                 else:
                     self.assertEqual(self.load_ticket(ident)["state"], "Ready")
 
@@ -1611,8 +1621,6 @@ class CostTakesAnEffort(Sandbox):
             row = self.load_ticket("1")["cost"][-1]
             self.assertEqual(set(row), COST_ROW_KEYS)
             self.assertEqual(row["effort"], want)
-            event = [r for r in self.events() if r["kind"] == "ticket.cost"][-1]
-            self.assertEqual(event.get("effort"), want)
 
     def test_t7_schema_names_effort_and_the_15_keys(self):
         with open(os.path.join(SCRIPTS, "..", "tickets", "SCHEMA.md"), encoding="utf-8") as handle:

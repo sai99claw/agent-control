@@ -428,11 +428,11 @@ def clean_base(args, rels, ref, where, verb):
     return candidate, cand_sha, base_dir, base_sha, None
 
 
-def write_baseline(ident, record, to):
+def write_baseline(ident, record):
     """證據寫回票的 `verify.baseline`(同一格,`stage` 是它的升級)。**只有 `check`
     叫它**;`red` 交的是證據檔(`write_red_record`),不碰票(#36)。"""
     try:
-        ticketlib.save_baseline(ident, record, to)
+        ticketlib.save_baseline(ident, record)
     except (OSError, ValueError, RuntimeError) as exc:
         sys.stderr.write("verify-case: 證據寫不回票 #%s —— %s\n" % (ident, exc))
         return 2
@@ -576,8 +576,7 @@ def cmd_check(args):
             "baseline": baseline,
             "candidate_run": cand,
         }
-        rc = write_baseline(args.ticket, portable(record, root, args.candidate),
-                            "ok" if ok else "紅不起來")
+        rc = write_baseline(args.ticket, portable(record, root, args.candidate))
         if rc:
             return rc
 

@@ -107,10 +107,10 @@ class T1Parser(unittest.TestCase):
         self.assertEqual(tc.guess_role("", late), "subagent")
 
     def test_a5_reader_takes_the_last_row_per_session_and_agent(self):
-        """A5 讀端;取第一筆或與 ticket.cost 相加會紅;常數;新案例。"""
+        """A5 讀端;取第一筆或與別種事件相加會紅;常數;新案例。"""
         events = [
             {"kind": "agent.cost", "session_id": "s1", "agent_id": None, "tokens_in": 10},
-            {"kind": "ticket.cost", "session_id": "s1", "tokens_in": 999},
+            {"kind": "agent.done", "session_id": "s1", "tokens_in": 999},
             {"kind": "agent.cost", "session_id": "s1", "agent_id": "a1", "tokens_in": 1},
             {"kind": "agent.cost", "session_id": "s1", "agent_id": None, "tokens_in": 20},
             {"kind": "agent.cost", "session_id": "s1", "agent_id": "a1", "tokens_in": 2},

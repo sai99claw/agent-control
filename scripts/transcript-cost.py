@@ -177,7 +177,7 @@ def guess_role(description, prompt, agent_type=None):
 
 def latest_costs(events):
     """讀端(A5):`agent.cost` 主線列以 session_id、子 agent 以 (session_id, agent_id)
-    各取最後一筆。只看 agent.cost —— 不與 headless 的 ticket.cost / 票 cost[] 相加。
+    各取最後一筆。只看 agent.cost —— 不與 headless 的票 cost[] 相加。
     沒有 session_id 的列合不起來,各算一筆。"""
     last = {}
     for index, row in enumerate(events):

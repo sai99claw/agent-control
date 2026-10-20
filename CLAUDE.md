@@ -13,8 +13,6 @@
 
 ## 不可違反的
 - **票是唯一的工作單位。** 沒有票的工作不派、不落地。票的契約在 `tickets/SCHEMA.md`。
-- **主線的每個動作要發事件**(`scripts/event.py emit`),控制台只認事件。沒發事件的事,對系統而言沒發生。
-  短命角色不發事件,由派工方代發(`docs/SESSION-START.md` Worker / 驗證者那一節)。
 - **收件只走 `scripts/apply.sh`**(收 EVIDENCE 與反駁,在票分支上補驗證者 patch-verify 與 code-map 重產的 commit);
   **落地只走 `scripts/land.sh`**,它會拒絕該拒絕的(0 commit、基準版本過期、命中 `hard_block`、
   complex 票缺覆核 pass(只有 complex 的票做完後覆核;沒標 = simple))。票沒有寫入範圍(D-054 Q2):唯一的硬擋是 `board/config.json` 的 `hard_block`。

@@ -281,9 +281,10 @@ class TriageBase(AutoFixBase):
         self.assertEqual([row for row in failed if row.get("reason") == "objection"], [])
         self.assertEqual(len(self.inbox_rows()), pages_before, self.inbox_rows())
         self.assertNotIn("decision.asked", self.kinds())
-        blocked = [row for row in self.events() if row["kind"] == "ticket.state"
-                   and str(row.get("to")).strip('"') == "Blocked"]
-        self.assertEqual(blocked, [])
+        # 票 JSON 是唯一的狀態(#143):沒轉過 Blocked 交主線 = 介入次數那一格沒長出來。
+        ticket = self.load_ticket("1")
+        self.assertNotEqual(ticket["state"], "Blocked")
+        self.assertIsNone(ticket.get("interventions"), "轉過 Blocked 交主線")
 
     def assert_evidence_kept(self):
         """A3/A4 的 (6):第一段的 EVIDENCE 改名留著,續做那一份另外一個檔。"""

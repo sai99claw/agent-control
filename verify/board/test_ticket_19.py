@@ -86,9 +86,13 @@ class BoardReads(Sandbox):
                    json.dumps(row, ensure_ascii=False))
         return row
 
-    def inbox_file(self, rows, name="index.jsonl"):
-        self.write(os.path.join("reports", "inbox", name),
-                   "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
+    def inbox_page(self, name, acked=False, **meta):
+        """收件匣一頁(#143:沒有索引檔;頁的第一行是 `list` 讀的那份 JSON,ack 過的在 `acked/`)。"""
+        where = os.path.join("reports", "inbox", *(["acked"] if acked else []))
+        self.write(os.path.join(where, name + ".md"),
+                   "<!-- inbox %s -->\n# #%s —— %s\n"
+                   % (json.dumps(meta, ensure_ascii=False), meta.get("ticket", ""),
+                      meta.get("state", "")))
 
     def section(self, body, anchor):
         return body.split('id="%s"' % anchor)[1].split("</section>")[0]
@@ -104,12 +108,10 @@ class LoadersReadWhatIsOnDisk(BoardReads):
         self.status(1, "20260921-100000-2", rc=1, failures=[
             {"case": "verify19.zzqx.CaseA.test_probe",
              "excerpt": "AssertionError: verify19-probe-failed\n第二行不該上畫面"}])
-        self.inbox_file([
-            {"name": "v19-open", "ticket": "1", "state": "閘門紅",
-             "what": "verify19-open-item", "where": "reports/t1/x/status.json"},
-            {"name": "v19-acked", "ticket": "1", "state": "收下過的",
-             "what": "verify19-acked-item", "where": "reports/t1/y/status.json"}])
-        self.inbox_file([{"name": "v19-acked", "ticket": "1"}], name="acked.jsonl")
+        self.inbox_page("v19-open", ticket="1", state="閘門紅",
+                        what="verify19-open-item", where="reports/t1/x/status.json")
+        self.inbox_page("v19-acked", acked=True, ticket="1", state="收下過的",
+                        what="verify19-acked-item", where="reports/t1/y/status.json")
         self.up()
         _, body = self.get("/")
         runs = self.section(body, "runs")
@@ -223,11 +225,10 @@ class BrokenDiskFilesNeverCauseA500(BoardReads):
         self.status(10, "20260920-090000-1")
         self.write(os.path.join("reports", "t10", "20260921-090000-2",
                                 "status.json"), "{")
-        self.write(os.path.join("reports", "inbox", "index.jsonl"),
-                   json.dumps({"name": "v19-broken-inbox", "ticket": "10",
-                              "state": "閘門紅", "what": "verify19-broken-item"},
-                             ensure_ascii=False) + "\nnot-json-verify19\n")
-        self.assertFalse(self.exists("reports/inbox/acked.jsonl"))
+        self.inbox_page("v19-broken-inbox", ticket="10", state="閘門紅",
+                        what="verify19-broken-item")
+        self.write(os.path.join("reports", "inbox", "v19-not-json.md"),
+                   "<!-- inbox {not-json-verify19 -->\n")
         self.up()
         for path in ("/", "/t/10", "/api/state"):
             status, body = self.get(path)

@@ -8,7 +8,6 @@
 哪張票、什麼狀態、要主線做什麼、去哪看。
 """
 
-import json
 import os
 import sys
 import unittest
@@ -37,10 +36,12 @@ class InboxBase(Sandbox):
                           "--where", where)
 
     def pages(self, ident=None):
-        rows = [json.loads(line) for line in self.read(
-            os.path.join("reports", "inbox", "index.jsonl")).splitlines() if line.strip()] \
-            if self.exists(os.path.join("reports", "inbox", "index.jsonl")) else []
-        return [row for row in rows if ident is None or row["ticket"] == ident]
+        """收件匣目錄裡的頁(含 `acked/`),讀每頁第一行那份 JSON —— 沒有索引檔。"""
+        return self.inbox_rows(ident)
+
+    def files_in_inbox(self):
+        where = os.path.join(self.repo, "reports", "inbox")
+        return sorted(os.listdir(where)) if os.path.isdir(where) else []
 
 
 class OnePage(InboxBase):
@@ -59,15 +60,14 @@ class OnePage(InboxBase):
     def test_two_terminal_states_in_one_run_do_not_share_a_page(self):
         """同一輪可以有兩個終態(閘門綠了,接著 auto-fix 說「停在等覆核」)。
 
-        **變異**:把撞名加序號那一段拿掉 → 這一條紅(索引上兩列指著同一個檔,
-        而後寫的那一頁蓋掉了前一頁)。
+        **變異**:把撞名加序號那一段拿掉 → 這一條紅(後寫的那一頁蓋掉了前一頁,
+        目錄裡只剩一頁)。
         """
         self.make_ticket("7")
         self.post(run="r1", state="閘門綠")
         self.post(run="r1", state="第 2 輪綠了,等覆核")
-        rows = [json.loads(line) for line in self.read(
-            os.path.join("reports", "inbox", "index.jsonl")).splitlines() if line.strip()]
-        self.assertEqual(len({row["page"] for row in rows}), 2, "兩列指著同一頁")
+        rows = self.pages("7")
+        self.assertEqual(len({row["page"] for row in rows}), 2, "兩則指著同一頁")
         for row in rows:
             page = self.read(row["page"])
             self.assertIn(row["state"], page)
@@ -90,11 +90,21 @@ class OnePage(InboxBase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual([row["kind"] for row in self.pages()], ["decision"])
 
-    def test_posting_emits_an_event_so_the_board_sees_it(self):
-        """控制台只認事件(D-003):沒發事件的事,對系統而言沒發生。"""
+    def test_posting_writes_only_the_page_no_index_and_no_event(self):
+        """#143(D-054 Q5):收件匣只有一份狀態 —— 目錄裡的頁。`post` 不寫索引檔、
+        不發鏡像事件;頁的第一行帶 `list` 讀的那一份 JSON。
+
+        **變異 M3**:`publish` 仍 append 一份索引檔 → 這一條紅(目錄多一個檔)。
+        """
         self.make_ticket("7")
-        self.post()
-        self.assertIn("inbox.posted", self.kinds())
+        before = self.events()
+        done = self.post()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.files_in_inbox(), ["7-r1.md"])
+        self.assertEqual(self.events(), before, "post 發了事件")
+        row = self.pages("7")[0]
+        self.assertEqual((row["kind"], row["state"], row["what"], row["where"]),
+                         ("decision", "閘門紅", "看紅榜", "reports/x"))
 
 
 SHA = "0123456789abcdef0123456789abcdef01234567"
@@ -150,12 +160,16 @@ class DoneBrief(InboxBase):
         self.make_ticket("7")
         self.done()
         self.assertIn("#7", self.inbox("list").stdout)
-        self.assertFalse(self.exists(os.path.join("reports", "inbox", "acked.jsonl")))
+        self.assertEqual([row["acked"] for row in self.pages("7")], [False])
 
 
 class ListAndAck(InboxBase):
 
     def test_list_shows_what_is_waiting_and_ack_takes_it_off(self):
+        """#143:ack 把頁搬進 `reports/inbox/acked/`,不另記一份。
+
+        **變異**:`ack` 不搬檔(頁留在原處)→ 這一條紅(清單上還有、acked/ 沒有)。
+        """
         self.make_ticket("7")
         self.post()
         listed = self.inbox("list")
@@ -166,6 +180,9 @@ class ListAndAck(InboxBase):
         after = self.inbox("list")
         self.assertNotIn("#7", after.stdout)
         self.assertIn("沒有等你的東西", after.stdout)
+        self.assertFalse(self.exists(os.path.join("reports", "inbox", "7-r1.md")))
+        self.assertTrue(self.exists(os.path.join("reports", "inbox", "acked", "7-r1.md")))
+        self.assertEqual(self.files_in_inbox(), ["acked"], "ack 多寫了別的檔")
 
     def test_ack_does_not_touch_the_ticket_state(self):
         """ack 是「我收下了」,不是「我做完了」。混在一起的話,一次 ack 會讓一張
@@ -174,6 +191,31 @@ class ListAndAck(InboxBase):
         self.post()
         self.inbox("ack", "7")
         self.assertEqual(self.load_ticket("7")["state"], "Blocked")
+
+    def test_pages_acked_in_the_old_acked_jsonl_stay_acked_after_the_move(self):
+        """#143 第 2 輪:這張刪了 `acked.jsonl`,現場只在那裡記過 ack 的頁不能落地後全變回未讀。
+
+        **變異**:`entries` 不呼叫 `migrate_acked_jsonl` → 這一條紅(清單上又出現 #7)。
+        """
+        inbox = os.path.join("reports", "inbox")
+        self.write(os.path.join(inbox, "7-old.md"), "# #7 —— 閘門紅\n\n舊頁,沒有第一行 JSON\n")
+        self.write(os.path.join(inbox, "8-old.md"), "# #8 —— 覆核退回\n\n還沒 ack\n")
+        self.write(os.path.join(inbox, "acked.jsonl"),
+                   '{"name": "7-old", "at": "2026-10-01T00:00:00+00:00", "ticket": "7",'
+                   ' "by": "review.sh"}\n')
+        listed = self.inbox("list")
+        self.assertEqual(listed.returncode, 0, listed.stdout + listed.stderr)
+        self.assertNotIn("#7", listed.stdout)
+        self.assertIn("#8", listed.stdout)
+        self.assertFalse(self.exists(os.path.join(inbox, "acked.jsonl")))
+        self.assertTrue(self.exists(os.path.join(inbox, "acked", "7-old.md")))
+        self.assertEqual([(row["name"], row.get("by")) for row in self.pages("7")],
+                         [("7-old", "review.sh")])
+        again = self.inbox("list", "--all")
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn("#7", again.stdout)
+        self.assertNotIn("#7", self.inbox("list").stdout, "再跑一次又變回未讀")
+        self.assertIn("#8", self.inbox("list").stdout)
 
     def test_an_acked_page_is_still_readable_with_all(self):
         self.make_ticket("7")
@@ -195,15 +237,14 @@ class ListAndAck(InboxBase):
 
 
 class WhoAcked(InboxBase):
-    """#43 A3:`acked.jsonl` 每一筆記是誰收的。腳本做掉的頁由腳本收(`--by <腳本>`),
+    """#43 A3:搬進 `acked/` 的每一頁記是誰收的。腳本做掉的頁由腳本收(`--by <腳本>`),
     主線只剩 Blocked / 裁示 / 落地順序三類頁 —— 而「誰收的」要在帳上分得開。"""
 
     def acked_rows(self):
-        return [json.loads(line) for line in self.read(
-            os.path.join("reports", "inbox", "acked.jsonl")).splitlines() if line.strip()]
+        return self.inbox_rows(acked=True)
 
     def test_ack_by_a_script_records_that_script(self):
-        """**變異 M3**:`--by` 收了不寫進 jsonl → 這一條紅。"""
+        """**變異**:`--by` 收了不寫進搬過去那一頁 → 這一條紅。"""
         self.make_ticket("7")
         self.post(state="第 1 輪綠了,等覆核")
         done = self.inbox("ack", "7", "--by", "review.sh")
@@ -283,18 +324,18 @@ class WhoWritesIntoIt(InboxBase):
         self.assertIn("gate.pass", self.kinds())
 
     def test_running_out_of_rounds_is_a_state_change_not_a_second_page(self):
-        """三輪耗盡是一個**狀態轉換**:票轉 Blocked、兩則事件。叫醒主線的那一頁由
-        auto-fix.sh 發(帶紅榜與輪數)—— 這裡再發一頁就是同一件事兩頁(#50 裁示)。"""
+        """三輪耗盡是一個**狀態轉換**:票轉 Blocked、owner=main,寫在票 JSON 上。叫醒
+        主線的那一頁由 auto-fix.sh 發(帶紅榜與輪數)—— 這裡再發一頁就是同一件事兩頁
+        (#50 裁示)。"""
         self.make_ticket("7", retry_limit=2, state="Running")
         done = self.ticket("round", "7", "3", "--red")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.load_ticket("7")["state"], "Blocked")
+        data = self.load_ticket("7")
+        self.assertEqual((data["state"], data["owner"]), ("Blocked", "main"))
         self.assertEqual(self.pages("7"), [])
-        self.assertIn("Blocked", [row.get("to") for row in self.events()
-                                  if row["kind"] == "ticket.state"])
 
-    def test_the_index_is_append_only_json_not_parsed_prose(self):
-        """`list` 讀索引而不是掃 markdown:散文改一個字就會解析錯。
+    def test_list_reads_the_page_header_not_parsed_prose(self):
+        """`list` 讀每頁第一行那份 JSON,不掃散文:頁裡的字改了,清單照樣對。
 
         併入(#72)原 OnePage.test_each_round_gets_its_own_page:**一輪一頁、不覆寫** ——
         覆寫的話,接手的人分不出手上這頁是哪一輪的。
@@ -304,10 +345,61 @@ class WhoWritesIntoIt(InboxBase):
         self.post(run="r2", state="閘門綠")
         self.assertTrue(self.exists(os.path.join("reports", "inbox", "7-r1.md")))
         self.assertTrue(self.exists(os.path.join("reports", "inbox", "7-r2.md")))
-        rows = [json.loads(line) for line
-                in self.read(os.path.join("reports", "inbox", "index.jsonl")).splitlines()
-                if line.strip()]
-        self.assertEqual([row["run_id"] for row in rows], ["r1", "r2"])
+        self.assertEqual([row["run_id"] for row in self.pages("7")], ["r1", "r2"])
+        page = os.path.join("reports", "inbox", "7-r1.md")
+        self.write(page, self.read(page).replace("## 要主線做什麼", "## 改過的標題"))
+        listed = self.inbox("list").stdout
+        self.assertIn("閘門紅", listed)
+        self.assertIn("看紅榜", listed)
+        shown = self.inbox("show", "7-r1").stdout
+        self.assertNotIn("<!-- inbox", shown, "show 印出了給 list 讀的那一行")
+
+
+class TheOpeningPageReadsTheDirectory(InboxBase):
+    """#143:`new-session.sh` 的收件段列的是目錄裡還沒 ack 的頁 —— 搬進 `acked/` 的不列。
+
+    **變異**:`inbox.entries` 連 `acked/` 一起當未 ack 讀 → 這一條紅。
+    """
+
+    def test_the_inbox_part_lists_only_pages_not_yet_acked(self):
+        for ident in ("7", "8"):
+            self.make_ticket(ident)
+        self.post(ident="7", what="收下過的那一頁")
+        self.post(ident="8", what="還在等的那一頁")
+        self.assertEqual(self.inbox("ack", "7").returncode, 0)
+        done = self.run_sh("scripts/new-session.sh", "main", "fable", "--no-event")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        part = done.stdout.split("5. 收件匣")[1].split("6. 決策收件匣")[0]
+        self.assertIn("還在等的那一頁", part)
+        self.assertIn("#8", part)
+        self.assertNotIn("收下過的那一頁", part)
+        self.assertIn("inbox: 1 則", part)
+
+
+class RulesDecisionIsNotPostedTwice(InboxBase):
+    """#143:rules.py 的 decision 頁去重查兩個目錄的檔名指紋 —— ack 過(搬進 `acked/`)
+    的那一頁也算送過,同一個缺項不再貼第二頁。
+
+    **變異**:`post_decision` 只查 `reports/inbox/`(不查 `acked/`)→ 這一條紅。
+    """
+
+    def test_the_same_fingerprint_is_not_posted_again_even_after_ack(self):
+        self.install_rules_sources()
+        rel = os.path.join("docs", "DISPATCH-TEMPLATE.md")
+        text = self.read(rel)
+        self.assertEqual(text.count("## 5.5 🩸"), 1, "夾具前提:§5.5 的標題只有一個")
+        self.write(rel, text.replace("## 5.5 🩸", "## 9.95 🩸"))
+        first = self.run_py("scripts/rules.py", "pack", "worker", "--model", "opus")
+        self.assertEqual(first.returncode, 1, first.stdout + first.stderr)
+        self.assertEqual(len(self.pages()), 1, first.stderr)
+        again = self.run_py("scripts/rules.py", "pack", "worker", "--model", "opus")
+        self.assertIn("不重送", again.stderr)
+        self.assertEqual(len(self.pages()), 1, "同一個指紋第二次又貼了一頁")
+        self.assertEqual(self.inbox("ack", "--all").returncode, 0)
+        third = self.run_py("scripts/rules.py", "pack", "worker", "--model", "opus")
+        self.assertIn("不重送", third.stderr)
+        self.assertEqual([row["acked"] for row in self.pages()], [True],
+                         "ack 過的指紋又貼了一頁")
 
 
 if __name__ == "__main__":

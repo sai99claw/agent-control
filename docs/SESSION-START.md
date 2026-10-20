@@ -2,7 +2,7 @@
 
 ## 所有角色
 1. `git log --oneline -1 main` 與 `git status --short`:知道自己站在哪個版本、工作樹乾不乾淨(worker 在自己的票分支 worktree 裡;驗證者的 `git archive` 副本不是 git 樹,看派工文給的 base sha)。
-2. **主線發一筆事件**:`scripts/event.py emit session.start --role <role> --model <model>`。控制台從此看得到你。短命角色不發,由派工方代發(下面 Worker / 驗證者那一節)。
+2. 主線的 `session.start` 由開場 hook(`scripts/new-session.sh`)發,結束前發 `session.end`(心跳拿這一對找死在半路的 session)。短命角色不發。
 3. 主線讀 `memory/model/<你的模型>.md` 與 `memory/role/main.md`(hook 那一頁已帶);**短命角色開場只讀「角色卡 + 票」**,正文在 `memory/role/README.md`,規則包已帶模型卡。
 
 ## 第 1 步之外,誰讀什麼(對齊 `CLAUDE.md` 與 `memory/role/README.md`;正文在 README)
@@ -47,16 +47,10 @@
 - 驗證者什麼時候起:正文只在 `tickets/SCHEMA.md` 的 `needs_verifier` 與 `interface_fixed` 兩列;交件路徑在派工文
   (`<副本根>/patch-verify.diff` 與 `EVIDENCE-verifier.md`)。
 - 共用規矩按需查:角色卡「遇到就查」那一行說遇到什麼查 `docs/DISPATCH-TEMPLATE.md` 哪一節,grep 那一節讀,不整份讀。
-- **短命角色不發事件,由派工方代發**(2026-09-23,#29 A9)。`ticket.attempt.start` /
-  `ticket.attempt.done` 由派工的那一側發:`auto-fix.sh` 自己發,第 1 輪由 auto-fix 發
+- **短命角色不發事件**(#29 A9)。`ticket.attempt.*` / `agent.*` 由派工的 `auto-fix.sh` 發
   (#40:Ready 票打 `sh scripts/auto-fix.sh <n>` 就起第 1 輪、發 `--attempt 1`、票轉 Running)。
-  為什麼不是你發:worktree / 副本裡 `event.py` 往上找到的是
-  **它自己那份** `board/config.json`,事件會寫進一個不是控制台在讀的檔,**而且不報錯** ——
-  發出去了與沒發出去因此長得一樣。沒帶 `AC_ROOT` 的話 `event.py emit` 會拒收(rc=3)並說出這一句。
-  - **auto-fix 派的**:不再帶主 repo 的 `AC_ROOT`。`AC_ROOT` 指 `auto-fix.sh` 在輪次目錄 / 副本根的 `control/` 開的
-    **拋棄式控制根**,你跑腳本的事件、票、收件匣落在那裡(`docs/WORKFLOW.md`
-    「一票一分支一 worktree」)—— 那些不是發給控制台的,派工方照舊代發。
-  - **手派的**:派工的人照舊可以自帶 `AC_ROOT=<主 repo 根>`,那時發的事件才進真看板。
+  auto-fix 派的 `AC_ROOT` 指輪次目錄 / 副本根的 `control/` **拋棄式控制根**,你跑腳本留下的票與收件匣
+  落在那裡,不是控制台在讀的(`docs/WORKFLOW.md`「一票一分支一 worktree」)。
 
 ## 結束前(所有角色)
 - 交接:主線寫 `docs/HANDOFF.md`;worker 的交接寫在回報裡。

@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""事件:agent 做的每一件事,在控制台上都是一行 JSON — D-003。
+"""事件:流程裡的關鍵時刻(派工、閘門、落地、session、記憶)一筆一行 JSON — D-003。
 
     scripts/event.py emit session.start --role main --model fable
     scripts/event.py emit ticket.attempt.done --ticket 7 --attempt 2 --note "patch 在 …" --kv rc=0
     scripts/event.py tail 20
     scripts/event.py grep land        # 事件種類,或票號
 
-控制台只讀這份檔,不猜(`board/README.md`)。**沒發事件的事,對系統而言沒發生**
-—— 所以這一支要便宜到沒有理由跳過:一次 append、不鎖、不讀回、不驗證票存不存在。
+票的狀態與成本以票 JSON 為準(D-054 Q5):這裡不另存一份票欄位變更、cost 列或收件匣
+的複本。看板的時間線、落地、session 讀這份檔(`board/README.md`)。這一支要便宜:
+一次 append、不鎖、不讀回、不驗證票存不存在。
 
 ## 種類是一張固定的表,不是自由字串
 下面 `KINDS` 就是全部;不在表上的一律拒收(退出碼 2),並把表印出來。
@@ -26,14 +27,11 @@ from datetime import datetime
 KINDS = (
     # session:誰在線上。heartbeat.sh 拿 start 沒有配對的 end 去對租約。
     "session.start", "session.end",
-    # 票的生命:建立、任一欄位變更、凍結、關閉。closed 帶 cost_total(與票上同一物件,#94)。
-    "ticket.created", "ticket.state", "ticket.frozen", "ticket.closed",
+    # 票的生命:建立、凍結、關閉。closed 帶 cost_total(與票上同一物件,#94)。
+    # 欄位變更與 cost 列只在票 JSON(D-054 Q5),不另發鏡像事件。
+    "ticket.created", "ticket.frozen", "ticket.closed",
     # 一次派工的三種結局。attempt 對不上的遲到回報要能被認出來(SCHEMA §執行)。
     "ticket.attempt.start", "ticket.attempt.done", "ticket.attempt.failed",
-    # 一次 headless 派工的 token 與時鐘進了票的 cost[](D-032);不動 state_version。
-    # 帶整列(除 `at`,#94):role / round / model / 四種 token / wall_seconds / outcome /
-    # run_id / session_id / by / note;null 的鍵照 emit 的規矩不寫。
-    "ticket.cost",
     # 機器派出的 agent:看板用 ticket + ts 與主線採樣到的 agent 對上。
     "agent.start", "agent.done", "agent.failed",
     # 額度 / 不可用後的下一個候選交給 Controller 接續(#121 A3):model / tool / effort /
@@ -61,8 +59,6 @@ KINDS = (
     "objection.triage.start", "objection.triage.done",
     # 覆核:review.sh 的四種結局。只有 fail 發頁(decision),其餘三種只寫事件(D-032)。
     "review.pass", "review.fail", "review.missing", "review.refused",
-    # 終態叫醒主線(D-015):一則事件 + `reports/inbox/` 一頁。主線不輪詢 status。
-    "inbox.posted",
     # 記憶:暫存區有未整理條目、整理完成、記一條(docs/MEMORY.md「整理」,D-053 ⑥)。
     "memory.pending", "memory.consolidated", "memory.noted",
 )

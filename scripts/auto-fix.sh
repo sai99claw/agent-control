@@ -38,7 +38,7 @@
 #    是哪一條 —— 頁的狀態格是「閘門硬擋命中」,歸因到交件(命中 `hard_block` 的改動)。
 #
 # **覆核由 `review.sh` 派**(#42,D-025 ②),**只派 `complexity=complex` 的票**(#136,VISION
-# 流程 #9):綠了之後票轉 `InReview`(`ticket.state` 事件)、complex 票再叫 `sh scripts/review.sh
+# 流程 #9):綠了之後票轉 `InReview`(寫在票 JSON)、complex 票再叫 `sh scripts/review.sh
 # <票號>` —— reviewer pass 由它寫 `review`,fail 由它轉 Blocked 回主線裁示。simple 或沒標(= simple)
 # 的票不派覆核、不停在等覆核:停在 InReview 等 land(land 不要它的 review),印
 # `終態=green_no_review`。這一支自己不碰 `review` 那一格;`--no-review` 讓 complex 票停在

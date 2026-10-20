@@ -89,9 +89,9 @@ class ConsolidateBase(Sandbox):
     def agent_rows(self, kind):
         return [row for row in self.events() if row["kind"] == kind]
 
-    def leases_taken(self):
-        return [row for row in self.events() if row["kind"] == "ticket.state"
-                and row.get("field") == "lease" and row.get("to") not in (None, "null")]
+    def lease_left(self):
+        # 票 JSON 是唯一的狀態(#143):租約的歷史不另存,讀票上現在那一格。
+        return self.load_ticket("7").get("lease")
 
     def costs(self):
         return [(row["role"], row["model"], row["outcome"], row["by"])
@@ -145,7 +145,7 @@ class OneLeaseOneFable(ConsolidateBase):
         self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
         self.assertIn("不起", second.stdout)
         self.assertEqual(len(self.session_calls()), 1)
-        self.assertEqual(len(self.leases_taken()), 1)
+        self.assertIsNone(self.lease_left(), "起過的那一次沒有還租約")
 
     def test_a1_running_twice_at_once_starts_one(self):
         """**變異 M16**:不取租約(直接轉 Running 起 session)→ 替身被叫 2 次,紅。"""
@@ -156,7 +156,7 @@ class OneLeaseOneFable(ConsolidateBase):
                                   stderr=subprocess.PIPE, text=True) for _ in range(2)]
         outputs = [proc.communicate(timeout=TIMEOUT) for proc in procs]
         self.assertEqual(len(self.session_calls()), 1, outputs)
-        self.assertEqual(len(self.leases_taken()), 1, outputs)
+        self.assertIsNone(self.lease_left(), outputs)
 
 
 class OnlyUnavailableMovesOn(ConsolidateBase):
@@ -216,11 +216,10 @@ class FailuresGoToMain(ConsolidateBase):
         row = self.load_ticket("7")
         self.assertEqual((row["state"], row.get("owner"), row.get("lease")),
                          ("NeedsDecision", "main", None))
-        index = os.path.join(self.repo, "reports", "inbox", "index.jsonl")
-        with open(index, encoding="utf-8") as handle:
-            pages = [json.loads(line) for line in handle if line.strip()]
+        pages = self.inbox_rows()
         self.assertEqual([page["kind"] for page in pages], ["decision"])
-        title = self.read(pages[0]["page"]).splitlines()[0]
+        title = [line for line in self.read(pages[0]["page"]).splitlines()
+                 if line.startswith("# ")][0]
         self.assertIn("#7", title)
         self.assertIn(words, title)
 

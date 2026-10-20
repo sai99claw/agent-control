@@ -1364,20 +1364,9 @@ class LandTriesToClose(LandBase):
         self.approve(1, "t1-good")
         return branch
 
-    def inbox_rows(self):
-        path = os.path.join(self.repo, "reports", "inbox", "index.jsonl")
-        if not os.path.exists(path):
-            return []
-        with open(path, encoding="utf-8") as handle:
-            return [json.loads(line) for line in handle if line.strip()]
-
     def acked(self):
-        path = os.path.join(self.repo, "reports", "inbox", "acked.jsonl")
-        if not os.path.exists(path):
-            return {}
-        with open(path, encoding="utf-8") as handle:
-            return {row["name"]: row for row in
-                    (json.loads(line) for line in handle if line.strip())}
+        """搬進 `reports/inbox/acked/` 的頁(#143:沒有 ack 帳,目錄就是帳)。"""
+        return {row["name"]: row for row in self.inbox_rows(acked=True)}
 
     def listed_for(self, ident):
         """`inbox.py list`(沒 ack 的)裡這張票的那幾列。"""

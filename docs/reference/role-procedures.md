@@ -48,7 +48,7 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 
 ### 跨 repo
 - 跨 repo 依賴不能寫 `depends_on`(兩邊票號撞)。`sync-to-project.sh` 名單只十支,
-  `gate.sh` / `land.sh` / `metrics.py` 不會到專案端;dry-run 不比內容,判準是同步後逐檔 `cmp -s`(#648)。
+  `gate.sh` / `land.sh` 不會到專案端;dry-run 不比內容,判準是同步後逐檔 `cmp -s`(#648)。
 
 ## 實作者角色操作細節
 

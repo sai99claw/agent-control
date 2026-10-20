@@ -96,13 +96,6 @@ class ReviewBase(Sandbox):
     def review(self, *args, ident="1"):
         return self.run_sh("scripts/review.sh", ident, *args)
 
-    def inbox_rows(self):
-        path = os.path.join(self.repo, "reports", "inbox", "index.jsonl")
-        if not os.path.exists(path):
-            return []
-        with open(path, encoding="utf-8") as handle:
-            return [json.loads(line) for line in handle if line.strip()]
-
     def reviewer_calls(self):
         if not os.path.exists(self.log):
             return []
@@ -299,7 +292,6 @@ class TheReviewerCostGoesOnTheTicket(ReviewBase):
         self.assertIsInstance(row["wall_seconds"], int)
         self.assertEqual(review_problems(ticket), [],
                          "寫了 cost 之後 land 對 review 的檢查要照樣過")
-        self.assertIn("ticket.cost", self.kinds())
 
 
 class TheReviewerRowSaysHowItEnded(ReviewBase):
@@ -325,9 +317,8 @@ class ItLeavesEarlierPagesAlone(ReviewBase):
         self.set_reviewer(REVIEWER_PASS)
         done = self.review()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertFalse(os.path.exists(
-            os.path.join(self.repo, "reports", "inbox", "acked.jsonl")))
-        self.assertEqual([row["state"] for row in self.inbox_rows()], ["第 1 輪綠了,等覆核"])
+        self.assertEqual([(row["state"], row["acked"]) for row in self.inbox_rows()],
+                         [("第 1 輪綠了,等覆核", False)])
 
 
 class TheFailPath(ReviewBase):
@@ -573,13 +564,6 @@ class ReviewBatch(Sandbox):
 
     def record(self, name):
         return os.path.join(self.repo, "reports", "batch", self.STAMP, name)
-
-    def inbox_rows(self):
-        path = os.path.join(self.repo, "reports", "inbox", "index.jsonl")
-        if not os.path.exists(path):
-            return []
-        with open(path, encoding="utf-8") as handle:
-            return [json.loads(line) for line in handle if line.strip()]
 
     def assert_tickets_kept(self):
         for ident, row in self.before.items():

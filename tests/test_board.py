@@ -136,47 +136,6 @@ class Pages(BoardUp):
         section = body.split("id=\"rehearsal\"")[1].split("</section>")[0]
         self.assertIn("沒有欠確認的真跑", section)
 
-    def test_the_ticket_table_draws_the_metrics_without_touching_the_token_header(self):
-        """**變異**:把 `state()` 的 `metrics` 那一格拿掉 → 這一條紅。
-
-        抬頭那一句 `token 用量:未知` 問的是「這個看板知不知道整體用量」(不知道);
-        票表那一欄答的是「這一張票各自量到了什麼」。**兩件事不是同一格** —— 混成
-        一格的話,任何一張票量到了數字,抬頭就會變成一句它答不出來的話。
-        """
-        self.make_ticket(1, state="Ready", subject="有數字的那一張")
-        self.write(os.path.join("reports", "t1", "r1", "status.json"),
-                   json.dumps({"state": "done", "run_id": "r1", "kind": "gate",
-                               "ticket": "1", "rc": 1, "round": 2,
-                               "environment_suspect": [
-                                   {"source": "statistical", "engine": "safari",
-                                    "why": "storage empty", "count": 8,
-                                    "threshold": 8, "log": "gate.log",
-                                    "line": "AssertionError: storage empty"}],
-                               "duration_seconds": 12}, ensure_ascii=False))
-        self.up()
-        _, body = self.get("/")
-        section = body.split("id=\"tickets\"")[1].split("</section>")[0]
-        for header in ("返工輪", "紅(env/product)", "token"):
-            self.assertIn(header, section, "票表少了 %s 這一欄" % header)
-        self.assertIn("1 (1/0)", section, "紅的分類沒有畫出來")
-        # #72:原 test_the_five_sections_are_all_there 的「票的標題畫進頁面」搬到這裡;
-        # 五節錨點每一節都有別的測試切 section 時要用到,缺一節那幾條就 IndexError。
-        self.assertIn("有數字的那一張", section)
-        self.assertIn("token 用量:未知", body, "抬頭那一格不准被票表的數字改掉")
-
-    def test_the_state_api_carries_the_metrics_next_to_the_unknown_token_total(self):
-        """#72 併入原 test_the_state_api_answers_json 的 200 / JSON / tokens 未知(票 id 那一句
-        併進 ReadsWhatIsAlreadyOnDisk.test_the_state_api_carries_the_runs_the_boxes_and_the_inbox)。"""
-        self.make_ticket(1)
-        self.up()
-        status, body = self.get("/api/state")
-        self.assertEqual(status, 200)
-        data = json.loads(body)
-        self.assertEqual(data["tokens"], "未知")
-        self.assertIn("metrics", data, "/api/state 少了 metrics 這個頂層鍵")
-        self.assertEqual(data["metrics"]["1"]["tokens"], "未知",
-                         "一份 log 都沒有的票,token 是未知,不是 0")
-
     def test_the_css_and_js_are_served_from_the_same_origin(self):
         self.up()
         self.assertEqual(self.get("/board.css")[0], 200)
@@ -230,7 +189,7 @@ class SavingAnAnswer(BoardUp):
 
 
 class ReadsWhatIsAlreadyOnDisk(BoardUp):
-    """看板直接讀磁碟上已經結構化的那幾份:run 的 `status.json`、收件匣索引、票自己的
+    """看板直接讀磁碟上已經結構化的那幾份:run 的 `status.json`、收件匣的頁、票自己的
     `objections` / `review` / `verify`。**一行都不必有人抄進來** —— 抄進來的那一份
     沒有人可以覆核(D-017 ②)。
     """
@@ -246,9 +205,13 @@ class ReadsWhatIsAlreadyOnDisk(BoardUp):
                    json.dumps(row, ensure_ascii=False))
         return row
 
-    def inbox_file(self, rows, name="index.jsonl"):
-        self.write(os.path.join("reports", "inbox", name),
-                   "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
+    def inbox_page(self, name, acked=False, **meta):
+        """收件匣一頁(#143:沒有索引檔,頁的第一行就是 `list` 讀的那份 JSON)。"""
+        where = os.path.join("reports", "inbox", *(["acked"] if acked else []))
+        self.write(os.path.join(where, name + ".md"),
+                   "<!-- inbox %s -->\n# #%s —— %s\n"
+                   % (json.dumps(meta, ensure_ascii=False), meta.get("ticket", ""),
+                      meta.get("state", "")))
 
     def section(self, body, anchor):
         return body.split("id=\"%s\"" % anchor)[1].split("</section>")[0]
@@ -260,12 +223,10 @@ class ReadsWhatIsAlreadyOnDisk(BoardUp):
         self.status(1, "20260922-110000-2", rc=1, failures=[
             {"case": "tests.test_x.Case.test_y",
              "excerpt": "AssertionError: 少了一段\n第二行不該上畫面"}])
-        self.inbox_file([
-            {"name": "1-a", "ticket": "1", "state": "閘門紅",
-             "what": "讀 patch 記 review", "where": "reports/t1/x/status.json"},
-            {"name": "1-b", "ticket": "1", "state": "收下過的",
-             "what": "這一則 ack 過了", "where": "reports/t1/y/status.json"}])
-        self.inbox_file([{"name": "1-b", "ticket": "1"}], name="acked.jsonl")
+        self.inbox_page("1-a", ticket="1", state="閘門紅",
+                        what="讀 patch 記 review", where="reports/t1/x/status.json")
+        self.inbox_page("1-b", acked=True, ticket="1", state="收下過的",
+                        what="這一則 ack 過了", where="reports/t1/y/status.json")
         self.up()
         _, body = self.get("/")
         runs = self.section(body, "runs")
@@ -460,12 +421,8 @@ class ReadsWhatIsAlreadyOnDisk(BoardUp):
         self.status(1, "20260922-100000-1")
         self.write(os.path.join("reports", "t1", "20260922-110000-2",
                                 "status.json"), "{")
-        self.inbox_file([{"name": "1-a", "ticket": "1", "state": "閘門紅",
-                          "what": "看一下"}])
-        with open(os.path.join(self.repo, "reports", "inbox", "index.jsonl"),
-                  "a", encoding="utf-8") as handle:
-            handle.write("not-json\n")
-        self.assertFalse(self.exists("reports/inbox/acked.jsonl"))
+        self.inbox_page("1-a", ticket="1", state="閘門紅", what="看一下")
+        self.write(os.path.join("reports", "inbox", "1-b.md"), "<!-- inbox {壞掉 -->\n")
         self.up()
         for path in ("/", "/t/1", "/api/state"):
             status, body = self.get(path)
@@ -477,14 +434,14 @@ class ReadsWhatIsAlreadyOnDisk(BoardUp):
                                          "owner": "worker", "blocking": True,
                                          "disposition": ""}])
         self.status(1, "20260922-100000-1", rc=1)
-        self.inbox_file([{"name": "1-a", "ticket": "1", "state": "閘門紅",
-                          "what": "看一下"}])
+        self.inbox_page("1-a", ticket="1", state="閘門紅", what="看一下")
         self.up()
         status, body = self.get("/api/state")
         self.assertEqual(status, 200)
         data = json.loads(body)
         self.assertEqual(data["ticket_runs"]["1"]["runs"][0]["rc"], 1)
         self.assertEqual(data["boxes"]["1"]["objections"][0]["category"], "test_defect")
+        self.assertTrue(data["inbox"]["entries"], "收件匣 entries 是空的")
         self.assertEqual(data["inbox"]["entries"][0]["name"], "1-a")
         self.assertEqual(data["tickets"][0]["id"], "1")
 
@@ -513,6 +470,135 @@ class TheBoardStaysOnThisMachine(unittest.TestCase):
             if "http://" in line or "https://" in line:
                 self.assertIn("127.0.0.1", line, "外連:" + line.strip())
         self.assertNotIn("cdn", source.lower())
+
+
+class TheFourVisionMetricsComeFromTicketJson(BoardUp):
+    """#143(D-054 Q5):看板第 ① 段只讀票 JSON 與收件匣目錄,畫 VISION 四個指標 ——
+    每張落地票的 token 與時間、一次就過測試的比例、每張票需要主線介入幾次、等主線處理
+    的事積了多少。**拿不到的顯示「未知」,不顯示 0**(VISION「看板與統計」)。
+
+    夾具三張票,數字手算(不從 board.py 算):
+    A(1)Done,`cost_total`:worker 一輪,in 100 + out 50 + cache_write 10 = 160 token,
+         wall 300 秒;
+    B(2)Done,只有 `cost[]`:worker round 1 與 round 2 兩列;
+    C(3)Blocked、owner=main、沒有 cost、沒有 `interventions` 這一格(舊票)。
+    收件匣:未 ack 一頁、ack 過一頁 → 等主線處理 = C 的 1 張 + 1 頁 = 2。
+    一次就過 = Done 且有 worker round 的 A、B 中 round 最大值為 1 的 → 1/2。
+
+    **變異**:`board.py` 把拿不到的格子(`shown` 的 None 那一支)畫成 0 → 「未知」那幾條紅。
+    """
+
+    UNKNOWN = "未知"
+
+    def cost_row(self, round_, tokens_in, tokens_out, cache_write, cache_read, wall):
+        return {"role": "worker", "round": round_, "model": "opus",
+                "tokens_in": tokens_in, "tokens_out": tokens_out,
+                "cache_write": cache_write, "cache_read": cache_read,
+                "wall_seconds": wall, "outcome": "ok", "run_id": "r%d" % round_,
+                "session_id": None, "by": "auto-fix", "note": "", "effort": None,
+                "at": "2026-10-19T10:00:00+08:00"}
+
+    def three_tickets(self):
+        self.make_ticket(1, state="Done", owner="worker", cost_total={
+            "calendar_seconds": 900, "wall_seconds": 300, "runs": 1,
+            "worker_rounds": 1, "objections": 0,
+            "by_role": {"worker": {"runs": 1, "wall_seconds": 300, "tokens_in": 100,
+                                   "tokens_out": 50, "cache_write": 10,
+                                   "cache_read": 1000, "unknown_token_runs": 0,
+                                   "outcomes": {"ok": 1}}},
+            "at": "2026-10-19T10:15:00+08:00"})
+        self.make_ticket(2, state="Done", owner="worker", cost=[
+            self.cost_row(1, 20, 5, 0, 7, 40), self.cost_row(2, 30, 10, 5, 9, 60)])
+        self.make_ticket(3, state="Blocked", owner="main")
+        meta = {"ticket": "3", "run_id": "r1", "kind": "gate", "state": "閘門紅",
+                "what": "看一下", "where": "reports/t3/r1/status.json",
+                "at": "2026-10-19T10:00:00+08:00"}
+        self.write(os.path.join("reports", "inbox", "3-r1.md"),
+                   "<!-- inbox %s -->\n# #3 —— 閘門紅\n" % json.dumps(meta, ensure_ascii=False))
+        meta = dict(meta, run_id="r0", what="收過了")
+        self.write(os.path.join("reports", "inbox", "acked", "3-r0.md"),
+                   "<!-- inbox %s -->\n# #3 —— 收過了\n" % json.dumps(meta, ensure_ascii=False))
+
+    def vision(self):
+        status, body = self.get("/api/state")
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertIn("vision", data, "/api/state 沒有四個指標")
+        return data["vision"]
+
+    def row_cells(self, body, ident):
+        """票表裡那一張的格子,以表頭的名字取 —— 不靠欄位順序。"""
+        section = body.split("id=\"tickets\"")[1].split("</section>")[0]
+        heads = re.findall(r"<th>(.*?)</th>", section)
+        found = re.search(r"<tr><td class=\"id\">#%s</td>(.*?)</tr>" % ident, section)
+        self.assertIsNotNone(found, "票表沒有 #%s 那一列" % ident)
+        cells = ["#%s" % ident] + re.findall(r"<td[^>]*>(.*?)</td>", found.group(1))
+        for name in ("token", "wall 秒", "介入"):
+            self.assertIn(name, heads, "票表沒有「%s」這一欄" % name)
+        return {name: re.sub(r"<[^>]+>", "", cells[heads.index(name)]) for name in heads}
+
+    def metric(self, body, n):
+        found = re.search(r"data-metric=\"%d\"><b>(.*?)</b>" % n, body)
+        self.assertIsNotNone(found, "看板第 ① 段沒有第 %d 個指標" % n)
+        # 只取打頭的那個數(或「未知」),後面的說明字不釘。
+        return re.match(r"[^\s(]*", found.group(1)).group(0)
+
+    def test_the_state_api_carries_the_four_numbers_and_unknown_is_not_zero(self):
+        self.three_tickets()
+        self.up()
+        numbers = self.vision()
+        a, c = numbers["tickets"]["1"], numbers["tickets"]["3"]
+        self.assertEqual(a["tokens"], 160)
+        self.assertEqual(a["wall_seconds"], 300)
+        self.assertEqual(numbers["tickets"]["2"]["tokens"], 25 + 45)
+        self.assertEqual(numbers["tickets"]["2"]["wall_seconds"], 100)
+        for key in ("tokens", "wall_seconds", "interventions"):
+            self.assertEqual(c[key], self.UNKNOWN, "C 的 %s 拿不到,要是未知" % key)
+        self.assertEqual(numbers["first_pass"]["passed"], 1)
+        self.assertEqual(numbers["first_pass"]["counted"], 2)
+        self.assertEqual(numbers["interventions"]["total"], self.UNKNOWN,
+                         "沒有一張票記過介入,合計是未知不是 0")
+        self.assertEqual(numbers["waiting"]["tickets"], 1)
+        self.assertEqual(numbers["waiting"]["inbox_pages"], 1, "ack 過的那頁不算")
+        self.assertEqual(numbers["waiting"]["total"], 2)
+
+    def test_the_page_draws_the_same_numbers(self):
+        self.three_tickets()
+        self.up()
+        _, body = self.get("/")
+        a, c = self.row_cells(body, 1), self.row_cells(body, 3)
+        self.assertEqual((a["token"], a["wall 秒"]), ("160", "300"))
+        self.assertEqual((c["token"], c["wall 秒"], c["介入"]),
+                         (self.UNKNOWN, self.UNKNOWN, self.UNKNOWN))
+        self.assertEqual(self.metric(body, 2), "1/2")
+        self.assertEqual(self.metric(body, 3), self.UNKNOWN)
+        self.assertEqual(self.metric(body, 4), "2")
+
+    def test_one_hand_over_to_main_turns_unknown_into_one(self):
+        """一份票 JSON 改了,看板就變 —— 不另外記帳。"""
+        self.three_tickets()
+        done = self.ticket("set", "3", "state", "Blocked")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.up()
+        numbers = self.vision()
+        self.assertEqual(numbers["tickets"]["3"]["interventions"], 1)
+        self.assertEqual(numbers["tickets"]["1"]["interventions"], self.UNKNOWN)
+        self.assertEqual(numbers["interventions"]["total"], 1)
+        _, body = self.get("/")
+        self.assertEqual(self.row_cells(body, 3)["介入"], "1")
+        self.assertEqual(self.metric(body, 3), "1")
+
+    def test_the_four_numbers_stay_when_the_event_log_is_gone(self):
+        """四個指標只讀票 JSON 與收件匣目錄:events.jsonl 刪掉,數字一個都不少。"""
+        self.three_tickets()
+        self.event("emit", "ticket.attempt.start", "--ticket", "3", "--attempt", "1",
+                   "--role", "worker", "--model", "opus")
+        os.remove(os.path.join(self.repo, "board", "events.jsonl"))
+        self.up()
+        numbers = self.vision()
+        self.assertEqual(numbers["tickets"]["1"]["tokens"], 160)
+        self.assertEqual(numbers["first_pass"]["text"], "1/2")
+        self.assertEqual(numbers["waiting"]["total"], 2)
 
 
 if __name__ == "__main__":

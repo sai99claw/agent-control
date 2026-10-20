@@ -5,7 +5,7 @@
     scripts/ticket.py create                      # 不給參數就一格一格問
     scripts/ticket.py list --open                 # 或 --state Running
     scripts/ticket.py show 7
-    scripts/ticket.py set 7 state InReview        # 每次變更 state_version +1,並發事件
+    scripts/ticket.py set 7 state InReview        # 每次變更 state_version +1
     scripts/ticket.py inbox                       # 等裁決的 + 使用者答了還沒落成裁示的
     scripts/ticket.py verify 7                    # 改動真的在主線?
     scripts/ticket.py close 7                     # 先 verify,>0 才准關
@@ -758,6 +758,7 @@ def cmd_set(argv):
                     return 1
             before = ticket.get(field)
             ticket[field] = value
+            count_intervention(ticket, field, before)
             # **每次變更 +1**,不管改的是哪一格:遲到的回報拿舊的 state_version 回來,
             # 對得上的才收(SCHEMA §執行)。只在改 state 時 +1 的版本擋不住「改了票面、
             # 版本沒動」那一種。
@@ -772,14 +773,29 @@ def cmd_set(argv):
     except RuntimeError as exc:
         sys.stderr.write("ticket: %s\n" % exc)
         return 5
-    event.emit("ticket.state", ticket=ident, field=field,
-               **{"from": json.dumps(before, ensure_ascii=False),
-                  "to": json.dumps(value, ensure_ascii=False),
-                  "state_version": ticket["state_version"]})
     sys.stdout.write("ticket: #%s %s: %s -> %s(state_version %d)\n"
                      % (ident, field, json.dumps(before, ensure_ascii=False),
                         json.dumps(value, ensure_ascii=False), ticket["state_version"]))
     return 0
+
+
+# 要主線處置的狀態:票轉進來且 owner=main,就是「需要我介入」一次(VISION 成功指標 ③,D-055)。
+INTERVENTION_STATES = ("Blocked", NEEDS_DECISION)
+
+
+def count_intervention(ticket, field, before):
+    """`interventions` +1,在呼叫端那一次存檔裡(#143)。這是統計欄,不是關卡。
+
+    兩條路都算一次:`state` 改成 Blocked / NeedsDecision 而 owner 已是 main;或票已在
+    那兩態、`owner` 從別人改成 main(auto-fix / review 先 set state 再 set owner)。
+    沒有這一格的舊票不補 0 —— 看板對它顯示「未知」,直到第一次介入才從 1 起算。"""
+    if ticket.get("state") not in INTERVENTION_STATES or ticket.get("owner") != "main":
+        return
+    if field == "owner" and before == "main":
+        return
+    if field not in ("state", "owner"):
+        return
+    ticket["interventions"] = int(ticket.get("interventions") or 0) + 1
 
 
 # --------------------------------------------------------- 進 Done 的必要條件
@@ -1199,7 +1215,6 @@ def stamp_landed(ident, sha):
             review = ticket.get("review")
             stamp_review = isinstance(review, dict) or needs_review(ticket)
             review = dict(review) if isinstance(review, dict) else {}
-            before = json.dumps(ticket.get("review"), ensure_ascii=False)
             if stamp_review:
                 review.setdefault("verdict", "pass")
                 review.setdefault("by", "main")
@@ -1212,14 +1227,6 @@ def stamp_landed(ident, sha):
     except RuntimeError as exc:
         sys.stderr.write("ticket: %s\n" % exc)
         return 5
-    if stamp_review:
-        event.emit("ticket.state", ticket=ident, field="review",
-                   **{"from": before, "to": json.dumps(review, ensure_ascii=False),
-                      "state_version": ticket["state_version"], "landed": sha[:12]})
-    else:
-        event.emit("ticket.state", ticket=ident, field="landed_sha",
-                   **{"from": "", "to": sha, "state_version": ticket["state_version"],
-                      "landed": sha[:12]})
     sys.stdout.write("ticket: #%s %s -> %s(--landed,已確認在主線歷史裡)\n"
                      % (ident, "review.sha" if stamp_review else "landed_sha", sha[:12]))
     return 0
@@ -1303,6 +1310,7 @@ def cmd_round(argv):
             if exhausted:
                 ticket["state"] = "Blocked"
                 ticket["owner"] = "main"
+                count_intervention(ticket, "state", None)
             ticket["state_version"] = int(ticket.get("state_version") or 0) + 1
             save(ticket)
     except (OSError, ValueError) as exc:
@@ -1314,10 +1322,7 @@ def cmd_round(argv):
     if exhausted:
         event.emit("ticket.attempt.failed", ticket=ident, attempt=number,
                    note="第 %d 輪仍紅,上限 %d —— 票轉 Blocked,owner=main" % (number, limit))
-        event.emit("ticket.state", ticket=ident, field="state",
-                   **{"from": "Running", "to": "Blocked",
-                      "state_version": ticket["state_version"]})
-        # 轉 Blocked 只寫上面兩則事件,不發頁(#50 裁示):叫醒主線的那一頁由 auto-fix.sh
+        # 轉 Blocked 只寫上面那則事件,不發頁(#50 裁示):叫醒主線的那一頁由 auto-fix.sh
         # 發(帶紅榜與輪數),這裡再發一頁就是同一件事兩頁 decision。
         sys.stdout.write("ticket: #%s 第 %d 輪仍紅(上限 %d)—— 轉 Blocked,"
                          "指派主線(state_version %d)\n"
@@ -1516,9 +1521,6 @@ def cmd_cost(argv):
     except RuntimeError as exc:
         sys.stderr.write("ticket: %s\n" % exc)
         return 5
-    # 事件帶整列(#94 C4),`at` 除外 —— 事件自己有 `ts`。
-    event.emit("ticket.cost", ticket=ident,
-               **{key: row[key] for key in COST_KEYS if key != "at"})
     sys.stdout.write("ticket: #%s cost 記一筆 role=%s round=%s tokens_out=%s wall=%s\n"
                      % (ident, row["role"], rnd, row["tokens_out"], wall))
     return 0
@@ -1978,8 +1980,6 @@ def record_objection(ident, line, evidence):
         ticket["objections"] = rows
         ticket["state_version"] = int(ticket.get("state_version") or 0) + 1
         save(ticket)
-    event.emit("ticket.state", ticket=str(ident), field="objections",
-               note=category, state_version=ticket["state_version"])
     return category, True, False
 
 
@@ -2023,7 +2023,7 @@ def cmd_objection(argv):
 # ------------------------------------------------------------ verify.baseline
 
 
-def save_baseline(ident, record, to):
+def save_baseline(ident, record):
     """把一份驗紅 / 驗綠的紀錄寫進票的 `verify.baseline`(同一格,`stage` 是它的升級)。
 
     **只有兩個入口叫它**(#36,FLOW G13):`verify-case.py check`(閘門 / land)與
@@ -2039,8 +2039,6 @@ def save_baseline(ident, record, to):
         fresh["verify"] = plan
         fresh["state_version"] = int(fresh.get("state_version") or 0) + 1
         save(fresh)
-    event.emit("ticket.state", ticket=str(ident), field="verify.baseline",
-               **{"to": to, "state_version": fresh["state_version"]})
     return fresh["state_version"]
 
 

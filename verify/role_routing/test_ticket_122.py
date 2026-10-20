@@ -249,13 +249,7 @@ class ConsolidatorFixture(FakeAgents, Sandbox):
         return [(row.get("role"), row.get("model")) for row in self.load_ticket("7").get("cost") or []]
 
     def decision_pages(self):
-        path = os.path.join(self.repo, "reports", "inbox", "index.jsonl")
-        if not os.path.exists(path):
-            return []
-        with open(path, encoding="utf-8") as handle:
-            rows = [json.loads(line) for line in handle if line.strip()]
-        return [row for row in rows if row.get("kind") == "decision"
-                and str(row.get("ticket")) == "7"]
+        return [row for row in self.inbox_rows("7") if row.get("kind") == "decision"]
 
     def assert_stopped_for_main(self, done):
         ticket = self.load_ticket("7")
