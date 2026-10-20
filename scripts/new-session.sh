@@ -423,7 +423,8 @@ fi
 # 它只是讓這個 session 知道有暫存區待整理(docs/MEMORY.md 第 1 點)。
 # 整理票只由主線開(#76):短命角色量的是同一份記憶,各開一張就是同一件事派好幾次。
 say "4. 記憶暫存區有沒有待整理(D-053 ⑥)"
-if [ "$ROLE" = "main" ]; then
+# 雲端副本(CLAUDE_CODE_REMOTE=true,Claude Code 官方變數)也走唯讀:整理票只在主線本機的主 repo 開(D-057 ②)。
+if [ "$ROLE" = "main" ] && [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
     sh -c "python3 \"$AC/memory.py\" check" || echo "new-session: (有待整理的暫存區,不停工;整理票已開或沿用)"
 else
     sh -c "python3 \"$AC/memory.py\" check --read-only" \
@@ -432,7 +433,7 @@ fi
 # 整理票自動起角色表的整理者(#122,原 #87 A41 的兩模型):只有主線開場叫,短命角色不叫 ——
 # 同一張票被每個開場各起一次,就是同一件事派好幾次。每張 role=consolidator、Ready、沒有有效租約的票叫一次
 # consolidate-memory.sh,背景跑(整理要幾十分鐘,不擋這一頁),輸出留在 reports/。
-if [ "$ROLE" = "main" ] && [ -f "$AC/consolidate-memory.sh" ]; then
+if [ "$ROLE" = "main" ] && [ "${CLAUDE_CODE_REMOTE:-}" != "true" ] && [ -f "$AC/consolidate-memory.sh" ]; then
     for cid in $(python3 - "$AC" <<'PY'
 import sys
 from datetime import datetime

@@ -319,9 +319,10 @@ class Sandbox(unittest.TestCase):
     def env(self, **extra):
         # 外面那一層的 `AC_*` 一個都不准進沙盒:land.sh 跑全套時帶著 AC_GATE_TICKET /
         # AC_NO_INBOX / AC_GATE_RUN_ID,auto-fix 派的 worker 帶著 AC_ROUND / AC_ROOT ——
+        # `CLAUDE_CODE_REMOTE` 同理:worker 在雲端跑全套時,外層的 true 會讓「主線開票」那條變紅(#150)。
         # 漏進去就是「沒給票號卻有票」「該有 inbox 卻沒有」,而紅榜指的是被測的腳本。
         base = {key: value for key, value in os.environ.items()
-                if not key.startswith("AC_")}
+                if not key.startswith("AC_") and key != "CLAUDE_CODE_REMOTE"}
         base.update({
             "HOME": self.home,
             "GIT_CONFIG_GLOBAL": os.devnull,
