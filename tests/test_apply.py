@@ -1,16 +1,14 @@
-"""`scripts/apply.sh`:套 patch → 建分支 → commit 的程式入口(D-015)。
+"""`scripts/apply.sh`:收件 → 在票分支上補 commit 的程式入口(D-015;#144,D-054 Q9)。
 
-這一手以前是**主線手動做的**(`docs/ROLES.md` 的引言框),而手動的問題不是慢,是
-**每一次都重新決定要不要檢查那五件事**。這一組問的就是那五件:
+worker 在票分支的 worktree 自己 commit(`auto-fix.sh` 判「分支有新 commit、工作樹乾淨」);
+這一支收 EVIDENCE(記憶、result、反駁)、把驗證者的計畫與驗紅併進票,驗證者交了 patch-verify
+就在分支上補一個 commit,code-map 索引有變再補一個。這一組問的就是這幾件:
 
-- 檔頭是不是 `base/…` / `work/…` 的相對形式 —— 🩸 絕對路徑的檔頭真的發生過:檔案被
-  寫進暫存目錄底下的同名路徑,套用成功、閘門也綠,而**被改的不是 repo 裡那一份**。
-- `diff -ruN` 的刪檔有沒有把 `+++` 側改成 `/dev/null` —— 不改的話 `git apply` 只會把
-  檔案**清空**,而清空的檔在 diffstat 上看起來像「改過」。
-- 套完的樹與 patch 說的是不是同一件事(該在的在、該刪的不在、反著套回得去)。
-- 有沒有動到硬擋的檔(config 的 `hard_block`;D-054 Q2:寫入範圍只剩這一道)。
-- commit 訊息答不答得出「分支上這一手是哪一份 patch 做的」—— 路徑答不出來,
-  重套過的那一份路徑一樣、內容不一樣,所以要 sha256。
+- 收件不替 worker commit:分支上原本幾個 commit,只收 EVIDENCE 時還是幾個。
+- patch-verify 進分支是**一個** commit,只帶它自己的改動(未追蹤的閘門殘留不跟進來)。
+- 票分支不在 = 沒有交件可收(rc 2);patch-verify 套不上(rc 3)。
+- 反駁收進票(rc 6)、驗證者的計畫與驗紅併進票。
+- 批次那一支(`--batch`)還收 patch,檔頭守衛留在那一支(#145)。
 """
 
 import glob
@@ -38,59 +36,6 @@ CREATE = """diff -ruN base/src/b.txt work/src/b.txt
 +made by the patch
 """
 
-ABSOLUTE = """diff -ruN /somewhere/base/src/a.txt /somewhere/work/src/a.txt
---- /somewhere/base/src/a.txt\t2026-09-21 10:00:00
-+++ /somewhere/work/src/a.txt\t2026-09-21 10:00:00
-@@ -1 +1 @@
--old
-+new
-"""
-
-# 刪檔,而 `+++` 側還指著真的路徑 —— `git apply` 會把它清空,不是刪掉。
-EMPTYING = """diff -ruN base/src/a.txt work/src/a.txt
---- base/src/a.txt\t2026-09-21 10:00:00
-+++ work/src/a.txt\t1970-01-01 08:00:00
-@@ -1 +0,0 @@
--old
-"""
-
-DELETE = """diff -ruN base/src/a.txt work/src/a.txt
---- base/src/a.txt\t2026-09-21 10:00:00
-+++ /dev/null\t1970-01-01 08:00:00
-@@ -1 +0,0 @@
--old
-"""
-
-OUTSIDE = """diff -ruN base/docs/secret.md work/docs/secret.md
---- base/docs/secret.md\t1970-01-01 08:00:00
-+++ work/docs/secret.md\t2026-09-21 10:00:00
-@@ -0,0 +1 @@
-+a secret doc
-diff -ruN base/config/private.ini work/config/private.ini
---- base/config/private.ini\t1970-01-01 08:00:00
-+++ work/config/private.ini\t2026-09-21 10:00:00
-@@ -0,0 +1 @@
-+a private setting
-"""
-
-IGNORED = """diff -ruN base/junk/x.log work/junk/x.log
---- base/junk/x.log\t1970-01-01 08:00:00
-+++ work/junk/x.log\t2026-09-21 10:00:00
-@@ -0,0 +1 @@
-+ignored by .gitignore
-"""
-
-# `hard_block.patterns` 的夾具:tests/** 的新增行帶 kill 家族。字面拆開寫 —— 這份測試檔自己的
-# 新增行也會被 A 的 hard_block.patterns 查。
-KILL_CALL = "os." + "kill(pid, 9)"
-KILLING_TEST = """diff -ruN base/tests/test_k.py work/tests/test_k.py
---- base/tests/test_k.py\t1970-01-01 08:00:00
-+++ work/tests/test_k.py\t2026-09-21 10:00:00
-@@ -0,0 +1 @@
-+%s
-""" % KILL_CALL
-KILLING_SCRIPT = KILLING_TEST.replace("tests/test_k.py", "scripts/k.py")
-
 VERIFY_CASE = """diff -ruN base/verify/example/test_ticket_1.py work/verify/example/test_ticket_1.py
 --- base/verify/example/test_ticket_1.py\t1970-01-01 08:00:00
 +++ work/verify/example/test_ticket_1.py\t2026-09-21 10:00:00
@@ -103,26 +48,6 @@ VERIFY_CASE = """diff -ruN base/verify/example/test_ticket_1.py work/verify/exam
 +    def test_one(self):
 +        self.assertTrue(True)
 """
-
-# 重套那幾條用一個**有上下文**的檔。三向合併看的就是上下文,而一行的檔沒有上下文:
-# 主線在唯一那一行旁邊動一下,對 git 來說就是同一塊被兩邊改了(`git rebase` 自己也
-# 衝突)。拿一行的檔去量,量到的是「模糊比對敢不敢猜」,不是重套對不對。
-WIDE = "序\n一\n二\nold\n三\n四\n跋\n"
-
-WIDE_CHANGE = """diff -ruN base/src/wide.txt work/src/wide.txt
---- base/src/wide.txt\t2026-09-21 10:00:00
-+++ work/src/wide.txt\t2026-09-21 10:00:00
-@@ -1,7 +1,7 @@
- 序
- 一
- 二
--old
-+new
- 三
- 四
- 跋
-"""
-
 
 class ApplyBase(Sandbox):
 
@@ -155,55 +80,66 @@ class ApplyBase(Sandbox):
     def wt(self, name="t1"):
         return os.path.join(self.home, "repo-wt", name)
 
+    def deliver(self, ident="1", files=None, branch=None):
+        """worker 交件的形狀(#144):票分支上一個 commit(預設把 src/a.txt 改成 new)。"""
+        return self.ticket_branch_commit(ident, files or {"src/a.txt": "new\n"}, branch=branch)
+
+    def deliver_apply(self, ident="1", *args, **kwargs):
+        self.deliver(ident, branch=kwargs.pop("branch", None))
+        return self.run_sh("scripts/apply.sh", ident, *args, **kwargs)
+
 
 class TheHappyPath(ApplyBase):
 
-    def test_it_makes_the_branch_applies_the_patch_and_commits(self):
+    def test_receiving_does_not_commit_for_the_worker(self):
+        """worker 的 commit 就是交件;只收 EVIDENCE 時 apply 不另 commit(D-054 Q9)。
+        **變異**:收件前 `git add -A && git commit`(腳本替 worker commit)→ 這一條紅。"""
         self.make("1")
-        patch = self.patch_file("p.diff", CHANGE)
-        done = self.apply("1", patch)
+        wt = self.deliver("1")
+        self.write("half.txt", "沒 commit 的半成品\n", where=wt)
+        done = self.apply("1", "--evidence", self.patch_file("EVIDENCE.md", "# E\n"))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertTrue(self.branch_exists("t1"), done.stdout)
         self.assertEqual(self.git("show", "t1:src/a.txt"), "new\n")
         self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "1")
+        self.assertNotIn("half.txt", self.git("ls-tree", "-r", "--name-only", "t1"))
 
-    def test_the_commit_message_names_the_ticket_and_the_patch_hash(self):
-        """路徑答不出「是不是同一份 patch」—— 重套過的那一份路徑一樣、內容不一樣。
-
-        **變異**:把 commit 訊息裡的 `sha256=` 拿掉 → 這一條紅。
-        """
-        import hashlib
+    def test_the_verify_patch_is_one_commit_of_its_own(self):
+        """patch-verify 在分支上補**一個** commit,訊息帶票號與 patch-verify。
+        **變異**:patch-verify 那一段不 commit → count 那一條紅。"""
         self.make("1")
-        patch = self.patch_file("p.diff", CHANGE)
-        self.assertEqual(self.apply("1", patch).returncode, 0)
-        message = self.git("log", "-1", "--format=%B", "t1")
-        self.assertIn("#1", message)
-        self.assertIn("sha256=" + hashlib.sha256(CHANGE.encode()).hexdigest(), message)
-
-    def test_a_second_round_adds_a_commit_to_the_same_branch(self):
-        """一票一分支:第二輪的修補進同一條分支,不另開一條。"""
-        self.make("1")
-        self.assertEqual(self.apply("1", self.patch_file("p1.diff", CHANGE)).returncode, 0)
-        done = self.apply("1", self.patch_file("p2.diff", CREATE))
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "2")
-        self.assertEqual(self.git("show", "t1:src/b.txt"), "made by the patch\n")
-
-    def test_the_verify_patch_rides_along_in_the_same_commit(self):
-        self.make("1")
-        done = self.apply("1", self.patch_file("p.diff", CHANGE),
-                          self.patch_file("v.diff", VERIFY_CASE))
+        done = self.deliver_apply("1", self.patch_file("v.diff", VERIFY_CASE))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("TAGS", self.git("show", "t1:verify/example/test_ticket_1.py"))
-        self.assertIn("patch-verify:", self.git("log", "-1", "--format=%B", "t1"))
+        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "2")
+        message = self.git("log", "-1", "--format=%B", "t1")
+        self.assertIn("patch-verify:", message)
+        self.assertIn("ticket: #1", message)
+
+    def test_a_patch_verify_that_does_not_fit_the_branch_is_rc_3_and_leaves_it(self):
+        """套不上分支 → rc 3,分支不動、worktree 沒有半套的改動。"""
+        self.make("1")
+        self.deliver("1")
+        head = self.git("rev-parse", "t1").strip()
+        done = self.apply("1", self.patch_file("v.diff", CHANGE))
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertIn("patch-verify 套不上分支 t1", done.stderr)
+        self.assertEqual(self.git("rev-parse", "t1").strip(), head)
+        self.assertEqual(self.git("status", "--porcelain", cwd=self.wt()), "")
+
+    def test_no_ticket_branch_means_nothing_to_receive(self):
+        """票分支不在 = worker 沒交件可收:rc 2,不從主線替它開分支。"""
+        self.make("1")
+        done = self.apply("1", "--evidence", self.patch_file("EVIDENCE.md", "# E\n"))
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("票分支 t1 不在", done.stderr)
+        self.assertFalse(self.branch_exists("t1"))
 
     def test_it_leaves_a_status_file_for_the_round(self):
         self.make("1")
-        self.assertEqual(self.apply("1", self.patch_file("p.diff", CHANGE)).returncode, 0)
+        self.assertEqual(self.deliver_apply("1").returncode, 0)
         data = self.status_of("1", kind="apply")
         self.assertEqual(data["rc"], 0)
         self.assertEqual(data["state"], "done")
-        self.assertTrue(data["repair_context"]["patch"]["sha256"])
 
     def test_it_harvests_two_memory_notes_from_evidence(self):
         self.make("1")
@@ -213,8 +149,7 @@ class TheHappyPath(ApplyBase):
             "memory.py note role implementer \"第一條原則\" --ticket 1 --by worker@opus\n"
             "python3 scripts/memory.py note model opus \"第二條原則\" "
             "--ticket 1 --by worker@opus\n")
-        patch = self.patch_file("p.diff", CHANGE)
-        done = self.apply("1", patch, "--evidence", evidence)
+        done = self.deliver_apply("1", "--evidence", evidence)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("第一條原則", self.read("memory/role/implementer.inbox.md"))
         self.assertIn("第二條原則", self.read("memory/model/opus.inbox.md"))
@@ -230,8 +165,7 @@ class TheHappyPath(ApplyBase):
             "memory.py note role implementer \"%s\" --ticket 1 --by worker@opus\n"
             "memory.py note role implementer \"仍會收這行\" --ticket 1 --by worker@opus\n"
             % too_long)
-        done = self.apply("1", self.patch_file("p.diff", CHANGE),
-                          "--evidence", evidence)
+        done = self.deliver_apply("1", "--evidence", evidence)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(done.stderr.count("拒絕 evidence 行"), 2, done.stderr)
         self.assertIn("仍會收這行", self.read("memory/role/implementer.inbox.md"))
@@ -240,8 +174,7 @@ class TheHappyPath(ApplyBase):
     def test_an_explicit_no_memory_section_writes_nothing(self):
         self.make("1")
         evidence = self.patch_file("EVIDENCE.md", "## 記憶\n無\n")
-        done = self.apply("1", self.patch_file("p.diff", CHANGE),
-                          "--evidence", evidence)
+        done = self.deliver_apply("1", "--evidence", evidence)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("memory.noted", self.kinds())
 
@@ -313,29 +246,12 @@ VERIFIER_EVIDENCE_WITH_RED = """# EVIDENCE-verifier
 """
 
 
-class ThePatchRefAndTheLandingEntry(ApplyBase):
-    """#87 A26 / A27:收件把 patch 路徑記進票的 `patch_ref`(相對主 repo 根);收尾那一行
-    以 `落地入口:` 起頭,指真正存在的入口。期望的路徑由測試自己拼(patch 放在沙盒根的
-    兄弟位置 = `../p.diff`)。"""
-
-    def test_apply_records_patch_ref_relative_to_the_repo(self):
-        """**變異 M12**:`record_patch_ref` 不叫 → 票上沒有 patch_ref,紅。"""
-        self.make("1")
-        done = self.apply("1", self.patch_file("p.diff", CHANGE))
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.load_ticket("1").get("patch_ref"), os.path.join("..", "p.diff"))
-        inside = self.write(os.path.join("reports", "t1", "p2.diff"), CREATE)
-        done = self.apply("1", inside)
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        ticket = self.read(os.path.join("tickets", "1.json"))
-        self.assertEqual(self.load_ticket("1")["patch_ref"],
-                         os.path.join("reports", "t1", "p2.diff"))
-        for where in {self.home, os.path.realpath(self.home)}:
-            self.assertNotIn(where, ticket)
+class TheLandingEntry(ApplyBase):
+    """#87 A27:收尾那一行以 `落地入口:` 起頭,指真正存在的入口。"""
 
     def test_the_last_line_names_land_sh_when_there_is_no_land_ticket(self):
         self.make("1")
-        done = self.apply("1", self.patch_file("p.diff", CHANGE))
+        done = self.deliver_apply("1")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual([l for l in done.stdout.splitlines() if l.startswith("落地入口:")],
                          ["落地入口:sh scripts/land.sh t1"])
@@ -345,7 +261,7 @@ class ThePatchRefAndTheLandingEntry(ApplyBase):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "專案自己的落地入口")
         self.make("1")
-        done = self.apply("1", self.patch_file("p.diff", CHANGE))
+        done = self.deliver_apply("1")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual([l for l in done.stdout.splitlines() if l.startswith("落地入口:")],
                          ["落地入口:sh scripts/land-ticket.sh t1"])
@@ -368,8 +284,7 @@ class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
         """**變異**:把 `apply.sh` 尾端那一段 `ticket.py result` 拿掉 → 這一條紅。"""
         self.make("1")
         evidence = self.patch_file("EVIDENCE.md", FULL_EVIDENCE)
-        done = self.apply("1", self.patch_file("p.diff", CHANGE),
-                          "--evidence", evidence)
+        done = self.deliver_apply("1", "--evidence", evidence)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         row = self.result_json()
         self.assertTrue(row["present"])
@@ -387,8 +302,7 @@ class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
         """
         self.make("1")
         evidence = self.patch_file("EVIDENCE.md", THIN_EVIDENCE)
-        done = self.apply("1", self.patch_file("p.diff", CHANGE),
-                          "--evidence", evidence)
+        done = self.deliver_apply("1", "--evidence", evidence)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         row = self.result_json()
         self.assertFalse(row["present"])
@@ -404,8 +318,7 @@ class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
         """
         self.make("1")
         evidence = self.patch_file("EVIDENCE.md", OBJECTING_EVIDENCE)
-        done = self.apply("1", self.patch_file("p.diff", CHANGE),
-                          "--evidence", evidence)
+        done = self.deliver_apply("1", "--evidence", evidence)
         self.assertEqual(done.returncode, 6, done.stdout + done.stderr)
         rows = self.load_ticket("1")["objections"]
         self.assertEqual(len(rows), 1, rows)
@@ -431,10 +344,8 @@ class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
         """
         self.make("1")
         evidence = self.patch_file("EVIDENCE.md", OBJECTING_EVIDENCE)
-        self.apply("1", self.patch_file("p.diff", CHANGE), "--evidence", evidence)
-        second = self.run_sh("scripts/apply.sh", "1",
-                             self.patch_file("p2.diff", CREATE),
-                             "--evidence", evidence,
+        self.deliver_apply("1", "--evidence", evidence)
+        second = self.run_sh("scripts/apply.sh", "1", "--evidence", evidence,
                              env=self.env(AC_RUN_ID="second"))
         self.assertEqual(len(self.load_ticket("1")["objections"]), 1,
                          second.stdout + second.stderr)
@@ -451,14 +362,12 @@ class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
         """
         self.make("1")
         evidence = self.patch_file("EVIDENCE.md", OBJECTING_EVIDENCE)
-        self.apply("1", self.patch_file("p.diff", CHANGE), "--evidence", evidence)
+        self.deliver_apply("1", "--evidence", evidence)
         rows = self.load_ticket("1")["objections"]
         rows[0]["disposition"] = "rejected"
         self.assertEqual(self.ticket("set", "1", "objections",
                                      json.dumps(rows, ensure_ascii=False)).returncode, 0)
-        second = self.run_sh("scripts/apply.sh", "1",
-                             self.patch_file("p2.diff", CREATE),
-                             "--evidence", evidence,
+        second = self.run_sh("scripts/apply.sh", "1", "--evidence", evidence,
                              env=self.env(AC_RUN_ID="second"))
         self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
         self.assertIn("已處置", second.stdout + second.stderr)
@@ -474,8 +383,7 @@ class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
         tickets = os.path.join(self.repo, "tickets")
         os.chmod(tickets, 0o555)
         self.addCleanup(os.chmod, tickets, 0o755)
-        done = self.apply("1", self.patch_file("p.diff", CHANGE),
-                          "--evidence", self.patch_file("EVIDENCE.md", OBJECTING_EVIDENCE))
+        done = self.deliver_apply("1", "--evidence", self.patch_file("EVIDENCE.md", OBJECTING_EVIDENCE))
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("已經有了", done.stderr)
         self.assertIn("記不進票", done.stderr)
@@ -483,8 +391,7 @@ class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
     def test_the_verifier_evidence_has_a_receiver_now(self):
         """#29 A5 / G5:`EVIDENCE-verifier.md` 以前是**一份沒有收件者的交付物**。"""
         self.make("1")
-        done = self.apply("1", self.patch_file("p.diff", CHANGE),
-                          "--evidence", self.patch_file("EVIDENCE.md", FULL_EVIDENCE),
+        done = self.deliver_apply("1", "--evidence", self.patch_file("EVIDENCE.md", FULL_EVIDENCE),
                           "--evidence-verifier",
                           self.patch_file("EV.md", VERIFIER_EVIDENCE))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -502,8 +409,7 @@ class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
         self.make("1", verify={"files": ["verify/nav/test_ticket_1.py"],
                                "tags": ["example"], "run": "", "notes": ""})
         before = self.load_ticket("1")["state_version"]
-        done = self.apply("1", self.patch_file("p.diff", CHANGE),
-                          "--evidence", self.patch_file("EVIDENCE.md", FULL_EVIDENCE),
+        done = self.deliver_apply("1", "--evidence", self.patch_file("EVIDENCE.md", FULL_EVIDENCE),
                           "--evidence-verifier",
                           self.patch_file("EV.md", VERIFIER_EVIDENCE_WITH_RED % "red"))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -517,8 +423,7 @@ class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
         """驗證者量不到綠:一份自稱 `stage=check` 的 baseline 併進去,`close` 就放行了。"""
         self.make("1", verify={"files": ["verify/nav/test_ticket_1.py"],
                                "tags": ["example"], "run": "", "notes": ""})
-        done = self.apply("1", self.patch_file("p.diff", CHANGE),
-                          "--evidence", self.patch_file("EVIDENCE.md", FULL_EVIDENCE),
+        done = self.deliver_apply("1", "--evidence", self.patch_file("EVIDENCE.md", FULL_EVIDENCE),
                           "--evidence-verifier",
                           self.patch_file("EV.md", VERIFIER_EVIDENCE_WITH_RED % "check"))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -542,8 +447,7 @@ class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
             "# v2\n\n## result\n\n```result\n"
             '{"ticket": "1", "role": "verifier", "round": 1, "rc": 0,\n'
             ' "verify": {"tags": ["example"]}}\n```\n'))
-        done = self.apply("1", self.patch_file("p.diff", CHANGE),
-                          "--evidence", self.patch_file("EVIDENCE.md", FULL_EVIDENCE),
+        done = self.deliver_apply("1", "--evidence", self.patch_file("EVIDENCE.md", FULL_EVIDENCE),
                           "--evidence-verifier", first, "--evidence-verifier", second)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         plan = self.load_ticket("1")["verify"]
@@ -594,7 +498,8 @@ class TheVerifierResultIsParsedOrSaysWhyNot(ApplyBase):
     """
 
     def apply_verifier(self, text, run_id="r1"):
-        return self.run_sh("scripts/apply.sh", "1", self.patch_file("p.diff", CHANGE),
+        self.deliver("1")
+        return self.run_sh("scripts/apply.sh", "1",
                            "--evidence", self.patch_file("EVIDENCE.md", FULL_EVIDENCE),
                            "--evidence-verifier", self.patch_file("EV.md", text),
                            env=self.env(AC_RUN_ID=run_id))
@@ -775,17 +680,19 @@ class TheCopyRootComesFromTheMainRepo(ApplyBase):
     """
 
     def test_run_from_a_ticket_worktree_the_copy_opens_under_the_main_repo_wt(self):
-        """**變異 M1**:apply.sh 改回 `$ROOT` 拼 WTBASE → 這一條紅。"""
+        """**變異 M1**:apply.sh 改回 `$ROOT` 拼 WTBASE → 這一條紅。分支 t2 已經在(主線從別處
+        fetch 回來的那一種)而 worktree 不在:apply 把它掛在主 repo 的 `-wt` 底下。"""
         self.make("2")
         wt = os.path.join(self.home, "repo-wt", "t1")
         self.git("worktree", "add", "-q", wt, "-b", "t1")
-        patch = self.patch_file("p.diff", CHANGE)
-        done = self.run_sh(os.path.join(wt, "scripts", "apply.sh"), "2", patch, cwd=wt)
+        self.git("branch", "t2", "main")
+        done = self.run_sh(os.path.join(wt, "scripts", "apply.sh"), "2", cwd=wt)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         expected = os.path.realpath(os.path.join(self.home, "repo-wt", "t2"))
-        found = [line for line in done.stdout.splitlines() if line.startswith("apply: 開了分支 t2 與副本 ")]
+        found = [line for line in done.stdout.splitlines()
+                 if line.startswith("apply: 分支 t2 掛上 worktree ")]
         self.assertEqual(len(found), 1, done.stdout)
-        copy = found[0][len("apply: 開了分支 t2 與副本 "):].rsplit("(", 1)[0]
+        copy = found[0][len("apply: 分支 t2 掛上 worktree "):]
         self.assertEqual(os.path.realpath(copy), expected)
         self.assertTrue(os.path.isdir(expected), done.stdout)
         self.assertFalse(os.path.exists(os.path.join(self.home, "repo-wt", "t1-wt")), "副本巢狀了")
@@ -800,7 +707,7 @@ class TheBranchNameComesFromTheTicket(ApplyBase):
     def test_a_ticket_branch_is_the_branch_and_the_worktree(self):
         """**變異 M4**:apply.sh 改回 `BR=${AC_BRANCH:-t$ID}` → 這一條紅。"""
         self.make("7", branch="t7-gaps")
-        done = self.apply("7", self.patch_file("p.diff", CHANGE))
+        done = self.deliver_apply("7", branch="t7-gaps")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertTrue(self.branch_exists("t7-gaps"), done.stdout)
         self.assertFalse(self.branch_exists("t7"), "另開了一條 t7")
@@ -809,15 +716,14 @@ class TheBranchNameComesFromTheTicket(ApplyBase):
 
     def test_an_empty_ticket_branch_opens_t_n_and_writes_it_back(self):
         self.make("7")
-        done = self.apply("7", self.patch_file("p.diff", CHANGE))
+        done = self.deliver_apply("7")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertTrue(self.branch_exists("t7"), done.stdout)
         self.assertEqual(self.load_ticket("7").get("branch"), "t7")
 
     def test_ac_branch_that_disagrees_with_the_ticket_is_refused(self):
         self.make("7", branch="t7-a")
-        done = self.run_sh("scripts/apply.sh", "7", self.patch_file("p.diff", CHANGE),
-                           env=self.env(AC_BRANCH="t7-b"))
+        done = self.run_sh("scripts/apply.sh", "7", env=self.env(AC_BRANCH="t7-b"))
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("t7-a", done.stderr)
         self.assertIn("t7-b", done.stderr)
@@ -825,298 +731,93 @@ class TheBranchNameComesFromTheTicket(ApplyBase):
         self.assertEqual(self.load_ticket("7").get("branch"), "t7-a")
 
 
-class ThingsItRefuses(ApplyBase):
-
-    def test_an_absolute_header_is_refused_before_anything_is_touched(self):
-        """🩸 絕對路徑的檔頭讓檔案被寫進暫存目錄,而套用本身成功、閘門也綠。
-
-        **變異**:把 `headers()` 裡 `name.startswith("/")` 那一條拿掉 → 這一條紅。
-        """
-        self.make("1")
-        done = self.apply("1", self.patch_file("p.diff", ABSOLUTE))
-        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
-        self.assertIn("絕對路徑", done.stderr)
-        self.assertFalse(self.branch_exists("t1"), "拒絕要發生在開分支之前")
-
-    def test_a_deletion_that_only_empties_the_file_is_refused(self):
-        """`diff -ruN` 的刪檔:`+++` 側不是 `/dev/null` 的話,`git apply` 只會清空它,
-        而清空的檔在 diffstat 上看起來像「改過」。"""
-        self.make("1")
-        done = self.apply("1", self.patch_file("p.diff", EMPTYING))
-        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
-        self.assertIn("/dev/null", done.stderr)
-
-    def test_a_real_deletion_with_dev_null_goes_through(self):
-        """守衛要分得開「刪檔」與「寫錯的刪檔」—— 不然它擋的是所有刪檔。"""
-        self.make("1")
-        done = self.apply("1", self.patch_file("p.diff", DELETE))
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        listed = self.git("ls-tree", "-r", "--name-only", "t1")
-        self.assertNotIn("src/a.txt", listed.split())
-
-    def test_the_same_patch_in_both_slots_is_refused_by_name(self):
-        """#112 P5(專案 #775):收件端把同一份 patch-verify 給了兩次,以前 rc=3「--check 不過」,
-        看不出是哪裡錯。同一路徑 → rc=2、點名、分支不建。
-
-        **變異**:同檔檢查拿掉 → rc 變 3、沒有「同一份 patch」→ 紅。
-        """
-        self.make("1")
-        patch = self.patch_file("patch-verify.diff", CREATE)
-        done = self.apply("1", patch, patch)
-        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        line = [text for text in done.stderr.splitlines() if "同一份 patch" in text]
-        self.assertEqual(len(line), 1, done.stderr)
-        self.assertIn(patch, line[0])
-        self.assertFalse(self.branch_exists("t1"), "拒絕要發生在開分支之前")
-
-    def test_two_paths_with_the_same_bytes_are_the_same_patch(self):
-        """#112 P5:兩個路徑、sha256 相同 → 同一份;已經在的分支不動。"""
-        self.make("1")
-        self.assertEqual(self.apply("1", self.patch_file("p.diff", CHANGE)).returncode, 0)
-        before = self.git("rev-parse", "--verify", "t1")
-        one = self.patch_file("one.diff", CREATE)
-        two = self.patch_file("two.diff", CREATE)
-        done = self.run_sh("scripts/apply.sh", "1", one, two, env=self.env(AC_RUN_ID="second"))
-        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        line = [text for text in done.stderr.splitlines() if "同一份 patch" in text]
-        self.assertEqual(len(line), 1, done.stderr)
-        self.assertIn(two, line[0])
-        self.assertEqual(self.git("rev-parse", "--verify", "t1"), before)
-
-
-class TheHardBlock(ApplyBase):
-    """D-054 Q2、Q3:寫入範圍的硬擋只剩 config 的 `hard_block`。"""
-
-    def protect(self, *globs, patterns=()):
-        conf = json.loads(self.read("board/config.json"))
-        conf["hard_block"] = {"paths": list(globs), "dirs": [], "patterns": list(patterns)}
-        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+class TheTicketItself(ApplyBase):
 
     def test_the_verifier_hand_in_merges_verify_files_with_a_patch_verify(self):
         """#101 A4:驗證者收件照既有角色管道把 verify.files 併進票(同一手帶 patch-verify)。
         量票的 verify.files;紅 = 驗證者收件併不進票;期望值 = 夾具的 PLAN_RESULT。"""
         self.make("1", needs_verifier=True)
         vcase = VERIFY_CASE.replace("verify/example/test_ticket_1.py", "verify/nav/test_ticket_1.py")
-        done = self.apply("1", self.patch_file("p.diff", CHANGE), self.patch_file("pv.diff", vcase),
-                          "--evidence", self.patch_file("EVIDENCE.md", FULL_EVIDENCE),
-                          "--evidence-verifier",
-                          self.patch_file("EV.md", "# EV\n\n## result\n\n```result\n"
-                                          + PLAN_RESULT + "\n```\n"))
+        done = self.deliver_apply("1", self.patch_file("pv.diff", vcase),
+                                  "--evidence", self.patch_file("EVIDENCE.md", FULL_EVIDENCE),
+                                  "--evidence-verifier",
+                                  self.patch_file("EV.md", "# EV\n\n## result\n\n```result\n"
+                                                  + PLAN_RESULT + "\n```\n"))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("併不進票", done.stdout + done.stderr)
         ticket = self.load_ticket("1")
         self.assertEqual(ticket["verify"]["files"], ["verify/nav/test_ticket_1.py"])
 
-    def test_a_file_in_config_hard_block_paths_is_refused_by_name_and_field(self):
-        """**變異 M4**:硬擋不看 config 的 `hard_block.paths` → 這一條紅。"""
+    def test_a_ticket_with_no_base_sha_is_refused(self):
+        self.make("1", base_sha="")
+        done = self.deliver_apply("1")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("base_sha", done.stderr)
+
+    def test_a_missing_ticket_is_named(self):
+        done = self.apply("9")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("#9", done.stderr)
+
+
+KILL_CALL = "os." + "kill(pid, 9)"
+KILLING_TEST = """diff -ruN base/tests/test_k.py work/tests/test_k.py
+--- base/tests/test_k.py\t1970-01-01 08:00:00
++++ work/tests/test_k.py\t2026-09-21 10:00:00
+@@ -0,0 +1 @@
++%s
+""" % KILL_CALL
+
+
+class TheHardBlock(ApplyBase):
+    """D-054 Q2、Q3(#135):硬擋只剩 config 的 `hard_block`;收件量的是這張票的改動 =
+    分支上 worker 的 commit 加 patch-verify。期望值 = 測試寫進 config 的那幾格。"""
+
+    def protect(self, *globs, patterns=()):
+        conf = json.loads(self.read("board/config.json"))
+        conf["hard_block"] = {"paths": list(globs), "dirs": [], "patterns": list(patterns)}
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+
+    def test_a_worker_commit_on_a_hard_block_path_is_refused_by_name_and_field(self):
+        """**變異 M4**:收件不量分支上的 commit(只量 patch-verify)→ 這一條紅。"""
         self.protect("config/**", "docs/DECISIONS.md")
         self.make("1")
-        done = self.apply("1", self.patch_file("p.diff", OUTSIDE))
+        self.deliver("1", {"config/private.ini": "a private setting\n",
+                           "docs/secret.md": "a secret doc\n"})
+        done = self.apply("1")
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         line = [row for row in done.stderr.splitlines() if "config/private.ini" in row]
         self.assertEqual(len(line), 1, done.stderr)
         self.assertIn("board/config.json 的 hard_block.paths", line[0])
         self.assertIn("`config/**`", line[0])
         self.assertNotIn("docs/secret.md", done.stderr)
-        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "0")
+        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "1",
+                         "收件這一手沒有 commit")
 
-    def test_a_pattern_in_an_added_test_line_is_refused_by_name_and_field(self):
-        """D-054 Q3:tests/** 的新增行命中 `hard_block.patterns` → rc 5、點名檔、0 commit。
-        期望值 = 測試寫進 config 的 pattern。**變異**:apply 不把 patch 的新增行交給硬擋 → 紅。"""
+    def test_a_pattern_in_a_patch_verify_test_line_is_refused_and_backed_out(self):
+        """tests/** 的新增行命中 `hard_block.patterns` → rc 5、patch-verify 退出來、分支不動。
+        **變異**:收件不把 stage 的 patch-verify 交給硬擋 → 這一條紅。"""
         self.protect(patterns=[r"os\.kill"])
         self.make("1")
-        done = self.apply("1", self.patch_file("p.diff", KILLING_TEST))
+        self.deliver("1")
+        head = self.git("rev-parse", "t1").strip()
+        done = self.apply("1", self.patch_file("v.diff", KILLING_TEST))
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         line = [row for row in done.stderr.splitlines() if "tests/test_k.py" in row]
         self.assertEqual(len(line), 1, done.stderr)
         self.assertIn("hard_block.patterns", line[0])
-        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "0")
+        self.assertEqual(self.git("rev-parse", "t1").strip(), head)
+        self.assertEqual(self.git("status", "--porcelain", cwd=self.wt()), "",
+                         "patch-verify 要退出來,不留在 index / 工作樹")
 
     def test_the_same_pattern_outside_tests_and_verify_is_not_refused(self):
         """patterns 只查 tests/** 與 verify/** 的新增行:scripts 自己合法用 kill。
         **變異 M2**:patterns 對 scripts/** 也查 → 這一條紅。"""
         self.protect(patterns=[r"os\.kill"])
         self.make("1")
-        done = self.apply("1", self.patch_file("p.diff", KILLING_SCRIPT))
+        self.deliver("1", {"scripts/k.py": KILL_CALL + "\n"})
+        done = self.apply("1")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "1")
-
-    def test_a_patch_that_only_touches_ignored_files_is_not_a_green_apply(self):
-        """套完之後 `git add -A` 一個位元都沒進 index —— **「套好了」與「什麼都沒做」
-        在退出碼上長得一樣**,而下一步(land)只看 commit 數。"""
-        self.make("1")
-        done = self.apply("1", self.patch_file("p.diff", IGNORED))
-        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
-        self.assertIn("等於什麼都沒做", done.stderr)
-
-    def test_a_ticket_with_no_base_sha_is_refused(self):
-        self.make("1", base_sha="")
-        done = self.apply("1", self.patch_file("p.diff", CHANGE))
-        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        self.assertIn("base_sha", done.stderr)
-
-    def test_a_missing_ticket_is_named(self):
-        done = self.apply("9", self.patch_file("p.diff", CHANGE))
-        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        self.assertIn("#9", done.stderr)
-
-
-class Rebase(ApplyBase):
-    """落地前把 patch 重套到**當前主線**,重生清單,出一份乾淨的 diff(D-012)。
-
-    重套是**三向合併**:祖先 = 票的 `base_sha`、我方 = 當前主線、對方 = base_sha + patch
-    (#17)。以前這裡是 GNU `patch -F 2`,而判失敗只看 `.rej` —— 上下文走遠的時候
-    `patch` 會整支 fatal 掉(「misordered hunks」)、**一個 `.rej` 都不留**,於是 0 byte
-    的檔案被印成「乾淨的 diff」,一路要到下一步 `git apply` 才喊「一個檔頭都沒有」。
-    """
-
-    def setUp(self):
-        super(Rebase, self).setUp()
-        self.write("src/wide.txt", WIDE)
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "主線上先有一個有上下文的 src/wide.txt")
-
-    def main_moves_near_the_patch(self):
-        """主線在 patch 那一塊**旁邊**動一行:三向合併過得去,而重生的 diff 要說得出
-        主線這一行 —— 那正是「對今天的主線說的」的意思。"""
-        self.write("src/wide.txt", WIDE.replace("一\n", "壹\n", 1))
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "主線在隔壁那一行走遠了")
-
-    def rebased(self, ident="1"):
-        out = os.path.join(self.repo, "reports", "t%s" % ident, "patch-rebased.diff")
-        with open(out, encoding="utf-8") as handle:
-            return out, handle.read()
-
-    def test_rebase_records_the_rebased_patch_as_the_patch_ref(self):
-        """#87 A26:`apply.sh rebase` 那條路也寫 patch_ref(相對主 repo 根)。"""
-        self.make("1")
-        self.main_moves_near_the_patch()
-        done = self.apply("rebase", "1", self.patch_file("p.diff", WIDE_CHANGE))
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.load_ticket("1").get("patch_ref"),
-                         os.path.join("reports", "t1", "patch-rebased.diff"))
-
-    def test_a_ticket_without_base_sha_names_the_missing_field(self):
-        self.make("1", base_sha="")
-        done = self.apply("rebase", "1", self.patch_file("p.diff", CHANGE))
-        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        self.assertIn("票 #1 缺 base_sha", done.stderr)
-        self.assertFalse(os.path.exists(os.path.join(self.home, "repo-wt", "rebase-t1")),
-                         "答不出原 patch 的版本時不該先做一份看似可用的副本")
-
-    def test_a_base_sha_the_repo_does_not_have_is_named_before_any_copy(self):
-        """`base_sha` 是三向合併的祖先。取不出祖先的時候沒有任何一棵樹算得出來 ——
-        而「算不出來」不可以長得像「算出來是空的」。"""
-        self.make("1", base_sha="0" * 40)
-        done = self.apply("rebase", "1", self.patch_file("p.diff", CHANGE))
-        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        self.assertIn("0" * 40, done.stderr)
-        self.assertFalse(os.path.exists(os.path.join(self.home, "repo-wt", "rebase-t1")),
-                         "取不出祖先時不該先做一份看似可用的副本")
-
-    def test_a_deletion_comes_back_with_dev_null_on_the_plus_side(self):
-        """重生出來的 diff 自己就是下一步的輸入,所以刪檔那一側要**這裡**改好 ——
-        叫人手改的那一步漏掉時,畫面上一個徵兆都沒有。"""
-        self.make("1")
-        done = self.apply("rebase", "1", self.patch_file("p.diff", DELETE))
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("+++ /dev/null", self.rebased()[1])
-
-    def test_a_three_way_conflict_fails_and_names_the_file_and_the_hunk(self):
-        """「套了但有幾塊沒進去」與「全套進去了」在退出碼上長得一樣(D-012 第 2 點),
-        所以衝突要非零 —— 而且要指名到**檔與行**:「有問題」不是一個可以執行的動作。
-
-        **變異**:把 `gitw merge` 那一段的 `exit 3` 改成 `:` → 這一條紅。
-        """
-        self.make("1")
-        self.write("src/wide.txt", "序\n一\n二\n完全不一樣的內容\n三\n四\n跋\n")
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "主線把同一行重寫了")
-        done = self.apply("rebase", "1", self.patch_file("p.diff", WIDE_CHANGE))
-        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
-        # 指名要是**自己說的那一句**,不是順手轉印的 git 輸出 —— 轉印那一段換個
-        # git 版本就換句話,而這一條問的是「接手的人看不看得到要動哪個檔的哪幾行」。
-        self.assertIn("衝突檔 src/wide.txt", done.stdout, "衝突的檔名要在 stdout 上")
-        self.assertRegex(done.stdout, r"第 \d+ 行:<<<<<<<")
-        self.assertFalse(
-            os.path.exists(os.path.join(self.repo, "reports", "t1",
-                                        "patch-rebased.diff")),
-            "衝突的時候不該留下一份看起來可以餵給下一步的 diff")
-
-    def test_an_empty_rebuilt_diff_is_never_called_clean(self):
-        """🩸 #17:`patch(1)` 在上下文走遠時整支 fatal 掉、**不留 `.rej`**,於是舊版印
-        「乾淨的 diff」而檔案是 0 byte,要到下一步 `git apply` 才喊「一個檔頭都沒有」。
-        **「沒有東西可做」與「做完了」長得一樣**,所以 0 byte 一定要自己喊。
-
-        **變異**:把 `[ ! -s "$out" ]` 那一段拿掉 → 這一條紅(rc 回 0、又印「乾淨的 diff」)。
-        """
-        self.make("1")
-        # 主線上已經有 patch 要做的那件事:三向合併過得去,但重套出來的樹 == 主線。
-        self.write("src/wide.txt", WIDE.replace("old\n", "new\n"))
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "主線上已經是 new 了")
-        out = self.patch_file("rebased.diff", "")
-        done = self.apply("rebase", "1", self.patch_file("p.diff", WIDE_CHANGE), "-o", out)
-        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(os.path.getsize(out), 0)
-        self.assertNotIn("乾淨的 diff", done.stdout, done.stdout)
-        self.assertIn("0 byte", done.stderr, done.stderr)
-
-    def test_the_rebuilt_tree_is_what_git_rebase_itself_would_have_produced(self):
-        """重套的定義就是 rebase,所以答案要跟 **git 自己 rebase** 出來的那一棵樹
-        逐位元相同 —— 不然這一支只是「某種會猜的東西」,而它猜錯的那一次沒有人會知道。
-
-        **變異**:把三向合併換成「把 patch 那一版直接蓋上去」
-        (`gitw merge …` → `gitw checkout ac-rebase-ticket -- .`)→ 這一條紅。
-
-        #72 併入同一場景(主線在隔壁走遠 + WIDE_CHANGE)的兩條,真 git rebase 的樹是
-        預言機,手算的內容留作第二預言機:
-        - 原 test_it_rebuilds_a_clean_diff_against_todays_main:重生的 diff 對今天的主線說。
-        - 原 test_the_rebuilt_diff_applies_cleanly_through_the_normal_entry:重生的 diff 要
-          **能餵回這一支自己** —— 不然它只是一個好看的檔。
-        """
-        import subprocess
-        self.make("1")
-        self.main_moves_near_the_patch()
-        patch = self.patch_file("p.diff", WIDE_CHANGE)
-        rebuilt = self.apply("rebase", "1", patch)
-        self.assertEqual(rebuilt.returncode, 0, rebuilt.stdout + rebuilt.stderr)
-        out, text = self.rebased()
-        self.assertTrue(os.path.exists(out), rebuilt.stdout)
-        self.assertIn("--- base/src/wide.txt", text)
-        self.assertIn("+new", text)
-        self.assertIn("壹", text, "重生出來的 diff 要是對今天的主線說的")
-        done = self.apply("1", out)
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.git("show", "t1:src/wide.txt"),
-                         WIDE.replace("一\n", "壹\n", 1).replace("old\n", "new\n"))
-
-        # 對照組:同一份 patch 在 base_sha 上 commit,然後讓 **git 自己** rebase 到主線。
-        where = os.path.join(self.home, "wt", "git-rebase")
-        self.git("worktree", "add", "-q", "-b", "g1", where,
-                 self.load_ticket("1")["base_sha"])
-        plain = subprocess.run(["git", "-C", where, "apply", "-p1", patch],
-                               capture_output=True, text=True, env=self.env())
-        self.assertEqual(plain.returncode, 0, plain.stdout + plain.stderr)
-        self.git("add", "-A", cwd=where)
-        self.git("commit", "-q", "-m", "t1 的那一手", cwd=where)
-        self.git("rebase", "main", cwd=where)
-
-        self.assertEqual(self.git("rev-parse", "t1^{tree}"),
-                         self.git("rev-parse", "g1^{tree}"),
-                         "重套出來的樹與 git 自己 rebase 的不是同一棵")
-
-    def test_a_patch_that_does_not_fit_its_own_base_sha_is_refused(self):
-        """三向合併的「對方」是 base_sha + patch。patch 套不回自己的 base_sha,就代表
-        票面上那一格是錯的 —— 這時候猜出來的任何一棵樹都沒有意義。
-
-        **變異**:把 `gitw apply` 後面的 `exit 3` 改成 `:` → 這一條紅。
-        """
-        self.make("1", base_sha=self.git("rev-list", "--max-parents=0", "main").strip())
-        done = self.apply("rebase", "1", self.patch_file("p.diff", WIDE_CHANGE))
-        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
-        self.assertIn("base_sha", done.stderr)
 
 
 class TheGateResidueOfTheLastRound(ApplyBase):
@@ -1134,11 +835,10 @@ class TheGateResidueOfTheLastRound(ApplyBase):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "下游專案:gate.log 沒被忽略")
 
-    def test_untracked_gate_logs_in_the_worktree_do_not_block_round_two(self):
-        """**變異 M1**:範圍檢查不略過殘留 → rc=5 寫入範圍越界,紅。
-        **變異 M2**:commit 前不把殘留退出 index → 分支上多出 gate.log*,紅。"""
+    def test_untracked_gate_logs_in_the_worktree_stay_out_of_the_patch_verify_commit(self):
+        """**變異 M2**:patch-verify 改回 `git add -A` 再 commit → 分支上多出 gate.log*,紅。"""
         self.make("1")
-        self.assertEqual(self.apply("1", self.patch_file("p1.diff", CHANGE)).returncode, 0)
+        self.deliver("1")
         self.write("gate.log", "Ran 1 test\n", where=self.wt())
         self.write("gate.log.verify-check", "check\n", where=self.wt())
         self.write(os.path.join("gate.log.verify-case.d", "x.log"), "case\n", where=self.wt())
@@ -1146,7 +846,7 @@ class TheGateResidueOfTheLastRound(ApplyBase):
                       self.git("status", "--porcelain", cwd=self.wt()),
                       "前提:殘留是未追蹤、沒被忽略的檔")
 
-        done = self.run_sh("scripts/apply.sh", "1", self.patch_file("p2.diff", CREATE),
+        done = self.run_sh("scripts/apply.sh", "1", self.patch_file("v.diff", CREATE),
                            env=self.env(AC_ROUND="2"))
 
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -1155,7 +855,6 @@ class TheGateResidueOfTheLastRound(ApplyBase):
         self.assertEqual(committed, ["src/b.txt"], "殘留不進 commit")
         self.assertTrue(os.path.isfile(os.path.join(self.wt(), "gate.log.verify-check")),
                         "殘留是上一輪的證據,不刪")
-
 
 
 def batch_patch(*files):
@@ -1284,15 +983,16 @@ MAP_CATALOG = {"version": 1, "managed": ["scripts/*.py", "tests/test_*.py"],
                                      "entry": "scripts/memory.py"}}}
 
 
-class TheCodeMapIsRebuiltIntoTheSameCommit(ApplyBase):
-    """#96:候選樹有 `scripts/repo-map.py` 與 `code-map/catalog.json` ⇒ apply 在 commit 之前跑一次
-    `repo-map.py build`,產出物有變就併進同一個 commit(訊息一行 `regen: repo-map build`)。
+class TheCodeMapIsRebuiltIntoACommitOfItsOwn(ApplyBase):
+    """#96、D-051:候選樹有 `scripts/repo-map.py` 與 `code-map/catalog.json` ⇒ 收件時跑一次
+    `repo-map.py build`,產出物有變就在分支上補一個 commit(訊息一行 `regen: repo-map build`;#144 起
+    worker 自己 commit,重產不再併進它的 commit)。
     沙盒照 test_repo_map_contract 的 A32:複製真的 repo-map.py、寫 catalog、build、commit 進主線。
     期望值(新檔名、commit 數、字樣)抄票面,不從 repo-map 算回來。
     """
 
     def setUp(self):
-        super(TheCodeMapIsRebuiltIntoTheSameCommit, self).setUp()
+        super(TheCodeMapIsRebuiltIntoACommitOfItsOwn, self).setUp()
         shutil.copy(os.path.join(SCRIPTS, "repo-map.py"),
                     os.path.join(self.repo, "scripts", "repo-map.py"))
         self.write(os.path.join("code-map", "catalog.json"),
@@ -1310,11 +1010,11 @@ class TheCodeMapIsRebuiltIntoTheSameCommit(ApplyBase):
 
     def apply_a_new_managed_file(self, *args):
         """交件只新增一支已管理的檔、不含 code-map/ 的改動(漏重生)。"""
-        done = self.apply("1", self.patch_file("p.diff", batch_patch(
-            ("tests/test_memory_new.py", None, TEST_X))), *args)
+        self.deliver("1", {"tests/test_memory_new.py": TEST_X})
+        done = self.apply("1", *args)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
-    def test_a_stale_code_map_is_rebuilt_into_the_same_commit(self):
+    def test_a_stale_code_map_is_rebuilt_into_a_commit_of_its_own(self):
         """A4。量 check rc、managed、commit 數、regen 行;
         紅 = 拿掉重產那一步(m3)時 check rc=1、managed 沒有新檔;
         期望值 = patch 新增的檔名 tests/test_memory_new.py。
@@ -1326,7 +1026,8 @@ class TheCodeMapIsRebuiltIntoTheSameCommit(ApplyBase):
         self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
         with open(os.path.join(wt, "code-map", "index.json"), encoding="utf-8") as handle:
             self.assertIn("tests/test_memory_new.py", json.load(handle)["managed"])
-        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "1")
+        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "2",
+                         "worker 的 commit + 重產那一個")
         self.assertEqual(len(self.regen_lines()), 1, self.git("log", "-1", "--format=%B", "t1"))
         self.assertTrue(self.regen_lines()[0].startswith("regen: repo-map build"))
 
@@ -1334,23 +1035,22 @@ class TheCodeMapIsRebuiltIntoTheSameCommit(ApplyBase):
         """A6。量 regen 行與分支 diff 的檔名;紅 = 不比對前後、每次都加 regen 行;
         期望值 = 只改既有檔內文時分支 diff 只有 tests/test_kept.py。
         """
-        done = self.apply("1", self.patch_file("p.diff", batch_patch(
-            ("tests/test_kept.py", TEST_X, TEST_X.replace("test_one", "test_two")))))
+        self.deliver("1", {"tests/test_kept.py": TEST_X.replace("test_one", "test_two")})
+        done = self.apply("1")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.regen_lines(), [])
         self.assertEqual(self.git("diff", "--name-only", "main..t1").split(),
                          ["tests/test_kept.py"])
 
     def test_a_failed_rebuild_does_not_block_the_apply(self):
-        """A7。量 rc、commit 數、輸出字樣;紅 = 重產失敗改成 die(m4)時 rc≠0、分支沒 commit;
+        """A7。量 rc、commit 數、輸出字樣;紅 = 重產失敗改成 die(m4)時 rc≠0;
         期望值 = 票面字樣「索引沒重產」。
         """
         broken = dict(MAP_CATALOG, topics=dict(MAP_CATALOG["topics"], ghost={
             "summary": "指到不存在的檔", "match": ["ghost"], "entry": "scripts/ghost.py"}))
-        old = json.dumps(MAP_CATALOG, ensure_ascii=False, indent=2) + "\n"
-        new = json.dumps(broken, ensure_ascii=False, indent=2) + "\n"
-        done = self.apply("1", self.patch_file("p.diff", batch_patch(
-            ("code-map/catalog.json", old, new))))
+        self.deliver("1", {"code-map/catalog.json":
+                           json.dumps(broken, ensure_ascii=False, indent=2) + "\n"})
+        done = self.apply("1")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "1")
         self.assertIn("索引沒重產", done.stdout + done.stderr)

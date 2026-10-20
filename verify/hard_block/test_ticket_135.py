@@ -80,6 +80,8 @@ class ApplyReadsTheSharedHardBlock(ScriptWorld):
         self.git("push", "-q", "origin", "main")
 
     def apply(self, body):
+        # #144:收件要有票分支(worker 在上面 commit);這份改動走 patch-verify 那一格進同一道硬擋。
+        self.git("branch", "t1", "main")
         patch_file = self.write("ticket.diff", body, where=self.home)
         return self.run_sh("scripts/apply.sh", "1", patch_file)
 
@@ -196,10 +198,11 @@ AGENT_WRITES_OUTSIDE = """#!/bin/sh
 set -e
 echo "$AC_ROLE ran round $AC_ROUND" >> "$AC_TEST_LOG"
 echo changed >> "$HOME/guarded/a.txt"
+W=$PWD
 cd "$AC_WORK"
 [ "$AC_ROLE" = worker ] || exit 0
-mkdir -p work/tests
-cat > work/tests/test_thing.py <<'CASE'
+mkdir -p "$W"/tests
+cat > "$W"/tests/test_thing.py <<'CASE'
 import unittest
 
 
@@ -207,7 +210,7 @@ class T(unittest.TestCase):
     def test_thing(self):
         self.assertEqual(1, 1)
 CASE
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+(cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
 printf '# evidence\n' > "EVIDENCE-round$AC_ROUND.md"
 """
 

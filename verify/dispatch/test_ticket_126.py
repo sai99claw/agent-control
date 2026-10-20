@@ -53,10 +53,11 @@ NOT_YET = "案例還沒交,第 2 輪先派驗證者"
 AGENT = """#!/bin/sh
 set -e
 echo "$AC_ROLE ran round $AC_ROUND" >> "$AC_TEST_LOG"
+W=$PWD
 cd "$AC_WORK"
 [ "$AC_ROLE" = worker ] || exit 0
-mkdir -p work/tests
-cat > work/tests/test_thing.py <<'CASE'
+mkdir -p "$W"/tests
+cat > "$W"/tests/test_thing.py <<'CASE'
 import unittest
 
 
@@ -64,7 +65,7 @@ class T(unittest.TestCase):
     def test_thing(self):
         self.assertEqual(1, 1)
 CASE
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+(cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
 printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
 """
 

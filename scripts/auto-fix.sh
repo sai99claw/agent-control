@@ -13,16 +13,16 @@
 #
 # ## 第 1 輪也由這一支起(#40,D-025 C1)
 # 票 **Ready 且沒有狀態檔** ⇒ 走同一個 `round_once 1`:派工文就是 `--dry-run --round 1`
-# 那一份、副本 base 取票的 `base_sha`(分支 t<n> 還不存在時)、`ticket.attempt.start`
-# 由這裡發、票轉 Running;之後 apply → gate → InReview → review.sh 與第 2 輪起是同一段。
+# 那一份、票分支的 worktree 從主線頭開(#144;base_sha 落後先升到主線頭)、`ticket.attempt.start`
+# 由這裡發、票轉 Running;之後收件(apply)→ gate → InReview → review.sh 與第 2 輪起是同一段。
 # 以前第 1 輪被「一輪都還沒跑過」的 exit 2 擋在門外,主線要自己派 worker、apply、
 # 帶 `AC_TICKETS_DIR` 跑閘門 —— 同一件事兩個入口。票不是 Ready 又沒有狀態檔 ⇒
 # 指名 state 停下(rc=2),不猜。
 #
 # ## 為什麼不叫醒舊的 worker
 # 它醒來一次 = 累積的整份上下文重送一輪(D-010)。所以每一輪都是**新的** worker,
-# 而它手上只有一份檔:狀態檔的 `repair_context`(base_sha、票面快照、副本、patch 路徑
-# 與雜湊、第幾輪、上一輪的 EVIDENCE、重現指令)。少一格,它就得回頭翻對話或猜檔案位置。
+# 而它手上只有一份檔:狀態檔的 `repair_context`(base_sha、票面快照、worktree、
+# 第幾輪、上一輪的 EVIDENCE、重現指令)加票分支上前幾輪的 commit。少一格,它就得回頭翻對話或猜檔案位置。
 #
 # ## 三種停下來(每一種都寫一則 inbox,kind=decision —— 不是印一行就算)
 # 1. worker 說**票寫錯 / 需要裁示** —— 它在 EVIDENCE 裡寫一行 `OBJECTION: <類別> <理由>`;
@@ -49,12 +49,12 @@
 # ## 退出碼
 #   0 綠了且覆核 pass(simple 票:綠了就是;或 --no-review:awaiting_review)   1 三輪耗盡仍紅   2 用法 / 沒有狀態檔而票不是 Ready
 #   3 worker 提反駁       4 failures 沒有歸因,或閘門硬擋命中(頁的狀態格分得出)
-#   5 worker 沒交出可用的 patch
+#   5 worker 沒交件(#144:票分支沒有新 commit,或 commit 了又留著未 commit 的改動)、收件沒過
 #   6 規則包產不出來(#74):worker / 驗證者一個都沒起;缺項在 rules.py 送的 decision 頁
 #   7 角色表的候選整串耗盡(#121 A3:票 Blocked、一頁 decision、不再起程序),或額度後的
 #     下一個候選交給 Controller / 別的驅動者接續(副本留著)
 #   8 agent 越界(#115,D-048):主 repo / hard_block.dirs 有不屬於控制面、也歸屬不到同時 land 的改動;
-#     票轉 Blocked、owner=main,一頁 decision,patch 不套、副本留著(與額度同時發生也是 8)
+#     票轉 Blocked、owner=main,一頁 decision,不收件、worktree 與副本留著(與額度同時發生也是 8)
 #   9 閘門綠、覆核 fail   10 閘門綠、覆核沒交件 / stale / 沒完成(#121 A6)
 set -u
 # `AC_ROOT` 優先:被 `gate.sh` 的 auto-fix 叫到時,這支檔案住在**副本**裡,
@@ -91,52 +91,6 @@ for part in key.split("."):
 print(data if data not in (None, "") else default)
 PY
 }
-
-# ## test_defect 收件後的守衛(#107)
-# worker 交了 patch 又說 test_defect:apply 收兩份(worker 的、patch-verify)。套完之後 worker
-# 那一份的每個 `+++` 目標(刪檔看 `---` 側)都要出現在 `<base_sha>..<分支>` 的改動裡 ——
-# 少一個就是殘缺的票,閘門剛好綠就會把它落地(專案 #751)。缺檔印一行、回 5。
-# 可單獨跑:`sh scripts/auto-fix.sh --landed-check <base_sha> <分支> <worker 的 patch>`。
-landed_check() {   # $1 = base sha  $2 = 分支  $3 = worker 的 patch
-    python3 - "$ROOT" "$1" "$2" "$3" <<'PY'
-import subprocess, sys
-root, base, branch, patch = sys.argv[1:5]
-
-
-def side(text):
-    name = text.split("\t")[0].strip()
-    return "" if name == "/dev/null" else name.split("/", 1)[-1]
-
-
-wanted, old = [], ""
-with open(patch, encoding="utf-8", errors="replace") as handle:
-    for line in handle:
-        if line.startswith("--- "):
-            old = side(line[4:])
-        elif line.startswith("+++ "):
-            name = side(line[4:]) or old
-            if name and name not in wanted:
-                wanted.append(name)
-done = subprocess.run(["git", "-C", root, "diff", "--name-only", "%s..%s" % (base, branch)],
-                      capture_output=True, text=True)
-if done.returncode != 0:
-    sys.stderr.write("auto-fix: worker 的 patch 沒全進分支 —— 問不到 %s..%s 的改動:%s\n"
-                     % (base, branch, done.stderr.strip()))
-    raise SystemExit(5)
-changed = set(done.stdout.splitlines())
-missing = [name for name in wanted if name not in changed]
-if missing:
-    sys.stderr.write("auto-fix: worker 的 patch 沒全進分支(%s 相對 %s 沒有改到):%s\n"
-                     % (branch, base, " ".join(missing)))
-    raise SystemExit(5)
-PY
-}
-
-if [ "${1:-}" = "--landed-check" ]; then
-    [ $# -eq 4 ] || { echo "用法:sh scripts/auto-fix.sh --landed-check <base_sha> <分支> <worker 的 patch>" >&2; exit 2; }
-    landed_check "$2" "$3" "$4"
-    exit $?
-fi
 
 [ $# -ge 1 ] || { echo "用法:sh scripts/auto-fix.sh <票號> [--dry-run] [--round 1] [--no-review]"; exit 2; }
 # `--batch <整合分支> <票號…>`:票號收進 B_IDS,第一張當 `ID`(票檔、模型、逾時、成本都照它),
@@ -293,6 +247,19 @@ print(str(worker[-1].get("model") or "") if worker else "")
 PY
 }
 T_LAST_WORKER=$(last_worker)
+# 票的分支名**只有一個來源:票的 `branch` 欄**(#53,D-018;`apply.sh` 收件時填)。
+# 空著才退回 `t<n>` —— 下游專案用 `t<n>-<slug>` 的票,寫死 `t$ID` 就找不到分支。
+ticket_branch() {
+    python3 - "$TF" "t$ID" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        name = json.load(handle).get("branch")
+except (OSError, ValueError):
+    name = None
+print(name or sys.argv[2])
+PY
+}
 if [ "$T_TOOL" = codex ] || [ "${T_MODEL#codex:}" != "$T_MODEL" ] \
         || [ "$T_TOOL" = agy ] || [ "${T_MODEL#agy:}" != "$T_MODEL" ]; then
     python3 "$AC/ticket.py" agent-command --model "$T_MODEL" --tool "$T_TOOL" >/dev/null || {
@@ -394,7 +361,7 @@ attempt_failed() {   # $1 = no-patch | apply-failed | timeout | objection | veri
 # 越界守衛的收件(#115):`run_agent` 寫的 `<log 去掉 .log>.guard.json` 裡 violations 不空就是越界
 # (只有 main_side 的那一份是主線那一邊的改動,只記不擋,#128)。這一輪
 # 每一個 agent 的報告併成**一頁**;票轉 Blocked、owner=main、attempt 以 guard-violation 收;
-# 不套 patch、副本不收(下一個人要從它看做了什麼)。額度那一手排在它後面(A7)。
+# 不收件、worktree 與副本不收(下一個人要從它看做了什麼)。額度那一手排在它後面(A7)。
 guard_stop() {   # $1… = 這一輪 agent 的 log(空字串略過);有越界回 0(ROUND_RC=8),沒有回 1
     G_OUT=$(python3 - "$@" <<'PY'
 import json, os, sys
@@ -422,7 +389,7 @@ PY
 ) || return 1
     G_WHAT=$(printf '%s\n' "$G_OUT" | sed -n 1p)
     G_WHERE=$(printf '%s\n' "$G_OUT" | sed -n 2p)
-    echo "auto-fix: #$ID 第 $r 輪 agent 越界 —— $G_WHAT;patch 不套、副本留著" >&2
+    echo "auto-fix: #$ID 第 $r 輪 agent 越界 —— $G_WHAT;不收件、worktree 與副本留著" >&2
     G_SCOPE=""
     if [ -n "${BATCH:-}" ]; then
         G_SCOPE="整批 ${B_TAGS}:"
@@ -438,7 +405,7 @@ PY
         block "#$ID 第 $r 輪 agent 越界(guard-violation)"
     fi
     post "agent 越界(guard-violation),副本留著" \
-         "${G_SCOPE}改到守衛範圍內的東西:${G_WHAT}。patch 沒套;前後證據在 ${G_WHERE}。查清楚、還原或認可後再派" \
+         "${G_SCOPE}改到守衛範圍內的東西:${G_WHAT}。沒有收件;前後證據在 ${G_WHERE}。查清楚、還原或認可後再派" \
          "$G_WHERE"
     [ -n "${BATCH:-}" ] || attempt_failed guard-violation
     G_STOPPED=1
@@ -446,39 +413,41 @@ PY
     return 0
 }
 
-shed_copies() {   # $1 = 副本根(fix-t<n>/round<r> 或 verify-t<n>/round<r>)
+shed_copies() {   # $1 = 副本根(fix-t<n>/round<r> 或 verify-t<n>/round<r>)  $2 = 那一輪 worker 的 worktree(可空)
     # **副本自己收**(#29 A6,G6):`patch` / `EVIDENCE` / `dispatch` / `result` 留著,
     # `work/` 與 `base/` 刪掉。以前它們只在**下一輪開始**才 `rm -rf`,綠了停 InReview
     # 就永遠留著 —— 而「沒人收」與「收過了」在磁碟上長得一樣,直到滿的那一刻
     # (2026-09-16 某個下游專案的副本 14 GB 塞滿磁碟,整台機器 disk I/O error)。
     [ -n "${1:-}" ] || return 0
-    [ -d "$1/work" ] || [ -d "$1/base" ] || return 0
+    [ -d "$1/work" ] || [ -d "$1/base" ] || [ -d "$1/control" ] || return 0
     # `control/` 是起 agent 時開的拋棄式控制根(`run_agent`):agent 的副作用在那裡,一起收。
     rm -rf "$1/work" "$1/base" "$1/control"
     echo "auto-fix: 收掉副本 $1/{work,base}(patch 與 EVIDENCE 留著)"
     # 副本沒了,在它裡面跑的 session 就接不回了(#89):sessions.json 那一列一起轉 closed。
-    session_close "$1"
+    # worker 在票分支的 worktree 裡跑(#144):worktree 留到落地,但這一輪收件了,下一輪是新的
+    # worker —— 那一列一起轉 closed。
+    session_close "$1" "${2:-}"
 }
 
 # ## agent 的 session(#89,D-041)
 # 反駁要接回**同一個** worker / 驗證者 session 在原副本續做,所以 session id 由這裡先指定
 # (`--session-id <uuid4>`),不從輸出撈 —— 撈不到就沒得接。每一列記在
-# `reports/t<n>/sessions.json`:`cwd` 是該副本 `work/` 相對主 repo 根(agent 就在那裡起,
-# 工具的 cwd 是當下目錄,接回也要在那裡)。命令不是 `claude` 起頭、或帶
+# `reports/t<n>/sessions.json`:`cwd` 是 agent 起的目錄相對主 repo 根 —— 驗證者是副本的 `work/`,
+# worker 是票分支的 worktree(#144)(工具的 cwd 是當下目錄,接回也要在那裡)。命令不是 `claude` 起頭、或帶
 # `--no-session-persistence` 的,不補旗標、該列 `resumable: false` 帶 `why`。
 SESSIONS=$ROOT/$(cfg reports_dir reports)/t$ID/sessions.json
 
-session_open() {   # $1 = 角色  $2 = 命令  $3 = 副本根  $4 = 第幾輪  $5 = 模型;印出要起的命令
-    python3 - "$SESSIONS" "$ROOT" "$@" <<'PY' || printf '%s\n' "$2"
+session_open() {   # $1 = 角色  $2 = 命令  $3 = 副本根  $4 = 第幾輪  $5 = 模型  $6 = 起的目錄(空 = 副本根的 work/);印出要起的命令
+    python3 - "$SESSIONS" "$ROOT" "$1" "$2" "$3" "$4" "$5" "${6:-}" <<'PY' || printf '%s\n' "$2"
 import json, os, shlex, sys, uuid
-path, root, role, cmd, copy, rnd, model = sys.argv[1:8]
+path, root, role, cmd, copy, rnd, model, start = sys.argv[1:9]
 try:
     parts = shlex.split(cmd)
 except ValueError:
     parts = cmd.split()
 head = os.path.basename(next((tok for tok in parts if "=" not in tok), ""))
 row = {"session_id": None,
-       "cwd": os.path.relpath(os.path.realpath(os.path.join(copy, "work")),
+       "cwd": os.path.relpath(os.path.realpath(start or os.path.join(copy, "work")),
                               os.path.realpath(root)),
        "round": int(rnd), "model": model, "state": "open", "resumable": True}
 if head != "claude":
@@ -517,17 +486,18 @@ print("" if value is None else (str(value).lower() if isinstance(value, bool) el
 PY
 }
 
-session_close() {   # $1 = 副本根;`cwd` 是它的 work/ 而還開著的那幾列轉 closed
+session_close() {   # $1 = 副本根  $2 = worker 的 worktree(可空);`cwd` 是其中之一而還開著的那幾列轉 closed
     [ -f "$SESSIONS" ] || return 0
-    python3 - "$SESSIONS" "$ROOT" "$1" <<'PY'
+    python3 - "$SESSIONS" "$ROOT" "$1" "${2:-}" <<'PY'
 import datetime, json, os, sys
-path, root, copy = sys.argv[1:4]
+path, root, copy, worktree = sys.argv[1:5]
 with open(path, encoding="utf-8") as handle:
     data = json.load(handle)
-cwd = os.path.relpath(os.path.realpath(os.path.join(copy, "work")), os.path.realpath(root))
+cwds = {os.path.relpath(os.path.realpath(where), os.path.realpath(root))
+        for where in (os.path.join(copy, "work"), worktree) if where}
 hit = False
 for row in data.values():
-    if isinstance(row, dict) and row.get("cwd") == cwd and row.get("state") == "open":
+    if isinstance(row, dict) and row.get("cwd") in cwds and row.get("state") == "open":
         row["state"] = "closed"
         row["closed_at"] = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
         hit = True
@@ -539,7 +509,7 @@ PY
 }
 
 collect_from_copy() {   # $1 = 副本根  $2… = 要撿出來的檔名
-    # worker 有時把交付物放在 `work/` 裡(派工文說放在副本根)。**先撿出來再刪副本** ——
+    # 驗證者 / 批次 worker 有時把交付物放在 `work/` 裡(派工文說放在副本根)。**先撿出來再刪副本** ——
     # 反過來的話,刪掉的是這一輪唯一的一份 patch。
     where=$1
     shift
@@ -609,7 +579,6 @@ if newest != run_id:
                         run_id, (status.read(root, ident, run_id) or {}).get("kind") or "?"))
 data = status.read(root, ident, run_id) if run_id else {}
 ctx = data.get("repair_context") or {}
-patch = (ctx.get("patch") or {}).get("path") or ""
 try:
     with open(tf, encoding="utf-8") as fh:
         limit = int(json.load(fh).get("retry_limit") or 2) + 1
@@ -637,7 +606,6 @@ mech = [line for line in str(data.get("note") or "").splitlines() if "硬擋命�
 out("S_MECH", "\n".join(mech))
 out("S_ROUND", (ctx.get("round") or 1))
 out("S_BASE", ctx.get("base_sha") or "")
-out("S_PATCH", patch)
 out("S_PREV_EVIDENCE", ctx.get("prev_evidence") or "")
 out("S_LIMIT", limit)
 # 上一輪的環境嫌疑(形狀見 `docs/DESIGN-ENV-SUSPECT.md`,D-019)。經正規化函式讀,
@@ -653,7 +621,7 @@ PY
 
 # 閘門硬擋命中(#90 A2–A4):測試沒起,紅榜本來就是空的 —— 那不是「沒有歸因」,歸因就寫在
 # gate 狀態檔的 note 裡。逐條點名(全是交件命中 `hard_block`),給主線接回的確切步驟;
-# 不派 worker、不轉 Ready(轉 Ready 會從頭派第 1 輪),patch 留在分支上。
+# 不派 worker、不轉 Ready(轉 Ready 會從頭派第 1 輪),commit 留在分支上。
 mechanical_stop() {   # uses S_MECH / S_RUN;票轉 Blocked、一頁、exit 4
     echo "auto-fix: 閘門硬擋命中(rc 4,測試沒起)—— 不派 worker:" >&2
     printf '%s\n' "$S_MECH" | sed 's/^/auto-fix:   /' >&2
@@ -676,7 +644,7 @@ out = ["閘門硬擋命中(rc 4,測試沒起,所以紅榜是空的 —— 歸因
 out.append("**歸因到交件(worker)**:")
 out += ["- %s" % line for line in rows]
 out += ["", "交件本身不合:拿掉命中 hard_block 的改動 —— 在分支 %s 上修。" % branch, ""]
-out.append("接回(patch 留在分支 %s 上;**不要轉 Ready** —— 那會從頭派第 1 輪):" % branch)
+out.append("接回(commit 留在分支 %s 上;**不要轉 Ready** —— 那會從頭派第 1 輪):" % branch)
 out.append("1. 修分支 %s 上的交件並 commit(或主線決定重派)" % branch)
 out.append("2. `python3 scripts/ticket.py set %s state Running`" % ident)
 out.append("3. 在分支副本重跑閘門:`cd %s && sh scripts/gate.sh --branch --ticket %s`"
@@ -736,9 +704,9 @@ first_round_packet() {   # $1 = 派工文寫到哪  $2 = 模型
     rules_pack "$1" worker "$2" || return 1
     {
         printf '%s\n' "$RULES_TEXT"
-        python3 - "$ROOT" "$ID" "$TF" "$fr_fix" "$2" <<'PY'
+        python3 - "$ROOT" "$ID" "$TF" "$fr_fix" "$2" "$WTBASE" <<'PY'
 import json, os, sys
-root, ident, tf, fix, model = sys.argv[1:6]
+root, ident, tf, fix, model, wtbase = sys.argv[1:7]
 try:
     with open(tf, encoding="utf-8") as handle:
         ticket = json.load(handle)
@@ -752,7 +720,9 @@ print("")
 print("你是 **role=worker** 的實作者,**短命**:交付那一回合結束,不會再被叫醒。")
 print("")
 print("## 權威票面快照")
-print("以下 JSON 與 `$AC_ROOT/%s` 是這一輪現況；`work/%s` 來自 base_sha，可能是歷史版本，不能用它推翻本快照。"
+branch = ticket.get("branch") or "t%s" % ident
+wt = os.path.join(wtbase, branch)
+print("以下 JSON 與 `$AC_ROOT/%s` 是這一輪現況；worktree 裡的 `%s` 是分支上的版本，不能用它推翻本快照。"
       % (os.path.join("tickets", "%s.json" % ident),
          os.path.join("tickets", "%s.json" % ident)))
 print("```json")
@@ -762,32 +732,25 @@ print("")
 print("## 這張票獨有的四件事")
 print("1. **票號**:#%s" % ident)
 print("2. **base sha**:`%s`(派工方已經 `git log --oneline -1` 對過)" % base)
-print("3. **副本路徑**:`%s/work`(改這個)、`%s/base`(一個字都不准動,它是 diff 的對照組)"
-      % (fix, fix))
-print("   兩個都這樣展:")
-print("   ```sh")
-print("   mkdir -p %s/base %s/work" % (fix, fix))
-print("   git -C %s archive %s | tar -x -C %s/base" % (root, base, fix))
-print("   git -C %s archive %s | tar -x -C %s/work" % (root, base, fix))
-print("   ```")
-print("   副本裡**沒有 `.git`**:想 git 寫入也寫不了,而票閘門的 `--branch` 在那裡是空閘門。")
+print("3. **你的 worktree**:`%s`(票分支 `%s`,派工方已建好,cwd 就是它)" % (wt, branch))
+print("   在這裡改、`git add` / `git commit`(可多個 commit,訊息帶 `t%s`)。" % ident)
+print("   交件 = 分支相對派工前多了至少一個 commit **而且工作樹乾淨**;沒 commit 的改動不算交件,"
+      "腳本不替你 commit。")
+print("   不碰 main、不 push、不 merge / rebase 進 main、不動別的分支、不 worktree add / remove。")
 print("4. **回報對象**:派工的那一條主線 session。")
 print("")
-print("## 你要交的兩樣(放在 `%s`)" % fix)
-print("1. `patch-round1.diff` —— `cd %s && diff -ruN -x __pycache__ -x '*.pyc' base work > patch-round1.diff`"
-      % fix)
-print("   檔頭只准 `base/…` / `work/…` 的相對形式(絕對路徑 `apply.sh` 檔頭秒退);"
-      "刪檔的 `+++` 側要改成 `/dev/null`。")
-print("2. `EVIDENCE-round1.md` —— 必備五段(見角色卡)+ 記憶段 + 檔尾一塊 ```result` JSON。")
+print("## 你要交的兩樣")
+print("1. 票分支 `%s` 上的 commit(閘門在同一個 worktree 跑)。" % branch)
+print("2. `%s/EVIDENCE-round1.md`(worktree 外的輪次目錄,不進 repo)—— 必備五段(見角色卡)"
+      "+ 記憶段 + 檔尾一塊 ```result` JSON。" % fix)
 print("   主線收件那一手是:")
 print("   ```sh")
-print("   sh scripts/apply.sh %s %s/patch-round1.diff --evidence %s/EVIDENCE-round1.md"
-      % (ident, fix, fix))
+print("   sh scripts/apply.sh %s --evidence %s/EVIDENCE-round1.md" % (ident, fix))
 print("   ```")
 print("   它會抽出 `result-round1.json`,並把 EVIDENCE 裡的 `OBJECTION:` 行記進票的 `objections[]`。")
 print("")
 print("## 回報格式")
-print("① patch 絕對路徑 + diffstat;② 閘門指令、`Ran N`、`rc=`(**判綠只看 rc**);"
+print("① 分支頭 sha + `git diff --stat <base sha>..HEAD`;② 測試指令、`Ran N`、`rc=`(**判綠只看 rc**);"
       "③ 變異驗紅表;④ 已排除的假設;⑤ 最小重現。")
 print("**測試一律前景跑加 timeout** —— 把整套丟背景後結束回合 = 什麼都沒交。")
 print("")
@@ -802,7 +765,7 @@ PY
 # 驗證者的派工文**只有一種組法**(#51,C3):`rules.py pack verifier` + `templates/dispatch-verifier.md`
 # 逐格填好。第 1 輪(needs_verifier)與 test_defect 那條路共用;後者只在尾巴多一段紅榜。
 # 以前 test_defect 那條路是一段內嵌文字 —— 人讀的範本與腳本餵的派工文是兩份,少了哪一格沒有人看得出來。
-verifier_packet() {   # $1 = 派工文寫到哪  $2 = 第幾輪  $3 = 驗證者副本根  $4 = base sha  $5 = worker 的 patch(非空 = 等 patch 才起,#60)
+verifier_packet() {   # $1 = 派工文寫到哪  $2 = 第幾輪  $3 = 驗證者副本根  $4 = base sha  $5 = 票分支(非空 = 等 worker 交件才起,#60)
     vp_template=""
     for candidate in "$ROOT/templates/dispatch-verifier.md" "$AC/../templates/dispatch-verifier.md"; do
         [ -f "$candidate" ] && { vp_template=$candidate; break; }
@@ -838,7 +801,7 @@ PY
         if [ -n "${5:-}" ]; then
             echo ""
             echo "## 介面以分支上的實作為準(#60:這張票 interface_fixed 不是 true)"
-            echo "你是在 worker 第 $2 輪交出 patch 之後才起的:介面以分支上的實作為準(worker 的 patch 在 \`$5\`,讀它、不要套進你的 work/)。"
+            echo "你是在 worker 第 $2 輪交件之後才起的:介面以分支上的實作為準(worker 的 commit 在分支 \`$5\`:\`git -C $ROOT diff $4..$5\` 讀它、不要套進你的 work/)。"
             echo "票面寫法與實作衝突時照實作、在 EVIDENCE 記一行(票面怎麼寫、實作怎麼做、你照哪個寫了案例)。"
         fi
         only_tests_section
@@ -850,7 +813,7 @@ PY
 # 開題端的自檢(D-031)已經擋,既有的票多半沒有這一格。
 # 設定 V_WANT(1 / 空)、V_BASE(票的 base_sha,驗證者副本從它展開)與 V_PARALLEL:
 # 票 `interface_fixed` 是 JSON `true` 才與 worker 平行起(#60,D-H38 ②);false / 缺 ⇒ 等 worker
-# 第 1 輪交出 patch 才起 —— 介面沒釘死的票,驗證者照票面猜的介面寫案例,worker 做出來的是另一個。
+# 第 1 輪交件(票分支有了新 commit)才起 —— 介面沒釘死的票,驗證者照票面猜的介面寫案例,worker 做出來的是另一個。
 verifier_wanted() {   # $1 = 第幾輪(預設 1)
     vw_round=${1:-1}
     eval "$(python3 - "$TF" <<'PY'
@@ -1034,7 +997,7 @@ first_round_dispatch() {
         VERIFIER_MODEL=$R_MODEL
         fr_vdispatch=$(dirname "$fr_dispatch")/dispatch-verifier-round1.md
         fr_after=""
-        [ -n "$V_PARALLEL" ] || fr_after=$WTBASE/fix-t$ID/round1/patch-round1.diff
+        [ -n "$V_PARALLEL" ] || fr_after=$(ticket_branch)
         verifier_packet "$fr_vdispatch" 1 "$WTBASE/verify-t$ID/round1" "$V_BASE" "$fr_after" \
             || return 6
         echo "auto-fix: 第 1 輪驗證者派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$fr_vdispatch" "$ROOT")" >&2
@@ -1094,9 +1057,8 @@ PY
     # 先選第 1 輪的 worker:票 / config 的 effort 不合候選的 tool 要在動票之前停(#114 A8),
     # 而底下換 base_sha 就是動票。
     route_round 1
-    # **base 落後主線就換成主線的頭**(#57)。第 1 輪的 patch 由 `apply.sh` 套在**從主線開**
-    # 的分支上;副本卻從票的舊 base_sha 展開的話,worker 對著舊樹寫、`git apply --check`
-    # 在主線上整輪停住。只在「還沒有分支、還沒有任何一輪」時換 —— 有分支就有人在上面
+    # **base 落後主線就換成主線的頭**(#57)。第 1 輪的票分支**從主線開**(`ticket_worktree`),
+    # base_sha 留著舊的話,票上的對照組與 worker 手上的樹不是同一版。只在「還沒有分支、還沒有任何一輪」時換 —— 有分支就有人在上面
     # 做過事,換 base 等於改寫它的對照組。`--dry-run` 不動票,只說一聲。
     MAIN_HEAD=$(git -C "$ROOT" rev-parse -q --verify "$MAIN^{commit}" 2>/dev/null || echo "")
     if [ -n "$MAIN_HEAD" ] && [ -n "$T_BASE" ] \
@@ -1164,8 +1126,6 @@ fi
 # 第 1 輪在上面已經選過(要趕在換 base_sha 之前);其餘照狀態檔的輪數選。
 [ -n "${W_ROUND:-}" ] || route_round $(( ${S_ROUND:-0} + 1 ))
 pick_verifier
-# 票的分支名**只有一個來源:票的 `branch` 欄**(#53,D-018;`apply.sh` 開分支時填)。
-# 空著才退回 `t<n>` —— 下游專案用 `t<n>-<slug>` 的票,寫死 `t$ID` 就找不到分支。
 # 只有 complex 的票做完後覆核(#136;沒標 = simple)。判準是 `ticket.py` 的 `needs_review`,
 # review.sh / land / close 問的也是它。
 needs_review() {
@@ -1182,17 +1142,6 @@ sys.exit(0 if ticket_mod.needs_review(row) else 1)
 PY
 }
 
-ticket_branch() {
-    python3 - "$TF" "t$ID" <<'PY'
-import json, sys
-try:
-    with open(sys.argv[1], encoding="utf-8") as handle:
-        name = json.load(handle).get("branch")
-except (OSError, ValueError):
-    name = None
-print(name or sys.argv[2])
-PY
-}
 WT=$WTBASE/$(ticket_branch)
 
 # 起一個 agent(worker / 驗證者)**只有這一條路**(#87 A9–A14)。
@@ -1202,8 +1151,8 @@ WT=$WTBASE/$(ticket_branch)
 # `memory.py check`、`ticket.py create`、`rules.py pack`,事件、票、收件匣就寫進主 repo 的
 # 真看板,而且不報錯。現在每一次起 agent 都在 `<副本根>/control` 開一顆**拋棄式控制根**
 # (config + 這張票 + 派工文的複本),`AC_ROOT` 指它;`AC_CONTROL_DIR`、`AC_TICKETS_DIR` 與
-# 任何值落在主 repo 底下的 `AC_*` 一律不帶。控制根在 `work/` 旁邊、不在裡面 —— 副作用
-# 不會變成 patch 的一部分。agent 在副本跑 `gate.sh --branch --ticket <n>` 讀得到票(那份
+# 任何值落在主 repo 底下的 `AC_*` 一律不帶。控制根在 `work/` 與 worker 的 worktree 外面 ——
+# 副作用不會變成交件的一部分。agent 跑 `gate.sh --branch --ticket <n>` 讀得到票(那份
 # 複本),狀態檔與收件匣落在控制根。auto-fix 自己起的閘門照舊帶主 repo 的 `AC_ROOT`。
 #
 # ## 逾時收整棵樹
@@ -1213,14 +1162,15 @@ WT=$WTBASE/$(ticket_branch)
 #
 # ## 開題者不隔離(#89)
 # 角色 `opener` 要改**真票**:cwd 與 `AC_ROOT` 都是主 repo 根、`AC_ROLE=opener`,不開控制根;
-# 時限由第 8 個參數給(`opener.timeout_seconds`)。worker / 驗證者在副本的 `work/` 裡起
-# (session 的 cwd 就是它,接回要在同一個目錄),`AC_WORK` 照舊指副本根。
-run_agent() {   # $1 = 命令 $2 = 派工文 $3 = 副本根 $4 = 角色 $5 = 第幾輪 $6 = log $7 = 1:tee+pid 檔 $8 = 時限;印出 rc
+# 時限由第 8 個參數給(`opener.timeout_seconds`)。驗證者在副本的 `work/` 裡起;worker 在第 9 個
+# 參數給的票分支 worktree 裡起(#144,D-054 Q9:它自己 commit)。session 的 cwd 就是起的那個目錄,
+# 接回要在同一個目錄;`AC_WORK` 照舊指副本根(worker 那一份是輪次目錄,EVIDENCE 寫在那裡)。
+run_agent() {   # $1 = 命令 $2 = 派工文 $3 = 副本根 $4 = 角色 $5 = 第幾輪 $6 = log $7 = 1:tee+pid 檔 $8 = 時限 $9 = worker 的 worktree;印出 rc
     python3 - "$1" "$2" "$3" "${8:-$WORKER_TIMEOUT}" "$ID" "$5" "$6" "$4" "${7:-}" \
-        "$ROOT" "$MAINROOT" "$TF" <<'PY'
+        "$ROOT" "$MAINROOT" "$TF" "${9:-}" <<'PY'
 import hashlib, json, os, shlex, shutil, signal, subprocess, sys, threading, time
 (cmd, dispatch, cwd, timeout, ident, r, log_path, role, tee_flag,
- root, mainroot, ticket_file) = sys.argv[1:13]
+ root, mainroot, ticket_file, worktree) = sys.argv[1:14]
 LABEL = {"worker": "worker ", "verifier": "驗證者", "opener": "開題者"}.get(role, role + " ")
 # 指著控制面的三格一律不帶;其餘 `AC_*` 只要值是主 repo 根或它底下的絕對路徑也不帶。
 CONTROL_KEYS = ("AC_ROOT", "AC_CONTROL_DIR", "AC_TICKETS_DIR")
@@ -1337,6 +1287,8 @@ def tee(stream, log):
 # 接不上的第一個 commit 記成 `unattributed`。票的 land 與 docs 通道(channel=docs)同一套,工作樹照查。
 # push 失敗的 land.fail 帶 stage=push 與齊全的 sha / main_before / stamp(#128 A4)也算一段:commit 已在本機 main。
 # 主線可寫前綴(config `guard_main_paths`,缺 = docs 通道三前綴,#128 A1)底下的改動只記不擋,列進 `main_side`。
+# 分支 ref(#144):`refs/heads` 底下每一條的頭也拍(主 worktree 的那一條由 HEAD 那一格管);這張票的分支
+# 與 worker 的 worktree 是它自己的、不算;land 的 `land/<stamp>` 有同 stamp 的 land.start 就歸屬給那次落地。
 # 越界寫 `<log 去掉 .log>.guard.json`、rc 印 8;只有 main_side 或 push 失敗的那一段時 guard.json 照寫、
 # violations 空、rc 不動。
 # **只查列出來的地方**:主 repo 被 .gitignore 掉的檔與 hard_block.dirs 以外,這裡不宣稱看過。
@@ -1353,6 +1305,8 @@ def guard_conf():
     repo = mainroot or root
     exempt = [os.path.realpath(os.path.join(root, str(conf.get(key) or default)))
               for key, default in RELATIVE_DEFAULTS] + [os.path.realpath(cwd)]
+    if worktree:
+        exempt.append(os.path.realpath(worktree))
     block = conf.get("hard_block") if isinstance(conf.get("hard_block"), dict) else {}
     dirs = block.get("dirs") or []
     if not isinstance(dirs, list) or not all(isinstance(item, str) for item in dirs):
@@ -1395,8 +1349,13 @@ def git_out(repo, *args):
 def guard_snapshot(repo, dirs):
     top = git_out(repo, "rev-parse", "--show-toplevel")
     snap = {"top": top.decode().strip() if top else None, "tree": None, "dirs": {},
-            "head": None, "branch": None}
+            "head": None, "branch": None, "refs": {}}
     if snap["top"]:
+        refs = git_out(repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads")
+        for line in (refs or b"").decode("utf-8", "surrogateescape").splitlines():
+            name, _, sha = line.rpartition(" ")
+            if name:
+                snap["refs"][name] = sha
         head = git_out(repo, "rev-parse", "-q", "--verify", "HEAD")
         branch = git_out(repo, "symbolic-ref", "-q", "HEAD")
         snap["head"] = head.decode().strip() if head else "(no commit)"
@@ -1529,6 +1488,17 @@ def guard_verdict(before, repo, exempt, dirs, events, mains, agent_rc):
         else:
             found.append({"path": "HEAD", "before": before["head"], "after": after["head"],
                           "unattributed": stray})
+    skip = {before["branch"], after["branch"], own_ref}
+    for name in sorted(set(before["refs"]) | set(after["refs"])):
+        was, now = before["refs"].get(name, "absent"), after["refs"].get(name, "absent")
+        if was == now or name in skip:
+            continue
+        stamp = name[len("refs/heads/land/"):] if name.startswith("refs/heads/land/") else ""
+        if stamp and any(row.get("kind") == "land.start" and row.get("stamp") == stamp
+                         for row in land_rows(events)):
+            notes.append("%s %s -> %s 歸屬於同時的 land stamp=%s" % (name, was[:12], now[:12], stamp))
+            continue
+        found.append({"path": name, "before": was, "after": now})
     for top in dirs:
         was, now = before["dirs"].get(top, {}), after["dirs"].get(top, {})
         for path in sorted(set(was) | set(now)):
@@ -1562,6 +1532,13 @@ if role != "opener":
         os.remove(guard_path)
     guard_repo, guard_exempt, guard_dirs, guard_events, guard_mains = guard_conf()
     guarded = guard_snapshot(guard_repo, guard_dirs)
+# 這張票自己的分支(#144,票的 `branch` 欄,沒寫 = `t<n>`):worker 在 worktree 裡 commit 是交件,
+# 不是越界 —— 與它平行跑的驗證者那一份快照也看得到這條分支在動,所以整張票的 agent 都不算它。
+try:
+    with open(ticket_file, encoding="utf-8") as handle:
+        own_ref = "refs/heads/" + (json.load(handle).get("branch") or "t%s" % ident)
+except (OSError, ValueError):
+    own_ref = "refs/heads/t%s" % ident
 
 # `worker.pid` 住在副本根(#46):下一輪收前幾輪副本之前先問它還活著沒有。回來了就刪掉,
 # 留著的那一份只會是「auto-fix 被砍了、worker 還在跑」的那一種。
@@ -1575,7 +1552,7 @@ try:
     else:
         where, copy = control_root()
         env = agent_env(where, copy)
-        start_in = os.path.join(cwd, "work")
+        start_in = worktree or os.path.join(cwd, "work")
         if not os.path.isdir(start_in):
             start_in = cwd
         cmd, agy = command_for_agent(cmd, copy)
@@ -1689,32 +1666,31 @@ verifier_fallback() {   # $1 = 重組派工文的函式;回 0 = 不用換或已�
     return 0
 }
 
-# 驗證者那一手停下(V_STOP)而 worker 這一輪已經跑過:它的交付先收進 reports、cost 照記,副本留著;
+# 驗證者那一手停下(V_STOP)而 worker 這一輪已經跑過:它的 commit 留在分支、EVIDENCE 先收進 reports、
+# cost 照記,worktree 與副本留著;
 # 設定 ROUND_RC。交給 Controller 的不轉 Blocked、不發頁(同 worker 那一支,接續的是它)。
 verifier_halt() {
-    collect_from_copy "$FIX" "patch-round$r.diff" "EVIDENCE-round$r.md"
-    for name in "patch-round$r.diff" "EVIDENCE-round$r.md"; do
-        [ ! -f "$FIX/$name" ] || cp "$FIX/$name" "$(dirname "$DISPATCH")/"
-    done
-    if [ -f "$FIX/patch-round$r.diff" ]; then worker_cost handed-in; else worker_cost error; fi
+    [ ! -f "$FIX/EVIDENCE-round$r.md" ] || cp "$FIX/EVIDENCE-round$r.md" "$(dirname "$DISPATCH")/"
+    worker_delivery
+    if [ -n "$W_HANDED" ]; then worker_cost handed-in; else worker_cost error; fi
     case $V_STOP in
         guard) ;;
         exhausted) attempt_failed quota-exhausted; ROUND_RC=7 ;;
         handed)
-            echo "auto-fix: 第 $r 輪的驗證者交給 Controller 接續 —— worker 的交付收在 $(dirname "$DISPATCH")/,副本 $FIX 留著"
+            echo "auto-fix: 第 $r 輪的驗證者交給 Controller 接續 —— worker 的 commit 在分支 $(ticket_branch),worktree $WT 留著"
             ROUND_RC=7 ;;
         packet) attempt_failed verifier-no-patch; ROUND_RC=6 ;;
         *) attempt_failed route-refused; ROUND_RC=2 ;;
     esac
 }
 
-v_packet() {   # 這一輪(平行 / 等 patch)驗證者的派工文;換候選重起時照新模型重組
-    verifier_packet "$VDISPATCH" "$r" "$VFIX" "$V_BASE" "${V_HELD:+$FIX/patch-round$r.diff}"
+v_packet() {   # 這一輪(平行 / 等交件)驗證者的派工文;換候選重起時照新模型重組
+    verifier_packet "$VDISPATCH" "$r" "$VFIX" "$V_BASE" "${V_HELD:+$(ticket_branch)}"
 }
 
-# **與 worker 平行**(#51 C2)只在票 `interface_fixed=true`(#60):驗證者不等 patch(D-020),
+# **與 worker 平行**(#51 C2)只在票 `interface_fixed=true`(#60):驗證者不等 worker(D-020),
 # 所以在 worker 派出**之前**就起跑,worker 回來之後 `wait_verifier` 才收。其餘的票在 worker
-# 第 1 輪交出 patch 之後才起、起了就收 —— 同一支、同一個副本做法,只差起跑的時機。
+# 第 1 輪交件之後才起、起了就收 —— 同一支、同一個副本做法,只差起跑的時機。
 # 副本是票的 base_sha(`git archive`,與 test_defect 那條路一樣是 {work,base} 兩份)。
 start_verifier_bg() {   # uses r/VFIX/VDISPATCH;設定 VPID/VLOG/VRC_FILE/VSTART
     rm -rf "$VFIX"
@@ -1730,7 +1706,7 @@ start_verifier_bg() {   # uses r/VFIX/VDISPATCH;設定 VPID/VLOG/VRC_FILE/VSTART
     if [ -n "$V_PARALLEL" ]; then
         echo "auto-fix: needs_verifier + interface_fixed —— 第 $r 輪的驗證者先起跑(背景,副本 $VFIX)"
     else
-        echo "auto-fix: needs_verifier —— worker 交了 patch-round$r.diff,第 $r 輪的驗證者現在起跑(副本 $VFIX)"
+        echo "auto-fix: needs_verifier —— worker 第 $r 輪交件了,驗證者現在起跑(副本 $VFIX)"
     fi
     VCMD=$(session_open verifier "$VERIFIER_CMD" "$VFIX" "$r" "$VERIFIER_MODEL")
     ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" ${V_EFFORT:+--kv effort=$V_EFFORT} \
@@ -1781,14 +1757,13 @@ dispatch_verifier() {   # uses r/FIX/DISPATCH/line/GAP_ROUND; sets PATCH_OUT/EVI
         cp "$VEVIDENCE" "$VKEPT_EVIDENCE" 2>/dev/null || VKEPT_EVIDENCE=""
         echo "auto-fix: 平行驗證者的交付先收進 reports —— $(basename "$VKEPT_PATCH")、$(basename "${VKEPT_EVIDENCE:-(沒有 EVIDENCE)}")"
     fi
-    # **副本 = 分支 + 本輪 worker 的 patch**(#107)。不從 `$FIX/base` 拷:那一份不含 worker 的
-    # 改動(案例要照的實作不在),而且 worker 收副本時可能已經刪了它(專案 #751)。
-    # worker 的 diff 是對 `$SRC`(round_once 展副本用的那一版)出的,所以從同一版展。
+    # **副本 = 票分支現在的頭**(#107、#144):worker 本輪交了 commit 就從票分支展(案例要照的實作
+    # 在上面);沒交(只派驗證者的那一輪、worker 沒 commit)才照 `$SRC`(round_once 那一版)。
     # 平行驗證者交過件的話 work/ 再加它的案例(#112):patch-verify 對 base/ 出,自然帶著它們。
     # `--dry-run`(只派驗證者的那一輪走得到)同 round_once(#96):副本已經在就原封不動。
-    WPATCH=""
-    [ ! -f "$PATCH_OUT" ] || WPATCH=$PATCH_OUT
-    vfix_next="讀 worker 的 patch 與 EVIDENCE:patch 要對分支 $SRC 出;要嘛重派 worker,要嘛人下場"
+    V_SRC=$SRC
+    [ -z "${W_HANDED:-}" ] || V_SRC=$(ticket_branch)
+    vfix_next="讀 worker 的 EVIDENCE 與分支 $V_SRC;要嘛重派 worker,要嘛人下場"
     VFIX_KEPT=""
     vfix_why=""
     if [ -n "$DRY" ] && [ -e "$VFIX" ]; then
@@ -1797,26 +1772,23 @@ dispatch_verifier() {   # uses r/FIX/DISPATCH/line/GAP_ROUND; sets PATCH_OUT/EVI
     else
         rm -rf "$VFIX"
         mkdir -p "$VFIX/base"
-        if ! git -C "$ROOT" archive "$SRC" 2>/dev/null | tar -x -C "$VFIX/base"; then
-            vfix_why="取不出 $SRC"
-        elif [ -n "$WPATCH" ] && ! ( cd "$VFIX/base" \
-                && patch -p1 -E -f -F 0 --no-backup-if-mismatch -s -i "$WPATCH" </dev/null ) >&2; then
-            vfix_why="worker 的 patch($WPATCH)套不上 $SRC"
+        if ! git -C "$ROOT" archive "$V_SRC" 2>/dev/null | tar -x -C "$VFIX/base"; then
+            vfix_why="取不出 $V_SRC"
         else
             cp -R "$VFIX/base" "$VFIX/work"
             if [ -n "$VKEPT_PATCH" ] && ! ( cd "$VFIX/work" \
                     && patch -p1 -E -f -F 0 --no-backup-if-mismatch -s -i "$VKEPT_PATCH" </dev/null ) >&2; then
-                vfix_why="平行驗證者的 patch-verify($VKEPT_PATCH)套不上分支 + worker 的 patch"
-                vfix_next="對照它與 worker 的 patch 哪幾個檔撞了;要嘛人下場併,要嘛重派"
+                vfix_why="平行驗證者的 patch-verify($VKEPT_PATCH)套不上分支 $V_SRC"
+                vfix_next="對照它與分支上 worker 的 commit 哪幾個檔撞了;要嘛人下場併,要嘛重派"
             fi
         fi
     fi
     if [ -n "$vfix_why" ]; then
         echo "auto-fix: 驗證者的副本建不出來 —— $vfix_why;驗證者不起" >&2
         rm -rf "$VFIX/base" "$VFIX/work"
-        [ -n "${FIX_KEPT:-}" ] || shed_copies "$FIX"
+        [ -n "${FIX_KEPT:-}" ] || shed_copies "$FIX" "$WT"
         block "#$ID 第 $r 輪驗證者的副本建不出來($vfix_why)"
-        post "驗證者的副本建不出來" "$vfix_why,驗證者沒起。$vfix_next" "${WPATCH:-$FIX}"
+        post "驗證者的副本建不出來" "$vfix_why,驗證者沒起。$vfix_next" "$FIX"
         return 1
     fi
     VDISPATCH=$(dirname "$DISPATCH")/dispatch-verifier-round$r.md
@@ -1851,12 +1823,12 @@ dispatch_verifier() {   # uses r/FIX/DISPATCH/line/GAP_ROUND; sets PATCH_OUT/EVI
     collect_from_copy "$VFIX" patch-verify.diff EVIDENCE-verifier.md
     PATCH_OUT=$VFIX/patch-verify.diff
     EVIDENCE=$VFIX/EVIDENCE-verifier.md
-    # 驗證者那條路也要留痕跡,**而且在「沒交 patch 就回去」之前** —— 沒交的那一次
+    # 驗證者那條路也要留痕跡,**而且在「驗證者沒交件就回去」之前** —— 沒交的那一次
     # 正是最需要一份「沒交」的檔的那一次。
     harvest_result "$EVIDENCE" \
         "$(dirname "$DISPATCH")/result-verifier-round$r.json" verifier "$r"
     shed_copies "$VFIX"
-    shed_copies "$FIX"
+    shed_copies "$FIX" "$WT"
     if [ "$VWRC" -ne 0 ] || [ ! -f "$PATCH_OUT" ]; then
         block "#$ID 第 $r 輪的驗證者沒交出 patch-verify"
         post "驗證者沒交出 patch-verify" \
@@ -1871,10 +1843,10 @@ dispatch_verifier() {   # uses r/FIX/DISPATCH/line/GAP_ROUND; sets PATCH_OUT/EVI
 # 換候選重起時照新模型重組(#132)。
 vd_packet() {
     verifier_packet "$VDISPATCH" "$r" "$VFIX" "$S_BASE" || return 1
-    python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "${line:-}" "$WPATCH" "$VKEPT_PATCH" \
+    python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "${line:-}" "${W_HANDED:+$V_SRC}" "$VKEPT_PATCH" \
             "${GAP_ROUND:+gap}" "${V_HAS_BASELINE:-}" >> "$VDISPATCH" <<'PY'
 import os, sys
-root, ident, run_id, r, objection, wpatch, kept, mode, has_baseline = sys.argv[1:10]
+root, ident, run_id, r, objection, branch, kept, mode, has_baseline = sys.argv[1:10]
 sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import status
 
@@ -1893,12 +1865,12 @@ if mode == "gap":
     print("\n上一輪閘門的紅榜只有缺口列(kind=GAP):這一輪不派 worker,只派你補案例。")
 else:
     print("\n產品 worker 提出:`%s`" % objection)
-if wpatch:
-    print("副本 = **分支上那一版 + 本輪 worker 的 patch**(`%s`;base/ 與 work/ 都已含它);"
-          "只修案例,不改產品程式。" % wpatch)
-    print("patch-verify 要對這份副本的 base/ 出(增量:只有你改的案例);收件時依序套 worker 那份與你這份。")
+if branch:
+    print("副本 = **分支 `%s` 現在的頭**(本輪 worker 的 commit 都在上面;base/ 與 work/ 都已含它);"
+          "只修案例,不改產品程式。" % branch)
+    print("patch-verify 要對這份副本的 base/ 出(增量:只有你改的案例);收件時在分支上補一個 commit。")
 else:
-    print("副本是**分支上**那一版(前幾輪的 patch 都在);只修案例,不改產品程式。")
+    print("副本是**分支上**那一版(前幾輪的 commit 都在);只修案例,不改產品程式。")
 if kept:
     print("work/ 另含本輪平行驗證者交的案例(`%s`,base/ 沒有):它們隨你的 patch-verify 進分支,"
           "留著、不要刪。" % kept)
@@ -1923,7 +1895,7 @@ run_worker() {   # $1 = 命令  $2 = 派工文;設定 WRC、WORKER_LOG 由呼叫
     ev agent.start --ticket "$ID" --role worker --model "$WORKER_MODEL" \
         --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix ${T_EFFORT:+--kv effort=$T_EFFORT}
     WSTART=$(date +%s)
-    WRC=$(run_agent "$1" "$2" "$FIX" worker "$r" "$WORKER_LOG" 1)
+    WRC=$(run_agent "$1" "$2" "$FIX" worker "$r" "$WORKER_LOG" 1 "" "$WT")
     if [ "$WRC" -eq 0 ]; then
         ev agent.done --ticket "$ID" --role worker --model "$WORKER_MODEL" \
             --kv run_id="$RUN_ID" --kv round="$r" --kv rc="$WRC" --kv agent=auto-fix \
@@ -2145,7 +2117,6 @@ PY
     # 第一段的證據改名留著,續做那一份不蓋掉它。
     OBJ_EVIDENCE=$FIX/EVIDENCE-round$r-objection.md
     mv "$EVIDENCE" "$OBJ_EVIDENCE"
-    [ ! -f "$PATCH_OUT" ] || mv "$PATCH_OUT" "$FIX/patch-round$r-objection.diff"
     # 開題者改了票(state_version 前進):重讀現況再寫,不帶舊版本。
     python3 - "$TF" "$ID" "$line" "$TRIAGE_VERDICT" "$TRIAGE_REASON" "$r" "$OBJ_EVIDENCE" <<'PY'
 import json, os, subprocess, sys
@@ -2220,7 +2191,7 @@ PY
     RDISPATCH=$(dirname "$DISPATCH")/dispatch-resume-round$r.md
     {
         echo "## 被接回"
-        echo "你是 #$ID 第 $r 輪**同一個** worker session,被接回在原副本續做(\`$FIX\`,不換輪)。"
+        echo "你是 #$ID 第 $r 輪**同一個** worker session,被接回在同一個 worktree 續做(\`$WT\`,不換輪)。"
         echo "你的反駁:\`$line\`"
         if [ "$TRIAGE_VERDICT" = accepted ]; then
             echo "開題者判 accepted:$TRIAGE_REASON"
@@ -2234,7 +2205,7 @@ PY
             echo ""
             echo "照原票做,不要再提同一條反駁(同票第二次反駁直接轉主線)。"
         fi
-        echo "交件照原派工文:\`patch-round$r.diff\` 與 \`EVIDENCE-round$r.md\` 放在 \`$FIX\`(第一段的 EVIDENCE 已改名為 \`EVIDENCE-round$r-objection.md\`)。"
+        echo "交件照原派工文:在 \`$WT\` 的票分支 commit,\`EVIDENCE-round$r.md\` 放在 \`$FIX\`(第一段的 EVIDENCE 已改名為 \`EVIDENCE-round$r-objection.md\`)。"
     } > "$RDISPATCH"
     WORKER_LOG=$(dirname "$DISPATCH")/worker-resume-round$r.log
     echo "auto-fix: 接回第 $r 輪的 worker(session $(session_field worker session_id),cwd $(session_field worker cwd))"
@@ -2288,9 +2259,9 @@ worker_packet() {   # uses r/DISPATCH/MODEL/FIX;組這一輪 worker 的派工文
         fi
         {
             printf '%s\n' "$RULES_TEXT"
-            python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "$FIX" "$TF" <<'PY'
+            python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "$FIX" "$TF" "$WT" "$(ticket_branch)" <<'PY'
 import json, os, sys
-root, ident, run_id, r, fix, tf = sys.argv[1:7]
+root, ident, run_id, r, fix, tf, wt, branch = sys.argv[1:9]
 sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import status
 
@@ -2310,15 +2281,14 @@ print("```")
 print("")
 print("## 交接包 repair_context")
 print("- base_sha:`%s`" % (ctx.get("base_sha") or "?"))
-print("- 上一輪的 patch:`%s`(sha256 %s)"
-      % ((ctx.get("patch") or {}).get("path") or "(沒有)",
-         ((ctx.get("patch") or {}).get("sha256") or "")[:16]))
+print("- 上一輪的改動:票分支 `%s` 上的 commit(`git log <base_sha>..HEAD`,你的 worktree 就在它的頭)"
+      % branch)
 print("- 上一輪的 EVIDENCE:`%s`" % (ctx.get("prev_evidence") or "(沒有 —— 第一輪)"))
 print("- 主線重現用的指令(**你不要跑它** —— 它動的是主 repo 的閘門/worktree):`%s`(cwd `%s`)"
       % ((ctx.get("repro") or {}).get("cmd") or "?",
          (ctx.get("repro") or {}).get("cwd") or "?"))
-print("- 你在副本裡重現:照底下紅榜的 case 名單跑(例 `python3 -m unittest <模組>.<類>.<案例>`,"
-      "cwd 是副本裡那個測試模組所在的目錄);修好後跑同一組再交,整套留給閘門。")
+print("- 你在 worktree 裡重現:照底下紅榜的 case 名單跑(例 `python3 -m unittest <模組>.<類>.<案例>`,"
+      "cwd 是 worktree 裡那個測試模組所在的目錄);修好後跑同一組再交,整套留給閘門。")
 print("- 這是第 %s 輪,上限 %s 輪" % (r, int(snap.get("retry_limit") or 2) + 1))
 print("")
 print("## 紅榜(逐條,excerpt ≤ 20 行)")
@@ -2365,22 +2335,22 @@ for row in objections:
     print("  - 處置:%s" % (row.get("disposition") or "**還沒處置**"))
     print("  - 主線裁示 follow_up:%s" % (row.get("follow_up") or "(沒有)"))
 print("")
-print("## 副本")
-print("- `%s/work` —— 改這個(上一輪的 patch 已經套進去了)" % fix)
-print("- `%s/base` —— 一個字都不准動,它是 diff 的對照組" % fix)
+print("## 你的 worktree")
+print("- `%s`(票分支 `%s`,cwd 就是它;上一輪的 commit 都在上面)" % (wt, branch))
+print("- 在這裡改、`git add` / `git commit`;交件 = 分支多了至少一個 commit **而且工作樹乾淨**,"
+      "沒 commit 的改動不算交件(腳本不替你 commit)")
+print("- 不碰 main、不 push、不 merge / rebase 進 main、不動別的分支、不 worktree add / remove")
 print("")
-print("## 你要交的兩樣(放在 `%s`)" % fix)
-print("1. `patch-round%s.diff` —— `cd %s && diff -ruN base work > patch-round%s.diff`"
-      % (r, fix, r))
-print("   檔頭只准 `base/…` / `work/…` 的相對形式;刪檔的 `+++` 側要改成 `/dev/null`。")
-print("2. `EVIDENCE-round%s.md` —— 必備五段(見角色卡),其中**已排除的假設**那一段"
-      % r)
+print("## 你要交的兩樣")
+print("1. 票分支 `%s` 上的 commit(訊息帶 `t%s`)。" % (branch, ident))
+print("2. `%s/EVIDENCE-round%s.md`(worktree 外的輪次目錄)—— 必備五段(見角色卡),其中**已排除的假設**那一段"
+      % (fix, r))
 print("   決定下一輪的人要不要把你查過的路再查一次。")
 print("")
 print("## 票寫錯 / 需要裁示怎麼說")
 print("在 EVIDENCE 裡寫**一行**:`OBJECTION: <ticket-wrong|test_defect|blocking> <一句話>`。")
 print("看到這一行,這支腳本會把它記成票的 `objections[]`、交給開題者判(判完可能把你接回"
-      "原副本續做;判不了才轉 Blocked 指派主線),**不會**再派下一輪。")
+      "同一個 worktree 續做;判不了才轉 Blocked 指派主線),**不會**再派下一輪。")
 print("**不准**放寬既有斷言、不准把期望值改成程式現在印的東西(那是假綠家族)。")
 PY
             only_tests_section
@@ -2388,35 +2358,57 @@ PY
     fi
 }
 
+# 票分支的 worktree(#144,D-054 Q9):worker 的 cwd、閘門跑的地方、落地收的分支,同一個,
+# 從第 1 輪用到落地。已經在就沿用;分支在而 worktree 不在就掛上去;分支也沒有就從主線頭開
+# (第 1 輪的 base_sha 已升到主線頭,同一個起點)。
+ticket_worktree() {   # 設定 WT;建不出來回 1
+    WT=$WTBASE/$(ticket_branch)
+    [ -e "$WT/.git" ] && return 0
+    mkdir -p "$WTBASE"
+    if git -C "$ROOT" rev-parse -q --verify "refs/heads/$(ticket_branch)" >/dev/null; then
+        git -C "$ROOT" worktree add -q "$WT" "$(ticket_branch)" || return 1
+        echo "auto-fix: 沿用分支 $(ticket_branch),worktree $WT"
+    else
+        git -C "$ROOT" worktree add -q -b "$(ticket_branch)" "$WT" "$MAIN" || return 1
+        echo "auto-fix: 開了分支 $(ticket_branch) 與 worktree $WT(從 $MAIN)"
+    fi
+}
+
+# 交件判準(#144):票分支相對派工前多了至少一個 commit,而且 worktree 乾淨。未 commit 的改動
+# 不算交件 —— 不替 worker commit、不另擋(替它 commit 就是腳本替人決定交什麼)。閘門寫的
+# `gate.log*` 殘留不算改動(#57)。
+worker_delivery() {   # uses WT/W_BEFORE;設定 W_HANDED(1 = 交了)與 W_WHY(沒交的理由)
+    W_NEW=$(git -C "$WT" rev-list --count "$W_BEFORE..refs/heads/$(ticket_branch)" 2>/dev/null || echo 0)
+    W_DIRTY=$(git -C "$WT" status --porcelain --untracked-files=all 2>/dev/null \
+        | grep -vE '^\?\? gate\.log' | cut -c4- | head -5 | tr '\n' ' ')
+    W_DIRTY=${W_DIRTY% }
+    W_HANDED=""
+    W_WHY=""
+    if [ "${W_NEW:-0}" -lt 1 ]; then
+        W_WHY="票分支 $(ticket_branch) 相對派工前(${W_BEFORE%"${W_BEFORE#????????????}"})沒有新 commit${W_DIRTY:+;未 commit 的改動($W_DIRTY)不算交件}"
+    elif [ -n "$W_DIRTY" ]; then
+        W_WHY="分支多了 $W_NEW 個 commit,但 worktree 還有未 commit 的改動($W_DIRTY)—— 當作沒交"
+    else
+        W_HANDED=1
+    fi
+}
+
 round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
     r=$1
     FIX=$WTBASE/fix-t$ID/round$r
-    # **`base/` 是目前分支上的內容,不是 base_sha 的內容。**
-    # worker 交的 diff 下一步要餵給 `apply.sh` 套在**分支上**,而分支已經有前幾輪了
-    # —— 拿 base_sha 當對照組的話,第二輪的 patch 會宣稱自己在新建一個已經存在的檔,
-    # 而 `git apply --check` 會在那裡整輪停住。分支還不存在(第一輪就紅)才退回 base_sha。
+    # 驗證者副本與只派驗證者那一輪展的那一版:票分支已經有就是它(前幾輪 worker 的 commit 都在上面),
+    # 還沒有才退回 base_sha。
     SRC=${AC_FIX_SOURCE:-$(ticket_branch)}
     git -C "$ROOT" rev-parse -q --verify "$SRC^{commit}" >/dev/null || SRC=$S_BASE
-    # `--dry-run` 只印(#96):這一輪的副本已經在 —— worker 交的 patch、EVIDENCE、改到一半的
-    # work/ 都在裡面 —— 就原封不動,不刪、不重建。還沒有才照常展。
+    # 輪次目錄(#144):worker 的 EVIDENCE、拋棄式控制根與 worker.pid 住這裡,在 worktree 外 ——
+    # 不進 repo、不靠 .gitignore。`--dry-run` 只印(#96):已經在就原封不動。
     FIX_KEPT=""
     if [ -n "$DRY" ] && [ -e "$FIX" ]; then
         FIX_KEPT=1
-        echo "auto-fix: --dry-run —— 副本 $FIX 已經在,不刪、不重建"
+        echo "auto-fix: --dry-run —— 輪次目錄 $FIX 已經在,不刪、不重建"
     else
         rm -rf "$FIX"
-        mkdir -p "$FIX/base"
-        if ! git -C "$ROOT" archive "$SRC" 2>/dev/null | tar -x -C "$FIX/base"; then
-            echo "auto-fix: 取不出 $SRC 的副本 —— 這張票的 base 對不上這顆 repo" >&2
-            ROUND_RC=2
-            return 1
-        fi
-        cp -R "$FIX/base" "$FIX/work"
-        if [ "$SRC" = "$S_BASE" ] && [ -n "$S_PATCH" ] && [ -f "$S_PATCH" ]; then
-            ( cd "$FIX/work" && patch -p1 -F 2 --no-backup-if-mismatch -i "$S_PATCH" ) \
-                >/dev/null 2>&1 || echo "auto-fix: 上一輪的 patch 有幾塊沒套進副本(worker 要自己看)"
-        fi
-        echo "auto-fix: 副本 $FIX(base = $SRC)"
+        mkdir -p "$FIX"
     fi
 
     DISPATCH=$ROOT/$(cfg reports_dir reports)/t$ID/$RUN_ID/dispatch-round$r.md
@@ -2446,10 +2438,10 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
         [ "$r" -eq 1 ] || echo "auto-fix: #$ID needs_verifier=true 而 verify.baseline 是空的 —— 案例還沒交,第 $r 輪先派驗證者"
         VFIX=$WTBASE/verify-t$ID/round$r
         VDISPATCH=$(dirname "$DISPATCH")/dispatch-verifier-round$r.md
-        # 等 patch 才起的那一種(#60):底下 worker 沒走到交 patch 的每一頁都要說驗證者沒起,
+        # 等交件才起的那一種(#60):底下 worker 沒走到交件的每一頁都要說驗證者沒起,
         # 不然「沒起」與「起了、沒交」在 inbox 長得一樣。
         [ -n "$V_PARALLEL" ] \
-            || V_HELD="。驗證者沒起:票 interface_fixed 不是 true,要等 worker 第 $r 輪交出 patch 才起"
+            || V_HELD="。驗證者沒起:票 interface_fixed 不是 true,要等 worker 第 $r 輪交件才起"
         if ! v_packet; then
             ROUND_RC=6
             return 1
@@ -2465,10 +2457,16 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
         return 1
     fi
 
+    if ! ticket_worktree; then
+        echo "auto-fix: 票分支 $(ticket_branch) 的 worktree $WT 建不出來 —— 這一輪不派" >&2
+        ROUND_RC=2
+        return 1
+    fi
+    W_BEFORE=$(git -C "$WT" rev-parse HEAD)
     if [ -n "$IS_AGY" ]; then
-        echo "auto-fix: 起第 $r 輪的 worker —— $WORKER_CMD(cwd $FIX,stdin=/dev/null,提示指向派工文)"
+        echo "auto-fix: 起第 $r 輪的 worker —— $WORKER_CMD(cwd $WT,stdin=/dev/null,提示指向派工文)"
     else
-        echo "auto-fix: 起第 $r 輪的 worker —— $WORKER_CMD(cwd $FIX,派工文從 stdin 餵)"
+        echo "auto-fix: 起第 $r 輪的 worker —— $WORKER_CMD(cwd $WT,派工文從 stdin 餵)"
     fi
     [ -z "$T_EFFORT" ] || echo "auto-fix: effort 來源=$EFFORT_SRC $T_EFFORT"
     # 第 1 輪:票 Ready → Running(#40)。擺在 `--dry-run` 那一手**之後**(dry-run 不動票)、
@@ -2482,7 +2480,7 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
     echo "auto-fix: 逾時來源=$TIMEOUT_SRC $WORKER_TIMEOUT 秒" >&2
     [ -z "$V_WANT" ] || [ -z "$V_PARALLEL" ] || start_verifier_bg || true
     WORKER_LOG=$(dirname "$DISPATCH")/worker-round$r.log
-    run_worker "$(session_open worker "$WORKER_CMD" "$FIX" "$r" "$WORKER_MODEL")" "$DISPATCH"
+    run_worker "$(session_open worker "$WORKER_CMD" "$FIX" "$r" "$WORKER_MODEL" "$WT")" "$DISPATCH"
     # worker 回來了才收驗證者(#51 C2)—— 它比 worker 早回來的話這一手不用等。
     [ -z "$VPID" ] || wait_verifier
 
@@ -2534,7 +2532,7 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
         use_worker || { attempt_failed route-refused; ROUND_RC=2; return 1; }
         worker_packet || return 1
         WORKER_LOG=$(dirname "$DISPATCH")/worker-round$r-c$W_INDEX.log
-        run_worker "$(session_open worker "$WORKER_CMD" "$FIX" "$r" "$WORKER_MODEL")" "$DISPATCH"
+        run_worker "$(session_open worker "$WORKER_CMD" "$FIX" "$r" "$WORKER_MODEL" "$WT")" "$DISPATCH"
         if guard_stop "$WORKER_LOG"; then
             worker_cost error
             return 1
@@ -2546,59 +2544,47 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
         return 1
     fi
 
-    # 反駁判完接回的 worker(#89)交件後從這裡再走一次:同一輪、同一份副本。
+    # 反駁判完接回的 worker(#89)交件後從這裡再走一次:同一輪、同一個 worktree。
     while :; do
     if guard_stop "$WORKER_LOG"; then
         worker_cost error
         return 1
     fi
-    collect_from_copy "$FIX" "patch-round$r.diff" "EVIDENCE-round$r.md"
-    PATCH_OUT=$FIX/patch-round$r.diff
     EVIDENCE=$FIX/EVIDENCE-round$r.md
 
-    # **收 patch 的同一手**把 EVIDENCE 尾端那一塊抽出來。位置在反駁那一段**之前**:
+    # **收件的同一手**把 EVIDENCE 尾端那一塊抽出來。位置在反駁那一段**之前**:
     # 反駁那條路會直接 return,而那一輪一樣要留得下一份可讀的結果。
     RESULT_JSON=$(dirname "$DISPATCH")/result-round$r.json
     harvest_result "$EVIDENCE" "$RESULT_JSON" worker "$r"
     echo "auto-fix: 結構化交付 -> $(basename "$RESULT_JSON")"
+    worker_delivery
 
-    # **逾時:副本不收、留半成品**(#57)。被砍的 worker 沒有機會出 diff,但它在 `work/`
-    # 做到哪都還在 —— 收掉副本就是把那一小時丟掉,下一個人從零開始。所以:副本留著、
-    # `work/` 對 `base/` 的 diff 存成 `patch-partial-round<r>.diff`(不套、不當交付),停下來問主線。
-    # 它交了 patch 也不收:被砍在寫到一半的那一份,與寫完的那一份長得一樣。
+    # **逾時:worktree 不動、留半成品**(#57)。被砍的 worker 做到哪(commit 與沒 commit 的)都還在
+    # worktree 裡 —— 停下來問主線,不當交付:被砍在 commit 到一半的那一份,與做完的那一份長得一樣。
     if [ "$WRC" -eq 124 ]; then
-        PARTIAL=$(dirname "$DISPATCH")/patch-partial-round$r.diff
-        ( cd "$FIX" && diff -ruN -x __pycache__ -x '*.pyc' base work ) > "$PARTIAL"
-        if [ -s "$PARTIAL" ]; then
-            partial_note="work/ 的半成品 diff 在 $PARTIAL"
-        else
-            partial_note="work/ 與 base/ 沒有差異($PARTIAL 是 0 byte:它什麼都還沒改)"
-        fi
-        echo "auto-fix: 第 $r 輪的 worker 逾時(${WORKER_TIMEOUT} 秒)—— 副本 $FIX 留著;$partial_note" >&2
+        partial_note="分支相對派工前多了 ${W_NEW:-0} 個 commit${W_DIRTY:+,未 commit 的改動:$W_DIRTY}"
+        echo "auto-fix: 第 $r 輪的 worker 逾時(${WORKER_TIMEOUT} 秒)—— worktree $WT 留著;$partial_note" >&2
         block "#$ID 第 $r 輪的 worker 逾時(${WORKER_TIMEOUT} 秒)"
-        post "worker 逾時(${WORKER_TIMEOUT} 秒),副本留著" \
-             "讀 $WORKER_LOG 看它做到哪;${partial_note}。要嘛拆票或加 worker.timeout_seconds 重派,要嘛人從副本接手${V_HELD}" \
-             "$FIX"
+        post "worker 逾時(${WORKER_TIMEOUT} 秒),worktree 留著" \
+             "讀 $WORKER_LOG 看它做到哪;${partial_note}。要嘛拆票或加 worker.timeout_seconds 重派,要嘛人從 worktree 接手${V_HELD}" \
+             "$WT"
         worker_cost timeout
         attempt_failed timeout
         ROUND_RC=5
         return 1
     fi
 
-    # 有反駁就先留著副本:`test_defect` 那條路由 dispatch_verifier 收(驗證者的副本自己從分支 +
-    # worker 的 patch 展,#107),其餘的反駁要
-    # 在原副本接回 worker / 驗證者(#89)。用**與底下那一段同一個判準**問一次,不是「反正
-    # 留著」—— 留著的那一份就是沒人收的那一份。沒有反駁 = 這一輪收件,兩份副本一起收。
+    # 有反駁就先留著驗證者副本:反駁要從它接回(#89)。用**與底下那一段同一個判準**問一次,
+    # 不是「反正留著」—— 留著的那一份就是沒人收的那一份。沒有反駁 = 這一輪收件,副本收掉。
     if [ -f "$EVIDENCE" ] && grep -q '^OBJECTION:' "$EVIDENCE"; then
-        echo "auto-fix: 先留著副本 $FIX —— 反駁要從它接回,或拿它做驗證者的副本"
+        echo "auto-fix: 先留著驗證者副本 —— 反駁要從它接回"
     else
-        shed_copies "$FIX"
+        shed_copies "$FIX" "$WT"
         [ -z "$V_WANT" ] || [ -z "$V_PARALLEL" ] || shed_copies "$VFIX"
     fi
 
     CASE_FIXED=""
-    WPATCH=""
-    # 反駁比 patch 先看:worker 說「這張票寫錯了」而東西照樣落地,那句話等於沒人收。
+    # 反駁比交件先看:worker 說「這張票寫錯了」而東西照樣落地,那句話等於沒人收。
     if [ -f "$EVIDENCE" ] && grep -q '^OBJECTION:' "$EVIDENCE"; then
         line=$(grep -m1 '^OBJECTION:' "$EVIDENCE")
         echo "auto-fix: worker 提了反駁 —— $line"
@@ -2617,7 +2603,7 @@ print(parts[0] if parts and parts[0] in ("ticket-wrong", "test_defect", "blockin
 PY
 )
         if [ "$category" = "test_defect" ]; then
-            # 等 patch 才起的第 1 輪驗證者(#60):worker 反駁了就不起 —— 案例要照的實作不在。
+            # 等交件才起的第 1 輪驗證者(#60):worker 反駁了就不起 —— 案例要照的實作不在。
             if [ -n "$V_HELD" ]; then
                 echo "auto-fix: worker 提了反駁$V_HELD —— 這一輪不起"
                 V_WANT=""
@@ -2644,22 +2630,19 @@ PY
     break
     done
 
-    if [ ! -f "$PATCH_OUT" ]; then
-        echo "auto-fix: 第 $r 輪的 worker 沒有交出 patch-round$r.diff" >&2
-        block "#$ID 第 $r 輪的 worker 沒交出 patch"
-        post "worker 沒交出 patch" "自己看副本裡有什麼;要嘛重派,要嘛人下場${V_HELD}" "$FIX"
-        if [ "$WRC" -eq 124 ]; then
-            worker_cost timeout
-            attempt_failed timeout
-        else
-            worker_cost no-patch
-            attempt_failed no-patch
-        fi
+    # 沒交件(#144):分支沒有新 commit,或 commit 了又留著未 commit 的改動。test_defect 那條路
+    # 驗證者修好了案例(CASE_FIXED)而 worker 沒 commit 的,照只收 patch-verify 那一條走。
+    if [ -z "$W_HANDED" ] && [ -z "$CASE_FIXED" ]; then
+        echo "auto-fix: 第 $r 輪的 worker 沒交件 —— $W_WHY" >&2
+        block "#$ID 第 $r 輪的 worker 沒交件"
+        post "worker 沒交件" "$W_WHY。worktree $WT 照原樣留著(腳本不替它 commit);要嘛重派,要嘛人下場${V_HELD}" "$WT"
+        worker_cost no-patch
+        attempt_failed no-patch
         ROUND_RC=5
         return 1
     fi
 
-    # 等 patch 才起的那一種(#60):worker 的 patch 在了,現在起、起了就收。
+    # 等交件才起的那一種(#60):worker 的 commit 在分支上了,現在起、起了就收。
     if [ -n "$V_WANT" ] && [ -n "$V_HELD" ]; then
         if start_verifier_bg; then wait_verifier; fi
         if guard_stop "${VLOG:-}"; then
@@ -2674,16 +2657,15 @@ PY
         shed_copies "$VFIX"
     fi
 
-    # 驗證者沒交件(#51 C6):worker 的 patch **先收進 reports**(下一輪或人下場還用得到,
-    # 不浪費那一趟),再停下來問主線 —— 只套 worker 那一份等於沒有案例就量綠。
+    # 驗證者沒交件(#51 C6):worker 的 commit 留在分支上、EVIDENCE **先收進 reports**(下一輪或
+    # 人下場還用得到),再停下來問主線 —— 只有 worker 那一份等於沒有案例就量綠。
     # test_defect 的驗證者交了件(CASE_FIXED)就不算沒交:平行那一位沒交也照 #107 的路收。
     if [ -n "$V_WANT" ] && [ -z "$VPATCH" ] && [ -z "$CASE_FIXED" ]; then
-        cp "$PATCH_OUT" "$(dirname "$DISPATCH")/" 2>/dev/null
         [ ! -f "$EVIDENCE" ] || cp "$EVIDENCE" "$(dirname "$DISPATCH")/"
-        echo "auto-fix: 第 $r 輪的驗證者沒交出 patch-verify —— worker 的 patch 收在 $(dirname "$DISPATCH")/" >&2
+        echo "auto-fix: 第 $r 輪的驗證者沒交出 patch-verify —— worker 的 commit 留在分支 $(ticket_branch)" >&2
         block "#$ID 第 $r 輪的驗證者沒交出 patch-verify"
         post "驗證者沒交出 patch-verify" \
-             "讀驗證者派工文與它的 log;worker 的 patch 已收在 reports,不要讓主線自己寫案例" \
+             "讀驗證者派工文與它的 log;worker 的 commit 在分支 $(ticket_branch) 上,不要讓主線自己寫案例" \
              "${VDISPATCH:-$(dirname "$DISPATCH")}"
         worker_cost handed-in
         attempt_failed verifier-no-patch
@@ -2708,7 +2690,7 @@ gap_round() {   # uses r/SRC/FIX/DISPATCH;設定 ROUND_RC
     VKEPT_EVIDENCE=""
     V_HELD=""
     W_COST_LOG=""
-    WPATCH=""
+    W_HANDED=""
     CASE_FIXED=""
     PATCH_OUT=""
     line=""
@@ -2749,7 +2731,7 @@ gap_round() {   # uses r/SRC/FIX/DISPATCH;設定 ROUND_RC
 }
 
 # 只併驗證者計畫(#130):計畫由 `apply.sh verify-plan` 併進票(與 `--evidence-verifier` 同一段),
-# 不套 patch、不 commit;閘門在既有分支的副本上重跑。副本不在 = 沒有分支可重跑,停下。
+# 不套 patch、不 commit;閘門在既有分支的 worktree 上重跑。worktree 不在 = 沒有分支可重跑,停下。
 plan_only_receive() {   # uses r/WT/EVIDENCE/VKEPT_EVIDENCE;停下時設定 ROUND_RC
     if [ ! -d "$WT" ]; then
         echo "auto-fix: 只併驗證者計畫,但分支 $(ticket_branch) 的副本 $WT 不在 —— 閘門沒地方重跑" >&2
@@ -2775,65 +2757,56 @@ plan_only_receive() {   # uses r/WT/EVIDENCE/VKEPT_EVIDENCE;停下時設定 ROUN
 }
 
 # 收件 → apply → 閘門:round_once 的後半,只派驗證者的那一輪(gap_round)也走這裡。
-round_receive() {   # uses r/CASE_FIXED/WPATCH/PATCH_OUT/EVIDENCE/RESULT_JSON/VPATCH/GAP_ROUND;設定 ROUND_RC
+round_receive() {   # uses r/CASE_FIXED/PATCH_OUT/EVIDENCE/RESULT_JSON/VPATCH/GAP_ROUND;設定 ROUND_RC
+    # worker 的改動已經是分支上的 commit(#144);apply 只收 EVIDENCE / result / 反駁、併驗證者計畫,
+    # 驗證者交了 patch-verify 才在分支上補一個 commit。
     # test_defect 先判(#112):平行驗證者交過件時 VPATCH 還指著它在 verify-t<n>/round<r> 的那份,
     # 而那個副本已經是 test_defect 驗證者的 —— 先判 VPATCH 就是把同一份 patch-verify 收兩次。
     # 驗證者的計畫兩條路都併進票:平行那一位保留下來的那份在前,test_defect 那一位的在後。
-    # 驗證者的 patch-verify **0 byte** = 這輪它沒改案例(#130,#98 第 2 輪):不當 patch 交給 apply
-    # (檔頭那一手對空檔 rc=3)。有 worker 的 patch 就只套它、計畫照併;驗證者是唯一交件者
-    # (gap_round、test_defect 沒有 worker patch)而 result 帶 verify → 只併計畫、分支不動。
-    # 只認 0 byte:有內容卻沒有檔頭照舊交 apply、照舊 rc=3。
+    # 驗證者的 patch-verify **0 byte** = 這輪它沒改案例(#130,#98 第 2 輪):不交給 apply 套。
+    # 驗證者是唯一交件者(gap_round、test_defect 而 worker 沒 commit)而 result 帶 verify →
+    # 只併計畫、分支不動。
     VSLOT=""
     PLAN_ONLY=""
-    if [ -n "$CASE_FIXED" ] && [ -n "$WPATCH" ]; then
+    if [ -n "$CASE_FIXED" ]; then
         VSLOT=$PATCH_OUT
-    elif [ -z "$CASE_FIXED" ]; then
+        if [ ! -s "$PATCH_OUT" ] && [ -z "$W_HANDED" ] && verifier_plan_given "$EVIDENCE"; then
+            PLAN_ONLY=1
+            echo "auto-fix: 第 $r 輪的驗證者這輪沒有改動(patch-verify 0 byte)—— 只併驗證者計畫:分支不動,直接重跑閘門"
+        fi
+    else
         VSLOT=$VPATCH
-    elif [ ! -s "$PATCH_OUT" ] && verifier_plan_given "$EVIDENCE"; then
-        PLAN_ONLY=1
-        echo "auto-fix: 第 $r 輪的驗證者這輪沒有改動(patch-verify 0 byte)—— 只併驗證者計畫:不套 patch、分支不動,直接重跑閘門"
     fi
     if [ -n "$VSLOT" ] && [ ! -s "$VSLOT" ]; then
         VSLOT=""
-        echo "auto-fix: 第 $r 輪的驗證者這輪沒有改動(patch-verify 0 byte)—— 只套 worker 的 patch,驗證者的計畫照併"
+        [ -n "$PLAN_ONLY" ] \
+            || echo "auto-fix: 第 $r 輪的驗證者這輪沒有改動(patch-verify 0 byte)—— 分支上只有 worker 的 commit,驗證者的計畫照併"
     fi
     if [ -n "$PLAN_ONLY" ]; then
         plan_only_receive || return 1
-    elif [ -n "$CASE_FIXED" ] && [ -n "$WPATCH" ]; then
-        # test_defect 而 worker 也交了 patch(#107):驗證者的 patch-verify 是疊在它上面的增量。
-        AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 AC_RESULT_JSON=$RESULT_JSON \
-            sh "$AC/apply.sh" "$ID" "$WPATCH" ${VSLOT:+"$VSLOT"} --evidence "$EVIDENCE" \
-            ${VKEPT_EVIDENCE:+--evidence-verifier "$VKEPT_EVIDENCE"} --evidence-verifier "$EVIDENCE"
     elif [ -n "$CASE_FIXED" ]; then
         AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 AC_RESULT_JSON=$RESULT_JSON \
-            sh "$AC/apply.sh" "$ID" "$PATCH_OUT" --evidence "$EVIDENCE" \
+            sh "$AC/apply.sh" "$ID" ${VSLOT:+"$VSLOT"} --evidence "$EVIDENCE" \
             ${VKEPT_EVIDENCE:+--evidence-verifier "$VKEPT_EVIDENCE"} --evidence-verifier "$EVIDENCE"
     elif [ -n "$VPATCH" ]; then
         AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 AC_RESULT_JSON=$RESULT_JSON \
-            sh "$AC/apply.sh" "$ID" "$PATCH_OUT" ${VSLOT:+"$VSLOT"} --evidence "$EVIDENCE" \
+            sh "$AC/apply.sh" "$ID" ${VSLOT:+"$VSLOT"} --evidence "$EVIDENCE" \
             --evidence-verifier "$VEVIDENCE"
     else
         AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 AC_RESULT_JSON=$RESULT_JSON \
-            sh "$AC/apply.sh" "$ID" "$PATCH_OUT" --evidence "$EVIDENCE"
+            sh "$AC/apply.sh" "$ID" --evidence "$EVIDENCE"
     fi
     arc=$?
     if [ "$arc" -ne 0 ]; then
-        echo "auto-fix: 第 $r 輪的 patch 套不上(apply rc=$arc)" >&2
-        post "第 $r 輪的 patch 套不上(apply rc=$arc)" \
-             "看 apply 的輸出:檔頭不合格、主線走遠(走 apply.sh rebase),還是越界" \
-             "$PATCH_OUT"
-        worker_cost apply-failed
-        attempt_failed apply-failed
-        ROUND_RC=5
-        return 1
-    fi
-    if [ -n "$WPATCH" ] && ! landed_check "$(python3 -c '
-import json, sys
-print(json.load(open(sys.argv[1], encoding="utf-8")).get("base_sha") or sys.argv[2])
-' "$TF" "$S_BASE")" "$(ticket_branch)" "$WPATCH"; then
-        post "worker 的 patch 沒全進分支" \
-             "閘門沒跑。缺的檔見 auto-fix 的輸出;對照 worker 的 patch 與分支 $(ticket_branch),補齊再跑閘門" \
-             "$WPATCH"
+        case $arc in
+            3) a_what="patch-verify 套不上(apply rc=3)" ;;
+            5) a_what="交件命中硬擋(apply rc=5)" ;;
+            *) a_what="收件沒過(apply rc=$arc)" ;;
+        esac
+        echo "auto-fix: 第 $r 輪的$a_what" >&2
+        post "第 $r 輪的$a_what" \
+             "看 apply 的輸出:patch-verify 套不上分支、worktree 不在,還是 EVIDENCE 的反駁沒處置" \
+             "${VSLOT:-$EVIDENCE}"
         worker_cost apply-failed
         attempt_failed apply-failed
         ROUND_RC=5
@@ -2870,7 +2843,7 @@ PY
     # `AC_ROOT=$ROOT`:閘門在**副本**裡跑,但狀態檔與收件匣要寫回**主 repo**
     # —— 不然這一輪的結果留在一個等一下會被收掉的目錄裡,而讀它的人在主 repo。
     ( cd "$WT" && AC_ROOT=$ROOT AC_WT=$WT AC_ROUND=$r AC_TICKET=$ID \
-        AC_PATCH=$PATCH_OUT \
+        AC_VERIFY_PATCH=${VSLOT:-} \
         AC_PREV_EVIDENCE=$EVIDENCE AC_IN_AUTOFIX=1 \
         sh -c "$gate_cmd" )
     grc=$?
@@ -3177,8 +3150,8 @@ PY
 rel_root() { python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$1" "$ROOT"; }
 [ -z "$BATCH" ] || batch_main
 
-# 迴圈從 `S_ROUND+1` 起,碰不到前面那幾輪的副本 —— 主線用 Agent 手建的第 1 輪就在這裡
-# (#38 A4)。派下一輪之前一併收;先撿再刪,同 `round_once`。`--dry-run` 不刪東西。
+# 迴圈從 `S_ROUND+1` 起,碰不到前面那幾輪的輪次目錄 —— 主線用 Agent 手建的第 1 輪就在這裡
+# (#38 A4)。派下一輪之前一併收(控制根;EVIDENCE 留著)。`--dry-run` 不刪東西。
 # 那一輪的 worker 還活著(`worker.pid` + `kill -0`)就不收:收了等於從它腳下抽走副本(#46)。
 if [ -z "$DRY" ]; then
     p=1
@@ -3189,8 +3162,7 @@ if [ -z "$DRY" ]; then
             p=$((p + 1))
             continue
         fi
-        collect_from_copy "$WTBASE/fix-t$ID/round$p" "patch-round$p.diff" "EVIDENCE-round$p.md"
-        shed_copies "$WTBASE/fix-t$ID/round$p"
+        shed_copies "$WTBASE/fix-t$ID/round$p" "$WT"
         p=$((p + 1))
     done
 fi

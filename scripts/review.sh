@@ -600,11 +600,11 @@ fi
 
 # review 記的就是**這一刻**的頭:派工文寫它、pass 寫它 —— 比事後再 rev-parse 一次、蓋上一個
 # 沒人讀過的 sha 誠實(給人看;#136 起 land 不拿它比分支頭)。
-# 分支名**只有一個來源:票的 `branch` 欄**(#53,D-018;`apply.sh` 開分支時填),空著才 `t<n>`。
+# 分支名**只有一個來源:票的 `branch` 欄**(#53,D-018;`apply.sh` 收件時填),空著才 `t<n>`。
 BR=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("branch") or "t"+sys.argv[2])' "$TF" "$ID" 2>/dev/null || echo "t$ID")
 SHA=$(git -C "$ROOT" rev-parse -q --verify "$BR^{commit}" 2>/dev/null || echo "")
 [ -n "$SHA" ] || refuse "分支 $BR 不存在" \
-    "先 sh scripts/apply.sh $ID <patch>(它建分支 $BR),閘門綠了再覆核"
+    "先 sh scripts/auto-fix.sh $ID(它建分支 $BR、worker 在上面 commit),閘門綠了再覆核"
 
 TEMPLATE=""
 for candidate in "$ROOT/templates/dispatch-reviewer.md" "$AC/../templates/dispatch-reviewer.md"; do

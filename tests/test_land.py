@@ -667,7 +667,7 @@ class TheDocsChannel(LandBase):
         done = self.docs("順手帶一支腳本", "tickets/7.json", "scripts/sneaky.sh")
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("scripts/sneaky.sh", done.stderr, "越界要指名是哪一個檔")
-        self.assertIn("apply.sh", done.stderr, "說得出下一步(§5.7)")
+        self.assertIn("auto-fix.sh", done.stderr, "說得出下一步(§5.7;#144 起 worker 在票分支 commit)")
         self.assertEqual(self.git("rev-parse", "main").strip(), before,
                          "拒收的那一次主線一個 commit 都不該多")
 
@@ -853,8 +853,8 @@ class LeftoverCopiesAreNamed(LandBase):
         self.approve(1, "t1-good")
         stale = os.path.join(self.wt_base(), "fix-t1", "round2")
         os.makedirs(stale)
-        with open(os.path.join(stale, "patch-round2.diff"), "w") as handle:
-            handle.write("# 上一輪的 patch\n")
+        with open(os.path.join(stale, "EVIDENCE-round2.md"), "w") as handle:
+            handle.write("# 上一輪的 EVIDENCE\n")
         done = self.land("t1-good")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("還留著這幾份副本", done.stdout)
@@ -879,8 +879,8 @@ class LeftoversUnderTheConfiguredWorktreeDir(LandBase):
         self.approve(1, "t1-good")
         stale = os.path.join(self.home, "x-wt", "fix-t1", "round1")
         os.makedirs(stale)
-        with open(os.path.join(stale, "patch-round1.diff"), "w") as handle:
-            handle.write("# 主線手建的第 1 輪留下的 patch\n")
+        with open(os.path.join(stale, "EVIDENCE-round1.md"), "w") as handle:
+            handle.write("# 主線手建的第 1 輪留下的 EVIDENCE\n")
         done = self.land("t1-good")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("還留著這幾份副本", done.stdout)

@@ -63,9 +63,10 @@ CODEX_TICKET_MODEL = "codex:gpt-6-astra"
 # 假 claude worker:交一份 patch(同 test_auto_fix_codex 的 deliver 那一段),不看參數。
 WORKER_DELIVERS = """#!/bin/sh
 echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+W=$PWD
 cd "$AC_WORK"
-mkdir -p work/tests
-cat > work/tests/test_thing.py <<'CASE'
+mkdir -p "$W"/tests
+cat > "$W"/tests/test_thing.py <<'CASE'
 import unittest
 
 
@@ -73,7 +74,7 @@ class T(unittest.TestCase):
     def test_thing(self):
         self.assertEqual(1, 1)
 CASE
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+(cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
 printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
 """
 

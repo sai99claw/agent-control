@@ -81,7 +81,7 @@ NUMBER = re.compile(r"^(\d+(?:\.\d+)*)\.?\s")
 WANTED = {
     "worker": ("implementer.md",
                ("1", "2", "3", "4", "5", "5.5", "5.7", "6.4", "7", "8"),
-               "在副本裡實作與局部驗證,交 patch + EVIDENCE"),
+               "在自己的 worktree / 分支實作、commit 與局部驗證,交 EVIDENCE"),
     "verifier": ("verifier.md",
                  ("0.5", "2", "3", "5.5", "6.4", "8"),
                  "把票面驗收寫成回歸案例,證明案例是對的,不判 PASS/FAIL"),

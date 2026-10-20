@@ -40,7 +40,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 TESTS_DIR = os.path.join(ROOT, "tests")
 sys.path.insert(0, TESTS_DIR)
-from control_harness import DEFAULT_CONFIG, Sandbox, write_executable  # noqa: E402
+from control_harness import DEFAULT_CONFIG, Sandbox, files_of, write_executable  # noqa: E402
 
 # ---------------------------------------------------------------- item 7
 
@@ -177,8 +177,9 @@ FAILED (failures=1)
 WORKER_SHIPS_RESULT = """#!/bin/sh
 set -e
 echo "agentout-worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+W=$PWD
 cd "$AC_WORK"
-cat > work/tests/test_agentout_probe.py <<'CASE'
+cat > "$W"/tests/test_agentout_probe.py <<'CASE'
 import unittest
 
 
@@ -186,10 +187,10 @@ class Probe(unittest.TestCase):
     def test_probe(self):
         self.assertEqual(1, 1)
 CASE
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+(cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
 sed "s/@R@/$AC_ROUND/g; s/@T@/$AC_TICKET/g" > "EVIDENCE-round$AC_ROUND.md" <<'EV'
 # agentout 夾具 —— 第 @R@ 輪
-已排除的假設:不是副本沒同步 —— base/ 與 work/ 只差那一個檔。
+已排除的假設:不是副本沒同步 —— base/ 與 "$W"/ 只差那一個檔。
 
 ## result
 
@@ -324,12 +325,10 @@ class AgentOutputHarness(Sandbox):
                            "gate", "--run-id", run_id, "--rc", str(rc), "--log", log)
 
     def first_red_round(self):
-        """要走到真的 apply + 閘門重跑那一段(綠的那條路)才需要這個 —— 其他停下
-        來的路(沒交 patch)在 `apply.sh`/`gate.sh` 之前就已經 return 了。"""
-        patch = self.write("round1.diff", PROBE_PATCH, where=self.home)
-        applied = self.run_sh("scripts/apply.sh", "1", patch)
-        self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
-        wt = os.path.join(self.home, "repo-wt", "t1")
+        """要走到真的收件 + 閘門重跑那一段(綠的那條路)才需要這個 —— 其他停下
+        來的路(沒交件)在 `apply.sh`/`gate.sh` 之前就已經 return 了。"""
+        # 第 1 輪交件 = 票分支 t1 上一個 commit(#144);夾具照舊是那一份紅的案例。
+        wt = self.ticket_branch_commit("1", files_of(PROBE_PATCH))
         gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
                            "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
                            env=self.env(AC_ROOT=self.repo))

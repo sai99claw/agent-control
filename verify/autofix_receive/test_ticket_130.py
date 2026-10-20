@@ -5,7 +5,7 @@ A1 | integ | #107 形狀:第 2 輪 worker 交產品檔 patch + test_defect;驗�
 A2 | integ | interface_fixed 第 1 輪,平行驗證者交 0 byte + verify,worker 交 tests/test_thing.py | 同 A1:SAME、沒有「套不上(apply rc=3)」、t1 有 worker 的檔、verify.files == 夾具值、第 1 輪 gate.rerun | 票面 A2;T2
 A3 | integ | (a) 上一輪紅榜只有缺口列(kind GAP,手寫同形列;#138 前是 #98 的「讀不到」LINT 列)→ 只派驗證者那一輪驗證者 0 byte + verify;(b) worker 只交 test_defect、驗證者 0 byte + verify;閘門替身綠 | SAME 與 PLAN_ONLY;t1 頭 sha 前後相同、替身閘門跑在那個 sha;verify 照 #100 A9 併法(files 聯集、run/notes 空才採);gate.rerun 第 2 輪;InReview;(b) disposition=fixed | 票面 A3;T3
 A4 | integ | `apply.sh verify-plan 1 --evidence-verifier EV`(red / check / 沒有 result 塊);`--help` | rc 0、票 verify 四格與 baseline 併進、分支清單與 HEAD 不變、沒有 t1;check 不收、印「不是 stage=red」;沒塊 → rc≠0、stderr 有 UNPARSED、票不動;--help 有 verify-plan | 票面 A4;T4;「不是 stage=red」是 apply 既有字樣
-A5 | integ | 只派驗證者那一輪 0 byte 而 result 沒有 verify / 沒有 result 塊;那一輪 patch-verify 一行文字;worker 自己交 0 byte | 照舊 Blocked、decision 有「驗證者交了空的 patch-verify」、不跑閘門;一行文字 → 「套不上(apply rc=3)」;worker 0 byte → 「空的 patch 不是綠」;三者都沒有 SAME | 票面 A5;T5
+A5 | integ | 只派驗證者那一輪 0 byte 而 result 沒有 verify / 沒有 result 塊;那一輪 patch-verify 一行文字;worker 沒 commit | 照舊 Blocked、decision 有「驗證者交了空的 patch-verify」、不跑閘門;一行文字 → 「套不上(apply rc=3)」;worker 沒 commit → 「沒有新 commit」(#144);三者都沒有 SAME | 票面 A5;T5
 A6 | integ + doc | A3(a) 那一輪的 attempt 事件;docs/WORKFLOW.md | ticket.attempt.start / done 都有第 2 輪;WORKFLOW 有一段同時寫 patch-verify、0 byte、計畫、閘門 | 票面 A6 原話
 
 ## 介面字串(全部出自票面;票面沒定的在這裡定)
@@ -15,7 +15,7 @@ SUBCOMMAND = "verify-plan"                   ← A4 子命令與 --help(票面�
 UNPARSED   = "驗證者的 result 解析不到"      ← A4 stderr(票面 A4「照既有字樣」)
 NOT_APPLIED = "套不上(apply rc=3)"         ← A2/A5(票面原字)
 EMPTY_PAGE = "驗證者交了空的 patch-verify"   ← A5 只派驗證者那一輪的頁(票面原字)
-EMPTY_GUARD = "空的 patch 不是綠"            ← A5 worker 0 byte(票面原字,apply 既有字樣)
+EMPTY_GUARD = "沒有新 commit"                ← A5 worker 沒 commit(#144 改:「分支有新 commit」取代「patch 套得上」)
 NOT_RED    = "不是 stage=red"                ← A4 check 不收(apply 既有字樣)
 
 ## 怎麼做假(不上真埠、不起真服務、不打真的模型)
@@ -50,7 +50,7 @@ SUBCOMMAND = "verify-plan"
 UNPARSED = "驗證者的 result 解析不到"
 NOT_APPLIED = "套不上(apply rc=3)"
 EMPTY_PAGE = "驗證者交了空的 patch-verify"
-EMPTY_GUARD = "空的 patch 不是綠"
+EMPTY_GUARD = "沒有新 commit"
 NOT_RED = "不是 stage=red"
 
 # 驗證者 result 的 verify 計畫:夾具值,斷言從這裡讀。
@@ -62,21 +62,23 @@ RED_RECORD = {"stage": "red", "ok": True, "why": "", "files": [CASE_FILE]}
 MISSING_REL = "verify/example/test_ticket_404.py"
 
 # 假 agent。worker:@WORKER@ = change(新增產品檔)/ case(新增 tests/test_thing.py)/
-# empty(0 byte 的 patch)/ none(不交 patch);@OBJECT@ = 1 時只交一行 test_defect 反駁。
+# empty / none(都不 commit:#144 起 worker 的交件是票分支上的 commit,0 byte 的 patch 這種形狀沒了);
+# @OBJECT@ = 1 時只交一行 test_defect 反駁。
 # 驗證者:@VPATCH@ = empty(0 byte)/ text(一行文字、沒有檔頭);@VEVIDENCE@ = plan / noplan / prose。
 AGENT = r"""#!/bin/sh
 set -e
 echo "$AC_ROLE ran round $AC_ROUND" >> "$AC_TEST_LOG"
+W=$PWD
 cd "$AC_WORK"
 if [ "$AC_ROLE" = worker ]; then
     case "@WORKER@" in
         change)
-            mkdir -p work/src
-            printf 'CHANGED = True\n' > work/src/worker_change.py
-            diff -ruN base work > "patch-round$AC_ROUND.diff" || true ;;
+            mkdir -p "$W"/src
+            printf 'CHANGED = True\n' > "$W"/src/worker_change.py
+            (cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true ;;
         case)
-            mkdir -p work/tests
-            cat > work/tests/test_thing.py <<'CASE'
+            mkdir -p "$W"/tests
+            cat > "$W"/tests/test_thing.py <<'CASE'
 import unittest
 
 
@@ -84,9 +86,9 @@ class T(unittest.TestCase):
     def test_thing(self):
         self.assertEqual(1, 1)
 CASE
-            diff -ruN base work > "patch-round$AC_ROUND.diff" || true ;;
+            (cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true ;;
         empty)
-            : > "patch-round$AC_ROUND.diff" ;;
+            : ;;
     esac
     if [ "@OBJECT@" = 1 ]; then
         printf 'OBJECTION: test_defect fixture 把正確結果寫成 2\n' > "EVIDENCE-round$AC_ROUND.md"
@@ -327,7 +329,7 @@ class NothingHandedInStillStops(ReceiveBase):
         self.assertNotIn(PLAN_ONLY, done.stdout, said)
 
     def test_a5_an_empty_worker_patch_is_still_not_green(self):
-        """A5 worker 自己的 patch 0 byte → 照舊「空的 patch 不是綠」,不走只併計畫。"""
+        """A5 worker 沒交件(#144:分支沒有新 commit)→「worker 沒交件」,不走只併計畫。"""
         self.arm(agent(worker="empty", objects=False), needs_verifier=False)
         self.first_round()
         done = self.auto_fix("--no-review")

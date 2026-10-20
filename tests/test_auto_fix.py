@@ -28,7 +28,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from control_harness import (DEFAULT_CONFIG, REVIEWER_PASS, Sandbox,  # noqa: E402
-                             envelope, fixture_candidate, write_executable)
+                             envelope, files_of, fixture_candidate, write_executable)
 
 # 沙盒的票沒標 complexity = simple(#136,VISION 流程 #9:只有複雜的票做完後檢查一次):閘門綠
 # 不派覆核、不停在等覆核,auto-fix rc=0。要覆核的案例自己標 complex(預設 reviewer `true` 什麼都
@@ -65,8 +65,9 @@ RED_CASE_WITH_DOCSTRING = """diff -ruN base/tests/test_thing.py work/tests/test_
 WORKER_FIXES = """#!/bin/sh
 set -e
 echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+W=$PWD
 cd "$AC_WORK"
-cat > work/tests/test_thing.py <<'CASE'
+cat > "$W"/tests/test_thing.py <<'CASE'
 import unittest
 
 
@@ -74,7 +75,7 @@ class T(unittest.TestCase):
     def test_thing(self):
         self.assertEqual(1, 1)
 CASE
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+(cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
 printf '# 第 %s 輪\\n已排除的假設:沒有\\n最小重現:python3 -m unittest test_thing\\n' \\
     "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
 printf '## 記憶\\nmemory.py note role implementer "auto-fix 收割" --ticket 1 --by worker@opus\\n' \\
@@ -85,8 +86,9 @@ printf '## 記憶\\nmemory.py note role implementer "auto-fix 收割" --ticket 1
 WORKER_STAYS_RED = """#!/bin/sh
 set -e
 echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+W=$PWD
 cd "$AC_WORK"
-cat > work/tests/test_thing.py <<CASE
+cat > "$W"/tests/test_thing.py <<CASE
 import unittest
 
 
@@ -94,7 +96,7 @@ class T(unittest.TestCase):
     def test_thing(self):
         self.assertEqual(1, 2, "第 $AC_ROUND 輪還是紅的")
 CASE
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+(cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
 printf '# 第 %s 輪\\n還是紅的\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
 """
 
@@ -103,6 +105,7 @@ WORKER_OBJECTS = """#!/bin/sh
 set -e
 echo "worker stdout round $AC_ROUND"
 echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+W=$PWD
 cd "$AC_WORK"
 printf 'OBJECTION: ticket-wrong 驗收第二條與設計文件對不上\\n' \\
     > "EVIDENCE-round$AC_ROUND.md"
@@ -132,6 +135,7 @@ printf '# verifier\\n案例已修\\n' > EVIDENCE-verifier.md
 WORKER_TEST_DEFECT_THEN_FIXES_PRODUCT = """#!/bin/sh
 set -e
 echo "$AC_ROLE ran round $AC_ROUND" >> "$AC_TEST_LOG"
+W=$PWD
 cd "$AC_WORK"
 if [ "$AC_ROLE" = verifier ]; then
     sed 's/assertEqual(1, 2/assertEqual(1, 3/' base/tests/test_thing.py \\
@@ -142,9 +146,8 @@ elif [ "$AC_ROUND" = 2 ]; then
     printf 'OBJECTION: test_defect fixture 把正確結果寫成 2\\n' \\
         > "EVIDENCE-round$AC_ROUND.md"
 else
-    sed 's/assertEqual(1, 3/assertEqual(1, 1/' base/tests/test_thing.py \\
-        > work/tests/test_thing.py
-    diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+    sed -i 's/assertEqual(1, 3/assertEqual(1, 1/' "$W"/tests/test_thing.py
+    (cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
     printf '# worker\\n產品修復\\n' > "EVIDENCE-round$AC_ROUND.md"
 fi
 """
@@ -165,20 +168,23 @@ exit 7
 WORKER_FIRST_ROUND = """#!/bin/sh
 set -e
 echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+W=$PWD
 cd "$AC_WORK"
-python3 - "@TICKET@" "@MARK@" "$AC_WORK" <<'PY'
-import json, sys
-ticket, mark, work = sys.argv[1:4]
+python3 - "@TICKET@" "@MARK@" "$AC_WORK" "$W" <<'PY'
+import json, os, subprocess, sys
+ticket, mark, work, cwd = sys.argv[1:5]
 with open(ticket, encoding="utf-8") as handle:
     state = json.load(handle).get("state")
-with open("base/README", encoding="utf-8") as handle:
+with open(os.path.join(cwd, "README"), encoding="utf-8") as handle:
     readme = handle.read()
+branch = subprocess.run(["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"],
+                        capture_output=True, text=True).stdout.strip()
 with open(mark, "w", encoding="utf-8") as out:
-    json.dump({"state": state, "base_readme": readme, "work": work}, out,
-              ensure_ascii=False)
+    json.dump({"state": state, "base_readme": readme, "work": work, "cwd": cwd,
+               "branch": branch}, out, ensure_ascii=False)
 PY
-mkdir -p work/tests
-cat > work/tests/test_thing.py <<'CASE'
+mkdir -p "$W"/tests
+cat > "$W"/tests/test_thing.py <<'CASE'
 import unittest
 
 
@@ -186,7 +192,7 @@ class T(unittest.TestCase):
     def test_thing(self):
         self.assertEqual(1, 1)
 CASE
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+(cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
 printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
 """
 
@@ -196,9 +202,10 @@ printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-rou
 WORKER_ROUND_ONE_COSTS = """#!/bin/sh
 set -e
 echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+W=$PWD
 cd "$AC_WORK"
-mkdir -p work/tests
-cat > work/tests/test_thing.py <<'CASE'
+mkdir -p "$W"/tests
+cat > "$W"/tests/test_thing.py <<'CASE'
 import unittest
 
 
@@ -206,7 +213,7 @@ class T(unittest.TestCase):
     def test_thing(self):
         self.assertEqual(1, 1)
 CASE
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+(cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
 printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
 echo '@ENVELOPE@'
 echo "worker stderr after the envelope" >&2
@@ -218,8 +225,9 @@ echo "worker stderr after the envelope" >&2
 WORKER_WITH_RESULT = """#!/bin/sh
 set -e
 echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+W=$PWD
 cd "$AC_WORK"
-cat > work/tests/test_thing.py <<'CASE'
+cat > "$W"/tests/test_thing.py <<'CASE'
 import unittest
 
 
@@ -227,7 +235,7 @@ class T(unittest.TestCase):
     def test_thing(self):
         self.assertEqual(1, 1)
 CASE
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+(cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
 sed "s/@R@/$AC_ROUND/g; s/@T@/$AC_TICKET/g" > "EVIDENCE-round$AC_ROUND.md" <<'EV'
 # 第 @R@ 輪
 已排除的假設:沒有
@@ -241,7 +249,7 @@ sed "s/@R@/$AC_ROUND/g; s/@T@/$AC_TICKET/g" > "EVIDENCE-round$AC_ROUND.md" <<'EV
  "mutations": [{"id": "M1", "count": 1, "case": "T.test_thing",
                 "red_first_line": "AssertionError: 1 != 2"}],
  "objection": null,
- "excluded": ["不是副本沒同步 —— base/ 與 work/ 只差那一個檔"],
+ "excluded": ["不是 worktree 沒同步 —— 分支只多那一個檔"],
  "repro": {"cmd": "python3 -m unittest test_thing", "expect": "Ran 1 test ... OK"},
  "memory": [{"layer": "role", "name": "implementer", "line": "一句原則", "ticket": "@T@"},
             {"layer": "model", "name": "opus", "line": "另一句原則", "ticket": "@T@"}]}
@@ -253,6 +261,7 @@ EV
 WORKER_NO_BLOCK = """#!/bin/sh
 set -e
 echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+W=$PWD
 cd "$AC_WORK"
 printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
 """
@@ -261,6 +270,7 @@ printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-rou
 WORKER_BAD_JSON = """#!/bin/sh
 set -e
 echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+W=$PWD
 cd "$AC_WORK"
 cat > "EVIDENCE-round$AC_ROUND.md" <<'EV'
 # 交了,但那一塊解不開
@@ -277,6 +287,7 @@ EV
 WORKER_CONFLICTING_OBJECTION = """#!/bin/sh
 set -e
 echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+W=$PWD
 cd "$AC_WORK"
 cat > "EVIDENCE-round$AC_ROUND.md" <<'EV'
 OBJECTION: ticket-wrong 驗收第二條與設計文件對不上
@@ -315,17 +326,18 @@ cat > EVIDENCE-verifier.md <<'EV'
 EV
 """
 
-# 假 worker(#107):第 2 輪**交了 patch 又說 test_defect** —— 新增一支產品檔、照規矩出
-# `diff -ruN base work`;`@AFTER@` 是交件後它還做什麼(W2 換成 `rm -rf work base`,專案 #751
-# 的 worker 真的這樣收副本)。驗證者把它看到的副本寫進 AC_TEST_LOG,再只改案例出 patch-verify。
+# 假 worker(#107、#144):第 2 輪**commit 了又說 test_defect** —— 新增一支產品檔、在票分支
+# 的 worktree commit;`@AFTER@` 是交件後它還做什麼。驗證者把它看到的副本寫進 AC_TEST_LOG,
+# 再只改案例出 patch-verify。
 WORKER_PATCH_AND_TEST_DEFECT = """#!/bin/sh
 set -e
 echo "$AC_ROLE ran round $AC_ROUND" >> "$AC_TEST_LOG"
+W=$PWD
 cd "$AC_WORK"
 if [ "$AC_ROLE" = worker ]; then
-    mkdir -p work/src
-    printf 'CHANGED = True\\n' > work/src/worker_change.py
-    diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+    mkdir -p "$W"/src
+    printf 'CHANGED = True\\n' > "$W"/src/worker_change.py
+    (cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
     printf 'OBJECTION: test_defect fixture 把正確結果寫成 2\\n' \\
         > "EVIDENCE-round$AC_ROUND.md"
     @AFTER@
@@ -344,22 +356,6 @@ class T(unittest.TestCase):
 CASE
 diff -ruN base work > patch-verify.diff || true
 printf '# verifier\\n案例已修\\n' > EVIDENCE-verifier.md
-"""
-
-# 假 worker(#107 W3):交一份 `---` 側與分支不符的 patch(分支上的案例沒有那一行)。
-WORKER_STALE_PATCH_AND_TEST_DEFECT = """#!/bin/sh
-set -e
-echo "$AC_ROLE ran round $AC_ROUND" >> "$AC_TEST_LOG"
-cd "$AC_WORK"
-cat > "patch-round$AC_ROUND.diff" <<'DIFF'
-diff -ruN base/tests/test_thing.py work/tests/test_thing.py
---- base/tests/test_thing.py\t2026-10-09 10:00:00
-+++ work/tests/test_thing.py\t2026-10-09 10:00:00
-@@ -1,1 +1,1 @@
--import nothing_like_this
-+import unittest
-DIFF
-printf 'OBJECTION: test_defect fixture 把正確結果寫成 2\\n' > "EVIDENCE-round$AC_ROUND.md"
 """
 
 GREEN_LOG = """test_ok (test_thing.T.test_ok) ... ok
@@ -468,10 +464,8 @@ class AutoFixBase(Sandbox):
                    for row in self.events())
 
     def first_round(self):
-        patch = self.write("p1.diff", RED_CASE, where=self.home)
-        done = self.run_sh("scripts/apply.sh", "1", patch)
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        wt = os.path.join(self.home, "repo-wt", "t1")
+        # 第 1 輪交件 = 票分支 t1 上一個 commit(#144);夾具照舊是那一份紅的案例。
+        wt = self.ticket_branch_commit("1", files_of(RED_CASE))
         # **副本裡那一支** gate.sh(不是主 repo 那一支):`--branch` 問的是
         # 「這條分支改了什麼」,而在主 repo 上問等於問 main 對 main —— 答案是「沒有」,
         # 而「沒有東西可跑」與「跑完了都過」長得一樣(§5.5)。
@@ -637,9 +631,7 @@ class ThingsThatStopIt(AutoFixBase):
     def test_a_test_defect_dispatches_a_new_verifier_and_resumes_the_gate(self):
         self.set_worker(WORKER_REPORTS_TEST_DEFECT)
         self.ticket_ready()
-        patch = self.write("p1.diff", RED_CASE, where=self.home)
-        self.assertEqual(self.run_sh("scripts/apply.sh", "1", patch).returncode, 0)
-        wt = os.path.join(self.home, "repo-wt", "t1")
+        wt = self.ticket_branch_commit("1", files_of(RED_CASE))
         gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
                            "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
                            env=self.env(AC_ROOT=self.repo))
@@ -681,9 +673,7 @@ class ThingsThatStopIt(AutoFixBase):
         """
         self.set_worker(WORKER_REPORTS_TEST_DEFECT)
         self.ticket_ready()
-        patch = self.write("p1.diff", RED_CASE_WITH_DOCSTRING, where=self.home)
-        self.assertEqual(self.run_sh("scripts/apply.sh", "1", patch).returncode, 0)
-        wt = os.path.join(self.home, "repo-wt", "t1")
+        wt = self.ticket_branch_commit("1", files_of(RED_CASE_WITH_DOCSTRING))
         gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
                            "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
                            env=self.env(AC_ROOT=self.repo))
@@ -707,9 +697,7 @@ class ThingsThatStopIt(AutoFixBase):
     def test_a_fixed_case_that_is_still_red_is_reported_before_the_next_round(self):
         self.set_worker(WORKER_TEST_DEFECT_THEN_FIXES_PRODUCT)
         self.ticket_ready()
-        patch = self.write("p1.diff", RED_CASE, where=self.home)
-        self.assertEqual(self.run_sh("scripts/apply.sh", "1", patch).returncode, 0)
-        wt = os.path.join(self.home, "repo-wt", "t1")
+        wt = self.ticket_branch_commit("1", files_of(RED_CASE))
         gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
                            "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
                            env=self.env(AC_ROOT=self.repo))
@@ -726,10 +714,10 @@ class ThingsThatStopIt(AutoFixBase):
 
 
 class AWorkerPatchWithATestDefectReachesTheBranch(AutoFixBase):
-    """#107(專案 #751 事故):worker 交了 patch-round<r>.diff 又說 test_defect —— 驗證者的副本
-    是「分支 + 本輪 worker 的 patch」,收件時兩份依序套,分支上兩份都在。以前驗證者的副本
-    拷自 worker 副本的 base/(不含 worker 的改動),收件只套 patch-verify:分支少了 worker
-    那份,閘門剛好綠就把殘缺的票落地。期望值來自替身寫的檔與它記下的副本,不從 auto-fix 算。
+    """#107(專案 #751 事故)、#144:worker commit 了又說 test_defect —— 驗證者的副本是「票分支現在
+    的頭」(worker 本輪的 commit 在上面),收件時 patch-verify 在分支上補一個 commit,分支上兩份都在。
+    以前驗證者的副本拷自 worker 副本的 base/(不含 worker 的改動),收件只套 patch-verify:分支少了
+    worker 那份,閘門剛好綠就把殘缺的票落地。期望值來自替身寫的檔與它記下的副本,不從 auto-fix 算。
     """
 
     def red_branch(self, worker):
@@ -745,15 +733,15 @@ class AWorkerPatchWithATestDefectReachesTheBranch(AutoFixBase):
         self.assertEqual(self.git("show", "t1:src/worker_change.py"), "CHANGED = True\n")
         self.assertIn("assertEqual(1, 1)", self.git("show", "t1:tests/test_thing.py"))
 
-    def test_w1_the_worker_patch_and_the_verifier_patch_both_land_on_the_branch(self):
-        """**變異 m1**:收件照舊只把 PATCH_OUT 換成 patch-verify 單獨套 → 這一條紅。"""
+    def test_w1_the_worker_commit_and_the_verifier_patch_both_land_on_the_branch(self):
+        """**變異 m1**:驗證者副本照舊從輪初那一版(不含 worker 本輪的 commit)展 → 這一條紅。"""
         self.red_branch(WORKER_PATCH_AND_TEST_DEFECT.replace("@AFTER@", ":"))
         done = self.auto_fix()
         self.assert_both_on_the_branch(done)
 
-    def test_w2_the_verifier_copy_does_not_need_the_base_the_worker_left_behind(self):
-        """**變異 m2**:副本照舊 `cp -R $FIX/base` → 這一條紅(worker 已刪了它)。"""
-        self.red_branch(WORKER_PATCH_AND_TEST_DEFECT.replace("@AFTER@", "rm -rf work base"))
+    def test_w2_the_verifier_copy_is_the_branch_head_with_the_worker_commit(self):
+        """驗證者副本的 base/ 與 work/ 都含 worker 本輪 commit 的檔。"""
+        self.red_branch(WORKER_PATCH_AND_TEST_DEFECT.replace("@AFTER@", ":"))
         done = self.auto_fix()
         with open(self.log, encoding="utf-8") as handle:
             seen = [line.strip() for line in handle if line.startswith("verifier saw")]
@@ -763,39 +751,7 @@ class AWorkerPatchWithATestDefectReachesTheBranch(AutoFixBase):
                          done.stdout + done.stderr)
         self.assert_both_on_the_branch(done)
 
-    def test_w3_a_worker_patch_that_does_not_apply_stops_before_the_verifier(self):
-        self.red_branch(WORKER_STALE_PATCH_AND_TEST_DEFECT)
-        done = self.auto_fix()
-        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
-        self.assertEqual([row for row in self.events() if row["kind"] == "agent.start"
-                          and row.get("role") == "verifier"], [], "副本建不出來就不起驗證者")
-        self.assertEqual(self.load_ticket("1")["state"], "Blocked")
-        self.assertIn("驗證者的副本建不出來", self.inbox_list())
-        with open(self.log, encoding="utf-8") as handle:
-            self.assertEqual(handle.read().splitlines(), ["worker ran round 2"])
-
-    def test_w4_the_guard_names_the_worker_file_missing_from_the_branch(self):
-        """守衛單獨餵:分支只有案例那一個檔,worker 的 patch 還有一支產品檔。"""
-        self.set_worker(WORKER_NEVER)
-        base = self.ticket_ready()["base_sha"]
-        self.first_round()
-        patch = self.write("worker.diff", (
-            "diff -ruN base/src/worker_change.py work/src/worker_change.py\n"
-            "--- base/src/worker_change.py\t1970-01-01 08:00:00\n"
-            "+++ work/src/worker_change.py\t2026-10-09 10:00:00\n"
-            "@@ -0,0 +1 @@\n+CHANGED = True\n") + RED_CASE, where=self.home)
-        done = self.run_sh("scripts/auto-fix.sh", "--landed-check", base, "t1", patch)
-        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
-        line = [text for text in done.stderr.splitlines() if "worker 的 patch 沒全進分支" in text]
-        self.assertEqual(len(line), 1, done.stderr)
-        self.assertIn("src/worker_change.py", line[0])
-        self.assertNotIn("tests/test_thing.py", line[0])
-
-        whole = self.write("worker-ok.diff", RED_CASE, where=self.home)
-        done = self.run_sh("scripts/auto-fix.sh", "--landed-check", base, "t1", whole)
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-
-    def test_w5_the_verifier_packet_says_the_copy_has_this_rounds_worker_patch(self):
+    def test_w5_the_verifier_packet_says_the_copy_has_this_rounds_worker_commit(self):
         self.red_branch(WORKER_PATCH_AND_TEST_DEFECT.replace("@AFTER@", ":"))
         self.auto_fix()
         packets = glob.glob(os.path.join(self.repo, "reports", "t1", "*",
@@ -803,7 +759,7 @@ class AWorkerPatchWithATestDefectReachesTheBranch(AutoFixBase):
         self.assertEqual(len(packets), 1)
         with open(packets[0], encoding="utf-8") as handle:
             packet = handle.read()
-        self.assertIn("本輪 worker 的 patch", packet)
+        self.assertIn("本輪 worker 的 commit 都在上面", packet)
         self.assertNotIn("副本是**分支上**那一版", packet)
 
 
@@ -812,12 +768,13 @@ class AWorkerPatchWithATestDefectReachesTheBranch(AutoFixBase):
 TEST_DEFECT_VERIFIER_WITH_PLAN = """#!/bin/sh
 set -e
 echo "$AC_ROLE ran round $AC_ROUND" >> "$AC_TEST_LOG"
+W=$PWD
 cd "$AC_WORK"
 if [ "$AC_ROLE" = worker ]; then
     if [ "@WORKER_PATCH@" = 1 ]; then
-        mkdir -p work/src
-        printf 'CHANGED = True\\n' > work/src/worker_change.py
-        diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+        mkdir -p "$W"/src
+        printf 'CHANGED = True\\n' > "$W"/src/worker_change.py
+        (cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
     fi
     printf 'OBJECTION: test_defect fixture 把正確結果寫成 2\\n' \\
         > "EVIDENCE-round$AC_ROUND.md"
@@ -879,6 +836,58 @@ class ASerialTestDefectMergesTheVerifierPlan(AutoFixBase):
 
     def test_p4_without_a_worker_patch_the_verifier_plan_reaches_the_ticket(self):
         self.run_it("0")
+
+
+# 假 worker(#144):在 cwd(票分支的 worktree)改檔;@COMMIT@ / @DIRTY@ 決定 commit 與否、
+# commit 之後是否再留一份未 commit 的改動。EVIDENCE 寫在 $AC_WORK。
+WORKER_EDITS = """#!/bin/sh
+set -e
+echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+mkdir -p tests
+printf 'x = 1\\n' > tests/half.py
+@COMMIT@
+@DIRTY@
+printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "$AC_WORK/EVIDENCE-round$AC_ROUND.md"
+"""
+
+
+class TheHandInIsACommitOnTheTicketBranch(AutoFixBase):
+    """#144(D-054 Q9):交件 = 票分支相對派工前多了至少一個 commit、worktree 乾淨。只改不 commit,
+    或 commit 了又留著未 commit 的改動,都走既有「沒交」處置;腳本不替 worker commit。
+    期望值(rc 5、頁名、no-patch、分支頭)寫死在這裡,不從被測腳本算。"""
+
+    def run_it(self, commit="", dirty=""):
+        self.set_worker(WORKER_EDITS.replace("@COMMIT@", commit).replace("@DIRTY@", dirty))
+        self.ticket_ready()
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["state"], "Blocked")
+        pages = self.inbox_rows()
+        self.assertEqual(len(pages), 1, pages)
+        self.assertIn("worker 沒交件", json.dumps(pages[0], ensure_ascii=False))
+        failed = [row.get("reason") for row in self.events()
+                  if row["kind"] == "ticket.attempt.failed"]
+        self.assertEqual(failed, ["no-patch"])
+        self.assertNotIn("gate.rerun", self.kinds(), "沒交件就不收件、不跑閘門")
+        return done, os.path.join(self.home, "repo-wt", "t1")
+
+    def test_edits_without_a_commit_are_not_a_hand_in(self):
+        """**變異**:收件前腳本替 worker `git add -A && git commit` → rc 0、分支多一個 commit,紅。"""
+        done, wt = self.run_it()
+        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "0",
+                         "腳本不替 worker commit")
+        self.assertIn("沒有新 commit", done.stderr)
+        self.assertIn("?? tests/", self.git("status", "--porcelain", cwd=wt),
+                      "未 commit 的改動照原樣留在 worktree")
+
+    def test_a_commit_with_changes_left_uncommitted_is_not_a_hand_in(self):
+        """**變異**:交件判準不看工作樹乾不乾淨 → rc 0,紅。"""
+        done, wt = self.run_it(commit='git add -A && git commit -q -m "t1 半套"',
+                               dirty="printf 'y = 2\\n' > tests/left.py")
+        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "1")
+        self.assertIn("當作沒交", done.stderr)
+        self.assertIn("tests/left.py", done.stderr, "說得出哪個檔沒 commit")
+        self.assertIn("?? tests/left.py", self.git("status", "--porcelain", cwd=wt))
 
 
 class TheEventModelIsTheOneThatActuallyRan(AutoFixBase):
@@ -1036,13 +1045,15 @@ class TheDispatchPacket(AutoFixBase):
         self.assertIn("test_thing.T.test_thing", packet, "紅榜逐條")
         self.assertIn("第一輪是紅的", packet, "excerpt 要帶著那一條斷言")
         self.assertIn("第 2 輪", packet, "第幾輪")
-        self.assertIn("patch-round2.diff", packet, "要交什麼")
+        self.assertIn("EVIDENCE-round2.md", packet, "要交什麼")
+        self.assertIn(os.path.join(self.home, "repo-wt", "t1"), packet, "worktree 在哪(#144)")
+        self.assertIn("`git add` / `git commit`", packet, "worker 自己 commit(#144)")
         self.assertIn("OBJECTION:", packet, "票寫錯的時候怎麼說")
         self.assertIn("memory/role/implementer.md", packet, "角色卡指路")
         self.assertIn("規則包", packet, "指向規則包,不是整份貼")
 
     def test_dry_run_keeps_the_round_copies(self):
-        """#96 A1 / A2:`--dry-run` 只印 —— 已經在的 worker 副本(交的 patch、work/)與驗證者
+        """#96 A1 / A2:`--dry-run` 只印 —— 已經在的 worker 輪次目錄(EVIDENCE、控制根)與驗證者
         副本原封不動。期望值是這裡事先寫進去的字串,不從被測腳本讀回來。
 
         **變異 m1**:拿掉 round_once 的 dry-run 守衛(照舊 `rm -rf "$FIX"`)→ A1 紅。
@@ -1053,8 +1064,8 @@ class TheDispatchPacket(AutoFixBase):
         fix = os.path.join(self.home, "repo-wt", "fix-t1", "round1")
         vfix = os.path.join(self.home, "repo-wt", "verify-t1", "round1")
         kept = {
-            os.path.join(fix, "patch-round1.diff"): "worker 交的 patch\n",
-            os.path.join(fix, "work", "marker"): "worker 改到一半\n",
+            os.path.join(fix, "EVIDENCE-round1.md"): "worker 交的 EVIDENCE\n",
+            os.path.join(fix, "control", "marker"): "控制根裡的東西\n",
             os.path.join(vfix, "marker"): "驗證者的案例\n",
         }
         for path, text in kept.items():
@@ -1068,12 +1079,12 @@ class TheDispatchPacket(AutoFixBase):
             with open(path, encoding="utf-8") as handle:
                 self.assertEqual(handle.read(), text, path)
 
-    def test_the_second_round_copy_comes_from_the_ticket_branch(self):
+    def test_the_second_round_worktree_is_the_ticket_branch(self):
         """#53 D3(D-018):分支名**只有一個來源 —— 票的 `branch` 欄**。票面 branch=t1-gaps
-        (下游專案的形狀),第 2 輪副本的 base 要取自那一條,不是退回 base_sha。夾具在
-        t1-gaps 放一個 t1 / main 都沒有的檔。
+        (下游專案的形狀),第 2 輪 worker 的 worktree 要是那一條(#144:worker 在它上面 commit),
+        不是寫死的 t1。
 
-        **變異 M5**:auto-fix.sh 的 `SRC` 改回 `${AC_FIX_SOURCE:-t$ID}` → 這一條紅。
+        **變異 M5**:auto-fix.sh 的 `ticket_branch` 改回寫死 `t$ID` → 這一條紅。
         """
         self.set_worker(WORKER_NEVER)
         self.ticket_ready(branch="t1-gaps")
@@ -1083,9 +1094,10 @@ class TheDispatchPacket(AutoFixBase):
         self.status(1, RED_LOG)
         done = self.auto_fix("--dry-run")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        base = os.path.join(self.home, "repo-wt", "fix-t1", "round2", "base")
-        self.assertTrue(os.path.isfile(os.path.join(base, "src", "only-on-gaps.txt")),
-                        done.stdout)
+        packet = self.read(os.path.join("reports", "t1", "20260921-100000-1",
+                                        "dispatch-round2.md"))
+        self.assertIn("`%s`(票分支 `t1-gaps`" % os.path.join(self.home, "repo-wt", "t1-gaps"),
+                      packet)
 
 
 class TheFirstRoundPacket(AutoFixBase):
@@ -1113,8 +1125,9 @@ class TheFirstRoundPacket(AutoFixBase):
         self.assertIn("#1", done.stdout, "票號")
         self.assertIn("把清單接上票的回歸", done.stdout, "票面快照")
         self.assertIn("base sha", done.stdout)
-        self.assertIn(self.fix_dir(), done.stdout, "副本路徑")
-        self.assertIn("patch-round1.diff", done.stdout, "要交什麼")
+        self.assertIn(self.fix_dir(), done.stdout, "輪次目錄(EVIDENCE 放這裡)")
+        self.assertIn(os.path.join(self.home, "repo-wt", "t1"), done.stdout, "worktree 路徑(#144)")
+        self.assertIn("EVIDENCE-round1.md", done.stdout, "要交什麼")
         self.assertIn("OBJECTION:", done.stdout, "票寫錯的時候怎麼說")
         self.assertIn("前景跑", done.stdout, "G14:丟背景就結束回合 = 什麼都沒交")
         self.assertEqual(self.worker_rounds(), [], "第 1 輪不由這一支起 worker")
@@ -1210,7 +1223,11 @@ class TheFirstRoundStartsFromReady(AutoFixBase):
         saw = self.worker_saw()
         self.assertEqual(saw["work"], self.fix_dir())
         self.assertEqual(saw["base_readme"], self.git("show", "%s:README" % row["base_sha"]),
-                         "副本 base/ 要是票的 base_sha 那一版")
+                         "worktree 要是票的 base_sha 那一版(第 1 輪從主線頭開)")
+        # #144:cwd 是票分支的 worktree,HEAD 在票分支上。
+        self.assertEqual(os.path.realpath(saw["cwd"]),
+                         os.path.realpath(os.path.join(self.home, "repo-wt", "t1")))
+        self.assertEqual(saw["branch"], "t1")
 
     def test_round_one_is_announced_runs_as_running_and_stops_awaiting_review(self):
         """A2:`ticket.attempt.start attempt=1` 由 auto-fix 發(只發一次);worker 跑的
@@ -1233,13 +1250,13 @@ class TheFirstRoundStartsFromReady(AutoFixBase):
         self.assertEqual(self.load_ticket("1")["state"], "InReview")
         self.assertEqual(self.inbox_rows(), [])
         self.assertTrue(self.went_in_review(), "events.jsonl 要有 ticket.state → InReview")
-        # #46 C2:第 1 輪綠了一樣收副本(確認用 —— #38/#40 起第 1 輪也走 `round_once`)。
-        for sub in ("work", "base"):
-            self.assertFalse(os.path.isdir(os.path.join(self.fix_dir(), sub)),
-                             "第 1 輪綠了 %s/ 沒被收掉" % sub)
-        for name in ("patch-round1.diff", "EVIDENCE-round1.md"):
-            self.assertTrue(os.path.isfile(os.path.join(self.fix_dir(), name)),
-                            "%s 是證據,不能跟著被掃掉" % name)
+        # #46 C2:第 1 輪綠了一樣收輪次目錄的控制根(確認用 —— #38/#40 起第 1 輪也走 `round_once`)。
+        self.assertFalse(os.path.isdir(os.path.join(self.fix_dir(), "control")),
+                         "第 1 輪綠了 control/ 沒被收掉")
+        self.assertTrue(os.path.isfile(os.path.join(self.fix_dir(), "EVIDENCE-round1.md")),
+                        "EVIDENCE 是證據,不能跟著被掃掉")
+        self.assertIn("tests/test_thing.py", self.git("diff", "--name-only", "main..t1").split(),
+                      "worker 的 commit 在票分支上(#144)")
 
     def test_a_ticket_that_is_not_ready_is_stopped_by_its_state(self):
         """A3:沒有狀態檔、票不是 Ready ⇒ 指名 state 停下 rc=2,不起 worker、不動票;
@@ -1508,8 +1525,8 @@ class TheCopyRootComesFromTheMainRepo(AutoFixBase):
         return path
 
     def copy_root_in(self, done):
-        found = re.search(r"副本路徑\*\*:`([^`]+)/work`", done.stdout)
-        self.assertIsNotNone(found, "派工文裡找不到副本路徑:" + done.stdout[-1500:] + done.stderr)
+        found = re.search(r"`([^`]+)/EVIDENCE-round1\.md`", done.stdout)
+        self.assertIsNotNone(found, "派工文裡找不到輪次目錄:" + done.stdout[-1500:] + done.stderr)
         return found.group(1)
 
     def expected(self):
@@ -1568,7 +1585,8 @@ class TheCopyRootComesFromTheMainRepo(AutoFixBase):
 
 
 class TheCopiesGetCollected(AutoFixBase):
-    """#29 A6 / G6:副本自己收 —— `work/` 與 `base/` 刪掉,patch 與 EVIDENCE 留著。
+    """#29 A6 / G6:副本自己收 —— `work/`、`base/` 與控制根刪掉,EVIDENCE 留著(#144 起 worker 的
+    輪次目錄只剩 EVIDENCE 與控制根;它的改動在票分支上)。
 
     以前它們只在**下一輪開始**才 `rm -rf`,綠了停 InReview 就永遠留著;而「沒人收」與
     「收過了」在磁碟上長得一樣,直到滿的那一刻(2026-09-16 某個下游專案的副本 14 GB 塞滿磁碟,
@@ -1578,47 +1596,22 @@ class TheCopiesGetCollected(AutoFixBase):
     def fix_dir(self, round_no=2):
         return os.path.join(self.home, "repo-wt", "fix-t1", "round%d" % round_no)
 
-    def test_work_and_base_are_gone_but_the_patch_stays(self):
-        """**變異**:把 `round_once` 裡那一句 `shed_copies "$FIX"` 拿掉 → 這一條紅。"""
+    def test_the_control_root_is_gone_but_the_evidence_stays(self):
+        """**變異**:把 `round_once` 裡那一句 `shed_copies "$FIX" "$WT"` 拿掉 → 這一條紅。"""
         self.set_worker(WORKER_FIXES)
         self.ticket_ready()
         self.first_round()
         done = self.auto_fix()
         self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
         where = self.fix_dir()
-        self.assertFalse(os.path.isdir(os.path.join(where, "work")), "work/ 沒被收掉")
-        self.assertFalse(os.path.isdir(os.path.join(where, "base")), "base/ 沒被收掉")
-        self.assertTrue(os.path.isfile(os.path.join(where, "patch-round2.diff")),
-                        "patch 是證據,不能跟著被掃掉")
-        self.assertTrue(os.path.isfile(os.path.join(where, "EVIDENCE-round2.md")))
+        self.assertFalse(os.path.isdir(os.path.join(where, "control")), "control/ 沒被收掉")
+        self.assertTrue(os.path.isfile(os.path.join(where, "EVIDENCE-round2.md")),
+                        "EVIDENCE 是證據,不能跟著被掃掉")
         self.assertIn("收掉副本", done.stdout)
-
-    def test_a_patch_left_inside_work_is_picked_out_before_the_copy_goes(self):
-        """worker 有時把交付物放在 `work/` 裡。**先撿出來再刪** —— 反過來的話,
-        刪掉的是這一輪唯一的一份 patch。
-
-        **變異**:把 `collect_from_copy` 那一句拿掉 → 這一條紅。
-        """
-        self.set_worker(WORKER_FIXES.replace(
-            'diff -ruN base work > "patch-round$AC_ROUND.diff" || true',
-            'diff -ruN base work > "work/patch-round$AC_ROUND.diff" || true')
-            .replace('> "EVIDENCE-round$AC_ROUND.md"',
-                     '> "work/EVIDENCE-round$AC_ROUND.md"')
-            .replace('>> "EVIDENCE-round$AC_ROUND.md"',
-                     '>> "work/EVIDENCE-round$AC_ROUND.md"'))
-        self.ticket_ready()
-        self.first_round()
-        done = self.auto_fix()
-        self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
-        where = self.fix_dir()
-        self.assertTrue(os.path.isfile(os.path.join(where, "patch-round2.diff")),
-                        done.stdout + done.stderr)
-        self.assertFalse(os.path.isdir(os.path.join(where, "work")))
-
 
     def test_a_hand_built_round_one_copy_is_collected_too(self):
         """#38 A4:主線用 Agent 手建的 `fix-t<n>/round1` —— 迴圈從 `S_ROUND+1` 起,碰不到它。
-        auto-fix 收過 patch、派下一輪之後,它的 `work/` 與 `base/` 也要不在,patch 留著。
+        auto-fix 收過件、派下一輪之後,它的 `work/` 與 `base/` 也要不在,EVIDENCE 留著。
 
         **變異**:拿掉迴圈前收前幾輪的那一句 `shed_copies "$WTBASE/fix-t$ID/round$p"` → 這一條紅。
         """
@@ -1628,13 +1621,13 @@ class TheCopiesGetCollected(AutoFixBase):
         where = self.fix_dir(1)
         for sub in ("work", "base"):
             self.write(os.path.join(sub, "README"), "main\n", where=where)
-        self.write("patch-round1.diff", RED_CASE, where=where)
+        self.write("EVIDENCE-round1.md", "# 手建第 1 輪\n", where=where)
         done = self.auto_fix()
         self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
         self.assertFalse(os.path.isdir(os.path.join(where, "work")), "round1 的 work/ 沒被收掉")
         self.assertFalse(os.path.isdir(os.path.join(where, "base")), "round1 的 base/ 沒被收掉")
-        self.assertTrue(os.path.isfile(os.path.join(where, "patch-round1.diff")),
-                        "patch 是證據,不能跟著被掃掉")
+        self.assertTrue(os.path.isfile(os.path.join(where, "EVIDENCE-round1.md")),
+                        "EVIDENCE 是證據,不能跟著被掃掉")
 
     def round_one_copy_with_pid(self, pid):
         """同上一條的手建第 1 輪,外加那一輪 worker 的 `worker.pid`(#46 C3)。"""
@@ -1644,7 +1637,7 @@ class TheCopiesGetCollected(AutoFixBase):
         where = self.fix_dir(1)
         for sub in ("work", "base"):
             self.write(os.path.join(sub, "README"), "main\n", where=where)
-        self.write("patch-round1.diff", RED_CASE, where=where)
+        self.write("EVIDENCE-round1.md", "# 手建第 1 輪\n", where=where)
         self.write("worker.pid", "%d\n" % pid, where=where)
         return where
 
@@ -1805,9 +1798,7 @@ echo "rerun $AC_ROUND ticket=$AC_TICKET" >> "$AC_TEST_LOG"
         """
         self.set_worker(WORKER_FIXES)
         self.ticket_ready()
-        patch = self.write("p1.diff", RED_CASE, where=self.home)
-        self.assertEqual(self.run_sh("scripts/apply.sh", "1", patch).returncode, 0)
-        wt = os.path.join(self.home, "repo-wt", "t1")
+        wt = self.ticket_branch_commit("1", files_of(RED_CASE))
         done = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
                            "--branch", "--ticket", "1", cwd=wt,
                            env=self.env(AC_ROOT=self.repo))
@@ -1821,9 +1812,7 @@ echo "rerun $AC_ROUND ticket=$AC_TICKET" >> "$AC_TEST_LOG"
     def test_no_auto_fix_leaves_the_red_round_for_a_human(self):
         self.set_worker(WORKER_FIXES)
         self.ticket_ready()
-        patch = self.write("p1.diff", RED_CASE, where=self.home)
-        self.assertEqual(self.run_sh("scripts/apply.sh", "1", patch).returncode, 0)
-        wt = os.path.join(self.home, "repo-wt", "t1")
+        wt = self.ticket_branch_commit("1", files_of(RED_CASE))
 
         done = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
                            "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
@@ -1979,10 +1968,7 @@ class MechanicalRedIsAttributed(AutoFixBase):
         """真 apply.sh 套 patch,(選擇性)在分支上再 commit 一筆碰 hard_block.paths 的改動 ——
         apply.sh 自己會以 rc 5 擋 hard_block,所以那一手只能是分支上另一個 commit ——
         再在 worktree 跑真 gate.sh(--no-auto-fix),最後由 auto-fix 從開場那條路讀它。"""
-        patch = self.write("p1.diff", patch_text, where=self.home)
-        done = self.run_sh("scripts/apply.sh", "1", patch)
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        wt = os.path.join(self.home, "repo-wt", "t1")
+        wt = self.ticket_branch_commit("1", files_of(patch_text))
         if protected_edit:
             self.write("scripts/land.sh", self.read("scripts/land.sh") + "\n# protected\n",
                        where=wt)
@@ -2173,11 +2159,12 @@ class TheResultBlockAtTheEndOfEvidence(AutoFixBase):
 # 就 exit 9、不交 patch;驗證者寫完 `started` 也輪詢 `worker-started` 最多 20 秒,等不到就
 # exit 9、不交件。單向的標記只擋得住「worker 先、驗證者後」—— 驗證者先跑完再派 worker 的
 # 串行,標記檔早就在了。@VERIFIER_HANDS_IN@ 換成 0 時驗證者什麼都不交就退出(C6)。
-# #60:驗證者**在寫 `started` 之前**先看 worker 的 patch-round1.diff(@WPATCH@)在不在,
+# #60:驗證者**在寫 `started` 之前**先看 worker 交件的標記(@WPATCH@:它 commit 完才寫)在不在,
 # 把 yes / no 寫進 @VSAW@ —— 先看再標記,平行那一種的 worker 才不可能搶在它看之前交件。
 # @WORKER_MODE@ 換成 objection 時 worker 只交一行反駁、nopatch 時什麼都不交。
 FIRST_ROUND_PAIR = '''#!/bin/sh
 set -e
+W=$PWD
 cd "$AC_WORK"
 if [ "$AC_ROLE" = verifier ]; then
     echo "verifier ran round $AC_ROUND" >> "@VCALLS@"
@@ -2256,8 +2243,8 @@ case "@WORKER_MODE@" in
     nopatch)
         exit 0 ;;
 esac
-mkdir -p work/tests
-cat > work/tests/test_thing.py <<'CASE'
+mkdir -p "$W"/tests
+cat > "$W"/tests/test_thing.py <<'CASE'
 import unittest
 
 
@@ -2265,7 +2252,8 @@ class T(unittest.TestCase):
     def test_thing(self):
         self.assertEqual(1, 1)
 CASE
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+(cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
+: > handed-in
 printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
 '''
 
@@ -2295,7 +2283,7 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
                         .replace("@VCALLS@", self.vcalls())
                         .replace("@VSAW@", self.vsaw())
                         .replace("@WPATCH@", os.path.join(self.home, "repo-wt", "fix-t1",
-                                                          "round1", "patch-round1.diff"))
+                                                          "round1", "handed-in"))
                         .replace("@WORKER_MODE@", worker_mode)
                         .replace("@VMARK@", os.path.join(self.vfix(), "started"))
                         .replace("@WMARK@", os.path.join(self.home, "repo-wt", "fix-t1",
@@ -2416,10 +2404,10 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
         self.assertIn("test_worker_case_is_there", branch)
 
     def test_c6_a_verifier_that_hands_in_nothing_blocks_but_keeps_the_worker_patch(self):
-        """C6:驗證者沒交件 ⇒ worker 的 patch 先收進 reports,票 Blocked、恰 1 頁 decision、
-        attempt.failed reason=verifier-no-patch、rc=5。
+        """C6:驗證者沒交件 ⇒ worker 的 commit 留在分支、EVIDENCE 先收進 reports,票 Blocked、
+        恰 1 頁 decision、attempt.failed reason=verifier-no-patch、rc=5;不收件、不跑閘門。
 
-        **變異**:worker 的 patch 被一起清掉(不先收進 reports)→ 紅。
+        **變異**:worker 的 EVIDENCE 不先收進 reports → 紅。
         """
         self.arm(needs_verifier=True, hands_in=False)
         done = self.auto_fix("--no-review")
@@ -2430,12 +2418,13 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
         self.assertEqual(len(pages), 1, pages)
         self.assertEqual(pages[0].get("kind"), "decision")
         self.assertIn("驗證者沒交出 patch-verify", json.dumps(pages[0], ensure_ascii=False))
-        self.assertEqual(len(self.result_files("patch-round1.diff")), 1,
-                         "worker 的 patch 要留在 reports 目錄")
+        self.assertEqual(len(self.result_files("EVIDENCE-round1.md")), 1,
+                         "worker 的 EVIDENCE 要留在 reports 目錄")
+        self.assertIn("tests/test_thing.py", self.git("diff", "--name-only", "main..t1").split(),
+                      "worker 的 commit 留在分支上")
         failed = [row for row in self.events() if row["kind"] == "ticket.attempt.failed"]
         self.assertEqual([row.get("reason") for row in failed], ["verifier-no-patch"])
-        self.assertFalse(self.git("branch", "--list", "t1").strip(),
-                         "沒有案例就不套、不量綠")
+        self.assertNotIn("gate.rerun", self.kinds(), "沒有案例就不收件、不量綠")
 
     def saw_patch(self):
         self.assertTrue(os.path.exists(self.vsaw()), "驗證者沒起,沒有東西可看")
@@ -2472,7 +2461,7 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
                          [("verifier", 1), ("worker", 1)], rows)
 
     def test_t60_interface_fixed_missing_starts_the_verifier_after_the_patch(self):
-        """#60 驗收二(缺):驗證者起跑時 patch-round1.diff 已經在;派工文含那一句與 patch 路徑。
+        """#60 驗收二(缺):驗證者起跑時 worker 已經 commit 了;派工文含那一句與票分支名(#144)。
 
         **變異**:`start_verifier_bg` 那一手不看 V_PARALLEL(照舊平行)→ 驗證者看不到 patch → 紅;
         派工文不帶第 5 個參數 → 「以分支上的實作為準」紅。
@@ -2486,8 +2475,7 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
         packet = self.sent_verifier_packet()
         self.assertIn("以分支上的實作為準", packet)
         self.assertIn("在 EVIDENCE 記一行", packet)
-        self.assertIn(os.path.join(self.home, "repo-wt", "fix-t1", "round1",
-                                   "patch-round1.diff"), packet)
+        self.assertIn("worker 的 commit 在分支 `t1`", packet)
         # 兩份照樣一起進閘門那一棵樹(#51 C5 不因為晚起而少一份)。
         self.assertIn("test_worker_case_is_there",
                       self.git("show", "t1:verify/example/test_ticket_1.py"))
@@ -2552,6 +2540,7 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
 # 第 2 次是 test_defect 驗證者 v2:把它副本裡三個檔在不在記進 @V2LOG@,再交 test_fix_1.py。
 PARALLEL_VERIFIER_THEN_TEST_DEFECT = '''#!/bin/sh
 set -e
+W=$PWD
 cd "$AC_WORK"
 if [ "$AC_ROLE" = verifier ]; then
     n=$(cat "@VCOUNT@" 2>/dev/null || echo 0)
@@ -2658,8 +2647,8 @@ EV
     exit 0
 fi
 echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
-mkdir -p work/tests
-cat > work/tests/test_thing.py <<'CASE'
+mkdir -p "$W"/tests
+cat > "$W"/tests/test_thing.py <<'CASE'
 import unittest
 
 
@@ -2667,7 +2656,7 @@ class T(unittest.TestCase):
     def test_thing(self):
         self.assertEqual(1, 1)
 CASE
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+(cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
 printf 'OBJECTION: test_defect fixture 把正確結果寫成 2\\n' > "EVIDENCE-round$AC_ROUND.md"
 '''
 
@@ -2771,9 +2760,10 @@ class AParallelVerifierThenATestDefect(AutoFixBase):
 # 的 print —— 不接 tty 時是區塊緩衝,只寫進 worker 自己的 stdout 的話,被砍就跟著消失。
 # Python 是 `sh` 的**子行程**(不 exec):只砍 `sh` 那一層的話它還活著,@PIDF@ 記它的 pid。
 WORKER_HANGS = """#!/bin/sh
+W=$PWD
 cd "$AC_WORK"
-mkdir -p work/tests
-echo "half of the fix" > work/tests/half.py
+mkdir -p "$W"/tests
+echo "half of the fix" > "$W"/tests/half.py
 python3 -c "import os, time; open('@PIDF@', 'w').write(str(os.getpid())); print('worker got this far before the timeout'); time.sleep(60)"
 """
 
@@ -2946,14 +2936,15 @@ class ClaudeIsAskedForAnEnvelope(AutoFixBase):
 
 
 class ATimedOutWorkerLeavesItsWorkBehind(AutoFixBase):
-    """#57 (b):worker 逾時 —— 副本不收、log 邊跑邊寫、work/ 的半成品存成 patch-partial。
+    """#57 (b):worker 逾時 —— worktree 不動(半成品還在)、log 邊跑邊寫、頁上寫它做到哪。
 
-    以前逾時與「沒交 patch」同一條路:副本照收、log 是 worker 的 stdout 本身(被砍時
-    緩衝裡的全丟),做了一小時的東西與什麼都沒做長得一樣。
+    以前逾時與「沒交件」同一條路:副本照收、log 是 worker 的 stdout 本身(被砍時
+    緩衝裡的全丟),做了一小時的東西與什麼都沒做長得一樣。#144 起半成品就躺在票分支的
+    worktree(沒 commit 的那幾個檔),不另存 diff。
     """
 
-    def test_the_copy_the_log_and_a_partial_patch_survive_the_timeout(self):
-        """**變異 M1**:逾時那一段拿掉(退回走「沒交 patch」)→ 副本被收、沒有 partial,紅。
+    def test_the_worktree_and_the_log_survive_the_timeout(self):
+        """**變異 M1**:逾時那一段拿掉(退回走「沒交件」)→ 頁上不是逾時、沒有半成品清單,紅。
         **變異 M2**:worker 的環境不帶 PYTHONUNBUFFERED、log 不 tee → log 是空的,紅。
         **變異 M3**:逾時只砍 `sh` 那一層、不砍群組 → 孫行程拿著 pipe,tee 等不到 EOF,
         log / rc 那一格紅或整條逾時。"""
@@ -2968,20 +2959,17 @@ class ATimedOutWorkerLeavesItsWorkBehind(AutoFixBase):
         done = self.auto_fix()
 
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
-        fix = os.path.join(self.home, "repo-wt", "fix-t1", "round2")
-        for sub in ("work", "base"):
-            self.assertTrue(os.path.isdir(os.path.join(fix, sub)),
-                            "逾時的副本 %s/ 被收掉了" % sub)
+        wt = os.path.join(self.home, "repo-wt", "t1")
+        with open(os.path.join(wt, "tests", "half.py"), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "half of the fix\n", "逾時的半成品被動了")
         run_dir = os.path.join(self.repo, "reports", "t1", "20260921-100000-1")
         with open(os.path.join(run_dir, "worker-round2.log"), encoding="utf-8") as handle:
             self.assertIn("worker got this far before the timeout", handle.read())
-        with open(os.path.join(run_dir, "patch-partial-round2.diff"), encoding="utf-8") as handle:
-            partial = handle.read()
-        self.assertIn("+++ work/tests/half.py", partial)
-        self.assertIn("+half of the fix", partial)
         pages = self.inbox_rows()
         self.assertEqual(len(pages), 1, pages)
-        self.assertIn("逾時", self.read(pages[0]["page"]))
+        page = self.read(pages[0]["page"])
+        self.assertIn("逾時", page)
+        self.assertIn("tests/half.py", page, "頁上要寫半成品(沒 commit 的檔)在哪")
         self.assertEqual(self.load_ticket("1")["state"], "Blocked")
         failed = [row for row in self.events() if row["kind"] == "ticket.attempt.failed"]
         self.assertEqual([row.get("reason") for row in failed], ["timeout"])
@@ -3272,7 +3260,7 @@ AGENT_PROBES = """out="@OUT@/$AC_ROLE"
 mkdir -p "$out"
 env | grep '^AC_' > "$out/env.txt" || true
 (
-    cd "$AC_WORK/work"
+    if [ -d "$AC_WORK/work" ]; then cd "$AC_WORK/work"; fi
     mkdir -p "$AC_ROOT/memory/model"
     old=$(python3 -c 'import datetime; print(datetime.date.today() - datetime.timedelta(days=3))')
     echo "- 探針的一條 (#1, $old, worker@opus)" > "$AC_ROOT/memory/model/huge-probe.inbox.md"
@@ -3375,13 +3363,13 @@ class TheAgentRunsAgainstAThrowawayControlRoot(AutoFixBase):
         self.assertIn("status.json", self.probe(role, "control.txt"),
                       "副本裡那一趟閘門的狀態檔沒有落在控制根")
 
-    def assert_the_patch_is_clean(self, path):
-        with open(path, encoding="utf-8") as handle:
-            heads = [line for line in handle if line.startswith("+++ ")]
-        self.assertTrue(heads, "patch 是空的 —— 這一條什麼都沒驗")
-        bad = [line for line in heads
-               if re.match(r"\+\+\+ work/(board/events\.jsonl|tickets/|reports/)", line)]
-        self.assertEqual(bad, [], "副作用跑進了 patch")
+    def assert_the_branch_is_clean(self):
+        """#144:worker 的交件是票分支上的 commit;控制根的副作用不能跟著 commit 進去。"""
+        names = self.git("diff", "--name-only", "main..t1").split()
+        self.assertTrue(names, "分支上沒有改動 —— 這一條什麼都沒驗")
+        bad = [name for name in names
+               if re.match(r"(board/events\.jsonl|tickets/|reports/)", name)]
+        self.assertEqual(bad, [], "副作用跑進了 worker 的 commit")
 
     def test_a9_a10_a11_a13_the_worker_leaves_the_real_board_alone(self):
         """**變異 M7**(A17 a):worker 的環境改回繼承主 repo 的 AC_ROOT → ticket.created /
@@ -3396,8 +3384,7 @@ class TheAgentRunsAgainstAThrowawayControlRoot(AutoFixBase):
         self.assertTrue(os.path.exists(os.path.join(self.out, "worker", "ticket.txt")),
                         "worker 的探針沒跑:" + done.stdout + done.stderr)
         self.assert_the_board_is_untouched(tickets_before, pages_before)
-        self.assert_the_patch_is_clean(
-            os.path.join(self.home, "repo-wt", "fix-t1", "round1", "patch-round1.diff"))
+        self.assert_the_branch_is_clean()
         self.assert_the_copy_gate_read_the_ticket("worker")
         self.assert_the_agent_env("worker")
 
@@ -3790,10 +3777,11 @@ emit() { AC_ROOT="$REPO" python3 "$REPO/scripts/event.py" emit "$@" >/dev/null; 
 if [ "$AC_ROLE" = "@WHO@" ]; then
 @STRAY@
 fi
+W=$PWD
 cd "$AC_WORK"
 [ "$AC_ROLE" = worker ] || exit 0
-mkdir -p work/tests
-cat > work/tests/test_thing.py <<'CASE'
+mkdir -p "$W"/tests
+cat > "$W"/tests/test_thing.py <<'CASE'
 import unittest
 
 
@@ -3801,7 +3789,7 @@ class T(unittest.TestCase):
     def test_thing(self):
         self.assertEqual(1, 1)
 CASE
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+(cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
 printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
 """
 
@@ -3863,8 +3851,13 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
             self.assertIn(path, pages[0]["what"])
         self.assertIn("前 ", pages[0]["what"], "頁上要有前後證據")
         self.assertEqual(len(self.guard_reports()), 1, self.guard_reports())
-        self.assertEqual(self.git("branch", "--list", "t1").strip(), "", "越界的 patch 不套")
+        self.assertEqual(self.apply_runs(), [], "越界時不收件(apply 沒跑)")
         return pages[0]
+
+    def apply_runs(self):
+        return [path for path in glob.glob(os.path.join(self.repo, "reports", "t1", "*",
+                                                         "status.json"))
+                if json.load(open(path, encoding="utf-8")).get("kind") == "apply"]
 
     def assert_not_stopped(self, done):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -3882,7 +3875,23 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
                 self.arm(stray)
                 done = self.auto_fix("--no-review")
                 self.assert_stopped(done, path)
-                self.assertTrue(os.path.isdir(os.path.join(self.fix_dir(), "work")), "副本留著")
+                self.assertTrue(os.path.isdir(os.path.join(self.home, "repo-wt", "t1")),
+                                "worktree 留著")
+
+    def test_144_another_branch_moved_by_the_agent_stops_the_round(self):
+        """#144:守衛的監看集加上 `refs/heads` 其他分支(同一個守衛,不是新關卡)。
+        **變異**:guard_snapshot 不拍分支 ref → rc 0,紅。"""
+        self.arm('git -C "$REPO" update-ref refs/heads/other HEAD')
+        done = self.auto_fix("--no-review")
+        self.assert_stopped(done, "refs/heads/other")
+
+    def test_144_commits_on_the_ticket_branch_are_not_a_violation(self):
+        """worker 在自己的票分支 commit 是交件(這一條的假 worker 本來就 commit)。
+        **變異**:守衛不跳過這張票自己的分支 → rc 8,紅。"""
+        self.arm(":")
+        done = self.auto_fix("--no-review")
+        self.assert_not_stopped(done)
+        self.assertIn("tests/test_thing.py", self.git("diff", "--name-only", "main..t1").split())
 
     def test_a4_a_dirty_file_changed_again_is_caught_by_its_content(self):
         """**M2**:只比 porcelain(` M` 前後都一樣)→ 不停,紅。量 rc 8;值 = A4 已髒檔。"""
@@ -4158,7 +4167,7 @@ class TheMissingCasesSendAVerifierEveryRound(AutoFixBase):
         self.set_worker(FIRST_ROUND_PAIR
                         .replace("@VCALLS@", self.vcalls())
                         .replace("@VSAW@", os.path.join(self.home, "verifier-saw-patch"))
-                        .replace("@WPATCH@", os.path.join(fix, "patch-round2.diff"))
+                        .replace("@WPATCH@", os.path.join(fix, "handed-in"))
                         .replace("@WORKER_MODE@", "patch")
                         .replace("@VMARK@", os.path.join(self.home, "repo-wt", "verify-t1",
                                                          "round2", "started"))
@@ -4320,12 +4329,13 @@ class TheMissingCasesSendAVerifierEveryRound(AutoFixBase):
 EMPTY_PATCH_VERIFY = """#!/bin/sh
 set -e
 echo "$AC_ROLE ran round $AC_ROUND" >> "$AC_TEST_LOG"
+W=$PWD
 cd "$AC_WORK"
 if [ "$AC_ROLE" = worker ]; then
     if [ "@WORKER_PATCH@" = 1 ]; then
-        mkdir -p work/src
-        printf 'CHANGED = True\\n' > work/src/worker_change.py
-        diff -ruN base work > "patch-round$AC_ROUND.diff" || true
+        mkdir -p "$W"/src
+        printf 'CHANGED = True\\n' > "$W"/src/worker_change.py
+        (cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
     fi
     if [ "@WORKER_DEFECT@" = 1 ]; then
         printf 'OBJECTION: test_defect fixture 把正確結果寫成 2\\n' > "EVIDENCE-round$AC_ROUND.md"
@@ -4388,9 +4398,7 @@ class AnEmptyPatchVerifyIsNoChange(AutoFixBase):
         self.arm(**arm)
         self.ticket_ready(needs_verifier=True, interface_fixed=True, retry_limit=1,
                           verify={"files": [], "tags": [], "run": "", "notes": ""})
-        applied = self.run_sh("scripts/apply.sh", "1",
-                              self.write("p1.diff", RED_CASE, where=self.home))
-        self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+        self.ticket_branch_commit("1", files_of(RED_CASE))
         gap = self.write("round.log.no-cases", NO_CASES, where=self.home)
         base = self.git("rev-parse", "main").strip()
         run_id = "20260921-100000-1"
@@ -4401,7 +4409,7 @@ class AnEmptyPatchVerifyIsNoChange(AutoFixBase):
                            "--run-id", run_id, "--rc", "1", "--no-cases-log", gap)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
-    # ------------------------------------------- A1 / A2:有 worker 的 patch 就只套它
+    # ------------------------------------------- A1 / A2:worker 有 commit 就只收它
 
     def test_a1_a_test_defect_with_a_worker_patch_applies_only_the_worker_patch(self):
         """T1。**變異 M1**:拿掉 VSLOT 的 0 byte 判斷 → 空檔照樣進 apply → rc=3「套不上」→ 紅。
@@ -4469,19 +4477,21 @@ class AnEmptyPatchVerifyIsNoChange(AutoFixBase):
         self.assertEqual(len(self.reruns("2")), 1, said)
         self.assertEqual(self.load_ticket("1")["state"], "InReview", said)
 
-    def test_a3_without_a_branch_copy_it_stops_before_the_gate(self):
-        """第 1 輪就 test_defect、還沒有分支:只併計畫沒有地方重跑閘門 → 停下、計畫不併。
+    def test_a3_a_round_one_test_defect_reruns_the_gate_in_the_ticket_worktree(self):
+        """第 1 輪就 test_defect、worker 沒 commit:票分支與 worktree 派工前就開了(#144),
+        只併計畫照樣在那個 worktree 重跑閘門(以前沒有分支 = 沒地方重跑,停下)。
 
-        **變異**:拿掉 plan_only_receive 的副本守衛 → 計畫併進票、閘門在不存在的目錄跑 → 紅。"""
+        **變異**:auto-fix 派工前不建 worktree(交給 apply 建)→ 「閘門沒地方重跑」→ 紅。"""
         self.arm(worker_defect="1")
         self.ticket_ready()
         done = self.auto_fix("--no-review")
         said = done.stdout + done.stderr
-        self.assertNotEqual(done.returncode, 0, said)
-        self.assertIn("閘門沒地方重跑", done.stderr)
-        self.assertEqual(self.load_ticket("1")["state"], "Blocked", said)
-        self.assertEqual(self.reruns("1"), [], said)
-        self.assertNotIn("verify", self.load_ticket("1"), said)
+        self.assertEqual(done.returncode, 0, said)
+        self.assertIn("只併驗證者計畫", done.stdout, said)
+        self.assert_plan_on_ticket(done)
+        self.assertEqual(len(self.reruns("1")), 1, said)
+        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "0",
+                         "worker 沒 commit、驗證者沒改動:分支頭就是主線頭")
 
     # ------------------------------------------------------ A5:真的什麼都沒交仍停
 
