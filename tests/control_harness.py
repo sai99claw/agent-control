@@ -433,7 +433,7 @@ class Sandbox(unittest.TestCase):
 
     def inbox_rows(self, ticket=None, acked=None):
         """收件匣的頁(`reports/inbox/*.md` 與 `acked/*.md`)第一行那份 JSON,加上
-        `name` / `page` / `acked`;舊的在前。`acked=None` 兩邊都要。只讀頁本身。"""
+        `name` / `page` / `acked`;舊的在前。`acked=None` 兩邊都要;舊的在前。只讀頁本身。"""
         rows = []
         for sub, flag in (("", False), ("acked", True)):
             if acked is not None and acked != flag:
@@ -452,8 +452,10 @@ class Sandbox(unittest.TestCase):
                     meta = json.loads(head[len("<!-- inbox "):-len(" -->")])
                 meta.update({"name": name[:-3], "acked": flag,
                              "page": os.path.relpath(path, self.repo)})
-                rows.append(meta)
-        rows.sort(key=lambda row: (str(row.get("at") or ""), row["name"]))
+                rows.append((os.stat(path).st_mtime_ns, meta))
+        # 同一秒寫的幾頁 `at` 分不出先後,用 mtime 排(與 `inbox.entries` 同一條規則)。
+        rows = [meta for _, meta in sorted(
+            rows, key=lambda pair: (str(pair[1].get("at") or ""), pair[0], pair[1]["name"]))]
         return [row for row in rows if ticket is None or str(row.get("ticket")) == str(ticket)]
 
     def tickets_on_disk(self):
