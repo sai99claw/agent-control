@@ -9,7 +9,7 @@ A5  | cli   | claude-code+ultra、codex+turbo、表外 tool(other)+high | rc 2�
 A6  | cli   | ticket.py create … --effort high / 不合法 / 不給 | 票檔 effort="high";rc 2 不寫檔;沒有 effort 鍵 | 票面 A6 原話
 A7  | integ | auto-fix --dry-run:票 effort / 只有 config effort.implement / 兩者都有 / 都沒有;codex 票;沒 model 的 claude-code 票 | worker 命令那一行與 `auto-fix: effort 來源=<票|config> <e>` 那一行 | 票面 A7 原話;無 effort 那一句抄 tests/test_auto_fix_codex.py test_a20
 A8  | integ | 票 effort=ultra(claude-code)/ config effort.implement=ultra;另乾跑一次 | rc 2、stderr 含 effort=ultra 與來源;票 Ready、state_version 與 cost 不變、沒有 agent.start | 票面 A8 原話
-A9  | integ | 假 claude worker 交件一輪 / 失敗一輪;ticket.py cost --effort high | agent.start/done/failed 帶 effort=high、無 effort 不帶;cost 列恰 15 鍵、effort 對上;ticket.cost 事件帶 effort | 票面 A9 原話;15 鍵 = #94 的 14 鍵字面 + effort
+A9  | integ | 假 claude worker 交件一輪 / 失敗一輪;ticket.py cost --effort high | agent.start/done/failed 帶 effort=high、無 effort 不帶;cost 列恰 15 鍵、effort 對上(#143 起成本列不發事件) | 票面 A9 原話;15 鍵 = #94 的 14 鍵字面 + effort
 A9b | doc   | 讀 tickets/SCHEMA.md | 票欄位表有 `effort` 那一列;成本列含 effort 與「15 鍵」 | 票面 A9 末句
 A10 | integ | 表 worker = [codex astra, opus];假 codex 回額度信封:票 effort=high(opus 表值 medium)/ effort=ultra(opus 表值 high) | 同一次接著起 opus:high → `--effort high`(票贏);ultra → `--effort high`(取表值,不寫 null);票的 model / tool / effort 都不改 | 票面 A10;#121 A2 / A7 取代「改派 opus、票 effort 設 null」(tickets/SCHEMA.md effort 列)
 
@@ -413,7 +413,7 @@ class EventsAndCostCarryTheEffort(EffortBase):
         self.assertIsNone(row.get("effort"))
 
     def test_a9_ticket_cost_takes_effort(self):
-        """A9 `ticket.py cost … --effort high` → 列恰 15 鍵、effort=high;ticket.cost 事件同列;不給 → null。"""
+        """A9 `ticket.py cost … --effort high` → 列恰 15 鍵、effort=high;不給 → null。"""
         self.claude_ticket()
         done = self.ticket("cost", "1", "--role", "worker", "--round", "1", "--model", "opus",
                            "--effort", "high")
@@ -421,9 +421,6 @@ class EventsAndCostCarryTheEffort(EffortBase):
         row = self.load_ticket("1")["cost"][-1]
         self.assertEqual(set(row), COST_KEYS_15)
         self.assertEqual(row.get("effort"), "high")
-        events = [r for r in self.events() if r["kind"] == "ticket.cost"]
-        self.assertEqual(len(events), 1, events)
-        self.assertEqual(unquoted(events[0].get("effort")), "high", events[0])
         done = self.ticket("cost", "1", "--role", "worker", "--round", "2", "--model", "opus")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         row = self.load_ticket("1")["cost"][-1]

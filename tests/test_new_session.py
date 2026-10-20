@@ -404,7 +404,7 @@ class A6ThePageFitsTheHook(OpeningPage):
             self.make_ticket(n, state="Ready", subject="%02d" % n + "滿" * 58)
         self.post(50)
         for n in range(30):
-            done = self.run_py("scripts/event.py", "emit", "ticket.state", "--role", "main",
+            done = self.run_py("scripts/event.py", "emit", "ticket.frozen", "--role", "main",
                                "--ticket", str(n + 1), "--note", "事件 %d:" % n + "長" * 40)
             self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         out = self.main()
@@ -436,7 +436,7 @@ class TheOtherSectionsHaveACapToo(OpeningPage):
         self.assertIn("處置", part, "塊尾那一行處置不能被收掉")
 
     def test_one_long_event_is_cut_to_one_short_line(self):
-        done = self.run_py("scripts/event.py", "emit", "ticket.state", "--ticket", "1",
+        done = self.run_py("scripts/event.py", "emit", "ticket.frozen", "--ticket", "1",
                            "--note", "長" * 400)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         part = section(self.main(), "2. 最近發生的事")

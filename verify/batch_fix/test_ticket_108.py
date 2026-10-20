@@ -291,12 +291,7 @@ class BatchWorld(Sandbox):
         return found[0]
 
     def decisions(self):
-        path = os.path.join(self.repo, "reports", "inbox", "index.jsonl")
-        if not os.path.exists(path):
-            return []
-        with open(path, encoding="utf-8") as handle:
-            rows = [json.loads(line) for line in handle if line.strip()]
-        return [row for row in rows if row.get("kind") == "decision"]
+        return [row for row in self.inbox_rows() if row.get("kind") == "decision"]
 
     def assert_one_decision_on_first_ticket_naming_the_batch(self, done):
         rows = self.decisions()

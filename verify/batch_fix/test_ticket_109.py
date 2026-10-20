@@ -171,22 +171,13 @@ class BatchLandWorld(Sandbox):
         return [row for row in self.events() if row.get("kind") == kind]
 
     def pages(self, ident=None):
-        path = os.path.join(self.repo, "reports", "inbox", "index.jsonl")
-        if not os.path.exists(path):
-            return []
         out = []
-        with open(path, encoding="utf-8") as handle:
-            for line in handle:
-                if not line.strip():
-                    continue
-                row = json.loads(line)
-                if ident is not None and str(row.get("ticket")) != str(ident):
-                    continue
-                if row.get("kind") != "decision":
-                    continue
-                with open(os.path.join(self.repo, row["page"]), encoding="utf-8") as fh:
-                    row["text"] = fh.read()
-                out.append(row)
+        for row in self.inbox_rows(ident):
+            if row.get("kind") != "decision":
+                continue
+            with open(os.path.join(self.repo, row["page"]), encoding="utf-8") as fh:
+                row["text"] = fh.read()
+            out.append(row)
         return out
 
     def kicked_values(self):

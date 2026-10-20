@@ -164,12 +164,6 @@ class GateSh(Sandbox):
         return [line.strip() for line in self.read("calls.log", where=self.home).splitlines()
                 if line.strip()]
 
-    def inbox_rows(self):
-        path = os.path.join("reports", "inbox", "index.jsonl")
-        if not self.exists(path):
-            return []
-        return [json.loads(line) for line in self.read(path).splitlines() if line.strip()]
-
     # ------------------------------------------------------ 對照表挑得對不對
 
     def test_a_mapped_file_runs_the_modules_that_guard_it(self):

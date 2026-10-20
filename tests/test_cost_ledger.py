@@ -1,5 +1,5 @@
 """#94 成本帳一列一形:cost[] 每列 15 鍵(#114 A9 加 effort)、outcome 只收登記字、token 取 modelUsage 全模型加總、
-ticket.cost 事件帶整列、每個派工點填 outcome / run_id、關票寫 cost_total。
+每個派工點填 outcome / run_id、關票寫 cost_total。
 
 ## 驗收表(票面每一條一列;期望值全部取自票面字面或手算,不從被測程式算回來)
 C1 | unit   | cost 帶信封 session_id=s-1 + --outcome handed-in --run-id r-1   | 列鍵集合 == 15 鍵、三新鍵值對上      | 票面 C1 字面
@@ -8,7 +8,7 @@ C2 | unit   | 每個登記字(配它所屬的角色)各寫一列                
 C2 | unit   | --outcome passed                                               | rc=2、stderr 印整張表、cost/事件不多  | 票面 C2 字面
 C3 | unit   | usage {5,77,0,9} + modelUsage m-a {5,77,0,9} m-b {3,20,4,100}   | (8, 97, 4, 109)                       | 手算 5+3 / 77+20 / 0+4 / 9+100
 C3 | unit   | 只有 usage 的信封                                               | (5, 77, 0, 9)                         | 票面 C3 字面
-C4 | unit   | 寫一列後讀最後一筆 ticket.cost                                  | 列的每鍵(除 at)事件裡值相同          | 票面 C4 字面
+C4 | unit   | 寫一列後 events.jsonl                                           | 不多任何一筆(#143 刪鏡像事件)       | #143 驗收 4
 C5 | script | auto-fix 假 worker 交 / 不交;驗證者交;開題者判 accepted / 不寫 TRIAGE;review pass;land 綠 / 全套紅 | 各列 outcome / run_id | 票面 C5 字面
 C6 | unit   | 預放六列後 close / set state Done;close 被拒                  | cost_total 逐格 == 手算;拒絕時沒有    | 票面 C6 手算(本檔 Close 類 docstring)
 C7 | unit   | cost 不動 state_version / review;close 只 +1                  | 版本差 0 / 1                          | 票面 C7 字面 + 既有 close 契約(+1)
@@ -103,8 +103,6 @@ class CostBase(Sandbox):
     def rows(self):
         return self.load_ticket("1").get("cost") or []
 
-    def cost_events(self):
-        return [row for row in self.events() if row["kind"] == "ticket.cost"]
 
 
 class TheRowHasOneShape(CostBase):
@@ -147,16 +145,16 @@ class OutcomeIsRegistered(CostBase):
         self.assertEqual(len(self.rows()), len(REGISTERED))
 
     def test_c2_an_unregistered_word_is_refused_and_writes_nothing(self):
-        """C2 反例:--outcome passed → rc=2、stderr 印整張表、cost[] 不變、不多一筆 ticket.cost。"""
+        """C2 反例:--outcome passed → rc=2、stderr 印整張表、cost[] 不變、不多一筆事件。"""
         self.cost("--outcome", "handed-in")
         rows_before = len(self.rows())
-        events_before = len(self.cost_events())
+        events_before = self.events()
         done = self.cost("--outcome", "passed", "--run-id", "r-x")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         for word in REGISTERED_WORDS:
             self.assertIn(word, done.stderr, "stderr 沒印出登記字 %s" % word)
         self.assertEqual(len(self.rows()), rows_before)
-        self.assertEqual(len(self.cost_events()), events_before)
+        self.assertEqual(self.events(), events_before)
 
 
 class TokensSumEveryModel(CostBase):
@@ -199,24 +197,21 @@ class TokensSumEveryModel(CostBase):
         self.assertIn("agy 信封沒有 result 行", row["note"])
 
 
-class TheEventCarriesTheWholeRow(CostBase):
+class TheRowIsTheOnlyCopy(CostBase):
 
-    def test_c4_ticket_cost_event_equals_the_row_minus_at(self):
-        """C4 寫一列後最後一筆 ticket.cost 對列的每鍵(除 at)值相同。
+    def test_c4_a_cost_row_lives_only_on_the_ticket(self):
+        """C4(#143 改,D-054 Q5):成本列只寫票的 `cost[]`,events.jsonl 不多任何一筆 ——
+        同一列不再存第二份。
 
-        事件層 `emit` 本來就不寫值為 None 的鍵(event.py),所以比 `event.get(key)`;
-        票面點名的七鍵這一列都給了非 null 的值,它們必須真的在事件裡。"""
+        **變異**:`cmd_cost` 存檔後仍發一筆事件 → 這一條紅。"""
+        before = self.events()
         done = self.cost("--from-envelope", self.envelope_file(multi_model_envelope("s-4")),
                          "--outcome", "handed-in", "--run-id", "r-4")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         row = self.rows()[-1]
-        event = self.cost_events()[-1]
-        self.assertEqual(event.get("ticket"), "1")
-        for key in ("model", "tokens_in", "cache_write", "cache_read",
-                    "outcome", "run_id", "session_id"):
-            self.assertIn(key, event, "ticket.cost 事件沒帶 %s" % key)
-        for key in sorted(set(row) - {"at"}):
-            self.assertEqual(event.get(key), row[key], key)
+        self.assertEqual((row["outcome"], row["run_id"], row["session_id"]),
+                         ("handed-in", "r-4", "s-4"))
+        self.assertEqual(self.events(), before, "cost 發了事件")
 
 
 class AutoFixRowsHaveOutcome(AutoFixBase):
@@ -532,7 +527,8 @@ class VersionsDoNotMove(ClosableTicket, CostBase):
 class TheContractIsWrittenDown(CostBase):
 
     def test_c8_schema_event_kinds_and_usage_name_the_new_shape(self):
-        """C8 SCHEMA 成本列有 15 鍵與登記表、有 cost_total 列;event.py 註解;cost --help 列新旗標。"""
+        """C8 SCHEMA 成本列有 15 鍵與登記表、有 cost_total 列;event.py 註解(closed 帶 cost_total;
+        #143 起成本列不發事件,「整列」那一句跟著刪);cost --help 列新旗標。"""
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         with open(os.path.join(root, "tickets", "SCHEMA.md"), encoding="utf-8") as handle:
             schema = handle.read()
@@ -545,7 +541,6 @@ class TheContractIsWrittenDown(CostBase):
                             for line in schema.splitlines()), "SCHEMA 沒有 cost_total 那一列")
         with open(os.path.join(root, "scripts", "event.py"), encoding="utf-8") as handle:
             kinds = handle.read()
-        self.assertIn("整列", kinds)
         self.assertIn("cost_total", kinds)
         done = self.ticket("cost", "--help")
         text = done.stdout + done.stderr

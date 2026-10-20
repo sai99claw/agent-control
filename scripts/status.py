@@ -578,8 +578,8 @@ def environment_suspects(data):
     """讀端正規化:一份 `status.json` → 這一格的 list(`docs/DESIGN-ENV-SUSPECT.md`)。
 
     舊檔有**四種「沒有」**(缺這一格 / `null` / `{}` / `start` 根本沒寫)與**一種舊的
-    非空 dict**(#7 的單筆)。裁的是「不改寫舊檔」,所以相容性全靠這一支 —— `metrics`
-    與看板一律經它讀,不直接下標。少了它,舊 dict 在真值上仍是真、卻在 `[0]` 下標
+    非空 dict**(#7 的單筆)。裁的是「不改寫舊檔」,所以相容性全靠這一支 —— 看板
+    一律經它讀,不直接下標。少了它,舊 dict 在真值上仍是真、卻在 `[0]` 下標
     炸掉,而那兩種壞法在畫面上都是一格空白。
     """
     raw = (data or {}).get("environment_suspect")

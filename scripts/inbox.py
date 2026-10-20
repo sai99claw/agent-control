@@ -133,7 +133,7 @@ def pages_in(where):
 
 
 def entries(root, include_acked=False):
-    """收件匣的每一頁,舊的在前(`at`,再來檔名)。只讀兩個目錄,不讀任何索引。"""
+    """收件匣的每一頁,舊的在前(`at`,同一秒再看檔的 mtime)。只讀兩個目錄,不讀任何索引。"""
     rows = []
     boxes = [(inbox_dir(root), False)] + ([(acked_dir(root), True)] if include_acked else [])
     for where, acked in boxes:

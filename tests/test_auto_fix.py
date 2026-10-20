@@ -452,17 +452,9 @@ class AutoFixBase(Sandbox):
     def inbox_list(self):
         return self.run_py("scripts/inbox.py", "list", "--all").stdout
 
-    def inbox_rows(self):
-        path = os.path.join(self.repo, "reports", "inbox", "index.jsonl")
-        if not os.path.exists(path):
-            return []
-        with open(path, encoding="utf-8") as handle:
-            return [json.loads(line) for line in handle if line.strip()]
-
     def went_in_review(self):
-        return any(row["kind"] == "ticket.state" and row.get("field") == "state"
-                   and str(row.get("to")).strip('"') == "InReview"
-                   for row in self.events())
+        # 票 JSON 是唯一的狀態(#143):讀票,不讀事件。
+        return self.load_ticket("1")["state"] == "InReview"
 
     def first_round(self):
         # 第 1 輪交件 = 票分支 t1 上一個 commit(#144);夾具照舊是那一份紅的案例。
@@ -1232,7 +1224,7 @@ class TheFirstRoundStartsFromReady(AutoFixBase):
 
     def test_round_one_is_announced_runs_as_running_and_stops_awaiting_review(self):
         """A2:`ticket.attempt.start attempt=1` 由 auto-fix 發(只發一次);worker 跑的
-        那一刻票是 Running;綠了轉 InReview —— 只有 ticket.state 事件,收件匣 0 頁(D-032)。
+        那一刻票是 Running;綠了轉 InReview —— 只寫票,收件匣 0 頁(D-032)。
 
         **變異 M4**:拿掉 `round_once` 裡轉 Running 那一手 → 標記檔記的是 Ready,紅。
         **變異**:綠了照發頁 → 「0 頁」紅。
@@ -1250,7 +1242,7 @@ class TheFirstRoundStartsFromReady(AutoFixBase):
                          "worker 跑的那一刻票要是 Running")
         self.assertEqual(self.load_ticket("1")["state"], "InReview")
         self.assertEqual(self.inbox_rows(), [])
-        self.assertTrue(self.went_in_review(), "events.jsonl 要有 ticket.state → InReview")
+        self.assertTrue(self.went_in_review(), "票要轉 InReview")
         # #46 C2:第 1 輪綠了一樣收輪次目錄的控制根(確認用 —— #38/#40 起第 1 輪也走 `round_once`)。
         self.assertFalse(os.path.isdir(os.path.join(self.fix_dir(), "control")),
                          "第 1 輪綠了 control/ 沒被收掉")
@@ -3217,10 +3209,6 @@ class TheFirstRoundBaseFollowsMain(AutoFixBase):
                             "前提:主線已經離開票的 base_sha")
         return row
 
-    def base_sha_events(self):
-        return [row for row in self.events()
-                if row["kind"] == "ticket.state" and row.get("field") == "base_sha"]
-
     def test_a_stale_base_with_no_branch_moves_to_main_head(self):
         """**變異 M1**:換 base 那一段拿掉 → 副本 base/ 是舊 README、票沒改,紅。
         **變異 M2**:換了票但不改 `T_BASE`(副本照舊)→ base/ 那一格紅。"""
@@ -3235,9 +3223,6 @@ class TheFirstRoundBaseFollowsMain(AutoFixBase):
         self.assertEqual(saw["base_readme"], self.git("show", "%s:README" % head),
                          "副本 base/ 要是主線的頭")
         self.assertEqual(self.load_ticket("1")["base_sha"], head)
-        moved = self.base_sha_events()
-        self.assertEqual(len(moved), 1, moved)
-        self.assertEqual(json.loads(moved[0]["to"]), head)
 
     def test_a_ticket_that_already_has_a_branch_keeps_its_base(self):
         """**變異 M3**:拿掉「分支已存在」那一格 → 票的 base_sha 被換掉,紅。"""
@@ -3249,7 +3234,6 @@ class TheFirstRoundBaseFollowsMain(AutoFixBase):
 
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         self.assertEqual(self.load_ticket("1")["base_sha"], row["base_sha"])
-        self.assertEqual(self.base_sha_events(), [])
 
 
 # #87 A9–A13:agent 在副本裡跑會寫看板的三支入口 + 自己的閘門,再照 `FIRST_ROUND_PAIR`

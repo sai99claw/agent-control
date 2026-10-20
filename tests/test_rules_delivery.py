@@ -116,10 +116,7 @@ class RulesBox(Sandbox):
         self.write(rel, text.replace(*BROKEN_HEADING))
 
     def decision_rows(self):
-        path = os.path.join(self.repo, "reports", "inbox", "index.jsonl")
-        if not os.path.exists(path):
-            return []
-        return [json.loads(line) for line in read(path).splitlines() if line.strip()]
+        return self.inbox_rows()
 
     def commit(self, message="沙盒:規則包的來源"):
         self.git("add", "-A")

@@ -127,27 +127,30 @@ class Emit(Sandbox):
         self.assertEqual([kind for kind in event_mod.KINDS if kind.startswith("review.")],
                          ["review.pass", "review.fail", "review.missing", "review.refused"])
 
-    def test_the_three_mirror_kinds_are_gone_and_nothing_took_their_place(self):
-        """#143(D-054 Q5):票 JSON 是唯一的狀態 —— `ticket.state` / `ticket.cost` /
-        `inbox.posted` 三種鏡像事件從登記表拿掉,不多任何一種;發它們會被拒收。
-        land.* / agent.* / ticket.attempt.* / ticket.closed 照舊(#115 守衛靠它們)。
+    def test_the_table_is_exactly_the_kinds_that_stay(self):
+        """#143(D-054 Q5):票 JSON 是唯一的狀態 —— 票欄位變更、cost 列、收件匣發頁
+        三種鏡像事件從登記表拿掉,不多任何一種。期望值是這份手抄的表(39 種),不從
+        KINDS 讀回來;不在表上的種類 `emit` 一律拒收(上一條)。land.* / agent.* /
+        ticket.attempt.* / ticket.closed 照舊(#115 守衛與看板時間線靠它們)。
 
-        **變異**:KINDS 留著 `ticket.state` → 這一條紅。
+        **變異**:KINDS 留著三種鏡像事件的任一種 → 這一條紅。
         """
         sys.path.insert(0, SCRIPTS)
         import event as event_mod
-        for gone in ("ticket.state", "ticket.cost", "inbox.posted"):
-            self.assertNotIn(gone, event_mod.KINDS)
-            done = self.event("emit", gone, "--ticket", "1")
-            self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        self.assertEqual(self.events(), [], "拒收的事件留下了一行")
-        self.assertEqual([kind for kind in event_mod.KINDS if kind.startswith("ticket.")],
-                         ["ticket.created", "ticket.frozen", "ticket.closed",
-                          "ticket.attempt.start", "ticket.attempt.done",
-                          "ticket.attempt.failed"])
-        for kept in ("land.start", "land.refused", "land.pass", "land.fail",
-                     "agent.start", "agent.done", "agent.failed"):
-            self.assertIn(kept, event_mod.KINDS)
+        self.assertEqual(list(event_mod.KINDS), [
+            "session.start", "session.end",
+            "ticket.created", "ticket.frozen", "ticket.closed",
+            "ticket.attempt.start", "ticket.attempt.done", "ticket.attempt.failed",
+            "agent.start", "agent.done", "agent.failed", "agent.recovery_needed",
+            "agent.cost", "schedule.proposed",
+            "gate.start", "gate.rerun", "gate.pass", "gate.fail", "flake.auto_pass",
+            "env.suspect", "regression.red",
+            "land.start", "land.refused", "land.pass", "land.fail",
+            "release.start", "release.pass", "release.fail",
+            "decision.asked", "decision.answered",
+            "objection.triage.start", "objection.triage.done",
+            "review.pass", "review.fail", "review.missing", "review.refused",
+            "memory.pending", "memory.consolidated", "memory.noted"])
 
     def test_writing_a_baseline_adds_no_event(self):
         """#143:`verify.baseline` 寫回票(verify-case.py check / apply.sh 共用的

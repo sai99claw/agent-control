@@ -94,7 +94,7 @@ class OnePage(InboxBase):
         """#143(D-054 Q5):收件匣只有一份狀態 —— 目錄裡的頁。`post` 不寫索引檔、
         不發鏡像事件;頁的第一行帶 `list` 讀的那一份 JSON。
 
-        **變異 M3**:`publish` 仍 append 一份 `index.jsonl` → 這一條紅(目錄多一個檔)。
+        **變異 M3**:`publish` 仍 append 一份索引檔 → 這一條紅(目錄多一個檔)。
         """
         self.make_ticket("7")
         before = self.events()
