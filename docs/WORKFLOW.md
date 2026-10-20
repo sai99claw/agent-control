@@ -160,7 +160,7 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
 4. **三輪耗盡不是一句話,是一個狀態轉換**:`round` 在第 `retry_limit+1` 輪仍紅時把票轉 **Blocked**、`owner` 設成 `main`,並發 `ticket.attempt.failed`。舊規則只寫「報主線」,而「報了」與「沒報」在票上長得一樣。
 5. 停下來報主線的**三種**情況,每一種都寫一則收件匣(kind=decision;綠了只寫事件、不發頁,D-032):worker 的**反駁升級**
    (它在 EVIDENCE 寫一行 `OBJECTION: <類別> <理由>`,`auto-fix.sh` 把它記成 `objections[]` 的一筆;
-   `ticket-wrong` / `blocking` 先由開題者判,判得出 accepted / rejected 就接回原 session 續做、不停,
+   `ticket-wrong` / `blocking` 先由開題者判,判 accepted(票面改好)就接回原 session 續做、不停,
    只有下面「實作者的反駁怎麼被收下」列的四種才停;`test_defect` 照舊派驗證者);
    三輪耗盡;**failures 沒有歸因**(rc 非零卻一條紅都解析不出來 —— 那一種最像「沒有紅」,
    而派下去的 worker 會拿著空紅榜去猜)。
@@ -222,24 +222,30 @@ worker 說「這張票寫錯了」以前只是一句話:沒有結構化類別、
                 "evidence": "EVIDENCE.md:12", "owner": "main",
                 "disposition": "", "follow_up": ""}]
 ```
-`category` 是 `ticket-wrong` / `blocking`(或 `blocking: true`)就是阻擋項;`disposition` 空著 → **land 拒絕、`close` 拒絕**。處置寫 `accepted` / `rejected` / `deferred` / `fixed`,要有 owner,建議附後續票號。
+`category` 是 `ticket-wrong` / `blocking`(或 `blocking: true`)就是阻擋項;`disposition` 空著 → **land 拒絕、`close` 拒絕**。處置的合法字只有一處:`scripts/ticket.py` 的 `DISPOSED`;要有 owner,建議附後續票號。
 
 ### 誰判、什麼時候才進主線(2026-10-04,D-041,#89)
 `ticket-wrong` / `blocking` **不再直接轉 Blocked 等主線**:
 1. auto-fix 發 `objection.triage.start`,起一個**開題者**判(`board/config.json` 的 `opener.command`,時限
    `opener.timeout_seconds`;cwd 與 `AC_ROOT` 是主 repo 根 —— 它要改真票)。派工文的 `## 判反駁` 段給它
    反駁行、EVIDENCE 與票號;判決寫進 `reports/t<n>/triage-round<r>.md` 第一行
-   `TRIAGE: <accepted|rejected|escalate> <一句理由>`。accepted 時它只改這張票的票面。
-2. 判 accepted / rejected:auto-fix 發 `objection.triage.done`(帶 verdict),並把那一筆的 `disposition`
-   與 `triage` 子格(`{verdict, reason, round, by}`)寫上 —— **只有 auto-fix 寫這兩格**(單一寫入者)。
+   `TRIAGE: <accepted|escalate> <一句理由>`。**一輪只有兩種結果**(D-054 Q8):
+   - accepted = 改好票面接回 worker。反駁成立就照它改;worker 讀錯了票也判 accepted —— 把澄清寫進票面,
+     下一個人才不會再讀錯。它只改這張票的票面。
+   - escalate = 交一題附建議的裁示題給主線:判決行之後寫題目、選項、建議;auto-fix 把這段原文放進
+     decision 頁的「補充」與那一筆的 `follow_up`,主線拿到的是一題選擇題,不是一句「需要裁示」。
+   判決行寫其他字樣 = 沒交判決(下面第 3 點)。
+2. 判 accepted:auto-fix 發 `objection.triage.done`(帶 verdict),並把那一筆的 `disposition`
+   與 `triage` 子格(`{verdict, reason, round, by}`)寫上 —— **只有 auto-fix 寫這兩格**(單一寫入者;
+   escalate 時 auto-fix 寫的是 `follow_up`)。
    接著用 `reports/t<n>/sessions.json` 記的 session 接回(`--resume`),同一輪、原副本、不發頁:
-   accepted 先接回這一輪平行起的驗證者依票面差異改案例,再接回 worker 照新票面做;rejected 附理由接回
-   worker 照原票做(同一個 worktree,已 commit 的留在分支上)。第一段的 EVIDENCE 改名成 `*-objection.*` 留著。接回的驗證者沒交件 →
+   先接回這一輪平行起的驗證者依票面差異改案例,再接回 worker 照新票面做
+   (同一個 worktree,已 commit 的留在分支上)。第一段的 EVIDENCE 改名成 `*-objection.*` 留著。接回的驗證者沒交件 →
    票轉 Blocked、發頁「驗證者沒交出 patch-verify」。
 3. **只有四種進主線收件匣**(票轉 Blocked、owner=main、decision 頁;也發 `objection.triage.done`,
    verdict=escalate;副本與 session 都留著,頁上寫 session id 與副本給主線手接回;`auto-fix.sh` 退出碼 3):
    開題者判需要裁示(escalate)、**同票第二次反駁**(票上已有一筆帶 `triage` 的)、開題者沒判出來
-   (命令缺、規則包產不出來、退出非零、逾時、沒交判決行)、session **不能接回**(`sessions.json` 那一列
+   (命令缺、規則包產不出來、退出非零、逾時、沒交判決行或判決字樣不是 accepted / escalate)、session **不能接回**(`sessions.json` 那一列
    `resumable` 不是 true)。這四種的 `disposition` 由主線處置。
 `test_defect` 那條路照舊(下一節)。
 

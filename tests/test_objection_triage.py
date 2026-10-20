@@ -1,8 +1,9 @@
 """`scripts/auto-fix.sh`:worker 的反駁改由開題者判,接回同一個 session 在原副本續做(#89,D-041)。
 
 D-041(2026-10-04):worker 交件帶 `OBJECTION: ticket-wrong|blocking` 時不再轉 Blocked 等主線,
-改起一個開題者判;accepted → 接回同一個驗證者改案例、再接回同一個 worker 在原副本續做;
-rejected → 附理由接回 worker 照原票做;只有開題者判需裁示、同票第二次反駁、開題者沒判出來、
+改起一個開題者判。開題者一輪只有兩種結果(D-054 Q8):accepted → 接回同一個驗證者改案例、
+再接回同一個 worker 在原副本續做;escalate → 一題附建議的裁示題原文進收件頁與 follow_up。
+判決行其他字樣算沒交判決。只有開題者判需裁示、同票第二次反駁、開題者沒判出來、
 session 接不回四種才進主線收件匣。
 
 worker / 驗證者 / 開題者三個角色都是 PATH 上同一支假 `claude`(`FAKE_CLAUDE`):它把每一次
@@ -30,8 +31,11 @@ OBJECTION_AGAIN = "OBJECTION: ticket-wrong 驗收第三條也與設計文件對�
 ACCEPTANCE = ["A1 第一條照舊", "A2 驗收第二條照票面:輸出兩欄"]
 NEW_ACCEPTANCE = ["A1 第一條照舊", "A2 驗收第二條改照設計文件:輸出三欄"]
 ACCEPT_REASON = "驗收第二條改照設計文件"
-REJECT_REASON = "驗收第二條與設計文件一致,反駁不成立"
+OTHER_VERDICT = "declined"
+OTHER_REASON = "驗收第二條與設計文件一致,反駁不成立"
 ESCALATE_REASON = "兩份設計文件互相矛盾,要使用者選一份"
+ESCALATE_QUESTION = ("題目:驗收第二條照哪一份設計文件?\n選項:\n- 甲 docs/a.md(兩欄)\n"
+                     "- 乙 docs/b.md(三欄)\n建議:選乙,b.md 是較新的一版,下游畫面已照三欄做")
 
 # 假 `claude`:先記一筆(被砍的那一種也留得下),再照劇本演。驗證者的標記檔不進 patch(`-x`);
 # worker 在票分支的 worktree(cwd)改檔、自己 commit(#144),標記檔放輪次目錄、不進 commit。
@@ -126,10 +130,11 @@ else:
                         "acceptance", json.dumps(plan["new_acceptance"], ensure_ascii=False)],
                        check=True, stdout=subprocess.DEVNULL)
         write(triage, "TRIAGE: accepted %s\n" % plan["accept_reason"])
-    elif mode == "reject":
-        write(triage, "TRIAGE: rejected %s\n" % plan["reject_reason"])
+    elif mode == "other":
+        write(triage, "TRIAGE: %s %s\n" % (plan["other_verdict"], plan["other_reason"]))
     elif mode == "escalate":
-        write(triage, "TRIAGE: escalate %s\n" % plan["escalate_reason"])
+        write(triage, "TRIAGE: escalate %s\n%s\n" % (plan["escalate_reason"],
+                                                      plan["escalate_question"]))
     elif mode == "exit3":
         sys.exit(3)
     elif mode == "sleep":
@@ -192,8 +197,9 @@ class TriageBase(AutoFixBase):
         self.calls_path = os.path.join(self.home, "claude-calls.jsonl")
         self.scenario = {"worker_first": worker_first, "objection": OBJECTION,
                          "objection_again": OBJECTION_AGAIN, "new_acceptance": NEW_ACCEPTANCE,
-                         "accept_reason": ACCEPT_REASON, "reject_reason": REJECT_REASON,
-                         "escalate_reason": ESCALATE_REASON}
+                         "accept_reason": ACCEPT_REASON, "other_verdict": OTHER_VERDICT,
+                         "other_reason": OTHER_REASON, "escalate_reason": ESCALATE_REASON,
+                         "escalate_question": ESCALATE_QUESTION}
         self.save_scenario()
         self.bindir = os.path.join(self.home, "bin")
         os.makedirs(self.bindir, exist_ok=True)
@@ -408,7 +414,9 @@ class AcceptedResumesTheSameSessions(TriageBase):
         self.assertIn("../repo-wt/fix-t1/round1/EVIDENCE-round1.md", packet)
         self.assertIn("#1", packet)
         self.assertIn("把判決寫進 reports/t1/triage-round1.md,第一行 TRIAGE: "
-                      "<accepted|rejected|escalate> <一句理由>", packet)
+                      "<accepted|escalate> <一句理由>", packet)
+        for text in ("只有兩種判決", "改好票面接回 worker", "一題附建議的裁示題", "建議:"):
+            self.assertIn(text, packet)
         self.assertEqual(opener["ticket"]["state"], "Running")
         self.assertEqual(opener["worker_copy"], [True, True])
         self.assertTrue(opener["verifier_copy"])
@@ -459,41 +467,23 @@ class AcceptedResumesTheSameSessions(TriageBase):
             self.assertTrue(rec.get("closed_at"), role)
 
 
-class RejectedResumesTheWorkerOnly(TriageBase):
+class AnyOtherVerdictWordEscalates(TriageBase):
 
-    def test_a4_rejected_resumes_the_worker_with_the_reason_and_leaves_the_ticket(self):
-        """守 rejected → 票面不動、驗證者不接回、worker 帶理由接回 / 可信回歸:票面比對
-        的兩端是替身開題者與接回的 worker 各自讀的票檔 / 既有測試沒有 rejected 這條路 /
-        不加縫:同一支假 claude。"""
+    def test_a4_a_verdict_word_other_than_accepted_or_escalate_is_no_verdict(self):
+        """守判決集合只有 accepted / escalate(D-054 Q8):判決行寫其他字(舊的「不成立」判決
+        同一條路)→ 與沒交判決同一處置:升級、不接回 worker 做原票、opener 列記 undecided /
+        可信回歸:TRIAGE 行是替身寫死的 / 舊案例釘的是「附理由接回 worker」/ 不加縫:同一支假
+        claude。**變異 M2**:regex 加回第三種字 → 接回 worker、rc=0,這一條紅。"""
         self.arm(needs_verifier=True, interface_fixed=True)
-        self.play(worker_resume="fix", opener="reject")
-        pages_before = len(self.inbox_rows())
+        self.play(worker_resume="fix", opener="other")
         done = self.auto_fix("--no-review")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        objection = self.objection()
-        self.assertEqual(objection["disposition"], "rejected")
-        self.assertEqual(objection["triage"]["verdict"], "rejected")
-        self.assertEqual(objection["triage"]["reason"], REJECT_REASON)
-        opener, = self.calls("opener")
-        workers = self.calls("worker")
-        self.assertEqual(len(workers), 2, workers)
-        resumed = workers[1]
-        skip = ("objections", "state_version")
-        self.assertEqual({k: v for k, v in resumed["ticket"].items() if k not in skip},
-                         {k: v for k, v in opener["ticket"].items() if k not in skip})
-        verifier_sid = self.flag_value(self.calls("verifier")[0]["argv"], "--session-id")
-        resumed_ids = [call["argv"][call["argv"].index("--resume") + 1]
-                       for call in self.calls() if "--resume" in call["argv"]]
-        self.assertNotIn(verifier_sid, resumed_ids)
+        page = self.assert_escalated(done, ["開題者沒交判決"], started=True, verifier=True)
+        self.assertNotIn(OTHER_REASON, page)
+        self.assertEqual(len(self.calls("worker")), 1, "其他判決字樣不該接回 worker")
         self.assertEqual(len(self.calls("verifier")), 1)
-        self.assertEqual(self.flag_value(resumed["argv"], "--resume"),
-                         self.flag_value(workers[0]["argv"], "--session-id"))
-        self.same_dir(workers[0]["sessions"]["worker"]["cwd"], resumed["cwd"])
-        for text in ("反駁不成立", REJECT_REASON, "照原票做"):
-            self.assertIn(text, resumed["stdin"])
-        self.assertTrue(resumed["mark_there"])
-        self.assert_not_stopped(done, pages_before)
-        self.assert_evidence_kept()
+        self.assertEqual(self.objection()["follow_up"], "")
+        self.assertEqual([row["outcome"] for row in self.load_ticket("1").get("cost") or []
+                          if row.get("role") == "opener"], ["undecided"])
 
 
 class OnlyTheseGoToTheMainLine(TriageBase):
@@ -505,21 +495,28 @@ class OnlyTheseGoToTheMainLine(TriageBase):
         self.arm(needs_verifier=True, interface_fixed=True)
         self.play(opener="escalate")
         done = self.auto_fix("--no-review")
-        self.assert_escalated(done, ["開題者判需要裁示", ESCALATE_REASON], started=True,
-                              verifier=True)
+        page = self.assert_escalated(done, ["開題者判需要裁示", ESCALATE_REASON], started=True,
+                                     verifier=True)
         self.assertEqual(len(self.calls("worker")), 1, "升級了不該接回 worker")
+        # 一題附建議的裁示題(D-054 Q8):判決行之後那段原文進收件頁與 follow_up。
+        # **變異 M1**:escalate 不轉貼題目 → 這幾條紅。
+        text = self.read(self.inbox_rows()[0]["page"])
+        self.assertIn(ESCALATE_QUESTION, text)
+        self.assertIn("建議:選乙,b.md 是較新的一版,下游畫面已照三欄做", text)
+        self.assertIn("一題附建議的裁示題", page)
+        self.assertEqual(self.objection()["follow_up"], ESCALATE_QUESTION)
 
     def test_a5b_a_second_objection_on_the_same_ticket(self):
         """守 (b) 被接回的 worker 再交 OBJECTION → 不再起開題者 / 可信回歸:開題者呼叫只有
         一次、第二筆 disposition 留空 / 既有測試沒有接回 / 不加縫:同一支假 claude。"""
         self.arm()
-        self.play(worker_resume="object-again", opener="reject")
+        self.play(worker_resume="object-again", opener="accept")
         done = self.auto_fix("--no-review")
         page = self.assert_escalated(done, ["同票第二次反駁"], started=False)
         self.assertEqual(len(self.calls("opener")), 1)
         self.assertEqual(len(self.calls("worker")), 2)
         rows = self.load_ticket("1")["objections"]
-        self.assertEqual([row["disposition"] for row in rows], ["rejected", ""])
+        self.assertEqual([row["disposition"] for row in rows], ["accepted", ""])
         self.assertIn("第三條", page + json.dumps(rows, ensure_ascii=False))
 
     def test_a5c_no_opener_block_in_config(self):
@@ -612,7 +609,7 @@ class ClosingAndTimeouts(TriageBase):
         可信回歸:第一段立刻交、接回那一段睡 60 秒,時限 3 秒 / 既有逾時案例沒有接回 /
         不加縫:票的 worker.timeout_seconds。"""
         self.arm(worker={"timeout_seconds": 3})
-        self.play(worker_resume="sleep", opener="reject")
+        self.play(worker_resume="sleep", opener="accept")
         done = self.auto_fix("--no-review")
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         self.assertEqual(len(self.calls("worker")), 2)
