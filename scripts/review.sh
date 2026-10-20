@@ -604,7 +604,7 @@ fi
 BR=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("branch") or "t"+sys.argv[2])' "$TF" "$ID" 2>/dev/null || echo "t$ID")
 SHA=$(git -C "$ROOT" rev-parse -q --verify "$BR^{commit}" 2>/dev/null || echo "")
 [ -n "$SHA" ] || refuse "分支 $BR 不存在" \
-    "先 sh scripts/auto-fix.sh $ID(它建分支 $BR、worker 在上面 commit),閘門綠了再覆核"
+    "先 sh scripts/auto-fix.sh $ID(它建分支 ${BR}、worker 在上面 commit),閘門綠了再覆核"
 
 TEMPLATE=""
 for candidate in "$ROOT/templates/dispatch-reviewer.md" "$AC/../templates/dispatch-reviewer.md"; do

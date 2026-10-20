@@ -2635,7 +2635,7 @@ PY
     if [ -z "$W_HANDED" ] && [ -z "$CASE_FIXED" ]; then
         echo "auto-fix: 第 $r 輪的 worker 沒交件 —— $W_WHY" >&2
         block "#$ID 第 $r 輪的 worker 沒交件"
-        post "worker 沒交件" "$W_WHY。worktree $WT 照原樣留著(腳本不替它 commit);要嘛重派,要嘛人下場${V_HELD}" "$WT"
+        post "worker 沒交件" "${W_WHY}。worktree $WT 照原樣留著(腳本不替它 commit);要嘛重派,要嘛人下場${V_HELD}" "$WT"
         worker_cost no-patch
         attempt_failed no-patch
         ROUND_RC=5

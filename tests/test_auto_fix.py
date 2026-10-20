@@ -146,7 +146,8 @@ elif [ "$AC_ROUND" = 2 ]; then
     printf 'OBJECTION: test_defect fixture 把正確結果寫成 2\\n' \\
         > "EVIDENCE-round$AC_ROUND.md"
 else
-    sed -i 's/assertEqual(1, 3/assertEqual(1, 1/' "$W"/tests/test_thing.py
+    sed 's/assertEqual(1, 3/assertEqual(1, 1/' "$W"/tests/test_thing.py > "$W"/tests/test_thing.py.new
+    mv "$W"/tests/test_thing.py.new "$W"/tests/test_thing.py
     (cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
     printf '# worker\\n產品修復\\n' > "EVIDENCE-round$AC_ROUND.md"
 fi
