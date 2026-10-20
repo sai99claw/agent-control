@@ -6,7 +6,7 @@ A2 | unit | 5000 字主檔無 note，再放 21 條 note | 前者不觸發，後�
 A3 | unit | memory_file(#137)/ 任意 role 覆蓋票、結案後、兩支併發 check | 查重訊息與票數;結案的整理票 24 小時內不重開 | 票面 A3;#148 冷卻
 A4 | unit | worker / main 開場讀同一份待整理 inbox | worker 不開、main 開 1 票 | 票面 A4 / new_session 契約
 A5 | unit | snapshot 後以 5000 字候選 consolidate | 成功、消耗、事件無 cap 鍵、舊旗標拒絕 | 票面 A5
-A6 | gate | 分支把乾淨記憶卡 1990 推到 2500，再加錯層行 | 長度不擋、錯層仍擋 | 票面 A6
+A6 | gate | 分支把乾淨記憶卡 1990 推到 2500 | 長度不擋 | 票面 A6;錯層那半由 #138 隨閘門記憶錯層格刪(D-054 Q4)
 A7 | unit | 讀整理票、兩份提示文字與填好的派工 stdin | 只有成本判準，沒有字數目標 | 票面 A7
 A8 | static | 跑票面釘死的 git grep | 0 行 | 票面 A8 原命令
 A9 | unit | 無 inbox / 有 1 條 3 天前 inbox 的探針與 AGENT_PROBES 原文 | 前提會翻轉，事件名是 memory.pending | 票面 A9;#148 最舊滿 3 天
@@ -295,7 +295,7 @@ class ConsolidationWithoutCaps(MemoryInboxWorld):
         self.assertEqual((self.raw(self.MAIN), self.raw(self.INBOX)), before)
 
 
-class GateKeepsOnlyLayerPolicy(MemoryInboxWorld):
+class GateDoesNotCapMemoryLength(MemoryInboxWorld):
 
     def setUp(self):
         super().setUp()
@@ -319,8 +319,8 @@ class GateKeepsOnlyLayerPolicy(MemoryInboxWorld):
                               cwd=where, env=self.env(), capture_output=True,
                               text=True, timeout=120)
 
-    def test_a6_length_growth_passes_but_a_new_wrong_layer_line_still_blocks(self):
-        """A6 1990→2500 不再是 gate 關卡；新增錯層行仍由原 lint 關卡擋下。"""
+    def test_a6_length_growth_passes_the_gate(self):
+        """A6 1990→2500 不再是 gate 關卡。"""
         self.write("memory/model/opus.md", self.body(1990))
         self.make_ticket(134, state="Running", role="worker")
         self.git("add", "-A")
@@ -334,12 +334,6 @@ class GateKeepsOnlyLayerPolicy(MemoryInboxWorld):
         self.assertEqual(gate.returncode, 0, gate.stdout + gate.stderr)
         self.assertNotIn("本分支讓記憶卡超上限", gate.stderr)
         self.assertNotIn("memory: cap ", gate.stderr)
-
-        bad = self.committed_branch(
-            "t134-bad", self.body(2500) + "- 改用 subprocess.run(x) 收尾\n")
-        blocked = self.run_gate(bad)
-        self.assertEqual(blocked.returncode, 4, blocked.stdout + blocked.stderr)
-        self.assertIn("分支改到的記憶檔有錯層內容", blocked.stderr)
 
 
 class ConsolidatorInstructions(MemoryInboxWorld):
