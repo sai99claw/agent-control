@@ -1472,7 +1472,7 @@ COST_OUTCOMES = (
     ("worker / verifier", ("handed-in", "no-patch", "apply-failed", "timeout",
                            "objection", "error")),
     ("reviewer", ("pass", "fail", "missing")),
-    ("opener", ("accepted", "rejected", "escalate", "undecided")),
+    ("opener", ("accepted", "escalate", "undecided")),
     ("land / gate", ("pass", "fail", "refused")),
 )
 

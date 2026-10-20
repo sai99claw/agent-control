@@ -317,7 +317,8 @@ grep -aE "^Ran |^OK|^FAILED" run.log      # 給人看的
    `OBJECTION: <ticket-wrong|test_defect|blocking> <一句話>`,收件的那一手(`apply.sh` / `auto-fix.sh`)
    把它記成票的 `objections[]` 一筆(`category` / `body` / `evidence` / `owner`),不要只寫在回報裡 ——
    **沒被收進票的反駁,與沒有反駁長得一樣**。`ticket-wrong` / `blocking` 由 auto-fix 起開題者判;
-   判 accepted / rejected 會把你接回同一個 session 在原處續做(worker 的 worktree、驗證者的副本;續做的規矩在實作者角色卡),只有四種情況
+   開題者一輪只有兩種結果:判 accepted(票面改好,含把你讀錯的地方澄清進票面)會把你接回同一個 session 在原處續做
+   (worker 的 worktree、驗證者的副本;續做的規矩在實作者角色卡);判 escalate 就帶一題附建議的裁示題轉主線。只有四種情況
    才進主線收件匣 —— 流程正文在 `docs/WORKFLOW.md`「實作者的反駁怎麼被收下」。
    案例錯是 `category: test_defect`:**你不准放寬斷言、不准改 oracle**,auto-fix 會派獨立的驗證者修案例。
    反駁行裡的家目錄路徑收件時會換成佔位(#91 C4),仍不要寫。

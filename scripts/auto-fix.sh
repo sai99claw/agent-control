@@ -27,9 +27,9 @@
 # ## 三種停下來(每一種都寫一則 inbox,kind=decision —— 不是印一行就算)
 # 1. worker 說**票寫錯 / 需要裁示** —— 它在 EVIDENCE 裡寫一行 `OBJECTION: <類別> <理由>`;
 #    這一支把它記成票的 `objections[]`;`ticket-wrong` / `blocking` 先交給開題者判(#89,
-#    D-041,見 `triage_objection`),判得出 accepted / rejected 就接回原 session 續做、不停;
-#    判需裁示、同票第二次、開題者沒判出來、session 接不回,才票轉 Blocked、owner=main,
-#    發 `decision.asked`。
+#    D-041,見 `triage_objection`),判 accepted(票面改好)就接回原 session 續做、不停;
+#    判 escalate(帶一題附建議的裁示題)、同票第二次、開題者沒判出來、session 接不回,
+#    才票轉 Blocked、owner=main,發 `decision.asked`。
 # 2. **三輪仍紅** —— `ticket.py round` 在第 `retry_limit+1` 輪把票轉 Blocked、owner=main。
 # 3. **failures 沒有歸因** —— rc 非零卻一條紅都解析不出來(log 壞了、跑都沒跑起來)。
 #    這一種**最危險**:它看起來像「沒有紅」,而自動派下去的 worker 會拿著一份空紅榜
@@ -284,9 +284,9 @@ ev() {
         || echo "auto-fix: 事件發不出去($*)" >&2
 }
 
-post() {   # $1 = 狀態  $2 = 要主線做什麼  $3 = 去哪看
+post() {   # $1 = 狀態  $2 = 要主線做什麼  $3 = 去哪看  $4 = 補充(可空)
     python3 "$AC/inbox.py" post --ticket "$ID" --run-id "${RUN_ID:-}" \
-        --kind decision --state "$1" --what "$2" --where "$3" \
+        --kind decision --state "$1" --what "$2" --where "$3" ${4:+--note "$4"} \
         || echo "auto-fix: inbox 寫不出來($1)" >&2
 }
 
@@ -1912,25 +1912,48 @@ run_worker() {   # $1 = 命令  $2 = 派工文;設定 WRC、WORKER_LOG 由呼叫
 
 # ## worker 的反駁由開題者判(#89,D-041)
 # `ticket-wrong` / `blocking` 不再直接轉 Blocked 等主線:起一個開題者判(cwd 與 `AC_ROOT` 是
-# 主 repo 根 —— 它要改真票)。accepted → 接回同一個驗證者(這一輪平行起的那一個)改案例、
-# 再接回同一個 worker 在原副本續做;rejected → 附理由接回 worker 照原票做。兩種都不換輪、
-# 不丟副本、不發頁。只有四種進主線收件匣:開題者判 escalate、同票第二次反駁、開題者沒判
-# 出來、session 接不回。objections 那一筆的 disposition / triage **只由這裡**依 TRIAGE 行寫。
+# 主 repo 根 —— 它要改真票)。開題者一輪只有兩種結果(D-054 Q8):accepted = 票面改好
+# (worker 讀錯票也算 —— 澄清寫進票面,下一個人才不會再讀錯)→ 接回同一個驗證者(這一輪平行
+# 起的那一個)改案例、再接回同一個 worker 在原副本續做,不換輪、不丟副本、不發頁;escalate =
+# 一題附建議的裁示題,判決行之後那段原文轉進收件頁與那一筆的 `follow_up`。判決行其他字樣
+# = 沒交判決。只有四種進主線收件匣:開題者判 escalate、同票第二次反駁、開題者沒判出來、
+# session 接不回。objections 那一筆的 disposition / triage / follow_up **只由這裡**寫。
 opener_cost() {   # 開題者那一列(#94 C5c)。接回的 worker 跑完才寫:它讀到的票要與開題者讀到的同一份
     [ -n "${O_COST:-}" ] || return 0
     write_cost opener "$r" "$O_MODEL" "$OLOG" "$OSECS" "$O_COST"
     O_COST=""
 }
 
-escalate_objection() {   # $1 = 字樣  $2 = 細節;票轉 Blocked、一頁、ROUND_RC=3,副本與 session 都留著
+escalate_objection() {   # $1 = 字樣  $2 = 細節  $3 = 開題者的裁示題(題目、選項、建議;可空);票轉 Blocked、一頁、ROUND_RC=3,副本與 session 都留著
     opener_cost
     ev objection.triage.done --ticket "$ID" --kv round="$r" --kv verdict=escalate --kv reason="$1"
     w_sid=$(session_field worker session_id)
     w_cwd=$(session_field worker cwd)
+    if [ -n "${3:-}" ]; then
+        # 裁示題原文進那一筆的 follow_up(既有空格,不加欄位):下一輪的交接包也帶著它。
+        python3 - "$TF" "$ID" "$line" "$3" <<'PY'
+import json, os, subprocess, sys
+path, ident, line, question = sys.argv[1:5]
+sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
+from ticket import objection_parts
+
+category, body = objection_parts(line)
+with open(path, encoding="utf-8") as handle:
+    rows = json.load(handle).get("objections") or []
+for row in reversed(rows):
+    if isinstance(row, dict) and row.get("category") == category \
+            and (row.get("body") or "") == body:
+        row["follow_up"] = question
+        break
+subprocess.run([sys.executable, os.path.join(os.environ["AC_CONTROL_DIR"], "ticket.py"),
+                "set", ident, "objections", json.dumps(rows, ensure_ascii=False)],
+               stdout=subprocess.DEVNULL, check=False)
+PY
+    fi
     block "#$ID 的 worker 提反駁:$line($1)"
     post "worker 提反駁(票寫錯 / 需裁示)" \
-         "$1${2:+:$2}。讀 EVIDENCE 那一行反駁,處置它(accepted / rejected / deferred / fixed);沒處置的阻擋項 land 與 close 都會拒絕${V_HELD}。主線手接回:worker session ${w_sid:-(沒有)},副本 ${w_cwd:-?}(副本與 session 都留著)" \
-         "$EVIDENCE"
+         "$1${2:+:$2}。${3:+開題者交了一題附建議的裁示題(見「補充」,也在那一筆的 follow_up),裁了寫進那一筆的處置;}讀 EVIDENCE 那一行反駁,處置它(處置字照 ticket.py 的 DISPOSED);沒處置的阻擋項 land 與 close 都會拒絕${V_HELD}。主線手接回:worker session ${w_sid:-(沒有)},副本 ${w_cwd:-?}(副本與 session 都留著)" \
+         "$EVIDENCE" "${3:-}"
     attempt_failed objection
     ROUND_RC=3
 }
@@ -2056,10 +2079,13 @@ print(next((tok for tok in parts if "=" not in tok), ""))' "$OPENER_CMD")
         echo ""
         echo "- 票號:#$ID(票檔 \`$TICKETS/$ID.json\`;改票只走 \`python3 scripts/ticket.py set $ID <欄位> '<JSON>'\`)"
         echo "- EVIDENCE:\`$EV_REL\`"
-        echo "- accepted = 反駁成立,票面照它改;rejected = 不成立,不改票;escalate = 要使用者裁示"
-        echo "- objections 那一筆的 disposition / triage 由 auto-fix 依你的判決行寫,你不要寫"
+        echo "- 只有兩種判決:"
+        echo "  - accepted = 改好票面接回 worker。反駁成立就照它改;worker 讀錯了票也判 accepted:把澄清寫進票面,下一個人才不會再讀錯"
+        echo "  - escalate = 要使用者取捨,交一題附建議的裁示題給主線:判決行之後寫「題目:」「選項:」(每個選項一行)「建議:」(選哪個、為什麼);這一段原文會進主線的收件頁與那一筆的 follow_up"
+        echo "- 判決行寫其他字樣 = 沒交判決(轉主線)"
+        echo "- objections 那一筆的 disposition / triage / follow_up 由 auto-fix 依你的判決檔寫,你不要寫"
         echo ""
-        echo "把判決寫進 $TRIAGE_REL,第一行 TRIAGE: <accepted|rejected|escalate> <一句理由>"
+        echo "把判決寫進 $TRIAGE_REL,第一行 TRIAGE: <accepted|escalate> <一句理由>"
     } > "$ODISPATCH"
     BEFORE=$(dirname "$DISPATCH")/ticket-before-triage-round$r.json
     cp "$TF" "$BEFORE"
@@ -2094,21 +2120,23 @@ import re, shlex, sys
 try:
     with open(sys.argv[1], encoding="utf-8") as handle:
         first = handle.readline().rstrip("\n")
+        rest = handle.read().strip()
 except OSError:
-    first = ""
-hit = re.match(r"TRIAGE: (accepted|rejected|escalate)(?:\s+(.*))?$", first)
+    first = rest = ""
+hit = re.match(r"TRIAGE: (accepted|escalate)(?:\s+(.*))?$", first)
 print("TRIAGE_VERDICT=%s" % shlex.quote(hit.group(1) if hit else ""))
 print("TRIAGE_REASON=%s" % shlex.quote((hit.group(2) or "").strip() if hit else ""))
+print("TRIAGE_QUESTION=%s" % shlex.quote(rest if hit else ""))
 PY
 )"
     O_COST=${TRIAGE_VERDICT:-undecided}
     case "$TRIAGE_VERDICT" in
         "")
             escalate_objection "開題者沒交判決" \
-                "$TRIAGE_REL 不在,或第一行不是 TRIAGE: <accepted|rejected|escalate> <理由>"
+                "$TRIAGE_REL 不在,或第一行不是 TRIAGE: <accepted|escalate> <理由>(其他判決字樣也算沒交)"
             return 1 ;;
         escalate)
-            escalate_objection "開題者判需要裁示" "$TRIAGE_REASON"
+            escalate_objection "開題者判需要裁示" "$TRIAGE_REASON" "$TRIAGE_QUESTION"
             return 1 ;;
     esac
     ev objection.triage.done --ticket "$ID" --kv round="$r" --kv verdict="$TRIAGE_VERDICT"
@@ -2140,7 +2168,7 @@ subprocess.run([sys.executable, os.path.join(os.environ["AC_CONTROL_DIR"], "tick
                stdout=subprocess.DEVNULL, check=False)
 PY
 
-    if [ "$TRIAGE_VERDICT" = accepted ] && [ -n "$VRESUME" ]; then
+    if [ -n "$VRESUME" ]; then
         VRDISPATCH=$(dirname "$DISPATCH")/dispatch-verifier-resume-round$r.md
         {
             echo "## 被接回"
@@ -2193,18 +2221,12 @@ PY
         echo "## 被接回"
         echo "你是 #$ID 第 $r 輪**同一個** worker session,被接回在同一個 worktree 續做(\`$WT\`,不換輪)。"
         echo "你的反駁:\`$line\`"
-        if [ "$TRIAGE_VERDICT" = accepted ]; then
-            echo "開題者判 accepted:$TRIAGE_REASON"
-            echo ""
-            echo "票面改過的欄位(現況全文):"
-            echo ""
-            ticket_changes "$BEFORE"
-            echo "照改過的票做。"
-        else
-            echo "開題者判 rejected,反駁不成立:$TRIAGE_REASON"
-            echo ""
-            echo "照原票做,不要再提同一條反駁(同票第二次反駁直接轉主線)。"
-        fi
+        echo "開題者判 accepted:$TRIAGE_REASON"
+        echo ""
+        echo "票面改過的欄位(現況全文):"
+        echo ""
+        ticket_changes "$BEFORE"
+        echo "照改過的票做,不要再提同一條反駁(同票第二次反駁直接轉主線)。"
         echo "交件照原派工文:在 \`$WT\` 的票分支 commit,\`EVIDENCE-round$r.md\` 放在 \`$FIX\`(第一段的 EVIDENCE 已改名為 \`EVIDENCE-round$r-objection.md\`)。"
     } > "$RDISPATCH"
     WORKER_LOG=$(dirname "$DISPATCH")/worker-resume-round$r.log

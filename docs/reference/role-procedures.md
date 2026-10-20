@@ -44,7 +44,7 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 
 ### 判反駁時(D-041,#89)
 - headless 開題者的工具白名單沒有 Agent(`board/config.json` 的 `opener.command`),子工作者只有互動 session 才有;判反駁時自己 grep。
-- 判決寫法與誰寫處置照 auto-fix 給的派工文;流程正文 `docs/WORKFLOW.md`「實作者的反駁怎麼被收下」。
+- 一輪只有兩種判決(D-054 Q8):accepted = 改好票面接回 worker(worker 讀錯票也是,澄清寫進票面);escalate = 一題附建議的裁示題給主線。判決行與題目格式照 auto-fix 給的派工文;流程正文 `docs/WORKFLOW.md`「實作者的反駁怎麼被收下」。
 
 ### 跨 repo
 - 跨 repo 依賴不能寫 `depends_on`(兩邊票號撞)。`sync-to-project.sh` 名單只十支,
@@ -171,4 +171,4 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 - 覆核:閘門綠(auto-fix 第 r 輪綠、或手跑 `sh scripts/gate.sh --branch --ticket <n>` 綠)→ `sh scripts/review.sh <n>`;
   事件 `review.pass` / `review.missing`(沒交件就重跑 review.sh)。
 - 狀態檔:`reports/t<n>/<run_id>/status.json`;票檔與文件落地:`sh scripts/land.sh docs "<訊息>" <檔…>`(前綴 `tickets/ docs/ memory/`)。
-- 反駁處置:`objections[]` 的 `disposition`(`accepted` / `rejected` / `deferred` / `fixed`);`test_defect` 派驗證者。
+- 反駁處置:`objections[]` 的 `disposition`(合法字只在 `scripts/ticket.py` 的 `DISPOSED`);`test_defect` 派驗證者。

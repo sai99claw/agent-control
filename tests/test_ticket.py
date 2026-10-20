@@ -1110,7 +1110,7 @@ COST_ROW_KEYS = {"role", "round", "model", "tokens_in", "tokens_out", "cache_wri
                  "note", "effort", "at"}
 # #94 C2 的登記表(票面字面)。
 REGISTERED_OUTCOMES = ("handed-in", "no-patch", "apply-failed", "timeout", "objection",
-                       "error", "pass", "fail", "missing", "accepted", "rejected",
+                       "error", "pass", "fail", "missing", "accepted",
                        "escalate", "undecided", "refused")
 
 
@@ -1306,7 +1306,7 @@ class CostTotalOnClose(Sandbox):
                   "test_evidence": [{"cmd": "gate --branch", "rc": 0}],
                   "cost": [dict(row) for row in self.ROWS],
                   "objections": [{"category": "ticket-wrong", "owner": "main",
-                                  "body": "x", "disposition": "rejected"}]}
+                                  "body": "x", "disposition": "accepted"}]}
         fields.update(extra)
         self.make_ticket(1, **fields)
         self.ticket("set", "1", "review",
