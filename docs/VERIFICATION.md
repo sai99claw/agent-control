@@ -37,7 +37,7 @@ verify 檔**,差分基準是乾淨基底)。然後**結束**。
 **第二段(閘門做)**:`scripts/verify-case.py check <票號>` —— 同一份案例在**乾淨主線副本**上跑
 (該紅)、在 **candidate 副本**上跑(該綠),工具把證據寫進票的 `verify.baseline`:案例數、紅的是哪幾條、skip 幾條、
 兩邊的 sha,`stage` 從 `red` 升成 `check`。**綠不是驗證者的事**——閘門在實作者的 patch 進來時跑,
-`ticket.py close` 只認 `stage=="check"`。
+`ticket.py close` 不讀它(D-054 Q4,#139)。
 
 > 🩸 **`import` 失敗不算紅。** 乾淨主線上沒有那個新符號,案例 `import` 就會炸 —— 那是「還沒接上」,不是「驗到了」,
 > 而兩者都讓 unittest 回非零。工具把它們分開數並**明列**;不適用「baseline 該紅」的驗收要在票裡寫明理由。

@@ -7,15 +7,12 @@ Ran/OK,而**一份貼上來的輸出沒有辦法被機器比對** —— 票的 
 這一組釘的是那一格能不能被偽造:
 - 案例在兩邊都綠 → 不准算過(「一條都沒紅」)。
 - 乾淨主線上是 `import` 炸掉 → 不算紅,而且要**明列**(那是還沒接上,不是驗到了)。
-- 過了才寫進票的 `verify.baseline`,讓 `ticket.py close` 有東西可以問。
+- 過了才寫進票的 `verify.baseline`(閘門的證據;close 不讀,D-054 Q4)。
 
-2026-09-23(#26 / D-020):`red` 子指令,以及 `close` 只認 `stage=="check"`(`lint` 子指令 #138 已刪)。
+2026-09-23(#26 / D-020):`red` 子指令(`lint` 子指令 #138 已刪;close 讀 `stage` 那幾條 #139 已刪)。
 釘的是**四種紅分不分得開**:看起來紅、其實是還沒接上的紅有三種(import 失敗、紅在缺
 符號、紅在別處),它們與「驗到了」一樣讓 unittest 回非零。揉成同一句「N 條紅」的那一刻,
 驗證者交的紅與一份還沒接上的案例長得一樣。
-
-`close` 那幾條本來該住 `tests/test_ticket.py`,#26 的寫入範圍沒有它 ——
-所以放在這一份的最後一個 class 裡(EVIDENCE 有記)。
 """
 
 import json
@@ -686,74 +683,6 @@ class RedIsTheOnlyThingTheVerifierMeasures(CaseSandbox):
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("candidate 上還有", done.stdout)
         self.assertFalse(self.load_ticket("1")["verify"]["baseline"]["ok"])
-
-
-class CloseOnlyCountsTheGateRun(Sandbox):
-    """`ticket.py close` 只認 `verify.baseline.stage == "check"`(#26 / D-020 C5)。
-
-    驗證者交的那一趟說的是「這條案例真的在驗東西」,不是「這張票的東西真的做出來了」
-    —— 少了後半的票與做完的票在票面上長得一樣。
-
-    (這幾條本來該住 `tests/test_ticket.py`;#26 的寫入範圍沒有它。)
-    """
-
-    def a_closable(self, baseline=None, **extra):
-        self.write("src/nav.py", "def size_nav():\n    return 42\n")
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "把 src/nav.py 放進主線")
-        plan = {"files": ["verify/nav/test_ticket_1.py"], "tags": ["example"],
-                "run": "", "notes": ""}
-        if baseline is not None:
-            plan["baseline"] = baseline
-        fields = {"landed_sha": self.git("rev-parse", "main").strip(), "verify": plan}
-        fields.update(extra)
-        self.make_ticket(1, **fields)
-        self.ticket("set", "1", "review",
-                    json.dumps({"verdict": "pass", "by": "main", "sha": "deadbeef"},
-                               ensure_ascii=False))
-
-    def test_a_baseline_that_the_gate_measured_closes_the_ticket(self):
-        self.a_closable({"stage": "check", "ok": True, "why": ""})
-        done = self.ticket("close", "1")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.load_ticket("1")["state"], "Done")
-
-    def test_a_baseline_still_at_stage_red_does_not_close(self):
-        """**變異**:把 `done_blockers` 裡 `stage != "check"` 那一段拿掉 → 這一條紅。"""
-        self.a_closable({"stage": "red", "ok": True, "why": ""})
-        done = self.ticket("close", "1")
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertIn("還缺閘門那一趟 check", done.stdout)
-        self.assertIn("stage 是 red", done.stdout)
-        self.assertEqual(self.load_ticket("1")["state"], "Ready", "票不該被關掉")
-
-    def test_a_baseline_without_any_stage_does_not_close_either(self):
-        """舊版的 `check` 沒有寫 `stage`。**沒有那一格**與「閘門量過了」長得一樣,
-        而 close 只認量過的那一趟。"""
-        self.a_closable({"ok": True, "why": ""})
-        done = self.ticket("close", "1")
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertIn("還缺閘門那一趟 check", done.stdout)
-
-    def test_a_baseline_that_says_red_failed_still_names_that_instead(self):
-        """`ok:false` 與「還缺 check」的下一步不一樣,兩句話不准揉在一起。"""
-        self.a_closable({"stage": "check", "ok": False, "why": "乾淨主線上一條都沒紅"})
-        done = self.ticket("close", "1")
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertIn("verify.baseline 說驗紅沒過", done.stdout)
-        self.assertNotIn("還缺閘門那一趟 check", done.stdout)
-
-    def test_an_honest_waiver_still_gets_past_the_stage_check(self):
-        """#15 那條豁免不變:誠實的 `verify_waiver` + review.sha 真的在主線歷史裡。"""
-        self.a_closable({"stage": "red", "ok": True, "why": ""},
-                        verify_waiver={"by": "main", "reason": "控制腳本票:無獨立驗證者"})
-        sha = self.git("rev-parse", "main").strip()
-        self.ticket("set", "1", "review",
-                    json.dumps({"verdict": "pass", "by": "main", "sha": sha},
-                               ensure_ascii=False))
-        done = self.ticket("close", "1")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.load_ticket("1")["state"], "Done")
 
 
 if __name__ == "__main__":

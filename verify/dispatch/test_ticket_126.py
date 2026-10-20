@@ -120,11 +120,9 @@ class MissingCasesEnterTheRedList(GateBase):
                          (NO_CASES, "", 0), rows[0])
         self.assertIn(GAP_LINE, rows[0].get("excerpt"), rows[0])
 
-    def test_a2_the_three_exceptions_write_no_gap_row(self):
-        """A2 waiver / needs_verifier=false / 沒宣告 verify:各 0 列 GAP。"""
-        for fields in ({"needs_verifier": True, "verify": dict(EMPTY_PLAN),
-                        "verify_waiver": {"by": "main", "reason": "純文字,沒有邏輯可紅"}},
-                       {"needs_verifier": False, "verify": dict(EMPTY_PLAN)},
+    def test_a2_the_exceptions_write_no_gap_row(self):
+        """A2 needs_verifier=false / 沒宣告 verify:各 0 列 GAP。"""
+        for fields in ({"needs_verifier": False, "verify": dict(EMPTY_PLAN)},
                        {"needs_verifier": True}):
             with self.subTest(fields=sorted(fields)):
                 self.a_ticket(**fields)

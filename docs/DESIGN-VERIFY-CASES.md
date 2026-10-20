@@ -16,7 +16,7 @@
 | C2 | **驗證者只證「乾淨基底紅、而且紅在自己的斷言」**,用工具量(`verify-case.py red <n>`,新子指令),寫進票的 `verify.baseline{stage:"red"}`。**不搭參考實作、不做產品變異、不證綠**。綠由閘門在實作者 patch 進來時用既有的 `verify-case.py check` 量(#22 做好的,現在沒人自動叫它)。 | 每票省 150–200K(參考實作 50–80K + 逐條變異 40–60K + 為了搭實作而多讀的產品檔 30–60K) |
 | C3 | **驗證者的變異驗紅整條拿掉**。oracle 不被騙的證據改成三件機器量的事:① 基底上紅在案例檔自己的 `AssertionError`(不是 import / AttributeError / 別的檔炸)② candidate 上綠(閘門量)③ 兩邊案例數相同。實作者對自己單元測試的變異照舊(D-009 那一半不動)。 | 每票省 40–60K;風險:一條「基底紅、候選綠、但判準選錯」的案例會漏過 —— 由 `red_lines`(每條紅的第一行寫進票)給主線覆核時看,成本 <1K |
 | C4 | (lint 那一半已撤,#138,D-054 Q4:閘門只跑案例,不先驗案例的格式)**一份範本 `verify/_template_ticket.py`(A 正本、同步到 T)+ 機器 lint**(`verify-case.py lint`,閘門叫):模組 docstring 固定五欄、`TAGS` 字面、每個 `test_` 的 docstring 首行是驗收編號、禁受保護埠字面與 kill、fixture 只走 `addCleanup`。lint 紅 = 閘門 rc≠0 並指名行。 | 每票省 20–40K(不必讀 2–3 份既有案例檔猜形狀;#23 自報讀了 7 份);lint 每命中一次省一輪退件(~50K) |
-| C5 | **閘門接線**(lint 那一步已撤,#138,D-054 Q4;只剩 `check`):`gate.sh --ticket <n>`(A)/ `land-ticket.sh gate`(T)在回歸層之後多兩步:`verify-case.py lint <verify.files>`、`verify-case.py check <n> --candidate <分支樹>`;`check` 把 `verify.baseline.stage` 從 `red` 升成 `check`。`ticket.py close` 只認 `stage=="check"`(或 `verify_waiver`)。 | 每票多花 0 agent token、閘門多 10–60 秒(案例檔在乾淨副本再跑一次);省掉的是「驗證者等 patch」那條路整個不存在 |
+| C5 | **閘門接線**(lint 那一步已撤,#138,D-054 Q4;只剩 `check`):`gate.sh --ticket <n>`(A)/ `land-ticket.sh gate`(T)在回歸層之後多兩步:`verify-case.py lint <verify.files>`、`verify-case.py check <n> --candidate <分支樹>`;`check` 把 `verify.baseline.stage` 從 `red` 升成 `check`。`ticket.py close` 不讀它(D-054 Q4,#139)。 | 每票多花 0 agent token、閘門多 10–60 秒(案例檔在乾淨副本再跑一次);省掉的是「驗證者等 patch」那條路整個不存在 |
 | C6 | **A 放:範本、lint、`red` 子指令、gate 接線、角色卡、`templates/dispatch-verifier.md`、VERIFICATION/SCHEMA 措辭。T 自備:`land-ticket.sh` 的兩行呼叫、`board/config.json` 的禁字清單(埠)、`verify/<feature>/_common.py` 之類的 fixture、`docs/DISPATCH-COMMON-RULES.md` §133 那段(它還在說 VERDICT,過期)。** | 同步一次 ~5K;不同步的話兩邊各長一種形狀(D-018 明禁) |
 | C7 | **四張票,順序:#25 文字(sonnet)→ #26 工具(opus)→ #27 閘門(opus)→ T#650 同步+接線(sonnet)**。#25 今天就能派,它是省最多的那一張;#26 沒落地前 #25 給一段過渡指令(貼 `^Ran\|^FAILED\|^(FAIL\|ERROR):` 與 rc,只准基底)。 | — |
 
@@ -88,7 +88,7 @@
 ### 綠由誰量、何時量
 
 閘門。`gate.sh --ticket <n>`(與 T 的 `land-ticket.sh gate`)在 `regression()` 之後:
-1. `verify.files` 空 → 印「這張票沒有驗證者案例」(有 `verify_waiver` 才不算缺口),照 #619 那條「宣告了 tags 卻選不到案例 = 缺口」的精神處理;
+1. `verify.files` 空 → 印「這張票沒有驗證者案例」(`needs_verifier=false` 才不算缺口),照 #619 那條「宣告了 tags 卻選不到案例 = 缺口」的精神處理;
 2. 非空 → `verify-case.py check <n> --ref <base_sha> --candidate <這一輪的分支樹>`,`stage` 升成 `check`;`ok:false` 就是閘門紅,紅榜寫進 status.json 的 `failures[]`,走 auto-fix 的路(worker 拿到的是「你的實作讓驗證者的第 k 條紅」,或反過來 `test_defect`——那條路 D-014 已有)。
 
 為什麼不在 land 量而在 gate:worker 三輪修復迴圈在 gate,量在 land 等於紅了才發現、多一整輪。
@@ -204,7 +204,7 @@ D-018 檢查:兩邊只有一種 `verify.baseline` 形狀(`stage` 是同一格的
 
 **依賴**:#25 獨立(今天可派,`verify-case.py red` 未落地前派工文寫過渡指令:`cd $W/base-with-cases && python3 -m unittest <module> -v`,只貼 `^Ran|^FAILED|^(FAIL|ERROR):` 與 rc,**不准搭實作、不准變異**);#26 獨立;#27 依賴 #26;#650(**已開**,tabby #650)依賴 #25–#27 全落地。
 
-**驗證者**:#25 `verify_waiver`(純文字 + 範本檔,lint 落地後 #650 會對範本本身跑一次);#26 / #27 有驗證者(sonnet),**用本設計的規矩派**——它們是第一批只交紅的票,派工文照 #25 改好的範本。
+**驗證者**:#25(純文字 + 範本檔,lint 落地後 #650 會對範本本身跑一次);#26 / #27 有驗證者(sonnet),**用本設計的規矩派**——它們是第一批只交紅的票,派工文照 #25 改好的範本。
 
 ---
 
@@ -234,4 +234,4 @@ D-018 檢查:兩邊只有一種 `verify.baseline` 形狀(`stage` 是同一格的
 
 `docs/VERIFICATION.md` §流程第二段:把「第二段(拿到指定的 patch 之後)」改成「第二段(閘門做)」。
 
-`tickets/SCHEMA.md` `verify.baseline`:「由 `red`(驗證者,stage=red)與 `check`(閘門,stage=check)寫同一格;close 只認 check」。
+`tickets/SCHEMA.md` `verify.baseline`:「由 `red`(驗證者,stage=red)與 `check`(閘門,stage=check)寫同一格;閘門量 check;close 不讀」(D-054 Q4 後)。

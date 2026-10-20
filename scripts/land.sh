@@ -478,38 +478,6 @@ PY
         continue
     fi
 
-    # 票的 `verify.files` 真的在這條分支上嗎(#587 那把尺)。
-    # 票上寫著「案例在這幾個檔」而分支上沒有那幾個檔,代表**驗證者的交付沒有跟著進來**
-    # —— 而 `verify.tags` 照樣會被閘門呼叫、照樣一個案例都選不到、照樣印一行綠。
-    # 退出碼與其他拒收分開(4):呼叫者要分得出「票面沒填好」與「分支沒準備好」。
-    out=$(python3 - "$ROOT" "$b" "$tf" <<'VFILES_PY'
-import json, subprocess, sys
-root, branch, path = sys.argv[1:4]
-try:
-    with open(path, encoding="utf-8") as handle:
-        plan = json.load(handle).get("verify") or {}
-except (OSError, ValueError):
-    plan = {}
-files = (plan.get("files") or []) if isinstance(plan, dict) else []
-for name in files:
-    if not name:
-        continue
-    done = subprocess.run(["git", "-C", root, "cat-file", "-e",
-                           "%s:%s" % (branch, name)], capture_output=True)
-    if done.returncode != 0:
-        print(name)
-VFILES_PY
-)
-    if [ -n "$out" ]; then
-        echo "land: $b —— 票 #$id 的 verify.files 有幾個不在這條分支上:"
-        echo "$out" | sed 's/^/land:   /'
-        echo "land:   驗證者的案例沒有跟著進來 —— 票的 tags 會被呼叫、卻一個案例都選不到。"
-        echo "land:   先把 patch-verify 套進這條分支:sh scripts/apply.sh $id <patch-verify>"
-        STOP=1
-        RC_REFUSE=4
-        continue
-    fi
-
     # 分支**新增**的路徑,在主線工作樹裡已經是未追蹤的檔(#69)。第 6 步的 ff-only 會被
     # git 拒絕(untracked working tree files would be overwritten by merge),而那是跑完
     # 九分鐘全套之後的事 —— 這裡先查得出來就先查。判準用 git 自己的:未追蹤且未被 ignore。
@@ -544,7 +512,7 @@ if [ -n "$STOP" ]; then
     ev land.refused --note "$*" --kv "stamp=$STAMP"
     status_done_all "$RC_REFUSE" "land 拒收"
     inbox_all "land 拒收(rc=$RC_REFUSE)" \
-        "上面逐條寫了是哪一條不過:0 commit / base 過期 / 越界 / 覆核 / verify.files / 未追蹤撞路徑;產品票缺案例時先派驗證者" \
+        "上面逐條寫了是哪一條不過:0 commit / base 過期 / 越界 / 覆核 / 未追蹤撞路徑;產品票缺案例時先派驗證者" \
         "reports/t<票號>/${LAND_RUN:-} 的 status.json"
     exit "$RC_REFUSE"
 fi
