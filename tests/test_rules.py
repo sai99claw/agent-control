@@ -535,7 +535,7 @@ class TheRoutingFloorIsGone(RulesBase):
 
     def test_a_worker_below_the_old_floor_still_gets_a_pack(self):
         """T4。**變異 M5**:cmd_pack 留著舊下限(sonnet < routing.implement=opus 就 rc=2)
-        → 這一條紅(rc 2、stdout 空)。四問:量 rc 與 stdout;值 = A8(simple 票選到 sonnet
+        → 這一條紅(rc 2、stdout 空)。量 rc 與 stdout;值 = A8(simple 票選到 sonnet
         照產包);舊值會在 rc=2 時紅;不靠沒設就退回(config 真的帶 routing + tiers)。"""
         for role, model in (("worker", "sonnet"), ("opener", "opus"),
                             ("verifier", "haiku"), ("design", "opus")):

@@ -6,7 +6,7 @@
     scripts/memory.py harvest EVIDENCE.md      # 收割「記憶」段的 note 指令
     scripts/memory.py snapshot memory/model/opus.md   # 討論檔頭要抄的兩行
     scripts/memory.py lint [--file <記憶檔>]… [--json]   # 分層 lint(唯讀):錯層內容逐條點名
-    scripts/memory.py lint --base main --file <記憶檔>…  # 閘門那一手:只量本分支新增行
+    scripts/memory.py lint --base main --file <記憶檔>…  # 只量本分支新增行
     scripts/memory.py consolidate memory/model/opus.md --candidate <新版> \
         --discussion discussions/2026-09-12-memory-opus-fable.md \
         --discussion discussions/2026-09-12-memory-opus-opus.md
@@ -272,7 +272,7 @@ def already_noted(path, text, tag):
 # 記憶分層(#87 A33–A37,原 #79;裁示原話 Q2 / Q3):角色與模型記憶只留通用原則與自身反思,
 # 專案記憶留設計理由與不變條件;具體的路徑、行號、呼叫、旗標、commit 指紋去 repo map /
 # reference / 票。這是**可測的語法近似**,不宣稱判斷得了所有語意錯層 —— 抽象過的專案限定
-# 說法仍要覆核者看。rule ID 是穩定的介面(note / consolidate / 閘門共用這一份判斷)。
+# 說法仍要覆核者看。rule ID 是穩定的介面(note / consolidate 共用這一份判斷)。
 #
 # 誤判的例外寫在**同一行**、只豁免一條規則的一個逐字值,要有理由與存在的裁示引用:
 #   <!-- memory-allow rule=path value="docs/ROLES.md" reason="navigation-only" ref="D-013" -->
@@ -439,7 +439,7 @@ def print_lint(bad, out=sys.stderr):
 
 # ------------------------------------------------------- lint --base(D-042)
 #
-# 閘門問的是**這條分支加了什麼**,不是這張卡整份乾不乾淨:既有正文的命中歸整理票
+# `--base` 問的是**這條分支加了什麼**,不是這張卡整份乾不乾淨:既有正文的命中歸整理票
 # (`check` 開的那一張),拿來擋一個只在卡尾加一行的分支,等於要每張票順手整理
 # 整張卡。改前 = 該卡在 merge-base(ref, HEAD) 的內容;改後 = 工作樹;改前不存在的卡
 # (含未追蹤)整份都算新增。

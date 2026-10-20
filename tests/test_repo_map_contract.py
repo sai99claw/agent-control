@@ -6,8 +6,8 @@
    答得對。改檔的**內容**、動不歸地圖管的檔 → 不 churn。
 3. `query memory` / `query rules` 指到真的入口與主守衛,印出來的每一條路徑都在;拼錯的
    主題非零,並給索引入口。
-4. 同步到專案的 `scripts/control/` 照樣能用,專案自己的 catalog 與人工卡不被同步蓋掉;
-   閘門拒收候選樹裡過期的索引。
+4. 同步到專案的 `scripts/control/` 照樣能用,專案自己的 catalog 與人工卡不被同步蓋掉。
+   (閘門拒收過期索引那一格 #138 已刪,D-054 Q4;落地合併後 land 重產,D-051。)
 
 拋棄式的樹由這裡自己搭(兩支腳本 + 一份 catalog);期望的檔名、主題、路徑都寫死在這裡,
 不從 repo-map.py 讀回來。
@@ -22,7 +22,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import ROOT, SCRIPTS, TIMEOUT, Sandbox  # noqa: E402
+from control_harness import ROOT, SCRIPTS, TIMEOUT  # noqa: E402
 
 CATALOG = {
     "version": 1,
@@ -34,14 +34,6 @@ CATALOG = {
                   "guard": "tests/test_rules.py"},
     },
 }
-
-PASSING = """import unittest
-
-
-class T(unittest.TestCase):
-    def test_ok(self):
-        self.assertTrue(True)
-"""
 
 
 def clean_env(**extra):
@@ -233,52 +225,6 @@ class TheSyncedCopyWorks(unittest.TestCase):
         self.assertIn("入口\tsrc/core.py", ran.stdout)
         self.assertTrue(os.path.isfile(os.path.join(project, "code-map", "index.json")),
                         "索引沒有寫在專案根")
-
-
-class TheGateRefusesAStaleIndex(Sandbox):
-    """A32:`gate.sh --branch --ticket <n>` 拒收候選樹裡過期的索引(候選樹 = 票的 worktree)。"""
-
-    def setUp(self):
-        super().setUp()
-        shutil.copy(os.path.join(SCRIPTS, "repo-map.py"),
-                    os.path.join(self.repo, "scripts", "repo-map.py"))
-        catalog = {"version": 1, "managed": ["scripts/*.py", "tests/test_*.py"],
-                   "topics": {"memory": {"summary": "沙盒", "match": ["memory"],
-                                         "entry": "scripts/memory.py"}}}
-        self.write(os.path.join("code-map", "catalog.json"),
-                   json.dumps(catalog, ensure_ascii=False, indent=2))
-        self.write(os.path.join("tests", "test_repo_map_contract.py"), PASSING)
-        done = self.run_py("scripts/repo-map.py", "build")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.make_ticket(7, state="Running")
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "沙盒的地圖與票 #7")
-
-    def gate_in(self, wt):
-        return self.run_sh(os.path.join(wt, "scripts", "gate.sh"), "--branch", "--ticket", "7",
-                           "--no-auto-fix", cwd=wt)
-
-    def test_a32_a_new_managed_file_without_a_rebuild_is_refused(self):
-        """**變異 M13**:拿掉 gate.sh 的 freshness 那一段 → 這一條紅(rc 不是 4)。"""
-        wt = self.worktree("t7")
-        self.write(os.path.join("tests", "test_memory_new.py"), PASSING, where=wt)
-        self.git("add", "-A", cwd=wt)
-        self.git("commit", "-q", "-m", "#7 加了一支已管理的檔,沒重生", cwd=wt)
-        done = self.gate_in(wt)
-        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
-        self.assertIn("code-map 索引過期", done.stderr)
-        self.assertIn("tests/test_memory_new.py", done.stderr)
-        self.assertFalse(os.path.exists(self.log), "索引過期卻跑了測試")
-
-        rebuilt = subprocess.run(["python3", os.path.join(wt, "scripts", "repo-map.py"),
-                                  "build"], cwd=wt, env=self.env(), capture_output=True,
-                                 text=True, timeout=TIMEOUT)
-        self.assertEqual(rebuilt.returncode, 0, rebuilt.stdout + rebuilt.stderr)
-        self.git("add", "-A", cwd=wt)
-        self.git("commit", "-q", "-m", "#7 重生索引", cwd=wt)
-        again = self.gate_in(wt)
-        self.assertNotIn("code-map 索引過期", again.stderr)
-        self.assertNotEqual(again.returncode, 4, again.stdout + again.stderr)
 
 
 if __name__ == "__main__":

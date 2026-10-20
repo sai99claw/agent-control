@@ -7,7 +7,7 @@ A3 | integ | agent 期間真跑 `AC_ROOT=$REPO ticket.py set 2 state Blocked` �
 A4 | integ | 沙盒 land.sh:docs 通道 / 票 land 的 push 被 origin pre-receive exit 1 拒;agent 期間 docs 通道 push 被拒;假發 land.fail 各形狀 | land.fail 帶 stage push、sha = 本機 main 短 sha、前 main = 跑之前 main、stamp;守衛 rc 0、notes 有 stamp 與「push 失敗」;閘門紅那種 land.fail / 缺前 main → rc 8 | 票面 A4 原話;變異 M3 / M4
 A5 | doc   | 讀 docs/WORKFLOW.md §8「agent 越界守衛」那一條 | 寫得出鍵名、預設三前綴、`[]`、只記不擋、stage push + sha + 前 main、專案端 land 包裝要照發 | 票面 A5 原話
 
-## 介面字串(全部出自票面 acceptance;票面 verify_strings 的原字不在本檔出現 —— gate 比的是 patch 內文)
+## 介面字串(全部出自票面 acceptance)
 KEY        = "guard_" + "main_paths"      ← A1 config 鍵
 SIDE       = "main" + "_side"             ← A1 guard.json 欄位(list,每列 path / before / after)
 STAGE      = ("stage", "push")            ← A4 land.fail 鍵值
@@ -22,7 +22,7 @@ A4 land.sh 那幾條借 tests/test_land.LandBase;push 被拒 = origin.git/hooks/
 守衛那條的 hook 只拒 docs 那一個 commit,auto-fix 自己的 push 不受影響。期望 sha 一律由案例 `git rev-parse` 取。
 
 ## 不做
-不改產品碼;不放寬票面驗收;不刪既有案例;不碰 verify_strings 的原字;
+不改產品碼;不放寬票面驗收;不刪既有案例;
 guard.json 不存在時 notes 無處可看,所以 A4 的 notes 用「再多一個 memory/ 檔」那一案驗(只記不擋,guard.json 會寫出)。
 """
 import glob
@@ -66,7 +66,7 @@ exit 0
 
 
 def shell(text):
-    """假 agent 的片段:`@KB@` 換成前 main 的鍵名、`@SK@` 換成 stage 鍵(verify_strings 的原字不進本檔)。"""
+    """假 agent 的片段:`@KB@` 換成前 main 的鍵名、`@SK@` 換成 stage 鍵。"""
     return text.replace("@KB@", BEFORE_KEY).replace("@SK@", STAGE_KEY)
 
 

@@ -152,7 +152,7 @@ class InitialTable(RoleModels):
     """A1(T1):表的初值逐角色逐格對 D-049 ② 原值。"""
 
     def test_a1_every_role_and_candidate_is_the_confirmed_initial_value(self):
-        """四問:釘什麼 = 表初值;為何會紅 = 任一格偏離裁示;oracle = 本檔寫死的 D-049 ② 原值;
+        """釘什麼 = 表初值;為何會紅 = 任一格偏離裁示;oracle = 本檔寫死的 D-049 ② 原值;
         **變異 M1**(全角色改 sol)→ 本案紅。"""
         self.assertEqual(self.table["schema_version"], 1)
         self.assertEqual(self.table["candidate_keys"],
@@ -166,7 +166,7 @@ class InitialTable(RoleModels):
         self.assertEqual(rc, 0, out + err)
 
     def test_a1_the_default_table_is_the_one_under_the_repo_root(self):
-        """四問:釘什麼 = 不給 --table 讀 <根>/board/role-models.json;為何會紅 = 讀錯樹;
+        """釘什麼 = 不給 --table 讀 <根>/board/role-models.json;為何會紅 = 讀錯樹;
         oracle = 拋棄式根裡改過一格的表;變異:路徑寫死成腳本旁 → 讀到真表、model 不是 fable。"""
         root = os.path.join(self.home, "root")
         os.makedirs(os.path.join(root, "board"))
@@ -187,7 +187,7 @@ class InitialTable(RoleModels):
         self.assertIn("讀不到角色模型表", err)
 
     def test_a1_a4_a_bad_cell_anywhere_refuses_every_role(self):
-        """四問:釘什麼 = 未知角色 / 空鏈 / 非法 effort / 非法 cap / model 與 tool 不符 / 多鍵
+        """釘什麼 = 未知角色 / 空鏈 / 非法 effort / 非法 cap / model 與 tool 不符 / 多鍵
         rc=2 不派,且壞在別的角色也整張不用(A4 不默默跳過);為何會紅 = 驗證漏一類;
         oracle = 逐格手改的表與錯誤訊息裡的欄位名;變異:load_table 不擋問題 → resolve 回 rc=0。"""
         def broken(change):
@@ -220,7 +220,7 @@ class InitialTable(RoleModels):
         self.assertIn("未知角色 owner", self.refused("--role", "owner"))
 
     def test_131_a1_an_agy_prefix_mismatch_invalidates_the_table(self):
-        """四問:量 agy 前綴/tool 對稱;值=A1;舊值放行;表真的含完整候選。"""
+        """量 agy 前綴/tool 對稱;值=A1;舊值放行;表真的含完整候選。"""
         for model, tool in ((AGY, "codex"), ("opus", "agy")):
             with self.subTest(model=model, tool=tool):
                 table = copy.deepcopy(self.table)
@@ -235,7 +235,7 @@ class Effort(RoleModels):
     """A3 / A7(T1):effort 取法與 complexity 選鏈。"""
 
     def test_a3_worker_effort_default_complex_and_red_repair(self):
-        """四問:釘什麼 = sol 預設 high、complex → xhigh、修補第 2 輪仍紅 → xhigh、其他修補沿用;
+        """釘什麼 = sol 預設 high、complex → xhigh、修補第 2 輪仍紅 → xhigh、其他修補沿用;
         為何會紅 = 升級條件寫錯或修補輪換模型;oracle = D-049 補的 worker_effort 原話;
         變異:升級條件改成 repair_round >= 1 → 「第 1 輪紅」那列紅。"""
         rows = (
@@ -256,7 +256,7 @@ class Effort(RoleModels):
         self.assertIn("表外模型先改表或由主線裁示", err)
 
     def test_a3_opus_takeover_is_high_and_simple_sonnet_stays_medium(self):
-        """四問:釘什麼 = sol 額度耗盡後 opus 接手 effort=high(不是 null)、sonnet medium 不降級、
+        """釘什麼 = sol 額度耗盡後 opus 接手 effort=high(不是 null)、sonnet medium 不降級、
         單一 fable 整理無 effort 無 cap;為何會紅 = 換候選時 effort 沒跟著換;oracle = 表初值;
         變異:換候選時沿用第 0 格的 effort → complex 那列給 opus xhigh、紅。"""
         _, got = self.resolve(*self.after("worker", 0, QUOTA_CODEX))
@@ -269,7 +269,7 @@ class Effort(RoleModels):
         self.assertEqual(self.pick(got), ("consolidator", 0, "fable", "claude-code", None, None))
 
     def test_a3_the_verifier_chain_never_looks_at_the_worker(self):
-        """四問:釘什麼 = verifier 不論 worker 是 sol/opus/fable 都 sol → opus;為何會紅 = 依
+        """釘什麼 = verifier 不論 worker 是 sol/opus/fable 都 sol → opus;為何會紅 = 依
         worker 換序;oracle = D-049 補「不強制異模型」;**變異 M5** → 本案紅。"""
         for worker in (None, SOL, "opus", "fable"):
             more = ("--worker-model", worker, "--repair-round", "2", "--last-red") if worker else ()
@@ -280,7 +280,7 @@ class Effort(RoleModels):
                 self.assertEqual(self.pick(got), ("verifier", 1, "opus", "claude-code", None, 1))
 
     def test_a7_complexity_picks_the_chain_and_anything_else_is_refused(self):
-        """四問:釘什麼 = opener 缺 → opener、complex → opener_complex、worker 缺 → worker、
+        """釘什麼 = opener 缺 → opener、complex → opener_complex、worker 缺 → worker、
         其他值 rc=2;為何會紅 = 多收一種值或選錯鏈;oracle = A7 原文;變異:complexity 不驗
         → 「medium」那列 rc=0。"""
         _, got = self.resolve("--role", "opener")
@@ -298,7 +298,7 @@ class TicketEffort(RoleModels):
     """A5(T1):票明寫的 effort 優先;換 provider 時不合法的不跨工具硬套。"""
 
     def test_a5_a_ticket_effort_wins_unless_the_tool_cannot_take_it(self):
-        """四問:釘什麼 = 票 effort 蓋過表(含升級)、ultra 不帶給 claude-code 而記原因;
+        """釘什麼 = 票 effort 蓋過表(含升級)、ultra 不帶給 claude-code 而記原因;
         為何會紅 = 跨工具硬套;oracle = EFFORT_LEVELS 的 claude-code 沒有 ultra(抄自 claude --help);
         **變異 M4**(直接沿用 ultra)→ 本案紅。"""
         _, got = self.resolve("--role", "worker", "--ticket-effort", "ultra")
@@ -317,7 +317,7 @@ class Fallback(RoleModels):
     """A2 / A4(T2):只有可信的額度 / 不可用證據才換下一個;耗盡回 exhausted。"""
 
     def test_a2_provider_envelopes_and_a_missing_cli_move_to_the_next(self):
-        """四問:釘什麼 = claude/codex 的額度信封、模型不存在信封、rc=127 都換下一格;
+        """釘什麼 = claude/codex 的額度信封、模型不存在信封、rc=127 都換下一格;
         為何會紅 = 認不得真的 provider 錯誤;oracle = 手寫假信封;變異:只認 claude 形狀 →
         codex 那幾列紅。"""
         rows = ((QUOTA_CLAUDE, 1, "quota_exhausted"), (QUOTA_CLAUDE_API, 1, "quota_exhausted"),
@@ -333,7 +333,7 @@ class Fallback(RoleModels):
                 self.assertEqual((got["candidate_index"], got["model"]), (1, "opus"))
 
     def test_a2_ordinary_failures_and_a_literal_429_never_move(self):
-        """四問:釘什麼 = 一般 rc≠0、測試紅、逾時、沒交 patch、patch 文字與工具輸出裡的 429
+        """釘什麼 = 一般 rc≠0、測試紅、逾時、沒交 patch、patch 文字與工具輸出裡的 429
         都不換候選(rc=2、不印候選);為何會紅 = 用字面比對判額度(今天 auto-fix 的 grep);
         oracle = A2 原文;**變異 M2**(任意非零即 fallback)→ 本案紅。"""
         rows = ((TEST_LOG, 1), (PATCH_TEXT, 1), (NESTED, 1), (TIMEOUT_LOG, 124),
@@ -353,14 +353,14 @@ class Fallback(RoleModels):
         self.assertIn("由呼叫端標記", got["reason"])
 
     def test_a2_an_auth_error_stops_with_the_setting_problem(self):
-        """四問:釘什麼 = 認證錯停下、印出那句設定問題、不換下一個;為何會紅 = 當成額度盲試;
+        """釘什麼 = 認證錯停下、印出那句設定問題、不換下一個;為何會紅 = 當成額度盲試;
         oracle = 假信封的 message;變異:auth 歸成 quota → 回 opus、rc=0、紅。"""
         err = self.refused(*self.after("worker", 0, AUTH_CODEX))
         self.assertIn("認證設定錯誤", err)
         self.assertIn("Incorrect API key provided", err)
 
     def test_a4_a_spent_chain_is_exhausted_not_opus(self):
-        """四問:釘什麼 = 整串耗盡回 exhausted、model 空、rc=3,不回任意 Opus;為何會紅 = 退回
+        """釘什麼 = 整串耗盡回 exhausted、model 空、rc=3,不回任意 Opus;為何會紅 = 退回
         預設模型;oracle = A4 原文;**變異 M3**(全耗回 opus)→ 本案紅。"""
         for role, last in (("worker", 1), ("reviewer", 0), ("design", 1)):
             with self.subTest(role=role):
@@ -373,7 +373,7 @@ class Fallback(RoleModels):
                       self.refused(*self.after("worker", 2, QUOTA_CLAUDE)))
 
     def test_131_a6_agy_error_envelopes_are_classified_without_plain_text_guessing(self):
-        """四問:量 direct/stream 信封與純文字;值=A6;舊值全 other;只讀頂層 provider 信封。"""
+        """量 direct/stream 信封與純文字;值=A6;舊值全 other;只讀頂層 provider 信封。"""
         rows = ((AGY_UNKNOWN, "provider_unavailable"), (AGY_EFFORT, "auth_config"),
                 (AGY_429, "quota_exhausted"), (AGY_QUOTA, "quota_exhausted"))
         for log, want in rows:
@@ -393,7 +393,7 @@ class Fallback(RoleModels):
         return json.loads(out)
 
     def test_133_a1_the_plain_codex_usage_limit_line_at_the_end_is_quota(self):
-        """T1 / A1。四問:量 classify 的 kind / detail;值 = 真 log 抄來的那一句(oracle 在檔頭);
+        """T1 / A1。量 classify 的 kind / detail;值 = 真 log 抄來的那一句(oracle 在檔頭);
         舊值 other(只認 JSON 信封)會紅;**M1**(刪掉結尾 ERROR: 段的判讀)→ 本案紅;
         **M5**(拿掉 tokens used 收尾段的略過)→ 收尾那一列紅(真 log 形狀:t115 worker-round1.log 末四行)。"""
         twice = REAL_CODEX_QUOTA + "\n" + REAL_CODEX_QUOTA + "\n"
@@ -408,7 +408,7 @@ class Fallback(RoleModels):
         self.assertEqual((got["candidate_index"], got["model"]), (1, "opus"))
 
     def test_133_a3_other_plain_text_still_does_not_move(self):
-        """T2 / A3。四問:量 kind;值 = A3 (a)–(d);(b) 的 tokens used 收尾略過後最後一行是
+        """T2 / A3。量 kind;值 = A3 (a)–(d);(b) 的 tokens used 收尾略過後最後一行是
         Traceback 段,仍 other;**M2**(掃整份 log 的 ERROR: 行)→ (b) 紅;
         **M3**(結尾不要求 ERROR: 前綴)→ (c) 紅;**M4**(不拿掉字面 429)→ (c) stdout only 紅
         (review.sh 把 stdout 單獨判,#132 B4 覆核者那一案就是這個形狀)。"""
@@ -430,7 +430,7 @@ class Fallback(RoleModels):
                     self.assertIn("不換候選", self.refused(*self.after("worker", 0, log, rc)))
 
     def test_133_a4_a_top_level_envelope_still_wins_over_the_plain_tail(self):
-        """T3 / A4。四問:量 kind;值 = 信封說的「模型不存在」;純文字先判的實作 → quota,紅。"""
+        """T3 / A4。量 kind;值 = 信封說的「模型不存在」;純文字先判的實作 → quota,紅。"""
         log = ('{"type":"error","message":"model gpt-x does not exist"}\n'
                + REAL_CODEX_QUOTA + "\n")
         got = self.classified(log)
@@ -446,7 +446,7 @@ class ExplicitTicketCandidate(RoleModels):
                             "--ticket-tool", tool, "--ticket-effort", effort, *more)
 
     def test_a10_agy_is_first_then_the_unchanged_worker_chain(self):
-        """四問:量三格順序;值=A10 寫死;舊值忽略票 model;表有 sol/opus 兩格。"""
+        """量三格順序;值=A10 寫死;舊值忽略票 model;表有 sol/opus 兩格。"""
         _, first = self.explicit(AGY, "agy")
         _, second = self.explicit(AGY, "agy", "high", "--exhausted-index", "0")
         _, third = self.explicit(AGY, "agy", "high", "--exhausted-index", "1")
@@ -456,7 +456,7 @@ class ExplicitTicketCandidate(RoleModels):
                           (2, "opus", "claude-code", "high")])
 
     def test_a10_a_duplicate_explicit_model_is_removed_from_the_table_tail(self):
-        """四問:量 opus 只出現一次;值=A10;舊值先 sol;用耗盡 index 證鏈尾。"""
+        """量 opus 只出現一次;值=A10;舊值先 sol;用耗盡 index 證鏈尾。"""
         _, first = self.explicit("opus")
         _, second = self.explicit("opus", "claude-code", "high", "--exhausted-index", "0")
         rc, spent = self.explicit("opus", "claude-code", "high", "--exhausted-index", "1")
@@ -465,7 +465,7 @@ class ExplicitTicketCandidate(RoleModels):
         self.assertTrue(spent["exhausted"])
 
     def test_a10_without_a_ticket_model_is_byte_for_byte_the_table_choice(self):
-        """四問:量無 model 的完整結果;值=既有表;變異 M5 只影響有 model;非 fallback。"""
+        """量無 model 的完整結果;值=既有表;變異 M5 只影響有 model;非 fallback。"""
         _, plain = self.resolve("--role", "worker")
         _, explicit = self.resolve("--role", "worker", "--ticket-model", SOL,
                                    "--ticket-tool", "codex", "--ticket-effort", "high")
@@ -479,7 +479,7 @@ class DispatchCap(RoleModels):
     """A8(T1):每次派工的份量上限只在派工前擋。"""
 
     def test_a8_items_over_the_cap_are_refused_with_the_batch_size(self):
-        """四問:釘什麼 = astra --items 6 rc=2 並印上限訊息、5 過、fable null 不擋、worker 固定 1;
+        """釘什麼 = astra --items 6 rc=2 並印上限訊息、5 過、fable null 不擋、worker 固定 1;
         為何會紅 = cap 不擋或擋錯候選;oracle = A8 原文的訊息句;**變異 M6**(cap 不擋)→ 本案紅。"""
         err = self.refused("--role", "opener", "--complexity", "complex", "--items", "6")
         self.assertIn("超過 codex:gpt-6-astra 的每次派工上限 5,請切成 ≤5 的批", err)

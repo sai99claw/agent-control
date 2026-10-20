@@ -45,9 +45,7 @@ TEMPLATE_FILES = ("dispatch-reviewer.md", "dispatch-verifier.md")
 # 回歸層的最小形狀:一個登記過的標籤 + 一個會綠的案例。沙盒少了它,`gate --full`
 # 跑到的回歸是一個空集合 —— 而**空集合與「都過了」長得一樣**,那正是這裡在擋的事。
 VERIFY_TAGS = "# 功能標籤登記\n- `example` — 沙盒示範用\n"
-# 模組 docstring 的四段是 `verify-case.py lint` 的 F1(D-020 §四)。**沙盒的示範案例
-# 也要過 lint** —— 閘門現在會對票的 `verify.files` 跑一次 lint(#27),而一份 lint 過
-# 不了的示範案例會讓「閘門有沒有去 lint」與「被測的票寫壞了」長得一樣。
+# 模組 docstring 的四段是 `verify/_template_ticket.py` 的形狀(D-020 §四;案例 lint #138 已刪)。
 VERIFY_CASE = '''"""#0 沙盒的示範案例:回歸層不是空集合。
 
 ## 驗收表(期望值來源獨立於被測程式)

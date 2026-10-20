@@ -36,7 +36,6 @@ from control_harness import GATE_STUB_GREEN, REVIEWER_PASS, Sandbox  # noqa: E40
 RULE = "開題者每張票標 simple / complex;只有 complex 做完後覆核;沒標 = simple"
 REVIEW_KEYS = {"verdict", "by", "sha", "note", "at"}
 CLOSABLE = {
-    "verify_strings": [{"path": "src/g1", "contains": "做完的那一張"}],
     "verify": {"files": [], "tags": [], "run": "", "notes": "",
                "baseline": {"ok": True, "stage": "check"}},
 }
@@ -109,8 +108,7 @@ class SimpleTicketsNeverAcquireAReview(ReviewWorld):
         self.write("src/unmarked", "未標票已在主線\n")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "unmarked ticket payload")
-        self.make_ticket("2", verify_strings=[{"path": "src/unmarked",
-                                                "contains": "未標票已在主線"}],
+        self.make_ticket("2", landed_sha=self.git("rev-parse", "main").strip(),
                          test_evidence=[{"cmd": "gate --branch", "rc": 0}])
         closed = self.ticket("close", "2")
         self.assertEqual(closed.returncode, 0, closed.stdout + closed.stderr)
@@ -161,8 +159,7 @@ class ComplexTicketsStillRequireOneReview(ReviewWorld):
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "complex close payload")
         self.make_ticket("3", complexity="complex",
-                         verify_strings=[{"path": "src/complex-close",
-                                          "contains": "complex close payload"}],
+                         landed_sha=self.git("rev-parse", "main").strip(),
                          test_evidence=[{"cmd": "gate --branch", "rc": 0}])
         close_done = self.ticket("close", "3")
 
@@ -288,8 +285,7 @@ class LegacyTicketFieldsRemainReadable(Sandbox):
             "state_version": 1, "face": "old-face", "patch_" + "id": "old-patch",
             "sha": "deadbeef",
         }
-        self.make_ticket("1", verify_strings=[{"path": "src/nav.py",
-                                                "contains": "def legacy_nav"}],
+        self.make_ticket("1", landed_sha=self.git("rev-parse", "main").strip(),
                          test_evidence=[{"cmd": "gate --branch", "rc": 0}],
                          review=old_review, **{"review_" + "request": old_dispatch})
 

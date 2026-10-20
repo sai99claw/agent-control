@@ -324,7 +324,7 @@ class TheAgentCostHookIsSynced(unittest.TestCase):
                 handle.write(settings)
 
     def test_a4_parser_and_hook_land_and_the_missing_wiring_is_printed(self):
-        """四問:A4 同步與接線提示;SCRIPT_LIST 少一支或提示段拿掉會紅;字面;新案例。"""
+        """A4 同步與接線提示;SCRIPT_LIST 少一支或提示段拿掉會紅;字面;新案例。"""
         with tempfile.TemporaryDirectory() as d:
             self.project(d)
             r = sync(d)
@@ -346,7 +346,7 @@ class TheAgentCostHookIsSynced(unittest.TestCase):
                              "sync 不自己改專案的 settings.json")
 
     def test_a4_a_wired_project_is_not_told_again(self):
-        """四問:A4 反方向;只看名單不看 settings 的版本會紅;字面;新案例。"""
+        """A4 反方向;只看名單不看 settings 的版本會紅;字面;新案例。"""
         with tempfile.TemporaryDirectory() as d:
             self.project(d, self.WIRED)
             r = sync(d)
@@ -803,7 +803,7 @@ class TheRoleTableIsSynced(unittest.TestCase):
             return f.read()
 
     def test_a4_an_empty_project_gets_the_table_and_the_router(self):
-        """四問:守沒有表就裝初表、選路器進 scripts/control / 可信回歸:M2 只同步腳本不裝表 →
+        """守沒有表就裝初表、選路器進 scripts/control / 可信回歸:M2 只同步腳本不裝表 →
         表不在紅 / 字面 A 的位元組 / 新案例。"""
         r = sync(self.d)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -819,7 +819,7 @@ class TheRoleTableIsSynced(unittest.TestCase):
         self.assertIn("不代表政策已同步", said[0])
 
     def test_a4_a_legal_custom_table_is_kept_and_its_difference_named(self):
-        """四問:守合法自訂表不覆蓋 / 可信回歸:無條件 cp → 位元組變成 A 的紅 / 字面 opener / 新案例。"""
+        """守合法自訂表不覆蓋 / 可信回歸:無條件 cp → 位元組變成 A 的紅 / 字面 opener / 新案例。"""
         data = json.loads(self.a_table)
         data["roles"]["opener"] = [dict(data["roles"]["opener"][0], model="fable")]
         mine = self.put_table(data)
@@ -833,7 +833,7 @@ class TheRoleTableIsSynced(unittest.TestCase):
         self.assertNotIn("worker", kept[0], "只列不同的角色")
 
     def test_a4_an_illegal_table_refuses_the_whole_sync(self):
-        """四問:守非法表報錯、不靜默同步、不動 source marker / 可信回歸:不驗表 → rc 0、腳本被寫紅 /
+        """守非法表報錯、不靜默同步、不動 source marker / 可信回歸:不驗表 → rc 0、腳本被寫紅 /
         字面 rc 2、schema_version / 新案例。"""
         data = json.loads(self.a_table)
         data["schema_version"] = 9

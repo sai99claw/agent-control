@@ -48,7 +48,7 @@ class T1Parser(unittest.TestCase):
 
     def test_a2_duplicate_ids_take_the_last_row_and_unfinished_output_is_null(self):
         """夾具 A:msg_a1 三列(output 3/8/8、stop_reason 全 null)+ msg_a2 一列。
-        四問:A2 去重與 output 收尾;M1 / M2 會紅;期望值手算;不放寬既有斷言。"""
+        A2 去重與 output 收尾;M1 / M2 會紅;期望值手算;不放寬既有斷言。"""
         got = tc.summarize(rows_of("dup_no_stop.jsonl"))
         self.assertEqual(got["tokens_in"], 14)          # 10 + 4(不是四列的 34)
         self.assertEqual(got["cache_write"], 200)       # 200 + 0
@@ -62,7 +62,7 @@ class T1Parser(unittest.TestCase):
 
     def test_a2_every_last_row_finished_sums_the_last_rows_output(self):
         """夾具 B:msg_b1 兩列(1 → 120,最後一列 tool_use)+ msg_b2(45,end_turn)。
-        四問:A2 output 只信收尾;取第一列會得 None / 46;期望值手算;新案例。"""
+        A2 output 只信收尾;取第一列會得 None / 46;期望值手算;新案例。"""
         got = tc.summarize(rows_of("complete_stop.jsonl"))
         self.assertEqual(got["tokens_in"], 50)          # 20 + 30
         self.assertEqual(got["cache_write"], 500)       # 500 + 0
@@ -74,7 +74,7 @@ class T1Parser(unittest.TestCase):
 
     def test_a2_missing_keys_stay_null_and_synthetic_never_wins_the_model(self):
         """夾具 C:沒有任何 cache 鍵、沒有 timestamp;model-b 2 / model-a 2 / <synthetic> 3。
-        四問:A1 null 不換 0、A2 model 規則;換成 0 或算進 synthetic 都紅;手算;新案例。"""
+        A1 null 不換 0、A2 model 規則;換成 0 或算進 synthetic 都紅;手算;新案例。"""
         got = tc.summarize(rows_of("null_and_synthetic.jsonl"))
         self.assertEqual(got["tokens_in"], 16)          # 7 + 5 + 0 + 0 + 0 + 3 + 1
         self.assertIsNone(got["cache_write"])
@@ -84,7 +84,7 @@ class T1Parser(unittest.TestCase):
         self.assertEqual(got["model"], "model-b")       # 同票數取先出現的
 
     def test_a2_no_assistant_usage_is_all_null(self):
-        """四問:A1 缺料明確 null;回 0 會紅;常數;新案例。"""
+        """A1 缺料明確 null;回 0 會紅;常數;新案例。"""
         got = tc.summarize([{"type": "user", "message": {"role": "user", "content": "hi"}}])
         for key in ("model", "tokens_in", "tokens_out", "cache_write", "cache_read",
                     "wall_seconds", "effort"):
@@ -92,7 +92,7 @@ class T1Parser(unittest.TestCase):
         self.assertEqual(got["note"], tc.EMPTY_NOTE)
 
     def test_a3_d4_ticket_and_role_examples(self):
-        """原 #95 D4 的例子。四問:A3 歸票與角色;關鍵字順序或 300 字界線錯會紅;票面字面;新案例。"""
+        """原 #95 D4 的例子。A3 歸票與角色;關鍵字順序或 300 字界線錯會紅;票面字面;新案例。"""
         cases = [("#655 reviewer", "", None, ("655", "reviewer")),
                  ("調查 flaky", "你是 #12 的實作者…", None, ("12", "investigator")),
                  ("A93 opener", "沒有井號", None, (None, "opener")),
@@ -107,7 +107,7 @@ class T1Parser(unittest.TestCase):
         self.assertEqual(tc.guess_role("", late), "subagent")
 
     def test_a5_reader_takes_the_last_row_per_session_and_agent(self):
-        """四問:A5 讀端;取第一筆或與 ticket.cost 相加會紅;常數;新案例。"""
+        """A5 讀端;取第一筆或與 ticket.cost 相加會紅;常數;新案例。"""
         events = [
             {"kind": "agent.cost", "session_id": "s1", "agent_id": None, "tokens_in": 10},
             {"kind": "ticket.cost", "session_id": "s1", "tokens_in": 999},
@@ -123,7 +123,7 @@ class T1Parser(unittest.TestCase):
                                ("s2", None): 4})
 
     def test_t3_parser_functions_have_no_side_effects(self):
-        """四問:T3 純函式;改輸入或寫檔會紅;sha / 目錄清單比對;新案例。"""
+        """T3 純函式;改輸入或寫檔會紅;sha / 目錄清單比對;新案例。"""
         path = os.path.join(FIXTURES, "dup_no_stop.jsonl")
         with open(path, "rb") as handle:
             before = hashlib.sha256(handle.read()).hexdigest()
@@ -146,7 +146,7 @@ class A5CostTotalIgnoresAgentCost(unittest.TestCase):
     """A5:agent.cost 是猜的票,不進 cost_total(M3 把它算進去 → 這一條紅)。"""
 
     def test_a5_cost_total_counts_only_the_ticket_cost_rows(self):
-        """四問:A5 不相加;M3 會紅;期望值由兩列 cost[] 手算;新案例。"""
+        """A5 不相加;M3 會紅;期望值由兩列 cost[] 手算;新案例。"""
         home = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, home, True)
         os.makedirs(os.path.join(home, "board"))
@@ -221,7 +221,7 @@ class HookCase(unittest.TestCase):
 class T2Hook(HookCase):
 
     def test_a3_session_end_reads_only_the_main_transcript(self):
-        """四問:A1 鍵集合 / A3 SessionEnd;重算子 agent 或漏鍵會紅;手算;新案例。"""
+        """A1 鍵集合 / A3 SessionEnd;重算子 agent 或漏鍵會紅;手算;新案例。"""
         row = self.only_event(self.run_hook(self.session_end()))
         self.assertEqual(row["role"], "main")
         self.assertIsNone(row["ticket"])
@@ -235,7 +235,7 @@ class T2Hook(HookCase):
         self.assertEqual(row["model"], "claude-opus-test")
 
     def test_a3_subagent_stop_derives_the_path_from_transcript_path_and_agent_id(self):
-        """四問:A3 推導路徑 + meta 歸票;拿掉推導會紅;手算;新案例。"""
+        """A3 推導路徑 + meta 歸票;拿掉推導會紅;手算;新案例。"""
         row = self.only_event(self.run_hook({
             "hook_event_name": "SubagentStop", "session_id": "s-1", "agent_id": "a1",
             "cwd": self.root, "transcript_path": os.path.join(self.t, "session.jsonl")}))
@@ -245,7 +245,7 @@ class T2Hook(HookCase):
 
     def test_a3_agent_transcript_path_wins_over_the_derived_one(self):
         """agent_transcript_path 指夾具 B,推導路徑會指 agent-a1 —— 讀到的必須是 B。
-        四問:A3 優先序;先推導會紅;手算;新案例。"""
+        A3 優先序;先推導會紅;手算;新案例。"""
         row = self.only_event(self.run_hook({
             "hook_event_name": "SubagentStop", "session_id": "s-1", "agent_id": "a1",
             "cwd": self.root, "transcript_path": os.path.join(self.t, "session.jsonl"),
@@ -254,7 +254,7 @@ class T2Hook(HookCase):
         self.assertEqual((row["ticket"], row["role"]), (None, "investigator"))
 
     def test_a3_missing_meta_and_no_keyword_is_subagent(self):
-        """四問:A3 meta 缺失;回 agentType 以外的猜測會紅;常數;新案例。"""
+        """A3 meta 缺失;回 agentType 以外的猜測會紅;常數;新案例。"""
         row = self.only_event(self.run_hook({
             "hook_event_name": "SubagentStop", "session_id": "s-1", "agent_id": "a2",
             "cwd": self.root, "transcript_path": os.path.join(self.t, "session.jsonl")}))
@@ -265,7 +265,7 @@ class T2Hook(HookCase):
     def test_a4_skips_emit_nothing_print_nothing_and_exit_zero(self):
         """壞 stdin / 缺 transcript / AC_ROLE=worker / cwd 在 `<根>-wt/` 底下 / 別的 hook。
         最後同一個根跑一次正常的,證明前面的「沒有」不是空真。
-        四問:A4;拿掉任一條不觸發會紅;stdout / rc / 事件數;新案例。"""
+        A4;拿掉任一條不觸發會紅;stdout / rc / 事件數;新案例。"""
         good = self.session_end()
         missing = dict(good, transcript_path=os.path.join(self.t, "nope.jsonl"))
         in_copy = dict(good, cwd=os.path.join(self.home, "ctl-wt", "fix-t1", "work"))

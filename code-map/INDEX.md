@@ -20,7 +20,7 @@
 
 ## gate
 
-閘門:對照表挑測試模組、preflight 機械格、狀態檔、索引新鮮度
+閘門:對照表挑測試模組、preflight 硬擋、狀態檔、驗證者案例
 
 - 入口:[`scripts/gate.sh`](../scripts/gate.sh)
 - 主守衛:[`tests/test_gate.py`](../tests/test_gate.py)
@@ -74,12 +74,11 @@
 
 - 入口:[`scripts/ticket.py`](../scripts/ticket.py)
 - 主守衛:[`tests/test_ticket.py`](../tests/test_ticket.py)
-- 來源:[`tests/test_ticket_65.py`](../tests/test_ticket_65.py)
 - 文件:[`tickets/SCHEMA.md`](../tickets/SCHEMA.md)
 
 ## verify
 
-回歸層執行器與驗證者案例的 red / check / lint
+回歸層執行器與驗證者案例的 red / check
 
 - 入口:[`scripts/verify-case.py`](../scripts/verify-case.py)
 - 主守衛:[`tests/test_verify_case.py`](../tests/test_verify_case.py)

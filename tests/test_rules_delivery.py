@@ -201,7 +201,7 @@ class NormalPacks(RulesBox):
         return done.stdout
 
     def test_every_role_in_the_canon_layout(self):
-        """四問:守「正本 A 每個角色的包都合法」;回歸是 #74 那種只剩標題的包(固定文字
+        """守「正本 A 每個角色的包都合法」;回歸是 #74 那種只剩標題的包(固定文字
         2,349 B 把正文擠空);舊測試只看總長與標題字串;不加測試專用 API(`inspect` 是
         派工與維護的介面)。"""
         for role in WANT:
@@ -209,7 +209,7 @@ class NormalPacks(RulesBox):
                 self.assert_legal(role)
 
     def test_every_role_in_a_generic_project_layout(self):
-        """四問:守「`roles_dir=docs/roles` 的專案每個角色的包都合法、本地主卡與暫存區
+        """守「`roles_dir=docs/roles` 的專案每個角色的包都合法、本地主卡與暫存區
         都留正文」;回歸是專案層疊上去後固定成本超標或本地格被砍成標題;舊測試只用
         一句話的假卡;不加測試專用 API。"""
         conf = json.loads(self.read("board/config.json"))
@@ -238,7 +238,7 @@ class BrokenSourcesStopThePack(RulesBox):
         return rows[0]
 
     def test_a_missing_section(self):
-        """四問:守「名單上的一節不在 → 不交」;回歸是舊版印一句警告照樣 rc=0;舊測試
+        """守「名單上的一節不在 → 不交」;回歸是舊版印一句警告照樣 rc=0;舊測試
         斷言的正是 rc=0;不加測試專用 API。
 
         **變異**:`cmd_pack` 拿掉 `return 1`(改回印包、rc=0)→ 這一條紅。
@@ -255,7 +255,7 @@ class BrokenSourcesStopThePack(RulesBox):
         self.assertEqual([row["ticket"] for row in self.decision_rows()], ["rules", "7"])
 
     def test_an_empty_model_card(self):
-        """四問:守「指定的模型卡只剩 front matter 與標題 = 缺項」;回歸是 #74 的模型卡
+        """守「指定的模型卡只剩 front matter 與標題 = 缺項」;回歸是 #74 的模型卡
         被擠成只有標題;舊測試沒有這一格;不加測試專用 API。"""
         self.write(os.path.join("memory", "model", "opus.md"),
                    "---\nowner: opus\n---\n# Opus 的行為準則\n\n"
@@ -264,7 +264,7 @@ class BrokenSourcesStopThePack(RulesBox):
                             "memory/model/opus.md", "沒有正文")
 
     def test_a_page_that_cannot_be_written_is_still_nonzero(self):
-        """四問:守「decision 頁寫不出來時照樣非零、說原因」;回歸是寫頁失敗被吞成 rc=0;
+        """守「decision 頁寫不出來時照樣非零、說原因」;回歸是寫頁失敗被吞成 rc=0;
         舊測試沒有這條路;不加測試專用 API。"""
         self.break_section()
         os.makedirs(os.path.join(self.repo, "reports"))
@@ -275,7 +275,7 @@ class BrokenSourcesStopThePack(RulesBox):
         self.assertIn("decision 頁寫不出來", done.stderr)
 
     def test_inspect_is_read_only_and_names_the_same_gap(self):
-        """四問:守「inspect 唯讀、與 pack 判同一件事」;回歸是診斷介面自己發頁或說法與
+        """守「inspect 唯讀、與 pack 判同一件事」;回歸是診斷介面自己發頁或說法與
         pack 不同;舊測試沒有 inspect;inspect 是票面要的維護介面,不是測試專用。"""
         self.break_section()
         before = len(self.events())
@@ -336,7 +336,7 @@ class TheDispatchEntriesStartNothing(RulesBox):
                     "--run-id", run, "--rc", "1", "--log", log)
 
     def test_first_round_worker_and_verifier(self):
-        """四問:守「第 1 輪 worker 與平行驗證者在包壞時都不起」;回歸是 `|| echo` 吞掉
+        """守「第 1 輪 worker 與平行驗證者在包壞時都不起」;回歸是 `|| echo` 吞掉
         rc 照派;舊測試沒有包壞的案例;不加測試專用 API。
 
         **變異**:`first_round_packet` 的 `rules_pack ... || return 1` 改成 `|| true` → 紅。
@@ -359,7 +359,7 @@ class TheDispatchEntriesStartNothing(RulesBox):
         self.assertNotIn("# 規則包", dry.stdout, "--dry-run 印出了半份派工文")
 
     def test_first_round_a_verifier_pack_alone_stops_the_worker(self):
-        """四問:守「驗證者的包壞(模型卡不在)時 worker 也不起」;回歸是只看 worker 那一份;
+        """守「驗證者的包壞(模型卡不在)時 worker 也不起」;回歸是只看 worker 那一份;
         舊測試沒有;不加測試專用 API。
 
         **變異**:`round_once` 裡 `verifier_packet ... || { ROUND_RC=6; return 1; }` 拿掉 → 紅。
@@ -373,7 +373,7 @@ class TheDispatchEntriesStartNothing(RulesBox):
         self.assertIn("ghost-model", done.stderr)
 
     def test_a_repair_round(self):
-        """四問:守「修復輪(第 2 輪起)包壞不起 worker」;回歸是修復輪那一份另有 `|| echo`;
+        """守「修復輪(第 2 輪起)包壞不起 worker」;回歸是修復輪那一份另有 `|| echo`;
         舊測試沒有;不加測試專用 API。
 
         **變異**:`round_once` 修復輪的 `rules_pack` 失敗分支拿掉 → 紅。
@@ -389,7 +389,7 @@ class TheDispatchEntriesStartNothing(RulesBox):
         self.assertEqual(self.started(), [])
 
     def test_the_test_defect_verifier(self):
-        """四問:守「worker 提 test_defect 後,驗證者的包壞就不起驗證者」;回歸是
+        """守「worker 提 test_defect 後,驗證者的包壞就不起驗證者」;回歸是
         `dispatch_verifier` 照起;舊測試沒有;不加測試專用 API。
 
         **變異**:`dispatch_verifier` 的 `verifier_packet` 失敗分支拿掉 → 紅(verifier 被起)。
@@ -404,7 +404,7 @@ class TheDispatchEntriesStartNothing(RulesBox):
         self.assertEqual(self.started(), ["worker"], "worker 起了一次、驗證者不該起")
 
     def test_the_reviewer(self):
-        """四問:守「review.sh 包壞不起 reviewer」;回歸是 `|| echo` 照派;舊測試沒有;
+        """守「review.sh 包壞不起 reviewer」;回歸是 `|| echo` 照派;舊測試沒有;
         不加測試專用 API。
 
         **變異**:`review.sh` 的 `|| refuse ...` 拿掉 → 紅。
@@ -444,7 +444,7 @@ class ProjectPacketsPointAtRealFiles(RulesBox):
         self.assertEqual(gone, [], "派工文指到不存在的檔")
 
     def test_the_first_round_worker_and_verifier_packets(self):
-        """四問:守「worker / verifier 派工文的角色與模型入口存在」;回歸是範本寫死
+        """守「worker / verifier 派工文的角色與模型入口存在」;回歸是範本寫死
         `memory/role/*.md`;舊測試只在正本版面跑;不加測試專用 API。"""
         self.make_ticket("1", needs_verifier=True,
                          interface_fixed=True)
@@ -459,7 +459,7 @@ class ProjectPacketsPointAtRealFiles(RulesBox):
         self.assert_paths_exist(packets["dispatch-verifier-round1.md"], "docs/roles/verifier.md")
 
     def test_the_reviewer_packet_has_no_memory_write(self):
-        """四問:守「reviewer 派工文的入口存在、而且沒有叫唯讀角色寫記憶」;回歸是包裡的
+        """守「reviewer 派工文的入口存在、而且沒有叫唯讀角色寫記憶」;回歸是包裡的
         「記憶回寫」固定段照給 reviewer;舊測試沒看這一格;不加測試專用 API。
 
         **變異**:`build()` 不分角色一律接 `MEMORY_NOTE` → 紅。
@@ -484,7 +484,7 @@ class TheTemplatesDoNotHardcodeTheRoleDirectory(unittest.TestCase):
     """驗收 4 前半的另一面:人手派的兩份範本(開題者、整理者)不在沙盒裡跑,直接讀。"""
 
     def test_no_template_names_a_memory_card_path(self):
-        """四問:守「範本引用 pack 解析的來源,不寫死角色卡 / 模型卡路徑」;回歸是專案裡
+        """守「範本引用 pack 解析的來源,不寫死角色卡 / 模型卡路徑」;回歸是專案裡
         指到不存在的 `memory/role/*.md`;舊測試沒掃;不加測試專用 API。"""
         where = os.path.join(ROOT, "templates")
         for name in sorted(os.listdir(where)):
@@ -518,7 +518,7 @@ class NewSessionForEachRole(RulesBox):
         return done.stdout
 
     def test_the_local_card_is_visible_before_and_after_consolidation(self):
-        """四問:守「本地教訓整理進主卡後主線頁還看得到」;回歸是頁面只印暫存區尾巴,
+        """守「本地教訓整理進主卡後主線頁還看得到」;回歸是頁面只印暫存區尾巴,
         整理完那一條就消失;舊測試只有暫存區;不加測試專用 API。
 
         **變異**:`top()` 拿掉印本地主卡那一段 → 「整理後」那一句紅。
@@ -532,7 +532,7 @@ class NewSessionForEachRole(RulesBox):
         self.assertIn(self.LESSON, after.split("1. 站在哪個版本")[0], "整理後看不到")
 
     def test_short_lived_roles_get_no_global_handoff(self):
-        """四問:守「短命角色不拿 HANDOFF、事件流、開票清單」;回歸是 new-session 對每個
+        """守「短命角色不拿 HANDOFF、事件流、開票清單」;回歸是 new-session 對每個
         角色印同一頁;舊測試斷言的正是 worker 也有;不加測試專用 API。
 
         **變異**:`new-session.sh` 第 2–3 段外面的 `if [ "$ROLE" = "main" ]` 拿掉 → 紅。
@@ -573,7 +573,7 @@ class TheGatePicksThisGuard(Sandbox):
         self.git("commit", "-q", "-m", "沙盒的替身測試模組")
 
     def test_each_entry_selects_the_guard(self):
-        """四問:守「改規則包或任一個派工入口時,閘門會跑這一組」;回歸是對照表只掛
+        """守「改規則包或任一個派工入口時,閘門會跑這一組」;回歸是對照表只掛
         test_rules,主守衛永遠不被選到;舊測試沒有;不加測試專用 API。"""
         for rel in ("scripts/rules.py", "scripts/auto-fix.sh", "scripts/review.sh",
                     "scripts/new-session.sh", "templates/dispatch-verifier.md",

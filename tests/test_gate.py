@@ -66,14 +66,13 @@ class T(unittest.TestCase):
 """
 
 
-# ---------------------------------------- D-020:驗證者的案例(lint -> check)
+# ---------------------------------------- D-020:驗證者的案例(check)
 # 乾淨基底上紅、這一輪的樹上綠的一條案例。**期望值 2 是票面說的**,不是跑一次記
-# 下來的;lint 的六條(F1-F6)在這一份上全過 —— 它是 `verify/_template_ticket.py`
-# 的形狀,`test_` 的 docstring 首行是驗收編號(F3)。
+# 下來的;它是 `verify/_template_ticket.py` 的形狀,`test_` 的 docstring 首行是驗收編號。
 #
 # 那個 docstring **是這一組的一部分**,不是裝飾:#31 之前 `unittest` 印在 `FAIL:`
 # 標頭下面的那一行說明會把整段 traceback 擠出 `excerpt`,於是照 F3 寫的案例一律被
-# 算成「紅在別處(不算紅)」—— lint 要求的形狀與分類器對打。這一份照 F3 寫,所以
+# 算成「紅在別處(不算紅)」—— 範本要求的形狀與分類器對打。這一份照範本寫,所以
 # 那條路要是再壞掉,這裡會紅。
 VERIFIER_CASE = '''"""#7 一句話:src/value.txt 的值由 1 變成 2。
 
@@ -104,7 +103,7 @@ class TheValue(unittest.TestCase):
             self.assertEqual(handle.read().strip(), VALUE)
 '''
 
-# 兩邊都綠的一條案例:lint 過得了,但它在乾淨基底上也不會紅 —— `check` 因此判
+# 兩邊都綠的一條案例:它在乾淨基底上也不會紅 —— `check` 因此判
 # `ok:false`(「一個永遠綠的案例與一個真的在驗的案例長得一樣」)。**那是驗證者那一趟
 # 要證的事**,不是 worker 這一輪弄壞的。
 ALWAYS_GREEN_CASE = '''"""#7 一句話:一條永遠綠的案例(沙盒用)。
@@ -132,27 +131,6 @@ class NeverRed(unittest.TestCase):
         """A1 這一條兩邊都綠。"""
         self.assertTrue(True)
 '''
-
-# 同一條斷言,但模組 docstring 的四段一段都沒有 —— lint 的 F1 擋它。
-UNLINTED_CASE = """import unittest
-
-TAGS = ["example"]
-
-
-class TheValue(unittest.TestCase):
-    def test_a1_the_value_is_two(self):
-        with open("src/value.txt", encoding="utf-8") as handle:
-            self.assertEqual(handle.read().strip(), "2")
-"""
-
-# #126 A3:lint 只印、不擋的兩種提示 —— F3(`test_` 沒有 docstring)與 F10(sleep 完就正向
-# 斷言,`verify_lint.block` 沒列就只印)。四段 docstring 在,所以 lint 過。
-HINTS_ONLY_CASE = VERIFIER_CASE.replace("import unittest\n\nTAGS", "import time\nimport unittest\n\nTAGS", 1) \
-    .replace('        """A1 src/value.txt 的值是 2。"""\n',
-             "        time.sleep(0)\n", 1)
-# 同兩條提示,外加一條擋的 F1(模組 docstring 一段都沒有)。
-HINTS_AND_F1_CASE = HINTS_ONLY_CASE.split('"""\n', 1)[1]
-
 
 class GateSh(Sandbox):
 
@@ -572,7 +550,7 @@ class GateSh(Sandbox):
         """#136(VISION 流程 #9:只有複雜的票做完後檢查一次;沒標 = simple):手跑綠 → 票轉
         InReview 等 land,不叫 review.sh、不起 reviewer。
 
-        四問:量 rc、票 state 與 review、reviewer 有沒有被叫、review.* 事件;紅 = gate.sh 對每張
+        量 rc、票 state 與 review、reviewer 有沒有被叫、review.* 事件;紅 = gate.sh 對每張
         票仍派覆核(reviewer ran 7);期望值 = VISION 流程 #9 與 D-054 Q1 原話。
         """
         for name, fields in (("simple", {"complexity": "simple"}), ("沒標", {})):
@@ -673,12 +651,12 @@ class VerifierCasesAtTheGate(Sandbox):
         """驗收 1 的另一半:**有 waiver 就不是缺口**。守衛擋下所有沒有案例的票的
         那一版,與 `verify_waiver` 這一格不存在長得一樣。
 
-        waiver 免的是**「有沒有案例」那一格**,不是整層:`verify.files` 非空時 lint 與
-        check 照跑(票面驗收 2、3 對這兩步沒有寫例外)。第 2 輪把它寫成短路整層,於是
-        帶 waiver 的票再也不會被 lint —— 驗證者的 A2–A6 就是量到那件事(#27 第 3 輪)。
+        waiver 免的是**「有沒有案例」那一格**,不是整層:`verify.files` 非空時 check
+        照跑(票面驗收 2、3 對這一步沒有寫例外)。第 2 輪把它寫成短路整層,於是
+        帶 waiver 的票再也不會被量 —— 驗證者的 A2–A6 就是量到那件事(#27 第 3 輪)。
 
         **變異**:把 `waiver)` 那一格拿掉 → 前半紅(rc 變 3);把它從 `[ -z "$files" ]`
-        裡面搬到外面(退回第 2 輪)→ 後半紅(lint 不會被叫到)。
+        裡面搬到外面(退回第 2 輪)→ 後半紅(check 不會被叫到)。
         """
         self.make_ticket(7, verify={"files": [], "tags": [], "run": "", "notes": ""},
                          verify_waiver={"by": "main", "reason": "純文字,沒有邏輯可紅"})
@@ -687,13 +665,12 @@ class VerifierCasesAtTheGate(Sandbox):
         self.assertIn("verify_waiver", done.stdout)
         self.assertNotIn("這張票沒有驗證者案例", done.stdout)
 
-        # 同一張票,這次**有**案例檔(而且是一份 lint 過不了的):waiver 不免 lint。
-        self.a_ticket(UNLINTED_CASE,
-                      verify_waiver={"by": "main", "reason": "純文字,沒有邏輯可紅"})
+        # 同一張票,這次**有**案例檔(而且在這一輪的樹上仍是紅的):waiver 不免 check。
+        self.a_ticket(verify_waiver={"by": "main", "reason": "純文字,沒有邏輯可紅"})
         done = self.gate()
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("verify-case lint:", done.stdout,
-                      "有 waiver 的票,案例檔還是要過 lint")
+        self.assertIn("驗證者案例的綠", done.stdout,
+                      "有 waiver 的票,案例檔還是要跑 check")
 
     def test_a_ticket_that_never_declared_verify_is_not_a_gap(self):
         """**沒有宣告**與**宣告了卻沒有案例**是兩件事,下一步也不同。
@@ -764,20 +741,6 @@ class VerifierCasesAtTheGate(Sandbox):
         return self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
                            "--branch", "--ticket", "7", "--no-auto-fix", cwd=wt, env=env)
 
-    def test_preflight_in_the_ticket_worktree_reads_the_main_repo_ticket(self):
-        """#53 D1(a):worktree 那份票的 `verify_strings` 要一個 patch 裡沒有的字,主 repo 那一份
-        是空的。閘門只帶 `AC_ROOT`,preflight 要讀主 repo 那一份。
-
-        **變異 M1**:preflight 改回 `event.tickets_dir(root)` 拼路徑 → 紅(rc 4)。
-        """
-        wt = self.worktree_with_an_old_ticket({"verify_strings": ["patch 裡沒有這幾個字"]},
-                                              {"verify_strings": []})
-        env = self.env(AC_ROOT=self.repo)
-        self.assertNotIn("AC_TICKETS_DIR", env)
-        done = self.gate_in(wt, env)
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertNotIn("不在 patch 內容裡", done.stdout + done.stderr)
-
     def test_ticket_tags_in_the_ticket_worktree_come_from_the_main_repo(self):
         """#53 D1(b):主 repo 那一份 `verify.tags` 是 [],worktree 那份是未登記的 ["zzz"]。
         preflight 不退 4,回歸層也不拿 zzz 去選案例。
@@ -843,101 +806,31 @@ class VerifierCasesAtTheGate(Sandbox):
         self.assertEqual(self.read(os.path.join("verify", "example", "test_example.py")),
                          VERIFY_CASE, "主 repo 的 verify/example 被動了")
 
-    # ------------------------------------------------- lint 紅了就停在這裡
+    # ------------------------------- 缺口進 failures[](#126 A2,kind=GAP)
 
-    def test_a_case_that_fails_lint_stops_the_gate_and_names_the_line(self):
-        """驗收 2:lint 的 rc 非零時**不繼續跑 check**。
-
-        格式不合的案例跑出來的紅指向的是格式,不是實作 —— 讓它往下跑,下一輪的
-        worker 會去修一個沒有壞掉的東西。
-
-        **變異**:把 `if [ "$lrc" -ne 0 ]` 那一段拿掉 → 這一條紅(check 的那一行
-        會出現在 stdout 裡)。
-        """
-        self.a_ticket(UNLINTED_CASE)
-        self.implement()
-        done = self.gate()
-        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("verify/nav/test_ticket_7.py:1", done.stdout, "沒有指名是哪一行")
-        self.assertIn("F1", done.stdout)
-        self.assertIn("不跑 check", done.stdout)
-        self.assertNotIn("驗證者案例的綠", done.stdout, "lint 紅了還往下跑 check")
-        self.assertNotIn("baseline", self.load_ticket("7")["verify"],
-                         "lint 紅了卻仍然在票上寫了一格判決")
-
-    # ------------------------------- lint 紅進 failures[](#126 A1–A3,kind=LINT)
-
-    def lint_rows(self):
+    def gap_rows(self):
         return [row for row in self.status_of("7", kind="gate")["failures"]
-                if row.get("kind") == "LINT"]
+                if row.get("kind") == "GAP"]
 
-    def test_t126_a1_a_lint_red_lands_in_the_red_list_with_file_and_line(self):
-        """A1:lint 擋的 F1 → 既有行為不變,而 failures[] 有一列 kind=LINT,鍵照票面字面。
-
-        **變異 M1**:gate 的 lint 分支不設 `LINT_ARGS` → failures[] 空 → 紅。
-        """
-        self.a_ticket(UNLINTED_CASE)
-        self.implement()
-        done = self.gate()
-        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("不跑 check", done.stdout)
-        self.assertNotIn("驗證者案例的綠", done.stdout)
-        rows = self.lint_rows()
-        self.assertEqual(len(rows), 1, self.status_of("7", kind="gate")["failures"])
-        row = rows[0]
-        self.assertEqual(row["case"], "verify-case-lint:verify/nav/test_ticket_7.py")
-        self.assertEqual(row["file"], "verify/nav/test_ticket_7.py")
-        self.assertEqual(row["line"], 1)
-        # lint 印的位置相對它自己的根(macOS 上 `/var` 與 `/private/var` 會讓它長出 `../`),
-        # 所以認的是那一行的尾巴;file / case 那兩格則要是換回來的相對路徑(上面兩句)。
-        f1 = [line for line in done.stdout.splitlines()
-              if line.startswith("verify-case lint: ")
-              and "verify/nav/test_ticket_7.py:1 F1 " in line]
-        self.assertEqual(len(f1), 1, done.stdout)
-        self.assertIn(f1[0], row["excerpt"])
-        self.assertTrue(row["log"].endswith(".lint"), row["log"])
-        with open(row["log"], encoding="utf-8") as handle:
-            self.assertIn(f1[0], handle.read())
-
-    def test_t126_a2_a_missing_case_file_is_a_relative_lint_row(self):
-        """A2:verify.files 列了一個不存在的檔 → 一列 LINT,file 相對 repo 根、line 0。
-
-        **變異 M5**:`parse_lint` 的 file 寫 lint 印的原樣(絕對路徑)→ 紅。
-        """
-        self.make_ticket(7, verify={"files": ["verify/nav/test_ticket_gone.py"],
-                                 "tags": [], "run": "", "notes": ""})
-        done = self.gate()
-        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        rows = self.lint_rows()
-        self.assertEqual(len(rows), 1, self.status_of("7", kind="gate")["failures"])
-        row = rows[0]
-        self.assertEqual(row["file"], "verify/nav/test_ticket_gone.py")
-        self.assertFalse(row["file"].startswith("/"), row)
-        self.assertNotIn(self.home, row["file"])
-        self.assertEqual(row["line"], 0)
-        unreadable = [line for line in done.stdout.splitlines() if "讀不到" in line]
-        self.assertEqual(len(unreadable), 1, done.stdout)
-        self.assertIn(unreadable[0], row["excerpt"])
-
-    def test_t126_a2_the_no_cases_gap_is_one_lint_row(self):
+    def test_t126_a2_the_no_cases_gap_is_one_gap_row(self):
         """A2 缺口列:needs_verifier=true、verify 宣告了而 files 空 → rc 仍 3,恰一列 (no-cases)。
 
-        **變異 M6**:CRC=3 那條路不設 `LINT_ARGS` → failures[] 空 → 紅。
+        **變異 M6**:CRC=3 那條路不設 `CASES_ARGS` → failures[] 空 → 紅。
         """
         self.make_ticket(7, needs_verifier=True,
                          verify={"files": [], "tags": [], "run": "", "notes": ""})
         done = self.gate()
         self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
-        rows = self.lint_rows()
+        rows = self.gap_rows()
         self.assertEqual(len(rows), 1, self.status_of("7", kind="gate")["failures"])
         self.assertEqual((rows[0]["case"], rows[0]["file"], rows[0]["line"]),
-                         ("verify-case-lint:(no-cases)", "", 0))
+                         ("verify-case:(no-cases)", "", 0))
         self.assertIn("這張票沒有驗證者案例", rows[0]["excerpt"])
 
-    def test_t126_a2_the_three_exceptions_write_no_lint_row(self):
-        """A2 的三個例外:waiver / needs_verifier=false / 沒宣告 verify → 0 列 LINT。
+    def test_t126_a2_the_three_exceptions_write_no_gap_row(self):
+        """A2 的三個例外:waiver / needs_verifier=false / 沒宣告 verify → 0 列 GAP。
 
-        **變異 M7**:三個例外那幾格也設 `LINT_ARGS` → 紅。
+        **變異 M7**:三個例外那幾格也設 `CASES_ARGS` → 紅。
         """
         empty = {"files": [], "tags": [], "run": "", "notes": ""}
         for label, fields in (
@@ -949,50 +842,11 @@ class VerifierCasesAtTheGate(Sandbox):
                 self.make_ticket(7, **fields)
                 done = self.gate()
                 self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-                self.assertEqual(self.lint_rows(), [])
+                self.assertEqual(self.gap_rows(), [])
 
-    def test_t126_a3_hints_that_do_not_block_are_not_rows(self):
-        """A3:F3 / F10 只印不擋 —— lint 過時 0 列;lint 因 F1 不過時列數 == 「不過(N 條)」的 N,
-        提示行不成列。
+    # --------------------------------------------- 量「候選該綠」
 
-        **變異 M4**:`parse_lint` 不照 N 截、帶位置的行全收 → 後半紅(3 列)。
-        """
-        self.a_ticket(HINTS_ONLY_CASE)
-        self.implement()
-        done = self.gate()
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("F3", done.stdout)
-        self.assertIn("F10", done.stdout)
-        self.assertIn("verify-case lint: 過", done.stdout)
-        self.assertEqual(self.lint_rows(), [])
-
-        self.a_ticket(HINTS_AND_F1_CASE)
-        done = self.gate()
-        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        counted = [line for line in done.stdout.splitlines() if "**不過**(1 條)" in line]
-        self.assertEqual(len(counted), 1, done.stdout)
-        rows = self.lint_rows()
-        self.assertEqual(len(rows), 1, rows)
-        self.assertIn(" F1 ", rows[0]["excerpt"])
-        hints = [line for line in done.stdout.splitlines()
-                 if line.startswith("verify-case lint: ") and (" F3 " in line or " F10 " in line)]
-        self.assertEqual(len(hints), 2, done.stdout)
-        for hint in hints:
-            self.assertNotIn(hint, rows[0]["excerpt"])
-
-    def test_t126_a3_the_rerun_ids_do_not_carry_lint_rows(self):
-        """A3:`status.py failures --log <gate log>` 印的可重跑 id 不含 LINT 列。"""
-        self.a_ticket(UNLINTED_CASE)
-        self.gate()
-        gate = self.status_of("7", kind="gate")
-        self.assertEqual(len(self.lint_rows()), 1)
-        ids = self.run_py("scripts/status.py", "failures", "--log", gate["logs"][0])
-        self.assertEqual(ids.returncode, 0, ids.stderr)
-        self.assertNotIn("verify-case-lint:", ids.stdout)
-
-    # --------------------------------------------- lint 過了才量「候選該綠」
-
-    def test_lint_passing_lets_check_run_and_lifts_the_stage(self):
+    def test_check_runs_and_lifts_the_stage(self):
         """驗收 3 與 4:`stage` 由 `red` 升成 `check`(`ticket.py close` 只認它)。
 
         **變異**:把 `verify_case` 裡 check 那一段拿掉 → 這一條紅(票上沒有
@@ -1002,7 +856,6 @@ class VerifierCasesAtTheGate(Sandbox):
         self.implement()
         done = self.gate()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("verify-case lint: 過", done.stdout)
         self.assertIn("驗證者案例的綠", done.stdout)
         baseline = self.load_ticket("7")["verify"]["baseline"]
         self.assertEqual(baseline["stage"], "check",
@@ -1147,51 +1000,6 @@ class TheHandRunGateWritesTheTicketGate(Sandbox):
         self.assertEqual(gate["sha"], self.git("rev-parse", "t7").strip())
 
 
-    # ----------------------- #87 A4:票檔不論在哪一側都不算 patch 內容
-
-    def test_a4_the_ticket_file_is_not_patch_content_on_either_side(self):
-        """#87 A4:票面寫著 needle,票檔的改動(分支已提交、副本未提交)不能讓它命中。
-
-        **變異 M4**:preflight 的 content diff 拿掉票檔的 exclude → 這一條紅(不報)。
-        """
-        self.make_ticket(7, state="Running",
-                         verify_strings=["needle-a4-branch", "needle-a4-dirty"])
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "票 #7")
-        wt = self.worktree("t7")
-        self.write(os.path.join("tests", "test_zz_green.py"), PASSING % "test_zz_green",
-                   where=wt)
-        row = json.loads(self.read(os.path.join("tickets", "7.json"), where=wt))
-        row["notes"] = "needle-a4-branch"
-        self.write(os.path.join("tickets", "7.json"), json.dumps(row, ensure_ascii=False),
-                   where=wt)
-        self.git("add", "-A", cwd=wt)
-        self.git("commit", "-q", "-m", "#7 的改動(票檔也動了)", cwd=wt)
-        row["notes"] = "needle-a4-branch needle-a4-dirty"
-        self.write(os.path.join("tickets", "7.json"), json.dumps(row, ensure_ascii=False),
-                   where=wt)
-        done = self.gate_in(wt, "--no-auto-fix")
-        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
-        for needle in ("needle-a4-branch", "needle-a4-dirty"):
-            self.assertIn("verify_strings: %r 不在 patch 內容裡" % needle, done.stderr)
-
-    def test_a4_a_needle_in_the_branch_diff_still_counts(self):
-        """#87 A4 回歸:needle 在分支的 diff 裡 → 不報。"""
-        self.set_reviewer(REVIEWER_PASS)
-        self.make_ticket(7, state="Running",
-                         verify_strings=["needle-a4-real"])
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "票 #7")
-        wt = self.worktree("t7")
-        self.write(os.path.join("tests", "test_zz_green.py"),
-                   PASSING % "test_zz_green" + "# needle-a4-real\n", where=wt)
-        self.git("add", "-A", cwd=wt)
-        self.git("commit", "-q", "-m", "#7 的改動", cwd=wt)
-        done = self.gate_in(wt, "--no-auto-fix")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertNotIn("verify_strings", done.stderr)
-
-
 class BranchGateRefusesAnEmptyCompareOnMain(Sandbox):
     """#87 A3:主 repo 的 HEAD 在主線、除了票檔什麼改動都沒有時跑
     `gate.sh --branch --ticket <n>` → rc=2,指出該去的 worktree;不寫狀態檔、不動票、
@@ -1201,7 +1009,7 @@ class BranchGateRefusesAnEmptyCompareOnMain(Sandbox):
 
     def setUp(self):
         super().setUp()
-        self.make_ticket(7, verify_strings=["x"])
+        self.make_ticket(7)
 
     def refused(self, expected, **env):
         ticket_before = self.read(os.path.join("tickets", "7.json"))
@@ -1239,7 +1047,7 @@ class BranchGateRefusesAnEmptyCompareOnMain(Sandbox):
         self.make_ticket(8)
         self.git("add", "tickets")
         self.git("commit", "-q", "-m", "tickets")
-        self.make_ticket(7, verify_strings=["x"], attempt=2)
+        self.make_ticket(7, attempt=2)
         self.make_ticket(8, attempt=2)
         self.make_ticket(9)
         self.assertEqual(sorted(self.git("status", "--porcelain").splitlines()),

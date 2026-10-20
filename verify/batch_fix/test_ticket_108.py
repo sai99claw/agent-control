@@ -27,7 +27,7 @@ worker 照單票的慣例在 $AC_WORK 交 patch-round$AC_ROUND.diff 與 EVIDENCE
 patch 由 `diff -ruN base work` 真的產生(base 側取自 land/X 的內容),不手寫 hunk。
 
 ## 不做
-不改產品碼;不放寬票面驗收;不刪既有案例;不碰 verify_strings 的原字以外的東西;不跑真的 gate / 模型。
+不改產品碼;不放寬票面驗收;不刪既有案例;不跑真的 gate / 模型。
 """
 import json
 import os

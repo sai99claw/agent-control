@@ -20,12 +20,11 @@ claude                                      # 開 Claude Code;CLAUDE.md 會告�
 python3 scripts/ticket.py create \
   --subject "…" --objective "…" \
   --acceptance "斷言一" --acceptance "斷言二" \
-  --verify-string "只有這張票才有的字串" \
   --role worker --model opus --tool claude-code
 python3 scripts/ticket.py list --open
 python3 scripts/event.py tail 20
 ```
-`ticket.py verify <id>` 會對主線 `grep` 那些 `--verify-string`;沒給就看 `close --landed` 蓋的 `landed_sha` 在不在主線歷史裡。
+`ticket.py verify <id>` 看 `close --landed` 蓋的 `landed_sha` 在不在主線歷史裡。
 
 票開好、worker 把 `patch.diff` 交回來之後,**一路到落地都有入口,不必手動套 patch**:
 ```sh

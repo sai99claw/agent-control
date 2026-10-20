@@ -63,7 +63,6 @@
     "tests/test_sync_to_project.py",
     "tests/test_templates.py",
     "tests/test_ticket.py",
-    "tests/test_ticket_65.py",
     "tests/test_verify_case.py",
     "tests/test_verify_runner.py"
   ],
@@ -105,7 +104,7 @@
         "scripts/gate.sh",
         "tests/test_gate.py"
       ],
-      "summary": "閘門:對照表挑測試模組、preflight 機械格、狀態檔、索引新鮮度"
+      "summary": "閘門:對照表挑測試模組、preflight 硬擋、狀態檔、驗證者案例"
     },
     "land": {
       "cards": [
@@ -186,8 +185,7 @@
       "guard": "tests/test_ticket.py",
       "sources": [
         "scripts/ticket.py",
-        "tests/test_ticket.py",
-        "tests/test_ticket_65.py"
+        "tests/test_ticket.py"
       ],
       "summary": "票:唯一的工作單位(create / set / cost / agent-command …)"
     },
@@ -202,7 +200,7 @@
         "tests/test_verify_case.py",
         "tests/test_verify_runner.py"
       ],
-      "summary": "回歸層執行器與驗證者案例的 red / check / lint"
+      "summary": "回歸層執行器與驗證者案例的 red / check"
     }
   },
   "version": 1

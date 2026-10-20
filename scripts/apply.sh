@@ -588,14 +588,14 @@ PY
     [ -z "$B_BAD" ] || { echo "$B_BAD" | sed 's/^/apply:   /' >&2; echo "apply: 套完的檔案與 patch 說的對不上" >&2; exit 4; }
     git -C "$WT" apply -p1 --reverse --check "$B_PATCH" 2>/dev/null \
         || { echo "apply: 反著套回不去 —— 工作樹上的改動不等於這份 patch" >&2; exit 4; }
-    # code-map 索引重產(#129):與單票那一支第 7 步同一份 `code_map_regen`;產出物有變就併進
+    # code-map 索引重產(#129):與單票那一支第 6 步同一份 `code_map_regen`;產出物有變就併進
     # 這一個 batch fix commit。hard_block 在 `git apply` 之前已經對 patch 量完,產出物不再量。
     B_REGEN=""
     code_map_regen "$WT"
     case $? in
         0)  B_REGEN="regen: repo-map build (code-map/index.json, code-map/INDEX.md)"
             echo "apply: 批次 code-map 索引重產了,併進同一個 batch fix commit" ;;
-        2)  echo "apply: 批次 code-map 索引沒重產(repo-map build 非零,上面 repo-map: 那幾行)—— 不擋套用,閘門的機械格會攔" >&2 ;;
+        2)  echo "apply: 批次 code-map 索引沒重產(repo-map build 非零,上面 repo-map: 那幾行)—— 不擋套用(落地合併後 land 再重產一次)" >&2 ;;
     esac
     git -C "$WT" add -A || { echo "apply: git add 失敗" >&2; exit 2; }
     for name in $B_RESIDUE; do
@@ -1081,50 +1081,21 @@ if [ -n "$BLOCKED" ]; then
     die 5 "寫入範圍命中硬擋(hard_block)"
 fi
 
-# 6. 票的 `verify_strings` 先對 patch 抓一次。**不擋**,但要現在說:
-#    不說的話,「字串不在分支上」要等到 `ticket.py close` 的最後一步才會講話(D-012 第 4 點)。
-python3 - "$TF" "$PATCH" "$VPATCH" <<'PY'
-import json, sys
-path, patch, vpatch = sys.argv[1], sys.argv[2], sys.argv[3]
-try:
-    with open(path, encoding="utf-8") as handle:
-        rows = json.load(handle).get("verify_strings") or []
-except (OSError, ValueError):
-    rows = []
-blob = ""
-for name in (patch, vpatch):
-    if not name:
-        continue
-    try:
-        with open(name, encoding="utf-8", errors="replace") as handle:
-            blob += handle.read()
-    except OSError:
-        pass
-missing = []
-for row in rows:
-    needle = row.get("contains") if isinstance(row, dict) else row
-    if needle and needle not in blob:
-        missing.append(needle)
-for needle in missing:
-    print("apply: 票的 verify_strings 有一條**不在這份 patch 裡**:%r" % needle)
-if missing:
-    print("apply:   不在 patch 裡就不會在分支上,而那要等到 close 才會說話 —— 先看一眼。")
-PY
-
-# 7. code-map 索引重產(#96)。候選樹有地圖(與 gate.sh 的新鮮度格同一個判準)就跑一次
+# 6. code-map 索引重產(#96)。候選樹有地圖就跑一次
 #    `repo-map.py build`:交件新增 / 改名 / 刪掉已管理的檔而沒重生,以前要閘門擋下一整輪。
 #    產出物有變才併進同一個 commit、訊息多一行 `regen:`;它們不是交件改的,不再量
-#    (hard_block 在上面第 5 步已經量完)。build 非零**不擋**:印一行、照樣 commit,攔它是閘門的事。
+#    (hard_block 在上面第 5 步已經量完)。build 非零**不擋**:印一行、照樣 commit(閘門不量
+#    索引新鮮度,D-054 Q4;落地合併後 land 會再重產一次,D-051)。
 #    判準與動作只有一份:`wtbase.sh` 的 `code_map_regen`(`--batch` 與 land 也叫它,#129)。
 REGEN=""
 code_map_regen "$WT"
 case $? in
     0)  REGEN="regen: repo-map build (code-map/index.json, code-map/INDEX.md)"
         echo "apply: code-map 索引重產了,併進同一個 commit" ;;
-    2)  echo "apply: code-map 索引沒重產(repo-map build 非零,上面 repo-map: 那幾行)—— 不擋套用,閘門的機械格會攔" >&2 ;;
+    2)  echo "apply: code-map 索引沒重產(repo-map build 非零,上面 repo-map: 那幾行)—— 不擋套用(落地合併後 land 再重產一次)" >&2 ;;
 esac
 
-# 8. commit。訊息帶票號與 patch 的 sha256 —— 下一個人要答得出「分支上這一手是哪一份
+# 7. commit。訊息帶票號與 patch 的 sha256 —— 下一個人要答得出「分支上這一手是哪一份
 #    patch 做的」,而路徑答不出來(重套過的那一份路徑一樣、內容不一樣)。
 SUBJECT=$(python3 - "$TF" <<'PY'
 import json, sys

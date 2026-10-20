@@ -181,13 +181,11 @@ class AutoFixHook(LandBase):
         return pages
 
     def batch_of_two(self, first=None, second=None):
-        """票 1 動 src/a、票 2 動 src/b;verify_strings + baseline 照 `CLOSABLE`,綠了關得掉。"""
+        """票 1 動 src/a、票 2 動 src/b;baseline 照 `CLOSABLE`,綠了關得掉。"""
         one = self.branch_for(1, "t1-a", **dict({
-            "verify_strings": [{"path": "src/a", "contains": "第一張"}],
             "verify": dict(CLOSABLE["verify"])}, **(first or {})))
         self.commit_in(one, "src/a", "第一張")
         two = self.branch_for(2, "t2-b", **dict({
-            "verify_strings": [{"path": "src/b", "contains": "第二張"}],
             "verify": dict(CLOSABLE["verify"])}, **(second or {})))
         self.commit_in(two, "src/b", "第二張")
         self.approve(1, "t1-a")
@@ -588,7 +586,7 @@ class TicketChecks(LandBase):
 
     def test_writing_into_hard_block_paths_is_refused_and_named(self):
         """#101 A1:hard_block.paths 硬擋,點名檔與格。
-        四問:量 rc 2、點名、主線不動;紅 = land 照落;期望值 = 測試寫進 config 的 hard_block.paths。
+        量 rc 2、點名、主線不動;紅 = land 照落;期望值 = 測試寫進 config 的 hard_block.paths。
         **變異 M1**:hard_block_hits 不看 hard_block.paths → 這一條紅。"""
         self.hard_block(paths=["secrets/*"])
         branch = self.branch_for(1, "t1-wide")
@@ -746,7 +744,7 @@ class TheDocsChannel(LandBase):
 
     def test_127_a1b_a_docs_commit_carries_its_stamp_channel_and_main_before(self):
         """#127 A1(b):一次呼叫一個 stamp、四種 kind 都帶它與 channel=docs;有 commit 的那筆 pass
-        帶 sha 與 main_before = 跑之前的 main(40 位)。四問:量事件檔;紅 = docs 通道不帶 stamp
+        帶 sha 與 main_before = 跑之前的 main(40 位)。量事件檔;紅 = docs 通道不帶 stamp
         (M3)/ main_before 取 commit 之後;值 = 跑之前自己 `git rev-parse main`。"""
         self.make_ticket(7)
         before = self.git("rev-parse", "main").strip()
@@ -765,7 +763,7 @@ class TheDocsChannel(LandBase):
 
     def test_127_a1b_refused_and_failed_docs_runs_carry_the_stamp_too(self):
         """#127 A1(b):land.refused(git add 收不下)與 land.fail(push 沒成功)也帶 stamp 與
-        channel=docs。四問:量事件檔;紅 = 那兩筆沒帶;值 = 票面 A1(b)。"""
+        channel=docs。量事件檔;紅 = 那兩筆沒帶;值 = 票面 A1(b)。"""
         done, rows = self.land_rows_of("打錯路徑", "docs/nope.md")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assert_one_docs_stamp(rows, ["land.start", "land.refused"])
@@ -778,7 +776,7 @@ class TheDocsChannel(LandBase):
 
     def test_128_a4_a_refused_push_is_a_land_fail_at_stage_push_with_its_segment(self):
         """#128 A4:origin 的 pre-receive exit 1 ⇒ commit 留在本機 main、rc 1;land.fail 帶 stage=push、
-        sha = 本機 main 的短 sha、main_before = 跑之前的 main。四問:量事件檔與兩邊的 main;
+        sha = 本機 main 的短 sha、main_before = 跑之前的 main。量事件檔與兩邊的 main;
         紅 = **M4**(push 失敗出口不帶 stage)/ 不帶 main_before;值 = 跑之前自己取的 main。"""
         self.make_ticket(7)
         write_executable(os.path.join(self.origin, "hooks", "pre-receive"), "#!/bin/sh\nexit 1\n")
@@ -1154,7 +1152,7 @@ class PushRefusedAfterTheMerge(LandBase):
     def test_128_a4_the_land_fail_carries_stage_push_and_the_segment(self):
         """#128 A4:票 land 已 ff-only 合進本機 main、origin 的 pre-receive 拒收 ⇒ rc 1;land.fail 帶
         stage=push、sha = 本機 main 的短 sha、main_before = land worktree 開出來時的 main(同 land.pass)。
-        四問:量事件檔;紅 = **M4**;值 = 跑之前自己取的 main。"""
+        量事件檔;紅 = **M4**;值 = 跑之前自己取的 main。"""
         good = self.branch_for(1, "t1-good")
         self.commit_in(good, "src/g1", "推不上去的那一張")
         self.approve(1, "t1-good")
@@ -1283,7 +1281,7 @@ class ReviewIsAHardGate(LandBase):
     def test_a_simple_or_unmarked_branch_lands_without_a_review(self):
         """#136:simple 與沒有 complexity 這一格的票不做做完後的覆核 —— 沒有 review 照樣落地。
 
-        四問:量 land 的 rc 與主線上有沒有那個 commit;紅 = land 對每張票仍要 review(M2:
+        量 land 的 rc 與主線上有沒有那個 commit;紅 = land 對每張票仍要 review(M2:
         rc=2「沒有 review」);期望值 = VISION 流程 #9 與 D-054 Q1 原話,不從 land.sh 算。
         """
         for ident, complexity in ((1, "simple"), (2, None)):
@@ -1360,9 +1358,8 @@ class OnlyOneLandAtATime(LandBase):
         self.assertFalse(self.gate_ran())
 
 
-# 關得掉的票面:verify_strings 指向分支上那一行、baseline 是閘門那一趟 check。
+# 關得掉的票面:baseline 是閘門那一趟 check(在不在主線由 land 的 `close --landed` 蓋的 sha 判)。
 CLOSABLE = {
-    "verify_strings": [{"path": "src/g1", "contains": "做完的那一張"}],
     "verify": {"files": [], "tags": [], "run": "", "notes": "",
                "baseline": {"ok": True, "stage": "check"}},
 }
@@ -1450,17 +1447,16 @@ class LandTriesToClose(LandBase):
     # ------------------------------------------------------------ A1 另一種
 
     def test_an_honest_waiver_instead_of_a_baseline_also_closes(self):
-        self.ready(verify_strings=CLOSABLE["verify_strings"],
-                   verify_waiver={"by": "main", "reason": "沙盒:工具票不需要驗證者"})
+        self.ready(verify_waiver={"by": "main", "reason": "沙盒:工具票不需要驗證者"})
         done = self.land("t1-good")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("已合併、已關票", done.stdout)
         self.assertEqual(self.load_ticket("1")["state"], "Done", done.stdout)
 
-    def test_no_verify_strings_closes_on_the_landed_sha(self):
-        """#137 (b):沒有 verify_strings 的票,`close --landed` 蓋的 landed_sha 在主線上 → 關得掉。
+    def test_a_ticket_closes_on_the_landed_sha(self):
+        """#137 (b):`close --landed` 蓋的 landed_sha 在主線上 → 關得掉。
 
-        **變異**:verify() 沒有 verify_strings 就回 False(舊的弱檢查拒絕)→ 這一條紅。"""
+        **變異**:verify() 不看 landed_sha 一律回 False → 這一條紅。"""
         self.ready(verify=CLOSABLE["verify"])
         done = self.land("t1-good")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -1487,8 +1483,7 @@ class LandTriesToClose(LandBase):
         self.assert_landed_but_not_closed(self.land("t1-good"), "還沒處置")
 
     def test_a_baseline_without_the_check_stage_is_not_closed(self):
-        self.ready(verify_strings=CLOSABLE["verify_strings"],
-                   verify={"files": [], "tags": [], "run": "", "notes": "",
+        self.ready(verify={"files": [], "tags": [], "run": "", "notes": "",
                            "baseline": {"ok": True, "stage": "red"}})
         self.assert_landed_but_not_closed(self.land("t1-good"), "還缺閘門那一趟 check")
 
@@ -1543,7 +1538,7 @@ class PhasesAndClosing(LandBase):
         """#43 A1(原本是「land 不關票」那一條,改寫不刪):「已合併」與「已關票」仍是
         兩件事,只是打 close 的人從主線變成 land —— Done 的條件一條不放。
 
-        票齊了四格:verify_strings(主線上抓得到)、review 綁分支頭、
+        票齊了四格:landed_sha(land 的 `close --landed` 蓋、在主線上)、review 綁分支頭、
         verify.baseline stage=check、沒有未處置的反駁。
 
         **變異 M1**:拿掉 land.sh 那一手 `ticket.py close` → 這一條紅。
@@ -1597,16 +1592,14 @@ with open(os.path.join(root, "stray.txt"), "w") as handle:
 """
 
 MERGED_STALE = "合併後 code-map 索引過期"
-REGEN_FAILED = "合併後索引重產失敗"
 STRAY = "重產動到 code-map/ 以外"
-GATE_STALE = "code-map 索引過期"
 
 
 class TheMergedCodeMapIsRebuilt(LandBase):
     """#129 A3–A7:合併結果的 code-map 索引過期 → land 自己重產、併進同一次落地。
 
     沙盒照 test_repo_map_contract 的 A32:真的 scripts/repo-map.py + catalog(managed 含
-    tests/test_*.py)+ 新鮮索引 commit 進主線;**真的** gate.sh(機械格要量得到索引)。
+    tests/test_*.py)+ 新鮮索引 commit 進主線;**真的** gate.sh。
     期望值(檔名、commit 首行、字樣)抄票面與夾具寫下的檔名,不從 repo-map 算回來。"""
     gate_stub = None
 
@@ -1664,8 +1657,8 @@ class TheMergedCodeMapIsRebuilt(LandBase):
         return glob.glob(os.path.join(self.wt_base(), "land-*"))
 
     def test_a3_a_stale_merge_is_rebuilt_into_the_same_landing(self):
-        """A3 + A7。四問:量 rc、主線 check、managed、regen commit 首行與檔、字樣、land.pass 兩格;
-        紅 = **m2**(拿掉 land 合併後重產)時閘門機械格 rc 4、land rc 1;
+        """A3 + A7。量 rc、主線 check、managed、regen commit 首行與檔、字樣、land.pass 兩格;
+        紅 = **m2**(拿掉 land 合併後重產)時主線 check rc 1;
         期望值 = 兩邊新增的檔名 tests/test_a.py / tests/test_z.py、票面首行字面。"""
         self.branch_adding(1, "tests/test_a.py")
         self.main_adds_without_rebuild("tests/test_z.py")
@@ -1689,8 +1682,6 @@ class TheMergedCodeMapIsRebuilt(LandBase):
         self.assertEqual([name for name in files
                           if name not in ("code-map/index.json", "code-map/INDEX.md")], [], files)
         self.assertIn(MERGED_STALE, output)
-        self.assertNotIn(GATE_STALE, output.replace(MERGED_STALE, ""),
-                         "全套閘門還是看到過期的索引")
         self.assertIn("gate.pass", self.kinds())
         # A7(#127):main_before 是合併前的主線頭、sha 是含 regen commit 的新主線頭;
         # first-parent 一路從 main_before 接到新頭(越界守衛 land_attribution 走的那一條)。
@@ -1704,7 +1695,7 @@ class TheMergedCodeMapIsRebuilt(LandBase):
         self.assertIn(regen[0], [line.split()[0] for line in chain])
 
     def test_a4_conflicts_only_in_the_outputs_are_rebuilt_away(self):
-        """A4。四問:量 rc、主線 check、managed、字樣;紅 = **m3**(衝突一律停)時 rc 3;
+        """A4。量 rc、主線 check、managed、字樣;紅 = **m3**(衝突一律停)時 rc 3;
         期望值 = 兩邊新增的相鄰檔名。前置先在拋棄式 worktree 手動 merge,自證衝突只落在 code-map/。"""
         self.branch_adding(1, "tests/test_a1.py")
         self.branch_adding(2, "tests/test_a2.py")
@@ -1736,7 +1727,7 @@ class TheMergedCodeMapIsRebuilt(LandBase):
                               text=True)
 
     def test_a5a_a_conflict_outside_the_outputs_still_stops(self):
-        """A5(a)。四問:量 rc 3、land.fail、主線不動、worktree 留著、沒有 regen commit;
+        """A5(a)。量 rc 3、land.fail、主線不動、worktree 留著、沒有 regen commit;
         紅 = 衝突判準把 code-map/ 以外的檔也吞掉;期望值 = 兩邊各改 src/same.txt(夾具)。"""
         self.write("src/same.txt", "base\n")
         self.git("add", "--", "src/same.txt")
@@ -1760,7 +1751,7 @@ class TheMergedCodeMapIsRebuilt(LandBase):
         self.assertTrue(self.land_worktrees(), "worktree 要留著給人看")
 
     def test_a5b_a_rebuild_that_writes_outside_code_map_is_refused(self):
-        """A5(b)。四問:量 rc 3、主線不動、worktree 留著、字樣、沒有 regen commit;
+        """A5(b)。量 rc 3、主線不動、worktree 留著、字樣、沒有 regen commit;
         紅 = **m4**(land 重產改成 git add -A)時 stray.txt 跟著進 commit、rc 0;
         期望值 = 假產生器寫的 stray.txt(夾具)。"""
         self.write(os.path.join("scripts", "repo-map.py"), FAKE_REPO_MAP)
@@ -1786,7 +1777,7 @@ class TheMergedCodeMapIsRebuilt(LandBase):
         self.assertNotIn("gate.start", self.kinds(), "動到 code-map/ 以外還去跑全套")
 
     def test_a6_a_fresh_merge_adds_no_regen_commit(self):
-        """A6 前半。四問:量沒有 regen commit、沒有字樣;紅 = 不先 check、每次都重產;
+        """A6 前半。量沒有 regen commit、沒有字樣;紅 = 不先 check、每次都重產;
         期望值 = 分支只新增一支不受管理的 src/ 檔。"""
         branch = self.branch_for(1, "t1-map")
         self.commit_in(branch, "src/b1", "不受管理的檔")
@@ -1798,32 +1789,6 @@ class TheMergedCodeMapIsRebuilt(LandBase):
         self.assertEqual(done.returncode, 0, output)
         self.assertEqual(self.regen_commits("%s..main" % before), [])
         self.assertNotIn(MERGED_STALE, output)
-
-    def test_a6_a_failed_rebuild_is_left_to_the_gate(self):
-        """A6 後半。四問:量沒有 regen commit、字樣、閘門機械格紅;紅 = build 失敗卻 commit 或吞掉;
-        期望值 = 票面字樣「合併後索引重產失敗」與閘門的「code-map 索引過期」。"""
-        broken = dict(MAP_CATALOG, topics=dict(MAP_CATALOG["topics"], ghost={
-            "summary": "指到不存在的檔", "match": ["ghost"], "entry": "scripts/ghost.py"}))
-        branch = self.branch_for(1, "t1-map")
-        self.write(os.path.join("code-map", "catalog.json"),
-                   json.dumps(broken, ensure_ascii=False, indent=2) + "\n", where=branch)
-        self.git("add", "-A", cwd=branch)
-        self.git("commit", "-q", "-m", "#1 catalog 指向不存在的檔", cwd=branch)
-        self.approve(1, "t1-map")
-        before = self.git("rev-parse", "main").strip()
-
-        done = self.land("t1-map", "--no-auto-fix")
-        output = done.stdout + done.stderr
-        self.assertEqual(done.returncode, 1, output)
-        self.assertIn(REGEN_FAILED, output)
-        self.assertNotIn(MERGED_STALE, output)
-        self.assertEqual(self.git("rev-parse", "main").strip(), before)
-        worktrees = self.land_worktrees()
-        self.assertEqual(len(worktrees), 1, output)
-        land_branch = "land/" + os.path.basename(worktrees[0])[len("land-"):]
-        self.assertEqual(self.regen_commits("main..%s" % land_branch), [])
-        # 閘門的機械格原文(gate.sh 印在 stderr、land 原樣轉出):行為同改前。
-        self.assertIn("機械格不合 —— " + GATE_STALE, output)
 
 
 if __name__ == "__main__":

@@ -174,7 +174,7 @@ class TokensSumEveryModel(CostBase):
         self.assertEqual(tuple(self.rows()[-1].get(key) for key in TOKENS), (5, 77, 0, 9))
 
     def test_131_a7_agy_stream_result_maps_usage_and_conversation_id(self):
-        """四問:量 agy 四 token/session/note;值=A7;舊值讀不到 event=result;thinking 不另加。"""
+        """量 agy 四 token/session/note;值=A7;舊值讀不到 event=result;thinking 不另加。"""
         body = json.dumps({"event": "result", "result": {
             "conversation_id": "agy-c-1", "status": "SUCCESS", "duration_seconds": 8,
             "usage": {"input_tokens": 38177, "output_tokens": 745,
@@ -189,7 +189,7 @@ class TokensSumEveryModel(CostBase):
         self.assertIn("agy 信封不提供 cache_write", row["note"])
 
     def test_131_a7_an_agy_stream_without_result_records_nulls_and_the_reason(self):
-        """四問:量被砍信封四 null/note;值=A7;舊值是泛稱 JSON;沒有補造 usage。"""
+        """量被砍信封四 null/note;值=A7;舊值是泛稱 JSON;沒有補造 usage。"""
         path = self.envelope_file('{"event":"init","model":"gemini"}\n'
                                   '{"event":"step_update"}', name="agy-cut.log")
         done = self.cost("--model", "agy:gemini-3.8-flash-high", "--from-envelope", path)
@@ -419,9 +419,9 @@ class ClosableTicket:
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "把 src/nav.py 放進主線")
 
-    def ready(self):
-        self.make_ticket(1, created=CREATED,
-                         verify_strings=["src/nav.py:def size_nav"],
+    def ready(self, landed=True):
+        on_main = {"landed_sha": self.git("rev-parse", "main").strip()} if landed else {}
+        self.make_ticket(1, created=CREATED, **on_main,
                          test_evidence=[{"cmd": "gate --branch", "rc": 0}],
                          objections=[{"category": "nit", "body": "變數名可以短一點",
                                       "evidence": "", "owner": "main", "disposition": ""}],
@@ -494,7 +494,7 @@ class CloseWritesCostTotal(ClosableTicket, Sandbox):
         """C6 反例:東西不在主線 → close 拒絕,票上沒有 cost_total、沒有 ticket.closed。
 
         先證同一張票在主線上有東西時關得掉且寫 cost_total(否則「沒有」是空真)。"""
-        self.ready()
+        self.ready(landed=False)
         done = self.ticket("close", "1")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         ticket = self.load_ticket("1")
@@ -502,7 +502,7 @@ class CloseWritesCostTotal(ClosableTicket, Sandbox):
         self.assertNotIn("cost_total", ticket)
         self.assertNotIn("ticket.closed", self.kinds())
         self.land_a_file()
-        done = self.ticket("close", "1")
+        done = self.ticket("close", "1", "--landed", self.git("rev-parse", "main").strip())
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("cost_total", self.load_ticket("1"))
 

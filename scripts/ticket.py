@@ -52,7 +52,7 @@ REQUIRED = ("id", "subject", "created", "objective", "acceptance",
 NOT_EMPTY = ("subject", "objective", "acceptance",
              "role", "model", "tool", "base_sha", "state")
 LIST_FIELDS = ("acceptance", "depends_on", "shared_resources", "decision_refs",
-               "test_evidence", "attempt_history", "verify_strings",
+               "test_evidence", "attempt_history",
                # 實作者的反駁(D-014):每筆 {category, body, evidence, owner,
                # disposition, blocking}。沒處置的阻擋項 land 會拒絕。
                "objections", "tags")
@@ -239,7 +239,7 @@ CREATE_FLAGS = {
 CREATE_REPEATED = {
     "--acceptance": "acceptance",
     "--depends-on": "depends_on", "--decision-ref": "decision_refs",
-    "--verify-string": "verify_strings", "--shared-resource": "shared_resources",
+    "--shared-resource": "shared_resources",
     "--verify-file": "verify.files", "--verify-tag": "verify.tags",
 }
 # 存成 JSON 布林的旗標:值只收 `true` / `false`,其他一律 rc=2 —— 存成字串的 `"true"`
@@ -253,12 +253,6 @@ FLAG_NOTE = {
     "--acceptance": "驗收;**一條一個旗標**,每條要能寫成一條會紅的斷言",
     "--depends-on": "前置票號;`7` 或 `7:閘門綠`;一個一個給",
     "--decision-ref": "相關裁示編號(D-00x);一個一個給",
-    "--verify-string": ("關票時要在主線上抓到的字;三種認法:`路徑:那串字`(冒號前像路徑"
-                        "才切 —— 含 / 或 .py/.sh/.md/.json 結尾、無空白)/ 純字串 / "
-                        "純字串含冒號不切(`D-G89: x`);根目錄無副檔名的檔(README、Makefile)"
-                        "冒號前不像路徑、不會切,要寫 `./README:那串字`;閘門比的是改動內文"
-                        "(diff 的增刪行與新檔全文),diff 檔頭與檔名不算 —— 新檔就挑檔內一定會有"
-                        "的字(類名、函式名);一個一個給"),
     "--verify-file": "驗證者寫的回歸案例檔;一個一個給(進票的 `verify.files`)",
     "--verify-tag": "那幾個案例宣告的功能標籤;一個一個給(進票的 `verify.tags`)",
     "--verify-run": "怎麼跑那幾個案例(一句可以直接貼的指令)",
@@ -325,7 +319,7 @@ USAGE = {
              "[--effort E]"),
     "agent-command": ("scripts/ticket.py agent-command --model M [--tool T] "
                       "[--base \"<worker.command>\"] [--swap-model] [--effort E]"),
-    "lint": "scripts/ticket.py lint <id>  # 唯讀:needs_verifier / verify_strings / 標籤",
+    "lint": "scripts/ticket.py lint <id>  # 唯讀:needs_verifier / 標籤",
 }
 
 EXAMPLE = {
@@ -334,7 +328,6 @@ EXAMPLE = {
   --objective "任一支分支相對主線 0 commit 時,land 秒退並點名,不跑全套" \\
   --acceptance "0 commit → rc!=0 且輸出含分支名" \\
   --acceptance "多支中一支 0 → 另一支也不在 land worktree" \\
-  --verify-string "scripts/land.sh:沒有新的 commit" \\
   --role worker --model opus --tool claude-code""",
     "list": "python3 scripts/ticket.py list --open",
     "show": "python3 scripts/ticket.py show 7",
@@ -506,39 +499,6 @@ def normalise_depends(values):
     return out
 
 
-PATH_SUFFIXES = (".py", ".sh", ".md", ".json")
-
-
-def looks_like_path(head):
-    """冒號前那一段像不像路徑:含 `/` 或以 `.py/.sh/.md/.json` 結尾,而且沒有空白。
-
-    **只有這一種認法**:以前見冒號就切,「D-G89: x」「http://x/y」「驗收:A1」這種
-    本來就含半形冒號的純字串被切成 `{path, contains}`,關票時拿一個不存在的路徑去
-    grep —— 抓不到,而那看起來跟「這張票沒做」一樣。"""
-    return bool(head) and not re.search(r"\s", head) \
-        and ("/" in head or head.endswith(PATH_SUFFIXES))
-
-
-def normalise_verify(values):
-    """`--verify-string 'path:那串字'` → `{path, contains}`;其餘一律是純字串 ——
-    「在主線任一個檔裡找這串字」。
-
-    三種認法:冒號前那段**像路徑**(`looks_like_path`)才切;沒有冒號是純字串;
-    有冒號但冒號前不像路徑(`D-G89: x`、`http://x/y`)也是純字串,整句不切。"""
-    out = []
-    for raw in values:
-        if isinstance(raw, dict):
-            out.append(raw)
-            continue
-        text = str(raw)
-        path, sep, needle = text.partition(":")
-        if sep and needle.strip() and looks_like_path(path):
-            out.append({"path": path, "contains": needle.strip()})
-        else:
-            out.append(text)
-    return out
-
-
 def ask_interactive(ticket, stdin, stdout):
     for field, prompt, many in ASK:
         if many:
@@ -603,8 +563,6 @@ def cmd_create(argv, stdin=sys.stdin, stdout=sys.stdout):
         sys.stderr.write("ticket: %s\n" % complexity_problem(ticket["complexity"]))
         return 2
     ticket["depends_on"] = normalise_depends(ticket.get("depends_on") or [])
-    if ticket.get("verify_strings"):
-        ticket["verify_strings"] = normalise_verify(ticket["verify_strings"])
     ticket["created"] = now()
     if not ticket.get("base_sha"):
         # 派工那一刻的主線 sha。閘門的綠只對它有效(SCHEMA §版本),所以寧可自己
@@ -707,8 +665,6 @@ def parse_value(field, raw):
         value = [value]
     if field == "depends_on":
         value = normalise_depends(value)
-    if field == "verify_strings":
-        value = normalise_verify(value)
     return value
 
 
@@ -1257,71 +1213,20 @@ def verify(ident):
     當時事後查證用的就是這一行:`git show main:<檔> | grep -c <那張票獨有的字串>`
     = 0。
 
-    所以這一支把那一行變成關票的前置條件:
-    - 票上有 `verify_strings` → 每一條都要在主線的那個檔裡抓到 **> 0** 次
-      (純字串的那幾條在主線整棵樹裡找);
-    - 沒有 → 看 `close --landed` 蓋進票的 `landed_sha` 在不在主線歷史裡
-      (`merge-base --is-ancestor`);沒蓋過就不算在主線上。
+    所以關票有一道前置條件:`close --landed` 蓋進票的 `landed_sha` 在不在
+    主線歷史裡(`merge-base --is-ancestor`);沒蓋過就不算在主線上(#137)。
 
     回傳 `(ok, 每一條的結果)`。
     """
     ticket = load(ident)
     branch = main_branch()
-    # 手寫的票也吃得到 `路徑:那串字` 這個形狀 —— 正規化在讀的這一側做,不是只在
-    # `create` 那一側做:票檔是人會直接編輯的東西(SCHEMA 的最小範例就是手寫的)。
-    needles = normalise_verify(ticket.get("verify_strings") or [])
-    rows = []
-    if needles:
-        for item in needles:
-            if not isinstance(item, dict):
-                found = grep_main(branch, str(item))
-                rows.append({"what": str(item), "hits": sum(n for _, n in found),
-                             "where": ["%s×%d" % row for row in found]})
-                continue
-            paths = [item.get("path", "")]
-            needle = item.get("contains", "")
-            hits = 0
-            looked = []
-            for path in paths:
-                if not path:
-                    continue
-                # 位元組讀、自己解碼(#65):glob 掃得到 PNG,而 text 模式的一個
-                # UnicodeDecodeError 會讓整張票「讀不到」。非文字檔不算命中;指名的
-                # 那一個要說出來,不然與「掃過、沒抓到」長得一樣。
-                done = git(["show", "%s:%s" % (branch, path)], text=False)
-                if done.returncode != 0:
-                    looked.append("%s(主線上沒有這個檔)" % path)
-                    continue
-                try:
-                    body = done.stdout.decode("utf-8")
-                except UnicodeDecodeError:
-                    looked.append("%s(非文字檔,沒掃)" % path)
-                    continue
-                found = sum(1 for line in body.splitlines() if needle in line)
-                hits += found
-                if found:
-                    looked.append("%s×%d" % (path, found))
-            rows.append({"what": needle, "hits": hits, "where": looked})
-        return all(row["hits"] > 0 for row in rows), rows
     landed = str(ticket.get("landed_sha") or "").strip()
     if not landed:
         return False, [{"what": "landed_sha", "hits": 0,
-                        "where": ["票上沒有 verify_strings,也沒有 close --landed 蓋的 sha"]}]
+                        "where": ["票上沒有 close --landed 蓋的 sha"]}]
     ok = sha_on_branch(landed, branch)
     return ok, [{"what": "close --landed 蓋的 %s 在 %s 的歷史裡" % (landed[:12], branch),
                  "hits": 1 if ok else 0, "where": [] if ok else ["不是 %s 的祖先" % branch]}]
-
-
-def grep_main(branch, needle):
-    """純字串的 `verify_strings`:主線整棵樹裡有這串字的檔 → `[(檔, 行數)]`。
-    `-I` 跳過非文字檔(#65)、`-F` 當字面比、`-e` 讓 `-` 開頭的字不被當成旗標。"""
-    done = git(["grep", "-I", "-F", "-c", "-e", needle, branch, "--"])
-    out = []
-    for line in done.stdout.splitlines() if done.returncode == 0 else []:
-        name, _, count = line[len(branch) + 1:].rpartition(":")
-        if name and count.isdigit():
-            out.append((name, int(count)))
-    return out
 
 
 def print_verify_plan(ticket):
@@ -1393,8 +1298,8 @@ def take_landed(argv):
 
 def stamp_landed(ident, sha):
     """`close --landed <sha>`(#15):落地是合併出一個**新**的 sha,不是分支審過的
-    那個頭 —— 先確認它真的在主線歷史裡,再蓋進票的 `landed_sha`(沒有 `verify_strings`
-    的票,`verify` 認的就是它)與 review.sha,一步做完「補審 + 關」。
+    那個頭 —— 先確認它真的在主線歷史裡,再蓋進票的 `landed_sha`(`verify` 認的就是它)
+    與 review.sha,一步做完「補審 + 關」。
     沒有既有 review 就開一張(verdict/by 給預設,主線隨時可以事後改)—— 只對 complex 的票;
     simple / 沒標的票不要 review(#136),沒有就不開。"""
     branch = main_branch()
@@ -1896,25 +1801,6 @@ def cmd_agent_command(argv):
 # --------------------------------------------------------------------- lint
 
 
-def verify_string_problems(rows):
-    """`verify_strings` 的形狀:非空串列,每筆是非空字串、或恰為 `{path, contains}` 兩鍵
-    且都是非空字串的 dict —— 也就是 `normalise_verify` 產得出的兩種(tickets/SCHEMA.md)。
-    只認字串的檢查會把工具自己產的票擋下來(F3)。"""
-    if not isinstance(rows, list) or not rows:
-        return ["verify_strings 要是非空串列,現在是 %s"
-                % json.dumps(rows, ensure_ascii=False)]
-    bad = []
-    for at, row in enumerate(rows, 1):
-        if isinstance(row, str) and row.strip():
-            continue
-        if isinstance(row, dict) and set(row) == {"path", "contains"} \
-                and all(isinstance(row[k], str) and row[k].strip() for k in row):
-            continue
-        bad.append("verify_strings 第 %d 筆形狀不對(要非空字串或恰為 {path, contains} "
-                   "兩個非空字串):%s" % (at, json.dumps(row, ensure_ascii=False)))
-    return bad
-
-
 def tag_problems(ticket):
     """票的 `tags` 與 `verify.tags` 每個都要已登記。讀法就是 `verify.py` 的
     `registered_tags`(TAGS.md + TAGS.d/),不另寫一份。"""
@@ -1945,7 +1831,6 @@ def cmd_lint(argv):
     unready = needs_verifier_problem(ticket)
     if unready:
         bad.append(unready)
-    bad += verify_string_problems(ticket.get("verify_strings"))
     bad += tag_problems(ticket)
     if bad:
         for line in bad:

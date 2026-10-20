@@ -1,24 +1,22 @@
-"""`scripts/memory.py lint`:記憶分層的契約做成 note / consolidate / 閘門共用的一份判斷
+"""`scripts/memory.py lint`:記憶分層的契約做成 note / consolidate 共用的一份判斷
 (#87 A33–A36,原 #79;裁示原話 Q2 / Q3)。
 
 角色與模型記憶只留通用原則;專案記憶留設計理由。路徑、行號、呼叫、旗標、commit 指紋
 是會過期的定位,去 repo map / reference / 票。五條 rule(path / line / call / flag / sha)
-是穩定的 ID。這一組問三件事:
+是穩定的 ID。這一組問兩件事:
 
 1. **矩陣**:每條規則在嚴格層(role / model)與專案層各有正例;模組名稱、時間、日期、
    全形括號、破折號這類長得像卻不是的,一條都不准誤判;精確的 allow marker 只豁免一條
    規則的一個逐字值,無效的 marker 自己就是一條命中。
 2. **拒絕發生在寫入之前**:`note`、`consolidate` 的真入口碰到錯層內容 → 檔、事件一個
    位元組都不動。
-3. **閘門只量分支改到的記憶檔**:候選記憶插一條函式呼叫 → `gate.sh --branch --ticket` 紅,
-   診斷有檔、行、rule 與建議去處。
+(閘門那一格 #138 已刪,D-054 Q4:記憶錯層由 `memory.py lint` 留給整理者用。)
 
 期望值(rule 名、逐字值、行號)寫死在這裡,不從 memory.py 讀回來。
 """
 
 import json
 import os
-import subprocess
 import sys
 import unittest
 
@@ -221,125 +219,6 @@ class ConsolidateRefusesTheCandidate(Consolidation):
         self.assertEqual(self.raw(self.INBOX), inbox, "inbox 被動了")
         self.assertEqual(self.consumed(), [])
         self.assertEqual(self.consolidated(), [])
-
-
-class TheGateLintsTheChangedMemory(LintBase):
-    """A36:候選記憶插一條函式呼叫 → `gate.sh --branch --ticket` 紅,診斷有檔、行、rule、去處。"""
-
-    def test_a36_a_call_in_a_changed_card_reds_the_gate(self):
-        """**變異**:拿掉 gate.sh 的記憶 lint 那一段 → rc 不是 4,紅。"""
-        self.write("memory/model/opus.md", "- 原則一條\n")
-        self.make_ticket(7, state="Running")
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "沙盒的模型卡與票 #7")
-        wt = self.worktree("t7")
-        self.write("memory/model/opus.md", "- 原則一條\n- 收尾用 os.kill(pid)\n", where=wt)
-        self.git("add", "-A", cwd=wt)
-        self.git("commit", "-q", "-m", "#7 候選記憶插了一條呼叫", cwd=wt)
-        done = self.run_sh(os.path.join(wt, "scripts", "gate.sh"), "--branch", "--ticket", "7",
-                           "--no-auto-fix", cwd=wt)
-        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
-        line = [l for l in done.stderr.splitlines() if "memory/model/opus.md:2" in l]
-        self.assertEqual(len(line), 1, done.stderr)
-        self.assertIn("rule=call", line[0])
-        self.assertIn("建議去處", line[0])
-        self.assertFalse(os.path.exists(self.log), "錯層記憶卻跑了測試")
-
-    # D-042(#90 A7):閘門只量**這條分支加了什麼** —— 新增行才 lint;卡多長不量(#134,D-053 ⑥)。
-    # 主線上 commit 卡 → worktree t7 改卡並 commit → 真 gate.sh。
-
-    OLD_HIT = "- 舊句用 os.kill(pid)\n"
-    CARD = "memory/model/opus.md"
-
-    def branch_gate(self, on_main, on_branch, config=None):
-        """`on_main` / `on_branch`:{相對路徑: 全文}。回 gate 的 CompletedProcess。"""
-        if config is not None:
-            self.write("board/config.json", json.dumps(config, ensure_ascii=False, indent=2))
-        for rel, text in on_main.items():
-            self.write(rel, text)
-        self.make_ticket(7, state="Running")
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "沙盒的記憶卡與票 #7")
-        wt = self.wt = self.worktree("t7")
-        for rel, text in on_branch.items():
-            self.write(rel, text, where=wt)
-        self.git("add", "-A", cwd=wt)
-        self.git("commit", "-q", "-m", "#7 改了記憶卡", cwd=wt)
-        return self.run_sh(os.path.join(wt, "scripts", "gate.sh"), "--branch", "--ticket", "7",
-                           "--no-auto-fix", cwd=wt)
-
-    @staticmethod
-    def body(chars):
-        """正文恰 `chars` 個字元的一條(`- ` + 字… + 換行)。"""
-        return "- " + "字" * (chars - 3) + "\n"
-
-    def lint_lines(self, done):
-        return [l for l in done.stderr.splitlines() if l.startswith("memory: lint ")]
-
-    def test_only_lines_added_on_the_branch_are_linted(self):
-        """A7(a):主線上的卡已有一行命中,分支只在卡尾加一行乾淨原則 → 不擋。
-        **變異 M5**:gate 對改到的卡整檔 lint(不看改前)→ 這一條紅。"""
-        main = "- 原則一條\n" + self.OLD_HIT
-        done = self.branch_gate({self.CARD: main}, {self.CARD: main + "- 新的乾淨原則\n"})
-        self.assertNotIn("記憶檔有錯層內容", done.stderr, done.stdout + done.stderr)
-        self.assertNotIn("memory: lint", done.stderr)
-
-    def test_a_new_hit_is_named_and_the_old_one_is_not(self):
-        """A7(b):同一張主線卡,分支另加一行呼叫(第 3 行)→ rc 4,恰一條 lint 行指名第 3 行。"""
-        main = "- 原則一條\n" + self.OLD_HIT
-        done = self.branch_gate({self.CARD: main},
-                                {self.CARD: main + "- 新句用 subprocess.run(x)\n"})
-        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
-        lines = self.lint_lines(done)
-        self.assertEqual(len(lines), 1, done.stderr)
-        self.assertIn("memory/model/opus.md:3 ", lines[0])
-        self.assertFalse([l for l in lines if "memory/model/opus.md:2 " in l], done.stderr)
-
-    def test_a_rewritten_old_hit_is_named(self):
-        """A7(c):分支改寫舊命中那一行(仍含呼叫)→ rc 4,第 2 行被點名(改到的行就要乾淨)。"""
-        done = self.branch_gate({self.CARD: "- 原則一條\n" + self.OLD_HIT},
-                                {self.CARD: "- 原則一條\n- 舊句改寫後仍用 os.kill(pid)\n"})
-        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
-        lines = self.lint_lines(done)
-        self.assertEqual(len(lines), 1, done.stderr)
-        self.assertIn("memory/model/opus.md:2 ", lines[0])
-
-    def lint_base_json(self):
-        wt = self.wt
-        return subprocess.run(["python3", os.path.join(wt, "scripts", "memory.py"), "lint",
-                               "--base", "main", "--json", "--file", self.CARD],
-                              cwd=wt, env=self.env(AC_ROOT=wt), capture_output=True, text=True,
-                              timeout=120)
-
-    def test_a_card_grown_from_1990_to_2500_with_clean_lines_passes(self):
-        """#134 A6:分支把卡從 1990 推到 2500 字元、新增行乾淨 → 閘門不印超上限、沒有
-        `memory: cap ` 行;`lint --base --json` 沒有 `over_cap` 鍵。
-        **變異 M4**:lint --base 留 over_cap(gate 照印)→ 這一條紅。"""
-        done = self.branch_gate({self.CARD: self.body(1990)},
-                                {self.CARD: self.body(1990) + self.body(510)})
-        self.assertNotIn("本分支讓記憶卡超上限", done.stderr, done.stdout + done.stderr)
-        self.assertFalse([l for l in done.stderr.splitlines() if l.startswith("memory: cap ")],
-                         done.stderr)
-        self.assertNotIn("記憶檔有錯層內容", done.stderr)
-        lint = self.lint_base_json()
-        self.assertEqual(lint.returncode, 0, lint.stdout + lint.stderr)
-        data = json.loads(lint.stdout)
-        self.assertNotIn("over_cap", data)
-        self.assertTrue(data["ok"])
-
-    def test_a_wrong_layer_line_on_a_grown_card_is_still_named(self):
-        """#134 A6:同樣 1990 → 2500,另加一條錯層行 → 恰一行 `機械格不合 —— `、是錯層那一句,
-        gate 狀態檔的 note 列得出它(既有行為不變)。"""
-        done = self.branch_gate({self.CARD: self.body(1990)},
-                                {self.CARD: self.body(1990) + self.body(510)
-                                 + "- 新句用 subprocess.run(x)\n"})
-        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
-        mech = [l for l in done.stderr.splitlines() if "機械格不合 —— " in l]
-        self.assertEqual(len(mech), 1, done.stderr)
-        self.assertIn("分支改到的記憶檔有錯層內容", mech[0])
-        self.assertNotIn("超上限", done.stderr)
-        note = self.status_of(7, kind="gate")["note"]
-        self.assertIn(mech[0], note)
 
 
 if __name__ == "__main__":

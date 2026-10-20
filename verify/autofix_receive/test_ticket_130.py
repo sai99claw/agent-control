@@ -3,18 +3,18 @@
 ## 驗收表(票面每一條一列;期望值來源獨立於被測程式:票面 acceptance / test_plan 字面、夾具自己寫下的值)
 A1 | integ | #107 形狀:第 2 輪 worker 交產品檔 patch + test_defect;驗證者 `: > patch-verify.diff`、result 帶 verify | stdout 有 SAME;沒有「套不上」;t1 有 src/worker_change.py(替身寫的那一行);票 verify.files == 夾具值、baseline red;末筆 test_defect disposition=fixed;第 2 輪 gate.rerun | 票面 A1 原話;T1
 A2 | integ | interface_fixed 第 1 輪,平行驗證者交 0 byte + verify,worker 交 tests/test_thing.py | 同 A1:SAME、沒有「套不上(apply rc=3)」、t1 有 worker 的檔、verify.files == 夾具值、第 1 輪 gate.rerun | 票面 A2;T2
-A3 | integ | (a) 上一輪紅榜只有「讀不到」那一列 LINT(#98 形狀)→ lint_round 驗證者 0 byte + verify;(b) worker 只交 test_defect、驗證者 0 byte + verify;閘門替身綠 | SAME 與 PLAN_ONLY;t1 頭 sha 前後相同、替身閘門跑在那個 sha;verify 照 #100 A9 併法(files 聯集、run/notes 空才採);gate.rerun 第 2 輪;InReview;(b) disposition=fixed | 票面 A3;T3
+A3 | integ | (a) 上一輪紅榜只有缺口列(kind GAP,手寫同形列;#138 前是 #98 的「讀不到」LINT 列)→ 只派驗證者那一輪驗證者 0 byte + verify;(b) worker 只交 test_defect、驗證者 0 byte + verify;閘門替身綠 | SAME 與 PLAN_ONLY;t1 頭 sha 前後相同、替身閘門跑在那個 sha;verify 照 #100 A9 併法(files 聯集、run/notes 空才採);gate.rerun 第 2 輪;InReview;(b) disposition=fixed | 票面 A3;T3
 A4 | integ | `apply.sh verify-plan 1 --evidence-verifier EV`(red / check / 沒有 result 塊);`--help` | rc 0、票 verify 四格與 baseline 併進、分支清單與 HEAD 不變、沒有 t1;check 不收、印「不是 stage=red」;沒塊 → rc≠0、stderr 有 UNPARSED、票不動;--help 有 verify-plan | 票面 A4;T4;「不是 stage=red」是 apply 既有字樣
-A5 | integ | lint_round 0 byte 而 result 沒有 verify / 沒有 result 塊;lint_round patch-verify 一行文字;worker 自己交 0 byte | 照舊 Blocked、decision 有「驗證者交了空的 patch-verify」、不跑閘門;一行文字 → 「套不上(apply rc=3)」;worker 0 byte → 「空的 patch 不是綠」;三者都沒有 SAME | 票面 A5;T5
+A5 | integ | 只派驗證者那一輪 0 byte 而 result 沒有 verify / 沒有 result 塊;那一輪 patch-verify 一行文字;worker 自己交 0 byte | 照舊 Blocked、decision 有「驗證者交了空的 patch-verify」、不跑閘門;一行文字 → 「套不上(apply rc=3)」;worker 0 byte → 「空的 patch 不是綠」;三者都沒有 SAME | 票面 A5;T5
 A6 | integ + doc | A3(a) 那一輪的 attempt 事件;docs/WORKFLOW.md | ticket.attempt.start / done 都有第 2 輪;WORKFLOW 有一段同時寫 patch-verify、0 byte、計畫、閘門 | 票面 A6 原話
 
 ## 介面字串(全部出自票面;票面沒定的在這裡定)
-SAME       = "驗證者這輪沒有改動"            ← A1/A2/A3 stdout(票面 verify_strings)
-PLAN_ONLY  = "只併驗證者計畫"                ← A3 stdout(票面 verify_strings)
-SUBCOMMAND = "verify-plan"                   ← A4 子命令與 --help(票面 verify_strings)
+SAME       = "驗證者這輪沒有改動"            ← A1/A2/A3 stdout(票面原字)
+PLAN_ONLY  = "只併驗證者計畫"                ← A3 stdout(票面原字)
+SUBCOMMAND = "verify-plan"                   ← A4 子命令與 --help(票面原字)
 UNPARSED   = "驗證者的 result 解析不到"      ← A4 stderr(票面 A4「照既有字樣」)
 NOT_APPLIED = "套不上(apply rc=3)"         ← A2/A5(票面原字)
-EMPTY_PAGE = "驗證者交了空的 patch-verify"   ← A5 lint_round 那一頁(票面原字)
+EMPTY_PAGE = "驗證者交了空的 patch-verify"   ← A5 只派驗證者那一輪的頁(票面原字)
 EMPTY_GUARD = "空的 patch 不是綠"            ← A5 worker 0 byte(票面原字,apply 既有字樣)
 NOT_RED    = "不是 stage=red"                ← A4 check 不收(apply 既有字樣)
 
@@ -22,12 +22,12 @@ NOT_RED    = "不是 stage=red"                ← A4 check 不收(apply 既有�
 沙盒借 tests/control_harness.Sandbox(拋棄式真 git repo、外層 AC_* 一律不進沙盒)、
 tests/test_auto_fix.AutoFixBase 與 tests/test_apply.ApplyBase。worker / 驗證者是 config
 worker.command 指向的假 sh(AC_ROLE 分流,交件形狀由 @…@ 換);閘門替身是 gate.rerun_cmd:
-把副本的 HEAD 記進一個檔、exit 0(T3「閘門替身綠」)。上一輪全 LINT 的狀態檔照 #126 的做法:
-first_round() 的真閘門跑完,把 failures[] 換成手寫同形列。驗證者 result 指向沙盒本來就有、
-lint 過的 verify/example/test_example.py。
+把副本的 HEAD 記進一個檔、exit 0(T3「閘門替身綠」)。上一輪只有缺口列的狀態檔照 #126 的做法:
+first_round() 的真閘門跑完,把 failures[] 換成手寫同形列。驗證者 result 指向沙盒本來就有的
+verify/example/test_example.py。
 
 ## 不做
-不改產品碼;不放寬票面驗收;不刪既有案例;不碰 verify_strings 的原字;不量閘門紅那條路的
+不改產品碼;不放寬票面驗收;不刪既有案例;不量閘門紅那條路的
 下一輪(閘門替身一律綠);A6「既有斷言不變」由 tests/test_auto_fix.py 全檔守(T6,閘門跑)。
 """
 import json
@@ -140,13 +140,11 @@ def agent(worker="none", objects=False, vpatch="empty", vevidence="plan"):
             .replace("@PLAN_RESULT@", PLAN_RESULT))
 
 
-def lint_row(rel, excerpt):
-    """手寫的 LINT 列(#126 A1 定的形狀)。"""
-    return {"case": "verify-case-lint:" + rel, "kind": "LINT", "subtest": "", "file": rel,
-            "line": 0, "engine": "", "log": "", "excerpt": excerpt, "suspected_flaky": False}
-
-
-MISSING_ROW = lint_row(MISSING_REL, "verify-case lint: 讀不到 " + MISSING_REL)
+# 手寫的缺口列(#126 A2 的形狀;#138 起 kind GAP)。
+GAP_ROW = {"case": "verify-case:(no-cases)", "kind": "GAP", "subtest": "", "file": "",
+           "line": 0, "engine": "", "log": "",
+           "excerpt": "gate: 這張票沒有驗證者案例(#1 的 verify.files 是空的)",
+           "suspected_flaky": False}
 
 
 class ReceiveBase(AutoFixBase):
@@ -206,12 +204,12 @@ class ReceiveBase(AutoFixBase):
             return
         self.fail("first_round() 沒留下 gate 狀態檔")
 
-    def lint_round(self, body):
-        """#98 形狀:verify.files 指向不存在的檔,上一輪紅榜只有「讀不到」那一列 LINT。"""
+    def gap_round(self, body):
+        """上一輪紅榜只有缺口列(手寫);票上 verify.files 留著一筆不存在的檔,量 #100 A9 的聯集併法。"""
         self.arm(body, needs_verifier=True, interface_fixed=True,
                  verify={"files": [MISSING_REL], "tags": [], "run": "", "notes": ""})
         self.first_round()
-        self.last_gate_says([MISSING_ROW])
+        self.last_gate_says([GAP_ROW])
         before = self.branch_head()
         return before, self.auto_fix("--no-review")
 
@@ -265,9 +263,9 @@ class TheVerifierAloneMergesOnlyItsPlan(ReceiveBase):
         self.assertEqual(self.gate_heads(), [before], "閘門替身沒在分支頭上跑(或跑了不只一次)\n" + said)
         self.assertTrue(self.went_in_review(), "閘門替身綠了,票沒進 InReview\n" + said)
 
-    def test_a3a_an_all_lint_round_with_an_empty_patch_merges_the_plan_and_reruns(self):
-        """A3 (a) lint_round 驗證者 0 byte + verify:分支不動、verify 照既有併法併進、重跑閘門、綠 → InReview。"""
-        before, done = self.lint_round(agent(vpatch="empty", vevidence="plan"))
+    def test_a3a_a_gap_round_with_an_empty_patch_merges_the_plan_and_reruns(self):
+        """A3 (a) 只派驗證者那一輪驗證者 0 byte + verify:分支不動、verify 照既有併法併進、重跑閘門、綠 → InReview。"""
+        before, done = self.gap_round(agent(vpatch="empty", vevidence="plan"))
         self.assert_plan_only(before, done)
         plan = self.plan()
         # 既有併法(#100 A9):files 聯集、既有在前;run / notes 票上空才採驗證者的。
@@ -291,7 +289,7 @@ class TheVerifierAloneMergesOnlyItsPlan(ReceiveBase):
 
     def test_a6_a_plan_only_round_still_counts_as_a_round(self):
         """A6 只併計畫那一輪照樣算一輪:第 2 輪的 ticket.attempt.start 與 ticket.attempt.done 都在。"""
-        _, done = self.lint_round(agent(vpatch="empty", vevidence="plan"))
+        _, done = self.gap_round(agent(vpatch="empty", vevidence="plan"))
         said = done.stdout + done.stderr
         self.assertIn(PLAN_ONLY, done.stdout, said)
         self.assertTrue(self.attempts("ticket.attempt.start", "2"), said)
@@ -311,18 +309,18 @@ class NothingHandedInStillStops(ReceiveBase):
         self.assertEqual(self.branch_head(), before)
 
     def test_a5_an_empty_patch_without_a_plan_still_blocks(self):
-        """A5 lint_round 0 byte、result 沒有 verify → 照舊「驗證者交了空的 patch-verify」、Blocked、不跑閘門。"""
-        before, done = self.lint_round(agent(vpatch="empty", vevidence="noplan"))
+        """A5 只派驗證者那一輪 0 byte、result 沒有 verify → 照舊「驗證者交了空的 patch-verify」、Blocked、不跑閘門。"""
+        before, done = self.gap_round(agent(vpatch="empty", vevidence="noplan"))
         self.assert_empty_page(before, done)
 
     def test_a5_an_empty_patch_with_an_unparsable_result_still_blocks(self):
-        """A5 lint_round 0 byte、EVIDENCE 沒有 result 塊 → 照舊「驗證者交了空的 patch-verify」、Blocked、不跑閘門。"""
-        before, done = self.lint_round(agent(vpatch="empty", vevidence="prose"))
+        """A5 只派驗證者那一輪 0 byte、EVIDENCE 沒有 result 塊 → 照舊「驗證者交了空的 patch-verify」、Blocked、不跑閘門。"""
+        before, done = self.gap_round(agent(vpatch="empty", vevidence="prose"))
         self.assert_empty_page(before, done)
 
     def test_a5_a_one_line_patch_verify_is_still_handed_to_apply(self):
         """A5 只認 0 byte:patch-verify 一行文字(沒有檔頭)→ 照舊「套不上(apply rc=3)」,沒有 SAME。"""
-        _, done = self.lint_round(agent(vpatch="text", vevidence="plan"))
+        _, done = self.gap_round(agent(vpatch="text", vevidence="plan"))
         said = done.stdout + done.stderr
         self.assertIn(NOT_APPLIED, said)
         self.assertNotIn(SAME, done.stdout, said)

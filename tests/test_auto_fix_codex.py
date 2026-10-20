@@ -301,7 +301,7 @@ class CodexNotOnPath(FallbackBase):
 
     def test_a2_codex_missing_takes_the_next_candidate_before_starting(self):
         """A2「CLI 已知不可用可於啟動前選下一候選」。**變異**:拿掉啟動前的 PATH 檢查 → 起 codex
-        撞 rc=127 那一列 cost 多出來 / agent.start 有 codex,紅。四問:量 agent.start 的 model 與
+        撞 rc=127 那一列 cost 多出來 / agent.start 有 codex,紅。量 agent.start 的 model 與
         cost;值 = A2;舊值(#87 A22 rc=2 停)會紅在 rc;不靠沒設就退回(表真的兩格)。"""
         self.codex_ticket()
         done = self.run_sh("scripts/auto-fix.sh", "1", "--no-review",
@@ -334,7 +334,7 @@ class QuotaTakesTheNextCandidate(FallbackBase):
     def test_a2_a_quota_envelope_relaunches_opus_in_the_same_copy(self):
         """T1:fake codex 先 quota、fake opus 交件。**M1**(保留舊的改派 opus + 回 Ready + rc 7)→
         rc 不是 0、opus 沒起,紅;**M2**(額度後 rm -rf 副本)→ opus 的 cwd 不在 / patch 沒進分支,紅。
-        四問:量 rc、兩次啟動、cwd、cost、事件;值 = A2/A4;舊值紅在 rc 與 opus_calls。"""
+        量 rc、兩次啟動、cwd、cost、事件;值 = A2/A4;舊值紅在 rc 與 opus_calls。"""
         self.assert_relaunched_opus("quota")
 
     def test_133_a2_the_plain_codex_usage_limit_line_relaunches_opus(self):

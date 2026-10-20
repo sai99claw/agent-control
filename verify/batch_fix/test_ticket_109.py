@@ -24,7 +24,7 @@ events: land.fail kicked=<id>;gate.start/pass/fail mode=full round=<r> batch=<st
 --batch 時在 $AC_FIX_SOURCE(沒給就用第二個參數)那條分支的 worktree 疊一個 commit。B5 用真的 gate.sh。
 
 ## 不做
-不改產品碼;不放寬票面驗收;不刪既有案例;不碰 verify_strings 的原字;不跑真的模型。
+不改產品碼;不放寬票面驗收;不刪既有案例;不跑真的模型。
 """
 import json
 import os
@@ -210,12 +210,10 @@ class B1RedThenBatchFixThenGreen(BatchLandWorld):
 
     def setUp(self):
         super().setUp()
-        closable = lambda path, text: {
-            "verify_strings": [{"path": path, "contains": text}],
+        closable = lambda: {
             "verify": {"files": [], "tags": [], "run": "", "notes": "",
                        "baseline": {"ok": True, "stage": "check"}}}
-        self.two_tickets(first=closable("src/a", "第一張"),
-                         second=closable("src/b", "第二張"))
+        self.two_tickets(first=closable(), second=closable())
         self.plan([1, 0])
 
     def test_b1_one_batch_fix_round_turns_it_green_and_both_tickets_close(self):

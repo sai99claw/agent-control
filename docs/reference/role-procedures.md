@@ -20,26 +20,21 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
   `sh scripts/land.sh docs "tickets: #<n> 開票" tickets/<n>.json`;`AC_ROLE=opener` 時它只收 `tickets/<AC_TICKET>.json`,
   別的檔 **land 會擋**(#91 C6)。裸 commit 與 land 的其他用法不做。
 
-### 票面四格自檢(D-031;#651/#652 各退三輪全是這幾格)
+### 票面三格自檢(D-031;#651/#652 各退三輪全是這幾格)
 - `needs_verifier`:JSON 布林 + 一句理由寫在 `outline`(D-028)。**缺了 Ready 會擋**:`ticket.py set <n> state Ready`
   拒收並印怎麼補(#91 C1 C2)。
-- `verify_strings`:**內容字串**,形狀以 `tickets/SCHEMA.md` 為準 —— 純字串,或 `ticket.py create --verify-string '<路徑>:<字>'`
-  的「路徑:字」寫法(工具存成 `{path, contains}`,那是合法的);**不手寫 dict**。閘門與落地比的是改動內文
-  (diff 的增刪行與新檔全文),diff 檔頭與檔名不算;新檔就挑檔內一定會有的字(類名、函式名)。完整認法見
-  `python3 scripts/ticket.py create --help` 的 `--verify-string` 說明與 `templates/dispatch-opener.md`「票面的機械格要能被機器驗」(#90 A5)。
 - `tags`:只能用 `verify/TAGS.md`(與 `verify/TAGS.d/`)登記過的;動到 `verify/` 案例的票一定要有。
 - 票面引用的指令先 `--help` 一次再寫。
 - 自檢(D-031 原話「要做成 `ticket.py lint`」;#91 C3 做出來了):
   ```
   python3 scripts/ticket.py lint <n>
   ```
-  唯讀、不動 `state_version`;逐條印 `needs_verifier` / `verify_strings` / 標籤的問題,全過印 `ok`。不再手寫 python 一行自檢。
+  唯讀、不動 `state_version`;逐條印 `needs_verifier` / 標籤的問題,全過印 `ok`。不再手寫 python 一行自檢。
 
 ### needs_verifier 怎麼判
-- `docs/DISPATCH-TEMPLATE.md` §5.8 第 3 問:驗證者案例只會重演 worker 自己案例的同一契約就寫
-  `false` + 一句理由(T #679 先例;#68)。
+- 驗證者案例只會重演 worker 自己案例的同一契約就寫 `false` + 一句理由(T #679 先例;#68)。
 - 本 repo(agent-control)的驗證者案例住 `tests/` 時,票的 `verify.tags` 要留空:gate 會拿 tags 跑
-  `verify.py --tag`,選不到案例算缺口 rc=3;TAGS 字面只為 lint F2(#29)。
+  `verify.py --tag`,選不到案例算缺口 rc=3(#29)。
 
 ### 引用端與驗收
 - 票沒有寫入範圍(D-054 Q2):會跟著動的檔寫進 `outline`,漏寫不擋;唯一的硬擋是 `board/config.json` 的 `hard_block`。
@@ -70,7 +65,7 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 - `patch.diff`:在副本根 `diff -ruN base work > patch.diff`,檔頭只准 `base/…` / `work/…` 的相對形式;
   絕對路徑檔頭 **`apply.sh` 會拒**(D-015 1;以前 `patch -p1` 會把檔案建到 `work/private/…`,#25 #26 #28)。驗證者的 `patch-verify.diff` 同一條。
 - `EVIDENCE.md` 五段:① patch sha256;② 測試指令、`Ran N`、rc;③ 變異表(編號 / 替換 count / 目標斷言 /
-  紅訊息首行 / 還原後 sha256)+ 每條新增或改動的案例一行 `四問:`(`docs/DISPATCH-TEMPLATE.md` §5.8,#68);
+  紅訊息首行 / 還原後 sha256);
   ④ 已排除的假設;⑤ 最小重現。`result` 塊的欄位見 `docs/DISPATCH-TEMPLATE.md` §8.5(#20 驗收⑦)。
 - 不寫 `verify/**`(驗證者的,同名檔落地會打架,#630)。
 - 紅了被重派時先讀 `reports/t<票號>/<run_id>/status.json`(票 + `repair_context` + 紅榜)。
@@ -119,13 +114,13 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 ## 驗證者角色操作細節
 
 ### 案例與交付物
-- 案例檔:`verify/<feature>/test_ticket_<n>.py`(檔頂宣告 `TAGS`);新標籤寫成片段 `verify/TAGS.d/<票號>.md`;
-  `files` / `tags` / `run` / `notes` 寫進 `result` 的 `verify` 格(形狀在 `templates/dispatch-verifier.md`),收件併進票的 `verify` 欄。
+- 案例:加進最貼近的既有測試模組(`tests/` 或既有 `verify/` 模組),不為單張票新開以票號命名的案例檔(D-056);
+  不新增標籤、不寫登記片段(`tests/` 模組 `tags` 留空);`files` / `tags` / `run` / `notes` 寫進 `result` 的 `verify` 格(形狀在 `templates/dispatch-verifier.md`),收件併進票的 `verify` 欄。
 - 驗紅:`python3 scripts/verify-case.py red <票號> --ref <base_sha> --candidate <$W/work>`;rc=0 才算交件。它不寫票(#36):
   印出的 `baseline-red.json` 原封抄進 `result` 的 `baseline`,`apply.sh --evidence-verifier` 收件時併進票。
 - **驗證者只跑自己的案例與 `verify-case.py red`**;`check`(乾淨主線紅、candidate 綠)是閘門 `gate.sh` 叫的、`ticket.py close` 只認那一趟,
   不是驗證者跑的(D-020;F1)。交付物 `verify-case.py extract`。
-- `EVIDENCE-verifier.md` 檔尾 `result` 區塊;`四問:` 行寫在每個案例名底下(`docs/DISPATCH-TEMPLATE.md` §5.8)。
+- `EVIDENCE-verifier.md` 檔尾 `result` 區塊。
 - 收件(#29 A5;auto-fix 跑,人手派時由派工的人跑):`sh scripts/apply.sh <票號> <patch> <patch-verify> --evidence-verifier EVIDENCE-verifier.md`,
   抽成 `reports/t<票號>/<run_id>/result-verifier-round<輪>.json`(看板 `/t/<票號>` 畫的就是那一份)。
 - `patch-verify`:在 `$W` 裡 `diff -ruN base work`;檔頭規矩同實作者「交付物的形狀」那一條(`apply.sh` 會拒)。

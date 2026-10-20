@@ -28,7 +28,7 @@ claude-code 那一支 = config worker.command 指向的假 sh(驗證者沒設 ve
 reviewer = config reviewer.command 指向的假 sh(交 pass / fail / 不交 / 先改票再交 pass)。外層 AC_* 由沙盒清掉。
 
 ## 不做
-不改產品碼;不放寬票面驗收;不刪既有案例;不碰 verify_strings 的原字;不跑真的模型。
+不改產品碼;不放寬票面驗收;不刪既有案例;不跑真的模型。
 A3 的「有 Controller 時只交 action 記錄、由 Controller 接續」票面沒有定 Controller 存在的訊號(#120 才整合),
 這裡只驗無 Controller 的本地有限驅動;A2「CLI 已知不可用可於啟動前選下一候選」是「可」,不驗;
 A1 的 test_defect 驗證者與晚起驗證者入口、A5 的 receipt/CAS 細節不另寫案例(平行驗證者與 stale 覆核那兩條代表)。

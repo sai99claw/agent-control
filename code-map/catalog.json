@@ -19,7 +19,7 @@
       "guard": "tests/test_auto_fix.py"
     },
     "gate": {
-      "summary": "閘門:對照表挑測試模組、preflight 機械格、狀態檔、索引新鮮度",
+      "summary": "閘門:對照表挑測試模組、preflight 硬擋、狀態檔、驗證者案例",
       "match": ["gate"],
       "entry": "scripts/gate.sh",
       "guard": "tests/test_gate.py",
@@ -67,7 +67,7 @@
       "docs": ["tickets/SCHEMA.md"]
     },
     "verify": {
-      "summary": "回歸層執行器與驗證者案例的 red / check / lint",
+      "summary": "回歸層執行器與驗證者案例的 red / check",
       "match": ["verify"],
       "entry": "scripts/verify-case.py",
       "guard": "tests/test_verify_case.py"

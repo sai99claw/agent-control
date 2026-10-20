@@ -854,12 +854,14 @@ class ASerialTestDefectMergesTheVerifierPlan(AutoFixBase):
     `--evidence-verifier`,驗證者的 verify 計畫與驗紅永遠不進票,落地後 close 被「沒有回歸
     證據」擋。期望值是替身 EVIDENCE 裡寫死的那兩格。
 
-    不斷言 rc:計畫併進票之後閘門會 lint tests/test_thing.py(替身的案例沒有驗證者案例的
-    docstring / TAGS),紅在那裡是沙盒案例的樣子,不是收件的行為;收件本身看「沒有套不上」。
+    不斷言 rc;收件本身看「沒有套不上」。收件後的閘門用替身 `true`(同 AnEmptyPatchVerifyIsNoChange):
+    這一組量的是收件,不是閘門 —— 真閘門會跑 check 把 baseline 升成 stage=check,蓋掉要量的那一格
+    (#138 前是案例 lint 先擋下、check 沒跑)。
     """
 
     def run_it(self, worker_patch):
-        self.set_worker(TEST_DEFECT_VERIFIER_WITH_PLAN.replace("@WORKER_PATCH@", worker_patch))
+        self.set_worker(TEST_DEFECT_VERIFIER_WITH_PLAN.replace("@WORKER_PATCH@", worker_patch),
+                        rerun_cmd="true")
         self.ticket_ready()
         self.first_round()
         done = self.auto_fix()
@@ -990,7 +992,7 @@ class TheTableModelPicksTheClaudeWorker(AutoFixBase):
     def test_a_simple_ticket_starts_sonnet_below_the_old_floor(self):
         """T5 / A8:complexity=simple → worker_simple 鏈(sonnet medium);config 還帶舊的
         routing.implement=opus 與 model_tiers,規則包照產、worker 照起。**M5**(rules.py 留著
-        below_floor)→ 規則包 rc=2、不起 worker,紅。四問:量 argv / 事件;值 = A1 + A8;
+        below_floor)→ 規則包 rc=2、不起 worker,紅。量 argv / 事件;值 = A1 + A8;
         舊值(#87 A8 拒起)紅在 argv 檔不在;不靠沒設就退回(config 真的帶 tiers)。"""
         conf = json.loads(self.read("board/config.json"))
         conf["model_tiers"] = ["sonnet", "opus", "fable"]
@@ -1747,7 +1749,7 @@ class TheWholeLoop(AutoFixBase):
         """#136(VISION 流程 #9:只有複雜的票做完後檢查一次;沒標 = simple):綠了轉 InReview,
         不派覆核、不停在等覆核 —— 帶不帶 `--no-review` 都一樣。
 
-        四問:量 rc、終態行、reviewer 叫了幾次、覆核派工文與 review.* 事件、票的 review 與
+        量 rc、終態行、reviewer 叫了幾次、覆核派工文與 review.* 事件、票的 review 與
         state;紅 = auto-fix 對每張票仍叫 review.sh(reviewer 被叫、review.pass);期望值 =
         VISION 流程 #9 與 D-054 Q1 原話,不從 auto-fix 算。
         """
@@ -1861,7 +1863,7 @@ exit @RC@
 class TheReviewOutcomeIsTheExitCode(AutoFixBase):
     """#121 A6:閘門綠但覆核 fail / missing / 寫不進票,auto-fix 的 rc 與終態分別保留,不被
     ROUND_RC=0 蓋成成功。**變異**:`review_outcome` 恆設 ROUND_RC=0(舊行為)→ 三案 rc 都是 0,紅。
-    四問:量 rc、終態行、票 state;值 = A6;舊值紅在 rc;missing 用真的 review.sh(預設 reviewer
+    量 rc、終態行、票 state;值 = A6;舊值紅在 rc;missing 用真的 review.sh(預設 reviewer
     替身什麼都不印),fail / 寫不進票用替身 rc —— 量的是 auto-fix 的對應,不是覆核本身。
     只有 complex 的票派覆核(#136),所以夾具標 complex。"""
 
@@ -1938,7 +1940,7 @@ class RepairRoundsEscalateOnlyWhenRed(AutoFixBase):
                 self.assertEqual(self.effort_of(), want)
 
 
-# 新檔的檔名就是 needle,檔內沒有 —— #89 第 1 輪那一種票面(verify_strings 寫了新檔檔名)。
+# 交件新增的一支測試檔(內容與歸因無關,只是讓 apply 有東西套)。
 FILENAME_TOKEN_FILE = """import unittest
 
 
@@ -1946,18 +1948,6 @@ class T(unittest.TestCase):
     def test_ok(self):
         pass
 """
-
-WORKER_NAMES_THE_FILE = """#!/bin/sh
-set -e
-echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
-cd "$AC_WORK"
-mkdir -p work/tests
-cat > work/tests/test_filename-token.py <<'CASE'
-%sCASE
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
-printf '# 第 %%s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
-""" % FILENAME_TOKEN_FILE
-
 
 def new_file_patch(rel, text):
     lines = text.splitlines()
@@ -1967,31 +1957,17 @@ def new_file_patch(rel, text):
 
 
 class MechanicalRedIsAttributed(AutoFixBase):
-    """#90:閘門機械格不合(rc 4)不再報「紅了但沒有歸因」。
+    """#90:閘門硬擋命中(rc 4)不再報「紅了但沒有歸因」。
 
-    🩸 #89 第 1 輪:verify_strings 寫的是新檔檔名(只出現在 diff 檔頭),閘門 preflight 退 4
-    卻不寫狀態檔,auto-fix 讀到的最新一筆是 apply 那一輪(rc 0、紅 0 條),發一頁「紅了但沒有
-    歸因」、去哪看指向 apply —— 主線只能自己挖 worker log。這裡用**真的** apply.sh 與真的
-    gate.sh(同 TheWholeLoop):要問的是 gate 寫下的那一筆 auto-fix 接不接得住。
+    🩸 #89 第 1 輪:閘門 preflight 退 4 卻不寫狀態檔,auto-fix 讀到的最新一筆是 apply 那一輪
+    (rc 0、紅 0 條),發一頁「紅了但沒有歸因」、去哪看指向 apply —— 主線只能自己挖 worker log。
+    這裡用**真的** apply.sh 與真的 gate.sh(同 TheWholeLoop):要問的是 gate 寫下的那一筆
+    auto-fix 接不接得住。#138 起 preflight 只剩 hard_block(D-054 Q4)。
     """
-
-    TICKET_SIDE = "verify_strings: 'filename-token' 不在 patch 內容裡"
 
     def page_of(self, row):
         with open(os.path.join(self.repo, row["page"]), encoding="utf-8") as handle:
             return handle.read()
-
-    def assert_the_page_points_at_the_gate_run(self, row):
-        where = row["where"]
-        self.assertRegex(where, r"^reports/t1/[^/]+/status\.json$")
-        with open(os.path.join(self.repo, where), encoding="utf-8") as handle:
-            self.assertEqual(json.load(handle)["kind"], "gate", "去哪看指向的不是閘門那一輪")
-
-    def assert_ticket_side(self, page):
-        for text in (self.TICKET_SIDE, "歸因到票面(開題者)", "比的是改動內文",
-                     "ticket.py set 1 verify_strings", "ticket.py set 1 state Running",
-                     "gate.sh --branch --ticket 1", "不要轉 Ready"):
-            self.assertIn(text, page)
 
     def protect(self, *globs):
         """config 的 hard_block.paths(D-054 Q3 起硬擋只剩 hard_block);在 ticket_ready 之前寫,隨開票進主線。"""
@@ -2017,59 +1993,13 @@ class MechanicalRedIsAttributed(AutoFixBase):
         self.assertEqual(gate.returncode, 4, gate.stdout + gate.stderr)
         return self.auto_fix()
 
-    def test_the_loop_attributes_a_filename_needle_to_the_ticket(self):
-        """A2:第 1 輪由 auto-fix 起 → worker 交新檔 → 真 apply / 真 gate rc 4 → 一頁歸因到票面。
-        **變異 M2**:auto-fix 不看 note、rc 非零紅 0 條一律走「沒有歸因」→ 這一條紅。
-        **變異 M1**(gate 機械格退出前不寫 status)→ GateWritesStatus 那幾條紅。"""
-        self.set_worker(WORKER_NAMES_THE_FILE)
-        self.ticket_ready(verify_strings=["filename-token"])
-        done = self.auto_fix()
-        out = done.stdout + done.stderr
-        self.assertEqual(done.returncode, 4, out)
-        ticket = self.load_ticket("1")
-        self.assertEqual(ticket["state"], "Blocked")
-        self.assertEqual(ticket["owner"], "main")
-        self.assertEqual(self.git("rev-list", "--count", "main..t1").strip(), "1", out)
-        self.assertEqual(self.git("show", "t1:tests/test_filename-token.py"),
-                         FILENAME_TOKEN_FILE, "分支頭要是套 patch 後那個 commit")
-        rows = self.inbox_rows()
-        self.assertEqual(len(rows), 1, rows)
-        self.assertEqual(rows[0]["state"], "閘門機械格不合")
-        page = self.page_of(rows[0])
-        self.assert_ticket_side(page)
-        self.assert_the_page_points_at_the_gate_run(rows[0])
-        for text in (page, done.stdout, done.stderr):
-            self.assertNotIn("沒有歸因", text)
-        asked = [row for row in self.events() if row["kind"] == "decision.asked"]
-        self.assertTrue(asked and "機械格不合" in (asked[-1].get("note") or ""), asked)
-        self.assertEqual(self.worker_rounds(), ["worker ran round 1"])
-
-    def test_the_opening_path_reads_a_mechanical_gate_status(self):
-        """A4:auto-fix 起跑時最新一輪就是 gate 的機械格 status → 同一頁,不起 worker。
-        **變異 M4**:只改迴圈內那條、開場那條路不認 → 這一條紅(走「沒有歸因」)。"""
-        self.set_worker(WORKER_NEVER)
-        self.ticket_ready(verify_strings=["filename-token"])
-        done = self.applied_and_gated(new_file_patch("tests/test_filename-token.py",
-                                                     FILENAME_TOKEN_FILE))
-        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
-        rows = self.inbox_rows()
-        self.assertEqual(len(rows), 1, rows)
-        self.assertEqual(rows[0]["state"], "閘門機械格不合")
-        page = self.page_of(rows[0])
-        self.assert_ticket_side(page)
-        self.assert_the_page_points_at_the_gate_run(rows[0])
-        self.assertNotIn("沒有歸因", page + done.stdout + done.stderr)
-        self.assertEqual(self.worker_rounds(), [])
-
     def test_a_hard_block_paths_hit_is_attributed_to_the_handin(self):
-        """A3:hard_block 硬擋命中(verify_strings 合格)→ 歸因到交件,不歸票面。硬擋只剩
-        hard_block(D-054 Q3)。
-        四問:量頁面的格名、檔名與兩個歸因字樣;紅 = 一律歸票面;期望值 = 夾具 config 的
-        hard_block.paths。
-        **變異 M3**:所有機械格行一律歸因到票面 → 這一條紅。"""
+        """A3:hard_block 硬擋命中 → 歸因到交件,不歸票面。硬擋只剩 hard_block(D-054 Q3)。
+        量頁面的格名、檔名與歸因字樣;期望值 = 夾具 config 的 hard_block.paths。
+        **變異**:auto-fix 不看 gate 的 note、rc 非零紅 0 條一律走「沒有歸因」→ 這一條紅。"""
         self.set_worker(WORKER_NEVER)
         self.protect("scripts/land.sh")
-        self.ticket_ready(verify_strings=["scope-token"])
+        self.ticket_ready()
         done = self.applied_and_gated(new_file_patch("tests/test_scope.py",
                                                      "# scope-token\n" + FILENAME_TOKEN_FILE),
                                       protected_edit=True)
@@ -2080,24 +2010,6 @@ class MechanicalRedIsAttributed(AutoFixBase):
         self.assertIn("歸因到交件(worker)", page)
         self.assertNotIn("歸因到票面", page)
         self.assertNotIn("沒有歸因", page + done.stdout + done.stderr)
-
-    def test_both_kinds_at_once_are_listed_with_both_attributions(self):
-        """A3:verify_strings 與 hard_block 硬擋同時不合 → 兩組各自列、兩個歸因字樣都在。"""
-        self.set_worker(WORKER_NEVER)
-        self.protect("scripts/land.sh")
-        self.ticket_ready(verify_strings=["filename-token"])
-        done = self.applied_and_gated(new_file_patch("tests/test_filename-token.py",
-                                                     FILENAME_TOKEN_FILE),
-                                      protected_edit=True)
-        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
-        page = self.page_of(self.inbox_rows()[-1])
-        self.assertIn(self.TICKET_SIDE, page)
-        self.assertIn("歸因到票面(開題者)", page)
-        self.assertIn("scripts/land.sh", page)
-        self.assertIn("歸因到交件(worker)", page)
-        ticket_part, _, work_part = page.partition("歸因到交件(worker)")
-        self.assertIn(self.TICKET_SIDE, ticket_part, "票面那一組要列在票面歸因底下")
-        self.assertIn("hard_block", work_part, "交件那一組要列在交件歸因底下")
 
 
 class TheResultBlockAtTheEndOfEvidence(AutoFixBase):
@@ -3652,7 +3564,7 @@ class TheVerifierComesFromTheRoleTable(AutoFixBase):
     表首選是 codex 而 codex 不在 PATH → 啟動前標記那一格、換下一個候選。夾具借
     `TheFirstRoundVerifierRunsAlongside` 那一組(worker 與驗證者同一支替身,看 `AC_ROLE`),
     另把每次被叫的 argv 記下來。**M1**(驗證者照舊用 worker 的 model)→ 驗證者 argv 的
-    `--model` 是 opus,紅。四問:量 argv / agent.start / cost;值 = A1、A2、A4;舊值
+    `--model` 是 opus,紅。量 argv / agent.start / cost;值 = A1、A2、A4;舊值
     (routing.verify)紅在 model;不靠沒設就退回(表真的兩格、首選是 codex)。"""
 
     vcalls = TheFirstRoundVerifierRunsAlongside.vcalls
@@ -3735,7 +3647,7 @@ class BatchFix(AutoFixBase):
                 self.assertEqual(now.get(key), row.get(key), "#%s 的 %s 被寫了" % (ident, key))
 
     def test_the_packet_carries_all_four_parts(self):
-        """A1(a)。四問:量派工文逐字含 ① 兩張票的 subject / objective / acceptance;
+        """A1(a)。量派工文逐字含 ① 兩張票的 subject / objective / acceptance;
         ② 紅榜每條 case / file / excerpt;③ git diff --stat main...land/X 與整批 diff 檔路徑;
         ④ 不得放寬測試 + OBJECTION: test_defect。紅 = 少任一項;
         期望值 = 票檔、status.json、測試自己跑的 git diff --stat。
@@ -3761,7 +3673,7 @@ class BatchFix(AutoFixBase):
     def test_121_the_batch_worker_comes_from_the_role_table(self):
         """#121 A1 / T1 批次:`--batch` 的 worker 照表選第一個可用候選(首選 codex 而 codex 不在
         PATH → 換 fable high);`worker.command` 沒寫 model。**M1**(批次照舊起 worker.command、
-        不換 model)→ argv 沒有 `--model fable`,紅。四問:量 argv / agent.start / cost;值 = A1、A2;
+        不換 model)→ argv 沒有 `--model fable`,紅。量 argv / agent.start / cost;值 = A1、A2;
         舊值紅在 argv;表真的兩格。"""
         argv_log = os.path.join(self.home, "batch-argv.log")
         assert BATCH_WORKER_FIXES.startswith("#!/bin/sh\n")
@@ -3786,7 +3698,7 @@ class BatchFix(AutoFixBase):
         self.assertEqual([(row["model"], row["effort"]) for row in cost], [("fable", "high")])
 
     def test_green_path_commits_one_fix_reviews_it_and_costs_two_rows_on_ticket_one(self):
-        """A2 / A5 / A6 一條龍。四問:量 rc 0、land/X 前進一個 batch commit、review.json.sha = land/X 頭、
+        """A2 / A5 / A6 一條龍。量 rc 0、land/X 前進一個 batch commit、review.json.sha = land/X 頭、
         票 1 cost 多 worker / reviewer 兩列(note 帶 batch、run_id = AC_BATCH_RUN_ID)、票 2 cost 不變、
         兩張票的版本與覆核不動;紅 = 任一格漂;期望值 = 夾具 rev-parse 與票檔。"""
         self.set_worker(BATCH_WORKER_FIXES)
@@ -3810,7 +3722,7 @@ class BatchFix(AutoFixBase):
         self.assertFalse(self.decisions())
 
     def test_a_failed_review_pages_ticket_one_and_returns_non_zero(self):
-        """A7 覆核 fail(e)。四問:量 rc≠0、review.json 不在、一頁 decision ticket=1 內文 #2;
+        """A7 覆核 fail(e)。量 rc≠0、review.json 不在、一頁 decision ticket=1 內文 #2;
         紅 = 寫了 review.json 或沒發頁;期望值 = 命令列的票號。"""
         self.set_worker(BATCH_WORKER_FIXES)
         self.set_reviewer(BATCH_REVIEW_FAIL)
@@ -3821,7 +3733,7 @@ class BatchFix(AutoFixBase):
         self.assert_tickets_kept()
 
     def test_no_patch_is_rc5_with_one_page(self):
-        """A7(g)。四問:量 rc 5、一頁 decision 掛票 1 列整批、land/X 不動、票不動;
+        """A7(g)。量 rc 5、一頁 decision 掛票 1 列整批、land/X 不動、票不動;
         紅 = 照套或沒發頁;期望值 = 單票那一張表的 5。"""
         self.set_worker(WORKER_NEVER)
         done = self.run_batch()
@@ -3831,7 +3743,7 @@ class BatchFix(AutoFixBase):
         self.assert_tickets_kept()
 
     def test_an_objection_stops_with_rc3_and_keeps_patch_and_evidence(self):
-        """A7 反駁。四問:量 rc 3、一頁、patch / EVIDENCE 留在 reports/batch/<stamp>/、land/X 不動、
+        """A7 反駁。量 rc 3、一頁、patch / EVIDENCE 留在 reports/batch/<stamp>/、land/X 不動、
         票的 objections 不動;紅 = 照套或記進票;期望值 = 單票那一張表的 3。"""
         self.set_worker(BATCH_WORKER_OBJECTS)
         done = self.run_batch()
@@ -3845,7 +3757,7 @@ class BatchFix(AutoFixBase):
         self.assert_tickets_kept()
 
     def test_115_a4_a_batch_worker_outside_its_copy_stops_with_rc8(self):
-        """#115 A4:批次 worker 也走同一份守衛。四問:量 rc 8、一頁(掛第一張、列整批)、
+        """#115 A4:批次 worker 也走同一份守衛。量 rc 8、一頁(掛第一張、列整批)、
         land/X 不動、兩張票 Blocked / owner=main;紅 = 批次不收守衛報告(照套);值 = A4。"""
         self.set_worker(BATCH_WORKER_FIXES.replace(
             'cd "$AC_WORK"', 'echo stray > "%s/stray.txt"\ncd "$AC_WORK"' % self.repo))
@@ -3960,7 +3872,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
         self.assertNotIn("guard-violation", self.failed_reasons())
 
     def test_a4_new_deleted_and_modified_files_in_the_main_repo_stop_the_round(self):
-        """四問:量 rc / 票 / 事件 / 頁 / 副本;紅 = 守衛不拍工作樹;值 = A4;真跑 auto-fix + 真 git。"""
+        """量 rc / 票 / 事件 / 頁 / 副本;紅 = 守衛不拍工作樹;值 = A4;真跑 auto-fix + 真 git。"""
         rows = (("新增", 'echo stray > "$REPO/stray.txt"', "stray.txt"),
                 ("刪除", 'rm "$REPO/verify/TAGS.md"', "verify/TAGS.md"),
                 ("修改", 'echo changed >> "$REPO/README"', "README"))
@@ -3973,7 +3885,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
                 self.assertTrue(os.path.isdir(os.path.join(self.fix_dir(), "work")), "副本留著")
 
     def test_a4_a_dirty_file_changed_again_is_caught_by_its_content(self):
-        """**M2**:只比 porcelain(` M` 前後都一樣)→ 不停,紅。四問:量 rc 8;值 = A4 已髒檔。"""
+        """**M2**:只比 porcelain(` M` 前後都一樣)→ 不停,紅。量 rc 8;值 = A4 已髒檔。"""
         self.arm('echo again >> "$REPO/README"')
         self.write("README", "main\n開工前就髒了\n")
         done = self.auto_fix("--no-review")
@@ -4042,7 +3954,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
 
     def test_127_a2_a_land_start_before_the_agent_started_still_counts(self):
         """#127 A2:land.start 在起跑**之前**就在事件檔裡(重疊的形狀),期間只看得到 pass。
-        四問:量 rc 0、沒有 guard.json;紅 = M1(start 只找起跑之後);值 = 票面 A2。"""
+        量 rc 0、沒有 guard.json;紅 = M1(start 只找起跑之後);值 = 票面 A2。"""
         self.arm(SHAPED_LAND.replace("@START@", "")
                  .replace("@PASS@", '--kv stamp=S2 --kv main_before="$OLD"'))
         emitted = self.run_py("scripts/event.py", "emit", "land.start", "--note", "早開跑的 land",
@@ -4051,7 +3963,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
         self.assert_not_stopped(self.auto_fix("--no-review"))
 
     def test_127_a3_a_real_docs_channel_run_is_a_legal_head_move(self):
-        """#127 A3:agent 跑的期間真跑一次 `land.sh docs` ⇒ 不擋。四問:量 rc 0、沒有 guard.json;
+        """#127 A3:agent 跑的期間真跑一次 `land.sh docs` ⇒ 不擋。量 rc 0、沒有 guard.json;
         紅 = M3(docs 通道不帶 stamp);值 = 票面 A3。"""
         self.arm(REAL_DOCS)
         before = self.git("rev-parse", "main").strip()
@@ -4061,7 +3973,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
     def test_127_a3_docs_then_a_ticket_land_end_to_end_both_count(self):
         """#127 A3:先 docs 通道、再一次票 land(首尾相接)⇒ HEAD 不算越界,notes 兩筆各點名 stamp。
         notes 只在有越界時寫得出來,所以另放一個多出來的檔讓 guard.json 落地,再看 HEAD 那一格。
-        四問:量 violations 只有 stray.txt、notes 兩筆;紅 = 只認一段;值 = 票面 A3。"""
+        量 violations 只有 stray.txt、notes 兩筆;紅 = 只認一段;值 = 票面 A3。"""
         self.arm(REAL_DOCS + FAKE_LAND + 'echo stray > "$REPO/stray.txt"')
         self.assert_stopped(self.auto_fix("--no-review"), "stray.txt")
         report = self.guard_report()
@@ -4074,7 +3986,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
 
     def test_127_a4_a_bare_commit_before_a_legal_land_is_named(self):
         """#127 A4:窗內先一個沒有 land 事件的 commit X,再一次合法 land(main_before = X)⇒ 越界,
-        guard.json 點名 X、頁上看得到 X 的前 7 位。四問:量 rc 8 / 票 / 事件 / 頁 / guard.json;
+        guard.json 點名 X、頁上看得到 X 的前 7 位。量 rc 8 / 票 / 事件 / 頁 / guard.json;
         紅 = M2(退回「新 HEAD = pass sha 且舊 HEAD 是祖先」);值 = X 由案例自己在 git 上取。"""
         self.arm('git -C "$REPO" commit -q --allow-empty -m "裸 commit X"\n' + FAKE_LAND)
         old = self.git("rev-parse", "main").strip()
@@ -4090,7 +4002,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
     def test_127_a5_identity_does_not_rest_on_missing_fields(self):
         """#127 A5:(a) start / pass 都沒有 stamp;(b) pass 沒有 main_before;(c) 整個事件檔沒有同
         stamp 的 start;(d) main_before 不是上一段的終點(= 舊 HEAD 的父)⇒ 全部 rc 8。
-        四問:量 rc 8 與 HEAD 那一格;紅 = M4(None 也算配上)只紅 (a);值 = 票面 A5。"""
+        量 rc 8 與 HEAD 那一格;紅 = M4(None 也算配上)只紅 (a);值 = 票面 A5。"""
         start = 'emit land.start --note "同時的落地" --kv stamp=S1'
         rows = (("a", 'emit land.start --note "同時的落地"', '--kv main_before="$OLD"'),
                 ("b", start, "--kv stamp=S1"),
@@ -4120,7 +4032,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
 
     def test_128_a1_main_paths_are_recorded_not_stopped(self):
         """#128 A1:預設前綴(tickets/ docs/ memory/)底下新增 / 修改 / 刪除 / 已髒檔再改 ⇒ 不擋,
-        main_side 列出那個路徑。四問:量 rc / 事件 / 頁 / guard.json;紅 = 前綴不豁免(rc 8)或
+        main_side 列出那個路徑。量 rc / 事件 / 頁 / guard.json;紅 = 前綴不豁免(rc 8)或
         guard.json 不寫;值 = 票面 A1。"""
         rows = (("新增", 'echo new > "$REPO/docs/T128.md"', "docs/T128.md"),
                 ("新增 memory", 'mkdir -p "$REPO/memory/main" && echo x > "$REPO/memory/main/n.md"',
@@ -4141,7 +4053,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
 
     def test_128_a1_a_malformed_guard_main_paths_is_named_and_falls_back(self):
         """#128 A1:guard_main_paths 不是字串 list ⇒ stderr 點名、照缺鍵(預設三前綴)處理。
-        四問:量 stderr 與 rc 0;紅 = 壞值被當 [](docs/ 判 8);值 = 票面 A1。"""
+        量 stderr 與 rc 0;紅 = 壞值被當 [](docs/ 判 8);值 = 票面 A1。"""
         self.arm('echo new > "$REPO/docs/T128.md"', config={"guard_main_paths": "docs/"})
         done = self.auto_fix("--no-review")
         self.assertIn("guard_main_paths 不是字串 list", done.stderr)
@@ -4149,7 +4061,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
 
     def test_128_a2_the_exemption_does_not_spill_over(self):
         """#128 A2:同一輪 docs/ 與 scripts/x.sh ⇒ rc 8,violations 只列 scripts/x.sh、main_side 照列。
-        四問:量 rc 8 一整組與兩格;紅 = 整輪因前綴豁免;值 = 票面 A2。"""
+        量 rc 8 一整組與兩格;紅 = 整輪因前綴豁免;值 = 票面 A2。"""
         self.arm('echo new > "$REPO/docs/T128.md"\necho x > "$REPO/scripts/x.sh"')
         self.assert_stopped(self.auto_fix("--no-review"), "scripts/x.sh")
         report = self.guard_report()
@@ -4173,7 +4085,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
 
     def test_128_a3_real_ticket_writes_on_another_ticket_are_control_plane(self):
         """#128 A3:agent 期間真跑 `ticket.py set 2 state Blocked` 與寫一筆已處置的 objection ⇒
-        不擋、沒有 guard.json(控制面豁免早已排除)。四問:量 rc 0、guard.json 不存在、票 2 真被改了;
+        不擋、沒有 guard.json(控制面豁免早已排除)。量 rc 0、guard.json 不存在、票 2 真被改了;
         紅 = 控制面豁免拿掉;值 = 票面 A3。"""
         self.make_ticket("2")
         objection = json.dumps([{"category": "ticket-wrong", "owner": "main", "body": "對不上",
@@ -4193,7 +4105,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
 
     def test_128_a4_a_docs_land_whose_push_failed_is_a_legal_segment(self):
         """#128 A4:agent 期間真跑 `land.sh docs`,commit 成功、origin 的 pre-receive 拒收 ⇒ 不擋,rc 0;
-        guard.json 的 notes 有那一段的 stamp 與「push 失敗」。四問:量 docs 通道 rc 1、rc 0、notes;
+        guard.json 的 notes 有那一段的 stamp 與「push 失敗」。量 docs 通道 rc 1、rc 0、notes;
         紅 = M4(push 失敗出口不帶 stage)與只認 land.pass;值 = 票面 A4、stamp 取自事件檔。"""
         self.arm('echo "docs 通道" > "$REPO/docs/T128.md"\n'
                  'AC_ROOT="$REPO" sh "$REPO/scripts/land.sh" docs "docs: #128 推不上去" docs/T128.md '
@@ -4215,7 +4127,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
 
     def test_128_a4_other_land_fails_are_not_a_segment(self):
         """#128 A4:land.fail 不是 stage=push(閘門紅)、即使 sha / main_before 齊全 ⇒ 不算一段,裸 commit
-        rc 8。四問:量 rc 8 與 HEAD;紅 = **M3**(land.fail 一律算一段);值 = 票面 A4 末句。"""
+        rc 8。量 rc 8 與 HEAD;紅 = **M3**(land.fail 一律算一段);值 = 票面 A4 末句。"""
         self.arm('emit land.start --note "閘門紅" --kv stamp=S1\n'
                  'OLD=$(git -C "$REPO" rev-parse HEAD)\n'
                  'git -C "$REPO" commit -q --allow-empty -m "裸 commit"\n'
@@ -4224,11 +4136,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
         self.assert_stopped(self.auto_fix("--no-review"), "HEAD")
 
 
-# 上一輪閘門的 lint 擋了一條(形狀抄 `verify-case.py lint`;#126 T3 手寫同形 status.json)。
-LINT_RED = """verify-case lint: verify/example/test_ticket_1.py:1 F1 模組沒有 docstring —— 要有 ## 驗收表
-verify-case lint: 1 個檔,驗收編號 (一條都沒宣告)
-verify-case lint: **不過**(1 條)
-"""
+# 上一輪閘門的缺口那幾行(形狀抄 gate.sh 的 verify_case;#126 T3 經 status.py done 寫同形 status.json)。
 NO_CASES = ("gate: 這張票沒有驗證者案例(#1 的 verify.files 是空的)—— 那是缺口,不是綠。\n")
 A_BASELINE = {"files": ["verify/example/test_ticket_1.py"], "tags": ["example"], "run": "",
               "notes": "", "baseline": {"stage": "red", "ok": True, "why": "",
@@ -4237,7 +4145,7 @@ A_BASELINE = {"files": ["verify/example/test_ticket_1.py"], "tags": ["example"],
 
 class TheMissingCasesSendAVerifierEveryRound(AutoFixBase):
     """#126 A4–A7:needs_verifier=true 而 verify.baseline 空 ⇒ 第 2 輪起接著跑也先派驗證者;
-    上一輪紅榜全是 kind=LINT ⇒ 這一輪只派驗證者、不派 worker。期望值(字面「案例還沒交,
+    上一輪紅榜只有缺口列(kind=GAP)⇒ 這一輪只派驗證者、不派 worker。期望值(字面「案例還沒交,
     第 2 輪先派驗證者」、round "2"、派工文標題)抄票面,不從 auto-fix.sh 讀回來。"""
 
     def vcalls(self):
@@ -4267,16 +4175,16 @@ class TheMissingCasesSendAVerifierEveryRound(AutoFixBase):
         self.git("commit", "-q", "-m", "開票 #1")
         self.git("push", "-q", "origin", "main")
 
-    def lint_status(self, lint_text, *extra, log_text=None):
-        """上一輪(第 1 輪)gate 紅的狀態檔:紅榜由 `--lint-log` 來(可再加一份 unittest log)。"""
-        lint = self.write("round.log.lint", lint_text, where=self.home)
+    def gap_status(self, log_text=None):
+        """上一輪(第 1 輪)gate 紅的狀態檔:紅榜的缺口列由 `--no-cases-log` 來(可再加一份 unittest log)。"""
+        gap = self.write("round.log.no-cases", NO_CASES, where=self.home)
         base = self.git("rev-parse", "main").strip()
         run_id = "20260921-100000-1"
         self.run_py("scripts/status.py", "start", "--ticket", "1", "--kind", "gate",
                     "--run-id", run_id, "--base-sha", base, "--round", "1",
                     "--worktree", self.repo)
         args = ["done", "--ticket", "1", "--kind", "gate", "--run-id", run_id, "--rc", "1",
-                "--lint-log", lint, "--lint-root", self.repo] + list(extra)
+                "--no-cases-log", gap]
         if log_text is not None:
             args += ["--log", self.write("round.log", log_text, where=self.home)]
         done = self.run_py("scripts/status.py", *args)
@@ -4333,15 +4241,16 @@ class TheMissingCasesSendAVerifierEveryRound(AutoFixBase):
         self.assertEqual(self.starts("verifier"), [], done.stdout + done.stderr)
         self.assertIn("D-028", done.stderr)
 
-    # --------------------------------------------- A5:全 LINT 那一輪只派驗證者
+    # --------------------------------------------- A5:只有缺口列那一輪只派驗證者
 
-    def test_a5_an_all_lint_round_sends_only_the_verifier(self):
+    def test_a5_a_gap_only_round_sends_only_the_verifier(self):
         """A5 baseline 空:沒有 worker 的 agent.start、恰一個驗證者、派工文是一般驗證者那一份。
 
-        **變異 M3**:全 LINT 那一輪照樣起 worker(拿掉 round_once 的 lint_round 分支)→ 紅。
+        **變異 M3**:只有缺口列那一輪照樣起 worker(拿掉 round_once 的 gap_round 分支)→ 紅。
         """
-        self.arm(needs_verifier=True, interface_fixed=True)
-        self.lint_status(LINT_RED)
+        self.arm(needs_verifier=True, interface_fixed=True,
+                 verify={"files": [], "tags": [], "run": "", "notes": ""})
+        self.gap_status()
         done = self.auto_fix("--no-review")
         said = done.stdout + done.stderr
         self.assertEqual(self.starts("worker"), [], said)
@@ -4350,32 +4259,32 @@ class TheMissingCasesSendAVerifierEveryRound(AutoFixBase):
         packet = self.packet("dispatch-verifier-round2.md")
         self.assertIn("# 派工:驗證者 —— #1 第 2 輪", packet)
         self.assertNotIn("這一輪多的一件事:test_defect", packet)
-        self.assertIn("verify-case-lint:verify/example/test_ticket_1.py", packet)
+        self.assertIn("verify-case:(no-cases)", packet)
         # A7:照樣算一輪 —— attempt 照發。
         attempts = [str(row.get("attempt")) for row in self.events()
                     if row["kind"] == "ticket.attempt.start"]
         self.assertIn("2", attempts, said)
 
-    def test_a5_an_all_lint_round_with_a_baseline_uses_the_test_defect_packet(self):
-        """A5 baseline 非空:走 test_defect 那條路的派工文,紅榜段列出 LINT 列(--dry-run 只產派工文)。"""
+    def test_a5_a_gap_only_round_with_a_baseline_uses_the_test_defect_packet(self):
+        """A5 baseline 非空:走 test_defect 那條路的派工文,紅榜段列出缺口列(--dry-run 只產派工文)。"""
         self.arm(needs_verifier=True, interface_fixed=True, verify=A_BASELINE)
-        self.lint_status(LINT_RED)
+        self.gap_status()
         done = self.auto_fix("--dry-run")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.starts("verifier") + self.starts("worker"), [])
         packet = self.packet("dispatch-verifier-round2.md")
         self.assertIn("這一輪多的一件事:test_defect", packet)
         red = packet.split("## 紅榜", 1)[1]
-        self.assertIn("LINT verify-case-lint:verify/example/test_ticket_1.py", red)
+        self.assertIn("GAP verify-case:(no-cases)", red)
 
-    def test_a_lint_dry_run_keeps_the_round_copies(self):
+    def test_a_gap_dry_run_keeps_the_round_copies(self):
         """#96:只派驗證者那一輪的 `--dry-run` 也走 dispatch_verifier —— 已經在的第 2 輪
         worker 副本與驗證者副本原封不動(以前前者被 `shed_copies`、後者被 `rm -rf`)。
 
         **變異 m2**:拿掉 dispatch_verifier 的 dry-run 守衛 → 驗證者副本那一格紅。
         """
         self.arm(needs_verifier=True, interface_fixed=True, verify=A_BASELINE)
-        self.lint_status(LINT_RED)
+        self.gap_status()
         kept = {
             os.path.join(self.home, "repo-wt", "fix-t1", "round2", "work", "marker"): "w\n",
             os.path.join(self.home, "repo-wt", "verify-t1", "round2", "marker"): "v\n",
@@ -4390,26 +4299,16 @@ class TheMissingCasesSendAVerifierEveryRound(AutoFixBase):
             with open(path, encoding="utf-8") as handle:
                 self.assertEqual(handle.read(), text, path)
 
-    def test_a5_a_no_cases_gap_round_sends_only_the_verifier(self):
-        """A2 缺口列與 lint 列同走 A5:上一輪只有 (no-cases) 那一列 → 這一輪只起驗證者。"""
-        self.arm(needs_verifier=True, interface_fixed=True,
-                 verify={"files": [], "tags": [], "run": "", "notes": ""})
-        self.lint_status(NO_CASES, "--lint-no-cases")
-        done = self.auto_fix("--no-review")
-        said = done.stdout + done.stderr
-        self.assertEqual(self.starts("worker"), [], said)
-        self.assertEqual(len(self.starts("verifier")), 1, said)
-
-    def test_a5_a_mixed_round_marks_the_lint_rows_in_the_worker_packet(self):
-        """A5 混合(LINT + FAIL):worker 照常派,它的派工文把 LINT 列標成驗證者的。"""
+    def test_a5_a_mixed_round_marks_the_gap_row_in_the_worker_packet(self):
+        """A5 混合(GAP + FAIL):worker 照常派,它的派工文把缺口列標成驗證者的。"""
         self.arm(needs_verifier=False)
-        self.lint_status(LINT_RED, log_text=RED_LOG)
+        self.gap_status(log_text=RED_LOG)
         done = self.auto_fix("--dry-run")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         packet = self.packet("dispatch-round2.md")
-        lint = packet.split("### LINT verify-case-lint:verify/example/test_ticket_1.py", 1)
-        self.assertEqual(len(lint), 2, packet)
-        self.assertIn("驗證者的,你不修、不寫 verify/**", lint[1].split("###", 1)[0])
+        gap = packet.split("### GAP verify-case:(no-cases)", 1)
+        self.assertEqual(len(gap), 2, packet)
+        self.assertIn("驗證者的,你不修、不寫 verify/**", gap[1].split("###", 1)[0])
         fail = packet.split("### FAIL test_thing.T.test_thing", 1)
         self.assertEqual(len(fail), 2, packet)
         self.assertNotIn("驗證者的", fail[1].split("###", 1)[0])
@@ -4452,7 +4351,7 @@ WITH_PLAN = '"verify": {"files": %s},' % json.dumps(PLAN_FILES)
 
 class AnEmptyPatchVerifyIsNoChange(AutoFixBase):
     """#130:驗證者交 0 byte 的 patch-verify = 這輪沒改案例。以前 round_receive 照樣把它當第二個
-    patch 給 apply(`headers` 對空檔 rc=3),整輪停在「套不上」;lint_round 則停在「交了空的
+    patch 給 apply(`headers` 對空檔 rc=3),整輪停在「套不上」;只派驗證者那一輪則停在「交了空的
     patch-verify」。閘門用替身 `true`(綠):這一組量的是收件,不是閘門。"""
 
     def arm(self, worker_patch="0", worker_defect="0", vpatch="empty", plan=WITH_PLAN):
@@ -4484,23 +4383,22 @@ class AnEmptyPatchVerifyIsNoChange(AutoFixBase):
         self.assertTrue(rows)
         self.assertEqual(rows[-1].get("disposition"), "fixed", rows)
 
-    def lint_round_armed(self, **arm):
-        """上一輪(第 1 輪)紅榜全是 LINT(#98 的形狀),分支 t1 已經在(apply 開的)。"""
+    def gap_round_armed(self, **arm):
+        """上一輪(第 1 輪)紅榜只有缺口列(kind=GAP),分支 t1 已經在(apply 開的)。"""
         self.arm(**arm)
         self.ticket_ready(needs_verifier=True, interface_fixed=True, retry_limit=1,
                           verify={"files": [], "tags": [], "run": "", "notes": ""})
         applied = self.run_sh("scripts/apply.sh", "1",
                               self.write("p1.diff", RED_CASE, where=self.home))
         self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
-        lint = self.write("round.log.lint", LINT_RED, where=self.home)
+        gap = self.write("round.log.no-cases", NO_CASES, where=self.home)
         base = self.git("rev-parse", "main").strip()
         run_id = "20260921-100000-1"
         self.run_py("scripts/status.py", "start", "--ticket", "1", "--kind", "gate",
                     "--run-id", run_id, "--base-sha", base, "--round", "1",
                     "--worktree", self.repo)
         done = self.run_py("scripts/status.py", "done", "--ticket", "1", "--kind", "gate",
-                           "--run-id", run_id, "--rc", "1", "--lint-log", lint,
-                           "--lint-root", self.repo)
+                           "--run-id", run_id, "--rc", "1", "--no-cases-log", gap)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
     # ------------------------------------------- A1 / A2:有 worker 的 patch 就只套它
@@ -4508,7 +4406,7 @@ class AnEmptyPatchVerifyIsNoChange(AutoFixBase):
     def test_a1_a_test_defect_with_a_worker_patch_applies_only_the_worker_patch(self):
         """T1。**變異 M1**:拿掉 VSLOT 的 0 byte 判斷 → 空檔照樣進 apply → rc=3「套不上」→ 紅。
 
-        四問:擋的是 #98 第 2 輪的 rc=3;期望值來自替身寫的檔名與 PLAN_FILES;
+        擋的是 #98 第 2 輪的 rc=3;期望值來自替身寫的檔名與 PLAN_FILES;
         M1 關得掉;不靠 auto-fix 印的路徑推期望值。"""
         self.arm(worker_patch="1", worker_defect="1")
         self.ticket_ready()
@@ -4523,7 +4421,7 @@ class AnEmptyPatchVerifyIsNoChange(AutoFixBase):
     def test_a2_a_parallel_verifier_with_nothing_changed_lets_the_worker_patch_in(self):
         """T2:interface_fixed=true 的平行驗證者交 0 byte(round_receive 帶 VPATCH)。
 
-        四問:擋的是平行那一位把空檔塞進第二個槽;期望值同 T1;**變異 M1** 關得掉;
+        擋的是平行那一位把空檔塞進第二個槽;期望值同 T1;**變異 M1** 關得掉;
         閘門替身綠,不涉 #126 沒有案例那條路。"""
         self.arm(worker_patch="1")
         self.ticket_ready(needs_verifier=True, interface_fixed=True)
@@ -4535,12 +4433,12 @@ class AnEmptyPatchVerifyIsNoChange(AutoFixBase):
 
     # ------------------------------------- A3:驗證者是唯一交件者 → 只併計畫、分支不動
 
-    def test_a3a_a_lint_round_with_only_a_plan_merges_it_and_reruns_the_gate(self):
+    def test_a3a_a_gap_round_with_only_a_plan_merges_it_and_reruns_the_gate(self):
         """T3 (a)。**變異 M3**:只併計畫那條路照樣叫 apply.sh 套 PATCH_OUT → rc=3 → 紅。
 
-        四問:擋的是 lint_round 停在「空的 patch-verify」;期望值是 PLAN_FILES 與分支頭前後;
+        擋的是只派驗證者那一輪停在「空的 patch-verify」;期望值是 PLAN_FILES 與分支頭前後;
         M3 關得掉;閘門替身綠 → InReview 是 auto-fix 綠的那條路本來的樣子。"""
-        self.lint_round_armed()
+        self.gap_round_armed()
         before = self.head()
         done = self.auto_fix("--no-review")
         said = done.stdout + done.stderr
@@ -4555,7 +4453,7 @@ class AnEmptyPatchVerifyIsNoChange(AutoFixBase):
     def test_a3b_a_test_defect_without_a_worker_patch_merges_only_the_plan(self):
         """T3 (b):worker 只交 test_defect 反駁,驗證者 0 byte + verify。**變異 M3** 同 (a)。
 
-        四問:同 (a),多一格 disposition=fixed(該筆反駁有人收)。"""
+        同 (a),多一格 disposition=fixed(該筆反駁有人收)。"""
         self.arm(worker_defect="1")
         self.ticket_ready()
         self.first_round()
@@ -4587,9 +4485,9 @@ class AnEmptyPatchVerifyIsNoChange(AutoFixBase):
 
     # ------------------------------------------------------ A5:真的什麼都沒交仍停
 
-    def test_a5_an_empty_patch_verify_without_a_plan_still_blocks_the_lint_round(self):
+    def test_a5_an_empty_patch_verify_without_a_plan_still_blocks_the_gap_round(self):
         """T5 第一案。**變異 M5**:verifier_plan_given 恆真 → 走只併計畫 → 這一條紅。"""
-        self.lint_round_armed(plan="")
+        self.gap_round_armed(plan="")
         before = self.head()
         done = self.auto_fix("--no-review")
         said = done.stdout + done.stderr
@@ -4602,7 +4500,7 @@ class AnEmptyPatchVerifyIsNoChange(AutoFixBase):
 
     def test_a5_a_patch_verify_with_text_but_no_header_is_still_handed_to_apply(self):
         """T5 第二案。**變異 M2**:判斷改成「沒有檔頭就略過」→ 不再「套不上」→ 這一條紅。"""
-        self.lint_round_armed(vpatch="text")
+        self.gap_round_armed(vpatch="text")
         done = self.auto_fix("--no-review")
         said = done.stdout + done.stderr
         self.assertIn("套不上(apply rc=3)", said)
