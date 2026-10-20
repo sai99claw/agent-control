@@ -11,11 +11,11 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 | Ready | 可操作的驗收、依賴達成、`base_sha` |
 | InReview | 票分支上的 commit、測試輸出逐字、變異驗紅、回報標明實測/推論 |
 | IntegrationQueued | 審查通過、局部閘門綠、無未解阻擋 |
-| Done | **同一份必要條件,`close` 與 `set state Done` 共用**(D-014):① `scripts/ticket.py verify` 證明改動真的在主線:`close --landed` 蓋的 `landed_sha` 在主線歷史裡(#137);② 有回歸證據(`test_evidence` 或 `verify.baseline`)——**或**票上有誠實的 `verify_waiver{by,reason}`(#8)且 review 記的 sha 真的在主線歷史裡(`git merge-base --is-ancestor`,不是逐字比對分支的頭,#15);③ **complex 的票**要有一格 `review.verdict` 通過(只有 complex 做完後覆核;沒標 = simple,不要 review;verdict 不綁任何版本,#136);④ `objections[]` 裡沒有未處置的阻擋項 |
+| Done | **同一份必要條件,`close` 與 `set state Done` 共用**(D-014):① `scripts/ticket.py verify` 證明改動真的在主線:`close --landed` 蓋的 `landed_sha` 在主線歷史裡(#137);② **complex 的票**要有一格 `review.verdict` 通過(只有 complex 做完後覆核;沒標 = simple,不要 review;verdict 不綁任何版本,#136);③ `objections[]` 裡沒有未處置的阻擋項。回歸證據不查第二次(D-054 Q4,#139):閘門綠才落得了地 |
 
 **exit code 0 不等於 Done;worker 說做完不等於 Done;閘門綠是對某個 `base_sha` 說的,基準走遠就過期。**
 
-**已落地的票關不掉(#15)**:落地之後記一筆 `verify_waiver`、或處置一筆 `objections`,都是**收尾**,不是重審票面 —— review 不綁票版本(#136),改哪一格都不讓它過期。落地那一手如果手上就是合併出來的 sha,`ticket.py close <n> --landed <merge sha>` 一步把它蓋進 `review.sha`(先確認在主線歷史裡)再走關票流程,不必先 `set review` 再 `close` 兩步。
+**已落地的票關不掉(#15)**:落地之後處置一筆 `objections`,是**收尾**,不是重審票面 —— review 不綁票版本(#136),改哪一格都不讓它過期。落地那一手如果手上就是合併出來的 sha,`ticket.py close <n> --landed <merge sha>` 一步把它蓋進 `review.sha`(先確認在主線歷史裡)再走關票流程,不必先 `set review` 再 `close` 兩步。
 
 ## 一票一分支一 worktree(D-054 Q9,#144)
 - **worker 在自己的 worktree / 分支 commit**:`auto-fix.sh` 派工前建好票分支(票的 `branch` 欄,沒寫 = `t<票號>`)
@@ -52,13 +52,10 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 3. 任一支的 `base_sha` 有問題 → 拒絕,分兩種話講:**主線根本沒有那個 sha**(副本是拿錯的 ref 做的,回去查副本從哪來)vs **有但不是主線祖先**(主線走遠了,rebase 後重跑閘門)。兩者 `merge-base` 都非零,下一步差很多。
 4. 硬擋:命中 `hard_block`(`paths` 的檔,或 tests/** verify/** 新增行命中 `patterns`)→ 拒絕(點名檔與格)。
    沒有寫入範圍(D-054 Q2),`hard_block` 是唯一的硬擋。
-5. **票的 `verify.files` 要真的在分支上**(#587 那把尺,D-015):票說「案例在這幾個檔」而分支上沒有,
-   代表驗證者的交付沒有跟著進來 —— 而 `verify.tags` 照樣會被閘門呼叫、照樣一個案例都選不到、照樣印一行綠。
-   缺了 **rc=4**(與其他拒收的 2 分開:呼叫者要分得出「票面沒填好」與「分支沒準備好」)。
-6. **覆核與反駁是硬閘門**(D-014):complex 的票要有一格 `review`、`verdict` 通過(simple / 沒標的票不要 review;verdict 不綁票版本或分支頭,#136);`objections[]` 裡有未處置的阻擋項 → 拒絕。任一不成立都在**開 worktree、跑九分鐘全套之前**就退回。
-7. **分支新增的路徑撞到主線工作樹的未追蹤檔** → 拒絕(#69,rc=2):判準是 git 自己的 —— `git diff --name-only --no-renames --diff-filter=A <main>...<branch>` 的路徑,丟給 `git ls-files --others --exclude-standard` 有輸出(未追蹤且未被 ignore);不擋的話 ff-only 會在九分鐘全套之後被 git 拒絕。
+5. **覆核與反駁是硬閘門**(D-014):complex 的票要有一格 `review`、`verdict` 通過(simple / 沒標的票不要 review;verdict 不綁票版本或分支頭,#136);`objections[]` 裡有未處置的阻擋項 → 拒絕。任一不成立都在**開 worktree、跑九分鐘全套之前**就退回。
+6. **分支新增的路徑撞到主線工作樹的未追蹤檔** → 拒絕(#69,rc=2):判準是 git 自己的 —— `git diff --name-only --no-renames --diff-filter=A <main>...<branch>` 的路徑,丟給 `git ls-files --others --exclude-standard` 有輸出(未追蹤且未被 ignore);不擋的話 ff-only 會在九分鐘全套之後被 git 拒絕。
    下一步:逐一點名撞到的路徑,由人自己移走或 commit 進主線再重跑 land —— land **不替人搬、不刪**(那是使用者的檔)。
-8. 依序合到 `land/<ts>` worktree,跑全套(`scripts/gate.sh --full`),綠才 `--ff-only` 推主線;紅則主線不動、worktree 留著給人看。
+7. 依序合到 `land/<ts>` worktree,跑全套(`scripts/gate.sh --full`),綠才 `--ff-only` 推主線;紅則主線不動、worktree 留著給人看。
    **合併結果的 code-map 索引**(#129,判準同 apply 的 `code_map_regen`):合完、跑全套之前 `repo-map.py --root <worktree> check`
    非零 → build,只把 `code-map/index.json`、`INDEX.md` 收成 land 分支上一個 commit(首行 `regen: repo-map build (land <stamp>)`,
    印「合併後 code-map 索引過期」),跟著同一次 ff-only 進主線;`land.pass` 的 `main_before` 仍是合併前的主線頭。
@@ -276,10 +273,9 @@ worker 同一輪**也 commit 了**(#107,專案 #751 事故;#144 起):驗證者�
 | 遲到的回報拿 `attempt` / `state_version` 比對後拒收;寫入走同一把鎖 | **已實作**(SCHEMA 以前宣稱過但沒有實作) | `ticket.py set --expect-attempt / --expect-state-version`;`.ticket.lock` |
 | 三輪耗盡 → 票轉 Blocked 並指派主線 | **已實作** | `ticket.py round <n> <r> --red` |
 | **建分支、worker 自己 commit、收件** | **已實作**(2026-09-21,D-015;#144 改成分支 commit,D-054 Q9) | `scripts/auto-fix.sh`(建 worktree、判交件);`scripts/apply.sh <票號> [<patch-verify>]`(收件) |
-| **關票** | 由 land 試(下一列),主線補齊缺格後手跑同一句。誠實的 `verify_waiver` + review sha 在主線歷史裡可免回歸證據那格;review 不綁版本,改票面不讓它過期(#136) | `scripts/ticket.py close <n> [--landed <merge sha>]` |
+| **關票** | 由 land 試(下一列),主線補齊缺格後手跑同一句。不查回歸證據(D-054 Q4);review 不綁版本,改票面不讓它過期(#136) | `scripts/ticket.py close <n> [--landed <merge sha>]` |
 | **land 試關**:push 成功後對批次每張票試 `ticket.py close <n> --landed <sha>`;關得掉發一頁 done 簡報;關不掉照舊印「已合併、尚未關票」+ inbox 一頁 decision,what 是 close 的理由原文;不加 `--force`,rc 不變 | **已實作**(2026-09-26,#43,D-025 ①) | `scripts/land.sh` 第 6 步之後 |
 | **兩種頁**:`inbox.py post` 只收 `--kind decision / done`(其餘 rc=2、什麼都不寫);腳本接著會做的終態(閘門綠 / 可歸因的紅 / 覆核通過 / 覆核沒交件)只寫事件;done 簡報由 land.sh 關票後 `inbox.py done` 發,不自動 ack。取代 #43 C4 的「腳本 ack」:`ack --by / --state` 留著收舊頁 | **已實作**(2026-09-26,#50,D-032) | `scripts/inbox.py`(`INBOX_KINDS`、`done`);`auto-fix.sh`、`gate.sh`、`review.sh`、`land.sh` |
-| land 前檢查 `verify.files` 都在分支上 | **已實作**(2026-09-21,D-015) | `scripts/land.sh` 第 5 步,缺了 rc=4 |
 | 用 headless `claude -p` **自動起新 worker**(三輪上限) | **已實作**(2026-09-22;gate / 單票 land 預設開,`--no-auto-fix` 關) | `scripts/auto-fix.sh <票號>`;`gate.sh`、`land.sh` |
 | **第 1 輪自動**:票 Ready 且沒有狀態檔 → 起第 1 輪 worker(發 `ticket.attempt.start`、轉 Running),apply → gate → InReview → review.sh 與第 2 輪起同一段;非 Ready 指名 state 停下 | **已實作**(2026-09-26,#40,D-025 C1) | `scripts/auto-fix.sh <票號>`(`round_once 1`);只看派工文 `--dry-run --round 1`;`--dry-run` 碰到已經在的 `fix-t<n>/round<r>` / `verify-t<n>/round<r>` 原封不動(#96) |
 | **第 1 輪驗證者自動**(#126 起**任一輪**,不只第 1 輪):票 `needs_verifier` 是 JSON `true` 且 `verify.baseline` 空(案例還沒交,D-018)→ 任一輪都先派驗證者(含從舊狀態檔接著跑的第 2 輪以後,stdout「案例還沒交,第 N 輪先派驗證者」);`interface_fixed=true` 時派 worker **之前**起背景驗證者(副本 = 票的 `base_sha`,派工文 = `rules.py pack verifier` + `templates/dispatch-verifier.md` 填好),worker 回來後才收;兩份 patch 一起 `apply.sh`、閘門量套了兩份的樹;沒交件 → worker 的 patch 先收進 reports、Blocked + decision 頁;`false` / 缺 → 不派(缺的 stderr 說一聲) | **已實作**(#51,D-032 ③) | `scripts/auto-fix.sh`(`start_verifier_bg` / `wait_verifier`);`--dry-run --round 1` 印兩份派工文路徑 |
@@ -290,7 +286,7 @@ worker 同一輪**也 commit 了**(#107,專案 #751 事故;#144 起):驗證者�
 | 一個既有專案**接上這一套** | **已實作**(步驟 + 腳本;實際遷移還沒做) | `docs/TODO.md` §0;`scripts/sync-to-project.sh` 同步到專案的 `scripts/control/` 並印出接點 |
 | **驗證者只證紅**:`verify-case.py red <n> --candidate <樹>`,四類紅分開數,`red_lines` 給覆核看 | **已落地**(D-020,#26) | `scripts/verify-case.py red` 只印 `<out-dir>/baseline-red.json` → 驗證者抄進 result 的 `baseline` → `apply.sh --evidence-verifier` 併進票的 `verify.baseline{stage:"red"}` |
 | **閘門接線**:回歸層之後只跑 `check`(不先驗案例的格式,D-054 Q4),`stage` 由 `red` 升成 `check`,紅榜收進 `status.json` | **已落地**(D-020,#27) | `scripts/gate.sh --ticket <n>`;`ticket.py close` 只認 `stage=="check"` |
-| **閘門只跑案例;缺案例 = 缺口**:票宣告了 verify 卻沒有案例(也沒有 `verify_waiver`、不是 `needs_verifier=false`)→ 閘門 rc 3,紅榜恰一列 `kind=GAP`、`case=verify-case:(no-cases)` 進 `status.json` 的 `failures[]`,**由驗證者補**(D-014);上一輪紅榜只有缺口列 → auto-fix 這一輪只派驗證者、不派 worker(那一輪照樣算一輪),混合時 worker 派工文把那一列標成驗證者的 | **已實作**(#126;#138 起不經案例格式檢查) | `scripts/gate.sh`(`CASES_ARGS`)→ `scripts/status.py done --no-cases-log`(`no_cases_row`);`scripts/auto-fix.sh`(`gap_round`) |
+| **閘門只跑案例;缺案例 = 缺口**:票宣告了 verify 卻沒有案例(也不是 `needs_verifier=false`)→ 閘門 rc 3,紅榜恰一列 `kind=GAP`、`case=verify-case:(no-cases)` 進 `status.json` 的 `failures[]`,**由驗證者補**(D-014);上一輪紅榜只有缺口列 → auto-fix 這一輪只派驗證者、不派 worker(那一輪照樣算一輪),混合時 worker 派工文把那一列標成驗證者的 | **已實作**(#126;#138 起不經案例格式檢查) | `scripts/gate.sh`(`CASES_ARGS`)→ `scripts/status.py done --no-cases-log`(`no_cases_row`);`scripts/auto-fix.sh`(`gap_round`) |
 | `land.sh` 那一側自己判 flake | **未實作,而且是刻意的** —— flake 判定在 `gate.sh`(單票的那一條路) | `scripts/gate.sh` 的 `flake_rerun` |
 | `land.sh` 一批 N≥2 張全套紅 | **已實作**(#109,D-H51 ②)—— 不歸責:先 `auto-fix.sh --batch` 整批修、每輪重跑全套,最多 `batch_fix.rounds`(預設 2)輪;仍紅才用紅榜檔 ↔ 各票 `verify.files` / 分支改動檔機械地找嫌疑票,恰部分命中才踢、其餘重 land 一次(`AC_LAND_DEPTH`);對不到或全中就停給主線 | `scripts/land.sh` 的 `batch_fix` |
 
@@ -302,12 +298,9 @@ worker 同一輪**也 commit 了**(#107,專案 #751 事故;#144 起):驗證者�
 
 `--ref` / `--candidate` 三種寫法都解得開:**worktree 路徑、分支名、sha**;同名時路徑優先(舊的叫法一律傳路徑)。以前只當路徑用,於是 `--candidate t20` 去找 `$PWD/t20`,印「candidate 裡找不到這幾個案例檔」,而檔就在 t20 上(#20)。
 
-**量不到 ≠ 驗紅沒過**:candidate 解不開、案例檔不在 candidate 上、ref 的歷史裡已經有 candidate —— 這三種是「這一趟沒量到」,rc=2、**票一個字都不改**、印下一步。只有真的兩邊都跑完才寫 `verify.baseline`。舊版把量不到也寫成 `ok: false`,`ticket.py close` 從此擋著那張票,而票面上看不出那一格說的是哪一件事。
+**量不到 ≠ 驗紅沒過**:candidate 解不開、案例檔不在 candidate 上、ref 的歷史裡已經有 candidate —— 這三種是「這一趟沒量到」,rc=2、**票一個字都不改**、印下一步。只有真的兩邊都跑完才寫 `verify.baseline`。舊版把量不到也寫成 `ok: false`,票面上看不出那一格說的是哪一件事。
 
 **新標籤一票一個片段檔** `verify/TAGS.d/<票號>.md`,`scripts/verify.py` 直接認它,`scripts/verify-case.py tags-merge` 再折進 `verify/TAGS.md`。理由:所有票都往同一份登記檔的尾巴附加,等於每張票都要等前一張落地(D-012 認過 TAGS 是最常見的衝突點);一票一個檔就不會撞,序列化的只剩合併那一步。
-
-land 前檢查 `verify.files` 都在分支上(#587 那把尺)**已經實作**:缺了 rc=4,而且是在
-開 worktree、跑九分鐘全套**之前**就退回(`scripts/land.sh` 第 5 步)。
 
 同一組標籤在同一輪裡只跑一次:`scripts/verify.py` 看 `AC_TICKET` + `AC_RUN_ID`,把輸出與 rc
 存成 `reports/t<n>/<run_id>/verify-<雜湊>.log`,雜湊含**標籤 + 這棵樹的 HEAD sha**。
