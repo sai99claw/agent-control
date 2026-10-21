@@ -333,9 +333,9 @@ block() {   # $1 = 為什麼;票轉 Blocked、指派主線
 # EVIDENCE 尾端那一塊 `result`(D-017,#20)。**只讀 EVIDENCE,不改它。**
 #
 # 抽出來的落在 `reports/t<票號>/<run_id>/` 裡,與那一輪的 `status.json` 同目錄 ——
-# 要讀它的人已經在那個目錄了。鍵名**不寫在這一支**:schema 只有兩份
-# (`docs/DISPATCH-TEMPLATE.md` §8.5 與 `tickets/SCHEMA.md`),抄第三份的那一天,
-# 三份會各自往不同方向漂,而漂開的那一份看起來仍然像規格。
+# 要讀它的人已經在那個目錄了。鍵名**不寫在這一支**:schema 只有一份正文
+# (`tickets/SCHEMA.md`;`docs/DISPATCH-TEMPLATE.md` §8.5 只指路,D-054 Q12),抄第二份的那一天,
+# 兩份會各自往不同方向漂,而漂開的那一份看起來仍然像規格。
 #
 # ## 三種缺漏要有三種樣子
 # 沒有 EVIDENCE 檔 / 有 EVIDENCE 但沒有那一塊 / 有那一塊但 JSON 解不開。揉成同一個
@@ -769,12 +769,12 @@ print("3. **你的 worktree**:`%s`(票分支 `%s`,派工方已建好,cwd 就是�
 print("   在這裡改、`git add` / `git commit`(可多個 commit,訊息帶 `t%s`)。" % ident)
 print("   交件 = 分支相對派工前多了至少一個 commit **而且工作樹乾淨**;沒 commit 的改動不算交件,"
       "腳本不替你 commit。")
-print("   不碰 main、不 push、不 merge / rebase 進 main、不動別的分支、不 worktree add / remove。")
+print("   git 規矩見 `docs/DISPATCH-TEMPLATE.md` §1(規則包已節錄)。")
 print("4. **回報對象**:派工的那一條主線 session。")
 print("")
 print("## 你要交的兩樣")
 print("1. 票分支 `%s` 上的 commit(閘門在同一個 worktree 跑)。" % branch)
-print("2. `%s/EVIDENCE-round1.md`(worktree 外的輪次目錄,不進 repo)—— 必備四段(見角色卡;變異表選填)"
+print("2. `%s/EVIDENCE-round1.md`(worktree 外的輪次目錄,不進 repo)—— 段名照 `docs/DISPATCH-TEMPLATE.md` §8"
       "+ 記憶段 + 檔尾一塊 ```result` JSON。" % fix)
 print("   主線收件那一手是:")
 print("   ```sh")
@@ -783,8 +783,7 @@ print("   ```")
 print("   它會抽出 `result-round1.json`,並把 EVIDENCE 裡的 `OBJECTION:` 行記進票的 `objections[]`。")
 print("")
 print("## 回報格式")
-print("① 分支頭 sha + `git diff --stat <base sha>..HEAD`;② 測試指令、`Ran N`、`rc=`(**判綠只看 rc**);"
-      "③ 已排除的假設;④ 最小重現;有變異就附變異驗紅表(選填)。")
+print("照 `docs/DISPATCH-TEMPLATE.md` §8(規則包已節錄);**判綠只看 rc**。")
 print("**測試一律前景跑加 timeout** —— 把整套丟背景後結束回合 = 什麼都沒交。")
 print("")
 print("## 票寫錯 / 需要裁示怎麼說")
@@ -2439,11 +2438,11 @@ print("## 你的 worktree")
 print("- `%s`(票分支 `%s`,cwd 就是它;上一輪的 commit 都在上面)" % (wt, branch))
 print("- 在這裡改、`git add` / `git commit`;交件 = 分支多了至少一個 commit **而且工作樹乾淨**,"
       "沒 commit 的改動不算交件(腳本不替你 commit)")
-print("- 不碰 main、不 push、不 merge / rebase 進 main、不動別的分支、不 worktree add / remove")
+print("- git 規矩見 `docs/DISPATCH-TEMPLATE.md` §1(規則包已節錄)")
 print("")
 print("## 你要交的兩樣")
 print("1. 票分支 `%s` 上的 commit(訊息帶 `t%s`)。" % (branch, ident))
-print("2. `%s/EVIDENCE-round%s.md`(worktree 外的輪次目錄)—— 必備四段(見角色卡;變異表選填),其中**已排除的假設**那一段"
+print("2. `%s/EVIDENCE-round%s.md`(worktree 外的輪次目錄)—— 段名照 `docs/DISPATCH-TEMPLATE.md` §8,其中**已排除的假設**那一段"
       % (fix, r))
 print("   決定下一輪的人要不要把你查過的路再查一次。")
 print("")
@@ -3104,12 +3103,12 @@ print("**不得放寬測試**:測試檔裡不刪含 assert 的行、不加 skip 
 print("")
 print("## 你的 worktree")
 print("- `%s` —— 整合分支 `%s` 的 worktree,派工方已建好,cwd 就是它" % (wt, branch))
-print("- 只在這條分支 commit:不碰 main、不 push、不 merge / rebase、不動別的分支、不 worktree add / remove")
+print("- 只在這條分支 commit、不 merge / rebase;其餘 git 規矩見 `docs/DISPATCH-TEMPLATE.md` §1(規則包已節錄)")
 print("")
 print("## 你要交的兩樣")
 print("1. 整合分支 `%s` 上的 commit,訊息以這次修到的票號 `t<n>` 開頭(例 `t%s fix: …`);"
       "交件時 worktree 要乾淨(沒 commit 的改動不算交件)。" % (branch, ids[0]))
-print("2. `%s/EVIDENCE-round1.md`(worktree 外,不進 repo)—— 必備四段(見角色卡;變異表選填)+ 記憶段 + 檔尾一塊 ```result` JSON。"
+print("2. `%s/EVIDENCE-round1.md`(worktree 外,不進 repo)—— 段名照 `docs/DISPATCH-TEMPLATE.md` §8 + 記憶段 + 檔尾一塊 ```result` JSON。"
       % fix)
 print("")
 print("## 票寫錯 / 需要裁示怎麼說")

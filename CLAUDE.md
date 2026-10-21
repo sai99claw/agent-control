@@ -19,8 +19,8 @@
   不准手動 merge 進主線。
 - **不准輪詢 status**(主線的正文;短命角色的在 `docs/DISPATCH-TEMPLATE.md` §3):跑完的事會寫進 `reports/inbox/`,
   開場 `python3 scripts/inbox.py list` 一次,之後被通知時再讀。每看一次背景工作就是整份上下文重送一輪。
-- **實作 agent 在自己的 worktree / 分支 commit**(D-054 Q9):不碰 main、不 push、不 merge / rebase 進 main、不動別的分支、不 worktree add / remove;
-  驗證者在副本交 patch-verify、不 git 寫入。共用規矩在 `docs/DISPATCH-TEMPLATE.md`,**按需查、不整份讀**。
+- **實作 agent 在自己的 worktree / 分支 commit**(D-054 Q9;git 規矩見 `docs/DISPATCH-TEMPLATE.md` §1);
+  驗證者在副本產出 patch-verify、不 git 寫入。共用規矩在 `docs/DISPATCH-TEMPLATE.md`,**按需查、不整份讀**。
   **派工 prompt 只指路,不整份貼**:短命角色開場只讀「角色卡 + 票」(正文在 `memory/role/README.md`;
   規則包 `rules.py pack` 已帶模型卡與會被擋到的那幾節);prompt 裡只給**這張票獨有的四件事**(票號與票庫路徑、base sha、worktree / 副本路徑、回報對象)。
   全域交接(`docs/HANDOFF.md`)、事件流、開票清單**是主線的**,短命角色不讀 —— 每貼一份就是每一個 agent 各付一次。

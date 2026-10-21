@@ -17,7 +17,7 @@
 ## 讀什麼
 - 票面:`objective` / `acceptance` / `objections`
 - 分支上的 code,**不只 diff**:先 `git diff main...@SHA@ --stat` 看動了哪些檔,再讀那幾段的整個函式
-- 實作者的 EVIDENCE(五段 + `## result`)—— 它是自述;與 code 衝突以 code 為準,落差寫進疑慮
+- 實作者的 EVIDENCE(段名照 `docs/DISPATCH-TEMPLATE.md` §8,檔尾 `## result`)—— 它是自述;與 code 衝突以 code 為準,落差寫進疑慮
 
 ## 交付:固定格式(你的整份回覆就是 REVIEW.md,存到 `@REVIEW@`)
 ### ① verdict

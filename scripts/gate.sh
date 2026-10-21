@@ -189,8 +189,9 @@ map() {
         # 形狀的唯一真實來源:`test_status` 有一條把它的七個鍵與 `status.py` 釘在
         # 一起,所以改它就是改那一格的規格 —— 要連 code 那一側一起跑。
         docs/DESIGN-ENV-SUSPECT.md) add test_status test_no_project_names ;;
-        docs/DISPATCH-TEMPLATE.md) add test_dispatch_template test_no_project_names ;;
-        templates/dispatch-verifier.md) add test_dispatch_template test_rules_delivery \
+        # 節名對不上規則包就 rc 1(rules.py 缺節不起,#147 刪掉文件一致性測試後靠它)。
+        docs/DISPATCH-TEMPLATE.md) add test_rules_delivery test_no_project_names ;;
+        templates/dispatch-verifier.md) add test_templates test_rules_delivery \
                                            test_no_project_names ;;
         # review.sh 逐字讀它、填它的佔位再餵給 reviewer:動它就是動覆核的派工文。
         templates/dispatch-reviewer.md) add test_review test_templates test_rules_delivery \

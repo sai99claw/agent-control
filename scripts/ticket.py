@@ -1751,7 +1751,7 @@ def cmd_import(argv):
 # ------------------------------------------------- EVIDENCE 尾端那一塊 result
 
 # `## result` 那一塊怎麼開頭、怎麼收尾。**最後**一塊才算:前面幾塊可能是規則包裡
-# 引用的範例,而尾端那一塊才是這一輪交的(`docs/DISPATCH-TEMPLATE.md` §8.5)。
+# 引用的範例,而尾端那一塊才是這一輪交的(`tickets/SCHEMA.md`「EVIDENCE 尾端的 `result` 區塊」)。
 RESULT_OPEN = re.compile(r"^\s*(?:`{3,}|~{3,})[ \t]*result[ \t]*$")
 RESULT_CLOSE = re.compile(r"^\s*(?:`{3,}|~{3,})[ \t]*$")
 RESULT_RAW_CAP = 500

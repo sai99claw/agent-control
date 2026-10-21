@@ -1,5 +1,7 @@
 # D-019(2026-09-23)`environment_suspect` 只有一種形狀:一個 list,每一筆標來源
 
+> 2026-10-21 註(#147):文中的 metrics 腳本已在 #143 退役、票的驗收字串格已在 #139 撤;以下照當時原文,行號只對當時的樹。
+>
 > 設計 session(Fable)裁的;實作票 #23。每一條結論都標「實測」(讀了兩個 repo 的檔、數了 reports/)或
 > 「讀 code 推的」(沒有跑)。**本文件沒有改任何 repo 檔、沒有跑任何指令**。
 > 使用者 2026-09-23 補的原則:**設計為未來的 token 消耗打算,不准因為眼前複雜就繞過;太複雜可以「先開票、之後做」,
@@ -50,7 +52,7 @@
 1. **同一件事有兩個來源,而且會同時出現。** A 的 dict 只裝得下「第一個達門檻的形狀」(達了就中止),T 的 list 裝的是案例逐條宣告。
    #645 之後 T 的一趟可以同時有「safari session 斷了」(declared)與 firefox 連紅同形(statistical,T 之後接 run-tests 就會有);
    一格只能放一筆的形狀在那一刻得選一個丟掉。list 不用選。
-2. **空值要只有一種。** `metrics.py:202` 用真值分類 env/product(實測),`[]`、`{}`、`None`、缺格四種在真值上都是假 ——
+2. **空值要只有一種。** metrics 腳本 `:202` 用真值分類 env/product(實測),`[]`、`{}`、`None`、缺格四種在真值上都是假 ——
    今天剛好沒炸,是運氣不是設計。一種空值,一條斷言就驗得完。
 3. **鍵固定、值可 null,不要「有沒有這個鍵」當語意。** 看板與 metrics 之後要畫 engine/why,對每一筆做 `.get` 分支是 bug 的溫床;
    七個鍵固定,讀的人只判 `source`。
@@ -105,11 +107,11 @@
    inbox 頁走環境那一段(`message_shape` 改印 `why`,並列出 `source`)。
 3. `scripts/auto-fix.sh`:讀最新一輪時若 `environment_suspects` 非空,印一行「上一輪環境可疑(<engine>:<why>),你確定要派?」**仍然照派**
    (手打就是覆寫),但那一行要進 stdout 讓人看見。
-4. 看板:**實測 `board/board.py` 沒有讀這一格**(#19 讀的是 failures/rc/state;只有 `scripts/metrics.py:202` 讀,經真值)。要改:
-   `metrics.py:202` 改經 `environment_suspects()`;`one_run()` 多回 `env_suspects=[{source,engine,why}]`,`verdict_cell` 在 `failure_total`
+4. 看板:**實測 `board/board.py` 沒有讀這一格**(#19 讀的是 failures/rc/state;只有 metrics 腳本 `:202` 讀,經真值)。要改:
+   metrics 腳本 `:202` 改經 `environment_suspects()`;`one_run()` 多回 `env_suspects=[{source,engine,why}]`,`verdict_cell` 在 `failure_total`
    之前加一支:非空 → `環境可疑 N 筆(engine:why 第一筆)`,再接原本的「紅 N 條」。理由:這一格存在就是為了把讀的人導去修環境;
    一張寫著「紅 26 條」的看板把人導去 auto-fix。未來每票省(推的):主線少開一份 status.json(1–2K)+ 少一次誤派(150–400K)。
-5. 案例:`tests/test_gate.py:165-167,207` 改 `[0][…]`;`tests/test_metrics.py:61,137,138,255` 與 `tests/test_board.py:169` 的 fixture
+5. 案例:`tests/test_gate.py:165-167,207` 改 `[0][…]`;metrics 腳本的測試 `:61,137,138,255` 與 `tests/test_board.py:169` 的 fixture
    改成 list;**另留一條用舊 dict fixture 走正規化**(驗相容)。
 6. `docs/DECISIONS.md` 收本條;`docs/WORKFLOW.md` schema;`docs/REHEARSAL.md` 多一列(第一次真的在 A 看到 declared 行時要看到什麼)。
 
@@ -160,7 +162,7 @@ fixture T:`verify/land_preflight/test_ticket_644.py:261-284` 的 `SUSPECT_LINE` 
 
 | 工作 | 模型 | 一行理由 |
 |---|---|---|
-| #23 開票(把本文件寫成 acceptance / test_plan / verify_strings) | opus | 票面十二條要對得上檔案行號,錯一條返工一輪;開題者角色卡在 opus |
+| #23 開票(把本文件寫成 acceptance / test_plan / 驗收字串) | opus | 票面十二條要對得上檔案行號,錯一條返工一輪;開題者角色卡在 opus |
 | #23 實作(status.py / gate.sh / auto-fix.sh / metrics / board / docs) | opus | 動 #7 的 `EnvironmentResult`(subTest failfast 有坑,EVIDENCE M1)與 gate.sh 流程,sonnet 在這種 shell + Python 交錯處的返工率高 |
 | #23 驗證者(照上表寫 12 條案例,含 8 的假 worker) | sonnet | 案例形狀已定、fixture 都指了行號;純機械,不需要判斷 |
 | T 同步票(跑 sync、跑三組既有案例、HANDOFF 一行) | sonnet | 機械;唯一判斷是「#23 先落再同步」,已寫在票上 |

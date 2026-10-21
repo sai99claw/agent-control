@@ -27,7 +27,7 @@
 # ## 「沒交」與 pass 要分得開(`docs/DISPATCH-TEMPLATE.md` §5.5)
 # 沒有 `## result`、JSON 解不開、逾時、verdict 不是 pass|fail —— 四種都**不是 pass**。
 # 逾時先判、不看內容:被砍之前它可能已經印了一塊像樣的 pass。verdict 說 pass 卻有
-# `OBJECTION:` 行時以那幾行為準(同 §8.5「以 OBJECTION 行為準」),走 fail。
+# `OBJECTION:` 行時以那幾行為準(同 `tickets/SCHEMA.md` result 區塊「以 OBJECTION 行為準」),走 fail。
 #
 # ## 模型名取自角色表(#121;以前取 `reviewer.command` 的 `--model`,#21),不是 routing 標籤
 # `review.by` 與事件的 model 欄記**實際起的那個**;命令裡沒有 `--model` 就記 `unknown`,不猜。

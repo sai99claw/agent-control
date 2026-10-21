@@ -64,8 +64,8 @@ READONLY_MEMORY_NOTE = ("## 記憶(D-013;唯讀角色)\n"
                         "你不寫記憶檔:值得記的原則在 REVIEW ④ 寫一行「候選記憶:<一句原則>」,"
                         "主線決定收不收;沒有就寫「無」。")
 # 第六段,**固定文字**(D-017,#20):交出來的東西一產生就要是機器讀得懂的。
-# 這一段不抄鍵名 —— 鍵只寫在兩處(`docs/DISPATCH-TEMPLATE.md` §8.5 與 `tickets/SCHEMA.md`),
-# 抄第三份的那一天,三份會各自往不同方向漂,而漂開的那一份看起來仍然像規格。
+# 這一段不抄鍵名 —— 鍵只寫在 `tickets/SCHEMA.md`(`docs/DISPATCH-TEMPLATE.md` §8.5 只指路,D-054 Q12),
+# 抄第二份的那一天,兩份會各自往不同方向漂,而漂開的那一份看起來仍然像規格。
 DELIVERY_NOTE = ("## 結構化交付(D-017)\n"
                  "檔尾 `## result` + 一塊 result JSON,鍵照 `docs/DISPATCH-TEMPLATE.md` §8.5 / "
                  "`tickets/SCHEMA.md`;寫不出的留 `null`,不要編。")

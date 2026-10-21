@@ -27,7 +27,7 @@ python3 scripts/event.py tail 20
 `ticket.py verify <id>` 看 `close --landed` 蓋的 `landed_sha` 在不在主線歷史裡。
 
 票開好之後 `sh scripts/auto-fix.sh 1` 起第 1 輪:它開票分支 `t1` 的 worktree,worker 在裡面自己 commit
-(D-054 Q9),**一路到落地都有入口,不必手動合併**:
+(D-054 Q9;git 規矩見 `docs/DISPATCH-TEMPLATE.md` §1),**一路到落地都有入口,不必手動合併**:
 ```sh
 sh scripts/apply.sh 1 --evidence <EVIDENCE>         # 收件:EVIDENCE、反駁;有 patch-verify 就在分支上補 commit
 (cd ../agent-control-wt/t1 && sh scripts/gate.sh --branch --ticket 1 --auto-fix)

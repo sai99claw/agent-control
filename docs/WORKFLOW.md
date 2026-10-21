@@ -21,8 +21,7 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 - **worker 在自己的 worktree / 分支 commit**:`auto-fix.sh` 派工前建好票分支(票的 `branch` 欄,沒寫 = `t<票號>`)
   的 worktree `<worktree_dir>/<票分支>`(分支已經有就用它;沒有就從主線頭開,第 1 輪的 `base_sha` 先升到主線頭),
   worker 的 cwd 就是它,自己 `git add` / `git commit`。閘門在同一個 worktree 跑,`land.sh` 收的也是這條分支 ——
-  一個 worktree 從第 1 輪用到落地。worker 不碰 main、不 push、不 merge / rebase 進 main、不動別的分支、
-  不 worktree add / remove(越界守衛見下)。
+  一個 worktree 從第 1 輪用到落地。worker 的 git 規矩見 `docs/DISPATCH-TEMPLATE.md` §1(越界守衛見下)。
 - **交件判準只看分支**:worker 結束後,票分支相對派工前多了至少一個 commit **而且** worktree 乾淨
   (`gate.log*` 殘留不算)→ 收件、進閘門;沒有新 commit,或 commit 了又留著未 commit 的改動 → 「worker 沒交件」
   (票 Blocked、一頁、rc=5),腳本不替 worker commit。EVIDENCE 寫在 worktree 外的輪次目錄
