@@ -1,0 +1,40 @@
+{
+  "id": "151",
+  "subject": "Cloud container (uid 0, non-reaping PID 1): make the two environment-dependent failure-injection tests hold, so land's full suite is green",
+  "created": "2026-10-21T04:01:29+00:00",
+  "objective": "In the cloud container (root, PID 1 = firecracker process_api) 'sh scripts/gate.sh --full' is green on main: the two tests that fake a failure through environment assumptions (chmod read-only dir; zombie = alive) cause / observe the failure in a way that holds for root and for non-root, with every behavioural assertion kept. No skip, no deletion, no getuid/geteuid branching.",
+  "acceptance": [
+    "A1 test_apply.TheStructuredDeliveryOfTheFirstRound.test_an_objection_that_cannot_be_recorded_is_not_called_already_there passes 3/3 when run alone as uid 0 (cwd tests/); it no longer uses chmod or file mode bits to make the write fail; its three assertions (rc != 0, stderr has no '已經有了', stderr contains '記不進票') are unchanged.",
+    "A2 Mutation: in scripts/apply.sh, change the objection 'case $orc' catch-all '*)' branch so it prints '已經有了' and falls through to exit 0 -> the A1 case is red (as uid 0).",
+    "A3 test_objection_triage.OnlyTheseGoToTheMainLine.test_a5c_the_opener_runs_past_its_timeout passes 3/3 alone as uid 0 in this container; it still fails if the opener double's pid is a live (non-zombie) process after auto-fix returns.",
+    "A4 No skipTest/skipIf/skipUnless, no os.getuid/os.geteuid branch, no deleted case in the diff; grep -rnE 'chmod\\([^)]*0o[0-6][0-7]{2}' tests/ verify/ returns nothing (only exec-bit 0o755 / 0o7xx chmods remain).",
+    "A5 As uid 0: python3 -m unittest discover -s tests and python3 scripts/verify.py are both all green (the pair gate.sh --full runs for land)."
+  ],
+  "depends_on": [],
+  "role": "worker",
+  "model": "sonnet",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "77cf8b0",
+  "state": "Ready",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "test_plan": "Expected values come from the existing assertions (unchanged) and from the opener's root scan below, not from the code under test. Layer: unit (tests/), end-to-end through scripts/apply.sh and scripts/auto-fix.sh in the existing Sandbox fixtures. No new verify/ files (D-056); tags stay empty.\n\nT1 (A1, test_apply.py:380-391) Replace os.chmod(tickets, 0o555) with a root-proof cause of 'ticket.py objection' rc=2. Opener-measured option: pre-create a stale write lock, os.mkdir(os.path.join(tickets, '.ticket.lock')) -> Lock() times out (LOCK_TIMEOUT 10s, no env override) -> RuntimeError -> rc 2 -> apply prints '記不進票', exit 2. Measured as root: green, 21s. The extra 10s is apply.sh's branch write-back (apply.sh ~622-636, 'with ticket.Lock(where)', non-fatal) because make('1') leaves branch empty; give the ticket branch='t1' via make(...) (or equivalent) so only the objection step hits the lock (~11s; not measured). Update the docstring: the claim 'apply 前面那幾手都不寫票庫' is stale since the #53 branch write-back. Do not add a lock-timeout env seam to scripts/ticket.py. Run alone x3 as root.\nT2 (A2) Apply the mutation in a scratch copy, run T1's case -> red (opener measured red: 'AssertionError: 0 == 0'). Restore, record sha256.\nT3 (A3, test_objection_triage.py:546-556) Root cause is not uid: the killed opener double is reparented to PID 1 (/process_api) which reaps late, so os.kill(pid, 0) succeeds on a zombie (opener observed '[python3] <defunct>' ppid 1 right after the test, gone seconds later). Fix: treat 'kill raises OSError' OR 'process state Z' (e.g. 'ps -o stat= -p <pid>' starts with Z) as killed. Opener prototype of that check: 3/3 green as root. Mutation (not measured): make auto-fix not kill the opener double on timeout -> pid is a live 'S' process -> red.\nT4 (A4) git diff main...HEAD grep for skip/getuid; run the A4 grep.\nT5 (A5) Full suite as root, per module batches <590s each, foreground with timeout; report Ran/rc per batch; then python3 scripts/verify.py. Opener baseline on main 77cf8b0 as root: unittest 1051 ran, 2 failures (exactly these two); verify.py 312 ran, OK.\nOptional: if a non-root user is available (e.g. setpriv --reuid=65534 --regid=65534 --clear-groups), run T1 and T3 cases once as non-root; otherwise state 'not measured'.",
+  "outline": "Prereq for landing #146 in the cloud (no depends_on: #146 does not need this content, only land is blocked). Opener root scan on main 77cf8b0 as uid 0: every chmod / mode-bit site in tests/, verify/, tests/control_harness.py checked. Broken under root: only test_apply.py:385 (chmod 0o555 tickets/). Unaffected (exec-bit 0o755, green in the root runs): control_harness.py:249/282, test_session_hook.py:55, verify/dispatch/test_ticket_121.py:193, test_sync_to_project.py:288 (mode assert). Full runs as root: unittest 1051/2 red, verify.py 312 OK. Second red is not uid but the container's PID 1 reaping late (zombie passes kill 0): test_objection_triage.py:556; included because land is red otherwise (main may split it). Fixes: stale .ticket.lock dir (measured green+mutation red); zombie counts as dead (prototype green). Files: tests/test_apply.py, tests/test_objection_triage.py only. needs_verifier=false: only two existing cases change how they cause/observe the failure, assertions unchanged; a verifier would replay the same contract. simple.",
+  "complexity": "simple",
+  "needs_verifier": false,
+  "interface_fixed": false,
+  "decision_refs": [
+    "D-059",
+    "D-056",
+    "D-028"
+  ],
+  "feature": "cloud main line (D-059)"
+}
