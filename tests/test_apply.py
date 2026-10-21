@@ -209,6 +209,10 @@ sha256 0123456789abcdef
 ```
 """
 
+# 變異表選填(D-054 Q10):少了那一段,四段照樣全到。
+NO_MUTATION_EVIDENCE = FULL_EVIDENCE.replace(
+    "## 3 變異表\n| M1 | count 1 | tests/test_x.py::T::test_y | AssertionError: 0 != 2 |\n\n", "")
+
 THIN_EVIDENCE = "# EVIDENCE\n\n交了,但是只有散文,沒有那一塊。\n"
 
 OBJECTING_EVIDENCE = """# EVIDENCE
@@ -290,9 +294,25 @@ class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
         self.assertTrue(row["present"])
         self.assertEqual(row["gate"]["ran"], 3)
         self.assertEqual(row["sections"],
-                         {"patch_sha256": True, "gate": True, "mutations": True,
+                         {"patch_sha256": True, "gate": True,
                           "excluded": True, "repro": True},
-                         "五段散文在不在是**另一格**,不是靠 result 那一塊推的")
+                         "四段散文在不在是**另一格**,不是靠 result 那一塊推的")
+
+    def test_evidence_without_a_mutation_table_misses_no_section(self):
+        """D-054 Q10:變異表選填 —— 沒有變異段,sections 四鍵全 true、不印缺段。
+
+        **變異**:`RESULT_SECTIONS` 加回 `("mutations", ("變異",))` → 這一條紅。
+        """
+        self.assertNotIn("變異", NO_MUTATION_EVIDENCE, "前提:這份 EVIDENCE 沒有變異段")
+        self.make("1")
+        evidence = self.patch_file("EVIDENCE.md", NO_MUTATION_EVIDENCE)
+        done = self.deliver_apply("1", "--evidence", evidence)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.result_json()
+        self.assertEqual(row["sections"],
+                         {"patch_sha256": True, "gate": True,
+                          "excluded": True, "repro": True})
+        self.assertNotIn("少了這幾段", done.stdout)
 
     def test_evidence_without_the_block_is_recorded_as_no_block_not_as_nothing(self):
         """三種缺漏各有各的樣子 —— 揉成同一個空檔的那一刻,「沒交」與「交了但都是
@@ -307,7 +327,7 @@ class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
         row = self.result_json()
         self.assertFalse(row["present"])
         self.assertEqual(row["reason"], "no-block")
-        self.assertFalse(row["sections"]["mutations"], "缺段要看得出來")
+        self.assertFalse(row["sections"]["excluded"], "缺段要看得出來")
         self.assertIn("少了這幾段", done.stdout, "缺段印出來(但不擋)")
 
     def test_an_objection_is_recorded_on_the_ticket_and_the_exit_code_says_so(self):

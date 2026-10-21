@@ -21,8 +21,8 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
   別的檔 **land 會擋**(#91 C6)。裸 commit 與 land 的其他用法不做。
 
 ### 票面三格自檢(D-031;#651/#652 各退三輪全是這幾格)
-- `needs_verifier`:JSON 布林 + 一句理由寫在 `outline`(D-028)。**缺了 Ready 會擋**:`ticket.py set <n> state Ready`
-  拒收並印怎麼補(#91 C1 C2)。
+- `needs_verifier`:JSON 布林 + 一句理由寫在 `outline`(D-028)。沒寫 = true(auto-fix 照樣起驗證者),
+  不擋 Ready、不進 lint(D-054 Q10);只有要免驗證者才明寫 `false`。
 - `tags`:只能用 `verify/TAGS.md`(與 `verify/TAGS.d/`)登記過的;動到 `verify/` 案例的票一定要有。
 - 票面引用的指令先 `--help` 一次再寫。
 - 自檢(D-031 原話「要做成 `ticket.py lint`」;#91 C3 做出來了):
@@ -65,10 +65,9 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 - 票分支上的 commit(D-054 Q9,#144):cwd 是派工前建好的票分支 worktree,改完自己 `git add` / `git commit`
   (訊息帶 `t<票號>`);交件 = 分支相對派工前多了至少一個 commit 而且工作樹乾淨,沒 commit 的不算(腳本不替你 commit)。
   不碰 main、不 push、不 merge / rebase 進 main、不動別的分支、不 worktree add / remove(越界守衛 rc 8)。
-- `EVIDENCE-round<r>.md` 寫在派工文給的輪次目錄(worktree 外,不 commit)。五段:① 分支頭 sha 與
-  `git diff --stat <base_sha>..HEAD`;② 測試指令、`Ran N`、rc;③ 變異表(編號 / 替換 count / 目標斷言 /
-  紅訊息首行 / 還原後 sha256);
-  ④ 已排除的假設;⑤ 最小重現。`result` 塊的欄位見 `docs/DISPATCH-TEMPLATE.md` §8.5(#20 驗收⑦)。
+- `EVIDENCE-round<r>.md` 寫在派工文給的輪次目錄(worktree 外,不 commit)。四段:① 分支頭 sha 與
+  `git diff --stat <base_sha>..HEAD`;② 測試指令、`Ran N`、rc;③ 已排除的假設;④ 最小重現。
+  變異表(編號 / 替換 count / 目標斷言 / 紅訊息首行 / 還原後 sha256)選填:有變異就寫,沒有不缺段(D-054 Q10)。`result` 塊的欄位見 `docs/DISPATCH-TEMPLATE.md` §8.5(#20 驗收⑦)。
 - 不寫 `verify/**`(驗證者的,同名檔落地會打架,#630)。
 - 紅了被重派時先讀 `reports/t<票號>/<run_id>/status.json`(票 + `repair_context` + 紅榜);前幾輪的改動是分支上的 commit。
 - 回報寫票分支名與分支頭 sha,不寫家目錄絕對路徑。

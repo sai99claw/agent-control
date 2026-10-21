@@ -9,7 +9,7 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 | 關卡 | 必須具備 |
 |---|---|
 | Ready | 可操作的驗收、依賴達成、`base_sha` |
-| InReview | 票分支上的 commit、測試輸出逐字、變異驗紅、回報標明實測/推論 |
+| InReview | 票分支上的 commit、測試輸出逐字、變異驗紅(選填)、回報標明實測/推論 |
 | IntegrationQueued | 審查通過、局部閘門綠、無未解阻擋 |
 | Done | **同一份必要條件,`close` 與 `set state Done` 共用**(D-014):① `scripts/ticket.py verify` 證明改動真的在主線:`close --landed` 蓋的 `landed_sha` 在主線歷史裡(#137);② 有回歸證據(`test_evidence` 或 `verify.baseline`)——**或**票上有誠實的 `verify_waiver{by,reason}`(#8)且 review 記的 sha 真的在主線歷史裡(`git merge-base --is-ancestor`,不是逐字比對分支的頭,#15);③ **complex 的票**要有一格 `review.verdict` 通過(只有 complex 做完後覆核;沒標 = simple,不要 review;verdict 不綁任何版本,#136);④ `objections[]` 裡沒有未處置的阻擋項 |
 
@@ -282,7 +282,7 @@ worker 同一輪**也 commit 了**(#107,專案 #751 事故;#144 起):驗證者�
 | land 前檢查 `verify.files` 都在分支上 | **已實作**(2026-09-21,D-015) | `scripts/land.sh` 第 5 步,缺了 rc=4 |
 | 用 headless `claude -p` **自動起新 worker**(三輪上限) | **已實作**(2026-09-22;gate / 單票 land 預設開,`--no-auto-fix` 關) | `scripts/auto-fix.sh <票號>`;`gate.sh`、`land.sh` |
 | **第 1 輪自動**:票 Ready 且沒有狀態檔 → 起第 1 輪 worker(發 `ticket.attempt.start`、轉 Running),apply → gate → InReview → review.sh 與第 2 輪起同一段;非 Ready 指名 state 停下 | **已實作**(2026-09-26,#40,D-025 C1) | `scripts/auto-fix.sh <票號>`(`round_once 1`);只看派工文 `--dry-run --round 1`;`--dry-run` 碰到已經在的 `fix-t<n>/round<r>` / `verify-t<n>/round<r>` 原封不動(#96) |
-| **第 1 輪驗證者自動**(#126 起**任一輪**,不只第 1 輪):票 `needs_verifier` 是 JSON `true` 且 `verify.baseline` 空(案例還沒交,D-018)→ 任一輪都先派驗證者(含從舊狀態檔接著跑的第 2 輪以後,stdout「案例還沒交,第 N 輪先派驗證者」);`interface_fixed=true` 時派 worker **之前**起背景驗證者(副本 = 票的 `base_sha`,派工文 = `rules.py pack verifier` + `templates/dispatch-verifier.md` 填好),worker 回來後才收;兩份 patch 一起 `apply.sh`、閘門量套了兩份的樹;沒交件 → worker 的 patch 先收進 reports、Blocked + decision 頁;`false` / 缺 → 不派(缺的 stderr 說一聲) | **已實作**(#51,D-032 ③) | `scripts/auto-fix.sh`(`start_verifier_bg` / `wait_verifier`);`--dry-run --round 1` 印兩份派工文路徑 |
+| **第 1 輪驗證者自動**(#126 起**任一輪**,不只第 1 輪):票 `needs_verifier` 不是 JSON `false`(缺 = true)且 `verify.baseline` 空(案例還沒交,D-018)→ 任一輪都先派驗證者(含從舊狀態檔接著跑的第 2 輪以後,stdout「案例還沒交,第 N 輪先派驗證者」);`interface_fixed=true` 時派 worker **之前**起背景驗證者(副本 = 票的 `base_sha`,派工文 = `rules.py pack verifier` + `templates/dispatch-verifier.md` 填好),worker 回來後才收;兩份 patch 一起 `apply.sh`、閘門量套了兩份的樹;沒交件 → worker 的 patch 先收進 reports、Blocked + decision 頁;明寫 `false` → 不派;缺 = true(D-054 Q10) | **已實作**(#51,D-032 ③) | `scripts/auto-fix.sh`(`start_verifier_bg` / `wait_verifier`);`--dry-run --round 1` 印兩份派工文路徑 |
 | **reviewer 自動**:閘門綠、complex 票轉 InReview → headless reviewer(#136 起只派 complex;`reviewer.command`,唯讀白名單);pass 由腳本寫 `review`,fail 逐條 blocking 反駁 + Blocked,沒交件不算 pass | **已實作**(2026-09-26,#42,D-025 ②) | `scripts/review.sh <票號>`;`auto-fix.sh` 綠(`--no-review` 關)與 `gate.sh --branch --ticket` 手跑綠 |
 | **終態叫醒主線**(要人裁的 decision 頁 + 整票 done 頁;其餘終態只寫事件)+ 禁止輪詢 | **已實作**(2026-09-21,D-015) | `scripts/inbox.py post\|done\|list\|show\|ack`;`reports/inbox/<票號>-<run_id>.md`;`new-session.sh` 開場印 |
 | 同一輪的回歸**只跑一次**(worker / 驗證者 / gate 共用) | **已實作**(2026-09-21,D-015) | `scripts/verify.py` 的 `reports/t<n>/<run_id>/verify-<雜湊>.log`(雜湊含標籤 + sha);`--no-cache` 關 |

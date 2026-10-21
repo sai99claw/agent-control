@@ -121,21 +121,6 @@ class Pages(BoardUp):
         self.assertIn("排在佇列的", section)
         self.assertIn("land.refused", section)
 
-    def test_the_rehearsal_table_is_read_from_the_file(self):
-        self.write("docs/REHEARSAL.md",
-                   "# 演練\n\n| 工具 | 第一次真跑 | 要看到什麼 |\n|---|---|---|\n"
-                   "| `land.sh` 的過期拒絕 | 下一次 base 過期 | EXIT=2 而且沒建 worktree |\n")
-        self.up()
-        _, body = self.get("/")
-        section = body.split("id=\"rehearsal\"")[1].split("</section>")[0]
-        self.assertIn("下一次 base 過期", section)
-
-    def test_an_empty_rehearsal_table_says_so_instead_of_being_blank(self):
-        self.up()
-        _, body = self.get("/")
-        section = body.split("id=\"rehearsal\"")[1].split("</section>")[0]
-        self.assertIn("沒有欠確認的真跑", section)
-
     def test_the_ticket_table_draws_the_metrics_without_touching_the_token_header(self):
         """**變異**:把 `state()` 的 `metrics` 那一格拿掉 → 這一條紅。
 

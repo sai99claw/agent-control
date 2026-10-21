@@ -9,7 +9,6 @@
  ② agent 時間線 —— 從事件重建:誰、什麼票、第幾次、開始/結束、現在還活著嗎
  ③ 落地佇列與最近的 land 結果
  ④ 決策收件匣(可以填答案)+ 終態收件匣 —— 讀 `<reports_dir>/inbox/index.jsonl`
- ⑤ 哪些保證還只在演練裡成立 —— 讀 `docs/REHEARSAL.md`
  ⑥ 每票最後一輪 —— 讀 `<reports_dir>/t<票號>/<run_id>/status.json`
  ⑦ 反駁 —— 讀票自己的 `objections[]`
 
@@ -49,7 +48,6 @@ import ticket   # noqa: E402
 
 DEFAULT_PORT = 18905
 ANSWER_MAX = 64 * 1024
-REHEARSAL_REL = os.path.join("docs", "REHEARSAL.md")
 LAND_KINDS = ("land.start", "land.refused", "land.pass", "land.fail")
 QUEUE_STATES = ("InReview", "IntegrationQueued", "Integrating")
 ATTEMPT_START = "ticket.attempt.start"
@@ -169,33 +167,6 @@ def sessions(rows):
         elif row.get("kind") == SESSION_END and pid in live:
             live[pid]["end"] = row.get("ts", "")
     return [live[pid] for pid in order]
-
-
-def rehearsal_rows():
-    """`docs/REHEARSAL.md` 的表:**哪些保證還只在演練裡成立。**
-
-    演練綠只證明「在受控環境裡這樣寫是對的」;新行為第一次真的被觸發的那一刻,
-    才是它第一次在真的路徑上成立 —— 而那兩件事在畫面上長得一樣。確認過的那一列
-    由人從檔案裡刪掉,所以這一段是空的才是好消息。
-    """
-    path = os.path.join(root(), REHEARSAL_REL)
-    try:
-        with open(path, encoding="utf-8") as handle:
-            lines = handle.read().splitlines()
-    except OSError:
-        return None
-    rows = []
-    for line in lines:
-        line = line.strip()
-        if not line.startswith("|") or not line.endswith("|"):
-            continue
-        cells = [c.strip() for c in line.strip("|").split("|")]
-        if not cells or all(set(c) <= set("-: ") for c in cells):
-            continue
-        if cells[0].startswith("工具") or cells[0].startswith("保證"):
-            continue
-        rows.append(cells)
-    return rows
 
 
 def latest_answers():
@@ -423,7 +394,6 @@ def state():
             "runs": agent_runs(rows),
             "sessions": sessions(rows),
             "answers": latest_answers(),
-            "rehearsal": rehearsal_rows(),
             # **`runs` 與 `ticket_runs` 不是同一件事**:上面那一格是從事件重建的
             # agent 時間線(誰在跑),這一格是磁碟上的閘門/落地結果(跑出了什麼)。
             # 合成一格的話,一個沒有發事件的閘門會看起來像沒有跑過。
@@ -559,7 +529,7 @@ JS = """
 """
 
 NAV = (("tickets", "票與依賴"), ("timeline", "agent 時間線"),
-       ("land", "落地"), ("inbox", "決策收件匣"), ("rehearsal", "只在演練裡成立"),
+       ("land", "落地"), ("inbox", "決策收件匣"),
        ("runs", "每票最後一輪"), ("objections", "反駁"))
 
 
@@ -732,24 +702,6 @@ def render_inbox(data):
                "落成裁示是主線的事(<code>docs/DECISIONS.md</code> 一列一條)。</p>")
     out.append(inbox_pages(data["inbox"]))
     out.append("</section>")
-    return "".join(out)
-
-
-def render_rehearsal(data):
-    out = ["<section id=\"rehearsal\"><h2>⑤ 哪些保證還只在演練裡成立</h2>"]
-    rows = data["rehearsal"]
-    if rows is None:
-        out.append("<p class=\"empty\">沒有 <code>%s</code> 這份檔</p>" % esc(REHEARSAL_REL))
-    elif not rows:
-        out.append("<p class=\"empty\">表是空的 —— 沒有欠確認的真跑</p>")
-    else:
-        out.append("<table>")
-        for cells in rows:
-            out.append("<tr>%s</tr>" % "".join("<td>%s</td>" % esc(c) for c in cells))
-        out.append("</table>")
-    out.append("<p class=\"empty\">演練綠只證明「在受控環境裡這樣寫是對的」。"
-               "新行為第一次真的被觸發時,誰在場誰確認一眼,然後把那一列從 "
-               "<code>%s</code> 刪掉。</p></section>" % esc(REHEARSAL_REL))
     return "".join(out)
 
 
@@ -1061,7 +1013,7 @@ def render_ticket(data):
 
 def render(data):
     return ("<main>" + render_tickets(data) + render_timeline(data)
-            + render_land(data) + render_inbox(data) + render_rehearsal(data)
+            + render_land(data) + render_inbox(data)
             + render_runs(data) + render_objections(data)
             + "</main>\n")
 

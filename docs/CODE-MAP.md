@@ -31,9 +31,9 @@ verified_by: <who> <date>
 ```
 **觸發建卡的條件**:某張票的 agent 回報「找不到 X 在哪」或「以為 Y 在 Z 其實不是」→ 主線建一張卡。不預先鋪滿。
 
-## 2. 過期偵測(`code-map/check-stale.py`)
-- 對每張卡,`git diff --stat <verified_at_commit>..HEAD -- <source_paths>`;有變動就標 `stale`。
-- 控制台顯示 stale 的卡;閘門不擋(卡片是輔助,不是契約)。
+## 2. 過期怎麼看
+- 沒有工具(D-054 Q11 刪了過期偵測腳本):讀卡的人自己跑 `git diff --stat <verified_at_commit>..HEAD -- <source_paths>`,
+  有變動就當過期、讀 code 為準,讀完順手更新 `verified_at_commit`。閘門不擋(卡片是輔助,不是契約)。
 - 卡片裡引用的**行號一律不寫**,寫符號名(`grep -n` 得到的東西會過期,符號名不會)。
 
 ## 3. 查證規矩(給讀 code 的 agent)

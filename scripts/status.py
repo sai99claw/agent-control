@@ -947,8 +947,8 @@ def cmd_regression_red(args):
                 argv += ["--acceptance", line.format(case=case, rerun=rerun)]
             if rerun:
                 argv += ["--verify-run", rerun]
-            # 兩格布林在 create 就帶(#91 C2):`--state Ready` 的實作票缺 needs_verifier
-            # 開不出來,create 完才補就會被那一關擋下。
+            # 兩格布林在 create 就帶:needs_verifier 缺 = true(D-054 Q10),修復票要明寫 false
+            # 才不起驗證者。
             argv += ["--role", "worker", "--model", str(model), "--tool", "claude-code",
                      "--needs-verifier", "false", "--interface-fixed", "false",
                      "--state", "Ready"]
