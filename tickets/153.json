@@ -1,0 +1,42 @@
+{
+  "id": "153",
+  "subject": "Receipt of a --prepare subagent round: reject if main moved outside main-line landings or anything was pushed",
+  "created": "2026-10-21T15:02:03+00:00",
+  "objective": "When the main line receives a worker / verifier round dispatched with 'auto-fix.sh --prepare', apply.sh compares main and origin with what they were at prepare time and refuses (rc 7) if main moved other than by main-line landings recorded in the event log, or if any remote ref changed other than main advancing along those landings. No other check is added; the headless guard is not restored for this path.",
+  "acceptance": [
+    "A1 'auto-fix.sh <n> --prepare worker' and '--prepare verifier' write, in the round dir they create (fix-t<n>/round1, verify-t<n>/round1), a record of main's HEAD (40 hex) and, when an 'origin' remote is configured, a snapshot of 'git ls-remote origin' refs at prepare time (unreachable origin -> snapshot null plus one stderr line; prepare still succeeds). Stdout of --prepare stays the pointer prompt only.",
+    "A2 apply.sh receiving a prepared round (worker: default round dir; verifier: the patch-verify's directory) accepts (rc as on base) when main's HEAD is unchanged, OR every first-parent commit from the recorded HEAD to the current HEAD is attributed to a main-line landing (land.pass / push-failed land.fail segments chained main_before -> sha, same rule as the existing #127 attribution). A 'land.sh docs' landing made while the subagent ran is accepted.",
+    "A3 apply.sh rejects with a new exit code 7 - before applying patch-verify, regenerating code-map or harvesting EVIDENCE (ticket JSON and ticket branch unchanged) - when: a main first-parent commit is not attributable to a landing; or main no longer contains the recorded HEAD (reset / rewrite); or, with a prepare-time remote snapshot, any remote ref was created / moved / deleted other than refs/heads/main advancing to a commit on main's first-parent chain at or before the current HEAD. stderr names the first offending commit or ref and says 'not received'.",
+    "A4 No record in the round dir (hand-dispatched subagent, headless auto-fix rounds) -> apply prints one line saying the main-line comparison was not made and keeps its base behaviour and rc. 'git ls-remote' failing at receipt -> one stderr line 'push not compared', not a rejection (pending main ruling, see outline).",
+    "A5 One copy of the landing-attribution logic: the chain walk (land_rows / land_segments / land_attribution, now inside the run_agent heredoc of scripts/auto-fix.sh) moves to one shared Python module used by both the headless guard and apply.sh; the existing guard cases (tests/test_auto_fix.py guard classes, verify/dispatch/test_ticket_115.py, _127.py, _128.py) stay green unchanged. scripts/auto-fix.sh does not grow in net lines.",
+    "A6 Docs: apply.sh header exit-code list gains 7; docs/SESSION-START.md main-line dispatch line lists apply rc 7 among the rejections (with what the main line does: do not hand the line back to the subagent; read the named commit / ref and decide)."
+  ],
+  "depends_on": [],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "b3d5db6ae4bac21bc5b6913fe8ac17a7fc83c93b",
+  "state": "Draft",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "complex",
+  "needs_verifier": true,
+  "interface_fixed": false,
+  "decision_refs": [
+    "D-063",
+    "D-061",
+    "D-048",
+    "D-056"
+  ],
+  "feature": "Dispatch: in-session subagent receipt check (D-063 5)",
+  "test_plan": "Expected values come from the fixture's own git operations (the test makes the commits / pushes and knows their shas), not from the code under test. Layer: end-to-end through scripts/auto-fix.sh --prepare + scripts/apply.sh (+ scripts/land.sh docs where named) in the existing tests/test_auto_fix.py fixture APreparedRoundIsHandedInByAnInSessionSubagent (prepare -> simulated subagent commit in the worktree -> apply). Cases go into that existing module (D-056); verify.tags empty. Root (uid 0) safe: no chmod; 'origin' is a local bare repo made by the test; no network.\n\nT1 (A2) Nothing moves between prepare and apply -> existing cases green, rc 0.\nT2 (A2) Between prepare and apply, the test runs 'sh scripts/land.sh docs \"<msg>\" tickets/<n>.json' (real docs channel, emits land.start/land.pass) once, then twice -> rc 0, patch-verify commit present on the branch as before.\nT3 (A3) Between prepare and apply, a commit is made directly on main (git -C <root> commit --allow-empty -m stray, no land events) -> rc 7; stderr contains that commit's short sha and 'not received'; ticket JSON bytes and the ticket branch head unchanged (compare before/after).\nT4 (A3) docs landing then a stray commit -> rc 7 naming the stray commit (chain breaks there, not at the landing).\nT5 (A3) main reset to HEAD~1 (recorded HEAD no longer on main) -> rc 7.\nT6 (A3, remote) Fixture with bare origin: (a) the 'subagent' runs 'git -C <worktree> push origin t<n>' -> rc 7 naming refs/heads/t<n>; (b) a docs landing that pushes main to origin -> rc 0; (c) 'git push origin <some sha>:refs/heads/main' from the worktree where that sha is not on local main -> rc 7.\nT7 (A1) After prepare: the record file exists in the round dir with HEAD == 'git rev-parse main' taken by the test before prepare; stdout of prepare unchanged (existing pointer assertions stay green). Origin missing -> remote snapshot null, prepare rc 0.\nT8 (A4) Delete the record before apply -> rc 0 and stdout has the 'not compared' line. Point origin at a non-existent path after prepare -> rc as base + the 'push not compared' line.\nT9 (A5) Run the existing guard tests unchanged (test_auto_fix guard classes + verify/dispatch/test_ticket_115/127/128.py); 'grep -c \"def land_attribution\" scripts/auto-fix.sh' == 0 and the shared module defines it; 'wc -l scripts/auto-fix.sh' <= the base count (3415).\nMutations (not measured by the opener): M1 replace the chain walk with a literal HEAD equality -> T2 red. M2 skip the remote comparison -> T6a red. M3 run the check after the patch-verify commit -> T3's 'branch head unchanged' assertion red.",
+  "outline": "D-063 (5): after a --prepare subagent hands in, apply.sh rejects if main moved or something was pushed - only this comparison, no file-snapshot guard (rc 8 stays headless-only). Measured on events.jsonl: every one of the 17 main first-parent commits since the cloud container started has a land.pass with main_before == parent and sha == commit (docs and ticket lands), so main-line landings are distinguishable from a subagent moving main; the #127 chain walk (land_attribution in auto-fix.sh's run_agent heredoc) already does this - reuse it via one shared module. Literal 'HEAD unchanged' would have rejected #147: main docs-landed at 10:11:54 while its verifier subagent ran (from ~10:11:35). Files: scripts/apply.sh, scripts/auto-fix.sh (prepare writes the record; chain code moves out), new shared module, docs/SESSION-START.md, tests/test_auto_fix.py. complex: a receipt gate that can wrongly reject every delivery. needs_verifier=true. Rulings pending: interpretation, ls-remote failure, hand dispatch."
+}

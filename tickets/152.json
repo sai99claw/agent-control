@@ -1,0 +1,43 @@
+{
+  "id": "152",
+  "subject": "In-session subagent tokens (auto-fix --prepare path) reach the ticket's cost[] and cost_total",
+  "created": "2026-10-21T15:01:02+00:00",
+  "objective": "For a worker / verifier subagent dispatched via 'auto-fix.sh <n> --prepare worker|verifier', its token usage (the SubagentStop agent.cost event) becomes one cost[] row on ticket <n> when the ticket closes and is counted in cost_total; subagents whose ticket is only guessed stay out, as today.",
+  "acceptance": [
+    "A1 scripts/agent-cost-hook.py, SubagentStop: when the subagent transcript's first user prompt contains an auto-fix --prepare dispatch path '<anything>/t<N>/<run_id>/dispatch-round<R>.md' (worker) or '.../dispatch-verifier-round<R>.md' (verifier), the agent.cost event carries ticket '<N>', role 'worker' / 'verifier', round R (int), run_id '<run_id>' taken from that path - even when the Agent description names another #n.",
+    "A2 A SubagentStop prompt without such a path, and every SessionEnd, produce the same event as on base (ticket guessed, round / run_id null): the existing tests/test_agent_cost_hook.py cases stay green with their assertions unchanged.",
+    "A3 'ticket.py close <n>' (also 'close --landed' and 'set <n> state Done', i.e. every path that writes cost_total) appends, in the same save, one cost[] row per (session_id, agent_id) for the LAST agent.cost event of that pair among events with ticket == n and a non-null run_id; the row has exactly the 15 cost keys (role/round/run_id/session_id/model/token fields/wall_seconds from the event, outcome null, by 'agent-cost-hook', note containing the agent_id), and cost_total counts it (by_role.worker.tokens_in = headless rows + folded row, hand-computed in the test).",
+    "A4 agent.cost events with run_id null (guessed ticket), events of other tickets, and role=main events are not folded: A5CostTotalIgnoresAgentCost in tests/test_agent_cost_hook.py stays green unchanged.",
+    "A5 A cost[] row already present for the same (run_id, agent_id) is not appended again (folding twice leaves one row).",
+    "A6 Tie to the real prompt: the stdout pointer of 'auto-fix.sh <n> --prepare worker' and '--prepare verifier' (the fixtures in tests/test_auto_fix.py ThePrepareWorkerStopsBeforeTheProcess / ThePrepareVerifierCopy) fed to the hook's prompt parser yields ticket n, the right role, round 1 and the run dir name as run_id.",
+    "A7 Docs follow: tickets/SCHEMA.md rows 'cost' / '互動成本' / 'cost_total' state which agent.cost events are folded at close and that guessed ones still are not; scripts/sync-to-project.sh line with '不進票 cost[]' and the agent-cost-hook.py / transcript-cost.py docstrings no longer claim round / run_id are always null or that agent.cost never reaches cost[]."
+  ],
+  "depends_on": [],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "b3d5db6ae4bac21bc5b6913fe8ac17a7fc83c93b",
+  "state": "Running",
+  "state_version": 4,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "simple",
+  "needs_verifier": true,
+  "interface_fixed": false,
+  "decision_refs": [
+    "D-063",
+    "D-061",
+    "D-045",
+    "D-056"
+  ],
+  "feature": "cost ledger: in-session subagents (D-063 3)",
+  "test_plan": "Expected values come from hand-built fixtures (transcript jsonl + events.jsonl rows written by the test) and hand arithmetic, never from the code under test. Layer: unit / CLI subprocess with AC_ROOT pointed at a throwaway control root (existing Sandbox / HookCase patterns). Cases go into existing modules (D-056: no new ticket-numbered case files): tests/test_agent_cost_hook.py, tests/test_ticket.py (CostTotalOnClose neighbourhood), tests/test_auto_fix.py (prepare classes). verify.tags stays empty (cases live in tests/; no feature tag). Root (uid 0) safe: no chmod / mode-bit failure injection.\n\nT1 (A1) HookCase fixture copy: first user prompt = 'model=opus\\n你是 #7 的實作者(role=worker...)\\n先讀這一份:/x/reports/t7/20261021-095546-17288/dispatch-round1.md ...' with meta description 'Worker: ticket #9'. Run the hook with SubagentStop stdin. Expect one agent.cost row: ticket '7', role 'worker', round 1, run_id '20261021-095546-17288'. Variant with 'dispatch-verifier-round1.md' -> role 'verifier'.\nT2 (A2) Rerun the existing hook cases unchanged; add one: description '#7 opener', prompt without a dispatch path -> round null, run_id null, ticket '7' (guess, as before).\nT3 (A3) Throwaway root: ticket 7 (state InReview, closable per the existing close fixtures) with one headless worker row tokens_in 100; events.jsonl: (s, a1, run R1, worker) tokens_in 10 then (s, a1, run R1) tokens_in 25 (cumulative resume); (s, a2, run R2, verifier) tokens_in 4. Close. Expect cost[] grows by exactly 2 rows; the a1 row has tokens_in 25 (not 35, not 10); by_role.worker.tokens_in == 125, by_role.verifier.tokens_in == 4; every row's key set == the 15 cost keys. Run for 'close', 'close --landed <sha>' (existing CloseLanded fixture) and 'set 7 state Done'.\nT4 (A4) Same root plus events: (s, a3, run_id null, ticket '7'), (s, a4, run R3, ticket '8'), (role main, agent_id null, ticket '7'). Expect none folded (row count as in T3).\nT5 (A5) Pre-seed cost[] with a row for (R1, a1); close -> still one row for that pair.\nT6 (A6) Reuse the prepare fixtures: capture stdout of '--prepare worker' / '--prepare verifier', pass it to the parser function the hook uses (transcript-cost.py), assert ticket / role / round / run_id equal the run dir that the fixture created (read from the filesystem, not from the parser).\nT7 (A7) grep -c '`run_id` 恆為 null' tickets/SCHEMA.md == 0 (the 互動成本 row now says when round / run_id are filled); sync-to-project.sh no longer says agent.cost '不進票 cost[]' without the exception.\nMutations (not measured by the opener): M1 fold every agent.cost event instead of the last per (session_id, agent_id) -> T3 red (tokens 35). M2 drop the run_id-not-null filter -> T4 red. M3 hook keeps run_id null for prepare prompts -> T1 red.\nFull suite: the ticket gate's table for the touched files; land runs the full suite anyway.",
+  "outline": "D-063 (3): --prepare worker/verifier subagent tokens reach the ticket's cost[]. Measured: the SubagentStop hook already writes agent.cost per subagent (board/events.jsonl: #149 opener/verifier/worker, #147 worker/verifier) with a guessed ticket, round/run_id null, tokens_out null (interactive stream). The #147 prepare prompt contains reports/t147/20261021-095546-17288/dispatch-round1.md, so ticket/run/round/role are exact for this path; hand-dispatched subagents (the #147 objection verifier) have no path and stay guessed. A resumed subagent writes a second cumulative event (a6d0d4f8: 259s then 1624s), so fold the LAST event per (session_id, agent_id), once, in ticket.py close (the save that writes cost_total; events exist by then). Files: scripts/agent-cost-hook.py, scripts/transcript-cost.py, scripts/ticket.py, tickets/SCHEMA.md, scripts/sync-to-project.sh (text), tests. Does not touch auto-fix.sh. needs_verifier=true: new contract (hook marks + close fold). simple. Not here: hand-dispatched subagents, opener cost, wall_seconds includes idle time of resumed agents."
+}
