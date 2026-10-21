@@ -59,9 +59,9 @@
   "model": "sonnet",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "b5e3e91b459fa89bd9a12d4add2f5deb1479d900",
-  "state": "Ready",
-  "state_version": 4,
+  "base_sha": "ac3fb4d66cb2da8a64bacf4ed336b17562768e7c",
+  "state": "InReview",
+  "state_version": 11,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -87,6 +87,32 @@
     {
       "path": "scripts/ticket.py",
       "contains": "needs_verifier_problem"
+    }
+  ],
+  "branch": "t146",
+  "gate": {
+    "rc": 0,
+    "sha": "77f591a5a24eb581f53fd4b6fc3799a3d5602995",
+    "run_id": "20261021-101913-94822",
+    "at": "2026-10-21T10:39:22+08:00"
+  },
+  "cost": [
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 7,
+      "outcome": "fail",
+      "run_id": "20261021-103923-d9-89017",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-21T10:39:30+08:00"
     }
   ]
 }

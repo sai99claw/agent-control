@@ -83,16 +83,67 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "b5e3e91b459fa89bd9a12d4add2f5deb1479d900",
-  "state": "Ready",
-  "state_version": 6,
+  "base_sha": "9478b34ad73f8526de8fb04d907ee32098ac1b01",
+  "state": "Done",
+  "state_version": 46,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
+    "files": [
+      "tests/test_board.py"
+    ],
     "tags": [],
-    "run": "",
-    "notes": ""
+    "run": "python3 -m unittest tests.test_board -v",
+    "notes": "The round copy already contains the intended ticket 143 cases, but the dispatched ref contains the implementation too; baseline red is unmeasurable until a pre-implementation ref is supplied.",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-21T07:15:35+08:00",
+      "files": [
+        "tests/test_board.py"
+      ],
+      "base_ref": "9478b34ad73f8526de8fb04d907ee32098ac1b01",
+      "base_sha": "9478b34ad73f8526de8fb04d907ee32098ac1b01",
+      "candidate": "../agent-control-wt/t143",
+      "candidate_sha": "e2fc8f87c5d206a2799062da6689de1dd115794c",
+      "baseline": {
+        "red": [
+          "tests.test_board.ReadsWhatIsAlreadyOnDisk.test_the_runs_and_the_inbox_come_from_the_files_themselves",
+          "tests.test_board.ReadsWhatIsAlreadyOnDisk.test_the_state_api_carries_the_runs_the_boxes_and_the_inbox",
+          "tests.test_board.TheFourVisionMetricsComeFromTicketJson.test_one_hand_over_to_main_turns_unknown_into_one",
+          "tests.test_board.TheFourVisionMetricsComeFromTicketJson.test_the_four_numbers_stay_when_the_event_log_is_gone",
+          "tests.test_board.TheFourVisionMetricsComeFromTicketJson.test_the_page_draws_the_same_numbers",
+          "tests.test_board.TheFourVisionMetricsComeFromTicketJson.test_the_state_api_carries_the_four_numbers_and_unknown_is_not_zero"
+        ],
+        "red_lines": [
+          "tests.test_board.ReadsWhatIsAlreadyOnDisk.test_the_runs_and_the_inbox_come_from_the_files_themselves: AssertionError: '讀 patch 記 review' not found in '><h2>④ 決策收件匣</h2><p class=\"empty\">沒有等你裁決的事</p><h2>終態收件匣(還沒 ack)</h2><p class=\"empty\">沒有 <code>reports/inbox/index.jsonl</code> —— 還沒有人寫過終態</p>'",
+          "tests.test_board.ReadsWhatIsAlreadyOnDisk.test_the_state_api_carries_the_runs_the_boxes_and_the_inbox: AssertionError: [] is not true : 收件匣 entries 是空的",
+          "tests.test_board.TheFourVisionMetricsComeFromTicketJson.test_one_hand_over_to_main_turns_unknown_into_one: AssertionError: 'vision' not found in {'generated_at': '2026-10-21T07:15:22+08:00', 'tickets': [{'id': '1', 'subject': '第 1 張', 'created': '2026-09-12T10:00:00+08:00', 'objective': '做完某件事', 'acceptance': ['會紅的斷言一條'], 'depends_on': [], 'role': 'worker', 'model': 'opus', 'tool': 'claude-code', 'attempt': 1, 'base_sha': '89f80a20f472d9d7e1f0a2b5972815a17f0ea10f', 'state': 'Done', 'state_version': 1, 'lease': None, 'retry_limit': 2, 'owner': 'worker', 'cost_total': {'calendar_seconds': 900, 'wall_seconds': 300, 'runs': 1, 'worker_rounds': 1, 'objections': 0, 'by_role': {'worker': {'runs': 1, 'wall_seconds': 300, 'tokens_in': 100, 'tokens_out': 50, 'cache_write': 10, 'cache_read': 1000, 'unknown_token_runs': 0, 'outcomes': {'ok': 1}}}, 'at': '2026-10-19T10:15:00+08:00'}, '_ancestor': True}, {'id': '2', 'subject': '第 2 張', 'created': '2026-09-12T10:00:00+08:00', 'objective': '做完某件事', 'acceptance': ['會紅的斷言一條'], 'depends_on': [], 'role': 'worker', 'model': 'opus', 'tool': 'claude-code', 'attempt': 1, 'base_sha': '89f80a20f472d9d7e1f0a2b5972815a17f0ea10f', 'state': 'Done', 'state_version': 1, 'lease': None, 'retry_limit': 2, 'owner': 'worker', 'cost': [{'role': 'worker', 'round': 1, 'model': 'opus', 'tokens_in': 20, 'tokens_out': 5, 'cache_write': 0, 'cache_read': 7, 'wall_seconds': 40, 'outcome': 'ok', 'run_id': 'r1', 'session_id': None, 'by': 'auto-fix', 'note': '', 'effort': None, 'at': '2026-10-19T10:00:00+08:00'}, {'role': 'worker', 'round': 2, 'model': 'opus', 'tokens_in': 30, 'tokens_out': 10, 'cache_write': 5, 'cache_read': 9, 'wall_seconds': 60, 'outcome': 'ok', 'run_id': 'r2', 'session_id': None, 'by': 'auto-fix', 'note': '', 'effort': None, 'at': '2026-10-19T10:00:00+08:00'}], '_ancestor': True}, {'id': '3', 'subject': '第 3 張', 'created': '2026-09-12T10:00:00+08:00', 'objective': '做完某件事', 'acceptance': ['會紅的斷言一條'], 'depends_on': [], 'role': 'worker', 'model': 'opus', 'tool': 'claude-code', 'attempt': 1, 'base_sha': '89f80a20f472d9d7e1f0a2b5972815a17f0ea10f', 'state': 'Blocked', 'state_version': 2, 'lease': None, 'retry_limit': 2, 'owner': 'main', '_ancestor': True}], 'runs': [], 'sessions': [], 'answers': {}, 'rehearsal': [], 'ticket_runs': {'1': {'ticket': '1', 'dir': 'reports/t1', 'exists': False, 'runs': [], 'broken': []}, '2': {'ticket': '2', 'dir': 'reports/t2', 'exists': False, 'runs': [], 'broken': []}, '3': {'ticket': '3', 'dir': 'reports/t3', 'exists': False, 'runs': [], 'broken': []}}, 'boxes': {'1': {'objections': [], 'review': {}, 'verify': {}}, '2': {'objections': [], 'review': {}, 'verify': {}}, '3': {'objections': [], 'review': {}, 'verify': {}}}, 'inbox': {'dir': 'reports/inbox', 'entries': [], 'broken': [], 'index_missing': True, 'acked_missing': False}, 'metrics': {'1': {'ticket': '1', 'gate_runs': 0, 'land_runs': 0, 'apply_runs': 0, 'fix_rounds': 0, 'red_runs': 0, 'env_runs': 0, 'product_runs': 0, 'wall_seconds': 0, 'objections_ticket_wrong': 0, 'objections_test_defect': 0, 'tokens_known_runs': 0, 'tokens_known_total': 0, 'tokens_unknown_runs': 0, 'tokens': '未知', 'note': '沒有 reports/t1 —— 這張票一輪都還沒跑過'}, '2': {'ticket': '2', 'gate_runs': 0, 'land_runs': 0, 'apply_runs': 0, 'fix_rounds': 0, 'red_runs': 0, 'env_runs': 0, 'product_runs': 0, 'wall_seconds': 0, 'objections_ticket_wrong': 0, 'objections_test_defect': 0, 'tokens_known_runs': 0, 'tokens_known_total': 0, 'tokens_unknown_runs': 0, 'tokens': '未知', 'note': '沒有 reports/t2 —— 這張票一輪都還沒跑過'}, '3': {'ticket': '3', 'gate_runs': 0, 'land_runs': 0, 'apply_runs': 0, 'fix_rounds': 0, 'red_runs': 0, 'env_runs': 0, 'product_runs': 0, 'wall_seconds': 0, 'objections_ticket_wrong': 0, 'objections_test_defect': 0, 'tokens_known_runs': 0, 'tokens_known_total': 0, 'tokens_unknown_runs': 0, 'tokens': '未知', 'note': '沒有 reports/t3 —— 這張票一輪都還沒跑過'}}, 'tokens': '未知'} : /api/state 沒有四個指標",
+          "tests.test_board.TheFourVisionMetricsComeFromTicketJson.test_the_four_numbers_stay_when_the_event_log_is_gone: AssertionError: 'vision' not found in {'generated_at': '2026-10-21T07:15:22+08:00', 'tickets': [{'id': '1', 'subject': '第 1 張', 'created': '2026-09-12T10:00:00+08:00', 'objective': '做完某件事', 'acceptance': ['會紅的斷言一條'], 'depends_on': [], 'role': 'worker', 'model': 'opus', 'tool': 'claude-code', 'attempt': 1, 'base_sha': '89f80a20f472d9d7e1f0a2b5972815a17f0ea10f', 'state': 'Done', 'state_version': 1, 'lease': None, 'retry_limit': 2, 'owner': 'worker', 'cost_total': {'calendar_seconds': 900, 'wall_seconds': 300, 'runs': 1, 'worker_rounds': 1, 'objections': 0, 'by_role': {'worker': {'runs': 1, 'wall_seconds': 300, 'tokens_in': 100, 'tokens_out': 50, 'cache_write': 10, 'cache_read': 1000, 'unknown_token_runs': 0, 'outcomes': {'ok': 1}}}, 'at': '2026-10-19T10:15:00+08:00'}, '_ancestor': True}, {'id': '2', 'subject': '第 2 張', 'created': '2026-09-12T10:00:00+08:00', 'objective': '做完某件事', 'acceptance': ['會紅的斷言一條'], 'depends_on': [], 'role': 'worker', 'model': 'opus', 'tool': 'claude-code', 'attempt': 1, 'base_sha': '89f80a20f472d9d7e1f0a2b5972815a17f0ea10f', 'state': 'Done', 'state_version': 1, 'lease': None, 'retry_limit': 2, 'owner': 'worker', 'cost': [{'role': 'worker', 'round': 1, 'model': 'opus', 'tokens_in': 20, 'tokens_out': 5, 'cache_write': 0, 'cache_read': 7, 'wall_seconds': 40, 'outcome': 'ok', 'run_id': 'r1', 'session_id': None, 'by': 'auto-fix', 'note': '', 'effort': None, 'at': '2026-10-19T10:00:00+08:00'}, {'role': 'worker', 'round': 2, 'model': 'opus', 'tokens_in': 30, 'tokens_out': 10, 'cache_write': 5, 'cache_read': 9, 'wall_seconds': 60, 'outcome': 'ok', 'run_id': 'r2', 'session_id': None, 'by': 'auto-fix', 'note': '', 'effort': None, 'at': '2026-10-19T10:00:00+08:00'}], '_ancestor': True}, {'id': '3', 'subject': '第 3 張', 'created': '2026-09-12T10:00:00+08:00', 'objective': '做完某件事', 'acceptance': ['會紅的斷言一條'], 'depends_on': [], 'role': 'worker', 'model': 'opus', 'tool': 'claude-code', 'attempt': 1, 'base_sha': '89f80a20f472d9d7e1f0a2b5972815a17f0ea10f', 'state': 'Blocked', 'state_version': 1, 'lease': None, 'retry_limit': 2, 'owner': 'main', '_ancestor': True}], 'runs': [], 'sessions': [], 'answers': {}, 'rehearsal': [], 'ticket_runs': {'1': {'ticket': '1', 'dir': 'reports/t1', 'exists': False, 'runs': [], 'broken': []}, '2': {'ticket': '2', 'dir': 'reports/t2', 'exists': False, 'runs': [], 'broken': []}, '3': {'ticket': '3', 'dir': 'reports/t3', 'exists': False, 'runs': [], 'broken': []}}, 'boxes': {'1': {'objections': [], 'review': {}, 'verify': {}}, '2': {'objections': [], 'review': {}, 'verify': {}}, '3': {'objections': [], 'review': {}, 'verify': {}}}, 'inbox': {'dir': 'reports/inbox', 'entries': [], 'broken': [], 'index_missing': True, 'acked_missing': False}, 'metrics': {'1': {'ticket': '1', 'gate_runs': 0, 'land_runs': 0, 'apply_runs': 0, 'fix_rounds': 0, 'red_runs': 0, 'env_runs': 0, 'product_runs': 0, 'wall_seconds': 0, 'objections_ticket_wrong': 0, 'objections_test_defect': 0, 'tokens_known_runs': 0, 'tokens_known_total': 0, 'tokens_unknown_runs': 0, 'tokens': '未知', 'note': '沒有 reports/t1 —— 這張票一輪都還沒跑過'}, '2': {'ticket': '2', 'gate_runs': 0, 'land_runs': 0, 'apply_runs': 0, 'fix_rounds': 0, 'red_runs': 0, 'env_runs': 0, 'product_runs': 0, 'wall_seconds': 0, 'objections_ticket_wrong': 0, 'objections_test_defect': 0, 'tokens_known_runs': 0, 'tokens_known_total': 0, 'tokens_unknown_runs': 0, 'tokens': '未知', 'note': '沒有 reports/t2 —— 這張票一輪都還沒跑過'}, '3': {'ticket': '3', 'gate_runs': 0, 'land_runs': 0, 'apply_runs': 0, 'fix_rounds': 0, 'red_runs': 0, 'env_runs': 0, 'product_runs': 0, 'wall_seconds': 0, 'objections_ticket_wrong': 0, 'objections_test_defect': 0, 'tokens_known_runs': 0, 'tokens_known_total': 0, 'tokens_unknown_runs': 0, 'tokens': '未知', 'note': '沒有 reports/t3 —— 這張票一輪都還沒跑過'}}, 'tokens': '未知'} : /api/state 沒有四個指標",
+          "tests.test_board.TheFourVisionMetricsComeFromTicketJson.test_the_page_draws_the_same_numbers: AssertionError: 'wall 秒' not found in ['票', '狀態', 'v', '前置', 'base_sha 還是主線祖先?', '返工輪', '紅(env/product)', 'token', '凍結', '標題'] : 票表沒有「wall 秒」這一欄",
+          "tests.test_board.TheFourVisionMetricsComeFromTicketJson.test_the_state_api_carries_the_four_numbers_and_unknown_is_not_zero: AssertionError: 'vision' not found in {'generated_at': '2026-10-21T07:15:23+08:00', 'tickets': [{'id': '1', 'subject': '第 1 張', 'created': '2026-09-12T10:00:00+08:00', 'objective': '做完某件事', 'acceptance': ['會紅的斷言一條'], 'depends_on': [], 'role': 'worker', 'model': 'opus', 'tool': 'claude-code', 'attempt': 1, 'base_sha': 'ab0b3fd0cff21e7c47510fb623d532a14545646b', 'state': 'Done', 'state_version': 1, 'lease': None, 'retry_limit': 2, 'owner': 'worker', 'cost_total': {'calendar_seconds': 900, 'wall_seconds': 300, 'runs': 1, 'worker_rounds': 1, 'objections': 0, 'by_role': {'worker': {'runs': 1, 'wall_seconds': 300, 'tokens_in': 100, 'tokens_out': 50, 'cache_write': 10, 'cache_read': 1000, 'unknown_token_runs': 0, 'outcomes': {'ok': 1}}}, 'at': '2026-10-19T10:15:00+08:00'}, '_ancestor': True}, {'id': '2', 'subject': '第 2 張', 'created': '2026-09-12T10:00:00+08:00', 'objective': '做完某件事', 'acceptance': ['會紅的斷言一條'], 'depends_on': [], 'role': 'worker', 'model': 'opus', 'tool': 'claude-code', 'attempt': 1, 'base_sha': 'ab0b3fd0cff21e7c47510fb623d532a14545646b', 'state': 'Done', 'state_version': 1, 'lease': None, 'retry_limit': 2, 'owner': 'worker', 'cost': [{'role': 'worker', 'round': 1, 'model': 'opus', 'tokens_in': 20, 'tokens_out': 5, 'cache_write': 0, 'cache_read': 7, 'wall_seconds': 40, 'outcome': 'ok', 'run_id': 'r1', 'session_id': None, 'by': 'auto-fix', 'note': '', 'effort': None, 'at': '2026-10-19T10:00:00+08:00'}, {'role': 'worker', 'round': 2, 'model': 'opus', 'tokens_in': 30, 'tokens_out': 10, 'cache_write': 5, 'cache_read': 9, 'wall_seconds': 60, 'outcome': 'ok', 'run_id': 'r2', 'session_id': None, 'by': 'auto-fix', 'note': '', 'effort': None, 'at': '2026-10-19T10:00:00+08:00'}], '_ancestor': True}, {'id': '3', 'subject': '第 3 張', 'created': '2026-09-12T10:00:00+08:00', 'objective': '做完某件事', 'acceptance': ['會紅的斷言一條'], 'depends_on': [], 'role': 'worker', 'model': 'opus', 'tool': 'claude-code', 'attempt': 1, 'base_sha': 'ab0b3fd0cff21e7c47510fb623d532a14545646b', 'state': 'Blocked', 'state_version': 1, 'lease': None, 'retry_limit': 2, 'owner': 'main', '_ancestor': True}], 'runs': [], 'sessions': [], 'answers': {}, 'rehearsal': [], 'ticket_runs': {'1': {'ticket': '1', 'dir': 'reports/t1', 'exists': False, 'runs': [], 'broken': []}, '2': {'ticket': '2', 'dir': 'reports/t2', 'exists': False, 'runs': [], 'broken': []}, '3': {'ticket': '3', 'dir': 'reports/t3', 'exists': False, 'runs': [], 'broken': []}}, 'boxes': {'1': {'objections': [], 'review': {}, 'verify': {}}, '2': {'objections': [], 'review': {}, 'verify': {}}, '3': {'objections': [], 'review': {}, 'verify': {}}}, 'inbox': {'dir': 'reports/inbox', 'entries': [], 'broken': [], 'index_missing': True, 'acked_missing': False}, 'metrics': {'1': {'ticket': '1', 'gate_runs': 0, 'land_runs': 0, 'apply_runs': 0, 'fix_rounds': 0, 'red_runs': 0, 'env_runs': 0, 'product_runs': 0, 'wall_seconds': 0, 'objections_ticket_wrong': 0, 'objections_test_defect': 0, 'tokens_known_runs': 0, 'tokens_known_total': 0, 'tokens_unknown_runs': 0, 'tokens': '未知', 'note': '沒有 reports/t1 —— 這張票一輪都還沒跑過'}, '2': {'ticket': '2', 'gate_runs': 0, 'land_runs': 0, 'apply_runs': 0, 'fix_rounds': 0, 'red_runs': 0, 'env_runs': 0, 'product_runs': 0, 'wall_seconds': 0, 'objections_ticket_wrong': 0, 'objections_test_defect': 0, 'tokens_known_runs': 0, 'tokens_known_total': 0, 'tokens_unknown_runs': 0, 'tokens': '未知', 'note': '沒有 reports/t2 —— 這張票一輪都還沒跑過'}, '3': {'ticket': '3', 'gate_runs': 0, 'land_runs': 0, 'apply_runs': 0, 'fix_rounds': 0, 'red_runs': 0, 'env_runs': 0, 'product_runs': 0, 'wall_seconds': 0, 'objections_ticket_wrong': 0, 'objections_test_defect': 0, 'tokens_known_runs': 0, 'tokens_known_total': 0, 'tokens_unknown_runs': 0, 'tokens': '未知', 'note': '沒有 reports/t3 —— 這張票一輪都還沒跑過'}}, 'tokens': '未知'} : /api/state 沒有四個指標"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 30,
+        "skipped": 0,
+        "log": "../agent-control-wt/t143/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 30,
+        "skipped": 0,
+        "log": "../agent-control-wt/t143/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "complexity": "complex",
   "needs_verifier": true,
@@ -112,5 +163,235 @@
       "path": "board/board.py",
       "contains": "metrics"
     }
-  ]
+  ],
+  "branch": "t143",
+  "gate": {
+    "rc": 0,
+    "sha": "e2fc8f87c5d206a2799062da6689de1dd115794c",
+    "run_id": "20261021-065147-73661",
+    "at": "2026-10-21T07:15:36+08:00"
+  },
+  "cost": [
+    {
+      "role": "verifier",
+      "round": 2,
+      "model": "codex:gpt-5.6-sol",
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 360,
+      "outcome": "handed-in",
+      "run_id": "20261021-044840-67537",
+      "session_id": null,
+      "by": "auto-fix.sh",
+      "note": "reports/t143/20261021-044840-67537/verifier-round2.log 裡沒有 JSON 信封",
+      "effort": "high",
+      "at": "2026-10-21T05:15:30+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 28,
+      "tokens_out": 9073,
+      "cache_write": 72147,
+      "cache_read": 897967,
+      "wall_seconds": 179,
+      "outcome": "fail",
+      "run_id": "20261021-051533-66668",
+      "session_id": "08d07556-7a01-434e-893c-380a7bdb4243",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-21T05:39:49+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 28,
+      "tokens_out": 9818,
+      "cache_write": 78124,
+      "cache_read": 919606,
+      "wall_seconds": 120,
+      "outcome": "pass",
+      "run_id": "20261021-060254-69807",
+      "session_id": "186199a6-7076-4a0d-b3d6-1974d306fd15",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-21T06:26:22+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 32,
+      "tokens_out": 8723,
+      "cache_write": 51671,
+      "cache_read": 973799,
+      "wall_seconds": 99,
+      "outcome": "pass",
+      "run_id": "20261021-060254-69807",
+      "session_id": "76673586-d119-470c-839f-3c172173bd33",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-21T06:28:05+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1,
+      "outcome": "fail",
+      "run_id": "20261021-062805-d9-69698",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-21T06:28:06+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 24,
+      "tokens_out": 9293,
+      "cache_write": 76546,
+      "cache_read": 742093,
+      "wall_seconds": 124,
+      "outcome": "fail",
+      "run_id": "20261021-065147-73661",
+      "session_id": "fb7bcdd1-9870-43fe-9855-1e0bb7dc3c90",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-21T07:17:43+08:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 32,
+      "tokens_out": 10560,
+      "cache_write": 53225,
+      "cache_read": 1025735,
+      "wall_seconds": 130,
+      "outcome": "pass",
+      "run_id": "20261021-065147-73661",
+      "session_id": "7f613f51-8c8f-4c79-94f2-8ad8663820c0",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-21T07:19:58+08:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2153,
+      "outcome": "pass",
+      "run_id": "20261021-072118-d9-74585",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-21T07:57:12+08:00"
+    }
+  ],
+  "repair_round": 2,
+  "objections": [
+    {
+      "category": "blocking",
+      "body": "No migration for the live inbox: 237 pages acked only in reports/inbox/acked.jsonl stay in reports/inbox/, so after landing inbox.py list, new-session.sh and board metric 4 show ~268 unacked pages instead of ~31; the ticket's \"delete index.jsonl and acked.jsonl\" needs a one-off move of acked pages into acked/.",
+      "evidence": "reports/t143/20261021-051533-66668/REVIEW.md",
+      "owner": "reviewer@opus",
+      "disposition": "accepted",
+      "follow_up": "主線裁:成立。本票補一次性搬遷:偵測到 reports/inbox/acked.jsonl 時,把已 ack 的頁搬進 reports/inbox/archive/ 再刪 acked.jsonl(冪等;T 同步後同樣適用),並在既有 tests/test_inbox.py 加一條斷言"
+    },
+    {
+      "category": "blocking",
+      "body": "Ticket verify.baseline is stage=check ok=false: tests/test_board.py:444 (test_the_state_api_carries_the_runs_the_boxes_and_the_inbox) reds on clean main with IndexError, not AssertionError as test_plan requires; assert entries is non-empty before indexing [0].",
+      "evidence": "reports/t143/20261021-051533-66668/REVIEW.md",
+      "owner": "reviewer@opus",
+      "disposition": "accepted",
+      "follow_up": "主線裁:test_defect 成立。案例先斷言 entries 非空再取 [0],讓它在乾淨主線上以 AssertionError 紅"
+    },
+    {
+      "category": "blocking",
+      "body": "Acceptance 1 grep is not 0 lines on e2fc8f8: scripts/inbox.py:63,:137,:139 and tests/test_inbox.py:196,:203,:210 still contain `acked.jsonl` (the round-2 one-time migration `migrate_acked_jsonl`); no objection or ticket amendment excludes them — main must either amend acceptance 1 to exempt the migration (and decide when it is removed) or have it dropped.",
+      "evidence": "reports/t143/20261021-065147-73661/REVIEW.md",
+      "owner": "reviewer@opus",
+      "disposition": "accepted",
+      "follow_up": "主線裁:驗收 1 的 grep 豁免一次性搬遷 migrate_acked_jsonl(inbox.py 與 tests/test_inbox.py 的那幾行);移除時機:T 同步並跑過一次搬遷之後,列進 #147 的 T 端清單"
+    }
+  ],
+  "owner": "main",
+  "interventions": 2,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "dd497ea167b37bb32476107542611bb6c5223fb0",
+    "note": "reports/t143/20261021-065147-73661/REVIEW.md",
+    "at": "2026-10-21T07:57:12+08:00"
+  },
+  "landed_sha": "dd497ea167b37bb32476107542611bb6c5223fb0",
+  "cost_total": {
+    "calendar_seconds": 164112,
+    "wall_seconds": 3166,
+    "runs": 8,
+    "worker_rounds": null,
+    "objections": 3,
+    "by_role": {
+      "verifier": {
+        "runs": 1,
+        "wall_seconds": 360,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "handed-in": 1
+        }
+      },
+      "reviewer": {
+        "runs": 5,
+        "wall_seconds": 652,
+        "tokens_in": 144,
+        "tokens_out": 47467,
+        "cache_write": 331713,
+        "cache_read": 4559200,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "fail": 2,
+          "pass": 3
+        }
+      },
+      "land": {
+        "runs": 2,
+        "wall_seconds": 2154,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 2,
+        "outcomes": {
+          "fail": 1,
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-21T07:57:12+08:00"
+  }
 }
