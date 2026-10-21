@@ -51,6 +51,7 @@
 #
 # ## 一批 N≥2 張全套紅(#109,D-H51 ②)
 # **不找是誰弄紅的**:同一把鎖下叫 `auto-fix.sh --batch land/<stamp> <id…>`(一個 worker 拿整批),
+# 那個 worker 就在這一個 land worktree(整合分支)上自己 commit(#145,D-054 Q9),
 # rc 0 就在同一個 land worktree 重跑全套;最多 `batch_fix.rounds`(預設 2)輪。鎖整段不放,所以
 # ff-only 不會因為主線中途動了而白跑;代價是 docs 通道最多等 rounds × (全套 + worker + 覆核)。
 # 修滿仍紅才找嫌疑票,規則純機械:最後一輪紅榜 `failures[].file` 對各票的

@@ -3,8 +3,8 @@
 #
 #   sh scripts/review.sh <票號>                  # 票要是 InReview / AwaitingReview、分支 t<票號> 要在
 #   sh scripts/review.sh <票號> --run-id <id>    # 派工文與 REVIEW.md 落在那一輪的目錄
-#   sh scripts/review.sh --batch <整合分支> <票號…> --run-id <stamp>
-#                                                # 批次修復的 fix commit(#108;見下面 batch 那一段)
+#   sh scripts/review.sh --batch <整合分支> <票號…> --run-id <stamp> [--base <sha>]
+#                                                # 批次修復的 commit(#108、#145;見下面 batch 那一段)
 #
 # 閘門綠、票轉 `InReview` 之後由兩處叫這一支:`auto-fix.sh` 第 r 輪綠(`--no-review` 關)
 # 與手跑 `gate.sh --branch --ticket <n>` 綠。主線不再組派工文、不再讀 patch、不再手抄 sha。
@@ -72,13 +72,14 @@ PY
 [ $# -ge 1 ] || { echo "用法:sh scripts/review.sh <票號> [--run-id <id>]" >&2; exit 2; }
 BATCH=""
 if [ "$1" = "--batch" ]; then
-    # 批次修復的覆核(#108):sh scripts/review.sh --batch <整合分支> <票號…> --run-id <stamp>
+    # 批次修復的覆核(#108):sh scripts/review.sh --batch <整合分支> <票號…> --run-id <stamp> [--base <sha>]
     shift
-    [ $# -ge 2 ] || { echo "用法:sh scripts/review.sh --batch <整合分支> <票號…> --run-id <stamp>" >&2; exit 2; }
+    [ $# -ge 2 ] || { echo "用法:sh scripts/review.sh --batch <整合分支> <票號…> --run-id <stamp> [--base <sha>]" >&2; exit 2; }
     BATCH=1
     B_BR=$1
     shift
     B_IDS=""
+    B_BASE=""
     RUN_ID=""
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -86,7 +87,11 @@ if [ "$1" = "--batch" ]; then
                 shift
                 [ $# -ge 1 ] || { echo "review: --run-id 後面要一個 stamp" >&2; exit 2; }
                 RUN_ID=$1 ;;
-            -*) echo "review: --batch 不認得 $1(--run-id <stamp>)" >&2; exit 2 ;;
+            --base)
+                shift
+                [ $# -ge 1 ] || { echo "review: --base 後面要一個 sha" >&2; exit 2; }
+                B_BASE=$1 ;;
+            -*) echo "review: --batch 不認得 $1(--run-id <stamp> [--base <sha>])" >&2; exit 2 ;;
             *) B_IDS="$B_IDS $1" ;;
         esac
         shift
@@ -405,7 +410,9 @@ PY
 }
 
 # ------------------------------------------------------------------ batch
-# 批次修復的覆核(#108,D-H51 ②):`apply.sh --batch` 在整合分支頭上疊的那一個 fix commit。
+# 批次修復的覆核(#108,D-H51 ②):批次 worker 在整合分支上的 commit(#145,D-054 Q9),連同
+# `apply.sh --batch` 補的 code-map 重產 = `<base>..<整合分支頭>` 的 diff。`<base>` = `--base`
+# (auto-fix 給派工前的頭);沒給 = 整合分支 first-parent 上最近一個 merge(最後併進來的那張票)。
 # 與單票那一條不同:**不寫票**(不 `set review`、不記反駁、不轉 Blocked —— 任何一張票的
 # `state_version` 一動,N 張的覆核同時過期);pass 寫 `reports/batch/<stamp>/review.json`,
 # sha 是派工那一刻的整合分支頭(不是哪一張票的分支頭);fail / 沒交件一頁 decision 掛第一張票、
@@ -424,10 +431,15 @@ if [ -n "$BATCH" ]; then
     RLOG=$RUNDIR/reviewer.log
     RESULT_JSON=$RUNDIR/result-reviewer.json
     SHA=$(git -C "$ROOT" rev-parse -q --verify "$B_BR^{commit}" 2>/dev/null || echo "")
-    [ -n "$SHA" ] || refuse "整合分支 $B_BR 不存在" "先 sh scripts/apply.sh --batch $B_BR $B_IDS <patch>"
-    [ "$(git -C "$ROOT" rev-list --parents -n 1 "$SHA" | wc -w)" -le 2 ] \
-        || refuse "整合分支 $B_BR 的頭是 merge,不是批次修復的 commit(apply.sh --batch 疊的那一個)" \
-                  "先 sh scripts/apply.sh --batch $B_BR $B_IDS <patch>,再覆核"
+    [ -n "$SHA" ] || refuse "整合分支 $B_BR 不存在" "先 sh scripts/auto-fix.sh --batch $B_BR $B_IDS"
+    [ -n "$B_BASE" ] || B_BASE=$(git -C "$ROOT" rev-list --first-parent --merges -n 1 "$SHA")
+    [ -n "$B_BASE" ] && git -C "$ROOT" merge-base --is-ancestor "$B_BASE" "$SHA" 2>/dev/null \
+        || refuse "base ${B_BASE:-(空)} 不在整合分支 $B_BR 的歷史上" \
+                  "給 --base <批次 worker 派工前的頭> 再覆核"
+    B_BASE=$(git -C "$ROOT" rev-parse "$B_BASE")
+    [ "$(git -C "$ROOT" rev-list --count "$B_BASE..$SHA")" -gt 0 ] \
+        || refuse "整合分支 $B_BR 相對 base $(echo "$B_BASE" | cut -c1-12) 沒有批次修復的 commit" \
+                  "先 sh scripts/auto-fix.sh --batch $B_BR $B_IDS(worker 在整合分支上 commit),再覆核"
     TEMPLATE=""
     for candidate in "$ROOT/templates/dispatch-reviewer.md" "$AC/../templates/dispatch-reviewer.md"; do
         [ -f "$candidate" ] && { TEMPLATE=$candidate; break; }
@@ -439,26 +451,26 @@ if [ -n "$BATCH" ]; then
     CWD=${CWD:-$ROOT}
     review_rules \
         || refuse "規則包產不出來(模型 ${RULES_MODEL:-未指定})" \
-                  "補齊 rules.py 列的缺項(decision 頁)再跑 sh scripts/review.sh --batch $B_BR $B_IDS --run-id $RUN_ID"
+                  "補齊 rules.py 列的缺項(decision 頁)再跑 sh scripts/review.sh --batch $B_BR $B_IDS --run-id $RUN_ID --base $B_BASE"
     batch_packet() {   # 派工文 = 規則包 + 這一批的那一段;換候選(#132)時先重產規則包再組一次
         {
             printf '%s\n' "$RULES_TEXT"
-            python3 - "$TEMPLATE" "$TDIR" "$ROOT" "$B_BR" "$SHA" "$REVIEW" "$MODEL" "$RUN_ID" $B_IDS <<'PY'
+            python3 - "$TEMPLATE" "$TDIR" "$ROOT" "$B_BR" "$SHA" "$REVIEW" "$MODEL" "$RUN_ID" "$B_BASE" $B_IDS <<'PY'
 import json, os, subprocess, sys
-template, tdir, root, branch, sha, review, model, stamp = sys.argv[1:9]
-ids = sys.argv[9:]
+template, tdir, root, branch, sha, review, model, stamp, base = sys.argv[1:10]
+ids = sys.argv[10:]
 tags = " ".join("#%s" % ident for ident in ids)
 print("")
 print("# 批次修復的覆核:%s(整合分支 `%s`)" % (tags, branch))
 print("")
-print("這一批 land 時全套紅了;一個 worker 在整合分支上修了紅榜,修法是整合分支頭上**一個** commit "
-      "`%s`。你覆核的是**這個 commit 的 diff**:有沒有把這批票各自的驗收修壞、有沒有放寬測試、"
-      "有沒有動到與修紅無關的檔。各票分支已各自覆核過,不重看。" % sha[:12])
+print("這一批 land 時全套紅了;一個 worker 在整合分支上修了紅榜,修法是整合分支上 `%s..%s` 的 commit。"
+      "你覆核的是**這一段的 diff**:有沒有把這批票各自的驗收修壞、有沒有放寬測試、"
+      "有沒有動到與修紅無關的檔。各票分支已各自覆核過,不重看。" % (base[:12], sha[:12]))
 print("")
 print("## 這一批獨有的四件事")
 print("1. **票號**:%s(票面在下面;不寫任何一張票)" % tags)
-print("2. **sha**:`%s`(整合分支 `%s` 的頭 = fix commit)" % (sha, branch))
-print("3. **紀錄目錄**:`%s`(worker 的 patch / EVIDENCE / result 都在這裡)"
+print("2. **sha**:`%s`(整合分支 `%s` 的頭;修復前是 `%s`)" % (sha, branch, base))
+print("3. **紀錄目錄**:`%s`(worker 的 EVIDENCE / result 都在這裡)"
       % os.path.relpath(os.path.dirname(review), root))
 print("4. **交付**:你的整份回覆就是 REVIEW.md,存到 `%s`" % review)
 print("")
@@ -472,10 +484,10 @@ for ident in ids:
     print("- acceptance:")
     for item in row.get("acceptance") or []:
         print("  - %s" % item)
-diff = subprocess.run(["git", "-C", root, "diff", "%s^" % sha, sha],
+diff = subprocess.run(["git", "-C", root, "diff", base, sha],
                       capture_output=True, text=True).stdout
 print("")
-print("## fix commit 前後的 diff(`git diff %s^ %s`)" % (sha[:12], sha[:12]))
+print("## 批次修復的 diff(`git diff %s %s`)" % (base[:12], sha[:12]))
 print("```diff")
 print(diff.rstrip("\n") or "(空的 diff)")
 print("```")
@@ -517,12 +529,12 @@ PY
                 ev review.missing --ticket "$ID" --kv run_id="$RUN_ID" --kv batch="$B_TAGS" \
                     --note "reviewer 候選整串耗盡($R_REASON)"
                 post "批次 reviewer 候選整串耗盡($B_TAGS)" \
-                     "整批 $B_TAGS 的 reviewer 候選都撞到額度 / 不可用($R_REASON);改表或等額度恢復後重派 sh scripts/review.sh --batch $B_BR $B_IDS --run-id $RUN_ID" \
+                     "整批 $B_TAGS 的 reviewer 候選都撞到額度 / 不可用($R_REASON);改表或等額度恢復後重派 sh scripts/review.sh --batch $B_BR $B_IDS --run-id $RUN_ID --base $B_BASE" \
                      "board/role-models.json"
                 exit 7 ;;
             handed) exit 7 ;;
             *) refuse "換候選後的 reviewer $MODEL 組不出命令或規則包產不出來" \
-                      "改表或補規則包後重派 sh scripts/review.sh --batch $B_BR $B_IDS --run-id $RUN_ID" ;;
+                      "改表或補規則包後重派 sh scripts/review.sh --batch $B_BR $B_IDS --run-id $RUN_ID --base $B_BASE" ;;
         esac
     fi
     unwrap_envelope "$REVIEW" "$RUNDIR/reviewer.json"
@@ -535,7 +547,7 @@ PY
         ev review.missing --ticket "$ID" --kv run_id="$RUN_ID" --kv batch="$B_TAGS" --note "沒交不是 pass($WHY)"
         batch_cost missing
         post "批次覆核沒交件($B_TAGS)" \
-             "整批 $B_TAGS 的 fix commit $(echo "$SHA" | cut -c1-12) 在 $B_BR 上沒有覆核結論($WHY):看 $(rel "$RLOG") 與 $REL_REVIEW,再重派 sh scripts/review.sh --batch $B_BR $B_IDS --run-id $RUN_ID" \
+             "整批 $B_TAGS 的批次修復(頭 $(echo "$SHA" | cut -c1-12)) 在 $B_BR 上沒有覆核結論($WHY):看 $(rel "$RLOG") 與 $REL_REVIEW,再重派 sh scripts/review.sh --batch $B_BR $B_IDS --run-id $RUN_ID --base $B_BASE" \
              "$REL_REVIEW"
         exit 3
     fi
@@ -560,7 +572,7 @@ PY
     ev decision.asked --ticket "$ID" --note "批次 $B_TAGS 覆核退回($BY)"
     echo "review: 批次 $B_TAGS 覆核退回($BY)—— 票檔沒動,一頁 decision 掛 #$ID${WHY:+;$WHY}" >&2
     post "批次覆核退回($B_TAGS)" \
-         "裁示:整批 $B_TAGS 的 fix commit $(echo "$SHA" | cut -c1-12) 在 $B_BR 上被覆核退回;讀 $REL_REVIEW 的 OBJECTION: 行,決定重派批次修復或拆批。各票分支與票檔都沒動" \
+         "裁示:整批 $B_TAGS 的批次修復(頭 $(echo "$SHA" | cut -c1-12)) 在 $B_BR 上被覆核退回;讀 $REL_REVIEW 的 OBJECTION: 行,決定重派批次修復或拆批。各票分支與票檔都沒動" \
          "$REL_REVIEW"
     exit 1
 fi

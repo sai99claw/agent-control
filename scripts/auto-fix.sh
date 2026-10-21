@@ -1288,7 +1288,7 @@ def tee(stream, log):
 # push 失敗的 land.fail 帶 stage=push 與齊全的 sha / main_before / stamp(#128 A4)也算一段:commit 已在本機 main。
 # 主線可寫前綴(config `guard_main_paths`,缺 = docs 通道三前綴,#128 A1)底下的改動只記不擋,列進 `main_side`。
 # 分支 ref(#144):`refs/heads` 底下每一條的頭也拍(主 worktree 的那一條由 HEAD 那一格管);這張票的分支
-# 與 worker 的 worktree 是它自己的、不算;land 的 `land/<stamp>` 有同 stamp 的 land.start 就歸屬給那次落地。
+# 與 worker 的 worktree(連它掛的分支,批次是整合分支,#145)是它自己的、不算;land 的 `land/<stamp>` 有同 stamp 的 land.start 就歸屬給那次落地。
 # 越界寫 `<log 去掉 .log>.guard.json`、rc 印 8;只有 main_side 或 push 失敗的那一段時 guard.json 照寫、
 # violations 空、rc 不動。
 # **只查列出來的地方**:主 repo 被 .gitignore 掉的檔與 hard_block.dirs 以外,這裡不宣稱看過。
@@ -1488,7 +1488,7 @@ def guard_verdict(before, repo, exempt, dirs, events, mains, agent_rc):
         else:
             found.append({"path": "HEAD", "before": before["head"], "after": after["head"],
                           "unattributed": stray})
-    skip = {before["branch"], after["branch"], own_ref}
+    skip = {before["branch"], after["branch"], own_ref, worktree_ref}
     for name in sorted(set(before["refs"]) | set(after["refs"])):
         was, now = before["refs"].get(name, "absent"), after["refs"].get(name, "absent")
         if was == now or name in skip:
@@ -1539,6 +1539,9 @@ try:
         own_ref = "refs/heads/" + (json.load(handle).get("branch") or "t%s" % ident)
 except (OSError, ValueError):
     own_ref = "refs/heads/t%s" % ident
+# worker 的 worktree 掛的那條分支也是它的(批次 worker 在整合分支上 commit,#145)。
+worktree_ref = ((git_out(worktree, "symbolic-ref", "-q", "HEAD") or b"").decode().strip()
+                if worktree else "") or own_ref
 
 # `worker.pid` 住在副本根(#46):下一輪收前幾輪副本之前先問它還活著沒有。回來了就刪掉,
 # 留著的那一份只會是「auto-fix 被砍了、worker 還在跑」的那一種。
@@ -2399,15 +2402,16 @@ ticket_worktree() {   # 設定 WT;建不出來回 1
 # 交件判準(#144):票分支相對派工前多了至少一個 commit,而且 worktree 乾淨。未 commit 的改動
 # 不算交件 —— 不替 worker commit、不另擋(替它 commit 就是腳本替人決定交什麼)。閘門寫的
 # `gate.log*` 殘留不算改動(#57)。
-worker_delivery() {   # uses WT/W_BEFORE;設定 W_HANDED(1 = 交了)與 W_WHY(沒交的理由)
-    W_NEW=$(git -C "$WT" rev-list --count "$W_BEFORE..refs/heads/$(ticket_branch)" 2>/dev/null || echo 0)
+worker_delivery() {   # $1 = 分支(缺 = 票分支;批次給整合分支)uses WT/W_BEFORE;設定 W_HANDED(1 = 交了)與 W_WHY
+    W_BR=${1:-$(ticket_branch)}
+    W_NEW=$(git -C "$WT" rev-list --count "$W_BEFORE..refs/heads/$W_BR" 2>/dev/null || echo 0)
     W_DIRTY=$(git -C "$WT" status --porcelain --untracked-files=all 2>/dev/null \
         | grep -vE '^\?\? gate\.log' | cut -c4- | head -5 | tr '\n' ' ')
     W_DIRTY=${W_DIRTY% }
     W_HANDED=""
     W_WHY=""
     if [ "${W_NEW:-0}" -lt 1 ]; then
-        W_WHY="票分支 $(ticket_branch) 相對派工前(${W_BEFORE%"${W_BEFORE#????????????}"})沒有新 commit${W_DIRTY:+;未 commit 的改動($W_DIRTY)不算交件}"
+        W_WHY="分支 $W_BR 相對派工前(${W_BEFORE%"${W_BEFORE#????????????}"})沒有新 commit${W_DIRTY:+;未 commit 的改動($W_DIRTY)不算交件}"
     elif [ -n "$W_DIRTY" ]; then
         W_WHY="分支多了 $W_NEW 個 commit,但 worktree 還有未 commit 的改動($W_DIRTY)—— 當作沒交"
     else
@@ -2920,12 +2924,13 @@ print(json.dumps({"rc": 0, "sha": sys.argv[1], "run_id": sys.argv[2],
 # land 一批 N 張、全套紅 → `AC_BATCH_RUN_ID=<land 那一輪的 run_id> sh scripts/auto-fix.sh --batch
 # <整合分支> <id…>`。**不猜哪張票弄紅**(D-H51 ②):一個 worker 拿整批 —— 紅榜(第一張票的
 # `reports/t<id>/<AC_BATCH_RUN_ID>/status.json`)、整批 diff、N 張票面 —— 在整合分支的
-# 副本上修;patch 由 `apply.sh --batch` 疊成整合分支頭上一個 commit,`review.sh --batch` 覆核它。
+# worktree 上修、自己 commit(#145,與單票同一種交件:分支相對派工前多了 commit、worktree 乾淨);
+# `apply.sh --batch` 量那幾個 commit、補 code-map 重產,`review.sh --batch` 覆核 `<派工前>..<頭>`。
 # 只跑一輪:rc 0 之後呼叫端重跑全套,紅了再叫一次就是下一輪。
 # **不寫票**:不 set state / attempt / objections —— 任何一張票的 state_version 一動,N 張的覆核同時
 # 過期。只有 worker 的成本一列記在第一張票(`ticket.py cost` 不動版本)。紀錄全在 reports/batch/<stamp>/。
 # 退出碼同單票那一張表:0 fix 已 commit 且覆核 pass(`--no-review` 是已 commit);3 worker 提反駁;
-# 4 紅榜讀不到或是空的;5 沒交 / 逾時 / 套不上;6 規則包產不出來;覆核不是 pass 就是 review.sh 的 rc。
+# 4 紅榜讀不到或是空的;5 沒交 / 逾時 / 收件被擋;6 規則包產不出來;覆核不是 pass 就是 review.sh 的 rc。
 batch_main() {
     [ -n "${AC_BATCH_RUN_ID:-}" ] || {
         echo "auto-fix: --batch 要 env AC_BATCH_RUN_ID(land 那一輪的 run_id;紅榜從 reports/t$ID/<它>/status.json 讀)" >&2
@@ -2954,14 +2959,19 @@ batch_main() {
              "$(rel_root "$B_STATUS")"
         exit 4
     fi
+    # 輪次目錄(EVIDENCE、拋棄式控制根、worker.pid)在 worktree 外;worker 的 cwd 是整合分支的
+    # worktree —— land 開的那一個就用它(同一條分支 git 只准一個 worktree),沒有才開。
     FIX=$WTBASE/fix-batch-$B_STAMP/round$r
     rm -rf "$FIX"
-    mkdir -p "$FIX/base"
-    if ! git -C "$ROOT" archive "$B_BR" 2>/dev/null | tar -x -C "$FIX/base"; then
-        echo "auto-fix: 取不出 $B_BR 的副本" >&2
-        exit 2
+    mkdir -p "$FIX"
+    WT=$(git -C "$ROOT" worktree list --porcelain | awk -v ref="branch refs/heads/$B_BR" '
+        /^worktree / { here = substr($0, 10) } $0 == ref { print here; exit }')
+    if [ -z "$WT" ]; then
+        WT=$WTBASE/batch-$(echo "$B_BR" | tr '/' '-')
+        mkdir -p "$WTBASE"
+        git -C "$ROOT" worktree add -q "$WT" "$B_BR" || { echo "auto-fix: 整合分支 $B_BR 的 worktree 開不出來" >&2; exit 2; }
     fi
-    cp -R "$FIX/base" "$FIX/work"
+    W_BEFORE=$(git -C "$ROOT" rev-parse "$B_BR")
     B_DIFF=$BDIR/batch.diff
     git -C "$ROOT" diff "$MAIN...$B_BR" > "$B_DIFF"
     DISPATCH=$BDIR/dispatch-round$r.md
@@ -2970,10 +2980,10 @@ batch_main() {
         {
             printf '%s\n' "$RULES_TEXT"
             python3 - "$ROOT" "$TDIR" "$B_STATUS" "$B_BR" "$FIX" "$B_DIFF" \
-                "$(git -C "$ROOT" diff --stat "$MAIN...$B_BR")" "$MAIN" $B_IDS <<'PY'
+                "$(git -C "$ROOT" diff --stat "$MAIN...$B_BR")" "$MAIN" "$WT" $B_IDS <<'PY'
 import json, os, sys
-root, tdir, status_file, branch, fix, diff_file, stat, main = sys.argv[1:9]
-ids = sys.argv[9:]
+root, tdir, status_file, branch, fix, diff_file, stat, main, wt = sys.argv[1:10]
+ids = sys.argv[10:]
 tags = " ".join("#%s" % ident for ident in ids)
 rows = []
 for ident in ids:
@@ -2986,7 +2996,7 @@ print("# 這一輪:批次修復 %s 第 1 輪(整合分支 `%s`)" % (tags, branch
 print("")
 print("你是 **role=worker** 的實作者,**短命**:交付那一回合結束,不會再被叫醒。")
 print("這 %d 張票各自綠過、覆核過,合在 `%s` 上跑全套卻紅了。**不要猜是哪一張弄紅的** —— "
-      "照紅榜修整合分支;修法會成為整合分支頭上一個 commit,各票分支與票檔都不動。" % (len(ids), branch))
+      "照紅榜修整合分支;修法是你在整合分支上的 commit,各票分支與票檔都不動。" % (len(ids), branch))
 print("")
 print("## 票面(%d 張快照;`tickets/<id>.json` 是現況)" % len(ids))
 for row in rows:
@@ -3014,18 +3024,18 @@ print("整批 diff 檔:`%s`" % diff_file)
 print("")
 print("## 規則")
 print("**不得放寬測試**:測試檔裡不刪含 assert 的行、不加 skip / expectedFailure —— `apply.sh --batch` "
-      "會硬擋(rc 5)。案例本身錯就在 EVIDENCE 寫一行 `OBJECTION: test_defect <案例>`(例 "
+      "量你的 commit,會硬擋(rc 5)。案例本身錯就在 EVIDENCE 寫一行 `OBJECTION: test_defect <案例>`(例 "
       "`tests.test_x.T.test_one`),不要自己改案例。")
 print("")
-print("## 副本")
-print("- `%s/work` —— 改這個(整合分支 `%s` 的內容)" % (fix, branch))
-print("- `%s/base` —— 一個字都不准動,它是 diff 的對照組" % fix)
+print("## 你的 worktree")
+print("- `%s` —— 整合分支 `%s` 的 worktree,派工方已建好,cwd 就是它" % (wt, branch))
+print("- 只在這條分支 commit:不碰 main、不 push、不 merge / rebase、不動別的分支、不 worktree add / remove")
 print("")
-print("## 你要交的兩樣(放在 `%s`)" % fix)
-print("1. `patch-round1.diff` —— `cd %s && diff -ruN -x __pycache__ -x '*.pyc' base work > patch-round1.diff`"
+print("## 你要交的兩樣")
+print("1. 整合分支 `%s` 上的 commit,訊息以這次修到的票號 `t<n>` 開頭(例 `t%s fix: …`);"
+      "交件時 worktree 要乾淨(沒 commit 的改動不算交件)。" % (branch, ids[0]))
+print("2. `%s/EVIDENCE-round1.md`(worktree 外,不進 repo)—— 必備五段(見角色卡)+ 記憶段 + 檔尾一塊 ```result` JSON。"
       % fix)
-print("   檔頭只准 `base/…` / `work/…` 的相對形式;刪檔的 `+++` 側要改成 `/dev/null`。")
-print("2. `EVIDENCE-round1.md` —— 必備五段(見角色卡)+ 記憶段 + 檔尾一塊 ```result` JSON。")
 print("")
 print("## 票寫錯 / 需要裁示怎麼說")
 print("在 EVIDENCE 裡寫**一行**:`OBJECTION: <ticket-wrong|test_defect|blocking> <一句話>`。"
@@ -3052,18 +3062,15 @@ PY
             --effort "$T_EFFORT" >/dev/null \
             || echo "auto-fix: #$ID 的 cost 寫不進票(批次 worker)—— 不擋流程" >&2
     }
-    keep() {   # 副本的 patch / EVIDENCE 收進紀錄目錄(不論交得怎樣都留)
-        collect_from_copy "$FIX" "patch-round$r.diff" "EVIDENCE-round$r.md"
-        for name in "patch-round$r.diff" "EVIDENCE-round$r.md"; do
-            [ ! -f "$FIX/$name" ] || cp "$FIX/$name" "$BDIR/$name"
-        done
+    keep() {   # 輪次目錄的 EVIDENCE 收進紀錄目錄(不論交得怎樣都留)
+        [ ! -f "$FIX/EVIDENCE-round$r.md" ] || cp "$FIX/EVIDENCE-round$r.md" "$BDIR/EVIDENCE-round$r.md"
     }
     batch_run() {   # 起一次批次 worker(WORKER_CMD / WORKER_LOG);設定 WRC / W_COST_SECS,交付收進紀錄目錄
         ev agent.start --ticket "$ID" --role worker --model "$WORKER_MODEL" \
             --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix --kv batch="$B_TAGS" \
             ${T_EFFORT:+--kv effort=$T_EFFORT}
         WSTART=$(date +%s)
-        WRC=$(run_agent "$WORKER_CMD" "$DISPATCH" "$FIX" worker "$r" "$WORKER_LOG" 1)
+        WRC=$(run_agent "$WORKER_CMD" "$DISPATCH" "$FIX" worker "$r" "$WORKER_LOG" 1 "" "$WT")
         W_COST_SECS=$(( $(date +%s) - WSTART ))
         if [ "$WRC" -eq 0 ]; then
             ev agent.done --ticket "$ID" --role worker --model "$WORKER_MODEL" \
@@ -3077,10 +3084,9 @@ PY
         keep
         harvest_result "$EVIDENCE" "$BDIR/result-round$r.json" worker "$r"
     }
-    echo "auto-fix: 起批次 $B_TAGS 的 worker —— $WORKER_CMD(cwd $FIX,派工文從 stdin 餵)"
+    echo "auto-fix: 起批次 $B_TAGS 的 worker —— $WORKER_CMD(cwd $WT,派工文從 stdin 餵)"
     echo "auto-fix: 逾時來源=$TIMEOUT_SRC $WORKER_TIMEOUT 秒" >&2
     WORKER_LOG=$BDIR/worker-round$r.log
-    PATCH_OUT=$BDIR/patch-round$r.diff
     EVIDENCE=$BDIR/EVIDENCE-round$r.md
     batch_run
     if guard_stop "$WORKER_LOG"; then
@@ -3120,51 +3126,51 @@ PY
         fi
     done
 
+    worker_delivery "$B_BR"
     if [ "$WRC" -eq 124 ]; then
-        PARTIAL=$BDIR/patch-partial-round$r.diff
-        ( cd "$FIX" && diff -ruN -x __pycache__ -x '*.pyc' base work ) > "$PARTIAL"
-        echo "auto-fix: 批次 $B_TAGS 的 worker 逾時(${WORKER_TIMEOUT} 秒)—— 副本 $FIX 留著" >&2
+        partial_note="整合分支相對派工前多了 ${W_NEW:-0} 個 commit${W_DIRTY:+,未 commit 的改動:$W_DIRTY}"
+        echo "auto-fix: 批次 $B_TAGS 的 worker 逾時(${WORKER_TIMEOUT} 秒)—— worktree $WT 留著;$partial_note" >&2
         post "批次 worker 逾時($B_TAGS)" \
-             "整批 $B_TAGS 在 $B_BR 上的修復 worker 逾時(${WORKER_TIMEOUT} 秒);半成品 diff 在 $(rel_root "$PARTIAL")。重派或人從副本 $FIX 接手" \
+             "整批 $B_TAGS 在 $B_BR 上的修復 worker 逾時(${WORKER_TIMEOUT} 秒);${partial_note}。重派或人從 worktree $WT 接手" \
              "$(rel_root "$BDIR")"
         batch_cost timeout
         exit 5
     fi
-    shed_copies "$FIX"
+    shed_copies "$FIX" "$WT"
     if [ -f "$EVIDENCE" ] && grep -q '^OBJECTION:' "$EVIDENCE"; then
         line=$(grep -m1 '^OBJECTION:' "$EVIDENCE")
         echo "auto-fix: 批次 worker 提了反駁 —— $line" >&2
         post "批次 worker 提了反駁($B_TAGS)" \
-             "整批 ${B_TAGS}:${line}。批次不寫票,這一筆沒有記進任何一張票的 objections[] —— 開題者 / 主線判;判 test_defect 成立、patch 照收就跑 sh scripts/apply.sh --batch $B_BR $B_IDS $(rel_root "$PATCH_OUT") --evidence $(rel_root "$EVIDENCE")" \
+             "整批 ${B_TAGS}:${line}。批次不寫票,這一筆沒有記進任何一張票的 objections[] —— 開題者 / 主線判;判 test_defect 成立、commit 照收就跑 sh scripts/apply.sh --batch $B_BR $B_IDS --base $W_BEFORE --evidence $(rel_root "$EVIDENCE")" \
              "$(rel_root "$EVIDENCE")"
         batch_cost objection
         exit 3
     fi
-    if [ ! -f "$PATCH_OUT" ]; then
-        echo "auto-fix: 批次 $B_TAGS 的 worker 沒有交出 patch-round$r.diff" >&2
-        post "批次 worker 沒交出 patch($B_TAGS)" \
-             "整批 $B_TAGS 在 $B_BR 上的修復 worker 沒交 patch(worker rc=$WRC);看 $(rel_root "$WORKER_LOG"),重派或人下場" \
+    if [ -z "$W_HANDED" ]; then
+        echo "auto-fix: 批次 $B_TAGS 的 worker 沒交件 —— $W_WHY" >&2
+        post "批次 worker 沒交件($B_TAGS)" \
+             "整批 $B_TAGS:${W_WHY}(worker rc=$WRC);看 $(rel_root "$WORKER_LOG"),worktree $WT 照原樣留著(腳本不替它 commit),重派或人下場" \
              "$(rel_root "$BDIR")"
         batch_cost no-patch
         exit 5
     fi
-    AC_ROUND=$r AC_BATCH_STAMP=$B_STAMP sh "$AC/apply.sh" --batch "$B_BR" $B_IDS "$PATCH_OUT" \
+    AC_ROUND=$r AC_BATCH_STAMP=$B_STAMP sh "$AC/apply.sh" --batch "$B_BR" $B_IDS --base "$W_BEFORE" \
         --evidence "$EVIDENCE"
     arc=$?
     if [ "$arc" -ne 0 ]; then
-        echo "auto-fix: 批次 $B_TAGS 的 patch 套不上(apply rc=$arc)" >&2
-        post "批次 patch 套不上($B_TAGS,apply rc=$arc)" \
-             "整批 $B_TAGS:看 apply 的輸出 —— 檔頭不合格、整合分支走遠、越界,還是放寬測試" \
-             "$(rel_root "$PATCH_OUT")"
+        echo "auto-fix: 批次 $B_TAGS 的收件被擋(apply rc=$arc)" >&2
+        post "批次收件被擋($B_TAGS,apply rc=$arc)" \
+             "整批 $B_TAGS:看 apply 的輸出 —— 命中 hard_block、放寬測試,還是整合分支的工作樹髒" \
+             "$(rel_root "$BDIR")"
         batch_cost apply-failed
         exit 5
     fi
     batch_cost handed-in
     if [ -n "$NO_REVIEW" ]; then
-        echo "auto-fix: 批次 $B_TAGS 的 fix 已 commit —— --no-review,覆核不派:sh scripts/review.sh --batch $B_BR $B_IDS --run-id $B_STAMP"
+        echo "auto-fix: 批次 $B_TAGS 的 fix 已 commit —— --no-review,覆核不派:sh scripts/review.sh --batch $B_BR $B_IDS --run-id $B_STAMP --base $W_BEFORE"
         exit 0
     fi
-    sh "$AC/review.sh" --batch "$B_BR" $B_IDS --run-id "$B_STAMP"
+    sh "$AC/review.sh" --batch "$B_BR" $B_IDS --run-id "$B_STAMP" --base "$W_BEFORE"
     rrc=$?
     [ "$rrc" -eq 0 ] || echo "auto-fix: 批次覆核沒過(review rc=$rrc)—— 看 reports/inbox/ 那一頁" >&2
     exit "$rrc"

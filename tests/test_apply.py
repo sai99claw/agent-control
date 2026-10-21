@@ -8,7 +8,8 @@ worker 在票分支的 worktree 自己 commit(`auto-fix.sh` 判「分支有新 c
 - patch-verify 進分支是**一個** commit,只帶它自己的改動(未追蹤的閘門殘留不跟進來)。
 - 票分支不在 = 沒有交件可收(rc 2);patch-verify 套不上(rc 3)。
 - 反駁收進票(rc 6)、驗證者的計畫與驗紅併進票。
-- 批次那一支(`--batch`)還收 patch,檔頭守衛留在那一支(#145)。
+- 批次那一支(`--batch`)也不收 patch(#145):worker 在整合分支上 commit,這一支量 `<base>..` 的 commit、
+  補 code-map 重產、收 EVIDENCE。
 """
 
 import glob
@@ -857,15 +858,17 @@ class TheGateResidueOfTheLastRound(ApplyBase):
                         "殘留是上一輪的證據,不刪")
 
 
-def batch_patch(*files):
-    """`(路徑, 舊內容, 新內容)` 逐檔組成 `diff -ruN base work` 形狀的 patch(舊內容 None = 新檔)。"""
-    import difflib
-    out = []
-    for path, old, new in files:
-        out.append("diff -ruN base/%s work/%s\n" % (path, path))
-        out.extend(difflib.unified_diff((old or "").splitlines(True), new.splitlines(True),
-                                        "base/" + path, "work/" + path))
-    return "".join(out)
+def land_commit(case, files, subject="t1 fix: 批次 worker 的 commit"):
+    """批次 worker 的交件(#145):在 land/X 頭上 commit 一次。`files` = {路徑: 新內容};
+    用拋棄式 detached worktree 做完就收掉,land/X 本身不被 worktree 佔著(apply 自己開)。"""
+    scratch = os.path.join(case.home, "scratch-land")
+    case.git("worktree", "add", "-q", "--detach", scratch, "land/X")
+    for path, text in files.items():
+        case.write(path, text, where=scratch)
+    case.git("add", "-A", cwd=scratch)
+    case.git("commit", "-q", "-m", subject, cwd=scratch)
+    case.git("branch", "-f", "land/X", "HEAD", cwd=scratch)
+    case.git("worktree", "remove", "--force", scratch)
 
 
 TEST_X = ("import unittest\n\n\nclass T(unittest.TestCase):\n"
@@ -873,22 +876,26 @@ TEST_X = ("import unittest\n\n\nclass T(unittest.TestCase):\n"
 
 
 class ApplyBatch(ApplyBase):
-    """#108 A2–A4:`apply.sh --batch land/X 1 2 <patch>` 疊成整合分支頭上恰一個 commit,
-    各票分支與票檔一個位元都不動;寫入範圍硬擋只剩 config 的 `hard_block`(D-054 Q2);
-    測試檔裡刪斷言 / 加 skip 是「放寬測試」,rc 5 —— 除非 EVIDENCE 對那條案例提了 test_defect。
-    期望值從夾具寫下的票檔與 `git rev-parse` 讀,不從 apply.sh 算。"""
+    """#108 A2–A4,#145:批次 worker 在 land/X 上 commit,`apply.sh --batch land/X 1 2 --base <派工前>`
+    不收 patch、不另加 commit(沒有重產時),各票分支與票檔一個位元都不動;寫入範圍硬擋只剩 config 的
+    `hard_block`(D-054 Q2);測試檔裡刪斷言 / 加 skip 是「放寬測試」,rc 5 —— 除非 EVIDENCE 對那條
+    案例提了 test_defect。期望值從夾具寫下的票檔與 `git rev-parse` 讀,不從 apply.sh 算。"""
 
     def setUp(self):
         super().setUp()
         self.batch = self.make_batch()
         self.tickets_before = {ident: self.read("tickets/%s.json" % ident) for ident in ("1", "2")}
 
-    def run_batch(self, body, evidence=None, ids=("1", "2")):
-        patch = self.patch_file("batch.diff", body)
-        args = ["--batch", "land/X", *ids, patch]
+    def run_batch(self, files, evidence=None, ids=("1", "2")):
+        land_commit(self, files)
+        args = ["--batch", "land/X", *ids, "--base", self.batch["land"]]
         if evidence is not None:
             args += ["--evidence", self.patch_file("EVIDENCE.md", evidence)]
         return self.apply(*args)
+
+    def assert_only_the_worker_commit(self):
+        self.assertEqual(self.git("rev-list", "--count", "%s..land/X" % self.batch["land"]).strip(),
+                         "1", "收件不另加 commit")
 
     def head(self, name="land/X"):
         return self.git("rev-parse", name).strip()
@@ -899,22 +906,21 @@ class ApplyBatch(ApplyBase):
         with open(found[0], encoding="utf-8") as handle:
             return json.load(handle)
 
-    def test_the_fix_is_exactly_one_commit_on_land_and_touches_no_ticket(self):
-        """A2。量什麼 = land/X 前進恰一個 commit、訊息帶 batch fix round 1 與 #1 #2、
-        t1-a / t2-b 與 1.json / 2.json 位元不變;為什麼會紅 = 疊到別處、多 commit、寫了票;
+    def test_the_worker_commit_is_taken_as_is_and_touches_no_ticket(self):
+        """A2(#145)。量什麼 = land/X 上只有 worker 那一個 commit(收件不另加、不改它)、紀錄目錄沒有
+        任何 patch 檔、t1-a / t2-b 與 1.json / 2.json 位元不變;為什麼會紅 = 收件另疊 commit、寫了票;
         期望值來源 = 夾具的 rev-parse 與票檔原文;不測 = 閘門。
 
         **變異 ②**:apply --batch 對票 1 跑一次 `ticket.py set 1 patch_ref` → 票檔那一條紅。
         """
-        done = self.run_batch(batch_patch(("src/one.txt", "one by #1\n", "one fixed\n"),
-                                          ("src/two.txt", "two by #2\n", "two fixed\n")))
+        done = self.run_batch({"src/one.txt": "one fixed\n", "src/two.txt": "two fixed\n"})
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.git("rev-parse", "land/X^").strip(), self.batch["land"])
-        self.assertEqual(self.git("rev-list", "--count", "%s..land/X" % self.batch["land"]).strip(), "1")
+        self.assert_only_the_worker_commit()
         self.assertEqual(self.git("show", "land/X:src/one.txt"), "one fixed\n")
-        message = self.git("log", "-1", "--format=%B", "land/X")
-        self.assertIn("batch fix round 1", message)
-        self.assertIn("#1 #2", message)
+        self.assertEqual(self.git("log", "-1", "--format=%s", "land/X").strip(),
+                         "t1 fix: 批次 worker 的 commit")
+        self.assertEqual(glob.glob(os.path.join(self.repo, "reports", "batch", "*", "*.diff")), [])
         for branch, sha in self.batch["shas"].items():
             self.assertEqual(self.head(branch), sha, "%s 被動了" % branch)
         for ident, text in self.tickets_before.items():
@@ -927,41 +933,41 @@ class ApplyBatch(ApplyBase):
         conf = json.loads(self.read("board/config.json"))
         conf["hard_block"] = {"paths": ["src/two.txt"], "dirs": [], "patterns": []}
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
-        done = self.run_batch(batch_patch(("src/two.txt", "two by #2\n", "two fixed\n")))
+        done = self.run_batch({"src/two.txt": "two fixed\n"})
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         self.assertIn("src/two.txt", done.stderr)
         self.assertIn("hard_block", done.stderr)
+        self.assert_only_the_worker_commit()
 
     def test_deleting_an_assert_in_a_test_file_is_blocked(self):
-        """A4。量 rc 5 + 「tests/test_x.py:6 放寬測試」+ land/X 不動;紅 = 守衛只印不擋;
+        """A4。量 rc 5 + 「tests/test_x.py:6 放寬測試」+ 收件沒另加 commit;紅 = 守衛只印不擋;
         期望值 = 夾具 test_x.py 第 6 行就是那一行 assertEqual。
 
         **變異 ①**:放寬測試守衛改成只印不擋 → 這一條 rc 紅。
         """
-        done = self.run_batch(batch_patch(
-            ("tests/test_x.py", TEST_X, TEST_X.replace("self.assertEqual(1, 1)", "pass"))))
+        done = self.run_batch({"tests/test_x.py": TEST_X.replace("self.assertEqual(1, 1)", "pass")})
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         self.assertIn("tests/test_x.py:6 放寬測試", done.stderr)
-        self.assertEqual(self.head(), self.batch["land"])
+        self.assert_only_the_worker_commit()
 
     def test_adding_a_skip_in_a_test_file_is_blocked(self):
         """A4 的 skip 那一半。量 rc 5 + 新增那一行的行號;紅 = 只看刪掉的行;
         期望值 = skip 插在第 5 行(def 之前)。"""
         body = TEST_X.replace("    def test_one", "    @unittest.skip(\"紅的先關掉\")\n    def test_one")
-        done = self.run_batch(batch_patch(("tests/test_x.py", TEST_X, body)))
+        done = self.run_batch({"tests/test_x.py": body})
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         self.assertIn("tests/test_x.py:5 放寬測試", done.stderr)
 
     def test_a_test_defect_objection_on_that_case_lets_it_through(self):
-        """A4 的豁免。量 stderr 沒有「放寬測試」、land/X 前進、rc 6(反駁沒收進票);
+        """A4 的豁免。量 stderr 沒有「放寬測試」、rc 6(反駁沒收進票);
         紅 = 豁免沒認案例檔或反駁寫進票;期望值 = 案例 tests.test_x.T.test_one ⇒ tests/test_x.py、
         result-round1.json 的 objections 就是 EVIDENCE 那一行(A4 改版)。"""
         done = self.run_batch(
-            batch_patch(("tests/test_x.py", TEST_X, TEST_X.replace("self.assertEqual(1, 1)", "pass"))),
+            {"tests/test_x.py": TEST_X.replace("self.assertEqual(1, 1)", "pass")},
             evidence="# EVIDENCE\nOBJECTION: test_defect tests.test_x.T.test_one 斷言本身錯\n")
         self.assertEqual(done.returncode, 6, done.stdout + done.stderr)
         self.assertNotIn("放寬測試 ——", done.stderr)
-        self.assertEqual(self.git("rev-parse", "land/X^").strip(), self.batch["land"])
+        self.assert_only_the_worker_commit()
         for ident, text in self.tickets_before.items():
             self.assertEqual(self.read("tickets/%s.json" % ident), text)
         self.assertEqual(self.result_round1()["objections"],
@@ -972,10 +978,30 @@ class ApplyBatch(ApplyBase):
         """A4 豁免只對那條案例的檔。量 rc 5;紅 = 有任何 test_defect 就全放;
         期望值 = 反駁點名的是 tests/test_other.py。"""
         done = self.run_batch(
-            batch_patch(("tests/test_x.py", TEST_X, TEST_X.replace("self.assertEqual(1, 1)", "pass"))),
+            {"tests/test_x.py": TEST_X.replace("self.assertEqual(1, 1)", "pass")},
             evidence="# EVIDENCE\nOBJECTION: test_defect tests.test_other.T.test_one 別的案例\n")
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         self.assertIn("tests/test_x.py:6 放寬測試", done.stderr)
+
+    def test_no_commit_since_the_base_is_rc4(self):
+        """#145:收件的對象是 `<base>..land/X` 的 commit;一個都沒有 ⇒ rc 4、land/X 不動、沒有 result;
+        紅 = 沒交也照收;期望值 = 夾具的 land/X 頭當 base。"""
+        done = self.apply("--batch", "land/X", "1", "2", "--base", self.batch["land"])
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        self.assertIn("沒有新 commit", done.stderr)
+        self.assertEqual(self.head(), self.batch["land"])
+        self.assertEqual(glob.glob(os.path.join(self.repo, "reports", "batch", "*",
+                                                "result-round1.json")), [])
+
+    def test_the_base_defaults_to_the_last_merge_on_land(self):
+        """#145:沒給 --base ⇒ 整合分支 first-parent 上最近一個 merge(最後併進來的那張票)。
+        量 rc 0 與輸出的 base;紅 = 預設成別的(例如 main 或 HEAD^ 之外的點);期望值 = 夾具的 land/X 頭
+        (merge t2-b 那一個)。"""
+        land_commit(self, {"src/one.txt": "one fixed\n"})
+        land_commit(self, {"src/two.txt": "two fixed\n"}, subject="t2 fix: 第二個 commit")
+        done = self.apply("--batch", "land/X", "1", "2")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("base %s  2 個 commit" % self.batch["land"][:12], done.stdout)
 
 
 MAP_CATALOG = {"version": 1, "managed": ["scripts/*.py", "tests/test_*.py"],
@@ -1059,7 +1085,7 @@ class TheCodeMapIsRebuiltIntoACommitOfItsOwn(ApplyBase):
 
 class TheBatchRebuildsTheCodeMap(ApplyBase):
     """#129 A1–A2:`apply.sh --batch` 與單票那一支同一個判準(候選樹有 repo-map.py 與 catalog),
-    產出物有變就併進那一個 batch fix commit。沙盒照 #96 那一類:真的 repo-map.py + catalog +
+    產出物有變就在整合分支上補一個 commit(#145 起 worker 自己 commit,重產不再併進它的 commit)。沙盒照 #96 那一類:真的 repo-map.py + catalog +
     新鮮索引進主線,再照 ApplyBatch 開整合分支 land/X(test_x.py 先寫好再 build,主線索引才是新的)。
     期望值(新檔名、commit 數、字樣)抄票面,不從 repo-map 算回來。"""
 
@@ -1077,8 +1103,9 @@ class TheBatchRebuildsTheCodeMap(ApplyBase):
         self.git("commit", "-q", "-m", "沙盒的地圖")
         self.batch = self.make_batch()
 
-    def run_batch(self, body):
-        return self.apply("--batch", "land/X", "1", "2", self.patch_file("batch.diff", body))
+    def run_batch(self, files):
+        land_commit(self, files)
+        return self.apply("--batch", "land/X", "1", "2", "--base", self.batch["land"])
 
     def wt(self, name="batch-land-X"):
         return os.path.join(self.home, "repo-wt", name)
@@ -1089,11 +1116,11 @@ class TheBatchRebuildsTheCodeMap(ApplyBase):
     def test_a1_a_stale_code_map_is_rebuilt_into_the_batch_commit(self):
         """A1。量 commit 數、regen 行、副本 check、managed、字樣;
         紅 = **m1**(拿掉 --batch 的重產)時 check rc=1、沒有 regen 行;
-        期望值 = patch 新增的檔名 tests/test_batch_new.py。"""
-        done = self.run_batch(batch_patch(("tests/test_batch_new.py", None, TEST_X)))
+        期望值 = worker 新增的檔名 tests/test_batch_new.py;commit 數 = worker 的 + 重產那一個。"""
+        done = self.run_batch({"tests/test_batch_new.py": TEST_X})
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.git("rev-list", "--count",
-                                  "%s..land/X" % self.batch["land"]).strip(), "1")
+                                  "%s..land/X" % self.batch["land"]).strip(), "2")
         self.assertTrue(any(line.startswith("regen: repo-map build")
                             for line in self.message().splitlines()), self.message())
         wt = self.wt()
@@ -1107,8 +1134,7 @@ class TheBatchRebuildsTheCodeMap(ApplyBase):
     def test_a2_an_unchanged_map_adds_no_regen_line(self):
         """A2 前半。量 regen 行與那個 commit 的檔名;紅 = 每次都加 regen 行;
         期望值 = 只改 tests/test_kept.py 的內文。"""
-        done = self.run_batch(batch_patch(
-            ("tests/test_kept.py", TEST_X, TEST_X.replace("test_one", "test_two"))))
+        done = self.run_batch({"tests/test_kept.py": TEST_X.replace("test_one", "test_two")})
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertFalse(any(line.startswith("regen:") for line in self.message().splitlines()),
                          self.message())
@@ -1120,9 +1146,8 @@ class TheBatchRebuildsTheCodeMap(ApplyBase):
         期望值 = 票面字樣「索引沒重產」。"""
         broken = dict(MAP_CATALOG, topics=dict(MAP_CATALOG["topics"], ghost={
             "summary": "指到不存在的檔", "match": ["ghost"], "entry": "scripts/ghost.py"}))
-        old = json.dumps(MAP_CATALOG, ensure_ascii=False, indent=2) + "\n"
-        new = json.dumps(broken, ensure_ascii=False, indent=2) + "\n"
-        done = self.run_batch(batch_patch(("code-map/catalog.json", old, new)))
+        done = self.run_batch({"code-map/catalog.json":
+                               json.dumps(broken, ensure_ascii=False, indent=2) + "\n"})
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.git("rev-list", "--count",
                                   "%s..land/X" % self.batch["land"]).strip(), "1")
