@@ -1,8 +1,8 @@
 """#129 code-map 索引重產補齊:`apply.sh --batch` 同一次重產;`land.sh` 合併後過期自動重產併進同一次落地。
 
 ## 驗收表(票面每一條一列;期望值來源獨立於被測程式:票面 acceptance 字面 / 夾具自己寫下的檔名 / git 上取的 sha)
-A1 | integ | 沙盒主線有真 repo-map.py、catalog(managed 含 tests/test_*.py)、新鮮索引;整合分支 land/X 頭上 apply --batch land/X 1 2,patch 只新增 tests/test_batch_new.py | rc 0;land/X 只多 1 commit;訊息有行以 `regen: repo-map build` 開頭;副本 check rc 0;managed 含 tests/test_batch_new.py;輸出含批次重產字樣 | 票面 A1 原話;檔名 = patch 新增的那一支
-A2 | integ | (a) patch 只改既有已管理檔 tests/test_kept.py 內文 (b) patch 讓 catalog 指向不存在的 scripts/ghost.py | (a) 訊息無 `regen:` 行、該 commit diff 只有 tests/test_kept.py (b) rc 0、只多 1 commit、輸出含「索引沒重產」 | 票面 A2 原話;(a) 改前即綠(回歸鎖)
+A1 | integ | 沙盒主線有真 repo-map.py、catalog(managed 含 tests/test_*.py)、新鮮索引;批次 worker 在 land/X 上 commit 只新增 tests/test_batch_new.py,再 apply --batch land/X 1 2 --base <原頭> | rc 0;land/X 多 2 commit(worker 的 + 重產);頭的訊息有行以 `regen: repo-map build` 開頭;副本 check rc 0;managed 含 tests/test_batch_new.py;輸出含批次重產字樣 | 票面 A1 原話,#145 改成分支 commit(重產不再併進 worker 的 commit);檔名 = worker 新增的那一支
+A2 | integ | (a) worker 的 commit 只改既有已管理檔 tests/test_kept.py 內文 (b) worker 的 commit 讓 catalog 指向不存在的 scripts/ghost.py | (a) 訊息無 `regen:` 行、只有 worker 那 1 個 commit、diff 只有 tests/test_kept.py (b) rc 0、只有 worker 那 1 個 commit、輸出含「索引沒重產」 | 票面 A2 原話;(a) 改前即綠(回歸鎖)
 A3 | integ | 分支 t1 新增 tests/test_a.py 並自己 build(分支 check 綠);主線再直接 commit tests/test_z.py 不 build;land t1-map | rc 0;主線 check rc 0;managed 含 test_a 與 test_z;主線多出的 commit 恰一個首行 `regen: repo-map build (land <stamp>)`(stamp = land.pass 的 stamp)、只動兩支產出物;輸出含合併後過期字樣 | 票面 A3 原話
 A4 | integ | 兩條分支各新增 tests/test_a1.py / tests/test_a2.py 且各自 build;前置在拋棄式 worktree 手動 merge 自證衝突只在 code-map/;land 兩條 | rc 0;主線 check rc 0;managed 含兩檔;輸出含合併後過期字樣 | 票面 A4 原話
 A5 | integ | (a) 兩條分支都改 src/same.txt(衝突在 code-map/ 以外)(b) 假 repo-map.py:check 一律 1、build 寫兩支產出物外加 stray.txt | (a) rc 3、land.fail、主線不動 (b) rc 3、主線不動、land worktree 留著、輸出含動到以外字樣、land 分支沒有 regen commit | 票面 A5 原話;(a) 改前即綠(回歸鎖)
@@ -24,7 +24,7 @@ OUTPUTS       = code-map/index.json、code-map/INDEX.md ← A3 regen commit 只�
 apply 那幾條借 tests/test_apply.ApplyBase + Sandbox.make_batch(整合分支 land/X 的真實形狀);
 land 那幾條借 tests/test_land.LandBase,`gate_stub = None` 用**真的** gate.sh。
 setUp 照 tests/test_repo_map_contract 的 A32:複製真的 scripts/repo-map.py、寫 catalog、build、commit 進主線。
-patch 用 `diff -ruN base work` 在拋棄式目錄裡現做(檔頭是相對形式),不手打 hunk。
+批次 worker 的交件(#145)用拋棄式 detached worktree 在 land/X 上真的 commit 一次。
 A5(b) 的假 repo-map.py 是夾具自己寫的一支 python,不碰真的那一支。
 
 ## 不做
@@ -122,27 +122,9 @@ class MapMixin(object):
         with open(os.path.join(tree, "code-map", "index.json"), encoding="utf-8") as handle:
             return json.load(handle)["managed"]
 
-    def make_patch(self, name, changes):
-        """`changes` = {相對路徑: 新內容};舊內容取主線上的那一份(沒有就是新增)。`diff -ruN base work`。"""
-        where = tempfile.mkdtemp(prefix="t129-patch-"); self.addCleanup(shutil.rmtree, where, True)
-        os.makedirs(os.path.join(where, "base"))
-        os.makedirs(os.path.join(where, "work"))
-        for rel, new in changes.items():
-            old = os.path.join(self.repo, rel)
-            if os.path.exists(old):
-                with open(old, encoding="utf-8") as handle:
-                    put(os.path.join(where, "base", rel), handle.read())
-            put(os.path.join(where, "work", rel), new)
-        made = subprocess.run(["diff", "-ruN", "base", "work"], cwd=where,
-                              capture_output=True, text=True)
-        self.assertEqual(made.returncode, 1, "沙盒自己壞了:diff " + made.stderr)
-        path = os.path.join(self.home, name)
-        put(path, made.stdout)
-        return path
-
 
 class TheBatchFixRebuildsTheIndex(MapMixin, ApplyBase):
-    """A1–A2:`apply.sh --batch` 與單票那一支同一個判準,產出物有變就併進那一個 batch fix commit。"""
+    """A1–A2:`apply.sh --batch` 與單票那一支同一個判準,產出物有變就在整合分支上補一個重產 commit。"""
 
     def setUp(self):
         super().setUp()
@@ -158,8 +140,17 @@ class TheBatchFixRebuildsTheIndex(MapMixin, ApplyBase):
         check = self.map_cmd(self.repo, "check")
         self.assertEqual(check.returncode, 0, "前置:主線索引要是新的 " + check.stderr)
 
-    def run_batch(self, patch):
-        return self.apply("--batch", "land/X", "1", "2", patch)
+    def run_batch(self, changes):
+        """批次 worker 在 land/X 上 commit `changes`(#145),再收件。"""
+        scratch = os.path.join(self.home, "scratch-land")
+        self.git("worktree", "add", "-q", "--detach", scratch, "land/X")
+        for rel, new in changes.items():
+            put(os.path.join(scratch, rel), new)
+        self.git("add", "-A", cwd=scratch)
+        self.git("commit", "-q", "-m", "t1 fix: 批次 worker", cwd=scratch)
+        self.git("branch", "-f", "land/X", "HEAD", cwd=scratch)
+        self.git("worktree", "remove", "--force", scratch)
+        return self.apply("--batch", "land/X", "1", "2", "--base", self.batch["land"])
 
     def wt(self, name="batch-land-X"):
         return os.path.join(self.home, "repo-wt", name)
@@ -171,11 +162,11 @@ class TheBatchFixRebuildsTheIndex(MapMixin, ApplyBase):
         return self.git("rev-list", "--count", "%s..land/X" % self.batch["land"]).strip()
 
     def test_a1_a_new_managed_file_is_indexed_in_the_same_batch_commit(self):
-        """A1 patch 只新增 tests/test_batch_new.py → 同一個 batch commit 帶新索引、regen 行、批次字樣。"""
-        done = self.run_batch(self.make_patch("new.diff", {"tests/test_batch_new.py": PASSING}))
+        """A1 worker 只新增 tests/test_batch_new.py → 收件補一個重產 commit 帶新索引、regen 行、批次字樣。"""
+        done = self.run_batch({"tests/test_batch_new.py": PASSING})
         output = done.stdout + done.stderr
         self.assertEqual(done.returncode, 0, output)
-        self.assertEqual(self.new_commits(), "1", output)
+        self.assertEqual(self.new_commits(), "2", output)
         self.assertTrue(any(line.startswith(REGEN_TRAILER) for line in self.message().splitlines()),
                         "batch commit 訊息沒有 regen 行:" + self.message())
         wt = self.wt()
@@ -185,19 +176,18 @@ class TheBatchFixRebuildsTheIndex(MapMixin, ApplyBase):
         self.assertIn(BATCH_REGEN, output)
 
     def test_a2_an_edit_inside_a_managed_file_adds_no_regen(self):
-        """A2 patch 只改 tests/test_kept.py 內文 → 訊息無 regen: 行、那個 commit 只動 tests/test_kept.py。"""
-        done = self.run_batch(self.make_patch("edit.diff", {
-            "tests/test_kept.py": PASSING + "\n# edited by the batch\n"}))
+        """A2 worker 只改 tests/test_kept.py 內文 → 訊息無 regen: 行、只有那 1 個 commit、只動 tests/test_kept.py。"""
+        done = self.run_batch({"tests/test_kept.py": PASSING + "\n# edited by the batch\n"})
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.new_commits(), "1", done.stdout + done.stderr)
         self.assertFalse(any(line.startswith(REGEN_PREFIX) for line in self.message().splitlines()),
                          self.message())
         self.assertEqual(self.git("diff", "--name-only", "land/X^", "land/X").split(),
                          ["tests/test_kept.py"])
 
     def test_a2_a_failed_build_does_not_block_the_batch(self):
-        """A2 catalog 指向不存在的 scripts/ghost.py(build rc≠0)→ rc 0、照樣 1 個 commit、輸出含「索引沒重產」。"""
-        done = self.run_batch(self.make_patch("ghost.diff", {
-            "code-map/catalog.json": catalog_text(BROKEN_CATALOG)}))
+        """A2 catalog 指向不存在的 scripts/ghost.py(build rc≠0)→ rc 0、只有 worker 那 1 個 commit、輸出含「索引沒重產」。"""
+        done = self.run_batch({"code-map/catalog.json": catalog_text(BROKEN_CATALOG)})
         output = done.stdout + done.stderr
         self.assertEqual(done.returncode, 0, output)
         self.assertEqual(self.new_commits(), "1", output)
