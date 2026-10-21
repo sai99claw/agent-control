@@ -34,6 +34,15 @@
 - 看裁示收件匣 `python3 scripts/ticket.py inbox`:使用者填過的裁示要落成 `docs/DECISIONS.md` 一列。
 - 檢查 `scripts/heartbeat.sh`:上一個 session / land 有沒有死在半路(有的話清 worktree、把票狀態對回事實)。
 - 用一句話跟使用者說現況。
+- **派工(D-061;雲端與 Mac 同一條)**:`sh scripts/auto-fix.sh <n> --prepare worker` → 把它印的那段指路 prompt
+  整段貼給 in-session subagent(Agent 工具),模型用它印的 `model=` → 等它回報(**不輪詢**)→ `sh scripts/apply.sh <n>`
+  (不用帶 `--evidence`:EVIDENCE 就在 apply 預設讀的輪次目錄)→ 要驗證者時(`--prepare verifier` 會說要不要):
+  `sh scripts/auto-fix.sh <n> --prepare verifier`(票 `interface_fixed` 是 true 可與 worker 平行,否則等 worker 的 commit 進分支)
+  → subagent → `sh scripts/apply.sh <n> <副本>/patch-verify.diff --evidence-verifier <副本>/EVIDENCE-verifier.md`
+  → `sh scripts/gate.sh --branch --ticket <n> --no-auto-fix`(綠了票轉 InReview,complex 票它自己叫 review.sh)
+  → `sh scripts/land.sh t<n> --no-auto-fix`。任何一步被拒或紅(apply rc 5 hard_block、閘門紅、land 拒收):
+  **把那一行拒收 / 紅榜叫回同一個 subagent**,不要再 prepare。`--no-auto-fix` 是因為預設會改起 headless worker 那一輪。
+  備援(routine,雲端)的手動步驟在 `docs/reference/role-procedures.md`「主線操作細節」的 Fallback: routine。
 
 ## 開題者
 - 只讀:使用者原話、repo 的設計文件與裁示、自己派的子工作者交回的數字。
