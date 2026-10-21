@@ -40,7 +40,7 @@
   "attempt": 0,
   "base_sha": "8ffc1e334861390d484b31d9f393d360f50d8ae4",
   "state": "Done",
-  "state_version": 47,
+  "state_version": 49,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -487,13 +487,13 @@
     "by": "reviewer@opus",
     "sha": "8e6c4832e587affdb2fa48d60a3bac48e1ffc7d2",
     "note": "reports/t133/20261019-050533-33085/REVIEW.md",
-    "at": "2026-10-19T09:15:38+08:00",
+    "at": "2026-10-21T10:53:46+08:00",
     "state_version": 47,
     "patch_id": "980c9162a932d6ba0341a978ecce3779c1674be3",
     "face": "158db6cacf173bc30afb1ee2a7a2b6f8c721c048f54744788fd289f52d30950c"
   },
   "cost_total": {
-    "calendar_seconds": 33754,
+    "calendar_seconds": 212442,
     "wall_seconds": 13221,
     "runs": 18,
     "worker_rounds": 2,
@@ -562,6 +562,7 @@
         }
       }
     },
-    "at": "2026-10-19T09:15:38+08:00"
-  }
+    "at": "2026-10-21T10:53:46+08:00"
+  },
+  "landed_sha": "8e6c4832e587affdb2fa48d60a3bac48e1ffc7d2"
 }

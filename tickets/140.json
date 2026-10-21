@@ -44,8 +44,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "1f1b0b10edf7e50ba4e575f7114e3d71b1c4ebe2",
-  "state": "InReview",
-  "state_version": 18,
+  "state": "Done",
+  "state_version": 20,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -196,12 +196,60 @@
   "review": {
     "verdict": "pass",
     "by": "reviewer@opus",
-    "sha": "e9e842d1fef0f03b0e6ad4e0a3019cbfca9d4083",
+    "sha": "33afbf1ffe6872ec7a299a660bc9023428263e75",
     "note": "reports/t140/20261019-115526-33129/REVIEW.md",
-    "at": "2026-10-19T23:16:37+08:00",
+    "at": "2026-10-21T10:51:10+08:00",
     "state_version": 9,
     "patch_id": "042a7d728b87aca9ebc0cc56b7f3f9af7a26ddce",
     "face": "3db3f25bbd116a563acc2ce1c9a03487d9691603954378017aa9732fed4130bc"
   },
-  "landed_sha": "e9e842d1fef0f03b0e6ad4e0a3019cbfca9d4083"
+  "landed_sha": "33afbf1ffe6872ec7a299a660bc9023428263e75",
+  "cost_total": {
+    "calendar_seconds": 174568,
+    "wall_seconds": 4899,
+    "runs": 6,
+    "worker_rounds": 1,
+    "objections": 0,
+    "by_role": {
+      "worker": {
+        "runs": 2,
+        "wall_seconds": 264,
+        "tokens_in": 52,
+        "tokens_out": 23304,
+        "cache_write": 133103,
+        "cache_read": 1870723,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 1,
+          "objection": 1
+        }
+      },
+      "reviewer": {
+        "runs": 1,
+        "wall_seconds": 174,
+        "tokens_in": 26,
+        "tokens_out": 8551,
+        "cache_write": 62455,
+        "cache_read": 678284,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 1
+        }
+      },
+      "land": {
+        "runs": 3,
+        "wall_seconds": 4461,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 3,
+        "outcomes": {
+          "fail": 2,
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-21T10:51:10+08:00"
+  }
 }

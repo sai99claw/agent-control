@@ -81,3 +81,38 @@ land 拒收 `verify.files` 沒帶進來的分支(**rc=4**);`verify.py` 在同一
 
 下一個 session:`docs/TODO.md` §2 剩下的(控制台驗證、排序腳本、推測性佇列、token 歸因、
 產品功能地圖、多 repo),或直接開始 §0 的遷移。
+
+## 2026-10-21 交接給雲端主線
+
+本機主線(Mac)在 2026-10-21 停工,之後由雲端 session 當主線。`reports/`、`board/events.jsonl`、`../agent-control-wt/` 都不進 git,雲端看不到;下面是它們裡面你需要知道的事。最上層判準是 `docs/VISION.md`;這一波減法的裁示是 D-053〜D-059。
+
+### 減法(D-054)進度
+已落地並關票:#134 #135 #136 #137 #138 #139 #140 #141 #142 #143 #144 #145 #148,以及試走票 #150(D-057 ② 的「新流程從開題走到落地」已通過)。#104、#106 Cancelled(分支 t104 8692063、t106 19c7c7c 已推上 origin 留存,不落地)。
+
+### 開著的票
+| 票 | 停在哪 | 分支 / 頭 | 閘門 / 覆核 | 證據 |
+|---|---|---|---|---|
+| #146 needs_verifier 缺 = true、小件清理(simple) | 閘門綠;**land 時合併衝突**:雲端 worker 從舊 clone 的 main(685af04)開分支,與 #139/#142/#143/#145 撞 6 檔(board/README.md、board/board.py、scripts/auto-fix.sh、tests/test_board.py、tests/test_ticket.py、tickets/SCHEMA.md)。已派雲端 rebase,**結果未收**:看 origin 有沒有 `t146-r2-cloud` 且含 `EVIDENCE-t146r2.md` | `t146` 77f591a(origin 已推;= `origin/t146-cloud~1`) | 閘門 rc 0(舊基底);simple 不覆核 | worker 證據在 `origin/t146-cloud:EVIDENCE-t146.md` |
+| #149 主線驅動雲端流程固定進 agent-control(complex、needs_verifier) | Ready,票面已照實測重寫(05151e2);depends_on #146 | 無 | 未跑 | 票面本身 |
+| #147 文件整併 + T 端配套清單(simple) | Ready;依賴減法其餘票(#146、#149 落地後做);T 端清單在 outline,另加:#143 的 `migrate_acked_jsonl` 在 T 同步並跑過一次後移除 | 無 | 未跑 | 票面本身 |
+| #93 交件前主線對齊 | Blocked、凍結:「繼續凍結到 DAG 排程(#119)落地」 | 無 | — | — |
+| #117 #118 #119 #120 #123 #124 #125 | Draft;VISION 待確認:#117、#120 等減法做完再做 | 無 | — | — |
+
+### 雲端 worker 的做法(#149 落地前照手動做)
+1. 主線用 routine API(`ac-worker`,trig_01QywoxG8TwSBMex4o6Rn9nR,opus,disabled、只手動 run)**先 update 派工文、再 run**(同時送會讀到舊的)。派工文第一步一定要 `git fetch origin`。
+2. worker 推 `t<n>-cloud`,最後一個 commit 只加 `EVIDENCE-t<n>.md`;驗證者另起一個 session,從 `origin/t<n>-cloud~1` 開 `t<n>v-cloud`。
+3. 等交件:每 20 分鐘 `git fetch` + `git cat-file -e origin/t<n>-cloud:EVIDENCE-t<n>.md`(使用者允許的輪詢,D-058 補)。
+4. 收件:確認最後一個 commit 只有 EVIDENCE → `git branch -f t<n> origin/t<n>-cloud~1`、開 worktree、`ticket.py set <n> base_sha / branch` → `gate.sh --branch --ticket <n>` → complex 才 `review.sh` → `land.sh t<n>`(全套紅時本機用 `AC_LAND_DEPTH=9` 不自動派本機 worker)。
+5. 下一張要等前一張落地再從 main 開,否則合併衝突(#143、#146 都撞過)。
+
+### 一定要在 Mac 上做的
+- tabby_pool 的瀏覽器測試(Safari / Chrome 引擎、`scripts/test-for.sh --checkin`)與發版(`scripts/build.sh` → `deploy-prod.sh`,prod 資料在 `~/tabby-data/prod/`)。
+- 本機工具:`land.sh` 的落地全套(約 38 分鐘)、`gate.sh`、本機 worktree、`sync-to-project.sh` 同步到 tabby、codex / agy CLI。
+- tabby 的收件匣(`../tabby_pool_ctl/`)與 launchd 服務。
+
+### 還沒裁 / 待辦
+- 使用者:VISION 的 worker 順序寫 sol→opus,現在雲端排第一格(D-058),VISION 由使用者回寫。
+- 2026-11-19 前後:拿 T 的反駁往上送比例回來問使用者(D-054 Q8)。
+- 減法前後對比報告(D-055 ③ / D-057 ①):增刪行數、token、落地全套耗時。減法前全套基準:unittest 1155 條 1606 s + 回歸 340 條 686 s ≈ 38 分鐘(2026-10-19)。
+- 擱著的新規則(D-053 減法期間不開):worker 只跑 1 輪沒用工具沒交件時自動重起一次。
+- tabby 端:A 整個改好後才改 T(使用者原話);T 的 guard-main 還在(A 已刪)。
