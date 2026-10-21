@@ -171,3 +171,14 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
   事件 `review.pass` / `review.missing`(沒交件就重跑 review.sh)。
 - 狀態檔:`reports/t<n>/<run_id>/status.json`;票檔與文件落地:`sh scripts/land.sh docs "<訊息>" <檔…>`(前綴 `tickets/ docs/ memory/`)。
 - 反駁處置:`objections[]` 的 `disposition`(合法字只在 `scripts/ticket.py` 的 `DISPOSED`);`test_defect` 派驗證者。
+- 派工的主路是 `auto-fix.sh <n> --prepare worker|verifier` + in-session subagent(D-061,順序在 `docs/SESSION-START.md` 主線那一節)。
+
+### Fallback: routine (cloud)
+只在 in-session subagent 派不出去時用(D-061 留作備援;routine 的 token 成本不知道)。
+1. routine `ac-worker`:**先 update prompt、等 update 回來,再 run**(同時送會讀到舊的)。prompt = `sh scripts/auto-fix.sh <n> --dry-run --round 1`
+   的派工文,再加一段交件說明:第一步 `git fetch origin`;從票的 base sha 開分支 `t<n>-cloud`;最後一個 commit 只加
+   `EVIDENCE-t<n>.md`;push。
+2. 等交件:背景迴圈每 20 分鐘 `git fetch` + `git cat-file -e origin/t<n>-cloud:EVIDENCE-t<n>.md`(D-058 補充只在這裡允許這種輪詢)。
+3. 收件:確認最後一個 commit 只加 EVIDENCE → `git branch t<n> origin/t<n>-cloud~1` → `ticket.py set <n> base_sha` 設成
+   `git merge-base main t<n>` → `sh scripts/auto-fix.sh <n> --prepare worker`(沿用已經在的分支,開 worktree 與輪次目錄)→
+   `git show origin/t<n>-cloud:EVIDENCE-t<n>.md > <輪次目錄>/EVIDENCE-round1.md` → 之後同主路:apply → gate `--no-auto-fix` → land `--no-auto-fix`。

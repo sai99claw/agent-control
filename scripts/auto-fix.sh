@@ -6,10 +6,23 @@
 #   sh scripts/auto-fix.sh <票號> --dry-run             # 只印派工文,不起 worker
 #   sh scripts/auto-fix.sh <票號> --dry-run --round 1   # 第 1 輪的派工文(還沒有狀態檔時)
 #   sh scripts/auto-fix.sh <票號> --no-review           # 綠了票停在 InReview,不叫 review.sh
+#   sh scripts/auto-fix.sh <票號> --prepare worker      # 第 1 輪只備好、不起程序(D-061,#149):
+#                                                       # 印一段指路 prompt 給 in-session subagent
+#   sh scripts/auto-fix.sh <票號> --prepare verifier    # 驗證者副本 + 派工文,同上(不動票)
 #   AC_BATCH_RUN_ID=<run> sh scripts/auto-fix.sh --batch <整合分支> <票號…> [--dry-run] [--no-review]
 #                                                       # 批次修復一輪(#108;見檔尾 batch_main)
 #
 # 閘門與單票落地預設會叫這一支;`--no-auto-fix` 才停給人處理。
+#
+# ## `--prepare worker|verifier`:派給 in-session subagent(D-061,#149;雲端與 Mac 同一條)
+# 主線的派工順序(prepare → subagent → apply → gate --no-auto-fix → land --no-auto-fix)
+# 正文在 `docs/SESSION-START.md` 主線那一節。`--prepare worker` = 票 Ready 且沒有狀態檔時
+# `auto-fix.sh <n>` 第 1 輪做的那一段(#57 換 base、票分支 worktree、輪次目錄、
+# `first_round_packet` 那一份派工文、Ready → Running),停在起 worker 之前:不起程序、
+# 不發 `ticket.attempt.*` / `agent.*`、不寫 cost、不寫 status.json。`--prepare verifier`
+# 建 `verify-t<n>/round1/{base,work}` 副本與 `verifier_packet` 那一份,不動票。兩者的 stdout
+# 都只有一段指路 prompt(`model=` 起頭;派工文本身不印),整段貼給 subagent。
+# 不與 `--dry-run` / `--round` / `--batch` 並用(rc 2)。
 #
 # ## 第 1 輪也由這一支起(#40,D-025 C1)
 # 票 **Ready 且沒有狀態檔** ⇒ 走同一個 `round_once 1`:派工文就是 `--dry-run --round 1`
@@ -92,7 +105,7 @@ print(data if data not in (None, "") else default)
 PY
 }
 
-[ $# -ge 1 ] || { echo "用法:sh scripts/auto-fix.sh <票號> [--dry-run] [--round 1] [--no-review]"; exit 2; }
+[ $# -ge 1 ] || { echo "用法:sh scripts/auto-fix.sh <票號> [--dry-run] [--round 1] [--no-review] | <票號> --prepare worker|verifier"; exit 2; }
 # `--batch <整合分支> <票號…>`:票號收進 B_IDS,第一張當 `ID`(票檔、模型、逾時、成本都照它),
 # 旗標交回底下同一段解析。
 BATCH=""
@@ -107,6 +120,7 @@ if [ "$1" = "--batch" ]; then
     while [ $# -gt 0 ]; do
         case "$1" in
             --dry-run|--no-review) B_FLAGS="$B_FLAGS $1" ;;
+            --prepare) echo "auto-fix: --prepare 不能與 --batch 並用(prepare 一次一張票)" >&2; exit 2 ;;
             -*) echo "auto-fix: --batch 不認得 $1(--dry-run / --no-review)" >&2; exit 2 ;;
             *) B_IDS="$B_IDS $1" ;;
         esac
@@ -121,6 +135,7 @@ shift
 DRY=""
 WANT_ROUND=""
 NO_REVIEW=""
+PREPARE=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY=1 ;;
@@ -129,10 +144,28 @@ while [ $# -gt 0 ]; do
             shift
             [ $# -ge 1 ] || { echo "auto-fix: --round 後面要一個數字" >&2; exit 2; }
             WANT_ROUND=$1 ;;
-        *) echo "auto-fix: 不認得 $1(--dry-run / --round <n> / --no-review)" >&2; exit 2 ;;
+        --prepare)
+            shift
+            case "${1:-}" in
+                worker|verifier) PREPARE=$1 ;;
+                *) echo "auto-fix: --prepare 後面要 worker 或 verifier(拿到「${1:-}」)" >&2; exit 2 ;;
+            esac ;;
+        --batch) echo "auto-fix: --batch 要放在最前面:sh scripts/auto-fix.sh --batch <整合分支> <票號…>(也不能與 --prepare 並用)" >&2; exit 2 ;;
+        *) echo "auto-fix: 不認得 $1(--dry-run / --round <n> / --no-review / --prepare worker|verifier)" >&2; exit 2 ;;
     esac
     shift
 done
+# `--prepare` 只備好第 1 輪給 in-session subagent(D-061):`--dry-run` 只印、`--round` 只產派工文、
+# `--batch` 是另一條路 —— 混著用,哪一個說了算都是猜。
+if [ -n "$PREPARE" ] && { [ -n "$DRY" ] || [ -n "$WANT_ROUND" ]; }; then
+    echo "auto-fix: --prepare 不能與 --dry-run / --round 並用 —— 只看派工文用 --dry-run --round 1" >&2
+    exit 2
+fi
+# prepare 的 stdout 只放那一段指路 prompt(主線整段貼給 subagent):其餘進度行改走 stderr,
+# prompt 從 fd 3 印。
+if [ -n "$PREPARE" ]; then
+    exec 3>&1 1>&2
+fi
 case "${WANT_ROUND:-}" in
     "") ;;
     1) ;;
@@ -1018,13 +1051,47 @@ route_round() {   # $1 = 要派的是第幾輪;讀 S_RC / T_LAST_WORKER,設 W_RO
     pick_worker
 }
 
+# `--prepare` 的模型(D-061,#149):in-session subagent 只起得了 claude-code。照同一張表選
+# (worker 走 `route_worker`,票的 model / tool 是第一候選);選到的 tool 不是 claude-code 就往下
+# 一格看(`--exhausted-index` 只用來跳格,不標記額度),鏈上第一個 claude-code 候選就是它。
+# 一個都沒有 ⇒ 回 2,呼叫端在動任何東西之前停。不起程序、不發事件、不寫 cost。
+prepare_route() {   # $1 = worker | verifier;設定 P_MODEL
+    P_MODEL=""
+    if [ "$1" = worker ]; then
+        W_ROUTE=$([ -z "$TK_EFFORT" ] || printf '%s\n%s\n' --ticket-effort "$TK_EFFORT")
+        route_worker
+    else
+        route verifier
+    fi
+    while [ "$R_RC" -eq 0 ] && [ "$R_TOOL" != claude-code ]; do
+        echo "auto-fix: #$ID 的 $1 候選第 $R_INDEX 格是 $R_MODEL(tool $R_TOOL)—— in-session subagent 只起得了 claude-code,看下一格" >&2
+        if [ "$1" = worker ]; then
+            route_worker --exhausted-index "$R_INDEX"
+        else
+            route verifier --exhausted-index "$R_INDEX"
+        fi
+    done
+    if [ "$R_RC" -ne 0 ]; then
+        echo "auto-fix: #$ID 的 $1 鏈上沒有 claude-code 候選(${R_REASON:-resolve rc=$R_RC})—— --prepare 不備、什麼都沒動;改角色表或票的 model / tool" >&2
+        return 2
+    fi
+    P_MODEL=$R_MODEL
+    echo "auto-fix: #$ID --prepare $1 的模型:$P_MODEL(鏈第 $R_INDEX 格:$R_REASON)" >&2
+}
+
 # 批次修復(#108)不讀單票的狀態檔:紅榜在 land 那一輪,底下到「一輪的動作」整段跳過。
-if [ -z "$BATCH" ]; then
+# `--prepare verifier` 也跳過:它不看輪數、不動票,只建副本與派工文(檔尾 `prepare_verifier`)。
+if [ -z "$BATCH" ] && [ "$PREPARE" != verifier ]; then
 read_status
 if [ "${WANT_ROUND:-}" = "1" ]; then
     [ -z "${S_RUN:-}" ] || echo "auto-fix: #$ID 已經有 $S_RUN 這一輪,你要的是第 1 輪的派工文 —— 照給" >&2
     first_round_dispatch
     exit $?
+fi
+if [ -n "$PREPARE" ] && [ -n "${S_RUN:-}" ]; then
+    echo "auto-fix: --prepare worker 只備第 1 輪(票 Ready 且沒有狀態檔)—— #$ID 已經有 $S_RUN 這一輪($S_KIND),什麼都沒動" >&2
+    echo "auto-fix:   收件 / 閘門 / 落地被拒或紅了:把那一行交回同一個 subagent,不要再 prepare" >&2
+    exit 2
 fi
 if [ -z "${S_RUN:-}" ]; then
     # **Ready 且沒有狀態檔 ⇒ 第 1 輪**(#40,D-025 C1)。只認 Ready:Draft 還沒開完、
@@ -1048,8 +1115,12 @@ PY
         exit 2
     fi
     # 先選第 1 輪的 worker:票 / config 的 effort 不合候選的 tool 要在動票之前停(#114 A8),
-    # 而底下換 base_sha 就是動票。
-    route_round 1
+    # 而底下換 base_sha 就是動票。`--prepare worker` 照表選 claude-code 那一格(不起程序)。
+    if [ -n "$PREPARE" ]; then
+        prepare_route worker || exit 2
+    else
+        route_round 1
+    fi
     # **base 落後主線就換成主線的頭**(#57)。第 1 輪的票分支**從主線開**(`ticket_worktree`),
     # base_sha 留著舊的話,票上的對照組與 worker 手上的樹不是同一版。只在「還沒有分支、還沒有任何一輪」時換 —— 有分支就有人在上面
     # 做過事,換 base 等於改寫它的對照組。`--dry-run` 不動票,只說一聲。
@@ -1072,7 +1143,8 @@ PY
     S_ROUND=0
     S_BASE=$T_BASE
     RUN_ID=${AC_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}
-    echo "auto-fix: #$ID 是 Ready、還沒有狀態檔 —— 起第 1 輪(票的 base_sha ${S_BASE:-?})"
+    [ -n "$PREPARE" ] \
+        || echo "auto-fix: #$ID 是 Ready、還沒有狀態檔 —— 起第 1 輪(票的 base_sha ${S_BASE:-?})"
 else
     RUN_ID=$S_RUN
     echo "auto-fix: #$ID 最新一輪 $S_RUN($S_KIND)state=$S_STATE rc=${S_RC:-?} 紅 $S_FAILS 條,第 $S_ROUND 輪(上限 $S_LIMIT)"
@@ -1117,8 +1189,12 @@ fi
 
 # --------------------------------------------------------------- 一輪的動作
 # 第 1 輪在上面已經選過(要趕在換 base_sha 之前);其餘照狀態檔的輪數選。
-[ -n "${W_ROUND:-}" ] || route_round $(( ${S_ROUND:-0} + 1 ))
-pick_verifier
+# `--prepare` 不起程序:模型由 `prepare_route` 選,不走這兩手(pick_* 會為不在 PATH 的 CLI 換格、
+# 整串耗盡還會轉票 Blocked)。
+if [ -z "$PREPARE" ]; then
+    [ -n "${W_ROUND:-}" ] || route_round $(( ${S_ROUND:-0} + 1 ))
+    pick_verifier
+fi
 # 只有 complex 的票做完後覆核(#136;沒標 = simple)。判準是 `ticket.py` 的 `needs_review`,
 # review.sh / land / close 問的也是它。
 needs_review() {
@@ -1688,14 +1764,20 @@ v_packet() {   # 這一輪(平行 / 等交件)驗證者的派工文;換候選重
 # 所以在 worker 派出**之前**就起跑,worker 回來之後 `wait_verifier` 才收。其餘的票在 worker
 # 第 1 輪交件之後才起、起了就收 —— 同一支、同一個副本做法,只差起跑的時機。
 # 副本是票的 base_sha(`git archive`,與 test_defect 那條路一樣是 {work,base} 兩份)。
+# 驗證者副本 `{base,work}` 兩份,都是 `git archive <ref>` 的內容(worktree 裡沒 commit 的不進去)。
+# 平行 / 等交件的驗證者與 `--prepare verifier`(#149)共用這一份。
+archive_copy() {   # $1 = ref  $2 = 副本根;取不出回 1
+    rm -rf "$2"
+    mkdir -p "$2/base"
+    git -C "$ROOT" archive "$1" 2>/dev/null | tar -x -C "$2/base" || return 1
+    cp -R "$2/base" "$2/work"
+}
+
 start_verifier_bg() {   # uses r/VFIX/VDISPATCH;設定 VPID/VLOG/VRC_FILE/VSTART
-    rm -rf "$VFIX"
-    mkdir -p "$VFIX/base"
-    if ! git -C "$ROOT" archive "$V_BASE" 2>/dev/null | tar -x -C "$VFIX/base"; then
+    if ! archive_copy "$V_BASE" "$VFIX"; then
         echo "auto-fix: 取不出 ${V_BASE:-(空)} 給驗證者的副本 —— 這一輪驗證者不起" >&2
         return 1
     fi
-    cp -R "$VFIX/base" "$VFIX/work"
     VLOG=$(dirname "$VDISPATCH")/verifier-round$r.log
     VRC_FILE=$(dirname "$VDISPATCH")/verifier-round$r.rc
     rm -f "$VRC_FILE"
@@ -3170,6 +3252,123 @@ PY
 }
 rel_root() { python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$1" "$ROOT"; }
 [ -z "$BATCH" ] || batch_main
+
+# ---------------------------------------------------------- --prepare(D-061,#149)
+# 主線派給 in-session subagent 的那一手(雲端與 Mac 同一條;順序正文在 docs/SESSION-START.md
+# 主線那一節)。stdout(fd 3)只印一段指路 prompt —— 派工文本身由 subagent 自己讀一次,
+# 不進主線的上下文。
+
+# 第 1 輪 = `round_once 1` 起 worker 之前那一段(base_sha 已在上面照 #57 換過):輪次目錄
+# (apply.sh 預設讀的 EVIDENCE 就在這裡)、`first_round_packet`(與 `--dry-run --round 1` 同一份)、
+# 票分支 worktree、Ready → Running。**不**起程序、不發 `ticket.attempt.start` / `agent.*`
+# (in-session 沒有人會發配對的 done / failed,heartbeat 照 attempt 配對)、不寫 cost、不寫 status.json。
+prepare_worker() {
+    FIX=$WTBASE/fix-t$ID/round1
+    DISPATCH=$ROOT/$(cfg reports_dir reports)/t$ID/$RUN_ID/dispatch-round1.md
+    rm -rf "$FIX"
+    mkdir -p "$FIX"
+    if ! first_round_packet "$DISPATCH" "$P_MODEL"; then
+        rm -rf "$FIX"
+        exit 6
+    fi
+    if ! ticket_worktree; then
+        echo "auto-fix: 票分支 $(ticket_branch) 的 worktree $WT 建不出來 —— 不備" >&2
+        rm -rf "$FIX"
+        exit 2
+    fi
+    python3 "$AC/ticket.py" set "$ID" state Running >/dev/null 2>&1 \
+        || echo "auto-fix: 票狀態改不動(Running)" >&2
+    pw_base=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8")).get("base_sha") or "")' "$TF")
+    echo "auto-fix: #$ID 第 1 輪備好了(派工文 $(rel_root "$DISPATCH"),票轉 Running)—— 底下那一段整段貼給 subagent" >&2
+    {
+        echo "model=$P_MODEL"
+        echo "你是 #$ID 的實作者(role=worker,短命角色):照派工文做,交件後回報。"
+        echo "先讀這一份:$DISPATCH(規則包 + 票面快照 + 你的四件事;其他按需 grep,不整份讀)"
+        echo "票:#$ID,票檔 $TF(唯讀)"
+        echo "base sha:$pw_base"
+        echo "worktree:$WT(分支 $(ticket_branch) 已建好,只在這裡 commit)。subagent 每次呼叫 cwd 都會重設 —— 每一個指令都在它裡面跑:\`cd $WT && …\` 或 \`git -C $WT …\`"
+        echo "EVIDENCE:$FIX/EVIDENCE-round1.md(worktree 外)"
+        echo "回報:做完回報給派你的那一條主線 session(分支頭 sha、EVIDENCE 路徑、Ran 數 / rc;有反駁寫 OBJECTION 行)。"
+    } >&3
+    exit 0
+}
+
+# 驗證者:`verifier_wanted` 說要才備(needs_verifier 不是 false、verify.baseline 空)。副本來源 =
+# 票分支相對 base_sha 有 commit 就是分支頭(案例照的實作在上面);沒有而 interface_fixed 是 true
+# 就是 base_sha(與 worker 平行);兩者都不是 ⇒ 等 worker 交件。不動票。
+prepare_verifier() {
+    verifier_wanted
+    if [ -z "$V_WANT" ]; then
+        if [ "$V_FLAG" = no ]; then
+            echo "auto-fix: #$ID needs_verifier=false —— 不要驗證者,--prepare verifier 什麼都沒建" >&2
+        else
+            echo "auto-fix: #$ID verify.baseline 已經有了(案例交過)—— 不再備驗證者,什麼都沒建" >&2
+        fi
+        exit 2
+    fi
+    pv_branch=$(ticket_branch)
+    pv_head=$(git -C "$ROOT" rev-parse -q --verify "refs/heads/$pv_branch^{commit}" 2>/dev/null || echo "")
+    pv_base=$(git -C "$ROOT" rev-parse -q --verify "${V_BASE:-?}^{commit}" 2>/dev/null || echo "")
+    if [ -z "$pv_base" ]; then
+        echo "auto-fix: #$ID 的 base_sha「${V_BASE:-(空)}」解不出 commit —— --prepare verifier 什麼都沒建" >&2
+        exit 2
+    fi
+    pv_new=0
+    [ -z "$pv_head" ] || pv_new=$(git -C "$ROOT" rev-list --count "$pv_base..$pv_head" 2>/dev/null || echo 0)
+    if [ "${pv_new:-0}" -ge 1 ]; then
+        pv_src=$pv_head
+        pv_from="票分支 $pv_branch 的頭(worker 的 $pv_new 個 commit 在上面)"
+    elif [ -n "$V_PARALLEL" ]; then
+        pv_src=$pv_base
+        pv_from="票的 base_sha(interface_fixed=true,與 worker 平行)"
+    else
+        echo "auto-fix: #$ID interface_fixed 不是 true,而票分支 $pv_branch 相對 base_sha 還沒有 commit —— 等 worker 交件(它的 commit 進了分支)再 --prepare verifier;什麼都沒建" >&2
+        exit 2
+    fi
+    prepare_route verifier || exit 2
+    VERIFIER_MODEL=$P_MODEL
+    RUN_ID=${AC_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}
+    VFIX=$WTBASE/verify-t$ID/round1
+    VDISPATCH=$ROOT/$(cfg reports_dir reports)/t$ID/$RUN_ID/dispatch-verifier-round1.md
+    if ! archive_copy "$pv_src" "$VFIX"; then
+        rm -rf "$VFIX"
+        echo "auto-fix: 取不出 $pv_src 給驗證者的副本 —— 什麼都沒建" >&2
+        exit 2
+    fi
+    # 等交件才備的那一種(interface_fixed 不是 true)照 #60 帶「介面以分支上的實作為準」那一段。
+    pv_after=""
+    [ -n "$V_PARALLEL" ] || pv_after=$pv_branch
+    if ! verifier_packet "$VDISPATCH" 1 "$VFIX" "$V_BASE" "$pv_after"; then
+        rm -rf "$VFIX"
+        exit 6
+    fi
+    if [ "$pv_src" != "$pv_base" ]; then
+        {
+            echo ""
+            echo "## 副本來源(--prepare verifier)"
+            echo "副本的 base/ 與 work/ 是**票分支 \`$pv_branch\` 的頭** \`$pv_src\`(worker 的 commit 都在上面),不是上面那個 base;"
+            echo "patch-verify 對這份 base/ 出(只有你改的案例),收件時 \`apply.sh\` 在分支上補一個 commit。"
+            echo "\`verify-case.py red\` 的 \`--ref\` 照上面那個 base(票的 base_sha):它只把案例檔疊上乾淨基底。"
+        } >> "$VDISPATCH"
+    fi
+    echo "auto-fix: #$ID 驗證者第 1 輪備好了(副本來自 $pv_from;派工文 $(rel_root "$VDISPATCH"))—— 底下那一段整段貼給 subagent" >&2
+    {
+        echo "model=$P_MODEL"
+        echo "你是 #$ID 的驗證者(role=verifier,短命角色):照派工文寫案例,交件後回報。"
+        echo "先讀這一份:$VDISPATCH(規則包 + 範本 + 你的四件事;其他按需 grep,不整份讀)"
+        echo "票:#$ID,票檔 $TF(唯讀)"
+        echo "副本來源 sha:$pv_src"
+        echo "副本根:$VFIX(work/ 改、base/ 一個字都不動;不 git 寫入)。subagent 每次呼叫 cwd 都會重設 —— 指令一律 \`cd $VFIX && …\`"
+        echo "交件:$VFIX/patch-verify.diff 與 $VFIX/EVIDENCE-verifier.md"
+        echo "回報:做完回報給派你的那一條主線 session(兩個檔的路徑、Ran 數 / rc;有反駁寫 OBJECTION 行)。"
+    } >&3
+    exit 0
+}
+
+case "$PREPARE" in
+    worker) prepare_worker ;;
+    verifier) prepare_verifier ;;
+esac
 
 # 迴圈從 `S_ROUND+1` 起,碰不到前面那幾輪的輪次目錄 —— 主線用 Agent 手建的第 1 輪就在這裡
 # (#38 A4)。派下一輪之前一併收(控制根;EVIDENCE 留著)。`--dry-run` 不刪東西。

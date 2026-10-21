@@ -60,6 +60,9 @@ python3 scripts/rules.py roles                         # 哪個角色要哪幾�
 **worker**(D-054 Q9,VISION 流程 #5「git 由工作者自己處理」):派工方(`auto-fix.sh`)派工前建好
 票分支(`t<n>`,票的 `branch` 欄)的 git worktree `<worktree_dir>/<票分支>`,你的 cwd 就是它;
 閘門在同一個 worktree 跑,落地收的也是這條分支(流程見 `docs/WORKFLOW.md`)。
+派工方兩種形式都是 `auto-fix.sh`(D-061):它自己起 headless worker,或 `--prepare worker|verifier` 備好後由主線交給
+in-session subagent(subagent 的 cwd 每次呼叫重設,指令一律帶 worktree / 副本路徑)。底下 rc 8 的越界守衛只包得到
+auto-fix 自己起的程序;in-session 的規矩一字不差。
 
 - **在自己的 worktree / 分支 commit**:改完 `git add` / `git commit`(可多個 commit,訊息帶 `t<n>`)。
 - **交件 = 分支相對派工前多了至少一個 commit,而且工作樹乾淨。** 沒 commit 的改動不算交件,

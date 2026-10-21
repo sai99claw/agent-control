@@ -1146,6 +1146,192 @@ class TheFirstRoundPacket(AutoFixBase):
         self.assertIn("--round 只接 1", done.stderr)
 
 
+class ThePrepareWorkerStopsBeforeTheProcess(AutoFixBase):
+    """#149 / D-061:`auto-fix.sh <n> --prepare worker` = Ready 票第 1 輪的那一段(#57 換 base、
+    票分支 worktree、輪次目錄、`first_round_packet`、Ready → Running),停在起 worker 之前;
+    stdout 只有一段給 in-session subagent 的指路 prompt。期望值來自票面 objective (1) 與既有
+    慣例(apply.sh 預設的 EVIDENCE 路徑、`<worktree_dir>/t<n>`),不取自被測程式。
+
+    變異(實測,見 EVIDENCE):M1 不停、照起 worker → `worker_rounds() == []` 紅;M2 拿掉
+    Ready → Running → state 紅;M4 把派工文 cat 到 stdout → `# 規則包` 不在 stdout 紅;
+    M6 發 `ticket.attempt.start` → 事件那一格紅。
+    """
+
+    def wt(self, name="t1"):
+        return os.path.join(self.home, "repo-wt", name)
+
+    def fix_dir(self):
+        return os.path.join(self.home, "repo-wt", "fix-t1", "round1")
+
+    def prepare(self, *more):
+        return self.auto_fix("--prepare", *more)
+
+    def test_prepare_worker_sets_up_round_one_and_prints_only_a_pointer(self):
+        self.set_worker(WORKER_NEVER)
+        row = self.ticket_ready(subject="準備好給 subagent 的第一輪")
+        self.write("README", "主線在開票之後又走了一步\n")
+        self.git("commit", "-q", "-am", "主線往前走")
+        self.git("push", "-q", "origin", "main")
+        head = self.git("rev-parse", "main").strip()
+        self.assertNotEqual(row["base_sha"], head, "前提:base_sha 落後主線一個 commit")
+        cost_before = self.load_ticket("1").get("cost")
+        events_before = len(self.events())
+
+        done = self.prepare("worker")
+
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        ticket = self.load_ticket("1")
+        self.assertEqual(ticket["state"], "Running")
+        self.assertEqual(ticket["base_sha"], head, "#57:base 換成主線的頭")
+        self.assertTrue(os.path.isdir(self.wt()), "票分支 worktree")
+        self.assertEqual(self.git("rev-parse", "HEAD", cwd=self.wt()).strip(), head)
+        self.assertEqual(self.git("rev-parse", "--abbrev-ref", "HEAD", cwd=self.wt()).strip(), "t1")
+        self.assertTrue(os.path.isdir(self.fix_dir()), "輪次目錄(apply.sh 預設讀的 EVIDENCE 在這裡)")
+        packets = self.result_files("dispatch-round1.md")
+        self.assertEqual(len(packets), 1, packets)
+        with open(packets[0], encoding="utf-8") as handle:
+            packet = handle.read()
+        self.assertTrue(packet.startswith("# 規則包:worker"), packet[:120])
+        self.assertIn("準備好給 subagent 的第一輪", packet, "票面快照")
+
+        out = done.stdout
+        self.assertIn("model=opus", out)
+        self.assertTrue(out.startswith("model=opus\n"), out[:200])
+        self.assertIn(packets[0], out, "派工文的絕對路徑")
+        self.assertIn("#1", out)
+        self.assertIn(head, out, "完整的 base sha")
+        self.assertIn(self.wt(), out, "worktree 路徑")
+        self.assertIn(os.path.join(self.fix_dir(), "EVIDENCE-round1.md"), out)
+        self.assertIn("主線", out, "回報對象")
+        self.assertNotIn("# 規則包", out, "派工文本身不進 stdout")
+        self.assertNotIn("# 規則包：", out)
+        self.assertNotIn("```json", out)
+
+        self.assertEqual(self.worker_rounds(), [], "不起 worker")
+        new_kinds = [row["kind"] for row in self.events()[events_before:]]
+        self.assertEqual([kind for kind in new_kinds
+                          if kind.startswith("ticket.attempt.") or kind.startswith("agent.")],
+                         [], new_kinds)
+        self.assertEqual(ticket.get("cost"), cost_before, "不寫 cost")
+        self.assertEqual(glob.glob(os.path.join(self.repo, "reports", "t1", "*", "status.json")), [],
+                         "不寫 status.json")
+
+    def test_a_ticket_that_is_not_ready_is_refused_and_untouched(self):
+        self.set_worker(WORKER_NEVER)
+        self.make_ticket("1", state="InReview")
+        path = os.path.join(self.repo, "tickets", "1.json")
+        with open(path, "rb") as handle:
+            before = handle.read()
+        done = self.prepare("worker")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("state=InReview", done.stderr)
+        with open(path, "rb") as handle:
+            self.assertEqual(handle.read(), before, "票檔逐位元組不變")
+        self.assertFalse(os.path.exists(self.wt()))
+        self.assertFalse(os.path.exists(self.fix_dir()))
+        self.assertEqual(self.worker_rounds(), [])
+
+    def test_prepare_does_not_mix_with_dry_run_round_or_batch(self):
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready()
+        for extra in (["--dry-run"], ["--round", "1"]):
+            with self.subTest(extra=extra):
+                done = self.prepare("worker", *extra)
+                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        batch = self.run_sh("scripts/auto-fix.sh", "--batch", "land/x", "1", "--prepare", "worker")
+        self.assertEqual(batch.returncode, 2, batch.stdout + batch.stderr)
+        self.assertEqual(self.load_ticket("1")["state"], "Ready")
+        self.assertFalse(os.path.exists(self.wt()))
+        self.assertFalse(os.path.exists(self.fix_dir()))
+        self.assertEqual(self.worker_rounds(), [])
+
+    def test_a_codex_first_chain_prepares_the_first_claude_code_candidate(self):
+        self.set_worker(WORKER_NEVER)
+        self.set_role_models(worker=[fixture_candidate("codex:gpt-5.6-sol", tool="codex"),
+                                     fixture_candidate("sonnet")])
+        self.ticket_ready(model="", tool="")
+        done = self.prepare("worker")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue(done.stdout.startswith("model=sonnet\n"), done.stdout[:200])
+        packets = self.result_files("dispatch-round1.md")
+        self.assertEqual(len(packets), 1, packets)
+        with open(packets[0], encoding="utf-8") as handle:
+            self.assertIn("memory/model/sonnet.md", handle.read(), "派工文帶的是選到那一格的模型卡")
+
+    def test_a_chain_with_no_claude_code_candidate_is_refused_untouched(self):
+        self.set_worker(WORKER_NEVER)
+        self.set_role_models(worker=[fixture_candidate("codex:gpt-5.6-sol", tool="codex")])
+        self.ticket_ready(model="", tool="")
+        path = os.path.join(self.repo, "tickets", "1.json")
+        with open(path, "rb") as handle:
+            before = handle.read()
+        done = self.prepare("worker")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("claude-code", done.stderr)
+        with open(path, "rb") as handle:
+            self.assertEqual(handle.read(), before)
+        self.assertFalse(os.path.exists(self.wt()))
+
+
+class ThePrepareVerifierCopy(AutoFixBase):
+    """#149 objective (2):`--prepare verifier` 只在要驗證者時備;副本來源 = 票分支有 commit 就是
+    分支頭,沒有而 interface_fixed 是 true 就是 base_sha,否則等 worker。不動票。
+
+    變異(實測,見 EVIDENCE):M5 interface_fixed 不是 true、沒有 worker commit 也照 base_sha 備
+    → 「等 worker」那一條紅。
+    """
+
+    def vfix(self):
+        return os.path.join(self.home, "repo-wt", "verify-t1", "round1")
+
+    def prepare(self):
+        return self.auto_fix("--prepare", "verifier")
+
+    def test_needs_verifier_false_is_refused(self):
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready(needs_verifier=False, interface_fixed=True)
+        done = self.prepare()
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.home, "repo-wt", "verify-t1")))
+
+    def test_without_a_fixed_interface_it_waits_for_the_worker(self):
+        self.set_worker(WORKER_NEVER)
+        row = self.ticket_ready(needs_verifier=True)
+        for case in ("no branch", "branch without commits"):
+            with self.subTest(case=case):
+                if case == "branch without commits":
+                    self.git("branch", "t1", row["base_sha"])
+                done = self.prepare()
+                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+                self.assertIn("等 worker", done.stderr)
+                self.assertFalse(os.path.exists(os.path.join(self.home, "repo-wt", "verify-t1")))
+        self.assertEqual(self.load_ticket("1")["state"], "Ready")
+
+    def test_a_fixed_interface_copies_base_sha_in_parallel(self):
+        self.set_worker(WORKER_NEVER)
+        row = self.ticket_ready(needs_verifier=True, interface_fixed=True)
+        path = os.path.join(self.repo, "tickets", "1.json")
+        with open(path, "rb") as handle:
+            before = handle.read()
+        done = self.prepare()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        with open(path, "rb") as handle:
+            self.assertEqual(handle.read(), before, "不動票")
+        self.assertEqual(self.read("README", where=os.path.join(self.vfix(), "base")),
+                         self.git("show", "%s:README" % row["base_sha"]))
+        self.assertTrue(os.path.isdir(os.path.join(self.vfix(), "work")))
+        packets = self.result_files("dispatch-verifier-round1.md")
+        self.assertEqual(len(packets), 1, packets)
+        out = done.stdout
+        self.assertTrue(out.startswith("model=opus\n"), out[:200])
+        for want in (packets[0], "#1", row["base_sha"], self.vfix(),
+                     os.path.join(self.vfix(), "patch-verify.diff"),
+                     os.path.join(self.vfix(), "EVIDENCE-verifier.md")):
+            self.assertIn(want, out)
+        self.assertNotIn("# 規則包", out)
+        self.assertEqual(self.worker_rounds(), [])
+
+
 class TheFirstRoundStartsFromReady(AutoFixBase):
     """#40 / D-025 C1:票 **Ready 且沒有狀態檔** ⇒ `auto-fix.sh <n>` 自己起第 1 輪。
 
