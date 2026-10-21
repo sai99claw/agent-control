@@ -17,18 +17,77 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "1219a4990dd35af139cfb340e4719f2e5d4a0ec2",
-  "state": "Ready",
-  "state_version": 3,
+  "state": "Done",
+  "state_version": 11,
   "lease": null,
   "retry_limit": 2,
   "complexity": "complex",
   "needs_verifier": true,
   "interface_fixed": true,
   "verify": {
-    "files": [],
+    "files": [
+      "tests/test_auto_fix.py"
+    ],
     "tags": [],
-    "run": "",
-    "notes": ""
+    "run": "python3 -m unittest tests.test_auto_fix.APreparedRoundIsHandedInByAnInSessionSubagent",
+    "notes": "Acceptance 3 of #149 (D-061 hand-off end to end). Class APreparedRoundIsHandedInByAnInSessionSubagent in tests/test_auto_fix.py, inserted right before EveryRoundCostsARowAndClosesItsAttempt. Real auto-fix.sh / apply.sh subprocesses in the AutoFixBase sandbox, WORKER_NEVER stub; the test plays the subagent (commit in <home>/repo-wt/t1, EVIDENCE at <home>/repo-wt/fix-t1/round1/EVIDENCE-round1.md, verifier case + diff -ruN base work in <home>/repo-wt/verify-t1/round1). Expected paths come from the ticket text and apply.sh's default, not from the program; the test asserts each is printed in --prepare stdout, then uses it. Case 3 moves main past base_sha so base/ == base_sha tree is distinguishable from main head; it also asserts --prepare verifier leaves tickets/1.json bytes unchanged (objective 2). No permission or signal tricks (uid 0 safe).",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-21T09:21:56+00:00",
+      "files": [
+        "tests/test_auto_fix.py"
+      ],
+      "base_ref": "1219a4990dd35af139cfb340e4719f2e5d4a0ec2",
+      "base_sha": "1219a4990dd35af139cfb340e4719f2e5d4a0ec2",
+      "candidate": "../agent-control-wt/t149",
+      "candidate_sha": "f1ca08b7f76ec27318b8c7bff1ab6a094dced045",
+      "baseline": {
+        "red": [
+          "tests.test_auto_fix.APreparedRoundIsHandedInByAnInSessionSubagent.test_a_parallel_verifier_with_no_worker_commit_copies_the_base_sha_tree",
+          "tests.test_auto_fix.APreparedRoundIsHandedInByAnInSessionSubagent.test_a_prepared_worker_round_is_received_by_apply_without_evidence_flag",
+          "tests.test_auto_fix.APreparedRoundIsHandedInByAnInSessionSubagent.test_a_verifier_prepared_after_the_worker_commit_lands_its_case_on_the_branch",
+          "tests.test_auto_fix.ThePrepareVerifierCopy.test_a_fixed_interface_copies_base_sha_in_parallel",
+          "tests.test_auto_fix.ThePrepareVerifierCopy.test_without_a_fixed_interface_it_waits_for_the_worker",
+          "tests.test_auto_fix.ThePrepareVerifierCopy.test_without_a_fixed_interface_it_waits_for_the_worker",
+          "tests.test_auto_fix.ThePrepareWorkerStopsBeforeTheProcess.test_a_chain_with_no_claude_code_candidate_is_refused_untouched",
+          "tests.test_auto_fix.ThePrepareWorkerStopsBeforeTheProcess.test_a_codex_first_chain_prepares_the_first_claude_code_candidate",
+          "tests.test_auto_fix.ThePrepareWorkerStopsBeforeTheProcess.test_a_ticket_that_is_not_ready_is_refused_and_untouched",
+          "tests.test_auto_fix.ThePrepareWorkerStopsBeforeTheProcess.test_prepare_worker_sets_up_round_one_and_prints_only_a_pointer"
+        ],
+        "red_lines": [
+          "tests.test_auto_fix.APreparedRoundIsHandedInByAnInSessionSubagent.test_a_parallel_verifier_with_no_worker_commit_copies_the_base_sha_tree: AssertionError: 2 != 0 : auto-fix: 不認得 --prepare(--dry-run / --round <n> / --no-review)",
+          "tests.test_auto_fix.APreparedRoundIsHandedInByAnInSessionSubagent.test_a_prepared_worker_round_is_received_by_apply_without_evidence_flag: AssertionError: 2 != 0 : auto-fix: 不認得 --prepare(--dry-run / --round <n> / --no-review)",
+          "tests.test_auto_fix.APreparedRoundIsHandedInByAnInSessionSubagent.test_a_verifier_prepared_after_the_worker_commit_lands_its_case_on_the_branch: AssertionError: 2 != 0 : auto-fix: 不認得 --prepare(--dry-run / --round <n> / --no-review)",
+          "tests.test_auto_fix.ThePrepareVerifierCopy.test_a_fixed_interface_copies_base_sha_in_parallel: AssertionError: 2 != 0 : auto-fix: 不認得 --prepare(--dry-run / --round <n> / --no-review)",
+          "tests.test_auto_fix.ThePrepareVerifierCopy.test_without_a_fixed_interface_it_waits_for_the_worker: AssertionError: '等 worker' not found in 'auto-fix: 不認得 --prepare(--dry-run / --round <n> / --no-review)\\n'",
+          "tests.test_auto_fix.ThePrepareVerifierCopy.test_without_a_fixed_interface_it_waits_for_the_worker: AssertionError: '等 worker' not found in 'auto-fix: 不認得 --prepare(--dry-run / --round <n> / --no-review)\\n'",
+          "tests.test_auto_fix.ThePrepareWorkerStopsBeforeTheProcess.test_a_chain_with_no_claude_code_candidate_is_refused_untouched: AssertionError: 'claude-code' not found in 'auto-fix: 不認得 --prepare(--dry-run / --round <n> / --no-review)\\n'",
+          "tests.test_auto_fix.ThePrepareWorkerStopsBeforeTheProcess.test_a_codex_first_chain_prepares_the_first_claude_code_candidate: AssertionError: 2 != 0 : auto-fix: 不認得 --prepare(--dry-run / --round <n> / --no-review)",
+          "tests.test_auto_fix.ThePrepareWorkerStopsBeforeTheProcess.test_a_ticket_that_is_not_ready_is_refused_and_untouched: AssertionError: 'state=InReview' not found in 'auto-fix: 不認得 --prepare(--dry-run / --round <n> / --no-review)\\n'",
+          "tests.test_auto_fix.ThePrepareWorkerStopsBeforeTheProcess.test_prepare_worker_sets_up_round_one_and_prints_only_a_pointer: AssertionError: 2 != 0 : auto-fix: 不認得 --prepare(--dry-run / --round <n> / --no-review)"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 164,
+        "skipped": 0,
+        "log": "../agent-control-wt/t149/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 164,
+        "skipped": 0,
+        "log": "../agent-control-wt/t149/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "objections": [],
   "decision_refs": [
@@ -42,5 +101,89 @@
   ],
   "test_plan": "Expected values come from D-061 and its #151 evidence, the existing conventions this ticket names (round dir path apply.sh:583, worktree `<worktree_dir>/t<n>`, `--dry-run --round 1` packet), and the flag/path/stdout fields pinned in objective (1)-(3); never from the program under test.\nEnvironment: the cloud container runs as uid 0 (#151). No test may rely on permission denial (chmod/0o555 tricks are no-ops as root) or on signalling processes; board/config.json hard_block rejects new lines in tests/** verify/** containing os\\.kill, killpg, pkill or `kill -`. Use the existing Sandbox (tests/control_harness.py), the WORKER_NEVER stub, `worker_rounds()` and the tripwire (`assert_no_tripwire`) to prove no agent started; no model, no network, no routine API.\nWorker: implement (1)-(4); acceptance 1-2 in tests/test_auto_fix.py. Only tests to run (foreground, `timeout 590`): `python3 -m unittest tests.test_auto_fix` and `python3 -m unittest tests.test_apply`, then `sh scripts/gate.sh --branch --ticket 149`. Not the full suite.\nVerifier (needs_verifier=true, interface_fixed=true: flag names, paths, stdout fields and ticket effects are pinned here, so it starts in parallel): acceptance 3 into an existing module (tests/test_auto_fix.py or tests/test_apply.py; D-056 ① no ticket-numbered file); real auto-fix.sh / apply.sh subprocesses in the Sandbox; the test itself plays the subagent.\nMutations (not run, opener could not without an implementation): M1 drop the early stop so --prepare starts the worker -> acceptance 1 `worker_rounds() == []` red; M2 skip Ready->Running -> acceptance 1 state red; M3 put the round dir under reports/ -> acceptance 3 `apply.sh 1` without --evidence red; M4 cat the packet to stdout -> acceptance 1 `# 規則包` absence red; M5 let --prepare verifier copy from base_sha when interface_fixed is false and no worker commit -> acceptance 2 red; M6 emit ticket.attempt.start -> acceptance 1 events red.\nOracles checked: tests/test_auto_fix.py TheFirstRoundPacket (:1108, asserts the dry-run packet shape; must stay as is), TheFirstRoundStartsFromReady (:1149); the only `不認得` assertion there is `--round 只接 1` (:1141), so extending the unknown-flag message is safe; tests/test_apply.py classes use their own ApplyBase and do not exercise auto-fix.",
   "outline": "Summary: D-061 makes in-session subagents the primary dispatch (cloud and Mac). Script only one entry, `auto-fix.sh <n> --prepare worker|verifier`: it runs auto-fix's existing round-1 prefix (base bump, worktree, round dir at the path apply.sh already defaults to, rules-pack packet file, verifier copy, Ready->Running) and stops before starting a process, printing a ~10-line pointer prompt. Everything else is docs: SESSION-START main order prepare -> subagent -> apply -> gate --no-auto-fix -> land --no-auto-fix, redo = call the same subagent back; routine kept as a manual fallback in the reference. Old --cloud-prompt / --cloud-wait / --cloud and cloud: cost rows dropped.\nOrder: worker prepare -> verifier prepare -> docs.\nFiles that move (grepped): scripts/auto-fix.sh (header :1-12, usage :95, flag parse :119-140, first_round_dispatch :976, round-1 start :1040-1075, round_once :2415-2500, verifier copy :1755-1790); tests/test_auto_fix.py; docs/SESSION-START.md main; docs/reference/role-procedures.md main; docs/DISPATCH-TEMPLATE.md §1. Not touched: apply/gate/land/review, role-models.\nneeds_verifier=true: new hand-off path into apply; the e2e case is a different layer than the worker's unit cases. interface_fixed=true. complex: refactors auto-fix's shared round-1 prefix.\nFor main to decide (with suggestion): 1. In-session subagent tokens only reach agent.cost events, not ticket cost[] (VISION line 51) -> suggest a separate ticket. 2. No overreach guard in-session -> accept for now. 3. Reviewer still headless via review.sh -> separate ticket if it fails in the cloud.",
-  "branch": "t149"
+  "branch": "t149",
+  "gate": {
+    "rc": 0,
+    "sha": "f1ca08b7f76ec27318b8c7bff1ab6a094dced045",
+    "run_id": "20261021-085137-4774",
+    "at": "2026-10-21T09:21:56+00:00"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "9ef2d6e46cfea6acb664b7298df5973b8a7e041e",
+    "note": "reports/t149/20261021-085137-4774/REVIEW.md",
+    "at": "2026-10-21T09:55:35+00:00"
+  },
+  "cost": [
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 22,
+      "tokens_out": 9696,
+      "cache_write": 77544,
+      "cache_read": 796162,
+      "wall_seconds": 101,
+      "outcome": "pass",
+      "run_id": "20261021-085137-4774",
+      "session_id": "5260a3b6-6423-5527-bed8-9d3211ae718f",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-21T09:23:37+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1907,
+      "outcome": "pass",
+      "run_id": "20261021-092348-18677",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-21T09:55:35+00:00"
+    }
+  ],
+  "landed_sha": "9ef2d6e46cfea6acb664b7298df5973b8a7e041e",
+  "cost_total": {
+    "calendar_seconds": 114935,
+    "wall_seconds": 2008,
+    "runs": 2,
+    "worker_rounds": null,
+    "objections": 0,
+    "by_role": {
+      "reviewer": {
+        "runs": 1,
+        "wall_seconds": 101,
+        "tokens_in": 22,
+        "tokens_out": 9696,
+        "cache_write": 77544,
+        "cache_read": 796162,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 1907,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-21T09:55:35+00:00"
+  }
 }
