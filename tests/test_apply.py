@@ -377,13 +377,19 @@ class TheStructuredDeliveryOfTheFirstRound(ApplyBase):
 
     def test_an_objection_that_cannot_be_recorded_is_not_called_already_there(self):
         """A3(#36):`ticket.py objection` 記不進票(rc=2)以前也掉到「已經有了」那一句
-        而 exit 0 —— 沒人收的反駁與沒有反駁長得一樣(§7)。票庫唯讀 = 鎖拿不到、
-        票寫不回去,apply 前面那幾手都不寫票庫,所以只有這一手會撞到。
+        而 exit 0 —— 沒人收的反駁與沒有反駁長得一樣(§7)。
+
+        記不進票的原因是一把**沒人釋放的寫入鎖**(上一個死在半路留下的 `.ticket.lock`
+        目錄):`Lock()` 等到逾時 → RuntimeError → rc=2。以前用 `chmod 0o555` 讓票庫唯讀,
+        但 root 不吃權限位元,雲端容器(uid 0)寫得進去、這一條就紅了(#151)。
+        apply 前面會寫票庫的只有分支名回寫(#53,票的 `branch` 空著才寫);票先帶
+        `branch="t1"`,那一手不拿鎖,所以只有反駁這一手會撞到。
+
+        **變異**:把 `apply.sh` 尾端 `case $orc` 的 `*)` 分支改成印「已經有了」、
+        往下走到 exit 0 → 這一條紅。
         """
-        self.make("1")
-        tickets = os.path.join(self.repo, "tickets")
-        os.chmod(tickets, 0o555)
-        self.addCleanup(os.chmod, tickets, 0o755)
+        self.make("1", branch="t1")
+        os.mkdir(os.path.join(self.repo, "tickets", ".ticket.lock"))
         done = self.deliver_apply("1", "--evidence", self.patch_file("EVIDENCE.md", OBJECTING_EVIDENCE))
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("已經有了", done.stderr)

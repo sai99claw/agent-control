@@ -15,6 +15,7 @@ JSONL,再照 `scenario.json` 演那一個角色。**期望值寫死在這裡**(�
 import json
 import os
 import shlex
+import subprocess
 import sys
 import time
 import unittest
@@ -545,7 +546,13 @@ class OnlyTheseGoToTheMainLine(TriageBase):
 
     def test_a5c_the_opener_runs_past_its_timeout(self):
         """守 (c) 逾時 + 收掉替身 / 可信回歸:替身睡 60 秒、時限 2 秒,量牆鐘與 pid /
-        既有逾時測試只量 worker / 不加縫:config 的 opener.timeout_seconds。"""
+        既有逾時測試只量 worker / 不加縫:config 的 opener.timeout_seconds。
+
+        「收掉了」= pid 不在,**或是殭屍**(#151):被砍的替身過繼給 PID 1,雲端容器的
+        PID 1 不是會馬上收屍的 init,`kill 0` 對殭屍照樣成功。活著(不是 Z)才算沒砍。
+
+        **變異**:`auto-fix.sh` 逾時那一手不呼叫 `kill_tree(proc)` → 替身是活的 S → 這一條紅。
+        """
         self.arm(opener={"command": OPENER_COMMAND, "timeout_seconds": 2})
         self.play(opener="sleep")
         began = time.time()
@@ -553,8 +560,34 @@ class OnlyTheseGoToTheMainLine(TriageBase):
         self.assertLess(time.time() - began, 50, "開題者沒有在時限被砍")
         self.assert_escalated(done, ["開題者逾時"], started=True)
         pid = self.calls("opener")[0]["pid"]
-        with self.assertRaises(OSError):
+        self.addCleanup(self.reap, pid)
+        self.assertTrue(self.killed(pid), "開題者替身 %d 逾時後還活著(不是殭屍)" % pid)
+
+    @staticmethod
+    def killed(pid):
+        """pid 不在,或在但是殭屍(`ps` 的 stat 以 Z 起頭)。兩眼之間被收掉也算。"""
+        try:
             os.kill(pid, 0)
+        except OSError:
+            return True
+        stat = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
+                              capture_output=True, text=True).stdout.strip()
+        if not stat:
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                return True
+        return stat.startswith("Z")
+
+    @classmethod
+    def reap(cls, pid):
+        """這是測試自己起的替身;變異下它還活著,不留給下一條。已收掉的不再碰(pid 會被重用)。"""
+        if cls.killed(pid):
+            return
+        try:
+            os.kill(pid, 9)
+        except OSError:
+            pass
 
     def test_a5c_the_opener_hands_in_no_verdict(self):
         """守 (c) 第一行不是 TRIAGE: 起頭(第二行才寫的不算)/ 可信回歸:替身寫死那兩行 /
