@@ -1482,6 +1482,199 @@ class TheFirstRoundStartsFromReady(AutoFixBase):
         self.assertEqual(len(self.result_files("dispatch-round1.md")), 1)
 
 
+# What an in-session worker subagent hands in (#149 acceptance 3): the four EVIDENCE sections
+# `ticket.py result` looks for (patch / gate / excluded hypotheses / repro) plus a ```result block.
+PREPARED_WORKER_EVIDENCE = """# EVIDENCE #1 round 1
+
+## 1 patch
+sha256 0123456789abcdef
+
+## 2 gate
+`python3 -m unittest tests.test_x`: Ran 1 test, rc=0
+
+## 4 已排除的假設 (excluded hypotheses)
+Not a stale worktree: the commit is on branch t1.
+
+## 5 最小重現 (minimal repro)
+`python3 -m unittest tests.test_x`, expect `Ran 1 test ... OK`
+
+## result
+
+```result
+{"ticket": "1", "role": "worker", "round": 1, "rc": 0,
+ "patch_sha256": "0123456789abcdef",
+ "gate": {"cmd": "python3 -m unittest tests.test_x", "ran": 1, "rc": 0},
+ "objection": null, "excluded": ["stale worktree"],
+ "repro": {"cmd": "python3 -m unittest tests.test_x", "expect": "OK"},
+ "memory": []}
+```
+"""
+
+PREPARED_VERIFIER_CASE_REL = "tests/test_prepared_hand_off.py"
+PREPARED_VERIFIER_CASE = ("import unittest\n\n\nclass T(unittest.TestCase):\n"
+                          "    def test_feature_file(self):\n"
+                          "        self.assertTrue(True)\n")
+PREPARED_VERIFIER_EVIDENCE = """# EVIDENCE-verifier #1 round 1
+
+## result
+
+```result
+{"ticket": "1", "role": "verifier", "round": 1, "rc": 0,
+ "verify": {"files": ["%s"], "tags": [],
+            "run": "python3 -m unittest tests.test_prepared_hand_off",
+            "notes": "sandbox hand-off case"},
+ "objection": null}
+```
+""" % PREPARED_VERIFIER_CASE_REL
+
+
+class APreparedRoundIsHandedInByAnInSessionSubagent(AutoFixBase):
+    """#149 acceptance 3 (D-061): `auto-fix.sh <n> --prepare worker|verifier` sets up round 1 and
+    stops; the test itself plays the in-session subagent, and `apply.sh` must take the hand-in
+    from the conventional paths with no `--evidence`.
+
+    Expected paths are not read back from the program under test: worktree `<worktree_dir>/t1`,
+    round dir `<worktree_dir>/fix-t1/round1` (the default `apply.sh` reads, scripts/apply.sh:583),
+    verifier copy `<worktree_dir>/verify-t1/round1/{base,work}`; the sandbox `worktree_dir` is the
+    default `<home>/repo-wt`. The test checks each one is printed, then uses it.
+
+    Mutations it should catch: round dir moved (e.g. under reports/) -> the printed EVIDENCE path
+    is not the default and apply without `--evidence` extracts no result; `--prepare verifier`
+    copying base_sha although the branch has the worker's commit -> base/ lacks the worker file;
+    copying the main head instead of base_sha -> base/ has main's README.
+    """
+
+    WORKER_FILE = "src/prepared_feature.txt"
+    WORKER_TEXT = "written by the fake worker subagent\n"
+
+    def wt_root(self):
+        return os.path.join(self.home, "repo-wt")
+
+    def worktree_path(self):
+        return os.path.join(self.wt_root(), "t1")
+
+    def evidence_path(self):
+        return os.path.join(self.wt_root(), "fix-t1", "round1", "EVIDENCE-round1.md")
+
+    def copy_root(self):
+        return os.path.join(self.wt_root(), "verify-t1", "round1")
+
+    def tree_files(self, top):
+        """{repo-relative path: text} of every file under `top`."""
+        out = {}
+        for here, dirs, files in os.walk(top):
+            for name in files:
+                path = os.path.join(here, name)
+                with open(path, encoding="utf-8", errors="replace") as handle:
+                    out[os.path.relpath(path, top).replace(os.sep, "/")] = handle.read()
+        return out
+
+    def tree_at(self, sha):
+        """{path: text} of the commit `sha`, read with ls-tree / show (not git archive)."""
+        names = [n for n in self.git("ls-tree", "-r", "-z", "--name-only", sha).split("\0") if n]
+        return {name: self.git("show", "%s:%s" % (sha, name)) for name in names}
+
+    def play_worker_subagent(self, prepared):
+        """One commit in the printed worktree + EVIDENCE at the printed path."""
+        wt, evidence = self.worktree_path(), self.evidence_path()
+        self.assertIn(wt, prepared.stdout, "pointer prompt names the worktree")
+        self.assertIn(evidence, prepared.stdout, "pointer prompt names the EVIDENCE path")
+        self.assertTrue(os.path.exists(os.path.join(wt, ".git")), "worktree %s missing" % wt)
+        self.write(self.WORKER_FILE, self.WORKER_TEXT, where=wt)
+        self.git("add", "-A", cwd=wt)
+        self.git("commit", "-q", "-m", "t1 fake subagent commit", cwd=wt)
+        self.write(os.path.basename(evidence), PREPARED_WORKER_EVIDENCE,
+                   where=os.path.dirname(evidence))
+        return self.git("rev-parse", "t1").strip()
+
+    def deliver_worker(self, **fields):
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready(needs_verifier=True, **fields)
+        prepared = self.auto_fix("--prepare", "worker")
+        self.assertEqual(prepared.returncode, 0, prepared.stdout + prepared.stderr)
+        worker_sha = self.play_worker_subagent(prepared)
+        applied = self.run_sh("scripts/apply.sh", "1")
+        self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+        return worker_sha
+
+    def test_a_prepared_worker_round_is_received_by_apply_without_evidence_flag(self):
+        """A3 first half: `--prepare worker` -> subagent commit + EVIDENCE -> `apply.sh 1` rc 0
+        with no `--evidence`: result-round1.json extracted from that EVIDENCE, branch recorded."""
+        self.deliver_worker(interface_fixed=False)
+        found = self.result_files("result-round1.json")
+        self.assertEqual(len(found), 1, "result-round1.json under reports/t1/: %s" % found)
+        with open(found[0], encoding="utf-8") as handle:
+            row = json.load(handle)
+        self.assertTrue(row.get("present"), "apply read the EVIDENCE at the default path: %s" % row)
+        self.assertEqual(str(row.get("ticket")), "1", row)
+        self.assertEqual(row.get("role"), "worker", row)
+        self.assertEqual(row.get("sections"), {"patch_sha256": True, "gate": True,
+                                               "excluded": True, "repro": True},
+                         "fixture premise: the four EVIDENCE sections are all there")
+        self.assertEqual(self.load_ticket("1").get("branch"), "t1")
+        self.assertEqual(self.worker_rounds(), [], "no headless worker was started")
+
+    def test_a_verifier_prepared_after_the_worker_commit_lands_its_case_on_the_branch(self):
+        """A3 second half: `--prepare verifier` copies the t1 head (the fake worker's file is in
+        base/), the subagent's patch-verify goes in through apply as one commit past the worker's."""
+        worker_sha = self.deliver_worker(interface_fixed=False)
+        base_sha = self.load_ticket("1")["base_sha"]
+        self.assertNotEqual(worker_sha, base_sha, "premise: the branch has a worker commit")
+
+        prepared = self.auto_fix("--prepare", "verifier")
+        self.assertEqual(prepared.returncode, 0, prepared.stdout + prepared.stderr)
+        copy = self.copy_root()
+        self.assertIn(copy, prepared.stdout, "pointer prompt names the copy root")
+        base_file = os.path.join(copy, "base", self.WORKER_FILE)
+        self.assertTrue(os.path.isfile(base_file),
+                        "base/ must be the t1 head (with the worker commit), not base_sha")
+        self.assertEqual(self.read(self.WORKER_FILE, where=os.path.join(copy, "base")),
+                         self.WORKER_TEXT)
+        self.assertTrue(os.path.isfile(os.path.join(copy, "work", self.WORKER_FILE)),
+                        "work/ starts as the same tree as base/")
+
+        self.write(PREPARED_VERIFIER_CASE_REL, PREPARED_VERIFIER_CASE,
+                   where=os.path.join(copy, "work"))
+        diff = subprocess.run(["diff", "-ruN", "base", "work"], cwd=copy,
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(diff.returncode, 1, diff.stdout + diff.stderr)
+        patch = self.write("patch-verify.diff", diff.stdout, where=copy)
+        evidence = self.write("EVIDENCE-verifier.md", PREPARED_VERIFIER_EVIDENCE, where=copy)
+
+        applied = self.run_sh("scripts/apply.sh", "1", patch, "--evidence-verifier", evidence)
+        self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+        head = self.git("rev-parse", "t1").strip()
+        self.assertEqual(self.git("rev-parse", "t1~1").strip(), worker_sha,
+                         "t1 head is exactly one commit past the worker's commit")
+        added = self.git("diff-tree", "--no-commit-id", "--name-status", "-r", head).splitlines()
+        self.assertIn("A\t%s" % PREPARED_VERIFIER_CASE_REL, added, added)
+
+    def test_a_parallel_verifier_with_no_worker_commit_copies_the_base_sha_tree(self):
+        """A3 last sentence: interface_fixed true, no worker commit -> `--prepare verifier` rc 0 and
+        base/ is the ticket's base_sha tree. Main moves on after the ticket so base_sha != main."""
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready(needs_verifier=True, interface_fixed=True)
+        base_sha = self.load_ticket("1")["base_sha"]
+        self.write("README", "main moved on after the ticket\n")
+        self.git("commit", "-q", "-am", "main moves on")
+        self.git("push", "-q", "origin", "main")
+        self.assertNotEqual(self.git("rev-parse", "main").strip(), base_sha, "premise")
+        ticket_bytes = self.read("tickets/1.json")
+
+        prepared = self.auto_fix("--prepare", "verifier")
+
+        self.assertEqual(prepared.returncode, 0, prepared.stdout + prepared.stderr)
+        self.assertIn(self.copy_root(), prepared.stdout, "pointer prompt names the copy root")
+        base_dir = os.path.join(self.copy_root(), "base")
+        self.assertTrue(os.path.isdir(base_dir), "no %s" % base_dir)
+        self.assertEqual(self.tree_files(base_dir), self.tree_at(base_sha),
+                         "base/ must equal the ticket's base_sha tree")
+        self.assertTrue(os.path.isdir(os.path.join(self.copy_root(), "work")))
+        self.assertEqual(self.read("tickets/1.json"), ticket_bytes,
+                         "--prepare verifier does not touch the ticket file (objective 2)")
+        self.assertEqual(self.worker_rounds(), [], "no headless worker was started")
+
+
 class EveryRoundCostsARowAndClosesItsAttempt(AutoFixBase):
     """#49 A4 / A7:每一輪派工在票的 `cost[]` 記一筆(role=worker),每一個
     `ticket.attempt.start` 都有配對的 done / failed —— heartbeat.sh 按 attempt 配對。
