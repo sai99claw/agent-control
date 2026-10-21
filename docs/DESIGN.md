@@ -47,7 +47,7 @@ flowchart TD
 `Draft → Ready → Running → InReview → IntegrationQueued → Integrating → Done`;`Blocked / NeedsDecision / Failed / Cancelled` 保存原因與回復點。`未執行`、`失敗`、`環境錯誤`、`依政策不適用` 分開記。**Worker 宣告完成或 exit code 為零,均不足以推動 Done。**
 
 ## 9. 每張票的最小契約(見 tickets/SCHEMA.md)
-產品關聯 / 目標與範圍 / 高階規劃內容 / 依賴與衝突 / 執行身份(attempt_id)/ 版本與環境(base_sha)/ 控制(state_version、lease、retry_limit、budget)/ 交付(evidence refs)。
+產品關聯 / 目標與範圍 / 高階規劃內容 / 依賴與衝突 / 執行身份(attempt_id)/ 版本與環境(base_sha)/ 控制(state_version、lease、retry_limit)/ 交付(evidence refs)。
 
 ## 10. 平行工作規則
 排程至少檢查:功能依賴、寫入範圍衝突、介面/語意耦合、共用執行資源。**不同檔案不代表可以安全平行。** 第一版保守:同一 repo 邏輯路徑的寫入範圍不可重疊;每票自己的 worktree/branch。路徑租約不能只是一句 prompt;跨界寫入先攔截或凍結交付。排程加入等待時間權重,避免困難票永遠被小票插隊。

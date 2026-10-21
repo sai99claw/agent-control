@@ -137,7 +137,7 @@ map() {
         # 沙盒共用給每一支用,所以動它就是動全部。
         tests/control_harness.py) add test_ticket test_event test_memory test_land \
                                       test_gate test_heartbeat test_new_session \
-                                      test_board test_check_stale test_no_project_names \
+                                      test_board test_no_project_names \
                                       test_status test_verify_case test_apply \
                                       test_auto_fix test_inbox test_rules ;;
         # `.gitignore` 決定「不准出現專案名」那一掃看得到哪些檔。
@@ -182,7 +182,6 @@ map() {
         # 設定檔:看板讀它,事件與落地也讀它(埠、票目錄、事件檔、租約)。
         board/config.json) add test_board test_event test_heartbeat test_memory \
                                test_routing_cards ;;
-        code-map/check-stale.py|code-map/cards/*) add test_check_stale ;;
         # repo 地圖(#87):手寫的 catalog、兩份產出物與產生器,同一組契約測試守。
         scripts/repo-map.py|code-map/catalog.json|code-map/index.json|code-map/INDEX.md)
             add test_repo_map_contract ;;

@@ -43,8 +43,8 @@ CLOSED_STATES = ("Done", "Cancelled")
 NEEDS_DECISION = "NeedsDecision"
 
 # 必填 = `tickets/SCHEMA.md` 的「最小可開工範例」逐格列出來的那些。
-# (SCHEMA 的表把 `shared_resources` / `attempt_history` / `branch` / `workspace` /
-#  `budget` 也標了 ✓,而它自己的最小範例沒有那五格 —— 以範例為準,差異記在回報裡。)
+# (SCHEMA 的表把 `shared_resources` / `attempt_history` / `branch` / `workspace`
+#  也標了 ✓,而它自己的最小範例沒有那四格 —— 以範例為準,差異記在回報裡。)
 REQUIRED = ("id", "subject", "created", "objective", "acceptance",
             "depends_on", "role", "model", "tool", "attempt", "base_sha",
             "state", "state_version", "lease", "retry_limit")
@@ -189,28 +189,6 @@ def missing_fields(ticket):
     return bad
 
 
-# needs_verifier 只對實作票有意義(D-028):整理票(memory.py)、flaky 票(status.py,
-# role=verifier)、開題票沒有「要不要起驗證者」這一問,硬擋會壞那兩條自動開票的路。
-NEEDS_VERIFIER_ROLES = ("worker", "")
-
-
-def needs_verifier_problem(ticket):
-    """實作票的 `needs_verifier` 不是 JSON 布林就回一句話,否則回空字串(#91 C1)。
-
-    缺、字串 `"true"`、`null` 都不算:`auto-fix.sh` 讀到那幾種一律當「沒寫」,第 1 輪
-    不起驗證者 —— 而那與「寫了 false」在派工那一刻長得一樣。"""
-    if (ticket.get("role") or "") not in NEEDS_VERIFIER_ROLES:
-        return ""
-    value = ticket.get("needs_verifier")
-    if isinstance(value, bool):
-        return ""
-    shown = "(沒有這一格)" if "needs_verifier" not in ticket \
-        else json.dumps(value, ensure_ascii=False)
-    return ("#%s 的 needs_verifier 要是 JSON 布林(true / false),現在是 %s —— "
-            "實作票轉 Ready 前要寫明(D-028):set %s needs_verifier false"
-            % (ticket.get("id", ""), shown, ticket.get("id", "<id>")))
-
-
 def git(args, cwd=None, check=False, text=True):
     done = subprocess.run(["git", *args], cwd=cwd or root(), capture_output=True,
                           text=text, timeout=GIT_TIMEOUT)
@@ -243,7 +221,7 @@ CREATE_REPEATED = {
     "--verify-file": "verify.files", "--verify-tag": "verify.tags",
 }
 # 存成 JSON 布林的旗標:值只收 `true` / `false`,其他一律 rc=2 —— 存成字串的 `"true"`
-# 在 Ready 那一關(`needs_verifier_problem`)會被擋,不如在開票這一手就說。
+# 讀的人分不出是不是筆誤,不如在開票這一手就說。
 CREATE_BOOLS = {"--needs-verifier": "needs_verifier", "--interface-fixed": "interface_fixed"}
 # 旗標 → 一句話說明。**名單不在這裡** —— `--help` 要印哪幾個是從 `CREATE_FLAGS` /
 # `CREATE_REPEATED` 自己數出來的,這裡只補說明。兩份名單會分岔,一份不會。
@@ -319,7 +297,7 @@ USAGE = {
              "[--effort E]"),
     "agent-command": ("scripts/ticket.py agent-command --model M [--tool T] "
                       "[--base \"<worker.command>\"] [--swap-model] [--effort E]"),
-    "lint": "scripts/ticket.py lint <id>  # 唯讀:needs_verifier / 標籤",
+    "lint": "scripts/ticket.py lint <id>  # 唯讀:標籤",
 }
 
 EXAMPLE = {
@@ -579,13 +557,6 @@ def cmd_create(argv, stdin=sys.stdin, stdout=sys.stdout):
                 sys.stderr.write("  %s\n" % line)
             sys.stderr.write("(契約見 tickets/SCHEMA.md)\n")
             return 2
-        # `--state Ready` 走 `set … state Ready` 同一個檢查(#91 C2):開票的那一手繞過它,
-        # 那一關就只擋手動轉的人。
-        unready = needs_verifier_problem(ticket) if ticket.get("state") == "Ready" else ""
-        if unready:
-            sys.stderr.write("ticket: 開不出 Ready 的票 —— %s(或給 --needs-verifier)\n"
-                             % unready)
-            return 2
         path = save(ticket)
     event.emit("ticket.created", ticket=ticket["id"], role=ticket["role"],
                model=ticket["model"], state=ticket["state"])
@@ -747,14 +718,6 @@ def cmd_set(argv):
                 missing = done_blockers(ticket)
                 if missing:
                     print_done_blockers(ident, missing)
-                    return 1
-            # Running → Ready 不查:那是已派出的票改派回來(auto-fix 的 codex 額度改派),
-            # 規格那一關在它第一次轉 Ready 時就過了;擋它,票就卡在 Running。
-            to_ready = field == "state" and value == "Ready" and ticket.get("state") != "Running"
-            if to_ready:
-                unready = needs_verifier_problem(ticket)
-                if unready:
-                    sys.stderr.write("ticket: 不轉 Ready —— %s\n" % unready)
                     return 1
             before = ticket.get(field)
             ticket[field] = value
@@ -1709,11 +1672,7 @@ def cmd_lint(argv):
     except (OSError, ValueError) as exc:
         sys.stderr.write("ticket: 讀不到 #%s —— %s\n" % (ident, exc))
         return 2
-    bad = []
-    unready = needs_verifier_problem(ticket)
-    if unready:
-        bad.append(unready)
-    bad += tag_problems(ticket)
+    bad = tag_problems(ticket)
     if bad:
         for line in bad:
             sys.stderr.write("ticket: lint #%s %s\n" % (ident, line))
@@ -1797,13 +1756,12 @@ RESULT_OPEN = re.compile(r"^\s*(?:`{3,}|~{3,})[ \t]*result[ \t]*$")
 RESULT_CLOSE = re.compile(r"^\s*(?:`{3,}|~{3,})[ \t]*$")
 RESULT_RAW_CAP = 500
 OBJECTION_CATEGORIES = ("ticket-wrong", "test_defect", "blocking")
-# 五段散文在不在 —— **人版**與機器版分開記(`tickets/SCHEMA.md` §result)。關鍵詞取
-# 角色卡那五段的標題字,一段給幾個同義詞:只認一個詞的話,換一種寫法就變成「沒交」,
+# 四段散文在不在 —— **人版**與機器版分開記(`tickets/SCHEMA.md` §result)。關鍵詞取
+# 角色卡那幾段的標題字(變異表選填,D-054 Q10,不在這裡數),一段給幾個同義詞:只認一個詞的話,換一種寫法就變成「沒交」,
 # 而**誤報缺段會讓人去補一段已經在那裡的東西**,比漏報更吵。
 RESULT_SECTIONS = (
     ("patch_sha256", ("sha256", "SHA256")),
     ("gate", ("閘門", "Ran ", "rc=")),
-    ("mutations", ("變異",)),
     ("excluded", ("排除的假設", "已排除")),
     ("repro", ("最小重現", "重現指令", "重現:")),
 )
@@ -1844,7 +1802,7 @@ def objection_parts(line):
 
 
 def result_sections(text):
-    """五段散文在不在 —— 回一個 `{段名: bool}`。"""
+    """四段散文在不在 —— 回一個 `{段名: bool}`。"""
     return {name: any(word in text for word in words)
             for name, words in RESULT_SECTIONS}
 
@@ -1930,11 +1888,11 @@ def cmd_result(argv):
     if not data.get("present"):
         sys.stdout.write("ticket: result 抽不出來(%s)—— %s;不擋流程\n"
                          % (data.get("reason") or "?", evidence))
-    # **缺段印出來、不擋流程**:五段散文是給下一輪那個新的人的,少一段他就得把
+    # **缺段印出來、不擋流程**:四段散文是給下一輪那個新的人的,少一段他就得把
     # 你查過的路再查一次(`docs/DISPATCH-TEMPLATE.md` §8 第 5、6 點)。
     gone = [name for name, ok in sorted((data.get("sections") or {}).items()) if not ok]
     if gone:
-        sys.stdout.write("ticket: EVIDENCE 少了這幾段:%s(不擋;見角色卡「必備五段」)\n"
+        sys.stdout.write("ticket: EVIDENCE 少了這幾段:%s(不擋;見角色卡「必備四段」)\n"
                          % "、".join(gone))
     sys.stdout.write("ticket: result -> %s\n" % out)
     return 0

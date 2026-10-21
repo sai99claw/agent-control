@@ -138,11 +138,11 @@ class MainWritablePrefixesAreRecordedNotStopped(MainSideCase):
         self.write("docs/t128-gone.md", "要被刪的\n")
         self.git("add", "docs/t128-gone.md")
         self.git("commit", "-q", "-m", "t128: 要被刪的檔")
-        self.arm('echo changed >> "$REPO/docs/REHEARSAL.md"\n'
+        self.arm('echo changed >> "$REPO/docs/NOTES.md"\n'
                  'echo again >> "$REPO/docs/DECISIONS.md"\n'
                  'rm "$REPO/docs/t128-gone.md"')
         self.write("docs/DECISIONS.md", self.read("docs/DECISIONS.md") + "開工前就髒了\n")
-        self.assert_recorded_not_stopped(self.auto_fix("--no-review"), "docs/REHEARSAL.md",
+        self.assert_recorded_not_stopped(self.auto_fix("--no-review"), "docs/NOTES.md",
                                          "docs/DECISIONS.md", "docs/t128-gone.md")
 
     def test_a1_a_new_memory_file_is_recorded_not_stopped(self):

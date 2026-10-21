@@ -20,8 +20,7 @@ source_paths: [scripts/land.sh]
 verified_at_commit: e6f3ed32112440ec727c826c02eb61ade46ad39d
 verified_by: opus 2026-09-12
 ---
-**這是示範卡**(`docs/CODE-MAP.md` §2 的格式),同時也是 `check-stale.py` 的第一筆
-真實輸入。
+**這是示範卡**(`docs/CODE-MAP.md` §1 的格式)。
 
 ## 為什麼它的拒絕條件長這樣
 四種拒絕各自對應一次事故,理由逐條寫在腳本自己的註解裡(那裡才是會被讀到的地方)。
@@ -40,5 +39,5 @@ verified_by: opus 2026-09-12
 
 ## 這張卡自己會示範什麼叫過期
 `verified_at_commit` 記的是 `scripts/land.sh` 還沒進主線的那個 commit。它一進主線,
-`python3 code-map/check-stale.py` 就會把這張卡標成 `stale` —— **那正是這支工具要做的
-事**,而不是一個要修掉的 bug。重新讀過卡的人把 sha 與 `verified_by` 更新成當下的。
+`git diff --stat <verified_at_commit>..HEAD -- scripts/land.sh` 就不是空的 —— 這張卡就算過期
+(`docs/CODE-MAP.md` §2),而不是一個要修掉的 bug。重新讀過卡的人把 sha 與 `verified_by` 更新成當下的。

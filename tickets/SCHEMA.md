@@ -16,10 +16,10 @@
 | 執行 | `worker` ({timeout_seconds}) | 選 | 這張票的 worker **與驗證者**在 `auto-fix.sh` 裡的逾時秒數(#64)。取值順序:票的 `worker.timeout_seconds` > `board/config.json` 的 `worker.timeout_seconds` > 3600;不是正數(0、負數、字串)就不採用、stderr 點名這一格、退回下一層。起 worker 時 stderr 印 `auto-fix: 逾時來源=<票/config/預設> <N> 秒` |
 | 版本 | **`base_sha`** | ✓ | 閘門結果只對 base_sha 有效;`branch`、`workspace` 派工時由工具填 |
 | 版本 | **`landed_sha`** | 落地後 | `ticket.py close --landed <sha>` 寫,每張票都寫:先確認 sha 是主線的祖先(`merge-base --is-ancestor`)才蓋。`ticket.py verify` 就看它在不在主線歷史裡(#137) |
-| 控制 | `state`, **`state_version`**, `lease` ({holder, until}), `retry_limit` | ✓ | state 見 `docs/WORKFLOW.md`;state_version 每次變更 +1;`budget` 建議 |
+| 控制 | `state`, **`state_version`**, `lease` ({holder, until}), `retry_limit` | ✓ | state 見 `docs/WORKFLOW.md`;state_version 每次變更 +1 |
 | 交付 | `patch_ref`, `review_ref`, `test_evidence` (list), `handoff`, `knowledge_updates` | Done 前 | evidence 每筆帶 base_sha、指令、rc、log 路徑;改動在不在主線由 `landed_sha` 判(票面字串比對已撤,D-054 Q4)。`patch_ref` 是舊票的欄位(#144 起 worker 在票分支 commit、`apply.sh` 不再收 patch,新票不寫):相對主 repo 根的路徑,repo 外的以 `../` 開頭,不含絕對路徑 |
-| 驗證 | **`needs_verifier`** | ✓ | bool;**開題者寫**,理由寫在 `outline`。`true` = 派驗證者寫案例(auto-fix 第 1 輪起;與 worker 平行與否看 `interface_fixed`,#60);`false` = 實作者自證變異紅。動到產品碼預設 `true`。**缺、或不是 JSON 布林 = Ready 會擋**(`ticket.py set <n> state Ready` 拒收並說怎麼補,#91 C1 C2;D-028)|
-| 驗證 | `interface_fixed` | 建議 | bool;**開題者寫**(D-H38 ②,#60)。只在 `needs_verifier=true` 時有作用。`true` = 純後端 / 介面(函式名、參數、輸出字串、檔案格式)已在票面釘死 —— auto-fix 第 1 輪驗證者與 worker 平行起(#51 的行為);`false` 或缺 = worker 第 1 輪交件(票分支有了新 commit)之後才起驗證者,它的派工文多一段「介面以分支上的實作為準,票面寫法與實作衝突時照實作、在 EVIDENCE 記一行」;worker 第 1 輪反駁 / 沒交 / 逾時 ⇒ 驗證者不起,inbox 頁寫明。拿不準就不寫(= false):平行猜錯介面的代價是一整份案例重寫,晚起的代價只是一次驗證者的時鐘 |
+| 驗證 | **`needs_verifier`** | 選 | bool;**開題者寫**,理由寫在 `outline`。`true` = 派驗證者寫案例(auto-fix 第 1 輪起;與 worker 平行與否看 `interface_fixed`,#60);`false` = 不派驗證者。**缺 = true**(D-054 Q10):沒寫、或不是 JSON `false`,auto-fix 一律照 true 起驗證者;不擋 Ready、不進 lint。只有明寫 `false` 才不起 |
+| 驗證 | `interface_fixed` | 選 | bool,選填(D-054 Q10);**開題者寫**(D-H38 ②,#60)。只在 `needs_verifier=true` 時有作用。`true` = 純後端 / 介面(函式名、參數、輸出字串、檔案格式)已在票面釘死 —— auto-fix 第 1 輪驗證者與 worker 平行起(#51 的行為);`false` 或缺 = worker 第 1 輪交件(票分支有了新 commit)之後才起驗證者,它的派工文多一段「介面以分支上的實作為準,票面寫法與實作衝突時照實作、在 EVIDENCE 記一行」;worker 第 1 輪反駁 / 沒交 / 逾時 ⇒ 驗證者不起,inbox 頁寫明。拿不準就不寫(= false):平行猜錯介面的代價是一整份案例重寫,晚起的代價只是一次驗證者的時鐘 |
 | 驗證 | **`verify`** ({files, tags, run, notes, **baseline**}) | 驗證者交件時 | **驗證者寫的**(D-010):案例檔在哪、宣告了哪幾個標籤、**怎麼跑**(一句可以直接貼的指令)、跑之前要知道的事。驗證者不判 PASS/FAIL、不寫 VERDICT —— 對錯由閘門跑 `verify.tags` 判。`ticket.py verify <id>` 會把這一格印出來;沒人寫時它印「還沒有人寫」而不是一片空白 |
 | 覆核 | **`review`** ({verdict, by, sha, note, at}) | complex 票 land 前 | **`scripts/review.sh` 寫的那一格**(D-022 / D-025 ②):閘門綠、complex 票 InReview 後它派短命 reviewer 讀分支上的 code 對票面,`pass` 由腳本經 `ticket.py set <n> review` 寫(by `reviewer@<模型>`、sha 派工那一刻的分支頭、note 是 REVIEW.md;`at` 由 set 補),`fail` 轉 Blocked 等主線裁示;主線不讀 patch、不重跑測試。**五格都是給人看的**(#136):verdict 不綁票版本、分支頭或內容 —— 覆核 pass 之後再 `ticket.py set` 改票面、分支再 commit,land / close 照收。判準只有 `ticket.py` 的 `review_problems`(land 與 close 共用):非 complex 的票不要 review;complex 的票缺 review、或 verdict 不是通過,land / close 拒絕。`close --landed <sha>` 把落地 sha 蓋進 `landed_sha`,有 review 或是 complex 的票也蓋進 `review.sha`(complex 票沒有 review 就開一張 verdict=pass、by=main)。舊票上 #98 留下的綁定與收件格原樣保留當歷史,沒有程式讀 |
 | 反駁 | **`objections`** (list of {category, body, evidence, owner, disposition, blocking, follow_up, triage}) | 有異議時 | 實作者說「票寫錯 / 這條驗收做不到 / 案例本身錯(`test_defect`)」的地方。`category` 是 `ticket-wrong` / `blocking`(或 `blocking: true`)= 阻擋項,`disposition` 空著 **land 與 close 都拒絕**。處置的合法字只在 `scripts/ticket.py` 的 `DISPOSED`。`ticket-wrong` / `blocking` 先由 auto-fix 起開題者判(D-041,#89),一輪只有兩種結果(D-054 Q8):判 accepted(票面改好)時 **auto-fix** 寫 `disposition` 與子格 `triage`(`{verdict, reason, round, by}`)並接回同一個 session 續做;判 escalate 時開題者交的那一題附建議的裁示題原文寫進 `follow_up` 與收件頁;開題者判需裁示、同票第二次反駁、開題者沒判出來、session 不能接回這四種才進主線收件匣,由主線處置。`test_defect` 照舊派驗證者。流程正文在 `docs/WORKFLOW.md`「實作者的反駁怎麼被收下」 |
@@ -51,7 +51,7 @@
 ## EVIDENCE 尾端的 `result` 區塊(D-017)
 
 票是規格,這一塊是**這一輪交出來的東西**。worker 與 verifier 的 `EVIDENCE-round<輪>.md`
-五段散文照舊給人看,檔尾再加一段 `## result`,底下一塊語言標記是 `result` 的 fenced
+四段散文照舊給人看,檔尾再加一段 `## result`,底下一塊語言標記是 `result` 的 fenced
 JSON 物件;`scripts/auto-fix.sh` 在收件的同一手把它抽成
 `reports/t<票號>/<run_id>/result-round<輪>.json`(驗證者那條路是
 `result-verifier-round<輪>.json`),與那一輪的 `status.json` 同目錄。**抽取只讀
@@ -65,7 +65,7 @@ EVIDENCE,不改它**;抽不出來也不改變退出碼、不擋流程。
 | `rc` | 整數 | 交出來那一刻自己跑的閘門退出碼 —— 判綠只看它 |
 | `patch_sha256` | 字串 | 交出去那份 patch 的 sha256 |
 | `gate` | 物件 | `{cmd, ran, rc}` |
-| `mutations` | 陣列 | `{id, count, case, red_first_line}` |
+| `mutations` | 陣列 | 選填:`{id, count, case, red_first_line}`;沒做變異留 `[]` |
 | `objection` | 物件或 `null` | `{category, body}`;`category` 是 `ticket-wrong` / `test_defect` / `blocking` |
 | `excluded` | 陣列 | 已排除的假設 |
 | `repro` | 物件 | `{cmd, expect}` |
@@ -74,9 +74,9 @@ EVIDENCE,不改它**;抽不出來也不改變退出碼、不擋流程。
 
 角色多出來的格(不在上表,收件端真的會讀):驗證者寫 `verify`(`{files, tags, run, notes}`,`apply.sh --evidence-verifier` 併進票的 `verify` 欄;形狀在 `templates/dispatch-verifier.md`),覆核者寫 `verdict`(`pass` / `fail`,`review.sh` 讀;形狀在 `templates/dispatch-reviewer.md`)。上表與 `docs/DISPATCH-TEMPLATE.md` §8.5 的那張 由 `tests/test_dispatch_template.py` 釘成同一組鍵,這兩格**不補進表**;補列要連測試一起改,歸後續 code 票。
 
-抽出來的那一份還多一格 `sections`:`{patch_sha256, gate, mutations, excluded, repro}` 五個 bool,
-答的是「EVIDENCE 那**五段散文**在不在」(§8 那五段;抽取只看小標與關鍵詞,**缺段印出來、不擋流程**)。
-為什麼要分開記:`result` 那一塊是機器版,五段是人版;兩者都可能單獨缺,而**只驗機器版的那一天,
+抽出來的那一份還多一格 `sections`:`{patch_sha256, gate, excluded, repro}` 四個 bool,
+答的是「EVIDENCE 那**四段散文**在不在」(§8 那四段;變異表選填、不數(D-054 Q10);抽取只看小標與關鍵詞,**缺段印出來、不擋流程**)。
+為什麼要分開記:`result` 那一塊是機器版,四段是人版;兩者都可能單獨缺,而**只驗機器版的那一天,
 一份沒有「已排除的假設」的 EVIDENCE 會長得跟完整的一模一樣**,下一輪那個新的人因此把同一段 code 再查一次。
 
 抽出來的那一份多一格 `"present": true` 與一格 `"conflict"`(`objection` 與 EVIDENCE 裡
@@ -93,7 +93,7 @@ EVIDENCE,不改它**;抽不出來也不改變退出碼、不擋流程。
 - `test_evidence.base_sha`:一支分支 3470 條綠,跑在三小時前的基準上,主線早已走遠。
 - `verify`:2026-09-20 驗證者交了案例卻沒寫怎麼跑,下一個人重跑整組閘門去找它們,一次等待燒掉幾十萬 token(D-010)。**案例在哪與怎麼跑,是交付的一部分。**
 - `verify.baseline`:2026-09-21 外部審查 —— 範本只要求貼兩份 Ran/OK,而**一份貼上來的輸出沒辦法被機器比對**;票上沒有一格說得出「乾淨主線上真的紅過」,於是一條永遠綠的斷言與一條真的在驗的斷言長得一樣。同一格由兩個 `stage` 接力寫(D-020,2026-09-23):`red`(驗證者跑 `scripts/verify-case.py red <n>`,只證乾淨基底上紅、紅在案例檔自己的斷言;red 只印 `<out-dir>/baseline-red.json`、不寫票 → 驗證者抄進 result 的 `baseline` → `apply.sh --evidence-verifier` 在鎖裡併進票,`stage=red`)升成 `check`(閘門,`scripts/verify-case.py check <n>` 寫,乾淨主線該紅、candidate 該綠,`stage=check`)。閘門量 check;close 不讀(D-054 Q4,#139)——`stage=red` 只代表案例寫好了,還沒有人量過綠。
-- `needs_verifier`:2026-09-26 #34–#38 五張票面都漏寫,驗證者要不要派只能由主線事後判(D-028)。**沒寫的票與寫了 `false` 的票長得一樣**,所以它是必填,理由寫在 `outline`。
+- `needs_verifier`:2026-09-26 #34–#38 五張票面都漏寫,驗證者要不要派只能由主線事後判(D-028)。D-054 Q10 起**沒寫 = true**:沒寫的票照樣起驗證者,與寫了 `false` 的票分得出來,所以不再必填、不擋 Ready。
 - `review.state_version` / `review.sha`:同一次審查 —— 舊的 `review` 只有 verdict/by/at/note,分支多一個 commit(舊流程是重套一次 patch)、改一次票面之後它仍然長得有效,而 land 根本沒有讀它。(#136 起拿掉綁定:覆核只對 complex 的票,`review` 回到 {verdict, by, sha, note, at} 給人看,D-054 Q1。)
 - `objections`:同一次審查 —— 實作者的反駁沒有可靠的收件與處置契約,「這張票寫錯了」講完之後東西照樣落地。
 - `attempt` / `state_version` 的**比對**:同一次審查 —— schema 宣稱過「對不上就拒絕」,而 `ticket.py set` 讀出來直接覆寫。**宣稱與實作分岔的那一格,看起來與有守衛的那一格一模一樣。**

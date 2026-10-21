@@ -139,7 +139,7 @@ class GateSh(Sandbox):
         # 沙盒裡放一組與真對照表同名的替身模組:跑起來只寫一行標記。
         # 換的是**代價**不是語意 —— 這一組問的是「哪幾支被挑到」,不是那幾支測什麼。
         for name in ("test_ticket", "test_event", "test_memory",
-                     "test_no_project_names", "test_check_stale", "test_land"):
+                     "test_no_project_names", "test_heartbeat", "test_land"):
             self.write(os.path.join("tests", "%s.py" % name), PASSING % name)
         # #74:缺角色卡、指定的模型卡不在、或只剩標題的規則包現在非零,而且不起 agent。
         # 預設沙盒沒有那幾份(`control_harness` 只給要的測試裝),不裝的話每一條派工的案例
@@ -167,9 +167,9 @@ class GateSh(Sandbox):
     # ------------------------------------------------------ 對照表挑得對不對
 
     def test_a_mapped_file_runs_the_modules_that_guard_it(self):
-        done = self.gate("code-map/check-stale.py")
+        done = self.gate("scripts/heartbeat.sh")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.ran(), ["test_check_stale"])
+        self.assertEqual(self.ran(), ["test_heartbeat"])
 
     def test_a_markdown_file_maps_to_the_guard_that_really_reads_it(self):
         """文件那一格不是硬塞的:那條「不准出現專案名 / 絕對路徑」的守衛掃的就是
@@ -278,9 +278,9 @@ class GateSh(Sandbox):
     def test_a_mixed_change_runs_what_it_can_and_still_refuses(self):
         """混合的情況是判斷題:**跑掉的測試是真的證據,不該丟**;而那幾個沒人守的
         檔要當場處理,所以退出碼仍然非零。"""
-        done = self.gate("code-map/check-stale.py", "assets/logo.png")
+        done = self.gate("scripts/heartbeat.sh", "assets/logo.png")
         self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
-        self.assertEqual(self.ran(), ["test_check_stale"], "對得到的那一支要照跑")
+        self.assertEqual(self.ran(), ["test_heartbeat"], "對得到的那一支要照跑")
         self.assertIn("assets/logo.png", done.stdout)
 
     # ------------------ 對照表沒列、但同票改了 tests:推給那幾支守(#45 B2)
