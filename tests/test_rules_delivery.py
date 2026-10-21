@@ -559,7 +559,7 @@ class TheGatePicksThisGuard(Sandbox):
 
     MODULES = ("test_rules_delivery", "test_rules", "test_auto_fix", "test_auto_fix_codex",
                "test_review",
-               "test_new_session", "test_templates", "test_dispatch_template",
+               "test_new_session", "test_templates",
                "test_no_project_names")
 
     def setUp(self):

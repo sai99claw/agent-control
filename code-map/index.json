@@ -35,7 +35,6 @@
     "tests/test_board.py",
     "tests/test_consolidate_memory.py",
     "tests/test_cost_ledger.py",
-    "tests/test_dispatch_template.py",
     "tests/test_event.py",
     "tests/test_gate.py",
     "tests/test_heartbeat.py",
