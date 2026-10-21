@@ -1210,6 +1210,128 @@ def ticket_bytes(case, ident):
         return handle.read()
 
 
+class AgentCostFoldsOnClose(Sandbox):
+    """#152 A3–A5:`--prepare` 子 agent 的 `agent.cost`(ticket 是本票、run_id 不是 null)在關票
+    那一次存檔摺進 `cost[]`,同 (session_id, agent_id) 取最後一筆,摺一次。期望值照票面 T3–T5
+    手算(headless worker 100 + 摺入 25 = 125),不取自被測程式。
+
+    變異(#152):M1 每一筆都摺(不取最後一筆)→ a1 那列 tokens_in 35 / 列數 3,T3 紅;
+    M2 拿掉 run_id 不是 null 那一條 → T4 多摺 a3,紅。
+    """
+
+    KEYS = {"role", "round", "model", "tokens_in", "tokens_out", "cache_write", "cache_read",
+            "wall_seconds", "outcome", "run_id", "session_id", "by", "note", "effort", "at"}
+    HEADLESS = {"role": "worker", "round": 1, "model": "opus", "tokens_in": 100,
+                "tokens_out": 7, "cache_write": 50, "cache_read": 500, "wall_seconds": 60,
+                "outcome": "handed-in", "run_id": "R0", "session_id": None,
+                "by": "auto-fix.sh", "note": None, "effort": None,
+                "at": "2026-09-12T10:10:00+08:00"}
+
+    def agent_cost(self, agent_id, run_id, tokens_in, role="worker", ticket="7", rnd=1,
+                   session="s", ts="2026-10-21T10:00:00+00:00"):
+        return {"ts": ts, "kind": "agent.cost", "pid": 1, "cwd": ".", "role": role,
+                "round": rnd if run_id else None, "model": "claude-opus-test",
+                "tokens_in": tokens_in, "tokens_out": None, "cache_write": 3, "cache_read": 9,
+                "wall_seconds": 30, "outcome": None, "run_id": run_id, "session_id": session,
+                "by": "agent-cost-hook", "note": "stream", "effort": None,
+                "ticket": ticket, "agent_id": agent_id}
+
+    def events_t3(self):
+        return [self.agent_cost("a1", "R1", 10),
+                self.agent_cost("a1", "R1", 25, ts="2026-10-21T11:00:00+00:00"),
+                self.agent_cost("a2", "R2", 4, role="verifier")]
+
+    def events_t4(self):
+        return [self.agent_cost("a3", None, 1000),
+                self.agent_cost("a4", "R3", 2000, ticket="8"),
+                self.agent_cost(None, None, 3000, role="main")]
+
+    def setUp(self):
+        super().setUp()
+        self.write("src/nav.py", "def size_nav():\n    return 42\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "把 src/nav.py 放進主線")
+        self.main = self.git("rev-parse", "main").strip()
+
+    def seed(self, events, cost=None, stamped=True, **fields):
+        """票 7(InReview,simple)+ 事件流只有 `events`。`stamped=False` 留給 `close --landed` 蓋。"""
+        if stamped:
+            fields["landed_sha"] = self.main
+        self.make_ticket(7, complexity="simple", needs_verifier=False, state="InReview",
+                         cost=[dict(self.HEADLESS)] if cost is None else cost, **fields)
+        with open(os.path.join(self.repo, "board", "events.jsonl"), "w",
+                  encoding="utf-8") as handle:
+            for row in events:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    def close_ways(self):
+        return (("close", True, ("close", "7")),
+                ("close --landed", False, ("close", "7", "--landed", self.main)),
+                ("set state Done", True, ("set", "7", "state", "Done")))
+
+    def folded(self, row):
+        return [r for r in row["cost"] if r.get("by") == "agent-cost-hook"]
+
+    def test_t3_the_last_event_per_agent_becomes_one_row_and_counts_in_cost_total(self):
+        """T3(A3):三條關票路徑都摺;M1 會紅;125 = 100 + 25 手算;新案例。"""
+        for name, stamped, args in self.close_ways():
+            with self.subTest(way=name):
+                self.seed(self.events_t3(), stamped=stamped)
+                done = self.ticket(*args)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                row = self.load_ticket("7")
+                self.assertEqual(row["state"], "Done")
+                self.assertEqual(len(row["cost"]), 3, row["cost"])     # 1 headless + 2
+                for cost in row["cost"]:
+                    self.assertEqual(set(cost), self.KEYS, cost)
+                mine = {r["run_id"]: r for r in self.folded(row)}
+                self.assertEqual(set(mine), {"R1", "R2"})
+                a1 = mine["R1"]
+                self.assertEqual((a1["role"], a1["round"], a1["tokens_in"], a1["session_id"],
+                                  a1["model"], a1["wall_seconds"], a1["outcome"]),
+                                 ("worker", 1, 25, "s", "claude-opus-test", 30, None))
+                self.assertIn("a1", a1["note"])
+                self.assertEqual(a1["at"], "2026-10-21T11:00:00+00:00")
+                self.assertEqual((mine["R2"]["role"], mine["R2"]["tokens_in"]), ("verifier", 4))
+                self.assertIn("a2", mine["R2"]["note"])
+                by_role = row["cost_total"]["by_role"]
+                self.assertEqual(by_role["worker"]["tokens_in"], 125)    # 100 + 25
+                self.assertEqual(by_role["worker"]["runs"], 2)
+                self.assertEqual(by_role["verifier"]["tokens_in"], 4)
+                self.assertEqual(row["cost_total"]["runs"], 3)
+
+    def test_t4_guessed_other_ticket_and_main_events_are_not_folded(self):
+        """T4(A4):run_id null / 別張票 / role=main 都不摺;M2 會紅;列數同 T3;新案例。"""
+        self.seed(self.events_t3() + self.events_t4())
+        done = self.ticket("close", "7")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("7")
+        self.assertEqual(len(row["cost"]), 3, row["cost"])
+        self.assertEqual(sorted(r["run_id"] for r in self.folded(row)), ["R1", "R2"])
+        self.assertEqual(row["cost_total"]["by_role"]["worker"]["tokens_in"], 125)
+
+    def test_t5_a_row_already_there_for_the_same_run_and_agent_is_not_added_again(self):
+        """T5(A5):預先有 (R1, a1) 那一列 → 關票後 R1 仍只有一列;拿掉去重會紅;新案例。"""
+        seeded = dict(self.HEADLESS, round=1, tokens_in=25, run_id="R1", session_id="s",
+                      by="agent-cost-hook", note="agent_id=a1;stream", outcome=None,
+                      model="claude-opus-test")
+        self.seed(self.events_t3(), cost=[dict(self.HEADLESS), seeded])
+        done = self.ticket("close", "7")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("7")
+        self.assertEqual([r["run_id"] for r in self.folded(row)].count("R1"), 1, row["cost"])
+        self.assertEqual(len(row["cost"]), 3, row["cost"])     # headless + R1(既有)+ R2
+        self.assertEqual(row["cost_total"]["by_role"]["worker"]["tokens_in"], 125)
+
+    def test_a_refused_close_folds_nothing(self):
+        """關不掉就不摺(與 cost_total 同一條);摺在拒絕檢查之前會紅;新案例。"""
+        self.seed(self.events_t3(), objections=[{"category": "ticket-wrong", "owner": "main",
+                                                 "body": "x", "disposition": ""}])
+        done = self.ticket("close", "7")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("7")["cost"], [self.HEADLESS])
+
+
 class ReadyWithoutNeedsVerifier(Sandbox):
     """D-054 Q10:`needs_verifier` 缺 = true,**不擋 Ready**(撤 #91 C1 那一關)。
     缺、字串、null、布林都轉得過去;要不要起驗證者是 auto-fix 那一手判的。"""

@@ -27,7 +27,7 @@ import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import (DEFAULT_CONFIG, REVIEWER_PASS, Sandbox,  # noqa: E402
+from control_harness import (DEFAULT_CONFIG, REVIEWER_PASS, SCRIPTS, Sandbox,  # noqa: E402
                              envelope, files_of, fixture_candidate, write_executable)
 
 # 沙盒的票沒標 complexity = simple(#136,VISION 流程 #9:只有複雜的票做完後檢查一次):閘門綠
@@ -1146,6 +1146,16 @@ class TheFirstRoundPacket(AutoFixBase):
         self.assertIn("--round 只接 1", done.stderr)
 
 
+def transcript_cost():
+    """hook 用的 prompt parser(`scripts/transcript-cost.py`,不在沙盒的 SCRIPT_FILES 裡)。"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "transcript_cost", os.path.join(SCRIPTS, "transcript-cost.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class ThePrepareWorkerStopsBeforeTheProcess(AutoFixBase):
     """#149 / D-061:`auto-fix.sh <n> --prepare worker` = Ready 票第 1 輪的那一段(#57 換 base、
     票分支 worktree、輪次目錄、`first_round_packet`、Ready → Running),停在起 worker 之前;
@@ -1215,6 +1225,20 @@ class ThePrepareWorkerStopsBeforeTheProcess(AutoFixBase):
         self.assertEqual(ticket.get("cost"), cost_before, "不寫 cost")
         self.assertEqual(glob.glob(os.path.join(self.repo, "reports", "t1", "*", "status.json")), [],
                          "不寫 status.json")
+
+    def test_the_pointer_feeds_the_cost_hooks_dispatch_parser(self):
+        """#152 A6 / T6:`--prepare worker` 的 stdout 整段給 `transcript-cost.py` 的
+        `dispatch_mark`(hook 用的那一支)→ 票 1、worker、round 1、run_id = 這次建出來的
+        run 目錄名(從檔案系統讀,不取自 parser)。M3(hook 不讀路徑)由 test_agent_cost_hook 守。"""
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready()
+        done = self.prepare("worker")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        packets = self.result_files("dispatch-round1.md")
+        self.assertEqual(len(packets), 1, packets)
+        run_id = os.path.basename(os.path.dirname(packets[0]))
+        self.assertEqual(transcript_cost().dispatch_mark(done.stdout),
+                         {"ticket": "1", "role": "worker", "round": 1, "run_id": run_id})
 
     def test_a_ticket_that_is_not_ready_is_refused_and_untouched(self):
         self.set_worker(WORKER_NEVER)
@@ -1330,6 +1354,19 @@ class ThePrepareVerifierCopy(AutoFixBase):
             self.assertIn(want, out)
         self.assertNotIn("# 規則包", out)
         self.assertEqual(self.worker_rounds(), [])
+
+    def test_the_pointer_feeds_the_cost_hooks_dispatch_parser(self):
+        """#152 A6 / T6:`--prepare verifier` 的 stdout → `dispatch_mark` 說 verifier、票 1、
+        round 1、run_id = 驗證者派工文所在的 run 目錄名(從檔案系統讀)。"""
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready(needs_verifier=True, interface_fixed=True)
+        done = self.prepare()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        packets = self.result_files("dispatch-verifier-round1.md")
+        self.assertEqual(len(packets), 1, packets)
+        run_id = os.path.basename(os.path.dirname(packets[0]))
+        self.assertEqual(transcript_cost().dispatch_mark(done.stdout),
+                         {"ticket": "1", "role": "verifier", "round": 1, "run_id": run_id})
 
 
 class TheFirstRoundStartsFromReady(AutoFixBase):
