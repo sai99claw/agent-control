@@ -444,3 +444,4 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - ② 原話:「2 豁免 tickets/、docs/、memory/，但 hard_block 清單上的路徑（DECISIONS.md、VISION.md 等）不豁免，有變就拒收。」—— 主 repo 工作樹比對:tickets/、docs/、memory/ 底下的變動只記錄不擋;hard_block.paths 上的檔(含 docs/DECISIONS.md、docs/VISION.md)不豁免,有變就拒收。主線因此在子 agent / worker 跑的期間不能改 DECISIONS.md(主線推論,#153 落地後生效)。
 - ③ 原話:「3 照建議，記進 HANDOFF，我在 Mac 上改。」—— scripts/sync-to-project.sh 第 466 行「(不進票 cost[])」在 #152 落地後要加 --prepare 例外;hard_block 檔,使用者在 Mac 上改。
 - 主線裁(未經使用者,#153 開題者 Q3–Q5 照建議):#144 的「其他本機分支被動到」比對拿掉(不在四個比對裡);`git ls-remote` 失敗或逾時只印「push not compared」不擋;沒有 --prepare 快照的手派子 agent 不比對、印一行。
+- 補(主線裁,未經使用者)#153 開題者兩題:Q1 窗內 commit 動到 hard_block.paths 也算「有變」→ 拒收(否則主線在窗內改了再落地 DECISIONS.md,工作樹前後都乾淨,看不到;D-065 ② 的延伸);Q2 不加新事件型別,紀錄寫在 main-compare.json 與 guard.json。
