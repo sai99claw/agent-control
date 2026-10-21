@@ -422,3 +422,6 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - 原話:「照你建議 worker 以後可能是雲端可能是地端 現在的方式較好的話 地端也可以這樣做」—— 回應主線建議:#149 改寫成「主線在同一個環境用子 agent 派工」(主線開 worktree 與輪次目錄、派工文只給四件事、子 agent 做完主動回報、主線 apply → gate → land),不用推中間分支、不用 20 分鐘輪詢;routine(`ac-worker`)只留作備用。雲端與 Mac 都照這一套。
 - 實測依據(2026-10-21 雲端,uid 0):#151 開題者 + worker 都是同容器子 agent,apply / gate / land 一次走通(land 全套 1756 s:unittest 1051 條 1217 s + 回歸 312 條 535 s);#146 由 routine worker 做,撞過舊 clone 開分支(合併衝突)與 push 403 兩次。子 agent 方式在 Mac 上還沒實測。
 - 補(2026-10-21,主線裁,未經使用者)#149 開題者交回的三題,照建議:① 同容器子 agent 的 token 只進 `agent.cost` 事件、不進票的 cost[] → 另開票,不在 #149 做;② 同容器這條路沒有 rc 8 越界守衛 → 暫時接受;③ 覆核仍由 `review.sh` 起 headless 程序、雲端未實測 → 先照跑,失敗再開票。
+
+## D-062(2026-10-21)#147 的 T 端配套清單先交讀得到的部分
+- 原話:「A」—— 回應主線的選擇題(A:先落地,缺的標「Mac 上補」;B:放行唯讀 clone tabby_pool 再補)。#147 驗收 4 以 worker EVIDENCE(`fix-t147/round1/EVIDENCE-round1.md` 的 T 端 11 條)為準:讀到並附行號的約 6 條照交;讀不到的(test-for.sh、看板讀 index.jsonl 處、第 10 條、第 11 條 `../tabby_pool_ctl/tickets` 舊票,以及 land-ticket.sh 的行號)在 Mac 上開 T 端票時補。雲端讀不到的原因:clone / `gh api` / jq 讀 tabby_pool 被 session 權限分類器擋,`tabby_pool_ctl` 不在 GitHub。
