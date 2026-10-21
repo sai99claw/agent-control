@@ -16,8 +16,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "2e6da9ce8c00d439a1aaa3c93ccb4bcef6eb08a9",
-  "state": "Ready",
-  "state_version": 4,
+  "state": "Done",
+  "state_version": 8,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -37,5 +37,53 @@
     "D-028"
   ],
   "feature": "cloud main line (D-059)",
-  "branch": "t151"
+  "branch": "t151",
+  "gate": {
+    "rc": 0,
+    "sha": "2af0e4c71cdc9a3b52ceaba688be13219d43fb3d",
+    "run_id": "20261021-043957-3807",
+    "at": "2026-10-21T04:42:03+00:00"
+  },
+  "cost": [
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1756,
+      "outcome": "pass",
+      "run_id": "20261021-044203-15286",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-21T05:11:19+00:00"
+    }
+  ],
+  "landed_sha": "c3acc15719b6c8386e50c4d1ea25c1f085616112",
+  "cost_total": {
+    "calendar_seconds": 4190,
+    "wall_seconds": 1756,
+    "runs": 1,
+    "worker_rounds": null,
+    "objections": 0,
+    "by_role": {
+      "land": {
+        "runs": 1,
+        "wall_seconds": 1756,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-21T05:11:19+00:00"
+  }
 }
