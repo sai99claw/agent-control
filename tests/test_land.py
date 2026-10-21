@@ -91,7 +91,7 @@ exit 1
 """
 
 # auto-fix 的替身:參數與 AC_BATCH_RUN_ID 記進 AC_TEST_LOG;`--batch` 時 rc 讀 `fix-rc`(預設 0),
-# 0 就在整合分支($2,land 開的那個 worktree)上疊一個 commit —— 同 `apply.sh --batch` 的形狀。
+# 0 就在整合分支($2,land 開的那個 worktree)上疊一個 commit —— 同批次 worker 自己 commit 的形狀(#145)。
 # `fix-hook.sh` 存在就在修復當中跑它(land 持鎖時另起 docs 通道)。
 AUTO_FIX_STUB = """#!/bin/sh
 echo "autofix $* source=$AC_FIX_SOURCE batch_run=${AC_BATCH_RUN_ID:-}" >> "$AC_TEST_LOG"

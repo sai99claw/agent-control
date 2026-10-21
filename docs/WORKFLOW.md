@@ -35,12 +35,12 @@ Draft → Ready → Running → InReview → IntegrationQueued → Integrating �
 - **驗證者**仍在 `base_sha`(或分支)的 `git archive` 副本(`work/` 與對照 `base/`)交 `patch-verify.diff`(VISION 只說工作者)。
 - **收件走 `scripts/apply.sh <票號> [<patch-verify>] --evidence <檔> [--evidence-verifier <檔>]…`**:
   收 EVIDENCE(記憶、result、`OBJECTION:` 行 → rc=6)、把驗證者的計畫與驗紅併進票;有 patch-verify 就
-  `git apply --index` 進票分支、補**一個** commit(套不上 rc=3)。
+  以 `--index` 套進票分支、補**一個** commit(套不上 rc=3)。
   候選樹有 `scripts/repo-map.py` 與 `code-map/catalog.json` 時跑一次 `repo-map.py build`(#96):
   `code-map/index.json` / `INDEX.md` 有變就在分支上再補一個 commit(訊息 `regen: repo-map build …`);
   build 非零不擋收件、印一行「索引沒重產」;閘門不量索引新鮮度(D-054 Q4),落地合併後 land 再重產一次(D-051)。
-  `apply.sh --batch` 同一個判準、同一份實作(#129,`scripts/wtbase.sh` 的 `code_map_regen`):有變就併進那一個
-  batch fix commit(訊息多一行 `regen: repo-map build …`、輸出「批次 code-map 索引重產」),build 非零照樣 commit。
+  `apply.sh --batch` 同一個判準、同一份實作(#129,`scripts/wtbase.sh` 的 `code_map_regen`):有變就在整合分支上
+  補一個 commit(訊息多一行 `regen: repo-map build …`、輸出「批次 code-map 索引重產」),build 非零不擋。
   `hard_block`(唯一的硬擋;沒有寫入範圍,D-054 Q2)在收件時先量這張票的改動(分支相對主線分岔點的
   commit 加 patch-verify),命中 rc=5、patch-verify 退出來、分支不動;閘門 preflight 與 `land.sh` 各再擋一次。
   **`land.sh` 收的是已經有 commit 的分支** —— 它不套 patch(`docs/ROLES.md`)。
@@ -169,14 +169,15 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
 7. **一批 N 張全套紅(批次修復,#108,D-H51 ②)**:`AC_BATCH_RUN_ID=<land 那一輪的 run_id> sh scripts/auto-fix.sh --batch <整合分支> <id…>`。
    不猜哪張票弄紅:**一個** worker 拿派工文 `reports/batch/<stamp>/dispatch-round1.md`(N 張票面快照、
    紅榜 = 第一張票 `reports/t<id>/<run_id>/status.json` 的 failures、`git diff --stat main...<整合分支>` 與整批 diff 檔、
-   「不得放寬測試」),在整合分支的副本上修。patch 走 `apply.sh --batch <整合分支> <id…> <patch>`:
-   疊成整合分支頭上**一個** commit(訊息 `batch fix round <r> #1 #2 …`),唯一的硬擋是 `hard_block`,測試檔(`batch_fix.test_globs`,預設 `tests/**`、
+   「不得放寬測試」),在整合分支的 worktree(land 開的那一個)上修、**自己 commit**(#145,與單票同一種交件:
+   整合分支相對派工前多了 commit、worktree 乾淨;訊息以 `t<n>` 開頭)。收件走 `apply.sh --batch <整合分支> <id…>
+   --base <派工前的頭>`:不收 patch,量 `<base>..<整合分支>` 的 diff、補 code-map 重產、收 EVIDENCE;唯一的硬擋是 `hard_block`,測試檔(`batch_fix.test_globs`,預設 `tests/**`、
    `verify/**`、`**/test_*.py`)刪含 assert 的行或加 skip / expectedFailure ⇒ rc 5「<檔>:<行> 放寬測試」
    (EVIDENCE 有 `OBJECTION: test_defect <案例>` 且是那條案例的檔才不擋)。覆核走 `review.sh --batch <整合分支> <id…>
-   --run-id <stamp>`:pass 寫 `reports/batch/<stamp>/review.json`(sha = 整合分支頭),fail 一頁 decision 掛第一張票、
+   --run-id <stamp> --base <派工前的頭>`(覆核 `<base>..<頭>` 的 diff):pass 寫 `reports/batch/<stamp>/review.json`(sha = 整合分支頭),fail 一頁 decision 掛第一張票、
    內文列整批。**全程不寫票**(不 `ticket.py set`;任何一張票的 `state_version` 一動,N 張的覆核同時過期),
    各票分支不動;worker / reviewer 的成本各一列只記在第一張票(`ticket.py cost --note "batch <stamp> #1 #2"`)。
-   只跑一輪:rc 0 = fix 已 commit 且覆核 pass,呼叫端接著重跑全套。退出碼同單票(3 反駁 / 4 紅榜空 / 5 沒交、逾時、套不上 / 8 越界)。
+   只跑一輪:rc 0 = fix 已 commit 且覆核 pass,呼叫端接著重跑全套。退出碼同單票(3 反駁 / 4 紅榜空 / 5 沒交、逾時、收件被擋 / 8 越界)。
 8. **agent 越界守衛(#115,D-048 現況)**:codex 與 claude worker 同權限(codex 起 `-s danger-full-access
    -c 'approval_policy="never"' -C .`,外加 `--add-dir <副本根>` 恰一次,cwd 與 claude 同是 worker 的票分支 worktree
    / 驗證者副本的 `work/`),不靠
@@ -313,12 +314,12 @@ worker 同一輪**也 commit 了**(#107,專案 #751 事故;#144 起):驗證者�
 存成 `reports/t<n>/<run_id>/verify-<雜湊>.log`,雜湊含**標籤 + 這棵樹的 HEAD sha**。
 sha 變了就是不同的問題,快取一定失效;單獨跑的人(沒有 `AC_RUN_ID`)拿到的永遠是真的跑。
 
-## patch 管線(單票已撤,#144)
+## patch 管線(已撤,#144 單票、#145 批次)
 > worker 改成在自己的 worktree / 分支 commit(D-054 Q9)之後,單票沒有 patch 要套、要重套:檔頭驗證、
 > 套用 / 反套比對、三向合併重套、test_defect 收件後的分支比對(#107)、逾時的半成品 diff 一起刪 ——
 > 「分支有新 commit」取代「patch 套得上」,是同一道門換形式。稽核(D-053 ④):apply rc=3 共 21 次全是
-> patch 形狀問題,每次一輪重來。批次修復(`apply.sh --batch`)還收 patch、檔頭守衛留在那一支,跟上分支
-> commit 是 #145。連續落地撞到登記檔與自動產生的清單,由 `land.sh` 合併時處理(衝突指名到檔、合併後重產 code-map,#129)。
+> patch 形狀問題,每次一輪重來。批次修復(`apply.sh --batch`)也跟上分支 commit(#145):批次 worker 在
+> 整合分支的 worktree commit,收件不再收 patch、驗檔頭、套用。連續落地撞到登記檔與自動產生的清單,由 `land.sh` 合併時處理(衝突指名到檔、合併後重產 code-map,#129)。
 
 ## 派工的並行上限
 同時最多兩個會起瀏覽器的 agent;全套並跑時不再起瀏覽器型 agent(2026-09-20 旅程「11-batch」在滿載下紅五次,每次白跑一輪全套)。優先序改變時把低優先的 agent 停掉,不要讓它自己滾。

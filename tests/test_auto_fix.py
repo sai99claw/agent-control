@@ -3493,23 +3493,30 @@ class ThePacketSaysWhichTestsToRun(AutoFixBase):
 
 
 
-# 批次修復的假 worker(#108):在副本 work/ 改一個檔、照規矩出 patch 與 EVIDENCE。
+# 批次修復的假 worker(#108;#145 起與單票同一種交件):cwd 是整合分支的 worktree,改一個檔、
+# 在整合分支上 commit,EVIDENCE 寫在輪次目錄(`$AC_WORK`)。
 BATCH_WORKER_FIXES = """#!/bin/sh
 set -e
 echo "worker ran batch round $AC_ROUND" >> "$AC_TEST_LOG"
-cd "$AC_WORK"
-printf 'one fixed by the batch\\n' > work/src/one.txt
-diff -ruN base work > patch-round1.diff || true
-printf '# EVIDENCE\\n修了 src/one.txt\\n' > EVIDENCE-round1.md
+printf 'one fixed by the batch\\n' > src/one.txt
+git add -A && git commit -q -m "t1 fix: one fixed by the batch"
+printf '# EVIDENCE\\n修了 src/one.txt\\n' > "$AC_WORK/EVIDENCE-round1.md"
+"""
+
+# 改了檔、沒 commit:沒 commit 的改動不算交件(#144 的判準)。
+BATCH_WORKER_NO_COMMIT = """#!/bin/sh
+set -e
+echo "worker ran batch round $AC_ROUND" >> "$AC_TEST_LOG"
+printf 'one fixed by the batch\\n' > src/one.txt
+printf '# EVIDENCE\\n修了 src/one.txt\\n' > "$AC_WORK/EVIDENCE-round1.md"
 """
 
 BATCH_WORKER_OBJECTS = """#!/bin/sh
 set -e
 echo "worker ran batch round $AC_ROUND" >> "$AC_TEST_LOG"
-cd "$AC_WORK"
-printf 'one fixed by the batch\\n' > work/src/one.txt
-diff -ruN base work > patch-round1.diff || true
-printf '# EVIDENCE\\nOBJECTION: ticket-wrong 票 2 的驗收與票 1 互斥\\n' > EVIDENCE-round1.md
+printf 'one fixed by the batch\\n' > src/one.txt
+git add -A && git commit -q -m "t1 fix: one fixed by the batch"
+printf '# EVIDENCE\\nOBJECTION: ticket-wrong 票 2 的驗收與票 1 互斥\\n' > "$AC_WORK/EVIDENCE-round1.md"
 """
 
 BATCH_REVIEW_FAIL = """#!/bin/sh
@@ -3641,6 +3648,8 @@ class BatchFix(AutoFixBase):
         self.assertTrue(os.path.exists(self.record("batch.diff")))
         self.assertIn("不得放寬測試", text)
         self.assertIn("OBJECTION: test_defect", text)
+        self.assertIn("整合分支 `land/X` 上的 commit", text)
+        self.assertNotIn("diff -ruN", text)
 
     def test_121_the_batch_worker_comes_from_the_role_table(self):
         """#121 A1 / T1 批次:`--batch` 的 worker 照表選第一個可用候選(首選 codex 而 codex 不在
@@ -3669,16 +3678,23 @@ class BatchFix(AutoFixBase):
         cost = [row for row in self.load_ticket("1").get("cost") or [] if row["role"] == "worker"]
         self.assertEqual([(row["model"], row["effort"]) for row in cost], [("fable", "high")])
 
-    def test_green_path_commits_one_fix_reviews_it_and_costs_two_rows_on_ticket_one(self):
-        """A2 / A5 / A6 一條龍。量 rc 0、land/X 前進一個 batch commit、review.json.sha = land/X 頭、
+    def test_green_path_takes_the_worker_commit_reviews_it_and_costs_two_rows_on_ticket_one(self):
+        """A2 / A5 / A6 一條龍(#145:worker 在整合分支的 worktree commit)。量 rc 0、land/X 前進的
+        就是 worker 那一個 commit、紀錄目錄沒有任何 patch 檔、review.json.sha = land/X 頭、
         票 1 cost 多 worker / reviewer 兩列(note 帶 batch、run_id = AC_BATCH_RUN_ID)、票 2 cost 不變、
-        兩張票的版本與覆核不動;紅 = 任一格漂;期望值 = 夾具 rev-parse 與票檔。"""
+        兩張票的版本與覆核不動;紅 = 任一格漂(**M1** 批次仍收 patch 檔 → rc 5 沒交 patch);
+        期望值 = 夾具 rev-parse、假 worker 的 commit 訊息與票檔。"""
         self.set_worker(BATCH_WORKER_FIXES)
         self.set_reviewer(REVIEWER_PASS)
         done = self.run_batch()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.git("rev-parse", "land/X^").strip(), self.batch["land"])
-        self.assertIn("batch fix round 1", self.git("log", "-1", "--format=%s", "land/X"))
+        self.assertEqual(self.git("log", "-1", "--format=%s", "land/X").strip(),
+                         "t1 fix: one fixed by the batch")
+        self.assertEqual(self.git("show", "land/X:src/one.txt"), "one fixed by the batch\n")
+        self.assertEqual([os.path.basename(path) for path in
+                          glob.glob(os.path.join(self.record(""), "*.diff"))], ["batch.diff"],
+                         "收件不讀、也不留任何 patch 檔(batch.diff 是派工文附的整批 diff)")
         with open(self.record("review.json"), encoding="utf-8") as handle:
             self.assertEqual(json.load(handle)["sha"], self.git("rev-parse", "land/X").strip())
         rows = self.load_ticket("1").get("cost") or []
@@ -3704,40 +3720,60 @@ class BatchFix(AutoFixBase):
         self.assert_one_page_for_the_batch()
         self.assert_tickets_kept()
 
-    def test_no_patch_is_rc5_with_one_page(self):
-        """A7(g)。量 rc 5、一頁 decision 掛票 1 列整批、land/X 不動、票不動;
-        紅 = 照套或沒發頁;期望值 = 單票那一張表的 5。"""
-        self.set_worker(WORKER_NEVER)
+    def assert_no_delivery(self, body):
+        self.set_worker(body)
         done = self.run_batch()
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         self.assert_one_page_for_the_batch()
+        self.assertIn("沒有新 commit", self.decisions()[0]["what"])
+        self.assertNotIn("apply: 批次", done.stdout + done.stderr)
         self.assertEqual(self.git("rev-parse", "land/X").strip(), self.batch["land"])
         self.assert_tickets_kept()
+        return done
 
-    def test_an_objection_stops_with_rc3_and_keeps_patch_and_evidence(self):
-        """A7 反駁。量 rc 3、一頁、patch / EVIDENCE 留在 reports/batch/<stamp>/、land/X 不動、
-        票的 objections 不動;紅 = 照套或記進票;期望值 = 單票那一張表的 3。"""
+    def test_no_commit_is_rc5_with_one_page(self):
+        """A7(g),#145:沒交 = 整合分支相對派工前沒有新 commit。量 rc 5、一頁 decision 掛票 1 列整批、
+        內文說沒有新 commit、land/X 不動、票不動、apply 沒被叫;紅 = 照收或沒發頁;
+        期望值 = 單票那一張表的 5。"""
+        self.assert_no_delivery(WORKER_NEVER)
+
+    def test_changes_left_uncommitted_are_not_a_delivery(self):
+        """#145:改了檔沒 commit 也是沒交(不替 worker commit)。量同上,另加頁上點名沒 commit 的檔;
+        紅 = 腳本替它 commit(land/X 前進);期望值 = 假 worker 改的 src/one.txt。"""
+        self.assert_no_delivery(BATCH_WORKER_NO_COMMIT)
+        self.assertIn("src/one.txt", self.decisions()[0]["what"])
+
+    def test_an_objection_stops_with_rc3_and_keeps_the_evidence(self):
+        """A7 反駁。量 rc 3、一頁(附判完要跑的 apply.sh --batch … --base <派工前的頭>)、EVIDENCE 留在
+        reports/batch/<stamp>/、worker 的 commit 留在 land/X 而收件沒跑(沒有再加 commit)、票的
+        objections 不動;紅 = 照收或記進票;期望值 = 單票那一張表的 3、夾具的 land/X 頭。"""
         self.set_worker(BATCH_WORKER_OBJECTS)
         done = self.run_batch()
         self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
         self.assert_one_page_for_the_batch()
-        self.assertIn("apply.sh --batch", self.decisions()[0]["what"],
-                      "頁上要附判完後要跑的那一句(A4 改版)")
-        self.assertTrue(os.path.exists(self.record("patch-round1.diff")))
+        self.assertIn("apply.sh --batch land/X 1 2 --base %s" % self.batch["land"],
+                      self.decisions()[0]["what"], "頁上要附判完後要跑的那一句(A4 改版)")
         self.assertIn("OBJECTION:", self.read(self.record("EVIDENCE-round1.md")))
-        self.assertEqual(self.git("rev-parse", "land/X").strip(), self.batch["land"])
+        self.assertEqual(self.git("rev-parse", "land/X^").strip(), self.batch["land"])
+        self.assertNotIn("apply: 批次", done.stdout + done.stderr)
         self.assert_tickets_kept()
 
     def test_115_a4_a_batch_worker_outside_its_copy_stops_with_rc8(self):
         """#115 A4:批次 worker 也走同一份守衛。量 rc 8、一頁(掛第一張、列整批)、
         land/X 不動、兩張票 Blocked / owner=main;紅 = 批次不收守衛報告(照套);值 = A4。"""
-        self.set_worker(BATCH_WORKER_FIXES.replace(
-            'cd "$AC_WORK"', 'echo stray > "%s/stray.txt"\ncd "$AC_WORK"' % self.repo))
+        stray = 'echo stray > "%s/stray.txt"\n' % self.repo
+        self.set_worker(BATCH_WORKER_FIXES.replace("set -e\n", "set -e\n" + stray, 1))
         done = self.run_batch()
         self.assertEqual(done.returncode, 8, done.stdout + done.stderr)
         self.assert_one_page_for_the_batch()
         self.assertIn("stray.txt", self.decisions()[0]["what"])
-        self.assertEqual(self.git("rev-parse", "land/X").strip(), self.batch["land"])
+        # worker 在整合分支上 commit 是交件、不是越界(#145):守衛只點名 stray.txt。
+        reports = glob.glob(os.path.join(self.record(""), "*.guard.json"))
+        self.assertEqual(len(reports), 1, reports)
+        with open(reports[0], encoding="utf-8") as handle:
+            paths = [row["path"] for row in json.load(handle)["violations"]]
+        self.assertEqual([os.path.basename(path) for path in paths], ["stray.txt"], paths)
+        self.assertNotIn("apply: 批次", done.stdout + done.stderr)
         for ident in ("1", "2"):
             row = self.load_ticket(ident)
             self.assertEqual((row["state"], row.get("owner")), ("Blocked", "main"), ident)

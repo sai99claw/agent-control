@@ -535,8 +535,8 @@ class ATimedOutReviewerIsReapedWithItsTree(ReviewBase):
 
 
 class ReviewBatch(Sandbox):
-    """#108 A5 / A6:`review.sh --batch land/X 1 2 --run-id <stamp>` 覆核整合分支頭上那一個
-    fix commit。pass 寫 `reports/batch/<stamp>/review.json`(sha = land/X 頭,不是哪一張票的
+    """#108 A5 / A6,#145:`review.sh --batch land/X 1 2 --run-id <stamp> [--base <sha>]` 覆核批次 worker
+    在整合分支上的 commit(`<base>..<頭>`;沒給 base = first-parent 上最近一個 merge)。pass 寫 `reports/batch/<stamp>/review.json`(sha = land/X 頭,不是哪一張票的
     分支頭);fail 不寫票、收件匣一頁 decision 掛票 1、內文列 #2。成本一列只記在票 1。
     期望的 sha 由夾具 `git rev-parse land/X` 取,不從 review.sh 算。"""
 
@@ -554,13 +554,13 @@ class ReviewBatch(Sandbox):
         land = self.worktree_of("land/X")
         self.write("src/one.txt", "one fixed by the batch\n", where=land)
         self.git("add", "-A", cwd=land)
-        self.git("commit", "-q", "-m", "batch fix round 1 #1 #2 (land/X)", cwd=land)
+        self.git("commit", "-q", "-m", "t1 fix: one fixed by the batch", cwd=land)
         self.fix = self.git("rev-parse", "land/X").strip()
         self.before = {ident: self.load_ticket(ident) for ident in ("1", "2")}
 
-    def review(self, *ids):
-        return self.run_sh("scripts/review.sh", "--batch", "land/X", *(ids or ("1", "2")),
-                           "--run-id", self.STAMP, env=self.env(AC_BATCH_RUN_ID=self.RUN))
+    def review(self, *extra):
+        return self.run_sh("scripts/review.sh", "--batch", "land/X", "1", "2",
+                           "--run-id", self.STAMP, *extra, env=self.env(AC_BATCH_RUN_ID=self.RUN))
 
     def record(self, name):
         return os.path.join(self.repo, "reports", "batch", self.STAMP, name)
@@ -630,8 +630,34 @@ class ReviewBatch(Sandbox):
         self.assertEqual(rows[0]["run_id"], self.RUN)
         self.assertEqual(self.load_ticket("2").get("cost"), self.before["2"].get("cost"))
 
+    def test_the_packet_spans_every_commit_since_the_base(self):
+        """#145:worker 可以 commit 不只一次;派工文的 diff 是 `<base>..<頭>`,不是頭那一個。
+        量兩個 commit 的改動都在、`--base` 給到第一個之後就只剩第二個;紅 = 照舊 `<頭>^..<頭>`;
+        期望值 = 夾具寫的兩行。"""
+        self.set_reviewer(REVIEWER_PASS)
+        land = os.path.join(self.home, "wt", "land-X")
+        self.write("src/two.txt", "two fixed by the batch\n", where=land)
+        self.git("add", "-A", cwd=land)
+        self.git("commit", "-q", "-m", "t2 fix: two fixed by the batch", cwd=land)
+        self.assertEqual(self.review().returncode, 0)
+        text = self.read(self.record("dispatch-reviewer.md"))
+        self.assertIn("+one fixed by the batch", text)
+        self.assertIn("+two fixed by the batch", text)
+        self.assertEqual(self.review("--base", self.fix).returncode, 0)
+        text = self.read(self.record("dispatch-reviewer.md"))
+        self.assertNotIn("+one fixed by the batch", text)
+        self.assertIn("+two fixed by the batch", text)
+
+    def test_a_base_off_the_branch_is_refused(self):
+        """#145 前提:`--base` 不在整合分支的歷史上 ⇒ rc 2、reviewer 不起;期望值 = 夾具做的一個孤兒 commit。"""
+        self.set_reviewer(REVIEWER_PASS)
+        orphan = self.git("commit-tree", "main^{tree}", "-m", "孤兒").strip()
+        done = self.review("--base", orphan)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertFalse(os.path.exists(self.log), "reviewer 不該被起")
+
     def test_a_head_that_is_not_a_batch_fix_is_refused(self):
-        """前提:頭不是 apply --batch 疊的 commit ⇒ rc 2、reviewer 不起。"""
+        """前提:頭是 merge(最近一個 merge 之後沒有批次修復的 commit)⇒ rc 2、reviewer 不起。"""
         self.set_reviewer(REVIEWER_PASS)
         land = os.path.join(self.home, "wt", "land-X")
         side = self.git("commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "side", cwd=land).strip()

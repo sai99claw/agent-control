@@ -2,19 +2,18 @@
 
 ## 驗收表(票面每一條一列;期望值來源獨立於被測程式:票面原話 / 夾具自己寫的票檔與 status.json / git 自己算)
 A1 | unit | auto-fix.sh --batch land/X 1 2(AC_BATCH_RUN_ID=R)     | reports/batch/<stamp>/dispatch-round1.md 含五項(④ 寫入範圍聯集 #137 起不再列) | 票面 A1 原話;期望值取自夾具的 1.json / 2.json、reports/t1/R/status.json、`git diff --stat main...land/X`
-A2 | unit | apply.sh --batch land/X 1 2 <patch>                    | land/X 前進恰 1 個 commit、訊息含 batch fix round 1 / #1 / #2;t1-a t2-b 不動;票的 state_version / review 不動 | 票面 A2 原話;sha 由 git 自己算
-A3 | unit | patch 動 secrets/k.txt | rc=5 且 stderr 點名檔與格 | 夾具寫進 config 的 hard_block.paths;#137(D-054 Q2)起寫入範圍只剩這一道
-A4 | unit | patch 在測試檔刪 assert 行 / 加 skip / expectedFailure  | rc=5、stderr 含「<檔>:<行> 放寬測試」;OBJECTION: test_defect 指到同一檔 → 不擋 | 票面 A4 原話;行號從夾具手寫的檔數
+A2 | unit | worker 在 land/X commit 後 apply.sh --batch land/X 1 2 --base <派工前> | 收件不另加 commit(land/X 只有 worker 那 1 個)、t1-a t2-b 不動;票的 state_version / review 不動 | 票面 A2 原話,#145 改成分支 commit(D-054 Q9);sha 由 git 自己算
+A3 | unit | commit 動 secrets/k.txt | rc=5 且 stderr 點名檔與格 | 夾具寫進 config 的 hard_block.paths;#137(D-054 Q2)起寫入範圍只剩這一道
+A4 | unit | commit 在測試檔刪 assert 行 / 加 skip / expectedFailure  | rc=5、stderr 含「<檔>:<行> 放寬測試」;OBJECTION: test_defect 指到同一檔 → 不擋 | 票面 A4 原話;行號從夾具手寫的檔數
 A5 | unit | review.sh --batch land/X 1 2 --run-id S                | pass → reports/batch/S/review.json(sha = land/X 頭);fail → 沒有 review.json、一頁 decision 掛 #1 內文有 #2、rc≠0 | 票面 A5 原話
 A6 | unit | 整條 auto-fix.sh --batch 綠到底                         | 1.json cost 多 worker / reviewer 各一列(note 含 batch <stamp> 與票號、run_id = R);2.json 一個 byte 不變 | 票面 A6 原話
-A7 | unit | worker 不交 patch / 逾時 / 阻擋反駁 / 覆核 fail          | rc 5 / 5 / 3 / 非 0;恰一頁 decision 掛 #1、內文有 #2;副本的 patch 與 EVIDENCE 留在 reports/batch/<stamp>/ | 票面 A7 原話;單票的退出碼表(scripts/auto-fix.sh 檔頭,基底)
+A7 | unit | worker 不 commit / 逾時 / 阻擋反駁 / 覆核 fail           | rc 5 / 5 / 3 / 非 0;恰一頁 decision 掛 #1、內文有 #2;EVIDENCE 留在 reports/batch/<stamp>/、逾時的半成品留在 worktree | 票面 A7 原話;單票的退出碼表(scripts/auto-fix.sh 檔頭,基底)
 A8 | unit | 三支既有測試檔載入                                     | 案例數 ≥ 92 / 45 / 17                                           | 票面 A8 原話(「照綠」是閘門 L2 的事,這裡只守「沒被刪」)
 
 ## 介面字串(每條斷言靠哪個字串;全部出自票面 acceptance / outline,不從腳本抄)
 BATCH_DIR   = reports/batch/<stamp>/       ← 所有 --batch 紀錄的家;<stamp> 由列目錄取(恰一個)
 DISPATCH    = dispatch-round1.md           ← A1
 REVIEW_JSON = review.json                  ← A5 {verdict, sha, by, at, note}
-COMMIT_MSG  = "batch fix round 1"          ← A2
 LOOSENED    = "放寬測試"                   ← A4 stderr「<檔>:<行> 放寬測試」
 RULE_NO_LOOSEN = "不得放寬測試"、RULE_OBJ = "OBJECTION: test_defect" ← A1 ⑤
 CONFIG_GLOBS = board/config.json batch_fix.test_globs ← A4
@@ -22,9 +21,9 @@ CONFIG_GLOBS = board/config.json batch_fix.test_globs ← A4
 ## 怎麼做假(不上真埠、不起真服務、不起真模型)
 沙盒借 tests/control_harness.Sandbox(拋棄式真 git repo + 絆線 claude);閘門換成 GATE_STUB_GREEN;
 worker / reviewer 是 board/config.json 的 worker.command / reviewer.command 指到的 sh 替身,
-worker 照單票的慣例在 $AC_WORK 交 patch-round$AC_ROUND.diff 與 EVIDENCE-round$AC_ROUND.md。
-分支 t1-a / t2-b / land/X 用拋棄式 detached worktree 做完 commit 就收掉,分支本身不留 worktree。
-patch 由 `diff -ruN base work` 真的產生(base 側取自 land/X 的內容),不手寫 hunk。
+worker 照單票的慣例(#144;批次跟上是 #145)在 cwd(整合分支的 worktree)commit、EVIDENCE-round$AC_ROUND.md 寫在 $AC_WORK。
+分支 t1-a / t2-b / land/X 用拋棄式 detached worktree 做完 commit 就收掉,分支本身不留 worktree;
+只測收件的案例照同一個辦法在 land/X 上疊一個「worker 的 commit」。
 
 ## 不做
 不改產品碼;不放寬票面驗收;不刪既有案例;不跑真的 gate / 模型。
@@ -32,10 +31,7 @@ patch 由 `diff -ruN base work` 真的產生(base 側取自 land/X 的內容),�
 import json
 import os
 import re
-import shutil
-import subprocess
 import sys
-import tempfile
 import unittest
 
 TAGS = ["batch-fix"]
@@ -49,7 +45,6 @@ from control_harness import (DEFAULT_CONFIG, GATE_STUB_GREEN, REVIEWER_PASS,  # 
 
 RUN = "20261010-120000-9"          # land 那一輪的 run_id(AC_BATCH_RUN_ID)
 
-COMMIT_MSG = "batch fix round 1"
 LOOSENED = "放寬測試"
 RULE_NO_LOOSEN = "不得放寬測試"
 RULE_OBJ = "OBJECTION: test_defect"
@@ -116,26 +111,24 @@ Ran 1 test in 0.001s
 FAILED (failures=1)
 """
 
-# worker 替身:照單票慣例在 $AC_WORK 交件。@BODY@ 換成各自那一段。
+# worker 替身:cwd 是整合分支的 worktree(在那裡 commit),EVIDENCE 寫在 $AC_WORK(輪次目錄)。
 WORKER_HEAD = """#!/bin/sh
 echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
 cat > /dev/null
-cd "$AC_WORK" || exit 9
 """
-WORKER_FIXES = WORKER_HEAD + """mkdir -p work/src
-printf 'batch fix line\\n' > work/src/fix.txt
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
-printf '# batch round %s\\n修了紅榜\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
+WORKER_FIXES = WORKER_HEAD + """mkdir -p src
+printf 'batch fix line\\n' > src/fix.txt
+git add -A && git commit -q -m "t1 fix: 紅榜" || exit 9
+printf '# batch round %s\\n修了紅榜\\n' "$AC_ROUND" > "$AC_WORK/EVIDENCE-round$AC_ROUND.md"
 """
-WORKER_NO_PATCH = WORKER_HEAD + """printf '# batch\\n沒交 patch 的證據標記\\n' > "EVIDENCE-round$AC_ROUND.md"
+WORKER_NO_COMMIT = WORKER_HEAD + """printf '# batch\\n沒 commit 的證據標記\\n' > "$AC_WORK/EVIDENCE-round$AC_ROUND.md"
 """
-WORKER_TIMES_OUT = WORKER_HEAD + """mkdir -p work/src
-printf 'partial\\n' > work/src/partial.txt
-diff -ruN base work > "patch-round$AC_ROUND.diff" || true
-printf '逾時前寫到這裡的標記\\n' > "EVIDENCE-round$AC_ROUND.md"
+WORKER_TIMES_OUT = WORKER_HEAD + """mkdir -p src
+printf 'partial\\n' > src/partial.txt
+printf '逾時前寫到這裡的標記\\n' > "$AC_WORK/EVIDENCE-round$AC_ROUND.md"
 exec sleep 60
 """
-WORKER_OBJECTS = WORKER_HEAD + """printf 'OBJECTION: blocking 紅榜兩條互相矛盾\\n' > "EVIDENCE-round$AC_ROUND.md"
+WORKER_OBJECTS = WORKER_HEAD + """printf 'OBJECTION: blocking 紅榜兩條互相矛盾\\n' > "$AC_WORK/EVIDENCE-round$AC_ROUND.md"
 """
 
 REVIEWER_FAIL = """#!/bin/sh
@@ -250,24 +243,20 @@ class BatchWorld(Sandbox):
     def ticket_path(self, ident):
         return os.path.join(self.repo, "tickets", "%s.json" % ident)
 
-    def make_patch(self, edits):
-        """`diff -ruN base work`:base 側是 land/X 上的內容(沒有就不放),work 側是新內容。"""
-        where = tempfile.mkdtemp(dir=self.home); self.addCleanup(shutil.rmtree, where, True)
-        for rel, text in edits.items():
-            shown = subprocess.run(["git", "show", "land/X:%s" % rel], cwd=self.repo,
-                                   env=self.env(), capture_output=True, text=True)
-            if shown.returncode == 0:
-                self.write(rel, shown.stdout, where=os.path.join(where, "base"))
-            self.write(rel, text, where=os.path.join(where, "work"))
-        os.makedirs(os.path.join(where, "base"), exist_ok=True)
-        done = subprocess.run(["diff", "-ruN", "base", "work"], cwd=where,
-                              capture_output=True, text=True)
-        self.assertEqual(done.returncode, 1, "夾具的 patch 沒有差異:%s" % done.stderr)
-        return self.write("p-%d.diff" % len(os.listdir(self.home)), done.stdout,
-                          where=self.home)
+    def worker_commit(self, edits):
+        """批次 worker 的交件:land/X 頭上一個 commit(#145)。"""
+        self.branch_from("land/X", "land/X", edits)
+        self.assertEqual(self.git("rev-list", "--count",
+                                  "%s..land/X" % self.land_before).strip(), "1")
 
-    def apply_batch(self, patch, *extra):
-        return self.run_sh("scripts/apply.sh", "--batch", "land/X", "1", "2", patch, *extra)
+    def apply_batch(self, *extra):
+        return self.run_sh("scripts/apply.sh", "--batch", "land/X", "1", "2",
+                           "--base", self.land_before, *extra)
+
+    def assert_no_commit_added(self):
+        self.assertEqual(self.git("rev-list", "--count",
+                                  "%s..land/X" % self.land_before).strip(), "1",
+                         "收件不另加 commit:land/X 上只有 worker 那一個")
 
     def auto_fix_batch(self):
         return self.run_sh("scripts/auto-fix.sh", "--batch", "land/X", "1", "2",
@@ -316,7 +305,7 @@ class TheBatchDispatchCarriesFiveThings(BatchWorld):
 
     def setUp(self):
         super().setUp()
-        self.set_worker(WORKER_NO_PATCH)
+        self.set_worker(WORKER_NO_COMMIT)
         self.done = self.auto_fix_batch()
         where = None
         for stamp in self.batch_dirs():
@@ -378,17 +367,15 @@ class TheBatchDispatchCarriesFiveThings(BatchWorld):
 class TheFixIsOneCommitOnTheIntegrationBranch(BatchWorld):
 
     def test_a2_one_commit_on_land_x_and_nothing_else_moves(self):
-        """A2 patch 成為 land/X 頭上恰一個 commit;t1-a / t2-b 與票的 state_version / review 不變。"""
-        patch = self.make_patch({"src/fix.txt": FIX_LINE + "\n"})
-        done = self.apply_batch(patch)
+        """A2(#145)worker 在 land/X 上的 commit 就是交件:收件不另加 commit、不改它;
+        t1-a / t2-b 與票的 state_version / review 不變。"""
+        self.worker_commit({"src/fix.txt": FIX_LINE + "\n"})
+        head = self.rev("land/X")
+        done = self.apply_batch()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.git("rev-list", "--count",
-                                  "%s..land/X" % self.land_before).strip(), "1")
-        self.assertEqual(self.rev("land/X^"), self.land_before, "疊在原本的頭上")
+        self.assert_no_commit_added()
+        self.assertEqual(self.rev("land/X"), head, "worker 的 commit 原樣留著")
         self.assertEqual(self.git("show", "land/X:src/fix.txt"), FIX_LINE + "\n")
-        message = self.git("log", "-1", "--format=%B", "land/X")
-        for text in (COMMIT_MSG, "#1", "#2"):
-            self.assertIn(text, message)
         self.assertEqual(self.rev("t1-a"), self.sha_t1)
         self.assertEqual(self.rev("t2-b"), self.sha_t2)
         self.assert_tickets_untouched()
@@ -399,11 +386,12 @@ class TheFixIsOneCommitOnTheIntegrationBranch(BatchWorld):
 class OnlyTheConfigHardBlockStopsTheBatch(BatchWorld):
 
     def assert_blocked(self, rel, field, text):
-        done = self.apply_batch(self.make_patch({rel: text}))
+        self.worker_commit({rel: text})
+        done = self.apply_batch()
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         self.assertIn(rel, done.stderr)
         self.assertIn(field, done.stderr)
-        self.assertEqual(self.rev("land/X"), self.land_before, "擋下就不 commit")
+        self.assert_no_commit_added()
 
     def test_a3_hard_block_paths_block_the_batch(self):
         """A3 secrets/k.txt:命中 config 的 hard_block.paths → rc 5、點名檔與格、land/X 不動。"""
@@ -417,15 +405,17 @@ class LooseningATestIsBlocked(BatchWorld):
     def test_a4_deleting_an_assert_line_in_tests_is_blocked(self):
         """A4 tests/test_x.py 刪第 6 行 self.assertEqual → rc 5、「tests/test_x.py:6 放寬測試」。"""
         loosened = TEST_X.replace("        self.assertEqual(1, 1)\n", "")
-        done = self.apply_batch(self.make_patch({"tests/test_x.py": loosened}))
+        self.worker_commit({"tests/test_x.py": loosened})
+        done = self.apply_batch()
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         self.assertIn("tests/test_x.py:6 " + LOOSENED, done.stderr)
-        self.assertEqual(self.rev("land/X"), self.land_before)
+        self.assert_no_commit_added()
 
     def test_a4_adding_a_skip_is_blocked(self):
         """A4 新增 @unittest.skip(新檔第 5 行)→ rc 5、「tests/test_x.py:5 放寬測試」。"""
         skipped = TEST_X.replace("    def test_one", "    @unittest.skip(\"later\")\n    def test_one")
-        done = self.apply_batch(self.make_patch({"tests/test_x.py": skipped}))
+        self.worker_commit({"tests/test_x.py": skipped})
+        done = self.apply_batch()
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         self.assertIn("tests/test_x.py:5 " + LOOSENED, done.stderr)
 
@@ -436,14 +426,16 @@ class LooseningATestIsBlocked(BatchWorld):
         self.assertIn("    def test_true", original, "夾具前提")
         changed = original.replace("    def test_true",
                                    "    @unittest.expectedFailure\n    def test_true")
-        done = self.apply_batch(self.make_patch({rel: changed}))
+        self.worker_commit({rel: changed})
+        done = self.apply_batch()
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         self.assertRegex(done.stderr, re.escape(rel) + r":\d+ " + LOOSENED)
 
     def test_a4_any_test_star_py_is_a_test_file_by_default(self):
         """A4 預設 glob **/test_*.py:pkg/test_y.py 刪 assert 行 → rc 5。"""
         loosened = TEST_Y.replace("        assert 1 + 1 == 2\n", "")
-        done = self.apply_batch(self.make_patch({"pkg/test_y.py": loosened}))
+        self.worker_commit({"pkg/test_y.py": loosened})
+        done = self.apply_batch()
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         self.assertIn("pkg/test_y.py:6 " + LOOSENED, done.stderr)
 
@@ -451,14 +443,16 @@ class LooseningATestIsBlocked(BatchWorld):
         """A4 batch_fix.test_globs = ["checks/**"] → checks/c.py 刪 assert 行也擋。"""
         self.configure(batch_fix={"test_globs": ["checks/**"]})
         loosened = CHECKS_C.replace("    assert 2 * 2 == 4\n", "")
-        done = self.apply_batch(self.make_patch({"checks/c.py": loosened}))
+        self.worker_commit({"checks/c.py": loosened})
+        done = self.apply_batch()
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         self.assertIn("checks/c.py:2 " + LOOSENED, done.stderr)
 
     def test_a4_an_assert_outside_test_files_is_not_guarded(self):
         """A4 src/lib.py 不是測試檔:刪 assert 行不擋。"""
         loosened = SRC_LIB.replace("    assert x\n", "")
-        done = self.apply_batch(self.make_patch({"src/lib.py": loosened}))
+        self.worker_commit({"src/lib.py": loosened})
+        done = self.apply_batch()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
     def test_a4_a_test_defect_objection_on_that_file_lets_it_through(self):
@@ -466,8 +460,8 @@ class LooseningATestIsBlocked(BatchWorld):
         loosened = TEST_X.replace("        self.assertEqual(1, 1)\n", "")
         evidence = self.evidence("# batch\nOBJECTION: test_defect tests.test_x.T.test_one "
                                  "期望值寫反了\n")
-        done = self.apply_batch(self.make_patch({"tests/test_x.py": loosened}),
-                                "--evidence", evidence)
+        self.worker_commit({"tests/test_x.py": loosened})
+        done = self.apply_batch("--evidence", evidence)
         self.assertNotIn(done.returncode, (2, 5), "不擋,也不是用法錯:\n"
                          + done.stdout + done.stderr)
         self.assertNotIn("tests/test_x.py:6 " + LOOSENED, done.stderr)
@@ -477,8 +471,8 @@ class LooseningATestIsBlocked(BatchWorld):
         loosened = TEST_X.replace("        self.assertEqual(1, 1)\n", "")
         evidence = self.evidence("# batch\nOBJECTION: test_defect tests.test_other.T.test_one "
                                  "期望值寫反了\n")
-        done = self.apply_batch(self.make_patch({"tests/test_x.py": loosened}),
-                                "--evidence", evidence)
+        self.worker_commit({"tests/test_x.py": loosened})
+        done = self.apply_batch("--evidence", evidence)
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         self.assertIn("tests/test_x.py:6 " + LOOSENED, done.stderr)
 
@@ -569,29 +563,30 @@ class TheCostGoesOnTheFirstTicketOnly(BatchWorld):
 
 class TheStopsLookLikeTheSingleTicketOnes(BatchWorld):
 
-    def test_a7_no_patch_is_rc5_with_one_page(self):
-        """A7 worker 沒交 patch → rc 5、一頁 decision 掛 #1 列 #2、EVIDENCE 留在 reports/batch/<stamp>/。"""
-        self.set_worker(WORKER_NO_PATCH)
+    def test_a7_no_commit_is_rc5_with_one_page(self):
+        """A7 worker 沒在整合分支上 commit → rc 5、一頁 decision 掛 #1 列 #2、EVIDENCE 留在 reports/batch/<stamp>/。"""
+        self.set_worker(WORKER_NO_COMMIT)
         done = self.auto_fix_batch()
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         self.assert_one_decision_on_first_ticket_naming_the_batch(done)
         evidence = os.path.join(self.one_batch_dir(), "EVIDENCE-round1.md")
         self.assertTrue(os.path.isfile(evidence), "EVIDENCE 要留在 reports/batch/<stamp>/")
         with open(evidence, encoding="utf-8") as handle:
-            self.assertIn("沒交 patch 的證據標記", handle.read())
+            self.assertIn("沒 commit 的證據標記", handle.read())
         self.assertEqual(self.rev("land/X"), self.land_before)
         self.assert_tickets_untouched()
 
     def test_a7_timeout_is_rc5_and_the_partial_work_survives(self):
-        """A7 逾時 → rc 5、一頁 decision;副本的 patch 與 EVIDENCE 留在 reports/batch/<stamp>/。"""
+        """A7 逾時 → rc 5、一頁 decision;沒 commit 的半成品留在整合分支的 worktree、
+        EVIDENCE 留在 reports/batch/<stamp>/(#145:不再另存半成品 diff)。"""
         self.set_worker(WORKER_TIMES_OUT, timeout=2)
         done = self.auto_fix_batch()
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
         self.assert_one_decision_on_first_ticket_naming_the_batch(done)
         stamp_dir = self.one_batch_dir()
-        patch = os.path.join(stamp_dir, "patch-round1.diff")
         evidence = os.path.join(stamp_dir, "EVIDENCE-round1.md")
-        self.assertTrue(os.path.isfile(patch), "逾時前的 patch 要留下來")
+        partial = os.path.join(self.home, "repo-wt", "batch-land-X", "src", "partial.txt")
+        self.assertTrue(os.path.isfile(partial), "逾時前的半成品要留在 worktree")
         self.assertTrue(os.path.isfile(evidence), "逾時前的 EVIDENCE 要留下來")
         with open(evidence, encoding="utf-8") as handle:
             self.assertIn("逾時前寫到這裡的標記", handle.read())

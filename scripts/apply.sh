@@ -3,8 +3,8 @@
 #
 #   sh scripts/apply.sh <票號> [<patch-verify>] [--evidence <檔>]
 #       [--evidence-verifier <檔>]…                   # 收 worker 的交件(分支上的 commit)
-#   sh scripts/apply.sh --batch <整合分支> <票號…> <patch> [--evidence <檔>]
-#                                                     # 批次修復:疊成整合分支頭上一個 commit(#108)
+#   sh scripts/apply.sh --batch <整合分支> <票號…> [--base <sha>] [--evidence <檔>]
+#                                                     # 批次修復:收整合分支上 worker 的 commit(#108、#145)
 #   sh scripts/apply.sh verify-plan <票號> --evidence-verifier <檔>…
 #                                                     # 只併驗證者計畫:不建分支、不 commit(#130)
 #
@@ -12,7 +12,7 @@
 # worker 在票分支的 worktree(`<worktree_dir>/<票分支>`,auto-fix 派工前建好)裡自己 commit;
 # 「分支有新 commit、工作樹乾淨」由 auto-fix 判,這一支不再收 worker 的 patch。它剩下的事:
 # 1. 驗證者的 patch-verify(驗證者仍在 `git archive` 副本交出 patch-verify,VISION 只說工作者)
-#    `git apply --index` 進分支、補**一個** commit;這張票的改動先量 `hard_block`(rc 5);
+#    以 `apply --index` 套進分支、補**一個** commit;這張票的改動先量 `hard_block`(rc 5);
 # 2. code-map 索引重產(D-051):產出物有變就再補一個 commit;
 # 3. 收 EVIDENCE(記憶、result、反駁)、把驗證者的計畫與驗紅併進票。
 # 進主線仍只由 `land.sh` 在測試綠後做(落地排序、與別張票的衝突是它的事)。
@@ -21,7 +21,7 @@
 #   0 收好了(有 patch-verify / 重產就已 commit)
 #   2 用法 / 票的問題(找不到票、沒有 base_sha;票分支或它的 worktree 不在;反駁記不進票;
 #     verify-plan 的驗證者 result 解析不到)
-#   3 patch-verify 套不上分支(`git apply --check` 不過)
+#   3 patch-verify 套不上分支(`apply --check` 不過)
 #   5 這張票的改動(分支上的 commit + patch-verify)命中 `board/config.json` 的 `hard_block`
 #     (`paths` 的檔,或 tests/** verify/** 新增行命中 `patterns`;D-054 Q2:寫入範圍只剩這一道硬擋)
 #   6 EVIDENCE 裡有一行 `OBJECTION:` —— 已記進票的 `objections[]`
@@ -105,159 +105,79 @@ PY
 
 # ------------------------------------------------------------------ batch
 #
-# 批次修復(#108,D-H51 ②):land 一批 N 張、全套紅時,`auto-fix.sh --batch` 派的那一個
-# worker 在**整合分支**的副本上修紅榜;它的 patch 由這裡疊成整合分支頭上**恰一個** commit。
+# 批次修復(#108,D-H51 ②;#145 跟上 D-054 Q9):land 一批 N 張、全套紅時,`auto-fix.sh --batch`
+# 派的那一個 worker 在**整合分支的 worktree** 上修紅榜、自己 commit(與單票同一種交件,#144)。
+# 這一支不收 patch:量 `<base>..<整合分支>` 那幾個 commit、補 code-map 重產的 commit、收 EVIDENCE。
+# `<base>` = `--base`(auto-fix 給派工前的頭);沒給 = 整合分支 first-parent 上最近一個 merge(最後併進來的那張票)。
 # 與單票那一支不同的三件事:
-# 1. **不寫票**:不 `ticket.py set`、不記 patch_ref / branch / objection。任何一張票的
+# 1. **不寫票**:不 `ticket.py set`、不記 branch / objection。任何一張票的
 #    `state_version` 動一下,N 張的覆核同時過期;各票分支也不動(覆核綁的是它們的 sha)。
 #    紀錄全在 `reports/batch/<stamp>/`。
-# 2. 寫入範圍硬擋只剩 `hard_block`(D-054 Q2、Q3)。在 `git apply` **之前**看檔頭量,
-#    擋下來的那一手整合分支的工作樹一個位元都沒動。
+# 2. 寫入範圍硬擋只剩 `hard_block`(D-054 Q2、Q3),量 `<base>..<整合分支>` 的 diff。
 # 3. **放寬測試**硬擋:測試檔(`batch_fix.test_globs`)裡刪掉含 assert 的行、或加了含 skip /
 #    expectedFailure 的行 → rc 5。修一批紅最便宜的路就是把紅的案例弄啞,派工文的一句話擋不住它。
 #    案例真的錯走 `OBJECTION: test_defect <案例>`:那條案例的檔不擋,交開題者判。
-# stamp:`AC_BATCH_STAMP` > patch 就住在 `reports/batch/<stamp>/` > 現在時間。
-# 退出碼同單票那一張表;6 = 套好也 commit 了,但 EVIDENCE 有 `OBJECTION:`(記在 result,不記進票)。
-# 批次那一支收的仍是 worker 的 patch(單票改成分支 commit 是 #144;批次跟上是 #145):
-# 檔頭守衛與套完比對只剩它用。
-# 檔頭守衛。印 `T <路徑>`(套完該在)與 `D <路徑>`(套完該不在);不合格就寫 stderr 並非零。
-headers() {   # $1 = patch
-    python3 - "$1" <<'PY'
-import re, sys
-
-path = sys.argv[1]
-try:
-    with open(path, encoding="utf-8", errors="replace") as handle:
-        lines = handle.read().splitlines()
-except OSError as exc:
-    sys.stderr.write("apply: 讀不到 patch —— %s\n" % exc)
-    raise SystemExit(2)
-
-HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
-ALLOWED = ("base/", "work/", "a/", "b/")
-bad, out = [], []
-sections, current = [], None
-for line in lines:
-    if line.startswith("--- "):
-        current = {"old": line[4:].split("\t")[0].strip(), "new": "",
-                   "adds": 0, "newlines": None}
-        sections.append(current)
-    elif line.startswith("+++ ") and current is not None and not current["new"]:
-        current["new"] = line[4:].split("\t")[0].strip()
-    elif line.startswith("@@") and current is not None:
-        found = HUNK.match(line)
-        if found:
-            count = 1 if found.group(2) is None else int(found.group(2))
-            current["newlines"] = (current["newlines"] or 0) + count
-    elif current is not None and line.startswith("+"):
-        current["adds"] += 1
-
-if not sections:
-    sys.stderr.write("apply: 這份 patch 裡一個檔頭都沒有 —— 空的 patch 不是綠\n")
-    raise SystemExit(3)
-
-for index, row in enumerate(sections):
-    for side, name in (("---", row["old"]), ("+++", row["new"])):
-        if not name:
-            bad.append("第 %d 段少了 %s 檔頭" % (index + 1, side))
-            continue
-        if name == "/dev/null":
-            continue
-        if name.startswith("/") or re.match(r"^[A-Za-z]:[\\/]", name):
-            bad.append("%s %s —— **絕對路徑**;只准 base/… / work/… 的相對形式或 /dev/null"
-                       % (side, name))
-            continue
-        if ".." in name.split("/"):
-            bad.append("%s %s —— 檔頭裡有 `..`,它會把檔案寫到副本外面" % (side, name))
-            continue
-        if not name.startswith(ALLOWED):
-            bad.append("%s %s —— 檔頭要 base/… 或 work/… 的形狀(diff -ruN base work)"
-                       % (side, name))
-    # `diff -ruN` 的刪檔:新側零行、一個 `+` 都沒有,而 `+++` 側還指著真的路徑。
-    # `git apply` 對它的處置是**把檔案清空**,不是刪掉 —— 而清空的檔在 diffstat 上
-    # 看起來像「改過」(`docs/WORKFLOW.md` §patch 管線第 3 點)。
-    if row["newlines"] == 0 and row["adds"] == 0 and row["new"] != "/dev/null":
-        bad.append("%s 是刪檔,但 `+++` 側不是 /dev/null —— git apply 只會把它清空。"
-                   "把那一行改成 `+++ /dev/null`" % row["new"])
-
-if bad:
-    for line in bad:
-        sys.stderr.write("apply:   %s\n" % line)
-    raise SystemExit(3)
-
-for row in sections:
-    if row["new"] == "/dev/null":
-        out.append("D %s" % row["old"].split("/", 1)[1])
-    else:
-        out.append("T %s" % row["new"].split("/", 1)[1])
-sys.stdout.write("\n".join(out) + "\n")
-PY
-}
-
-# 套完逐一比對:該在的在、該刪的不在。`$WT` 由呼叫端設好。
-verify_targets() {   # $1 = headers 印出來的清單
-    echo "$1" | while read -r mark path; do
-        [ -n "${path:-}" ] || continue
-        case "$mark" in
-            T) [ -f "$WT/$path" ] || echo "該在卻不在:$path" ;;
-            D) [ ! -e "$WT/$path" ] || echo "該刪卻還在:$path" ;;
-        esac
-    done
-}
-
+#    命中兩道硬擋之一:這一支不再加 commit,worker 的 commit 留在整合分支上(land 停下、不 merge)。
+# stamp:`AC_BATCH_STAMP` > EVIDENCE 就住在 `reports/batch/<stamp>/` > 現在時間。
+# 退出碼:0 收好了;2 用法 / 前提(票、分支、base、工作樹髒);4 `<base>..` 沒有 commit;5 硬擋;
+# 6 收好了,但 EVIDENCE 有 `OBJECTION:`(記在 result,不記進票)。
 cmd_batch() {
-    [ $# -ge 3 ] || { echo "apply: --batch <整合分支> <票號…> <patch> [--evidence <檔>]" >&2; exit 2; }
+    [ $# -ge 2 ] || { echo "apply: --batch <整合分支> <票號…> [--base <sha>] [--evidence <檔>]" >&2; exit 2; }
     B_BR=$1
     shift
-    B_IDS=""; B_PATCH=""; B_EVIDENCE=""
+    B_IDS=""; B_EVIDENCE=""; B_BASE=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --evidence)
+            --evidence|--base)
+                b_flag=$1
                 shift
-                [ $# -ge 1 ] || { echo "apply: --evidence 後面要路徑" >&2; exit 2; }
-                B_EVIDENCE=$1 ;;
+                [ $# -ge 1 ] || { echo "apply: $b_flag 後面要值" >&2; exit 2; }
+                if [ "$b_flag" = --base ]; then B_BASE=$1; else B_EVIDENCE=$1; fi ;;
             -*) echo "apply: --batch 不認得 $1" >&2; exit 2 ;;
-            *)  [ -z "$B_PATCH" ] || B_IDS="$B_IDS $B_PATCH"
-                B_PATCH=$1 ;;
+            *)  B_IDS="$B_IDS $1" ;;
         esac
         shift
     done
     B_IDS=${B_IDS# }
-    [ -n "$B_IDS" ] || { echo "apply: --batch 至少要一張票號,最後一個參數是 patch" >&2; exit 2; }
+    [ -n "$B_IDS" ] || { echo "apply: --batch 至少要一張票號" >&2; exit 2; }
     for b_id in $B_IDS; do
         [ -f "$TDIR/$b_id.json" ] || { echo "apply: 找不到票 #$b_id($TDIR/$b_id.json)" >&2; exit 2; }
     done
-    [ -f "$B_PATCH" ] || { echo "apply: 找不到 patch $B_PATCH" >&2; exit 2; }
-    B_PATCH=$(cd "$(dirname "$B_PATCH")" && pwd)/$(basename "$B_PATCH")
-    [ -n "$B_EVIDENCE" ] || B_EVIDENCE=$(dirname "$B_PATCH")/EVIDENCE.md
     git -C "$ROOT" rev-parse -q --verify "$B_BR^{commit}" >/dev/null \
         || { echo "apply: 整合分支 $B_BR 不存在" >&2; exit 2; }
+    [ -n "$B_BASE" ] || B_BASE=$(git -C "$ROOT" rev-list --first-parent --merges -n 1 "$B_BR")
+    [ -n "$B_BASE" ] && git -C "$ROOT" merge-base --is-ancestor "$B_BASE" "$B_BR" 2>/dev/null \
+        || { echo "apply: base ${B_BASE:-(空)} 不在整合分支 $B_BR 的歷史上 —— 給 --base <派工前的頭>" >&2; exit 2; }
+    B_BASE=$(git -C "$ROOT" rev-parse "$B_BASE")
     B_TAGS=$(for b_id in $B_IDS; do printf '#%s ' "$b_id"; done)
     B_TAGS=${B_TAGS% }
     B_ROOT=$ROOT/$(cfg reports_dir reports)/batch
-    B_STAMP=${AC_BATCH_STAMP:-$(python3 -c 'import os,sys; d=os.path.realpath(os.path.dirname(sys.argv[1])); print(os.path.basename(d) if os.path.dirname(d)==os.path.realpath(sys.argv[2]) else "")' "$B_PATCH" "$B_ROOT")}
+    if [ -n "$B_EVIDENCE" ]; then
+        B_EVIDENCE=$(cd "$(dirname "$B_EVIDENCE")" 2>/dev/null && pwd)/$(basename "$B_EVIDENCE")
+        B_STAMP=${AC_BATCH_STAMP:-$(python3 -c 'import os,sys; d=os.path.realpath(os.path.dirname(sys.argv[1])); print(os.path.basename(d) if os.path.dirname(d)==os.path.realpath(sys.argv[2]) else "")' "$B_EVIDENCE" "$B_ROOT")}
+    else
+        B_STAMP=${AC_BATCH_STAMP:-}
+    fi
     [ -n "$B_STAMP" ] || B_STAMP=$(date +%Y%m%d-%H%M%S)-$$
     B_DIR=$B_ROOT/$B_STAMP
     B_ROUND=${AC_ROUND:-1}
     mkdir -p "$B_DIR"
-    B_SHA=$(sha256_of "$B_PATCH")
-    echo "apply: 批次 $B_TAGS -> $B_BR  patch $(basename "$B_PATCH")  sha256 ${B_SHA%"${B_SHA#??????????}"}…  紀錄 $B_DIR"
+    [ -n "$B_EVIDENCE" ] || B_EVIDENCE=$B_DIR/EVIDENCE-round$B_ROUND.md
+    B_NEW=$(git -C "$ROOT" rev-list --count "$B_BASE..$B_BR")
+    echo "apply: 批次 $B_TAGS -> $B_BR  base $(echo "$B_BASE" | cut -c1-12)  $B_NEW 個 commit  紀錄 $B_DIR"
+    if [ "$B_NEW" -eq 0 ]; then
+        echo "apply: 整合分支 $B_BR 相對 base 沒有新 commit —— worker 的交件是它在整合分支上的 commit" >&2
+        exit 4
+    fi
 
-    B_TARGETS=$(headers "$B_PATCH") || { echo "apply: patch 檔頭不合格(見上面逐條)" >&2; exit 3; }
-
-    # 兩道硬擋都只看 patch 本身:印 `B <檔>\t<哪一格>\t<glob 或 regex>`(hard_block)、
+    # 兩道硬擋都只看 `<base>..<整合分支>` 的 diff:印 `B <檔>\t<哪一格>\t<glob 或 regex>`(hard_block)、
     # `R <檔>:<行>\t<那一行>`(放寬測試)、`X <檔>\t<案例>`(反駁豁免)。
-    B_OUT=$(python3 - "$AC" "$ROOT" "$TDIR" "$B_PATCH" "$B_EVIDENCE" $B_IDS <<'PY'
-import json, os, re, sys
-ac, root, tdir, patch, evidence = sys.argv[1:6]
-ids = sys.argv[6:]
+    B_OUT=$(python3 - "$AC" "$ROOT" "$B_EVIDENCE" "$B_BASE" "$B_BR" <<'PY'
+import json, os, re, subprocess, sys
+ac, root, evidence, base, branch = sys.argv[1:6]
 sys.path.insert(0, ac)
 import ticket as ticket_mod
 
-rows = {}
-for ident in ids:
-    with open(os.path.join(tdir, "%s.json" % ident), encoding="utf-8") as handle:
-        rows[ident] = json.load(handle)
 try:
     with open(os.path.join(root, "board", "config.json"), encoding="utf-8") as handle:
         conf = json.load(handle)
@@ -294,8 +214,8 @@ except OSError:
     pass
 
 HUNK = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
-with open(patch, encoding="utf-8", errors="replace") as handle:
-    lines = handle.read().splitlines()
+lines = subprocess.run(["git", "-C", root, "diff", "--no-renames", base, branch],
+                       capture_output=True, check=True).stdout.decode("utf-8", "replace").splitlines()
 sections, current = [], None
 for line in lines:
     if line.startswith("--- "):
@@ -351,7 +271,7 @@ for row in sections:
     for number, text in hits:
         print("R %s:%d\t%s" % (name, number, text.strip()))
 PY
-) || { echo "apply: 批次的寫入範圍 / 放寬測試量不出來(票讀不動?)" >&2; exit 2; }
+) || { echo "apply: 批次的寫入範圍 / 放寬測試量不出來" >&2; exit 2; }
     B_BLOCKED=$(echo "$B_OUT" | sed -n 's/^B //p')
     B_RELAX=$(echo "$B_OUT" | sed -n 's/^R //p')
     echo "$B_OUT" | sed -n 's/^X //p' | awk -F '\t' '{ printf "apply: %s 的測試改動不擋 —— EVIDENCE 有 OBJECTION: test_defect %s(交開題者判)\n", $1, $2 }'
@@ -360,12 +280,12 @@ PY
         echo "$B_BLOCKED" | awk -F '\t' '{ printf "apply:   %s —— 命中%s(`%s`)\n", $1, $2, $3 }' >&2
     fi
     if [ -n "$B_RELAX" ]; then
-        echo "apply: patch 在測試檔裡刪了斷言或加了 skip —— 修紅不准把案例弄啞:" >&2
+        echo "apply: 整合分支的 commit 在測試檔裡刪了斷言或加了 skip —— 修紅不准把案例弄啞:" >&2
         echo "$B_RELAX" | awk -F '\t' '{ printf "apply:   %s 放寬測試 —— %s\n", $1, $2 }' >&2
         echo "apply:   案例本身錯就在 EVIDENCE 寫 OBJECTION: test_defect <案例>,交開題者判" >&2
     fi
     if [ -n "$B_BLOCKED" ] || [ -n "$B_RELAX" ]; then
-        echo "apply: 批次 patch 被硬擋,$B_BR 沒動(沒有套、沒有 commit)" >&2
+        echo "apply: 批次的 commit 被硬擋 —— 這一手沒有再加 commit,$B_BR 不該落地" >&2
         exit 5
     fi
 
@@ -376,54 +296,30 @@ PY
         WT=$WTBASE/batch-$(echo "$B_BR" | tr '/' '-')
         mkdir -p "$WTBASE"
         git -C "$ROOT" worktree add -q "$WT" "$B_BR" || { echo "apply: worktree add $B_BR 失敗" >&2; exit 2; }
-        echo "apply: 開了整合分支 $B_BR 的副本 $WT"
-    else
-        echo "apply: 沿用整合分支的副本 $WT"
+        echo "apply: 開了整合分支 $B_BR 的 worktree $WT"
     fi
-    B_RESIDUE=$(git -C "$WT" ls-files --others --exclude-standard -- 'gate.log*')
     B_DIRTY=$(git -C "$WT" status --porcelain --untracked-files=all | grep -v '^?? gate\.log')
     if [ -n "$B_DIRTY" ]; then
         echo "$B_DIRTY" | sed 's/^/apply:   /' >&2
-        echo "apply: 整合分支的工作樹 $WT 有沒 commit 的改動 —— 疊上去會把它們一起 commit,停" >&2
+        echo "apply: 整合分支的工作樹 $WT 有沒 commit 的改動 —— 重產會把它們一起 commit,停" >&2
         exit 2
     fi
-    if ! git -C "$WT" apply -p1 --check "$B_PATCH" 2>/tmp/ac-apply-$$.err; then
-        sed 's/^/apply:   /' /tmp/ac-apply-$$.err >&2
-        rm -f /tmp/ac-apply-$$.err
-        echo "apply: git apply --check 不過 —— 這份 patch 不是對 $B_BR 的頭做的" >&2
-        exit 3
-    fi
-    rm -f /tmp/ac-apply-$$.err
-    git -C "$WT" apply -p1 "$B_PATCH" || { echo "apply: git apply 失敗(--check 過了卻套不進去)" >&2; exit 3; }
-    B_BAD=$(verify_targets "$B_TARGETS")
-    [ -z "$B_BAD" ] || { echo "$B_BAD" | sed 's/^/apply:   /' >&2; echo "apply: 套完的檔案與 patch 說的對不上" >&2; exit 4; }
-    git -C "$WT" apply -p1 --reverse --check "$B_PATCH" 2>/dev/null \
-        || { echo "apply: 反著套回不去 —— 工作樹上的改動不等於這份 patch" >&2; exit 4; }
-    # code-map 索引重產(#129):與單票那一支第 6 步同一份 `code_map_regen`;產出物有變就併進
-    # 這一個 batch fix commit。hard_block 在 `git apply` 之前已經對 patch 量完,產出物不再量。
-    B_REGEN=""
+    # code-map 索引重產(#129):與單票那一支同一份 `code_map_regen`;產出物有變就補一個 commit。
     code_map_regen "$WT"
     case $? in
-        0)  B_REGEN="regen: repo-map build (code-map/index.json, code-map/INDEX.md)"
-            echo "apply: 批次 code-map 索引重產了,併進同一個 batch fix commit" ;;
-        2)  echo "apply: 批次 code-map 索引沒重產(repo-map build 非零,上面 repo-map: 那幾行)—— 不擋套用(落地合併後 land 再重產一次)" >&2 ;;
-    esac
-    git -C "$WT" add -A || { echo "apply: git add 失敗" >&2; exit 2; }
-    for name in $B_RESIDUE; do
-        git -C "$WT" reset -q -- "$name" || { echo "apply: git reset $name 失敗" >&2; exit 2; }
-    done
-    if git -C "$WT" diff --cached --quiet; then
-        echo "apply: 套完之後工作樹沒有任何改動 —— 這份 patch 等於什麼都沒做" >&2
-        exit 4
-    fi
-    git -C "$WT" commit -q -m "batch fix round $B_ROUND $B_TAGS ($B_BR)
+        0)  git -C "$WT" add -- code-map/index.json code-map/INDEX.md || { echo "apply: git add code-map 失敗" >&2; exit 2; }
+            if ! git -C "$WT" diff --cached --quiet; then
+                git -C "$WT" commit -q -m "batch code-map 索引重產 round $B_ROUND $B_TAGS ($B_BR)
 
 batch: $B_STAMP
 tickets: $B_TAGS
-patch: $(basename "$B_PATCH") sha256=$B_SHA
-round: $B_ROUND${B_REGEN:+
-$B_REGEN}" || { echo "apply: git commit 失敗" >&2; exit 2; }
-    echo "apply: 批次 $B_TAGS -> $B_BR $(git -C "$WT" rev-parse --short HEAD) 已 commit(各票分支與票檔都沒動)"
+round: $B_ROUND
+regen: repo-map build (code-map/index.json, code-map/INDEX.md)" || { echo "apply: git commit 失敗(code-map 重產)" >&2; exit 2; }
+                echo "apply: 批次 code-map 索引重產了,補一個 commit"
+            fi ;;
+        2)  echo "apply: 批次 code-map 索引沒重產(repo-map build 非零,上面 repo-map: 那幾行)—— 不擋收件(落地合併後 land 再重產一次)" >&2 ;;
+    esac
+    echo "apply: 批次 $B_TAGS -> $B_BR $(git -C "$WT" rev-parse --short HEAD)(各票分支與票檔都沒動)"
     if [ -f "$B_EVIDENCE" ]; then
         python3 "$AC/memory.py" harvest "$B_EVIDENCE" \
             || echo "apply: EVIDENCE 記憶收割失敗($B_EVIDENCE)—— 不擋 apply" >&2
@@ -462,7 +358,7 @@ PY
         echo "apply:   批次不寫票:反駁沒有記進任何一張票的 objections[],由開題者 / 主線照 EVIDENCE 判" >&2
         exit 6
     fi
-    echo "apply: 下一步 —— sh scripts/review.sh --batch $B_BR $B_IDS --run-id $B_STAMP"
+    echo "apply: 下一步 —— sh scripts/review.sh --batch $B_BR $B_IDS --run-id $B_STAMP --base $B_BASE"
     exit 0
 }
 
@@ -621,7 +517,7 @@ cmd_verify_plan() {
 usage() {   # $1 = 出去的檔案描述子(1 = 有人問 --help,2 = 用錯了)
     {
         echo "用法:sh scripts/apply.sh <票號> [<patch-verify>] [旗標…]"
-        echo "      sh scripts/apply.sh --batch <整合分支> <票號…> <patch> [--evidence <檔>]"
+        echo "      sh scripts/apply.sh --batch <整合分支> <票號…> [--base <sha>] [--evidence <檔>]"
         echo "      sh scripts/apply.sh verify-plan <票號> --evidence-verifier <檔>…"
         echo "                             只把驗證者的 verify 計畫與驗紅併進票:不建分支、不 commit"
         echo ""
