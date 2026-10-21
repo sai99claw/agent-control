@@ -15,9 +15,9 @@
   "model": "sonnet",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "77cf8b0",
+  "base_sha": "2e6da9ce8c00d439a1aaa3c93ccb4bcef6eb08a9",
   "state": "Ready",
-  "state_version": 2,
+  "state_version": 4,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -36,5 +36,6 @@
     "D-056",
     "D-028"
   ],
-  "feature": "cloud main line (D-059)"
+  "feature": "cloud main line (D-059)",
+  "branch": "t151"
 }
