@@ -413,3 +413,7 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - 反駁處置(主線裁,未經使用者;逐條也在各票 objections[]):#141 舊案例引用 guard_main → 寫入範圍只是建議,worker 照改;#135 驗收 grep `verify_lint` 撞 #138 範圍 → 豁免,test_defect 由獨立驗證者修 a3;#136 verify_strings 與驗收互斥 → 不擋落地,#138 落地後關票;#143 收件匣 acked.jsonl 一次性搬遷(搬到 reports/inbox/acked/)、test_board.py:444 先斷言非空、驗收 1 豁免 migrate_acked_jsonl(T 同步並跑過一次後移除,列進 #147 的 T 端清單);#144 驗收 grep 改字邊界;#144 保留 apply.sh headers()/verify_targets 給 #145 刪。
 - 雲端 worker 實測:routine API(只在主線 session 工具裡)換派工文 → run(先 update 再 run,同時送會讀到舊的)→ 背景每 20 分鐘查 `origin/t<n>-cloud:EVIDENCE-t<n>.md` → 收件(`t<n>` = `origin/t<n>-cloud~1`)→ gate / review / land。雲端容器會沿用舊 clone,派工文第一步一定要 `git fetch origin`(#146 因此從舊 main 開、合併衝突 6 檔)。雲端 auto mode 會擋「刪檢查」類編輯,使用者已對 routine 放行。
 - 原話:「主線要交接給雲端 session。交接完你就停下來，不再派工、不再落地，也不再動票。」—— 本機主線 2026-10-21 停工,票況與未完事項寫在 docs/HANDOFF.md「交接給雲端主線」。
+
+## D-060(2026-10-21)雲端主線可以從雲端 session 推 main
+- 原話:「意讓 land.sh 從這個雲端 session 推 main」—— 雲端主線照本機流程用 `scripts/land.sh`(票與 docs 通道)落地並 push `origin main`;不改成開 PR。前提:GitHub App 對 agent-control 要有 Contents 寫入(2026-10-21 補裝後 push 才通,之前 git push 與 API 都 403 `Resource not accessible by integration`,雲端 worker 的 `t146-r2-cloud` 也因此第一次沒推上)。
+- 雲端容器以 root(uid 0)跑:靠 `chmod` 造寫入失敗的案例在 root 下不紅(#146 分支閘門唯一一條紅:test_apply `test_an_objection_that_cannot_be_recorded_is_not_called_already_there`,乾淨 main 一樣紅)。主線派開題者開票改成 root 也擋得住的造錯方式,不准 skip;該票落地是雲端第一次 land 的前置。(讀 log 得知,修法未實測)
