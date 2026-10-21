@@ -1156,6 +1156,47 @@ def transcript_cost():
     return module
 
 
+
+def cost_hook_event(case, prompt, agent):
+    """#152 A6 (verifier case): feed `prompt` as the FIRST user message of a subagent transcript
+    to the real `scripts/agent-cost-hook.py` (SubagentStop), with AC_ROOT on a throwaway control
+    root, and return the single `agent.cost` event it wrote. The meta description names
+    another ticket and role on purpose (#99 reviewer), so only the prompt can give ticket 1."""
+    import shutil
+    import tempfile
+    home = tempfile.mkdtemp()
+    case.addCleanup(shutil.rmtree, home, True)
+    root = os.path.join(home, "ctl")
+    os.makedirs(os.path.join(root, "board"))
+    with open(os.path.join(root, "board", "config.json"), "w") as handle:
+        handle.write("{}")
+    transcript = os.path.join(home, "agent-%s.jsonl" % agent)
+    rows = [{"type": "user", "message": {"role": "user", "content": prompt},
+             "timestamp": "2026-10-21T09:00:00.000Z"},
+            {"type": "assistant", "message": {
+                "id": "msg_a6", "type": "message", "role": "assistant",
+                "model": "claude-opus-test", "stop_reason": "end_turn",
+                "usage": {"input_tokens": 5, "cache_creation_input_tokens": 6,
+                          "cache_read_input_tokens": 7, "output_tokens": 8}},
+             "timestamp": "2026-10-21T09:00:09.000Z"}]
+    with open(transcript, "w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    with open(os.path.join(home, "agent-%s.meta.json" % agent), "w") as handle:
+        json.dump({"agentType": "general-purpose", "description": "#99 reviewer"}, handle)
+    stdin = json.dumps({"hook_event_name": "SubagentStop", "session_id": "s-a6",
+                        "agent_id": agent, "cwd": root, "agent_transcript_path": transcript})
+    done = subprocess.run(["python3", os.path.join(SCRIPTS, "agent-cost-hook.py")],
+                          input=stdin, cwd=root, env=case.env(AC_ROOT=root),
+                          capture_output=True, text=True, timeout=60)
+    case.assertEqual(done.returncode, 0, done.stderr)
+    case.assertEqual(done.stdout, "")
+    with open(os.path.join(root, "board", "events.jsonl"), encoding="utf-8") as handle:
+        events = [json.loads(line) for line in handle if line.strip()]
+    case.assertEqual([e["kind"] for e in events], ["agent.cost"], done.stderr)
+    case.assertEqual(events[0]["tokens_in"], 5, "the event is about this transcript")
+    return events[0]
+
 class ThePrepareWorkerStopsBeforeTheProcess(AutoFixBase):
     """#149 / D-061:`auto-fix.sh <n> --prepare worker` = Ready 票第 1 輪的那一段(#57 換 base、
     票分支 worktree、輪次目錄、`first_round_packet`、Ready → Running),停在起 worker 之前;
@@ -1237,8 +1278,25 @@ class ThePrepareWorkerStopsBeforeTheProcess(AutoFixBase):
         packets = self.result_files("dispatch-round1.md")
         self.assertEqual(len(packets), 1, packets)
         run_id = os.path.basename(os.path.dirname(packets[0]))
-        self.assertEqual(transcript_cost().dispatch_mark(done.stdout),
+        parser = transcript_cost()
+        self.assertTrue(hasattr(parser, "dispatch_mark"), "transcript-cost.py has no dispatch_mark")
+        self.assertEqual(parser.dispatch_mark(done.stdout),
                          {"ticket": "1", "role": "worker", "round": 1, "run_id": run_id})
+
+    def test_a6_the_real_worker_pointer_marks_the_cost_event(self):
+        """#152 A6 / T6 (verifier case): the whole `--prepare worker` stdout, as the subagent's
+        first prompt, makes the real cost hook write ticket 1 / worker / round 1 / run_id = the
+        run dir auto-fix created (read from the filesystem, not from any parser)."""
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready()
+        done = self.prepare("worker")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        packets = self.result_files("dispatch-round1.md")
+        self.assertEqual(len(packets), 1, packets)
+        run_dir = os.path.basename(os.path.dirname(packets[0]))
+        row = cost_hook_event(self, done.stdout, "aw6")
+        self.assertEqual((row["ticket"], row["role"], row["round"], row["run_id"],
+                          row["agent_id"]), ("1", "worker", 1, run_dir, "aw6"))
 
     def test_a_ticket_that_is_not_ready_is_refused_and_untouched(self):
         self.set_worker(WORKER_NEVER)
@@ -1365,8 +1423,25 @@ class ThePrepareVerifierCopy(AutoFixBase):
         packets = self.result_files("dispatch-verifier-round1.md")
         self.assertEqual(len(packets), 1, packets)
         run_id = os.path.basename(os.path.dirname(packets[0]))
-        self.assertEqual(transcript_cost().dispatch_mark(done.stdout),
+        parser = transcript_cost()
+        self.assertTrue(hasattr(parser, "dispatch_mark"), "transcript-cost.py has no dispatch_mark")
+        self.assertEqual(parser.dispatch_mark(done.stdout),
                          {"ticket": "1", "role": "verifier", "round": 1, "run_id": run_id})
+
+    def test_a6_the_real_verifier_pointer_marks_the_cost_event(self):
+        """#152 A6 / T6 (verifier case): `--prepare verifier` stdout -> the real cost hook
+        writes ticket 1 / verifier / round 1 / run_id = the dir holding
+        dispatch-verifier-round1.md (read from the filesystem)."""
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready(needs_verifier=True, interface_fixed=True)
+        done = self.prepare()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        packets = self.result_files("dispatch-verifier-round1.md")
+        self.assertEqual(len(packets), 1, packets)
+        run_dir = os.path.basename(os.path.dirname(packets[0]))
+        row = cost_hook_event(self, done.stdout, "av6")
+        self.assertEqual((row["ticket"], row["role"], row["round"], row["run_id"],
+                          row["agent_id"]), ("1", "verifier", 1, run_dir, "av6"))
 
 
 class TheFirstRoundStartsFromReady(AutoFixBase):

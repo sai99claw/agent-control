@@ -1332,6 +1332,186 @@ class AgentCostFoldsOnClose(Sandbox):
         self.assertEqual(self.load_ticket("7")["cost"], [self.HEADLESS])
 
 
+
+class PrepareSubagentCostOnClose(Sandbox):
+    """#152 A3-A5 (verifier cases): at close (`close`, `close --landed`, `set <n> state Done`)
+    the LAST `agent.cost` event per (session_id, agent_id) among events with ticket == n and a
+    non-null run_id becomes one cost[] row (exactly the 15 keys, outcome null, by
+    'agent-cost-hook', note naming the agent_id) and cost_total counts it.
+
+    Fixture (hand-built, values chosen so every field is distinct):
+      headless worker row (already on the ticket): tokens_in 100, out 10, cw 1, cr 2, wall 50
+      events, in file order:
+        e1 (s, a1, R1, worker, round 1): in 10, out None, cw 100, cr 1000, wall 60
+        e2 (s, a2, R2, verifier, round 1): in 4, out 3, cw 7, cr 70, wall 20
+        e3 (s, a1, R1, worker, round 1): in 25, out None, cw 200, cr 3000, wall 300  <- last a1
+    Hand totals: worker runs 2, in 100+25=125, out 10, cw 1+200=201, cr 2+3000=3002,
+    wall 50+300=350, outcomes {handed-in: 1, null: 1}; verifier runs 1, in 4, out 3, cw 7,
+    cr 70, wall 20, outcomes {null: 1}; runs 3, wall 370, worker_rounds 1.
+    Mutations: M1 fold every event -> a1 tokens 35 / 4 rows; M2 drop the run_id filter -> T4
+    folds the guessed event.
+    """
+
+    COST_KEYS = {"role", "round", "model", "tokens_in", "tokens_out", "cache_write",
+                 "cache_read", "wall_seconds", "outcome", "run_id", "session_id", "by",
+                 "note", "effort", "at"}
+    HEADLESS = {"role": "worker", "round": 1, "model": "opus", "tokens_in": 100,
+                "tokens_out": 10, "cache_write": 1, "cache_read": 2, "wall_seconds": 50,
+                "outcome": "handed-in", "run_id": "H1", "session_id": "hs", "by": "auto-fix.sh",
+                "note": None, "effort": None, "at": "2026-10-21T08:00:00+00:00"}
+
+    @staticmethod
+    def agent_event(ts, session, agent, run_id, role, ticket, tokens_in, tokens_out, cw, cr,
+                    wall, model="claude-sonnet-v152", rnd=1, note=None):
+        return {"ts": ts, "kind": "agent.cost", "pid": 4242, "cwd": "/x",
+                "role": role, "round": rnd, "model": model, "tokens_in": tokens_in,
+                "tokens_out": tokens_out, "cache_write": cw, "cache_read": cr,
+                "wall_seconds": wall, "outcome": None, "run_id": run_id, "session_id": session,
+                "by": "agent-cost-hook", "note": note, "effort": None, "ticket": ticket,
+                "agent_id": agent}
+
+    def t3_events(self):
+        ev = self.agent_event
+        return [ev("2026-10-21T09:00:00+00:00", "s", "a1", "R1", "worker", "7",
+                   10, None, 100, 1000, 60, note="tokens_out: stream"),
+                ev("2026-10-21T09:10:00+00:00", "s", "a2", "R2", "verifier", "7",
+                   4, 3, 7, 70, 20),
+                ev("2026-10-21T09:20:00+00:00", "s", "a1", "R1", "worker", "7",
+                   25, None, 200, 3000, 300, note="tokens_out: stream")]
+
+    def t4_events(self):
+        ev = self.agent_event
+        return [ev("2026-10-21T09:30:00+00:00", "s", "a3", None, "worker", "7",
+                   1000, None, 1, 1, 1, rnd=None),
+                ev("2026-10-21T09:31:00+00:00", "s", "a4", "R3", "worker", "8",
+                   2000, None, 1, 1, 1),
+                ev("2026-10-21T09:32:00+00:00", "s", None, None, "main", "7",
+                   3000, None, 1, 1, 1, rnd=None),
+                # role=main even with a run_id and an agent_id: A4 says main is never folded
+                ev("2026-10-21T09:33:00+00:00", "s", "m1", "R5", "main", "7",
+                   5000, None, 1, 1, 1)]
+
+    def build(self, events, landed=True, cost=None):
+        self.write("src/cost152.py", "VALUE = 152\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "put src/cost152.py on main")
+        self.main_sha = self.git("rev-parse", "main").strip()
+        fields = {"state": "InReview", "test_evidence": [{"cmd": "gate --branch", "rc": 0}],
+                  "cost": [dict(self.HEADLESS)] if cost is None else cost}
+        if landed:
+            fields["landed_sha"] = self.main_sha
+        self.make_ticket(7, **fields)
+        path = os.path.join(self.repo, "board", "events.jsonl")
+        with open(path, "a", encoding="utf-8") as fh:
+            for row in events:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        self.version_before = self.load_ticket("7")["state_version"]
+
+    def close_by(self, way):
+        if way == "close":
+            return self.ticket("close", "7")
+        if way == "close --landed":
+            return self.ticket("close", "7", "--landed", self.main_sha)
+        return self.ticket("set", "7", "state", "Done")
+
+    def check_t3(self, way, bump=1):
+        """`bump`: expected state_version step. `close --landed` stamps landed_sha in its own
+        save first (base behaviour, #15), so that path passes None and skips the check."""
+        row = self.load_ticket("7")
+        self.assertEqual(row["state"], "Done", way)
+        self.assertEqual(len(row["cost"]), 3, (way, row["cost"]))     # 1 + exactly 2
+        for cost in row["cost"]:
+            self.assertEqual(set(cost), self.COST_KEYS, (way, cost))
+        self.assertEqual(row["cost"][0], self.HEADLESS, "the headless row is untouched")
+        added = row["cost"][1:]
+        by_run = {cost["run_id"]: cost for cost in added}
+        self.assertEqual(set(by_run), {"R1", "R2"}, way)
+        a1, a2 = by_run["R1"], by_run["R2"]
+        self.assertEqual((a1["role"], a1["round"], a1["session_id"], a1["model"],
+                          a1["tokens_in"], a1["tokens_out"], a1["cache_write"],
+                          a1["cache_read"], a1["wall_seconds"]),
+                         ("worker", 1, "s", "claude-sonnet-v152", 25, None, 200, 3000, 300),
+                         "a1 = the LAST event of (s, a1), not the sum 35 / the first 10")
+        self.assertEqual((a2["role"], a2["round"], a2["tokens_in"], a2["tokens_out"],
+                          a2["cache_write"], a2["cache_read"], a2["wall_seconds"]),
+                         ("verifier", 1, 4, 3, 7, 70, 20))
+        for cost, agent in ((a1, "a1"), (a2, "a2")):
+            self.assertIsNone(cost["outcome"], way)
+            self.assertEqual(cost["by"], "agent-cost-hook", way)
+            self.assertIn(agent, cost["note"] or "", way)
+        total = row["cost_total"]
+        self.assertEqual(total["runs"], 3, way)
+        self.assertEqual(total["wall_seconds"], 370, way)            # 50 + 300 + 20
+        self.assertEqual(total["worker_rounds"], 1, way)
+        self.assertEqual(total["by_role"]["worker"],
+                         {"runs": 2, "wall_seconds": 350, "tokens_in": 125, "tokens_out": 10,
+                          "cache_write": 201, "cache_read": 3002, "unknown_token_runs": 0,
+                          "outcomes": {"handed-in": 1, "null": 1}}, way)
+        self.assertEqual(total["by_role"]["verifier"],
+                         {"runs": 1, "wall_seconds": 20, "tokens_in": 4, "tokens_out": 3,
+                          "cache_write": 7, "cache_read": 70, "unknown_token_runs": 0,
+                          "outcomes": {"null": 1}}, way)
+        if bump is not None:
+            self.assertEqual(row["state_version"], self.version_before + bump,
+                             "folding is part of the closing save, no extra bump")
+        return row
+
+    def test_a3_close_folds_the_last_event_per_agent(self):
+        self.build(self.t3_events())
+        done = self.close_by("close")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.check_t3("close")
+        closed = [e for e in self.events() if e["kind"] == "ticket.closed"]
+        self.assertEqual(len(closed), 1)
+        self.assertEqual(closed[0]["cost_total"], row["cost_total"], "same save as the event")
+
+    def test_a3_close_landed_folds_too(self):
+        self.build(self.t3_events(), landed=False)
+        done = self.close_by("close --landed")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.check_t3("close --landed", bump=None)
+
+    def test_a3_set_state_done_folds_too(self):
+        self.build(self.t3_events())
+        done = self.close_by("set Done")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.check_t3("set Done")
+
+    def test_a4_guessed_other_ticket_and_main_events_stay_out(self):
+        """T4: run_id null / ticket 8 / role main (with and without run_id) -> same as T3."""
+        self.build(self.t3_events() + self.t4_events())
+        done = self.close_by("close")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.check_t3("close + T4 noise")
+        self.assertNotIn("main", row["cost_total"]["by_role"])
+
+    def test_a4_set_state_done_ignores_the_same_noise(self):
+        self.build(self.t4_events())
+        done = self.close_by("set Done")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("7")
+        self.assertEqual(row["cost"], [self.HEADLESS])
+        self.assertEqual(row["cost_total"]["runs"], 1)
+        self.assertEqual(row["cost_total"]["by_role"]["worker"]["tokens_in"], 100)
+
+    def test_a5_a_row_already_there_for_the_pair_is_not_added_again(self):
+        """T5: cost[] already holds the (R1, a1) row (as a previous fold wrote it: by
+        agent-cost-hook, note 'agent_id=a1', per SCHEMA) -> still one row for that pair."""
+        seeded = {"role": "worker", "round": 1, "model": "claude-sonnet-v152",
+                  "tokens_in": 25, "tokens_out": None, "cache_write": 200, "cache_read": 3000,
+                  "wall_seconds": 300, "outcome": None, "run_id": "R1", "session_id": "s",
+                  "by": "agent-cost-hook", "note": "agent_id=a1", "effort": None,
+                  "at": "2026-10-21T09:20:00+00:00"}
+        self.build(self.t3_events(), cost=[dict(self.HEADLESS), dict(seeded)])
+        done = self.close_by("close")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("7")
+        pairs = [(c["run_id"], c["note"]) for c in row["cost"]]
+        self.assertEqual([c["run_id"] for c in row["cost"]].count("R1"), 1, pairs)
+        self.assertEqual(len(row["cost"]), 3, pairs)                  # headless + R1 + R2
+        self.assertEqual(row["cost"][1], seeded, "the existing row is kept as it was")
+        self.assertEqual(row["cost_total"]["by_role"]["worker"]["tokens_in"], 125)
+
 class ReadyWithoutNeedsVerifier(Sandbox):
     """D-054 Q10:`needs_verifier` 缺 = true,**不擋 Ready**(撤 #91 C1 那一關)。
     缺、字串、null、布林都轉得過去;要不要起驗證者是 auto-fix 那一手判的。"""
