@@ -115,14 +115,59 @@
   "attempt": 0,
   "base_sha": "8f533668a93fd7cadd712a69feaa039aa7708ff0",
   "state": "Running",
-  "state_version": 7,
+  "state_version": 12,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
+    "files": [
+      "verify/agent-output/test_ticket_20.py"
+    ],
     "tags": [],
-    "run": "",
-    "notes": ""
+    "run": "python3 -m unittest verify.agent-output.test_ticket_20.SchemaKeysLiveInOnlyTwoDocs",
+    "notes": "test_defect fix for the #147 objection: the #20 case SchemaKeysLiveInOnlyTwoDocs now allows only tickets/SCHEMA.md (plus tests/, verify/, tickets/*.json) to carry both patch_sha256 and red_first_line, per #147 acceptance 2 (SCHEMA.md is the only home of the result key table, DISPATCH-TEMPLATE 8.5 a pointer). Oracle source: ticket acceptance 2 text, not the implementation. Red on base 8f53366 because DISPATCH-TEMPLATE.md still carries the table there; static file scan, no sandbox, uid 0 safe. The module's tag agent-output is already registered.",
+    "baseline": {
+      "stage": "check",
+      "ok": false,
+      "why": "candidate 上還有 1 條紅(其中 import 失敗 0、缺符號 0、別處 0)",
+      "at": "2026-10-21T10:35:02+00:00",
+      "files": [
+        "verify/agent-output/test_ticket_20.py"
+      ],
+      "base_ref": "8f533668a93fd7cadd712a69feaa039aa7708ff0",
+      "base_sha": "8f533668a93fd7cadd712a69feaa039aa7708ff0",
+      "candidate": "../agent-control-wt/t147",
+      "candidate_sha": "e11d97bca2d33ebb570200b163a5fb4f0eda7f71",
+      "baseline": {
+        "red": [
+          "test_only_the_two_schema_docs_and_test_fixtures_carry_both_keys"
+        ],
+        "red_lines": [
+          "test_only_the_two_schema_docs_and_test_fixtures_carry_both_keys: AssertionError: Lists differ: ['docs/DISPATCH-TEMPLATE.md'] != []"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 10,
+        "skipped": 0,
+        "log": "../agent-control-wt/t147/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [
+          "test_only_the_two_schema_docs_and_test_fixtures_carry_both_keys"
+        ],
+        "red_lines": [
+          "test_only_the_two_schema_docs_and_test_fixtures_carry_both_keys: AssertionError: Lists differ: ['gate.log.verify-case.d/base/tests/test_a[427 chars].md'] != []"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 10,
+        "skipped": 0,
+        "log": "../agent-control-wt/t147/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "complexity": "simple",
   "needs_verifier": false,
@@ -149,8 +194,14 @@
       "body": "verify/agent-output/test_ticket_20.py::SchemaKeysLiveInOnlyTwoDocs test_only_the_two_schema_docs_and_test_fixtures_carry_both_keys still requires docs/DISPATCH-TEMPLATE.md to carry the result key names (ALLOWED_EXACT <= hits), but #147 acceptance 2 makes tickets/SCHEMA.md the only home and §8.5 a pointer; the case should require only SCHEMA.md.",
       "evidence": "../agent-control-wt/fix-t147/round1/EVIDENCE-round1.md",
       "owner": "verifier",
-      "disposition": "",
-      "follow_up": ""
+      "disposition": "fixed",
+      "follow_up": "Independent verifier confirmed red on t147 and fixed the case: ALLOWED_EXACT now {tickets/SCHEMA.md} (t147 e11d97b, patch-verify); base 8f53366 still red, t147 green."
     }
-  ]
+  ],
+  "gate": {
+    "rc": 1,
+    "sha": "e11d97bca2d33ebb570200b163a5fb4f0eda7f71",
+    "run_id": "20261021-101813-31515",
+    "at": "2026-10-21T10:35:03+00:00"
+  }
 }
