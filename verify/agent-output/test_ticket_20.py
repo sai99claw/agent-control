@@ -64,16 +64,26 @@ class SchemaKeysLiveInOnlyTwoDocs(unittest.TestCase):
     one-line pointer. So SCHEMA.md is the single exact-match spec file, and
     DISPATCH-TEMPLATE.md carrying both key names again is a copy like any other.
     The contract this case guards is unchanged: the key names do not spread.
+
+    Runtime output is not a copy (same reason `reports` / `wt` / `land` are skipped,
+    all gitignored): the gate writes `gate.log*` at the tree root, and its
+    `verify-case check` extracts the whole clean base under `gate.log.verify-case.d/base/`
+    inside the candidate (`scripts/gate.sh` CHECK_DIR=$LOG.verify-case.d). Walking into
+    it counted every spec file a second time (#147 r1 gate red).
     """
 
     SKIP_DIRS = {".git", "__pycache__", "reports", "wt", "land", ".land.lock"}
+    RUNTIME_PREFIX = "gate.log"
     ALLOWED_EXACT = {"tickets/SCHEMA.md"}
 
     def test_only_the_two_schema_docs_and_test_fixtures_carry_both_keys(self):
         hits = []
         for dirpath, dirnames, filenames in os.walk(ROOT):
-            dirnames[:] = [d for d in dirnames if d not in self.SKIP_DIRS]
+            dirnames[:] = [d for d in dirnames if d not in self.SKIP_DIRS
+                           and not d.startswith(self.RUNTIME_PREFIX)]
             for name in filenames:
+                if name.startswith(self.RUNTIME_PREFIX):
+                    continue
                 path = os.path.join(dirpath, name)
                 rel = os.path.relpath(path, ROOT).replace(os.sep, "/")
                 try:
