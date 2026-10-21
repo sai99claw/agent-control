@@ -548,8 +548,9 @@ class OnlyTheseGoToTheMainLine(TriageBase):
         """守 (c) 逾時 + 收掉替身 / 可信回歸:替身睡 60 秒、時限 2 秒,量牆鐘與 pid /
         既有逾時測試只量 worker / 不加縫:config 的 opener.timeout_seconds。
 
-        「收掉了」= pid 不在,**或是殭屍**(#151):被砍的替身過繼給 PID 1,雲端容器的
-        PID 1 不是會馬上收屍的 init,`kill 0` 對殭屍照樣成功。活著(不是 Z)才算沒砍。
+        「收掉了」= `ps` 查不到那個 pid,**或是殭屍**(stat 以 Z 起頭)(#151):被砍的替身
+        過繼給 PID 1,雲端容器的 PID 1 不是會馬上收屍的 init,探測訊號對殭屍照樣成功。
+        活著(不是 Z)才算沒砍。只用 `ps` 看,不送任何訊號(hard_block)。
 
         **變異**:`auto-fix.sh` 逾時那一手不呼叫 `kill_tree(proc)` → 替身是活的 S → 這一條紅。
         """
@@ -560,34 +561,18 @@ class OnlyTheseGoToTheMainLine(TriageBase):
         self.assertLess(time.time() - began, 50, "開題者沒有在時限被砍")
         self.assert_escalated(done, ["開題者逾時"], started=True)
         pid = self.calls("opener")[0]["pid"]
-        self.addCleanup(self.reap, pid)
-        self.assertTrue(self.killed(pid), "開題者替身 %d 逾時後還活著(不是殭屍)" % pid)
+        self.assertTrue(self.gone(pid), "開題者替身 %d 逾時後還活著(不是殭屍)" % pid)
 
     @staticmethod
-    def killed(pid):
-        """pid 不在,或在但是殭屍(`ps` 的 stat 以 Z 起頭)。兩眼之間被收掉也算。"""
-        try:
-            os.kill(pid, 0)
-        except OSError:
-            return True
-        stat = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
-                              capture_output=True, text=True).stdout.strip()
+    def gone(pid):
+        """`ps -o stat= -p <pid>`:查不到(沒輸出、rc 非零)= 已收;Z = 殭屍,也算已收;
+        其他 = 活著。`ps` 不在就丟例外(紅),不當成已收。"""
+        seen = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
+                              capture_output=True, text=True)
+        stat = seen.stdout.strip()
         if not stat:
-            try:
-                os.kill(pid, 0)
-            except OSError:
-                return True
+            return seen.returncode != 0
         return stat.startswith("Z")
-
-    @classmethod
-    def reap(cls, pid):
-        """這是測試自己起的替身;變異下它還活著,不留給下一條。已收掉的不再碰(pid 會被重用)。"""
-        if cls.killed(pid):
-            return
-        try:
-            os.kill(pid, 9)
-        except OSError:
-            pass
 
     def test_a5c_the_opener_hands_in_no_verdict(self):
         """守 (c) 第一行不是 TRIAGE: 起頭(第二行才寫的不算)/ 可信回歸:替身寫死那兩行 /
