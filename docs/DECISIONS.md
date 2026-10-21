@@ -438,3 +438,9 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - ① #153 原話(選項):「只准主線落地前進」—— 子 agent 跑的期間 main 只能因主線自己的落地前進。
 - ② #154 原話:「拿掉歸屬判斷那套複雜邏輯，但留兩個簡單比對，跟 #153 的 HEAD/push 比對放在一起：① 主 repo 工作樹 git status --porcelain 加髒檔雜湊，跑前跑後要一致；② hard_block.dirs 底下的檔跑前跑後要一致（tabby 的 prod 資料目錄靠這條）。主線在 worker 跑的期間自己落地造成的差異，用最簡單的方式處理就好，例如 worker 跑的期間主線不落地，或者有落地就只記錄不擋，不要再做逐 commit 歸屬。行數到不到 2,959 不重要。沒到的話，報告寫一句理由就好。這樣應該也能省掉大半行數，因為大頭是歸屬判斷。我沒有實測，把握中等，但方向是保住安全、拿掉複雜。」
 - 主線解讀(① 與 ② 並讀,未經使用者確認):不做逐 commit 歸屬(不走 land.pass 鏈);main HEAD 在子 agent / worker 跑的期間前進時,若同一段期間有主線的 land 事件 → 只記錄不擋;沒有 land 事件卻前進、或 origin 被 push → 拒收。四個比對(HEAD、push、主 repo 工作樹 porcelain + 髒檔雜湊、hard_block.dirs)放同一處,headless 與子 agent 兩條路共用;#127 的歸屬判斷(land_attribution 鏈走查)與 rc 8 的檔案快照守衛由這四個比對取代。
+
+## D-065(2026-10-21)#153 的三個細節;sync-to-project.sh 那一行留給使用者
+- ① 原話:「1 照建議。「只記錄不擋」的那一段，紀錄裡要列出不屬於落地的 commit，不擋，只要查得到。」—— D-064 主線解讀成立:main 前進而同期有主線落地 → 只記錄不擋;紀錄要列出這段期間不屬於任何 land.pass sha 的 commit(集合差,不走鏈),查得到即可。
+- ② 原話:「2 豁免 tickets/、docs/、memory/，但 hard_block 清單上的路徑（DECISIONS.md、VISION.md 等）不豁免，有變就拒收。」—— 主 repo 工作樹比對:tickets/、docs/、memory/ 底下的變動只記錄不擋;hard_block.paths 上的檔(含 docs/DECISIONS.md、docs/VISION.md)不豁免,有變就拒收。主線因此在子 agent / worker 跑的期間不能改 DECISIONS.md(主線推論,#153 落地後生效)。
+- ③ 原話:「3 照建議，記進 HANDOFF，我在 Mac 上改。」—— scripts/sync-to-project.sh 第 466 行「(不進票 cost[])」在 #152 落地後要加 --prepare 例外;hard_block 檔,使用者在 Mac 上改。
+- 主線裁(未經使用者,#153 開題者 Q3–Q5 照建議):#144 的「其他本機分支被動到」比對拿掉(不在四個比對裡);`git ls-remote` 失敗或逾時只印「push not compared」不擋;沒有 --prepare 快照的手派子 agent 不比對、印一行。
