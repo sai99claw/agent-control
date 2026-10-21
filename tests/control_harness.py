@@ -30,7 +30,6 @@ TESTS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(TESTS)
 SCRIPTS = os.environ.get("AC_TEST_SCRIPTS", os.path.join(ROOT, "scripts"))
 BOARD_DIR = os.environ.get("AC_TEST_BOARD", os.path.join(ROOT, "board"))
-CODE_MAP = os.path.join(ROOT, "code-map")
 TIMEOUT = 180
 
 SCRIPT_FILES = ("event.py", "ticket.py", "memory.py", "status.py", "land.sh",
@@ -286,8 +285,6 @@ class Sandbox(unittest.TestCase):
                         os.path.join(self.repo, "templates", name))
         shutil.copy(os.path.join(BOARD_DIR, "board.py"),
                     os.path.join(self.repo, "board", "board.py"))
-        shutil.copy(os.path.join(CODE_MAP, "check-stale.py"),
-                    os.path.join(self.repo, "code-map", "check-stale.py"))
 
         conf = dict(DEFAULT_CONFIG)
         if self.config_extra:
@@ -296,8 +293,7 @@ class Sandbox(unittest.TestCase):
         self.write("board/role-models.json",
                    json.dumps(fixture_role_models(), ensure_ascii=False, indent=2))
         self.write("docs/DECISIONS.md", "# 裁示\n\n| 編號 | 裁示 | 來源 | 日期 | 狀態 |\n")
-        self.write("docs/REHEARSAL.md", "# 哪些保證還只在演練裡成立\n\n"
-                                        "| 工具 | 第一次真跑 | 要看到什麼 |\n|---|---|---|\n")
+        self.write("docs/NOTES.md", "# notes\n")
         self.write("README", "main\n")
         self.write(".gitignore", SANDBOX_IGNORE)
         self.write(os.path.join("verify", "__init__.py"), "")

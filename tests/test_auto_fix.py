@@ -398,7 +398,19 @@ ModuleNotFoundError: No module named 'test_thing'
 """
 
 
+# 票面「沒有 needs_verifier 這一格」的記號(傳 `needs_verifier=ABSENT`)。
+ABSENT = object()
+
+
 class AutoFixBase(Sandbox):
+
+    def make_ticket(self, ident, **fields):
+        """D-054 Q10 起缺 needs_verifier = true(auto-fix 會起驗證者)。這一組大多測的不是
+        驗證者,票面預設明寫 `false`;要測「缺」的案例傳 `needs_verifier=ABSENT`。"""
+        fields.setdefault("needs_verifier", False)
+        if fields["needs_verifier"] is ABSENT:
+            del fields["needs_verifier"]
+        return super(AutoFixBase, self).make_ticket(ident, **fields)
 
     def setUp(self):
         super(AutoFixBase, self).setUp()
@@ -2258,7 +2270,7 @@ UNFILLED = re.compile(r"@[A-Z_]+@|<票號>|<票庫路徑>|<sha>|<\$W|<主線 / s
 class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
     """#51 / D-032 ③(C6):票 `needs_verifier` 是 JSON `true` ⇒ auto-fix 第 1 輪在派 worker
     **之前**起一個背景驗證者,worker 回來之後才收;兩份 patch 一起套進閘門那一棵樹。
-    `false` / 缺這一格 ⇒ 不派(缺的那一種 stderr 說一聲)。期望值(事件的 role、cost
+    `false` ⇒ 不派;缺這一格 = true(D-054 Q10)。期望值(事件的 role、cost
     筆數、頁數、案例名)寫死在這裡,不從被測腳本算回去。"""
 
     def vcalls(self):
@@ -2312,16 +2324,22 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
         self.assertEqual(self.verifier_starts(), [])
         self.assertNotIn("needs_verifier", done.stderr)
 
-    def test_c1_missing_starts_no_verifier_and_says_so(self):
-        """C1 缺這一格。**變異**:條件改成「缺也派」→ 這一條紅。"""
-        row = self.arm()
+    def test_c1_missing_starts_the_verifier_like_true(self):
+        """C1 缺這一格 = true(D-054 Q10):第 1 輪起恰一個驗證者,與 true 同一條路
+        (事件的 agent 是 auto-fix-verifier),票面不補寫、stderr 不提 D-028。
+
+        **變異 M1**:`verifier_wanted` 對缺格仍給 no → 這一條紅。
+        """
+        row = self.arm(needs_verifier=ABSENT)
         self.assertNotIn("needs_verifier", row, "前提:票面沒有這一格")
         done = self.auto_fix("--no-review")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.verifier_calls(), [])
-        self.assertEqual(self.verifier_starts(), [])
-        self.assertIn("needs_verifier", done.stderr)
-        self.assertIn("D-028", done.stderr)
+        starts = self.verifier_starts()
+        self.assertEqual(len(starts), 1, done.stdout + done.stderr)
+        self.assertEqual((str(starts[0].get("round")), starts[0].get("agent")),
+                         ("1", "auto-fix-verifier"))
+        self.assertNotIn("needs_verifier", self.load_ticket("1"), "不補寫票面")
+        self.assertNotIn("D-028", done.stderr)
 
     def test_c3_the_verifier_packet_is_the_template_filled_in(self):
         """C3:派工文 = 規則包 + 範本逐格填好;`--dry-run --round 1` 兩份路徑都印、不起行程。
@@ -4068,7 +4086,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
                 ("新增 memory", 'mkdir -p "$REPO/memory/main" && echo x > "$REPO/memory/main/n.md"',
                  "memory/main/n.md"),
                 ("修改", 'echo more >> "$REPO/docs/DECISIONS.md"', "docs/DECISIONS.md"),
-                ("刪除", 'rm "$REPO/docs/REHEARSAL.md"', "docs/REHEARSAL.md"))
+                ("刪除", 'rm "$REPO/docs/NOTES.md"', "docs/NOTES.md"))
         for name, stray, path in rows:
             with self.subTest(name):
                 self.setUp()
@@ -4263,13 +4281,13 @@ class TheMissingCasesSendAVerifierEveryRound(AutoFixBase):
         done = self.auto_fix("--no-review")
         self.assertEqual(self.starts("verifier"), [], done.stdout + done.stderr)
 
-    def test_a4_needs_verifier_missing_sends_no_verifier_and_names_d028(self):
-        """A4 對照:needs_verifier 缺 → 不起;stderr 照舊點名 D-028。"""
-        self.arm()
+    def test_a4_needs_verifier_missing_sends_the_verifier_like_true(self):
+        """A4 對照:needs_verifier 缺 = true(D-054 Q10)→ 第 2 輪照樣先派驗證者。"""
+        self.arm(needs_verifier=ABSENT, interface_fixed=True)
         self.status(1, RED_LOG)
         done = self.auto_fix("--no-review")
-        self.assertEqual(self.starts("verifier"), [], done.stdout + done.stderr)
-        self.assertIn("D-028", done.stderr)
+        self.assertEqual(len(self.starts("verifier")), 1, done.stdout + done.stderr)
+        self.assertIn("案例還沒交,第 2 輪先派驗證者", done.stdout)
 
     # --------------------------------------------- A5:只有缺口列那一輪只派驗證者
 

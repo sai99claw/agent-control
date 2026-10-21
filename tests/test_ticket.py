@@ -1210,61 +1210,48 @@ def ticket_bytes(case, ident):
         return handle.read()
 
 
-class ReadyNeedsABooleanNeedsVerifier(Sandbox):
-    """#91 C1(R2):實作票轉 Ready 前 `needs_verifier` 要是 JSON 布林。文字上寫「必填」
-    擋不住任何一張票;擋下的票位元組不變。"""
+class ReadyWithoutNeedsVerifier(Sandbox):
+    """D-054 Q10:`needs_verifier` 缺 = true,**不擋 Ready**(撤 #91 C1 那一關)。
+    缺、字串、null、布林都轉得過去;要不要起驗證者是 auto-fix 那一手判的。"""
 
     MISSING = object()
 
-    def draft(self, ident, needs_verifier, role="worker"):
-        fields = {"state": "Draft", "role": role, "attempt": 0}
+    def draft(self, ident, needs_verifier, role="worker", state="Draft"):
+        fields = {"state": state, "role": role, "attempt": 0}
         if needs_verifier is not self.MISSING:
             fields["needs_verifier"] = needs_verifier
         self.make_ticket(ident, **fields)
 
-    def test_four_drafts_go_to_ready_or_not(self):
-        """**變異**:拿掉 `cmd_set` 裡的 needs_verifier 檢查 → 「缺」那條紅。"""
-        cases = (("1", self.MISSING, "worker", 1, 1),
-                 ("2", "true", "worker", 1, 1),
-                 ("3", True, "worker", 0, 2),
-                 ("4", self.MISSING, "consolidator", 0, 2),
-                 ("5", None, "", 1, 1),
-                 ("6", False, "worker", 0, 2))
-        for ident, value, role, rc, version in cases:
+    def test_every_draft_goes_to_ready(self):
+        """**變異**:`cmd_set` 轉 Ready 時對缺 needs_verifier 的實作票 rc 1 → 「缺」那條紅。"""
+        cases = (("1", self.MISSING, "worker"),
+                 ("2", "true", "worker"),
+                 ("3", True, "worker"),
+                 ("4", self.MISSING, "consolidator"),
+                 ("5", None, ""),
+                 ("6", False, "worker"))
+        for ident, value, role in cases:
             self.draft(ident, value, role)
-        for ident, value, role, rc, version in cases:
+        for ident, value, role in cases:
             with self.subTest(ident=ident, value=value, role=role):
-                before = ticket_bytes(self, ident)
                 done = self.ticket("set", ident, "state", "Ready")
-                self.assertEqual(done.returncode, rc, done.stdout + done.stderr)
-                self.assertEqual(self.load_ticket(ident)["state_version"], version)
-                if rc:
-                    self.assertIn("needs_verifier", done.stderr)
-                    self.assertIn("#%s" % ident, done.stderr)
-                    self.assertEqual(ticket_bytes(self, ident), before)
-                else:
-                    self.assertEqual(self.load_ticket(ident)["state"], "Ready")
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertNotIn("needs_verifier", done.stderr)
+                row = self.load_ticket(ident)
+                self.assertEqual((row["state"], row["state_version"]), ("Ready", 2))
+                if value is self.MISSING:
+                    self.assertNotIn("needs_verifier", row, "不補寫票面")
 
-    def test_blocked_back_to_ready_is_checked_running_back_to_ready_is_not(self):
-        """Running → Ready 是已派出的票改派回來(auto-fix codex 額度改派,
-        test_auto_fix_codex A23);其他狀態轉 Ready 照查。"""
-        self.make_ticket("1", state="Blocked")
-        self.make_ticket("2", state="Running")
-        blocked = self.ticket("set", "1", "state", "Ready")
-        self.assertEqual(blocked.returncode, 1, blocked.stdout + blocked.stderr)
-        running = self.ticket("set", "2", "state", "Ready")
-        self.assertEqual(running.returncode, 0, running.stdout + running.stderr)
-
-    def test_verifier_and_opener_tickets_are_not_checked(self):
-        for ident, role in (("1", "verifier"), ("2", "opener")):
-            self.draft(ident, self.MISSING, role)
-            done = self.ticket("set", ident, "state", "Ready")
-            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+    def test_blocked_back_to_ready_without_needs_verifier_goes_through(self):
+        self.draft("1", self.MISSING, state="Blocked")
+        done = self.ticket("set", "1", "state", "Ready")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["state"], "Ready")
 
 
 class CreateTakesTheTwoBooleans(Sandbox):
     """#91 C2:`create --needs-verifier / --interface-fixed` 存成 JSON 布林;
-    `create --state Ready` 走 C1 同一個檢查。"""
+    `create --state Ready` 不查 needs_verifier(D-054 Q10:缺 = true)。"""
 
     def test_true_and_false_are_stored_as_json_booleans(self):
         done = self.ticket("create", *MIN, "--needs-verifier", "true",
@@ -1288,13 +1275,14 @@ class CreateTakesTheTwoBooleans(Sandbox):
         self.assertIn("--needs-verifier", printed)
         self.assertIn("--interface-fixed", printed)
 
-    def test_ready_without_needs_verifier_does_not_make_a_file(self):
-        """**變異**:create 不跑 needs_verifier 檢查 → 這一條紅。"""
+    def test_ready_without_needs_verifier_opens(self):
+        """**變異**:create `--state Ready` 對缺 needs_verifier 的票 rc 2 → 這一條紅。"""
         done = self.ticket("create", *MIN, "--state", "Ready")
-        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("needs_verifier", done.stderr)
-        self.assertEqual(self.tickets_on_disk(), [])
-        self.assertNotIn("ticket.created", self.kinds())
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.load_ticket("1")
+        self.assertEqual(row["state"], "Ready")
+        self.assertNotIn("needs_verifier", row, "不補寫票面")
+        self.assertIn("ticket.created", self.kinds())
 
     def test_ready_with_needs_verifier_opens(self):
         done = self.ticket("create", *MIN, "--state", "Ready", "--needs-verifier", "false")
@@ -1323,23 +1311,18 @@ class Lint(Sandbox):
             done = self.ticket(*args)
             self.assertIn("scripts/ticket.py lint <id>", done.stdout + done.stderr)
 
-    def test_missing_needs_verifier_is_named(self):
-        """**變異**:拿掉 (a) → 這一條紅。"""
-        row = self.good()
-        del row["needs_verifier"]
-        self.write(os.path.join("tickets", "1.json"),
-                   json.dumps(row, ensure_ascii=False, indent=2) + "\n")
-        done = self.lint()
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertIn("needs_verifier", done.stderr)
-
-    def test_consolidator_ticket_without_needs_verifier_passes(self):
-        row = self.good(role="consolidator")
-        del row["needs_verifier"]
-        self.write(os.path.join("tickets", "1.json"),
-                   json.dumps(row, ensure_ascii=False, indent=2) + "\n")
-        done = self.lint()
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+    def test_missing_needs_verifier_is_not_mentioned(self):
+        """D-054 Q10:缺 = true,lint 不提它。**變異**:lint 對缺 needs_verifier 的實作票
+        加一行 → 這一條紅。"""
+        for role in ("worker", "consolidator"):
+            with self.subTest(role=role):
+                row = self.good(role=role)
+                del row["needs_verifier"]
+                self.write(os.path.join("tickets", "1.json"),
+                           json.dumps(row, ensure_ascii=False, indent=2) + "\n")
+                done = self.lint()
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertNotIn("needs_verifier", done.stdout + done.stderr)
 
     def test_unregistered_tags_are_named_per_field(self):
         self.good(tags=["example", "nope-a"],
@@ -1358,14 +1341,12 @@ class Lint(Sandbox):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
     def test_every_bad_cell_gets_its_own_line(self):
-        row = self.good(tags=["nope"])
-        del row["needs_verifier"]
-        self.write(os.path.join("tickets", "1.json"),
-                   json.dumps(row, ensure_ascii=False, indent=2) + "\n")
+        self.good(tags=["nope-a"],
+                  verify={"files": [], "tags": ["nope-b"], "run": "", "notes": ""})
         done = self.lint()
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         lines = done.stderr.splitlines()
-        for field in ("needs_verifier", " tags "):
+        for field in ("verify.tags", " tags "):
             self.assertEqual(len([l for l in lines if field in l]), 1, (field, lines))
 
 

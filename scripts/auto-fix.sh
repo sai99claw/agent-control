@@ -741,7 +741,7 @@ print("4. **回報對象**:派工的那一條主線 session。")
 print("")
 print("## 你要交的兩樣")
 print("1. 票分支 `%s` 上的 commit(閘門在同一個 worktree 跑)。" % branch)
-print("2. `%s/EVIDENCE-round1.md`(worktree 外的輪次目錄,不進 repo)—— 必備五段(見角色卡)"
+print("2. `%s/EVIDENCE-round1.md`(worktree 外的輪次目錄,不進 repo)—— 必備四段(見角色卡;變異表選填)"
       "+ 記憶段 + 檔尾一塊 ```result` JSON。" % fix)
 print("   主線收件那一手是:")
 print("   ```sh")
@@ -751,7 +751,7 @@ print("   它會抽出 `result-round1.json`,並把 EVIDENCE 裡的 `OBJECTION:` 
 print("")
 print("## 回報格式")
 print("① 分支頭 sha + `git diff --stat <base sha>..HEAD`;② 測試指令、`Ran N`、`rc=`(**判綠只看 rc**);"
-      "③ 變異驗紅表;④ 已排除的假設;⑤ 最小重現。")
+      "③ 已排除的假設;④ 最小重現;有變異就附變異驗紅表(選填)。")
 print("**測試一律前景跑加 timeout** —— 把整套丟背景後結束回合 = 什麼都沒交。")
 print("")
 print("## 票寫錯 / 需要裁示怎麼說")
@@ -808,9 +808,9 @@ PY
     } > "$1"
 }
 
-# 這一輪要不要起驗證者(#51,D-032 ③;#126 起任一輪,不只第 1 輪):票 `needs_verifier` 是 JSON
-# `true`、而且 `verify.baseline` 還是空的(D-018:案例還沒交)。**缺這一格不擋**,只說一聲:
-# 開題端的自檢(D-031)已經擋,既有的票多半沒有這一格。
+# 這一輪要不要起驗證者(#51,D-032 ③;#126 起任一輪,不只第 1 輪):票 `needs_verifier` 不是
+# JSON `false`、而且 `verify.baseline` 還是空的(D-018:案例還沒交)。**缺這一格當 true**
+# (D-054 Q10):只有明寫 false 才不起,沒寫與寫 false 分得出來。
 # 設定 V_WANT(1 / 空)、V_BASE(票的 base_sha,驗證者副本從它展開)與 V_PARALLEL:
 # 票 `interface_fixed` 是 JSON `true` 才與 worker 平行起(#60,D-H38 ②);false / 缺 ⇒ 等 worker
 # 第 1 輪交件(票分支有了新 commit)才起 —— 介面沒釘死的票,驗證者照票面猜的介面寫案例,worker 做出來的是另一個。
@@ -824,12 +824,7 @@ try:
 except (OSError, ValueError):
     ticket = {}
 plan = ticket.get("verify") if isinstance(ticket.get("verify"), dict) else {}
-if "needs_verifier" not in ticket:
-    flag = "missing"
-elif ticket["needs_verifier"] is True:
-    flag = "true"
-else:
-    flag = "no"
+flag = "no" if ticket.get("needs_verifier") is False else "true"
 print("V_FLAG=%s" % flag)
 print("V_HAS_BASELINE=%s" % ("1" if plan.get("baseline") else ""))
 print("V_BASE=%s" % shlex.quote(str(ticket.get("base_sha") or "")))
@@ -840,12 +835,10 @@ PY
     case "$V_FLAG" in
         true)
             if [ -n "$V_HAS_BASELINE" ]; then
-                echo "auto-fix: #$ID needs_verifier=true,但 verify.baseline 已經有了 —— 第 $vw_round 輪不再起驗證者"
+                echo "auto-fix: #$ID needs_verifier 不是 false,但 verify.baseline 已經有了 —— 第 $vw_round 輪不再起驗證者"
             else
                 V_WANT=1
             fi ;;
-        missing)
-            echo "auto-fix: #$ID 票面沒寫 needs_verifier(D-028)—— 第 $vw_round 輪不起驗證者" >&2 ;;
     esac
 }
 
@@ -2368,7 +2361,7 @@ print("- 不碰 main、不 push、不 merge / rebase 進 main、不動別的分�
 print("")
 print("## 你要交的兩樣")
 print("1. 票分支 `%s` 上的 commit(訊息帶 `t%s`)。" % (branch, ident))
-print("2. `%s/EVIDENCE-round%s.md`(worktree 外的輪次目錄)—— 必備五段(見角色卡),其中**已排除的假設**那一段"
+print("2. `%s/EVIDENCE-round%s.md`(worktree 外的輪次目錄)—— 必備四段(見角色卡;變異表選填),其中**已排除的假設**那一段"
       % (fix, r))
 print("   決定下一輪的人要不要把你查過的路再查一次。")
 print("")
@@ -2461,7 +2454,7 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
     V_SWAPPED=""
     verifier_wanted "$r"
     if [ -n "$V_WANT" ]; then
-        [ "$r" -eq 1 ] || echo "auto-fix: #$ID needs_verifier=true 而 verify.baseline 是空的 —— 案例還沒交,第 $r 輪先派驗證者"
+        [ "$r" -eq 1 ] || echo "auto-fix: #$ID needs_verifier 不是 false(缺 = true)而 verify.baseline 是空的 —— 案例還沒交,第 $r 輪先派驗證者"
         VFIX=$WTBASE/verify-t$ID/round$r
         VDISPATCH=$(dirname "$DISPATCH")/dispatch-verifier-round$r.md
         # 等交件才起的那一種(#60):底下 worker 沒走到交件的每一頁都要說驗證者沒起,
@@ -3034,7 +3027,7 @@ print("")
 print("## 你要交的兩樣")
 print("1. 整合分支 `%s` 上的 commit,訊息以這次修到的票號 `t<n>` 開頭(例 `t%s fix: …`);"
       "交件時 worktree 要乾淨(沒 commit 的改動不算交件)。" % (branch, ids[0]))
-print("2. `%s/EVIDENCE-round1.md`(worktree 外,不進 repo)—— 必備五段(見角色卡)+ 記憶段 + 檔尾一塊 ```result` JSON。"
+print("2. `%s/EVIDENCE-round1.md`(worktree 外,不進 repo)—— 必備四段(見角色卡;變異表選填)+ 記憶段 + 檔尾一塊 ```result` JSON。"
       % fix)
 print("")
 print("## 票寫錯 / 需要裁示怎麼說")
