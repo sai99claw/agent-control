@@ -12,8 +12,10 @@ EVIDENCE。這一組獨立問票面 `test_plan` 的九件事:
 4. `OBJECTION:` 那一行與 block 的 `objection.category` 對不上時,既有的收件 /
    轉 Blocked / 退出碼一個字不改,只多一格 `conflict: true`;
 6. 驗證者那條路寫的是 `result-verifier-round<輪>.json`,檔名不一樣;
-7. schema 的鍵名只活在 `docs/DISPATCH-TEMPLATE.md`、`tickets/SCHEMA.md` 與測試
-   夾具裡 —— **判準是鍵名(`patch_sha256` + `red_first_line`),不是那個 fenced
+7. schema 的鍵名只活在 `tickets/SCHEMA.md` 與測試夾具裡(#147 acceptance 2:
+   SCHEMA.md is the only home of the result key table; DISPATCH-TEMPLATE §8.5 is a
+   pointer and now counts as a third copy if the key names come back)
+   —— **判準是鍵名(`patch_sha256` + `red_first_line`),不是那個 fenced
    標記本身**:`scripts/auto-fix.sh` 與 `scripts/rules.py` 合法地帶有 `result-round`
    / `no-block` / fenced 標記等詞,但不抄鍵名(2026-09-22 派工裁示);
 8. `memory/role/implementer.md`、`memory/role/verifier.md` 各多一句,上限與量法由
@@ -56,10 +58,16 @@ class SchemaKeysLiveInOnlyTwoDocs(unittest.TestCase):
     要逐字講清楚案例要守住的 schema 形狀本來就得抄鍵名(#20 自己的票檔就是
     這樣),不算多抄了一份 schema。`tickets/SCHEMA.md` 仍是精確比對那一份
     規格檔,`tickets/*.json` 另外放行。
+
+    2026-10-21 (#147 acceptance 2, D-054 Q12 "one rule, one home"): the result key
+    table lives only in `tickets/SCHEMA.md`; `docs/DISPATCH-TEMPLATE.md` §8.5 is a
+    one-line pointer. So SCHEMA.md is the single exact-match spec file, and
+    DISPATCH-TEMPLATE.md carrying both key names again is a copy like any other.
+    The contract this case guards is unchanged: the key names do not spread.
     """
 
     SKIP_DIRS = {".git", "__pycache__", "reports", "wt", "land", ".land.lock"}
-    ALLOWED_EXACT = {"docs/DISPATCH-TEMPLATE.md", "tickets/SCHEMA.md"}
+    ALLOWED_EXACT = {"tickets/SCHEMA.md"}
 
     def test_only_the_two_schema_docs_and_test_fixtures_carry_both_keys(self):
         hits = []
@@ -82,7 +90,7 @@ class SchemaKeysLiveInOnlyTwoDocs(unittest.TestCase):
                      and not (rel.startswith("tickets/") and rel.endswith(".json"))]
         self.assertEqual(third_copy, [], "schema 鍵名多抄了一份:%s" % third_copy)
         self.assertTrue(self.ALLOWED_EXACT <= set(hits),
-                        "兩份規格檔本身都要帶得到鍵名範例:命中 %s" % hits)
+                        "the spec file itself must carry the key names: hits %s" % hits)
 
     def test_auto_fix_and_rules_keep_the_fenced_marker_without_the_key_names(self):
         """反面:那兩支腳本**可以**合法出現 fenced 標記字樣,只是不抄鍵名。"""
