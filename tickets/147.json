@@ -115,7 +115,7 @@
   "attempt": 0,
   "base_sha": "8f533668a93fd7cadd712a69feaa039aa7708ff0",
   "state": "Running",
-  "state_version": 6,
+  "state_version": 7,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -140,6 +140,17 @@
     {
       "path": "tests/test_dispatch_template.py",
       "contains": "EveryRolePacks"
+    }
+  ],
+  "branch": "t147",
+  "objections": [
+    {
+      "category": "test_defect",
+      "body": "verify/agent-output/test_ticket_20.py::SchemaKeysLiveInOnlyTwoDocs test_only_the_two_schema_docs_and_test_fixtures_carry_both_keys still requires docs/DISPATCH-TEMPLATE.md to carry the result key names (ALLOWED_EXACT <= hits), but #147 acceptance 2 makes tickets/SCHEMA.md the only home and §8.5 a pointer; the case should require only SCHEMA.md.",
+      "evidence": "../agent-control-wt/fix-t147/round1/EVIDENCE-round1.md",
+      "owner": "verifier",
+      "disposition": "",
+      "follow_up": ""
     }
   ]
 }
