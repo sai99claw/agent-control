@@ -304,7 +304,9 @@ class AgentOutputHarness(Sandbox):
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
 
     def ticket_ready(self):
-        row = self.make_ticket("1")
+        # 這組量的是 worker 的 result 塊,不是驗證者:D-054 Q10 起缺 needs_verifier = true,
+        # 票面明寫 false,第 2 輪才不另起驗證者。
+        row = self.make_ticket("1", needs_verifier=False)
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "開票 #1(agentout 夾具)")
         self.git("push", "-q", "origin", "main")

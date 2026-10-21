@@ -5,7 +5,7 @@
 
 ## 驗收表(票面每一條一列;期望值來源獨立於被測程式:票面 acceptance 字面 / 夾具自己寫下的值)
 A2 | integ | needs_verifier=true 而 files 空;三個例外 | rc 3 恰一列 (no-cases);例外 0 列 | 票面 A2 原話
-A4 | integ | needs_verifier true、baseline 空、上一輪 gate 紅(RED_LOG,第 1 輪)跑 auto-fix --no-review | 第 2 輪 role=verifier 的 agent.start 恰一筆、stdout 有「案例還沒交,第 2 輪先派驗證者」;baseline 非空 / false 0 筆;缺 → 0 筆且 stderr 點名 D-028 | 票面 A4 原話
+A4 | integ | needs_verifier true、baseline 空、上一輪 gate 紅(RED_LOG,第 1 輪)跑 auto-fix --no-review | 第 2 輪 role=verifier 的 agent.start 恰一筆、stdout 有「案例還沒交,第 2 輪先派驗證者」;baseline 非空 / false 0 筆(缺 = true 由 tests/test_auto_fix.py 守,D-054 Q10) | 票面 A4 原話
 A6 | integ | 第 2 輪 worker 回 test_defect(interface_fixed 缺,等 patch) | 第 2 輪 verifier 的 agent.start 恰一筆 | 票面 A6 原話
 A7 | integ | 只有缺口列的狀態檔已是第 3 輪;needs_verifier true 而上一輪沒有歸因 | rc 1「三輪耗盡」不起任何 agent;rc 4、Blocked、「沒有歸因」、不起任何 agent | 票面 A7 原話
 A8 | doc   | 讀 docs/WORKFLOW.md | 有「任一輪」(與驗證者同段) | 票面 A8 原話
@@ -190,15 +190,6 @@ class EveryRoundDispatchesTheMissingVerifier(AutoFixBase126):
         self.status(1, RED_LOG)
         done = self.auto_fix("--no-review")
         self.assertEqual(self.starts("verifier"), [], done.stdout + done.stderr)
-
-    def test_a4_needs_verifier_missing_starts_none_and_names_d028(self):
-        """A4 對照:缺 needs_verifier → 第 2 輪不起,stderr 照舊點名 D-028。"""
-        row = self.arm(interface_fixed=True, verify=dict(EMPTY_PLAN))
-        self.assertNotIn("needs_verifier", row, "前提:票面沒有這一格")
-        self.status(1, RED_LOG)
-        done = self.auto_fix("--no-review")
-        self.assertEqual(self.starts("verifier"), [], done.stdout + done.stderr)
-        self.assertIn("D-028", done.stderr, done.stdout + done.stderr)
 
 
 class RoundsAndStopsStayTheSame(AutoFixBase126):
