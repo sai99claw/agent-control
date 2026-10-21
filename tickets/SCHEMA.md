@@ -50,42 +50,64 @@
 
 ## EVIDENCE 尾端的 `result` 區塊(D-017)
 
+**這一節是 `result` 區塊的唯一正文**(D-054 Q12):`docs/DISPATCH-TEMPLATE.md` §8.5 與規則包只指路到這裡,
+不另列鍵 —— 第二份一出現,兩份就會各自往不同方向漂,而漂開的那一份看起來仍然像規格。
+
 票是規格,這一塊是**這一輪交出來的東西**。worker 與 verifier 的 `EVIDENCE-round<輪>.md`
-四段散文照舊給人看,檔尾再加一段 `## result`,底下一塊語言標記是 `result` 的 fenced
+散文段照舊給人看(段名照 `docs/DISPATCH-TEMPLATE.md` §8),檔尾再加一段 `## result`,底下一塊語言標記是 `result` 的 fenced
 JSON 物件;`scripts/auto-fix.sh` 在收件的同一手把它抽成
 `reports/t<票號>/<run_id>/result-round<輪>.json`(驗證者那條路是
-`result-verifier-round<輪>.json`),與那一輪的 `status.json` 同目錄。**抽取只讀
+`result-verifier-round<輪>.json`),與那一輪的 `status.json` 同目錄;看板的 `/t/<票號>` 畫的就是那一份。**抽取只讀
 EVIDENCE,不改它**;抽不出來也不改變退出碼、不擋流程。
+為什麼不是另一份 `RESULT.md`:多一份要維護的檔就是多一個忘記寫的地方。
 
 | 鍵 | 型別 | 說明 |
 |---|---|---|
 | `ticket` | 字串 | 票號 |
 | `role` | 字串 | `worker` / `verifier` |
 | `round` | 整數 | 第幾輪 |
-| `rc` | 整數 | 交出來那一刻自己跑的閘門退出碼 —— 判綠只看它 |
-| `patch_sha256` | 字串 | 交出去那份 patch 的 sha256 |
-| `gate` | 物件 | `{cmd, ran, rc}` |
-| `mutations` | 陣列 | 選填:`{id, count, case, red_first_line}`;沒做變異留 `[]` |
+| `rc` | 整數 | 交出來那一刻自己跑的那一組測試的退出碼 —— 判綠只看它(`docs/DISPATCH-TEMPLATE.md` §3) |
+| `patch_sha256` | 字串 | 交出去那份 patch 的 sha256(驗證者的 patch-verify;worker 交件是分支 commit,留空字串) |
+| `gate` | 物件 | `{cmd, ran, rc}`:指令逐字、`ran` 是 `Ran N` 的 N、`rc` 同上一格 |
+| `mutations` | 陣列 | 選填:一條變異一項 `{id, count, case, red_first_line}`;沒做變異或驗證者留 `[]` |
 | `objection` | 物件或 `null` | `{category, body}`;`category` 是 `ticket-wrong` / `test_defect` / `blocking` |
-| `excluded` | 陣列 | 已排除的假設 |
-| `repro` | 物件 | `{cmd, expect}` |
-| `memory` | 陣列 | `{layer, name, line, ticket}`;**鏡像而已,寫入仍由 `memory.py harvest` 做** |
+| `excluded` | 陣列 | 已排除的假設,一項一句(散文那一段的機器版) |
+| `repro` | 物件 | `{cmd, expect}`:最小重現那一句與預期輸出 |
+| `memory` | 陣列 | 這一輪寫的記憶,一項 `{layer, name, line, ticket}`;**鏡像而已,不是入口**:寫入仍由 `memory.py note` / `harvest` 做 |
 | `baseline` | 物件或 `null` | **只有 verifier 寫**:`verify-case.py red` 印出的 `<out-dir>/baseline-red.json` 原封抄進來,`stage` 必是 `red`;worker 留 `null`;`apply.sh --evidence-verifier` 在鎖裡把它併進票的 `verify.baseline` |
 
-角色多出來的格(不在上表,收件端真的會讀):驗證者寫 `verify`(`{files, tags, run, notes}`,`apply.sh --evidence-verifier` 併進票的 `verify` 欄;形狀在 `templates/dispatch-verifier.md`),覆核者寫 `verdict`(`pass` / `fail`,`review.sh` 讀;形狀在 `templates/dispatch-reviewer.md`)。上表與 `docs/DISPATCH-TEMPLATE.md` §8.5 的那張 由 `tests/test_dispatch_template.py` 釘成同一組鍵,這兩格**不補進表**;補列要連測試一起改,歸後續 code 票。
+角色多出來的格(不在上表,收件端真的會讀):驗證者寫 `verify`(`{files, tags, run, notes}`,`apply.sh --evidence-verifier` 併進票的 `verify` 欄;形狀在 `templates/dispatch-verifier.md`),覆核者寫 `verdict`(`pass` / `fail`,`review.sh` 讀;形狀在 `templates/dispatch-reviewer.md`)。
+
+寫不出來的欄位**照實留空**(`null` / `[]`)。**編一個數字進去,與量過那個數字長得一樣**。
 
 抽出來的那一份還多一格 `sections`:`{patch_sha256, gate, excluded, repro}` 四個 bool,
-答的是「EVIDENCE 那**四段散文**在不在」(§8 那四段;變異表選填、不數(D-054 Q10);抽取只看小標與關鍵詞,**缺段印出來、不擋流程**)。
-為什麼要分開記:`result` 那一塊是機器版,四段是人版;兩者都可能單獨缺,而**只驗機器版的那一天,
+答的是「EVIDENCE 那幾段**散文**在不在」(變異表選填、不數(D-054 Q10);抽取只看小標與關鍵詞,**缺段印出來、不擋流程**)。
+為什麼要分開記:`result` 那一塊是機器版,散文是人版;兩者都可能單獨缺,而**只驗機器版的那一天,
 一份沒有「已排除的假設」的 EVIDENCE 會長得跟完整的一模一樣**,下一輪那個新的人因此把同一段 code 再查一次。
 
 抽出來的那一份多一格 `"present": true` 與一格 `"conflict"`(`objection` 與 EVIDENCE 裡
-那一行 `OBJECTION:` 對不上時為 `true`,並**以那一行為準**)。沒交的三種各有各的樣子:
+那一行 `OBJECTION:` 對不上時為 `true`,並**以那一行為準**;收件、轉 Blocked、退出碼一個字不改)。沒交的三種各有各的樣子:
 `{"present": false, "reason": "no-evidence"}`、`"no-block"`、`"bad-json"`(後者把原文前
 500 字放進 `raw`)—— **揉成同一個空檔的那一刻,「沒交」與「交了但都是空的」長得一樣**。
 
-欄位的完整說明與範例另一份在 `docs/DISPATCH-TEMPLATE.md` §8.5(**只有這兩份**:第三份
-一出現,三份就會各自往不同方向漂,而漂開的那一份看起來仍然像規格)。
+範例(worker;抽出來的那一份就是這一塊再加一格 `"present": true`):
+
+```result
+{
+  "ticket": "42", "role": "worker", "round": 2, "rc": 0,
+  "patch_sha256": "",
+  "gate": {"cmd": "python3 -m unittest tests.test_land",
+           "ran": 12, "rc": 0},
+  "mutations": [{"id": "M1", "count": 1,
+                 "case": "tests/test_land.py::TheLock::test_second_land_refuses",
+                 "red_first_line": "AssertionError: 0 != 2"}],
+  "objection": null,
+  "excluded": ["不是 worktree 沒收 —— 那一輪的 status.json 裡 rc 已經是 2"],
+  "repro": {"cmd": "python3 -m unittest tests.test_land", "expect": "Ran 12 tests … OK"},
+  "memory": [],
+  "baseline": null
+}
+```
 
 ## 為什麼是這幾個欄位(每一個都對應一次事故)
 - `base_sha`:2026-09-10 用過期的 branch ref 做副本,agent 拿到看起來正常但缺了上一張票的樹。

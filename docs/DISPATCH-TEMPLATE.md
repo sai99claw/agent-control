@@ -332,55 +332,8 @@ grep -aE "^Ran |^OK|^FAILED" run.log      # 給人看的
 
 ## 8.5 🩸 結構化交付:EVIDENCE 尾端那一塊 `result`
 
-§8 那八點是**寫給人看的**,照舊。同一份檔的**最後**再加一段 `## result`,底下一塊語言標記是 `result`
-的 fenced JSON 物件 —— **寫給機器看的**。`scripts/auto-fix.sh` 在收件的同一手把它抽成
-`reports/t<票號>/<run_id>/result-round<輪>.json`(驗證者 `result-verifier-round<輪>.json`),
-與那一輪的 `status.json` 同目錄;**抽取只讀 EVIDENCE,不改它**。看板的 `/t/<票號>` 畫的就是那一份。
-
-為什麼不是另一份 `RESULT.md`:多一份要維護的檔就是多一個忘記寫的地方。為什麼不是「沒有就算了」:
-**三種缺漏各有各的樣子** —— 沒有 EVIDENCE(`no-evidence`)、有但沒那一塊(`no-block`)、有但 JSON 解不開
-(`bad-json`,原文前 500 字留在 `raw`)。揉成同一個空檔的那一刻,「沒交」與「交了但都是空的」長得一樣(§5.5)。
-三種都不改變退出碼,也不擋流程。
-
-| 鍵 | 型別 | 寫什麼 |
-|---|---|---|
-| `ticket` | 字串 | 票號 |
-| `role` | 字串 | `worker` 或 `verifier` |
-| `round` | 整數 | 第幾輪 |
-| `rc` | 整數 | 你自己跑的那一組測試的退出碼 —— **判綠只看它**(§3) |
-| `patch_sha256` | 字串 | 交出去那份 patch 的 sha256(驗證者的 patch-verify;worker 交件是分支 commit,留空字串) |
-| `gate` | 物件 | `{cmd, ran, rc}`:指令逐字、`ran` 是 `Ran N` 的 N、`rc` 同上一格 |
-| `mutations` | 陣列 | 選填:一條變異一項 `{id, count, case, red_first_line}`(§5;沒做變異或驗證者留 `[]`) |
-| `objection` | 物件或 `null` | `{category, body}`;`category` 是 `ticket-wrong` / `test_defect` / `blocking` |
-| `excluded` | 陣列 | 已排除的假設,一項一句(§8 第 5 點的機器版) |
-| `repro` | 物件 | `{cmd, expect}`:最小重現那一句與預期輸出(§8 第 6 點) |
-| `memory` | 陣列 | 這一輪寫的記憶,一項 `{layer, name, line, ticket}` |
-| `baseline` | 物件或 `null` | **只有 verifier 寫**:`verify-case.py red` 印出的 `<out-dir>/baseline-red.json` 原封抄進來,`stage` 必是 `red`;worker 留 `null`;`apply.sh --evidence-verifier` 在鎖裡把它併進票的 `verify.baseline` |
-
-角色多出來的格(不在上表,收件端真的會讀):驗證者寫 `verify`(`{files, tags, run, notes}`,`apply.sh --evidence-verifier` 併進票的 `verify` 欄;形狀在 `templates/dispatch-verifier.md`),覆核者寫 `verdict`(`pass` / `fail`,`review.sh` 讀;形狀在 `templates/dispatch-reviewer.md`)。上表與 `tickets/SCHEMA.md` 的那張 由 `tests/test_dispatch_template.py` 釘成同一組鍵,這兩格**不補進表**;補列要連測試一起改,歸後續 code 票。
-
-`memory` 是**鏡像,不是入口**:真正寫進記憶的是 §8 第 8 點那幾行 `memory.py note`。
-`objection` 與 §7 那一行 `OBJECTION:` 同時存在而**對不上**時,以 `OBJECTION:` 那一行為準 —— 收件、
-轉 Blocked、退出碼一個字不改,抽出來的 json 多一格 `"conflict": true`。
-寫不出來的欄位**照實留空**(`null` / `[]`)。**編一個數字進去,與量過那個數字長得一樣**。
-
-抽出來的那一份就是這一塊再加一格 `"present": true`:
-
-```result
-{
-  "ticket": "42", "role": "worker", "round": 2, "rc": 0,
-  "patch_sha256": "3f1c0b…",
-  "gate": {"cmd": "python3 -m unittest tests.test_land",
-           "ran": 12, "rc": 0},
-  "mutations": [{"id": "M1", "count": 1,
-                 "case": "tests/test_land.py::TheLock::test_second_land_refuses",
-                 "red_first_line": "AssertionError: 0 != 2"}],
-  "objection": null,
-  "excluded": ["不是 worktree 沒收 —— 那一輪的 status.json 裡 rc 已經是 2"],
-  "repro": {"cmd": "python3 -m unittest tests.test_land", "expect": "Ran 12 tests … OK"},
-  "memory": []
-}
-```
+§8 是寫給人看的;同一份檔的**最後**再加一段 `## result` 與一塊語言標記是 `result` 的 fenced JSON(寫給機器看的)——
+鍵、型別、抽取、缺漏的三種樣子與範例只有一份正文,照 `tickets/SCHEMA.md`「EVIDENCE 尾端的 `result` 區塊」寫(D-054 Q12)。
 
 ## 9. 專案特有的那幾節
 

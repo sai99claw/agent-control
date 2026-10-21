@@ -47,7 +47,7 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 - 一輪只有兩種判決(D-054 Q8):accepted = 改好票面接回 worker(worker 讀錯票也是,澄清寫進票面);escalate = 一題附建議的裁示題給主線。判決行與題目格式照 auto-fix 給的派工文;流程正文 `docs/WORKFLOW.md`「實作者的反駁怎麼被收下」。
 
 ### 跨 repo
-- 跨 repo 依賴不能寫 `depends_on`(兩邊票號撞)。`sync-to-project.sh` 名單只十支,
+- 跨 repo 依賴不能寫 `depends_on`(兩邊票號撞)。`sync-to-project.sh` 只同步 `SCRIPT_LIST` 那幾支(名單正文在腳本裡),
   `gate.sh` / `land.sh` 不會到專案端;dry-run 不比內容,判準是同步後逐檔 `cmp -s`(#648)。
 
 ## 實作者角色操作細節
@@ -62,12 +62,9 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 - 擷取測試輸出只看 `^Ran |^OK|^FAILED|^(FAIL|ERROR):`;前景跑、給 `timeout`(不准輪詢的正文在 `docs/DISPATCH-TEMPLATE.md` §3)。
 
 ### 交付物的形狀
-- 票分支上的 commit(D-054 Q9,#144):cwd 是派工前建好的票分支 worktree,改完自己 `git add` / `git commit`
-  (訊息帶 `t<票號>`);交件 = 分支相對派工前多了至少一個 commit 而且工作樹乾淨,沒 commit 的不算(腳本不替你 commit)。
-  不碰 main、不 push、不 merge / rebase 進 main、不動別的分支、不 worktree add / remove(越界守衛 rc 8)。
-- `EVIDENCE-round<r>.md` 寫在派工文給的輪次目錄(worktree 外,不 commit)。四段:① 分支頭 sha 與
-  `git diff --stat <base_sha>..HEAD`;② 測試指令、`Ran N`、rc;③ 已排除的假設;④ 最小重現。
-  變異表(編號 / 替換 count / 目標斷言 / 紅訊息首行 / 還原後 sha256)選填:有變異就寫,沒有不缺段(D-054 Q10)。`result` 塊的欄位見 `docs/DISPATCH-TEMPLATE.md` §8.5(#20 驗收⑦)。
+- 票分支上的 commit(D-054 Q9,#144):cwd 是派工前建好的票分支 worktree;交件判準與 git 規矩見 `docs/DISPATCH-TEMPLATE.md` §1(越界守衛 rc 8)。
+- `EVIDENCE-round<r>.md` 寫在派工文給的輪次目錄(worktree 外,不 commit);段名照 `docs/DISPATCH-TEMPLATE.md` §8,
+  檔尾 `result` 塊照 `tickets/SCHEMA.md`(#20 驗收⑦)。
 - 不寫 `verify/**`(驗證者的,同名檔落地會打架,#630)。
 - 紅了被重派時先讀 `reports/t<票號>/<run_id>/status.json`(票 + `repair_context` + 紅榜);前幾輪的改動是分支上的 commit。
 - 回報寫票分支名與分支頭 sha,不寫家目錄絕對路徑。
@@ -121,7 +118,7 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 - 收件(#29 A5;auto-fix 跑,人手派時由派工的人跑):`sh scripts/apply.sh <票號> <patch-verify> --evidence-verifier EVIDENCE-verifier.md`
   (在票分支上補一個 commit),
   抽成 `reports/t<票號>/<run_id>/result-verifier-round<輪>.json`(看板 `/t/<票號>` 畫的就是那一份)。
-- `patch-verify`:在 `$W` 裡 `diff -ruN base work`;檔頭只准 `base/…` / `work/…` 的相對形式(`apply.sh` 以 `git apply -p1 --check` 套不上就 rc 3)。
+- `patch-verify`:怎麼產照 `templates/dispatch-verifier.md` 第四樣;檔頭只准 `base/…` / `work/…` 的相對形式(`apply.sh` 以 `git apply -p1 --check` 套不上就 rc 3)。
 - 案例檔由驗證者獨占:實作者交的同名檔落地時以驗證者的為準,票的 `verify.files` 記驗證者那份(#630)。
 
 ### 誰派、何時起

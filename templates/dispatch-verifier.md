@@ -43,13 +43,13 @@
    `files` / `tags` / `run` / `notes` 併進票,與 `baseline` 同一手)。形狀見下面「第五樣」那一塊
    完整的 `result` 範例 —— 不單獨貼一段 `verify` 片段:照抄片段的人會連柵欄一起抄成 `json`,
    收件端只認 `result`(#731/#772/#775 三次 `no-block`)。
-   交付物本身是 `@COPY@/patch-verify.diff`:`cd @COPY@ && diff -ruN base work > patch-verify.diff`
+   交付物本身是 `@COPY@/patch-verify.diff`:`cd @COPY@ && diff -Nru base work > patch-verify.diff`
    (`work/` 裡只有你改的案例,所以它就只含那幾個檔;票上已經有 `verify.files` 時
    `python3 scripts/verify-case.py extract @TICKET@` 出的是同一份)。檔頭是 `--- base/…` /
    `+++ work/…` 的相對形式。**不要手工挑檔**。
 
 ## 第五樣:`@COPY@/EVIDENCE-verifier.md`(有收件者才交)
-五段散文照舊給人看,檔尾再加一段 `## result`(鍵見 `tickets/SCHEMA.md` §result,`role` 寫 `verifier`)。
+散文段照 `docs/DISPATCH-TEMPLATE.md` §8 給人看,檔尾再加一段 `## result`(鍵見 `tickets/SCHEMA.md` §result,`role` 寫 `verifier`)。
 小標底下那一塊的柵欄語言標記**是 `result`,不是 `json`**;整塊長這樣(`<…>` 換成你的,
 `baseline` 那一格整份換成 `verify-case.py red` 印出的 `baseline-red.json`):
 ```result
