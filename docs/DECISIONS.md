@@ -417,3 +417,7 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 ## D-060(2026-10-21)雲端主線可以從雲端 session 推 main
 - 原話:「意讓 land.sh 從這個雲端 session 推 main」—— 雲端主線照本機流程用 `scripts/land.sh`(票與 docs 通道)落地並 push `origin main`;不改成開 PR。前提:GitHub App 對 agent-control 要有 Contents 寫入(2026-10-21 補裝後 push 才通,之前 git push 與 API 都 403 `Resource not accessible by integration`,雲端 worker 的 `t146-r2-cloud` 也因此第一次沒推上)。
 - 雲端容器以 root(uid 0)跑:靠 `chmod` 造寫入失敗的案例在 root 下不紅(#146 分支閘門唯一一條紅:test_apply `test_an_objection_that_cannot_be_recorded_is_not_called_already_there`,乾淨 main 一樣紅)。主線派開題者開票改成 root 也擋得住的造錯方式,不准 skip;該票落地是雲端第一次 land 的前置。(讀 log 得知,修法未實測)
+
+## D-061(2026-10-21)派工以主線 session 內的子 agent 為主,雲端與地端同一套;routine 降為備用
+- 原話:「照你建議 worker 以後可能是雲端可能是地端 現在的方式較好的話 地端也可以這樣做」—— 回應主線建議:#149 改寫成「主線在同一個環境用子 agent 派工」(主線開 worktree 與輪次目錄、派工文只給四件事、子 agent 做完主動回報、主線 apply → gate → land),不用推中間分支、不用 20 分鐘輪詢;routine(`ac-worker`)只留作備用。雲端與 Mac 都照這一套。
+- 實測依據(2026-10-21 雲端,uid 0):#151 開題者 + worker 都是同容器子 agent,apply / gate / land 一次走通(land 全套 1756 s:unittest 1051 條 1217 s + 回歸 312 條 535 s);#146 由 routine worker 做,撞過舊 clone 開分支(合併衝突)與 push 403 兩次。子 agent 方式在 Mac 上還沒實測。
