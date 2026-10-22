@@ -26,6 +26,11 @@
 #     (`paths` 的檔,或 tests/** verify/** 新增行命中 `patterns`;D-054 Q2:寫入範圍只剩這一道硬擋)
 #   6 EVIDENCE 裡有一行 `OBJECTION:` —— 已記進票的 `objections[]`
 #     (記過的同一筆 disposition 還空著也是 6;處置過的才放行成 0)
+#   7 主 repo 比對拒收(#153,D-064 / D-065;規則在 `main_guard.py`):`--prepare` 留下的
+#     `main-snapshot.json` 與現在比,主線 HEAD 沒有主線落地卻前進或被改寫、origin 被推、工作樹在
+#     控制面與 guard_main_paths 之外有變、hard_block.paths / hard_block.dirs 有變。在任何收件動作
+#     之前停:票 JSON、票分支頭、EVIDENCE 都沒動;stderr 點名第一項並說 not received,
+#     紀錄在快照旁的 `main-compare.json`。沒有快照 = 沒比,印一行,照舊。
 #
 # ## `--evidence` 收三樣(2026-09-23,#29 A4;以前只收第一樣)
 # 1. `memory.py harvest` —— EVIDENCE 記憶段那幾行;
@@ -585,6 +590,21 @@ if [ -n "$VPATCH" ]; then
     [ -f "$VPATCH" ] || { echo "apply: 找不到 patch-verify $VPATCH" >&2; exit 2; }
     VPATCH=$(cd "$(dirname "$VPATCH")" && pwd)/$(basename "$VPATCH")
 fi
+
+# 0. 主 repo 比對(#153,D-064 / D-065):`auto-fix.sh --prepare` 在輪次目錄(worker)/ 驗證者副本根
+#    留了 `main-snapshot.json` 的,這裡比一次 —— 規則只有一份,在 `main_guard.py`。拒收 = rc 7,
+#    擺在任何收件動作(寫票的 branch 欄、套 patch-verify、重產 code-map、收 EVIDENCE)之前;
+#    只記不擋的每一筆印一行。結果寫進快照旁的 `main-compare.json`。找不到快照(手派的
+#    subagent、headless 那幾輪)印一行「沒比」,其餘照舊(D-065 Q5)。
+python3 "$AC/main_guard.py" compare --root "$ROOT" --repo "$(main_root)" --label apply \
+    "$WTBASE/fix-t$ID/round$ROUND" "$(dirname "$EVIDENCE")" ${VPATCH:+"$(dirname "$VPATCH")"}
+case $? in
+    0) ;;
+    7) echo "apply: #$ID 沒有收件(主 repo 比對拒收)—— 票、票分支、EVIDENCE 都沒動;讀上面點名的那一項再決定,不要把這一輪交回 subagent" >&2
+       exit 7 ;;
+    *) echo "apply: 主 repo 比對跑不起來(main_guard.py)—— 沒有收件" >&2
+       exit 7 ;;
+esac
 
 BASE=$(python3 - "$TF" <<'PY'
 import json, sys
