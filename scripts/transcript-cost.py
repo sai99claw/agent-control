@@ -4,7 +4,14 @@
     python3 scripts/transcript-cost.py <transcript.jsonl>     # 印取數結果(JSON)
 
 `agent-cost-hook.py`(SubagentStop / SessionEnd)與 #124 共用這一份;寫票 cost[] 的
-只有 `ticket.py cost`,寫 `agent.cost` 事件的只有 hook。
+只有 `ticket.py`(`cost`,與關票時摺入 `--prepare` 子 agent 的 `agent.cost`,#152),
+寫 `agent.cost` 事件的只有 hook。
+
+## 歸票
+- `dispatch_mark`:第一則 user 訊息裡有 `auto-fix.sh --prepare` 的派工文路徑
+  (`.../t<n>/<run_id>/dispatch-round<r>.md`、`dispatch-verifier-round<r>.md`)→ 票、角色、
+  round、run_id 都取自路徑(#152),關票時進票 `cost[]`。
+- 否則 `guess_ticket` / `guess_role` 猜(round / run_id = null),不進票 `cost[]`。
 
 ## 取數規則(票 #95 A2)
 - 只看 `type == "assistant"` 且 `message.usage` 是物件的列;同一個 `message.id` 取**最後一列**。
@@ -42,6 +49,9 @@ ROLE_KEYWORDS = (("覆核", "reviewer"), ("reviewer", "reviewer"),
                  ("開題者", "opener"), ("opener", "opener"),
                  ("調查", "investigator"), ("investigat", "investigator"))
 TICKET = re.compile(r"#(\d+)")
+# `auto-fix.sh <n> --prepare worker|verifier` 印給 in-session subagent 的派工文路徑(#152):
+# `<reports_dir>/t<n>/<run_id>/dispatch-round<r>.md` 或 `.../dispatch-verifier-round<r>.md`。
+DISPATCH = re.compile(r"/t(\d+)/([^/\s]+)/dispatch-(verifier-)?round(\d+)\.md")
 
 
 def read_rows(path):
@@ -161,6 +171,16 @@ def guess_ticket(description, prompt):
         if hit:
             return hit.group(1)
     return None
+
+
+def dispatch_mark(prompt):
+    """prompt 裡第一個 `--prepare` 派工文路徑 → {ticket, role, round, run_id};沒有 → None。
+    這一條是**確定**的(路徑是 auto-fix 自己組的),不是猜:命中就蓋過描述裡的 `#<n>`。"""
+    hit = DISPATCH.search(prompt or "")
+    if not hit:
+        return None
+    return {"ticket": hit.group(1), "role": "verifier" if hit.group(3) else "worker",
+            "round": int(hit.group(4)), "run_id": hit.group(2)}
 
 
 def earliest_role(text):

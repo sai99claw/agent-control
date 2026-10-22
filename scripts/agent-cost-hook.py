@@ -8,6 +8,8 @@
 - SubagentStop:stdin 有 `agent_transcript_path` 就讀它;沒有就推導
   `<transcript_path 去掉 .jsonl>/subagents/agent-<agent_id>.jsonl`。同目錄同名的
   `.meta.json` 給 description 與 agentType,拿來猜票與角色(`transcript-cost.py`)。
+  第一則 user 訊息帶 `auto-fix.sh --prepare` 的派工文路徑(`.../t<n>/<run_id>/dispatch-round<r>.md`
+  或 `dispatch-verifier-round<r>.md`)時不猜:ticket / role / round / run_id 取自路徑(#152)。
 - SessionEnd:只讀主線自己的 `transcript_path`,role=main、ticket / agent_id = null
   (子 agent 在 subagents/ 另一份,不重算)。同一 session resume 後再結束會再記一筆累計,
   讀的人取同 session_id 最後一筆(`transcript-cost.py latest_costs`)。
@@ -19,7 +21,9 @@ rc 恆為 0、**stdout 一個位元組都不印**:SubagentStop 的 stdout JSON �
 與 `session-hook.sh` 同一組不觸發:`AC_ROLE` 設了且不是 main、cwd 有一層是 `worktree_dir`
 的 basename(headless worker 的子 agent 已由 #94 的信封算進票 cost[],再記就是重複)。
 
-事件不進票 cost[]、不進 cost_total:ticket 是猜的。寫票 cost[] 的只有 `ticket.py cost`。
+進不進票 cost[](#152):帶 run_id 的那幾筆(`--prepare` 派工文路徑命中)在 `ticket.py close`
+(含 `--landed`、`set <n> state Done`)時,同 (session_id, agent_id) 取最後一筆摺進票 cost[]、
+算進 cost_total;run_id 是 null 的(ticket 是猜的)與 role=main 照舊不進。
 """
 
 import importlib.util
@@ -113,6 +117,7 @@ def main():
         return 0
 
     summary = parser.summarize(rows)
+    rnd, run_id = None, None
     if name == "SessionEnd":
         role, ticket, agent_id = "main", None, None
     else:
@@ -122,7 +127,11 @@ def main():
         ticket = parser.guess_ticket(description, prompt)
         role = parser.guess_role(description, prompt, meta.get("agentType"))
         agent_id = hook.get("agent_id")
-    fields = {"role": role, "round": None, "outcome": None, "run_id": None,
+        mark = parser.dispatch_mark(prompt)
+        if mark:
+            ticket, role = mark["ticket"], mark["role"]
+            rnd, run_id = mark["round"], mark["run_id"]
+    fields = {"role": role, "round": rnd, "outcome": None, "run_id": run_id,
               "session_id": hook.get("session_id"), "by": BY}
     fields.update(summary)
     fields = {key: fields.get(key) for key in parser.COST_KEYS if key != "at"}

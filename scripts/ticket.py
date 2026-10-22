@@ -731,6 +731,7 @@ def cmd_set(argv):
             if field == "review" and isinstance(value, dict):
                 value.setdefault("at", now())
             if field == "state" and value == "Done":
+                fold_agent_cost(ticket)
                 ticket["cost_total"] = cost_total(ticket)
             save(ticket)
     except RuntimeError as exc:
@@ -1230,6 +1231,7 @@ def cmd_close(argv):
             ticket = load(ident)
             ticket["state"] = "Done"
             ticket["state_version"] = int(ticket.get("state_version") or 0) + 1
+            fold_agent_cost(ticket)
             ticket["cost_total"] = cost_total(ticket)
             save(ticket)
     except RuntimeError as exc:
@@ -1501,6 +1503,56 @@ def add_up(values):
     """非 null 的加總;一個都沒有就是 null —— 不是 0(0 與「全都沒量」長得一樣)。"""
     values = [value for value in values if whole(value) is not None]
     return sum(values) if values else None
+
+
+# `agent-cost-hook.py` 寫的 `agent.cost` 事件裡,`--prepare` 派工的子 agent 那幾筆(#152)。
+AGENT_COST_BY = "agent-cost-hook"
+AGENT_ID_NOTE = re.compile(r"(?:^|;)agent_id=([^;]+)")
+
+
+def agent_cost_events(ident, events):
+    """ticket == ident、run_id 不是 null、有 agent_id、role 不是 main 的 `agent.cost`,
+    同 (session_id, agent_id) 取**最後一筆**(resume 過的子 agent 會再記一筆累計)。
+    run_id 是 null 的那幾筆 ticket 是猜的,不收。"""
+    last = {}
+    for row in events:
+        if not isinstance(row, dict) or row.get("kind") != "agent.cost" \
+                or str(row.get("ticket")) != str(ident) or not row.get("run_id") \
+                or not row.get("agent_id") or row.get("role") == "main":
+            continue
+        key = (row.get("session_id"), row.get("agent_id"))
+        last.pop(key, None)
+        last[key] = row
+    return list(last.values())
+
+
+def fold_agent_cost(ticket):
+    """關票那一次存檔前,把 `agent_cost_events` 摺成票 `cost[]` 的列(#152)。一列仍恰是
+    `COST_KEYS` 那 15 鍵;agent_id 記在 `note` 的 `agent_id=<id>`。同 (run_id, agent_id)
+    已經有一列就不再加(摺兩次仍是一列)。回加了幾列。"""
+    rows = ticket.get("cost") if isinstance(ticket.get("cost"), list) else []
+    have = set()
+    for row in rows:
+        if isinstance(row, dict) and row.get("by") == AGENT_COST_BY:
+            hit = AGENT_ID_NOTE.search(row.get("note") or "")
+            if hit:
+                have.add((row.get("run_id"), hit.group(1)))
+    added = 0
+    for found in agent_cost_events(ticket.get("id"), event.read_events(root())):
+        key = (found["run_id"], str(found["agent_id"]))
+        if key in have:
+            continue
+        have.add(key)
+        note = ";".join(part for part in ("agent_id=%s" % found["agent_id"], found.get("note"))
+                        if isinstance(part, str) and part)
+        row = {name: found.get(name) for name in COST_KEYS}
+        row.update(outcome=None, by=AGENT_COST_BY, note=note,
+                   round=whole(found.get("round")), at=found.get("ts") or now())
+        rows.append(row)
+        added += 1
+    if added:
+        ticket["cost"] = rows
+    return added
 
 
 def cost_total(ticket):

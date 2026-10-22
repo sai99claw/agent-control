@@ -284,5 +284,269 @@ class T2Hook(HookCase):
         self.only_event(self.run_hook(good, AC_ROLE="main"))
 
 
+class PrepareDispatchMark(HookCase):
+    """#152 A1 / A2:`auto-fix.sh --prepare` 派的子 agent,第一則 user 訊息帶派工文路徑 →
+    ticket / role / round / run_id 取自路徑,蓋過描述裡的 `#<n>`;沒有路徑照舊猜。
+    期望值是夾具字面(路徑裡的 7 / 1 / run 目錄名、usage 的數字),不取自被測程式。
+
+    變異(#152 M3):hook 不用 `dispatch_mark`(round / run_id 留 null)→ 前兩條紅。
+    """
+
+    RUN = "20261021-095546-17288"
+
+    def subagent(self, prompt, description, agent="p1"):
+        path = os.path.join(self.t, "prep", "agent-%s.jsonl" % agent)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        rows = [{"type": "user", "message": {"role": "user", "content": prompt},
+                 "timestamp": "2026-10-21T10:00:00.000Z"},
+                {"type": "assistant", "message": {
+                    "id": "msg_p1", "type": "message", "role": "assistant",
+                    "model": "claude-opus-test", "stop_reason": None,
+                    "usage": {"input_tokens": 12, "cache_creation_input_tokens": 300,
+                              "cache_read_input_tokens": 4000, "output_tokens": 2}},
+                 "timestamp": "2026-10-21T10:00:30.000Z"}]
+        with open(path, "w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        with open(path[:-len(".jsonl")] + ".meta.json", "w", encoding="utf-8") as handle:
+            json.dump({"agentType": "general-purpose", "description": description}, handle)
+        return self.run_hook({"hook_event_name": "SubagentStop", "session_id": "s-1",
+                              "agent_id": agent, "cwd": self.root,
+                              "transcript_path": os.path.join(self.t, "session.jsonl"),
+                              "agent_transcript_path": path})
+
+    def marked_event(self, result):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+        rows = self.rows()
+        self.assertEqual(len(rows), 1, result.stderr)
+        row = rows[0]
+        self.assertEqual(row["kind"], "agent.cost")
+        self.assertEqual(set(row), EVENT_KEYS | ENVELOPE)
+        self.assertEqual(row["by"], "agent-cost-hook")
+        self.assertIsNone(row["outcome"])
+        self.assertEqual((row["tokens_in"], row["cache_write"], row["cache_read"],
+                          row["wall_seconds"]), (12, 300, 4000, 30))
+        return row
+
+    def test_a1_worker_dispatch_path_sets_ticket_role_round_and_run_id(self):
+        """T1:描述寫 #9,路徑是 t7 —— 取路徑。M3 會紅;期望值是路徑字面;新案例。"""
+        prompt = ("model=opus\n你是 #7 的實作者(role=worker,短命角色):照派工文做,交件後回報。\n"
+                  "先讀這一份:/x/reports/t7/%s/dispatch-round1.md(規則包 + 票面快照)\n"
+                  % self.RUN)
+        row = self.marked_event(self.subagent(prompt, "Worker: ticket #9"))
+        self.assertEqual((row["ticket"], row["role"], row["round"], row["run_id"],
+                          row["agent_id"]), ("7", "worker", 1, self.RUN, "p1"))
+
+    def test_a1_verifier_dispatch_path_says_verifier(self):
+        """T1 變體:描述說 Worker、路徑是 dispatch-verifier-round1 —— role 取路徑。新案例。"""
+        prompt = ("model=opus\n你是 #7 的驗證者(role=verifier,短命角色):照派工文寫案例。\n"
+                  "先讀這一份:/x/reports/t7/%s/dispatch-verifier-round1.md(規則包 + 範本)\n"
+                  % self.RUN)
+        row = self.marked_event(self.subagent(prompt, "Worker: ticket #9"))
+        self.assertEqual((row["ticket"], row["role"], row["round"], row["run_id"]),
+                         ("7", "verifier", 1, self.RUN))
+
+    def test_a2_no_dispatch_path_is_guessed_as_before(self):
+        """T2:沒有派工文路徑 → 照舊猜票、round / run_id null。新案例。"""
+        row = self.only_event(self.subagent("看一下 tickets/7.json 的開題", "#7 opener"))
+        self.assertEqual((row["ticket"], row["role"]), ("7", "opener"))
+
+    def test_a1_parser_reads_round_and_takes_the_first_path(self):
+        """`dispatch_mark` 純函式:round 是 int、第二條路徑不蓋第一條、worktree 路徑不算。新案例。"""
+        text = ("worktree:/w/repo-wt/t3(分支 t3)\n先讀這一份:/r/t3/RUN-A/dispatch-round12.md"
+                "(…)再看 /r/t4/RUN-B/dispatch-verifier-round1.md")
+        self.assertTrue(hasattr(tc, "dispatch_mark"), "transcript-cost.py has no dispatch_mark")
+        self.assertEqual(tc.dispatch_mark(text),
+                         {"ticket": "3", "role": "worker", "round": 12, "run_id": "RUN-A"})
+        self.assertIsNone(tc.dispatch_mark("worktree:/w/repo-wt/t3 與 /r/t3/dispatch-round1.md"))
+        self.assertIsNone(tc.dispatch_mark(""))
+
+
+class DocsSayWhichAgentCostIsFolded(unittest.TestCase):
+    """#152 A7 / T7:SCHEMA 不再說 run_id 恆為 null、agent.cost 一律不進 cost[]。量**那一列**,
+    不量整份。拿掉例外的那句(或改回舊句)會紅。`scripts/sync-to-project.sh` 那一行在
+    hard_block.paths 裡,worker 不動(見 #152 EVIDENCE 的 OBJECTION)。"""
+
+    def line_with(self, rel, marker):
+        with open(os.path.join(ROOT, rel), encoding="utf-8") as handle:
+            hits = [line for line in handle if marker in line]
+        self.assertEqual(len(hits), 1, (rel, marker, hits))
+        return hits[0]
+
+    def test_schema_interactive_cost_row_says_when_round_and_run_id_are_filled(self):
+        with open(os.path.join(ROOT, "tickets", "SCHEMA.md"), encoding="utf-8") as handle:
+            self.assertNotIn("`run_id` 恆為 null", handle.read())
+        row = self.line_with(os.path.join("tickets", "SCHEMA.md"), "| 互動成本 |")
+        self.assertIn("dispatch-round<r>.md", row)
+        self.assertIn("ticket.py close", row)
+        self.assertIn("照舊不進票 `cost[]`", row, "猜的票仍不進")
+
+
+
+class PrepareDispatchPathPinsTheEvent(HookCase):
+    """#152 A1 / A2 (verifier cases): a subagent whose FIRST user message carries an
+    `auto-fix.sh --prepare` dispatch path gets ticket / role / round / run_id from that path,
+    even when the Agent description names another ticket and another role; without such a
+    path the event is today's guessed one. The transcript is found by the derived path
+    (`<transcript_path minus .jsonl>/subagents/agent-<id>.jsonl` + `.meta.json`).
+    Expected values are the literals written into the fixture below (path pieces, usage
+    numbers); nothing is read back from the code under test.
+    Mutation M3 (hook keeps run_id null for prepare prompts) -> the marked cases are red.
+    """
+
+    RUN = "20261021-095546-17288"
+
+    def write_subagent(self, agent, messages, description):
+        """`messages`: list of user-message contents (str or list of parts), in order; one
+        assistant reply with hand-picked usage follows the first one."""
+        sub = os.path.join(self.t, "session", "subagents")
+        rows = []
+        for index, content in enumerate(messages):
+            rows.append({"type": "user", "message": {"role": "user", "content": content},
+                         "timestamp": "2026-10-21T09:56:%02d.000Z" % (index * 2)})
+            if index == 0:
+                rows.append({"type": "assistant", "message": {
+                    "id": "msg_v152", "type": "message", "role": "assistant",
+                    "model": "claude-opus-test", "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 11, "cache_creation_input_tokens": 22,
+                              "cache_read_input_tokens": 33, "output_tokens": 44}},
+                    "timestamp": "2026-10-21T09:56:01.000Z"})
+        with open(os.path.join(sub, "agent-%s.jsonl" % agent), "w", encoding="utf-8") as fh:
+            for row in rows:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        with open(os.path.join(sub, "agent-%s.meta.json" % agent), "w", encoding="utf-8") as fh:
+            json.dump({"agentType": "general-purpose", "description": description}, fh)
+
+    def stop(self, agent):
+        return self.run_hook({"hook_event_name": "SubagentStop", "session_id": "s-152",
+                              "agent_id": agent, "cwd": self.root,
+                              "transcript_path": os.path.join(self.t, "session.jsonl")})
+
+    def one_event(self, result):
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "", "SubagentStop stdout must stay empty")
+        rows = self.rows()
+        self.assertEqual(len(rows), 1, result.stderr)
+        row = rows[0]
+        self.assertEqual(row["kind"], "agent.cost")
+        self.assertEqual(set(row), EVENT_KEYS | ENVELOPE)
+        self.assertEqual(row["by"], "agent-cost-hook")
+        self.assertIsNone(row["outcome"])
+        self.assertIsNone(row["effort"])
+        # the event is about THIS transcript: usage literals from write_subagent
+        self.assertEqual((row["tokens_in"], row["cache_write"], row["cache_read"],
+                          row["tokens_out"]), (11, 22, 33, 44))
+        self.assertEqual(row["session_id"], "s-152")
+        return row
+
+    def test_a1_worker_path_beats_the_description_ticket_and_role(self):
+        """A1 / T1: description says reviewer of #9; the path says worker of #7, round 1."""
+        prompt = ("model=opus\n你是 #7 的實作者(role=worker,短命角色):照派工文做。\n"
+                  "先讀這一份:/x/reports/t7/%s/dispatch-round1.md(規則包 + 票面)\n" % self.RUN)
+        self.write_subagent("w152", [prompt], "Reviewer: ticket #9")
+        row = self.one_event(self.stop("w152"))
+        self.assertEqual((row["ticket"], row["role"], row["round"], row["run_id"],
+                          row["agent_id"]), ("7", "worker", 1, self.RUN, "w152"))
+        self.assertIsInstance(row["round"], int)
+
+    def test_a1_verifier_path_says_verifier_even_when_the_description_says_worker(self):
+        """A1 / T1 variant: dispatch-verifier-round1.md -> role verifier; content given as a
+        list of text parts (the shape Claude Code writes for multi-part prompts)."""
+        parts = [{"type": "text", "text": "model=opus\n你是 #7 的驗證者(role=verifier)\n"},
+                 {"type": "text",
+                  "text": "先讀這一份:/x/reports/t7/%s/dispatch-verifier-round1.md\n" % self.RUN}]
+        self.write_subagent("v152", [parts], "Worker: ticket #9")
+        row = self.one_event(self.stop("v152"))
+        self.assertEqual((row["ticket"], row["role"], row["round"], row["run_id"],
+                          row["agent_id"]), ("7", "verifier", 1, self.RUN, "v152"))
+
+    def test_a1_round_is_the_integer_in_the_file_name(self):
+        """A1: round R (int) comes from dispatch-round<R>.md; R = 12 by hand."""
+        prompt = "先讀這一份:/srv/ctl/reports/t31/20261101-000000-1/dispatch-round12.md\n"
+        self.write_subagent("r152", [prompt], "#9 worker")
+        row = self.one_event(self.stop("r152"))
+        self.assertEqual((row["ticket"], row["role"], row["round"], row["run_id"]),
+                         ("31", "worker", 12, "20261101-000000-1"))
+
+    def test_a2_no_dispatch_path_is_todays_guess(self):
+        """A2 / T2: description '#7 opener', prompt names a report file that is NOT a dispatch
+        path -> ticket guessed '7', role opener, round / run_id null (as on base)."""
+        prompt = "看一下 /x/reports/t9/%s/EVIDENCE-round1.md 再開題\n" % self.RUN
+        self.write_subagent("o152", [prompt], "#7 opener")
+        row = self.one_event(self.stop("o152"))
+        self.assertEqual((row["ticket"], row["role"], row["agent_id"]), ("7", "opener", "o152"))
+        self.assertIsNone(row["round"])
+        self.assertIsNone(row["run_id"])
+
+    def test_a2_a_path_only_in_a_later_user_message_does_not_mark(self):
+        """A1 reads the FIRST user prompt only: a dispatch path in the second user message
+        leaves the event guessed (ticket from the description, round / run_id null)."""
+        later = "順便看 /x/reports/t7/%s/dispatch-round1.md\n" % self.RUN
+        self.write_subagent("l152", ["幫 #5 的 reviewer 看一下 diff", later], "#5 reviewer")
+        row = self.one_event(self.stop("l152"))
+        self.assertEqual((row["ticket"], row["role"]), ("5", "reviewer"))
+        self.assertIsNone(row["round"])
+        self.assertIsNone(row["run_id"])
+
+    def test_a2_session_end_still_has_null_round_and_run_id(self):
+        """A2: SessionEnd is unchanged even when the main transcript mentions a dispatch path."""
+        main = os.path.join(self.t, "main152.jsonl")
+        with open(main, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"type": "user", "message": {
+                "role": "user", "content": "/x/reports/t7/%s/dispatch-round1.md" % self.RUN},
+                "timestamp": "2026-10-21T09:56:00.000Z"}, ensure_ascii=False) + "\n")
+            fh.write(json.dumps({"type": "assistant", "message": {
+                "id": "msg_m", "type": "message", "role": "assistant",
+                "model": "claude-opus-test", "stop_reason": "end_turn",
+                "usage": {"input_tokens": 11, "cache_creation_input_tokens": 22,
+                          "cache_read_input_tokens": 33, "output_tokens": 44}},
+                "timestamp": "2026-10-21T09:56:01.000Z"}) + "\n")
+        row = self.one_event(self.run_hook({"hook_event_name": "SessionEnd",
+                                            "session_id": "s-152", "cwd": self.root,
+                                            "transcript_path": main}))
+        self.assertEqual(row["role"], "main")
+        for key in ("ticket", "agent_id", "round", "run_id"):
+            self.assertIsNone(row[key], key)
+
+
+class DocsNameTheFoldedAgentCost(unittest.TestCase):
+    """#152 A7 / T7 (verifier case): SCHEMA rows 'cost' / '互動成本' / 'cost_total' say which
+    agent.cost events are folded at close; the hook / parser docstrings drop the old claims
+    ('round / run_id always null', 'agent.cost never reaches cost[]'). Strings below are the
+    literal base wording (b3d5db6) that must be gone, plus row markers from SCHEMA.
+    scripts/sync-to-project.sh is deliberately not asserted (hard_block, objection 1)."""
+
+    def text(self, *rel):
+        with open(os.path.join(ROOT, *rel), encoding="utf-8") as fh:
+            return fh.read()
+
+    def schema_row(self, label):
+        rows = [line for line in self.text("tickets", "SCHEMA.md").splitlines()
+                if line.startswith("| %s |" % label)]
+        self.assertEqual(len(rows), 1, (label, rows))
+        return rows[0]
+
+    def docstring(self, filename):
+        import ast
+        return ast.get_docstring(ast.parse(self.text("scripts", filename))).replace("\n", "")
+
+    def test_t7_schema_no_longer_says_run_id_is_always_null(self):
+        self.assertEqual(self.text("tickets", "SCHEMA.md").count("`run_id` 恆為 null"), 0)
+
+    def test_a7_schema_rows_say_agent_cost_is_folded_at_close(self):
+        interactive = self.schema_row("互動成本")
+        self.assertIn("ticket.py close", interactive)
+        self.assertIn("run_id", interactive)
+        self.assertIn("agent.cost", self.schema_row("成本"))
+        self.assertIn("agent.cost", self.schema_row("成本加總"))
+
+    def test_a7_docstrings_drop_the_never_reaches_cost_claims(self):
+        self.assertNotIn("事件不進票 cost[]、不進 cost_total:ticket 是猜的",
+                         self.docstring("agent-cost-hook.py"))
+        self.assertNotIn("寫票 cost[] 的只有 `ticket.py cost`,",
+                         self.docstring("transcript-cost.py"))
+
+
 if __name__ == "__main__":
     unittest.main()
