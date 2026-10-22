@@ -26,8 +26,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "d9ef26ae11cf265b3ccf821e676d779a645a1c91",
-  "state": "InReview",
-  "state_version": 39,
+  "state": "Done",
+  "state_version": 41,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -210,9 +210,9 @@
   "review": {
     "verdict": "pass",
     "by": "reviewer@opus",
-    "sha": "5961752a7a08607e6a8956c609904f9d353171a0",
+    "sha": "d1d3bf97f7c6d72704072195b87a49e784cb9024",
     "note": "reports/t153/20261022-083316-15850/REVIEW.md",
-    "at": "2026-10-22T09:15:20+00:00"
+    "at": "2026-10-22T09:47:08+00:00"
   },
   "cost": [
     {
@@ -231,6 +231,58 @@
       "note": null,
       "effort": null,
       "at": "2026-10-22T09:15:20+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1905,
+      "outcome": "pass",
+      "run_id": "20261022-091522-24414",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-22T09:47:08+00:00"
     }
-  ]
+  ],
+  "landed_sha": "d1d3bf97f7c6d72704072195b87a49e784cb9024",
+  "cost_total": {
+    "calendar_seconds": 67505,
+    "wall_seconds": 2058,
+    "runs": 2,
+    "worker_rounds": null,
+    "objections": 2,
+    "by_role": {
+      "reviewer": {
+        "runs": 1,
+        "wall_seconds": 153,
+        "tokens_in": 40,
+        "tokens_out": 11488,
+        "cache_write": 76482,
+        "cache_read": 1470280,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 1905,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-22T09:47:08+00:00"
+  }
 }
