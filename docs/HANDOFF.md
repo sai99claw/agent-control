@@ -123,7 +123,8 @@ land 拒收 `verify.files` 沒帶進來的分支(**rc=4**);`verify.py` 在同一
 
 ### 現況
 - 落地:#151(root 下測試)、#146、#149(`auto-fix.sh <n> --prepare`,D-061)、#147(文件整併,減法最後一張)、#152(子 agent token 進 cost[])。
-- 進行中:**#153**(complex、needs_verifier)—— 四個事後比對取代 land_attribution 與 rc 8 守衛,並瘦身 auto-fix.sh(併入 #154,D-064 / D-065)。worker 第 1 輪 2026-10-22 起跑(`reports/t153/20261022-065225-895/`,worktree `../agent-control-wt/t153`)。交件後:`apply.sh 153 --evidence ../agent-control-wt/fix-t153/round1/EVIDENCE-round1.md` → `auto-fix.sh 153 --prepare verifier` 派驗證者 → apply 驗證者 → gate(綠會自動 review.sh)→ land。
+- 落地(續):**#153**(d1d3bf9,complex、覆核 pass)—— `scripts/main_guard.py` 四個比對(HEAD / origin / 主 repo 工作樹 / hard_block.dirs)取代 land_attribution 與 rc 8 快照守衛;`--prepare` 那條路收件拒收是 apply rc 7,每次收件只比收的那一輪自己的快照。auto-fix.sh 3,414 → 3,203 行(沒到 2,959:歸屬判斷約 310 行已移進 main_guard.py,再砍只剩本票沒碰的派工 / 驗證者註解,worker EVIDENCE 理由)。A 端開著的票只剩凍結的 #93 與 Draft。
+- 待查(沒開票):apply.sh 反駁去重太粗 —— #153 驗證者那筆 ticket-wrong 與 worker 那筆被當成同一筆沒記進票,主線手動補記(ba8c41d)。
 - 其他開著的:#93 與 7 張 Draft 照舊凍結。
 
 ### 雲端主線的做法(實測過)
