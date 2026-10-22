@@ -27,7 +27,7 @@
   "attempt": 0,
   "base_sha": "d9ef26ae11cf265b3ccf821e676d779a645a1c91",
   "state": "Running",
-  "state_version": 30,
+  "state_version": 31,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -173,6 +173,14 @@
       "owner": "main",
       "disposition": "deferred",
       "follow_up": "Main: (1) sync-to-project.sh SCRIPT_LIST must add scripts/main_guard.py before the next sync to tabby; hard_block file, user edits it on Mac together with the D-065 ③ line (HANDOFF todo). (2) A8 vs A5: worker followed A5 (guard.json written on concurrent land); accepted."
+    },
+    {
+      "category": "ticket-wrong",
+      "body": "A3 does not say whether a verifier receipt also re-compares the worker round's main-snapshot.json; measured: apply.sh does (it always passes fix-t<n>/round<r>), so a docs/DECISIONS.md landing made after the worker round was received and before --prepare verifier rejects the verifier receipt with rc 7, against the rule the branch's own docs state (decisions wait until the round is received). Opener: say which snapshot(s) a verifier receipt compares.",
+      "evidence": "../agent-control-wt/verify-t153/round1/EVIDENCE-verifier.md",
+      "owner": "opener",
+      "disposition": "",
+      "follow_up": ""
     }
   ]
 }
