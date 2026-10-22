@@ -116,3 +116,49 @@ land 拒收 `verify.files` 沒帶進來的分支(**rc=4**);`verify.py` 在同一
 - 減法前後對比報告(D-055 ③ / D-057 ①):增刪行數、token、落地全套耗時。減法前全套基準:unittest 1155 條 1606 s + 回歸 340 條 686 s ≈ 38 分鐘(2026-10-19)。
 - 擱著的新規則(D-053 減法期間不開):worker 只跑 1 輪沒用工具沒交件時自動重起一次。
 - tabby 端:A 整個改好後才改 T(使用者原話);T 的 guard-main 還在(A 已刪)。
+
+## 2026-10-22 雲端主線第一輪(給下一個主線)
+
+雲端主線從 2026-10-21 接手(D-059)。這一輪在雲端走通了完整流程,減法 A 端做完並宣告完成(D-063 ②)。
+
+### 現況
+- 落地:#151(root 下測試)、#146、#149(`auto-fix.sh <n> --prepare`,D-061)、#147(文件整併,減法最後一張)、#152(子 agent token 進 cost[])。
+- 進行中:**#153**(complex、needs_verifier)—— 四個事後比對取代 land_attribution 與 rc 8 守衛,並瘦身 auto-fix.sh(併入 #154,D-064 / D-065)。worker 第 1 輪 2026-10-22 起跑(`reports/t153/20261022-065225-895/`,worktree `../agent-control-wt/t153`)。交件後:`apply.sh 153 --evidence ../agent-control-wt/fix-t153/round1/EVIDENCE-round1.md` → `auto-fix.sh 153 --prepare verifier` 派驗證者 → apply 驗證者 → gate(綠會自動 review.sh)→ land。
+- 其他開著的:#93 與 7 張 Draft 照舊凍結。
+
+### 雲端主線的做法(實測過)
+- 派工:`auto-fix.sh <n> --prepare worker|verifier` 印出四件事,原樣貼給 Agent 工具的子 agent(背景跑,交件主動回報)。被擋或紅 → 用 SendMessage 叫回同一個子 agent,不重新 prepare。手派(開題者、反駁驗證者)直接給四件事。
+- gate / land 一律帶 `--no-auto-fix`(不加,紅了會起 headless worker)。覆核由 gate 綠後自動叫 `review.sh`(headless `claude -p`,雲端可用)。
+- 票檔 / DECISIONS 一律 `land.sh docs`;本機要在 `main` 分支上跑。落地時 docs 通道會被 `.land.lock` 擋,等落地完再推。
+- 容器 2026-10-21〜22 重啟 3 次:背景工作會被殺、子 agent 結果要從 tasks/*.output 讀。每收完一步就把票檔推上 main,別讓狀態只留在容器。
+- GitHub App 要有 Contents 寫入(D-060);沒有的話 push 與 API 都 403。
+
+### 使用者待辦(在 Mac 上)
+- `scripts/sync-to-project.sh` 第 466 行「(不進票 cost[])」:#152 落地後要加 --prepare 例外;hard_block 檔,使用者自己改(D-065 ③)。
+- VISION:使用者自己加「執行位置(本機/雲端/子 agent)由主線依額度決定」(D-063 ④)。
+- T 端(tabby):第 6 題「何時開始、要不要搬雲端」還沒裁;主線建議報告後開 T 票,寫碼與 Chrome 測試放雲端,Safari、發版、同步留 Mac。
+- 2026-11-19 前後:T 的反駁往上送比例(D-054 Q8)。減法報告第二段:T 端跑完 10 張票後補每票成本對比減法前 30 天(D-063 ②)。
+
+### 減法簡報
+Claude Docs 文件「Agent Control 減法改動簡報」:https://claude.ai/artifact/RQKo3FxGWL1oFxTetQVwKR(含一覽、流程前後、雲端主線、待決題與裁示、第一段報告)。
+
+### #147 的 T 端配套清單(D-062;原文抄自 #147 worker EVIDENCE,該檔在 worktree 外、不進 git)
+讀不到的條目標「未讀」,要在 Mac 上補(`../tabby_pool_ctl/tickets` 不在 GitHub)。
+
+Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 through the GitHub file-content tool; read-only, nothing written).
+**Limits**: cloning T and processing the downloaded file in the shell were refused by this session's permission classifier, so line numbers below are hand-counted from the raw file (±1, marked) or missing (marked "未讀"). T's `tickets_dir` is `../tabby_pool_ctl/tickets` (outside the repo), so old tickets (item 11) cannot be read from GitHub.
+`scripts/control/.synced-from` = `990d739a37f3b99f1dfdb79c3cf89aed24f0e623` (read). `scripts/control/` holds apply.sh, auto-fix.sh, event.py, guard-main.sh, heartbeat.sh, inbox.py, memory.py, new-session.sh, repo-map.py, review.sh, rules.py, session-hook.sh, status.py, ticket.py, verify-case.py, verify.py, wtbase.sh — no agent-cost-hook.py, transcript-cost.py, role-models.py (A's SCRIPT_LIST, scripts/sync-to-project.sh:102, has them).
+
+| # | T 現況 (file:line) | 改成 |
+|---|---|---|
+| 1 | `board/config.json`: no `hard_block`; `protected_paths` :110-115 = DECISIONS.md, scripts/build.sh, scripts/deploy-prod.sh, demo/data/** ; kill/port regexes live in `verify_lint.forbid` :83-94 (os\.kill, killpg, pkill, kill -, 1890[3-5], 18889, 15349, TABBY_BROWSER_ENGINES=) (hand-counted ±1) | add `hard_block` {paths: docs/DECISIONS.md, docs/VISION.md, scripts/build.sh, scripts/deploy-prod.sh; dirs: ~/tabby-data/prod/; patterns: 4 kill + 18903/18904/18889}; drop demo/data/**; remove `protected_paths` and `verify_lint` (case lint retired #138); land-ticket.sh / test-for.sh call ticket.py's hard_block check. land-ticket.sh has 0 occurrences of `protected_paths` (Grep -o on the fetched file), so where T enforces it today is 未讀 (likely the synced ticket.py at 990d739). Open question for main: outline drops 18905 / 15349 / TABBY_BROWSER_ENGINES= that T forbids today. |
+| 2 | `scripts/land-ticket.sh`: contains `review_problems` x3, no `complexity` (Grep -o, no line numbers; 未讀 line-level) | require review only for complexity=complex; drop review binding |
+| 3 | `scripts/land-ticket.sh`: `verify_strings` x17, `waiver` x9 (Grep -o, no line numbers); `scripts/test-for.sh` 未讀 | delete verify_strings match, verify.files checks, waiver, second close gate |
+| 4 | land-ticket.sh: 未讀 (no `patch.diff` token found by Grep -o); `docs/DISPATCH-COMMON-RULES.md` §6 :79 still says deliver `diff -ruN … > $W/patch.diff`; §10 :~118-122 "交付後清副本" assumes archive copies (hand-counted) | receive the ticket-branch commit, not a patch (#144/#145 form) |
+| 5 | `.claude/settings.json` :15-26 PreToolUse matcher Bash\|Read -> `scripts/control/guard-main.sh` (:21); no SubagentStop / SessionEnd entries; agent-cost-hook.py not present in scripts/control (hand-counted) | drop the guard-main.sh hook (sync manifest retires the file); add SubagentStop + SessionEnd -> `scripts/control/agent-cost-hook.py` (arrives with the next sync) |
+| 6 | `docs/DISPATCH-COMMON-RULES.md` §1 "工作區" :36-41: "改 `$W/work` … 沒有 `.git`" (:37), "**禁止一切 git 寫入動詞**(add / commit / … / rebase / tag / clean)" (:38) (hand-counted ±1); T config `rules.sections.worker` starts with "工作區" (board/config.json:26) so this is what T workers read | rewrite §1 to the branch-commit rule (same moment as syncing #144's auto-fix.sh) |
+| 7 | `board/config.json` `memory` :95-106: `cap_chars: 2000` :96, `consolidators` [fable, codex:gpt-6-astra] :101-104, `inbox_max_lines: 20` :105; no `unit` / `raise_allowed` keys (hand-counted ±1) | drop cap_chars and inbox_max_lines (#134/#148: no fixed cap; inbox trigger is ≥5 lines or 3 days); `consolidators` list is also an old key (#122: single consolidator from role table) |
+| 8 | `docs/TICKET-OPENER-PROMPT.md` :21 asks for "in-scope 檔案清單、allowed_write_paths", :23 asks for `verify_strings`, :27 ticket shape with `verify_strings`; no complexity field (hand-counted); `docs/roles/` (synced) not read | opener marks every ticket simple/complex; stop asking for allowed_write_paths / verify_strings; check T's own docs against synced docs/roles |
+| 9 | `scripts/board.py` exists (T-owned); index.jsonl readers 未讀 | if it reads index.jsonl, switch to the reports/inbox/ directory (#143) |
+| 10 | 未讀 on T side; A side: `scripts/sync-to-project.sh:493` prints "非產出物 … 同步不管它" for files in docs/roles not on the manifest (read) | run sync-to-project.sh, handle its warnings about T's own scripts/land.sh |
+| 11 | T tickets live in `../tabby_pool_ctl/tickets` (board/config.json:4), not in the repo: 未讀 | leave old tickets' allowed_write_paths / verify_strings / review binding as history |
