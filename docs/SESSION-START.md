@@ -42,6 +42,11 @@
   → `sh scripts/gate.sh --branch --ticket <n> --no-auto-fix`(綠了票轉 InReview,complex 票它自己叫 review.sh)
   → `sh scripts/land.sh t<n> --no-auto-fix`。任何一步被拒或紅(apply rc 5 hard_block、閘門紅、land 拒收):
   **把那一行拒收 / 紅榜叫回同一個 subagent**,不要再 prepare。`--no-auto-fix` 是因為預設會改起 headless worker 那一輪。
+  **apply rc 7 是例外**(主 repo 比對拒收,#153,D-064):不是 subagent 的錯能修的,**不要交回 subagent** —— 讀
+  stderr 點名的那一項(sha 範圍、origin 的 ref 或路徑;全文在快照旁的 `main-compare.json`),查清楚是誰動的再決定
+  (還原後重跑 apply、或作廢這一輪重派)。只記不擋的(落地期間 main 前進、docs/ 等前綴的改動)apply 照收、每筆印一行。
+  **一輪跑著的期間,主線不改、也不落地 `hard_block.paths` 上的檔**(`docs/DECISIONS.md`、`docs/VISION.md`):
+  改了那一輪就被拒收(D-065 ②);裁示等收件之後再寫。
   備援(routine,雲端)的手動步驟在 `docs/reference/role-procedures.md`「主線操作細節」的 Fallback: routine。
 
 ## 開題者

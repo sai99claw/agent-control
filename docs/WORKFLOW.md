@@ -177,32 +177,41 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
    內文列整批。**全程不寫票**(不 `ticket.py set`;任何一張票的 `state_version` 一動,N 張的覆核同時過期),
    各票分支不動;worker / reviewer 的成本各一列只記在第一張票(`ticket.py cost --note "batch <stamp> #1 #2"`)。
    只跑一輪:rc 0 = fix 已 commit 且覆核 pass,呼叫端接著重跑全套。退出碼同單票(3 反駁 / 4 紅榜空 / 5 沒交、逾時、收件被擋 / 8 越界)。
-8. **agent 越界守衛(#115,D-048 現況)**:codex 與 claude worker 同權限(codex 起 `-s danger-full-access
+8. **agent 越界守衛(#115,D-048 現況;規則 D-064 / D-065,#153)**:codex 與 claude worker 同權限(codex 起 `-s danger-full-access
    -c 'approval_policy="never"' -C .`,外加 `--add-dir <副本根>` 恰一次,cwd 與 claude 同是 worker 的票分支 worktree
-   / 驗證者副本的 `work/`),不靠
-   沙盒擋,改由 `run_agent` 在 worker / 驗證者 / 批次 worker 起跑前後各拍一次快照:主 repo 的 HEAD、分支、
-   `refs/heads` 底下每一條分支的頭(#144;主 worktree 那一條由 HEAD 那一格管,worker 自己的票分支不算,
-   land 的 `land/<stamp>` 有同 stamp 的 `land.start` 就歸屬給那次落地)、
-   `git status` 列得出的每個路徑**加內容雜湊**(已髒的檔再被改一次也看得到),以及 `board/config.json` 的
-   `hard_block.dirs`(字串 list,`~` 展開、相對主 repo 解析;缺或 `[]` 只查主 repo)底下每一個檔。豁免只有
-   config 解析出的 tickets / events / answers / reports 路徑、這個 agent 自己的副本與 worker 自己的 worktree;HEAD 前進時
-   `git rev-list --first-parent 舊..新` 的**每一個 commit** 都要歸屬到一次合法落地(#127):一筆 `land.pass`
-   帶 `stamp`、`sha`、40 位的 `main_before`,而整份事件檔裡在它之前有同一 stamp 的 `land.start`(可以早於
-   agent 起跑),就是 `main_before..sha` 那一段;從舊 HEAD 起一段接一段首尾相接到新 HEAD 才算同時的合法落地
-   (notes 逐段列 stamp)。接不上 ⇒ 越界,HEAD 那一格的 `unattributed` 是第一個歸屬不上的 commit。工作樹照查,
-   只有 `land.start` 不算數。**事件形狀是契約**,專案端的 land 包裝照發:票 land 的 `land.pass` 帶
-   `stamp`、`sha`(短)、`main_before`(land worktree 開出來時的 HEAD),不帶 `channel`;docs 通道一次呼叫一個
-   `stamp=docs-<YYYYmmdd-HHMMSS>-<pid>`,它的 `land.start` / `land.refused` / `land.fail` / `land.pass` 都帶這個
-   stamp 與 `channel=docs`,有 commit 的那筆 pass 帶 `sha` 與 `main_before`(commit 之前的 HEAD)。缺 stamp
-   或 `main_before` 的落地會被判越界。**push 失敗也算一段**(#128):commit 已在本機 main,所以票 land 與
-   docs 通道的 push 失敗出口發的 `land.fail` 帶 `stage=push`、`sha`(本機 main 的短 sha)、`main_before`(同 pass
-   的定義)與 stamp;守衛把這種 `land.fail` 當作與 `land.pass` 同等的一段(notes 那一段標「push 失敗」,
-   guard.json 照寫、rc 不動),其他 `land.fail`(閘門紅、ff-only 拒絕、衝突)不算 —— 它們不動 main。
-   專案端 land 包裝的 push 失敗出口要照發這個形狀。**主線可寫前綴只記不擋**(#128):`board/config.json`
-   的 `guard_main_paths`(字串 list,主 repo 相對前綴,以 `/` 為界;缺鍵 = `["tickets/", "docs/", "memory/"]`
-   = land.sh 的 DOCS_PREFIXES;`[]` = 不豁免;不是字串 list ⇒ stderr 點名、照缺鍵)底下的工作樹改動不判越界,
-   列進 guard.json 的 `main_side`(路徑與前後雜湊),`violations` 空、rc 照 agent 的結局;同一輪前綴以外的改動
-   照判 8。其餘改動 ⇒ `reports/t<n>/<run_id>/<角色>-round<r>.guard.json`(前後證據)、
+   / 驗證者副本的 `work/`),不靠沙盒擋,改由**同一支** `scripts/main_guard.py` 在 agent 跑的前後比**四樣**,
+   兩條派工路共用:headless(`run_agent` 包住 worker / 驗證者 / 批次 worker,拒收 = `auto-fix.sh` rc=8)與
+   `auto-fix.sh --prepare` 交給 in-session subagent 的那一輪(prepare 把快照寫進輪次目錄 / 驗證者副本根的
+   `main-snapshot.json`,`apply.sh` 收件前比,拒收 = rc 7;比的結果寫在旁邊的 `main-compare.json`;沒有快照
+   = 手派的 subagent,不比、印一行)。四樣:
+   ① **主線 HEAD**(與它所在的分支):沒動 = 好。往前走(快照的 HEAD 仍是祖先),而事件檔在快照之後有
+   `land.pass` 或 `stage=push` 的 `land.fail` ⇒ **只記不擋**,紀錄寫舊..新、那幾次落地的 stamp,以及
+   **不屬於任何落地的 commit**:`git rev-list 舊..新` 減掉每一筆窗內落地自己的 `main_before..sha`(沒有
+   `main_before` 就只算它的 `sha`)—— 集合差,不走鏈、不逐 commit 判(D-065 ①:「不擋,只要查得到」),沒有就寫
+   `non-land commits: none`。`舊..新` 動到 `hard_block.paths` 上的檔 ⇒ 拒收,有沒有落地都一樣(D-065 ②)。
+   沒有落地卻前進、切了分支、或被改寫(快照的 HEAD 不再是祖先)⇒ 拒收。只有 `land.start` 不算數。
+   ② **origin 的 ref**(`git ls-remote origin`,有逾時):任一條被建 / 推 / 刪 ⇒ 拒收,只有窗內有落地時
+   main(與 HEAD)前進是紀錄。沒有 origin ⇒ 不比、一行;`ls-remote` 失敗或逾時 ⇒ 一行 `push not compared`,
+   不擋(D-065 Q4)。本機其他分支(`refs/heads/*`)不比(D-065 Q3,#144 那一格拿掉)。
+   ③ **主 repo 工作樹**:`git status --porcelain=v1 -z --untracked-files=all` 的每個路徑**加內容雜湊**(已髒的檔
+   再被改一次也看得到)。豁免:config 解析出的 tickets / events / answers / reports(控制面)、這個 agent 自己的
+   副本與 worker 的 worktree。**主線可寫前綴只記不擋**(#128):`board/config.json` 的 `guard_main_paths`
+   (字串 list,主 repo 相對前綴,以 `/` 為界;缺鍵 = `["tickets/", "docs/", "memory/"]` = land.sh 的
+   DOCS_PREFIXES;`[]` = 不豁免;不是字串 list ⇒ stderr 點名、照缺鍵)底下的改動列進 guard.json 的
+   `main_side` / 收件時印一行,rc 照舊;同一輪前綴以外的改動照拒。**`hard_block.paths` 上的檔永遠不豁免**
+   (D-065 ②):`docs/DECISIONS.md`、`docs/VISION.md` 在 docs/ 底下也一樣,建 / 改 / 刪 / 已髒再改 ⇒ 拒收。
+   ④ **`hard_block.dirs`**(字串 list,`~` 展開、相對主 repo 解析;缺或 `[]` 只查主 repo)底下每一個檔:
+   建 / 改 / 刪 ⇒ 拒收,沒有例外,有沒有落地都一樣。
+   **主線因此在派出去的一輪跑著的期間,不改、也不落地 `hard_block.paths` 上的檔**(`docs/DECISIONS.md`、
+   `docs/VISION.md`):改了那一輪就被拒收(D-065 ② 的推論)。裁示等那一輪收件之後再寫。
+   **事件形狀是契約**,專案端的 land 包裝照發:票 land 的 `land.pass` 帶 `stamp`、`sha`(短)、`main_before`
+   (land worktree 開出來時的 HEAD),不帶 `channel`;docs 通道一次呼叫一個 `stamp=docs-<YYYYmmdd-HHMMSS>-<pid>`,
+   它的每一筆 `land.*` 都帶這個 stamp 與 `channel=docs`,有 commit 的那筆 pass 帶 `sha` 與 `main_before`。
+   **push 失敗也算一次落地**(#128):commit 已在本機 main,所以票 land 與 docs 通道的 push 失敗出口發的
+   `land.fail` 帶 `stage=push`、`sha`(本機 main 的短 sha)、`main_before` 與 stamp,紀錄裡那一筆標「push 失敗」;
+   其他 `land.fail`(閘門紅、ff-only 拒絕、衝突)不算 —— 它們不動 main。專案端 land 包裝的 push 失敗出口要照發這個形狀。
+   headless 拒收 ⇒ `reports/t<n>/<run_id>/<角色>-round<r>.guard.json`(`violations` 前後證據;只記不擋的那一份
+   `violations` 空,`notes` 帶紀錄那一行、`non_land_commits` 列 commit)、
    `auto-fix.sh` rc=8、票 Blocked / owner=main、`ticket.attempt.failed reason=guard-violation`、一頁 decision
    列路徑與前後;不收件、worktree 與副本留著。**排在額度那一手之前**:同一輪又撞額度仍是 8,不換候選、不重起。
    **額度 / 不可用換候選(#121/#131)**:worker 票明寫的 model/tool/effort 先於角色鏈(依 model 去重;其他角色不讀它);判讀只由 `role-models.py classify`;可換時這一次記 cost(outcome=error、note 記原因)、
