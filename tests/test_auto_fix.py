@@ -2073,6 +2073,60 @@ class APreparedRoundIsHandedInByAnInSessionSubagent(AutoFixBase):
         self.assertFalse(os.path.exists(os.path.join(os.path.dirname(self.snapshot_path()),
                                                      "main-compare.json")))
 
+    def t9b_verifier_patch(self):
+        """`--prepare verifier` after the worker commit, then the subagent's patch-verify + EVIDENCE."""
+        prepared = self.auto_fix("--prepare", "verifier")
+        self.assertEqual(prepared.returncode, 0, prepared.stdout + prepared.stderr)
+        copy = self.copy_root()
+        self.write(PREPARED_VERIFIER_CASE_REL, PREPARED_VERIFIER_CASE,
+                   where=os.path.join(copy, "work"))
+        diff = subprocess.run(["diff", "-ruN", "base", "work"], cwd=copy,
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(diff.returncode, 1, diff.stdout + diff.stderr)
+        return (self.write("patch-verify.diff", diff.stdout, where=copy),
+                self.write("EVIDENCE-verifier.md", PREPARED_VERIFIER_EVIDENCE, where=copy))
+
+    def test_153_t9b_a_verifier_receipt_compares_only_its_own_round(self):
+        """T9b (A3, objection 2): a docs/DECISIONS.md landing after the worker receipt and before
+        `--prepare verifier` is legal -> the verifier receipt is rc 0, its own main-compare.json
+        does not name DECISIONS.md and the worker round's main-compare.json keeps the bytes the
+        worker receipt wrote. Control: the same landing after `--prepare verifier` -> rc 7.
+        M9 (also pass the worker round dir on a patch-verify receipt) turns the first half red."""
+        worker_sha = self.deliver_worker(interface_fixed=False)
+        worker_record = os.path.join(os.path.dirname(self.snapshot_path()), "main-compare.json")
+        with open(worker_record, "rb") as handle:
+            worker_bytes = handle.read()
+        self.land_docs("docs/DECISIONS.md", self.read("docs/DECISIONS.md") + "| D-998 | x |\n")
+        patch, evidence = self.t9b_verifier_patch()
+        done = self.run_sh("scripts/apply.sh", "1", patch, "--evidence-verifier", evidence)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("not received", done.stderr)
+        self.assertEqual(self.git("rev-parse", "t1~1").strip(), worker_sha,
+                         "the patch-verify commit is one past the worker's")
+        added = self.git("diff-tree", "--no-commit-id", "--name-status", "-r", "t1").splitlines()
+        self.assertIn("A\t%s" % PREPARED_VERIFIER_CASE_REL, added, added)
+        with open(os.path.join(self.copy_root(), "main-compare.json"), encoding="utf-8") as handle:
+            self.assertNotIn("docs/DECISIONS.md", handle.read())
+        with open(worker_record, "rb") as handle:
+            self.assertEqual(handle.read(), worker_bytes, "the worker round's record is untouched")
+
+        with self.subTest("control: landing after --prepare verifier"):
+            self.setUp()
+            worker_sha = self.deliver_worker(interface_fixed=False)
+            patch, evidence = self.t9b_verifier_patch()
+            self.land_docs("docs/DECISIONS.md",
+                           self.read("docs/DECISIONS.md") + "| D-998 | x |\n")
+            done = self.run_sh("scripts/apply.sh", "1", patch, "--evidence-verifier", evidence)
+            self.assertEqual(done.returncode, 7, done.stdout + done.stderr)
+            self.assertIn("not received", done.stderr)
+            self.assertIn("docs/DECISIONS.md", done.stderr)
+            with open(os.path.join(self.copy_root(), "main-compare.json"),
+                      encoding="utf-8") as handle:
+                record = json.load(handle)
+            self.assertEqual(record["verdict"], "reject")
+            self.assertIn("docs/DECISIONS.md", json.dumps(record))
+            self.assertEqual(self.git("rev-parse", "t1").strip(), worker_sha)
+
     # ---- #153 verifier cases (round 1): written from the ticket text, independent of the cases
     # above. Shas, stamps and paths come from the test's own git / event-file reads; wording
     # ('not received', 'non-land commits: none', 'push not compared') from the ticket.
