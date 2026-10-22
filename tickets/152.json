@@ -18,8 +18,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "b3d5db6ae4bac21bc5b6913fe8ac17a7fc83c93b",
-  "state": "Running",
-  "state_version": 11,
+  "state": "InReview",
+  "state_version": 14,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -32,10 +32,10 @@
     "run": "cd tests && python3 -m unittest test_agent_cost_hook.PrepareDispatchPathPinsTheEvent test_agent_cost_hook.DocsNameTheFoldedAgentCost test_ticket.PrepareSubagentCostOnClose test_auto_fix.ThePrepareWorkerStopsBeforeTheProcess.test_a6_the_real_worker_pointer_marks_the_cost_event test_auto_fix.ThePrepareVerifierCopy.test_a6_the_real_verifier_pointer_marks_the_cost_event",
     "notes": "Verifier cases (17) live in existing modules next to the worker's own #152 cases. Expected values are hand-built fixture literals (transcript jsonl / events.jsonl rows written by the test) and hand arithmetic (worker tokens_in 100+25=125, wall 50+300+20=370), never read back from the code under test. The A2 cases and test_a4_set_state_done_ignores_the_same_noise are green on base by design (they pin unchanged behaviour). A6 runs the real scripts/agent-cost-hook.py end to end on the --prepare stdout (AC_ROOT on a throwaway root). close --landed stamps landed_sha in its own save first, so its state_version step is not asserted. T5 seeds the existing row with note 'agent_id=a1' (the form SCHEMA and the fold write). No assertion on scripts/sync-to-project.sh (hard_block). The three modules take ~645 s on base (verify-case TIMEOUT is 900 s). uid 0 safe: no chmod.",
     "baseline": {
-      "stage": "red",
+      "stage": "check",
       "ok": true,
       "why": "",
-      "at": "2026-10-21T16:28:22+00:00",
+      "at": "2026-10-22T06:21:00+00:00",
       "files": [
         "tests/test_agent_cost_hook.py",
         "tests/test_ticket.py",
@@ -43,8 +43,8 @@
       ],
       "base_ref": "b3d5db6ae4bac21bc5b6913fe8ac17a7fc83c93b",
       "base_sha": "b3d5db6ae4bac21bc5b6913fe8ac17a7fc83c93b",
-      "candidate": "../agent-control-wt/verify-t152/round1/work",
-      "candidate_sha": "",
+      "candidate": "../agent-control-wt/t152",
+      "candidate_sha": "c92f2ada6906171a5ba0bb82424cce37ed756e30",
       "baseline": {
         "red": [
           "tests.test_agent_cost_hook.DocsNameTheFoldedAgentCost.test_a7_docstrings_drop_the_never_reaches_cost_claims",
@@ -93,9 +93,9 @@
           "tests.test_ticket.PrepareSubagentCostOnClose.test_a3_set_state_done_folds_too: AssertionError: 1 != 3 : ('set Done', [{'role': 'worker', 'round': 1, 'model': 'opus', 'tokens_in': 100, 'tokens_out': 10, 'cache_write': 1, 'cache_read': 2, 'wall_seconds': 50, 'outcome': 'handed-in', 'run_id': 'H1', 'session_id': 'hs', 'by': 'auto-fix.sh', 'note': None, 'effort': None, 'at': '2026-10-21T08:00:00+00:00'}])",
           "tests.test_ticket.PrepareSubagentCostOnClose.test_a4_guessed_other_ticket_and_main_events_stay_out: AssertionError: 1 != 3 : ('close + T4 noise', [{'role': 'worker', 'round': 1, 'model': 'opus', 'tokens_in': 100, 'tokens_out': 10, 'cache_write': 1, 'cache_read': 2, 'wall_seconds': 50, 'outcome': 'handed-in', 'run_id': 'H1', 'session_id': 'hs', 'by': 'auto-fix.sh', 'note': None, 'effort': None, 'at': '2026-10-21T08:00:00+00:00'}])",
           "tests.test_ticket.PrepareSubagentCostOnClose.test_a5_a_row_already_there_for_the_pair_is_not_added_again: AssertionError: 2 != 3 : [('H1', None), ('R1', 'agent_id=a1')]",
-          "tests.test_auto_fix.ThePrepareVerifierCopy.test_a6_the_real_verifier_pointer_marks_the_cost_event: AssertionError: Tuples differ: ('99', 'reviewer', None, None, 'av6') != ('1', 'verifier', 1, '20261021-162526-2109', 'av6')",
+          "tests.test_auto_fix.ThePrepareVerifierCopy.test_a6_the_real_verifier_pointer_marks_the_cost_event: AssertionError: Tuples differ: ('99', 'reviewer', None, None, 'av6') != ('1', 'verifier', 1, '20261022-060759-3747', 'av6')",
           "tests.test_auto_fix.ThePrepareVerifierCopy.test_the_pointer_feeds_the_cost_hooks_dispatch_parser: AssertionError: False is not true : transcript-cost.py has no dispatch_mark",
-          "tests.test_auto_fix.ThePrepareWorkerStopsBeforeTheProcess.test_a6_the_real_worker_pointer_marks_the_cost_event: AssertionError: Tuples differ: ('99', 'reviewer', None, None, 'aw6') != ('1', 'worker', 1, '20261021-162531-2658', 'aw6')",
+          "tests.test_auto_fix.ThePrepareWorkerStopsBeforeTheProcess.test_a6_the_real_worker_pointer_marks_the_cost_event: AssertionError: Tuples differ: ('99', 'reviewer', None, None, 'aw6') != ('1', 'worker', 1, '20261022-060804-4299', 'aw6')",
           "tests.test_auto_fix.ThePrepareWorkerStopsBeforeTheProcess.test_the_pointer_feeds_the_cost_hooks_dispatch_parser: AssertionError: False is not true : transcript-cost.py has no dispatch_mark"
         ],
         "import_failures": [],
@@ -104,9 +104,19 @@
         "rc": 1,
         "cases": 314,
         "skipped": 0,
-        "log": "../../../tmp/claude-0/-home-user/5260a3b6-6423-5527-bed8-9d3211ae718f/scratchpad/red2/logs/baseline.log"
+        "log": "../agent-control-wt/t152/gate.log.verify-case.d/logs/baseline.log"
       },
-      "candidate_run": null
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 314,
+        "skipped": 0,
+        "log": "../agent-control-wt/t152/gate.log.verify-case.d/logs/candidate.log"
+      }
     }
   },
   "complexity": "simple",
@@ -131,5 +141,11 @@
       "disposition": "accepted",
       "follow_up": "Opener triage: sync-to-project.sh (hard_block) dropped from A7/T7; listed as a main-line, human-authorised todo. Worker 6bccba0 already meets the revised A7/T7, no redo."
     }
-  ]
+  ],
+  "gate": {
+    "rc": 0,
+    "sha": "c92f2ada6906171a5ba0bb82424cce37ed756e30",
+    "run_id": "20261022-054848-225",
+    "at": "2026-10-22T06:21:00+00:00"
+  }
 }
