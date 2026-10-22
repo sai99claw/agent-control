@@ -6,11 +6,11 @@ A2 | integ | auto-fix 真起假 codex 與假 claude worker,各記 argv / pwd / b
 A3 | integ | base_sha 上的票寫 OLD objective,權威票庫寫 NEW | 派工文有「權威票面快照」、含 NEW 不含 OLD、明說 worktree 的 tickets/1.json 不能推翻;控制根票副本 NEW;worktree 那份 OLD(夾具自證) | 票面 A3 原話
 A4 | integ | worker 在主 repo 新增 / 刪除 / 修改、已髒檔再改、HEAD 前進、切分支、hard_block.dirs 新增 / 刪除 / 改動;驗證者越界;批次 worker 越界 | rc 8、票 Blocked / owner=main、attempt.failed reason=guard-violation、唯一 decision 指出路徑、guard 報告有前後;票分支與 worktree 留著 | #144 驗收 3
 A5 | integ | 寫 tickets/(控制面)/ board/ 下非控制面檔;hard_block.dirs ["~/g"] / ["../o"];缺 / [] 時寫主 repo 外 | 控制面不擋、board/ 其他檔擋;~ 展開與相對主 repo 都抓;缺 / [] 不抓 repo 外 | 票面 A5 原話
-A6 | integ | 同 stamp land.start + land.pass(sha = 新 HEAD);只有 land.start;pass 的 sha 對不上;合法 land + 多一個檔 | 第一種不擋,其餘三種 rc 8 | 票面 A6 原話
+A6 | integ | 同 stamp land.start + land.pass(sha = 新 HEAD);只有 land.start;合法 land + 多一個檔 | 第一種不擋,其餘兩種 rc 8 | 票面 A6 原話(「pass 的 sha 對不上」那一案 #153 刪:D-064 / D-065 不做逐 commit 歸屬)
 A7 | integ | 假 codex 回額度信封且越界;只撞額度(表 worker = [codex astra, opus]) | 前者 rc 8、票 Blocked 不改派、reason=guard-violation、頁指出路徑;後者同一次接著起 claude worker、rc 0、票的 model / tool 不改、沒有 guard-violation | 票面 A7;#121 A2 / A4 取代「rc 7、Ready、改 opus」
 A8 | doc   | 讀 docs/ROLES.md、docs/WORKFLOW.md、scripts/ticket.py、scripts/auto-fix.sh;乾跑 codex 票 | 兩份文件有 D-048、rc=8、「待專案同步後冒煙實證」;兩支腳本與乾跑 worker 行沒有 workspace-write | 票面 A8 原話
 A9 | integ | worker commit;只改不 commit;commit 後再留未 commit 改動 | 只有新 commit + 乾淨工作樹算交件;前兩種 rc 5、分支頭不變且未 commit 改動留下;腳本不替 worker commit | #144 驗收 1
-A10 | integ | worker 在自己的 t1 commit;worker `git update-ref` 建立別的分支 | 前者守衛無 violation、同一 worktree 跑 gate、gate.sha=t1 頭且 main 頭不動;後者 rc 8 | #144 驗收 1、3
+A10 | integ | worker 在自己的 t1 commit | 守衛無 violation、同一 worktree 跑 gate、gate.sha=t1 頭且 main 頭不動 | #144 驗收 1(「別的分支被動到 rc 8」那一案 #153 刪:D-065 Q3 不比本機其他分支)
 
 ## 介面字串(全部出自票面 acceptance / interface_contracts;票面沒定的照 t115 的 patch,EVIDENCE 記一行)
 CODEX_BASE   = "codex exec -m gpt-5.6-sol -s danger-full-access -c 'approval_policy=\"never\"' -C . --skip-git-repo-check -"  ← A1 原話
@@ -501,7 +501,7 @@ printf '# EVIDENCE\\n修了 src/one.txt\\n' > EVIDENCE-round1.md
 
 
 class OnlyAnAttributedLandExplainsHead(GuardBase):
-    """A6:land.start 不是萬用豁免;要同一次 land 的識別 + 對得上的 HEAD。"""
+    """A6:land.start 不是萬用豁免;要有 land.pass(#153 起不再逐 commit 對 HEAD)。"""
 
     def test_a6_a_matching_land_start_and_pass_is_not_a_violation(self):
         """A6 同 stamp 的 land.start + land.pass、pass 的 sha = 新 HEAD → 不擋。"""
@@ -512,14 +512,6 @@ class OnlyAnAttributedLandExplainsHead(GuardBase):
         """A6 只有 land.start、HEAD 前進、沒有 pass → rc 8。"""
         self.arm('emit land.start --note "只有開始" --kv stamp=S9\n'
                  'git -C "$REPO" commit -q --allow-empty -m "不是落地"')
-        self.assert_stopped(self.auto_fix("--no-review"), "HEAD")
-
-    def test_a6_a_pass_whose_sha_is_not_the_new_head_does_not_excuse_it(self):
-        """A6 land.start + land.pass 同 stamp,但 pass 的 sha 是舊 HEAD → rc 8。"""
-        self.arm('OLD="$(git -C "$REPO" rev-parse --short HEAD)"\n'
-                 'emit land.start --note "對不上" --kv stamp=S9\n'
-                 'git -C "$REPO" commit -q --allow-empty -m "對不上的落地"\n'
-                 'emit land.pass --note "對不上" --kv stamp=S9 --kv sha="$OLD"')
         self.assert_stopped(self.auto_fix("--no-review"), "HEAD")
 
     def test_a6_a_legal_land_does_not_hide_a_worktree_change(self):
@@ -561,7 +553,7 @@ class QuotaDoesNotSwallowAViolation(GuardBase):
 
 
 class ACommitOnTheTicketBranchIsTheDelivery(GuardBase):
-    """#144 驗收 1、3:commit + clean 才交件;自己的分支合法,其他 ref 仍越界。"""
+    """#144 驗收 1、3:commit + clean 才交件;自己的分支合法。"""
 
     def assert_missing_delivery(self, done):
         self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
@@ -635,13 +627,6 @@ class ACommitOnTheTicketBranchIsTheDelivery(GuardBase):
         said = done.stdout + done.stderr + "\n" + "\n".join(
             self.page_text(row) for row in self.decisions())
         self.assertRegex(said, r"未 commit|工作樹[^\n]*(?:不乾淨|髒)")
-
-    def test_a10_updating_another_branch_ref_is_still_a_guard_violation(self):
-        """worker 在 t1 裡 `git update-ref` 另一分支 → rc 8、t1 分支與 worktree 留著。"""
-        self.arm('git -C "$REPO" update-ref refs/heads/worker-other '
-                 '"$(git -C "$REPO" rev-parse main)"')
-        self.assert_stopped(self.auto_fix("--no-review"), "worker-other")
-
 
 class DocsAndScriptsSayD048(GuardBase):
     """A8:文件寫 D-048 現況與 rc=8、能力標待實證;腳本不再用 workspace-write 起 worker。"""

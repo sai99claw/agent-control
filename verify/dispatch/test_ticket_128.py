@@ -4,7 +4,7 @@
 A1 | integ | 缺鍵(預設 tickets/ docs/ memory/)時 agent 期間主 repo docs/ 新增、改、刪、已髒再改,memory/ 新增;鍵不是字串 list | rc 0、沒有 guard-violation、沒有 decision 頁;guard.json 寫出、violations 空、主線那一邊逐路徑列前後;壞鍵 stderr 點名、照預設 | 票面 A1 原話
 A2 | integ | docs/ + scripts/ 新檔;鍵 = [] 時 docs/;預設下 docs-x/a.md | 前者 rc 8 一整組、violations 只有 scripts 那一個、主線那一邊照列 docs;後兩者 rc 8 | 票面 A2 原話;變異 M1 / M2
 A3 | integ | agent 期間真跑 `AC_ROOT=$REPO ticket.py set 2 state Blocked` 與 `set 2 objections`(處置 accepted) | rc 0、沒有 guard.json;票 2 真的變了(夾具自證) | 票面 A3 原話(基底就該綠:本票只加回歸斷言)
-A4 | integ | 沙盒 land.sh:docs 通道 / 票 land 的 push 被 origin pre-receive exit 1 拒;agent 期間 docs 通道 push 被拒;假發 land.fail 各形狀 | land.fail 帶 stage push、sha = 本機 main 短 sha、前 main = 跑之前 main、stamp;守衛 rc 0、notes 有 stamp 與「push 失敗」;閘門紅那種 land.fail / 缺前 main → rc 8 | 票面 A4 原話;變異 M3 / M4
+A4 | integ | 沙盒 land.sh:docs 通道 / 票 land 的 push 被 origin pre-receive exit 1 拒;agent 期間 docs 通道 push 被拒;假發 land.fail 各形狀 | land.fail 帶 stage push、sha = 本機 main 短 sha、前 main = 跑之前 main、stamp;守衛 rc 0、notes 有 stamp 與「push 失敗」;閘門紅那種 land.fail → rc 8(「缺前 main → rc 8」那一案 #153 刪:D-065 (1) 起缺前 main 的那一筆只算它自己的 sha)| 票面 A4 原話;變異 M3 / M4
 A5 | doc   | 讀 docs/WORKFLOW.md §8「agent 越界守衛」那一條 | 寫得出鍵名、預設三前綴、`[]`、只記不擋、stage push + sha + 前 main、專案端 land 包裝要照發 | 票面 A5 原話
 
 ## 介面字串(全部出自票面 acceptance)
@@ -136,14 +136,16 @@ class MainWritablePrefixesAreRecordedNotStopped(MainSideCase):
     def test_a1_modify_delete_and_dirty_again_under_docs(self):
         """A1 docs/ 已追蹤檔改、刪、開工前已髒再改 → 不擋;三個路徑各一列、前後不同。"""
         self.write("docs/t128-gone.md", "要被刪的\n")
-        self.git("add", "docs/t128-gone.md")
+        self.write("docs/t128-dirty.md", "開工前就會髒的\n")
+        self.git("add", "docs/t128-gone.md", "docs/t128-dirty.md")
         self.git("commit", "-q", "-m", "t128: 要被刪的檔")
+        # #153 / D-065 (2):docs/DECISIONS.md 在 hard_block.paths 上、不豁免,已髒再改改用一般 docs 檔。
         self.arm('echo changed >> "$REPO/docs/NOTES.md"\n'
-                 'echo again >> "$REPO/docs/DECISIONS.md"\n'
+                 'echo again >> "$REPO/docs/t128-dirty.md"\n'
                  'rm "$REPO/docs/t128-gone.md"')
-        self.write("docs/DECISIONS.md", self.read("docs/DECISIONS.md") + "開工前就髒了\n")
+        self.write("docs/t128-dirty.md", self.read("docs/t128-dirty.md") + "開工前就髒了\n")
         self.assert_recorded_not_stopped(self.auto_fix("--no-review"), "docs/NOTES.md",
-                                         "docs/DECISIONS.md", "docs/t128-gone.md")
+                                         "docs/t128-dirty.md", "docs/t128-gone.md")
 
     def test_a1_a_new_memory_file_is_recorded_not_stopped(self):
         """A1 缺鍵時主 repo memory/ 新增檔 → 不擋、主線那一邊列出它。"""
@@ -317,14 +319,6 @@ class APushFailureIsALegalSegment(MainSideCase):
                        'git -C "$REPO" commit -q --allow-empty -m "裸 commit"\n'
                        'emit land.fail --note "閘門紅" --kv stamp=S9 --kv @SK@=gate '
                        '--kv sha="$(git -C "$REPO" rev-parse --short HEAD)" --kv @KB@="$LB"'))
-        self.assert_stopped(self.auto_fix("--no-review"), "HEAD")
-
-    def test_a4_a_push_failure_without_the_prior_main_is_not_a_segment(self):
-        """A4 land.fail stage push 有 sha、stamp,缺前 main → rc 8(欄位要齊)。"""
-        self.arm(shell('emit land.start --note "缺前 main" --kv stamp=S9\n'
-                       'git -C "$REPO" commit -q --allow-empty -m "缺前 main"\n'
-                       'emit land.fail --note "push 沒成功" --kv stamp=S9 --kv @SK@=push '
-                       '--kv sha="$(git -C "$REPO" rev-parse --short HEAD)"'))
         self.assert_stopped(self.auto_fix("--no-review"), "HEAD")
 
 
