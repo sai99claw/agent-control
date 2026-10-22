@@ -26,8 +26,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "d9ef26ae11cf265b3ccf821e676d779a645a1c91",
-  "state": "Running",
-  "state_version": 35,
+  "state": "InReview",
+  "state_version": 39,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -38,17 +38,17 @@
     "run": "python3 -m unittest -k v153 tests.test_auto_fix   # the 13 verifier cases (~21 s on the candidate); the whole module is what verify-case.py red/check runs (~620 s on base)",
     "notes": "13 verifier cases named test_v153_* in tests/test_auto_fix.py, next to the worker's test_153_* cases: 7 in APreparedRoundIsHandedInByAnInSessionSubagent (verifier-path receipt reject/received, land.fail stage=push counts, a land before the snapshot does not count, land.fail at another stage does not count, only origin main may move with a land, unreachable origin fails neither prepare nor apply), 2 in TheGuardCatchesAgentsOutsideTheirCopy (headless: a push to origin -> exit 8; docs/DECISIONS.md landed through the real docs channel -> exit 8), 4 in a new class TheMainRepoCheckIsOneModule reading the source tree (T12 grep, T13 call graph, A7 line count < 3414, A9 docs). Expected values come from the test's own git / event-file reads and the ticket's wording, never from main_guard.py. T13 excludes first_round_dispatch (the --dry-run --round 1 printer, not named by A6) from the one-caller count. Root-safe, origin is the sandbox bare repo, no network; one case sleeps 1.5 s because event ts has one-second resolution. Whole-module run is ~620 s on base, inside verify-case.py's 900 s TIMEOUT but with ~30% margin.",
     "baseline": {
-      "stage": "red",
-      "ok": true,
-      "why": "",
-      "at": "2026-10-22T08:14:37+00:00",
+      "stage": "check",
+      "ok": false,
+      "why": "乾淨主線上有 1 條紅在缺符號(AttributeError/NameError/FileNotFoundError/TypeError 那一族)—— 改成先 assert 它存在",
+      "at": "2026-10-22T09:12:46+00:00",
       "files": [
         "tests/test_auto_fix.py"
       ],
       "base_ref": "d9ef26ae11cf265b3ccf821e676d779a645a1c91",
       "base_sha": "d9ef26ae11cf265b3ccf821e676d779a645a1c91",
-      "candidate": "../agent-control-wt/verify-t153/round1/work",
-      "candidate_sha": "",
+      "candidate": "../agent-control-wt/t153",
+      "candidate_sha": "5961752a7a08607e6a8956c609904f9d353171a0",
       "baseline": {
         "red": [
           "tests.test_auto_fix.APreparedRoundIsHandedInByAnInSessionSubagent.test_153_t10_no_snapshot_means_not_compared",
@@ -139,14 +139,26 @@
           "tests.test_auto_fix.TheMainRepoCheckIsOneModule.test_v153_t14_auto_fix_sh_is_smaller_than_base: AssertionError: 3414 not less than 3414"
         ],
         "import_failures": [],
-        "missing_symbol": [],
+        "missing_symbol": [
+          "tests.test_auto_fix.APreparedRoundIsHandedInByAnInSessionSubagent.test_153_t9b_a_verifier_receipt_compares_only_its_own_round: FileNotFoundError: [Errno 2] No such file or directory: '/tmp/tmpk6o6yplz/repo-wt/fix-t1/round1/main-compare.json'"
+        ],
         "elsewhere": [],
         "rc": 1,
-        "cases": 190,
+        "cases": 191,
         "skipped": 0,
-        "log": "../../../tmp/claude-0/-home-user/5260a3b6-6423-5527-bed8-9d3211ae718f/scratchpad/v153/red/logs/baseline.log"
+        "log": "../agent-control-wt/t153/gate.log.verify-case.d/logs/baseline.log"
       },
-      "candidate_run": null
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 191,
+        "skipped": 0,
+        "log": "../agent-control-wt/t153/gate.log.verify-case.d/logs/candidate.log"
+      }
     }
   },
   "complexity": "complex",
@@ -187,6 +199,38 @@
         "round": 1,
         "by": "opener (in-session, dispatched by main)"
       }
+    }
+  ],
+  "gate": {
+    "rc": 0,
+    "sha": "5961752a7a08607e6a8956c609904f9d353171a0",
+    "run_id": "20261022-083316-15850",
+    "at": "2026-10-22T09:12:46+00:00"
+  },
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "5961752a7a08607e6a8956c609904f9d353171a0",
+    "note": "reports/t153/20261022-083316-15850/REVIEW.md",
+    "at": "2026-10-22T09:15:20+00:00"
+  },
+  "cost": [
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 40,
+      "tokens_out": 11488,
+      "cache_write": 76482,
+      "cache_read": 1470280,
+      "wall_seconds": 153,
+      "outcome": "pass",
+      "run_id": "20261022-083316-15850",
+      "session_id": "5260a3b6-6423-5527-bed8-9d3211ae718f",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-22T09:15:20+00:00"
     }
   ]
 }
