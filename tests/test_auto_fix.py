@@ -2073,6 +2073,163 @@ class APreparedRoundIsHandedInByAnInSessionSubagent(AutoFixBase):
         self.assertFalse(os.path.exists(os.path.join(os.path.dirname(self.snapshot_path()),
                                                      "main-compare.json")))
 
+    # ---- #153 verifier cases (round 1): written from the ticket text, independent of the cases
+    # above. Shas, stamps and paths come from the test's own git / event-file reads; wording
+    # ('not received', 'non-land commits: none', 'push not compared') from the ticket.
+
+    def v153_main(self):
+        return self.git("rev-parse", "main").strip()
+
+    def v153_rejected(self, done, *names):
+        self.assertEqual(done.returncode, 7, done.stdout + done.stderr)
+        self.assertIn("not received", done.stderr)
+        for name in names:
+            self.assertIn(name, done.stderr)
+
+    def v153_verifier_round(self, between):
+        """Worker round received, then `--prepare verifier` (after the worker commit), then
+        `between()` runs while the verifier subagent works, then the subagent's patch-verify and
+        EVIDENCE. Returns (worker sha, patch, evidence, main head read before the prepare)."""
+        worker_sha = self.deliver_worker(interface_fixed=False)
+        head = self.v153_main()
+        prepared = self.auto_fix("--prepare", "verifier")
+        self.assertEqual(prepared.returncode, 0, prepared.stdout + prepared.stderr)
+        copy = self.copy_root()
+        self.assertTrue(os.path.isfile(os.path.join(copy, "main-snapshot.json")),
+                        "A3: --prepare verifier leaves verify-t1/round1/main-snapshot.json")
+        between()
+        self.write(PREPARED_VERIFIER_CASE_REL, PREPARED_VERIFIER_CASE,
+                   where=os.path.join(copy, "work"))
+        diff = subprocess.run(["diff", "-ruN", "base", "work"], cwd=copy,
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(diff.returncode, 1, diff.stdout + diff.stderr)
+        patch = self.write("patch-verify.diff", diff.stdout, where=copy)
+        evidence = self.write("EVIDENCE-verifier.md", PREPARED_VERIFIER_EVIDENCE, where=copy)
+        return worker_sha, patch, evidence, head
+
+    def v153_verifier_record(self):
+        path = os.path.join(self.copy_root(), "main-compare.json")
+        self.assertTrue(os.path.isfile(path), "A3: main-compare.json beside the verifier snapshot")
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def test_v153_a3_a_verifier_hand_in_with_a_stray_main_commit_is_not_received(self):
+        """A3 (verifier: the patch-verify's directory): a bare commit on main while the verifier
+        subagent works -> apply rc 7 before patch-verify is committed; stderr says 'not received'
+        and names the snapshot HEAD; ticket bytes, t1 head and the verifier result untouched; the
+        reject is written to main-compare.json beside verify-t1/round1/main-snapshot.json."""
+        worker_sha, patch, evidence, head = self.v153_verifier_round(
+            lambda: self.git("commit", "-q", "--allow-empty", "-m", "stray in the verifier round"))
+        ticket_bytes = self.read("tickets/1.json")
+        done = self.run_sh("scripts/apply.sh", "1", patch, "--evidence-verifier", evidence)
+        self.v153_rejected(done, head[:12])
+        self.assertEqual(self.git("rev-parse", "t1").strip(), worker_sha,
+                         "no patch-verify commit on t1 after a reject")
+        self.assertEqual(self.read("tickets/1.json"), ticket_bytes)
+        self.assertEqual(self.result_files("result-verifier-round1.json"), [],
+                         "the verifier EVIDENCE is not harvested after a reject")
+        record = self.v153_verifier_record()
+        self.assertEqual(record.get("verdict"), "reject", record)
+        self.assertIn(head[:12], json.dumps(record))
+
+    def test_v153_a3_a_verifier_hand_in_with_a_landing_in_the_window_is_received(self):
+        """A2(a) + A3 control for the case above: a docs landing while the verifier works -> rc 0,
+        the patch-verify commit is on t1 as before (one past the worker's), and stdout carries
+        the recorded line old..new with 'non-land commits: none'."""
+        landed = []
+
+        def land():
+            self.write("docs/V153.md", "landed while the verifier works\n")
+            done = self.run_sh("scripts/land.sh", "docs", "docs: v153 landing", "docs/V153.md")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            landed.append(self.v153_main())
+        worker_sha, patch, evidence, head = self.v153_verifier_round(land)
+        self.assertNotEqual(landed[0], head, "premise: the landing moved main")
+        done = self.run_sh("scripts/apply.sh", "1", patch, "--evidence-verifier", evidence)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("not received", done.stderr)
+        self.assertEqual(self.git("rev-parse", "t1~1").strip(), worker_sha,
+                         "patch-verify committed one past the worker's commit")
+        lines = [line for line in done.stdout.splitlines()
+                 if "%s..%s" % (head[:12], landed[0][:12]) in line]
+        self.assertTrue(lines, done.stdout)
+        self.assertIn("non-land commits: none", lines[0])
+        self.assertEqual(self.v153_verifier_record().get("verdict"), "ok")
+
+    def test_v153_a2a_a_landing_whose_push_failed_counts_as_a_land(self):
+        """A2(a): 'land.fail with stage=push' is a land event. origin refuses the push (pre-receive
+        exit 1), so land.sh docs fails at push with the commit on local main -> apply rc 0 and
+        the recorded line names old..new, that event's stamp and 'non-land commits: none'.
+        Red when only land.pass is counted."""
+        self.prepared_worker()
+        old = self.v153_main()
+        write_executable(os.path.join(self.origin, "hooks", "pre-receive"), "#!/bin/sh\nexit 1\n")
+        self.write("docs/V153.md", "push refused\n")
+        landed = self.run_sh("scripts/land.sh", "docs", "docs: v153 push refused", "docs/V153.md")
+        self.assertNotEqual(landed.returncode, 0, "premise: the push was refused")
+        new = self.v153_main()
+        self.assertNotEqual(new, old, "premise: the commit is on local main")
+        fails = [row for row in self.events()
+                 if row["kind"] == "land.fail" and row.get("stage") == "push"]
+        self.assertEqual(len(fails), 1, "premise: land.sh emitted land.fail stage=push")
+        done = self.receive()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("not received", done.stderr)
+        lines = [line for line in done.stdout.splitlines()
+                 if "%s..%s" % (old[:12], new[:12]) in line]
+        self.assertEqual(len(lines), 1, done.stdout)
+        self.assertIn("non-land commits: none", lines[0])
+        self.assertIn(str(fails[0]["stamp"]), lines[0])
+
+    def test_v153_a2a_a_landing_before_the_snapshot_does_not_cover_a_later_commit(self):
+        """A2(a): only land events stamped at or after the snapshot count. A real docs landing
+        before prepare (the test waits past the one-second timestamp), then a bare commit after
+        prepare -> rc 7. Red when every land event in the file counts."""
+        def landed_before():
+            self.write("docs/V153.md", "landed before prepare\n")
+            done = self.run_sh("scripts/land.sh", "docs", "docs: v153 before", "docs/V153.md")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            time.sleep(1.5)
+        self.prepared_worker(before=landed_before)
+        self.assertTrue([row for row in self.events() if row["kind"] == "land.pass"],
+                        "premise: a land.pass is in the events file")
+        old = self.v153_main()
+        self.git("commit", "-q", "--allow-empty", "-m", "stray")
+        self.v153_rejected(self.receive(), old[:12])
+
+    def test_v153_a2a_a_land_fail_at_another_stage_is_not_a_land(self):
+        """A2(a): land.fail counts only with stage=push. A bare commit plus a land.fail stage=gate
+        whose sha / main_before name exactly that commit -> rc 7."""
+        self.prepared_worker()
+        old = self.v153_main()
+        self.git("commit", "-q", "--allow-empty", "-m", "stray")
+        short = self.git("rev-parse", "--short", "main").strip()
+        emitted = self.event("emit", "land.fail", "--note", "gate red", "--kv", "stamp=V153",
+                             "--kv", "stage=gate", "--kv", "sha=%s" % short,
+                             "--kv", "main_before=%s" % old)
+        self.assertEqual(emitted.returncode, 0, emitted.stdout + emitted.stderr)
+        self.v153_rejected(self.receive(), old[:12])
+
+    def test_v153_a2b_only_main_may_move_on_origin_with_a_landing(self):
+        """A2(b): with a land event in the window only refs/heads/main (and HEAD) may move; a tag
+        pushed to origin in the same window -> rc 7 naming it."""
+        self.prepared_worker()
+        self.write("docs/V153.md", "landing in the window\n")
+        done = self.run_sh("scripts/land.sh", "docs", "docs: v153 window", "docs/V153.md")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.git("push", "-q", "origin", "main:refs/tags/v153-stray")
+        self.v153_rejected(self.receive(), "refs/tags/v153-stray")
+
+    def test_v153_a3_an_unreachable_origin_fails_neither_prepare_nor_apply(self):
+        """A3 / D-065 Q4: origin unreachable before prepare -> prepare rc 0 (asserted inside
+        prepared_worker), apply rc 0 with one 'push not compared' line."""
+        self.prepared_worker(before=lambda: self.git(
+            "remote", "set-url", "origin", os.path.join(self.home, "gone.git")))
+        done = self.receive()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("not received", done.stderr)
+        self.assertEqual(done.stdout.count("push not compared"), 1, done.stdout)
+
 
 class EveryRoundCostsARowAndClosesItsAttempt(AutoFixBase):
     """#49 A4 / A7:每一輪派工在票的 `cost[]` 記一筆(role=worker),每一個
@@ -4806,6 +4963,32 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
         self.assertEqual([os.path.relpath(row["path"], report["monitored"]["repo"])
                           for row in report["violations"]], ["docs/DECISIONS.md"])
 
+    # ---- #153 verifier cases (round 1), headless path ----
+
+    def test_v153_a5_a_worker_pushing_to_origin_stops_the_round(self):
+        """A2(b) / A5: the fake worker pushes a new branch to origin, no land in the window ->
+        exit 8, Blocked, owner main, one page naming the ref. Red when origin is not compared."""
+        self.arm('git -C "$REPO" push -q origin HEAD:refs/heads/v153-side')
+        done = self.auto_fix("--no-review")
+        self.assertTrue(self.git("ls-remote", "origin", "refs/heads/v153-side").strip(),
+                        "premise: the push reached origin")
+        self.assert_stopped(done, "refs/heads/v153-side")
+
+    def test_v153_a2a_prime_decisions_md_landed_during_the_round_stops_it(self):
+        """A2(a') / D-065 (2): docs/DECISIONS.md (hard_block.paths) edited and landed through the
+        real docs channel while the worker runs; working tree clean afterwards -> exit 8 naming it,
+        land event or not. Red when only the working tree is checked against hard_block.paths."""
+        self.arm('echo "| D-998 | during the round |" >> "$REPO/docs/DECISIONS.md"\n'
+                 'AC_ROOT="$REPO" sh "$REPO/scripts/land.sh" docs "docs: v153 decisions" '
+                 'docs/DECISIONS.md >/dev/null')
+        before = self.git("rev-parse", "main").strip()
+        done = self.auto_fix("--no-review")
+        self.assertNotEqual(self.git("rev-parse", "main").strip(), before,
+                            "premise: the docs channel landed it")
+        self.assertEqual(self.git("status", "--porcelain", "--", "docs/DECISIONS.md").strip(), "",
+                         "premise: clean working tree after the landing")
+        self.assert_stopped(done, "docs/DECISIONS.md")
+
     def test_a6_a_land_start_alone_does_not_excuse_a_head_change(self):
         """**M4**:有 land.start 就豁免 → 不停,紅。只有開始事件、沒有對應的 pass。"""
         self.arm('emit land.start --note "假的" --kv stamp=S1\n'
@@ -4941,6 +5124,120 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
                  'emit land.fail --note "閘門紅" --kv stamp=S1 --kv stage=gate '
                  '--kv sha="$(git -C "$REPO" rev-parse --short HEAD)" --kv main_before="$OLD"')
         self.assert_stopped(self.auto_fix("--no-review"), "HEAD")
+
+
+class TheMainRepoCheckIsOneModule(unittest.TestCase):
+    """#153 A1 / A5 / A6 / A7 / A9 (T12-T14), read from the source tree this module sits in.
+    Expected strings are the ticket's own (names, 'ls-remote', 'rc 7', 'DECISIONS.md', 3414)."""
+
+    ROOT = os.path.dirname(SCRIPTS)
+
+    def source(self, rel):
+        with open(os.path.join(self.ROOT, rel), encoding="utf-8", errors="replace") as handle:
+            return handle.read()
+
+    def functions(self, text):
+        """{shell function: [body lines without comment lines]} of a sh script."""
+        out, current = {}, None
+        for line in text.splitlines():
+            head = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{", line)
+            if head:
+                current = head.group(1)
+                out[current] = []
+            elif line.startswith("}"):
+                current = None
+            elif current and not line.lstrip().startswith("#"):
+                out[current].append(line)
+        return out
+
+    def calls(self, body, name):
+        return [line for line in body if re.search(r"(?<![\w$-])%s(?![\w(-])" % name, line)]
+
+    def test_v153_t12_one_module_holds_the_check(self):
+        """T12 (A1 / A5): no chain-walk names left under scripts/; no ls-remote in auto-fix.sh or
+        apply.sh; exactly one scripts/*.py holds ls-remote and the porcelain walk, and both shell
+        scripts name it."""
+        scripts = os.path.join(self.ROOT, "scripts")
+        hits = []
+        for here, _, names in os.walk(scripts):
+            for name in names:
+                with open(os.path.join(here, name), encoding="utf-8", errors="replace") as handle:
+                    text = handle.read()
+                hits += ["%s: %s" % (name, word) for word in
+                         ("land_attribution", "land_segments", "land_rows") if word in text]
+        self.assertEqual(hits, [])
+        for rel in ("scripts/auto-fix.sh", "scripts/apply.sh"):
+            self.assertEqual(self.source(rel).count("ls-remote"), 0, rel)
+        modules = [name for name in sorted(os.listdir(scripts)) if name.endswith(".py")
+                   and "ls-remote" in self.source("scripts/" + name)
+                   and "porcelain=v1" in self.source("scripts/" + name)]
+        self.assertEqual(len(modules), 1, modules)
+        for rel in ("scripts/auto-fix.sh", "scripts/apply.sh"):
+            self.assertIn(modules[0][:-3], self.source(rel), rel)
+
+    def test_v153_t13_shared_round_one_setup_exists_once(self):
+        """T13 (A6): first_round_packet is called from one function apart from first_round_dispatch
+        (the '--dry-run --round 1' printer, which A6 does not name), and prepare_worker and
+        round_once both call one helper that reaches it; archive_copy has one call site, followed
+        by verifier_packet in the same function, which prepare_verifier reaches."""
+        funcs = self.functions(self.source("scripts/auto-fix.sh"))
+        for name in ("first_round_packet", "prepare_worker", "round_once", "prepare_verifier",
+                     "archive_copy", "verifier_packet"):
+            self.assertIn(name, funcs, "premise: auto-fix.sh defines %s" % name)
+
+        def reach(start):
+            seen, todo = set(), [start]
+            while todo:
+                body = funcs[todo.pop()]
+                for other in funcs:
+                    if other not in seen and self.calls(body, other):
+                        seen.add(other)
+                        todo.append(other)
+            return seen
+        callers = sorted(name for name, body in funcs.items()
+                         if name != "first_round_dispatch" and self.calls(body, "first_round_packet"))
+        self.assertEqual(len(callers), 1, callers)
+        shared = [name for name in funcs
+                  if self.calls(funcs["prepare_worker"], name)
+                  and self.calls(funcs["round_once"], name)
+                  and "first_round_packet" in reach(name)]
+        self.assertTrue(shared, "no helper shared by prepare_worker and round_once")
+        sites = [(name, line) for name, body in funcs.items() if name != "archive_copy"
+                 for line in self.calls(body, "archive_copy")]
+        self.assertEqual(len(sites), 1, sites)
+        body = funcs[sites[0][0]]
+        at = body.index(sites[0][1])
+        self.assertTrue(self.calls(body[at + 1:], "verifier_packet"), sites[0][0])
+        self.assertIn(sites[0][0], reach("prepare_verifier") | {"prepare_verifier"})
+
+    def test_v153_t14_auto_fix_sh_is_smaller_than_base(self):
+        """A7: 'wc -l < scripts/auto-fix.sh' below 3414 (the ticket's measured base)."""
+        self.assertLess(self.source("scripts/auto-fix.sh").count("\n"), 3414)
+
+    def test_v153_a9_docs_follow(self):
+        """A9: apply.sh's exit-code header has a 7 row; auto-fix.sh's exit 8 row names origin (one
+        of the four comparisons); DISPATCH-TEMPLATE no longer names refs/heads as guarded;
+        WORKFLOW item 8 and SESSION-START state the hard_block.paths consequence; SESSION-START
+        lists apply rc 7."""
+        head = []
+        for line in self.source("scripts/apply.sh").splitlines()[1:]:
+            if not line.startswith("#"):
+                break
+            head.append(line)
+        self.assertTrue([line for line in head if re.match(r"^#\s+7\s", line)], "apply.sh header")
+        rows = self.source("scripts/auto-fix.sh").split("\n#   8 ", 1)
+        self.assertEqual(len(rows), 2, "premise: auto-fix.sh has an exit 8 row")
+        self.assertIn("origin", rows[1].split("\n#   9 ", 1)[0])
+        self.assertNotIn("refs/heads", self.source("docs/DISPATCH-TEMPLATE.md"))
+        workflow = self.source("docs/WORKFLOW.md")
+        item = re.search(r"(?ms)^8\. \*\*agent.*?(?=^\d+\. )", workflow)
+        self.assertIsNotNone(item, "premise: WORKFLOW item 8")
+        self.assertIn("DECISIONS.md", item.group(0))
+        self.assertIn("hard_block.paths", item.group(0))
+        start = self.source("docs/SESSION-START.md")
+        self.assertTrue([line for line in start.splitlines() if "rc 7" in line], "SESSION-START")
+        self.assertTrue([line for line in start.splitlines()
+                         if "hard_block.paths" in line and "DECISIONS.md" in line], "SESSION-START")
 
 
 # 上一輪閘門的缺口那幾行(形狀抄 gate.sh 的 verify_case;#126 T3 經 status.py done 寫同形 status.json)。
