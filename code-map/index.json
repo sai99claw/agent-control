@@ -12,6 +12,7 @@
     "scripts/heartbeat.sh",
     "scripts/inbox.py",
     "scripts/land.sh",
+    "scripts/main_guard.py",
     "scripts/memory.py",
     "scripts/new-session.sh",
     "scripts/repo-map.py",

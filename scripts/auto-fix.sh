@@ -66,8 +66,11 @@
 #   6 規則包產不出來(#74):worker / 驗證者一個都沒起;缺項在 rules.py 送的 decision 頁
 #   7 角色表的候選整串耗盡(#121 A3:票 Blocked、一頁 decision、不再起程序),或額度後的
 #     下一個候選交給 Controller / 別的驅動者接續(副本留著)
-#   8 agent 越界(#115,D-048):主 repo / hard_block.dirs 有不屬於控制面、也歸屬不到同時 land 的改動;
-#     票轉 Blocked、owner=main,一頁 decision,不收件、worktree 與副本留著(與額度同時發生也是 8)
+#   8 agent 越界(#115,D-048;規則 D-064 / D-065,`main_guard.py`):agent 跑的前後比四樣 —— 主線 HEAD、
+#     origin 的 ref、主 repo 工作樹(porcelain + 髒檔雜湊)、hard_block.dirs 底下的檔。沒有逐 commit 歸屬:
+#     HEAD 前進而期間有主線落地只記不擋(紀錄列出不屬於任何落地的 commit);沒有落地卻前進、被改寫、
+#     origin 被推、工作樹在控制面與 guard_main_paths 之外有變、hard_block.paths 或 hard_block.dirs 有變
+#     ⇒ 票轉 Blocked、owner=main,一頁 decision,不收件、worktree 與副本留著(與額度同時發生也是 8)
 #   9 閘門綠、覆核 fail   10 閘門綠、覆核沒交件 / stale / 沒完成(#121 A6)
 set -u
 # `AC_ROOT` 優先:被 `gate.sh` 的 auto-fix 叫到時,這支檔案住在**副本**裡,
@@ -392,7 +395,7 @@ attempt_failed() {   # $1 = no-patch | apply-failed | timeout | objection | veri
 }
 
 # 越界守衛的收件(#115):`run_agent` 寫的 `<log 去掉 .log>.guard.json` 裡 violations 不空就是越界
-# (只有 main_side 的那一份是主線那一邊的改動,只記不擋,#128)。這一輪
+# (violations 空的那一份是只記不擋的紀錄:main_side 與主線落地期間的 HEAD 前進,#128、#153)。這一輪
 # 每一個 agent 的報告併成**一頁**;票轉 Blocked、owner=main、attempt 以 guard-violation 收;
 # 不收件、worktree 與副本不收(下一個人要從它看做了什麼)。額度那一手排在它後面(A7)。
 guard_stop() {   # $1… = 這一輪 agent 的 log(空字串略過);有越界回 0(ROUND_RC=8),沒有回 1
@@ -410,8 +413,7 @@ for log in sys.argv[1:]:
         continue
     said.append("%s:%s" % (report.get("role") or "?", ";".join(
         "%s(前 %s → 後 %s%s)" % (row.get("path"), row.get("before"), row.get("after"),
-                                "、歸屬不上 %s" % row["unattributed"][:12]
-                                if row.get("unattributed") else "")
+                                ";" + row["why"] if row.get("why") else "")
         for row in rows[:5]) + (" 等 %d 處" % len(rows) if len(rows) > 5 else "")))
     where.append(path)
 if not said:
@@ -1236,7 +1238,7 @@ WT=$WTBASE/$(ticket_branch)
 run_agent() {   # $1 = 命令 $2 = 派工文 $3 = 副本根 $4 = 角色 $5 = 第幾輪 $6 = log $7 = 1:tee+pid 檔 $8 = 時限 $9 = worker 的 worktree;印出 rc
     python3 - "$1" "$2" "$3" "${8:-$WORKER_TIMEOUT}" "$ID" "$5" "$6" "$4" "${7:-}" \
         "$ROOT" "$MAINROOT" "$TF" "${9:-}" <<'PY'
-import hashlib, json, os, shlex, shutil, signal, subprocess, sys, threading, time
+import json, os, shlex, shutil, signal, subprocess, sys, threading, time
 (cmd, dispatch, cwd, timeout, ident, r, log_path, role, tee_flag,
  root, mainroot, ticket_file, worktree) = sys.argv[1:14]
 LABEL = {"worker": "worker ", "verifier": "驗證者", "opener": "開題者"}.get(role, role + " ")
@@ -1344,272 +1346,48 @@ def tee(stream, log):
             sys.stderr.buffer.flush()
 
 
-# ## 越界守衛(#115,D-048 的事後檢查)
-# worker / 驗證者 / 批次 worker 與 claude 同權限,不靠沙盒擋;起跑前後各拍一次快照:主 repo 的
-# HEAD、分支、`git status` 列得出的每一個路徑加內容雜湊(已髒的檔再被改一次,porcelain 一樣、
-# 雜湊不一樣),與 config `hard_block.dirs` 底下每一個檔。對不上的就是越界,除了兩種:控制面
-# (config 解析出的 tickets / events / answers / reports)與這一個 agent 自己的副本;HEAD 前進
-# 時 `git rev-list --first-parent 舊..新` 的每一個 commit 都要歸屬到一次合法落地(#127):一筆
-# land.pass 帶 stamp、sha、40 位的 main_before,事件檔裡在它之前(可以早於起跑)有同 stamp 的
-# land.start,就是 main_before..sha 那一段;從舊 HEAD 起一段接一段首尾相接到新 HEAD 才算數,
-# 接不上的第一個 commit 記成 `unattributed`。票的 land 與 docs 通道(channel=docs)同一套,工作樹照查。
-# push 失敗的 land.fail 帶 stage=push 與齊全的 sha / main_before / stamp(#128 A4)也算一段:commit 已在本機 main。
-# 主線可寫前綴(config `guard_main_paths`,缺 = docs 通道三前綴,#128 A1)底下的改動只記不擋,列進 `main_side`。
-# 分支 ref(#144):`refs/heads` 底下每一條的頭也拍(主 worktree 的那一條由 HEAD 那一格管);這張票的分支
-# 與 worker 的 worktree(連它掛的分支,批次是整合分支,#145)是它自己的、不算;land 的 `land/<stamp>` 有同 stamp 的 land.start 就歸屬給那次落地。
-# 越界寫 `<log 去掉 .log>.guard.json`、rc 印 8;只有 main_side 或 push 失敗的那一段時 guard.json 照寫、
-# violations 空、rc 不動。
-# **只查列出來的地方**:主 repo 被 .gitignore 掉的檔與 hard_block.dirs 以外,這裡不宣稱看過。
+# ## 越界守衛 = main-repo check (#115, D-048; one rule for both dispatch paths since #153, D-064)
+# The shared module `main_guard.py` snapshots before the agent starts and compares after it exits
+# (HEAD / origin refs / main-repo porcelain + hash / hard_block.dirs; the rules are in its header).
+# Exempt: the control plane, the agent's own copy and the worker's worktree. A reject writes
+# `<log stem>.guard.json` and prints rc 8; recorded items only (main-side paths, HEAD moved during
+# a main-line land: commits outside every in-window land's own main_before..sha are listed, not
+# blocked) write it too, rc unchanged. The opener edits real tickets by design (#89).
+sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
+import main_guard  # noqa: E402
+
 guard_path = os.path.splitext(log_path)[0] + ".guard.json"
-MAIN_PATHS_DEFAULT = ["tickets/", "docs/", "memory/"]   # = land.sh 的 DOCS_PREFIXES
 
 
-def guard_conf():
-    try:
-        with open(os.path.join(root, "board", "config.json"), encoding="utf-8") as handle:
-            conf = json.load(handle)
-    except (OSError, ValueError):
-        conf = {}
-    repo = mainroot or root
-    exempt = [os.path.realpath(os.path.join(root, str(conf.get(key) or default)))
-              for key, default in RELATIVE_DEFAULTS] + [os.path.realpath(cwd)]
-    if worktree:
-        exempt.append(os.path.realpath(worktree))
-    block = conf.get("hard_block") if isinstance(conf.get("hard_block"), dict) else {}
-    dirs = block.get("dirs") or []
-    if not isinstance(dirs, list) or not all(isinstance(item, str) for item in dirs):
-        sys.stderr.write("auto-fix: hard_block.dirs 不是字串 list(%r)—— 這一次只查主 repo\n" % (dirs,))
-        dirs = []
-    dirs = [os.path.realpath(os.path.join(repo, os.path.expanduser(item))) for item in dirs]
-    events = os.path.join(root, str(conf.get("events_file") or "board/events.jsonl"))
-    mains = conf.get("guard_main_paths", MAIN_PATHS_DEFAULT)
-    if not isinstance(mains, list) or not all(isinstance(item, str) for item in mains):
-        sys.stderr.write("auto-fix: guard_main_paths 不是字串 list(%r)—— 這一次照預設 %s\n"
-                         % (mains, MAIN_PATHS_DEFAULT))
-        mains = MAIN_PATHS_DEFAULT
-    # 前綴以 `/` 為界:`docs` 與 `docs/` 一樣,都不含 `docs-x/`。
-    mains = [item.strip("/") + "/" for item in mains if item.strip("/")]
-    return repo, exempt, dirs, events, mains
-
-
-def file_digest(path):
-    if os.path.islink(path):
-        return "link:" + os.readlink(path)
-    if os.path.isdir(path):
-        return "dir"
-    if not os.path.exists(path):
-        return None
-    digest = hashlib.sha256()
-    try:
-        with open(path, "rb") as handle:
-            for chunk in iter(lambda: handle.read(1 << 20), b""):
-                digest.update(chunk)
-    except OSError as exc:
-        return "unreadable:%s" % exc.strerror
-    return digest.hexdigest()[:16]
-
-
-def git_out(repo, *args):
-    done = subprocess.run(["git", "-C", repo, *args], capture_output=True)
-    return done.stdout if done.returncode == 0 else None
-
-
-def guard_snapshot(repo, dirs):
-    top = git_out(repo, "rev-parse", "--show-toplevel")
-    snap = {"top": top.decode().strip() if top else None, "tree": None, "dirs": {},
-            "head": None, "branch": None, "refs": {}}
-    if snap["top"]:
-        refs = git_out(repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads")
-        for line in (refs or b"").decode("utf-8", "surrogateescape").splitlines():
-            name, _, sha = line.rpartition(" ")
-            if name:
-                snap["refs"][name] = sha
-        head = git_out(repo, "rev-parse", "-q", "--verify", "HEAD")
-        branch = git_out(repo, "symbolic-ref", "-q", "HEAD")
-        snap["head"] = head.decode().strip() if head else "(no commit)"
-        snap["branch"] = branch.decode().strip() if branch else "(detached)"
-        listed = git_out(repo, "status", "--porcelain=v1", "-z", "--untracked-files=all")
-        if listed is not None:
-            snap["tree"] = {}
-            entries = listed.split(b"\0")
-            at = 0
-            while at < len(entries):
-                entry = entries[at].decode("utf-8", "surrogateescape")
-                at += 1
-                if len(entry) < 4:
-                    continue
-                if entry[0] in "RC":
-                    at += 1   # rename / copy:下一格是原路徑
-                path = os.path.join(snap["top"], entry[3:])
-                snap["tree"][path] = "%s %s" % (entry[:2].strip(), file_digest(path))
-    for top in dirs:
-        files = {}
-        for where, subdirs, names in os.walk(top):
-            for name in names + [item for item in subdirs
-                                 if os.path.islink(os.path.join(where, item))]:
-                path = os.path.join(where, name)
-                files[path] = file_digest(path)
-        snap["dirs"][top] = files
-    return snap
-
-
-def land_rows(events):
-    # 整份讀(#127 A2):land 跑全套要幾分鐘,land.start 常早於 agent 起跑。只在 HEAD 動過時讀一次。
-    try:
-        with open(events, "rb") as handle:
-            lines = handle.read().decode("utf-8", "replace").splitlines()
-    except OSError:
-        return []
-    rows = []
-    for line in lines:
-        if '"land.' not in line:
-            continue
-        try:
-            row = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(row, dict) and str(row.get("kind") or "").startswith("land."):
-            rows.append(row)
-    return rows
-
-
-def land_segments(rows):
-    """每一次合法落地的 (main_before, sha, stamp)。缺 stamp、sha、40 位 main_before 任一格,或在它之前
-    沒有同 stamp 的 land.start,就不是一段 —— 識別不靠缺欄(None 配 None 不是配對)。"""
-    starts, segments = set(), []
-    for row in rows:
-        stamp = row.get("stamp")
-        if not isinstance(stamp, str) or not stamp:
-            continue
-        if row.get("kind") == "land.start":
-            starts.add(stamp)
-        elif stamp in starts and (row.get("kind") == "land.pass" or (
-                row.get("kind") == "land.fail" and row.get("stage") == "push")):
-            sha, before = str(row.get("sha") or ""), str(row.get("main_before") or "")
-            if len(sha) >= 7 and len(before) == 40 and all(c in "0123456789abcdef" for c in before):
-                segments.append((before, sha, stamp + ("(push 失敗)" if row["kind"] == "land.fail"
-                                                       else "")))
-    return segments
-
-
-def land_attribution(repo, old, new, rows):
-    """從舊 HEAD 沿 first-parent 往新 HEAD 走:每一步找 main_before 恰是目前終點、sha 在鏈上更後面的
-    那一段(多段取走得最遠的)接上去。回 (接上的各段, 第一個歸屬不上的 commit);全接上第二格是 None。
-    鏈本身不經過舊 HEAD(改寫、倒退)就一段都不算,第一格空。"""
-    listed = git_out(repo, "log", "--first-parent", "--format=%H %P", "%s..%s" % (old, new))
-    chain = [line.split() for line in (listed or b"").decode().splitlines() if line.strip()][::-1]
-    if not chain or len(chain[0]) < 2 or chain[0][1] != old:
-        return [], chain[0][0] if chain else None
-    order = [old] + [item[0] for item in chain]
-    segments = land_segments(rows)
-    at, said = 0, []
-    while at < len(order) - 1:
-        best = None
-        for before, sha, stamp in segments:
-            if before != order[at]:
-                continue
-            for end in range(at + 1, len(order)):
-                if order[end].startswith(sha):
-                    if best is None or end > best[0]:
-                        best = (end, stamp, sha)
-                    break
-        if best is None:
-            return said, order[at + 1]
-        said.append("land stamp=%s sha=%s(%s..%s)" % (best[1], best[2], order[at][:12],
-                                                      order[best[0]][:12]))
-        at = best[0]
-    return said, None
-
-
-def guard_verdict(before, repo, exempt, dirs, events, mains, agent_rc):
-    after = guard_snapshot(repo, dirs)
-
-    def exempted(path):
-        real = os.path.realpath(path)
-        return any(real == item or real.startswith(item + os.sep) for item in exempt)
-
-    def main_side_path(path):
-        top = before["top"]
-        if not top or not path.startswith(top + os.sep):
-            return False
-        rel = path[len(top) + 1:].replace(os.sep, "/")
-        return any(rel.startswith(item) for item in mains)
-
-    found, notes, main_side = [], [], []
-    if before["tree"] is not None and after["tree"] is not None:
-        for path in sorted(set(before["tree"]) | set(after["tree"])):
-            was, now = before["tree"].get(path, "clean"), after["tree"].get(path, "clean")
-            if was != now and not exempted(path):
-                (main_side if main_side_path(path) else found).append(
-                    {"path": path, "before": was, "after": now})
-    elif before["top"]:
-        notes.append("主 repo 的 git status 拍不到 —— 工作樹這一次沒有比")
-    if before["branch"] != after["branch"]:
-        found.append({"path": "HEAD(分支)", "before": before["branch"], "after": after["branch"]})
-    elif before["head"] != after["head"]:
-        said, stray = land_attribution(repo, before["head"], after["head"] or "",
-                                       land_rows(events))
-        if said and stray is None:
-            notes.extend("HEAD %s -> %s 歸屬於同時的 %s" % (before["head"][:12],
-                                                          (after["head"] or "")[:12], why)
-                         for why in said)
-        else:
-            found.append({"path": "HEAD", "before": before["head"], "after": after["head"],
-                          "unattributed": stray})
-    skip = {before["branch"], after["branch"], own_ref, worktree_ref}
-    for name in sorted(set(before["refs"]) | set(after["refs"])):
-        was, now = before["refs"].get(name, "absent"), after["refs"].get(name, "absent")
-        if was == now or name in skip:
-            continue
-        stamp = name[len("refs/heads/land/"):] if name.startswith("refs/heads/land/") else ""
-        if stamp and any(row.get("kind") == "land.start" and row.get("stamp") == stamp
-                         for row in land_rows(events)):
-            notes.append("%s %s -> %s 歸屬於同時的 land stamp=%s" % (name, was[:12], now[:12], stamp))
-            continue
-        found.append({"path": name, "before": was, "after": now})
-    for top in dirs:
-        was, now = before["dirs"].get(top, {}), after["dirs"].get(top, {})
-        for path in sorted(set(was) | set(now)):
-            if was.get(path, "absent") != now.get(path, "absent") and not exempted(path):
-                (main_side if main_side_path(path) else found).append(
-                    {"path": path, "before": was.get(path, "absent"),
-                     "after": now.get(path, "absent")})
-    # push 失敗的那一段不擋,但主線要自己推一次:guard.json 照寫,notes 帶它。
-    if not found and not main_side and not any("(push 失敗)" in note for note in notes):
+def guard_verdict(before, conf, agent_rc):
+    found = main_guard.compare(before, conf)
+    for note in found["notes"]:
+        sys.stderr.write("auto-fix: %s%s\n" % (LABEL, note))
+    if not (found["rejects"] or found["main_side"] or found["recorded"]):
         return agent_rc
     with open(guard_path, "w", encoding="utf-8") as handle:
         json.dump({"ticket": ident, "round": r, "role": role, "agent_rc": agent_rc,
-                   "monitored": {"repo": before["top"], "hard_block_dirs": dirs,
-                                 "guard_main_paths": mains},
-                   "exempt": exempt, "violations": found, "main_side": main_side,
-                   "notes": notes},
+                   "monitored": {"repo": before["top"], "hard_block_dirs": conf["dirs"],
+                                 "guard_main_paths": conf["mains"]},
+                   "exempt": conf["exempt"], "violations": found["rejects"],
+                   "main_side": found["main_side"], "notes": found["recorded"] + found["notes"],
+                   "non_land_commits": found["non_land_commits"]},
                   handle, ensure_ascii=False, indent=2)
-    if not found:
-        sys.stderr.write("auto-fix: %s跑的期間主線那一邊改了 %d 處、落地 %d 段(只記不擋)—— 報告 %s\n"
-                         % (LABEL, len(main_side), len(notes), guard_path))
+    if not found["rejects"]:
+        sys.stderr.write("auto-fix: %s跑的期間主線那一邊改了 %d 處、記錄 %d 筆(只記不擋)—— 報告 %s\n"
+                         % (LABEL, len(found["main_side"]), len(found["recorded"]), guard_path))
         return agent_rc
     sys.stderr.write("auto-fix: %s越界 %d 處(第一處 %s)—— 報告 %s\n"
-                     % (LABEL, len(found), found[0]["path"], guard_path))
+                     % (LABEL, len(found["rejects"]), found["rejects"][0]["path"], guard_path))
     return 8
 
 
-# 開題者改真票是它的工作(#89),不在守衛裡。
 guarded = None
 if role != "opener":
     if os.path.exists(guard_path):
         os.remove(guard_path)
-    guard_repo, guard_exempt, guard_dirs, guard_events, guard_mains = guard_conf()
-    guarded = guard_snapshot(guard_repo, guard_dirs)
-# 這張票自己的分支(#144,票的 `branch` 欄,沒寫 = `t<n>`):worker 在 worktree 裡 commit 是交件,
-# 不是越界 —— 與它平行跑的驗證者那一份快照也看得到這條分支在動,所以整張票的 agent 都不算它。
-try:
-    with open(ticket_file, encoding="utf-8") as handle:
-        own_ref = "refs/heads/" + (json.load(handle).get("branch") or "t%s" % ident)
-except (OSError, ValueError):
-    own_ref = "refs/heads/t%s" % ident
-# worker 的 worktree 掛的那條分支也是它的(批次 worker 在整合分支上 commit,#145)。
-worktree_ref = ((git_out(worktree, "symbolic-ref", "-q", "HEAD") or b"").decode().strip()
-                if worktree else "") or own_ref
+    guard_conf = main_guard.settings(root, mainroot or root, [cwd, worktree])
+    guarded = main_guard.snapshot(guard_conf)
 
 # `worker.pid` 住在副本根(#46):下一輪收前幾輪副本之前先問它還活著沒有。回來了就刪掉,
 # 留著的那一份只會是「auto-fix 被砍了、worker 還在跑」的那一種。
@@ -1654,8 +1432,7 @@ except OSError as exc:
     sys.stderr.write("auto-fix: %s起不來 —— %s\n" % (LABEL, exc))
     rc = 127
 if guarded is not None:
-    rc = guard_verdict(guarded, guard_repo, guard_exempt, guard_dirs, guard_events, guard_mains,
-                       rc)
+    rc = guard_verdict(guarded, guard_conf, rc)
 print(rc)
 PY
 }
@@ -1772,11 +1549,20 @@ archive_copy() {   # $1 = ref  $2 = 副本根;取不出回 1
     cp -R "$2/base" "$2/work"
 }
 
-start_verifier_bg() {   # uses r/VFIX/VDISPATCH;設定 VPID/VLOG/VRC_FILE/VSTART
-    if ! archive_copy "$V_BASE" "$VFIX"; then
-        echo "auto-fix: 取不出 ${V_BASE:-(空)} 給驗證者的副本 —— 這一輪驗證者不起" >&2
+# 驗證者的副本與派工文只有一種組法(#153 A6):headless 起驗證者(`start_verifier_bg`)與
+# `--prepare verifier` 都走這裡 —— `archive_copy` 接著 `verifier_packet`(規則包照當下的
+# VERIFIER_MODEL)。來源由呼叫端給:headless 是票的 base_sha,prepare 照 #149 的規則選。
+verifier_copy() {   # $1 = 副本來源 ref  $2 = 票分支(非空 = 等 worker 交件才起,#60);uses r/VFIX/VDISPATCH/V_BASE
+    if ! archive_copy "$1" "$VFIX"; then
+        rm -rf "$VFIX"
+        echo "auto-fix: 取不出 ${1:-(空)} 給驗證者的副本 —— 驗證者不起" >&2
         return 1
     fi
+    verifier_packet "$VDISPATCH" "$r" "$VFIX" "$V_BASE" "$2" || { rm -rf "$VFIX"; return 6; }
+}
+
+start_verifier_bg() {   # uses r/VFIX/VDISPATCH;設定 VPID/VLOG/VRC_FILE/VSTART
+    verifier_copy "$V_BASE" "${V_HELD:+$(ticket_branch)}" || return 1
     VLOG=$(dirname "$VDISPATCH")/verifier-round$r.log
     VRC_FILE=$(dirname "$VDISPATCH")/verifier-round$r.rc
     rm -f "$VRC_FILE"
@@ -2493,15 +2279,11 @@ worker_delivery() {   # $1 = 分支(缺 = 票分支;批次給整合分支)uses W
     fi
 }
 
-round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
-    r=$1
-    FIX=$WTBASE/fix-t$ID/round$r
-    # 驗證者副本與只派驗證者那一輪展的那一版:票分支已經有就是它(前幾輪 worker 的 commit 都在上面),
-    # 還沒有才退回 base_sha。
-    SRC=${AC_FIX_SOURCE:-$(ticket_branch)}
-    git -C "$ROOT" rev-parse -q --verify "$SRC^{commit}" >/dev/null || SRC=$S_BASE
-    # 輪次目錄(#144):worker 的 EVIDENCE、拋棄式控制根與 worker.pid 住這裡,在 worktree 外 ——
-    # 不進 repo、不靠 .gitignore。`--dry-run` 只印(#96):已經在就原封不動。
+rel_root() { python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$1" "$ROOT"; }
+
+# 輪次目錄(#144):worker 的 EVIDENCE、拋棄式控制根與 worker.pid 住這裡,在 worktree 外 ——
+# 不進 repo、不靠 .gitignore。`--dry-run` 只印(#96):已經在就原封不動。
+round_dir() {   # uses FIX/DRY;設定 FIX_KEPT
     FIX_KEPT=""
     if [ -n "$DRY" ] && [ -e "$FIX" ]; then
         FIX_KEPT=1
@@ -2510,16 +2292,40 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
         rm -rf "$FIX"
         mkdir -p "$FIX"
     fi
+}
 
+# 一輪的準備只有一份(#153 A6):headless 的 `round_once` 與 `--prepare worker` 都走這裡 ——
+# 輪次目錄、派工文(第 1 輪是 `first_round_packet`,經 `worker_packet`)、票分支 worktree、
+# 第 1 輪 Ready → Running。`--dry-run` 停在派工文(不建 worktree、不動票)。Running 擺在
+# worker 起跑**之前**:worker 跑的時候票就該是 Running。回 6 = 派工文產不出來,2 = worktree 建不出來。
+round_setup() {   # uses r/FIX/DISPATCH/MODEL/DRY;設定 FIX_KEPT、WT
+    round_dir
+    worker_packet || return 6
+    echo "auto-fix: 派工文 -> $(rel_root "$DISPATCH")"
+    [ -z "$DRY" ] || return 0
+    if ! ticket_worktree; then
+        echo "auto-fix: 票分支 $(ticket_branch) 的 worktree $WT 建不出來 —— 這一輪不派" >&2
+        return 2
+    fi
+    [ "$r" -ne 1 ] || python3 "$AC/ticket.py" set "$ID" state Running >/dev/null 2>&1 \
+        || echo "auto-fix: 票狀態改不動(Running)" >&2
+}
+
+round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
+    r=$1
+    FIX=$WTBASE/fix-t$ID/round$r
+    # 驗證者副本與只派驗證者那一輪展的那一版:票分支已經有就是它(前幾輪 worker 的 commit 都在上面),
+    # 還沒有才退回 base_sha。
+    SRC=${AC_FIX_SOURCE:-$(ticket_branch)}
+    git -C "$ROOT" rev-parse -q --verify "$SRC^{commit}" >/dev/null || SRC=$S_BASE
     DISPATCH=$ROOT/$(cfg reports_dir reports)/t$ID/$RUN_ID/dispatch-round$r.md
     mkdir -p "$(dirname "$DISPATCH")"
     GAP_ROUND=""
     if [ "$r" -gt 1 ] && [ -n "${S_GAP_ONLY:-}" ]; then
+        round_dir
         gap_round
         return $?
     fi
-    worker_packet || return 1
-    echo "auto-fix: 派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$DISPATCH" "$ROOT")"
 
     # 案例還沒交的驗證者(#51;#126 A4 起**任一輪**):第 2 輪起接著跑的票(舊狀態檔)以前只剩
     # test_defect 那一條路派得到驗證者,needs_verifier=true 而 baseline 空的票就一路沒有案例。
@@ -2546,20 +2352,15 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
             ROUND_RC=6
             return 1
         fi
-        echo "auto-fix: 驗證者派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$VDISPATCH" "$ROOT")"
+        echo "auto-fix: 驗證者派工文 -> $(rel_root "$VDISPATCH")"
     fi
+    round_setup || { ROUND_RC=$?; return 1; }
 
     if [ -n "$DRY" ]; then
         echo "auto-fix: worker 命令 —— $WORKER_CMD"
         [ -z "$T_EFFORT" ] || echo "auto-fix: effort 來源=$EFFORT_SRC $T_EFFORT"
         echo "auto-fix: --dry-run —— 不起 worker 也不起驗證者。派工文在上面那一份。"
         ROUND_RC=0
-        return 1
-    fi
-
-    if ! ticket_worktree; then
-        echo "auto-fix: 票分支 $(ticket_branch) 的 worktree $WT 建不出來 —— 這一輪不派" >&2
-        ROUND_RC=2
         return 1
     fi
     W_BEFORE=$(git -C "$WT" rev-parse HEAD)
@@ -2569,12 +2370,6 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
         echo "auto-fix: 起第 $r 輪的 worker —— $WORKER_CMD(cwd $WT,派工文從 stdin 餵)"
     fi
     [ -z "$T_EFFORT" ] || echo "auto-fix: effort 來源=$EFFORT_SRC $T_EFFORT"
-    # 第 1 輪:票 Ready → Running(#40)。擺在 `--dry-run` 那一手**之後**(dry-run 不動票)、
-    # 起 worker **之前**(worker 跑的時候票就該是 Running)。第 2 輪起票已經不是 Ready 了。
-    if [ "$r" -eq 1 ]; then
-        python3 "$AC/ticket.py" set "$ID" state Running >/dev/null 2>&1 \
-            || echo "auto-fix: 票狀態改不動(Running)" >&2
-    fi
     ev ticket.attempt.start --ticket "$ID" --attempt "$r" --note "auto-fix 第 $r 輪"
     # 起不來(副本取不出)照樣派 worker,收件時走「驗證者沒交出 patch-verify」那一頁。
     echo "auto-fix: 逾時來源=$TIMEOUT_SRC $WORKER_TIMEOUT 秒" >&2
@@ -3249,7 +3044,6 @@ PY
     [ "$rrc" -eq 0 ] || echo "auto-fix: 批次覆核沒過(review rc=$rrc)—— 看 reports/inbox/ 那一頁" >&2
     exit "$rrc"
 }
-rel_root() { python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$1" "$ROOT"; }
 [ -z "$BATCH" ] || batch_main
 
 # ---------------------------------------------------------- --prepare(D-061,#149)
@@ -3257,26 +3051,26 @@ rel_root() { python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.arg
 # 主線那一節)。stdout(fd 3)只印一段指路 prompt —— 派工文本身由 subagent 自己讀一次,
 # 不進主線的上下文。
 
+# 主 repo 快照(#153,D-064):寫在輪次目錄 / 驗證者副本根的 `main-snapshot.json`,收件時
+# `apply.sh` 拿它比(拒收 rc 7)。指路 prompt 照舊;快照寫不出來不擋 prepare(收件時印「沒比」)。
+main_snapshot() {   # $1 = 輪次目錄或副本根  $2 = 也豁免的目錄(worker 的 worktree)
+    python3 "$AC/main_guard.py" snapshot --root "$ROOT" --repo "$MAINROOT" \
+        --out "$1/main-snapshot.json" --exempt "$1" ${2:+--exempt "$2"} >&2 \
+        || echo "auto-fix: 主 repo 快照寫不出來($1/main-snapshot.json)—— 收件時不比" >&2
+}
+
 # 第 1 輪 = `round_once 1` 起 worker 之前那一段(base_sha 已在上面照 #57 換過):輪次目錄
 # (apply.sh 預設讀的 EVIDENCE 就在這裡)、`first_round_packet`(與 `--dry-run --round 1` 同一份)、
 # 票分支 worktree、Ready → Running。**不**起程序、不發 `ticket.attempt.start` / `agent.*`
 # (in-session 沒有人會發配對的 done / failed,heartbeat 照 attempt 配對)、不寫 cost、不寫 status.json。
 prepare_worker() {
+    r=1
+    MODEL=$P_MODEL
     FIX=$WTBASE/fix-t$ID/round1
     DISPATCH=$ROOT/$(cfg reports_dir reports)/t$ID/$RUN_ID/dispatch-round1.md
-    rm -rf "$FIX"
-    mkdir -p "$FIX"
-    if ! first_round_packet "$DISPATCH" "$P_MODEL"; then
-        rm -rf "$FIX"
-        exit 6
-    fi
-    if ! ticket_worktree; then
-        echo "auto-fix: 票分支 $(ticket_branch) 的 worktree $WT 建不出來 —— 不備" >&2
-        rm -rf "$FIX"
-        exit 2
-    fi
-    python3 "$AC/ticket.py" set "$ID" state Running >/dev/null 2>&1 \
-        || echo "auto-fix: 票狀態改不動(Running)" >&2
+    mkdir -p "$(dirname "$DISPATCH")"
+    round_setup || { pw_rc=$?; rm -rf "$FIX"; exit "$pw_rc"; }
+    main_snapshot "$FIX" "$WT"
     pw_base=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8")).get("base_sha") or "")' "$TF")
     echo "auto-fix: #$ID 第 1 輪備好了(派工文 $(rel_root "$DISPATCH"),票轉 Running)—— 底下那一段整段貼給 subagent" >&2
     {
@@ -3327,20 +3121,14 @@ prepare_verifier() {
     prepare_route verifier || exit 2
     VERIFIER_MODEL=$P_MODEL
     RUN_ID=${AC_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}
+    r=1
     VFIX=$WTBASE/verify-t$ID/round1
     VDISPATCH=$ROOT/$(cfg reports_dir reports)/t$ID/$RUN_ID/dispatch-verifier-round1.md
-    if ! archive_copy "$pv_src" "$VFIX"; then
-        rm -rf "$VFIX"
-        echo "auto-fix: 取不出 $pv_src 給驗證者的副本 —— 什麼都沒建" >&2
-        exit 2
-    fi
     # 等交件才備的那一種(interface_fixed 不是 true)照 #60 帶「介面以分支上的實作為準」那一段。
     pv_after=""
     [ -n "$V_PARALLEL" ] || pv_after=$pv_branch
-    if ! verifier_packet "$VDISPATCH" 1 "$VFIX" "$V_BASE" "$pv_after"; then
-        rm -rf "$VFIX"
-        exit 6
-    fi
+    verifier_copy "$pv_src" "$pv_after"
+    case $? in 0) ;; 1) exit 2 ;; *) exit 6 ;; esac
     if [ "$pv_src" != "$pv_base" ]; then
         {
             echo ""
@@ -3350,6 +3138,7 @@ prepare_verifier() {
             echo "\`verify-case.py red\` 的 \`--ref\` 照上面那個 base(票的 base_sha):它只把案例檔疊上乾淨基底。"
         } >> "$VDISPATCH"
     fi
+    main_snapshot "$VFIX" "$WTBASE/$pv_branch"
     echo "auto-fix: #$ID 驗證者第 1 輪備好了(副本來自 $pv_from;派工文 $(rel_root "$VDISPATCH"))—— 底下那一段整段貼給 subagent" >&2
     {
         echo "model=$P_MODEL"

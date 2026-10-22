@@ -2,10 +2,10 @@
 
 ## 驗收表(票面每一條一列;期望值來源獨立於被測程式:票面 acceptance 字面 / 案例自己在 git 上取的 sha)
 A1 | integ | 真跑沙盒 land.sh:一次單票綠 land;docs 通道有 commit / 已在主線上 / git add 失敗 / push 失敗 | 票 land 的 land.pass 帶 40 位前 main、沒有 channel 鍵;docs 每筆同一 stamp(docs-YYYYmmdd-HHMMSS-pid)、channel docs,有 commit 的 pass 帶 sha 與前 main,已在主線上那筆兩者都沒有 | 票面 A1 原話;前 main 由案例跑之前 `git rev-parse main`
-A2 | integ | auto-fix 起跑前 emit land.start S1,agent 期間 commit + land.pass S1(sha 新、前 main 舊) | rc 0、沒有 guard.json、沒有 guard-violation;start 在 pass 之後才發 → rc 8 | 票面 A2 原話(「在那一筆 pass 之前的列」)
-A3 | integ | agent 期間真跑 `AC_ROOT=$REPO sh $REPO/scripts/land.sh docs …`;docs 一次再接一次票 land | 都 rc 0、沒有 guard.json;同一段再多一個工作樹檔 → guard.json 只指那個檔、notes 列得出兩次落地的 stamp | 票面 A3 原話 + objective「notes 逐次列 stamp」
-A4 | integ | agent 期間先裸 commit X,再一次合法 land(前 main = X) | rc 8 一整組;guard.json 有 path=HEAD、before 舊、after 新、unattributed = X 40 位;decision 頁有 X 前 7 位 | 票面 A4 原話;X 由假 agent 在 git 上取
-A5 | integ | (a) start / pass 都沒 stamp (b) 沒有前 main (c) 整檔找不到同 stamp 的 start (d) 前 main = 舊 HEAD 的父 | 四種都 rc 8 | 票面 A5 原話
+A2 | —     | (#153 刪:D-064 / D-065 起不配 land.start,窗內有 land.pass 就只記不擋)(「在那一筆 pass 之前的列」)
+A3 | integ | agent 期間真跑 `AC_ROOT=$REPO sh $REPO/scripts/land.sh docs …` 再接一次票 land,再多一個工作樹檔 | guard.json 只指那個檔、notes 列得出兩次落地的 stamp(「沒有 guard.json」那兩案 #153 刪:落地期間的 HEAD 前進改寫紀錄,#153 A5) | 票面 A3 原話 + objective「notes 逐次列 stamp」
+A4 | —     | (#153 刪,D-065 (1) 反轉:裸 commit 只列進紀錄、不擋;新案例在 tests/test_auto_fix.py T4 / T11)
+A5 | —     | (#153 刪:識別欄位不再參與判決)
 A6 | integ | 新形狀的合法 land + 工作樹多一個檔 | rc 8 指那個檔、沒有 HEAD 那一列;#115 的其餘案例在 verify/dispatch/test_ticket_115.py(本票只補它的夾具) | 票面 A6 原話
 A7 | doc   | 讀 docs/WORKFLOW.md §8 守衛那一條、auto-fix.sh 守衛檔頭註解 | 兩處都寫得出新規則的鍵,舊句「pass 的 sha 就是新 HEAD」不在 | 票面 A7 原話
 
@@ -13,7 +13,6 @@ A7 | doc   | 讀 docs/WORKFLOW.md §8 守衛那一條、auto-fix.sh 守衛檔頭
 BEFORE_KEY = "main" + "_before"        ← A1 鍵名
 CHANNEL    = ("channel", "docs")       ← A1(b)
 DOCS_STAMP = ^docs-\\d{8}-\\d{6}-\\d+$  ← A1(b) 形狀
-UNATTRIB   = "unattributed"            ← A4 guard.json 欄位
 GUARD_RC   = 8 / REASON = "guard-violation"(沿用 #115)
 
 ## 怎麼做假(不上真埠、不起真服務、不打真的模型)
@@ -47,18 +46,12 @@ from test_ticket_115 import GUARD_RC, REASON, GuardBase  # noqa: E402
 BEFORE_KEY = "main" + "_before"
 CHANNEL_KEY, CHANNEL_DOCS = "channel", "docs"
 DOCS_STAMP = r"^docs-\d{8}-\d{6}-\d+$"
-UNATTRIB = "unattributed"
 LAND_KINDS = ("land.start", "land.refused", "land.fail", "land.pass")
 
 
 def shell(text):
     """假 agent 的片段:`@KB@` 換成鍵名。"""
     return text.replace("@KB@", BEFORE_KEY)
-
-
-def sha_file(home, name):
-    with open(os.path.join(home, name), encoding="utf-8") as handle:
-        return handle.read().strip()
 
 
 # 一次合法的票 land:同 stamp 的 start + pass,pass 帶 sha(短)= 新 HEAD、前 main = 這一段的起點。
@@ -185,32 +178,6 @@ class GuardCase(GuardBase):
     def guard_files(self):
         return glob.glob(os.path.join(self.repo, "reports", "t1", "*", "*.guard.json"))
 
-    def assert_clean_pass(self, done):
-        self.assert_not_stopped(done)
-        self.assertEqual(self.guard_files(), [])
-
-
-class TheStartIsLookedForBackwards(GuardCase):
-    """A2:land.start 可以早於 agent 起跑;只認 pass 之前的列。"""
-
-    def test_a2_a_start_before_the_agent_started_is_found(self):
-        """A2 起跑前已有 land.start S1,期間 commit + land.pass S1(sha 新、前 main 舊)→ rc 0、沒有 guard.json。"""
-        self.arm(shell('OLD="$(git -C "$REPO" rev-parse HEAD)"\n'
-                       'git -C "$REPO" commit -q --allow-empty -m "跑了幾分鐘的 land"\n'
-                       'emit land.pass --note "早開始的 land" --kv stamp=S1 '
-                       '--kv sha="$(git -C "$REPO" rev-parse --short HEAD)" --kv @KB@="$OLD"'))
-        self.emit("land.start", "--note", "agent 起跑前就開始的 land", "--kv", "stamp=S1")
-        self.assert_clean_pass(self.auto_fix("--no-review"))
-
-    def test_a2_a_start_after_the_pass_does_not_count(self):
-        """A2 同 stamp 的 land.start 在 pass 之後才發 → rc 8(搜尋範圍是 pass 之前的列)。"""
-        self.arm(shell('OLD="$(git -C "$REPO" rev-parse HEAD)"\n'
-                       'git -C "$REPO" commit -q --allow-empty -m "倒過來的 land"\n'
-                       'emit land.pass --note "倒過來" --kv stamp=S5 '
-                       '--kv sha="$(git -C "$REPO" rev-parse --short HEAD)" --kv @KB@="$OLD"\n'
-                       'emit land.start --note "倒過來" --kv stamp=S5'))
-        self.assert_stopped(self.auto_fix("--no-review"), "HEAD")
-
 
 class TheDocsChannelIsALegalLand(GuardCase):
     """A3:agent 期間真跑 docs 通道;docs + 票 land 首尾相接。"""
@@ -225,20 +192,6 @@ class TheDocsChannelIsALegalLand(GuardCase):
         out = self.read("docs-land.out", where=self.home)
         self.assertIn("docs: t127 note", self.git("log", "--format=%s", "main"), out)
 
-    def test_a3_a_real_docs_land_during_the_run_is_not_a_violation(self):
-        """A3 agent 期間 `AC_ROOT=$REPO sh land.sh docs …` 真 commit → rc 0、沒有 guard.json。"""
-        self.arm(DOCS_LAND)
-        done = self.auto_fix("--no-review")
-        self.assert_docs_landed()
-        self.assert_clean_pass(done)
-
-    def test_a3_docs_then_a_ticket_land_end_to_end_is_not_a_violation(self):
-        """A3 同一段先 docs 通道、再一次票 land(前 main = docs 的 commit)→ rc 0、沒有 guard.json。"""
-        self.arm(DOCS_LAND + legal_land("S9"))
-        done = self.auto_fix("--no-review")
-        self.assert_docs_landed()
-        self.assert_clean_pass(done)
-
     def test_a3_notes_list_both_lands(self):
         """A3 docs + 票 land 再多一個工作樹檔 → rc 8 只指那個檔;guard.json notes 列得出 docs 的 stamp 與 S9。"""
         self.arm(DOCS_LAND + legal_land("S9") + 'echo stray > "$REPO/stray-127.txt"')
@@ -252,65 +205,6 @@ class TheDocsChannelIsALegalLand(GuardCase):
         self.assertIn("S9", notes)
 
 
-class EveryCommitIsAttributed(GuardCase):
-    """A4:沿主線逐 commit 歸屬;夾在中間沒有落地的 commit 抓得到。"""
-
-    def test_a4_a_bare_commit_before_a_legal_land_is_named(self):
-        """A4 期間先裸 commit X、再一次合法 land(前 main = X)→ rc 8;guard.json 點名 X;頁上有 X 前 7 位。"""
-        self.arm('git -C "$REPO" rev-parse HEAD > "$SANDBOX/old.sha"\n'
-                 'git -C "$REPO" commit -q --allow-empty -m "沒有落地的 commit X"\n'
-                 'git -C "$REPO" rev-parse HEAD > "$SANDBOX/x.sha"\n'
-                 + legal_land("S9")
-                 + 'git -C "$REPO" rev-parse HEAD > "$SANDBOX/new.sha"\n')
-        done = self.auto_fix("--no-review")
-        self.assert_stopped(done, "HEAD")
-        old, x, new = (sha_file(self.home, name) for name in ("old.sha", "x.sha", "new.sha"))
-        heads = [row for row in self.guard_rows() if row.get("path") == "HEAD"]
-        self.assertEqual(len(heads), 1, self.guard_rows())
-        self.assertEqual((heads[0].get("before"), heads[0].get("after")), (old, new), heads[0])
-        self.assertEqual(heads[0].get(UNATTRIB), x, heads[0])
-        self.assertIn(x[:7], self.page_text(self.decisions()[0]))
-
-
-class IdentityDoesNotComeFromMissingFields(GuardCase):
-    """A5:缺欄不算配上。"""
-
-    def test_a5a_start_and_pass_without_stamp(self):
-        """A5 (a) land.start 與 land.pass 都沒有 stamp(其餘都對)→ rc 8。"""
-        self.arm(shell('OLD="$(git -C "$REPO" rev-parse HEAD)"\n'
-                       'emit land.start --note "沒有 stamp"\n'
-                       'git -C "$REPO" commit -q --allow-empty -m "沒有 stamp 的落地"\n'
-                       'emit land.pass --note "沒有 stamp" '
-                       '--kv sha="$(git -C "$REPO" rev-parse --short HEAD)" --kv @KB@="$OLD"'))
-        self.assert_stopped(self.auto_fix("--no-review"), "HEAD")
-
-    def test_a5b_pass_without_the_prior_main(self):
-        """A5 (b) 同 stamp 的 start + pass、pass 有 sha 沒有前 main → rc 8。"""
-        self.arm('emit land.start --note "沒有前 main" --kv stamp=S9\n'
-                 'git -C "$REPO" commit -q --allow-empty -m "沒有前 main 的落地"\n'
-                 'emit land.pass --note "沒有前 main" --kv stamp=S9 '
-                 '--kv sha="$(git -C "$REPO" rev-parse --short HEAD)"')
-        self.assert_stopped(self.auto_fix("--no-review"), "HEAD")
-
-    def test_a5c_no_start_with_that_stamp_anywhere(self):
-        """A5 (c) pass 的 stamp 在整個事件檔找不到同 stamp 的 land.start(只有別的 stamp)→ rc 8。"""
-        self.arm(shell('OLD="$(git -C "$REPO" rev-parse HEAD)"\n'
-                       'git -C "$REPO" commit -q --allow-empty -m "找不到開始的落地"\n'
-                       'emit land.pass --note "找不到開始" --kv stamp=S7 '
-                       '--kv sha="$(git -C "$REPO" rev-parse --short HEAD)" --kv @KB@="$OLD"'))
-        self.emit("land.start", "--note", "別的一次 land", "--kv", "stamp=S8")
-        self.assert_stopped(self.auto_fix("--no-review"), "HEAD")
-
-    def test_a5d_the_prior_main_is_not_the_previous_end(self):
-        """A5 (d) pass 的前 main = 舊 HEAD 的父(不是上一段的終點)→ rc 8。"""
-        self.arm(shell('PARENT="$(git -C "$REPO" rev-parse HEAD~1)"\n'
-                       'emit land.start --note "接不上" --kv stamp=S9\n'
-                       'git -C "$REPO" commit -q --allow-empty -m "接不上的落地"\n'
-                       'emit land.pass --note "接不上" --kv stamp=S9 '
-                       '--kv sha="$(git -C "$REPO" rev-parse --short HEAD)" --kv @KB@="$PARENT"'))
-        self.assert_stopped(self.auto_fix("--no-review"), "HEAD")
-
-
 class TheRestOfTheGuardIsUnchanged(GuardCase):
     """A6:新形狀的合法 land 照樣不藏工作樹改動(#115 其餘案例在 test_ticket_115.py)。"""
 
@@ -319,11 +213,6 @@ class TheRestOfTheGuardIsUnchanged(GuardCase):
         self.arm(legal_land("S9") + 'echo stray > "$REPO/stray-during-land.txt"')
         self.assert_stopped(self.auto_fix("--no-review"), "stray-during-land.txt")
         self.assertEqual([row for row in self.guard_rows() if row.get("path") == "HEAD"], [])
-
-    def test_a6_a_legal_land_alone_is_not_a_violation(self):
-        """A6 新形狀的合法 land 單獨一次 → rc 0、沒有 guard.json。"""
-        self.arm(legal_land("S9"))
-        self.assert_clean_pass(self.auto_fix("--no-review"))
 
 
 class TheDocsSayTheNewRule(unittest.TestCase):
