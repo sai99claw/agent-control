@@ -135,6 +135,7 @@ land 拒收 `verify.files` 沒帶進來的分支(**rc=4**);`verify.py` 在同一
 
 ### 使用者待辦(在 Mac 上)
 - `scripts/sync-to-project.sh` 第 466 行「(不進票 cost[])」:#152 落地後要加 --prepare 例外;hard_block 檔,使用者自己改(D-065 ③)。
+- **同一支 `scripts/sync-to-project.sh` 的 SCRIPT_LIST 要加 `scripts/main_guard.py`**(#153 新模組):#153 落地後、下一次同步到 tabby 之前一定要加,否則 tabby 的 auto-fix.sh import 失敗、apply.sh 回 rc 7(#153 反駁,deferred)。
 - VISION:使用者自己加「執行位置(本機/雲端/子 agent)由主線依額度決定」(D-063 ④)。
 - T 端(tabby):第 6 題「何時開始、要不要搬雲端」還沒裁;主線建議報告後開 T 票,寫碼與 Chrome 測試放雲端,Safari、發版、同步留 Mac。
 - 2026-11-19 前後:T 的反駁往上送比例(D-054 Q8)。減法報告第二段:T 端跑完 10 張票後補每票成本對比減法前 30 天(D-063 ②)。
