@@ -99,7 +99,7 @@ CTRL=$DEST/scripts/control
 CTRL_MANIFEST=$CTRL/.sync-manifest
 NEW_SCRIPTS=""
 # 專案端要用到的那幾支 + 它們 import 的。順序無所謂,名單本身要進 code review。
-SCRIPT_LIST="status.py verify-case.py apply.sh auto-fix.sh review.sh inbox.py rules.py memory.py event.py ticket.py verify.py new-session.sh heartbeat.sh session-hook.sh wtbase.sh repo-map.py agent-cost-hook.py transcript-cost.py role-models.py"
+SCRIPT_LIST="status.py verify-case.py apply.sh auto-fix.sh review.sh inbox.py rules.py memory.py event.py ticket.py verify.py new-session.sh heartbeat.sh session-hook.sh wtbase.sh repo-map.py agent-cost-hook.py transcript-cost.py role-models.py main_guard.py"
 # 這兩支**不是入口**,是被上面那幾支 `import` 的(見檔頭)。查「接了沒」時要把它們挑掉
 # —— 對一支本來就沒有人直接叫的檔說「沒有呼叫點」,是一句假話,而假警報會讓真的那幾條
 # 被一起跳過(`docs/DISPATCH-TEMPLATE.md` §5.7)。
@@ -463,7 +463,7 @@ case " $UNCALLED " in
 sync: 專案的 .claude/settings.json 沒接互動成本 hook —— hooks.SubagentStop 與 hooks.SessionEnd 各貼一筆:
 sync:        "SubagentStop": [{"hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/control/agent-cost-hook.py\"", "timeout": 10}]}]
 sync:        "SessionEnd": [{"hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/control/agent-cost-hook.py\"", "timeout": 10}]}]
-sync:      主線與子 agent 的 token 寫成 agent.cost 事件(不進票 cost[]);副本裡與 AC_ROLE 非 main 不觸發。
+sync:      主線與子 agent 的 token 寫成 agent.cost 事件(不進票 cost[];`auto-fix.sh <n> --prepare` 派的子 agent 例外,記進那張票的 cost[],#152);副本裡與 AC_ROLE 非 main 不觸發。
 EOF
     ;;
 esac

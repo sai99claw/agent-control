@@ -445,3 +445,7 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - ③ 原話:「3 照建議，記進 HANDOFF，我在 Mac 上改。」—— scripts/sync-to-project.sh 第 466 行「(不進票 cost[])」在 #152 落地後要加 --prepare 例外;hard_block 檔,使用者在 Mac 上改。
 - 主線裁(未經使用者,#153 開題者 Q3–Q5 照建議):#144 的「其他本機分支被動到」比對拿掉(不在四個比對裡);`git ls-remote` 失敗或逾時只印「push not compared」不擋;沒有 --prepare 快照的手派子 agent 不比對、印一行。
 - 補(主線裁,未經使用者)#153 開題者兩題:Q1 窗內 commit 動到 hard_block.paths 也算「有變」→ 拒收(否則主線在窗內改了再落地 DECISIONS.md,工作樹前後都乾淨,看不到;D-065 ② 的延伸);Q2 不加新事件型別,紀錄寫在 main-compare.json 與 guard.json。
+
+## D-066(2026-10-24)使用者授權改 hard_block 檔 sync-to-project.sh 兩處,直接 commit 進 main
+- 原話:「我授權修改 hard_block 檔 scripts/sync-to-project.sh，只限這兩處：(a) SCRIPT_LIST 加 scripts/main_guard.py；(b) 第 466 行附近「(不進票 cost[])」補上 --prepare 的例外。這個檔 land.sh 會擋，所以這一次直接 commit 到 agent-control main 並 push；commit 訊息寫明「user-authorised hard_block edit (D-066)」。同時在 agent-control docs/DECISIONS.md 加 D-066，附我這段原話。除了這兩處，不准動任何 hard_block 檔。」
+- 做法:SCRIPT_LIST 末尾加 `main_guard.py`(#153 新模組,不加 tabby 的 auto-fix.sh 會 import 失敗);agent-cost-hook 提示那行改成「不進票 cost[];`auto-fix.sh <n> --prepare` 派的子 agent 例外,記進那張票的 cost[],#152」。`tests.test_sync_to_project` 46 條實跑綠。沒有加進 DEPENDENCY_ONLY(授權範圍外):同步時若對 main_guard.py 印「沒有呼叫點」的提示,是這個原因。
