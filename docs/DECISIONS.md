@@ -449,3 +449,8 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 ## D-066(2026-10-24)使用者授權改 hard_block 檔 sync-to-project.sh 兩處,直接 commit 進 main
 - 原話:「我授權修改 hard_block 檔 scripts/sync-to-project.sh，只限這兩處：(a) SCRIPT_LIST 加 scripts/main_guard.py；(b) 第 466 行附近「(不進票 cost[])」補上 --prepare 的例外。這個檔 land.sh 會擋，所以這一次直接 commit 到 agent-control main 並 push；commit 訊息寫明「user-authorised hard_block edit (D-066)」。同時在 agent-control docs/DECISIONS.md 加 D-066，附我這段原話。除了這兩處，不准動任何 hard_block 檔。」
 - 做法:SCRIPT_LIST 末尾加 `main_guard.py`(#153 新模組,不加 tabby 的 auto-fix.sh 會 import 失敗);agent-cost-hook 提示那行改成「不進票 cost[];`auto-fix.sh <n> --prepare` 派的子 agent 例外,記進那張票的 cost[],#152」。`tests.test_sync_to_project` 46 條實跑綠。沒有加進 DEPENDENCY_ONLY(授權範圍外):同步時若對 main_guard.py 印「沒有呼叫點」的提示,是這個原因。
+
+## D-067(2026-10-24)派工回到方式一(headless);方式二(--prepare 子 agent)退役,推翻 D-061
+- 原話:「選方式一， 我感受不到方式二的好處，如果之前往錯誤方向做了 就當教訓吧」—— 回應主線的修正建議:headless(`auto-fix.sh` 起 `claude -p` 等程序,跑完寫收件匣)恢復為唯一主要做法,雲端也用;每一輪預設開新 agent,靠 EVIDENCE「已排除的假設」與狀態檔 repair_context 交接;續做只用在交件後短時間內的退回(headless `--resume`),或不做。`--prepare` 這條路(#149)與 #153 在 apply.sh 收件那一側的比對一起退役;#152 的 cost[] 併入(從派工文路徑認票)隨之檢討。
+- 為什麼錯(主線檢討,寫給下一個主線):D-061 拿子 agent 跟 routine 比(舊 clone、push 403、20 分鐘輪詢都是 routine 的問題),沒有跟 headless 比;headless 在雲端可用(#149 的 review.sh 用 `claude -p` 實跑成功)。子 agent 的代價正是 headless 要避免的:每則回報進主線上下文;等待期間主線與子 agent 都被「還在跑」通知叫醒(#151 約 30 次,worker 每次重讀約 95k);主線第一天 8 小時 cache_read 約 2,786 萬。續做也不省:#147 驗證者第 2 輪(修一條案例)約 28 萬換算 token,與全新第 1 輪的約 30 萬相當(快取寫 ×1.25、讀 ×0.1 換算;疑為等閘門期間快取過期整份重寫,未完全確認)。
+- 連帶:scripts/sync-to-project.sh 在 D-066 加的「--prepare 例外」註記將過時;hard_block 檔,使用者改(主線待辦)。
