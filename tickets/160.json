@@ -22,7 +22,7 @@
   "attempt": 0,
   "base_sha": "3bdba76591a8e5c27a52621452e5f7dbebe833ed",
   "state": "InReview",
-  "state_version": 14,
+  "state_version": 19,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -36,14 +36,14 @@
       "stage": "check",
       "ok": true,
       "why": "",
-      "at": "2026-10-24T22:50:38+00:00",
+      "at": "2026-10-24T23:42:36+00:00",
       "files": [
         "tests/test_project_config_cases.py"
       ],
       "base_ref": "3bdba76591a8e5c27a52621452e5f7dbebe833ed",
       "base_sha": "3bdba76591a8e5c27a52621452e5f7dbebe833ed",
       "candidate": "../agent-control-wt/t160",
-      "candidate_sha": "1b340975578c0ba6b9985c6688a0066a88f1ec09",
+      "candidate_sha": "b0ac6094e55ce0f625e28c02725b6ee174b4170f",
       "baseline": {
         "red": [
           "tests.test_project_config_cases.ProjectConfigCases.test_check_refuses_non_int_versions_and_names_the_value",
@@ -157,14 +157,31 @@
       "note": "沒帶 --from-envelope",
       "effort": null,
       "at": "2026-10-24T23:17:52+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 18,
+      "tokens_out": 5878,
+      "cache_write": 36940,
+      "cache_read": 513841,
+      "wall_seconds": 259,
+      "outcome": "handed-in",
+      "run_id": "20261024-225127-14921-gate",
+      "session_id": "d39c0e8e-8d76-4045-9c23-49bb45a9a36e",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-24T23:27:30+00:00"
     }
   ],
   "branch": "t160",
   "gate": {
     "rc": 0,
-    "sha": "1b340975578c0ba6b9985c6688a0066a88f1ec09",
-    "run_id": "20261024-223600-21575",
-    "at": "2026-10-24T22:50:38+00:00"
+    "sha": "b0ac6094e55ce0f625e28c02725b6ee174b4170f",
+    "run_id": "20261024-232730-27773",
+    "at": "2026-10-24T23:42:37+00:00"
   },
   "repair_round": 2
 }
