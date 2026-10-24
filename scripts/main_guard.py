@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Main-repo check around a dispatched round (#153, D-064 / D-065): one copy, two callers.
+"""Main-repo check around a dispatched round (#153, D-064 / D-065; headless only since D-067).
 
-`auto-fix.sh` (`run_agent`, headless worker / verifier / batch worker: reject = exit 8) and
-`apply.sh` (rounds prepared with `auto-fix.sh --prepare`, compared on receipt: reject = exit 7)
-both call this module; neither walks porcelain, hard_block.dirs or `ls-remote` itself.
+`auto-fix.sh` `run_agent` (headless worker / verifier / batch worker) imports this module,
+snapshots before the agent starts and compares after it exits: reject = exit 8. It does not walk
+porcelain, hard_block.dirs or `ls-remote` itself.
 
 A snapshot holds four things, and `compare` checks the same four against now:
 1. main HEAD (40 hex) and the branch it is on. Unchanged -> ok. Moved forward while the events
@@ -25,15 +25,8 @@ A snapshot holds four things, and `compare` checks the same four against now:
    reject, no exception.
 Only what is listed is looked at: files ignored by .gitignore and directories outside
 hard_block.dirs are not claimed as seen.
-
-CLI (exit 0 ok, 7 reject, 2 usage):
-  main_guard.py snapshot --root <control root> [--repo <main repo>] [--exempt <dir>]… --out <file>
-  main_guard.py compare --root <control root> [--repo <main repo>] [--label <who>] <dir>…
-      compares every <dir>/main-snapshot.json, writes <dir>/main-compare.json beside each one;
-      none found -> one line that the comparison was not made, exit 0 (D-065 Q5).
 """
 
-import argparse
 import datetime
 import hashlib
 import json
@@ -44,8 +37,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ticket as ticket_mod  # noqa: E402
 
-SNAPSHOT = "main-snapshot.json"
-COMPARE = "main-compare.json"
 CONTROL_PLANE = (("tickets_dir", "tickets"), ("events_file", "board/events.jsonl"),
                  ("answers_file", "board/answers.jsonl"), ("reports_dir", "reports"))
 MAIN_PATHS_DEFAULT = ["tickets/", "docs/", "memory/"]   # = land.sh DOCS_PREFIXES
@@ -337,81 +328,3 @@ def compare(before, conf, exempt=()):
                                        "after": now_files.get(path, "absent")})
     return out
 
-
-def describe(row):
-    return "%s (before %s -> after %s%s)" % (row["path"], row.get("before"), row.get("after"),
-                                             "; " + row["why"] if row.get("why") else "")
-
-
-def cmd_snapshot(args):
-    conf = settings(args.root, args.repo, args.exempt)
-    snap = snapshot(conf)
-    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-    with open(args.out, "w", encoding="utf-8") as handle:
-        json.dump(snap, handle, ensure_ascii=False, indent=2)
-    origin = snap["origin"]
-    sys.stderr.write("main-guard: snapshot %s (HEAD %s%s)\n"
-                     % (args.out, (snap["head"] or "?")[:12],
-                        "; push will not be compared: " + origin["why"]
-                        if origin.get("state") == "error" else
-                        "; no origin" if origin.get("state") == "absent" else ""))
-    return 0
-
-
-def cmd_compare(args):
-    label = args.label
-    seen, found = set(), []
-    for where in args.dirs:
-        path = os.path.join(where, SNAPSHOT)
-        if where and os.path.isfile(path) and os.path.realpath(path) not in seen:
-            seen.add(os.path.realpath(path))
-            found.append(path)
-    if not found:
-        print("%s: main-repo comparison not made - no %s in %s (hand-dispatched round, D-065 Q5)"
-              % (label, SNAPSHOT, ", ".join(item for item in args.dirs if item) or "(none)"))
-        return 0
-    conf = settings(args.root, args.repo)
-    rc = 0
-    for path in found:
-        try:
-            with open(path, encoding="utf-8") as handle:
-                before = json.load(handle)
-        except (OSError, ValueError) as exc:
-            sys.stderr.write("%s: %s unreadable (%s) - not received\n" % (label, path, exc))
-            return 7
-        result = compare(before, conf)
-        record = dict(result, snapshot=path, compared_at=now_ts(), snapshot_ts=before.get("ts"),
-                      verdict="reject" if result["rejects"] else "ok")
-        out = os.path.join(os.path.dirname(path), COMPARE)
-        with open(out, "w", encoding="utf-8") as handle:
-            json.dump(record, handle, ensure_ascii=False, indent=2)
-        for line in result["recorded"] + ["%s (recorded, not blocked)" % describe(row)
-                                          for row in result["main_side"]] + result["notes"]:
-            print("%s: main-repo: %s" % (label, line))
-        if result["rejects"]:
-            sys.stderr.write("%s: main repo changed while the round ran: %s - not received "
-                             "(%d item(s); record %s)\n"
-                             % (label, describe(result["rejects"][0]), len(result["rejects"]), out))
-            rc = 7
-    return rc
-
-
-def main(argv=None):
-    parser = argparse.ArgumentParser(prog="main_guard.py")
-    sub = parser.add_subparsers(dest="cmd", required=True)
-    for name in ("snapshot", "compare"):
-        one = sub.add_parser(name)
-        one.add_argument("--root", required=True)
-        one.add_argument("--repo", default=None)
-        if name == "snapshot":
-            one.add_argument("--exempt", action="append", default=[])
-            one.add_argument("--out", required=True)
-        else:
-            one.add_argument("--label", default="main-guard")
-            one.add_argument("dirs", nargs="*")
-    args = parser.parse_args(argv)
-    return cmd_snapshot(args) if args.cmd == "snapshot" else cmd_compare(args)
-
-
-if __name__ == "__main__":
-    sys.exit(main())

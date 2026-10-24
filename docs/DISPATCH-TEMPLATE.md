@@ -60,17 +60,16 @@ python3 scripts/rules.py roles                         # 哪個角色要哪幾�
 **worker**(D-054 Q9,VISION 流程 #5「git 由工作者自己處理」):派工方(`auto-fix.sh`)派工前建好
 票分支(`t<n>`,票的 `branch` 欄)的 git worktree `<worktree_dir>/<票分支>`,你的 cwd 就是它;
 閘門在同一個 worktree 跑,落地收的也是這條分支(流程見 `docs/WORKFLOW.md`)。
-派工方兩種形式都是 `auto-fix.sh`(D-061):它自己起 headless worker,或 `--prepare worker|verifier` 備好後由主線交給
-in-session subagent(subagent 的 cwd 每次呼叫重設,指令一律帶 worktree / 副本路徑)。底下的主 repo 比對兩種都做
-(D-064):headless 是 auto-fix 起的程序跑完當場比(rc 8),in-session 是收件時 `apply.sh` 比 prepare 留的快照(rc 7)。
+派工方只有一種形式(D-067):`auto-fix.sh` 自己起 headless worker / 驗證者的程序,底下的主 repo 比對在
+那個程序跑完當場比(D-064,拒收 = rc 8)。
 
 - **在自己的 worktree / 分支 commit**:改完 `git add` / `git commit`(可多個 commit,訊息帶 `t<n>`)。
 - **交件 = 分支相對派工前多了至少一個 commit,而且工作樹乾淨。** 沒 commit 的改動不算交件,
   腳本不替你 commit;commit 了又留著未 commit 的改動,當作沒交。
 - EVIDENCE 寫在 worktree 外的輪次目錄(派工文給絕對路徑),不進 repo。
 - **不碰 main、不 push、不 merge / rebase 進 main、不動別的分支、不 worktree add / remove**。
-  主 repo 的 HEAD / 分支 / 工作樹、origin 的 ref、`hard_block.dirs` 動了 → 拒收(headless `auto-fix.sh` rc 8,
-  `--prepare` 那一輪收件時 `apply.sh` rc 7;規則在 `scripts/main_guard.py`,不逐 commit 歸屬)。
+  主 repo 的 HEAD / 分支 / 工作樹、origin 的 ref、`hard_block.dirs` 動了 → 拒收(`auto-fix.sh` rc 8;
+  規則在 `scripts/main_guard.py`,不逐 commit 歸屬)。
   **為什麼**:進主線只由 `land.sh` 在測試綠後做 —— 落地要決定分支順序、在 land 佇列裡排、處理與
   別張票的衝突,而你看不到別張票。
 
@@ -102,7 +101,7 @@ archive 給的是 commit 的內容,worktree 裡沒 commit 的一個字都不進�
 
 **沒有寫入範圍;機器會擋的只有一份清單**:`board/config.json` 的 `hard_block`(D-054 Q2、Q3)。`paths`(repo 內 glob:
 裁示文件、發版腳本)動到 → `apply.sh` rc 5(量票分支上的 commit 加 patch-verify)、`gate.sh` preflight rc 4、`land.sh` 拒收;`dirs`(repo 外
-目錄,`~` 展開、相對主 repo 解析)底下的檔在一輪跑著時被動到 → 越界守衛拒收(`auto-fix.sh` rc 8 / `apply.sh` rc 7);`patterns`
+目錄,`~` 展開、相對主 repo 解析)底下的檔在一輪跑著時被動到 → 越界守衛拒收(`auto-fix.sh` rc 8);`patterns`
 (改動內文禁字 regex)**只查 tests/** 與 verify/** 的新增行**,命中同 `paths` 三處擋 —— scripts 自己合法用
 kill,不查。沒設或三格皆空 = 不擋。
 
