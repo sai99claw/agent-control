@@ -4868,5 +4868,171 @@ class T157TheVerifierCopyAndTheParallelReceipt(AutoFixBase):
         self.assertIn("3-way: tests/test_x.py", self.git("log", "--format=%B", "main..t1"))
 
 
+class TheVerifierCopySourceFollowsTheTicketMode(AutoFixBase):
+    """#157 驗證者的案例(B1-B4、D8),經 auto-fix 端到端,同 TheFirstRoundVerifierRunsAlongside 的
+    一支替身兩個角色(AC_ROLE)。替身驗證者起跑時把副本裡看到的東西寫下來(副本收完會被清掉);
+    期望值 = 這一組的 fixture 字串與測試自己 `git rev-parse` 的 sha。helper 都在 class 裡。"""
+
+    STUB = r"""#!/bin/sh
+set -e
+W=$PWD
+cd "$AC_WORK"
+if [ "$AC_ROLE" = verifier ]; then
+    : > "@SAW@.started"
+    if [ -f base/w.txt ]; then cat base/w.txt > "@SAW@.base"; else echo absent > "@SAW@.base"; fi
+    if [ -f work/w.txt ]; then cat work/w.txt > "@SAW@.work"; else echo absent > "@SAW@.work"; fi
+    case "@VMODE@" in
+        line3) sed -i 's/^v3 = 3$/v3 = 30/' work/tests/test_x.py ;;
+        append) printf '\n\nclass V(unittest.TestCase):\n    def test_v(self):\n        self.assertTrue(True)\n' >> work/tests/test_x.py ;;
+    esac
+    diff -Nru base work > patch-verify.diff || true
+    cat > EVIDENCE-verifier.md <<'EV'
+# EVIDENCE-verifier
+
+## result
+
+```result
+{"ticket": "1", "role": "verifier", "round": 1, "rc": 0,
+ "verify": {"files": ["tests/test_x.py"], "tags": [], "run": "python3 -m unittest tests.test_x",
+            "notes": "sandbox"},
+ "baseline": {"stage": "red", "ok": true, "why": "", "files": ["tests/test_x.py"]}}
+```
+EV
+    exit 0
+fi
+echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+case "@WMODE@" in
+    catchup)
+        git -C "$W" merge -q --ff-only "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["base_sha"])' "@TICKET@")" ;;
+    line2)
+        sed -i 's/^v2 = 2$/v2 = 20/' "$W"/tests/test_x.py
+        echo worker > "$W"/w.txt
+        (cd "$W" && git add -A && git commit -q -m "t157-fixture worker commit") ;;
+    append)
+        printf '\n\nclass W(unittest.TestCase):\n    def test_w(self):\n        self.assertTrue(True)\n' >> "$W"/tests/test_x.py
+        echo worker > "$W"/w.txt
+        (cd "$W" && git add -A && git commit -q -m "t157-fixture worker commit") ;;
+esac
+printf '# round %s\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
+"""
+    BASE_X = ("import unittest\n\nv2 = 2\nv3 = 3\n\n\nclass A(unittest.TestCase):\n"
+              "    def test_a(self):\n        self.assertTrue(True)\n")
+    ADD_W = ("\n\nclass W(unittest.TestCase):\n"
+             "    def test_w(self):\n        self.assertTrue(True)\n")
+    ADD_V = ("\n\nclass V(unittest.TestCase):\n"
+             "    def test_v(self):\n        self.assertTrue(True)\n")
+
+    def saw(self):
+        return os.path.join(self.home, "t157-verifier-saw")
+
+    def arm(self, wmode, vmode, behind=False, **fields):
+        self.set_worker(self.STUB.replace("@SAW@", self.saw()).replace("@WMODE@", wmode)
+                        .replace("@VMODE@", vmode)
+                        .replace("@TICKET@", os.path.join(self.repo, "tickets", "1.json")))
+        self.write(os.path.join("tests", "test_x.py"), self.BASE_X)
+        if behind:
+            # 票分支先在、落後票的 base_sha 一個 commit;worker 只把它快轉到 base_sha
+            # = 分支多了 commit(交件),但對 base_sha 0 個 commit。
+            self.git("add", "-A")
+            self.git("commit", "-q", "-m", "setup")
+            self.git("branch", "t1", "main")
+            self.write("later.txt", "later\n")
+            self.git("add", "-A")
+            self.git("commit", "-q", "-m", "main moves on")
+        self.make_ticket("1", needs_verifier=True, **fields)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "open #1")
+        self.git("push", "-q", "origin", "main")
+
+    def seen(self, suffix):
+        path = self.saw() + suffix
+        self.assertTrue(os.path.exists(path), "替身驗證者沒有跑(%s)" % path)
+        with open(path, encoding="utf-8") as handle:
+            return handle.read().strip()
+
+    def packet(self):
+        sent = [path for path in glob.glob(os.path.join(self.repo, "reports", "t1", "*",
+                                                        "dispatch-verifier-round1.md"))
+                if os.path.exists(os.path.join(os.path.dirname(path), "verifier-round1.log"))]
+        self.assertEqual(len(sent), 1, sent)
+        with open(sent[0], encoding="utf-8") as handle:
+            return handle.read()
+
+    def worker_commit(self):
+        sha = self.git("log", "--format=%H", "--grep=t157-fixture worker commit", "t1").split()
+        self.assertEqual(len(sha), 1, sha)
+        return sha[0]
+
+    def copy_source_headings(self, packet):
+        return [line for line in packet.splitlines()
+                if line.startswith("#") and "副本來源" in line]
+
+    def test_b1_the_held_verifier_copies_the_branch_head(self):
+        """B1(+ D8 後半)。紅 = 副本永遠從 base_sha 展(m1)。"""
+        self.arm("append", "none")
+        done = self.auto_fix("--no-review")
+        out = done.stdout + done.stderr
+        self.assertEqual((self.seen(".base"), self.seen(".work")), ("worker", "worker"), out)
+        packet = self.packet()
+        self.assertIn("t1", packet)
+        self.assertIn(self.worker_commit(), packet, "派工文要寫出副本展開的分支頭 sha")
+        self.assertTrue(self.copy_source_headings(packet), "派工文要有副本來源那一段")
+        self.assertNotIn("no new module-level names", packet)
+
+    def test_b2_the_parallel_verifier_copies_the_base_sha(self):
+        """B2。interface_fixed true:副本是 base_sha 的內容(沒有 w.txt)、沒有副本來源那一段。"""
+        self.arm("append", "none", interface_fixed=True)
+        done = self.auto_fix("--no-review")
+        out = done.stdout + done.stderr
+        self.assertEqual(self.seen(".base"), "absent", out)
+        packet = self.packet()
+        self.assertEqual(self.copy_source_headings(packet), [])
+        self.assertNotIn(self.worker_commit(), packet)
+
+    def test_b3_the_155_receipt_no_longer_misses(self):
+        """B3(#155 端到端):worker 改第 2 行、驗證者在副本改第 3 行 → 收件 rc 0,
+        分支頭多一個 commit 帶驗證者那一行。紅 = 副本從 base_sha 展,patch context 對不上(rc 3)。"""
+        self.arm("line2", "line3")
+        done = self.auto_fix("--no-review")
+        out = done.stdout + done.stderr
+        self.assertEqual(self.status_of("1", kind="apply").get("rc"), 0, out)
+        self.assertEqual(self.git("show", "t1:tests/test_x.py"),
+                         self.BASE_X.replace("v2 = 2\n", "v2 = 20\n")
+                                    .replace("v3 = 3\n", "v3 = 30\n"))
+        touched = self.git("log", "--format=%H", "-S", "v3 = 30", "t1").split()
+        self.assertEqual(len(touched), 1, touched)
+        self.assertNotEqual(touched[0], self.worker_commit(), "驗證者那一行在自己的 commit")
+
+    def test_b4_no_commit_over_base_sha_starts_no_verifier(self):
+        """B4。分支對 base_sha 0 個 commit 時:不展副本、不起驗證者、stderr 說出來。"""
+        self.arm("catchup", "none", behind=True)
+        done = self.auto_fix("--no-review")
+        out = done.stdout + done.stderr
+        self.assertEqual(self.git("rev-parse", "t1").strip(), self.load_ticket("1")["base_sha"],
+                         "fixture: worker 把 t1 快轉到 base_sha " + out)
+        self.assertFalse(os.path.exists(self.saw() + ".started"), "替身驗證者不該被起 " + out)
+        self.assertFalse(os.path.exists(os.path.join(self.home, "repo-wt", "verify-t1", "round1")),
+                         out)
+        self.assertEqual([row for row in self.events() if row["kind"] == "agent.start"
+                          and row.get("role") == "verifier"], [])
+        said = [line for line in done.stderr.splitlines()
+                if "#1" in line and "waits for worker commits" in line]
+        self.assertTrue(said, done.stderr)
+
+    def test_d8_the_parallel_receipt_merges_three_way_on_the_ticket_base(self):
+        """D8。兩邊都在 tests/test_x.py 檔尾加 class → 收件 rc 0、分支頭兩個 class 都在、
+        --verifier-base = 票的 base_sha、派工文有 'no new module-level names'。紅 = m4。"""
+        self.arm("append", "append", interface_fixed=True)
+        done = self.auto_fix("--no-review")
+        out = done.stdout + done.stderr
+        base = self.load_ticket("1")["base_sha"]
+        self.assertIn("no new module-level names", self.packet())
+        self.assertEqual(self.status_of("1", kind="apply").get("rc"), 0, out)
+        self.assertEqual(self.git("show", "t1:tests/test_x.py"),
+                         self.BASE_X + self.ADD_W + self.ADD_V)
+        # apply.sh 的第一行印出它收到的 --verifier-base(介面照分支上的實作)。
+        self.assertIn("verifier-base %s" % base, out)
+
+
 if __name__ == "__main__":
     unittest.main()

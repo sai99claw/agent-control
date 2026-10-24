@@ -1327,5 +1327,284 @@ class T157ThreeWayReceiptAndEveryObjection(ApplyBase):
                           ("blocking", "B cannot be measured")])
 
 
+class TheVerifierReceiptMergesThreeWayAndKeepsEveryObjection(ApplyBase):
+    """#157 驗證者的案例(C1-C4、D1-D7、D9)。patch-verify 由測試自己照
+    `templates/dispatch-verifier.md` 第四樣的形狀做(`diff -Nru base work`,base 是 ancestor 的內容);
+    期望值一律由這一組自己的 fixture 字串拼出來,不從被測腳本算回去。helper 都在這個 class 裡
+    (不加模組層名字,票面 (4))。"""
+
+    HEAD_A = ("import unittest\n\n\nclass A(unittest.TestCase):\n"
+              "    def test_a(self):\n        self.assertTrue(True)\n")
+    ADD_W = ("\n\nclass W(unittest.TestCase):\n"
+             "    def test_w(self):\n        self.assertTrue(True)\n")
+    ADD_V = ("\n\nclass V(unittest.TestCase):\n"
+             "    def test_v(self):\n        self.assertTrue(True)\n")
+    SLOW_W = ("\n\nclass Slow(unittest.TestCase):\n"
+              "    def test_from_worker(self):\n        self.assertTrue(True)\n")
+    SLOW_V = ("\n\nclass Slow(unittest.TestCase):\n"
+              "    def test_from_verifier(self):\n        self.assertTrue(True)\n")
+    LINES = "".join("v%d = %d\n" % (n, n) for n in range(1, 21))
+
+    # ---------------------------------------------------------------- helpers
+
+    def start(self, files):
+        """主線上先有這幾個檔,再開票(base_sha = 主線的頭)。"""
+        for rel, text in files.items():
+            self.write(rel, text)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "#157 fixture base")
+        self.git("push", "-q", "origin", "main")
+        self.make("1")
+
+    def verifier_diff(self, rel, base, work, name="patch-verify.diff"):
+        """驗證者副本的形狀:`<copy>/base` 與 `<copy>/work` 各一份,在副本根跑 `diff -Nru base work`。"""
+        import subprocess
+        copy = os.path.join(self.home, "t157-copy")
+        shutil.rmtree(copy, ignore_errors=True)
+        self.write(rel, base, where=os.path.join(copy, "base"))
+        self.write(rel, work, where=os.path.join(copy, "work"))
+        done = subprocess.run(["diff", "-Nru", "base", "work"], cwd=copy,
+                              capture_output=True, text=True)
+        self.assertEqual(done.returncode, 1, "fixture: base 與 work 要不一樣 " + done.stderr)
+        self.assertTrue(done.stdout.startswith("diff -Nru base/"), done.stdout[:80])
+        return self.patch_file(name, done.stdout)
+
+    def head(self):
+        return self.git("rev-parse", "t1").strip()
+
+    def commits(self):
+        return int(self.git("rev-list", "--count", "main..t1").strip())
+
+    def untouched(self, head, done):
+        self.assertEqual(self.head(), head, "分支頭不准動 " + done.stdout + done.stderr)
+        self.assertEqual(self.git("status", "--porcelain", cwd=self.wt()), "",
+                         "worktree 不准留東西 " + done.stdout + done.stderr)
+
+    def status_rc(self, run_id):
+        with open(os.path.join(self.repo, "reports", "t1", run_id, "status.json"),
+                  encoding="utf-8") as handle:
+            return json.load(handle)["rc"]
+
+    def rows(self):
+        return self.load_ticket("1").get("objections") or []
+
+    # ------------------------------------------------- C:每一份、每一行反駁都收
+
+    def test_c1_a_verifier_objection_reaches_the_ticket(self):
+        """C1。紅 = 只收 `--evidence` 的第一行(m2)。期望值 = 票面 C1 的那一行與四格。"""
+        self.make("1")
+        worker = self.patch_file("EVIDENCE.md", "# EVIDENCE\n\n沒有反駁。\n")
+        verifier = self.patch_file("EVIDENCE-verifier.md",
+                                   "# EVIDENCE-verifier\n\nOBJECTION: blocking X cannot be measured\n")
+        done = self.deliver_apply("1", "--evidence", worker, "--evidence-verifier", verifier,
+                                  env=self.env(AC_RUN_ID="c1"))
+        self.assertEqual(done.returncode, 6, done.stdout + done.stderr)
+        self.assertEqual(self.status_rc("c1"), 6)
+        rows = self.rows()
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual((rows[0]["category"], rows[0]["body"], rows[0]["owner"]),
+                         ("blocking", "X cannot be measured", "main"))
+        self.assertEqual(rows[0]["evidence"], os.path.relpath(verifier, self.repo))
+
+    def test_c2_a_disposed_row_does_not_swallow_the_verifier_line(self):
+        """C2(#155 的情境)。紅 = 驗證者那一份沒人收。期望值 = 1 筆變 2 筆。"""
+        self.make("1")
+        first = self.patch_file("EVIDENCE.md",
+                                "# EVIDENCE\n\nOBJECTION: ticket-wrong the old field is gone\n")
+        self.deliver_apply("1", "--evidence", first)
+        rows = self.rows()
+        self.assertEqual(len(rows), 1, "fixture: 先有一筆")
+        rows[0]["disposition"] = "rejected"
+        self.assertEqual(self.ticket("set", "1", "objections",
+                                     json.dumps(rows, ensure_ascii=False)).returncode, 0)
+        worker = self.patch_file("EVIDENCE-2.md", "# EVIDENCE\n\n沒有反駁。\n")
+        verifier = self.patch_file("EVIDENCE-verifier.md",
+                                   "# EVIDENCE-verifier\n\nOBJECTION: blocking X cannot be measured\n")
+        done = self.apply("1", "--evidence", worker, "--evidence-verifier", verifier)
+        self.assertEqual(done.returncode, 6, done.stdout + done.stderr)
+        rows = self.rows()
+        self.assertEqual(len(rows), 2, rows)
+        self.assertEqual((rows[1]["category"], rows[1]["body"]),
+                         ("blocking", "X cannot be measured"))
+
+    def test_c3_two_lines_of_one_verifier_evidence_are_both_recorded_in_order(self):
+        """C3。紅 = 只記第一行(m3)或驗證者那一份不收(m2)。期望值 = 檔裡兩行的順序。"""
+        self.make("1")
+        worker = self.patch_file("EVIDENCE.md", "# EVIDENCE\n\n沒有反駁。\n")
+        verifier = self.patch_file("EVIDENCE-verifier.md",
+                                   "# EVIDENCE-verifier\n\n"
+                                   "OBJECTION: ticket-wrong A the field is not there\n"
+                                   "說明一行。\n"
+                                   "OBJECTION: blocking B cannot be measured\n")
+        done = self.deliver_apply("1", "--evidence", worker, "--evidence-verifier", verifier)
+        self.assertEqual(done.returncode, 6, done.stdout + done.stderr)
+        self.assertEqual([(row["category"], row["body"]) for row in self.rows()],
+                         [("ticket-wrong", "A the field is not there"),
+                          ("blocking", "B cannot be measured")])
+
+    def test_c4_lines_already_recorded_and_disposed_let_apply_through(self):
+        """C4。兩行先記進票(rc 6)、都處置後再收一次:不多記、rc 0、狀態檔 0。"""
+        self.make("1")
+        worker = self.patch_file("EVIDENCE.md", "# EVIDENCE\n\n沒有反駁。\n")
+        verifier = self.patch_file("EVIDENCE-verifier.md",
+                                   "# EVIDENCE-verifier\n\n"
+                                   "OBJECTION: ticket-wrong A the field is not there\n"
+                                   "OBJECTION: blocking B cannot be measured\n")
+        first = self.deliver_apply("1", "--evidence", worker, "--evidence-verifier", verifier)
+        self.assertEqual(first.returncode, 6, first.stdout + first.stderr)
+        rows = self.rows()
+        self.assertEqual(len(rows), 2, rows)
+        for row in rows:
+            row["disposition"] = "rejected"
+        self.assertEqual(self.ticket("set", "1", "objections",
+                                     json.dumps(rows, ensure_ascii=False)).returncode, 0)
+        second = self.run_sh("scripts/apply.sh", "1", "--evidence", worker,
+                             "--evidence-verifier", verifier, env=self.env(AC_RUN_ID="c4"))
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertEqual(len(self.rows()), 2)
+        self.assertEqual(self.status_rc("c4"), 0)
+
+    # ------------------------------------------- D:套不上分支頭就逐檔三方合併
+
+    def test_d1_both_sides_appending_a_class_merge_worker_then_verifier(self):
+        """D1。紅 = --check 不過立刻 rc 3(m4)。期望值 = base + W + V(fixture 字串拼)。"""
+        rel = "tests/test_x.py"
+        self.start({rel: self.HEAD_A})
+        self.deliver("1", {rel: self.HEAD_A + self.ADD_W})
+        before = self.commits()
+        done = self.apply("1", self.verifier_diff(rel, self.HEAD_A, self.HEAD_A + self.ADD_V))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.commits(), before + 1, "恰好多一個 commit")
+        self.assertEqual(self.git("show", "t1:" + rel), self.HEAD_A + self.ADD_W + self.ADD_V)
+        self.assertIn("3-way: tests/test_x.py", self.git("log", "-1", "--format=%B", "t1"))
+
+    def test_d2_edits_two_lines_apart_both_land(self):
+        """D2。第 10 行(worker)與第 12 行(驗證者)在 patch 的 context 裡,--check 不過。"""
+        rel = "tests/test_x.py"
+        self.start({rel: self.LINES})
+        worker = self.LINES.replace("v10 = 10\n", "v10 = 100\n")
+        self.deliver("1", {rel: worker})
+        done = self.apply("1", self.verifier_diff(
+            rel, self.LINES, self.LINES.replace("v12 = 12\n", "v12 = 120\n")))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("show", "t1:" + rel),
+                         self.LINES.replace("v10 = 10\n", "v10 = 100\n")
+                                   .replace("v12 = 12\n", "v12 = 120\n"))
+        self.assertEqual(self.git("diff", "--name-only", "t1~1", "t1").split(), [rel],
+                         "patch-verify 那一個 commit 只動這一支")
+
+    def test_d3_the_same_line_changed_twice_is_rc_3_and_named(self):
+        """D3。期望值 = 票面:rc 3、分支與 worktree 不動、stderr 指名檔與行號(第 10 行)。"""
+        rel = "tests/test_x.py"
+        self.start({rel: self.LINES})
+        self.deliver("1", {rel: self.LINES.replace("v10 = 10\n", "v10 = 'worker'\n")})
+        head = self.head()
+        done = self.apply("1", self.verifier_diff(
+            rel, self.LINES, self.LINES.replace("v10 = 10\n", "v10 = 'verifier'\n")))
+        import re
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.untouched(head, done)
+        named = [line for line in done.stderr.splitlines()
+                 if rel in line and re.search(r"(?<!\d)10(?!\d)", line)]
+        self.assertTrue(named, "stderr 要有一行指名 %s 與第 10 行:%s" % (rel, done.stderr))
+
+    def test_d4_a_class_both_sides_define_is_rc_3_and_named(self):
+        """D4(#156 r1 的 class Slow)。紅 = 不查重名(m5)會 rc 0 而遮掉一個。"""
+        rel = "tests/test_x.py"
+        self.start({rel: self.HEAD_A})
+        self.deliver("1", {rel: self.HEAD_A + self.SLOW_W})
+        head = self.head()
+        done = self.apply("1", self.verifier_diff(rel, self.HEAD_A, self.HEAD_A + self.SLOW_V))
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.untouched(head, done)
+        self.assertIn(rel, done.stderr)
+        self.assertIn("Slow", done.stderr)
+
+    def test_d4_a_union_that_does_not_parse_is_rc_3(self):
+        """D4 後半:兩邊插入合起來 ast 解析不了 → rc 3、分支不動。"""
+        rel = "tests/test_x.py"
+        self.start({rel: self.HEAD_A})
+        self.deliver("1", {rel: self.HEAD_A + "\n\nclass W(unittest.TestCase:\n    pass\n"})
+        head = self.head()
+        done = self.apply("1", self.verifier_diff(rel, self.HEAD_A, self.HEAD_A + self.ADD_V))
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.untouched(head, done)
+
+    def test_d5_insert_insert_outside_py_is_rc_3(self):
+        """D5。紅 = 非 .py 也照併(m6)。"""
+        rel = "verify/x.json"
+        self.start({rel: "[1]\n"})
+        self.deliver("1", {rel: "[1]\n[2]\n"})
+        head = self.head()
+        done = self.apply("1", self.verifier_diff(rel, "[1]\n", "[1]\n[3]\n"))
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.untouched(head, done)
+        self.assertIn(rel, done.stderr)
+
+    def older_ancestor(self):
+        """D6 的 fixture:X(副本展開的那一版)→ Y(票的 base_sha,改了檔尾前一行)→ 分支加 W。
+        patch-verify 對 X 出,context 帶著 X 的那一行,套不上 Y 也套不上分支頭。"""
+        rel = "tests/test_x.py"
+        x_text = (self.HEAD_A + "\n\nclass B(unittest.TestCase):\n    def test_b(self):\n"
+                  "        x = 1\n        self.assertTrue(x)\n")
+        y_text = x_text.replace("        x = 1\n", "        x = 2\n")
+        self.write(rel, x_text)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "#157 X")
+        x_sha = self.git("rev-parse", "HEAD").strip()
+        self.start({rel: y_text})
+        self.assertNotEqual(self.load_ticket("1")["base_sha"], x_sha, "fixture: base_sha 是 Y")
+        self.deliver("1", {rel: y_text + self.ADD_W})
+        return rel, x_text, y_text, x_sha
+
+    def test_d6_verifier_base_names_the_ancestor_the_copy_was_made_from(self):
+        """D6 前半。期望值 = Y + W + V。"""
+        rel, x_text, y_text, x_sha = self.older_ancestor()
+        done = self.apply("1", self.verifier_diff(rel, x_text, x_text + self.ADD_V),
+                          "--verifier-base", x_sha)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("show", "t1:" + rel), y_text + self.ADD_W + self.ADD_V)
+
+    def test_d6_verifier_base_off_the_branch_is_rc_2(self):
+        """D6 後半:不是分支頭祖先的 sha → rc 2、分支不動。"""
+        rel, x_text, _, _ = self.older_ancestor()
+        self.git("checkout", "-q", "-b", "t157-side", "main")
+        self.write("side.txt", "side\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "side")
+        side = self.git("rev-parse", "HEAD").strip()
+        self.git("checkout", "-q", "main")
+        head = self.head()
+        done = self.apply("1", self.verifier_diff(rel, x_text, x_text + self.ADD_V),
+                          "--verifier-base", side)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.untouched(head, done)
+
+    def test_d7_the_merged_result_still_goes_through_hard_block(self):
+        """D7。驗證者那一段新增行命中 hard_block.patterns → rc 5(紅 = 三方合併繞過硬擋,或根本不合)。"""
+        conf = json.loads(self.read("board/config.json"))
+        conf["hard_block"] = {"paths": [], "dirs": [], "patterns": [r"T157_FORBIDDEN_MARK"]}
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        rel = "tests/test_x.py"
+        self.start({rel: self.HEAD_A})
+        self.deliver("1", {rel: self.HEAD_A + self.ADD_W})
+        head = self.head()
+        marked = self.ADD_V.replace("self.assertTrue(True)", "self.assertTrue('T157_FORBIDDEN_MARK')")
+        done = self.apply("1", self.verifier_diff(rel, self.HEAD_A, self.HEAD_A + marked))
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        self.untouched(head, done)
+
+    def test_d9_a_patch_that_fits_the_head_takes_the_fast_path(self):
+        """D9。分支沒碰這支檔,patch-verify 直接套得上:沒有 3-way 字樣。"""
+        rel = "tests/test_x.py"
+        self.start({rel: self.HEAD_A})
+        self.deliver("1")
+        done = self.apply("1", self.verifier_diff(rel, self.HEAD_A, self.HEAD_A + self.ADD_V))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("show", "t1:" + rel), self.HEAD_A + self.ADD_V)
+        self.assertNotIn("3-way", done.stdout)
+        self.assertNotIn("3-way", self.git("log", "-1", "--format=%B", "t1"))
+
+
 if __name__ == "__main__":
     unittest.main()
