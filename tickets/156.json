@@ -17,8 +17,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "fa38f583f0a1f2df98183f133e54619940e6db10",
-  "state": "Running",
-  "state_version": 7,
+  "state": "InReview",
+  "state_version": 10,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -29,19 +29,21 @@
     "run": "timeout 580 python3 -m unittest tests.test_verify_case",
     "notes": "#156 cases are classes CaseTimeoutResolver (A1, importlib-loads scripts/verify-case.py, temp root with board/config.json) and CaseTimeout (A2-A4, CaseSandbox; edits the sandbox board/config.json working copy). A2/A3 use a case that sleeps 10 s then fails with timeout_seconds=2; A2 also asserts wall < 9 s. 'Names the seconds' is checked as a standalone 2 in stderr after stripping sandbox paths, shas, the module name and the key; the module may be named dotted (verify.nav.test_ticket_1) or as its path. A4 is green on the clean base by design (regression guard: with/without the key, rc and baseline-red.json minus 'at' must be equal), so it is not in the baseline reds. A5 (board/config.json value, ruled by main Q1) and A6 (existing cases unchanged) have no case: A5 is a config diff check, A6 is the existing module staying green. Runtime about 35 s for the new cases. Round 2: 3-way reapplied onto t156 head 10e82d0; the worker's own #156 classes (CaseTimeoutFromConfig, ARunThatTimesOutIsUnmeasured) are kept unchanged alongside; the verifier loader is renamed load_verify_case_t156 to avoid clashing with the worker's load_verify_case. Whole module at 10e82d0+patch: Ran 47, OK. baseline below is carried over unchanged from round 1 (measured at base fa38f58), not re-measured.",
     "baseline": {
-      "stage": "red",
-      "ok": true,
-      "why": "",
-      "at": "2026-10-24T06:01:33+00:00",
+      "stage": "check",
+      "ok": false,
+      "why": "乾淨主線上有 9 條紅在缺符號(AttributeError/NameError/FileNotFoundError/TypeError 那一族)—— 改成先 assert 它存在",
+      "at": "2026-10-24T06:10:13+00:00",
       "files": [
         "tests/test_verify_case.py"
       ],
       "base_ref": "fa38f583f0a1f2df98183f133e54619940e6db10",
       "base_sha": "fa38f583f0a1f2df98183f133e54619940e6db10",
-      "candidate": "../../../../../../home/user/agent-control-wt/verify-t156/round1/work",
-      "candidate_sha": "",
+      "candidate": "../agent-control-wt/t156",
+      "candidate_sha": "dffc5db9e37b2e5e9030b179bd8859ece5dbf39d",
       "baseline": {
         "red": [
+          "tests.test_verify_case.ARunThatTimesOutIsUnmeasured.test_check_that_times_out_is_rc_2_and_leaves_the_ticket",
+          "tests.test_verify_case.ARunThatTimesOutIsUnmeasured.test_red_that_times_out_is_rc_2_and_writes_nothing",
           "tests.test_verify_case.CaseTimeout.test_check_that_times_out_is_rc_2_and_leaves_the_ticket",
           "tests.test_verify_case.CaseTimeout.test_red_that_times_out_is_rc_2_and_writes_nothing",
           "tests.test_verify_case.CaseTimeoutResolver.test_a_bad_value_warns_and_falls_back_to_900",
@@ -50,22 +52,44 @@
           "tests.test_verify_case.CaseTimeoutResolver.test_an_unreadable_config_is_900"
         ],
         "red_lines": [
+          "tests.test_verify_case.ARunThatTimesOutIsUnmeasured.test_check_that_times_out_is_rc_2_and_leaves_the_ticket: AssertionError: 0 != 2 : verify-case: #1 案例 1 個",
+          "tests.test_verify_case.ARunThatTimesOutIsUnmeasured.test_red_that_times_out_is_rc_2_and_writes_nothing: AssertionError: 0 != 2 : verify-case: #1 案例 1 個(乾淨基底 21710ce9fb9cb54b49b85dd1165faa1c1dac2653 / 21710ce9fb9c)",
           "tests.test_verify_case.CaseTimeout.test_check_that_times_out_is_rc_2_and_leaves_the_ticket: AssertionError: 1 != 2 : verify-case: #1 案例 1 個",
-          "tests.test_verify_case.CaseTimeout.test_red_that_times_out_is_rc_2_and_writes_nothing: AssertionError: 0 != 2 : verify-case: #1 案例 1 個(乾淨基底 df8ac4831a02f2279cfc8883fb485f4debe1aada / df8ac4831a02)",
+          "tests.test_verify_case.CaseTimeout.test_red_that_times_out_is_rc_2_and_writes_nothing: AssertionError: 0 != 2 : verify-case: #1 案例 1 個(乾淨基底 bbadf0410d7b59340a638ac74a2efa269e8d0844 / bbadf0410d7b)",
           "tests.test_verify_case.CaseTimeoutResolver.test_a_bad_value_warns_and_falls_back_to_900: AssertionError: False is not true : verify-case.py 沒有 case_timeout(root)",
           "tests.test_verify_case.CaseTimeoutResolver.test_a_positive_int_is_used: AssertionError: False is not true : verify-case.py 沒有 case_timeout(root)",
           "tests.test_verify_case.CaseTimeoutResolver.test_absent_key_is_900: AssertionError: False is not true : verify-case.py 沒有 case_timeout(root)",
           "tests.test_verify_case.CaseTimeoutResolver.test_an_unreadable_config_is_900: AssertionError: False is not true : verify-case.py 沒有 case_timeout(root)"
         ],
         "import_failures": [],
-        "missing_symbol": [],
+        "missing_symbol": [
+          "tests.test_verify_case.CaseTimeoutFromConfig.test_a_bad_value_warns_and_falls_back_to_900: AttributeError: module 'verify_case_156' has no attribute 'case_timeout'",
+          "tests.test_verify_case.CaseTimeoutFromConfig.test_a_bad_value_warns_and_falls_back_to_900: AttributeError: module 'verify_case_156' has no attribute 'case_timeout'",
+          "tests.test_verify_case.CaseTimeoutFromConfig.test_a_bad_value_warns_and_falls_back_to_900: AttributeError: module 'verify_case_156' has no attribute 'case_timeout'",
+          "tests.test_verify_case.CaseTimeoutFromConfig.test_a_bad_value_warns_and_falls_back_to_900: AttributeError: module 'verify_case_156' has no attribute 'case_timeout'",
+          "tests.test_verify_case.CaseTimeoutFromConfig.test_a_bad_value_warns_and_falls_back_to_900: AttributeError: module 'verify_case_156' has no attribute 'case_timeout'",
+          "tests.test_verify_case.CaseTimeoutFromConfig.test_a_bad_value_warns_and_falls_back_to_900: AttributeError: module 'verify_case_156' has no attribute 'case_timeout'",
+          "tests.test_verify_case.CaseTimeoutFromConfig.test_a_positive_int_is_taken: AttributeError: module 'verify_case_156' has no attribute 'case_timeout'",
+          "tests.test_verify_case.CaseTimeoutFromConfig.test_an_unreadable_config_is_900: AttributeError: module 'verify_case_156' has no attribute 'case_timeout'",
+          "tests.test_verify_case.CaseTimeoutFromConfig.test_no_key_is_900: AttributeError: module 'verify_case_156' has no attribute 'case_timeout'"
+        ],
         "elsewhere": [],
         "rc": 1,
-        "cases": 40,
+        "cases": 47,
         "skipped": 0,
-        "log": "../red-out/logs/baseline.log"
+        "log": "../agent-control-wt/t156/gate.log.verify-case.d/logs/baseline.log"
       },
-      "candidate_run": null
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 47,
+        "skipped": 0,
+        "log": "../agent-control-wt/t156/gate.log.verify-case.d/logs/candidate.log"
+      }
     }
   },
   "test_plan": "Worker runs only, foreground: timeout 580 python3 -m unittest tests.test_verify_case <verifier case module if separate>; report Ran/OK verbatim. No full suite, no test_auto_fix (that is what times out). Verifier writes cases for A1-A4 in tests/ (verify.tags stays empty, agent-control rule #29). Mutations (worker, optional, not measured by opener): (m1) keep TIMEOUT = 900 and ignore config -> A2 red (sleep 10 completes, rc != 2); (m2) drop the TimeoutExpired handling -> A2 red (Traceback in stderr); (m3) accept bool true as 1 -> A1 red.",
@@ -112,5 +136,11 @@
       "at": "2026-10-24T06:02:43+00:00"
     }
   ],
-  "branch": "t156"
+  "branch": "t156",
+  "gate": {
+    "rc": 0,
+    "sha": "dffc5db9e37b2e5e9030b179bd8859ece5dbf39d",
+    "run_id": "20261024-060631-20291",
+    "at": "2026-10-24T06:10:14+00:00"
+  }
 }
