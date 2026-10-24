@@ -284,5 +284,51 @@ class T2Hook(HookCase):
         self.only_event(self.run_hook(good, AC_ROLE="main"))
 
 
+class T155NoDispatchPathMark(HookCase):
+    """#155 T7: #152 undone - a dispatch path in the first prompt no longer pins the event;
+    ticket / role are the #95 guess (description first), round / run_id null. Fixture
+    literals only (usage 11/22/33/44 written below)."""
+
+    def write_subagent(self, agent, prompt, description):
+        sub = os.path.join(self.t, "session", "subagents")
+        rows = [{"type": "user", "message": {"role": "user", "content": prompt},
+                 "timestamp": "2026-10-22T09:00:00.000Z"},
+                {"type": "assistant", "message": {
+                    "id": "msg_t155", "type": "message", "role": "assistant",
+                    "model": "claude-opus-test", "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 11, "cache_creation_input_tokens": 22,
+                              "cache_read_input_tokens": 33, "output_tokens": 44}},
+                 "timestamp": "2026-10-22T09:00:01.000Z"}]
+        with open(os.path.join(sub, "agent-%s.jsonl" % agent), "w", encoding="utf-8") as fh:
+            for row in rows:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        with open(os.path.join(sub, "agent-%s.meta.json" % agent), "w", encoding="utf-8") as fh:
+            json.dump({"agentType": "general-purpose", "description": description}, fh)
+
+    def test_t7_a_dispatch_path_in_the_prompt_is_ignored(self):
+        self.write_subagent("x155", "先讀這一份:/x/reports/t4/20261022-1/dispatch-round1.md",
+                            "#9 verifier")
+        row = self.only_event(self.run_hook({
+            "hook_event_name": "SubagentStop", "session_id": "s-155", "agent_id": "x155",
+            "cwd": self.root, "transcript_path": os.path.join(self.t, "session.jsonl")}))
+        self.assertEqual((row["ticket"], row["role"], row["agent_id"]),
+                         ("9", "verifier", "x155"))
+        self.assertIsNone(row["round"])
+        self.assertIsNone(row["run_id"])
+        self.assertEqual((row["tokens_in"], row["cache_write"], row["cache_read"],
+                          row["tokens_out"]), (11, 22, 33, 44))
+
+    def test_t7_session_end_is_unchanged(self):
+        row = self.only_event(self.run_hook(self.session_end()))
+        self.assertEqual(row["role"], "main")
+        for key in ("ticket", "agent_id", "round", "run_id"):
+            self.assertIsNone(row[key], key)
+
+    def test_t7_the_parser_has_no_dispatch_regex(self):
+        module = load("transcript_cost_t155", "transcript-cost.py")
+        self.assertFalse(hasattr(module, "dispatch" + "_mark"))
+        self.assertFalse(hasattr(module, "DISPATCH"))
+
+
 if __name__ == "__main__":
     unittest.main()

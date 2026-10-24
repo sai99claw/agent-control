@@ -1614,3 +1614,50 @@ class CostTakesAnEffort(Sandbox):
         self.assertIn("15 鍵", cost[0])
 
 
+
+
+class T155AgentCostStaysOutOfCost(Sandbox):
+    """#155 T8 (A6): #152 undone - closing a ticket never folds an agent.cost event into
+    cost[] / cost_total. Expected: the one headless row (tokens_in 100, by auto-fix.sh)
+    and nothing else; 10 from the event must not show up (100, not 110)."""
+
+    HEADLESS = {"role": "worker", "round": 1, "model": "opus", "tokens_in": 100,
+                "tokens_out": 7, "cache_write": 50, "cache_read": 500, "wall_seconds": 60,
+                "outcome": "handed-in", "run_id": "R0", "session_id": None,
+                "by": "auto-fix.sh", "note": None, "effort": None,
+                "at": "2026-09-12T10:10:00+08:00"}
+    EVENT = {"ts": "2026-10-21T10:00:00+00:00", "kind": "agent.cost", "pid": 1, "cwd": ".",
+             "role": "worker", "round": 1, "model": "claude-opus-test", "tokens_in": 10,
+             "tokens_out": None, "cache_write": 3, "cache_read": 9, "wall_seconds": 30,
+             "outcome": None, "run_id": "R1", "session_id": "s", "by": "agent-cost-hook",
+             "note": "stream", "effort": None, "ticket": "7", "agent_id": "a1"}
+
+    def setUp(self):
+        super().setUp()
+        self.write("src/nav.py", "def size_nav():\n    return 42\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "src/nav.py on main")
+        self.main = self.git("rev-parse", "main").strip()
+
+    def seed(self, stamped):
+        fields = {"landed_sha": self.main} if stamped else {}
+        self.make_ticket(7, complexity="simple", needs_verifier=False, state="InReview",
+                         cost=[dict(self.HEADLESS)], **fields)
+        with open(os.path.join(self.repo, "board", "events.jsonl"), "w",
+                  encoding="utf-8") as handle:
+            handle.write(json.dumps(self.EVENT, ensure_ascii=False) + "\n")
+
+    def test_t8_no_close_path_adds_an_agent_cost_row(self):
+        for name, stamped, args in (("close", True, ("close", "7")),
+                                    ("close --landed", False, ("close", "7", "--landed",
+                                                               self.main)),
+                                    ("set state Done", True, ("set", "7", "state", "Done"))):
+            with self.subTest(way=name):
+                self.seed(stamped)
+                done = self.ticket(*args)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                row = self.load_ticket("7")
+                self.assertEqual(row["state"], "Done")
+                self.assertEqual(len(row["cost"]), 1, row["cost"])
+                self.assertNotEqual(row["cost"][0]["by"], "agent-cost-hook")
+                self.assertEqual(row["cost_total"]["by_role"]["worker"]["tokens_in"], 100)

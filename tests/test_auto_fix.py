@@ -4618,5 +4618,162 @@ class AnEmptyPatchVerifyIsNoChange(AutoFixBase):
         self.assertEqual(self.reruns("2"), [], said)
 
 
+# #155: the in-session dispatch path is gone, headless only (D-067). The removed names are
+# spelled in pieces so this module does not itself match the grep it runs (T1).
+PREP = "--pre" + "pare"
+REMOVED_NAMES = [PREP, "prepare" + "_route", "prepare" + "_worker", "prepare" + "_verifier",
+                 "P_" + "MODEL", "main-" + "snapshot", "main-" + "compare", "dispatch" + "_mark",
+                 "fold_" + "agent_cost", "agent_cost" + "_events", "in-session " + "subagent",
+                 "子 agent " + "派工"]
+TREE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def tree_text(rel):
+    with open(os.path.join(TREE, rel), encoding="utf-8") as handle:
+        return handle.read()
+
+
+def sh_function(text, name):
+    """Body of the top-level sh function `name() {` up to its closing `}` at column 0."""
+    found = re.search(r"(?ms)^%s\(\) \{[^\n]*\n(.*?)^\}" % re.escape(name), text)
+    return found.group(1) if found else None
+
+
+class T155TheInSessionPathIsGone(unittest.TestCase):
+    """#155 T1 / T3 / T6 / T9: static greps over the tree; literals are today's names and
+    message text at 85a1eb4, not read back from the scripts."""
+
+    def test_t1_no_removed_name_is_left_outside_the_history_files(self):
+        done = subprocess.run(["grep", "-rnE", "--exclude-dir=review", "--",
+                               "|".join(re.escape(n) for n in REMOVED_NAMES),
+                               "scripts", "tests", "verify", "templates", "memory",
+                               "tickets/SCHEMA.md", "docs"],
+                              cwd=TREE, capture_output=True, text=True, timeout=120)
+        self.assertIn(done.returncode, (0, 1), done.stderr)
+        left = [line for line in done.stdout.splitlines()
+                if not re.match(r"^(docs/(DECISIONS|HANDOFF)\.md|scripts/sync-to-project\.sh):",
+                                line)]
+        self.assertEqual(left, [])
+
+    def test_t3_apply_no_longer_compares_and_main_guard_has_no_cli(self):
+        apply_sh = tree_text("scripts/apply.sh")
+        self.assertEqual(apply_sh.count("exit 7"), 0)
+        self.assertEqual(apply_sh.count("main_guard"), 0)
+        auto = tree_text("scripts/auto-fix.sh")
+        self.assertEqual(len([l for l in auto.splitlines() if "import main_guard" in l]), 1)
+        import ast
+        guard = tree_text("scripts/main_guard.py")
+        names = {n.name for n in ast.parse(guard).body if isinstance(n, ast.FunctionDef)}
+        self.assertTrue({"settings", "snapshot", "compare"} <= names, sorted(names))
+        self.assertEqual(names & {"cmd_snapshot", "cmd_compare", "main"}, set())
+        for word in ("argparse", "__main__", "SNAPSHOT = ", "COMPARE = "):
+            self.assertNotIn(word, guard)
+
+    def test_t6_the_shared_helpers_are_merged_back(self):
+        auto = tree_text("scripts/auto-fix.sh")
+        defined = re.findall(r"(?m)^([a-z_]+)\(\)", auto)
+        self.assertEqual([n for n in defined if n in ("round_setup", "verifier_copy")], [])
+        kept = ("archive_copy", "verifier_packet", "first_round_packet", "first_round_dispatch",
+                "start_verifier_bg", "round_once")
+        self.assertEqual(sorted(n for n in defined if n in kept), sorted(kept))
+        calls = [l for l in auto.splitlines() if re.search(r"(^|[^_a-z])archive_copy", l)
+                 and not re.match(r"^archive_copy\(\)", l)]
+        self.assertEqual(len(calls), 1, calls)
+        self.assertIn(calls[0], sh_function(auto, "start_verifier_bg").splitlines())
+
+    def test_t9_session_start_says_headless_only(self):
+        text = tree_text("docs/SESSION-START.md")
+        for line in text.splitlines():
+            for word in (PREP, "subagent", "rc 7"):
+                self.assertNotIn(word, line)
+        main = re.search(r"(?ms)^## 主線\n(.*?)(?=^## )", text).group(1)
+        self.assertIn("auto-fix.sh <n>", main)
+        self.assertTrue([l for l in text.splitlines()
+                         if "hard_block.paths" in l and "DECISIONS.md" in l])
+
+    def test_t9_dispatch_template_names_one_form(self):
+        text = tree_text("docs/DISPATCH-TEMPLATE.md")
+        for word in (PREP, "rc 7", "in-session"):
+            self.assertNotIn(word, text)
+
+    def test_t9_workflow_item_8_keeps_the_comparisons_only(self):
+        item = re.search(r"(?ms)^8\. \*\*agent.*?(?=^\d+\. )",
+                         tree_text("docs/WORKFLOW.md")).group(0)
+        self.assertIn("DECISIONS.md", item)
+        self.assertIn("hard_block.paths", item)
+        self.assertNotIn("prepare", item)
+        self.assertNotIn("rc 7", item)
+
+    def test_t9_role_procedures_drop_the_routine_fallback(self):
+        text = tree_text("docs/reference/role-procedures.md")
+        self.assertNotIn(PREP, text)
+        self.assertEqual([l for l in text.splitlines()
+                          if l.startswith("#") and "Fallback: routine" in l], [])
+
+    def test_t9_schema_cost_rows_say_agent_cost_stays_out(self):
+        rows = {}
+        for line in tree_text("tickets/SCHEMA.md").splitlines():
+            for label in ("| 成本 |", "| 互動成本 |", "| 成本加總 |"):
+                if line.startswith(label):
+                    rows[label] = line
+        self.assertEqual(sorted(rows), sorted(("| 成本 |", "| 互動成本 |", "| 成本加總 |")))
+        for label, line in rows.items():
+            self.assertNotIn(PREP, line, label)
+            self.assertNotIn("dispatch-round<r>.md", line, label)
+        self.assertIn("不進票 `cost[]`", rows["| 互動成本 |"])
+
+
+class T155NoPrepareFlag(AutoFixBase):
+    """#155 T2 / T4, end to end through the sh scripts."""
+
+    def listing(self, top):
+        if not os.path.isdir(top):
+            return None
+        return sorted(os.path.relpath(os.path.join(here, name), top)
+                      for here, dirs, files in os.walk(top) for name in dirs + files)
+
+    def test_t2_prepare_is_an_unknown_flag_and_touches_nothing(self):
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready()
+        ticket = os.path.join(self.repo, "tickets", "1.json")
+        with open(ticket, "rb") as handle:
+            before = handle.read()
+        reports = os.path.join(self.repo, "reports")
+        wt = os.path.join(self.home, "repo-wt")
+        lists = (self.listing(reports), self.listing(wt))
+        done = self.auto_fix(PREP, "worker")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("不認得 " + PREP, done.stderr)
+        self.assertIn("--dry-run / --round <n> / --no-review", done.stderr)
+        self.assertNotIn("worker|verifier", done.stderr)
+        with open(ticket, "rb") as handle:
+            self.assertEqual(handle.read(), before)
+        self.assertEqual((self.listing(reports), self.listing(wt)), lists)
+        self.assertEqual(self.worker_rounds(), [])
+
+    def test_t2_control_dry_run_round_one_still_prints_the_packet(self):
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready()
+        done = self.auto_fix("--dry-run", "--round", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["state"], "Ready")
+        self.assertEqual(len(self.result_files("dispatch-round1.md")), 1)
+
+    def test_t4_a_stray_main_commit_no_longer_changes_the_apply_exit_code(self):
+        self.ticket_ready(needs_verifier=True)
+        self.ticket_branch_commit("1", {"src/fake_worker.py": "DONE = True\n"},
+                                  subject="t1 fake worker commit")
+        round_dir = os.path.join(self.home, "repo-wt", "fix-t1", "round1")
+        self.write("EVIDENCE-round1.md", "# EVIDENCE #1 round 1\n\n## 1 patch\n無\n",
+                   where=round_dir)
+        self.git("commit", "-q", "--allow-empty", "-m", "stray")
+        done = self.run_sh("scripts/apply.sh", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1").get("branch"), "t1")
+        self.assertEqual([l for l in done.stdout.splitlines() if "main-repo" in l], [])
+        self.assertEqual(glob.glob(os.path.join(self.home, "repo-wt", "**",
+                                                "main-" + "compare.json"), recursive=True), [])
+
+
 if __name__ == "__main__":
     unittest.main()
