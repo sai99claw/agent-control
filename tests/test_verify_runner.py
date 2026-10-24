@@ -400,7 +400,10 @@ class TestsSectionOfAsConfig(unittest.TestCase):
             self.assertRegex(self.gate, r"\n {8}(\S+\|)?%s(\|\S+)?\)" % re.escape(pattern))
 
     def test_project_config_check_accepts_it(self):
-        tool = os.path.join(HERE, "scripts", "project_config.py")
+        """`project_config.py` 是 #160(設計 row 2,並行、不是 depends_on),base 3bdba76 上沒有。
+        不是 #161 的驗收閘(round-1 反駁 accepted):檔在才跑、斷言 rc 0;#160 / #161 哪張後落地,
+        這一條就在那一刻變成真的在量。"""
+        tool =os.path.join(HERE, "scripts", "project_config.py")
         if not os.path.exists(tool):
             self.skipTest("scripts/project_config.py (design row 2) is not on this base yet")
         done = subprocess.run([sys.executable, tool, "check", "."], cwd=HERE, env=local_env(),
