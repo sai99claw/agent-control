@@ -3,7 +3,7 @@
 ## 驗收表(票面每一條一列;期望值來源獨立於被測程式:票面 acceptance 字面 / 案例自己在 git 上取的 sha)
 A1 | integ | 真跑沙盒 land.sh:一次單票綠 land;docs 通道有 commit / 已在主線上 / git add 失敗 / push 失敗 | 票 land 的 land.pass 帶 40 位前 main、沒有 channel 鍵;docs 每筆同一 stamp(docs-YYYYmmdd-HHMMSS-pid)、channel docs,有 commit 的 pass 帶 sha 與前 main,已在主線上那筆兩者都沒有 | 票面 A1 原話;前 main 由案例跑之前 `git rev-parse main`
 A2 | —     | (#153 刪:D-064 / D-065 起不配 land.start,窗內有 land.pass 就只記不擋)(「在那一筆 pass 之前的列」)
-A3 | integ | agent 期間真跑 `AC_ROOT=$REPO sh $REPO/scripts/land.sh docs …` 再接一次票 land,再多一個工作樹檔 | guard.json 只指那個檔、notes 列得出兩次落地的 stamp(「沒有 guard.json」那兩案 #153 刪:落地期間的 HEAD 前進改寫紀錄,#153 A5) | 票面 A3 原話 + objective「notes 逐次列 stamp」
+A3 | integ | agent 期間真跑 `AC_ROOT=$REPO sh $SCRIPTS/land.sh docs …` 再接一次票 land,再多一個工作樹檔 | guard.json 只指那個檔、notes 列得出兩次落地的 stamp(「沒有 guard.json」那兩案 #153 刪:落地期間的 HEAD 前進改寫紀錄,#153 A5) | 票面 A3 原話 + objective「notes 逐次列 stamp」
 A4 | —     | (#153 刪,D-065 (1) 反轉:裸 commit 只列進紀錄、不擋;新案例在 tests/test_auto_fix.py T4 / T11)
 A5 | —     | (#153 刪:識別欄位不再參與判決)
 A6 | integ | 新形狀的合法 land + 工作樹多一個檔 | rc 8 指那個檔、沒有 HEAD 那一列;#115 的其餘案例在 verify/dispatch/test_ticket_115.py(本票只補它的夾具) | 票面 A6 原話
@@ -61,10 +61,10 @@ git -C "$REPO" commit -q --allow-empty -m "同時的落地 @STAMP@"
 emit land.pass --note "同時的落地" --kv stamp=@STAMP@ --kv sha="$(git -C "$REPO" rev-parse --short HEAD)" --kv @KB@="$LB"
 """)
 
-# docs 通道真跑沙盒裡的 land.sh;AC_ROOT 要指主 repo,不然事件寫進副本、守衛看不到。
+# docs 通道真跑 A 的 land.sh($SCRIPTS = 這個測試的 AC_HOME/scripts,#159);AC_ROOT 要指主 repo,不然事件寫進副本、守衛看不到。
 DOCS_LAND = """mkdir -p "$REPO/docs"
 echo "t127 docs note" > "$REPO/docs/t127-note.md"
-AC_ROOT="$REPO" sh "$REPO/scripts/land.sh" docs "docs: t127 note" docs/t127-note.md > "$SANDBOX/docs-land.out" 2>&1
+AC_ROOT="$REPO" sh "$SCRIPTS/land.sh" docs "docs: t127 note" docs/t127-note.md > "$SANDBOX/docs-land.out" 2>&1
 """
 
 
@@ -163,7 +163,7 @@ class GuardCase(GuardBase):
     """A2–A6 共用:沙盒主 repo 上發事件、讀 guard.json。"""
 
     def emit(self, *args):
-        done = subprocess.run(["python3", os.path.join(self.repo, "scripts", "event.py"), "emit", *args],
+        done = subprocess.run(["python3", self.script("scripts/event.py"), "emit", *args],
                               env=self.env(AC_ROOT=self.repo), capture_output=True, text=True,
                               timeout=60)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)

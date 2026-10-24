@@ -75,9 +75,11 @@ class MemoryInboxWorld(Sandbox):
     }
 
     def memory(self, *args, cwd=None):
-        script = os.path.join(cwd or self.repo, "scripts", "memory.py")
-        return subprocess.run(["python3", script, *args], cwd=cwd or self.repo,
-                              env=self.env(), capture_output=True, text=True, timeout=120)
+        # 給了 cwd 就量那一棵樹(票分支的 worktree):專案根 AC_ROOT 指它,腳本仍是 A 的那一支(#159)。
+        env = self.env(AC_ROOT=cwd) if cwd else self.env()
+        return subprocess.run(["python3", self.script("scripts/memory.py"), *args],
+                              cwd=cwd or self.repo, env=env, capture_output=True, text=True,
+                              timeout=120)
 
     def ticket_ids(self):
         return sorted(row["id"] for row in self.tickets_on_disk())
@@ -198,7 +200,7 @@ class Deduplication(MemoryInboxWorld):
         self.cancel_all_tickets(hours_ago=25)
 
         before = self.ticket_ids()
-        command = ["python3", os.path.join(self.repo, "scripts", "memory.py"), "check"]
+        command = ["python3", self.script("scripts/memory.py"), "check"]
         procs = [subprocess.Popen(command, cwd=self.repo, env=self.env(),
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                  for _ in range(2)]
@@ -314,10 +316,8 @@ class GateDoesNotCapMemoryLength(MemoryInboxWorld):
         return where
 
     def run_gate(self, where):
-        return subprocess.run(["sh", os.path.join(where, "scripts", "gate.sh"),
-                               "--branch", "--ticket", "134", "--no-auto-fix"],
-                              cwd=where, env=self.env(), capture_output=True,
-                              text=True, timeout=120)
+        return self.run_sh("scripts/gate.sh", "--branch", "--ticket", "134", "--no-auto-fix",
+                           cwd=where)
 
     def test_a6_length_growth_passes_the_gate(self):
         """A6 1990→2500 不再是 gate 關卡。"""
@@ -351,8 +351,6 @@ class ConsolidatorInstructions(MemoryInboxWorld):
         for old in ("上限", "cap_history", "字元"):
             self.assertNotIn(old, contract)
 
-        shutil.copy(os.path.join(SOURCE_ROOT, "scripts", "consolidate-memory.sh"),
-                    os.path.join(self.repo, "scripts", "consolidate-memory.sh"))
         shutil.copy(os.path.join(SOURCE_ROOT, "templates", "dispatch-consolidator.md"),
                     os.path.join(self.repo, "templates", "dispatch-consolidator.md"))
         self.install_rules_sources()

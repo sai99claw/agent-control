@@ -47,7 +47,6 @@ TAGS = ["batch-regen-index", "land-regen-index"]
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
-from control_harness import SCRIPTS  # noqa: E402
 from test_apply import ApplyBase  # noqa: E402
 from test_land import LandBase  # noqa: E402
 
@@ -104,8 +103,7 @@ class MapMixin(object):
     """沙盒主線放真的 repo-map.py + catalog + 新鮮索引;check / build / managed 都對某一棵樹量。"""
 
     def install_map(self):
-        shutil.copy(os.path.join(SCRIPTS, "repo-map.py"),
-                    os.path.join(self.repo, "scripts", "repo-map.py"))
+        self.install_code_map_tool()
         self.write(os.path.join("code-map", "catalog.json"), catalog_text(CATALOG))
         self.write(os.path.join("tests", "test_kept.py"), PASSING)
 

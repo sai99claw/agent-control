@@ -87,8 +87,9 @@ FAKE_AGENT = """#!/bin/sh
 set -e
 REPO="@REPO@"
 SANDBOX="@SANDBOX@"
+SCRIPTS="@SCRIPTS@"
 echo "$AC_ROLE ran round $AC_ROUND" >> "$AC_TEST_LOG"
-emit() { AC_ROOT="$REPO" python3 "$REPO/scripts/event.py" emit "$@" >/dev/null; }
+emit() { AC_ROOT="$REPO" python3 "$SCRIPTS/event.py" emit "$@" >/dev/null; }
 if [ "$AC_ROLE" = worker ]; then
     printf '%s\\n%s\\n%s\\n%s\\n' "$(pwd -P)" "$AC_ROLE" "$AC_ROOT" \
         "$(git symbolic-ref --short HEAD 2>/dev/null || true)" > "$SANDBOX/agent.where"
@@ -225,7 +226,7 @@ class GuardBase(CodexBase):
         return os.path.realpath(cwd), role, os.path.realpath(control), branch
 
     def arm(self, stray="true", who="worker", guarded=None, delivery=DELIVER_COMMIT, **fields):
-        self.set_worker(FAKE_AGENT.replace("@REPO@", self.repo).replace("@SANDBOX@", self.home)
+        self.set_worker(FAKE_AGENT.replace("@REPO@", self.repo).replace("@SCRIPTS@", self.scripts).replace("@SANDBOX@", self.home)
                         .replace("@WHO@", who).replace("@STRAY@", stray)
                         .replace("@DELIVERY@", delivery))
         if guarded is not None:
@@ -353,7 +354,7 @@ class TheSnapshotComesFromTheLiveStore(GuardBase):
 
     def test_a3_the_claude_worker_sees_the_new_objective(self):
         """A3 claude worker:派工文「權威票面快照」是 NEW、控制根票是 NEW、worktree 那份是 OLD。"""
-        self.set_worker(FAKE_AGENT.replace("@REPO@", self.repo).replace("@SANDBOX@", self.home)
+        self.set_worker(FAKE_AGENT.replace("@REPO@", self.repo).replace("@SCRIPTS@", self.scripts).replace("@SANDBOX@", self.home)
                         .replace("@WHO@", "nobody").replace("@STRAY@", "true")
                         .replace("@DELIVERY@", DELIVER_COMMIT))
         self.stale_base("OBJ-OLD-from-base", "OBJ-NEW-from-store")
@@ -538,7 +539,7 @@ class QuotaDoesNotSwallowAViolation(GuardBase):
     def test_a7_quota_alone_moves_to_the_next_candidate_without_a_violation(self):
         """A7 只撞額度、沒越界 → 同一次接著起表上的 claude worker、rc 0、票的 model / tool 不改、沒有 guard-violation。"""
         self.set_role_models(worker=[fixture_candidate(CODEX_MODEL, "codex"), fixture_candidate()])
-        self.set_worker(FAKE_AGENT.replace("@REPO@", self.repo).replace("@SANDBOX@", self.home)
+        self.set_worker(FAKE_AGENT.replace("@REPO@", self.repo).replace("@SCRIPTS@", self.scripts).replace("@SANDBOX@", self.home)
                         .replace("@WHO@", "worker").replace("@STRAY@", "true")
                         .replace("@DELIVERY@", DELIVER_COMMIT))
         self.arm_codex("quota")
