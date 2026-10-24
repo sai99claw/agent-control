@@ -8,7 +8,9 @@
 哪張票、什麼狀態、要主線做什麼、去哪看。
 """
 
+import hashlib
 import os
+import re
 import sys
 import unittest
 
@@ -193,9 +195,10 @@ class ListAndAck(InboxBase):
         self.assertEqual(self.load_ticket("7")["state"], "Blocked")
 
     def test_pages_acked_in_the_old_acked_jsonl_stay_acked_after_the_move(self):
-        """#143 第 2 輪:這張刪了 `acked.jsonl`,現場只在那裡記過 ack 的頁不能落地後全變回未讀。
+        """#143 第 2 輪:現場只在 `acked.jsonl` 記過 ack 的頁,搬遷後不能全變回未讀。
+        #158 改契約:搬遷只在明說的 `inbox.py migrate`,`list` 本身不搬(見 ReadingNeverWrites)。
 
-        **變異**:`entries` 不呼叫 `migrate_acked_jsonl` → 這一條紅(清單上又出現 #7)。
+        **變異**:`migrate_acked_jsonl` 不搬頁 → 這一條紅(清單上又出現 #7)。
         """
         inbox = os.path.join("reports", "inbox")
         self.write(os.path.join(inbox, "7-old.md"), "# #7 —— 閘門紅\n\n舊頁,沒有第一行 JSON\n")
@@ -203,6 +206,8 @@ class ListAndAck(InboxBase):
         self.write(os.path.join(inbox, "acked.jsonl"),
                    '{"name": "7-old", "at": "2026-10-01T00:00:00+00:00", "ticket": "7",'
                    ' "by": "review.sh"}\n')
+        moved = self.inbox("migrate")
+        self.assertEqual(moved.returncode, 0, moved.stdout + moved.stderr)
         listed = self.inbox("list")
         self.assertEqual(listed.returncode, 0, listed.stdout + listed.stderr)
         self.assertNotIn("#7", listed.stdout)
@@ -400,6 +405,123 @@ class RulesDecisionIsNotPostedTwice(InboxBase):
         self.assertIn("不重送", third.stderr)
         self.assertEqual([row["acked"] for row in self.pages()], [True],
                          "ack 過的指紋又貼了一頁")
+
+
+LEGACY_AT = "2026-10-01T00:00:00+00:00"
+FIXTURE = {
+    "7-old.md": "# #7 —— 閘門紅\n\n舊頁,沒有第一行 JSON\n",
+    "8-old.md": "# #8 —— 覆核退回\n\n還沒 ack\n",
+    "acked.jsonl": '{"name": "7-old", "at": "%s", "ticket": "7", "by": "review.sh"}\n'
+                   % LEGACY_AT,
+    "index.jsonl": '{"ticket": "1", "state": "x"}\n{"ticket": "2", "what": "y"}\n',
+}
+
+
+def sha(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+class ReadingNeverWrites(InboxBase):
+    """#158(D-069):讀收件匣從不寫。`acked.jsonl` 的搬遷只在 `inbox.py migrate`;
+    `index.jsonl` 哪一個動詞都不碰。期望的雜湊是本測試寫進去的夾具位元組,不是 inbox.py 算的。
+
+    **變異 m1**:`entries` 再呼叫 `migrate_acked_jsonl` → A1、A2、A6 紅。
+    **變異 m2**:`migrate` 不刪 `acked.jsonl` → A4、A5 紅。
+    **變異 m3**:`migrate` 不搬頁就回 → A4 紅。
+    """
+
+    INBOX = os.path.join("reports", "inbox")
+
+    def setUp(self):
+        super(ReadingNeverWrites, self).setUp()
+        for name, text in FIXTURE.items():
+            self.write(os.path.join(self.INBOX, name), text)
+
+    def hash_of(self, name):
+        with open(os.path.join(self.repo, self.INBOX, name), "rb") as handle:
+            return hashlib.sha256(handle.read()).hexdigest()
+
+    def listing(self):
+        where = os.path.join(self.repo, self.INBOX)
+        acked = os.path.join(where, "acked")
+        return (sorted(os.listdir(where)) if os.path.isdir(where) else [],
+                sorted(os.listdir(acked)) if os.path.isdir(acked) else [])
+
+    def assertLedgersUntouched(self):
+        self.assertEqual(self.hash_of("acked.jsonl"), sha(FIXTURE["acked.jsonl"]))
+        self.assertEqual(self.hash_of("index.jsonl"), sha(FIXTURE["index.jsonl"]))
+
+    def test_a1_list_and_show_change_nothing(self):
+        before = self.listing()
+        self.assertEqual(before, (sorted(FIXTURE), []), "夾具前提")
+        for args in (("list",), ("list", "--all"), ("show", "7")):
+            done = self.inbox(*args)
+            self.assertEqual(done.returncode, 0, (args, done.stdout, done.stderr))
+            self.assertLedgersUntouched()
+            self.assertEqual(self.listing(), before, args)
+
+    def test_a2_ack_moves_only_the_page_it_was_asked_for(self):
+        done = self.inbox("ack", "8")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertLedgersUntouched()
+        self.assertTrue(self.exists(os.path.join(self.INBOX, "acked", "8-old.md")))
+        self.assertFalse(self.exists(os.path.join(self.INBOX, "8-old.md")))
+        self.assertTrue(self.exists(os.path.join(self.INBOX, "7-old.md")))
+        self.assertFalse(self.exists(os.path.join(self.INBOX, "acked", "7-old.md")))
+
+    def test_a3_list_names_the_ledger_and_the_migrate_command_only_while_it_exists(self):
+        listed = self.inbox("list")
+        said = listed.stdout + listed.stderr
+        self.assertIn("inbox.py migrate", said)
+        self.assertIn("acked.jsonl", said)
+        self.assertIn("#7", listed.stdout, "舊帳不照它算:7-old 還在目錄裡,就列")
+        self.assertEqual(self.inbox("migrate").returncode, 0)
+        for args in (("list",), ("list", "--all")):
+            done = self.inbox(*args)
+            self.assertNotIn("acked.jsonl", done.stdout + done.stderr, args)
+
+    def migrate(self):
+        done = self.inbox("migrate")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        lines = done.stdout.splitlines()
+        self.assertEqual(len(lines), 1, done.stdout)
+        return [int(n) for n in re.findall(r"\d+", lines[0])]
+
+    def test_a4_migrate_moves_the_ledger_pages_keeping_by_and_at(self):
+        self.assertEqual(self.migrate(), [1])
+        self.assertFalse(self.exists(os.path.join(self.INBOX, "acked.jsonl")))
+        moved = os.path.join(self.INBOX, "acked", "7-old.md")
+        self.assertTrue(self.exists(moved))
+        rows = self.inbox_rows("7", acked=True)
+        self.assertEqual([(row["name"], row.get("by"), row.get("acked_at")) for row in rows],
+                         [("7-old", "review.sh", LEGACY_AT)])
+        self.assertTrue(self.read(moved).startswith("<!-- inbox "), "by / at 不在第一行")
+        self.assertTrue(self.exists(os.path.join(self.INBOX, "8-old.md")))
+        self.assertEqual(self.hash_of("index.jsonl"), sha(FIXTURE["index.jsonl"]))
+
+    def test_a5_migrate_again_is_a_no_op(self):
+        self.assertEqual(self.migrate(), [1])
+        after = self.listing()
+        self.assertEqual(self.migrate(), [0])
+        self.assertEqual(self.listing(), after)
+        self.assertEqual(self.hash_of("index.jsonl"), sha(FIXTURE["index.jsonl"]))
+
+    def test_a5_migrate_without_an_inbox_creates_nothing(self):
+        where = os.path.join(self.repo, "reports", "inbox")
+        for name in FIXTURE:
+            os.remove(os.path.join(where, name))
+        os.rmdir(where)
+        self.assertEqual(self.migrate(), [0])
+        self.assertFalse(os.path.exists(where))
+
+    def test_a6_the_opening_page_does_not_migrate_and_says_how(self):
+        done = self.run_sh("scripts/new-session.sh", "main", "fable", "--no-event")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertLedgersUntouched()
+        self.assertTrue(self.exists(os.path.join(self.INBOX, "7-old.md")))
+        part = done.stdout.split("5. 收件匣")[1].split("6. 決策收件匣")[0]
+        self.assertIn("inbox.py migrate", part)
+        self.assertIn("acked.jsonl", part)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@
     scripts/inbox.py ack 7-20260921-…      # 收下了(by=main)
     scripts/inbox.py ack 7 --state 等覆核 --by review.sh   # 收 D-032 之前留下的舊頁
     scripts/inbox.py ack --all --by migration
+    scripts/inbox.py migrate               # 一次性:把 #143 之前 acked.jsonl 記過的頁搬進 acked/
 
 ## 為什麼要有這一支
 2026-09-21 的外部審查:「最容易空轉的是『gate 紅了以後由主線人工接續』」。在它之前,
@@ -24,6 +25,10 @@
 是收下的 —— `list` / `show` / 看板 / `new-session.sh` 都讀這兩個目錄。每頁第一行是一行
 `<!-- inbox {...} -->`(票號、狀態、要做什麼、去哪看、時間),`list` 讀的是那一行 JSON,
 不解析散文;沒有那一行的頁(手寫的)退回檔名取票號、標題取狀態。
+
+**讀收件匣從不寫**(#158,D-069):`list` / `show` / `new-session.sh` / 看板只讀目錄。
+#143 之前的 `acked.jsonl` 還在時,讀的那一手只印一行提示(不照它算 ack),搬遷要人明說
+`python3 scripts/inbox.py migrate`。`index.jsonl` 哪一個動詞都不讀、不寫、不刪。
 
 ## ack 是「我收下了」,不是「我做完了」
 ack 把頁搬進 `acked/`,只從清單上拿掉 —— 票的狀態由票說了算(`ticket.py`),不由收件匣說。
@@ -60,7 +65,7 @@ INBOX_KINDS = ("decision", "done")
 DEFAULT_REPORTS = "reports"
 INBOX_REL = "inbox"
 ACKED_REL = "acked"
-LEGACY_ACKED = "acked.jsonl"  # #143 之前的 ack 帳,只剩 `migrate_acked_jsonl` 讀
+LEGACY_ACKED = "acked.jsonl"  # #143 之前的 ack 帳,只剩 `migrate` 讀
 PAGE_SUFFIX = ".md"
 META = re.compile(r"^<!-- inbox (\{.*\}) -->$")
 TITLE = re.compile(r"^#\s+#?(\S+)\s+——\s+(.*)$")
@@ -136,10 +141,11 @@ def pages_in(where):
 def migrate_acked_jsonl(root):
     """一次性搬遷(#143 第 2 輪):#143 之前 ack 只記在 `acked.jsonl`,頁留在原處。
     有那個檔就把裡面記過的頁搬進 `acked/`(保留當時的 `by` 與時間),再刪掉它;
-    沒有就什麼都不做。中途倒下時 `acked.jsonl` 還在,下一次再搬剩下的 —— 冪等。"""
+    沒有就什麼都不做。中途倒下時 `acked.jsonl` 還在,下一次再搬剩下的 —— 冪等。
+    只由 `inbox.py migrate` 叫(#158):讀收件匣的入口不搬。回搬了幾頁。"""
     legacy = os.path.join(inbox_dir(root), LEGACY_ACKED)
     if not os.path.isfile(legacy):
-        return
+        return 0
     acked = {}
     with open(legacy, encoding="utf-8", errors="replace") as handle:
         for line in handle:
@@ -149,6 +155,7 @@ def migrate_acked_jsonl(root):
                 continue
             if isinstance(row, dict) and row.get("name"):
                 acked[str(row["name"])] = row
+    moved = 0
     for path in pages_in(inbox_dir(root)):
         name = os.path.basename(path)[:-len(PAGE_SUFFIX)]
         if name in acked:
@@ -157,13 +164,29 @@ def migrate_acked_jsonl(root):
                 row.pop("_mtime", None)
                 move_to_acked(root, row, str(acked[name].get("by") or "main"),
                               acked[name].get("at"))
+                moved += 1
     os.remove(legacy)
+    return moved
+
+
+def legacy_hint(root):
+    """`acked.jsonl` 還在時給讀的那一手印的一行;不在回 None。只看檔在不在,不讀它。"""
+    legacy = os.path.join(inbox_dir(root), LEGACY_ACKED)
+    if not os.path.isfile(legacy):
+        return None
+    return ("inbox: %s 還在(#143 之前的 ack 帳,清單不照它算)—— 搬一次:"
+            "python3 scripts/inbox.py migrate\n" % os.path.relpath(legacy, root))
+
+
+def warn_legacy(root):
+    hint = legacy_hint(root)
+    if hint:
+        sys.stderr.write(hint)
 
 
 def entries(root, include_acked=False):
-    """收件匣的每一頁,舊的在前(`at`,同一秒再看檔的 mtime)。只讀兩個目錄,不讀任何索引。"""
-    # 每一個讀收件匣的入口(inbox.py 各指令、new-session.sh、看板)都經過這裡。
-    migrate_acked_jsonl(root)
+    """收件匣的每一頁,舊的在前(`at`,同一秒再看檔的 mtime)。只讀兩個目錄,不讀任何索引。
+    **不寫**(#158):`acked.jsonl` 的搬遷只在 `inbox.py migrate`。"""
     rows = []
     boxes = [(inbox_dir(root), False)] + ([(acked_dir(root), True)] if include_acked else [])
     for where, acked in boxes:
@@ -331,6 +354,7 @@ def cmd_done_brief(args):
 
 def cmd_list(args):
     root = event.repo_root()
+    warn_legacy(root)
     rows = entries(root, include_acked=args.all)
     if not rows:
         sys.stdout.write("inbox: 沒有等你的東西%s\n"
@@ -358,6 +382,7 @@ def pick(root, needle, include_acked=True):
 
 def cmd_show(args):
     root = event.repo_root()
+    warn_legacy(root)
     rows = pick(root, args.which)
     if not rows:
         sys.stderr.write("inbox: 沒有 %r 這一則(`inbox.py list --all` 看全部)\n"
@@ -396,6 +421,7 @@ def cmd_ack(args):
     if not args.by.strip():
         sys.stderr.write("inbox: --by 不能是空的 —— 空的與「沒寫是誰收的」長得一樣\n")
         return 2
+    warn_legacy(root)
     if args.all:
         rows = entries(root, include_acked=False)
     else:
@@ -416,6 +442,13 @@ def cmd_ack(args):
                          % (row["name"], row.get("ticket", "?"), row.get("state", ""),
                             args.by))
     sys.stdout.write("inbox: ack 只是「我收下了」—— 票的狀態還是由 ticket.py 說了算\n")
+    return 0
+
+
+def cmd_migrate(args):
+    root = event.repo_root()
+    moved = migrate_acked_jsonl(root)
+    sys.stdout.write("inbox: migrate 搬了 %d 頁進 acked/\n" % moved)
     return 0
 
 
@@ -454,6 +487,10 @@ def main(argv):
     ack.add_argument("--by", default="main")
     ack.add_argument("--state", action="append", default=[])
     ack.set_defaults(run=cmd_ack)
+
+    migrate = subs.add_parser("migrate",
+                              help="一次性:把 acked.jsonl 記過的頁搬進 acked/,再刪掉它")
+    migrate.set_defaults(run=cmd_migrate)
 
     args = parser.parse_args(argv)
     if not getattr(args, "run", None):

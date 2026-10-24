@@ -291,6 +291,9 @@ def tickets():
 
 
 def inbox_part():
+    hint = inbox.legacy_hint(root)
+    if hint:
+        sys.stdout.write(hint)
     rows = inbox.entries(root)
     if not rows:
         sys.stdout.write("inbox: 沒有等你的東西(ack 過的用 --all 看)\n")
