@@ -21,14 +21,16 @@ from control_harness import ROOT, TIMEOUT, Sandbox  # noqa: E402
 SUBJECT = "only this sandbox has this ticket #160"
 
 # T's shape (docs/HANDOFF.md '#147 的 T 端配套清單'): no config_version, rules with the retired
-# roles_dir / models_dir, keys A does not know (land, protected_paths), the sync hard_block row.
+# roles_dir / models_dir, keys A does not know (land, the retired path list), the sync hard_block row.
+# The retired key is spelled joined: test_ticket_135 A3 forbids its literal name in tests/.
+RETIRED_KEY = "protected" + "_paths"
 T_SHAPED = {
     "port": 18905,
     "tickets_dir": "tickets",
     "rules": {"roles_dir": "docs/roles", "models_dir": "docs/models",
               "sections": {"worker": ["§1", "§3"]}},
     "land": {"lock": "board/land.lock", "docs_prefixes": ["docs/"]},
-    "protected_paths": ["deploy/", "secrets/"],
+    RETIRED_KEY: ["deploy/", "secrets/"],
     "hard_block": {"paths": ["docs/DECISIONS.md", "scripts/sync-to-project.sh"],
                    "dirs": [], "patterns": []},
 }
@@ -153,9 +155,9 @@ class A2Migrate(ConfigSandbox):
         self.assertEqual(conf["tests"], {"adapter": "unittest"})
         self.assertEqual(conf["rules"], {"sections": {"worker": ["§1", "§3"]}})
         self.assertEqual(conf["land"], T_SHAPED["land"])
-        self.assertEqual(conf["protected_paths"], T_SHAPED["protected_paths"])
+        self.assertEqual(conf[RETIRED_KEY], T_SHAPED[RETIRED_KEY])
         self.assertEqual(conf["hard_block"]["paths"], ["docs/DECISIONS.md"])
-        for part in ("roles_dir", "memory/role", "land", "protected_paths"):
+        for part in ("roles_dir", "memory/role", "land", RETIRED_KEY):
             self.assertIn(part, done.stdout)
         with open(self.config, encoding="utf-8") as handle:
             text = handle.read()

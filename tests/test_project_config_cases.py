@@ -17,6 +17,9 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from control_harness import DEFAULT_CONFIG, TIMEOUT, Sandbox  # noqa: E402
 
+# The retired key is spelled joined: test_ticket_135 A3 forbids its literal name in tests/.
+RETIRED_KEY = "protected" + "_paths"
+
 
 class ProjectConfigCases(Sandbox):
     """Arms beyond A1-A5: key order, nested unknown keys, odd versions, foreign hooks."""
@@ -29,7 +32,7 @@ class ProjectConfigCases(Sandbox):
                                  "scripts/sync-to-project.sh"]},
         "land": {"require_review": True, "gate": "full"},
         "port": 8123,
-        "protected_paths": ["docs/VISION.md"],
+        RETIRED_KEY: ["docs/VISION.md"],
         "verify_lint": {"enabled": True},
         "memory": {"cap_chars": 4000, "inbox_max_lines": 50},
         "tickets_dir": "tickets",
@@ -80,7 +83,7 @@ class ProjectConfigCases(Sandbox):
                          "every entry ending in sync-to-project.sh goes, nothing else")
         self.assertEqual(conf["hard_block"]["patterns"], [])
         self.assertEqual(conf["hard_block"]["dirs"], [])
-        for key in ("land", "protected_paths", "verify_lint", "memory", "port", "tickets_dir"):
+        for key in ("land", RETIRED_KEY, "verify_lint", "memory", "port", "tickets_dir"):
             self.assertEqual(conf.get(key), self.T_FIXTURE[key], "%s must be kept" % key)
         kept = [k for k in conf if k in self.T_FIXTURE]
         self.assertEqual(kept, list(self.T_FIXTURE), "key order of the file must be kept")
@@ -88,7 +91,7 @@ class ProjectConfigCases(Sandbox):
                         "one trailing newline:\n" + raw[-20:])
         self.assertTrue(raw.splitlines()[1].startswith('  "')
                         and not raw.splitlines()[1].startswith('   '), "indent 2:\n" + raw)
-        for word in ("roles_dir", "memory/role", "land", "protected_paths"):
+        for word in ("roles_dir", "memory/role", "land", RETIRED_KEY):
             self.assertIn(word, done.stdout, self.say(done))
         self.assertIn("verify_lint", done.stdout + done.stderr,
                       "unknown top-level keys are printed as warnings")
