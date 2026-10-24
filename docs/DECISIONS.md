@@ -477,3 +477,9 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - 介面要寫完整、有彈性:專案設定檔(schema 與版本)、專案提供的測試介面(主線負責定義,T 照著實作)、Claude Code hooks 的接法、專案自有狀態(票、裁示、記憶的專案層)與 A 自有內容(角色卡、規則、範本)的界線。A 自己也照同一套介面跑(自己是自己的第一個專案)。
 - T 看板走代理(portal):A 的看板維持只綁 127.0.0.1;key 門做成選填設定,由代理那一側決定要不要用。
 - 先派設計 session 重寫 docs/design/project-runnable-entries.md(D-019),再開票。
+
+## D-072(2026-10-24)設計文件 v2(A 是安裝即用的工具)的五題(主線裁,未經使用者)
+- 依據 D-071 與使用者「interface 要定義完善 有彈性」「T 的測試 你要定義一個好的方式 讓他遵守」。
+- Q1:T 照設計 §4 的測試介面寫自己的轉接器(可先只宣告 preflight)。Q2:A 的 clone 預設放專案旁(../agent-control),A 不依賴位置。Q3:單一入口改名 `actl`(bin/actl),避開 macOS 內建 /usr/sbin/ac。Q4:專案設定比 A 新 → actl 拒跑 rc 2,訊息叫人 git pull A。Q5:刪 scripts/sync-to-project.sh 與測試視為 D-071 已授權;board/config.json hard_block.paths 那一列由主線落,不在 worker 票裡。
+- 票:#159〜#167(依賴見各票;#159 先做)。
+- 主線事故(寫給下一個主線):#157 第 1 輪 worker 被 main_guard 拒收(rc 8),原因是主線在 worker 跑的期間落了 D-071(DECISIONS.md 是 hard_block 路徑,D-065 ②)。守衛照設計運作;主線查清後認可 worker 的 commit、手動收件接回。規矩:派出 worker 到它收件前,主線不寫 DECISIONS / VISION。

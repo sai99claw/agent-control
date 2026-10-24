@@ -3,3 +3,4 @@
 - 停下佇列重起前,先把當下 Running 的票轉回 Ready,否則重起的佇列不會再接它。 (2026-10-11, main@opus)
 - 套 patch 被拒、原因是主線走遠(不是檔頭不合或越界)時,不重派 worker 從頭做:派 opus 把同一份 patch 對新主線三向重套、跑票測試,主線拿重套後的 patch 接回原本那一輪重套,再重跑閘門與落地。 (2026-10-11, main@opus)
 - 比較方案時要跟「現行做法」比,不只跟「出事的那個替代方案」比;派工方式一定先算主線上下文成本(回報進上下文、等待期間的喚醒次數)。D-061 只比了子 agent vs routine,漏了 headless,做了 #149 / #153 一半後由 D-067 撤回。 (2026-10-24, main@opus)
+- 派出 worker(auto-fix headless)到它收件前,不落 DECISIONS.md / VISION.md(hard_block,main_guard 會拒收整輪,#157 撞過);要寫的裁示先記著,收件後一起落。 (2026-10-24, main@opus)
