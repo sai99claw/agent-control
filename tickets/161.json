@@ -8,7 +8,7 @@
     "A2 run/full write schema 1 (tests/test_adapter_unittest.py, tmp AC_CODE_ROOT with tests/test_fx.py written by the test: one pass, one assertEqual fail, one setUp raise (error), one skip with reason 'fx reason', one skip with empty reason): 'run' of the five ids -> rc 1; result.json: schema 1, command 'run', ids set == the five, statuses pass/fail/error/skip/error, fail row exception 'AssertionError', file 'tests/test_fx.py', line == the assert line number the test computed from the fixture source, message starts 'AssertionError', traceback non-null; skip row message == 'fx reason'; empty-reason row status 'error' with message containing 'without reason'; environment_suspect == []; log == 'run.log' and $AC_TEST_OUT/run.log contains 'Ran 5 tests'. 'full' on the same tree finds the same ids. 'run' with zero ids -> rc 2, no result.json; unset AC_TEST_OUT -> rc 2.",
     "A3 environment suspect (tests/test_adapter_unittest.py + tests/test_status.py): fixture case that prints 'ENVIRONMENT-SUSPECT: firefox fake' then skips (same shape as tests/test_status.py's existing run-tests fixture) -> 'run' rc 86, result environment_suspect has one row, source 'declared', engine 'firefox', all seven D-019 keys present; the statistical path: the existing tests/test_status.py run-tests cases (statistical row, redirect_stdout mutation, one-list suspect file) stay green unchanged through the shim (oracle: tests/test_status.py ~829-1040); rc 86 never comes with environment_suspect [] (asserted on both fixtures).",
     "A4 status.py done --result (tests/test_status.py): from A2's result.json, 'done --ticket 7 --run-id r --rc 1 --result <path>' -> status.json failures[] has exactly the fail and the two error rows with case == id, file/line copied from the rows (null -> '' / 0 as today's parser does for unknown), excerpt == message; from A3's rc-86 result with --state env_suspect -> environment_suspect normalised to seven keys and equal to the file's row; '--result' naming a missing file or a file with schema 2 -> rc 2, stderr names the path, status.json absent. status.json key set identical to a --log run (no new key).",
-    "A5 verify.py and A's config (tests/test_verify_runner.py + static): in the harness sandbox with AC_CODE_ROOT=<sandbox>, 'verify.py --case verify/example/test_example.py --result <out>/result.json --no-cache' rc 0 and result.json schema 1 with >= 1 id whose module is verify.example.test_example; '--tag example --result ...' writes the same shape; '--case <missing file>' rc 3 with the path named; existing tests/test_verify_runner.py cases green. Static: A's board/config.json tests.unittest.base == the four BASE ids; tests.unittest.map has one row per case arm of gate.sh map() at base except the tests/test_*.py arm (that rule is the adapter's built-in) - the worker counts the arms at base (opener's rough count ~33, design says 32; not measured exactly) and the test asserts that literal count and that every 'match' string is a verbatim arm pattern from gate.sh (multi-pattern arms 'a|b' become two rows with the same ids); 'python3 scripts/project_config.py check .' rc 0."
+    "A5 verify.py and A's config (tests/test_verify_runner.py + static): in the harness sandbox with AC_CODE_ROOT=<sandbox>, 'verify.py --case verify/example/test_example.py --result <out>/result.json --no-cache' rc 0 and result.json schema 1 with >= 1 id whose module is verify.example.test_example; '--tag example --result ...' writes the same shape; '--case <missing file>' rc 3 with the path named; existing tests/test_verify_runner.py cases green. Static: A's board/config.json tests.unittest.base == the four BASE ids; tests.unittest.map has one row per case arm of gate.sh map() at base except the tests/test_*.py arm (that rule is the adapter's built-in) - the worker counts the arms at base (opener's rough count ~33, design says 32; not measured exactly) and the test asserts that literal count and that every 'match' string is a verbatim arm pattern from gate.sh (multi-pattern arms 'a|b' become two rows with the same ids). project_config check (clarified after round-1 objection): scripts/project_config.py is #160 (design row 2), parallel and not a depends_on, absent at base 3bdba76; the static test runs 'python3 scripts/project_config.py check .' and asserts rc 0 only when that file exists, otherwise skips with the reason 'scripts/project_config.py (design row 2) is not on this base yet'. Not a #161 acceptance gate; whichever of #160/#161 lands second turns that test live."
   ],
   "depends_on": [
     {
@@ -20,16 +20,67 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "601b36f039a336a6f2e87effefbed3067bfa2585",
-  "state": "Ready",
-  "state_version": 4,
+  "base_sha": "3bdba76591a8e5c27a52621452e5f7dbebe833ed",
+  "state": "Blocked",
+  "state_version": 21,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
+    "files": [
+      "tests/test_adapter_cases.py"
+    ],
     "tags": [],
-    "run": "",
-    "notes": ""
+    "run": "python3 -m unittest tests.test_adapter_cases",
+    "notes": "Needs scripts/adapter-unittest.py (D-071 section 4). Each case builds a tmp project (AC_ROOT == AC_CODE_ROOT, board/config.json tests.unittest.roots = ['tests','demo/tests']) and runs the adapter as a child with subprocess.run(timeout=120); ~seconds. Covers the test_plan's verifier list: two roots (full discovers tests/ and demo/tests/, run demo_mod.T.test_x by name), helper-frame file/line (helper in the test file -> helper's assert line; helper in lib/ outside roots -> the call line in the test file), unknown ids (missing method, missing module) -> one error row per id and ids set == ids passed, rc 1; plus message = first line only, run with zero ids -> rc 2 and no result.json, unset AC_TEST_OUT -> rc 2. Line oracles come from marker comments in the fixture source. Every case first asserts the adapter file exists, because python3 on a missing file also exits 2.",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-24T22:32:47+00:00",
+      "files": [
+        "tests/test_adapter_cases.py"
+      ],
+      "base_ref": "3bdba76591a8e5c27a52621452e5f7dbebe833ed",
+      "base_sha": "3bdba76591a8e5c27a52621452e5f7dbebe833ed",
+      "candidate": "../agent-control-wt/t161",
+      "candidate_sha": "38f9b4880ed0a780bd7adef47f9e9e43d06d2b20",
+      "baseline": {
+        "red": [
+          "tests.test_adapter_cases.AdapterResultCases.test_fail_in_helper_reports_test_file_frame",
+          "tests.test_adapter_cases.AdapterResultCases.test_full_discovers_both_roots",
+          "tests.test_adapter_cases.AdapterResultCases.test_message_is_first_line_only",
+          "tests.test_adapter_cases.AdapterResultCases.test_run_id_in_second_root",
+          "tests.test_adapter_cases.AdapterResultCases.test_unknown_ids_get_error_rows",
+          "tests.test_adapter_cases.AdapterResultCases.test_zero_ids_and_missing_out"
+        ],
+        "red_lines": [
+          "tests.test_adapter_cases.AdapterResultCases.test_fail_in_helper_reports_test_file_frame: AssertionError: False is not true : /home/user/agent-control-wt/t161/gate.log.verify-case.d/base/scripts/adapter-unittest.py",
+          "tests.test_adapter_cases.AdapterResultCases.test_full_discovers_both_roots: AssertionError: False is not true : /home/user/agent-control-wt/t161/gate.log.verify-case.d/base/scripts/adapter-unittest.py",
+          "tests.test_adapter_cases.AdapterResultCases.test_message_is_first_line_only: AssertionError: False is not true : /home/user/agent-control-wt/t161/gate.log.verify-case.d/base/scripts/adapter-unittest.py",
+          "tests.test_adapter_cases.AdapterResultCases.test_run_id_in_second_root: AssertionError: False is not true : /home/user/agent-control-wt/t161/gate.log.verify-case.d/base/scripts/adapter-unittest.py",
+          "tests.test_adapter_cases.AdapterResultCases.test_unknown_ids_get_error_rows: AssertionError: False is not true : /home/user/agent-control-wt/t161/gate.log.verify-case.d/base/scripts/adapter-unittest.py",
+          "tests.test_adapter_cases.AdapterResultCases.test_zero_ids_and_missing_out: AssertionError: False is not true : /home/user/agent-control-wt/t161/gate.log.verify-case.d/base/scripts/adapter-unittest.py"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 6,
+        "skipped": 0,
+        "log": "../agent-control-wt/t161/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 6,
+        "skipped": 0,
+        "log": "../agent-control-wt/t161/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "complexity": "complex",
   "needs_verifier": true,
@@ -44,5 +95,126 @@
   ],
   "worker": {
     "timeout_seconds": 7200
-  }
+  },
+  "cost": [
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 44,
+      "tokens_out": 16440,
+      "cache_write": 60385,
+      "cache_read": 1582910,
+      "wall_seconds": 1013,
+      "outcome": "handed-in",
+      "run_id": "20261024-220803-12582",
+      "session_id": "5b4b5255-ba8e-4ee1-9d65-ab60e185a862",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-24T22:24:57+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 100,
+      "tokens_out": 76477,
+      "cache_write": 182507,
+      "cache_read": 7168135,
+      "wall_seconds": 1013,
+      "outcome": "objection",
+      "run_id": "20261024-220803-12582",
+      "session_id": "27444370-78bf-4e13-8c60-985308c34785",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-24T22:24:58+00:00"
+    },
+    {
+      "role": "opener",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 12,
+      "tokens_out": 2654,
+      "cache_write": 26667,
+      "cache_read": 274815,
+      "wall_seconds": 31,
+      "outcome": "accepted",
+      "run_id": "20261024-220803-12582",
+      "session_id": "5260a3b6-6423-5527-bed8-9d3211ae718f",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-24T22:29:30+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 114,
+      "tokens_out": 81008,
+      "cache_write": 190977,
+      "cache_read": 8680009,
+      "wall_seconds": 241,
+      "outcome": "handed-in",
+      "run_id": "20261024-220803-12582",
+      "session_id": "27444370-78bf-4e13-8c60-985308c34785",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-24T22:29:31+00:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 24,
+      "tokens_out": 11633,
+      "cache_write": 83285,
+      "cache_read": 903964,
+      "wall_seconds": 120,
+      "outcome": "fail",
+      "run_id": "20261024-222931-30824",
+      "session_id": "5260a3b6-6423-5527-bed8-9d3211ae718f",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-24T22:34:48+00:00"
+    }
+  ],
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "A5 asks for `python3 scripts/project_config.py check .` rc 0, but scripts/project_config.py (design row 2, parallel, not a depends_on) does not exist on base 3bdba76; the static test runs it when present and skips with a stated reason until row 2 lands.",
+      "evidence": "../agent-control-wt/fix-t161/round1/EVIDENCE-round1-objection.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "",
+      "triage": {
+        "verdict": "accepted",
+        "reason": "objection holds: scripts/project_config.py belongs to #160 (design row 2, running in parallel, not a depends_on) and is absent at base 3bdba76, so A5's \"project_config.py check . rc 0\" could not be met on this base.",
+        "round": 1,
+        "by": "auto-fix"
+      }
+    },
+    {
+      "category": "blocking",
+      "body": "duplicate contract (garbage-case 3): tests/test_adapter_unittest.py::RunWritesSchemaOne::test_every_passed_id_comes_back duplicates the verifier's tests/test_adapter_cases.py::AdapterResultCases::test_unknown_ids_get_error_rows (test_plan assigns that contract to the verifier), and test_adapter_cases.py::test_zero_ids_and_missing_out duplicates A2's test_zero_ids_is_rc_2_without_a_result / test_no_test_out_is_rc_2 (assigned to the worker); drop one copy of each",
+      "evidence": "reports/t161/20261024-222931-30824/REVIEW.md",
+      "owner": "reviewer@opus",
+      "disposition": "accepted",
+      "follow_up": "Main: per test_plan ownership drop the worker copy tests/test_adapter_unittest.py::RunWritesSchemaOne::test_every_passed_id_comes_back (verifier owns that contract) and the verifier copy tests/test_adapter_cases.py::test_zero_ids_and_missing_out (worker owns A2); one dedupe round, no other change."
+    }
+  ],
+  "branch": "t161",
+  "gate": {
+    "rc": 0,
+    "sha": "38f9b4880ed0a780bd7adef47f9e9e43d06d2b20",
+    "run_id": "20261024-222931-30824",
+    "at": "2026-10-24T22:32:48+00:00"
+  },
+  "repair_round": 1,
+  "owner": "main",
+  "interventions": 1
 }

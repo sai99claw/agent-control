@@ -20,16 +20,63 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "601b36f039a336a6f2e87effefbed3067bfa2585",
-  "state": "Ready",
-  "state_version": 2,
+  "base_sha": "3bdba76591a8e5c27a52621452e5f7dbebe833ed",
+  "state": "InReview",
+  "state_version": 14,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
+    "files": [
+      "tests/test_project_config_cases.py"
+    ],
     "tags": [],
-    "run": "",
-    "notes": ""
+    "run": "python3 -m unittest tests.test_project_config_cases",
+    "notes": "Harness sandbox (tests/control_harness.Sandbox); every config, config_version included, is written by the case, so it does not depend on DEFAULT_CONFIG. Calls 'sh $AC_HOME/bin/actl migrate|doctor|ticket list --open' and 'python3 $AC_HOME/scripts/project_config.py check <sandbox>' per the ticket's pinned interface. Each refusal case has a version-2 positive control in the same test (a missing project_config.py also exits 2), and the foreign-hook 'no row' case has a must-be-false arm (same hook, file removed -> rc 1 with an 'actl hooks install' row). Supplements A1-A5 in tests/test_project_config.py (worker's).",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-24T22:50:38+00:00",
+      "files": [
+        "tests/test_project_config_cases.py"
+      ],
+      "base_ref": "3bdba76591a8e5c27a52621452e5f7dbebe833ed",
+      "base_sha": "3bdba76591a8e5c27a52621452e5f7dbebe833ed",
+      "candidate": "../agent-control-wt/t160",
+      "candidate_sha": "1b340975578c0ba6b9985c6688a0066a88f1ec09",
+      "baseline": {
+        "red": [
+          "tests.test_project_config_cases.ProjectConfigCases.test_check_refuses_non_int_versions_and_names_the_value",
+          "tests.test_project_config_cases.ProjectConfigCases.test_check_refuses_version_zero_and_names_it",
+          "tests.test_project_config_cases.ProjectConfigCases.test_doctor_has_no_row_for_a_foreign_hook_whose_file_exists",
+          "tests.test_project_config_cases.ProjectConfigCases.test_migrate_second_t_fixture_keeps_order_and_nested_unknown_keys"
+        ],
+        "red_lines": [
+          "tests.test_project_config_cases.ProjectConfigCases.test_check_refuses_non_int_versions_and_names_the_value: AssertionError: 2 != 0 : positive control: version 2 passes",
+          "tests.test_project_config_cases.ProjectConfigCases.test_check_refuses_version_zero_and_names_it: AssertionError: 2 != 0 : positive control: version 2 passes",
+          "tests.test_project_config_cases.ProjectConfigCases.test_doctor_has_no_row_for_a_foreign_hook_whose_file_exists: AssertionError: 2 != 0 : rc=2",
+          "tests.test_project_config_cases.ProjectConfigCases.test_migrate_second_t_fixture_keeps_order_and_nested_unknown_keys: AssertionError: 2 != 0 : rc=2"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 4,
+        "skipped": 0,
+        "log": "../agent-control-wt/t160/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 4,
+        "skipped": 0,
+        "log": "../agent-control-wt/t160/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "complexity": "simple",
   "needs_verifier": true,
@@ -41,5 +88,66 @@
     "D-072",
     "D-069",
     "D-054"
-  ]
+  ],
+  "cost": [
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 38,
+      "tokens_out": 14146,
+      "cache_write": 58276,
+      "cache_read": 1341882,
+      "wall_seconds": 558,
+      "outcome": "handed-in",
+      "run_id": "20261024-220803-12581",
+      "session_id": "95a7d572-c4e2-4445-8fc4-e20c76abe181",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-24T22:17:22+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 74,
+      "tokens_out": 35616,
+      "cache_write": 98589,
+      "cache_read": 3422169,
+      "wall_seconds": 558,
+      "outcome": "handed-in",
+      "run_id": "20261024-220803-12581",
+      "session_id": "26cdd8b1-1322-46f2-8630-2bcc73956328",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-24T22:17:23+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 26,
+      "tokens_out": 5734,
+      "cache_write": 37856,
+      "cache_read": 740605,
+      "wall_seconds": 249,
+      "outcome": "handed-in",
+      "run_id": "20261024-221723-9520",
+      "session_id": "56acf6c8-3896-4ed6-a04c-3adbf8163d69",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-24T22:36:00+00:00"
+    }
+  ],
+  "branch": "t160",
+  "gate": {
+    "rc": 0,
+    "sha": "1b340975578c0ba6b9985c6688a0066a88f1ec09",
+    "run_id": "20261024-223600-21575",
+    "at": "2026-10-24T22:50:38+00:00"
+  },
+  "repair_round": 2
 }
