@@ -16,6 +16,13 @@ tempdir 裡的 bare repo —— 所以這一組碰不到這台機器上任何一
 誰的 git 設定。埠一律 0(OS 給),不碰任何固定埠。
 
 受測腳本的來源走 `AC_TEST_SCRIPTS`,好讓變異驗紅把一份改壞的複本餵給同一組測試。
+
+## 腳本不拷進沙盒(D-071 §8,#159)
+A 是一支裝好的工具:專案 clone A、在原地跑,腳本**不住在專案裡**。所以沙盒只有專案的東西
+(票、board/config.json、verify/、tests/),受測腳本從 `AC_HOME`(A 的 clone;變異驗紅時是
+`AC_TEST_SCRIPTS` 的上一層)跑,環境帶 `AC_HOME` 與 `AC_ROOT=<沙盒>`、cwd 是沙盒 ——
+`ac_env()` 是唯一設它們的地方。要換掉某一支腳本(閘門的替身、auto-fix 的替身)的案例拿
+`own_ac_home()`:每個測試一份 `<home>/ac-home` 的 A 複本,`AC_HOME` 指過去。
 """
 
 import glob
@@ -29,13 +36,10 @@ import unittest
 TESTS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(TESTS)
 SCRIPTS = os.environ.get("AC_TEST_SCRIPTS", os.path.join(ROOT, "scripts"))
+# 受測腳本住的那一份 A(`AC_HOME`):平常是這個 repo 自己,變異驗紅時是改壞的那一份的上一層。
+AC_HOME = os.path.dirname(os.path.abspath(SCRIPTS))
 BOARD_DIR = os.environ.get("AC_TEST_BOARD", os.path.join(ROOT, "board"))
 TIMEOUT = 180
-
-SCRIPT_FILES = ("event.py", "ticket.py", "memory.py", "status.py", "land.sh",
-                "gate.sh", "heartbeat.sh", "new-session.sh", "verify.py",
-                "verify-case.py", "apply.sh", "auto-fix.sh", "review.sh", "inbox.py",
-                "rules.py", "wtbase.sh", "role-models.py", "main_guard.py")
 # `review.sh` 逐字讀它(#42):沙盒少了它,覆核在「派工文組不出來」那一步就停,
 # 而那與「reviewer 沒交件」在收件匣上是兩頁不同的東西。`auto-fix.sh` 的驗證者派工文
 # 也是範本填出來的(#51):少了它,派工文裡只剩一行「範本找不到」。
@@ -257,6 +261,9 @@ class Sandbox(unittest.TestCase):
     def setUp(self):
         self.home = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.home, True)
+        self.ac_home = AC_HOME
+        self.scripts = SCRIPTS
+        self.board_py = os.path.join(BOARD_DIR, "board.py")
         self.tripwire = os.path.join(self.home, "tripwire.log")
         self.stub_bin = os.path.join(self.home, "stub-bin")
         os.makedirs(self.stub_bin)
@@ -267,24 +274,17 @@ class Sandbox(unittest.TestCase):
         self.repo = os.path.join(self.home, "repo")
         self.origin = os.path.join(self.home, "origin.git")
         self.log = os.path.join(self.home, "calls.log")
-        for rel in ("scripts", "tickets", "board", "docs", "tests",
+        for rel in ("tickets", "board", "docs", "tests",
                     os.path.join("verify", "example"),
                     os.path.join("memory", "model"), os.path.join("code-map", "cards")):
             os.makedirs(os.path.join(self.repo, rel))
 
-        for name in SCRIPT_FILES:
-            target = os.path.join(self.repo, "scripts", name)
-            if name == "gate.sh" and self.gate_stub:
-                write_executable(target, self.gate_stub)
-                continue
-            shutil.copy(os.path.join(SCRIPTS, name), target)
-            os.chmod(target, 0o755)
+        if self.gate_stub:
+            self.stub_script("gate.sh", self.gate_stub)
         os.makedirs(os.path.join(self.repo, "templates"))
         for name in TEMPLATE_FILES:
             shutil.copy(os.path.join(ROOT, "templates", name),
                         os.path.join(self.repo, "templates", name))
-        shutil.copy(os.path.join(BOARD_DIR, "board.py"),
-                    os.path.join(self.repo, "board", "board.py"))
 
         conf = dict(DEFAULT_CONFIG)
         if self.config_extra:
@@ -310,6 +310,45 @@ class Sandbox(unittest.TestCase):
         self.git("remote", "add", "origin", self.origin)
         self.git("push", "-q", "origin", "main")
 
+    # ------------------------------------------------------------ A 在哪
+
+    def own_ac_home(self):
+        """這個測試自己的一份 A(`<home>/ac-home`:scripts/、bin/、board/board.py、範本),
+        `AC_HOME` 從此指它 —— 要換掉某一支腳本的案例在這一份上換,不動這個 repo。
+        冪等;回傳它的 scripts/。"""
+        where = os.path.join(self.home, "ac-home")
+        if self.ac_home != where:
+            ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
+            shutil.copytree(SCRIPTS, os.path.join(where, "scripts"), ignore=ignore)
+            if os.path.isdir(os.path.join(self.ac_home, "bin")):
+                shutil.copytree(os.path.join(self.ac_home, "bin"),
+                                os.path.join(where, "bin"), ignore=ignore)
+            os.makedirs(os.path.join(where, "board"))
+            shutil.copy(self.board_py, os.path.join(where, "board", "board.py"))
+            os.makedirs(os.path.join(where, "templates"))
+            for name in TEMPLATE_FILES:
+                shutil.copy(os.path.join(ROOT, "templates", name),
+                            os.path.join(where, "templates", name))
+            self.ac_home = where
+            self.scripts = os.path.join(where, "scripts")
+            self.board_py = os.path.join(where, "board", "board.py")
+        return self.scripts
+
+    def stub_script(self, name, body):
+        """把這個測試那一份 A 的 `scripts/<name>` 換成 `body`(可執行)。回傳路徑。"""
+        path = os.path.join(self.own_ac_home(), name)
+        write_executable(path, body)
+        return path
+
+    def ac_env(self):
+        """受測腳本看到的那三格(D-071 §8 的唯一一處):A 在哪、專案根是沙盒。cwd 是沙盒
+        由 `run_py` / `run_sh` 給。要測「沒設 AC_ROOT」的案例自己 `pop`。"""
+        return {"AC_HOME": self.ac_home, "AC_ROOT": self.repo}
+
+    def script(self, rel):
+        """`scripts/x.py` 這種相對路徑解析到 `AC_HOME` 底下;絕對路徑照用。"""
+        return os.path.join(self.ac_home, rel)
+
     # ------------------------------------------------------------ 基本動作
 
     def env(self, **extra):
@@ -317,8 +356,10 @@ class Sandbox(unittest.TestCase):
         # AC_NO_INBOX / AC_GATE_RUN_ID,auto-fix 派的 worker 帶著 AC_ROUND / AC_ROOT ——
         # `CLAUDE_CODE_REMOTE` 同理:worker 在雲端跑全套時,外層的 true 會讓「主線開票」那條變紅(#150)。
         # 漏進去就是「沒給票號卻有票」「該有 inbox 卻沒有」,而紅榜指的是被測的腳本。
+        # `CLAUDE_PROJECT_DIR` 也是:`actl` 與 session-hook.sh 拿它當專案根(#159)。
         base = {key: value for key, value in os.environ.items()
-                if not key.startswith("AC_") and key != "CLAUDE_CODE_REMOTE"}
+                if not key.startswith("AC_")
+                and key not in ("CLAUDE_CODE_REMOTE", "CLAUDE_PROJECT_DIR")}
         base.update({
             "HOME": self.home,
             "GIT_CONFIG_GLOBAL": os.devnull,
@@ -333,6 +374,7 @@ class Sandbox(unittest.TestCase):
             "AC_TEST_LOG": self.log,
             "AC_GATE_LOG": os.path.join(self.home, "gate.log"),
         })
+        base.update(self.ac_env())
         base.update(extra)
         return base
 
@@ -395,13 +437,13 @@ class Sandbox(unittest.TestCase):
 
     def run_py(self, script, *args, cwd=None, stdin="", env=None):
         return subprocess.run(
-            ["python3", os.path.join(self.repo, script), *args],
+            ["python3", self.script(script), *args],
             cwd=cwd or self.repo, env=env or self.env(), input=stdin,
             capture_output=True, text=True, timeout=TIMEOUT)
 
     def run_sh(self, script, *args, cwd=None, env=None):
         return subprocess.run(
-            ["sh", os.path.join(self.repo, script), *args],
+            ["sh", self.script(script), *args],
             cwd=cwd or self.repo, env=env or self.env(),
             capture_output=True, text=True, timeout=TIMEOUT)
 
@@ -549,6 +591,14 @@ class Sandbox(unittest.TestCase):
 
     def gate_ran(self):
         return os.path.exists(self.log)
+
+    def install_code_map_tool(self):
+        """專案自己樹裡的 `scripts/repo-map.py`(+ 它 import 的 event.py、沙盒 catalog 的主題入口
+        memory.py):`wtbase.sh` 的 `code_map_present` 認樹裡有沒有這一支 —— A 自己的樹有,
+        沙盒要的案例自己裝(#159 起腳本不再整批拷進沙盒)。"""
+        os.makedirs(os.path.join(self.repo, "scripts"), exist_ok=True)
+        for name in ("repo-map.py", "event.py", "memory.py"):
+            shutil.copy(os.path.join(SCRIPTS, name), os.path.join(self.repo, "scripts", name))
 
     # ------------------------------------------------------- 規則包要的那幾份
 

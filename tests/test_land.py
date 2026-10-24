@@ -21,7 +21,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import (GATE_STUB_GREEN, GATE_STUB_RED, SCRIPTS, Sandbox,  # noqa: E402
+from control_harness import (GATE_STUB_GREEN, GATE_STUB_RED, Sandbox,  # noqa: E402
                              write_executable)
 
 
@@ -118,7 +118,7 @@ class AutoFixHook(LandBase):
 
     def setUp(self):
         super(AutoFixHook, self).setUp()
-        write_executable(os.path.join(self.repo, "scripts", "auto-fix.sh"), AUTO_FIX_STUB)
+        self.stub_script("auto-fix.sh", AUTO_FIX_STUB)
 
     def put(self, name, text):
         self.write(name, "%s\n" % text, where=self.home)
@@ -361,7 +361,7 @@ class AutoFixHook(LandBase):
         self.put("gate-red", 1)
         self.make_ticket(7)
         self.put("fix-hook.sh", 'sh "%s" docs "擠進去" tickets/7.json > "%s" 2>&1; echo "rc=$?" >> "%s"'
-                 % (os.path.join(self.repo, "scripts", "land.sh"),
+                 % (self.script("scripts/land.sh"),
                     os.path.join(self.home, "docs-out"), os.path.join(self.home, "docs-out")))
 
         done = self.land("t1-a", "t2-b")
@@ -1355,7 +1355,8 @@ class LandTriesToClose(LandBase):
         """閘門跑的時候對主 repo 的票打一次 `ticket.py set`。"""
         line = " ".join(shlex.quote(arg) for arg in ticket_set_args)
         self.write("gate-hook.sh",
-                   'cd "$AC_ROOT" && python3 scripts/ticket.py set %s >/dev/null\n' % line,
+                   'cd "$AC_ROOT" && python3 "$AC_HOME/scripts/ticket.py" set %s >/dev/null\n'
+                   % line,
                    where=self.home)
 
     def ready(self, **fields):
@@ -1560,8 +1561,7 @@ class TheMergedCodeMapIsRebuilt(LandBase):
 
     def setUp(self):
         super(TheMergedCodeMapIsRebuilt, self).setUp()
-        shutil.copy(os.path.join(SCRIPTS, "repo-map.py"),
-                    os.path.join(self.repo, "scripts", "repo-map.py"))
+        self.install_code_map_tool()
         self.write(os.path.join("code-map", "catalog.json"),
                    json.dumps(MAP_CATALOG, ensure_ascii=False, indent=2) + "\n")
         self.write(os.path.join("tests", "test_kept.py"), MAP_TEST)
@@ -1744,6 +1744,62 @@ class TheMergedCodeMapIsRebuilt(LandBase):
         self.assertEqual(done.returncode, 0, output)
         self.assertEqual(self.regen_commits("%s..main" % before), [])
         self.assertNotIn(MERGED_STALE, output)
+
+
+
+# V3(D-071 C3,#159):land 跑哪一份閘門。替身寫自己的 `$0` —— 「跑的是哪一份」因此是標記檔裡
+# 的一行字;worktree 那一份寫 `WT-GATE`。
+GATE_STUB_SELF = """#!/bin/sh
+echo "gate $0" >> "$AC_TEST_LOG"
+exit 0
+"""
+GATE_STUB_WT = """#!/bin/sh
+echo "WT-GATE" >> "$AC_TEST_LOG"
+exit 0
+"""
+
+
+class WhichGateLandRuns(LandBase):
+    """專案**就是** A 自己(主 repo 根 == AC_HOME,實體路徑)才跑票 worktree 裡那一份閘門 ——
+    A 的票改的正是閘門;其他專案一律跑 `$AC_HOME/scripts/gate.sh`(它們的樹裡沒有閘門)。"""
+
+    gate_stub = GATE_STUB_SELF
+
+    def gate_calls(self):
+        return self.read("calls.log", where=self.home).splitlines()
+
+    def test_a3a_a_project_runs_the_gate_that_lives_in_ac_home(self):
+        """(a) 預設沙盒(AC_HOME = 這個測試自己那一份 A,閘門是替身):標記寫的是
+        `$AC_HOME/scripts/gate.sh`;沙盒的票 worktree 裡沒有 scripts/gate.sh。"""
+        branch = self.branch_for(1, "t1-a")
+        self.commit_in(branch, "src/a", "專案的一件事")
+        self.approve(1, "t1-a")
+        done = self.land("t1-a")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.gate_calls(),
+                         ["gate " + os.path.join(self.ac_home, "scripts", "gate.sh")])
+        self.assertFalse(os.path.exists(os.path.join(branch, "scripts", "gate.sh")))
+
+    def test_a3b_a_itself_runs_the_gate_of_the_ticket_worktree(self):
+        """(b) dogfood:把這個測試那一份 A 的 scripts/ 拷進沙盒、commit,AC_HOME 指沙盒;票分支
+        把 scripts/gate.sh 換成寫 `WT-GATE` 的替身 → land 之後標記是 WT-GATE。
+
+        **變異 m4**:land.sh 一律跑 `$AC_HOME` 那一份 → 標記是 `gate <沙盒>/scripts/gate.sh`,紅。"""
+        shutil.copytree(self.own_ac_home(), os.path.join(self.repo, "scripts"),
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "A 自己:腳本住在專案裡")
+        self.git("push", "-q", "origin", "main")
+        self.ac_home = self.repo
+        self.scripts = os.path.join(self.repo, "scripts")
+        branch = self.branch_for(1, "t1-gate")
+        write_executable(os.path.join(branch, "scripts", "gate.sh"), GATE_STUB_WT)
+        self.git("add", "-A", cwd=branch)
+        self.git("commit", "-q", "-m", "這張票改了閘門", cwd=branch)
+        self.approve(1, "t1-gate")
+        done = self.land("t1-gate")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.gate_calls(), ["WT-GATE"])
 
 
 if __name__ == "__main__":

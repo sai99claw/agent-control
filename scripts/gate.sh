@@ -111,8 +111,15 @@
 # 而那幾個沒人守的檔要當場處理:要嘛補對照表,要嘛在票裡寫明為什麼它們不需要測試。
 # `--base` 不受這一條影響(它本來就是「不管改了什麼都跑這一組」)。
 set -u
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
-AC=${AC_CONTROL_DIR:-$(cd "$(dirname "$0")" && pwd)}
+# 同伴腳本一律從**這一份閘門自己住的目錄**叫(不認 `AC_CONTROL_DIR`):land / auto-fix 在 A 自己的
+# 票 worktree 裡跑的是 worktree 那一份閘門(D-071 C3),它的 status.py / verify.py 要是同一棵樹的。
+AC=$(cd "$(dirname "$0")" && pwd)
+export AC_CONTROL_DIR=$AC
+. "$AC/wtbase.sh"
+# 程式碼根(受測的那棵樹,D-071 §1):`AC_CODE_ROOT`,否則 cwd 的 toplevel —— 不從 `$0` 來。
+# 票根(票、事件、reports)是另一個:`AC_ROOT` / cwd 的主 repo 根,見「手跑在票 worktree 裡」那一段。
+ROOT=$(ac_code_root) || { echo "gate: $AC_NOT_IN_PROJECT" >&2; exit 2; }
+export AC_CODE_ROOT=$ROOT
 LOG=${AC_GATE_LOG:-$ROOT/gate.log}
 RERUN_LOG=$LOG.rerun
 VERIFY_LOG=${AC_VERIFY_LOG:-$ROOT/verify.log}
@@ -135,15 +142,20 @@ map() {
         # 這一份 diff 刪掉的測試檔不排進模組清單(#71 A3):unittest 對不存在的模組會報錯。
         tests/test_*.py) [ -f "$ROOT/$f" ] && add "$(basename "$f" .py)" ;;
         # 沙盒共用給每一支用,所以動它就是動全部。
+        # `ac_env()`(#159):AC_HOME / AC_ROOT 只在這裡設,test_actl 釘它。
         tests/control_harness.py) add test_ticket test_event test_memory test_land \
                                       test_gate test_heartbeat test_new_session \
                                       test_board test_no_project_names \
                                       test_status test_verify_case test_apply \
-                                      test_auto_fix test_inbox test_rules ;;
+                                      test_auto_fix test_inbox test_rules test_actl \
+                                      test_session_hook test_review test_verify_runner \
+                                      test_consolidate_memory ;;
+        # 入口(D-071 C1,#159):找根、指令表、version。
+        bin/actl) add test_actl ;;
         # `.gitignore` 決定「不准出現專案名」那一掃看得到哪些檔。
         .gitignore) add test_no_project_names ;;
         # ticket.py import event.py:動 event 的人要連票那一側一起跑。
-        scripts/event.py) add test_event test_ticket test_land ;;
+        scripts/event.py) add test_event test_ticket test_land test_actl ;;
         # `agent-command`(依 model/tool 起什麼,#87)住在 ticket.py,codex 那一組守它。
         scripts/ticket.py) add test_ticket test_land test_auto_fix_codex ;;
         scripts/land.sh) add test_land ;;
@@ -153,8 +165,10 @@ map() {
         # 或完全不起動」的主守衛,四支都要過它。
         scripts/auto-fix.sh) add test_auto_fix test_auto_fix_codex test_rules_delivery ;;
         scripts/review.sh) add test_review test_rules_delivery ;;
-        # 副本根的唯一來源(#46):四支都 source 它。
-        scripts/wtbase.sh) add test_apply test_auto_fix test_land test_review ;;
+        # 副本根與專案根的唯一來源(#46、#159):actl 與每一支找根的腳本都 source 它。
+        scripts/wtbase.sh) add test_apply test_auto_fix test_land test_review test_actl \
+                               test_gate test_heartbeat test_new_session test_session_hook \
+                               test_consolidate_memory ;;
         # 收件匣:閘門與落地的終態都寫它,所以動它要連那兩側一起跑。
         scripts/inbox.py) add test_inbox test_gate test_land test_new_session ;;
         scripts/rules.py) add test_rules test_rules_delivery ;;
@@ -168,8 +182,8 @@ map() {
         scripts/memory.py) add test_memory test_memory_note_names test_memory_lifecycle \
                                test_memory_layer_policy ;;
         # 回歸層的執行器與它的登記檔:動它就是動「哪些案例會被跑到」。
-        scripts/verify.py|verify/TAGS.md|verify/TAGS.d/*) add test_verify_runner test_verify_case ;;
-        scripts/verify-case.py) add test_verify_case ;;
+        scripts/verify.py|verify/TAGS.md|verify/TAGS.d/*) add test_verify_runner test_verify_case test_actl ;;
+        scripts/verify-case.py) add test_verify_case test_actl ;;
         verify/*) add test_verify_runner ;;
         scripts/sync-to-project.sh) add test_sync_to_project ;;
         # 狀態檔:閘門與落地都寫它,所以動它要連那兩側一起跑。
@@ -264,7 +278,7 @@ if [ "$want_branch" = 1 ] && [ -n "$TICKET" ]; then
 import json, os, subprocess, sys
 
 root, ident, main = sys.argv[1:4]
-sys.path.insert(0, os.path.join(root, "scripts"))
+sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import event
 
 def git(*args):
@@ -307,23 +321,14 @@ raise SystemExit(1)
 ON_MAIN_PY
 fi
 
-# 手跑在票 worktree 裡、沒帶 `AC_ROOT`(#53,同 review.sh 那一段):`event.repo_root()`
-# 會找到 worktree 自己的 board/config.json,票與狀態就寫進副本那一份。主 repo 有這張票
-# 就把票根指回主 repo;auto-fix 起的閘門帶著 `AC_ROOT`,不走這裡。
-if [ -n "$TICKET" ] && [ -z "${AC_ROOT:-}" ]; then
-    . "$AC/wtbase.sh"
-    MAINROOT=$(main_root)
-    if [ "$MAINROOT" != "$ROOT" ] && python3 - "$AC" "$MAINROOT" "$TICKET" <<'MAIN_TICKET_PY'
-import os, sys
-here, root, ident = sys.argv[1:4]
-sys.path.insert(0, here)
-import event
-raise SystemExit(0 if os.path.isfile(
-    os.path.join(event.tickets_dir(root), "%s.json" % ident)) else 1)
-MAIN_TICKET_PY
-    then
-        echo "gate: $ROOT 是 worktree —— 票改讀主 repo $MAINROOT"
-        export AC_ROOT=$MAINROOT
+# 票根(#53;D-071 C2):`AC_ROOT`,否則 cwd 的主 repo 根 —— 手跑在票 worktree 裡時它與程式碼根
+# 不同,票與狀態寫主 repo 那一份,不寫 worktree 裡的。定下來就 export,子行程(status / ticket /
+# inbox / verify-case)讀同一個;land / auto-fix 起的閘門本來就帶著 `AC_ROOT`。
+if [ -z "${AC_ROOT:-}" ]; then
+    AC_ROOT=$(ac_root gate) || exit 2
+    export AC_ROOT
+    if [ -n "$TICKET" ] && [ "$AC_ROOT" != "$(cd "$ROOT" && pwd -P)" ]; then
+        echo "gate: $ROOT 是 worktree —— 票改讀主 repo $AC_ROOT"
     fi
 fi
 
@@ -340,7 +345,7 @@ if [ -n "$TICKET" ]; then
 import os, subprocess, sys
 
 root, ident, main, hard_log = sys.argv[1:5]
-sys.path.insert(0, os.path.join(root, "scripts"))
+sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import event
 import ticket as ticket_mod
 
@@ -425,6 +430,8 @@ SHA=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo "")
 HEAD_SHA=$(git -C "$ROOT" rev-parse -q --verify "HEAD^{commit}" 2>/dev/null || echo "")
 BASE_SHA=$(git -C "$ROOT" rev-parse "$MAIN" 2>/dev/null || echo "")
 RUN_ID=${AC_GATE_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}
+# 哪一版 A 跑的這一輪(D-071 §1):`gate.start` / `gate.pass` / `gate.fail` 都帶它。
+AC_SHA=$(ac_sha "$(ac_home)")
 FLAKY_ARGS=""
 AUTO_FLAKY_ARGS=""
 ORDER_ARGS=""
@@ -464,7 +471,7 @@ SUSPECT_PY
 # 問不出來印 `?`,不印 0:那兩件事的下一步不同(見 `auto_fix`)。
 env_suspect_rows() {
     [ -n "$TICKET" ] || { echo 0; return 0; }
-    python3 "$ROOT/scripts/status.py" suspects --ticket "$TICKET" \
+    python3 "$AC/status.py" suspects --ticket "$TICKET" \
         --run-id "$RUN_ID" --count 2>/dev/null || echo "?"
 }
 
@@ -472,7 +479,7 @@ env_suspect_rows() {
 run_tests() {   # $1 = discover|names;其餘是模組名
     mode=$1
     shift
-    python3 "$ROOT/scripts/status.py" run-tests --root "$ROOT" --log "$LOG" \
+    python3 "$AC/status.py" run-tests --root "$ROOT" --log "$LOG" \
         --suspect-file "$SUSPECT_FILE" --mode "$mode" "$@"
 }
 
@@ -482,12 +489,26 @@ env_suspect_note() {
     echo "gate: 環境可疑 —— $(suspect_field engine) 連紅 $(suspect_field count) 條同形訊息,這一段中止了"
 }
 
+# 測試開跑的那一刻發 `gate.start`(帶 `ac_sha`,#159)。land 的全套由 land.sh 自己發
+# (`AC_NO_INBOX`,同 gate.pass / gate.fail);硬擋命中不起測試,也就不發。發不出去出聲、不擋閘門。
+gate_start_event() {
+    [ -z "${AC_NO_INBOX:-}" ] || return 0
+    if [ "$want_full" -eq 1 ]; then mode=full
+    elif [ "$want_branch" -eq 1 ]; then mode=branch
+    elif [ "$want_base" -eq 1 ]; then mode=base
+    else mode=files; fi
+    set -- --kv "mode=$mode" --kv "run_id=$RUN_ID" --kv "sha=$SHA" --kv "ac_sha=$AC_SHA"
+    [ -z "$TICKET" ] || set -- --ticket "$TICKET" "$@"
+    python3 "$AC/event.py" emit gate.start "$@" >/dev/null 2>&1 \
+        || echo "gate: 事件發不出去(gate.start,不擋閘門)" >&2
+}
 # 狀態檔發不出去要出聲,但**不擋閘門** —— 同 land.sh 的事件:寫不出來的那一刻正是
 # 最需要紀錄的那一刻,而讓它擋住測試會把一個紀錄問題升級成一個交付問題。
 status_start() {
+    gate_start_event
     [ -n "$STATUS_IDS" ] || return 0
     for t in $STATUS_IDS; do
-        python3 "$ROOT/scripts/status.py" start --ticket "$t" --kind gate \
+        python3 "$AC/status.py" start --ticket "$t" --kind gate \
             --run-id "$RUN_ID" --sha "$SHA" --base-sha "$BASE_SHA" \
             --worktree "$ROOT" --round "${AC_ROUND:-1}" \
             --patch "${AC_PATCH:-}" --verify-patch "${AC_VERIFY_PATCH:-}" \
@@ -505,7 +526,7 @@ status_done() {   # $1 = rc
     fi
     for t in $STATUS_IDS; do
         # shellcheck disable=SC2086
-        python3 "$ROOT/scripts/status.py" done --ticket "$t" --kind gate \
+        python3 "$AC/status.py" done --ticket "$t" --kind gate \
             --run-id "$RUN_ID" --sha "$SHA" --rc "$1" --note "$NOTE" \
             --log "$LOG" $state_args $VERIFY_LOG_ARGS $CHECK_LOG_ARGS $EXTRA_LOG_ARGS $CASES_ARGS $FLAKY_ARGS \
             $AUTO_FLAKY_ARGS $ORDER_ARGS \
@@ -523,8 +544,8 @@ inbox_post() {   # $1 = rc
     [ -z "${AC_NO_INBOX:-}" ] || return 0
     if [ "$ENV_SUSPECT" -ne 1 ]; then
         if [ "$1" -eq 0 ]; then verdict=gate.pass; else verdict=gate.fail; fi
-        python3 "$ROOT/scripts/event.py" emit "$verdict" --ticket "$TICKET" \
-            --kv "run_id=$RUN_ID" --kv "sha=$SHA" --kv "rc=$1" >/dev/null 2>&1 \
+        python3 "$AC/event.py" emit "$verdict" --ticket "$TICKET" \
+            --kv "run_id=$RUN_ID" --kv "sha=$SHA" --kv "rc=$1" --kv "ac_sha=$AC_SHA" >/dev/null 2>&1 \
             || echo "gate: 事件發不出去($verdict,不擋閘門)" >&2
         return 0
     fi
@@ -543,9 +564,9 @@ inbox_post() {   # $1 = rc
 同形訊息:$message
 連續紅:$count
 疑似原因:掛很久的 Safari --automation 行程、磁碟剩餘空間不足、測試埠被占用。"
-    python3 "$ROOT/scripts/inbox.py" post --ticket "$TICKET" --run-id "$RUN_ID" \
+    python3 "$AC/inbox.py" post --ticket "$TICKET" --run-id "$RUN_ID" \
         --kind decision --state "$state" --what "$what" --note "$note" \
-        --where "$(python3 "$ROOT/scripts/status.py" rundir --ticket "$TICKET" \
+        --where "$(python3 "$AC/status.py" rundir --ticket "$TICKET" \
                    --run-id "$RUN_ID" 2>/dev/null || echo "reports/t$TICKET/$RUN_ID")/status.json" \
         >/dev/null 2>&1 || echo "gate: 收件匣寫不出來(不擋閘門)" >&2
 }
@@ -574,7 +595,7 @@ auto_fix() {   # $1 = rc
         return 0
     fi
     echo "gate: auto-fix —— sh scripts/auto-fix.sh $TICKET"
-    sh "$ROOT/scripts/auto-fix.sh" "$TICKET" \
+    sh "$AC/auto-fix.sh" "$TICKET" \
         || echo "gate: auto-fix 停下來了(rc=$?)—— 看 reports/inbox/ 那一頁"
 }
 
@@ -590,7 +611,7 @@ ticket_gate() {   # $1 = rc
         echo "gate: 問不到 HEAD —— 票的 gate 欄不寫" >&2
         return 0
     fi
-    python3 "$ROOT/scripts/ticket.py" set "$TICKET" gate "$(python3 -c '
+    python3 "$AC/ticket.py" set "$TICKET" gate "$(python3 -c '
 import datetime, json, sys
 print(json.dumps({"rc": int(sys.argv[1]), "sha": sys.argv[2], "run_id": sys.argv[3],
                   "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}))
@@ -607,10 +628,10 @@ review_after_green() {   # $1 = rc
         echo "gate: 在 auto-fix 裡面 —— InReview 與覆核由 auto-fix 自己做"
         return 0
     fi
-    python3 "$ROOT/scripts/ticket.py" set "$TICKET" state InReview >/dev/null 2>&1 \
+    python3 "$AC/ticket.py" set "$TICKET" state InReview >/dev/null 2>&1 \
         || echo "gate: 票狀態改不動(InReview)" >&2
     # 判準是 `ticket.py` 的 `needs_review`(#136;沒標 = simple),review.sh / land / close 同一支。
-    if ! python3 - "$ROOT/scripts" "$TICKET" <<'PY'
+    if ! python3 - "$AC" "$TICKET" <<'PY'
 import sys
 sys.path.insert(0, sys.argv[1])
 import ticket as ticket_mod
@@ -625,7 +646,7 @@ PY
         return 0
     fi
     echo "gate: 綠了 —— 票轉 InReview,派覆核:sh scripts/review.sh $TICKET"
-    sh "$ROOT/scripts/review.sh" "$TICKET" --run-id "$RUN_ID" \
+    sh "$AC/review.sh" "$TICKET" --run-id "$RUN_ID" \
         || echo "gate: 覆核停下來了(rc=$?)—— 看 reports/inbox/ 那一頁"
 }
 
@@ -635,11 +656,11 @@ PY
 status_nothing() {   # $1 = rc  $2 = 為什麼
     [ -n "$TICKET" ] || return 0
     NOTE=$2
-    python3 "$ROOT/scripts/status.py" start --ticket "$TICKET" --kind gate \
+    python3 "$AC/status.py" start --ticket "$TICKET" --kind gate \
         --run-id "$RUN_ID" --sha "$SHA" --base-sha "$BASE_SHA" \
         --worktree "$ROOT" --repro "sh scripts/gate.sh $ALL_ARGS" --cwd "$ROOT" \
         >/dev/null 2>&1
-    python3 "$ROOT/scripts/status.py" done --ticket "$TICKET" --kind gate \
+    python3 "$AC/status.py" done --ticket "$TICKET" --kind gate \
         --run-id "$RUN_ID" --sha "$SHA" --rc "$1" --note "$2" >/dev/null 2>&1 \
         || echo "gate: 狀態檔寫不出來(不擋閘門)" >&2
     inbox_post "$1"
@@ -658,7 +679,7 @@ ticket_tags() {
     python3 - "$ROOT" "$TICKET" <<'PY' 2>/dev/null
 import os, sys
 root, ident = sys.argv[1], sys.argv[2]
-sys.path.insert(0, os.path.join(root, "scripts"))
+sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import ticket as ticketlib
 try:
     data = ticketlib.load(ident)
@@ -679,7 +700,7 @@ PY
 regression() {   # $1 = ticket|full;設定 VRC
     VRC=0
     args=""
-    if [ ! -f "$ROOT/scripts/verify.py" ]; then
+    if [ ! -f "$AC/verify.py" ]; then
         # 沒有回歸層的 repo(或沙盒)要**說出來**,不要讓「沒有回歸可跑」穿著
         # 「回歸綠了」的衣服走過去(§5.5 的母題)。
         echo "gate: 這顆 repo 沒有 scripts/verify.py —— 回歸層沒跑(不是綠)"
@@ -704,7 +725,7 @@ regression() {   # $1 = ticket|full;設定 VRC
     # 同一份程式、同一組標籤、同一個 sha 只跑一次(D-015)。
     # shellcheck disable=SC2086
     ( cd "$ROOT" && AC_TICKET="$TICKET" AC_RUN_ID="$RUN_ID" \
-        python3 scripts/verify.py $args ) > "$VERIFY_LOG" 2>&1
+        python3 "$AC/verify.py" $args ) > "$VERIFY_LOG" 2>&1
     VRC=$?
     grep -aE "^Ran |^OK|^FAILED|^verify: " "$VERIFY_LOG" \
         || echo "gate: 回歸的 log 裡連 Ran 都沒有,看 $VERIFY_LOG"
@@ -742,7 +763,7 @@ verify_plan() {
     python3 - "$ROOT" "$TICKET" <<'TICKET_PY' 2>/dev/null
 import os, sys
 root, ident = sys.argv[1], sys.argv[2]
-sys.path.insert(0, os.path.join(root, "scripts"))
+sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import ticket as ticketlib
 try:
     data = ticketlib.load(ident)
@@ -776,9 +797,9 @@ TICKET_PY
 candidate_reds() {
     python3 - "$ROOT" "$TICKET" <<'CAND_PY' 2>/dev/null || echo "?"
 import os, sys
-# `$ROOT/scripts` 進 path,票的根由 `event.repo_root()`(`AC_ROOT` 蓋得掉)自己決定 ——
+# `$AC` 進 path,票的根由 `event.repo_root()`(`AC_ROOT` 蓋得掉)自己決定 ——
 # 與 `verify-case.py` 寫回票時走的是同一條路。
-sys.path.insert(0, os.path.join(sys.argv[1], "scripts"))
+sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 try:
     import ticket as ticketlib
     plan = ticketlib.load(sys.argv[2]).get("verify") or {}
@@ -801,7 +822,7 @@ verify_case() {
     CRC=0
     CASES_ARGS=""
     [ -n "$TICKET" ] || return 0
-    if [ ! -f "$ROOT/scripts/verify-case.py" ]; then
+    if [ ! -f "$AC/verify-case.py" ]; then
         # 同 `regression()` 的態度:沒有這一層要**說出來**,不要讓「沒驗」穿著
         # 「驗過了」的衣服走過去(`docs/DISPATCH-TEMPLATE.md` §5.5)。
         echo "gate: 這顆 repo 沒有 scripts/verify-case.py —— 驗證者那一層沒跑(不是綠)"
@@ -850,7 +871,7 @@ verify_case() {
     [ -z "$ticket_base" ] || ref_args="--ref $ticket_base"
     echo "gate: 驗證者案例的綠 —— python3 scripts/verify-case.py check $TICKET $ref_args --candidate $ROOT"
     # shellcheck disable=SC2086
-    ( cd "$ROOT" && python3 scripts/verify-case.py check "$TICKET" $ref_args \
+    ( cd "$ROOT" && python3 "$AC/verify-case.py" check "$TICKET" $ref_args \
         --candidate "$ROOT" --out-dir "$CHECK_DIR" ) > "$CHECK_LOG" 2>&1
     CRC=$?
     cat "$CHECK_LOG"
@@ -898,7 +919,7 @@ flake_rerun() {   # $1 = rc  $2 = 整組重跑的指令描述
     [ "$1" -eq 0 ] && return 0
     [ -n "$TICKET" ] || return "$1"
     [ -z "${AC_NO_FLAKE_RERUN:-}" ] || return "$1"
-    cases=$(python3 "$ROOT/scripts/status.py" failures --log "$LOG" 2>/dev/null || true)
+    cases=$(python3 "$AC/status.py" failures --log "$LOG" 2>/dev/null || true)
     [ -n "$cases" ] || return "$1"
     single_runs=$(python3 - "$ROOT" <<'PY'
 import json, os, sys
@@ -968,7 +989,7 @@ PY
     for case in $cases; do AUTO_FLAKY_ARGS="$AUTO_FLAKY_ARGS --auto-flaky $case"; done
     echo "gate: 單跑與原順序整組都達門檻 —— flaky=auto,rc 轉 0"
     NOTE="$NOTE 單跑與整組都達門檻,flaky=auto。"
-    python3 "$ROOT/scripts/event.py" emit flake.auto_pass --ticket "$TICKET" \
+    python3 "$AC/event.py" emit flake.auto_pass --ticket "$TICKET" \
         --kv "run_id=$RUN_ID" --kv "single_runs=$single_runs" \
         --kv "group_runs=$group_runs" --note "$cases" >/dev/null \
         || echo "gate: flake.auto_pass 事件發不出去(不擋閘門)" >&2

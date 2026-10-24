@@ -26,7 +26,7 @@ import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import (ROOT, SCRIPTS, TIMEOUT, Sandbox, fixture_candidate,  # noqa: E402
+from control_harness import (ROOT, TIMEOUT, Sandbox, fixture_candidate,  # noqa: E402
                              write_executable)
 from test_memory_lifecycle import Consolidation  # noqa: E402
 
@@ -50,8 +50,6 @@ class ConsolidateBase(Sandbox):
 
     def setUp(self):
         super().setUp()
-        shutil.copy(os.path.join(SCRIPTS, "consolidate-memory.sh"),
-                    os.path.join(self.repo, "scripts", "consolidate-memory.sh"))
         shutil.copy(os.path.join(ROOT, "templates", "dispatch-consolidator.md"),
                     os.path.join(self.repo, "templates", "dispatch-consolidator.md"))
         self.install_rules_sources()
@@ -150,8 +148,7 @@ class OneLeaseOneFable(ConsolidateBase):
     def test_a1_running_twice_at_once_starts_one(self):
         """**變異 M16**:不取租約(直接轉 Running 起 session)→ 替身被叫 2 次,紅。"""
         self.arm()
-        procs = [subprocess.Popen(["sh", os.path.join(self.repo, "scripts",
-                                                      "consolidate-memory.sh"), "7"],
+        procs = [subprocess.Popen(["sh", self.script("scripts/consolidate-memory.sh"), "7"],
                                   cwd=self.repo, env=self.env(), stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, text=True) for _ in range(2)]
         outputs = [proc.communicate(timeout=TIMEOUT) for proc in procs]
@@ -264,12 +261,12 @@ class TheLauncherRecordsWhoTalked(ConsolidateBase):
 IN_SESSION = """#!/bin/sh
 echo "session $*" >> "@CALLS@"
 cat > /dev/null
-snap=$(python3 scripts/memory.py snapshot memory/model/opus.md)
+snap=$(python3 "$AC_HOME/scripts/memory.py" snapshot memory/model/opus.md)
 mkdir -p "$(dirname "$AC_DISCUSSION")" candidates
 printf -- '---\\nmodel: %s\\n%s\\n---\\n\\n## 第 1 輪 — %s\\n- 主張:逐條處置\\n\\n## 結論\\n- L1: 保留\\n' \\
     "$AC_MODEL" "$snap" "$AC_MODEL" > "$AC_DISCUSSION"
 printf -- '- 整理後的原則 (#10, 2026-10-01, fable@fable)\\n' > candidates/opus.md
-python3 scripts/memory.py consolidate memory/model/opus.md --candidate candidates/opus.md \\
+python3 "$AC_HOME/scripts/memory.py" consolidate memory/model/opus.md --candidate candidates/opus.md \\
     --discussion "$AC_DISCUSSION" --by "$AC_MODEL" > "@OUT@" 2>&1
 echo "rc=$?" >> "@OUT@"
 exit 0

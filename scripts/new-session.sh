@@ -29,17 +29,12 @@ set -u
 USAGE="new-session: 要 <role> <model> [--no-event] [--session <id>],例:sh scripts/new-session.sh main fable"
 if [ "${1:-}" = dispatch ]; then
     shift
-    _ac_root() {
-        _d=$(cd "$(dirname "$0")" && pwd); _i=0
-        while [ $_i -lt 5 ]; do
-            [ -f "$_d/board/config.json" ] && { echo "$_d"; return; }
-            _d=$(dirname "$_d"); _i=$((_i+1))
-        done
-        cd "$(dirname "$0")/.." && pwd
-    }
-    ROOT=${AC_ROOT:-$(_ac_root)}
+    # 專案根:`AC_ROOT`,否則 cwd 的主 repo 根(`wtbase.sh`,D-071 C2);不從 `$0` 來。
+    AC=$(cd "$(dirname "$0")" && pwd)
+    . "$AC/wtbase.sh"
+    ROOT=$(ac_root new-session) || exit 2
     export AC_ROOT=$ROOT
-    exec python3 - "$(cd "$(dirname "$0")" && pwd)" "$ROOT" "$@" <<'PY'
+    exec python3 - "$AC" "$ROOT" "$@" <<'PY'
 import argparse, json, os, shlex, shutil, signal, subprocess, sys, time
 from datetime import datetime
 
@@ -162,20 +157,12 @@ while [ $# -gt 0 ]; do
     shift
 done
 [ -n "$SID" ] || SID=$(date +%Y%m%d-%H%M%S)-$$
-# 根:`AC_ROOT` 有設就用,否則往上找 board/config.json(與 heartbeat.sh 同一種)——
-# 同步到專案後這一支住在 scripts/control/,「上一層」不再是根。
-_ac_root() {
-    _d=$(cd "$(dirname "$0")" && pwd); _i=0
-    while [ $_i -lt 5 ]; do
-        [ -f "$_d/board/config.json" ] && { echo "$_d"; return; }
-        _d=$(dirname "$_d"); _i=$((_i+1))
-    done
-    cd "$(dirname "$0")/.." && pwd
-}
-ROOT=${AC_ROOT:-$(_ac_root)}
-export AC_ROOT=$ROOT
-# 同伴腳本從這一支自己住的目錄叫,不寫死 $ROOT/scripts。
+# 同伴腳本從這一支自己住的目錄(A 的 clone)叫,不寫死 $ROOT/scripts。專案根不從 `$0` 來
+# (D-071 C2,#159):`AC_ROOT`,否則 cwd 的主 repo 根(`wtbase.sh`);都沒有 rc 2。
 AC=$(cd "$(dirname "$0")" && pwd)
+. "$AC/wtbase.sh"
+ROOT=$(ac_root new-session) || exit 2
+export AC_ROOT=$ROOT
 MAIN=main
 
 CTL=${AC#"$ROOT"/}
@@ -484,7 +471,8 @@ fi
 
 if [ "$EMIT" -eq 1 ]; then
     say "發事件:控制台從此看得到你"
-    python3 "$AC/event.py" emit session.start --role "$ROLE" --model "$MODEL" --session "$SID"
+    python3 "$AC/event.py" emit session.start --role "$ROLE" --model "$MODEL" --session "$SID" \
+        --kv "ac_sha=$(ac_sha "$(ac_home)")"
 else
     say "發事件:略過(--no-event —— 同一個 session 重印這一頁,不是新的開場)"
 fi

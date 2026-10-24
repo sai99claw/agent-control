@@ -565,7 +565,7 @@ class GateWritesStatus(Sandbox):
         self.install_test_marker()
         self.hard_block(paths=["scripts/land.sh"])
         self.make_ticket(7)
-        self.write("scripts/land.sh", self.read("scripts/land.sh") + "\n# outside scope\n")
+        self.write("scripts/land.sh", "# outside scope\n")
         done = self.gate("--branch", "--ticket", "7")
         self.assert_preflight_stopped_before_tests(done)
         self.assertIn("board/config.json 的 hard_block.paths:scripts/land.sh", done.stderr)

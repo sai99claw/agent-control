@@ -8,13 +8,14 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 import unittest
 from datetime import date, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import SCRIPTS, Sandbox, write_executable  # noqa: E402
+from control_harness import ROOT, Sandbox, write_executable  # noqa: E402
 
 
 # #148(D-055 ①):1 條要放滿 3 天才觸發
@@ -155,8 +156,9 @@ class NewSession(Sandbox):
         sid = rows[0].get("session")
         self.assertTrue(sid, "session.start 沒帶 session id")
         self.assertIn("session: %s" % sid, done.stdout.splitlines())
-        self.assertIn("結束前:python3 scripts/event.py emit session.end --role worker "
-                      "--session %s" % sid, done.stdout.splitlines())
+        # 腳本住在 A 的 clone(#159):那句指的是 A 那一份 event.py 的完整路徑。
+        self.assertIn("結束前:python3 %s/event.py emit session.end --role worker "
+                      "--session %s" % (self.scripts, sid), done.stdout.splitlines())
 
     def test_a_given_session_id_is_used(self):
         done = self.start("main", "fable", "--session", "abc")
@@ -180,9 +182,7 @@ class TheMainLineStartsTheConsolidators(Sandbox):
     def setUp(self):
         super().setUp()
         self.calls = os.path.join(self.home, "consolidate-calls.log")
-        path = os.path.join(self.repo, "scripts", "consolidate-memory.sh")
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write(self.STUB % self.calls)
+        self.stub_script("consolidate-memory.sh", self.STUB % self.calls)
         self.make_ticket(7, role="consolidator", state="Ready",
                          memory_file="memory/model/opus.md")
         self.make_ticket(8, role="consolidator", state="Ready",
@@ -211,36 +211,57 @@ class TheMainLineStartsTheConsolidators(Sandbox):
                          "只該叫 Ready、沒有有效租約的整理票那一張")
 
 
-class A7ItMovesWithTheSync(Sandbox):
-    """#39 A7:同步到專案後這幾支住在 `scripts/control/`,「上一層」不再是根。"""
-
-    MOVED = ("new-session.sh", "heartbeat.sh", "session-hook.sh", "event.py",
-             "ticket.py", "inbox.py", "memory.py", "status.py", "verify.py", "rules.py")
+class A7TheRootComesFromWhereYouStand(Sandbox):
+    """#39 A7 → #159(D-071 C2):腳本住在 A 的 clone、不在專案裡,專案根不從 `$0` 往上找 ——
+    `AC_ROOT`,否則 cwd 的主 repo 根,否則 rc 2。期望的票題是這裡寫進沙盒的字串。"""
 
     def setUp(self):
         super().setUp()
-        control = os.path.join(self.repo, "scripts", "control")
-        os.makedirs(control)
-        for name in self.MOVED:
-            shutil.copy(os.path.join(SCRIPTS, name), os.path.join(control, name))
         self.make_ticket(7, subject="只有這顆沙盒才有的那一張")
 
-    def run_moved(self, **env):
-        return self.run_sh("scripts/control/new-session.sh", "main", "fable",
-                           "--no-event", env=self.env(**env))
+    def run_page(self, cwd, **env):
+        full = self.env(**env)
+        if "AC_ROOT" not in env:
+            full.pop("AC_ROOT")
+        return self.run_sh("scripts/new-session.sh", "main", "fable", "--no-event",
+                           cwd=cwd, env=full)
 
     def test_a7_with_ac_root(self):
-        done = self.run_moved(AC_ROOT=self.repo)
+        """cwd 在任何專案之外,`AC_ROOT` 指沙盒 → 那一頁是沙盒的票。"""
+        done = self.run_page(self.home, AC_ROOT=self.repo)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("開著的票", done.stdout)
         self.assertIn("只有這顆沙盒才有的那一張", done.stdout)
 
-    def test_a7_without_ac_root_it_walks_up_to_the_config(self):
-        done = self.run_moved()
+    def test_a7_without_ac_root_cwd_inside_the_sandbox_finds_it(self):
+        """cwd 在沙盒裡(子目錄)、沒有 `AC_ROOT` → 沙盒的票在頁上。
+
+        **變異**:`ac_root` 退回 `$0` 的上一層(A 的 clone)→ 這一條紅(讀到 A 的票庫)。"""
+        done = self.run_page(os.path.join(self.repo, "docs"))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("開著的票", done.stdout)
         self.assertIn("只有這顆沙盒才有的那一張", done.stdout,
-                      "票庫讀錯地方 —— 根沒有往上找到 board/config.json")
+                      "票庫讀錯地方 —— 根不是 cwd 所在的專案")
+
+    def test_a7_from_a_ticket_worktree_it_is_the_main_repo(self):
+        """cwd 是票的 worktree:票檔只在主 repo 的工作樹裡(沒 commit),頁上照樣有它。"""
+        wt = self.worktree("t7")
+        self.assertFalse(os.path.exists(os.path.join(wt, "tickets", "7.json")))
+        done = self.run_page(wt)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("只有這顆沙盒才有的那一張", done.stdout)
+
+    def test_a7_outside_any_project_is_rc_2_and_writes_nothing(self):
+        """cwd 不在任何 git 樹、沒有 `AC_ROOT` → rc 2、說得出 `-C`;不發事件、不寫任何地方。"""
+        bare = os.path.join(self.home, "bare")
+        os.makedirs(bare)
+        done = self.run_sh("scripts/new-session.sh", "main", "fable", cwd=bare,
+                           env={k: v for k, v in self.env().items() if k != "AC_ROOT"})
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("not inside a project", done.stderr)
+        self.assertIn("-C", done.stderr)
+        self.assertEqual(os.listdir(bare), [])
+        self.assertEqual(self.events(), [])
 
 
 
@@ -660,6 +681,40 @@ class IndependentOpenerAndDesignDispatch(Sandbox):
         done = self.dispatch("opener")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertEqual(self.agent_calls(), [])
+
+
+def a_home_sha(case):
+    """A 的根(這個 repo)的 HEAD —— 測試自己用 git 量,不讀被測腳本。封存副本(不是 git 樹)
+    量不了真 sha:skip 並說原因,`unknown` 那一半另有一條。"""
+    top = subprocess.run(["git", "-C", ROOT, "rev-parse", "--show-toplevel"],
+                         capture_output=True, text=True)
+    if top.returncode != 0 or os.path.realpath(top.stdout.strip()) != os.path.realpath(ROOT):
+        case.skipTest("A 的根在這裡不是一棵 git 樹(封存副本)—— 量不了真 sha")
+    return subprocess.run(["git", "-C", ROOT, "rev-parse", "HEAD"], capture_output=True,
+                          text=True, check=True).stdout.strip()
+
+
+class A5TheStartSaysWhichA(Sandbox):
+    """#159 A5(D-071 §1):`session.start` 帶 `ac_sha` = AC_HOME 的 HEAD;AC_HOME 不是 git 樹就是
+    字面 `unknown` —— 永不空、永不缺。"""
+
+    def start_row(self):
+        rows = [row for row in self.events() if row["kind"] == "session.start"]
+        self.assertEqual(len(rows), 1, self.events())
+        return rows[0]
+
+    def test_a5_the_start_carries_the_head_of_ac_home(self):
+        """**變異 m5**:拿掉 new-session.sh 那一格 `--kv ac_sha=…` → 紅。"""
+        sha = a_home_sha(self)
+        done = self.run_sh("scripts/new-session.sh", "main", "fable", env=self.env(AC_HOME=ROOT))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.start_row().get("ac_sha"), sha)
+
+    def test_a5_a_non_git_ac_home_says_unknown(self):
+        self.own_ac_home()
+        done = self.run_sh("scripts/new-session.sh", "main", "fable")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.start_row().get("ac_sha"), "unknown")
 
 
 if __name__ == "__main__":

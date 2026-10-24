@@ -70,7 +70,13 @@
 # 這一支不 ack 任何一頁:D-032 之後腳本接著會做的終態只寫事件,沒有頁可收。
 set -u
 [ $# -ge 1 ] || { echo "land: 給我至少一條分支"; exit 2; }
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
+# 專案根不從 `$0` 來(D-071 C2,#159):`AC_ROOT`,否則 cwd 的主 repo 根,否則 rc 2 —— 規則只有一份,
+# 在 `wtbase.sh`。同伴腳本從這一支自己住的目錄(A 的 clone)叫,不寫死 $ROOT/scripts。
+AC=${AC_CONTROL_DIR:-$(cd "$(dirname "$0")" && pwd)}
+export AC_CONTROL_DIR=$AC
+. "$AC/wtbase.sh"
+ROOT=$(ac_root land) || exit 2
+export AC_ROOT=$ROOT
 
 cfg() {
     python3 - "$ROOT" "$1" "$2" <<'PY'
@@ -110,7 +116,7 @@ take_lock() {   # $1 = 這一次在做什麼(寫進 holder,給撞上的人看)
 }
 
 ev() {
-    python3 "$ROOT/scripts/event.py" emit "$@" >/dev/null \
+    python3 "$AC/event.py" emit "$@" >/dev/null \
         || echo "land: 事件發不出去($*)" >&2
 }
 
@@ -248,7 +254,7 @@ status_start_all() {
     [ -n "$IDS" ] || return 0
     LAND_RUN=${LAND_RUN:-$STAMP-$$}
     for i in $IDS; do
-        python3 "$ROOT/scripts/status.py" start --ticket "$i" --kind land \
+        python3 "$AC/status.py" start --ticket "$i" --kind land \
             --run-id "$LAND_RUN" --sha "$(git -C "$ROOT" rev-parse --short "$MAIN")" \
             --base-sha "$(git -C "$ROOT" rev-parse "$MAIN")" \
             --worktree "${WT:-}" --repro "sh scripts/land.sh $ALL_BRANCHES" \
@@ -264,9 +270,9 @@ status_phase_all() {   # $1 = gate|merge|push  $2 = rc  $3 = 說明  [$4 = 抄�
     [ -n "$LAND_RUN" ] || return 0
     for i in $IDS; do
         from=""
-        [ -z "${4:-}" ] || from=$(python3 "$ROOT/scripts/status.py" rundir --ticket "$i" \
+        [ -z "${4:-}" ] || from=$(python3 "$AC/status.py" rundir --ticket "$i" \
             --run-id "$4" 2>/dev/null)/status.json
-        python3 "$ROOT/scripts/status.py" phase --ticket "$i" --run-id "$LAND_RUN" \
+        python3 "$AC/status.py" phase --ticket "$i" --run-id "$LAND_RUN" \
             --phase "$1" --rc "$2" --note "$3" --failures-from "$from" >/dev/null 2>&1 \
             || echo "land: #$i 的 $1 狀態寫不出來(不擋落地)" >&2
     done
@@ -282,12 +288,12 @@ status_done_all() {   # $1 = rc  $2 = 說明
     fi
     for i in $IDS; do
         if [ -n "${WT:-}" ] && [ -f "$WT/gate.log" ]; then
-            python3 "$ROOT/scripts/status.py" done --ticket "$i" --kind land \
+            python3 "$AC/status.py" done --ticket "$i" --kind land \
                 --run-id "$LAND_RUN" --sha "${SHA:-}" --rc "$1" --note "$2" \
                 --log "$WT/gate.log" >/dev/null 2>&1 \
                 || echo "land: #$i 的狀態檔寫不出來(不擋落地)" >&2
         else
-            python3 "$ROOT/scripts/status.py" done --ticket "$i" --kind land \
+            python3 "$AC/status.py" done --ticket "$i" --kind land \
                 --run-id "$LAND_RUN" --sha "${SHA:-}" --rc "$1" --note "$2" \
                 >/dev/null 2>&1 \
                 || echo "land: #$i 的狀態檔寫不出來(不擋落地)" >&2
@@ -300,7 +306,7 @@ inbox_all() {   # $1 = 狀態  $2 = 要主線做什麼  $3 = 去哪看
     [ -n "$IDS" ] || return 0
     [ -z "${AC_NO_INBOX:-}" ] || return 0
     for i in $IDS; do
-        python3 "$ROOT/scripts/inbox.py" post --ticket "$i" \
+        python3 "$AC/inbox.py" post --ticket "$i" \
             --run-id "${LAND_RUN:-$STAMP-$$}" --kind decision \
             --state "$1" --what "$2" --where "$3" >/dev/null 2>&1 \
             || echo "land: #$i 的收件匣寫不出來(不擋落地)" >&2
@@ -312,7 +318,7 @@ inbox_first() {   # $1 = 狀態  $2 = 要主線做什麼  $3 = 去哪看
     [ -n "$IDS" ] || return 0
     [ -z "${AC_NO_INBOX:-}" ] || return 0
     first=$(echo $IDS | cut -d' ' -f1)
-    python3 "$ROOT/scripts/inbox.py" post --ticket "$first" \
+    python3 "$AC/inbox.py" post --ticket "$first" \
         --run-id "${LAND_RUN:-$STAMP-$$}" --kind decision \
         --state "$1" --what "$2" --where "$3" >/dev/null 2>&1 \
         || echo "land: #$first 的收件匣寫不出來(不擋落地)" >&2
@@ -323,7 +329,7 @@ auto_fix_all() {
     [ "$AUTOFIX" -eq 1 ] || return 0
     for i in $IDS; do
         echo "land: auto-fix —— sh scripts/auto-fix.sh $i(base=$BR)"
-        AC_FIX_SOURCE="$BR" sh "$ROOT/scripts/auto-fix.sh" "$i" \
+        AC_FIX_SOURCE="$BR" sh "$AC/auto-fix.sh" "$i" \
             || echo "land: auto-fix 停下來了(rc=$?)—— 看 reports/inbox/ 那一頁"
     done
 }
@@ -432,7 +438,7 @@ PY
     out=$(python3 - "$ROOT" "$MAIN" "$b" <<'PY'
 import os, subprocess, sys
 root, main, branch = sys.argv[1:4]
-sys.path.insert(0, os.path.join(root, "scripts"))
+sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import ticket as ticket_mod
 done = subprocess.run(["git", "-C", root, "diff", "--name-only",
                        "%s...%s" % (main, branch)],
@@ -459,7 +465,7 @@ PY
     out=$(python3 - "$ROOT" "$tf" <<'PY'
 import json, os, sys
 root, path = sys.argv[1:3]
-sys.path.insert(0, os.path.join(root, "scripts"))
+sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import ticket as ticket_mod
 try:
     with open(path, encoding="utf-8") as handle:
@@ -525,7 +531,7 @@ land_cost_all() {   # $1 = 結局 pass|fail
     for i in $IDS; do
         _attempt=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("attempt") or 0)' \
             "$ROOT/$TICKETS/$i.json" 2>/dev/null || echo 0)
-        python3 "$ROOT/scripts/ticket.py" cost "$i" --role land --round "$_attempt" --by land.sh \
+        python3 "$AC/ticket.py" cost "$i" --role land --round "$_attempt" --by land.sh \
             --wall-seconds "$LAND_SECS" --outcome "$1" --run-id "${LAND_RUN:-$STAMP-$$}" \
             >/dev/null 2>&1 \
             || echo "land: #$i 的 cost 寫不進票(不擋落地)" >&2
@@ -536,8 +542,7 @@ land_cost_all() {   # $1 = 結局 pass|fail
 # 副本根與 `auto-fix.sh` **同一種解析**(#38):環境變數 > `worktree_dir` > `../<主 repo>-wt`,
 # 相對路徑以主 repo 根(`wtbase.sh` 的 `main_root`)拼。各算各的那一天,auto-fix 開副本的
 # 地方與底下唸殘留清單的地方就不是同一個目錄,而「沒有殘留」與「看錯地方」長得一樣。
-# 兩支共用 `scripts/wtbase.sh`(#46)。
-. "$ROOT/scripts/wtbase.sh"
+# 兩支共用 `scripts/wtbase.sh`(#46;檔頭已載入)。
 WTBASE=$(wtbase)
 WT=$WTBASE/land-$STAMP
 BR=land/$STAMP
@@ -632,24 +637,31 @@ else
     GATE_TICKETS=$(echo $IDS)
 fi
 
-# 全套一輪(#109 B6):事件帶 mode / round / batch,狀態檔每輪一筆 gate phase。
+# 全套一輪(#109 B6):事件帶 mode / round / batch / ac_sha,狀態檔每輪一筆 gate phase。
 # 第 1 輪的 run_id 照舊是 `<land run>-gate`;批次修復之後的第 r 輪是 `<land run>-gate-r<r>`。
+# 跑哪一份閘門(D-071 C3,`wtbase.sh` 的 `ac_gate_script`):專案就是 A 自己時跑 worktree 那一份
+# (A 的票改的正是閘門),其他專案一律跑 `$AC_HOME/scripts/gate.sh`(它們的樹裡沒有)。
 ROUND=0
 GATE_RUN=""
+GATE=$(ac_gate_script "$WT")
+AC_SHA=$(ac_sha "$(ac_home)")
 run_gate() {
     ROUND=$((ROUND + 1))
     SHA=$(git -C "$WT" rev-parse --short HEAD)
     GATE_RUN=$LAND_RUN-gate
     [ "$ROUND" -eq 1 ] || GATE_RUN=$LAND_RUN-gate-r$ROUND
-    ev gate.start --kv mode=full --kv "round=$ROUND" --kv "batch=$STAMP" --kv "sha=$SHA"
+    ev gate.start --kv mode=full --kv "round=$ROUND" --kv "batch=$STAMP" --kv "sha=$SHA" \
+        --kv "ac_sha=$AC_SHA"
     if (cd "$WT" && AC_ROOT="$ROOT" AC_GATE_TICKET="$GATE_TICKET" AC_GATE_TICKETS="$GATE_TICKETS" \
-        AC_GATE_RUN_ID="$GATE_RUN" AC_NO_INBOX=1 sh scripts/gate.sh --full --no-auto-fix); then
+        AC_GATE_RUN_ID="$GATE_RUN" AC_NO_INBOX=1 sh "$GATE" --full --no-auto-fix); then
         status_phase_all gate 0 "全套第 $ROUND 輪綠"
-        ev gate.pass --kv mode=full --kv "round=$ROUND" --kv "batch=$STAMP" --kv "sha=$SHA"
+        ev gate.pass --kv mode=full --kv "round=$ROUND" --kv "batch=$STAMP" --kv "sha=$SHA" \
+            --kv "ac_sha=$AC_SHA"
         return 0
     fi
     status_phase_all gate 1 "全套第 $ROUND 輪紅" "$GATE_RUN"
-    ev gate.fail --kv mode=full --kv "round=$ROUND" --kv "batch=$STAMP" --kv "sha=$SHA"
+    ev gate.fail --kv mode=full --kv "round=$ROUND" --kv "batch=$STAMP" --kv "sha=$SHA" \
+        --kv "ac_sha=$AC_SHA"
     return 1
 }
 
@@ -676,7 +688,7 @@ batch_fix() {
         echo "land: 全套第 $ROUND 輪紅 —— 批次修復第 $fixed/$rounds 輪:AC_BATCH_RUN_ID=$LAND_RUN sh scripts/auto-fix.sh --batch $BR $GATE_TICKETS"
         # 紅榜已由 run_gate 抄進 land 這一輪的狀態檔(reports/t<第一張>/$LAND_RUN/status.json)。
         # shellcheck disable=SC2086
-        AC_BATCH_RUN_ID="$LAND_RUN" AC_FIX_SOURCE="$BR" sh "$ROOT/scripts/auto-fix.sh" --batch "$BR" $IDS
+        AC_BATCH_RUN_ID="$LAND_RUN" AC_FIX_SOURCE="$BR" sh "$AC/auto-fix.sh" --batch "$BR" $IDS
         frc=$?
         if [ "$frc" -ne 0 ]; then
             echo "land: 批次修復停了(auto-fix --batch rc=$frc)—— 不重跑全套,$MAIN 沒動;worktree 留在 $WT"
@@ -694,7 +706,7 @@ batch_fix() {
         fi
     done
     echo "land: 全套連紅 $ROUND 輪(批次修復 $fixed 輪)—— 找嫌疑票"
-    STATUS_FILE=$(python3 "$ROOT/scripts/status.py" rundir --ticket "$(echo $IDS | cut -d' ' -f1)" \
+    STATUS_FILE=$(python3 "$AC/status.py" rundir --ticket "$(echo $IDS | cut -d' ' -f1)" \
         --run-id "$GATE_RUN" 2>/dev/null)/status.json
     # 第一行:嫌疑票號(空白分隔,可能是空的);其餘:逐條「案例(檔)—— 命中哪張票的哪一格」。
     SUSPECT_OUT=$(python3 - "$ROOT" "$MAIN" "$TICKETS" "$STATUS_FILE" "$@" <<'SUSPECT_PY'
@@ -774,7 +786,7 @@ SUSPECT_PY
             *" $id "*)
                 echo "land: 踢出 #$id($b)—— 紅榜對到它;這張票不改 state,之後單張 land 它"
                 if [ -z "${AC_NO_INBOX:-}" ]; then
-                    python3 "$ROOT/scripts/inbox.py" post --ticket "$id" \
+                    python3 "$AC/inbox.py" post --ticket "$id" \
                         --run-id "$LAND_RUN-kick" --kind decision \
                         --state "批次落地踢出(全套連紅 $ROUND 輪)" \
                         --what "紅榜對到這張票,已從整批 $ALL_BRANCHES 踢出、其餘自動重 land;修好後單張 land:sh scripts/land.sh ${b}。紅榜:$WHY" \
@@ -791,7 +803,7 @@ SUSPECT_PY
     status_done_all 1 "批次全套連紅 $ROUND 輪,踢出 #$(echo "$SUSPECTS" | sed 's/ / #/g'),其餘重 land"
     echo "land: 重 land 其餘:sh scripts/land.sh$REST(AC_LAND_DEPTH=$((DEPTH + 1)));這一批的 worktree 留在 $WT"
     # shellcheck disable=SC2086
-    AC_LAND_DEPTH=$((DEPTH + 1)) sh "$ROOT/scripts/land.sh" $REST
+    AC_LAND_DEPTH=$((DEPTH + 1)) sh "$AC/land.sh" $REST
     relanded=$?
     exit "$relanded"
 }
@@ -868,12 +880,12 @@ status_done_all 0 "已合併、已推上;關票由 ticket.py close --landed 判(
 # land.start 到 push 的秒數。寫在 close 之前;cost 不看 state、不動 state_version。
 land_cost_all pass
 for i in $IDS; do
-    CLOSE_OUT=$(python3 "$ROOT/scripts/ticket.py" close "$i" --landed "$LANDED" 2>&1)
+    CLOSE_OUT=$(python3 "$AC/ticket.py" close "$i" --landed "$LANDED" 2>&1)
     CLOSE_RC=$?
     if [ "$CLOSE_RC" -eq 0 ]; then
         echo "land: #$i 已合併、已關票(ticket.py close --landed $(echo "$LANDED" | cut -c1-12))"
         if [ -z "${AC_NO_INBOX:-}" ]; then
-            python3 "$ROOT/scripts/inbox.py" done "$i" --landed "$LANDED" --by land.sh \
+            python3 "$AC/inbox.py" done "$i" --landed "$LANDED" --by land.sh \
                 --run-id "${LAND_RUN:-$STAMP-$$}" >/dev/null 2>&1 \
                 || echo "land: #$i 的完成簡報寫不出來(不擋落地)" >&2
         fi
@@ -885,7 +897,7 @@ for i in $IDS; do
     # 一頁的 what 是一行:原文逐行接起來,一個字都不改寫(理由只有 ticket.py 一份)。
     WHY=$(echo "$CLOSE_OUT" | awk 'NF { sub(/^[ \t]+/, ""); printf "%s%s", sep, $0; sep = " ／ " }')
     if [ -z "${AC_NO_INBOX:-}" ]; then
-        python3 "$ROOT/scripts/inbox.py" post --ticket "$i" \
+        python3 "$AC/inbox.py" post --ticket "$i" \
             --run-id "${LAND_RUN:-$STAMP-$$}" --kind decision --state "已合併、尚未關票" \
             --what "ticket.py close 關不掉(rc=$CLOSE_RC):$WHY ／ 補齊後:python3 scripts/ticket.py close $i --landed $LANDED" \
             --where "git log --oneline -3 $MAIN" >/dev/null 2>&1 \

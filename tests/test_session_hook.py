@@ -12,13 +12,12 @@
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import ROOT, SCRIPTS, TIMEOUT, Sandbox  # noqa: E402
+from control_harness import ROOT, TIMEOUT, Sandbox  # noqa: E402
 
 SETTINGS = os.path.join(ROOT, ".claude", "settings.json")
 SOURCES = {"startup", "resume", "clear", "compact", "fork"}
@@ -48,21 +47,21 @@ class A1HookShape(unittest.TestCase):
 class HookSandbox(Sandbox):
     config_extra = {"routing": {"main": "fable"}, "worktree_dir": WORKTREE}
 
-    def setUp(self):
-        super().setUp()
-        target = os.path.join(self.repo, "scripts", "session-hook.sh")
-        shutil.copy(os.path.join(SCRIPTS, "session-hook.sh"), target)
-        os.chmod(target, 0o755)
-
     def hook(self, source="startup", cwd=None, session_id=None, **env):
+        """Claude Code 叫 hook 的形狀:沒有 `AC_ROOT`,專案根是 `CLAUDE_PROJECT_DIR`(#159);
+        案例自己給了哪一格就用那一格。腳本是 A 那一份(`AC_HOME`),不在專案裡。"""
         cwd = cwd or self.repo
         payload = {"source": source, "cwd": cwd, "hook_event_name": "SessionStart"}
         if session_id is not None:
             payload["session_id"] = session_id
         payload = json.dumps(payload)
+        full = self.env(**env)
+        if "AC_ROOT" not in env:
+            full.pop("AC_ROOT")
+            full.setdefault("CLAUDE_PROJECT_DIR", self.repo)
         return subprocess.run(
-            ["sh", os.path.join(self.repo, "scripts", "session-hook.sh")],
-            cwd=cwd, env=self.env(**env), input=payload,
+            ["sh", self.script("scripts/session-hook.sh")],
+            cwd=cwd, env=full, input=payload,
             capture_output=True, text=True, timeout=TIMEOUT)
 
     def event_lines(self):
@@ -198,6 +197,35 @@ class A6TheCap(HookSandbox):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertLessEqual(len(done.stdout), LIMIT)
         self.assertNotIn("截斷", done.stdout)
+
+
+class A8TheHookFindsTheProject(HookSandbox):
+    """#159(D-071 §1):腳本住在 A 的 clone,hook 的專案根是 `AC_ROOT` > `CLAUDE_PROJECT_DIR` >
+    cwd 的主 repo 根 > rc 2 —— 不從 `$0` 往上找。"""
+
+    def test_a8_claude_project_dir_is_the_root_from_anywhere(self):
+        """cwd 在任何專案之外、`CLAUDE_PROJECT_DIR=<沙盒>` → 主線那一頁、沙盒多一筆 start。
+
+        **變異**:拿掉 session-hook.sh 認 `CLAUDE_PROJECT_DIR` 那一段 → rc 2,紅。"""
+        before = self.event_lines()
+        done = self.hook("startup", cwd=self.home)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("memory/role/main.md", done.stdout)
+        self.assertEqual(self.event_lines(), before + 1)
+
+    def test_a8_without_either_the_cwd_rule_finds_it(self):
+        before = self.event_lines()
+        done = self.hook("startup", CLAUDE_PROJECT_DIR="")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.event_lines(), before + 1)
+
+    def test_a8_outside_any_project_is_rc_2(self):
+        bare = os.path.join(self.home, "bare")
+        os.makedirs(bare)
+        done = self.hook("startup", cwd=bare, CLAUDE_PROJECT_DIR="")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("not inside a project", done.stderr)
+        self.assertEqual(os.listdir(bare), [])
 
 
 if __name__ == "__main__":

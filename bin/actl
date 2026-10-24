@@ -1,0 +1,113 @@
+#!/bin/sh
+# actl — the one entry into agent-control (D-071 C1; named actl, not ac: macOS ships
+# /usr/sbin/ac, D-072).
+#
+#   actl [-C <project dir>] <command> [args…]
+#   actl version                      # works anywhere, rc 0
+#
+# AC_HOME is the clone this file lives in (realpath of its dir/..), never configured.
+# The project root AC_ROOT (tickets, events, reports) never comes from $0 — first hit wins,
+# no silent fallback:
+#   1 AC_ROOT env   2 -C <dir>   3 CLAUDE_PROJECT_DIR
+#   4 main root of cwd's git tree (a ticket worktree yields its main repo)
+#   5 none → rc 2, one stderr line
+# Then AC_ROOT/board/config.json must exist (rc 2 naming `actl init`). Exports AC_HOME,
+# AC_ROOT, AC_CONTROL_DIR and execs the mapped script; the scripts stay directly callable.
+# The cwd rule itself lives in scripts/wtbase.sh (`ac_main_root_of`), shared with every script.
+set -u
+
+# A symlink in ~/bin must still find the clone: follow links to this file first.
+_self=$0
+while [ -L "$_self" ]; do
+    _link=$(readlink "$_self")
+    case "$_link" in /*) _self=$_link ;; *) _self=$(dirname "$_self")/$_link ;; esac
+done
+AC_HOME=$(cd "$(dirname "$_self")/.." && pwd -P) || exit 2
+AC_CONTROL_DIR=$AC_HOME/scripts
+AC=$AC_CONTROL_DIR
+. "$AC/wtbase.sh"
+
+TABLE='actl [-C <project dir>] <command> [args…]
+  land apply review auto-fix     scripts/<command>.sh
+  gate                           scripts/gate.sh  (--branch | --base | --full [--ticket n])
+  ticket event inbox status memory rules repo-map
+                                 scripts/<command>.py
+  verify verify-case             scripts/verify.py / scripts/verify-case.py (code root = cwd toplevel)
+  board                          board/board.py
+  session heartbeat              scripts/new-session.sh / scripts/heartbeat.sh
+  version                        AC_HOME, ac_sha, AC_ROOT, AC_CODE_ROOT (works outside a project)
+  test hooks doctor migrate init not landed yet'
+
+C_DIR=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -C)
+            [ $# -ge 2 ] && [ -n "$2" ] || { echo "actl: -C needs a directory" >&2; exit 2; }
+            C_DIR=$2; shift 2 ;;
+        -h|--help) printf '%s\n' "$TABLE"; exit 0 ;;
+        --) shift; break ;;
+        -*) echo "actl: unknown option $1" >&2; printf '%s\n' "$TABLE" >&2; exit 2 ;;
+        *) break ;;
+    esac
+done
+[ $# -ge 1 ] || { echo "actl: which command?" >&2; printf '%s\n' "$TABLE" >&2; exit 2; }
+CMD=$1
+shift
+
+# Project root per the order above; prints nothing and returns non-zero when none applies.
+resolve_root() {
+    if [ -n "${AC_ROOT:-}" ]; then echo "$AC_ROOT"; return 0; fi
+    if [ -n "$C_DIR" ]; then
+        (cd "$C_DIR" 2>/dev/null && pwd -P) && return 0
+        echo "actl: -C $C_DIR: no such directory" >&2
+        return 3
+    fi
+    if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+        (cd "$CLAUDE_PROJECT_DIR" 2>/dev/null && pwd -P) && return 0
+        echo "actl: CLAUDE_PROJECT_DIR=$CLAUDE_PROJECT_DIR: no such directory" >&2
+        return 3
+    fi
+    ac_main_root_of .
+}
+
+case "$CMD" in
+    version)
+        _root=$(resolve_root 2>/dev/null) || _root=""
+        _code=$(ac_code_root) || _code=""
+        echo "AC_HOME=$AC_HOME"
+        echo "ac_sha=$(ac_sha "$AC_HOME")"
+        echo "AC_ROOT=${_root:-(none)}"
+        echo "AC_CODE_ROOT=${_code:-(none)}"
+        exit 0 ;;
+    test|hooks|doctor|migrate|init)
+        echo "actl: $CMD: not landed yet (D-071 follow-up)" >&2
+        exit 2 ;;
+    land|gate|apply|review|auto-fix|heartbeat|session|board|\
+    ticket|event|inbox|status|memory|rules|repo-map|verify|verify-case) ;;
+    *)
+        echo "actl: unknown command '$CMD'" >&2
+        printf '%s\n' "$TABLE" >&2
+        exit 2 ;;
+esac
+
+AC_ROOT=$(resolve_root) || {
+    _rc=$?
+    [ "$_rc" -eq 3 ] || echo "actl: $AC_NOT_IN_PROJECT" >&2
+    exit 2
+}
+[ -f "$AC_ROOT/board/config.json" ] || {
+    echo "actl: $AC_ROOT has no board/config.json — not a project yet; run actl init there, or use -C <project dir>" >&2
+    exit 2
+}
+
+# ---- config_version check goes here (D-071 row 2, not in #159):
+# python3 "$AC_HOME/scripts/project_config.py" check "$AC_ROOT" || exit 2
+
+export AC_HOME AC_ROOT AC_CONTROL_DIR
+
+case "$CMD" in
+    session) exec sh "$AC/new-session.sh" "$@" ;;
+    board) exec python3 "$AC_HOME/board/board.py" "$@" ;;
+    land|gate|apply|review|auto-fix|heartbeat) exec sh "$AC/$CMD.sh" "$@" ;;
+    *) exec python3 "$AC/$CMD.py" "$@" ;;
+esac

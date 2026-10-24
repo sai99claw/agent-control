@@ -23,39 +23,40 @@
 之間隔著一次 commit。sha 變了就是不同的問題,快取一定失效。
 沒有 `AC_RUN_ID` 就完全不快取(單獨跑的人拿到的永遠是真的跑)。
 
-## 兩個根(#55)
-程式碼根是這支檔案所在的那棵樹(#55):`verify/` 的案例、被測檔、unittest 的 cwd、
-`--unit` 的 `unit_cmd`、快取雜湊裡的 HEAD sha,全部跟 `ROOT`(從 `__file__` 往上找
-`board/config.json`)。AC_ROOT 不再是程式碼根(#55):它只管票、事件與 `reports/`
-—— 快取檔住在 `event.repo_root()` 那棵樹。land.sh 在票 worktree 裡帶
-`AC_ROOT=<主 repo>` 跑閘門時,回歸層跑的是 worktree 那份案例,不是主 repo 那份。
+## 兩個根(#55;D-071 §1,#159)
+程式碼根是**受測的那棵樹**:`verify/` 的案例、被測檔、unittest 的 cwd、`--unit` 的 `unit_cmd`、
+快取雜湊裡的 HEAD sha,全部跟 `ROOT` —— `AC_CODE_ROOT`,否則 cwd 的 `git --show-toplevel`。
+不從這支檔案的位置推:腳本住在 A 的 clone,受測的樹在專案裡(#159)。AC_ROOT 不是程式碼根
+(#55):它只管票、事件與 `reports/` —— 快取檔住在 `event.repo_root()` 那棵樹。land.sh 在票
+worktree 裡帶 `AC_ROOT=<主 repo>` 跑閘門時,回歸層跑的是 worktree 那份案例,不是主 repo 那份。
 """
 import argparse, ast, hashlib, json, os, re, subprocess, sys
 
 CONFIG_REL = os.path.join("board", "config.json")
 
 
+NO_CODE_ROOT = "not inside a project; set AC_CODE_ROOT or run from the tree under test"
+
+
 def _find_root():
-    """程式碼根:從這支檔案往上找 `board/config.json`。**不認 `AC_ROOT`**(#55)——
-    那是票根;認了它,worktree 裡的閘門跑的就是主 repo 的 `verify/`。
-    不 import event.py,因為這支會被
-    `scripts/sync-to-project.sh` 單獨同步到 `<專案>/scripts/control/`,那裡不保證
-    有 event.py 陪著。寫死 `dirname(dirname(__file__))` 在那個位置算出的是
-    `<專案>/scripts`,不是專案根,`verify/` 找不到、`registered_tags()` 回空集合。
-    """
-    here = os.path.dirname(os.path.abspath(__file__))
-    walk = here
-    for _ in range(5):
-        walk = os.path.dirname(walk)
-        if not walk or walk == os.path.dirname(walk):
-            break
-        if os.path.exists(os.path.join(walk, CONFIG_REL)):
-            return walk
-    return os.path.dirname(here)
+    """程式碼根:`AC_CODE_ROOT`,否則 cwd 的 `git --show-toplevel`(D-071 §1)。**不認 `AC_ROOT`**
+    (#55)—— 那是票根;認了它,worktree 裡的閘門跑的就是主 repo 的 `verify/`。也不從這支檔案
+    的位置往上找(#159):在 A 的 clone 裡那一找永遠找到 A 自己,而且不報錯。
+    兩者都沒有回 None:`main()` 說出來、rc 2,不猜一棵樹。"""
+    override = os.environ.get("AC_CODE_ROOT")
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+    try:
+        done = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                              capture_output=True, text=True)
+    except OSError:
+        return None
+    top = done.stdout.strip()
+    return top if done.returncode == 0 and top else None
 
 
 ROOT = _find_root()
-VERIFY = os.path.join(ROOT, "verify")
+VERIFY = os.path.join(ROOT, "verify") if ROOT else None
 
 
 def head_sha():
@@ -70,7 +71,7 @@ def cache_path(tags, unit):
     if not ticket or not run_id:
         return ""
     try:
-        sys.path.insert(0, os.path.join(ROOT, "scripts"))
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import status
         # 根走 `event.repo_root()`(認得 `AC_ROOT`),不是這支檔案的上兩層:快取是
         # **這一輪的產物**,它要跟票、reports 住在同一顆樹裡,不是住在腳本旁邊。
@@ -122,6 +123,9 @@ def main(argv):
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--no-cache", action="store_true")
     a = ap.parse_args(argv)
+    if not ROOT:
+        print("verify: " + NO_CODE_ROOT, file=sys.stderr)
+        return 2
     cache = "" if (a.no_cache or a.list) else cache_path(a.tag, a.unit or a.all)
     if cache and os.path.exists(cache) and os.path.exists(cache + ".rc"):
         with open(cache, encoding="utf-8", errors="replace") as handle:

@@ -27,6 +27,7 @@
     "scripts/verify-case.py",
     "scripts/verify.py",
     "scripts/wtbase.sh",
+    "tests/test_actl.py",
     "tests/test_agent_cost_hook.py",
     "tests/test_apply.py",
     "tests/test_auto_fix.py",

@@ -32,17 +32,14 @@
 #   0 起完了(或不該起:不是 Ready、租約在別人手上)   1 起不來 / session 失敗(已送 decision)
 #   2 用法錯、找不到票、不是整理票
 set -u
-_ac_root() {
-    _d=$(cd "$(dirname "$0")" && pwd); _i=0
-    while [ $_i -lt 5 ]; do
-        [ -f "$_d/board/config.json" ] && { echo "$_d"; return; }
-        _d=$(dirname "$_d"); _i=$((_i+1))
-    done
-    cd "$(dirname "$0")/.." && pwd
-}
-ROOT=${AC_ROOT:-$(_ac_root)}
+# 專案根不從 `$0` 來(D-071 C2,#159):`AC_ROOT`,否則 cwd 的主 repo 根,否則 rc 2 ——
+# 規則只有一份,在 `wtbase.sh`。控制腳本自己住的目錄(A 的 clone)才從 `$0` 算;
+# 同伴腳本一律從這裡叫,不寫死 $ROOT/scripts。
 AC=${AC_CONTROL_DIR:-$(cd "$(dirname "$0")" && pwd)}
-export AC_ROOT=$ROOT AC_CONTROL_DIR=$AC
+export AC_CONTROL_DIR=$AC
+. "$AC/wtbase.sh"
+ROOT=$(ac_root consolidate-memory) || exit 2
+export AC_ROOT=$ROOT
 
 [ $# -eq 1 ] || { echo "用法:sh scripts/consolidate-memory.sh <票號>" >&2; exit 2; }
 
