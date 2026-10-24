@@ -11,7 +11,8 @@
 #   1 AC_ROOT env   2 -C <dir>   3 CLAUDE_PROJECT_DIR
 #   4 main root of cwd's git tree (a ticket worktree yields its main repo)
 #   5 none → rc 2, one stderr line
-# Then AC_ROOT/board/config.json must exist (rc 2 naming `actl init`). Exports AC_HOME,
+# Then AC_ROOT/board/config.json must exist (rc 2 naming `actl init`; init itself excepted) and
+# pass `project_config.py check` (config_version == A's; doctor / migrate / init skip it). Exports AC_HOME,
 # AC_ROOT, AC_CONTROL_DIR and execs the mapped script; the scripts stay directly callable.
 # The cwd rule itself lives in scripts/wtbase.sh (`ac_main_root_of`), shared with every script.
 set -u
@@ -35,8 +36,9 @@ TABLE='actl [-C <project dir>] <command> [args…]
   verify verify-case             scripts/verify.py / scripts/verify-case.py (code root = cwd toplevel)
   board                          board/board.py
   session heartbeat              scripts/new-session.sh / scripts/heartbeat.sh
+  doctor migrate init            scripts/project_config.py (board/config.json version, schema, rows)
   version                        AC_HOME, ac_sha, AC_ROOT, AC_CODE_ROOT (works outside a project)
-  test hooks doctor migrate init not landed yet'
+  test hooks                     not landed yet'
 
 C_DIR=""
 while [ $# -gt 0 ]; do
@@ -79,11 +81,12 @@ case "$CMD" in
         echo "AC_ROOT=${_root:-(none)}"
         echo "AC_CODE_ROOT=${_code:-(none)}"
         exit 0 ;;
-    test|hooks|doctor|migrate|init)
+    test|hooks)
         echo "actl: $CMD: not landed yet (D-071 follow-up)" >&2
         exit 2 ;;
     land|gate|apply|review|auto-fix|heartbeat|session|board|\
-    ticket|event|inbox|status|memory|rules|repo-map|verify|verify-case) ;;
+    ticket|event|inbox|status|memory|rules|repo-map|verify|verify-case|\
+    doctor|migrate|init) ;;
     *)
         echo "actl: unknown command '$CMD'" >&2
         printf '%s\n' "$TABLE" >&2
@@ -95,19 +98,24 @@ AC_ROOT=$(resolve_root) || {
     [ "$_rc" -eq 3 ] || echo "actl: $AC_NOT_IN_PROJECT" >&2
     exit 2
 }
-[ -f "$AC_ROOT/board/config.json" ] || {
+[ "$CMD" = init ] || [ -f "$AC_ROOT/board/config.json" ] || {
     echo "actl: $AC_ROOT has no board/config.json — not a project yet; run actl init there, or use -C <project dir>" >&2
     exit 2
 }
 
-# ---- config_version check goes here (D-071 row 2, not in #159):
-# python3 "$AC_HOME/scripts/project_config.py" check "$AC_ROOT" || exit 2
+# config_version and key types (D-071 §2, #160): a stale or newer project is refused here, once,
+# for every command — except the ones that must run on such a project (version exited above).
+case "$CMD" in
+    doctor|migrate|init) ;;
+    *) python3 "$AC/project_config.py" check "$AC_ROOT" || exit 2 ;;
+esac
 
 export AC_HOME AC_ROOT AC_CONTROL_DIR
 
 case "$CMD" in
     session) exec sh "$AC/new-session.sh" "$@" ;;
     board) exec python3 "$AC_HOME/board/board.py" "$@" ;;
+    doctor|migrate|init) exec python3 "$AC/project_config.py" "$CMD" "$AC_ROOT" "$@" ;;
     land|gate|apply|review|auto-fix|heartbeat) exec sh "$AC/$CMD.sh" "$@" ;;
     *) exec python3 "$AC/$CMD.py" "$@" ;;
 esac

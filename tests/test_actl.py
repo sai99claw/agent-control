@@ -184,7 +184,8 @@ class A1TheEntryFindsTheProject(ActlBase):
         self.assertIn("actl init", done.stderr)
 
     def test_a1_rows_wired_later_say_not_landed_yet(self):
-        for command in ("test", "hooks", "doctor", "migrate", "init"):
+        # doctor / migrate / init landed in #160 (tests/test_project_config.py).
+        for command in ("test", "hooks"):
             with self.subTest(command):
                 done = self.actl(command, cwd=self.repo)
                 self.assertEqual(done.returncode, 2, done.stdout + done.stderr)

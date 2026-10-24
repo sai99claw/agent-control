@@ -151,7 +151,8 @@ map() {
                                       test_session_hook test_review test_verify_runner \
                                       test_consolidate_memory ;;
         # 入口(D-071 C1,#159):找根、指令表、version。
-        bin/actl) add test_actl ;;
+        bin/actl) add test_actl test_project_config ;;
+        scripts/project_config.py) add test_project_config test_actl test_session_hook ;;
         # `.gitignore` 決定「不准出現專案名」那一掃看得到哪些檔。
         .gitignore) add test_no_project_names ;;
         # ticket.py import event.py:動 event 的人要連票那一側一起跑。

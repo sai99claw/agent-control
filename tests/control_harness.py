@@ -129,6 +129,7 @@ def fixture_role_models(**chains):
 
 
 DEFAULT_CONFIG = {
+    "config_version": 2,
     "port": 0,
     "tickets_dir": "tickets",
     "events_file": "board/events.jsonl",
