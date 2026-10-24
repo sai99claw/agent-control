@@ -470,3 +470,10 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - #158 不派驗證者(needs_verifier=false,A1–A6 已寫死 fixture 與期望值)。
 - #157 Q2:驗證者反駁暫走 rc 6,分流到開題者另開票(同 D-068 Q2)。Q3:同處插入只對 .py 自動接,並要求接完可解析、沒有重複的頂層名稱;其他衝突照舊 rc 3。
 - 設計文件 docs/design/project-runnable-entries.md(D-069 ①②)收下;建議 6 張 A 票。待裁:Q1(T 的閘門測試是否全能由 unittest 載入)與 Q2(T 看板對外是直接綁介面還是走代理)轉 T 端回答;Q3(同步清單一次加入 land.sh / gate.sh / board.py 三個入口,hard_block 檔)等使用者授權。
+
+## D-071(2026-10-24)A 是管理工具:專案 clone A 直接跑,不再同步;介面要完善有彈性
+- 原話:「同步清單要一次加進 land.sh、gate.sh、board.py 三個入口  同意。你把要改好的都改好 我再去跟T 那邊講要怎麼做 T 的測試 你要定義一個好的方式 讓他遵守，我覺得A就是個管理器 一個專案要用就是clone一個 然後直接在上面跑東西 不再做額外sync, 要同步remote 就pull就好 interface 要定義完善 有彈性 T 的看板是走代理(portal」
+- 裁示:A(agent-control)改成安裝即用的工具 —— 專案端 clone A,從 A 的 clone 直接對專案執行;更新 A = 在 A 的 clone `git pull`。不再把腳本同步進專案:sync-to-project.sh、SCRIPT_LIST / DEPENDENCY_ONLY、專案的 scripts/control/ 與 .synced-from 退役(使用者原話「不再做額外sync」視為授權退役這支 hard_block 檔;「三個入口同意」的授權因此不再需要,保留紀錄)。D-069 ② 由本條取代;D-069 ①(專案只留專案知識)保留並擴大。
+- 介面要寫完整、有彈性:專案設定檔(schema 與版本)、專案提供的測試介面(主線負責定義,T 照著實作)、Claude Code hooks 的接法、專案自有狀態(票、裁示、記憶的專案層)與 A 自有內容(角色卡、規則、範本)的界線。A 自己也照同一套介面跑(自己是自己的第一個專案)。
+- T 看板走代理(portal):A 的看板維持只綁 127.0.0.1;key 門做成選填設定,由代理那一側決定要不要用。
+- 先派設計 session 重寫 docs/design/project-runnable-entries.md(D-019),再開票。
