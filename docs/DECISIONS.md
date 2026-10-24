@@ -459,3 +459,9 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - Q1:`verify_case.timeout_seconds` 設 2700(check 跑 base 與 candidate 兩趟,各算各的時限);#156 落地後在雲端實跑 `verify-case.py red 155`,2700 還逾時就另開票查是卡住還是慢,不再加大數字。
 - Q2:驗證者 EVIDENCE 有反駁時 apply.sh 回 rc 6、auto-fix 報「收件沒過」,不像 worker 反駁那樣交開題者判 —— #157 先接受這個行為,路由另開票。
 - 順序:#156 先落 → #155 閘門、覆核、落地 → #157。#157 開題者實測:反駁沒記進票的真因不是 ticket.py 去重(它比 category + body),而是 apply.sh 只讀 worker EVIDENCE 的第一行反駁、驗證者 EVIDENCE 的反駁沒送進票(讀 code 推,原始現場未重演)。
+
+## D-069(2026-10-24)tabby 回報的三題:主線受權裁定
+- 來源:T 端回報「tabby 改走 agent-control:遇到的問題」(2026-10-24)。使用者原話:「分別啥影響? 你能分析優劣然後 決定嗎? 這些問題是有啥設計取捨嗎?」—— 使用者授權主線分析後裁定;以下為主線裁定。
+- ① 方向 1「A 的入口都能從專案跑」:採用。取捨是共用平台 vs 專案分叉;證據:T 自寫落地器 land-ticket.sh 2,601 行,同步 A 08e6752 後 8 處壞、其中 6 處是黏合層對不上 A 介面(覆核 / 反駁檢查默默失效)。A 補:land.sh / gate.sh / 看板的控制腳本路徑走 $AC 並進同步清單;gate 選填 `gate.select_cmd`(專案只提供挑測試與怎麼跑,preflight 回 86 走既有 env_suspect);verify.py `--case`;看板認 AC_CONTROL_DIR 與選填 `board.key_file`。專案只留專案知識(挑測試、瀏覽器引擎層、preflight、build / deploy)。先派設計 session 落文件(D-019),再開票。
+- ② 同步清單:留在 hard_block(發程式碼進別的專案是政策,要人把關);SCRIPT_LIST 與 DEPENDENCY_ONLY 合成一份,依賴由 import 關係自動算,同步時發出去的腳本缺依賴就失敗(不只警告)。只有新增入口才需授權;方向 1 的新增一次授權。設計併入 ① 的文件。
+- ③ 收件匣搬遷:`inbox.py` 讀取時不再自動執行 migrate_acked_jsonl,改成明確 `inbox.py migrate`。開票先做。T 在 A 修好並重新同步前:不要重開 session,或先把工作樹的 scripts/control/inbox.py 換回同步前版本(主線建議後者);T 改用 A 看板時手動跑一次 migrate。
