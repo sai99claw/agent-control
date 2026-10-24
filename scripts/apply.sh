@@ -2,7 +2,8 @@
 # 收件 → 在票分支上補 commit:**一個程式入口** — `docs/WORKFLOW.md` §交件管線(D-012、D-015、D-054 Q9)。
 #
 #   sh scripts/apply.sh <票號> [<patch-verify>] [--evidence <檔>]
-#       [--evidence-verifier <檔>]…                   # 收 worker 的交件(分支上的 commit)
+#       [--evidence-verifier <檔>]… [--verifier-base <sha>]
+#                                                     # 收 worker 的交件(分支上的 commit)
 #   sh scripts/apply.sh --batch <整合分支> <票號…> [--base <sha>] [--evidence <檔>]
 #                                                     # 批次修復:收整合分支上 worker 的 commit(#108、#145)
 #   sh scripts/apply.sh verify-plan <票號> --evidence-verifier <檔>…
@@ -13,6 +14,7 @@
 # 「分支有新 commit、工作樹乾淨」由 auto-fix 判,這一支不再收 worker 的 patch。它剩下的事:
 # 1. 驗證者的 patch-verify(驗證者仍在 `git archive` 副本交出 patch-verify,VISION 只說工作者)
 #    以 `apply --index` 套進分支、補**一個** commit;這張票的改動先量 `hard_block`(rc 5);
+#    套不上分支頭(平行驗證者與 worker 改了同一支檔,#157)就逐檔三方合併(底下 2b);
 # 2. code-map 索引重產(D-051):產出物有變就再補一個 commit;
 # 3. 收 EVIDENCE(記憶、result、反駁)、把驗證者的計畫與驗紅併進票。
 # 進主線仍只由 `land.sh` 在測試綠後做(落地排序、與別張票的衝突是它的事)。
@@ -20,19 +22,21 @@
 # ## 退出碼
 #   0 收好了(有 patch-verify / 重產就已 commit)
 #   2 用法 / 票的問題(找不到票、沒有 base_sha;票分支或它的 worktree 不在;反駁記不進票;
-#     verify-plan 的驗證者 result 解析不到)
-#   3 patch-verify 套不上分支(`apply --check` 不過)
+#     verify-plan 的驗證者 result 解析不到;`--verifier-base` 不是分支頭的祖先)
+#   3 patch-verify 套不上分支(`apply --check` 不過,三方合併也併不起來;分支與 worktree 不動)
 #   5 這張票的改動(分支上的 commit + patch-verify)命中 `board/config.json` 的 `hard_block`
 #     (`paths` 的檔,或 tests/** verify/** 新增行命中 `patterns`;D-054 Q2:寫入範圍只剩這一道硬擋)
-#   6 EVIDENCE 裡有一行 `OBJECTION:` —— 已記進票的 `objections[]`
-#     (記過的同一筆 disposition 還空著也是 6;處置過的才放行成 0)
+#   6 worker 或驗證者的 EVIDENCE 裡有 `OBJECTION:` 行 —— 每一行都記進票的 `objections[]`
+#     (記過的同一筆 disposition 還空著也是 6;每一行都處置過了才放行成 0)
 #
 # ## `--evidence` 收三樣(2026-09-23,#29 A4;以前只收第一樣)
 # 1. `memory.py harvest` —— EVIDENCE 記憶段那幾行;
 # 2. `ticket.py result` —— 檔尾那一塊 `result` 抽成
 #    `reports/t<票號>/<run_id>/result-round<輪>.json`(**與 `auto-fix.sh` 同一支抽取**;
 #    `--evidence-verifier` 那一份抽成 `result-verifier-round<輪>.json`);
-# 3. `ticket.py objection` —— `^OBJECTION:` 那一行記進票的 `objections[]`,rc=6 指名。
+# 3. `ticket.py objection` —— `^OBJECTION:` **每一行**記進票的 `objections[]`,rc=6 指名;
+#    `--evidence` 與每一份 `--evidence-verifier` 都收(#157:以前只收 `--evidence` 的第一行,
+#    驗證者的反駁一路沒進票)。
 #    **記過的同一筆不會再記第二次**(`auto-fix.sh` 那條路已經先收過),但**還沒處置
 #    就照樣 rc=6** —— 「已經有了」不等於「有人收了」(#36)。
 # 沒給 `--evidence` 就讀輪次目錄那一份(`<worktree_dir>/fix-t<票號>/round<輪>/EVIDENCE-round<輪>.md`)。
@@ -529,6 +533,8 @@ usage() {   # $1 = 出去的檔案描述子(1 = 有人問 --help,2 = 用錯了)
         echo "                             收 ^OBJECTION: 那一行(不給就讀輪次目錄那一份)"
         echo "  --evidence-verifier <檔>   驗證者的 EVIDENCE-verifier.md:抽 result-verifier-round<輪>.json"
         echo "                             (可重複給:verify 計畫與驗紅依給的順序逐份併進票)"
+        echo "  --verifier-base <sha>      驗證者副本展開的那一版:patch-verify 套不上分支頭時三方合併的"
+        echo "                             ancestor(不給 = 票的 base_sha;要是分支頭的祖先)"
         echo ""
         echo "例:"
         echo "  sh scripts/apply.sh 7 patch-verify.diff \\"
@@ -553,6 +559,7 @@ VPATCH=""
 EVIDENCE=""
 VEVIDENCE=""
 VEVIDENCES=""
+VBASE=""
 shift
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -560,6 +567,10 @@ while [ $# -gt 0 ]; do
             shift
             [ $# -ge 1 ] || { echo "apply: --evidence 後面要路徑" >&2; exit 2; }
             EVIDENCE=$1 ;;
+        --verifier-base)
+            shift
+            [ $# -ge 1 ] || { echo "apply: --verifier-base 後面要 sha" >&2; exit 2; }
+            VBASE=$1 ;;
         --evidence-verifier)
             # 可重複給(#112):平行驗證者與 test_defect 驗證者各一份,依給的順序逐份併進票。
             shift
@@ -660,7 +671,7 @@ die() {   # $1 = rc  $2… = 說明
     exit "$rc"
 }
 
-echo "apply: 票 #$ID  分支 $BR${VPATCH:+  patch-verify $(basename "$VPATCH")}"
+echo "apply: 票 #$ID  分支 $BR${VPATCH:+  patch-verify $(basename "$VPATCH")}${VBASE:+  verifier-base $VBASE}"
 status_start
 
 # 1. 票分支的 worktree。worker 在它裡面 commit(auto-fix 派工前建);分支在而 worktree 不在
@@ -682,16 +693,225 @@ except (OSError, ValueError):
 PY
 )
 
+# 三方合併的 ancestor(#157)= 驗證者副本展開的那一版:`--verifier-base`(auto-fix 給
+# `start_verifier_bg` archive 的 sha)> 票的 base_sha。要是分支頭的祖先,否則合出來的東西沒有意義(rc 2)。
+ancestor_of_head() {   # $1 = sha;印完整 sha,不是祖先回 1
+    a_full=$(git -C "$WT" rev-parse -q --verify "$1^{commit}" 2>/dev/null) || return 1
+    git -C "$WT" merge-base --is-ancestor "$a_full" HEAD 2>/dev/null || return 1
+    echo "$a_full"
+}
+if [ -n "$VBASE" ]; then
+    VBASE_FULL=$(ancestor_of_head "$VBASE") \
+        || die 2 "--verifier-base $VBASE 不是分支 $BR 頭的祖先 —— 給驗證者副本展開的那一版"
+fi
+
+# 2b. 逐檔三方合併(#157):ancestor = 驗證者副本那一版、ours = 分支頭、theirs = ancestor + patch-verify
+#     (`git merge-file --diff3`)。theirs 在暫存 index 上套出來(`diff -Nru` 沒有 blob id,`apply -3` 用不了)。
+#     乾淨的檔照收;衝突只有一種會解:ancestor 那一段是空的(兩邊在同一處插入,例:都在檔尾加了 class)
+#     **而且是 *.py** —— 先 ours 後 theirs,合出來要 `ast.parse` 得過、不能讓同一個模組層名字多定義一次
+#     (兩邊都加了 `class Slow` 會靜靜地遮掉一個)。其餘一律 rc 3,stderr 指名檔、行號或名字。
+#     **全部算完才寫**:有一個檔不過,分支頭與 worktree 一個字都不動。
+#     stdout 一行 `3-way: <檔>, …`;rc 3 = 併不起來,rc 4 = 合完沒有任何改動(分支上都已經有了)。
+three_way() {   # $1 = ancestor 完整 sha
+    python3 - "$WT" "$1" "$VPATCH" <<'PY'
+import ast, collections, os, subprocess, sys, tempfile
+
+wt, anc, patch = sys.argv[1:4]
+MARK = 13
+OPEN, BASE, SEP, CLOSE = "<" * MARK + " ", "|" * MARK + " ", "=" * MARK, ">" * MARK + " "
+
+
+def git(*args, env=None, data=None):
+    return subprocess.run(["git", "-C", wt] + list(args), capture_output=True, env=env,
+                          input=data)
+
+
+def blob(rev, path, env=None):
+    done = git("cat-file", "blob", "%s:%s" % (rev, path), env=env)
+    return done.stdout if done.returncode == 0 else None
+
+
+def say(text):
+    sys.stderr.write("apply:   %s\n" % text)
+
+
+def top_names(text):
+    """模組層定義的名字(def / class / 賦值 / import)各出現幾次;解析不了回 None。"""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return None
+    seen = collections.Counter()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            seen[node.name] += 1
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                seen[(alias.asname or alias.name).split(".")[0]] += 1
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target]):
+                for leaf in ast.walk(target):
+                    if isinstance(leaf, ast.Name):
+                        seen[leaf.id] += 1
+    return seen
+
+
+def merge(path, ours, base, theirs, problems):
+    """回合好的位元組;併不起來回 None(原因記進 problems)。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        files = []
+        for name, data in (("ours", ours), ("base", base), ("theirs", theirs)):
+            files.append(os.path.join(tmp, name))
+            with open(files[-1], "wb") as handle:
+                handle.write(data)
+        done = subprocess.run(["git", "merge-file", "-p", "--diff3", "--marker-size=%d" % MARK,
+                               "-L", "ours", "-L", "base", "-L", "theirs"] + files,
+                              capture_output=True)
+    if done.returncode < 0 or done.returncode > 127:
+        problems.append("%s:git merge-file 合不了(%s)" % (path, done.stderr.decode(
+            "utf-8", "replace").strip() or "rc=%d" % done.returncode))
+        return None
+    if done.returncode == 0:
+        return done.stdout
+    try:
+        lines = done.stdout.decode("utf-8").splitlines(True)
+    except UnicodeDecodeError:
+        problems.append("%s:有衝突,而且不是 utf-8 文字" % path)
+        return None
+    out, at, failed, index = [], 0, False, 0
+    while index < len(lines):
+        line = lines[index]
+        index += 1
+        if not line.startswith(OPEN):
+            out.append(line)
+            at += 1
+            continue
+        parts = {"ours": [], "base": [], "theirs": []}
+        side = "ours"
+        while index < len(lines):
+            line = lines[index]
+            index += 1
+            if line.startswith(BASE):
+                side = "base"
+            elif line.rstrip("\r\n") == SEP:
+                side = "theirs"
+            elif line.startswith(CLOSE):
+                break
+            else:
+                parts[side].append(line)
+        first, at = at + 1, at + len(parts["ours"])
+        where = "%s:%d-%d" % (path, first, at) if parts["ours"] else "%s:%d(之後)" % (path, first - 1)
+        if parts["base"]:
+            problems.append("%s 衝突:兩邊改了同一段(ancestor 那一段不是空的)" % where)
+            failed = True
+        elif not path.endswith(".py"):
+            problems.append("%s 衝突:兩邊在同一處插入,不是 .py 不自動合" % where)
+            failed = True
+        else:
+            head = parts["ours"]
+            if head and not head[-1].endswith("\n"):
+                head[-1] += "\n"
+            out.extend(head + parts["theirs"])
+    if failed:
+        return None
+    text = "".join(out)
+    try:
+        ast.parse(text)
+    except SyntaxError as exc:
+        problems.append("%s:兩邊插入合起來解析不了(第 %s 行:%s)" % (path, exc.lineno, exc.msg))
+        return None
+    merged = top_names(text)
+    mine = top_names(ours.decode("utf-8", "replace")) or collections.Counter()
+    yours = top_names(theirs.decode("utf-8", "replace")) or collections.Counter()
+    twice = sorted(name for name, count in merged.items()
+                   if count > max(mine[name], yours[name]))
+    if twice:
+        problems.append("%s:兩邊插入合起來,模組層名字定義了兩次 —— %s" % (path, ", ".join(twice)))
+        return None
+    return text.encode("utf-8")
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    env = dict(os.environ, GIT_INDEX_FILE=os.path.join(tmp, "index"))
+    if git("read-tree", anc, env=env).returncode != 0:
+        say("ancestor %s 讀不出來" % anc[:12])
+        sys.exit(3)
+    done = git("apply", "-p1", "--cached", patch, env=env)
+    if done.returncode != 0:
+        for row in done.stderr.decode("utf-8", "replace").splitlines():
+            say(row)
+        say("patch-verify 連它的 ancestor %s 都套不上 —— 不是對那一版出的" % anc[:12])
+        sys.exit(3)
+    names = [n for n in git("diff", "--cached", "--name-only", "-z", anc,
+                            env=env).stdout.decode("utf-8").split("\0") if n]
+    theirs = {name: blob("", name, env=env) for name in names}
+
+results, merged, problems = {}, [], []
+for name in names:
+    base, ours, mine = blob(anc, name), blob("HEAD", name), theirs[name]
+    if ours == base:
+        results[name] = mine
+        continue
+    if ours == mine:
+        continue
+    merged.append(name)
+    if ours is None or mine is None:
+        problems.append("%s:一邊刪了這個檔、另一邊改了它" % name)
+        continue
+    text = merge(name, ours, base or b"", mine, problems)
+    if text is not None and text != ours:
+        results[name] = text
+for name in results:
+    dirty = git("diff", "--quiet", "HEAD", "--", name).returncode != 0
+    stray = blob("HEAD", name) is None and os.path.lexists(os.path.join(wt, name))
+    if dirty or stray:
+        problems.append("%s:worktree 裡這個檔有沒 commit 的改動,不蓋過去" % name)
+if problems:
+    for row in problems:
+        say(row)
+    sys.exit(3)
+if not results:
+    sys.exit(4)
+for name, data in results.items():
+    full = os.path.join(wt, name)
+    if data is None:
+        if os.path.lexists(full):
+            os.remove(full)
+    else:
+        os.makedirs(os.path.dirname(full) or wt, exist_ok=True)
+        with open(full, "wb") as handle:
+            handle.write(data)
+    if git("update-index", "--add", "--remove", "--", name).returncode != 0:
+        say("%s:stage 不進去" % name)
+        sys.exit(3)
+print("3-way: %s" % ", ".join([n for n in merged if n in results] or sorted(results)))
+PY
+}
+
 # 2. 驗證者的 patch-verify:`--index` 只 stage patch 自己的改動(閘門殘留等未追蹤檔不會跟進來)。
-#    預檢不過就**不要套**:套一半的工作樹比沒套更難收。
+#    預檢不過就**不要套**:套一半的工作樹比沒套更難收;改走 2b 的三方合併(#157)。
+THREE_WAY=""
 if [ -n "$VPATCH" ]; then
-    if ! git -C "$WT" apply -p1 --index --check "$VPATCH" 2>/tmp/ac-apply-$$.err; then
+    if git -C "$WT" apply -p1 --index --check "$VPATCH" 2>/tmp/ac-apply-$$.err; then
+        rm -f /tmp/ac-apply-$$.err
+        git -C "$WT" apply -p1 --index "$VPATCH" || die 3 "patch-verify 套不進去(--check 過了卻套不進去)"
+    else
         sed 's/^/apply:   /' /tmp/ac-apply-$$.err >&2
         rm -f /tmp/ac-apply-$$.err
-        die 3 "patch-verify 套不上分支 $BR(git apply --check 不過)"
+        if [ -n "$VBASE" ]; then
+            ANC=$VBASE_FULL
+        else
+            ANC=$(ancestor_of_head "$BASE") \
+                || die 2 "票的 base_sha $BASE 不是分支 $BR 頭的祖先 —— 三方合併沒有 ancestor(給 --verifier-base)"
+        fi
+        echo "apply: git apply --check 不過 —— 改逐檔三方合併(ancestor $(git -C "$WT" rev-parse --short "$ANC"))"
+        THREE_WAY=$(three_way "$ANC")
+        case $? in
+            0)  echo "apply: $THREE_WAY" ;;
+            4)  die 3 "patch-verify 套不上分支 $BR(三方合併之後沒有留下任何改動 —— 它的改動分支上都已經有了)" ;;
+            *)  die 3 "patch-verify 套不上分支 $BR(git apply --check 不過,三方合併也併不起來;分支與 worktree 沒動)" ;;
+        esac
     fi
-    rm -f /tmp/ac-apply-$$.err
-    git -C "$WT" apply -p1 --index "$VPATCH" || die 3 "patch-verify 套不進去(--check 過了卻套不進去)"
 fi
 
 # 3. 硬擋只剩 `board/config.json` 的 `hard_block`(D-054 Q2、Q3;#135 的三個執行點之一):
@@ -728,7 +948,8 @@ if [ -n "$VPATCH" ]; then
     git -C "$WT" commit -q -m "t$ID patch-verify: $SUBJECT
 
 ticket: #$ID
-round: $ROUND" || die 2 "git commit 失敗(patch-verify)"
+round: $ROUND${THREE_WAY:+
+$THREE_WAY}" || die 2 "git commit 失敗(patch-verify)"
     echo "apply: patch-verify 進分支 $BR($(git -C "$WT" rev-parse --short HEAD))"
 fi
 
@@ -783,33 +1004,54 @@ merge_verifier_plans "$ID" "$VEVIDENCES"
 # **反駁放在最後**:交件已經在分支上了(那是事實),但這一手沒有結束 ——
 # 一個「票寫錯了」的說法沒有人收,與沒有那個說法長得一樣(§7)。
 # 狀態檔只寫**最後那一個** rc:先寫 0 再改 6 的那一段空檔裡,讀的人看到的是綠(#36)。
-if [ -f "$EVIDENCE" ] && grep -q '^OBJECTION:' "$EVIDENCE"; then
-    OLINE=$(grep -m1 '^OBJECTION:' "$EVIDENCE")
-    echo "apply: EVIDENCE 裡有一行反駁 —— $OLINE" >&2
-    python3 "$AC/ticket.py" objection "$ID" --line "$OLINE" --evidence "$EVIDENCE"
-    orc=$?
-    case $orc in
-        0)
-            echo "apply: #$ID 已記進 objections[] —— 處置它(accepted / rejected / deferred / fixed)" >&2
-            echo "apply:   沒處置的阻擋項 land 與 close 都會拒絕。" >&2
-            status_done 6 "交件在分支上,但 worker 提了反駁"
-            exit 6 ;;
-        3)
-            # 同一筆第二次收到,而**還沒處置**:與第一次收到一樣擋。以前這裡放行成 0,
-            # 未處置的反駁第二輪就過去了(D-014 硬閘門)。
-            echo "apply: #$ID 這一筆反駁票上已經有了,但還沒處置 —— 處置它(accepted / rejected / deferred / fixed)" >&2
-            echo "apply:   沒處置的阻擋項 land 與 close 都會拒絕。" >&2
-            status_done 6 "交件在分支上,但 worker 的反駁還沒處置"
-            exit 6 ;;
-        4)
-            echo "apply: #$ID 這一筆反駁票上已經有了,而且已處置 —— 沒有再記一次" >&2 ;;
-        *)
-            # 記不進票(rc=2)不是「已經有了」:沒人收的反駁,與沒有反駁長得一樣(§7)。
-            echo "apply: #$ID 的反駁記不進票(ticket.py objection rc=$orc)—— 修好之後手動記:" >&2
-            echo "apply:   python3 scripts/ticket.py objection $ID --line \"$OLINE\" --evidence $EVIDENCE" >&2
-            status_done 2 "交件在分支上,但 worker 的反駁記不進票"
-            exit 2 ;;
-    esac
+# **每一份 EVIDENCE 的每一行**(#157):worker 的 `--evidence` 與每一份 `--evidence-verifier`,
+# 依檔、依行的順序全記完才決定 rc —— 以前只收 `--evidence` 的第一行,驗證者的反駁沒有人收。
+# 同一份檔給兩次(test_defect 那條路兩格都是驗證者那一份)只收一次。
+O_PENDING=""
+O_FAILED=""
+O_SEEN="|"
+O_TMP=${TMPDIR:-/tmp}/ac-objections-$$
+while IFS= read -r ofile; do
+    [ -n "$ofile" ] && [ -f "$ofile" ] || continue
+    okey=$(cd "$(dirname "$ofile")" && pwd)/$(basename "$ofile")
+    case $O_SEEN in *"|$okey|"*) continue ;; esac
+    O_SEEN="$O_SEEN$okey|"
+    grep '^OBJECTION:' "$ofile" > "$O_TMP" || continue
+    while IFS= read -r OLINE <&4; do
+        echo "apply: $(basename "$ofile") 裡有一行反駁 —— $OLINE" >&2
+        python3 "$AC/ticket.py" objection "$ID" --line "$OLINE" --evidence "$ofile" </dev/null
+        orc=$?
+        case $orc in
+            0)
+                echo "apply: #$ID 已記進 objections[] —— 處置它(accepted / rejected / deferred / fixed)" >&2
+                O_PENDING=1 ;;
+            3)
+                # 同一筆第二次收到,而**還沒處置**:與第一次收到一樣擋。以前這裡放行成 0,
+                # 未處置的反駁第二輪就過去了(D-014 硬閘門)。
+                echo "apply: #$ID 這一筆反駁票上已經有了,但還沒處置 —— 處置它(accepted / rejected / deferred / fixed)" >&2
+                O_PENDING=1 ;;
+            4)
+                echo "apply: #$ID 這一筆反駁票上已經有了,而且已處置 —— 沒有再記一次" >&2 ;;
+            *)
+                # 記不進票(rc=2)不是「已經有了」:沒人收的反駁,與沒有反駁長得一樣(§7)。
+                echo "apply: #$ID 的反駁記不進票(ticket.py objection rc=$orc)—— 修好之後手動記:" >&2
+                echo "apply:   python3 scripts/ticket.py objection $ID --line \"$OLINE\" --evidence $ofile" >&2
+                O_FAILED=1 ;;
+        esac
+    done 4< "$O_TMP"
+done <<EOF
+$EVIDENCE
+$VEVIDENCES
+EOF
+rm -f "$O_TMP"
+if [ -n "$O_FAILED" ]; then
+    status_done 2 "交件在分支上,但 EVIDENCE 的反駁記不進票"
+    exit 2
+fi
+if [ -n "$O_PENDING" ]; then
+    echo "apply:   沒處置的阻擋項 land 與 close 都會拒絕。" >&2
+    status_done 6 "交件在分支上,但 EVIDENCE 的反駁還沒處置"
+    exit 6
 fi
 status_done 0 "收件完成,分支頭 $SHA"
 echo "apply: 下一步 —— (cd $WT && sh scripts/gate.sh --branch --ticket $ID)"

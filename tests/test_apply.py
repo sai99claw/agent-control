@@ -1180,5 +1180,152 @@ class TheBatchRebuildsTheCodeMap(ApplyBase):
         self.assertIn("索引沒重產", done.stdout + done.stderr)
 
 
+T157_A = "import unittest\n\n\nclass A(unittest.TestCase):\n    def test_a(self):\n        self.assertTrue(True)\n"
+T157_W = "\n\nclass W(unittest.TestCase):\n    def test_w(self):\n        self.assertTrue(True)\n"
+T157_V = "\n\nclass V(unittest.TestCase):\n    def test_v(self):\n        self.assertTrue(True)\n"
+T157_SLOW_W = "\n\nclass Slow(unittest.TestCase):\n    def test_w(self):\n        self.assertTrue(True)\n"
+T157_SLOW_V = "\n\nclass Slow(unittest.TestCase):\n    def test_v(self):\n        self.assertTrue(True)\n"
+T157_LINES = "".join("line %d\n" % n for n in range(1, 21))
+T157_TWO_OBJECTIONS = """# EVIDENCE-verifier
+
+OBJECTION: ticket-wrong A the field is not there
+OBJECTION: blocking B cannot be measured
+"""
+
+
+class T157ThreeWayReceiptAndEveryObjection(ApplyBase):
+    """#157 worker unit cases: patch-verify that misses the branch head goes through a per-file
+    3-way merge (ancestor = --verifier-base or the ticket base_sha); every OBJECTION line of
+    every EVIDENCE reaches objections[]. patch-verify is built as `diff -Nru base work` from
+    the base_sha content (templates/dispatch-verifier.md); expected texts are the fixture strings."""
+
+    def start(self, rel, text):
+        self.write(rel, text)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "base %s" % rel)
+        self.git("push", "-q", "origin", "main")
+        self.make("1")
+
+    def verifier_patch(self, rel, base, work):
+        import subprocess
+        copy = os.path.join(self.home, "vcopy")
+        shutil.rmtree(copy, ignore_errors=True)
+        self.write(rel, base, where=os.path.join(copy, "base"))
+        self.write(rel, work, where=os.path.join(copy, "work"))
+        done = subprocess.run(["diff", "-Nru", "base", "work"], cwd=copy,
+                              capture_output=True, text=True)
+        self.assertEqual(done.returncode, 1, done.stderr)
+        return self.patch_file("patch-verify.diff", done.stdout)
+
+    def unchanged(self, head):
+        self.assertEqual(self.git("rev-parse", "t1").strip(), head)
+        self.assertEqual(self.git("status", "--porcelain", cwd=self.wt()), "")
+
+    def test_d1_both_appended_classes_are_merged_ours_then_theirs(self):
+        self.start("tests/test_x.py", T157_A)
+        self.deliver("1", {"tests/test_x.py": T157_A + T157_W})
+        before = int(self.git("rev-list", "--count", "main..t1"))
+        done = self.apply("1", self.verifier_patch("tests/test_x.py", T157_A, T157_A + T157_V))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("show", "t1:tests/test_x.py"), T157_A + T157_W + T157_V)
+        self.assertEqual(int(self.git("rev-list", "--count", "main..t1")), before + 1)
+        self.assertIn("3-way: tests/test_x.py", self.git("log", "-1", "--format=%B", "t1"))
+        self.assertEqual(self.git("status", "--porcelain", cwd=self.wt()), "")
+
+    def test_d2_edits_two_lines_apart_merge_cleanly(self):
+        self.start("tests/x.txt", T157_LINES)
+        worker = T157_LINES.replace("line 10\n", "worker 10\n")
+        self.deliver("1", {"tests/x.txt": worker})
+        patch = self.verifier_patch("tests/x.txt", T157_LINES,
+                                    T157_LINES.replace("line 12\n", "verifier 12\n"))
+        done = self.apply("1", patch)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("show", "t1:tests/x.txt"),
+                         worker.replace("line 12\n", "verifier 12\n"))
+
+    def test_d3_the_same_line_changed_twice_is_rc_3_and_names_the_line(self):
+        self.start("tests/test_x.py", T157_LINES)
+        self.deliver("1", {"tests/test_x.py": T157_LINES.replace("line 10\n", "w = 10\n")})
+        head = self.git("rev-parse", "t1").strip()
+        done = self.apply("1", self.verifier_patch("tests/test_x.py", T157_LINES,
+                                                   T157_LINES.replace("line 10\n", "v = 10\n")))
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertIn("tests/test_x.py:10-10", done.stderr)
+        self.unchanged(head)
+
+    def test_d4_a_class_defined_by_both_sides_is_rc_3_and_named(self):
+        self.start("tests/test_x.py", T157_A)
+        self.deliver("1", {"tests/test_x.py": T157_A + T157_SLOW_W})
+        head = self.git("rev-parse", "t1").strip()
+        done = self.apply("1", self.verifier_patch("tests/test_x.py", T157_A, T157_A + T157_SLOW_V))
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertIn("tests/test_x.py", done.stderr)
+        self.assertIn("Slow", done.stderr)
+        self.unchanged(head)
+
+    def test_d4_a_union_that_does_not_parse_is_rc_3(self):
+        self.start("tests/test_x.py", T157_A)
+        self.deliver("1", {"tests/test_x.py": T157_A + "\n\nclass W(\n"})
+        head = self.git("rev-parse", "t1").strip()
+        done = self.apply("1", self.verifier_patch("tests/test_x.py", T157_A, T157_A + T157_V))
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertIn("解析不了", done.stderr)
+        self.unchanged(head)
+
+    def test_d5_insert_insert_outside_py_is_rc_3(self):
+        self.start("verify/x.json", "[1]\n")
+        self.deliver("1", {"verify/x.json": "[1]\n[2]\n"})
+        head = self.git("rev-parse", "t1").strip()
+        done = self.apply("1", self.verifier_patch("verify/x.json", "[1]\n", "[1]\n[3]\n"))
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertIn("verify/x.json", done.stderr)
+        self.unchanged(head)
+
+    def test_d6_a_verifier_base_off_the_branch_is_rc_2(self):
+        self.start("tests/test_x.py", T157_A)
+        self.deliver("1", {"tests/test_x.py": T157_A + T157_W})
+        self.git("checkout", "-q", "-b", "side", "main")
+        self.write("side.txt", "side\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "side")
+        side = self.git("rev-parse", "HEAD").strip()
+        self.git("checkout", "-q", "main")
+        head = self.git("rev-parse", "t1").strip()
+        done = self.apply("1", self.verifier_patch("tests/test_x.py", T157_A, T157_A + T157_V),
+                          "--verifier-base", side)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("--verifier-base", done.stderr)
+        self.unchanged(head)
+
+    def test_d9_a_patch_that_fits_takes_the_fast_path(self):
+        self.start("tests/test_x.py", T157_A)
+        self.deliver("1")
+        done = self.apply("1", self.verifier_patch("tests/test_x.py", T157_A, T157_A + T157_V))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("3-way", done.stdout + done.stderr)
+        self.assertNotIn("3-way", self.git("log", "-1", "--format=%B", "t1"))
+
+    def test_c1_a_verifier_objection_is_recorded(self):
+        self.make("1")
+        verifier = self.patch_file("EVIDENCE-verifier.md",
+                                   "# V\n\nOBJECTION: blocking X cannot be measured\n")
+        done = self.deliver_apply("1", "--evidence", self.patch_file("EVIDENCE.md", "# E\n"),
+                                  "--evidence-verifier", verifier)
+        self.assertEqual(done.returncode, 6, done.stdout + done.stderr)
+        rows = self.load_ticket("1")["objections"]
+        self.assertEqual([(r["category"], r["body"], r["owner"]) for r in rows],
+                         [("blocking", "X cannot be measured", "main")])
+
+    def test_c3_two_lines_in_one_evidence_are_both_recorded_in_order(self):
+        self.make("1")
+        done = self.deliver_apply("1", "--evidence",
+                                  self.patch_file("EVIDENCE.md", T157_TWO_OBJECTIONS))
+        self.assertEqual(done.returncode, 6, done.stdout + done.stderr)
+        rows = self.load_ticket("1")["objections"]
+        self.assertEqual([(r["category"], r["body"]) for r in rows],
+                         [("ticket-wrong", "A the field is not there"),
+                          ("blocking", "B cannot be measured")])
+
+
 if __name__ == "__main__":
     unittest.main()

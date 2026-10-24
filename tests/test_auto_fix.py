@@ -4775,5 +4775,98 @@ class T155NoPrepareFlag(AutoFixBase):
                                                 "main-" + "compare.json"), recursive=True), [])
 
 
+# #157: one executable for both roles (AC_ROLE). The worker appends class W to the existing
+# tests/test_x.py and adds w.txt; the verifier records what its copy holds and the branch head
+# it was started on, then appends class V in work/ and hands in `diff -ruN base work`.
+T157_X = "import unittest\n\n\nclass A(unittest.TestCase):\n    def test_a(self):\n        self.assertTrue(True)\n"
+T157_W = "\n\nclass W(unittest.TestCase):\n    def test_w(self):\n        self.assertTrue(True)\n"
+T157_V = "\n\nclass V(unittest.TestCase):\n    def test_v(self):\n        self.assertTrue(True)\n"
+T157_PAIR = '''#!/bin/sh
+set -e
+W=$PWD
+cd "$AC_WORK"
+if [ "$AC_ROLE" = verifier ]; then
+    cat base/w.txt > "@SAW@.base" 2>/dev/null || echo absent > "@SAW@.base"
+    cat work/w.txt > "@SAW@.work" 2>/dev/null || echo absent > "@SAW@.work"
+    git -C "@REPO@" rev-parse t1 > "@SAW@.head"
+    printf "@V@" >> work/tests/test_x.py
+    diff -ruN base work > patch-verify.diff || true
+    cat > EVIDENCE-verifier.md <<'EV'
+# verifier
+
+## result
+
+```result
+{"ticket": "1", "role": "verifier", "round": 1, "rc": 0,
+ "verify": {"files": ["tests/test_x.py"], "tags": [], "run": "python3 -m unittest tests.test_x",
+            "notes": "sandbox"},
+ "baseline": {"stage": "red", "ok": true, "why": "", "files": ["tests/test_x.py"]}}
+```
+EV
+    exit 0
+fi
+echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+printf "@W@" >> "$W"/tests/test_x.py
+echo worker > "$W"/w.txt
+(cd "$W" && git add -A && git commit -q -m "t$AC_TICKET round $AC_ROUND") || true
+printf '# round %s\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
+'''
+
+
+class T157TheVerifierCopyAndTheParallelReceipt(AutoFixBase):
+    """#157 worker unit cases, end to end through auto-fix with T157_PAIR: the held verifier's
+    copy is the branch head and its packet names it; the parallel verifier's patch is merged
+    3-way onto the branch head with --verifier-base = the ticket base_sha."""
+
+    def saw(self):
+        return os.path.join(self.home, "verifier-saw")
+
+    def arm(self, **fields):
+        self.set_worker(T157_PAIR.replace("@SAW@", self.saw()).replace("@REPO@", self.repo)
+                        .replace("@W@", T157_W.replace("\n", "\\n"))
+                        .replace("@V@", T157_V.replace("\n", "\\n")))
+        self.write(os.path.join("tests", "test_x.py"), T157_X)
+        self.make_ticket("1", needs_verifier=True, **fields)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "open #1")
+        self.git("push", "-q", "origin", "main")
+
+    def seen(self, suffix):
+        with open(self.saw() + suffix, encoding="utf-8") as handle:
+            return handle.read().strip()
+
+    def packet(self):
+        sent = [path for path in glob.glob(os.path.join(self.repo, "reports", "t1", "*",
+                                                        "dispatch-verifier-round1.md"))
+                if os.path.exists(os.path.join(os.path.dirname(path), "verifier-round1.log"))]
+        self.assertEqual(len(sent), 1, sent)
+        with open(sent[0], encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_b1_the_held_verifier_copies_the_branch_head(self):
+        self.arm()
+        done = self.auto_fix("--no-review")
+        self.assertEqual((self.seen(".base"), self.seen(".work")), ("worker", "worker"),
+                         done.stdout + done.stderr)
+        packet = self.packet()
+        self.assertIn("票分支 `t1` 的頭", packet)
+        self.assertIn(self.seen(".head"), packet)
+        self.assertNotIn("no new module-level names", packet)
+        self.assertEqual(self.status_of("1", kind="apply").get("rc"), 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("show", "t1:tests/test_x.py"), T157_X + T157_W + T157_V)
+
+    def test_d8_the_parallel_verifier_is_merged_three_way(self):
+        self.arm(interface_fixed=True)
+        done = self.auto_fix("--no-review")
+        base = self.load_ticket("1")["base_sha"]   # bumped to main's head at round start (#57 d)
+        self.assertEqual(self.seen(".base"), "absent", done.stdout + done.stderr)
+        self.assertIn("no new module-level names", self.packet())
+        self.assertNotIn("票分支 `t1` 的頭", self.packet())
+        self.assertIn("verifier-base %s" % base, done.stdout)
+        self.assertEqual(self.status_of("1", kind="apply").get("rc"), 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("show", "t1:tests/test_x.py"), T157_X + T157_W + T157_V)
+        self.assertIn("3-way: tests/test_x.py", self.git("log", "--format=%B", "main..t1"))
+
+
 if __name__ == "__main__":
     unittest.main()
