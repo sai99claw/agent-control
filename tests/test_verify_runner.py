@@ -1,4 +1,4 @@
-import contextlib, importlib.util, os, subprocess, sys, tempfile, unittest, shutil
+import contextlib, importlib.util, json, os, re, subprocess, sys, tempfile, unittest, shutil
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUN = [sys.executable, os.path.join(HERE, "scripts/verify.py")]
 
@@ -42,7 +42,7 @@ def copy_code_tree(tmp, only=None):
     `only` 給了就只搬 verify/ 底下那幾個功能目錄(登記檔照搬):全庫的回歸案例
     與這裡要問的事無關,只是時間(#73)。"""
     for rel in ("scripts/verify.py", "scripts/status.py", "scripts/event.py",
-                "board/config.json"):
+                "scripts/adapter-unittest.py", "board/config.json"):
         os.makedirs(os.path.dirname(os.path.join(tmp, rel)), exist_ok=True)
         shutil.copy(os.path.join(HERE, rel), os.path.join(tmp, rel))
     src = os.path.join(HERE, "verify")
@@ -283,6 +283,132 @@ class RootIsTheTreeUnderTestNotTheFilesHome(unittest.TestCase):
             self.assertEqual(os.path.realpath(mod.ROOT), os.path.realpath(tree))
             mod = self._load_verify_copied_to(os.path.join(bare, "b", "scripts"), None, bare)
             self.assertIsNone(mod.ROOT)
+
+
+class ResultAndCase(unittest.TestCase):
+    """#161 A5:`--result` 寫 schema 1(經 adapter 的寫法)、`--case` 直接指名案例檔。
+    沙盒同 `test_list_and_tag_filter_run_in_a_sandbox_with_only_example`:只搬 verify/example,
+    `AC_CODE_ROOT` = 沙盒。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        copy_code_tree(self.tmp, only=("example",))
+        self.run_cmd = [sys.executable, os.path.join(self.tmp, "scripts", "verify.py")]
+        self.env = local_env(AC_ROOT=self.tmp, AC_CODE_ROOT=self.tmp)
+        self.env.pop("AC_TICKET", None)
+        self.env.pop("AC_RUN_ID", None)
+        self.out = os.path.join(self.tmp, "out", "result.json")
+
+    def verify(self, *args, env=None):
+        return subprocess.run(self.run_cmd + list(args), capture_output=True, text=True,
+                              env=env or self.env, timeout=300)
+
+    def result(self):
+        with open(self.out, encoding="utf-8") as handle:
+            return json.load(handle)
+
+    def assert_example_result(self, done):
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        data = self.result()
+        self.assertEqual(data["schema"], 1)
+        self.assertEqual(data["command"], "regression")
+        ids = [row["id"] for row in data["ids"]]
+        self.assertTrue([i for i in ids if i.startswith("verify.example.test_example.")], ids)
+        self.assertEqual({row["status"] for row in data["ids"]}, {"pass"})
+        self.assertEqual(data["environment_suspect"], [])
+        self.assertIn("Ran ", done.stdout, "跑的輸出照舊印到 stdout")
+
+    def test_case_with_result(self):
+        self.assert_example_result(self.verify(
+            "--case", "verify/example/test_example.py", "--result", self.out, "--no-cache"))
+
+    def test_tag_with_result_writes_the_same_shape(self):
+        self.assert_example_result(self.verify("--tag", "example", "--result", self.out))
+
+    def test_case_ignores_tags(self):
+        """`--case` 不看標籤:沒有 TAGS 的檔照跑,紅的那一條 file/line 指回案例檔。"""
+        body = "import unittest\nclass T(unittest.TestCase):\n    def test_red(self):\n" \
+               "        self.assertEqual(1, 2)\n"
+        with open(os.path.join(self.tmp, "verify", "example", "test_untagged.py"), "w",
+                  encoding="utf-8") as handle:
+            handle.write(body)
+        done = self.verify("--case", "verify/example/test_untagged.py", "--result", self.out)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        row, = self.result()["ids"]
+        self.assertEqual((row["id"], row["status"], row["file"], row["line"]),
+                         ("verify.example.test_untagged.T.test_red", "fail",
+                          "verify/example/test_untagged.py", 4))
+        # 沒有 --case 時,同一個沒 TAGS 的檔照舊讓全跑 rc 2(標籤檢查沒被拿掉)。
+        self.assertEqual(self.verify("--tag", "example").returncode, 2)
+
+    def test_missing_case_is_rc_3_naming_the_path(self):
+        done = self.verify("--case", "verify/example/test_nope_zzz.py")
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertIn("verify/example/test_nope_zzz.py", done.stdout + done.stderr)
+
+    def test_a_cached_run_still_writes_the_result(self):
+        env = dict(self.env, AC_TICKET="77", AC_RUN_ID="r1")
+        self.assert_example_result(self.verify("--tag", "example", "--result", self.out,
+                                               env=env))
+        os.remove(self.out)
+        again = self.verify("--tag", "example", "--result", self.out, env=env)
+        self.assertIn("用快取", again.stdout)
+        self.assert_example_result(again)
+
+
+def gate_map_rows(text):
+    """`scripts/gate.sh` 的 `map()` → `[(pattern, ids)]`,`a|b` 拆成兩列;不含
+    `tests/test_*.py`(adapter 內建那一條)與 `*`(= unmapped)。"""
+    body = text[text.index("map() {"):]
+    body = body[:body.index("\n}\n")]
+    body = "\n".join(line for line in body.splitlines() if not line.strip().startswith("#"))
+    body = re.sub(r"\\\n\s*", " ", body)
+    rows = []
+    for found in re.finditer(r"^ {8}(\S+)\)\s*(.*?);;", body, re.M | re.S):
+        pattern, action = found.group(1), found.group(2).split()
+        if pattern in ("tests/test_*.py", "*"):
+            continue
+        ids = action[1:] if action[:1] == ["add"] else []
+        rows.extend((one, ids) for one in pattern.split("|"))
+    return rows
+
+
+class TestsSectionOfAsConfig(unittest.TestCase):
+    """#161 A5 靜態:A 的 `board/config.json` 的 `tests.unittest` 是 `gate.sh map()` / `BASE`
+    的資料版(row 3b 之前兩份並存,這一條讓它們不准漂)。"""
+
+    def setUp(self):
+        with open(os.path.join(HERE, "board", "config.json"), encoding="utf-8") as handle:
+            self.unit = json.load(handle)["tests"]["unittest"]
+        with open(os.path.join(HERE, "scripts", "gate.sh"), encoding="utf-8") as handle:
+            self.gate = handle.read()
+
+    def test_base_is_the_four_base_ids(self):
+        self.assertEqual(self.unit["base"],
+                         ["test_ticket", "test_event", "test_memory", "test_no_project_names"])
+        self.assertIn('BASE="%s"' % " ".join(self.unit["base"]), self.gate)
+        self.assertEqual(self.unit["roots"], ["tests"])
+
+    def test_map_is_gate_map_row_for_row(self):
+        """45 列 = base 3bdba76 的 36 個 case 分支(去掉 `tests/test_*.py` 與 `*`,實數)拆
+        `a|b` 後 44 列,加本票的 `scripts/adapter-unittest.py` 一列。順序照 gate(first match wins)。"""
+        rows = [(row["match"], row["ids"]) for row in self.unit["map"]]
+        self.assertEqual(len(rows), 45)
+        self.assertEqual(rows, gate_map_rows(self.gate))
+        for pattern, _ in rows:
+            self.assertRegex(self.gate, r"\n {8}(\S+\|)?%s(\|\S+)?\)" % re.escape(pattern))
+
+    def test_project_config_check_accepts_it(self):
+        """`project_config.py` 是 #160(設計 row 2,並行、不是 depends_on),base 3bdba76 上沒有。
+        不是 #161 的驗收閘(round-1 反駁 accepted):檔在才跑、斷言 rc 0;#160 / #161 哪張後落地,
+        這一條就在那一刻變成真的在量。"""
+        tool =os.path.join(HERE, "scripts", "project_config.py")
+        if not os.path.exists(tool):
+            self.skipTest("scripts/project_config.py (design row 2) is not on this base yet")
+        done = subprocess.run([sys.executable, tool, "check", "."], cwd=HERE, env=local_env(),
+                              capture_output=True, text=True, timeout=60)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
 
 if __name__ == "__main__":
