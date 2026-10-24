@@ -140,6 +140,23 @@
       "note": null,
       "effort": null,
       "at": "2026-10-24T22:36:00+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1585,
+      "outcome": "fail",
+      "run_id": "20261024-225127-14921",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-24T23:17:52+00:00"
     }
   ],
   "branch": "t160",

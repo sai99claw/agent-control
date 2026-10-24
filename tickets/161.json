@@ -21,8 +21,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "3bdba76591a8e5c27a52621452e5f7dbebe833ed",
-  "state": "Blocked",
-  "state_version": 21,
+  "state": "InReview",
+  "state_version": 26,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -36,36 +36,34 @@
       "stage": "check",
       "ok": true,
       "why": "",
-      "at": "2026-10-24T22:32:47+00:00",
+      "at": "2026-10-24T23:21:17+00:00",
       "files": [
         "tests/test_adapter_cases.py"
       ],
       "base_ref": "3bdba76591a8e5c27a52621452e5f7dbebe833ed",
       "base_sha": "3bdba76591a8e5c27a52621452e5f7dbebe833ed",
       "candidate": "../agent-control-wt/t161",
-      "candidate_sha": "38f9b4880ed0a780bd7adef47f9e9e43d06d2b20",
+      "candidate_sha": "eca0451d53892c4f225382226b3bcd9d1f30733c",
       "baseline": {
         "red": [
           "tests.test_adapter_cases.AdapterResultCases.test_fail_in_helper_reports_test_file_frame",
           "tests.test_adapter_cases.AdapterResultCases.test_full_discovers_both_roots",
           "tests.test_adapter_cases.AdapterResultCases.test_message_is_first_line_only",
           "tests.test_adapter_cases.AdapterResultCases.test_run_id_in_second_root",
-          "tests.test_adapter_cases.AdapterResultCases.test_unknown_ids_get_error_rows",
-          "tests.test_adapter_cases.AdapterResultCases.test_zero_ids_and_missing_out"
+          "tests.test_adapter_cases.AdapterResultCases.test_unknown_ids_get_error_rows"
         ],
         "red_lines": [
           "tests.test_adapter_cases.AdapterResultCases.test_fail_in_helper_reports_test_file_frame: AssertionError: False is not true : /home/user/agent-control-wt/t161/gate.log.verify-case.d/base/scripts/adapter-unittest.py",
           "tests.test_adapter_cases.AdapterResultCases.test_full_discovers_both_roots: AssertionError: False is not true : /home/user/agent-control-wt/t161/gate.log.verify-case.d/base/scripts/adapter-unittest.py",
           "tests.test_adapter_cases.AdapterResultCases.test_message_is_first_line_only: AssertionError: False is not true : /home/user/agent-control-wt/t161/gate.log.verify-case.d/base/scripts/adapter-unittest.py",
           "tests.test_adapter_cases.AdapterResultCases.test_run_id_in_second_root: AssertionError: False is not true : /home/user/agent-control-wt/t161/gate.log.verify-case.d/base/scripts/adapter-unittest.py",
-          "tests.test_adapter_cases.AdapterResultCases.test_unknown_ids_get_error_rows: AssertionError: False is not true : /home/user/agent-control-wt/t161/gate.log.verify-case.d/base/scripts/adapter-unittest.py",
-          "tests.test_adapter_cases.AdapterResultCases.test_zero_ids_and_missing_out: AssertionError: False is not true : /home/user/agent-control-wt/t161/gate.log.verify-case.d/base/scripts/adapter-unittest.py"
+          "tests.test_adapter_cases.AdapterResultCases.test_unknown_ids_get_error_rows: AssertionError: False is not true : /home/user/agent-control-wt/t161/gate.log.verify-case.d/base/scripts/adapter-unittest.py"
         ],
         "import_failures": [],
         "missing_symbol": [],
         "elsewhere": [],
         "rc": 1,
-        "cases": 6,
+        "cases": 5,
         "skipped": 0,
         "log": "../agent-control-wt/t161/gate.log.verify-case.d/logs/baseline.log"
       },
@@ -76,7 +74,7 @@
         "missing_symbol": [],
         "elsewhere": [],
         "rc": 0,
-        "cases": 6,
+        "cases": 5,
         "skipped": 0,
         "log": "../agent-control-wt/t161/gate.log.verify-case.d/logs/candidate.log"
       }
@@ -181,6 +179,23 @@
       "note": null,
       "effort": null,
       "at": "2026-10-24T22:34:48+00:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 24,
+      "tokens_out": 5908,
+      "cache_write": 50668,
+      "cache_read": 737389,
+      "wall_seconds": 69,
+      "outcome": "pass",
+      "run_id": "20261024-231753-21822",
+      "session_id": "5260a3b6-6423-5527-bed8-9d3211ae718f",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-24T23:22:26+00:00"
     }
   ],
   "objections": [
@@ -210,11 +225,18 @@
   "branch": "t161",
   "gate": {
     "rc": 0,
-    "sha": "38f9b4880ed0a780bd7adef47f9e9e43d06d2b20",
-    "run_id": "20261024-222931-30824",
-    "at": "2026-10-24T22:32:48+00:00"
+    "sha": "eca0451d53892c4f225382226b3bcd9d1f30733c",
+    "run_id": "20261024-231753-21822",
+    "at": "2026-10-24T23:21:17+00:00"
   },
   "repair_round": 1,
   "owner": "main",
-  "interventions": 1
+  "interventions": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "eca0451d53892c4f225382226b3bcd9d1f30733c",
+    "note": "reports/t161/20261024-231753-21822/REVIEW.md",
+    "at": "2026-10-24T23:22:26+00:00"
+  }
 }
