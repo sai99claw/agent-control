@@ -20,9 +20,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "85a1eb4c44e11db8b8ea42bbd998675f479cb744",
+  "base_sha": "6ba6500c530d7f1a3e7167caf11da902db4ea95b",
   "state": "Ready",
-  "state_version": 2,
+  "state_version": 8,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -43,5 +43,29 @@
     "D-065",
     "D-066"
   ],
-  "feature": "dispatch"
+  "feature": "dispatch",
+  "owner": "main",
+  "interventions": 1,
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 3602,
+      "outcome": "timeout",
+      "run_id": "20261024-030710-1279",
+      "session_id": null,
+      "by": "auto-fix.sh",
+      "note": "reports/t155/20261024-030710-1279/worker-round1.log 裡沒有 JSON 信封",
+      "effort": "high",
+      "at": "2026-10-24T04:07:13+00:00"
+    }
+  ],
+  "worker": {
+    "timeout_seconds": 7200
+  }
 }
