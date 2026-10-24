@@ -15,15 +15,21 @@ Ran/OK,而**一份貼上來的輸出沒有辦法被機器比對** —— 票的 
 驗證者交的紅與一份還沒接上的案例長得一樣。
 """
 
+import contextlib
+import importlib.util
+import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import Sandbox  # noqa: E402
+from control_harness import SCRIPTS, Sandbox  # noqa: E402
 
 # 期望值來源獨立於被測程式:這個 2 是票面說的,不是跑一次記下來的。
 CASE = """import unittest
@@ -842,6 +848,154 @@ class ARunThatTimesOutIsUnmeasured(CaseSandbox):
         within = red("within")
         self.assertEqual(without[0], 0)
         self.assertEqual(within, without)
+
+
+# ------------------------------------------- #156:unittest 子行程的時限從設定讀
+
+# 期望值來源是 #156 票面(A1-A4),不是跑一次記下來的:沒設 -> 900、正整數照用、
+# 其餘一律警告後 900;超時 rc 2、不寫證據、不動票。
+TIMEOUT_KEY = "verify_case.timeout_seconds"
+
+SLOW_RED = """import time
+import unittest
+
+
+class Slow(unittest.TestCase):
+    def test_slow_then_red(self):
+        time.sleep(%d)
+        self.assertEqual(1, 2)
+"""
+
+
+def load_verify_case_t156():
+    spec = importlib.util.spec_from_file_location(
+        "verify_case_t156", os.path.join(SCRIPTS, "verify-case.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class CaseTimeoutResolver(unittest.TestCase):
+    """#156 A1:`case_timeout(root)` 讀 `board/config.json` 的 `verify_case.timeout_seconds`。"""
+
+    def setUp(self):
+        self.vc = load_verify_case_t156()
+        self.assertTrue(hasattr(self.vc, "case_timeout"),
+                        "verify-case.py 沒有 case_timeout(root)")
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, True)
+        os.makedirs(os.path.join(self.root, "board"))
+        self.path = os.path.join(self.root, "board", "config.json")
+
+    def resolve(self, conf):
+        with open(self.path, "w", encoding="utf-8") as handle:
+            json.dump(conf, handle)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            value = self.vc.case_timeout(self.root)
+        return value, err.getvalue()
+
+    def test_absent_key_is_900(self):
+        self.assertEqual(self.resolve({"port": 1})[0], 900)
+        self.assertEqual(self.resolve({"verify_case": {}})[0], 900)
+
+    def test_a_positive_int_is_used(self):
+        self.assertEqual(self.resolve({"verify_case": {"timeout_seconds": 1200}})[0], 1200)
+
+    def test_a_bad_value_warns_and_falls_back_to_900(self):
+        # bool 是 int 的子類別:`true` 不准被當成 1(票面 m3)。
+        for bad in (0, -5, 1.5, "600", True, None):
+            with self.subTest(bad=bad):
+                value, err = self.resolve({"verify_case": {"timeout_seconds": bad}})
+                self.assertEqual(value, 900)
+                self.assertIn(TIMEOUT_KEY, err)
+
+    def test_an_unreadable_config_is_900(self):
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write("{not json")
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.vc.case_timeout(self.root), 900)
+        os.remove(self.path)
+        os.makedirs(self.path)  # 一個目錄:root 也讀不了,chmod 000 對 root 沒用
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(self.vc.case_timeout(self.root), 900)
+
+
+class CaseTimeout(CaseSandbox):
+    """#156 A2-A4:超時是「量不到」(rc 2、不寫證據、不動票),不是一段 traceback。"""
+
+    def set_timeout(self, seconds):
+        conf = json.loads(self.read("board/config.json"))
+        if seconds is None:
+            conf.pop("verify_case", None)
+        else:
+            conf["verify_case"] = {"timeout_seconds": seconds}
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+
+    def ticket_bytes(self):
+        with open(os.path.join(self.repo, "tickets", "1.json"), "rb") as handle:
+            return handle.read()
+
+    def base_sha(self):
+        return self.git("rev-parse", "HEAD").strip()
+
+    def assert_timed_out(self, done, out):
+        err = done.stderr
+        self.assertEqual(done.returncode, 2, done.stdout + err)
+        self.assertNotIn("Traceback", err)
+        self.assertIn(TIMEOUT_KEY, err)
+        self.assertTrue("verify.nav.test_ticket_1" in err
+                        or "verify/nav/test_ticket_1.py" in err, "沒點名案例模組:" + err)
+        # 秒數:路徑與模組名裡的數字不算,剩下的要有一個獨立的 2。
+        bare = err.replace(self.home, "").replace(out, "")
+        bare = bare.replace("test_ticket_1", "").replace(TIMEOUT_KEY, "")
+        bare = re.sub(r"\b[0-9a-f]{7,40}\b", "", bare)  # sha 裡的 2 不算
+        self.assertRegex(bare, r"(?<![\d.])2(?![\d.])", "沒說是幾秒:" + err)
+        self.assertFalse(os.path.exists(os.path.join(out, "baseline-red.json")))
+
+    def test_red_that_times_out_is_rc_2_and_writes_nothing(self):
+        """A2。**變異**(票面 m1/m2):時限照舊寫死 900 → sleep 10 跑完、rc 不是 2;
+        拿掉 TimeoutExpired 的處理 → stderr 有 Traceback。"""
+        self.set_timeout(2)
+        self.a_ticket(SLOW_RED % 10)
+        before = self.ticket_bytes()
+        out = os.path.join(self.home, "out-red")
+        started = time.monotonic()
+        done = self.tool("red", "1", "--ref", self.base_sha(), "--out-dir", out)
+        wall = time.monotonic() - started
+        self.assert_timed_out(done, out)
+        self.assertLess(wall, 9, "沒在時限內停下")
+        self.assertEqual(self.ticket_bytes(), before, "超時的那一趟動了票")
+
+    def test_check_that_times_out_is_rc_2_and_leaves_the_ticket(self):
+        """A3:同一份夾具走 check;票(含 verify.baseline)一個 byte 都不准動。"""
+        self.set_timeout(2)
+        self.a_ticket(SLOW_RED % 10)
+        before = self.ticket_bytes()
+        out = os.path.join(self.home, "out-check")
+        done = self.tool("check", "1", "--ref", self.base_sha(),
+                         "--candidate", self.repo, "--out-dir", out)
+        self.assert_timed_out(done, out)
+        self.assertEqual(self.ticket_bytes(), before, "超時的那一趟動了票")
+
+    def test_within_the_limit_red_is_the_same_as_without_the_key(self):
+        """A4:時限內跑完的那一趟,有沒有這個鍵 rc 與證據都一樣(同一條測試裡比)。
+
+        **這一條在乾淨基底上本來就綠**:它守的是「加了時限不改既有行為」,基底上沒有
+        這個鍵也一樣 —— 不適用「baseline 該紅」。"""
+        self.a_ticket(SLOW_RED % 1)
+        out = os.path.join(self.home, "out-same")
+        runs = []
+        for seconds in (None, 60):
+            self.set_timeout(seconds)
+            done = self.tool("red", "1", "--ref", self.base_sha(), "--out-dir", out)
+            with open(os.path.join(out, "baseline-red.json"), encoding="utf-8") as handle:
+                record = json.load(handle)
+            record.pop("at", None)  # 時間戳記每一趟都不一樣
+            runs.append((done.returncode, record))
+            os.remove(os.path.join(out, "baseline-red.json"))
+        self.assertEqual(runs[0][0], 0, "沒設時限時這一份夾具該驗紅成立")
+        self.assertEqual(runs[1], runs[0])
 
 
 if __name__ == "__main__":
