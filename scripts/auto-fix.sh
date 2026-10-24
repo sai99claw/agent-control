@@ -768,6 +768,7 @@ PY
 # 逐格填好。第 1 輪(needs_verifier)與 test_defect 那條路共用;後者只在尾巴多一段紅榜。
 # 以前 test_defect 那條路是一段內嵌文字 —— 人讀的範本與腳本餵的派工文是兩份,少了哪一格沒有人看得出來。
 verifier_packet() {   # $1 = 派工文寫到哪  $2 = 第幾輪  $3 = 驗證者副本根  $4 = base sha  $5 = 票分支(非空 = 等 worker 交件才起,#60)
+                      # $6 = 副本展開的分支頭 sha(非空 = 副本是 $5 的頭,#157)  $7 = 非空 = 與 worker 平行(interface_fixed)
     vp_template=""
     for candidate in "$ROOT/templates/dispatch-verifier.md" "$AC/../templates/dispatch-verifier.md"; do
         [ -f "$candidate" ] && { vp_template=$candidate; break; }
@@ -805,6 +806,18 @@ PY
             echo "## 介面以分支上的實作為準(#60:這張票 interface_fixed 不是 true)"
             echo "你是在 worker 第 $2 輪交件之後才起的:介面以分支上的實作為準(worker 的 commit 在分支 \`$5\`:\`git -C $ROOT diff $4..$5\` 讀它、不要套進你的 work/)。"
             echo "票面寫法與實作衝突時照實作、在 EVIDENCE 記一行(票面怎麼寫、實作怎麼做、你照哪個寫了案例)。"
+        fi
+        if [ -n "${5:-}" ] && [ -n "${6:-}" ]; then
+            echo ""
+            echo "## 副本來源:票分支 \`$5\` 的頭(#157)"
+            echo "你的副本 \`$3/base\` 與 \`$3/work\` 是票分支 \`$5\` 的頭 \`$6\`(worker 第 $2 輪交件後 \`git archive\`),不是票的 base_sha:worker 的 commit 已經在兩份裡,上面「兩份都是 base 的內容」那一句這一輪不適用。\`diff -Nru base work\` 出的 patch-verify 只帶你的案例,收件時套在這個分支頭上。"
+            echo "\`verify-case.py red --ref\` 照舊是票的 base_sha \`$4\`:證的是乾淨基底紅,不是分支頭紅。"
+        fi
+        if [ -n "${7:-}" ]; then
+            echo ""
+            echo "## 與 worker 平行:案例加在既有模組尾端的新 class(#157,D-056 1)"
+            echo "你與 worker 同時從票的 base_sha 起跑,兩邊常改同一支測試模組;收件時 \`apply.sh\` 以三方合併把你的 patch-verify 併上分支頭,兩邊在同一處插入只對 *.py、而且合起來沒有重複的模組層名字才自動合。"
+            echo "所以:新案例放在**既有模組尾端新加的 class**(不新開以票號命名的案例檔,D-056 1);helper 寫在你自己的 class 裡;no new module-level names(不新增模組層的函式、常數、import)。"
         fi
         only_tests_section
     } > "$1"
@@ -994,7 +1007,7 @@ first_round_dispatch() {
         fr_after=""
         [ -n "$V_PARALLEL" ] || fr_after=$(ticket_branch)
         verifier_packet "$fr_vdispatch" 1 "$WTBASE/verify-t$ID/round1" "$V_BASE" "$fr_after" \
-            || return 6
+            "" "$V_PARALLEL" || return 6
         echo "auto-fix: 第 1 輪驗證者派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$fr_vdispatch" "$ROOT")" >&2
     fi
     echo "auto-fix: --round 1 只印派工文;票是 Ready 時不帶 --round 就由這一支起第 1 輪:sh scripts/auto-fix.sh $ID" >&2
@@ -1458,7 +1471,8 @@ verifier_halt() {
 }
 
 v_packet() {   # 這一輪(平行 / 等交件)驗證者的派工文;換候選重起時照新模型重組
-    verifier_packet "$VDISPATCH" "$r" "$VFIX" "$V_BASE" "${V_HELD:+$(ticket_branch)}"
+    verifier_packet "$VDISPATCH" "$r" "$VFIX" "$V_BASE" "${V_HELD:+$(ticket_branch)}" \
+        "${V_COPY_HEAD:-}" "${V_PARALLEL:-}"
 }
 
 # **與 worker 平行**(#51 C2)只在票 `interface_fixed=true`(#60):驗證者不等 worker(D-020),
@@ -1473,12 +1487,31 @@ archive_copy() {   # $1 = ref  $2 = 副本根;取不出回 1
     cp -R "$2/base" "$2/work"
 }
 
-start_verifier_bg() {   # uses r/VFIX/VDISPATCH;設定 VPID/VLOG/VRC_FILE/VSTART
-    if ! archive_copy "$V_BASE" "$VFIX"; then
+# **副本從哪一版展**(#157,同 #149 那一支):平行(interface_fixed)= 票的 base_sha;等交件才起的 =
+# 票分支的頭(worker 的實作在上面,patch-verify 才對得上分支),分支對 base_sha 還沒有 commit 就不起。
+# archive 的那一版記在 V_COPY_SHA:收件時當三方合併的 ancestor(`apply.sh --verifier-base`)。
+start_verifier_bg() {   # uses r/VFIX/VDISPATCH;設定 VPID/VLOG/VRC_FILE/VSTART/V_COPY_SHA/V_COPY_HEAD
+    V_COPY_SHA=""
+    V_COPY_HEAD=""
+    vs_ref=$V_BASE
+    if [ -z "$V_PARALLEL" ]; then
+        vs_head=$(git -C "$ROOT" rev-parse -q --verify "refs/heads/$(ticket_branch)^{commit}" 2>/dev/null)
+        vs_count=0
+        [ -z "$vs_head" ] || [ -z "$V_BASE" ] \
+            || vs_count=$(git -C "$ROOT" rev-list --count "$V_BASE..$vs_head" 2>/dev/null || echo 0)
+        if [ "${vs_count:-0}" -lt 1 ]; then
+            echo "auto-fix: #$ID 票分支 $(ticket_branch) 對 base_sha ${V_BASE:-(空)} 還沒有 commit —— 驗證者等 worker 的 commit(verifier waits for worker commits),不起" >&2
+            return 1
+        fi
+        vs_ref=$vs_head
+        V_COPY_HEAD=$vs_head
+    fi
+    if ! archive_copy "$vs_ref" "$VFIX"; then
         rm -rf "$VFIX"
-        echo "auto-fix: 取不出 ${V_BASE:-(空)} 給驗證者的副本 —— 驗證者不起" >&2
+        echo "auto-fix: 取不出 ${vs_ref:-(空)} 給驗證者的副本 —— 驗證者不起" >&2
         return 1
     fi
+    V_COPY_SHA=$(git -C "$ROOT" rev-parse -q --verify "$vs_ref^{commit}" 2>/dev/null)
     v_packet || { rm -rf "$VFIX"; return 1; }
     VLOG=$(dirname "$VDISPATCH")/verifier-round$r.log
     VRC_FILE=$(dirname "$VDISPATCH")/verifier-round$r.rc
@@ -2235,6 +2268,8 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
     VPATCH=""
     VEVIDENCE=""
     V_HELD=""
+    V_COPY_SHA=""
+    V_COPY_HEAD=""
     VWRC=""
     V_QUOTA=""
     V_HANDED=""
@@ -2496,6 +2531,8 @@ gap_round() {   # uses r/SRC/FIX/DISPATCH;設定 ROUND_RC
     VEVIDENCE=""
     VKEPT_EVIDENCE=""
     V_HELD=""
+    V_COPY_SHA=""
+    V_COPY_HEAD=""
     W_COST_LOG=""
     W_HANDED=""
     CASE_FIXED=""
@@ -2596,9 +2633,10 @@ round_receive() {   # uses r/CASE_FIXED/PATCH_OUT/EVIDENCE/RESULT_JSON/VPATCH/GA
             sh "$AC/apply.sh" "$ID" ${VSLOT:+"$VSLOT"} --evidence "$EVIDENCE" \
             ${VKEPT_EVIDENCE:+--evidence-verifier "$VKEPT_EVIDENCE"} --evidence-verifier "$EVIDENCE"
     elif [ -n "$VPATCH" ]; then
+        # 三方合併的 ancestor = 驗證者副本展開的那一版(#157;平行 = base_sha,等交件 = 分支頭)。
         AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 AC_RESULT_JSON=$RESULT_JSON \
             sh "$AC/apply.sh" "$ID" ${VSLOT:+"$VSLOT"} --evidence "$EVIDENCE" \
-            --evidence-verifier "$VEVIDENCE"
+            --evidence-verifier "$VEVIDENCE" ${V_COPY_SHA:+--verifier-base "$V_COPY_SHA"}
     else
         AC_ROUND=$r AC_PREV_EVIDENCE=$EVIDENCE AC_RESULT_DONE=1 AC_RESULT_JSON=$RESULT_JSON \
             sh "$AC/apply.sh" "$ID" --evidence "$EVIDENCE"
