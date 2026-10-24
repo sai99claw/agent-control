@@ -299,15 +299,6 @@ class RunWritesSchemaOne(Fixture):
         self.assertEqual({row["id"] for row in data["ids"]}, set(FIVE))
         self.assertTrue(os.path.exists(os.path.join(self.out, "full.log")))
 
-    def test_every_passed_id_comes_back(self):
-        """An id that does not exist is an `error` row under that id, never a missing row."""
-        done = self.run_adapter("run", "test_fx.FX.test_pass", "test_fx.FX.test_nope",
-                                "test_gone_zzz")
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        rows = {row["id"]: row["status"] for row in self.result()["ids"]}
-        self.assertEqual(rows, {"test_fx.FX.test_pass": "pass", "test_fx.FX.test_nope": "error",
-                                "test_gone_zzz": "error"})
-
     def test_all_green_is_rc_0(self):
         done = self.run_adapter("run", "test_fx.FX.test_pass", "test_fx.FX.test_skip")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)

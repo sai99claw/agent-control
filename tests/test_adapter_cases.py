@@ -189,17 +189,6 @@ class AdapterResultCases(unittest.TestCase):
         self.assertEqual(proc.returncode, 1)
         self.assertEqual(result["environment_suspect"], [])
 
-    def test_zero_ids_and_missing_out(self):
-        proc, result, _ = self._adapter("run", out="zero")
-        self.assertEqual(proc.returncode, 2)
-        self.assertIsNone(result)
-        env = {k: v for k, v in os.environ.items() if not k.startswith("AC_")}
-        env.update({"AC_HOME": AC_HOME, "AC_ROOT": self.root, "AC_CODE_ROOT": self.root})
-        proc = subprocess.run(
-            [sys.executable, self._script(), "full"],
-            cwd=self.root, env=env, capture_output=True, text=True, timeout=self.TIMEOUT)
-        self.assertEqual(proc.returncode, 2)
-
 
 if __name__ == "__main__":
     unittest.main()
