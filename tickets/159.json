@@ -15,9 +15,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "601b36f039a336a6f2e87effefbed3067bfa2585",
+  "base_sha": "6d788d27c49673970536dba090424be006edb354",
   "state": "Ready",
-  "state_version": 2,
+  "state_version": 8,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -36,5 +36,29 @@
     "D-072",
     "D-054",
     "D-018"
-  ]
+  ],
+  "owner": "main",
+  "interventions": 1,
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 3602,
+      "outcome": "timeout",
+      "run_id": "20261024-184858-875",
+      "session_id": null,
+      "by": "auto-fix.sh",
+      "note": "reports/t159/20261024-184858-875/worker-round1.log 裡沒有 JSON 信封",
+      "effort": "high",
+      "at": "2026-10-24T19:49:01+00:00"
+    }
+  ],
+  "worker": {
+    "timeout_seconds": 7200
+  }
 }

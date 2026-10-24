@@ -22,7 +22,7 @@
   "attempt": 0,
   "base_sha": "601b36f039a336a6f2e87effefbed3067bfa2585",
   "state": "Ready",
-  "state_version": 3,
+  "state_version": 4,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -41,5 +41,8 @@
     "D-072",
     "D-019",
     "D-020"
-  ]
+  ],
+  "worker": {
+    "timeout_seconds": 7200
+  }
 }
