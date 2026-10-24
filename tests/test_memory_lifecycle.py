@@ -268,7 +268,7 @@ class A3OneConsolidationTicket(Lifecycle):
     def test_a3_two_checks_at_once_open_exactly_one(self):
         """A3 無覆蓋票時兩個 check 同時跑 → tickets/ 恰好多 1 張。"""
         before = self.ticket_ids()
-        procs = [subprocess.Popen(["python3", os.path.join(self.repo, "scripts", "memory.py"),
+        procs = [subprocess.Popen(["python3", self.script("scripts/memory.py"),
                                    "check"], cwd=self.repo, env=self.env(),
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                  for _ in range(2)]

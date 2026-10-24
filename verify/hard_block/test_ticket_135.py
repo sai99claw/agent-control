@@ -145,6 +145,9 @@ class GateReadsTheSharedHardBlock(ScriptWorld):
         for name, config, changed, addition, expected, tests_run in rows:
             with self.subTest(name):
                 self.setUp()
+                if not self.exists(changed):
+                    # #159 起沙盒不帶 A 的腳本:專案自己樹裡的 scripts/land.sh 由案例放。
+                    self.write(changed, "#!/bin/sh\n")
                 self.configure(config)
                 self.git("add", "-A")
                 self.git("commit", "-q", "--allow-empty", "-m", "hard_block config")

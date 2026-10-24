@@ -71,10 +71,11 @@ class ThrowawayTree(unittest.TestCase):
             write(self.root, rel, "# %s\n" % rel)
 
     def tool(self, *args, root=None):
+        # 拋棄式樹不是 git 樹:根由 `AC_ROOT` 給(#159 起不從腳本位置往上找)。
         return subprocess.run(["python3", os.path.join(root or self.root, "scripts",
                                                        "repo-map.py"), *args],
-                              cwd=root or self.root, env=clean_env(), capture_output=True,
-                              text=True, timeout=TIMEOUT)
+                              cwd=root or self.root, env=clean_env(AC_ROOT=root or self.root),
+                              capture_output=True, text=True, timeout=TIMEOUT)
 
     def built(self):
         done = self.tool("build")
@@ -219,7 +220,8 @@ class TheSyncedCopyWorks(unittest.TestCase):
         tool = os.path.join(project, "scripts", "control", "repo-map.py")
         self.assertTrue(os.path.isfile(tool), "repo-map.py 沒有同步到 scripts/control/")
         for args, rc in ((("build",), 0), (("check",), 0), (("query", "core"), 0)):
-            ran = subprocess.run(["python3", tool, *args], cwd=project, env=clean_env(),
+            ran = subprocess.run(["python3", tool, *args], cwd=project,
+                                 env=clean_env(AC_ROOT=project),
                                  capture_output=True, text=True, timeout=TIMEOUT)
             self.assertEqual(ran.returncode, rc, " ".join(args) + ran.stdout + ran.stderr)
         self.assertIn("入口\tsrc/core.py", ran.stdout)

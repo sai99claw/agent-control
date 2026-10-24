@@ -20,7 +20,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import SCRIPTS, Sandbox  # noqa: E402
+from control_harness import Sandbox  # noqa: E402
 
 CHANGE = """diff -ruN base/src/a.txt work/src/a.txt
 --- base/src/a.txt\t2026-09-21 10:00:00
@@ -713,7 +713,7 @@ class TheCopyRootComesFromTheMainRepo(ApplyBase):
         wt = os.path.join(self.home, "repo-wt", "t1")
         self.git("worktree", "add", "-q", wt, "-b", "t1")
         self.git("branch", "t2", "main")
-        done = self.run_sh(os.path.join(wt, "scripts", "apply.sh"), "2", cwd=wt)
+        done = self.run_sh("scripts/apply.sh", "2", cwd=wt)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         expected = os.path.realpath(os.path.join(self.home, "repo-wt", "t2"))
         found = [line for line in done.stdout.splitlines()
@@ -1045,8 +1045,7 @@ class TheCodeMapIsRebuiltIntoACommitOfItsOwn(ApplyBase):
 
     def setUp(self):
         super(TheCodeMapIsRebuiltIntoACommitOfItsOwn, self).setUp()
-        shutil.copy(os.path.join(SCRIPTS, "repo-map.py"),
-                    os.path.join(self.repo, "scripts", "repo-map.py"))
+        self.install_code_map_tool()
         self.write(os.path.join("code-map", "catalog.json"),
                    json.dumps(MAP_CATALOG, ensure_ascii=False, indent=2) + "\n")
         # gate.sh 把 code-map/* 的改動對到 test_repo_map_contract;沙盒放一支會綠的替身。
@@ -1117,8 +1116,7 @@ class TheBatchRebuildsTheCodeMap(ApplyBase):
 
     def setUp(self):
         super(TheBatchRebuildsTheCodeMap, self).setUp()
-        shutil.copy(os.path.join(SCRIPTS, "repo-map.py"),
-                    os.path.join(self.repo, "scripts", "repo-map.py"))
+        self.install_code_map_tool()
         self.write(os.path.join("code-map", "catalog.json"),
                    json.dumps(MAP_CATALOG, ensure_ascii=False, indent=2) + "\n")
         self.write(os.path.join("tests", "test_kept.py"), TEST_X)

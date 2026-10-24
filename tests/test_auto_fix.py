@@ -474,7 +474,7 @@ class AutoFixBase(Sandbox):
         # **副本裡那一支** gate.sh(不是主 repo 那一支):`--branch` 問的是
         # 「這條分支改了什麼」,而在主 repo 上問等於問 main 對 main —— 答案是「沒有」,
         # 而「沒有東西可跑」與「跑完了都過」長得一樣(§5.5)。
-        gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
+        gate = self.run_sh("scripts/gate.sh",
                            "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
                            env=self.env(AC_ROOT=self.repo))
         self.assertNotEqual(gate.returncode, 0, gate.stdout + gate.stderr)
@@ -637,7 +637,7 @@ class ThingsThatStopIt(AutoFixBase):
         self.set_worker(WORKER_REPORTS_TEST_DEFECT)
         self.ticket_ready()
         wt = self.ticket_branch_commit("1", files_of(RED_CASE))
-        gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
+        gate = self.run_sh("scripts/gate.sh",
                            "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
                            env=self.env(AC_ROOT=self.repo))
         self.assertNotEqual(gate.returncode, 0, gate.stdout + gate.stderr)
@@ -679,7 +679,7 @@ class ThingsThatStopIt(AutoFixBase):
         self.set_worker(WORKER_REPORTS_TEST_DEFECT)
         self.ticket_ready()
         wt = self.ticket_branch_commit("1", files_of(RED_CASE_WITH_DOCSTRING))
-        gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
+        gate = self.run_sh("scripts/gate.sh",
                            "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
                            env=self.env(AC_ROOT=self.repo))
         self.assertNotEqual(gate.returncode, 0, gate.stdout + gate.stderr)
@@ -703,7 +703,7 @@ class ThingsThatStopIt(AutoFixBase):
         self.set_worker(WORKER_TEST_DEFECT_THEN_FIXES_PRODUCT)
         self.ticket_ready()
         wt = self.ticket_branch_commit("1", files_of(RED_CASE))
-        gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
+        gate = self.run_sh("scripts/gate.sh",
                            "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
                            env=self.env(AC_ROOT=self.repo))
         self.assertNotEqual(gate.returncode, 0, gate.stdout + gate.stderr)
@@ -1480,23 +1480,28 @@ class WhichRoundIsTheLatestOne(AutoFixBase):
 class RunFromInsideATicketWorktree(AutoFixBase):
     """#29 A10(G10 的另一半):票分支的 worktree **不是**控制根。
 
-    `_ac_root()` 往上找 `board/config.json`,在 worktree 裡找到的是 worktree 自己 ——
-    於是票檔要在**那一條分支上進了版控**才找得到,而票檔是走 docs 通道進主線的,常常
-    還沒進去。#23 第 2 輪就是這樣 rc=2 停掉的。
+    以前那支從 `$0` 往上找 `board/config.json` 的根函式,在 worktree 裡找到的是 worktree
+    自己 —— 於是票檔要在**那一條分支上進了版控**才找得到,而票檔是走 docs 通道進主線的,
+    常常還沒進去。#23 第 2 輪就是這樣 rc=2 停掉的。#159 起根是 cwd 的主 repo 根
+    (`--git-common-dir` 的上一層,D-071 C2):在 worktree 裡手跑、沒帶 `AC_ROOT`,一開始就是主 repo。
     """
 
     def test_a_ticket_that_is_not_in_version_control_yet_is_still_found(self):
-        """**變異**:把 `TF` 那一段 `--git-common-dir` 的退路拿掉 → 這一條紅(rc=2 找不到票)。"""
+        """**變異**:`ac_root` 的 cwd 規則改回 `--show-toplevel`(worktree 自己)**且**拿掉 `TF`
+        那一段 `main_root` 的退路 → 這一條紅(rc=2 找不到票)。只拿掉其中一半是綠的:另一半接得住。"""
         self.set_worker(WORKER_NEVER)
         self.make_ticket("1")   # **故意不 commit**
         wt = self.worktree("t1")
         self.assertFalse(os.path.exists(os.path.join(wt, "tickets", "1.json")),
                          "這一條問的正是「票檔還沒進版控」")
-        done = self.run_sh(os.path.join(wt, "scripts", "auto-fix.sh"),
-                           "1", "--dry-run", "--round", "1", cwd=wt)
+        env = self.env()
+        env.pop("AC_ROOT")   # 手跑:根由 cwd 規則找
+        done = self.run_sh("scripts/auto-fix.sh",
+                           "1", "--dry-run", "--round", "1", cwd=wt, env=env)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("找不到票", done.stderr)
-        self.assertIn("是 worktree", done.stdout, "改用主 repo 這件事要說出來")
+        self.assertFalse(os.path.exists(os.path.join(wt, "reports")),
+                         "reports 落在 worktree 裡 —— 根沒有指回主 repo")
         self.assertIn("#1", done.stdout)
         found = glob.glob(os.path.join(self.repo, "reports", "t1", "*",
                                        "dispatch-round1.md"))
@@ -1547,7 +1552,7 @@ class TheCopyRootComesFromTheMainRepo(AutoFixBase):
         wt = self.ticket_worktree()
         self.assertTrue(os.path.isfile(os.path.join(wt, "tickets", "1.json")),
                         "這一條問的是「票檔已經在分支上」—— 走不到找票的退路")
-        done = self.run_sh(os.path.join(wt, "scripts", "auto-fix.sh"),
+        done = self.run_sh("scripts/auto-fix.sh",
                            "1", "--dry-run", "--round", "1", cwd=wt)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn(os.path.join("x-wt", "x-wt"), done.stdout, "副本巢狀了")
@@ -1564,7 +1569,7 @@ class TheCopyRootComesFromTheMainRepo(AutoFixBase):
         wt = self.ticket_worktree()
         self.make_ticket("1")   # 只在主 repo,不進版控
         self.assertFalse(os.path.exists(os.path.join(wt, "tickets", "1.json")))
-        done = self.run_sh(os.path.join(wt, "scripts", "auto-fix.sh"),
+        done = self.run_sh("scripts/auto-fix.sh",
                            "1", "--dry-run", "--round", "1", cwd=wt,
                            env=self.env(AC_TICKETS_DIR=os.path.join(self.repo, "tickets")))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -1804,7 +1809,7 @@ echo "rerun $AC_ROUND ticket=$AC_TICKET" >> "$AC_TEST_LOG"
         self.set_worker(WORKER_FIXES)
         self.ticket_ready()
         wt = self.ticket_branch_commit("1", files_of(RED_CASE))
-        done = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
+        done = self.run_sh("scripts/gate.sh",
                            "--branch", "--ticket", "1", cwd=wt,
                            env=self.env(AC_ROOT=self.repo))
         self.assertNotEqual(done.returncode, 0,
@@ -1819,7 +1824,7 @@ echo "rerun $AC_ROUND ticket=$AC_TICKET" >> "$AC_TEST_LOG"
         self.ticket_ready()
         wt = self.ticket_branch_commit("1", files_of(RED_CASE))
 
-        done = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
+        done = self.run_sh("scripts/gate.sh",
                            "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
                            env=self.env(AC_ROOT=self.repo))
 
@@ -1879,8 +1884,7 @@ class TheReviewOutcomeIsTheExitCode(AutoFixBase):
                 self.set_worker(WORKER_FIXES)
                 self.ticket_ready(complexity="complex")
                 self.first_round()
-                write_executable(os.path.join(self.repo, "scripts", "review.sh"),
-                                 REVIEW_RC.replace("@RC@", rc))
+                self.stub_script("review.sh", REVIEW_RC.replace("@RC@", rc))
                 done = self.auto_fix()
                 self.assertEqual(done.returncode, want_rc, done.stdout + done.stderr)
                 self.assertIn("終態=%s" % word, done.stdout)
@@ -1975,10 +1979,10 @@ class MechanicalRedIsAttributed(AutoFixBase):
         再在 worktree 跑真 gate.sh(--no-auto-fix),最後由 auto-fix 從開場那條路讀它。"""
         wt = self.ticket_branch_commit("1", files_of(patch_text))
         if protected_edit:
-            self.write("scripts/land.sh", self.read("scripts/land.sh") + "\n# protected\n",
-                       where=wt)
-            self.git("commit", "-q", "-am", "#1 分支上碰到 hard_block.paths", cwd=wt)
-        gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
+            self.write("scripts/land.sh", "# protected\n", where=wt)
+            self.git("add", "-A", cwd=wt)
+            self.git("commit", "-q", "-m", "#1 分支上碰到 hard_block.paths", cwd=wt)
+        gate = self.run_sh("scripts/gate.sh",
                            "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
                            env=self.env(AC_ROOT=self.repo))
         self.assertEqual(gate.returncode, 4, gate.stdout + gate.stderr)
@@ -3267,14 +3271,14 @@ env | grep '^AC_' > "$out/env.txt" || true
     mkdir -p "$AC_ROOT/memory/model"
     old=$(python3 -c 'import datetime; print(datetime.date.today() - datetime.timedelta(days=3))')
     echo "- 探針的一條 (#1, $old, worker@opus)" > "$AC_ROOT/memory/model/huge-probe.inbox.md"
-    python3 scripts/memory.py check > "$out/memory.txt" 2>&1
-    python3 scripts/event.py tail 50 > "$out/events.txt" 2>&1
+    python3 "$AC_HOME/scripts/memory.py" check > "$out/memory.txt" 2>&1
+    python3 "$AC_HOME/scripts/event.py" tail 50 > "$out/events.txt" 2>&1
     rm -f "$AC_ROOT/memory/model/huge-probe.inbox.md"
-    python3 scripts/ticket.py create --subject 外洩探針 --objective 探針 --acceptance 探針 \\
+    python3 "$AC_HOME/scripts/ticket.py" create --subject 外洩探針 --objective 探針 --acceptance 探針 \\
         --role worker --model opus --tool claude-code \\
         > "$out/ticket.txt" 2>&1
-    python3 scripts/rules.py pack worker --model opus > "$out/rules.txt" 2>&1
-    sh scripts/gate.sh --branch --ticket 1 > "$out/gate.txt" 2>&1
+    python3 "$AC_HOME/scripts/rules.py" pack worker --model opus > "$out/rules.txt" 2>&1
+    sh "$AC_HOME/scripts/gate.sh" --branch --ticket 1 > "$out/gate.txt" 2>&1
     ls -R "$AC_ROOT" > "$out/control.txt" 2>&1
 ) || true"""
 
@@ -3812,7 +3816,7 @@ set -e
 echo "$AC_ROLE ran round $AC_ROUND" >> "$AC_TEST_LOG"
 REPO="@REPO@"
 SANDBOX="@SANDBOX@"
-emit() { AC_ROOT="$REPO" python3 "$REPO/scripts/event.py" emit "$@" >/dev/null; }
+emit() { AC_ROOT="$REPO" python3 "$AC_HOME/scripts/event.py" emit "$@" >/dev/null; }
 if [ "$AC_ROLE" = "@WHO@" ]; then
 @STRAY@
 fi
@@ -3841,7 +3845,7 @@ emit land.pass --note "同時的落地" --kv stamp=S1 --kv sha="$(git -C "$REPO"
 
 # #127 A3:agent 跑的期間真跑一次沙盒裡的 docs 通道(AC_ROOT 不覆寫的話事件寫進副本、守衛看不到)。
 REAL_DOCS = """echo "docs 通道" > "$REPO/docs/T127.md"
-AC_ROOT="$REPO" sh "$REPO/scripts/land.sh" docs "docs: #127 同時的 docs 通道" docs/T127.md >/dev/null
+AC_ROOT="$REPO" sh "$AC_HOME/scripts/land.sh" docs "docs: #127 同時的 docs 通道" docs/T127.md >/dev/null
 """
 
 class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
@@ -4044,7 +4048,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
         real docs channel while the worker runs; working tree clean afterwards -> exit 8 naming it,
         land event or not. Red when only the working tree is checked against hard_block.paths."""
         self.arm('echo "| D-998 | during the round |" >> "$REPO/docs/DECISIONS.md"\n'
-                 'AC_ROOT="$REPO" sh "$REPO/scripts/land.sh" docs "docs: v153 decisions" '
+                 'AC_ROOT="$REPO" sh "$AC_HOME/scripts/land.sh" docs "docs: v153 decisions" '
                  'docs/DECISIONS.md >/dev/null')
         before = self.git("rev-parse", "main").strip()
         done = self.auto_fix("--no-review")
@@ -4117,7 +4121,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
     def test_128_a2_the_exemption_does_not_spill_over(self):
         """#128 A2:同一輪 docs/ 與 scripts/x.sh ⇒ rc 8,violations 只列 scripts/x.sh、main_side 照列。
         量 rc 8 一整組與兩格;紅 = 整輪因前綴豁免;值 = 票面 A2。"""
-        self.arm('echo new > "$REPO/docs/T128.md"\necho x > "$REPO/scripts/x.sh"')
+        self.arm('echo new > "$REPO/docs/T128.md"\nmkdir -p "$REPO/scripts" && echo x > "$REPO/scripts/x.sh"')
         self.assert_stopped(self.auto_fix("--no-review"), "scripts/x.sh")
         report = self.guard_report()
         top = report["monitored"]["repo"]
@@ -4146,8 +4150,8 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
         objection = json.dumps([{"category": "ticket-wrong", "owner": "main", "body": "對不上",
                                  "evidence": "EVIDENCE.md:1", "disposition": "accepted",
                                  "follow_up": ""}], ensure_ascii=False)
-        self.arm('AC_ROOT="$REPO" python3 "$REPO/scripts/ticket.py" set 2 state Blocked >/dev/null\n'
-                 "AC_ROOT=\"$REPO\" python3 \"$REPO/scripts/ticket.py\" set 2 objections '%s' >/dev/null"
+        self.arm('AC_ROOT="$REPO" python3 "$AC_HOME/scripts/ticket.py" set 2 state Blocked >/dev/null\n'
+                 "AC_ROOT=\"$REPO\" python3 \"$AC_HOME/scripts/ticket.py\" set 2 objections '%s' >/dev/null"
                  % objection)
         self.assert_not_stopped(self.auto_fix("--no-review"))
         row = self.load_ticket("2")
@@ -4163,7 +4167,7 @@ class TheGuardCatchesAgentsOutsideTheirCopy(AutoFixBase):
         guard.json 的 notes 有那一段的 stamp 與「push 失敗」。量 docs 通道 rc 1、rc 0、notes;
         紅 = M4(push 失敗出口不帶 stage)與只認 land.pass;值 = 票面 A4、stamp 取自事件檔。"""
         self.arm('echo "docs 通道" > "$REPO/docs/T128.md"\n'
-                 'AC_ROOT="$REPO" sh "$REPO/scripts/land.sh" docs "docs: #128 推不上去" docs/T128.md '
+                 'AC_ROOT="$REPO" sh "$AC_HOME/scripts/land.sh" docs "docs: #128 推不上去" docs/T128.md '
                  '>/dev/null 2>&1 || echo "rc=$?" > "$SANDBOX/docs-rc"')
         self.refuse_pushes()
         before = self.git("rev-parse", "main").strip()

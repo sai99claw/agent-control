@@ -22,7 +22,7 @@ OLD_FLOOR    = "below_floor"(rules.py)/「低於 routing 下限」(DISPATCH-TEMP
 
 ## 怎麼做假(不上真埠、不起真服務、不打真的模型)
 沙盒借 tests/control_harness.Sandbox 經 tests/test_auto_fix.AutoFixBase(拋棄式真 git repo;PATH 最前面的 `claude`
-是絆線)。沙盒另外放進 scripts/role-models.py 與一份由本檔寫下的 board/role-models.json(由真表複製再改鏈)。
+是絆線)。沙盒另外放進一份由本檔寫下的 board/role-models.json(由真表複製再改鏈)。
 claude-code 那一支 = config worker.command 指向的假 sh(驗證者沒設 verifier.command 時同一支),記 AC_ROLE 與 argv、
 存 stdin;worker 交一份會綠的 patch。codex = stub-bin 的假 `codex`,記 argv,依模式交件 / 回額度信封 / 印純文字。
 reviewer = config reviewer.command 指向的假 sh(交 pass / fail / 不交 / 先改票再交 pass)。外層 AC_* 由沙盒清掉。
@@ -46,7 +46,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 TESTS_DIR = os.path.join(ROOT, "tests")
 sys.path.insert(0, TESTS_DIR)
-from control_harness import DEFAULT_CONFIG, SCRIPTS, write_executable  # noqa: E402
+from control_harness import DEFAULT_CONFIG, write_executable  # noqa: E402
 from test_auto_fix import RED_LOG, AutoFixBase  # noqa: E402
 
 # ---- 介面字串:斷言只認這裡的常數,改這裡等於改契約 ----
@@ -135,7 +135,7 @@ verdict="@VERDICT@"
 [ "$verdict" != none ] || exit 0
 if [ "$verdict" = stale ]; then
     env -u AC_TICKETS_DIR -u AC_CONTROL_DIR AC_ROOT="@REPO@" \\
-        python3 "@REPO@/scripts/ticket.py" set 1 acceptance '["覆核途中改過的驗收"]' >/dev/null
+        python3 "@SCRIPTS@/ticket.py" set 1 acceptance '["覆核途中改過的驗收"]' >/dev/null
     verdict=pass
 fi
 cat <<EOF
@@ -185,12 +185,6 @@ class RoleTableBase(AutoFixBase):
         super().setUp()
         self.calls = os.path.join(self.home, "calls.tsv")
         self.partial = os.path.join(self.home, "repo-wt", "t1", "tests", "codex_partial.txt")
-        target = os.path.join(self.repo, "scripts", "role-models.py")
-        if not os.path.exists(target):
-            with open(os.path.join(SCRIPTS, "role-models.py"), encoding="utf-8") as src, \
-                    open(target, "w", encoding="utf-8") as dst:
-                dst.write(src.read())
-            os.chmod(target, 0o755)
         with open(os.path.join(ROOT, "board", "role-models.json"), encoding="utf-8") as handle:
             self.base_table = json.load(handle)
         self.table = copy.deepcopy(self.base_table)
@@ -225,7 +219,8 @@ class RoleTableBase(AutoFixBase):
     def fake_reviewer(self, verdict):
         path = os.path.join(self.home, "fake-reviewer.sh")
         write_executable(path, FAKE_REVIEWER.replace("@CALLS@", self.calls)
-                         .replace("@VERDICT@", verdict).replace("@REPO@", self.repo))
+                         .replace("@VERDICT@", verdict).replace("@REPO@", self.repo)
+                         .replace("@SCRIPTS@", self.scripts))
         self.conf["reviewer"] = {"command": "sh %s --model fixture-model" % path,
                                  "timeout_seconds": 60}
         self.save_conf()

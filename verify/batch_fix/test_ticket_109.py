@@ -38,7 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 TESTS_DIR = os.path.join(ROOT, "tests")
 sys.path.insert(0, TESTS_DIR)
-from control_harness import Sandbox, write_executable  # noqa: E402
+from control_harness import Sandbox  # noqa: E402
 
 KICKED = "踢出"
 SINGLE = "單張 land"
@@ -89,12 +89,12 @@ PY
 
 AUTO_FIX_STUB = r'''#!/bin/sh
 here=$(dirname "$AC_TEST_LOG")
-root=$(cd "$(dirname "$0")/.." && pwd)
+root=${AC_ROOT:-$(pwd)}
 lock=no
 [ -d "$root/.land.lock" ] && lock=yes
 echo "autofix $* |batch_run=${AC_BATCH_RUN_ID:-} lock=$lock" >> "$AC_TEST_LOG"
 if [ -f "$here/docs-probe" ]; then
-    sh "$root/scripts/land.sh" docs "擠進去" tickets/7.json > "$here/docs-probe.out" 2>&1
+    sh "$(dirname "$0")/land.sh" docs "擠進去" tickets/7.json > "$here/docs-probe.out" 2>&1
     echo "docs-probe rc=$?" >> "$AC_TEST_LOG"
 fi
 if [ "${1:-}" = "--batch" ]; then
@@ -115,7 +115,7 @@ class BatchLandWorld(Sandbox):
 
     def setUp(self):
         super().setUp()
-        write_executable(os.path.join(self.repo, "scripts", "auto-fix.sh"), AUTO_FIX_STUB)
+        self.stub_script("auto-fix.sh", AUTO_FIX_STUB)
 
     # ------------------------------------------------------------ 夾具
 

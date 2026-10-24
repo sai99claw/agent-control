@@ -60,24 +60,13 @@
 #     ⇒ 票轉 Blocked、owner=main,一頁 decision,不收件、worktree 與副本留著(與額度同時發生也是 8)
 #   9 閘門綠、覆核 fail   10 閘門綠、覆核沒交件 / stale / 沒完成(#121 A6)
 set -u
-# `AC_ROOT` 優先:被 `gate.sh` 的 auto-fix 叫到時,這支檔案住在**副本**裡,
-# 而票、reports 與收件匣住在主 repo。照 `$0` 算根會把它們寫進一個等一下會被
-# 收掉的目錄 —— 而且不會報錯。
-# 主 repo 根:找 board/config.json 往上走(同步到專案後這幾支住在 scripts/control/,
-# 「上一層」不再是根);找不到才退回上一層,跟以前一樣。
-_ac_root() {
-    _d=$(cd "$(dirname "$0")" && pwd); _i=0
-    while [ $_i -lt 5 ]; do
-        [ -f "$_d/board/config.json" ] && { echo "$_d"; return; }
-        _d=$(dirname "$_d"); _i=$((_i+1))
-    done
-    cd "$(dirname "$0")/.." && pwd
-}
-ROOT=${AC_ROOT:-$(_ac_root)}
-# 控制腳本自己住的目錄:agent-control 裡是 scripts/,同步到專案後是 scripts/control/。
+# 專案根不從 `$0` 來(D-071 C2,#159):`AC_ROOT`,否則 cwd 的主 repo 根,否則 rc 2 ——
+# 規則只有一份,在 `wtbase.sh`。控制腳本自己住的目錄(A 的 clone)才從 `$0` 算;
 # 同伴腳本一律從這裡叫,不寫死 $ROOT/scripts。
 AC=${AC_CONTROL_DIR:-$(cd "$(dirname "$0")" && pwd)}
 export AC_CONTROL_DIR=$AC
+. "$AC/wtbase.sh"
+ROOT=$(ac_root auto-fix) || exit 2
 export AC_ROOT=$ROOT
 
 cfg() {   # $1 = key(巢狀用 a.b)  $2 = 預設
@@ -179,13 +168,12 @@ BASE_WORKER_CMD=$(with_envelope "$(cfg worker.command "claude -p --model opus")"
 WORKER_CMD=$BASE_WORKER_CMD
 RERUN_CMD=$(cfg gate.rerun_cmd "")
 TF=$TDIR/$ID.json
-# 主 repo 根與副本根 **只有一種定義**(#38,#46,D-018):`scripts/wtbase.sh`。
-. "$AC/wtbase.sh"
+# 主 repo 根與副本根 **只有一種定義**(#38,#46,D-018):`scripts/wtbase.sh`(檔頭已載入)。
 MAINROOT=$(main_root)
-# 票分支的 worktree **不是**控制根(G10 / #29 A10):`_ac_root()` 往上找
-# `board/config.json`,在 worktree 裡找到的是 worktree 自己,於是票檔要在**那一條分支上
-# 進了版控**才找得到 —— 而票檔是走 docs 通道進主線的,常常還沒進去(#23 第 2 輪就是這樣
-# rc=2 停掉的)。所以找不到票時改問主 repo(`wtbase.sh` 的 `main_root`)。
+# 票分支的 worktree **不是**控制根(G10 / #29 A10):cwd 規則本來就指回主 repo,但呼叫端
+# 給的 `AC_ROOT` 可能是 worktree 自己,而票檔要在**那一條分支上進了版控**才找得到 ——
+# 票檔是走 docs 通道進主線的,常常還沒進去(#23 第 2 輪就是這樣 rc=2 停掉的)。
+# 所以找不到票時改問主 repo(`wtbase.sh` 的 `main_root`)。
 if [ ! -f "$TF" ] && [ -z "${AC_TICKETS_DIR:-}" ]; then
     if [ "$MAINROOT" != "$ROOT" ] \
             && [ -f "$MAINROOT/board/config.json" ] && [ -f "$MAINROOT/$TICKETS/$ID.json" ]; then
@@ -1342,6 +1330,9 @@ try:
         start_in = worktree or os.path.join(cwd, "work")
         if not os.path.isdir(start_in):
             start_in = cwd
+        # 程式碼根(D-071 §1,#159)= agent 起的那棵樹:驗證者的封存副本不是 git 樹,cwd 規則在
+        # 那裡答不出來;外層(閘門)留下的 `AC_CODE_ROOT` 指的是別棵樹,不准漏進來。
+        env["AC_CODE_ROOT"] = start_in
         cmd, agy = command_for_agent(cmd, copy)
     input_path = os.devnull if role != "opener" and agy else dispatch
     with open(input_path, encoding="utf-8") as handle, open(log_path, "wb") as log:
@@ -2679,7 +2670,9 @@ PY
     if [ -n "$RERUN_CMD" ]; then
         gate_cmd=$RERUN_CMD
     else
-        gate_cmd="sh scripts/gate.sh --branch --ticket $ID"
+        # 預設跑哪一份閘門與 land.sh 同一條(D-071 C3,`wtbase.sh` 的 `ac_gate_script`):
+        # 專案就是 A 自己才跑 worktree 那一份,其他專案跑 AC_HOME 那一份。
+        gate_cmd="sh '$(ac_gate_script "$WT")' --branch --ticket $ID"
         echo "auto-fix: 警告:沒有設 gate.rerun_cmd —— 退回 $gate_cmd" >&2
     fi
     echo "auto-fix: 第 $r 輪的閘門 —— (cd $WT && $gate_cmd)"

@@ -40,7 +40,7 @@ class BoardReads(Sandbox):
 
     def serve(self):
         proc = subprocess.Popen(
-            ["python3", os.path.join(self.repo, "board", "board.py"), "--port", "0"],
+            ["python3", self.board_py, "--port", "0"],
             cwd=self.repo, env=self.env(), stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True)
         # 只殺自己起的那一顆,不去獵行程(`docs/DISPATCH-TEMPLATE.md` §2)。

@@ -45,24 +45,13 @@
 # 那句話等於沒有人收(`docs/DISPATCH-TEMPLATE.md` §7)。退出碼說的是「這一手沒有結束」,
 # 不是「什麼都沒發生」。
 set -u
-# `AC_ROOT` 優先:被 `gate.sh --auto-fix` 叫到的時候,這支檔案住在**副本**裡,
-# 而票、reports 與收件匣住在主 repo。照 `$0` 算根會把它們寫進一個等一下會被
-# 收掉的目錄 —— 而且不會報錯。
-# 主 repo 根:找 board/config.json 往上走(同步到專案後這幾支住在 scripts/control/,
-# 「上一層」不再是根);找不到才退回上一層,跟以前一樣。
-_ac_root() {
-    _d=$(cd "$(dirname "$0")" && pwd); _i=0
-    while [ $_i -lt 5 ]; do
-        [ -f "$_d/board/config.json" ] && { echo "$_d"; return; }
-        _d=$(dirname "$_d"); _i=$((_i+1))
-    done
-    cd "$(dirname "$0")/.." && pwd
-}
-ROOT=${AC_ROOT:-$(_ac_root)}
-# 控制腳本自己住的目錄:agent-control 裡是 scripts/,同步到專案後是 scripts/control/。
+# 專案根不從 `$0` 來(D-071 C2,#159):`AC_ROOT`,否則 cwd 的主 repo 根,否則 rc 2 ——
+# 規則只有一份,在 `wtbase.sh`。控制腳本自己住的目錄(A 的 clone)才從 `$0` 算;
 # 同伴腳本一律從這裡叫,不寫死 $ROOT/scripts。
 AC=${AC_CONTROL_DIR:-$(cd "$(dirname "$0")" && pwd)}
 export AC_CONTROL_DIR=$AC
+. "$AC/wtbase.sh"
+ROOT=$(ac_root apply) || exit 2
 
 cfg() {   # $1 = key  $2 = 預設;巢狀用 a.b
     python3 - "$ROOT" "$1" "$2" <<'PY'
@@ -83,7 +72,6 @@ TICKETS=${AC_TICKETS_DIR:-$(cfg tickets_dir tickets)}
 case $TICKETS in /*) TDIR=$TICKETS ;; *) TDIR=$ROOT/$TICKETS ;; esac
 # 副本/worktree 的根:環境變數 > board/config.json 的 `worktree_dir` > 預設 `../<主 repo>-wt`;
 # 相對路徑以**主 repo 根**拼(#46,與 auto-fix / land / review 同一個來源 `scripts/wtbase.sh`)。
-. "$AC/wtbase.sh"
 WTBASE=$(wtbase)
 
 # 收尾提示指**真正的**落地入口(#87 A27,與 sync-to-project.sh 同一條判準):專案根有

@@ -181,7 +181,7 @@ class ConcurrentCreate(Sandbox):
 
         **變異**:把 `cmd_create` 裡的 `with Lock():` 拿掉 → 這一條紅。
         """
-        scripts = os.path.join(self.repo, "scripts")
+        scripts = self.scripts
         procs = [subprocess.Popen(
             ["python3", "-c", SLOW_NEXT_ID, scripts, "create", *MIN],
             cwd=self.repo, env=self.env(), stdout=subprocess.PIPE,

@@ -349,9 +349,8 @@ class AgentOutputHarness(Sandbox):
         來的路(沒交件)在 `apply.sh`/`gate.sh` 之前就已經 return 了。"""
         # 第 1 輪交件 = 票分支 t1 上一個 commit(#144);夾具照舊是那一份紅的案例。
         wt = self.ticket_branch_commit("1", files_of(PROBE_PATCH))
-        gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
-                           "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt,
-                           env=self.env(AC_ROOT=self.repo))
+        gate = self.run_sh("scripts/gate.sh",
+                           "--branch", "--ticket", "1", "--no-auto-fix", cwd=wt)
         self.assertNotEqual(gate.returncode, 0, gate.stdout + gate.stderr)
         return wt
 

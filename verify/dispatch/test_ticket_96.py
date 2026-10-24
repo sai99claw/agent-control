@@ -28,7 +28,6 @@ scripts/repo-map.py 進沙盒、寫 catalog、build、commit。worker 的交件�
 """
 import json
 import os
-import shutil
 import subprocess
 import sys
 import unittest
@@ -38,7 +37,6 @@ TAGS = ["dry-run-keeps-copies", "apply-regen-index"]
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
-from control_harness import SCRIPTS  # noqa: E402
 from test_apply import ApplyBase, FULL_EVIDENCE  # noqa: E402
 from test_auto_fix import AutoFixBase, WORKER_NEVER  # noqa: E402
 
@@ -155,15 +153,15 @@ class ApplyRebuildsTheCodeMap(ApplyBase):
 
     def setUp(self):
         super().setUp()
-        shutil.copy(os.path.join(SCRIPTS, "repo-map.py"),
-                    os.path.join(self.repo, "scripts", "repo-map.py"))
+        self.install_code_map_tool()
         catalog = {"version": 1, "managed": ["scripts/*.py", "tests/test_*.py"],
                    "topics": {"memory": {"summary": "沙盒", "match": ["memory"],
                                          "entry": "scripts/memory.py"}}}
         self.write(os.path.join("code-map", "catalog.json"),
                    json.dumps(catalog, ensure_ascii=False, indent=2))
         self.write(os.path.join("tests", "test_repo_map_contract.py"), PASSING)
-        built = self.run_py("scripts/repo-map.py", "build")
+        built = self.run_py(os.path.join(self.repo, "scripts", "repo-map.py"),
+                            "--root", self.repo, "build")
         self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
         self.make("1")
         self.git("push", "-q", "origin", "main")
@@ -199,7 +197,7 @@ class ApplyRebuildsTheCodeMap(ApplyBase):
         """A5 A4 那條分支跑 gate.sh --branch --ticket 1 --no-auto-fix:不再擋「索引過期」、rc 不是 4。"""
         self.apply_new_managed_file()
         wt = self.wt()
-        gate = self.run_sh(os.path.join(wt, "scripts", "gate.sh"), "--branch", "--ticket", "1",
+        gate = self.run_sh("scripts/gate.sh", "--branch", "--ticket", "1",
                            "--no-auto-fix", cwd=wt)
         self.assertNotIn(STALE, gate.stderr)
         self.assertNotEqual(gate.returncode, 4, gate.stdout + gate.stderr)

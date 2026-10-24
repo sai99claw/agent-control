@@ -127,7 +127,8 @@ elif role == "verifier":
 else:
     triage = os.path.join(os.getcwd(), "reports", "t1", "triage-round%s.md" % r)
     if mode == "accept":
-        subprocess.run([sys.executable, os.path.join(REPO, "scripts", "ticket.py"), "set", "1",
+        subprocess.run([sys.executable, os.path.join(os.environ["AC_HOME"], "scripts", "ticket.py"),
+                        "set", "1",
                         "acceptance", json.dumps(plan["new_acceptance"], ensure_ascii=False)],
                        check=True, stdout=subprocess.DEVNULL)
         write(triage, "TRIAGE: accepted %s\n" % plan["accept_reason"])

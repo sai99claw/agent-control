@@ -26,7 +26,7 @@ class BoardUp(Sandbox):
 
     def serve(self):
         proc = subprocess.Popen(
-            ["python3", os.path.join(self.repo, "board", "board.py"), "--port", "0"],
+            ["python3", self.board_py, "--port", "0"],
             cwd=self.repo, env=self.env(), stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True)
         # **只殺自己起的**:記下這一顆的 pid,不去獵行程。

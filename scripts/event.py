@@ -21,6 +21,7 @@
 
 import json
 import os
+import subprocess
 import sys
 from datetime import datetime
 
@@ -71,28 +72,45 @@ DEFAULT_ANSWERS = os.path.join("board", "answers.jsonl")
 OUTSIDE = "(repo 外)"
 
 
-def repo_root():
-    """repo 根。`AC_ROOT` 可以蓋掉它 —— 測試要把整支腳本指到一顆拋棄式 repo,
-    而**能被指到別處**正是「這一支沒有寫死任何專案」的可驗證形狀。
+NOT_IN_PROJECT = "not inside a project; use actl -C <dir> or set AC_ROOT"
 
-    沒有 `AC_ROOT` 時往上找 `board/config.json`。理由是同步過去的形狀:專案把這幾支
-    放在 `scripts/control/`(`scripts/sync-to-project.sh`),而「上兩層」在那裡是
-    `<專案>/scripts` —— 票、事件、reports 會通通寫到一個沒有人看的目錄,而且
-    **它不會報錯**(設定讀不到就回空 dict,一路用預設值)。找不到就退回上兩層,
-    行為與以前一模一樣。
+
+def main_root_of(where):
+    """`where` 所在 git 樹的主 repo 根(`--git-common-dir` 的上一層,實體路徑):在票的
+    worktree 裡它指回主 repo。不在 git 裡回 None。與 `wtbase.sh` 的 `ac_main_root_of`
+    同一條規則(shell 那一份給 `bin/actl` 與 scripts/*.sh)。"""
+    try:
+        done = subprocess.run(["git", "-C", where, "rev-parse", "--git-common-dir"],
+                              capture_output=True, text=True)
+    except OSError:
+        return None
+    common = done.stdout.strip()
+    if done.returncode != 0 or not common:
+        return None
+    return os.path.realpath(os.path.dirname(os.path.join(where, common).rstrip(os.sep)))
+
+
+def repo_root():
+    """專案根(票、事件、reports)。`AC_ROOT` 可以蓋掉它 —— `actl` 替每個子行程設好;測試把
+    整支腳本指到一顆拋棄式 repo,而**能被指到別處**正是「這一支沒有寫死任何專案」的可驗證形狀。
+
+    沒有 `AC_ROOT` 時是 cwd 所在 git 樹的主 repo 根(D-071 C2,#159)。**不從這支檔案的位置
+    往上找**:腳本住在 A 的 clone,從那裡往上找到的永遠是 A 自己的 `board/config.json` ——
+    票與事件寫進 A,而且**不會報錯**。兩者都沒有就一行 stderr、rc 2,不猜一個根。
     """
     override = os.environ.get(ENV_ROOT)
     if override:
         return os.path.abspath(os.path.expanduser(override))
-    here = os.path.dirname(os.path.abspath(__file__))
-    walk = here
-    for _ in range(5):
-        walk = os.path.dirname(walk)
-        if not walk or walk == os.path.dirname(walk):
-            break
-        if os.path.exists(os.path.join(walk, CONFIG_REL)):
-            return walk
-    return os.path.dirname(here)
+    try:
+        here = os.getcwd()
+    except OSError:
+        here = None
+    found = main_root_of(here) if here else None
+    if found:
+        return found
+    prog = os.path.basename(sys.argv[0] or "") or "event.py"
+    sys.stderr.write("%s: %s\n" % (prog, NOT_IN_PROJECT))
+    raise SystemExit(2)
 
 
 def looks_like_a_copy(root):

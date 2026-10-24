@@ -82,7 +82,7 @@ if mode == "quota":
     print(@QUOTA@)
     sys.exit(1)
 if mode == "discuss":
-    snap = subprocess.run([sys.executable, os.path.join(os.environ["AC_ROOT"], "scripts", "memory.py"),
+    snap = subprocess.run([sys.executable, os.path.join(os.environ["AC_HOME"], "scripts", "memory.py"),
                            "snapshot", plan["memory_file"]], capture_output=True, text=True).stdout
     count = int(snap.split("source_lines:")[1].split()[0])
     talk = os.environ["AC_DISCUSSION"]
@@ -221,9 +221,8 @@ class ConsolidatorFixture(FakeAgents, Sandbox):
 
     def setUp(self):
         super().setUp()
-        for rel in (os.path.join("scripts", "consolidate-memory.sh"),
-                    os.path.join("templates", "dispatch-consolidator.md")):
-            shutil.copy(os.path.join(ROOT, rel), os.path.join(self.repo, rel))
+        rel = os.path.join("templates", "dispatch-consolidator.md")
+        shutil.copy(os.path.join(ROOT, rel), os.path.join(self.repo, rel))
         self.install_rules_sources()
         self.write(MEMORY_FILE, "---\ncap_chars: 2000\ncap_history: []\n---\n" + "舊" * 2100)
         self.write(MEMORY_INBOX, "- 待整理一 (#11, 2026-09-01, worker@opus)\n"

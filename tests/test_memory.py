@@ -398,7 +398,7 @@ class Note(Sandbox):
                 "'--ticket','2','--by','worker@opus']) for i in range(50)]")
         env = self.env(AC_ROOT=self.repo)
         procs = [subprocess.Popen([sys.executable, "-c", code,
-                                  os.path.join(self.repo, "scripts"), prefix],
+                                  self.scripts, prefix],
                                  env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                  text=True) for prefix in ("A-", "B-")]
         outputs = [proc.communicate(timeout=30) for proc in procs]

@@ -4,28 +4,35 @@ RUN = [sys.executable, os.path.join(HERE, "scripts/verify.py")]
 
 
 def local_env(**overrides):
-    """釘死 AC_ROOT = HERE(這個 worktree 自己),不管外層(land.sh 跑全套時)有沒有
-    設 AC_ROOT(#32 第 2 輪:分支閘門用的是乾淨環境,沒有外部 AC_ROOT,這裡的測試
-    才碰巧綠;land 的全套在自己的環境裡先設了 AC_ROOT 指到別的 worktree,子行程
-    會原樣繼承,這幾條測試要驗的是『這個副本自己的 verify/』,不是外層那一個)。"""
+    """釘死 AC_ROOT = AC_CODE_ROOT = HERE(這個 worktree 自己),不管外層(land.sh 跑全套時)
+    有沒有設(#32 第 2 輪:land 的全套在自己的環境裡先設了 AC_ROOT 指到別的 worktree,子行程
+    會原樣繼承,這幾條測試要驗的是『這個副本自己的 verify/』,不是外層那一個)。程式碼根是
+    `AC_CODE_ROOT`,否則 cwd 的 toplevel(#159)—— 驗證者的封存副本不是 git 樹,不釘就答不出來。"""
     env = dict(os.environ)
     env["AC_ROOT"] = HERE
+    env["AC_CODE_ROOT"] = HERE
     env.update(overrides)
     return env
 
 
 @contextlib.contextmanager
-def no_ac_root():
-    """import 進行程時暫時拿掉 AC_ROOT,讓 `_find_root()` 走到往上找
-    `board/config.json` 那一段 —— 不這樣做,外層(land.sh)留在 os.environ 裡的
-    AC_ROOT 會讓 override 分支先短路,fixture 造的假專案永遠不會被走到。"""
-    had = "AC_ROOT" in os.environ
-    old = os.environ.pop("AC_ROOT", None)
+def code_root_env(value, cwd):
+    """import 進行程時暫時把 `AC_CODE_ROOT` 換成 `value`(None = 拿掉)、cwd 換成 `cwd` ——
+    `ROOT = _find_root()` 在 import 那一刻執行,外層(閘門)留在 os.environ 的 `AC_CODE_ROOT`
+    會讓 override 分支先短路,這裡要問的那一段永遠不會被走到(#32 第 2 輪同一種)。"""
+    had = "AC_CODE_ROOT" in os.environ
+    old = os.environ.pop("AC_CODE_ROOT", None)
+    here = os.getcwd()
+    if value is not None:
+        os.environ["AC_CODE_ROOT"] = value
+    os.chdir(cwd)
     try:
         yield
     finally:
+        os.chdir(here)
+        os.environ.pop("AC_CODE_ROOT", None)
         if had:
-            os.environ["AC_ROOT"] = old
+            os.environ["AC_CODE_ROOT"] = old
 
 
 def copy_code_tree(tmp, only=None):
@@ -57,7 +64,7 @@ class VerifyRunner(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             copy_code_tree(tmp, only=("example",))
             run = [sys.executable, os.path.join(tmp, "scripts", "verify.py")]
-            env = local_env(AC_ROOT=tmp)
+            env = local_env(AC_ROOT=tmp, AC_CODE_ROOT=tmp)
             env.pop("AC_TICKET", None)
             env.pop("AC_RUN_ID", None)
             listed = subprocess.run(run + ["--list"], capture_output=True, text=True, env=env)
@@ -87,7 +94,7 @@ class VerifyRunner(unittest.TestCase):
                         f.write("{}")
                 r = subprocess.run([sys.executable, os.path.join(tmp, "scripts", "verify.py"),
                                     "--unit"], capture_output=True, text=True,
-                                   env=local_env(AC_ROOT=tmp))
+                                   env=local_env(AC_ROOT=tmp, AC_CODE_ROOT=tmp))
                 self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
                 self.assertIn("單元層未設定(board/config.json 的 unit_cmd)", r.stdout)
 
@@ -98,7 +105,8 @@ class VerifyRunner(unittest.TestCase):
             with open(p, "w") as f:
                 f.write("import unittest\nTAGS=['not-registered']\nclass T(unittest.TestCase):\n    def test_x(self): pass\n")
             r = subprocess.run([sys.executable, os.path.join(tmp, "scripts", "verify.py"), "--list"],
-                               capture_output=True, text=True, env=local_env(AC_ROOT=tmp))
+                               capture_output=True, text=True,
+                               env=local_env(AC_ROOT=tmp, AC_CODE_ROOT=tmp))
             self.assertEqual(r.returncode, 2, r.stdout)
             self.assertIn("標籤未登記", r.stdout)
 
@@ -112,9 +120,10 @@ class RunScopedCache(unittest.TestCase):
 
     def run_with(self, root, run_id, *extra):
         # `root` 只是票根(AC_ROOT):快取檔寫去它的 reports/。案例與被測檔來自
-        # scripts/verify.py 自己所在的那棵樹(HERE),所以假專案不需要自己的 verify/(#55)。
+        # 程式碼根 HERE(`AC_CODE_ROOT`,#159),所以假專案不需要自己的 verify/(#55)。
         env = dict(os.environ)
-        env.update({"AC_TICKET": "77", "AC_RUN_ID": run_id, "AC_ROOT": root})
+        env.update({"AC_TICKET": "77", "AC_RUN_ID": run_id, "AC_ROOT": root,
+                    "AC_CODE_ROOT": HERE})
         return subprocess.run(RUN + ["--tag", "example", *extra],
                               capture_output=True, text=True, env=env, timeout=300)
 
@@ -152,7 +161,7 @@ class RunScopedCache(unittest.TestCase):
         with tempfile.TemporaryDirectory() as home:
             self.run_with(home, "r1")
             env = dict(os.environ)
-            env.update({"AC_TICKET": "77", "AC_ROOT": home})
+            env.update({"AC_TICKET": "77", "AC_ROOT": home, "AC_CODE_ROOT": HERE})
             env.pop("AC_RUN_ID", None)
             for _ in range(2):
                 done = subprocess.run(RUN + ["--tag", "example"], capture_output=True,
@@ -163,17 +172,18 @@ class RunScopedCache(unittest.TestCase):
 class CodeRootIsNotTheTicketRoot(unittest.TestCase):
     """#55:land.sh 在票 worktree 裡帶 `AC_ROOT=<主 repo>` 跑閘門,verify.py 子行程繼承
     它 —— 舊版的 `_find_root()` 先讀 `AC_ROOT`,於是 worktree 的閘門跑的是主 repo 的
-    `verify/`,worktree 裡的紅看不見。兩個根分開:程式碼根跟檔案走,`AC_ROOT` 只管
-    票、事件與 reports。"""
+    `verify/`,worktree 裡的紅看不見。兩個根分開:程式碼根是 `AC_CODE_ROOT`(否則 cwd 的
+    toplevel,#159),`AC_ROOT` 只管票、事件與 reports。"""
 
-    def test_ac_root_elsewhere_still_runs_the_cases_beside_this_file(self):
-        """程式碼根是這支檔案所在的那棵樹(#55)。
+    def test_ac_code_root_runs_the_copys_red_case_while_ac_root_is_here(self):
+        """程式碼根是受測的那棵樹(#55;D-071 §1,#159)。
 
         A1:把 HERE 的必要部分拷到 tmp,tmp 那份 example 案例改成紅(字串由這裡寫);
-        `AC_ROOT=HERE` 跑 tmp 的 verify.py —— 紅只可能來自 tmp。HERE 的 verify/ 不動。
+        `AC_CODE_ROOT=tmp`、`AC_ROOT=HERE` 跑 HERE 的 verify.py —— 紅只可能來自 tmp。
+        HERE 的 verify/ 不動。
 
-        **變異 M1**:`_find_root()` 放回 `AC_ROOT` override 分支 → 紅(跑到 HERE 那份綠
-        案例,rc 0)。
+        **變異 M1**:`_find_root()` 放回 `AC_ROOT` override 分支(或從 `__file__` 往上找)
+        → 紅(跑到 HERE 那份綠案例,rc 0)。
         """
         with tempfile.TemporaryDirectory() as tmp:
             copy_code_tree(tmp)
@@ -183,12 +193,11 @@ class CodeRootIsNotTheTicketRoot(unittest.TestCase):
                         "class T(unittest.TestCase):\n"
                         "    def test_red(self):\n"
                         "        self.fail('copy-only red')\n")
-            env = local_env()
+            env = local_env(AC_CODE_ROOT=tmp)
             env.pop("AC_TICKET", None)
             env.pop("AC_RUN_ID", None)
             done = subprocess.run(
-                [sys.executable, os.path.join(tmp, "scripts", "verify.py"),
-                 "--tag", "example", "--no-cache"],
+                RUN + ["--tag", "example", "--no-cache"],
                 capture_output=True, text=True, env=env, timeout=300)
             self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
             self.assertIn("copy-only red", done.stdout + done.stderr)
@@ -207,7 +216,8 @@ class CodeRootIsNotTheTicketRoot(unittest.TestCase):
                 f.write("{}")
             run_id = "r-ticket-root-%d" % os.getpid()
             env = dict(os.environ)
-            env.update({"AC_TICKET": "77", "AC_RUN_ID": run_id, "AC_ROOT": tmp2})
+            env.update({"AC_TICKET": "77", "AC_RUN_ID": run_id, "AC_ROOT": tmp2,
+                        "AC_CODE_ROOT": HERE})
             try:
                 done = subprocess.run(RUN + ["--tag", "example"], capture_output=True,
                                       text=True, env=env, timeout=300)
@@ -223,11 +233,10 @@ class CodeRootIsNotTheTicketRoot(unittest.TestCase):
                 shutil.rmtree(os.path.join(HERE, "reports", "t77", run_id), True)
 
 
-class RootFindsProjectRootWhenSyncedToControl(unittest.TestCase):
-    """`scripts/sync-to-project.sh` 把這支同步到 `<專案>/scripts/control/verify.py`
-    之後,寫死 `dirname(dirname(__file__))` 算出的是 `<專案>/scripts`,不是專案根 ——
-    `verify/` 找不到、`registered_tags()` 回空集合(#32)。ROOT 要跟 `scripts/event.py`
-    的 `repo_root()` 一樣:往上找 `board/config.json`,兩個位置都要算出同一個根。
+class RootIsTheTreeUnderTestNotTheFilesHome(unittest.TestCase):
+    """#159(D-071 C2/§1):腳本住在 A 的 clone,受測的樹在專案裡 —— 程式碼根不從這支檔案
+    的位置往上找(舊版那一找在 A 的 clone 裡永遠找到 A 自己)。同一份 verify.py 放在哪裡都
+    算出同一個根:`AC_CODE_ROOT`,否則 cwd 的 toplevel,都沒有就 None(`main()` rc 2)。
     """
 
     def _fake_project(self, tmp, tag):
@@ -238,28 +247,42 @@ class RootFindsProjectRootWhenSyncedToControl(unittest.TestCase):
         with open(os.path.join(tmp, "verify", "TAGS.md"), "w", encoding="utf-8") as f:
             f.write("- `%s` — fixture\n" % tag)
 
-    def _load_verify_copied_to(self, dest_dir):
+    def _load_verify_copied_to(self, dest_dir, code_root, cwd):
         os.makedirs(dest_dir, exist_ok=True)
         dest = os.path.join(dest_dir, "verify.py")
         shutil.copy(os.path.join(HERE, "scripts", "verify.py"), dest)
         spec = importlib.util.spec_from_file_location("verify_under_test_%d" % id(dest), dest)
         mod = importlib.util.module_from_spec(spec)
-        # import 這一刻就是 `ROOT = _find_root()` 執行的那一刻 —— 外層(land.sh 全套)
-        # 留在 os.environ 的 AC_ROOT 會讓 override 分支先短路,fixture 的假專案永遠不會
-        # 被走到,這支測試就測不到往上找 board/config.json 那段邏輯(#32 第 2 輪)。
-        with no_ac_root():
+        with code_root_env(code_root, cwd):
             spec.loader.exec_module(mod)
         return mod
 
-    def test_scripts_and_scripts_control_agree_on_the_same_root(self):
-        """放在 `<root>/scripts/` 與 `<root>/scripts/control/` 兩處都要算出同一個 root。"""
-        with tempfile.TemporaryDirectory() as fake:
+    def test_two_homes_of_the_file_agree_on_the_code_root(self):
+        """`<A>/scripts/` 與 `<別處>/scripts/control/` 兩份,`AC_CODE_ROOT=<專案>` 都算出專案。
+
+        **變異**:`_find_root()` 放回從 `__file__` 往上找 → 兩份算出各自的家,紅。"""
+        with tempfile.TemporaryDirectory() as fake, tempfile.TemporaryDirectory() as home:
             self._fake_project(fake, "example-fake")
-            at_scripts = self._load_verify_copied_to(os.path.join(fake, "scripts"))
-            at_control = self._load_verify_copied_to(os.path.join(fake, "scripts", "control"))
-            self.assertEqual(os.path.realpath(at_scripts.ROOT), os.path.realpath(at_control.ROOT))
-            self.assertIn("example-fake", at_scripts.registered_tags())
-            self.assertIn("example-fake", at_control.registered_tags())
+            self._fake_project(home, "home-only")
+            in_home = self._load_verify_copied_to(os.path.join(home, "scripts"), fake, home)
+            in_control = self._load_verify_copied_to(
+                os.path.join(home, "x", "scripts", "control"), fake, home)
+            self.assertEqual(os.path.realpath(in_home.ROOT), os.path.realpath(fake))
+            self.assertEqual(os.path.realpath(in_control.ROOT), os.path.realpath(fake))
+            self.assertIn("example-fake", in_home.registered_tags())
+            self.assertNotIn("home-only", in_home.registered_tags())
+
+    def test_without_ac_code_root_it_is_cwd_toplevel_or_nothing(self):
+        """沒有 `AC_CODE_ROOT`:cwd 在一棵 git 樹裡 → 它的 toplevel;不在 → None(不猜)。"""
+        with tempfile.TemporaryDirectory() as tree, tempfile.TemporaryDirectory() as bare:
+            self._fake_project(tree, "in-tree")
+            subprocess.run(["git", "init", "-q", tree], check=True, capture_output=True)
+            os.makedirs(os.path.join(tree, "docs"))
+            mod = self._load_verify_copied_to(os.path.join(bare, "a", "scripts"), None,
+                                              os.path.join(tree, "docs"))
+            self.assertEqual(os.path.realpath(mod.ROOT), os.path.realpath(tree))
+            mod = self._load_verify_copied_to(os.path.join(bare, "b", "scripts"), None, bare)
+            self.assertIsNone(mod.ROOT)
 
 
 if __name__ == "__main__":

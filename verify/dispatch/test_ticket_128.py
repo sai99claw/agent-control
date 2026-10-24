@@ -76,7 +76,7 @@ def reject_pushes(origin, only=""):
 
 DOCS_LAND = """mkdir -p "$REPO/docs"
 echo "t128 docs note" > "$REPO/docs/t128-landed.md"
-AC_ROOT="$REPO" sh "$REPO/scripts/land.sh" docs "docs: t128 note" docs/t128-landed.md > "$SANDBOX/docs-land.out" 2>&1 || true
+AC_ROOT="$REPO" sh "$SCRIPTS/land.sh" docs "docs: t128 note" docs/t128-landed.md > "$SANDBOX/docs-land.out" 2>&1 || true
 """
 
 
@@ -173,6 +173,7 @@ class TheExemptionDoesNotSpill(MainSideCase):
     def test_a2_a_change_outside_the_prefixes_is_still_rc8_alone(self):
         """A2 同一輪 docs/ 新檔 + scripts/ 新檔 → rc 8 一整組;violations 只有 scripts 那一個;主線那一邊照列 docs。"""
         self.arm('echo note > "$REPO/docs/t128-side.md"\n'
+                 'mkdir -p "$REPO/scripts"\n'
                  'echo "#!/bin/sh" > "$REPO/scripts/t128-x.sh"')
         self.assert_stopped(self.auto_fix("--no-review"), "scripts/t128-x.sh")
         violations = self.guard_doc().get("violations") or []
@@ -209,7 +210,7 @@ class TicketWritesStayExempt(MainSideCase):
                      "owner": "main", "disposition": "", "follow_up": ""}
         self.make_ticket(2, objections=[objection])
         disposed = json.dumps([dict(objection, disposition="accepted")])
-        self.arm('T="env -u AC_TICKETS_DIR -u AC_CONTROL_DIR AC_ROOT=$REPO python3 $REPO/scripts/ticket.py"\n'
+        self.arm('T="env -u AC_TICKETS_DIR -u AC_CONTROL_DIR AC_ROOT=$REPO python3 $SCRIPTS/ticket.py"\n'
                  '$T set 2 state Blocked > "$SANDBOX/t128-set.out" 2>&1\n'
                  "$T set 2 objections '%s' >> \"$SANDBOX/t128-set.out\" 2>&1" % disposed)
         done = self.auto_fix("--no-review")

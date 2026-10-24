@@ -7,11 +7,12 @@
 
 import json
 import os
+import subprocess
 import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import REVIEWER_PASS, VERIFY_CASE, Sandbox, write_executable  # noqa: E402
+from control_harness import REVIEWER_PASS, ROOT, VERIFY_CASE, Sandbox, write_executable  # noqa: E402
 
 PASSING = """import os
 import unittest
@@ -240,7 +241,7 @@ class GateSh(Sandbox):
                           "test_ticket"])
 
     def test_branch_picks_up_what_this_branch_changed(self):
-        self.write("scripts/land.sh", self.read("scripts/land.sh") + "\n# 動一下\n")
+        self.write("scripts/land.sh", "# 動一下\n")
         done = self.gate("--branch")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.ran(), ["test_land"])
@@ -254,7 +255,7 @@ class GateSh(Sandbox):
         self.git("commit", "-q", "-m", "test_x 先在主線")
         self.git("checkout", "-q", "-b", "t71")
         self.git("rm", "-q", "tests/test_x.py")
-        self.write("scripts/land.sh", self.read("scripts/land.sh") + "\n# 動一下\n")
+        self.write("scripts/land.sh", "# 動一下\n")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "刪掉 test_x")
         done = self.gate("--branch")
@@ -687,7 +688,7 @@ class VerifierCasesAtTheGate(Sandbox):
         env = self.env(AC_ROOT=self.repo)
         self.assertNotIn("AC_TICKETS_DIR", env)
 
-        done = self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
+        done = self.run_sh("scripts/gate.sh",
                            "--branch", "--ticket", "7", "--no-auto-fix", cwd=wt, env=env)
 
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
@@ -707,7 +708,7 @@ class VerifierCasesAtTheGate(Sandbox):
         return wt
 
     def gate_in(self, wt, env):
-        return self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
+        return self.run_sh("scripts/gate.sh",
                            "--branch", "--ticket", "7", "--no-auto-fix", cwd=wt, env=env)
 
     def test_ticket_tags_in_the_ticket_worktree_come_from_the_main_repo(self):
@@ -735,7 +736,7 @@ class VerifierCasesAtTheGate(Sandbox):
         fields = {"state": "Running"}
         wt = self.worktree_with_an_old_ticket(fields, fields)
         env = self.env()
-        self.assertNotIn("AC_ROOT", env)
+        env.pop("AC_ROOT")   # 手跑:票根由 cwd 規則找(#159)
         done = self.gate_in(wt, env)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("票改讀主 repo", done.stdout)
@@ -928,8 +929,8 @@ class TheHandRunGateWritesTheTicketGate(Sandbox):
 
     def gate_in(self, wt, *extra):
         env = self.env()
-        self.assertNotIn("AC_ROOT", env)
-        return self.run_sh(os.path.join(wt, "scripts", "gate.sh"),
+        env.pop("AC_ROOT")   # 手跑:票根由 cwd 規則找(#159)
+        return self.run_sh("scripts/gate.sh",
                            "--branch", "--ticket", "7", *extra, cwd=wt, env=env)
 
     def test_a_green_hand_run_writes_rc_0_at_the_branch_head(self):
@@ -1073,6 +1074,60 @@ class GateExample(unittest.TestCase):
             text = handle.read()
         self.assertIn('"$AC/status.py"', text, "範本要示範狀態檔怎麼寫")
         self.assertIn('"$AC/verify.py"', text, "範本要示範票的回歸怎麼跑")
+
+def a_home_sha(case):
+    """A 的根(這個 repo)的 HEAD —— 測試自己用 git 量,不讀被測腳本。封存副本(不是 git 樹)
+    量不了真 sha:skip 並說原因,`unknown` 那一半另有一條。"""
+    top = subprocess.run(["git", "-C", ROOT, "rev-parse", "--show-toplevel"],
+                         capture_output=True, text=True)
+    if top.returncode != 0 or os.path.realpath(top.stdout.strip()) != os.path.realpath(ROOT):
+        case.skipTest("A 的根在這裡不是一棵 git 樹(封存副本)—— 量不了真 sha")
+    return subprocess.run(["git", "-C", ROOT, "rev-parse", "HEAD"], capture_output=True,
+                          text=True, check=True).stdout.strip()
+
+
+# `status.py` 的 gate 狀態檔在 #159 之前的鍵集合:base 6d788d2 上同一趟 `gate.sh --base --ticket 7`
+# (舊 harness)量出來、抄在這裡。這張票不加 status.json 欄位(D-071 §4;§1 那一句留給主線裁)。
+STATUS_KEYS_BEFORE_159 = [
+    "auto_flaky", "duration_seconds", "environment_suspect", "extra_logs", "failures", "finished",
+    "flaky", "kept_logs", "kind", "logs", "note", "order_dependent", "order_dependent_cases",
+    "phases", "rc", "repair_context", "report", "round", "run_id", "sha", "started", "state",
+    "suspected_flaky", "ticket"]
+
+
+class A5TheGateSaysWhichA(Sandbox):
+    """#159 A5(D-071 §1):`gate.start` / `gate.pass` 帶 `ac_sha` = AC_HOME 的 HEAD;AC_HOME 不是
+    git 樹就是字面 `unknown`(永不空、永不缺)。status.json 不加鍵。"""
+
+    def setUp(self):
+        super().setUp()
+        for name in ("test_ticket", "test_event", "test_memory", "test_no_project_names"):
+            self.write(os.path.join("tests", "%s.py" % name), "import unittest\n")
+
+    def row(self, kind):
+        rows = [row for row in self.events() if row["kind"] == kind]
+        self.assertEqual(len(rows), 1, self.events())
+        return rows[0]
+
+    def test_a5_gate_base_carries_the_head_of_ac_home(self):
+        """**變異 m5**:拿掉 gate.sh 那一格 `--kv ac_sha=…` → 紅。"""
+        sha = a_home_sha(self)
+        done = self.run_sh("scripts/gate.sh", "--base", env=self.env(AC_HOME=ROOT))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.row("gate.start")
+        self.assertEqual(row.get("ac_sha"), sha)
+        self.assertEqual(row.get("mode"), "base")
+
+    def test_a5_a_non_git_ac_home_says_unknown_and_status_keeps_its_keys(self):
+        self.own_ac_home()
+        self.make_ticket(7)
+        done = self.run_sh("scripts/gate.sh", "--base", "--ticket", "7", "--no-auto-fix")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.row("gate.start").get("ac_sha"), "unknown")
+        self.assertEqual(self.row("gate.pass").get("ac_sha"), "unknown")
+        status = self.status_of(7, kind="gate")
+        self.assertEqual(sorted(status), STATUS_KEYS_BEFORE_159, status)
+
 
 if __name__ == "__main__":
     unittest.main()

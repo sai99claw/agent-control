@@ -32,17 +32,16 @@ set -u
 [ "${AC_SESSION_HOOK:-}" = "0" ] && exit 0
 [ -n "${AC_ROLE:-}" ] && [ "$AC_ROLE" != "main" ] && exit 0
 
-# 根與同伴腳本的找法與 heartbeat.sh 同一種:同步到專案後這幾支住在 scripts/control/。
-_ac_root() {
-    _d=$(cd "$(dirname "$0")" && pwd); _i=0
-    while [ $_i -lt 5 ]; do
-        [ -f "$_d/board/config.json" ] && { echo "$_d"; return; }
-        _d=$(dirname "$_d"); _i=$((_i+1))
-    done
-    cd "$(dirname "$0")/.." && pwd
-}
-ROOT=${AC_ROOT:-$(_ac_root)}
+# 同伴腳本從這一支自己住的目錄(A 的 clone)叫。專案根不從 `$0` 來(D-071 C2,#159):
+# `AC_ROOT`,沒設就認 Claude Code 給 hook 的 `CLAUDE_PROJECT_DIR`(§1 第 3 條),再退
+# `wtbase.sh` 的 cwd 規則;都沒有 rc 2。
 AC=$(cd "$(dirname "$0")" && pwd)
+. "$AC/wtbase.sh"
+if [ -z "${AC_ROOT:-}" ] && [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+    ROOT=$CLAUDE_PROJECT_DIR
+else
+    ROOT=$(ac_root session-hook) || exit 2
+fi
 LIMIT=10000
 
 # stdin 是 hook 的 JSON;手動在終端機跑時沒有,不要卡在讀 stdin。

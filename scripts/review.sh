@@ -39,19 +39,13 @@
 #   7 reviewer 執行中撞額度 / 不可用而候選整串耗盡(票 Blocked + 一頁;批次只發頁),
 #     或下一個候選交給 Controller(`AC_RECOVERY_OWNER=controller`)接續(#132)
 set -u
-# 根的找法與 `auto-fix.sh` 同一套:`AC_ROOT` 優先;往上找 `board/config.json`;
-# 在票的 worktree 裡找不到票就改問主 repo(`wtbase.sh` 的 `main_root`)。
-_ac_root() {
-    _d=$(cd "$(dirname "$0")" && pwd); _i=0
-    while [ $_i -lt 5 ]; do
-        [ -f "$_d/board/config.json" ] && { echo "$_d"; return; }
-        _d=$(dirname "$_d"); _i=$((_i+1))
-    done
-    cd "$(dirname "$0")/.." && pwd
-}
-ROOT=${AC_ROOT:-$(_ac_root)}
+# 專案根不從 `$0` 來(D-071 C2,#159):`AC_ROOT`,否則 cwd 的主 repo 根,否則 rc 2 ——
+# 規則只有一份,在 `wtbase.sh`。控制腳本自己住的目錄(A 的 clone)才從 `$0` 算;
+# 同伴腳本一律從這裡叫,不寫死 $ROOT/scripts。
 AC=${AC_CONTROL_DIR:-$(cd "$(dirname "$0")" && pwd)}
 export AC_CONTROL_DIR=$AC
+. "$AC/wtbase.sh"
+ROOT=$(ac_root review) || exit 2
 export AC_ROOT=$ROOT
 
 cfg() {   # $1 = key(巢狀用 a.b)  $2 = 預設
@@ -120,7 +114,6 @@ TICKETS=${AC_TICKETS_DIR:-$(cfg tickets_dir tickets)}
 case $TICKETS in /*) TDIR=$TICKETS ;; *) TDIR=$ROOT/$TICKETS ;; esac
 TF=$TDIR/$ID.json
 if [ ! -f "$TF" ] && [ -z "${AC_TICKETS_DIR:-}" ]; then
-    . "$AC/wtbase.sh"
     MAINROOT=$(main_root)
     if [ "$MAINROOT" != "$ROOT" ] \
             && [ -f "$MAINROOT/board/config.json" ] && [ -f "$MAINROOT/$TICKETS/$ID.json" ]; then

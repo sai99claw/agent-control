@@ -13,9 +13,12 @@ class InsideACopy(Sandbox):
     """副本裡不發事件,由派工方代發(#29 A9,G9)。
 
     `docs/SESSION-START.md` 以前要 worker / 驗證者自己發 `ticket.attempt.start`,而
-    worker 住在 `git archive | tar -x` 展出來的副本裡 —— `repo_root()` 往上找到的是
+    worker 住在 `git archive | tar -x` 展出來的副本裡 —— 舊的 `repo_root()` 往上找到的是
     **副本自己那份** `board/config.json`,事件因此寫進一個等一下會被刪掉的檔,
     **而且一聲都不吭**。發出去了與沒發出去於是長得一樣。
+
+    #159(D-071 C2)之後根不從檔案位置推:副本不是 git 樹,沒有 `AC_ROOT` 就 rc 2、一個
+    位元組都不寫;`looks_like_a_copy()` 照舊認得副本。
     """
 
     def copy_of_the_repo(self):
@@ -23,8 +26,7 @@ class InsideACopy(Sandbox):
         import shutil
         where = os.path.join(self.home, "fix-t1", "work")
         os.makedirs(where)
-        for rel in ("scripts", "board"):
-            shutil.copytree(os.path.join(self.repo, rel), os.path.join(where, rel))
+        shutil.copytree(os.path.join(self.repo, "board"), os.path.join(where, "board"))
         for junk in ("events.jsonl", "answers.jsonl"):
             path = os.path.join(where, "board", junk)
             if os.path.exists(path):
@@ -33,21 +35,32 @@ class InsideACopy(Sandbox):
         return where
 
     def emit_in(self, where, *args, **extra):
-        import subprocess
-        return subprocess.run(
-            ["python3", os.path.join(where, "scripts", "event.py"), "emit", *args],
-            cwd=where, env=self.env(**extra), capture_output=True, text=True,
-            timeout=60)
+        env = self.env(**extra)
+        if "AC_ROOT" not in extra:
+            env.pop("AC_ROOT")
+        return self.event("emit", *args, cwd=where, env=env)
 
     def test_emitting_from_a_copy_is_refused_and_writes_nothing_there(self):
-        """**變異**:把 `cmd_emit` 裡那一段 `looks_like_a_copy` 拿掉 → 這一條紅。"""
+        """**變異**:`repo_root()` 找不到根時退回這支檔案的上一層(或副本自己)→ 這一條紅。"""
         where = self.copy_of_the_repo()
+        before = self.events()
         done = self.emit_in(where, "ticket.attempt.start", "--ticket", "1")
-        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("副本裡不發事件,由派工方代發", done.stderr)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("not inside a project", done.stderr)
         self.assertIn("AC_ROOT", done.stderr, "說得出下一步")
         self.assertFalse(os.path.exists(os.path.join(where, "board", "events.jsonl")),
                          "副本裡那一行會跟著副本一起被刪 —— 不該寫得出來")
+        self.assertEqual(self.events(), before)
+
+    def test_the_copy_still_looks_like_a_copy(self):
+        """`looks_like_a_copy()` 照舊:有 board/config.json、沒有 .git 是副本;worktree 不是。"""
+        where = self.copy_of_the_repo()
+        wt = self.worktree("t1")
+        sys.path.insert(0, self.scripts)
+        import event as event_mod
+        self.assertTrue(event_mod.looks_like_a_copy(where))
+        self.assertFalse(event_mod.looks_like_a_copy(wt))
+        self.assertFalse(event_mod.looks_like_a_copy(self.repo))
 
     def test_with_ac_root_it_writes_into_the_real_repo(self):
         """派工方帶著 `AC_ROOT` 就照發 —— 擋的是「寫進副本」,不是「從副本發」。"""
@@ -60,15 +73,13 @@ class InsideACopy(Sandbox):
         self.assertFalse(os.path.exists(os.path.join(where, "board", "events.jsonl")))
 
     def test_a_worktree_is_not_a_copy(self):
-        """worktree 的 `.git` 是一個**檔**,不是目錄 —— 判準要看得到它,
-        不然票分支的 worktree 會被誤判成副本,而那一側是真的要發事件的。"""
+        """worktree 的 `.git` 是一個**檔**,不是目錄 —— 票分支的 worktree 不是副本,而那一側
+        是真的要發事件的。沒有 `AC_ROOT` 時 cwd 規則指回主 repo(#159):事件寫進沙盒那一份。"""
         wt = self.worktree("t1")
-        import subprocess
-        done = subprocess.run(
-            ["python3", os.path.join(wt, "scripts", "event.py"), "emit",
-             "gate.start"],
-            cwd=wt, env=self.env(), capture_output=True, text=True, timeout=60)
+        done = self.emit_in(wt, "gate.start")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.kinds(), ["gate.start"])
+        self.assertFalse(os.path.exists(os.path.join(wt, "board", "events.jsonl")))
 
 
 class Emit(Sandbox):
@@ -93,10 +104,10 @@ class Emit(Sandbox):
         **變異**:把 `relative_cwd` 改成回 `os.getcwd()` → 這一條紅。
         """
         done = self.event("emit", "gate.start",
-                          cwd=os.path.join(self.repo, "scripts"))
+                          cwd=os.path.join(self.repo, "docs"))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         row = self.events()[0]
-        self.assertEqual(row["cwd"], "scripts")
+        self.assertEqual(row["cwd"], "docs")
         self.assertNotIn(self.home, json.dumps(row))
 
     def test_running_from_outside_the_repo_says_so_instead_of_leaking_a_path(self):
@@ -164,7 +175,7 @@ class Emit(Sandbox):
         done = subprocess.run(
             ["python3", "-c", "import sys; sys.path.insert(0, sys.argv[1]); import ticket; "
              "print(ticket.save_baseline('1', {'stage': 'red', 'case': 'x'}))",
-             os.path.join(self.repo, "scripts")],
+             self.scripts],
             cwd=self.repo, env=self.env(), capture_output=True, text=True, timeout=60)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         data = self.load_ticket(1)

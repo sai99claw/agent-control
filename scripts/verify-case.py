@@ -263,11 +263,15 @@ def run_cases(where, rels, log_path, timeout=TIMEOUT):
 
     **原始輸出存檔**,不只回傳摘要:少了原文,下一個人要重現這一趟只能重跑一次。
     超過 `timeout` 秒丟 `CaseTimeout`(逾時前印出的那一段照樣存進 `log_path`)。
+    `AC_CODE_ROOT` 設成這份副本(D-071 §1,#159):案例裡再叫的 `verify.py` 量的是它,
+    不是呼叫端 cwd 的那棵樹(副本不是 git 樹,cwd 規則在那裡答不出來)。
     """
     mods = [module_of(rel) for rel in rels]
+    env = dict(os.environ, AC_CODE_ROOT=os.path.abspath(where))
     try:
         done = subprocess.run([sys.executable, "-m", "unittest", "-v", *mods],
-                              cwd=where, capture_output=True, text=True, timeout=timeout)
+                              cwd=where, env=env, capture_output=True, text=True,
+                              timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         partial = "".join(part.decode("utf-8", "replace") if isinstance(part, bytes)
                           else part for part in (exc.stdout, exc.stderr) if part)
