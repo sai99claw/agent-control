@@ -454,3 +454,8 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - 原話:「選方式一， 我感受不到方式二的好處，如果之前往錯誤方向做了 就當教訓吧」—— 回應主線的修正建議:headless(`auto-fix.sh` 起 `claude -p` 等程序,跑完寫收件匣)恢復為唯一主要做法,雲端也用;每一輪預設開新 agent,靠 EVIDENCE「已排除的假設」與狀態檔 repair_context 交接;續做只用在交件後短時間內的退回(headless `--resume`),或不做。`--prepare` 這條路(#149)與 #153 在 apply.sh 收件那一側的比對一起退役;#152 的 cost[] 併入(從派工文路徑認票)隨之檢討。
 - 為什麼錯(主線檢討,寫給下一個主線):D-061 拿子 agent 跟 routine 比(舊 clone、push 403、20 分鐘輪詢都是 routine 的問題),沒有跟 headless 比;headless 在雲端可用(#149 的 review.sh 用 `claude -p` 實跑成功)。子 agent 的代價正是 headless 要避免的:每則回報進主線上下文;等待期間主線與子 agent 都被「還在跑」通知叫醒(#151 約 30 次,worker 每次重讀約 95k);主線第一天 8 小時 cache_read 約 2,786 萬。續做也不省:#147 驗證者第 2 輪(修一條案例)約 28 萬換算 token,與全新第 1 輪的約 30 萬相當(快取寫 ×1.25、讀 ×0.1 換算;疑為等閘門期間快取過期整份重寫,未完全確認)。
 - 連帶:scripts/sync-to-project.sh 在 D-066 加的「--prepare 例外」註記將過時;hard_block 檔,使用者改(主線待辦)。
+
+## D-068(2026-10-24)#156 / #157 開題者兩題(主線裁,未經使用者)
+- Q1:`verify_case.timeout_seconds` 設 2700(check 跑 base 與 candidate 兩趟,各算各的時限);#156 落地後在雲端實跑 `verify-case.py red 155`,2700 還逾時就另開票查是卡住還是慢,不再加大數字。
+- Q2:驗證者 EVIDENCE 有反駁時 apply.sh 回 rc 6、auto-fix 報「收件沒過」,不像 worker 反駁那樣交開題者判 —— #157 先接受這個行為,路由另開票。
+- 順序:#156 先落 → #155 閘門、覆核、落地 → #157。#157 開題者實測:反駁沒記進票的真因不是 ticket.py 去重(它比 category + body),而是 apply.sh 只讀 worker EVIDENCE 的第一行反駁、驗證者 EVIDENCE 的反駁沒送進票(讀 code 推,原始現場未重演)。

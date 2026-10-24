@@ -1,0 +1,210 @@
+{
+  "id": "156",
+  "subject": "verify-case.py: unittest timeout from board/config.json (default 900); a timeout ends as unmeasured rc 2, not a traceback",
+  "created": "2026-10-24T05:55:19+00:00",
+  "objective": "scripts/verify-case.py reads the timeout of its unittest subprocess (red / check / extract all use run_cases) from board/config.json key verify_case.timeout_seconds through one resolver case_timeout(root): key absent -> 900 (todays value), a positive int -> that value, anything else (0, negative, non-int, bool, string) -> one stderr warning naming the key and the bad value, then 900. A run that exceeds the timeout no longer dies on an uncaught subprocess.TimeoutExpired: it ends rc 2 with a stderr reason naming the seconds, the unittest modules and the config key, writes no baseline-red.json and leaves the ticket file byte-identical (same contract as unmeasured()). board/config.json carries the key explicitly (value per outline Q1, recommended 2700) so the cloud container can measure #155 (tests.test_auto_fix as a whole module does not finish in 900 s there).",
+  "acceptance": [
+    "A1 resolver (unit layer, importlib-load scripts/verify-case.py, sandbox root with board/config.json): no verify_case key -> case_timeout(root) == 900; {\"verify_case\": {\"timeout_seconds\": 1200}} -> 1200; each of 0, -5, 1.5, \"600\", true, null -> 900 and stderr contains verify_case.timeout_seconds; unreadable config.json -> 900. Expected values come from this ticket, not from the code.",
+    "A2 red times out (CLI layer, CaseSandbox like tests/test_verify_case.py): config timeout_seconds=2, ticket verify.files = one case file whose test does time.sleep(10) then fails -> verify-case.py red <n> --ref <base> --out-dir <d> returns rc 2 within 9 s wall; stderr names 2 seconds, the case module and verify_case.timeout_seconds; stderr has no 'Traceback'; <d> has no baseline-red.json; tickets/<n>.json bytes unchanged.",
+    "A3 check times out: same fixture through verify-case.py check <n> --ref <base> --candidate <tree> -> rc 2, same stderr contract, ticket verify.baseline unchanged (bytes of the ticket file unchanged).",
+    "A4 within the limit nothing changes: config timeout_seconds=60, a case that sleeps 1 s and fails on an assert -> red behaves exactly as without the key (rc and baseline-red.json content equal to a run with the key absent, compared in the same test).",
+    "A5 board/config.json has verify_case.timeout_seconds set to the value ruled in Q1 (recommended 2700); every other key of board/config.json is unchanged (diff of board/config.json is that one key).",
+    "A6 existing tests/test_verify_case.py cases stay green unchanged (no edits to existing cases; oracle checked: tests/test_verify_case.py has no TIMEOUT / 900 assertion, grep at 7fd9894)."
+  ],
+  "depends_on": [],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "fa38f583f0a1f2df98183f133e54619940e6db10",
+  "state": "Done",
+  "state_version": 12,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [
+      "tests/test_verify_case.py"
+    ],
+    "tags": [],
+    "run": "timeout 580 python3 -m unittest tests.test_verify_case",
+    "notes": "#156 cases are classes CaseTimeoutResolver (A1, importlib-loads scripts/verify-case.py, temp root with board/config.json) and CaseTimeout (A2-A4, CaseSandbox; edits the sandbox board/config.json working copy). A2/A3 use a case that sleeps 10 s then fails with timeout_seconds=2; A2 also asserts wall < 9 s. 'Names the seconds' is checked as a standalone 2 in stderr after stripping sandbox paths, shas, the module name and the key; the module may be named dotted (verify.nav.test_ticket_1) or as its path. A4 is green on the clean base by design (regression guard: with/without the key, rc and baseline-red.json minus 'at' must be equal), so it is not in the baseline reds. A5 (board/config.json value, ruled by main Q1) and A6 (existing cases unchanged) have no case: A5 is a config diff check, A6 is the existing module staying green. Runtime about 35 s for the new cases. Round 2: 3-way reapplied onto t156 head 10e82d0; the worker's own #156 classes (CaseTimeoutFromConfig, ARunThatTimesOutIsUnmeasured) are kept unchanged alongside; the verifier loader is renamed load_verify_case_t156 to avoid clashing with the worker's load_verify_case. Whole module at 10e82d0+patch: Ran 47, OK. baseline below is carried over unchanged from round 1 (measured at base fa38f58), not re-measured.",
+    "baseline": {
+      "stage": "check",
+      "ok": false,
+      "why": "乾淨主線上有 9 條紅在缺符號(AttributeError/NameError/FileNotFoundError/TypeError 那一族)—— 改成先 assert 它存在",
+      "at": "2026-10-24T06:10:13+00:00",
+      "files": [
+        "tests/test_verify_case.py"
+      ],
+      "base_ref": "fa38f583f0a1f2df98183f133e54619940e6db10",
+      "base_sha": "fa38f583f0a1f2df98183f133e54619940e6db10",
+      "candidate": "../agent-control-wt/t156",
+      "candidate_sha": "dffc5db9e37b2e5e9030b179bd8859ece5dbf39d",
+      "baseline": {
+        "red": [
+          "tests.test_verify_case.ARunThatTimesOutIsUnmeasured.test_check_that_times_out_is_rc_2_and_leaves_the_ticket",
+          "tests.test_verify_case.ARunThatTimesOutIsUnmeasured.test_red_that_times_out_is_rc_2_and_writes_nothing",
+          "tests.test_verify_case.CaseTimeout.test_check_that_times_out_is_rc_2_and_leaves_the_ticket",
+          "tests.test_verify_case.CaseTimeout.test_red_that_times_out_is_rc_2_and_writes_nothing",
+          "tests.test_verify_case.CaseTimeoutResolver.test_a_bad_value_warns_and_falls_back_to_900",
+          "tests.test_verify_case.CaseTimeoutResolver.test_a_positive_int_is_used",
+          "tests.test_verify_case.CaseTimeoutResolver.test_absent_key_is_900",
+          "tests.test_verify_case.CaseTimeoutResolver.test_an_unreadable_config_is_900"
+        ],
+        "red_lines": [
+          "tests.test_verify_case.ARunThatTimesOutIsUnmeasured.test_check_that_times_out_is_rc_2_and_leaves_the_ticket: AssertionError: 0 != 2 : verify-case: #1 案例 1 個",
+          "tests.test_verify_case.ARunThatTimesOutIsUnmeasured.test_red_that_times_out_is_rc_2_and_writes_nothing: AssertionError: 0 != 2 : verify-case: #1 案例 1 個(乾淨基底 21710ce9fb9cb54b49b85dd1165faa1c1dac2653 / 21710ce9fb9c)",
+          "tests.test_verify_case.CaseTimeout.test_check_that_times_out_is_rc_2_and_leaves_the_ticket: AssertionError: 1 != 2 : verify-case: #1 案例 1 個",
+          "tests.test_verify_case.CaseTimeout.test_red_that_times_out_is_rc_2_and_writes_nothing: AssertionError: 0 != 2 : verify-case: #1 案例 1 個(乾淨基底 bbadf0410d7b59340a638ac74a2efa269e8d0844 / bbadf0410d7b)",
+          "tests.test_verify_case.CaseTimeoutResolver.test_a_bad_value_warns_and_falls_back_to_900: AssertionError: False is not true : verify-case.py 沒有 case_timeout(root)",
+          "tests.test_verify_case.CaseTimeoutResolver.test_a_positive_int_is_used: AssertionError: False is not true : verify-case.py 沒有 case_timeout(root)",
+          "tests.test_verify_case.CaseTimeoutResolver.test_absent_key_is_900: AssertionError: False is not true : verify-case.py 沒有 case_timeout(root)",
+          "tests.test_verify_case.CaseTimeoutResolver.test_an_unreadable_config_is_900: AssertionError: False is not true : verify-case.py 沒有 case_timeout(root)"
+        ],
+        "import_failures": [],
+        "missing_symbol": [
+          "tests.test_verify_case.CaseTimeoutFromConfig.test_a_bad_value_warns_and_falls_back_to_900: AttributeError: module 'verify_case_156' has no attribute 'case_timeout'",
+          "tests.test_verify_case.CaseTimeoutFromConfig.test_a_bad_value_warns_and_falls_back_to_900: AttributeError: module 'verify_case_156' has no attribute 'case_timeout'",
+          "tests.test_verify_case.CaseTimeoutFromConfig.test_a_bad_value_warns_and_falls_back_to_900: AttributeError: module 'verify_case_156' has no attribute 'case_timeout'",
+          "tests.test_verify_case.CaseTimeoutFromConfig.test_a_bad_value_warns_and_falls_back_to_900: AttributeError: module 'verify_case_156' has no attribute 'case_timeout'",
+          "tests.test_verify_case.CaseTimeoutFromConfig.test_a_bad_value_warns_and_falls_back_to_900: AttributeError: module 'verify_case_156' has no attribute 'case_timeout'",
+          "tests.test_verify_case.CaseTimeoutFromConfig.test_a_bad_value_warns_and_falls_back_to_900: AttributeError: module 'verify_case_156' has no attribute 'case_timeout'",
+          "tests.test_verify_case.CaseTimeoutFromConfig.test_a_positive_int_is_taken: AttributeError: module 'verify_case_156' has no attribute 'case_timeout'",
+          "tests.test_verify_case.CaseTimeoutFromConfig.test_an_unreadable_config_is_900: AttributeError: module 'verify_case_156' has no attribute 'case_timeout'",
+          "tests.test_verify_case.CaseTimeoutFromConfig.test_no_key_is_900: AttributeError: module 'verify_case_156' has no attribute 'case_timeout'"
+        ],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 47,
+        "skipped": 0,
+        "log": "../agent-control-wt/t156/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 47,
+        "skipped": 0,
+        "log": "../agent-control-wt/t156/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
+  },
+  "test_plan": "Worker runs only, foreground: timeout 580 python3 -m unittest tests.test_verify_case <verifier case module if separate>; report Ran/OK verbatim. No full suite, no test_auto_fix (that is what times out). Verifier writes cases for A1-A4 in tests/ (verify.tags stays empty, agent-control rule #29). Mutations (worker, optional, not measured by opener): (m1) keep TIMEOUT = 900 and ignore config -> A2 red (sleep 10 completes, rc != 2); (m2) drop the TimeoutExpired handling -> A2 red (Traceback in stderr); (m3) accept bool true as 1 -> A1 red.",
+  "complexity": "simple",
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "decision_refs": [
+    "D-067"
+  ],
+  "outline": "Why: #155 verifier r1 OBJECTION (blocking, deferred to this ticket): verify-case.py:97 TIMEOUT=900 hard-coded; run_cases runs whole modules; tests.test_auto_fix+test_agent_cost_hook+test_ticket hit TimeoutExpired after 900 s in the cloud, so red and the gate check cannot measure #155. Measured at 7fd9894: verify-case.py reads no config; TimeoutExpired is uncaught; gate.sh verify_case() already treats check rc!=0 that never reached the candidate as unmeasured (rc stays non-zero) -> rc 2 needs no gate change. main...t155 does not touch verify-case.py / board/config.json / tests/test_verify_case.py -> no depends_on. ORDER: land this before #155's gate run. Files: scripts/verify-case.py, board/config.json, tests/test_verify_case.py. Precedent: worker.timeout_seconds bad-value warning (#64). needs_verifier true: new contract, independent cases. interface_fixed true: key, case_timeout(root), rc 2, stderr words pinned. Q1 (main): config value - (a) 2700 recommended (check runs base+candidate, each with its own limit); (b) 900 and raise by hand. Not ruled out (not measured): test_auto_fix may hang in the cloud rather than be slow; if main's post-landing run of verify-case red 155 still times out at 2700, open a new ticket, do not raise the number. Not in ticket: running only case classes instead of whole modules.",
+  "cost": [
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 48,
+      "tokens_out": 20405,
+      "cache_write": 70865,
+      "cache_read": 1859645,
+      "wall_seconds": 310,
+      "outcome": "handed-in",
+      "run_id": "20261024-055730-14003",
+      "session_id": "d4796da2-5b31-4d05-b2bc-3efb42c7660f",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-24T06:02:42+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 34,
+      "tokens_out": 14116,
+      "cache_write": 58860,
+      "cache_read": 1160864,
+      "wall_seconds": 212,
+      "outcome": "apply-failed",
+      "run_id": "20261024-055730-14003",
+      "session_id": "2c600e95-38b4-478c-8614-643a68bd1b22",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-24T06:02:43+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2837,
+      "outcome": "pass",
+      "run_id": "20261024-061016-26316",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-24T06:57:33+00:00"
+    }
+  ],
+  "branch": "t156",
+  "gate": {
+    "rc": 0,
+    "sha": "dffc5db9e37b2e5e9030b179bd8859ece5dbf39d",
+    "run_id": "20261024-060631-20291",
+    "at": "2026-10-24T06:10:14+00:00"
+  },
+  "landed_sha": "33068739a66f09e2147e6770de075fa0014fc831",
+  "cost_total": {
+    "calendar_seconds": 3734,
+    "wall_seconds": 3359,
+    "runs": 3,
+    "worker_rounds": 1,
+    "objections": 0,
+    "by_role": {
+      "verifier": {
+        "runs": 1,
+        "wall_seconds": 310,
+        "tokens_in": 48,
+        "tokens_out": 20405,
+        "cache_write": 70865,
+        "cache_read": 1859645,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 1
+        }
+      },
+      "worker": {
+        "runs": 1,
+        "wall_seconds": 212,
+        "tokens_in": 34,
+        "tokens_out": 14116,
+        "cache_write": 58860,
+        "cache_read": 1160864,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "apply-failed": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 2837,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-24T06:57:33+00:00"
+  }
+}
