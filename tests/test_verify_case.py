@@ -685,5 +685,164 @@ class RedIsTheOnlyThingTheVerifierMeasures(CaseSandbox):
         self.assertFalse(self.load_ticket("1")["verify"]["baseline"]["ok"])
 
 
+# #156:案例那一趟先睡再紅。睡多久由各案例自己給,時限由沙盒的 config 給。
+SLEEP_THEN_RED = """import time
+import unittest
+TAGS = ["example"]
+
+
+class Slow(unittest.TestCase):
+    def test_value(self):
+        time.sleep(%d)
+        with open("src/value.txt", encoding="utf-8") as handle:
+            self.assertEqual(handle.read().strip(), "2")
+"""
+
+
+def load_verify_case():
+    """`scripts/verify-case.py` 檔名有連字號,`import` 不到;照路徑載入。"""
+    import importlib.util
+    from control_harness import SCRIPTS
+    sys.path.insert(0, SCRIPTS)
+    spec = importlib.util.spec_from_file_location("verify_case_156",
+                                                  os.path.join(SCRIPTS, "verify-case.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class CaseTimeoutFromConfig(unittest.TestCase):
+    """A1(#156):`case_timeout(root)` 讀 `board/config.json` 的
+    `verify_case.timeout_seconds`。期望值是票面寫的(沒設 900、壞值退回 900),
+    不是跑一次記下來的。
+
+    **變異**:`case_timeout` 不擋 `bool` → `true` 那一格拿到 1,這一條紅。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.vc = load_verify_case()
+
+    def setUp(self):
+        import tempfile
+        import shutil
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, True)
+        os.makedirs(os.path.join(self.root, "board"))
+
+    def resolve(self, text):
+        import contextlib
+        import io
+        if text is not None:
+            with open(os.path.join(self.root, "board", "config.json"), "w",
+                      encoding="utf-8") as handle:
+                handle.write(text)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            value = self.vc.case_timeout(self.root)
+        return value, err.getvalue()
+
+    def test_no_key_is_900(self):
+        self.assertEqual(self.resolve(json.dumps({"port": 1}))[0], 900)
+
+    def test_a_positive_int_is_taken(self):
+        value, err = self.resolve(json.dumps({"verify_case": {"timeout_seconds": 1200}}))
+        self.assertEqual(value, 1200)
+        self.assertEqual(err, "")
+
+    def test_a_bad_value_warns_and_falls_back_to_900(self):
+        for bad in (0, -5, 1.5, "600", True, None):
+            with self.subTest(bad=bad):
+                value, err = self.resolve(
+                    json.dumps({"verify_case": {"timeout_seconds": bad}}))
+                self.assertEqual(value, 900)
+                self.assertIn("verify_case.timeout_seconds", err)
+                self.assertIn(json.dumps(bad), err, "警告要指名那個壞值")
+
+    def test_an_unreadable_config_is_900(self):
+        self.assertEqual(self.resolve(None)[0], 900)          # 沒有這個檔
+        self.assertEqual(self.resolve("{not json")[0], 900)   # 讀得到、解不開
+
+
+class ARunThatTimesOutIsUnmeasured(CaseSandbox):
+    """A2–A4(#156):超過時限的一趟是「量不到」(rc 2、票不動、不交證據檔),
+    不是一段沒接住的 `TimeoutExpired` traceback。
+
+    **變異**:(m1)`run_cases` 照舊用寫死的 900、不讀 config → A2 紅(睡 10 秒跑完,
+    rc 1 而非 2);(m2)拿掉 `except subprocess.TimeoutExpired` → A2 紅(stderr 有
+    Traceback)。
+    """
+
+    def set_timeout(self, seconds):
+        conf = json.loads(self.read("board/config.json"))
+        if seconds is None:
+            conf.pop("verify_case", None)
+        else:
+            conf["verify_case"] = {"timeout_seconds": seconds}
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+
+    def committed_ticket(self, case):
+        self.a_ticket(case)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "開票 #1")
+        return self.load_ticket("1")["base_sha"]
+
+    def ticket_bytes(self):
+        with open(os.path.join(self.repo, "tickets", "1.json"), "rb") as handle:
+            return handle.read()
+
+    def assert_unmeasured_by_timeout(self, done):
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
+        self.assertIn("量不到基準,票沒有動", done.stderr)
+        self.assertIn("2 秒", done.stderr)
+        self.assertIn("verify.nav.test_ticket_1", done.stderr)
+        self.assertIn("verify_case.timeout_seconds", done.stderr)
+
+    def test_red_that_times_out_is_rc_2_and_writes_nothing(self):
+        import time
+        base = self.committed_ticket(SLEEP_THEN_RED % 10)
+        self.set_timeout(2)
+        before = self.ticket_bytes()
+        out = os.path.join(self.home, "vc-red")
+        start = time.monotonic()
+        done = self.tool("red", "1", "--ref", base, "--out-dir", out)
+        elapsed = time.monotonic() - start
+        self.assert_unmeasured_by_timeout(done)
+        self.assertLess(elapsed, 9, "時限 2 秒卻跑了 %.1f 秒" % elapsed)
+        self.assertFalse(os.path.exists(os.path.join(out, "baseline-red.json")))
+        self.assertEqual(self.ticket_bytes(), before)
+
+    def test_check_that_times_out_is_rc_2_and_leaves_the_ticket(self):
+        base = self.committed_ticket(SLEEP_THEN_RED % 10)
+        self.set_timeout(2)
+        self.write("src/value.txt", "2\n")
+        before = self.ticket_bytes()
+        done = self.tool("check", "1", "--ref", base, "--candidate", self.repo)
+        self.assert_unmeasured_by_timeout(done)
+        self.assertEqual(self.ticket_bytes(), before)
+        self.assertNotIn("baseline", self.load_ticket("1")["verify"])
+
+    def test_within_the_limit_red_is_the_same_as_without_the_key(self):
+        base = self.committed_ticket(SLEEP_THEN_RED % 1)
+
+        def red(tag):
+            out = os.path.join(self.home, "vc-" + tag)
+            done = self.tool("red", "1", "--ref", base, "--out-dir", out)
+            with open(os.path.join(out, "baseline-red.json"), encoding="utf-8") as handle:
+                record = json.load(handle)
+            # 兩趟必然不同的只有時間戳與各自 out-dir 底下的 log 路徑。
+            record.pop("at")
+            record["baseline"].pop("log")
+            return done.returncode, record
+
+        self.set_timeout(None)
+        without = red("without")
+        self.set_timeout(60)
+        within = red("within")
+        self.assertEqual(without[0], 0)
+        self.assertEqual(within, without)
+
+
 if __name__ == "__main__":
     unittest.main()

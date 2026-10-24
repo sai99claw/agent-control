@@ -94,7 +94,14 @@ CHAIN_MARKS = ("During handling of the above exception",
 # 鏈的標記是 unittest 緊接著印的:例外那一行、空行、標記、空行。往下看三行就夠 ——
 # 再遠就會掃進訊息本文,而那正是這一條要擋的東西。
 CHAIN_LOOKAHEAD = 3
+# 一趟 unittest 的時限(秒):`board/config.json` 的 `verify_case.timeout_seconds`,
+# 沒設就是這個數(#156)。雲端容器裡整支模組跑不完 900 秒,而寫死的數字只能改碼。
 TIMEOUT = 900
+TIMEOUT_KEY = "verify_case.timeout_seconds"
+
+
+class CaseTimeout(Exception):
+    """一趟案例跑超過時限 —— 那一趟**沒量到**,不是紅也不是綠(#156)。"""
 
 
 def now():
@@ -233,14 +240,42 @@ def not_counted(run, where):
     return out
 
 
-def run_cases(where, rels, log_path):
+def case_timeout(root):
+    """案例那一趟的時限:`board/config.json` 的 `verify_case.timeout_seconds`(#156)。
+
+    沒設 → 900;正整數 → 照用;其他(0、負數、小數、字串、`true`、`null`)→ 印一行
+    警告指名那一格與那個值,再退回 900(同 `worker.timeout_seconds` 的形狀,#64)。
+    `bool` 是 `int` 的子類別,不先擋掉的話 `true` 會被當成 1 秒。
+    """
+    section = event.config(root).get("verify_case")
+    if not isinstance(section, dict) or "timeout_seconds" not in section:
+        return TIMEOUT
+    value = section["timeout_seconds"]
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    sys.stderr.write("verify-case: board/config.json 的 %s=%s 不是正整數 —— 不採用,退回 %d\n"
+                     % (TIMEOUT_KEY, json.dumps(value, ensure_ascii=False), TIMEOUT))
+    return TIMEOUT
+
+
+def run_cases(where, rels, log_path, timeout=TIMEOUT):
     """在 `where` 這份副本裡跑這幾個案例檔,回傳一份可以比對的結果。
 
     **原始輸出存檔**,不只回傳摘要:少了原文,下一個人要重現這一趟只能重跑一次。
+    超過 `timeout` 秒丟 `CaseTimeout`(逾時前印出的那一段照樣存進 `log_path`)。
     """
     mods = [module_of(rel) for rel in rels]
-    done = subprocess.run([sys.executable, "-m", "unittest", "-v", *mods],
-                          cwd=where, capture_output=True, text=True, timeout=TIMEOUT)
+    try:
+        done = subprocess.run([sys.executable, "-m", "unittest", "-v", *mods],
+                              cwd=where, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        partial = "".join(part.decode("utf-8", "replace") if isinstance(part, bytes)
+                          else part for part in (exc.stdout, exc.stderr) if part)
+        with open(log_path, "w", encoding="utf-8") as handle:
+            handle.write(partial)
+        raise CaseTimeout("案例跑超過 %d 秒(%s)被中止 —— 時限在 board/config.json 的 %s;"
+                          "逾時前的輸出 -> %s"
+                          % (timeout, " ".join(mods), TIMEOUT_KEY, log_path)) from None
     text = (done.stdout or "") + (done.stderr or "")
     with open(log_path, "w", encoding="utf-8") as handle:
         handle.write(text)
@@ -479,7 +514,11 @@ def cmd_red(args):
         return rc
 
     try:
-        run = run_cases(base_dir, rels, os.path.join(logs, "baseline.log"))
+        try:
+            run = run_cases(base_dir, rels, os.path.join(logs, "baseline.log"),
+                            case_timeout(root))
+        except CaseTimeout as exc:
+            return unmeasured(args.ticket, str(exc), ref, "red")
         sys.stdout.write("verify-case: #%s 案例 %d 個(乾淨基底 %s / %s)\n"
                          % (args.ticket, run["cases"], ref, base_sha[:12] or "無 sha"))
         print_shapes(run)
@@ -542,8 +581,13 @@ def cmd_check(args):
         return rc
 
     try:
-        baseline = run_cases(base_dir, rels, os.path.join(logs, "baseline.log"))
-        cand = run_cases(candidate, rels, os.path.join(logs, "candidate.log"))
+        # 兩趟各算各的時限:base 與 candidate 是兩次獨立的 unittest。
+        timeout = case_timeout(root)
+        try:
+            baseline = run_cases(base_dir, rels, os.path.join(logs, "baseline.log"), timeout)
+            cand = run_cases(candidate, rels, os.path.join(logs, "candidate.log"), timeout)
+        except CaseTimeout as exc:
+            return unmeasured(args.ticket, str(exc), ref, "check")
 
         why = not_counted(baseline, "乾淨主線")
         if not baseline["red"]:
