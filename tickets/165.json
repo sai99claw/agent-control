@@ -1,0 +1,43 @@
+{
+  "id": "165",
+  "subject": "board.py: optional board.key_file gate (?key= sets an HttpOnly cookie, 401 otherwise, /healthz always open, POST gated too); actl board serves the project root",
+  "created": "2026-10-24T17:17:13+00:00",
+  "objective": "Design docs/design/project-runnable-entries.md (D-071) C9, section 6, section 8 V14, acceptance row C9, follow-up row 5. Entry name actl (D-072); 'actl board' is already wired by #159 (board/board.py with AC_ROOT = project), so this ticket changes board/board.py and its tests only. (1) board.py reads board.key_file from the project's board/config.json (through event.config(root()) like 'port'). Key absent or null -> every behaviour byte for byte as today (whole existing test_board suite). (2) Key set: the path is relative to the project root (absolute allowed); the key is the file's first line stripped of whitespace. File missing or first line empty -> the board refuses to start: one stderr line containing 'board: key_file', the path and 'missing or empty', rc 2, no port line (a configured gate must not fall open, section 5.5). (3) With a key, for every method (GET and the existing POST) and every path except exactly /healthz: if the query carries key=<v> and hmac.compare_digest(v, key) -> 302, Location = the same path with the key parameter removed and every other parameter kept (no query -> bare path), header Set-Cookie: ac_board_key=<v>; Path=/; HttpOnly; SameSite=Strict, empty body; else if the request's ac_board_key cookie compare_digest-equals the key -> served as today; else 401 with an empty body and no WWW-Authenticate. A wrong ?key= is 401 and sets no cookie. /healthz (after the existing rstrip of a trailing slash) is 200 as today and never requires the key - it is the portal's liveness probe. (4) The log line stays path-only (today's log_message already prints urlparse(path).path); the key must never appear on stderr. (5) Bind stays 127.0.0.1 (board.py:1210), no bind key, --port unchanged, port 0 for tests (test_board.py:29). (6) Not here: proxy headers, sessions, key rotation, a UI for the key; T's portal decides whether to use the key (D-071 original words).",
+  "acceptance": [
+    "A1 unchanged without a key (tests/test_board.py): every existing test_board case green with Ran count equal to base plus the new cases; a sandbox whose config has \"board\": {} -> GET / 200 with no Set-Cookie header and GET /healthz 200.",
+    "A2 V14 flow (tests/test_board.py BoardUp, config_extra board.key_file = 'board/key.txt', the test writes 'k-secret\\nsecond line ignored\\n'; a urllib opener that does not follow redirects): GET / -> 401 and body b''; GET /api/state -> 401; GET /t/1 -> 401; GET /healthz -> 200 and JSON {\"ok\": true}; GET /?key=k-secret -> 302, Location == '/', Set-Cookie contains 'ac_board_key=k-secret', 'HttpOnly' and 'Path=/'; GET / with header 'Cookie: ac_board_key=k-secret' -> 200 and the HTML contains the sandbox ticket subject the test wrote; GET /t/1?key=k-secret&x=1 -> 302 Location == '/t/1?x=1'; GET /?key=wrong -> 401 and no Set-Cookie; GET / with 'Cookie: ac_board_key=wrong' -> 401. The expected key comes from the test's own file write.",
+    "A3 POST gated (tests/test_board.py): the existing POST route (board.py ~1182) without a cookie -> 401 and the sandbox's answers file line count before == after; with the cookie -> the existing POST case's assertions hold unchanged.",
+    "A4 refuse to start (tests/test_board.py): key_file configured but absent -> the process exits within 20 s with rc 2, stderr contains 'key_file' and 'board/key.txt', and no 'http://127.0.0.1:' line was printed; the same with a file whose first line is empty.",
+    "A5 static + log + actl (tests/test_board.py): grep -c compare_digest board/board.py >= 1 (design acceptance C9); the stderr captured during A2 contains '/t/1' and does not contain 'k-secret'; 'sh $AC_HOME/bin/actl board --port 0' with cwd = sandbox prints the port line within 20 s and GET /healthz is 200 (stopped through the Popen handle as the existing _stop does)."
+  ],
+  "depends_on": [
+    {
+      "id": "159",
+      "condition": "landed"
+    }
+  ],
+  "role": "worker",
+  "model": "sonnet",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "601b36f039a336a6f2e87effefbed3067bfa2585",
+  "state": "Ready",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "simple",
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "decision_refs": [
+    "D-071",
+    "D-072"
+  ],
+  "test_plan": "Worker, foreground: timeout 590 python3 -m unittest tests.test_board tests.test_actl; report Ran/OK verbatim with the base Ran count of tests.test_board for A1. Worker writes A1-A5 in tests/test_board.py (reuse BoardUp.serve/_stop/get; add a no-redirect opener and a header-returning get). Verifier (needs_verifier true, interface_fixed true: paths, codes, cookie name and header text are pinned above) writes tests/test_board_cases.py (new, not in worker scope) in parallel: at least a Cookie header carrying other cookies around ac_board_key, a key file with trailing spaces and CRLF, '/healthz/' (open, rstrip) versus '/HEALTHZ' (401), an absolute key_file path, a key containing '=' and '%', and '/board.css' / '/board.js' gated like '/'. Mutations (not measured by opener): m1 compare_digest replaced by '==' -> A5 red; m2 /healthz gated -> A2 red; m3 a missing key file treated as 'no key' -> A4 red; m4 POST not gated -> A3 red; m5 cookie set on a wrong ?key= -> A2 red. Container runs as uid 0: no chmod-based unreadable-file cases (root reads them); use a missing file or invalid JSON instead. hard_block.patterns forbids the four process-signal spellings in added tests/** lines: never stop a child that way in a test; stop a served board only through the Popen handle as tests/test_board.py _stop does today; timeouts belong to subprocess.run(timeout=) inside scripts/.",
+  "outline": "D-071 row 5 (self-contained HTTP change; port-0 harness exists). Facts at base 601b36f: board.py binds 127.0.0.1 (1210), do_GET at 1107 routes /healthz, /board.css, /board.js, /api/state, /, /t/<n>; a POST handler reads Content-Length at ~1182 (answers); log_message prints urlparse(self.path).path (query already dropped); grep 'key_file|compare_digest' in board/: 0; DEFAULT_PORT 18905; test_board.py BoardUp.serve runs board.py from the sandbox copy with --port 0 and stops it through the Popen handle (after #159 the harness runs $AC_HOME/board/board.py with AC_ROOT = sandbox - the worker rebases BoardUp on that). Existing test_board cases never set 'board' in config, so A1 is the no-key path. Files: board/board.py, tests/test_board.py; gate map data gains nothing (board/board.py -> test_board row exists). needs_verifier true: an auth gate that falls open is invisible to the owner (section 5.5); interface_fixed true. simple, sonnet (design). Depends on #159 (harness moves board.py out of the sandbox; test_board paths change in that ticket - landing both in parallel would collide in test_board.py). Parallel with #160-#164."
+}

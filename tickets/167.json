@@ -1,0 +1,44 @@
+{
+  "id": "167",
+  "subject": "Docs on the installed-tool model: WORKFLOW section 閘門, MEMORY, CODE-MAP, TODO section 0, HANDOFF T-list items 5 and 10 rewritten for actl; DECISIONS pointer left to main",
+  "created": "2026-10-24T17:17:13+00:00",
+  "objective": "Design docs/design/project-runnable-entries.md (D-071) section 7 A-side Edit column (docs items), section 3 (ownership), section 4 (what the project declares), follow-up row 7. Entry name actl (D-072). (1) docs/WORKFLOW.md section '## 閘門(scripts/gate.sh)' (107-114): one paragraph - the project fills the tests section of board/config.json (preflight / select / run / full / regression, result.json, pointer to the design section 4); the gate is A's ('actl gate --branch|--base|--full [--ticket n]'); 'unmapped' from select is still rc 3, never a silent green; --ticket still writes the status file, runs the regression layer ('regression --tag', declared tags selecting nothing = non-zero) and the flake rerun by id; the gate.example.sh mention goes. The row '一個既有專案接上這一套' in the '哪些已經是程式' table (~300) -> 已實作: git clone A beside the project, actl doctor / migrate / hooks install, the tests section; pointer docs/TODO.md section 0. (2) docs/MEMORY.md: the paragraph at 26 ('同步一個位元組都不碰 <專案>/memory/') -> A never writes into <project>/memory/; memory/{role,model,project} in the project is the project's own layer overlaid on $AC_HOME/memory (D-071 section 3, '### 本專案'); memory.applies_to points at memory/role/*.md and memory/model/*.md; the 專案端 row at 10 names 'actl memory' where it names a synced script. (3) docs/CODE-MAP.md:12 -> the project's code-map/ is project data; the tool is $AC_HOME/scripts/repo-map.py, run as 'actl repo-map'. (4) docs/TODO.md section 0: the table rewritten as the design section 7 T-side steps 1-6 (clone beside the project; actl doctor -> actl migrate, actl inbox migrate once, hard_block, board.key_file, scripts/ac-tests.sh with preflight only, tests.unittest.roots; actl hooks install; rehearsal a-e; three tickets landed by actl land then delete scripts/control/ and the project's lander; board behind the portal), each row keeping the two columns 指令 / 怎麼知道它成了 with one pasteable command and one observable; the closing paragraphs mentioning test_sync_to_project.py and 'scripts/control' deleted; the section 1 checklist row naming gate.example.sh -> 'tests interface (design section 4) + templates/project-tests.example.sh'. (5) docs/HANDOFF.md section '#147 的 T 端配套清單' rows 5 and 10, 改成 column only: 5 -> 'actl hooks install'(replaces the guard-main.sh hook, adds SubagentStop / SessionEnd into A's clone); 10 -> clone A beside T, 'actl doctor' then 'actl migrate'; no sync run. No other HANDOFF text (the batch's own HANDOFF section is main's). (6) Not here: docs/DECISIONS.md (hard_block path; main writes D-072 and the pointer to this design), docs/FLOW.html, docs/DESIGN-*.md, docs/design/*, discussions/, README.md and templates (#166). Every edited sentence names actl, never 'ac' as a command (D-072).",
+  "acceptance": [
+    "A1 static grep (shell, in the ticket worktree): grep -cE 'sync-to-project|scripts/control|\\.synced-from|gate\\.example|test_sync_to_project' on each of docs/WORKFLOW.md docs/MEMORY.md docs/CODE-MAP.md docs/TODO.md = 0; on docs/HANDOFF.md the only remaining hits are outside the '#147 的 T 端配套清單' table (history sections keep theirs) and its rows 5 and 10 contain 'actl hooks install' and 'actl doctor' respectively.",
+    "A2 docs/WORKFLOW.md: the section between '## 閘門' and the next '## ' contains 'tests', 'actl gate', 'unmapped', 'regression' and 'docs/design/project-runnable-entries.md'; the heading order 閘門, 發版, 衝突, 狀態檔 is unchanged (diff of the heading list before/after is empty); the '哪些已經是程式' row for 接上這一套 contains 'git clone' and 'actl'.",
+    "A3 docs/TODO.md section 0: the table's 指令 column contains, across rows, 'git clone', 'actl doctor', 'actl migrate', 'actl hooks install', 'actl test preflight', 'actl land'; every row has a non-empty 怎麼知道它成了 cell; the sentence containing 'tests/test_sync_to_project.py' is gone; section 1 names templates/project-tests.example.sh and not gate.example.sh.",
+    "A4 docs/MEMORY.md and docs/CODE-MAP.md: the rewritten MEMORY paragraph contains 'AC_HOME', 'memory/role' and '本專案'; CODE-MAP line names 'repo-map.py' and 'actl'; timeout 590 python3 -m unittest tests.test_memory tests.test_rules_delivery tests.test_status tests.test_no_project_names green (modules that read these docs).",
+    "A5 untouched files: docs/DECISIONS.md byte-identical to the ticket base; 'git diff --stat <base>..HEAD' lists only docs/WORKFLOW.md docs/MEMORY.md docs/CODE-MAP.md docs/TODO.md docs/HANDOFF.md; the HANDOFF diff touches only lines inside the '#147 的 T 端配套清單' table."
+  ],
+  "depends_on": [
+    {
+      "id": "166",
+      "condition": "landed"
+    }
+  ],
+  "role": "worker",
+  "model": "sonnet",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "601b36f039a336a6f2e87effefbed3067bfa2585",
+  "state": "Ready",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "simple",
+  "needs_verifier": false,
+  "interface_fixed": true,
+  "decision_refs": [
+    "D-071",
+    "D-072",
+    "D-069"
+  ],
+  "test_plan": "Worker, foreground: the A1-A3 greps as shell commands with output verbatim; timeout 590 python3 -m unittest tests.test_memory tests.test_rules_delivery tests.test_status tests.test_no_project_names; then tests.test_auto_fix alone (its T1 and ~4238/4701 cases read docs/WORKFLOW.md); 'git diff --stat <base>..HEAD' verbatim for A5. No new test file: docs-only ticket, assertions are the greps above. needs_verifier false: a verifier's case would re-run the same greps on the same five files (D-028 rename/small-edit class). Container runs as uid 0: no chmod-based unreadable-file cases (root reads them); use a missing file or invalid JSON instead. hard_block.patterns forbids the four process-signal spellings in added tests/** lines: never stop a child that way in a test; stop a served board only through the Popen handle as tests/test_board.py _stop does today; timeouts belong to subprocess.run(timeout=) inside scripts/.",
+  "outline": "D-071 row 7 (docs channel). Facts at base 601b36f: WORKFLOW.md 107-114 section 閘門 names gate.example.sh (110) and the table row at 300 names sync-to-project.sh; MEMORY.md 10 and 26; CODE-MAP.md 12; TODO.md section 0 rows 1-9 name scripts/control/ and the closing paragraph names test_sync_to_project.py, section 1 row names gate.example.sh; HANDOFF.md T-list rows 5 and 10 (147-175) say 'next sync' / 'run sync-to-project.sh'. Tests reading these docs: test_auto_fix.py 4238 and 4701 (WORKFLOW sections on objections / land, not 閘門 - keep those sections byte for byte), test_status.py:709 (docstring only), test_rules_delivery writes its own docs in a sandbox. docs/DECISIONS.md is hard_block.paths - the pointer line is main's (D-072). Nothing in DISPATCH-TEMPLATE.md or ROLES.md names sync (grep 0). Files: the five docs only. simple, sonnet, needs_verifier false (greps on five files; a second case set would repeat them), interface_fixed true. Depends on #166 (README / template / code already on actl; otherwise the docs would describe a tool that is not there). Last in the batch; T side (design row 8) starts after T pulls."
+}

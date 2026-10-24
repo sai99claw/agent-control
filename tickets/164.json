@@ -1,0 +1,48 @@
+{
+  "id": "164",
+  "subject": "scripts/hooks.py: 'actl hooks install|check' writes the three Claude Code hook entries of <project>/.claude/settings.json pointing into AC_HOME; A's own settings.json is a managed instance",
+  "created": "2026-10-24T17:17:13+00:00",
+  "objective": "Design docs/design/project-runnable-entries.md (D-071) C8, section 5, section 8 V13, follow-up row 4. Entry name actl (D-072). (1) scripts/hooks.py <install|check> [--project <dir>]; the project root is --project, else AC_ROOT (set by actl); AC_HOME required (rc 2 'AC_HOME not set' when absent). bin/actl's 'hooks' row (a 'not landed yet' stub since #159) now execs it. (2) A managed entry = an item of hooks.<event>[].hooks[] whose command names one of the basenames session-hook.sh, agent-cost-hook.py, guard-main.sh, main_guard.py at any path. The target set (design section 5): SessionStart matcher 'startup|resume|clear|compact|fork' -> sh <HOME>/scripts/session-hook.sh timeout 60; SubagentStop -> python3 <HOME>/scripts/agent-cost-hook.py timeout 10; SessionEnd -> the same, timeout 10. <HOME> spelling: when realpath(project) == realpath(AC_HOME) (dogfood, A's own committed file) write \"$CLAUDE_PROJECT_DIR/scripts/<hook>\" double-quoted exactly as A's .claude/settings.json reads today (a committed file must not carry a machine path: tests/test_no_project_names.py treats .json as code level and forbids home paths); otherwise the absolute realpath of AC_HOME, double-quoted. Opener's ruling, main to confirm (outline). (3) install: creates .claude/ and the file ({} start) when absent; rewrites every managed entry to the target set; adds target entries that are missing; deletes a managed entry whose first path-looking token (after the interpreter word, quotes stripped, $CLAUDE_PROJECT_DIR expanded to the project root) is a missing file; leaves every non-managed entry and every other top-level key byte for byte; keeps key order; writes json indent 2 + trailing newline; prints a unified diff of the file (old vs new), or the single line 'hooks: no change'; rc 0. Not valid JSON -> rc 2, file untouched. (4) check: same computation, prints the same diff, never writes; rc 1 when install would change anything, 0 otherwise, 2 when not valid JSON. (5) Dogfood: 'actl hooks check' in A on the committed .claude/settings.json is rc 0; tests/test_session_hook.py A1 keeps pinning the shape and gains that arm. (6) The two 'please paste' lines printed by sync-to-project.sh today (412, 464-465) are not touched here: row 6 (#166) deletes that script; hooks.py is their replacement. (7) #160's doctor row 'hook points at a missing file -> actl hooks install' is the text this command resolves; nothing in project_config.py changes here.",
+  "acceptance": [
+    "A1 install twice (tests/test_hooks.py, new; harness sandbox at config_version 2, sandbox != AC_HOME; scripts via $AC_HOME/bin/actl): sandbox without .claude/ -> 'actl hooks install' rc 0, stdout has '+' lines containing session-hook.sh and agent-cost-hook.py; the file loads; keys SessionStart, SubagentStop, SessionEnd present; SessionStart matcher == 'startup|resume|clear|compact|fork', its command == 'sh \"<H>/scripts/session-hook.sh\"' where <H> = realpath of the AC_HOME the test set (expected string built by the test, not read from output), timeouts 60/10/10. Second install: rc 0, stdout contains 'no change', file byte-identical.",
+    "A2 V13 foreign survives, missing managed removed (tests/test_hooks.py): the test prewrites settings.json with (a) a PreToolUse entry {matcher 'Bash', command 'echo foreign-hook'}, (b) a SessionStart entry whose command is 'sh \"<sandbox>/scripts/control/guard-main.sh\"' (file absent), (c) a top-level \"permissions\" object, in that key order. After 'actl hooks install' rc 0: the parsed (a) and (c) subtrees are equal to what was written, top-level key order is permissions-after-hooks exactly as written, no command in the file contains 'guard-main.sh', stdout has a '-' line containing guard-main.sh and '+' lines for the three targets.",
+    "A3 check (tests/test_hooks.py): after A1's install, 'actl hooks check' rc 0 and stdout has no line starting with '+' or '-' (or contains 'no change'); the test then appends ' --x' to the SessionStart command -> check rc 1, stdout has a '-' line containing '--x' and a '+' line without it, file byte-identical before/after check; file content '{' -> check rc 2 and install rc 2, file byte-identical, stderr names the file.",
+    "A4 dogfood (tests/test_session_hook.py A1HookShape, static): 'python3 scripts/hooks.py check --project <A root>' with AC_HOME=<A root> rc 0 on the committed .claude/settings.json; the committed file's three commands contain '$CLAUDE_PROJECT_DIR' and no '/home/' or home-directory path; the existing A1 assertions (command contains scripts/session-hook.sh, matcher subset of the five sources) unchanged and green.",
+    "A5 actl wiring + doctor handshake (tests/test_hooks.py): 'actl hooks check' in a version-2 sandbox without settings.json -> rc 1 and '+' lines; 'actl hooks nonsense' -> rc 2; a sandbox whose settings.json names a missing guard-main.sh -> 'actl doctor' stdout contains 'actl hooks install' (the #160 row); after 'actl hooks install' -> 'actl doctor' stdout contains no 'hooks install' and rc 0."
+  ],
+  "depends_on": [
+    {
+      "id": "159",
+      "condition": "landed"
+    },
+    {
+      "id": "160",
+      "condition": "landed"
+    }
+  ],
+  "role": "worker",
+  "model": "sonnet",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "601b36f039a336a6f2e87effefbed3067bfa2585",
+  "state": "Ready",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "simple",
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "decision_refs": [
+    "D-071",
+    "D-072",
+    "D-069"
+  ],
+  "test_plan": "Worker, foreground: timeout 590 python3 -m unittest tests.test_hooks tests.test_session_hook tests.test_actl tests.test_project_config tests.test_no_project_names; report Ran/OK verbatim. Worker writes A1-A5 in tests/test_hooks.py (new) and the A4 arm in tests/test_session_hook.py; adds tests.unittest.map rows (or gate.sh map() rows while map() still exists, whichever the base has) for scripts/hooks.py -> test_hooks test_session_hook and for bin/actl -> + test_hooks. Verifier (needs_verifier true, interface_fixed true: subcommands, rc, diff output and the entry shape are pinned above) writes tests/test_hooks_cases.py (new, not in worker scope) in parallel: at least an event list holding one managed and one foreign item in the same 'hooks' array (foreign survives, managed rewritten), a managed command with extra arguments, a settings.json with no 'hooks' key, --project given with a trailing slash, a SessionStart entry without 'matcher', and a managed entry pointing at an existing non-A file of the same basename (rewritten, not deleted). Mutations (not measured by opener): m1 install drops the foreign entry -> A2 red; m2 check writes the file -> A3 red; m3 install appends instead of rewriting (duplicates on second run) -> A1 red; m4 dogfood writes the absolute path -> A4 red; m5 missing-file managed entry kept -> A2 red. Container runs as uid 0: no chmod-based unreadable-file cases (root reads them); use a missing file or invalid JSON instead. hard_block.patterns forbids the four process-signal spellings in added tests/** lines: never stop a child that way in a test; stop a served board only through the Popen handle as tests/test_board.py _stop does today; timeouts belong to subprocess.run(timeout=) inside scripts/.",
+  "outline": "D-071 row 4 (self-contained JSON rewrite with a diff; the shape test exists). Facts at base 601b36f: A's .claude/settings.json has the three events with \"$CLAUDE_PROJECT_DIR/scripts/<hook>\" commands (SessionStart matcher startup|resume|clear|compact|fork, timeouts 60/10/10); tests/test_session_hook.py:32 A1 pins type/command substring/timeout/matcher subset; test_no_project_names.py:53-67 treats every .json outside tickets/ as code level (absolute home paths forbidden) - hence the dogfood spelling rule in objective (2): the design's 'absolute path into AC_HOME' is kept for every other project. QUESTION for main (recommended yes): accept '$CLAUDE_PROJECT_DIR' form when project == AC_HOME. T facts (docs/HANDOFF.md T list item 5): T's settings.json has a PreToolUse Bash|Read hook to scripts/control/guard-main.sh (file retired) and no SubagentStop/SessionEnd - A2 is that shape. 'please paste' text lives only in scripts/sync-to-project.sh (412, 461-465) and dies with #166. #159 wired 'actl hooks' as a 'not landed yet' rc-2 stub; this ticket replaces it. #160's doctor row text 'actl hooks install' is fixed; A5 is the handshake. Files: scripts/hooks.py (new), bin/actl (hooks row), tests/test_hooks.py (new), tests/test_session_hook.py (one arm), gate map data (two rows). No change to project_config.py, session-hook.sh or sync-to-project.sh. needs_verifier true: a wrong merge deletes a user's own hook silently (section 5.5 class); interface_fixed true. simple, sonnet (design). Depends on #159 (actl, harness ac_env) and #160 (version-2 sandbox passes actl's check; doctor row). Parallel with #161, #162, #163, #165."
+}

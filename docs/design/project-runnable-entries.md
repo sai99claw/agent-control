@@ -1,313 +1,621 @@
-# D-069 ①② — A's entry points run from a project; one sync list with computed dependencies
+# D-071 — A is an installed tool: a project clones A and runs it in place; no sync
 
-Design session (Fable, 2026-10-24). A = agent-control (this repo, the master), T = the downstream
-project that reported the problems (its own `land-ticket.sh`, `board.py`, `test-for.sh`,
-`verify-refs.py`). Every factual claim is tagged **measured** (read or run in this session, in A)
-or **inferred** (read from code, not executed) or **T-reported** (from T's report; nothing in T
-was read here). Every trade-off carries a "per future ticket: saves / costs" line (D-018, rough,
-inferred). Fixed sections follow `docs/DESIGN.md` §設計文件的固定段; the five questions from the
-dispatch are answered in §1–§5 inside section ② / ④.
+Design session (Fable, 2026-10-24, second pass; replaces the D-069 ①② version of this file).
+A = agent-control (this repo), T = the downstream project that reported the problems. Every factual
+claim is tagged **measured** (read or run in this session, in A), **inferred** (read from code, not
+executed) or **T-reported** (from T's report via main; nothing in T was read here). Every trade-off
+carries a "per future ticket: saves / costs" line (D-018, rough, inferred). Fixed sections follow
+`docs/DESIGN.md` §設計文件的固定段; the nine topics from the dispatch are §1–§9 inside ②.
+
+Hard rule for this file: `board/config.json` `hard_block.patterns` forbids four process-signal
+spellings in added test lines, so no example below spells them; "stop a leftover process" is written in
+words.
 
 ## ① Origin
 
-User's words (D-069, 2026-10-24, verbatim): 「分別啥影響? 你能分析優劣然後 決定嗎? 這些問題是有啥設計取捨嗎?」
-— the user authorised main to analyse and rule. Main's ruling ① (verbatim): 「方向 1「A 的入口都能從專案跑」:採用。
-… A 補:land.sh / gate.sh / 看板的控制腳本路徑走 $AC 並進同步清單;gate 選填 `gate.select_cmd`(專案只提供挑測試與怎麼跑,
-preflight 回 86 走既有 env_suspect);verify.py `--case`;看板認 AC_CONTROL_DIR 與選填 `board.key_file`。專案只留專案知識
-(挑測試、瀏覽器引擎層、preflight、build / deploy)。」 Ruling ② (verbatim): 「同步清單:留在 hard_block … SCRIPT_LIST 與
-DEPENDENCY_ONLY 合成一份,依賴由 import 關係自動算,同步時發出去的腳本缺依賴就失敗(不只警告)。只有新增入口才需授權」.
+User's words (D-071, 2026-10-24, verbatim): 「同步清單要一次加進 land.sh、gate.sh、board.py 三個入口  同意。你把要改好的都改好
+我再去跟T 那邊講要怎麼做 T 的測試 你要定義一個好的方式 讓他遵守，我覺得A就是個管理器 一個專案要用就是clone一個 然後直接在上面跑東西
+不再做額外sync, 要同步remote 就pull就好 interface 要定義完善 有彈性 T 的看板是走代理(portal」
 
-Symptoms:
-- T-reported: T wrote its own lander `scripts/land-ticket.sh` (2,601 lines) and `board.py` (5,711 lines); after syncing
-  A 08e6752, 8 things broke, 6 of them glue that no longer matched A's interface (review / objection checks silently off).
-- Measured: `scripts/land.sh` has 18 `$ROOT/scripts/*` call sites (lines 113–888) plus `. "$ROOT/scripts/wtbase.sh"` (540);
-  `scripts/gate.sh` has 17 `$ROOT/scripts/*` sites (467–971) and computes `ROOT=$(cd "$(dirname "$0")/.." && pwd)` (114),
-  which from `<project>/scripts/control/` resolves to `<project>/scripts`, not the project root.
-- Measured: `review.sh:53-54`, `apply.sh:60-61`, `auto-fix.sh:79-80`, `heartbeat.sh:32-33`, `consolidate-memory.sh:44-45`
-  already use `AC=${AC_CONTROL_DIR:-$(dirname "$0")}` and `export AC_CONTROL_DIR`; `apply.sh:57` resolves `ROOT` by
-  walking up to `board/config.json` (`_ac_root`, `AC_ROOT` overrides). `gate.example.sh:88` has the `$AC` form too.
-- Measured: `board/board.py:48` inserts `dirname(HERE)/scripts` into `sys.path` — from `scripts/control/` that is
-  `<project>/scripts/scripts`; `board.py` is not in `SCRIPT_LIST` at all; bind is `127.0.0.1` only (1210); `/healthz` exists (1109);
-  there is no key / cookie code anywhere in A (grep `key_file|cookie|?key=`: 0 hits).
-- Measured: `sync-to-project.sh:102` `SCRIPT_LIST` (20 names) and `:113` `DEPENDENCY_ONLY` (6 names) are two hand-written
-  lists; a missing dependency is only detectable by reading the comments (18–20, 103–113). The wiring check (427–448) and the
-  fork check (474–482) both iterate `SCRIPT_LIST`.
-- Measured (ran an AST / regex scan over `scripts/`, see §2 for the rule): the import closure of today's entry points is
-  computable; `verify.py` imports `status.py`, which imports `event.py` + `ticket.py`; `ticket.py` imports `verify.py` (a cycle,
-  harmless for closure); `status.py:898` launches `auto-fix.sh` by path next to `__file__`; shell scripts reference siblings
-  as `$AC/<name>`, `$ROOT/scripts/<name>`, `. "$AC/wtbase.sh"` and `import <mod>` inside python heredocs.
-- Measured: `status.py run-tests` (273–316) runs **in-process unittest** from `<root>/tests` (`--mode discover|names`), so the
-  statistical environment-suspect detection and rc 86 only exist for unittest modules it loads itself. Declared suspects are
-  also parsed from any log by `done --log` (`parse_environment_suspects`, 534+).
-- Measured: `verify.py` selects cases only by `--tag` (119, 154); T's `test-for.sh` wants to name case files found via its
-  `verify-refs.py` reverse lookup (T-reported).
-- Measured: `land.sh:645-646` runs the full gate as `cd "$WT" && … sh scripts/gate.sh --full` — the gate **from the tree under
-  test**, not from `$ROOT`. This must survive (the merged tree may change the gate).
+Main's ruling (D-071, verbatim): 「A(agent-control)改成安裝即用的工具 —— 專案端 clone A,從 A 的 clone 直接對專案執行;更新 A =
+在 A 的 clone `git pull`。不再把腳本同步進專案:sync-to-project.sh、SCRIPT_LIST / DEPENDENCY_ONLY、專案的 scripts/control/ 與
+.synced-from 退役 … D-069 ② 由本條取代;D-069 ①(專案只留專案知識)保留並擴大。」 and 「A 自己也照同一套介面跑(自己是自己的第一個專案)」.
+
+What is kept from the previous version of this file (all still true under the new model, re-expressed in §1–§4):
+the gate's two roots (code root ≠ ticket root), the `select` contract (ids or `unmapped <file>`), rc 86 =
+environment suspect with `environment_suspect` rows (D-019), `board.key_file`, `verify.py --case`, and the
+compatibility period of three consecutive T tickets (D-017). D-069 ① ("the project keeps only project
+knowledge: which tests, how to run them, preflight, build / deploy") is the dividing line for §3 and §4.
+
+Symptoms and facts this design rests on:
+- T-reported: after syncing A 08e6752, 8 things in T broke; 6 were glue that no longer matched A's interface
+  (`review_problems` signature, verify-case lint, inbox file shape) and failed **silently** (review / objection
+  checks off, no red).
+- Measured: the sync machinery is `scripts/sync-to-project.sh` (496 lines), `tests/test_sync_to_project.py`
+  (865 lines), a `hard_block.paths` entry, a `map()` row in `gate.sh:174`, and prose in `README.md:95`,
+  `docs/TODO.md:10-27`, `docs/MEMORY.md:26`, `docs/CODE-MAP.md:12`, `docs/reference/role-procedures.md:50`,
+  `new-session.sh:231,253`, `rules.py:268` (sync header handling), plus comments in `event.py`, `verify.py`,
+  `heartbeat.sh`, `board.py`.
+- Measured: eight scripts compute the project root by walking **up from `$0`** to `board/config.json`
+  (`_ac_root()` in `apply.sh:49-57`, `review.sh:44-52`, `auto-fix.sh:68-76`, `heartbeat.sh:21-29`,
+  `session-hook.sh:36-44`, `consolidate-memory.sh:35-43`, `new-session.sh:32/167`; `event.repo_root()` 73-90 does
+  the same in Python). Under D-071 the scripts live in **A's clone**, so that walk always finds **A's own**
+  `board/config.json` — the wrong root for every project except A, and it does not fail (the §5.5 family).
+  `AC_ROOT` already overrides all of them (measured in each file).
+- Measured: `gate.sh:114` uses `ROOT=$(dirname "$0")/..` as the **code root**; `verify.py:36-50` finds the code
+  root from `__file__` and explicitly refuses `AC_ROOT` (#55: in a worktree the gate must test the worktree's
+  `verify/`). Both become wrong when the file lives in A's clone.
+- Measured: `land.sh:645-646` runs the full gate as `cd "$WT" && … sh scripts/gate.sh --full` — the gate **from
+  the tree under test**. In a project that no longer has `scripts/gate.sh`; in A it is still the right thing
+  (a ticket that changes the gate must be gated by its own gate).
+- Measured: `status.py run-tests` (273-316) is the only runner: in-process unittest, statistical environment
+  suspect (`EnvironmentResult`), `LogStream`, rc 86; `gate.sh` then parses the log (`status.py failures --log`,
+  1090-1100) for ids to rerun (`flake_rerun`, 897+, reruns each id via `python3 -m unittest <id>` from `tests/`).
+  `verify-case.py run_cases` (261-290) runs case files with `python3 -m unittest -v` in a `git archive` copy
+  and classifies red by **traceback frames** (red_shape, D-020).
+- Measured: `rules.py` has one overlay mechanism already: `roles_dir` (canon) vs `memory/role` (this repo's
+  own layer); `is_canon()` = both are the same dir; when not canon the pack appends "### 本專案 …" sections
+  (430-450). `board/board.py:48` inserts `dirname(HERE)/scripts` (correct inside A's clone), binds
+  `127.0.0.1` only (1210), has no key code (grep `key_file|compare_digest`: 0).
+- Measured: `hard_block` is read by `ticket.py:986` from `board/config.json`; `land.sh:430-445` and `apply` /
+  `gate` share `hard_block_hits`. Nothing from the previous design has landed (grep `select_cmd|tests_dir|
+  key_file` in `scripts/`: 0 hits), so there is no half-built shape to migrate.
+- Measured: `.claude/settings.json` in A runs hooks as `sh "$CLAUDE_PROJECT_DIR/scripts/session-hook.sh"`
+  (SessionStart) and `python3 "$CLAUDE_PROJECT_DIR/scripts/agent-cost-hook.py"` (SubagentStop, SessionEnd);
+  `test_session_hook.py:32` pins that shape. `CLAUDE_PROJECT_DIR` is therefore the variable Claude Code gives
+  hooks (inferred to be reliable from A using it since #39).
+- Measured: no `ac` command exists in this container (`command -v ac` empty). macOS ships `/usr/sbin/ac`
+  (accounting) — **?** not verified here, see ⑥ Q3.
 
 ## ② Conclusions (one trade-off per row)
 
 | # | Conclusion | Why | Per future ticket: saves / costs (inferred) |
 |---|---|---|---|
-| C1 | **One control dir, one rule for roots.** Every synced shell script starts with the same 4 lines: `ROOT=${AC_ROOT:-$(_ac_root)}` (walk up from `$0` to `board/config.json`), `AC=${AC_CONTROL_DIR:-$(cd "$(dirname "$0")" && pwd)}`, `export AC_CONTROL_DIR=$AC`; siblings are called only as `"$AC/<name>"`. `gate.sh` and `land.sh` adopt it; `$ROOT/scripts/` is forbidden in synced scripts (pinned by a test, ⑤ V1). | `apply.sh:57-61` is the already-working shape; two shapes for the same thing is what D-018 bans. | saves: T's glue layer (T-reported 6 of 8 breakages) disappears per sync; costs: 0 per ticket. |
-| C2 | **gate.sh keeps two roots**: code root `ROOT` = the tree the script file lives in (walk up from `$0`); ticket root = `event.repo_root()` (`AC_ROOT`). `land.sh` keeps calling the gate **inside the worktree** via `$WT/$AC_REL/gate.sh` where `AC_REL` = `$AC` relative to `main_root` (`scripts` in A, `scripts/control` in T). | Same split `verify.py` already has (#55, docstring 26–31); land must test the merged tree's own gate. | saves: a wrong-tree gate run is a whole land round (~30–80K tokens); costs: 0. |
-| C3 | **`gate.select_cmd` (optional config key) replaces A's hard-coded `map()`/`BASE` when set.** Contract in §1 below. Without it, `gate.sh` behaves exactly as today (A's own table). It is not a new gate: it is the existing gate's selection step made pluggable (D-053 ④ respected). | The 32-row `map()` (measured, gate.sh 136–200) is A knowledge; the project's only contribution is "which tests guard which files, how to pick them, and what to check before running" — which is what D-069 ① says the project keeps. | saves: T stops maintaining a 2,601-line lander to own one `case` table (T-reported); costs: one extra process per gate run (~0 tokens, <1 s). |
-| C4 | **Preflight lives inside `select_cmd`**: exit 86 + a JSON list on stdout in the `environment_suspect` shape (`source:"declared"`, D-019) → gate writes it to `SUSPECT_FILE`, takes the existing `env_suspect_note` path (no flake rerun, no auto-fix, one decision page). No new config key, no new gate. | gate.sh already has that whole path (987–988, 1037–1038, 561–569); the project just needs a way to say "the machine is bad before you start". | saves: a worker round dispatched into a locked screen / orphan Safari / full disk (D-019 §理由 5); costs: 0. |
-| C5 | **"How to run" stays in A**: `status.py run-tests --mode names` loads what `select_cmd` printed; the only project knob is `gate.tests_dir` (default `tests`) for where unittest names resolve. A `run: <command>` line form is **rejected** (③ 丙). | Keeps statistical env-suspect + per-case red lists + flake rerun working for projects; the browser layer is "which modules", not "which runner" (T's cases are unittest: `verify.py` and `land-ticket.sh gate` both call `python -m unittest`, T-reported via D-020 C5). | saves: a project never re-implements the red-list parser; costs: a project whose tests are not unittest-loadable cannot use `select_cmd` (none known; **?** for T, see ⑥ Q1). |
-| C6 | **Board**: `board.py` enters the sync list (lands in `scripts/control/`), resolves its control dir as `AC_CONTROL_DIR` → `HERE` if `event.py` sits beside it → `HERE/../scripts`; optional `board.key_file`: when set, every path except `/healthz` requires the key, `?key=<k>` on any path sets an `HttpOnly` cookie and redirects to the same path without the query, cookie or `?key=` compared with `hmac.compare_digest`, failure = 401 with an empty body. Bind stays `127.0.0.1`; exposure is the project's reverse proxy / tunnel (**?** ⑥ Q2). | T-reported need; A's board has no auth at all (measured), so the project forked 5,711 lines to add one. Key in a file (not in `config.json`) because `config.json` is synced-adjacent and lands in git. | saves: the fork; costs: 0 per ticket (one more `if` per request). |
-| C7 | **`verify.py --case <path|dotted>`** (repeatable, mixes with `--tag`): selects exactly those case files; unregistered tags still fail (rc 2); nothing selected is still rc 3; cache key includes the sorted cases. | T's `test-for.sh` already knows the files (via `verify-refs.py`); forcing it through tags means a tag per file. | saves: T's per-ticket "which tags cover this file" guess (T-reported); costs: 0. |
-| C8 | **One sync list `ENTRIES`** (entry points only) + dependencies **computed** (rule in §2); a computed dependency that is not in `scripts/` fails the sync with rc 2 naming `<caller> → <missing>`; the "uncalled" and "fork" checks iterate `ENTRIES` only; `.sync-manifest` records the closure. `sync-to-project.sh` stays in `hard_block.paths` (D-069 ②): adding an entry is a human-authorised change; the closure is not. | Two hand lists drift (the file already needs 11 comment lines to explain why 3 names are where they are, measured 103–113). | saves: one silent "import explodes in the project" per missed dependency (today found at T's first run, T-reported "8 處壞"); costs: ~0.5 s per sync. |
-| C9 | **Compatibility period is T's choice per ticket, not a flag in A** (§3): T keeps `land-ticket.sh` on disk, lands with `scripts/control/land.sh` for 3 consecutive tickets (D-017 threshold), then retires its own lander in a docs ticket. Both landers must share the lock (`AC_LAND_LOCK` → T's existing lock path) during the period. Rollback = call the old script; no data migrates. | Tickets, events and reports are already A's formats in T (synced `ticket.py` / `event.py`); only the lander changes. | saves: nothing to migrate; costs: during the period a human types a different command. |
-| C10 | **A tests "run from a project" with the real sync output** (§4): a harness layout where the sandbox's control scripts live in `scripts/control/` (copied by `sync-to-project.sh` itself), a `select_cmd` fixture, and the existing land / gate / board tests re-run in that layout through one env var. Plus a static test that greps synced entries for `$ROOT/scripts/`. | D-015 §5.6: do not build a simulator of T; the thing to test is A's own scripts from a different directory. | saves: the next "works in A, breaks in T" round (one sync + one T debugging session); costs: test suite +~20 % runtime (inferred), 0 tokens per ticket. |
-| C11 | **Not now** (⑤ has no row for these; ⑥ lists none): binding the board to `0.0.0.0`; a `run:` command mode in `select_cmd`; moving `templates/` / `verify/_template_ticket.py` into the computed closure; syncing `VISION.md`; auto-running sync; touching T's scripts from A. | See §5. | — |
+| C1 | **One entry `$AC_HOME/bin/ac <command>`**, a ~60-line POSIX dispatcher that resolves `AC_HOME` (its own dir/..), the project root (§1 order), exports `AC_HOME AC_ROOT AC_CONTROL_DIR`, checks `config_version` once, and `exec`s the existing script. Scripts keep their names and stay directly callable (tests, `land.sh` → gate, `auto-fix.sh` → `apply.sh`). | A single place for root + version + path; the scripts' `$AC/<sibling>` convention (measured in `apply.sh:60-61`, `review.sh:53-54`) already needs only `AC_CONTROL_DIR`. Renaming scripts would be a second shape (D-018). | saves: every "which path do I type in this project" question in dispatch prompts (one `ac` word replaces `scripts/control/…`); costs: one `exec`, 0 tokens. |
+| C2 | **Project root never comes from `$0`.** Order: `AC_ROOT` → `ac -C <dir>` → `CLAUDE_PROJECT_DIR` → main root of cwd's git tree (`git rev-parse --git-common-dir`'s parent, so a worktree resolves to its main repo) → rc 2. The `_ac_root()` walk is deleted from all eight scripts; `event.repo_root()` keeps `AC_ROOT` and falls back to the cwd rule, never to `__file__`. **Code root** (tree under test) is a second variable `AC_CODE_ROOT`, default = cwd's toplevel (the worktree itself). | The `$0` walk finds A's own config from A's clone and does not fail (①). The cwd rule is what `wtbase.sh main_root()` already does (measured 15-22). | saves: one silent "wrote tickets into A's repo" round per project session (a whole ticket's events/status lost, ~1 land round); costs: a user outside any git tree must type `-C` or set `AC_ROOT`. |
+| C3 | **A dogfoods**: A's clone is its own first project. `ac` run with cwd inside A resolves root = A; A's `board/config.json` carries the same `config_version` and `tests` section as any project (A's gate `map()` table becomes data in `tests.unittest.map`). One special case, pinned by a test: `land.sh` runs the gate from `$WT/scripts/gate.sh` only when the project **is** A (`realpath main_root == realpath AC_HOME`); every other project gets `$AC_HOME/scripts/gate.sh`. | D-071 原話「A 自己也照同一套介面跑」; the gate-from-worktree rule (`land.sh:645`) exists for A's own tickets that change the gate and is kept for exactly that case. | saves: A's tests are the project-interface tests (no simulator, §8); costs: one `realpath` compare in land.sh. |
+| C4 | **Project config stays `board/config.json`** (no rename, no second file) and gains `"config_version": 2` plus a `tests` section (§2, §4). A owns `scripts/project_config.py`: the schema table, `CURRENT_VERSION`, explicit migrations, `ac doctor`, `ac migrate`, `ac init`. `ac` refuses (rc 2, one line naming the fix) when the project's version is **lower** (run `ac migrate`) or **higher** (A is behind, `git pull`) than A's. Unknown keys warn, known keys are type-checked, missing keys take defaults. `session-hook.sh` runs `ac doctor` so a stale project is reported at session start, not at the first land. | T's six silent breakages (①) all came from A changing an interface without the project noticing. A version number the tool checks on every call is the smallest thing that turns "silent" into "one line". Data-shape changes (inbox dir, ticket fields) are **doctor rows with a fix command**, not config versions. | saves: the T-side debugging session after each A interface change (T-reported "8 處壞", one session ≈ 100K+ tokens); costs: ~50 ms per `ac` call, one JSON read. |
+| C5 | **Ownership line (§3)**: tickets, DECISIONS / VISION, `memory/{role,model,project}` (the project's own layer), `reports/` + inbox, worktrees, `board/{config,events,answers,role-models}.json`, `code-map/`, `verify/` cases + `TAGS.md`, `hard_block` — **project**. Role cards (canon), rules sections, templates, model cards, scripts, board code — **A** (read from `AC_HOME`). Project extends A by the existing overlay (`<project>/memory/role/<role>.md`, `<role>.inbox.md`, `memory/model/<m>.md`) and `rules.sections`; `rules.roles_dir` / `models_dir` retire (canon is always `$AC_HOME/memory/{role,model}`; `is_canon` = `AC_ROOT == AC_HOME`). | D-069 ① / D-071 「專案只留專案知識」; the overlay already exists (measured `rules.py:430-450`), so no new mechanism. | saves: T stops maintaining `docs/roles/` copies (T-reported drift); costs: 0. |
+| C6 | **Test interface = five commands declared in `tests` (§4)**: `preflight`, `select`, `run`, `full`, optional `regression`. A's gate, land, flake rerun, verify-case and `regression-red` call **only** these. Ids are opaque strings; results come back as one JSON file with a fixed schema (`result.json`, schema 1); exit codes 0 / 1 / 86 / 2 / 3 have one meaning each. A ships the **unittest adapter** (`scripts/adapter-unittest.py`, built from today's `status.py run-tests` + `EnvironmentResult` + `LogStream`) as the default for every command; a project overrides any subset with its own command string. A uses the adapter itself. | D-071 「T 的測試 你要定義一個好的方式 讓他遵守」. The previous version rejected a project runner (③ 丙) because env-suspect statistics and rerun ids lived in A's in-process unittest; with a **result file that carries ids, status, message, exception/file/line and `environment_suspect` rows**, every one of those features works for any runner, and the unittest case keeps its in-process statistics inside the adapter. | saves: per T ticket, the "which tests, how to run them" guess and the browser-layer special cases leave A's gate (T's 2,601-line lander retires, T-reported); costs: one extra process per gate phase (<1 s), and the project must write a result file (the adapter does it for unittest projects). |
+| C7 | **Red classification moves from traceback parsing to result fields.** `verify-case.py red/check` run `regression --case <file>` in the base copy and in the candidate (with `AC_CODE_ROOT` set to each tree) and classify from `exception` + `file` + `line` (D-020 table unchanged: `AssertionError` in a `verify.files` file counts; import failure, missing symbol, red elsewhere do not). A result row with `status: fail` and `exception: null` is **unmeasured** (rc 2, no ticket write), exactly today's `unmeasured` path. | D-020 rules stay; only the source of "which frame" changes. A runner that cannot say what failed must not be read as "it red-ed in the right place" (§5.5). | saves: 0 per ticket; costs: 0 (the adapter fills the fields from the same traceback it has today). |
+| C8 | **Claude Code hooks via `ac hooks install|check`** (§5): idempotent, writes `.claude/settings.json` entries whose command is the **absolute path into `AC_HOME`**, keeps every entry it does not manage, removes entries that point at files that no longer exist **and** whose basename is one A used to ship (`guard-main.sh`, `session-hook.sh`, `agent-cost-hook.py`, `main_guard.py`), prints a diff, rc 1 on drift in `check`. Replaces the two "please paste" lines `sync-to-project.sh:412,464-465` print today. | A hook pointing at a deleted file is a silent no-op (§5.5); a command that fixes it is cheaper than a paragraph that asks. | saves: one session with no opening page / no cost rows per hook drift; costs: 0. |
+| C9 | **Board**: `ac board` = `python3 $AC_HOME/board/board.py` with `AC_ROOT` = project; bind stays `127.0.0.1`; optional `board.key_file` (relative to project root; first line is the key; every path except `/healthz` requires it; `?key=` sets an `HttpOnly` cookie and redirects; `hmac.compare_digest`; failure 401 empty). T exposes it through its portal proxy (D-071 原話). | Unchanged from the previous version except that `board.py` no longer needs a control-dir rule (it lives in A). | saves: T's 5,711-line board fork (T-reported); costs: one `if` per request. |
+| C10 | **Retire the sync machinery entirely** (§7): `sync-to-project.sh`, `test_sync_to_project.py`, the `hard_block.paths` row (user-authorised, D-071), `gate.example.sh` (replaced by `templates/project-tests.example.sh` + `templates/project-config.example.json`), `.synced-from` / `scripts/control/` handling, `rules.roles_dir`, and every prose reference listed in ①. T retires `scripts/control/`, `.synced-from`, `land-ticket.sh` and its board fork on the §7 schedule; rollback = the files are still on disk until the last step. | D-071 原話「不再做額外sync」. Two shapes (synced copies + A's clone) must not coexist in A; in T they coexist only for the rehearsal window. | saves: every sync round (hard_block authorisation + a T session, ~50K tokens each, T-reported cadence ~1 per 5 A tickets); costs: T must `git pull` A deliberately (one command). |
+| C11 | **A tests "run against another project" with a fixture project** (§8): the harness no longer copies scripts into the sandbox; it runs `$AC_HOME/scripts/*` (or `AC_TEST_SCRIPTS` for mutation) with `AC_ROOT=<sandbox>` and cwd = sandbox; a committed `tests/fixtures/project/` carries a `tests` section with a **command adapter** written in shell (the T shape) and the unittest default. | D-015 §5.6: do not simulate T; the thing to test is A's own scripts from a different root. The dogfood path is tested by A's own gate. | saves: the next "works in A, breaks in T" round; costs: +~10 % test runtime (inferred; fewer file copies than today). |
+| C12 | **Not now** (§9): `0.0.0.0`, auto `git pull`, a packaging/installer beyond `git clone`, a multi-project registry, a template override dir, a daemon / RPC, a new gate or rc (D-053 ④), reading or patching T. | See §9. | — |
 
-### §1 Interface between project and A
+### §1 Invocation
 
-**Config keys (`board/config.json`, all optional):**
+**Install** = `git clone <A remote> ~/agent-control` (any path; `AC_HOME` is derived, never configured).
+**Update** = `git -C ~/agent-control pull`. **Pin / roll back** = `git -C ~/agent-control checkout <sha>`;
+every `session.start` event and every `status.json` records `ac_sha` (the clone's HEAD) so a report says which
+A produced it (new field in the event `--kv`, not a ticket field).
 
-| Key | Type | Meaning | Read by |
+**`bin/ac`** — the whole dispatcher is: resolve `AC_HOME=$(cd "$(dirname "$(realpath "$0")")/.." && pwd)`;
+parse `-C <dir>`; resolve `AC_ROOT` (table below); `export AC_HOME AC_ROOT AC_CONTROL_DIR=$AC_HOME/scripts`;
+`python3 "$AC_HOME/scripts/project_config.py" check "$AC_ROOT"` (rc 2 stops here, §2); `exec` the mapped script.
+
+| `ac <command>` | Runs | Notes |
+|---|---|---|
+| `ac land …` | `scripts/land.sh "$@"` | incl. `ac land docs "<msg>" <files>` |
+| `ac gate …` | `scripts/gate.sh "$@"` | `--branch\|--base\|--full [--ticket n]` |
+| `ac apply …` / `ac review …` / `ac auto-fix …` | the same-named `.sh` | |
+| `ac ticket …` / `ac event …` / `ac inbox …` / `ac status …` / `ac memory …` / `ac rules …` / `ac repo-map …` | the same-named `.py` | |
+| `ac verify …` / `ac verify-case …` | `verify.py` / `verify-case.py` | code root = cwd's toplevel |
+| `ac test <preflight\|select\|run\|full\|regression> …` | `scripts/testiface.py` | runs the project's declared command (§4); what the gate calls internally; useful for rehearsal |
+| `ac board` | `board/board.py` | §6 |
+| `ac hooks install\|check` | `scripts/hooks.py` | §5 |
+| `ac doctor` / `ac migrate` / `ac init` | `scripts/project_config.py` | §2 |
+| `ac session …` / `ac heartbeat` | `new-session.sh` / `heartbeat.sh` | |
+| `ac version` | prints `AC_HOME`, HEAD sha, `CURRENT_VERSION` | |
+
+Unknown command → rc 2 with the table above. Calling a script directly (`sh ~/agent-control/scripts/land.sh`)
+keeps working **inside a project tree** (cwd rule); the only thing lost is the version check, which is why
+dispatch prompts and docs say `ac`.
+
+**Project root (`AC_ROOT`, the ticket root)** — first hit wins, no silent fallback:
+
+| # | Source | When it applies |
+|---|---|---|
+| 1 | `AC_ROOT` env | set by `ac` for every child; set by `land.sh` / `auto-fix.sh` when they run the gate inside a worktree (measured today) |
+| 2 | `ac -C <dir>` | scripts, cron, a shell outside the project |
+| 3 | `CLAUDE_PROJECT_DIR` | Claude Code hooks (§5) |
+| 4 | main root of cwd's git tree (`git rev-parse --git-common-dir` → parent) | the normal interactive case; inside a ticket worktree it still yields the main repo |
+| 5 | none | rc 2: `ac: not inside a project; use -C <dir> or set AC_ROOT` |
+
+After resolution `AC_ROOT/board/config.json` must exist, else rc 2 naming `ac init`. **The `$0` walk is gone**;
+the fallback in `event.repo_root()` becomes rule 4, and `looks_like_a_copy()` keeps working (it tests the
+resolved root for `.git`).
+
+**Code root (`AC_CODE_ROOT`, the tree under test)** — `AC_CODE_ROOT` env, else cwd's `--show-toplevel`.
+Used by `gate.sh` (its `ROOT`), `verify.py` (`_find_root`), `verify-case.py` (set to each copy), and passed
+to every test command (§4). In A's own clone, cwd = A → both roots are A (dogfood).
+
+Example (T, interactive): `cd ~/T && ac ticket list --open` → root = `~/T`. In a T worktree:
+`cd ~/T-wt/t12-wt && ac gate --branch --ticket 12` → `AC_ROOT=~/T`, `AC_CODE_ROOT=~/T-wt/t12-wt`.
+
+### §2 Project configuration
+
+**Location**: `<project>/board/config.json` (unchanged; every reader already goes through `event.config()`,
+measured). **Version**: top-level `"config_version": <int>`; a file without the key is version 1 (today's
+shape). A's `scripts/project_config.py` holds `CURRENT_VERSION = 2`, the schema table, and `MIGRATIONS =
+{1: migrate_1_to_2}`.
+
+**Compatibility rules** (the T lesson, applied once in one place):
+
+| Situation | `ac` does | Who else notices |
+|---|---|---|
+| project version == A's | nothing | — |
+| project version < A's | rc 2: `config_version 1 < 2 — run: ac migrate` (every command, including `ac inbox list`) | `session-hook.sh` prints the same line at session start |
+| project version > A's | rc 2: `project needs config_version 3, this A has 2 — git -C $AC_HOME pull` | same |
+| known key, wrong type | rc 2 naming key, expected type, got | `ac doctor` |
+| unknown key | one stderr warning per call (never rc) | `ac doctor` lists them with "possibly retired" |
+| `ac migrate` | applies migrations in order, writes the file, prints each change, refuses if the file is not valid JSON; idempotent | the user lands the change through their own docs channel (`ac land docs`) |
+| data shapes (not config) | `ac doctor` rows, each with a fix command, e.g. `reports/inbox/index.jsonl exists → ac inbox migrate`; `scripts/control/ exists → retired, delete after §7 step 5`; `.claude/settings.json hook points at missing file → ac hooks install` | `ac doctor` exits 1 when any row is severity `error` |
+
+**When A changes an interface**: a change to a config key = bump `CURRENT_VERSION` + a migration function;
+a change to a data file shape (inbox, status.json, ticket field) = a doctor row + a migrate subcommand on the
+owning script (`inbox.py migrate`, D-069 ③ is the pattern); a change to a dispatch-prompt / role-card contract
+= nothing (A reads its own cards). The acceptance test for an A ticket that changes any config key is "the
+fixture project at version N−1 is refused and migrates cleanly" (§8 V4).
+
+**Schema (version 2)**. Type / default / reader. Rows marked *existing* are measured in A's `config.json`
+today; rows marked *new* come from this design.
+
+| Key | Type | Default | Read by | Status |
+|---|---|---|---|---|
+| `config_version` | int | — (required) | `ac`, `project_config.py` | new |
+| `main_branch` | string | `main` | land, gate, apply | existing |
+| `tickets_dir`, `events_file`, `answers_file`, `reports_dir` | path (rel. to root or abs) | `tickets`, `board/events.jsonl`, `board/answers.jsonl`, `reports` | event, ticket, status, inbox, board | existing |
+| `worktree_dir` | path | `../<repo>-wt` | wtbase.sh | existing |
+| `port` | int | 18905 | board | existing |
+| `health_urls` | object | `{}` | board | existing |
+| `routing`, `model_tiers`, `effort` | object / list / object | — | role-models, new-session, auto-fix | existing |
+| `worker.command`, `opener.command`, `reviewer.command` (+ `timeout_seconds`) | string / int | — | auto-fix, review, new-session | existing |
+| `lease_seconds.{opener,verifier,land,worker}` | int | — | heartbeat, auto-fix | existing |
+| `flaky_threshold`, `flake_auto_single_runs`, `flake_auto_group_runs`, `environment_fail_fast_threshold`, `flaky_auto_ticket` | int / bool | 3, 5, 1, 8, true | gate, status, adapter | existing |
+| `verify_case.timeout_seconds` | int | 900 | verify-case | existing (#156) |
+| `batch_fix.rounds` | int | 2 | land | existing |
+| `apply.regen_cmd` | string | `""` | apply | existing |
+| `memory.applies_to`, `memory.inbox_suffix` | list / string | — | memory, rules | existing |
+| `rules.sections` | object | A's table | rules | existing |
+| `rules.roles_dir`, `rules.models_dir` | — | — | — | **retired** (migration deletes with a note) |
+| `hard_block.{paths,dirs,patterns}` | lists | `[]` | ticket (apply, gate, land, auto-fix) | existing; **project-owned** |
+| `board.key_file` | path | none → no auth | board | new (previous version's C6) |
+| `tests` | object | `{"adapter": "unittest"}` | gate, land, verify-case, status, `testiface.py` | new (§4) |
+| `tests.adapter` | `"unittest"` | `"unittest"` | testiface | new; the only built-in |
+| `tests.preflight`, `tests.select`, `tests.run`, `tests.full`, `tests.regression` | string (shell) or null | null = adapter's built-in | testiface | new |
+| `tests.unittest.roots` | list of dirs | `["tests"]` | adapter | new (T's `demo/` tests) |
+| `tests.unittest.pattern` | string | `test_*.py` | adapter | new |
+| `tests.unittest.base` | list of ids | `[]` | adapter `select --mode base` | new (A's `BASE`, gate.sh:129) |
+| `tests.unittest.map` | list of `{match, ids}` | `[]` | adapter `select` | new (A's `map()`, gate.sh:132-210) |
+| `tests.timeout_seconds.{preflight,select,run,full,regression}` | int | 60, 60, 1800, 3600, 2700 | testiface | new |
+
+`migrate_1_to_2`: add `config_version: 2`; add `tests: {"adapter": "unittest"}` if absent; delete
+`rules.roles_dir` / `rules.models_dir` and print "project role cards now overlay `$AC_HOME/memory/role`; move
+`docs/roles/<role>.md` additions into `memory/role/<role>.md`"; delete `hard_block.paths` entries ending in
+`sync-to-project.sh`; print unknown top-level keys (T has `land`, `protected_paths`, `verify_lint`, HANDOFF
+item 1-3) as warnings, never delete them.
+
+### §3 Project-owned vs A-owned
+
+| Thing | Owner | Lives at | How the project extends / overrides |
 |---|---|---|---|
-| `gate.select_cmd` | string (shell) | Project's test selector + env preflight. Absent → A's built-in `map()`. | `gate.sh` |
-| `gate.tests_dir` | string, default `tests` | Directory unittest names resolve from (`status.py run-tests` cwd + `sys.path`). | `status.py run-tests` (new `--tests-dir`), `gate.sh` |
-| `board.key_file` | path (relative to repo root) | File whose first line is the access key. Absent → no auth (today's behaviour). | `board.py` |
-| `main_branch`, `tickets_dir`, `reports_dir`, `worktree_dir`, `hard_block`, … | existing | unchanged | |
+| tickets, `SCHEMA.md` contract | project data / A contract | `<root>/<tickets_dir>` | — |
+| `docs/DECISIONS.md`, `docs/VISION.md` | project | `<root>/docs/` | they are the project's rulings; A's own are A's project layer |
+| `memory/role/<role>.md`, `<role>.inbox.md`, `memory/model/<m>.md`, `memory/project/*` | project (its own layer) | `<root>/memory/` | **this is the override**: rules pack appends them after A's canon card ("### 本專案", measured `rules.py:436-450`); `memory.py note` writes here |
+| role cards (canon), model cards (canon), `docs/DISPATCH-TEMPLATE.md` sections, `templates/dispatch-*.md`, `verify/_template_ticket.py` | A | `$AC_HOME/…` | not overridable; file an A ticket. Which DISPATCH sections a role gets: `rules.sections` (existing) |
+| scripts, `bin/ac`, board code, adapter | A | `$AC_HOME/scripts`, `bin`, `board/board.py` | `tests.*` command strings (§4) are the only code the project plugs in |
+| `reports/`, `reports/inbox/`, `status.json`, logs | project | `<root>/<reports_dir>` | — |
+| worktrees | project | `worktree_dir` | — |
+| `board/config.json`, `events.jsonl`, `answers.jsonl`, `role-models.json` | project | `<root>/board/` | `role-models.json` stays project data (which model each role uses is a project choice; A ships a default copy in `templates/`) |
+| `code-map/` + `repo-map.py` catalog | project (data) / A (tool) | `<root>/code-map/` | unchanged (docs/CODE-MAP.md:12 already says so) |
+| `verify/` cases, `verify/TAGS.md`, `TAGS.d/` | project | `<root>/verify/` | the regression layer is project data run by A's `verify.py` (default adapter) or the project's `tests.regression` |
+| `hard_block` | project | `board/config.json` | the only write-scope rule (D-054 Q2); A's own list is A's project config |
+| project `CLAUDE.md` | project | `<root>/CLAUDE.md` | `templates/project-CLAUDE.md` rewritten: 「主線先讀 `$AC_HOME/CLAUDE.md`」, the 對照表 becomes one line: 「A 的入口一律 `ac <命令>`;專案特有的只有 §專案特有」 |
 
-**Environment variables (already exist; now honoured by every synced script):** `AC_ROOT` (ticket root override),
-`AC_CONTROL_DIR` (where the sibling scripts are; set and exported by whichever script runs first), `AC_LAND_LOCK`, `AC_GATE_*`.
+A's own `memory/`, `tickets/`, `reports/`, `verify/` are A-as-project; `rules.py is_canon()` becomes
+`realpath(AC_ROOT) == realpath(AC_HOME)` (one comparison, no key).
 
-**`gate.select_cmd` contract.** gate.sh runs `sh -c "$select_cmd" select <mode>` with:
-- `<mode>` ∈ `branch | base | full | files`; for `files` and `branch` the candidate file list is on **stdin**, one path per line,
-  repo-relative (for `branch` gate.sh computes it exactly as today, lines 1006–1008); for `base` and `full` stdin is empty.
-- env: `AC_ROOT`, `AC_CONTROL_DIR`, `AC_GATE_MODE=<mode>`, `AC_TICKET` (may be empty), `AC_GATE_RUN_ID`; cwd = code root.
-- **stdout, rc 0**: one item per line; `<unittest-name>` (module or dotted `module.Class.test`, resolvable from `gate.tests_dir`)
-  or `unmapped <file>` (no test guards this file). gate.sh dedups names, runs them via `run-tests names`, and if any
-  `unmapped` line exists keeps today's semantics (run what mapped, exit 3, `ticket_gate 3`). For `full` the selector may print
-  the single word `discover` meaning "everything under `tests_dir`" (the default when `select_cmd` is absent).
-- **rc 86**: environment preflight failed; stdout is a JSON list of `environment_suspect` rows (D-019 seven keys, `source:"declared"`,
-  `log` null). gate.sh writes it to `SUSPECT_FILE`, calls `env_suspect_note`, `status_done 86`, no `flake_rerun`, no regression,
-  no `verify_case`, no auto-fix, inbox decision page as today. (The selector is where the project checks lock screen / orphan
-  Safari / free disk; A never learns what those are.)
-- **rc 3**: nothing selectable (selector's own "no tests for these files") → gate.sh prints the selector's stderr and exits 3.
-- any other rc: gate.sh exits 2 ("selector failed", stderr passed through). Empty stdout with rc 0 = exit 2 as well
-  (§5.5: "nothing to run" must not look like green).
-- The selector never runs tests, never writes `reports/`, never touches tickets.
+### §4 Test interface (what T implements)
 
-**Which A scripts become entries (go into `ENTRIES`):** today's 20 minus the 6 that were `DEPENDENCY_ONLY`, plus
-`land.sh`, `gate.sh`, `board.py` (new; one-time authorisation per D-069 ②). `verify.py` stays an entry (#35).
-`gate.example.sh` is **not** synced (it is a template for projects that still want their own gate; with `select_cmd` they
-no longer need one, and the example is rewritten to show a `select_cmd` instead).
+**Principle**: A knows *when* to test (branch / base / full / rerun / verify-red / verify-check), *what to do
+with results* (status file, events, inbox, flake rerun, auto-fix, red classification) and *nothing about the
+project's tests*. The project knows *which ids guard which files*, *how to run an id*, *what to check before
+running*, and nothing about tickets. The seam is five commands and one result file.
 
-**What a project shim looks like** (lives in the project's own `scripts/`, not in `control/`; this is the entire glue):
+**How A invokes a command** (`scripts/testiface.py`, used by gate / land / verify-case / `ac test`):
+`sh -c "$cmd \"\$@\"" ac-test <args…>` with cwd = `AC_CODE_ROOT`, a fresh empty directory in `AC_TEST_OUT`,
+and env:
+
+| Variable | Value |
+|---|---|
+| `AC_HOME`, `AC_ROOT`, `AC_CODE_ROOT` | §1 |
+| `AC_TEST_OUT` | directory for `result.json` and logs (A chooses: `<reports_dir>/t<n>/<run_id>/<phase>/` under a ticket, else `<reports_dir>/gate/<run_id>/<phase>/`) |
+| `AC_TEST_MODE` | `branch` / `base` / `full` / `rerun` / `verify-red` / `verify-check` / `release` |
+| `AC_TICKET`, `AC_RUN_ID` | may be empty (hand run without a ticket) |
+| `AC_TEST_TIMEOUT` | the configured seconds; A also enforces it (a timeout = rc 2 "unmeasured", never red) |
+
+Stdout and stderr of every command are captured to `$AC_TEST_OUT/<command>.log` (the raw text is evidence);
+A **reads decisions only from exit codes, `select`'s stdout and `result.json`**, never by parsing the log
+(`ENVIRONMENT-SUSPECT:` lines in the log stay accepted as a second source of declared rows, as today's
+`parse_environment_suspects`, so T's existing case prints keep working).
+
+**The five commands**
+
+| Command | argv after the name | stdin | stdout | Exit codes | Must not |
+|---|---|---|---|---|---|
+| `preflight` | — | — | rc 86: JSON list of `environment_suspect` rows (D-019 seven keys, `source:"declared"`, `log` null); rc 0: ignored | 0 ok · 86 environment suspect · other = rc 2 for the gate ("preflight itself failed") | take longer than its timeout; run tests |
+| `select --mode branch\|base` | — | `branch`: changed files, repo-relative, one per line (A computes them exactly as `gate.sh:1006-1008`); `base`: empty | one item per line: `<id>` or `unmapped <file>`; for `base` the project's fixed set | 0 ok (≥1 line) · 3 nothing selectable (stderr says why) · 0 with empty stdout = rc 2 (§5.5) · other = rc 2 | run tests; write under `reports/`; touch tickets |
+| `run <id>…` | ids from `select` (deduped by A) | — | free (goes to log) | 0 every id pass/skip · 1 any fail/error · 86 environment suspect (rows in `result.json`) · 2 could not run (A also uses 2 when `result.json` is missing/invalid, when rc 0 but zero ids or any fail row, when rc 86 but no rows) | exit 0 with zero ids; claim ids it was not given |
+| `full` | — | — | free | same as `run` | — |
+| `regression [--tag t]… [--case path]… \| --list` | tags from the ticket's `verify.tags`; case files from `verify.files`; `--list` prints what would run, one per line | — | free (`--list`: ids) | same as `run`; plus 3 = tags declared but nothing selected (today's `verify.py` rc 3, kept) | — |
+
+**`result.json` (schema 1)** — written by `run`, `full`, `regression` into `$AC_TEST_OUT/result.json`:
+
+```json
+{
+  "schema": 1,
+  "command": "run",
+  "ac_test_mode": "branch",
+  "started": "2026-10-24T09:12:03+00:00",
+  "seconds": 41.7,
+  "ids": [
+    {"id": "test_event.EmitTest.test_emit_writes_one_line", "status": "pass",
+     "message": null, "exception": null, "file": null, "line": null, "seconds": 0.21, "traceback": null},
+    {"id": "test_land.RefuseTest.test_zero_commits", "status": "fail",
+     "message": "AssertionError: 0 != 2 : land must refuse", "exception": "AssertionError",
+     "file": "tests/test_land.py", "line": 88, "seconds": 1.3,
+     "traceback": "Traceback (most recent call last):\n  File \"tests/test_land.py\", line 88 …"},
+    {"id": "browser:safari:test_login", "status": "skip",
+     "message": "engine not available on this host", "exception": null, "file": null, "line": null,
+     "seconds": 0.0, "traceback": null}
+  ],
+  "environment_suspect": [],
+  "log": "run.log"
+}
+```
+
+| Field | Type | Rule |
+|---|---|---|
+| `schema` | int | 1; A refuses other values (rc 2) |
+| `ids[].id` | string | opaque; must be rerunnable alone via `run <id>`; the set must equal the ids A passed (`full`/`regression`: whatever ran, ≥1) |
+| `ids[].status` | `pass` / `fail` / `error` / `skip` | `error` = did not reach an assertion (import, setup, crash) |
+| `ids[].message` | string / null | first line; **skip reasons are mandatory** (a skip without a reason is an `error`, §5.5) |
+| `ids[].exception`, `file`, `line` | string / null | the innermost frame **inside the test file**; what verify-case classifies on (C7) |
+| `ids[].seconds` | number / null | per id |
+| `ids[].traceback` | string / null | full text when available; the adapter always fills it |
+| `environment_suspect` | list (never null, `[]` when none) | D-019 rows; `source` `statistical` or `declared`; non-empty ⇔ rc 86 |
+| `log` | string / null | path relative to `AC_TEST_OUT` |
+
+**Minimal command adapter** (`templates/project-tests.example.sh`, the shape T writes; project knowledge only):
 
 ```sh
-# <project>/scripts/select-tests.sh — gate.select_cmd (project knowledge only)
 #!/bin/sh
+# <project>/scripts/ac-tests.sh — every tests.* key in board/config.json points here.
 set -u
-mode=$2
-# 1. env preflight (lock screen / orphan Safari / disk) — rc 86 + JSON rows
-if ! ok=$(sh scripts/preflight.sh 2>&1); then
-    printf '[{"source":"declared","engine":"safari","why":%s,"count":1,"threshold":null,"log":null,"line":null}]\n' \
-        "$(printf '%s' "$ok" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read().strip()))')"
-    exit 86
-fi
-# 2. selection — the project's own table (this is what land-ticket.sh / test-for.sh know today)
-case "$mode" in
-    full) echo discover ;;
-    base) echo test_ledger; echo test_invariants ;;
-    branch|files)
-        while IFS= read -r f; do
-            case "$f" in
-                demo/*.py)        echo test_demo ;;
-                browser/*.py)     echo test_browser_engines ;;
-                tests/test_*.py)  echo "$(basename "$f" .py)" ;;
-                *.md)             ;;                     # docs: no test, not unmapped (project's call)
-                *)                echo "unmapped $f" ;;
-            esac
-        done ;;
+cmd=$1; shift
+case "$cmd" in
+  preflight)
+    # lock screen / leftover Safari process / free disk: project knows, A never learns what these are
+    if sh scripts/preflight-mac.sh >"$AC_TEST_OUT/preflight.txt" 2>&1; then exit 0; fi
+    python3 - "$AC_TEST_OUT/preflight.txt" <<'PY'
+import json, sys
+why = open(sys.argv[1], encoding="utf-8").read().strip() or "preflight failed"
+print(json.dumps([{"source": "declared", "engine": "host", "why": why, "count": 1,
+                   "threshold": None, "log": None, "line": None}]))
+PY
+    exit 86 ;;
+  select)
+    mode=$2
+    if [ "$mode" = base ]; then echo test_ledger; echo test_invariants; exit 0; fi
+    n=0
+    while IFS= read -r f; do
+      n=$((n+1))
+      case "$f" in
+        demo/*.py)       echo demo.tests.test_demo ;;
+        browser/*.py)    echo browser:safari:test_engines; echo browser:chrome:test_engines ;;
+        tests/test_*.py) echo "$(basename "$f" .py)" ;;
+        *.md)            ;;                         # docs: no test, not unmapped (project's call)
+        *)               echo "unmapped $f" ;;
+      esac
+    done
+    [ "$n" -gt 0 ] || { echo "select: no changed files" >&2; exit 3; } ;;
+  run)
+    # unittest ids → A's adapter (reuse, do not rewrite); browser ids → the project's engine runner
+    unit=""; browser=""
+    for id in "$@"; do case "$id" in browser:*) browser="$browser $id" ;; *) unit="$unit $id" ;; esac; done
+    rc=0
+    [ -z "$unit" ] || { python3 "$AC_HOME/scripts/adapter-unittest.py" run $unit || rc=$?; }
+    [ -z "$browser" ] || { python3 scripts/browser-tests.py --result "$AC_TEST_OUT/result.json" $browser || rc=$?; }
+    exit $rc ;;        # browser-tests.py merges its rows into result.json; both write schema 1
+  full)        exec python3 "$AC_HOME/scripts/adapter-unittest.py" full ;;
+  regression)  exec python3 "$AC_HOME/scripts/verify.py" --result "$AC_TEST_OUT/result.json" "$@" ;;
+  *) echo "ac-tests: unknown $cmd" >&2; exit 2 ;;
 esac
 ```
 
 ```json
-{ "gate": { "select_cmd": "sh scripts/select-tests.sh", "tests_dir": "tests" },
-  "board": { "key_file": ".board.key" } }
+"tests": {
+  "adapter": "unittest",
+  "preflight":  "sh scripts/ac-tests.sh preflight",
+  "select":     "sh scripts/ac-tests.sh select",
+  "run":        "sh scripts/ac-tests.sh run",
+  "full":       null,
+  "regression": null,
+  "unittest": {"roots": ["tests", "demo/tests"]},
+  "timeout_seconds": {"run": 1200, "full": 3600}
+}
 ```
 
-Everything else the project used to wrap (`land-ticket.sh gate`, `docs`, review check, objection check, hard_block, close)
-is called directly: `sh scripts/control/land.sh t<n>-…`, `sh scripts/control/land.sh docs "…" <files>`,
-`sh scripts/control/gate.sh --branch --ticket <n>`, `python3 scripts/control/board.py`.
+`null` (or absent) = the built-in adapter's command; so T can start with **only `preflight`** declared and add
+`select` / `run` when the browser layer is wired. A's own `config.json` declares none of the five (all built-in)
+and carries `tests.unittest.map` (today's 32 `map()` rows as `{"match": "scripts/event.py", "ids":
+["test_event","test_ticket","test_land"]}`, first match wins, `"ids": []` = "no test, not unmapped") and
+`tests.unittest.base`.
 
-### §2 One sync list, computed dependencies, missing dependency = failure
+**Built-in unittest adapter** (`scripts/adapter-unittest.py`; `status.py run-tests` moves into it, one runner
+in A): `select` = `tests.unittest.map` + `tests/test_*.py changed → that module` + `base` list; `run <id>…` /
+`full` = `loader.loadTestsFromNames` / `discover` over `tests.unittest.roots`, in-process, with today's
+`EnvironmentResult` (statistical suspects, `environment_fail_fast_threshold`) and `LogStream`; it writes
+`result.json` from the `TestResult` (status per id, exception type / innermost frame in the test file for
+`file`/`line`, docstring-free first line as `message`, skip reason as `message`). `regression` built-in =
+`$AC_HOME/scripts/verify.py` gaining `--result <path>` (and `--case`, C7 of the previous version); `preflight`
+built-in = rc 0.
 
-- `ENTRIES="apply.sh auto-fix.sh review.sh land.sh gate.sh inbox.py rules.py memory.py status.py verify.py verify-case.py
-  session-hook.sh wtbase.sh repo-map.py agent-cost-hook.py main_guard.py board.py"` (one list; `board.py` is copied from
-  `board/board.py` into `scripts/control/` — the only entry whose source is not `scripts/`).
-- Dependency rule (one python block inside `sync-to-project.sh`, no new file; measured against today's tree, closure below):
-  - `*.py`: AST `import X` / `from X import …` where `scripts/X.py` exists (module `_` ↔ file `-`), plus any string literal
-    equal to a sibling file name (`status.py:898` `"auto-fix.sh"` is a real launch; the only false positives are
-    self-references, which the closure ignores).
-  - `*.sh`: on each line **with the `#…` comment stripped** (same stance as the wiring grep, line 443), the pattern
-    `(\$AC|\$\{AC\}|\$ROOT/scripts|\$HERE/scripts)/<name>.(py|sh)` and a heredoc line `^\s*(import|from) <module>`, where the
-    name is a sibling file. **Bare `scripts/<name>` does not count** — measured: with it, `gate.sh`'s `map()` table
-    (`scripts/sync-to-project.sh) add test_sync_to_project`) pulls `sync-to-project.sh` into the closure; without it the
-    closure is exactly the one below. After C1 every real call is a `$AC/` call, so the bare form has nothing left to catch.
-  - Closure = fixed point over `ENTRIES`; `DEPS = closure − ENTRIES`.
-  - Measured closure today (from `ENTRIES` above; the scan was run in this session): adds `event.py ticket.py heartbeat.sh
-    new-session.sh transcript-cost.py role-models.py consolidate-memory.sh` — today's `DEPENDENCY_ONLY` plus
-    `consolidate-memory.sh`, which `new-session.sh:436/462` calls behind an `[ -f "$AC/consolidate-memory.sh" ]` guard: not a
-    crash in T today, but the main session's memory consolidation silently never starts there (inferred).
-- **Failure**: any name in the closure with no file in `scripts/` (or `board/board.py`) → `sync: <caller> 需要 scripts/<name>,
-  主 repo 沒有 —— 不同步` and `exit 2` **before any file is written** (same stance as the invalid role table, lines 133–138).
-  Today's "名單與事實分岔了(先修名單)" `continue` (221) becomes this failure.
-- The manifest (`scripts/control/.sync-manifest`) lists the closure; retirement logic (310–322) unchanged.
-- The wiring check (427–448) iterates `ENTRIES`; `heartbeat.sh`/`new-session.sh`/`role-models.py` never show as "uncalled" because
-  they are not entries — same outcome as today's `DEPENDENCY_ONLY` skip, without the list.
-- `templates/` and `verify/_template_ticket.py` keep their own small lists (different destination, different header rules);
-  folding them in buys nothing per ticket.
+**How A's existing features sit on the interface** (what changes in `gate.sh`; everything after the result is
+as today):
 
-### §3 Compatibility period: T from `land-ticket.sh` to A `land.sh`
+| Feature | Today (measured) | On the interface |
+|---|---|---|
+| mapping gap → rc 3 | `map()` + `unmapped` list (gate.sh 123-126, 1053-1066) | `select` prints `unmapped <file>`; gate keeps the semantics byte for byte: run what mapped, exit 3, `ticket_gate 3` |
+| run | `status.py run-tests --mode names\|discover` (475-477) | `run <ids>` / `full`; green = rc 0 **and** result validated |
+| environment suspect | rc 86 from in-process result → `SUSPECT_FILE` → `env_suspect_note`, no rerun, no auto-fix (987-988) | `preflight` rc 86 **or** `run` rc 86 → `environment_suspect` rows copied to `SUSPECT_FILE`; same path, same inbox decision page; declared rows from `ENVIRONMENT-SUSPECT:` log lines still merged by `status.py done` |
+| flake rerun | `status.py failures --log` → ids → `python3 -m unittest <id>` ×N (897-935) | ids = result rows with `fail`/`error` → `run <id>` ×`flake_auto_single_runs` (each into `$AC_TEST_OUT/rerun-<k>/`), group rerun ×`flake_auto_group_runs`; flaky classification and the auto flaky ticket unchanged |
+| status file | `status.py done --log` parses the log into `failures[]` (case/file/line/excerpt) | `status.py done --result <result.json>`; `failures[]` keys unchanged (`case`=id, `file`, `line`, `excerpt`=message); `--log` stays as attachment; **no new status.json field** |
+| events | `gate.start/pass/fail`, `land.*` | unchanged; `--kv ac_sha=<A HEAD>` added |
+| regression layer | `regression()` → `verify.py --tag …` (679-700) | `regression --tag …`; "no verify.tags declared" / "no regression layer" notes unchanged |
+| verify-case red / check | `run_cases` spawns `python3 -m unittest -v` in copies, classifies by traceback | `regression --case <files>` with `AC_CODE_ROOT=<copy>`; classification from result fields (C7); timeout = `verify_case.timeout_seconds` (unchanged, #156) |
+| `regression-red --case id` | exists (status.py:16) | unchanged; ids are now whatever the project's `regression` printed |
+| release gate (`templates/project-CLAUDE.md` 發版 row) | `status.py regression-red --source release --log` | `ac test full` with `AC_TEST_MODE=release` then `status.py regression-red --source release --result …`; same behaviour |
 
-Preconditions (A side, all in ⑥): C1/C2/C3/C8 landed and synced; `inbox.py migrate` (D-069 ③) done once in T.
+**T's three needs on this interface**: `demo/` unit tests → `tests.unittest.roots` (built-in) or ids T's
+`select` emits; browser engine layer → T's `run` routes `browser:*` ids to its engine runner, which writes
+rows (skip with reason when an engine is absent — a skip is visible in `result.json`, not a silent pass);
+lock screen / leftover Safari process / low disk → T's `preflight` rc 86 with declared rows (no worker is
+dispatched into that machine, D-019 §理由 5).
 
-Steps in T (each is a T docs/config ticket or a line in one):
-1. Sync (`sh ../agent-control/scripts/sync-to-project.sh . --dry-run` → real). Expect `land.sh gate.sh board.py` new in
-   `scripts/control/`; expect the "uncalled" line to name them until step 3.
-2. `board/config.json`: add `gate.select_cmd` + `gate.tests_dir`; add `board.key_file` and create the key file
-   (git-ignored); confirm `hard_block` is there (HANDOFF item 1); set `worktree_dir` if T's differs from `../<repo>-wt`.
-   Point `AC_LAND_LOCK` at the lock `land-ticket.sh` uses today (or make `land-ticket.sh` use `.land.lock`) so the two landers
-   cannot run at once.
-3. Rehearsal, cheapest first: (a) `sh scripts/control/gate.sh --branch --ticket <n>` on an already-landed branch → compare
-   the module list with what `land-ticket.sh gate` picked (the selector table is right when they match); (b) `select_cmd`
-   with the screen locked → rc 86 decision page, no worker dispatched; (c) `land.sh docs "…" tickets/<n>.json` on a real
-   ticket file; (d) one **simple** ticket end to end with `land.sh`.
-4. Three consecutive tickets landed by `land.sh` (D-017 "連續三票" threshold) → docs ticket: delete `land-ticket.sh`, the
-   T-side review/objection/hard_block glue, and update T's `CLAUDE.md` 對照表 (`templates/project-CLAUDE.md` rows now say
-   `scripts/control/<same name>`).
-5. `board.py` (T's) is switched only after (4): run A's board on a second port with `board.key_file`, compare the four VISION
-   metrics, then retire T's.
+### §5 Claude Code hooks
 
-Rollback at any step before 4: run `land-ticket.sh` again — it is still on disk, tickets/events/reports formats did not
-change, `base_sha`/`gate`/`review` fields are written by the same synced `ticket.py`. The one thing to undo is the shared lock
-path if it was moved. After step 4 rollback = `git revert` of that docs ticket.
+`ac hooks install [--project <dir>]` writes `<root>/.claude/settings.json`:
 
-What is **not** compatible and T must know: `land.sh docs` accepts only `tickets/ docs/ memory/` prefixes (118); if T's
-`land-ticket.sh docs` accepted more, those files go through a normal ticket branch.
+```json
+{ "hooks": {
+    "SessionStart": [{"matcher": "startup|resume|clear|compact|fork", "hooks": [
+        {"type": "command", "command": "sh <AC_HOME>/scripts/session-hook.sh", "timeout": 60}]}],
+    "SubagentStop": [{"hooks": [
+        {"type": "command", "command": "python3 <AC_HOME>/scripts/agent-cost-hook.py", "timeout": 10}]}],
+    "SessionEnd":   [{"hooks": [
+        {"type": "command", "command": "python3 <AC_HOME>/scripts/agent-cost-hook.py", "timeout": 10}]}]
+} }
+```
 
-### §4 Test strategy: how A simulates "run from a project"
+Rules: `<AC_HOME>` above is written out by the installer as the clone's **absolute** path (the example keeps a
+placeholder because A's own guard test forbids home-directory paths in docs). Hooks run without A's env; `$CLAUDE_PROJECT_DIR`
+is still what the hook uses to find the **project**, §1 rule 3). "Managed" = an entry whose command names one
+of A's hook scripts (`session-hook.sh`, `agent-cost-hook.py`, `guard-main.sh`, `main_guard.py`) at any path;
+`install` rewrites managed entries to the current `AC_HOME` set, deletes managed entries whose target file does
+not exist (T's `scripts/control/guard-main.sh`, HANDOFF item 5), leaves every other entry untouched, keeps
+key order, prints a unified diff, rc 0. `check` prints the same diff and exits 1 when `install` would change
+anything, 0 otherwise, 2 when the file is not valid JSON. `session-hook.sh` runs `ac doctor` and shows its
+rows on the opening page (so a drift is seen at the next session start). A's own `.claude/settings.json`
+becomes a managed instance too (dogfood): `ac hooks check` in A is green; `test_session_hook.py` A1 keeps
+pinning the shape, now via the installer.
 
-- **Layout switch in the harness** (`tests/control_harness.py`): `AC_TEST_LAYOUT=control` makes `make_repo()` place the
-  scripts at `<sandbox>/scripts/control/` **by running `scripts/sync-to-project.sh <sandbox>`** (the real artefact, not a
-  copy loop), write a `select_cmd` fixture into `<sandbox>/scripts/select-tests.sh`, and set `gate.select_cmd` in the
-  sandbox config. Every `subprocess` call in the harness that builds a path with `"scripts", name` goes through one
-  `script_path(name)` helper so the layout is chosen in one place.
-- **Which suites run twice**: `test_land`, `test_gate`, `test_board`, `test_apply`, `test_review` — the entry points. A one-line
-  loader (`tests/test_project_layout.py`) re-imports those modules with the env set, so no test body is duplicated.
-- **New cases (red today, green after C1–C8)**:
-  - V1 static: no synced entry/dependency contains `$ROOT/scripts/` or `dirname(HERE)/scripts` (grep over the closure).
-  - V2 `land.sh` from `scripts/control/` lands a branch; the gate marker file proves the gate was called **from the
-    worktree's `scripts/control/gate.sh`** (harness replaces the expensive gate with a marker, header lines 10–13).
-  - V3 `gate.sh --branch` with `select_cmd`: prints the fixture's modules, never A's `map()` names; `unmapped` → rc 3.
-  - V4 `select_cmd` exit 86 with rows → `status.json.state == env_suspect`, `environment_suspect` is that list, no
-    `auto-fix` marker, one inbox decision page.
-  - V5 `select_cmd` rc 0 empty stdout → rc 2, not 0.
-  - V6 `board.py` with `key_file`: `/` → 401 without key; `/?key=k` → 302 + cookie; `/` with cookie → 200; `/healthz` → 200
-    always; wrong key → 401 (port 0 as today, `test_board.py:29`).
-  - V7 `verify.py --case verify/x/test_a.py` runs only that file; `--case` + `--tag` is the union; unknown case → rc 3.
-  - V8 sync: delete a dependency from the sandbox's `scripts/` → `exit 2`, no file written, message names caller → missing.
-  - V9 sync: `.sync-manifest` equals the computed closure; adding an entry with a new import pulls the import in without
-    touching any list (mutation: hard-code the old `DEPENDENCY_ONLY` → V9 red).
-- Cost model: static V1 is ~0 s; the duplicated suites roughly double land/gate test time (inferred +20 % of the full gate).
-  Per D-016 this is paid in A's gate, not per ticket's agent context.
+### §6 Board
 
-### §5 Not doing (and why)
+`ac board [--port n]` → `python3 $AC_HOME/board/board.py` with `AC_ROOT` = project; `port` from the
+project's config (`DEFAULT_PORT` 18905 measured) or the flag; bind `127.0.0.1` only (unchanged, board.py:1210).
+`board.key_file` as C9. T's portal proxies to it and decides whether to set the key (D-071 原話). `/healthz`
+never requires the key (the proxy's liveness probe). No `bind` key (§9).
 
-- **Not** a `run: <cmd>` line in `select_cmd` (③ 丙): it would move "how to run" to the project and lose rc 86 statistics,
-  per-case red lists and flake rerun for that project.
-- **Not** `board.bind` / `0.0.0.0`: exposure is the project's proxy; a key gate on a loopback server is enough for T's
-  tunnel (T-reported "對外網"; **?** ⑥ Q2 if T binds directly).
-- **Not** reading, patching or syncing anything **into** T from this design; T's `verify-refs.py` and `test-for.sh` stay T's.
-- **Not** auto-sync on A land, not a T-side "am I stale" check: sync is a human act (hard_block, D-069 ②).
-- **Not** a new gate, a new rc, a new ticket field (D-053 ④, D-018).
-- **Not** folding `templates/` / `verify/_template_ticket.py` into the closure (§2 last bullet).
-- **Not** changing `land.sh docs` prefixes, the lock, or any land refusal rule.
+### §7 Retirement and migration
+
+**A side (one retirement ticket, user-authorised for the `hard_block` row, D-071)**:
+
+| Delete | Edit |
+|---|---|
+| `scripts/sync-to-project.sh` | `board/config.json`: drop the `hard_block.paths` row; add `config_version`, `tests` (map + base from gate.sh) |
+| `tests/test_sync_to_project.py` | `scripts/gate.sh`: remove `map()`/`BASE` (132-210, 129) and the sync row; `ROOT` → `AC_CODE_ROOT`; phases via `testiface.py` |
+| `scripts/gate.example.sh` | eight `_ac_root()` blocks → `AC_ROOT` required (set by `ac`) with the cwd rule as the only fallback; `event.repo_root()` same |
+| `scripts/status.py cmd_run_tests` (moves into the adapter) | `scripts/verify.py _find_root` → `AC_CODE_ROOT` / cwd; `--case`, `--result` |
+| the `.sync-manifest` / `.synced-from` / sync-header code paths (`rules.py:268`, `new-session.sh:231,253`) | `scripts/rules.py`: `roles_dir`/`models_dir` → `AC_HOME`; `is_canon` = roots equal |
+| `docs/TODO.md` rows 1, 5-9 (they describe `scripts/control/`) | `templates/project-CLAUDE.md` (對照表 → `ac`), `README.md:95`, `docs/MEMORY.md:26`, `docs/CODE-MAP.md:12`, `docs/reference/role-procedures.md:50`, `docs/WORKFLOW.md` §閘門 (one paragraph: the project fills `tests`, the gate is A's), `docs/HANDOFF.md` 配套清單 items 5 and 10 |
+| — | comments naming `scripts/control/` in `event.py:78-83`, `verify.py:41-45`, `heartbeat.sh:19,30`, `board.py:183-186`, `new-session.sh:166` (fix when the file is touched; a `grep -c scripts/control scripts/ board/` = 0 assertion in ⑤ makes it a one-time sweep) |
+
+New files: `bin/ac`, `scripts/project_config.py`, `scripts/testiface.py`, `scripts/adapter-unittest.py`,
+`scripts/hooks.py`, `templates/project-tests.example.sh`, `templates/project-config.example.json`,
+`tests/fixtures/project/` (§8).
+
+**T side (steps; each is a T ticket or a line in one; nothing here is an A ticket)**:
+
+| Step | Action | Rollback |
+|---|---|---|
+| 1 | `git clone <A> ../agent-control` (sibling path — `templates/project-CLAUDE.md` already says `../agent-control`), `alias ac=../agent-control/bin/ac` or add `bin` to PATH | delete the clone |
+| 2 | `cd T && ac doctor` → rows: config version 1, unknown keys (`land`, `protected_paths`, `verify_lint`), inbox `index.jsonl`, hooks to `scripts/control/guard-main.sh`, `scripts/control/` present. `ac migrate`; `ac inbox migrate` once (D-069 ③); add `hard_block` (HANDOFF item 1); add `board.key_file` + git-ignored key file; write `scripts/ac-tests.sh` starting with `preflight` only; set `tests.unittest.roots` | `git checkout board/config.json`; `scripts/control/` untouched so far |
+| 3 | `ac hooks install` (replaces the guard-main hook, adds SubagentStop / SessionEnd) | `git checkout .claude/settings.json` |
+| 4 | Rehearsal, cheapest first: (a) `ac test preflight` with the screen locked → rc 86 + rows; (b) `ac test select --mode branch < <(git diff --name-only main...HEAD)` on a landed branch, compare with what `land-ticket.sh gate` picked; (c) `ac gate --branch --ticket <n>` on that branch; (d) `ac land docs "…" tickets/<n>.json`; (e) one **simple** ticket end to end with `ac land`. Both landers share the lock (`AC_LAND_LOCK` → T's lock path) during this window | run `land-ticket.sh` — still on disk; ticket / event / report formats are A's already (synced `ticket.py`, `event.py`) |
+| 5 | Three consecutive tickets landed by `ac land` (D-017 threshold; main checks `land.pass` events `by=land.sh` with `ac_sha` set) → T docs ticket: delete `scripts/control/`, `.synced-from`, `land-ticket.sh`, `test-for.sh`'s A-glue, the review / objection glue, T's `docs/roles/` copies (move T-specific additions to `memory/role/`), update T's `CLAUDE.md` | `git revert` of that ticket |
+| 6 | Board: run `ac board` on a second port behind the portal with `key_file`; compare the four VISION metrics with T's `board.py`; retire T's | keep T's board until the compare passes |
+
+**Pinning A**: T records nothing; every T event / status carries `ac_sha`. If an A pull breaks T,
+`git -C ../agent-control checkout <last good ac_sha>` is the rollback, and `ac doctor` says when the project's
+config is newer than that A.
+
+**Not compatible, T must know**: `ac land docs` accepts only `tickets/ docs/ memory/` prefixes (land.sh:118);
+`ac` refuses to run until `ac migrate` has run (step 2), so step 2 precedes everything.
+
+### §8 How A tests "run against another project"
+
+- `tests/control_harness.py`: `make_repo()` stops copying `SCRIPT_FILES` into `<sandbox>/scripts/`
+  (measured 274-281). Scripts run from `AC_HOME` = `$ROOT` of A (or `AC_TEST_SCRIPTS`, kept for mutation red),
+  with `AC_ROOT=<sandbox>` in the env and cwd = sandbox; one `ac_env()` helper is the single place. The
+  `gate_stub` goes into a per-test `<home>/scripts/gate.sh` copy of A's scripts (what today's sandbox copy did,
+  moved one directory over) and `AC_HOME` points at it — so "was the gate called" stays a marker file.
+- `tests/fixtures/project/` (committed): a minimal project — `board/config.json` version 2 with `tests` pointing
+  at `scripts/ac-tests.sh` (the §4 shell adapter with a fake `browser:*` runner writing schema-1 rows and a
+  `preflight` that reads `AC_TEST_FAKE_PREFLIGHT`), `tests/test_ok.py`, `demo/tests/test_demo.py`, `verify/` with
+  one tag. The harness can also load it as the sandbox instead of the hand-built one.
+- Which suites run against the fixture: `test_gate`, `test_land`, `test_verify_case`, `test_status`,
+  `test_board`, `test_session_hook`, plus new `test_ac.py`, `test_project_config.py`, `test_testiface.py`,
+  `test_hooks.py`.
+- New cases (red today):
+  - V1 `bin/ac` with cwd in a sandbox worktree → `AC_ROOT` = sandbox main repo, `AC_CODE_ROOT` = worktree;
+    cwd outside any git tree and no `-C` → rc 2, nothing written; `-C` wins over cwd; `CLAUDE_PROJECT_DIR` wins
+    over cwd.
+  - V2 static: `grep -c '_ac_root\|dirname "\$0")/\.\.' scripts/*.sh` = 0 and `grep -c 'scripts/control' scripts/ board/` = 0.
+  - V3 dogfood: `realpath AC_ROOT == realpath AC_HOME` → `land.sh` runs `$WT/scripts/gate.sh`; otherwise
+    `$AC_HOME/scripts/gate.sh` (marker proves which).
+  - V4 `config_version` 1 → every `ac` command rc 2 naming `ac migrate`; version 3 → rc 2 naming `git pull`;
+    `ac migrate` on the T-shaped config (fixture copy with `rules.roles_dir`, `land`, `protected_paths`) produces
+    version 2, deletes the two `rules` keys, keeps `land`, prints both; running it twice changes nothing.
+  - V5 `ac doctor` on a sandbox with `reports/inbox/index.jsonl`, `scripts/control/`, a hook to a missing
+    file → three rows each naming its fix command; rc 1.
+  - V6 `select` rc 0 empty stdout → gate rc 2; `unmapped` → rc 3 after running the mapped ids; `select` rc 3 →
+    gate rc 3 with the stderr shown.
+  - V7 `preflight` rc 86 with rows → `status.json.state == env_suspect`, `environment_suspect` equals the rows,
+    no auto-fix marker, one inbox decision page; mutation: gate treats 86 as red → V7 red.
+  - V8 `run` rc 0 with zero ids / missing `result.json` / a `fail` row → gate rc 2, not 0 (§5.5); rc 86 with
+    `environment_suspect: []` → rc 2.
+  - V9 flake rerun calls `run <id>` exactly `flake_auto_single_runs` times for a failing `browser:*` id (the
+    fixture runner counts calls) — the rerun no longer spells `python3 -m unittest`.
+  - V10 `status.py done --result` yields `failures[]` with `case/file/line/excerpt` from the rows; the seven-key
+    `environment_suspect` normalisation unchanged (`test_status` pins).
+  - V11 verify-case `red` on the fixture: `AssertionError` row in a `verify.files` file → counts; row with
+    `exception: ImportError` → "import 失敗(不算紅)"; row with `exception: null` → unmeasured rc 2, ticket
+    untouched.
+  - V12 unittest adapter: `select --mode branch` with `tests.unittest.map` reproduces today's `map()` for the 32
+    rows (table-driven test, data copied from gate.sh before deletion); `run` writes schema 1 with
+    `exception/file/line` filled; `ENVIRONMENT-SUSPECT:` print → `environment_suspect` row + rc 86.
+  - V13 `ac hooks install` twice = one diff then none; a foreign hook entry survives byte for byte; a managed
+    entry pointing at a missing file is removed; `check` rc 1 after editing a managed command.
+  - V14 board `key_file`: `/` 401, `/?key=k` 302 + cookie, cookie → 200, `/healthz` 200 always, wrong key 401
+    (port 0 as `test_board.py:29`).
+- Cost: V2 is static; the fixture adds ~10 % runtime (inferred). Paid in A's gate (D-016), 0 per ticket's agent
+  context.
+
+### §9 Not doing (and why)
+
+- **Not** `board.bind` / `0.0.0.0`: T's portal proxies (D-071 原話); a key gate on loopback is enough.
+- **Not** auto-`git pull`, an "A is behind origin" network check, or a per-project pin file: updating A is a
+  human act; `ac_sha` in events + `ac doctor`'s version compare are the record and the detector.
+- **Not** a package / installer (pip, brew, curl|sh): `git clone` is the install (原話); `bin/ac` needs only
+  `sh` and `python3`.
+- **Not** a template / model-card override directory: the role-card overlay exists and no second overlay has a
+  known reader; a project that needs a different dispatch template files an A ticket.
+- **Not** a multi-project registry or a daemon / RPC: `ac -C` and cwd cover "which project"; D-053 ③減法.
+- **Not** a new gate, rc or ticket field (D-053 ④, D-018): rc 3 / 2 / 86 keep their meanings; `status.json`
+  keeps its keys; `environment_suspect` keeps D-019's seven keys.
+- **Not** folding `verify_case.timeout_seconds` into `tests.timeout_seconds` now (#156 landed this week; one
+  migration later if it ever matters).
+- **Not** reading, patching or testing anything inside T from A; T's `browser-tests.py`, `preflight-mac.sh`,
+  `test-for.sh` are T's.
+- **Not** changing `land docs` prefixes, the land lock, or any land refusal rule.
 
 ## ③ Rejected alternatives
 
-**甲 — Keep the project fork, fix the glue (T patches `land-ticket.sh` to A's new interface each sync).**
-Rejected: this is exactly what produced "8 處壞、6 處黏合層" (T-reported); every A interface change costs a T ticket, and the
-breakage is silent (review/objection checks turned off without a red). Per future ticket: costs a T glue ticket per A
-interface change (~1 per 5 A tickets, inferred) plus undetected policy gaps.
+**甲 — Keep sync but make it correct (the D-069 ② design: computed closure, one list, fail on missing dependency).**
+Rejected by D-071 原話「不再做額外sync」. Even done right, every A interface change still needs a human-authorised
+sync into each project, and the copy in the project is a second shape that drifts the day it is copied (T's 8
+breakages happened **with** a correct sync). Per future ticket: costs one sync round per A change (~50K tokens
+T-reported cadence) plus the silent window between A landing and T syncing.
 
-**乙 — Make `gate.sh` itself a template the project copies and edits (today's `gate.example.sh` route).**
-Rejected: a copied gate stops following A the day it is copied (`sync-to-project.sh` header lines 5–6 say why for role cards;
-the same holds for a 1,050-line gate). The project's real contribution is one `case` table and a preflight; everything else in
-`gate.sh` (status files, env suspect, flake rerun, regression, verify-case, review handoff) is A's and changes often (measured:
-D-010, D-014, D-019, D-020, #126, #136 all touched it). Per future ticket: costs re-copying or diverging on each gate change.
+**乙 — Keep each script as its own entry (no `bin/ac`), fix only the root rule.**
+Rejected: the root resolution, the `config_version` check and `AC_HOME` export would be repeated in ~14 entry
+scripts (today eight already carry a copy of `_ac_root()`, measured), and dispatch prompts would again carry
+`~/agent-control/scripts/<name>` paths that differ per machine. One dispatcher is one copy. Per future ticket:
+costs a path per command in every prompt and a per-script version check that will be forgotten in one of them.
 
-**丙 — `select_cmd` may also emit `run: <shell command>` lines (project supplies the runner).**
-Rejected (C5): `status.py run-tests` detects environment failures **in-process** (lines 302–315); an external command gives
-only an exit code and a log, so rc 86 statistics, `failures[]` ids that feed back into `python -m unittest`, and the
-flake rerun all stop working for that project — the three things that make auto-fix dispatch safe. Declared suspects would
-still parse from the log, but that is a smaller guarantee than today. If a project ever has non-unittest tests, that is a
-new design question, not a line form. Per future ticket: would cost a worker round dispatched into a broken environment
-whenever the project's runner hides it.
+**丙 — `select` may return `run: <shell>` lines and A keeps parsing unittest logs (the previous version's C5).**
+Rejected: it keeps "how to run" half in A (log parser, `python3 -m unittest <id>` reruns) and half in the project,
+so T's browser layer could not be rerun or classified. The result file (C6) is the shape that lets A keep
+statistics, rerun ids and red classification **without** knowing the runner; the unittest adapter keeps the
+in-process statistics for projects that have none of their own. Per future ticket: 丙 would cost one worker round
+per browser-layer flake that A cannot rerun.
 
-**丁 — `board.key` inside `config.json` instead of `key_file`.**
-Rejected: `config.json` is committed and read by every script and every short-lived agent (`rules.py pack` reads it); a
-secret in it is a secret in every dispatch and in git history. Per future ticket: costs nothing either way; the file form
-costs one `open()`.
+**丁 — A per-project config file at `.agent-control/config.json` (new location, "cleaner").**
+Rejected: every reader is `event.config()` on `board/config.json` (measured) and T already has that file; a
+second location is a second shape (D-018) and buys nothing per ticket.
 
-**戊 — Keep `SCRIPT_LIST` + `DEPENDENCY_ONLY` but add a test that they match the import graph.**
-Rejected: D-054 Q12 — pinning two copies with a test is the symptom of keeping two copies. The computed closure *is* the
-list; the test (V9) checks the computation, not a second hand copy.
+**戊 — Config version as a semver string / A refuses only on major.**
+Rejected: a single integer with one migration function per step is what `ac migrate` can execute; "minor
+compatible" is exactly the judgement that produced T's silent breakages. Per future ticket: 0 either way; the
+integer removes a judgement call.
+
+**己 — Project-level `AC_HOME` recorded in `board/config.json` (so `ac` is found from the project).**
+Rejected: the clone location is per machine, not per project; it would land a home-directory path in git
+(`test_no_project_names` family). The shell alias / PATH entry is the per-machine fact and stays per machine.
 
 ## ④ Migration
 
-- **A files that change** (all A tickets, ⑥): `scripts/gate.sh` (root rule, `$AC`, `select_cmd` branch, rc 86 from selector,
-  `--tests-dir` pass-through), `scripts/land.sh` (`$AC`, gate path via `AC_REL`), `scripts/status.py` (`run-tests --tests-dir`),
-  `scripts/verify.py` (`--case`), `board/board.py` (control dir rule, `key_file`), `scripts/sync-to-project.sh` (`ENTRIES`, closure,
-  failure; **hard_block** → human lands it), `scripts/gate.example.sh` (rewritten as a `select_cmd` example),
-  `templates/project-CLAUDE.md` (對照表 rows become `scripts/control/<same>`), `docs/WORKFLOW.md` §閘門 (one paragraph:
-  "the project fills `gate.select_cmd`; the gate is A's"), `tests/control_harness.py` + new `tests/test_project_layout.py`.
-- **Two shapes coexist**: none in A. In T, two landers coexist for the §3 period (three tickets); the lock is shared so they
-  cannot interleave. `gate.sh` without `select_cmd` is byte-for-byte today's behaviour, so A's own gate is unaffected.
-- **Existing data**: tickets, events, `reports/`, `status.json` unchanged. `.sync-manifest` in T gains the three new names on
-  the next sync (and `consolidate-memory.sh`, which was missing); nothing is retired.
-- **Order**: ⑥ rows in order; T steps in §3 only after A rows 1–6 have landed and been synced once.
+- **A files that change**: see §7 table; new files listed there. `gate.sh` without a `tests` section behaves
+  as the unittest adapter with an empty map — which for A is **not** today's behaviour, so A's `config.json`
+  gets the map in the same ticket that deletes `map()` (⑥ row 3b), with V12 pinning equality.
+- **Two shapes coexist**: in A, none (the retirement ticket deletes sync in the same ticket that lands the
+  dispatcher's docs). In T, the synced `scripts/control/` and A's clone coexist from step 2 to step 5 of §7
+  (three tickets); the land lock is shared; `ac` and `land-ticket.sh` write the same ticket / event / report
+  formats because T's `scripts/control/` **is** an older A.
+- **Existing data**: tickets, events, `reports/`, `status.json` unchanged. `board/config.json` gains two keys
+  via `ac migrate` (reviewable diff, landed by the project's docs channel). `reports/inbox/index.jsonl` → `ac
+  inbox migrate` (D-069 ③, already decided).
+- **Order**: ⑥ rows in order; T steps only after rows 1–6 have landed in A and T has pulled.
 
 ## ⑤ Acceptance (one assertion per conclusion)
 
 | Conclusion | Red-today assertion / greppable change |
 |---|---|
-| C1 | V1: `grep -l '\$ROOT/scripts/' scripts/land.sh scripts/gate.sh` returns nothing; `gate.sh` run as `<sandbox>/scripts/control/gate.sh --full` writes `status.json` under `<sandbox>/reports/`, not `<sandbox>/scripts/reports/`. |
-| C2 | V2: marker proves the gate ran from `$WT/scripts/control/gate.sh`; `AC_ROOT` still points at the main repo (ticket file updated there). |
-| C3 | V3; and `gate.sh` with no `select_cmd` still picks `test_ticket test_event test_memory test_no_project_names` for `--base` (today's `BASE`, line 129). |
-| C4 | V4; mutation: make gate.sh treat selector rc 86 as "red" → V4 red (auto-fix marker appears). |
-| C5 | `status.py run-tests --tests-dir demo/tests --mode names test_x` loads from that dir; V5. |
-| C6 | V6; `grep -n 'compare_digest' board/board.py` ≥ 1; `/healthz` has no key check (assert in V6). |
-| C7 | V7; `python3 scripts/verify.py --list --case verify/x/test_a.py` prints one line. |
-| C8 | V8, V9; `grep -c 'DEPENDENCY_ONLY' scripts/sync-to-project.sh` = 0; `test_sync_to_project.py:96-128` (the two `verify.py` mutations) still green. |
-| C9 | `docs/WORKFLOW.md` §閘門 and `templates/project-CLAUDE.md` 對照表 mention `scripts/control/land.sh`; T-side: three `land.pass` events with `by=land.sh` before the retirement ticket (checked by main, not by a test in A). |
-| C10 | `AC_TEST_LAYOUT=control python3 -m unittest test_land test_gate test_board` green; `.sync-manifest` in the sandbox equals the closure. |
+| C1 | `bin/ac` exists; `sh bin/ac version` prints `AC_HOME`, sha, `2`; `sh bin/ac nonsense` rc 2 lists commands; V1. |
+| C2 | V1, V2; `grep -c 'def _find_root\|__file__' scripts/verify.py` shows no `__file__`-based root. |
+| C3 | V3; A's `board/config.json` has `config_version` and `tests.unittest.map`; `ac gate --base` in A runs `test_ticket test_event test_memory test_no_project_names` (today's `BASE`). |
+| C4 | V4, V5; `scripts/project_config.py` has `CURRENT_VERSION = 2` and `MIGRATIONS`; `session-hook.sh` output contains the doctor rows when the sandbox is at version 1. |
+| C5 | `grep -c roles_dir scripts/rules.py` = 0; rules pack in the fixture project appends "### 本專案 memory/role/worker.md" after A's card (existing test re-pointed). |
+| C6 | V6–V10, V12; `grep -c 'python3 -m unittest' scripts/gate.sh` = 0; `grep -c 'def cmd_run_tests' scripts/status.py` = 0. |
+| C7 | V11; `grep -c 'subprocess.run(\[sys.executable, "-m", "unittest"' scripts/verify-case.py` = 0. |
+| C8 | V13; `grep -c '請貼\|print_hooks' scripts/` = 0 (the paste-two-lines text is gone with sync). |
+| C9 | V14; `grep -n compare_digest board/board.py` ≥ 1. |
+| C10 | `test -e scripts/sync-to-project.sh` fails; `grep -rc 'sync-to-project\|scripts/control\|\.synced-from' scripts board templates README.md docs/WORKFLOW.md docs/MEMORY.md docs/TODO.md` = 0; `board/config.json` `hard_block.paths` has two entries. |
+| C11 | `tests/fixtures/project/board/config.json` exists with a `tests` section naming a shell adapter; `test_gate test_land test_verify_case` green against it; mutation: point `AC_TEST_SCRIPTS` at a copy of `scripts/` with `testiface.py` ignoring rc 86 → V7 red. |
 
 ## ⑥ Follow-up work (model table)
 
-| # | What | Ticket | Model | One-line reason |
-|---|---|---|---|---|
-| 1 | `gate.sh` + `land.sh`: root rule, `$AC`, gate via `AC_REL`; harness `AC_TEST_LAYOUT=control` + V1, V2 | 未開 | opus | Mechanical but spans two 1,000-line scripts and the harness; the layout switch is the foundation every other row tests against. |
-| 2 | `gate.select_cmd` + rc 86 path + `gate.tests_dir` (`status.py --tests-dir`); V3–V5; `gate.example.sh` rewritten as a selector example | 未開 | opus | Touches the env-suspect path (D-019); needs someone who reads `status.py` and `gate.sh` together. |
-| 3 | `verify.py --case` + V7 | 未開 | sonnet | 185-line file, one flag, cache key change; verification is a `--list` call. |
-| 4 | `board.py`: control-dir rule, `key_file`, V6 | 未開 | sonnet | Self-contained HTTP change; the test harness for the board already exists (port 0). |
-| 5 | `sync-to-project.sh`: `ENTRIES` + computed closure + failure + `board.py` source; V8, V9; adjust `test_sync_to_project.py` | 未開 | opus | File is in `hard_block` — main lands it after human authorisation (D-069 ②: this is the one-time "new entries" authorisation for `land.sh gate.sh board.py`). |
-| 6 | Docs: `docs/WORKFLOW.md` §閘門 paragraph, `templates/project-CLAUDE.md` 對照表, `docs/DECISIONS.md` pointer to this file | 未開 | sonnet | Text only; lands via the docs channel. |
-| 7 | T side (not A tickets): §3 steps 1–5 | T 未開 | — | Main dispatches after rows 1–6 are synced; order 1 → 2 → 3 → 4,5 (parallel) → 6; row 7 last. |
+| # | What | Ticket | Model | Depends on | Size (inferred) | One-line reason |
+|---|---|---|---|---|---|---|
+| 1 | `bin/ac` + root rule: delete eight `_ac_root()` blocks, `event.repo_root()` cwd rule, `AC_CODE_ROOT` in gate/verify/verify-case, `land.sh` dogfood gate rule (C3), `ac_sha` kv; harness `ac_env()` + no script copies; V1–V3 | 未開 | opus | — | L (touches 10 scripts + harness) | Foundation every other row runs on; the root bug is silent, so the harness switch must come with it. |
+| 2 | `scripts/project_config.py`: schema table, `CURRENT_VERSION`, `migrate_1_to_2`, `ac doctor` / `migrate` / `init`, `ac` version check, `session-hook.sh` doctor rows; V4–V5 | 未開 | opus | 1 | M | Policy-shaped (what is an error vs a warning); needs the T config facts from HANDOFF items 1-7. |
+| 3a | `scripts/adapter-unittest.py` (from `status.py run-tests`) + `result.json` schema 1 + `status.py done --result` + `verify.py --result/--case`; A's `tests.unittest.map/base` data; V10, V12 | 未開 | opus | 1 | L | The runner move must keep `EnvironmentResult` statistics and `LogStream` behaviour exactly (D-019). |
+| 3b | `scripts/testiface.py` + `gate.sh` phases on the interface (preflight / select / run / full / regression, flake rerun by id, delete `map()`); `templates/project-tests.example.sh` + example config; fixture project; V6–V9 | 未開 | opus | 3a | L | Rewires the 1,079-line gate around one seam; the fixture with a fake browser runner is the T rehearsal. |
+| 3c | `verify-case.py red/check` through `regression --case` with `AC_CODE_ROOT` per copy; classification from result fields; V11 | 未開 | opus | 3a, 3b | M | D-020 red shapes must survive the switch; the unmeasured path is the safety net. |
+| 4 | `scripts/hooks.py` (`ac hooks install\|check`), A's own settings as a managed instance, `test_session_hook` re-pointed; V13 | 未開 | sonnet | 1 | S | Self-contained JSON rewrite with a diff; the shape test exists. |
+| 5 | `board.py` `key_file` + `ac board`; V14 | 未開 | sonnet | 1 | S | Self-contained HTTP change; port-0 harness exists. |
+| 6 | Retirement: delete sync script + test + `gate.example.sh`, `hard_block.paths` row (**user-authorised, main lands**), the §7 edit list, `templates/project-CLAUDE.md`, `README.md`; C10 assertions | 未開 | sonnet | 3b | M (mostly deletes) | Text + deletes; depends on 3b so no gate row still names `test_sync_to_project`. |
+| 7 | Docs: `docs/WORKFLOW.md` §閘門, `docs/MEMORY.md`, `docs/CODE-MAP.md`, `docs/TODO.md`, `docs/DECISIONS.md` pointer, `docs/HANDOFF.md` T list items 5/10 | 未開 | sonnet | 6 | S | Docs channel. |
+| 8 | T side: §7 steps 1–6 | T 未開 | — | 1–7 pulled | — | Main dispatches after A rows land; T writes `scripts/ac-tests.sh`. |
 
-Rows 3 and 4 do not depend on 1–2 and can run in parallel with them; row 5 depends on 4 (it copies `board.py`); row 6 last.
+Order: 1 → 2 → 3a → 3b → 3c; 4 and 5 run in parallel with 2–3; 6 after 3b; 7 last; 8 after T pulls.
+Rows 1, 3a, 3b are `complex` (reviewer pass required); the rest `simple`.
 
 ### Questions for the user (with recommendation)
 
-- **Q1** Are all of T's gate tests unittest-loadable from one directory (`gate.tests_dir`)? If T's browser-engine layer is run
-  by something else, C5 needs a second look. Recommendation: assume yes (T's `verify.py` and `land-ticket.sh gate` call
-  `python -m unittest`, D-020 C5), confirm with one `python3 -m unittest <browser module>` in T before row 2 lands.
-- **Q2** Does T expose the board by binding a public interface, or through a proxy / tunnel? Recommendation: keep A's board
-  on `127.0.0.1` and let the proxy forward (no `board.bind` key); only add `bind` if T answers "directly".
-- **Q3** Authorise the three new sync entries (`land.sh`, `gate.sh`, `board.py`) now, in one go (D-069 ②: only new entries
-  need authorisation; this design is that list). Recommendation: yes, as one authorisation attached to row 5.
+- **Q1** Does T accept writing `scripts/ac-tests.sh` (preflight + select + run for the browser layer) in the
+  §4 shape, with the unittest adapter for `demo/` and `tests/`? Recommendation: yes; T starts with `preflight`
+  only (step 2) and adds the rest when the browser runner writes schema-1 rows.
+- **Q2** Where does T clone A: sibling `../agent-control` (what `templates/project-CLAUDE.md` already says) or
+  `~/agent-control`? Recommendation: sibling; nothing in A depends on it (`AC_HOME` is derived), only T's alias.
+- **Q3** The entry name `ac` may collide with macOS `/usr/sbin/ac` (login accounting) — **?** not verified
+  here. Recommendation: keep the file `bin/ac` and have T alias it (`alias ac=../agent-control/bin/ac`), or
+  prepend `bin` to PATH; rename only if the Mac check shows a real collision in T's shell.
+- **Q4** Should `ac` refuse to run when the project's `config_version` is **newer** than A's (A behind)?
+  Recommendation: yes (C4); the alternative is the silent class T just reported.
+- **Q5** Row 6 deletes `scripts/sync-to-project.sh` and edits `hard_block.paths` — D-071 原話「不再做額外sync」is
+  read as that authorisation. Recommendation: main lands row 6's `hard_block` edit itself as the one-time
+  user-authorised change; no further authorisation needed.
