@@ -502,6 +502,7 @@ class ReadingNeverWrites(InboxBase):
     def test_a5_migrate_again_is_a_no_op(self):
         self.assertEqual(self.migrate(), [1])
         after = self.listing()
+        self.assertNotIn("acked.jsonl", after[0], "起點是 A4 之後:舊帳已刪")
         self.assertEqual(self.migrate(), [0])
         self.assertEqual(self.listing(), after)
         self.assertEqual(self.hash_of("index.jsonl"), sha(FIXTURE["index.jsonl"]))
