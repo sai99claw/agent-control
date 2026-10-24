@@ -179,11 +179,9 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
    只跑一輪:rc 0 = fix 已 commit 且覆核 pass,呼叫端接著重跑全套。退出碼同單票(3 反駁 / 4 紅榜空 / 5 沒交、逾時、收件被擋 / 8 越界)。
 8. **agent 越界守衛(#115,D-048 現況;規則 D-064 / D-065,#153)**:codex 與 claude worker 同權限(codex 起 `-s danger-full-access
    -c 'approval_policy="never"' -C .`,外加 `--add-dir <副本根>` 恰一次,cwd 與 claude 同是 worker 的票分支 worktree
-   / 驗證者副本的 `work/`),不靠沙盒擋,改由**同一支** `scripts/main_guard.py` 在 agent 跑的前後比**四樣**,
-   兩條派工路共用:headless(`run_agent` 包住 worker / 驗證者 / 批次 worker,拒收 = `auto-fix.sh` rc=8)與
-   `auto-fix.sh --prepare` 交給 in-session subagent 的那一輪(prepare 把快照寫進輪次目錄 / 驗證者副本根的
-   `main-snapshot.json`,`apply.sh` 收件前比,拒收 = rc 7;比的結果寫在旁邊的 `main-compare.json`;沒有快照
-   = 手派的 subagent,不比、印一行)。四樣:
+   / 驗證者副本的 `work/`),不靠沙盒擋,改由 `scripts/main_guard.py` 在 agent 跑的前後比**四樣**:
+   `run_agent` 包住 headless 的 worker / 驗證者 / 批次 worker,拒收 = `auto-fix.sh` rc=8(D-067:headless
+   是唯一的派工路)。四樣:
    ① **主線 HEAD**(與它所在的分支):沒動 = 好。往前走(快照的 HEAD 仍是祖先),而事件檔在快照之後有
    `land.pass` 或 `stage=push` 的 `land.fail` ⇒ **只記不擋**,紀錄寫舊..新、那幾次落地的 stamp,以及
    **不屬於任何落地的 commit**:`git rev-list 舊..新` 減掉每一筆窗內落地自己的 `main_before..sha`(沒有
@@ -198,7 +196,7 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
    副本與 worker 的 worktree。**主線可寫前綴只記不擋**(#128):`board/config.json` 的 `guard_main_paths`
    (字串 list,主 repo 相對前綴,以 `/` 為界;缺鍵 = `["tickets/", "docs/", "memory/"]` = land.sh 的
    DOCS_PREFIXES;`[]` = 不豁免;不是字串 list ⇒ stderr 點名、照缺鍵)底下的改動列進 guard.json 的
-   `main_side` / 收件時印一行,rc 照舊;同一輪前綴以外的改動照拒。**`hard_block.paths` 上的檔永遠不豁免**
+   `main_side`,rc 照舊;同一輪前綴以外的改動照拒。**`hard_block.paths` 上的檔永遠不豁免**
    (D-065 ②):`docs/DECISIONS.md`、`docs/VISION.md` 在 docs/ 底下也一樣,建 / 改 / 刪 / 已髒再改 ⇒ 拒收。
    ④ **`hard_block.dirs`**(字串 list,`~` 展開、相對主 repo 解析;缺或 `[]` 只查主 repo)底下每一個檔:
    建 / 改 / 刪 ⇒ 拒收,沒有例外,有沒有落地都一樣。

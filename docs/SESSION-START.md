@@ -34,20 +34,14 @@
 - 看裁示收件匣 `python3 scripts/ticket.py inbox`:使用者填過的裁示要落成 `docs/DECISIONS.md` 一列。
 - 檢查 `scripts/heartbeat.sh`:上一個 session / land 有沒有死在半路(有的話清 worktree、把票狀態對回事實)。
 - 用一句話跟使用者說現況。
-- **派工(D-061;雲端與 Mac 同一條)**:`sh scripts/auto-fix.sh <n> --prepare worker` → 把它印的那段指路 prompt
-  整段貼給 in-session subagent(Agent 工具),模型用它印的 `model=` → 等它回報(**不輪詢**)→ `sh scripts/apply.sh <n>`
-  (不用帶 `--evidence`:EVIDENCE 就在 apply 預設讀的輪次目錄)→ 要驗證者時(`--prepare verifier` 會說要不要):
-  `sh scripts/auto-fix.sh <n> --prepare verifier`(票 `interface_fixed` 是 true 可與 worker 平行,否則等 worker 的 commit 進分支)
-  → subagent → `sh scripts/apply.sh <n> <副本>/patch-verify.diff --evidence-verifier <副本>/EVIDENCE-verifier.md`
-  → `sh scripts/gate.sh --branch --ticket <n> --no-auto-fix`(綠了票轉 InReview,complex 票它自己叫 review.sh)
-  → `sh scripts/land.sh t<n> --no-auto-fix`。任何一步被拒或紅(apply rc 5 hard_block、閘門紅、land 拒收):
-  **把那一行拒收 / 紅榜叫回同一個 subagent**,不要再 prepare。`--no-auto-fix` 是因為預設會改起 headless worker 那一輪。
-  **apply rc 7 是例外**(主 repo 比對拒收,#153,D-064):不是 subagent 的錯能修的,**不要交回 subagent** —— 讀
-  stderr 點名的那一項(sha 範圍、origin 的 ref 或路徑;全文在快照旁的 `main-compare.json`),查清楚是誰動的再決定
-  (還原後重跑 apply、或作廢這一輪重派)。只記不擋的(落地期間 main 前進、docs/ 等前綴的改動)apply 照收、每筆印一行。
+- **派工(D-067;headless 是唯一的派工路,雲端與 Mac 同一條)**:`sh scripts/auto-fix.sh <n>`(票 Ready)自己起
+  worker 與驗證者的程序、收件(apply)、跑閘門、綠了叫 `review.sh`,每一個結局寫進 `reports/inbox/`;
+  主線被通知時讀收件匣,**不輪詢**。只看派工文:`sh scripts/auto-fix.sh <n> --dry-run --round 1`。
+  每一輪都是**新的** agent,交接只靠上一輪 EVIDENCE 的「已排除的假設」與狀態檔的 `repair_context`;
+  `--resume` 只用在交件後短時間內的退回,其餘不續做(D-067)。主 repo 比對包在 auto-fix 起的每一個程序前後,
+  拒收 = auto-fix rc 8(#153,D-064)。
   **一輪跑著的期間,主線不改、也不落地 `hard_block.paths` 上的檔**(`docs/DECISIONS.md`、`docs/VISION.md`):
-  改了那一輪就被拒收(D-065 ②);裁示等收件之後再寫。
-  備援(routine,雲端)的手動步驟在 `docs/reference/role-procedures.md`「主線操作細節」的 Fallback: routine。
+  改了那一輪就被拒收(auto-fix rc 8,D-065 ②);裁示等收件之後再寫。
 
 ## 開題者
 - 只讀:使用者原話、repo 的設計文件與裁示、自己派的子工作者交回的數字。
