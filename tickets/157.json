@@ -1,0 +1,50 @@
+{
+  "id": "157",
+  "subject": "Headless verifier started after hand-in copies the ticket branch head; apply.sh records every OBJECTION line of worker and verifier EVIDENCE",
+  "created": "2026-10-24T05:55:53+00:00",
+  "objective": "Written against the shape #155 lands (no --prepare, verifier_copy inlined into start_verifier_bg). (1) start_verifier_bg picks the copy source the way #149's --prepare verifier did: interface_fixed true -> ticket base_sha (unchanged, parallel with the worker); otherwise, branch t<n> with >= 1 commit over base_sha -> archive of the branch head, and the verifier dispatch packet gets a 'copy source' paragraph naming the branch and head sha and saying verify-case.py red --ref stays the ticket base_sha; otherwise (0 commits) the verifier is not started and stderr says so. archive_copy stays called exactly once, inside start_verifier_bg. (2) apply.sh feeds every ^OBJECTION: line of the --evidence file AND of each --evidence-verifier file to ticket.py objection (with that file as --evidence), not only grep -m1 of --evidence; any line that comes back fresh (rc 0) or undisposed (rc 3) makes apply exit 6 after all lines are recorded; ticket.py objection rc 2 on any line keeps today's rc-2 path. ticket.py record_objection (category + body match) is unchanged.",
+  "acceptance": [
+    "B1 (auto-fix integration, tests/test_auto_fix.py stub worker/verifier like TheFirstRoundVerifierRunsAlongside): ticket needs_verifier true, interface_fixed absent; stub worker commits a new file w.txt='worker' on t1 -> when the verifier stub runs, <WTBASE>/verify-t1/round1/base/w.txt and work/w.txt exist with 'worker'; the verifier dispatch packet contains the branch name t1 and the branch head sha (sha read with git rev-parse in the test).",
+    "B2 same but interface_fixed true -> verifier copy base/ has no w.txt (base_sha content), packet has no copy-source paragraph.",
+    "B3 #155 failure reproduced end to end: worker commit changes line 2 of an existing tests/test_x.py; stub verifier edits line 3 of that same file in work/ and hands in patch-verify.diff -> apply.sh receipt rc 0 (not 3) and the branch head has a second commit containing the verifier's line; before this ticket the same fixture gives apply rc 3.",
+    "B4 interface_fixed absent and branch t1 has 0 commits over base_sha when start_verifier_bg is reached -> no verify-t1/round1 directory, stderr names #1 and says the verifier waits for worker commits; no agent.start role=verifier event.",
+    "B5 #155's verifier pin tests.test_auto_fix.T155TheInSessionPathIsGone.test_t6_the_shared_helpers_are_merged_back stays green unchanged: archive_copy has exactly one call site and it is inside start_verifier_bg.",
+    "C1 (tests/test_apply.py, ApplyBase): worker EVIDENCE with no OBJECTION + --evidence-verifier EVIDENCE with 'OBJECTION: blocking X cannot be measured' -> ticket objections[] gains one row category blocking, body 'X cannot be measured', evidence = relative path of the verifier EVIDENCE, owner main; apply rc 6; status file rc 6.",
+    "C2 the #155 scenario: ticket already has one disposed row (ticket-wrong, other body) -> the verifier blocking line of C1 is still recorded (objections length 1 -> 2), rc 6.",
+    "C3 one EVIDENCE with two different OBJECTION lines (ticket-wrong A, blocking B) -> both rows recorded in file order, rc 6.",
+    "C4 all lines already on the ticket and disposed -> nothing new recorded, apply continues to rc 0; existing cases test_the_same_objection_is_not_recorded_twice and test_an_objection_already_disposed_lets_the_second_apply_through stay green unchanged (oracle: tests/test_apply.py on t155, checked)."
+  ],
+  "depends_on": [
+    {
+      "id": "155",
+      "condition": ""
+    },
+    {
+      "id": "156",
+      "condition": ""
+    }
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "7fd9894e4ef44e30b05f2d50a09b4b8c5efb8273",
+  "state": "Ready",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "test_plan": "Worker, foreground, each batch < 590 s: timeout 580 python3 -m unittest tests.test_apply; timeout 580 python3 -m unittest <only the new/changed classes of tests.test_auto_fix, by class name>; report Ran/OK verbatim. Not the whole tests.test_auto_fix module and not the full suite (cloud timing, see #156). Verifier writes cases for B1-B4 and C1-C3 in tests/ (verify.tags empty, #29). Mutations (optional, not measured by opener): (m1) start_verifier_bg back to V_BASE always -> B1 and B3 red; (m2) apply.sh back to grep -m1 of --evidence only -> C1, C2, C3 red; (m3) record only the first verifier line -> C3 red.",
+  "complexity": "complex",
+  "needs_verifier": true,
+  "interface_fixed": false,
+  "decision_refs": [
+    "D-067"
+  ],
+  "outline": "Item 2 (copy source): t155 auto-fix.sh start_verifier_bg archives V_BASE (= ticket base_sha) for every verifier; #149's --prepare picked branch head when it had >=1 commit, and #155 deletes that path (D-067). Evidence: #155 verifier patch did not apply on t155 (apply rc 3 at tests/test_agent_cost_hook.py:548); main 3-way reapplied. Item 3 (objections) - hypothesis in the request REJECTED: ticket.py record_objection already dedupes on category+body; measured: a different blocking line on a ticket with one disposed row -> rc 0, recorded. Real mechanism (code read, t155 apply.sh 786-789 + auto-fix.sh 2596-2600): apply.sh reads only grep -m1 of --evidence; in the normal path that is the worker EVIDENCE, the verifier EVIDENCE goes only to result json and plans, so its OBJECTION never reaches objections[] (#153 ba8c41d, #155 manual). Not replayed against the original receipt logs (none kept). Files: scripts/auto-fix.sh, scripts/apply.sh, tests/test_auto_fix.py, tests/test_apply.py, apply.sh header rc table. ORDER: #156 lands first (no deps), then #155 gate, then this; depends_on 156 because this ticket's own gate runs test_auto_fix cases in the cloud. complex: two receipt paths. interface_fixed false: packet wording and fixtures follow #155's final shape. Q2 (main): a verifier objection makes apply rc 6, which auto-fix reports as 'receipt failed' (attempt_failed apply-failed) instead of routing to opener triage like a worker objection - (a) accept for now, triage routing in a later ticket (recommended, keeps this ticket small); (b) route it here. Not in ticket: batch apply path, the --prepare packet text."
+}
