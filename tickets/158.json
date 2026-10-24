@@ -1,0 +1,41 @@
+{
+  "id": "158",
+  "subject": "inbox.py stops migrating acked.jsonl on read; explicit 'inbox.py migrate' subcommand",
+  "created": "2026-10-24T16:21:30+00:00",
+  "objective": "Reading the inbox never writes. entries() (and therefore list / show / ack / new-session.sh inbox part / board.py inbox_rows) no longer calls migrate_acked_jsonl. A new subcommand 'python3 scripts/inbox.py migrate' runs it explicitly: moves every page named in <inbox>/acked.jsonl into acked/ (keeping that row's by and at, as today), removes acked.jsonl, prints one stdout line with the count of pages moved, rc 0; with no acked.jsonl it prints 0 and changes nothing (idempotent). index.jsonl is never read, written or removed by any verb, migrate included. While acked.jsonl exists, list / show / ack and the new-session.sh inbox part print one stderr/stdout hint line naming acked.jsonl and the command 'inbox.py migrate' (read-only; pages listed exactly as the directory says, legacy ledger not honoured).",
+  "acceptance": [
+    "A1 (tests/test_inbox.py, InboxBase sandbox): fixture <inbox>/7-old.md and 8-old.md (old pages, no JSON first line), acked.jsonl with one row name 7-old by review.sh, index.jsonl with two arbitrary JSON rows. Record sha256 of acked.jsonl, index.jsonl, and the sorted list of files under <inbox> and <inbox>/acked before. Run 'inbox.py list', 'inbox.py list --all', 'inbox.py show 7' -> each rc 0; afterwards sha256 of both files and the file listing are identical to before (expected values = the fixture bytes written by the test, not computed by inbox.py).",
+    "A2 same fixture: 'inbox.py ack 8' -> rc 0, 8-old.md moved to acked/ (the ack itself), acked.jsonl and index.jsonl byte-identical, 7-old.md still at <inbox>/7-old.md.",
+    "A3 same fixture while acked.jsonl exists: 'inbox.py list' output (stdout or stderr) contains the literal 'inbox.py migrate' and 'acked.jsonl'; without acked.jsonl (A5 after migrate) neither list output contains 'acked.jsonl'.",
+    "A4 same fixture: 'inbox.py migrate' -> rc 0, stdout contains the number 1 as the moved count (one line), acked.jsonl gone, acked/7-old.md exists with first-line by=review.sh and acked_at = the fixture's at, 8-old.md still in <inbox>, index.jsonl byte-identical.",
+    "A5 'inbox.py migrate' a second time -> rc 0, stdout reports 0 pages, file listing and index.jsonl unchanged from after A4. Also on a fresh sandbox with no inbox dir at all -> rc 0, 0 pages, no directory created.",
+    "A6 opening hooks do not migrate: same fixture, run 'sh scripts/new-session.sh main fable --no-event' (as TheOpeningPageReadsTheDirectory does) -> rc 0, acked.jsonl / index.jsonl byte-identical, 7-old.md still in <inbox>; the inbox part contains the 'inbox.py migrate' hint. session-hook.sh only calls new-session.sh main (read at base, line ~106), so no separate case unless the worker changes that.",
+    "A7 existing case tests/test_inbox.py ListAndAck.test_pages_acked_in_the_old_acked_jsonl_stay_acked_after_the_move pins the OLD behaviour (list deletes acked.jsonl) and is rewritten to the new contract (it becomes A4/A5); every other test in tests/test_inbox.py stays green unchanged (oracle checked: only that case and its docstring mutation mention migrate_acked_jsonl / acked.jsonl).",
+    "A8 'inbox.py --help' lists migrate; module docstring states reading never writes and names the migrate command."
+  ],
+  "depends_on": [],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "3d71d356abf39cc3ce3922cde0794837ff00ba2a",
+  "state": "Ready",
+  "state_version": 6,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "simple",
+  "needs_verifier": false,
+  "interface_fixed": false,
+  "decision_refs": [
+    "D-069",
+    "D-054"
+  ],
+  "test_plan": "Worker, foreground: timeout 580 python3 -m unittest tests.test_inbox; report Ran/OK verbatim. No verifier (needs_verifier false): worker writes A1-A6 in tests/test_inbox.py as one new class appended at file end. Mutations (not measured by opener): (m1) entries() calls migrate_acked_jsonl again -> A1, A2, A6 red; (m2) migrate keeps acked.jsonl -> A4 and A5 red; (m3) migrate returns without moving -> A4 red.",
+  "outline": "D-069 (3). Today scripts/inbox.py entries() (line 166) calls migrate_acked_jsonl on every read, so the first list/show/ack or new-session.sh/board.py read in a synced project moves pages into acked/ and deletes acked.jsonl (pinned by tests/test_inbox.py:195 test_pages_acked_in_the_old_acked_jsonl_stay_acked_after_the_move, code read; not replayed on T). Fix: drop the call from entries(); add 'migrate' subparser; migrate_acked_jsonl returns the moved count. index.jsonl: inbox.py never touches it (grep: no reference in scripts/), the acceptance pins that it stays so. Callers of entries(): new-session.sh:294, board/board.py:324, pick() in inbox.py. Files: scripts/inbox.py, tests/test_inbox.py, new-session.sh inbox_part (hint), docs/HANDOFF not needed. sync-to-project ships inbox.py -> T gets it on next sync (D-069: T runs migrate once by hand). needs_verifier false: A1-A6 already spell out fixtures, steps and byte-level expectations, so verifier cases would replay the worker's own contract; and until #157 a verifier on tests/test_inbox.py would start from base_sha and conflict with the worker's edits there. No depends_on: D-069 says open this first (T is broken until resync). Q for main: if you want a verifier anyway, set needs_verifier true and add depends_on 157. simple."
+}

@@ -465,3 +465,8 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - ① 方向 1「A 的入口都能從專案跑」:採用。取捨是共用平台 vs 專案分叉;證據:T 自寫落地器 land-ticket.sh 2,601 行,同步 A 08e6752 後 8 處壞、其中 6 處是黏合層對不上 A 介面(覆核 / 反駁檢查默默失效)。A 補:land.sh / gate.sh / 看板的控制腳本路徑走 $AC 並進同步清單;gate 選填 `gate.select_cmd`(專案只提供挑測試與怎麼跑,preflight 回 86 走既有 env_suspect);verify.py `--case`;看板認 AC_CONTROL_DIR 與選填 `board.key_file`。專案只留專案知識(挑測試、瀏覽器引擎層、preflight、build / deploy)。先派設計 session 落文件(D-019),再開票。
 - ② 同步清單:留在 hard_block(發程式碼進別的專案是政策,要人把關);SCRIPT_LIST 與 DEPENDENCY_ONLY 合成一份,依賴由 import 關係自動算,同步時發出去的腳本缺依賴就失敗(不只警告)。只有新增入口才需授權;方向 1 的新增一次授權。設計併入 ① 的文件。
 - ③ 收件匣搬遷:`inbox.py` 讀取時不再自動執行 migrate_acked_jsonl,改成明確 `inbox.py migrate`。開票先做。T 在 A 修好並重新同步前:不要重開 session,或先把工作樹的 scripts/control/inbox.py 換回同步前版本(主線建議後者);T 改用 A 看板時手動跑一次 migrate。
+
+## D-070(2026-10-24)#157 / #158 開題題目與設計文件(主線裁,未經使用者)
+- #158 不派驗證者(needs_verifier=false,A1–A6 已寫死 fixture 與期望值)。
+- #157 Q2:驗證者反駁暫走 rc 6,分流到開題者另開票(同 D-068 Q2)。Q3:同處插入只對 .py 自動接,並要求接完可解析、沒有重複的頂層名稱;其他衝突照舊 rc 3。
+- 設計文件 docs/design/project-runnable-entries.md(D-069 ①②)收下;建議 6 張 A 票。待裁:Q1(T 的閘門測試是否全能由 unittest 載入)與 Q2(T 看板對外是直接綁介面還是走代理)轉 T 端回答;Q3(同步清單一次加入 land.sh / gate.sh / board.py 三個入口,hard_block 檔)等使用者授權。
