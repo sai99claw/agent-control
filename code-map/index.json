@@ -2,6 +2,7 @@
   "catalog": "code-map/catalog.json",
   "generated_by": "python3 scripts/repo-map.py build",
   "managed": [
+    "scripts/adapter-unittest.py",
     "scripts/agent-cost-hook.py",
     "scripts/apply.sh",
     "scripts/auto-fix.sh",
@@ -29,6 +30,8 @@
     "scripts/wtbase.sh",
     "tests/test_actl.py",
     "tests/test_actl_cases.py",
+    "tests/test_adapter_cases.py",
+    "tests/test_adapter_unittest.py",
     "tests/test_agent_cost_hook.py",
     "tests/test_apply.py",
     "tests/test_auto_fix.py",
