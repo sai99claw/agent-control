@@ -16,8 +16,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "6d788d27c49673970536dba090424be006edb354",
-  "state": "InReview",
-  "state_version": 29,
+  "state": "Done",
+  "state_version": 31,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -262,6 +262,23 @@
       "note": null,
       "effort": null,
       "at": "2026-10-24T21:40:42+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1608,
+      "outcome": "pass",
+      "run_id": "20261024-214112-6658",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-24T22:08:00+00:00"
     }
   ],
   "worker": {
@@ -302,8 +319,82 @@
   "review": {
     "verdict": "pass",
     "by": "reviewer@opus",
-    "sha": "6aab7ef0020021d53ccf4b0f50cfa8a57c33b242",
+    "sha": "414e82426818d5436ed45a46facba38395007a46",
     "note": "reports/t159/20261024-212032-31935/REVIEW.md",
-    "at": "2026-10-24T21:40:42+00:00"
+    "at": "2026-10-24T22:08:00+00:00"
+  },
+  "landed_sha": "414e82426818d5436ed45a46facba38395007a46",
+  "cost_total": {
+    "calendar_seconds": 18170,
+    "wall_seconds": 9737,
+    "runs": 11,
+    "worker_rounds": 2,
+    "objections": 2,
+    "by_role": {
+      "worker": {
+        "runs": 4,
+        "wall_seconds": 5296,
+        "tokens_in": 174,
+        "tokens_out": 61139,
+        "cache_write": 327340,
+        "cache_read": 9034122,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "timeout": 1,
+          "objection": 2,
+          "handed-in": 1
+        }
+      },
+      "opener": {
+        "runs": 1,
+        "wall_seconds": 26,
+        "tokens_in": 10,
+        "tokens_out": 2183,
+        "cache_write": 41679,
+        "cache_read": 204421,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "accepted": 1
+        }
+      },
+      "verifier": {
+        "runs": 2,
+        "wall_seconds": 1099,
+        "tokens_in": 184,
+        "tokens_out": 57752,
+        "cache_write": 225443,
+        "cache_read": 9700278,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 2
+        }
+      },
+      "reviewer": {
+        "runs": 2,
+        "wall_seconds": 249,
+        "tokens_in": 82,
+        "tokens_out": 24806,
+        "cache_write": 198313,
+        "cache_read": 3867356,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 2
+        }
+      },
+      "land": {
+        "runs": 2,
+        "wall_seconds": 3067,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 2,
+        "outcomes": {
+          "fail": 1,
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-24T22:08:00+00:00"
   }
 }
