@@ -124,6 +124,15 @@ class A1VersionRefusal(ConfigSandbox):
         self.assertEqual(migrate.returncode, 2, migrate.stdout + migrate.stderr)
         self.assertEqual(digest(self.config), config_before)
 
+    def test_a1_invalid_version_is_named_right_after_the_key(self):
+        """A bad value reads as 'config_version <value>', no other digit in between."""
+        for value, shown in ((0, "0"), (-1, "-1"), ("two", '"two"'), (2.5, "2.5")):
+            with self.subTest(value=value):
+                self.edit_conf(config_version=value)
+                done = self.actl("ticket", "list", "--open")
+                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+                self.assertIn("config_version %s " % shown, done.stderr)
+
     def test_a1_version_2_runs(self):
         self.assertEqual(self.conf()["config_version"], 2, "precondition: harness default")
         done = self.actl("ticket", "list", "--open")

@@ -140,7 +140,9 @@ def version_of(conf):
         return 1
     value = conf["config_version"]
     if not type_ok(value, "int") or value < 1:
-        raise Refused("config_version must be an int >= 1, got %s" % json.dumps(value))
+        # The value comes right after the key so "config_version <value>" reads as one phrase.
+        raise Refused("config_version %s is not a valid version (expected an int >= 1)"
+                      % json.dumps(value))
     return value
 
 
