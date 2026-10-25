@@ -1104,6 +1104,7 @@ class FixtureRegression(CaseSandbox):
         self.assertEqual(os.path.realpath(calls[0]["code_root"]),
                          os.path.realpath(os.path.join(out, "base")))
         self.assertTrue(self.under(calls[0]["out"], out), calls[0])
+        self.assertIsNone(self.red_record(done)["candidate_run"], "red 不跑 candidate(D-020)")
 
     def test_check_runs_each_copy_with_its_own_code_root_and_out(self):
         """A4(check):兩次呼叫,`AC_CODE_ROOT` 分別是基底副本與候選副本(`--candidate` 是
