@@ -25,8 +25,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "2d5f82ea94299f86fceaf2339bb2847d60f3d167",
-  "state": "Running",
-  "state_version": 10,
+  "state": "InReview",
+  "state_version": 18,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -37,17 +37,17 @@
     "run": "python3 -m unittest tests.test_testiface_cases",
     "notes": "Sandbox cases on the committed fixture project (control_harness fixture=True); each runs the real scripts/gate.sh or bin/actl in a temp git repo, ~4 s total. Covers: tests.run null with select declared (A's adapter runs unittest ids, project run never called), group rerun count = flake_auto_group_runs as run <all ids>, actl test preflight rc 86/2/0 and the suspect file. Complements tests/test_testiface.py (worker's A1-A5).",
     "baseline": {
-      "stage": "red",
+      "stage": "check",
       "ok": true,
       "why": "",
-      "at": "2026-10-25T02:54:50+00:00",
+      "at": "2026-10-25T04:16:30+00:00",
       "files": [
         "tests/test_testiface_cases.py"
       ],
       "base_ref": "2d5f82ea94299f86fceaf2339bb2847d60f3d167",
       "base_sha": "2d5f82ea94299f86fceaf2339bb2847d60f3d167",
-      "candidate": "../agent-control-wt/verify-t162/round1/work",
-      "candidate_sha": "",
+      "candidate": "../agent-control-wt/t162",
+      "candidate_sha": "cacd00b40e296eca2439de66641773ea36c17365",
       "baseline": {
         "red": [
           "tests.test_testiface_cases.ActlTestPreflightByHand.test_broken_preflight_is_2_and_writes_no_suspect_file",
@@ -71,9 +71,19 @@
         "rc": 1,
         "cases": 6,
         "skipped": 0,
-        "log": "../../../tmp/claude-0/-home-user-agent-control-wt-verify-t162-round1-work/2f5318b1-82d0-4654-9e9f-f93e318c16fe/scratchpad/redout/logs/baseline.log"
+        "log": "../agent-control-wt/t162/gate.log.verify-case.d/logs/baseline.log"
       },
-      "candidate_run": null
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 6,
+        "skipped": 0,
+        "log": "../agent-control-wt/t162/gate.log.verify-case.d/logs/candidate.log"
+      }
     }
   },
   "complexity": "complex",
@@ -158,6 +168,40 @@
       "note": null,
       "effort": "high",
       "at": "2026-10-25T02:55:41+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 40,
+      "tokens_out": 11132,
+      "cache_write": 25338,
+      "cache_read": 1810895,
+      "wall_seconds": 1703,
+      "outcome": "handed-in",
+      "run_id": "20261025-030535-27100",
+      "session_id": "1680dcfd-e9e9-4a35-ac08-fbd7c4b45f50",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-25T03:56:46+00:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 26,
+      "tokens_out": 10447,
+      "cache_write": 90658,
+      "cache_read": 1073962,
+      "wall_seconds": 112,
+      "outcome": "pass",
+      "run_id": "20261025-035646-26598",
+      "session_id": "5260a3b6-6423-5527-bed8-9d3211ae718f",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-25T04:18:23+00:00"
     }
   ],
   "objections": [
@@ -176,5 +220,19 @@
       }
     }
   ],
-  "branch": "t162"
+  "branch": "t162",
+  "gate": {
+    "rc": 0,
+    "sha": "cacd00b40e296eca2439de66641773ea36c17365",
+    "run_id": "20261025-035646-26598",
+    "at": "2026-10-25T04:16:31+00:00"
+  },
+  "repair_round": 2,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "cacd00b40e296eca2439de66641773ea36c17365",
+    "note": "reports/t162/20261025-035646-26598/REVIEW.md",
+    "at": "2026-10-25T04:18:23+00:00"
+  }
 }
