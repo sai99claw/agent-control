@@ -10,7 +10,7 @@ A5 | contract | 讀指定既有 oracle 與 Sandbox 預設設定 | 舊鍵已遷�
 
 ## 介面字串(全部出自票面 objective / acceptance)
 HARD_BLOCK = board/config.json 的 "hard_block": {"paths": [...], "dirs": [...], "patterns": [...]}
-PATHS      = docs/DECISIONS.md、docs/VISION.md、scripts/sync-to-project.sh(票面驗收 4)
+PATHS      = docs/DECISIONS.md、docs/VISION.md(票面驗收 4;D-071 / #172 兩條)
 PATTERNS   = 原 verify-case.py 預設禁字那四條殺行程字樣(本檔 PATTERNS 常數拆字寫,避開 F4);只查 tests/**、verify/** 新增行
 RC         = apply.sh 5、gate.sh preflight 4、land.sh 拒收(既有拒收 rc 2)、auto-fix.sh 守衛 8
 A3 GREP    = 票面驗收 3 那條 git grep 的 regex 與路徑原樣;*.inbox.md 不算
@@ -38,7 +38,7 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 from control_harness import DEFAULT_CONFIG, GATE_STUB_GREEN, Sandbox, write_executable  # noqa: E402
 
-PATHS = ["docs/DECISIONS.md", "docs/VISION.md", "scripts/sync-to-project.sh"]
+PATHS = ["docs/DECISIONS.md", "docs/VISION.md"]
 PATTERNS = [r"os\." + "kill", "kill" + "pg", "p" + "kill", "kill" + " -"]
 OS_KILL = "os." + "kill("
 
