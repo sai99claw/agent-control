@@ -189,6 +189,8 @@ map() {
         scripts/sync-to-project.sh) add test_sync_to_project ;;
         # 狀態檔:閘門與落地都寫它,所以動它要連那兩側一起跑。
         scripts/status.py) add test_status test_gate test_land ;;
+        # 內建 unittest adapter(D-071 C6,#161):run-tests 是它上面的薄殼,閘門經它跑測試。
+        scripts/adapter-unittest.py) add test_adapter_unittest test_status test_gate ;;
         # 記憶檔既受整理守衛管(test_memory),也在「不准出現專案名」那一掃裡。
         # routing 每個值都要有卡(#87):刪一張卡就是動那一條守衛。
         memory/model/*.md) add test_memory test_no_project_names test_routing_cards ;;

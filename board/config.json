@@ -71,5 +71,66 @@
       "pkill",
       "kill -"
     ]
+  },
+  "tests": {
+    "adapter": "unittest",
+    "unittest": {
+      "roots": [
+        "tests"
+      ],
+      "base": [
+        "test_ticket",
+        "test_event",
+        "test_memory",
+        "test_no_project_names"
+      ],
+      "map": [
+        {"match": "tests/control_harness.py", "ids": ["test_ticket", "test_event", "test_memory", "test_land", "test_gate", "test_heartbeat", "test_new_session", "test_board", "test_no_project_names", "test_status", "test_verify_case", "test_apply", "test_auto_fix", "test_inbox", "test_rules", "test_actl", "test_session_hook", "test_review", "test_verify_runner", "test_consolidate_memory"]},
+        {"match": "bin/actl", "ids": ["test_actl"]},
+        {"match": ".gitignore", "ids": ["test_no_project_names"]},
+        {"match": "scripts/event.py", "ids": ["test_event", "test_ticket", "test_land", "test_actl"]},
+        {"match": "scripts/ticket.py", "ids": ["test_ticket", "test_land", "test_auto_fix_codex"]},
+        {"match": "scripts/land.sh", "ids": ["test_land"]},
+        {"match": "scripts/gate.sh", "ids": ["test_gate", "test_status"]},
+        {"match": "scripts/gate.example.sh", "ids": ["test_gate", "test_status"]},
+        {"match": "scripts/apply.sh", "ids": ["test_apply"]},
+        {"match": "scripts/auto-fix.sh", "ids": ["test_auto_fix", "test_auto_fix_codex", "test_rules_delivery"]},
+        {"match": "scripts/review.sh", "ids": ["test_review", "test_rules_delivery"]},
+        {"match": "scripts/wtbase.sh", "ids": ["test_apply", "test_auto_fix", "test_land", "test_review", "test_actl", "test_gate", "test_heartbeat", "test_new_session", "test_session_hook", "test_consolidate_memory"]},
+        {"match": "scripts/inbox.py", "ids": ["test_inbox", "test_gate", "test_land", "test_new_session"]},
+        {"match": "scripts/rules.py", "ids": ["test_rules", "test_rules_delivery"]},
+        {"match": "scripts/heartbeat.sh", "ids": ["test_heartbeat"]},
+        {"match": "scripts/new-session.sh", "ids": ["test_new_session", "test_rules_delivery"]},
+        {"match": "scripts/session-hook.sh", "ids": ["test_session_hook"]},
+        {"match": ".claude/settings.json", "ids": ["test_session_hook"]},
+        {"match": "scripts/consolidate-memory.sh", "ids": ["test_consolidate_memory", "test_new_session"]},
+        {"match": "scripts/memory.py", "ids": ["test_memory", "test_memory_note_names", "test_memory_lifecycle", "test_memory_layer_policy"]},
+        {"match": "scripts/verify.py", "ids": ["test_verify_runner", "test_verify_case", "test_actl"]},
+        {"match": "verify/TAGS.md", "ids": ["test_verify_runner", "test_verify_case", "test_actl"]},
+        {"match": "verify/TAGS.d/*", "ids": ["test_verify_runner", "test_verify_case", "test_actl"]},
+        {"match": "scripts/verify-case.py", "ids": ["test_verify_case", "test_actl"]},
+        {"match": "verify/*", "ids": ["test_verify_runner"]},
+        {"match": "scripts/sync-to-project.sh", "ids": ["test_sync_to_project"]},
+        {"match": "scripts/status.py", "ids": ["test_status", "test_gate", "test_land"]},
+        {"match": "scripts/adapter-unittest.py", "ids": ["test_adapter_unittest", "test_status", "test_gate"]},
+        {"match": "memory/model/*.md", "ids": ["test_memory", "test_no_project_names", "test_routing_cards"]},
+        {"match": "memory/role/*.md", "ids": ["test_memory", "test_sync_to_project", "test_no_project_names"]},
+        {"match": "board/board.py", "ids": ["test_board"]},
+        {"match": "board/config.json", "ids": ["test_board", "test_event", "test_heartbeat", "test_memory", "test_routing_cards"]},
+        {"match": "scripts/repo-map.py", "ids": ["test_repo_map_contract"]},
+        {"match": "code-map/catalog.json", "ids": ["test_repo_map_contract"]},
+        {"match": "code-map/index.json", "ids": ["test_repo_map_contract"]},
+        {"match": "code-map/INDEX.md", "ids": ["test_repo_map_contract"]},
+        {"match": "tickets/*.json", "ids": ["test_ticket"]},
+        {"match": "tickets/SCHEMA.md", "ids": ["test_ticket"]},
+        {"match": "docs/DESIGN-ENV-SUSPECT.md", "ids": ["test_status", "test_no_project_names"]},
+        {"match": "docs/DISPATCH-TEMPLATE.md", "ids": ["test_rules_delivery", "test_no_project_names"]},
+        {"match": "templates/dispatch-verifier.md", "ids": ["test_templates", "test_rules_delivery", "test_no_project_names"]},
+        {"match": "templates/dispatch-reviewer.md", "ids": ["test_review", "test_templates", "test_rules_delivery", "test_no_project_names"]},
+        {"match": "templates/dispatch-*.md", "ids": ["test_rules_delivery", "test_no_project_names"]},
+        {"match": "docs/*.html", "ids": ["test_no_project_names"]},
+        {"match": "*.md", "ids": ["test_no_project_names"]}
+      ]
+    }
   }
 }

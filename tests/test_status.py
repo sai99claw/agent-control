@@ -1193,5 +1193,91 @@ class TheShapeHasExactlyOneSourceOfTruth(unittest.TestCase):
         self.assertEqual(strays, [], "這幾份自己定義了一套形狀:%s" % strays)
 
 
+class DoneReadsResultJson(Sandbox):
+    """#161 A4:`done --result <result.json>`(設計 §4 status file 那一列)。
+
+    result 由真的 `adapter-unittest.py run` 寫(A2 / A3 的夾具),不是手捏的:手捏的
+    result 只證明 `done` 讀得懂這裡寫的形狀,不證明讀得懂 adapter 寫的形狀。"""
+
+    def status(self, *args, env=None):
+        return self.run_py("scripts/status.py", *args, env=env)
+
+    def adapter_result(self, name, text, ids):
+        self.write(os.path.join("tests", name), text)
+        out = os.path.join(self.home, "out-" + name[:-3])
+        done = self.run_py("scripts/adapter-unittest.py", "run", *ids,
+                           env=self.env(AC_CODE_ROOT=self.repo, AC_TEST_OUT=out))
+        path = os.path.join(out, "result.json")
+        self.assertTrue(os.path.exists(path), done.stdout + done.stderr)
+        with open(path, encoding="utf-8") as handle:
+            return path, json.load(handle), done.returncode
+
+    def test_failures_come_from_the_fail_and_error_rows(self):
+        """**變異 m4**:`excerpt` 改取 traceback → 最後一條 `excerpt == message` 紅。"""
+        from test_adapter_unittest import FIVE, FIXTURE
+        path, data, rc = self.adapter_result("test_fx.py", FIXTURE, FIVE)
+        self.assertEqual(rc, 1)
+        done = self.status("done", "--ticket", "7", "--run-id", "r", "--rc", "1",
+                           "--result", path)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        failures = self.status_of("7")["failures"]
+        red = [row for row in data["ids"] if row["status"] in ("fail", "error")]
+        self.assertEqual(sorted(row["id"] for row in red),
+                         sorted(["test_fx.FX.test_fail", "test_fx.Broken.test_x",
+                                 "test_fx.FX.test_skip_empty"]))
+        self.assertEqual([row["case"] for row in failures], [row["id"] for row in red])
+        for got, row in zip(failures, red):
+            self.assertEqual(got["file"], row["file"] if row["file"] is not None else "")
+            self.assertEqual(got["line"], row["line"] if row["line"] is not None else 0)
+            self.assertEqual(got["excerpt"], row["message"])
+            self.assertEqual(sorted(got), sorted(["case", "kind", "subtest", "file", "line",
+                                                  "engine", "log", "excerpt",
+                                                  "suspected_flaky", "flaky",
+                                                  "order_dependent"]))
+        self.assertEqual(failures[0]["file"], "tests/test_fx.py")
+
+    def test_the_key_set_is_the_one_a_log_run_writes(self):
+        from test_adapter_unittest import FIVE, FIXTURE
+        path, _, _ = self.adapter_result("test_fx.py", FIXTURE, FIVE)
+        log = os.path.join(os.path.dirname(path), "run.log")
+        self.status("done", "--ticket", "7", "--run-id", "r", "--rc", "1", "--result", path)
+        self.status("done", "--ticket", "8", "--run-id", "r", "--rc", "1", "--log", log)
+        self.assertEqual(sorted(self.status_of("7")), sorted(self.status_of("8")),
+                         "--result 不准帶新鍵")
+        self.assertEqual(len(self.status_of("8")["failures"]),
+                         len(self.status_of("7")["failures"]) - 1,
+                         "--log 讀不到 skip-without-reason 那一條;--result 讀得到")
+
+    def test_declared_rows_are_copied_normalised(self):
+        from test_adapter_unittest import DECLARES_THEN_SKIPS
+        path, data, rc = self.adapter_result("test_declared.py", DECLARES_THEN_SKIPS,
+                                             ["test_declared"])
+        self.assertEqual(rc, 86)
+        self.assertTrue(data["environment_suspect"], "rc 86 不會帶 []")
+        done = self.status("done", "--ticket", "7", "--run-id", "r", "--rc", "86",
+                           "--state", "env_suspect", "--result", path)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        got = self.status_of("7")
+        self.assertEqual(got["state"], "env_suspect")
+        self.assertEqual(got["environment_suspect"], data["environment_suspect"])
+        for row in got["environment_suspect"]:
+            self.assertEqual(list(row), list(status_module.SUSPECT_KEYS))
+
+    def test_an_unreadable_result_is_rc_2_and_writes_nothing(self):
+        bad = self.write("schema2.json", json.dumps({"schema": 2, "ids": [],
+                                                     "environment_suspect": []}),
+                         where=self.home)
+        broken = self.write("broken.json", "{not json", where=self.home)
+        missing = os.path.join(self.home, "missing.json")
+        for path in (missing, bad, broken):
+            with self.subTest(path=os.path.basename(path)):
+                done = self.status("done", "--ticket", "7", "--run-id", "r", "--rc", "1",
+                                   "--result", path)
+                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+                self.assertIn(path, done.stderr)
+                self.assertFalse(os.path.exists(os.path.join(
+                    self.repo, "reports", "t7", "r", "status.json")))
+
+
 if __name__ == "__main__":
     unittest.main()
