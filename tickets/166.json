@@ -28,9 +28,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "601b36f039a336a6f2e87effefbed3067bfa2585",
-  "state": "Ready",
-  "state_version": 2,
+  "base_sha": "26c776b97b90ef00558de8d34bb079b3719d06bc",
+  "state": "Blocked",
+  "state_version": 9,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -49,5 +49,70 @@
     "D-021"
   ],
   "test_plan": "Worker, foreground, batches < 590 s, Ran/OK verbatim per batch: (1) timeout 590 python3 -m unittest tests.test_rules tests.test_new_session tests.test_repo_map_contract tests.test_retire_sync tests.test_templates tests.test_no_project_names; (2) tests.test_gate tests.test_land; (3) tests.test_auto_fix alone; (4) 'python3 scripts/repo-map.py check' and 'python3 scripts/verify.py --tag role_routing' once each, output verbatim; (5) 'sh bin/actl gate --base' in A once. Worker writes A1 in tests/test_retire_sync.py (new) and A2-A4 as rewrites in the three named modules. Verifier (needs_verifier true, interface_fixed true: AC_HOME env, is_canon compare and the overlay heading are pinned above) starts in parallel: (a) deletes A4SyncCarriesTheTable in verify/role_routing/test_ticket_122.py and its docstring row (objective 6) - that file is the verifier's, the worker never touches verify/**; (b) writes tests/test_retire_sync_cases.py (new): at least a sandbox whose memory/role/ has a card AC_HOME lacks (project-only card -> pack says so, not silently empty), AC_HOME given as a symlink to A (realpath compare makes it canon), and 'rules.py pack main' in A itself with AC_ROOT unset but cwd = A. Mutations (not measured by opener): m1 is_canon compares strings not realpaths -> verifier symlink case red; m2 pack reads the project card as canon -> A2 red; m3 new-session still reads <root>/CLAUDE.md for the contract -> A3 red; m4 repo-map resolves its catalog from AC_HOME -> A4 red; m5 a map row for test_sync_to_project left in config -> A1 red (and the gate would call a missing module). Container runs as uid 0: no chmod-based unreadable-file cases (root reads them); use a missing file or invalid JSON instead. hard_block.patterns forbids the four process-signal spellings in added tests/** lines: never stop a child that way in a test; stop a served board only through the Popen handle as tests/test_board.py _stop does today; timeouts belong to subprocess.run(timeout=) inside scripts/.",
-  "outline": "D-071 row 6 (text + deletes, plus the rules.py canon switch the design puts in the same row). Facts at base 601b36f: hard_block.paths = [docs/DECISIONS.md, docs/VISION.md, scripts/sync-to-project.sh] (board/config.json:64) - deleting the script in a ticket branch hits land.sh's hard_block check, so main's row removal must land FIRST, and verify case 135 (A4 line 299-301 reads A's committed config, A5 line 318-319 reads DEFAULT_CONFIG) pins the three-entry list, so main's commit must carry those two oracle edits too or the regression layer goes red between the two landings. QUESTION for main (recommended): one commit with board/config.json + tests/control_harness.py + verify/hard_block/test_ticket_135.py; note 'actl land docs' prefixes (tickets/ docs/ memory/) do not accept it, so main lands it as the user-authorised direct commit D-072 Q5 names. Other facts: 46 refs in test_sync_to_project.py, 45 in the script; runners of the script outside those: tests/test_repo_map_contract.py:213 (A31), verify/role_routing/test_ticket_122.py:449 (A4 class, verifier deletes), tests/test_new_session.py:320 (expects the sync hint text); rules.roles_dir readers rules.py:109-141 (roles_dir, models_dir, is_canon) and test_rules.py:293,474 config_extra; units() comment skip rules.py:268 with test class at test_rules.py:464; new-session.sh contract() 223-232 reads <roles_dir>/contract.md when not canon; code-map/index.json lists both deleted files (24, 60) and INDEX.md:27 names gate.example.sh -> repo-map check would fail without the catalog edit; gate.sh map rows 150/174/180 name the deleted files/test - after #162 they are config rows. test_templates.py does not read project-CLAUDE.md (grep 0). DESIGN-*.md / FLOW.html / DECISIONS history keep mentions (design acceptance C10 grep list excludes them). Files: 3 deletions, scripts/rules.py, scripts/new-session.sh, 10 comment sweeps, board/config.json (map data only, never hard_block), code-map/catalog.json + regenerated index.json/INDEX.md, README.md, templates/project-CLAUDE.md, docs/reference/role-procedures.md, tests/test_retire_sync.py (new), tests/test_rules.py, tests/test_new_session.py, tests/test_repo_map_contract.py, tests/test_auto_fix.py (one regex). Verifier: verify/role_routing/test_ticket_122.py, tests/test_retire_sync_cases.py. Model opus not sonnet (deviation from design row 6): the rules.py canon/overlay rewrite feeds every dispatch pack and the new-session page; a wrong overlay is silent. complexity simple per design (main may raise to complex). needs_verifier true; interface_fixed true. Depends on #159 (AC_HOME, root rule), #160 (migration deletes rules keys), #162 (map rows are config data; gate.example.sh is unreferenced by gate.sh) and main's hard_block commit. Parallel with #163, #164, #165 once those dependencies land. Row 7 (#167) starts after this lands."
+  "outline": "D-071 row 6 (text + deletes, plus the rules.py canon switch the design puts in the same row). Facts at base 601b36f: hard_block.paths = [docs/DECISIONS.md, docs/VISION.md, scripts/sync-to-project.sh] (board/config.json:64) - deleting the script in a ticket branch hits land.sh's hard_block check, so main's row removal must land FIRST, and verify case 135 (A4 line 299-301 reads A's committed config, A5 line 318-319 reads DEFAULT_CONFIG) pins the three-entry list, so main's commit must carry those two oracle edits too or the regression layer goes red between the two landings. QUESTION for main (recommended): one commit with board/config.json + tests/control_harness.py + verify/hard_block/test_ticket_135.py; note 'actl land docs' prefixes (tickets/ docs/ memory/) do not accept it, so main lands it as the user-authorised direct commit D-072 Q5 names. Other facts: 46 refs in test_sync_to_project.py, 45 in the script; runners of the script outside those: tests/test_repo_map_contract.py:213 (A31), verify/role_routing/test_ticket_122.py:449 (A4 class, verifier deletes), tests/test_new_session.py:320 (expects the sync hint text); rules.roles_dir readers rules.py:109-141 (roles_dir, models_dir, is_canon) and test_rules.py:293,474 config_extra; units() comment skip rules.py:268 with test class at test_rules.py:464; new-session.sh contract() 223-232 reads <roles_dir>/contract.md when not canon; code-map/index.json lists both deleted files (24, 60) and INDEX.md:27 names gate.example.sh -> repo-map check would fail without the catalog edit; gate.sh map rows 150/174/180 name the deleted files/test - after #162 they are config rows. test_templates.py does not read project-CLAUDE.md (grep 0). DESIGN-*.md / FLOW.html / DECISIONS history keep mentions (design acceptance C10 grep list excludes them). Files: 3 deletions, scripts/rules.py, scripts/new-session.sh, 10 comment sweeps, board/config.json (map data only, never hard_block), code-map/catalog.json + regenerated index.json/INDEX.md, README.md, templates/project-CLAUDE.md, docs/reference/role-procedures.md, tests/test_retire_sync.py (new), tests/test_rules.py, tests/test_new_session.py, tests/test_repo_map_contract.py, tests/test_auto_fix.py (one regex). Verifier: verify/role_routing/test_ticket_122.py, tests/test_retire_sync_cases.py. Model opus not sonnet (deviation from design row 6): the rules.py canon/overlay rewrite feeds every dispatch pack and the new-session page; a wrong overlay is silent. complexity simple per design (main may raise to complex). needs_verifier true; interface_fixed true. Depends on #159 (AC_HOME, root rule), #160 (migration deletes rules keys), #162 (map rows are config data; gate.example.sh is unreferenced by gate.sh) and main's hard_block commit. Parallel with #163, #164, #165 once those dependencies land. Row 7 (#167) starts after this lands.",
+  "cost": [
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 72,
+      "tokens_out": 31026,
+      "cache_write": 107116,
+      "cache_read": 3324571,
+      "wall_seconds": 383,
+      "outcome": "handed-in",
+      "run_id": "20261025-121038-13477",
+      "session_id": "e33d2e15-e7de-4dd9-a527-84ca943afc72",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-25T12:17:04+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 22,
+      "tokens_out": 5429,
+      "cache_write": 38985,
+      "cache_read": 626386,
+      "wall_seconds": 76,
+      "outcome": "objection",
+      "run_id": "20261025-121038-13477",
+      "session_id": "41d738f9-1ecb-4f80-a116-d90711534b9d",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-25T12:17:04+00:00"
+    },
+    {
+      "role": "opener",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 8,
+      "tokens_out": 2303,
+      "cache_write": 22582,
+      "cache_read": 171425,
+      "wall_seconds": 32,
+      "outcome": "escalate",
+      "run_id": "20261025-121038-13477",
+      "session_id": "5260a3b6-6423-5527-bed8-9d3211ae718f",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-25T12:17:37+00:00"
+    }
+  ],
+  "objections": [
+    {
+      "category": "blocking",
+      "body": "ticket precondition unmet - base 26c776b still has scripts/sync-to-project.sh in board/config.json hard_block.paths (and tests/control_harness.py:180, verify/hard_block/test_ticket_135.py:13,41 still pin the three-entry list); main must land its user-authorised hard_block commit (D-071/D-072 Q5) and re-dispatch #166 on that commit or later, otherwise deleting the script is refused by apply.sh rc 5 / gate preflight rc 4 / land.sh and A1 (hard_block.paths == two entries) cannot be green.",
+      "evidence": "../agent-control-wt/fix-t166/round1/EVIDENCE-round1.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "Main: the precondition goes through a normal ticket instead of a main-line exception (board/config.json is not itself a hard_block path, so removing the row is not a hard_block hit): new ticket removes scripts/sync-to-project.sh from hard_block.paths and updates tests/control_harness.py:180 and verify/hard_block/test_ticket_135.py:13,41; #166 is re-dispatched after it lands."
+    }
+  ],
+  "owner": "main",
+  "interventions": 1
 }
