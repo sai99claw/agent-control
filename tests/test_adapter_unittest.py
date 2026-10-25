@@ -37,7 +37,8 @@ VERIFY_IDS = ["test_verify_runner", "test_verify_case", "test_actl"]
 REPO_MAP_IDS = ["test_repo_map_contract"]
 GATE_MAP = [
     ("tests/control_harness.py", HARNESS_IDS),
-    ("bin/actl", ["test_actl", "test_project_config"]),
+    ("bin/actl", ["test_actl", "test_project_config", "test_hooks"]),
+    ("scripts/hooks.py", ["test_hooks", "test_session_hook"]),
     ("scripts/project_config.py", ["test_project_config", "test_actl", "test_session_hook"]),
     (".gitignore", ["test_no_project_names"]),
     ("scripts/event.py", ["test_event", "test_ticket", "test_land", "test_actl"]),

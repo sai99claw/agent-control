@@ -24,22 +24,73 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "601b36f039a336a6f2e87effefbed3067bfa2585",
-  "state": "Ready",
-  "state_version": 3,
+  "base_sha": "2d5f82ea94299f86fceaf2339bb2847d60f3d167",
+  "state": "Done",
+  "state_version": 26,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
+    "files": [
+      "tests/test_testiface_cases.py"
+    ],
     "tags": [],
-    "run": "",
-    "notes": ""
+    "run": "python3 -m unittest tests.test_testiface_cases",
+    "notes": "Sandbox cases on the committed fixture project (control_harness fixture=True); each runs the real scripts/gate.sh or bin/actl in a temp git repo, ~4 s total. Covers: tests.run null with select declared (A's adapter runs unittest ids, project run never called), group rerun count = flake_auto_group_runs as run <all ids>, actl test preflight rc 86/2/0 and the suspect file. Complements tests/test_testiface.py (worker's A1-A5).",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-25T05:41:25+00:00",
+      "files": [
+        "tests/test_testiface_cases.py"
+      ],
+      "base_ref": "2d5f82ea94299f86fceaf2339bb2847d60f3d167",
+      "base_sha": "2d5f82ea94299f86fceaf2339bb2847d60f3d167",
+      "candidate": "../agent-control-wt/t162",
+      "candidate_sha": "e5cdbcd93ecf1bcd20af5acf87986bcbbde9ab75",
+      "baseline": {
+        "red": [
+          "tests.test_testiface_cases.ActlTestPreflightByHand.test_broken_preflight_is_2_and_writes_no_suspect_file",
+          "tests.test_testiface_cases.ActlTestPreflightByHand.test_clean_preflight_is_0_and_writes_no_suspect_file",
+          "tests.test_testiface_cases.ActlTestPreflightByHand.test_locked_is_86_and_the_declared_row_lands_in_the_suspect_file",
+          "tests.test_testiface_cases.GroupRerunCount.test_group_reruns_are_run_with_all_ids_group_runs_times",
+          "tests.test_testiface_cases.StepTwoShapeRunNull.test_green_unittest_id_runs_through_the_builtin_adapter",
+          "tests.test_testiface_cases.StepTwoShapeRunNull.test_red_unittest_id_is_rc_1_with_unittests_own_id"
+        ],
+        "red_lines": [
+          "tests.test_testiface_cases.ActlTestPreflightByHand.test_broken_preflight_is_2_and_writes_no_suspect_file: AssertionError: 'preflight' not found in 'actl: test: not landed yet (D-071 follow-up)\\n'",
+          "tests.test_testiface_cases.ActlTestPreflightByHand.test_clean_preflight_is_0_and_writes_no_suspect_file: AssertionError: 2 != 0 : actl: test: not landed yet (D-071 follow-up)",
+          "tests.test_testiface_cases.ActlTestPreflightByHand.test_locked_is_86_and_the_declared_row_lands_in_the_suspect_file: AssertionError: 2 != 86 : actl: test: not landed yet (D-071 follow-up)",
+          "tests.test_testiface_cases.GroupRerunCount.test_group_reruns_are_run_with_all_ids_group_runs_times: AssertionError: 0 != 8 : []",
+          "tests.test_testiface_cases.StepTwoShapeRunNull.test_green_unittest_id_runs_through_the_builtin_adapter: AssertionError: 'tests' not found in {'config_version': 2, 'port': 0, 'tickets_dir': 'tickets', 'events_file': 'board/events.jsonl', 'answers_file': 'board/answers.jsonl', 'main_branch': 'main', 'routing': {'implement': 'opus'}, 'memory': {'consolidator': 'fable', 'applies_to': ['memory/model/*.md'], 'inbox_suffix': '.inbox.md'}, 'lease_seconds': {'opener': 900, 'verifier': 3600, 'land': 1800, 'worker': 7200}, 'reviewer': {'command': 'true', 'timeout_seconds': 60}, 'worker': {'command': 'true'}, 'hard_block': {'paths': ['docs/DECISIONS.md', 'docs/VISION.md', 'scripts/sync-to-project.sh'], 'dirs': [], 'patterns': ['os\\\\.kill', 'killpg', 'pkill', 'kill -']}} : sandbox config has no tests block",
+          "tests.test_testiface_cases.StepTwoShapeRunNull.test_red_unittest_id_is_rc_1_with_unittests_own_id: AssertionError: 'tests' not found in {'config_version': 2, 'port': 0, 'tickets_dir': 'tickets', 'events_file': 'board/events.jsonl', 'answers_file': 'board/answers.jsonl', 'main_branch': 'main', 'routing': {'implement': 'opus'}, 'memory': {'consolidator': 'fable', 'applies_to': ['memory/model/*.md'], 'inbox_suffix': '.inbox.md'}, 'lease_seconds': {'opener': 900, 'verifier': 3600, 'land': 1800, 'worker': 7200}, 'reviewer': {'command': 'true', 'timeout_seconds': 60}, 'worker': {'command': 'true'}, 'hard_block': {'paths': ['docs/DECISIONS.md', 'docs/VISION.md', 'scripts/sync-to-project.sh'], 'dirs': [], 'patterns': ['os\\\\.kill', 'killpg', 'pkill', 'kill -']}} : sandbox config has no tests block"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 6,
+        "skipped": 0,
+        "log": "../agent-control-wt/t162/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 6,
+        "skipped": 0,
+        "log": "../agent-control-wt/t162/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "complexity": "complex",
   "needs_verifier": true,
   "interface_fixed": false,
   "test_plan": "Worker, foreground, batches: (1) timeout 590 python3 -m unittest tests.test_testiface tests.test_gate; (2) tests.test_land tests.test_status; (3) tests.test_verify_case tests.test_session_hook tests.test_board tests.test_templates tests.test_no_project_names (the fixture project must not carry a project name or home path); (4) tests.test_auto_fix alone; report Ran/OK verbatim. 'sh bin/actl gate --base' once in A (A5), output verbatim. Worker writes A1-A5 in tests/test_testiface.py (new) plus the test_gate.py rewrites; adds map rows to A's tests.unittest.map for scripts/testiface.py, tests/fixtures/project/**, templates/project-*.example.* (map rows are config data now). Verifier (needs_verifier true, interface_fixed false: the fixture project and its knobs are the worker's) writes tests/test_testiface_cases.py (new) after hand-in: at least a second fixture copy with select declared and run null (T's step-2 shape: unittest ids run through A's adapter, browser ids absent), the group rerun count, and 'actl test preflight' by hand with the fake env (rc and suspect file). Mutations (not measured by opener): m1 testiface returns 86 for rc 86 without rows -> A3 red; m2 gate treats preflight 86 as red -> A2 red; m3 select empty stdout accepted -> A1 red; m4 flake rerun shells 'python3 -m unittest' -> A4 red; m5 timeout treated as red (rc 1) -> A3 red. Container runs as uid 0: no chmod-based unreadable-file cases (root reads them); use a missing file or invalid JSON instead. hard_block.patterns forbids the four process-signal spellings in added tests/** lines: never stop a child that way in a test; timeouts belong to subprocess.run(timeout=) inside scripts/. The fixture's 'sleep' arm uses sleep; stopping it is testiface's subprocess timeout, never a test line.",
-  "outline": "D-071 row 3b (rewires the 1,079-line gate around one seam). Facts at base 601b36f: gate.sh run_tests() 472-477 -> status.py run-tests; map() 132-210 + BASE 129 (3a copied them into config); branch diff rule 1006-1008; unmapped + diff_tests guard 1014-1023 and rc-3 tail 1058-1070 (keep byte for byte); flake_rerun 897-935 shells python3 -m unittest per case; regression() 679-700 -> verify.py --tag; hard_block preflight 330-418 stays (rc 4 path unchanged, D-054 Q4); env suspect path env_suspect_note + SUSPECT_FILE. Pinned old output: tests/test_gate.py:262-263 asserts 'gate: python3 -m unittest test_land' (rewrite); test_gate.py:335 mutation note mentions the --full spelling (text). control_harness.py: sandbox has verify/example + TAGS.md (VERIFY_CASE), gate_stub marker, DEFAULT_CONFIG (gains tests). Fixture env knobs (AC_TEST_FAKE_*, AC_TEST_CALLS) are this ticket's invention; the fixture must pass test_no_project_names (no project names, no home paths). Files: scripts/testiface.py (new), scripts/gate.sh, scripts/status.py (delete shim, regression-red --result), bin/actl (test row), templates/project-tests.example.sh + project-config.example.json (new), tests/fixtures/project/** (new), tests/control_harness.py, tests/test_testiface.py (new), tests/test_gate.py, board/config.json (map rows). Not here: verify-case red/check (3c), sync deletion incl. gate.example.sh (row 6), docs (row 7), release-gate template text (row 6/7). complex (design). Depends on row 2 (fixture is version 2 and must pass actl's check) and row 3a (adapter, done --result, config map). Row 3c starts after this lands.",
+  "outline": "D-071 row 3b (rewires the 1,079-line gate around one seam). Facts at base 601b36f: gate.sh run_tests() 472-477 -> status.py run-tests; map() 132-210 + BASE 129 (3a copied them into config); branch diff rule 1006-1008; unmapped + diff_tests guard 1014-1023 and rc-3 tail 1058-1070 (keep byte for byte); flake_rerun 897-935 shells python3 -m unittest per case; regression() 679-700 -> verify.py --tag; hard_block preflight 330-418 stays (rc 4 path unchanged, D-054 Q4); env suspect path env_suspect_note + SUSPECT_FILE. Pinned old output: tests/test_gate.py:262-263 asserts 'gate: python3 -m unittest test_land' (rewrite); test_gate.py:335 mutation note mentions the --full spelling (text). control_harness.py: sandbox has verify/example + TAGS.md (VERIFY_CASE), gate_stub marker, DEFAULT_CONFIG (gains tests). Fixture env knobs (AC_TEST_FAKE_*, AC_TEST_CALLS) are this ticket's invention; the fixture must pass test_no_project_names (no project names, no home paths). Files: scripts/testiface.py (new), scripts/gate.sh, scripts/status.py (delete shim, regression-red --result), bin/actl (test row), templates/project-tests.example.sh + project-config.example.json (new), tests/fixtures/project/** (new), tests/control_harness.py, tests/test_testiface.py (new), tests/test_gate.py, board/config.json (map rows). Not here: verify-case red/check (3c), sync deletion incl. gate.example.sh (row 6), docs (row 7), release-gate template text (row 6/7). complex (design). Depends on row 2 (fixture is version 2 and must pass actl's check) and row 3a (adapter, done --result, config map). Row 3c starts after this lands. Triage r1 (objection 'tests.* from AC_ROOT'): keep it. tests.* (incl. tests.unittest.map) is read from AC_ROOT/board/config.json for every project, A included (design C2, section 4 table; 3a's adapter settings() already does this). No dogfood special case reading AC_CODE_ROOT's config. Known, accepted consequence: an A ticket's own new map rows take effect only after it lands, so its branch gate may print 'unmapped <file>' / rc 3 for new files (land runs --full, which does not use the map). Not a defect of this ticket; do not change testiface/adapter for it.",
   "decision_refs": [
     "D-071",
     "D-072",
@@ -48,5 +99,298 @@
   ],
   "worker": {
     "timeout_seconds": 7200
+  },
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 176,
+      "tokens_out": 139924,
+      "cache_write": 345984,
+      "cache_read": 23670772,
+      "wall_seconds": 3015,
+      "outcome": "objection",
+      "run_id": "20261025-015919-26671",
+      "session_id": "821bb51a-fca4-48e1-b952-5ed73f12864b",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-25T02:49:34+00:00"
+    },
+    {
+      "role": "opener",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 12,
+      "tokens_out": 3976,
+      "cache_write": 35684,
+      "cache_read": 307972,
+      "wall_seconds": 50,
+      "outcome": "accepted",
+      "run_id": "20261025-015919-26671",
+      "session_id": "5260a3b6-6423-5527-bed8-9d3211ae718f",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-25T02:52:20+00:00"
+    },
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 54,
+      "tokens_out": 17956,
+      "cache_write": 86341,
+      "cache_read": 2309667,
+      "wall_seconds": 200,
+      "outcome": "handed-in",
+      "run_id": "20261025-015919-26671",
+      "session_id": "2f5318b1-82d0-4654-9e9f-f93e318c16fe",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-25T02:55:40+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 190,
+      "tokens_out": 144649,
+      "cache_write": 353958,
+      "cache_read": 26317380,
+      "wall_seconds": 115,
+      "outcome": "handed-in",
+      "run_id": "20261025-015919-26671",
+      "session_id": "821bb51a-fca4-48e1-b952-5ed73f12864b",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-25T02:55:41+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 40,
+      "tokens_out": 11132,
+      "cache_write": 25338,
+      "cache_read": 1810895,
+      "wall_seconds": 1703,
+      "outcome": "handed-in",
+      "run_id": "20261025-030535-27100",
+      "session_id": "1680dcfd-e9e9-4a35-ac08-fbd7c4b45f50",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-25T03:56:46+00:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 26,
+      "tokens_out": 10447,
+      "cache_write": 90658,
+      "cache_read": 1073962,
+      "wall_seconds": 112,
+      "outcome": "pass",
+      "run_id": "20261025-035646-26598",
+      "session_id": "5260a3b6-6423-5527-bed8-9d3211ae718f",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-25T04:18:23+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1,
+      "outcome": "fail",
+      "run_id": "20261025-041854-26764",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-25T04:18:55+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2037,
+      "outcome": "fail",
+      "run_id": "20261025-042022-26962",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-25T04:54:19+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 40,
+      "tokens_out": 11204,
+      "cache_write": 48374,
+      "cache_read": 1304761,
+      "wall_seconds": 1603,
+      "outcome": "handed-in",
+      "run_id": "20261025-042022-26962-gate",
+      "session_id": "f40d0575-5501-4cec-b3c9-ff8d5e587d66",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-25T05:21:04+00:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 16,
+      "tokens_out": 4718,
+      "cache_write": 37862,
+      "cache_read": 429637,
+      "wall_seconds": 54,
+      "outcome": "pass",
+      "run_id": "20261025-052104-4878",
+      "session_id": "5260a3b6-6423-5527-bed8-9d3211ae718f",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-25T05:42:20+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2150,
+      "outcome": "pass",
+      "run_id": "20261025-054259-5565",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-25T06:18:50+00:00"
+    }
+  ],
+  "objections": [
+    {
+      "category": "ticket-wrong",
+      "body": "tests.* (incl. tests.unittest.map) is read from AC_ROOT/board/config.json, so an A ticket that edits its own map rows is gated with main's map until it lands (map() used to run from the worktree's gate.sh); decide whether A's dogfood case (realpath AC_ROOT == AC_HOME) should read tests from AC_CODE_ROOT's config, or accept it",
+      "evidence": "../agent-control-wt/fix-t162/round1/EVIDENCE-round1-objection.md",
+      "owner": "main",
+      "disposition": "accepted",
+      "follow_up": "",
+      "triage": {
+        "verdict": "accepted",
+        "reason": "ticket is right as written — tests.* is read from AC_ROOT for every project, A included; the delay before a branch's own map rows take effect is a known, accepted cost, now written into the ticket",
+        "round": 1,
+        "by": "auto-fix"
+      }
+    }
+  ],
+  "branch": "t162",
+  "gate": {
+    "rc": 0,
+    "sha": "e5cdbcd93ecf1bcd20af5acf87986bcbbde9ab75",
+    "run_id": "20261025-052104-4878",
+    "at": "2026-10-25T05:41:25+00:00"
+  },
+  "repair_round": 2,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "681488187d3e9ae5db6c953334efea4e0a9891ae",
+    "note": "reports/t162/20261025-052104-4878/REVIEW.md",
+    "at": "2026-10-25T06:18:50+00:00"
+  },
+  "landed_sha": "681488187d3e9ae5db6c953334efea4e0a9891ae",
+  "cost_total": {
+    "calendar_seconds": 47620,
+    "wall_seconds": 11040,
+    "runs": 11,
+    "worker_rounds": 2,
+    "objections": 1,
+    "by_role": {
+      "worker": {
+        "runs": 4,
+        "wall_seconds": 6436,
+        "tokens_in": 446,
+        "tokens_out": 306909,
+        "cache_write": 773654,
+        "cache_read": 53103808,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "objection": 1,
+          "handed-in": 3
+        }
+      },
+      "opener": {
+        "runs": 1,
+        "wall_seconds": 50,
+        "tokens_in": 12,
+        "tokens_out": 3976,
+        "cache_write": 35684,
+        "cache_read": 307972,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "accepted": 1
+        }
+      },
+      "verifier": {
+        "runs": 1,
+        "wall_seconds": 200,
+        "tokens_in": 54,
+        "tokens_out": 17956,
+        "cache_write": 86341,
+        "cache_read": 2309667,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 1
+        }
+      },
+      "reviewer": {
+        "runs": 2,
+        "wall_seconds": 166,
+        "tokens_in": 42,
+        "tokens_out": 15165,
+        "cache_write": 128520,
+        "cache_read": 1503599,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "pass": 2
+        }
+      },
+      "land": {
+        "runs": 3,
+        "wall_seconds": 4188,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 3,
+        "outcomes": {
+          "fail": 2,
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-25T06:18:50+00:00"
   }
 }

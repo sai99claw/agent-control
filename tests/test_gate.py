@@ -260,8 +260,8 @@ class GateSh(Sandbox):
         self.git("commit", "-q", "-m", "刪掉 test_x")
         done = self.gate("--branch")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        line = [l for l in done.stdout.splitlines() if l.startswith("gate: python3 -m unittest")]
-        self.assertEqual(line, ["gate: python3 -m unittest test_land"])
+        line = [l for l in done.stdout.splitlines() if l.startswith("gate: run")]
+        self.assertEqual(line, ["gate: run test_land"])
         self.assertEqual(self.ran(), ["test_land"])
 
     # ----------------------------------------------- 對不到任何模組:要出聲
@@ -333,8 +333,8 @@ class GateSh(Sandbox):
     def test_full_is_red_when_a_test_is_red(self):
         """判綠先寫檔再讀退出碼,不用 `cmd | tail` —— 管線的退出碼是右邊那一支的。
 
-        **變異**:把 `--full` 那一段改成 `python3 -m unittest … | tail -5` 並回
-        `$?` → 這一條紅(它會判成綠)。
+        **變異**:把 `--full` 那一段的 `run_tests full full` 改成 `run_tests full full | tail -5`
+        並回 `$?` → 這一條紅(它會判成綠)。
         """
         self.write("tests/test_zz_red.py", FAILING)
         done = self.gate("--full")
@@ -1101,8 +1101,12 @@ class A5TheGateSaysWhichA(Sandbox):
 
     def setUp(self):
         super().setUp()
+        # 每支一條綠的(#162):testiface 起,一個載不出任何測試的 id 是 error 列、不是綠
+        # (adapter 的 §5.5,「Ran 0」與「都過了」不再長得一樣)。這一組問的是事件與鍵,不是 0 條。
         for name in ("test_ticket", "test_event", "test_memory", "test_no_project_names"):
-            self.write(os.path.join("tests", "%s.py" % name), "import unittest\n")
+            self.write(os.path.join("tests", "%s.py" % name),
+                       "import unittest\n\n\nclass T(unittest.TestCase):\n"
+                       "    def test_ok(self):\n        pass\n")
 
     def row(self, kind):
         rows = [row for row in self.events() if row["kind"] == kind]

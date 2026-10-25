@@ -25,6 +25,7 @@
     "scripts/session-hook.sh",
     "scripts/status.py",
     "scripts/sync-to-project.sh",
+    "scripts/testiface.py",
     "scripts/ticket.py",
     "scripts/transcript-cost.py",
     "scripts/verify-case.py",
@@ -71,6 +72,8 @@
     "tests/test_status_67.py",
     "tests/test_sync_to_project.py",
     "tests/test_templates.py",
+    "tests/test_testiface.py",
+    "tests/test_testiface_cases.py",
     "tests/test_ticket.py",
     "tests/test_verify_case.py",
     "tests/test_verify_runner.py"

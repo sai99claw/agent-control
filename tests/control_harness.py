@@ -23,6 +23,14 @@ A 是一支裝好的工具:專案 clone A、在原地跑,腳本**不住在專案
 `AC_TEST_SCRIPTS` 的上一層)跑,環境帶 `AC_HOME` 與 `AC_ROOT=<沙盒>`、cwd 是沙盒 ——
 `ac_env()` 是唯一設它們的地方。要換掉某一支腳本(閘門的替身、auto-fix 的替身)的案例拿
 `own_ac_home()`:每個測試一份 `<home>/ac-home` 的 A 複本,`AC_HOME` 指過去。
+
+## 兩種沙盒(D-071 §8 C11,#162)
+預設是手搭的那一份;`fixture = True`(或環境 `AC_TEST_FIXTURE=1`,整組換)改從
+`tests/fixtures/project/`(commit 進來的最小專案:`tests.*` 指向 shell 寫的 command adapter、
+假的 `browser:*` runner、`tests/test_ok.py`、`demo/tests/test_demo.py`、一個標籤的 `verify/`)
+起沙盒,手搭的那幾樣(範本、角色表、`verify/example`、`.gitignore`)照樣補上。設定是
+`DEFAULT_CONFIG` 蓋上 fixture 的 `board/config.json`:`tests` 用 fixture 的命令與
+`tests.unittest.roots`,`map` / `base` 仍是 A 的(手搭那一組的案例問的是 A 的對照表)。
 """
 
 import glob
@@ -40,6 +48,20 @@ SCRIPTS = os.environ.get("AC_TEST_SCRIPTS", os.path.join(ROOT, "scripts"))
 AC_HOME = os.path.dirname(os.path.abspath(SCRIPTS))
 BOARD_DIR = os.environ.get("AC_TEST_BOARD", os.path.join(ROOT, "board"))
 TIMEOUT = 180
+# commit 進來的 fixture 專案(#162):`fixture = True` 的沙盒從它起。
+FIXTURE_PROJECT = os.path.join(TESTS, "fixtures", "project")
+
+
+def a_unittest_tests():
+    """A 自己 `board/config.json` 的 `tests.unittest`(對照表與基礎組,#161 起是設定資料):
+    手搭沙盒的 `tests` 用同一份 —— gate 的案例問「這個檔挑到哪幾支」問的就是 A 的那一份。"""
+    try:
+        with open(os.path.join(ROOT, "board", "config.json"), encoding="utf-8") as handle:
+            unit = (json.load(handle).get("tests") or {}).get("unittest") or {}
+    except (OSError, ValueError, AttributeError):
+        unit = {}
+    return {key: unit[key] for key in ("roots", "base", "map") if key in unit}
+
 # `review.sh` 逐字讀它(#42):沙盒少了它,覆核在「派工文組不出來」那一步就停,
 # 而那與「reviewer 沒交件」在收件匣上是兩頁不同的東西。`auto-fix.sh` 的驗證者派工文
 # 也是範本填出來的(#51):少了它,派工文裡只剩一行「範本找不到」。
@@ -158,6 +180,8 @@ DEFAULT_CONFIG = {
                              "scripts/sync-to-project.sh"],
                    "dirs": [],
                    "patterns": [r"os\." + "kill", "kill" + "pg", "p" + "kill", "kill" + " -"]},
+    # 測試介面(D-071 §4,#162):五個命令都用內建(`scripts/testiface.py`),對照表是 A 的。
+    "tests": {"adapter": "unittest", "unittest": a_unittest_tests()},
 }
 
 # 絆線(#70):每個沙盒的 PATH 最前面放這一支 `claude`。**替身漏了哪一條路**,那條路
@@ -258,6 +282,7 @@ class Sandbox(unittest.TestCase):
 
     gate_stub = None          # None = 用真的 scripts/gate.sh
     config_extra = None
+    fixture = None            # None = 看 `AC_TEST_FIXTURE`;True = 從 tests/fixtures/project 起
 
     def setUp(self):
         self.home = tempfile.mkdtemp()
@@ -280,6 +305,11 @@ class Sandbox(unittest.TestCase):
                     os.path.join("memory", "model"), os.path.join("code-map", "cards")):
             os.makedirs(os.path.join(self.repo, rel))
 
+        use_fixture = (self.fixture if self.fixture is not None
+                       else os.environ.get("AC_TEST_FIXTURE") == "1")
+        if use_fixture:
+            shutil.copytree(FIXTURE_PROJECT, self.repo, dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         if self.gate_stub:
             self.stub_script("gate.sh", self.gate_stub)
         os.makedirs(os.path.join(self.repo, "templates"))
@@ -287,7 +317,13 @@ class Sandbox(unittest.TestCase):
             shutil.copy(os.path.join(ROOT, "templates", name),
                         os.path.join(self.repo, "templates", name))
 
-        conf = dict(DEFAULT_CONFIG)
+        conf = json.loads(json.dumps(DEFAULT_CONFIG))
+        tags = VERIFY_TAGS
+        if use_fixture:
+            conf = self.fixture_config(conf)
+            with open(os.path.join(FIXTURE_PROJECT, "verify", "TAGS.md"), encoding="utf-8") as handle:
+                tags += "".join(line + "\n" for line in handle.read().splitlines()
+                                if line.startswith("- ") and line.split()[1] not in tags)
         if self.config_extra:
             conf.update(self.config_extra)
         self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
@@ -300,7 +336,7 @@ class Sandbox(unittest.TestCase):
         self.write(os.path.join("verify", "__init__.py"), "")
         self.write(os.path.join("verify", "example", "__init__.py"), "")
         self.write(os.path.join("verify", "example", "test_example.py"), VERIFY_CASE)
-        self.write(os.path.join("verify", "TAGS.md"), VERIFY_TAGS)
+        self.write(os.path.join("verify", "TAGS.md"), tags)
 
         self.git("init", "-q", "--bare", self.origin, cwd=self.home)
         self.git("init", "-q")
@@ -310,6 +346,20 @@ class Sandbox(unittest.TestCase):
         self.git("commit", "-q", "-m", "沙盒的第一個 commit")
         self.git("remote", "add", "origin", self.origin)
         self.git("push", "-q", "origin", "main")
+
+    @staticmethod
+    def fixture_config(conf):
+        """`conf`(手搭的預設)蓋上 fixture 的 `board/config.json`;`tests.unittest` 的
+        `map` / `base` 留 A 的,其餘(命令、roots、逾時)用 fixture 的。"""
+        with open(os.path.join(FIXTURE_PROJECT, "board", "config.json"), encoding="utf-8") as handle:
+            mine = json.load(handle)
+        tests = dict(mine.get("tests") or {})
+        unit = dict(conf["tests"].get("unittest") or {})
+        unit.update(tests.get("unittest") or {})
+        tests["unittest"] = unit
+        conf.update(mine)
+        conf["tests"] = tests
+        return conf
 
     # ------------------------------------------------------------ A 在哪
 
