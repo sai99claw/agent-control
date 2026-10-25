@@ -24,19 +24,24 @@ False:要嘛把案例寫成不依賴新符號,要嘛在票裡寫明為什麼這�
 
 ## 紅的四種形狀(D-020)
 `red` 與 `check` 共用同一張分類表(`docs/DESIGN-VERIFY-CASES.md` §三)。**看起來紅、
-其實是還沒接上**的紅有三種,而它們與「驗到了」一樣讓 unittest 回非零:
+其實是還沒接上**的紅有三種,而它們與「驗到了」一樣讓回歸命令回非零:
 
-| traceback 最後一個 frame 與例外型別 | 算不算 | 印什麼 |
+| result.json 那一列(fail / error)| 算不算 | 印什麼 |
 |---|---|---|
-| `AssertionError`(含 `self.fail`),frame 在 `verify.files` 之一 | **算** | `紅 <案例>: <第一行>`,並寫進 `baseline.red_lines` |
-| `ImportError` / `ModuleNotFoundError` / `_FailedTest` | 不算 | `import 失敗(不算紅)` |
-| 其他例外(`AttributeError` / `NameError` / `FileNotFoundError` / `TypeError` …),frame 在案例檔 | 不算 | `紅在缺符號(不算紅):改成先 assert 它存在` |
-| frame 不在案例檔(產品碼或既有測試炸了) | 不算 | `紅在別處(不算紅)` |
+| `exception` 是 `AssertionError`(或名字以它結尾的子類別),`file` 在 `verify.files` 之一 | **算** | `紅 <id>: <message>`,並寫進 `baseline.red_lines` |
+| `exception` 是 `ImportError` / `ModuleNotFoundError`,或 `message` 以 `Failed to import` 起頭 | 不算 | `import 失敗(不算紅)` |
+| 其他例外(`AttributeError` / `NameError` / `FileNotFoundError` / `TypeError` …),`file` 在案例檔 | 不算 | `紅在缺符號(不算紅):改成先 assert 它存在` |
+| `file` 不在案例檔,或例外是從案例檔那一格**更深處**(產品碼)丟出來的 | 不算 | `紅在別處(不算紅)` |
+| `exception` 是 `null` | **量不到** | rc 2、不寫票 —— 分不出是哪一種紅 |
 
-問的是 **traceback 本體**的最後一個 frame,不是輸出裡最後一個長得像 frame 的東西:
-案例用 `subprocess` 跑工具、把工具的輸出當 `assertEqual` 的訊息時,那份輸出裡的整段
-traceback 跟在例外那一行後面 —— 照字面數會指到工具裡的檔,一條算數的紅就成了「紅在
-別處」(#31)。`unittest` 印在 `FAIL:` 標頭下面那一行是方法 docstring,也不是 traceback。
+D-071 C7(#163):案例不再由這一支自己 `-m unittest` 跑、再讀 log 的字;每一份副本各叫一次
+`scripts/testiface.py regression --case <檔>…`(`AC_CODE_ROOT` = 那一份副本),分類只讀它交回的
+`result.json`。log(`logs/<baseline|candidate>.log`)照舊留在 out dir 當證據,但不再是判準。
+
+`file` 是 adapter 記的「最後一個在測試檔裡的 frame」:產品碼在案例那一行底下炸掉時,`file`
+仍是案例檔。所以「紅在別處」另外問一次那一列自己的 `traceback`:案例檔那一格後面、例外那一行
+之前,還有沒有更深的 frame(`raised_below`)。例外那一行之後的字是訊息 —— 案例把工具的輸出
+當 `assertEqual` 的訊息時,那份輸出裡的 traceback 在那裡,不算(#31)。
 
 `skip` 另外數,兩邊都不歸。**三類不算的紅任一出現就 rc=1 而且不寫票** —— 同 #22
 「量不到不動票」:「驗紅沒過」與「這一趟還沒接上」在票面上長得一樣,而下一步差很多。
@@ -62,7 +67,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import unittest
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -74,33 +78,27 @@ import verify as verifylib  # noqa: E402
 TAGS_REL = os.path.join("verify", "TAGS.md")
 TAGS_DIR_REL = os.path.join("verify", "TAGS.d")
 TAG_LINE = re.compile(r"^- `([a-z0-9-]+)`\s*(.*)$")
-RAN = re.compile(r"^Ran (\d+) test")
-SKIPPED = re.compile(r"skipped=(\d+)")
-IMPORT_MARKS = ("ImportError", "ModuleNotFoundError", "_FailedTest",
-                "cannot import name", "No module named")
-# 「紅在缺符號」那一類最常見的四個名字。**分類不靠這份名單**:frame 在案例檔而例外
+IMPORT_EXCS = ("ImportError", "ModuleNotFoundError")
+IMPORT_MESSAGE = "Failed to import"
+# 「紅在缺符號」那一類最常見的四個名字。**分類不靠這份名單**:`file` 在案例檔而例外
 # 不是 `AssertionError` 就一律算這一類 —— 名單漏一個型別的那一刻,那條紅會被算成
 # 「驗到了」,而這張表擋的就是那件事。名單只進訊息,讓人看得出在說哪一族。
 MISSING_SYMBOL_EXCS = ("AttributeError", "NameError", "FileNotFoundError", "TypeError")
-# traceback 最後一個 frame 之後那一行 `SomeError: 訊息`:行首不縮排、名字後面直接是
-# 冒號或行尾。`Traceback (most recent call last):` 與 `During handling …` 進不來
-# (名字後面不是冒號),`assertEqual` 的 diff 也進不來(以 `- ` / `+ ` 開頭)。
-EXC_LINE = re.compile(r"^([A-Za-z_][A-Za-z0-9_.]*)(?::\s?(.*))?$")
-# 例外那一行之後還有 traceback 的**唯一**合法理由:鏈起來的例外。認的是這兩句標記,
-# 不是「又出現一段 `Traceback (most recent call last):`」—— 案例把工具的輸出當
-# `assertEqual` 的訊息時,訊息裡貼著的那一份也長那樣(#31)。
-CHAIN_MARKS = ("During handling of the above exception",
-               "The above exception was the direct cause")
-# 鏈的標記是 unittest 緊接著印的:例外那一行、空行、標記、空行。往下看三行就夠 ——
-# 再遠就會掃進訊息本文,而那正是這一條要擋的東西。
-CHAIN_LOOKAHEAD = 3
-# 一趟 unittest 的時限(秒):`board/config.json` 的 `verify_case.timeout_seconds`,
+# 一趟案例的時限(秒):`board/config.json` 的 `verify_case.timeout_seconds`,
 # 沒設就是這個數(#156)。雲端容器裡整支模組跑不完 900 秒,而寫死的數字只能改碼。
 TIMEOUT = 900
 TIMEOUT_KEY = "verify_case.timeout_seconds"
+# testiface 量不到時一律 rc 2(D-071 C6);逾時那一種它在 stderr 說這一句。
+UNMEASURED_RC = 2
+TIMEOUT_SAYS = "unmeasured: timeout"
 
 
-class CaseTimeout(Exception):
+class CaseUnmeasured(Exception):
+    """一趟案例**沒量到**:testiface rc 2、result.json 缺或壞、一列 `exception` 是 null(#163)。
+    不是紅也不是綠 —— 呼叫者走 `unmeasured()`,不寫票。"""
+
+
+class CaseTimeout(CaseUnmeasured):
     """一趟案例跑超過時限 —— 那一趟**沒量到**,不是紅也不是綠(#156)。"""
 
 
@@ -117,63 +115,6 @@ def module_of(rel):
     return rel[:-3].replace(os.sep, ".").replace("/", ".")
 
 
-def parse_reds(log_path):
-    """一份 log → 一份紅榜:就是 `status.parse_failures`,**不再自己先刪說明行**。
-
-    `unittest` 在 `FAIL:` 標頭下印的方法 docstring 第一行,#31 在這裡餵進去之前拿掉;
-    #34 把那一步搬回 `status.parse_failures` 本身 —— 一份紅榜只該有一個解析器,兩份會
-    各自往不同方向漂,而閘門寫的 `status.json` 當時就是沒修到的那一份(G16)。
-    """
-    return status.parse_failures(log_path)
-
-
-def traceback_end(body):
-    """一段 traceback 文字 → `(最後一個 frame 的 index, 例外那一行的 index)`,沒有就 -1。
-
-    「最後一個 frame」指的是 **traceback 本體**的最後一個,不是這段文字裡最後一個長得
-    像 frame 的東西:案例用 `subprocess` 跑工具、再把工具的輸出當 `assertEqual` 的訊息
-    時,那份輸出裡的整段 traceback 會跟在例外那一行**後面**。照字面取最後一個,指到的
-    是工具裡的檔,於是一條紅在案例檔自己斷言的紅被算成「紅在別處」(#31)。
-
-    鏈起來的例外要跟到最後一段(算數的是最後被丟出來的那一個),而**鏈是有標記的**:
-    看到 `CHAIN_MARKS` 才往下一段數,沒看到就停在這裡。
-    """
-    frame, out, index = -1, (-1, -1), 0
-    while index < len(body):
-        line = body[index]
-        if status.FILE_LINE.match(line):
-            frame = index
-        elif frame >= 0 and line.strip() and EXC_LINE.match(line):
-            out = (frame, index)
-            window = body[index + 1:index + 1 + CHAIN_LOOKAHEAD]
-            if not any(mark in text for text in window for mark in CHAIN_MARKS):
-                return out
-            frame = -1
-        index += 1
-    return out
-
-
-def red_shape(row):
-    """一筆紅 → `(例外型別, 紅訊息的第一行, 最後一個 frame 的檔路徑)`。
-
-    型別與 frame 讀的是**同一段** traceback 本體(`traceback_end`):兩邊各讀各的那
-    一刻,「型別是 AssertionError」與「frame 在案例檔」會說的是兩個不同的例外。認不出
-    型別時第一行退回「最後一行非空白」—— 空字串會讓 `red_lines` 只剩案例名,而主線
-    覆核時要看的就是那句話。
-    """
-    body = (row.get("excerpt") or "").splitlines()
-    frame, exc_at = traceback_end(body)
-    where = ""
-    if frame >= 0:
-        spot = status.FILE_LINE.match(body[frame])
-        where = spot.group(1) if spot else ""
-    if exc_at >= 0:
-        line = body[exc_at].strip()
-        return EXC_LINE.match(body[exc_at]).group(1).rsplit(".", 1)[-1], line, where
-    tail = [line for line in body if line.strip()]
-    return "", tail[-1].strip() if tail else "", where
-
-
 def frame_in(where, rels):
     """traceback 裡的檔路徑是絕對的(副本在 tempdir 裡),票面的是 repo 相對路徑 ——
     直接比會**一條都對不上**,而「一條都在別處」與「一條都沒紅」的下一步不一樣。"""
@@ -185,28 +126,62 @@ def frame_in(where, rels):
     return False
 
 
+def raised_below(row):
+    """這一列的例外是不是從 `file` 那一格**更深處**丟出來的(產品碼、被叫的函式)。
+
+    讀的是那一列自己的 `traceback`:找 `file` / `line` 那一個 frame 的**最後**一次出現(鏈起來
+    的例外,算數的是最後一段),往下看到的第一個不縮排的行是例外那一行 —— 在那之前又出現
+    `File "…"` 就是更深的 frame。例外那一行之後是訊息,不看(#31)。沒有 `traceback` 時
+    答不出來,照 `file` 說的算(那一格本來就是命令說「紅在這個檔」)。
+    """
+    text = row.get("traceback")
+    if not isinstance(text, str) or not row.get("file"):
+        return False
+    lines = text.splitlines()
+    at = -1
+    for index, line in enumerate(lines):
+        spot = status.FILE_LINE.match(line)
+        if spot and frame_in(spot.group(1), [row["file"]]) \
+                and str(spot.group(2)) == str(row.get("line")):
+            at = index
+    if at < 0:
+        return False
+    for line in lines[at + 1:]:
+        if status.FILE_LINE.match(line):
+            return True
+        if line.strip() and not line[:1].isspace():
+            return False
+    return False
+
+
 def shapes(rows, rels):
-    """一份紅榜 → 四種形狀。**不准揉成一句「N 條紅」**:揉起來的那一刻,「驗到了」與
-    「還沒接上」長得一樣(`docs/DESIGN-VERIFY-CASES.md` §三)。"""
-    imports = [row for row in rows
-               if any(mark in (row["case"] + row["excerpt"]) for mark in IMPORT_MARKS)]
+    """result.json 的 ids → 四種形狀 + skip 數。**不准揉成一句「N 條紅」**:揉起來的那一刻,
+    「驗到了」與「還沒接上」長得一樣(`docs/DESIGN-VERIFY-CASES.md` §三)。
+
+    fail / error 一列的 `exception` 是 null → `CaseUnmeasured`:那一列說不出是哪一種紅,
+    猜成任何一類都是一個長得像判決的猜測(§5.5「拿不到就當空的」)。
+    """
     out = {"red": [], "red_lines": [], "import_failures": [], "missing_symbol": [],
-           "elsewhere": []}
+           "elsewhere": [], "skipped": 0}
     for row in rows:
-        if row in imports:
-            out["import_failures"].append(
-                "%s: %s" % (row["case"], row["excerpt"].splitlines()[-1]
-                            if row["excerpt"] else ""))
+        state = row.get("status")
+        if state == "skip":
+            out["skipped"] += 1
             continue
-        exc, first, where = red_shape(row)
-        label = "%s: %s" % (row["case"], first)
-        if not frame_in(where, rels):
+        if state not in ("fail", "error"):
+            continue
+        exc = row.get("exception")
+        label = "%s: %s" % (row["id"], row.get("message") or "")
+        if not exc:
+            raise CaseUnmeasured(
+                "unmeasured: %s 是 %s,但 exception 是 null —— 分不出是哪一種紅(%s)"
+                % (row["id"], state, row.get("message") or "沒有 message"))
+        if exc in IMPORT_EXCS or str(row.get("message") or "").startswith(IMPORT_MESSAGE):
+            out["import_failures"].append(label)
+        elif not frame_in(row.get("file"), rels) or raised_below(row):
             out["elsewhere"].append(label)
-        elif row["kind"] == "FAIL" or exc.endswith("AssertionError"):
-            # unittest 只把 `failureException`(= `AssertionError`,`self.fail` 也是它)
-            # 報成 `FAIL:`,其他例外一律 `ERROR:` —— 所以這一格問的就是票面那一句
-            # 「例外是 AssertionError」,而不是一份型別名單。
-            out["red"].append(row["case"])
+        elif exc.endswith("AssertionError"):
+            out["red"].append(row["id"])
             out["red_lines"].append(label)
         else:
             out["missing_symbol"].append(label)
@@ -258,42 +233,60 @@ def case_timeout(root):
     return TIMEOUT
 
 
-def run_cases(where, rels, log_path, timeout=TIMEOUT):
-    """在 `where` 這份副本裡跑這幾個案例檔,回傳一份可以比對的結果。
+def run_cases(where, rels, log_path, timeout=TIMEOUT, mode="verify-check"):
+    """在 `where` 這份副本裡跑這幾個案例檔,回傳一份可以比對的結果(D-071 C7,#163)。
 
-    **原始輸出存檔**,不只回傳摘要:少了原文,下一個人要重現這一趟只能重跑一次。
-    超過 `timeout` 秒丟 `CaseTimeout`(逾時前印出的那一段照樣存進 `log_path`)。
-    `AC_CODE_ROOT` 設成這份副本(D-071 §1,#159):案例裡再叫的 `verify.py` 量的是它,
-    不是呼叫端 cwd 的那棵樹(副本不是 git 樹,cwd 規則在那裡答不出來)。
+    跑的是 `scripts/testiface.py regression --case <檔>…`:專案的 `tests.regression`,沒宣告
+    就是內建的 `verify.py --case … --result`。`AC_CODE_ROOT` 設成這份副本(D-071 §1):命令
+    量的是它,不是呼叫端 cwd 的那棵樹。`AC_TEST_OUT` 是 `log_path` 去掉 `.log` 的目錄(一份
+    副本一個,跑之前清空 —— testiface 只收空的),`AC_TEST_TIMEOUT` 是 `timeout`,testiface
+    照它停下整個行程群組。分類只讀 `result.json`;`<command>.log` 抄成 `log_path` 當證據。
+
+    逾時丟 `CaseTimeout`(逾時前的輸出照樣在 `log_path`);其他量不到(rc 2、rc 86、rc 3、
+    result.json 讀不回來、一列 `exception` 是 null)丟 `CaseUnmeasured`。
     """
     mods = [module_of(rel) for rel in rels]
-    env = dict(os.environ, AC_CODE_ROOT=os.path.abspath(where))
+    out_dir = log_path[:-len(".log")] if log_path.endswith(".log") else log_path + ".d"
+    shutil.rmtree(out_dir, ignore_errors=True)
+    env = dict(os.environ, AC_ROOT=event.repo_root(), AC_CODE_ROOT=os.path.abspath(where),
+               AC_TEST_OUT=out_dir, AC_TEST_MODE=mode, AC_TEST_TIMEOUT=str(timeout))
+    argv = [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                         "testiface.py"), "regression"]
+    for rel in rels:
+        argv += ["--case", rel]
+    expired = False
     try:
-        done = subprocess.run([sys.executable, "-m", "unittest", "-v", *mods],
-                              cwd=where, env=env, capture_output=True, text=True,
-                              timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
-        partial = "".join(part.decode("utf-8", "replace") if isinstance(part, bytes)
-                          else part for part in (exc.stdout, exc.stderr) if part)
-        with open(log_path, "w", encoding="utf-8") as handle:
-            handle.write(partial)
+        # testiface 自己照 `AC_TEST_TIMEOUT` 停下命令;這裡多給的一分鐘是煞車,不是時限。
+        done = subprocess.run(argv, cwd=where, env=env, capture_output=True, text=True,
+                              timeout=timeout + 60)
+        rc, said = done.returncode, (done.stderr or "")
+    except subprocess.TimeoutExpired:
+        rc, said, expired = None, "", True
+    text = ""
+    command_log = os.path.join(out_dir, "regression.log")
+    if os.path.exists(command_log):
+        with open(command_log, encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+    with open(log_path, "w", encoding="utf-8") as handle:
+        handle.write(text + said)
+    if expired or (rc == UNMEASURED_RC and TIMEOUT_SAYS in said):
         raise CaseTimeout("案例跑超過 %d 秒(%s)被中止 —— 時限在 board/config.json 的 %s;"
                           "逾時前的輸出 -> %s"
-                          % (timeout, " ".join(mods), TIMEOUT_KEY, log_path)) from None
-    text = (done.stdout or "") + (done.stderr or "")
-    with open(log_path, "w", encoding="utf-8") as handle:
-        handle.write(text)
-    out = shapes(parse_reds(log_path), rels)
-    count, skipped = 0, 0
-    for line in text.splitlines():
-        hit = RAN.match(line)
-        if hit:
-            count = int(hit.group(1))
-        hit = SKIPPED.search(line)
-        if hit:
-            skipped = int(hit.group(1))
-    out.update({"rc": done.returncode, "cases": count, "skipped": skipped,
-                "log": log_path})
+                          % (timeout, " ".join(mods), TIMEOUT_KEY, log_path))
+    if rc not in (0, 1):
+        raise CaseUnmeasured("unmeasured: testiface regression rc %s(%s)%s -> %s"
+                             % (rc, " ".join(mods),
+                                ":" + said.strip().splitlines()[-1] if said.strip() else "",
+                                log_path))
+    try:
+        with open(os.path.join(out_dir, "result.json"), encoding="utf-8") as handle:
+            rows = json.load(handle)["ids"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        # testiface rc 0/1 已經驗過它;讀不回來還是量不到,不是零條紅。
+        raise CaseUnmeasured("unmeasured: %s 讀不回來(%s)" % (
+            os.path.join(out_dir, "result.json"), exc)) from None
+    out = shapes(rows, rels)
+    out.update({"rc": rc, "cases": len(rows), "log": log_path})
     return out
 
 
@@ -520,8 +513,8 @@ def cmd_red(args):
     try:
         try:
             run = run_cases(base_dir, rels, os.path.join(logs, "baseline.log"),
-                            case_timeout(root))
-        except CaseTimeout as exc:
+                            case_timeout(root), "verify-red")
+        except CaseUnmeasured as exc:
             return unmeasured(args.ticket, str(exc), ref, "red")
         sys.stdout.write("verify-case: #%s 案例 %d 個(乾淨基底 %s / %s)\n"
                          % (args.ticket, run["cases"], ref, base_sha[:12] or "無 sha"))
@@ -585,12 +578,14 @@ def cmd_check(args):
         return rc
 
     try:
-        # 兩趟各算各的時限:base 與 candidate 是兩次獨立的 unittest。
+        # 兩趟各算各的時限:base 與 candidate 是兩次獨立的 regression。
         timeout = case_timeout(root)
         try:
-            baseline = run_cases(base_dir, rels, os.path.join(logs, "baseline.log"), timeout)
-            cand = run_cases(candidate, rels, os.path.join(logs, "candidate.log"), timeout)
-        except CaseTimeout as exc:
+            baseline = run_cases(base_dir, rels, os.path.join(logs, "baseline.log"), timeout,
+                                 "verify-check")
+            cand = run_cases(candidate, rels, os.path.join(logs, "candidate.log"), timeout,
+                             "verify-check")
+        except CaseUnmeasured as exc:
             return unmeasured(args.ticket, str(exc), ref, "check")
 
         why = not_counted(baseline, "乾淨主線")

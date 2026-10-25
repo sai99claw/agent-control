@@ -38,7 +38,9 @@ stderr (the caller shows it). A reads decisions only from exit codes, `select`'s
 reason on stderr · 3 `select` / `regression` had nothing to select (the command's own rc 3).
 
 **Every "could not answer" is rc 2, never 0 and never 1** (§5.5): a timeout
-(`tests.timeout_seconds.<command>`, defaults 60/60/1800/3600/2700) is `unmeasured: timeout`;
+(`tests.timeout_seconds.<command>`, defaults 60/60/1800/3600/2700; a caller's `AC_TEST_TIMEOUT`
+that is a smaller positive integer wins — verify-case passes `verify_case.timeout_seconds` that
+way, #163) is `unmeasured: timeout`;
 `select` rc 0 with empty stdout; `run`/`full`/`regression` whose `result.json` is missing,
 invalid, `schema != 1`, has zero ids, ids other than the ones passed (`run`; a row id covers a
 passed id it equals or is nested under, as the adapter reports methods for a module id), a
@@ -105,6 +107,13 @@ def timeout_of(conf, command):
     if isinstance(value, int) and not isinstance(value, bool) and value > 0:
         return value
     return DEFAULT_TIMEOUTS[command]
+
+
+def caller_timeout():
+    """The caller's `AC_TEST_TIMEOUT` when it is a positive integer, else None. It can only
+    shorten the configured limit: an inherited value never stretches a command's own timeout."""
+    value = (os.environ.get("AC_TEST_TIMEOUT") or "").strip()
+    return int(value) if value.isdigit() and int(value) > 0 else None
 
 
 def code_root():
@@ -318,7 +327,10 @@ def main(argv):
     if out is None:
         say(why)
         return UNMEASURED
-    timeout = timeout_of(conf, command)
+    timeout, limit = timeout_of(conf, command), "tests.timeout_seconds.%s" % command
+    asked = caller_timeout()
+    if asked is not None and asked < timeout:
+        timeout, limit = asked, "the caller's AC_TEST_TIMEOUT"
     env = dict(os.environ)
     env.update({
         "AC_HOME": os.path.dirname(HERE), "AC_ROOT": root, "AC_CODE_ROOT": code,
@@ -340,8 +352,8 @@ def main(argv):
         sys.stderr.flush()
     source = "tests.%s" % command if declared else "built-in %s" % command
     if rc is None:
-        say("unmeasured: timeout — %s ran longer than %ds (tests.timeout_seconds.%s); "
-            "log %s" % (source, timeout, command, os.path.join(out, "%s.log" % command)))
+        say("unmeasured: timeout — %s ran longer than %ds (%s); "
+            "log %s" % (source, timeout, limit, os.path.join(out, "%s.log" % command)))
         return UNMEASURED
     if command == "preflight":
         if rc == GREEN:
