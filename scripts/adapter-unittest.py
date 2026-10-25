@@ -6,8 +6,9 @@
     AC_TEST_OUT=<dir> python3 scripts/adapter-unittest.py run test_event test_land.RefuseTest
     AC_TEST_OUT=<dir> python3 scripts/adapter-unittest.py full
 
-**One runner in A**: `status.py run-tests` used to own the in-process unittest run; it is now a thin
-shim over `run_suite` here (until row 3b deletes it). `EnvironmentResult` (statistical environment
+**One runner in A**: `status.py run-tests` used to own the in-process unittest run; it moved here
+and the shim is gone (#162: the gate calls `scripts/testiface.py`, whose built-in `select` / `run` /
+`full` is this file). `EnvironmentResult` (statistical environment
 suspects, `environment_fail_fast_threshold`) and `LogStream` moved here verbatim — the D-019 row shape
 (`suspect_row`, `parse_environment_suspects`) stays in `status.py`, which `status.py done` needs even
 in a copy that has no adapter next to it.

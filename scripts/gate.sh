@@ -49,10 +49,20 @@
 # **驗證者那一趟**(`stage=red`)的事,worker 修不動 —— 出聲、寫進 note,但不算這一輪
 # 的紅;票上那一格仍是 `ok:false`,`ticket.py close` 照樣擋著。
 #
+# ## 測試只走五個命令(D-071 C6 §4,#162)
+# 這一支不知道專案的測試長什麼樣:`scripts/testiface.py` 跑專案在 `board/config.json`
+# `tests.*` 宣告的命令(沒宣告 = 內建的 unittest adapter),閘門只讀退出碼、`select` 的
+# stdout 與 `result.json`。順序:硬擋 → `preflight`(rc 86 = 環境可疑、測試不跑;其他非零
+# = 2「preflight 本身壞了」)→ `select --mode branch|base`(改動檔一行一個餵進去;
+# `unmapped <檔>` 照舊走下面「對不到」那一段)→ `run <ids>` / `full` → 紅例 `run <id>` 單跑、
+# `run <全部 ids>` 整組重跑 → `regression --tag …` → 驗證者那一層。每一步的輸出在自己的
+# `AC_TEST_OUT`(有票:`reports/t<票號>/<run_id>/<步驟>/`;沒票:`<log>.out/<步驟>/`)。
+# 綠 = rc 0 **而且** result 驗過;量不到(逾時、result 壞、0 個 id……)= 2,不是紅也不是綠。
+#
 # ## 紅榜的處理順序:先環境 fail-fast、再 flake 判定(#7)
-# 測試由 `scripts/status.py run-tests` 跑(不再由這一支 shell 直接叫 unittest),它在
-# 同一個程序裡看每一條結果:同一引擎、同形訊息連紅達 `board/config.json` 的
-# `environment_fail_fast_threshold`(預設 8)就**中止那一段**、回 rc=86。
+# 內建 adapter 在同一個程序裡看每一條結果:同一引擎、同形訊息連紅達 `board/config.json` 的
+# `environment_fail_fast_threshold`(預設 8)就**中止那一段**、回 rc=86;專案自己的 `run`
+# 回 86 也一樣(rows 在 `result.json`)。
 #
 # 這一關擺在 flake 判定前面,理由是兩個:
 #   * 被中止的那一段紅榜本來就**不完整** —— 拿不完整的紅榜做 flake 判定,結論不成立。
@@ -91,13 +101,17 @@
 # 轉、自己叫(免得同一個綠派兩次覆核);`--full`(land 跑的那一發)與指定檔不觸發。
 # **閘門自己的 rc 不動**:覆核的結果看 review.sh 那一頁。
 #
-# **這一份是本 repo 自己的實作。** 別的專案把 `scripts/gate.sh` 換成自己的
-# (範本見 `scripts/gate.example.sh`),介面不變 —— `land.sh` 只認 `--full` 的
-# 退出碼,不認它跑了什麼。
+# **每個專案跑的都是這一份**(D-071):專案的知識只在 `tests.*` 命令裡(範本
+# `templates/project-tests.example.sh` + `templates/project-config.example.json`)。
 #
-# ## 對照表為什麼寫死在這裡
-# 誰改了對照表就是在改「哪些測試守哪些檔」這件事本身,要進 code review。自動推導
-# 出來的對照表沒有這一層。
+# ## 對照表住在設定裡(#161、#162)
+# 「哪些測試守哪些檔」是專案的 `select`;內建版讀 `tests.unittest.map`(A 自己的那一份在
+# A 的 `board/config.json`)。誰改了它就是在改這件事本身,要進 code review —— 它是設定
+# 資料,一樣進版控、一樣過覆核。自動推導出來的對照表沒有這一層。
+# `tests.*`(含這份對照表)一律從 **`AC_ROOT`** 的 `board/config.json` 讀,A 自己也一樣(D-071
+# C2,#162 開題者裁定):一張票在自己分支上新增的對照列**落地後才生效**,所以它的 `--branch`
+# 可能對新檔印 `unmapped` / 退 3(同票改了 tests/test_*.py 時由下面推得的那一手接住);
+# land 跑的 `--full` 不讀對照表。這是已接受的代價,不是缺口 —— 不要在這裡為 A 開特例。
 #
 # ## 對不到任何模組 → 出聲,而且非零
 # 前一個專案 2026-09-10 的第三次事故(那張票的原話:「這一條修的不是那三個缺口,
@@ -121,7 +135,6 @@ export AC_CONTROL_DIR=$AC
 ROOT=$(ac_code_root) || { echo "gate: $AC_NOT_IN_PROJECT" >&2; exit 2; }
 export AC_CODE_ROOT=$ROOT
 LOG=${AC_GATE_LOG:-$ROOT/gate.log}
-RERUN_LOG=$LOG.rerun
 VERIFY_LOG=${AC_VERIFY_LOG:-$ROOT/verify.log}
 SUSPECT_FILE=$LOG.env-suspect.json
 MAIN=main
@@ -129,111 +142,8 @@ ALL_ARGS="$*"
 
 mods=""
 unmapped=""
+files=""
 add() { for m in "$@"; do case " $mods " in *" $m "*) ;; *) mods="$mods $m" ;; esac; done; }
-miss() { unmapped="$unmapped $1"; }
-
-# 基礎組:契約層。票、事件、以及「這個 repo 裡不准出現專案名」那一條。
-BASE="test_ticket test_event test_memory test_no_project_names"
-
-# 檔 → 測試模組。越特定的規則越前面。
-map() {
-    f=$1
-    case "$f" in
-        # 這一份 diff 刪掉的測試檔不排進模組清單(#71 A3):unittest 對不存在的模組會報錯。
-        tests/test_*.py) [ -f "$ROOT/$f" ] && add "$(basename "$f" .py)" ;;
-        # 沙盒共用給每一支用,所以動它就是動全部。
-        # `ac_env()`(#159):AC_HOME / AC_ROOT 只在這裡設,test_actl 釘它。
-        tests/control_harness.py) add test_ticket test_event test_memory test_land \
-                                      test_gate test_heartbeat test_new_session \
-                                      test_board test_no_project_names \
-                                      test_status test_verify_case test_apply \
-                                      test_auto_fix test_inbox test_rules test_actl \
-                                      test_session_hook test_review test_verify_runner \
-                                      test_consolidate_memory ;;
-        # 入口(D-071 C1,#159):找根、指令表、version。
-        bin/actl) add test_actl test_project_config ;;
-        scripts/project_config.py) add test_project_config test_actl test_session_hook ;;
-        # `.gitignore` 決定「不准出現專案名」那一掃看得到哪些檔。
-        .gitignore) add test_no_project_names ;;
-        # ticket.py import event.py:動 event 的人要連票那一側一起跑。
-        scripts/event.py) add test_event test_ticket test_land test_actl ;;
-        # `agent-command`(依 model/tool 起什麼,#87)住在 ticket.py,codex 那一組守它。
-        scripts/ticket.py) add test_ticket test_land test_auto_fix_codex ;;
-        scripts/land.sh) add test_land ;;
-        scripts/gate.sh|scripts/gate.example.sh) add test_gate test_status ;;
-        scripts/apply.sh) add test_apply ;;
-        # 派工的三個入口與規則包本身(#74):`test_rules_delivery` 是「agent 收到合法規則
-        # 或完全不起動」的主守衛,四支都要過它。
-        scripts/auto-fix.sh) add test_auto_fix test_auto_fix_codex test_rules_delivery ;;
-        scripts/review.sh) add test_review test_rules_delivery ;;
-        # 副本根與專案根的唯一來源(#46、#159):actl 與每一支找根的腳本都 source 它。
-        scripts/wtbase.sh) add test_apply test_auto_fix test_land test_review test_actl \
-                               test_gate test_heartbeat test_new_session test_session_hook \
-                               test_consolidate_memory ;;
-        # 收件匣:閘門與落地的終態都寫它,所以動它要連那兩側一起跑。
-        scripts/inbox.py) add test_inbox test_gate test_land test_new_session ;;
-        scripts/rules.py) add test_rules test_rules_delivery ;;
-        scripts/heartbeat.sh) add test_heartbeat ;;
-        scripts/new-session.sh) add test_new_session test_rules_delivery ;;
-        # SessionStart hook(#39):`test_session_hook` 兩個都讀 —— A1 解析
-        # `.claude/settings.json` 的形狀,其餘案例跑 `session-hook.sh`。
-        scripts/session-hook.sh|.claude/settings.json) add test_session_hook ;;
-        # 整理票的啟動器(#87):自己的契約測試 + 開場叫它的那一支。
-        scripts/consolidate-memory.sh) add test_consolidate_memory test_new_session ;;
-        scripts/memory.py) add test_memory test_memory_note_names test_memory_lifecycle \
-                               test_memory_layer_policy ;;
-        # 回歸層的執行器與它的登記檔:動它就是動「哪些案例會被跑到」。
-        scripts/verify.py|verify/TAGS.md|verify/TAGS.d/*) add test_verify_runner test_verify_case test_actl ;;
-        scripts/verify-case.py) add test_verify_case test_actl ;;
-        verify/*) add test_verify_runner ;;
-        scripts/sync-to-project.sh) add test_sync_to_project ;;
-        # 狀態檔:閘門與落地都寫它,所以動它要連那兩側一起跑。
-        scripts/status.py) add test_status test_gate test_land ;;
-        # 內建 unittest adapter(D-071 C6,#161):run-tests 是它上面的薄殼,閘門經它跑測試。
-        scripts/adapter-unittest.py) add test_adapter_unittest test_status test_gate ;;
-        # 記憶檔既受整理守衛管(test_memory),也在「不准出現專案名」那一掃裡。
-        # routing 每個值都要有卡(#87):刪一張卡就是動那一條守衛。
-        memory/model/*.md) add test_memory test_no_project_names test_routing_cards ;;
-        memory/role/*.md) add test_memory test_sync_to_project test_no_project_names ;;
-        board/board.py) add test_board ;;
-        # 設定檔:看板讀它,事件與落地也讀它(埠、票目錄、事件檔、租約)。
-        board/config.json) add test_board test_event test_heartbeat test_memory \
-                               test_routing_cards ;;
-        # repo 地圖(#87):手寫的 catalog、兩份產出物與產生器,同一組契約測試守。
-        scripts/repo-map.py|code-map/catalog.json|code-map/index.json|code-map/INDEX.md)
-            add test_repo_map_contract ;;
-        tickets/*.json|tickets/SCHEMA.md) add test_ticket ;;
-        # 形狀的唯一真實來源:`test_status` 有一條把它的七個鍵與 `status.py` 釘在
-        # 一起,所以改它就是改那一格的規格 —— 要連 code 那一側一起跑。
-        docs/DESIGN-ENV-SUSPECT.md) add test_status test_no_project_names ;;
-        # 節名對不上規則包就 rc 1(rules.py 缺節不起,#147 刪掉文件一致性測試後靠它)。
-        docs/DISPATCH-TEMPLATE.md) add test_rules_delivery test_no_project_names ;;
-        templates/dispatch-verifier.md) add test_templates test_rules_delivery \
-                                           test_no_project_names ;;
-        # review.sh 逐字讀它、填它的佔位再餵給 reviewer:動它就是動覆核的派工文。
-        templates/dispatch-reviewer.md) add test_review test_templates test_rules_delivery \
-                                           test_no_project_names ;;
-        # 人手派的那兩份(開題者、整理者)也引用規則包解析出來的路徑(#74)。
-        templates/dispatch-*.md) add test_rules_delivery test_no_project_names ;;
-        # 文件**有**一支測試真的讀它們:那條「不准出現專案名 / 絕對路徑」的守衛
-        # 掃的就是整個 repo。所以這一格不是硬塞,是實話。
-        #
-        # `docs/**.html` 與 `.md` 同一格(2026-09-23,#29):`docs/FLOW.html` 畫的是
-        # 這條管線自己,而 `test_no_project_names` **逐字讀它**
-        # (`test_real_flow_html_passes_the_project_name_check` 直接 `read("docs/FLOW.html")`,
-        # 而且 `is_document()` 把「`docs/` 前綴 + `.html`」列為文件級)。所以這一格
-        # 同樣不是硬塞。**只有 `docs/` 底下的 `.html` 算** —— 守衛那一側也只放行
-        # `docs/` 底下的(`templates/x.html` 仍是程式級),兩邊用同一條判準;
-        # `case` 的 `*` 會跨 `/`,所以 `docs/a/b.html` 一樣對得到。
-        #
-        # 🩸 沒有這一格的時候:改 `docs/FLOW.html` 的那一輪,閘門走「對不到任何測試
-        # 模組」退 3 —— 而那條守衛真的在守它,只是對照表沒說。**一個沒有人守的檔與
-        # 一個沒被登記的檔長得一樣**,而這裡是後者(#29 第 2 輪實測)。
-        docs/*.html) add test_no_project_names ;;
-        *.md) add test_no_project_names ;;
-        *) miss "$f" ;;
-    esac
-}
 
 want_base=0; want_branch=0; want_full=0
 want_autofix=1
@@ -253,7 +163,7 @@ while [ $# -gt 0 ]; do
         --no-auto-fix) want_autofix=0 ;;
         --no-cache) NO_CACHE=1 ;;
         --*) echo "gate: 不認得 $1(--branch / --base / --full / --ticket <票號> / --auto-fix / --no-auto-fix / --no-cache)" >&2; exit 2 ;;
-        *) map "$1" ;;
+        *) files="$files $1" ;;
     esac
     shift
 done
@@ -437,6 +347,10 @@ RUN_ID=${AC_GATE_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}
 AC_SHA=$(ac_sha "$(ac_home)")
 FLAKY_ARGS=""
 AUTO_FLAKY_ARGS=""
+# `status.py done --result`:測試那一步與回歸那一步各自的 result.json(驗過才給,見 run_tests)。
+RESULT_ARGS=""
+REG_RESULT_ARGS=""
+RUN_OUT=""
 ORDER_ARGS=""
 EXTRA_LOG_ARGS=""
 VERIFY_LOG_ARGS=""
@@ -478,16 +392,62 @@ env_suspect_rows() {
         --run-id "$RUN_ID" --count 2>/dev/null || echo "?"
 }
 
-# 測試一律走這裡。判綠仍然只看 rc:86 = 環境可疑(那一段被中止)、1 = 紅、0 = 綠。
-run_tests() {   # $1 = discover|names;其餘是模組名
-    mode=$1
-    shift
-    python3 "$AC/status.py" run-tests --root "$ROOT" --log "$LOG" \
-        --suspect-file "$SUSPECT_FILE" --mode "$mode" "$@"
+# 測試介面的每一步都走這裡(D-071 §4):`scripts/testiface.py` 跑專案宣告的命令(或內建),
+# 驗過退出碼與 result.json 才回來。每一步一個**新的** `AC_TEST_OUT`(`$OUT/<步驟>`,閘門自己
+# 的目錄,重跑同一個 run_id 就先清掉它);testiface 的 stderr(量不到的原因、select 自己印的話)
+# 留在 `$TI_ERR`,呼叫的那一段決定要不要印。rc 86 的 rows 由 testiface 抄進 `$SUSPECT_FILE`。
+testiface() {   # $1 = AC_TEST_MODE  $2 = 步驟目錄(相對 $OUT)  其餘 = testiface 的命令與參數
+    TI_OUT=$OUT/$2
+    TI_ERR=$TI_OUT.stderr
+    ti_mode=$1
+    shift 2
+    rm -rf "$TI_OUT" "$TI_ERR"
+    mkdir -p "$(dirname "$TI_OUT")"
+    AC_TEST_OUT=$TI_OUT AC_TEST_MODE=$ti_mode AC_TICKET=$TICKET AC_RUN_ID=$RUN_ID \
+        python3 "$AC/testiface.py" --suspect-file "$SUSPECT_FILE" "$@" 2>"$TI_ERR"
 }
 
-env_suspect_note() {
+# `run <ids>` / `full`。判綠只看 rc:0 = 綠(result 驗過)、1 = 紅、86 = 環境可疑、2 = 量不到。
+# 那一步的 log 抄成 `$LOG`(閘門的 log 照舊是「這一輪測試的原文」:狀態檔留它當附件、
+# `grep Ran` 讀它)。result 驗過(0 / 1 / 86)才交給狀態檔 —— 量不到的那一份不准當紅榜讀。
+run_tests() {   # $1 = AC_TEST_MODE  $2 = run|full  其餘 = ids;設 RUN_OUT 與 RESULT_ARGS
+    rt_mode=$1
+    rt_cmd=$2
+    shift 2
+    testiface "$rt_mode" "$rt_cmd" "$rt_cmd" "$@"
+    rt_rc=$?
+    RUN_OUT=$TI_OUT
+    if [ -f "$RUN_OUT/$rt_cmd.log" ]; then cp "$RUN_OUT/$rt_cmd.log" "$LOG"; else : > "$LOG"; fi
+    [ ! -s "$TI_ERR" ] || cat "$TI_ERR"
+    case "$rt_rc" in
+        0|1|86) RESULT_ARGS="--result $RUN_OUT/result.json" ;;
+        *) RESULT_ARGS="" ;;
+    esac
+    return "$rt_rc"
+}
+
+# 環境可疑那一條路(D-019):`preflight` 回 86(測試沒跑),或 `run` / `full` 回 86(那一段被中止)。
+# rows 已在 `$SUSPECT_FILE`;run 那一份的 `log` 指的是那一步自己的 log,抄成 `$LOG` 了,改指它。
+env_suspect_note() {   # $1 = preflight|run
     ENV_SUSPECT=1
+    if [ "$1" = preflight ]; then
+        NOTE="$NOTE preflight 說環境可疑,測試沒跑(不做 flake 判定)。"
+        echo "gate: 環境可疑(preflight)—— $(suspect_field engine):$(suspect_field why);測試沒跑"
+        return 0
+    fi
+    python3 - "$SUSPECT_FILE" "$RUN_OUT" "$LOG" <<'SUSPECT_LOG_PY' || true
+import json, os, sys
+path, out, log = sys.argv[1:4]
+with open(path, encoding="utf-8") as handle:
+    rows = json.load(handle)
+for row in rows:
+    where = row.get("log") if isinstance(row, dict) else None
+    if isinstance(where, str) and where and os.path.dirname(os.path.abspath(where)) == os.path.abspath(out):
+        row["log"] = log
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(rows, handle, ensure_ascii=False)
+    handle.write("\n")
+SUSPECT_LOG_PY
     NOTE="$NOTE 同一引擎同形訊息連紅達環境門檻,已中止這一段(不做 flake 判定)。"
     echo "gate: 環境可疑 —— $(suspect_field engine) 連紅 $(suspect_field count) 條同形訊息,這一段中止了"
 }
@@ -531,8 +491,8 @@ status_done() {   # $1 = rc
         # shellcheck disable=SC2086
         python3 "$AC/status.py" done --ticket "$t" --kind gate \
             --run-id "$RUN_ID" --sha "$SHA" --rc "$1" --note "$NOTE" \
-            --log "$LOG" $state_args $VERIFY_LOG_ARGS $CHECK_LOG_ARGS $EXTRA_LOG_ARGS $CASES_ARGS $FLAKY_ARGS \
-            $AUTO_FLAKY_ARGS $ORDER_ARGS \
+            --log "$LOG" $RESULT_ARGS $REG_RESULT_ARGS $state_args $VERIFY_LOG_ARGS $CHECK_LOG_ARGS \
+            $EXTRA_LOG_ARGS $CASES_ARGS $FLAKY_ARGS $AUTO_FLAKY_ARGS $ORDER_ARGS \
             || echo "gate: #$t 的狀態檔寫不出來(不擋閘門)" >&2
     done
     inbox_post "$1"
@@ -719,17 +679,19 @@ regression() {   # $1 = ticket|full;設定 VRC
             return 0
         fi
         for t in $tags; do args="$args --tag $t"; done
-        echo "gate: 票 #$TICKET 的回歸 —— python3 scripts/verify.py$args"
+        echo "gate: 票 #$TICKET 的回歸 —— regression$args"
     else
-        echo "gate: 回歸全部 —— python3 scripts/verify.py"
+        echo "gate: 回歸全部 —— regression"
     fi
     [ -z "$NO_CACHE" ] || args="$args --no-cache"
-    # `AC_TICKET` + `AC_RUN_ID` 讓 worker、驗證者與這裡共用同一輪的回歸快取:
-    # 同一份程式、同一組標籤、同一個 sha 只跑一次(D-015)。
+    # `AC_TICKET` + `AC_RUN_ID`(testiface 帶給命令)讓 worker、驗證者與這裡共用同一輪的
+    # 回歸快取:同一份程式、同一組標籤、同一個 sha 只跑一次(D-015)。
     # shellcheck disable=SC2086
-    ( cd "$ROOT" && AC_TICKET="$TICKET" AC_RUN_ID="$RUN_ID" \
-        python3 "$AC/verify.py" $args ) > "$VERIFY_LOG" 2>&1
+    testiface "$TEST_MODE" regression regression $args > /dev/null
     VRC=$?
+    if [ -f "$TI_OUT/regression.log" ]; then cp "$TI_OUT/regression.log" "$VERIFY_LOG"; else : > "$VERIFY_LOG"; fi
+    if [ -s "$TI_ERR" ]; then cat "$TI_ERR" >> "$VERIFY_LOG"; cat "$TI_ERR"; fi
+    case "$VRC" in 0|1|86) REG_RESULT_ARGS="--result $TI_OUT/result.json" ;; esac
     grep -aE "^Ran |^OK|^FAILED|^verify: " "$VERIFY_LOG" \
         || echo "gate: 回歸的 log 裡連 Ran 都沒有,看 $VERIFY_LOG"
     VERIFY_LOG_ARGS="--log $VERIFY_LOG"
@@ -907,7 +869,7 @@ verify_case() {
     # `ok:false` 而且候選真的紅了。紅榜住在 candidate 的原始輸出裡,**餵給狀態檔的是
     # 它**,不是一句「verify-case 回了 1」—— 下一輪的 worker 讀的是 `failures[]`,而
     # 一個沒有案例名字的紅榜與沒有紅榜一樣(D-014)。
-    CHECK_LOG_ARGS="--log $CHECK_DIR/logs/candidate.log"
+    CHECK_LOG_ARGS="--red-log $CHECK_DIR/logs/candidate.log"
     echo "gate: 驗證者的案例在這一輪的樹上紅了($bad 條)—— 紅榜進狀態檔的 failures[]"
     NOTE="$NOTE 驗證者的案例這一輪沒綠(verify-case check rc=$CRC,候選 $bad 條)。"
     return 0
@@ -917,13 +879,31 @@ merge_rc() {   # $1 = 目前 rc  $2 = 另一個 rc;印出合併後的
     if [ "$1" -ne 0 ]; then echo "$1"; else echo "$2"; fi
 }
 
-# 紅例連續單跑與原順序整組都達設定門檻才自動放行。
-flake_rerun() {   # $1 = rc  $2 = 整組重跑的指令描述
-    [ "$1" -eq 0 ] && return 0
-    [ -n "$TICKET" ] || return "$1"
-    [ -z "${AC_NO_FLAKE_RERUN:-}" ] || return "$1"
-    cases=$(python3 "$AC/status.py" failures --log "$LOG" 2>/dev/null || true)
-    [ -n "$cases" ] || return "$1"
+# 紅例連續單跑與原順序整組都達設定門檻才自動放行。紅例 = 這一趟 result.json 的 fail / error 列
+# (id 照原樣交回 `run <id>`,D-071 §4);每次單跑進 `$RUN_OUT/rerun-<k>/`,整組重跑是
+# `run <原跑的全部 ids>`(`full` 那一趟沒有給 ids,用它 result 裡的每一條)進 `rerun-group-<g>/`。
+# 只有可歸因的紅(rc 1)才重跑:2 是量不到、86 是環境,重跑只會把浪費加倍。
+flake_rerun() {   # $1 = rc  $2 = run|full(原跑的那一個)  其餘 = 原跑給的 ids
+    fr_rc=$1
+    fr_cmd=$2
+    shift 2
+    [ "$fr_rc" -eq 0 ] && return 0
+    [ "$fr_rc" -eq 1 ] || return "$fr_rc"
+    [ -n "$TICKET" ] || return "$fr_rc"
+    [ -z "${AC_NO_FLAKE_RERUN:-}" ] || return "$fr_rc"
+    first_out=$RUN_OUT
+    cases=$(python3 "$AC/status.py" failures --result "$first_out/result.json" 2>/dev/null || true)
+    [ -n "$cases" ] || return "$fr_rc"
+    if [ "$fr_cmd" = full ]; then
+        group_ids=$(python3 - "$first_out/result.json" <<'IDS_PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    print(" ".join(row["id"] for row in json.load(handle)["ids"]))
+IDS_PY
+)
+    else
+        group_ids="$*"
+    fi
     single_runs=$(python3 - "$ROOT" <<'PY'
 import json, os, sys
 try:
@@ -944,6 +924,7 @@ except (OSError, ValueError, TypeError):
 print(max(1, value))
 PY
 )
+    rerun=0
     total=0
     qualified=0
     for case in $cases; do
@@ -951,7 +932,8 @@ PY
         passed=0
         attempt=1
         while [ "$attempt" -le "$single_runs" ]; do
-            if ( cd "$ROOT/tests" && python3 -m unittest "$case" ) >/dev/null 2>&1; then
+            rerun=$((rerun + 1))
+            if testiface rerun "$fr_cmd/rerun-$rerun" run "$case" >/dev/null; then
                 passed=$((passed + 1))
             else
                 break
@@ -966,26 +948,28 @@ PY
             echo "gate: $case 單獨重跑只綠 $passed/$single_runs 次 —— 真紅"
         fi
     done
-    [ "$qualified" -gt 0 ] || return "$1"
+    [ "$qualified" -gt 0 ] || return "$fr_rc"
     NOTE="$NOTE 單跑門檻達標 $qualified/$total 條。"
-    [ "$qualified" -eq "$total" ] || return "$1"
+    [ "$qualified" -eq "$total" ] || return "$fr_rc"
     if [ -n "${AC_FLAKE_RERUN_GROUP:-}" ] && [ "${AC_FLAKE_RERUN_GROUP:-}" = "0" ]; then
-        echo "gate: AC_FLAKE_RERUN_GROUP=0 —— 不做整組重跑;rc 維持 $1"
-        return "$1"
+        echo "gate: AC_FLAKE_RERUN_GROUP=0 —— 不做整組重跑;rc 維持 $fr_rc"
+        return "$fr_rc"
     fi
     echo "gate: 用原順序整組重跑 $group_runs 次 —— 順序污染會在這裡再紅"
     group=1
     while [ "$group" -le "$group_runs" ]; do
-        run_log=$RERUN_LOG.$group
-        ( eval "$2" ) > "$run_log" 2>&1
+        # shellcheck disable=SC2086
+        testiface rerun "$fr_cmd/rerun-group-$group" run $group_ids >/dev/null
         grc=$?
+        run_log=$TI_OUT/run.log
+        [ -f "$run_log" ] || run_log=$TI_ERR
         EXTRA_LOG_ARGS="$EXTRA_LOG_ARGS --extra-log $run_log"
         grep -aE "^Ran |^OK|^FAILED" "$run_log" || true
         if [ "$grc" -ne 0 ]; then
             for case in $cases; do ORDER_ARGS="$ORDER_ARGS --order-dependent $case"; done
             echo "gate: 原順序整組第 $group 次仍然紅 —— order_dependent(log: $run_log)"
             NOTE="$NOTE 原順序整組重跑仍紅 = order_dependent。"
-            return "$1"
+            return "$fr_rc"
         fi
         group=$((group + 1))
     done
@@ -999,19 +983,59 @@ PY
     return 0
 }
 
+# 這一輪每一步的 `AC_TEST_OUT` 住哪(D-071 §4):有票 = 狀態檔那一輪的目錄
+# (`reports/t<票號>/<run_id>/<步驟>/`,證據跟著狀態檔留著);沒票 = `<log>.out/<步驟>/`
+# —— 沒給票號的呼叫照舊**不寫 reports/**,那一份與 `$LOG` 一樣每趟覆寫。
+OUT=""
+if [ -n "$TICKET" ]; then
+    OUT=$(python3 "$AC/status.py" rundir --ticket "$TICKET" --run-id "$RUN_ID" 2>/dev/null) || OUT=""
+fi
+if [ -z "$OUT" ]; then
+    OUT=$LOG.out
+    rm -rf "$OUT"
+fi
+mkdir -p "$OUT"
+# `--suspect-file` 那一份**空值只有 `[]`**(`docs/DESIGN-ENV-SUSPECT.md`):上一趟留下的 rows
+# 不准被這一趟讀成自己的。
+echo "[]" > "$SUSPECT_FILE"
+if [ "$want_full" -eq 1 ]; then TEST_MODE=full
+elif [ "$want_base" -eq 1 ] && [ "$want_branch" -eq 0 ] && [ -z "$files" ]; then TEST_MODE=base
+else TEST_MODE=branch; fi
+
+# preflight(專案說「這台機器現在能不能跑」):86 → 環境可疑那一條路(狀態檔 env_suspect、
+# 不做 flake、不自動派、一頁 decision),測試一條都不跑;其他非零 → 2,preflight 本身壞了。
+testiface "$TEST_MODE" preflight preflight
+prc=$?
+if [ "$prc" -eq 86 ]; then
+    [ ! -s "$TI_ERR" ] || cat "$TI_ERR"
+    status_start
+    env_suspect_note preflight
+    status_done 86
+    ticket_gate 86
+    auto_fix 86
+    exit 86
+fi
+if [ "$prc" -ne 0 ]; then
+    [ ! -s "$TI_ERR" ] || cat "$TI_ERR"
+    echo "gate: preflight itself failed(testiface rc=$prc)—— 測試一條都沒跑"
+    status_nothing 2 "preflight 本身失敗(testiface rc=$prc),測試沒跑。"
+    ticket_gate 2
+    exit 2
+fi
+
 if [ "$want_full" -eq 1 ]; then
-    echo "gate: 全套 —— python3 -m unittest discover -s tests"
+    echo "gate: 全套 —— full"
     status_start
     # 判綠先寫檔再讀退出碼,不用 `cmd | tail`:管線的退出碼是右邊那一支的
     # (`false | tail` 是 0),而那會讓「根本沒跑起來」靜靜判成綠。
-    run_tests discover
+    run_tests full full
     rc=$?
     grep -aE "^Ran |^OK|^FAILED" "$LOG" || echo "gate: log 裡連 Ran 都沒有,看 $LOG"
     # 先環境 fail-fast、再 flake 判定(見檔頭)。
     if [ "$rc" -eq 86 ]; then
-        env_suspect_note
+        env_suspect_note run
     else
-        flake_rerun "$rc" "cd \"$ROOT\" && python3 -m unittest discover -s tests -v"
+        flake_rerun "$rc" full
         rc=$?
     fi
     # 全套 = 單元全部 + **回歸全部**。回歸不靠執行器自測間接跑。
@@ -1025,14 +1049,51 @@ if [ "$want_full" -eq 1 ]; then
     exit $rc
 fi
 
+# `select`:改動檔一行一個餵進去,印回來的每一行是一個 id 或 `unmapped <檔>`(§4)。
+# rc 3 = 沒有東西可選(專案自己說為什麼,原話照印)、量不到 = 2;兩種都留終態再退。
+select_ids() {   # $1 = branch|base  $2 = 步驟目錄;stdin = 改動檔
+    testiface "$TEST_MODE" "$2" select --mode "$1" > "$OUT/$2.ids"
+    src=$?
+    if [ "$src" -ne 0 ]; then
+        [ ! -s "$TI_ERR" ] || cat "$TI_ERR"
+        why=$(head -n 1 "$TI_ERR" 2>/dev/null)
+        if [ "$src" -eq 3 ]; then
+            echo "gate: select --mode $1 沒有可選的(rc 3)—— 上面是專案的原話"
+            status_nothing 3 "select --mode $1 沒有可選的(rc 3):$why"
+            ticket_gate 3
+            exit 3
+        fi
+        echo "gate: select --mode $1 量不到(testiface rc=$src)—— 測試沒跑"
+        status_nothing 2 "select --mode $1 量不到(testiface rc=$src):$why"
+        ticket_gate 2
+        exit 2
+    fi
+    while IFS= read -r line; do
+        case "$line" in
+            "") ;;
+            "unmapped "*) unmapped="$unmapped ${line#unmapped }" ;;
+            *) add "$line" ;;
+        esac
+    done < "$OUT/$2.ids"
+}
+
+changed=""
+for f in $files; do changed="$changed $f"; done
 if [ "$want_branch" -eq 1 ]; then
     diff_tests=""
     for f in $(git -C "$ROOT" diff --name-only "$MAIN...HEAD"; \
                git -C "$ROOT" diff --name-only HEAD; \
                git -C "$ROOT" ls-files --others --exclude-standard); do
-        map "$f"
+        case " $changed " in *" $f "*) ;; *) changed="$changed $f" ;; esac
         case "$f" in tests/test_*.py) [ -f "$ROOT/$f" ] && diff_tests="$diff_tests $(basename "$f" .py)" ;; esac
     done
+fi
+if [ -n "$changed" ]; then
+    # shellcheck disable=SC2086
+    printf '%s\n' $changed > "$OUT/changed-files.txt"
+    select_ids branch select-branch < "$OUT/changed-files.txt"
+fi
+if [ "$want_branch" -eq 1 ]; then
     # 對照表沒列的檔(#45 B2):同一份 diff 改到的 tests/test_*.py 就是它的守衛 ——
     # 出聲、照那幾支跑、rc 照測試結果。推不到(diff 沒有 tests)才走下面退 3 那一段。
     if [ -n "$unmapped" ] && [ -n "$diff_tests" ]; then
@@ -1046,22 +1107,23 @@ if [ "$want_branch" -eq 1 ]; then
         unmapped=""
     fi
 fi
-[ "$want_base" -eq 1 ] && add $BASE
+[ "$want_base" -eq 1 ] && select_ids base select-base < /dev/null
 
 mods=$(echo "$mods" | tr ' ' '\n' | sed '/^$/d' | sort -u | tr '\n' ' ')
 rc=0
 if [ -n "$mods" ]; then
-    echo "gate: python3 -m unittest$(echo " $mods" | sed 's/ *$//')"
+    echo "gate: run$(echo " $mods" | sed 's/ *$//')"
     status_start
     # shellcheck disable=SC2086
-    run_tests names $mods
+    run_tests "$TEST_MODE" run $mods
     rc=$?
     grep -aE "^Ran |^OK|^FAILED" "$LOG" || echo "gate: log 裡連 Ran 都沒有,看 $LOG"
     # 先環境 fail-fast、再 flake 判定(見檔頭)。
     if [ "$rc" -eq 86 ]; then
-        env_suspect_note
+        env_suspect_note run
     else
-        flake_rerun "$rc" "cd \"$ROOT/tests\" && python3 -m unittest $mods"
+        # shellcheck disable=SC2086
+        flake_rerun "$rc" run $mods
         rc=$?
     fi
     if [ -n "$TICKET" ] && [ "$ENV_SUSPECT" -eq 0 ]; then
