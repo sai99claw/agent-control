@@ -20,16 +20,75 @@
   "model": "sonnet",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "601b36f039a336a6f2e87effefbed3067bfa2585",
-  "state": "Ready",
-  "state_version": 2,
+  "base_sha": "1b6ac4e101e7bc73e694f17a5759a172dfb4c58c",
+  "state": "InReview",
+  "state_version": 11,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
+    "files": [
+      "tests/test_board_cases.py"
+    ],
     "tags": [],
-    "run": "",
-    "notes": ""
+    "run": "timeout 590 python3 -m unittest tests.test_board_cases",
+    "notes": "Verifier edge cases for the board.key_file gate (#165), beside the worker's A1-A5 in tests/test_board.py: cookie among other cookies (and x_ac_board_key is not it), key file with spaces + CRLF, /healthz/ open vs /HEALTHZ and /healthz/x 401, absolute key_file (present and missing), key with '=' and '%' round-tripped through the Set-Cookie pair, /board.css and /board.js gated, 401 without WWW-Authenticate, 302 Location keeping other params (order kept) and Set-Cookie attributes exactly Path=/, HttpOnly, SameSite=Strict, POST with ?key= -> 302 and no answers file, key_file null -> ungated. Expected codes/headers come from the ticket objective; keys from the file each test writes. Uses http.client (no redirect following) and the harness Sandbox only (not BoardUp), board stderr to a file, stopped via its Popen handle. On base 10 of 11 red; test_a_null_key_file_is_the_ungated_board is green on base by design (null key = today's behaviour). The two refuse-to-start cases wait up to 20 s each on base before failing.",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-25T00:24:27+00:00",
+      "files": [
+        "tests/test_board_cases.py"
+      ],
+      "base_ref": "1b6ac4e101e7bc73e694f17a5759a172dfb4c58c",
+      "base_sha": "1b6ac4e101e7bc73e694f17a5759a172dfb4c58c",
+      "candidate": "../agent-control-wt/t165",
+      "candidate_sha": "a5a77530ce3d7dfa877e564f720256c627ebf5e7",
+      "baseline": {
+        "red": [
+          "tests.test_board_cases.KeyGateCases.test_a_key_file_whose_first_line_is_only_spaces_refuses_to_start",
+          "tests.test_board_cases.KeyGateCases.test_a_key_with_equals_and_percent_round_trips",
+          "tests.test_board_cases.KeyGateCases.test_a_post_carrying_the_key_in_the_query_is_redirected_not_saved",
+          "tests.test_board_cases.KeyGateCases.test_an_absolute_key_file_path_outside_the_project_is_used",
+          "tests.test_board_cases.KeyGateCases.test_an_absolute_key_file_that_is_missing_refuses_to_start",
+          "tests.test_board_cases.KeyGateCases.test_healthz_with_a_trailing_slash_is_open_and_uppercase_is_gated",
+          "tests.test_board_cases.KeyGateCases.test_the_401_and_the_302_carry_exactly_the_pinned_headers",
+          "tests.test_board_cases.KeyGateCases.test_the_css_and_the_js_are_gated_like_the_page",
+          "tests.test_board_cases.KeyGateCases.test_the_key_cookie_is_found_among_other_cookies",
+          "tests.test_board_cases.KeyGateCases.test_the_key_is_the_first_line_stripped_of_spaces_and_crlf"
+        ],
+        "red_lines": [
+          "tests.test_board_cases.KeyGateCases.test_a_key_file_whose_first_line_is_only_spaces_refuses_to_start: AssertionError: board kept running with an unusable key_file: board: http://127.0.0.1:33521/",
+          "tests.test_board_cases.KeyGateCases.test_a_key_with_equals_and_percent_round_trips: AssertionError: 200 != 302",
+          "tests.test_board_cases.KeyGateCases.test_a_post_carrying_the_key_in_the_query_is_redirected_not_saved: AssertionError: 200 != 401",
+          "tests.test_board_cases.KeyGateCases.test_an_absolute_key_file_path_outside_the_project_is_used: AssertionError: 200 != 401",
+          "tests.test_board_cases.KeyGateCases.test_an_absolute_key_file_that_is_missing_refuses_to_start: AssertionError: board kept running with an unusable key_file: board: http://127.0.0.1:42245/",
+          "tests.test_board_cases.KeyGateCases.test_healthz_with_a_trailing_slash_is_open_and_uppercase_is_gated: AssertionError: 404 != 401",
+          "tests.test_board_cases.KeyGateCases.test_the_401_and_the_302_carry_exactly_the_pinned_headers: AssertionError: 200 != 401",
+          "tests.test_board_cases.KeyGateCases.test_the_css_and_the_js_are_gated_like_the_page: AssertionError: 200 != 401",
+          "tests.test_board_cases.KeyGateCases.test_the_key_cookie_is_found_among_other_cookies: AssertionError: 200 != 401",
+          "tests.test_board_cases.KeyGateCases.test_the_key_is_the_first_line_stripped_of_spaces_and_crlf: AssertionError: 200 != 302"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 11,
+        "skipped": 0,
+        "log": "../agent-control-wt/t165/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 11,
+        "skipped": 0,
+        "log": "../agent-control-wt/t165/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "complexity": "simple",
   "needs_verifier": true,
@@ -39,5 +98,49 @@
     "D-072"
   ],
   "test_plan": "Worker, foreground: timeout 590 python3 -m unittest tests.test_board tests.test_actl; report Ran/OK verbatim with the base Ran count of tests.test_board for A1. Worker writes A1-A5 in tests/test_board.py (reuse BoardUp.serve/_stop/get; add a no-redirect opener and a header-returning get). Verifier (needs_verifier true, interface_fixed true: paths, codes, cookie name and header text are pinned above) writes tests/test_board_cases.py (new, not in worker scope) in parallel: at least a Cookie header carrying other cookies around ac_board_key, a key file with trailing spaces and CRLF, '/healthz/' (open, rstrip) versus '/HEALTHZ' (401), an absolute key_file path, a key containing '=' and '%', and '/board.css' / '/board.js' gated like '/'. Mutations (not measured by opener): m1 compare_digest replaced by '==' -> A5 red; m2 /healthz gated -> A2 red; m3 a missing key file treated as 'no key' -> A4 red; m4 POST not gated -> A3 red; m5 cookie set on a wrong ?key= -> A2 red. Container runs as uid 0: no chmod-based unreadable-file cases (root reads them); use a missing file or invalid JSON instead. hard_block.patterns forbids the four process-signal spellings in added tests/** lines: never stop a child that way in a test; stop a served board only through the Popen handle as tests/test_board.py _stop does today; timeouts belong to subprocess.run(timeout=) inside scripts/.",
-  "outline": "D-071 row 5 (self-contained HTTP change; port-0 harness exists). Facts at base 601b36f: board.py binds 127.0.0.1 (1210), do_GET at 1107 routes /healthz, /board.css, /board.js, /api/state, /, /t/<n>; a POST handler reads Content-Length at ~1182 (answers); log_message prints urlparse(self.path).path (query already dropped); grep 'key_file|compare_digest' in board/: 0; DEFAULT_PORT 18905; test_board.py BoardUp.serve runs board.py from the sandbox copy with --port 0 and stops it through the Popen handle (after #159 the harness runs $AC_HOME/board/board.py with AC_ROOT = sandbox - the worker rebases BoardUp on that). Existing test_board cases never set 'board' in config, so A1 is the no-key path. Files: board/board.py, tests/test_board.py; gate map data gains nothing (board/board.py -> test_board row exists). needs_verifier true: an auth gate that falls open is invisible to the owner (section 5.5); interface_fixed true. simple, sonnet (design). Depends on #159 (harness moves board.py out of the sandbox; test_board paths change in that ticket - landing both in parallel would collide in test_board.py). Parallel with #160-#164."
+  "outline": "D-071 row 5 (self-contained HTTP change; port-0 harness exists). Facts at base 601b36f: board.py binds 127.0.0.1 (1210), do_GET at 1107 routes /healthz, /board.css, /board.js, /api/state, /, /t/<n>; a POST handler reads Content-Length at ~1182 (answers); log_message prints urlparse(self.path).path (query already dropped); grep 'key_file|compare_digest' in board/: 0; DEFAULT_PORT 18905; test_board.py BoardUp.serve runs board.py from the sandbox copy with --port 0 and stops it through the Popen handle (after #159 the harness runs $AC_HOME/board/board.py with AC_ROOT = sandbox - the worker rebases BoardUp on that). Existing test_board cases never set 'board' in config, so A1 is the no-key path. Files: board/board.py, tests/test_board.py; gate map data gains nothing (board/board.py -> test_board row exists). needs_verifier true: an auth gate that falls open is invisible to the owner (section 5.5); interface_fixed true. simple, sonnet (design). Depends on #159 (harness moves board.py out of the sandbox; test_board paths change in that ticket - landing both in parallel would collide in test_board.py). Parallel with #160-#164.",
+  "cost": [
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 52,
+      "tokens_out": 20819,
+      "cache_write": 82967,
+      "cache_read": 2186290,
+      "wall_seconds": 327,
+      "outcome": "handed-in",
+      "run_id": "20261025-001802-6786",
+      "session_id": "1d3cac76-34bd-4909-933b-4aa2e7821197",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-25T00:23:30+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "sonnet",
+      "tokens_in": 20,
+      "tokens_out": 9456,
+      "cache_write": 43540,
+      "cache_read": 590040,
+      "wall_seconds": 105,
+      "outcome": "handed-in",
+      "run_id": "20261025-001802-6786",
+      "session_id": "bb8c07c4-65b5-4234-a89e-27da109f0195",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "medium",
+      "at": "2026-10-25T00:23:31+00:00"
+    }
+  ],
+  "branch": "t165",
+  "gate": {
+    "rc": 0,
+    "sha": "a5a77530ce3d7dfa877e564f720256c627ebf5e7",
+    "run_id": "20261025-002331-4751",
+    "at": "2026-10-25T00:24:28+00:00"
+  },
+  "repair_round": 1
 }
