@@ -176,8 +176,7 @@ DEFAULT_CONFIG = {
     # 硬擋清單(#135,D-054 Q3)跟 board/config.json 同一份值:沙盒預設就是 prod 的形狀。
     # 測「沒設就不擋」的案例要自己 `pop("hard_block")`,不能靠預設沒有。patterns 字面拆開
     # 寫 —— 這一支在 tests/**,自己的新增行也會被 patterns 查。
-    "hard_block": {"paths": ["docs/DECISIONS.md", "docs/VISION.md",
-                             "scripts/sync-to-project.sh"],
+    "hard_block": {"paths": ["docs/DECISIONS.md", "docs/VISION.md"],
                    "dirs": [],
                    "patterns": [r"os\." + "kill", "kill" + "pg", "p" + "kill", "kill" + " -"]},
     # 測試介面(D-071 §4,#162):五個命令都用內建(`scripts/testiface.py`),對照表是 A 的。
