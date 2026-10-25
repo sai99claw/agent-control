@@ -534,11 +534,13 @@ class A8GateAndOldCases(unittest.TestCase):
             return handle.read()
 
     def test_a8_the_gate_runs_the_lifecycle_cases_for_memory_py(self):
-        """A8 gate.sh 的 `scripts/memory.py)` 那一格加 test_memory_lifecycle。"""
-        arm = re.search(r"^\s*scripts/memory\.py\)(.*)$", self.source("scripts/gate.sh"),
-                        re.MULTILINE)
-        self.assertTrue(arm, "gate.sh 找不到 scripts/memory.py) 那一格")
-        self.assertIn("test_memory_lifecycle", arm.group(1))
+        """A8 gate 對 `scripts/memory.py` 那一列加 test_memory_lifecycle。#162 把 gate.sh 的
+        `map()` 刪了,對照表只住在 `board/config.json` 的 `tests.unittest.map`(gate 經
+        testiface 讀它),所以量那一列,不量 gate.sh。"""
+        rows = json.loads(self.source("board/config.json"))["tests"]["unittest"]["map"]
+        arm = [row for row in rows if row["match"] == "scripts/memory.py"]
+        self.assertEqual(len(arm), 1, "board/config.json 找不到 scripts/memory.py 那一列")
+        self.assertIn("test_memory_lifecycle", arm[0]["ids"])
 
     def test_a8_the_old_consolidate_cases_use_the_new_contract(self):
         """A8 test_memory.py 釘舊行為的案例改用 --candidate + 兩份討論。"""
