@@ -1,0 +1,54 @@
+{
+  "id": "168",
+  "subject": "D-073 ①: worker hands in after running only this ticket's verifier cases (own changed unit tests when none yet) + the base set; auto-fix 只准跑的測試 section, implementer card, DISPATCH-TEMPLATE §1, role-procedures and verifier template rewritten; gate.sh --base measured 35.5 s",
+  "created": "2026-10-25T00:42:07+00:00",
+  "objective": "D-073 ① (user, 2026-10-25: \"worker 本來就該只跑驗證者寫給他的測試+1分鐘基礎case\"). Today the dispatch packet's '## 只准跑的測試' section copies the ticket's test_plan verbatim plus a fixed sentence (scripts/auto-fix.sh only_tests_section(), lines 664-685 at base 1b6ac4e), and the implementer card / DISPATCH-TEMPLATE §1 / role-procedures tell the worker to run whatever test_plan lists, including full-suite batches when listed (#155 / #159 timed out doing exactly that, D-073 background). After this ticket the worker runs exactly two things before handing in: (a) this ticket's verifier cases - the ticket's verify.run when verify.files is non-empty (repair rounds, or after a parallel verifier handed in); when there are none yet (round 1) the unit-test modules the worker itself changed or added under tests/; (b) the base set via the same gate script the packet already names for the branch gate, with --base (measured here: 35.5 s wall, 168 tests, see outline). Everything else (branch map, regression layer, verifier check, full suite) is the gate's and land's. The ticket's test_plan stays in the packet verbatim under its own heading '## 票的測試計畫' - it is the design of what to build and what the verifier will assert, not a list to run. The verifier packet's same section lists only its own case file(s) and 'verify-case.py red' (D-020). The rule text changes in the same ticket as the behaviour (D-054 Q12): docs/DISPATCH-TEMPLATE.md §1 paragraph '只准跑的測試', memory/role/implementer.md sentences '交付物' and '測試範圍', docs/reference/role-procedures.md '### 測試怎麼叫' bullets, templates/dispatch-verifier.md line about the section. Section titles stay (rules.py pack matches them). Not here: gate.sh / land.sh behaviour, the base set's membership (tests.unittest.base in board/config.json), shrinking the base set (35.5 s is under the 60 s target).",
+  "acceptance": [
+    "A1 round-1 worker packet (tests/test_auto_fix.py, class ThePacketSaysWhichTestsToRun rewritten, harness sandbox, ticket with test_plan set and verify.files empty, 'auto-fix.sh <n> --dry-run --round 1'): dispatch-round1.md contains the heading '## 只准跑的測試' followed by exactly three non-empty lines before the next heading: (1) a line containing '你改到 / 新增的 tests/ 模組' and 'python3 -m unittest' and '驗證者案例還沒交'; (2) the base command: the same script path the packet's '在分支副本重跑閘門' line uses, with ' --base' in place of ' --branch --ticket <n>' (the test extracts both lines and compares the path); (3) a fixed sentence containing '全套、回歸、驗證者 check 是閘門與落地的事' and '交件前只跑上面兩項'. The ticket's test_plan appears verbatim under a separate heading '## 票的測試計畫'; the old sentence '不跑全套(unittest discover 整組、gate.sh --full)、不跑 verify.py 全部回歸 —— 回歸是閘門的事' is absent from the packet. A ticket without test_plan: the '## 票的測試計畫' section says '票沒有 test_plan' and the three lines of 只准跑 are unchanged (no '只跑你改到的 tests/ 檔,不跑全套' line anywhere).",
+    "A2 repair round / verifier handed in (same class): ticket with verify.files ['tests/test_x_cases.py'] and verify.run 'python3 -m unittest tests.test_x_cases', status file with a red list, 'auto-fix.sh <n> --dry-run' -> dispatch-round2.md line (1) under 只准跑 is exactly the verify.run string (no '你改到' line), lines (2)-(3) as A1; the existing red-list section text is unchanged (the test pins today's heading for it). verify.files non-empty but verify.run empty -> line (1) is 'python3 -m unittest ' + the module names derived from verify.files (tests/test_x_cases.py -> tests.test_x_cases).",
+    "A3 verifier packet (same class): dispatch-verifier-round1.md's '## 只准跑的測試' lists exactly two lines: your own case file(s) ('只跑你寫的案例檔' + 'python3 -m unittest <module>' when verify.files known, else the literal placeholder '<你加進案例的那支模組>') and the 'verify-case.py red' line; no test_plan copy under that heading, no --base line. Mutation (not measured by opener): m1 only_tests_section still prints the test_plan under 只准跑 -> A1 and A3 red.",
+    "A4 rule text (static tests in tests/test_auto_fix.py or tests/test_templates.py reading the committed files): grep -c '明列全套' docs/reference/role-procedures.md memory/role/implementer.md docs/DISPATCH-TEMPLATE.md == 0; grep -c '只准跑的測試' docs/DISPATCH-TEMPLATE.md >= 1 and that §1 paragraph contains '驗證者' and '--base' and 'test_plan 是' (design, not a run list); memory/role/implementer.md contains '--base' and no longer contains '全套、分批、負載下重跑只在票的 test_plan 明列時才做'; templates/dispatch-verifier.md line about the section contains '自己的案例'; 'python3 scripts/rules.py pack worker' and 'pack verifier' rc 0 (section titles intact; tests/test_rules_delivery green); 'python3 scripts/memory.py check' reports no over-cap for memory/role/implementer.md (the card's byte count does not grow: new sentence <= removed sentence in bytes; EVIDENCE shows both counts).",
+    "A5 base-set timing in EVIDENCE (not a test): worker runs the base command once in its worktree, foreground, and pastes wall seconds plus the 'Ran … / OK' lines verbatim. Opener measured at base 1b6ac4e in this container: 35.5 s total (test_ticket 22.2 s, test_memory 5.1 s, test_event 2.4 s, test_no_project_names 0.2 s; 168 tests). If the worker measures > 60 s it lists per-module seconds and proposes which module to trim - no base-set change in this ticket."
+  ],
+  "depends_on": [
+    {
+      "id": "162",
+      "condition": "landed"
+    },
+    {
+      "id": "163",
+      "condition": "landed"
+    },
+    {
+      "id": "166",
+      "condition": "landed"
+    }
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "1b6ac4e101e7bc73e694f17a5759a172dfb4c58c",
+  "state": "Ready",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "test_plan": "Verification design (the worker writes these as unit tests; the verifier is not dispatched, see needs_verifier): (1) packet shape A1-A3 via the existing AutoFixBase sandbox and --dry-run (no LLM); expected strings written in the test, not read from auto-fix.sh; the base path is cross-checked against the packet's own gate line. (2) static A4 reading the committed docs/cards. Worker, foreground: timeout 590 python3 -m unittest tests.test_auto_fix (270 s recorded at #70; run alone); then tests.test_templates tests.test_rules_delivery tests.test_memory; then the base command once (A5). Mutations (not measured by opener): m1 as A3; m2 the base line printed with --branch --ticket instead of --base -> A1 (2) red; m3 docs edited but auto-fix.sh not -> A1 red while A4 green (the two are independent assertions on purpose). Container runs as uid 0; hard_block.patterns forbids os.kill / killpg / pkill / 'kill -' in added tests/** lines.",
+  "outline": "D-073 ① done as one ticket (behaviour + rule text, D-054 Q12). Facts at base 1b6ac4e: auto-fix.sh only_tests_section() 664-685 prints test_plan + FIXED sentence; gate line for the packet at 641 ('在分支副本重跑閘門') and the gate command resolver ac_gate_script at 2675 - reuse it for the --base line. Pinned old text: tests/test_auto_fix.py:3464-3513 ThePacketSaysWhichTestsToRun (PLAN/FIXED/EMPTY constants; 3 cases) - rewrite. Checked and NOT pinned: verify/dispatch/test_ticket_133.py:41 T122_TAIL uses the old sentence only as fake worker-log text for the fallback parser (fixture content, not an assertion on the packet) - leave it. Rule text to change: docs/DISPATCH-TEMPLATE.md:84-88 (§1, title '## 1. 在自己的 worktree / 分支 commit' must stay - rules.py matches titles; test_rules_delivery guards), memory/role/implementer.md lines '交付物' ('含自己的單元測試…先綠才交') and '測試範圍(#87 A18)', docs/reference/role-procedures.md '### 測試怎麼叫' (5 bullets; drop the '全套只在 test_plan 明列' and '負載下重跑只在列了才做' rules), templates/dispatch-verifier.md:92. Measured: gate.sh --base 35.5 s here (target 60 s met; no trim). needs_verifier=false: a verifier case would replay the same packet-string contract the worker's unit tests assert (text + one shell function; D-028 exception). simple. Depends on #162 (gate on testiface; 'actl gate --base' spelling) and #163 (user asked both into depends_on; both batch 2) and #166 (deletes scripts/control/ code paths in auto-fix.sh - same file, land after it to avoid a merge conflict). Not measured: the mutations; the full-suite effect of removing test_plan runs from workers (expected: shorter worker rounds, #155/#159 shape gone).",
+  "complexity": "simple",
+  "needs_verifier": false,
+  "interface_fixed": false,
+  "feature": "agent-control: worker test scope",
+  "decision_refs": [
+    "D-073",
+    "D-054",
+    "D-028",
+    "D-016"
+  ]
+}

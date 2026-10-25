@@ -1,94 +1,64 @@
 {
   "id": "119",
-  "subject": "沿用既有 queue 的 DAG 排程與寫入衝突控制",
+  "subject": "scripts/schedule.py (actl schedule plan|run): DAG from tickets' depends_on + board/batches.json edited by main; dispatches auto-fix.sh up to schedule.max_workers, lands each all-green batch with land.sh t<a> t<b> …, wakes main only at terminal states; ticket.py lint rejects depends_on cycles",
   "created": "2026-10-15T03:48:17+08:00",
-  "objective": "A 尚無 queue；以 T 已存在的 scripts/queue.sh 為來源泛化納入 A，再在同一路徑加入 PlanningBatch frontier、互斥及容量控制。不另做 scheduler/broker 平台。",
+  "objective": "User (2026-10-25): 「票的 DAG 應該可以跟 land.sh 1 2 3 連動…land.sh t162 t164 t165 應該是系統自動知道的,不是 llm 去控制的…LLM 應該是依我的要求去改 dag 的 batch 檔案,後面的 land 該怎麼跑應該是自動的」「開題者要在開題時把自己的票插入 dag」. D-073 ② (batch landing), D-067 (no polling; wake main only at terminal states), D-049 ④ (DAG). Rewritten after the subtraction audit (D-054): no queue platform, no PlanningBatch manifest, no slot API - one script over facts that already exist (ticket files, git, auto-fix.sh, land.sh, inbox.py). (1) scripts/schedule.py with 'plan' (read-only) and 'run'; bin/actl TABLE row 'schedule' and the case that execs it. (2) DAG: nodes = tickets in tickets_dir, edges = depends_on. A dependency is satisfied iff the dependency ticket is Done AND its landed_sha is an ancestor of main (git merge-base --is-ancestor) - 'Done' alone or a non-empty sha alone is not enough. Condition 'landed' (and legacy '落地…' / '已落地…' on Done tickets) is the only understood condition; any other string, a missing ticket, or a Cancelled/Blocked dependency -> the dependant is 'waiting(<reason>)', never dispatched, reason printed. A cycle or self-dependency among tickets that are not Done/Cancelled -> rc 2 naming the cycle; nothing starts. (3) Batch file board/batches.json, edited by main on the user's request: {\"schema\": 1, \"batches\": [{\"id\": \"b1\", \"tickets\": [\"162\", \"164\", \"165\"]}, {\"id\": \"b2\", \"tickets\": [\"163\", \"166\"]}, {\"id\": \"b3\", \"tickets\": [\"167\"]}]} - list order is landing order. Validation (rc 2, naming ticket / dependency / batch): unknown id, an id listed twice, invalid JSON, schema != 1, a dependency inside the same batch (gates are measured against main, not against a batch-mate), a dependency in a later batch or in no batch and not landed. Tickets not listed are untouched by run and printed under 'unscheduled'. File absent -> default plan: batch = every Ready ticket whose dependencies are all landed; after it lands, recompute (next frontier) until nothing is Ready or the frontier is empty while tickets wait (then stop and list why). (4) run, per batch: tickets already green (InReview, gate pass; complex also review.verdict pass per ticket.py review_problems) count as green without dispatch; Ready tickets get 'sh $AC_HOME/scripts/auto-fix.sh <n>' spawned (cwd AC_ROOT) with at most schedule.max_workers (board/config.json, default 2; one auto-fix = one worker + at most one verifier, 4 CPUs) running at once; the script blocks on its children (subprocess wait) - nobody polls status files. auto-fix rc 0 -> green. Any other rc -> that ticket is red-terminal for this run (auto-fix already wrote its own decision page): running children finish, no new dispatch in this batch, then stop (6). A ticket that is Running / InReview-without-gate at start -> rc 2 before anything starts ('another driver has #n'); complex InReview without a review verdict -> 'waiting(review)', counted not green, and if nothing else can move the run stops with a decision page naming review.sh. (5) All tickets of the batch green -> foreground 'sh $AC_HOME/scripts/land.sh <branch…>' (branch = ticket's branch field, else t<n>; batch-file order). land rc 0 -> land closed the tickets -> recompute, next batch. land rc != 0 -> stop (land did its batch_fix and pages; the scheduler never re-runs land). (6) Terminal states, exactly one inbox page per run: every listed batch landed -> kind done, attached to the last landed ticket, listing batches and landed shas; any stop -> kind decision attached to the ticket that stopped it: what happened, what main does next (handle that ticket's page / edit board/batches.json / run review.sh), and 'actl schedule run' to resume. Nothing to dispatch or land at start -> rc 3, reasons on stdout, no page (DISPATCH-TEMPLATE §5.5: 'nothing to do' must not look like 'done'). Events: schedule.start (kv run_id, batches, max_workers), schedule.dispatch per ticket, schedule.land per batch (kv branches), schedule.stop (kv reason). Log: reports/schedule/<run_id>/schedule.log + plan.json. (7) Resumable: nothing is persisted but logs; run recomputes from ticket files and git at start and after every land. Lock .schedule.lock (mkdir, like land's) -> second run rc 2 naming the holder. The scheduler never signals a child (no kill of any spelling): auto-fix and land own their timeouts. (8) 'ticket.py lint <n>' gains: depends_on cycle / self-dependency across tickets_dir -> rc 1 line 'depends_on cycle: a -> b -> a'; a condition other than 'landed' on the linted ticket -> rc 1 naming it; lint stays read-only. This is how an opener 'inserts a ticket into the DAG': write depends_on, run lint. Not here: a board view of the plan (plan's stdout is the view), PlanningBatch manifests (#118), session registry / slot API (#117), scope-overlap serialisation (D-054 Q2 removed write scopes; land.sh's merge conflict stop and batch_fix are the overlap handling), Controller (#120).",
   "acceptance": [
-    "A1 從 source_refs 的既有 queue 保留 --serial、--batch N 與 land:n 用法；--batch N 仍為落地批次大小，另加 --plan-batch <id> 載 PlanningBatch。A 權威版可從 scripts/ 或同步後 scripts/control/ 正確尋根。",
-    "A2 泛化 worker/ticket/control 路徑與 land adapter：A 的 land.sh 吃分支，T 的 land-ticket.sh land 吃票號，不可原樣複製。專案 marker/鎖屏等能力由 config queue.land_command/marker_capability 指定；無 marker 只停用 land 重疊，不妨礙互不衝突 worker 並行。",
-    "A3 已發布批次輸入 B,C,A，B 依賴 A 且 C 獨立、scope 不重疊、容量=2 時先 A/C；A 有真 landed 證據且主線包含該 commit 後才 B，B 取包含 A 的新 base。Done 字樣或非空 sha 單獨不夠；缺票/未知 condition/循環/自依賴零派工並指出原因。",
-    "A4 frontier 只含 Ready、依賴滿足、#106 證據有效與可 claim 的票。依優先級 P1/P2/P3、manifest 順序穩定排；有未滿足依賴仍是 waiting，不再把 skipped 報 done。每次票/落地事件重新計算。",
-    "A5 並行衝突取 #101 提示範圍與 verifier 預留案例、shared_resources；相同資源互斥；空/未知 scope 串行；glob/glob 即使尚無現存檔仍須保守判重疊，無法證不相交就串行。不能將提示清單變成新的 worker 禁寫規則。",
-    "A6 以 #117 同一原子 claim 與容量 reservation 起 worker，兩個 queue 不得超額或雙派同票；stale/未知 owner 的票 queue 不重派，寫成 waiting(owner) 留在狀態檔與看板，#120 落地後由它對帳接手（#120 不存在時就停在 waiting，不暗自修復）。auto-fix rc=0 仍需 gate/review/land 的真終態，不能當落地成功。",
-    "A7 sync-to-project 送 A 權威 queue 與 helper，專案 wrapper 只做命令 adapter，不養第二份排程核心；本票用拋棄式專案驗 A/T 兩種 adapter，真正 T 部署另行同步。看板顯示 waiting dependency/scope/capacity/owner 的原因。",
-    "A8 queue 設定容量後，auto-fix/review 的所有 launch 接到 #117 slot API；容量=1 時 worker 釋 slot 後 verifier 可起，reviewer 再取得 slot；同票不能為等待驗證者而永遠占滿容量。"
+    "A1 plan / DAG (tests/test_schedule.py, harness sandbox, tickets written by the test; 'actl schedule plan', no batches.json): A Ready no deps; B Ready depends A landed; C Ready depends #999 (missing); D Ready depends E, E Ready depends D; F Done landed_sha = a commit on the sandbox main; G Ready depends F; H Ready depends F with condition '閘門綠'; J Ready depends K, K Done with landed_sha = a sha not in the sandbox repo -> rc 2 and stdout names the cycle 'D -> E -> D' (both ids), nothing else printed as a batch; after the test removes D and E: rc 0, stdout has 'batch 1: A G' (ids ascending), waiting lines: B 'waiting dep #A not landed', C 'waiting missing #999', H \"waiting unknown condition '閘門綠'\", J 'waiting dep #K landed_sha not on main'. No process spawned (fake auto-fix call log absent), no inbox page, every ticket file byte-identical, no event emitted by plan.",
+    "A2 batches.json validation (same file): b1 [A, B] -> rc 2 naming B, A and 'same batch'; b1 [B], b2 [A] -> rc 2 naming B, A, 'later batch'; b1 [A] with B unlisted -> rc 0, stdout 'b1: A' then 'unscheduled: B'; id '777' -> rc 2 naming 777; A listed in b1 and b2 -> rc 2 'twice'; invalid JSON -> rc 2 naming board/batches.json; schema 2 -> rc 2 naming 'schema'. In every rc-2 arm nothing is spawned and no page is written.",
+    "A3 dispatch and concurrency (same file; fake auto-fix.sh in the sandbox ac-home appends '<n> start <epoch>' and '<n> end <epoch>' to a call log, sleeps 2 s, sets the ticket InReview with a gate pass, exits 0): b1 [A, G, X] all Ready, schedule.max_workers 2 -> call log has three start/end pairs and the maximum number of overlapping intervals is exactly 2; max_workers 1 -> no overlap and the three starts are in batch order; A already InReview with gate pass (complex: plus review.verdict pass) -> no call for A, A is in the land argv; a complex A InReview without review -> no call for A, A not landed, the run stops with one decision page whose text contains 'review.sh' and '#A'; X Running at start -> rc 2 before any call (empty call log) naming X and 'another driver'.",
+    "A4 land chaining (same file; fake land.sh records argv, sets each named ticket Done with landed_sha = the sandbox main HEAD it advances by one commit, exits 0): b1 [A, G, X], b2 [B] (B depends A) -> exactly one land call for b1 with argv 'tA tG tX' in batch order (ticket branch field used when set: X with branch 'tX-renamed' -> that name), B's dispatch line comes after the b1 land line in the call log, a second land call 'tB', then run rc 0, exactly one inbox page (kind done, ticket B) listing b1 and b2 with both landed shas, events in order: schedule.start, schedule.dispatch ×4, schedule.land ×2, schedule.stop reason=done. Mutation (not measured by opener): m1 land called when only 2 of 3 are green -> this assertion red (argv count).",
+    "A5 stops (same file): max_workers 1, fake auto-fix exits 1 for G -> X never dispatched, land never called, run rc 1, exactly one decision page naming G and 'actl schedule run' and 'board/batches.json', A's state unchanged (InReview), schedule.stop reason=red; fake land exits 1 -> run rc 1, land called exactly once, no b2 dispatch, one decision page naming b1 and 'land'. No batches.json, all Ready tickets waiting on an un-landed Done-without-sha dependency -> rc 3, stdout lists each 'waiting' reason, no page, no dispatch. Every ticket Done -> rc 3, stdout 'nothing to dispatch or land', no page.",
+    "A6 lock and resume (same file): with .schedule.lock present (holder file 'pid=1 …') -> run rc 2 naming the holder, nothing spawned; a run that stopped at A5's red, re-run after the test sets G InReview+gate pass -> dispatches nothing for A/G, dispatches X, lands b1 (argv 'tA tG tX') - i.e. recompute from facts, no state file needed (the test deletes reports/schedule/ first).",
+    "A7 lint (tests/test_ticket.py): D <-> E cycle -> 'ticket.py lint D' rc 1 with a line containing 'depends_on cycle' and both ids; self-dependency -> rc 1; condition '閘門綠' -> rc 1 naming the condition and 'landed'; a ticket whose dependency is Done with a legacy '落地(…)' condition -> rc 0 (legacy on Done is read as landed); lint on A (no deps) still prints 'lint #A ok'; lint leaves every ticket file byte-identical and emits no event. 'ticket.py create --depends-on 7:閘門綠' is still accepted (lint is the check, D-031).",
+    "A8 dogfood + static: in A (cwd A, AC_ROOT unset) 'sh bin/actl schedule plan' rc 0 and prints at least one batch line (A's open tickets have no cycle at base 1b6ac4e - the test asserts rc 0 and the 'batch' word, not the content); 'sh bin/actl schedule' with no subcommand rc 2 and the TABLE line contains 'schedule'; board/config.json has schedule.max_workers 2 and 'python3 scripts/project_config.py check .' rc 0 (schema table gains 'schedule'); grep -c 'os\\.kill\\|killpg\\|pkill\\|kill -' scripts/schedule.py == 0; 'sh bin/actl schedule run' in A is NOT run by the worker (it would dispatch real agents) - EVIDENCE says so explicitly."
   ],
-  "in_scope": [
-    "A 尚無 queue；以 T 已存在的 scripts/queue.sh 為來源泛化納入 A，再在同一路徑加入 PlanningBatch frontier、互斥及容量控制。不另做 scheduler/broker 平台。"
-  ],
-  "out_of_scope": [
-    "docs/DECISIONS.md"
-  ],
+  "in_scope": null,
+  "out_of_scope": null,
   "depends_on": [
     {
-      "id": "101",
-      "condition": "landed"
-    },
-    {
-      "id": "117",
-      "condition": "landed"
-    },
-    {
-      "id": "118",
+      "id": "162",
       "condition": "landed"
     }
   ],
-  "allowed_write_paths": [
-    "scripts/queue.sh",
-    "scripts/queue-graph.py",
-    "scripts/sync-to-project.sh",
-    "scripts/session-state.py",
-    "tests/test_queue.py",
-    "tests/test_queue_graph.py",
-    "tests/test_sync_to_project.py",
-    "tests/test_session_state.py",
-    "board/board.py",
-    "tests/test_board.py",
-    "board/config.json",
-    "docs/WORKFLOW.md",
-    "scripts/auto-fix.sh",
-    "scripts/review.sh",
-    "tests/test_auto_fix.py",
-    "tests/test_review.py"
-  ],
+  "allowed_write_paths": null,
   "role": "worker",
-  "model": "codex:gpt-5.6-sol",
-  "tool": "codex",
+  "model": "opus",
+  "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "fac9173633ebcd697c71a69d23d148b89a15fae1",
-  "state": "Draft",
-  "state_version": 57,
+  "base_sha": "1b6ac4e101e7bc73e694f17a5759a172dfb4c58c",
+  "state": "Ready",
+  "state_version": 78,
   "lease": null,
   "retry_limit": 2,
   "verify": {
     "files": [],
-    "tags": [
-      "agent-output",
-      "board-reads"
-    ],
+    "tags": [],
     "run": "",
     "notes": ""
   },
-  "outline": "本票只負責沿用既有 queue 的 DAG 排程與寫入衝突控制。前置：#101、#117、#118（不依賴 #120：缺 Controller 時 waiting 可見即可；#103 只是共檔 sync-to-project.sh）。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。",
+  "outline": "Rewritten 2026-10-25 by the opener from the user's words (DAG ↔ land.sh linkage is the system's, the LLM edits the batch file; openers insert tickets into the DAG = depends_on). Facts at base 1b6ac4e: no script reads depends_on today (grep: only board.py renders it); land.sh maps branch t<n>[-…] -> ticket (376-390), refuses 0 commits / stale base_sha / hard_block / complex without review (ticket.py review_problems, objection_problems), takes .land.lock by mkdir (90-110), runs batch_fix itself and writes its own decision pages; auto-fix.sh <n> starts round 1 for a Ready ticket, rc table in its header (0 green incl. review pass; 1/3/4/5/6/7/8/9/10 stops) and writes decision pages for its stops; inbox.py post kinds are decision / done only (INBOX_KINDS); ticket.py lint 1664-1681 only checks tags (no cycle check) - add one; depends_on conditions in the ticket store: 50 'landed' (all open tickets), legacy '落地…' / '已落地…' / '' / 'stacked:…' only on Done/Cancelled tickets; states IntegrationQueued / Integrating exist in STATES but no script sets them (not used here either - land owns state). Measured here: gate.sh --base 35.5 s. Judgement on the former prerequisites: #101 Done (its write-scope hints were later deleted by D-054 Q2; dependency dropped as satisfied-and-irrelevant); #117 (session registry v2, slot API) dropped from depends_on - the only thing #119 needed from it was a process slot, and a counter over the scheduler's own children is that; recommend keeping #117 Draft for the main to decide with its cluster (#120/#123/#124/#125), not a #119 matter; #118 (PlanningBatch manifest) recommend Cancel: superseded by this ticket's rule 'opener writes depends_on + lint checks cycles' and by board/batches.json for ordering - the user's words put the DAG in the tickets, not in a manifest. #93 stays frozen on #119 landing (D-050 ④) - unchanged. Depends on #162 (auto-fix/land/gate on testiface; scheduler calls them). complex. needs_verifier true, interface_fixed true. Not measured: the mutations; real 'run' in A (worker must not run it).",
   "effort": "high",
   "needs_verifier": true,
   "interface_fixed": true,
-  "test_plan": "T1 純 graph 固定三票與 scope 夾具：src/*.py vs src/foo.*、尚不存在新檔、空 scope、相同資源、循環。oracle 是手寫順序/衝突矩陣，不呼叫被測函式算預期。\nT2 fake worker/gate/review/land 在拋棄式 A 與 T adapter 跑舊旗標及新 --plan-batch；不啟真 LLM，不操作真 T。\nT3 兩 queue barrier、verifier 共占容量、A 真落地才 B、未發布 Ready 拒絕、review fail 不當 Done；M1 只看 Done 使 A3 紅；M2 空 scope 當不衝突使 A5 紅；M3 skipped 報 done 使 A4 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例置於 tests/test_ticket_<正式票號>_verify.py，不列入 worker 的 allowed_write_paths；由驗證者設定 verify.files/run，verify.tags=[]（A 的 tests/ 案例不冒用未登記的 verify 標籤）。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
-  "feature": "agent-control：DAG 排程",
+  "test_plan": "Layers: unit (tests/test_schedule.py, harness Sandbox with the per-test ac-home copy whose auto-fix.sh / land.sh / review.sh are replaced by recording fakes, as test_land does with gate_stub; oracles are the fakes' call logs, the ticket files the fakes write and hand-written expected strings - never schedule.py's own output parsed back), unit (tests/test_ticket.py for lint), static/dogfood A8. Worker, foreground: timeout 590 python3 -m unittest tests.test_schedule; then tests.test_ticket; then tests.test_actl (TABLE row) and the base command once. Verifier (needs_verifier true, interface_fixed true: subcommands, batches.json schema 1, rc table 0/1/2/3, event names, page kinds and config key are pinned here) writes tests/test_schedule_cases.py in parallel: a Done dependency whose landed_sha is NOT an ancestor of main is not satisfied (the 'Done alone is not enough' rule, old A3); a batch whose land fails must not let a later batch's dependant dispatch; a ticket with legacy '落地(…)' condition on a Done dependency is dispatched; max_workers absent -> 2 (overlap == 2 with 3 tickets); two runs started together -> exactly one proceeds (lock). Mutations (not measured by opener): m1 as A4; m2 'Done' accepted without ancestry -> A1 J arm red; m3 max_workers ignored -> A3 overlap red; m4 cycle check removed -> A1 and A7 red; m5 lock ignored -> A6 red; m6 page written on rc 3 -> A5 last arm red. Timing margins: fakes sleep 2 s, overlap computed from epoch pairs. Container is uid 0; hard_block.patterns forbids os.kill / killpg / pkill / 'kill -' in added tests/** lines and the scheduler itself never signals children (A8 grep).",
+  "feature": "agent-control: DAG scheduling and batch landing",
   "verify_strings": [
-    "--plan-batch",
-    "land_command",
+    "batches.json",
     "max_workers",
-    "marker_capability"
+    "schedule.dispatch",
+    "depends_on cycle"
   ],
   "problem": null,
   "goal": null,
   "non_goals": null,
   "interface_contracts": {
-    "source": "T（tabby_pool 專案）的 scripts/queue.sh；本次只讀，A 的 queue.sh 是新納入檔而非已存在檔。",
-    "graph": "依賴正規化、循環與發布判準只呼叫 #118 planning-batch.py；queue-graph.py 僅為既有 queue 的 frontier/衝突純 helper，沒有另一個 scheduler daemon 或恢復狀態機。",
-    "adapter": "config.queue.land_command 是 argv 模板，明列 {branch}/{ticket} 佔位，不使用未驗證任意 shell 插值；保留人工授權邊界。",
-    "capacity": "config.queue.max_workers 正整數，預設 1；每一個實際 LLM 子程序都占容量（含 verifier/reviewer），不是只數票。不足時延後 verifier，不能超額。"
+    "cli": "actl schedule plan | run; plan is read-only (no spawn, no page, no event); run rc 0 all batches landed / 1 stopped (page written) / 2 refused before start (cycle, batch file, lock, Running ticket) / 3 nothing to do (no page).",
+    "batch_file": "board/batches.json {schema:1, batches:[{id, tickets:[ticket ids as strings]}]}; list order = landing order; absent = frontier default.",
+    "config": "board/config.json schedule.max_workers int >= 1, default 2 (one auto-fix.sh child = one slot).",
+    "satisfied_dependency": "dependency ticket state Done AND landed_sha is an ancestor of main_branch; condition 'landed' (legacy '落地…'/'已落地…' read as landed on Done tickets); anything else = waiting, printed.",
+    "children": "sh $AC_HOME/scripts/auto-fix.sh <n> and sh $AC_HOME/scripts/land.sh <branches>, cwd AC_ROOT, waited on; never signalled.",
+    "events_pages": "schedule.start / schedule.dispatch / schedule.land / schedule.stop; one inbox page per run (done or decision), none on rc 2/3."
   },
   "planning_evidence": null,
   "assignment_reason": null,
@@ -96,11 +66,12 @@
   "coverage_matrix": null,
   "priority": "P1",
   "decision_refs": [
+    "D-073",
+    "D-067",
     "D-049",
+    "D-054",
     "D-016",
-    "D-018",
-    "D-028",
-    "D-031",
     "D-050"
-  ]
+  ],
+  "complexity": "complex"
 }

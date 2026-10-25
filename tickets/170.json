@@ -1,0 +1,58 @@
+{
+  "id": "170",
+  "subject": "gate.sh --branch --ticket runs the whole regression layer (regression with no tag filter) after the unit layer, keeping the ticket-tag gap check; evidence #159 (84 reds only at land) and #160 (two lands red by one case each)",
+  "created": "2026-10-25T00:42:08+00:00",
+  "objective": "Evidence (D-073 background: 'branch gate does not run the regression layer; #159 went red only at land'): #159's branch gate was green, its land full suite red with 84 cases in 1459 s (reports/t159/20261024-203811-6970-gate), every one in the regression layer: verify/dispatch/test_ticket_121.py 23, verify/memory_inbox/test_ticket_134.py 8, verify/board/test_ticket_19.py 6, verify/dispatch/test_ticket_115.py 6, test_ticket_128.py 4, test_ticket_127.py 1, test_ticket_20.py 1, plus 35 rows attributed to shutil.py / control_harness.py frames (also regression cases). #160 landed red twice by one case each: round 1 verify/hard_block/test_ticket_135.py (regression layer, 1585 s lost), round 2 tests/test_verify_runner.py test_map_is_gate_map_row_for_row (a unit module outside #160's branch map, broken by #161 landing in between - a cross-ticket red that only landing on current main can show; not this ticket's). Ruling (opener): the branch gate runs the WHOLE regression layer, not a reference-selected subset. Why: (a) 18 of 22 case files drive A through 'sh scripts/<x>.sh' subprocesses, env and board/config.json - three indirect channels a static 'which cases reference the changed file' map cannot see; a wrong map is a silent gap and looks exactly like green (DISPATCH-TEMPLATE §5.5); (b) #159 changed root resolution in every script, so a reference map would have selected nearly all files anyway; (c) cost: 442 s sequential today, ≈ 442/4 after the parallel ticket, against 1459-1644 s per red land round plus the batch_fix worker rounds it triggers - D-016 counts tokens, and a land-red round costs a worker; the gate's extra minutes cost none. (1) scripts/gate.sh in '--branch --ticket <n>' mode: after the unit layer, run 'regression' with no tag filter (the --full wording and path: status file, flake rerun on regression ids, auto-fix on red) instead of 'regression --tag <ticket tags>'. (2) Keep the gap check: verify.tags declared but selecting no case -> rc 3 with today's message, computed with 'regression --list --tag …' (no second run). (3) The verifier 'check' layer and its 'no declaration' exception are unchanged. (4) '--full' unchanged byte for byte in its regression section. (5) docs/WORKFLOW.md §閘門: one sentence that the branch gate runs unit layer + whole regression layer + verifier check. Not here: selecting unit modules differently, land.sh, the project (T) side - a project's 'regression' command decides what 'all' means.",
+  "acceptance": [
+    "A1 whole regression on the branch (tests/test_gate.py, harness sandbox with verify/example plus a second registered tag's case file, both green; branch changes a mapped scripts/ file): 'gate.sh --branch --ticket <n>' with ticket verify.tags [] -> stdout contains 'gate: 回歸全部' and the verify log 'Ran ' count equals both files' case count; verify.tags ['example'] -> the same count (not only example's); verify.tags ['ghost'] (registered in the sandbox TAGS.md, no case) -> rc 3 and today's gap message, and the fake regression command's call log shows exactly one '--list' call and at most one run call. A ticket with no 'verify' key at all -> regression still runs all.",
+    "A2 red path (same file): the second tag's case made red on the branch -> gate rc 1, status.json failures[0].case is that regression id, state 'done', the fake auto-fix marker file exists (same path as a unit red); fixture case flaky-then-pass -> the flake rerun runs that regression id flake_auto_single_runs times (call log) and status.json marks it suspected_flaky. Mutation (not measured by opener): m1 regression reds not fed to the status file -> A2 first arm red.",
+    "A3 cache and --no-cache (same file): two gate runs under one AC_RUN_ID -> the second regression call is served from verify.py's cache (existing cache assertions; one real run in the call log); '--no-cache' -> two real runs.",
+    "A4 --full unchanged (same file): the regression section of 'gate.sh --full' stdout (lines from 'gate: 回歸全部' to the next 'gate: ' line) is byte-identical to the string the test pins from base 1b6ac4e's sandbox output.",
+    "A5 dogfood + docs: in this ticket's worktree 'sh scripts/gate.sh --branch --ticket <this ticket>' - EVIDENCE pastes the verify 'Ran N tests' line with N >= 290 and the gate rc; docs/WORKFLOW.md §閘門 contains '回歸層全部' (static grep -c >= 1); tests/test_gate.py, tests/test_status.py, tests/test_verify_runner.py green."
+  ],
+  "depends_on": [
+    {
+      "id": "162",
+      "condition": "landed"
+    },
+    {
+      "id": "163",
+      "condition": "landed"
+    },
+    {
+      "id": "169",
+      "condition": "landed"
+    },
+    {
+      "id": "167",
+      "condition": "landed"
+    }
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "1b6ac4e101e7bc73e694f17a5759a172dfb4c58c",
+  "state": "Ready",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "test_plan": "Layers: unit (tests/test_gate.py on the harness sandbox; the sandbox's regression command is the row-3b fixture or verify.py itself; oracle is the fixture's own case count and ids, never gate output parsed back into expectations). Worker, foreground: timeout 590 python3 -m unittest tests.test_gate; then tests.test_status tests.test_verify_runner; then A5 once. Verifier (needs_verifier true, interface_fixed true: gate CLI, rc table and status.json keys unchanged; only which cases run) writes tests/test_gate_regression_cases.py in parallel: the #159 shape - a case under a tag the ticket does not declare goes red on the branch -> gate rc 1 and that id in failures[]; a ticket without a verify key -> all cases ran (count); '--full' and '--branch --ticket' produce the same regression 'Ran ' count on the same tree. Mutations (not measured by opener): m1 as A2; m2 branch mode still passes --tag -> A1 'example' arm red; m3 gap check dropped -> A1 'ghost' arm red; m4 --full section edited -> A4 red. Container is uid 0; hard_block.patterns forbids os.kill / killpg / pkill / 'kill -' in added tests/** lines.",
+  "outline": "D-073 to-open item '分支閘門跑回歸層'. Facts at base 1b6ac4e: gate.sh regression() 702-735 ('ticket' passes the ticket's tags, 'full' passes none; wording 'gate: 票 #n 的回歸' vs 'gate: 回歸全部'); branch flow calls 'regression ticket' at 1067, full calls 'regression full' at 1018; verify.py rc 3 = tags declared but nothing selected (keep via --list); same-round cache in verify.py (cache_path 79-95, keyed on tags + sha + unit) - a no-tag run is a different key than today's tag run, so the first branch gate of a round pays once. After #162 these become testiface 'regression [--tag]' / 'regression --list' calls - write against that interface. Regression layer size: 22 files / 298 ran / 442 s sequential (#161 land). Decision 'whole, not reference- selected' with three reasons in objective; the alternative (map changed files -> case files by grep of script basenames) was rejected, not deferred. simple (one call-site change + gap check + docs). Depends on #162, #163 (user asked), the parallel full-suite ticket (cost of the whole layer on every gate round) and #167 (it rewrites docs/WORKFLOW.md §閘門; same section). needs_verifier true, interface_fixed true. Not measured: the mutations; the per-gate wall after parallelisation.",
+  "complexity": "simple",
+  "needs_verifier": true,
+  "interface_fixed": true,
+  "feature": "agent-control: branch gate",
+  "decision_refs": [
+    "D-073",
+    "D-016",
+    "D-020",
+    "D-014"
+  ]
+}
