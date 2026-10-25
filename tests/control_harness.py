@@ -363,7 +363,7 @@ class Sandbox(unittest.TestCase):
     # ------------------------------------------------------------ A 在哪
 
     def own_ac_home(self):
-        """這個測試自己的一份 A(`<home>/ac-home`:scripts/、bin/、board/board.py、範本),
+        """這個測試自己的一份 A(`<home>/ac-home`:scripts/、bin/、board/board.py、範本、正本卡),
         `AC_HOME` 從此指它 —— 要換掉某一支腳本的案例在這一份上換,不動這個 repo。
         冪等;回傳它的 scripts/。"""
         where = os.path.join(self.home, "ac-home")
@@ -379,6 +379,15 @@ class Sandbox(unittest.TestCase):
             for name in TEMPLATE_FILES:
                 shutil.copy(os.path.join(ROOT, "templates", name),
                             os.path.join(where, "templates", name))
+            # 正本住 A(#166,D-071 §3):角色卡、模型卡、「不可違反的」、共用規矩跟著這一份 A。
+            for kind in ("role", "model"):
+                shutil.copytree(os.path.join(ROOT, "memory", kind),
+                                os.path.join(where, "memory", kind),
+                                ignore=shutil.ignore_patterns("*.inbox.md"))
+            os.makedirs(os.path.join(where, "docs"))
+            shutil.copy(os.path.join(ROOT, "docs", "DISPATCH-TEMPLATE.md"),
+                        os.path.join(where, "docs", "DISPATCH-TEMPLATE.md"))
+            shutil.copy(os.path.join(ROOT, "CLAUDE.md"), os.path.join(where, "CLAUDE.md"))
             self.ac_home = where
             self.scripts = os.path.join(where, "scripts")
             self.board_py = os.path.join(where, "board", "board.py")

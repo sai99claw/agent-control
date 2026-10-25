@@ -454,20 +454,27 @@ def build(root, role, model, override=""):
         cell.heading = "%s %s" % (label, short_title(title)) if NUMBER.match(title) else label
         sections.append(cell)
 
-    model_rel = canon_rel(root, model_card(model)) if model else ""
-    memory = required("模型卡", "## 模型記憶 `%s`" % model_rel, model_rel) if model_rel else None
-
     # 專案層(D-021):根不是 `AC_HOME` 的時候,這個 repo 在讀**A 的**
     # 正本規矩,而它自己的教訓寫在 `memory/`。兩層都疊;同一個目錄時只讀一次 ——
     # 疊兩次的話角色卡會整份出現兩遍,而讀的人會以為那是兩份不同的規矩。
     local = not is_canon(root)
     suffix = inbox_suffix(root)
+    model_rel = canon_rel(root, model_card(model)) if model else ""
     model_name = os.path.basename(model_rel) if model_rel else ""
     local_card = local_memory = None
     if local:
         one = os.path.join(local_dir("role"), card_name)
         local_card = optional("本專案角色卡", "### 本專案 `%s`" % one, one)
-        if model_name:
+    memory = None
+    if model_rel and local and not os.path.isfile(full_path(root, model_rel)):
+        # 專案自己選的模型(角色表是專案資料,D-071 §3)A 不一定有正本:那時專案那一張就是
+        # 這個模型唯一的卡,照必要項要求正文;小標說出 A 沒有正本,不靜默地少一格。
+        one = os.path.join(local_dir("model"), model_name)
+        local_memory = required("模型卡", "## 模型記憶 `%s`(A 沒有 `%s`,只有本專案這一張)"
+                                % (one, model_rel), one)
+    elif model_rel:
+        memory = required("模型卡", "## 模型記憶 `%s`" % model_rel, model_rel)
+        if local:
             one = os.path.join(local_dir("model"), model_name)
             local_memory = optional("本專案模型卡", "### 本專案 `%s`" % one, one)
     # 暫存區:主檔不在也要讀得到 —— 一條寫進 inbox 還沒併檔的教訓,與併過檔的那一條

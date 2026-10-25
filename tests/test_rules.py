@@ -452,6 +452,23 @@ class CanonFromAcHome(RulesBase):
         self.assertEqual(done.stdout.count("CANON-MARK"), 1)
         self.assertNotIn("### 本專案", done.stdout)
 
+    def test_a_model_only_the_project_has_is_its_card_and_says_so(self):
+        """專案自己選的模型 A 沒有正本:專案那一張就是模型卡,小標說出 A 沒有;兩邊都沒有才是錯。
+
+        **變異**:拿掉 build() 的「A 沒有正本」那一路 → 第一段 rc 1,紅。"""
+        self.write(os.path.join("memory", "model", "house-model.md"), "- HOUSE-MODEL 專案模型那一句。\n")
+        done = self.rules("pack", "worker", "--model", "house-model")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        heads = [line for line in done.stdout.splitlines() if "HOUSE-MODEL" in line
+                 or line.startswith("## 模型記憶")]
+        self.assertTrue(heads and "A 沒有" in heads[0], heads)
+        self.assertIn("HOUSE-MODEL", done.stdout)
+        os.remove(os.path.join(self.repo, "memory", "model", "house-model.md"))
+        done = self.rules("pack", "worker", "--model", "house-model")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(done.stdout, "")
+        self.assertIn("memory/model/house-model.md", done.stderr)
+
     def test_without_ac_home_it_is_rc_2_and_says_so(self):
         env = self.env()
         env.pop("AC_HOME")
