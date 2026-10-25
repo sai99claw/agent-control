@@ -1,0 +1,36 @@
+{
+  "id": "171",
+  "subject": "board: tickets table shows two cells per ticket, 驗證者 有/無 (needs_verifier, missing = true) and 覆核 有/無 (complexity == complex); fields unchanged (D-075)",
+  "created": "2026-10-25T10:34:50+00:00",
+  "objective": "D-075 (user 2026-10-25: 「票裡要有欄位給開題者 看要不要啟用 覆核 跟驗證者 這樣就好了」; main: 看板補兩格顯示「驗證者:有 / 無、覆核:有 / 無」,欄位本身不改). In board/board.py render_tickets (section id=\"tickets\", the ① table) add two columns with plain headers <th>驗證者</th> and <th>覆核</th> (plain <th> without attributes, so the header-keyed row_cells helper in tests/test_board.py reads them). Cell values, from the existing fields only, same meaning as the code that acts on them: 驗證者 = '無' iff needs_verifier is JSON false (identity, as scripts/auto-fix.sh 'ticket.get(\"needs_verifier\") is False'), otherwise '有' - missing, null, true, and the string \"false\" are all '有' (tickets/SCHEMA.md needs_verifier row: 缺 = true, only a JSON false skips the verifier). 覆核 = '有' iff complexity == \"complex\" (scripts/ticket.py needs_review), otherwise '無' - missing, null, \"simple\" all '無'. Wording exactly 有 / 無, no other text in the cell. Not here: changing needs_verifier / complexity semantics or ticket.py / SCHEMA, the per-ticket page /t/<n> (it already has a review section), routing by complexity, any new ticket field.",
+  "acceptance": [
+    "A1 needs_verifier cell (tests/test_board.py, BoardUp sandbox, tickets written with make_ticket, page fetched from '/', cells read with row_cells by header name): tickets 1 needs_verifier false, 2 needs_verifier true, 3 key absent, 4 needs_verifier null, 5 needs_verifier the string \"false\" -> row_cells(body, n)['驗證者'] is '無' for 1 and '有' for 2, 3, 4, 5. Oracle: tickets/SCHEMA.md needs_verifier row (only a JSON false is 無), hand-written expected strings.",
+    "A2 review cell (same file and setup): tickets 6 complexity complex, 7 complexity simple, 8 key absent -> row_cells(body, n)['覆核'] is '有' for 6, '無' for 7 and 8. Oracle: tickets/SCHEMA.md complexity row (only complex is reviewed; missing = simple).",
+    "A3 nothing else moves (same file): the existing tests in tests/test_board.py and tests/test_board_cases.py and verify/board/test_ticket_19.py pass unchanged (checked by the opener: they read the tickets table only through header-keyed row_cells or verdict cells, none pins column count or order); the ticket JSON files are byte-identical after the page is served (the board reads, never writes the two fields). Mutation (worker measures): treating 'needs_verifier falsy' instead of 'is False' as 無 -> A1 tickets 4 red; treating 'complexity != simple' as 有 -> A2 ticket 8 red."
+  ],
+  "depends_on": [],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "3c81c2bdffe69fe000588175fe4f516a08d70897",
+  "state": "Ready",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "simple",
+  "needs_verifier": false,
+  "decision_refs": [
+    "D-075",
+    "D-054"
+  ],
+  "feature": "agent-control: board",
+  "test_plan": "Layer: unit, tests/test_board.py (BoardUp, make_ticket, row_cells - all existing helpers; no new harness). Add one test method per acceptance A1/A2 with the hand-written expected cells; oracles are tickets/SCHEMA.md rows, never board.py output parsed back into the oracle. Worker, foreground: timeout 590 python3 -m unittest tests.test_board tests.test_board_cases; then python3 scripts/verify.py --case verify/board/test_ticket_19.py (see python3 scripts/verify.py --help for --case). Mutations as in A3 (revert after). Container is uid 0; hard_block forbids added lines with os.kill / killpg / pkill / 'kill -' - the board test harness already stops its server without them.",
+  "outline": "D-075 small ticket. Change: board/board.py render_tickets only (header row at ~650 and the row format at ~660; add two cells from one.get('needs_verifier') is False and one.get('complexity') == 'complex'). Referencing tests checked: tests/test_board.py row_cells (514) is header-keyed - new headers must be plain <th>; no test pins column count; tests/test_board_cases.py and verify/board/test_ticket_19.py read verdict cells only. needs_verifier false: the only verifier cases would replay the same two-value mapping the worker's A1/A2 already pin with the edge rows (null, string \"false\", absent); a small display change. complexity simple. No depends_on. Not measured: the mutations."
+}

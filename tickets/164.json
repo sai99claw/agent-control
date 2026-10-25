@@ -26,7 +26,7 @@
   "attempt": 0,
   "base_sha": "654d419e7eedeb06f6322ade22f5e0b9b7daad01",
   "state": "InReview",
-  "state_version": 16,
+  "state_version": 21,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -40,14 +40,14 @@
       "stage": "check",
       "ok": true,
       "why": "",
-      "at": "2026-10-25T10:34:40+00:00",
+      "at": "2026-10-25T11:22:23+00:00",
       "files": [
         "tests/test_hooks_cases.py"
       ],
       "base_ref": "654d419e7eedeb06f6322ade22f5e0b9b7daad01",
       "base_sha": "654d419e7eedeb06f6322ade22f5e0b9b7daad01",
       "candidate": "../agent-control-wt/t164",
-      "candidate_sha": "c909a0299df02e41638b099cc2ef7c649ff7046b",
+      "candidate_sha": "795ba07cae4351630f34aa92681b213aef08b51f",
       "baseline": {
         "red": [
           "tests.test_hooks_cases.HooksMergeCases.test_ac_home_unset_is_rc2",
@@ -155,14 +155,48 @@
       "note": "沒帶 --from-envelope",
       "effort": null,
       "at": "2026-10-25T04:18:55+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2758,
+      "outcome": "fail",
+      "run_id": "20261025-103443-9489",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-25T11:20:41+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "sonnet",
+      "tokens_in": 8,
+      "tokens_out": 1737,
+      "cache_write": 28845,
+      "cache_read": 191846,
+      "wall_seconds": 27,
+      "outcome": "handed-in",
+      "run_id": "20261025-103443-9489-gate",
+      "session_id": "d82d5dc1-fea8-4be3-ad2d-19ef01a36211",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "medium",
+      "at": "2026-10-25T11:21:10+00:00"
     }
   ],
   "branch": "t164",
   "gate": {
     "rc": 0,
-    "sha": "c909a0299df02e41638b099cc2ef7c649ff7046b",
-    "run_id": "20261025-103334-4569",
-    "at": "2026-10-25T10:34:40+00:00"
+    "sha": "795ba07cae4351630f34aa92681b213aef08b51f",
+    "run_id": "20261025-112110-25379",
+    "at": "2026-10-25T11:22:23+00:00"
   },
-  "repair_round": 1
+  "repair_round": 2
 }
