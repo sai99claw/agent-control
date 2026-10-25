@@ -26,7 +26,7 @@
   "attempt": 0,
   "base_sha": "2d5f82ea94299f86fceaf2339bb2847d60f3d167",
   "state": "InReview",
-  "state_version": 18,
+  "state_version": 24,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -40,14 +40,14 @@
       "stage": "check",
       "ok": true,
       "why": "",
-      "at": "2026-10-25T04:16:30+00:00",
+      "at": "2026-10-25T05:41:25+00:00",
       "files": [
         "tests/test_testiface_cases.py"
       ],
       "base_ref": "2d5f82ea94299f86fceaf2339bb2847d60f3d167",
       "base_sha": "2d5f82ea94299f86fceaf2339bb2847d60f3d167",
       "candidate": "../agent-control-wt/t162",
-      "candidate_sha": "cacd00b40e296eca2439de66641773ea36c17365",
+      "candidate_sha": "e5cdbcd93ecf1bcd20af5acf87986bcbbde9ab75",
       "baseline": {
         "red": [
           "tests.test_testiface_cases.ActlTestPreflightByHand.test_broken_preflight_is_2_and_writes_no_suspect_file",
@@ -202,6 +202,74 @@
       "note": null,
       "effort": null,
       "at": "2026-10-25T04:18:23+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1,
+      "outcome": "fail",
+      "run_id": "20261025-041854-26764",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-25T04:18:55+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2037,
+      "outcome": "fail",
+      "run_id": "20261025-042022-26962",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-25T04:54:19+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 40,
+      "tokens_out": 11204,
+      "cache_write": 48374,
+      "cache_read": 1304761,
+      "wall_seconds": 1603,
+      "outcome": "handed-in",
+      "run_id": "20261025-042022-26962-gate",
+      "session_id": "f40d0575-5501-4cec-b3c9-ff8d5e587d66",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-25T05:21:04+00:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 16,
+      "tokens_out": 4718,
+      "cache_write": 37862,
+      "cache_read": 429637,
+      "wall_seconds": 54,
+      "outcome": "pass",
+      "run_id": "20261025-052104-4878",
+      "session_id": "5260a3b6-6423-5527-bed8-9d3211ae718f",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-25T05:42:20+00:00"
     }
   ],
   "objections": [
@@ -223,16 +291,16 @@
   "branch": "t162",
   "gate": {
     "rc": 0,
-    "sha": "cacd00b40e296eca2439de66641773ea36c17365",
-    "run_id": "20261025-035646-26598",
-    "at": "2026-10-25T04:16:31+00:00"
+    "sha": "e5cdbcd93ecf1bcd20af5acf87986bcbbde9ab75",
+    "run_id": "20261025-052104-4878",
+    "at": "2026-10-25T05:41:25+00:00"
   },
   "repair_round": 2,
   "review": {
     "verdict": "pass",
     "by": "reviewer@opus",
-    "sha": "cacd00b40e296eca2439de66641773ea36c17365",
-    "note": "reports/t162/20261025-035646-26598/REVIEW.md",
-    "at": "2026-10-25T04:18:23+00:00"
+    "sha": "e5cdbcd93ecf1bcd20af5acf87986bcbbde9ab75",
+    "note": "reports/t162/20261025-052104-4878/REVIEW.md",
+    "at": "2026-10-25T05:42:20+00:00"
   }
 }
