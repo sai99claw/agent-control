@@ -1,4 +1,4 @@
-import contextlib, importlib.util, json, os, re, subprocess, sys, tempfile, unittest, shutil
+import contextlib, importlib.util, json, os, subprocess, sys, tempfile, unittest, shutil
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUN = [sys.executable, os.path.join(HERE, "scripts/verify.py")]
 
@@ -357,26 +357,11 @@ class ResultAndCase(unittest.TestCase):
         self.assert_example_result(again)
 
 
-def gate_map_rows(text):
-    """`scripts/gate.sh` 的 `map()` → `[(pattern, ids)]`,`a|b` 拆成兩列;不含
-    `tests/test_*.py`(adapter 內建那一條)與 `*`(= unmapped)。"""
-    body = text[text.index("map() {"):]
-    body = body[:body.index("\n}\n")]
-    body = "\n".join(line for line in body.splitlines() if not line.strip().startswith("#"))
-    body = re.sub(r"\\\n\s*", " ", body)
-    rows = []
-    for found in re.finditer(r"^ {8}(\S+)\)\s*(.*?);;", body, re.M | re.S):
-        pattern, action = found.group(1), found.group(2).split()
-        if pattern in ("tests/test_*.py", "*"):
-            continue
-        ids = action[1:] if action[:1] == ["add"] else []
-        rows.extend((one, ids) for one in pattern.split("|"))
-    return rows
-
-
 class TestsSectionOfAsConfig(unittest.TestCase):
     """#161 A5 靜態:A 的 `board/config.json` 的 `tests.unittest` 是 `gate.sh map()` / `BASE`
-    的資料版(row 3b 之前兩份並存,這一條讓它們不准漂)。"""
+    的資料版。#161 時兩份並存,這一條逐列比對讓它們不准漂;#162(設計 row 3b)把 `map()`
+    與 `BASE` 從 gate.sh 刪了,設定是唯一的一份 —— 比對的對象沒了,改成斷言 gate.sh 不再
+    帶第二份(漂移的前提就是兩份並存)。"""
 
     def setUp(self):
         with open(os.path.join(HERE, "board", "config.json"), encoding="utf-8") as handle:
@@ -387,18 +372,23 @@ class TestsSectionOfAsConfig(unittest.TestCase):
     def test_base_is_the_four_base_ids(self):
         self.assertEqual(self.unit["base"],
                          ["test_ticket", "test_event", "test_memory", "test_no_project_names"])
-        self.assertIn('BASE="%s"' % " ".join(self.unit["base"]), self.gate)
+        self.assertFalse('\nBASE="' in self.gate, "gate.sh carries a second copy of the base ids")
         self.assertEqual(self.unit["roots"], ["tests"])
 
-    def test_map_is_gate_map_row_for_row(self):
-        """46 列 = base 3bdba76 的 36 個 case 分支(去掉 `tests/test_*.py` 與 `*`,實數)拆
-        `a|b` 後 44 列,加本票的 `scripts/adapter-unittest.py` 一列;#160 再加
-        `scripts/project_config.py` 一列 = 46。順序照 gate(first match wins)。"""
+    def test_map_is_the_only_copy(self):
+        """49 列 = #161 / #160 的 46 列(那時逐列等於 gate.sh `map()`)加 #162 的三列
+        (`scripts/testiface.py`、`tests/fixtures/project/*`、`templates/project-*.example.*`)。
+        gate.sh 不再有 `map()`:對照表只住在設定裡(#162 A4 靜態那一條的同一件事)。"""
         rows = [(row["match"], row["ids"]) for row in self.unit["map"]]
-        self.assertEqual(len(rows), 46)
-        self.assertEqual(rows, gate_map_rows(self.gate))
-        for pattern, _ in rows:
-            self.assertRegex(self.gate, r"\n {8}(\S+\|)?%s(\|\S+)?\)" % re.escape(pattern))
+        self.assertEqual(len(rows), 49)
+        self.assertEqual(len({match for match, _ in rows}), len(rows), "duplicate match rows")
+        for row in (("scripts/testiface.py",
+                     ["test_testiface", "test_gate", "test_status", "test_actl"]),
+                    ("tests/fixtures/project/*", ["test_testiface", "test_no_project_names"]),
+                    ("templates/project-*.example.*",
+                     ["test_testiface", "test_no_project_names"])):
+            self.assertIn(row, rows)
+        self.assertFalse("\nmap() {" in self.gate, "gate.sh carries a second copy of the map")
 
     def test_project_config_check_accepts_it(self):
         """`project_config.py` 是 #160(設計 row 2,並行、不是 depends_on),base 3bdba76 上沒有。
