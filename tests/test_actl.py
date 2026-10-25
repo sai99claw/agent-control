@@ -183,14 +183,15 @@ class A1TheEntryFindsTheProject(ActlBase):
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("actl init", done.stderr)
 
-    def test_a1_rows_wired_later_say_not_landed_yet(self):
-        # doctor / migrate / init landed in #160 (tests/test_project_config.py); test in #162
-        # (tests/test_testiface.py).
-        for command in ("hooks",):
+    def test_a1_no_row_says_not_landed_yet(self):
+        # doctor / migrate / init landed in #160 (tests/test_project_config.py), test in #162
+        # (tests/test_testiface.py), hooks in #164 (tests/test_hooks.py): no stub row is left.
+        done = self.actl("--help", cwd=self.repo)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("not landed yet", done.stdout)
+        for command in ("test", "hooks"):
             with self.subTest(command):
-                done = self.actl(command, cwd=self.repo)
-                self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-                self.assertIn("not landed yet", done.stderr)
+                self.assertIn("\n  %s " % command, done.stdout)
 
     def test_a1_a_child_writes_into_the_resolved_root(self):
         """`actl` export 的 AC_ROOT 就是子行程寫的地方:`-C <另一顆> event emit` 寫進那一顆的

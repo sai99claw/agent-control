@@ -44,6 +44,26 @@ class A1HookShape(unittest.TestCase):
                              "永遠對不到,而它讀起來跟對得到的一樣")
 
 
+    def test_a4_dogfood_check_is_clean_and_spelling_is_portable(self):
+        """#164 A4: `hooks.py check` on this tree's committed file is rc 0 (no diff), and the
+        committed commands carry `$CLAUDE_PROJECT_DIR`, never a machine path."""
+        env = {key: value for key, value in os.environ.items() if not key.startswith("AC_")}
+        env["AC_HOME"] = ROOT
+        done = subprocess.run(
+            [sys.executable, os.path.join(ROOT, "scripts", "hooks.py"), "check",
+             "--project", ROOT], env=env, capture_output=True, text=True, timeout=TIMEOUT)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        with open(SETTINGS, encoding="utf-8") as handle:
+            conf = json.load(handle)
+        commands = [hook["command"] for groups in conf["hooks"].values()
+                    for group in groups for hook in group["hooks"]]
+        self.assertEqual(len(commands), 3)
+        for command in commands:
+            self.assertIn("$CLAUDE_PROJECT_DIR", command)
+            self.assertNotIn("/home/", command)
+            self.assertNotIn(os.path.expanduser("~"), command)
+
+
 class HookSandbox(Sandbox):
     config_extra = {"routing": {"main": "fable"}, "worktree_dir": WORKTREE}
 

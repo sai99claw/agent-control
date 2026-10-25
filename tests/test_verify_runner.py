@@ -376,11 +376,12 @@ class TestsSectionOfAsConfig(unittest.TestCase):
         self.assertEqual(self.unit["roots"], ["tests"])
 
     def test_map_is_the_only_copy(self):
-        """49 列 = #161 / #160 的 46 列(那時逐列等於 gate.sh `map()`)加 #162 的三列
-        (`scripts/testiface.py`、`tests/fixtures/project/*`、`templates/project-*.example.*`)。
+        """50 列 = #161 / #160 的 46 列(那時逐列等於 gate.sh `map()`)加 #162 的三列
+        (`scripts/testiface.py`、`tests/fixtures/project/*`、`templates/project-*.example.*`)
+        加 #164 的一列(`scripts/hooks.py`)。
         gate.sh 不再有 `map()`:對照表只住在設定裡(#162 A4 靜態那一條的同一件事)。"""
         rows = [(row["match"], row["ids"]) for row in self.unit["map"]]
-        self.assertEqual(len(rows), 49)
+        self.assertEqual(len(rows), 50)
         self.assertEqual(len({match for match, _ in rows}), len(rows), "duplicate match rows")
         for row in (("scripts/testiface.py",
                      ["test_testiface", "test_gate", "test_status", "test_actl"]),

@@ -40,7 +40,7 @@ TABLE='actl [-C <project dir>] <command> [args…]
   version                        AC_HOME, ac_sha, AC_ROOT, AC_CODE_ROOT (works outside a project)
   test <preflight|select|run|full|regression> [args…]
                                  scripts/testiface.py (the declared tests.* command, or the built-in)
-  hooks                          not landed yet'
+  hooks                          scripts/hooks.py (install | check the .claude/settings.json hook entries)'
 
 C_DIR=""
 while [ $# -gt 0 ]; do
@@ -83,12 +83,9 @@ case "$CMD" in
         echo "AC_ROOT=${_root:-(none)}"
         echo "AC_CODE_ROOT=${_code:-(none)}"
         exit 0 ;;
-    hooks)
-        echo "actl: $CMD: not landed yet (D-071 follow-up)" >&2
-        exit 2 ;;
     land|gate|apply|review|auto-fix|heartbeat|session|board|test|\
     ticket|event|inbox|status|memory|rules|repo-map|verify|verify-case|\
-    doctor|migrate|init) ;;
+    doctor|migrate|init|hooks) ;;
     *)
         echo "actl: unknown command '$CMD'" >&2
         printf '%s\n' "$TABLE" >&2
