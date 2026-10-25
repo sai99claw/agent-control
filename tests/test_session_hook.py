@@ -228,5 +228,30 @@ class A8TheHookFindsTheProject(HookSandbox):
         self.assertEqual(os.listdir(bare), [])
 
 
+class A9DoctorBeforeThePage(HookSandbox):
+    """#160(D-071 §2):`actl doctor` 的 row 印在那一頁之前 —— 版本落後的專案開場就被看見。"""
+
+    def first_heading(self, stdout):
+        at = stdout.find("\n── ")
+        return at + 1 if at >= 0 else (0 if stdout.startswith("── ") else -1)
+
+    def test_a9_a_version_1_project_says_migrate_before_the_page(self):
+        """**變異**:拿掉 session-hook.sh 叫 doctor 那一行 → 沒有 `actl migrate`,紅。"""
+        conf = json.loads(self.read("board/config.json"))
+        conf.pop("config_version")
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        done = self.hook("startup")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        heading = self.first_heading(done.stdout)
+        self.assertGreater(heading, 0, done.stdout[:400])
+        self.assertIn("actl migrate", done.stdout[:heading])
+
+    def test_a9_a_version_2_project_does_not(self):
+        done = self.hook("startup")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("actl migrate", done.stdout)
+        self.assertNotIn("actl doctor", done.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

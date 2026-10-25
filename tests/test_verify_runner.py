@@ -391,10 +391,11 @@ class TestsSectionOfAsConfig(unittest.TestCase):
         self.assertEqual(self.unit["roots"], ["tests"])
 
     def test_map_is_gate_map_row_for_row(self):
-        """45 列 = base 3bdba76 的 36 個 case 分支(去掉 `tests/test_*.py` 與 `*`,實數)拆
-        `a|b` 後 44 列,加本票的 `scripts/adapter-unittest.py` 一列。順序照 gate(first match wins)。"""
+        """46 列 = base 3bdba76 的 36 個 case 分支(去掉 `tests/test_*.py` 與 `*`,實數)拆
+        `a|b` 後 44 列,加本票的 `scripts/adapter-unittest.py` 一列;#160 再加
+        `scripts/project_config.py` 一列 = 46。順序照 gate(first match wins)。"""
         rows = [(row["match"], row["ids"]) for row in self.unit["map"]]
-        self.assertEqual(len(rows), 45)
+        self.assertEqual(len(rows), 46)
         self.assertEqual(rows, gate_map_rows(self.gate))
         for pattern, _ in rows:
             self.assertRegex(self.gate, r"\n {8}(\S+\|)?%s(\|\S+)?\)" % re.escape(pattern))

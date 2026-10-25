@@ -99,7 +99,13 @@ FLAG=""
 [ -z "$SID" ] || FLAG="$FLAG --session $SID"
 AGAIN="sh ${AC#"$ROOT"/}/new-session.sh main $MODEL --no-event"
 
+# `actl doctor` 的 row 印在那一頁之前(D-071 §2,#160):版本落後 / 超前的專案在開場就被看見,
+# 不是等到第一個 actl 指令 rc 2。沒有 finding 時一個字都不印。
+DOCTOR=$(AC_ROOT=$ROOT sh "${AC_CONTROL_DIR:-$AC}/../bin/actl" doctor 2>&1)
+[ "$DOCTOR" = "actl doctor: no findings" ] && DOCTOR=""
+
 PAGE=$(
+    [ -z "$DOCTOR" ] || printf '%s\n\n' "$DOCTOR"
     [ -z "$WARN" ] || echo "$WARN"
     # shellcheck disable=SC2086
     AC_ROOT=$ROOT sh "$AC/new-session.sh" main "$MODEL" $FLAG 2>&1
