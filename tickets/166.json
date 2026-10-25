@@ -22,6 +22,10 @@
     {
       "id": "162",
       "condition": "landed"
+    },
+    {
+      "id": "172",
+      "condition": "landed"
     }
   ],
   "role": "worker",
@@ -30,7 +34,7 @@
   "attempt": 0,
   "base_sha": "26c776b97b90ef00558de8d34bb079b3719d06bc",
   "state": "Blocked",
-  "state_version": 9,
+  "state_version": 10,
   "lease": null,
   "retry_limit": 2,
   "verify": {

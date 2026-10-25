@@ -1,0 +1,37 @@
+{
+  "id": "172",
+  "subject": "Drop scripts/sync-to-project.sh from board/config.json hard_block.paths and update the two oracles that pin the three-entry list (precondition of #166, D-071)",
+  "created": "2026-10-25T12:36:45+00:00",
+  "objective": "D-071 (user-authorised retirement of sync-to-project.sh). After this ticket board/config.json hard_block.paths is exactly [\"docs/DECISIONS.md\", \"docs/VISION.md\"] (order kept, dirs and patterns unchanged), so #166 can delete the script without land.sh refusing it as a hard_block hit. Three edits, nothing else: (1) board/config.json hard_block.paths drops \"scripts/sync-to-project.sh\". (2) tests/control_harness.py DEFAULT_CONFIG hard_block.paths (lines 179-180) becomes the same two-entry list (comment above it says the sandbox default mirrors board/config.json). (3) verify/hard_block/test_ticket_135.py: PATHS constant (line 41) becomes the two-entry list and the docstring PATHS line (line 13) drops scripts/sync-to-project.sh. NOT in this ticket: the board/config.json tests map rows naming scripts/sync-to-project.sh / test_sync_to_project (lines ~115, ~122), the script itself, tests/test_sync_to_project.py, and every prose mention - all #166. Do not touch test fixtures that carry their own T-shaped hard_block (tests/test_project_config.py:34, tests/test_project_config_cases.py:31-32) or tests/test_adapter_unittest.py:69 / tests/test_auto_fix.py:4658 / tests/test_actl.py:228 - they do not read A's hard_block.",
+  "acceptance": [
+    "A1 config: python3 -c 'import json;print(json.load(open(\"board/config.json\"))[\"hard_block\"])' prints paths == ['docs/DECISIONS.md', 'docs/VISION.md'], dirs == [], patterns unchanged (the four kill patterns); expected value from D-071 / design docs/design/project-runnable-entries.md:586 ('hard_block.paths has two entries').",
+    "A2 oracles follow: tests/control_harness.py DEFAULT_CONFIG['hard_block']['paths'] and verify/hard_block/test_ticket_135.py PATHS both equal ['docs/DECISIONS.md', 'docs/VISION.md']; the 135 docstring PATHS line no longer names scripts/sync-to-project.sh; 'python3 scripts/verify.py --tag hard-block' rc 0 with Ran 7 (base count measured: Ran 7, OK).",
+    "A3 no regression: the full suite green per docs/DISPATCH-TEMPLATE.md section 1 batching (each batch < 590s), plus the gate's selection for this branch; paste each Ran/OK line.",
+    "A4 the ticket's own diff does not hit hard_block: changed files are exactly board/config.json, tests/control_harness.py, verify/hard_block/test_ticket_135.py; none is in hard_block.paths (old or new); no added line in tests/** or verify/** contains a kill pattern literally (the harness patterns line is not touched; keep it split-spelled). land.sh accepts the branch."
+  ],
+  "depends_on": [],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "cd9be0b87f3b9c25445f6055b5c97576fb8d71ab",
+  "state": "Ready",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [
+      "hard-block"
+    ],
+    "run": "",
+    "notes": ""
+  },
+  "test_plan": "Layer: contract (config + oracle constants). Run: python3 scripts/verify.py --tag hard-block (expect Ran 7 OK; A4 'test_a4' compares board/config.json hard_block to PATHS, A5 compares Sandbox DEFAULT_CONFIG to PATHS - expected values come from D-071, not from the code under test). Then the full suite in batches per DISPATCH-TEMPLATE section 1. Mutation (worker, optional): revert only the board/config.json edit -> verify case 135 A4 red (read from code: test_ticket_135.py:301-304 assertEqual config vs PATHS; not measured); revert only control_harness.py -> 135 A5 red (test_ticket_135.py:312-322; not measured).",
+  "complexity": "simple",
+  "needs_verifier": false,
+  "decision_refs": [
+    "D-071"
+  ],
+  "outline": "Precondition of #166 (D-071 retire sync; user authorised removing the hard_block row). Three one-line edits: board/config.json hard_block.paths, tests/control_harness.py:179-180 DEFAULT_CONFIG, verify/hard_block/test_ticket_135.py:13,41 (verify/** is normally the verifier's; here it is a config-sync of an oracle constant, user named it explicitly). Checked references: git grep sync-to-project over tests/ verify/ - only those two pin A's list; test_project_config*.py fixtures carry their own T shapes, test_adapter_unittest/test_auto_fix/test_actl hits are independent of A's hard_block -> unchanged. tests map rows (config.json ~115, ~122) stay for #166. Base: verify --tag hard-block Ran 7 OK (measured). needs_verifier=false: pure config sync; a verifier case would replay case 135 A4/A5, the same contract. Order: edit three files, run hard-block tag, full suite, land."
+}
