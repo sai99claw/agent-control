@@ -40,6 +40,7 @@
     "tests/test_auto_fix_codex.py",
     "tests/test_auto_fix_fallback_midrun.py",
     "tests/test_board.py",
+    "tests/test_board_cases.py",
     "tests/test_consolidate_memory.py",
     "tests/test_cost_ledger.py",
     "tests/test_event.py",

@@ -586,5 +586,137 @@ class TheFourVisionMetricsComeFromTicketJson(BoardUp):
         self.assertEqual(numbers["waiting"]["total"], 2)
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+class KeyGate(BoardUp):
+    """D-071 C9:`board.key_file` 設了,除了 `/healthz` 每個方法每條路徑都要過。"""
+
+    config_extra = {"board": {"key_file": "board/key.txt"}}
+    KEY = "k-secret"
+
+    def raw(self, path, headers=None, method="GET", data=None):
+        """(status, headers, body),不跟 302、401 也不丟例外。"""
+        _, port = self.port_cache
+        opener = urllib.request.build_opener(NoRedirect)
+        request = urllib.request.Request(
+            "http://127.0.0.1:%d%s" % (port, path), data=data,
+            headers=headers or {}, method=method)
+        try:
+            response = opener.open(request, timeout=20)
+        except urllib.error.HTTPError as err:
+            response = err
+        with response:
+            return response.status, response.headers, response.read()
+
+    def serve_keyed(self):
+        self.write("board/key.txt", "k-secret\nsecond line ignored\n")
+        self.make_ticket(1, state="NeedsDecision", subject="只有這顆沙盒的票題")
+        self.up()
+
+    def test_the_gate_flow(self):
+        self.serve_keyed()
+        cookie = {"Cookie": "ac_board_key=k-secret"}
+        for path in ("/", "/api/state", "/t/1"):
+            status, headers, body = self.raw(path)
+            self.assertEqual((status, body), (401, b""), path)
+            self.assertIsNone(headers.get("WWW-Authenticate"))
+        status, _, body = self.raw("/healthz")
+        self.assertEqual((status, json.loads(body)), (200, {"ok": True}))
+        status, headers, body = self.raw("/?key=k-secret")
+        self.assertEqual((status, headers["Location"], body), (302, "/", b""))
+        setter = headers["Set-Cookie"]
+        for part in ("ac_board_key=k-secret", "HttpOnly", "Path=/"):
+            self.assertIn(part, setter)
+        status, _, body = self.raw("/", cookie)
+        self.assertEqual(status, 200)
+        self.assertIn("只有這顆沙盒的票題", body.decode("utf-8"))
+        status, headers, _ = self.raw("/t/1?key=k-secret&x=1")
+        self.assertEqual((status, headers["Location"]), (302, "/t/1?x=1"))
+        status, headers, _ = self.raw("/?key=wrong")
+        self.assertEqual(status, 401)
+        self.assertIsNone(headers.get("Set-Cookie"))
+        self.assertEqual(self.raw("/", {"Cookie": "ac_board_key=wrong"})[0], 401)
+
+    def test_post_is_gated(self):
+        self.serve_keyed()
+        before = self.exists("board/answers.jsonl") and self.read("board/answers.jsonl")
+        body = json.dumps({"ticket": "1", "answer": "不該存"}).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        status, _, _ = self.raw("/api/answer", headers, "POST", body)
+        self.assertEqual(status, 401)
+        after = self.exists("board/answers.jsonl") and self.read("board/answers.jsonl")
+        self.assertEqual(before, after)
+        headers["Cookie"] = "ac_board_key=k-secret"
+        status, _, out = self.raw("/api/answer", headers, "POST", body)
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(out)["ok"])
+        self.assertEqual(len(self.read("board/answers.jsonl").splitlines()), 1)
+
+    def refuse(self, prepare):
+        prepare()
+        done = subprocess.run(
+            ["python3", self.board_py, "--port", "0"], cwd=self.repo, env=self.env(),
+            capture_output=True, text=True, timeout=20)
+        self.assertEqual(done.returncode, 2, done.stderr)
+        self.assertIn("board: key_file", done.stderr)
+        self.assertIn("board/key.txt", done.stderr)
+        self.assertIn("missing or empty", done.stderr)
+        self.assertNotIn("http://127.0.0.1:", done.stderr + done.stdout)
+
+    def test_missing_key_file_refuses_to_start(self):
+        self.refuse(lambda: None)
+
+    def test_empty_first_line_refuses_to_start(self):
+        self.refuse(lambda: self.write("board/key.txt", "\nk-secret\n"))
+
+    def test_the_log_is_path_only_and_the_source_uses_compare_digest(self):
+        self.serve_keyed()
+        proc, _ = self.port_cache
+        self.raw("/t/1?key=k-secret")
+        self.raw("/t/1", {"Cookie": "ac_board_key=k-secret"})
+        self.raw("/healthz")
+        proc.terminate()
+        proc.wait(timeout=10)
+        err = proc.stderr.read()
+        self.assertIn("/t/1", err)
+        self.assertNotIn("k-secret", err)
+        with open(self.board_py, encoding="utf-8") as handle:
+            self.assertGreaterEqual(handle.read().count("compare_digest"), 1)
+
+
+class NoKeyConfigured(BoardUp):
+    config_extra = {"board": {}}
+
+    def test_empty_board_section_means_no_gate_and_no_cookie(self):
+        self.up()
+        _, port = self.port_cache
+        with urllib.request.urlopen("http://127.0.0.1:%d/" % port, timeout=20) as r:
+            self.assertEqual(r.status, 200)
+            self.assertIsNone(r.headers.get("Set-Cookie"))
+        self.assertEqual(self.get("/healthz")[0], 200)
+
+    def test_actl_board_serves_the_project(self):
+        proc = subprocess.Popen(
+            ["sh", os.path.join(self.ac_home, "bin", "actl"), "board", "--port", "0"],
+            cwd=self.repo, env=self.env(), stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True)
+        self.addCleanup(self._stop, proc)
+        deadline = time.time() + 20
+        port = None
+        while time.time() < deadline and port is None:
+            line = proc.stderr.readline()
+            found = PORT_LINE.search(line or "")
+            if found:
+                port = int(found.group(1))
+            elif proc.poll() is not None:
+                self.fail("actl board 沒起來:" + proc.stderr.read())
+        self.assertIsNotNone(port, "20 秒內沒有報出埠")
+        with urllib.request.urlopen("http://127.0.0.1:%d/healthz" % port, timeout=20) as r:
+            self.assertEqual(r.status, 200)
+
+
 if __name__ == "__main__":
     unittest.main()

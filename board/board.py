@@ -34,6 +34,7 @@ VISION「目的與成功指標」的四個數字:每張落地票的 token 與時
 **不改票的狀態、不派工** —— 一顆會順手改狀態的儲存鈕,是一顆不敢按的儲存鈕。
 """
 
+import hmac
 import html
 import json
 import os
@@ -42,7 +43,7 @@ import subprocess
 import sys
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qsl, unquote, urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
@@ -1094,6 +1095,32 @@ def append_answer(ident, answer):
     return row
 
 
+KEY = None          # board.key_file 的第一行;None = 沒設閘門(main 填)
+COOKIE = "ac_board_key"
+
+
+def load_key(base):
+    """`board.key_file`(相對專案根,或絕對)的第一行去掉空白。沒設 → None;設了卻讀不到
+    或第一行是空的 → 拒答(ValueError):設了的閘門不能靜靜地開著(D-071 C9)。"""
+    board = event.config(base).get("board")
+    rel = board.get("key_file") if isinstance(board, dict) else None
+    if rel is None:
+        return None
+    path = os.path.join(base, str(rel))
+    try:
+        with open(path, encoding="utf-8") as handle:
+            first = handle.readline().strip()
+    except (OSError, UnicodeDecodeError):
+        first = ""
+    if not first:
+        raise ValueError("board: key_file %s missing or empty" % path)
+    return first
+
+
+def same(left, right):
+    return hmac.compare_digest(left.encode("utf-8"), right.encode("utf-8"))
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "control-board"
     sys_version = ""
@@ -1104,7 +1131,44 @@ class Handler(BaseHTTPRequestHandler):
             datetime.now().isoformat(timespec="seconds"),
             self.command, urlparse(self.path).path))
 
+    def gate(self):
+        """True = 放行。有 key 時,除了 `/healthz` 每個方法每條路徑都要過:`?key=` 對 →
+        302 到去掉 key 的同一條路徑並種 HttpOnly cookie;cookie 對 → 放行;其餘 401 空 body。"""
+        if KEY is None:
+            return True
+        parsed = urlparse(self.path)
+        if (parsed.path.rstrip("/") or "/") == "/healthz":
+            return True
+        good = [v for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+                if k == "key" and same(v, KEY)]
+        if good:
+            rest = "&".join(
+                part for part in parsed.query.split("&")
+                if part and unquote(part.partition("=")[0].replace("+", " ")) != "key")
+            self.close_connection = True
+            self.send_response(302)
+            self.send_header("Location", parsed.path + ("?" + rest if rest else ""))
+            self.send_header("Set-Cookie", "%s=%s; Path=/; HttpOnly; SameSite=Strict" % (
+                COOKIE, good[0]))
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return False
+        for header in self.headers.get_all("Cookie") or []:
+            for item in header.split(";"):
+                name, _, value = item.strip().partition("=")
+                if name == COOKIE and same(value, KEY):
+                    return True
+        self.close_connection = True
+        self.send_response(401)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+        return False
+
     def do_GET(self):
+        if self.gate():
+            self.serve_get()
+
+    def serve_get(self):
         path = urlparse(self.path).path.rstrip("/") or "/"
         if path == "/healthz":
             return self.send_json({"ok": True})
@@ -1153,6 +1217,10 @@ class Handler(BaseHTTPRequestHandler):
         return self.send_body(body.encode("utf-8"), "text/html; charset=utf-8")
 
     def do_POST(self):
+        if self.gate():
+            self.serve_post()
+
+    def serve_post(self):
         path = urlparse(self.path).path.rstrip("/") or "/"
         raw = self.read_body()
         if path != "/api/answer":
@@ -1211,6 +1279,12 @@ def make_server(port):
 
 
 def main(argv):
+    global KEY
+    try:
+        KEY = load_key(root())
+    except ValueError as err:
+        sys.stderr.write(str(err) + "\n")
+        return 2
     port = int(event.config(root()).get("port") or DEFAULT_PORT)
     if "--port" in argv:
         at = argv.index("--port")
