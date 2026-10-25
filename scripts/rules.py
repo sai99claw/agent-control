@@ -104,10 +104,8 @@ WANTED = {
                  ("0.5", "3", "5.5", "6.4", "8"),
                  "讀分支上的 code 對票面驗收,交 verdict 與逐條對照"),
 }
-# 專案可以在 board/config.json 的 `rules` 段改版面(同步到專案後角色卡住在
-# `docs/roles/`,共用規矩的節沒有編號、只有標題):
-#   "rules": {"roles_dir": "docs/roles", "models_dir": "docs/roles/model",
-#             "sections": {"worker": ["工作區", "判綠", …]}}
+# 專案可以在 board/config.json 的 `rules` 段改版面(共用規矩的節沒有編號、只有標題):
+#   "rules": {"sections": {"worker": ["工作區", "判綠", …]}}
 # `sections` 的每一項可以是節號(`5.5`)或標題的一段字(子字串,第一個命中的節)。
 def rules_config(root):
     try:
@@ -117,19 +115,26 @@ def rules_config(root):
     return data if isinstance(data, dict) else {}
 
 
-def roles_dir(root):
-    return rules_config(root).get("roles_dir") or os.path.join("memory", "role")
+# 正本規矩住 A 的 clone(D-071 §3):`$AC_HOME/memory/{role,model}`。`actl` 設 `AC_HOME`;
+# 沒設就不猜(rc 2,`main()`)—— 猜錯的那一份規矩與對的長得一樣。包裡的路徑寫成這個前綴,
+# 不把某台機器的家目錄抄進派工文。
+HOME_MARK = "$AC_HOME"
 
 
-def models_dir(root):
-    return rules_config(root).get("models_dir") or os.path.join("memory", "model")
+def ac_home():
+    return os.environ.get("AC_HOME") or ""
+
+
+def canon_dir(layer):
+    """正本那一層(A 的 `memory/<layer>`),相對 `AC_HOME`。"""
+    return os.path.join("memory", layer)
 
 
 def local_dir(layer):
-    """專案**自己寫的**那一層,固定住 `memory/<layer>`(D-021)。
+    """專案**自己寫的**那一層,固定住 `<根>/memory/<layer>`(D-021)。
 
-    不做成設定鍵:`memory/` 永遠是「這個 repo 自己寫的」,`roles_dir` 是「規矩從哪來」。
-    兩者是同一個目錄時,這個 repo 就是正本;不同時,這個 repo 是專案,規則包兩層都疊。
+    不做成設定鍵:`memory/` 永遠是「這個 repo 自己寫的」,`AC_HOME` 是「規矩從哪來」。
+    兩者是同一個 repo 時,這個 repo 就是正本;不同時,這個 repo 是專案,規則包兩層都疊。
     一條規則,沒有第二個欄位、沒有旗標 —— 多一個鍵就多一個要對齊的地方,而對不齊的
     那天沒有人會知道(`memory.py watched_files` 的 docstring 講過同一件事)。
     """
@@ -137,8 +142,21 @@ def local_dir(layer):
 
 
 def is_canon(root):
-    """這個 repo 自己就是正本嗎 —— `roles_dir` 與 `memory/role` 指到同一個目錄。"""
-    return os.path.normpath(roles_dir(root)) == os.path.normpath(local_dir("role"))
+    """這個 repo 自己就是正本嗎 —— 根與 `AC_HOME` 的實體路徑相同(D-071 §3,一個比較、沒有鍵)。"""
+    home = ac_home()
+    return bool(home) and os.path.realpath(root) == os.path.realpath(home)
+
+
+def canon_rel(root, rel):
+    """正本裡的 `rel`(相對 `AC_HOME`)在包裡怎麼寫:正本自己寫相對路徑,專案寫 `$AC_HOME/…`。"""
+    return rel if is_canon(root) else HOME_MARK + "/" + rel.replace(os.sep, "/")
+
+
+def full_path(root, source):
+    """`canon_rel` / 相對根的路徑 → 檔案系統上的路徑。"""
+    if source.startswith(HOME_MARK + "/"):
+        return os.path.join(ac_home(), source[len(HOME_MARK) + 1:])
+    return os.path.join(root, source)
 
 
 def inbox_suffix(root):
@@ -194,13 +212,24 @@ ALIASES = {"implementer": "worker", "impl": "worker", "verify": "verifier",
 
 
 def source_path(root, override=""):
+    """共用規矩的路徑:根上有就用根的(專案自己抽的 `DISPATCH-COMMON-RULES.md`),
+    沒有就是 A 的那一份(`$AC_HOME/docs/DISPATCH-TEMPLATE.md`,D-071 §3)。"""
     if override:
         return override if os.path.isabs(override) else os.path.join(root, override)
-    for rel in SOURCES:
-        path = os.path.join(root, rel)
-        if os.path.exists(path):
-            return path
+    for base in (root, ac_home()):
+        for rel in SOURCES:
+            path = os.path.join(base, rel)
+            if base and os.path.exists(path):
+                return path
     return os.path.join(root, SOURCES[-1])
+
+
+def source_rel(root, path):
+    """共用規矩在包裡怎麼寫:根底下寫相對根,A 的那一份寫 `$AC_HOME/…`。"""
+    rel = os.path.relpath(path, root)
+    if not rel.startswith(os.pardir) or not ac_home():
+        return rel
+    return canon_rel(root, os.path.relpath(path, ac_home()))
 
 
 def short_sha(root):
@@ -245,7 +274,6 @@ SOURCE_FIELD = re.compile(r"^(?:[-*+]\s+)?(?:\*\*)?(?:來源|Source)(?:\*\*)?\s*
 SENTENCE_END = re.compile(r"[。!?!?][)」』)\]]*$")
 POINTER_NOISE = re.compile(r"\[[^\]]*\]\([^)]*\)|`[^`]*`|全文見|詳見|參見|見|see\b|->|→")
 HTML_COMMENT = re.compile(r"<!--.*?-->", re.S)
-COMMENT_LINE = re.compile(r"^\s*<!--.*-->\s*$")
 
 
 def is_content(unit):
@@ -265,10 +293,6 @@ def units(text):
     """把一段 markdown 切成**正文單位**:段落、清單的一條(連它的續行)、表的一列、
     一整塊 code。front matter、標題、空行不算 —— 它們是固定成本,不是正文。"""
     lines = text.splitlines()
-    # 同步檔頭(`sync-to-project.sh` 寫在第 1 行的 `<!-- … -->`)壓在 front matter 上面:
-    # 不先跳過,專案端每張卡的第一個單位是那行註解、第二個是 front matter 的第一格(#110)。
-    while lines and (not lines[0].strip() or COMMENT_LINE.match(lines[0])):
-        lines = lines[1:]
     if lines and lines[0].strip() == "---":
         for index in range(1, len(lines)):
             if lines[index].strip() == "---":
@@ -325,16 +349,16 @@ def short_title(title):
     return head or text.strip()
 
 
-def model_card(root, model):
-    """模型記憶的檔名。路由表裡的模型帶著工具前綴(`codex:gpt-5.6-sol`),而記憶檔
-    的名字只有模型那一半 —— 指著一個永遠不存在的路徑,比不指路更糟:它看起來像
+def model_card(model, home=None):
+    """正本模型記憶的路徑(相對 `home`,預設 `AC_HOME`)。路由表裡的模型帶著工具前綴(`codex:gpt-5.6-sol`),
+    而記憶檔的名字只有模型那一半 —— 指著一個永遠不存在的路徑,比不指路更糟:它看起來像
     「那個模型還沒有記憶」。"""
     if not model:
         return ""
-    where = models_dir(root)
+    where = canon_dir("model")
     for name in (model, model.split(":")[-1]):
         rel = os.path.join(where, "%s.md" % name)
-        if os.path.exists(os.path.join(root, rel)):
+        if os.path.exists(os.path.join(home or ac_home(), rel)):
             return rel
     return os.path.join(where, "%s.md" % model.split(":")[-1])
 
@@ -383,14 +407,14 @@ def build(root, role, model, override=""):
     card_name, default_wanted, _one_line = WANTED[role]
     wanted = wanted_sections(root, role, default_wanted)
     path = source_path(root, override)
-    rel = os.path.relpath(path, root)
+    rel = source_rel(root, path)
     problems = []
 
     def problem(item, source, why, nbytes=None):
         problems.append({"item": item, "source": source, "problem": why, "bytes": nbytes})
 
     def required(item, heading, source, **kwargs):
-        full = os.path.join(root, source)
+        full = full_path(root, source)
         if not os.path.isfile(full):
             problem(item, source, "檔案不存在")
             return None
@@ -406,7 +430,7 @@ def build(root, role, model, override=""):
         cell = Cell(item, heading, source, text, **kwargs) if text else None
         return cell if cell is not None and cell.units else None
 
-    card_rel = os.path.join(roles_dir(root), card_name)
+    card_rel = canon_rel(root, os.path.join(canon_dir("role"), card_name))
     card = required("角色卡", "## 角色卡 `%s`" % card_rel, card_rel)
 
     found = blocks(path)
@@ -430,10 +454,10 @@ def build(root, role, model, override=""):
         cell.heading = "%s %s" % (label, short_title(title)) if NUMBER.match(title) else label
         sections.append(cell)
 
-    model_rel = model_card(root, model)
+    model_rel = canon_rel(root, model_card(model)) if model else ""
     memory = required("模型卡", "## 模型記憶 `%s`" % model_rel, model_rel) if model_rel else None
 
-    # 專案層(D-021):`roles_dir` 不是 `memory/role` 的時候,這個 repo 在讀**別人的**
+    # 專案層(D-021):根不是 `AC_HOME` 的時候,這個 repo 在讀**A 的**
     # 正本規矩,而它自己的教訓寫在 `memory/`。兩層都疊;同一個目錄時只讀一次 ——
     # 疊兩次的話角色卡會整份出現兩遍,而讀的人會以為那是兩份不同的規矩。
     local = not is_canon(root)
@@ -447,8 +471,8 @@ def build(root, role, model, override=""):
             one = os.path.join(local_dir("model"), model_name)
             local_memory = optional("本專案模型卡", "### 本專案 `%s`" % one, one)
     # 暫存區:主檔不在也要讀得到 —— 一條寫進 inbox 還沒併檔的教訓,與併過檔的那一條
-    # 一樣會擋到人。來源**不綁 `local`**:暫存區永遠住在 `memory/`(這個 repo 自己寫的),
-    # 而同步刻意不帶它(D-021)—— 綁在 `local` 上的話,正本自己的 inbox 兩邊都沒有讀者。
+    # 一樣會擋到人。來源**不綁 `local`**:暫存區永遠住在 `memory/`(這個 repo 自己寫的)
+    # —— 綁在 `local` 上的話,正本自己的 inbox 沒有讀者(#37)。
     inboxes = {}
     for key, main_rel in (("role", os.path.join(local_dir("role"), card_name)),
                           ("model", os.path.join(local_dir("model"), model_name)
@@ -497,7 +521,7 @@ def fingerprint(root, role, model, problems):
     for row in problems:
         digest.update(json.dumps([row["item"], row["source"], row["problem"]],
                                  ensure_ascii=False).encode("utf-8"))
-        where = os.path.join(root, row["source"].split(" §")[0])
+        where = full_path(root, row["source"].split(" §")[0])
         try:
             with open(where, "rb") as handle:
                 digest.update(handle.read())
@@ -610,12 +634,12 @@ def cmd_roles(args):
     path = source_path(root, args.source)
     found = blocks(path)
     sys.stdout.write("rules: 共用規矩 %s(%d 節)\n"
-                     % (os.path.relpath(path, root), len(found)))
+                     % (source_rel(root, path), len(found)))
     for role in sorted(WANTED):
         card, wanted, one_line = WANTED[role]
         sys.stdout.write("  %-9s %s\n" % (role, one_line))
         sys.stdout.write("            角色卡 %s;節 %s\n"
-                         % (os.path.join(roles_dir(root), card),
+                         % (os.path.join(ac_home(), canon_dir("role"), card),
                             "、".join("§" + x for x in wanted)))
     return 0
 
@@ -642,6 +666,11 @@ def main(argv):
     args = parser.parse_args(argv)
     if not getattr(args, "run", None):
         parser.print_help()
+        return 2
+    if not os.path.isdir(ac_home()):
+        sys.stderr.write("rules: AC_HOME 沒設或不是目錄(%r)—— 正本角色卡與模型卡住 "
+                         "$AC_HOME/memory/{role,model};從 actl 跑,或自己設 AC_HOME=<A 的 clone>\n"
+                         % ac_home())
         return 2
     return args.run(args)
 

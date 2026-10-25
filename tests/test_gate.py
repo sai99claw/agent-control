@@ -1023,58 +1023,6 @@ class BranchGateRefusesAnEmptyCompareOnMain(Sandbox):
         self.refused(os.path.join(os.path.dirname(self.repo), "repo-wt", "t7"))
 
 
-class GateExample(unittest.TestCase):
-    """範例那一份要**自己的語法是對的** —— 一份 `sh -n` 過不了的範本,照抄的人第一
-    件事是修語法,不是讀理由。
-
-    #72:介面那兩條改成**真的執行**範本(只走參數解析與「對不到」那一段,不跑測試),
-    不再 grep 範本散文。"""
-
-    HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-    def example(self, *args):
-        import subprocess
-        import tempfile
-        with tempfile.TemporaryDirectory() as tmp:
-            env = dict(os.environ, AC_GATE_LOG=os.path.join(tmp, "gate.log"))
-            env.pop("AC_GATE_TICKET", None)
-            return subprocess.run(["sh", os.path.join(self.HERE, "scripts", "gate.example.sh")]
-                                  + list(args), capture_output=True, text=True, timeout=60,
-                                  env=env, cwd=tmp)
-
-    def test_the_example_parses(self):
-        import subprocess
-        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        done = subprocess.run(["sh", "-n", os.path.join(here, "scripts", "gate.example.sh")],
-                              capture_output=True, text=True, timeout=60)
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-
-    def test_the_example_keeps_the_three_layer_interface(self):
-        """不認得的旗標退 2、用法列出三層;對不到任何模組的檔退 3 並出聲(§5.5)。"""
-        done = self.example("--quick")
-        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        for flag in ("--branch", "--base", "--full"):
-            self.assertIn(flag, done.stderr)
-        done = self.example("README.md")
-        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
-        self.assertIn("對不到任何測試模組", done.stdout)
-
-    def test_the_example_accepts_the_ticket_flag(self):
-        """**變異**:把範本的 `--ticket` 那一格拿掉 → 這一條紅。
-
-        2026-09-21 外部審查:範本不接受 `--ticket`,照抄的人拿不到狀態檔與票的回歸,
-        而他的 gate 收到 `--ticket 7` 只會回「不認得」+ 退出碼 2 —— 而 2 與「紅了」
-        在呼叫者眼裡長得很像。
-        """
-        done = self.example("--ticket", "7", "README.md")
-        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
-        self.assertNotIn("不認得", done.stderr)
-        with open(os.path.join(self.HERE, "scripts", "gate.example.sh"),
-                  encoding="utf-8") as handle:
-            text = handle.read()
-        self.assertIn('"$AC/status.py"', text, "範本要示範狀態檔怎麼寫")
-        self.assertIn('"$AC/verify.py"', text, "範本要示範票的回歸怎麼跑")
-
 def a_home_sha(case):
     """A 的根(這個 repo)的 HEAD —— 測試自己用 git 量,不讀被測腳本。封存副本(不是 git 樹)
     量不了真 sha:skip 並說原因,`unknown` 那一半另有一條。"""

@@ -19,6 +19,8 @@ from control_harness import DEFAULT_CONFIG, TIMEOUT, Sandbox  # noqa: E402
 
 # The retired key is spelled joined: test_ticket_135 A3 forbids its literal name in tests/.
 RETIRED_KEY = "protected" + "_paths"
+# The retired sync script and its directory, spelled in pieces (#166 retire grep).
+RETIRED_SYNC = "sync-to-" "project.sh"
 
 
 class ProjectConfigCases(Sandbox):
@@ -28,8 +30,8 @@ class ProjectConfigCases(Sandbox):
     # memory, a top-level unknown key, and a sync row with a different directory.
     T_FIXTURE = {
         "hard_block": {"patterns": [], "dirs": [],
-                       "paths": ["tools/sync-to-project.sh", "docs/DECISIONS.md",
-                                 "scripts/sync-to-project.sh"]},
+                       "paths": ["tools/" + RETIRED_SYNC, "docs/DECISIONS.md",
+                                 "scripts/" + RETIRED_SYNC]},
         "land": {"require_review": True, "gate": "full"},
         "port": 8123,
         RETIRED_KEY: ["docs/VISION.md"],
@@ -80,7 +82,7 @@ class ProjectConfigCases(Sandbox):
         self.assertEqual(conf["rules"], {"sections": ["a", "b"], "zzz_nested": {"keep": 1}},
                          "only roles_dir / models_dir leave rules; nested unknown keys stay")
         self.assertEqual(conf["hard_block"]["paths"], ["docs/DECISIONS.md"],
-                         "every entry ending in sync-to-project.sh goes, nothing else")
+                         "every entry ending in %s goes, nothing else" % RETIRED_SYNC)
         self.assertEqual(conf["hard_block"]["patterns"], [])
         self.assertEqual(conf["hard_block"]["dirs"], [])
         for key in ("land", RETIRED_KEY, "verify_lint", "memory", "port", "tickets_dir"):

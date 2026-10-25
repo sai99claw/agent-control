@@ -20,10 +20,19 @@ from control_harness import ROOT, Sandbox  # noqa: E402
 
 
 class RulesBase(Sandbox):
+    """`canon_root`:受測腳本看到的 `AC_HOME`(正本角色卡與模型卡住那裡,D-071 §3)。預設是沙盒
+    自己(`install_rules_sources` 把 A 的卡複製進去了,沙盒就是正本);腳本照樣從 harness 的 A 跑。"""
 
     def setUp(self):
         super(RulesBase, self).setUp()
         self.install_rules_sources()
+        self.canon_root = self.repo
+
+    def ac_env(self):
+        env = super(RulesBase, self).ac_env()
+        # 沙盒 setUp 跑 git 時還沒有 `canon_root`:那時候用 harness 的,不影響受測腳本。
+        env["AC_HOME"] = getattr(self, "canon_root", env["AC_HOME"])
+        return env
 
     def rules(self, *args):
         return self.run_py("scripts/rules.py", *args)
@@ -281,17 +290,16 @@ class EfficiencyOverSpeed(RulesBase):
 class TheProjectLayer(RulesBase):
     """疊在正本規矩上的**專案自己那一層**(D-021,#28)。
 
-    `memory/` 永遠是「這個 repo 自己寫的」,`roles_dir` 是「規矩從哪來」。同一個目錄時
-    這個 repo 就是正本(agent-control 自己),不同時它是專案 —— 而專案的教訓寫在
-    `memory/`,以前 `pack` 一個字都沒讀到:路徑錯(它只讀 `roles_dir`)+ 暫存區本來就
-    不進包。少讀一次的代價是一輪落地紅。
+    `memory/` 永遠是「這個 repo 自己寫的」,`AC_HOME` 是「規矩從哪來」(#166)。根就是 `AC_HOME`
+    時這個 repo 就是正本(agent-control 自己),不是時它是專案 —— 而專案的教訓寫在
+    `memory/`,以前 `pack` 一個字都沒讀到:路徑錯 + 暫存區本來就不進包。少讀一次的代價是一輪落地紅。
+
+    正本在測試自己搭的 `<home>/canon-home`(只有 `memory/{role,model}`),不是沙盒。
 
     **變異**:把 `pack()` 裡 `local = not is_canon(root)` 改成 `local = False`
     → 這一組除了「A 自己」那兩條之外全紅。
     """
 
-    config_extra = {"rules": {"roles_dir": os.path.join("docs", "roles"),
-                              "models_dir": os.path.join("docs", "roles", "model")}}
     CANON_ROLE = "CANON-ROLE 正本角色卡說的那一句。"
     LOCAL_ROLE = "LOCAL-ROLE 這個 repo 自己補的那一句。"
     CANON_MODEL = "CANON-MODEL 正本模型記憶說的那一句。"
@@ -300,10 +308,11 @@ class TheProjectLayer(RulesBase):
 
     def setUp(self):
         super(TheProjectLayer, self).setUp()
-        self.write(os.path.join("docs", "roles", "implementer.md"),
-                   "# 正本角色卡\n%s\n" % self.CANON_ROLE)
-        self.write(os.path.join("docs", "roles", "model", "opus.md"),
-                   "# 正本模型記憶\n%s\n" % self.CANON_MODEL)
+        self.canon_root = os.path.join(self.home, "canon-home")
+        self.write(os.path.join("memory", "role", "implementer.md"),
+                   "# 正本角色卡\n%s\n" % self.CANON_ROLE, where=self.canon_root)
+        self.write(os.path.join("memory", "model", "opus.md"),
+                   "# 正本模型記憶\n%s\n" % self.CANON_MODEL, where=self.canon_root)
         self.write(os.path.join("memory", "role", "implementer.md"),
                    "%s\n" % self.LOCAL_ROLE)
         self.write(os.path.join("memory", "role", "implementer.inbox.md"),
@@ -314,11 +323,8 @@ class TheProjectLayer(RulesBase):
                    "- %s\n" % self.PROJECT_NOTE)
 
     def single_layer(self):
-        """`roles_dir` 不設 = 這個 repo 自己就是正本(agent-control)。"""
-        conf = json.loads(self.read(os.path.join("board", "config.json")))
-        conf["rules"] = {}
-        self.write(os.path.join("board", "config.json"),
-                   json.dumps(conf, ensure_ascii=False, indent=2))
+        """根就是 `AC_HOME` = 這個 repo 自己就是正本(agent-control)。"""
+        self.canon_root = self.repo
 
     def test_both_layers_are_in_the_pack(self):
         done = self.rules("pack", "worker", "--model", "opus")
@@ -348,7 +354,7 @@ class TheProjectLayer(RulesBase):
         self.assertNotIn("\n…\n", done.stdout)
 
     def test_being_the_canon_repo_itself_reads_the_card_once(self):
-        """`roles_dir` 與 `memory/role` 是同一個目錄 = 這個 repo 就是正本。疊兩次的話
+        """根與 `AC_HOME` 是同一個目錄 = 這個 repo 就是正本。疊兩次的話
         角色卡會整份出現兩遍,而讀的人會以為那是兩份不同的規矩。"""
         self.single_layer()
         done = self.rules("pack", "worker", "--model", "opus")
@@ -395,19 +401,64 @@ class TheProjectLayer(RulesBase):
         done = self.rules("pack", "worker", "--model", "opus")
         # #74:沒有獨立的先讀清單了,每一格的標題列就是它的路徑。
         head = "\n".join(line for line in done.stdout.splitlines() if line.startswith("#"))
-        for pointer in (os.path.join("docs", "roles", "implementer.md"),
-                        os.path.join("memory", "role", "implementer.md"),
-                        os.path.join("docs", "roles", "model", "opus.md"),
-                        os.path.join("memory", "model", "opus.md")):
+        for pointer in ("## 角色卡 `$AC_HOME/memory/role/implementer.md`",
+                        "### 本專案 `memory/role/implementer.md`",
+                        "## 模型記憶 `$AC_HOME/memory/model/opus.md`",
+                        "### 本專案 `memory/model/opus.md`"):
             self.assertIn(pointer, head)
 
     def test_roles_prints_the_canon_directory_not_a_hardcoded_one(self):
-        """`roles` 那張表以前寫死 `memory/role/` —— 在專案裡那句話指向一個不是正本的
-        目錄,而讀的人會去改那一份(改了下一次同步就被蓋掉)。"""
+        """`roles` 那張表印 `$AC_HOME/memory/role/` 的實際目錄 —— 在專案裡指向專案的
+        `memory/role/` 的話,讀的人會去改那一份,而那一份不是正本(#166 A2)。"""
         done = self.rules("roles")
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertIn(os.path.join("docs", "roles", "implementer.md"), done.stdout)
-        self.assertNotIn(os.path.join("memory", "role", "implementer.md"), done.stdout)
+        self.assertIn(os.path.join(self.canon_root, "memory", "role", "implementer.md"),
+                      done.stdout)
+        self.assertNotIn(os.path.join(self.repo, "memory", "role"), done.stdout)
+
+
+class CanonFromAcHome(RulesBase):
+    """#166 A2:正本卡讀 `$AC_HOME/memory/{role,model}`,專案那一層讀 `<AC_ROOT>/memory/`,
+    中間是 `### 本專案` 小標;根就是 `AC_HOME` 時只讀一次;`AC_HOME` 沒設 rc 2。
+
+    票面寫 `memory/role/worker.md`;worker 的卡檔名是 `implementer.md`(`rules.py WANTED`),照實用它。
+
+    **變異 m2**:pack 把專案的卡當正本讀 → CANON-MARK 不見,紅。"""
+
+    def setUp(self):
+        super(CanonFromAcHome, self).setUp()
+        self.canon_root = os.path.join(self.home, "canon-home")
+        self.write(os.path.join("memory", "role", "implementer.md"),
+                   "- CANON-MARK 正本那一句。\n", where=self.canon_root)
+        self.write(os.path.join("memory", "model", "opus.md"),
+                   "- CANON-MODEL 正本模型那一句。\n", where=self.canon_root)
+        self.write(os.path.join("memory", "role", "implementer.md"),
+                   "- LOCAL-MARK 專案那一句。\n")
+
+    def test_a_project_gets_canon_then_its_own_layer(self):
+        done = self.rules("pack", "worker", "--model", "opus")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        out = done.stdout
+        at = [out.find("CANON-MARK"), out.find("### 本專案"), out.find("LOCAL-MARK")]
+        self.assertNotIn(-1, at, out[:2000])
+        self.assertEqual(at, sorted(at), "正本 → 本專案小標 → 專案那一句")
+
+    def test_the_canon_repo_reads_its_card_once(self):
+        self.write(os.path.join("memory", "role", "implementer.md"),
+                   "- CANON-MARK 正本那一句。\n")
+        self.canon_root = self.repo
+        done = self.rules("pack", "worker", "--model", "opus")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.count("CANON-MARK"), 1)
+        self.assertNotIn("### 本專案", done.stdout)
+
+    def test_without_ac_home_it_is_rc_2_and_says_so(self):
+        env = self.env()
+        env.pop("AC_HOME")
+        done = self.run_py("scripts/rules.py", "pack", "worker", "--model", "opus", env=env)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertEqual(done.stdout, "")
+        self.assertIn("AC_HOME", done.stderr)
 
 
 def hundred_byte_lines(tag, count):
@@ -461,64 +512,20 @@ class TheWholeTextIsCarried(RulesBase):
         self.assertNotIn("\n…\n", text)
 
 
-class TheSyncHeaderIsNotContent(RulesBase):
-    """同步檔頭與 front matter 不算正文(#110)。
+class TheFrontMatterIsNotContent(RulesBase):
+    """front matter 不算正文(#110;#166 拿掉同步檔頭那一半,front matter 這一半留著)。
 
-    `sync-to-project.sh` 在專案端每張卡的第 1 行寫 `<!-- 由 agent-control … 同步產生 -->`,
-    front matter 因此從第 2 行開始 —— `units()` 只在第 1 行是 `---` 時剝 front matter,
-    於是專案端卡的第一個單位是那行註解、第二個是 front matter 的第一格;worker 包的角色卡格只剩註解。
+    **變異**:把 `units()` 剝 front matter 的那一段拿掉 → 紅。"""
 
-    **變異**:把 `units()` 裡跳過開頭註解行的那個 `while` 拿掉 → 這一組兩條都紅。
-    """
-
-    config_extra = {"rules": {"roles_dir": os.path.join("docs", "roles"),
-                              "models_dir": os.path.join("docs", "roles", "model")}}
-    HEADER = ("<!-- 由 agent-control deadbeef 的 memory/role/implementer.md 同步產生;"
-              "請到 agent-control 改,不要改這一份 -->\n")
     FRONT = ("---\nowner: implementer\nhistory:\n"
              "  - {date: 2026-09-30, ticket: \"#99\"}\n---\n")
-    ROLE_FIRST = "SYNC-ROLE-1 角色卡正文的第一句。"
-    ROLE_SECOND = "SYNC-ROLE-2 角色卡正文的第二句。"
-    MODEL_FIRST = "SYNC-MODEL-1 模型卡正文的第一句。"
-    MODEL_SECOND = "SYNC-MODEL-2 模型卡正文的第二句。"
-
-    def synced(self, first, second):
-        return self.HEADER + self.FRONT + "%s\n%s\n" % (first, second)
+    ROLE_FIRST = "FRONT-ROLE-1 角色卡正文的第一句。"
+    ROLE_SECOND = "FRONT-ROLE-2 角色卡正文的第二句。"
 
     def test_units_start_at_the_first_sentence(self):
-        """A1:fixture 卡 = 同步檔頭 + front matter + 兩句正文。"""
         rules = rules_module(ROOT)
-        path = os.path.join(self.repo, "docs", "roles", "implementer.md")
-        self.write(os.path.join("docs", "roles", "implementer.md"),
-                   self.synced(self.ROLE_FIRST, self.ROLE_SECOND))
-        found = rules.units(rules.read_text(path))
-        self.assertEqual(found[0], self.ROLE_FIRST, found)
-        for one in found:
-            self.assertNotIn("<!--", one, found)
-            self.assertNotIn("owner:", one, found)
-
-    def test_a_project_pack_starts_each_card_at_its_first_sentence(self):
-        """A2:專案形狀的根(roles_dir=docs/roles),角色卡與模型卡都帶同步檔頭。"""
-        self.write(os.path.join("docs", "roles", "implementer.md"),
-                   self.synced(self.ROLE_FIRST, self.ROLE_SECOND))
-        self.write(os.path.join("docs", "roles", "model", "opus.md"),
-                   self.synced(self.MODEL_FIRST, self.MODEL_SECOND))
-        self.write(os.path.join("memory", "role", "implementer.inbox.md"),
-                   "- 暫存的一行 SYNC-INBOX。\n")
-        rules = rules_module(ROOT)
-        built = rules.build(self.repo, "worker", "opus")
-        self.assertEqual(built["problems"], [], built["problems"])
-        text = built["text"]
-        self.assertNotIn("<!--", text)
-        self.assertNotIn("history:", text)
-        cells = dict((one["item"], one) for one in built["stats"]["sections"])
-        for item, heading, first in (
-                ("角色卡", "## 角色卡 `docs/roles/implementer.md`\n", self.ROLE_FIRST),
-                ("模型卡", "## 模型記憶 `docs/roles/model/opus.md`\n", self.MODEL_FIRST)):
-            self.assertGreaterEqual(cells[item]["source_units"], 1, cells[item])
-            self.assertIn(heading, text)
-            rendered = text[text.index(heading) + len(heading):]
-            self.assertTrue(rendered.startswith(first), "%s 格的開頭:%r" % (item, rendered[:120]))
+        found = rules.units(self.FRONT + "%s\n%s\n" % (self.ROLE_FIRST, self.ROLE_SECOND))
+        self.assertEqual(found, [self.ROLE_FIRST, self.ROLE_SECOND], found)
 
 
 def rules_module(repo):

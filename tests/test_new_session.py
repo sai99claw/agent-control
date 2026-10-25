@@ -269,7 +269,6 @@ class A7TheRootComesFromWhereYouStand(Sandbox):
 RULES = ("# 沙盒的契約\n\n## 開場\n開場那一節\n\n## 不可違反的\n- RULE-MARK 一條規則\n"
          "### 子標題不算下一節\n- 還是規則\n\n## 別的\n- OTHER-MARK 不該印\n")
 CARD = "# 主線\nCARD-MARK 主線角色卡\n"
-PROJECT_RULES = {"roles_dir": "docs/roles", "models_dir": "docs/roles/model"}
 
 
 def section(out, title, stop="\n── "):
@@ -280,6 +279,26 @@ def section(out, title, stop="\n── "):
 
 
 class OpeningPage(Sandbox):
+    """`canon_root`:受測腳本看到的 `AC_HOME`(正本「不可違反的」、角色卡、模型卡住那裡,D-071 §3)。
+    None = harness 的那一份(這個 repo);腳本照樣從 harness 的 A 跑。"""
+
+    canon_root = None
+
+    def ac_env(self):
+        env = super().ac_env()
+        if self.canon_root:
+            env["AC_HOME"] = self.canon_root
+        return env
+
+    def own_canon(self, rules=None, card=None):
+        """一份測試自己搭的 A(只有正本那幾格),不是沙盒;沙盒因此是專案。"""
+        self.canon_root = os.path.join(self.home, "canon-home")
+        os.makedirs(self.canon_root, exist_ok=True)
+        if rules is not None:
+            self.write("CLAUDE.md", rules, where=self.canon_root)
+        if card is not None:
+            self.write("memory/role/main.md", card, where=self.canon_root)
+        return self.canon_root
 
     def main(self, *more):
         done = self.run_sh("scripts/new-session.sh", "main", "fable", "--no-event", *more)
@@ -287,6 +306,8 @@ class OpeningPage(Sandbox):
         return done.stdout
 
     def canon(self):
+        """沙盒自己就是 A(根 == AC_HOME)。"""
+        self.canon_root = self.repo
         self.write("CLAUDE.md", RULES)
         self.write("memory/role/main.md", CARD)
 
@@ -315,31 +336,45 @@ class A1RulesOnTop(OpeningPage):
 
 
 class A2ProjectLayers(OpeningPage):
-    config_extra = {"rules": PROJECT_RULES}
+    """#166 A3:專案(根 != AC_HOME)的「不可違反的」一律讀 `$AC_HOME/CLAUDE.md`,角色卡讀
+    `$AC_HOME/memory/role/`;專案自己那一層(暫存區)照舊疊在後面。
+
+    **變異 m3**:new-session 又讀 `<根>/CLAUDE.md` 的契約 → RULE-LOCAL 出現、RULE-A 不見,紅。"""
 
     def setUp(self):
         super().setUp()
-        self.write("docs/roles/contract.md", "## 不可違反的\n- RULE-MARK 專案那一份\n")
-        self.write("docs/roles/main.md", CARD)
+        self.own_canon(rules="# A\n\n## 不可違反的\n- RULE-A\n", card=CARD)
+        self.write("CLAUDE.md", "# 專案\n\n## 不可違反的\n- RULE-LOCAL\n")
         self.write("memory/role/main.inbox.md",
                    "".join("- L%02d 專案疊層第 %d 行\n" % (n, n) for n in range(1, 13)))
 
     def test_a2_contract_then_card_then_the_inbox_tail(self):
         out = self.main()
-        marks = ["RULE-MARK", "CARD-MARK"] + ["L%02d" % n for n in range(8, 13)]
+        self.assertNotIn("RULE-LOCAL", out, "專案的 CLAUDE.md 不是契約的來源")
+        marks = ["RULE-A", "CARD-MARK"] + ["L%02d" % n for n in range(8, 13)]
         where = [out.index(mark) for mark in marks]
         self.assertEqual(where, sorted(where), "順序:契約 → 角色卡 → 暫存區尾巴")
         self.assertLess(where[-1], out.index("站在哪個版本"))
         for n in range(1, 8):
             self.assertNotIn("L%02d" % n, out, "只印最後 5 行")
 
-    def test_a2_a_missing_contract_is_said_out_loud(self):
-        os.remove(os.path.join(self.repo, "docs", "roles", "contract.md"))
-        done = self.run_sh("scripts/new-session.sh", "main", "fable", "--no-event")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        said = [line for line in done.stdout.splitlines()
-                if "contract.md" in line and "sync-to-project.sh" in line]
-        self.assertTrue(said, "缺了要講,不靜默:" + done.stdout[:2000])
+    def test_a2_a_missing_section_in_ac_home_is_said_out_loud(self):
+        self.write("CLAUDE.md", "# A\n\n## 別的\n- 沒有那一節\n", where=self.canon_root)
+        out = self.main()
+        said = [line for line in out.splitlines()
+                if "new-session:" in line and "不可違反的" in line]
+        self.assertTrue(said, "缺了要講,不靜默:" + out[:2000])
+        self.assertNotIn("RULE-LOCAL", out, "缺了也不退回專案那一份")
+
+    def test_a2_a_missing_canon_card_hints_a_pull(self):
+        os.remove(os.path.join(self.canon_root, "memory", "role", "main.md"))
+        out = self.main()
+        said = [line for line in out.splitlines()
+                if "new-session:" in line and "main.md" in line]
+        self.assertTrue(said, "缺角色卡要講:" + out[:2000])
+        self.assertIn("git -C", said[0])
+        self.assertIn("pull", said[0])
+        self.assertFalse([line for line in out.splitlines() if "sync-to-" "project" in line])
 
 
 class A3OnlyTheMainLine(OpeningPage):
@@ -466,13 +501,11 @@ class TheOtherSectionsHaveACapToo(OpeningPage):
 
 
 class A8TheReadingList(OpeningPage):
-    config_extra = {"rules": PROJECT_RULES}
 
     def setUp(self):
         super().setUp()
-        self.write("docs/roles/contract.md", "## 不可違反的\n- RULE-MARK\n")
-        self.write("docs/roles/main.md", CARD)
-        self.write("docs/roles/model/fable.md", "# fable\n")
+        self.own_canon(rules="## 不可違反的\n- RULE-MARK\n", card=CARD)
+        self.write("memory/model/fable.md", "# fable\n", where=self.canon_root)
         self.write("memory/role/main.inbox.md", "- 專案疊層\n")
         self.write("memory/model/fable.inbox.md", "- 還沒併檔的\n")
         self.write("memory/project/facts.md", "# 事實\n")
@@ -483,16 +516,18 @@ class A8TheReadingList(OpeningPage):
 
     def test_a8_card_then_project_layer_then_memory_then_handoff(self):
         part = self.reading()
-        order = [part.index(one) for one in ("docs/roles/main.md", "memory/role/main.inbox.md",
+        order = [part.index(one) for one in ("$AC_HOME/memory/role/main.md",
+                                             "memory/role/main.inbox.md",
                                              "memory/model/fable.inbox.md", "docs/HANDOFF.md")]
         self.assertEqual(order, sorted(order), part)
-        self.assertIn("memory/role/main.md", part[:part.index("memory/role/main.inbox.md")],
-                      "角色卡那一行要標明它是 memory/role/main.md 的同步本")
-        self.assertNotIn("memory/role/main.md    你這個角色的角色卡", part)
+        card = [line for line in part.splitlines()
+                if line.split()[:1] == ["$AC_HOME/memory/role/main.md"]]
+        self.assertEqual(len(card), 1, part)
+        self.assertIn("正本", card[0], "角色卡那一行要標明它是 A 的正本")
         self.assertFalse([line for line in part.splitlines()
                           if line.split()[:1] == ["memory/role/main.md"]],
                          "專案沒有 memory/role/main.md,不准指過去")
-        for one in ("docs/roles/model/fable.md", "memory/role/", "memory/project/"):
+        for one in ("$AC_HOME/memory/model/fable.md", "memory/role/", "memory/project/"):
             self.assertIn(one, part)
         self.assertIn("現況", part)
         self.assertNotIn("最後三節", part)
@@ -506,16 +541,17 @@ class A8TheReadingList(OpeningPage):
             if not words or not ("/" in words[0] or words[0].endswith(".md")):
                 continue
             seen += 1
-            gone = not os.path.exists(os.path.join(self.repo, words[0]))
+            mark = "$AC_HOME/"
+            where = (os.path.join(self.canon_root, words[0][len(mark):])
+                     if words[0].startswith(mark) else os.path.join(self.repo, words[0]))
+            gone = not os.path.exists(where)
             self.assertEqual("(不在)" in line, gone, line)
         self.assertGreater(seen, 5, part)
         self.assertIn("(不在)", [line for line in part.splitlines()
                                if "memory/project/" in line][0])
 
     def test_a8_canon_points_at_its_own_card(self):
-        conf = json.loads(self.read("board/config.json"))
-        del conf["rules"]
-        self.write("board/config.json", json.dumps(conf))
+        self.canon_root = self.repo
         self.write("memory/role/main.md", CARD)
         part = self.reading()
         self.assertEqual([line.split()[0] for line in part.splitlines()[1:3]],

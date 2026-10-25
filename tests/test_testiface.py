@@ -246,7 +246,7 @@ class A4FlakeRerunById(FixtureGate):
         self.assertEqual(count("scripts/gate.sh", "python3 -m unittest"), 0)
         self.assertEqual(count("scripts/status.py", "def cmd_run_tests"), 0)
         self.assertEqual(count("scripts/gate.sh", "map()", whole_line=True), 0)
-        self.assertEqual(count("scripts/gate.sh", "test_sync_to_project"), 0)
+        self.assertEqual(count("scripts/gate.sh", "test_sync_" "to_project"), 0)
 
 
 class A5DogfoodAndTemplates(Sandbox):

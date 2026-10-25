@@ -47,8 +47,7 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 - 一輪只有兩種判決(D-054 Q8):accepted = 改好票面接回 worker(worker 讀錯票也是,澄清寫進票面);escalate = 一題附建議的裁示題給主線。判決行與題目格式照 auto-fix 給的派工文;流程正文 `docs/WORKFLOW.md`「實作者的反駁怎麼被收下」。
 
 ### 跨 repo
-- 跨 repo 依賴不能寫 `depends_on`(兩邊票號撞)。`sync-to-project.sh` 只同步 `SCRIPT_LIST` 那幾支(名單正文在腳本裡),
-  `gate.sh` / `land.sh` 不會到專案端;dry-run 不比內容,判準是同步後逐檔 `cmp -s`(#648)。
+- 跨 repo 依賴不能寫 `depends_on`(兩邊票號撞)。
 
 ## 實作者角色操作細節
 

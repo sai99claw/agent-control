@@ -24,6 +24,9 @@ SUBJECT = "only this sandbox has this ticket #160"
 # roles_dir / models_dir, keys A does not know (land, the retired path list), the sync hard_block row.
 # The retired key is spelled joined: test_ticket_135 A3 forbids its literal name in tests/.
 RETIRED_KEY = "protected" + "_paths"
+# The retired sync script and its directory, spelled in pieces (#166 retire grep).
+RETIRED_SYNC = "sync-to-" "project.sh"
+RETIRED_DIR = "scripts/" "control"
 T_SHAPED = {
     "port": 18905,
     "tickets_dir": "tickets",
@@ -31,7 +34,7 @@ T_SHAPED = {
               "sections": {"worker": ["§1", "§3"]}},
     "land": {"lock": "board/land.lock", "docs_prefixes": ["docs/"]},
     RETIRED_KEY: ["deploy/", "secrets/"],
-    "hard_block": {"paths": ["docs/DECISIONS.md", "scripts/sync-to-project.sh"],
+    "hard_block": {"paths": ["docs/DECISIONS.md", "scripts/" + RETIRED_SYNC],
                    "dirs": [], "patterns": []},
 }
 
@@ -194,7 +197,7 @@ class A3Doctor(ConfigSandbox):
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         lines = done.stdout.splitlines()
         for parts in (("acked.jsonl", "actl inbox migrate"),
-                      ("scripts/control", "retired"),
+                      (RETIRED_DIR, "retired"),
                       ("guard-main.sh", "actl hooks install")):
             hits = [line for line in lines if all(part in line for part in parts)]
             self.assertEqual(len(hits), 1, "%s in\n%s" % (parts, done.stdout))

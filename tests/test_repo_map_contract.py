@@ -6,7 +6,7 @@
    答得對。改檔的**內容**、動不歸地圖管的檔 → 不 churn。
 3. `query memory` / `query rules` 指到真的入口與主守衛,印出來的每一條路徑都在;拼錯的
    主題非零,並給索引入口。
-4. 同步到專案的 `scripts/control/` 照樣能用,專案自己的 catalog 與人工卡不被同步蓋掉。
+4. 從 `$AC_HOME` 跑、cwd 是專案:量的是專案自己的 catalog,專案的人工卡與 A 的索引都不被動到(#166)。
    (閘門拒收過期索引那一格 #138 已刪,D-054 Q4;落地合併後 land 重產,D-051。)
 
 拋棄式的樹由這裡自己搭(兩支腳本 + 一份 catalog);期望的檔名、主題、路徑都寫死在這裡,
@@ -195,10 +195,15 @@ class QueryTheRealRepo(unittest.TestCase):
         self.assertIn("memory", done.stderr)
 
 
-class TheSyncedCopyWorks(unittest.TestCase):
-    """A31:同步到專案的 `scripts/control/` 照樣能用;專案的 catalog 與人工卡不被蓋。"""
+class RunFromAcHome(unittest.TestCase):
+    """A31(#166 改寫):`python3 $AC_HOME/scripts/repo-map.py` 在專案裡跑(cwd 與 `AC_ROOT` 都是
+    專案)—— build / check / query 量的是專案自己的 catalog,專案的 catalog 與人工卡、A 自己的
+    `code-map/index.json` 一個位元組都不動。
 
-    def test_a31_it_runs_from_scripts_control_and_keeps_the_local_catalog(self):
+    **變異 m4**:repo-map 從 `AC_HOME` 找 catalog → `query core` 對不到(或 A 的索引被改寫),紅。"""
+
+    def test_a31_it_runs_from_ac_home_and_measures_the_project(self):
+        home = os.path.dirname(SCRIPTS)
         project = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, project, True)
         write(project, os.path.join("board", "config.json"), "{}\n")
@@ -210,23 +215,19 @@ class TheSyncedCopyWorks(unittest.TestCase):
         card = write(project, os.path.join("code-map", "cards", "core.md"), "# 人工卡\n")
         for rel in ("src/core.py", "src/core_check.py"):
             write(project, rel, "# %s\n" % rel)
-        before = (read_bytes(catalog), read_bytes(card))
-        done = subprocess.run(["sh", os.path.join(ROOT, "scripts", "sync-to-project.sh"),
-                               project], env=clean_env(), capture_output=True, text=True,
-                              timeout=TIMEOUT)
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual((read_bytes(catalog), read_bytes(card)), before,
-                         "同步蓋掉了專案自己的 catalog / 人工卡")
-        tool = os.path.join(project, "scripts", "control", "repo-map.py")
-        self.assertTrue(os.path.isfile(tool), "repo-map.py 沒有同步到 scripts/control/")
-        for args, rc in ((("build",), 0), (("check",), 0), (("query", "core"), 0)):
+        a_index = os.path.join(home, "code-map", "index.json")
+        before = (read_bytes(catalog), read_bytes(card), read_bytes(a_index))
+        tool = os.path.join(home, "scripts", "repo-map.py")
+        for args in (("build",), ("check",), ("query", "core")):
             ran = subprocess.run(["python3", tool, *args], cwd=project,
-                                 env=clean_env(AC_ROOT=project),
+                                 env=clean_env(AC_ROOT=project, AC_HOME=home),
                                  capture_output=True, text=True, timeout=TIMEOUT)
-            self.assertEqual(ran.returncode, rc, " ".join(args) + ran.stdout + ran.stderr)
+            self.assertEqual(ran.returncode, 0, " ".join(args) + ran.stdout + ran.stderr)
         self.assertIn("入口\tsrc/core.py", ran.stdout)
         self.assertTrue(os.path.isfile(os.path.join(project, "code-map", "index.json")),
                         "索引沒有寫在專案根")
+        self.assertEqual((read_bytes(catalog), read_bytes(card), read_bytes(a_index)), before,
+                         "專案的 catalog / 人工卡或 A 的索引被改了")
 
 
 if __name__ == "__main__":

@@ -90,11 +90,14 @@ v0.2(2026-09-21)。從 tabby_pool 抽出來、去掉專案名。2026-09-21 補�
 (套 patch、自動派 worker、終態收件匣、flake 自動開票、角色規則包、同輪回歸去重;D-015)。
 **還沒有第二個專案真的接上去**——`docs/TODO.md` §0 是可執行的遷移步驟。
 
-## 把規範與腳本同步進專案(agent-control 是主,專案是從)
+## 安裝與更新
+專案不複製任何腳本或角色卡:A 是一份 clone,專案透過 `actl` 叫它(D-071)。
 ```sh
-sh scripts/sync-to-project.sh /path/to/project   # 角色卡 → docs/roles/,模型記憶 → docs/roles/model/
-                                                 # 控制腳本 → scripts/control/,並印出專案端要改的接點
+git clone <A 的 remote> ../agent-control        # 一次;放在專案旁邊
+../agent-control/bin/actl <命令>                 # 例:actl ticket list --open、actl gate --base(建議把 bin/ 放進 PATH)
+git -C ../agent-control pull                     # 更新 A:規範、角色卡、腳本一起到
+actl doctor                                      # 專案的 board/config.json 對不對得上這一版 A
+actl migrate                                     # 對不上時把設定遷到這一版(先印要改什麼)
 ```
-專案裡那份檔頭標「請到 agent-control 改」;改規範永遠在這個 repo 改,再同步。
-退場的角色卡與腳本會**先唸出來再刪**(靜悄悄的刪除與沒發生的刪除長得一樣)。
+改規範永遠在這個 repo 改;專案自己的補充寫在專案的 `memory/role/<角色>.md`,規則包疊在 A 的正本後面。
 一個既有專案怎麼接上來,逐步在 `docs/TODO.md` §0。

@@ -182,8 +182,8 @@ def latest_answers():
 def reports_dir():
     """`board/config.json` 的 `reports_dir`(預設 `reports/`)。
 
-    路徑從設定解析,不寫死 —— 專案把這幾支同步過去時 reports 會落在別的地方
-    (`scripts/sync-to-project.sh`),而一個寫死的相對路徑在那裡會**安靜地**指到
+    路徑從設定解析,不寫死 —— 專案的 reports 可以落在別的地方(`reports_dir`),
+    而一個寫死的相對路徑在那裡會**安靜地**指到
     一個沒有人寫過的空目錄,然後這一段就會永遠說「沒有跑過」。
     """
     where = root()

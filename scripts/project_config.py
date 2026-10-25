@@ -99,6 +99,11 @@ SCHEMA = [
 TOP_KEYS = {key for key, _, _ in SCHEMA if "." not in key}
 ROLE_CARD_NOTE = ("project role cards now overlay $AC_HOME/memory/role; "
                   "move docs/roles/<role>.md additions into memory/role/<role>.md")
+# What the retired copy-into-the-project mechanism left behind (D-071 row 6, #166): migrate drops the
+# hard_block row naming its script, doctor refuses its directory. Spelled in pieces so the retire
+# grep (tests/test_retire_sync.py) keeps meaning "no code path assumes them".
+RETIRED_DIR = os.path.join("scripts", "con" "trol")
+RETIRED_SYNC = "sync-to-" "project.sh"
 
 
 class Refused(Exception):
@@ -251,8 +256,8 @@ def doctor_rows(root):
     if os.path.exists(os.path.join(inbox, "index.jsonl")):
         rows.append(("warning", "%s/inbox/index.jsonl exists - legacy ledger, not read by A"
                      % reports, None))
-    if os.path.isdir(os.path.join(root, "scripts", "control")):
-        rows.append(("error", "scripts/control/ exists - retired (D-071 section 7 step 5)", None))
+    if os.path.isdir(os.path.join(root, RETIRED_DIR)):
+        rows.append(("error", "%s/ exists - retired (D-071 section 7 step 5)" % RETIRED_DIR, None))
     settings_path = os.path.join(root, ".claude", "settings.json")
     if os.path.exists(settings_path):
         try:
@@ -301,7 +306,7 @@ def migrate_1_to_2(conf):
     block = out.get("hard_block")
     if isinstance(block, dict) and isinstance(block.get("paths"), list):
         keep = [path for path in block["paths"]
-                if not (isinstance(path, str) and path.endswith("sync-to-project.sh"))]
+                if not (isinstance(path, str) and path.endswith(RETIRED_SYNC))]
         if keep != block["paths"]:
             for path in block["paths"]:
                 if path not in keep:

@@ -4655,8 +4655,7 @@ class T155TheInSessionPathIsGone(unittest.TestCase):
                               cwd=TREE, capture_output=True, text=True, timeout=120)
         self.assertIn(done.returncode, (0, 1), done.stderr)
         left = [line for line in done.stdout.splitlines()
-                if not re.match(r"^(docs/(DECISIONS|HANDOFF)\.md|scripts/sync-to-project\.sh):",
-                                line)]
+                if not re.match(r"^docs/(DECISIONS|HANDOFF)\.md:", line)]
         self.assertEqual(left, [])
 
     def test_t3_apply_no_longer_compares_and_main_guard_has_no_cli(self):

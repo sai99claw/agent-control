@@ -258,7 +258,7 @@ class RootIsTheTreeUnderTestNotTheFilesHome(unittest.TestCase):
         return mod
 
     def test_two_homes_of_the_file_agree_on_the_code_root(self):
-        """`<A>/scripts/` 與 `<別處>/scripts/control/` 兩份,`AC_CODE_ROOT=<專案>` 都算出專案。
+        """`<A>/scripts/` 與別處更深一層的一份複本,`AC_CODE_ROOT=<專案>` 都算出專案。
 
         **變異**:`_find_root()` 放回從 `__file__` 往上找 → 兩份算出各自的家,紅。"""
         with tempfile.TemporaryDirectory() as fake, tempfile.TemporaryDirectory() as home:
