@@ -9,7 +9,7 @@ tabby_pool 三天的實測:agent 讀整份設計文件並沒有出大錯;出錯�
 - `check`:唯讀;索引過期或 entry / guard 連結斷了 rc 1。閘門帶票跑時(`gate.sh --ticket`)對候選樹跑它,**過期必擋**(只比索引,不跑測試)。
 - `query <主題>`:印那個主題的入口、主守衛、來源、文件、人工卡;**查不到 rc 1** 並列出認得的主題。只認 catalog 的主題名,不查符號。
 
-專案的 `code-map/catalog.json`、`code-map/index.json` 與人工卡**歸專案所有**:`sync-to-project.sh` 只把 `repo-map.py` 同步進專案的 `scripts/control/`,不覆蓋專案的 `code-map/`。
+專案的 `code-map/catalog.json`、`code-map/index.json` 與人工卡**歸專案所有**:工具是 `$AC_HOME/scripts/repo-map.py`,用 `actl repo-map` 跑;它不覆蓋專案的 `code-map/`(專案資料)。
 
 ## 1. 模組卡片(只在查找失敗過的地方建)
 `code-map/cards/<module>.md`,每張:

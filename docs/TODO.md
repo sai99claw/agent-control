@@ -7,24 +7,17 @@
 
 | # | 做什麼 | 指令 | 怎麼知道它成了 |
 |---|---|---|---|
-| 0 | 專案先有一份 `board/config.json`(`tickets_dir` / `events_file` / `reports_dir` / `flaky_threshold` / `worker.command`) | 抄 agent-control 的那一份改埠與目錄 | `python3 scripts/control/event.py tail 1` 不再寫到別的地方 —— **少了它,票與 reports 會寫到沒有人在看的目錄,而且不會報錯** |
-| 1 | 同步角色卡、模型記憶與控制腳本 | `sh scripts/sync-to-project.sh <專案根> [--dry-run]` | 專案多出 `docs/roles/` 與 `scripts/control/`(裡面有 `apply.sh` / `auto-fix.sh` / `inbox.py` / `rules.py` / `status.py` / `verify-case.py` / `memory.py`),結尾印出**接點清單** |
-| 2 | 專案的 `CLAUDE.md` 改成先讀這一套的契約,再讀專案自己的 | 手改一段 | 新 session 開場唸得出「票是唯一的工作單位」 |
-| 3 | 舊票轉進來 | `python3 scripts/control/ticket.py import <舊票目錄>` | `ticket.py list --open` 看得到;缺的欄位標 `legacy`,**不補假的 `base_sha`** |
-| 4 | 專案的閘門接 `--ticket` | 照 `scripts/gate.example.sh` 改專案的 `scripts/gate.sh` | `sh scripts/gate.sh --branch --ticket <n>` 會寫 `reports/t<n>/<run_id>/status.json`,而且**真的呼叫票的 `verify.tags`** |
-| 5 | 專案的落地腳本改成呼叫這一套 | `land-ticket.sh` 裡:閘門跑完 `python3 scripts/control/status.py done --ticket <n> --run-id <run> --kind gate --rc $rc --log <log>`;開跑前對應的 `status.py start` | 落地紅了之後,`reports/t<n>/<run_id>/status.json` 的 `failures` 逐條有案例、檔、行、excerpt |
-| 6 | 套 patch 改走程式入口 | `sh scripts/control/apply.sh <n> patch.diff [patch-verify.diff]` | 絕對路徑檔頭的 patch 被 rc=3 退回;commit 訊息帶票號與 patch sha256 |
-| 7 | 紅了自動派下一輪 | `sh scripts/control/auto-fix.sh <n>`(或閘門加 `--auto-fix`) | 第二輪的 commit 進同一條 `t<n>` 分支;三輪耗盡票轉 Blocked、owner=main |
-| 8 | 主線開場讀收件匣、不輪詢 | `python3 scripts/control/inbox.py list` | 跑完的事自己排隊;主線不再用 sleep 迴圈等背景工作 |
-| 9 | 派工文前言改成引用規則包 | `python3 scripts/control/rules.py pack worker --model <模型>` | 派工文 ≤ 4 KB 的前言 + 指路,不再整份貼 |
-| 10 | 控制台改讀這一套的事件檔;`board-note.py` 退役 | 改 `board/config.json` 的 `events_file` | 控制台上看得到 `gate.*` / `land.*` / `inbox.posted` |
-| 11 | 兩邊並行跑一週,比 `docs/DESIGN.md` §21 的指標 | — | 有數字可以比,而不是感覺 |
+| 1 | 把 A 複製到專案旁邊(`templates/project-CLAUDE.md` 已寫 `../agent-control`) | `git clone <A> ../agent-control && alias actl=../agent-control/bin/actl` | `actl doctor` 能跑起來(回滾:刪掉那份 clone) |
+| 2 | 體檢、遷移設定與收件匣,補 `hard_block`、`board.key_file`、`scripts/ac-tests.sh`(先只有 `preflight`)、`tests.unittest.roots` | `actl doctor && actl migrate && actl inbox migrate` | `actl doctor` 的列全綠:config 版本、未知鍵(`land` / `protected_paths` / `verify_lint`)、`index.jsonl`、舊 hook、舊的控制腳本目錄 都被點名處理過;`git diff board/config.json` 看得到 `hard_block` 與 `tests` 段(回滾:`git checkout board/config.json`) |
+| 3 | 裝 Claude Code hooks(換掉 guard-main hook,加 SubagentStop / SessionEnd) | `actl hooks install` | `.claude/settings.json` 裡 PreToolUse 不再指 guard-main hook,多了 SubagentStop 與 SessionEnd(回滾:`git checkout .claude/settings.json`) |
+| 4 | 演練,由便宜到貴:(a) 預檢 (b) `select` 對照舊閘門挑的 (c) 一條分支過閘門 (d) 落一張 docs 票 (e) 一張 simple 票從頭走到尾;演練期間兩邊的 lander 共用同一把鎖(`AC_LAND_LOCK`) | `actl test preflight` → `git diff --name-only main...HEAD \| actl test select --mode branch` → `actl gate --branch --ticket <n>` → `actl land docs "…" tickets/<n>.json` → `actl land t<n>` | (a) 鎖屏時 rc 86 並印出列;(b) 挑出的模組與舊閘門一致;(c) `reports/t<n>/<run_id>/status.json` 有 `failures` 逐條案例、檔、行,且真的跑了票的 `verify.tags`;(d)(e) `land.pass` 事件 `by=land.sh`、帶 `ac_sha`(回滾:專案原本的 lander 還在) |
+| 5 | 連續三張票由 `actl land` 落地(D-017 門檻)後,刪舊的控制腳本目錄與專案自己的 lander | `actl event grep land.pass` | 三筆連續的 `land.pass` 都是 `by=land.sh`;之後的 docs 票刪掉舊的控制腳本目錄、舊 lander、各自的接合腳本、`docs/roles/` 副本(專案特有的補充搬進 `memory/role/`),專案 `CLAUDE.md` 改完,該目錄不存在(回滾:`git revert` 那張票) |
+| 6 | 看板放到 portal 後面、用 `key_file`;比 `docs/DESIGN.md` §21 的四個指標 | `actl board` | 另一個埠上的看板讀得到事件檔,四個指標有數字可以比,而不是感覺;比完才退役專案自己的看板 |
 
 **專案特有的段落**(埠號、目錄、測試陷阱)留在專案自己的 `docs/`;本 repo 的
 `docs/DISPATCH-TEMPLATE.md` 留通用版,派工時用 `rules.py pack` 裁切。
 
-**還沒做的是遷移本身**(上表第 2、3、10、11 步要在那個專案裡做,不在這個 repo)。
-步驟與腳本這一側 2026-09-21 已經做完並有測試(`tests/test_sync_to_project.py`)。
+**還沒做的是遷移本身**(上表在那個專案裡做,不在這個 repo)。
 
 ## 1. 第一版必須有(對照 `docs/DESIGN.md` §18)
 - [x] 票契約(`tickets/SCHEMA.md`)
@@ -32,7 +25,7 @@
 - [x] `scripts/ticket.py`:create / list / show / set / inbox / verify / close / import / freeze
 - [x] `scripts/event.py`:emit / tail / grep;事件種類是一張固定的表,未知的拒收
 - [x] `scripts/land.sh`:0 commit 拒絕、`base_sha` 檢查、寫入範圍檢查、先印再做
-- [x] `scripts/gate.sh` 介面(專案實作)+ 範例(`scripts/gate.example.sh`);對不到模組要出聲且非零
+- [x] `scripts/gate.sh` 介面(專案實作)+ 範例(`templates/project-tests.example.sh`);對不到模組要出聲且非零
 - [x] `scripts/heartbeat.sh`:session / land / attempt 的租約與死亡偵測、land worktree 殘骸
 - [x] `board/board.py`:抽出、去專案名、讀 `board/config.json`;agent 時間線與「哪些保證還只在演練裡成立」(`docs/REHEARSAL.md`)
 - [x] 決策收件匣填完自動發事件(`decision.answered`;主線用 `ticket.py inbox` 讀,它拿 `docs/DECISIONS.md` 判哪些還沒落成裁示)
@@ -68,7 +61,7 @@
 
 ## 明天用哪一份(2026-09-21,外部審查要求先指定)
 票庫 = 本 repo 的 `tickets/*.json`(`board/config.json` 的 `tickets_dir`);事件流 = `board/events.jsonl`;
-閘門 = 本 repo 的 `scripts/gate.sh`(專案自己的照 `scripts/gate.example.sh` 改,**要接 `--ticket`**)。
+閘門 = 本 repo 的 `scripts/gate.sh`(專案自己填 `board/config.json` 的 `tests` 段,**要接 `--ticket`**)。
 演練用一張拋棄式票走完:交付 → `verify-case.py check` 驗紅 → `ticket.py set review` 覆核 → `land.sh` → `ticket.py close`。
 
 ## 票進 git 會撞鎖(2026-09-12,tabby_pool D-G112 的教訓)

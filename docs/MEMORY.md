@@ -7,7 +7,7 @@
 |---|---|---|---|
 | **專案共用** | `docs/DECISIONS.md`、`docs/HANDOFF.md`、`code-map/`、`memory/project/*.md` | 主線(經裁示)、知識維護 | 裁示、交接、repo map;`memory/project/` 照分層契約 |
 | **模型私有** | `memory/model/<model>.md` | 該模型的任何 session | 照分層契約(role / model 層) |
-| **專案端**(接 agent-control 的專案) | `memory/role/<role>.md`、`memory/model/<model>.md`(各帶一份 `.inbox.md` 暫存)、`memory/project/<主題>.md` | 那個專案裡的任何 session(`scripts/control/memory.py note`) | 這個專案自己的記憶,分層照同一份契約;規則包在正本規矩之外**疊**這一層 |
+| **專案端**(接 agent-control 的專案) | `memory/role/<role>.md`、`memory/model/<model>.md`(各帶一份 `.inbox.md` 暫存)、`memory/project/<主題>.md` | 那個專案裡的任何 session(`actl memory note`) | 這個專案自己的記憶,分層照同一份契約;規則包在正本規矩之外**疊**這一層 |
 
 ### 專案端那三個目錄(2026-09-23,D-021)
 
@@ -23,10 +23,7 @@
 
 `note` 的名稱寫 `X` 或 `X.md` 都落到同一份(只去一個 `.md`);空、`.`/`..`、含路徑分隔、多一個 `.md` 或帶 inbox 後綴(`.inbox.md`/`.inbox`)的名稱 rc 2 `名稱不合法`,推得出本意時附「改用 X」。同層、同名、同正文、同票號再送一次 rc 0 `已有同一條`、不追加;換票號照寫,兩行各帶自己的 `#票號`(#75)。
 
-**同步(`sync-to-project.sh`)一個位元組都不碰 `<專案>/memory/`**,也不再複製 A 的
-`*.inbox.md`(A 的暫存區是 A 的,不是規矩)。專案的 `memory.applies_to` 因此要指
-`memory/role/*.md`、`memory/model/*.md`,不是 `docs/roles/*.md` —— 指到同步產出物的話,
-整理的是一份專案改不了、下一次同步就蓋掉的檔,而它開出來的整理票沒有人能執行。
+**A 從不寫進 `<專案>/memory/`**。專案裡的 `memory/{role,model,project}` 是專案自己的一層,疊在 `$AC_HOME/memory`(A 的正本)之上(規則包的「### 本專案」,見 `docs/design/project-runnable-entries.md` §3);A 的 `*.inbox.md` 暫存區是 A 的,不是規矩。專案的 `memory.applies_to` 指 `memory/role/*.md`、`memory/model/*.md`,整理的是專案自己改得了的檔,開出來的整理票有人能執行。
 
 模型私有記憶的重點是**同模型跨 session 共享**:Opus 的下一個 session 應該知道 Opus 上次在這裡犯過什麼。每一條附:日期、來源(票號或對話)、適用範圍(專案 / 角色)、是實測還是推論。
 
