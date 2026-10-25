@@ -21,8 +21,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "1b6ac4e101e7bc73e694f17a5759a172dfb4c58c",
-  "state": "InReview",
-  "state_version": 11,
+  "state": "Done",
+  "state_version": 13,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -133,6 +133,40 @@
       "note": null,
       "effort": "medium",
       "at": "2026-10-25T00:23:31+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1579,
+      "outcome": "fail",
+      "run_id": "20261025-003757-4024",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-25T01:04:16+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 3266,
+      "outcome": "pass",
+      "run_id": "20261025-010450-11865",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-25T01:59:16+00:00"
     }
   ],
   "branch": "t165",
@@ -142,5 +176,53 @@
     "run_id": "20261025-002331-4751",
     "at": "2026-10-25T00:24:28+00:00"
   },
-  "repair_round": 1
+  "repair_round": 1,
+  "landed_sha": "cfda06043fdf81fd26333bd19fffb75b4b26a60b",
+  "cost_total": {
+    "calendar_seconds": 31323,
+    "wall_seconds": 5277,
+    "runs": 4,
+    "worker_rounds": 1,
+    "objections": 0,
+    "by_role": {
+      "verifier": {
+        "runs": 1,
+        "wall_seconds": 327,
+        "tokens_in": 52,
+        "tokens_out": 20819,
+        "cache_write": 82967,
+        "cache_read": 2186290,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 1
+        }
+      },
+      "worker": {
+        "runs": 1,
+        "wall_seconds": 105,
+        "tokens_in": 20,
+        "tokens_out": 9456,
+        "cache_write": 43540,
+        "cache_read": 590040,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 1
+        }
+      },
+      "land": {
+        "runs": 2,
+        "wall_seconds": 4845,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 2,
+        "outcomes": {
+          "fail": 1,
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-25T01:59:16+00:00"
+  }
 }
