@@ -76,6 +76,7 @@
     "tests/test_testiface_cases.py",
     "tests/test_ticket.py",
     "tests/test_verify_case.py",
+    "tests/test_verify_case_iface_cases.py",
     "tests/test_verify_runner.py"
   ],
   "topics": {
@@ -210,6 +211,7 @@
         "scripts/verify-case.py",
         "scripts/verify.py",
         "tests/test_verify_case.py",
+        "tests/test_verify_case_iface_cases.py",
         "tests/test_verify_runner.py"
       ],
       "summary": "回歸層執行器與驗證者案例的 red / check"

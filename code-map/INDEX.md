@@ -82,4 +82,4 @@
 
 - 入口:[`scripts/verify-case.py`](../scripts/verify-case.py)
 - 主守衛:[`tests/test_verify_case.py`](../tests/test_verify_case.py)
-- 來源:[`scripts/verify.py`](../scripts/verify.py)、[`tests/test_verify_runner.py`](../tests/test_verify_runner.py)
+- 來源:[`scripts/verify.py`](../scripts/verify.py)、[`tests/test_verify_case_iface_cases.py`](../tests/test_verify_case_iface_cases.py)、[`tests/test_verify_runner.py`](../tests/test_verify_runner.py)

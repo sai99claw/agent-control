@@ -998,5 +998,289 @@ class CaseTimeout(CaseSandbox):
         self.assertEqual(runs[1], runs[0])
 
 
+# ------------------------------------------- #163:案例走 testiface regression,分類讀 result.json
+
+FIXTURE_CASE_REL = "verify/fixture/test_fixture_case.py"
+FIXTURE_CASE_ID = "verify.fixture.test_fixture_case.T.test_fixture"
+
+# fixture 專案那一份案例檔改成「值該是 2」:基底(值 1)上紅在案例檔自己的 assertEqual。
+FIXTURE_RED = """import unittest
+
+TAGS = ["example"]
+
+
+class T(unittest.TestCase):
+    def test_fixture(self):
+        with open("src/value.txt", encoding="utf-8") as handle:
+            self.assertEqual(handle.read().strip(), "2")
+"""
+
+
+class FixtureRegression(CaseSandbox):
+    """#163 A1、A3、A4:沙盒是 fixture 專案(row 3b),`tests.regression` 指向它的
+    `scripts/ac-tests.sh regression` —— 每被叫一次在 `$AC_TEST_CALLS` 記一行,
+    `AC_TEST_FAKE_REGRESSION` 換成三種量不到的形狀。期望值從 fixture 與票面來。
+
+    **變異**(票面 m3):`run_cases` 不把 `AC_CODE_ROOT` 設成那一份副本(兩趟都看 candidate)
+    → A1 的「基底紅」那一段與 A4 紅;(m4)`AC_TEST_MODE` 寫死一個值 → A4 紅;(m2)
+    `exception` 是 null 那一列算成紅 → A3 第一條紅。
+    """
+
+    fixture = True
+
+    def setUp(self):
+        super().setUp()
+        self.calls = os.path.join(self.home, "regression-calls.log")
+        conf = json.loads(self.read("board/config.json"))
+        conf["tests"]["regression"] = "sh scripts/ac-tests.sh regression"
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        self.write(FIXTURE_CASE_REL, FIXTURE_RED)
+        self.make_ticket(1, verify={"files": [FIXTURE_CASE_REL], "tags": ["example"],
+                                    "run": "", "notes": ""})
+
+    def tool(self, *args, **env):
+        return self.run_py("scripts/verify-case.py", *args,
+                           env=self.env(AC_TEST_CALLS=self.calls, **env))
+
+    def regression_calls(self):
+        """`[{argv, mode, code_root, out}]`,一次呼叫一筆;沒被叫過就是 []。"""
+        if not os.path.exists(self.calls):
+            return []
+        rows = []
+        with open(self.calls, encoding="utf-8") as handle:
+            for line in handle:
+                head, *rest = line.rstrip("\n").split("\t")
+                row = {"argv": head}
+                row.update(part.split("=", 1) for part in rest)
+                rows.append(row)
+        return rows
+
+    def ticket_bytes(self):
+        with open(os.path.join(self.repo, "tickets", "1.json"), "rb") as handle:
+            return handle.read()
+
+    def under(self, path, parent):
+        path, parent = os.path.realpath(path), os.path.realpath(parent)
+        return path.startswith(parent + os.sep)
+
+    # ------------------------------------------------------------ A1
+
+    def test_an_assert_equal_red_on_the_base_counts_and_check_records_it(self):
+        """A1:案例檔裡的 assertEqual 在基底上紅、在候選上綠 → red rc 0、列在紅、
+        red_lines 帶那一列的 message;check rc 0、票的 verify.baseline 照舊寫。"""
+        out = os.path.join(self.home, "vc-red")
+        done = self.tool("red", "1", "--out-dir", out)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("紅 %s" % FIXTURE_CASE_ID, done.stdout)
+        run = self.red_record(done)["baseline"]
+        self.assertEqual(run["red"], [FIXTURE_CASE_ID])
+        self.assertEqual(run["red_lines"], ["%s: AssertionError: '1' != '2'" % FIXTURE_CASE_ID])
+        self.assertEqual((run["cases"], run["skipped"]), (1, 0))
+
+        self.write("src/value.txt", "2\n")
+        done = self.tool("check", "1", "--out-dir", os.path.join(self.home, "vc-check"))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        base = self.load_ticket("1")["verify"]["baseline"]
+        self.assertEqual(base["stage"], "check")
+        self.assertTrue(base["ok"], base["why"])
+        self.assertEqual(base["baseline"]["red"], [FIXTURE_CASE_ID])
+        self.assertEqual(base["candidate_run"]["red"], [])
+        for key in ("rc", "cases", "skipped", "log", "red", "red_lines", "import_failures",
+                    "missing_symbol", "elsewhere"):
+            self.assertIn(key, base["baseline"], "verify.baseline 的形狀變了")
+
+    # ------------------------------------------------------------ A4
+
+    def test_red_runs_the_base_copy_once_in_verify_red_mode(self):
+        """A4(red):一次呼叫,`AC_CODE_ROOT` 是 out dir 底下的基底副本,模式 verify-red,
+        `AC_TEST_OUT` 在 out dir 底下;參數是 `--case <案例檔>`。綠不在 red 量(D-020)。"""
+        out = os.path.join(self.home, "vc-red")
+        done = self.tool("red", "1", "--out-dir", out)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        calls = self.regression_calls()
+        self.assertEqual(len(calls), 1, calls)
+        self.assertEqual(calls[0]["argv"], "regression --case %s" % FIXTURE_CASE_REL)
+        self.assertEqual(calls[0]["mode"], "verify-red")
+        self.assertEqual(os.path.realpath(calls[0]["code_root"]),
+                         os.path.realpath(os.path.join(out, "base")))
+        self.assertTrue(self.under(calls[0]["out"], out), calls[0])
+        self.assertIsNone(self.red_record(done)["candidate_run"], "red 不跑 candidate(D-020)")
+
+    def test_check_runs_each_copy_with_its_own_code_root_and_out(self):
+        """A4(check):兩次呼叫,`AC_CODE_ROOT` 分別是基底副本與候選副本(`--candidate` 是
+        分支,兩份都在 out dir 底下、不同),模式都是 verify-check,`AC_TEST_OUT` 各一個。"""
+        path = self.worktree("t1")
+        self.write("src/value.txt", "2\n", where=path)
+        self.write(FIXTURE_CASE_REL, FIXTURE_RED, where=path)
+        self.git("add", "-A", cwd=path)
+        self.git("commit", "-q", "-m", "值改成 2,附案例", cwd=path)
+        out = os.path.join(self.home, "vc-check")
+        done = self.tool("check", "1", "--candidate", "t1", "--out-dir", out)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        calls = self.regression_calls()
+        self.assertEqual(len(calls), 2, calls)
+        roots = [os.path.realpath(call["code_root"]) for call in calls]
+        self.assertEqual(roots, [os.path.realpath(os.path.join(out, "base")),
+                                 os.path.realpath(os.path.join(out, "candidate"))])
+        self.assertEqual([call["mode"] for call in calls], ["verify-check", "verify-check"])
+        outs = [call["out"] for call in calls]
+        self.assertNotEqual(outs[0], outs[1])
+        for one in outs:
+            self.assertTrue(self.under(one, out), one)
+        self.assertEqual(sorted(os.listdir(out)), ["logs"], "base/candidate 該砍掉了")
+
+    # ------------------------------------------------------------ A3
+
+    def assert_unmeasured(self, done, before):
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("量不到基準,票沒有動", done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
+        self.assertEqual(self.ticket_bytes(), before, "量不到的那一趟動了票")
+
+    def test_a_fail_row_with_a_null_exception_is_unmeasured(self):
+        before = self.ticket_bytes()
+        done = self.tool("check", "1", AC_TEST_FAKE_REGRESSION="null-exception")
+        self.assert_unmeasured(done, before)
+        self.assertIn("unmeasured", done.stderr)
+        self.assertIn(FIXTURE_CASE_ID, done.stderr)
+
+    def test_a_regression_without_result_json_is_unmeasured(self):
+        before = self.ticket_bytes()
+        done = self.tool("check", "1", AC_TEST_FAKE_REGRESSION="no-result")
+        self.assert_unmeasured(done, before)
+        self.assertIn("result.json", done.stderr)
+
+    def test_a_regression_past_the_timeout_is_unmeasured(self):
+        conf = json.loads(self.read("board/config.json"))
+        conf["verify_case"] = {"timeout_seconds": 1}
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        before = self.ticket_bytes()
+        out = os.path.join(self.home, "vc-sleep")
+        started = time.monotonic()
+        done = self.tool("check", "1", "--out-dir", out, AC_TEST_FAKE_REGRESSION="sleep")
+        wall = time.monotonic() - started
+        self.assert_unmeasured(done, before)
+        self.assertLess(wall, 30, "時限 1 秒卻跑了 %.1f 秒" % wall)
+        self.assertIn("verify_case.timeout_seconds", done.stderr)
+        self.assertIn(os.path.join(out, "logs", "baseline.log"), done.stderr)
+
+
+def result_row(ident, status, exception=None, file=None, line=None, message=None,
+               traceback=None):
+    """一列 result.json(schema 1)—— 欄位照 adapter 的那一張表。"""
+    return {"id": ident, "status": status, "message": message, "exception": exception,
+            "file": file, "line": line, "seconds": 0.0, "traceback": traceback}
+
+
+CASE_REL = "verify/nav/test_ticket_1.py"
+
+
+class ShapesFromRows(unittest.TestCase):
+    """#163:`shapes()` 是一支只吃 result.json 列的純函式;D-020 那張表一格一條,期望值是
+    表上寫的那一類,不是跑一次記下來的。
+
+    **變異**(票面 m1):分類只看 exception、不看 file(拿掉 `not frame_in(...)`)→
+    `test_an_assertion_in_another_file_is_elsewhere` 紅;`raised_below` 永遠回 False →
+    `test_a_raise_below_the_case_frame_is_elsewhere` 紅。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.vc = load_verify_case()
+
+    def shape(self, *rows, rels=(CASE_REL,)):
+        return self.vc.shapes(list(rows), list(rels))
+
+    def test_an_assertion_in_the_case_file_is_red(self):
+        got = self.shape(result_row("c.T.t", "fail", "AssertionError", CASE_REL, 9,
+                                    "AssertionError: 1 != 2"))
+        self.assertEqual(got["red"], ["c.T.t"])
+        self.assertEqual(got["red_lines"], ["c.T.t: AssertionError: 1 != 2"])
+
+    def test_an_assertion_subclass_name_is_red(self):
+        got = self.shape(result_row("c.T.t", "fail", "CustomAssertionError", CASE_REL, 9, "x"))
+        self.assertEqual(got["red"], ["c.T.t"])
+
+    def test_import_failures_by_exception_or_message(self):
+        got = self.shape(
+            result_row("c", "error", "ImportError", None, None,
+                       "ImportError: Failed to import test module: c"),
+            result_row("d.T.t", "error", "ModuleNotFoundError", CASE_REL, 2, "No module"),
+            result_row("e", "error", "SomethingElse", None, None, "Failed to import e"))
+        self.assertEqual(len(got["import_failures"]), 3)
+        self.assertEqual(got["red"], [])
+
+    def test_another_exception_in_the_case_file_is_a_missing_symbol(self):
+        for exc in ("AttributeError", "NameError", "FileNotFoundError", "TypeError"):
+            with self.subTest(exc):
+                got = self.shape(result_row("c.T.t", "error", exc, CASE_REL, 3, exc))
+                self.assertEqual(len(got["missing_symbol"]), 1)
+                self.assertEqual(got["red"], [])
+
+    def test_an_assertion_in_another_file_is_elsewhere(self):
+        got = self.shape(result_row("c.T.t", "fail", "AssertionError",
+                                    "verify/nav/test_helper.py", 4, "AssertionError: x"))
+        self.assertEqual(got["elsewhere"], ["c.T.t: AssertionError: x"])
+        self.assertEqual(got["red"], [])
+
+    def test_a_row_without_a_file_is_elsewhere(self):
+        got = self.shape(result_row("c.T.t", "error", "RuntimeError", None, None, "boom"))
+        self.assertEqual(len(got["elsewhere"]), 1)
+
+    def test_a_case_file_under_a_longer_prefix_still_matches(self):
+        """frame_in 的 endswith 規則:result 的 `file` 帶著前綴時照樣認得出是案例檔。"""
+        got = self.shape(result_row("c.T.t", "fail", "AssertionError",
+                                    "sub/" + CASE_REL, 9, "x"))
+        self.assertEqual(got["red"], ["c.T.t"])
+
+    def test_a_raise_below_the_case_frame_is_elsewhere(self):
+        """`file` 是案例檔(adapter 記的是最後一個測試檔 frame),但例外是產品碼丟的。"""
+        tb = ("Traceback (most recent call last):\n"
+              '  File "/tmp/x/%s", line 6, in test_t\n'
+              "    src.boom.go()\n"
+              '  File "/tmp/x/src/boom.py", line 2, in go\n'
+              '    raise AssertionError("prod")\n'
+              "AssertionError: prod\n") % CASE_REL
+        got = self.shape(result_row("c.T.t", "fail", "AssertionError", CASE_REL, 6,
+                                    "AssertionError: prod", tb))
+        self.assertEqual(got["elsewhere"], ["c.T.t: AssertionError: prod"])
+        self.assertEqual(got["red"], [])
+
+    def test_a_traceback_inside_the_message_does_not_move_the_frame(self):
+        """#31:工具的 traceback 在例外那一行**之後**(訊息裡),不是更深的 frame。"""
+        tb = ("Traceback (most recent call last):\n"
+              '  File "/tmp/x/%s", line 9, in test_t\n'
+              "    self.assertEqual(done.returncode, 0, done.stderr)\n"
+              "AssertionError: 1 != 0 : Traceback (most recent call last):\n"
+              '  File "/tmp/x/src/tool.py", line 1, in <module>\n'
+              "ValueError: tool\n") % CASE_REL
+        got = self.shape(result_row("c.T.t", "fail", "AssertionError", CASE_REL, 9,
+                                    "AssertionError: 1 != 0 : Traceback", tb))
+        self.assertEqual(got["red"], ["c.T.t"])
+
+    def test_skip_rows_are_counted_apart(self):
+        got = self.shape(result_row("c.T.s", "skip", message="why"),
+                         result_row("c.T.p", "pass"))
+        self.assertEqual(got["skipped"], 1)
+        self.assertEqual((got["red"], got["elsewhere"], got["missing_symbol"]), ([], [], []))
+
+    def test_a_fail_row_with_a_null_exception_cannot_be_classified(self):
+        with self.assertRaises(self.vc.CaseUnmeasured) as caught:
+            self.shape(result_row("c.T.t", "fail", None, CASE_REL, 9, "unexpected success"))
+        self.assertIn("unmeasured", str(caught.exception))
+        self.assertIn("c.T.t", str(caught.exception))
+
+
+class TheLogTextPathIsGone(unittest.TestCase):
+    """#163 A5:`-m unittest` 的子行程與讀 log 字的解析器不在了 —— 分類只有 result.json 一個來源。"""
+
+    def test_no_unittest_spawn_and_no_log_parser(self):
+        with open(os.path.join(SCRIPTS, "verify-case.py"), encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertEqual(text.count('"-m", "unittest"'), 0)
+        self.assertEqual(len(re.findall(r"def parse_reds|def traceback_end", text)), 0)
+        self.assertIn("testiface.py", text)
+
+
 if __name__ == "__main__":
     unittest.main()
