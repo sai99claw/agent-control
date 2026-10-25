@@ -105,12 +105,9 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
 的上一層)—— 票檔還沒進版控就 rc=2 停掉的那一種(#23 第 2 輪)不再發生。
 
 ## 閘門(`scripts/gate.sh`)
-專案自己定義三層:`--branch`(改動檔對應的模組)、`--base`(基礎組)、`--full`(全套)。**對不到任何模組要出聲,不准印一行綠。** 判綠先寫檔再讀退出碼,不用 `cmd | tail`。瀏覽器引擎由 `available()` 判,不在指令列收窄。
+閘門是 A 的:`actl gate --branch|--base|--full [--ticket n]`。專案只填 `board/config.json` 的 `tests` 段(`preflight` / `select` / `run` / `full` / `regression` 五條命令,結果一律寫成 `result.json`;介面與退出碼見 `docs/design/project-runnable-entries.md` §4)。`select` 回 `unmapped`(改動檔對不到任何模組)仍是 rc 3,**要出聲,不准印一行綠**。判綠先寫檔再讀退出碼,不用 `cmd | tail`。瀏覽器引擎由 `available()` 判,不在指令列收窄。
 
-`--ticket <n>` 再多做三件事(範本 `scripts/gate.example.sh` 也示範了這一格):
-1. 寫這一輪的狀態檔(見下)。
-2. **真的去跑票的回歸**:票的 `verify.tags` 併 `tags` → `scripts/verify.py --tag …`,原始輸出存 `verify.log` 並進狀態檔的 `logs`。宣告了 tags 卻一個案例都選不到 = 非零(那是缺口,不是綠)。`--full` 則跑**全部**回歸。
-3. flake 重跑(見下一節)。
+`--ticket <n>` 再多做三件事:寫這一輪的狀態檔(見下);**真的去跑票的回歸**(票的 `verify.tags` 併 `tags` → `regression --tag …`,原始輸出存 `verify.log` 並進狀態檔的 `logs`;宣告了 tags 卻一個案例都選不到 = 非零,那是缺口,不是綠;`--full` 則跑**全部**回歸);以及按 id 的 flake 重跑(見下一節)。
 
 ## 發版
 主線執行、人事先授權;順序:tag → build → staging → 閘門 → prod → 健康檢查 → 記事件。**發版期間不開 land。**
@@ -297,7 +294,7 @@ worker 同一輪**也 commit 了**(#107,專案 #751 事故;#144 起):驗證者�
 | **一份狀態**(D-054 Q5):收件匣只有目錄(`reports/inbox/*.md`,ack = 搬進 `acked/`,頁的第一行是 `list` 讀的 JSON),沒有索引檔;票欄位變更、cost 列、發頁不另發鏡像事件;看板從票 JSON 畫 VISION 四個指標(拿不到 = 未知),`interventions` 在轉 Blocked / NeedsDecision 且 owner=main 的同一次存檔 +1 | **已實作**(#143) | `scripts/inbox.py`、`scripts/ticket.py`(`count_intervention`)、`board/board.py`(`vision`) |
 | 同一輪的回歸**只跑一次**(worker / 驗證者 / gate 共用) | **已實作**(2026-09-21,D-015) | `scripts/verify.py` 的 `reports/t<n>/<run_id>/verify-<雜湊>.log`(雜湊含標籤 + sha);`--no-cache` 關 |
 | **按角色裁切、帶版本的規則包** | **已實作**(2026-09-21,D-015) | `scripts/rules.py pack <角色> --model <模型>`(各段原文串起來,不設位元組上限) |
-| 一個既有專案**接上這一套** | **已實作**(步驟 + 腳本;實際遷移還沒做) | `docs/TODO.md` §0;`scripts/sync-to-project.sh` 同步到專案的 `scripts/control/` 並印出接點 |
+| 一個既有專案**接上這一套** | **已實作**(`git clone` A 放在專案旁,`actl doctor` / `actl migrate` / `actl hooks install`,再填 `tests` 段;實際遷移還沒做) | `docs/TODO.md` §0 |
 | **驗證者只證紅**:`verify-case.py red <n> --candidate <樹>`,四類紅分開數,`red_lines` 給覆核看 | **已落地**(D-020,#26) | `scripts/verify-case.py red` 只印 `<out-dir>/baseline-red.json` → 驗證者抄進 result 的 `baseline` → `apply.sh --evidence-verifier` 併進票的 `verify.baseline{stage:"red"}` |
 | **閘門接線**:回歸層之後只跑 `check`(不先驗案例的格式,D-054 Q4),`stage` 由 `red` 升成 `check`,紅榜收進 `status.json` | **已落地**(D-020,#27) | `scripts/gate.sh --ticket <n>`;`ticket.py close` 只認 `stage=="check"` |
 | **閘門只跑案例;缺案例 = 缺口**:票宣告了 verify 卻沒有案例(也不是 `needs_verifier=false`)→ 閘門 rc 3,紅榜恰一列 `kind=GAP`、`case=verify-case:(no-cases)` 進 `status.json` 的 `failures[]`,**由驗證者補**(D-014);上一輪紅榜只有缺口列 → auto-fix 這一輪只派驗證者、不派 worker(那一輪照樣算一輪),混合時 worker 派工文把那一列標成驗證者的 | **已實作**(#126;#138 起不經案例格式檢查) | `scripts/gate.sh`(`CASES_ARGS`)→ `scripts/status.py done --no-cases-log`(`no_cases_row`);`scripts/auto-fix.sh`(`gap_round`) |
