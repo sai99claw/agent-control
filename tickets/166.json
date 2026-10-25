@@ -32,16 +32,61 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "26c776b97b90ef00558de8d34bb079b3719d06bc",
-  "state": "Blocked",
-  "state_version": 10,
+  "base_sha": "5ecfffc38e924f63019308536480d6113ae6dfb4",
+  "state": "InReview",
+  "state_version": 23,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
+    "files": [
+      "tests/test_retire_sync_cases.py"
+    ],
     "tags": [],
-    "run": "",
-    "notes": ""
+    "run": "python3 -m unittest tests.test_retire_sync_cases",
+    "notes": "Each case builds its own AC_HOME / project dirs in a tempdir (board/config.json '{}', a copy of docs/DISPATCH-TEMPLATE.md in both, marker cards) and runs control_harness.SCRIPTS/rules.py pack with an env stripped of AC_*. Three cases are red on base (project-only card packed as canon; AC_HOME unset not rc 2; no project overlay because base reads cards from <root>/memory). Two are green on base by design and guard mutations: the symlink case (AC_HOME -> link to the root) goes red if is_canon compares strings instead of realpaths (m1); 'pack main' with AC_ROOT unset and cwd = a git-initialised A goes red if canon detection depends on AC_ROOT being set. The patch also deletes class A4SyncCarriesTheTable (3 cases), its helpers and its docstring row from verify/role_routing/test_ticket_122.py (objective 6); that file is not in files because a deletion has no red to prove.",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-25T17:38:18+00:00",
+      "files": [
+        "tests/test_retire_sync_cases.py"
+      ],
+      "base_ref": "5ecfffc38e924f63019308536480d6113ae6dfb4",
+      "base_sha": "5ecfffc38e924f63019308536480d6113ae6dfb4",
+      "candidate": "../agent-control-wt/t166",
+      "candidate_sha": "b0e639f079ce01ec2931a17a501af6d58ff57aca",
+      "baseline": {
+        "red": [
+          "tests.test_retire_sync_cases.RulesCanonFromAcHome.test_a_card_only_the_project_has_is_refused_not_packed_as_canon",
+          "tests.test_retire_sync_cases.RulesCanonFromAcHome.test_ac_home_unset_is_rc_2_and_named",
+          "tests.test_retire_sync_cases.RulesCanonFromAcHome.test_canon_then_the_project_heading_then_the_project_card"
+        ],
+        "red_lines": [
+          "tests.test_retire_sync_cases.RulesCanonFromAcHome.test_a_card_only_the_project_has_is_refused_not_packed_as_canon: AssertionError: 0 == 0 : packed without a canon card:",
+          "tests.test_retire_sync_cases.RulesCanonFromAcHome.test_ac_home_unset_is_rc_2_and_named: AssertionError: 0 != 2 : # 規則包:verifier @ unknown",
+          "tests.test_retire_sync_cases.RulesCanonFromAcHome.test_canon_then_the_project_heading_then_the_project_card: AssertionError: 1 != 0 : rules: verifier 的規則包產不出來(模型 opus)—— stdout 不印半包,呼叫端不准起 agent"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "skipped": 0,
+        "rc": 1,
+        "cases": 5,
+        "log": "../agent-control-wt/t166/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "skipped": 0,
+        "rc": 0,
+        "cases": 5,
+        "log": "../agent-control-wt/t166/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "complexity": "simple",
   "needs_verifier": true,
@@ -105,6 +150,57 @@
       "note": null,
       "effort": null,
       "at": "2026-10-25T12:17:37+00:00"
+    },
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 56,
+      "tokens_out": 21461,
+      "cache_write": 87396,
+      "cache_read": 2348939,
+      "wall_seconds": 3257,
+      "outcome": "handed-in",
+      "run_id": "20261025-151726-14093",
+      "session_id": "30557cd0-4a2f-4c9e-bd84-ca1393af76bc",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-25T16:11:45+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 170,
+      "tokens_out": 61340,
+      "cache_write": 173906,
+      "cache_read": 12663767,
+      "wall_seconds": 3257,
+      "outcome": "handed-in",
+      "run_id": "20261025-151726-14093",
+      "session_id": "bf43ba27-c5a9-4ebf-a71b-782e3faad3aa",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-25T16:11:47+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 84,
+      "tokens_out": 32868,
+      "cache_write": 117314,
+      "cache_read": 4728800,
+      "wall_seconds": 1981,
+      "outcome": "handed-in",
+      "run_id": "20261025-161147-1644",
+      "session_id": "36b82a3c-3404-4a61-ad8d-1c7faa0e5053",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-25T17:11:44+00:00"
     }
   ],
   "objections": [
@@ -118,5 +214,13 @@
     }
   ],
   "owner": "main",
-  "interventions": 1
+  "interventions": 1,
+  "branch": "t166",
+  "gate": {
+    "rc": 0,
+    "sha": "b0e639f079ce01ec2931a17a501af6d58ff57aca",
+    "run_id": "20261025-171144-5402",
+    "at": "2026-10-25T17:38:19+00:00"
+  },
+  "repair_round": 2
 }
