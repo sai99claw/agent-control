@@ -12,7 +12,7 @@
 3. 真正的派工入口(`auto-fix.sh` 第 1 輪 / 修復輪 / 驗證者兩條路、`review.sh`):包產不出來
    時 worker / verifier / reviewer 替身**一次都沒被起** —— 每一條都有一個「包好的時候
    替身真的會被起」的對照,不然零次也可能只是替身沒接上。
-4. 讀這些包的另外兩個入口:派工文裡的角色 / 模型路徑在 `roles_dir=docs/roles` 的專案裡
+4. 讀這些包的另外兩個入口:派工文裡的角色 / 模型路徑在正本住 `$AC_HOME` 的專案裡
    都真的存在、reviewer 沒有寫記憶的動作;`new-session.sh` 讓本地主卡整理前後都看得到、
    短命角色不拿全域交接;閘門動到這幾支時選得到這一組。
 
@@ -42,7 +42,6 @@ WANT = {
     "design": ("design", ("0.5", "5.5", "6.4", "8")),
     "reviewer": ("reviewer", ("0.5", "3", "5.5", "6.4", "8")),
 }
-PROJECT_RULES = {"roles_dir": "docs/roles", "models_dir": "docs/roles/model"}
 FIXTURE_MODEL = "- 沙盒替身模型:照派工文做,不猜。\n"
 # 讓「少一節」成真的那一刀:5.5 每個角色都要。
 BROKEN_HEADING = ("## 5.5 🩸", "## 9.95 🩸")
@@ -100,7 +99,13 @@ def read(path):
 
 
 class RulesBox(Sandbox):
-    """裝好正本 A 的規則來源(`install_rules_sources`)+ 假模型的卡。"""
+    """裝好正本 A 的規則來源(`install_rules_sources`)+ 假模型的卡。
+
+    正本版面 = 沙盒自己就是 A:`rules.py` 跑的時候 `AC_HOME` 指沙盒(#166:正本是根與
+    `AC_HOME` 同一個目錄,不是設定鍵)。`make_project` 把沙盒換成專案版面,`AC_HOME` 回到
+    這個 repo。派工入口(auto-fix / review)照舊從 `self.ac_home` 跑。"""
+
+    project = False
 
     def setUp(self):
         super().setUp()
@@ -108,6 +113,8 @@ class RulesBox(Sandbox):
         self.write(os.path.join("memory", "model", "fixture-model.md"), FIXTURE_MODEL)
 
     def rules(self, *args, **env):
+        if not self.project:
+            env.setdefault("AC_HOME", self.repo)
         return self.run_py("scripts/rules.py", *args, env=self.env(**env))
 
     def break_section(self, rel=os.path.join("docs", "DISPATCH-TEMPLATE.md")):
@@ -125,16 +132,16 @@ class RulesBox(Sandbox):
 
 
 def make_project(box, local_cards=("implementer",), local_model=True):
-    """泛用專案的版面:正本角色卡 / 模型卡同步在 `docs/roles/`,共用規矩叫
-    `docs/DISPATCH-COMMON-RULES.md`,`memory/` 只有這個專案自己寫的(主卡、暫存區、備忘)。"""
+    """泛用專案的版面(#166,D-071 §3):正本角色卡 / 模型卡只住 `$AC_HOME/memory/`(這個
+    repo),專案裡沒有副本;共用規矩叫 `docs/DISPATCH-COMMON-RULES.md`,`memory/` 只有這個
+    專案自己寫的(主卡、暫存區、備忘)。"""
     repo = box.repo
-    for kind, dest in (("role", os.path.join("docs", "roles")),
-                       ("model", os.path.join("docs", "roles", "model"))):
-        os.makedirs(os.path.join(repo, dest), exist_ok=True)
+    box.project = True
+    for kind in ("role", "model"):
         where = os.path.join(repo, "memory", kind)
         for name in sorted(os.listdir(where)):
             if name.endswith(".md") and not name.endswith(".inbox.md") and name != "README.md":
-                shutil.move(os.path.join(where, name), os.path.join(repo, dest, name))
+                os.remove(os.path.join(where, name))
     shutil.move(os.path.join(repo, "docs", "DISPATCH-TEMPLATE.md"),
                 os.path.join(repo, "docs", "DISPATCH-COMMON-RULES.md"))
     for card in local_cards:
@@ -154,21 +161,18 @@ class NormalPacks(RulesBox):
         """`[(這一格要在包裡留下正文的來源檔, 那一份的文字)]` —— 由這一組自己決定,
         照票面「必要項」的定義:角色卡、指定的模型卡、名單上每一節、存在且有正文的本地
         主卡與暫存區。"""
-        conf = json.loads(self.read("board/config.json")).get("rules") or {}
-        roles = conf.get("roles_dir") or os.path.join("memory", "role")
-        models = conf.get("models_dir") or os.path.join("memory", "model")
+        home = self.ac_home if self.project else self.repo
         card, nums = WANT[role]
-        out = [(os.path.join(roles, card + ".md"), None),
-               (os.path.join(models, model + ".md"), None)]
+        out = [(os.path.join(home, "memory", "role", card + ".md"), None),
+               (os.path.join(home, "memory", "model", model + ".md"), None)]
         rules_rel = next(rel for rel in (os.path.join("docs", "DISPATCH-COMMON-RULES.md"),
                                          os.path.join("docs", "DISPATCH-TEMPLATE.md"))
                          if self.exists(rel))
         doc = self.read(rules_rel)
         out += [("%s §%s" % (rules_rel, num), section_text(doc, num)) for num in nums]
-        local = os.path.normpath(roles) != os.path.normpath(os.path.join("memory", "role"))
         extra = [os.path.join("memory", "role", card + ".inbox.md"),
                  os.path.join("memory", "model", model + ".inbox.md")]
-        if local:
+        if self.project:
             extra += [os.path.join("memory", "role", card + ".md"),
                       os.path.join("memory", "model", model + ".md")]
         out += [(rel, None) for rel in extra if self.exists(rel) and self.read(rel).strip()]
@@ -206,12 +210,9 @@ class NormalPacks(RulesBox):
                 self.assert_legal(role)
 
     def test_every_role_in_a_generic_project_layout(self):
-        """守「`roles_dir=docs/roles` 的專案每個角色的包都合法、本地主卡與暫存區
+        """守「正本住 `$AC_HOME` 的專案每個角色的包都合法、本地主卡與暫存區
         都留正文」;回歸是專案層疊上去後固定成本超標或本地格被砍成標題;舊測試只用
         一句話的假卡;不加測試專用 API。"""
-        conf = json.loads(self.read("board/config.json"))
-        conf["rules"] = PROJECT_RULES
-        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
         make_project(self, local_cards=tuple(card for card, _nums in WANT.values()))
         for role in WANT:
             with self.subTest(role=role):
@@ -423,12 +424,11 @@ class TheDispatchEntriesStartNothing(RulesBox):
 
 
 class ProjectPacketsPointAtRealFiles(RulesBox):
-    """驗收 4 前半:`roles_dir=docs/roles` 的專案裡,派工文提到的角色 / 模型路徑都真的存在。
+    """驗收 4 前半:正本住 `$AC_HOME` 的專案裡,派工文提到的角色 / 模型路徑都真的存在。
     本地只有 implementer 的主卡、沒有本地模型卡 —— 寫死 `memory/role/verifier.md`、
-    `memory/model/<模型>.md` 的派工文在這裡會指到不存在的檔。"""
+    `memory/model/<模型>.md`(相對專案根)的派工文在這裡會指到不存在的檔。"""
 
-    config_extra = {"rules": PROJECT_RULES}
-    PATH = re.compile(r"`((?:memory|docs/roles)/[^`\s<>@]*\.md)`")
+    PATH = re.compile(r"`((?:\$AC_HOME/)?memory/[^`\s<>@]*\.md)`")
 
     def setUp(self):
         super().setUp()
@@ -437,7 +437,10 @@ class ProjectPacketsPointAtRealFiles(RulesBox):
     def assert_paths_exist(self, text, must):
         found = set(self.PATH.findall(text))
         self.assertIn(must, found, "派工文沒有指到角色卡:\n" + text)
-        gone = sorted(rel for rel in found if not self.exists(rel))
+        home = "$AC_HOME/"
+        gone = sorted(rel for rel in found if not os.path.exists(
+            os.path.join(self.ac_home, rel[len(home):]) if rel.startswith(home)
+            else os.path.join(self.repo, rel)))
         self.assertEqual(gone, [], "派工文指到不存在的檔")
 
     def test_the_first_round_worker_and_verifier_packets(self):
@@ -452,8 +455,8 @@ class ProjectPacketsPointAtRealFiles(RulesBox):
         packets = {name: read(os.path.join(run, sub, name)) for sub in os.listdir(run)
                    for name in os.listdir(os.path.join(run, sub)) if name.startswith("dispatch")}
         self.assertEqual(sorted(packets), ["dispatch-round1.md", "dispatch-verifier-round1.md"])
-        self.assert_paths_exist(packets["dispatch-round1.md"], "docs/roles/implementer.md")
-        self.assert_paths_exist(packets["dispatch-verifier-round1.md"], "docs/roles/verifier.md")
+        self.assert_paths_exist(packets["dispatch-round1.md"], "$AC_HOME/memory/role/implementer.md")
+        self.assert_paths_exist(packets["dispatch-verifier-round1.md"], "$AC_HOME/memory/role/verifier.md")
 
     def test_the_reviewer_packet_has_no_memory_write(self):
         """守「reviewer 派工文的入口存在、而且沒有叫唯讀角色寫記憶」;回歸是包裡的
@@ -472,7 +475,7 @@ class ProjectPacketsPointAtRealFiles(RulesBox):
         self.commit_in(self.worktree("t1"), "thing.txt", "#1")
         self.run_sh("scripts/review.sh", "1")
         text = read(stdin)
-        self.assert_paths_exist(text, "docs/roles/reviewer.md")
+        self.assert_paths_exist(text, "$AC_HOME/memory/role/reviewer.md")
         self.assertNotIn("## 記憶回寫", text)
         self.assertIn("候選記憶", text)
 
@@ -494,14 +497,11 @@ class TheTemplatesDoNotHardcodeTheRoleDirectory(unittest.TestCase):
 class NewSessionForEachRole(RulesBox):
     """驗收 5:`new-session.sh` 的本地主卡整理前後都看得到;短命角色沒有全域交接。"""
 
-    config_extra = {"rules": PROJECT_RULES}
     LESSON = "- LOCAL-MAIN-LESSON-74 本專案:落地前先看 git status。"
 
     def setUp(self):
         super().setUp()
-        self.write(os.path.join("docs", "roles", "contract.md"), "## 不可違反的\n- RULE-MARK\n")
-        self.write(os.path.join("docs", "roles", "main.md"), "# 主線\n- 正本主線卡的一條。\n")
-        self.write(os.path.join("docs", "roles", "model", "fable.md"), "- fable 的一條。\n")
+        # 正本(「不可違反的」、主線卡、模型卡)住 `$AC_HOME`(#166),這裡只寫專案自己的。
         self.write(os.path.join("docs", "HANDOFF.md"), "# 交接\n")
         self.make_ticket(9, state="Ready", subject="OPEN-TICKET-74")
         # 主卡還沒有,而 `install_rules_sources` 帶進來的正本主卡在這個專案裡不是它的。

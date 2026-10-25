@@ -208,6 +208,26 @@ class Select(unittest.TestCase):
             empty = self.select("docs/a/note.txt", env=env)
             self.assertEqual((empty.returncode, empty.stdout), (0, ""), empty.stderr)
 
+    def test_a_map_id_whose_module_this_diff_deletes_is_dropped_out_loud(self):
+        """#166: the map comes from `AC_ROOT` (main), the tree is the branch — a branch deleting
+        `tests/test_gone_zzz.py` still meets main's row naming `test_gone_zzz`. Only an id whose
+        file is in the same diff and missing is dropped; one that never had a file stays.
+
+        **Mutation**: drop the `gone` filter in `cmd_select` → the first assert is red."""
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "board"))
+            with open(os.path.join(tmp, "board", "config.json"), "w", encoding="utf-8") as h:
+                json.dump({"tests": {"unittest": {"map": [
+                    {"match": "scripts/old_zzz.sh", "ids": ["test_gone_zzz", "test_event"]}]}}}, h)
+            env = clean_env(AC_ROOT=tmp, AC_CODE_ROOT=ROOT)
+            done = self.select("scripts/old_zzz.sh", "tests/test_gone_zzz.py", env=env)
+            self.assertEqual((done.returncode, done.stdout.splitlines()), (0, ["test_event"]),
+                             done.stderr)
+            self.assertIn("test_gone_zzz", done.stderr, "dropped silently")
+            kept = self.select("scripts/old_zzz.sh", env=env)
+            self.assertEqual(kept.stdout.splitlines(), ["test_gone_zzz", "test_event"],
+                             "an id not deleted by this diff is not ours to drop")
+
     def test_empty_stdin_is_rc_3_with_a_reason(self):
         done = self.select()
         self.assertEqual(done.returncode, 3, done.stdout)

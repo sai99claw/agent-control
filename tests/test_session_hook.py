@@ -194,7 +194,9 @@ class A6TheCap(HookSandbox):
 
         **變異**:上限量回 bytes → 最後一行的原始長度對不上(這一條紅)。
         """
-        self.write("CLAUDE.md", "## 不可違反的\n- RULE-MARK 一條規則\n\n## 別的\n")
+        # 「不可違反的」一律讀 `$AC_HOME/CLAUDE.md`(#166):標記寫在這個測試自己那一份 A。
+        self.write("CLAUDE.md", "## 不可違反的\n- RULE-MARK 一條規則\n\n## 別的\n",
+                   where=os.path.dirname(self.own_ac_home()))
         self.write("memory/role/main.md", "# 主線\n" + "長的角色卡一行。\n" * 1300)
         full = self.run_sh("scripts/new-session.sh", "main", "fable", "--no-event")
         self.assertEqual(full.stderr, "", "量原始長度那一趟要乾淨,不然兩邊量的不是同一頁")
