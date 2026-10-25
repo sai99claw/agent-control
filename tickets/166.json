@@ -33,8 +33,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "5ecfffc38e924f63019308536480d6113ae6dfb4",
-  "state": "InReview",
-  "state_version": 23,
+  "state": "Done",
+  "state_version": 25,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -201,6 +201,23 @@
       "note": null,
       "effort": null,
       "at": "2026-10-25T17:11:44+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 2721,
+      "outcome": "pass",
+      "run_id": "20261025-173906-7306",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-25T18:24:27+00:00"
     }
   ],
   "objections": [
@@ -222,5 +239,65 @@
     "run_id": "20261025-171144-5402",
     "at": "2026-10-25T17:38:19+00:00"
   },
-  "repair_round": 2
+  "repair_round": 2,
+  "landed_sha": "e40a17b5d3f724389c61e00657b1707e70622657",
+  "cost_total": {
+    "calendar_seconds": 90434,
+    "wall_seconds": 11707,
+    "runs": 7,
+    "worker_rounds": 2,
+    "objections": 1,
+    "by_role": {
+      "verifier": {
+        "runs": 2,
+        "wall_seconds": 3640,
+        "tokens_in": 128,
+        "tokens_out": 52487,
+        "cache_write": 194512,
+        "cache_read": 5673510,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 2
+        }
+      },
+      "worker": {
+        "runs": 3,
+        "wall_seconds": 5314,
+        "tokens_in": 276,
+        "tokens_out": 99637,
+        "cache_write": 330205,
+        "cache_read": 18018953,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "objection": 1,
+          "handed-in": 2
+        }
+      },
+      "opener": {
+        "runs": 1,
+        "wall_seconds": 32,
+        "tokens_in": 8,
+        "tokens_out": 2303,
+        "cache_write": 22582,
+        "cache_read": 171425,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "escalate": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 2721,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-25T18:24:27+00:00"
+  }
 }
