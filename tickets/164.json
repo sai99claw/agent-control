@@ -24,16 +24,75 @@
   "model": "sonnet",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "601b36f039a336a6f2e87effefbed3067bfa2585",
-  "state": "Ready",
-  "state_version": 2,
+  "base_sha": "2d5f82ea94299f86fceaf2339bb2847d60f3d167",
+  "state": "InReview",
+  "state_version": 11,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
+    "files": [
+      "tests/test_hooks_cases.py"
+    ],
     "tags": [],
-    "run": "",
-    "notes": ""
+    "run": "python3 -m unittest tests.test_hooks_cases",
+    "notes": "Runs scripts/hooks.py directly with AC_HOME=<dirname of SCRIPTS> and --project <tempdir>; no actl, no sandbox, no network. test_dogfood_* runs 'check' (read-only) against A's committed .claude/settings.json, so AC_HOME's copy must carry .claude/. Expected commands are built from the ticket's pinned target set + realpath(AC_HOME). Edge cases from the test_plan list; A1-A5 live in the worker's tests/test_hooks.py.",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-25T02:03:34+00:00",
+      "files": [
+        "tests/test_hooks_cases.py"
+      ],
+      "base_ref": "2d5f82ea94299f86fceaf2339bb2847d60f3d167",
+      "base_sha": "2d5f82ea94299f86fceaf2339bb2847d60f3d167",
+      "candidate": "../agent-control-wt/t164",
+      "candidate_sha": "de8ae231df70d59fbc4aec2a8b48d025cc373e61",
+      "baseline": {
+        "red": [
+          "tests.test_hooks_cases.HooksMergeCases.test_ac_home_unset_is_rc2",
+          "tests.test_hooks_cases.HooksMergeCases.test_check_on_absent_file_writes_nothing",
+          "tests.test_hooks_cases.HooksMergeCases.test_dogfood_with_trailing_slash_is_still_dogfood",
+          "tests.test_hooks_cases.HooksMergeCases.test_managed_and_foreign_in_same_hooks_array",
+          "tests.test_hooks_cases.HooksMergeCases.test_managed_command_with_extra_arguments_is_rewritten",
+          "tests.test_hooks_cases.HooksMergeCases.test_managed_entry_at_existing_foreign_file_is_rewritten_not_deleted",
+          "tests.test_hooks_cases.HooksMergeCases.test_project_dir_spelling_missing_file_is_removed",
+          "tests.test_hooks_cases.HooksMergeCases.test_project_with_trailing_slash",
+          "tests.test_hooks_cases.HooksMergeCases.test_session_start_entry_without_matcher",
+          "tests.test_hooks_cases.HooksMergeCases.test_settings_without_hooks_key"
+        ],
+        "red_lines": [
+          "tests.test_hooks_cases.HooksMergeCases.test_ac_home_unset_is_rc2: AssertionError: 'AC_HOME not set' not found in \"/usr/bin/python3: can't open file '/home/user/agent-control-wt/t164/gate.log.verify-case.d/base/scripts/hooks.py': [Errno 2] No such file or directory\\n\"",
+          "tests.test_hooks_cases.HooksMergeCases.test_check_on_absent_file_writes_nothing: AssertionError: 2 != 1 : /usr/bin/python3: can't open file '/home/user/agent-control-wt/t164/gate.log.verify-case.d/base/scripts/hooks.py': [Errno 2] No such file or directory",
+          "tests.test_hooks_cases.HooksMergeCases.test_dogfood_with_trailing_slash_is_still_dogfood: AssertionError: 2 != 0 : /usr/bin/python3: can't open file '/home/user/agent-control-wt/t164/gate.log.verify-case.d/base/scripts/hooks.py': [Errno 2] No such file or directory",
+          "tests.test_hooks_cases.HooksMergeCases.test_managed_and_foreign_in_same_hooks_array: AssertionError: 2 != 0 : rc=2",
+          "tests.test_hooks_cases.HooksMergeCases.test_managed_command_with_extra_arguments_is_rewritten: AssertionError: 2 != 1 : /usr/bin/python3: can't open file '/home/user/agent-control-wt/t164/gate.log.verify-case.d/base/scripts/hooks.py': [Errno 2] No such file or directory",
+          "tests.test_hooks_cases.HooksMergeCases.test_managed_entry_at_existing_foreign_file_is_rewritten_not_deleted: AssertionError: 2 != 0 : rc=2",
+          "tests.test_hooks_cases.HooksMergeCases.test_project_dir_spelling_missing_file_is_removed: AssertionError: 2 != 0 : rc=2",
+          "tests.test_hooks_cases.HooksMergeCases.test_project_with_trailing_slash: AssertionError: 2 != 0 : rc=2",
+          "tests.test_hooks_cases.HooksMergeCases.test_session_start_entry_without_matcher: AssertionError: 2 != 0 : rc=2",
+          "tests.test_hooks_cases.HooksMergeCases.test_settings_without_hooks_key: AssertionError: 2 != 0 : rc=2"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 1,
+        "cases": 10,
+        "skipped": 0,
+        "log": "../agent-control-wt/t164/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "rc": 0,
+        "cases": 10,
+        "skipped": 0,
+        "log": "../agent-control-wt/t164/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "complexity": "simple",
   "needs_verifier": true,
@@ -44,5 +103,49 @@
     "D-069"
   ],
   "test_plan": "Worker, foreground: timeout 590 python3 -m unittest tests.test_hooks tests.test_session_hook tests.test_actl tests.test_project_config tests.test_no_project_names; report Ran/OK verbatim. Worker writes A1-A5 in tests/test_hooks.py (new) and the A4 arm in tests/test_session_hook.py; adds tests.unittest.map rows (or gate.sh map() rows while map() still exists, whichever the base has) for scripts/hooks.py -> test_hooks test_session_hook and for bin/actl -> + test_hooks. Verifier (needs_verifier true, interface_fixed true: subcommands, rc, diff output and the entry shape are pinned above) writes tests/test_hooks_cases.py (new, not in worker scope) in parallel: at least an event list holding one managed and one foreign item in the same 'hooks' array (foreign survives, managed rewritten), a managed command with extra arguments, a settings.json with no 'hooks' key, --project given with a trailing slash, a SessionStart entry without 'matcher', and a managed entry pointing at an existing non-A file of the same basename (rewritten, not deleted). Mutations (not measured by opener): m1 install drops the foreign entry -> A2 red; m2 check writes the file -> A3 red; m3 install appends instead of rewriting (duplicates on second run) -> A1 red; m4 dogfood writes the absolute path -> A4 red; m5 missing-file managed entry kept -> A2 red. Container runs as uid 0: no chmod-based unreadable-file cases (root reads them); use a missing file or invalid JSON instead. hard_block.patterns forbids the four process-signal spellings in added tests/** lines: never stop a child that way in a test; stop a served board only through the Popen handle as tests/test_board.py _stop does today; timeouts belong to subprocess.run(timeout=) inside scripts/.",
-  "outline": "D-071 row 4 (self-contained JSON rewrite with a diff; the shape test exists). Facts at base 601b36f: A's .claude/settings.json has the three events with \"$CLAUDE_PROJECT_DIR/scripts/<hook>\" commands (SessionStart matcher startup|resume|clear|compact|fork, timeouts 60/10/10); tests/test_session_hook.py:32 A1 pins type/command substring/timeout/matcher subset; test_no_project_names.py:53-67 treats every .json outside tickets/ as code level (absolute home paths forbidden) - hence the dogfood spelling rule in objective (2): the design's 'absolute path into AC_HOME' is kept for every other project. QUESTION for main (recommended yes): accept '$CLAUDE_PROJECT_DIR' form when project == AC_HOME. T facts (docs/HANDOFF.md T list item 5): T's settings.json has a PreToolUse Bash|Read hook to scripts/control/guard-main.sh (file retired) and no SubagentStop/SessionEnd - A2 is that shape. 'please paste' text lives only in scripts/sync-to-project.sh (412, 461-465) and dies with #166. #159 wired 'actl hooks' as a 'not landed yet' rc-2 stub; this ticket replaces it. #160's doctor row text 'actl hooks install' is fixed; A5 is the handshake. Files: scripts/hooks.py (new), bin/actl (hooks row), tests/test_hooks.py (new), tests/test_session_hook.py (one arm), gate map data (two rows). No change to project_config.py, session-hook.sh or sync-to-project.sh. needs_verifier true: a wrong merge deletes a user's own hook silently (section 5.5 class); interface_fixed true. simple, sonnet (design). Depends on #159 (actl, harness ac_env) and #160 (version-2 sandbox passes actl's check; doctor row). Parallel with #161, #162, #163, #165."
+  "outline": "D-071 row 4 (self-contained JSON rewrite with a diff; the shape test exists). Facts at base 601b36f: A's .claude/settings.json has the three events with \"$CLAUDE_PROJECT_DIR/scripts/<hook>\" commands (SessionStart matcher startup|resume|clear|compact|fork, timeouts 60/10/10); tests/test_session_hook.py:32 A1 pins type/command substring/timeout/matcher subset; test_no_project_names.py:53-67 treats every .json outside tickets/ as code level (absolute home paths forbidden) - hence the dogfood spelling rule in objective (2): the design's 'absolute path into AC_HOME' is kept for every other project. QUESTION for main (recommended yes): accept '$CLAUDE_PROJECT_DIR' form when project == AC_HOME. T facts (docs/HANDOFF.md T list item 5): T's settings.json has a PreToolUse Bash|Read hook to scripts/control/guard-main.sh (file retired) and no SubagentStop/SessionEnd - A2 is that shape. 'please paste' text lives only in scripts/sync-to-project.sh (412, 461-465) and dies with #166. #159 wired 'actl hooks' as a 'not landed yet' rc-2 stub; this ticket replaces it. #160's doctor row text 'actl hooks install' is fixed; A5 is the handshake. Files: scripts/hooks.py (new), bin/actl (hooks row), tests/test_hooks.py (new), tests/test_session_hook.py (one arm), gate map data (two rows). No change to project_config.py, session-hook.sh or sync-to-project.sh. needs_verifier true: a wrong merge deletes a user's own hook silently (section 5.5 class); interface_fixed true. simple, sonnet (design). Depends on #159 (actl, harness ac_env) and #160 (version-2 sandbox passes actl's check; doctor row). Parallel with #161, #162, #163, #165.",
+  "cost": [
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 46,
+      "tokens_out": 18817,
+      "cache_write": 60577,
+      "cache_read": 1638028,
+      "wall_seconds": 180,
+      "outcome": "handed-in",
+      "run_id": "20261025-015919-26672",
+      "session_id": "2a1979ad-eaf5-4b7e-b8b8-ab4ce1479f3d",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-25T02:02:20+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "sonnet",
+      "tokens_in": 28,
+      "tokens_out": 15659,
+      "cache_write": 63820,
+      "cache_read": 1027927,
+      "wall_seconds": 144,
+      "outcome": "handed-in",
+      "run_id": "20261025-015919-26672",
+      "session_id": "8f2d3ff8-4e33-4c74-821d-c7e37f5a02fa",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "medium",
+      "at": "2026-10-25T02:02:21+00:00"
+    }
+  ],
+  "branch": "t164",
+  "gate": {
+    "rc": 0,
+    "sha": "de8ae231df70d59fbc4aec2a8b48d025cc373e61",
+    "run_id": "20261025-020221-32637",
+    "at": "2026-10-25T02:03:35+00:00"
+  },
+  "repair_round": 1
 }
