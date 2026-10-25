@@ -151,7 +151,9 @@ map() {
                                       test_session_hook test_review test_verify_runner \
                                       test_consolidate_memory ;;
         # 入口(D-071 C1,#159):找根、指令表、version。
-        bin/actl) add test_actl test_project_config ;;
+        bin/actl) add test_actl test_project_config test_hooks ;;
+        # `actl hooks`(#164):settings.json 的三筆 hook;A 自己那份是它的 dogfood。
+        scripts/hooks.py) add test_hooks test_session_hook ;;
         scripts/project_config.py) add test_project_config test_actl test_session_hook ;;
         # `.gitignore` 決定「不准出現專案名」那一掃看得到哪些檔。
         .gitignore) add test_no_project_names ;;
