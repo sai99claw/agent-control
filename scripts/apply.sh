@@ -74,7 +74,7 @@ case $TICKETS in /*) TDIR=$TICKETS ;; *) TDIR=$ROOT/$TICKETS ;; esac
 # 相對路徑以**主 repo 根**拼(#46,與 auto-fix / land / review 同一個來源 `scripts/wtbase.sh`)。
 WTBASE=$(wtbase)
 
-# 收尾提示指**真正的**落地入口(#87 A27,與 sync-to-project.sh 同一條判準):專案根有
+# 收尾提示指**真正的**落地入口(#87 A27):專案根有
 # `scripts/land-ticket.sh` 就是它,否則是 `scripts/land.sh`。
 land_entry() {   # $1 = 專案根  $2 = 分支
     if [ -f "$1/scripts/land-ticket.sh" ]; then

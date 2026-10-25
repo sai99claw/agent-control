@@ -11,7 +11,6 @@ A1 | integ | 表 consolidator=[fable, sonnet];fable 額度 / fable 一般退出 
 A2 | integ | auto-fix 判反駁,表 opener=[fable]、opener_complex=[哨兵];票 model=opus、complexity=complex;config opener.command 寫 --model opus | 開題者 argv 的 --model 是 fable;opener cost 的 model 是 fable | 票面 A2「auto-fix 判反駁的 opener 走 #116」
 A2 | cli   | new-session.sh main fable,表 main=[哨兵模型] | session.start 記 fable;輸出有一行帶哨兵模型名(建議) | 票面 A2「main 仍由啟動指定模型,僅顯示表中建議,不熱切」
 A3 | cli   | role-models.py legacy --config <拷貝>(routing.open=sonnet 等、memory.consolidators、second_opinion/discuss) | 不帶 --write:列出衝突、檔不變;--write:被取代的格刪掉,second_opinion/discuss 原值 | 票面 A3「警告舊衝突設定並提供一次明確遷移;second_opinion/discuss 維持」
-A4 | cli   | sync-to-project.sh 到空專案 / 合法自訂表 / 非法表 | 裝表與選路器、可 resolve;自訂表位元組不變且輸出點名不同的角色;非法表不覆蓋、輸出點名表、不會靜默可用 | 票面 A4 原話
 A5 | doc   | ROLES / role-procedures / 兩份範本 / consolidator.inbox.md | 不再寫雙模型或 routing.open/design 為來源;寫出 dispatch_cap / --items;角色卡改動在 inbox | 票面 A5 原話
 
 ## 介面字串(票面沒定的照 worker patch 的介面,EVIDENCE 記一行)
@@ -24,13 +23,12 @@ CAP_HINT = "≤5"(#116 A8 的切批句)
 ## 怎麼做假(不上真埠、不起真服務、不打真的模型)
 control_harness.Sandbox 拋棄式 repo(PATH 最前面的 claude 是絆線)。claude-code 候選 = config 命令指向的假 agent
 (python 腳本,記 argv 與模型一行 JSON,照本檔的 plan 退出);codex 候選 = stub-bin 裡同一支假 agent。
-判反駁借 tests/test_objection_triage.TriageBase 的劇本 claude。sync 用 tempfile 專案目錄。
+判反駁借 tests/test_objection_triage.TriageBase 的劇本 claude。
 
 ## 不做
 不改產品碼;不放寬票面驗收;不刪既有案例;不呼叫真 LLM;不跑 tag 回歸。
 """
 import glob
-import hashlib
 import json
 import os
 import shutil
@@ -419,90 +417,6 @@ class A3LegacySettingsMigrateOnce(unittest.TestCase):
         for key in ("second_opinion", "discuss"):
             self.assertEqual(after["routing"][key], LEGACY_CONFIG["routing"][key])
         self.assertEqual((after["memory"]["unit"], after["memory"]["cap_chars"]), ("chars", 2000))
-
-
-# ============================================================ A4
-
-def write_project_config(dest):
-    os.makedirs(os.path.join(dest, "board"), exist_ok=True)
-    with open(os.path.join(dest, "board", "config.json"), "w", encoding="utf-8") as handle:
-        handle.write('{"rules":{"roles_dir":"docs/roles","models_dir":"docs/roles/model"},'
-                     '"memory":{"applies_to":["memory/model/*.md"]}}')
-
-
-def a_project(case):
-    where = tempfile.mkdtemp(prefix="t122-proj-"); case.addCleanup(shutil.rmtree, where, True)
-    write_project_config(where)
-    return where
-
-
-def sha_of(path):
-    with open(path, "rb") as handle:
-        return hashlib.sha256(handle.read()).hexdigest()
-
-
-class A4SyncCarriesTheTable(unittest.TestCase):
-
-    def sync(self, dest):
-        env = {k: v for k, v in os.environ.items() if not k.startswith("AC_")}
-        return subprocess.run(["sh", os.path.join(ROOT, "scripts", "sync-to-project.sh"), dest],
-                              capture_output=True, text=True, env=env, timeout=180)
-
-    def resolve(self, dest, role):
-        env = {k: v for k, v in os.environ.items() if not k.startswith("AC_")}
-        return subprocess.run([sys.executable, os.path.join(dest, "scripts", "control", ROUTER),
-                               "--table", os.path.join(dest, TABLE_REL), "resolve", "--role", role],
-                              capture_output=True, text=True, env=env, timeout=60)
-
-    def our_table(self):
-        with open(os.path.join(ROOT, TABLE_REL), encoding="utf-8") as handle:
-            return json.load(handle)
-
-    def put_table(self, dest, table):
-        with open(os.path.join(dest, TABLE_REL), "w", encoding="utf-8") as handle:
-            json.dump(table, handle, ensure_ascii=False, indent=2)
-
-    def test_a4_an_empty_project_gets_the_router_and_the_table(self):
-        """A4 不存在時安裝初表,並同步共用選路器;同步完專案端選得出整理者 fable。
-
-        四問:守表與選路器都到 / 壞掉時:只同步腳本 → 表不在、resolve 失敗 /
-        期望表 = agent-control 那一份、fable 來自票面 A1 / 不加縫。"""
-        dest = a_project(self)
-        done = self.sync(dest)
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertTrue(os.path.isfile(os.path.join(dest, TABLE_REL)), done.stdout)
-        self.assertEqual(sha_of(os.path.join(dest, TABLE_REL)), sha_of(os.path.join(ROOT, TABLE_REL)))
-        picked = self.resolve(dest, "consolidator")
-        self.assertEqual(picked.returncode, 0, picked.stdout + picked.stderr)
-        self.assertEqual(json.loads(picked.stdout)["model"], "fable")
-        self.assertIn(RM + ".json", done.stdout, "同步結果沒說角色表的狀態")
-
-    def test_a4_a_legal_custom_table_is_kept_and_the_difference_named(self):
-        """A4 專案已有合法自訂表 → 保留(位元組不變)並提示差異(點名不同的角色)。"""
-        dest = a_project(self)
-        table = self.our_table()
-        table["roles"]["opener"] = [FABLE]
-        self.put_table(dest, table)
-        before = sha_of(os.path.join(dest, TABLE_REL))
-        done = self.sync(dest)
-        out = done.stdout + done.stderr
-        self.assertEqual(done.returncode, 0, out)
-        self.assertEqual(sha_of(os.path.join(dest, TABLE_REL)), before, "自訂表被覆蓋")
-        self.assertTrue([line for line in out.splitlines() if "opener" in line], out)
-
-    def test_a4_an_illegal_table_is_refused_not_silently_used(self):
-        """A4 非法表拒絕派工而非靜默用舊設定:不覆蓋、輸出點名角色表;同步若照常完成,專案端選路必須 rc=2。"""
-        dest = a_project(self)
-        table = self.our_table()
-        table["roles"]["consolidator"] = []
-        self.put_table(dest, table)
-        before = sha_of(os.path.join(dest, TABLE_REL))
-        done = self.sync(dest)
-        out = done.stdout + done.stderr
-        self.assertEqual(sha_of(os.path.join(dest, TABLE_REL)), before, "非法表被悄悄換掉")
-        self.assertTrue([line for line in out.splitlines() if RM + ".json" in line], out)
-        if done.returncode == 0:
-            self.assertEqual(self.resolve(dest, "consolidator").returncode, 2, out)
 
 
 # ============================================================ A5

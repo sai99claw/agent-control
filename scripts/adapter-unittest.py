@@ -443,22 +443,28 @@ def fail(rc, text):
 # ------------------------------------------------------------ commands
 
 
-def select_one(path, conf, root):
-    """Ids for one changed file: map (first match wins) → `<root>/test_*.py` that exists → unmapped."""
-    for row in conf["map"]:
-        if fnmatch.fnmatchcase(path, row.get("match") or ""):
-            return list(row.get("ids") or [])
+def test_id(path, conf):
+    """The module id of a test file under one of the roots, or None."""
     for test_root in conf["roots"]:
         prefix = test_root.rstrip("/") + "/"
         if not path.startswith(prefix) or not path.endswith(".py"):
             continue
         if not fnmatch.fnmatchcase(os.path.basename(path), conf["pattern"]):
             continue
-        # A deleted test file selects nothing (#71 A3): unittest errors on a missing module.
-        if not os.path.isfile(os.path.join(root, path)):
-            return []
-        return [path[len(prefix):-3].replace("/", ".")]
-    return ["unmapped %s" % path]
+        return path[len(prefix):-3].replace("/", ".")
+    return None
+
+
+def select_one(path, conf, root):
+    """Ids for one changed file: map (first match wins) → `<root>/test_*.py` that exists → unmapped."""
+    for row in conf["map"]:
+        if fnmatch.fnmatchcase(path, row.get("match") or ""):
+            return list(row.get("ids") or [])
+    ident = test_id(path, conf)
+    if ident is None:
+        return ["unmapped %s" % path]
+    # A deleted test file selects nothing (#71 A3): unittest errors on a missing module.
+    return [ident] if os.path.isfile(os.path.join(root, path)) else []
 
 
 def cmd_select(args):
@@ -477,6 +483,15 @@ def cmd_select(args):
         out = []
         for path in files:
             out.extend(select_one(path, conf, root))
+        # The map is read from `AC_ROOT` (main's config), the tree is the branch: a branch that
+        # deletes a test module still meets main's rows naming it (#166). Only a module this
+        # same diff deletes is dropped, out loud; an id that never had a file stays and fails.
+        gone = {test_id(path, conf) for path in files
+                if not os.path.isfile(os.path.join(root, path))} - {None}
+        for ident in sorted(gone & set(out)):
+            sys.stderr.write("adapter-unittest: map names %s, which this diff deletes "
+                             "- not selected\n" % ident)
+        out = [item for item in out if item not in gone]
     seen = []
     for item in out:
         if item not in seen:

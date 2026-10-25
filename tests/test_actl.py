@@ -213,9 +213,7 @@ class A2TheDollarZeroWalkIsGone(ActlBase):
                 for path in sorted(glob.glob(os.path.join(SCRIPTS, "*.sh")))}
 
     def test_a2_no_root_walk_left_in_the_shell_scripts(self):
-        """`_ac_root` 0 處;`dirname "$0")/..` 0 處 —— 不算 `gate.example.sh`(D-071 row 6 刪)與
-        `sync-to-project.sh`(那一支的 HERE 是 A 自己的根、不是專案根,而且它在 hard_block 裡,
-        這張票動不了;row 6 刪)。
+        """`_ac_root` 0 處;`dirname "$0")/..` 0 處(D-071 row 6 刪掉的兩支以前不算,#166 起沒有例外)。
 
         **變異 m1**:放回任何一支的 `_ac_root()` → 紅。"""
         sources = self.sources()
@@ -224,8 +222,7 @@ class A2TheDollarZeroWalkIsGone(ActlBase):
                 if "_ac_root" in text}
         self.assertEqual(walk, {})
         dollar0 = {name: text.count('dirname "$0")/..') for name, text in sources.items()
-                   if 'dirname "$0")/..' in text
-                   and name not in ("gate.example.sh", "sync-to-project.sh")}
+                   if 'dirname "$0")/..' in text}
         self.assertEqual(dollar0, {})
 
     def test_a2_verify_find_root_has_no_file_based_root(self):

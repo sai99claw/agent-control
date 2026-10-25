@@ -29,7 +29,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import event  # noqa: E402  共用 repo 根(同步到專案後住在 scripts/control/ 也找得到根)
+import event  # noqa: E402  共用 repo 根(從 AC_HOME 跑、量的是 AC_ROOT 那個專案)
 
 CATALOG = os.path.join("code-map", "catalog.json")
 INDEX_JSON = os.path.join("code-map", "index.json")

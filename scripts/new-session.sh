@@ -163,14 +163,17 @@ AC=$(cd "$(dirname "$0")" && pwd)
 . "$AC/wtbase.sh"
 ROOT=$(ac_root new-session) || exit 2
 export AC_ROOT=$ROOT
+# 正本(「不可違反的」、角色卡、模型卡)住 A 的 clone(D-071 §3):`AC_HOME`,沒設就是這一支的上一層。
+AC_HOME=$(ac_home)
+export AC_HOME
 MAIN=main
 
 CTL=${AC#"$ROOT"/}
 
 say() { echo; echo "── $* ──"; }
 
-# 會長的那幾段(規則、票、收件匣、讀單)在這裡組:讀設定與票庫要 Python,而同一格設定
-# (`rules.roles_dir` / `models_dir` / `memory.inbox_suffix`)只准從 rules.py 讀一份 ——
+# 會長的那幾段(規則、票、收件匣、讀單)在這裡組:讀設定與票庫要 Python,而正本在哪、
+# 是不是正本、`memory.inbox_suffix` 只准從 rules.py 讀一份 ——
 # 寫死第二份的那一天,兩份會往不同方向漂(#62:讀單寫死 memory/role/,專案那一條指到空)。
 #
 # ## 上限(#62):這一頁由 session-hook.sh 塞進 10,000 字元的 hook 輸出
@@ -191,33 +194,36 @@ PAGE_ROWS = 20
 INBOX_TAIL = 5
 # 角色卡的檔名跟角色名不一定一樣(worker 的卡是 implementer.md;對照表在 rules.py WANTED)。
 card = "implementer" if role == "worker" else role
-roles = os.path.normpath(rules.roles_dir(root))
-models = os.path.normpath(rules.models_dir(root))
+# 正本(角色卡、模型卡、「不可違反的」)住 A 的 clone(D-071 §3);專案自己那一層住根的 memory/。
+home = rules.ac_home()
+roles = rules.canon_dir("role")
+models = rules.canon_dir("model")
 canon = rules.is_canon(root)
 suffix = rules.inbox_suffix(root)
 local_role = rules.local_dir("role")
 local_model = rules.local_dir("model")
 
 
-def read(rel):
+def read(rel, base=None):
     try:
-        with open(os.path.join(root, rel), encoding="utf-8") as handle:
+        with open(os.path.join(base or root, rel), encoding="utf-8") as handle:
             return handle.read()
     except OSError:
         return None
 
 
+def shown(rel):
+    """正本裡的 `rel` 在頁上怎麼寫:正本自己寫相對路徑,專案寫 `$AC_HOME/…`。"""
+    return rules.canon_rel(root, rel)
+
+
+PULL = "git -C <AC_HOME> pull" if not home else "git -C %s pull" % home
+
+
 def contract():
-    """「不可違反的」那一節。正本讀 CLAUDE.md 那一節(到下一個 `## `);專案讀 sync 產生的
-    `<roles_dir>/contract.md` —— 與角色卡同一條同步,不會手抄分岔(D-026 丙)。"""
-    if not canon:
-        rel = os.path.join(roles, "contract.md")
-        text = read(rel)
-        if text is None:
-            return ("new-session: 缺 %s —— 到 agent-control 跑 "
-                    "sh scripts/sync-to-project.sh <這個專案的根> 產生它\n" % rel)
-        return text
-    text = read("CLAUDE.md")
+    """「不可違反的」那一節,一律讀 `$AC_HOME/CLAUDE.md` 那一節(到下一個 `## `)——
+    專案自己的 CLAUDE.md 不是這一節的來源(D-071 §3:正本不能被專案蓋)。"""
+    text = read("CLAUDE.md", home) if home else None
     out, inside = [], False
     for line in (text or "").splitlines(True):
         if line.startswith("## "):
@@ -227,17 +233,17 @@ def contract():
         if inside:
             out.append(line)
     if not out:
-        return "new-session: CLAUDE.md 沒有「## 不可違反的」那一節 —— 規則沒有印出來\n"
+        return ("new-session: %s 沒有「## 不可違反的」那一節 —— 規則沒有印出來(%s 更新 A)\n"
+                % (shown("CLAUDE.md"), PULL))
     return "".join(out)
 
 
 def top():
     sys.stdout.write(contract().rstrip("\n") + "\n\n")
     rel = os.path.join(roles, card + ".md")
-    text = read(rel)
+    text = read(rel, home) if home else None
     if text is None:
-        sys.stdout.write("new-session: 缺角色卡 %s%s\n" % (rel, "" if canon else
-                         " —— 到 agent-control 跑 sh scripts/sync-to-project.sh <這個專案的根>"))
+        sys.stdout.write("new-session: 缺角色卡 %s —— %s 更新 A\n" % (shown(rel), PULL))
     else:
         sys.stdout.write(text.rstrip("\n") + "\n")
     # 專案自己整理過的主卡(#74):暫存區整理進 `memory/role/<卡>.md` 之後,那幾條從暫存區
@@ -247,7 +253,7 @@ def top():
         text = read(rel)
         if text and text.strip():
             sys.stdout.write("\n%s(本專案整理過的主卡):\n%s\n" % (rel, text.strip("\n")))
-    # 暫存區住在 memory/(這個 repo 自己寫的),同步刻意不帶它(D-021):只印尾巴。
+    # 暫存區住在 memory/(這個 repo 自己寫的,D-021):只印尾巴。
     rel = os.path.join(local_role, card + suffix)
     lines = [line for line in (read(rel) or "").splitlines() if line.strip()]
     if lines:
@@ -309,20 +315,19 @@ def events():
 def reading():
     """讀單:① 角色卡 ② 專案疊層 ③ 多層記憶 ④ HANDOFF 現況(使用者 2026-09-29 裁示)。
     每一條相對於根解析,不在的標出來 —— 指到一個不存在的檔,比沒有那一行更糟。"""
-    def say(rel, why):
-        gone = "" if os.path.exists(os.path.join(root, rel)) else "(不在)"
-        sys.stdout.write("  %-26s %s%s\n" % (rel, why, gone))
+    def say(rel, why, base=None):
+        gone = "" if os.path.exists(os.path.join(base or root, rel)) else "(不在)"
+        sys.stdout.write("  %-26s %s%s\n" % (rel if base is None else shown(rel), why, gone))
 
     rel = os.path.join(roles, card + ".md")
     if canon:
         say(rel, "你這個角色的角色卡")
     else:
-        say(rel, "你這個角色的角色卡(agent-control 的 %s 同步本)"
-            % os.path.join(local_role, card + ".md"))
+        say(rel, "你這個角色的角色卡(agent-control 的正本)", home)
         if os.path.exists(os.path.join(root, local_role, card + ".md")):
             say(os.path.join(local_role, card + ".md"), "這個專案整理過的角色規矩")
         say(os.path.join(local_role, card + suffix), "這個專案疊上去的角色規矩")
-    name = os.path.basename(rules.model_card(root, model) or model + ".md")
+    name = os.path.basename(rules.model_card(model) or model + ".md")
     rel = os.path.join(local_model, name)
     pending = rel[:-len(".md")] + suffix
     if not os.path.exists(os.path.join(root, rel)) and os.path.exists(os.path.join(root, pending)):
@@ -330,7 +335,7 @@ def reading():
     else:
         say(rel, "你這個模型在這個專案踩過的坑")
     if not canon:
-        say(os.path.join(models, name), "你這個模型在 agent-control 踩過的坑(同步本)")
+        say(os.path.join(models, name), "你這個模型在 agent-control 踩過的坑(正本)", home)
         say(local_role + "/", "這個專案自己寫的角色備忘")
         say(rules.local_dir("project") + "/", "這個專案的專案事實")
     # 全域交接與收件匣是主線的(`docs/SESSION-START.md` 那張表):短命角色不列(#74)。

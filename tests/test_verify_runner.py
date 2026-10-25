@@ -258,7 +258,7 @@ class RootIsTheTreeUnderTestNotTheFilesHome(unittest.TestCase):
         return mod
 
     def test_two_homes_of_the_file_agree_on_the_code_root(self):
-        """`<A>/scripts/` 與 `<別處>/scripts/control/` 兩份,`AC_CODE_ROOT=<專案>` 都算出專案。
+        """`<A>/scripts/` 與別處更深一層的一份複本,`AC_CODE_ROOT=<專案>` 都算出專案。
 
         **變異**:`_find_root()` 放回從 `__file__` 往上找 → 兩份算出各自的家,紅。"""
         with tempfile.TemporaryDirectory() as fake, tempfile.TemporaryDirectory() as home:
@@ -376,12 +376,13 @@ class TestsSectionOfAsConfig(unittest.TestCase):
         self.assertEqual(self.unit["roots"], ["tests"])
 
     def test_map_is_the_only_copy(self):
-        """50 列 = #161 / #160 的 46 列(那時逐列等於 gate.sh `map()`)加 #162 的三列
+        """48 列 = #161 / #160 的 46 列(那時逐列等於 gate.sh `map()`)加 #162 的三列
         (`scripts/testiface.py`、`tests/fixtures/project/*`、`templates/project-*.example.*`)
-        加 #164 的一列(`scripts/hooks.py`)。
+        加 #164 的一列(`scripts/hooks.py`),減 #166 刪掉的兩列(同步腳本與舊閘門範本,
+        兩支檔都退場了)= 48。
         gate.sh 不再有 `map()`:對照表只住在設定裡(#162 A4 靜態那一條的同一件事)。"""
         rows = [(row["match"], row["ids"]) for row in self.unit["map"]]
-        self.assertEqual(len(rows), 50)
+        self.assertEqual(len(rows), 48)
         self.assertEqual(len({match for match, _ in rows}), len(rows), "duplicate match rows")
         for row in (("scripts/testiface.py",
                      ["test_testiface", "test_gate", "test_status", "test_actl"]),

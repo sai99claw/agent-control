@@ -29,7 +29,7 @@ class EveryRoutingValueHasACard(unittest.TestCase):
         self.assertTrue(routing, "board/config.json 沒有 routing —— 這一條什麼都沒驗")
         missing = []
         for key, value in sorted(routing.items()):
-            card = rules.model_card(ROOT, value)
+            card = rules.model_card(value, ROOT)
             if not card or not os.path.isfile(os.path.join(ROOT, card)):
                 missing.append("routing.%s=%s → %s" % (key, value, card or "(空)"))
         self.assertEqual(missing, [], "路由表指到沒有卡的模型:\n" + "\n".join(missing))

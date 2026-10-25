@@ -45,7 +45,6 @@ GATE_MAP = [
     ("scripts/ticket.py", ["test_ticket", "test_land", "test_auto_fix_codex"]),
     ("scripts/land.sh", ["test_land"]),
     ("scripts/gate.sh", ["test_gate", "test_status"]),
-    ("scripts/gate.example.sh", ["test_gate", "test_status"]),
     ("scripts/apply.sh", ["test_apply"]),
     ("scripts/auto-fix.sh", ["test_auto_fix", "test_auto_fix_codex", "test_rules_delivery"]),
     ("scripts/review.sh", ["test_review", "test_rules_delivery"]),
@@ -66,12 +65,10 @@ GATE_MAP = [
     ("verify/TAGS.d/zzz.md", VERIFY_IDS),
     ("scripts/verify-case.py", ["test_verify_case", "test_actl"]),
     ("verify/example/test_example.py", ["test_verify_runner"]),
-    ("scripts/sync-to-project.sh", ["test_sync_to_project"]),
     ("scripts/status.py", ["test_status", "test_gate", "test_land"]),
     ("scripts/adapter-unittest.py", ["test_adapter_unittest", "test_status", "test_gate"]),
     ("memory/model/opus.md", ["test_memory", "test_no_project_names", "test_routing_cards"]),
-    ("memory/role/implementer.md", ["test_memory", "test_sync_to_project",
-                                    "test_no_project_names"]),
+    ("memory/role/implementer.md", ["test_memory", "test_no_project_names"]),
     ("board/board.py", ["test_board"]),
     ("board/config.json", ["test_board", "test_event", "test_heartbeat", "test_memory",
                            "test_routing_cards"]),
@@ -210,6 +207,26 @@ class Select(unittest.TestCase):
                              ["test_first"])
             empty = self.select("docs/a/note.txt", env=env)
             self.assertEqual((empty.returncode, empty.stdout), (0, ""), empty.stderr)
+
+    def test_a_map_id_whose_module_this_diff_deletes_is_dropped_out_loud(self):
+        """#166: the map comes from `AC_ROOT` (main), the tree is the branch — a branch deleting
+        `tests/test_gone_zzz.py` still meets main's row naming `test_gone_zzz`. Only an id whose
+        file is in the same diff and missing is dropped; one that never had a file stays.
+
+        **Mutation**: drop the `gone` filter in `cmd_select` → the first assert is red."""
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "board"))
+            with open(os.path.join(tmp, "board", "config.json"), "w", encoding="utf-8") as h:
+                json.dump({"tests": {"unittest": {"map": [
+                    {"match": "scripts/old_zzz.sh", "ids": ["test_gone_zzz", "test_event"]}]}}}, h)
+            env = clean_env(AC_ROOT=tmp, AC_CODE_ROOT=ROOT)
+            done = self.select("scripts/old_zzz.sh", "tests/test_gone_zzz.py", env=env)
+            self.assertEqual((done.returncode, done.stdout.splitlines()), (0, ["test_event"]),
+                             done.stderr)
+            self.assertIn("test_gone_zzz", done.stderr, "dropped silently")
+            kept = self.select("scripts/old_zzz.sh", env=env)
+            self.assertEqual(kept.stdout.splitlines(), ["test_gone_zzz", "test_event"],
+                             "an id not deleted by this diff is not ours to drop")
 
     def test_empty_stdin_is_rc_3_with_a_reason(self):
         done = self.select()

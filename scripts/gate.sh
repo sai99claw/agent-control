@@ -1054,8 +1054,9 @@ fi
 select_ids() {   # $1 = branch|base  $2 = 步驟目錄;stdin = 改動檔
     testiface "$TEST_MODE" "$2" select --mode "$1" > "$OUT/$2.ids"
     src=$?
+    # 綠的時候也印:adapter 說「這一列點名的模組被這份 diff 刪了,不選」要被人看到(#166)。
+    [ ! -s "$TI_ERR" ] || cat "$TI_ERR"
     if [ "$src" -ne 0 ]; then
-        [ ! -s "$TI_ERR" ] || cat "$TI_ERR"
         why=$(head -n 1 "$TI_ERR" 2>/dev/null)
         if [ "$src" -eq 3 ]; then
             echo "gate: select --mode $1 沒有可選的(rc 3)—— 上面是專案的原話"
