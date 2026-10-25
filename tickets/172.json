@@ -14,9 +14,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "cd9be0b87f3b9c25445f6055b5c97576fb8d71ab",
-  "state": "Ready",
-  "state_version": 2,
+  "base_sha": "96a2c7d73c8af45ca69304590ed7d9e5a853d800",
+  "state": "InReview",
+  "state_version": 8,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -33,5 +33,32 @@
   "decision_refs": [
     "D-071"
   ],
-  "outline": "Precondition of #166 (D-071 retire sync; user authorised removing the hard_block row). Three one-line edits: board/config.json hard_block.paths, tests/control_harness.py:179-180 DEFAULT_CONFIG, verify/hard_block/test_ticket_135.py:13,41 (verify/** is normally the verifier's; here it is a config-sync of an oracle constant, user named it explicitly). Checked references: git grep sync-to-project over tests/ verify/ - only those two pin A's list; test_project_config*.py fixtures carry their own T shapes, test_adapter_unittest/test_auto_fix/test_actl hits are independent of A's hard_block -> unchanged. tests map rows (config.json ~115, ~122) stay for #166. Base: verify --tag hard-block Ran 7 OK (measured). needs_verifier=false: pure config sync; a verifier case would replay case 135 A4/A5, the same contract. Order: edit three files, run hard-block tag, full suite, land."
+  "outline": "Precondition of #166 (D-071 retire sync; user authorised removing the hard_block row). Three one-line edits: board/config.json hard_block.paths, tests/control_harness.py:179-180 DEFAULT_CONFIG, verify/hard_block/test_ticket_135.py:13,41 (verify/** is normally the verifier's; here it is a config-sync of an oracle constant, user named it explicitly). Checked references: git grep sync-to-project over tests/ verify/ - only those two pin A's list; test_project_config*.py fixtures carry their own T shapes, test_adapter_unittest/test_auto_fix/test_actl hits are independent of A's hard_block -> unchanged. tests map rows (config.json ~115, ~122) stay for #166. Base: verify --tag hard-block Ran 7 OK (measured). needs_verifier=false: pure config sync; a verifier case would replay case 135 A4/A5, the same contract. Order: edit three files, run hard-block tag, full suite, land.",
+  "branch": "t172",
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 50,
+      "tokens_out": 13752,
+      "cache_write": 45303,
+      "cache_read": 1477422,
+      "wall_seconds": 2444,
+      "outcome": "handed-in",
+      "run_id": "20261025-132459-20958",
+      "session_id": "69103d5e-a1b8-4f0b-9a5b-1674d3247659",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-25T14:05:45+00:00"
+    }
+  ],
+  "gate": {
+    "rc": 0,
+    "sha": "2927874f993d20b7c6ccd319fa72dae367e61415",
+    "run_id": "20261025-140546-31660",
+    "at": "2026-10-25T14:31:18+00:00"
+  },
+  "repair_round": 1
 }
