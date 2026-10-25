@@ -61,6 +61,7 @@
     "tests/test_project_config_cases.py",
     "tests/test_repo_map_contract.py",
     "tests/test_retire_sync.py",
+    "tests/test_retire_sync_cases.py",
     "tests/test_review.py",
     "tests/test_role_models.py",
     "tests/test_routing_cards.py",
