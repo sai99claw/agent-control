@@ -5,16 +5,17 @@
                              --base-sha abc1234 --worktree /path/wt --round 2
     scripts/status.py phase  --ticket 7 --run-id … --phase merge --rc 0
     scripts/status.py failures --log gate.log        # 印可以單獨重跑的案例 id,一行一個
-    scripts/status.py run-tests --root . --log gate.log --suspect-file gate.log.env-suspect.json \
-                             --mode discover              # 跑測試,環境壞了當場中止(rc=86)
+    scripts/status.py failures --result <AC_TEST_OUT>/result.json   # 同上,讀 fail / error 列
     scripts/status.py done   --ticket 7 --run-id … --rc 1 --log gate.log \
                              [--result <AC_TEST_OUT>/result.json]…  # 紅榜改讀 result.json \
+                             [--red-log <unittest log>]…  # 有 --result 時仍要剖的紅榜 log \
                              [--suspected-flaky test_x.Case.test_y …] \
                              [--no-cases-log gate.log.no-cases]
     scripts/status.py show   --ticket 7 [--run-id …] [--runs]
     scripts/status.py suspects --ticket 7 [--run-id …] [--count]   # 環境可疑幾筆
     scripts/status.py rundir --ticket 7 --run-id …   # 這一輪的目錄(回歸快取住那裡)
-    scripts/status.py regression-red --source release|gate [--log gate.log]… [--case id]…
+    scripts/status.py regression-red --source release|gate [--log gate.log]… [--result r.json]…
+                             [--case id]…
                              [--from-ticket 7] [--model m] [--rerun "<全套指令>"] [--dispatch]
                              # 回歸紅在既有案例上 → 每條開(或沿用)一張修復票(T D-G130)
 
@@ -45,12 +46,13 @@ rc),`done` 才覆寫成 `done` 並帶 `rc`。一份沒有 `finished` 的 `done` 
 patch 路徑與雜湊、第幾輪、上一輪排除過什麼、怎麼重現,它就得回頭翻對話或猜檔案位置
 —— 那一趟比整份 log 還貴。
 
-## 環境壞了要當場停(`run-tests`,rc=86)
-(D-071 C6 起跑測試的是 `scripts/adapter-unittest.py`;`run-tests` 是它上面的薄殼,下面講的
-`EnvironmentResult` / `LogStream` 搬到那一支,行為逐字沒變。)
+## 環境壞了要當場停(rc=86)
+(D-071 C6 起跑測試的是 `scripts/testiface.py` 的 `run` / `full`,內建版是
+`scripts/adapter-unittest.py`;下面講的 `EnvironmentResult` / `LogStream` 住在那一支。舊的
+`run-tests` 薄殼已刪,#162。)
 2026-09-22 #620:safaridriver 起的 Safari 行程掛了幾小時後 storage 壞掉,26 條 safari
 案例全紅、訊息同一形狀。閘門把整段跑完才說話 —— 兩輪落地白跑。所以測試不再由 shell
-直接叫,改由 `run-tests` 在同一個程序裡跑:每條紅例取「引擎 + 去掉數字與 id 的訊息」
+直接叫,改在 adapter 的同一個程序裡跑:每條紅例取「引擎 + 去掉數字與 id 的訊息」
 當形狀,同一形狀連紅達 `board/config.json` 的 `environment_fail_fast_threshold`
 (預設 8)就**中止那一段**並回 rc=86。一次環境故障最多浪費 N 條案例,不是整段。
 
@@ -81,7 +83,6 @@ import re
 import shlex
 import subprocess
 import sys
-import unittest
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -149,55 +150,6 @@ def suspect_row(source, engine="", why="", count=None, threshold=None,
     values = {"source": source, "engine": engine, "why": why, "count": count,
               "threshold": threshold, "log": log, "line": line}
     return {key: values[key] for key in SUSPECT_KEYS}
-
-
-def load_adapter():
-    """`scripts/adapter-unittest.py`(連字號的檔名不能 `import`,走 importlib)。
-
-    **只在 `run-tests` 那一條路上載入**:`done` / `failures` / `suspects` 不需要它 —— 一份旁邊
-    沒有 adapter 的 `status.py`(同步過去的副本)照樣寫得出狀態檔。"""
-    import importlib.util
-    where = os.path.join(os.path.dirname(os.path.abspath(__file__)), "adapter-unittest.py")
-    spec = importlib.util.spec_from_file_location("adapter_unittest", where)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def cmd_run_tests(args):
-    """跑測試並在環境可疑時中止 —— **薄殼**,跑的是 `adapter-unittest.py` 的 `run_suite`
-    (D-071 C6,一個 A 裡只有一個 runner;設計 §⑥ 3b 刪掉這一支)。旗標、rc、`--log` 與
-    `--suspect-file` 的契約照舊:gate.sh 與 `tests/test_status.py` 釘的就是這一份。
-
-    log 的寫法與舊版的 shell 一樣:先整份寫檔,再回退出碼。判綠只看 rc。
-    rc 86 **只看統計那一條**(舊契約):declared 那幾行照舊由 `done --log` 從 log 撈。
-    """
-    adapter = load_adapter()
-    root = os.path.abspath(args.root)
-    threshold = int(event.config(root).get("environment_fail_fast_threshold")
-                    or DEFAULT_ENV_FAIL_FAST_THRESHOLD)
-    with open(args.suspect_file, "w", encoding="utf-8") as handle:
-        # **空值只有 `[]`**(`docs/DESIGN-ENV-SUSPECT.md`)。舊版寫空字串,於是
-        # 「這一趟沒有嫌疑」與「這個檔壞了」在 `json.load` 底下都是同一個例外。
-        handle.write("[]\n")
-    # cwd 照舊版兩條路各自的樣子:discover 在 repo 根、指名模組在 `tests/`。
-    tests = os.path.join(root, "tests")
-    where = root if args.mode == "discover" else tests
-    os.chdir(where)
-    sys.path.insert(0, tests)
-    loader = unittest.defaultTestLoader
-    if args.mode == "discover":
-        suite = loader.discover("tests", pattern="test_*.py")
-    else:
-        suite = loader.loadTestsFromNames(args.names)
-    # **案例自己 `print` 的那一行也要進 log**(`adapter-unittest.py` 的 `LogStream`)。
-    result, _, _ = adapter.run_suite(suite, args.log, threshold, root, [tests])
-    if result.environment_suspect:
-        with open(args.suspect_file, "w", encoding="utf-8") as handle:
-            json.dump(result.environment_suspect, handle, ensure_ascii=False)
-            handle.write("\n")
-        return ENV_SUSPECT_RC
-    return 0 if result.wasSuccessful() else 1
 
 
 def reports_dir(root):
@@ -852,13 +804,23 @@ def cmd_regression_red(args):
         if not os.path.isfile(log):
             sys.stderr.write("status: --log 找不到 %s\n" % log)
             return 2
+    # `--result`(#162,設計 §4 release gate 那一列):fail / error 列的 id 就是案例;讀不懂
+    # 就 rc 2、一張都不開 —— 讀成「沒有紅」與真的沒有紅長得一樣。
+    results = []
+    for path in args.result:
+        data, why = load_result(path)
+        if data is None:
+            sys.stderr.write("status: --result %s %s\n" % (path, why))
+            return 2
+        results.append((path, data))
     root = event.repo_root()
     cases, logs = [], {}
-    for log in args.log:
-        for row in parse_failures(log):
-            if row["case"] not in cases:
-                cases.append(row["case"])
-                logs[row["case"]] = log
+    found = [(row, path) for path, data in results for row in result_failures(path, data)]
+    found += [(row, log) for log in args.log for row in parse_failures(log)]
+    for row, where in found:
+        if row["case"] not in cases:
+            cases.append(row["case"])
+            logs[row["case"]] = where
     for case in args.case:
         if case not in cases:
             cases.append(case)
@@ -951,6 +913,10 @@ def cmd_done(args):
     else:
         for log in args.log or []:
             failures.extend(parse_failures(log))
+    # `--red-log`:有 `--result` 時 `--log` 只是附件,但驗證者那一層的 candidate log 還是
+    # unittest 的原文(#162;3c 把它也搬上 result.json 之前)—— 它的紅榜照剖、接在後面。
+    for log in args.red_log or []:
+        failures.extend(parse_failures(log))
     suspect_names = set(args.suspected_flaky or [])
     auto_names = set(args.auto_flaky or [])
     order_names = set(args.order_dependent or [])
@@ -979,14 +945,16 @@ def cmd_done(args):
         except (OSError, ValueError):
             loaded = None
         suspects.extend(environment_suspects({"environment_suspect": loaded}))
-    if results:
+    # `--environment-log` 給了,result 那一格就不再讀第二次:閘門的那一份正是 testiface 從
+    # result.json 抄過去的同一批 rows(#162),兩邊都讀會讓每一筆出現兩次。
+    if results and not args.environment_log:
         rows = [suspect_row(**{key: row.get(key) for key in SUSPECT_KEYS})
                 for _, data in results for row in data["environment_suspect"]
                 if isinstance(row, dict)]
         # 同 `--environment-log` 的順序:statistical 在前、declared 在後(各自保持原順序)。
         suspects.extend(row for row in rows if row["source"] != "declared")
         suspects.extend(row for row in rows if row["source"] == "declared")
-    else:
+    elif not results:
         for log in args.log or []:
             suspects.extend(parse_environment_suspects(log))
     context = before.get("repair_context") or repair_context(root, args)
@@ -1001,12 +969,13 @@ def cmd_done(args):
         "rc": args.rc,
         "note": args.note or before.get("note") or "",
         "report": args.report or before.get("report") or "",
-        "logs": list(args.log or []),
+        "logs": list(args.log or []) + list(args.red_log or []),
         # 重跑的原始輸出**不再丟掉**(審查:「重跑輸出直接丟掉」)。它不進 failures
         # 的解析 —— 同一條紅解析兩遍會讓紅榜看起來有兩條 —— 但檔要留著。
         "extra_logs": list(args.extra_log or []),
         "kept_logs": keep_logs(root, args.ticket, run_id,
-                               list(args.log or []) + list(args.extra_log or [])),
+                               list(args.log or []) + list(args.red_log or [])
+                               + list(args.extra_log or [])),
         "phases": before.get("phases") or [],
         "failures": failures,
         "suspected_flaky": suspected,
@@ -1053,10 +1022,19 @@ def cmd_failures(args):
     """印出可以單獨重跑的案例 id,一行一個。**呼叫它的是 shell 迴圈** —— 所以這裡
     只印 id,不印別的;多印一個字,那個迴圈就會拿它當案例名去跑。"""
     seen = []
+    rows = []
+    for path in args.result or []:
+        data, why = load_result(path)
+        if data is None:
+            # 讀不懂就拒答(§5.5):空的輸出與「一條紅都沒有」長得一樣,而迴圈會照空的跑。
+            sys.stderr.write("status: --result %s %s\n" % (path, why))
+            return 2
+        rows.extend(result_failures(path, data))
     for log in args.log or []:
-        for row in parse_failures(log):
-            if row["case"] not in seen:
-                seen.append(row["case"])
+        rows.extend(parse_failures(log))
+    for row in rows:
+        if row["case"] not in seen:
+            seen.append(row["case"])
     for case in seen:
         print(case)
     return 0
@@ -1170,6 +1148,7 @@ def main(argv):
     done.add_argument("--report", default="")
     done.add_argument("--log", action="append", default=[])
     done.add_argument("--result", action="append", default=[])
+    done.add_argument("--red-log", action="append", default=[])
     done.add_argument("--extra-log", action="append", default=[])
     done.add_argument("--no-cases-log", default="")
     done.add_argument("--suspected-flaky", action="append", default=[])
@@ -1178,16 +1157,9 @@ def main(argv):
     add_context_flags(done)
     done.set_defaults(run=cmd_done)
 
-    run_tests = subs.add_parser("run-tests")
-    run_tests.add_argument("--root", required=True)
-    run_tests.add_argument("--log", required=True)
-    run_tests.add_argument("--suspect-file", required=True)
-    run_tests.add_argument("--mode", choices=("discover", "names"), required=True)
-    run_tests.add_argument("names", nargs="*")
-    run_tests.set_defaults(run=cmd_run_tests)
-
     fails = subs.add_parser("failures")
     fails.add_argument("--log", action="append", default=[])
+    fails.add_argument("--result", action="append", default=[])
     fails.set_defaults(run=cmd_failures)
 
     suspects = subs.add_parser("suspects")
@@ -1205,6 +1177,7 @@ def main(argv):
     # 不用 `choices` / `required`:缺與錯要一樣列出認得的值,argparse 缺的那一種不列。
     red.add_argument("--source", default="")
     red.add_argument("--log", action="append", default=[])
+    red.add_argument("--result", action="append", default=[])
     red.add_argument("--case", action="append", default=[])
     red.add_argument("--from-ticket", default="")
     red.add_argument("--model", default="")

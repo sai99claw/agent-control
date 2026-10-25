@@ -957,20 +957,23 @@ class EnvironmentSuspectHasOneShape(Sandbox):
     # ------------------- 驗收 6:案例自己 print 的那一行要進 --log 那份檔
 
     def test_a_case_that_prints_its_own_declaration_lands_in_the_log(self):
-        """**變異**:拿掉 `cmd_run_tests` 的 `redirect_stdout` → 這一條紅
+        """**變異**:拿掉 `adapter-unittest.py` `run_suite` 的 `redirect_stdout` → 這一條紅
         (log 裡沒有那一行,接著 `done` 得 0 筆)。
+
+        #162 刪掉 `status.py run-tests` 薄殼:跑的是它底下那一支(adapter 的 `run`),log 是
+        `AC_TEST_OUT/run.log`。宣告行讓 adapter 回 86(§4:`environment_suspect` 非空 ⇔ 86),
+        不再是薄殼的 0 + 空的 suspect file。
 
         **這是本票最容易漏的一條**:`TextTestRunner(stream=…)` 只收 runner 自己的
         輸出,案例 `print()` 的那一行會流到呼叫者的 stdout。人看終端機時它在那裡,
         所以「有印出來」與「進了 log」長得一樣 —— 而 `done --log` 只讀那份檔。
         """
         self.write(os.path.join("tests", "test_declared.py"), DECLARES_THEN_SKIPS)
-        log = os.path.join(self.home, "run.log")
-        suspect = os.path.join(self.home, "run.log.env-suspect.json")
-        done = self.status("run-tests", "--root", self.repo, "--log", log,
-                           "--suspect-file", suspect, "--mode", "names",
-                           "test_declared")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        out = os.path.join(self.home, "out")
+        log = os.path.join(out, "run.log")
+        done = self.run_py("scripts/adapter-unittest.py", "run", "test_declared",
+                           env=self.env(AC_CODE_ROOT=self.repo, AC_TEST_OUT=out))
+        self.assertEqual(done.returncode, 86, done.stdout + done.stderr)
         with open(log, encoding="utf-8") as handle:
             text = handle.read()
         self.assertIn("ENVIRONMENT-SUSPECT: firefox 假的宣告", text,
@@ -982,9 +985,9 @@ class EnvironmentSuspectHasOneShape(Sandbox):
         # 案例名 —— 「有那一行」與「那一行是原樣的」長得一樣。
         self.assertIn("\nENVIRONMENT-SUSPECT: firefox 假的宣告\n", text,
                       "那一行沒有落在行首:%r" % text[:300])
-        with open(suspect, encoding="utf-8") as handle:
-            self.assertEqual(json.load(handle), [],
-                             "沒有連紅統計時那一份檔是 [],不是空字串")
+        with open(os.path.join(out, "result.json"), encoding="utf-8") as handle:
+            self.assertEqual([row["source"] for row in json.load(handle)["environment_suspect"]],
+                             ["declared"], "沒有連紅統計:只有宣告那一筆")
         self.status("start", "--ticket", "7", "--kind", "gate")
         self.status("done", "--ticket", "7", "--rc", "0", "--log", log)
         rows = self.suspects_of()

@@ -1785,8 +1785,9 @@ class WhichGateLandRuns(LandBase):
         把 scripts/gate.sh 換成寫 `WT-GATE` 的替身 → land 之後標記是 WT-GATE。
 
         **變異 m4**:land.sh 一律跑 `$AC_HOME` 那一份 → 標記是 `gate <沙盒>/scripts/gate.sh`,紅。"""
+        # `dirs_exist_ok`:fixture 專案當沙盒時(#162)它自己就有 scripts/(command adapter)。
         shutil.copytree(self.own_ac_home(), os.path.join(self.repo, "scripts"),
-                        ignore=shutil.ignore_patterns("__pycache__"))
+                        ignore=shutil.ignore_patterns("__pycache__"), dirs_exist_ok=True)
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "A 自己:腳本住在專案裡")
         self.git("push", "-q", "origin", "main")
