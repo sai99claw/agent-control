@@ -1456,7 +1456,7 @@ verifier_fallback() {   # $1 = 重組派工文的函式;回 0 = 不用換或已�
         use_verifier || { V_STOP=refused; return 1; }
         "$1" || { V_STOP=packet; return 1; }
         VLOG=$(dirname "$VDISPATCH")/verifier-round$r-c$V_INDEX.log
-        ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" ${V_EFFORT:+--kv effort=$V_EFFORT} \
+        ev agent.start --driver $$ --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" ${V_EFFORT:+--kv effort=$V_EFFORT} \
             --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix-verifier
         VSTART=$(date +%s)
         VWRC=$(run_verifier "$VDISPATCH" "$VFIX" "$r" "$VLOG" \
@@ -1541,7 +1541,7 @@ start_verifier_bg() {   # uses r/VFIX/VDISPATCH;設定 VPID/VLOG/VRC_FILE/VSTART
         echo "auto-fix: needs_verifier —— worker 第 $r 輪交件了,驗證者現在起跑(副本 $VFIX)"
     fi
     VCMD=$(session_open verifier "$VERIFIER_CMD" "$VFIX" "$r" "$VERIFIER_MODEL")
-    ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" ${V_EFFORT:+--kv effort=$V_EFFORT} \
+    ev agent.start --driver $$ --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" ${V_EFFORT:+--kv effort=$V_EFFORT} \
         --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix-verifier
     VSTART=$(date +%s)
     run_verifier "$VDISPATCH" "$VFIX" "$r" "$VLOG" "$VCMD" > "$VRC_FILE" &
@@ -1640,7 +1640,7 @@ dispatch_verifier() {   # uses r/FIX/DISPATCH/line/GAP_ROUND; sets PATCH_OUT/EVI
         echo "auto-fix: test_defect —— 起第 $r 輪的新驗證者 worker"
     fi
     VLOG=$(dirname "$DISPATCH")/verifier-round$r.log
-    ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" ${V_EFFORT:+--kv effort=$V_EFFORT} \
+    ev agent.start --driver $$ --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" ${V_EFFORT:+--kv effort=$V_EFFORT} \
         --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix-verifier
     VSTART=$(date +%s)
     VWRC=$(run_verifier "$VDISPATCH" "$VFIX" "$r" "$VLOG" \
@@ -1724,7 +1724,7 @@ PY
 }
 
 run_worker() {   # $1 = 命令  $2 = 派工文;設定 WRC、WORKER_LOG 由呼叫端先給
-    ev agent.start --ticket "$ID" --role worker --model "$WORKER_MODEL" \
+    ev agent.start --driver $$ --ticket "$ID" --role worker --model "$WORKER_MODEL" \
         --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix ${T_EFFORT:+--kv effort=$T_EFFORT}
     WSTART=$(date +%s)
     WRC=$(run_agent "$1" "$2" "$FIX" worker "$r" "$WORKER_LOG" 1 "" "$WT")
@@ -1925,7 +1925,7 @@ print(next((tok for tok in parts if "=" not in tok), ""))' "$OPENER_CMD")
     O_TIMEOUT=$(cfg opener.timeout_seconds 1800)
     OLOG=$(dirname "$DISPATCH")/opener-round$r.log
     echo "auto-fix: 反駁交給開題者判 —— $OPENER_CMD(cwd $ROOT,時限 $O_TIMEOUT 秒)"
-    ev agent.start --ticket "$ID" --role opener --model "$O_MODEL" \
+    ev agent.start --driver $$ --ticket "$ID" --role opener --model "$O_MODEL" \
         --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix-opener
     OSTART=$(date +%s)
     ORC=$(run_agent "$OPENER_CMD" "$ODISPATCH" "$ROOT" opener "$r" "$OLOG" "" "$O_TIMEOUT")
@@ -2017,7 +2017,7 @@ PY
         [ ! -f "$VFIX/EVIDENCE-verifier.md" ] || mv "$VFIX/EVIDENCE-verifier.md" "$VFIX/EVIDENCE-verifier-objection.md"
         VLOG=$(dirname "$DISPATCH")/verifier-resume-round$r.log
         echo "auto-fix: 接回第 $r 輪的驗證者(session $(session_field verifier session_id))"
-        ev agent.start --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" ${V_EFFORT:+--kv effort=$V_EFFORT} \
+        ev agent.start --driver $$ --ticket "$ID" --role verifier --model "$VERIFIER_MODEL" ${V_EFFORT:+--kv effort=$V_EFFORT} \
             --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix-verifier
         VSTART=$(date +%s)
         VWRC=$(run_verifier "$VRDISPATCH" "$VFIX" "$r" "$VLOG" \
@@ -2271,6 +2271,16 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
     SRC=${AC_FIX_SOURCE:-$(ticket_branch)}
     git -C "$ROOT" rev-parse -q --verify "$SRC^{commit}" >/dev/null || SRC=$S_BASE
     DISPATCH=$ROOT/$(cfg reports_dir reports)/t$ID/$RUN_ID/dispatch-round$r.md
+    # 這一輪在同一個 run 裡已經起過 agent(driver 死在半路,`heartbeat --reconcile` 把票轉回 Ready):
+    # 那一輪的派工文 / log / result 留在原地給人看,這一次換一個新的 run_id,不覆寫(#117 A4 vii)。
+    if [ -z "$DRY" ] && { [ -e "$(dirname "$DISPATCH")/worker-round$r.log" ] \
+            || [ -e "$(dirname "$DISPATCH")/verifier-round$r.log" ]; }; then
+        r_was=$RUN_ID
+        RUN_ID=$(date +%Y%m%d-%H%M%S)-$$
+        [ "$RUN_ID" != "$r_was" ] || RUN_ID=$(date +%Y%m%d-%H%M%S)-$$$r
+        DISPATCH=$ROOT/$(cfg reports_dir reports)/t$ID/$RUN_ID/dispatch-round$r.md
+        echo "auto-fix: 第 $r 輪在 $r_was 已經起過(死在半路的那一次留在原地)—— 這一次的 run_id 換成 $RUN_ID"
+    fi
     mkdir -p "$(dirname "$DISPATCH")"
     GAP_ROUND=""
     if [ "$r" -gt 1 ] && [ -n "${S_GAP_ONLY:-}" ]; then
@@ -2326,9 +2336,12 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
         return 1
     fi
     # 第 1 輪:票 Ready → Running(#40)。擺在 `--dry-run` 那一手**之後**(dry-run 不動票)、
-    # 起 worker **之前**(worker 跑的時候票就該是 Running)。第 2 輪起票已經不是 Ready 了。
-    [ "$r" -ne 1 ] || python3 "$AC/ticket.py" set "$ID" state Running >/dev/null 2>&1 \
-        || echo "auto-fix: 票狀態改不動(Running)" >&2
+    # 起 worker **之前**(worker 跑的時候票就該是 Running)。第 2 輪起票平常已經不是 Ready 了;
+    # 是的話是 `heartbeat --reconcile` 收過死掉的那一輪(#117 A4 vi),這一輪照樣轉 Running。
+    if [ "$r" -eq 1 ] || [ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1],encoding="utf-8")).get("state") or "")' "$TF" 2>/dev/null)" = "Ready" ]; then
+        python3 "$AC/ticket.py" set "$ID" state Running >/dev/null 2>&1 \
+            || echo "auto-fix: 票狀態改不動(Running)" >&2
+    fi
     W_BEFORE=$(git -C "$WT" rev-parse HEAD)
     if [ -n "$IS_AGY" ]; then
         echo "auto-fix: 起第 $r 輪的 worker —— $WORKER_CMD(cwd $WT,stdin=/dev/null,提示指向派工文)"
@@ -2336,7 +2349,7 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
         echo "auto-fix: 起第 $r 輪的 worker —— $WORKER_CMD(cwd $WT,派工文從 stdin 餵)"
     fi
     [ -z "$T_EFFORT" ] || echo "auto-fix: effort 來源=$EFFORT_SRC $T_EFFORT"
-    ev ticket.attempt.start --ticket "$ID" --attempt "$r" --note "auto-fix 第 $r 輪"
+    ev ticket.attempt.start --driver $$ --ticket "$ID" --attempt "$r" --kv run_id="$RUN_ID" --note "auto-fix 第 $r 輪"
     # 起不來(副本取不出)照樣派 worker,收件時走「驗證者沒交出 patch-verify」那一頁。
     echo "auto-fix: 逾時來源=$TIMEOUT_SRC $WORKER_TIMEOUT 秒" >&2
     [ -z "$V_WANT" ] || [ -z "$V_PARALLEL" ] || start_verifier_bg || true
@@ -2560,7 +2573,7 @@ gap_round() {   # uses r/SRC/FIX/DISPATCH;設定 ROUND_RC
     verifier_wanted "$r" >/dev/null 2>&1
     V_WANT=""
     echo "auto-fix: 上一輪的紅榜只有缺口列(kind=GAP)—— 第 $r 輪不派 worker,只派驗證者"
-    [ -n "$DRY" ] || ev ticket.attempt.start --ticket "$ID" --attempt "$r" \
+    [ -n "$DRY" ] || ev ticket.attempt.start --driver $$ --ticket "$ID" --attempt "$r" --kv run_id="$RUN_ID" \
         --note "auto-fix 第 $r 輪(只派驗證者)"
     dispatch_verifier
     lr_rc=$?
@@ -2906,7 +2919,7 @@ PY
         [ ! -f "$FIX/EVIDENCE-round$r.md" ] || cp "$FIX/EVIDENCE-round$r.md" "$BDIR/EVIDENCE-round$r.md"
     }
     batch_run() {   # 起一次批次 worker(WORKER_CMD / WORKER_LOG);設定 WRC / W_COST_SECS,交付收進紀錄目錄
-        ev agent.start --ticket "$ID" --role worker --model "$WORKER_MODEL" \
+        ev agent.start --driver $$ --ticket "$ID" --role worker --model "$WORKER_MODEL" \
             --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix --kv batch="$B_TAGS" \
             ${T_EFFORT:+--kv effort=$T_EFFORT}
         WSTART=$(date +%s)
@@ -3019,12 +3032,13 @@ PY
 
 # 迴圈從 `S_ROUND+1` 起,碰不到前面那幾輪的輪次目錄 —— 主線用 Agent 手建的第 1 輪就在這裡
 # (#38 A4)。派下一輪之前一併收(控制根;EVIDENCE 留著)。`--dry-run` 不刪東西。
-# 那一輪的 worker 還活著(`worker.pid` + `kill -0`)就不收:收了等於從它腳下抽走副本(#46)。
+# 那一輪的 worker 還活著(`worker.pid` 的 pid 在 /proc,liveness.py —— 不發訊號,#117)就不收:
+# 收了等於從它腳下抽走副本(#46)。
 if [ -z "$DRY" ]; then
     p=1
     while [ "$p" -le "$S_ROUND" ]; do
         _pid=$(cat "$WTBASE/fix-t$ID/round$p/worker.pid" 2>/dev/null || echo "")
-        if [ -n "$_pid" ] && kill -0 "$_pid" 2>/dev/null; then
+        if [ -n "$_pid" ] && ! python3 "$AC/liveness.py" gone "$_pid"; then
             echo "auto-fix: 第 $p 輪的 worker(pid $_pid)還在跑,不收副本"
             p=$((p + 1))
             continue

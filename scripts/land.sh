@@ -107,13 +107,24 @@ take_lock() {   # $1 = 這一次在做什麼(寫進 holder,給撞上的人看)
         return 0
     fi
     if ! mkdir "$LOCK" 2>/dev/null; then
-        echo "land: 已經有一個 land 在跑 —— 同時只准一個(docs/WORKFLOW.md)"
-        [ -f "$LOCK/holder" ] && sed 's/^/land:   /' "$LOCK/holder"
-        echo "land: 確定那一個已經死了(heartbeat.sh 會說),就 rm -rf $LOCK"
-        exit 2
+        # 持鎖的那一個死了(pid 不在 /proc、或記的是上一次開機)就接手(#117 A5):判準與
+        # heartbeat、schedule.py 同一份(liveness.py),只讀 /proc,不發任何訊號。
+        _hpid=$(sed -n 's/^pid=\([0-9][0-9]*\).*/\1/p' "$LOCK/holder" 2>/dev/null | head -1)
+        _hboot=$(sed -n 's/^pid=[0-9]* boot_id=\([^ ]*\).*/\1/p' "$LOCK/holder" 2>/dev/null | head -1)
+        if [ -n "$_hpid" ] && python3 "$AC/liveness.py" gone "$_hpid" "$_hboot" \
+                && mv "$LOCK" "$LOCK.stale-$$" 2>/dev/null && mkdir "$LOCK" 2>/dev/null; then
+            rm -rf "$LOCK.stale-$$"
+            echo "land: stale lock pid $_hpid taken over(它已經不在了;heartbeat --reconcile 收它留下的 land/ 殘骸)"
+        else
+            echo "land: 已經有一個 land 在跑 —— 同時只准一個(docs/WORKFLOW.md)"
+            [ -f "$LOCK/holder" ] && sed 's/^/land:   /' "$LOCK/holder"
+            echo "land: 持鎖的還活著(或 holder 讀不出 pid);確定它死了再 rm -rf $LOCK"
+            exit 2
+        fi
     fi
     HELD=1
-    printf 'pid=%s 開始=%s 分支=%s\n' "$$" "$(date +%Y-%m-%dT%H:%M:%S)" "$1" > "$LOCK/holder"
+    printf 'pid=%s boot_id=%s 開始=%s 分支=%s\n' "$$" "$(python3 "$AC/liveness.py" boot)" \
+        "$(date +%Y-%m-%dT%H:%M:%S)" "$1" > "$LOCK/holder"
 }
 
 ev() {
@@ -176,7 +187,7 @@ cmd_docs() {   # $1 = commit 訊息  $2… = 檔案(repo 相對路徑)
     # 一次呼叫一個 stamp、每一筆 land.* 都帶 `channel=docs`(#127 A1(b)):越界守衛靠 stamp 把
     # land.start 與 land.pass 配成一次落地,靠 pass 的 main_before 把它接在上一段的終點後面。
     DSTAMP=docs-$(date +%Y%m%d-%H%M%S)-$$
-    ev land.start --note "docs $msg" --kv "stamp=$DSTAMP" --kv channel=docs
+    ev land.start --driver $$ --note "docs $msg" --kv "stamp=$DSTAMP" --kv channel=docs
     git -C "$ROOT" add -- "$@" || {
         echo "land: git add 收不下這幾個檔(打錯路徑?)" >&2
         ev land.refused --note "docs add 失敗" --kv "stamp=$DSTAMP" --kv channel=docs
@@ -245,7 +256,8 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 IDS=""
 ALL_BRANCHES="$*"
 LAND_T0=$(date +%s)
-ev land.start --note "$*" --kv "stamp=$STAMP"
+ev land.start --driver $$ --note "$*" --kv "stamp=$STAMP" \
+    --kv "main_before=$(git -C "$ROOT" rev-parse -q --verify "$MAIN^{commit}" 2>/dev/null)"
 
 # 狀態檔:這一批每一張票各一份 `reports/t<票號>-status.json`(D-010,格式見
 # `scripts/status.py`)。**寫不出來要出聲但不擋落地** —— 同上面那一段事件的理由。

@@ -104,6 +104,30 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
 `auto-fix.sh` 在票分支的 worktree 裡找票時,改問主 repo 的 `tickets/`(`--git-common-dir`
 的上一層)—— 票檔還沒進版控就 rc=2 停掉的那一種(#23 第 2 輪)不再發生。
 
+## A driver died(#117)
+容器重啟、或 auto-fix / land / review / 主線 session 被砍掉,留下的是「有 start 沒結尾」的事件、Running 的票、
+有未 commit 改動的 worktree、`.land.lock` 與 `land/<stamp>`。start 事件帶 `driver_pid` 與 `boot_id`
+(`event.py emit --driver <pid>`),所以分得出死活:
+- **`actl heartbeat`**(只讀,退出碼 0 / 1 / 2 不變)每一筆沒結尾的 start 給一個字:`alive`(driver 在 /proc、同一次開機;
+  過了租約也照印、不算要處理)、`dead awaiting-takeover`(沒有人接手)、`dead taken-over by <attempt / run / stamp>`
+  (同一張票更高的 attempt、同票同角色另一個 run_id、同一條分支後來的 land)、`unknown (no driver recorded; lease rule)`
+  (#117 之前的舊列,只按租約判)。`actl schedule run` 停在半路也列出來(dead 時提示 `actl schedule run` 接續)。
+  判死活只有一份(`scripts/liveness.py` 的 `gone()`,schedule.py 共用):讀 /proc,**不發任何訊號**。
+- **`actl heartbeat --reconcile`** 只動 `dead awaiting-takeover`:worker / 驗證者那一輪 —— worktree 的未 commit 改動
+  (`git add -N .` 後 `git diff HEAD`)存成 `reports/t<n>/<run_id>/wip-round<r>-died.diff`、worktree 清乾淨(分支頭與已 commit
+  的不動)、`worker.pid` 刪掉、`sessions.json` 那幾列 closed(why=driver-died)、發 `agent.failed` /
+  `ticket.attempt.failed` reason=driver-died、每個死掉的 agent 一列 cost(outcome=error)、票 Running → Ready
+  (InReview / Blocked / Done / Cancelled 不動);覆核者只發 `agent.failed` + `review.missing`;land —— 鎖、
+  `land.fail stage=died`、`land/<stamp>` 的 worktree 與分支;主線 session —— `session.end` reason=driver-died。
+  每一件印一行 `heartbeat: reconciled <什麼> -> <做了什麼>`,也記進 `reports/heartbeat/<時間>.log`;再跑一次是
+  `nothing to reconcile`,不寫任何東西。
+- **它不做的**:不重派(排程器 / 主線從 Ready 派;同一個 run 再派那一輪時 auto-fix 換一個新 run_id,死掉那一輪的
+  派工文與 log 留在原地);不接回死掉的 agent(D-067);不動 `alive` / `taken-over` / `unknown` 的列;不動
+  `reports/schedule/state.json` 與排程鎖(`actl schedule run` 自己接續);driver 死了而 agent 的 pid 還在 /proc 的那一輪
+  也不動(印 `left alone`);不發收件匣的頁(收拾是主線自己的動作,D-032)。
+- `land.sh` 撞上鎖時,持鎖的那一個已經死了(同一條 `gone()`)就自己接手(印 `stale lock pid X taken over`),
+  活著才拒絕。
+
 ## 閘門(`scripts/gate.sh`)
 閘門是 A 的:`actl gate --branch|--base|--full [--ticket n]`。專案只填 `board/config.json` 的 `tests` 段(`preflight` / `select` / `run` / `full` / `regression` 五條命令,結果一律寫成 `result.json`;介面與退出碼見 `docs/design/project-runnable-entries.md` §4)。`select` 回 `unmapped`(改動檔對不到任何模組)仍是 rc 3,**要出聲,不准印一行綠**。判綠先寫檔再讀退出碼,不用 `cmd | tail`。瀏覽器引擎由 `available()` 判,不在指令列收窄。
 

@@ -261,6 +261,8 @@ EMIT_FLAGS = (
     ("--attempt", "第幾次派工(遲到的回報對不上 attempt 就拒絕)"),
     ("--note", "一句給人看的話"),
     ("--session", "session id:heartbeat 拿它配 session.start / session.end(沒給就不寫這欄)"),
+    ("--driver", "發這一筆的 driver 的 pid(不是 event.py 自己的):寫 driver_pid 與 boot_id,"
+                 "heartbeat 拿它讀 /proc 判死活(#117;start 事件帶)"),
     ("--kv", "任何一格 `k=v`;可重複(例:`--kv sha=abc1234 --kv mode=full`)"),
 )
 
@@ -341,6 +343,15 @@ def cmd_emit(argv):
                 return 2
             key, _, value = rest[index].partition("=")
             fields[key] = value
+        elif arg == "--driver":
+            # `pid` 這一格是 event.py 自己的(一發就走),判不了死活;driver 由呼叫端給(#117 A1)。
+            index += 1
+            if index >= len(rest) or not rest[index].isdigit():
+                sys.stderr.write("event: --driver 要一個 pid(例:--driver $$)\n")
+                return 2
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import liveness
+            fields.update(liveness.driver_fields(int(rest[index])))
         elif arg.startswith("--") and arg[2:] in ("ticket", "role", "model",
                                                   "attempt", "note", "session"):
             name = arg[2:]

@@ -50,6 +50,7 @@ from datetime import date, datetime, timedelta
 ac, root, ident = sys.argv[1:4]
 sys.path.insert(0, ac)
 import event   # noqa: E402
+import liveness   # noqa: E402  driver_pid + boot_id on agent.start (#117 A1)
 import ticket  # noqa: E402
 
 ROLE = "consolidator"
@@ -203,7 +204,7 @@ def run(model, effort, cmd, dispatch, log_path):
     env = dict(os.environ, AC_TICKET=ident, AC_ROLE=ROLE, AC_DISPATCH=dispatch,
                AC_MODEL=model, AC_DISCUSSION=talk)
     event.emit("agent.start", ticket=ident, role=ROLE, model=model, run_id=run_id,
-               agent="consolidate-memory")
+               agent="consolidate-memory", **liveness.driver_fields())
     started = time.time()
     try:
         with open(dispatch, encoding="utf-8") as stdin, open(log_path, "wb") as log:
