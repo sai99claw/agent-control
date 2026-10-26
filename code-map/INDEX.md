@@ -24,6 +24,7 @@
 
 - 入口:[`scripts/gate.sh`](../scripts/gate.sh)
 - 主守衛:[`tests/test_gate.py`](../tests/test_gate.py)
+- 來源:[`tests/test_gate_regression_cases.py`](../tests/test_gate_regression_cases.py)
 - 文件:[`docs/WORKFLOW.md`](../docs/WORKFLOW.md)
 
 ## land
