@@ -140,7 +140,7 @@ class Emit(Sandbox):
 
     def test_the_table_is_exactly_the_kinds_that_stay(self):
         """#143(D-054 Q5):票 JSON 是唯一的狀態 —— 票欄位變更、cost 列、收件匣發頁
-        三種鏡像事件從登記表拿掉,不多任何一種。期望值是這份手抄的表(39 種),不從
+        三種鏡像事件從登記表拿掉,不多任何一種;#119 加 schedule.* 五種。期望值是這份手抄的表(44 種),不從
         KINDS 讀回來;不在表上的種類 `emit` 一律拒收(上一條)。land.* / agent.* /
         ticket.attempt.* / ticket.closed 照舊(#115 守衛與看板時間線靠它們)。
 
@@ -154,6 +154,8 @@ class Emit(Sandbox):
             "ticket.attempt.start", "ticket.attempt.done", "ticket.attempt.failed",
             "agent.start", "agent.done", "agent.failed", "agent.recovery_needed",
             "agent.cost", "schedule.proposed",
+            "schedule.start", "schedule.resume", "schedule.dispatch", "schedule.land",
+            "schedule.stop",
             "gate.start", "gate.rerun", "gate.pass", "gate.fail", "flake.auto_pass",
             "env.suspect", "regression.red",
             "land.start", "land.refused", "land.pass", "land.fail",

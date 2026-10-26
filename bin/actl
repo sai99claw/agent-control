@@ -35,6 +35,7 @@ TABLE='actl [-C <project dir>] <command> [args…]
                                  scripts/<command>.py
   verify verify-case             scripts/verify.py / scripts/verify-case.py (code root = cwd toplevel)
   board                          board/board.py
+  schedule                       scripts/schedule.py (plan | run: depends_on DAG + board/batches.json -> auto-fix, land)
   session heartbeat              scripts/new-session.sh / scripts/heartbeat.sh
   doctor migrate init            scripts/project_config.py (board/config.json version, schema, rows)
   version                        AC_HOME, ac_sha, AC_ROOT, AC_CODE_ROOT (works outside a project)
@@ -83,7 +84,7 @@ case "$CMD" in
         echo "AC_ROOT=${_root:-(none)}"
         echo "AC_CODE_ROOT=${_code:-(none)}"
         exit 0 ;;
-    land|gate|apply|review|auto-fix|heartbeat|session|board|test|\
+    land|gate|apply|review|auto-fix|heartbeat|session|board|test|schedule|\
     ticket|event|inbox|status|memory|rules|repo-map|verify|verify-case|\
     doctor|migrate|init|hooks) ;;
     *)

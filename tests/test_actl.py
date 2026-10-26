@@ -193,6 +193,15 @@ class A1TheEntryFindsTheProject(ActlBase):
             with self.subTest(command):
                 self.assertIn("\n  %s " % command, done.stdout)
 
+    def test_a1_schedule_has_a_row_and_needs_a_subcommand(self):
+        """#119: `actl schedule` is in the table and execs scripts/schedule.py; no subcommand -> rc 2."""
+        done = self.actl("--help", cwd=self.repo)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("\n  schedule ", done.stdout)
+        done = self.actl("schedule", cwd=self.repo)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("plan | run", done.stderr)
+
     def test_a1_a_child_writes_into_the_resolved_root(self):
         """`actl` export 的 AC_ROOT 就是子行程寫的地方:`-C <另一顆> event emit` 寫進那一顆的
         events.jsonl,cwd 那一顆一筆都沒有。"""

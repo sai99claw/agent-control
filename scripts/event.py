@@ -44,6 +44,8 @@ KINDS = (
     "agent.cost",
     # 排順序只是提案(docs/ROLES.md:沒有調度員這個角色),所以它只有這一種事件。
     "schedule.proposed",
+    # schedule.py run(#119):一次 run 的開始 / 接續、每張票派 auto-fix、每次叫 land、終態(kv reason)。
+    "schedule.start", "schedule.resume", "schedule.dispatch", "schedule.land", "schedule.stop",
     # 閘門。綠是對某一個 base_sha 說的,所以 kv 要帶 sha。
     "gate.start", "gate.rerun", "gate.pass", "gate.fail", "flake.auto_pass",
     # 環境壞了:同一引擎同形訊息連紅達門檻,那一段當場中止(#7)。

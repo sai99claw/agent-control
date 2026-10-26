@@ -58,6 +58,10 @@
   "batch_fix": {
     "rounds": 2
   },
+  "schedule": {
+    "max_workers": 2,
+    "reland_max": 2
+  },
   "hard_block": {
     "paths": [
       "docs/DECISIONS.md",
@@ -90,8 +94,9 @@
         {"match": "scripts/project_config.py", "ids": ["test_project_config", "test_actl", "test_session_hook"]},
         {"match": ".gitignore", "ids": ["test_no_project_names"]},
         {"match": "scripts/event.py", "ids": ["test_event", "test_ticket", "test_land", "test_actl"]},
-        {"match": "scripts/ticket.py", "ids": ["test_ticket", "test_land", "test_auto_fix_codex"]},
+        {"match": "scripts/ticket.py", "ids": ["test_ticket", "test_land", "test_auto_fix_codex", "test_schedule"]},
         {"match": "scripts/land.sh", "ids": ["test_land"]},
+        {"match": "scripts/schedule.py", "ids": ["test_schedule", "test_actl"]},
         {"match": "scripts/gate.sh", "ids": ["test_gate", "test_status"]},
         {"match": "scripts/apply.sh", "ids": ["test_apply"]},
         {"match": "scripts/auto-fix.sh", "ids": ["test_auto_fix", "test_auto_fix_codex", "test_rules_delivery"]},

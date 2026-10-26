@@ -1350,6 +1350,70 @@ class Lint(Sandbox):
             self.assertEqual(len([l for l in lines if field in l]), 1, (field, lines))
 
 
+class LintDependsOn(Sandbox):
+    """#119 A7: lint checks depends_on - a cycle / self-dependency across tickets_dir and a condition
+    other than `landed` -> rc 1; still read-only: every ticket file byte-identical, no event."""
+
+    def lint(self, ident):
+        where = os.path.join(self.repo, "tickets")
+        before = {name: ticket_bytes(self, name[:-5]) for name in os.listdir(where)}
+        events = len(self.events())
+        done = self.ticket("lint", ident)
+        self.assertEqual({name: ticket_bytes(self, name[:-5]) for name in os.listdir(where)},
+                         before, "lint is read-only")
+        self.assertEqual(len(self.events()), events, "lint emits no event")
+        return done
+
+    def dep(self, ident, condition="landed"):
+        return [{"id": ident, "condition": condition}]
+
+    def test_a7_cycle_names_both_ids(self):
+        self.make_ticket("D", depends_on=self.dep("E"))
+        self.make_ticket("E", depends_on=self.dep("D"))
+        done = self.lint("D")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertTrue([l for l in done.stderr.splitlines()
+                         if "depends_on cycle" in l and "D" in l and "E" in l], done.stderr)
+
+    def test_a7_self_dependency(self):
+        self.make_ticket("S", depends_on=self.dep("S"))
+        done = self.lint("S")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("depends_on cycle: S -> S", done.stderr)
+
+    def test_a7_condition_other_than_landed(self):
+        self.make_ticket("F", state="Done")
+        self.make_ticket("H", depends_on=self.dep("F", "閘門綠"))
+        done = self.lint("H")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertTrue([l for l in done.stderr.splitlines()
+                         if "閘門綠" in l and "landed" in l], done.stderr)
+
+    def test_a7_legacy_condition_on_a_done_dependency_is_landed(self):
+        self.make_ticket("F", state="Done")
+        self.make_ticket("L", depends_on=self.dep("F", "落地(654d419)"))
+        done = self.lint("L")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.make_ticket("R")
+        self.make_ticket("M", depends_on=self.dep("R", "落地(654d419)"))
+        done = self.lint("M")
+        self.assertEqual(done.returncode, 1, "legacy on a dependency that is not Done is not landed")
+
+    def test_a7_no_deps_still_ok_beside_a_cycle(self):
+        self.make_ticket("D", depends_on=self.dep("E"))
+        self.make_ticket("E", depends_on=self.dep("D"))
+        self.make_ticket("A")
+        done = self.lint("A")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("lint #A ok", done.stdout)
+
+    def test_a7_create_still_accepts_any_condition(self):
+        """D-031: create does not judge the condition; lint is the check."""
+        done = self.ticket("create", *MIN, "--depends-on", "7:閘門綠")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["depends_on"], [{"id": "7", "condition": "閘門綠"}])
+
+
 class ObjectionBodyDropsTheHomeDirectory(Sandbox):
     """#91 C4(R1):票檔是文件級(test_no_project_names),反駁 body 帶家目錄絕對路徑
     記進去,那張票就落不了地。所有收反駁的入口都經 `record_objection`。"""

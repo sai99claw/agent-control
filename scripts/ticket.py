@@ -1661,8 +1661,80 @@ def tag_problems(ticket):
     return bad
 
 
+LANDED_CONDITION = "landed"
+LEGACY_LANDED = ("落地", "已落地")
+
+
+def condition_understood(condition, dependency):
+    """`depends_on[].condition` 讀得懂嗎(#119):只認 `landed`;舊寫法 `落地…` / `已落地…` 只在依賴
+    已 Done 時讀成 landed。其餘(含空字串)都是讀不懂 —— `schedule.py` 讓依賴它的票等、印出原因。"""
+    condition = str(condition or "").strip()
+    if condition == LANDED_CONDITION:
+        return True
+    return (isinstance(dependency, dict) and dependency.get("state") == "Done"
+            and condition.startswith(LEGACY_LANDED))
+
+
+def depends_cycles(tickets):
+    """`depends_on` 的環(#119),只看還沒 Done / Cancelled 的票;每個環是 [a, b, …, a],
+    自己依賴自己是 [a, a]。`schedule.py` 遇到就 rc 2、`lint` 遇到就 rc 1。"""
+    rows = {str(t.get("id")): t for t in tickets
+            if isinstance(t, dict) and t.get("state") not in CLOSED_STATES}
+    key = lambda i: (0, int(i), "") if i.isdigit() else (1, 0, i)  # noqa: E731
+    edges = {}
+    for ident, row in rows.items():
+        deps = []
+        for dep in row.get("depends_on") or []:
+            target = str(dep.get("id") if isinstance(dep, dict) else dep).strip().lstrip("#")
+            if target in rows and target not in deps:
+                deps.append(target)
+        edges[ident] = sorted(deps, key=key)
+    color, stack, cycles, seen = {}, [], [], set()
+
+    def visit(ident):
+        color[ident] = 1
+        stack.append(ident)
+        for target in edges[ident]:
+            if color.get(target) == 1:
+                cycle = stack[stack.index(target):] + [target]
+                if frozenset(cycle) not in seen:
+                    seen.add(frozenset(cycle))
+                    cycles.append(cycle)
+            elif not color.get(target):
+                visit(target)
+        stack.pop()
+        color[ident] = 2
+
+    for ident in sorted(edges, key=key):
+        if not color.get(ident):
+            visit(ident)
+    return cycles
+
+
+def depends_problems(ticket):
+    """lint 的 depends_on 兩條:這張票在環上(含自己依賴自己)、條件不是 `landed`。"""
+    ident = str(ticket.get("id"))
+    bad = []
+    rows = load_all()
+    for cycle in depends_cycles(rows):
+        if ident in cycle:
+            bad.append("depends_on cycle: %s%s" % (" -> ".join(cycle),
+                                                   " (self-dependency)" if len(cycle) == 2 else ""))
+    known = {str(row.get("id")): row for row in rows}
+    for dep in ticket.get("depends_on") or []:
+        target = str(dep.get("id") if isinstance(dep, dict) else dep).strip().lstrip("#")
+        condition = dep.get("condition") if isinstance(dep, dict) else ""
+        if not condition_understood(condition, known.get(target)):
+            bad.append("depends_on #%s condition %r is not %r —— schedule.py 只認 landed"
+                       "(舊寫法 落地… 只在依賴已 Done 時算)"
+                       % (target, condition or "", LANDED_CONDITION))
+    return bad
+
+
 def cmd_lint(argv):
-    """票面機械檢查(#91 C3)。**唯讀**:不寫票、不動 state_version、不發事件。"""
+    """票面機械檢查(#91 C3)。**唯讀**:不寫票、不動 state_version、不發事件。
+    #119 起多查 depends_on:環 / 自己依賴自己、條件不是 `landed` —— 開題者把票插進 DAG
+    就是寫 depends_on 再跑這一支。"""
     if len(argv) != 1:
         sys.stderr.write("ticket: %s\n" % USAGE["lint"])
         return 2
@@ -1672,7 +1744,7 @@ def cmd_lint(argv):
     except (OSError, ValueError) as exc:
         sys.stderr.write("ticket: 讀不到 #%s —— %s\n" % (ident, exc))
         return 2
-    bad = tag_problems(ticket)
+    bad = tag_problems(ticket) + depends_problems(ticket)
     if bad:
         for line in bad:
             sys.stderr.write("ticket: lint #%s %s\n" % (ident, line))
