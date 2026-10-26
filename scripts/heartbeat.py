@@ -521,9 +521,8 @@ class Reconciler(object):
         except OSError:
             pass
         if os.path.isdir(lock):
-            mine = str(holder.get("pid")) == str(driver[0])
-            if mine or (holder.get("pid") and liveness.gone(holder.get("pid"),
-                                                            holder.get("boot_id"))):
+            # One gone rule (A2): the holder's own pid and boot, never "same pid as the driver".
+            if holder.get("pid") and liveness.gone(holder.get("pid"), holder.get("boot_id")):
                 aside = "%s.stale-%d" % (lock, os.getpid())
                 os.rename(lock, aside)
                 shutil.rmtree(aside, ignore_errors=True)

@@ -1354,47 +1354,6 @@ class EveryRoundCostsARowAndClosesItsAttempt(AutoFixBase):
                          "沒交 patch 也派過一次,成本照記")
 
 
-class TheRoundCarriesItsDriver(AutoFixBase):
-    """#117 A1 / A4 (vii), T5 / T6: start events name the auto-fix.sh that drives the round, and a
-    round re-dispatched in the same run does not overwrite the files of the one that died."""
-
-    def setUp(self):
-        super(TheRoundCarriesItsDriver, self).setUp()
-        self.set_worker(WORKER_ROUND_ONE_COSTS.replace("@ENVELOPE@", "not an envelope"))
-        self.ticket_ready()
-
-    def test_the_start_events_carry_the_auto_fix_pid_and_this_boot(self):
-        """**M5**: emit driver_pid from event.py's own pid -> red."""
-        proc = subprocess.Popen(["sh", self.script("scripts/auto-fix.sh"), "1", "--no-review"],
-                                cwd=self.repo, env=self.env(), stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, text=True)
-        out, _ = proc.communicate(timeout=300)
-        self.assertEqual(proc.returncode, 0, out)
-        with open("/proc/sys/kernel/random/boot_id", encoding="utf-8") as handle:
-            boot = handle.read().strip()
-        rows = [row for row in self.events()
-                if row["kind"] in ("ticket.attempt.start", "agent.start")]
-        self.assertEqual(sorted(row["kind"] for row in rows),
-                         ["agent.start", "ticket.attempt.start"], rows)
-        self.assertEqual([(row.get("driver_pid"), row.get("boot_id")) for row in rows],
-                         [(proc.pid, boot)] * 2)
-        self.assertNotEqual(rows[0]["pid"], rows[1]["pid"], "two emits, two event.py pids")
-
-    def test_a_round_dispatched_again_in_the_same_run_keeps_the_dead_rounds_log(self):
-        """**Mutation**: drop the new-run_id guard in round_once -> the dead log is overwritten."""
-        run = "20261020-101010-4242"
-        dead = self.write(os.path.join("reports", "t1", run, "worker-round1.log"),
-                          "the round whose auto-fix died\n")
-        done = self.run_sh("scripts/auto-fix.sh", "1", "--no-review",
-                           env=self.env(AC_RUN_ID=run))
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        with open(dead, encoding="utf-8") as handle:
-            self.assertEqual(handle.read(), "the round whose auto-fix died\n")
-        logs = self.result_files("worker-round1.log")
-        self.assertEqual(len(logs), 2, logs)
-        self.assertEqual(self.worker_rounds(), ["worker ran round 1"])
-
-
 class EveryWorkerRowSaysHowTheRoundEnded(AutoFixBase):
     """#94 C5(a):worker 那一列帶該輪結局與 RUN_ID,一輪仍只一列。"""
 

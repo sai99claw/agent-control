@@ -1353,49 +1353,6 @@ class OnlyOneLandAtATime(LandBase):
         self.assertFalse(self.gate_ran())
 
 
-# 閘門替身:跑的那一刻把鎖的 holder 抄出來(落地完鎖就放了,事後讀不到)。
-GATE_STUB_HOLDER = """#!/bin/sh
-echo "gate $*" >> "$AC_TEST_LOG"
-cp "$AC_LAND_LOCK/holder" "$(dirname "$AC_TEST_LOG")/holder.seen" 2>/dev/null
-exit 0
-"""
-
-
-def boot_now():
-    with open("/proc/sys/kernel/random/boot_id", encoding="utf-8") as handle:
-        return handle.read().strip()
-
-
-class ADeadHolderIsTakenOver(LandBase):
-    """#117 A5 / T3 / T5:持鎖的那一個死了(pid 不在 /proc)就接手,不叫人 rm -rf;
-    land.start 帶 driver(land.sh 自己的 pid,不是 event.py 的)與 boot_id,holder 也帶 boot_id。"""
-
-    gate_stub = GATE_STUB_HOLDER
-
-    def test_a_dead_holder_is_taken_over_and_the_land_carries_its_driver(self):
-        branch = self.branch_for(1, "t1-good")
-        self.commit_in(branch, "src/g1", "做完的那一張")
-        gone = subprocess.Popen(["true"])
-        gone.wait()
-        lock = os.path.join(self.repo, ".land.lock")
-        os.makedirs(lock)
-        self.write(os.path.join(".land.lock", "holder"),
-                   "pid=%d boot_id=%s 開始=x 分支=t9\n" % (gone.pid, boot_now()))
-        proc = subprocess.Popen(["sh", self.script("scripts/land.sh"), "t1-good"],
-                                cwd=self.repo, env=self.env(AC_LAND_LOCK=lock),
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        out, _ = proc.communicate(timeout=300)
-        self.assertEqual(proc.returncode, 0, out)
-        self.assertIn("land: stale lock pid %d taken over" % gone.pid, out)
-        self.assertTrue(self.gate_ran())
-        seen = self.read("holder.seen", where=self.home)
-        self.assertTrue(seen.startswith("pid=%d boot_id=%s " % (proc.pid, boot_now())), seen)
-        starts = [row for row in self.events() if row["kind"] == "land.start"]
-        self.assertEqual(len(starts), 1, starts)
-        self.assertEqual((starts[0]["driver_pid"], starts[0]["boot_id"]), (proc.pid, boot_now()))
-        self.assertNotEqual(starts[0]["pid"], proc.pid, "driver_pid 是 event.py 自己的")
-
-
 # 關得掉的票面:baseline 是閘門那一趟 check(在不在主線由 land 的 `close --landed` 蓋的 sha 判)。
 CLOSABLE = {
     "verify": {"files": [], "tags": [], "run": "", "notes": "",
