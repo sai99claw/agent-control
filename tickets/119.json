@@ -31,7 +31,7 @@
   "attempt": 0,
   "base_sha": "8d2cd914254d76e5620aeb3e90dcc1f1ddf6030f",
   "state": "Blocked",
-  "state_version": 108,
+  "state_version": 109,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -250,8 +250,8 @@
       "body": "tests/test_schedule.py::A10Reland::test_a10_blocked_ticket_blocks_the_reland duplicates the verifier case test_schedule_cases.py::test_no_reland_when_a_ticket_of_the_failed_call_is_blocked (same contract, same [A,G] fix+block input, same 1-land-call/rc 1 oracle; not in A10's acceptance, EVIDENCE names no independent contract) - junk case (3); remove the worker copy",
       "evidence": "reports/t119/20261026-072341-16482/REVIEW.md",
       "owner": "reviewer@opus",
-      "disposition": "",
-      "follow_up": ""
+      "disposition": "accepted",
+      "follow_up": "Main: dedupe round per the reviewer (keep one copy; the copy named in the objection goes); no other change."
     }
   ],
   "owner": "main",

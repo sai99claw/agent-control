@@ -26,7 +26,7 @@
   "attempt": 0,
   "base_sha": "9c5893a5d05e380aec0aff094694eff2515f09ab",
   "state": "Blocked",
-  "state_version": 26,
+  "state_version": 27,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -239,8 +239,8 @@
       "body": "verifier patch-verify duplicates the worker's A1-A4 cases in the same unit layer (tests/test_adapter_cases.py::AdapterParallelCases test_a1_*/test_a2_*/test_a4_* and tests/test_verify_runner.py::ParallelRegressionCases mirror Parallel/ProcessCount/ParallelRegression) - reviewer junk-case rule (3); keep one copy (verifier keeps only test_shared_state_red_is_not_hidden_under_parallel plus the test_plan's own arms)",
       "evidence": "reports/t169/20261026-080223-8311/REVIEW.md",
       "owner": "reviewer@opus",
-      "disposition": "",
-      "follow_up": ""
+      "disposition": "accepted",
+      "follow_up": "Main: dedupe round per the reviewer (keep one copy; the copy named in the objection goes); no other change."
     }
   ]
 }

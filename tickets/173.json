@@ -1,0 +1,41 @@
+{
+  "id": "173",
+  "subject": "tests read tests.unittest.map / base from board/config.json instead of a hand-copied GATE_MAP (one fact, one place; D-054 Q12)",
+  "created": "2026-10-26T06:47:42+00:00",
+  "objective": "Adding a test module or a map row means editing board/config.json only. tests/test_adapter_unittest.py stops carrying GATE_MAP / HARNESS_IDS / VERIFY_IDS / REPO_MAP_IDS / BASE_IDS (lines 26-91 at base 8d2cd91, a row-by-row copy of tests.unittest.map + base; its original purpose - cross-checking gate.sh map() - is gone since #162 deleted map()). It reads the rows from the config and asserts behaviour and structure only. Same fix for the other copies found by grep: tests/test_verify_runner.py test_map_is_the_only_copy pins len(rows) == 48 and test_base_is_the_four_base_ids pins the literal base list. Symptom: #160 land red three times and the #164 merge collided on this duplicated table.",
+  "acceptance": [
+    "A1 (tests/test_adapter_unittest.py, Select): for every row of board/config.json tests.unittest.map read at test time, the representative path (row.match with each '*' replaced by 'zzz') fed alone to 'adapter-unittest.py select --mode branch' prints exactly set(row.ids), no 'unmapped', no duplicate line; rows whose representative path matches tests/test_*.py (built-in arm) are skipped by name. The file no longer defines GATE_MAP, HARNESS_IDS, VERIFY_IDS, REPO_MAP_IDS or BASE_IDS (grep '^GATE_MAP\\|^BASE_IDS' -> 0).",
+    "A2 (same file): '--mode base' output equals the config's tests.unittest.base read at test time (replaces the BASE_IDS literal at line 240). The existing synthetic-config cases stay as they are and keep pinning behaviour: test_first_match_wins_and_empty_ids_is_not_unmapped, test_unknown_file_is_unmapped_and_test_files_are_built_in, test_several_files_are_deduped_in_order, #166 deleted-module case.",
+    "A3 structural checks on the real config (tests/test_verify_runner.py replaces the len(rows) == 48 and literal-base asserts): map has > 10 rows (precondition: the table was read); no duplicate match; every id in map and base names an existing tests/<id>.py; no row is shadowed by an earlier row (its representative path also fnmatches an earlier match -> red, naming both rows). gate.sh still carries no map() / BASE= copy (keep those two asserts).",
+    "A4 mutations, each red then reverted (worker, EVIDENCE table): m1 add a config row with ids ['test_zzz_missing'] -> A3 red; m2 move 'verify/*' above 'verify/TAGS.d/*' -> A3 shadow red; m3 adapter select lets a later matching row add its ids -> test_first_match_wins red; m4 adapter select ignores the map -> A1 red. Adding a new valid row to the config alone keeps all of these green (no test edit).",
+    "A5 full suite green: 'sh scripts/gate.sh --full' rc 0 (after #169 lands, on its base); timeout 590 python3 -m unittest tests.test_adapter_unittest tests.test_verify_runner tests.test_memory_lifecycle tests.test_retire_sync green in the foreground first."
+  ],
+  "depends_on": [
+    {
+      "id": "169",
+      "condition": ""
+    }
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "8d2cd914254d76e5620aeb3e90dcc1f1ddf6030f",
+  "state": "Draft",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "test_plan": "Unit layer only. Oracle = board/config.json read by the test with json.load (the fact under test is the adapter's reading of it, not the content); representative paths are derived mechanically ('*' -> 'zzz'; measured at 8d2cd91: 48 rows, 10 glob rows, none use '?' or '[', 0 rows shadowed, every id has tests/<id>.py). First-match-wins and empty-ids stay pinned by the existing synthetic config in a tempdir (AC_ROOT=tmp). Run: timeout 590 python3 -m unittest tests.test_adapter_unittest tests.test_verify_runner; then gate --full. No kill/os.kill/pkill lines in tests (hard_block). Container is uid 0 - nothing here depends on permissions.",
+  "outline": "D-054 Q12 one fact one place. Files: tests/test_adapter_unittest.py (docstring A1 line 5-6 says 'copied below as literal data' - rewrite; drop lines 26-91 literals; line 171 loop and 240 base), tests/test_verify_runner.py (test_map_is_the_only_copy len==48 + specific-row asserts for #162 rows - drop count, keep structure; test_base_is_the_four_base_ids literal). Grep of tests/ and verify/ for other copies: tests/test_memory_lifecycle.py:540 (A8 'memory.py row contains test_memory_lifecycle') and tests/test_retire_sync.py:67 (hard_block.paths == the two rulings) pin a single ruling, not a copy of the table - left as is, not in this ticket. verify/ has no config-map copy (grep '\"map\"' 0). Overlap: branch t169 (#169 Running) edits tests/test_adapter_unittest.py docstring/imports hunk @@ -8,14 (adjacent to lines 5-6 and 26) and appends to tests/test_verify_runner.py at 357 -> depends_on 169 landed, rebase on it. simple. needs_verifier false: test-only refactor, a verifier case would replay the same config-read contract the worker writes; mutations m1-m4 are the check.",
+  "complexity": "simple",
+  "needs_verifier": false,
+  "decision_refs": [
+    "D-054"
+  ]
+}
