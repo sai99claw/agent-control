@@ -32,18 +32,33 @@ the same to a reader that only counts reds (§5.5). A skip without a reason is a
 `skip without reason` for the same reason. `file` / `line` are the innermost traceback frame inside a
 test file under the roots (`tests.unittest.pattern`), relative to `AC_CODE_ROOT` — what verify-case
 classifies on (C7); a helper module's frame is never the answer.
+
+## `full` in parallel (#169, D-073 / D-074)
+`full` runs one shard per discovered module — `adapter-unittest.py run <module>` with its own
+`AC_TEST_OUT=<out>/shard-<k>/` (and `AC_TEST_SHARD=1`: cwd = code root, as `full` has it) — at most
+N at once, longest-known module first (`<reports_dir>/test-times.json`, `{module: seconds}`, written
+after every `full`; absent = discovery order), then `tests.unittest.serial` one at a time. The shards
+merge into one `result.json` (ids in shard order, `seconds` = wall, suspects concatenated, rc from
+the merged rows) and one `full.log` (each shard's log under a `==== shard` header). A shard that
+times out, exits other than 0/1/86, or leaves no valid `result.json` → rc 2, the module named on
+stdout, no merged `result.json`. N is decided here at run time (`process_count`), printed as one
+`parallel: ` line; `tests.parallel` only caps it, and N == 1 is the old single in-process run.
+`verify.py --result` shards its case files through the same `run_shards` / `merge_shards`.
 """
 
 import argparse
 import contextlib
 import fnmatch
 import json
+import math
 import os
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -58,6 +73,14 @@ STATUSES = ("pass", "fail", "error", "skip")
 SKIP_WITHOUT_REASON = "skip without reason"
 # Worse wins when one id reports twice (a subTest failure, then a tearDown error).
 RANK = {"pass": 0, "skip": 1, "fail": 2, "error": 3}
+# Peak RSS of one shard process tree, MiB — the divisor of free memory in `process_count` (D-074).
+# Measured #169 A5 (wait4 ru_maxrss per shard over one parallel `full` of this repo, 4 CPUs):
+# max PEAK_MEASURED_PLACEHOLDER; rounded up with MARGIN_PLACEHOLDER.
+PER_PROCESS_PEAK_MIB = 512
+DEFAULT_CGROUP_ROOT = "/sys/fs/cgroup"
+DEFAULT_MEMINFO = "/proc/meminfo"
+TIMES_FILE = "test-times.json"
+DEFAULT_TIMEOUTS = {"full": 3600, "regression": 2700}       # testiface's, when no caller's limit
 
 
 # ------------------------------------------------------------ the runner (moved from status.py)
@@ -427,7 +450,34 @@ def settings():
     return {"roots": list(unit.get("roots") or DEFAULT_ROOTS),
             "pattern": unit.get("pattern") or DEFAULT_PATTERN,
             "base": list(unit.get("base") or []),
-            "map": list(unit.get("map") or [])}
+            "map": list(unit.get("map") or []),
+            "serial": list(unit.get("serial") or [])}
+
+
+def parallel_cap():
+    """`tests.parallel`: `(cap or None, error or "")`. Absent = no cap; anything but an int >= 1
+    is refused — a cap that does not parse must not quietly become "no cap"."""
+    tests = event.config(event.repo_root()).get("tests") or {}
+    if not isinstance(tests, dict) or "parallel" not in tests or tests["parallel"] is None:
+        return None, ""
+    value = tests["parallel"]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None, "tests.parallel must be an integer >= 1, got %r" % (value,)
+    return value, ""
+
+
+def run_timeout(command):
+    """The whole run's limit in seconds: the caller's `AC_TEST_TIMEOUT` (testiface always sets it),
+    else `tests.timeout_seconds.<command>`, else testiface's default. A shard gets what is left."""
+    value = (os.environ.get("AC_TEST_TIMEOUT") or "").strip()
+    if value.isdigit() and int(value) > 0:
+        return int(value)
+    tests = event.config(event.repo_root()).get("tests") or {}
+    table = tests.get("timeout_seconds") if isinstance(tests, dict) else None
+    value = table.get(command) if isinstance(table, dict) else None
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return DEFAULT_TIMEOUTS[command]
 
 
 def threshold():
@@ -438,6 +488,258 @@ def threshold():
 def fail(rc, text):
     sys.stderr.write("adapter-unittest: %s\n" % text)
     return rc
+
+
+# ------------------------------------------------------------ parallel: how many, in what order
+
+
+def read_text(path):
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return None
+
+
+def cgroup_cores(cgroup):
+    """`floor(quota / period)` of a numeric `cpu.max`, never above `os.cpu_count()`; else that."""
+    cpus = os.cpu_count() or 1
+    parts = (read_text(os.path.join(cgroup, "cpu.max")) or "").split()
+    if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit() and int(parts[1]) > 0:
+        return min(int(parts[0]) // int(parts[1]), cpus)
+    return cpus
+
+
+def available_bytes(cgroup, meminfo):
+    """`memory.max - memory.current` when both are numbers, else `MemAvailable`; None = neither."""
+    limit = read_text(os.path.join(cgroup, "memory.max")) or ""
+    used = read_text(os.path.join(cgroup, "memory.current")) or ""
+    if limit.isdigit() and used.isdigit():
+        return max(0, int(limit) - int(used))
+    for line in (read_text(meminfo) or "").splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and fields[0] == "MemAvailable:" and fields[1].isdigit():
+            return int(fields[1]) * 1024
+    return None
+
+
+def process_count(cap):
+    """`(N, the 'parallel: ' line)` (D-074 item 2). One core is left for the system; memory gives
+    `floor(free / PER_PROCESS_PEAK_MIB)`; either below 1 → 1. `cap` (`tests.parallel`) only lowers N.
+    Memory that cannot be read at all is said and taken as 1 — not as "plenty"."""
+    cgroup = os.environ.get("AC_CGROUP_ROOT") or DEFAULT_CGROUP_ROOT
+    meminfo = os.environ.get("AC_MEMINFO") or DEFAULT_MEMINFO
+    cores = cgroup_cores(cgroup)
+    free = available_bytes(cgroup, meminfo)
+    count = max(1, cores - 1)
+    notes = []
+    if free is None:
+        count = 1
+        notes.append("available memory unknown, fallback 1")
+    elif free // (PER_PROCESS_PEAK_MIB * 1048576) < 1:
+        count = 1
+        notes.append("memory short, fallback 1")
+    else:
+        count = min(count, free // (PER_PROCESS_PEAK_MIB * 1048576))
+    if cap is not None and cap < count:
+        count = cap
+        notes.append("capped by tests.parallel=%d" % cap)
+    memory = "unknown" if free is None else "%d MiB" % (free // 1048576)
+    line = "parallel: %d processes (cores %d, available memory %s, per-process %d MiB)%s" % (
+        count, cores, memory, PER_PROCESS_PEAK_MIB, "".join("; " + note for note in notes))
+    return count, line
+
+
+def discover_modules(dirs, pattern):
+    """The module ids `full`'s discover finds, in its order, without importing one: `pattern`
+    files (valid module names) in sorted order, descending only into packages (`__init__.py`)."""
+    out = []
+
+    def visit(path, prefix):
+        for name in sorted(os.listdir(path)):
+            where = os.path.join(path, name)
+            if os.path.isfile(where):
+                stem = name[:-3]
+                if name.endswith(".py") and stem.isidentifier() \
+                        and fnmatch.fnmatch(name, pattern):
+                    out.append(prefix + stem)
+            elif os.path.isfile(os.path.join(where, "__init__.py")) and name.isidentifier():
+                visit(where, prefix + name + ".")
+
+    for where in dirs:
+        if os.path.isdir(where):
+            visit(where, "")
+    return out
+
+
+def times_path():
+    return os.path.join(status.reports_dir(event.repo_root()), TIMES_FILE)
+
+
+def read_times():
+    try:
+        with open(times_path(), encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return {key: value for key, value in data.items() if isinstance(value, (int, float))} \
+        if isinstance(data, dict) else {}
+
+
+def write_times(seconds):
+    """Merge `{module: seconds}` into `<reports_dir>/test-times.json` (other modules' rows kept)."""
+    if not seconds:
+        return
+    data = read_times()
+    data.update({key: round(value, 3) for key, value in seconds.items()})
+    try:
+        write_result(times_path(), dict(sorted(data.items())))
+    except OSError as error:
+        print("adapter-unittest: %s not written (%s) - next run keeps the old order"
+              % (TIMES_FILE, error))
+
+
+def schedule(modules, serial):
+    """Parallel modules longest-known first (unknown ones first, in discovery order — they may be
+    the long ones), then the serial ones in discovery order."""
+    times = read_times()
+    first = [m for m in modules if m not in serial]
+    first.sort(key=lambda m: -times.get(m, math.inf))
+    return first + [m for m in modules if m in serial]
+
+
+# ------------------------------------------------------------ parallel: run and merge shards
+
+
+def wait_child(child, seconds):
+    """`(rc or None on timeout, peak RSS MiB of the shard's process tree or None)`.
+
+    `os.wait4`, not `child.wait()`: each shard's own `ru_maxrss` comes back with it
+    (`RUSAGE_CHILDREN` would be one number, the max over every shard)."""
+    expired = threading.Event()
+
+    def stop():
+        expired.set()
+        child.kill()
+
+    timer = threading.Timer(max(0.0, seconds), stop)
+    timer.start()
+    peak = None
+    try:
+        _, word, usage = os.wait4(child.pid, 0)
+        child.returncode = os.waitstatus_to_exitcode(word)
+        peak = round(usage.ru_maxrss / 1024, 1)                  # Linux: kB
+    except ChildProcessError:
+        # `kill()` polls first and may reap the child itself; its returncode is then set.
+        pass
+    finally:
+        timer.cancel()
+    if expired.is_set() and child.returncode is not None and child.returncode < 0:
+        return None, peak
+    return child.returncode, peak
+
+
+def run_shard(job, deadline):
+    """Run one shard to completion; fills `rc` / `seconds` / `peak` / `start` / `end` in `job`."""
+    os.makedirs(job["out"], exist_ok=True)
+    job["start"] = time.monotonic()
+    with open(os.path.join(job["out"], "console.txt"), "wb") as console:
+        child = subprocess.Popen(job["argv"], cwd=job["cwd"], env=job["env"],
+                                 stdin=subprocess.DEVNULL, stdout=console,
+                                 stderr=subprocess.STDOUT)
+        job["rc"], job["peak"] = wait_child(child, deadline - time.monotonic())
+    job["end"] = time.monotonic()
+    job["seconds"] = round(job["end"] - job["start"], 3)
+    return job
+
+
+def run_shards(jobs, count, serial, timeout):
+    """`jobs` (dicts with module / argv / cwd / env / out) in their order: the non-serial ones at
+    most `count` at once, then the `serial` modules one at a time. A shard gets what is left of
+    `timeout`; the run stops nobody early — every shard's outcome is reported."""
+    deadline = time.monotonic() + timeout
+    first = [job for job in jobs if job["module"] not in serial]
+    with ThreadPoolExecutor(max_workers=max(1, count)) as pool:
+        list(pool.map(lambda job: run_shard(job, deadline), first))
+    for job in jobs:
+        if job["module"] in serial:
+            run_shard(job, deadline)
+    write_times({job["module"]: job["seconds"] for job in jobs})
+    return jobs
+
+
+def shard_result(job):
+    """`(doc, "")` for a shard whose `result.json` is valid and agrees with its exit code,
+    else `(None, why)`."""
+    if job["rc"] is None:
+        return None, "timeout after %ds (the run's limit: AC_TEST_TIMEOUT / tests.timeout_seconds)" \
+            % job["timeout"]
+    path = os.path.join(job["out"], "result.json")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            doc = json.load(handle)
+    except OSError:
+        return None, "no result.json (exit %d)" % job["rc"]
+    except ValueError:
+        return None, "result.json is not valid JSON (exit %d)" % job["rc"]
+    if not isinstance(doc, dict) or doc.get("schema") != SCHEMA \
+            or not isinstance(doc.get("ids"), list) \
+            or not all(isinstance(row, dict) and row.get("status") in STATUSES
+                       for row in doc["ids"]) \
+            or not isinstance(doc.get("environment_suspect"), list):
+        return None, "result.json is not schema %d (exit %d)" % (SCHEMA, job["rc"])
+    expected = exit_code(doc["ids"], doc["environment_suspect"])
+    if job["rc"] != expected:
+        return None, "exit %d but its result.json says %d" % (job["rc"], expected)
+    return doc, ""
+
+
+def merge_shards(jobs, log_path):
+    """`(rows, suspects, problems)` over every shard in `jobs` order; writes the merged log.
+
+    Each shard's log follows one `==== shard k/K <module>: …` header. A shard with a problem also
+    gets its console output (the shard's own stdout/stderr) in the log."""
+    rows, suspects, problems = [], [], []
+    with open(log_path, "w", encoding="utf-8") as log:
+        for index, job in enumerate(jobs, 1):
+            doc, why = shard_result(job)
+            log.write("==== shard %d/%d %s: %s, %.2f s, peak %s MiB ====\n" % (
+                index, len(jobs), job["module"],
+                "timeout" if job["rc"] is None else "rc %d" % job["rc"], job["seconds"],
+                "?" if job["peak"] is None else "%g" % job["peak"]))
+            text = read_text(os.path.join(job["out"], job["log"]))
+            if text:
+                log.write(text + "\n")
+            if why:
+                problems.append("shard %s (%s): %s" % (job["module"],
+                                                       os.path.basename(job["out"]), why))
+                console = read_text(os.path.join(job["out"], "console.txt"))
+                if console:
+                    log.write(console + "\n")
+                continue
+            rows.extend(doc["ids"])
+            suspects.extend(doc["environment_suspect"])
+    return rows, suspects, problems
+
+
+def shard_jobs(modules, out_dir, argv_of, cwd, log_name, timeout):
+    return [{"module": module, "argv": argv_of(module, os.path.join(out_dir, "shard-%d" % index)),
+             "cwd": cwd, "env": dict(os.environ, AC_TEST_OUT=os.path.join(out_dir,
+                                                                          "shard-%d" % index)),
+             "out": os.path.join(out_dir, "shard-%d" % index), "log": log_name,
+             "timeout": timeout}
+            for index, module in enumerate(modules, 1)]
+
+
+def module_seconds(rows, modules):
+    """`{module: summed row seconds}` for the in-process run (no shard wall to read)."""
+    out = {}
+    for row in rows:
+        owner = max((m for m in modules if row["id"] == m or row["id"].startswith(m + ".")),
+                    key=len, default=None)
+        if owner is not None:
+            out[owner] = out.get(owner, 0) + (row.get("seconds") or 0)
+    return out
 
 
 # ------------------------------------------------------------ commands
@@ -522,7 +824,27 @@ def cmd_run(args):
         return fail(2, "run: no test root exists (%s)" % ", ".join(conf["roots"]))
     loader = unittest.defaultTestLoader
     aliases, wanted = None, ()
-    if args.command == "run":
+    modules = []
+    if args.command == "full":
+        cap, why = parallel_cap()
+        if why:
+            return fail(2, why)
+        modules = discover_modules(dirs, conf["pattern"])
+        for name in conf["serial"]:
+            if name not in modules:
+                print("adapter-unittest: warning: tests.unittest.serial names %s, which was not "
+                      "discovered - ignored" % name)
+        count, line = process_count(cap)
+        print(line, flush=True)
+        if min(count, len(modules)) > 1:
+            return full_parallel(root, modules, conf["serial"], count, out_dir)
+    if args.command == "run" and args.shard:
+        # One shard of a parallel `full`: cwd as `full` has it, and a module that holds zero
+        # tests has no row (discover gives it none either) rather than a "did not run" error.
+        os.chdir(root)
+        suite, aliases, wanted = load_names(loader, args.ids)
+        wanted = ()
+    elif args.command == "run":
         # cwd as `run-tests --mode names` always had it: the (first existing) test root.
         os.chdir(next(where for where in dirs if os.path.isdir(where)))
         suite, aliases, wanted = load_names(loader, args.ids)
@@ -538,10 +860,37 @@ def cmd_run(args):
     log_path = os.path.join(os.path.abspath(out_dir), log_name)
     _, rows, suspects = run_suite(suite, log_path, threshold(), root, dirs, conf["pattern"],
                                   aliases, wanted)
-    if not rows:
+    if not rows and not (args.command == "run" and args.shard):
         return fail(2, "%s: no test ran" % args.command)
     doc = result_doc(args.command, started, round(time.monotonic() - clock, 3), rows,
                      suspects, log_name)
+    write_result(os.path.join(out_dir, "result.json"), doc)
+    if args.command == "full":
+        write_times(module_seconds(rows, modules))
+    return exit_code(rows, doc["environment_suspect"])
+
+
+def full_parallel(root, modules, serial, count, out_dir):
+    """`full` as shards (`run --shard <module>`), merged into `full.log` + `result.json`."""
+    order = schedule(modules, serial)
+    timeout = run_timeout("full")
+    here = os.path.abspath(__file__)
+    jobs = shard_jobs(order, os.path.abspath(out_dir),
+                      lambda module, _out: [sys.executable, here, "run", "--shard", module],
+                      root, "run.log", timeout)
+    started, clock = now(), time.monotonic()
+    run_shards(jobs, count, serial, timeout)
+    rows, suspects, problems = merge_shards(jobs, os.path.join(out_dir, "full.log"))
+    if problems:
+        for problem in problems:
+            print("adapter-unittest: %s" % problem)
+        print("adapter-unittest: full: %d shard(s) could not be read - no result.json "
+              "(see full.log)" % len(problems))
+        return 2
+    if not rows:
+        return fail(2, "full: no test ran")
+    doc = result_doc("full", started, round(time.monotonic() - clock, 3), rows, suspects,
+                     "full.log")
     write_result(os.path.join(out_dir, "result.json"), doc)
     return exit_code(rows, doc["environment_suspect"])
 
@@ -554,9 +903,11 @@ def main(argv):
     select.set_defaults(run=cmd_select)
     run = subs.add_parser("run")
     run.add_argument("ids", nargs="*")
+    # Internal: one shard of a parallel `full` (a flag, not an env var — tests inherit env).
+    run.add_argument("--shard", action="store_true", help=argparse.SUPPRESS)
     run.set_defaults(run=cmd_run)
     full = subs.add_parser("full")
-    full.set_defaults(run=cmd_run)
+    full.set_defaults(run=cmd_run, shard=False)
     args = parser.parse_args(argv)
     if not getattr(args, "run", None):
         parser.print_help(sys.stderr)

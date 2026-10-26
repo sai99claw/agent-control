@@ -692,6 +692,7 @@ regression() {   # $1 = ticket|full;設定 VRC
     if [ -f "$TI_OUT/regression.log" ]; then cp "$TI_OUT/regression.log" "$VERIFY_LOG"; else : > "$VERIFY_LOG"; fi
     if [ -s "$TI_ERR" ]; then cat "$TI_ERR" >> "$VERIFY_LOG"; cat "$TI_ERR"; fi
     case "$VRC" in 0|1|86) REG_RESULT_ARGS="--result $TI_OUT/result.json" ;; esac
+    [ "$1" != full ] || grep -a "^parallel: " "$VERIFY_LOG" || true
     grep -aE "^Ran |^OK|^FAILED|^verify: " "$VERIFY_LOG" \
         || echo "gate: 回歸的 log 裡連 Ran 都沒有,看 $VERIFY_LOG"
     VERIFY_LOG_ARGS="--log $VERIFY_LOG"
@@ -1030,6 +1031,9 @@ if [ "$want_full" -eq 1 ]; then
     # (`false | tail` 是 0),而那會讓「根本沒跑起來」靜靜判成綠。
     run_tests full full
     rc=$?
+    # `parallel: ` = how many shards the adapter decided on at run time (#169, D-074); its own
+    # grep, so the line never stands in for a missing `Ran`.
+    grep -a "^parallel: " "$LOG" || true
     grep -aE "^Ran |^OK|^FAILED" "$LOG" || echo "gate: log 裡連 Ran 都沒有,看 $LOG"
     # 先環境 fail-fast、再 flake 判定(見檔頭)。
     if [ "$rc" -eq 86 ]; then

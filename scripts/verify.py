@@ -138,13 +138,26 @@ def load_adapter():
     return module
 
 
-def run_with_result(mods, result_path):
-    """在這個程序裡經 adapter 跑 `mods`,寫 `result_path`;回 (rc, 給 stdout 的原文)。"""
+def run_with_result(mods, result_path, shard=False):
+    """經 adapter 跑 `mods`,寫 `result_path`;回 (rc, 給 stdout 的原文)。
+
+    原文第一行是 adapter 的 `parallel: ` 那一行(#169;快取存的也是這一份,命中照樣印一次)。
+    N > 1 而且不只一個案例檔 → 一個案例檔一個 shard(`--case <檔> --shard`),合併成一份;
+    否則照舊在這個程序裡跑。`shard` = 自己就是那一個 shard:不判 N、不印那一行。"""
     import time, unittest
     adapter = load_adapter()
     out_dir = os.path.dirname(os.path.abspath(result_path))
     os.makedirs(out_dir, exist_ok=True)
     log_path = os.path.join(out_dir, "verify.log")
+    line = ""
+    if not shard:
+        cap, why = adapter.parallel_cap()
+        if why:
+            return 2, "verify: %s\n" % why
+        count, line = adapter.process_count(cap)
+        line += "\n"
+        if min(count, len(mods)) > 1:
+            return run_sharded(adapter, mods, result_path, count, line)
     # 程式碼根排第一:這支檔案所在的 `scripts/` 也在 sys.path 上,而 `scripts/verify.py` 這個
     # 模組會蓋過 `verify/` 這個 package,`verify.example.test_example` 就載不起來。
     sys.path.insert(0, ROOT)
@@ -156,8 +169,42 @@ def run_with_result(mods, result_path):
     doc = adapter.result_doc("regression", started, round(time.monotonic() - clock, 3), rows,
                              suspects, os.path.relpath(log_path, out_dir))
     adapter.write_result(result_path, doc)
+    if not shard:
+        adapter.write_times(adapter.module_seconds(rows, mods))
     with open(log_path, encoding="utf-8", errors="replace") as handle:
         blob = handle.read()
+    rc = adapter.exit_code(rows, doc["environment_suspect"]) if rows else 2
+    return rc, line + blob
+
+
+def run_sharded(adapter, mods, result_path, count, line):
+    """`mods` 一個案例檔一個 shard(同一支 verify.py `--case … --result <shard>/result.json
+    --no-cache --shard`),最多 `count` 個同時,合併成 `verify.log` 與一份 result(#169)。"""
+    import time
+    out_dir = os.path.dirname(os.path.abspath(result_path))
+    here = os.path.abspath(__file__)
+    order = adapter.schedule(mods, [])
+    timeout = adapter.run_timeout("regression")
+
+    def argv(module, shard_out):
+        return [sys.executable, here, "--case", module.replace(".", os.sep) + ".py",
+                "--result", os.path.join(shard_out, "result.json"), "--no-cache", "--shard"]
+
+    jobs = adapter.shard_jobs(order, out_dir, argv, ROOT, "verify.log", timeout)
+    started, clock = adapter.now(), time.monotonic()
+    adapter.run_shards(jobs, count, [], timeout)
+    log_path = os.path.join(out_dir, "verify.log")
+    rows, suspects, problems = adapter.merge_shards(jobs, log_path)
+    with open(log_path, encoding="utf-8", errors="replace") as handle:
+        blob = line + handle.read()
+    if problems:
+        blob += "".join("verify: %s\n" % p for p in problems)
+        blob += "verify: %d 個 shard 讀不到 result.json —— 沒有合併的 result(看 verify.log)\n" \
+            % len(problems)
+        return 2, blob
+    doc = adapter.result_doc("regression", started, round(time.monotonic() - clock, 3), rows,
+                             suspects, "verify.log")
+    adapter.write_result(result_path, doc)
     rc = adapter.exit_code(rows, doc["environment_suspect"]) if rows else 2
     return rc, blob
 
@@ -171,6 +218,8 @@ def main(argv):
     ap.add_argument("--no-cache", action="store_true")
     ap.add_argument("--case", action="append", default=[])
     ap.add_argument("--result", default="")
+    # 內部用:平行 `--result` 的一個 shard(旗標不是環境變數 —— 案例會繼承環境)。
+    ap.add_argument("--shard", action="store_true", help=argparse.SUPPRESS)
     a = ap.parse_args(argv)
     if not ROOT:
         print("verify: " + NO_CODE_ROOT, file=sys.stderr)
@@ -239,9 +288,10 @@ def main(argv):
         print(f"verify: 沒有案例符合 {a.tag or '全部'}(登記標籤 {sorted(known)})"); return 3
     mods = [os.path.relpath(c, ROOT)[:-3].replace(os.sep, ".") for c, _ in picked]
     if a.result:
-        rc, blob = run_with_result(mods, a.result)
+        rc, blob = run_with_result(mods, a.result, shard=a.shard)
         sys.stdout.write(blob)
-        if cache:
+        # 量不到(rc 2:shard 逾時、沒有 result)不進快取:同一輪再問一次要真的再跑。
+        if cache and rc in (0, 1, 86):
             try:
                 os.makedirs(os.path.dirname(cache), exist_ok=True)
                 with open(cache, "w", encoding="utf-8") as handle:
