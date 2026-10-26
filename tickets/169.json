@@ -25,8 +25,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "9c5893a5d05e380aec0aff094694eff2515f09ab",
-  "state": "Blocked",
-  "state_version": 27,
+  "state": "InReview",
+  "state_version": 32,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -41,7 +41,7 @@
       "stage": "check",
       "ok": false,
       "why": "乾淨主線上有 4 條紅在缺符號(AttributeError/NameError/FileNotFoundError/TypeError 那一族)—— 改成先 assert 它存在",
-      "at": "2026-10-26T08:07:18+00:00",
+      "at": "2026-10-26T08:19:40+00:00",
       "files": [
         "tests/test_adapter_cases.py",
         "tests/test_verify_runner.py"
@@ -49,51 +49,13 @@
       "base_ref": "9c5893a5d05e380aec0aff094694eff2515f09ab",
       "base_sha": "9c5893a5d05e380aec0aff094694eff2515f09ab",
       "candidate": "../agent-control-wt/t169",
-      "candidate_sha": "e6e927591ff00372b7b2d860e85ef0bb35ce465c",
+      "candidate_sha": "349d241a5e27f0523663c6c2d45540b8edb3f6fc",
       "baseline": {
         "red": [
-          "tests.test_adapter_cases.AdapterParallelCases.test_a1_parallel_one_is_todays_single_run",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a1_parallel_three_shards_merge_and_order",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a1_serial_module_runs_after_the_parallel_phase",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a1_serial_name_not_discovered_is_a_warning",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a2_bad_parallel_value_is_rc_2",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a2_declared_environment_suspect_is_rc_86",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a2_project_config_knows_both_keys",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a2_shard_without_result_json_is_rc_2",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a2_syntax_error_module_is_an_error_row",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a2_worst_rc_wins_a_failing_module_not_first",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a4_a_quota_four_cores_leaves_one",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a4_b_no_quota_no_limit_uses_cpu_count_and_memavailable",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a4_c_memory_short_falls_back_to_one",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a4_d_empty_cgroup_dir_falls_back",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a4_e_tests_parallel_caps_but_never_raises",
-          "tests.test_adapter_cases.AdapterParallelCases.test_shared_state_red_is_not_hidden_under_parallel",
-          "tests.test_verify_runner.ParallelRegressionCases.test_case_and_tag_selection_unchanged",
-          "tests.test_verify_runner.ParallelRegressionCases.test_failing_case_file_is_rc_1_with_its_row",
-          "tests.test_verify_runner.ParallelRegressionCases.test_parallel_two_same_ids_as_one",
-          "tests.test_verify_runner.ParallelRegressionCases.test_same_round_cache_stores_the_merged_result"
+          "tests.test_adapter_cases.AdapterParallelCases.test_shared_state_red_is_not_hidden_under_parallel"
         ],
         "red_lines": [
-          "tests.test_adapter_cases.AdapterParallelCases.test_a1_parallel_one_is_todays_single_run: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a1_parallel_three_shards_merge_and_order: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a1_serial_module_runs_after_the_parallel_phase: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a1_serial_name_not_discovered_is_a_warning: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a2_bad_parallel_value_is_rc_2: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a2_declared_environment_suspect_is_rc_86: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a2_project_config_knows_both_keys: AssertionError: None != 'int' : schema table lacks tests.parallel",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a2_shard_without_result_json_is_rc_2: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a2_syntax_error_module_is_an_error_row: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a2_worst_rc_wins_a_failing_module_not_first: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a4_a_quota_four_cores_leaves_one: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a4_b_no_quota_no_limit_uses_cpu_count_and_memavailable: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a4_c_memory_short_falls_back_to_one: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a4_d_empty_cgroup_dir_falls_back: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
-          "tests.test_adapter_cases.AdapterParallelCases.test_a4_e_tests_parallel_caps_but_never_raises: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
-          "tests.test_adapter_cases.AdapterParallelCases.test_shared_state_red_is_not_hidden_under_parallel: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
-          "tests.test_verify_runner.ParallelRegressionCases.test_case_and_tag_selection_unchanged: AssertionError: 0 != 1 : test_x (verify.par.test_p2.T.test_x) ... ok",
-          "tests.test_verify_runner.ParallelRegressionCases.test_failing_case_file_is_rc_1_with_its_row: AssertionError: 0 != 1 : test_x (verify.par.test_p1.T.test_x) ... ok",
-          "tests.test_verify_runner.ParallelRegressionCases.test_parallel_two_same_ids_as_one: AssertionError: 0 != 1 : test_x (verify.par.test_p1.T.test_x) ... ok",
-          "tests.test_verify_runner.ParallelRegressionCases.test_same_round_cache_stores_the_merged_result: AssertionError: 0 != 1 : test_x (verify.par.test_p1.T.test_x) ... ok"
+          "tests.test_adapter_cases.AdapterParallelCases.test_shared_state_red_is_not_hidden_under_parallel: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB"
         ],
         "import_failures": [],
         "missing_symbol": [
@@ -105,7 +67,7 @@
         "elsewhere": [],
         "skipped": 0,
         "rc": 1,
-        "cases": 48,
+        "cases": 29,
         "log": "../agent-control-wt/t169/gate.log.verify-case.d/logs/baseline.log"
       },
       "candidate_run": {
@@ -116,7 +78,7 @@
         "elsewhere": [],
         "skipped": 0,
         "rc": 0,
-        "cases": 48,
+        "cases": 29,
         "log": "../agent-control-wt/t169/gate.log.verify-case.d/logs/candidate.log"
       }
     }
@@ -218,6 +180,23 @@
       "note": null,
       "effort": null,
       "at": "2026-10-26T08:09:44+00:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 22,
+      "tokens_out": 9732,
+      "cache_write": 69726,
+      "cache_read": 772535,
+      "wall_seconds": 104,
+      "outcome": "pass",
+      "run_id": "20261026-081511-7749",
+      "session_id": "5260a3b6-6423-5527-bed8-9d3211ae718f",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-26T08:21:26+00:00"
     }
   ],
   "owner": "main",
@@ -228,9 +207,9 @@
   "branch": "t169",
   "gate": {
     "rc": 0,
-    "sha": "e6e927591ff00372b7b2d860e85ef0bb35ce465c",
-    "run_id": "20261026-080223-8311",
-    "at": "2026-10-26T08:07:18+00:00"
+    "sha": "349d241a5e27f0523663c6c2d45540b8edb3f6fc",
+    "run_id": "20261026-081511-7749",
+    "at": "2026-10-26T08:19:40+00:00"
   },
   "repair_round": 1,
   "objections": [
@@ -242,5 +221,12 @@
       "disposition": "accepted",
       "follow_up": "Main: dedupe round per the reviewer (keep one copy; the copy named in the objection goes); no other change."
     }
-  ]
+  ],
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "349d241a5e27f0523663c6c2d45540b8edb3f6fc",
+    "note": "reports/t169/20261026-081511-7749/REVIEW.md",
+    "at": "2026-10-26T08:21:25+00:00"
+  }
 }
