@@ -1328,6 +1328,30 @@ class EveryRoundCostsARowAndClosesItsAttempt(AutoFixBase):
         rows = self.load_ticket("1").get("cost") or []
         self.assertEqual(len(rows), 1, rows)
 
+    def test_124_a7_a_timed_out_stream_costs_the_tokens_it_printed(self):
+        """#124 A7:逾時被砍、沒有 result 列的 stream-json log → 那一列 outcome=timeout,
+        tokens_in 是印出來的兩則訊息加總(2 + 3),呼叫端不改。"""
+        rows = "\n".join(
+            "echo '%s'" % json.dumps({"type": "assistant", "session_id": "s-124",
+                                      "timestamp": "2026-10-26T10:00:0%dZ" % n,
+                                      "message": {"id": "m-%d" % n, "usage": {
+                                          "input_tokens": tin, "output_tokens": 16,
+                                          "cache_creation_input_tokens": 100,
+                                          "cache_read_input_tokens": 1000}}})
+            for n, tin in ((1, 2), (2, 3)))
+        self.set_worker("#!/bin/sh\n%s\nexec sleep 60\n" % rows)
+        conf = json.loads(self.read("board/config.json"))
+        conf["worker"]["timeout_seconds"] = 1
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        self.ticket_ready()
+        done = self.auto_fix("--no-review")
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        cost = self.load_ticket("1").get("cost") or []
+        self.assertEqual(len(cost), 1, cost)
+        self.assertEqual((cost[0]["outcome"], cost[0]["tokens_in"], cost[0]["tokens_out"],
+                          cost[0]["session_id"]), ("timeout", 5, None, "s-124"))
+        self.assertTrue(cost[0]["note"].startswith("transcript:"), cost[0]["note"])
+
     def test_a_round_whose_gate_ran_is_done_with_the_same_attempt(self):
         """A7。**變異**:拿掉 `ev ticket.attempt.done` 那一行 → 這一條紅。"""
         self.worker_with("not an envelope")

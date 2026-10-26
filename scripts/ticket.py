@@ -24,6 +24,7 @@
 
 import errno
 import fnmatch
+import importlib.util
 import json
 import os
 import re
@@ -378,9 +379,12 @@ def known_flags(verb):
                 ("--round", "第幾輪", False, False),
                 ("--model", "模型;land 不給(null)", False, False),
                 ("--by", "哪一支腳本寫的", False, False),
-                ("--from-envelope", "claude -p --output-format json 的信封檔(或混著它的 log)",
+                ("--from-envelope", "claude -p --output-format json 的信封檔(或混著它的 log);"
+                 "沒有帶 usage 的 result 信封而 log 是 stream-json transcript(逾時被砍)→ "
+                 "token 改由 scripts/transcript-cost.py 取,note 以 `transcript:` 開頭",
                  False, False),
-                ("--wall-seconds", "量到的秒數;沒給才取信封 duration_ms/1000", False, False),
+                ("--wall-seconds", "量到的秒數;沒給才取信封 duration_ms/1000"
+                 "(transcript 取數時取它的時間戳跨度)", False, False),
                 ("--outcome", "這一次的結局;只收登記表的字(tickets/SCHEMA.md 成本那一列)",
                  False, False),
                 ("--run-id", "這一次的 run_id(land 是那一次的戳記)", False, False),
@@ -1405,6 +1409,27 @@ def envelope_tokens(envelope):
             for field, key in COST_USAGE}
 
 
+def transcript_cost(path):
+    """信封讀不到時的第二條路(#124):同一份 log 是 stream-json transcript(有帶
+    message.usage 的 assistant 列)就交給 `scripts/transcript-cost.py` 的 read_rows +
+    summarize —— SubagentStop / SessionEnd hook 用的那一支,這裡不另寫去重與加總。
+    不是 transcript(codex 純文字、agy 事件流、空檔、讀不到)回 `(None, None)`。"""
+    spec = importlib.util.spec_from_file_location(
+        "transcript_cost", os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                        "transcript-cost.py"))
+    parser = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(parser)
+    try:
+        rows = parser.read_rows(path)
+    except (OSError, ValueError):
+        return None, None
+    if not parser.messages(rows):
+        return None, None
+    sessions = {row.get("session_id") for row in rows if "session_id" in row}
+    session = sessions.pop() if len(sessions) == 1 else None
+    return parser.summarize(rows), session
+
+
 def outcome_table():
     return "\n".join("  %s:%s" % (who, " / ".join(words)) for who, words in COST_OUTCOMES)
 
@@ -1448,27 +1473,42 @@ def cmd_cost(argv):
     if got.get("--from-envelope"):
         envelope, why = read_envelope(got["--from-envelope"])
     tokens = envelope_tokens(envelope) if envelope else {}
+    # 信封優先;信封讀不到(含 result 列沒有 usage)才看同一份 log 是不是 transcript。
+    summary, transcript_session = transcript_cost(got["--from-envelope"]) \
+        if envelope is None and got.get("--from-envelope") else (None, None)
+    if summary:
+        tokens = summary
     for field, _ in COST_USAGE:
         row[field] = tokens.get(field)
     if wall is None and envelope and isinstance(envelope.get("duration_ms"), (int, float)):
         wall = int(round(envelope["duration_ms"] / 1000.0))
+    if wall is None and summary:
+        wall = summary.get("wall_seconds")
     # token 欄是 null 的那一列,原因寫在 `note`(#58):「沒量」與「量了但信封不見」
     # 都是 null,只看數字分不出來。
     agy = bool(envelope and isinstance(envelope.get("conversation_id"), str))
     session = (envelope.get("conversation_id") if agy else envelope.get("session_id")) \
-        if envelope else None
+        if envelope else transcript_session
     note = got.get("--note")
     if agy:
         note = ";".join(part for part in (note, "agy 信封不提供 cache_write") if part)
+    # transcript 取數的那一列 `note` 以 `transcript:` 開頭:信封為什麼讀不到,
+    # 與 tokens_out 為什麼是 null(transcript-cost 的 STREAM_NOTE)都寫在裡面。
+    if summary:
+        note = "transcript: " + ";".join(part for part in (why, summary.get("note"), note)
+                                         if part)
     row.update({"wall_seconds": wall, "outcome": outcome,
                 "run_id": got.get("--run-id") or None,
                 "session_id": session if isinstance(session, str) and session else None,
                 "by": got.get("--by") or None,
-                "note": ";".join(part for part in (note, None if envelope else why)
+                "note": ";".join(part for part in (note, None if envelope or summary else why)
                                  if part) or None,
                 "effort": got.get("--effort") or None,
                 "at": now()})
-    if envelope is None:
+    if summary:
+        sys.stderr.write("ticket: #%s cost 的信封讀不到(%s)—— token 從 stream-json "
+                         "transcript 讀(scripts/transcript-cost.py)\n" % (ident, why))
+    elif envelope is None:
         sys.stderr.write("ticket: #%s cost 的信封讀不到(%s)—— token 欄記 null\n"
                          % (ident, why))
     try:
