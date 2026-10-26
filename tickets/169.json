@@ -24,9 +24,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "1b6ac4e101e7bc73e694f17a5759a172dfb4c58c",
-  "state": "Ready",
-  "state_version": 8,
+  "base_sha": "9c5893a5d05e380aec0aff094694eff2515f09ab",
+  "state": "Blocked",
+  "state_version": 12,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -46,5 +46,43 @@
     "D-071",
     "D-016",
     "D-019"
-  ]
+  ],
+  "cost": [
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 56,
+      "tokens_out": 43610,
+      "cache_write": 103014,
+      "cache_read": 2717198,
+      "wall_seconds": 3602,
+      "outcome": "handed-in",
+      "run_id": "20261026-045637-234",
+      "session_id": "f59cf17a-d3a5-4620-a580-0ee0d4a7abb3",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-26T05:56:45+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 3602,
+      "outcome": "timeout",
+      "run_id": "20261026-045637-234",
+      "session_id": null,
+      "by": "auto-fix.sh",
+      "note": "reports/t169/20261026-045637-234/worker-round1.log 裡沒有 JSON 信封",
+      "effort": "high",
+      "at": "2026-10-26T05:56:46+00:00"
+    }
+  ],
+  "owner": "main",
+  "interventions": 1
 }
