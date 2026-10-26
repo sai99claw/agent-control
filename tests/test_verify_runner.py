@@ -1,4 +1,4 @@
-import contextlib, importlib.util, json, os, subprocess, sys, tempfile, unittest, shutil
+import contextlib, fnmatch, importlib.util, json, os, subprocess, sys, tempfile, unittest, shutil
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUN = [sys.executable, os.path.join(HERE, "scripts/verify.py")]
 
@@ -520,27 +520,37 @@ class TestsSectionOfAsConfig(unittest.TestCase):
         with open(os.path.join(HERE, "scripts", "gate.sh"), encoding="utf-8") as handle:
             self.gate = handle.read()
 
-    def test_base_is_the_four_base_ids(self):
-        self.assertEqual(self.unit["base"],
-                         ["test_ticket", "test_event", "test_memory", "test_no_project_names"])
+    def ids_name_existing_modules(self, ids, where):
+        for ident in ids:
+            self.assertTrue(os.path.isfile(os.path.join(HERE, "tests", ident + ".py")),
+                            "%s names %r, but tests/%s.py does not exist" % (where, ident, ident))
+
+    def test_base_names_existing_modules_and_gate_has_no_copy(self):
+        """#173(D-054 Q12 一件事一處):base 的內容不在這裡抄,只量結構 —— 非空、每個 id 有
+        `tests/<id>.py`。"""
+        self.assertTrue(self.unit["base"], "precondition: tests.unittest.base was read")
+        self.ids_name_existing_modules(self.unit["base"], "tests.unittest.base")
         self.assertFalse('\nBASE="' in self.gate, "gate.sh carries a second copy of the base ids")
         self.assertEqual(self.unit["roots"], ["tests"])
 
     def test_map_is_the_only_copy(self):
-        """48 列 = #161 / #160 的 46 列(那時逐列等於 gate.sh `map()`)加 #162 的三列
-        (`scripts/testiface.py`、`tests/fixtures/project/*`、`templates/project-*.example.*`)
-        加 #164 的一列(`scripts/hooks.py`),減 #166 刪掉的兩列(同步腳本與舊閘門範本,
-        兩支檔都退場了)加 #119 的一列(`scripts/schedule.py`)= 49。
-        gate.sh 不再有 `map()`:對照表只住在設定裡(#162 A4 靜態那一條的同一件事)。"""
+        """對照表只住在設定裡:gate.sh 不再有 `map()`(#162),測試也不抄列數或逐列內容(#173)。
+        量的是結構:讀到了(> 10 列)、`match` 不重複、每個 id 有 `tests/<id>.py`、沒有一列被
+        更早的列遮住(first match wins 時,它的代表路徑 —— 每個 `*` 換成 `zzz` —— 若也吻合前面
+        某列的 `match`,這一列永遠選不到)。新增一列合法的對照只改設定,這裡不用跟著改。
+
+        **變異 m1**:加一列 ids `["test_zzz_missing"]` → 紅在 id 存在那一條。
+        **變異 m2**:把 `verify/*` 移到 `verify/TAGS.d/*` 上面 → 紅在遮蔽那一條,兩列都點名。"""
         rows = [(row["match"], row["ids"]) for row in self.unit["map"]]
-        self.assertEqual(len(rows), 49)
+        self.assertGreater(len(rows), 10, "precondition: tests.unittest.map was read")
         self.assertEqual(len({match for match, _ in rows}), len(rows), "duplicate match rows")
-        for row in (("scripts/testiface.py",
-                     ["test_testiface", "test_gate", "test_status", "test_actl"]),
-                    ("tests/fixtures/project/*", ["test_testiface", "test_no_project_names"]),
-                    ("templates/project-*.example.*",
-                     ["test_testiface", "test_no_project_names"])):
-            self.assertIn(row, rows)
+        for index, (match, ids) in enumerate(rows):
+            self.ids_name_existing_modules(ids, "map row %r" % match)
+            path = match.replace("*", "zzz")
+            for earlier, _ in rows[:index]:
+                self.assertFalse(fnmatch.fnmatchcase(path, earlier),
+                                 "map row %r is shadowed by earlier row %r (path %r)"
+                                 % (match, earlier, path))
         self.assertFalse("\nmap() {" in self.gate, "gate.sh carries a second copy of the map")
 
     def test_project_config_check_accepts_it(self):
