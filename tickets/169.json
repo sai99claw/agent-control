@@ -25,8 +25,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "9c5893a5d05e380aec0aff094694eff2515f09ab",
-  "state": "InReview",
-  "state_version": 32,
+  "state": "Done",
+  "state_version": 34,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -197,6 +197,23 @@
       "note": null,
       "effort": null,
       "at": "2026-10-26T08:21:26+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1216,
+      "outcome": "pass",
+      "run_id": "20261026-082131-9998",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-26T08:41:47+00:00"
     }
   ],
   "owner": "main",
@@ -225,8 +242,69 @@
   "review": {
     "verdict": "pass",
     "by": "reviewer@opus",
-    "sha": "349d241a5e27f0523663c6c2d45540b8edb3f6fc",
+    "sha": "c4d509897af2bdfdb5a598a82d80cea0a5b6a6e3",
     "note": "reports/t169/20261026-081511-7749/REVIEW.md",
-    "at": "2026-10-26T08:21:25+00:00"
+    "at": "2026-10-26T08:41:47+00:00"
+  },
+  "landed_sha": "c4d509897af2bdfdb5a598a82d80cea0a5b6a6e3",
+  "cost_total": {
+    "calendar_seconds": 115180,
+    "wall_seconds": 17793,
+    "runs": 7,
+    "worker_rounds": 1,
+    "objections": 1,
+    "by_role": {
+      "verifier": {
+        "runs": 2,
+        "wall_seconds": 8164,
+        "tokens_in": 126,
+        "tokens_out": 85621,
+        "cache_write": 222825,
+        "cache_read": 6345387,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 2
+        }
+      },
+      "worker": {
+        "runs": 2,
+        "wall_seconds": 8164,
+        "tokens_in": 88,
+        "tokens_out": 27686,
+        "cache_write": 89365,
+        "cache_read": 3964457,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "timeout": 1,
+          "handed-in": 1
+        }
+      },
+      "reviewer": {
+        "runs": 2,
+        "wall_seconds": 249,
+        "tokens_in": 48,
+        "tokens_out": 22937,
+        "cache_write": 143802,
+        "cache_read": 1750829,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "fail": 1,
+          "pass": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 1216,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-26T08:41:47+00:00"
   }
 }
