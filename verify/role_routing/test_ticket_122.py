@@ -469,11 +469,18 @@ class A5DocsSayOneModel(unittest.TestCase):
             self.assertIn(word, opener)
 
     def test_a5_the_role_card_change_goes_to_the_inbox(self):
-        """A5 角色卡通用規則變更送 inbox:memory/role/consolidator.inbox.md 有一行帶 #122。"""
-        path = os.path.join(ROOT, "memory", "role", "consolidator.inbox.md")
-        self.assertTrue(os.path.isfile(path), "整理者 inbox 不在")
-        self.assertTrue([line for line in read_root(os.path.relpath(path, ROOT)).splitlines()
-                         if "#122" in line])
+        """A5 角色卡通用規則變更送 inbox、由整理流程消化:帶 #122 的一行在整理者 inbox(待消化)
+        或已被整理進整理者角色卡(消化後;3f461f6 把它從 inbox 併進卡)—— 兩處都沒有才紅。"""
+        inbox = os.path.join(ROOT, "memory", "role", "consolidator.inbox.md")
+        card = os.path.join(ROOT, "memory", "role", "consolidator.md")
+        self.assertTrue(os.path.isfile(card), "整理者角色卡不在")
+        found = {}
+        for path in (inbox, card):
+            if os.path.isfile(path):
+                found[os.path.basename(path)] = [
+                    line for line in read_root(os.path.relpath(path, ROOT)).splitlines()
+                    if "#122" in line]
+        self.assertTrue(any(found.values()), "#122 的規則既不在 inbox 也不在角色卡: %r" % found)
 
 
 if __name__ == "__main__":

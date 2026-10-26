@@ -6,16 +6,17 @@
 #   sh scripts/land.sh t7-x                                 # 全套紅了預設派下一輪 worker
 #   sh scripts/land.sh t7-x --no-auto-fix                   # 明說要人下場
 #   sh scripts/land.sh docs "<訊息>" tickets/7.json docs/X.md memory/role/y.inbox.md
-#                                                           # 票檔 / 文件 / 記憶進主線
+#                                                           # 票檔 / 文件 / 記憶 / 討論檔進主線
 #
 # ## docs 通道(2026-09-23,#29 A10;G10 / G17)
 # 票檔、`memory/`、`docs/DECISIONS.md` 以前進主線**只有裸 commit 一條路**,而
 # `memory/role/main.md` 明禁裸 commit 主線 —— 一條每天都在走、卻沒有任何守衛的路,
 # 與沒有規矩長得一樣(G17:同一天兩筆)。所以給它一個入口,而且:
-#   * **只收 `tickets/` `docs/` `memory/` 三個前綴** —— 產品碼走一票一分支,越界 rc=2 指名檔;
+#   * **只收 `tickets/` `docs/` `memory/` `discussions/` 四個前綴** —— 產品碼走一票一分支,越界 rc=2 指名檔
+#     (`discussions/` 是整理者的討論檔與候選草稿,#179 補進來;gap #52);
 #   * **與票的落地共用同一把 `.land.lock`** —— land 跑到一半有人往主線塞 commit,
 #     那條 `ff-only` 就進不去了,而失敗訊息說的是另一件事。
-# 它**不跑閘門**:這三個前綴不進產品碼,跑九分鐘全套換來的是同一份綠。
+# 它**不跑閘門**:這四個前綴不進產品碼,跑九分鐘全套換來的是同一份綠。
 #
 # 這一支**沒有判斷**(docs/ROLES.md:落地器是程式;順序是主線決定的)。它只會拒絕:
 # 0 commit、票對不上、`base_sha` 過期、命中 `hard_block`、閘門紅。要它放寬的時候,
@@ -121,11 +122,11 @@ ev() {
 }
 
 # ------------------------------------------------------------------ docs 通道
-DOCS_PREFIXES="tickets/ docs/ memory/"
+DOCS_PREFIXES="tickets/ docs/ memory/ discussions/"
 
 cmd_docs() {   # $1 = commit 訊息  $2… = 檔案(repo 相對路徑)
     if [ $# -lt 2 ]; then
-        echo "land: docs <訊息> <檔…>  —— 只收 $DOCS_PREFIXES 三個前綴" >&2
+        echo "land: docs <訊息> <檔…>  —— 只收 $DOCS_PREFIXES 四個前綴" >&2
         echo "land:   例:sh scripts/land.sh docs \"tickets: #29 v2\" tickets/29.json" >&2
         exit 2
     fi
