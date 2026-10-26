@@ -48,8 +48,8 @@
   "tool": "codex",
   "attempt": 0,
   "base_sha": "eca7254d444a17e6d5785ca42295e955a1c8da96",
-  "state": "Blocked",
-  "state_version": 20,
+  "state": "Cancelled",
+  "state_version": 21,
   "lease": null,
   "retry_limit": 2,
   "verify": {

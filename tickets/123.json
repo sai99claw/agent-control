@@ -36,8 +36,8 @@
   "tool": "codex",
   "attempt": 0,
   "base_sha": "dfaa05c0c87d5011a31872614c2c7a01d2176d25",
-  "state": "Draft",
-  "state_version": 9,
+  "state": "Cancelled",
+  "state_version": 10,
   "lease": null,
   "retry_limit": 2,
   "verify": {
