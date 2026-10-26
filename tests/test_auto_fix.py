@@ -27,7 +27,7 @@ import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import (DEFAULT_CONFIG, REVIEWER_PASS, SCRIPTS, Sandbox,  # noqa: E402
+from control_harness import (AC_HOME, DEFAULT_CONFIG, REVIEWER_PASS, SCRIPTS, Sandbox,  # noqa: E402
                              envelope, files_of, fixture_candidate, write_executable)
 
 # 沙盒的票沒標 complexity = simple(#136,VISION 流程 #9:只有複雜的票做完後檢查一次):閘門綠
@@ -3461,8 +3461,10 @@ class ATimeoutReapsTheWholeTree(AutoFixBase):
 
 
 class ThePacketSaysWhichTestsToRun(AutoFixBase):
-    """#87 A18:worker 與驗證者的派工文都有 `## 只准跑的測試`,其後逐字是票的 test_plan,
-    再一行固定字。期望的字寫死在這裡(票面原文),不從 auto-fix.sh 讀。"""
+    """D-073 ①(#168;#87 A18 起有這一段):worker 派工文的 `## 只准跑的測試` 恰好三行 ——
+    這張票的驗證者案例(還沒交時是自己改到 / 新增的 tests/ 模組)、基礎組(閘門同一支腳本
+    `--base`)、一行固定字;票的 test_plan 逐字在另一段 `## 票的測試計畫`。驗證者那一份只列
+    自己的案例檔與 `verify-case.py red`。期望的字寫死在這裡(票面原文),不從 auto-fix.sh 讀。"""
 
     vcalls = TheFirstRoundVerifierRunsAlongside.vcalls
     vfix = TheFirstRoundVerifierRunsAlongside.vfix
@@ -3470,9 +3472,11 @@ class ThePacketSaysWhichTestsToRun(AutoFixBase):
     arm = TheFirstRoundVerifierRunsAlongside.arm
 
     PLAN = "G1:python3 -m unittest discover -s tests -p 'test_thing.py'\n收尾:只跑改到的檔"
-    FIXED = ("不跑全套(unittest discover 整組、gate.sh --full)、不跑 verify.py 全部回歸 —— "
-             "回歸是閘門的事,閘門紅由 auto-fix 下一輪處理")
-    EMPTY = "票沒有 test_plan:只跑你改到的 tests/ 檔,不跑全套"
+    OLD_FIXED = ("不跑全套(unittest discover 整組、gate.sh --full)、不跑 verify.py 全部回歸 —— "
+                 "回歸是閘門的事")
+    OLD_EMPTY = "只跑你改到的 tests/ 檔,不跑全套"
+    CASES = {"files": ["tests/test_x_cases.py"], "tags": [],
+             "run": "python3 -m unittest tests.test_x_cases", "notes": ""}
 
     def packets(self, name):
         found = self.result_files(name)
@@ -3480,26 +3484,55 @@ class ThePacketSaysWhichTestsToRun(AutoFixBase):
         with open(found[-1], encoding="utf-8") as handle:
             return handle.read()
 
-    def test_a18_both_packets_carry_the_test_plan_and_the_fixed_line(self):
-        """**變異 M9**:派工文拿掉只准跑段(`only_tests_section` 不叫)→ 這一條紅。"""
+    def section(self, text, heading):
+        """`heading` 那一段到下一個 `## ` 標題(或檔尾)為止的非空行。"""
+        self.assertEqual(text.count("\n%s\n" % heading), 1, "要恰好一段 %s" % heading)
+        body = text.split("\n%s\n" % heading, 1)[1]
+        body = re.split(r"^## ", body, maxsplit=1, flags=re.M)[0]
+        return [line for line in body.splitlines() if line.strip()]
+
+    def assert_base_and_fixed(self, lines, gate_path=None):
+        self.assertEqual(len(lines), 3, lines)
+        if gate_path is not None:
+            self.assertEqual(lines[1], "sh '%s' --base" % gate_path)
+        else:
+            self.assertRegex(lines[1], r"^sh '[^']+/scripts/gate\.sh' --base$")
+        self.assertIn("全套、回歸、驗證者 check 是閘門與落地的事", lines[2])
+        self.assertIn("交件前只跑上面兩項", lines[2])
+
+    def assert_own_tests_line(self, line):
+        for want in ("你改到 / 新增的 tests/ 模組", "python3 -m unittest", "驗證者案例還沒交"):
+            self.assertIn(want, line)
+
+    def test_a1_round1_worker_runs_its_own_tests_and_the_base_set(self):
+        """A1 + A3(真跑一輪:閘門那一行印在 stdout,拿它對 --base 那一行的腳本路徑)。
+        **變異 m1**:只准跑段照舊印 test_plan → 行數與 `## 票的測試計畫` 斷言紅;
+        **m2**:基礎組那一行印成 `--branch --ticket` → lines[1] 紅。"""
         self.arm(needs_verifier=True, test_plan=self.PLAN)
         done = self.auto_fix("--no-review")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        want = "## 只准跑的測試\n%s\n%s\n" % (self.PLAN, self.FIXED)
-        for name in ("dispatch-round1.md", "dispatch-verifier-round1.md"):
+        gate = re.search(r"第 1 輪的閘門 —— \(cd \S+ && sh '([^']+)' --branch --ticket 1\)",
+                         done.stdout)
+        self.assertIsNotNone(gate, "stdout 裡要有第 1 輪的閘門那一行:" + done.stdout)
+        worker = self.packets("dispatch-round1.md")
+        lines = self.section(worker, "## 只准跑的測試")
+        self.assert_base_and_fixed(lines, gate.group(1))
+        self.assert_own_tests_line(lines[0])
+        self.assertIn("\n## 票的測試計畫\n%s\n" % self.PLAN, worker)
+        verifier = self.packets("dispatch-verifier-round1.md")
+        vlines = self.section(verifier, "## 只准跑的測試")
+        self.assertEqual(len(vlines), 2, vlines)
+        self.assertIn("只跑你寫的案例檔", vlines[0])
+        self.assertIn("python3 -m unittest <你加進案例的那支模組>", vlines[0])
+        self.assertIn("verify-case.py red", vlines[1])
+        self.assertNotIn("--base", "\n".join(vlines))
+        self.assertIn("\n## 票的測試計畫\n%s\n" % self.PLAN, verifier)
+        for name, text in (("worker", worker), ("verifier", verifier)):
             with self.subTest(name):
-                self.assertIn(want, self.packets(name))
+                self.assertNotIn(self.OLD_FIXED, text)
+                self.assertNotIn("G1:", "\n".join(self.section(text, "## 只准跑的測試")))
 
-    def test_a18_the_repair_round_packet_carries_it_too(self):
-        self.set_worker(WORKER_FIXES)
-        self.ticket_ready(test_plan=self.PLAN)
-        self.status(1, RED_LOG)
-        done = self.auto_fix("--dry-run")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("## 只准跑的測試\n%s\n%s\n" % (self.PLAN, self.FIXED),
-                      self.packets("dispatch-round2.md"))
-
-    def test_a18_a_ticket_without_a_test_plan_says_so(self):
+    def test_a1_a_ticket_without_a_test_plan_says_so(self):
         for plan in (None, "  "):
             with self.subTest(plan=plan):
                 fields = {"needs_verifier": True}
@@ -3508,11 +3541,72 @@ class ThePacketSaysWhichTestsToRun(AutoFixBase):
                 self.arm(**fields)
                 done = self.auto_fix("--dry-run", "--round", "1")
                 self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                text = self.packets("dispatch-round1.md")
+                self.assertIn("票沒有 test_plan", "\n".join(self.section(text, "## 票的測試計畫")))
+                lines = self.section(text, "## 只准跑的測試")
+                self.assert_base_and_fixed(lines)
+                self.assert_own_tests_line(lines[0])
                 for name in ("dispatch-round1.md", "dispatch-verifier-round1.md"):
-                    text = self.packets(name)
-                    self.assertIn("## 只准跑的測試\n%s\n" % self.EMPTY, text)
-                    self.assertNotIn(self.FIXED, text)
+                    self.assertNotIn(self.OLD_EMPTY, self.packets(name))
 
+    def test_a2_the_repair_round_runs_the_verifier_cases(self):
+        for run, want in ((self.CASES["run"], self.CASES["run"]),
+                          ("", "python3 -m unittest tests.test_x_cases")):
+            with self.subTest(run=run):
+                self.set_worker(WORKER_FIXES)
+                self.ticket_ready(test_plan=self.PLAN, verify=dict(self.CASES, run=run))
+                self.status(1, RED_LOG)
+                done = self.auto_fix("--dry-run")
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                text = self.packets("dispatch-round2.md")
+                lines = self.section(text, "## 只准跑的測試")
+                self.assert_base_and_fixed(lines)
+                self.assertEqual(lines[0], want)
+                self.assertNotIn("你改到", lines[0])
+                self.assertIn("\n## 紅榜(逐條,excerpt ≤ 20 行)\n", text)
+                self.assertIn("\n## 票的測試計畫\n%s\n" % self.PLAN, text)
+
+    def test_a3_the_verifier_runs_its_own_case_file_when_known(self):
+        self.arm(needs_verifier=True, test_plan=self.PLAN, verify=dict(self.CASES))
+        done = self.auto_fix("--dry-run", "--round", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        vlines = self.section(self.packets("dispatch-verifier-round1.md"), "## 只准跑的測試")
+        self.assertEqual(len(vlines), 2, vlines)
+        self.assertIn("只跑你寫的案例檔", vlines[0])
+        self.assertIn("python3 -m unittest tests.test_x_cases", vlines[0])
+        self.assertIn("verify-case.py red", vlines[1])
+
+
+class TheTestScopeRuleTextMatchesThePacket(unittest.TestCase):
+    """D-073 ① A4(#168):規則正文與派工文同一張票改(D-054 Q12)。讀的是 commit 進來的檔,
+    與上面那一組各自獨立 —— 只改文件不改 auto-fix.sh(m3)時上面紅、這裡綠。"""
+
+    def read(self, rel):
+        with open(os.path.join(AC_HOME, rel), encoding="utf-8") as handle:
+            return handle.read()
+
+    def test_no_rule_runs_the_full_suite_because_test_plan_lists_it(self):
+        for rel in ("docs/reference/role-procedures.md", "memory/role/implementer.md",
+                    "docs/DISPATCH-TEMPLATE.md"):
+            with self.subTest(rel):
+                self.assertEqual(self.read(rel).count("明列全套"), 0)
+        self.assertNotIn("全套、分批、負載下重跑只在票的 test_plan 明列時才做",
+                         self.read("memory/role/implementer.md"))
+
+    def test_dispatch_template_section_1_names_the_two_runs(self):
+        text = self.read("docs/DISPATCH-TEMPLATE.md")
+        self.assertIn("## 1. 在自己的 worktree / 分支 commit", text)
+        para = [p for p in text.split("\n\n") if p.startswith("**只准跑的測試")]
+        self.assertEqual(len(para), 1, "§1 要恰好一段「只准跑的測試」")
+        for want in ("驗證者", "--base", "test_plan 是"):
+            self.assertIn(want, para[0])
+
+    def test_the_card_and_the_verifier_template(self):
+        self.assertIn("--base", self.read("memory/role/implementer.md"))
+        lines = [line for line in self.read("templates/dispatch-verifier.md").splitlines()
+                 if "只准跑的測試" in line]
+        self.assertTrue(lines)
+        self.assertTrue(any("自己的案例" in line for line in lines), lines)
 
 
 # 批次修復的假 worker(#108;#145 起與單票同一種交件):cwd 是整合分支的 worktree,改一個檔、

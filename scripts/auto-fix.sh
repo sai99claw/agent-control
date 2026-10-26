@@ -661,25 +661,48 @@ rules_pack() {   # $1 = 派工文寫到哪(失敗就刪掉,不留半份)  $2 = �
     return 1
 }
 
-# 派工文的「只准跑的測試」段(#87 A18):worker 與驗證者兩份都帶,逐字抄票的 `test_plan`。
-# worker 的時限與回歸切開計(使用者 2026-10-03):agent 只跑票上列的測試,回歸是閘門的事,
-# 閘門紅由 auto-fix 下一輪處理 —— 不寫在派工文裡,agent 就會自己跑全套把時限吃掉。
-only_tests_section() {
-    python3 - "$TF" <<'PY'
+# 派工文的「只准跑的測試」段(#87 A18;D-073 ①):worker 交件前只跑兩項 —— 這張票的驗證者案例
+# (`verify.files` 還空的時候是自己改到 / 新增的 tests/ 模組)與基礎組(閘門同一支腳本 `--base`);
+# 驗證者只跑自己的案例與 `verify-case.py red`。全套、回歸、驗證者 check 是閘門與落地的事 ——
+# 不寫在派工文裡,agent 就會自己跑全套把時限吃掉(#155、#159)。票的 `test_plan` 是設計
+# (要做什麼、驗證者會斷言什麼),逐字放在自己的「## 票的測試計畫」段,不是要跑的清單。
+only_tests_section() {   # $1 = worker / verifier
+    python3 - "$TF" "$1" "$(ac_gate_script "${WT:-$WTBASE/$(ticket_branch)}")" <<'PY'
 import json, sys
+tf, role, gate = sys.argv[1:4]
 try:
-    with open(sys.argv[1], encoding="utf-8") as handle:
-        plan = json.load(handle).get("test_plan")
+    with open(tf, encoding="utf-8") as handle:
+        ticket = json.load(handle)
 except (OSError, ValueError):
-    plan = None
+    ticket = {}
+plan = ticket.get("test_plan")
+verify = ticket.get("verify") if isinstance(ticket.get("verify"), dict) else {}
+files = [f for f in verify.get("files") or [] if isinstance(f, str) and f.strip()]
+run = verify.get("run") if isinstance(verify.get("run"), str) else ""
+modules = " ".join(f.strip()[:-3].replace("/", ".") if f.strip().endswith(".py")
+                   else f.strip().replace("/", ".") for f in files)
 print("")
-print("## 只准跑的測試")
+print("## 票的測試計畫")
 if isinstance(plan, str) and plan.strip():
     print(plan)
-    print("不跑全套(unittest discover 整組、gate.sh --full)、不跑 verify.py 全部回歸 —— "
-          "回歸是閘門的事,閘門紅由 auto-fix 下一輪處理")
 else:
-    print("票沒有 test_plan:只跑你改到的 tests/ 檔,不跑全套")
+    print("票沒有 test_plan(驗收照票面 acceptance)")
+print("")
+print("## 只准跑的測試")
+if role == "verifier":
+    print("只跑你寫的案例檔:`python3 -m unittest %s`" % (modules or "<你加進案例的那支模組>"))
+    print("`python3 scripts/verify-case.py red %s`(旗標照上面範本);check、閘門那一組、全套、回歸都不是你的"
+          % ticket.get("id", ""))
+else:
+    if files:
+        print(run.strip() if run.strip() else "python3 -m unittest %s" % modules)
+    else:
+        print("你改到 / 新增的 tests/ 模組:`python3 -m unittest <那幾支模組>`(驗證者案例還沒交)")
+    if not gate:   # 解不出閘門腳本:不印一行空路徑冒充指令(§5.5)
+        sys.stderr.write("auto-fix: 解不出閘門腳本 —— 基礎組那一行退回 scripts/gate.sh\n")
+    print("sh '%s' --base" % (gate or "scripts/gate.sh"))
+    print("全套、回歸、驗證者 check 是閘門與落地的事;交件前只跑上面兩項(第一行是這張票的案例,"
+          "第二行是基礎組,cwd 是你的 worktree)")
 PY
 }
 
@@ -748,7 +771,7 @@ print("## 票寫錯 / 需要裁示怎麼說")
 print("在 EVIDENCE 裡寫**一行**:`OBJECTION: <ticket-wrong|test_defect|blocking> <一句話>`。")
 print("**不准**放寬既有斷言、不准把期望值改成程式現在印的東西(那是假綠家族)。")
 PY
-        only_tests_section
+        only_tests_section worker
     } > "$1"
 }
 
@@ -807,7 +830,7 @@ PY
             echo "你與 worker 同時從票的 base_sha 起跑,兩邊常改同一支測試模組;收件時 \`apply.sh\` 以三方合併把你的 patch-verify 併上分支頭,兩邊在同一處插入只對 *.py、而且合起來沒有重複的模組層名字才自動合。"
             echo "所以:新案例放在**既有模組尾端新加的 class**(不新開以票號命名的案例檔,D-056 1);helper 寫在你自己的 class 裡;no new module-level names(不新增模組層的函式、常數、import)。"
         fi
-        only_tests_section
+        only_tests_section verifier
     } > "$1"
 }
 
@@ -2179,7 +2202,7 @@ print("看到這一行,這支腳本會把它記成票的 `objections[]`、交給
       "同一個 worktree 續做;判不了才轉 Blocked 指派主線),**不會**再派下一輪。")
 print("**不准**放寬既有斷言、不准把期望值改成程式現在印的東西(那是假綠家族)。")
 PY
-            only_tests_section
+            only_tests_section worker
         } > "$DISPATCH"
     fi
 }

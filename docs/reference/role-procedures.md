@@ -52,12 +52,10 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
 ## 實作者角色操作細節
 
 ### 測試怎麼叫
-- 只准跑的測試:正文在 `docs/DISPATCH-TEMPLATE.md` §1(派工文「## 只准跑的測試」段由 `auto-fix.sh` 逐字抄票的 `test_plan`)。
-- 票閘門對照表挑到的那一組(`scripts/gate.sh --branch --ticket <n>`):在自己的 worktree 裡量得到分支;只在 `test_plan` 列了才跑。
-- 負載下重跑(**只在票的 `test_plan` 列了才做**):`nice -n 19` + 4 支 `yes`,記 PID 只 kill 自己的,
-  新案例跑 3 次;窗口要蓋得住負載下受測那一包的 parse/exec,前提不成立要大聲紅(#642,比照 #639)。
-- 全套(**只在票的 `test_plan` 明列全套時才跑**;#70 實測 878 條、單 `test_auto_fix` 270s):逐模組分批前景跑、每批 <590s,
-  合計 Ran 與各批 rc。
+- 只准跑的測試:正文在 `docs/DISPATCH-TEMPLATE.md` §1(D-073 ①;派工文「## 只准跑的測試」段由 `auto-fix.sh` 產:本票驗證者案例或自己改到 / 新增的 tests/ 模組,加基礎組;票的 `test_plan` 在「## 票的測試計畫」段,是設計不是要跑的清單)。
+- 基礎組:派工文那一行(`sh '<閘門腳本>' --base`,與閘門同一支),cwd 是自己的 worktree;#168 實測 35.5 秒、168 條。
+- 票閘門對照表那一組(`scripts/gate.sh --branch --ticket <n>`)、回歸、全套(#70 實測 878 條、單 `test_auto_fix` 270s)、負載下重跑:
+  閘門與落地的事,worker 不跑(自己跑會把時限吃掉,#155、#159)。
 - 擷取測試輸出只看 `^Ran |^OK|^FAILED|^(FAIL|ERROR):`;前景跑、給 `timeout`(不准輪詢的正文在 `docs/DISPATCH-TEMPLATE.md` §3)。
 
 ### 交付物的形狀
