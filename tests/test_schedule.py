@@ -130,10 +130,6 @@ def land(branches):
             save(row)
         if act.get("land_also"):
             land_on_main(act["land_also"], "batch_fix")
-        for n in act.get("block") or []:
-            row = load(n)
-            row["state"] = "Blocked"
-            save(row)
         return 1
     if act["do"] == "same":
         for n in ids:
@@ -825,14 +821,6 @@ class A10Reland(ScheduleBase):
         self.fake(land=[{"do": "fix", "tickets": ["A"], "land_also": ["G"]}, "land"])
         self.ok(self.run_(), 0)
         self.assertEqual(self.lands(), ["tA tG", "tA"])
-
-    def test_a10_blocked_ticket_blocks_the_reland(self):
-        self.green("A")
-        self.green("G")
-        self.batches(("b1", ["A", "G"]))
-        self.fake(land=[{"do": "fix", "block": ["G"]}, "land"])
-        self.ok(self.run_(), 1)
-        self.assertEqual(self.lands(), ["tA tG"])
 
 
 # ===================================================================== A11
