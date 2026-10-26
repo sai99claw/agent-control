@@ -87,7 +87,7 @@ sh scripts/land.sh docs "tickets: #29 v2 與整理票的 outline" \
    tickets/29.json memory/role/implementer.inbox.md docs/DECISIONS.md
 ```
 
-**只收三個前綴**:`tickets/`、`docs/`、`memory/`。越界 rc=2 **指名是哪一個檔** ——
+**只收四個前綴**:`tickets/`、`docs/`、`memory/`、`discussions/`(整理者的討論檔與候選草稿,#179)。越界 rc=2 **指名是哪一個檔** ——
 產品碼走一票一分支(worker 在票分支 commit → `scripts/land.sh t<票號>`),
 不走這一條。路徑裡有 `..` 或絕對路徑一樣拒。
 
@@ -95,8 +95,8 @@ sh scripts/land.sh docs "tickets: #29 v2 與整理票的 outline" \
 commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊息說的是「主線在這中間
 動了」,沒有人會知道動它的是誰。所以兩條路排同一個佇列。
 
-**它不跑閘門**:這三個前綴不進產品碼,跑一次全套換來的是同一份綠。它也**不是**
-「什麼都可以塞」的後門:三個前綴之外一律拒,而拒的時候說得出下一步。
+**它不跑閘門**:這四個前綴不進產品碼,跑一次全套換來的是同一份綠。它也**不是**
+「什麼都可以塞」的後門:四個前綴之外一律拒,而拒的時候說得出下一步。
 
 為什麼要有(G10 / G17):票檔、`memory/`、`docs/DECISIONS.md` 以前進主線只有**裸 commit**
 一條路,而 `memory/role/main.md` 明禁裸 commit 主線 —— 一條每天都在走、卻沒有任何守衛的路,

@@ -618,9 +618,24 @@ class TheDocsChannel(LandBase):
         self.assertEqual(self.git("rev-parse", "main", cwd=self.origin).strip(),
                          self.git("rev-parse", "main").strip(), "push 沒有跟上")
         self.assertFalse(self.gate_ran(),
-                         "這三個前綴不進產品碼 —— 跑一次全套換來的是同一份綠")
+                         "這四個前綴不進產品碼 —— 跑一次全套換來的是同一份綠")
 
-    def test_a_file_outside_the_three_prefixes_is_refused_by_name(self):
+    def test_179_a1_a_discussion_file_lands_without_the_gate(self):
+        """#179 A1:整理者的討論檔(`discussions/`)走 docs 通道進主線,不跑閘門。
+
+        **變異**:把 `discussions/` 從 `DOCS_PREFIXES` 拿掉 → 這一條紅(rc 2)。
+        """
+        path = "discussions/2026-10-26-memory-x.md"
+        self.write(path, "# 討論\n")
+        before = self.git("rev-parse", "main").strip()
+        done = self.docs("discussions: memory x", path)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotEqual(self.git("rev-parse", "main").strip(), before)
+        landed = self.git("show", "--name-only", "--format=", "main").split()
+        self.assertEqual(landed, [path])
+        self.assertFalse(self.gate_ran(), "docs 通道不跑閘門")
+
+    def test_a_file_outside_the_four_prefixes_is_refused_by_name(self):
         """**變異**:把前綴檢查那一段拿掉 → 這一條紅。
 
         產品碼從這裡進去的那一刻,一票一分支、閘門、覆核三件事一起被繞過。
@@ -686,10 +701,10 @@ class TheDocsChannel(LandBase):
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("要在 main 上跑", done.stderr)
 
-    def test_usage_names_the_three_prefixes(self):
+    def test_usage_names_the_four_prefixes(self):
         done = self.docs("只給訊息沒給檔")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
-        for prefix in ("tickets/", "docs/", "memory/"):
+        for prefix in ("tickets/", "docs/", "memory/", "discussions/"):
             self.assertIn(prefix, done.stderr)
 
     def land_rows_of(self, *args):
@@ -791,6 +806,17 @@ class TheOpenerLandsOnlyItsOwnTicket(LandBase):
                 self.assertNotIn("land:   tickets/7.json", done.stderr.splitlines(),
                                  "自己那張不在被拒名單上")
                 self.assertEqual(self.git("rev-parse", "main").strip(), before)
+
+    def test_179_a2_a_discussion_file_is_refused_for_the_opener(self):
+        """#179 A2:`discussions/` 進了 docs 通道的前綴,開題者仍只收自己那張票檔。"""
+        self.make_ticket(7)
+        self.write("discussions/x.md", "x\n")
+        before = self.git("rev-parse", "main").strip()
+        done = self.docs("7", "順手", "tickets/7.json", "discussions/x.md")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("開題者只收自己那張票檔", done.stderr)
+        self.assertIn("discussions/x.md", done.stderr)
+        self.assertEqual(self.git("rev-parse", "main").strip(), before)
 
     def test_no_ticket_number_refuses_everything(self):
         self.make_ticket(7)

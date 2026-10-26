@@ -20,3 +20,5 @@ reports/
 board/batches.json
 # 回歸層執行器寫的 log
 verify.log
+# `memory.py consolidate` 把合併過的 inbox 搬成 `<inbox>.<run_id>.consumed` 的備份(#179):執行期殘骸,不是原始碼
+memory/**/*.consumed

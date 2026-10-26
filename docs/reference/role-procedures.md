@@ -150,7 +150,7 @@ commit 指紋搬到這裡,依角色分節。卡上用「reference『<角色>角�
   worker 不自改模型政策(`board/role-models.json`、`docs/ROLES.md` 模型表)。
 - 收工檢查:合併那一句 rc 0(snapshot 那 K 行已移進 `.consumed`);整理票 `ticket.py close <票號>`。
 - 分層契約與 lint:`memory/role/README.md`;`python3 scripts/memory.py lint --file <檔> --json`。
-- 討論檔目前不在 `land.sh docs` 的前綴白名單(`tickets/ docs/ memory/`),整理票的 `discussions/` 要走票的一般落地(#52)。
+- 討論檔與候選草稿走 `land.sh docs`:前綴白名單是 `tickets/ docs/ memory/ discussions/` 四個(#179,補 #52);`memory.py consolidate` 留下的 `memory/**/*.consumed` 備份由 `.gitignore` 擋掉,不必落地。
 
 ## 設計 session 操作細節
 - 誰起(#122):角色表 `design` 鏈 astra → fable。主線用 `sh scripts/new-session.sh dispatch design --items <這次要交的份數> --prompt <派工文>` 派;
