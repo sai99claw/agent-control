@@ -650,7 +650,7 @@ def render_tickets(data):
     out.append("<table><tr><th>票</th><th>狀態</th><th>v</th><th>前置</th>"
                "<th>base_sha 還是主線祖先?</th><th>token</th><th>cache 讀</th>"
                "<th>wall 秒</th><th>worker 輪</th><th>介入</th>"
-               "<th>凍結</th><th>標題</th></tr>")
+               "<th>驗證者</th><th>覆核</th><th>凍結</th><th>標題</th></tr>")
     numbers = data["vision"]["tickets"]
     for one in tickets:
         deps = ", ".join("#%s" % esc(d.get("id", "")) for d in (one.get("depends_on") or []))
@@ -661,12 +661,16 @@ def render_tickets(data):
             "<td><span class=\"pill s-%s\">%s</span></td>"
             "<td>%s</td><td>%s</td><td>%s</td>"
             "<td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>"
-            "<td>%s</td><td>%s</td></tr>"
+            "<td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"
             % (esc(one.get("id", "")), esc(one.get("state", "")),
                esc(one.get("state", "")), esc(one.get("state_version", "")),
                deps or "—", ancestor_cell(one.get("_ancestor")),
                *(esc(row.get(key, UNKNOWN)) for key in
                  ("tokens", "cache_read", "wall_seconds", "worker_rounds", "interventions")),
+               # D-075:讀法與動手的那支一樣 —— 只有 JSON false 不起驗證者(auto-fix.sh
+               # 的 `is False`),只有 complex 做覆核(ticket.py needs_review);缺 / null 不另說。
+               "無" if one.get("needs_verifier") is False else "有",
+               "有" if one.get("complexity") == "complex" else "無",
                esc(frozen.get("reason", "")) or "—", esc(one.get("subject", ""))))
     out.append("</table></section>")
     return "".join(out)
