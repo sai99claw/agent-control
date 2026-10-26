@@ -47,6 +47,7 @@
     "tests/test_event.py",
     "tests/test_gate.py",
     "tests/test_gate_regression_cases.py",
+    "tests/test_gitignore_consumed.py",
     "tests/test_heartbeat.py",
     "tests/test_hooks.py",
     "tests/test_hooks_cases.py",
