@@ -1875,5 +1875,50 @@ class WhichGateLandRuns(LandBase):
         self.assertEqual(self.gate_calls(), ["WT-GATE"])
 
 
+
+class DriverOnTheLock(LandBase):
+    """#117 A1 / A5:land.start 與鎖的 holder 帶 driver(land.sh 自己的 pid)與 boot_id;
+    holder 死了的鎖由 take_lock 接手。期望值:holder 是假閘門在持鎖期間抄出來的,
+    死的 pid 是測試自己起、等它結束的 `true`,boot 是測試自己讀的 /proc。"""
+
+    def boot(self):
+        with open("/proc/sys/kernel/random/boot_id", encoding="utf-8") as handle:
+            return handle.read().strip()
+
+    def test_land_start_and_the_holder_carry_the_driver(self):
+        import re
+        copy = os.path.join(self.home, "holder.copy")
+        self.stub_script("gate.sh", GATE_STUB_GREEN.replace(
+            "exit 0", 'cp "$AC_ROOT/.land.lock/holder" "%s"\nexit 0' % copy))
+        branch = self.branch_for(1, "t1-x")
+        self.commit_in(branch, "src/a", "一件事")
+        done = self.land("t1-x")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        with open(copy, encoding="utf-8") as handle:
+            holder = handle.read()
+        pid = re.search(r"(^| )pid=(\d+)", holder)
+        self.assertTrue(pid, holder)
+        self.assertIn("boot_id=%s" % self.boot(), holder)
+        starts = [row for row in self.events() if row["kind"] == "land.start"]
+        self.assertEqual(len(starts), 1, starts)
+        self.assertEqual(str(starts[0].get("driver_pid")), pid.group(2))
+        self.assertNotEqual(str(starts[0].get("pid")), pid.group(2))
+        self.assertEqual(starts[0].get("boot_id"), self.boot())
+
+    def test_a_lock_whose_holder_is_dead_is_taken_over(self):
+        child = subprocess.Popen(["true"])
+        child.wait()
+        self.assertFalse(os.path.isdir("/proc/%d" % child.pid))
+        os.makedirs(os.path.join(self.repo, ".land.lock"))
+        self.write(".land.lock/holder", "pid=%d boot_id=%s 開始=2026-10-20T11:11:11 分支=t9\n"
+                   % (child.pid, self.boot()))
+        branch = self.branch_for(1, "t1-x")
+        self.commit_in(branch, "src/a", "一件事")
+        done = self.land("t1-x")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("stale lock pid %d taken over" % child.pid, done.stdout)
+        self.assertTrue(self.gate_ran())
+
+
 if __name__ == "__main__":
     unittest.main()

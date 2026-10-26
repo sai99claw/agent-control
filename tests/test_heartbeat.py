@@ -418,5 +418,301 @@ class ReconcileAMainSession(Driven):
                          [("dead-one", "driver-died")], done.stdout)
 
 
+
+class DriverLiveness(Heartbeat):
+    """#117:start 事件帶 driver_pid + boot_id,心跳據此判 alive / dead / unknown,
+    `--reconcile` 只收 dead + awaiting-takeover 的那幾列。期望值全部來自夾具本身:
+    死的 pid 是測試自己起、等它結束的 `true`;活的是測試自己起的 `sleep`;boot 是測試
+    自己讀的 /proc。"""
+
+    def boot(self):
+        with open("/proc/sys/kernel/random/boot_id", encoding="utf-8") as handle:
+            return handle.read().strip()
+
+    def dead_pid(self):
+        import subprocess
+        child = subprocess.Popen(["true"])
+        child.wait()
+        self.assertFalse(os.path.isdir("/proc/%d" % child.pid), "夾具:pid 還在")
+        return child.pid
+
+    def live_pid(self):
+        import subprocess
+        child = subprocess.Popen(["sleep", "300"])
+        self.addCleanup(child.wait)
+        self.addCleanup(child.terminate)
+        self.assertTrue(os.path.isdir("/proc/%d" % child.pid))
+        return child.pid
+
+    def line_with(self, out, needle):
+        lines = [line for line in out.splitlines()
+                 if line.startswith("heartbeat:") and needle in line]
+        self.assertEqual(len(lines), 1, "要剛好一行含 %r:\n%s" % (needle, out))
+        return lines[0]
+
+    def reconcile(self):
+        return self.run_sh("scripts/heartbeat.sh", "--reconcile")
+
+    # ------------------------------------------------------------ T1 判詞
+
+    def test_t1a_a_start_whose_driver_is_gone_is_dead_awaiting_takeover(self):
+        self.events_file({"ts": ago(60), "kind": "ticket.attempt.start", "pid": 9001,
+                          "ticket": "7", "attempt": "1",
+                          "driver_pid": self.dead_pid(), "boot_id": self.boot()})
+        done = self.beat()
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("dead awaiting-takeover", self.line_with(done.stdout, "pid=9001"))
+
+    def test_t1b_a_live_driver_past_its_lease_is_alive_and_not_a_failure(self):
+        self.events_file({"ts": ago(3 * 3600), "kind": "ticket.attempt.start", "pid": 9001,
+                          "ticket": "7", "attempt": "1",
+                          "driver_pid": self.live_pid(), "boot_id": self.boot()})
+        done = self.beat()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        line = self.line_with(done.stdout, "pid=9001")
+        self.assertIn("alive", line)
+        self.assertNotIn("dead", line)
+
+    def test_t1c_a_live_pid_from_another_boot_is_dead(self):
+        self.events_file({"ts": ago(60), "kind": "ticket.attempt.start", "pid": 9001,
+                          "ticket": "7", "attempt": "1",
+                          "driver_pid": 1, "boot_id": "00000000-dead"})
+        done = self.beat()
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        line = self.line_with(done.stdout, "pid=9001")
+        self.assertIn("dead", line)
+        self.assertNotIn("alive", line)
+
+    def test_t1d_a_later_attempt_of_the_same_ticket_takes_over(self):
+        boot = self.boot()
+        self.events_file(
+            {"ts": ago(600), "kind": "ticket.attempt.start", "pid": 9001,
+             "ticket": "7", "attempt": "1", "driver_pid": self.dead_pid(), "boot_id": boot},
+            {"ts": ago(60), "kind": "ticket.attempt.start", "pid": 9002,
+             "ticket": "7", "attempt": "2", "driver_pid": self.live_pid(), "boot_id": boot})
+        done = self.beat()
+        line = self.line_with(done.stdout, "pid=9001")
+        self.assertIn("dead taken-over by attempt 2", line)
+        self.assertNotIn("awaiting-takeover", line)
+
+    def test_t1d_a_later_start_of_another_ticket_does_not_take_over(self):
+        boot = self.boot()
+        self.events_file(
+            {"ts": ago(600), "kind": "ticket.attempt.start", "pid": 9001,
+             "ticket": "7", "attempt": "1", "driver_pid": self.dead_pid(), "boot_id": boot},
+            {"ts": ago(60), "kind": "ticket.attempt.start", "pid": 9002,
+             "ticket": "8", "attempt": "2", "driver_pid": self.live_pid(), "boot_id": boot})
+        done = self.beat()
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        line = self.line_with(done.stdout, "pid=9001")
+        self.assertIn("dead awaiting-takeover", line)
+        self.assertNotIn("taken-over", line)
+
+    def test_t1e_a_row_without_a_driver_is_unknown_under_the_lease_rule(self):
+        self.events_file({"ts": ago(3 * 3600), "kind": "ticket.attempt.start", "pid": 9001,
+                          "ticket": "7", "attempt": "1"})
+        done = self.beat()
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        line = self.line_with(done.stdout, "pid=9001")
+        self.assertIn("unknown", line)
+        self.assertNotIn("alive", line)
+        self.assertIn("租約 7200 秒", line)
+
+    def test_t1f_a_land_whose_driver_is_gone_is_dead_awaiting_takeover(self):
+        self.events_file({"ts": ago(60), "kind": "land.start", "pid": 9001, "stamp": "S1",
+                          "driver_pid": self.dead_pid(), "boot_id": self.boot()})
+        done = self.beat()
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("dead awaiting-takeover", self.line_with(done.stdout, "stamp=S1"))
+
+    def test_t1f_a_dead_land_that_already_failed_is_not_open(self):
+        self.events_file(
+            {"ts": ago(600), "kind": "land.start", "pid": 9001, "stamp": "S1",
+             "driver_pid": self.dead_pid(), "boot_id": self.boot()},
+            {"ts": ago(590), "kind": "land.fail", "pid": 9002, "stamp": "S1"})
+        done = self.beat()
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("stamp=S1", done.stdout)
+
+    # ------------------------------------------------------------ T2 死掉的 worker 輪
+
+    def dead_worker_round(self, ident="5", run_id="20261020-101010-1"):
+        self.make_ticket(ident, state="Running", state_version=3)
+        wt = self.ticket_branch_commit(ident, {"src/a.txt": "one\n"})
+        head = self.git("rev-parse", "t%s" % ident).strip()
+        self.write("src/a.txt", "one\ntwo\n", where=wt)
+        self.write("src/new.txt", "untracked\n", where=wt)
+        self.git("add", "-N", ".", cwd=wt)
+        expected = self.git("diff", "HEAD", cwd=wt)
+        self.assertIn("src/new.txt", expected, "夾具:未追蹤的檔要進 diff")
+        run_dir = os.path.join("reports", "t%s" % ident, run_id)
+        dead = self.dead_pid()
+        self.write(os.path.join(run_dir, "worker.pid"), "%d\n" % dead)
+        self.write(os.path.join(run_dir, "worker-round1.log"), "worker said something\n")
+        self.write(os.path.join("reports", "t%s" % ident, "sessions.json"), json.dumps(
+            {"worker": {"session_id": None, "cwd": os.path.relpath(wt, self.repo),
+                        "round": 1, "model": "opus", "state": "open",
+                        "resumable": False, "why": "fixture"}}))
+        boot = self.boot()
+        self.events_file(
+            {"ts": ago(600), "kind": "ticket.attempt.start", "pid": 9001, "ticket": ident,
+             "attempt": "1", "driver_pid": dead, "boot_id": boot},
+            {"ts": ago(599), "kind": "agent.start", "pid": 9002, "ticket": ident,
+             "role": "worker", "model": "opus", "run_id": run_id, "round": "1",
+             "driver_pid": dead, "boot_id": boot})
+        return wt, head, expected, run_dir
+
+    def test_t2_a_dead_worker_round_is_saved_cleaned_closed_and_requeued(self):
+        wt, head, expected, run_dir = self.dead_worker_round()
+        done = self.reconcile()
+        out = done.stdout + done.stderr
+        self.assertIn("heartbeat: reconciled", done.stdout, out)
+        self.assertEqual(self.read(os.path.join(run_dir, "wip-round1-died.diff")), expected)
+        self.assertEqual(self.git("status", "--porcelain", cwd=wt), "")
+        self.assertEqual(self.git("rev-parse", "t5").strip(), head)
+        self.assertFalse(self.exists(os.path.join(run_dir, "worker.pid")), out)
+        row = json.loads(self.read("reports/t5/sessions.json"))["worker"]
+        self.assertEqual(row["state"], "closed")
+        self.assertEqual(row["why"], "driver-died")
+        self.assertTrue(row.get("closed_at"))
+        rows = self.events()
+        self.assertEqual(len([r for r in rows if r["kind"] == "ticket.attempt.failed"
+                              and str(r.get("ticket")) == "5"
+                              and r.get("reason") == "driver-died"]), 1, out)
+        self.assertEqual(len([r for r in rows if r["kind"] == "agent.failed"
+                              and r.get("role") == "worker"
+                              and r.get("reason") == "driver-died"]), 1, out)
+        ticket = self.load_ticket("5")
+        self.assertEqual(ticket["state"], "Ready")
+        self.assertEqual(ticket["state_version"], 4)
+        cost = [c for c in ticket.get("cost") or [] if c.get("role") == "worker"]
+        self.assertEqual(len(cost), 1, cost)
+        self.assertEqual(cost[0]["round"], 1)
+        self.assertEqual(cost[0]["outcome"], "error")
+        self.assertIn("driver-died", cost[0]["note"] or "")
+        self.assertEqual(cost[0]["run_id"], "20261020-101010-1")
+        self.assertEqual(self.inbox_rows(), [])
+        logs = os.path.join(self.repo, "reports", "heartbeat")
+        self.assertTrue(os.path.isdir(logs) and any(n.endswith(".log") for n in os.listdir(logs)))
+
+        again = self.reconcile()
+        self.assertIn("nothing to reconcile", again.stdout, again.stdout + again.stderr)
+        self.assertEqual(len(self.events()), len(rows))
+        self.assertEqual(self.load_ticket("5")["state_version"], 4)
+
+    def test_t2_a_taken_over_round_is_left_alone(self):
+        wt, head, expected, run_dir = self.dead_worker_round()
+        with open(os.path.join(self.repo, "board", "events.jsonl"), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": ago(30), "kind": "ticket.attempt.start", "pid": 9003,
+                                 "ticket": "5", "attempt": "2",
+                                 "driver_pid": self.live_pid(), "boot_id": self.boot()}) + "\n")
+        before = len(self.events())
+        done = self.reconcile()
+        self.assertNotIn("ticket.attempt.failed", [r["kind"] for r in self.events()],
+                         done.stdout + done.stderr)
+        self.assertEqual(len(self.events()), before)
+        self.assertEqual(self.load_ticket("5")["state"], "Running")
+        self.assertNotEqual(self.git("status", "--porcelain", cwd=wt), "")
+
+    # ------------------------------------------------------------ T3 死掉的 land
+
+    def dead_land(self, holder_pid, driver_pid, stamp="20261020-111111"):
+        os.makedirs(os.path.join(self.repo, ".land.lock"))
+        self.write(".land.lock/holder", "pid=%d boot_id=%s 開始=2026-10-20T11:11:11 分支=t1-x\n"
+                   % (holder_pid, self.boot()))
+        self.events_file({"ts": ago(600), "kind": "land.start", "pid": 9001, "stamp": stamp,
+                          "driver_pid": driver_pid, "boot_id": self.boot()})
+        path = os.path.join(self.home, "land-wt")
+        self.git("worktree", "add", "-q", "-b", "land/%s" % stamp, path, "main")
+        return path, stamp
+
+    def has_branch(self, name):
+        import subprocess
+        return subprocess.run(["git", "-C", self.repo, "rev-parse", "-q", "--verify",
+                               "refs/heads/%s" % name], capture_output=True,
+                              env=self.env()).returncode == 0
+
+    def test_t3_a_dead_land_is_unlocked_failed_and_swept(self):
+        dead = self.dead_pid()
+        path, stamp = self.dead_land(dead, dead)
+        done = self.reconcile()
+        out = done.stdout + done.stderr
+        self.assertFalse(self.exists(".land.lock"), out)
+        fails = [r for r in self.events() if r["kind"] == "land.fail"
+                 and r.get("stamp") == stamp]
+        self.assertEqual(len(fails), 1, out)
+        self.assertEqual(fails[0].get("stage"), "died")
+        self.assertFalse(os.path.exists(path), out)
+        self.assertFalse(self.has_branch("land/%s" % stamp), out)
+
+    def test_t3_a_land_that_already_ended_keeps_its_worktree_and_lock(self):
+        dead = self.dead_pid()
+        path, stamp = self.dead_land(dead, dead)
+        with open(os.path.join(self.repo, "board", "events.jsonl"), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": ago(590), "kind": "land.fail", "pid": 9002,
+                                 "stamp": stamp}) + "\n")
+        holder = self.read(".land.lock/holder")
+        self.reconcile()
+        self.assertTrue(os.path.isdir(path))
+        self.assertTrue(self.has_branch("land/%s" % stamp))
+        self.assertEqual(self.read(".land.lock/holder"), holder)
+        self.assertEqual(len([r for r in self.events() if r["kind"] == "land.fail"]), 1)
+
+    def test_t3_a_live_land_is_named_alive_and_nothing_is_removed(self):
+        live = self.live_pid()
+        path, stamp = self.dead_land(live, live)
+        done = self.reconcile()
+        self.assertIn("alive", done.stdout, done.stdout + done.stderr)
+        self.assertTrue(self.exists(".land.lock/holder"))
+        self.assertTrue(os.path.isdir(path))
+        self.assertTrue(self.has_branch("land/%s" % stamp))
+        self.assertNotIn("land.fail", self.kinds())
+
+    # ------------------------------------------------------------ T4 主線 session
+
+    def test_t4_a_dead_main_session_gets_its_end(self):
+        self.events_file({"ts": ago(600), "kind": "session.start", "pid": 9001,
+                          "role": "main", "session": "s-dead",
+                          "driver_pid": self.dead_pid(), "boot_id": self.boot()})
+        done = self.reconcile()
+        ends = [r for r in self.events() if r["kind"] == "session.end"]
+        self.assertEqual(len(ends), 1, done.stdout + done.stderr)
+        self.assertEqual(ends[0].get("reason"), "driver-died")
+        self.assertEqual(ends[0].get("session"), "s-dead")
+
+    def test_t4_a_main_session_without_a_driver_is_not_ended(self):
+        self.events_file({"ts": ago(3 * 3600), "kind": "session.start", "pid": 9001,
+                          "role": "main", "session": "s-old"})
+        self.reconcile()
+        self.assertNotIn("session.end", self.kinds())
+
+    # ------------------------------------------------------------ T7 一份活性判準、不發訊號
+
+    def test_t7_one_liveness_module_shared_with_schedule_and_no_signals(self):
+        import re
+        here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        scripts = os.path.join(here, "scripts")
+
+        def text(name):
+            with open(os.path.join(scripts, name), encoding="utf-8") as handle:
+                return handle.read()
+
+        schedule = text("schedule.py")
+        self.assertNotIn("def gone(", schedule, "schedule.py 還留著自己那一份 gone()")
+        homes = [name[:-3] for name in sorted(os.listdir(scripts))
+                 if name.endswith(".py") and "\ndef gone(" in "\n" + text(name)]
+        self.assertEqual(len(homes), 1, "gone() 要剛好一份:%s" % homes)
+        module = homes[0]
+        pattern = r"(^|\n)\s*(import|from)\s+%s\b" % re.escape(module)
+        self.assertRegex(schedule, pattern)
+        beat = text("heartbeat.sh") + (text("heartbeat.py") if os.path.exists(
+            os.path.join(scripts, "heartbeat.py")) else "")
+        self.assertRegex(beat, pattern)
+        body = text(module + ".py")
+        # 字面拆開:hard_block.patterns 查 tests/ 的新增行(A9)。
+        for word in ("os" + ".kill(", "kill" + "pg(", "signal."):
+            self.assertNotIn(word, body)
+
+
 if __name__ == "__main__":
     unittest.main()
