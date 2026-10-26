@@ -13,7 +13,7 @@
   "depends_on": [
     {
       "id": "169",
-      "condition": ""
+      "condition": "landed"
     }
   ],
   "role": "worker",
@@ -21,8 +21,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "8d2cd914254d76e5620aeb3e90dcc1f1ddf6030f",
-  "state": "Draft",
-  "state_version": 1,
+  "state": "Ready",
+  "state_version": 3,
   "lease": null,
   "retry_limit": 2,
   "verify": {

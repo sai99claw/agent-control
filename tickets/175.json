@@ -1,0 +1,33 @@
+{
+  "id": "175",
+  "subject": "整理 memory/role/main.md(暫存區 5 條未整理)",
+  "created": "2026-10-26T09:45:11+00:00",
+  "objective": "由 fable 照 docs/DISCUSSION.md 的格式討論後整理 memory/role/main.md:處置 memory/role/main.inbox.md 在 snapshot 那一刻的每一行(D-053 ⑥ / D-055 ① 暫存區達批次門檻就整理)。判準只有一句:每個 session 開場都會讀，只留值得這個成本的;寫什麼、留多長由你決定,沒有字數目標(D-053 ⑥)。D-007「沒有討論檔不准整理」、D-013「兩個模型或一個高階模型、只留原則」、D-043「單一高階整理者」",
+  "acceptance": [
+    "`memory.py consolidate memory/role/main.md` 退出碼 0(snapshot 那 K 行已移進 `.consumed`)",
+    "**fable 單獨整理**(D-043 / D-049 ②,角色表 consolidator 鏈);討論檔寫得出每一行處置的理由",
+    "整理後只留**具體的原則、行為準則、思考方式**;**不直接寫案例**,案例用票號當來源引用(例:「快照層只畫說得出處的畫面(#585)」)",
+    "案例原文留在紀錄類文件(DECISIONS 歸檔 / HANDOFF 歷史),記憶檔只留指路",
+    "保留的每一條仍帶日期 / 來源票號 / 實測或推論三個標記",
+    "討論存成 discussions/<date>-memory-<model>.md(docs/DISCUSSION.md 的格式:檔頭 model / source_lines / source_sha256,結論區逐條 `- L<n>: <處置>`)"
+  ],
+  "depends_on": [],
+  "role": "consolidator",
+  "model": "fable",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "727fd9a91730256885367b0584d3e92740776e04",
+  "state": "Ready",
+  "state_version": 1,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "outline": "派工照 `templates/dispatch-consolidator.md`(主線開場由 `consolidate-memory.sh` 照角色表起**一個** session;規則包 `python3 scripts/rules.py pack consolidator --model <模型>`,角色卡 `memory/role/consolidator.md`)。先 `python3 scripts/memory.py snapshot memory/role/main.md` 把兩行抄進討論檔頭,逐行寫處置,最後跑 `python3 scripts/memory.py consolidate memory/role/main.md --candidate <新版> --discussion <啟動端記下的那一份討論檔>`。",
+  "needs_verifier": false,
+  "memory_file": "memory/role/main.md"
+}
