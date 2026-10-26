@@ -1,88 +1,58 @@
 {
   "id": "117",
-  "subject": "session 生命週期、結構化交接與看板可見性",
+  "subject": "Driver liveness: dead mid-way / awaiting takeover / taken over are told apart, and `actl heartbeat --reconcile` puts tickets, events, land lock and worktree debris back to the facts",
   "created": "2026-10-15T03:13:56+08:00",
-  "objective": "以現有 events、sessions.json 與看板為基礎，讓中途死亡、待接手與新 session 已接手能區分；本票保存事實與原子 claim，不決定何時自動重派。",
+  "objective": "After a container restart (or any killed auto-fix / land / review / main session), one command reports every unmatched start as alive / dead-awaiting-takeover / taken-over / unknown by reading /proc and boot_id (never a signal), and `--reconcile` does what main did by hand 4+ times on 2026-10-21..26: closes the dead round's events and sessions.json rows, saves the worktree's uncommitted work to reports/t<n>/<run_id>/wip-round<r>-died.diff and leaves the worktree clean, writes the dead round's cost row, puts the ticket back to Ready, removes a dead land's lock and debris, and emits the closer events so heartbeat is quiet afterwards. No daemon (#120 cancelled): facts are read at session start and on demand.",
   "acceptance": [
-    "A1 sessions.json 新版固定 schema_version=2、runs 以 run_id 索引、handoffs 以 handoff_id 索引；同角色多次執行不覆蓋，內部 session_id 與 provider_session_id 分開。舊 role→row 檔只讀正規化，首次 host 寫入在鎖內遷移，無兩份可寫真相。",
-    "A2 host 記 start/heartbeat/end/crashed，心跳預設 30 秒；超過 90 秒只標 stale，不能憑 stale 或 PID 存在就宣稱存活／死亡。保留 pid 與 process_start identity 供 #120 對帳。worker 只交觀察與檔案，不自行寫正式 registry。",
-    "A3 handoff 有摘要、下一步、artifact_refs、來源 run、接收角色、可空接手 run 與 pending/claimed/completed/superseded 狀態；缺 artifact 可顯示但禁止宣稱可直接 resume。記錄已完成與已排除假設，不能把整份歷史 prompt 再貼給接手者。",
-    "A4 claim 先以 ticket+attempt 取得單一派工 owner，既有票 lease holder=owner_id；同 owner 在 registry 鎖內按 role 領取唯一 active run。worker/verifier 可平行且不互搶票租約，同 role 雙 claim 只有一個成功，失敗不啟動程序；不同 owner 不得接管仍有效票租約，未知交 #120 對帳。",
-    "A5 board/board.py 使用同一 reducer 顯示 role/model/effort、執行狀態、最後心跳、交接摘要及接手連結；舊事件只有 PID 時標 legacy，不將 compact/resume 當新 session start。接手完成不等於票 Done。",
-    "A6 auto-fix/review 與 session hook 送新版生命週期資料；程序死在沒有 EVIDENCE 時也能由 host 以現有副本、部分 patch、log 產生交接事實；內容未知填 null，不虛構進度。receipt 接受仍交 #98，不另造 review 欄。",
-    "A7 worker/verifier 收件在同一票鎖驗派工 attempt、role active run、owner、捕獲版本及 #98 face；舊 run 或外部改票 rc=4 零覆蓋。平行角色先收 artifact 再序列化 apply；只有可追溯為同 owner 的已接受同伴收件造成版本前進，且 face 未變，才允許依該連續版本鏈前推 CAS；未知版本跳躍拒收。finish 保持 attempt 也不能接收舊 run。",
-    "A8 提供唯一程序 slot acquire/release API，#119 呼叫時可設容量，未設時沿用現有執行數；每個實際 worker/verifier/reviewer 都持一 slot。worker 結束即釋 slot，再等待 verifier；禁止持有最後一 slot 等待尚未啟動的 verifier。",
-    "A9 新 session-state helper 與 schema 讀端一併列入 sync-to-project；拋棄式已同步專案可跑新 auto-fix 的 session 路徑，不會缺 helper。"
+    "A1 Start events carry the driver: `ticket.attempt.start` and `agent.start` (auto-fix.sh, review.sh, consolidate-memory.sh, new-session.sh dispatch), `land.start` (land.sh), `session.start` (session-hook.sh / new-session.sh main) get kv `driver_pid=<pid of the emitting driver, not of event.py>` and `boot_id=<content of /proc/sys/kernel/random/boot_id>`. The land lock holder line gets `boot_id=` next to `pid=`. Rows written before this ticket (no kv) are still read: they fall back to the lease rule and are reported as `unknown`, never `alive`.",
+    "A2 `actl heartbeat` (read-only, unchanged exit codes 0/1/2, same `heartbeat:   ` line prefix that new-session.sh's awk filters) reports every unmatched start with one verdict word: `alive` (driver_pid present in /proc and boot_id equal to the current one - printed even past the lease, exit code contribution 0), `dead` (pid gone or boot differs) with sub-state `awaiting-takeover` (no later start for the same key, H2) or `taken-over by <run_id/attempt/stamp>`, or `unknown (no driver recorded; lease rule)`. Verdicts are computed by ONE liveness implementation shared with scripts/schedule.py `gone()` (moved to a module both import; a second copy is an objection) and read only /proc - no signal of any kind.",
+    "A3 `actl heartbeat --reconcile` acts only on `dead` + `awaiting-takeover`; `alive`, `taken-over` and `unknown` rows are printed and left alone (`unknown` tells the human what to check). It is idempotent: a second run reports 'nothing to reconcile' and writes no event, no file, no ticket change.",
+    "A4 Dead worker / verifier round r of run R for ticket n: (i) if the ticket worktree has uncommitted or untracked changes, their diff (H3) is written to reports/t<n>/<R>/wip-round<r>-died.diff and the worktree is then clean (`git status --porcelain` empty; branch head untouched; commits made before death stay); an empty diff writes no file; (ii) reports/t<n>/<R>/worker.pid (and the verifier's) removed; (iii) sessions.json rows for that run -> state=closed, why=driver-died, closed_at; (iv) events `agent.failed` (role, round, run_id, kv reason=driver-died) for each open agent row and `ticket.attempt.failed attempt=r reason=driver-died`; (v) one cost row per dead agent via `ticket.py cost <n> --role <role> --round r --from-envelope <that round's log> --outcome error --note driver-died --run-id R` (with #124 landed the tokens come from the transcript; without it the row is nulls with the existing reason - this ticket does not parse logs); (vi) ticket state Running -> Ready (so the scheduler frontier / `actl schedule run` / auto-fix can re-dispatch); InReview stays InReview (a dead reviewer only gets `agent.failed` + `review.missing`); Blocked / Done / Cancelled are never changed; (vii) the dead round's dispatch / log / result files are kept where they are - the next round of the same run must not overwrite them: auto-fix.sh names a re-dispatched round's files with a `-r2` style suffix or mints a new run_id (worker's choice, written in EVIDENCE); the test asserts the dead round's worker log still exists byte-identical after the next round ran.",
+    "A5 Dead land (land.start with stamp S, no land.pass/fail/refused for S, holder pid gone or boot differs): .land.lock removed, `land.fail stamp=S stage=died main_before=<holder's or event's main_before if recorded> note=driver-died` emitted so heartbeat pairs it, the land/<S> worktree and branch removed. A land whose stamp already has a terminal event (red kept on purpose, conflict) is NOT touched - still listed as debris as today. A live holder (pid in /proc, same boot) is named and nothing is removed. land.sh `take_lock` itself takes over a lock whose holder is dead by the same shared rule (prints 'stale lock pid X taken over'), instead of refusing and asking a human.",
+    "A6 Dead main session (session.start role=main, driver_pid gone or boot differs): `session.end` with kv reason=driver-died is emitted; a session with no driver_pid (pre-A1 rows) stays `unknown` and is not ended.",
+    "A7 Dead scheduler run (reports/schedule/state.json stop=null, pid gone/boot differs): heartbeat prints it as `dead awaiting-takeover` with the resume hint `actl schedule run` and `--reconcile` does NOT touch state.json or the schedule lock (schedule.py already resumes and takes over its own stale lock, #119 A6/A11); its orphan auto-fix children are reconciled by A4 only when they are dead themselves.",
+    "A8 Output for humans: each reconciled item prints one line `heartbeat: reconciled <what> -> <done>`; the summary is also appended to reports/heartbeat/<timestamp>.log (not a page: reconcile is main's own action, D-032 pages are for decisions); no `decision` inbox page is written by reconcile.",
+    "A9 No new line matching hard_block.patterns (os\\.kill, killpg, pkill, `kill -`) in tests/ or verify/; liveness code outside tests contains no signal call either (grep in the verifier case).",
+    "A10 docs: docs/WORKFLOW.md gets a short section 'A driver died' (what heartbeat reports, what --reconcile does, what it never does) and docs/SESSION-START.md's main-role step says `actl heartbeat` then `--reconcile` when it reports dead rows; tickets/SCHEMA.md: nothing new on the ticket (no sessions registry on the ticket, no new fields)."
   ],
   "in_scope": [
-    "以現有 events、sessions.json 與看板為基礎，讓中途死亡、待接手與新 session 已接手能區分；本票保存事實與原子 claim，不決定何時自動重派。"
+    "Driver pid + boot_id on start events and the land lock; shared liveness module; heartbeat verdicts; `actl heartbeat --reconcile` for dead worker/verifier rounds, dead land, dead reviewer, dead main session; docs."
   ],
   "out_of_scope": [
-    "docs/DECISIONS.md"
+    "No daemon / controller (#120 cancelled). No automatic re-dispatch (the scheduler / main does that from Ready). No resume of the dead agent's session (D-067: every round is a new agent). No sessions.json schema change beyond state/why/closed_at. No token parsing (#124). No change to the repair budget (#125). docs/DECISIONS.md and docs/VISION.md (hard_block)."
   ],
-  "depends_on": [
-    {
-      "id": "98",
-      "condition": "landed"
-    },
-    {
-      "id": "121",
-      "condition": "landed"
-    }
-  ],
-  "allowed_write_paths": [
-    "scripts/session-state.py",
-    "scripts/auto-fix.sh",
-    "scripts/review.sh",
-    "scripts/session-hook.sh",
-    "scripts/event.py",
-    "scripts/heartbeat.sh",
-    "board/board.py",
-    "tests/test_session_state.py",
-    "tests/test_session_hook.py",
-    "tests/test_board.py",
-    "tests/test_event.py",
-    "tickets/SCHEMA.md",
-    "docs/WORKFLOW.md",
-    "scripts/sync-to-project.sh",
-    "tests/test_sync_to_project.py"
-  ],
+  "depends_on": [],
+  "allowed_write_paths": [],
   "role": "worker",
-  "model": "codex:gpt-5.6-sol",
-  "tool": "codex",
+  "model": "opus",
+  "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "fac9173633ebcd697c71a69d23d148b89a15fae1",
-  "state": "Draft",
-  "state_version": 55,
+  "base_sha": "2942f85f9e27903562443a41a828d603f34ea6c5",
+  "state": "Ready",
+  "state_version": 81,
   "lease": null,
   "retry_limit": 2,
   "verify": {
     "files": [],
-    "tags": [
-      "agent-output",
-      "board-reads"
-    ],
+    "tags": [],
     "run": "",
     "notes": ""
   },
-  "outline": "本票只負責session 生命週期、結構化交接與看板可見性。前置：#98、#121。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。",
+  "outline": "Rewritten 2026-10-26 per D-076 (old draft: sessions registry schema v2, claims, slots, #120 Controller - all dropped; #120/#123 cancelled, #119 schedule landed). Verified by reading (not run): heartbeat.sh = lease-only + land debris; schedule.py has pid+boot_id liveness for its own children (gone(), Lock.take, orphan()); event.py pid = emitter pid; land.sh take_lock refuses on any existing lock; auto-fix run_agent writes <round dir>/worker.pid, removed on return; sessions.json rows open/closed via session_open/session_close; events: 1 session.start role=main, 0 session.end. Evidence of the manual loop: reports/t{155,159,169}/wip-round1-timeout.diff, reports/t162/wip-round2-restart.diff. Files that will move: scripts/heartbeat.sh (+ maybe scripts/heartbeat.py), scripts/schedule.py (import shared gone()), scripts/event.py (none required), scripts/auto-fix.sh (ev kv on start events; round-file naming on re-dispatch), scripts/land.sh (holder boot_id, take over dead lock, land.start kv), scripts/review.sh, scripts/consolidate-memory.sh, scripts/new-session.sh, scripts/session-hook.sh ($PPID best effort), tests/test_heartbeat.py, tests/test_schedule.py (A6 stale holder test must keep passing), tests/test_land.py, tests/test_auto_fix.py, tests/test_session_hook.py, tests/test_new_session.py (awk filter of heartbeat lines), docs/WORKFLOW.md, docs/SESSION-START.md. Pinned old behaviour checked: tests/test_heartbeat.py lease wording and land-debris listing; tests/test_schedule.py test_a6_stale_holder_is_taken_over, test_a11_* (resume). needs_verifier=true: cross-process liveness and crash boundaries need independent cases. interface_fixed=true: verdict words, kv names, file names and the CLI flag are fixed above, so the verifier starts in parallel. complexity=complex. Overlap with #125: both edit scripts/auto-fix.sh (different sections: event kv / re-dispatch file naming here, round budget + diagnosis dispatch there) - land in order #124, #117, #125. Relation to #124: A4(v) calls ticket.py cost on the dead round's log; tokens appear only once #124 landed - not a dependency.",
   "effort": "high",
   "needs_verifier": true,
   "interface_fixed": true,
-  "feature": "agent-control：session 生命週期與交接",
-  "test_plan": "T1 純 reducer 事件夾具測同 role 多 run、重複事件、亂序 end、stale、legacy 及舊檔遷移；oracle 為固定狀態轉移表。\nT2 fake worker 被控制退出且無 EVIDENCE；核對 host 產交接保留原副本路徑；兩個 claim barrier 驗一個成功。\nT3 test_board/test_session_hook：看板可辨 stale/接手/closed，compact 無新 start。M1 按 role 覆寫使 A1 紅；M2 stale 直接准新 claim 使 A4 紅；M3 交接完成設 Done 使 A5 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例置於 tests/test_ticket_<正式票號>_verify.py，不列入 worker 的 allowed_write_paths；由驗證者設定 verify.files/run，verify.tags=[]（A 的 tests/ 案例不冒用未登記的 verify 標籤）。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。\nT4 雙角色同 owner 平行均可收件、同 role 雙派拒絕、外部改票使遲到結果拒收；容量=1 時 worker 先釋 slot 再起 verifier，不能死鎖。",
-  "verify_strings": [
-    "handoff_id",
-    "provider_session_id",
-    "last_heartbeat"
-  ],
-  "problem": null,
-  "hypotheses": null,
+  "feature": "agent-control: driver liveness and reconcile after a crash",
+  "test_plan": "All tests in tests/ against a throwaway control root (tests/control_harness.py); clear AC_ROOT / AC_TICKETS_DIR / AC_CONTROL_DIR; no real LLM; expected values come from the fixture, not from the code under test.\nT1 (unit, verdicts; tests/test_heartbeat.py) Fixture events: (a) ticket.attempt.start with driver_pid=<a pid the test proved absent: spawn `true` and wait for it> and boot_id=<current boot read by the test> -> line contains `dead awaiting-takeover`; exit code 1. (b) driver_pid=<pid of a `sleep 300` child the test spawned> same boot, ts 3 h old (past lease 7200) -> `alive`, exit code 0 when nothing else is open. (c) driver_pid=1 (alive) with boot_id=`00000000-dead` -> `dead`. (d) as (a) plus a later ticket.attempt.start attempt+1 for the same ticket -> `dead taken-over by attempt 2`; a later start for ANOTHER ticket -> still `awaiting-takeover`. (e) a row without driver_pid 3 h old -> `unknown` and the existing lease wording (existing tests test_a_session_past_its_lease_* and test_two_lines_running_at_once_* unchanged and green). (f) land.start stamp S with dead driver and no terminal event -> `dead awaiting-takeover`; with a land.fail for S -> not listed as open (existing test_a_refused_land_counts_as_come_back).\nT2 (integration, reconcile worker round; tests/test_heartbeat.py or a new tests/test_reconcile.py) Build: ticket n Running, branch t<n> worktree with one commit after base, one modified tracked file, one untracked file, reports/t<n>/<R>/worker.pid, sessions.json worker row open, events attempt.start + agent.start with a dead driver, a worker-round1.log (any text). Before the call the test computes expected diff = `git add -N . && git diff HEAD` output. After `actl heartbeat --reconcile`: wip-round1-died.diff == expected; porcelain empty; branch head unchanged; worker.pid gone; sessions row closed/why=driver-died; events attempt.failed reason=driver-died and agent.failed reason=driver-died present exactly once; ticket state Ready, state_version +1; one cost row role=worker round=1 outcome=error note contains driver-died run_id=R; no inbox page written; second run -> 'nothing to reconcile', event count unchanged.\nT3 (integration, land) .land.lock/holder `pid=<absent> boot_id=<current>` + land.start stamp S + land/<S> worktree and branch -> after reconcile: lock dir gone, land.fail stamp=S stage=died present, worktree and branch gone. Variant: stamp S has land.fail already -> worktree kept, lock untouched. Variant: holder pid = live sleep child -> nothing removed, line says `alive`. land.sh: with a dead holder, `sh scripts/land.sh t<n>` proceeds and prints the takeover line (tests/test_land.py).\nT4 (integration, main session) session.start role=main driver_pid=<absent> -> session.end reason=driver-died emitted; without driver_pid -> no session.end.\nT5 (events carry the driver) auto-fix harness round 1 (tests/test_auto_fix.py): ticket.attempt.start and agent.start rows have driver_pid == the auto-fix.sh pid (the harness reads it from the emitted row and checks it is not event.py's: it differs between the two rows' `pid` field and equals across them) and boot_id == current; land.start in tests/test_land.py likewise; holder line has boot_id=.\nT6 (next round does not overwrite) after T2, run auto-fix round 2 in the harness: the dead round's worker-round1.log is byte-identical afterwards.\nT7 (hard_block) grep of the branch diff's added lines in tests/ and verify/ for hard_block.patterns = 0 hits (gate preflight does this; the verifier also asserts no `os.kill(`/`killpg(` in the liveness module).\nMutations (worker runs, states which test goes red): M1 drop the boot_id comparison in gone() -> T1(c) red. M2 reconcile treats `taken-over` like `awaiting-takeover` -> T1(d)/T2 variant red (the newer attempt would get a failed event). M3 write the wip diff but skip cleaning -> T2 red (porcelain not empty). M4 remove the land worktree regardless of a terminal event -> T3 variant red. M5 emit driver_pid from event.py's os.getpid() -> T5 red. Not measured by the opener (read-only opening); the worker hands in red/green evidence.",
+  "verify_strings": [],
+  "problem": "Evidence: reports/t162/wip-round2-restart.diff, reports/t155|t159|t169/wip-round1-timeout.diff (all hand-made by main), HANDOFF 2026-10-22 ('container restarted 3 times, background work killed') and 2026-10-26 ('long runs must be setsid nohup; the container restarts'). What a killed driver leaves behind today: ticket Running with nobody on it; `ticket.attempt.start` / `agent.start` / `land.start` with no closer; reports/t<n>/<run>/worker.pid (removed only on return, auto-fix.sh run_agent); reports/t<n>/sessions.json rows state=open; the worktree with uncommitted work; .land.lock/holder (pid only, no boot id; land.sh take_lock refuses and tells a human to rm -rf); land/<stamp> worktree + branch. heartbeat.sh can only say 'lease expired' (lease_seconds) - a slow live run and a dead one look the same, and it never reads /proc or boot_id. schedule.py already judges its own children right (state.json pid + boot_id, `gone()`), but only for children of `actl schedule run` and only when that command is re-run. event.py writes `pid` = the pid of the emitting `event.py` process, which is useless for liveness. On the cloud main session, session.start has no session.end (events: 1 start, 0 end), so heartbeat names the live main session as stale after 2 h every time.",
+  "hypotheses": "H1 Every start a driver emits can carry the driver's own pid and the boot id (auto-fix.sh / land.sh / review.sh: $$; new-session.sh dispatch: the python wrapper's pid; session-hook.sh: $PPID, best effort). Falsify: find a start path that cannot know its driver pid before emitting - then that path records nothing and its rows stay `unknown`, never `alive`.\nH2 'Taken over' is decidable from the event file alone: after a dead start there is a later `ticket.attempt.start` with a higher attempt, or an `agent.start` for the same ticket+role with another run_id, or (land) a later `land.start` whose branches include the same t<n>. Falsify: construct a fixture where the later start belongs to another ticket or the same run_id - it must not count.\nH3 A saved `git diff HEAD` plus a clean worktree is enough for the next round: that is exactly what main did by hand for #155, #159, #162, #169 and the next round went on. Falsify: untracked files - `git diff HEAD` misses them, so the diff must be taken after `git add -N .` (intent-to-add) or untracked paths are listed in the diff header; the test fixture has one untracked file.\nH4 Liveness needs no signal: /proc/<pid> plus /proc/sys/kernel/random/boot_id is what schedule.py already uses and hard_block forbids os.kill / killpg / pkill / `kill -` in new test lines anyway.",
   "interface_contracts": {
-    "run": "{run_id,session_id,provider_session_id,ticket_id,attempt,state_version,face,owner_id,role,model,effort,cwd,status,last_heartbeat,pid,process_start,artifact_refs}；無票欄為 null，artifact_refs 永為 list[str]。",
-    "handoff": "{handoff_id,from_run,to_role,to_run,summary,next_action,artifact_refs,status,supersedes}；to_run/supersedes 可 null。",
-    "registry": "有票 reports/t<id>/sessions.json；無票 reports/sessions.json，同一 schema/reducer；handoff 僅此處可寫，票 handoff 留引用。",
-    "claim": "既有 ticket lease 的 holder/until 形狀不變，holder=派工 owner_id；同 owner 的 role claim 只在 sessions registry 唯一 active run 表示，不另設各自到期租約。review 角色以 #98 review_request 的 run_id 為當前收件身分。"
+    "events": "start kinds gain kv driver_pid=<int> boot_id=<uuid string>; closers added: ticket.attempt.failed kv reason=driver-died; agent.failed kv reason=driver-died; land.fail kv stage=died note=driver-died; session.end kv reason=driver-died. No new kind in event.py KINDS.",
+    "liveness": "one function `gone(pid, boot) -> bool` (pid absent from /proc, or boot recorded and != current boot) used by schedule.py and heartbeat; no signals.",
+    "heartbeat_cli": "`actl heartbeat [--reconcile]` (scripts/heartbeat.sh; python body may move to scripts/heartbeat.py called by the sh wrapper - actl's table maps heartbeat to the .sh). Verdict words exactly: alive | dead awaiting-takeover | dead taken-over | unknown.",
+    "files": "reports/t<n>/<run_id>/wip-round<r>-died.diff (unified diff of `git diff HEAD` after `git add -N .`, taken before cleaning); reports/heartbeat/<YYYYmmdd-HHMMSS>.log.",
+    "ticket": "only `state` Running->Ready by reconcile (through ticket.py set, state_version +1); cost row through ticket.py cost; nothing else on the ticket."
   },
   "non_goals": null,
   "duplicate_analysis": null,
@@ -91,11 +61,12 @@
   "supersedes_contract": null,
   "priority": "P1",
   "decision_refs": [
-    "D-049",
-    "D-016",
-    "D-018",
-    "D-028",
-    "D-031",
-    "D-050"
-  ]
+    "D-076",
+    "D-067",
+    "D-071",
+    "D-032",
+    "D-054",
+    "D-065"
+  ],
+  "complexity": "complex"
 }

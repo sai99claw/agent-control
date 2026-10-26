@@ -1,61 +1,37 @@
 {
   "id": "125",
-  "subject": "閘門與落地全套紅預設自動修補，統一三輪上限",
+  "subject": "Red gate / red landing repairs itself by default: budget = D-050 ② (3 repair rounds after the first red, one config key), and unattributed red / environment-suspect get one bounded diagnosis round instead of a page",
   "created": "2026-10-17T13:07:40+08:00",
-  "objective": "補完既有 gate/land 預設開 auto-fix 的缺口：可歸因紅、無歸因紅與環境可疑先走有界診斷修補，不把一般技術失敗直接送回主線。",
+  "objective": "Fill the three gaps left after the inventory below: (1) the repair budget reads one key `repair.max_rounds` (default 3 = repair rounds after the first red, D-050 ②) through one function, replacing the two `retry_limit or 2` copies in auto-fix.sh and ticket.py's own; (2) an unattributed red (rc != 0, failures []) dispatches ONE diagnosis round inside the same budget instead of paging main; (3) an environment-suspect gate (rc 86) is re-run once mechanically and, if still 86, gets ONE diagnosis round; a second consecutive unattributed / 86 outcome pages main. Single-ticket gate, single-ticket land and batch land share the contract. Ordinary technical failures no longer reach main (D-049 ③).",
   "acceptance": [
-    "A1 gate 與單票/多票 land 全套紅預設開修補；--no-auto-fix 仍是明確停用。紅的原 gate rc 不偽裝綠，修補產生新候選後重新量 gate/review/full suite。",
-    "A2 D-050 ② 已裁 repair.max_rounds=3：首次紅之後最多 3 次修補嘗試（不是總共三次 worker）；技術診斷若啟 LLM 也算一次；跨重啟、換模型不歸零。既有 retry_limit 與 batch_fix.rounds 讀端正規化為同一 repair.max_rounds=3，衝突新值優先並警告；無重置、無 off-by-one。",
-    "A3 一般測試紅／missing result／不可歸因／environment_suspect 都提供現成 log 與失敗證據給 auto-fix。環境可疑不得盲目改產品碼或調弱測試，先診斷；只需既有授權內環境修復可續做，需產品/權限取捨才 decision。",
-    "A4 第 3 次修補後仍紅（D-050 ②）、明確 worker 反駁或產品取捨才對本修復流程發 decision；中間只寫事件。角色全耗與 #115 越界是各自既有停止理由，不被本票吞掉，也不冒充一般測試紅重試。",
-    "A5 同一 land 批次只一個 incident/預算，呼叫既有 auto-fix --batch；不得各票重複三輪。#120 處理進程失敗，本票處理測試修補輪數；同一 root_run_id 在重啟與換模型後仍延續預算。",
-    "A6 修補結果與新 base/patch 不匹配則重新 gate/review，未通過不能合併或發布；批次紅的 main 保持未變，修好後仍走原 land 授權與檢查。",
-    "A7 本票接上 #120 repair_needed 並消化等待中的 incident；單票與批次共用 #120 已定 ticket_ids/attempts/batch_id/root_run_id 形狀，第三輪紅只發一頁，不另建 batch repair ledger。",
-    "A8 status.py regression-red 建出的 Draft 票（#106 A4 沒有完整 gate 證據那種），由本票的修補流程在同一 incident 預算內呼叫 ticket.py plan <id> --run <該 gate 命令> 實跑一次；rc 任何值都寫 plan_ran，綠才轉 Ready 並進既有派工；紅則留 Draft 並在 incident 記 next_action；不另寫第二種證據欄。"
+    "A1 One budget key: board/config.json `repair: {\"max_rounds\": 3, \"env_rerun\": 1}` (project_config.py knows both keys with these defaults; `actl doctor` on a config without them reports nothing wrong). `ticket.py create` writes `retry_limit` = repair.max_rounds at creation (3 when the key is absent) instead of the literal 2; a ticket's explicit `retry_limit` wins over config (per-ticket override, as today). The limit is computed by ONE function in ticket.py (`repair_limit(ticket, conf)` -> rounds allowed = retry_limit + 1 when the ticket has a number, else max_rounds + 1); auto-fix.sh obtains it through `ticket.py` (a subcommand or the status reader), the two heredoc copies are gone (no `retry_limit\") or 2` arithmetic left in scripts/auto-fix.sh: grep `or 2) + 1` = 0 hits; comments may still mention the field). A's board/config.json: add `repair`, remove `batch_fix.rounds` so the batch budget also comes from max_rounds (batch_fix.rounds, when present, still wins for projects that set it; A does not).",
+    "A2 Budget semantics (D-050 ②): with max_rounds 3 and a ticket without retry_limit, a gate red on rounds 1..4 dispatches worker rounds 2, 3, 4 and after round 4's red the ticket is Blocked/owner=main with one decision page; with ticket retry_limit 1 only round 2 is dispatched. A diagnosis round (A3/A4) counts as one of those rounds. A model switch inside a round (quota -> next candidate) and the mechanical env re-run (A4) do not count (existing #121/#131 tests pin the former). A new auto-fix process (new pid, same ticket) continues at the next round number, never restarts at 2 (status files are the truth; already true - pinned by a test).",
+    "A3 Unattributed red: status rc != 0, failures [] and no hard-block note -> auto-fix dispatches a diagnosis round: the dispatch file has `## 診斷` (gate rc, status state, the last 200 lines of the gate log, the gate command to re-run, the rules: find why no attributable red list was produced; allowed fixes are harness / test-infrastructure / in-repo environment setup; never weaken or skip tests; if the cause is outside the repo write `OBJECTION: blocking <cause>` and hand in nothing) and no red list; `ticket.attempt.start` carries kv kind=diagnosis; the round is received, gated and reviewed like any other. Afterwards: attributable red -> normal repair continues; green -> normal green path; unattributed again -> rc 4 and ONE page saying 'diagnosis round r did not make the red attributable' (no second consecutive diagnosis). Batch: the same section in reports/batch/<stamp>/dispatch-round<r>.md when the batch red is unattributed; after a second unattributed outcome the suspect-kicking step is skipped (no red list to match) and one page is written.",
+    "A4 Environment suspect: gate.sh with auto-fix on and rc 86 calls auto-fix (the '環境可疑,不自動派' refusal is removed; `--no-auto-fix` keeps today's page and no dispatch). auto-fix on a status whose state is env_suspect (or environment_suspect rows non-empty): first re-runs the same gate command once (`repair.env_rerun`, default 1; event `gate.rerun` kv reason=env_suspect; not a round); rc 0 -> green path; rc 1 attributable -> normal repair; rc 86 / unattributed again -> ONE diagnosis round whose `## 診斷` section also lists the environment_suspect rows (source, engine, why, count, threshold) and the preflight output; if that round's gate is 86 / unattributed again -> one page 'environment: needs a human' and stop. A typed `auto-fix.sh <n>` over an env suspect keeps printing the existing warning line (test pinned) and then follows the same path. land.sh: the full suite's rc 86 is told apart from 1 (land.fail note names env_suspect; status state env_suspect) before auto_fix_all / batch_fix, which then follow A4 instead of reading an empty red list as 'unattributed'.",
+    "A5 Pages to main only at: budget exhausted (A2), second consecutive unattributed / 86 (A3/A4), worker objection escalate, hard_block hit, guard violation, candidates exhausted - each scenario in the harness ends with exactly one decision page; green rounds and diagnosis rounds that lead to an attributable red write events only (D-032).",
+    "A6 Mechanical stops unchanged and never diagnosed: hard_block hit (mechanical_stop), rc 8 guard, rc 7 candidates exhausted, rc 3 objection, rc 5 no hand-in keep their rc, page and state (existing tests pin them).",
+    "A7 docs: docs/WORKFLOW.md '回歸紅了之後' names `repair.max_rounds` / `repair.env_rerun`, the diagnosis round and the one-consecutive bound; docs/DESIGN-ENV-SUSPECT.md 理由 5 gets a dated note that D-076 replaces 'never dispatch over env suspect' with 'one re-run, then one diagnosis round' (gate's behaviour change); tickets/SCHEMA.md retry_limit row says where the default comes from."
   ],
   "in_scope": [
-    "補完既有 gate/land 預設開 auto-fix 的缺口：可歸因紅、無歸因紅與環境可疑先走有界診斷修補，不把一般技術失敗直接送回主線。"
+    "repair budget key + single reader; diagnosis round dispatch section for unattributed red and env suspect (single ticket and batch); gate.sh / land.sh hand-off to auto-fix on rc 86; pages only at the listed terminal states; docs."
   ],
   "out_of_scope": [
-    "docs/DECISIONS.md"
+    "No change to flake rerun, regression-red tickets, suspect-kicking rules, scheduler reland_max, review flow, candidate chains; no Controller (#120 cancelled); no driver-death handling (#117); no new agent kind or prompt route; docs/DECISIONS.md and docs/VISION.md (hard_block)."
   ],
   "depends_on": [
     {
-      "id": "120",
-      "condition": "landed"
-    },
-    {
-      "id": "106",
-      "condition": "landed"
-    },
-    {
-      "id": "126",
+      "id": "117",
       "condition": "landed"
     }
   ],
-  "allowed_write_paths": [
-    "scripts/gate.sh",
-    "scripts/land.sh",
-    "scripts/auto-fix.sh",
-    "scripts/controller.py",
-    "scripts/status.py",
-    "scripts/ticket.py",
-    "scripts/inbox.py",
-    "tests/test_gate.py",
-    "tests/test_land.py",
-    "tests/test_auto_fix.py",
-    "tests/test_controller.py",
-    "tests/test_status_67.py",
-    "board/config.json",
-    "docs/WORKFLOW.md"
-  ],
+  "allowed_write_paths": [],
   "role": "worker",
-  "model": "codex:gpt-5.6-sol",
-  "tool": "codex",
+  "model": "opus",
+  "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "dfaa05c0c87d5011a31872614c2c7a01d2176d25",
-  "state": "Draft",
-  "state_version": 9,
+  "base_sha": "2942f85f9e27903562443a41a828d603f34ea6c5",
+  "state": "Ready",
+  "state_version": 37,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -65,33 +41,28 @@
     "notes": ""
   },
   "effort": "high",
-  "outline": "本票只負責閘門與落地全套紅預設自動修補，統一三輪上限。前置：#120、#106。本次已讀來源與引用測試；行為案例、變異均未實測。needs_verifier=true：跨程序或失敗邊界須獨立案例。\nD-050 ②：修補上限 3 輪，跨重啟與換模型不歸零，第 3 次仍紅才發 decision 頁。",
-  "test_plan": "T1 假 gate 首紅第二修綠、三次仍紅；單票與多票各測，斷言修補啟動次數、原 rc、decision 只有上限後一頁。\nT2 無法解析失敗、環境可疑、review missing、產品反駁四種，核對診斷／decision 分界，禁止用環境旗標自動判綠。\nT3 跨重啟及 quota 換模型仍僅三次；--no-auto-fix 零自動派工；M1 第三次後再派使 A2 紅；M2 紅後立即 decision 使 A4 紅；M3 批次每票各起修復使 A5 紅。\n驗證界線：本次是唯讀開題，未執行上述產品行為或變異；實作者須在拋棄式測試樹執行並交紅／綠證據。\n獨立驗證者案例置於 tests/test_ticket_<正式票號>_verify.py，不列入 worker 的 allowed_write_paths；由驗證者設定 verify.files/run，verify.tags=[]（A 的 tests/ 案例不冒用未登記的 verify 標籤）。\n執行前清除 AC_ROOT、AC_TICKETS_DIR、AC_CONTROL_DIR 繼承值；測試以假 provider 與拋棄式控制根執行，不呼叫真 LLM、不碰正式票庫。",
+  "outline": "Rewritten 2026-10-26 per D-076 (old draft depended on #120 Controller incidents, #106 regression recorder, #126 - #120/#106 cancelled, #126 Done without landed_sha and its behaviour is on main). Inventory (read, not run) is in `problem`: of the old ticket's eight items, repair-by-default, land single/batch repair, scheduler re-land and restart/model persistence are DONE; left: budget size+single key (G1), unattributed-red diagnosis (G2), env-suspect re-run+diagnosis (G3, incl. land not telling 86 from 1). Files that move: scripts/auto-fix.sh (round limit reader; diagnosis dispatch section; env re-run; batch path), scripts/gate.sh (rc 86 hand-off), scripts/land.sh (86 vs 1 before auto_fix_all/batch_fix; batch rounds default), scripts/ticket.py (repair_limit; create default; help), scripts/project_config.py (repair keys), board/config.json, docs/WORKFLOW.md, docs/DESIGN-ENV-SUSPECT.md, tickets/SCHEMA.md, tests/test_auto_fix.py, tests/test_gate.py, tests/test_land.py, tests/test_ticket.py, tests/test_project_config.py. Pinned old behaviour that WILL change (list for the worker; each needs its expected value updated, not deleted): tests/test_ticket.py test_three_rounds_of_red_park_the_ticket_on_main and test_running_out_of_rounds_counts_one_intervention (limit 3 -> 4 rounds when retry_limit absent; keep a retry_limit=2 fixture to show the override), tests/test_auto_fix.py test_a_red_with_no_attribution_is_not_handed_to_a_new_worker (becomes: first unattributed -> diagnosis round; second -> no worker), tests/test_gate.py cases asserting '環境可疑,不自動派' (becomes hand-off), role-models.py RED_REPAIR rule (`repair_round >= 2 and last red` - unchanged, diagnosis rounds count as repair rounds for effort escalation). Decisions for main (recommendations): (1) D-019 reason 5 vs D-076: recommend D-076 wins - one free mechanical re-run, then one LLM diagnosis round inside the budget, then page; (2) bound = one consecutive diagnosis round (not configurable) - recommend accept; (3) A's batch_fix.rounds 2 -> removed so batches also get 3 - recommend accept (D-050 ② covers 落地全套紅). needs_verifier=true (failure-boundary behaviour across three scripts). interface_fixed=true (config keys, section header, kv names fixed above). complexity=complex. Not merged with #117: #117 is process liveness after a crash, #125 is test-outcome repair; they share scripts/auto-fix.sh but different sections; depends_on #117 landed only to serialise the auto-fix.sh edits (merge conflicts, HANDOFF 2026-10-21) and so a died round is never counted as a red round.",
+  "test_plan": "tests/ against the throwaway control root with the fake worker / fake gate of tests/test_auto_fix.py, tests/test_land.py, tests/test_gate.py; clear AC_ROOT / AC_TICKETS_DIR / AC_CONTROL_DIR; no real LLM.\nT1 (tests/test_ticket.py, tests/test_project_config.py) A1: create without config key -> retry_limit 3; with repair.max_rounds 1 -> 1; explicit --retry-limit (if exists) or set -> wins; `actl doctor` on a config lacking `repair` reports nothing; static: grep `or 2) + 1` in scripts/auto-fix.sh == 0 hits (the arithmetic, not the word).\nT2 (tests/test_auto_fix.py) A2: fake gate red forever, max_rounds 3 -> worker rounds run == [2, 3, 4], then state Blocked, pages == 1 (kind decision); ticket retry_limit 1 -> rounds == [2]; re-invoking auto-fix in a fresh process after a round-2 red dispatches round 3 (existing test_three_rounds_of_red_park_the_ticket_on_main updated to 4 rounds, see outline).\nT3 A3: status round 1 rc 1 failures [] no mech note -> dispatch-round2.md contains `## 診斷` and the log's last line, no failures section; attempt.start row has kind=diagnosis; variant: round 2's gate attributable red -> round 3 is a normal repair dispatch (has the red list); variant: round 2 unattributed again -> rc 4, no round 3, exactly one page whose text names round 2; batch variant in tests/test_land.py: unattributed batch red -> reports/batch/<stamp>/dispatch-round1.md has `## 診斷`; second unattributed -> one page, no kick.\nT4 A4: (tests/test_gate.py) gate rc 86 with auto-fix on -> auto-fix invoked (the fake records the call), no page from gate; with --no-auto-fix -> today's page and no call. (tests/test_auto_fix.py) status env_suspect -> fake gate called once more (gate.rerun reason=env_suspect in events) before any worker; fake gate scripted [86, 0] -> green path, no worker; [86, 1 attributable] -> repair round with red list; [86, 86] -> diagnosis dispatch with the suspect rows text (engine/why), then [86] again -> one page 'environment', rc 4, no further worker; env_rerun 0 -> no re-run, straight to diagnosis. The typed-dispatch warning test stays green. (tests/test_land.py) full suite 86 single ticket -> land.fail note contains env_suspect and auto-fix called with that status (not an 'unattributed' page).\nT5 A5: count of inbox pages per scenario == 1 at the terminal state and == 0 after a green or an attributable diagnosis outcome.\nT6 A6: existing mechanical-stop tests (hard_block, guard rc 8, rc 7, rc 3, rc 5) green unchanged.\nMutations (worker runs): M1 count the env re-run as a round -> T2/T4 red (one worker round fewer). M2 allow a second consecutive diagnosis -> T3 variant red. M3 keep one `retry_limit or 2` copy in auto-fix.sh -> T1 static red and T2 red (rounds [2,3]). M4 gate.sh still refuses on 86 -> T4 red. M5 diagnosis dispatch with an empty `## 診斷` body -> T3 red (log last line missing). Not measured by the opener.",
   "needs_verifier": true,
   "interface_fixed": true,
   "decision_refs": [
+    "D-076",
+    "D-050",
     "D-049",
-    "D-016",
-    "D-018",
-    "D-028",
-    "D-031",
-    "D-050"
+    "D-019",
+    "D-032",
+    "D-054"
   ],
-  "verify_strings": [
-    {
-      "path": "board/config.json",
-      "contains": "\"max_rounds\""
-    },
-    {
-      "path": "board/config.json",
-      "contains": "\"repair\""
-    }
-  ],
+  "verify_strings": [],
   "interface_contracts": {
-    "repair_policy": "board/config.json repair={enabled:true,max_rounds:3}；唯一新寫入處。#120 incident.retry_count.repair 記已耗輪數；不增加另一個 ticket repair budget。",
-    "compatibility": "票 repair_round 保持顯示用途；新策略啟用時停止以 ticket.py round 的舊 retry_limit+1 另判終止，該入口委派共用策略。",
-    "regression_ready": "Draft 回歸票轉 Ready 的唯一入口是 #106 的 recorder（ticket.py plan）；本票只負責觸發與預算，不自寫 plan_ran。",
-    "decided": "D-050 ② 已裁 N=3（repair.max_rounds=3），跨重啟、換模型不歸零，第 3 次仍紅才發 decision 頁；D-049 ③ 已裁預設開。"
+    "config": "board/config.json `repair`: {max_rounds: int >= 0 (repair rounds after the first red; default 3), env_rerun: int >= 0 (mechanical gate re-runs on rc 86; default 1)}; `batch_fix.rounds` optional override for batches; ticket `retry_limit` optional per-ticket override (null/absent = config).",
+    "dispatch": "a diagnosis round's dispatch file has the section header `## 診斷` in place of the red-list section; `ticket.attempt.start` kv kind=diagnosis; the EVIDENCE / result block, apply, gate and review are unchanged.",
+    "events": "gate.rerun kv reason=env_suspect for the mechanical re-run; no new kind.",
+    "pages": "unchanged inbox kinds (decision / done); new wording only."
   },
-  "priority": "P1"
+  "priority": "P1",
+  "problem": "Inventory 2026-10-26 (by reading, not run). Already done: attributable gate red -> auto-fix next round with the red list, limit `retry_limit+1` rounds (ticket.py cmd_round; auto-fix.sh:575 and :2146 each recompute `int(retry_limit or 2)+1`), retry_limit written as 2 by `ticket.py create` -> first red + 2 repairs, while D-050 ② says 3 repairs after the first red; single-ticket land full-suite red -> auto_fix_all -> the same budget (land.sh:329); batch land red -> batch_fix up to `batch_fix.rounds` (config: 2) then suspect-kicking and one re-land (land.sh:684); scheduler re-lands only on a new gated head, <= schedule.reland_max 2, and stops on any auto-fix rc != 0 (schedule.py); round numbers persist across restarts (status files + ticket.repair_round) and a model switch re-runs the same round (#121/#131) - so 'does not reset on restart / model change' already holds; hard_block hit is mechanical_stop (auto-fix.sh:613); flake rerun and regression-red tickets exist. Gaps: G1 budget is 2 not 3 and lives in three places; G2 unattributed red -> rc 4 + decision page, no worker (auto-fix.sh:1130; batch 2796/3044); G3 gate rc 86 -> gate.sh:546-556 refuses to call auto-fix and pages ('先修環境'), a typed auto-fix warns and goes (auto-fix.sh:1116) - at land, the full suite's 86 is not told apart from red (land.sh has 0 hits for env_suspect) and ends as 'unattributed' rc 4. Evidence of the cost: the container's full suite has died with rc 137 inside a worker round (reports/t169 worker log last tool result 'Exit code 137'), and every such stop today is a page for main.",
+  "hypotheses": "H1 The budget is one number: repair rounds after the first red, for gate and land alike (D-050 ② original wording: 首次紅後最多 3 次修補). Falsify: a place where a 'round' is not a worker dispatch (flake rerun, mechanical env re-run) - those are not counted (acceptance A4 pins the mechanical re-run as free).\nH2 A diagnosis round can be the ordinary worker dispatch with a different section (`## 診斷`: rc, state, suspect rows, log tail, preflight output, gate command) instead of the red list, so no new agent kind, prompt route or receiving path is needed (same apply/gate/review afterwards). Falsify: the dispatch builder requires failures[] non-empty somewhere - then that guard moves to 'failures[] non-empty OR diagnosis'.\nH3 One consecutive diagnosis round is enough bound: if the agent could not make the red attributable, a second blind round would only burn tokens (D-019 reason 5's asymmetry). Falsify: none planned; the bound is a decision, see outline.\nH4 Re-running the gate once on 86 is cheaper than a page: a page costs a main turn (context resend) plus a human; a re-run costs wall time only. Falsify: the second run is also 86 every time in practice - then env_rerun=0 in config turns it off without code change.",
+  "feature": "agent-control: self-repair of red gates and landings",
+  "complexity": "complex"
 }
