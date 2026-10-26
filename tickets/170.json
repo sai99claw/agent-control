@@ -32,16 +32,75 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "1b6ac4e101e7bc73e694f17a5759a172dfb4c58c",
-  "state": "Ready",
-  "state_version": 2,
+  "base_sha": "4ca7e6a672654b8e42f83d73e4b22215f06191cb",
+  "state": "Done",
+  "state_version": 13,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
+    "files": [
+      "tests/test_gate_regression_cases.py"
+    ],
     "tags": [],
-    "run": "",
-    "notes": ""
+    "run": "python3 -m unittest tests.test_gate_regression_cases",
+    "notes": "Sandbox (control_harness.Sandbox) with verify/example (1 case) + verify/second (3 cases, tag 'second') and 'ghost' registered with no case; tests.regression is a wrapper that logs its argv to <home>/regression-calls.log and execs the built-in verify.py --result, so the gap check's single '--list' call is countable; regression cases append their own name to <home>/case-runs.log (real executions, independent of gate output; used for flake-rerun and cache counts). Oracle for 'Ran' = count of 'def test_' in the sandbox case files (4), summed over sharded 'Ran N' lines. A2 flaky arm sets flake_auto_single_runs=2 and AC_FLAKE_RERUN_GROUP=0 so the exact count is 1 original + 2 single reruns. A4 (test_a4_full_regression_section_is_byte_identical) is green on base by design (it pins --full as unchanged); it normalises only the parallel: line's numbers and 'in <t>s', and ends the section at the next 'gate: ' or 'status: ' line (status_done prints 'status: ' right after regression() on a green --full). A5's dogfood half (Ran N >= 290 in the ticket worktree) is the worker's EVIDENCE, not a case; only the docs grep is here. File named per the ticket's test_plan (verifier-owned *_cases.py, not ticket-numbered), so it does not collide with the worker's edits to tests/test_gate.py.",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-26T10:25:51+00:00",
+      "files": [
+        "tests/test_gate_regression_cases.py"
+      ],
+      "base_ref": "4ca7e6a672654b8e42f83d73e4b22215f06191cb",
+      "base_sha": "4ca7e6a672654b8e42f83d73e4b22215f06191cb",
+      "candidate": "../agent-control-wt/t170",
+      "candidate_sha": "f6d82882d1fffa28073a1ce1bf7fbbd55273bf9e",
+      "baseline": {
+        "red": [
+          "tests.test_gate_regression_cases.BranchGateRunsTheWholeRegressionLayer.test_a1_a_declared_tag_still_runs_every_case_not_only_its_own",
+          "tests.test_gate_regression_cases.BranchGateRunsTheWholeRegressionLayer.test_a1_a_tag_that_selects_nothing_is_still_the_gap_rc_3_with_one_list_call",
+          "tests.test_gate_regression_cases.BranchGateRunsTheWholeRegressionLayer.test_a1_a_ticket_without_a_verify_key_runs_the_whole_layer",
+          "tests.test_gate_regression_cases.BranchGateRunsTheWholeRegressionLayer.test_a1_no_declared_tags_runs_the_whole_regression_layer",
+          "tests.test_gate_regression_cases.BranchGateRunsTheWholeRegressionLayer.test_a2_a_flaky_regression_case_is_rerun_by_id_and_marked_suspected_flaky",
+          "tests.test_gate_regression_cases.BranchGateRunsTheWholeRegressionLayer.test_a2_a_red_case_under_an_undeclared_tag_is_the_gate_red",
+          "tests.test_gate_regression_cases.BranchGateRunsTheWholeRegressionLayer.test_a3_no_cache_runs_the_regression_twice",
+          "tests.test_gate_regression_cases.BranchGateRunsTheWholeRegressionLayer.test_a3_two_gates_in_one_run_id_run_the_regression_once",
+          "tests.test_gate_regression_cases.BranchGateRunsTheWholeRegressionLayer.test_full_and_branch_report_the_same_regression_ran_count",
+          "tests.test_gate_regression_cases.WorkflowDocSaysTheBranchGateRunsTheWholeLayer.test_a5_workflow_doc_names_the_whole_regression_layer"
+        ],
+        "red_lines": [
+          "tests.test_gate_regression_cases.BranchGateRunsTheWholeRegressionLayer.test_a1_a_declared_tag_still_runs_every_case_not_only_its_own: AssertionError: 'gate: 回歸全部' not found in 'gate: run test_land test_ticket\\nRan 2 tests in 0.001s\\nOK\\ngate: 票 #7 的回歸 —— regression --tag example\\nRan 1 test in 0.000s\\nOK\\ngate: 票 #7 明著寫了 needs_verifier=false —— 這一層不要求案例\\nstatus: reports/t7/20261026-102501-26774/status.json rc=0 紅 0 條(疑似 flaky 0 條,自動 flaky 0 條)\\ngate: 綠了 —— 票轉 InReview;票不是 complex(沒標 = simple),不派覆核,等 land\\n' : rc=0",
+          "tests.test_gate_regression_cases.BranchGateRunsTheWholeRegressionLayer.test_a1_a_tag_that_selects_nothing_is_still_the_gap_rc_3_with_one_list_call: AssertionError: 0 != 1 : rc=3",
+          "tests.test_gate_regression_cases.BranchGateRunsTheWholeRegressionLayer.test_a1_a_ticket_without_a_verify_key_runs_the_whole_layer: AssertionError: 'gate: 回歸全部' not found in 'gate: run test_land test_ticket\\nRan 2 tests in 0.000s\\nOK\\ngate: 票 #7 沒有宣告 verify.tags —— 這一輪沒有回歸可跑\\ngate:   (驗證者交件時要填票的 verify.tags;現在這個綠只涵蓋單元層。)\\ngate: 票 #7 明著寫了 needs_verifier=false —— 這一層不要求案例\\nstatus: reports/t7/20261026-102506-27206/status.json rc=0 紅 0 條(疑似 flaky 0 條,自動 flaky 0 條)\\ngate: 綠了 —— 票轉 InReview;票不是 complex(沒標 = simple),不派覆核,等 land\\n' : rc=0",
+          "tests.test_gate_regression_cases.BranchGateRunsTheWholeRegressionLayer.test_a1_no_declared_tags_runs_the_whole_regression_layer: AssertionError: 'gate: 回歸全部' not found in 'gate: run test_land test_ticket\\nRan 2 tests in 0.000s\\nOK\\ngate: 票 #7 沒有宣告 verify.tags —— 這一輪沒有回歸可跑\\ngate:   (驗證者交件時要填票的 verify.tags;現在這個綠只涵蓋單元層。)\\ngate: 票 #7 明著寫了 needs_verifier=false —— 這一層不要求案例\\nstatus: reports/t7/20261026-102508-27315/status.json rc=0 紅 0 條(疑似 flaky 0 條,自動 flaky 0 條)\\ngate: 綠了 —— 票轉 InReview;票不是 complex(沒標 = simple),不派覆核,等 land\\n' : rc=0",
+          "tests.test_gate_regression_cases.BranchGateRunsTheWholeRegressionLayer.test_a2_a_flaky_regression_case_is_rerun_by_id_and_marked_suspected_flaky: AssertionError: 0 != 3 : rc=0",
+          "tests.test_gate_regression_cases.BranchGateRunsTheWholeRegressionLayer.test_a2_a_red_case_under_an_undeclared_tag_is_the_gate_red: AssertionError: 0 != 1 : rc=0",
+          "tests.test_gate_regression_cases.BranchGateRunsTheWholeRegressionLayer.test_a3_no_cache_runs_the_regression_twice: AssertionError: 0 != 2 : rc=0",
+          "tests.test_gate_regression_cases.BranchGateRunsTheWholeRegressionLayer.test_a3_two_gates_in_one_run_id_run_the_regression_once: AssertionError: 0 != 1 : rc=0",
+          "tests.test_gate_regression_cases.BranchGateRunsTheWholeRegressionLayer.test_full_and_branch_report_the_same_regression_ran_count: AssertionError: 1 != 4 : rc=0",
+          "tests.test_gate_regression_cases.WorkflowDocSaysTheBranchGateRunsTheWholeLayer.test_a5_workflow_doc_names_the_whole_regression_layer: AssertionError: 0 not greater than or equal to 1"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "skipped": 0,
+        "rc": 1,
+        "cases": 11,
+        "log": "../agent-control-wt/t170/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "skipped": 0,
+        "rc": 0,
+        "cases": 11,
+        "log": "../agent-control-wt/t170/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "test_plan": "Layers: unit (tests/test_gate.py on the harness sandbox; the sandbox's regression command is the row-3b fixture or verify.py itself; oracle is the fixture's own case count and ids, never gate output parsed back into expectations). Worker, foreground: timeout 590 python3 -m unittest tests.test_gate; then tests.test_status tests.test_verify_runner; then A5 once. Verifier (needs_verifier true, interface_fixed true: gate CLI, rc table and status.json keys unchanged; only which cases run) writes tests/test_gate_regression_cases.py in parallel: the #159 shape - a case under a tag the ticket does not declare goes red on the branch -> gate rc 1 and that id in failures[]; a ticket without a verify key -> all cases ran (count); '--full' and '--branch --ticket' produce the same regression 'Ran ' count on the same tree. Mutations (not measured by opener): m1 as A2; m2 branch mode still passes --tag -> A1 'example' arm red; m3 gap check dropped -> A1 'ghost' arm red; m4 --full section edited -> A4 red. Container is uid 0; hard_block.patterns forbids os.kill / killpg / pkill / 'kill -' in added tests/** lines.",
   "outline": "D-073 to-open item '分支閘門跑回歸層'. Facts at base 1b6ac4e: gate.sh regression() 702-735 ('ticket' passes the ticket's tags, 'full' passes none; wording 'gate: 票 #n 的回歸' vs 'gate: 回歸全部'); branch flow calls 'regression ticket' at 1067, full calls 'regression full' at 1018; verify.py rc 3 = tags declared but nothing selected (keep via --list); same-round cache in verify.py (cache_path 79-95, keyed on tags + sha + unit) - a no-tag run is a different key than today's tag run, so the first branch gate of a round pays once. After #162 these become testiface 'regression [--tag]' / 'regression --list' calls - write against that interface. Regression layer size: 22 files / 298 ran / 442 s sequential (#161 land). Decision 'whole, not reference- selected' with three reasons in objective; the alternative (map changed files -> case files by grep of script basenames) was rejected, not deferred. simple (one call-site change + gap check + docs). Depends on #162, #163 (user asked), the parallel full-suite ticket (cost of the whole layer on every gate round) and #167 (it rewrites docs/WORKFLOW.md §閘門; same section). needs_verifier true, interface_fixed true. Not measured: the mutations; the per-gate wall after parallelisation.",
@@ -54,5 +113,113 @@
     "D-016",
     "D-020",
     "D-014"
-  ]
+  ],
+  "cost": [
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 74,
+      "tokens_out": 32242,
+      "cache_write": 123984,
+      "cache_read": 4082561,
+      "wall_seconds": 1763,
+      "outcome": "handed-in",
+      "run_id": "20261026-094644-23682",
+      "session_id": "9caf6cf4-ec6d-44e1-b119-7a5e644fe300",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-26T10:16:09+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 122,
+      "tokens_out": 53208,
+      "cache_write": 153553,
+      "cache_read": 7766304,
+      "wall_seconds": 1763,
+      "outcome": "handed-in",
+      "run_id": "20261026-094644-23682",
+      "session_id": "69f0e7a6-9d41-43c7-9d9e-3d331e316f9f",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-26T10:16:10+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1233,
+      "outcome": "pass",
+      "run_id": "20261026-103007-16179",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-26T10:50:40+00:00"
+    }
+  ],
+  "branch": "t170",
+  "gate": {
+    "rc": 0,
+    "sha": "f6d82882d1fffa28073a1ce1bf7fbbd55273bf9e",
+    "run_id": "20261026-101611-23079",
+    "at": "2026-10-26T10:25:52+00:00"
+  },
+  "repair_round": 1,
+  "landed_sha": "b92674679445bff84f259253f37a853ce94a42ab",
+  "cost_total": {
+    "calendar_seconds": 122912,
+    "wall_seconds": 4759,
+    "runs": 3,
+    "worker_rounds": 1,
+    "objections": 0,
+    "by_role": {
+      "verifier": {
+        "runs": 1,
+        "wall_seconds": 1763,
+        "tokens_in": 74,
+        "tokens_out": 32242,
+        "cache_write": 123984,
+        "cache_read": 4082561,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 1
+        }
+      },
+      "worker": {
+        "runs": 1,
+        "wall_seconds": 1763,
+        "tokens_in": 122,
+        "tokens_out": 53208,
+        "cache_write": 153553,
+        "cache_read": 7766304,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 1233,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-26T10:50:40+00:00"
+  }
 }

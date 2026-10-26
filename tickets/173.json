@@ -20,9 +20,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "8d2cd914254d76e5620aeb3e90dcc1f1ddf6030f",
-  "state": "Ready",
-  "state_version": 3,
+  "base_sha": "4ca7e6a672654b8e42f83d73e4b22215f06191cb",
+  "state": "Done",
+  "state_version": 11,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -37,5 +37,84 @@
   "needs_verifier": false,
   "decision_refs": [
     "D-054"
-  ]
+  ],
+  "branch": "t173",
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 32,
+      "tokens_out": 13847,
+      "cache_write": 51991,
+      "cache_read": 1030354,
+      "wall_seconds": 261,
+      "outcome": "handed-in",
+      "run_id": "20261026-095007-4708",
+      "session_id": "e4fcd76c-2e94-4725-b402-45ff92311ffb",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-26T09:54:31+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1233,
+      "outcome": "pass",
+      "run_id": "20261026-103007-16179",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-26T10:50:40+00:00"
+    }
+  ],
+  "gate": {
+    "rc": 0,
+    "sha": "69fd528c53726656acab118412f8c92015d3891b",
+    "run_id": "20261026-095431-16407",
+    "at": "2026-10-26T09:55:13+00:00"
+  },
+  "repair_round": 1,
+  "landed_sha": "b92674679445bff84f259253f37a853ce94a42ab",
+  "cost_total": {
+    "calendar_seconds": 14579,
+    "wall_seconds": 1494,
+    "runs": 2,
+    "worker_rounds": 1,
+    "objections": 0,
+    "by_role": {
+      "worker": {
+        "runs": 1,
+        "wall_seconds": 261,
+        "tokens_in": 32,
+        "tokens_out": 13847,
+        "cache_write": 51991,
+        "cache_read": 1030354,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 1233,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-26T10:50:41+00:00"
+  }
 }
