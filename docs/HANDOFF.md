@@ -164,3 +164,22 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
 | 9 | `scripts/board.py` exists (T-owned); index.jsonl readers 未讀 | if it reads index.jsonl, switch to the reports/inbox/ directory (#143) |
 | 10 | 未讀 on T side; A side: `scripts/sync-to-project.sh:493` prints "非產出物 … 同步不管它" for files in docs/roles not on the manifest (read) | clone A beside T, `actl doctor` then `actl migrate`; no sync run |
 | 11 | T tickets live in `../tabby_pool_ctl/tickets` (board/config.json:4), not in the repo: 未讀 | leave old tickets' allowed_write_paths / verify_strings / review binding as history |
+
+## 2026-10-26 A 是安裝即用的工具;可以交給 T 遷移
+
+### 現況
+- D-071〜D-075 全部落地:#159〜#167、#172(A 當工具)、#168、#169、#170、#171、#173、#178、#119(排程)、#179;整理票 #174〜#177。開著的只剩凍結的 #93(解凍條件「DAG 排程落地」已滿足,等使用者決定)與減法前的 Draft #117、#120、#123、#124、#125(D-075 保留)。
+- 單一入口 `bin/actl`(`actl --help`)。專案 clone A 放旁邊(../agent-control),從 A 的 clone 對專案執行;更新 A = git pull。sync-to-project.sh 已退役、hard_block.paths 只剩 docs/DECISIONS.md、docs/VISION.md。
+- 2026-10-26 主線實測:A 自己 `actl doctor` 無發現、`actl hooks check` 無變更;一個全新的空專案 `actl init` → `doctor` → `hooks install/check` → `test preflight` → `ticket list` 全通。
+
+### 主線怎麼跑(取代 2026-10-22 節的做法)
+- 一律從 `bin/actl` 操作(直接叫 scripts/*.sh 沒有 AC_HOME,規則包會拒絕起 agent)。
+- 派工與落地交給排程:主線依使用者要求寫 `board/batches.json`(不進 git;schema 見 scripts/schedule.py 檔頭),`actl schedule plan` 看計畫,`actl schedule run` 跑(派 auto-fix、同時上限 2、依檔案重疊拆落地、落地紅修好自動重落、狀態寫 reports/schedule/)。只在終態看收件匣。
+- 長跑一律 `setsid nohup` 脫離背景工具(工具 2 小時上限、容器會重啟);等待用「檔案出現」判斷,不要用 pgrep(會比對到自己)。
+- 派出 worker 到收件前不落 DECISIONS / VISION(main_guard 會拒收整輪,#157 撞過)。
+- A 測自己的分支時要用分支自己的 `bin/actl`(主線的 actl 會載入 main 的腳本,#119 撞過)。
+- 記憶整理票:`AC_HOME=… AC_ROOT=… sh scripts/consolidate-memory.sh <n>` → `actl land docs` 記憶檔 → `ticket.py close <n> --landed <sha>`(要先落再關)→ discussions/ 也走 docs 通道(#179)。
+
+### 給 T 的遷移
+- 設計文件 docs/design/project-runnable-entries.md §1、§2、§4、§5、§7(入口名已改 actl)。T 的步驟:§7 T side 六步;測試介面 §4,範本 templates/project-tests.example.sh。
+- 使用者待辦(T 端):hard_block 的 18905 / 15349 / TABBY_BROWSER_ENGINES= 要不要留(建議留)。
