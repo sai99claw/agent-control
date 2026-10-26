@@ -13,6 +13,12 @@ C5 | script | auto-fix 假 worker 交 / 不交;驗證者交;開題者判 accepte
 C6 | unit   | 預放六列後 close / set state Done;close 被拒                  | cost_total 逐格 == 手算;拒絕時沒有    | 票面 C6 手算(本檔 Close 類 docstring)
 C7 | unit   | cost 不動 state_version / review;close 只 +1                  | 版本差 0 / 1                          | 票面 C7 字面 + 既有 close 契約(+1)
 C8 | text   | SCHEMA / event.py / ticket.py cost --help                      | 含 15 鍵、登記字、cost_total、新旗標  | 票面 C8 字面
+#124 A1 | unit | 三則訊息各兩列(usage 2/2/3、100/200/300、1000/1000/2000、2/16/16)、沒有 result、沒有 stop_reason | (7, None, 600, 4000)、note `transcript:` | 手算 2+2+3 / 100+200+300 / 1000+1000+2000
+#124 A3 | unit | 空檔 / codex 純文字 / 讀不到 / result 沒 usage + assistant 列 | 前三者 null 照舊;最後一個取 transcript | 票面 A3 字面
+#124 A4 | unit | 同上、每則最後一列 stop_reason=end_turn                         | tokens_out 34                         | 手算 2+16+16
+#124 A1 | unit | 不給 --wall-seconds、時間戳 10:00:00..10:59:54;session 不一致 | wall 3594;session None               | 手算 59*60+54
+#124 A6 | unit | close:信封列 + transcript 列 + codex 文字列                    | unknown 1、tokens_in 5+7              | 手算
+#124 A5 | text | ticket.py 原始碼                                               | 載入 transcript-cost.py、沒有自己的去重 | 票面 A5 字面
 
 C9(既有斷言照綠)沒有案例:它在乾淨基底上本來就綠,不是「基底該紅」的驗收,由閘門跑既有那十支守。
 
@@ -79,6 +85,32 @@ def usage_only_envelope():
         "usage": {"input_tokens": 5, "output_tokens": 77,
                   "cache_creation_input_tokens": 0, "cache_read_input_tokens": 9},
     }, ensure_ascii=False)
+
+
+# #124 的 transcript 夾具:形狀照逾時被砍的 stream-json worker log(assistant 列、同一個
+# message.id 兩列同 usage、頂層 timestamp / session_id、沒有 result 列)。
+TRANSCRIPT_USAGE = ((2, 100, 1000, 2), (2, 200, 1000, 16), (3, 300, 2000, 16))
+TRANSCRIPT_STAMPS = ("2026-10-26T10:00:00Z", "2026-10-26T10:00:01Z", "2026-10-26T10:20:00Z",
+                     "2026-10-26T10:20:01Z", "2026-10-26T10:59:50Z", "2026-10-26T10:59:54Z")
+
+
+def transcript(stop=False, sessions=("s-t",) * 6, result=None, model="claude-fixture-9"):
+    lines = [json.dumps({"type": "system", "subtype": "init", "session_id": sessions[0]})]
+    for index, (tin, cw, cr, out) in enumerate(TRANSCRIPT_USAGE):
+        for half in (0, 1):
+            row = 2 * index + half
+            message = {"id": "msg-%d" % index, "model": model, "role": "assistant",
+                       "content": [{"type": "text", "text": "x"}],
+                       "usage": {"input_tokens": tin, "cache_creation_input_tokens": cw,
+                                 "cache_read_input_tokens": cr, "output_tokens": out}}
+            if stop and half:
+                message["stop_reason"] = "end_turn"
+            lines.append(json.dumps({"type": "assistant", "message": message,
+                                     "timestamp": TRANSCRIPT_STAMPS[row],
+                                     "session_id": sessions[row]}))
+    if result is not None:
+        lines.append(json.dumps(result))
+    return "\n".join(lines)
 
 
 def parse_ts(text):
@@ -195,6 +227,96 @@ class TokensSumEveryModel(CostBase):
         row = self.rows()[-1]
         self.assertEqual(tuple(row.get(key) for key in TOKENS), (None, None, None, None))
         self.assertIn("agy 信封沒有 result 行", row["note"])
+
+
+class ATimedOutTranscriptStillHasTokens(CostBase):
+    """#124:信封讀不到而 log 是 stream-json transcript → token 從 transcript-cost.summarize 取。"""
+
+    def test_124_a1_the_transcript_fills_the_tokens_once_per_message(self):
+        """**變異 M1**:不去重 → tokens_in 14,紅。**M2**:tokens_out 寫 0 → 紅。
+        **M4**:model 取 transcript 的 → 紅(夾具 model 與 --model 不同)。"""
+        path = self.envelope_file(transcript(), name="worker-round1.log")
+        done = self.cost("--from-envelope", path, "--wall-seconds", "3594",
+                         "--outcome", "timeout", "--run-id", "R")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        rows = self.rows()
+        self.assertEqual(len(rows), 1, rows)
+        row = rows[0]
+        self.assertEqual(set(row), ROW_KEYS)
+        self.assertEqual(tuple(row.get(key) for key in TOKENS), (7, None, 600, 4000))
+        self.assertEqual((row["wall_seconds"], row["session_id"], row["model"],
+                          row["outcome"], row["run_id"]), (3594, "s-t", "opus", "timeout", "R"))
+        self.assertTrue(row["note"].startswith("transcript:"), row["note"])
+        self.assertIn("裡沒有 JSON 信封", row["note"])
+        self.assertIn("stop_reason", row["note"])
+        self.assertIn("transcript", done.stderr)
+        self.assertNotIn("token 欄記 null", done.stderr)
+
+    def test_124_a4_a_finished_stream_sums_tokens_out(self):
+        path = self.envelope_file(transcript(stop=True), name="worker-round1.log")
+        done = self.cost("--from-envelope", path)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.rows()[-1]
+        self.assertEqual(tuple(row.get(key) for key in TOKENS), (7, 34, 600, 4000))
+        self.assertTrue(row["note"].startswith("transcript:"), row["note"])
+        self.assertNotIn("stop_reason", row["note"])
+
+    def test_124_a1_wall_from_the_stamps_only_without_the_flag(self):
+        path = self.envelope_file(transcript(), name="worker-round1.log")
+        done = self.cost("--from-envelope", path)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual((self.rows()[-1]["wall_seconds"], self.rows()[-1]["session_id"]),
+                         (3594, "s-t"))
+        mixed = self.envelope_file(transcript(sessions=("s-t",) * 5 + ("s-u",)), name="mixed.log")
+        done = self.cost("--from-envelope", mixed)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIsNone(self.rows()[-1]["session_id"], "各列 session_id 不一致要是 null")
+
+    def test_124_a3_logs_that_are_not_transcripts_stay_null(self):
+        """**變異 M3**:fallback 排在信封前 / 不看有沒有 assistant 列 → 這幾格或 c3 / agy 紅。"""
+        cases = (("empty", self.envelope_file("", name="empty.log"), "裡沒有 JSON 信封"),
+                 ("codex", self.envelope_file("codex\nthinking...\ndone", name="codex.log"),
+                  "裡沒有 JSON 信封"),
+                 ("missing", os.path.join(self.home, "no-such.log"), "讀不到"))
+        for label, path, why in cases:
+            with self.subTest(label):
+                done = self.cost("--from-envelope", path)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                row = self.rows()[-1]
+                self.assertEqual(tuple(row.get(key) for key in TOKENS), (None,) * 4)
+                self.assertIn(why, row["note"])
+                self.assertFalse(row["note"].startswith("transcript:"), row["note"])
+                self.assertIn("token 欄記 null", done.stderr)
+
+    def test_124_a3e_a_result_row_without_usage_falls_back(self):
+        body = transcript(result={"type": "result", "subtype": "error", "session_id": "s-t"})
+        done = self.cost("--from-envelope", self.envelope_file(body, name="no-usage.log"))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.rows()[-1]
+        self.assertEqual(tuple(row.get(key) for key in TOKENS), (7, None, 600, 4000))
+        self.assertTrue(row["note"].startswith("transcript:"), row["note"])
+        self.assertIn("的信封沒有 usage", row["note"])
+
+    def test_124_a2_a_result_row_with_usage_wins_over_the_transcript(self):
+        """**變異 M3**:transcript 排在信封前 → (7, None, 600, 4000),紅。"""
+        body = transcript(result=json.loads(usage_only_envelope()))
+        done = self.cost("--from-envelope", self.envelope_file(body, name="finished.log"))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        row = self.rows()[-1]
+        self.assertEqual(tuple(row.get(key) for key in TOKENS), (5, 77, 0, 9))
+        self.assertEqual((row["session_id"], row["wall_seconds"], row["note"]), ("s-u", 1, None))
+
+    def test_124_a5_one_parser(self):
+        """ticket.py 載入 transcript-cost.py 的 read_rows + summarize,自己不認 assistant 列。"""
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "scripts", "ticket.py"), encoding="utf-8") as handle:
+            source = handle.read()
+        self.assertIn('"transcript-cost.py"', source)
+        self.assertIn(".read_rows(path)", source)
+        self.assertIn(".summarize(rows)", source)
+        for own in ('"assistant"', "stop_reason", '"message"'):
+            with self.subTest(own):
+                self.assertNotIn(own, source)
 
 
 class TheRowIsTheOnlyCopy(CostBase):
@@ -522,6 +644,26 @@ class VersionsDoNotMove(ClosableTicket, CostBase):
         ticket = self.load_ticket("1")
         self.assertIn("cost_total", ticket)
         self.assertEqual(ticket["state_version"], version + 1)
+
+
+class UnknownRunsCountOnlyTheNullRow(ClosableTicket, CostBase):
+
+    def test_124_a6_a_transcript_row_is_not_an_unknown_run(self):
+        """envelope 列(tokens_in 5)+ transcript 列(7)+ codex 文字列(null)→ unknown 1、in 12。"""
+        self.land_a_file()
+        self.make_ticket(1, created=CREATED, landed_sha=self.git("rev-parse", "main").strip(),
+                         test_evidence=[{"cmd": "gate --branch", "rc": 0}], cost=[])
+        self.ticket("set", "1", "review",
+                    json.dumps({"verdict": "pass", "by": "main", "sha": "deadbeef"}))
+        for name, text in (("env.json", usage_only_envelope()), ("t.log", transcript()),
+                           ("codex.log", "codex text")):
+            done = self.cost("--from-envelope", self.envelope_file(text, name=name))
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        done = self.ticket("close", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        worker = self.load_ticket("1")["cost_total"]["by_role"]["worker"]
+        self.assertEqual((worker["runs"], worker["unknown_token_runs"], worker["tokens_in"]),
+                         (3, 1, 12))
 
 
 class TheContractIsWrittenDown(CostBase):
