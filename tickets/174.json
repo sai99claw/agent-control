@@ -17,8 +17,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "727fd9a91730256885367b0584d3e92740776e04",
-  "state": "Running",
-  "state_version": 6,
+  "state": "Done",
+  "state_version": 8,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -55,5 +55,28 @@
       "effort": null,
       "at": "2026-10-26T10:54:42+00:00"
     }
-  ]
+  ],
+  "landed_sha": "3f461f6",
+  "cost_total": {
+    "calendar_seconds": 4942,
+    "wall_seconds": 188,
+    "runs": 1,
+    "worker_rounds": null,
+    "objections": 0,
+    "by_role": {
+      "consolidator": {
+        "runs": 1,
+        "wall_seconds": 188,
+        "tokens_in": 354,
+        "tokens_out": 14023,
+        "cache_write": 80225,
+        "cache_read": 738962,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 1
+        }
+      }
+    },
+    "at": "2026-10-26T11:07:33+00:00"
+  }
 }
