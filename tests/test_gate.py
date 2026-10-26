@@ -7,6 +7,7 @@
 
 import json
 import os
+import re
 import subprocess
 import sys
 import unittest
@@ -611,8 +612,8 @@ class VerifierCasesAtTheGate(Sandbox):
     def a_ticket(self, case=VERIFIER_CASE, **fields):
         """一張指著一份驗證者案例的票。
 
-        `verify.tags` 留空是**故意的**:回歸層因此只印一行就回來,這一組量到的紅與
-        綠就只會來自驗證者那一層 —— 兩層混在同一個 rc 裡的話,紅榜指誰說不清楚。
+        `verify.tags` 留空:#170 起回歸層不看標籤、整層跑(這份案例也在裡面),
+        標籤只拿去查缺口 —— 留空就不查,這一組不碰缺口那一條。
         """
         self.write(os.path.join("verify", "nav", "__init__.py"), "")
         self.write(os.path.join("verify", "nav", "test_ticket_7.py"), case)
@@ -645,8 +646,8 @@ class VerifierCasesAtTheGate(Sandbox):
     def test_a_ticket_that_never_declared_verify_is_not_a_gap(self):
         """**沒有宣告**與**宣告了卻沒有案例**是兩件事,下一步也不同。
 
-        同一支腳本對回歸層就是這樣分的:`regression()` 對「票沒有宣告 verify.tags」
-        出聲不擋,對「宣告了 tags 卻一個案例都選不到」才非零(#619)。`needs_verifier`
+        同一支腳本對回歸層的缺口檢查就是這樣分的:`regression()` 對「票沒有宣告 verify.tags」
+        不查,對「宣告了 tags 卻一個案例都選不到」才非零(#619)。`needs_verifier`
         那一格則是與 `land.sh` 對齊(#8)—— 兩支對同一張票不該給出不同的答案。
 
         **變異**:把 `undeclared)` 那一格拿掉 → 後半紅(rc 變 3);把
@@ -724,7 +725,10 @@ class VerifierCasesAtTheGate(Sandbox):
         done = self.gate_in(wt, self.env(AC_ROOT=self.repo))
         self.assertNotEqual(done.returncode, 4, done.stdout + done.stderr)
         self.assertNotIn("zzz", done.stdout + done.stderr)
-        self.assertIn("沒有宣告 verify.tags", done.stdout)
+        # #170:回歸層整層跑;worktree 那份 zzz 要是被讀到,缺口檢查(`--list --tag zzz`)
+        # 會印出它而退 3。
+        self.assertIn("gate: 回歸全部", done.stdout)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
     def test_a_hand_run_in_the_ticket_worktree_writes_the_main_repo_ticket(self):
         """#53 D2:手跑在 worktree、**沒帶** `AC_ROOT`。綠了轉 InReview 要寫主 repo 那一份,
@@ -845,7 +849,7 @@ class VerifierCasesAtTheGate(Sandbox):
         self.implement()
         done = self.gate()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertLess(done.stdout.index("沒有宣告 verify.tags"),
+        self.assertLess(done.stdout.index("gate: 回歸全部"),
                         done.stdout.index("驗證者案例的綠"),
                         "驗證者那一層跑在回歸層前面")
 
@@ -1079,6 +1083,275 @@ class A5TheGateSaysWhichA(Sandbox):
         self.assertEqual(self.row("gate.pass").get("ac_sha"), "unknown")
         status = self.status_of(7, kind="gate")
         self.assertEqual(sorted(status), STATUS_KEYS_BEFORE_159, status)
+
+
+
+# #170:回歸層的案例自己記「我真的跑了」(`REG_RUNS`,一次一行),假的 regression 命令記
+# 「我被叫了、帶什麼參數」(`REG_CALLS`)—— 兩份 log 分開,快取命中(被叫了、案例沒跑)
+# 與真的跑過才分得開。
+REG_CASE = '''"""#170 沙盒的第二個標籤:兩條案例。
+
+## 驗收表(期望值來源獨立於被測程式)
+A1 | unit | 跑這兩條 | %(want)s | 沙盒 fixture
+
+## 介面字串
+(沒有)
+
+## 怎麼做假
+不上真埠、不起真服務、不殺行程:只寫環境給的一份 log。
+
+## 不做
+不改產品碼。
+"""
+import os
+import unittest
+
+TAGS = ["second"]
+
+
+class Second(unittest.TestCase):
+    def mark(self, name):
+        with open(os.environ["REG_RUNS"], "a", encoding="utf-8") as handle:
+            handle.write(name + "\\n")
+
+    def test_one(self):
+        """A1 第一條。"""
+        self.mark("one")
+        %(one)s
+
+    def test_two(self):
+        """A1 第二條。"""
+        self.mark("two")
+'''
+# 第一次跑紅、之後都綠(計數器住在 `REG_RUNS` 旁邊)—— flake 判定那條路的夾具。
+FLAKY_BODY = ("count = os.environ['REG_RUNS'] + '.flaky'\n"
+              "        seen = os.path.exists(count)\n"
+              "        open(count, 'a').close()\n"
+              "        self.assertTrue(seen, 'first run is red')")
+REGRESS_SH = """#!/bin/sh
+echo "$*" >> "$REG_CALLS"
+exec python3 "$AC_HOME/scripts/verify.py" --result "$AC_TEST_OUT/result.json" "$@"
+"""
+
+
+class BranchGateRunsTheWholeRegressionLayer(Sandbox):
+    """#170(D-073):`gate.sh --branch --ticket <n>` 在單元層之後跑**整個回歸層**,不只票的
+    標籤那一組 —— #159 的 84 條紅全在票沒宣告的標籤底下,分支閘門綠、到 land 才紅。
+    票的標籤只剩缺口檢查(`regression --list --tag …`,不跑)。
+
+    沙盒:verify/example(1 條,沙盒預設)+ verify/second(2 條,標籤 second)+ 登記了卻沒有
+    案例的 ghost。regression 命令是一支記帳的包裝(`REGRESS_SH`),底下是真的 verify.py。
+    期望的案例數(3)由這裡寫的夾具數出來,不從閘門輸出讀回來。
+    """
+
+    WHOLE = 3   # verify/example 1 條 + verify/second 2 條
+
+    def setUp(self):
+        super().setUp()
+        self.write(os.path.join("tests", "test_land.py"), PASSING % "test_land")
+        # 對照表把 verify/* 對到 test_verify_runner;沙盒沒有那支,給一份綠的替身,
+        # 讓這一組的紅只可能來自回歸層。
+        self.write(os.path.join("tests", "test_verify_runner.py"),
+                   PASSING % "test_verify_runner")
+        self.write(os.path.join("verify", "TAGS.md"),
+                   self.read(os.path.join("verify", "TAGS.md"))
+                   + "- `second` — #170 沙盒的第二個標籤\n- `ghost` — 登記了,沒有案例\n")
+        self.write(os.path.join("verify", "second", "__init__.py"), "")
+        self.second(green=True)
+        regress = os.path.join(self.home, "regress.sh")
+        write_executable(regress, REGRESS_SH)
+        config = json.loads(self.read("board/config.json"))
+        config["tests"]["regression"] = "sh %s" % regress
+        config["flake_auto_single_runs"] = 3
+        self.write("board/config.json", json.dumps(config, ensure_ascii=False, indent=2))
+        self.calls = os.path.join(self.home, "reg-calls.log")
+        self.runs = os.path.join(self.home, "reg-runs.log")
+        self.verify_log = os.path.join(self.home, "verify-t170.log")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "沙盒:兩個標籤的回歸層")
+
+    def second(self, green=True, where=None, body=None):
+        one = body or ("pass" if green else "self.fail('second-tag red')")
+        self.write(os.path.join("verify", "second", "test_second.py"),
+                   REG_CASE % {"want": "綠" if green else "紅", "one": one}, where=where)
+
+    def branch(self, **fields):
+        """票 #7 + 分支 t7(改一個對得到的 scripts/ 檔);回傳 worktree。"""
+        fields.setdefault("needs_verifier", False)
+        self.make_ticket(7, **fields)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "開票 #7")
+        wt = self.worktree("t7")
+        self.write(os.path.join("scripts", "land.sh"), "# 動一下\n", where=wt)
+        self.git("add", "-A", cwd=wt)
+        self.git("commit", "-q", "-m", "#7 的改動", cwd=wt)
+        return wt
+
+    def gate_in(self, wt, *extra, **env):
+        env.setdefault("AC_GATE_RUN_ID", "20261026-000000-%d" % os.getpid())
+        return self.run_sh("scripts/gate.sh", "--branch", "--ticket", "7", *extra, cwd=wt,
+                           env=self.env(AC_ROOT=self.repo, AC_VERIFY_LOG=self.verify_log,
+                                        REG_CALLS=self.calls, REG_RUNS=self.runs, **env))
+
+    def lines(self, path):
+        if not os.path.exists(path):
+            return []
+        with open(path, encoding="utf-8") as handle:
+            return [line.strip() for line in handle if line.strip()]
+
+    def list_calls(self):
+        return [c for c in self.lines(self.calls) if "--list" in c.split()]
+
+    def run_calls(self):
+        return [c for c in self.lines(self.calls) if "--list" not in c.split()]
+
+    def ran_count(self):
+        with open(self.verify_log, encoding="utf-8") as handle:
+            text = handle.read()
+        counts = re.findall(r"^Ran (\d+) tests? in ", text, re.M)
+        self.assertTrue(counts, "verify log 裡沒有 Ran:" + text)
+        return sum(int(n) for n in counts)
+
+    def reset_logs(self):
+        for path in (self.calls, self.runs):
+            if os.path.exists(path):
+                os.remove(path)
+
+    # ------------------------------------------------------------ A1
+
+    def test_a1_the_branch_gate_runs_every_regression_case_whatever_the_ticket_declares(self):
+        """A1:verify.tags [] / ['example'] / 沒有 verify 格 → 整層 3 條都跑。
+
+        **變異 m2**:分支模式照舊帶 `--tag example` → 'example' 那一臂紅(Ran 1 ≠ 3)。
+        """
+        wt = self.branch()
+        shapes = (("verify.tags []", {"files": [], "tags": [], "run": "", "notes": ""}),
+                  ("verify.tags ['example']",
+                   {"files": [], "tags": ["example"], "run": "", "notes": ""}),
+                  ("沒有 verify 格", None))
+        for label, verify in shapes:
+            with self.subTest(label):
+                self.reset_logs()
+                fields = {"needs_verifier": False}
+                if verify is not None:
+                    fields["verify"] = verify
+                self.make_ticket(7, **fields)
+                done = self.gate_in(wt, "--no-auto-fix", "--no-cache")
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertIn("gate: 回歸全部", done.stdout)
+                self.assertEqual(self.ran_count(), self.WHOLE, done.stdout)
+                self.assertEqual(sorted(self.lines(self.runs)), ["one", "two"],
+                                 "第二個標籤的案例沒跑")
+                self.assertEqual(len(self.run_calls()), 1, self.lines(self.calls))
+                for call in self.run_calls():
+                    self.assertNotIn("--tag", call.split(), "整層跑不帶 --tag")
+
+    def test_a1_a_declared_tag_with_no_case_is_still_the_gap(self):
+        """A1 ghost 臂:登記了、一條案例都沒有 → rc 3、今天那句話;`--list` 恰一次、run 至多一次。
+
+        **變異 m3**:拿掉缺口檢查 → rc 0,紅。
+        """
+        wt = self.branch(verify={"files": [], "tags": ["ghost"], "run": "", "notes": ""})
+        done = self.gate_in(wt, "--no-auto-fix")
+        self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
+        self.assertIn("gate: 票宣告了 tags,但一個案例都選不到 —— 那是缺口,不是綠。", done.stdout)
+        self.assertEqual(len(self.list_calls()), 1, self.lines(self.calls))
+        self.assertIn("--tag ghost", self.list_calls()[0])
+        self.assertLessEqual(len(self.run_calls()), 1, self.lines(self.calls))
+
+    # ------------------------------------------------------------ A2
+
+    def test_a2_a_red_case_under_an_undeclared_tag_is_the_gates_red(self):
+        """A2 紅臂(#159 的形狀):票只宣告 example,second 的一條在分支上紅 → rc 1、
+        failures[0].case 是那條回歸 id、state done、假 auto-fix 被叫到。
+
+        **變異 m1**:回歸的 result 不餵狀態檔(拿掉 REG_RESULT_ARGS)→ failures[] 空,紅。
+        """
+        marker = os.path.join(self.home, "auto-fix-called")
+        self.stub_script("auto-fix.sh", "#!/bin/sh\necho \"$1\" >> %s\n" % marker)
+        wt = self.branch(verify={"files": [], "tags": ["example"], "run": "", "notes": ""})
+        self.second(green=False, where=wt)
+        self.git("add", "-A", cwd=wt)
+        self.git("commit", "-q", "-m", "#7 把 second 弄紅", cwd=wt)
+        done = self.gate_in(wt, AC_NO_FLAKE_RERUN="1")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        status = self.status_of("7", kind="gate")
+        self.assertEqual(status["state"], "done")
+        self.assertTrue(status["failures"], status)
+        self.assertEqual(status["failures"][0]["case"],
+                         "verify.second.test_second.Second.test_one", status["failures"])
+        self.assertTrue(os.path.exists(marker), "回歸紅了卻沒派 auto-fix:" + done.stdout)
+
+    def test_a2_a_flaky_regression_case_goes_through_the_flake_rerun(self):
+        """A2 flake 臂:第一次紅、之後綠 → 那條回歸 id 單跑 flake_auto_single_runs(3)次,
+        status.json 的 suspected_flaky 有它。執行次數 = 1(原跑)+ 3(單跑)+ 1(整組)。
+        """
+        wt = self.branch(verify={"files": [], "tags": ["example"], "run": "", "notes": ""})
+        self.second(where=wt, body=FLAKY_BODY)
+        self.git("add", "-A", cwd=wt)
+        self.git("commit", "-q", "-m", "#7 的 second 第一次紅", cwd=wt)
+        done = self.gate_in(wt, "--no-auto-fix")
+        self.assertIn("單獨重跑 3 次全綠", done.stdout, done.stdout + done.stderr)
+        singles = [c for c in self.run_calls()
+                   if "--case verify/second/test_second.py" in c]
+        self.assertEqual(len(singles), 3, self.lines(self.calls))
+        self.assertEqual(self.lines(self.runs).count("one"), 1 + 3 + 1, self.lines(self.runs))
+        status = self.status_of("7", kind="gate")
+        self.assertEqual([row["case"] for row in status["suspected_flaky"]],
+                         ["verify.second.test_second.Second.test_one"], status)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    # ------------------------------------------------------------ A3
+
+    def test_a3_the_second_gate_of_a_round_is_served_from_the_cache(self):
+        """A3:同一個 AC_RUN_ID 跑兩次 → 第二次回歸吃快取(案例只真跑一次);--no-cache → 兩次。"""
+        wt = self.branch(verify={"files": [], "tags": [], "run": "", "notes": ""})
+        for _ in range(2):
+            done = self.gate_in(wt, "--no-auto-fix")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.lines(self.runs).count("one"), 1, self.lines(self.runs))
+        self.assertIn("用快取", self.read("verify-t170.log", where=self.home))
+        self.reset_logs()
+        for _ in range(2):
+            done = self.gate_in(wt, "--no-auto-fix", "--no-cache",
+                                AC_GATE_RUN_ID="20261026-000001-%d" % os.getpid())
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.lines(self.runs).count("one"), 2, self.lines(self.runs))
+
+    # ------------------------------------------------------------ A4
+
+    # base 4ca7e6a 的 `gate.sh --full` 在這個沙盒的回歸段,用 base 的 scripts/ 跑一次抄下來的
+    # (`AC_TEST_SCRIPTS=<git archive 4ca7e6a scripts>/scripts`)。段 = `gate: 回歸全部` 那一行
+    # 到下一個 `gate: ` 或 `status: ` 行(`status: ` 是 status.py 印的,不屬回歸段)。只換掉
+    # 跟機器有關的三樣:秒數、`parallel:` 括號裡的核數與記憶體、行程數。
+    FULL_SECTION_AT_BASE = ("gate: 回歸全部 —— regression\n"
+                            "parallel: <n> processes (<machine>)\n"
+                            "Ran 1 test in <t>s\n"
+                            "OK\n"
+                            "Ran 2 tests in <t>s\n"
+                            "OK\n")
+
+    def full_section(self, stdout):
+        lines = stdout.splitlines(keepends=True)
+        start = [i for i, line in enumerate(lines) if line.startswith("gate: 回歸全部")]
+        self.assertEqual(len(start), 1, stdout)
+        out = [lines[start[0]]]
+        for line in lines[start[0] + 1:]:
+            if line.startswith(("gate: ", "status: ")):
+                break
+            out.append(line)
+        text = re.sub(r"(^Ran \d+ tests? in )\d+\.\d+s", r"\1<t>s", "".join(out), flags=re.M)
+        return re.sub(r"^parallel: \d+ processes \(.*\)$", "parallel: <n> processes (<machine>)",
+                      text, flags=re.M)
+
+    def test_a4_the_full_regression_section_is_unchanged(self):
+        """A4:`--full` 的回歸段與 base 逐字相同。**變異 m4**:改那一段的字 → 紅。"""
+        self.make_ticket(7)
+        done = self.run_sh("scripts/gate.sh", "--full", "--ticket", "7", "--no-auto-fix",
+                           env=self.env(AC_VERIFY_LOG=self.verify_log, REG_CALLS=self.calls,
+                                        REG_RUNS=self.runs))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.full_section(done.stdout), self.FULL_SECTION_AT_BASE)
 
 
 if __name__ == "__main__":

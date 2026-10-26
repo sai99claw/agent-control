@@ -283,7 +283,11 @@ def main(argv):
     if a.list:
         for c, t in picked:
             print(f"{os.path.relpath(c, ROOT)}  {t}")
-        print(f"verify: {len(picked)} 個案例檔,{len(known)} 個登記標籤"); return 0
+        print(f"verify: {len(picked)} 個案例檔,{len(known)} 個登記標籤")
+        if a.tag and not picked:
+            # 同不帶 `--list` 的 rc 3:分支閘門的缺口檢查只問這一句,不跑案例(#170)。
+            print(f"verify: 沒有案例符合 {a.tag}(登記標籤 {sorted(known)})"); return 3
+        return 0
     if not picked:
         print(f"verify: 沒有案例符合 {a.tag or '全部'}(登記標籤 {sorted(known)})"); return 3
     mods = [os.path.relpath(c, ROOT)[:-3].replace(os.sep, ".") for c, _ in picked]

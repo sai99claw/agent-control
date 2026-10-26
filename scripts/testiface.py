@@ -381,6 +381,13 @@ def main(argv):
         return UNMEASURED
     if command == "regression" and rc == NOTHING:
         return NOTHING
+    if command == "regression" and "--list" in args:
+        # `--list` prints what would run and runs nothing: no result.json to check (§4 table).
+        if rc == GREEN:
+            sys.stdout.write(stdout)
+            return GREEN
+        say("%s --list exited %d; log %s" % (source, rc, os.path.join(out, "%s.log" % command)))
+        return UNMEASURED
     if rc not in (GREEN, RED, SUSPECT):
         say("%s exited %d — could not run (%.1fs); log %s"
             % (source, rc, time.monotonic() - started, os.path.join(out, "%s.log" % command)))
