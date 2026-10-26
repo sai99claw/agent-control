@@ -11,7 +11,8 @@
     scripts/ticket.py close 7                     # 先 verify,>0 才准關
     scripts/ticket.py close 7 --landed <merge sha> # 落地後一步:蓋 landed_sha 再關
     scripts/ticket.py set 7 verify '{…}' --expect-state-version 4   # 過期的回報拒收
-    scripts/ticket.py round 7 3 --red             # 第三輪仍紅 -> Blocked,指派主線
+    scripts/ticket.py round 7 3 --red             # 第 repair_limit 輪仍紅 -> Blocked,指派主線
+    scripts/ticket.py repair-limit 7              # 這張票准幾輪(retry_limit+1;沒寫 = repair.max_rounds+1)
     scripts/ticket.py import <舊票目錄>           # 轉成這份 schema,缺的留空並標 legacy
     scripts/ticket.py freeze 7 --reason … --criterion …
     scripts/ticket.py cost 7 --role worker --round 1 --from-envelope <信封>  # 不動 state_version
@@ -36,6 +37,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import event  # noqa: E402  同一個目錄,共用 repo 根與設定的判讀
+import project_config  # noqa: E402  repair.* 的預設只有它那一份(#125)
 
 # docs/WORKFLOW.md 的狀態機。表在這裡,不在提示裡 —— D-001。
 STATES = ("Draft", "Ready", "Running", "InReview", "IntegrationQueued",
@@ -258,7 +260,7 @@ FLAG_NOTE = {
     "--criterion": "什麼時候可以解凍 —— 少了它,「凍著」與「忘了」長得一樣",
     "--expect-state-version": "這份回報是對票的哪一版說的;對不上就拒收(rc=4)",
     "--expect-attempt": "這份回報是第幾次派工的;對不上就拒收(rc=4)",
-    "--red": "這一輪仍然紅(預設);第 retry_limit+1 輪仍紅 -> 轉 Blocked、指派主線",
+    "--red": "這一輪仍然紅(預設);第 repair_limit 輪(retry_limit+1,沒寫 = repair.max_rounds+1)仍紅 -> 轉 Blocked、指派主線",
     "--green": "這一輪綠了",
     "--landed": "落地後的合併 sha;先確認它在主線歷史裡,再蓋進 landed_sha(與 review.sha)一步關票",
 }
@@ -288,6 +290,7 @@ USAGE = {
     "import": "scripts/ticket.py import <舊票目錄>",
     "freeze": "scripts/ticket.py freeze <id> --reason … --criterion …",
     "round": "scripts/ticket.py round <id> <第幾輪> [--red|--green]",
+    "repair-limit": "scripts/ticket.py repair-limit <id>  # 唯讀:印這張票准幾輪",
     "result": ("scripts/ticket.py result <EVIDENCE> <輸出.json> "
                "--ticket <id> --role worker|verifier|reviewer --round N"),
     "objection": ("scripts/ticket.py objection <id> --line \"OBJECTION: …\" "
@@ -321,6 +324,7 @@ python3 scripts/ticket.py set 7 decision_refs '["D-001", "D-014"]'""",
                '  --reason "視覺方向未定" \\\n'
                '  --criterion "產出會不會因視覺方向改變而重做"'),
     "round": "python3 scripts/ticket.py round 7 3 --red",
+    "repair-limit": "python3 scripts/ticket.py repair-limit 7",
     "result": ("python3 scripts/ticket.py result EVIDENCE-round2.md \\\n"
                "  reports/t7/20260923-101500-1/result-round2.json \\\n"
                "  --ticket 7 --role worker --round 2"),
@@ -442,7 +446,9 @@ def blank_ticket():
             "acceptance": [], "depends_on": [],
             "role": "worker", "model": "", "tool": "claude-code", "attempt": 0,
             "base_sha": "", "state": "Draft", "state_version": 1,
-            "lease": None, "retry_limit": 2,
+            # 修補輪數的預設(#125,D-050 ②):開票那一刻的 `repair.max_rounds`(沒設 = 3)。
+            "lease": None,
+            "retry_limit": project_config.repair_setting(event.config(root()), "max_rounds"),
             # 驗證者的交付落在這一格(D-010):案例檔、標籤、怎麼跑、要知道的事。
             # **空著是誠實的「還沒有人寫案例」**,不是「這張票不用驗」。
             "verify": {"files": [], "tags": [], "run": "", "notes": ""}}
@@ -1251,6 +1257,33 @@ def cmd_close(argv):
 # --------------------------------------------------------------------- round
 
 
+def repair_limit(ticket, conf):
+    """這張票准幾輪(第 1 輪 + 修補輪;#125,D-050 ②「首次紅後最多 3 次修補」)。
+
+    **唯一一份算法** —— `round` 轉 Blocked、`auto-fix.sh` 決定派不派下一輪、派工文印的上限
+    都問這裡。票寫了 `retry_limit`(整數 >= 0)就是它 + 1(單票覆寫);沒寫(null / 缺)才退回
+    `board/config.json` 的 `repair.max_rounds` + 1。"""
+    own = ticket.get("retry_limit") if isinstance(ticket, dict) else None
+    if isinstance(own, int) and not isinstance(own, bool) and own >= 0:
+        return own + 1
+    return project_config.repair_setting(conf, "max_rounds") + 1
+
+
+def cmd_repair_limit(argv):
+    rest = [x for x in argv if not x.startswith("--")]
+    if len(rest) != 1 or len(argv) != 1:
+        sys.stderr.write("ticket: repair-limit <id>\n")
+        return 2
+    ident = rest[0].lstrip("#")
+    try:
+        ticket = load(ident)
+    except (OSError, ValueError) as exc:
+        sys.stderr.write("ticket: 讀不到 #%s —— %s\n" % (ident, exc))
+        return 2
+    sys.stdout.write("%d\n" % repair_limit(ticket, event.config(root())))
+    return 0
+
+
 def cmd_round(argv):
     """修復迴圈的一輪結束了。**三輪耗盡不是一句話,是一個狀態轉換。**
 
@@ -1272,7 +1305,7 @@ def cmd_round(argv):
         with Lock():
             ticket = load(ident)
             ticket["repair_round"] = number
-            limit = int(ticket.get("retry_limit") or 2) + 1
+            limit = repair_limit(ticket, event.config(root()))
             exhausted = red and number >= limit
             if exhausted:
                 ticket["state"] = "Blocked"
@@ -2123,7 +2156,7 @@ def main(argv):
     table = {"create": cmd_create, "list": cmd_list, "show": cmd_show,
              "set": cmd_set, "inbox": cmd_inbox, "verify": cmd_verify,
              "close": cmd_close, "import": cmd_import, "freeze": cmd_freeze,
-             "round": cmd_round, "result": cmd_result,
+             "round": cmd_round, "repair-limit": cmd_repair_limit, "result": cmd_result,
              "objection": cmd_objection, "cost": cmd_cost,
              "agent-command": cmd_agent_command, "lint": cmd_lint}
     if verb in ("--help", "-h", "help"):

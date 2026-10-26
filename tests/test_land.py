@@ -90,6 +90,24 @@ echo "FAILED (假的紅)"
 exit 1
 """
 
+# 同一支替身的兩種「紅榜是空的」(#125):`@RC@` = 1 是沒有歸因的紅,86 是環境可疑(狀態檔寫
+# env_suspect 與一筆嫌疑列)。每一次都是同一種 —— 問的是「連第二次也一樣」時 land 怎麼停。
+GATE_STUB_EMPTY = """#!/bin/sh
+dir=$(dirname "$AC_TEST_LOG")
+n=$(( $(cat "$dir/gate-count" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "$dir/gate-count"
+echo "gate $* $(git rev-parse --short HEAD) run=$AC_GATE_RUN_ID tickets=$AC_GATE_TICKETS depth=${AC_LAND_DEPTH:-}" >> "$AC_TEST_LOG"
+state=done
+[ @RC@ != 86 ] || state=env_suspect
+for t in $AC_GATE_TICKETS $AC_GATE_TICKET; do
+    mkdir -p "$AC_ROOT/reports/t$t/$AC_GATE_RUN_ID"
+    printf '{"ticket": "%s", "kind": "gate", "run_id": "%s", "rc": @RC@, "state": "%s", "failures": [], "environment_suspect": [{"source": "statistical", "engine": "safari", "why": "螢幕鎖著", "count": 8, "threshold": 8, "log": "", "line": ""}]}\\n' \\
+        "$t" "$AC_GATE_RUN_ID" "$state" > "$AC_ROOT/reports/t$t/$AC_GATE_RUN_ID/status.json"
+done
+echo "gate: 假的紅,紅榜是空的"
+exit @RC@
+"""
+
 # auto-fix 的替身:參數與 AC_BATCH_RUN_ID 記進 AC_TEST_LOG;`--batch` 時 rc 讀 `fix-rc`(預設 0),
 # 0 就在整合分支($2,land 開的那個 worktree)上疊一個 commit —— 同批次 worker 自己 commit 的形狀(#145)。
 # `fix-hook.sh` 存在就在修復當中跑它(land 持鎖時另起 docs 通道)。
@@ -230,20 +248,20 @@ class AutoFixHook(LandBase):
     def assert_ticket_two_was_kicked(self, done):
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertEqual(len([line for line in self.auto_fix_lines()
-                              if line.startswith("autofix --batch")]), 2,
-                         "batch_fix.rounds 預設 2:修兩輪,第三次紅才找嫌疑票")
+                              if line.startswith("autofix --batch")]), 3,
+                         "沒設 batch_fix.rounds = repair.max_rounds 預設 3(#125 A1):修三輪,第四次紅才找嫌疑票")
         pages = self.inbox_pages(2)
         kicked = [page for page in pages if "踢出" in page]
         self.assertEqual(len(kicked), 1, pages)
         self.assertIn("單張 land", kicked[0])
-        self.assertIn("tests.test_red.T.test_round_3", kicked[0], "紅榜的 case 名要在頁上")
+        self.assertIn("tests.test_red.T.test_round_4", kicked[0], "紅榜的 case 名要在頁上")
         self.assertFalse([page for page in self.inbox_pages(1) if "踢出" in page])
         fails = [row for row in self.events() if row["kind"] == "land.fail" and row.get("kicked")]
         self.assertEqual([row["kicked"] for row in fails], ["2"])
         self.assertIn("重 land", done.stdout)
         starts = [row["note"] for row in self.events() if row["kind"] == "land.start"]
         self.assertEqual(starts, ["t1-a t2-b", "t1-a"])
-        relanded = self.gate_lines()[3:]
+        relanded = self.gate_lines()[4:]
         self.assertTrue(relanded, "重 land 要再跑全套")
         for line in relanded:
             self.assertIn("depth=1", line)
@@ -252,7 +270,8 @@ class AutoFixHook(LandBase):
     def test_three_reds_kick_the_ticket_the_red_file_hits(self):
         """B2:連紅 rounds+1 次、紅榜檔只命中票 2(分支改動檔)→ 踢 2、自動重 land t1-a。
 
-        **變異 ①**:rounds 寫死 1 → 第二次紅就踢,auto-fix 只 1 次 → 這一條紅。"""
+        **變異 ①**:rounds 寫死 1 → 第二次紅就踢,auto-fix 只 1 次 → 這一條紅。
+        #125:rounds 沒設時是 `repair.max_rounds`(預設 3),所以是第四次紅才踢。"""
         self.assert_ticket_two_was_kicked(self.kicked_land())
 
     def test_a_red_file_named_only_in_verify_files_kicks_that_ticket(self):
@@ -287,7 +306,8 @@ class AutoFixHook(LandBase):
         for ident, branch in ((1, "t1-a"), (2, "t2-b"), (3, "t3-c")):
             self.approve(ident, branch)
         self.put("gate-fail", "src/c")
-        for n in (1, 2, 3):
+        # 第一層:3 輪修補(repair.max_rounds 預設 3,#125)+ 第一次紅 = 4 次全套都只命中票 2。
+        for n in (1, 2, 3, 4):
             self.put("gate-fail-%s" % n, "src/b")
 
         done = self.land("t1-a", "t2-b", "t3-c")
@@ -372,6 +392,74 @@ class AutoFixHook(LandBase):
         self.assertIn("已經有一個 land 在跑", out)
         self.assertIn("t1-a t2-b", out, "說得出現在是誰在落地")
         self.assertNotIn("擠進去", self.main_log())
+
+    def test_a_single_ticket_full_suite_86_is_handed_over_as_env_suspect(self):
+        """#125 A4:全套 rc 86 與 1 分開記 —— land.fail note 與 land 狀態檔說 env_suspect,auto-fix
+        照樣被叫(它讀到 env_suspect 才走「機械重跑 → 一輪診斷」),不把空紅榜讀成「沒有歸因」。
+        改前:land.sh 對 env_suspect 0 處,狀態檔 rc 1、note「閘門紅」。"""
+        self.stub_script("gate.sh", GATE_STUB_EMPTY.replace("@RC@", "86"))
+        branch = self.branch_for(1, "t1-a")
+        self.commit_in(branch, "src/a", "第一張")
+        self.approve(1, "t1-a")
+
+        done = self.land("t1-a")
+
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        notes = [row.get("note") or "" for row in self.events() if row["kind"] == "land.fail"]
+        self.assertEqual(len(notes), 1, notes)
+        self.assertIn("env_suspect", notes[0])
+        status = self.status_of(1, kind="land")
+        self.assertEqual((status["state"], status["rc"]), ("env_suspect", 86))
+        self.assertEqual(self.auto_fix_lines(), [line for line in self.auto_fix_lines()
+                                                 if line.startswith("autofix 1 ")])
+        self.assertEqual(len(self.auto_fix_lines()), 1)
+        for page in self.inbox_pages(1):
+            self.assertNotIn("沒有歸因", page)
+
+    def test_a_batch_red_with_no_red_list_twice_stops_after_one_diagnosis(self):
+        """#125 A3:批次紅榜空的 → 那一輪的批次 worker 拿診斷(auto-fix 替身被叫一次);診斷之後全套
+        仍是空紅榜 → 一頁掛第一張票、不踢、不重 land、不再修。
+
+        **變異 M2**(land 那一側):拿掉 `diag_prev` 那一問 → auto-fix --batch 被叫到 rounds 次、這一條紅。"""
+        self.stub_script("gate.sh", GATE_STUB_EMPTY.replace("@RC@", "1"))
+        self.batch_of_two()
+
+        done = self.land("t1-a", "t2-b")
+
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(len([line for line in self.auto_fix_lines()
+                              if line.startswith("autofix --batch")]), 1)
+        self.assertEqual(len(self.gate_lines()), 2, "第一次紅 + 診斷之後那一次")
+        self.assertFalse([row for row in self.events()
+                          if row["kind"] == "land.fail" and row.get("kicked")], "不准踢")
+        self.assertEqual(len([row for row in self.events() if row["kind"] == "land.start"]), 1,
+                         "不重 land")
+        pages = self.inbox_pages(1)
+        self.assertEqual(len(pages), 1, pages)
+        self.assertIn("diagnosis round 1 did not make the red attributable", pages[0])
+        self.assertEqual(self.inbox_pages(2), [])
+
+    def test_a_batch_full_suite_86_reruns_once_then_diagnoses_once(self):
+        """#125 A4 批次:全套 86 → 機械重跑一次全套(gate.rerun reason=env_suspect,不算一輪)→ 仍 86 →
+        一輪批次診斷 → 仍 86 → 一頁「環境要人看」、停。
+
+        **變異 M1**(land 那一側):把重跑算成一輪(fixed+1)→ rounds 不變時 auto-fix 次數不變,但重跑
+        之後的那一次被當成診斷之後 —— 這一條紅在 gate 次數或 auto-fix 次數。"""
+        self.stub_script("gate.sh", GATE_STUB_EMPTY.replace("@RC@", "86"))
+        self.batch_of_two()
+
+        done = self.land("t1-a", "t2-b")
+
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(len(self.gate_lines()), 3, "第一次 + 機械重跑 + 診斷之後")
+        self.assertEqual(len([line for line in self.auto_fix_lines()
+                              if line.startswith("autofix --batch")]), 1)
+        reruns = [row for row in self.events() if row["kind"] == "gate.rerun"]
+        self.assertEqual([row.get("reason") for row in reruns], ["env_suspect"])
+        pages = self.inbox_pages(1)
+        self.assertEqual(len(pages), 1, pages)
+        self.assertIn("environment: needs a human", pages[0])
+        self.assertEqual(self.status_of(1, kind="land")["state"], "env_suspect")
 
     def test_an_unknown_flag_is_named(self):
         self.branch_for(1, "t1-a")

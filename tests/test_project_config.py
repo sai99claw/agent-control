@@ -252,6 +252,33 @@ class A4Keys(ConfigSandbox):
         self.assertNotIn("config_version", done.stderr)
 
 
+class RepairKeys(ConfigSandbox):
+    """#125 A1:`repair.max_rounds` / `repair.env_rerun` 是認得的鍵;沒寫不出聲,寫錯型別照舊點名。"""
+
+    def test_doctor_on_a_config_without_repair_says_nothing(self):
+        self.edit_conf(repair=None)
+        done = self.actl("doctor")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("repair", done.stdout)
+
+    def test_the_keys_are_known_and_typed(self):
+        self.edit_conf(repair={"max_rounds": 3, "env_rerun": 1})
+        done = self.actl("doctor")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("repair", done.stdout)
+        self.edit_conf(repair={"max_rounds": "three"})
+        done = self.actl("doctor")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("repair.max_rounds", done.stdout)
+
+    def test_the_defaults_are_three_and_one(self):
+        sys.path.insert(0, os.path.join(ROOT, "scripts"))
+        import project_config
+        self.assertEqual(project_config.repair_setting({}, "max_rounds"), 3)
+        self.assertEqual(project_config.repair_setting({}, "env_rerun"), 1)
+        self.assertEqual(project_config.repair_setting({"repair": {"max_rounds": 0}}, "max_rounds"), 0)
+
+
 class A5DogfoodAndInit(ConfigSandbox):
 
     def test_a5_a_own_config_is_version_2_and_runs(self):

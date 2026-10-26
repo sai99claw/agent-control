@@ -461,44 +461,35 @@ class GateSh(Sandbox):
         self.assertEqual(self.status_of("7")["state"], "done")
         self.assertNotIn("env.suspect", self.kinds())
 
-    def test_an_environment_suspect_round_does_not_dispatch_a_worker(self):
-        """驗收 8(D-019):**這一格非空 → 不自動派**。
+    def test_an_environment_suspect_round_is_handed_to_auto_fix(self):
+        """#125 A4(D-076 取代 D-019 驗收 8 的「這一格非空 → 不自動派」):auto-fix 開著時,
+        rc 86 也交給 `auto-fix.sh`(它先機械重跑、仍可疑派一輪診斷),閘門自己**不發頁** ——
+        發了就是同一件事兩頁。`--no-auto-fix` 照舊:一頁 decision、不叫 auto-fix。
 
-        `gate.sh` 舊版對任何 rc≠0 都叫 `auto_fix`,而 `auto_fix()` 沒看這一格 ——
-        rc=86 那一輪照樣送一個 worker 進一台「現在跑不動」的機器(#7 的案例帶著
-        `--no-auto-fix` 跑,所以沒抓到)。
-
-        **變異**:把 `auto_fix` 開頭那一行守衛拿掉 → 這一條紅(`gate: auto-fix ——`
-        那一行會出現,假 worker 會被叫)。守衛**寫反邊**(非空才派)時,其他驗收
-        全綠,只有這一條紅。
-        """
+        auto-fix 換成替身(只記被叫的參數):這一條問的是閘門交不交出去,不是 auto-fix 怎麼修。
+        **變異 M4**:`auto_fix` 裡留著「環境可疑,不自動派」那一手 return → 這一條紅(替身沒被叫)。"""
         self.write("tests/test_env_wave.py", ENVIRONMENT_WAVE)
-        # 假 worker:被叫到就寫一行。**換的是代價不是語意** —— 這一條問的是
-        # 「它到底有沒有被叫到」,而那正好因此變成一個看得見的事實。
-        worker = os.path.join(self.home, "fake-worker.sh")
-        write_executable(worker, "#!/bin/sh\n"
-                                 "echo fake-worker-ran >> \"$AC_TEST_LOG\"\n")
-        config = json.loads(self.read("board/config.json"))
-        config["worker"] = {"command": "sh %s" % worker, "timeout_seconds": 60}
-        self.write("board/config.json", json.dumps(config, ensure_ascii=False, indent=2))
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "沙盒的假 worker")
+        marker = os.path.join(self.home, "auto-fix-called")
+        self.stub_script("auto-fix.sh", "#!/bin/sh\necho \"$*\" >> %s\n" % marker)
         self.make_ticket(7)
         done = self.gate("tests/test_env_wave.py", "--ticket", "7")
-        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("環境可疑,不自動派", done.stdout)
-        # **釘住這一條的是下面兩句,不是最後那一句。** 實測:把守衛拿掉,`auto-fix.sh`
-        # 真的被叫起來(stdout 出現這兩行),但那支腳本在這個沙盒裡會因為自己的前置
-        # (票沒 commit、沒有第一輪的 patch)先停下來,所以**假 worker 兩邊都沒被叫** ——
-        # 只斷言「worker 沒被叫」的那一版,守衛在不在都是綠的(§5.5 的母題)。
-        # 最後那一句留著是因為它是驗收的字面,而它現在是**第二道**而不是唯一那道。
-        self.assertNotIn("gate: auto-fix ——", done.stdout,
-                         "連 auto-fix.sh 都不該被叫起來")
-        self.assertNotIn("auto-fix: #7", done.stdout,
-                         "auto-fix.sh 已經開始讀上一輪了")
-        self.assertEqual([row for row in self.ran() if row == "fake-worker-ran"], [],
-                         "環境可疑的那一輪派了 worker")
+        self.assertEqual(done.returncode, 86, done.stdout + done.stderr)
         self.assertEqual(self.status_of("7")["state"], "env_suspect")
+        self.assertNotIn("環境可疑,不自動派", done.stdout)
+        self.assertIn("gate: auto-fix —— sh scripts/auto-fix.sh 7", done.stdout)
+        self.assertTrue(os.path.exists(marker), "rc 86 沒交給 auto-fix:" + done.stdout)
+        with open(marker, encoding="utf-8") as handle:
+            self.assertEqual(handle.read().splitlines(), ["7"])
+        self.assertEqual(self.inbox_rows(), [], "auto-fix 開著:環境可疑由它接手,閘門不發頁")
+        fails = [row for row in self.events() if row["kind"] == "gate.fail"]
+        self.assertEqual([(row.get("rc"), row.get("state")) for row in fails], [("86", "env_suspect")])
+
+        os.remove(marker)
+        again = self.gate("tests/test_env_wave.py", "--ticket", "7", "--no-auto-fix")
+        self.assertEqual(again.returncode, 86, again.stdout + again.stderr)
+        self.assertFalse(os.path.exists(marker), "--no-auto-fix 叫了 auto-fix")
+        self.assertEqual([row["kind"] for row in self.inbox_rows()], ["decision"],
+                         "--no-auto-fix:照舊一頁環境那一頁")
 
     def test_a_plain_red_round_still_dispatches(self):
         """守衛不准把**所有**紅都攔下來:那一版與「auto-fix 壞了」長得一樣。

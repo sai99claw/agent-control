@@ -68,7 +68,8 @@
 #   * 被中止的那一段紅榜本來就**不完整** —— 拿不完整的紅榜做 flake 判定,結論不成立。
 #   * flake 判定要做的事(每條紅例單跑 N 次、再原順序整組重跑)在壞掉的環境裡最貴,
 #     而且只會再紅一輪 —— 那正是這張票要省下的時間,不是要加倍的時間。
-# 所以 rc=86 時 `flake_rerun` 與回歸層都不跑,狀態檔寫 `env_suspect`,inbox 那一頁
+# 所以 rc=86 時 `flake_rerun` 與回歸層都不跑,狀態檔寫 `env_suspect`(auto-fix 先機械重跑一次、仍可疑派
+# 一輪診斷 —— #125 A4;`--no-auto-fix` 才發下面那一頁),inbox 那一頁
 # 列出引擎、同形訊息、連紅條數與疑似原因清單。
 #
 # ## 單跑綠**不等於**綠(2026-09-21 改;取代 D-010 的「全 flaky 視為綠」)
@@ -83,9 +84,9 @@
 # 沒給票號就完全照舊 —— 不寫檔、不重跑、退出碼不變。
 #
 # ## 終態會叫醒主線(D-015)
-# 給了票號,跑完發 `gate.pass` / `gate.fail`;只有環境可疑(不自動派、要人動手)那一種
+# 給了票號,跑完發 `gate.pass` / `gate.fail`;只有環境可疑**而 `--no-auto-fix`**(要人動手)那一種
 # 另寫一則 `reports/inbox/<票號>-<run_id>.md`(kind=decision,D-032):綠由 review.sh
-# 接手、可歸因的紅由 auto-fix.sh 接手,不發頁。主線因此不必輪詢 status ——
+# 接手、紅(可歸因、沒有歸因、環境可疑 —— #125,D-076)由 auto-fix.sh 接手,不發頁。主線因此不必輪詢 status ——
 # 每看一次背景工作就是整份上下文重送一輪。
 #
 # ## auto-fix:紅了預設派下一輪(D-010)
@@ -499,16 +500,21 @@ status_done() {   # $1 = rc
 }
 
 # 終態叫醒主線(D-015)。**只有要人動手的終態發頁**(D-032):閘門綠(review.sh 接手)與
-# 閘門紅可歸因(auto-fix.sh 接手)只發 gate.pass / gate.fail;環境可疑(不可歸因、不自動
-# 派)才發一頁 decision。`AC_NO_INBOX` = 呼叫者(land.sh 全套)自己發這一則,這裡都不發。
+# 閘門紅(auto-fix.sh 接手)只發 gate.pass / gate.fail;環境可疑**而 auto-fix 關著**(`--no-auto-fix`)
+# 才發一頁 decision —— auto-fix 開著時環境可疑也交給它(#125 A4:機械重跑一次 → 一輪診斷 → 才一頁),
+# 這裡再發一頁就是同一件事兩頁。`AC_NO_INBOX` = 呼叫者(land.sh 全套)自己發這一則,這裡都不發。
 # 寫不出來要出聲但不擋閘門 —— 同狀態檔的理由。
 inbox_post() {   # $1 = rc
     [ -n "$TICKET" ] || return 0
     [ -z "${AC_NO_INBOX:-}" ] || return 0
-    if [ "$ENV_SUSPECT" -ne 1 ]; then
+    if [ "$ENV_SUSPECT" -ne 1 ] || [ "$want_autofix" -eq 1 ]; then
         if [ "$1" -eq 0 ]; then verdict=gate.pass; else verdict=gate.fail; fi
+        verdict_kv=""
+        [ "$ENV_SUSPECT" -ne 1 ] || verdict_kv="--kv state=env_suspect"
+        # shellcheck disable=SC2086
         python3 "$AC/event.py" emit "$verdict" --ticket "$TICKET" \
-            --kv "run_id=$RUN_ID" --kv "sha=$SHA" --kv "rc=$1" --kv "ac_sha=$AC_SHA" >/dev/null 2>&1 \
+            --kv "run_id=$RUN_ID" --kv "sha=$SHA" --kv "rc=$1" --kv "ac_sha=$AC_SHA" \
+            $verdict_kv >/dev/null 2>&1 \
             || echo "gate: 事件發不出去($verdict,不擋閘門)" >&2
         return 0
     fi
@@ -542,16 +548,12 @@ auto_fix() {   # $1 = rc
         echo "gate: auto-fix 要有 --ticket <票號> —— 沒有票就沒有紅榜可以派" >&2
         return 0
     fi
-    # **這一格非空 → 不自動派**(D-019,理由見 `docs/DESIGN-ENV-SUSPECT.md` §理由 5):
-    # 舊版對任何 rc≠0 都派,於是「機器現在不能跑」那一輪照樣送一個 worker 進去。
-    # 抓與放的代價不對稱 —— 懷疑錯了的代價是人手打一行指令,派錯了的代價是一整輪
-    # worker。所以**問不出來也當成有**,而且那一句要與「真的有」分得開。
+    # 環境可疑也交給 auto-fix(#125 A4,D-076 取代 D-019 理由 5 的「不自動派」):它先**機械重跑**
+    # 一次閘門(不派 agent、不算一輪),仍可疑才派**一輪診斷**,診斷之後還是一樣才一頁。抓與放的
+    # 不對稱還在 —— 只是第一手從「發頁叫人」換成「免費重跑一次」。`--no-auto-fix` 照舊發頁、不派。
     rows=$(env_suspect_rows)
-    [ "$rows" = "?" ] && echo "gate: 問不出這一輪環境可疑幾筆(狀態檔讀不到)—— 當成有" >&2
     if [ "$ENV_SUSPECT" -eq 1 ] || [ "$rows" != 0 ]; then
-        echo "gate: 環境可疑,不自動派(environment_suspect $rows 筆)—— 先修環境;"\
-             "真的要派就手打 sh scripts/auto-fix.sh $TICKET"
-        return 0
+        echo "gate: 環境可疑(environment_suspect $rows 筆)—— 交給 auto-fix:先機械重跑一次閘門,仍可疑派一輪診斷"
     fi
     if [ -n "${AC_IN_AUTOFIX:-}" ]; then
         echo "gate: 已經在 auto-fix 裡面了,不再往下派(免得自己叫自己)"
@@ -1068,11 +1070,15 @@ elif [ "$want_base" -eq 1 ] && [ "$want_branch" -eq 0 ] && [ -z "$files" ]; then
 else TEST_MODE=branch; fi
 
 # preflight(專案說「這台機器現在能不能跑」):86 → 環境可疑那一條路(狀態檔 env_suspect、
-# 不做 flake、不自動派、一頁 decision),測試一條都不跑;其他非零 → 2,preflight 本身壞了。
+# 不做 flake;auto-fix 開著交給它,`--no-auto-fix` 一頁 decision),測試一條都不跑;其他非零 → 2,
+# preflight 本身壞了。86 那一次 preflight 說的話抄進閘門 log:狀態檔留它,診斷輪的派工文讀它的尾巴(#125 A4)。
 testiface "$TEST_MODE" preflight preflight
 prc=$?
 if [ "$prc" -eq 86 ]; then
     [ ! -s "$TI_ERR" ] || cat "$TI_ERR"
+    { echo "gate: preflight 說環境可疑(rc 86),測試沒跑 —— preflight 的輸出:"
+      cat "$TI_ERR" 2>/dev/null
+      cat "$TI_OUT"/*.log 2>/dev/null; } > "$LOG"
     status_start
     env_suspect_note preflight
     status_done 86

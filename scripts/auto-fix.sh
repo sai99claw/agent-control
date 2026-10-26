@@ -30,12 +30,16 @@
 #    D-041,見 `triage_objection`),判 accepted(票面改好)就接回原 session 續做、不停;
 #    判 escalate(帶一題附建議的裁示題)、同票第二次、開題者沒判出來、session 接不回,
 #    才票轉 Blocked、owner=main,發 `decision.asked`。
-# 2. **三輪仍紅** —— `ticket.py round` 在第 `retry_limit+1` 輪把票轉 Blocked、owner=main。
-# 3. **failures 沒有歸因** —— rc 非零卻一條紅都解析不出來(log 壞了、跑都沒跑起來)。
-#    這一種**最危險**:它看起來像「沒有紅」,而自動派下去的 worker 會拿著一份空紅榜
-#    去猜。所以這裡當場停,不派。
+# 2. **修補輪用完仍紅**(頁名沿用「三輪耗盡」)—— 准幾輪只有 `ticket.py repair_limit` 一份算法
+#    (#125 A1,D-050 ②):票的 `retry_limit`+1,沒寫 = `repair.max_rounds`(預設 3)+1;
+#    `ticket.py round` 在那一輪把票轉 Blocked、owner=main。診斷輪算一輪,環境重跑不算。
+# 3. **診斷輪之後仍沒有歸因 / 仍環境可疑**(#125 A3/A4,D-076)—— rc 非零卻一條紅都解析不出來
+#    (log 壞了、跑都沒跑起來),或閘門說環境可疑(rc 86)。它看起來像「沒有紅」,拿空紅榜去猜的
+#    worker 會改到沒壞的地方 —— 所以第一次**不照紅榜修**:環境可疑先機械重跑閘門
+#    (`repair.env_rerun`,不算一輪),仍可疑或本來就沒有歸因就派**一輪診斷**(派工文 `## 診斷`
+#    取代紅榜,`ticket.attempt.start` 帶 `round_kind=diagnosis`)。診斷輪之後還是一樣才停、一頁。
 #    **閘門硬擋命中**(#90)不是這一種:測試沒起所以紅榜空,但 gate 狀態檔的 note 寫著
-#    是哪一條 —— 頁的狀態格是「閘門硬擋命中」,歸因到交件(命中 `hard_block` 的改動)。
+#    是哪一條 —— 頁的狀態格是「閘門硬擋命中」,歸因到交件(命中 `hard_block` 的改動),不重跑、不診斷。
 #
 # **覆核由 `review.sh` 派**(#42,D-025 ②),**只派 `complexity=complex` 的票**(#136,VISION
 # 流程 #9):綠了之後票轉 `InReview`(寫在票 JSON)、complex 票再叫 `sh scripts/review.sh
@@ -47,8 +51,8 @@
 # `--no-review` 回 0 並印 `終態=awaiting_review` —— 閘門綠、還沒覆核,不是可落地。
 #
 # ## 退出碼
-#   0 綠了且覆核 pass(simple 票:綠了就是;或 --no-review:awaiting_review)   1 三輪耗盡仍紅   2 用法 / 沒有狀態檔而票不是 Ready
-#   3 worker 提反駁       4 failures 沒有歸因,或閘門硬擋命中(頁的狀態格分得出)
+#   0 綠了且覆核 pass(simple 票:綠了就是;或 --no-review:awaiting_review)   1 修補輪用完仍紅   2 用法 / 沒有狀態檔而票不是 Ready
+#   3 worker 提反駁       4 診斷輪之後仍沒有歸因 / 仍環境可疑,或閘門硬擋命中(頁的狀態格分得出)
 #   5 worker 沒交件(#144:票分支沒有新 commit,或 commit 了又留著未 commit 的改動)、收件沒過
 #   6 規則包產不出來(#74):worker / 驗證者一個都沒起;缺項在 rules.py 送的 decision 頁
 #   7 角色表的候選整串耗盡(#121 A3:票 Blocked、一頁 decision、不再起程序),或額度後的
@@ -167,6 +171,16 @@ PY
 BASE_WORKER_CMD=$(with_envelope "$(cfg worker.command "claude -p --model opus")")
 WORKER_CMD=$BASE_WORKER_CMD
 RERUN_CMD=$(cfg gate.rerun_cmd "")
+# 環境可疑時機械重跑閘門幾次(#125 A4):`repair.env_rerun`,預設只在 project_config 那一份。
+ENV_RERUN=$(python3 - "$AC" "$ROOT" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import event, project_config
+print(project_config.repair_setting(event.config(sys.argv[2]), "env_rerun"))
+PY
+) || ENV_RERUN=1
+PRE_RED=""
+DIAG=""
 TF=$TDIR/$ID.json
 # 主 repo 根與副本根 **只有一種定義**(#38,#46,D-018):`scripts/wtbase.sh`(檔頭已載入)。
 MAINROOT=$(main_root)
@@ -280,6 +294,18 @@ post() {   # $1 = 狀態  $2 = 要主線做什麼  $3 = 去哪看  $4 = 補充(�
     python3 "$AC/inbox.py" post --ticket "$ID" --run-id "${RUN_ID:-}" \
         --kind decision --state "$1" --what "$2" --where "$3" ${4:+--note "$4"} \
         || echo "auto-fix: inbox 寫不出來($1)" >&2
+}
+
+# 修補輪用完(#125 A2,D-050 ②):`ticket.py round` 轉 Blocked、owner=main,一頁 decision,rc 1。
+rounds_exhausted() {   # $1 = 剛紅的是第幾輪  $2 = recorded(round_receive 已經記過這一輪的紅)
+    echo "auto-fix: 第 $1 輪仍紅(上限 $S_LIMIT 輪)—— 不再派,票轉 Blocked、指派主線"
+    # 同一輪記兩次紅會把介入次數算兩次(count_intervention)—— 迴圈裡那一手已經記過了。
+    [ "${2:-}" = recorded ] || python3 "$AC/ticket.py" round "$ID" "$1" --red >/dev/null || true
+    # 頁名沿用「三輪耗盡」(停下來那一種的名字,inbox / 測試 / 文件都認它);輪數寫實數。
+    post "三輪耗盡仍紅(第 $1 輪,上限 $S_LIMIT 輪)" \
+         "這張票由你接手:讀紅榜決定要改票面還是換做法(上限 = repair_limit:retry_limit+1,沒寫 = repair.max_rounds+1)" \
+         "reports/t$ID/$S_RUN/status.json"
+    exit 1
 }
 
 block() {   # $1 = 為什麼;票轉 Blocked、指派主線
@@ -570,11 +596,16 @@ if newest != run_id:
                         run_id, (status.read(root, ident, run_id) or {}).get("kind") or "?"))
 data = status.read(root, ident, run_id) if run_id else {}
 ctx = data.get("repair_context") or {}
+# 准幾輪只問 `ticket.py` 的 `repair_limit`(#125 A1):票的 retry_limit 優先,沒寫退回
+# `repair.max_rounds`。票讀不到也照同一支算(當成沒寫)—— 不在這裡另寫一份預設。
+import event
+import ticket as ticket_mod
 try:
     with open(tf, encoding="utf-8") as fh:
-        limit = int(json.load(fh).get("retry_limit") or 2) + 1
-except (OSError, ValueError, TypeError):
-    limit = 3
+        row = json.load(fh)
+except (OSError, ValueError):
+    row = {}
+limit = ticket_mod.repair_limit(row if isinstance(row, dict) else {}, event.config(root))
 
 
 def out(name, value):
@@ -606,6 +637,26 @@ first = suspects[0] if suspects else {}
 out("S_ENV", len(suspects))
 out("S_ENV_ENGINE", first.get("engine") or "?")
 out("S_ENV_WHY", first.get("why") or "?")
+# 環境可疑的紅(#125 A4):閘門寫了 env_suspect / rc 86,或有嫌疑列而紅榜是空的。有嫌疑列
+# **而紅榜可歸因**(案例自己宣告的那一種)照一般修補輪走 —— 紅榜就是答案。
+out("S_ENV_SUSPECT", "1" if data.get("rc") not in (None, 0) and (
+    data.get("state") == "env_suspect" or data.get("rc") == 86
+    or (suspects and not fails)) else "")
+# 這一輪(repair_context.round)的派工是不是診斷輪、它的閘門已經機械重跑過幾次 —— 問事件流,
+# 不問這個程序記得什麼:換一個程序接手(新 pid)要得到同一個答案(A2)。
+this_round = str(ctx.get("round") or 1)
+diag_prev, reruns = "", 0
+for ev_row in event.read_events(root):
+    if str(ev_row.get("ticket") or "") != ident or str(ev_row.get("attempt") or "") != this_round:
+        continue
+    if ev_row.get("kind") == "ticket.attempt.start":
+        # `round_kind`,不是票面寫的 `kind`:事件列的 `kind` 是事件種類,`--kv kind=` 會讓
+        # event.py 的 emit 撞名炸掉(實測 TypeError)。同一輪起過兩次(換候選)以最後一次為準。
+        diag_prev = "1" if ev_row.get("round_kind") == "diagnosis" else ""
+    elif ev_row.get("kind") == "gate.rerun" and ev_row.get("reason") == "env_suspect":
+        reruns += 1
+out("S_DIAG_PREV", diag_prev)
+out("S_RERUNS", reruns)
 PY
 )"
 }
@@ -1109,9 +1160,9 @@ else
     echo "auto-fix: #$ID 最新一輪 $S_RUN($S_KIND)state=$S_STATE rc=${S_RC:-?} 紅 $S_FAILS 條,第 $S_ROUND 輪(上限 $S_LIMIT)"
 fi
 
-# 手打就是覆寫:`gate.sh` 這一格非空時不自動派(D-019),但人自己打這一支的時候
-# **照派** —— 只是要看得見他覆寫了什麼。一句警告加一次照派,比一次靜靜的拒絕好:
-# 拒絕的那一版會讓人以為腳本壞了,然後去改腳本。
+# 上一輪有環境嫌疑就說一聲(D-019 驗收 12)。#125(D-076)起 `gate.sh` 不再在這裡擋 ——
+# 閘門與手打走同一條路(先機械重跑一次、仍可疑派一輪診斷,見 `red_next`);這一句留著,
+# 讓人看得見這一輪是踩在一份環境嫌疑上派的。
 if [ "${S_ENV:-0}" != "0" ]; then
     echo "auto-fix: 上一輪環境可疑($S_ENV_ENGINE:$S_ENV_WHY),你確定要派?"
 fi
@@ -1121,28 +1172,18 @@ if [ "${S_RC:-1}" = "0" ]; then
     exit 0
 fi
 
-# **沒有歸因的紅**:rc 非零卻一條都解析不出來。它看起來最像「沒紅」,而派下去的
-# worker 會拿著空紅榜去猜 —— 猜出來的修法會改到沒有壞的地方。
-# 第 1 輪(#40)沒有上一輪:環境嫌疑 0 條、rc 是空的、S_ROUND=0,前後三格本來就不成立;
-# 只有這一格要明著跳過 —— 不然「還沒有紅榜」會被讀成「紅了但沒有歸因」。
-# 閘門硬擋命中(#90 A4)排在它前面:紅榜空是因為測試沒起,歸因在 gate 的 note 裡。
+# 閘門硬擋命中(#90 A4)最先:紅榜空是因為測試沒起,歸因在 gate 的 note 裡 —— 機械停,
+# 不重跑、不診斷(#125 A6)。第 1 輪(#40)沒有上一輪:S_MECH 空、S_RUN 空,底下都不成立。
 [ -z "${S_MECH:-}" ] || mechanical_stop
-if [ -n "${S_RUN:-}" ] && [ "$S_FAILS" -eq 0 ]; then
-    echo "auto-fix: rc=${S_RC:-?} 卻一條紅都解析不出來 —— **沒有歸因**,不派 worker" >&2
-    block "#$ID rc=${S_RC:-?} 但 failures 是空的:紅榜解析不出案例,要人看 log"
-    post "紅了但沒有歸因" \
-         "自己看 log:紅榜是空的,可能是測試根本沒跑起來(import 炸了、指令打錯)" \
-         "reports/t$ID/$S_RUN/status.json 與它的 logs/"
-    exit 4
+
+# 輪數用完先停(#125 A2):診斷輪也算一輪,環境重跑不算 —— 所以用完了就不重跑、不診斷。
+if [ -n "${S_RUN:-}" ] && [ "$S_ROUND" -ge "$S_LIMIT" ]; then
+    rounds_exhausted "$S_ROUND"
 fi
 
-if [ "$S_ROUND" -ge "$S_LIMIT" ]; then
-    echo "auto-fix: 已經是第 $S_ROUND 輪(上限 $S_LIMIT)—— 不再派,轉主線"
-    python3 "$AC/ticket.py" round "$ID" "$S_ROUND" --red || true
-    post "三輪耗盡仍紅" "這張票由你接手:讀紅榜決定要改票面還是換做法" \
-         "reports/t$ID/$S_RUN/status.json"
-    exit 1
-fi
+# 沒有歸因的紅 / 環境可疑(#125 A3/A4)由 `red_next` 決定下一輪派什麼 —— 它要用到底下
+# 才定義的重跑閘門與綠了那一手,所以在迴圈前叫(PRE_RED)。
+[ -z "${S_RUN:-}" ] || PRE_RED=1
 
 fi
 
@@ -2098,7 +2139,86 @@ print("Q_DETAIL=%s" % shlex.quote(str(got.get("detail") or "")))')"
     return 1
 }
 
-worker_packet() {   # uses r/DISPATCH/MODEL/FIX;組這一輪 worker 的派工文,規則包照 MODEL 挑模型卡
+# 診斷輪(#125 A3/A4,D-076):上一輪紅了卻沒有可歸因的紅榜(rc≠0、failures 空),或閘門說環境可疑
+# 而機械重跑也沒救回來。派的還是一般 worker、收件 / 閘門 / 覆核照舊(H2:沒有新的 agent 種類);
+# 只是派工文裡紅榜那一段換成 `## 診斷`:rc、state、嫌疑列、log 尾巴、重跑閘門的指令、規則。
+# 單票與批次同一份(批次的 log 是整合分支 worktree 的 gate.log)。
+diagnosis_section() {   # $1 = 狀態檔  $2 = 閘門 log(空 = 狀態檔記的那一份)  $3 = 重跑閘門的指令  $4 = env|unattributed  $5 = 紅的是第幾輪  $6 = 寫到哪
+    python3 - "$ROOT" "$@" > "$6" <<'PY'
+import json, os, sys
+root, status_file, log, gate_cmd, why, red_round = sys.argv[1:7]
+sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
+import status
+
+try:
+    with open(status_file, encoding="utf-8") as handle:
+        data = json.load(handle)
+except (OSError, ValueError):
+    data = {}
+phases = data.get("phases") or []
+rc = data.get("rc")
+if rc is None and phases:
+    rc = phases[-1].get("rc")
+if not log:
+    # 狀態檔留的複本先(worktree 收掉之後它還在),再退回原路徑。
+    for row in data.get("kept_logs") or []:
+        if isinstance(row, dict) and row.get("kept"):
+            log = os.path.join(root, row["kept"])
+            break
+    else:
+        log = (data.get("logs") or [""])[0]
+try:
+    with open(log, encoding="utf-8", errors="replace") as handle:
+        tail = handle.read().splitlines()[-200:]
+except OSError as exc:
+    tail = None
+    missing = "(讀不到 %s:%s)" % (log or "(狀態檔沒記 log)", exc.strerror or exc)
+print("")
+print("## 診斷")
+print("")
+if why == "env":
+    print("第 %s 輪的閘門**說環境可疑**(rc 86 / state env_suspect),機械重跑也沒救回來;"
+          "紅榜因此是空的或不完整。這一輪是**診斷輪**(D-076):不是照紅榜修,是先找出閘門為什麼"
+          "產不出可歸因的紅。" % red_round)
+else:
+    print("第 %s 輪的閘門紅了(rc≠0),但**一條可歸因的紅都解析不出來**(failures 是空的)。"
+          "這一輪是**診斷輪**(D-076):不是照紅榜修,是先找出閘門為什麼產不出可歸因的紅。"
+          % red_round)
+print("")
+print("- 閘門 rc:%s" % ("?" if rc is None else rc))
+print("- 狀態檔 state:%s(`%s`)" % (data.get("state") or "?", os.path.relpath(status_file, root)))
+print("- 狀態檔 note:%s" % ((data.get("note") or "").strip() or "(空)"))
+print("- 重跑閘門(你在 worktree 裡重現用這一句):`%s`" % gate_cmd)
+suspects = status.environment_suspects(data)
+if why == "env" or suspects:
+    print("")
+    print("### 環境嫌疑(environment_suspect,%d 筆)" % len(suspects))
+    if not suspects:
+        print("- (狀態檔沒有列;閘門只回了 rc 86 —— preflight 說的話在底下 log 裡)")
+    for row in suspects:
+        print("- source=%s engine=%s why=%s count=%s threshold=%s"
+              % (row.get("source") or "?", row.get("engine") or "?", row.get("why") or "?",
+                 "?" if row.get("count") is None else row.get("count"),
+                 "?" if row.get("threshold") is None else row.get("threshold")))
+print("")
+print("### 閘門 log 最後 200 行(`%s`;preflight 說環境可疑的那一條路,這裡是 preflight 的輸出)"
+      % (os.path.relpath(log, root) if log and os.path.isabs(log) else log or "?"))
+print("```")
+print("\n".join(tail) if tail is not None else missing)
+print("```")
+print("")
+print("### 規則")
+print("- 找出閘門為什麼沒產出可歸因的紅榜(測試根本沒跑起來?harness / adapter 炸了?環境?),"
+      "修好讓它產得出來 —— 修好之後閘門綠或紅都可以,紅了下一輪照紅榜修。")
+print("- 准許的修法:harness、測試基礎設施、repo 內的環境設定。")
+print("- **不准放寬或略過測試**:不刪 assert、不加 skip / expectedFailure、不改期望值。")
+print("- 原因在 repo 外(機器、權限、外部服務):在 EVIDENCE 寫一行 "
+      "`OBJECTION: blocking <原因>`,**不交 commit**。")
+print("- 診斷只有一輪:這一輪之後閘門還是沒有可歸因的紅,就交主線,不會再派第二輪診斷。")
+PY
+}
+
+worker_packet() {   # uses r/DISPATCH/MODEL/FIX/DIAG;組這一輪 worker 的派工文,規則包照 MODEL 挑模型卡
     # 換候選(額度 / 不可用)時重組一次:規則包要跟實際起的模型相符(#121 A1)。
     if [ "$r" -eq 1 ]; then
         # 第 1 輪沒有紅榜、沒有上一輪:派工文就是 `--dry-run --round 1` 那一份(#40)。
@@ -2111,11 +2231,19 @@ worker_packet() {   # uses r/DISPATCH/MODEL/FIX;組這一輪 worker 的派工文
             ROUND_RC=6
             return 1
         fi
+        DIAG_FILE=""
+        if [ -n "${DIAG:-}" ]; then
+            gate_command
+            DIAG_FILE=$(dirname "$DISPATCH")/diagnosis-round$r.md
+            diagnosis_section "$ROOT/$(cfg reports_dir reports)/t$ID/$S_RUN/status.json" "" \
+                "(cd $WT && $gate_cmd)" "$DIAG" "$((r - 1))" "$DIAG_FILE"
+        fi
         {
             printf '%s\n' "$RULES_TEXT"
-            python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "$FIX" "$TF" "$WT" "$(ticket_branch)" <<'PY'
+            python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "$FIX" "$TF" "$WT" "$(ticket_branch)" \
+                "$S_LIMIT" "$DIAG_FILE" <<'PY'
 import json, os, sys
-root, ident, run_id, r, fix, tf, wt, branch = sys.argv[1:9]
+root, ident, run_id, r, fix, tf, wt, branch, limit, diag_file = sys.argv[1:11]
 sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
 import status
 
@@ -2123,7 +2251,7 @@ data = status.read(root, ident, run_id)
 ctx = data.get("repair_context") or {}
 snap = ctx.get("ticket") or {}
 print("")
-print("# 這一輪:#%s 第 %s 輪(修復)" % (ident, r))
+print("# 這一輪:#%s 第 %s 輪(%s)" % (ident, r, "診斷" if diag_file else "修復"))
 print("")
 print("上一輪紅了。你是**新的** worker —— 上一輪那個不會醒來,所以下面這幾格就是你手上的全部。")
 print("")
@@ -2141,12 +2269,19 @@ print("- 上一輪的 EVIDENCE:`%s`" % (ctx.get("prev_evidence") or "(沒有 —
 print("- 主線重現用的指令(**你不要跑它** —— 它動的是主 repo 的閘門/worktree):`%s`(cwd `%s`)"
       % ((ctx.get("repro") or {}).get("cmd") or "?",
          (ctx.get("repro") or {}).get("cwd") or "?"))
-print("- 你在 worktree 裡重現:照底下紅榜的 case 名單跑(例 `python3 -m unittest <模組>.<類>.<案例>`,"
-      "cwd 是 worktree 裡那個測試模組所在的目錄);修好後跑同一組再交,整套留給閘門。")
-print("- 這是第 %s 輪,上限 %s 輪" % (r, int(snap.get("retry_limit") or 2) + 1))
-print("")
-print("## 紅榜(逐條,excerpt ≤ 20 行)")
-for row in data.get("failures") or []:
+if diag_file:
+    print("- 你在 worktree 裡重現:用底下 `## 診斷` 那一段給的閘門指令;沒有紅榜可照著跑。")
+else:
+    print("- 你在 worktree 裡重現:照底下紅榜的 case 名單跑(例 `python3 -m unittest <模組>.<類>.<案例>`,"
+          "cwd 是 worktree 裡那個測試模組所在的目錄);修好後跑同一組再交,整套留給閘門。")
+print("- 這是第 %s 輪,上限 %s 輪(`ticket.py repair-limit %s`)" % (r, limit, ident))
+if diag_file:
+    with open(diag_file, encoding="utf-8") as handle:
+        sys.stdout.write(handle.read())
+else:
+    print("")
+    print("## 紅榜(逐條,excerpt ≤ 20 行)")
+for row in [] if diag_file else data.get("failures") or []:
     print("")
     print("### %s %s" % (row.get("kind") or "FAIL", row.get("case") or "?"))
     bits = []
@@ -2349,7 +2484,9 @@ round_once() {   # $1 = 第幾輪(r);設定 ROUND_RC
         echo "auto-fix: 起第 $r 輪的 worker —— $WORKER_CMD(cwd $WT,派工文從 stdin 餵)"
     fi
     [ -z "$T_EFFORT" ] || echo "auto-fix: effort 來源=$EFFORT_SRC $T_EFFORT"
-    ev ticket.attempt.start --driver $$ --ticket "$ID" --attempt "$r" --kv run_id="$RUN_ID" --note "auto-fix 第 $r 輪"
+    # 診斷輪(#125 A3)的記號 `round_kind=diagnosis`:下一個程序靠它認出「上一輪已經診斷過」。
+    ev ticket.attempt.start --driver $$ --ticket "$ID" --attempt "$r" --kv run_id="$RUN_ID" \
+        ${DIAG:+--kv round_kind=diagnosis --kv diagnosis="$DIAG"} --note "auto-fix 第 $r 輪${DIAG:+(診斷)}"
     # 起不來(副本取不出)照樣派 worker,收件時走「驗證者沒交出 patch-verify」那一頁。
     echo "auto-fix: 逾時來源=$TIMEOUT_SRC $WORKER_TIMEOUT 秒" >&2
     [ -z "$V_WANT" ] || [ -z "$V_PARALLEL" ] || start_verifier_bg || true
@@ -2708,14 +2845,7 @@ subprocess.run([sys.executable, os.path.join(os.environ["AC_CONTROL_DIR"], "tick
 PY
     fi
 
-    if [ -n "$RERUN_CMD" ]; then
-        gate_cmd=$RERUN_CMD
-    else
-        # 預設跑哪一份閘門與 land.sh 同一條(D-071 C3,`wtbase.sh` 的 `ac_gate_script`):
-        # 專案就是 A 自己才跑 worktree 那一份,其他專案跑 AC_HOME 那一份。
-        gate_cmd="sh '$(ac_gate_script "$WT")' --branch --ticket $ID"
-        echo "auto-fix: 警告:沒有設 gate.rerun_cmd —— 退回 $gate_cmd" >&2
-    fi
+    gate_command
     echo "auto-fix: 第 $r 輪的閘門 —— (cd $WT && $gate_cmd)"
     ev gate.rerun --ticket "$ID" --attempt "$r" --note "$gate_cmd" \
         --kv run_id="$RUN_ID" --kv round="$r"
@@ -2729,36 +2859,7 @@ PY
     # 閘門跑過了 —— 綠或紅,這一次派工都算收工(紅的下一輪是另一個 attempt)。
     ev ticket.attempt.done --ticket "$ID" --attempt "$r" --kv rc="$grc"
     if [ "$grc" -eq 0 ]; then
-        python3 "$AC/ticket.py" round "$ID" "$r" --green || true
-        python3 "$AC/ticket.py" set "$ID" state InReview >/dev/null 2>&1 || true
-        read_status
-        RUN_ID=$S_RUN
-        # 閘門只有一個真相(#56,D-H38):這一輪的綠寫進票上**同一個** `gate` 欄,sha 是
-        # 分支此刻的頭。以前副本裡的綠只留在狀態檔,land 只認 `gate.rc` 就拒收,主線只剩
-        # `gate --redo` —— 它改了分支 sha,綁在舊 sha 的覆核跟著失效。
-        GATE_SHA=$(git -C "$ROOT" rev-parse -q --verify "$(ticket_branch)^{commit}" 2>/dev/null || echo "")
-        if [ -n "$GATE_SHA" ]; then
-            python3 "$AC/ticket.py" set "$ID" gate "$(python3 -c '
-import datetime, json, sys
-print(json.dumps({"rc": 0, "sha": sys.argv[1], "run_id": sys.argv[2],
-                  "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}))
-' "$GATE_SHA" "$RUN_ID")" >/dev/null 2>&1 \
-                || echo "auto-fix: 票的 gate 欄寫不進去 —— land 會拒收,review.sh 會說沒跑過閘門" >&2
-        else
-            echo "auto-fix: 問不到分支 $(ticket_branch) 的頭 —— 票的 gate 欄不寫" >&2
-        fi
-        ROUND_RC=0
-        if ! needs_review; then
-            echo "auto-fix: 第 $r 輪綠了 —— 票不是 complex(沒標 = simple),不派覆核;票停在 InReview 等 land"
-            echo "auto-fix: 終態=green_no_review(simple 票:閘門綠就可落地,不做做完後的覆核)"
-        elif [ -n "$NO_REVIEW" ]; then
-            echo "auto-fix: 第 $r 輪綠了 —— --no-review,覆核不派,票停在 InReview:sh scripts/review.sh $ID"
-            echo "auto-fix: 終態=awaiting_review(閘門綠、還沒覆核 —— 不是可落地)"
-        else
-            echo "auto-fix: 第 $r 輪綠了 —— 覆核交給 review.sh(sh scripts/review.sh $ID)"
-            sh "$AC/review.sh" "$ID" --run-id "$RUN_ID"
-            review_outcome $?
-        fi
+        gate_green
         return 1
     fi
     python3 "$AC/ticket.py" round "$ID" "$r" --red || true
@@ -2773,6 +2874,129 @@ print(json.dumps({"rc": 0, "sha": sys.argv[1], "run_id": sys.argv[2],
     return 0
 }
 
+# 這張票的閘門怎麼跑(round_receive 與環境重跑同一句):`gate.rerun_cmd`,沒設退回預設那一支。
+gate_command() {   # uses WT;設定 gate_cmd
+    if [ -n "$RERUN_CMD" ]; then
+        gate_cmd=$RERUN_CMD
+    else
+        # 預設跑哪一份閘門與 land.sh 同一條(D-071 C3,`wtbase.sh` 的 `ac_gate_script`):
+        # 專案就是 A 自己才跑 worktree 那一份,其他專案跑 AC_HOME 那一份。
+        gate_cmd="sh '$(ac_gate_script "$WT")' --branch --ticket $ID"
+        echo "auto-fix: 警告:沒有設 gate.rerun_cmd —— 退回 $gate_cmd" >&2
+    fi
+}
+
+# 第 r 輪的閘門綠了(round_receive,或環境重跑綠了 —— #125 A4):記綠、票轉 InReview、票的 gate 欄、
+# complex 票派覆核。設定 ROUND_RC。
+gate_green() {   # uses r
+    python3 "$AC/ticket.py" round "$ID" "$r" --green || true
+    python3 "$AC/ticket.py" set "$ID" state InReview >/dev/null 2>&1 || true
+    read_status
+    RUN_ID=$S_RUN
+    # 閘門只有一個真相(#56,D-H38):這一輪的綠寫進票上**同一個** `gate` 欄,sha 是
+    # 分支此刻的頭。以前副本裡的綠只留在狀態檔,land 只認 `gate.rc` 就拒收,主線只剩
+    # `gate --redo` —— 它改了分支 sha,綁在舊 sha 的覆核跟著失效。
+    GATE_SHA=$(git -C "$ROOT" rev-parse -q --verify "$(ticket_branch)^{commit}" 2>/dev/null || echo "")
+    if [ -n "$GATE_SHA" ]; then
+        python3 "$AC/ticket.py" set "$ID" gate "$(python3 -c '
+import datetime, json, sys
+print(json.dumps({"rc": 0, "sha": sys.argv[1], "run_id": sys.argv[2],
+              "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}))
+' "$GATE_SHA" "$RUN_ID")" >/dev/null 2>&1 \
+            || echo "auto-fix: 票的 gate 欄寫不進去 —— land 會拒收,review.sh 會說沒跑過閘門" >&2
+    else
+        echo "auto-fix: 問不到分支 $(ticket_branch) 的頭 —— 票的 gate 欄不寫" >&2
+    fi
+    ROUND_RC=0
+    if ! needs_review; then
+        echo "auto-fix: 第 $r 輪綠了 —— 票不是 complex(沒標 = simple),不派覆核;票停在 InReview 等 land"
+        echo "auto-fix: 終態=green_no_review(simple 票:閘門綠就可落地,不做做完後的覆核)"
+    elif [ -n "$NO_REVIEW" ]; then
+        echo "auto-fix: 第 $r 輪綠了 —— --no-review,覆核不派,票停在 InReview:sh scripts/review.sh $ID"
+        echo "auto-fix: 終態=awaiting_review(閘門綠、還沒覆核 —— 不是可落地)"
+    else
+        echo "auto-fix: 第 $r 輪綠了 —— 覆核交給 review.sh(sh scripts/review.sh $ID)"
+        sh "$AC/review.sh" "$ID" --run-id "$RUN_ID"
+        review_outcome $?
+    fi
+}
+
+# 環境可疑(#125 A4,D-076 取代 D-019 理由 5 的「永不派」):同一支閘門**機械重跑**一次 —— 不派
+# agent、不算一輪(`repair.env_rerun`,預設 1;0 = 不重跑)。發 `gate.rerun` reason=env_suspect;
+# 那一筆就是「這一輪已經重跑過」的紀錄,換程序接手也數得到(read_status 的 S_RERUNS)。
+env_rerun() {   # uses S_ROUND / S_PREV_EVIDENCE;重讀狀態檔
+    if ! ticket_worktree; then
+        echo "auto-fix: 票分支 $(ticket_branch) 的 worktree $WT 建不出來 —— 環境重跑跳過" >&2
+        return 1
+    fi
+    gate_command
+    echo "auto-fix: 第 $S_ROUND 輪的閘門環境可疑($S_ENV_ENGINE:$S_ENV_WHY)—— 同一支閘門機械重跑一次(不算一輪):(cd $WT && $gate_cmd)"
+    ev gate.rerun --ticket "$ID" --attempt "$S_ROUND" --note "$gate_cmd" \
+        --kv run_id="$RUN_ID" --kv round="$S_ROUND" --kv reason=env_suspect
+    ( cd "$WT" && AC_ROOT=$ROOT AC_WT=$WT AC_ROUND=$S_ROUND AC_TICKET=$ID \
+        AC_PREV_EVIDENCE=${S_PREV_EVIDENCE:-} AC_IN_AUTOFIX=1 \
+        sh -c "$gate_cmd" )
+    erc=$?
+    read_status
+    RUN_ID=$S_RUN
+    # 重跑的閘門沒寫狀態檔(或寫了別輪)也不准讀成綠:綠只認重跑的 rc 與新狀態檔兩邊都是 0。
+    [ "$erc" -eq 0 ] && [ "${S_RC:-1}" = "0" ] && return 0
+    [ "$erc" -eq 0 ] && echo "auto-fix: 重跑的閘門 rc 0,但最新狀態檔 rc=${S_RC:-?} —— 照狀態檔走" >&2
+    return 2
+}
+
+# 紅了之後下一輪派什麼(#125 A3/A4,D-076)。讀 S_*;設 DIAG(空 = 一般修補輪、env / unattributed =
+# 診斷輪)。停下來的幾種在這裡收尾、exit(各恰一頁);環境重跑綠了走 gate_green、exit。
+#   可歸因的紅                        → 一般修補輪
+#   環境可疑,這一輪還沒重跑夠         → 機械重跑(不算一輪),再判一次
+#   沒有歸因 / 環境可疑,上一輪不是診斷 → 診斷輪(算一輪)
+#   診斷輪之後還是沒有歸因 / 環境可疑   → 一頁、rc 4(不連派第二輪診斷,H3)
+red_next() {
+    while :; do
+        [ -z "${S_MECH:-}" ] || mechanical_stop
+        DIAG=""
+        if [ -n "${S_ENV_SUSPECT:-}" ]; then
+            DIAG=env
+        elif [ "$S_FAILS" -eq 0 ]; then
+            DIAG=unattributed
+        else
+            return 0
+        fi
+        if [ "$DIAG" = env ] && [ -z "$S_DIAG_PREV" ] && [ "${S_RERUNS:-0}" -lt "$ENV_RERUN" ]; then
+            if [ -n "$DRY" ]; then
+                echo "auto-fix: --dry-run —— 環境可疑:真的起跑時會先機械重跑閘門 $ENV_RERUN 次(不算一輪),仍可疑才派這一份診斷輪"
+            else
+                env_rerun
+                case $? in
+                    0) r=$S_ROUND
+                       echo "auto-fix: 環境重跑綠了 —— 第 $r 輪照綠的路走,不派 worker"
+                       gate_green
+                       exit "$ROUND_RC" ;;
+                    2) continue ;;
+                esac
+            fi
+        fi
+        if [ -n "$S_DIAG_PREV" ]; then
+            if [ "$DIAG" = env ]; then
+                echo "auto-fix: 第 $S_ROUND 輪是診斷輪,閘門仍環境可疑 —— 環境要人看,不再派" >&2
+                block "#$ID 第 $S_ROUND 輪(診斷輪)之後閘門仍環境可疑:環境要人看"
+                post "環境要人看(environment: needs a human)" \
+                     "第 $S_ROUND 輪診斷輪之後閘門仍環境可疑(rc=${S_RC:-?},$S_ENV_ENGINE:$S_ENV_WHY):機械重跑與一輪診斷都沒救回來,先修機器 / 環境,再 python3 scripts/ticket.py set $ID state Running 並重跑閘門" \
+                     "reports/t$ID/$S_RUN/status.json 與它的 logs/"
+            else
+                echo "auto-fix: 第 $S_ROUND 輪是診斷輪,紅仍沒有歸因 —— 不連派第二輪診斷" >&2
+                block "#$ID 第 $S_ROUND 輪診斷輪之後紅仍沒有歸因"
+                post "診斷輪之後紅仍沒有歸因(第 $S_ROUND 輪的診斷沒讓紅變成可歸因)" \
+                     "diagnosis round $S_ROUND did not make the red attributable:rc=${S_RC:-?} 而 failures 仍是空的;看那一輪的 EVIDENCE 與閘門 log,決定修 harness 還是改票" \
+                     "reports/t$ID/$S_RUN/status.json 與它的 logs/"
+            fi
+            exit 4
+        fi
+        echo "auto-fix: 第 $S_ROUND 輪紅了但$([ "$DIAG" = env ] && echo "閘門環境可疑" || echo "一條可歸因的紅都沒有")(rc=${S_RC:-?})—— 下一輪是診斷輪(D-076)"
+        return 0
+    done
+}
+
 # --------------------------------------------------------------- 批次修復(#108)
 # land 一批 N 張、全套紅 → `AC_BATCH_RUN_ID=<land 那一輪的 run_id> sh scripts/auto-fix.sh --batch
 # <整合分支> <id…>`。**不猜哪張票弄紅**(D-H51 ②):一個 worker 拿整批 —— 紅榜(第一張票的
@@ -2783,7 +3007,7 @@ print(json.dumps({"rc": 0, "sha": sys.argv[1], "run_id": sys.argv[2],
 # **不寫票**:不 set state / attempt / objections —— 任何一張票的 state_version 一動,N 張的覆核同時
 # 過期。只有 worker 的成本一列記在第一張票(`ticket.py cost` 不動版本)。紀錄全在 reports/batch/<stamp>/。
 # 退出碼同單票那一張表:0 fix 已 commit 且覆核 pass(`--no-review` 是已 commit);3 worker 提反駁;
-# 4 紅榜讀不到或是空的;5 沒交 / 逾時 / 收件被擋;6 規則包產不出來;覆核不是 pass 就是 review.sh 的 rc。
+# 4 紅榜讀不到(空的 = 這一輪派診斷,#125);5 沒交 / 逾時 / 收件被擋;6 規則包產不出來;覆核不是 pass 就是 review.sh 的 rc。
 batch_main() {
     [ -n "${AC_BATCH_RUN_ID:-}" ] || {
         echo "auto-fix: --batch 要 env AC_BATCH_RUN_ID(land 那一輪的 run_id;紅榜從 reports/t$ID/<它>/status.json 讀)" >&2
@@ -2803,14 +3027,29 @@ batch_main() {
     mkdir -p "$BDIR"
     B_STATUS=$ROOT/$(cfg reports_dir reports)/t$ID/$RUN_ID/status.json
     B_FAILS=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1],encoding="utf-8")).get("failures") or []))' "$B_STATUS" 2>/dev/null || echo "")
-    if [ -z "$B_FAILS" ] || [ "$B_FAILS" -eq 0 ]; then
-        b_why=讀不到
-        [ -z "$B_FAILS" ] || b_why=是空的
-        echo "auto-fix: 批次 $B_TAGS 的紅榜${b_why}($B_STATUS)—— 沒有歸因,不派" >&2
+    if [ -z "$B_FAILS" ]; then
+        echo "auto-fix: 批次 $B_TAGS 的紅榜讀不到($B_STATUS)—— 沒有歸因,不派" >&2
         post "批次紅了但沒有歸因($B_TAGS)" \
-             "整批 $B_TAGS 在 $B_BR 上的紅榜${b_why}:自己看那一輪的 log,不要讓 worker 拿空紅榜去猜" \
+             "整批 $B_TAGS 在 $B_BR 上的紅榜讀不到:自己看那一輪的 log,不要讓 worker 拿空紅榜去猜" \
              "$(rel_root "$B_STATUS")"
         exit 4
+    fi
+    # 紅榜是空的(#125 A3/A4,D-076):這一輪派**診斷**(`## 診斷` 取代紅榜),不停。連第二次也沒有
+    # 歸因由 land.sh 停(它知道上一輪是不是診斷;這一支一次只跑一輪)。全套那一輪 rc 86 / 狀態
+    # env_suspect 的是環境那一種(嫌疑列由 land 抄進同一份狀態檔)。
+    B_DIAG=""
+    if [ "$B_FAILS" -eq 0 ]; then
+        B_DIAG=$(python3 - "$B_STATUS" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+phases = [row for row in data.get("phases") or [] if row.get("phase") == "gate"]
+env = data.get("state") == "env_suspect" or data.get("rc") == 86 \
+    or (phases and phases[-1].get("rc") == 86)
+print("env" if env else "unattributed")
+PY
+)
+        echo "auto-fix: 批次 $B_TAGS 的紅榜是空的($B_DIAG)—— 這一輪派診斷,不照紅榜修"
     fi
     # 輪次目錄(EVIDENCE、拋棄式控制根、worker.pid)在 worktree 外;worker 的 cwd 是整合分支的
     # worktree —— land 開的那一個就用它(同一條分支 git 只准一個 worktree),沒有才開。
@@ -2830,13 +3069,20 @@ batch_main() {
     DISPATCH=$BDIR/dispatch-round$r.md
     batch_packet() {   # 規則包照 MODEL 挑模型卡;換候選(#132 B3)時重組一次
         rules_pack "$DISPATCH" worker "$MODEL" || return 1
+        B_DIAG_FILE=""
+        if [ -n "$B_DIAG" ]; then
+            B_DIAG_FILE=$BDIR/diagnosis-round$r.md
+            diagnosis_section "$B_STATUS" "$WT/gate.log" \
+                "(cd $WT && sh '$(ac_gate_script "$WT")' --full --no-auto-fix)" "$B_DIAG" "$r" \
+                "$B_DIAG_FILE"
+        fi
         {
             printf '%s\n' "$RULES_TEXT"
             python3 - "$ROOT" "$TDIR" "$B_STATUS" "$B_BR" "$FIX" "$B_DIFF" \
-                "$(git -C "$ROOT" diff --stat "$MAIN...$B_BR")" "$MAIN" "$WT" $B_IDS <<'PY'
+                "$(git -C "$ROOT" diff --stat "$MAIN...$B_BR")" "$MAIN" "$WT" "$B_DIAG_FILE" $B_IDS <<'PY'
 import json, os, sys
-root, tdir, status_file, branch, fix, diff_file, stat, main, wt = sys.argv[1:10]
-ids = sys.argv[10:]
+root, tdir, status_file, branch, fix, diff_file, stat, main, wt, diag_file = sys.argv[1:11]
+ids = sys.argv[11:]
 tags = " ".join("#%s" % ident for ident in ids)
 rows = []
 for ident in ids:
@@ -2845,7 +3091,7 @@ for ident in ids:
 with open(status_file, encoding="utf-8") as handle:
     failures = json.load(handle).get("failures") or []
 print("")
-print("# 這一輪:批次修復 %s 第 1 輪(整合分支 `%s`)" % (tags, branch))
+print("# 這一輪:批次%s %s 第 1 輪(整合分支 `%s`)" % ("診斷" if diag_file else "修復", tags, branch))
 print("")
 print("你是 **role=worker** 的實作者,**短命**:交付那一回合結束,不會再被叫醒。")
 print("這 %d 張票各自綠過、覆核過,合在 `%s` 上跑全套卻紅了。**不要猜是哪一張弄紅的** —— "
@@ -2860,8 +3106,12 @@ for row in rows:
     for item in row.get("acceptance") or []:
         print("  - %s" % item)
 print("")
-print("## 紅榜(逐條;來源 `%s`)" % os.path.relpath(status_file, root))
-for row in failures:
+if diag_file:
+    with open(diag_file, encoding="utf-8") as handle:
+        sys.stdout.write(handle.read().lstrip("\n"))
+else:
+    print("## 紅榜(逐條;來源 `%s`)" % os.path.relpath(status_file, root))
+for row in [] if diag_file else failures:
     print("")
     print("### %s %s" % (row.get("kind") or "FAIL", row.get("case") or "?"))
     print("- file:%s:%s" % (row.get("file") or "?", row.get("line") or "?"))
@@ -2895,7 +3145,8 @@ print("在 EVIDENCE 裡寫**一行**:`OBJECTION: <ticket-wrong|test_defect|block
       "看到這一行,這一輪停下、整批交主線(批次不寫票)。")
 print("")
 print("## 只准跑的測試")
-print("紅榜上那幾條(照 case 名單跑);不跑全套 —— 全套是呼叫端在 fix commit 之後重跑的事。")
+print("紅榜上那幾條(照 case 名單跑;診斷輪沒有紅榜:照 `## 診斷` 的指令重現);"
+      "不跑全套 —— 全套是呼叫端在 fix commit 之後重跑的事。")
 PY
         } > "$DISPATCH"
     }
@@ -2921,7 +3172,7 @@ PY
     batch_run() {   # 起一次批次 worker(WORKER_CMD / WORKER_LOG);設定 WRC / W_COST_SECS,交付收進紀錄目錄
         ev agent.start --driver $$ --ticket "$ID" --role worker --model "$WORKER_MODEL" \
             --kv run_id="$RUN_ID" --kv round="$r" --kv agent=auto-fix --kv batch="$B_TAGS" \
-            ${T_EFFORT:+--kv effort=$T_EFFORT}
+            ${T_EFFORT:+--kv effort=$T_EFFORT} ${B_DIAG:+--kv round_kind=diagnosis}
         WSTART=$(date +%s)
         WRC=$(run_agent "$WORKER_CMD" "$DISPATCH" "$FIX" worker "$r" "$WORKER_LOG" 1 "" "$WT")
         W_COST_SECS=$(( $(date +%s) - WSTART ))
@@ -3048,25 +3299,18 @@ if [ -z "$DRY" ]; then
     done
 fi
 
+# 上一輪(狀態檔那一輪)紅了:這一次要派的是一般修補輪還是診斷輪,環境可疑先機械重跑(#125)。
+[ -z "$PRE_RED" ] || red_next
+
 r=$((S_ROUND + 1))
 while :; do
     ROUND_RC=0
     if round_once "$r"; then
-        # 還紅,而且沒有停下來的理由 —— 看還有沒有下一輪。
+        # 還紅,而且沒有停下來的理由 —— 看還有沒有下一輪。硬擋命中最先(A6),再看輪數(A2:
+        # 診斷輪也算一輪),最後由 red_next 決定下一輪的種類(A3/A4)。
         [ -z "${S_MECH:-}" ] || mechanical_stop
-        if [ "$S_FAILS" -eq 0 ]; then
-            echo "auto-fix: 第 $r 輪 rc 非零卻解析不出紅榜 —— 沒有歸因,停" >&2
-            block "#$ID 第 $r 輪 rc 非零但 failures 是空的"
-            post "紅了但沒有歸因" "自己看 log:紅榜是空的" \
-                 "reports/t$ID/$S_RUN/status.json"
-            exit 4
-        fi
-        if [ "$r" -ge "$S_LIMIT" ]; then
-            echo "auto-fix: 第 $r 輪仍紅,上限 $S_LIMIT —— 票已轉 Blocked、指派主線"
-            post "三輪耗盡仍紅" "這張票由你接手:讀紅榜決定要改票面還是換做法" \
-                 "reports/t$ID/$S_RUN/status.json"
-            exit 1
-        fi
+        [ "$r" -lt "$S_LIMIT" ] || rounds_exhausted "$r" recorded
+        red_next
         r=$((r + 1))
         T_LAST_WORKER=$(last_worker)
         route_round "$r"

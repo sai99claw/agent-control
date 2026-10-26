@@ -73,7 +73,12 @@ SCHEMA = [
     ("verify_case", "object", NO_DEFAULT),
     ("verify_case.timeout_seconds", "int", NO_DEFAULT),
     ("batch_fix", "object", NO_DEFAULT),
-    ("batch_fix.rounds", "int", NO_DEFAULT),
+    ("batch_fix.rounds", "int", NO_DEFAULT),        # optional batch override; absent = repair.max_rounds
+    # The repair budget (#125, D-050 ②): repair rounds after the first red, and free mechanical
+    # gate re-runs on rc 86. Absent = these defaults; readers go through `repair_setting`.
+    ("repair", "object", NO_DEFAULT),
+    ("repair.max_rounds", "int", 3),
+    ("repair.env_rerun", "int", 1),
     ("schedule", "object", NO_DEFAULT),             # scripts/schedule.py (#119); readers default 2 / 2
     ("schedule.max_workers", "int", NO_DEFAULT),
     ("schedule.reland_max", "int", NO_DEFAULT),
@@ -110,6 +115,20 @@ ROLE_CARD_NOTE = ("project role cards now overlay $AC_HOME/memory/role; "
 # grep (tests/test_retire_sync.py) keeps meaning "no code path assumes them".
 RETIRED_DIR = os.path.join("scripts", "con" "trol")
 RETIRED_SYNC = "sync-to-" "project.sh"
+
+
+def repair_setting(conf, key):
+    """`repair.<key>` of a loaded config (#125): an int >= 0, else the SCHEMA default.
+
+    The one place the defaults live — `ticket.py repair_limit`, `auto-fix.sh` and `land.sh`
+    read through here, so "absent" means the same number everywhere."""
+    name = "repair." + key
+    default = next(value for dotted, _, value in SCHEMA if dotted == name)
+    node = conf.get("repair") if isinstance(conf, dict) else None
+    value = node.get(key) if isinstance(node, dict) else None
+    if type_ok(value, "int") and value >= 0:
+        return value
+    return default
 
 
 class Refused(Exception):

@@ -55,8 +55,9 @@
     "regen_cmd": ""
   },
   "worktree_dir": "../agent-control-wt",
-  "batch_fix": {
-    "rounds": 2
+  "repair": {
+    "max_rounds": 3,
+    "env_rerun": 1
   },
   "schedule": {
     "max_workers": 2,

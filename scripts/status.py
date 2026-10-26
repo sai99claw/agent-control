@@ -619,10 +619,14 @@ def cmd_phase(args):
         "note": args.note or ""})
     # land 批次修復(#109):全套那一輪的紅榜抄進 land 這一輪,`auto-fix --batch` 拿
     # land 的 run_id(AC_BATCH_RUN_ID)就讀得到 —— 不必知道全套另開的 run 目錄。
+    # 環境嫌疑列跟著抄(#125 A4):全套 rc 86 那一輪紅榜是空的,`auto-fix --batch` 的 `## 診斷`
+    # 要列得出是哪個引擎、哪一句。
     if args.failures_from:
         try:
             with open(args.failures_from, encoding="utf-8") as handle:
-                data["failures"] = json.load(handle).get("failures") or []
+                source = json.load(handle)
+            data["failures"] = source.get("failures") or []
+            data["environment_suspect"] = environment_suspects(source)
         except (OSError, ValueError) as exc:
             sys.stderr.write("status: 紅榜抄不過來(%s):%s\n" % (args.failures_from, exc))
     write(root, args.ticket, run_id, data)
