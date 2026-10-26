@@ -89,7 +89,7 @@ sh scripts/apply.sh @TICKET@ <patch.diff> @COPY@/patch-verify.diff --evidence-ve
 - **不重跑票閘門那整組,也不跑 tag 回歸** —— 主線的閘門與落地的全套都會再跑一次,你重跑等於把同一份
   綠買第三遍(2026-09-21:重跑整組 + 輪詢等它,一天燒掉幾十萬 token)。
   你只跑:**自己的案例**,以及 `scripts/verify-case.py red @TICKET@`。`check` 是閘門的事,不是你的。
-- **只跑這份派工文「## 只准跑的測試」段列的測試**(那一段在派工文最後);正文與理由在 `docs/DISPATCH-TEMPLATE.md` §1,
+- **只跑這份派工文「## 只准跑的測試」段列的測試**(那一段在派工文最後:自己的案例檔與 `verify-case.py red` 兩行);正文與理由在 `docs/DISPATCH-TEMPLATE.md` §1,
   判綠與不准輪詢在 §3,這裡不重抄。
 - **不改產品碼、不放寬票面的驗收、不刪既有案例、不 git 寫入、不執行整支落地腳本。**
 - 交完刪掉自己的副本,只留 `patch-verify.diff` 與上面那一份 EVIDENCE

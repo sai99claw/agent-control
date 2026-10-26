@@ -82,10 +82,12 @@ archive 給的是 commit 的內容,worktree 裡沒 commit 的一個字都不進�
 派工文「base = `<sha>`」與票的 `base_sha`(`tickets/SCHEMA.md`),三處出自同一次 `git log`。
 
 **只准跑的測試(唯一正文;worker 與驗證者同一條)**:只跑派工文「## 只准跑的測試」段列的測試
-(#87 A18;那一段由 `auto-fix.sh` 逐字抄票的 `test_plan`)。不跑全套(unittest discover 整組、
-`gate.sh --full`)、不跑 `verify.py` 全部回歸 —— 回歸是閘門的事,閘門紅由 auto-fix 下一輪派 worker
-處理,全套只在 land 跑一次。票沒有 `test_plan` 時那一段寫「只跑你改到的 tests/ 檔」,照它做。
-負載下重跑、逐模組分批跑,**只在票的 `test_plan` 明列時才做**(#70、#642)。
+(#87 A18、D-073 ①;那一段由 `auto-fix.sh` 產)。worker 交件前只跑兩項:這張票的驗證者案例(票的
+`verify.run`;`verify.files` 還空的時候是自己改到 / 新增的 tests/ 模組)與基礎組(閘門同一支腳本
+`gate.sh --base`,#168 實測 35.5 秒);驗證者只跑自己的案例與 `verify-case.py red`。票的 test_plan 是設計
+(要做什麼、驗證者會斷言什麼),逐字放在派工文「## 票的測試計畫」段,不是要跑的清單。不跑全套
+(unittest discover 整組、`gate.sh --full`)、不跑 `verify.py` 回歸、不分批、不在負載下重跑 —— 對照表
+那一組、回歸、驗證者 check 是閘門的事,閘門紅由 auto-fix 下一輪派 worker 處理,全套只在 land 跑一次。
 
 ---
 
