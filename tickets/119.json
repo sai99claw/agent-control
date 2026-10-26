@@ -31,7 +31,7 @@
   "attempt": 0,
   "base_sha": "8d2cd914254d76e5620aeb3e90dcc1f1ddf6030f",
   "state": "InReview",
-  "state_version": 116,
+  "state_version": 122,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -45,14 +45,14 @@
       "stage": "check",
       "ok": true,
       "why": "",
-      "at": "2026-10-26T08:49:41+00:00",
+      "at": "2026-10-26T09:23:26+00:00",
       "files": [
         "tests/test_schedule_cases.py"
       ],
       "base_ref": "8d2cd914254d76e5620aeb3e90dcc1f1ddf6030f",
       "base_sha": "8d2cd914254d76e5620aeb3e90dcc1f1ddf6030f",
       "candidate": "../agent-control-wt/t119",
-      "candidate_sha": "9917e7335b80baed4ef1eed171625b5f11bf8389",
+      "candidate_sha": "fa2f3c752f798131c77abfc4417e44451be631f9",
       "baseline": {
         "red": [
           "tests.test_schedule_cases.ScheduleVerifierCases.test_done_dependency_off_main_is_not_satisfied",
@@ -243,14 +243,65 @@
       "note": null,
       "effort": null,
       "at": "2026-10-26T08:53:04+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1181,
+      "outcome": "fail",
+      "run_id": "20261026-085307-20341",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-26T09:12:48+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 32,
+      "tokens_out": 9729,
+      "cache_write": 54120,
+      "cache_read": 1101516,
+      "wall_seconds": 211,
+      "outcome": "handed-in",
+      "run_id": "20261026-085307-20341-gate",
+      "session_id": "6000b3d4-52f9-44b8-91c5-b7b187b92391",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-26T09:16:22+00:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 14,
+      "tokens_out": 4816,
+      "cache_write": 44653,
+      "cache_read": 404410,
+      "wall_seconds": 49,
+      "outcome": "pass",
+      "run_id": "20261026-091622-10018",
+      "session_id": "5260a3b6-6423-5527-bed8-9d3211ae718f",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-26T09:24:17+00:00"
     }
   ],
   "branch": "t119",
   "gate": {
     "rc": 0,
-    "sha": "9917e7335b80baed4ef1eed171625b5f11bf8389",
-    "run_id": "20261026-084238-24396",
-    "at": "2026-10-26T08:49:42+00:00"
+    "sha": "fa2f3c752f798131c77abfc4417e44451be631f9",
+    "run_id": "20261026-091622-10018",
+    "at": "2026-10-26T09:23:27+00:00"
   },
   "repair_round": 2,
   "objections": [
@@ -276,8 +327,8 @@
   "review": {
     "verdict": "pass",
     "by": "reviewer@opus",
-    "sha": "9917e7335b80baed4ef1eed171625b5f11bf8389",
-    "note": "reports/t119/20261026-084238-24396/REVIEW.md",
-    "at": "2026-10-26T08:53:04+00:00"
+    "sha": "fa2f3c752f798131c77abfc4417e44451be631f9",
+    "note": "reports/t119/20261026-091622-10018/REVIEW.md",
+    "at": "2026-10-26T09:24:17+00:00"
   }
 }
