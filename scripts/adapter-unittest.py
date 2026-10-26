@@ -74,9 +74,11 @@ SKIP_WITHOUT_REASON = "skip without reason"
 # Worse wins when one id reports twice (a subTest failure, then a tearDown error).
 RANK = {"pass": 0, "skip": 1, "fail": 2, "error": 3}
 # Peak RSS of one shard process tree, MiB — the divisor of free memory in `process_count` (D-074).
-# Measured #169 A5 (wait4 ru_maxrss per shard over one parallel `full` of this repo, 4 CPUs):
-# max PEAK_MEASURED_PLACEHOLDER; rounded up with MARGIN_PLACEHOLDER.
-PER_PROCESS_PEAK_MIB = 512
+# Measured #169 A5 (wait4 ru_maxrss per shard over one parallel `full` of this repo at N 3, 4 CPUs):
+# max 49.9 MiB (test_status; regression max 38.7, verify ticket_136), rounded up to 128 — a ~2.5x
+# margin because ru_maxrss is the largest single process of the shard's tree, not the sum of the
+# subprocesses a test holds at once.
+PER_PROCESS_PEAK_MIB = 128
 DEFAULT_CGROUP_ROOT = "/sys/fs/cgroup"
 DEFAULT_MEMINFO = "/proc/meminfo"
 TIMES_FILE = "test-times.json"
