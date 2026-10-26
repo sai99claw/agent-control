@@ -585,6 +585,40 @@ class TheFourVisionMetricsComeFromTicketJson(BoardUp):
         self.assertEqual(numbers["first_pass"]["text"], "1/2")
         self.assertEqual(numbers["waiting"]["total"], 2)
 
+    ABSENT = object()
+
+    def ticket_files(self):
+        folder = os.path.join(self.repo, "tickets")
+        return {name: open(os.path.join(folder, name), "rb").read()
+                for name in sorted(os.listdir(folder)) if name.endswith(".json")}
+
+    def cells_for(self, field, rows):
+        """每張票只動 `field` 那一格(ABSENT = 鍵不寫),回傳 (頁面, 票檔服務前的位元組)。"""
+        for ident, value in rows.items():
+            fields = {} if value is self.ABSENT else {field: value}
+            row = self.make_ticket(ident, **fields)
+            self.assertEqual(field in row, value is not self.ABSENT)
+        before = self.ticket_files()
+        self.up()
+        _, body = self.get("/")
+        self.assertEqual(self.ticket_files(), before, "看板只讀票,不寫那兩格")
+        return body
+
+    def test_verifier_cell_is_none_only_for_json_false(self):
+        """D-075 A1:SCHEMA needs_verifier 那一列 —— 缺 = true,只有 JSON false 不起驗證者。
+        **變異**:`is False` 改成「falsy 就無」→ #4(null)紅。"""
+        body = self.cells_for("needs_verifier", {
+            1: False, 2: True, 3: self.ABSENT, 4: None, 5: "false"})
+        expected = {1: "無", 2: "有", 3: "有", 4: "有", 5: "有"}
+        self.assertEqual({n: self.row_cells(body, n)["驗證者"] for n in expected}, expected)
+
+    def test_review_cell_is_yes_only_for_complex(self):
+        """D-075 A2:SCHEMA complexity 那一列 —— 只有 complex 做覆核,沒標 = simple。
+        **變異**:`== "complex"` 改成 `!= "simple"` → #8(沒標)紅。"""
+        body = self.cells_for("complexity", {6: "complex", 7: "simple", 8: self.ABSENT})
+        expected = {6: "有", 7: "無", 8: "無"}
+        self.assertEqual({n: self.row_cells(body, n)["覆核"] for n in expected}, expected)
+
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
