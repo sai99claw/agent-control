@@ -2,9 +2,11 @@
 
 What is pinned here is the seam A's gate will read in row 3b — `select`'s stdout, the exit code and
 `result.json` — never the log text:
-- A1 `select`: every row of `gate.sh map()` (copied below as literal data, not read back from the
-  config the adapter reads) selects the same ids through `tests.unittest.map`; first match wins;
-  `ids: []` is "no test, not unmapped"; empty stdin is rc 3, not an empty green.
+- A1 `select`: every row of `tests.unittest.map` in `board/config.json`, read at test time (one
+  fact, one place - #173, D-054 Q12), selects exactly its own ids for a representative path;
+  first match wins; `ids: []` is "no test, not unmapped"; empty stdin is rc 3, not an empty green.
+  The table's content is not pinned here (structure is, in `test_verify_runner`); behaviour is
+  pinned by the synthetic configs below.
 - A2 `run` / `full` write schema 1: one row per id with status / message / exception / file / line;
   a skip without a reason is an error; zero ids and no `AC_TEST_OUT` are rc 2.
 - A3 environment suspect: a declared row makes rc 86, and rc 86 never comes with `[]`.
@@ -13,6 +15,7 @@ What is pinned here is the seam A's gate will read in row 3b — `select`'s stdo
   files (expected N is arithmetic here from the fixture numbers, never the adapter's output).
 """
 
+import fnmatch
 import importlib.util
 import json
 import math
@@ -30,73 +33,18 @@ from control_harness import ROOT, SCRIPTS, TIMEOUT  # noqa: E402
 
 ADAPTER = os.path.join(SCRIPTS, "adapter-unittest.py")
 
-# One representative path per row of `scripts/gate.sh map()` (base 3bdba76 plus this ticket's
-# `scripts/adapter-unittest.py` row) and the ids that row adds — copied by hand from the shell,
-# so a config row that drifts from the gate is red here. Multi-pattern arms (`a|b`) are one entry
-# per pattern. Not listed: the `tests/test_*.py` arm (the adapter's built-in, asserted below) and
-# `*` (→ `unmapped`).
-HARNESS_IDS = ["test_ticket", "test_event", "test_memory", "test_land", "test_gate",
-               "test_heartbeat", "test_new_session", "test_board", "test_no_project_names",
-               "test_status", "test_verify_case", "test_apply", "test_auto_fix", "test_inbox",
-               "test_rules", "test_actl", "test_session_hook", "test_review",
-               "test_verify_runner", "test_consolidate_memory"]
-VERIFY_IDS = ["test_verify_runner", "test_verify_case", "test_actl"]
-REPO_MAP_IDS = ["test_repo_map_contract"]
-GATE_MAP = [
-    ("tests/control_harness.py", HARNESS_IDS),
-    ("bin/actl", ["test_actl", "test_project_config", "test_hooks"]),
-    ("scripts/hooks.py", ["test_hooks", "test_session_hook"]),
-    ("scripts/project_config.py", ["test_project_config", "test_actl", "test_session_hook"]),
-    (".gitignore", ["test_no_project_names"]),
-    ("scripts/event.py", ["test_event", "test_ticket", "test_land", "test_actl"]),
-    ("scripts/ticket.py", ["test_ticket", "test_land", "test_auto_fix_codex", "test_schedule"]),
-    ("scripts/land.sh", ["test_land"]),
-    ("scripts/schedule.py", ["test_schedule", "test_actl"]),
-    ("scripts/gate.sh", ["test_gate", "test_status"]),
-    ("scripts/apply.sh", ["test_apply"]),
-    ("scripts/auto-fix.sh", ["test_auto_fix", "test_auto_fix_codex", "test_rules_delivery"]),
-    ("scripts/review.sh", ["test_review", "test_rules_delivery"]),
-    ("scripts/wtbase.sh", ["test_apply", "test_auto_fix", "test_land", "test_review", "test_actl",
-                           "test_gate", "test_heartbeat", "test_new_session", "test_session_hook",
-                           "test_consolidate_memory"]),
-    ("scripts/inbox.py", ["test_inbox", "test_gate", "test_land", "test_new_session"]),
-    ("scripts/rules.py", ["test_rules", "test_rules_delivery"]),
-    ("scripts/heartbeat.sh", ["test_heartbeat"]),
-    ("scripts/new-session.sh", ["test_new_session", "test_rules_delivery"]),
-    ("scripts/session-hook.sh", ["test_session_hook"]),
-    (".claude/settings.json", ["test_session_hook"]),
-    ("scripts/consolidate-memory.sh", ["test_consolidate_memory", "test_new_session"]),
-    ("scripts/memory.py", ["test_memory", "test_memory_note_names", "test_memory_lifecycle",
-                           "test_memory_layer_policy"]),
-    ("scripts/verify.py", VERIFY_IDS),
-    ("verify/TAGS.md", VERIFY_IDS),
-    ("verify/TAGS.d/zzz.md", VERIFY_IDS),
-    ("scripts/verify-case.py", ["test_verify_case", "test_actl"]),
-    ("verify/example/test_example.py", ["test_verify_runner"]),
-    ("scripts/status.py", ["test_status", "test_gate", "test_land"]),
-    ("scripts/adapter-unittest.py", ["test_adapter_unittest", "test_status", "test_gate"]),
-    ("memory/model/opus.md", ["test_memory", "test_no_project_names", "test_routing_cards"]),
-    ("memory/role/implementer.md", ["test_memory", "test_no_project_names"]),
-    ("board/board.py", ["test_board"]),
-    ("board/config.json", ["test_board", "test_event", "test_heartbeat", "test_memory",
-                           "test_routing_cards"]),
-    ("scripts/repo-map.py", REPO_MAP_IDS),
-    ("code-map/catalog.json", REPO_MAP_IDS),
-    ("code-map/index.json", REPO_MAP_IDS),
-    ("code-map/INDEX.md", REPO_MAP_IDS),
-    ("tickets/161.json", ["test_ticket"]),
-    ("tickets/SCHEMA.md", ["test_ticket"]),
-    ("docs/DESIGN-ENV-SUSPECT.md", ["test_status", "test_no_project_names"]),
-    ("docs/DISPATCH-TEMPLATE.md", ["test_rules_delivery", "test_no_project_names"]),
-    ("templates/dispatch-verifier.md", ["test_templates", "test_rules_delivery",
-                                        "test_no_project_names"]),
-    ("templates/dispatch-reviewer.md", ["test_review", "test_templates", "test_rules_delivery",
-                                        "test_no_project_names"]),
-    ("templates/dispatch-opener.md", ["test_rules_delivery", "test_no_project_names"]),
-    ("docs/FLOW.html", ["test_no_project_names"]),
-    ("docs/HANDOFF.md", ["test_no_project_names"]),
-]
-BASE_IDS = ["test_ticket", "test_event", "test_memory", "test_no_project_names"]
+CONFIG = os.path.join(ROOT, "board", "config.json")
+
+
+def unit_config():
+    """`tests.unittest` of the real config, read at test time: the oracle is what the adapter reads."""
+    with open(CONFIG, encoding="utf-8") as handle:
+        return json.load(handle)["tests"]["unittest"]
+
+
+def representative(match):
+    """One path a `match` glob accepts: each `*` -> `zzz` (no row uses `?` or `[`, #173)."""
+    return match.replace("*", "zzz")
 
 # A2's fixture: one of each status. `FAIL_LINE` is found in this text, not hard-coded.
 FIXTURE = '''import unittest
@@ -173,11 +121,18 @@ class Select(unittest.TestCase):
         stdin = "".join(path + "\n" for path in files)
         return adapter("select", "--mode", "branch", env=env or self.env(), stdin=stdin)
 
-    def test_every_gate_map_row_selects_the_ids_that_row_adds(self):
-        """**Mutation m2-adjacent**: drop a row from `tests.unittest.map` → its path prints
-        `unmapped` here. Each path is fed alone, so a row is not covered by its neighbour's ids."""
-        for path, ids in GATE_MAP:
-            with self.subTest(path=path):
+    def test_every_config_map_row_selects_the_ids_that_row_adds(self):
+        """Each row's representative path is fed alone, so a row is not covered by its neighbour's
+        ids. Rows whose path falls in the built-in `tests/test_*.py` arm are skipped by name.
+
+        **Mutation m4**: `select_one` ignores the map → every path prints `unmapped`, red here."""
+        rows = unit_config()["map"]
+        self.assertGreater(len(rows), 10, "precondition: the map was read")
+        for row in rows:
+            path, ids = representative(row["match"]), row["ids"]
+            if fnmatch.fnmatchcase(path, "tests/test_*.py"):
+                continue  # built-in arm, asserted in test_unknown_file_is_unmapped_...
+            with self.subTest(match=row["match"], path=path):
                 done = self.select(path)
                 self.assertEqual(done.returncode, 0, done.stderr)
                 lines = done.stdout.splitlines()
@@ -199,7 +154,7 @@ class Select(unittest.TestCase):
                          ["test_land", "test_status", "test_gate", "unmapped docs/zzz.unknownext"])
 
     def test_first_match_wins_and_empty_ids_is_not_unmapped(self):
-        """**Mutation m2**: let a later matching row add its ids too → the first assert is red."""
+        """**Mutation m3** (#173): let a later matching row add its ids too → the first assert is red."""
         with tempfile.TemporaryDirectory() as tmp:
             os.makedirs(os.path.join(tmp, "board"))
             with open(os.path.join(tmp, "board", "config.json"), "w", encoding="utf-8") as h:
@@ -242,10 +197,12 @@ class Select(unittest.TestCase):
         self.assertEqual(done.stdout, "")
         self.assertTrue(done.stderr.strip(), "rc 3 must say why")
 
-    def test_base_prints_the_four_base_ids(self):
+    def test_base_prints_the_config_base_ids(self):
+        base = unit_config()["base"]
+        self.assertTrue(base, "precondition: tests.unittest.base was read")
         done = adapter("select", "--mode", "base", env=self.env())
         self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertEqual(done.stdout.splitlines(), BASE_IDS)
+        self.assertEqual(done.stdout.splitlines(), base)
 
 
 class Fixture(unittest.TestCase):
