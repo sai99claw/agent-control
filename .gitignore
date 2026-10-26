@@ -15,5 +15,8 @@ reports/
 
 # land 的互斥鎖(mkdir 鎖;它是執行時的事實,不是原始碼)
 .land.lock/
+# schedule.py 的互斥鎖與排程檔(#119):主線依使用者的話改的執行期事實,不是原始碼
+.schedule.lock/
+board/batches.json
 # 回歸層執行器寫的 log
 verify.log

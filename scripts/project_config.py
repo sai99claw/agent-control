@@ -74,6 +74,9 @@ SCHEMA = [
     ("verify_case.timeout_seconds", "int", NO_DEFAULT),
     ("batch_fix", "object", NO_DEFAULT),
     ("batch_fix.rounds", "int", NO_DEFAULT),
+    ("schedule", "object", NO_DEFAULT),             # scripts/schedule.py (#119); readers default 2 / 2
+    ("schedule.max_workers", "int", NO_DEFAULT),
+    ("schedule.reland_max", "int", NO_DEFAULT),
     ("apply", "object", NO_DEFAULT),
     ("apply.regen_cmd", "string", NO_DEFAULT),
     ("memory", "object", NO_DEFAULT),
