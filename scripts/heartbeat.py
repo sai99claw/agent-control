@@ -220,7 +220,7 @@ def who(row):
         "attempt=%s" % row["attempt"] if row.get("attempt") else "",
         "run_id=%s" % row["run_id"] if row.get("run_id") and row.get("kind") == "agent.start" else "",
         "round=%s" % row["round"] if row.get("round") else "",
-        "pid=%s" % row["pid"] if row.get("pid") and driver_of(row) is None else "",
+        "pid=%s" % row["pid"] if row.get("pid") else "",
         "driver_pid=%s" % row["driver_pid"] if driver_of(row) else "",
         "stamp=%s" % row["stamp"] if row.get("stamp") else ""]))
 
@@ -561,10 +561,11 @@ class Reconciler(object):
                 key = (str(row.get("ticket")), str(row.get("attempt")), driver)
                 rounds.setdefault(key, {"attempt": None, "agents": []})["attempt"] = row
             elif kind == "agent.start" and row.get("role") in ROUND_ROLES \
-                    and str(row.get("agent") or "").startswith("auto-fix"):
+                    and str(row.get("agent") or "auto-fix").startswith("auto-fix"):
                 key = (str(row.get("ticket")), str(row.get("round")), driver)
                 rounds.setdefault(key, {"attempt": None, "agents": []})["agents"].append(row)
-            elif kind == "agent.start" and row.get("agent") == "review":
+            elif kind == "agent.start" and (row.get("agent") or row.get("role")) in (
+                    "review", "reviewer"):
                 self.reviewer(row, driver)
             elif kind == "agent.start":
                 self.other_agent(row, driver)

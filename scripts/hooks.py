@@ -47,7 +47,7 @@ def is_managed(item):
     return any(os.path.basename(token) in MANAGED for token in tokens)
 
 
-def gone(item, project):
+def dangling(item, project):
     """A managed entry whose first path token is a file that does not exist."""
     if not is_managed(item):
         return False
@@ -87,7 +87,7 @@ def compute(settings, project, ac_home):
         kept = []
         for group in hooks[event]:
             before = group.get("hooks", [])
-            after = [item for item in before if not gone(item, project)]
+            after = [item for item in before if not dangling(item, project)]
             group["hooks"] = after if "hooks" in group else before
             if before and not after:
                 continue
