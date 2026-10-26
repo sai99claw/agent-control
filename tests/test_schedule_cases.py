@@ -9,9 +9,11 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 
-from tests.control_harness import Sandbox, TIMEOUT
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from control_harness import Sandbox, TIMEOUT  # noqa: E402
 
 
 FAKE_AUTO_FIX = r'''
