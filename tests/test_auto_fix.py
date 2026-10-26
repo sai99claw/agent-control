@@ -2042,8 +2042,11 @@ class TheRepairBudgetAndTheDiagnosisRound(AutoFixBase):
         self.assertIn("test_thing.T.test_thing", three)
         self.assertNotIn("## 診斷", three)
         starts = self.starts()
-        self.assertEqual(starts["2"].get("round_kind"), "diagnosis")
+        self.assertEqual(starts["2"]["kind"], "ticket.attempt.start", "事件種類不被 kv 蓋掉")
+        self.assertEqual((starts["2"].get("round_kind"), starts["2"].get("diagnosis")),
+                         ("diagnosis", "unattributed"))
         self.assertIsNone(starts["3"].get("round_kind"))
+        self.assertIsNone(starts["3"].get("diagnosis"))
         self.assertEqual(self.inbox_rows(), [], "診斷導出可歸因的紅、最後綠:只寫事件(A5)")
 
     def test_a_second_unattributed_red_pages_once_and_stops(self):
@@ -2102,7 +2105,9 @@ class TheRepairBudgetAndTheDiagnosisRound(AutoFixBase):
         self.assertIn("engine=safari", two)
         self.assertIn("why=螢幕鎖著", two)
         self.assertIn("PREFLIGHT-LAST-LINE", two)
-        self.assertEqual(self.starts()["2"].get("round_kind"), "diagnosis")
+        start = self.starts()["2"]
+        self.assertEqual(start["kind"], "ticket.attempt.start")
+        self.assertEqual((start.get("round_kind"), start.get("diagnosis")), ("diagnosis", "env"))
         rows = self.decisions()
         self.assertEqual(len(rows), 1, self.inbox_rows())
         self.assertIn("environment", rows[0]["state"])
