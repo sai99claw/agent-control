@@ -107,7 +107,7 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
 ## 閘門(`scripts/gate.sh`)
 閘門是 A 的:`actl gate --branch|--base|--full [--ticket n]`。專案只填 `board/config.json` 的 `tests` 段(`preflight` / `select` / `run` / `full` / `regression` 五條命令,結果一律寫成 `result.json`;介面與退出碼見 `docs/design/project-runnable-entries.md` §4)。`select` 回 `unmapped`(改動檔對不到任何模組)仍是 rc 3,**要出聲,不准印一行綠**。判綠先寫檔再讀退出碼,不用 `cmd | tail`。瀏覽器引擎由 `available()` 判,不在指令列收窄。
 
-`--ticket <n>` 再多做三件事:寫這一輪的狀態檔(見下);**真的去跑票的回歸**(票的 `verify.tags` 併 `tags` → `regression --tag …`,原始輸出存 `verify.log` 並進狀態檔的 `logs`;宣告了 tags 卻一個案例都選不到 = 非零,那是缺口,不是綠;`--full` 則跑**全部**回歸);以及按 id 的 flake 重跑(見下一節)。
+`--ticket <n>` 再多做三件事:寫這一輪的狀態檔(見下);**真的去跑回歸**(原始輸出存 `verify.log` 並進狀態檔的 `logs`);以及按 id 的 flake 重跑(見下一節;回歸的紅例單跑是 `regression --no-cache --case <案例檔>`、看那一條 id 的列)。**分支閘門(`--branch --ticket <n>`)跑單元層 + 回歸層全部 + 驗證者 check**(#170,D-073):回歸不再只跑票的標籤那一組 —— #159 的 84 條紅全在票沒宣告的標籤底下,到 land 才露出來。票的 `verify.tags` 併 `tags` 只拿去 `regression --list --tag …` 查缺口:宣告了 tags 卻一個案例都選不到 = rc 3,那是缺口,不是綠。`--full` 跑單元全部 + 回歸層全部。
 
 ## 發版
 主線執行、人事先授權;順序:tag → build → staging → 閘門 → prod → 健康檢查 → 記事件。**發版期間不開 land。**
@@ -302,7 +302,7 @@ worker 同一輪**也 commit 了**(#107,專案 #751 事故;#144 起):驗證者�
 | `land.sh` 一批 N≥2 張全套紅 | **已實作**(#109,D-H51 ②)—— 不歸責:先 `auto-fix.sh --batch` 整批修、每輪重跑全套,最多 `batch_fix.rounds`(預設 2)輪;仍紅才用紅榜檔 ↔ 各票 `verify.files` / 分支改動檔機械地找嫌疑票,恰部分命中才踢、其餘重 land 一次(`AC_LAND_DEPTH`);對不到或全中就停給主線 | `scripts/land.sh` 的 `batch_fix` |
 
 ## 驗證者的案例怎麼進閘門
-票的 `verify.tags` 併進 `tags`,由 `gate.sh --ticket <n>` **真的呼叫** `scripts/verify.py --tag …`(原始輸出存檔)。`--full` 跑全部回歸。驗證者不出 VERDICT;紅了照上一節走。
+`gate.sh --ticket <n>` **真的呼叫**回歸層全部(`scripts/verify.py`,原始輸出存檔);票的 `verify.tags` 併進 `tags` 只用來查缺口(`--list --tag …`)。`--full` 也跑全部回歸。驗證者不出 VERDICT;紅了照上一節走。
 
 ### baseline 要對著哪一版量(2026-09-22,#22)
 `--ref` **沒給時是那張票的 `base_sha`**,不是主線的頭。票一落地,主線上就已經有那份實作,對主線量出來的「一條都沒紅」說的是**這一趟量錯了地方**,不是「這條案例是假的」(#19)。落地後要補量就寫死兩端:`check <n> --ref <票的 base_sha> --candidate <merge sha>`。

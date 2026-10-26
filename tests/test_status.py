@@ -744,7 +744,9 @@ class GateWritesStatus(Sandbox):
                                     "tags": ["example"], "run": "", "notes": ""})
         done = self.gate("scripts/land.sh", "--ticket", "7")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("--tag example", done.stdout, "票的 tags 沒有被拿去叫 verify.py")
+        # #170:分支閘門跑回歸層全部,不再帶 `--tag`(票的標籤只拿去 `--list` 查缺口)。
+        self.assertIn("gate: 回歸全部 —— regression", done.stdout, "閘門沒有叫回歸層")
+        self.assertNotIn("regression --tag", done.stdout)
         data = self.load()
         self.assertTrue([row for row in data["logs"] if row.endswith("verify.log")],
                         "回歸的原始輸出沒有存檔")

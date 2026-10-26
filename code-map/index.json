@@ -46,6 +46,7 @@
     "tests/test_cost_ledger.py",
     "tests/test_event.py",
     "tests/test_gate.py",
+    "tests/test_gate_regression_cases.py",
     "tests/test_heartbeat.py",
     "tests/test_hooks.py",
     "tests/test_hooks_cases.py",
@@ -116,7 +117,8 @@
       "guard": "tests/test_gate.py",
       "sources": [
         "scripts/gate.sh",
-        "tests/test_gate.py"
+        "tests/test_gate.py",
+        "tests/test_gate_regression_cases.py"
       ],
       "summary": "閘門:對照表挑測試模組、preflight 硬擋、狀態檔、驗證者案例"
     },

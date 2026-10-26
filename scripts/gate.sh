@@ -55,7 +55,7 @@
 # stdout 與 `result.json`。順序:硬擋 → `preflight`(rc 86 = 環境可疑、測試不跑;其他非零
 # = 2「preflight 本身壞了」)→ `select --mode branch|base`(改動檔一行一個餵進去;
 # `unmapped <檔>` 照舊走下面「對不到」那一段)→ `run <ids>` / `full` → 紅例 `run <id>` 單跑、
-# `run <全部 ids>` 整組重跑 → `regression --tag …` → 驗證者那一層。每一步的輸出在自己的
+# `run <全部 ids>` 整組重跑 → `regression`(整層;票的標籤只拿去 `regression --list` 查缺口)→ 驗證者那一層。每一步的輸出在自己的
 # `AC_TEST_OUT`(有票:`reports/t<票號>/<run_id>/<步驟>/`;沒票:`<log>.out/<步驟>/`)。
 # 綠 = rc 0 **而且** result 驗過;量不到(逾時、result 壞、0 個 id……)= 2,不是紅也不是綠。
 #
@@ -671,18 +671,35 @@ regression() {   # $1 = ticket|full;設定 VRC
         return 0
     fi
     if [ "$1" = "ticket" ]; then
+        # 分支閘門跑**整個回歸層**,不跑票的標籤那一組(#170,D-073):#159 的 84 條紅全在
+        # 票沒宣告的標籤底下,到 land 才露出來。案例透過 `sh scripts/<x>.sh` 子行程、環境與
+        # board/config.json 驅動 A —— 「哪幾個案例引用了改動檔」的對照表看不到這三條路,
+        # 而對照表漏一格與綠長得一樣(§5.5)。票的標籤只剩一個用途:缺口檢查(`--list`,不跑)。
         tags=$(ticket_tags)
-        if [ -z "$tags" ]; then
-            echo "gate: 票 #$TICKET 沒有宣告 verify.tags —— 這一輪沒有回歸可跑"
-            echo "gate:   (驗證者交件時要填票的 verify.tags;現在這個綠只涵蓋單元層。)"
-            NOTE="$NOTE 票沒有宣告 verify.tags,回歸層這一輪沒跑。"
-            return 0
+        if [ -n "$tags" ]; then
+            list_args=""
+            for t in $tags; do list_args="$list_args --tag $t"; done
+            # shellcheck disable=SC2086
+            testiface "$TEST_MODE" regression-list regression --list $list_args > /dev/null
+            lrc=$?
+            if [ "$lrc" -ne 0 ]; then
+                VRC=$lrc
+                if [ -f "$TI_OUT/regression.log" ]; then cp "$TI_OUT/regression.log" "$VERIFY_LOG"; else : > "$VERIFY_LOG"; fi
+                if [ -s "$TI_ERR" ]; then cat "$TI_ERR" >> "$VERIFY_LOG"; cat "$TI_ERR"; fi
+                grep -aE "^verify: " "$VERIFY_LOG" || true
+                VERIFY_LOG_ARGS="--log $VERIFY_LOG"
+                if [ "$VRC" -eq 3 ]; then
+                    # 票說它有 tags,執行器卻一個案例都選不到 —— 那是**缺口**:
+                    # 「驗證者交了案例」與「案例根本不存在」在這裡分得開。
+                    echo "gate: 票宣告了 tags,但一個案例都選不到 —— 那是缺口,不是綠。"
+                else
+                    echo "gate: regression --list$list_args 量不到(rc=$VRC),回歸層沒跑,看 $VERIFY_LOG"
+                fi
+                return 0
+            fi
         fi
-        for t in $tags; do args="$args --tag $t"; done
-        echo "gate: 票 #$TICKET 的回歸 —— regression$args"
-    else
-        echo "gate: 回歸全部 —— regression"
     fi
+    echo "gate: 回歸全部 —— regression"
     [ -z "$NO_CACHE" ] || args="$args --no-cache"
     # `AC_TICKET` + `AC_RUN_ID`(testiface 帶給命令)讓 worker、驗證者與這裡共用同一輪的
     # 回歸快取:同一份程式、同一組標籤、同一個 sha 只跑一次(D-015)。
@@ -697,17 +714,21 @@ regression() {   # $1 = ticket|full;設定 VRC
         || echo "gate: 回歸的 log 裡連 Ran 都沒有,看 $VERIFY_LOG"
     VERIFY_LOG_ARGS="--log $VERIFY_LOG"
     if [ "$VRC" -eq 3 ]; then
-        if [ "$1" = "ticket" ]; then
-            # 票說它有 tags,執行器卻一個案例都選不到 —— 那是**缺口**:
-            # 「驗證者交了案例」與「案例根本不存在」在這裡分得開。
-            echo "gate: 票宣告了 tags,但一個案例都選不到 —— 那是缺口,不是綠。"
-        else
-            # 整個回歸層還是空的(年輕的 repo)。出聲、記進狀態檔,但不擋 ——
-            # 擋住的話第一張票永遠落不了地。
-            echo "gate: 回歸層一個案例都沒有 —— 出聲但不擋(第一張帶標籤的票會補上)"
-            NOTE="$NOTE 回歸層是空的。"
-            VRC=0
-        fi
+        # 整個回歸層還是空的(年輕的 repo)。出聲、記進狀態檔,但不擋 ——
+        # 擋住的話第一張票永遠落不了地。
+        echo "gate: 回歸層一個案例都沒有 —— 出聲但不擋(第一張帶標籤的票會補上)"
+        NOTE="$NOTE 回歸層是空的。"
+        VRC=0
+    fi
+    if [ "$1" = "ticket" ] && [ "$VRC" -eq 1 ]; then
+        # 回歸的紅例走同一條 flake 判定(單跑 `run <id>`、原順序整組 `run <全部 ids>`),
+        # 讀的是回歸那一步的 result.json;`full` 那一段不動(#170 A4)。
+        reg_out=$TI_OUT
+        unit_out=$RUN_OUT
+        RUN_OUT=$reg_out
+        flake_rerun "$VRC" regression
+        VRC=$?
+        RUN_OUT=$unit_out
     fi
     [ "$VRC" -eq 0 ] || echo "gate: 回歸紅了,看 $VERIFY_LOG"
     return 0
@@ -740,8 +761,8 @@ if data.get("needs_verifier") is False:
     print("needs-verifier-false")
 elif plan is None:
     # 票上連 `verify` 這一格都沒有 = **沒有宣告**,不是「宣告了卻沒有案例」。
-    # 同一支腳本對回歸層就是這樣分的(`regression()`:「沒有宣告 verify.tags」出聲
-    # 不擋,「宣告了卻一個案例都選不到」才是缺口)。
+    # 同一支腳本對回歸層的缺口檢查就是這樣分的(`regression()`:沒有宣告 verify.tags
+    # 不查,「宣告了卻一個案例都選不到」才是缺口)。
     print("undeclared")
 else:
     print("required")
@@ -809,8 +830,8 @@ verify_case() {
                 NOTE="$NOTE 票 needs_verifier=false,這一層不要求案例。"
                 return 0 ;;
             undeclared)
-                # 票上連 `verify` 這一格都沒有。**出聲但不擋**,與 `regression()` 對
-                # 「票沒有宣告 verify.tags」的處理同一個形狀 —— 而宣告了 `verify`
+                # 票上連 `verify` 這一格都沒有。**出聲但不擋**,與 `regression()` 的缺口
+                # 檢查同一個形狀(沒有宣告 verify.tags 就不查)—— 而宣告了 `verify`
                 # 卻沒有案例(下面那一段)才是缺口(#619 的精神)。
                 echo "gate: 票 #$TICKET 連 verify 這一格都沒有宣告 —— 驗證者那一層這一輪沒跑"
                 NOTE="$NOTE 票沒有宣告 verify 這一格,驗證者那一層沒跑。"
@@ -884,7 +905,44 @@ merge_rc() {   # $1 = 目前 rc  $2 = 另一個 rc;印出合併後的
 # (id 照原樣交回 `run <id>`,D-071 §4);每次單跑進 `$RUN_OUT/rerun-<k>/`,整組重跑是
 # `run <原跑的全部 ids>`(`full` 那一趟沒有給 ids,用它 result 裡的每一條)進 `rerun-group-<g>/`。
 # 只有可歸因的紅(rc 1)才重跑:2 是量不到、86 是環境,重跑只會把浪費加倍。
-flake_rerun() {   # $1 = rc  $2 = run|full(原跑的那一個)  其餘 = 原跑給的 ids
+# 單跑一條紅例:綠 = rc 0。回歸的紅例(#170)交不回 `run <id>` —— 內建 adapter 的 sys.path 上
+# `scripts/verify.py` 蓋過 `verify/` 這個 package,`verify.*` 的 id 載不起來;所以單跑是
+# `regression --no-cache --case <那條 id 的案例檔>`(不吃快取:同一輪同一個檔第二次會被快取
+# 回答),判的是**那一條 id** 在那一趟 result.json 裡的列,不是整檔的 rc。
+rerun_one() {   # $1 = run|full|regression  $2 = 步驟目錄  $3 = id
+    if [ "$1" != regression ]; then
+        testiface rerun "$2" run "$3" >/dev/null
+        return
+    fi
+    ro_file=$(python3 - "$ROOT" "$3" <<'CASE_FILE_PY'
+import os, sys
+root, ident = sys.argv[1], sys.argv[2]
+parts = ident.split(".")
+for k in range(len(parts), 0, -1):
+    rel = os.path.join(*parts[:k]) + ".py"
+    if os.path.isfile(os.path.join(root, rel)):
+        print(rel)
+        break
+CASE_FILE_PY
+)
+    if [ -z "$ro_file" ]; then
+        echo "gate: $3 對不到案例檔 —— 不單跑(算真紅)"
+        return 2
+    fi
+    testiface rerun "$2" regression --no-cache --case "$ro_file" >/dev/null
+    python3 - "$TI_OUT/result.json" "$3" <<'ROW_PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        rows = json.load(handle)["ids"]
+except (OSError, ValueError, KeyError, TypeError):
+    raise SystemExit(1)
+raise SystemExit(0 if any(row.get("id") == sys.argv[2] and row.get("status") == "pass"
+                          for row in rows) else 1)
+ROW_PY
+}
+
+flake_rerun() {   # $1 = rc  $2 = run|full|regression(原跑的那一個)  其餘 = 原跑給的 ids
     fr_rc=$1
     fr_cmd=$2
     shift 2
@@ -895,7 +953,7 @@ flake_rerun() {   # $1 = rc  $2 = run|full(原跑的那一個)  其餘 = 原跑�
     first_out=$RUN_OUT
     cases=$(python3 "$AC/status.py" failures --result "$first_out/result.json" 2>/dev/null || true)
     [ -n "$cases" ] || return "$fr_rc"
-    if [ "$fr_cmd" = full ]; then
+    if [ "$fr_cmd" = full ] || [ "$fr_cmd" = regression ]; then
         group_ids=$(python3 - "$first_out/result.json" <<'IDS_PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -934,7 +992,7 @@ PY
         attempt=1
         while [ "$attempt" -le "$single_runs" ]; do
             rerun=$((rerun + 1))
-            if testiface rerun "$fr_cmd/rerun-$rerun" run "$case" >/dev/null; then
+            if rerun_one "$fr_cmd" "$fr_cmd/rerun-$rerun" "$case"; then
                 passed=$((passed + 1))
             else
                 break
@@ -959,10 +1017,16 @@ PY
     echo "gate: 用原順序整組重跑 $group_runs 次 —— 順序污染會在這裡再紅"
     group=1
     while [ "$group" -le "$group_runs" ]; do
-        # shellcheck disable=SC2086
-        testiface rerun "$fr_cmd/rerun-group-$group" run $group_ids >/dev/null
-        grc=$?
-        run_log=$TI_OUT/run.log
+        if [ "$fr_cmd" = regression ]; then
+            testiface rerun "$fr_cmd/rerun-group-$group" regression --no-cache >/dev/null
+            grc=$?
+            run_log=$TI_OUT/regression.log
+        else
+            # shellcheck disable=SC2086
+            testiface rerun "$fr_cmd/rerun-group-$group" run $group_ids >/dev/null
+            grc=$?
+            run_log=$TI_OUT/run.log
+        fi
         [ -f "$run_log" ] || run_log=$TI_ERR
         EXTRA_LOG_ARGS="$EXTRA_LOG_ARGS --extra-log $run_log"
         grep -aE "^Ran |^OK|^FAILED" "$run_log" || true
