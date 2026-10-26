@@ -1345,5 +1345,50 @@ class BranchGateRunsTheWholeRegressionLayer(Sandbox):
         self.assertEqual(self.full_section(done.stdout), self.FULL_SECTION_AT_BASE)
 
 
+
+class T125EnvSuspectHandsOffToAutoFix(Sandbox):
+    """#125 A4 (D-076 replaces D-019 reason 5's 'never dispatch over env suspect'): a gate that ends
+    in rc 86 with auto-fix on calls auto-fix (which re-runs once, then diagnoses) and writes no
+    page itself; `--no-auto-fix` keeps today's page and calls nothing. auto-fix is a stub that
+    records its argument, so 'was it called' is a visible fact."""
+
+    def setUp(self):
+        super().setUp()
+        for name in ("test_ticket", "test_event", "test_memory",
+                     "test_no_project_names", "test_heartbeat", "test_land"):
+            self.write(os.path.join("tests", "%s.py" % name), PASSING % name)
+        self.write("tests/test_env_wave.py", ENVIRONMENT_WAVE)
+        self.marker = os.path.join(self.home, "auto-fix-called")
+        self.stub_script("auto-fix.sh", "#!/bin/sh\necho \"$1\" >> %s\n" % self.marker)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "sandbox: env wave + stub auto-fix")
+        self.make_ticket(7)
+
+    def called(self):
+        if not os.path.exists(self.marker):
+            return []
+        with open(self.marker, encoding="utf-8") as handle:
+            return handle.read().split()
+
+    def decision_pages(self):
+        return [row for row in self.inbox_rows(ticket="7") if row.get("kind") == "decision"]
+
+    def test_a4_rc_86_with_auto_fix_on_calls_auto_fix_and_writes_no_page(self):
+        done = self.run_sh("scripts/gate.sh", "tests/test_env_wave.py", "--ticket", "7")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.status_of("7")["state"], "env_suspect", "precondition: rc 86 path")
+        self.assertEqual(self.called(), ["7"], done.stdout + done.stderr)
+        self.assertNotIn("環境可疑,不自動派", done.stdout)
+        self.assertEqual(self.decision_pages(), [],
+                         "the page is auto-fix's terminal state, not the gate's")
+
+    def test_a4_rc_86_with_no_auto_fix_keeps_the_page_and_calls_nothing(self):
+        done = self.run_sh("scripts/gate.sh", "tests/test_env_wave.py", "--ticket", "7",
+                           "--no-auto-fix")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.called(), [])
+        self.assertEqual(len(self.decision_pages()), 1, self.decision_pages())
+
+
 if __name__ == "__main__":
     unittest.main()

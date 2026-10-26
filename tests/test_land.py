@@ -1965,5 +1965,129 @@ class DriverOnTheLock(LandBase):
         self.assertTrue(self.gate_ran())
 
 
+
+class T125LandHandsRepairToTheBudget(LandBase):
+    """#125 A1 / A3 / A4 at land: the full suite's rc 86 is told apart from a red (land.fail note
+    and status name env_suspect before auto-fix); a batch's repair budget is `repair.max_rounds`
+    (`batch_fix.rounds` still wins when set); an unattributed batch red gets one diagnosis round,
+    and a second unattributed outcome kicks nobody and writes one page."""
+
+    gate_stub = None
+
+    # Scripted full suite: `gate-mode` (env / unattr / red) decides every run. env: rc 86, state
+    # env_suspect, one statistical row; unattr: rc 1, failures []; red: rc 1, one row in src/zzz.
+    GATE = """#!/bin/sh
+dir=$(dirname "$AC_TEST_LOG")
+mode=$(cat "$dir/gate-mode")
+echo "gate $* mode=$mode" >> "$AC_TEST_LOG"
+for t in $AC_GATE_TICKETS $AC_GATE_TICKET; do
+    mkdir -p "$AC_ROOT/reports/t$t/$AC_GATE_RUN_ID"
+    python3 -c '
+import json, sys
+mode, ticket, run_id, path = sys.argv[1:5]
+rows = [{"kind": "FAIL", "case": "tests.test_red.T.test_red", "file": "src/zzz", "line": 1,
+         "excerpt": "AssertionError: fake red"}] if mode == "red" else []
+suspects = [{"source": "statistical", "engine": "safari", "why": "localStorage empty",
+             "count": 8, "threshold": 8, "log": "", "line": ""}] if mode == "env" else []
+json.dump({"ticket": ticket, "kind": "gate", "run_id": run_id,
+           "state": "env_suspect" if mode == "env" else "done",
+           "rc": 86 if mode == "env" else 1, "failures": rows,
+           "environment_suspect": suspects}, open(path, "w"))
+' "$mode" "$t" "$AC_GATE_RUN_ID" "$AC_ROOT/reports/t$t/$AC_GATE_RUN_ID/status.json"
+done
+echo "FAILED (fake)"
+[ "$mode" = env ] && exit 86
+exit 1
+"""
+
+    # auto-fix stub: records its argv and, for a single ticket, the state of the land status it
+    # would read; a batch call commits one fix on the integration branch (AUTO_FIX_STUB's shape).
+    AUTO_FIX = """#!/bin/sh
+state=$(python3 -c 'import glob, json, sys
+rows = [json.load(open(p)) for p in glob.glob("reports/t%s/*/status.json" % sys.argv[1])]
+print(",".join(sorted(str(r.get("state")) for r in rows if r.get("kind") == "land")))' "$1" 2>/dev/null)
+echo "autofix $* land_state=$state" >> "$AC_TEST_LOG"
+[ "$1" = "--batch" ] || exit 0
+wt=$(git worktree list --porcelain | awk -v ref="branch refs/heads/$2" '
+    /^worktree / { here = substr($0, 10) } $0 == ref { print here; exit }')
+n=$(grep -c '^autofix --batch' "$AC_TEST_LOG")
+echo "fix $n" > "$wt/batch-fix-$n.txt"
+git -C "$wt" add "batch-fix-$n.txt" && git -C "$wt" commit -q -m "batch fix $n"
+"""
+
+    def setUp(self):
+        super().setUp()
+        self.stub_script("gate.sh", self.GATE)
+        self.stub_script("auto-fix.sh", self.AUTO_FIX)
+
+    def arrange(self, mode, n=1, conf=None):
+        self.write("gate-mode", mode + "\n", where=self.home)
+        if conf:
+            config = json.loads(self.read("board/config.json"))
+            config.update(conf)
+            self.write("board/config.json", json.dumps(config, ensure_ascii=False, indent=2))
+            self.git("add", "-A")
+            self.git("commit", "-q", "-m", "sandbox config")
+        branches = []
+        for ident in range(1, n + 1):
+            branch = "t%d-x" % ident
+            path = self.branch_for(ident, branch)
+            self.commit_in(path, "src/f%d" % ident, "ticket %d" % ident)
+            self.approve(ident, branch)
+            branches.append(branch)
+        return branches
+
+    def autofix_lines(self, batch=None):
+        if not os.path.exists(self.log):
+            return []
+        with open(self.log, encoding="utf-8") as handle:
+            rows = [line.strip() for line in handle if line.startswith("autofix ")]
+        if batch is None:
+            return rows
+        return [row for row in rows if row.startswith("autofix --batch") == batch]
+
+    def decision_pages(self, *idents):
+        return [row for ident in idents for row in self.inbox_rows(ticket=ident)
+                if row.get("kind") == "decision"]
+
+    def test_a4_a_single_ticket_full_suite_86_is_env_suspect_before_auto_fix(self):
+        done = self.land(*self.arrange("env"))
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        fails = [row.get("note") or "" for row in self.events() if row["kind"] == "land.fail"]
+        self.assertTrue(fails and "env_suspect" in fails[-1], fails)
+        self.assertEqual(self.status_of(1, kind="land")["state"], "env_suspect")
+        self.assertEqual(self.autofix_lines(), ["autofix 1 land_state=env_suspect"],
+                         done.stdout + done.stderr)
+        for row in self.decision_pages(1):
+            self.assertNotIn("沒有歸因", self.read(row["page"]))
+
+    def test_a1_the_batch_budget_defaults_to_repair_max_rounds_3(self):
+        done = self.land(*self.arrange("red", n=2))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(len(self.autofix_lines(batch=True)), 3, self.autofix_lines())
+
+    def test_a1_the_batch_budget_follows_repair_max_rounds(self):
+        done = self.land(*self.arrange("red", n=2, conf={"repair": {"max_rounds": 1}}))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(len(self.autofix_lines(batch=True)), 1, self.autofix_lines())
+
+    def test_a1_batch_fix_rounds_still_wins_when_set(self):
+        done = self.land(*self.arrange("red", n=2, conf={"repair": {"max_rounds": 1},
+                                                          "batch_fix": {"rounds": 2}}))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(len(self.autofix_lines(batch=True)), 2, self.autofix_lines())
+
+    def test_a3_a_second_unattributed_batch_red_kicks_nobody_and_pages_once(self):
+        done = self.land(*self.arrange("unattr", n=2))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(len(self.autofix_lines(batch=True)), 1,
+                         "one diagnosis round, never a second consecutive one")
+        self.assertEqual([row for row in self.events()
+                          if row["kind"] == "land.fail" and row.get("kicked")], [])
+        self.assertEqual(len([row for row in self.events() if row["kind"] == "land.start"]), 1)
+        pages = self.decision_pages(1, 2)
+        self.assertEqual(len(pages), 1, pages)
+
+
 if __name__ == "__main__":
     unittest.main()
