@@ -25,9 +25,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "2942f85f9e27903562443a41a828d603f34ea6c5",
-  "state": "Ready",
-  "state_version": 35,
+  "base_sha": "de17d8ebcb060748fae907fa536a3cbf46756e88",
+  "state": "InReview",
+  "state_version": 41,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -57,5 +57,32 @@
   "problem": "Timed-out rounds record token nulls: #155 worker round 1 (note 'reports/t155/20261024-030710-1279/worker-round1.log 裡沒有 JSON 信封'), #159 round 1, #169 round 1 - auto-fix.sh prints 'cost 的信封讀不到 —— token 欄記 null' (ticket.py cmd_cost). The claude -p stream-json log (worker.command has --output-format stream-json --verbose) is killed before its `result` row, so read_envelope finds nothing, yet every assistant message is already in the file. Measured 2026-10-26 by running `python3 scripts/transcript-cost.py <log>` on the three real logs: #169 53 messages -> tokens_in 106 / cache_write 171031 / cache_read 8041906 / wall 3594; #155 60 -> 120 / 151496 / 7823074 / 3594; #159 134 -> 268 / 361003 / 34191649 / 3597; tokens_out null in all three (no row carries stop_reason; output_tokens are stream-start values 2/16). Row shape in those logs: type=assistant, message.id repeated twice per message with identical usage, message.usage with input_tokens / cache_creation_input_tokens / cache_read_input_tokens / output_tokens, a top-level `timestamp` and `session_id` on every row, no `type=result` row. cost_total counts such rows as unknown_token_runs (ticket.py cost_total), which is where the 'about 40 % unknown' in the cost ledger comes from.",
   "hypotheses": "H1 transcript-cost.summarize already yields the right numbers for stream-json worker logs without modification (measured on the three logs above: yes). Falsify: a stream-json log whose assistant rows lack message.usage - then summarize returns nulls with EMPTY_NOTE and the row must say so.\nH2 Envelope-first keeps every existing row identical: a log that has a result row never reaches the fallback. Falsify: a result row without usage (read_envelope returns 'envelope has no usage') - decide: fallback applies there too (the transcript is still in the file); acceptance A3 pins it.\nH3 tokens_out can be summed only when every deduplicated message's last row has a stop_reason (transcript-cost rule); in a killed stream that is never the case, so tokens_out stays null - the ledger must not invent output tokens.",
   "feature": "agent-control: cost ledger for interrupted headless runs",
-  "complexity": "simple"
+  "complexity": "simple",
+  "branch": "t124",
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 66,
+      "tokens_out": 29184,
+      "cache_write": 96787,
+      "cache_read": 3209816,
+      "wall_seconds": 1279,
+      "outcome": "handed-in",
+      "run_id": "20261026-173205-4076",
+      "session_id": "63c988a6-89ac-40ee-bc78-c2d72aeb16a6",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "medium",
+      "at": "2026-10-26T17:53:28+00:00"
+    }
+  ],
+  "gate": {
+    "rc": 0,
+    "sha": "45dff2beb5f06b51922f1e4a4164e2a661c84528",
+    "run_id": "20261026-175328-24726",
+    "at": "2026-10-26T18:18:34+00:00"
+  },
+  "repair_round": 1
 }
