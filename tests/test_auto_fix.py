@@ -3576,6 +3576,46 @@ class ThePacketSaysWhichTestsToRun(AutoFixBase):
         self.assertIn("python3 -m unittest tests.test_x_cases", vlines[0])
         self.assertIn("verify-case.py red", vlines[1])
 
+    # #178:案例歸屬照 test_plan。期望字串照票面逐字寫死,不從 auto-fix.sh 讀。
+    WORKER_OWNS = ("寫案例只寫 test_plan 指給 worker 的契約;指給驗證者的不寫"
+                   "(驗證者會寫,重複會被覆核退回);沒指派的才自己判。")
+    VERIFIER_OWNS = ("寫案例只寫 test_plan 指給驗證者的契約;指給 worker 的不寫"
+                     "(worker 會寫,重複會被覆核退回)。")
+
+    def test_178_a1_a2_the_plan_section_says_who_writes_which_case(self):
+        """**變異**:拿掉 worker 那一行 print → worker 段少一行紅;兩邊印反 → 互斥斷言紅。"""
+        self.arm(needs_verifier=True, test_plan=self.PLAN)
+        done = self.auto_fix("--dry-run", "--round", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        worker = self.packets("dispatch-round1.md")
+        verifier = self.packets("dispatch-verifier-round1.md")
+        plan = self.PLAN.splitlines()
+        self.assertEqual(self.section(worker, "## 票的測試計畫"), plan + [self.WORKER_OWNS])
+        self.assertEqual(self.section(verifier, "## 票的測試計畫"), plan + [self.VERIFIER_OWNS])
+        self.assertIn("\n## 票的測試計畫\n%s\n%s\n" % (self.PLAN, self.WORKER_OWNS), worker)
+        self.assertIn("\n## 票的測試計畫\n%s\n%s\n" % (self.PLAN, self.VERIFIER_OWNS), verifier)
+        self.assertNotIn(self.VERIFIER_OWNS, worker)
+        self.assertNotIn(self.WORKER_OWNS, verifier)
+        lines = self.section(worker, "## 只准跑的測試")
+        self.assert_base_and_fixed(lines)
+        self.assert_own_tests_line(lines[0])
+
+    def test_178_a2_no_test_plan_no_ownership_line(self):
+        for plan in (None, "  "):
+            with self.subTest(plan=plan):
+                fields = {"needs_verifier": True}
+                if plan is not None:
+                    fields["test_plan"] = plan
+                self.arm(**fields)
+                done = self.auto_fix("--dry-run", "--round", "1")
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                for name in ("dispatch-round1.md", "dispatch-verifier-round1.md"):
+                    text = self.packets(name)
+                    self.assertEqual(self.section(text, "## 票的測試計畫"),
+                                     ["票沒有 test_plan(驗收照票面 acceptance)"])
+                    self.assertNotIn(self.WORKER_OWNS, text)
+                    self.assertNotIn(self.VERIFIER_OWNS, text)
+
 
 class TheTestScopeRuleTextMatchesThePacket(unittest.TestCase):
     """D-073 ① A4(#168):規則正文與派工文同一張票改(D-054 Q12)。讀的是 commit 進來的檔,
@@ -3607,6 +3647,22 @@ class TheTestScopeRuleTextMatchesThePacket(unittest.TestCase):
                  if "只准跑的測試" in line]
         self.assertTrue(lines)
         self.assertTrue(any("自己的案例" in line for line in lines), lines)
+
+    def test_178_a3_a4_case_ownership_has_one_body_and_pointers(self):
+        """#178:歸屬正文在 DISPATCH-TEMPLATE §1(D-054 Q12),兩張卡與 ROLES 只指路。"""
+        text = self.read("docs/DISPATCH-TEMPLATE.md")
+        section1 = text.split("\n## 1. ", 1)[1].split("\n## 2. ", 1)[0]
+        sentences = [s for s in re.split(r"[。\n]", section1)
+                     if all(w in s for w in ("test_plan", "指給 worker", "指給驗證者", "沒指派"))]
+        self.assertTrue(sentences, "§1 要有一句同時講 test_plan / 指給 worker / 指給驗證者 / 沒指派")
+        card = self.read("memory/role/implementer.md")
+        deliver = [line for line in card.splitlines() if line.startswith("**交付物**")]
+        self.assertEqual(len(deliver), 1, deliver)
+        self.assertIn("test_plan 指給 worker", deliver[0])
+        self.assertIn("test_plan 指給驗證者", self.read("memory/role/verifier.md"))
+        for rel in ("memory/role/implementer.md", "docs/ROLES.md"):
+            with self.subTest(rel):
+                self.assertEqual(self.read(rel).count("自己的單元測試"), 0)
 
 
 # 批次修復的假 worker(#108;#145 起與單票同一種交件):cwd 是整合分支的 worktree,改一個檔、
