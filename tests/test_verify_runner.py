@@ -357,6 +357,157 @@ class ResultAndCase(unittest.TestCase):
         self.assert_example_result(again)
 
 
+PAR_CASE = '''import unittest
+TAGS = [{tag!r}]
+
+
+class T(unittest.TestCase):
+    def test_one(self):
+        pass
+
+    def test_two(self):
+        {body}
+'''
+# file → (tag, second test's body); the oracle for every id / status below.
+PAR_FILES = {"test_p1": ("par-one", "pass"), "test_p2": ("par-one", "pass"),
+             "test_p3": ("par-two", "pass"), "test_p4": ("par-two", "pass")}
+
+
+class ParallelRegression(unittest.TestCase):
+    """#169 A3: `--result` shards per case file across `tests.parallel` processes and merges into
+    one result; cache, `--case` and `--tag` keep their meaning. Sandbox = `verify/example` plus
+    `verify/par/` (four files, two tags); fake cgroup with 4 cores and room for 100 shards."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        copy_code_tree(self.tmp, only=("example",))
+        par = os.path.join(self.tmp, "verify", "par")
+        os.makedirs(par)
+        open(os.path.join(par, "__init__.py"), "w").close()
+        self.files = dict(PAR_FILES)
+        for name, (tag, body) in self.files.items():
+            self.write_case(name, tag, body)
+        with open(os.path.join(self.tmp, "verify", "TAGS.d", "zz-par.md"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("- `par-one` — fixture\n- `par-two` — fixture\n")
+        adapter_path = os.path.join(self.tmp, "scripts", "adapter-unittest.py")
+        spec = importlib.util.spec_from_file_location("adapter_for_par", adapter_path)
+        sys.path.insert(0, os.path.join(self.tmp, "scripts"))
+        try:
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+        finally:
+            sys.path.remove(os.path.join(self.tmp, "scripts"))
+        peak = mod.PER_PROCESS_PEAK_MIB
+        cg = os.path.join(self.tmp, "cg")
+        os.makedirs(cg)
+        for name, text in (("cpu.max", "400000 100000"), ("memory.current", "0"),
+                           ("memory.max", str(100 * peak * 1048576))):
+            with open(os.path.join(cg, name), "w", encoding="utf-8") as handle:
+                handle.write(text + "\n")
+        self.env = local_env(AC_ROOT=self.tmp, AC_CODE_ROOT=self.tmp, AC_CGROUP_ROOT=cg,
+                             AC_MEMINFO=os.path.join(self.tmp, "no-meminfo"))
+        self.env.pop("AC_TICKET", None)
+        self.env.pop("AC_RUN_ID", None)
+        self.out_dir = os.path.join(self.tmp, "out")
+        self.out = os.path.join(self.out_dir, "result.json")
+
+    def write_case(self, name, tag, body):
+        with open(os.path.join(self.tmp, "verify", "par", name + ".py"), "w",
+                  encoding="utf-8") as handle:
+            handle.write(PAR_CASE.format(tag=tag, body="self.assertEqual(1, 2)"
+                                         if body == "fail" else "pass"))
+
+    def cap(self, value):
+        cfg = os.path.join(self.tmp, "board", "config.json")
+        with open(cfg, encoding="utf-8") as handle:
+            conf = json.load(handle)
+        conf.setdefault("tests", {})["parallel"] = value
+        with open(cfg, "w", encoding="utf-8") as handle:
+            json.dump(conf, handle)
+
+    def verify(self, *args, env=None):
+        shutil.rmtree(self.out_dir, True)
+        return subprocess.run([sys.executable, os.path.join(self.tmp, "scripts", "verify.py"),
+                               *args, "--result", self.out], capture_output=True, text=True,
+                              env=env or self.env, timeout=300)
+
+    def rows(self):
+        with open(self.out, encoding="utf-8") as handle:
+            return {row["id"]: row["status"] for row in json.load(handle)["ids"]}
+
+    def expected(self, names):
+        out = {}
+        for name in names:
+            _, body = self.files[name]
+            out["verify.par.%s.T.test_one" % name] = "pass"
+            out["verify.par.%s.T.test_two" % name] = body
+        return out
+
+    def parallel_lines(self, done):
+        return [line for line in done.stdout.splitlines() if line.startswith("parallel: ")]
+
+    def shards(self):
+        return [n for n in os.listdir(self.out_dir) if n.startswith("shard-")]
+
+    def test_two_processes_give_the_same_ids_as_one(self):
+        self.cap(2)
+        done = self.verify("--no-cache")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        sharded = self.rows()
+        want = dict(self.expected(PAR_FILES), **{"verify.example.test_example.TheExampleHolds."
+                                                 "test_true": "pass"})
+        self.assertEqual(sharded, want)
+        self.assertEqual(len(self.shards()), 5, "one shard per case file")
+        lines = self.parallel_lines(done)
+        self.assertEqual(len(lines), 1, done.stdout)
+        self.assertIn("parallel: 2 processes", lines[0])
+        self.assertIn("capped by tests.parallel=2", lines[0])
+        self.assertEqual(done.stdout.count("\nRan "), 5, "every shard's run is in the output")
+        self.cap(1)
+        single = self.verify("--no-cache")
+        self.assertEqual(single.returncode, 0, single.stdout + single.stderr)
+        self.assertEqual(self.rows(), sharded)
+        self.assertEqual(self.shards(), [])
+        self.assertEqual(len(self.parallel_lines(single)), 1, single.stdout)
+
+    def test_the_cache_stores_and_returns_the_merged_result(self):
+        """**Mutation m3**: the cache keeps one shard's result instead of the merged one → the
+        second call's rows are short, red."""
+        self.cap(2)
+        env = dict(self.env, AC_TICKET="77", AC_RUN_ID="r-par")
+        first = self.verify("--tag", "par-one", "--tag", "par-two", env=env)
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertNotIn("用快取", first.stdout)
+        self.assertEqual(len(self.shards()), 4)
+        again = self.verify("--tag", "par-one", "--tag", "par-two", env=env)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn("用快取", again.stdout)
+        self.assertFalse(os.path.exists(os.path.join(self.out_dir, "shard-1")), "it re-ran")
+        self.assertEqual(self.rows(), self.expected(PAR_FILES))
+        self.assertEqual(len(self.parallel_lines(again)), 1, again.stdout)
+
+    def test_case_and_tag_select_as_before(self):
+        self.cap(2)
+        one = self.verify("--case", "verify/par/test_p3.py", "--no-cache")
+        self.assertEqual(one.returncode, 0, one.stdout + one.stderr)
+        self.assertEqual(self.rows(), self.expected(["test_p3"]))
+        tagged = self.verify("--tag", "par-one", "--no-cache")
+        self.assertEqual(tagged.returncode, 0, tagged.stdout + tagged.stderr)
+        self.assertEqual(self.rows(), self.expected(["test_p1", "test_p2"]))
+
+    def test_a_failing_case_file_is_rc_1_with_its_row(self):
+        self.cap(2)
+        self.files["test_p4"] = ("par-two", "fail")
+        self.write_case("test_p4", "par-two", "fail")
+        done = self.verify("--tag", "par-one", "--tag", "par-two", "--no-cache")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(self.rows(), self.expected(PAR_FILES))
+        self.assertEqual(self.rows()["verify.par.test_p4.T.test_two"], "fail")
+        self.assertEqual(len(self.shards()), 4)
+
+
 class TestsSectionOfAsConfig(unittest.TestCase):
     """#161 A5 靜態:A 的 `board/config.json` 的 `tests.unittest` 是 `gate.sh map()` / `BASE`
     的資料版。#161 時兩份並存,這一條逐列比對讓它們不准漂;#162(設計 row 3b)把 `map()`

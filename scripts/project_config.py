@@ -89,6 +89,9 @@ SCHEMA = [
     ("board.key_file", "string", NO_DEFAULT),
     ("tests", "object", {"adapter": "unittest"}),
     ("tests.adapter", "string", NO_DEFAULT),
+    ("tests.parallel", "int", NO_DEFAULT),            # cap on the run-time process count (#169)
+    ("tests.unittest", "object", NO_DEFAULT),
+    ("tests.unittest.serial", "list", NO_DEFAULT),    # modules run one at a time after (#169)
     # read at base, not in the design table
     ("gate", "object", NO_DEFAULT),
     ("guard_main_paths", "list", NO_DEFAULT),
