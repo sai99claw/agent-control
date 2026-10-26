@@ -30,8 +30,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "8d2cd914254d76e5620aeb3e90dcc1f1ddf6030f",
-  "state": "Running",
-  "state_version": 112,
+  "state": "InReview",
+  "state_version": 116,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -45,7 +45,7 @@
       "stage": "check",
       "ok": true,
       "why": "",
-      "at": "2026-10-26T08:21:28+00:00",
+      "at": "2026-10-26T08:49:41+00:00",
       "files": [
         "tests/test_schedule_cases.py"
       ],
@@ -226,14 +226,31 @@
       "note": null,
       "effort": null,
       "at": "2026-10-26T07:34:06+00:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 34,
+      "tokens_out": 16544,
+      "cache_write": 103164,
+      "cache_read": 1661738,
+      "wall_seconds": 201,
+      "outcome": "pass",
+      "run_id": "20261026-084238-24396",
+      "session_id": "5260a3b6-6423-5527-bed8-9d3211ae718f",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-26T08:53:04+00:00"
     }
   ],
   "branch": "t119",
   "gate": {
-    "rc": 1,
+    "rc": 0,
     "sha": "9917e7335b80baed4ef1eed171625b5f11bf8389",
-    "run_id": "20261026-081346-32417",
-    "at": "2026-10-26T08:21:28+00:00"
+    "run_id": "20261026-084238-24396",
+    "at": "2026-10-26T08:49:42+00:00"
   },
   "repair_round": 2,
   "objections": [
@@ -255,5 +272,12 @@
     }
   ],
   "owner": "main",
-  "interventions": 1
+  "interventions": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "9917e7335b80baed4ef1eed171625b5f11bf8389",
+    "note": "reports/t119/20261026-084238-24396/REVIEW.md",
+    "at": "2026-10-26T08:53:04+00:00"
+  }
 }
