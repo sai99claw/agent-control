@@ -89,6 +89,11 @@ archive 給的是 commit 的內容,worktree 裡沒 commit 的一個字都不進�
 (unittest discover 整組、`gate.sh --full`)、不跑 `verify.py` 回歸、不分批、不在負載下重跑 —— 對照表
 那一組、回歸、驗證者 check 是閘門的事,閘門紅由 auto-fix 下一輪派 worker 處理,全套只在 land 跑一次。
 
+**案例歸屬照 test_plan(唯一正文,#178;worker 與驗證者同一條)**:test_plan 逐條指派契約的寫案例者。
+worker 只寫 test_plan 指給 worker 的契約,指給驗證者的不寫,沒指派的契約(或票沒有 test_plan)由 worker 自己判
+(驗證者會寫它那幾條,同一層重複會被覆核退回,#157、#161、#169、#119)。驗證者對稱:只寫 test_plan 指給驗證者的契約,指給 worker 的不寫;
+沒指派的照票面 acceptance。派工文「## 票的測試計畫」段在 test_plan 之後印一行同義的提醒(`auto-fix.sh` 產)。
+
 ---
 
 ## 2. 禁區

@@ -685,6 +685,11 @@ print("")
 print("## 票的測試計畫")
 if isinstance(plan, str) and plan.strip():
     print(plan)
+    # 案例歸屬照 test_plan 的指派(#178;正文在 DISPATCH-TEMPLATE §1):兩邊各寫各的,重複會被覆核退回
+    if role == "verifier":
+        print("寫案例只寫 test_plan 指給驗證者的契約;指給 worker 的不寫(worker 會寫,重複會被覆核退回)。")
+    else:
+        print("寫案例只寫 test_plan 指給 worker 的契約;指給驗證者的不寫(驗證者會寫,重複會被覆核退回);沒指派的才自己判。")
 else:
     print("票沒有 test_plan(驗收照票面 acceptance)")
 print("")
