@@ -29,16 +29,75 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "3c81c2bdffe69fe000588175fe4f516a08d70897",
-  "state": "Ready",
-  "state_version": 89,
+  "base_sha": "8d2cd914254d76e5620aeb3e90dcc1f1ddf6030f",
+  "state": "Blocked",
+  "state_version": 108,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
+    "files": [
+      "tests/test_schedule_cases.py"
+    ],
     "tags": [],
-    "run": "",
-    "notes": ""
+    "run": "python3 -m unittest tests.test_schedule_cases",
+    "notes": "Needs scripts/schedule.py and the bin/actl 'schedule' row (invoked as 'sh $AC_HOME/bin/actl schedule plan|run'). Each case uses the harness Sandbox with own_ac_home(); auto-fix.sh / land.sh / review.sh in that A copy are replaced by recording python fakes (call log <home>/schedule-calls.log: '<n> start|end <epoch>', '<n> state <seen>', 'land <argv> <epoch>'; land behaviour per call from <home>/land_plan.json, auto-fix rc from <home>/afrc_<n>). Oracles: call log, ticket files the fakes write, inbox pages, events. Fake auto-fix sleeps 2 s and polls reports/schedule/state.json 20x at 0.1 s; overlap counted from epoch pairs. Ticket ids are numeric (11=A, 12=G, 13=X, 14=B). Case-text assumptions taken from the acceptance wording: plan line 'batch 1: <ids>', waiting text 'landed_sha not on main', 'files unknown', page kinds decision/done, final state.json stop.reason 'done'. ~25 s total.",
+    "baseline": {
+      "stage": "check",
+      "ok": true,
+      "why": "",
+      "at": "2026-10-26T07:31:18+00:00",
+      "files": [
+        "tests/test_schedule_cases.py"
+      ],
+      "base_ref": "8d2cd914254d76e5620aeb3e90dcc1f1ddf6030f",
+      "base_sha": "8d2cd914254d76e5620aeb3e90dcc1f1ddf6030f",
+      "candidate": "../agent-control-wt/t119",
+      "candidate_sha": "22f94263b6d2803503866815cc3bbf44a1fb31bb",
+      "baseline": {
+        "red": [
+          "tests.test_schedule_cases.ScheduleVerifierCases.test_done_dependency_off_main_is_not_satisfied",
+          "tests.test_schedule_cases.ScheduleVerifierCases.test_failed_land_blocks_later_batch_dependant",
+          "tests.test_schedule_cases.ScheduleVerifierCases.test_legacy_landed_condition_on_done_dependency_dispatches",
+          "tests.test_schedule_cases.ScheduleVerifierCases.test_max_workers_absent_defaults_to_two",
+          "tests.test_schedule_cases.ScheduleVerifierCases.test_no_reland_when_a_ticket_of_the_failed_call_is_blocked",
+          "tests.test_schedule_cases.ScheduleVerifierCases.test_overlap_is_symmetric_and_measured_against_main",
+          "tests.test_schedule_cases.ScheduleVerifierCases.test_reland_max_absent_defaults_to_two",
+          "tests.test_schedule_cases.ScheduleVerifierCases.test_state_json_is_whole_at_every_snapshot",
+          "tests.test_schedule_cases.ScheduleVerifierCases.test_ticket_without_branch_is_never_no_overlap_in_plan",
+          "tests.test_schedule_cases.ScheduleVerifierCases.test_two_runs_started_together_only_one_proceeds"
+        ],
+        "red_lines": [
+          "tests.test_schedule_cases.ScheduleVerifierCases.test_done_dependency_off_main_is_not_satisfied: AssertionError: 2 != 0 : rc=2",
+          "tests.test_schedule_cases.ScheduleVerifierCases.test_failed_land_blocks_later_batch_dependant: AssertionError: 2 != 1 : rc=2",
+          "tests.test_schedule_cases.ScheduleVerifierCases.test_legacy_landed_condition_on_done_dependency_dispatches: AssertionError: 2 != 0 : rc=2",
+          "tests.test_schedule_cases.ScheduleVerifierCases.test_max_workers_absent_defaults_to_two: AssertionError: 2 != 0 : rc=2",
+          "tests.test_schedule_cases.ScheduleVerifierCases.test_no_reland_when_a_ticket_of_the_failed_call_is_blocked: AssertionError: 2 != 1 : rc=2",
+          "tests.test_schedule_cases.ScheduleVerifierCases.test_overlap_is_symmetric_and_measured_against_main: AssertionError: 2 != 0 : rc=2",
+          "tests.test_schedule_cases.ScheduleVerifierCases.test_reland_max_absent_defaults_to_two: AssertionError: 2 != 1 : rc=2",
+          "tests.test_schedule_cases.ScheduleVerifierCases.test_state_json_is_whole_at_every_snapshot: AssertionError: 2 != 0 : rc=2",
+          "tests.test_schedule_cases.ScheduleVerifierCases.test_ticket_without_branch_is_never_no_overlap_in_plan: AssertionError: 2 != 0 : rc=2",
+          "tests.test_schedule_cases.ScheduleVerifierCases.test_two_runs_started_together_only_one_proceeds: AssertionError: Lists differ: [2, 2] != [0, 2]"
+        ],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "skipped": 0,
+        "rc": 1,
+        "cases": 10,
+        "log": "../agent-control-wt/t119/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "skipped": 0,
+        "rc": 0,
+        "cases": 10,
+        "log": "../agent-control-wt/t119/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "outline": "Rewritten 2026-10-25 by the opener from the user's words (DAG ↔ land.sh linkage is the system's, the LLM edits the batch file; openers insert tickets into the DAG = depends_on). Facts at base 1b6ac4e: no script reads depends_on today (grep: only board.py renders it); land.sh maps branch t<n>[-…] -> ticket (376-390), refuses 0 commits / stale base_sha / hard_block / complex without review (ticket.py review_problems, objection_problems), takes .land.lock by mkdir (90-110), runs batch_fix itself and writes its own decision pages; auto-fix.sh <n> starts round 1 for a Ready ticket, rc table in its header (0 green incl. review pass; 1/3/4/5/6/7/8/9/10 stops) and writes decision pages for its stops; inbox.py post kinds are decision / done only (INBOX_KINDS); ticket.py lint 1664-1681 only checks tags (no cycle check) - add one; depends_on conditions in the ticket store: 50 'landed' (all open tickets), legacy '落地…' / '已落地…' / '' / 'stacked:…' only on Done/Cancelled tickets; states IntegrationQueued / Integrating exist in STATES but no script sets them (not used here either - land owns state). Measured here: gate.sh --base 35.5 s. #162 landed (654d419), so the dependency is satisfied; base moved to main head 3c81c2b (tickets-only commit on top). Judgement on the former prerequisites: #101 Done (its write-scope hints were later deleted by D-054 Q2; dependency dropped as satisfied-and-irrelevant); #117 (session registry v2, slot API) dropped from depends_on - the only thing #119 needed from it was a process slot, and a counter over the scheduler's own children is that; recommend keeping #117 Draft for the main to decide with its cluster (#120/#123/#124/#125), not a #119 matter; #118 (PlanningBatch manifest) recommend Cancel: superseded by this ticket's rule 'opener writes depends_on + lint checks cycles' and by board/batches.json for ordering - the user's words put the DAG in the tickets, not in a manifest. #93 stays frozen on #119 landing (D-050 ④) - unchanged. Added 2026-10-25 by opener round 2 (main's incidents): (9) overlap from real branch diffs - knowable only once branches exist, so the hard guarantee is at land composition, dispatch-time only for existing branches; (10) re-land when land.sh's own auto-fix made the batch green (fact check: ticket gate.sha == branch head != pre-land head; #162 commit 20cd27e shows exactly that shape: gate.sha e5cdbcd new, review pass); (11) state.json + stale-lock takeover, so a container restart or the 2 h background cap resumes instead of 'another driver'. Removed: 'nothing persisted but logs', 'never re-runs land', 'scope-overlap not here'. Files that move with it: scripts/schedule.py, bin/actl, board/config.json, scripts/project_config.py schema table, tests/test_schedule.py, tests/test_ticket.py, tests/test_actl.py. Depends on #162 (auto-fix/land/gate on testiface; scheduler calls them). complex. needs_verifier true, interface_fixed true. Not measured: the mutations; real 'run' in A (worker must not run it).",
   "effort": "high",
@@ -81,5 +140,120 @@
     "D-016",
     "D-050"
   ],
-  "complexity": "complex"
+  "complexity": "complex",
+  "cost": [
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 64,
+      "tokens_out": 27360,
+      "cache_write": 81929,
+      "cache_read": 2845974,
+      "wall_seconds": 1455,
+      "outcome": "handed-in",
+      "run_id": "20261026-064616-22889",
+      "session_id": "e0ae608b-0030-44d9-b8a4-1829a2ca9780",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-26T07:10:34+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 118,
+      "tokens_out": 113322,
+      "cache_write": 230984,
+      "cache_read": 10459608,
+      "wall_seconds": 1455,
+      "outcome": "handed-in",
+      "run_id": "20261026-064616-22889",
+      "session_id": "4e00093e-5bfa-4dbb-a9eb-45b8df5e34d0",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-26T07:10:36+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 30,
+      "tokens_out": 8500,
+      "cache_write": 58084,
+      "cache_read": 1065651,
+      "wall_seconds": 207,
+      "outcome": "objection",
+      "run_id": "20261026-071036-2224",
+      "session_id": "661df309-f5e6-4391-86bb-3a8a66d9eade",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-26T07:21:21+00:00"
+    },
+    {
+      "role": "verifier",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 38,
+      "tokens_out": 10839,
+      "cache_write": 39010,
+      "cache_read": 1058355,
+      "wall_seconds": 137,
+      "outcome": "handed-in",
+      "run_id": "20261026-071036-2224",
+      "session_id": "cec09e2b-7f8b-4ada-bf87-352bd2108323",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-26T07:23:39+00:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 34,
+      "tokens_out": 15714,
+      "cache_write": 107674,
+      "cache_read": 1538324,
+      "wall_seconds": 166,
+      "outcome": "fail",
+      "run_id": "20261026-072341-16482",
+      "session_id": "5260a3b6-6423-5527-bed8-9d3211ae718f",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-26T07:34:06+00:00"
+    }
+  ],
+  "branch": "t119",
+  "gate": {
+    "rc": 0,
+    "sha": "22f94263b6d2803503866815cc3bbf44a1fb31bb",
+    "run_id": "20261026-072341-16482",
+    "at": "2026-10-26T07:31:19+00:00"
+  },
+  "repair_round": 2,
+  "objections": [
+    {
+      "category": "test_defect",
+      "body": "tests/test_schedule_cases.py line 14 imports `from tests.control_harness import Sandbox, TIMEOUT`, which cannot resolve under the gate's unittest adapter (cwd tests/, only tests/ on sys.path, no tests/__init__.py) -> ImportError; every other case file uses `sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))` + `from control_harness import ...`; with only that import fixed all 10 cases pass from cwd tests/.",
+      "evidence": "../agent-control-wt/fix-t119/round2/EVIDENCE-round2.md",
+      "owner": "verifier",
+      "disposition": "fixed",
+      "follow_up": "../agent-control-wt/verify-t119/round2/patch-verify.diff"
+    },
+    {
+      "category": "blocking",
+      "body": "tests/test_schedule.py::A10Reland::test_a10_blocked_ticket_blocks_the_reland duplicates the verifier case test_schedule_cases.py::test_no_reland_when_a_ticket_of_the_failed_call_is_blocked (same contract, same [A,G] fix+block input, same 1-land-call/rc 1 oracle; not in A10's acceptance, EVIDENCE names no independent contract) - junk case (3); remove the worker copy",
+      "evidence": "reports/t119/20261026-072341-16482/REVIEW.md",
+      "owner": "reviewer@opus",
+      "disposition": "",
+      "follow_up": ""
+    }
+  ],
+  "owner": "main",
+  "interventions": 1
 }

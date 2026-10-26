@@ -25,15 +25,101 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "9c5893a5d05e380aec0aff094694eff2515f09ab",
-  "state": "Ready",
-  "state_version": 14,
+  "state": "Blocked",
+  "state_version": 26,
   "lease": null,
   "retry_limit": 2,
   "verify": {
-    "files": [],
+    "files": [
+      "tests/test_adapter_cases.py",
+      "tests/test_verify_runner.py"
+    ],
     "tags": [],
-    "run": "",
-    "notes": ""
+    "run": "timeout 590 python3 -m unittest tests.test_adapter_cases tests.test_verify_runner",
+    "notes": "#169 cases are the classes AdapterParallelCases (tests/test_adapter_cases.py: A1, A2, A4, test-plan shared-state arm) and ParallelRegressionCases (tests/test_verify_runner.py: A3). Fixture modules, a fake cgroup v2 dir (cpu.max, memory.max, memory.current in bytes) and a fake meminfo are written under a tempdir; AC_CGROUP_ROOT / AC_MEMINFO point at them; nothing under /sys is touched and no memory is allocated. Expected N is arithmetic in the test (_expected_n) from the fixture numbers; PER_PROCESS_PEAK_MIB is read from the adapter only to size them. A1 parallel arm, A1 serial arm, A4(a) and A4(e) skip when os.cpu_count() < 4. Timing: A1 asserts wall < 4.5 s (parallel=3) and >= 6 s (parallel=1) over 2 s sleeps; the class takes ~40-60 s. Every 'parallel: ' line is read from stdout, as are the serial-not-discovered warning and the missing-result.json message (the acceptance says stdout).",
+    "baseline": {
+      "stage": "check",
+      "ok": false,
+      "why": "乾淨主線上有 4 條紅在缺符號(AttributeError/NameError/FileNotFoundError/TypeError 那一族)—— 改成先 assert 它存在",
+      "at": "2026-10-26T08:07:18+00:00",
+      "files": [
+        "tests/test_adapter_cases.py",
+        "tests/test_verify_runner.py"
+      ],
+      "base_ref": "9c5893a5d05e380aec0aff094694eff2515f09ab",
+      "base_sha": "9c5893a5d05e380aec0aff094694eff2515f09ab",
+      "candidate": "../agent-control-wt/t169",
+      "candidate_sha": "e6e927591ff00372b7b2d860e85ef0bb35ce465c",
+      "baseline": {
+        "red": [
+          "tests.test_adapter_cases.AdapterParallelCases.test_a1_parallel_one_is_todays_single_run",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a1_parallel_three_shards_merge_and_order",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a1_serial_module_runs_after_the_parallel_phase",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a1_serial_name_not_discovered_is_a_warning",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a2_bad_parallel_value_is_rc_2",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a2_declared_environment_suspect_is_rc_86",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a2_project_config_knows_both_keys",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a2_shard_without_result_json_is_rc_2",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a2_syntax_error_module_is_an_error_row",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a2_worst_rc_wins_a_failing_module_not_first",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a4_a_quota_four_cores_leaves_one",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a4_b_no_quota_no_limit_uses_cpu_count_and_memavailable",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a4_c_memory_short_falls_back_to_one",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a4_d_empty_cgroup_dir_falls_back",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a4_e_tests_parallel_caps_but_never_raises",
+          "tests.test_adapter_cases.AdapterParallelCases.test_shared_state_red_is_not_hidden_under_parallel",
+          "tests.test_verify_runner.ParallelRegressionCases.test_case_and_tag_selection_unchanged",
+          "tests.test_verify_runner.ParallelRegressionCases.test_failing_case_file_is_rc_1_with_its_row",
+          "tests.test_verify_runner.ParallelRegressionCases.test_parallel_two_same_ids_as_one",
+          "tests.test_verify_runner.ParallelRegressionCases.test_same_round_cache_stores_the_merged_result"
+        ],
+        "red_lines": [
+          "tests.test_adapter_cases.AdapterParallelCases.test_a1_parallel_one_is_todays_single_run: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a1_parallel_three_shards_merge_and_order: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a1_serial_module_runs_after_the_parallel_phase: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a1_serial_name_not_discovered_is_a_warning: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a2_bad_parallel_value_is_rc_2: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a2_declared_environment_suspect_is_rc_86: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a2_project_config_knows_both_keys: AssertionError: None != 'int' : schema table lacks tests.parallel",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a2_shard_without_result_json_is_rc_2: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a2_syntax_error_module_is_an_error_row: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a2_worst_rc_wins_a_failing_module_not_first: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a4_a_quota_four_cores_leaves_one: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a4_b_no_quota_no_limit_uses_cpu_count_and_memavailable: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a4_c_memory_short_falls_back_to_one: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a4_d_empty_cgroup_dir_falls_back: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
+          "tests.test_adapter_cases.AdapterParallelCases.test_a4_e_tests_parallel_caps_but_never_raises: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
+          "tests.test_adapter_cases.AdapterParallelCases.test_shared_state_red_is_not_hidden_under_parallel: AssertionError: False is not true : adapter-unittest.py has no PER_PROCESS_PEAK_MIB",
+          "tests.test_verify_runner.ParallelRegressionCases.test_case_and_tag_selection_unchanged: AssertionError: 0 != 1 : test_x (verify.par.test_p2.T.test_x) ... ok",
+          "tests.test_verify_runner.ParallelRegressionCases.test_failing_case_file_is_rc_1_with_its_row: AssertionError: 0 != 1 : test_x (verify.par.test_p1.T.test_x) ... ok",
+          "tests.test_verify_runner.ParallelRegressionCases.test_parallel_two_same_ids_as_one: AssertionError: 0 != 1 : test_x (verify.par.test_p1.T.test_x) ... ok",
+          "tests.test_verify_runner.ParallelRegressionCases.test_same_round_cache_stores_the_merged_result: AssertionError: 0 != 1 : test_x (verify.par.test_p1.T.test_x) ... ok"
+        ],
+        "import_failures": [],
+        "missing_symbol": [
+          "tests.test_verify_runner.ParallelRegression.test_a_failing_case_file_is_rc_1_with_its_row: AttributeError: module 'adapter_for_par' has no attribute 'PER_PROCESS_PEAK_MIB'",
+          "tests.test_verify_runner.ParallelRegression.test_case_and_tag_select_as_before: AttributeError: module 'adapter_for_par' has no attribute 'PER_PROCESS_PEAK_MIB'",
+          "tests.test_verify_runner.ParallelRegression.test_the_cache_stores_and_returns_the_merged_result: AttributeError: module 'adapter_for_par' has no attribute 'PER_PROCESS_PEAK_MIB'",
+          "tests.test_verify_runner.ParallelRegression.test_two_processes_give_the_same_ids_as_one: AttributeError: module 'adapter_for_par' has no attribute 'PER_PROCESS_PEAK_MIB'"
+        ],
+        "elsewhere": [],
+        "skipped": 0,
+        "rc": 1,
+        "cases": 48,
+        "log": "../agent-control-wt/t169/gate.log.verify-case.d/logs/baseline.log"
+      },
+      "candidate_run": {
+        "red": [],
+        "red_lines": [],
+        "import_failures": [],
+        "missing_symbol": [],
+        "elsewhere": [],
+        "skipped": 0,
+        "rc": 0,
+        "cases": 48,
+        "log": "../agent-control-wt/t169/gate.log.verify-case.d/logs/candidate.log"
+      }
+    }
   },
   "test_plan": "Layers: unit (tests/test_adapter_unittest.py, tests/test_verify_runner.py) with fixture modules written by the test under a temp root - timings asserted with generous margins (sleep 2 s per module; < 4.5 s parallel vs >= 6 s serial); rc and row assertions use the fixture's own declared statuses as oracle, never the adapter's output. Worker, foreground: timeout 590 python3 -m unittest tests.test_adapter_unittest tests.test_verify_runner; then tests.test_gate tests.test_status (gate reads the merged result); then the A5 measurement. Verifier (needs_verifier true, interface_fixed true: config keys, schema-1 result fields and the §4 rc table are pinned here) writes tests/test_adapter_parallel_cases.py in parallel: two fixture modules that both write a fixed path under the temp root -> under parallel=2 at least one shows a fail/error row (the runner must not hide shared-state reds); the merged log contains every shard's 'Ran ' line; a shard timeout (fixture module sleeping past tests.timeout_seconds.full = 2) -> rc 2 within 30 s wall and stdout contains 'timeout' (unmeasured, never red). Run-time N (A4) fixture: the test writes a fake cgroup v2 dir under its tempdir (cpu.max, memory.max, memory.current as plain text; bytes) and a fake meminfo ('MemAvailable: <kB> kB'), points AC_CGROUP_ROOT / AC_MEMINFO at them, and reads P from the adapter module only as an input to size the numbers; expected N is arithmetic in the test from the fixture values, never the adapter's output. Reproducible as uid 0 in this container (plain files in a tempdir; nothing under /sys is written; no memory is actually consumed); case (a) skips when os.cpu_count() < 4. Mutations (not measured by opener): m1 as A2; m2 serial list ignored -> A1 serial arm red; m3 cache key omits the merged result -> A3 cache arm red; m4 parallel ignores the cap -> A4(e) red; m5 N ignores memory -> A4(c) red; m6 no core left for the system -> A4(a) red; m7 tests.parallel raises N -> A4(e) second arm red. Shared-state audit is EVIDENCE text with one line per module. Container is uid 0; hard_block.patterns forbids os.kill / killpg / pkill / 'kill -' in added tests/** lines - stopping a shard on timeout is subprocess.run(timeout=) inside scripts/, never a test line; set PYTHONDONTWRITEBYTECODE=1 in shards or accept CPython's atomic .pyc rename (state which in EVIDENCE).",
   "outline": "D-073 to-open item '全套平行跑'. Facts: #161 land gate 1595 s (unit ≈ 1150 s + verify-b2a3e360f66e.log 'Ran 298 tests in 442.346s'); 42 test modules / 1256 unit tests; 22 verify case files / 326 case methods; adapter-unittest.py run_suite 327-349 is one in-process TextTestRunner (RecordingResult, LogStream, EnvironmentResult threshold) - keep it as the per-shard runner; write_result 384 is the single result.json writer (reuse for the merge); verify.py --result runs through the adapter's run_suite in-process (header lines 35-41). Shared state found by grep: os.chdir only in tests/test_verify_runner.py; port 0 in test_board; 12 modules use tempfile, the rest use control_harness.Sandbox (tempdir); gate tests set AC_GATE_LOG. Not measured by opener: per-module wall distribution (a background full run would have loaded the #160 gate running in this container); the speedup (D-073's 27 → 10 min is an estimate). D-074 item 2: N decided at run time (A4); tests.parallel is a cap only. Measured by opener: this container is cgroup v1 hybrid - no /sys/fs/cgroup/cpu.max or memory.max (cpu.cfs_quota_us -1, memory.limit_in_bytes unlimited), so here the rule takes the os.cpu_count()=4 / MemAvailable ≈ 14.9 GiB fallback -> expect N 3 unless P > ~5 GiB; cgroup v1 file support is not in this ticket. Per-process peak P is the worker's measurement (A5), not guessed. Interface pinned: AC_CGROUP_ROOT (default /sys/fs/cgroup), AC_MEMINFO (default /proc/meminfo), PER_PROCESS_PEAK_MIB, the 'parallel: ' line, tests.parallel (int >= 1, cap), tests.unittest.serial (list), result.json schema 1 unchanged, reports/test-times.json {module: seconds}. complex (two runners + merge + measurement). Depends on #162 (gate/full go through testiface and the adapter) and #163 (verify-case runs regression --case through verify.py --result; land after it so the sharding lands on the rewired classification). needs_verifier true, interface_fixed true. Order: before the branch-gate-regression ticket (it relies on this speedup).",
@@ -81,11 +167,80 @@
       "note": "reports/t169/20261026-045637-234/worker-round1.log 裡沒有 JSON 信封",
       "effort": "high",
       "at": "2026-10-26T05:56:46+00:00"
+    },
+    {
+      "role": "verifier",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 70,
+      "tokens_out": 42011,
+      "cache_write": 119811,
+      "cache_read": 3628189,
+      "wall_seconds": 4562,
+      "outcome": "handed-in",
+      "run_id": "20261026-064616-22888",
+      "session_id": "c469befd-9e57-40fe-8fee-e4ee754f786f",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-26T08:02:21+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 88,
+      "tokens_out": 27686,
+      "cache_write": 89365,
+      "cache_read": 3964457,
+      "wall_seconds": 4562,
+      "outcome": "handed-in",
+      "run_id": "20261026-064616-22888",
+      "session_id": "4521a5af-7fae-4da6-805e-8a5e2a73324c",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-26T08:02:23+00:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 26,
+      "tokens_out": 13205,
+      "cache_write": 74076,
+      "cache_read": 978294,
+      "wall_seconds": 145,
+      "outcome": "fail",
+      "run_id": "20261026-080223-8311",
+      "session_id": "5260a3b6-6423-5527-bed8-9d3211ae718f",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-26T08:09:44+00:00"
     }
   ],
   "owner": "main",
-  "interventions": 1,
+  "interventions": 2,
   "worker": {
     "timeout_seconds": 7200
-  }
+  },
+  "branch": "t169",
+  "gate": {
+    "rc": 0,
+    "sha": "e6e927591ff00372b7b2d860e85ef0bb35ce465c",
+    "run_id": "20261026-080223-8311",
+    "at": "2026-10-26T08:07:18+00:00"
+  },
+  "repair_round": 1,
+  "objections": [
+    {
+      "category": "blocking",
+      "body": "verifier patch-verify duplicates the worker's A1-A4 cases in the same unit layer (tests/test_adapter_cases.py::AdapterParallelCases test_a1_*/test_a2_*/test_a4_* and tests/test_verify_runner.py::ParallelRegressionCases mirror Parallel/ProcessCount/ParallelRegression) - reviewer junk-case rule (3); keep one copy (verifier keeps only test_shared_state_red_is_not_hidden_under_parallel plus the test_plan's own arms)",
+      "evidence": "reports/t169/20261026-080223-8311/REVIEW.md",
+      "owner": "reviewer@opus",
+      "disposition": "",
+      "follow_up": ""
+    }
+  ]
 }
