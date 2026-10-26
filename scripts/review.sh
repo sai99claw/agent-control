@@ -268,7 +268,7 @@ PY
 reviewer_run() {   # $1 = 第幾輪  $2… = 事件多帶的旗標;起一次 reviewer(REVIEWER_CMD → REVIEW / RLOG),設定 RRC / RSECS
     rr_round=$1
     shift
-    ev agent.start --ticket "$ID" --role reviewer --model "$MODEL" ${R_EFFORT:+--kv effort=$R_EFFORT} \
+    ev agent.start --driver $$ --ticket "$ID" --role reviewer --model "$MODEL" ${R_EFFORT:+--kv effort=$R_EFFORT} \
         --kv run_id="$RUN_ID" --kv round="$rr_round" --kv agent=review "$@"
     # 上一次派(同一個 run_id 重派、或換候選前那一次)留下的信封不准被這一次的成本讀到。
     rm -f "$RUNDIR/reviewer.json"

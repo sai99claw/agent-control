@@ -107,8 +107,10 @@ DOCTOR=$(AC_ROOT=$ROOT sh "${AC_CONTROL_DIR:-$AC}/../bin/actl" doctor 2>&1)
 PAGE=$(
     [ -z "$DOCTOR" ] || printf '%s\n\n' "$DOCTOR"
     [ -z "$WARN" ] || echo "$WARN"
+    # session.start 的 driver(#117 A1,best effort):hook 的父行程,跳過中間那一層 `sh -c`。
+    DRIVER=$(python3 "$AC/liveness.py" driver "$PPID" 2>/dev/null || true)
     # shellcheck disable=SC2086
-    AC_ROOT=$ROOT sh "$AC/new-session.sh" main "$MODEL" $FLAG 2>&1
+    AC_ROOT=$ROOT AC_DRIVER_PID=$DRIVER sh "$AC/new-session.sh" main "$MODEL" $FLAG 2>&1
     rc=$?
     [ "$rc" -eq 0 ] || echo "session-hook: new-session.sh 退出碼 $rc —— 上面那一頁可能缺段;重跑:$AGAIN"
 )

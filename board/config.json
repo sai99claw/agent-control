@@ -105,6 +105,8 @@
         {"match": "scripts/inbox.py", "ids": ["test_inbox", "test_gate", "test_land", "test_new_session"]},
         {"match": "scripts/rules.py", "ids": ["test_rules", "test_rules_delivery"]},
         {"match": "scripts/heartbeat.sh", "ids": ["test_heartbeat"]},
+        {"match": "scripts/heartbeat.py", "ids": ["test_heartbeat"]},
+        {"match": "scripts/liveness.py", "ids": ["test_heartbeat", "test_schedule", "test_land"]},
         {"match": "scripts/new-session.sh", "ids": ["test_new_session", "test_rules_delivery"]},
         {"match": "scripts/session-hook.sh", "ids": ["test_session_hook"]},
         {"match": ".claude/settings.json", "ids": ["test_session_hook"]},

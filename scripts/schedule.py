@@ -59,6 +59,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import event  # noqa: E402  repo root and board/config.json, shared with every script
 import inbox  # noqa: E402  the one page per terminal state
+import liveness  # noqa: E402  pid + boot_id, shared with heartbeat (#117)
 import ticket as tk  # noqa: E402  ticket files, review_problems, depends_cycles
 
 BATCHES_REL = os.path.join("board", "batches.json")
@@ -69,7 +70,6 @@ DEFAULT_MAX_WORKERS = 2
 DEFAULT_RELAND_MAX = 2
 DEFAULT_MAIN = "main"
 GIT_TIMEOUT = 60
-BOOT_ID = "/proc/sys/kernel/random/boot_id"
 LAND_CONFLICT_RC = 3
 NOTHING = "nothing to dispatch or land"
 RESUME_HINT = ("then `actl schedule run` resumes this run (facts first: what landed meanwhile counts); "
@@ -97,30 +97,15 @@ def id_key(ident):
     return (0, int(ident), "") if str(ident).isdigit() else (1, 0, str(ident))
 
 
-def boot_id():
-    try:
-        with open(BOOT_ID, encoding="utf-8") as handle:
-            return handle.read().strip()
-    except OSError:
-        return ""
+# Liveness is one implementation shared with heartbeat (#117 A2): scripts/liveness.py.
+boot_id = liveness.boot_id
+gone = liveness.gone
 
 
 def pid_alive(pid):
-    """/proc only — a signal-0 probe is a signal (hard_block)."""
-    try:
-        pid = int(pid)
-    except (TypeError, ValueError):
-        return False
-    return pid > 0 and os.path.isdir("/proc/%d" % pid)
-
-
-def gone(pid, boot):
-    """A recorded process (lock holder, child of an interrupted run) is gone when its pid is absent
-    from /proc or it was recorded under another boot. No boot recorded -> judged by pid only."""
-    current = boot_id()
-    if boot and current and boot != current:
-        return True
-    return not pid_alive(pid)
+    """/proc only — a signal-0 probe is a signal (hard_block). Kept by name for the scheduler's
+    own readers; the rule lives in liveness.pid_alive."""
+    return liveness.pid_alive(pid)
 
 
 def ac_home():

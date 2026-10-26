@@ -1337,16 +1337,19 @@ class OnlyOneLandAtATime(LandBase):
     """`docs/WORKFLOW.md` 早就寫「同時只准一個 land」,而腳本從來沒有擋(外部審查)。"""
 
     def test_a_second_land_is_refused_while_the_lock_is_held(self):
-        """**變異**:把 `mkdir "$LOCK"` 那一段拿掉 → 這一條紅。"""
+        """**變異**:把 `mkdir "$LOCK"` 那一段拿掉 → 這一條紅。
+
+        持鎖的是活著的行程(pid 1 一定在 /proc):#117 起死掉的持鎖者會被接手,所以這一條的
+        夾具要一個活的 —— 以前的 pid=999 只因為「有鎖就拒」才拒。"""
         branch = self.branch_for(1, "t1-good")
         self.commit_in(branch, "src/g1", "做完的那一張")
         self.approve(1, "t1-good")
         os.makedirs(os.path.join(self.repo, ".land.lock"))
-        self.write(os.path.join(".land.lock", "holder"), "pid=999 開始=剛剛\n")
+        self.write(os.path.join(".land.lock", "holder"), "pid=1 開始=剛剛\n")
         done = self.land("t1-good")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("已經有一個 land 在跑", done.stdout)
-        self.assertIn("pid=999", done.stdout, "要說得出現在是誰在落地")
+        self.assertIn("pid=1 開始=剛剛", done.stdout, "要說得出現在是誰在落地")
         self.assertFalse(self.gate_ran())
 
 
@@ -1827,6 +1830,51 @@ class WhichGateLandRuns(LandBase):
         done = self.land("t1-gate")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.gate_calls(), ["WT-GATE"])
+
+
+
+class DriverOnTheLock(LandBase):
+    """#117 A1 / A5:land.start 與鎖的 holder 帶 driver(land.sh 自己的 pid)與 boot_id;
+    holder 死了的鎖由 take_lock 接手。期望值:holder 是假閘門在持鎖期間抄出來的,
+    死的 pid 是測試自己起、等它結束的 `true`,boot 是測試自己讀的 /proc。"""
+
+    def boot(self):
+        with open("/proc/sys/kernel/random/boot_id", encoding="utf-8") as handle:
+            return handle.read().strip()
+
+    def test_land_start_and_the_holder_carry_the_driver(self):
+        import re
+        copy = os.path.join(self.home, "holder.copy")
+        self.stub_script("gate.sh", GATE_STUB_GREEN.replace(
+            "exit 0", 'cp "$AC_ROOT/.land.lock/holder" "%s"\nexit 0' % copy))
+        branch = self.branch_for(1, "t1-x")
+        self.commit_in(branch, "src/a", "一件事")
+        done = self.land("t1-x")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        with open(copy, encoding="utf-8") as handle:
+            holder = handle.read()
+        pid = re.search(r"(^| )pid=(\d+)", holder)
+        self.assertTrue(pid, holder)
+        self.assertIn("boot_id=%s" % self.boot(), holder)
+        starts = [row for row in self.events() if row["kind"] == "land.start"]
+        self.assertEqual(len(starts), 1, starts)
+        self.assertEqual(str(starts[0].get("driver_pid")), pid.group(2))
+        self.assertNotEqual(str(starts[0].get("pid")), pid.group(2))
+        self.assertEqual(starts[0].get("boot_id"), self.boot())
+
+    def test_a_lock_whose_holder_is_dead_is_taken_over(self):
+        child = subprocess.Popen(["true"])
+        child.wait()
+        self.assertFalse(os.path.isdir("/proc/%d" % child.pid))
+        os.makedirs(os.path.join(self.repo, ".land.lock"))
+        self.write(".land.lock/holder", "pid=%d boot_id=%s 開始=2026-10-20T11:11:11 分支=t9\n"
+                   % (child.pid, self.boot()))
+        branch = self.branch_for(1, "t1-x")
+        self.commit_in(branch, "src/a", "一件事")
+        done = self.land("t1-x")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("stale lock pid %d taken over" % child.pid, done.stdout)
+        self.assertTrue(self.gate_ran())
 
 
 if __name__ == "__main__":

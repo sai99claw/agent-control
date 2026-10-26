@@ -1678,7 +1678,7 @@ class TheCopiesGetCollected(AutoFixBase):
     def test_a_round_whose_worker_is_still_running_keeps_its_copy(self):
         """#46 C3:第 1 輪的 worker 還活著(pid = 這條案例自己)—— 派第 2 輪時不收它的副本。
 
-        **變異 M3**:拿掉 `kill -0` 那一問 → 這一條紅。
+        **變異 M3**:拿掉 `liveness.py gone` 那一問(#117 起不發訊號,讀 /proc)→ 這一條紅。
         """
         pid = os.getpid()
         where = self.round_one_copy_with_pid(pid)
@@ -5116,6 +5116,56 @@ printf '# round %s\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
                          self.BASE_X + self.ADD_W + self.ADD_V)
         # apply.sh 的第一行印出它收到的 --verifier-base(介面照分支上的實作)。
         self.assertIn("verifier-base %s" % base, out)
+
+
+
+class DriverOnTheStartEvents(AutoFixBase):
+    """#117 A1 / A4(vii):auto-fix 的 start 事件帶 driver(auto-fix.sh 自己,不是 event.py)
+    與 boot_id;死掉那一輪的 log 不被下一輪蓋掉。"""
+
+    def boot(self):
+        with open("/proc/sys/kernel/random/boot_id", encoding="utf-8") as handle:
+            return handle.read().strip()
+
+    def test_t5_attempt_and_agent_starts_name_the_same_driver(self):
+        self.set_worker(WORKER_OBJECTS)
+        self.ticket_ready()
+        self.status(1, RED_LOG)
+        done = self.auto_fix()
+        out = done.stdout + done.stderr
+        attempt = [row for row in self.events() if row["kind"] == "ticket.attempt.start"]
+        agent = [row for row in self.events() if row["kind"] == "agent.start"
+                 and row.get("role") == "worker"]
+        self.assertEqual((len(attempt), len(agent)), (1, 1), out)
+        self.assertNotEqual(attempt[0]["pid"], agent[0]["pid"])
+        self.assertTrue(attempt[0].get("driver_pid"), attempt[0])
+        self.assertEqual(str(attempt[0].get("driver_pid")), str(agent[0].get("driver_pid")))
+        for row in attempt + agent:
+            self.assertNotEqual(str(row.get("driver_pid")), str(row["pid"]))
+            self.assertEqual(row.get("boot_id"), self.boot())
+
+    def test_t6_the_next_round_does_not_overwrite_the_dead_rounds_log(self):
+        self.set_worker(WORKER_OBJECTS)
+        self.ticket_ready()
+        self.status(1, RED_LOG)
+        run_dir = os.path.join(self.repo, "reports", "t1", "20260921-100000-1")
+        child = subprocess.Popen(["true"])
+        child.wait()
+        with open(os.path.join(self.repo, "board", "events.jsonl"), "a", encoding="utf-8") as fh:
+            for row in ({"kind": "ticket.attempt.start", "attempt": "2"},
+                        {"kind": "agent.start", "role": "worker", "model": "opus",
+                         "run_id": "20260921-100000-1", "round": "2"}):
+                row.update({"ts": "2026-09-21T10:00:00+08:00", "pid": 9001, "ticket": "1",
+                            "driver_pid": child.pid, "boot_id": self.boot()})
+                fh.write(json.dumps(row) + "\n")
+        dead_log = os.path.join(run_dir, "worker-round2.log")
+        os.makedirs(run_dir, exist_ok=True)
+        with open(dead_log, "wb") as handle:
+            handle.write(b"the dead round said this\n")
+        done = self.auto_fix()
+        self.assertTrue(self.worker_rounds(), done.stdout + done.stderr)
+        with open(dead_log, "rb") as handle:
+            self.assertEqual(handle.read(), b"the dead round said this\n")
 
 
 if __name__ == "__main__":

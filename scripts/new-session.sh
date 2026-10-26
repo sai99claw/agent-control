@@ -41,6 +41,7 @@ from datetime import datetime
 ac, root = sys.argv[1:3]
 sys.path.insert(0, ac)
 import event  # noqa: E402
+import liveness  # noqa: E402  driver_pid + boot_id on agent.start (#117 A1)
 
 top = argparse.ArgumentParser(prog="new-session.sh dispatch")
 top.add_argument("role", choices=("opener", "design"))
@@ -111,7 +112,8 @@ while True:
                   items=args.items)
     if args.ticket:
         fields["ticket"] = args.ticket
-    event.emit("agent.start", **fields)
+    # 這一支 python 就是 driver:它起 agent、等它回來、發 done / failed(#117 A1)。
+    event.emit("agent.start", **fields, **liveness.driver_fields())
     env = dict(os.environ, AC_ROLE=args.role, AC_MODEL=model,
                **({"AC_TICKET": args.ticket} if args.ticket else {}))
     with open(args.prompt, encoding="utf-8") as stdin, open(log_path, "wb") as log:
@@ -476,8 +478,13 @@ fi
 
 if [ "$EMIT" -eq 1 ]; then
     say "發事件:控制台從此看得到你"
+    # driver(#117 A1):session 本身那一個行程。這一支一印完就走,不是它;session-hook.sh 從
+    # hook 的父行程算出來交給 `AC_DRIVER_PID`。手打的沒有 —— 那一筆在 heartbeat 是 unknown,
+    # 照租約判,不會被當成死了收掉。
+    _drv=""
+    case "${AC_DRIVER_PID:-}" in ''|*[!0-9]*) ;; *) _drv=$AC_DRIVER_PID ;; esac
     python3 "$AC/event.py" emit session.start --role "$ROLE" --model "$MODEL" --session "$SID" \
-        --kv "ac_sha=$(ac_sha "$(ac_home)")"
+        ${_drv:+--driver "$_drv"} --kv "ac_sha=$(ac_sha "$(ac_home)")"
 else
     say "發事件:略過(--no-event —— 同一個 session 重印這一頁,不是新的開場)"
 fi

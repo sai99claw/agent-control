@@ -32,7 +32,9 @@
   收下用 `inbox.py ack <票號>`。
   **開場讀一次,之後只在被通知時讀 —— 不准輪詢 status**(每看一次背景工作 = 整份上下文重送一輪)。
 - 看裁示收件匣 `python3 scripts/ticket.py inbox`:使用者填過的裁示要落成 `docs/DECISIONS.md` 一列。
-- 檢查 `scripts/heartbeat.sh`:上一個 session / land 有沒有死在半路(有的話清 worktree、把票狀態對回事實)。
+- 跑 `actl heartbeat`:上一個 session / land / worker 有沒有死在半路。它報出 `dead awaiting-takeover` 的列就跑
+  `actl heartbeat --reconcile`(存 wip diff、清 worktree、補結尾事件、票 Running → Ready、收 land 的鎖與殘骸);
+  `unknown` 的列(#117 之前的舊列)照它印的那一句自己查。
 - 用一句話跟使用者說現況。
 - **派工(D-067;headless 是唯一的派工路,雲端與 Mac 同一條)**:`sh scripts/auto-fix.sh <n>`(票 Ready)自己起
   worker 與驗證者的程序、收件(apply)、跑閘門、綠了叫 `review.sh`,每一個結局寫進 `reports/inbox/`;

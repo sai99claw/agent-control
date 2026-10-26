@@ -1,20 +1,21 @@
 #!/bin/sh
-# 心跳:誰的租約到期了還沒回來,以及有沒有 land 的殘骸。
+# 心跳:誰死在半路、誰還活著,以及有沒有 land 的殘骸。
 #
-#   sh scripts/heartbeat.sh
+#   sh scripts/heartbeat.sh               # 只讀
+#   sh scripts/heartbeat.sh --reconcile   # 把死掉的那幾輪對回事實(#117;只動 dead awaiting-takeover)
 #
 # 主線 session 開頭跑這一支(`docs/SESSION-START.md`)。它回答一個問題:
 # **上一個 session / land / worker 是不是死在半路了?**
 #
 # 為什麼需要它:協調者自己會撞額度(`docs/DESIGN.md` 主線審稿第 3 點 —— 一天內三個
 # 模型都撞過),而**一個撞了額度靜停的 session,與一個正在思考的 session,在事件檔上
-# 長得一模一樣** —— 兩者都是「有 start、沒有 end」。分辨它們的唯一辦法是時間:
-# `board/config.json` 的 `lease_seconds`。
+# 長得一模一樣** —— 兩者都是「有 start、沒有 end」。#117 起 start 事件帶 driver 的 pid 與
+# boot_id:讀 /proc 就分得出 alive / dead(不發任何訊號,判準與 schedule.py 同一份 liveness.py);
+# 沒帶的舊列才退回時間(`board/config.json` 的 `lease_seconds`),記成 unknown。
 #
-# 退出碼:0 = 沒有到期的租約也沒有殘骸;1 = 有(要人處理,不是錯誤)。
+# 退出碼:0 = 沒有要處理的;1 = 有(要人處理,不是錯誤);2 = 找不到專案根 / 參數錯。
 #
-# JSON 交給 python3(POSIX sh 沒有解析器,而自己用 sed 剖 JSON 是在測自己寫的
-# 剖析器 —— 同 `docs/DISPATCH-TEMPLATE.md` §5.6「不要造一個自己寫的模擬器」)。
+# 本體在 heartbeat.py(判決、--reconcile 的每一步寫在那裡的檔頭)。
 set -u
 # 專案根不從 `$0` 來(D-071 C2,#159):`AC_ROOT`,否則 cwd 的主 repo 根,否則 rc 2 ——
 # 規則只有一份,在 `wtbase.sh`。控制腳本自己住的目錄(A 的 clone)才從 `$0` 算;
@@ -25,113 +26,16 @@ export AC_CONTROL_DIR=$AC
 ROOT=$(ac_root heartbeat) || exit 2
 export AC_ROOT=$ROOT
 
-python3 - "$ROOT" <<'PY'
-import json
-import os
-import subprocess
-import sys
-from datetime import datetime
-
-root = sys.argv[1]
-sys.path.insert(0, os.environ["AC_CONTROL_DIR"])
-import event  # noqa: E402
-
-conf = event.config(root)
-leases = conf.get("lease_seconds") or {}
-DEFAULT_LEASE = 7200
-
-# 開始 → 什麼算它回來了。land 用 stamp 配對(同一輪落地的四種結局);session 用
-# session id(舊列沒有才用 pid);attempt 用票號加 attempt。**配對的鍵要選得夠細** —— 用「最近一筆 end」去
-# 配所有 start,兩條同時在跑的線會互相把對方銷掉,而那看起來就像大家都回來了。
-CLOSERS = {
-    "session.start": ("session.end",),
-    "land.start": ("land.pass", "land.fail", "land.refused"),
-    "ticket.attempt.start": ("ticket.attempt.done", "ticket.attempt.failed"),
-}
-LEASE_KEY = {"land.start": "land", "ticket.attempt.start": "worker"}
-
-
-def key_of(row):
-    kind = row.get("kind", "")
-    if kind.startswith("land."):
-        return ("land", str(row.get("stamp", "")))
-    if kind.startswith("ticket.attempt."):
-        return ("attempt", str(row.get("ticket", "")), str(row.get("attempt", "")))
-    # session 先看 emit 的 `--session` id(#45 B3):start 與 end 是兩次 `event.py emit`、
-    # 兩個 pid,拿 pid 配永遠配不上。沒有那一欄的舊列才退回 pid。
-    if row.get("session"):
-        return ("session", row.get("session"), str(row.get("role", "")))
-    return ("session", str(row.get("pid", "")), str(row.get("role", "")))
-
-
-def lease_for(row):
-    kind = row.get("kind", "")
-    if kind in LEASE_KEY:
-        return int(leases.get(LEASE_KEY[kind]) or DEFAULT_LEASE)
-    role = str(row.get("role") or "")
-    return int(leases.get(role) or leases.get("worker") or DEFAULT_LEASE)
-
-
-rows = event.read_events(root)
-closed = set()
-for row in rows:
-    for starter, enders in CLOSERS.items():
-        if row.get("kind") in enders:
-            closed.add(key_of(row))
-now = datetime.now().astimezone()
-stale = []
-for row in rows:
-    if row.get("kind") not in CLOSERS:
-        continue
-    if key_of(row) in closed:
-        continue
-    when = row.get("ts", "")
-    try:
-        started = datetime.fromisoformat(when)
-    except ValueError:
-        continue
-    if started.tzinfo is None:
-        started = started.astimezone()
-    age = (now - started).total_seconds()
-    lease = lease_for(row)
-    if age > lease:
-        stale.append((row, int(age), lease))
-
-if stale:
-    print("heartbeat: 租約到期還沒回來的:")
-    for row, age, lease in stale:
-        who = " ".join(filter(None, [
-            str(row.get("kind")),
-            "#%s" % row["ticket"] if row.get("ticket") else "",
-            "role=%s" % row["role"] if row.get("role") else "",
-            "model=%s" % row["model"] if row.get("model") else "",
-            "pid=%s" % row["pid"] if row.get("pid") else "",
-            "stamp=%s" % row["stamp"] if row.get("stamp") else ""]))
-        print("heartbeat:   %s —— %s,已經 %d 秒(租約 %d 秒)"
-              % (row.get("ts", "?"), who, age, lease))
-    print("heartbeat: 處置:確認那個 session 真的沒了,再把票的狀態對回事實"
-          "(scripts/ticket.py set … / verify)。")
-else:
-    print("heartbeat: 沒有到期的租約")
-
-# land 的殘骸:閘門紅或衝突時 worktree 是**故意留著給人看的**,所以「有殘骸」不是
-# 錯誤,是一件還沒有人處理完的事。分支名認得出來(`land/<時間>`),不必知道它在哪。
-done = subprocess.run(["git", "-C", root, "worktree", "list", "--porcelain"],
-                      capture_output=True, text=True)
-leftovers = []
-path = ""
-for line in done.stdout.splitlines():
-    if line.startswith("worktree "):
-        path = line[len("worktree "):]
-    elif line.startswith("branch refs/heads/land/"):
-        leftovers.append((line[len("branch refs/heads/"):], path))
-if leftovers:
-    print("heartbeat: land 的 worktree 還留著:")
-    for branch, where in leftovers:
-        print("heartbeat:   %s -> %s" % (branch, where))
-    print("heartbeat: 處置:看完 gate.log 再 `git worktree remove` 並刪掉那條分支。")
-else:
-    print("heartbeat: 沒有 land 殘骸")
-
-sys.exit(1 if (stale or leftovers) else 0)
+# 副本根與 auto-fix / land 同一條規則(`wtbase.sh`):--reconcile 要找那一輪的 worker.pid。
+cfg() {
+    python3 - "$ROOT" "$1" "$2" <<'PY'
+import json, os, sys
+try:
+    with open(os.path.join(sys.argv[1], "board", "config.json"), encoding="utf-8") as handle:
+        data = json.load(handle)
+except (OSError, ValueError):
+    data = {}
+print(data.get(sys.argv[2]) or sys.argv[3])
 PY
+}
+AC_WTBASE=$(wtbase) python3 "$AC/heartbeat.py" "$@"
