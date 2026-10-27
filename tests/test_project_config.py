@@ -292,6 +292,98 @@ class A5DogfoodAndInit(ConfigSandbox):
         self.assertEqual(digest(path), before)
 
 
+class T184CoexistenceAndRoleModels(ConfigSandbox):
+    """#184: scripts/control/ is a warning during the §7 coexistence window; a missing or unparsable
+    board/role-models.json is an error fixed by `actl migrate`, which (like `actl init`) copies A's
+    table when the project has none and never overwrites one."""
+
+    def setUp(self):
+        super().setUp()
+        self.models = os.path.join(self.repo, "board", "role-models.json")
+        self.a_models = os.path.join(self.ac_home, "board", "role-models.json")
+
+    def rows(self, done, *parts):
+        return [line for line in done.stdout.splitlines() if all(part in line for part in parts)]
+
+    def test_a1_retired_dir_alone_is_a_warning_naming_step_5(self):
+        """**m**: severity back to error → rc 1 and no 'warning:' row, red."""
+        os.makedirs(os.path.join(self.repo, "scripts", "control"))
+        done = self.actl("doctor")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        hits = self.rows(done, RETIRED_DIR + "/", "§7 step 5")
+        self.assertEqual(len(hits), 1, done.stdout)
+        self.assertTrue(hits[0].startswith("warning: "), hits[0])
+
+    def test_a2_missing_role_models_is_an_error_naming_migrate(self):
+        """**m**: drop the role-models row → rc 0, red."""
+        os.remove(self.models)
+        done = self.actl("doctor")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        hits = self.rows(done, "board/role-models.json", "actl migrate")
+        self.assertEqual(len(hits), 1, done.stdout)
+        self.assertTrue(hits[0].startswith("error: "), hits[0])
+
+    def test_a2_invalid_json_role_models_is_an_error_naming_migrate(self):
+        self.write("board/role-models.json", "{")
+        done = self.actl("doctor")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        hits = self.rows(done, "board/role-models.json", "actl migrate")
+        self.assertEqual(len(hits), 1, done.stdout)
+        self.assertTrue(hits[0].startswith("error: "), hits[0])
+
+    def test_a3_migrate_seeds_a_copy_once(self):
+        """**m**: migrate skips the seed → file absent, red; **m**: seed overwrites → the
+        different-file case below goes red."""
+        os.remove(self.models)
+        done = self.actl("migrate")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(digest(self.models), digest(self.a_models))
+        self.assertIsNotNone(digest(self.models))
+        self.assertTrue(self.rows(done, "board/role-models.json"), done.stdout)
+        config = digest(self.config)
+        again = self.actl("migrate")
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertEqual(digest(self.models), digest(self.a_models))
+        self.assertEqual(digest(self.config), config)
+        self.assertIn("0 changes", again.stdout)
+        self.assertNotIn("role-models", again.stdout)
+        doctor = self.actl("doctor")
+        self.assertEqual(doctor.returncode, 0, doctor.stdout + doctor.stderr)
+        self.assertNotIn("role-models", doctor.stdout)
+
+    def test_a3_migrate_from_version_1_also_seeds(self):
+        os.remove(self.models)
+        self.edit_conf(config_version=None)
+        done = self.actl("migrate")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.conf()["config_version"], 2)
+        self.assertEqual(digest(self.models), digest(self.a_models))
+        self.assertTrue(self.rows(done, "board/role-models.json"), done.stdout)
+
+    def test_a3_migrate_leaves_an_existing_different_table_alone(self):
+        self.write("board/role-models.json", '{"schema_version": 1, "roles": {}}\n')
+        before = digest(self.models)
+        self.assertNotEqual(before, digest(self.a_models), "precondition: differs from A's")
+        done = self.actl("migrate")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(digest(self.models), before)
+        self.assertNotIn("role-models", done.stdout)
+
+    def test_a4_init_seeds_the_table_and_doctor_has_no_row(self):
+        """**m**: init skips the seed → file absent and doctor has the row, red."""
+        fresh = os.path.join(self.home, "fresh")
+        os.makedirs(fresh)
+        self.git("init", "-q", cwd=fresh)
+        env = {"AC_ROOT": ""}
+        done = self.actl("-C", fresh, "init", cwd=self.home, **env)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        models = os.path.join(fresh, "board", "role-models.json")
+        self.assertEqual(digest(models), digest(self.a_models))
+        self.assertIsNotNone(digest(models))
+        doctor = self.actl("-C", fresh, "doctor", cwd=self.home, **env)
+        self.assertNotIn("role-models", doctor.stdout + doctor.stderr)
+
+
 
 class T125RepairKeys(ConfigSandbox):
     """#125 A1: `repair: {max_rounds: 3, env_rerun: 1}` is a known, typed key with those defaults;

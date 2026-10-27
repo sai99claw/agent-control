@@ -152,7 +152,7 @@ shape). A's `scripts/project_config.py` holds `CURRENT_VERSION = 2`, the schema 
 | known key, wrong type | rc 2 naming key, expected type, got | `actl doctor` |
 | unknown key | one stderr warning per call (never rc) | `actl doctor` lists them with "possibly retired" |
 | `actl migrate` | applies migrations in order, writes the file, prints each change, refuses if the file is not valid JSON; idempotent | the user lands the change through their own docs channel (`actl land docs`) |
-| data shapes (not config) | `actl doctor` rows, each with a fix command, e.g. `reports/inbox/index.jsonl exists → actl inbox migrate`; `scripts/control/ exists → retired, delete after §7 step 5`; `.claude/settings.json hook points at missing file → actl hooks install` | `actl doctor` exits 1 when any row is severity `error` |
+| data shapes (not config) | `actl doctor` rows, each with a fix command, e.g. `reports/inbox/index.jsonl exists → actl inbox migrate`; `scripts/control/ exists → warning: retired, coexists with A until §7 step 5, delete it then` (a warning, not an error, during the §7 window, #184); `board/role-models.json missing or not valid JSON → error, actl migrate` (`actl migrate` / `actl init` copy `$AC_HOME/board/role-models.json` when the project has none, never overwrite, #184); `.claude/settings.json hook points at missing file → actl hooks install` | `actl doctor` exits 1 when any row is severity `error` |
 
 **When A changes an interface**: a change to a config key = bump `CURRENT_VERSION` + a migration function;
 a change to a data file shape (inbox, status.json, ticket field) = a doctor row + a migrate subcommand on the
