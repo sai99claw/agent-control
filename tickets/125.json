@@ -31,7 +31,7 @@
   "attempt": 0,
   "base_sha": "45ec9e15b9487f0927b35e0b324a855a26d2d0ff",
   "state": "Running",
-  "state_version": 53,
+  "state_version": 54,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -338,16 +338,16 @@
       "body": "five older verify cases pin the behaviour #125 replaces by design - verify/batch_fix/test_ticket_109.py B2 test_b2_red_rounds_plus_one_times_kicks_ticket_two_by_allowed_paths, B2 test_b2_the_second_land_does_not_kick_again, B3 test_b3_a_red_file_no_ticket_owns_stops, B3 test_b3_a_red_file_every_ticket_owns_stops (batch_fix.rounds absent => 2 fix rounds; #125 A1 makes it repair.max_rounds = 3) and verify/dispatch/test_ticket_126.py RoundsAndStopsStayTheSame.test_a7_no_attribution_still_stops_before_any_agent (unattributed red => rc 4, no agent; #125 A3 makes it one diagnosis round) - the verifier must update their oracles to the #125 budget/diagnosis contract; the worker may not edit verify/.",
       "evidence": "../agent-control-wt/fix-t125/round2/EVIDENCE-round2.md",
       "owner": "verifier",
-      "disposition": "",
-      "follow_up": ""
+      "disposition": "fixed",
+      "follow_up": "Verifier round 2 (b65f23e) updated the five verify cases to the #125 budget / diagnosis contract."
     },
     {
       "category": "blocking",
       "body": "verify-case red 125 cannot reach rc 0: on base 57e170d two non-verifier cases in the ticket's verify.files modules go red on missing symbols (tests.test_project_config.RepairKeys.test_the_defaults_are_three_and_one AttributeError repair_setting; tests.test_auto_fix.TheRepairBudgetAndTheDiagnosisRound.test_an_environment_suspect_twice_gets_one_diagnosis_then_one_page FileNotFoundError calls.log) - their owner should assert the symbol/file exists first; also the dispatch's AC_ROOT control dir is not a git repo so --ref <base_sha> does not resolve without pointing AC_ROOT at the main repo, and the ticket's base_sha (45ec9e15) differs from the dispatch's (57e170d).",
       "evidence": "../agent-control-wt/verify-t125/round2/EVIDENCE-verifier.md",
       "owner": "main",
-      "disposition": "",
-      "follow_up": ""
+      "disposition": "accepted",
+      "follow_up": "Main: worker round 3 makes the two named unit cases assert their symbol / file exists first (hasattr / exists, like #152), so verify-case red can measure; the AC_ROOT-not-a-git-repo and base_sha-mismatch tooling notes go to a follow-up ticket."
     }
   ],
   "branch": "t125",
