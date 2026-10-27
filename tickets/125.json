@@ -30,8 +30,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "45ec9e15b9487f0927b35e0b324a855a26d2d0ff",
-  "state": "InReview",
-  "state_version": 66,
+  "state": "Done",
+  "state_version": 74,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -54,7 +54,7 @@
       "stage": "check",
       "ok": true,
       "why": "",
-      "at": "2026-10-27T02:51:25+00:00",
+      "at": "2026-10-27T03:53:40+00:00",
       "files": [
         "tests/test_auto_fix.py",
         "tests/test_ticket.py",
@@ -67,7 +67,7 @@
       "base_ref": "45ec9e15b9487f0927b35e0b324a855a26d2d0ff",
       "base_sha": "45ec9e15b9487f0927b35e0b324a855a26d2d0ff",
       "candidate": "../agent-control-wt/t125",
-      "candidate_sha": "d57b5cfca405d290c3a6ad0d6eea85400f09681c",
+      "candidate_sha": "5c3d494690c0f6f0c280210d9a58e4516a4490f8",
       "baseline": {
         "red": [
           "tests.test_auto_fix.T125BatchDiagnosis.test_a3_an_unattributed_batch_red_is_dispatched_as_a_diagnosis",
@@ -126,8 +126,8 @@
           "tests.test_land.AutoFixHook.test_a_red_file_named_only_in_verify_files_kicks_that_ticket: AssertionError: 2 != 3 : 沒設 batch_fix.rounds = repair.max_rounds 預設 3(#125 A1):修三輪,第四次紅才找嫌疑票",
           "tests.test_land.AutoFixHook.test_a_red_file_only_changed_on_the_branch_kicks_that_ticket: AssertionError: 2 != 3 : 沒設 batch_fix.rounds = repair.max_rounds 預設 3(#125 A1):修三輪,第四次紅才找嫌疑票",
           "tests.test_land.AutoFixHook.test_three_reds_kick_the_ticket_the_red_file_hits: AssertionError: 2 != 3 : 沒設 batch_fix.rounds = repair.max_rounds 預設 3(#125 A1):修三輪,第四次紅才找嫌疑票",
-          "tests.test_land.T125LandHandsRepairToTheBudget.test_a1_the_batch_budget_defaults_to_repair_max_rounds_3: AssertionError: 2 != 3 : ['autofix --batch land/20261027-023122 1 2 land_state=', 'autofix --batch land/20261027-023122 1 2 land_state=']",
-          "tests.test_land.T125LandHandsRepairToTheBudget.test_a1_the_batch_budget_follows_repair_max_rounds: AssertionError: 2 != 1 : ['autofix --batch land/20261027-023125 1 2 land_state=', 'autofix --batch land/20261027-023125 1 2 land_state=']",
+          "tests.test_land.T125LandHandsRepairToTheBudget.test_a1_the_batch_budget_defaults_to_repair_max_rounds_3: AssertionError: 2 != 3 : ['autofix --batch land/20261027-033338 1 2 land_state=', 'autofix --batch land/20261027-033338 1 2 land_state=']",
+          "tests.test_land.T125LandHandsRepairToTheBudget.test_a1_the_batch_budget_follows_repair_max_rounds: AssertionError: 2 != 1 : ['autofix --batch land/20261027-033341 1 2 land_state=', 'autofix --batch land/20261027-033341 1 2 land_state=']",
           "tests.test_land.T125LandHandsRepairToTheBudget.test_a3_a_second_unattributed_batch_red_kicks_nobody_and_pages_once: AssertionError: 2 != 1 : one diagnosis round, never a second consecutive one",
           "tests.test_land.T125LandHandsRepairToTheBudget.test_a4_a_single_ticket_full_suite_86_is_env_suspect_before_auto_fix: AssertionError: False is not true : ['閘門紅']",
           "tests.test_gate.T125EnvSuspectHandsOffToAutoFix.test_a4_rc_86_with_auto_fix_on_calls_auto_fix_and_writes_no_page: AssertionError: Lists differ: [] != ['7']",
@@ -327,6 +327,74 @@
       "note": null,
       "effort": null,
       "at": "2026-10-27T02:53:33+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 830,
+      "outcome": "fail",
+      "run_id": "20261027-025336-12180",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-27T03:07:26+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 22,
+      "tokens_out": 9571,
+      "cache_write": 53520,
+      "cache_read": 760463,
+      "wall_seconds": 218,
+      "outcome": "handed-in",
+      "run_id": "20261027-025336-12180-gate",
+      "session_id": "03c97f01-633e-45a5-b94f-e7eeea880bc0",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-27T03:11:06+00:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 30,
+      "tokens_out": 9426,
+      "cache_write": 79063,
+      "cache_read": 1194275,
+      "wall_seconds": 97,
+      "outcome": "pass",
+      "run_id": "20261027-031106-27273",
+      "session_id": "5260a3b6-6423-5527-bed8-9d3211ae718f",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-27T03:55:18+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 846,
+      "outcome": "pass",
+      "run_id": "20261027-035518-9341",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-27T04:09:24+00:00"
     }
   ],
   "objections": [
@@ -380,17 +448,93 @@
   "branch": "t125",
   "gate": {
     "rc": 0,
-    "sha": "d57b5cfca405d290c3a6ad0d6eea85400f09681c",
-    "run_id": "20261027-020910-32162",
-    "at": "2026-10-27T02:51:25+00:00"
+    "sha": "5c3d494690c0f6f0c280210d9a58e4516a4490f8",
+    "run_id": "20261027-031106-27273",
+    "at": "2026-10-27T03:53:41+00:00"
   },
   "owner": "main",
   "interventions": 1,
   "review": {
     "verdict": "pass",
     "by": "reviewer@opus",
-    "sha": "d57b5cfca405d290c3a6ad0d6eea85400f09681c",
-    "note": "reports/t125/20261027-020910-32162/REVIEW.md",
-    "at": "2026-10-27T02:53:33+00:00"
+    "sha": "f524206ba7dc4fb2c061dd86af43357eaf6d5d9c",
+    "note": "reports/t125/20261027-031106-27273/REVIEW.md",
+    "at": "2026-10-27T04:09:24+00:00"
+  },
+  "repair_round": 2,
+  "landed_sha": "f524206ba7dc4fb2c061dd86af43357eaf6d5d9c",
+  "cost_total": {
+    "calendar_seconds": 860504,
+    "wall_seconds": 11164,
+    "runs": 12,
+    "worker_rounds": 2,
+    "objections": 5,
+    "by_role": {
+      "verifier": {
+        "runs": 2,
+        "wall_seconds": 5613,
+        "tokens_in": 258,
+        "tokens_out": 91603,
+        "cache_write": 294767,
+        "cache_read": 17230016,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 2
+        }
+      },
+      "worker": {
+        "runs": 4,
+        "wall_seconds": 3507,
+        "tokens_in": 508,
+        "tokens_out": 257701,
+        "cache_write": 778493,
+        "cache_read": 56737260,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "objection": 2,
+          "apply-failed": 1,
+          "handed-in": 1
+        }
+      },
+      "opener": {
+        "runs": 1,
+        "wall_seconds": 31,
+        "tokens_in": 10,
+        "tokens_out": 2737,
+        "cache_write": 30931,
+        "cache_read": 229258,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "accepted": 1
+        }
+      },
+      "reviewer": {
+        "runs": 3,
+        "wall_seconds": 337,
+        "tokens_in": 88,
+        "tokens_out": 32778,
+        "cache_write": 266668,
+        "cache_read": 3704215,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "fail": 1,
+          "pass": 2
+        }
+      },
+      "land": {
+        "runs": 2,
+        "wall_seconds": 1676,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 2,
+        "outcomes": {
+          "fail": 1,
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-27T04:09:24+00:00"
   }
 }

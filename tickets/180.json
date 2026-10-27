@@ -15,9 +15,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "486703b8dcfafa0837d0a4ff9173e0f4c249da82",
-  "state": "Ready",
-  "state_version": 4,
+  "base_sha": "f524206ba7dc4fb2c061dd86af43357eaf6d5d9c",
+  "state": "InReview",
+  "state_version": 10,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -30,5 +30,32 @@
   "needs_verifier": false,
   "interface_fixed": true,
   "outline": "Files: docs/DISPATCH-TEMPLATE.md §1 ownership paragraph (lines ~92-95), scripts/auto-fix.sh only_tests_section python block (~line 688-692: the two reminder lines, worker line depends on needs_verifier), memory/role/implementer.md line 8 and memory/role/verifier.md line 4 pointers if they restate the default, tests/test_auto_fix.py ThePacketSaysWhichTestsToRun. Ticket JSON needs_verifier missing = true (D-054 Q10).",
-  "test_plan": "All contracts (A1-A5) are the worker's: A1-A4 extend ThePacketSaysWhichTestsToRun in tests/test_auto_fix.py, A5 one case in tests/test_ticket.py (expected strings hard-coded from this ticket). No verifier cases (needs_verifier false)."
+  "test_plan": "All contracts (A1-A5) are the worker's: A1-A4 extend ThePacketSaysWhichTestsToRun in tests/test_auto_fix.py, A5 one case in tests/test_ticket.py (expected strings hard-coded from this ticket). No verifier cases (needs_verifier false).",
+  "branch": "t180",
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 40,
+      "tokens_out": 16361,
+      "cache_write": 71448,
+      "cache_read": 1403045,
+      "wall_seconds": 313,
+      "outcome": "handed-in",
+      "run_id": "20261027-040925-11672",
+      "session_id": "497c5e2d-0c29-4bec-8fe9-c0477e9c3aaf",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-27T04:14:39+00:00"
+    }
+  ],
+  "gate": {
+    "rc": 0,
+    "sha": "dc820c94a13d7d9109564b718176513fb3f9ff15",
+    "run_id": "20261027-041439-1285",
+    "at": "2026-10-27T04:33:07+00:00"
+  },
+  "repair_round": 1
 }

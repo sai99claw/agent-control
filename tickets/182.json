@@ -1,0 +1,38 @@
+{
+  "id": "182",
+  "subject": "The auto-fix-dispatched verifier measures red without git: auto-fix unpacks the base_sha tree into the verifier copy with a sha marker, and the packet's red command uses --ref <that dir>",
+  "created": "2026-10-27T04:34:22+00:00",
+  "objective": "#181 objection 0 (option B, ruled 2026-10-27): auto-fix starts the verifier with AC_ROOT = control dir and cwd / AC_CODE_ROOT = a git-archive copy, and agent_env strips AC_* vars that point at the main repo on purpose, so 'verify-case.py red <n>' in the verifier has no git tree to resolve the base sha. Keep that isolation: before starting the verifier, auto-fix (which has git) writes the base_sha tree into the verifier copy (e.g. <round>/ref/) plus a marker file holding the sha; the verifier packet's red command uses '--ref <that dir>'; verify-case reads the sha from the marker for a directory --ref that is not a git tree, and never treats an empty rev-parse result as a sha (it refuses rc 2 instead). Same family, fix here too: the worker repair packet prints gate.sh's main head under the label 'base_sha' (auto-fix.sh ~2265); it must print the ticket's base_sha under that label, or label the main head as what it is.",
+  "acceptance": [
+    "A1 (tests/test_auto_fix.py, existing harness, '--dry-run' verifier round 1): the verifier copy contains a ref dir with the base_sha tree (a file changed after base_sha has its base content there) and a marker file whose content is the ticket's base_sha; the packet's verify-case red command contains '--ref <that dir>'.",
+    "A2 (verify-case tests, throwaway layout with no git anywhere reachable: AC_ROOT non-git, cwd non-git, AC_CODE_ROOT unset or non-git): 'verify-case.py red <n> --ref <dir with marker>' reaches the measuring step and records the marker sha as base_sha in its output.",
+    "A3 same layout, '--ref <dir without marker>' that is not a git tree: rc 2 with one stderr line naming the missing sha; no record is written with an empty base_sha.",
+    "A4 the worker repair packet (dry-run repair round 2 with a gate status whose repair_context carries a main head different from the ticket base_sha): the line labelled base_sha shows the ticket's base_sha; the main head, if printed, is not labelled base_sha."
+  ],
+  "depends_on": [
+    {
+      "id": "181",
+      "condition": ""
+    }
+  ],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "f524206ba7dc4fb2c061dd86af43357eaf6d5d9c",
+  "state": "Ready",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 3,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "simple",
+  "needs_verifier": false,
+  "interface_fixed": true,
+  "outline": "Read first: ../agent-control-wt/fix-t181/round1/EVIDENCE-round1.md (§3, §7) and tickets/181.json objection 0. Files: scripts/auto-fix.sh (verifier copy setup ~1397-1404, agent_env ~1268 stays as is, vd_packet red command, repair packet ~2265), scripts/verify-case.py resolve_tree (directory branch: marker sha, empty rev-parse -> refuse). Tests next to the existing verifier-packet cases in tests/test_auto_fix.py and verify-case cases.",
+  "test_plan": "All contracts (A1-A4) are the worker's (needs_verifier false): A1/A4 in tests/test_auto_fix.py next to the verifier / repair packet cases, A2/A3 in the verify-case test module #181 used. Expected strings hard-coded from this ticket."
+}
