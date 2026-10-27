@@ -30,8 +30,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "45ec9e15b9487f0927b35e0b324a855a26d2d0ff",
-  "state": "Running",
-  "state_version": 62,
+  "state": "InReview",
+  "state_version": 66,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -54,7 +54,7 @@
       "stage": "check",
       "ok": true,
       "why": "",
-      "at": "2026-10-27T01:54:38+00:00",
+      "at": "2026-10-27T02:51:25+00:00",
       "files": [
         "tests/test_auto_fix.py",
         "tests/test_ticket.py",
@@ -67,7 +67,7 @@
       "base_ref": "45ec9e15b9487f0927b35e0b324a855a26d2d0ff",
       "base_sha": "45ec9e15b9487f0927b35e0b324a855a26d2d0ff",
       "candidate": "../agent-control-wt/t125",
-      "candidate_sha": "c6afa34ec36963599617a124c5392f99fe8451da",
+      "candidate_sha": "d57b5cfca405d290c3a6ad0d6eea85400f09681c",
       "baseline": {
         "red": [
           "tests.test_auto_fix.T125BatchDiagnosis.test_a3_an_unattributed_batch_red_is_dispatched_as_a_diagnosis",
@@ -81,25 +81,17 @@
           "tests.test_auto_fix.T125RepairBudgetAndDiagnosis.test_a4_an_attributable_rerun_goes_to_a_normal_repair_round_that_the_rerun_did_not_spend",
           "tests.test_auto_fix.T125RepairBudgetAndDiagnosis.test_a4_an_env_suspect_is_rerun_once_and_a_green_rerun_needs_no_worker",
           "tests.test_auto_fix.T125RepairBudgetAndDiagnosis.test_a4_env_rerun_0_goes_straight_to_diagnosis",
-          "tests.test_auto_fix.TheRepairBudgetAndTheDiagnosisRound.test_a_second_unattributed_red_pages_once_and_stops",
-          "tests.test_auto_fix.TheRepairBudgetAndTheDiagnosisRound.test_an_attributable_rerun_goes_to_a_normal_repair_round",
-          "tests.test_auto_fix.TheRepairBudgetAndTheDiagnosisRound.test_an_environment_suspect_is_rerun_and_a_green_rerun_needs_no_worker",
           "tests.test_auto_fix.TheRepairBudgetAndTheDiagnosisRound.test_an_environment_suspect_twice_gets_one_diagnosis_then_one_page",
           "tests.test_auto_fix.TheRepairBudgetAndTheDiagnosisRound.test_an_unattributed_red_gets_a_diagnosis_round_then_a_normal_repair",
-          "tests.test_auto_fix.TheRepairBudgetAndTheDiagnosisRound.test_env_rerun_zero_goes_straight_to_diagnosis",
-          "tests.test_auto_fix.TheRepairBudgetAndTheDiagnosisRound.test_red_forever_dispatches_rounds_two_three_four_then_one_page",
-          "tests.test_auto_fix.TheRepairBudgetAndTheDiagnosisRound.test_the_config_key_sets_the_budget",
           "tests.test_land.AutoFixHook.test_a_batch_full_suite_86_reruns_once_then_diagnoses_once",
           "tests.test_land.AutoFixHook.test_a_batch_red_with_no_red_list_twice_stops_after_one_diagnosis",
           "tests.test_land.AutoFixHook.test_a_red_file_named_only_in_verify_files_kicks_that_ticket",
           "tests.test_land.AutoFixHook.test_a_red_file_only_changed_on_the_branch_kicks_that_ticket",
-          "tests.test_land.AutoFixHook.test_a_single_ticket_full_suite_86_is_handed_over_as_env_suspect",
           "tests.test_land.AutoFixHook.test_three_reds_kick_the_ticket_the_red_file_hits",
           "tests.test_land.T125LandHandsRepairToTheBudget.test_a1_the_batch_budget_defaults_to_repair_max_rounds_3",
           "tests.test_land.T125LandHandsRepairToTheBudget.test_a1_the_batch_budget_follows_repair_max_rounds",
           "tests.test_land.T125LandHandsRepairToTheBudget.test_a3_a_second_unattributed_batch_red_kicks_nobody_and_pages_once",
           "tests.test_land.T125LandHandsRepairToTheBudget.test_a4_a_single_ticket_full_suite_86_is_env_suspect_before_auto_fix",
-          "tests.test_gate.GateSh.test_an_environment_suspect_round_is_handed_to_auto_fix",
           "tests.test_gate.T125EnvSuspectHandsOffToAutoFix.test_a4_rc_86_with_auto_fix_on_calls_auto_fix_and_writes_no_page",
           "verify.batch_fix.test_ticket_109.B2KickTheSuspectAndRelandTheRest.test_b2_red_rounds_plus_one_times_kicks_ticket_two_by_allowed_paths",
           "verify.batch_fix.test_ticket_109.B3NoClearSuspectStops.test_b3_a_red_file_every_ticket_owns_stops",
@@ -109,13 +101,8 @@
           "tests.test_ticket.T125RepairBudgetKey.test_a1_create_without_the_key_writes_retry_limit_3",
           "tests.test_ticket.T125RepairBudgetKey.test_a2_no_retry_limit_and_no_key_means_four_rounds",
           "tests.test_ticket.T125RepairBudgetKey.test_a2_no_retry_limit_follows_repair_max_rounds",
-          "tests.test_ticket.TheRepairBudget.test_a_ticket_retry_limit_wins_over_the_config",
           "tests.test_ticket.TheRepairBudget.test_a_ticket_without_retry_limit_reads_max_rounds",
-          "tests.test_ticket.TheRepairBudget.test_auto_fix_has_no_copy_of_the_old_default",
-          "tests.test_ticket.TheRepairBudget.test_create_writes_the_configured_budget",
           "verify.dispatch.test_ticket_126.RoundsAndStopsStayTheSame.test_a7_no_attribution_still_stops_before_any_agent",
-          "tests.test_project_config.RepairKeys.test_the_defaults_are_three_and_one",
-          "tests.test_project_config.RepairKeys.test_the_keys_are_known_and_typed",
           "tests.test_project_config.T125RepairKeys.test_a1_repair_keys_are_known_and_quiet",
           "tests.test_project_config.T125RepairKeys.test_a1_repair_max_rounds_is_typed_int",
           "tests.test_project_config.T125RepairKeys.test_a1_the_schema_defaults_are_3_and_1"
@@ -132,25 +119,17 @@
           "tests.test_auto_fix.T125RepairBudgetAndDiagnosis.test_a4_an_attributable_rerun_goes_to_a_normal_repair_round_that_the_rerun_did_not_spend: AssertionError: 0 not greater than or equal to 2 : auto-fix: #1 最新一輪 20260921-100000-1(gate)state=env_suspect rc=86 紅 0 條,第 1 輪(上限 2)",
           "tests.test_auto_fix.T125RepairBudgetAndDiagnosis.test_a4_an_env_suspect_is_rerun_once_and_a_green_rerun_needs_no_worker: AssertionError: 0 != 1 : []",
           "tests.test_auto_fix.T125RepairBudgetAndDiagnosis.test_a4_env_rerun_0_goes_straight_to_diagnosis: AssertionError: Lists differ: [] != ['worker ran round 2']",
-          "tests.test_auto_fix.TheRepairBudgetAndTheDiagnosisRound.test_a_second_unattributed_red_pages_once_and_stops: AssertionError: Lists differ: [] != ['worker ran round 2']",
-          "tests.test_auto_fix.TheRepairBudgetAndTheDiagnosisRound.test_an_attributable_rerun_goes_to_a_normal_repair_round: AssertionError: 4 != 0 : auto-fix: #1 最新一輪 20260921-100000-1(gate)state=env_suspect rc=86 紅 0 條,第 1 輪(上限 3)",
-          "tests.test_auto_fix.TheRepairBudgetAndTheDiagnosisRound.test_an_environment_suspect_is_rerun_and_a_green_rerun_needs_no_worker: AssertionError: 4 != 0 : auto-fix: #1 最新一輪 20260921-100000-1(gate)state=env_suspect rc=86 紅 0 條,第 1 輪(上限 3)",
           "tests.test_auto_fix.TheRepairBudgetAndTheDiagnosisRound.test_an_environment_suspect_twice_gets_one_diagnosis_then_one_page: AssertionError: False is not true : no calls.log: auto-fix: #1 最新一輪 20260921-100000-1(gate)state=env_suspect rc=86 紅 0 條,第 1 輪(上限 3)",
           "tests.test_auto_fix.TheRepairBudgetAndTheDiagnosisRound.test_an_unattributed_red_gets_a_diagnosis_round_then_a_normal_repair: AssertionError: 4 != 0 : auto-fix: #1 最新一輪 20260921-100000-1(gate)state=done rc=1 紅 0 條,第 1 輪(上限 3)",
-          "tests.test_auto_fix.TheRepairBudgetAndTheDiagnosisRound.test_env_rerun_zero_goes_straight_to_diagnosis: AssertionError: 4 != 0 : auto-fix: #1 最新一輪 20260921-100000-1(gate)state=env_suspect rc=86 紅 0 條,第 1 輪(上限 3)",
-          "tests.test_auto_fix.TheRepairBudgetAndTheDiagnosisRound.test_red_forever_dispatches_rounds_two_three_four_then_one_page: AssertionError: Lists differ: ['worker ran round 2', 'worker ran round 3'] != ['worker ran round 2', 'worker ran round 3', 'worker ran round 4']",
-          "tests.test_auto_fix.TheRepairBudgetAndTheDiagnosisRound.test_the_config_key_sets_the_budget: AssertionError: Lists differ: ['worker ran round 2', 'worker ran round 3'] != ['worker ran round 2']",
           "tests.test_land.AutoFixHook.test_a_batch_full_suite_86_reruns_once_then_diagnoses_once: AssertionError: 2 != 1",
           "tests.test_land.AutoFixHook.test_a_batch_red_with_no_red_list_twice_stops_after_one_diagnosis: AssertionError: 2 != 1",
           "tests.test_land.AutoFixHook.test_a_red_file_named_only_in_verify_files_kicks_that_ticket: AssertionError: 2 != 3 : 沒設 batch_fix.rounds = repair.max_rounds 預設 3(#125 A1):修三輪,第四次紅才找嫌疑票",
           "tests.test_land.AutoFixHook.test_a_red_file_only_changed_on_the_branch_kicks_that_ticket: AssertionError: 2 != 3 : 沒設 batch_fix.rounds = repair.max_rounds 預設 3(#125 A1):修三輪,第四次紅才找嫌疑票",
-          "tests.test_land.AutoFixHook.test_a_single_ticket_full_suite_86_is_handed_over_as_env_suspect: AssertionError: 'env_suspect' not found in '閘門紅'",
           "tests.test_land.AutoFixHook.test_three_reds_kick_the_ticket_the_red_file_hits: AssertionError: 2 != 3 : 沒設 batch_fix.rounds = repair.max_rounds 預設 3(#125 A1):修三輪,第四次紅才找嫌疑票",
-          "tests.test_land.T125LandHandsRepairToTheBudget.test_a1_the_batch_budget_defaults_to_repair_max_rounds_3: AssertionError: 2 != 3 : ['autofix --batch land/20261027-013307 1 2 land_state=', 'autofix --batch land/20261027-013307 1 2 land_state=']",
-          "tests.test_land.T125LandHandsRepairToTheBudget.test_a1_the_batch_budget_follows_repair_max_rounds: AssertionError: 2 != 1 : ['autofix --batch land/20261027-013310 1 2 land_state=', 'autofix --batch land/20261027-013310 1 2 land_state=']",
+          "tests.test_land.T125LandHandsRepairToTheBudget.test_a1_the_batch_budget_defaults_to_repair_max_rounds_3: AssertionError: 2 != 3 : ['autofix --batch land/20261027-023122 1 2 land_state=', 'autofix --batch land/20261027-023122 1 2 land_state=']",
+          "tests.test_land.T125LandHandsRepairToTheBudget.test_a1_the_batch_budget_follows_repair_max_rounds: AssertionError: 2 != 1 : ['autofix --batch land/20261027-023125 1 2 land_state=', 'autofix --batch land/20261027-023125 1 2 land_state=']",
           "tests.test_land.T125LandHandsRepairToTheBudget.test_a3_a_second_unattributed_batch_red_kicks_nobody_and_pages_once: AssertionError: 2 != 1 : one diagnosis round, never a second consecutive one",
           "tests.test_land.T125LandHandsRepairToTheBudget.test_a4_a_single_ticket_full_suite_86_is_env_suspect_before_auto_fix: AssertionError: False is not true : ['閘門紅']",
-          "tests.test_gate.GateSh.test_an_environment_suspect_round_is_handed_to_auto_fix: AssertionError: '環境可疑,不自動派' unexpectedly found in 'gate: run test_env_wave\\ntestiface: run: environment suspect, 1 row(s) → /tmp/tmpqeyew0ss/gate.log.env-suspect.json\\nRan 1 test in 0.004s\\nFAILED (failures=8)\\ngate: 環境可疑 —— safari 連紅 8 條同形訊息,這一段中止了\\ngate: 紅了,看 /tmp/tmpqeyew0ss/gate.log\\nstatus: reports/t7/20261027-013210-6450/status.json rc=86 紅 1 條(疑似 flaky 0 條,自動 flaky 0 條)\\ngate: 環境可疑,不自動派(environment_suspect 1 筆)—— 先修環境; 真的要派就手打 sh scripts/auto-fix.sh 7\\n'",
           "tests.test_gate.T125EnvSuspectHandsOffToAutoFix.test_a4_rc_86_with_auto_fix_on_calls_auto_fix_and_writes_no_page: AssertionError: Lists differ: [] != ['7']",
           "verify.batch_fix.test_ticket_109.B2KickTheSuspectAndRelandTheRest.test_b2_red_rounds_plus_one_times_kicks_ticket_two_by_allowed_paths: AssertionError: 2 != 3 : land: t1-a —— 1 個 commit",
           "verify.batch_fix.test_ticket_109.B3NoClearSuspectStops.test_b3_a_red_file_every_ticket_owns_stops: AssertionError: 2 != 3 : land: t1-a —— 1 個 commit",
@@ -160,13 +139,8 @@
           "tests.test_ticket.T125RepairBudgetKey.test_a1_create_without_the_key_writes_retry_limit_3: AssertionError: 2 != 3",
           "tests.test_ticket.T125RepairBudgetKey.test_a2_no_retry_limit_and_no_key_means_four_rounds: AssertionError: 'Blocked' != 'Running'",
           "tests.test_ticket.T125RepairBudgetKey.test_a2_no_retry_limit_follows_repair_max_rounds: AssertionError: 'Running' != 'Blocked'",
-          "tests.test_ticket.TheRepairBudget.test_a_ticket_retry_limit_wins_over_the_config: AssertionError: Tuples differ: (2, '') != (0, '2')",
           "tests.test_ticket.TheRepairBudget.test_a_ticket_without_retry_limit_reads_max_rounds: AssertionError: '' != '4'",
-          "tests.test_ticket.TheRepairBudget.test_auto_fix_has_no_copy_of_the_old_default: AssertionError: 2 != 0",
-          "tests.test_ticket.TheRepairBudget.test_create_writes_the_configured_budget: AssertionError: 2 != 3",
           "verify.dispatch.test_ticket_126.RoundsAndStopsStayTheSame.test_a7_no_attribution_still_stops_before_any_agent: AssertionError: 4 == 4 : auto-fix: #1 最新一輪 20260921-100000-1(gate)state=done rc=1 紅 0 條,第 1 輪(上限 3)",
-          "tests.test_project_config.RepairKeys.test_the_defaults_are_three_and_one: AssertionError: False is not true : scripts/project_config.py has no repair_setting",
-          "tests.test_project_config.RepairKeys.test_the_keys_are_known_and_typed: AssertionError: 'repair' unexpectedly found in \"warning: board/config.json key 'repair' unknown to this A - possibly retired\\n\"",
           "tests.test_project_config.T125RepairKeys.test_a1_repair_keys_are_known_and_quiet: AssertionError: 'repair' unexpectedly found in 'project_config: warning: unknown top-level key(s) in board/config.json: repair (possibly retired; see actl doctor)\\n'",
           "tests.test_project_config.T125RepairKeys.test_a1_repair_max_rounds_is_typed_int: AssertionError: 0 != 2 : #5    Ready             v1   only this sandbox has this ticket #160",
           "tests.test_project_config.T125RepairKeys.test_a1_the_schema_defaults_are_3_and_1: AssertionError: None != 3 : repair.max_rounds default"
@@ -176,7 +150,7 @@
         "elsewhere": [],
         "skipped": 1,
         "rc": 1,
-        "cases": 524,
+        "cases": 508,
         "log": "../agent-control-wt/t125/gate.log.verify-case.d/logs/baseline.log"
       },
       "candidate_run": {
@@ -187,7 +161,7 @@
         "elsewhere": [],
         "skipped": 0,
         "rc": 0,
-        "cases": 524,
+        "cases": 508,
         "log": "../agent-control-wt/t125/gate.log.verify-case.d/logs/candidate.log"
       }
     }
@@ -336,6 +310,23 @@
       "note": null,
       "effort": null,
       "at": "2026-10-27T01:56:31+00:00"
+    },
+    {
+      "role": "reviewer",
+      "round": 0,
+      "model": "opus",
+      "tokens_in": 30,
+      "tokens_out": 12585,
+      "cache_write": 100784,
+      "cache_read": 1344768,
+      "wall_seconds": 128,
+      "outcome": "pass",
+      "run_id": "20261027-020910-32162",
+      "session_id": "5260a3b6-6423-5527-bed8-9d3211ae718f",
+      "by": "review.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-27T02:53:33+00:00"
     }
   ],
   "objections": [
@@ -389,10 +380,17 @@
   "branch": "t125",
   "gate": {
     "rc": 0,
-    "sha": "c6afa34ec36963599617a124c5392f99fe8451da",
-    "run_id": "20261027-011008-243",
-    "at": "2026-10-27T01:54:38+00:00"
+    "sha": "d57b5cfca405d290c3a6ad0d6eea85400f09681c",
+    "run_id": "20261027-020910-32162",
+    "at": "2026-10-27T02:51:25+00:00"
   },
   "owner": "main",
-  "interventions": 1
+  "interventions": 1,
+  "review": {
+    "verdict": "pass",
+    "by": "reviewer@opus",
+    "sha": "d57b5cfca405d290c3a6ad0d6eea85400f09681c",
+    "note": "reports/t125/20261027-020910-32162/REVIEW.md",
+    "at": "2026-10-27T02:53:33+00:00"
+  }
 }
