@@ -12,7 +12,7 @@
   "depends_on": [
     {
       "id": "181",
-      "condition": ""
+      "condition": "landed"
     }
   ],
   "role": "worker",
@@ -21,7 +21,7 @@
   "attempt": 0,
   "base_sha": "f524206ba7dc4fb2c061dd86af43357eaf6d5d9c",
   "state": "Ready",
-  "state_version": 2,
+  "state_version": 3,
   "lease": null,
   "retry_limit": 3,
   "verify": {
