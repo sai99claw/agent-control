@@ -1,0 +1,33 @@
+{
+  "id": "184",
+  "subject": "actl doctor: scripts/control/ is a warning during the §7 coexistence window; a missing board/role-models.json is an error with a fix, and init / migrate write A's default table",
+  "created": "2026-10-27T10:28:56+00:00",
+  "objective": "T migration report 2026-10-27: (1) design §7 says scripts/control/ coexists with A through steps 2-5, but doctor_rows (scripts/project_config.py ~285) lists it as severity error, so 'actl doctor' exits 1 and prints it at every session start during the rehearsal. (2) auto-fix.sh (~934), review.sh (~137), new-session.sh and consolidate-memory.sh read $ROOT/board/role-models.json, and role-models.py exits rc 2 when it is missing (measured on A), but neither doctor nor migrate nor init checks or creates it - the first dispatch in a fresh project fails. After this ticket: scripts/control/ is a warning naming §7 step 5; a missing or unparsable board/role-models.json is an error row whose fix is 'actl migrate'; 'actl migrate' and 'actl init' copy $AC_HOME/board/role-models.json into the project when it is absent (never overwrite an existing one).",
+  "acceptance": [
+    "A1 throwaway project with scripts/control/ present and nothing else wrong: 'actl doctor' prints a warning row naming scripts/control/ and '§7 step 5', exit 0.",
+    "A2 throwaway project without board/role-models.json: 'actl doctor' prints an error row naming board/role-models.json and 'actl migrate', exit 1; same with a file that is not valid JSON.",
+    "A3 'actl migrate' in that project creates board/role-models.json byte-identical to $AC_HOME/board/role-models.json and prints a line naming it; a second migrate is a no-op; an existing (different) role-models.json is left byte-identical.",
+    "A4 'actl init' on an empty project creates board/role-models.json too; afterwards 'actl doctor' has no role-models row."
+  ],
+  "depends_on": [],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "37a6ed5f0172e94a409e94884081a370399152a7",
+  "state": "Ready",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 3,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "simple",
+  "needs_verifier": false,
+  "interface_fixed": true,
+  "outline": "Files: scripts/project_config.py (doctor_rows RETIRED_DIR row severity; new role-models row; migrate / init copy step printing the change), docs/design/project-runnable-entries.md §2 doctor row text, tests/test_project_config.py. Do not add a fallback to A's table inside auto-fix / review (one source: the project's file).",
+  "test_plan": "All contracts (A1-A4) are the worker's (needs_verifier false): tests/test_project_config.py next to the existing doctor / migrate / init cases; expected strings hard-coded from this ticket."
+}
