@@ -102,6 +102,14 @@ class CaseTimeout(CaseUnmeasured):
     """一趟案例跑超過時限 —— 那一趟**沒量到**,不是紅也不是綠(#156)。"""
 
 
+class MissingSha(Exception):
+    """`--ref` 是一個目錄,卻說不出它是哪一個 sha(#182)。"""
+
+
+# auto-fix 展給驗證者的 base 樹(`<副本>/ref`)裡記著那一版 sha 的檔(#182)。
+SHA_MARKER = ".ac-base-sha"
+
+
 def now():
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
@@ -376,12 +384,29 @@ def resolve_tree(repo, tree, spec, where, label):
 
     `repo` 是解 ref 的那一顆(`code_repo()`),`tree` 是沒給 spec 時的那棵樹(`code_tree()`)。
     回傳 `(樹的路徑, sha, 解不開的理由)`;解不開時前兩格不保證有值。
+
+    `--ref` 給的目錄有 `SHA_MARKER`(auto-fix 展給驗證者的 `<副本>/ref`,#182)就照它的 sha:
+    驗證者的副本不是 git 樹,在那裡問 `rev-parse HEAD` 答不出來 —— 而且一個 git 樹底下的
+    非 git 目錄會答成外層 repo 的 HEAD。沒有標記、`rev-parse` 也是空的就丟 `MissingSha`:
+    空字串不是 sha,記進證據就是一份「對誰都說得通」的基準。candidate 沒有 sha 照舊可以。
     """
     if not spec:
         return tree, git(["rev-parse", "HEAD"], tree).stdout.strip(), ""
     if os.path.isdir(spec):
         path = os.path.abspath(spec)
-        return path, git(["rev-parse", "HEAD"], path).stdout.strip(), ""
+        marker = os.path.join(path, SHA_MARKER)
+        if label == "ref" and os.path.isfile(marker):
+            with open(marker, encoding="utf-8") as handle:
+                sha = handle.read().strip()
+            if not sha:
+                raise MissingSha("ref「%s」的 %s 是空的 —— 不知道這棵樹是哪一個 base sha"
+                                 % (spec, SHA_MARKER))
+            return path, sha, ""
+        sha = git(["rev-parse", "HEAD"], path).stdout.strip()
+        if label == "ref" and not sha:
+            raise MissingSha("ref「%s」不是 git 樹、也沒有 %s 標記檔 —— 不知道這棵樹是哪一個 "
+                             "base sha" % (spec, SHA_MARKER))
+        return path, sha, ""
     seen = git(["rev-parse", "--verify", "--quiet", "%s^{commit}" % spec], repo)
     if seen.returncode != 0 or not seen.stdout.strip():
         return None, "", "%s「%s」既不是一個目錄,也不是這個 repo 裡的 ref" % (label, spec)
@@ -462,8 +487,13 @@ def clean_base(args, rels, ref, where, verb):
         repo, tree, args.candidate, os.path.join(where, "candidate"), "candidate")
     if why:
         return None, "", None, "", unmeasured(args.ticket, why, ref, verb)
-    base_dir, base_sha, why = resolve_tree(
-        repo, tree, ref, os.path.join(where, "base"), "ref")
+    try:
+        base_dir, base_sha, why = resolve_tree(
+            repo, tree, ref, os.path.join(where, "base"), "ref")
+    except MissingSha as exc:
+        # 一行就說完:沒有 sha 就沒有基準,不寫票、不寫證據檔(#182 A3)。
+        sys.stderr.write("verify-case: #%s 量不到基準 —— %s\n" % (args.ticket, exc))
+        return None, "", None, "", 2
     if why:
         return None, "", None, "", unmeasured(args.ticket, why, ref, verb)
     # ref 的歷史裡已經有 candidate = 那棵樹上**本來就有這份實作**,再怎麼跑也紅不

@@ -30,8 +30,10 @@
 1. **案例** —— 票面**每一條驗收的行為斷言**,加進**最貼近的既有測試模組**(`tests/` 或既有
    `verify/` 模組;D-056):**不為單張票新開以票號命名的案例檔**。期望值來源要獨立於被測程式:
    設計文件、手算、既有 golden。**「跑一次記下來當期望」不算。**
-2. 寫完案例 —— 跑 `python3 scripts/verify-case.py red @TICKET@ --ref @BASE@ --candidate @COPY@/work`
-   (它自己做乾淨基底副本、覆上你的案例、只跑一次;算數的紅只有「案例檔自己的
+2. 寫完案例 —— 跑 `python3 scripts/verify-case.py red @TICKET@ --ref @COPY@/ref --candidate @COPY@/work`
+   (`@COPY@/ref` 是 auto-fix 先展好的票 base_sha `@BASE@` 那一棵樹,`.ac-base-sha` 記著那個 sha:
+   你的副本不是 git 樹,`--ref` 給 sha 在這裡解不開,#182;
+   它覆上你的案例、只跑一次;算數的紅只有「案例檔自己的
    `AssertionError`」,import / 缺符號 / 別處炸的紅會列出來、不算)。rc=0 才算交件。
    **它不寫票**(#36):證據落在 `--out-dir` 的 `baseline-red.json`,路徑印在 stdout ——
    把那份 JSON 原封抄進 `result` 區塊的 `baseline` 那一格,收件的 `apply.sh --evidence-verifier`(auto-fix 跑)在鎖裡併進票的 `verify.baseline`。

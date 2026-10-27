@@ -795,7 +795,11 @@ class TheTestDefectVerifierRedRefIsTheTicketBaseSha(AutoFixBase):
         self.assertEqual(len(packets), 1)
         with open(packets[0], encoding="utf-8") as handle:
             packet = handle.read()
-        self.assertIn("verify-case.py red 1 --ref %s --candidate" % base, packet)
+        # #182:`--ref` 是副本裡 auto-fix 展好的票 base_sha 樹(驗證者沒有 git 樹);
+        # 那棵樹是哪一個 sha 由 `**base**` 那一行與 `ref/.ac-base-sha` 說。
+        vfix = os.path.join(self.home, "repo-wt", "verify-t1", "round2")
+        self.assertIn("verify-case.py red 1 --ref %s --candidate"
+                      % os.path.join(vfix, "ref"), packet)
         self.assertIn("**base**:`%s`" % base, packet)
         self.assertNotIn(main_at_gate, packet)
 
@@ -1135,6 +1139,37 @@ class TheDispatchPacket(AutoFixBase):
                                         "dispatch-round2.md"))
         self.assertIn("`%s`(票分支 `t1-gaps`" % os.path.join(self.home, "repo-wt", "t1-gaps"),
                       packet)
+
+
+class TheRepairPacketLabelsTheTicketBaseSha(AutoFixBase):
+    """#182 A4:修復輪派工文標 `base_sha` 的那一行是**票的** base_sha。狀態檔的
+    `repair_context.base_sha` 是閘門開跑時主線的頭(`gate.sh` 的 `BASE_SHA`);印成 base_sha,
+    worker 照 `git log <base_sha>..HEAD` 讀到的就混進主線的 commit。
+
+    **變異**:那一行改回 `ctx.get("base_sha")` → 這一條紅。
+    """
+
+    def test_the_base_sha_line_is_the_ticket_base_sha_not_the_main_head(self):
+        self.set_worker(WORKER_NEVER)
+        self.ticket_ready()
+        self.write("src/main-moves-on.txt", "主線又多一個 commit\n")
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "主線往前")
+        self.status(1, RED_LOG)
+        base = self.load_ticket("1")["base_sha"]
+        main_at_gate = self.git("rev-parse", "main").strip()
+        self.assertNotEqual(base, main_at_gate, "前提:閘門開跑時主線的頭不是票的 base_sha")
+        done = self.auto_fix("--dry-run")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        packet = self.read(os.path.join("reports", "t1", "20260921-100000-1",
+                                        "dispatch-round2.md"))
+        section = packet.split("## 交接包 repair_context", 1)[1].split("\n## ", 1)[0]
+        labelled = [line for line in section.splitlines() if line.startswith("- base_sha:")]
+        self.assertEqual(len(labelled), 1, section)
+        self.assertIn("`%s`" % base, labelled[0])
+        for line in packet.splitlines():
+            if main_at_gate in line:
+                self.assertNotIn("base_sha", line, "主線的頭不准標成 base_sha:" + line)
 
 
 class TheFirstRoundPacket(AutoFixBase):
@@ -2572,7 +2607,7 @@ class TheFirstRoundVerifierRunsAlongside(AutoFixBase):
         self.assertIn(os.path.join(self.vfix(), "work"), packet)
         self.assertIn(os.path.join(self.repo, "tickets", "1.json"), packet)
         self.assertIn("auto-fix.sh(交檔即回報", packet)
-        self.assertIn("verify-case.py red 1 --ref %s" % base, packet)
+        self.assertIn("verify-case.py red 1 --ref %s" % os.path.join(self.vfix(), "ref"), packet)
         # 規則包在範本之前,它自己的說明文字裡就寫著 `<票號>` 當通稱 —— 量的是範本那一段。
         self.assertIn("# 派工:驗證者 —— #1 第 1 輪", packet)
         filled = packet.split("# 派工:驗證者", 1)[1]
@@ -5329,6 +5364,64 @@ printf '# round %s\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
                          self.BASE_X + self.ADD_W + self.ADD_V)
         # apply.sh 的第一行印出它收到的 --verifier-base(介面照分支上的實作)。
         self.assertIn("verifier-base %s" % base, out)
+
+
+class TheVerifierGetsARefTreeToMeasureRed(AutoFixBase):
+    """#182 A1:驗證者手上沒有 git 樹(cwd / AC_CODE_ROOT 是封存副本、AC_ROOT 是拋棄式控制根),
+    所以 auto-fix 在副本裡先展好 `ref/` = 票 base_sha 的樹 + 記著那個 sha 的 `.ac-base-sha`,
+    派工文的 `red --ref` 指那個目錄。替身驗證者起跑時把 `ref/` 看到的東西寫下來(副本收完會被清掉)。
+    worker 在 base_sha 之後改了 `w.txt`:副本(分支頭)是改過的,`ref/` 要是 base 的那一份。
+
+    **變異**:`archive_copy` 拿掉 `ref_tree` 那一行 → 「ref/ 不在」紅。
+    """
+
+    STUB = r"""#!/bin/sh
+set -e
+W=$PWD
+cd "$AC_WORK"
+if [ "$AC_ROLE" = verifier ]; then
+    if [ -f ref/w.txt ]; then cat ref/w.txt > "@SAW@.ref"; else echo absent > "@SAW@.ref"; fi
+    if [ -f ref/.ac-base-sha ]; then cat ref/.ac-base-sha > "@SAW@.marker"; else echo absent > "@SAW@.marker"; fi
+    cat base/w.txt > "@SAW@.base"
+    exit 0
+fi
+echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+echo worker > "$W"/w.txt
+(cd "$W" && git add -A && git commit -q -m "t182-fixture worker commit")
+printf '# round %s\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
+"""
+
+    def saw(self):
+        return os.path.join(self.home, "t182-verifier-saw")
+
+    def seen(self, suffix):
+        path = self.saw() + suffix
+        self.assertTrue(os.path.exists(path), "替身驗證者沒有跑(%s)" % path)
+        with open(path, encoding="utf-8") as handle:
+            return handle.read().strip()
+
+    def test_a1_the_copy_has_the_base_sha_tree_and_a_sha_marker_and_the_packet_points_at_it(self):
+        self.set_worker(self.STUB.replace("@SAW@", self.saw()))
+        self.write("w.txt", "base\n")
+        self.make_ticket("1", needs_verifier=True)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "open #1")
+        self.git("push", "-q", "origin", "main")
+        vfix = os.path.join(self.home, "repo-wt", "verify-t1", "round1")
+
+        shown = self.auto_fix("--dry-run", "--round", "1")
+        self.assertEqual(shown.returncode, 0, shown.stdout + shown.stderr)
+        self.auto_fix("--no-review")
+        base = self.load_ticket("1")["base_sha"]
+        self.assertEqual(self.seen(".base"), "worker", "前提:副本是分支頭,w.txt 在 base_sha 之後改過")
+        self.assertEqual(self.seen(".ref"), "base", "ref/ 要是票 base_sha 的內容")
+        self.assertEqual(self.seen(".marker"), base)
+        packets = self.result_files("dispatch-verifier-round1.md")
+        self.assertTrue(packets)
+        for path in packets:   # --dry-run 印的那一份與真的派出去的那一份
+            with open(path, encoding="utf-8") as handle:
+                self.assertIn("verify-case.py red 1 --ref %s " % os.path.join(vfix, "ref"),
+                              handle.read(), path)
 
 
 

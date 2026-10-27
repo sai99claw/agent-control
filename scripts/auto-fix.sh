@@ -436,9 +436,10 @@ shed_copies() {   # $1 = 副本根(fix-t<n>/round<r> 或 verify-t<n>/round<r>)  
     # 就永遠留著 —— 而「沒人收」與「收過了」在磁碟上長得一樣,直到滿的那一刻
     # (2026-09-16 某個下游專案的副本 14 GB 塞滿磁碟,整台機器 disk I/O error)。
     [ -n "${1:-}" ] || return 0
-    [ -d "$1/work" ] || [ -d "$1/base" ] || [ -d "$1/control" ] || return 0
+    [ -d "$1/work" ] || [ -d "$1/base" ] || [ -d "$1/control" ] || [ -d "$1/ref" ] || return 0
     # `control/` 是起 agent 時開的拋棄式控制根(`run_agent`):agent 的副作用在那裡,一起收。
-    rm -rf "$1/work" "$1/base" "$1/control"
+    # `ref/` 是驗證者量紅的票 base_sha 樹(#182)。
+    rm -rf "$1/work" "$1/base" "$1/control" "$1/ref"
     echo "auto-fix: 收掉副本 $1/{work,base}(patch 與 EVIDENCE 留著)"
     # 副本沒了,在它裡面跑的 session 就接不回了(#89):sessions.json 那一列一起轉 closed。
     # worker 在票分支的 worktree 裡跑(#144):worktree 留到落地,但這一輪收件了,下一輪是新的
@@ -881,7 +882,7 @@ PY
             echo ""
             echo "## 副本來源:票分支 \`$5\` 的頭(#157)"
             echo "你的副本 \`$3/base\` 與 \`$3/work\` 是票分支 \`$5\` 的頭 \`$6\`(worker 第 $2 輪交件後 \`git archive\`),不是票的 base_sha:worker 的 commit 已經在兩份裡,上面「兩份都是 base 的內容」那一句這一輪不適用。\`diff -Nru base work\` 出的 patch-verify 只帶你的案例,收件時套在這個分支頭上。"
-            echo "\`verify-case.py red --ref\` 照舊是票的 base_sha \`$4\`:證的是乾淨基底紅,不是分支頭紅。"
+            echo "\`verify-case.py red --ref $3/ref\` 照舊是票的 base_sha \`$4\` 那一棵樹:證的是乾淨基底紅,不是分支頭紅。"
         fi
         if [ -n "${7:-}" ]; then
             echo ""
@@ -1548,6 +1549,32 @@ archive_copy() {   # $1 = ref  $2 = 副本根;取不出回 1
     mkdir -p "$2/base"
     git -C "$ROOT" archive "$1" 2>/dev/null | tar -x -C "$2/base" || return 1
     cp -R "$2/base" "$2/work"
+    ref_tree "$V_BASE" "$2"
+}
+
+# 驗證者量紅的乾淨基底(#182):`<副本>/ref` = 票 base_sha 的樹 + 一個記著那個 sha 的
+# `.ac-base-sha`(`verify-case.py` 的 SHA_MARKER)。驗證者的 cwd / AC_CODE_ROOT 是封存副本、
+# AC_ROOT 是拋棄式控制根,`agent_env` 故意把指回主 repo 的 AC_* 拿掉 —— 它手上沒有任何
+# git 樹,`red --ref <sha>` 解不開。git 由這裡(有 git 的這一手)先做完,派工文的
+# `red --ref` 指這個目錄。不放在 base/ 裡:base/ 是 patch-verify 的對照組,案例疊上去就髒了。
+ref_tree() {   # $1 = 票的 base_sha  $2 = 副本根;取不出回 1
+    rt_sha=$(git -C "$ROOT" rev-parse -q --verify "$1^{commit}" 2>/dev/null) || return 1
+    [ -n "$rt_sha" ] || return 1
+    rm -rf "$2/ref"
+    mkdir -p "$2/ref"
+    git -C "$ROOT" archive "$rt_sha" 2>/dev/null | tar -x -C "$2/ref" || return 1
+    printf '%s\n' "$rt_sha" > "$2/ref/.ac-base-sha"
+}
+
+ticket_base_sha() {   # 印出票的 base_sha(沒有就空行)
+    python3 - "$TF" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        print(json.load(handle).get("base_sha") or "")
+except (OSError, ValueError):
+    print("")
+PY
 }
 
 # **副本從哪一版展**(#157,同 #149 那一支):平行(interface_fixed)= 票的 base_sha;等交件才起的 =
@@ -1652,16 +1679,19 @@ dispatch_verifier() {   # uses r/FIX/DISPATCH/line/GAP_ROUND; sets PATCH_OUT/EVI
             vfix_why="取不出 $V_SRC"
         else
             cp -R "$VFIX/base" "$VFIX/work"
+            vd_ref=$(ticket_base_sha)
             if [ -n "$VKEPT_PATCH" ] && ! ( cd "$VFIX/work" \
                     && patch -p1 -E -f -F 0 --no-backup-if-mismatch -s -i "$VKEPT_PATCH" </dev/null ) >&2; then
                 vfix_why="平行驗證者的 patch-verify($VKEPT_PATCH)套不上分支 $V_SRC"
                 vfix_next="對照它與分支上 worker 的 commit 哪幾個檔撞了;要嘛人下場併,要嘛重派"
+            elif ! ref_tree "$vd_ref" "$VFIX"; then
+                vfix_why="取不出票的 base_sha ${vd_ref:-(空)} 給驗證者量紅(ref/)"
             fi
         fi
     fi
     if [ -n "$vfix_why" ]; then
         echo "auto-fix: 驗證者的副本建不出來 —— $vfix_why;驗證者不起" >&2
-        rm -rf "$VFIX/base" "$VFIX/work"
+        rm -rf "$VFIX/base" "$VFIX/work" "$VFIX/ref"
         [ -n "${FIX_KEPT:-}" ] || shed_copies "$FIX" "$WT"
         block "#$ID 第 $r 輪驗證者的副本建不出來($vfix_why)"
         post "驗證者的副本建不出來" "$vfix_why,驗證者沒起。$vfix_next" "$FIX"
@@ -1721,15 +1751,7 @@ dispatch_verifier() {   # uses r/FIX/DISPATCH/line/GAP_ROUND; sets PATCH_OUT/EVI
 # 主線的頭(`gate.sh` 的 `BASE_SHA`),而派工文的 `red --ref` 要與 `verify-case.py red` 的預設
 # ref(票的 base_sha)是同一個 sha。#125 第 2 輪派工文印 57e170d、票是 45ec9e15,就是這一格。
 vd_packet() {
-    vd_base=$(python3 - "$TF" <<'PY'
-import json, sys
-try:
-    with open(sys.argv[1], encoding="utf-8") as handle:
-        print(json.load(handle).get("base_sha") or "")
-except (OSError, ValueError):
-    print("")
-PY
-)
+    vd_base=$(ticket_base_sha)
     verifier_packet "$VDISPATCH" "$r" "$VFIX" "${vd_base:-$S_BASE}" || return 1
     python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "${line:-}" "${W_HANDED:+$V_SRC}" "$VKEPT_PATCH" \
             "${GAP_ROUND:+gap}" "${V_HAS_BASELINE:-}" >> "$VDISPATCH" <<'PY'
@@ -2277,7 +2299,16 @@ print(json.dumps(snap, ensure_ascii=False, indent=2))
 print("```")
 print("")
 print("## 交接包 repair_context")
-print("- base_sha:`%s`" % (ctx.get("base_sha") or "?"))
+# `base_sha` 這一格是**票的** base_sha(#182):`repair_context.base_sha` 是閘門開跑時主線的頭
+# (`gate.sh` 的 `BASE_SHA`),拿它當 `git log <base_sha>..HEAD` 的起點會把主線的 commit 算進來。
+try:
+    with open(tf, encoding="utf-8") as handle:
+        ticket_base = json.load(handle).get("base_sha") or ""
+except (OSError, ValueError):
+    ticket_base = ""
+print("- base_sha:`%s`(票的 base_sha)" % (ticket_base or snap.get("base_sha") or "?"))
+if ctx.get("base_sha") and ctx.get("base_sha") != ticket_base:
+    print("- 閘門開跑時主線的頭(main head at gate time):`%s`" % ctx["base_sha"])
 print("- 上一輪的改動:票分支 `%s` 上的 commit(`git log <base_sha>..HEAD`,你的 worktree 就在它的頭)"
       % branch)
 print("- 上一輪的 EVIDENCE:`%s`" % (ctx.get("prev_evidence") or "(沒有 —— 第一輪)"))
