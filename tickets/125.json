@@ -30,8 +30,8 @@
   "tool": "claude-code",
   "attempt": 0,
   "base_sha": "45ec9e15b9487f0927b35e0b324a855a26d2d0ff",
-  "state": "Blocked",
-  "state_version": 61,
+  "state": "Running",
+  "state_version": 62,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -382,8 +382,8 @@
       "body": "worker classes TheRepairBudgetAndTheDiagnosisRound / RepairKeys / TheRepairBudget (+ test_gate handed_to_auto_fix, test_land single-86 and batch-twice cases) pin the same contracts with the same inputs as the verifier's T125* classes; keep one copy per contract (garbage list item 3), no EVIDENCE names an independent contract",
       "evidence": "reports/t125/20261027-011008-243/REVIEW.md",
       "owner": "reviewer@opus",
-      "disposition": "",
-      "follow_up": ""
+      "disposition": "accepted",
+      "follow_up": "Main: test_plan T1-T6 named no case writer, so under #178 both sides wrote every contract. The verifier's T125* classes stay (they own the acceptance cases); worker round 4 deletes its duplicate classes/cases (TheRepairBudgetAndTheDiagnosisRound, RepairKeys, TheRepairBudget, test_gate handed_to_auto_fix, test_land single-86 and batch-twice) and keeps only a case that pins a contract no T125* case covers, named in EVIDENCE. The #178 hole (unassigned test_plan => both write) goes to a follow-up ticket."
     }
   ],
   "branch": "t125",
