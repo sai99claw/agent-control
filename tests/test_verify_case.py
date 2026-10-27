@@ -1335,6 +1335,75 @@ class TheRefsResolveInTheCodeRepo(CaseSandbox):
         self.assertEqual(baseline["base_sha"], self.load_ticket("1")["base_sha"])
 
 
+class ADirectoryRefSaysItsShaWithAMarker(CaseSandbox):
+    """#182 A2/A3:驗證者派工的真實形狀,而且**哪裡都摸不到 git**:AC_ROOT 是拋棄式控制根、
+    cwd 與 AC_CODE_ROOT 是封存副本 `work/`(或 AC_CODE_ROOT 沒設)。`--ref` 是 auto-fix 展好的
+    `ref/`(票 base_sha 的樹);那棵樹是哪一個 sha 只有 `.ac-base-sha` 說得出來。
+
+    **變異**:`resolve_tree` 的目錄那一支不讀標記 → A2 紅(rc 2);拿掉「rev-parse 是空的就拒絕」
+    → A3 紅(rc 0,證據檔的 base_sha 是空字串)。
+    """
+
+    MARKER = ".ac-base-sha"
+
+    def layout(self, marker=True):
+        self.a_ticket()
+        copy = os.path.join(self.home, "copy")
+        control = os.path.join(copy, "control")
+        for rel in (os.path.join("tickets", "1.json"), os.path.join("board", "config.json")):
+            source = os.path.join(self.repo, rel)
+            if os.path.exists(source):
+                os.makedirs(os.path.dirname(os.path.join(control, rel)), exist_ok=True)
+                shutil.copy(source, os.path.join(control, rel))
+        base = self.load_ticket("1")["base_sha"]
+        for name in ("ref", "work"):
+            os.makedirs(os.path.join(copy, name))
+            tar = subprocess.run(["git", "-C", self.repo, "archive", base],
+                                 capture_output=True, check=True)
+            subprocess.run(["tar", "-x", "-C", os.path.join(copy, name)], input=tar.stdout,
+                           check=True)
+        work = os.path.join(copy, "work")
+        self.write(os.path.join("verify", "nav", "__init__.py"), "", where=work)
+        self.write(os.path.join("verify", "nav", "test_ticket_1.py"), CASE, where=work)
+        if marker:
+            self.write(self.MARKER, base + "\n", where=os.path.join(copy, "ref"))
+        for where in (control, os.path.join(copy, "ref"), work):
+            probe = subprocess.run(["git", "-C", where, "rev-parse", "--git-dir"],
+                                   capture_output=True, text=True)
+            self.assertNotEqual(probe.returncode, 0, "前提:%s 不在任何 git 樹裡" % where)
+        return copy, control, work, base
+
+    def red(self, control, work, *args, **extra):
+        env = self.env(AC_ROOT=control, **extra)
+        return self.run_py("scripts/verify-case.py", "red", "1", *args, cwd=work, env=env)
+
+    def test_a2_a_ref_dir_with_a_marker_reaches_the_measuring_step_with_the_marker_sha(self):
+        copy, control, work, base = self.layout()
+        ref = os.path.join(copy, "ref")
+        for label, args, extra in (
+                ("AC_CODE_ROOT = 副本", ("--ref", ref), {"AC_CODE_ROOT": work}),
+                ("AC_CODE_ROOT 沒設", ("--ref", ref, "--candidate", work), {})):
+            with self.subTest(label):
+                done = self.red(control, work, *args, **extra)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assertIn("案例 1 個", done.stdout, done.stdout + done.stderr)
+                self.assertEqual(self.red_record(done)["base_sha"], base)
+
+    def test_a3_a_ref_dir_without_a_marker_that_is_not_git_is_refused(self):
+        copy, control, work, _ = self.layout(marker=False)
+        out = os.path.join(self.home, "red-out")
+        done = self.red(control, work, "--ref", os.path.join(copy, "ref"), "--out-dir", out,
+                        AC_CODE_ROOT=work)
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        lines = [line for line in done.stderr.splitlines() if line.strip()]
+        self.assertEqual(len(lines), 1, done.stderr)
+        self.assertIn("sha", lines[0])
+        self.assertIn(self.MARKER, lines[0])
+        self.assertFalse(os.path.exists(os.path.join(out, "baseline-red.json")),
+                         "沒有 sha 不准留一份證據檔")
+        self.assertNotIn("案例 1 個", done.stdout)
+
+
 class TheLogTextPathIsGone(unittest.TestCase):
     """#163 A5:`-m unittest` 的子行程與讀 log 字的解析器不在了 —— 分類只有 result.json 一個來源。"""
 
