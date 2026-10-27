@@ -111,6 +111,32 @@ def git(args, cwd):
                           text=True, timeout=120)
 
 
+def code_tree():
+    """不帶 `--candidate` 時那棵候選樹:`AC_CODE_ROOT`,否則 cwd 的 `git --show-toplevel`
+    (D-071 §1,同 `verify.py`);兩者都沒有才退回專案根。"""
+    override = os.environ.get("AC_CODE_ROOT")
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+    top = git(["rev-parse", "--show-toplevel"], os.getcwd())
+    if top.returncode == 0 and top.stdout.strip():
+        return top.stdout.strip()
+    return event.repo_root()
+
+
+def code_repo():
+    """`--ref` / `--candidate` / 票的 base_sha 去哪一顆 repo 解(#181):程式碼那一顆的主 repo,
+    不是 `AC_ROOT`。D-071 起專案根(票、事件)與程式碼 repo 可以不是同一處:驗證者的
+    `AC_ROOT` 是一個不是 git 的拋棄式控制根,在那裡解 ref 一律「既不是一個目錄,也不是這個
+    repo 裡的 ref」(#125 第 2 輪實測)。依序問 `AC_CODE_ROOT`、cwd、`AC_ROOT`,第一個在 git
+    裡的那一顆;都不在 git 裡就照舊是專案根(底下每一支 git 都會說它解不開)。"""
+    root = event.repo_root()
+    for where in (os.environ.get("AC_CODE_ROOT"), os.getcwd(), root):
+        found = event.main_root_of(os.path.abspath(os.path.expanduser(where))) if where else None
+        if found:
+            return found
+    return root
+
+
 def module_of(rel):
     return rel[:-3].replace(os.sep, ".").replace("/", ".")
 
@@ -338,7 +364,7 @@ def overlay(rels, src, dst):
     return missing
 
 
-def resolve_tree(root, spec, where, label):
+def resolve_tree(repo, tree, spec, where, label):
     """把 `--ref` / `--candidate` 這一格解成「一棵可以跑測試的樹」+ 它的 sha。
 
     三種寫法都要解得開:**worktree 路徑、分支名、sha**。舊版一律當路徑用,於是
@@ -348,18 +374,19 @@ def resolve_tree(root, spec, where, label):
     順序是**路徑先於 ref**:既有的叫法一律傳路徑,反過來會讓一個剛好與分支同名的
     目錄被解成 ref,而那一趟跑的樹與呼叫者指的不是同一棵。
 
+    `repo` 是解 ref 的那一顆(`code_repo()`),`tree` 是沒給 spec 時的那棵樹(`code_tree()`)。
     回傳 `(樹的路徑, sha, 解不開的理由)`;解不開時前兩格不保證有值。
     """
     if not spec:
-        return root, git(["rev-parse", "HEAD"], root).stdout.strip(), ""
+        return tree, git(["rev-parse", "HEAD"], tree).stdout.strip(), ""
     if os.path.isdir(spec):
         path = os.path.abspath(spec)
         return path, git(["rev-parse", "HEAD"], path).stdout.strip(), ""
-    seen = git(["rev-parse", "--verify", "--quiet", "%s^{commit}" % spec], root)
+    seen = git(["rev-parse", "--verify", "--quiet", "%s^{commit}" % spec], repo)
     if seen.returncode != 0 or not seen.stdout.strip():
         return None, "", "%s「%s」既不是一個目錄,也不是這個 repo 裡的 ref" % (label, spec)
     sha = seen.stdout.strip()
-    if not clean_copy(root, sha, where):
+    if not clean_copy(repo, sha, where):
         return None, sha, "做不出 %s(%s)的乾淨副本" % (spec, sha[:12])
     return where, sha, ""
 
@@ -373,19 +400,19 @@ def main_repo_root(root):
     return os.path.dirname(os.path.join(root, common).rstrip(os.sep))
 
 
-def portable(record, root, candidate_spec):
+def portable(record, repo, tree, candidate_spec):
     """寫進票 / 證據檔之前,把三格路徑改成相對主 repo 根(#87 A2):`candidate`、
     `baseline.log`、`candidate_run.log`。票檔進 git,家目錄的絕對路徑不該跟著進去;
     worktree 在 `../<repo>-wt/t<n>` 時就是 `../` 開頭。`--candidate` 給的是分支名 / sha
     就照原字串 —— 那不是路徑。"""
-    main = os.path.realpath(main_repo_root(root))
+    main = os.path.realpath(main_repo_root(repo))
 
     def rel(path):
         return os.path.relpath(os.path.realpath(path), main)
 
     out = dict(record)
     if not candidate_spec or os.path.isdir(candidate_spec):
-        out["candidate"] = rel(candidate_spec or root)
+        out["candidate"] = rel(candidate_spec or tree)
     for key in ("baseline", "candidate_run"):
         run = out.get(key)
         if isinstance(run, dict) and run.get("log"):
@@ -430,13 +457,13 @@ def clean_base(args, rels, ref, where, verb):
     回傳 `(candidate, candidate sha, base 樹, base sha, rc)`;rc 非 None 就是**這一趟
     量不到**,呼叫者直接回它 —— 量不到的路徑一律不寫票(`unmeasured`)。
     """
-    root = event.repo_root()
+    repo, tree = code_repo(), code_tree()
     candidate, cand_sha, why = resolve_tree(
-        root, args.candidate, os.path.join(where, "candidate"), "candidate")
+        repo, tree, args.candidate, os.path.join(where, "candidate"), "candidate")
     if why:
         return None, "", None, "", unmeasured(args.ticket, why, ref, verb)
     base_dir, base_sha, why = resolve_tree(
-        root, ref, os.path.join(where, "base"), "ref")
+        repo, tree, ref, os.path.join(where, "base"), "ref")
     if why:
         return None, "", None, "", unmeasured(args.ticket, why, ref, verb)
     # ref 的歷史裡已經有 candidate = 那棵樹上**本來就有這份實作**,再怎麼跑也紅不
@@ -444,19 +471,19 @@ def clean_base(args, rels, ref, where, verb):
     # 張票(#19)。兩個 sha 一樣時不算 —— 那是「candidate 是同一棵樹上未 commit 的
     # 改動」,驗證者交件時的正常形狀。
     if cand_sha and base_sha and cand_sha != base_sha and git(
-            ["merge-base", "--is-ancestor", cand_sha, base_sha], root).returncode == 0:
+            ["merge-base", "--is-ancestor", cand_sha, base_sha], repo).returncode == 0:
         return None, "", None, "", unmeasured(
             args.ticket,
             "ref(%s / %s)的歷史裡已經有 candidate(%s / %s)——"
             "那棵樹上本來就有這份實作,量不出紅"
-            % (ref, base_sha[:12], args.candidate or root, cand_sha[:12]), ref, verb)
+            % (ref, base_sha[:12], args.candidate or tree, cand_sha[:12]), ref, verb)
     # ref 那棵樹上本來就不會有這幾個案例檔(案例是這張票才加的),所以一律把
     # candidate 的那一份疊上去 —— **兩邊跑的一定要是同一份檔**。
     missing = overlay(rels, candidate, base_dir)
     if missing:
         return None, "", None, "", unmeasured(
             args.ticket, "candidate(%s)裡找不到這幾個案例檔:%s"
-            % (args.candidate or root, ", ".join(missing)), ref, verb)
+            % (args.candidate or tree, ", ".join(missing)), ref, verb)
     return candidate, cand_sha, base_dir, base_sha, None
 
 
@@ -544,12 +571,12 @@ def cmd_red(args):
             "files": rels,
             "base_ref": ref,
             "base_sha": base_sha,
-            "candidate": args.candidate or root,
+            "candidate": args.candidate or code_tree(),
             "candidate_sha": cand_sha,
             "baseline": run,
             "candidate_run": None,
         }
-        path = write_red_record(args.ticket, portable(record, root, args.candidate), where)
+        path = write_red_record(args.ticket, portable(record, code_repo(), code_tree(), args.candidate), where)
         if not path:
             return 2
         sys.stdout.write("verify-case: #%s 驗紅成立(stage=red,票沒有動;綠由閘門的 check 量)\n"
@@ -614,12 +641,12 @@ def cmd_check(args):
             "files": rels,
             "base_ref": ref,
             "base_sha": base_sha,
-            "candidate": args.candidate or root,
+            "candidate": args.candidate or code_tree(),
             "candidate_sha": cand_sha,
             "baseline": baseline,
             "candidate_run": cand,
         }
-        rc = write_baseline(args.ticket, portable(record, root, args.candidate))
+        rc = write_baseline(args.ticket, portable(record, code_repo(), code_tree(), args.candidate))
         if rc:
             return rc
 
@@ -630,7 +657,7 @@ def cmd_check(args):
                             baseline["log"]))
         print_shapes(baseline)
         sys.stdout.write("  candidate %s(%s):紅 %d、skip %d -> %s\n"
-                         % (args.candidate or root, cand_sha[:12], len(cand["red"]),
+                         % (args.candidate or code_tree(), cand_sha[:12], len(cand["red"]),
                             cand["skipped"], cand["log"]))
         print_shapes(cand)
         if ok:
@@ -652,8 +679,8 @@ def cmd_extract(args):
     patch —— **沒有給差分基準**,手工挑檔遲早挑錯一個(2026-09-21 外部審查)。
     差分基準在這裡說死:乾淨的 `<ref>`。
     """
-    root = event.repo_root()
-    candidate = os.path.abspath(args.candidate or root)
+    repo = code_repo()
+    candidate = os.path.abspath(args.candidate or code_tree())
     try:
         data = ticketlib.load(args.ticket)
     except (OSError, ValueError) as exc:
@@ -667,7 +694,7 @@ def cmd_extract(args):
     ref = args.ref or data.get("base_sha") or ticketlib.main_branch()
     chunks = []
     for rel in rels:
-        old = git(["show", "%s:%s" % (ref, rel)], root)
+        old = git(["show", "%s:%s" % (ref, rel)], repo)
         before = old.stdout.splitlines(keepends=True) if old.returncode == 0 else []
         target = os.path.join(candidate, rel)
         if not os.path.exists(target):

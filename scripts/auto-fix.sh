@@ -1717,8 +1717,20 @@ dispatch_verifier() {   # uses r/FIX/DISPATCH/line/GAP_ROUND; sets PATCH_OUT/EVI
 
 # test_defect / 缺口那一輪驗證者的派工文:一般那一份 + 這一輪多的那一段(紅榜、案例檔路徑)。
 # 換候選重起時照新模型重組(#132)。
+# base 是**票的 base_sha**(#181),不是狀態檔的 `repair_context.base_sha`:那一格是閘門開跑時
+# 主線的頭(`gate.sh` 的 `BASE_SHA`),而派工文的 `red --ref` 要與 `verify-case.py red` 的預設
+# ref(票的 base_sha)是同一個 sha。#125 第 2 輪派工文印 57e170d、票是 45ec9e15,就是這一格。
 vd_packet() {
-    verifier_packet "$VDISPATCH" "$r" "$VFIX" "$S_BASE" || return 1
+    vd_base=$(python3 - "$TF" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        print(json.load(handle).get("base_sha") or "")
+except (OSError, ValueError):
+    print("")
+PY
+)
+    verifier_packet "$VDISPATCH" "$r" "$VFIX" "${vd_base:-$S_BASE}" || return 1
     python3 - "$ROOT" "$ID" "$RUN_ID" "$r" "${line:-}" "${W_HANDED:+$V_SRC}" "$VKEPT_PATCH" \
             "${GAP_ROUND:+gap}" "${V_HAS_BASELINE:-}" >> "$VDISPATCH" <<'PY'
 import os, sys

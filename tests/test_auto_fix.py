@@ -774,6 +774,32 @@ class AWorkerPatchWithATestDefectReachesTheBranch(AutoFixBase):
         self.assertNotIn("副本是**分支上**那一版", packet)
 
 
+class TheTestDefectVerifierRedRefIsTheTicketBaseSha(AutoFixBase):
+    """#181 A3:test_defect 那一輪驗證者派工文的 `red --ref` 是**票的 base_sha** —— 與
+    `verify-case.py red` 不帶 `--ref` 時的預設是同一個 sha。以前它印狀態檔
+    `repair_context.base_sha`(閘門開跑時主線的頭):#125 第 2 輪派工文 57e170d、票 45ec9e15。
+
+    **變異**:`vd_packet` 的 base 換回 `$S_BASE` → 這一條紅(派工文印的是主線頭)。
+    """
+
+    def test_the_packet_names_the_ticket_base_sha_not_the_main_head_at_gate_time(self):
+        self.set_worker(WORKER_PATCH_AND_TEST_DEFECT.replace("@AFTER@", ":"))
+        self.ticket_ready()
+        self.first_round()
+        base = self.load_ticket("1")["base_sha"]
+        main_at_gate = self.git("rev-parse", "main").strip()
+        self.assertNotEqual(base, main_at_gate, "前提:閘門開跑時主線已經離開票的 base_sha")
+        self.auto_fix()
+        packets = glob.glob(os.path.join(self.repo, "reports", "t1", "*",
+                                         "dispatch-verifier-round2.md"))
+        self.assertEqual(len(packets), 1)
+        with open(packets[0], encoding="utf-8") as handle:
+            packet = handle.read()
+        self.assertIn("verify-case.py red 1 --ref %s --candidate" % base, packet)
+        self.assertIn("**base**:`%s`" % base, packet)
+        self.assertNotIn(main_at_gate, packet)
+
+
 # 假 worker(#112 P4):第 2 輪說 test_defect;@WORKER_PATCH@ 換成 1 時同時交一份產品檔的 patch
 # (#107 那一種),0 時只交反駁。驗證者修案例、出 patch-verify,EVIDENCE 帶 verify 計畫與驗紅。
 TEST_DEFECT_VERIFIER_WITH_PLAN = """#!/bin/sh
