@@ -1271,6 +1271,70 @@ class ShapesFromRows(unittest.TestCase):
         self.assertIn("c.T.t", str(caught.exception))
 
 
+class TheRefsResolveInTheCodeRepo(CaseSandbox):
+    """#181 A1/A2:`AC_ROOT` 是一個**不是 git** 的拋棄式控制根(只有 `tickets/<n>.json`
+    與 `board/config.json`),程式碼 repo 是 cwd / `AC_CODE_ROOT` —— 驗證者派工的真實形狀。
+    `--ref`、`--candidate`、票的 base_sha 都要在程式碼 repo 解,不是在 `AC_ROOT`。
+
+    **變異**:`code_repo()` 直接回 `event.repo_root()` → 這一組紅(rc 2「既不是一個目錄」)。
+    """
+
+    NOT_A_REF = "既不是一個目錄"
+
+    def control_root(self):
+        where = os.path.join(self.home, "control")
+        for rel in (os.path.join("tickets", "1.json"), os.path.join("board", "config.json")):
+            source = os.path.join(self.repo, rel)
+            if os.path.exists(source):
+                os.makedirs(os.path.dirname(os.path.join(where, rel)), exist_ok=True)
+                shutil.copy(source, os.path.join(where, rel))
+        probe = subprocess.run(["git", "-C", where, "rev-parse", "--git-dir"],
+                               capture_output=True, text=True)
+        self.assertNotEqual(probe.returncode, 0, "前提:控制根不在任何 git 樹裡")
+        return where
+
+    def tool_in(self, control, *args, **extra):
+        return self.run_py("scripts/verify-case.py", *args,
+                           env=self.env(AC_ROOT=control, **extra))
+
+    def assert_reached_the_measuring_step(self, done):
+        self.assertNotIn(self.NOT_A_REF, done.stderr)
+        self.assertIn("案例 1 個", done.stdout, done.stdout + done.stderr)
+
+    def test_a1_red_resolves_the_base_sha_ref_sha_and_ref_branch_from_the_code_repo(self):
+        self.a_ticket()
+        control = self.control_root()
+        base = self.load_ticket("1")["base_sha"]
+        for label, args, extra in (
+                ("票的 base_sha(cwd)", (), {}),
+                ("票的 base_sha(AC_CODE_ROOT)", (), {"AC_CODE_ROOT": self.repo}),
+                ("--ref <sha>", ("--ref", base), {}),
+                ("--ref <branch>", ("--ref", "main"), {})):
+            with self.subTest(label):
+                done = self.tool_in(control, "red", "1", *args, **extra)
+                self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+                self.assert_reached_the_measuring_step(done)
+                self.assertEqual(self.red_record(done)["base_sha"], base)
+
+    def test_a2_check_resolves_a_candidate_branch_from_the_code_repo(self):
+        path = self.worktree("t1")
+        self.write("src/value.txt", "2\n", where=path)
+        self.write(os.path.join("verify", "nav", "__init__.py"), "", where=path)
+        self.write(os.path.join("verify", "nav", "test_ticket_1.py"), CASE, where=path)
+        self.git("add", "-A", cwd=path)
+        self.git("commit", "-q", "-m", "值改成 2,附案例", cwd=path)
+        self.make_ticket(1, verify={"files": ["verify/nav/test_ticket_1.py"],
+                                    "tags": ["example"], "run": "", "notes": ""})
+        control = self.control_root()
+        done = self.tool_in(control, "check", "1", "--candidate", "t1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assert_reached_the_measuring_step(done)
+        with open(os.path.join(control, "tickets", "1.json"), encoding="utf-8") as handle:
+            baseline = json.load(handle)["verify"]["baseline"]
+        self.assertEqual(baseline["candidate_sha"], self.git("rev-parse", "t1").strip())
+        self.assertEqual(baseline["base_sha"], self.load_ticket("1")["base_sha"])
+
+
 class TheLogTextPathIsGone(unittest.TestCase):
     """#163 A5:`-m unittest` 的子行程與讀 log 字的解析器不在了 —— 分類只有 result.json 一個來源。"""
 
