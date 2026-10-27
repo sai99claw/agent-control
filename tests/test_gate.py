@@ -461,36 +461,6 @@ class GateSh(Sandbox):
         self.assertEqual(self.status_of("7")["state"], "done")
         self.assertNotIn("env.suspect", self.kinds())
 
-    def test_an_environment_suspect_round_is_handed_to_auto_fix(self):
-        """#125 A4(D-076 取代 D-019 驗收 8 的「這一格非空 → 不自動派」):auto-fix 開著時,
-        rc 86 也交給 `auto-fix.sh`(它先機械重跑、仍可疑派一輪診斷),閘門自己**不發頁** ——
-        發了就是同一件事兩頁。`--no-auto-fix` 照舊:一頁 decision、不叫 auto-fix。
-
-        auto-fix 換成替身(只記被叫的參數):這一條問的是閘門交不交出去,不是 auto-fix 怎麼修。
-        **變異 M4**:`auto_fix` 裡留著「環境可疑,不自動派」那一手 return → 這一條紅(替身沒被叫)。"""
-        self.write("tests/test_env_wave.py", ENVIRONMENT_WAVE)
-        marker = os.path.join(self.home, "auto-fix-called")
-        self.stub_script("auto-fix.sh", "#!/bin/sh\necho \"$*\" >> %s\n" % marker)
-        self.make_ticket(7)
-        done = self.gate("tests/test_env_wave.py", "--ticket", "7")
-        self.assertEqual(done.returncode, 86, done.stdout + done.stderr)
-        self.assertEqual(self.status_of("7")["state"], "env_suspect")
-        self.assertNotIn("環境可疑,不自動派", done.stdout)
-        self.assertIn("gate: auto-fix —— sh scripts/auto-fix.sh 7", done.stdout)
-        self.assertTrue(os.path.exists(marker), "rc 86 沒交給 auto-fix:" + done.stdout)
-        with open(marker, encoding="utf-8") as handle:
-            self.assertEqual(handle.read().splitlines(), ["7"])
-        self.assertEqual(self.inbox_rows(), [], "auto-fix 開著:環境可疑由它接手,閘門不發頁")
-        fails = [row for row in self.events() if row["kind"] == "gate.fail"]
-        self.assertEqual([(row.get("rc"), row.get("state")) for row in fails], [("86", "env_suspect")])
-
-        os.remove(marker)
-        again = self.gate("tests/test_env_wave.py", "--ticket", "7", "--no-auto-fix")
-        self.assertEqual(again.returncode, 86, again.stdout + again.stderr)
-        self.assertFalse(os.path.exists(marker), "--no-auto-fix 叫了 auto-fix")
-        self.assertEqual([row["kind"] for row in self.inbox_rows()], ["decision"],
-                         "--no-auto-fix:照舊一頁環境那一頁")
-
     def test_a_plain_red_round_still_dispatches(self):
         """守衛不准把**所有**紅都攔下來:那一版與「auto-fix 壞了」長得一樣。
 

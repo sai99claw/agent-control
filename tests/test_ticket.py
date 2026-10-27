@@ -72,30 +72,9 @@ class Create(Sandbox):
 
 
 class TheRepairBudget(Sandbox):
-    """#125 A1(D-050 ②「首次紅後最多 3 次修補」):一個 config 鍵 `repair.max_rounds`(預設 3)、
-    一支算法 `ticket.py repair_limit`(票的 retry_limit 優先)。期望值是票面,不是程式印什麼。"""
-
-    def conf(self, **repair):
-        path = os.path.join(self.repo, "board", "config.json")
-        with open(path, encoding="utf-8") as handle:
-            data = json.load(handle)
-        data["repair"] = repair
-        self.write("board/config.json", json.dumps(data, ensure_ascii=False, indent=2))
-
-    def test_create_writes_the_configured_budget(self):
-        """沒設 repair → retry_limit 3(不再是寫死的 2);max_rounds 1 → 1。"""
-        self.assertEqual(self.ticket("create", *MIN).returncode, 0)
-        self.assertEqual(self.load_ticket("1")["retry_limit"], 3)
-        self.conf(max_rounds=1)
-        self.assertEqual(self.ticket("create", *MIN).returncode, 0)
-        self.assertEqual(self.load_ticket("2")["retry_limit"], 1)
-
-    def test_a_ticket_retry_limit_wins_over_the_config(self):
-        self.conf(max_rounds=5)
-        self.ticket("create", *MIN)
-        self.assertEqual(self.ticket("set", "1", "retry_limit", "1").returncode, 0)
-        done = self.ticket("repair-limit", "1")
-        self.assertEqual((done.returncode, done.stdout.strip()), (0, "2"), done.stderr)
+    """#125 A1(D-050 ②):只留驗證者 `T125RepairBudgetKey` 沒守的一件 —— 票的 `retry_limit` 寫成
+    **null**(不是缺鍵)也退回 `repair.max_rounds`(tickets/SCHEMA.md「null / 缺 = 讀當下的
+    repair.max_rounds」;T125 只測缺鍵)。期望值是票面,不是程式印什麼。"""
 
     def test_a_ticket_without_retry_limit_reads_max_rounds(self):
         """null / 缺 = config;第一輪 + 3 輪修補 = 第 4 輪仍紅才轉 Blocked。"""
@@ -106,13 +85,6 @@ class TheRepairBudget(Sandbox):
         self.assertEqual(self.ticket("round", "1", "4", "--red").returncode, 0)
         row = self.load_ticket("1")
         self.assertEqual((row["state"], row["owner"]), ("Blocked", "main"))
-
-    def test_auto_fix_has_no_copy_of_the_old_default(self):
-        """A1 靜態:auto-fix.sh 不再自己算 `retry_limit or 2`(兩份 heredoc 拿掉了);註解可以提欄位名。
-        **變異 M3**:留一份 `int(...get("retry_limit") or 2) + 1` → 這一條紅。"""
-        with open(os.path.join(SCRIPTS, "auto-fix.sh"), encoding="utf-8") as handle:
-            text = handle.read()
-        self.assertEqual(text.count("or 2) + 1"), 0)
 
 
 class Help(Sandbox):

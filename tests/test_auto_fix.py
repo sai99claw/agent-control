@@ -1924,13 +1924,13 @@ ENV_ROWS = [{"source": "statistical", "engine": "safari", "why": "螢幕鎖著",
 
 
 class TheRepairBudgetAndTheDiagnosisRound(AutoFixBase):
-    """#125(D-076、D-050 ②):預算 = 第一次紅後 `repair.max_rounds` 輪修補(預設 3);沒有歸因的紅與
-    環境可疑各給一輪診斷(派工文 `## 診斷`),診斷之後還是一樣才一頁;環境可疑先免費機械重跑一次。
+    """#125(D-076):只留驗證者 `T125RepairBudgetAndDiagnosis` 沒守的兩件 —— 診斷輪的
+    `ticket.attempt.start` 帶的 diagnosis 值分得出 unattributed / env(T3),與環境診斷的 `## 診斷`
+    帶 preflight 輸出(A4)。預算、重跑、第二次沒歸因那些契約由 T125* 守,這裡不再寫一份。
 
-    worker 與閘門都是替身(WORKER_COMMITS / FAKE_GATE):問的是 auto-fix 怎麼數輪、派什麼、停在哪,
-    期望值從票面(A2/A3/A4)來,不從腳本算。"""
+    worker 與閘門都是替身(WORKER_COMMITS / FAKE_GATE),期望值從票面(A3/A4)來,不從腳本算。"""
 
-    def arrange(self, plan, config=None, **ticket):
+    def arrange(self, plan, **ticket):
         gate = os.path.join(self.home, "fake-gate.sh")
         write_executable(gate, FAKE_GATE.replace("@HOME@", self.home)
                          .replace("@STATUS@", self.script("scripts/status.py")))
@@ -1941,10 +1941,6 @@ class TheRepairBudgetAndTheDiagnosisRound(AutoFixBase):
         self.write("env.log", ENV_LOG, where=self.home)
         self.write("env-rows.json", json.dumps(ENV_ROWS, ensure_ascii=False), where=self.home)
         self.set_worker(WORKER_COMMITS, "sh %s" % gate)
-        if config:
-            conf = json.loads(self.read("board/config.json"))
-            conf.update(config)
-            self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
         ticket.setdefault("retry_limit", None)
         self.ticket_ready(**ticket)
 
@@ -1957,12 +1953,6 @@ class TheRepairBudgetAndTheDiagnosisRound(AutoFixBase):
         return self.run_py("scripts/status.py", "done", "--ticket", "1", "--kind", "gate",
                            "--run-id", "20260921-100000-1", "--rc", "86", "--log", log,
                            "--state", "env_suspect", "--environment-log", rows)
-
-    def gate_calls(self):
-        if not os.path.exists(self.log):
-            return []
-        with open(self.log, encoding="utf-8") as handle:
-            return [line.strip() for line in handle if line.startswith("gate call")]
 
     def calls(self):
         with open(self.log, encoding="utf-8") as handle:
@@ -1979,47 +1969,6 @@ class TheRepairBudgetAndTheDiagnosisRound(AutoFixBase):
 
     def decisions(self):
         return [row for row in self.inbox_rows() if row.get("kind") == "decision"]
-
-    # ------------------------------------------------------------------ A1 / A2
-
-    def test_red_forever_dispatches_rounds_two_three_four_then_one_page(self):
-        """A2:沒寫 retry_limit、max_rounds 預設 3 → 修補輪 2、3、4,第 4 輪紅後 Blocked/main、恰一頁。
-        **變異 M3**:auto-fix 留一份 `retry_limit or 2` → 上限 3 輪,只派 [2, 3],這一條紅。"""
-        self.arrange([1])
-        self.status(1, RED_LOG)
-        done = self.auto_fix()
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertEqual(self.worker_rounds(),
-                         ["worker ran round 2", "worker ran round 3", "worker ran round 4"])
-        ticket = self.load_ticket("1")
-        self.assertEqual((ticket["state"], ticket["owner"]), ("Blocked", "main"))
-        self.assertEqual(len(self.decisions()), 1, self.inbox_rows())
-        self.assertEqual(len(self.inbox_rows()), 1)
-
-    def test_a_ticket_retry_limit_overrides_the_config(self):
-        """A1/A2:票的 retry_limit 1 → 只派第 2 輪;config 的 max_rounds 不管。"""
-        self.arrange([1], config={"repair": {"max_rounds": 5}}, retry_limit=1)
-        self.status(1, RED_LOG)
-        done = self.auto_fix()
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertEqual(self.worker_rounds(), ["worker ran round 2"])
-        self.assertEqual(len(self.decisions()), 1)
-
-    def test_the_config_key_sets_the_budget(self):
-        """A1:repair.max_rounds 1 → 第一次紅之後只修一輪。"""
-        self.arrange([1], config={"repair": {"max_rounds": 1}})
-        self.status(1, RED_LOG)
-        done = self.auto_fix()
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        self.assertEqual(self.worker_rounds(), ["worker ran round 2"])
-
-    def test_a_new_process_continues_at_the_next_round(self):
-        """A2:狀態檔是真相 —— 第 2 輪紅之後換一個程序接手,派的是第 3 輪,不從 2 重來。"""
-        self.arrange([0])
-        self.status(1, RED_LOG, round_no=2)
-        done = self.auto_fix()
-        self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
-        self.assertEqual(self.worker_rounds(), ["worker ran round 3"])
 
     # ------------------------------------------------------------------ A3
 
@@ -2049,47 +1998,7 @@ class TheRepairBudgetAndTheDiagnosisRound(AutoFixBase):
         self.assertIsNone(starts["3"].get("diagnosis"))
         self.assertEqual(self.inbox_rows(), [], "診斷導出可歸因的紅、最後綠:只寫事件(A5)")
 
-    def test_a_second_unattributed_red_pages_once_and_stops(self):
-        """A3:診斷輪(第 2 輪)之後仍沒有歸因 → rc 4、不派第 3 輪、恰一頁且點名第 2 輪。
-        **變異 M2**:允許連第二輪診斷 → 第 3 輪被派,這一條紅。"""
-        self.arrange(["u"])
-        self.status(1, NO_ATTRIBUTION_LOG)
-        done = self.auto_fix()
-        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
-        self.assertEqual(self.worker_rounds(), ["worker ran round 2"])
-        rows = self.decisions()
-        self.assertEqual(len(rows), 1, self.inbox_rows())
-        self.assertEqual(len(self.inbox_rows()), 1)
-        self.assertIn("第 2 輪", rows[0]["state"])
-        self.assertEqual(self.load_ticket("1")["state"], "Blocked")
-
     # ------------------------------------------------------------------ A4
-
-    def test_an_environment_suspect_is_rerun_and_a_green_rerun_needs_no_worker(self):
-        """A4:env_suspect → 先用同一支閘門重跑一次(gate.rerun reason=env_suspect,不算一輪);[86→0]
-        → 綠的路(InReview),不派 worker、不發頁。"""
-        self.arrange([0])
-        self.env_status()
-        done = self.auto_fix()
-        self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
-        self.assertEqual(self.calls(), ["gate call 1 plan=0 round=1"])
-        reruns = [row for row in self.events() if row["kind"] == "gate.rerun"]
-        self.assertEqual([row.get("reason") for row in reruns], ["env_suspect"])
-        self.assertEqual(self.load_ticket("1")["state"], "InReview")
-        self.assertEqual(self.inbox_rows(), [])
-
-    def test_an_attributable_rerun_goes_to_a_normal_repair_round(self):
-        """A4:[86→1 可歸因] → 第 2 輪是一般修補(有紅榜),重跑那一次不算一輪。
-        **變異 M1**:重跑算成一輪 → 派的是第 3 輪,這一條紅。"""
-        self.arrange([1, 0])
-        self.env_status()
-        done = self.auto_fix()
-        self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
-        self.assertEqual(self.calls(), ["gate call 1 plan=1 round=1", "worker ran round 2",
-                                        "gate call 2 plan=0 round=2"])
-        two = self.packet(2)
-        self.assertIn("## 紅榜", two)
-        self.assertNotIn("## 診斷", two)
 
     def test_an_environment_suspect_twice_gets_one_diagnosis_then_one_page(self):
         """A4:[86→86] → 第 2 輪是診斷(派工文列嫌疑列 engine / why 與 preflight 輸出),第 2 輪閘門
@@ -2113,17 +2022,6 @@ class TheRepairBudgetAndTheDiagnosisRound(AutoFixBase):
         self.assertEqual(len(rows), 1, self.inbox_rows())
         self.assertIn("environment", rows[0]["state"])
         self.assertEqual(self.load_ticket("1")["state"], "Blocked")
-
-    def test_env_rerun_zero_goes_straight_to_diagnosis(self):
-        """A4:repair.env_rerun 0 → 不重跑,直接派診斷輪。"""
-        self.arrange([0], config={"repair": {"env_rerun": 0}})
-        self.env_status()
-        done = self.auto_fix()
-        self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
-        self.assertEqual(self.calls(), ["worker ran round 2", "gate call 1 plan=0 round=2"])
-        self.assertIn("## 診斷", self.packet(2))
-        self.assertEqual([row for row in self.events() if row["kind"] == "gate.rerun"
-                          and row.get("reason") == "env_suspect"], [])
 
 
 # 假 review.sh(#121 A6):只回指定的 rc,要測的是 auto-fix 怎麼讀它,不是覆核怎麼判。

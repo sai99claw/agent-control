@@ -393,29 +393,6 @@ class AutoFixHook(LandBase):
         self.assertIn("t1-a t2-b", out, "說得出現在是誰在落地")
         self.assertNotIn("擠進去", self.main_log())
 
-    def test_a_single_ticket_full_suite_86_is_handed_over_as_env_suspect(self):
-        """#125 A4:全套 rc 86 與 1 分開記 —— land.fail note 與 land 狀態檔說 env_suspect,auto-fix
-        照樣被叫(它讀到 env_suspect 才走「機械重跑 → 一輪診斷」),不把空紅榜讀成「沒有歸因」。
-        改前:land.sh 對 env_suspect 0 處,狀態檔 rc 1、note「閘門紅」。"""
-        self.stub_script("gate.sh", GATE_STUB_EMPTY.replace("@RC@", "86"))
-        branch = self.branch_for(1, "t1-a")
-        self.commit_in(branch, "src/a", "第一張")
-        self.approve(1, "t1-a")
-
-        done = self.land("t1-a")
-
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        notes = [row.get("note") or "" for row in self.events() if row["kind"] == "land.fail"]
-        self.assertEqual(len(notes), 1, notes)
-        self.assertIn("env_suspect", notes[0])
-        status = self.status_of(1, kind="land")
-        self.assertEqual((status["state"], status["rc"]), ("env_suspect", 86))
-        self.assertEqual(self.auto_fix_lines(), [line for line in self.auto_fix_lines()
-                                                 if line.startswith("autofix 1 ")])
-        self.assertEqual(len(self.auto_fix_lines()), 1)
-        for page in self.inbox_pages(1):
-            self.assertNotIn("沒有歸因", page)
-
     def test_a_batch_red_with_no_red_list_twice_stops_after_one_diagnosis(self):
         """#125 A3:批次紅榜空的 → 那一輪的批次 worker 拿診斷(auto-fix 替身被叫一次);診斷之後全套
         仍是空紅榜 → 一頁掛第一張票、不踢、不重 land、不再修。
