@@ -736,11 +736,14 @@ print("")
 print("## 票的測試計畫")
 if isinstance(plan, str) and plan.strip():
     print(plan)
-    # 案例歸屬照 test_plan 的指派(#178;正文在 DISPATCH-TEMPLATE §1):兩邊各寫各的,重複會被覆核退回
+    # 案例歸屬照 test_plan 的指派(#178;正文在 DISPATCH-TEMPLATE §1):兩邊各寫各的,重複會被覆核退回。
+    # 沒指派的契約只有一個寫案例者(#180):有驗證者(needs_verifier 是 true 或缺)歸驗證者,false 歸 worker
     if role == "verifier":
-        print("寫案例只寫 test_plan 指給驗證者的契約;指給 worker 的不寫(worker 會寫,重複會被覆核退回)。")
+        print("寫案例只寫 test_plan 指給驗證者的契約與沒指派的契約(照 acceptance);指給 worker 的不寫(worker 會寫,重複會被覆核退回)。")
+    elif ticket.get("needs_verifier") is False:
+        print("寫案例:這張票沒有驗證者,test_plan 的每條契約(含沒指派的)都由你寫。")
     else:
-        print("寫案例只寫 test_plan 指給 worker 的契約;指給驗證者的不寫(驗證者會寫,重複會被覆核退回);沒指派的才自己判。")
+        print("寫案例只寫 test_plan 指給 worker 的契約;指給驗證者的與沒指派的都不寫(驗證者照 acceptance 寫,重複會被覆核退回)。")
 else:
     print("票沒有 test_plan(驗收照票面 acceptance)")
 print("")
