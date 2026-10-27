@@ -14,6 +14,7 @@
 # 與沒有規矩長得一樣(G17:同一天兩筆)。所以給它一個入口,而且:
 #   * **只收 `tickets/` `docs/` `memory/` `discussions/` 四個前綴** —— 產品碼走一票一分支,越界 rc=2 指名檔
 #     (`discussions/` 是整理者的討論檔與候選草稿,#179 補進來;gap #52);
+#     另收逐字列名的專案設定檔(#183,`docs_setup_files`);票庫在 repo 外時票檔參數略過;
 #   * **與票的落地共用同一把 `.land.lock`** —— land 跑到一半有人往主線塞 commit,
 #     那條 `ff-only` 就進不去了,而失敗訊息說的是另一件事。
 # 它**不跑閘門**:這四個前綴不進產品碼,跑九分鐘全套換來的是同一份綠。
@@ -138,9 +139,66 @@ ev() {
 # ------------------------------------------------------------------ docs 通道
 DOCS_PREFIXES="tickets/ docs/ memory/ discussions/"
 
+# 專案設定檔(#183):每次 `actl migrate` 都要動的那幾個檔,逐字列名、不給前綴。
+# 固定四個 + board/config.json 裡 tests.<指令> 字串點名的 repo 相對腳本
+# (`sh scripts/ac-tests.sh preflight` → scripts/ac-tests.sh)。一行一個。
+docs_setup_files() {
+    python3 - "$ROOT" "$AC" <<'PY'
+import json, os, shlex, sys
+root, here = sys.argv[1], sys.argv[2]
+sys.path.insert(0, here)
+from testiface import COMMANDS
+names = ["board/config.json", "board/role-models.json", ".claude/settings.json", ".gitignore"]
+try:
+    with open(os.path.join(root, "board", "config.json"), encoding="utf-8") as handle:
+        tests = json.load(handle).get("tests")
+except (OSError, ValueError, AttributeError):
+    tests = None
+for key in COMMANDS if isinstance(tests, dict) else ():
+    value = tests.get(key)
+    if not isinstance(value, str):
+        continue
+    try:
+        tokens = shlex.split(value)
+    except ValueError:
+        tokens = value.split()
+    for token in tokens:
+        if token.startswith("-") or "$" in token or os.path.isabs(token):
+            continue
+        rel = os.path.normpath(token)
+        if rel.startswith("..") or not ("/" in token or os.path.isfile(os.path.join(root, rel))):
+            continue
+        if rel not in names:
+            names.append(rel)
+print("\n".join(names))
+PY
+}
+
+# 票庫在 code repo 的工作樹外面(#183;T 的 tickets_dir 是 ../<pool>/tickets,不是 git repo)
+# 就印那個目錄,否則印空:那時候 `tickets/<n>.json` 在這裡沒有東西可 commit。
+docs_pool_outside() {
+    python3 - "$ROOT" "$AC" <<'PY'
+import os, subprocess, sys
+root, here = sys.argv[1], sys.argv[2]
+sys.path.insert(0, here)
+import event
+pool = os.path.realpath(event.tickets_dir(root))
+top = subprocess.run(["git", "-C", root, "rev-parse", "--show-toplevel"],
+                     capture_output=True, text=True).stdout.strip() or root
+top = os.path.realpath(top)
+try:
+    inside = os.path.commonpath([pool, top]) == top
+except ValueError:
+    inside = False
+print("" if inside else pool)
+PY
+}
+
 cmd_docs() {   # $1 = commit 訊息  $2… = 檔案(repo 相對路徑)
+    setup=$(docs_setup_files)
+    setup_line=$(printf '%s\n' "$setup" | tr '\n' ' ' | sed 's/ $//')
     if [ $# -lt 2 ]; then
-        echo "land: docs <訊息> <檔…>  —— 只收 $DOCS_PREFIXES 四個前綴" >&2
+        echo "land: docs <訊息> <檔…>  —— 只收 $DOCS_PREFIXES 四個前綴,與專案設定檔:$setup_line" >&2
         echo "land:   例:sh scripts/land.sh docs \"tickets: #29 v2\" tickets/29.json" >&2
         exit 2
     fi
@@ -158,11 +216,19 @@ cmd_docs() {   # $1 = commit 訊息  $2… = 檔案(repo 相對路徑)
         for prefix in $DOCS_PREFIXES; do
             case "$f" in "$prefix"*) ok=1 ;; esac
         done
+        if [ -z "$ok" ]; then
+            while IFS= read -r one; do
+                [ "$f" = "$one" ] && ok=1
+            done <<EOF
+$setup
+EOF
+        fi
         [ -n "$ok" ] || bad="$bad $f"
     done
     if [ -n "$bad" ]; then
-        echo "land: docs 通道只收 $DOCS_PREFIXES —— 這幾個不在裡面:" >&2
+        echo "land: docs 通道只收 $DOCS_PREFIXES 與專案設定檔 —— 這幾個不在裡面:" >&2
         for one in $bad; do echo "land:   $one" >&2; done
+        echo "land:   收的專案設定檔(逐字):$setup_line" >&2
         echo "land:   產品碼走一票一分支:worker 在票分支 commit(sh scripts/auto-fix.sh <票號>),再 sh scripts/land.sh t<票號>" >&2
         exit 2
     fi
@@ -180,6 +246,22 @@ cmd_docs() {   # $1 = commit 訊息  $2… = 檔案(repo 相對路徑)
             for one in $bad; do echo "land:   $one" >&2; done
             exit 2
         fi
+    fi
+    # 票庫不在這個 repo 裡(#183):票檔參數略過、一行說明;其餘照收。全被略過 = 沒有東西要落地,rc 0。
+    pool=$(docs_pool_outside)
+    if [ -n "$pool" ]; then
+        skipped=""
+        for f in "$@"; do
+            shift
+            case "$f" in
+                tickets/*) skipped="$skipped $f" ;;
+                *) set -- "$@" "$f" ;;
+            esac
+        done
+        if [ -n "$skipped" ]; then
+            echo "land: docs —— 票庫 $pool 在這個 repo 外,not versioned here;略過:$skipped"
+        fi
+        [ $# -gt 0 ] || exit 0
     fi
     here=$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
     if [ "$here" != "$MAIN" ]; then

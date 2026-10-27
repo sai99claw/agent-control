@@ -90,6 +90,11 @@ sh scripts/land.sh docs "tickets: #29 v2 與整理票的 outline" \
 **只收四個前綴**:`tickets/`、`docs/`、`memory/`、`discussions/`(整理者的討論檔與候選草稿,#179)。越界 rc=2 **指名是哪一個檔** ——
 產品碼走一票一分支(worker 在票分支 commit → `scripts/land.sh t<票號>`),
 不走這一條。路徑裡有 `..` 或絕對路徑一樣拒。
+**另收專案設定檔(#183,逐字列名、不是前綴)**:`board/config.json`、`board/role-models.json`、
+`.claude/settings.json`、`.gitignore`,以及 `board/config.json` 的 `tests.<指令>` 字串點名的 repo 相對腳本
+(`sh scripts/ac-tests.sh preflight` → `scripts/ac-tests.sh`)—— `actl migrate` 每次要動的就是這幾個;拒收訊息逐字列出它們。
+**票庫在 repo 外**(`tickets_dir` 解析到 code repo 工作樹之外,例如不是 git repo 的票庫目錄):`tickets/<n>.json`
+參數略過,印一行指名票庫路徑與 `not versioned here`;其餘檔照收,全被略過就 rc 0、不 commit。
 
 **與票的落地共用同一把 `.land.lock`**:land 正在跑九分鐘全套的時候有人往主線塞一個
 commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊息說的是「主線在這中間

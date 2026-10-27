@@ -838,6 +838,97 @@ class TheDocsChannel(LandBase):
                         rows[-1])
 
 
+class TheDocsChannelTakesTheSetupFiles(LandBase):
+    """#183:`actl migrate` 每次要動的專案設定檔走 docs 通道進主線;票庫在 repo 外時票檔參數略過。"""
+
+    SETUP = ("board/config.json", ".claude/settings.json", ".gitignore", "board/role-models.json")
+
+    def docs(self, *args):
+        return self.run_sh("scripts/land.sh", "docs", *args)
+
+    def set_config(self, **fields):
+        conf = json.loads(self.read("board/config.json"))
+        conf.update(fields)
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+
+    def landed(self):
+        return sorted(self.git("show", "--name-only", "--format=", "main").split())
+
+    def test_183_a1_the_four_setup_files_land_in_one_commit(self):
+        """A1。**變異**:把 docs_setup_files 的固定四個拿掉 → 這一條紅(rc 2)。"""
+        self.set_config(main_branch="main", migrated=True)
+        self.write(".claude/settings.json", "{}\n")
+        self.write(".gitignore", "*.pyc\nnew-line\n")
+        self.write("board/role-models.json", "{\"roles\": {}}\n")
+        before = self.git("rev-parse", "main").strip()
+        done = self.docs("m", *self.SETUP)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.git("rev-list", "--count", "%s..main" % before).strip(), "1")
+        self.assertEqual(self.landed(), sorted(self.SETUP))
+        self.assertFalse(self.gate_ran(), "docs 通道不跑閘門")
+
+    def test_183_a2_a_script_named_by_a_tests_command_lands_and_others_are_refused(self):
+        """A2。**變異**:把 tests.<指令> 掃腳本那一段拿掉 → 第一半紅;把例外清單併進前綴放行 → 第二半紅。"""
+        self.set_config(tests={"adapter": "unittest",
+                               "preflight": "sh scripts/ac-tests.sh preflight"})
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "tests.preflight")
+        self.write("scripts/ac-tests.sh", "#!/bin/sh\necho preflight\n")
+        before = self.git("rev-parse", "main").strip()
+        done = self.docs("m", "scripts/ac-tests.sh")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.landed(), ["scripts/ac-tests.sh"])
+        self.assertNotEqual(self.git("rev-parse", "main").strip(), before)
+
+        self.write("scripts/other.sh", "#!/bin/sh\n")
+        before = self.git("rev-parse", "main").strip()
+        done = self.docs("m", "scripts/other.sh")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertIn("scripts/other.sh", done.stderr)
+        for name in self.SETUP + ("scripts/ac-tests.sh",):
+            self.assertIn(name, done.stderr, "拒收訊息要列出收的設定檔")
+        self.assertEqual(self.git("rev-parse", "main").strip(), before)
+
+    def pool_outside(self):
+        pool = os.path.join(self.home, "pool", "tickets")
+        os.makedirs(pool)
+        self.set_config(tickets_dir=pool)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "tickets_dir outside")
+        self.git("push", "-q", "origin", "main")
+        return pool
+
+    def test_183_a3_a_ticket_path_is_skipped_when_the_pool_is_outside_the_repo(self):
+        """A3。**變異**:把 docs_pool_outside 改成一律印空 → 這一條紅(git add 收不下 tickets/5.json)。"""
+        pool = self.pool_outside()
+        self.write("docs/x.md", "x\n")
+        before = self.git("rev-parse", "main").strip()
+        done = self.docs("m", "tickets/5.json", "docs/x.md")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.landed(), ["docs/x.md"])
+        self.assertEqual(self.git("rev-list", "--count", "%s..main" % before).strip(), "1")
+        said = [line for line in done.stdout.splitlines() if "not versioned" in line]
+        self.assertEqual(len(said), 1, done.stdout)
+        self.assertIn(os.path.realpath(pool), said[0])
+
+        before = self.git("rev-parse", "main").strip()
+        done = self.docs("m", "tickets/5.json")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        said = [line for line in done.stdout.splitlines() if "not versioned" in line]
+        self.assertEqual(len(said), 1, done.stdout)
+        self.assertIn(os.path.realpath(pool), said[0])
+        self.assertEqual(self.git("rev-parse", "main").strip(), before, "沒有東西要落地")
+        self.assertNotIn("docs -> main", done.stdout)
+
+    def test_183_a3_a_pool_inside_the_repo_still_lands_ticket_files(self):
+        """對照組:票庫在 repo 裡(預設 tickets)時票檔照收,不印 not versioned。"""
+        self.make_ticket(5)
+        done = self.docs("m", "tickets/5.json")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("not versioned", done.stdout + done.stderr)
+        self.assertEqual(self.landed(), ["tickets/5.json"])
+
+
 class TheOpenerLandsOnlyItsOwnTicket(LandBase):
     """#91 C6(R4):`AC_ROLE=opener` 走 docs 通道時只收 `tickets/<AC_TICKET>.json`。"""
 
