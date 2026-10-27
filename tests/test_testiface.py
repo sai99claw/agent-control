@@ -125,11 +125,16 @@ class A2Preflight(FixtureGate):
 
     def test_a2_preflight_86_is_env_suspect_with_the_declared_row(self):
         """**變異 m2**:gate 把 preflight 的 86 當紅(走 rc 1 / 跑測試)→ 這一條紅。
-        **變異**(未量,開題者記):testiface 把 preflight 86 當紅(rc 1)→ 這一條紅。"""
+        **變異**(未量,開題者記):testiface 把 preflight 86 當紅(rc 1)→ 這一條紅。
+
+        Runs with `--no-auto-fix` since #125 A4 (D-076): with auto-fix on, rc 86 now hands off to
+        auto-fix (one re-run, then one diagnosis round), pinned by
+        tests.test_gate.T125EnvSuspectHandsOffToAutoFix; `--no-auto-fix` keeps the page and no
+        dispatch, which is what the last assertions here ask."""
         self.with_fake_worker()
         self.write(os.path.join("tests", "test_ok.py"),
                    self.read(os.path.join("tests", "test_ok.py")) + "# 改動\n")
-        done = self.gate(AC_TEST_FAKE_PREFLIGHT="locked")
+        done = self.gate("--no-auto-fix", AC_TEST_FAKE_PREFLIGHT="locked")
         self.assertEqual(done.returncode, 86, done.stdout + done.stderr)
         status = self.status_of(7, kind="gate")
         self.assertEqual(status["state"], "env_suspect")
