@@ -7,7 +7,7 @@
 A2 | integ | needs_verifier=true 而 files 空;三個例外 | rc 3 恰一列 (no-cases);例外 0 列 | 票面 A2 原話
 A4 | integ | needs_verifier true、baseline 空、上一輪 gate 紅(RED_LOG,第 1 輪)跑 auto-fix --no-review | 第 2 輪 role=verifier 的 agent.start 恰一筆、stdout 有「案例還沒交,第 2 輪先派驗證者」;baseline 非空 / false 0 筆(缺 = true 由 tests/test_auto_fix.py 守,D-054 Q10) | 票面 A4 原話
 A6 | integ | 第 2 輪 worker 回 test_defect(interface_fixed 缺,等 patch) | 第 2 輪 verifier 的 agent.start 恰一筆 | 票面 A6 原話
-A7 | integ | 只有缺口列的狀態檔已是第 3 輪;needs_verifier true 而上一輪沒有歸因 | rc 1「三輪耗盡」不起任何 agent;rc 4、Blocked、「沒有歸因」、不起任何 agent | 票面 A7 原話
+A7 | integ | 只有缺口列的狀態檔已是第 3 輪;needs_verifier true 而上一輪沒有歸因 | rc 1「三輪耗盡」不起任何 agent;沒有歸因的那一條 #125 A3 改成派一輪診斷(第 2 輪派工文有 `## 診斷` 與 log 最後一行、attempt.start round_kind=diagnosis diagnosis=unattributed、起了第 2 輪 worker、不是 rc 4) | 票面 A7 原話;#125 A3 原話
 A8 | doc   | 讀 docs/WORKFLOW.md | 有「任一輪」(與驗證者同段) | 票面 A8 原話
 
 ## 介面字串(全部出自票面 acceptance;票面沒定的在這裡定)
@@ -26,6 +26,7 @@ tests/test_auto_fix.AutoFixBase。閘門那幾條照 tests/test_gate.VerifierCas
 ## 不做
 不改產品碼;不放寬票面驗收;不刪既有案例。
 """
+import glob
 import json
 import os
 import re
@@ -213,14 +214,26 @@ class RoundsAndStopsStayTheSame(AutoFixBase126):
         self.assertIn("三輪耗盡", self.inbox_list())
 
     def test_a7_no_attribution_still_stops_before_any_agent(self):
-        """A7 needs_verifier=true、baseline 空,上一輪沒有歸因:照舊 rc 4、Blocked、不起任何 agent。"""
+        """A7 needs_verifier=true、baseline 空,上一輪沒有歸因。#125 A3(D-076)取代了「rc 4、不起任何 agent」:
+        第一次沒有歸因是**一輪診斷** —— 第 2 輪派工文有 `## 診斷`(含 gate log 最後一行)、
+        ticket.attempt.start 帶 round_kind=diagnosis diagnosis=unattributed、起了第 2 輪 worker,不在派工前停在 rc 4。
+        (案例名照舊,讓紅榜對得上;期望值出自 #125 票面 A3 原話。)"""
         self.arm(needs_verifier=True, interface_fixed=True, verify=dict(EMPTY_PLAN))
         self.status(1, NO_ATTRIBUTION_LOG)
         done = self.auto_fix("--no-review")
-        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
-        self.assertIn("沒有歸因", done.stderr)
-        self.assertEqual([row for row in self.events() if row["kind"] == "agent.start"], [])
-        self.assertEqual(self.load_ticket("1")["state"], "Blocked")
+        said = done.stdout + done.stderr
+        self.assertNotEqual(done.returncode, 4, said)
+        found = sorted(glob.glob(os.path.join(self.repo, "reports", "t1", "*", "dispatch-round2.md")))
+        self.assertEqual(len(found), 1, "第 2 輪(診斷)要有一份派工文:%s\n%s" % (found, said))
+        packet = self.read(found[0])
+        self.assertIn("## 診斷", packet)
+        self.assertIn("ModuleNotFoundError: No module named 'test_thing'", packet)  # log 最後一行
+        starts = [row for row in self.events() if row["kind"] == "ticket.attempt.start"
+                  and str(row.get("attempt")).strip('"') == "2"]
+        self.assertEqual(len(starts), 1, said)
+        self.assertEqual((starts[0].get("round_kind"), starts[0].get("diagnosis")),
+                         ("diagnosis", "unattributed"), starts[0])
+        self.assertTrue(self.starts("worker"), "診斷輪要起 worker:\n" + said)
 
 
 class TheWorkflowDocSaysSo(unittest.TestCase):

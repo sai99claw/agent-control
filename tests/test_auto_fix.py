@@ -568,11 +568,17 @@ class ThingsThatStopIt(AutoFixBase):
         """rc 非零卻一條紅都解析不出來,**最像「沒有紅」** —— 而派下去的 worker 會
         拿著一份空紅榜去猜,猜出來的修法會改到沒有壞的地方。
 
-        **變異**:把 `[ "$S_FAILS" -eq 0 ]` 那一段拿掉 → 這一條紅。
+        #125(D-076):第一次這樣是**一輪診斷**(`TheRepairBudgetAndTheDiagnosisRound`);
+        這一條釘的是第二次 —— 上一輪(第 2 輪)已經是診斷輪(`ticket.attempt.start`
+        round_kind=diagnosis),它的閘門仍沒有歸因 → 不派 worker、rc 4、Blocked、一頁。
+
+        **變異**:把 `S_DIAG_PREV` 那一段拿掉 → 這一條紅(又派一輪)。
         """
         self.set_worker(WORKER_NEVER)
         self.ticket_ready()
-        self.status(1, NO_ATTRIBUTION_LOG)
+        self.event("emit", "ticket.attempt.start", "--ticket", "1", "--attempt", "2",
+                   "--kv", "round_kind=diagnosis")
+        self.status(1, NO_ATTRIBUTION_LOG, round_no=2)
         done = self.auto_fix()
         self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
         self.assertIn("沒有歸因", done.stderr)
@@ -1874,6 +1880,148 @@ echo "rerun $AC_ROUND ticket=$AC_TICKET" >> "$AC_TEST_LOG"
         self.assertEqual([row["kind"] for row in rows], ["decision"],
                          "三輪紅恰一頁 decision(auto-fix 那頁;ticket.py 只寫事件)")
         self.assertIn("三輪耗盡", rows[0]["state"])
+
+
+# 假 worker(#125):每輪 commit 一個新檔、寫 EVIDENCE —— 交得了件,紅綠由假閘門決定。
+WORKER_COMMITS = """#!/bin/sh
+set -e
+echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+W=$PWD
+echo "round $AC_ROUND" > "$W/round-$AC_ROUND.txt"
+(cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪")
+printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "$AC_WORK/EVIDENCE-round$AC_ROUND.md"
+"""
+
+# 假閘門(`gate.rerun_cmd`,#125):照 `gate-plan` 一行一個結果 —— 0 綠 / 1 可歸因的紅 / u 沒有歸因
+# 的紅 / 86 環境可疑 —— 用真的 status.py 寫這一輪的狀態檔,再退那個 rc。第 n 次被叫讀第 n 行,
+# 超過就重複最後一行。每一次記一行 `gate call <n> plan=<x> round=<r>`。
+FAKE_GATE = """#!/bin/sh
+dir=@HOME@
+n=$(( $(cat "$dir/gate-count" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "$dir/gate-count"
+plan=$(sed -n "${n}p" "$dir/gate-plan")
+[ -n "$plan" ] || plan=$(tail -n 1 "$dir/gate-plan")
+echo "gate call $n plan=$plan round=$AC_ROUND" >> "$AC_TEST_LOG"
+run=$(printf '20260921-11%04d-%d' "$n" "$n")
+log="$dir/gate-$n.log"
+state=""
+case $plan in
+    0) cp "$dir/green.log" "$log"; rc=0 ;;
+    1) cp "$dir/red.log" "$log"; rc=1 ;;
+    u) cp "$dir/unattributed.log" "$log"; rc=1 ;;
+    86) cp "$dir/env.log" "$log"; rc=86; state="--state env_suspect --environment-log $dir/env-rows.json" ;;
+esac
+python3 @STATUS@ start --ticket "$AC_TICKET" --kind gate --run-id "$run" --round "$AC_ROUND" \\
+    --worktree "$PWD" >/dev/null
+python3 @STATUS@ done --ticket "$AC_TICKET" --kind gate --run-id "$run" --rc "$rc" \\
+    --log "$log" $state >/dev/null
+exit "$rc"
+"""
+
+ENV_LOG = "preflight: safari 起不來\nPREFLIGHT-LAST-LINE 螢幕鎖著\n"
+ENV_ROWS = [{"source": "statistical", "engine": "safari", "why": "螢幕鎖著", "count": 8,
+             "threshold": 8, "log": "", "line": ""}]
+
+
+class TheRepairBudgetAndTheDiagnosisRound(AutoFixBase):
+    """#125(D-076):只留驗證者 `T125RepairBudgetAndDiagnosis` 沒守的兩件 —— 診斷輪的
+    `ticket.attempt.start` 帶的 diagnosis 值分得出 unattributed / env(T3),與環境診斷的 `## 診斷`
+    帶 preflight 輸出(A4)。預算、重跑、第二次沒歸因那些契約由 T125* 守,這裡不再寫一份。
+
+    worker 與閘門都是替身(WORKER_COMMITS / FAKE_GATE),期望值從票面(A3/A4)來,不從腳本算。"""
+
+    def arrange(self, plan, **ticket):
+        gate = os.path.join(self.home, "fake-gate.sh")
+        write_executable(gate, FAKE_GATE.replace("@HOME@", self.home)
+                         .replace("@STATUS@", self.script("scripts/status.py")))
+        self.write("gate-plan", "".join("%s\n" % step for step in plan), where=self.home)
+        self.write("green.log", GREEN_LOG, where=self.home)
+        self.write("red.log", RED_LOG, where=self.home)
+        self.write("unattributed.log", NO_ATTRIBUTION_LOG, where=self.home)
+        self.write("env.log", ENV_LOG, where=self.home)
+        self.write("env-rows.json", json.dumps(ENV_ROWS, ensure_ascii=False), where=self.home)
+        self.set_worker(WORKER_COMMITS, "sh %s" % gate)
+        ticket.setdefault("retry_limit", None)
+        self.ticket_ready(**ticket)
+
+    def env_status(self, round_no=1):
+        log = self.write("round.log", ENV_LOG, where=self.home)
+        rows = self.write("rows.json", json.dumps(ENV_ROWS, ensure_ascii=False), where=self.home)
+        self.run_py("scripts/status.py", "start", "--ticket", "1", "--kind", "gate",
+                    "--run-id", "20260921-100000-1", "--round", str(round_no),
+                    "--worktree", self.repo)
+        return self.run_py("scripts/status.py", "done", "--ticket", "1", "--kind", "gate",
+                           "--run-id", "20260921-100000-1", "--rc", "86", "--log", log,
+                           "--state", "env_suspect", "--environment-log", rows)
+
+    def calls(self):
+        with open(self.log, encoding="utf-8") as handle:
+            return [line.strip() for line in handle
+                    if line.startswith("gate call") or line.startswith("worker ran")]
+
+    def packet(self, r):
+        found = self.result_files("dispatch-round%d.md" % r)
+        self.assertEqual(len(found), 1, found)
+        return self.read(found[0])
+
+    def starts(self):
+        return {row["attempt"]: row for row in self.events() if row["kind"] == "ticket.attempt.start"}
+
+    def decisions(self):
+        return [row for row in self.inbox_rows() if row.get("kind") == "decision"]
+
+    # ------------------------------------------------------------------ A3
+
+    def test_an_unattributed_red_gets_a_diagnosis_round_then_a_normal_repair(self):
+        """A3:第 1 輪 rc 1、failures 空 → 第 2 輪是診斷(`## 診斷` 帶 log 最後一行、沒有紅榜段,
+        attempt.start 帶 round_kind=diagnosis);第 2 輪閘門可歸因 → 第 3 輪是一般修補(有紅榜);
+        之後綠 —— 一頁都沒有(A5)。
+        **變異 M5**:`## 診斷` 那一段只印標題 → log 最後一行不在派工文裡,這一條紅。"""
+        self.arrange([1, 0])
+        self.status(1, NO_ATTRIBUTION_LOG)
+        done = self.auto_fix()
+        self.assertEqual(done.returncode, GREEN_SIMPLE_RC, done.stdout + done.stderr)
+        self.assertEqual(self.worker_rounds(), ["worker ran round 2", "worker ran round 3"])
+        two = self.packet(2)
+        self.assertIn("## 診斷", two)
+        self.assertIn("ModuleNotFoundError: No module named 'test_thing'", two, "log 的最後一行")
+        self.assertNotIn("## 紅榜", two)
+        three = self.packet(3)
+        self.assertIn("## 紅榜", three)
+        self.assertIn("test_thing.T.test_thing", three)
+        self.assertNotIn("## 診斷", three)
+        starts = self.starts()
+        self.assertEqual(starts["2"]["kind"], "ticket.attempt.start", "事件種類不被 kv 蓋掉")
+        self.assertEqual((starts["2"].get("round_kind"), starts["2"].get("diagnosis")),
+                         ("diagnosis", "unattributed"))
+        self.assertIsNone(starts["3"].get("round_kind"))
+        self.assertIsNone(starts["3"].get("diagnosis"))
+        self.assertEqual(self.inbox_rows(), [], "診斷導出可歸因的紅、最後綠:只寫事件(A5)")
+
+    # ------------------------------------------------------------------ A4
+
+    def test_an_environment_suspect_twice_gets_one_diagnosis_then_one_page(self):
+        """A4:[86→86] → 第 2 輪是診斷(派工文列嫌疑列 engine / why 與 preflight 輸出),第 2 輪閘門
+        仍 86 → 一頁「environment」、rc 4、不再派。"""
+        self.arrange([86])
+        self.env_status()
+        done = self.auto_fix()
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        self.assertTrue(os.path.exists(self.log), "no calls.log: " + done.stdout + done.stderr)
+        self.assertEqual(self.calls(), ["gate call 1 plan=86 round=1", "worker ran round 2",
+                                        "gate call 2 plan=86 round=2"])
+        two = self.packet(2)
+        self.assertIn("## 診斷", two)
+        self.assertIn("engine=safari", two)
+        self.assertIn("why=螢幕鎖著", two)
+        self.assertIn("PREFLIGHT-LAST-LINE", two)
+        start = self.starts()["2"]
+        self.assertEqual(start["kind"], "ticket.attempt.start")
+        self.assertEqual((start.get("round_kind"), start.get("diagnosis")), ("diagnosis", "env"))
+        rows = self.decisions()
+        self.assertEqual(len(rows), 1, self.inbox_rows())
+        self.assertIn("environment", rows[0]["state"])
+        self.assertEqual(self.load_ticket("1")["state"], "Blocked")
 
 
 # 假 review.sh(#121 A6):只回指定的 rc,要測的是 auto-fix 怎麼讀它,不是覆核怎麼判。
@@ -5166,6 +5314,348 @@ class DriverOnTheStartEvents(AutoFixBase):
         self.assertTrue(self.worker_rounds(), done.stdout + done.stderr)
         with open(dead_log, "rb") as handle:
             self.assertEqual(handle.read(), b"the dead round said this\n")
+
+
+
+class T125RepairBudgetAndDiagnosis(AutoFixBase):
+    """#125 A2–A5 (verifier cases, D-076): the repair budget is `repair.max_rounds` (default 3 repair
+    rounds after the first red, D-050 ②); an unattributed red gets ONE diagnosis round (`## 診斷`)
+    instead of a page; an environment suspect (rc 86) is re-run once mechanically, then gets one
+    diagnosis round; a second consecutive unattributed / 86 outcome pages main once.
+
+    The gate after every round is a scripted fake (`gate.rerun_cmd`): call n plays the n-th entry of
+    `gate-script.json` (green / red / unattr / env), writes that run's status through
+    `scripts/status.py` exactly like a gate verdict, logs `gate call n …` and exits with the rc.
+    Expected values come from the ticket text (A2: rounds [2, 3, 4]; A3/A4: one page, rc 4), not
+    from a run of the script under test."""
+
+    FAKE_GATE = r'''
+import json, os, subprocess, sys
+home = sys.argv[1]
+with open(os.path.join(home, "gate-script.json"), encoding="utf-8") as handle:
+    plan = json.load(handle)
+counter = os.path.join(home, "gate-count")
+n = (int(open(counter).read()) if os.path.exists(counter) else 0) + 1
+with open(counter, "w") as handle:
+    handle.write(str(n))
+outcome = plan[n - 1] if n <= len(plan) else "unscripted"
+round_no = os.environ.get("AC_ROUND") or "1"
+with open(os.environ["AC_TEST_LOG"], "a", encoding="utf-8") as handle:
+    handle.write("gate call %d round=%s %s\n" % (n, round_no, outcome))
+if outcome == "unscripted":
+    sys.exit(3)
+rc = {"green": 0, "red": 1, "unattr": 1, "env": 86}[outcome]
+log = os.path.join(home, "fake-gate-%d.log" % n)
+with open(log, "w", encoding="utf-8") as handle:
+    handle.write(open(os.path.join(home, "log-%s.txt" % outcome), encoding="utf-8").read())
+root = os.environ["AC_ROOT"]
+status = os.path.join(os.environ["AC_HOME"], "scripts", "status.py")
+ticket = os.environ.get("AC_TICKET") or "1"
+run_id = "20260922-%06d-1" % n
+base = subprocess.run(["git", "-C", root, "rev-parse", "main"], capture_output=True,
+                      text=True).stdout.strip()
+subprocess.run([sys.executable, status, "start", "--ticket", ticket, "--kind", "gate",
+                "--run-id", run_id, "--base-sha", base, "--round", round_no,
+                "--worktree", os.getcwd()], check=True, capture_output=True)
+extra = []
+if outcome == "env":
+    extra = ["--state", "env_suspect", "--environment-log", os.path.join(home, "suspects.json")]
+subprocess.run([sys.executable, status, "done", "--ticket", ticket, "--kind", "gate",
+                "--run-id", run_id, "--rc", str(rc), "--log", log] + extra,
+               check=True, capture_output=True)
+sys.exit(rc)
+'''
+
+    SUSPECT_WHY = "localStorage id=<id> empty after <n> seconds"
+
+    # Hands in one commit per round (the sandbox branch has no src/ yet, so mkdir first); the
+    # fake gate, not this file, decides the round's outcome.
+    WORKER_COMMITS = """#!/bin/sh
+set -e
+echo "worker ran round $AC_ROUND" >> "$AC_TEST_LOG"
+W=$PWD
+cd "$AC_WORK"
+mkdir -p "$W"/src
+printf 'round %s\\n' "$AC_ROUND" > "$W"/src/t125-round.txt
+(cd "$W" && git add -A && git commit -q -m "t$AC_TICKET 第 $AC_ROUND 輪") || true
+printf '# 第 %s 輪\\n已排除的假設:沒有\\n' "$AC_ROUND" > "EVIDENCE-round$AC_ROUND.md"
+"""
+
+    def setUp(self):
+        super().setUp()
+        logs = {"green": GREEN_LOG, "red": RED_LOG, "unattr": NO_ATTRIBUTION_LOG,
+                "env": "ENVIRONMENT WAVE: safari stopped the segment\n" + NO_ATTRIBUTION_LOG}
+        for name, text in logs.items():
+            self.write("log-%s.txt" % name, text, where=self.home)
+        self.write("suspects.json", json.dumps([{
+            "source": "statistical", "engine": "safari", "why": self.SUSPECT_WHY,
+            "count": 8, "threshold": 8, "log": "", "line": ""}]), where=self.home)
+        self.fake_gate = self.write("fake-gate.py", self.FAKE_GATE, where=self.home)
+
+    def arrange(self, gate_plan, retry_limit="absent", repair=None, worker=None):
+        """Ticket #1 Ready, the fake gate scripted with `gate_plan`, an optional `repair` config.
+        `retry_limit="absent"` removes the key (A1: absent = config decides)."""
+        self.set_worker(worker or self.WORKER_COMMITS,
+                        rerun_cmd="python3 %s %s" % (self.fake_gate, self.home))
+        if repair is not None:
+            conf = json.loads(self.read("board/config.json"))
+            conf["repair"] = repair
+            self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+        self.write("gate-script.json", json.dumps(gate_plan), where=self.home)
+        if retry_limit == "absent":
+            self.make_ticket("1")
+            path = os.path.join("tickets", "1.json")
+            row = json.loads(self.read(path))
+            row.pop("retry_limit", None)
+            self.write(path, json.dumps(row, ensure_ascii=False, indent=2) + "\n")
+            self.git("add", "-A")
+            self.git("commit", "-q", "-m", "開票 #1")
+            self.git("push", "-q", "origin", "main")
+        else:
+            self.ticket_ready(retry_limit=retry_limit)
+
+    def env_status(self):
+        """Round 1's gate verdict is an environment suspect: rc 86, state env_suspect, one row."""
+        log = self.write("round.log", "ENVIRONMENT WAVE\n" + NO_ATTRIBUTION_LOG, where=self.home)
+        base = self.git("rev-parse", "main").strip()
+        run_id = "20260921-100000-1"
+        self.run_py("scripts/status.py", "start", "--ticket", "1", "--kind", "gate",
+                    "--run-id", run_id, "--base-sha", base, "--round", "1",
+                    "--worktree", self.repo)
+        done = self.run_py("scripts/status.py", "done", "--ticket", "1", "--kind", "gate",
+                           "--run-id", run_id, "--rc", "86", "--log", log,
+                           "--state", "env_suspect",
+                           "--environment-log", os.path.join(self.home, "suspects.json"))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+    def calls(self):
+        if not os.path.exists(self.log):
+            return []
+        with open(self.log, encoding="utf-8") as handle:
+            return [line.strip() for line in handle
+                    if line.startswith("gate call") or line.startswith("worker ran")]
+
+    def gate_calls(self):
+        return [line for line in self.calls() if line.startswith("gate call")]
+
+    def decision_pages(self):
+        return [row for row in self.inbox_rows(ticket="1") if row.get("kind") == "decision"]
+
+    def page_text(self, row):
+        return self.read(row["page"])
+
+    def dispatch(self, r):
+        found = sorted(glob.glob(os.path.join(self.repo, "reports", "t1", "*",
+                                              "dispatch-round%d.md" % r)))
+        self.assertEqual(len(found), 1, "dispatch-round%d.md: %s" % (r, found))
+        with open(found[0], encoding="utf-8") as handle:
+            return handle.read()
+
+    def section(self, text, header):
+        """The body of `header` up to the next `## ` header ('' when the header is absent)."""
+        at = text.find("\n" + header)
+        if at < 0:
+            return ""
+        body = text[at + 1 + len(header):]
+        end = body.find("\n## ")
+        return body if end < 0 else body[:end]
+
+    def start_values(self, attempt):
+        rows = [row for row in self.events() if row["kind"] == "ticket.attempt.start"
+                and str(row.get("attempt")) == str(attempt)]
+        self.assertTrue(rows, "no ticket.attempt.start for attempt %s" % attempt)
+        return [set(str(value) for value in row.values()) for row in rows]
+
+    def env_reruns(self):
+        return [row for row in self.events()
+                if row["kind"] == "gate.rerun" and row.get("reason") == "env_suspect"]
+
+    # ------------------------------------------------------------------ A2 budget
+
+    def test_a2_red_forever_runs_repair_rounds_2_3_4_then_one_page(self):
+        """A2: max_rounds 3 (default, no key), ticket without retry_limit, gate red on rounds
+        1..4 -> worker rounds 2, 3, 4; after round 4 Blocked / owner main, exactly one decision
+        page (A5). Old budget `retry_limit or 2` stops after [2, 3]."""
+        self.arrange(["red", "red", "red", "red"])
+        self.status(1, RED_LOG)
+        done = self.auto_fix()
+        self.assertEqual(self.worker_rounds(),
+                         ["worker ran round 2", "worker ran round 3", "worker ran round 4"],
+                         done.stdout + done.stderr)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        ticket = self.load_ticket("1")
+        self.assertEqual((ticket["state"], ticket.get("owner")), ("Blocked", "main"))
+        self.assertEqual(len(self.decision_pages()), 1, self.decision_pages())
+
+    def test_a2_config_max_rounds_is_the_budget_when_the_ticket_has_no_number(self):
+        """A1/A2: `repair.max_rounds: 1` and no retry_limit -> only round 2, then one page."""
+        self.arrange(["red", "red", "red"], repair={"max_rounds": 1})
+        self.status(1, RED_LOG)
+        done = self.auto_fix()
+        self.assertEqual(self.worker_rounds(), ["worker ran round 2"], done.stdout + done.stderr)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(len(self.decision_pages()), 1, self.decision_pages())
+
+    def test_a2_ticket_retry_limit_1_dispatches_only_round_2(self):
+        """A2: a ticket's retry_limit 1 wins over the default 3 -> rounds == [2], one page."""
+        self.arrange(["red", "red", "red"], retry_limit=1)
+        self.status(1, RED_LOG)
+        done = self.auto_fix()
+        self.assertEqual(self.worker_rounds(), ["worker ran round 2"], done.stdout + done.stderr)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(len(self.decision_pages()), 1, self.decision_pages())
+
+    def test_a2_a_fresh_process_after_a_round_2_red_continues_at_round_3(self):
+        """A2: status files are the truth - a new auto-fix after round 2's red dispatches 3 then 4
+        (default budget 4 rounds), never restarts at 2."""
+        self.arrange(["red", "red", "red"])
+        self.status(1, RED_LOG)
+        self.status(1, RED_LOG, run_id="20260921-100001-1", round_no=2)
+        done = self.auto_fix()
+        self.assertEqual(self.worker_rounds(), ["worker ran round 3", "worker ran round 4"],
+                         done.stdout + done.stderr)
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+
+    # ------------------------------------------------------------- A3 unattributed
+
+    def test_a3_an_unattributed_red_dispatches_one_diagnosis_round(self):
+        """A3: round 1 rc 1, failures [] -> dispatch-round2.md has `## 診斷` carrying the last
+        lines of the gate log (not its 250-lines-ago head) and the blocking-objection rule, and no
+        red list; attempt 2 starts with kind=diagnosis. Its gate goes attributable red -> round 3
+        is a normal repair dispatch (red list, no `## 診斷`); green after it -> no page (A5)."""
+        head = "HEAD-MARKER-T125 first line of a long gate log"
+        log = head + "\n" + "".join("filler line %d\n" % i for i in range(250)) \
+            + NO_ATTRIBUTION_LOG
+        self.arrange(["red", "green"])
+        self.status(1, log)
+        done = self.auto_fix()
+        self.assertEqual(self.worker_rounds(), ["worker ran round 2", "worker ran round 3"],
+                         done.stdout + done.stderr)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        first = self.dispatch(2)
+        diagnosis = self.section(first, "## 診斷")
+        self.assertTrue(diagnosis.strip(), "dispatch-round2.md has no `## 診斷` body:\n" + first)
+        self.assertIn("ModuleNotFoundError: No module named 'test_thing'", diagnosis,
+                      "the gate log's last line belongs in `## 診斷`")
+        self.assertNotIn(head, first, "only the last 200 lines of the log, not the whole log")
+        self.assertIn("OBJECTION: blocking", diagnosis)
+        self.assertNotIn("\n## 紅榜", first, "a diagnosis round has no red list section")
+        self.assertTrue(any("diagnosis" in values for values in self.start_values(2)),
+                        "ticket.attempt.start of round 2 carries kind=diagnosis")
+        second = self.dispatch(3)
+        self.assertIn("\n## 紅榜", second)
+        self.assertIn("test_thing.T.test_thing", second)
+        self.assertNotIn("## 診斷", second)
+        self.assertFalse(any("diagnosis" in values for values in self.start_values(3)))
+        self.assertEqual(self.decision_pages(), [], "diagnosis then green writes events only")
+
+    def test_a3_a_diagnosis_round_that_goes_green_takes_the_green_path(self):
+        """A3/A5: unattributed -> diagnosis round 2 -> green: InReview, rc 0, no page."""
+        self.arrange(["green"])
+        self.status(1, NO_ATTRIBUTION_LOG)
+        done = self.auto_fix()
+        self.assertEqual(self.worker_rounds(), ["worker ran round 2"], done.stdout + done.stderr)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["state"], "InReview")
+        self.assertEqual(self.decision_pages(), [])
+
+    def test_a3_a_second_consecutive_unattributed_red_pages_once_and_stops(self):
+        """A3: diagnosis round 2's gate is unattributed again -> rc 4, no round 3, exactly one
+        decision page and it names round 2 (no second consecutive diagnosis)."""
+        self.arrange(["unattr", "unattr", "unattr"])
+        self.status(1, NO_ATTRIBUTION_LOG)
+        done = self.auto_fix()
+        self.assertEqual(self.worker_rounds(), ["worker ran round 2"], done.stdout + done.stderr)
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        pages = self.decision_pages()
+        self.assertEqual(len(pages), 1, pages)
+        self.assertRegex(self.page_text(pages[0]), r"第\s*2\s*輪|round\s*2")
+
+    # ------------------------------------------------------------- A4 env suspect
+
+    def test_a4_an_env_suspect_is_rerun_once_and_a_green_rerun_needs_no_worker(self):
+        """A4: state env_suspect -> the same gate command runs once more (event gate.rerun
+        reason=env_suspect, not a round); rc 0 -> green path, no worker, no page."""
+        self.arrange(["green"])
+        self.env_status()
+        done = self.auto_fix()
+        self.assertEqual(len(self.gate_calls()), 1, self.calls())
+        self.assertEqual(len(self.env_reruns()), 1, [row["kind"] for row in self.events()])
+        self.assertEqual(self.worker_rounds(), [], done.stdout + done.stderr)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["state"], "InReview")
+        self.assertEqual(self.decision_pages(), [])
+
+    def test_a4_an_attributable_rerun_goes_to_a_normal_repair_round_that_the_rerun_did_not_spend(self):
+        """A4/A2: rerun -> attributable red -> repair round 2 with the red list. retry_limit 1
+        (two rounds in all): the free re-run must not use up round 2. Order: gate, then worker."""
+        self.arrange(["red", "green"], retry_limit=1)
+        self.env_status()
+        done = self.auto_fix()
+        calls = self.calls()
+        self.assertGreaterEqual(len(calls), 2, done.stdout + done.stderr)
+        self.assertTrue(calls[0].startswith("gate call 1 ") and calls[0].endswith(" red"), calls)
+        self.assertEqual(calls[1], "worker ran round 2", calls)
+        self.assertEqual(self.worker_rounds(), ["worker ran round 2"])
+        self.assertEqual(len(self.env_reruns()), 1)
+        packet = self.dispatch(2)
+        self.assertIn("\n## 紅榜", packet)
+        self.assertIn("test_thing.T.test_thing", packet)
+        self.assertNotIn("## 診斷", packet)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.decision_pages(), [])
+
+    def test_a4_86_again_gets_one_diagnosis_round_then_one_environment_page(self):
+        """A4: rerun 86 -> diagnosis round 2 whose `## 診斷` lists the suspect rows (engine, why);
+        that round's gate 86 again -> one page 'environment: needs a human', rc 4, no round 3."""
+        self.arrange(["env", "env", "env"])
+        self.env_status()
+        done = self.auto_fix()
+        self.assertEqual(self.worker_rounds(), ["worker ran round 2"], done.stdout + done.stderr)
+        self.assertEqual([line.split()[-1] for line in self.calls()[:1]], ["env"],
+                         "the re-run comes before any worker")
+        diagnosis = self.section(self.dispatch(2), "## 診斷")
+        self.assertIn("safari", diagnosis)
+        self.assertIn(self.SUSPECT_WHY, diagnosis)
+        self.assertNotIn("\n## 紅榜", self.dispatch(2))
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        pages = self.decision_pages()
+        self.assertEqual(len(pages), 1, pages)
+        self.assertRegex(self.page_text(pages[0]), r"環境|[Ee]nvironment")
+
+    def test_a4_env_rerun_0_goes_straight_to_diagnosis(self):
+        """A4: `repair.env_rerun: 0` -> no mechanical re-run; round 2 is a diagnosis round."""
+        self.arrange(["green"], repair={"env_rerun": 0})
+        self.env_status()
+        done = self.auto_fix()
+        self.assertEqual(self.env_reruns(), [])
+        self.assertEqual(self.calls()[:1], ["worker ran round 2"], done.stdout + done.stderr)
+        self.assertEqual(len(self.gate_calls()), 1)
+        self.assertTrue(self.section(self.dispatch(2), "## 診斷").strip())
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.decision_pages(), [])
+
+
+class T125BatchDiagnosis(AutoFixBase):
+    """#125 A3 batch: an unattributed batch red (rc 1, failures []) gets a diagnosis dispatch
+    `reports/batch/<stamp>/dispatch-round1.md` with `## 診斷` and no red list, instead of rc 4
+    before any dispatch."""
+
+    def test_a3_an_unattributed_batch_red_is_dispatched_as_a_diagnosis(self):
+        batch = self.make_batch()
+        path = os.path.join("reports", "t1", batch["run_id"], "status.json")
+        data = json.loads(self.read(path))
+        data["failures"] = []
+        self.write(path, json.dumps(data, ensure_ascii=False, indent=2))
+        self.set_worker(WORKER_NEVER)
+        done = self.run_sh("scripts/auto-fix.sh", "--batch", "land/X", "1", "2", "--no-review",
+                           env=self.env(AC_BATCH_RUN_ID=batch["run_id"]))
+        found = glob.glob(os.path.join(self.repo, "reports", "batch", "*", "dispatch-round1.md"))
+        self.assertEqual(len(found), 1, done.stdout + done.stderr)
+        with open(found[0], encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertIn("\n## 診斷", text)
+        self.assertNotIn("\n## 紅榜", text)
 
 
 if __name__ == "__main__":

@@ -461,45 +461,6 @@ class GateSh(Sandbox):
         self.assertEqual(self.status_of("7")["state"], "done")
         self.assertNotIn("env.suspect", self.kinds())
 
-    def test_an_environment_suspect_round_does_not_dispatch_a_worker(self):
-        """驗收 8(D-019):**這一格非空 → 不自動派**。
-
-        `gate.sh` 舊版對任何 rc≠0 都叫 `auto_fix`,而 `auto_fix()` 沒看這一格 ——
-        rc=86 那一輪照樣送一個 worker 進一台「現在跑不動」的機器(#7 的案例帶著
-        `--no-auto-fix` 跑,所以沒抓到)。
-
-        **變異**:把 `auto_fix` 開頭那一行守衛拿掉 → 這一條紅(`gate: auto-fix ——`
-        那一行會出現,假 worker 會被叫)。守衛**寫反邊**(非空才派)時,其他驗收
-        全綠,只有這一條紅。
-        """
-        self.write("tests/test_env_wave.py", ENVIRONMENT_WAVE)
-        # 假 worker:被叫到就寫一行。**換的是代價不是語意** —— 這一條問的是
-        # 「它到底有沒有被叫到」,而那正好因此變成一個看得見的事實。
-        worker = os.path.join(self.home, "fake-worker.sh")
-        write_executable(worker, "#!/bin/sh\n"
-                                 "echo fake-worker-ran >> \"$AC_TEST_LOG\"\n")
-        config = json.loads(self.read("board/config.json"))
-        config["worker"] = {"command": "sh %s" % worker, "timeout_seconds": 60}
-        self.write("board/config.json", json.dumps(config, ensure_ascii=False, indent=2))
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", "沙盒的假 worker")
-        self.make_ticket(7)
-        done = self.gate("tests/test_env_wave.py", "--ticket", "7")
-        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("環境可疑,不自動派", done.stdout)
-        # **釘住這一條的是下面兩句,不是最後那一句。** 實測:把守衛拿掉,`auto-fix.sh`
-        # 真的被叫起來(stdout 出現這兩行),但那支腳本在這個沙盒裡會因為自己的前置
-        # (票沒 commit、沒有第一輪的 patch)先停下來,所以**假 worker 兩邊都沒被叫** ——
-        # 只斷言「worker 沒被叫」的那一版,守衛在不在都是綠的(§5.5 的母題)。
-        # 最後那一句留著是因為它是驗收的字面,而它現在是**第二道**而不是唯一那道。
-        self.assertNotIn("gate: auto-fix ——", done.stdout,
-                         "連 auto-fix.sh 都不該被叫起來")
-        self.assertNotIn("auto-fix: #7", done.stdout,
-                         "auto-fix.sh 已經開始讀上一輪了")
-        self.assertEqual([row for row in self.ran() if row == "fake-worker-ran"], [],
-                         "環境可疑的那一輪派了 worker")
-        self.assertEqual(self.status_of("7")["state"], "env_suspect")
-
     def test_a_plain_red_round_still_dispatches(self):
         """守衛不准把**所有**紅都攔下來:那一版與「auto-fix 壞了」長得一樣。
 
@@ -1352,6 +1313,51 @@ class BranchGateRunsTheWholeRegressionLayer(Sandbox):
                                         REG_RUNS=self.runs))
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual(self.full_section(done.stdout), self.FULL_SECTION_AT_BASE)
+
+
+
+class T125EnvSuspectHandsOffToAutoFix(Sandbox):
+    """#125 A4 (D-076 replaces D-019 reason 5's 'never dispatch over env suspect'): a gate that ends
+    in rc 86 with auto-fix on calls auto-fix (which re-runs once, then diagnoses) and writes no
+    page itself; `--no-auto-fix` keeps today's page and calls nothing. auto-fix is a stub that
+    records its argument, so 'was it called' is a visible fact."""
+
+    def setUp(self):
+        super().setUp()
+        for name in ("test_ticket", "test_event", "test_memory",
+                     "test_no_project_names", "test_heartbeat", "test_land"):
+            self.write(os.path.join("tests", "%s.py" % name), PASSING % name)
+        self.write("tests/test_env_wave.py", ENVIRONMENT_WAVE)
+        self.marker = os.path.join(self.home, "auto-fix-called")
+        self.stub_script("auto-fix.sh", "#!/bin/sh\necho \"$1\" >> %s\n" % self.marker)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "sandbox: env wave + stub auto-fix")
+        self.make_ticket(7)
+
+    def called(self):
+        if not os.path.exists(self.marker):
+            return []
+        with open(self.marker, encoding="utf-8") as handle:
+            return handle.read().split()
+
+    def decision_pages(self):
+        return [row for row in self.inbox_rows(ticket="7") if row.get("kind") == "decision"]
+
+    def test_a4_rc_86_with_auto_fix_on_calls_auto_fix_and_writes_no_page(self):
+        done = self.run_sh("scripts/gate.sh", "tests/test_env_wave.py", "--ticket", "7")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.status_of("7")["state"], "env_suspect", "precondition: rc 86 path")
+        self.assertEqual(self.called(), ["7"], done.stdout + done.stderr)
+        self.assertNotIn("環境可疑,不自動派", done.stdout)
+        self.assertEqual(self.decision_pages(), [],
+                         "the page is auto-fix's terminal state, not the gate's")
+
+    def test_a4_rc_86_with_no_auto_fix_keeps_the_page_and_calls_nothing(self):
+        done = self.run_sh("scripts/gate.sh", "tests/test_env_wave.py", "--ticket", "7",
+                           "--no-auto-fix")
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.called(), [])
+        self.assertEqual(len(self.decision_pages()), 1, self.decision_pages())
 
 
 if __name__ == "__main__":

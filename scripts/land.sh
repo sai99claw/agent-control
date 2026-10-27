@@ -53,9 +53,12 @@
 # ## 一批 N≥2 張全套紅(#109,D-H51 ②)
 # **不找是誰弄紅的**:同一把鎖下叫 `auto-fix.sh --batch land/<stamp> <id…>`(一個 worker 拿整批),
 # 那個 worker 就在這一個 land worktree(整合分支)上自己 commit(#145,D-054 Q9),
-# rc 0 就在同一個 land worktree 重跑全套;最多 `batch_fix.rounds`(預設 2)輪。鎖整段不放,所以
+# rc 0 就在同一個 land worktree 重跑全套;最多 `batch_fix.rounds` 輪(沒設 = `repair.max_rounds`,預設 3;
+# #125,D-050 ②「落地全套紅」同一個預算)。鎖整段不放,所以
 # ff-only 不會因為主線中途動了而白跑;代價是 docs 通道最多等 rounds × (全套 + worker + 覆核)。
-# 修滿仍紅才找嫌疑票,規則純機械:最後一輪紅榜 `failures[].file` 對各票的
+# 全套 rc 86(環境可疑,#125 A4)先機械重跑一次全套(`repair.env_rerun`,不算一輪);紅榜空的
+# (沒有歸因 / 仍環境可疑)那一輪的批次 worker 拿的是 `## 診斷`;診斷之後還是一樣 → 一頁、停,不找嫌疑票
+# (沒有紅榜可以對)。修滿仍紅才找嫌疑票,規則純機械:最後一輪紅榜 `failures[].file` 對各票的
 # `verify.files`、`git diff --name-only main...<分支>`。**恰有部分票命中** → 那幾張踢出
 # (各一頁 decision,票不改 state —— 改票會讓覆核過期)、其餘自動重 land 一次(`AC_LAND_DEPTH`,
 # 重 land 那一層不再踢);對不到或全中 → 停、worktree 留、一頁 decision 掛第一張票。
@@ -293,22 +296,32 @@ status_phase_all() {   # $1 = gate|merge|push  $2 = rc  $3 = 說明  [$4 = 抄�
 
 # **每一條退出路徑都要寫終態**(2026-09-21 外部審查:停在 running 的檔與還在跑的
 # 檔長得一樣)。log 由 status.py 複製一份進 run 目錄 —— 成功之後 worktree 會被收掉。
-status_done_all() {   # $1 = rc  $2 = 說明
+status_done_all() {   # $1 = rc  $2 = 說明  [$3 = env_suspect:全套說環境可疑(#125 A4)]
     [ -n "$IDS" ] || return 0
     if [ -z "$LAND_RUN" ]; then
         LAND_RUN=$STAMP-$$
         status_start_all
     fi
+    set -- "$1" "$2" "${3:-}"
+    sd_state=""
+    if [ "$3" = env_suspect ]; then
+        # 嫌疑列在閘門的那一份(`<gate.log>.env-suspect.json`);沒有也照記 state,不當成乾淨。
+        sd_state="--state env_suspect"
+        [ ! -f "${WT:-}/gate.log.env-suspect.json" ] \
+            || sd_state="$sd_state --environment-log $WT/gate.log.env-suspect.json"
+    fi
     for i in $IDS; do
         if [ -n "${WT:-}" ] && [ -f "$WT/gate.log" ]; then
+            # shellcheck disable=SC2086
             python3 "$AC/status.py" done --ticket "$i" --kind land \
                 --run-id "$LAND_RUN" --sha "${SHA:-}" --rc "$1" --note "$2" \
-                --log "$WT/gate.log" >/dev/null 2>&1 \
+                --log "$WT/gate.log" $sd_state >/dev/null 2>&1 \
                 || echo "land: #$i 的狀態檔寫不出來(不擋落地)" >&2
         else
+            # shellcheck disable=SC2086
             python3 "$AC/status.py" done --ticket "$i" --kind land \
                 --run-id "$LAND_RUN" --sha "${SHA:-}" --rc "$1" --note "$2" \
-                >/dev/null 2>&1 \
+                $sd_state >/dev/null 2>&1 \
                 || echo "land: #$i 的狀態檔寫不出來(不擋落地)" >&2
         fi
     done
@@ -658,19 +671,28 @@ ROUND=0
 GATE_RUN=""
 GATE=$(ac_gate_script "$WT")
 AC_SHA=$(ac_sha "$(ac_home)")
-run_gate() {
+GATE_RC=0
+run_gate() {   # 設定 GATE_RC(全套的退出碼:86 = 環境可疑,與 1 分開記 —— #125 A4)
     ROUND=$((ROUND + 1))
     SHA=$(git -C "$WT" rev-parse --short HEAD)
     GATE_RUN=$LAND_RUN-gate
     [ "$ROUND" -eq 1 ] || GATE_RUN=$LAND_RUN-gate-r$ROUND
     ev gate.start --kv mode=full --kv "round=$ROUND" --kv "batch=$STAMP" --kv "sha=$SHA" \
         --kv "ac_sha=$AC_SHA"
-    if (cd "$WT" && AC_ROOT="$ROOT" AC_GATE_TICKET="$GATE_TICKET" AC_GATE_TICKETS="$GATE_TICKETS" \
-        AC_GATE_RUN_ID="$GATE_RUN" AC_NO_INBOX=1 sh "$GATE" --full --no-auto-fix); then
+    (cd "$WT" && AC_ROOT="$ROOT" AC_GATE_TICKET="$GATE_TICKET" AC_GATE_TICKETS="$GATE_TICKETS" \
+        AC_GATE_RUN_ID="$GATE_RUN" AC_NO_INBOX=1 sh "$GATE" --full --no-auto-fix)
+    GATE_RC=$?
+    if [ "$GATE_RC" -eq 0 ]; then
         status_phase_all gate 0 "全套第 $ROUND 輪綠"
         ev gate.pass --kv mode=full --kv "round=$ROUND" --kv "batch=$STAMP" --kv "sha=$SHA" \
             --kv "ac_sha=$AC_SHA"
         return 0
+    fi
+    if [ "$GATE_RC" -eq 86 ]; then
+        status_phase_all gate 86 "全套第 $ROUND 輪環境可疑(env_suspect,rc 86)" "$GATE_RUN"
+        ev gate.fail --kv mode=full --kv "round=$ROUND" --kv "batch=$STAMP" --kv "sha=$SHA" \
+            --kv "ac_sha=$AC_SHA" --kv rc=86 --kv state=env_suspect
+        return 1
     fi
     status_phase_all gate 1 "全套第 $ROUND 輪紅" "$GATE_RUN"
     ev gate.fail --kv mode=full --kv "round=$ROUND" --kv "batch=$STAMP" --kv "sha=$SHA" \
@@ -678,16 +700,39 @@ run_gate() {
     return 1
 }
 
-# 批次修復的輪數:`board/config.json` 的 `batch_fix.rounds`,預設 2。
+# 最近一輪全套的紅榜幾條(land 這一輪的狀態檔,run_gate 抄過來的那一份);讀不到印空字串。
+land_fails() {
+    python3 - "$(python3 "$AC/status.py" rundir --ticket "$(echo $IDS | cut -d' ' -f1)" \
+        --run-id "$LAND_RUN" 2>/dev/null)/status.json" <<'FAILS_PY' 2>/dev/null || echo ""
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    print(len(json.load(handle).get("failures") or []))
+FAILS_PY
+}
+
+# `repair.env_rerun`(#125 A4):全套 rc 86 時機械重跑幾次;預設只在 project_config 那一份。
+env_reruns() {
+    python3 - "$AC" "$ROOT" <<'RERUN_PY' 2>/dev/null || echo 1
+import sys
+sys.path.insert(0, sys.argv[1])
+import event, project_config
+print(project_config.repair_setting(event.config(sys.argv[2]), "env_rerun"))
+RERUN_PY
+}
+
+# 批次修復的輪數:`board/config.json` 的 `batch_fix.rounds`(專案自己設的覆寫),沒設 = 單票同一個
+# 預算 `repair.max_rounds`(#125 A1,預設 3 —— 預設值只在 project_config 那一份)。
 batch_rounds() {
-    python3 - "$ROOT" <<'ROUNDS_PY'
-import json, os, sys
-try:
-    with open(os.path.join(sys.argv[1], "board", "config.json"), encoding="utf-8") as handle:
-        value = int((json.load(handle).get("batch_fix") or {}).get("rounds", 2))
-except (OSError, ValueError, TypeError, AttributeError):
-    value = 2
-print(max(0, value))
+    python3 - "$AC" "$ROOT" <<'ROUNDS_PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import event, project_config
+conf = event.config(sys.argv[2])
+own = (conf.get("batch_fix") or {}).get("rounds") if isinstance(conf.get("batch_fix"), dict) else None
+if isinstance(own, int) and not isinstance(own, bool):
+    print(max(0, own))
+else:
+    print(project_config.repair_setting(conf, "max_rounds"))
 ROUNDS_PY
 }
 
@@ -695,10 +740,54 @@ ROUNDS_PY
 # 綠了 return 0 走第 6 步;其餘每一條路都在這裡收尾、退出。$@ = 這一批的分支。
 batch_fix() {
     rounds=$(batch_rounds)
+    max_reruns=$(env_reruns)
     fixed=0
-    while [ "$fixed" -lt "$rounds" ]; do
+    reruns=0
+    diag_prev=""
+    while :; do
+        # 環境可疑(#125 A4):同一份全套機械重跑,不算一輪、不派 worker;上一輪是診斷就不再重跑。
+        if [ "$GATE_RC" -eq 86 ] && [ -z "$diag_prev" ] && [ "$reruns" -lt "$max_reruns" ]; then
+            reruns=$((reruns + 1))
+            echo "land: 全套第 $ROUND 輪環境可疑(rc 86)—— 機械重跑一次全套(不算一輪)"
+            ev gate.rerun --note "全套第 $ROUND 輪環境可疑" --kv "stamp=$STAMP" --kv reason=env_suspect \
+                --kv "round=$ROUND"
+            if run_gate; then
+                echo "land: 環境重跑之後全套綠"
+                return 0
+            fi
+            continue
+        fi
+        # 紅榜空的(沒有歸因,或環境可疑而重跑沒救回來):這一輪的批次 worker 拿 `## 診斷`(auto-fix 自己
+        # 認得空紅榜)。診斷之後還是一樣 → 一頁、停;不找嫌疑票 —— 沒有紅榜可以對(A3)。
+        unattributed=""
+        if [ "$GATE_RC" -eq 86 ] || [ "$(land_fails)" = 0 ]; then
+            unattributed=1
+        fi
+        if [ -n "$unattributed" ] && [ -n "$diag_prev" ]; then
+            if [ "$GATE_RC" -eq 86 ]; then
+                stop_state="環境要人看(environment: needs a human;整批 $ALL_BRANCHES)"
+                stop_what="批次診斷輪(第 $fixed 輪修復)之後全套仍環境可疑(rc 86):機械重跑與一輪診斷都沒救回來,先修機器 / 環境再重跑 land"
+            else
+                stop_state="批次診斷輪沒讓紅變成可歸因(整批 $ALL_BRANCHES)"
+                stop_what="diagnosis round $fixed did not make the red attributable:全套 rc=$GATE_RC 而紅榜仍是空的;不找嫌疑票(沒有紅榜可以對)。看 reports/batch/ 的 EVIDENCE 與 gate.log"
+            fi
+            echo "land: $stop_state —— 不再修、不踢;$MAIN 沒動,worktree 留在 $WT"
+            ev land.fail --note "$stop_state" --kv "stamp=$STAMP"
+            land_cost_all fail
+            if [ "$GATE_RC" -eq 86 ]; then
+                status_done_all 86 "$stop_state" env_suspect
+            else
+                status_done_all 1 "$stop_state"
+            fi
+            inbox_first "$stop_state" "$stop_what" \
+                "$WT/gate.log 與 reports/t<票號>/$GATE_RUN/status.json"
+            exit 1
+        fi
+        [ "$fixed" -lt "$rounds" ] || break
+        diag_prev=$unattributed
+        reruns=0
         fixed=$((fixed + 1))
-        echo "land: 全套第 $ROUND 輪紅 —— 批次修復第 $fixed/$rounds 輪:AC_BATCH_RUN_ID=$LAND_RUN sh scripts/auto-fix.sh --batch $BR $GATE_TICKETS"
+        echo "land: 全套第 $ROUND 輪紅 —— 批次修復第 $fixed/$rounds 輪${unattributed:+(診斷:紅榜是空的)}:AC_BATCH_RUN_ID=$LAND_RUN sh scripts/auto-fix.sh --batch $BR $GATE_TICKETS"
         # 紅榜已由 run_gate 抄進 land 這一輪的狀態檔(reports/t<第一張>/$LAND_RUN/status.json)。
         # shellcheck disable=SC2086
         AC_BATCH_RUN_ID="$LAND_RUN" AC_FIX_SOURCE="$BR" sh "$AC/auto-fix.sh" --batch "$BR" $IDS
@@ -718,6 +807,21 @@ batch_fix() {
             return 0
         fi
     done
+    if [ "$GATE_RC" -eq 86 ] || [ "$(land_fails)" = 0 ]; then
+        # 修滿了,而最後一輪紅榜是空的:沒有紅榜可以對,不找嫌疑票(#125 A3)。
+        echo "land: 全套連紅 $ROUND 輪(批次修復 $fixed 輪),最後一輪紅榜是空的 —— 不踢、不重 land;$MAIN 沒動,worktree 留在 $WT"
+        ev land.fail --note "批次全套連紅 $ROUND 輪,紅榜是空的,不踢" --kv "stamp=$STAMP"
+        land_cost_all fail
+        if [ "$GATE_RC" -eq 86 ]; then
+            status_done_all 86 "批次全套連紅 $ROUND 輪,環境可疑(env_suspect)" env_suspect
+        else
+            status_done_all 1 "批次全套連紅 $ROUND 輪,紅榜是空的"
+        fi
+        inbox_first "批次全套連紅 $ROUND 輪(整批 $ALL_BRANCHES)" \
+            "批次修復 $fixed 輪仍紅,最後一輪紅榜是空的$([ "$GATE_RC" -eq 86 ] && echo "(環境可疑 rc 86)") —— 沒有紅榜可以對,不找嫌疑票;留給主線" \
+            "$WT/gate.log 與 reports/t<票號>/$GATE_RUN/status.json"
+        exit 1
+    fi
     echo "land: 全套連紅 $ROUND 輪(批次修復 $fixed 輪)—— 找嫌疑票"
     STATUS_FILE=$(python3 "$AC/status.py" rundir --ticket "$(echo $IDS | cut -d' ' -f1)" \
         --run-id "$GATE_RUN" 2>/dev/null)/status.json
@@ -825,14 +929,26 @@ if ! run_gate; then
     if [ "$AUTOFIX" -eq 1 ] && [ "$NIDS" -ge 2 ]; then
         batch_fix "$@"
     else
-        echo "land: 全套紅,$MAIN 沒動;worktree 留在 $WT"
-        echo "land: 紅榜逐條在 reports/t<票號>/<run_id>/status.json 的 failures(案例、檔、行、log、excerpt)"
-        ev land.fail --note "閘門紅" --kv "stamp=$STAMP"
-        land_cost_all fail
-        status_done_all 1 "閘門紅,沒有 merge、沒有 push"
-        inbox_all "落地時全套紅" \
-            "預設已自動派下一輪 worker;--no-auto-fix 才留給人處理" \
-            "$WT/gate.log 與 reports/t<票號>/$LAND_RUN/status.json"
+        # 全套 rc 86 與 1 分開記(#125 A4):auto-fix 讀到 env_suspect 才走「機械重跑 → 一輪診斷」,
+        # 不把空紅榜讀成「沒有歸因」。
+        if [ "$GATE_RC" -eq 86 ]; then
+            echo "land: 全套環境可疑(env_suspect,rc 86),$MAIN 沒動;worktree 留在 $WT"
+            ev land.fail --note "閘門環境可疑(env_suspect,rc 86)" --kv "stamp=$STAMP" --kv state=env_suspect
+            land_cost_all fail
+            status_done_all 86 "閘門環境可疑(env_suspect,rc 86),沒有 merge、沒有 push" env_suspect
+            inbox_all "落地時全套環境可疑(env_suspect)" \
+                "預設交給 auto-fix:先機械重跑一次閘門,仍可疑派一輪診斷;--no-auto-fix 才留給人處理" \
+                "$WT/gate.log 與 reports/t<票號>/$LAND_RUN/status.json"
+        else
+            echo "land: 全套紅,$MAIN 沒動;worktree 留在 $WT"
+            echo "land: 紅榜逐條在 reports/t<票號>/<run_id>/status.json 的 failures(案例、檔、行、log、excerpt)"
+            ev land.fail --note "閘門紅" --kv "stamp=$STAMP"
+            land_cost_all fail
+            status_done_all 1 "閘門紅,沒有 merge、沒有 push"
+            inbox_all "落地時全套紅" \
+                "預設已自動派下一輪 worker;--no-auto-fix 才留給人處理" \
+                "$WT/gate.log 與 reports/t<票號>/$LAND_RUN/status.json"
+        fi
         auto_fix_all
         exit 1
     fi

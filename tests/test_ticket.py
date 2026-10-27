@@ -71,6 +71,22 @@ class Create(Sandbox):
                          [{"id": "3", "condition": "閘門綠"}])
 
 
+class TheRepairBudget(Sandbox):
+    """#125 A1(D-050 ②):只留驗證者 `T125RepairBudgetKey` 沒守的一件 —— 票的 `retry_limit` 寫成
+    **null**(不是缺鍵)也退回 `repair.max_rounds`(tickets/SCHEMA.md「null / 缺 = 讀當下的
+    repair.max_rounds」;T125 只測缺鍵)。期望值是票面,不是程式印什麼。"""
+
+    def test_a_ticket_without_retry_limit_reads_max_rounds(self):
+        """null / 缺 = config;第一輪 + 3 輪修補 = 第 4 輪仍紅才轉 Blocked。"""
+        self.make_ticket(1, state="Running", retry_limit=None)
+        self.assertEqual(self.ticket("repair-limit", "1").stdout.strip(), "4")
+        self.assertEqual(self.ticket("round", "1", "3", "--red").returncode, 0)
+        self.assertEqual(self.load_ticket("1")["state"], "Running", "第 3 輪還有預算")
+        self.assertEqual(self.ticket("round", "1", "4", "--red").returncode, 0)
+        row = self.load_ticket("1")
+        self.assertEqual((row["state"], row["owner"]), ("Blocked", "main"))
+
+
 class Help(Sandbox):
     """D-001 的具體化:規則住在程式裡,而**程式要自己說得出規則**。
 
@@ -1725,3 +1741,60 @@ class T155AgentCostStaysOutOfCost(Sandbox):
                 self.assertEqual(len(row["cost"]), 1, row["cost"])
                 self.assertNotEqual(row["cost"][0]["by"], "agent-cost-hook")
                 self.assertEqual(row["cost_total"]["by_role"]["worker"]["tokens_in"], 100)
+
+
+class T125RepairBudgetKey(Sandbox):
+    """#125 A1/A2 (D-050 ②, D-076): the repair budget is one config key `repair.max_rounds`
+    (default 3 = repair rounds after the first red) read through ticket.py; a ticket's own
+    `retry_limit` wins. Expected numbers are the ticket text's, not a run of the script."""
+
+    def set_repair(self, repair):
+        conf = json.loads(self.read("board/config.json"))
+        conf["repair"] = repair
+        self.write("board/config.json", json.dumps(conf, ensure_ascii=False, indent=2))
+
+    def ticket_without_limit(self, ident):
+        row = self.make_ticket(ident, state="Running")
+        row.pop("retry_limit", None)
+        self.write(os.path.join("tickets", "%s.json" % ident),
+                   json.dumps(row, ensure_ascii=False, indent=2) + "\n")
+
+    def test_a1_create_without_the_key_writes_retry_limit_3(self):
+        done = self.ticket("create", *MIN)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["retry_limit"], 3)
+
+    def test_a1_create_reads_repair_max_rounds(self):
+        self.set_repair({"max_rounds": 1})
+        done = self.ticket("create", *MIN)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(self.load_ticket("1")["retry_limit"], 1)
+
+    def test_a1_a_ticket_set_retry_limit_wins_over_config(self):
+        self.set_repair({"max_rounds": 5})
+        self.make_ticket(1, state="Running", retry_limit=1)
+        self.assertEqual(self.ticket("round", "1", "2", "--red").returncode, 0)
+        self.assertEqual(self.load_ticket("1")["state"], "Blocked",
+                         "retry_limit 1 = 2 rounds in all, whatever max_rounds says")
+
+    def test_a2_no_retry_limit_and_no_key_means_four_rounds(self):
+        """first red + 3 repairs: round 3 red keeps it Running, round 4 red parks it on main."""
+        self.ticket_without_limit(1)
+        self.assertEqual(self.ticket("round", "1", "2", "--red").returncode, 0)
+        self.assertEqual(self.ticket("round", "1", "3", "--red").returncode, 0)
+        self.assertEqual(self.load_ticket("1")["state"], "Running")
+        self.assertEqual(self.ticket("round", "1", "4", "--red").returncode, 0)
+        row = self.load_ticket("1")
+        self.assertEqual((row["state"], row.get("owner")), ("Blocked", "main"))
+
+    def test_a2_no_retry_limit_follows_repair_max_rounds(self):
+        self.set_repair({"max_rounds": 1})
+        self.ticket_without_limit(1)
+        self.assertEqual(self.ticket("round", "1", "2", "--red").returncode, 0)
+        self.assertEqual(self.load_ticket("1")["state"], "Blocked")
+
+    def test_a1_auto_fix_has_no_retry_limit_or_2_arithmetic_left(self):
+        """static: the two heredoc copies `int(… retry_limit … or 2) + 1` are gone."""
+        with open(os.path.join(SCRIPTS, "auto-fix.sh"), encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertEqual(text.count("or 2) + 1"), 0)

@@ -2,7 +2,7 @@
 
 ## 驗收表(票面每一條一列;期望值來源獨立於被測程式:票面原話 / 夾具自己寫的票檔、替身、紅榜 / git 自己算)
 B1 | unit | land t1-a t2-b;閘門替身 第 1 次紅、第 2 次綠;auto-fix 替身 rc 0、在整合分支疊一個 commit | rc 0;main 含替身 commit;1.json 2.json state=Done;stdout 無「不猜是誰紅的」;auto-fix 恰 1 次、參數 = --batch land/<land.start 的 stamp> 1 2;AC_BATCH_RUN_ID = reports/t1 那一輪 kind=land 的 run_id | 票面 B1 原話;stamp 取自 land.start 事件 kv
-B2 | unit | 閘門替身一律紅、紅榜 file 只命中票 2(verify.files / 分支改動檔 兩種各一) | auto-fix --batch 恰 rounds 次(預設 2;config rounds=1 時 1 次);閘門(第一層)恰 rounds+1 次;收件匣 ticket=2 一頁含「踢出」「單張 land」與紅榜 case 名;events land.fail kicked=2;stdout 含「重 land」;第二次 land.start 只剩 t1-a、它的閘門 env AC_LAND_DEPTH=1;rc 1 | 票面 B2 原話;3 張票時重 land 的紅榜改指票 2 → 不再踢(只踢過 3)
+B2 | unit | 閘門替身一律紅、紅榜 file 只命中票 2(verify.files / 分支改動檔 兩種各一) | auto-fix --batch 恰 rounds 次(預設 3 = repair.max_rounds,#125 A1;config rounds=1 時 1 次);閘門(第一層)恰 rounds+1 次;收件匣 ticket=2 一頁含「踢出」「單張 land」與紅榜 case 名;events land.fail kicked=2;stdout 含「重 land」;第二次 land.start 只剩 t1-a、它的閘門 env AC_LAND_DEPTH=1;rc 1 | 票面 B2 原話;3 張票時重 land 的紅榜改指票 2 → 不再踢(只踢過 3)
 B3 | unit | 紅榜 file=src/zzz(對不到)或 src/a(票 1 與票 2 都中) | rc 1;沒有 kicked 事件、沒有「踢出」頁;land.start 只一筆;land worktree 還在;decision 只掛 #1 一頁且列得出 #2 | 票面 B3 原話
 B4 | unit | --no-auto-fix 兩張;單張一批 | 前者 auto-fix 0 次、閘門 1 次、rc 1、有 decision;後者 auto-fix 恰 1 次參數 = 1(沒有 --batch)、閘門 1 次、rc 1;tests/test_land.py 既有三條還在 | 票面 B4 原話
 B5 | unit | 真的 gate.sh --full 紅,AC_GATE_TICKETS="1 2" / AC_GATE_TICKET=1 | 前者 reports/t1 與 t2 各一份 kind=gate、run_id 都是給的那個、failures 相同且有那條紅;後者只有 t1 | 票面 B5 原話
@@ -12,7 +12,7 @@ B8 | doc  | 讀 docs/WORKFLOW.md | §落地 提到 batch_fix.rounds 與踢;第 1
 
 ## 介面字串(全部出自票面 acceptance / outline,不從腳本抄)
 AC_BATCH_RUN_ID / AC_GATE_TICKETS / AC_LAND_DEPTH  ← env 名(interface_fixed)
-batch_fix.rounds(預設 2)                         ← board/config.json 鍵
+batch_fix.rounds(沒設時 = repair.max_rounds,預設 3;#125 A1 改掉原本的預設 2)← board/config.json 鍵
 "--batch land/<stamp> <id…>"                      ← auto-fix 參數形狀(#108)
 KICKED = "踢出"、SINGLE = "單張 land"、RELAND = "重 land"、STOPPED = "批次修復停了"、OLD = "不猜是誰紅的"
 events: land.fail kicked=<id>;gate.start/pass/fail mode=full round=<r> batch=<stamp>;phase note 「第 r 輪」
@@ -278,15 +278,15 @@ class B2KickTheSuspectAndRelandTheRest(BatchLandWorld):
         self.assertEqual(self.land_branches()[1:2], [["t1-a"]], out)
 
     def test_b2_red_rounds_plus_one_times_kicks_ticket_two_by_allowed_paths(self):
-        """B2 連紅 3 次(rounds 預設 2)→ 不再派;紅榜 file 命中票 2 的分支改動檔 → 踢 2、重 land t1-a(AC_LAND_DEPTH=1)、rc 1。"""
+        """B2 連紅 4 次(rounds 沒設 = repair.max_rounds 預設 3,#125 A1)→ 不再派;紅榜 file 命中票 2 的分支改動檔 → 踢 2、重 land t1-a(AC_LAND_DEPTH=1)、rc 1。"""
         self.two_tickets()
         self.plan([1], files=[["src/b"]])
         done = self.land("t1-a", "t2-b")
         out = done.stdout + done.stderr
         self.assertEqual(done.returncode, 1, out)
         batch = [args for args in self.autofix_args() if args.startswith("--batch")]
-        self.assertEqual(len(batch), 2, out)
-        self.assertEqual(len(self.gate_calls(depth="")), 3, out)
+        self.assertEqual(len(batch), 3, out)  # #125 A1:沒設 batch_fix.rounds → repair.max_rounds 3
+        self.assertEqual(len(self.gate_calls(depth="")), 4, out)
         self.assert_ticket_two_kicked(done)
         relanded = self.gate_calls(depth="1")
         self.assertTrue(relanded, "重 land 的閘門要看得到 AC_LAND_DEPTH=1:\n" + out)
@@ -326,7 +326,8 @@ class B2KickTheSuspectAndRelandTheRest(BatchLandWorld):
         self.commit_in(three, "src/c", "第三張")
         for ident, name in ((1, "t1-a"), (2, "t2-b"), (3, "t3-c")):
             self.approve(ident, name)
-        self.plan([1], files=[["src/c"], ["src/c"], ["src/c"], ["src/b"]])
+        # 第一層閘門 = rounds+1 = 4 次(#125 A1:預設 3 輪)都指票 3,第 5 次(重 land)改指票 2。
+        self.plan([1], files=[["src/c"], ["src/c"], ["src/c"], ["src/c"], ["src/b"]])
         done = self.land("t1-a", "t2-b", "t3-c")
         out = done.stdout + done.stderr
         self.assertEqual(done.returncode, 1, out)
@@ -362,7 +363,8 @@ class B3NoClearSuspectStops(BatchLandWorld):
         self.assertEqual([row for row in self.pages() if KICKED in row["text"]], [], out)
         self.assertEqual(len(self.ev("land.start")), 1, "不重 land")
         self.assertEqual(len(self.land_worktrees()), 1, "land worktree 要留著")
-        self.assertEqual(len([a for a in self.autofix_args() if a.startswith("--batch")]), 2, out)
+        # #125 A1:沒設 batch_fix.rounds → repair.max_rounds 預設 3 輪
+        self.assertEqual(len([a for a in self.autofix_args() if a.startswith("--batch")]), 3, out)
         self.assertEqual(self.pages(2), [], "decision 只掛第一張票")
         first = self.pages(1)
         self.assertEqual(len(first), 1, out)

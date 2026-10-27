@@ -90,6 +90,24 @@ echo "FAILED (假的紅)"
 exit 1
 """
 
+# 同一支替身的兩種「紅榜是空的」(#125):`@RC@` = 1 是沒有歸因的紅,86 是環境可疑(狀態檔寫
+# env_suspect 與一筆嫌疑列)。每一次都是同一種 —— 問的是「連第二次也一樣」時 land 怎麼停。
+GATE_STUB_EMPTY = """#!/bin/sh
+dir=$(dirname "$AC_TEST_LOG")
+n=$(( $(cat "$dir/gate-count" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "$dir/gate-count"
+echo "gate $* $(git rev-parse --short HEAD) run=$AC_GATE_RUN_ID tickets=$AC_GATE_TICKETS depth=${AC_LAND_DEPTH:-}" >> "$AC_TEST_LOG"
+state=done
+[ @RC@ != 86 ] || state=env_suspect
+for t in $AC_GATE_TICKETS $AC_GATE_TICKET; do
+    mkdir -p "$AC_ROOT/reports/t$t/$AC_GATE_RUN_ID"
+    printf '{"ticket": "%s", "kind": "gate", "run_id": "%s", "rc": @RC@, "state": "%s", "failures": [], "environment_suspect": [{"source": "statistical", "engine": "safari", "why": "螢幕鎖著", "count": 8, "threshold": 8, "log": "", "line": ""}]}\\n' \\
+        "$t" "$AC_GATE_RUN_ID" "$state" > "$AC_ROOT/reports/t$t/$AC_GATE_RUN_ID/status.json"
+done
+echo "gate: 假的紅,紅榜是空的"
+exit @RC@
+"""
+
 # auto-fix 的替身:參數與 AC_BATCH_RUN_ID 記進 AC_TEST_LOG;`--batch` 時 rc 讀 `fix-rc`(預設 0),
 # 0 就在整合分支($2,land 開的那個 worktree)上疊一個 commit —— 同批次 worker 自己 commit 的形狀(#145)。
 # `fix-hook.sh` 存在就在修復當中跑它(land 持鎖時另起 docs 通道)。
@@ -230,20 +248,20 @@ class AutoFixHook(LandBase):
     def assert_ticket_two_was_kicked(self, done):
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertEqual(len([line for line in self.auto_fix_lines()
-                              if line.startswith("autofix --batch")]), 2,
-                         "batch_fix.rounds 預設 2:修兩輪,第三次紅才找嫌疑票")
+                              if line.startswith("autofix --batch")]), 3,
+                         "沒設 batch_fix.rounds = repair.max_rounds 預設 3(#125 A1):修三輪,第四次紅才找嫌疑票")
         pages = self.inbox_pages(2)
         kicked = [page for page in pages if "踢出" in page]
         self.assertEqual(len(kicked), 1, pages)
         self.assertIn("單張 land", kicked[0])
-        self.assertIn("tests.test_red.T.test_round_3", kicked[0], "紅榜的 case 名要在頁上")
+        self.assertIn("tests.test_red.T.test_round_4", kicked[0], "紅榜的 case 名要在頁上")
         self.assertFalse([page for page in self.inbox_pages(1) if "踢出" in page])
         fails = [row for row in self.events() if row["kind"] == "land.fail" and row.get("kicked")]
         self.assertEqual([row["kicked"] for row in fails], ["2"])
         self.assertIn("重 land", done.stdout)
         starts = [row["note"] for row in self.events() if row["kind"] == "land.start"]
         self.assertEqual(starts, ["t1-a t2-b", "t1-a"])
-        relanded = self.gate_lines()[3:]
+        relanded = self.gate_lines()[4:]
         self.assertTrue(relanded, "重 land 要再跑全套")
         for line in relanded:
             self.assertIn("depth=1", line)
@@ -252,7 +270,8 @@ class AutoFixHook(LandBase):
     def test_three_reds_kick_the_ticket_the_red_file_hits(self):
         """B2:連紅 rounds+1 次、紅榜檔只命中票 2(分支改動檔)→ 踢 2、自動重 land t1-a。
 
-        **變異 ①**:rounds 寫死 1 → 第二次紅就踢,auto-fix 只 1 次 → 這一條紅。"""
+        **變異 ①**:rounds 寫死 1 → 第二次紅就踢,auto-fix 只 1 次 → 這一條紅。
+        #125:rounds 沒設時是 `repair.max_rounds`(預設 3),所以是第四次紅才踢。"""
         self.assert_ticket_two_was_kicked(self.kicked_land())
 
     def test_a_red_file_named_only_in_verify_files_kicks_that_ticket(self):
@@ -287,7 +306,8 @@ class AutoFixHook(LandBase):
         for ident, branch in ((1, "t1-a"), (2, "t2-b"), (3, "t3-c")):
             self.approve(ident, branch)
         self.put("gate-fail", "src/c")
-        for n in (1, 2, 3):
+        # 第一層:3 輪修補(repair.max_rounds 預設 3,#125)+ 第一次紅 = 4 次全套都只命中票 2。
+        for n in (1, 2, 3, 4):
             self.put("gate-fail-%s" % n, "src/b")
 
         done = self.land("t1-a", "t2-b", "t3-c")
@@ -372,6 +392,51 @@ class AutoFixHook(LandBase):
         self.assertIn("已經有一個 land 在跑", out)
         self.assertIn("t1-a t2-b", out, "說得出現在是誰在落地")
         self.assertNotIn("擠進去", self.main_log())
+
+    def test_a_batch_red_with_no_red_list_twice_stops_after_one_diagnosis(self):
+        """#125 A3:批次紅榜空的 → 那一輪的批次 worker 拿診斷(auto-fix 替身被叫一次);診斷之後全套
+        仍是空紅榜 → 一頁掛第一張票、不踢、不重 land、不再修。
+
+        **變異 M2**(land 那一側):拿掉 `diag_prev` 那一問 → auto-fix --batch 被叫到 rounds 次、這一條紅。"""
+        self.stub_script("gate.sh", GATE_STUB_EMPTY.replace("@RC@", "1"))
+        self.batch_of_two()
+
+        done = self.land("t1-a", "t2-b")
+
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(len([line for line in self.auto_fix_lines()
+                              if line.startswith("autofix --batch")]), 1)
+        self.assertEqual(len(self.gate_lines()), 2, "第一次紅 + 診斷之後那一次")
+        self.assertFalse([row for row in self.events()
+                          if row["kind"] == "land.fail" and row.get("kicked")], "不准踢")
+        self.assertEqual(len([row for row in self.events() if row["kind"] == "land.start"]), 1,
+                         "不重 land")
+        pages = self.inbox_pages(1)
+        self.assertEqual(len(pages), 1, pages)
+        self.assertIn("diagnosis round 1 did not make the red attributable", pages[0])
+        self.assertEqual(self.inbox_pages(2), [])
+
+    def test_a_batch_full_suite_86_reruns_once_then_diagnoses_once(self):
+        """#125 A4 批次:全套 86 → 機械重跑一次全套(gate.rerun reason=env_suspect,不算一輪)→ 仍 86 →
+        一輪批次診斷 → 仍 86 → 一頁「環境要人看」、停。
+
+        **變異 M1**(land 那一側):把重跑算成一輪(fixed+1)→ rounds 不變時 auto-fix 次數不變,但重跑
+        之後的那一次被當成診斷之後 —— 這一條紅在 gate 次數或 auto-fix 次數。"""
+        self.stub_script("gate.sh", GATE_STUB_EMPTY.replace("@RC@", "86"))
+        self.batch_of_two()
+
+        done = self.land("t1-a", "t2-b")
+
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(len(self.gate_lines()), 3, "第一次 + 機械重跑 + 診斷之後")
+        self.assertEqual(len([line for line in self.auto_fix_lines()
+                              if line.startswith("autofix --batch")]), 1)
+        reruns = [row for row in self.events() if row["kind"] == "gate.rerun"]
+        self.assertEqual([row.get("reason") for row in reruns], ["env_suspect"])
+        pages = self.inbox_pages(1)
+        self.assertEqual(len(pages), 1, pages)
+        self.assertIn("environment: needs a human", pages[0])
+        self.assertEqual(self.status_of(1, kind="land")["state"], "env_suspect")
 
     def test_an_unknown_flag_is_named(self):
         self.branch_for(1, "t1-a")
@@ -1875,6 +1940,130 @@ class DriverOnTheLock(LandBase):
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("stale lock pid %d taken over" % child.pid, done.stdout)
         self.assertTrue(self.gate_ran())
+
+
+
+class T125LandHandsRepairToTheBudget(LandBase):
+    """#125 A1 / A3 / A4 at land: the full suite's rc 86 is told apart from a red (land.fail note
+    and status name env_suspect before auto-fix); a batch's repair budget is `repair.max_rounds`
+    (`batch_fix.rounds` still wins when set); an unattributed batch red gets one diagnosis round,
+    and a second unattributed outcome kicks nobody and writes one page."""
+
+    gate_stub = None
+
+    # Scripted full suite: `gate-mode` (env / unattr / red) decides every run. env: rc 86, state
+    # env_suspect, one statistical row; unattr: rc 1, failures []; red: rc 1, one row in src/zzz.
+    GATE = """#!/bin/sh
+dir=$(dirname "$AC_TEST_LOG")
+mode=$(cat "$dir/gate-mode")
+echo "gate $* mode=$mode" >> "$AC_TEST_LOG"
+for t in $AC_GATE_TICKETS $AC_GATE_TICKET; do
+    mkdir -p "$AC_ROOT/reports/t$t/$AC_GATE_RUN_ID"
+    python3 -c '
+import json, sys
+mode, ticket, run_id, path = sys.argv[1:5]
+rows = [{"kind": "FAIL", "case": "tests.test_red.T.test_red", "file": "src/zzz", "line": 1,
+         "excerpt": "AssertionError: fake red"}] if mode == "red" else []
+suspects = [{"source": "statistical", "engine": "safari", "why": "localStorage empty",
+             "count": 8, "threshold": 8, "log": "", "line": ""}] if mode == "env" else []
+json.dump({"ticket": ticket, "kind": "gate", "run_id": run_id,
+           "state": "env_suspect" if mode == "env" else "done",
+           "rc": 86 if mode == "env" else 1, "failures": rows,
+           "environment_suspect": suspects}, open(path, "w"))
+' "$mode" "$t" "$AC_GATE_RUN_ID" "$AC_ROOT/reports/t$t/$AC_GATE_RUN_ID/status.json"
+done
+echo "FAILED (fake)"
+[ "$mode" = env ] && exit 86
+exit 1
+"""
+
+    # auto-fix stub: records its argv and, for a single ticket, the state of the land status it
+    # would read; a batch call commits one fix on the integration branch (AUTO_FIX_STUB's shape).
+    AUTO_FIX = """#!/bin/sh
+state=$(python3 -c 'import glob, json, sys
+rows = [json.load(open(p)) for p in glob.glob("reports/t%s/*/status.json" % sys.argv[1])]
+print(",".join(sorted(str(r.get("state")) for r in rows if r.get("kind") == "land")))' "$1" 2>/dev/null)
+echo "autofix $* land_state=$state" >> "$AC_TEST_LOG"
+[ "$1" = "--batch" ] || exit 0
+wt=$(git worktree list --porcelain | awk -v ref="branch refs/heads/$2" '
+    /^worktree / { here = substr($0, 10) } $0 == ref { print here; exit }')
+n=$(grep -c '^autofix --batch' "$AC_TEST_LOG")
+echo "fix $n" > "$wt/batch-fix-$n.txt"
+git -C "$wt" add "batch-fix-$n.txt" && git -C "$wt" commit -q -m "batch fix $n"
+"""
+
+    def setUp(self):
+        super().setUp()
+        self.stub_script("gate.sh", self.GATE)
+        self.stub_script("auto-fix.sh", self.AUTO_FIX)
+
+    def arrange(self, mode, n=1, conf=None):
+        self.write("gate-mode", mode + "\n", where=self.home)
+        if conf:
+            config = json.loads(self.read("board/config.json"))
+            config.update(conf)
+            self.write("board/config.json", json.dumps(config, ensure_ascii=False, indent=2))
+            self.git("add", "-A")
+            self.git("commit", "-q", "-m", "sandbox config")
+        branches = []
+        for ident in range(1, n + 1):
+            branch = "t%d-x" % ident
+            path = self.branch_for(ident, branch)
+            self.commit_in(path, "src/f%d" % ident, "ticket %d" % ident)
+            self.approve(ident, branch)
+            branches.append(branch)
+        return branches
+
+    def autofix_lines(self, batch=None):
+        if not os.path.exists(self.log):
+            return []
+        with open(self.log, encoding="utf-8") as handle:
+            rows = [line.strip() for line in handle if line.startswith("autofix ")]
+        if batch is None:
+            return rows
+        return [row for row in rows if row.startswith("autofix --batch") == batch]
+
+    def decision_pages(self, *idents):
+        return [row for ident in idents for row in self.inbox_rows(ticket=ident)
+                if row.get("kind") == "decision"]
+
+    def test_a4_a_single_ticket_full_suite_86_is_env_suspect_before_auto_fix(self):
+        done = self.land(*self.arrange("env"))
+        self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
+        fails = [row.get("note") or "" for row in self.events() if row["kind"] == "land.fail"]
+        self.assertTrue(fails and "env_suspect" in fails[-1], fails)
+        self.assertEqual(self.status_of(1, kind="land")["state"], "env_suspect")
+        self.assertEqual(self.autofix_lines(), ["autofix 1 land_state=env_suspect"],
+                         done.stdout + done.stderr)
+        for row in self.decision_pages(1):
+            self.assertNotIn("沒有歸因", self.read(row["page"]))
+
+    def test_a1_the_batch_budget_defaults_to_repair_max_rounds_3(self):
+        done = self.land(*self.arrange("red", n=2))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(len(self.autofix_lines(batch=True)), 3, self.autofix_lines())
+
+    def test_a1_the_batch_budget_follows_repair_max_rounds(self):
+        done = self.land(*self.arrange("red", n=2, conf={"repair": {"max_rounds": 1}}))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(len(self.autofix_lines(batch=True)), 1, self.autofix_lines())
+
+    def test_a1_batch_fix_rounds_still_wins_when_set(self):
+        done = self.land(*self.arrange("red", n=2, conf={"repair": {"max_rounds": 1},
+                                                          "batch_fix": {"rounds": 2}}))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(len(self.autofix_lines(batch=True)), 2, self.autofix_lines())
+
+    def test_a3_a_second_unattributed_batch_red_kicks_nobody_and_pages_once(self):
+        done = self.land(*self.arrange("unattr", n=2))
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertEqual(len(self.autofix_lines(batch=True)), 1,
+                         "one diagnosis round, never a second consecutive one")
+        self.assertEqual([row for row in self.events()
+                          if row["kind"] == "land.fail" and row.get("kicked")], [])
+        self.assertEqual(len([row for row in self.events() if row["kind"] == "land.start"]), 1)
+        pages = self.decision_pages(1, 2)
+        self.assertEqual(len(pages), 1, pages)
 
 
 if __name__ == "__main__":

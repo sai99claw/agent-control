@@ -292,5 +292,41 @@ class A5DogfoodAndInit(ConfigSandbox):
         self.assertEqual(digest(path), before)
 
 
+
+class T125RepairKeys(ConfigSandbox):
+    """#125 A1: `repair: {max_rounds: 3, env_rerun: 1}` is a known, typed key with those defaults;
+    a config without it is fine (doctor reports nothing about it)."""
+
+    def test_a1_repair_keys_are_known_and_quiet(self):
+        self.edit_conf(repair={"max_rounds": 3, "env_rerun": 1})
+        done = self.actl("ticket", "list", "--open")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("repair", done.stderr)
+
+    def test_a1_repair_max_rounds_is_typed_int(self):
+        self.edit_conf(repair={"max_rounds": "three"})
+        done = self.actl("ticket", "list", "--open")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        for part in ("max_rounds", "int", "three"):
+            self.assertIn(part, done.stderr)
+
+    def test_a1_doctor_on_a_config_without_repair_reports_nothing(self):
+        self.edit_conf(repair=None)
+        done = self.actl("doctor")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("repair", done.stdout)
+
+    def test_a1_the_schema_defaults_are_3_and_1(self):
+        sys.path.insert(0, os.path.join(ROOT, "scripts"))
+        import project_config
+        rows = {key: default for key, _, default in project_config.SCHEMA}
+        parent = rows.get("repair")
+        parent = parent if isinstance(parent, dict) else {}
+        for key, want in (("max_rounds", 3), ("env_rerun", 1)):
+            own = rows.get("repair." + key, project_config.NO_DEFAULT)
+            got = own if own is not project_config.NO_DEFAULT else parent.get(key)
+            self.assertEqual(got, want, "repair.%s default" % key)
+
+
 if __name__ == "__main__":
     unittest.main()

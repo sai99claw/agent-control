@@ -177,13 +177,30 @@ commit,那一條 `git merge --ff-only` 就進不去了 —— 而它的失敗訊
    `AC_WT`(這張票的 worktree)、`AC_ROUND`(本輪)與 `AC_TICKET`(票號)。
    **綠了轉 `InReview`,complex 的票再叫 `scripts/review.sh <票號>` 派覆核**(`--no-review` 關;#42,D-025 ②;
    simple / 沒標的票不派、停在 InReview 等 land,印 `終態=green_no_review`,#136)。
-4. **三輪耗盡不是一句話,是一個狀態轉換**:`round` 在第 `retry_limit+1` 輪仍紅時把票轉 **Blocked**、`owner` 設成 `main`,並發 `ticket.attempt.failed`。舊規則只寫「報主線」,而「報了」與「沒報」在票上長得一樣。
-5. 停下來報主線的**三種**情況,每一種都寫一則收件匣(kind=decision;綠了只寫事件、不發頁,D-032):worker 的**反駁升級**
+4. **三輪耗盡不是一句話,是一個狀態轉換**:`round` 在最後一輪仍紅時把票轉 **Blocked**、`owner` 設成 `main`,並發 `ticket.attempt.failed`。舊規則只寫「報主線」,而「報了」與「沒報」在票上長得一樣。
+   **預算只有一個數**(#125,D-050 ②「首次紅後最多 3 次修補」):`board/config.json` 的 `repair.max_rounds`
+   (預設 3 = 第一次紅之後的修補輪數)。准幾輪只有一份算法 `ticket.py repair_limit`(`ticket.py repair-limit <n>` 印它):
+   票寫了 `retry_limit` 就是 `retry_limit+1`(單票覆寫;`ticket.py create` 開票時寫入 `repair.max_rounds`),沒寫 = `repair.max_rounds+1`。
+   閘門紅、單票落地全套紅、批次落地全套紅同一個預算(批次 `batch_fix.rounds` 有設才覆寫)。**診斷輪算一輪**;
+   環境機械重跑、額度換候選(#121/#131)不算。換一個 auto-fix 程序接手照狀態檔續編號,不從 2 重來。
+   **沒有歸因的紅與環境可疑**(#125,D-076):
+   - 環境可疑(閘門 rc 86 / 狀態檔 `env_suspect`,或有嫌疑列而紅榜空):`gate.sh`(auto-fix 開著)照樣交給
+     `auto-fix.sh`,它先**機械重跑同一支閘門** `repair.env_rerun` 次(預設 1;事件 `gate.rerun` reason=env_suspect;不派 agent、
+     不算一輪)。重跑綠 → 綠的路;可歸因的紅 → 一般修補輪;仍 86 / 仍沒有歸因 → 一輪診斷。`--no-auto-fix` 照舊發頁、不派。
+   - 沒有歸因(rc≠0、failures 空、不是閘門硬擋命中):派**一輪診斷** —— 一般 worker,派工文的紅榜那一段換成
+     `## 診斷`(rc、state、嫌疑列、閘門 log 最後 200 行、重跑閘門的指令、規則:找出為什麼產不出可歸因的紅榜;
+     只准修 harness / 測試基礎設施 / repo 內環境設定;不准放寬或略過測試;原因在 repo 外寫 `OBJECTION: blocking <原因>`、不交件),
+     `ticket.attempt.start` 帶 `round_kind=diagnosis`;收件、閘門、覆核照舊。
+   - **只連一輪**:診斷輪之後閘門可歸因 → 一般修補;綠 → 綠的路;仍沒有歸因 → rc 4、一頁「診斷輪沒讓紅變成可歸因」;
+     仍環境可疑 → rc 4、一頁「環境要人看(environment: needs a human)」。不連派第二輪診斷(不能設定)。
+   - 批次:紅榜空的那一輪 `reports/batch/<stamp>/dispatch-round1.md` 同樣是 `## 診斷`;全套 rc 86 先重跑一次全套;
+     診斷之後還是空紅榜 → land 一頁、停,**不找嫌疑票**(沒有紅榜可以對)。land 的全套 rc 86 與 1 分開記(`land.fail` note、狀態檔 `env_suspect`)。
+5. 停下來報主線的情況,每一種都寫**恰一則**收件匣(kind=decision;綠了、診斷輪導出可歸因的紅都只寫事件、不發頁,D-032):worker 的**反駁升級**
    (它在 EVIDENCE 寫一行 `OBJECTION: <類別> <理由>`,`auto-fix.sh` 把它記成 `objections[]` 的一筆;
    `ticket-wrong` / `blocking` 先由開題者判,判 accepted(票面改好)就接回原 session 續做、不停,
    只有下面「實作者的反駁怎麼被收下」列的四種才停;`test_defect` 照舊派驗證者);
-   三輪耗盡;**failures 沒有歸因**(rc 非零卻一條紅都解析不出來 —— 那一種最像「沒有紅」,
-   而派下去的 worker 會拿著空紅榜去猜)。
+   修補輪用完(三輪耗盡);**診斷輪之後仍沒有歸因 / 仍環境可疑**(上一條);閘門硬擋命中、越界(rc 8)、
+   候選整串耗盡(rc 7)、沒交件(rc 5)—— 後面這幾種是機械停,不重跑、不診斷。
    > ⛔ **「紅在票沒動到的檔 → 疑似他票」這一條拿掉了**(D-014)。`failures.file` 取的是 traceback 最後一個檔案,經常是既有測試或共用 helper;而產品改壞行為,本來就會紅在完全沒修改的測試檔。歸責改用**同條件的 baseline / candidate 對照**(`scripts/verify-case.py check`:同一份案例在乾淨主線與 candidate 上各跑一次)。**未完成歸因前,票由原 owner 持有** —— 不因為某個檔沒被這張票改過就轉成別人的問題。
 6. 覆核由 `review.sh` 派(auto-fix 第 r 輪綠、手跑 `gate.sh --branch --ticket` 綠兩處觸發,主線不讀 patch),**只派 complex 的票**(開題者每張票標 simple / complex;只有 complex 做完後覆核;沒標 = simple,#136 —— 其他走 `review.refused`):reviewer pass ⇒ 腳本 `ticket.py set review`(verdict、by `reviewer@<模型>`、sha、note、at,給人看),land 才收;fail ⇒ 每條理由一筆 blocking 反駁、票轉 Blocked、inbox 一頁 decision「覆核退回,裁示」;沒交件(沒有 `## result` / JSON 壞 / 逾時 / verdict 不是 pass|fail)⇒ 不寫 review、票留 InReview、只發事件 `review.missing`。pass / 沒派成也只發事件(`review.pass` / `review.refused`)。
 7. **一批 N 張全套紅(批次修復,#108,D-H51 ②)**:`AC_BATCH_RUN_ID=<land 那一輪的 run_id> sh scripts/auto-fix.sh --batch <整合分支> <id…>`。
