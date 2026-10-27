@@ -309,6 +309,18 @@ class Set(Sandbox):
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertEqual(self.load_ticket("1")["state_version"], 1)
 
+    def test_a_field_name_starting_with_a_dash_is_refused(self):
+        """#180 A5:`set 1 --state Ready` 以前靜靜寫進一格叫 `--state` 的欄位。
+        **變異**:拿掉 `field.startswith("-")` 那一段 → rc 0、票多一格 `--state` 紅。"""
+        before = self.load_ticket("1")
+        done = self.ticket("set", "1", "--state", "Ready")
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        lines = done.stderr.splitlines()
+        self.assertEqual(len(lines), 1, done.stderr)
+        self.assertIn("set 1 state Ready", lines[0])
+        self.assertEqual(self.load_ticket("1"), before)
+        self.assertEqual(self.load_ticket("1")["state_version"], 1)
+
     def test_id_and_state_version_cannot_be_set_by_hand(self):
         for field in ("id", "state_version"):
             done = self.ticket("set", "1", field, "99")

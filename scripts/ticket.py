@@ -697,6 +697,11 @@ def cmd_set(argv):
                          "[--expect-state-version N] [--expect-attempt N]\n")
         return 2
     ident, field, raw = argv[0].lstrip("#"), argv[1], argv[2]
+    # `set 7 --state Ready` 以前靜靜寫進一格叫 `--state` 的欄位(#180)
+    if field.startswith("-"):
+        sys.stderr.write("ticket: 欄位名不以 - 開頭 —— 要寫成 set %s %s %s\n"
+                         % (ident, field.lstrip("-"), raw))
+        return 2
     if field in ("id", "state_version"):
         sys.stderr.write("ticket: %s 不給改(id 是身分,state_version 是這支腳本自己數的)\n" % field)
         return 2

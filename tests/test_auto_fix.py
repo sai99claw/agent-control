@@ -3748,11 +3748,12 @@ class ThePacketSaysWhichTestsToRun(AutoFixBase):
         self.assertIn("python3 -m unittest tests.test_x_cases", vlines[0])
         self.assertIn("verify-case.py red", vlines[1])
 
-    # #178:案例歸屬照 test_plan。期望字串照票面逐字寫死,不從 auto-fix.sh 讀。
-    WORKER_OWNS = ("寫案例只寫 test_plan 指給 worker 的契約;指給驗證者的不寫"
-                   "(驗證者會寫,重複會被覆核退回);沒指派的才自己判。")
-    VERIFIER_OWNS = ("寫案例只寫 test_plan 指給驗證者的契約;指給 worker 的不寫"
-                     "(worker 會寫,重複會被覆核退回)。")
+    # #178:案例歸屬照 test_plan;#180:沒指派的只有一個寫案例者。期望字串照票面逐字寫死,不從 auto-fix.sh 讀。
+    WORKER_OWNS = ("寫案例只寫 test_plan 指給 worker 的契約;指給驗證者的與沒指派的都不寫"
+                   "(驗證者照 acceptance 寫,重複會被覆核退回)。")
+    WORKER_ALONE = "寫案例:這張票沒有驗證者,test_plan 的每條契約(含沒指派的)都由你寫。"
+    VERIFIER_OWNS = ("寫案例只寫 test_plan 指給驗證者的契約與沒指派的契約(照 acceptance);"
+                     "指給 worker 的不寫(worker 會寫,重複會被覆核退回)。")
 
     def test_178_a1_a2_the_plan_section_says_who_writes_which_case(self):
         """**變異**:拿掉 worker 那一行 print → worker 段少一行紅;兩邊印反 → 互斥斷言紅。"""
@@ -3771,6 +3772,44 @@ class ThePacketSaysWhichTestsToRun(AutoFixBase):
         lines = self.section(worker, "## 只准跑的測試")
         self.assert_base_and_fixed(lines)
         self.assert_own_tests_line(lines[0])
+
+    def test_180_a1_a3_needs_verifier_missing_is_true(self):
+        """#180 A1 / A3:needs_verifier 缺 = true(D-054 Q10),與明寫 true 同一行。
+        **變異**:worker 那一行判 `not ticket.get("needs_verifier")` → 缺的那一張印成 WORKER_ALONE 紅。"""
+        self.arm(needs_verifier=ABSENT, test_plan=self.PLAN)
+        done = self.auto_fix("--dry-run", "--round", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        plan = self.PLAN.splitlines()
+        self.assertEqual(self.section(self.packets("dispatch-round1.md"), "## 票的測試計畫"),
+                         plan + [self.WORKER_OWNS])
+        self.assertEqual(self.section(self.packets("dispatch-verifier-round1.md"),
+                                      "## 票的測試計畫"), plan + [self.VERIFIER_OWNS])
+
+    def test_180_a2_no_verifier_the_worker_writes_every_contract(self):
+        """#180 A2:needs_verifier false → worker 那一行換成 WORKER_ALONE,不起驗證者派工文。
+        **變異**:拿掉 `elif needs_verifier is False` 那一支 → 印成 WORKER_OWNS 紅。"""
+        self.arm(needs_verifier=False, test_plan=self.PLAN)
+        done = self.auto_fix("--dry-run", "--round", "1")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        worker = self.packets("dispatch-round1.md")
+        self.assertEqual(self.section(worker, "## 票的測試計畫"),
+                         self.PLAN.splitlines() + [self.WORKER_ALONE])
+        self.assertNotIn(self.WORKER_OWNS, worker)
+        self.assertNotIn(self.VERIFIER_OWNS, worker)
+        self.assertEqual(self.result_files("dispatch-verifier-round1.md"), [])
+
+    def test_180_a4_dispatch_template_names_one_writer_for_unassigned(self):
+        """#180 A4:§1 歸屬那一段寫同一條預設,不再有「由 worker 自己判」(靜態,讀 commit 進來的檔)。"""
+        with open(os.path.join(AC_HOME, "docs", "DISPATCH-TEMPLATE.md"), encoding="utf-8") as handle:
+            text = handle.read()
+        section1 = text.split("\n## 1. ", 1)[1].split("\n## 2. ", 1)[0]
+        para = [p for p in section1.split("\n\n") if p.startswith("**案例歸屬照 test_plan")]
+        self.assertEqual(len(para), 1, "§1 要恰好一段案例歸屬")
+        flat = para[0].replace("\n", "")
+        self.assertNotIn("由 worker 自己判", flat)
+        for want in ("沒指派的契約", "needs_verifier` 是 true 或缺)時歸驗證者",
+                     "needs_verifier` 是 false 時歸 worker"):
+            self.assertIn(want, flat)
 
     def test_178_a2_no_test_plan_no_ownership_line(self):
         for plan in (None, "  "):
