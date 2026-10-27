@@ -1,0 +1,32 @@
+{
+  "id": "181",
+  "subject": "verify-case resolves --ref / --candidate / the ticket's base_sha against the code repo, so a verifier whose AC_ROOT is a non-git control dir measures red without re-pointing AC_ROOT",
+  "created": "2026-10-27T01:58:40+00:00",
+  "objective": "#125 verifier round 2 (../agent-control-wt/verify-t125/round2/EVIDENCE-verifier.md §3) measured: from its dispatch, AC_ROOT is a control dir that is not a git repo, so 'verify-case.py red 125 --ref <base_sha>' fails rc 2 '既不是一個目錄,也不是這個 repo 裡的 ref'; it only worked after pointing AC_ROOT at the main repo by hand. Since D-071 the project root (tickets, events) and the code repo can differ; git lookups in scripts/verify-case.py (resolve_tree, clean_copy, merge-base, main_repo_root) must use the code repo (AC_CODE_ROOT, else the cwd's main repo), not AC_ROOT. Also the same EVIDENCE notes the ticket's base_sha (45ec9e15) differed from the base its dispatch printed (57e170d): find which writer is stale and make the verifier packet and verify-case red's default ref name the same sha.",
+  "acceptance": [
+    "A1 (tests/, throwaway layout): AC_ROOT = a temp dir that is not a git repo but holds tickets/<n>.json with base_sha = a commit of a separate throwaway git repo; cwd / AC_CODE_ROOT = that git repo; 'verify-case.py red <n>' (no --ref) resolves the base_sha and reaches the measuring step (no rc 2 '既不是一個目錄'); same for '--ref <sha>' and '--ref <branch>'.",
+    "A2 same layout, 'verify-case.py check <n> --candidate <branch>' resolves both trees (no rc 2 from ref resolution).",
+    "A3 base sha agreement: for a ticket whose base_sha is X, the verifier dispatch packet ('auto-fix.sh <n> --dry-run' verifier packet, existing harness) names X as the sha verify-case red measures against; if the packet also names the branch head it says that is not the red ref (existing text at auto-fix.sh ~830 stays). If the 45ec9e15 vs 57e170d mismatch had a different cause (e.g. base_sha rewritten on rebase / round), EVIDENCE names the writer and the fix pins it with one case."
+  ],
+  "depends_on": [],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "486703b8dcfafa0837d0a4ff9173e0f4c249da82",
+  "state": "Ready",
+  "state_version": 4,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "simple",
+  "needs_verifier": false,
+  "interface_fixed": true,
+  "outline": "Read first: scripts/verify-case.py resolve_tree (~line 341), clean_copy, clean_base (~430-460), the '--ref' defaults (~505, 571, 667); scripts/event.py repo_root / code-root helper; the verifier packet text in scripts/auto-fix.sh (~line 825-835, base sha in the dispatch). Keep AC_ROOT for reading the ticket; only git calls move.",
+  "test_plan": "All contracts are the worker's (needs_verifier false): A1/A2 in the existing verify-case test module (tests/test_verify_case*.py or the nearest one that already drives verify-case.py against a throwaway repo), A3 in tests/test_auto_fix.py next to the verifier-packet cases. Expected strings hard-coded from this ticket."
+}

@@ -1,0 +1,34 @@
+{
+  "id": "180",
+  "subject": "Unassigned test_plan contracts have one case writer: the verifier when the ticket has a verifier, the worker otherwise; packet lines and DISPATCH-TEMPLATE §1 say so",
+  "created": "2026-10-27T01:58:15+00:00",
+  "objective": "#178 left a hole: a contract test_plan does not assign is 'worker decides' for the worker and 'follow acceptance' for the verifier, so on a ticket whose test_plan names no writer (#125 T1-T6, #117) both sides write every contract and review rejects the duplicates (#125 review 20261027-011008-243 objection 4, one extra worker round). After this ticket an unassigned contract has exactly one writer: the verifier when needs_verifier is true or missing, the worker when needs_verifier is false.",
+  "acceptance": [
+    "A1 worker packet, ticket with test_plan and needs_verifier true or missing ('auto-fix.sh <n> --dry-run --round 1', existing ThePacketSaysWhichTestsToRun harness): the line after the plan is exactly '寫案例只寫 test_plan 指給 worker 的契約;指給驗證者的與沒指派的都不寫(驗證者照 acceptance 寫,重複會被覆核退回)。'",
+    "A2 worker packet, needs_verifier false: the line after the plan is exactly '寫案例:這張票沒有驗證者,test_plan 的每條契約(含沒指派的)都由你寫。'",
+    "A3 verifier packet: the line after the plan is exactly '寫案例只寫 test_plan 指給驗證者的契約與沒指派的契約(照 acceptance);指給 worker 的不寫(worker 會寫,重複會被覆核退回)。'",
+    "A4 docs/DISPATCH-TEMPLATE.md §1 ownership paragraph states the same default (unassigned -> verifier when needs_verifier true/missing, worker when false) and no longer contains '由 worker 自己判'; static assertion in the same test class. The existing '票沒有 test_plan' line is unchanged.",
+    "A5 'ticket.py set <n> --state Ready' (a field name starting with '-') is refused rc 2 with one stderr line naming the right form 'set <n> state Ready'; the ticket file is unchanged (state_version too). Found 2026-10-27: it silently wrote a key named '--state'. Case in tests/test_ticket.py."
+  ],
+  "depends_on": [],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "486703b8dcfafa0837d0a4ff9173e0f4c249da82",
+  "state": "Ready",
+  "state_version": 4,
+  "lease": null,
+  "retry_limit": 2,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "simple",
+  "needs_verifier": false,
+  "interface_fixed": true,
+  "outline": "Files: docs/DISPATCH-TEMPLATE.md §1 ownership paragraph (lines ~92-95), scripts/auto-fix.sh only_tests_section python block (~line 688-692: the two reminder lines, worker line depends on needs_verifier), memory/role/implementer.md line 8 and memory/role/verifier.md line 4 pointers if they restate the default, tests/test_auto_fix.py ThePacketSaysWhichTestsToRun. Ticket JSON needs_verifier missing = true (D-054 Q10).",
+  "test_plan": "All contracts (A1-A5) are the worker's: A1-A4 extend ThePacketSaysWhichTestsToRun in tests/test_auto_fix.py, A5 one case in tests/test_ticket.py (expected strings hard-coded from this ticket). No verifier cases (needs_verifier false)."
+}
