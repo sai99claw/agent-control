@@ -151,7 +151,7 @@ shape). A's `scripts/project_config.py` holds `CURRENT_VERSION = 2`, the schema 
 | project version > A's | rc 2: `project needs config_version 3, this A has 2 — git -C $AC_HOME pull` | same |
 | known key, wrong type | rc 2 naming key, expected type, got | `actl doctor` |
 | unknown key | one stderr warning per call (never rc) | `actl doctor` lists them with "possibly retired" |
-| `actl migrate` | applies migrations in order, writes the file, prints each change, refuses if the file is not valid JSON; idempotent | the user lands the change through their own docs channel (`actl land docs`) |
+| `actl migrate` | applies migrations in order, writes the file, prints each change, refuses if the file is not valid JSON; idempotent | the user lands the change through their own docs channel (`actl land docs`), which also takes the setup files by exact name (#183): `board/config.json`, `board/role-models.json`, `.claude/settings.json`, `.gitignore`, and every repo-relative script named by a `tests.*` command string; a `tickets/<n>.json` argument is skipped with one line when `tickets_dir` is outside the code repo |
 | data shapes (not config) | `actl doctor` rows, each with a fix command, e.g. `reports/inbox/index.jsonl exists → actl inbox migrate`; `scripts/control/ exists → retired, delete after §7 step 5`; `.claude/settings.json hook points at missing file → actl hooks install` | `actl doctor` exits 1 when any row is severity `error` |
 
 **When A changes an interface**: a change to a config key = bump `CURRENT_VERSION` + a migration function;
