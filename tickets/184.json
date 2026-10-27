@@ -14,9 +14,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "37a6ed5f0172e94a409e94884081a370399152a7",
-  "state": "Ready",
-  "state_version": 2,
+  "base_sha": "d90533be499c00100cdc448600b66c8247b114a3",
+  "state": "InReview",
+  "state_version": 8,
   "lease": null,
   "retry_limit": 3,
   "verify": {
@@ -29,5 +29,49 @@
   "needs_verifier": false,
   "interface_fixed": true,
   "outline": "Files: scripts/project_config.py (doctor_rows RETIRED_DIR row severity; new role-models row; migrate / init copy step printing the change), docs/design/project-runnable-entries.md §2 doctor row text, tests/test_project_config.py. Do not add a fallback to A's table inside auto-fix / review (one source: the project's file).",
-  "test_plan": "All contracts (A1-A4) are the worker's (needs_verifier false): tests/test_project_config.py next to the existing doctor / migrate / init cases; expected strings hard-coded from this ticket."
+  "test_plan": "All contracts (A1-A4) are the worker's (needs_verifier false): tests/test_project_config.py next to the existing doctor / migrate / init cases; expected strings hard-coded from this ticket.",
+  "branch": "t184",
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 36,
+      "tokens_out": 13487,
+      "cache_write": 61192,
+      "cache_read": 1286106,
+      "wall_seconds": 208,
+      "outcome": "handed-in",
+      "run_id": "20261027-102907-470",
+      "session_id": "4b7f10c7-1b5e-401c-8cb0-0ff33e8d8674",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-27T10:32:38+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 1,
+      "outcome": "fail",
+      "run_id": "20261027-105713-32154",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-27T10:57:14+00:00"
+    }
+  ],
+  "gate": {
+    "rc": 0,
+    "sha": "dd3c21ce50492166f336172c807c63c16e75f871",
+    "run_id": "20261027-103239-21897",
+    "at": "2026-10-27T10:36:22+00:00"
+  },
+  "repair_round": 1
 }

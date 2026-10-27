@@ -14,9 +14,9 @@
   "model": "opus",
   "tool": "claude-code",
   "attempt": 0,
-  "base_sha": "37a6ed5f0172e94a409e94884081a370399152a7",
-  "state": "Ready",
-  "state_version": 2,
+  "base_sha": "d90533be499c00100cdc448600b66c8247b114a3",
+  "state": "Done",
+  "state_version": 10,
   "lease": null,
   "retry_limit": 3,
   "verify": {
@@ -29,5 +29,84 @@
   "needs_verifier": false,
   "interface_fixed": true,
   "outline": "Files: scripts/land.sh cmd_docs (~line 139-235: DOCS_PREFIXES + an exact-file list; tests.* command scripts read from board/config.json via scripts/project_config.py or event._from_config); ticket-path skip uses event.tickets_dir() vs git rev-parse --show-toplevel; opener restriction (AC_ROLE=opener -> only tickets/<AC_TICKET>.json) unchanged; usage / refusal text lists the setup files; docs/design/project-runnable-entries.md §2 row 'actl migrate' and docs/WORKFLOW.md docs-channel sentence name the setup files. Tests in tests/test_land.py next to the existing docs-channel cases.",
-  "test_plan": "All contracts (A1-A4) are the worker's (needs_verifier false): tests/test_land.py next to the existing docs-channel cases, throwaway repo with a temp control root; expected strings hard-coded from this ticket."
+  "test_plan": "All contracts (A1-A4) are the worker's (needs_verifier false): tests/test_land.py next to the existing docs-channel cases, throwaway repo with a temp control root; expected strings hard-coded from this ticket.",
+  "branch": "t183",
+  "cost": [
+    {
+      "role": "worker",
+      "round": 1,
+      "model": "opus",
+      "tokens_in": 42,
+      "tokens_out": 16855,
+      "cache_write": 75688,
+      "cache_read": 1675875,
+      "wall_seconds": 378,
+      "outcome": "handed-in",
+      "run_id": "20261027-102907-469",
+      "session_id": "50c7babf-8584-41c0-9d48-69a4f31ef074",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-27T10:35:29+00:00"
+    },
+    {
+      "role": "land",
+      "round": 0,
+      "model": null,
+      "tokens_in": null,
+      "tokens_out": null,
+      "cache_write": null,
+      "cache_read": null,
+      "wall_seconds": 961,
+      "outcome": "pass",
+      "run_id": "20261027-104111-26690",
+      "session_id": null,
+      "by": "land.sh",
+      "note": "沒帶 --from-envelope",
+      "effort": null,
+      "at": "2026-10-27T10:57:13+00:00"
+    }
+  ],
+  "gate": {
+    "rc": 0,
+    "sha": "41ae8b9d942d5454967d188c537672818edd49e5",
+    "run_id": "20261027-103529-8818",
+    "at": "2026-10-27T10:41:10+00:00"
+  },
+  "repair_round": 1,
+  "landed_sha": "ffb20430ca613d77f2f757f77931b6aa06e0a99c",
+  "cost_total": {
+    "calendar_seconds": 1699,
+    "wall_seconds": 1339,
+    "runs": 2,
+    "worker_rounds": 1,
+    "objections": 0,
+    "by_role": {
+      "worker": {
+        "runs": 1,
+        "wall_seconds": 378,
+        "tokens_in": 42,
+        "tokens_out": 16855,
+        "cache_write": 75688,
+        "cache_read": 1675875,
+        "unknown_token_runs": 0,
+        "outcomes": {
+          "handed-in": 1
+        }
+      },
+      "land": {
+        "runs": 1,
+        "wall_seconds": 961,
+        "tokens_in": null,
+        "tokens_out": null,
+        "cache_write": null,
+        "cache_read": null,
+        "unknown_token_runs": 1,
+        "outcomes": {
+          "pass": 1
+        }
+      }
+    },
+    "at": "2026-10-27T10:57:13+00:00"
+  }
 }
