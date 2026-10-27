@@ -183,3 +183,21 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
 ### 給 T 的遷移
 - 設計文件 docs/design/project-runnable-entries.md §1、§2、§4、§5、§7(入口名已改 actl)。T 的步驟:§7 T side 六步;測試介面 §4,範本 templates/project-tests.example.sh。
 - 使用者待辦(T 端):hard_block 的 18905 / 15349 / TABBY_BROWSER_ENGINES= 要不要留(建議留)。
+
+## 2026-10-27 A 的票清空;可以交給 T
+
+### 現況
+- 開著的票:0。D-076 之後的收尾全部落地:#124、#117(b3)、#125(b4,f524206)、#180 + #181(b5,7247ecf / a4a3755)、#182(b6,5235369)。#93 / #120 / #123 依 D-076 取消。
+- `actl doctor` 無發現、`actl hooks check` 無變更、收件匣清空(全部 ack)。
+
+### 這一輪學到的(給下一個主線)
+- **案例重複被覆核退回的根因**是 test_plan 沒寫「誰寫案例」:#178 的舊規則讓沒指派的契約 worker 自己判、驗證者照 acceptance 寫,兩邊都寫(#117、#125 各多一輪)。#180 已改成:沒指派的契約,有驗證者(needs_verifier 沒寫或 true)就只有驗證者寫,沒有驗證者就 worker 寫。開題時仍建議逐條寫明寫案例者。
+- **派出的驗證者量紅不碰 git**(#181 反駁 0,主線裁 B):auto-fix 起驗證者前把 base_sha 的樹與 sha 標記放進副本,派工文的 red 指令用 `--ref <那個目錄>`(#182)。agent_env 的隔離沒動;給驗證者一個 git 指標(A)與每輪手動指路(C)都不採用。
+- **落地的全套會抓到票外的舊案例**:#125 落地時 tests/test_testiface.py 一條釘舊行為(86 不派)的案例紅,auto-fix 第 2 輪修好、排程自動重落一次(reland 1)——排程的「落地紅 → 修 → 重落」實際走通一次。
+- `ticket.py set <n> --state X` 以前會默默寫一個叫 `--state` 的欄位(#180 A5 已改成拒絕);正確寫法 `set <n> state X`。
+- `ticket.py create --depends-on 181` 寫出的 condition 是空字串,`schedule.py` 只認 `landed`;lint 會抓到,手補成 `{"id": …, "condition": "landed"}`。**還沒開票修**(小;要修就讓 create 預設 landed)。
+- 容器這一輪又重啟兩次:`setsid nohup` 的鏈會一起死,接手時看結果檔停在哪一步,從那一步重接(worker 的 commit 與 EVIDENCE 都在磁碟上,不必重派)。
+
+### 接下來
+- 使用者把 T 遷移的 prompt 交給 Mac 上的 tabby session(見上一節「給 T 的遷移」);T 會問 hard_block 的 18905 / 15349 / TABBY_BROWSER_ENGINES=(建議留)。
+- T 遷移時回報的問題,照「該 A 改的開 A 票、T 該 porting 的交回 T」分。
