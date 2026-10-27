@@ -2098,6 +2098,7 @@ class TheRepairBudgetAndTheDiagnosisRound(AutoFixBase):
         self.env_status()
         done = self.auto_fix()
         self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        self.assertTrue(os.path.exists(self.log), "no calls.log: " + done.stdout + done.stderr)
         self.assertEqual(self.calls(), ["gate call 1 plan=86 round=1", "worker ran round 2",
                                         "gate call 2 plan=86 round=2"])
         two = self.packet(2)

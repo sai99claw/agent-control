@@ -274,6 +274,8 @@ class RepairKeys(ConfigSandbox):
     def test_the_defaults_are_three_and_one(self):
         sys.path.insert(0, os.path.join(ROOT, "scripts"))
         import project_config
+        self.assertTrue(hasattr(project_config, "repair_setting"),
+                        "scripts/project_config.py has no repair_setting")
         self.assertEqual(project_config.repair_setting({}, "max_rounds"), 3)
         self.assertEqual(project_config.repair_setting({}, "env_rerun"), 1)
         self.assertEqual(project_config.repair_setting({"repair": {"max_rounds": 0}}, "max_rounds"), 0)
