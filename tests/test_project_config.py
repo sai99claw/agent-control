@@ -293,7 +293,7 @@ class A5DogfoodAndInit(ConfigSandbox):
 
 
 class T184CoexistenceAndRoleModels(ConfigSandbox):
-    """#184: scripts/control/ is a warning during the §7 coexistence window; a missing or unparsable
+    """#184: the retired control dir (RETIRED_DIR) is a warning during the §7 coexistence window; a missing or unparsable
     board/role-models.json is an error fixed by `actl migrate`, which (like `actl init`) copies A's
     table when the project has none and never overwrites one."""
 
