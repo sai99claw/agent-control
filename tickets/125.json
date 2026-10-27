@@ -31,7 +31,7 @@
   "attempt": 0,
   "base_sha": "45ec9e15b9487f0927b35e0b324a855a26d2d0ff",
   "state": "Running",
-  "state_version": 50,
+  "state_version": 53,
   "lease": null,
   "retry_limit": 2,
   "verify": {
@@ -40,9 +40,14 @@
       "tests/test_ticket.py",
       "tests/test_project_config.py",
       "tests/test_gate.py",
-      "tests/test_land.py"
+      "tests/test_land.py",
+      "verify/batch_fix/test_ticket_109.py",
+      "verify/dispatch/test_ticket_126.py"
     ],
-    "tags": [],
+    "tags": [
+      "batch-land",
+      "verifier-gap"
+    ],
     "run": "python3 -m unittest tests.test_auto_fix.T125RepairBudgetAndDiagnosis tests.test_auto_fix.T125BatchDiagnosis tests.test_ticket.T125RepairBudgetKey tests.test_project_config.T125RepairKeys tests.test_gate.T125EnvSuspectHandsOffToAutoFix tests.test_land.T125LandHandsRepairToTheBudget",
     "notes": "#125 cases are the T125* classes at the end of the five modules (29 cases; 24 red on base, 5 green guards of kept behaviour). auto-fix cases script the per-round gate through gate.rerun_cmd (fake gate writes status via scripts/status.py, plan in gate-script.json); land cases stub gate.sh/auto-fix.sh. Diagnosis kv: the case accepts any field of round 2's ticket.attempt.start row whose value is 'diagnosis' (a kv literally named kind crashes event.py, see objection). Page wording is matched loosely (第 2 輪|round 2; 環境|environment). baseline.candidate holds the round copy path because red ran with a scratch control root (AC_ROOT) - the copy is deleted after hand-in.",
     "baseline": {
@@ -269,6 +274,40 @@
       "note": null,
       "effort": "high",
       "at": "2026-10-26T22:52:18+00:00"
+    },
+    {
+      "role": "worker",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 32,
+      "tokens_out": 10695,
+      "cache_write": 62522,
+      "cache_read": 1175983,
+      "wall_seconds": 295,
+      "outcome": "objection",
+      "run_id": "20261026-225408-20855",
+      "session_id": "19d9ac62-c72b-4e0b-9ccb-589c285e59ff",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": "high",
+      "at": "2026-10-27T00:05:37+00:00"
+    },
+    {
+      "role": "verifier",
+      "round": 2,
+      "model": "opus",
+      "tokens_in": 94,
+      "tokens_out": 21720,
+      "cache_write": 79562,
+      "cache_read": 3724403,
+      "wall_seconds": 2857,
+      "outcome": "handed-in",
+      "run_id": "20261026-225408-20855",
+      "session_id": "3ce34a56-d46c-4fa8-b427-4a5c99bb5aa9",
+      "by": "auto-fix.sh",
+      "note": null,
+      "effort": null,
+      "at": "2026-10-27T00:53:15+00:00"
     }
   ],
   "objections": [
@@ -293,6 +332,22 @@
       "owner": "main",
       "disposition": "accepted",
       "follow_up": "Main: same as objection 0 - the start row carries kv round_kind=diagnosis (worker implementation); the verifier case checks the value diagnosis on round 2 start row, so it stands with round_kind."
+    },
+    {
+      "category": "test_defect",
+      "body": "five older verify cases pin the behaviour #125 replaces by design - verify/batch_fix/test_ticket_109.py B2 test_b2_red_rounds_plus_one_times_kicks_ticket_two_by_allowed_paths, B2 test_b2_the_second_land_does_not_kick_again, B3 test_b3_a_red_file_no_ticket_owns_stops, B3 test_b3_a_red_file_every_ticket_owns_stops (batch_fix.rounds absent => 2 fix rounds; #125 A1 makes it repair.max_rounds = 3) and verify/dispatch/test_ticket_126.py RoundsAndStopsStayTheSame.test_a7_no_attribution_still_stops_before_any_agent (unattributed red => rc 4, no agent; #125 A3 makes it one diagnosis round) - the verifier must update their oracles to the #125 budget/diagnosis contract; the worker may not edit verify/.",
+      "evidence": "../agent-control-wt/fix-t125/round2/EVIDENCE-round2.md",
+      "owner": "verifier",
+      "disposition": "",
+      "follow_up": ""
+    },
+    {
+      "category": "blocking",
+      "body": "verify-case red 125 cannot reach rc 0: on base 57e170d two non-verifier cases in the ticket's verify.files modules go red on missing symbols (tests.test_project_config.RepairKeys.test_the_defaults_are_three_and_one AttributeError repair_setting; tests.test_auto_fix.TheRepairBudgetAndTheDiagnosisRound.test_an_environment_suspect_twice_gets_one_diagnosis_then_one_page FileNotFoundError calls.log) - their owner should assert the symbol/file exists first; also the dispatch's AC_ROOT control dir is not a git repo so --ref <base_sha> does not resolve without pointing AC_ROOT at the main repo, and the ticket's base_sha (45ec9e15) differs from the dispatch's (57e170d).",
+      "evidence": "../agent-control-wt/verify-t125/round2/EVIDENCE-verifier.md",
+      "owner": "main",
+      "disposition": "",
+      "follow_up": ""
     }
   ],
   "branch": "t125",
