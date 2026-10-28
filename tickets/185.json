@@ -1,0 +1,32 @@
+{
+  "id": "185",
+  "subject": "User-facing hints name 'actl <cmd>' instead of 'python3 scripts/x.py' / 'sh scripts/x.sh'; the unknown-config-key warning prints in actl doctor / migrate only, not before every command",
+  "created": "2026-10-28T13:31:50+00:00",
+  "objective": "T migration report 2026-10-28: (1) 'actl inbox list' ends with 'python3 scripts/inbox.py show <票號>' - in a project that path does not exist and calling scripts directly has no AC_HOME (D-071: bin/actl is the only entry). About 45 printed hints in scripts/*.sh / *.py have the same shape (auto-fix.sh 13, apply.sh 9, land.sh 6, review.sh 3, gate.sh 3, consolidate-memory.sh 2, inbox.py, ticket.py, memory.py, testiface.py, role-models.py, transcript-cost.py). (2) bin/actl runs 'project_config.py check' before every command and check prints the unknown-top-level-key warning each time; T keeps 4 legacy keys through the §7 coexistence window, so every command is noisy. After this ticket: every printed hint whose script has an actl subcommand reads 'actl <subcommand> …'; 'check' no longer prints the unknown-key warning (it still refuses on config_version newer than A and on type errors); 'actl doctor' and 'actl migrate' still report unknown keys.",
+  "acceptance": [
+    "A1 'actl inbox list' output's last line contains 'actl inbox show' and 'actl inbox ack' and does not contain 'scripts/inbox.py'.",
+    "A2 static: for every script name S that bin/actl dispatches as a subcommand, no printed line (echo / say / print / .write) in scripts/*.sh and scripts/*.py contains 'python3 scripts/S.py' or 'sh scripts/S.sh'; the case lists the scripts it checked so a new subcommand is covered automatically.",
+    "A3 a throwaway project whose board/config.json has an unknown top-level key: 'actl ticket list' (any non-doctor command) prints no line containing 'unknown top-level key' and runs normally; 'actl doctor' still prints the warning row for that key; a config_version newer than A still makes 'actl ticket list' exit 2."
+  ],
+  "depends_on": [],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "09eabec471593391e1b2a3285fb3df24417b065a",
+  "state": "Ready",
+  "state_version": 2,
+  "lease": null,
+  "retry_limit": 3,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "complexity": "simple",
+  "needs_verifier": false,
+  "interface_fixed": true,
+  "outline": "Files: the scripts above (only printed text: echo / say / print / sys.stdout|stderr.write lines; comments and code paths unchanged), scripts/project_config.py cmd_check (drop the unknown_warning print; doctor_rows and migrate keep theirs), bin/actl (read its command table to know which scripts have a subcommand). Hints for scripts with no actl subcommand stay as they are and are listed in EVIDENCE. Existing tests that assert old hint text get their expected strings updated (not deleted). Tests: tests/test_inbox.py or the module that covers inbox list output, tests/test_project_config.py, tests/test_actl.py.",
+  "test_plan": "All contracts (A1-A3) are the worker's (needs_verifier false): A1 next to the existing inbox list cases, A2 as one static case in tests/test_actl.py, A3 in tests/test_project_config.py or tests/test_actl.py next to the existing check / doctor cases. Expected strings hard-coded from this ticket."
+}
