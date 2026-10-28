@@ -88,13 +88,13 @@ print(data if data not in (None, "") else default)
 PY
 }
 
-[ $# -ge 1 ] || { echo "用法:sh scripts/auto-fix.sh <票號> [--dry-run] [--round 1] [--no-review]"; exit 2; }
+[ $# -ge 1 ] || { echo "用法:actl auto-fix <票號> [--dry-run] [--round 1] [--no-review]"; exit 2; }
 # `--batch <整合分支> <票號…>`:票號收進 B_IDS,第一張當 `ID`(票檔、模型、逾時、成本都照它),
 # 旗標交回底下同一段解析。
 BATCH=""
 if [ "$1" = "--batch" ]; then
     shift
-    [ $# -ge 2 ] || { echo "用法:AC_BATCH_RUN_ID=<run> sh scripts/auto-fix.sh --batch <整合分支> <票號…> [--dry-run] [--no-review]" >&2; exit 2; }
+    [ $# -ge 2 ] || { echo "用法:AC_BATCH_RUN_ID=<run> actl auto-fix --batch <整合分支> <票號…> [--dry-run] [--no-review]" >&2; exit 2; }
     BATCH=1
     B_BR=$1
     shift
@@ -125,7 +125,7 @@ while [ $# -gt 0 ]; do
             shift
             [ $# -ge 1 ] || { echo "auto-fix: --round 後面要一個數字" >&2; exit 2; }
             WANT_ROUND=$1 ;;
-        --batch) echo "auto-fix: --batch 要放在最前面:sh scripts/auto-fix.sh --batch <整合分支> <票號…>" >&2; exit 2 ;;
+        --batch) echo "auto-fix: --batch 要放在最前面:actl auto-fix --batch <整合分支> <票號…>" >&2; exit 2 ;;
         *) echo "auto-fix: 不認得 $1(--dry-run / --round <n> / --no-review)" >&2; exit 2 ;;
     esac
     shift
@@ -689,8 +689,8 @@ out += ["- %s" % line for line in rows]
 out += ["", "交件本身不合:拿掉命中 hard_block 的改動 —— 在分支 %s 上修。" % branch, ""]
 out.append("接回(commit 留在分支 %s 上;**不要轉 Ready** —— 那會從頭派第 1 輪):" % branch)
 out.append("1. 修分支 %s 上的交件並 commit(或主線決定重派)" % branch)
-out.append("2. `python3 scripts/ticket.py set %s state Running`" % ident)
-out.append("3. 在分支副本重跑閘門:`cd %s && sh scripts/gate.sh --branch --ticket %s`"
+out.append("2. `actl ticket set %s state Running`" % ident)
+out.append("3. 在分支副本重跑閘門:`cd %s && actl gate --branch --ticket %s`"
            "(綠 → InReview → review.sh)" % (wt, ident))
 print("\n".join(out))
 PY
@@ -751,7 +751,7 @@ print("")
 print("## 只准跑的測試")
 if role == "verifier":
     print("只跑你寫的案例檔:`python3 -m unittest %s`" % (modules or "<你加進案例的那支模組>"))
-    print("`python3 scripts/verify-case.py red %s`(旗標照上面範本);check、閘門那一組、全套、回歸都不是你的"
+    print("`actl verify-case red %s`(旗標照上面範本);check、閘門那一組、全套、回歸都不是你的"
           % ticket.get("id", ""))
 else:
     if files:
@@ -819,7 +819,7 @@ print("2. `%s/EVIDENCE-round1.md`(worktree 外的輪次目錄,不進 repo)——
       "+ 記憶段 + 檔尾一塊 ```result` JSON。" % fix)
 print("   主線收件那一手是:")
 print("   ```sh")
-print("   sh scripts/apply.sh %s --evidence %s/EVIDENCE-round1.md" % (ident, fix))
+print("   actl apply %s --evidence %s/EVIDENCE-round1.md" % (ident, fix))
 print("   ```")
 print("   它會抽出 `result-round1.json`,並把 EVIDENCE 裡的 `OBJECTION:` 行記進票的 `objections[]`。")
 print("")
@@ -992,7 +992,7 @@ chain_exhausted() {   # $1 = 角色;整串候選都用不了:票 Blocked、一�
     echo "auto-fix: #$ID 的 $1 候選整串耗盡($R_REASON)—— 不再起程序,票轉 Blocked" >&2
     block "#$ID 的 $1 候選整串耗盡:$R_REASON"
     post "$1 候選整串耗盡" \
-         "#$ID 的 $1 候選都撞到額度 / 不可用($R_REASON);改表或等額度恢復後重跑 auto-fix:sh scripts/auto-fix.sh $ID" \
+         "#$ID 的 $1 候選都撞到額度 / 不可用($R_REASON);改表或等額度恢復後重跑 auto-fix:actl auto-fix $ID" \
          "${1:+board/role-models.json}"
 }
 
@@ -1081,7 +1081,7 @@ first_round_dispatch() {
             "" "$V_PARALLEL" || return 6
         echo "auto-fix: 第 1 輪驗證者派工文 -> $(python3 -c 'import os,sys;print(os.path.relpath(sys.argv[1],sys.argv[2]))' "$fr_vdispatch" "$ROOT")" >&2
     fi
-    echo "auto-fix: --round 1 只印派工文;票是 Ready 時不帶 --round 就由這一支起第 1 輪:sh scripts/auto-fix.sh $ID" >&2
+    echo "auto-fix: --round 1 只印派工文;票是 Ready 時不帶 --round 就由這一支起第 1 輪:actl auto-fix $ID" >&2
     return 0
 }
 
@@ -1129,8 +1129,8 @@ PY
 )"
     if [ "$T_STATE" != "Ready" ]; then
         echo "auto-fix: #$ID 沒有狀態檔,而票的 state=${T_STATE:-(空)},不是 Ready —— 停,不猜要不要起第 1 輪" >&2
-        echo "auto-fix:   Ready 的票才由這一支起第 1 輪;只看派工文:sh scripts/auto-fix.sh $ID --dry-run --round 1" >&2
-        echo "auto-fix:   已經派過第 1 輪、要修紅的:先跑 sh scripts/gate.sh --branch --ticket $ID" >&2
+        echo "auto-fix:   Ready 的票才由這一支起第 1 輪;只看派工文:actl auto-fix $ID --dry-run --round 1" >&2
+        echo "auto-fix:   已經派過第 1 輪、要修紅的:先跑 actl gate --branch --ticket $ID" >&2
         exit 2
     fi
     # 先選第 1 輪的 worker:票 / config 的 effort 不合候選的 tool 要在動票之前停(#114 A8),
@@ -1172,7 +1172,7 @@ if [ "${S_ENV:-0}" != "0" ]; then
 fi
 
 if [ "${S_RC:-1}" = "0" ]; then
-    echo "auto-fix: 上一輪是綠的 —— 沒有東西要修。complex 票的覆核由 review.sh 派:sh scripts/review.sh $ID"
+    echo "auto-fix: 上一輪是綠的 —— 沒有東西要修。complex 票的覆核由 review.sh 派:actl review $ID"
     exit 0
 fi
 
@@ -1987,7 +1987,7 @@ print(next((tok for tok in parts if "=" not in tok), ""))' "$OPENER_CMD")
         echo ""
         echo "$line"
         echo ""
-        echo "- 票號:#$ID(票檔 \`$TICKETS/$ID.json\`;改票只走 \`python3 scripts/ticket.py set $ID <欄位> '<JSON>'\`)"
+        echo "- 票號:#$ID(票檔 \`$TICKETS/$ID.json\`;改票只走 \`actl ticket set $ID <欄位> '<JSON>'\`)"
         echo "- EVIDENCE:\`$EV_REL\`"
         echo "- 只有兩種判決:"
         echo "  - accepted = 改好票面接回 worker。反駁成立就照它改;worker 讀錯了票也判 accepted:把澄清寫進票面,下一個人才不會再讀錯"
@@ -2958,10 +2958,10 @@ print(json.dumps({"rc": 0, "sha": sys.argv[1], "run_id": sys.argv[2],
         echo "auto-fix: 第 $r 輪綠了 —— 票不是 complex(沒標 = simple),不派覆核;票停在 InReview 等 land"
         echo "auto-fix: 終態=green_no_review(simple 票:閘門綠就可落地,不做做完後的覆核)"
     elif [ -n "$NO_REVIEW" ]; then
-        echo "auto-fix: 第 $r 輪綠了 —— --no-review,覆核不派,票停在 InReview:sh scripts/review.sh $ID"
+        echo "auto-fix: 第 $r 輪綠了 —— --no-review,覆核不派,票停在 InReview:actl review $ID"
         echo "auto-fix: 終態=awaiting_review(閘門綠、還沒覆核 —— 不是可落地)"
     else
-        echo "auto-fix: 第 $r 輪綠了 —— 覆核交給 review.sh(sh scripts/review.sh $ID)"
+        echo "auto-fix: 第 $r 輪綠了 —— 覆核交給 review.sh(actl review $ID)"
         sh "$AC/review.sh" "$ID" --run-id "$RUN_ID"
         review_outcome $?
     fi
@@ -3027,7 +3027,7 @@ red_next() {
                 echo "auto-fix: 第 $S_ROUND 輪是診斷輪,閘門仍環境可疑 —— 環境要人看,不再派" >&2
                 block "#$ID 第 $S_ROUND 輪(診斷輪)之後閘門仍環境可疑:環境要人看"
                 post "環境要人看(environment: needs a human)" \
-                     "第 $S_ROUND 輪診斷輪之後閘門仍環境可疑(rc=${S_RC:-?},$S_ENV_ENGINE:$S_ENV_WHY):機械重跑與一輪診斷都沒救回來,先修機器 / 環境,再 python3 scripts/ticket.py set $ID state Running 並重跑閘門" \
+                     "第 $S_ROUND 輪診斷輪之後閘門仍環境可疑(rc=${S_RC:-?},$S_ENV_ENGINE:$S_ENV_WHY):機械重跑與一輪診斷都沒救回來,先修機器 / 環境,再 actl ticket set $ID state Running 並重跑閘門" \
                      "reports/t$ID/$S_RUN/status.json 與它的 logs/"
             else
                 echo "auto-fix: 第 $S_ROUND 輪是診斷輪,紅仍沒有歸因 —— 不連派第二輪診斷" >&2
@@ -3291,7 +3291,7 @@ PY
         line=$(grep -m1 '^OBJECTION:' "$EVIDENCE")
         echo "auto-fix: 批次 worker 提了反駁 —— $line" >&2
         post "批次 worker 提了反駁($B_TAGS)" \
-             "整批 ${B_TAGS}:${line}。批次不寫票,這一筆沒有記進任何一張票的 objections[] —— 開題者 / 主線判;判 test_defect 成立、commit 照收就跑 sh scripts/apply.sh --batch $B_BR $B_IDS --base $W_BEFORE --evidence $(rel_root "$EVIDENCE")" \
+             "整批 ${B_TAGS}:${line}。批次不寫票,這一筆沒有記進任何一張票的 objections[] —— 開題者 / 主線判;判 test_defect 成立、commit 照收就跑 actl apply --batch $B_BR $B_IDS --base $W_BEFORE --evidence $(rel_root "$EVIDENCE")" \
              "$(rel_root "$EVIDENCE")"
         batch_cost objection
         exit 3
@@ -3317,7 +3317,7 @@ PY
     fi
     batch_cost handed-in
     if [ -n "$NO_REVIEW" ]; then
-        echo "auto-fix: 批次 $B_TAGS 的 fix 已 commit —— --no-review,覆核不派:sh scripts/review.sh --batch $B_BR $B_IDS --run-id $B_STAMP --base $W_BEFORE"
+        echo "auto-fix: 批次 $B_TAGS 的 fix 已 commit —— --no-review,覆核不派:actl review --batch $B_BR $B_IDS --run-id $B_STAMP --base $W_BEFORE"
         exit 0
     fi
     sh "$AC/review.sh" --batch "$B_BR" $B_IDS --run-id "$B_STAMP" --base "$W_BEFORE"

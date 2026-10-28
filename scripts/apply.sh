@@ -80,7 +80,7 @@ land_entry() {   # $1 = 專案根  $2 = 分支
     if [ -f "$1/scripts/land-ticket.sh" ]; then
         echo "落地入口:sh scripts/land-ticket.sh $2"
     else
-        echo "落地入口:sh scripts/land.sh $2"
+        echo "落地入口:actl land $2"
     fi
 }
 
@@ -350,7 +350,7 @@ PY
         echo "apply:   批次不寫票:反駁沒有記進任何一張票的 objections[],由開題者 / 主線照 EVIDENCE 判" >&2
         exit 6
     fi
-    echo "apply: 下一步 —— sh scripts/review.sh --batch $B_BR $B_IDS --run-id $B_STAMP --base $B_BASE"
+    echo "apply: 下一步 —— actl review --batch $B_BR $B_IDS --run-id $B_STAMP --base $B_BASE"
     exit 0
 }
 
@@ -508,9 +508,9 @@ cmd_verify_plan() {
 # ------------------------------------------------------------------ 收件(單票)
 usage() {   # $1 = 出去的檔案描述子(1 = 有人問 --help,2 = 用錯了)
     {
-        echo "用法:sh scripts/apply.sh <票號> [<patch-verify>] [旗標…]"
-        echo "      sh scripts/apply.sh --batch <整合分支> <票號…> [--base <sha>] [--evidence <檔>]"
-        echo "      sh scripts/apply.sh verify-plan <票號> --evidence-verifier <檔>…"
+        echo "用法:actl apply <票號> [<patch-verify>] [旗標…]"
+        echo "      actl apply --batch <整合分支> <票號…> [--base <sha>] [--evidence <檔>]"
+        echo "      actl apply verify-plan <票號> --evidence-verifier <檔>…"
         echo "                             只把驗證者的 verify 計畫與驗紅併進票:不建分支、不 commit"
         echo ""
         echo "worker 的改動是票分支上它自己的 commit;這一支收 EVIDENCE、在分支上補 patch-verify"
@@ -525,7 +525,7 @@ usage() {   # $1 = 出去的檔案描述子(1 = 有人問 --help,2 = 用錯了)
         echo "                             ancestor(不給 = 票的 base_sha;要是分支頭的祖先)"
         echo ""
         echo "例:"
-        echo "  sh scripts/apply.sh 7 patch-verify.diff \\"
+        echo "  actl apply 7 patch-verify.diff \\"
         echo "     --evidence EVIDENCE-round1.md --evidence-verifier EVIDENCE-verifier.md"
     } >&"$1"
 }
@@ -1023,7 +1023,7 @@ while IFS= read -r ofile; do
             *)
                 # 記不進票(rc=2)不是「已經有了」:沒人收的反駁,與沒有反駁長得一樣(§7)。
                 echo "apply: #$ID 的反駁記不進票(ticket.py objection rc=$orc)—— 修好之後手動記:" >&2
-                echo "apply:   python3 scripts/ticket.py objection $ID --line \"$OLINE\" --evidence $ofile" >&2
+                echo "apply:   actl ticket objection $ID --line \"$OLINE\" --evidence $ofile" >&2
                 O_FAILED=1 ;;
         esac
     done 4< "$O_TMP"
@@ -1042,7 +1042,7 @@ if [ -n "$O_PENDING" ]; then
     exit 6
 fi
 status_done 0 "收件完成,分支頭 $SHA"
-echo "apply: 下一步 —— (cd $WT && sh scripts/gate.sh --branch --ticket $ID)"
+echo "apply: 下一步 —— (cd $WT && actl gate --branch --ticket $ID)"
 echo "apply:       閘門綠了主線覆核記 review,再落地:"
 land_entry "$(main_root)" "$BR"
 exit 0

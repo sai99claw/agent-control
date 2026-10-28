@@ -11,8 +11,9 @@
 ## Compatibility (the T lesson, in one place)
 A file without `config_version` is version 1. Lower than A's → rc 2 and `actl migrate`; higher
 than A's → rc 2 and "pull A" (main's ruling: A behind ⇒ refuse). A known key with the wrong type
-→ rc 2 naming key, expected type, got value. An unknown top-level key → exactly one stderr warning
-line per call, never rc. A missing key → the reader's default, silent.
+→ rc 2 naming key, expected type, got value. An unknown top-level key → silent in `check` (it runs
+before every command; T keeps legacy keys through §7, #185), a warning row in `actl doctor` and
+`actl migrate`, never rc. A missing key → the reader's default, silent.
 
 `actl version / doctor / migrate / init` skip `check` (bin/actl) — otherwise a stale project could
 never be migrated.
@@ -209,11 +210,6 @@ def unknown_keys(conf):
     return [key for key in conf if key not in TOP_KEYS]
 
 
-def unknown_warning(unknown):
-    return ("project_config: warning: unknown top-level key(s) in board/config.json: %s "
-            "(possibly retired; see actl doctor)" % ", ".join(unknown))
-
-
 # ---------------------------------------------------------------- check
 
 def cmd_check(root):
@@ -224,9 +220,6 @@ def cmd_check(root):
     errors = type_errors(conf)
     for line in errors:
         sys.stderr.write("project_config: %s\n" % line)
-    unknown = unknown_keys(conf)
-    if unknown:
-        sys.stderr.write(unknown_warning(unknown) + "\n")
     return 2 if errors else 0
 
 

@@ -785,8 +785,8 @@ class Run(object):
         if review:
             raise Stop("review", review[0],
                        "batch %s cannot land: %s" % (batch["id"], lines),
-                       "complex ticket(s) %s wait for a review: run `sh scripts/review.sh %s` "
-                       "(actl review %s)" % (" ".join("#" + i for i in review), review[0], review[0]))
+                       "complex ticket(s) %s wait for a review: run `actl review %s`"
+                       % (" ".join("#" + i for i in review), review[0]))
         drivers = [i for i, (kind, _) in kinds.items() if kind == "driver"]
         first = (drivers or [i for i, _ in waiting] or batch["tickets"])[0]
         raise Stop("another-driver" if drivers else "waiting", first,
@@ -924,8 +924,7 @@ class Run(object):
                 raise Stop("review" if review else "land", problems[0][0],
                            "batch %s: land.sh %s exited rc %d and the batch is not fixed: %s"
                            % (batch["id"], " ".join(after.branch(i) for i in call), rc, text),
-                           ("run `sh scripts/review.sh %s` (actl review %s)"
-                            % (problems[0][0], problems[0][0])) if review else
+                           ("run `actl review %s`" % problems[0][0]) if review else
                            "handle land's own page for batch %s (land rc %d)" % (batch["id"], rc))
             if entry.get("relands", 0) >= self.reland_max:
                 entry["status"] = "stopped"

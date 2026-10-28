@@ -15,6 +15,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import unittest
@@ -280,6 +281,59 @@ class A2TheDollarZeroWalkIsGone(ActlBase):
                 self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
                 self.assertIn("not inside a project", done.stderr)
                 self.assertEqual(os.listdir(self.bare), [])
+
+
+PRINTS = re.compile(r"\becho\b|\bsay\(|\bprint\(|\.write\(")
+
+
+def dispatched_scripts(actl_text):
+    """bin/actl's own tables → the scripts/ files it execs, read from the file so a new
+    subcommand is covered without touching this case: the allowed-command `case` arm (the one
+    ending in `) ;;`) and the final `exec` arms (`$CMD` expanded per name, `*` = the rest)."""
+    allowed = re.search(r"\n\s*((?:[\w-]+\|\\?\s*)+[\w-]+)\) ;;", actl_text)
+    assert allowed, "bin/actl: the allowed-command case arm moved"
+    names = re.findall(r"[\w-]+", allowed.group(1))
+    out, taken = {}, set()
+    arms = re.findall(r'^\s*([\w|*-]+)\) exec (?:sh|python3) "\$(AC|AC_HOME)/([^"]+)"',
+                      actl_text, re.M)
+    for pattern, where, target in arms:
+        cmds = [n for n in names if n not in taken] if pattern == "*" else pattern.split("|")
+        taken.update(cmds)
+        if where != "AC":
+            continue  # not under scripts/ (board/board.py)
+        for cmd in cmds:
+            script = target.replace("$CMD", cmd)
+            out[script] = " / ".join(filter(None, (out.get(script), cmd)))
+    return out
+
+
+class A185HintsNameActl(unittest.TestCase):
+    """#185 A2:在專案裡 `scripts/x` 不存在、直接叫也沒有 AC_HOME(D-071:bin/actl 是唯一入口),
+    所以印出來的提示對有 actl 子命令的腳本一律寫 `actl <子命令>`。"""
+
+    def test_185_a2_no_printed_line_names_a_dispatched_script(self):
+        """**變異**:`inbox.py` 的提示改回 `python3 scripts/inbox.py show` → 紅,訊息列出那一行。"""
+        with open(os.path.join(ROOT, "bin", "actl"), encoding="utf-8") as handle:
+            scripts = dispatched_scripts(handle.read())
+        checked = sorted(scripts)
+        # the parse itself must answer: an empty or short table is not a pass
+        for must in ("inbox.py", "ticket.py", "gate.sh", "auto-fix.sh", "new-session.sh",
+                     "testiface.py", "project_config.py", "verify-case.py"):
+            self.assertIn(must, checked, "bin/actl parse lost %s; checked: %s" % (must, checked))
+        bad = []
+        files = sorted(glob.glob(os.path.join(SCRIPTS, "*.sh")) + glob.glob(os.path.join(SCRIPTS, "*.py")))
+        self.assertTrue(files)
+        for path in files:
+            with open(path, encoding="utf-8") as handle:
+                for number, line in enumerate(handle, 1):
+                    if line.lstrip().startswith("#") or not PRINTS.search(line):
+                        continue
+                    for script in checked:
+                        old = ("python3 scripts/%s" if script.endswith(".py") else "sh scripts/%s") % script
+                        if old in line:
+                            bad.append("%s:%d %s -> actl %s" % (os.path.basename(path), number,
+                                                                old, scripts[script]))
+        self.assertEqual(bad, [], "checked scripts: %s" % ", ".join(checked))
 
 
 if __name__ == "__main__":

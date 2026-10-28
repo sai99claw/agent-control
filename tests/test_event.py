@@ -256,7 +256,7 @@ class Help(Sandbox):
         for flag in ("--ticket", "--role", "--model", "--attempt", "--note", "--kv"):
             self.assertIn(flag, done.stdout)
         self.assertIn("session.start", done.stdout, "沒有把種類表印出來")
-        self.assertIn("python3 scripts/event.py emit", done.stdout)
+        self.assertIn("actl event emit", done.stdout)
         self.assertEqual(self.events(), [], "印說明不該發出一筆事件")
 
     def test_an_unknown_flag_lists_the_ones_it_does_know(self):

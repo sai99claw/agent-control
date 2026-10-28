@@ -105,13 +105,13 @@ USAGE = {
 }
 
 EXAMPLE = {
-    "check": "python3 scripts/memory.py check",
-    "check-stale": "python3 scripts/memory.py check-stale --read-only --file memory/role/worker.md",
-    "snapshot": "python3 scripts/memory.py snapshot memory/model/opus.md",
-    "lint": "python3 scripts/memory.py lint --file memory/role/implementer.md --json",
-    "note": ('python3 scripts/memory.py note role implementer '
+    "check": "actl memory check",
+    "check-stale": "actl memory check-stale --read-only --file memory/role/worker.md",
+    "snapshot": "actl memory snapshot memory/model/opus.md",
+    "lint": "actl memory lint --file memory/role/implementer.md --json",
+    "note": ('actl memory note role implementer '
              '"變異後先確認替換真的生效" --ticket 17 --by worker@opus'),
-    "consolidate": ('python3 scripts/memory.py consolidate memory/model/opus.md \\\n'
+    "consolidate": ('actl memory consolidate memory/model/opus.md \\\n'
                     '  --candidate discussions/2026-09-12-memory-opus.candidate.md \\\n'
                     '  --discussion discussions/2026-09-12-memory-opus-fable.md \\\n'
                     '  --discussion discussions/2026-09-12-memory-opus-opus.md \\\n'
@@ -135,7 +135,7 @@ def unknown_flag(flag):
     sys.stderr.write("memory: consolidate 不認得 %r\n" % flag)
     sys.stderr.write("memory: consolidate 認得的是:%s\n"
                      % "  ".join(name for name, _ in CONSOLIDATE_FLAGS))
-    sys.stderr.write("memory: 看範例:python3 scripts/memory.py consolidate --help\n")
+    sys.stderr.write("memory: 看範例:actl memory consolidate --help\n")
     return 2
 
 
@@ -786,20 +786,20 @@ def open_ticket_for(rel, entries, out):
     if len(who) == 1:
         who_says = "**%s 單獨整理**(D-043 / D-049 ②,角色表 consolidator 鏈);討論檔寫得出每一行處置的理由" % model
         how = ("派工照 `templates/dispatch-consolidator.md`(主線開場由 `consolidate-memory.sh` 照角色表起"
-               "**一個** session;規則包 `python3 scripts/rules.py pack consolidator --model <模型>`,"
+               "**一個** session;規則包 `actl rules pack consolidator --model <模型>`,"
                "角色卡 `memory/role/consolidator.md`)。"
-               "先 `python3 scripts/memory.py snapshot %s` 把兩行抄進討論檔頭,逐行寫處置,最後跑 "
-               "`python3 scripts/memory.py consolidate %s --candidate <新版> "
+               "先 `actl memory snapshot %s` 把兩行抄進討論檔頭,逐行寫處置,最後跑 "
+               "`actl memory consolidate %s --candidate <新版> "
                "--discussion <啟動端記下的那一份討論檔>`。" % (rel, rel))
     else:
         who_says = "**兩個不同的模型**參與討論(%s);討論檔列得出雙方的分歧" \
                    % (model or "名單見 board/role-models.json 的 consolidator 鏈")
         how = ("派工照 `templates/dispatch-consolidator.md`(兩個模型各開一個 session、各貼一次;"
-               "規則包 `python3 scripts/rules.py pack consolidator --model <模型>`,"
+               "規則包 `actl rules pack consolidator --model <模型>`,"
                "角色卡 `memory/role/consolidator.md`)。"
-               "先 `python3 scripts/memory.py snapshot %s` 把兩行抄進各自的討論檔頭,"
+               "先 `actl memory snapshot %s` 把兩行抄進各自的討論檔頭,"
                "再互讀寫分歧,最後一位跑 "
-               "`python3 scripts/memory.py consolidate %s --candidate <新版> "
+               "`actl memory consolidate %s --candidate <新版> "
                "--discussion <討論檔 A> --discussion <討論檔 B>`。" % (rel, rel))
     argv = [
         "--subject", "整理 %s(暫存區 %d 條未整理)" % (rel, entries),

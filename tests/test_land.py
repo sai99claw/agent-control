@@ -711,7 +711,8 @@ class TheDocsChannel(LandBase):
         done = self.docs("順手帶一支腳本", "tickets/7.json", "scripts/sneaky.sh")
         self.assertNotEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("scripts/sneaky.sh", done.stderr, "越界要指名是哪一個檔")
-        self.assertIn("auto-fix.sh", done.stderr, "說得出下一步(§5.7;#144 起 worker 在票分支 commit)")
+        self.assertIn("actl auto-fix <票號>", done.stderr,
+                      "說得出下一步(§5.7;#144 起 worker 在票分支 commit;#185 提示走 actl)")
         self.assertEqual(self.git("rev-parse", "main").strip(), before,
                          "拒收的那一次主線一個 commit 都不該多")
 

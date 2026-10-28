@@ -273,11 +273,11 @@ USAGE = {
 }
 
 EXAMPLE = {
-    "emit": ('python3 scripts/event.py emit session.start --role main --model fable\n'
-             'python3 scripts/event.py emit ticket.attempt.done --ticket 7 '
+    "emit": ('actl event emit session.start --role main --model fable\n'
+             'actl event emit ticket.attempt.done --ticket 7 '
              '--attempt 2 --note "patch 在 …" --kv rc=0'),
-    "tail": "python3 scripts/event.py tail 20",
-    "grep": "python3 scripts/event.py grep land\npython3 scripts/event.py grep #7",
+    "tail": "actl event tail 20",
+    "grep": "actl event grep land\nactl event grep #7",
 }
 
 
@@ -301,7 +301,7 @@ def unknown_flag(flag):
     sys.stderr.write("event: emit 不認得 %r\n" % flag)
     sys.stderr.write("event: emit 認得的是:%s\n"
                      % "  ".join(name for name, _ in EMIT_FLAGS))
-    sys.stderr.write("event: 看範例:python3 scripts/event.py emit --help\n")
+    sys.stderr.write("event: 看範例:actl event emit --help\n")
     return 2
 
 
@@ -324,7 +324,7 @@ def cmd_emit(argv):
                          "是 `git archive | tar -x` 展出來的副本;\n")
         sys.stderr.write("event:   寫進去的那一行會跟著副本一起被刪,而且不會報錯。\n")
         sys.stderr.write("event:   真的要從這裡發:AC_ROOT=<主 repo 根> "
-                         "python3 scripts/event.py emit %s …\n" % kind)
+                         "actl event emit %s …\n" % kind)
         return 3
     if kind not in KINDS:
         sys.stderr.write("event: 不認得的事件種類 %r —— 種類是一張固定的表:\n" % kind)

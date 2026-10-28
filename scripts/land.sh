@@ -199,7 +199,7 @@ cmd_docs() {   # $1 = commit 訊息  $2… = 檔案(repo 相對路徑)
     setup_line=$(printf '%s\n' "$setup" | tr '\n' ' ' | sed 's/ $//')
     if [ $# -lt 2 ]; then
         echo "land: docs <訊息> <檔…>  —— 只收 $DOCS_PREFIXES 四個前綴,與專案設定檔:$setup_line" >&2
-        echo "land:   例:sh scripts/land.sh docs \"tickets: #29 v2\" tickets/29.json" >&2
+        echo "land:   例:actl land docs \"tickets: #29 v2\" tickets/29.json" >&2
         exit 2
     fi
     msg=$1
@@ -229,7 +229,7 @@ EOF
         echo "land: docs 通道只收 $DOCS_PREFIXES 與專案設定檔 —— 這幾個不在裡面:" >&2
         for one in $bad; do echo "land:   $one" >&2; done
         echo "land:   收的專案設定檔(逐字):$setup_line" >&2
-        echo "land:   產品碼走一票一分支:worker 在票分支 commit(sh scripts/auto-fix.sh <票號>),再 sh scripts/land.sh t<票號>" >&2
+        echo "land:   產品碼走一票一分支:worker 在票分支 commit(actl auto-fix <票號>),再 actl land t<票號>" >&2
         exit 2
     fi
     # 開題者(AC_ROLE=opener)只收 `tickets/<AC_TICKET>.json` 一個檔(#91 C6,R4):它的交付
@@ -436,7 +436,7 @@ inbox_first() {   # $1 = 狀態  $2 = 要主線做什麼  $3 = 去哪看
 auto_fix_all() {
     [ "$AUTOFIX" -eq 1 ] || return 0
     for i in $IDS; do
-        echo "land: auto-fix —— sh scripts/auto-fix.sh $i(base=$BR)"
+        echo "land: auto-fix —— actl auto-fix $i(base=$BR)"
         AC_FIX_SOURCE="$BR" sh "$AC/auto-fix.sh" "$i" \
             || echo "land: auto-fix 停下來了(rc=$?)—— 看 reports/inbox/ 那一頁"
     done
@@ -869,7 +869,7 @@ batch_fix() {
         diag_prev=$unattributed
         reruns=0
         fixed=$((fixed + 1))
-        echo "land: 全套第 $ROUND 輪紅 —— 批次修復第 $fixed/$rounds 輪${unattributed:+(診斷:紅榜是空的)}:AC_BATCH_RUN_ID=$LAND_RUN sh scripts/auto-fix.sh --batch $BR $GATE_TICKETS"
+        echo "land: 全套第 $ROUND 輪紅 —— 批次修復第 $fixed/$rounds 輪${unattributed:+(診斷:紅榜是空的)}:AC_BATCH_RUN_ID=$LAND_RUN actl auto-fix --batch $BR $GATE_TICKETS"
         # 紅榜已由 run_gate 抄進 land 這一輪的狀態檔(reports/t<第一張>/$LAND_RUN/status.json)。
         # shellcheck disable=SC2086
         AC_BATCH_RUN_ID="$LAND_RUN" AC_FIX_SOURCE="$BR" sh "$AC/auto-fix.sh" --batch "$BR" $IDS
@@ -988,7 +988,7 @@ SUSPECT_PY
                     python3 "$AC/inbox.py" post --ticket "$id" \
                         --run-id "$LAND_RUN-kick" --kind decision \
                         --state "批次落地踢出(全套連紅 $ROUND 輪)" \
-                        --what "紅榜對到這張票,已從整批 $ALL_BRANCHES 踢出、其餘自動重 land;修好後單張 land:sh scripts/land.sh ${b}。紅榜:$WHY" \
+                        --what "紅榜對到這張票,已從整批 $ALL_BRANCHES 踢出、其餘自動重 land;修好後單張 land:actl land ${b}。紅榜:$WHY" \
                         --where "$WT/gate.log 與 reports/t<票號>/$GATE_RUN/status.json" >/dev/null 2>&1 \
                         || echo "land: #$id 的收件匣寫不出來(不擋落地)" >&2
                 fi
@@ -1000,7 +1000,7 @@ SUSPECT_PY
         --kv "stamp=$STAMP" --kv "kicked=$(echo "$SUSPECTS" | tr ' ' ',')"
     land_cost_all fail
     status_done_all 1 "批次全套連紅 $ROUND 輪,踢出 #$(echo "$SUSPECTS" | sed 's/ / #/g'),其餘重 land"
-    echo "land: 重 land 其餘:sh scripts/land.sh$REST(AC_LAND_DEPTH=$((DEPTH + 1)));這一批的 worktree 留在 $WT"
+    echo "land: 重 land 其餘:actl land$REST(AC_LAND_DEPTH=$((DEPTH + 1)));這一批的 worktree 留在 $WT"
     # shellcheck disable=SC2086
     AC_LAND_DEPTH=$((DEPTH + 1)) sh "$AC/land.sh" $REST
     relanded=$?
@@ -1104,13 +1104,13 @@ for i in $IDS; do
     fi
     echo "land: #$i 已合併、尚未關票 —— ticket.py close 關不掉(rc=$CLOSE_RC),它說:"
     echo "$CLOSE_OUT" | sed 's/^/land:   /'
-    echo "land:   補齊後:python3 scripts/ticket.py close $i --landed $LANDED"
+    echo "land:   補齊後:actl ticket close $i --landed $LANDED"
     # 一頁的 what 是一行:原文逐行接起來,一個字都不改寫(理由只有 ticket.py 一份)。
     WHY=$(echo "$CLOSE_OUT" | awk 'NF { sub(/^[ \t]+/, ""); printf "%s%s", sep, $0; sep = " ／ " }')
     if [ -z "${AC_NO_INBOX:-}" ]; then
         python3 "$AC/inbox.py" post --ticket "$i" \
             --run-id "${LAND_RUN:-$STAMP-$$}" --kind decision --state "已合併、尚未關票" \
-            --what "ticket.py close 關不掉(rc=$CLOSE_RC):$WHY ／ 補齊後:python3 scripts/ticket.py close $i --landed $LANDED" \
+            --what "ticket.py close 關不掉(rc=$CLOSE_RC):$WHY ／ 補齊後:actl ticket close $i --landed $LANDED" \
             --where "git log --oneline -3 $MAIN" >/dev/null 2>&1 \
             || echo "land: #$i 的收件匣寫不出來(不擋落地)" >&2
     fi

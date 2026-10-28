@@ -552,7 +552,7 @@ def post_decision(root, role, model, problems):
                 "\n" + "".join(
                     "- %s(`%s`):%s\n" % (row["item"], row["source"], row["problem"])
                     for row in problems))
-        where = "`python3 scripts/rules.py inspect %s --model %s --json`" % (role, model or '""')
+        where = "`actl rules inspect %s --model %s --json`" % (role, model or '""')
         state = "規則包產不出來(%s)" % role
         with contextlib.redirect_stdout(sys.stderr):
             inbox.publish(root, ticket, run_id, "decision", state, what, where, lambda: inbox.PAGE % {

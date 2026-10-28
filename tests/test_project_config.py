@@ -217,7 +217,7 @@ class A3Doctor(ConfigSandbox):
 
 
 class A4Keys(ConfigSandbox):
-    """Known keys are typed; unknown keys warn once; missing keys are silent."""
+    """Known keys are typed; unknown keys show only in doctor / migrate (#185); missing keys are silent."""
 
     def test_a4_wrong_type_is_rc_2_naming_key_type_value(self):
         """**m4**: check skips the type table → rc 0, red."""
@@ -227,12 +227,23 @@ class A4Keys(ConfigSandbox):
         for part in ("port", "int", "abc"):
             self.assertIn(part, done.stderr)
 
-    def test_a4_unknown_key_warns_once_never_rc(self):
+    def test_185_a3_unknown_key_is_silent_outside_doctor_never_rc(self):
+        """#185 A3 (was: one warning per call — T keeps 4 legacy keys through §7, so every
+        command was noisy). `check` says nothing about unknown keys; `actl doctor` still names
+        them; a newer config_version is still refused.
+        **m**: put the unknown-key write back in cmd_check → the 'unknown top-level key' line
+        shows up in `ticket list`, red."""
         self.edit_conf(zzz_unknown=1)
         done = self.actl("ticket", "list", "--open")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(len([line for line in done.stderr.splitlines()
-                              if "zzz_unknown" in line]), 1, done.stderr)
+        self.assertIn(SUBJECT, done.stdout, "ticket list runs normally")
+        self.assertEqual([line for line in (done.stdout + done.stderr).splitlines()
+                          if "unknown top-level key" in line or "zzz_unknown" in line], [],
+                         done.stderr)
+        self.edit_conf(config_version=3)
+        newer = self.actl("ticket", "list", "--open")
+        self.assertEqual(newer.returncode, 2, newer.stdout + newer.stderr)
+        self.edit_conf(config_version=2)
         doctor = self.actl("doctor")
         self.assertEqual(doctor.returncode, 0, doctor.stdout + doctor.stderr)
         self.assertTrue([line for line in doctor.stdout.splitlines()
