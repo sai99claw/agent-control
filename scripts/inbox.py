@@ -175,7 +175,7 @@ def legacy_hint(root):
     if not os.path.isfile(legacy):
         return None
     return ("inbox: %s 還在(#143 之前的 ack 帳,清單不照它算)—— 搬一次:"
-            "python3 scripts/inbox.py migrate\n" % os.path.relpath(legacy, root))
+            "actl inbox migrate\n" % os.path.relpath(legacy, root))
 
 
 def warn_legacy(root):
@@ -367,8 +367,8 @@ def cmd_list(args):
                          % (mark, row.get("ticket", "?"), row.get("state", "?"),
                             row.get("what", "")[:60]))
         sys.stdout.write("      %s\n" % row.get("page", ""))
-    sys.stdout.write("inbox: 讀一頁 `python3 scripts/inbox.py show <票號>`;"
-                     "收下 `python3 scripts/inbox.py ack <票號>`\n")
+    sys.stdout.write("inbox: 讀一頁 `actl inbox show <票號>`;"
+                     "收下 `actl inbox ack <票號>`\n")
     return 0
 
 

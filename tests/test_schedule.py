@@ -450,7 +450,7 @@ class A3DispatchAndConcurrency(ScheduleBase):
         self.assertEqual(len(pages), 1, pages)
         self.assertEqual(pages[0]["kind"], "decision")
         text = self.page_text(pages[0])
-        self.assertIn("review.sh", text)
+        self.assertIn("actl review", text)
         self.assertIn("#A", text)
         self.assertFalse([c for c in self.calls() if c.startswith("review")], "scheduler ran review")
 
@@ -796,7 +796,7 @@ class A10Reland(ScheduleBase):
         self.assertEqual(self.lands(), ["tA"])
         pages = self.pages()
         self.assertEqual(len(pages), 1)
-        self.assertIn("review.sh", self.page_text(pages[0]))
+        self.assertIn("actl review", self.page_text(pages[0]))
 
     def test_a10_same_head_is_not_relanded(self):
         self.green("A")

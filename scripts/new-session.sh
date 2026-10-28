@@ -26,7 +26,7 @@
 # 候選額度用完 / 不可用(provider 錯誤信封、CLI 不在)才換下一個;一般失敗不換。
 # 退出碼:0 交完;1 那個 session 失敗(不換人);2 不派(表、旗標、超量);3 整串耗盡、停下。
 set -u
-USAGE="new-session: 要 <role> <model> [--no-event] [--session <id>],例:sh scripts/new-session.sh main fable"
+USAGE="new-session: 要 <role> <model> [--no-event] [--session <id>],例:actl session main fable"
 if [ "${1:-}" = dispatch ]; then
     shift
     # 專案根:`AC_ROOT`,否則 cwd 的主 repo 根(`wtbase.sh`,D-071 C2);不從 `$0` 來。

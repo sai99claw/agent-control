@@ -691,7 +691,7 @@ def record_flakes(root, ticket, run_id, rows):
                                  row.get("log", ""), ticket)
         if made:
             print("status: 自動開了修不穩定的票 #%s(role=verifier)—— "
-                  "`python3 scripts/ticket.py show %s`" % (made, made))
+                  "`actl ticket show %s`" % (made, made))
     return hot
 
 

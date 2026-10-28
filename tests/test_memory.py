@@ -115,7 +115,7 @@ class MemoryCheck(Sandbox):
         row = self.load_ticket("1")
         self.assertIn("templates/dispatch-consolidator.md", row.get("outline") or "",
                       "整理票要指得出那一份範本")
-        self.assertIn("memory.py consolidate", row.get("outline") or "",
+        self.assertIn("actl memory consolidate", row.get("outline") or "",
                       "收的那一句要可以直接貼")
 
     def test_a_role_card_with_an_inbox_is_watched_too(self):
@@ -251,7 +251,7 @@ class Consolidate(Sandbox):
             self.assertIn(flag, done.stdout)
         for flag in ("--new-cap", "--reason"):
             self.assertNotIn(flag, done.stdout)
-        self.assertIn("python3 scripts/memory.py consolidate", done.stdout)
+        self.assertIn("actl memory consolidate", done.stdout)
 
     def test_an_unknown_flag_lists_the_ones_it_does_know(self):
         done = self.memory("consolidate", "memory/model/opus.md", "--talk", "x.md")

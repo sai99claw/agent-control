@@ -507,7 +507,7 @@ class WhenThereIsNothingToFix(AutoFixBase):
         self.status(0, GREEN_LOG)
         done = self.auto_fix()
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("sh scripts/review.sh 1", done.stdout)
+        self.assertIn("actl review 1", done.stdout)
         self.assertEqual(self.worker_rounds(), [])
 
 
@@ -3757,7 +3757,7 @@ class ThePacketSaysWhichTestsToRun(AutoFixBase):
         self.assertEqual(len(vlines), 2, vlines)
         self.assertIn("只跑你寫的案例檔", vlines[0])
         self.assertIn("python3 -m unittest <你加進案例的那支模組>", vlines[0])
-        self.assertIn("verify-case.py red", vlines[1])
+        self.assertIn("actl verify-case red", vlines[1])
         self.assertNotIn("--base", "\n".join(vlines))
         self.assertIn("\n## 票的測試計畫\n%s\n" % self.PLAN, verifier)
         for name, text in (("worker", worker), ("verifier", verifier)):
@@ -3807,7 +3807,7 @@ class ThePacketSaysWhichTestsToRun(AutoFixBase):
         self.assertEqual(len(vlines), 2, vlines)
         self.assertIn("只跑你寫的案例檔", vlines[0])
         self.assertIn("python3 -m unittest tests.test_x_cases", vlines[0])
-        self.assertIn("verify-case.py red", vlines[1])
+        self.assertIn("actl verify-case red", vlines[1])
 
     # #178:案例歸屬照 test_plan;#180:沒指派的只有一個寫案例者。期望字串照票面逐字寫死,不從 auto-fix.sh 讀。
     WORKER_OWNS = ("寫案例只寫 test_plan 指給 worker 的契約;指給驗證者的與沒指派的都不寫"
@@ -4195,7 +4195,7 @@ class BatchFix(AutoFixBase):
         done = self.run_batch()
         self.assertEqual(done.returncode, 3, done.stdout + done.stderr)
         self.assert_one_page_for_the_batch()
-        self.assertIn("apply.sh --batch land/X 1 2 --base %s" % self.batch["land"],
+        self.assertIn("actl apply --batch land/X 1 2 --base %s" % self.batch["land"],
                       self.decisions()[0]["what"], "頁上要附判完後要跑的那一句(A4 改版)")
         self.assertIn("OBJECTION:", self.read(self.record("EVIDENCE-round1.md")))
         self.assertEqual(self.git("rev-parse", "land/X^").strip(), self.batch["land"])

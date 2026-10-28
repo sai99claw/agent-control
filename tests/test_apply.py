@@ -259,7 +259,7 @@ class TheLandingEntry(ApplyBase):
         done = self.deliver_apply("1")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertEqual([l for l in done.stdout.splitlines() if l.startswith("落地入口:")],
-                         ["落地入口:sh scripts/land.sh t1"])
+                         ["落地入口:actl land t1"])
 
     def test_the_last_line_names_land_ticket_when_the_project_has_it(self):
         self.write(os.path.join("scripts", "land-ticket.sh"), "#!/bin/sh\n")
@@ -694,7 +694,7 @@ class VerifyPlanMergesWithoutAPatch(ApplyBase):
     def test_a4_help_lists_verify_plan(self):
         done = self.apply("--help")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn("sh scripts/apply.sh verify-plan <票號> --evidence-verifier <檔>", done.stdout)
+        self.assertIn("actl apply verify-plan <票號> --evidence-verifier <檔>", done.stdout)
 
 
 class TheCopyRootComesFromTheMainRepo(ApplyBase):

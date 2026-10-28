@@ -275,7 +275,7 @@ def report(root, items, sched):
     else:
         print("heartbeat: 沒有到期的租約")
     if any(item["verdict"] == DEAD and not item.get("by") for item in items):
-        print("heartbeat: 處置:sh scripts/heartbeat.sh --reconcile(只動 dead awaiting-takeover 的列)")
+        print("heartbeat: 處置:actl heartbeat --reconcile(只動 dead awaiting-takeover 的列)")
     leftovers = land_debris(root)
     if leftovers:
         print("heartbeat: land 的 worktree 還留著:")

@@ -102,7 +102,7 @@ class Help(Sandbox):
             self.assertEqual(done.returncode, 0, verb + ":" + done.stdout + done.stderr)
             self.assertIn("用法:", done.stdout, verb + " 沒有印用法")
             self.assertIn("例:", done.stdout, verb + " 沒有印範例")
-            self.assertIn("python3 scripts/ticket.py " + verb, done.stdout,
+            self.assertIn("actl ticket " + verb, done.stdout,
                           verb + " 的範例不是這個子指令的")
 
     def test_create_help_shows_how_to_give_the_repeated_flags(self):
@@ -125,7 +125,7 @@ class Help(Sandbox):
         printed = self.ticket("create", "--help").stdout
         block = printed.split("例:\n", 1)[1].split("\n\n", 1)[0]
         args = shlex.split(block.replace("\\\n", " "))
-        self.assertEqual(args[:2], ["python3", "scripts/ticket.py"])
+        self.assertEqual(args[:2], ["actl", "ticket"])  # #185: hints name actl
         done = self.ticket(*args[2:])
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         row = self.load_ticket("1")

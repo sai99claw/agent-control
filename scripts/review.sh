@@ -63,12 +63,12 @@ print(data if data not in (None, "") else default)
 PY
 }
 
-[ $# -ge 1 ] || { echo "用法:sh scripts/review.sh <票號> [--run-id <id>]" >&2; exit 2; }
+[ $# -ge 1 ] || { echo "用法:actl review <票號> [--run-id <id>]" >&2; exit 2; }
 BATCH=""
 if [ "$1" = "--batch" ]; then
     # 批次修復的覆核(#108):sh scripts/review.sh --batch <整合分支> <票號…> --run-id <stamp> [--base <sha>]
     shift
-    [ $# -ge 2 ] || { echo "用法:sh scripts/review.sh --batch <整合分支> <票號…> --run-id <stamp> [--base <sha>]" >&2; exit 2; }
+    [ $# -ge 2 ] || { echo "用法:actl review --batch <整合分支> <票號…> --run-id <stamp> [--base <sha>]" >&2; exit 2; }
     BATCH=1
     B_BR=$1
     shift
@@ -424,7 +424,7 @@ if [ -n "$BATCH" ]; then
     RLOG=$RUNDIR/reviewer.log
     RESULT_JSON=$RUNDIR/result-reviewer.json
     SHA=$(git -C "$ROOT" rev-parse -q --verify "$B_BR^{commit}" 2>/dev/null || echo "")
-    [ -n "$SHA" ] || refuse "整合分支 $B_BR 不存在" "先 sh scripts/auto-fix.sh --batch $B_BR $B_IDS"
+    [ -n "$SHA" ] || refuse "整合分支 $B_BR 不存在" "先 actl auto-fix --batch $B_BR $B_IDS"
     [ -n "$B_BASE" ] || B_BASE=$(git -C "$ROOT" rev-list --first-parent --merges -n 1 "$SHA")
     [ -n "$B_BASE" ] && git -C "$ROOT" merge-base --is-ancestor "$B_BASE" "$SHA" 2>/dev/null \
         || refuse "base ${B_BASE:-(空)} 不在整合分支 $B_BR 的歷史上" \
@@ -432,7 +432,7 @@ if [ -n "$BATCH" ]; then
     B_BASE=$(git -C "$ROOT" rev-parse "$B_BASE")
     [ "$(git -C "$ROOT" rev-list --count "$B_BASE..$SHA")" -gt 0 ] \
         || refuse "整合分支 $B_BR 相對 base $(echo "$B_BASE" | cut -c1-12) 沒有批次修復的 commit" \
-                  "先 sh scripts/auto-fix.sh --batch $B_BR $B_IDS(worker 在整合分支上 commit),再覆核"
+                  "先 actl auto-fix --batch $B_BR $B_IDS(worker 在整合分支上 commit),再覆核"
     TEMPLATE=""
     for candidate in "$ROOT/templates/dispatch-reviewer.md" "$AC/../templates/dispatch-reviewer.md"; do
         [ -f "$candidate" ] && { TEMPLATE=$candidate; break; }
@@ -444,7 +444,7 @@ if [ -n "$BATCH" ]; then
     CWD=${CWD:-$ROOT}
     review_rules \
         || refuse "規則包產不出來(模型 ${RULES_MODEL:-未指定})" \
-                  "補齊 rules.py 列的缺項(decision 頁)再跑 sh scripts/review.sh --batch $B_BR $B_IDS --run-id $RUN_ID --base $B_BASE"
+                  "補齊 rules.py 列的缺項(decision 頁)再跑 actl review --batch $B_BR $B_IDS --run-id $RUN_ID --base $B_BASE"
     batch_packet() {   # 派工文 = 規則包 + 這一批的那一段;換候選(#132)時先重產規則包再組一次
         {
             printf '%s\n' "$RULES_TEXT"
@@ -522,12 +522,12 @@ PY
                 ev review.missing --ticket "$ID" --kv run_id="$RUN_ID" --kv batch="$B_TAGS" \
                     --note "reviewer 候選整串耗盡($R_REASON)"
                 post "批次 reviewer 候選整串耗盡($B_TAGS)" \
-                     "整批 $B_TAGS 的 reviewer 候選都撞到額度 / 不可用($R_REASON);改表或等額度恢復後重派 sh scripts/review.sh --batch $B_BR $B_IDS --run-id $RUN_ID --base $B_BASE" \
+                     "整批 $B_TAGS 的 reviewer 候選都撞到額度 / 不可用($R_REASON);改表或等額度恢復後重派 actl review --batch $B_BR $B_IDS --run-id $RUN_ID --base $B_BASE" \
                      "board/role-models.json"
                 exit 7 ;;
             handed) exit 7 ;;
             *) refuse "換候選後的 reviewer $MODEL 組不出命令或規則包產不出來" \
-                      "改表或補規則包後重派 sh scripts/review.sh --batch $B_BR $B_IDS --run-id $RUN_ID --base $B_BASE" ;;
+                      "改表或補規則包後重派 actl review --batch $B_BR $B_IDS --run-id $RUN_ID --base $B_BASE" ;;
         esac
     fi
     unwrap_envelope "$REVIEW" "$RUNDIR/reviewer.json"
@@ -540,7 +540,7 @@ PY
         ev review.missing --ticket "$ID" --kv run_id="$RUN_ID" --kv batch="$B_TAGS" --note "沒交不是 pass($WHY)"
         batch_cost missing
         post "批次覆核沒交件($B_TAGS)" \
-             "整批 $B_TAGS 的批次修復(頭 $(echo "$SHA" | cut -c1-12)) 在 $B_BR 上沒有覆核結論($WHY):看 $(rel "$RLOG") 與 $REL_REVIEW,再重派 sh scripts/review.sh --batch $B_BR $B_IDS --run-id $RUN_ID --base $B_BASE" \
+             "整批 $B_TAGS 的批次修復(頭 $(echo "$SHA" | cut -c1-12)) 在 $B_BR 上沒有覆核結論($WHY):看 $(rel "$RLOG") 與 $REL_REVIEW,再重派 actl review --batch $B_BR $B_IDS --run-id $RUN_ID --base $B_BASE" \
              "$REL_REVIEW"
         exit 3
     fi
@@ -588,7 +588,7 @@ STATE=$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1],encoding=
 case "$STATE" in
     InReview|AwaitingReview) ;;
     *) refuse "票的 state=${STATE:-(空)},不是 InReview / AwaitingReview" \
-    "閘門綠之後票才轉 InReview;要覆核就先確認閘門綠:sh scripts/gate.sh --branch --ticket $ID" ;;
+    "閘門綠之後票才轉 InReview;要覆核就先確認閘門綠:actl gate --branch --ticket $ID" ;;
 esac
 # 只有 complex 的票做完後覆核(#136);沒標 = simple。判準與 land / close 同一支 `needs_review`。
 if ! python3 - "$AC" "$TF" <<'PY'
@@ -600,7 +600,7 @@ with open(sys.argv[2], encoding="utf-8") as handle:
 PY
 then
     refuse "票的 complexity 不是 complex(沒標 = simple)—— 只有 complex 的票做完後覆核" \
-        "simple 票閘門綠就等 land,不要 review;要覆核就先 python3 scripts/ticket.py set $ID complexity complex"
+        "simple 票閘門綠就等 land,不要 review;要覆核就先 actl ticket set $ID complexity complex"
 fi
 
 # review 記的就是**這一刻**的頭:派工文寫它、pass 寫它 —— 比事後再 rev-parse 一次、蓋上一個
@@ -609,14 +609,14 @@ fi
 BR=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8")).get("branch") or "t"+sys.argv[2])' "$TF" "$ID" 2>/dev/null || echo "t$ID")
 SHA=$(git -C "$ROOT" rev-parse -q --verify "$BR^{commit}" 2>/dev/null || echo "")
 [ -n "$SHA" ] || refuse "分支 $BR 不存在" \
-    "先 sh scripts/auto-fix.sh $ID(它建分支 ${BR}、worker 在上面 commit),閘門綠了再覆核"
+    "先 actl auto-fix $ID(它建分支 ${BR}、worker 在上面 commit),閘門綠了再覆核"
 
 TEMPLATE=""
 for candidate in "$ROOT/templates/dispatch-reviewer.md" "$AC/../templates/dispatch-reviewer.md"; do
     [ -f "$candidate" ] && { TEMPLATE=$candidate; break; }
 done
 [ -n "$TEMPLATE" ] || refuse "找不到 templates/dispatch-reviewer.md" \
-    "從 agent-control 複製 templates/dispatch-reviewer.md 到 $ROOT/templates/,再 sh scripts/review.sh $ID"
+    "從 agent-control 複製 templates/dispatch-reviewer.md 到 $ROOT/templates/,再 actl review $ID"
 
 # 四件事的另外兩件:worktree(問 git,不照命名規則猜)、EVIDENCE 與狀態檔(問狀態檔)。
 WT=""; STATUS_FILE=""; EVIDENCE=""; ROUND=1
@@ -673,7 +673,7 @@ RESULT_JSON=$RUNDIR/result-reviewer-round$ROUND.json
 # 模型卡:指定一張不存在的卡是錯,而「不知道是哪個模型」不是指定。
 review_rules \
     || refuse "規則包產不出來(模型 ${RULES_MODEL:-未指定})" \
-              "補齊 rules.py 列的缺項(decision 頁)再跑 sh scripts/review.sh $ID"
+              "補齊 rules.py 列的缺項(decision 頁)再跑 actl review $ID"
 review_packet() {   # 派工文 = 規則包 + 範本四件事填好;換候選(#132)時先重產規則包再組一次
     {
         printf '%s\n' "$RULES_TEXT"
@@ -747,7 +747,7 @@ if ! reviewer_fallback write_cost review_repack "$ROUND"; then
         exhausted) RF_WHY="reviewer 候選整串耗盡($R_REASON)" ;;
         *) RF_WHY="換候選後的 reviewer $MODEL 組不出命令或規則包產不出來" ;;
     esac
-    [ "$RF_STOP" = exhausted ] || refuse "$RF_WHY" "改表或補規則包後重派 sh scripts/review.sh $ID --run-id <新的>"
+    [ "$RF_STOP" = exhausted ] || refuse "$RF_WHY" "改表或補規則包後重派 actl review $ID --run-id <新的>"
     echo "review: #$ID 的 $RF_WHY —— 不再起,票轉 Blocked" >&2
     python3 "$AC/ticket.py" set "$ID" state Blocked >/dev/null 2>&1 \
         || echo "review: 票狀態改不動(Blocked)" >&2
@@ -755,7 +755,7 @@ if ! reviewer_fallback write_cost review_repack "$ROUND"; then
     ev review.missing --ticket "$ID" --kv run_id="$RUN_ID" --note "$RF_WHY"
     ev decision.asked --ticket "$ID" --note "#$ID 的 $RF_WHY"
     post "reviewer 候選整串耗盡" \
-         "#$ID 的 reviewer 候選都撞到額度 / 不可用($R_REASON);改表或等額度恢復後重派 sh scripts/review.sh $ID --run-id <新的>" \
+         "#$ID 的 reviewer 候選都撞到額度 / 不可用($R_REASON);改表或等額度恢復後重派 actl review $ID --run-id <新的>" \
          "board/role-models.json"
     exit 7
 fi
@@ -771,7 +771,7 @@ REL_REVIEW=$(rel "$REVIEW")
 if [ -z "$VERDICT" ]; then
     echo "review: #$ID 覆核沒交件 —— $WHY;不寫 review,票留 InReview" >&2
     ev review.missing --ticket "$ID" --kv run_id="$RUN_ID" \
-        --note "沒交不是 pass($WHY):看 $(rel "$RLOG") 與 $REL_REVIEW,再重派 sh scripts/review.sh $ID"
+        --note "沒交不是 pass($WHY):看 $(rel "$RLOG") 與 $REL_REVIEW,再重派 actl review $ID"
     write_cost missing
     exit 3
 fi

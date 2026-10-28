@@ -305,39 +305,39 @@ USAGE = {
 }
 
 EXAMPLE = {
-    "create": """python3 scripts/ticket.py create \\
+    "create": """actl ticket create \\
   --subject "land.sh 對 0 commit 的分支整批拒絕" \\
   --objective "任一支分支相對主線 0 commit 時,land 秒退並點名,不跑全套" \\
   --acceptance "0 commit → rc!=0 且輸出含分支名" \\
   --acceptance "多支中一支 0 → 另一支也不在 land worktree" \\
   --role worker --model opus --tool claude-code""",
-    "list": "python3 scripts/ticket.py list --open",
-    "show": "python3 scripts/ticket.py show 7",
-    "set": """python3 scripts/ticket.py set 7 state InReview
-python3 scripts/ticket.py set 7 decision_refs '["D-001", "D-014"]'""",
-    "inbox": "python3 scripts/ticket.py inbox",
-    "verify": "python3 scripts/ticket.py verify 7",
-    "close": "python3 scripts/ticket.py close 7\n"
-             "python3 scripts/ticket.py close 7 --landed a1b2c3d",
-    "import": "python3 scripts/ticket.py import ~/somewhere/old-tickets",
-    "freeze": ('python3 scripts/ticket.py freeze 7 \\\n'
+    "list": "actl ticket list --open",
+    "show": "actl ticket show 7",
+    "set": """actl ticket set 7 state InReview
+actl ticket set 7 decision_refs '["D-001", "D-014"]'""",
+    "inbox": "actl ticket inbox",
+    "verify": "actl ticket verify 7",
+    "close": "actl ticket close 7\n"
+             "actl ticket close 7 --landed a1b2c3d",
+    "import": "actl ticket import ~/somewhere/old-tickets",
+    "freeze": ('actl ticket freeze 7 \\\n'
                '  --reason "視覺方向未定" \\\n'
                '  --criterion "產出會不會因視覺方向改變而重做"'),
-    "round": "python3 scripts/ticket.py round 7 3 --red",
-    "repair-limit": "python3 scripts/ticket.py repair-limit 7",
-    "result": ("python3 scripts/ticket.py result EVIDENCE-round2.md \\\n"
+    "round": "actl ticket round 7 3 --red",
+    "repair-limit": "actl ticket repair-limit 7",
+    "result": ("actl ticket result EVIDENCE-round2.md \\\n"
                "  reports/t7/20260923-101500-1/result-round2.json \\\n"
                "  --ticket 7 --role worker --round 2"),
-    "objection": ('python3 scripts/ticket.py objection 7 \\\n'
+    "objection": ('actl ticket objection 7 \\\n'
                   '  --line "OBJECTION: ticket-wrong 驗收 A3 指的欄位不存在" \\\n'
                   '  --evidence reports/t7/EVIDENCE.md'),
-    "cost": ("python3 scripts/ticket.py cost 7 --role worker --round 1 --model opus \\\n"
+    "cost": ("actl ticket cost 7 --role worker --round 1 --model opus \\\n"
              "  --by auto-fix.sh --from-envelope reports/t7/20260923-101500-1/worker-round1.log \\\n"
              "  --wall-seconds 412 --outcome handed-in --run-id 20260923-101500-1"),
-    "agent-command": ("python3 scripts/ticket.py agent-command --model codex:gpt-6-astra --tool codex\n"
-                      "python3 scripts/ticket.py agent-command --model fable --tool claude-code \\\n"
+    "agent-command": ("actl ticket agent-command --model codex:gpt-6-astra --tool codex\n"
+                      "actl ticket agent-command --model fable --tool claude-code \\\n"
                       "  --base \"claude -p --model opus\" --swap-model"),
-    "lint": "python3 scripts/ticket.py lint 7",
+    "lint": "actl ticket lint 7",
 }
 
 
@@ -437,7 +437,7 @@ def unknown_flag(verb, flag):
     names = flag_names(verb)
     if names:
         sys.stderr.write("ticket: %s 認得的是:%s\n" % (verb, "  ".join(names)))
-    sys.stderr.write("ticket: 看範例:python3 scripts/ticket.py %s --help\n" % verb)
+    sys.stderr.write("ticket: 看範例:actl ticket %s --help\n" % verb)
     return 2
 
 

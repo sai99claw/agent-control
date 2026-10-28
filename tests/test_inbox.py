@@ -11,11 +11,12 @@
 import hashlib
 import os
 import re
+import subprocess
 import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from control_harness import Sandbox  # noqa: E402
+from control_harness import TIMEOUT, Sandbox  # noqa: E402
 
 RED_CASE = """import unittest
 
@@ -185,6 +186,22 @@ class ListAndAck(InboxBase):
         self.assertFalse(self.exists(os.path.join("reports", "inbox", "7-r1.md")))
         self.assertTrue(self.exists(os.path.join("reports", "inbox", "acked", "7-r1.md")))
         self.assertEqual(self.files_in_inbox(), ["acked"], "ack 多寫了別的檔")
+
+    def test_185_a1_list_hint_names_actl_not_the_script(self):
+        """#185 A1:在專案裡 `scripts/inbox.py` 不存在、直接叫也沒有 AC_HOME(D-071),
+        所以 `actl inbox list` 的最後一行指 `actl inbox show / ack`。
+        **變異**:提示行改回 `python3 scripts/inbox.py show` → 紅。"""
+        self.make_ticket("7")
+        self.post()
+        done = subprocess.run(["sh", os.path.join(self.ac_home, "bin", "actl"), "inbox", "list"],
+                              cwd=self.repo, env=self.env(), capture_output=True, text=True,
+                              timeout=TIMEOUT)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("#7", done.stdout)
+        last = done.stdout.rstrip("\n").splitlines()[-1]
+        self.assertIn("actl inbox show", last)
+        self.assertIn("actl inbox ack", last)
+        self.assertNotIn("scripts/inbox.py", last)
 
     def test_ack_does_not_touch_the_ticket_state(self):
         """ack 是「我收下了」,不是「我做完了」。混在一起的話,一次 ack 會讓一張
@@ -472,7 +489,7 @@ class ReadingNeverWrites(InboxBase):
     def test_a3_list_names_the_ledger_and_the_migrate_command_only_while_it_exists(self):
         listed = self.inbox("list")
         said = listed.stdout + listed.stderr
-        self.assertIn("inbox.py migrate", said)
+        self.assertIn("actl inbox migrate", said)
         self.assertIn("acked.jsonl", said)
         self.assertIn("#7", listed.stdout, "舊帳不照它算:7-old 還在目錄裡,就列")
         self.assertEqual(self.inbox("migrate").returncode, 0)
@@ -521,7 +538,7 @@ class ReadingNeverWrites(InboxBase):
         self.assertLedgersUntouched()
         self.assertTrue(self.exists(os.path.join(self.INBOX, "7-old.md")))
         part = done.stdout.split("5. 收件匣")[1].split("6. 決策收件匣")[0]
-        self.assertIn("inbox.py migrate", part)
+        self.assertIn("actl inbox migrate", part)
         self.assertIn("acked.jsonl", part)
 
 

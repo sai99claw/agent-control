@@ -229,7 +229,7 @@ elif not os.path.isabs(base):
     base = os.path.join(root, base)
 target = os.path.normpath(os.path.join(base, "t%s" % ident))
 sys.stderr.write("gate: --branch 不在主線上跑 —— %s 的 HEAD 是 %s,除了票檔沒有任何改動可比;"
-                 "到票的 worktree 跑:cd %s && sh scripts/gate.sh --branch --ticket %s\n"
+                 "到票的 worktree 跑:cd %s && actl gate --branch --ticket %s\n"
                  % (root, main, target, ident))
 raise SystemExit(1)
 ON_MAIN_PY
@@ -559,7 +559,7 @@ auto_fix() {   # $1 = rc
         echo "gate: 已經在 auto-fix 裡面了,不再往下派(免得自己叫自己)"
         return 0
     fi
-    echo "gate: auto-fix —— sh scripts/auto-fix.sh $TICKET"
+    echo "gate: auto-fix —— actl auto-fix $TICKET"
     sh "$AC/auto-fix.sh" "$TICKET" \
         || echo "gate: auto-fix 停下來了(rc=$?)—— 看 reports/inbox/ 那一頁"
 }
@@ -610,7 +610,7 @@ PY
         echo "gate: 綠了 —— 票轉 InReview;票不是 complex(沒標 = simple),不派覆核,等 land"
         return 0
     fi
-    echo "gate: 綠了 —— 票轉 InReview,派覆核:sh scripts/review.sh $TICKET"
+    echo "gate: 綠了 —— 票轉 InReview,派覆核:actl review $TICKET"
     sh "$AC/review.sh" "$TICKET" --run-id "$RUN_ID" \
         || echo "gate: 覆核停下來了(rc=$?)—— 看 reports/inbox/ 那一頁"
 }
@@ -858,7 +858,7 @@ verify_case() {
     rm -rf "$CHECK_DIR"
     ref_args=""
     [ -z "$ticket_base" ] || ref_args="--ref $ticket_base"
-    echo "gate: 驗證者案例的綠 —— python3 scripts/verify-case.py check $TICKET $ref_args --candidate $ROOT"
+    echo "gate: 驗證者案例的綠 —— actl verify-case check $TICKET $ref_args --candidate $ROOT"
     # shellcheck disable=SC2086
     ( cd "$ROOT" && python3 "$AC/verify-case.py" check "$TICKET" $ref_args \
         --candidate "$ROOT" --out-dir "$CHECK_DIR" ) > "$CHECK_LOG" 2>&1

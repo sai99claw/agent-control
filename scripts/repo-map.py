@@ -35,6 +35,7 @@ CATALOG = os.path.join("code-map", "catalog.json")
 INDEX_JSON = os.path.join("code-map", "index.json")
 INDEX_MD = os.path.join("code-map", "INDEX.md")
 BUILD = "python3 scripts/repo-map.py build"
+BUILD_HINT = "actl repo-map build"  # printed hint (D-071: actl is the entry); BUILD stays in generated files
 LINK_FIELDS = ("entry", "guard")
 LIST_FIELDS = ("docs", "cards")
 
@@ -172,7 +173,7 @@ def cmd_check(root, args):
     if problems:
         for line in problems:
             sys.stderr.write("repo-map: %s\n" % line)
-        sys.stderr.write("repo-map: code-map 索引過期 —— 重生:%s,連同產出物一起 commit\n" % BUILD)
+        sys.stderr.write("repo-map: code-map 索引過期 —— 重生:%s,連同產出物一起 commit\n" % BUILD_HINT)
         return 1
     sys.stdout.write("repo-map: 索引是新的(已管理 %d 支、主題 %d 個)\n"
                      % (len(index["managed"]), len(index["topics"])))
@@ -182,7 +183,7 @@ def cmd_check(root, args):
 def cmd_query(root, args):
     text = read_text(os.path.join(root, INDEX_JSON))
     if text is None:
-        sys.stderr.write("repo-map: %s 不在 —— 先跑 %s\n" % (INDEX_JSON, BUILD))
+        sys.stderr.write("repo-map: %s 不在 —— 先跑 %s\n" % (INDEX_JSON, BUILD_HINT))
         return 2
     topics = json.loads(text).get("topics") or {}
     topic = topics.get(args.topic) or topics.get(args.topic.lower())

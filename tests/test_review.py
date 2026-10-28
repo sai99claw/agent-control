@@ -383,7 +383,7 @@ class NotDeliveredIsNotAPass(ReviewBase):
                 self.assertEqual(self.inbox_rows(), [], "沒交件只寫事件,不發頁")
                 note = self.last_event("review.missing").get("note") or ""
                 self.assertIn(name, note, "四種沒交要說得出是哪一種")
-                self.assertIn("review.sh 1", note)
+                self.assertIn("actl review 1", note)
                 rows = ticket.get("cost") or []
                 self.assertEqual([row["role"] for row in rows], ["reviewer"] * count)
                 self.assertIsNone(rows[-1]["tokens_out"])
