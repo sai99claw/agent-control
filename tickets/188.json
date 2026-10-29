@@ -1,0 +1,42 @@
+{
+  "id": "188",
+  "subject": "New objection category needs-redesign: implementer says the architecture cannot carry the requirement",
+  "created": "2026-10-30T01:12:16+08:00",
+  "objective": "An implementer can write 'OBJECTION: needs-redesign <one line>' in EVIDENCE; it is recorded on the ticket under its own category (not folded into ticket-wrong), blocks land/close until disposed, and is judged by the opener on the same triage path as ticket-wrong, where the triage dispatch tells the opener: accepted only if the ticket can be rewritten within the current architecture, otherwise escalate with a question proposing a design session (D-019). The implementer card and the dispatch rule text name the new category in the same ticket (D-054 Q12).",
+  "acceptance": [
+    "A1 ticket.py objection with line 'OBJECTION: needs-redesign X' adds a row whose category is exactly needs-redesign, owner main, body X",
+    "A2 a ticket holding an undisposed needs-redesign row (no explicit blocking key) is refused by close and by the Done/land objection check, same message family as ticket-wrong",
+    "A3 auto-fix: a worker EVIDENCE with a needs-redesign line starts the opener triage (objection.triage.start category=needs-redesign), not the test_defect verifier path",
+    "A4 the opener triage dispatch for a needs-redesign objection contains the needs-redesign judging rule (accepted only within current architecture; else escalate proposing a design session); for a ticket-wrong objection that rule line is absent",
+    "A5 review.sh fail with an 'OBJECTION: needs-redesign X' line records category needs-redesign (not ticket-wrong)",
+    "A6 every place that prints the category list to agents (auto-fix dispatch texts, DISPATCH-TEMPLATE section 8 item 7, implementer card, SCHEMA objection rows, WORKFLOW objection section) lists four categories; checked by reviewer reading, not by a doc-consistency test (D-054 Q12: pinning copies with tests is the multi-copy symptom)",
+    "A7 existing ticket-wrong / test_defect / blocking tests unchanged and green; unknown category still falls back to ticket-wrong"
+  ],
+  "depends_on": [],
+  "role": "worker",
+  "model": "opus",
+  "tool": "claude-code",
+  "attempt": 0,
+  "base_sha": "85bb31d",
+  "state": "Ready",
+  "state_version": 3,
+  "lease": null,
+  "retry_limit": 3,
+  "verify": {
+    "files": [],
+    "tags": [],
+    "run": "",
+    "notes": ""
+  },
+  "test_plan": "T1 (A1, unit, tests/test_ticket.py): fixture ticket in temp AC_ROOT; run ticket.py objection <n> --line 'OBJECTION: needs-redesign shape cannot hold per-round state'; load ticket JSON; expect objections[-1].category == 'needs-redesign', owner == 'main', body == 'shape cannot hold per-round state' (expected values copied from the input line, not computed by objection_parts). Mutation: drop needs-redesign from OBJECTION_CATEGORIES -> category becomes ticket-wrong -> red. T2 (A2, unit, tests/test_ticket.py): fixture ticket Ready with objections=[{category: needs-redesign, body, owner: main, disposition: ''}] and no blocking key; ticket.py close <n> -> rc != 0 and output contains 'needs-redesign'; with disposition 'accepted' -> that refusal gone. Mutation: remove needs-redesign from the blocking default set in objection_problems -> red. T3 (A3+A4, integration, tests/test_objection_triage.py, reuse its fake-opener fixture): worker EVIDENCE with 'OBJECTION: needs-redesign X'; expect event objection.triage.start with category needs-redesign and no verifier dispatch for that round; captured opener dispatch file contains the literal rule sentence chosen by the worker (assert on a fixed substring the test declares, e.g. 'needs-redesign'+'design session' in the 判反駁 section); same fixture with ticket-wrong line -> that rule substring absent. T4 (A5, integration, existing review.sh test module): reviewer output 'OBJECTION: needs-redesign X' on fail -> ticket row category needs-redesign. T5 (A7): existing test_ticket / test_objection_triage / test_auto_fix / test_apply green unchanged; add one assertion that 'OBJECTION: bogus X' still records ticket-wrong. A6 is reviewer-read only (list the files in EVIDENCE).",
+  "outline": "Program ticket, split from the role-card+SKILL text ticket (which depends on this). Grounded at 85bb31d (read code): category tuple lives in ticket.py OBJECTION_CATEGORIES (~1908), auto-fix.sh category parse (~2658), review.sh KNOWN (~798); blocking default set in ticket.py objection_problems (~824) lists blocking/阻擋/ticket-wrong - add needs-redesign there. Unknown category falls back to ticket-wrong, so today needs-redesign would silently become ticket-wrong with no label. Routing decision (opener's): reuse the ticket-wrong opener-triage path, add one conditional rule line to the 判反駁 dispatch section in auto-fix.sh (~1985) -> no opener card edit, no dependency on #187. Files that move: scripts/ticket.py, scripts/auto-fix.sh (tuple, triage text, three 'OBJECTION: <...>' prompt lines ~831/2386/3190), scripts/review.sh, tickets/SCHEMA.md (objections + result objection rows), docs/WORKFLOW.md objection section, docs/DISPATCH-TEMPLATE.md section 8 item 7, memory/role/implementer.md objection line (Q12 same-ticket rule text; keep memory.py lint clean), scripts/inbox.py:40 and scripts/status.py:784 mentions if they enumerate. No existing test pins the three-name list string (grep tests/verify: 0). needs_verifier=true: triage routing is cross-script behavior the worker's unit tests would not exercise. complexity=complex (pipeline routing). Order: land first.",
+  "decision_refs": [
+    "D-041",
+    "D-054",
+    "D-019",
+    "D-018"
+  ],
+  "needs_verifier": true,
+  "complexity": "complex",
+  "branch": "t188"
+}
