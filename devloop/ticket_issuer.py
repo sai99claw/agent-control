@@ -31,7 +31,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import agents, memory, osx, testrun  # noqa: E402
+from core import agents, memory, osx, slots, testrun  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.pool import event  # noqa: E402
@@ -223,8 +223,12 @@ class Issuer:
         if not ids:
             return None
         self.check_time()
-        out = testrun.run(self.cfg, self.wt, "run", ids, timeout=self.left(),
-                          keep_dir=os.path.join(self.cfg.runs_dir(self.id), "cases"))
+        slot = self.test_slot()
+        try:
+            out = testrun.run(self.cfg, self.wt, "run", ids, timeout=self.left(),
+                              keep_dir=os.path.join(self.cfg.runs_dir(self.id), "cases"))
+        finally:
+            slot.release()
         if out.status == testrun.GREEN:
             return None
         if out.status == testrun.ENV:
@@ -240,8 +244,12 @@ class Issuer:
         self.check_time()
         self.repo.detached(tree, self.repo.sha(self.cases_branch))
         try:
-            out = testrun.run(self.cfg, tree, "run", ids, timeout=min(1800, self.left()),
-                              keep_dir=os.path.join(self.cfg.runs_dir(self.id), "red-check"))
+            slot = self.test_slot()
+            try:
+                out = testrun.run(self.cfg, tree, "run", ids, timeout=min(1800, self.left()),
+                                  keep_dir=os.path.join(self.cfg.runs_dir(self.id), "red-check"))
+            finally:
+                slot.release()
         finally:
             self.repo.remove_worktree(tree)
         if out.status == testrun.ENV:
@@ -326,6 +334,15 @@ class Issuer:
 
     def left(self):
         return max(1.0, self.deadline - time.time())
+
+    def test_slot(self):
+        """A machine slot for one test run, waiting at most until the issuer's deadline."""
+        began = time.time()
+        slot = slots.take(self.cfg, self.deadline)
+        if slot is None:
+            raise Stuck("timeout", "issuer ran longer than %d s waiting for a test run: %s" % (
+                self.cfg.issuer_timeout_seconds, slots.busy(self.cfg, time.time() - began)))
+        return slot
 
     def check_time(self):
         if time.time() >= self.deadline:

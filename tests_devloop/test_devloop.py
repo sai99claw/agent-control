@@ -89,6 +89,9 @@ class LoopCase(unittest.TestCase):
                         PATH=guard + os.pathsep + os.environ.get("PATH", ""),
                         GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
                         GIT_COMMITTER_EMAIL="t@t")
+        # a test's loop has its own slots: when the suite itself runs under a machine slot (an
+        # agent's run_tests.py), the inherited DEVLOOP_SLOT must not switch the test loop's slots off
+        self.env.pop("DEVLOOP_SLOT", None)
 
     # ------------------------------------------------------------ helpers
 
@@ -516,6 +519,182 @@ class AgentChains(LoopCase):
         self.assertEqual(agents.with_effort(["agy", "run"], "high"), ["agy", "run"])
         with self.assertRaises(osx.OSFailure):
             agents.with_effort(["claude"], "huge")
+
+
+class MachineSlots(LoopCase):
+    """devloop.machine_slots: the implementer's tests (core/slots.py and its call sites)."""
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)     # this process is not nested under a slot
+        os.environ["AC_ROOT"] = self.proj
+        self.slot_dir = os.path.join(self.tmp, "wt", "slots")
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def agents_cfg(self):
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            return json.load(fh)["devloop"]["agents"]
+
+    def hold_slot(self):
+        """This test process takes the only slot."""
+        import time
+        from core import slots
+        slot = slots.take(self.cfg(), time.time() + 5)
+        self.assertTrue(slot and slot.held)
+        self.addCleanup(slot.release)
+        return slot
+
+    def test_no_setting_takes_no_slot(self):
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertFalse(os.path.exists(self.slot_dir))
+        self.config(machine_slots=None)
+        self.assertIsNone(self.cfg().machine_slots)
+
+    def test_bad_values_stop_every_script(self):
+        for bad in (0, -1, True, "2", 1.5):
+            self.config(machine_slots=bad)
+            with self.assertRaises(osx.OSFailure) as ctx:
+                self.cfg()
+            self.assertIn("devloop.machine_slots", str(ctx.exception))
+        res = self.run_py("tickets.py", "list")
+        self.assertEqual(res.returncode, 2, res.stdout)
+        self.assertIn("devloop.machine_slots", res.stderr)
+        self.config(machine_slots=3)
+        self.assertEqual(self.cfg().machine_slots, 3)
+
+    def test_slot_files_are_kept_and_a_held_slot_blocks_the_next_taker(self):
+        import time
+        from core import slots
+        self.config(machine_slots=2)
+        cfg = self.cfg()
+        a = slots.take(cfg, time.time() + 1)
+        b = slots.take(cfg, time.time() + 1)
+        self.assertEqual(sorted(os.path.basename(s.path) for s in (a, b)), ["slot-0", "slot-1"])
+        began = time.time()
+        self.assertIsNone(slots.take(cfg, time.time() + 1.2))
+        self.assertGreaterEqual(time.time() - began, 1.0)
+        inode = os.stat(a.path).st_ino
+        a.release()
+        a.release()                                     # idempotent
+        c = slots.take(cfg, time.time() + 1)
+        self.assertEqual(c.path, a.path)
+        self.assertEqual(os.stat(c.path).st_ino, inode)  # never replaced
+        b.release()
+        c.release()
+        self.assertEqual(sorted(os.listdir(self.slot_dir)), ["slot-0", "slot-1"])
+
+    def test_a_nested_taker_neither_waits_nor_takes(self):
+        import time
+        from core import slots
+        self.config(machine_slots=1)
+        held = self.hold_slot()
+        os.environ["DEVLOOP_SLOT"] = held.path
+        began = time.time()
+        free = slots.take(self.cfg(), time.time() + 5)
+        self.assertLess(time.time() - began, 0.5)
+        self.assertFalse(free.held)
+        self.assertIsNone(free.path)
+
+    def test_an_agent_slot_is_free_when_it_exits_though_its_background_child_lives(self):
+        import time
+        from core import agents, slots
+        script = ('sleep 20 & echo "{\\"kind\\": \\"done\\", \\"slot\\": \\"$DEVLOOP_SLOT\\"}" '
+                  '> "$DEVLOOP_RESULT"; exit 0')
+        self.config(machine_slots=1, agents=dict(self.agents_cfg(), worker=["sh", "-c", script]))
+        cfg = self.cfg()
+        p = agents.start(cfg, "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30)
+        self.addCleanup(p.stop)          # ends the background sleep (its process group)
+        began = time.time()
+        slot = slots.take(cfg, time.time() + 3)     # the worker was never collected
+        self.assertTrue(slot and slot.held, "the agent's slot was not freed within 3 s of its exit")
+        self.assertLess(time.time() - began, 3.5)
+        slot.release()
+        hand = p.finish()
+        self.assertIsNone(hand.problem())
+        self.assertEqual(hand.result["slot"], os.path.join(self.slot_dir, "slot-0"))
+
+    def test_an_agent_with_no_slot_in_time_never_starts(self):
+        import time
+        from core import agents
+        marker = os.path.join(self.tmp, "ran")
+        self.config(machine_slots=1, agents=dict(self.agents_cfg(), worker=["touch", marker]))
+        self.hold_slot()
+        began = time.time()
+        hand = agents.run(self.cfg(), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 1.2)
+        self.assertGreaterEqual(time.time() - began, 1.0)
+        self.assertFalse(os.path.exists(marker))
+        self.assertIn("machine slot", hand.problem())
+        self.assertEqual(hand.cost["outcome"], "no slot")
+        self.assertIsNone(hand.cost["input_tokens"])
+        self.assertGreaterEqual(hand.cost["seconds"], 1.0)
+        self.assertEqual(agents.model_of(None), "unknown")
+
+    def test_a_holder_that_dies_frees_its_slot(self):
+        import time
+        from core import slots
+        self.config(machine_slots=1)
+        code = ("import sys, time; sys.path.insert(0, %r)\n"
+                "from core.config import Config\nfrom core import slots\n"
+                "s = slots.take(Config(%r), time.time() + 10)\n"
+                "print('held' if s and s.held else 'none', flush=True)\ntime.sleep(60)\n" % (LOOP, self.proj))
+        child = subprocess.Popen(["python3", "-c", code], stdout=subprocess.PIPE, text=True,
+                                 env=os.environ.copy())
+        self.addCleanup(child.stdout.close)
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        self.assertEqual(child.stdout.readline().strip(), "held")
+        cfg = self.cfg()
+        self.assertIsNone(slots.take(cfg, time.time() + 0.6))
+        child.terminate()
+        child.wait(timeout=10)
+        began = time.time()
+        slot = slots.take(cfg, time.time() + 3)
+        self.assertTrue(slot and slot.held)
+        self.assertLess(time.time() - began, 3.5)
+        slot.release()
+
+    def test_an_issuer_test_run_with_no_slot_before_the_deadline_is_stuck_timeout(self):
+        import time
+        import ticket_issuer
+        self.config(machine_slots=1)
+        self.hold_slot()
+        issuer = ticket_issuer.Issuer.__new__(ticket_issuer.Issuer)
+        issuer.cfg, issuer.id, issuer.deadline = self.cfg(), "1", time.time() + 1.2
+        with self.assertRaises(ticket_issuer.Stuck) as ctx:
+            issuer.run_cases({"cases": {"run": ["case_1"]}})
+        self.assertEqual(ctx.exception.reason, "timeout")
+        self.assertIn("machine slot", ctx.exception.text)
+
+    def test_a_worker_that_has_its_ticket_revised_lands_with_one_slot(self):
+        self.config(machine_slots=1)
+        self.add(1)
+        self.plan(worker={"1": ["revise", "ok"]}, creator={"1": ["revised"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        t = self.snap().ticket("1")
+        self.assertEqual(t["state"], "landed")
+        self.assertEqual(t["acceptance"], ["a possible thing"])
+        self.assertEqual(sorted(os.listdir(self.slot_dir)), ["slot-0"])
+
+    def test_readme_has_the_section(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            text = fh.read()
+        self.assertLess(text.index("## Project settings"), text.index("## Machine slots"))
+        self.assertLess(text.index("## Machine slots"), text.index("## Agents, models and tests"))
+        section = text.split("## Machine slots", 1)[1].split("\n## ", 1)[0]
+        for words in ("agent", "red check", "regression", "slots/slot-", "own limit", "DEVLOOP_SLOT",
+                      "parent's slot"):
+            self.assertIn(words, section)
 
 
 class Landing(LoopCase):

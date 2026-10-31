@@ -46,6 +46,22 @@ Run them from the project (or set `AC_ROOT` to it).
 Tests run through the project's existing test interface (`tests.*`, `scripts/testiface.py`).
 `hard_block.paths` / `patterns`: a ticket that touches them stops before merging.
 
+## Machine slots
+
+`machine_slots` (default null = no limit) caps the heavy runs on the machine at N, across every
+devloop process that shares the project's worktrees root. What takes a slot: every agent run
+(every role, every command of its chain, from just before it starts until its process exits), the
+issuer's red check and each case run, and a regression (from before preflight until `full` ends).
+A slot is a `flock` on `<worktrees>/slots/slot-<i>` (i = 0..N-1); the files are created when
+missing and never deleted. The devloop process that started the run holds the lock, so a
+background process an agent leaves behind keeps no slot, and a process that dies frees its slot.
+Waiting counts against the caller's own limit: an agent that gets no slot within its timeout is
+not started (cost outcome "no slot"), an issuer test run out of time makes the ticket stuck
+("timeout"), and a regression with no slot within `regression_timeout_seconds` is "unmeasured".
+Nested runs use their parent's slot: agents get `DEVLOOP_SLOT` (their slot file) in the
+environment, and a process with it set takes no slot (an agent's `run_tests.py`, a worker's
+`ticket_creator.py --revise`).
+
 ## Agents, models and tests (D-084)
 
 - `agents.<role>` is one command or a chain of commands; the next one is tried when a command is

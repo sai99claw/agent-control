@@ -54,6 +54,7 @@ DEFAULTS = {
     "index_path": "CODE-MAP.md",     # D-038 / D-084: generated code index, refreshed at landing; null = off
     "required_fields": {},           # extra ticket fields the opener must fill: {"name": "what to write"}
     "unlimited_tokens": False,       # D-084 Q1: when true, memory consolidation is a two-model discussion
+    "machine_slots": None,           # at most N agent / test runs at once on the machine; null = no limit
     "agents": DEFAULT_AGENTS,
 }
 
@@ -73,6 +74,10 @@ class Config:
         agents = dict(DEFAULTS["agents"])
         agents.update(loop.get("agents") or {})
         self.values["agents"] = agents
+        slots = self.values.get("machine_slots")
+        if slots is not None and (isinstance(slots, bool) or not isinstance(slots, int) or slots < 1):
+            raise osx.OSFailure("board/config.json devloop.machine_slots must be null or a whole number "
+                                ">= 1, not %r" % (slots,))
         hb = raw.get("hard_block") or {}
         self.hard_paths = list(hb.get("paths") or [])
         self.hard_patterns = list(hb.get("patterns") or [])
