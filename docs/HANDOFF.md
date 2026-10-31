@@ -225,3 +225,12 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
 - T 接上:`board/config.json` 加 `devloop`(release、base_tests、hard_block)、`tests.*` 要一個 case 一列的結果(紅燈檢查靠它);
   T 的發版腳本只做 build 加 tag 還是包含部署,要使用者決定。
 - 舊的設定鍵還在 schema 裡(下一版 config_version 拿掉);`scripts/status.py` 舊閘門的部分還沒瘦身。
+
+## 2026-10-31(續)A 第一次拿自己跑 devloop;給 T 的接手 prompt
+
+- A 自己的兩張票(驗證者 prompt 的標記改成不限 Python;macOS 從 `vm_stat` 讀可用記憶體)走 devloop 落地,main = 1de150a,
+  CODE-MAP.md 第一次由 controller 產生並 commit。花費約 7.2 美元,其中 4.9 是把舊角色卡、舊模型卡(104 條)整理成新記憶的一次性成本。
+- **發版在雲端容器裡必定失敗**:git proxy 只讓推分支,推 tag 回 403(實測)。tag `a-20261031-g1-1de150a` 只在這個容器裡。
+  在 Mac 上跑就沒這個問題;在雲端跑 A 的票會每組多一頁 decision,照規則不重試。
+- **A 的票庫在這個容器的 `pools/agent-control`,沒有遠端**:容器回收就沒了,整理好的記憶也一起沒。要保留就得給它一個遠端。
+- 給 T 的接手 prompt 在這次對話裡交給使用者;T 的票庫用本機 sub repo(使用者裁示),發版腳本做到哪由 T 判斷。
