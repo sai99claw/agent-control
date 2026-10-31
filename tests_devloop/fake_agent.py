@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """A stand-in for an LLM agent in the loop tests. What it does on its n-th call for a role and
 ticket comes from the plan file in $FAKE_PLAN: {"worker": {"7": ["wrong", "ok"]}, ...};
-the last action repeats. No plan entry = the role's default ("ok" / "pass" / "fix" / "tickets")."""
+the last action repeats. No plan entry = the role's default ("ok" / "pass" / "fix" / "tickets").
+$FAKE_INTERVALS: append "agent <role> <ticket> <start> <end>" there on exit. $FAKE_HOLD: seconds to
+sleep before working. Action "slow": hold 4 s more, then behave as "ok"."""
 
+import atexit
 import json
 import os
 import subprocess
@@ -22,6 +25,11 @@ default = {"worker": "ok", "verifier": "ok", "reviewer": "pass", "fixer": "fix",
 actions = (plan.get(role) or {}).get(ticket) or (plan.get(role) or {}).get("*") or [default]
 action = actions[min(n, len(actions) - 1)]
 sys.stdin.read()
+STARTED = time.time()
+if os.environ.get("FAKE_INTERVALS"):
+    atexit.register(lambda: open(os.environ["FAKE_INTERVALS"], "a").write(
+        "agent %s %s %.3f %.3f\n" % (role, ticket, STARTED, time.time())))
+time.sleep(float(os.environ.get("FAKE_HOLD") or 0) + (4 if action == "slow" else 0))
 
 
 def git(*args, check=True):

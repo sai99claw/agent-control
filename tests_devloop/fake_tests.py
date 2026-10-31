@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 """Stand-in project tests for the loop tests, behind the real test interface.
 case_<n> passes when impl_<n>.txt says ok; `full` also fails while red.txt exists.
-preflight reports an unusable environment while $AC_ROOT/.env-bad exists."""
+preflight reports an unusable environment while $AC_ROOT/.env-bad exists.
+$FAKE_INTERVALS: append "tests <command> <start> <end>" there on exit."""
 
+import atexit
 import glob
 import json
 import os
 import sys
+import time
 
 cmd, ids = sys.argv[1], sys.argv[2:]
+STARTED = time.time()
+if os.environ.get("FAKE_INTERVALS"):
+    atexit.register(lambda: open(os.environ["FAKE_INTERVALS"], "a").write(
+        "tests %s %.3f %.3f\n" % (cmd, STARTED, time.time())))
 out = os.environ.get("AC_TEST_OUT", ".")
 
 
