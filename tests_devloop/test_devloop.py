@@ -302,6 +302,22 @@ class Memory(LoopCase):
         self.assertIn("memory/project.md", mem)
         self.assertIn("memory/model/python3.md", mem)   # the fake agent's command has no --model
 
+    def test_an_old_model_card_is_not_copied_but_queued_as_lessons(self):
+        cards = os.path.join(HOME, "memory", "model", "opus.md")
+        if not os.path.exists(cards):
+            self.skipTest("no agent-control model card to import")
+        argv = ["claude", "-p", "--model", "opus"]
+        cfg = json.load(open(os.path.join(self.proj, "board", "config.json")))
+        cfg["devloop"]["agents"]["worker"] = argv
+        json.dump(cfg, open(os.path.join(self.proj, "board", "config.json"), "w"))
+        res = self.run_py("tickets.py", "init")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        snap = self.snap()
+        self.assertEqual(snap.memory["memory/model/opus.md"].splitlines()[0], "# Model memory: opus")
+        queued = [r for r in snap.lessons.values() if r["name"] == "opus"]
+        self.assertGreaterEqual(len(queued), 5)
+        self.assertTrue(all(r["source"] == "agent-control model card before devloop" for r in queued))
+
     def test_lessons_are_collected_and_five_get_consolidated_by_the_keeper(self):
         self.run_py("tickets.py", "init")
         self.add(1)

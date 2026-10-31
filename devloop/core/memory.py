@@ -49,23 +49,36 @@ def _safe(name):
 
 
 def seed(tx, models=(), home=None):
-    """Create the memory files that are missing (never overwrites). A model's memory starts from
-    agent-control's own model card when there is one (how a model goes wrong holds anywhere)."""
+    """Create the memory files that are missing (never overwrites), each with only its heading.
+
+    Older notes (agent-control's model cards from before devloop) are not copied in: every
+    bullet goes to memory/inbox as a lesson, so the consolidator applies the layer contract to
+    it like to any other lesson - nothing reaches an agent's prompt unfiltered."""
     have = tx.data.memory
     wanted = [("role", r) for r in ROLES] + [("model", m) for m in models] + [("project", "project")]
+    imported = 0
     for layer, name in wanted:
         path = rel(layer, name)
         if path in have:
             continue
-        text = SEED[layer].format(name=name)
-        card = os.path.join(home or "", "memory", "model", "%s.md" % name)
-        if layer == "model" and home and os.path.isfile(card):
-            try:
-                with open(card) as fh:
-                    text = fh.read()
-            except OSError:
-                pass
-        tx.write_text(path, text)
+        tx.write_text(path, SEED[layer].format(name=name))
+        if layer == "model" and home:
+            imported += _import_card(tx, os.path.join(home, "memory", "model", "%s.md" % name), name)
+    return imported
+
+
+def _import_card(tx, card, name):
+    try:
+        with open(card) as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return 0
+    bullets = [l.lstrip("-* ").strip() for l in lines if l.lstrip().startswith(("-", "*"))]
+    for i, text in enumerate(b for b in bullets if b):
+        tx.write("memory/inbox/import-%s-%02d.json" % (_safe(name), i), {
+            "layer": "model", "name": name, "text": text[:MAX_TEXT],
+            "source": "agent-control model card before devloop", "at": osx.now()})
+    return len(bullets)
 
 
 def for_prompt(snap, role, model):

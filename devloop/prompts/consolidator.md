@@ -12,7 +12,11 @@ every session. Keep only what is worth that cost. You decide what to write and h
   what must stay true. Not commands, paths, line numbers or flags (those go stale; the code is
   where to look them up).
 - Nowhere: the story of an incident (tickets hold that), concrete examples, anything that only
-  restates the rules already in the agent's prompt.
+  restates the rules already in the agent's prompt, and routing or staffing policy ("this model
+  does not open tickets") - that is configuration.
+- **Stale**: a lesson about a tool, script, step or rule the current loop does not have (the loop
+  is described in {loop_readme}) - drop it, even if it was true once. Lessons imported from
+  before devloop are often like that.
 
 Write principles, ways of thinking and rules of conduct, not cases. A ticket number may be cited
 as the source of a principle.

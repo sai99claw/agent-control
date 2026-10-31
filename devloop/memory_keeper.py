@@ -35,6 +35,7 @@ def keep(cfg, pool, layer, name):
         "lessons": json.dumps([{"text": r.get("text"), "source": r.get("source"), "at": r.get("at")}
                                for r in rows.values()], indent=2, ensure_ascii=False),
         "result_path": os.path.join(run_dir, "result.json"),
+        "loop_readme": os.path.join(cfg.home, "devloop", "README.md"),
     })
     hand = agents.run(cfg, "consolidator", prompt, pool.path, run_dir, cfg.agent_timeout_seconds)
     text = (hand.result or {}).get("text") if hand.kind == "memory" else None
