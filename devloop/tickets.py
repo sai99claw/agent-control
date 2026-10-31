@@ -9,6 +9,7 @@
     python3 devloop/tickets.py inbox [--all]        # pages for the main session
     python3 devloop/tickets.py ack <page>|--all
     python3 devloop/tickets.py lessons --layer role --name worker --file OLD.md   # old notes -> lessons
+    python3 devloop/tickets.py release g1 [--again]  # re-run a landed group's failed release
 
 Opening tickets is ticket_creator.py; moving them is ticket_controller.py.
 """
@@ -22,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import agents, memory  # noqa: E402
 from core import dag as dagmod  # noqa: E402
-from core import osx  # noqa: E402
+from core import osx, release  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.pool import event  # noqa: E402
 
@@ -116,6 +117,38 @@ def cmd_lessons(pool, args):
     return 0
 
 
+def cmd_release(pool, cfg, args):
+    """Re-run the release of a landed group the way the controller does at landing; once, no
+    retry, no rollback. The outcome goes on the group and in a page."""
+    gid = args.group
+    g = pool.snapshot().groups.get(gid)
+    if not g:
+        raise osx.OSFailure("no group %s" % gid)
+    if g.get("state") != "landed" or not g.get("landed_sha"):
+        raise osx.OSFailure("group %s is %s, not landed; only a landed group is released" % (gid, g.get("state")))
+    if g.get("release") == "ok" and not args.again:
+        raise osx.OSFailure("group %s is already released; --again runs the release once more" % gid)
+    cfg.require_release()
+    sha = g["landed_sha"]
+    ok, text = release.run(cfg, g, sha)
+
+    def change(tx):
+        grp = tx.data.groups[gid]
+        grp["release"] = "ok" if ok else "failed"
+        event(grp, "release re-run: %s" % ("ok" if ok else "failed"))
+        tx.put_group(grp)
+    pool.update(change, "group %s: release re-run (%s)" % (gid, "ok" if ok else "failed"))
+    if ok:
+        pool.report("landed", gid, "group %s released (re-run): #%s (%s)" % (
+            gid, ", #".join(g.get("members") or []), sha[:12]))
+        print("group %s released" % gid)
+        return 0
+    pool.report("decision", gid, "group %s (%s): the re-run release failed - not retried, not "
+                "rolled back:\n%s" % (gid, sha[:12], text))
+    print("group %s: release failed\n%s" % (gid, text), file=sys.stderr)
+    return 1
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -139,6 +172,9 @@ def main(argv=None):
     p.add_argument("--layer", required=True, choices=memory.LAYERS)
     p.add_argument("--name")
     p.add_argument("--file", required=True)
+    p = sub.add_parser("release")
+    p.add_argument("group")
+    p.add_argument("--again", action="store_true")
     args = ap.parse_args(argv)
     try:
         cfg = Config()
@@ -149,6 +185,8 @@ def main(argv=None):
             pool.update(lambda tx: memory.seed(tx, models, cfg.home), "memory: seed")
             print("pool ready at %s" % pool.path)
             return 0
+        if args.cmd == "release":
+            return cmd_release(pool, cfg, args)
         return {"list": cmd_list, "show": cmd_show, "inbox": cmd_inbox, "ack": cmd_ack, "lessons": cmd_lessons,
                 "ready": lambda p, a: _set(p, a.id, "ready", a.why),
                 "cancel": lambda p, a: _set(p, a.id, "cancelled", a.why)}[args.cmd](pool, args)

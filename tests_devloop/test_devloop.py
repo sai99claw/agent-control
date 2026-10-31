@@ -317,6 +317,98 @@ class Revise(LoopCase):
         self.assertEqual(self.snap().tickets, {})
 
 
+class ReleaseRerun(LoopCase):
+    """tickets.py release: refusals, the timeout, the shared function and the docs (#9)."""
+    release = "exit 7"
+
+    def land_failed(self):
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+
+    def decisions(self):
+        return [r for r in self.snap().inbox.values() if r["kind"] == "decision" and r["ref"] == "g1"]
+
+    def test_unknown_or_unlanded_group_is_refused_and_nothing_runs(self):
+        out = os.path.join(self.tmp, "out")
+        self.config(release="echo ran >> %s" % out)
+        res = self.run_py("tickets.py", "release", "g9")
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertEqual(len(res.stderr.strip().splitlines()), 1, res.stderr)
+        self.assertIn("g9", res.stderr)
+        self.pool.update(lambda tx: tx.put_group({"id": "g2", "state": "pr", "members": ["1"],
+                                                  "branch": "int/g2"}), "test: open group")
+        res = self.run_py("tickets.py", "release", "g2")
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertEqual(len(res.stderr.strip().splitlines()), 1, res.stderr)
+        self.assertIn("g2", res.stderr)
+        self.assertFalse(os.path.exists(out))
+        self.assertEqual(self.snap().inbox, {})
+
+    def test_no_release_configured_gives_the_config_sentence(self):
+        from core.config import Config
+        self.land_failed()
+        self.config(release=None)
+        with self.assertRaises(osx.OSFailure) as ctx:
+            Config(self.proj).require_release()
+        pages = len(self.snap().inbox)
+        res = self.run_py("tickets.py", "release", "g1")
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertIn(str(ctx.exception), res.stderr)
+        self.assertEqual(len(self.snap().inbox), pages)
+
+    def test_the_rerun_is_limited_by_release_timeout_seconds(self):
+        self.land_failed()
+        out = os.path.join(self.tmp, "out")
+        self.config(release="sleep 5; echo done >> %s" % out, release_timeout_seconds=1)
+        before = len(self.decisions())
+        res = self.run_py("tickets.py", "release", "g1", timeout=60)
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+        new = self.decisions()
+        self.assertEqual(len(new), before + 1)
+        self.assertTrue(any("timeout" in r["text"] and "rc " in r["text"] for r in new), new)
+        self.assertIn("release re-run: failed", json.dumps(self.snap().groups["g1"]))
+        self.assertFalse(os.path.exists(out), "the release ran past its limit")
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "wt", "release-g1")), "worktree left behind")
+
+    def test_actl_tickets_release_runs_it_too(self):
+        self.land_failed()
+        self.config(release="true")
+        res = subprocess.run([os.path.join(HOME, "bin", "actl"), "tickets", "release", "g1"], cwd=self.proj,
+                             env=self.env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["release"], "ok")
+
+    def test_controller_release_is_the_shared_function(self):
+        import ticket_controller
+        from core import release
+        from core.config import Config
+        calls = []
+        orig = release.run
+        release.run = lambda cfg, g, sha: calls.append((g["id"], sha)) or (True, "x")
+        try:
+            ctl = ticket_controller.Controller(Config(self.proj), self.pool)
+            self.assertEqual(ctl.release({"id": "g5", "members": []}, "abc"), (True, "x"))
+        finally:
+            release.run = orig
+        self.assertEqual(calls, [("g5", "abc")])
+
+    def test_help_docstring_and_readme_list_the_command(self):
+        def read(*parts):
+            with open(os.path.join(HOME, *parts)) as fh:
+                return fh.read()
+        actl = [ln for ln in read("bin", "actl").splitlines() if ln.startswith("  tickets ")]
+        self.assertEqual(len(actl), 1)
+        self.assertIn("|release", actl[0])
+        doc = read("devloop", "tickets.py").split('"""')[1]
+        self.assertIn("tickets.py release", doc)
+        readme = read("devloop", "README.md").splitlines()
+        cancel = [i for i, ln in enumerate(readme) if ln.startswith("| `python3 devloop/tickets.py cancel")][0]
+        self.assertIn("tickets.py release", readme[cancel + 1])
+
+
 class WebInput(LoopCase):
     def stuck(self, ident):
         self.add(ident)

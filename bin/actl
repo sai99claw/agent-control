@@ -32,7 +32,7 @@ AC=$AC_CONTROL_DIR
 TABLE='actl [-C <project dir>] <command> [args…]
   new --request "…" | --revise N …   devloop/ticket_creator.py (the opener writes tickets)
   run [--forever]                    devloop/ticket_controller.py (drives tickets to landed)
-  tickets init|list|show|inbox|ack|lessons|ready|cancel …
+  tickets init|list|show|inbox|ack|lessons|ready|cancel|release …
                                      devloop/tickets.py (the pool)
   board serve|html …                 devloop/board.py
   check                              board/config.json is usable by this A: prints "ok <project root>"

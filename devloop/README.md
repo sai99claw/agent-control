@@ -30,6 +30,7 @@ group complete (= one PR, a local mark) -> regression.py (preflight + full suite
 | `python3 devloop/tickets.py list` / `show N` | state of tickets and groups |
 | `python3 devloop/tickets.py ready N` | after deciding on a stuck ticket |
 | `python3 devloop/tickets.py cancel N --why ...` | drop a ticket |
+| `python3 devloop/tickets.py release gN [--again]` | re-run a landed group's failed release once (`--again` also when it was ok); the outcome is a page |
 | `python3 devloop/board.py serve [--port 8765] [--key-file F]` | the dashboard (or `board.py html --out F`) |
 
 Agents run their tests with `python3 devloop/run_tests.py <ids>` (output stays in their run directory).

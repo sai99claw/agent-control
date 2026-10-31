@@ -32,7 +32,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import dag as dagmod  # noqa: E402
-from core import agents, codemap, memory, osx  # noqa: E402
+from core import agents, codemap, memory, osx, release  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.pool import event  # noqa: E402
@@ -303,24 +303,7 @@ class Controller:
                 pass
 
     def release(self, g, sha):
-        tree = os.path.join(self.cfg.worktree_root, "release-" + g["id"])
-        try:
-            self.repo.detached(tree, sha)
-            res = osx.run(["sh", "-c", self.release_cmd], cwd=tree, timeout=self.cfg.release_timeout_seconds,
-                          env=self.cfg.env(DEVLOOP_RELEASE_SHA=sha, DEVLOOP_GROUP=g["id"],
-                                           DEVLOOP_TICKETS=",".join(g.get("members") or []),
-                                           DEVLOOP_REMOTE=self.cfg.values.get("remote")),
-                          what="release")
-            text = (res.out + res.err).strip()[-2000:]
-            return res.ok, text if res.ok else "rc %s%s\n%s" % (
-                res.rc, " (timeout)" if res.timed_out else "", text)
-        except osx.OSFailure as exc:
-            return False, str(exc)
-        finally:
-            try:
-                self.repo.remove_worktree(tree)
-            except osx.OSFailure:
-                pass
+        return release.run(self.cfg, g, sha)
 
     # ------------------------------------------------------------ 4. memory
 
