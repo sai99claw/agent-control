@@ -234,3 +234,9 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
   在 Mac 上跑就沒這個問題;在雲端跑 A 的票會每組多一頁 decision,照規則不重試。
 - **A 的票庫在這個容器的 `pools/agent-control`,沒有遠端**:容器回收就沒了,整理好的記憶也一起沒。要保留就得給它一個遠端。
 - 給 T 的接手 prompt 在這次對話裡交給使用者;T 的票庫用本機 sub repo(使用者裁示),發版腳本做到哪由 T 判斷。
+
+## 2026-10-31(續二)T 的九個問題
+
+- 答案在 D-086。A 的改動 8 張票(#3–#10)一輪落地,main = dfc0e96,花費約 8.7 美元(3 張 complex 有覆核)。發版一樣卡在雲端推不了 tag。
+- **還沒解的流程缺口**:`docs/DECISIONS.md` 與 `docs/HANDOFF.md` 是主線寫的(DECISIONS 在 hard_block 裡,票不能改),但 main 只由
+  controller 前進——所以主線的文件沒有路進 main,現在只在 `claude/repo-access-check-s7faow` 分支上。要使用者裁示怎麼進 main。

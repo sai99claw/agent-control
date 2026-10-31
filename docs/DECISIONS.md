@@ -63,7 +63,9 @@
 ## 六、測試與驗證
 
 1. worker 為自己寫的程式寫單元測試;驗收項目的案例**只歸驗證者**。驗證者的案例一律帶 `T<票號>Acceptance` 這個名字(Python unittest:放在同名的 class),和 worker 的測試不會撞名。(D-009、D-054 Q4、D-084 Q8)
-2. 驗證者的案例必須在改動前的程式上紅,而且是紅在自己的斷言、不是 import 或缺名字;issuer 在合併前用腳本實際跑一次確認。案例寫進專案既有的測試模組,不為一張票開新檔。(D-020、D-056 ①、D-084 Q10)
+2. 驗證者的案例必須在改動前的程式上紅,而且是紅在自己的斷言、不是 import 或缺名字;issuer 在合併前用腳本實際跑一次確認。案例寫進專案既有的測試模組(負責那一區的那一層),不為一張票開新檔;標記要出現在測試介面回報的 id 裡。(D-020、D-056 ①、D-084 Q10、D-086)
+6. devloop 只用專案的 `preflight`、`run`、`full`。`full` 就是 regression,要包含專案的每一層(單元、驗證層、瀏覽器);`run <id>` 要吃得下 `full` 回報的每一個 id。(D-086)
+7. 會搶機器的專案(例如瀏覽器測試)設 `devloop.machine_slots`(同時最多幾個 agent 或 devloop 自己起的測試)與 `devloop.regression_exclusive`(regression 獨佔整台機器)。沒設就不限。(D-086)
 3. worker 交件前只跑:驗證者的案例、自己的單元測試、約 1 分鐘的基礎組。全套是 regression 的事。(D-073 ①、D-084 Q9)
 4. 覆核只派給 complex 的票,由新的 opus 做:讀做出來的 code,看是不是票上要的。(D-022、D-054 Q1)
 5. flaky 不另外記帳:紅就是紅,當成回饋;worker 認為是測試本身的問題就反駁給開題者。(D-078 ①)
@@ -71,7 +73,8 @@
 ## 七、安全
 
 1. hard_block 清單只擋裁示文件、VISION、發版腳本、prod 資料;票的改動碰到就停下來問你,不合進去。(D-054 Q3、D-080)
-2. 不做 main 與 prod 目錄的前後比對:票只在自己的分支工作就夠了。(D-084 Q6;撤銷 D-064、D-065 的比對)
+2. 不做 main 與 prod 目錄的前後比對:票只在自己的分支工作就夠了。所以 `hard_block.dirs` devloop 不讀(`actl doctor` 會警告):repo 裡的目錄放 `paths`;repo 外的(prod 資料)靠專案 `CLAUDE.md` 裡「每個 agent 都要守」的規矩。(D-084 Q6、D-086;撤銷 D-064、D-065 的比對)
+4. 專案給 agent 的硬規矩(prod 資料、受保護的埠、不准跑的腳本)寫在專案 `CLAUDE.md` 的「每個 agent 都要守」一節:agent 是在專案 worktree 裡起的 `claude -p`,會自動讀到它(codex 讀 `AGENTS.md`)。專案記憶只放設計理由,不放硬規矩。(D-086)
 3. 看板來的文字先清理、再包在注入檢查的 prompt 後面,開題者判斷是注入就不執行、發頁。看板要有 key 才能輸入。(D-083)
 
 ## 八、記憶
@@ -140,4 +143,25 @@
    SessionStart hook 只印「等你的頁」與票;devloop 起的 agent 不觸發。保留:測試介面(`testiface.py`、`adapter-unittest.py`,
    以及它們用到的 `status.py`、`event.py`)、`project_config.py`、`memory/model/`(新票庫的模型記憶從這裡匯入)。
 4. A 的舊票與舊記憶沒有搬進 A 的票庫;A 的票庫在第一次 `actl tickets init` 時建立。(推論:舊記憶大多是舊迴圈的操作細節,已不適用)
+
+---
+
+## D-086(2026-10-31)T 開跑前的九個問題
+
+來源:使用者轉來 T 主線讀 A 的 main(1de150a)後的提問(讀 code 推的,未實跑),原文九題:regression 不跑 `regression` 指令、驗證者案例放哪、
+瀏覽器並行、`hard_block.dirs` 沒人讀、專案規矩怎麼送到 agent、舊票、T 自己的記憶、發版失敗後重發、舊設定鍵。
+
+主線的回答(主線判斷;A 的改動走 devloop,8 張票一輪落地,main = dfc0e96,實測只在 Linux):
+1. `full` 就是 regression,要包每一層;`regression` / `select` 指令 devloop 不用。→ 六.6
+2. 案例寫進負責那一區的既有模組,不一票一檔;T 的「一票一檔」lint 要拿掉。→ 六.2
+3. 新增 `devloop.machine_slots` 與 `devloop.regression_exclusive`(`devloop/core/slots.py`,flock)。T 建議 `machine_slots: 2`、`regression_exclusive: true`。→ 六.7
+4. `dirs` 是 D-084 Q6 的結果,刻意不讀;`actl doctor` 現在會警告。→ 七.2
+5. 專案 `CLAUDE.md` 第一行告訴 agent 主線段落不是給它的,另有「每個 agent 都要守」一節;範本已改。→ 七.4
+6. 舊票不匯入(同 A):挑出還要做的寫進一個需求檔,一次 `actl new --request-file`,只付一次開題成本。
+7. `actl tickets lessons --layer L --name N --file F`:把一份舊記憶的每條 bullet 排進整理暫存區。
+8. `actl tickets release <group>`:對同一個 sha 重跑發版;`devloop.release_timeout_seconds`(預設 3600)。
+9. 舊設定鍵可以現在手動刪;`actl migrate` 只處理版本 1 → 2,不受影響。
+
+T 自己決定、主線同意的:`devloop.remote: null`(GitHub 上的 main 由使用者手動推,要自動推再說)、發版只做 `build.sh`、
+worktree 放外接碟(絕對路徑)。
 
