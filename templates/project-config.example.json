@@ -13,10 +13,8 @@
   "tests": {
     "adapter": "unittest",
     "preflight": "sh scripts/ac-tests.sh preflight",
-    "select": "sh scripts/ac-tests.sh select",
     "run": "sh scripts/ac-tests.sh run",
     "full": null,
-    "regression": null,
     "unittest": {
       "roots": [
         "tests",

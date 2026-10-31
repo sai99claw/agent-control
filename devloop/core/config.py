@@ -50,6 +50,7 @@ DEFAULTS = {
     "regression_timeout_seconds": 3 * 3600,
     "poll_seconds": 10,
     "release": None,                 # required: shell command run at the landed sha
+    "release_timeout_seconds": 3600, # time limit of the release command at landing
     "base_tests": None,              # D-073 ①: ids of the ~1 minute base set; default tests.unittest.base
     "index_path": "CODE-MAP.md",     # D-038 / D-084: generated code index, refreshed at landing; null = off
     "required_fields": {},           # extra ticket fields the opener must fill: {"name": "what to write"}

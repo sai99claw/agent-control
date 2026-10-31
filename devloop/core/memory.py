@@ -13,6 +13,7 @@ waited 3 days, and that file was not consolidated in the last 24 hours. A consol
 rewrites the file; nobody deletes memory alone.
 """
 
+import hashlib
 import os
 import time
 
@@ -77,18 +78,38 @@ def seed(tx, models=(), home=None):
     return imported
 
 
+def bullets(path):
+    """The lesson texts of a notes file: every line whose first non-space character is '-' or '*',
+    without the marker, trimmed, empty ones skipped. Raises OSError when it cannot be read."""
+    with open(path) as fh:
+        lines = fh.read().splitlines()
+    texts = [l.lstrip("-* ").strip() for l in lines if l.lstrip().startswith(("-", "*"))]
+    return [t[:MAX_TEXT] for t in texts if t]
+
+
+def queue(tx, texts, layer, name, source, prefix):
+    """Put texts into memory/inbox as lessons for one memory file; keys are prefix-NN."""
+    for i, text in enumerate(texts):
+        tx.write("memory/inbox/%s-%02d.json" % (prefix, i), {
+            "layer": layer, "name": name, "text": text, "source": source, "at": osx.now()})
+    return len(texts)
+
+
 def _import_card(tx, card, layer, name):
     try:
-        with open(card) as fh:
-            lines = fh.read().splitlines()
+        texts = bullets(card)
     except OSError:
         return 0
-    bullets = [l.lstrip("-* ").strip() for l in lines if l.lstrip().startswith(("-", "*"))]
-    for i, text in enumerate(b for b in bullets if b):
-        tx.write("memory/inbox/import-%s-%s-%02d.json" % (layer, _safe(name), i), {
-            "layer": layer, "name": name, "text": text[:MAX_TEXT],
-            "source": "agent-control %s card before devloop" % layer, "at": osx.now()})
-    return len(bullets)
+    return queue(tx, texts, layer, name, "agent-control %s card before devloop" % layer,
+                 "import-%s-%s" % (layer, _safe(name)))
+
+
+def import_lessons(tx, texts, layer, name, path):
+    """Queue a project's own old notes (texts from bullets(path)); every import gets its own keys."""
+    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+    uniq = hashlib.sha1(("%s|%s" % (path, time.time_ns())).encode()).hexdigest()[:8]
+    prefix = "lessons-%s-%s-%s-%s-%s" % (stamp, uniq, layer, _safe(name), _safe(os.path.basename(path)))
+    return queue(tx, texts, layer, name, "lessons import from %s" % path, prefix)
 
 
 def for_prompt(snap, role, model):

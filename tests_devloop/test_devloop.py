@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -267,6 +268,22 @@ class ReleaseFails(LoopCase):
         self.assertIn("decision", self.inbox_kinds())
 
 
+class T8Acceptance(LoopCase):
+    def test_a_release_past_release_timeout_seconds_is_stopped_and_failed(self):
+        out = os.path.join(self.tmp, "release-out.txt")
+        self.config(release="sleep 5; echo done >> %s" % out, release_timeout_seconds=1)
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+        pages = [row for row in self.snap().inbox.values()
+                 if row["kind"] == "decision" and row["ref"] == "g1"]
+        self.assertTrue(pages, "a decision page about g1")
+        self.assertTrue(any("timeout" in row["text"] for row in pages), pages)
+        self.assertFalse(os.path.exists(out), "the release's process group was not stopped")
+
+
 class Timeout(LoopCase):
     loop_extra = {"issuer_timeout_seconds": 4}
 
@@ -277,6 +294,95 @@ class Timeout(LoopCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         t = self.snap().ticket("1")
         self.assertEqual((t["state"], t["stuck"]["reason"]), ("stuck", "timeout"))
+
+
+class T9Acceptance(LoopCase):
+    """tickets.py release <group>: re-run a failed release (ticket #9)."""
+
+    def land_failed(self):
+        self.flag = os.path.join(self.tmp, "release-flag")
+        self.out = os.path.join(self.tmp, "release-out.txt")
+        self.config(release='if test -f %s; then { git rev-parse HEAD; '
+                            'echo "$DEVLOOP_RELEASE_SHA $DEVLOOP_GROUP $DEVLOOP_TICKETS"; pwd; } >> %s; '
+                            'else echo NOFLAG-MARK; exit 3; fi' % (self.flag, self.out))
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+        self.assertFalse(os.path.exists(self.out))
+
+    def out_lines(self):
+        if not os.path.exists(self.out):
+            return []
+        with open(self.out) as fh:
+            return fh.read().splitlines()
+
+    def pages(self, kind):
+        return [row for row in self.snap().inbox.values() if row["kind"] == kind and row["ref"] == "g1"]
+
+    def worktrees(self):
+        return [line for line in git(self.proj, "worktree", "list", "--porcelain").splitlines()
+                if line.startswith("worktree ")]
+
+    def test_a_failed_release_is_rerun_at_landed_sha_in_a_throwaway_worktree(self):
+        self.land_failed()
+        trees = self.worktrees()
+        history = len(self.snap().groups["g1"].get("history") or [])
+        open(self.flag, "w").close()
+        res = self.run_py("tickets.py", "release", "g1")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        lines = self.out_lines()
+        self.assertEqual(len(lines), 3, "the release ran exactly once: %r" % lines)
+        head, envline, cwd = lines
+        grp = self.snap().groups["g1"]
+        self.assertEqual(envline, "%s g1 1" % grp["landed_sha"])
+        self.assertEqual(head, grp["landed_sha"])
+        self.assertNotEqual(os.path.realpath(cwd), os.path.realpath(self.proj),
+                            "the release ran in the project checkout")
+        self.assertFalse(os.path.exists(cwd), "the release worktree was not removed")
+        self.assertEqual(self.worktrees(), trees, "the release worktree is still registered")
+        self.assertEqual(grp["release"], "ok")
+        self.assertEqual(len(grp["history"]), history + 1)
+        self.assertIn("re-run", grp["history"][-1]["event"])
+        self.assertTrue(self.pages("landed"), "a landed page about g1")
+
+    def test_a_rerun_that_fails_stays_failed_and_leaves_a_decision_with_rc_and_output(self):
+        self.land_failed()
+        decisions = len(self.pages("decision"))
+        history = len(self.snap().groups["g1"].get("history") or [])
+        time.sleep(1.1)  # page names are unique to the second
+        res = self.run_py("tickets.py", "release", "g1")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        grp = self.snap().groups["g1"]
+        self.assertEqual(grp["release"], "failed")
+        self.assertEqual(len(grp["history"]), history + 1)
+        self.assertIn("re-run", grp["history"][-1]["event"])
+        pages = sorted(self.pages("decision"), key=lambda r: r["at"])
+        self.assertEqual(len(pages), decisions + 1)
+        text = pages[-1]["text"]
+        self.assertIn("NOFLAG-MARK", text)
+        self.assertRegex(text, r"\b3\b")
+        self.assertEqual(self.out_lines(), [])
+
+    def test_an_ok_release_is_refused_unless_again(self):
+        self.land_failed()
+        open(self.flag, "w").close()
+        res = self.run_py("tickets.py", "release", "g1")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["release"], "ok")
+        before, inbox = self.out_lines(), len(self.snap().inbox)
+        self.assertEqual(len(before), 3)
+        res = self.run_py("tickets.py", "release", "g1")
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertEqual(len(res.stderr.strip().splitlines()), 1, res.stderr)
+        self.assertEqual(self.out_lines(), before, "a refused release ran")
+        self.assertEqual(len(self.snap().inbox), inbox, "a refused release left a page")
+        time.sleep(1.1)
+        res = self.run_py("tickets.py", "release", "g1", "--again")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(len(self.out_lines()), 6, "--again ran the release once more")
+        self.assertEqual(self.snap().groups["g1"]["release"], "ok")
 
 
 class Revise(LoopCase):
@@ -302,6 +408,98 @@ class Revise(LoopCase):
         res = self.run_py("ticket_creator.py", "--request", "x")
         self.assertEqual(res.returncode, 1, res.stderr)
         self.assertEqual(self.snap().tickets, {})
+
+
+class ReleaseRerun(LoopCase):
+    """tickets.py release: refusals, the timeout, the shared function and the docs (#9)."""
+    release = "exit 7"
+
+    def land_failed(self):
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+
+    def decisions(self):
+        return [r for r in self.snap().inbox.values() if r["kind"] == "decision" and r["ref"] == "g1"]
+
+    def test_unknown_or_unlanded_group_is_refused_and_nothing_runs(self):
+        out = os.path.join(self.tmp, "out")
+        self.config(release="echo ran >> %s" % out)
+        res = self.run_py("tickets.py", "release", "g9")
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertEqual(len(res.stderr.strip().splitlines()), 1, res.stderr)
+        self.assertIn("g9", res.stderr)
+        self.pool.update(lambda tx: tx.put_group({"id": "g2", "state": "pr", "members": ["1"],
+                                                  "branch": "int/g2"}), "test: open group")
+        res = self.run_py("tickets.py", "release", "g2")
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertEqual(len(res.stderr.strip().splitlines()), 1, res.stderr)
+        self.assertIn("g2", res.stderr)
+        self.assertFalse(os.path.exists(out))
+        self.assertEqual(self.snap().inbox, {})
+
+    def test_no_release_configured_gives_the_config_sentence(self):
+        from core.config import Config
+        self.land_failed()
+        self.config(release=None)
+        with self.assertRaises(osx.OSFailure) as ctx:
+            Config(self.proj).require_release()
+        pages = len(self.snap().inbox)
+        res = self.run_py("tickets.py", "release", "g1")
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertIn(str(ctx.exception), res.stderr)
+        self.assertEqual(len(self.snap().inbox), pages)
+
+    def test_the_rerun_is_limited_by_release_timeout_seconds(self):
+        self.land_failed()
+        out = os.path.join(self.tmp, "out")
+        self.config(release="sleep 5; echo done >> %s" % out, release_timeout_seconds=1)
+        before = len(self.decisions())
+        res = self.run_py("tickets.py", "release", "g1", timeout=60)
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+        new = self.decisions()
+        self.assertEqual(len(new), before + 1)
+        self.assertTrue(any("timeout" in r["text"] and "rc " in r["text"] for r in new), new)
+        self.assertIn("release re-run: failed", json.dumps(self.snap().groups["g1"]))
+        self.assertFalse(os.path.exists(out), "the release ran past its limit")
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "wt", "release-g1")), "worktree left behind")
+
+    def test_actl_tickets_release_runs_it_too(self):
+        self.land_failed()
+        self.config(release="true")
+        res = subprocess.run([os.path.join(HOME, "bin", "actl"), "tickets", "release", "g1"], cwd=self.proj,
+                             env=self.env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["release"], "ok")
+
+    def test_controller_release_is_the_shared_function(self):
+        import ticket_controller
+        from core import release
+        from core.config import Config
+        calls = []
+        orig = release.run
+        release.run = lambda cfg, g, sha: calls.append((g["id"], sha)) or (True, "x")
+        try:
+            ctl = ticket_controller.Controller(Config(self.proj), self.pool)
+            self.assertEqual(ctl.release({"id": "g5", "members": []}, "abc"), (True, "x"))
+        finally:
+            release.run = orig
+        self.assertEqual(calls, [("g5", "abc")])
+
+    def test_help_docstring_and_readme_list_the_command(self):
+        def read(*parts):
+            with open(os.path.join(HOME, *parts)) as fh:
+                return fh.read()
+        actl = [ln for ln in read("bin", "actl").splitlines() if ln.startswith("  tickets ")]
+        self.assertEqual(len(actl), 1)
+        self.assertIn("|release", actl[0])
+        doc = read("devloop", "tickets.py").split('"""')[1]
+        self.assertIn("tickets.py release", doc)
+        readme = read("devloop", "README.md").splitlines()
+        cancel = [i for i, ln in enumerate(readme) if ln.startswith("| `python3 devloop/tickets.py cancel")][0]
+        self.assertIn("tickets.py release", readme[cancel + 1])
 
 
 class WebInput(LoopCase):
@@ -457,6 +655,37 @@ class RedCheck(LoopCase):
 
     def test_the_unnamed_message_points_at_result_json(self):
         self._round_two("unnamed", "result.json")
+
+
+class TestLayerDocs(unittest.TestCase):
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def read(self, *p):
+        with open(os.path.join(self.ROOT, *p), encoding="utf-8") as f:
+            return f.read()
+
+    def test_readme_bullet_names_the_three_commands(self):
+        text = self.read("devloop", "README.md")
+        bullet = [b for b in text.split("\n- ") if b.startswith("devloop calls only")]
+        self.assertTrue(bullet, "README lacks the 'devloop calls only' bullet")
+        for w in ("tests.preflight", "tests.run", "tests.full", "every id", "result.json"):
+            self.assertIn(w, bullet[0])
+        self.assertIn("(`tests.preflight`, `tests.run`, `tests.full`;", text)
+
+    def test_template_script(self):
+        path = os.path.join(self.ROOT, "templates", "project-tests.example.sh")
+        text = self.read("templates", "project-tests.example.sh")
+        for w in ("verify.py", "regression)", "select)"):
+            self.assertNotIn(w, text)
+        self.assertEqual(subprocess.run(["sh", "-n", path]).returncode, 0)
+
+    def test_example_config_has_no_select_or_regression(self):
+        cfg = json.loads(self.read("templates", "project-config.example.json"))
+        self.assertNotIn("select", cfg["tests"])
+        self.assertNotIn("regression", cfg["tests"])
+
+    def test_verifier_prompt_forbids_a_file_per_ticket(self):
+        self.assertIn("new file", self.read("devloop", "prompts", "verifier.md"))
 
 
 class MarkExplained(unittest.TestCase):
@@ -800,6 +1029,15 @@ class Landing(LoopCase):
         self.assertIsNone(total["input_tokens"])
 
 
+class ReleaseTimeoutSetting(LoopCase):
+    def test_release_timeout_defaults_to_3600_and_can_be_set(self):
+        from core.config import Config
+        self.config(release="true")
+        self.assertEqual(Config(self.proj).release_timeout_seconds, 3600)
+        self.config(release_timeout_seconds=7)
+        self.assertEqual(Config(self.proj).release_timeout_seconds, 7)
+
+
 class RequiredFields(LoopCase):
     def test_a_project_field_the_opener_left_out_is_rejected(self):
         self.config(required_fields={"vision": "which VISION metric this improves"})
@@ -842,6 +1080,32 @@ class Recovery(LoopCase):
         res = self.controller()
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(self.state(1), "landed")
+
+
+class LessonsHelpers(unittest.TestCase):
+    def test_bullets_parse_and_limits(self):
+        from core import memory
+        with tempfile.TemporaryDirectory() as d:
+            f = os.path.join(d, "n.md")
+            with open(f, "w") as fh:
+                fh.write("# h\n- a\n  * b\nplain\n- \n-" + "x" * 1300 + "\n")
+            got = memory.bullets(f)
+            self.assertEqual(got[:2], ["a", "b"])
+            self.assertEqual(len(got), 3)
+            self.assertEqual(len(got[2]), memory.MAX_TEXT)
+            with self.assertRaises(OSError):
+                memory.bullets(os.path.join(d, "missing"))
+
+    def test_import_keys_are_unique_per_import(self):
+        from core import memory
+
+        class Tx:
+            def __init__(self): self.rows = {}
+            def write(self, k, v): self.rows[k] = v
+        tx = Tx()
+        memory.import_lessons(tx, ["a"], "role", "worker", "/x/f.md")
+        memory.import_lessons(tx, ["b"], "role", "worker", "/x/f.md")
+        self.assertEqual(len(tx.rows), 2)
 
 
 class Memory(LoopCase):
@@ -904,6 +1168,84 @@ class Memory(LoopCase):
         self.pool.update(change, "test: one lesson")
         from core import memory
         self.assertEqual(memory.due(self.snap()), [])
+
+
+class T7Acceptance(LoopCase):
+    """Ticket #7: tickets.py lessons imports a project's own old memory as lessons."""
+
+    def write(self, name, text):
+        path = os.path.join(self.tmp, name)
+        with open(path, "w") as fh:
+            fh.write(text)
+        return path
+
+    def lessons(self, *args):
+        return self.run_py("tickets.py", "lessons", *args)
+
+    def rows(self, layer, name):
+        return [r for r in self.snap().lessons.values() if r.get("layer") == layer and r.get("name") == name]
+
+    def pool_commits(self):
+        return int(git(self.pool_path, "rev-list", "--count", "HEAD"))
+
+    def test_item1_every_bullet_line_is_queued_once_with_its_text(self):
+        self.init_without_imports()
+        path = self.write("old-worker.md", "# Old worker notes\n\nA plain line, not a bullet.\n"
+                                           "- dash lesson\n* star lesson\n  - indented lesson  \n")
+        res = self.lessons("--layer", "role", "--name", "worker", "--file", path)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("3", res.stdout)
+        self.assertIn("memory/role/worker.md", res.stdout)
+        rows = self.rows("role", "worker")
+        self.assertEqual(len(self.snap().lessons), 3, "only the three bullets are queued")
+        self.assertEqual(sorted(r["text"] for r in rows), ["dash lesson", "indented lesson", "star lesson"])
+        for r in rows:
+            self.assertIn(path, r.get("source", ""))
+            self.assertTrue(r.get("at"))
+
+    def test_item2_one_pool_commit_and_the_memory_file_is_untouched(self):
+        self.init_without_imports()
+        before = self.snap().memory["memory/role/worker.md"]
+        commits = self.pool_commits()
+        path = self.write("old.md", "- one\n- two\n")
+        res = self.lessons("--layer", "role", "--name", "worker", "--file", path)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(len(self.rows("role", "worker")), 2)
+        self.assertEqual(self.pool_commits(), commits + 1, "one pool commit")
+        self.assertEqual(self.snap().memory["memory/role/worker.md"], before)
+
+    def test_item3_two_files_for_the_same_memory_both_stay_queued(self):
+        self.init_without_imports()
+        a = self.write("a.md", "- a one\n- a two\n")
+        b = self.write("b.md", "- b one\n- b two\n- b three\n")
+        for path in (a, b):
+            res = self.lessons("--layer", "role", "--name", "worker", "--file", path)
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        rows = self.rows("role", "worker")
+        self.assertEqual(len(rows), 5)
+        self.assertEqual(sorted(r["text"] for r in rows),
+                         ["a one", "a two", "b one", "b three", "b two"])
+
+    def test_item4_five_imported_lessons_are_consolidated_by_the_keeper(self):
+        self.init_without_imports()
+        path = self.write("five.md", "".join("- lesson %d from #imp\n" % i for i in range(1, 6)))
+        res = self.lessons("--layer", "role", "--name", "worker", "--file", path)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(len(self.rows("role", "worker")), 5)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        snap = self.snap()
+        self.assertIn("merged 5 lessons", snap.memory["memory/role/worker.md"])
+        self.assertEqual(snap.lessons, {}, "the imported lessons were consumed")
+
+    def test_item5_project_layer_without_name_uses_name_project(self):
+        self.init_without_imports()
+        path = self.write("project-old.md", "- a project reason\n- another invariant\n")
+        res = self.lessons("--layer", "project", "--file", path)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        rows = list(self.snap().lessons.values())
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(r["layer"] == "project" and r["name"] == "project" for r in rows), rows)
 
 
 class Board(LoopCase):
@@ -1024,6 +1366,31 @@ class AgentEnv(LoopCase):
                     os.environ[k] = v
         self.assertEqual([k for k in PARENT_SESSION if k in env], [])
         self.assertEqual(env["DEVLOOP_ROLE"], "worker")
+
+
+class ProjectRulesHome(unittest.TestCase):
+    def read(self, *parts):
+        with open(os.path.join(HOME, *parts)) as f:
+            return f.read()
+
+    def test_template_line_one_and_heading(self):
+        text = self.read("templates", "project-CLAUDE.md")
+        first = text.split("\n", 1)[0]
+        self.assertIn("DEVLOOP_ROLE", first)
+        self.assertIn("Rules for every agent", first)
+        self.assertIn("\n## Rules for every agent\n", text)
+
+    def test_template_old_sentence_and_select_gone(self):
+        text = self.read("templates", "project-CLAUDE.md")
+        self.assertNotIn("agents started by devloop read only their prompt", text)
+        self.assertNotIn("select", text)
+
+    def test_readme_section_points_to_the_home(self):
+        text = self.read("devloop", "README.md")
+        self.assertIn("\n## Project rules for agents\n", text)
+        sec = text.split("\n## Project rules for agents\n", 1)[1].split("\n## ", 1)[0]
+        for word in ("CLAUDE.md", "AGENTS.md", "project memory", "hard_block"):
+            self.assertIn(word, sec.replace("Project memory", "project memory"))
 
 
 class AgentControlRelease(unittest.TestCase):
