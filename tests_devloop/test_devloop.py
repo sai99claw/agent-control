@@ -643,6 +643,84 @@ class Memory(LoopCase):
         self.assertEqual(memory.due(self.snap()), [])
 
 
+class T7Acceptance(LoopCase):
+    """Ticket #7: tickets.py lessons imports a project's own old memory as lessons."""
+
+    def write(self, name, text):
+        path = os.path.join(self.tmp, name)
+        with open(path, "w") as fh:
+            fh.write(text)
+        return path
+
+    def lessons(self, *args):
+        return self.run_py("tickets.py", "lessons", *args)
+
+    def rows(self, layer, name):
+        return [r for r in self.snap().lessons.values() if r.get("layer") == layer and r.get("name") == name]
+
+    def pool_commits(self):
+        return int(git(self.pool_path, "rev-list", "--count", "HEAD"))
+
+    def test_item1_every_bullet_line_is_queued_once_with_its_text(self):
+        self.init_without_imports()
+        path = self.write("old-worker.md", "# Old worker notes\n\nA plain line, not a bullet.\n"
+                                           "- dash lesson\n* star lesson\n  - indented lesson  \n")
+        res = self.lessons("--layer", "role", "--name", "worker", "--file", path)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("3", res.stdout)
+        self.assertIn("memory/role/worker.md", res.stdout)
+        rows = self.rows("role", "worker")
+        self.assertEqual(len(self.snap().lessons), 3, "only the three bullets are queued")
+        self.assertEqual(sorted(r["text"] for r in rows), ["dash lesson", "indented lesson", "star lesson"])
+        for r in rows:
+            self.assertIn(path, r.get("source", ""))
+            self.assertTrue(r.get("at"))
+
+    def test_item2_one_pool_commit_and_the_memory_file_is_untouched(self):
+        self.init_without_imports()
+        before = self.snap().memory["memory/role/worker.md"]
+        commits = self.pool_commits()
+        path = self.write("old.md", "- one\n- two\n")
+        res = self.lessons("--layer", "role", "--name", "worker", "--file", path)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(len(self.rows("role", "worker")), 2)
+        self.assertEqual(self.pool_commits(), commits + 1, "one pool commit")
+        self.assertEqual(self.snap().memory["memory/role/worker.md"], before)
+
+    def test_item3_two_files_for_the_same_memory_both_stay_queued(self):
+        self.init_without_imports()
+        a = self.write("a.md", "- a one\n- a two\n")
+        b = self.write("b.md", "- b one\n- b two\n- b three\n")
+        for path in (a, b):
+            res = self.lessons("--layer", "role", "--name", "worker", "--file", path)
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        rows = self.rows("role", "worker")
+        self.assertEqual(len(rows), 5)
+        self.assertEqual(sorted(r["text"] for r in rows),
+                         ["a one", "a two", "b one", "b three", "b two"])
+
+    def test_item4_five_imported_lessons_are_consolidated_by_the_keeper(self):
+        self.init_without_imports()
+        path = self.write("five.md", "".join("- lesson %d from #imp\n" % i for i in range(1, 6)))
+        res = self.lessons("--layer", "role", "--name", "worker", "--file", path)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(len(self.rows("role", "worker")), 5)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        snap = self.snap()
+        self.assertIn("merged 5 lessons", snap.memory["memory/role/worker.md"])
+        self.assertEqual(snap.lessons, {}, "the imported lessons were consumed")
+
+    def test_item5_project_layer_without_name_uses_name_project(self):
+        self.init_without_imports()
+        path = self.write("project-old.md", "- a project reason\n- another invariant\n")
+        res = self.lessons("--layer", "project", "--file", path)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        rows = list(self.snap().lessons.values())
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(r["layer"] == "project" and r["name"] == "project" for r in rows), rows)
+
+
 class Board(LoopCase):
     def test_the_page_shows_the_four_numbers_from_the_pool(self):
         self.add(1)
