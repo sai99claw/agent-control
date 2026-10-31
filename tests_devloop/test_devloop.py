@@ -537,6 +537,15 @@ class Landing(LoopCase):
         self.assertIsNone(total["input_tokens"])
 
 
+class ReleaseTimeoutSetting(LoopCase):
+    def test_release_timeout_defaults_to_3600_and_can_be_set(self):
+        from core.config import Config
+        self.config(release="true")
+        self.assertEqual(Config(self.proj).release_timeout_seconds, 3600)
+        self.config(release_timeout_seconds=7)
+        self.assertEqual(Config(self.proj).release_timeout_seconds, 7)
+
+
 class RequiredFields(LoopCase):
     def test_a_project_field_the_opener_left_out_is_rejected(self):
         self.config(required_fields={"vision": "which VISION metric this improves"})

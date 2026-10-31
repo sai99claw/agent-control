@@ -306,7 +306,7 @@ class Controller:
         tree = os.path.join(self.cfg.worktree_root, "release-" + g["id"])
         try:
             self.repo.detached(tree, sha)
-            res = osx.run(["sh", "-c", self.release_cmd], cwd=tree, timeout=3600,
+            res = osx.run(["sh", "-c", self.release_cmd], cwd=tree, timeout=self.cfg.release_timeout_seconds,
                           env=self.cfg.env(DEVLOOP_RELEASE_SHA=sha, DEVLOOP_GROUP=g["id"],
                                            DEVLOOP_TICKETS=",".join(g.get("members") or []),
                                            DEVLOOP_REMOTE=self.cfg.values.get("remote")),
