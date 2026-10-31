@@ -98,7 +98,7 @@ class Config:
         return cmd
 
     def env(self, **extra):
-        env = dict(os.environ, AC_HOME=self.home, AC_ROOT=self.root)
+        env = dict(os.environ, AC_HOME=self.home, AC_ROOT=self.root, PYTHONDONTWRITEBYTECODE="1")
         env.update({k: str(v) for k, v in extra.items() if v is not None})
         return env
 

@@ -41,7 +41,7 @@ def fix(cfg, pool, gid, report):
     before = g.sha("HEAD")
     main = cfg.main_branch
     main_moved = not g.is_ancestor(main, "HEAD")
-    if main_moved and g.merge(main) and report.get("status") != "red":
+    if main_moved and g.merge(main)[0] and report.get("status") != "red":
         return 0                       # main taken in cleanly; regression decides the rest
 
     rnd = int(group.get("fix_round") or 0)

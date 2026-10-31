@@ -21,6 +21,8 @@ touch any other branch, do not push, do not merge into {target} (a script does t
    Run them with: {test_cmd}
    Run only those cases and the tests next to the code you changed - not the full suite.
 3. Commit everything. An uncommitted change counts as not handed in.
+   Commit source and test files only - never generated files (caches such as __pycache__,
+   build output, logs). If such files show up in `git status`, add them to .gitignore instead.
 
 ## If you think the ticket (or the verifier's cases) is wrong
 

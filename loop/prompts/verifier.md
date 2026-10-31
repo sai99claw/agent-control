@@ -18,6 +18,8 @@ branch.
    (not by an import error or a missing name - assert that a symbol exists first if needed).
    Run them with: {test_cmd}
 3. Commit the cases on {cases_branch}.
+   Commit source and test files only - never generated files (caches such as __pycache__,
+   build output, logs). If such files show up in `git status`, add them to .gitignore instead.
 
 ## Hand-in
 

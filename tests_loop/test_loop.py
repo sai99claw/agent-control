@@ -329,6 +329,29 @@ class PoolRules(unittest.TestCase):
         self.assertIn("5", self.b.snapshot().tickets)
 
 
+class GitRules(unittest.TestCase):
+    def test_a_merge_blocked_by_an_untracked_file_is_reported_not_raised(self):
+        tmp = tempfile.mkdtemp(prefix="loop-git-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        git(tmp, "init", "-q", "-b", "main")
+        git(tmp, "config", "user.name", "t")
+        git(tmp, "config", "user.email", "t@t")
+        open(os.path.join(tmp, "a.txt"), "w").write("a")
+        git(tmp, "add", "-A")
+        git(tmp, "commit", "-q", "-m", "a")
+        git(tmp, "checkout", "-q", "-b", "other")
+        open(os.path.join(tmp, "cache.pyc"), "w").write("from other")
+        git(tmp, "add", "-A")
+        git(tmp, "commit", "-q", "-m", "cache")
+        git(tmp, "checkout", "-q", "main")
+        open(os.path.join(tmp, "cache.pyc"), "w").write("untracked here")
+        from core.gitx import Git
+        ok, why = Git(tmp).merge("other")
+        self.assertFalse(ok)
+        self.assertIn("overwritten", why)
+        self.assertEqual(git(tmp, "status", "--porcelain"), "?? cache.pyc")
+
+
 class DagRules(unittest.TestCase):
     def test_problems(self):
         dag = {"1": {"depends_on": ["2"]}, "2": {"depends_on": ["1"]}, "3": {"depends_on": ["9"]},

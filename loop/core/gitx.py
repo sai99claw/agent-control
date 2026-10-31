@@ -72,16 +72,19 @@ class Git:
     # ------------------------------------------------------------ changes
 
     def merge(self, ref):
-        """Merge `ref` into the checked-out branch. Returns True, or False on conflict
-        (the merge is aborted, the tree is clean again)."""
+        """Merge `ref` into the checked-out branch. Returns (True, "") or (False, why).
+
+        Any failure - a conflict, untracked files in the way, anything git refuses - is the
+        caller's to hand to someone who can resolve it; the merge is aborted so the tree is
+        as it was."""
         res = self.run("merge", "--no-edit", "--no-ff", ref, check=False)
         if res.ok:
-            return True
+            return True, ""
         self.run("merge", "--abort", check=False)
-        if "CONFLICT" in res.out or "CONFLICT" in res.err or "conflict" in res.err:
-            return False
-        raise GitError("git merge %s failed in %s: %s" % (
-            ref, self.cwd, (res.err or res.out).strip().splitlines()[-1:]))
+        lines = [l for l in (res.out + "\n" + res.err).splitlines() if l.strip()]
+        keep = [l.strip() for l in lines if "CONFLICT" in l or "error:" in l or "overwritten" in l
+                or l.startswith("\t")]
+        return False, "; ".join(keep[:8]) or (lines[-1] if lines else "rc %s" % res.rc)
 
     def move_ref(self, branch, new, old):
         """Compare-and-swap a branch: succeeds only if it still points at `old`."""

@@ -158,9 +158,10 @@ class Issuer:
             return "the worktree has uncommitted changes; commit everything before handing in", costs
         cases = t.get("cases") or {}
         if cases.get("branch") and not g.is_ancestor(cases["branch"], "HEAD"):
-            if not g.merge(cases["branch"]):
-                return ("merging the verifier's branch %s conflicts; merge it into %s yourself "
-                        "and resolve" % (cases["branch"], self.branch)), costs
+            ok, why = g.merge(cases["branch"])
+            if not ok:
+                return ("merging the verifier's branch %s into %s failed (%s); merge it "
+                        "yourself and resolve" % (cases["branch"], self.branch, why)), costs
 
         self.hard_block(g)
 
@@ -182,10 +183,11 @@ class Issuer:
         for _ in range(8):
             old = self.repo.sha(self.target)
             if not g.is_ancestor(old, "HEAD"):
-                if not g.merge(self.target):
-                    return ("merging the latest %s into %s conflicts (another ticket of this "
-                            "group changed the same code); merge %s yourself and resolve" % (
-                                self.target, self.branch, self.target))
+                ok, why = g.merge(self.target)
+                if not ok:
+                    return ("merging the latest %s into %s failed (%s) - another ticket of "
+                            "this group changed the same files; merge %s yourself and resolve" % (
+                                self.target, self.branch, why, self.target))
                 failed = self.run_cases(t)
                 if failed:
                     return "after taking in %s: %s" % (self.target, failed)
