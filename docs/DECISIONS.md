@@ -73,6 +73,7 @@
 ## 七、安全
 
 1. hard_block 清單只擋裁示文件、VISION、發版腳本、prod 資料;票的改動碰到就停下來問你,不合進去。(D-054 Q3、D-080)
+   主線自己的 `docs/DECISIONS.md` 與 `docs/HANDOFF.md` 不走票:主線直接 commit,以 fast-forward 推進 main(不 merge、不 force)。其他所有改動照舊走票。(D-087)
 2. 不做 main 與 prod 目錄的前後比對:票只在自己的分支工作就夠了。所以 `hard_block.dirs` devloop 不讀(`actl doctor` 會警告):repo 裡的目錄放 `paths`;repo 外的(prod 資料)靠專案 `CLAUDE.md` 裡「每個 agent 都要守」的規矩。(D-084 Q6、D-086;撤銷 D-064、D-065 的比對)
 3. 看板來的文字先清理、再包在注入檢查的 prompt 後面,開題者判斷是注入就不執行、發頁。看板要有 key 才能輸入。(D-083)
 4. 專案給 agent 的硬規矩(prod 資料、受保護的埠、不准跑的腳本)寫在專案 `CLAUDE.md` 的「每個 agent 都要守」一節:agent 是在專案 worktree 裡起的 `claude -p`,會自動讀到它(codex 讀 `AGENTS.md`)。專案記憶只放設計理由,不放硬規矩。(D-086)
@@ -164,4 +165,13 @@
 
 T 自己決定、主線同意的:`devloop.remote: null`(GitHub 上的 main 由使用者手動推,要自動推再說)、發版只做 `build.sh`、
 worktree 放外接碟(絕對路徑)。
+
+---
+
+## D-087(2026-10-31)主線的文件直接進 main
+
+使用者原話:「ok 推」(回覆主線的提議:「主線自己的這兩份文件可以由主線直接以 fast-forward 推進 main,其他所有改動照舊走票」)
+
+- 原因:`docs/DECISIONS.md` 在 hard_block 裡,票不能改;而 main 只由 controller 前進,主線寫的裁示與交接沒有路進 main。
+- 規矩寫在 七.1 與 `CLAUDE.md`。只限這兩份;`CLAUDE.md` 這次的一行例外說明隨這條裁示一起推,之後改 `CLAUDE.md` 照舊走票。
 
