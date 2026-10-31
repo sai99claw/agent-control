@@ -742,6 +742,94 @@ class ProcessCount(ParallelFixture):
         self.assertEqual(count, 3, line)
         self.assertNotIn("capped", tail)
 
+    # ---- the macOS source (vm_stat) is tried last; run_tool / vm_stat_bytes are its pieces
+
+    def fake_exe(self, name, body):
+        path = os.path.join(self.tmp, name)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("#!/bin/sh\n" + body)
+        os.chmod(path, 0o755)
+        return path
+
+    def vm_stat_report(self, free=1000, inactive=500, page=16384):
+        return ("Mach Virtual Memory Statistics: (page size of %d bytes)\n"
+                "Pages free:                               %d.\n"
+                "Pages inactive:                           %d.\n" % (page, free, inactive))
+
+    def unknown_line(self, **env):
+        cgroup = fake_cgroup(os.path.join(self.tmp, "u"), cpu_max="400000 100000")
+        cgroup.update(env)
+        count, _, _, line = self.line_of_any(cgroup)
+        self.assertIn("available memory unknown, fallback 1", line)
+        self.assertEqual(count, 1, line)
+
+    def line_of_any(self, cgroup):
+        done, _ = self.full(env=self.env(FX_MARKS=self.marks, **cgroup))
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        lines = self.parallel_lines(done)
+        self.assertEqual(len(lines), 1, done.stdout)
+        found = re.match(r"^parallel: (\d+) processes \(cores (\d+)", lines[0])
+        self.assertTrue(found, lines[0])
+        return int(found.group(1)), int(found.group(2)), None, lines[0]
+
+    def test_cgroup_wins_and_vm_stat_is_not_run(self):
+        marker = os.path.join(self.tmp, "ran")
+        fake = self.fake_exe("vm_stat_fake", "touch %s\n" % marker)
+        cgroup = fake_cgroup(os.path.join(self.tmp, "g"), cpu_max="400000 100000",
+                             free_mib=10 * PEAK_MIB)
+        count, _, _, line = self.line_of(dict(cgroup, AC_VM_STAT=fake))
+        self.assertIn("available memory %d MiB" % (10 * PEAK_MIB), line)
+        self.assertFalse(os.path.exists(marker))
+
+    def test_meminfo_wins_and_vm_stat_is_not_run(self):
+        marker = os.path.join(self.tmp, "ran")
+        fake = self.fake_exe("vm_stat_fake", "touch %s\n" % marker)
+        cgroup = fake_cgroup(os.path.join(self.tmp, "m"), meminfo_kb=100 * PEAK_MIB * 1024)
+        _, _, _, line = self.line_of(dict(cgroup, AC_VM_STAT=fake))
+        self.assertIn("available memory %d MiB" % (100 * PEAK_MIB), line)
+        self.assertFalse(os.path.exists(marker))
+
+    def test_vm_stat_missing_failing_or_unparsable_is_unknown(self):
+        self.unknown_line(AC_VM_STAT=os.path.join(self.tmp, "nope"))
+        self.unknown_line(AC_VM_STAT=self.fake_exe("bad", "exit 3\n"))
+        self.unknown_line(AC_VM_STAT=self.fake_exe(
+            "nofree", "printf 'Mach Virtual Memory Statistics: (page size of 4096 bytes)\\n'\n"))
+        self.unknown_line(AC_VM_STAT=self.fake_exe(
+            "nohdr", "printf 'Pages free: 10.\\nPages inactive: 5.\\n'\n"))
+
+    def test_vm_stat_that_hangs_is_stopped_after_10_seconds(self):
+        fake = self.fake_exe("hang", "exec sleep 60\n")
+        began = time.monotonic()
+        self.unknown_line(AC_VM_STAT=fake)
+        self.assertLess(time.monotonic() - began, 40)
+
+    def test_vm_stat_default_is_looked_up_on_path(self):
+        bindir = os.path.join(self.tmp, "bin")
+        os.makedirs(bindir)
+        for name, body in (("vm_stat", "cat <<'EOF'\n%sEOF\n" % self.vm_stat_report(6400, 0, 4096)),
+                           ("sysctl", "exit 1\n")):
+            path = os.path.join(bindir, name)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("#!/bin/sh\n" + body)
+            os.chmod(path, 0o755)
+        cgroup = fake_cgroup(os.path.join(self.tmp, "p"), cpu_max="400000 100000")
+        env = self.env(FX_MARKS=self.marks, **cgroup)
+        env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
+        done, _ = self.full(env=env)
+        self.assertIn("available memory 25 MiB", done.stdout + done.stderr)
+
+    def test_vm_stat_bytes_pieces(self):
+        adapter_mod = load_adapter()
+        report = self.fake_exe("ok", "cat <<'EOF'\n%sEOF\n" % self.vm_stat_report(10, 5, 4096))
+        big = self.fake_exe("big", "echo 99999999999\n")
+        small = self.fake_exe("small", "echo 1000\n")
+        bad = self.fake_exe("badctl", "exit 1\n")
+        self.assertEqual(adapter_mod.vm_stat_bytes(report, big), 15 * 4096)
+        self.assertEqual(adapter_mod.vm_stat_bytes(report, small), 1000)
+        self.assertEqual(adapter_mod.vm_stat_bytes(report, bad), 15 * 4096)
+        self.assertIsNone(adapter_mod.vm_stat_bytes(bad, big))
+        self.assertIsNone(adapter_mod.run_tool([os.path.join(self.tmp, "missing")]))
+
 
 if __name__ == "__main__":
     unittest.main()

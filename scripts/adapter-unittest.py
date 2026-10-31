@@ -52,6 +52,7 @@ import fnmatch
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -513,8 +514,36 @@ def cgroup_cores(cgroup):
     return cpus
 
 
-def available_bytes(cgroup, meminfo):
-    """`memory.max - memory.current` when both are numbers, else `MemAvailable`; None = neither."""
+def run_tool(argv):
+    """stdout of `argv` when it ran, exited 0 and finished within 10 seconds; else None."""
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def vm_stat_bytes(vm_stat, sysctl):
+    """macOS: `(Pages free + Pages inactive) * page size` from a `vm_stat` report (page size from its
+    header), capped by `sysctl -n hw.memsize` when that prints a positive integer. None = no number."""
+    report = run_tool([vm_stat])
+    if report is None:
+        return None
+    header = re.search(r"\(page size of (\d+) bytes\)", report)
+    free = re.search(r"^Pages free:\s+(\d+)\.", report, re.MULTILINE)
+    inactive = re.search(r"^Pages inactive:\s+(\d+)\.", report, re.MULTILINE)
+    if not (header and free and inactive) or int(header.group(1)) < 1:
+        return None
+    available = (int(free.group(1)) + int(inactive.group(1))) * int(header.group(1))
+    total = (run_tool([sysctl, "-n", "hw.memsize"]) or "").strip()
+    if total.isdigit() and int(total) > 0:
+        available = min(available, int(total))
+    return available
+
+
+def available_bytes(cgroup, meminfo, vm_stat="vm_stat", sysctl="sysctl"):
+    """`memory.max - memory.current` when both are numbers, else `MemAvailable`, else (macOS) the
+    `vm_stat` free + inactive pages capped by `hw.memsize`; None = none of them gave a number."""
     limit = read_text(os.path.join(cgroup, "memory.max")) or ""
     used = read_text(os.path.join(cgroup, "memory.current")) or ""
     if limit.isdigit() and used.isdigit():
@@ -523,7 +552,7 @@ def available_bytes(cgroup, meminfo):
         fields = line.split()
         if len(fields) >= 2 and fields[0] == "MemAvailable:" and fields[1].isdigit():
             return int(fields[1]) * 1024
-    return None
+    return vm_stat_bytes(vm_stat, sysctl)
 
 
 def process_count(cap):
@@ -533,7 +562,9 @@ def process_count(cap):
     cgroup = os.environ.get("AC_CGROUP_ROOT") or DEFAULT_CGROUP_ROOT
     meminfo = os.environ.get("AC_MEMINFO") or DEFAULT_MEMINFO
     cores = cgroup_cores(cgroup)
-    free = available_bytes(cgroup, meminfo)
+    vm_stat = os.environ.get("AC_VM_STAT") or "vm_stat"
+    sysctl = os.environ.get("AC_SYSCTL") or "sysctl"
+    free = available_bytes(cgroup, meminfo, vm_stat, sysctl)
     count = max(1, cores - 1)
     notes = []
     if free is None:
