@@ -56,6 +56,7 @@ DEFAULTS = {
     "required_fields": {},           # extra ticket fields the opener must fill: {"name": "what to write"}
     "unlimited_tokens": False,       # D-084 Q1: when true, memory consolidation is a two-model discussion
     "machine_slots": None,           # at most N agent / test runs at once on the machine; null = no limit
+    "regression_exclusive": False,   # true: a regression runs alone on the machine (needs machine_slots)
     "agents": DEFAULT_AGENTS,
 }
 
@@ -79,6 +80,14 @@ class Config:
         if slots is not None and (isinstance(slots, bool) or not isinstance(slots, int) or slots < 1):
             raise osx.OSFailure("board/config.json devloop.machine_slots must be null or a whole number "
                                 ">= 1, not %r" % (slots,))
+        exclusive = self.values.get("regression_exclusive")
+        if not isinstance(exclusive, bool):
+            raise osx.OSFailure("board/config.json devloop.regression_exclusive must be true or false, "
+                                "not %r" % (exclusive,))
+        if exclusive and slots is None:
+            raise osx.OSFailure("board/config.json devloop.regression_exclusive is true but "
+                                "devloop.machine_slots is not set: exclusivity is counted in slots, "
+                                "so it needs a slot count")
         hb = raw.get("hard_block") or {}
         self.hard_paths = list(hb.get("paths") or [])
         self.hard_patterns = list(hb.get("patterns") or [])

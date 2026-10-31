@@ -222,6 +222,164 @@ class RoundsAndFeedback(LoopCase):
         self.assertFalse(self.main_has("impl_1.txt"))
 
 
+class ExclusiveRegression(LoopCase):
+    """devloop.regression_exclusive: the implementer's tests (gate and whole-machine take in core/slots.py)."""
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)     # this process is not nested under a slot
+        os.environ["AC_ROOT"] = self.proj
+        self.slot_dir = os.path.join(self.tmp, "wt", "slots")
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def test_off_by_default_and_only_a_bool(self):
+        import time
+        from core import slots
+        self.config(machine_slots=1)
+        self.assertIs(self.cfg().regression_exclusive, False)
+        slot = slots.take(self.cfg(), time.time() + 1)
+        slot.release()
+        self.assertEqual(os.listdir(self.slot_dir), ["slot-0"])     # no gate file when off
+        for bad in (1, 0, "true", None, [True]):
+            self.config(machine_slots=1, regression_exclusive=bad)
+            with self.assertRaises(osx.OSFailure) as ctx:
+                self.cfg()
+            self.assertIn("devloop.regression_exclusive", str(ctx.exception))
+        self.config(machine_slots=None, regression_exclusive=False)
+        self.assertIs(self.cfg().regression_exclusive, False)
+
+    def test_exclusive_needs_slots(self):
+        self.config(machine_slots=None, regression_exclusive=True)
+        with self.assertRaises(osx.OSFailure) as ctx:
+            self.cfg()
+        self.assertIn("devloop.regression_exclusive", str(ctx.exception))
+        self.assertIn("devloop.machine_slots", str(ctx.exception))
+
+    def test_the_machine_take_holds_every_slot_and_blocks_new_takers(self):
+        import time
+        from core import slots
+        self.config(machine_slots=2, regression_exclusive=True)
+        cfg = self.cfg()
+        machine = slots.take_machine(cfg, time.time() + 2)
+        self.assertTrue(machine and machine.held)
+        self.assertEqual(sorted(os.path.basename(s.path) for s in machine.slots), ["slot-0", "slot-1"])
+        began = time.time()
+        self.assertIsNone(slots.take(cfg, time.time() + 0.6))     # gate shut: no slot although waiting
+        self.assertGreaterEqual(time.time() - began, 0.5)
+        machine.release()
+        machine.release()                                         # idempotent
+        slot = slots.take(cfg, time.time() + 1)
+        self.assertTrue(slot and slot.held)
+        slot.release()
+        self.assertEqual(sorted(os.listdir(self.slot_dir)), ["exclusive", "slot-0", "slot-1"])
+
+    def test_a_machine_take_waits_for_held_slots_and_gives_up_cleanly(self):
+        import fcntl
+        import time
+        from core import slots
+        self.config(machine_slots=2, regression_exclusive=True)
+        cfg = self.cfg()
+        held = slots.take(cfg, time.time() + 1)
+        self.assertEqual(os.path.basename(held.path), "slot-0")
+        self.assertIsNone(slots.take_machine(cfg, time.time() + 0.6))
+        # nothing left behind: the gate and slot-1 can be locked exclusively again
+        for name in ("exclusive", "slot-1"):
+            with open(os.path.join(self.slot_dir, name), "a") as fh:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        held.release()
+        machine = slots.take_machine(cfg, time.time() + 1)
+        self.assertTrue(machine and machine.held)
+        machine.release()
+
+    def test_a_shut_gate_alone_keeps_takers_off_free_slots(self):
+        import fcntl
+        import time
+        from core import slots
+        self.config(machine_slots=2, regression_exclusive=True)
+        os.makedirs(self.slot_dir, exist_ok=True)
+        fh = open(os.path.join(self.slot_dir, "exclusive"), "a")
+        self.addCleanup(fh.close)
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        began = time.time()
+        self.assertIsNone(slots.take(self.cfg(), time.time() + 0.6))
+        self.assertGreaterEqual(time.time() - began, 0.5)
+        fcntl.flock(fh, fcntl.LOCK_UN)
+        slot = slots.take(self.cfg(), time.time() + 1)
+        self.assertTrue(slot and slot.held)
+        slot.release()
+
+    def test_a_nested_run_ignores_the_gate(self):
+        import fcntl
+        import time
+        from core import slots
+        self.config(machine_slots=1, regression_exclusive=True)
+        os.makedirs(self.slot_dir, exist_ok=True)
+        fh = open(os.path.join(self.slot_dir, "exclusive"), "a")
+        self.addCleanup(fh.close)
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        os.environ["DEVLOOP_SLOT"] = os.path.join(self.slot_dir, "slot-0")
+        began = time.time()
+        self.assertFalse(slots.take(self.cfg(), time.time() + 5).held)
+        self.assertLess(time.time() - began, 0.5)
+
+    def test_a_regression_holding_the_mark_that_dies_blocks_nobody(self):
+        import time
+        from core import slots
+        self.config(machine_slots=2, regression_exclusive=True)
+        code = ("import sys, time; sys.path.insert(0, %r)\n"
+                "from core.config import Config\nfrom core import slots\n"
+                "m = slots.take_machine(Config(%r), time.time() + 10)\n"
+                "print('held' if m and m.held else 'none', flush=True)\ntime.sleep(60)\n" % (LOOP, self.proj))
+        child = subprocess.Popen(["python3", "-c", code], stdout=subprocess.PIPE, text=True,
+                                 env=os.environ.copy())
+        self.addCleanup(child.stdout.close)
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        self.assertEqual(child.stdout.readline().strip(), "held")
+        cfg = self.cfg()
+        self.assertIsNone(slots.take(cfg, time.time() + 0.6))
+        child.terminate()
+        child.wait(timeout=10)
+        began = time.time()
+        slot = slots.take(cfg, time.time() + 3)
+        self.assertTrue(slot and slot.held)
+        self.assertLess(time.time() - began, 3.0)
+        slot.release()
+
+    def test_a_regression_without_the_whole_machine_is_unmeasured_and_releases(self):
+        import fcntl
+        import time
+        from core import slots
+        self.config(machine_slots=2, regression_exclusive=True, regression_timeout_seconds=2)
+        held = slots.take(self.cfg(), time.time() + 1)
+        self.addCleanup(held.release)
+        out = os.path.join(self.tmp, "regression.json")
+        began = time.time()
+        res = self.run_py("regression.py", "--branch", "main", "--out", out, timeout=120)
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertGreaterEqual(time.time() - began, 2.0)
+        with open(out) as fh:
+            got = json.load(fh)
+        self.assertEqual(got["status"], "unmeasured")
+        self.assertIn("machine slot", got["summary"])
+        for name in ("exclusive", "slot-1"):
+            with open(os.path.join(self.slot_dir, name), "a") as fh:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_readme_describes_it(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            section = fh.read().split("## Machine slots", 1)[1].split("\n## ", 1)[0]
+        for words in ("regression_exclusive", "slots/exclusive", "needs `machine_slots`"):
+            self.assertIn(words, section)
+
+
 class Regression(LoopCase):
     def test_red_regression_is_fixed_on_the_integration_branch(self):
         self.add(1)

@@ -5,8 +5,9 @@ Started only by ticket_controller. Runs the project's `preflight`, then `full`, 
 worktree at the branch head. An unusable environment is not red: it is reported as "env" and
 nobody is sent to fix code for it.
 
-Holds one machine slot (devloop.machine_slots) from before preflight until full has ended; the
-wait counts against regression_timeout_seconds.
+Holds one machine slot (devloop.machine_slots) from before preflight until full has ended, or with
+devloop.regression_exclusive the whole machine (the gate and every slot); the wait counts against
+regression_timeout_seconds.
 
 Exit: 0 green · 1 red · 86 environment not usable · 2 could not measure. The same outcome is
 written to --out as {"status", "sha", "summary", "failures"}.
@@ -32,10 +33,12 @@ def verify(cfg, branch, out_path):
     if not sha:
         raise osx.OSFailure("branch %s does not exist" % branch)
     began = time.time()
-    slot = slots.take(cfg, began + cfg.regression_timeout_seconds)
+    take, busy = ((slots.take_machine, slots.machine_busy) if cfg.regression_exclusive
+                  else (slots.take, slots.busy))
+    slot = take(cfg, began + cfg.regression_timeout_seconds)
     if slot is None:
         osx.write_json(out_path, {"status": testrun.UNMEASURED, "sha": sha,
-                                  "summary": "could not measure: " + slots.busy(cfg, time.time() - began),
+                                  "summary": "could not measure: " + busy(cfg, time.time() - began),
                                   "failures": [], "at": osx.now()})
         return CODES[testrun.UNMEASURED]
     try:

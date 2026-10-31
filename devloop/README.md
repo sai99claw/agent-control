@@ -64,6 +64,17 @@ Nested runs use their parent's slot: agents get `DEVLOOP_SLOT` (their slot file)
 environment, and a process with it set takes no slot (an agent's `run_tests.py`, a worker's
 `ticket_creator.py --revise`).
 
+`regression_exclusive` (default false) makes a regression take the whole machine: it runs only
+while no other slot is held, and no new slot is taken while it waits or runs. It
+needs `machine_slots` (exclusivity is counted in slots; true without a slot count stops every devloop
+script). The mark is a `flock` LOCK_EX on `<worktrees>/slots/exclusive`, held by the regression
+from the moment it starts waiting until it has released every slot; with it held, the regression
+takes every `slot-<i>`, waiting for each, then runs preflight and `full`. Every other taker needs a
+LOCK_SH on that file, only while it takes its slot; its wait for it counts against its own limit
+like a slot wait. The whole wait counts against `regression_timeout_seconds` ("unmeasured" when the
+machine is not free in time), and a regression that dies leaves nothing locked. Nested runs
+(`DEVLOOP_SLOT` set) do not touch the mark.
+
 ## Agents, models and tests (D-084)
 
 - `agents.<role>` is one command or a chain of commands; the next one is tried when a command is
