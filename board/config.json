@@ -1,68 +1,6 @@
 {
   "config_version": 2,
-  "port": 18905,
-  "tickets_dir": "tickets",
-  "events_file": "board/events.jsonl",
-  "answers_file": "board/answers.jsonl",
   "reports_dir": "reports",
-  "health_urls": {},
-  "routing": {
-    "main": "opus",
-    "second_opinion": "agy:gemini-3.8-flash-high",
-    "discuss": "agy:gemini-3.8-flash-high"
-  },
-  "memory": {
-    "applies_to": [
-      "memory/model/*.md",
-      "memory/role/*.md",
-      "memory/project/*.md"
-    ],
-    "inbox_suffix": ".inbox.md"
-  },
-  "lease_seconds": {
-    "opener": 900,
-    "verifier": 3600,
-    "land": 1800,
-    "worker": 7200
-  },
-  "model_tiers": [
-    "haiku",
-    "sonnet",
-    "opus",
-    "fable"
-  ],
-  "flaky_threshold": 3,
-  "flake_auto_single_runs": 5,
-  "flake_auto_group_runs": 1,
-  "environment_fail_fast_threshold": 8,
-  "flaky_auto_ticket": true,
-  "worker": {
-    "command": "claude -p --model opus --permission-mode acceptEdits --allowedTools Read Edit Write Glob Grep Bash --output-format stream-json --verbose",
-    "timeout_seconds": 3600
-  },
-  "opener": {
-    "command": "claude -p --model opus --permission-mode acceptEdits --allowedTools Read Glob Grep Bash Write --output-format stream-json --verbose",
-    "timeout_seconds": 1800
-  },
-  "reviewer": {
-    "command": "claude -p --model opus --allowedTools Read Glob Grep Bash --output-format json",
-    "timeout_seconds": 1800
-  },
-  "verify_case": {
-    "timeout_seconds": 2700
-  },
-  "apply": {
-    "regen_cmd": ""
-  },
-  "worktree_dir": "../agent-control-wt",
-  "repair": {
-    "max_rounds": 3,
-    "env_rerun": 1
-  },
-  "schedule": {
-    "max_workers": 2,
-    "reland_max": 2
-  },
   "hard_block": {
     "paths": [
       "docs/DECISIONS.md",
@@ -80,274 +18,87 @@
     "adapter": "unittest",
     "unittest": {
       "roots": [
-        "tests"
+        "tests",
+        "tests_devloop"
       ],
       "base": [
-        "test_ticket",
-        "test_event",
-        "test_memory",
-        "test_no_project_names"
+        "test_project_config",
+        "test_no_project_names",
+        "test_testiface"
       ],
       "map": [
         {
-          "match": "tests/control_harness.py",
+          "match": "devloop/*",
           "ids": [
-            "test_ticket",
-            "test_event",
-            "test_memory",
-            "test_land",
-            "test_gate",
-            "test_heartbeat",
-            "test_new_session",
-            "test_board",
-            "test_no_project_names",
-            "test_status",
-            "test_verify_case",
-            "test_apply",
-            "test_auto_fix",
-            "test_inbox",
-            "test_rules",
-            "test_actl",
-            "test_session_hook",
-            "test_review",
-            "test_verify_runner",
-            "test_consolidate_memory"
+            "test_devloop"
+          ]
+        },
+        {
+          "match": "tests_devloop/*",
+          "ids": [
+            "test_devloop"
+          ]
+        },
+        {
+          "match": "scripts/release.sh",
+          "ids": [
+            "test_devloop"
           ]
         },
         {
           "match": "bin/actl",
           "ids": [
-            "test_actl",
             "test_project_config",
-            "test_hooks"
-          ]
-        },
-        {
-          "match": "scripts/hooks.py",
-          "ids": [
-            "test_hooks",
-            "test_session_hook"
+            "test_actl"
           ]
         },
         {
           "match": "scripts/project_config.py",
           "ids": [
             "test_project_config",
-            "test_actl",
-            "test_session_hook"
-          ]
-        },
-        {
-          "match": ".gitignore",
-          "ids": [
-            "test_no_project_names"
-          ]
-        },
-        {
-          "match": "scripts/event.py",
-          "ids": [
-            "test_event",
-            "test_ticket",
-            "test_land",
-            "test_actl"
-          ]
-        },
-        {
-          "match": "scripts/ticket.py",
-          "ids": [
-            "test_ticket",
-            "test_land",
-            "test_auto_fix_codex",
-            "test_schedule"
-          ]
-        },
-        {
-          "match": "scripts/land.sh",
-          "ids": [
-            "test_land"
-          ]
-        },
-        {
-          "match": "scripts/schedule.py",
-          "ids": [
-            "test_schedule",
-            "test_actl"
-          ]
-        },
-        {
-          "match": "scripts/gate.sh",
-          "ids": [
-            "test_gate",
-            "test_status"
-          ]
-        },
-        {
-          "match": "scripts/apply.sh",
-          "ids": [
-            "test_apply"
-          ]
-        },
-        {
-          "match": "scripts/auto-fix.sh",
-          "ids": [
-            "test_auto_fix",
-            "test_auto_fix_codex",
-            "test_rules_delivery"
-          ]
-        },
-        {
-          "match": "scripts/review.sh",
-          "ids": [
-            "test_review",
-            "test_rules_delivery"
-          ]
-        },
-        {
-          "match": "scripts/wtbase.sh",
-          "ids": [
-            "test_apply",
-            "test_auto_fix",
-            "test_land",
-            "test_review",
-            "test_actl",
-            "test_gate",
-            "test_heartbeat",
-            "test_new_session",
-            "test_session_hook",
-            "test_consolidate_memory"
-          ]
-        },
-        {
-          "match": "scripts/inbox.py",
-          "ids": [
-            "test_inbox",
-            "test_gate",
-            "test_land",
-            "test_new_session"
-          ]
-        },
-        {
-          "match": "scripts/rules.py",
-          "ids": [
-            "test_rules",
-            "test_rules_delivery"
-          ]
-        },
-        {
-          "match": "scripts/heartbeat.sh",
-          "ids": [
-            "test_heartbeat"
-          ]
-        },
-        {
-          "match": "scripts/heartbeat.py",
-          "ids": [
-            "test_heartbeat"
-          ]
-        },
-        {
-          "match": "scripts/liveness.py",
-          "ids": [
-            "test_heartbeat",
-            "test_schedule",
-            "test_land"
-          ]
-        },
-        {
-          "match": "scripts/new-session.sh",
-          "ids": [
-            "test_new_session",
-            "test_rules_delivery"
-          ]
-        },
-        {
-          "match": "scripts/session-hook.sh",
-          "ids": [
-            "test_session_hook"
-          ]
-        },
-        {
-          "match": ".claude/settings.json",
-          "ids": [
-            "test_session_hook"
-          ]
-        },
-        {
-          "match": "scripts/consolidate-memory.sh",
-          "ids": [
-            "test_consolidate_memory",
-            "test_new_session"
-          ]
-        },
-        {
-          "match": "scripts/memory.py",
-          "ids": [
-            "test_memory",
-            "test_memory_note_names",
-            "test_memory_lifecycle",
-            "test_memory_layer_policy"
-          ]
-        },
-        {
-          "match": "scripts/verify.py",
-          "ids": [
-            "test_verify_runner",
-            "test_verify_case",
-            "test_actl"
-          ]
-        },
-        {
-          "match": "verify/TAGS.md",
-          "ids": [
-            "test_verify_runner",
-            "test_verify_case",
-            "test_actl"
-          ]
-        },
-        {
-          "match": "verify/TAGS.d/*",
-          "ids": [
-            "test_verify_runner",
-            "test_verify_case",
-            "test_actl"
-          ]
-        },
-        {
-          "match": "scripts/verify-case.py",
-          "ids": [
-            "test_verify_case",
-            "test_actl"
-          ]
-        },
-        {
-          "match": "verify/*",
-          "ids": [
-            "test_verify_runner"
-          ]
-        },
-        {
-          "match": "scripts/status.py",
-          "ids": [
-            "test_status",
-            "test_gate",
-            "test_land"
-          ]
-        },
-        {
-          "match": "scripts/adapter-unittest.py",
-          "ids": [
-            "test_adapter_unittest",
-            "test_status",
-            "test_gate"
+            "test_project_config_cases"
           ]
         },
         {
           "match": "scripts/testiface.py",
           "ids": [
             "test_testiface",
-            "test_gate",
-            "test_status",
+            "test_devloop"
+          ]
+        },
+        {
+          "match": "scripts/adapter-unittest.py",
+          "ids": [
+            "test_adapter_unittest",
+            "test_adapter_cases",
+            "test_testiface"
+          ]
+        },
+        {
+          "match": "scripts/status.py",
+          "ids": [
+            "test_testiface",
+            "test_adapter_unittest"
+          ]
+        },
+        {
+          "match": "scripts/event.py",
+          "ids": [
+            "test_testiface",
+            "test_adapter_unittest"
+          ]
+        },
+        {
+          "match": "scripts/session-hook.sh",
+          "ids": [
             "test_actl"
+          ]
+        },
+        {
+          "match": "tests/control_harness.py",
+          "ids": [
+            "test_project_config",
+            "test_adapter_unittest"
           ]
         },
         {
@@ -358,119 +109,7 @@
           ]
         },
         {
-          "match": "templates/project-*.example.*",
-          "ids": [
-            "test_testiface",
-            "test_no_project_names"
-          ]
-        },
-        {
-          "match": "memory/model/*.md",
-          "ids": [
-            "test_memory",
-            "test_no_project_names",
-            "test_routing_cards"
-          ]
-        },
-        {
-          "match": "memory/role/*.md",
-          "ids": [
-            "test_memory",
-            "test_no_project_names"
-          ]
-        },
-        {
-          "match": "board/board.py",
-          "ids": [
-            "test_board"
-          ]
-        },
-        {
-          "match": "board/config.json",
-          "ids": [
-            "test_board",
-            "test_event",
-            "test_heartbeat",
-            "test_memory",
-            "test_routing_cards"
-          ]
-        },
-        {
-          "match": "scripts/repo-map.py",
-          "ids": [
-            "test_repo_map_contract"
-          ]
-        },
-        {
-          "match": "code-map/catalog.json",
-          "ids": [
-            "test_repo_map_contract"
-          ]
-        },
-        {
-          "match": "code-map/index.json",
-          "ids": [
-            "test_repo_map_contract"
-          ]
-        },
-        {
-          "match": "code-map/INDEX.md",
-          "ids": [
-            "test_repo_map_contract"
-          ]
-        },
-        {
-          "match": "tickets/*.json",
-          "ids": [
-            "test_ticket"
-          ]
-        },
-        {
-          "match": "tickets/SCHEMA.md",
-          "ids": [
-            "test_ticket"
-          ]
-        },
-        {
-          "match": "docs/DESIGN-ENV-SUSPECT.md",
-          "ids": [
-            "test_status",
-            "test_no_project_names"
-          ]
-        },
-        {
-          "match": "docs/DISPATCH-TEMPLATE.md",
-          "ids": [
-            "test_rules_delivery",
-            "test_no_project_names"
-          ]
-        },
-        {
-          "match": "templates/dispatch-verifier.md",
-          "ids": [
-            "test_templates",
-            "test_rules_delivery",
-            "test_no_project_names"
-          ]
-        },
-        {
-          "match": "templates/dispatch-reviewer.md",
-          "ids": [
-            "test_review",
-            "test_templates",
-            "test_rules_delivery",
-            "test_no_project_names"
-          ]
-        },
-        {
-          "match": "templates/dispatch-*.md",
-          "ids": [
-            "test_rules_delivery",
-            "test_no_project_names"
-          ]
-        },
-        {
-          "match": "docs/*.html",
+          "match": "templates/project-*",
           "ids": [
             "test_no_project_names"
           ]
@@ -485,6 +124,7 @@
     }
   },
   "devloop": {
+    "release": "sh scripts/release.sh",
     "required_fields": {
       "vision": "which item of docs/VISION.md and which of its four metrics this ticket improves, and roughly by how much",
       "removes": "which gate, rule or step this ticket removes (VISION: add one, remove one); 'none' only with the reason"

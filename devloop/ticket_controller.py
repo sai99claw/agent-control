@@ -308,7 +308,8 @@ class Controller:
             self.repo.detached(tree, sha)
             res = osx.run(["sh", "-c", self.release_cmd], cwd=tree, timeout=3600,
                           env=self.cfg.env(DEVLOOP_RELEASE_SHA=sha, DEVLOOP_GROUP=g["id"],
-                                           DEVLOOP_TICKETS=",".join(g.get("members") or [])),
+                                           DEVLOOP_TICKETS=",".join(g.get("members") or []),
+                                           DEVLOOP_REMOTE=self.cfg.values.get("remote")),
                           what="release")
             text = (res.out + res.err).strip()[-2000:]
             return res.ok, text if res.ok else "rc %s%s\n%s" % (

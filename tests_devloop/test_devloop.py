@@ -32,6 +32,16 @@ class LoopCase(unittest.TestCase):
     release = None
     loop_extra = {}
 
+    def init_without_imports(self):
+        """A new pool, minus the lessons imported from agent-control's old cards."""
+        self.run_py("tickets.py", "init")
+
+        def change(tx):
+            for key in list(tx.data.lessons):
+                if key.startswith("import-"):
+                    tx.delete("memory/inbox/%s.json" % key)
+        Pool(self.pool_path, remote=None).update(change, "test: drop imported lessons")
+
     def config(self, **devloop):
         path = os.path.join(self.proj, "board", "config.json")
         with open(path) as fh:
@@ -429,6 +439,9 @@ class RedCheck(LoopCase):
         log = git(self.pool_path, "log", "--format=%H", "--grep", "#1: round 1 feedback")
         old = json.loads(git(self.pool_path, "show", "%s:tickets/1.json" % log.split()[0]))
         self.assertIn(words, old["feedback"][-1])
+        roles = [(c["role"], c["round"]) for c in t["cost"]]
+        self.assertEqual(roles, [("worker", 1), ("verifier", 1), ("verifier", 2)],
+                         "only the verifier's cases went back: the worker's hand-in stands")
 
     def test_cases_that_pass_before_the_change_go_back_to_the_verifier(self):
         self._round_two("weak", "already pass before the change")
@@ -515,7 +528,7 @@ class RequiredFields(LoopCase):
 class UnlimitedTokens(LoopCase):
     def test_memory_is_consolidated_by_two_models_with_the_discussion_kept(self):
         self.config(unlimited_tokens=True)
-        self.run_py("tickets.py", "init")
+        self.init_without_imports()
         self.add(1)
         self.plan(worker={"1": ["lessons"]})
         res = self.controller()
@@ -572,8 +585,19 @@ class Memory(LoopCase):
         self.assertGreaterEqual(len(queued), 5)
         self.assertTrue(all(r["source"] == "agent-control model card before devloop" for r in queued))
 
+    def test_an_old_role_card_is_queued_as_lessons_for_the_role_it_now_informs(self):
+        if not os.path.exists(os.path.join(HOME, "memory", "role", "implementer.md")):
+            self.skipTest("no agent-control role card to import")
+        res = self.run_py("tickets.py", "init")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        snap = self.snap()
+        worker = [r for r in snap.lessons.values() if r["layer"] == "role" and r["name"] == "worker"]
+        self.assertTrue(worker)
+        self.assertTrue(all(r["source"] == "agent-control role card before devloop" for r in worker))
+        self.assertEqual(snap.memory["memory/role/worker.md"].splitlines()[0], "# Role memory: worker")
+
     def test_lessons_are_collected_and_five_get_consolidated_by_the_keeper(self):
-        self.run_py("tickets.py", "init")
+        self.init_without_imports()
         self.add(1)
         self.plan(worker={"1": ["lessons"]})
         res = self.controller()
@@ -588,7 +612,7 @@ class Memory(LoopCase):
             self.assertIn("Role memory: worker", fh.read(), "agents start with their role memory")
 
     def test_fewer_than_five_fresh_lessons_wait(self):
-        self.run_py("tickets.py", "init")
+        self.init_without_imports()
 
         def change(tx):
             tx.write("memory/inbox/a.json", {"layer": "role", "name": "worker", "text": "x", "at": osx.now()})
@@ -698,6 +722,68 @@ class GitRules(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("overwritten", why)
         self.assertEqual(git(tmp, "status", "--porcelain"), "?? cache.pyc")
+
+
+class AgentEnv(LoopCase):
+    def test_agents_do_not_inherit_the_parent_claude_session(self):
+        from core.config import Config, PARENT_SESSION
+        saved = {k: os.environ.get(k) for k in PARENT_SESSION}
+        os.environ.update({k: "parent" for k in PARENT_SESSION})
+        try:
+            env = Config(self.proj).env(DEVLOOP_ROLE="worker")
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        self.assertEqual([k for k in PARENT_SESSION if k in env], [])
+        self.assertEqual(env["DEVLOOP_ROLE"], "worker")
+
+
+class AgentControlRelease(unittest.TestCase):
+    """scripts/release.sh, agent-control's own devloop.release: tags the landed commit."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="ac-release-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.git("init", "-q", "-b", "main")
+        self.git("-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "--allow-empty", "-m", "c")
+        self.sha = self.git("rev-parse", "HEAD").strip()
+
+    def git(self, *args):
+        return subprocess.run(["git"] + list(args), cwd=self.tmp, check=True, capture_output=True,
+                              text=True).stdout
+
+    def release(self, **env):
+        full = dict(os.environ, GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@x", **env)
+        full.pop("DEVLOOP_REMOTE", None)
+        full.update(env)
+        return subprocess.run(["sh", os.path.join(HOME, "scripts", "release.sh")], cwd=self.tmp,
+                              env=full, capture_output=True, text=True)
+
+    def test_tags_the_landed_commit_once(self):
+        res = self.release(DEVLOOP_RELEASE_SHA=self.sha, DEVLOOP_GROUP="g1", DEVLOOP_TICKETS="1,2")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        tags = self.git("tag", "--points-at", self.sha).split()
+        self.assertEqual(len(tags), 1)
+        self.assertIn("g1", tags[0])
+        self.assertIn("tickets: 1,2", self.git("tag", "-l", "-n9", tags[0]))
+        again = self.release(DEVLOOP_RELEASE_SHA=self.sha, DEVLOOP_GROUP="g1")
+        self.assertNotEqual(again.returncode, 0)
+        self.assertIn("already exists", again.stderr)
+
+    def test_refuses_without_a_sha(self):
+        self.assertNotEqual(self.release().returncode, 0)
+
+    def test_a_failed_push_fails_the_release(self):
+        res = self.release(DEVLOOP_RELEASE_SHA=self.sha, DEVLOOP_GROUP="g2", DEVLOOP_REMOTE="nowhere")
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("not pushed", res.stderr)
+
+    def test_agent_control_config_names_it(self):
+        with open(os.path.join(HOME, "board", "config.json")) as fh:
+            self.assertEqual(json.load(fh)["devloop"]["release"], "sh scripts/release.sh")
 
 
 class DagRules(unittest.TestCase):

@@ -48,10 +48,15 @@ def _safe(name):
     return "".join(c if c.isalnum() or c in "-._" else "-" for c in str(name)) or "unknown"
 
 
+# agent-control's role cards from before devloop, by the devloop role they now inform.
+OLD_ROLE_CARDS = {"worker": "implementer", "fixer": "implementer", "creator": "opener",
+                  "verifier": "verifier", "reviewer": "reviewer", "consolidator": "consolidator"}
+
+
 def seed(tx, models=(), home=None):
     """Create the memory files that are missing (never overwrites), each with only its heading.
 
-    Older notes (agent-control's model cards from before devloop) are not copied in: every
+    Older notes (agent-control's model and role cards from before devloop) are not copied in: every
     bullet goes to memory/inbox as a lesson, so the consolidator applies the layer contract to
     it like to any other lesson - nothing reaches an agent's prompt unfiltered."""
     have = tx.data.memory
@@ -62,12 +67,17 @@ def seed(tx, models=(), home=None):
         if path in have:
             continue
         tx.write_text(path, SEED[layer].format(name=name))
-        if layer == "model" and home:
-            imported += _import_card(tx, os.path.join(home, "memory", "model", "%s.md" % name), name)
+        if not home:
+            continue
+        if layer == "model":
+            imported += _import_card(tx, os.path.join(home, "memory", "model", "%s.md" % name), layer, name)
+        elif layer == "role" and name in OLD_ROLE_CARDS:
+            imported += _import_card(tx, os.path.join(home, "memory", "role", "%s.md" % OLD_ROLE_CARDS[name]),
+                                     layer, name)
     return imported
 
 
-def _import_card(tx, card, name):
+def _import_card(tx, card, layer, name):
     try:
         with open(card) as fh:
             lines = fh.read().splitlines()
@@ -75,9 +85,9 @@ def _import_card(tx, card, name):
         return 0
     bullets = [l.lstrip("-* ").strip() for l in lines if l.lstrip().startswith(("-", "*"))]
     for i, text in enumerate(b for b in bullets if b):
-        tx.write("memory/inbox/import-%s-%02d.json" % (_safe(name), i), {
-            "layer": "model", "name": name, "text": text[:MAX_TEXT],
-            "source": "agent-control model card before devloop", "at": osx.now()})
+        tx.write("memory/inbox/import-%s-%s-%02d.json" % (layer, _safe(name), i), {
+            "layer": layer, "name": name, "text": text[:MAX_TEXT],
+            "source": "agent-control %s card before devloop" % layer, "at": osx.now()})
     return len(bullets)
 
 

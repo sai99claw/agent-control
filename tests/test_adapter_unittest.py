@@ -143,15 +143,17 @@ class Select(unittest.TestCase):
     def test_unknown_file_is_unmapped_and_test_files_are_built_in(self):
         self.assertEqual(self.select("docs/zzz.unknownext").stdout.splitlines(),
                          ["unmapped docs/zzz.unknownext"])
-        self.assertEqual(self.select("tests/test_event.py").stdout.splitlines(), ["test_event"])
+        self.assertEqual(self.select("tests/test_project_config.py").stdout.splitlines(),
+                         ["test_project_config"])
         gone = self.select("tests/test_gone_zzz.py")
         self.assertEqual(gone.returncode, 0, gone.stderr)
         self.assertEqual(gone.stdout, "", "a deleted test file selects nothing, not unmapped")
 
     def test_several_files_are_deduped_in_order(self):
-        done = self.select("scripts/land.sh", "scripts/status.py", "docs/zzz.unknownext")
+        done = self.select("scripts/project_config.py", "scripts/adapter-unittest.py", "docs/zzz.unknownext")
         self.assertEqual(done.stdout.splitlines(),
-                         ["test_land", "test_status", "test_gate", "unmapped docs/zzz.unknownext"])
+                         ["test_project_config", "test_project_config_cases", "test_adapter_unittest",
+                          "test_adapter_cases", "test_testiface", "unmapped docs/zzz.unknownext"])
 
     def test_first_match_wins_and_empty_ids_is_not_unmapped(self):
         """**Mutation m3** (#173): let a later matching row add its ids too → the first assert is red."""

@@ -59,6 +59,9 @@ class Issuer:
         self.cwt = os.path.join(cfg.worktree_root, "t%s-cases" % self.id)
         self.deadline = time.time() + cfg.issuer_timeout_seconds
         self.pending = []
+        # The worker's hand-in of an earlier round still stands when only the verifier's cases
+        # were sent back: the next round starts the verifier alone.
+        self.worker_ok = False
 
     # ------------------------------------------------------------ pool
 
@@ -119,26 +122,35 @@ class Issuer:
 
     def one_round(self, t, r):
         """Returns (None, costs) when merged into the target, else (feedback text, costs)."""
+        feedback, costs = self._round(t, r)
+        if feedback is not None and not getattr(self, "_verifier_only", False):
+            self.worker_ok = False
+        self._verifier_only = False
+        return feedback, costs
+
+    def _round(self, t, r):
         costs = []
         need_cases = t.get("needs_verifier", True) and not (t.get("cases") or {}).get("run")
         if need_cases:
             self.repo.worktree(self.cwt, self.cases_branch, start=self.repo.sha(self.target))
-        work = self.start("worker", "worker.md", t, r, self.wt)
+        work = None if self.worker_ok else self.start("worker", "worker.md", t, r, self.wt)
         ver = self.start("verifier", "verifier.md", t, r, self.cwt) if need_cases else None
-        hands = [p.finish() for p in [work] + ([ver] if ver else [])]
+        hands = [p.finish() for p in [work, ver] if p]
         self.pending = []
         for h in hands:
             memory.collect(self.pool, h, "#%s r%d %s" % (self.id, r, h.role))
         costs.extend(h.cost for h in hands)
-        whand = hands[0]
-        if whand.kind == "blocked":
+        whand = hands[0] if work else None
+        if whand and whand.kind == "blocked":
             raise Stuck("decision", whand.result.get("text") or "worker says the ticket needs your decision")
 
         problems = []
-        if whand.problem():
+        if whand and whand.problem():
             problems.append(whand.problem())
+        elif whand:
+            self.worker_ok = True
         if ver:
-            vh = hands[1]
+            vh = hands[-1]
             if vh.problem():
                 problems.append(vh.problem())
             elif vh.kind != "cases" or not vh.result.get("run"):
@@ -157,6 +169,7 @@ class Issuer:
                               "cases ready")
                     t = self.ticket()
         if problems:
+            self._verifier_only = self.worker_ok
             return "\n".join(problems), costs
 
         t = self.ticket()          # the worker may have had the ticket revised
@@ -237,6 +250,11 @@ class Issuer:
             return "the cases could not be run on the code before the change (%s)" % out.detail
         mine = [r for r in out.rows if mark in str(r.get("id"))]
         if not mine:
+            broken = [r for r in out.rows if r.get("status") == "error"]
+            if broken:
+                return ("the case modules did not load on the code before the change, so no %s case "
+                        "ran: %s" % (mark, "; ".join("%s: %s" % (r.get("id"), _last_line(
+                            r.get("message") or r.get("exception"))) for r in broken[:5])))
             return ("no acceptance case named %s ran (ids %s); name every acceptance case with %s"
                     % (mark, " ".join(ids), mark))
         passing = [r["id"] for r in mine if r.get("status") == "pass"]
@@ -270,6 +288,8 @@ class Issuer:
     def start(self, role, template, t, r, cwd):
         self.check_time()
         run_dir = self.cfg.runs_dir(self.id, "r%d-%s" % (r, role))
+        simple = role == "worker" and complexity(t) == "simple"
+        chain = "worker_simple" if simple else role
         revise = "python3 %s --revise %s --from %s --reason '<why the ticket is wrong>'" % (
             os.path.join(LOOP, "ticket_creator.py"), self.id, role)
         values = {
@@ -292,15 +312,14 @@ class Issuer:
                 if t.get("needs_verifier", True) else
                 "This ticket has no verifier: write unit tests for your code and the acceptance cases "
                 "yourself, in the project's existing test modules."),
-            "memory": memory.for_prompt(self.pool.snapshot(), role, agents._model(self.cfg.agent(role))),
+            "memory": memory.for_prompt(self.pool.snapshot(), role, agents.model_of(self.cfg.agent(chain))),
             "project_memory": os.path.join(self.pool.path, memory.rel("project", "project")),
         }
         timeout = min(self.cfg.agent_timeout_seconds, self.left())
-        simple = role == "worker" and complexity(t) == "simple"
         p = agents.start(self.cfg, role, agents.render(template, values), cwd, run_dir, timeout,
                          extra_env={"DEVLOOP_TICKET": self.id, "AC_CODE_ROOT": cwd},
                          effort=t.get("effort") if role == "worker" else None, round_no=r,
-                         chain_role="worker_simple" if simple else None)
+                         chain_role=chain)
         self.pending.append(p)
         return p
 
@@ -350,6 +369,11 @@ def complexity(t):
     if value in ("simple", "complex"):
         return value
     return "complex" if t.get("needs_review") else "simple"
+
+
+def _last_line(text):
+    lines = str(text or "error").strip().splitlines()
+    return lines[-1] if lines else "error"
 
 
 def case_mark(ident):

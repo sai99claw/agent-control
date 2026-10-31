@@ -118,7 +118,7 @@ class ProjectConfigCases(Sandbox):
         self.assertIn("config_version", done.stderr, self.say(done))
         self.assertRegex(done.stderr, r"config_version\D{0,20}\b0\b",
                          "the message names the value 0")
-        gated = self.actl("ticket", "list", "--open")
+        gated = self.actl("check")
         self.assertEqual(gated.returncode, 2, "actl runs check first\n" + self.say(gated))
         self.assertIn("config_version", gated.stderr, self.say(gated))
 

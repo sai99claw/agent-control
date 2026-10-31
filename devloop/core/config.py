@@ -131,10 +131,20 @@ class Config:
         return cmd
 
     def env(self, **extra):
-        env = dict(os.environ, AC_HOME=self.home, AC_ROOT=self.root, PYTHONDONTWRITEBYTECODE="1",
+        env = {k: v for k, v in os.environ.items() if k not in PARENT_SESSION}
+        env.update(AC_HOME=self.home, AC_ROOT=self.root, PYTHONDONTWRITEBYTECODE="1",
                    AC_REPORTS_DIR=os.path.join(self.worktree_root, "reports"))
         env.update({k: str(v) for k, v in extra.items() if v is not None})
         return env
+
+
+# When devloop is started from inside a Claude Code session, these name that session. An agent
+# that inherits them reports under the parent's session id and may post into its transcript;
+# each agent must be its own session.
+PARENT_SESSION = ("CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_REMOTE_SESSION_ID", "CLAUDE_CODE_REMOTE_SDK_URL",
+                  "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_SYNC_SESSION_REFS",
+                  "CLAUDE_CODE_POST_FOR_SESSION_INGRESS_V2", "CLAUDE_CODE_MESSAGING_SOCKET",
+                  "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_PID")
 
 
 def project_root():

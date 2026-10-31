@@ -98,7 +98,7 @@ class NoProjectNames(unittest.TestCase):
         (`docs/DISPATCH-TEMPLATE.md` §5.5「沒有輸入也算跑過」)。"""
         names = repo_files()
         self.assertGreater(len(names), 20, "掃到的檔太少,八成是 git 那一問失敗了")
-        for must in ("scripts/land.sh", "board/board.py", "CLAUDE.md"):
+        for must in ("devloop/ticket_controller.py", "devloop/board.py", "CLAUDE.md"):
             self.assertIn(must, names)
 
     def test_no_code_or_config_names_the_project_it_came_from(self):
@@ -152,17 +152,6 @@ class NoProjectNames(unittest.TestCase):
         home_text = "在 %s底下跑" % ABSOLUTE_HOME
         self.assertEqual(offences("docs/FLOW.html", home_text), [ABSOLUTE_HOME])
         self.assertEqual(offences("tickets/23.json", home_text), [ABSOLUTE_HOME])
-
-    def test_real_flow_html_passes_the_project_name_check(self):
-        """對真正的 `docs/FLOW.html` 內容重現 #30 的 acceptance #1 —— 這份檔在修好
-        之前會被 `test_no_code_or_config_names_the_project_it_came_from` 印出來
-        (該測試靠 `git ls-files` 找檔案,在沒有 `.git` 的派工副本裡掃不到任何檔,
-        所以這裡改成直接讀檔驗證同一個判準,不依賴 git)。`tickets/23.json` 的內容
-        由主線另外處理(絕對路徑那一格),這裡不對它的即時內容斷言,避免跟主線的
-        修改撞期。"""
-        flow_html = self.read("docs/FLOW.html")
-        self.assertEqual(offences("docs/FLOW.html", flow_html), [],
-                         "docs/FLOW.html 提到來源專案名或絕對路徑,修好後這裡不該再列")
 
 
 if __name__ == "__main__":

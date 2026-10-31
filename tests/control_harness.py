@@ -65,6 +65,13 @@ def a_unittest_tests():
 # `review.sh` 逐字讀它(#42):沙盒少了它,覆核在「派工文組不出來」那一步就停,
 # 而那與「reviewer 沒交件」在收件匣上是兩頁不同的東西。`auto-fix.sh` 的驗證者派工文
 # 也是範本填出來的(#51):少了它,派工文裡只剩一行「範本找不到」。
+def copy_if_there(src, dst):
+    """Copy a file of A into a sandbox when A still has it (the old workflow's files were removed
+    when devloop became the loop; tests that need them are gone with them)."""
+    if os.path.exists(src):
+        shutil.copy(src, dst)
+
+
 TEMPLATE_FILES = ("dispatch-reviewer.md", "dispatch-verifier.md")
 
 # 回歸層的最小形狀:一個登記過的標籤 + 一個會綠的案例。沙盒少了它,`gate --full`
@@ -152,6 +159,7 @@ def fixture_role_models(**chains):
 
 DEFAULT_CONFIG = {
     "config_version": 2,
+    "devloop": {"release": "true"},
     "port": 0,
     "tickets_dir": "tickets",
     "events_file": "board/events.jsonl",
@@ -313,7 +321,7 @@ class Sandbox(unittest.TestCase):
             self.stub_script("gate.sh", self.gate_stub)
         os.makedirs(os.path.join(self.repo, "templates"))
         for name in TEMPLATE_FILES:
-            shutil.copy(os.path.join(ROOT, "templates", name),
+            copy_if_there(os.path.join(ROOT, "templates", name),
                         os.path.join(self.repo, "templates", name))
 
         conf = json.loads(json.dumps(DEFAULT_CONFIG))
@@ -374,20 +382,20 @@ class Sandbox(unittest.TestCase):
                 shutil.copytree(os.path.join(self.ac_home, "bin"),
                                 os.path.join(where, "bin"), ignore=ignore)
             os.makedirs(os.path.join(where, "board"))
-            shutil.copy(self.board_py, os.path.join(where, "board", "board.py"))
+            copy_if_there(self.board_py, os.path.join(where, "board", "board.py"))
             os.makedirs(os.path.join(where, "templates"))
             for name in TEMPLATE_FILES:
-                shutil.copy(os.path.join(ROOT, "templates", name),
+                copy_if_there(os.path.join(ROOT, "templates", name),
                             os.path.join(where, "templates", name))
             # 正本住 A(#166,D-071 §3):角色卡、模型卡、「不可違反的」、共用規矩跟著這一份 A。
-            for kind in ("role", "model"):
+            for kind in [k for k in ("role", "model") if os.path.isdir(os.path.join(ROOT, "memory", k))]:
                 shutil.copytree(os.path.join(ROOT, "memory", kind),
                                 os.path.join(where, "memory", kind),
                                 ignore=shutil.ignore_patterns("*.inbox.md"))
             os.makedirs(os.path.join(where, "docs"))
-            shutil.copy(os.path.join(ROOT, "docs", "DISPATCH-TEMPLATE.md"),
+            copy_if_there(os.path.join(ROOT, "docs", "DISPATCH-TEMPLATE.md"),
                         os.path.join(where, "docs", "DISPATCH-TEMPLATE.md"))
-            shutil.copy(os.path.join(ROOT, "CLAUDE.md"), os.path.join(where, "CLAUDE.md"))
+            copy_if_there(os.path.join(ROOT, "CLAUDE.md"), os.path.join(where, "CLAUDE.md"))
             self.ac_home = where
             self.scripts = os.path.join(where, "scripts")
             self.board_py = os.path.join(where, "board", "board.py")
@@ -667,7 +675,7 @@ class Sandbox(unittest.TestCase):
         **只有要它們的測試才裝** —— 預設就複製進去的話,記憶整理那一組會量到這幾份(連暫存區),
         而那一組問的是「待整理會不會被發現」,不是「這個 repo 有幾份記憶」。
         """
-        shutil.copy(os.path.join(ROOT, "docs", "DISPATCH-TEMPLATE.md"),
+        copy_if_there(os.path.join(ROOT, "docs", "DISPATCH-TEMPLATE.md"),
                     os.path.join(self.repo, "docs", "DISPATCH-TEMPLATE.md"))
         for kind in ("role", "model"):
             src = os.path.join(ROOT, "memory", kind)

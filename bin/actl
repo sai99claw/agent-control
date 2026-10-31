@@ -14,6 +14,7 @@
 # Then AC_ROOT/board/config.json must exist (rc 2 naming `actl init`; init itself excepted) and
 # pass `project_config.py check` (config_version == A's; doctor / migrate / init skip it). Exports AC_HOME,
 # AC_ROOT, AC_CONTROL_DIR and execs the mapped script; the scripts stay directly callable.
+# The work itself is devloop/ (D-078 … D-084): `actl new` opens tickets, `actl run` drives them.
 # The cwd rule itself lives in scripts/wtbase.sh (`ac_main_root_of`), shared with every script.
 set -u
 
@@ -29,19 +30,16 @@ AC=$AC_CONTROL_DIR
 . "$AC/wtbase.sh"
 
 TABLE='actl [-C <project dir>] <command> [args…]
-  land apply review auto-fix     scripts/<command>.sh
-  gate                           scripts/gate.sh  (--branch | --base | --full [--ticket n])
-  ticket event inbox status memory rules repo-map
-                                 scripts/<command>.py
-  verify verify-case             scripts/verify.py / scripts/verify-case.py (code root = cwd toplevel)
-  board                          board/board.py
-  schedule                       scripts/schedule.py (plan | run: depends_on DAG + board/batches.json -> auto-fix, land)
-  session heartbeat              scripts/new-session.sh / scripts/heartbeat.sh
-  doctor migrate init            scripts/project_config.py (board/config.json version, schema, rows)
-  version                        AC_HOME, ac_sha, AC_ROOT, AC_CODE_ROOT (works outside a project)
+  new --request "…" | --revise N …   devloop/ticket_creator.py (the opener writes tickets)
+  run [--forever]                    devloop/ticket_controller.py (drives tickets to landed)
+  tickets init|list|show|inbox|ack|ready|cancel …
+                                     devloop/tickets.py (the pool)
+  board serve|html …                 devloop/board.py
+  check                              board/config.json is usable by this A: prints "ok <project root>"
+  doctor migrate init                scripts/project_config.py (board/config.json version, schema, rows)
+  version                            AC_HOME, ac_sha, AC_ROOT, AC_CODE_ROOT (works outside a project)
   test <preflight|select|run|full|regression> [args…]
-                                 scripts/testiface.py (the declared tests.* command, or the built-in)
-  hooks                          scripts/hooks.py (install | check the .claude/settings.json hook entries)'
+                                     scripts/testiface.py (the declared tests.* command, or the built-in)'
 
 C_DIR=""
 while [ $# -gt 0 ]; do
@@ -84,9 +82,7 @@ case "$CMD" in
         echo "AC_ROOT=${_root:-(none)}"
         echo "AC_CODE_ROOT=${_code:-(none)}"
         exit 0 ;;
-    land|gate|apply|review|auto-fix|heartbeat|session|board|test|schedule|\
-    ticket|event|inbox|status|memory|rules|repo-map|verify|verify-case|\
-    doctor|migrate|init|hooks) ;;
+    new|run|tickets|board|test|check|doctor|migrate|init) ;;
     *)
         echo "actl: unknown command '$CMD'" >&2
         printf '%s\n' "$TABLE" >&2
@@ -113,10 +109,11 @@ esac
 export AC_HOME AC_ROOT AC_CONTROL_DIR
 
 case "$CMD" in
-    session) exec sh "$AC/new-session.sh" "$@" ;;
-    board) exec python3 "$AC_HOME/board/board.py" "$@" ;;
+    check) echo "ok $AC_ROOT"; exit 0 ;;
+    new) exec python3 "$AC_HOME/devloop/ticket_creator.py" "$@" ;;
+    run) exec python3 "$AC_HOME/devloop/ticket_controller.py" "$@" ;;
+    tickets) exec python3 "$AC_HOME/devloop/tickets.py" "$@" ;;
+    board) exec python3 "$AC_HOME/devloop/board.py" "$@" ;;
     test) exec python3 "$AC/testiface.py" "$@" ;;
     doctor|migrate|init) exec python3 "$AC/project_config.py" "$CMD" "$AC_ROOT" "$@" ;;
-    land|gate|apply|review|auto-fix|heartbeat) exec sh "$AC/$CMD.sh" "$@" ;;
-    *) exec python3 "$AC/$CMD.py" "$@" ;;
 esac

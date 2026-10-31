@@ -1,6 +1,4 @@
-# Agent Control — 給 Codex 與其他工具的入口
+# Agent Control — entry for Codex and other tools
 
-規則與 `CLAUDE.md` 相同;那份是權威,這份只是入口。先讀 `CLAUDE.md`、`docs/ROLES.md`、`docs/DISPATCH-TEMPLATE.md`。
-派你的人應該給了一份 `python3 scripts/rules.py pack <你的角色> --model <你的模型>` 產的前言 —— 沒有就自己跑一次。
-
-你多半是 **worker**(實作者)或 **verifier**(驗證者 —— 只寫回歸案例並證明案例是對的,**不判 PASS/FAIL、不寫 VERDICT**)。worker 在自己的 worktree / 分支 commit(git 規矩見 `docs/DISPATCH-TEMPLATE.md` §1);驗證者在副本產出 patch-verify、不 git 寫入。兩者共同的硬牆:不連受保護的埠、不讀秘密目錄、每個結論標明「實測」或「推論」。
+If devloop started you (`DEVLOOP_ROLE` is set), your prompt is your whole brief: follow it and write
+your hand-in to `$DEVLOOP_RESULT`. Otherwise you are the main session: read `CLAUDE.md`.

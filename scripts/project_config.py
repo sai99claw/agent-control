@@ -118,9 +118,6 @@ ROLE_CARD_NOTE = ("project role cards now overlay $AC_HOME/memory/role; "
 # grep (tests/test_retire_sync.py) keeps meaning "no code path assumes them".
 RETIRED_DIR = os.path.join("scripts", "con" "trol")
 RETIRED_SYNC = "sync-to-" "project.sh"
-# The project's role -> model table (#184): auto-fix / review / new-session read it from the project
-# only, so doctor flags its absence and migrate / init seed it from A's copy (never overwrite).
-ROLE_MODELS_REL = os.path.join("board", "role-models.json")
 
 
 def repair_setting(conf, key):
@@ -282,15 +279,10 @@ def doctor_rows(root):
     if os.path.isdir(os.path.join(root, RETIRED_DIR)):
         rows.append(("warning", "%s/ exists - retired, coexists with A until §7 step 5 "
                      "(D-071), delete it then" % RETIRED_DIR, None))
-    models = os.path.join(root, ROLE_MODELS_REL)
-    try:
-        with open(models, encoding="utf-8") as handle:
-            json.load(handle)
-    except FileNotFoundError:
-        rows.append(("error", "%s missing - dispatch reads the project's role -> model table"
-                     % ROLE_MODELS_REL, "actl migrate"))
-    except (OSError, ValueError) as err:
-        rows.append(("error", "%s unreadable (%s)" % (ROLE_MODELS_REL, err), "actl migrate"))
+    loop = conf.get("devloop") if isinstance(conf.get("devloop"), dict) else {}
+    if not loop.get("release"):
+        rows.append(("error", "devloop.release missing - actl run refuses to start without the "
+                     "project's release command", "edit board/config.json"))
     settings_path = os.path.join(root, ".claude", "settings.json")
     if os.path.exists(settings_path):
         try:
@@ -353,29 +345,12 @@ def migrate_1_to_2(conf):
 MIGRATIONS = {1: migrate_1_to_2}
 
 
-def seed_role_models(root):
-    """Copy $AC_HOME/board/role-models.json into the project when it has none (#184); an existing
-    file is never touched. Returns the change line, or None."""
-    dest = os.path.join(root, ROLE_MODELS_REL)
-    if os.path.lexists(dest):
-        return None
-    source = os.path.join(AC_HOME, ROLE_MODELS_REL)
-    if not os.path.isfile(source):
-        raise Refused("%s: missing in A - cannot seed %s" % (source, ROLE_MODELS_REL))
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    with open(source, "rb") as handle:
-        data = handle.read()
-    with open(dest, "xb") as handle:
-        handle.write(data)
-    return "add %s (copied from %s)" % (ROLE_MODELS_REL, source)
-
-
 def cmd_migrate(root):
     conf, raw = load(root)
     version = version_of(conf)
     if version > CURRENT_VERSION:
         raise Refused(version_problem(version)[0])
-    seeded = seed_role_models(root)
+    seeded = None
     if version == CURRENT_VERSION:
         if seeded:
             print("migrate: %s" % seeded)
@@ -422,8 +397,6 @@ def cmd_init(root):
     with open(path, "x", encoding="utf-8") as handle:
         handle.write(json.dumps(defaults(), ensure_ascii=False, indent=2) + "\n")
     print(path)
-    if seed_role_models(root):
-        print(os.path.join(root, ROLE_MODELS_REL))
     return 0
 
 

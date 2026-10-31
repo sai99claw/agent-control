@@ -1,7 +1,8 @@
 # devloop/ — the dev loop (v2)
 
-Five scripts, one git-backed ticket pool, one DAG file. Design and decisions: `docs/design/dev-loop-v2.md`,
-D-078, D-079, D-080. Python 3.8+ standard library only; Linux and macOS.
+Five scripts, one git-backed ticket pool, one DAG file: agent-control's loop (D-085). Design:
+`docs/design/dev-loop-v2.md`; rules in force: `docs/DECISIONS.md`. The entry is `bin/actl`
+(`actl new`, `actl run`, `actl tickets …`, `actl board …`). Python 3.8+ standard library only; Linux and macOS.
 
 ```
 you -> main session -> ticket_creator.py -> opener (LLM) -> pool: tickets + dag.json
@@ -77,8 +78,9 @@ prompt (project memory by path). They never edit memory; a hand-in may carry
 `"lessons": [{"layer", "text"}]`, which the scripts put in `memory/inbox/`. The controller starts
 `memory_keeper.py` for one file at a time once 5 lessons wait (or the oldest waited 3 days, at
 most once per 24 h per file); a consolidator agent rewrites the file. What belongs in which layer
-is written once, in `prompts/consolidator.md`. `tickets.py init` seeds the files; a model's
-memory starts from agent-control's own model card.
+is written once, in `prompts/consolidator.md`. `tickets.py init` seeds the files with headings
+only; agent-control's cards from before devloop (`memory/model/`, `memory/role/`) are queued as
+lessons for the consolidator, never copied in.
 
 ## Dashboard
 

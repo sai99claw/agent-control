@@ -201,3 +201,27 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
 ### 接下來
 - 使用者把 T 遷移的 prompt 交給 Mac 上的 tabby session(見上一節「給 T 的遷移」);T 會問 hard_block 的 18905 / 15349 / TABBY_BROWSER_ENGINES=(建議留)。
 - T 遷移時回報的問題,照「該 A 改的開 A 票、T 該 porting 的交回 T」分。
+
+## 2026-10-31 devloop 成為正式迴圈(D-085)
+
+### 現況
+- 舊迴圈(apply / land / gate / auto-fix / review / schedule / ticket.py / rules.py …)、舊票、`verify/`、`code-map/`、舊流程文件都刪了,
+  在 git 歷史裡。入口是 `actl new` / `run` / `tickets` / `board` / `test` / `check` / `doctor`。主線契約是新的 `CLAUDE.md`。
+- A 的發版:`scripts/release.sh`(給落地的 commit 打 tag)。
+- **A 自己的票庫還沒建**:要先有一個遠端 repo(例如 `agent-control-pool`),再 `actl tickets init`、`git -C pools/agent-control remote add origin …`。
+  雲端容器是暫時的,沒有 remote 的票庫會跟容器一起消失。
+
+### 真模型實測(demo 專案 `loop-demo5`,7 張票、4 組,全部落地)
+- 走過的路:網頁送需求 → 開題(3 張票、DAG);驗證者案例紅燈檢查退回一次;同組合併衝突由 worker 解;注入一條全套才跑的規則 →
+  regression 紅 → auto_fixer 修一輪 → 綠;開題者自己把系統性改動標成 `alone` 並依賴前一張;g4 開著時有人推 main →
+  落地前 auto_fixer 把 main 合進來 → 重驗 → 落地;記憶整理(含兩個模型討論)跑了 8 次;每組落地都重產 code map、發版。
+- 花費:33 次 agent 呼叫,CLI 回報約 10 美元(開題 2.2、驗證者 3.2、worker 1.4、記憶 3.1、修紅 0.2),輸出約 12 萬 token。
+  驗證者(opus)比 worker(sonnet)貴;記憶整理在無限 token 模式下最貴,正式專案預設關著。
+- 修掉的:agent 繼承主線 session 的身分變數;驗證者案例被退回時 worker 也重跑(現在只重跑驗證者);簡單票的 worker 拿到 opus 的
+  模型記憶;案例模組載入失敗時紅燈檢查說錯原因。
+
+### 接下來
+- 使用者建 A 和 T 的票庫遠端 repo。
+- T 接上:`board/config.json` 加 `devloop`(release、base_tests、hard_block)、`tests.*` 要一個 case 一列的結果(紅燈檢查靠它);
+  T 的發版腳本只做 build 加 tag 還是包含部署,要使用者決定。
+- 舊的設定鍵還在 schema 裡(下一版 config_version 拿掉);`scripts/status.py` 舊閘門的部分還沒瘦身。

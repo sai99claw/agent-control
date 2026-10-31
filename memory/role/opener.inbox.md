@@ -1,1 +1,0 @@
-- 純刪除的票不派驗證者(needs_verifier=false 加一句理由),驗收是已刪名字 grep 為 0 加既有全套綠 —— needs_verifier 的 false 款除了「改名、小修、設定同步」還有這一種(D-056 ①,原登記在 verifier 暫存區,#177 整理時轉記) (#177, 2026-10-26, consolidator@fable)

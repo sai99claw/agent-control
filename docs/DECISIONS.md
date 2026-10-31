@@ -24,7 +24,7 @@
 1. 專案在旁邊 clone 一份 agent-control,直接拿它對專案執行;更新就 `git pull`,不再同步任何東西進專案。介面要定義完善、有彈性。(D-071、D-069 ①)
 2. agent-control 的 clone 預設放在專案旁(`../agent-control`),它不依賴自己的位置。(D-072 Q2)
 3. 專案的測試由專案自己的測試介面提供(`scripts/testiface.py` 的五個指令,`tests.*` 設定)。(D-072 Q1)
-4. 專案設定的版本比 agent-control 新時,拒絕執行、請使用者先 pull。(D-072 Q4;devloop 尚未實作)
+4. 專案設定的版本比 agent-control 新時,拒絕執行、請使用者先 pull。經 `actl` 的每個指令都檢查;直接叫 `devloop/*.py` 不檢查。(D-072 Q4、D-085)
 
 ## 三、開發迴圈(devloop)
 
@@ -90,10 +90,11 @@
 
 ## 十、待辦(不是規矩,做完就從這裡拿掉)
 
-- **切換**:devloop 成為正式迴圈,刪掉舊迴圈的腳本與角色卡,CLAUDE.md、SessionStart hook 改成照 devloop。(CLAUDE.md 目前仍寫「發版永遠是人授權」「收件只走 apply.sh」,已過時)
 - 票庫的遠端 repo(A、T 各一個),之後掛成 submodule。
 - T 改用 devloop;T 跑完 10 張票後,補每票成本與減法前 30 天的對比。(D-063 ②、D-017 ①)
-- 專案設定比 A 新時拒跑(二.4)、astra 切小批(五.5)尚未實作。
+- astra 切小批(五.5)尚未實作。
+- `board/config.json` 的舊鍵(`routing`、`worker`、`opener`、`repair`、`schedule` 等舊迴圈用的)還在 schema 裡、不會報錯;
+  下一版設定(config_version 3)拿掉,`actl migrate` 一併刪。`scripts/status.py` 裡舊閘門的部分也還沒瘦身(測試介面只用到它的一小段)。
 
 ---
 
@@ -120,3 +121,23 @@
 - Q15「全部追認」涵蓋的主線自裁:D-008、D-019、D-020、D-033、D-041 主線預設、D-045 主線補充、D-049 模型用完停下發頁、D-065 主線裁 Q3–Q5、D-069、D-072 Q1/Q2/Q4、D-072「派 worker 期間不寫 DECISIONS」(devloop 下已無意義,不列入現行)、D-078 主線解讀、D-079 主線解讀、D-080 主線解讀與每次叫 agent 1 小時、D-082 主線解讀、devloop 的預設值(同時 2 個 worker、regression 上限 3 小時)。其中 D-065 的比對已由 Q6 撤銷。
 - Q10「可行嗎?」:可行。驗證者的分支就是「舊程式 + 案例」,issuer 在那一版上跑那幾個案例:應該全部紅、而且是斷言失敗(unittest 的 fail,不是 error);名字帶 `T<票號>Acceptance` 的案例才算,所以不會被舊測試干擾。多花一次只跑那幾個案例的時間。
 - Q11 主線解讀:索引由腳本從程式碼生成(Python 列出 class / 函式與 docstring 第一行),在落地前一刻 commit 到整合分支上,所以永遠跟 main 一致,票不會因為它衝突。
+
+---
+
+## D-085(2026-10-31)devloop 成為正式迴圈
+
+使用者原話(回覆「A 本身還缺的」三點):「1. 還沒併進 A 的 main … 要切過去需要你點頭 … 2. 用真模型跑過的只有簡單的情況 … 3. A 自己沒有發版腳本 … 這些先做」
+
+1. **真模型實測**(demo 專案,2026-10-31,實測):網頁送需求 → 開題者開 3 張票與 DAG;驗證者案例的紅燈檢查(第 1 輪退回、第 2 輪過);
+   同組兩張票改同一批檔案的合併衝突由 worker 自己解;regression 紅 → auto_fixer 修一輪 → 重驗綠 → 落地;記憶整理含兩個模型討論;
+   落地重產 code map、發版。實測中修掉的:agent 繼承主線 session 的身分變數(用量記到主線的 session 下)、驗證者案例被退回時
+   worker 也被重叫一次(現在只重叫驗證者)、簡單票的 worker 拿到 opus 的模型記憶(現在拿 sonnet 的)、案例模組載入失敗時紅燈檢查的訊息說錯原因。
+2. **agent-control 的發版**:`scripts/release.sh`,給落地的 commit 打 annotated tag `a-<日期>-<組>-<短 sha>`(列出票號),有 remote 就推 tag;
+   專案照舊 `git pull` 拿 main,要釘版本就用 tag。(推論:A 沒有別的「產出物」,main 本身就是發出去的東西,tag 只是給它名字)
+3. **切換**:舊迴圈的腳本(apply / land / gate / auto-fix / review / schedule / ticket / rules / memory / inbox / event 的 CLI 等)、
+   舊票(`tickets/`)、角色卡(`memory/role/`)、專案記憶(`memory/project/`)、驗證案例庫(`verify/`)、`code-map/`、舊流程文件刪除,都在 git 歷史裡。
+   `actl` 的指令改成 `new` / `run` / `tickets` / `board` / `test` / `check` / `doctor` / `migrate` / `init`。
+   SessionStart hook 只印「等你的頁」與票;devloop 起的 agent 不觸發。保留:測試介面(`testiface.py`、`adapter-unittest.py`,
+   以及它們用到的 `status.py`、`event.py`)、`project_config.py`、`memory/model/`(新票庫的模型記憶從這裡匯入)。
+4. A 的舊票與舊記憶沒有搬進 A 的票庫;A 的票庫在第一次 `actl tickets init` 時建立。(推論:舊記憶大多是舊迴圈的操作細節,已不適用)
+

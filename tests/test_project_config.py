@@ -95,11 +95,11 @@ class A1VersionRefusal(ConfigSandbox):
         """**m1-like**: drop the `check` call in bin/actl → rc 0, red."""
         self.edit_conf(config_version=None)
         before = self.snapshot()
-        done = self.actl("ticket", "list", "--open")
+        done = self.actl("check")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         self.assertIn("config_version 1 < 2", done.stderr)
         self.assertIn("actl migrate", done.stderr)
-        self.assertNotIn(SUBJECT, done.stdout)
+        self.assertNotIn("ok ", done.stdout)
         self.assertEqual(self.snapshot(), before)
         self.assertEqual(self.actl("version").returncode, 0)
         doctor = self.actl("doctor")
@@ -107,16 +107,16 @@ class A1VersionRefusal(ConfigSandbox):
         self.assertIn("actl migrate", doctor.stdout)
         migrate = self.actl("migrate")
         self.assertEqual(migrate.returncode, 0, migrate.stdout + migrate.stderr)
-        again = self.actl("ticket", "list", "--open")
+        again = self.actl("check")
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
-        self.assertIn(SUBJECT, again.stdout)
+        self.assertIn("ok ", again.stdout)
 
     def test_a1_version_3_is_refused_and_says_pull_a(self):
         """**m1**: check returns 0 for version 3 → this goes red."""
         self.edit_conf(config_version=3)
         before = self.snapshot()
         config_before = digest(self.config)
-        done = self.actl("ticket", "list", "--open")
+        done = self.actl("check")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         for part in ("config_version 3", "this A has 2", "git -C", "pull"):
             self.assertIn(part, done.stderr)
@@ -134,15 +134,15 @@ class A1VersionRefusal(ConfigSandbox):
         for value, shown in ((0, "0"), (-1, "-1"), ("two", '"two"'), (2.5, "2.5")):
             with self.subTest(value=value):
                 self.edit_conf(config_version=value)
-                done = self.actl("ticket", "list", "--open")
+                done = self.actl("check")
                 self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
                 self.assertIn("config_version %s " % shown, done.stderr)
 
     def test_a1_version_2_runs(self):
         self.assertEqual(self.conf()["config_version"], 2, "precondition: harness default")
-        done = self.actl("ticket", "list", "--open")
+        done = self.actl("check")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn(SUBJECT, done.stdout)
+        self.assertIn("ok ", done.stdout)
 
 
 class A2Migrate(ConfigSandbox):
@@ -222,7 +222,7 @@ class A4Keys(ConfigSandbox):
     def test_a4_wrong_type_is_rc_2_naming_key_type_value(self):
         """**m4**: check skips the type table → rc 0, red."""
         self.edit_conf(port="abc")
-        done = self.actl("ticket", "list", "--open")
+        done = self.actl("check")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         for part in ("port", "int", "abc"):
             self.assertIn(part, done.stderr)
@@ -234,14 +234,14 @@ class A4Keys(ConfigSandbox):
         **m**: put the unknown-key write back in cmd_check → the 'unknown top-level key' line
         shows up in `ticket list`, red."""
         self.edit_conf(zzz_unknown=1)
-        done = self.actl("ticket", "list", "--open")
+        done = self.actl("check")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertIn(SUBJECT, done.stdout, "ticket list runs normally")
+        self.assertIn("ok ", done.stdout, "check runs normally")
         self.assertEqual([line for line in (done.stdout + done.stderr).splitlines()
                           if "unknown top-level key" in line or "zzz_unknown" in line], [],
                          done.stderr)
         self.edit_conf(config_version=3)
-        newer = self.actl("ticket", "list", "--open")
+        newer = self.actl("check")
         self.assertEqual(newer.returncode, 2, newer.stdout + newer.stderr)
         self.edit_conf(config_version=2)
         doctor = self.actl("doctor")
@@ -250,14 +250,14 @@ class A4Keys(ConfigSandbox):
                          if "zzz_unknown" in line and "possibly retired" in line], doctor.stdout)
 
     def test_a4_clean_sandbox_says_nothing(self):
-        done = self.actl("ticket", "list", "--open")
+        done = self.actl("check")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("config_version", done.stderr)
         self.assertNotIn("unknown", done.stderr)
 
     def test_a4_missing_optional_keys_are_silent(self):
         self.set_conf({"config_version": 2, "port": 0})
-        done = self.actl("ticket", "list", "--open")
+        done = self.actl("check")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("warning", done.stderr)
         self.assertNotIn("config_version", done.stderr)
@@ -275,7 +275,7 @@ class A5DogfoodAndInit(ConfigSandbox):
                                 "check", "."], cwd=ROOT, env=env, capture_output=True,
                                text=True, timeout=TIMEOUT)
         self.assertEqual(check.returncode, 0, check.stdout + check.stderr)
-        listed = subprocess.run(["sh", "bin/actl", "ticket", "list", "--open"], cwd=ROOT,
+        listed = subprocess.run(["sh", "bin/actl", "check"], cwd=ROOT,
                                 env=env, capture_output=True, text=True, timeout=TIMEOUT)
         self.assertEqual(listed.returncode, 0, listed.stdout + listed.stderr)
 
@@ -303,15 +303,9 @@ class A5DogfoodAndInit(ConfigSandbox):
         self.assertEqual(digest(path), before)
 
 
-class T184CoexistenceAndRoleModels(ConfigSandbox):
-    """#184: the retired control dir (RETIRED_DIR) is a warning during the §7 coexistence window; a missing or unparsable
-    board/role-models.json is an error fixed by `actl migrate`, which (like `actl init`) copies A's
-    table when the project has none and never overwrites one."""
-
-    def setUp(self):
-        super().setUp()
-        self.models = os.path.join(self.repo, "board", "role-models.json")
-        self.a_models = os.path.join(self.ac_home, "board", "role-models.json")
+class T184CoexistenceAndRelease(ConfigSandbox):
+    """#184: the retired control dir (RETIRED_DIR) is a warning during the coexistence window.
+    devloop: a project without `devloop.release` is an error row (`actl run` refuses to start)."""
 
     def rows(self, done, *parts):
         return [line for line in done.stdout.splitlines() if all(part in line for part in parts)]
@@ -325,75 +319,15 @@ class T184CoexistenceAndRoleModels(ConfigSandbox):
         self.assertEqual(len(hits), 1, done.stdout)
         self.assertTrue(hits[0].startswith("warning: "), hits[0])
 
-    def test_a2_missing_role_models_is_an_error_naming_migrate(self):
-        """**m**: drop the role-models row → rc 0, red."""
-        os.remove(self.models)
+    def test_a2_a_project_without_a_release_command_is_an_error(self):
+        conf = self.conf()
+        conf.pop("devloop", None)
+        self.write("board/config.json", json.dumps(conf))
         done = self.actl("doctor")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        hits = self.rows(done, "board/role-models.json", "actl migrate")
+        hits = self.rows(done, "devloop.release")
         self.assertEqual(len(hits), 1, done.stdout)
         self.assertTrue(hits[0].startswith("error: "), hits[0])
-
-    def test_a2_invalid_json_role_models_is_an_error_naming_migrate(self):
-        self.write("board/role-models.json", "{")
-        done = self.actl("doctor")
-        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
-        hits = self.rows(done, "board/role-models.json", "actl migrate")
-        self.assertEqual(len(hits), 1, done.stdout)
-        self.assertTrue(hits[0].startswith("error: "), hits[0])
-
-    def test_a3_migrate_seeds_a_copy_once(self):
-        """**m**: migrate skips the seed → file absent, red; **m**: seed overwrites → the
-        different-file case below goes red."""
-        os.remove(self.models)
-        done = self.actl("migrate")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(digest(self.models), digest(self.a_models))
-        self.assertIsNotNone(digest(self.models))
-        self.assertTrue(self.rows(done, "board/role-models.json"), done.stdout)
-        config = digest(self.config)
-        again = self.actl("migrate")
-        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
-        self.assertEqual(digest(self.models), digest(self.a_models))
-        self.assertEqual(digest(self.config), config)
-        self.assertIn("0 changes", again.stdout)
-        self.assertNotIn("role-models", again.stdout)
-        doctor = self.actl("doctor")
-        self.assertEqual(doctor.returncode, 0, doctor.stdout + doctor.stderr)
-        self.assertNotIn("role-models", doctor.stdout)
-
-    def test_a3_migrate_from_version_1_also_seeds(self):
-        os.remove(self.models)
-        self.edit_conf(config_version=None)
-        done = self.actl("migrate")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(self.conf()["config_version"], 2)
-        self.assertEqual(digest(self.models), digest(self.a_models))
-        self.assertTrue(self.rows(done, "board/role-models.json"), done.stdout)
-
-    def test_a3_migrate_leaves_an_existing_different_table_alone(self):
-        self.write("board/role-models.json", '{"schema_version": 1, "roles": {}}\n')
-        before = digest(self.models)
-        self.assertNotEqual(before, digest(self.a_models), "precondition: differs from A's")
-        done = self.actl("migrate")
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        self.assertEqual(digest(self.models), before)
-        self.assertNotIn("role-models", done.stdout)
-
-    def test_a4_init_seeds_the_table_and_doctor_has_no_row(self):
-        """**m**: init skips the seed → file absent and doctor has the row, red."""
-        fresh = os.path.join(self.home, "fresh")
-        os.makedirs(fresh)
-        self.git("init", "-q", cwd=fresh)
-        env = {"AC_ROOT": ""}
-        done = self.actl("-C", fresh, "init", cwd=self.home, **env)
-        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
-        models = os.path.join(fresh, "board", "role-models.json")
-        self.assertEqual(digest(models), digest(self.a_models))
-        self.assertIsNotNone(digest(models))
-        doctor = self.actl("-C", fresh, "doctor", cwd=self.home, **env)
-        self.assertNotIn("role-models", doctor.stdout + doctor.stderr)
-
 
 
 class T125RepairKeys(ConfigSandbox):
@@ -402,13 +336,13 @@ class T125RepairKeys(ConfigSandbox):
 
     def test_a1_repair_keys_are_known_and_quiet(self):
         self.edit_conf(repair={"max_rounds": 3, "env_rerun": 1})
-        done = self.actl("ticket", "list", "--open")
+        done = self.actl("check")
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertNotIn("repair", done.stderr)
 
     def test_a1_repair_max_rounds_is_typed_int(self):
         self.edit_conf(repair={"max_rounds": "three"})
-        done = self.actl("ticket", "list", "--open")
+        done = self.actl("check")
         self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
         for part in ("max_rounds", "int", "three"):
             self.assertIn(part, done.stderr)

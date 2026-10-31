@@ -1,137 +1,20 @@
 #!/bin/sh
-# Claude Code 的 SessionStart hook:主線開場那一頁**不靠自律** —— `.claude/settings.json`
-# 叫這一支,這一支再叫 `new-session.sh main <model>`(`docs/SESSION-START.md` §主線)。
-#
-#   echo '{"source":"startup","cwd":"<根>","hook_event_name":"SessionStart"}' \
-#       | sh scripts/session-hook.sh
-#
-# 為什麼要有這一支:開場那一頁以前要主線自己記得跑,而**漏跑的那一個 session 與跑過的
-# 長得一樣** —— 沒有任何東西把 new-session.sh 叫起來,整段開場就被跳過,而且沒人發現。
-# 不靠自律就生效的只有 CLAUDE.md、記憶索引與 hook;hook 的 stdout 在 SessionStart 會
-# 進上下文(code.claude.com/docs/en/hooks),所以那一頁在第一個 prompt 之前就在。
-#
-# ## 副本不觸發:rc 0、一個位元組都不印、一筆事件都不發
-# 三條各自成立就停(`AC_SESSION_HOOK=0` / `AC_ROLE` 設了且不是 main / cwd 有一層叫
-# `worktree_dir` 的 basename)。短命 worker 的 session 開在副本裡,它要的是派工文,
-# 不是主線那一頁 —— 印進去是白花它的上下文,發一筆 start 是在控制台上假造一個主線。
-# 不用 `claude --bare`:它連 CLAUDE.md 都跳過。
-#
-# ## startup / clear 才發 session.start
-# resume / compact / fork 只重印那一頁(`--no-event`)。每次 compact 多一筆 start 的話,
-# 有 start 沒 end 的那幾筆在 heartbeat 看來就是死在半路的 session。
-#
-# ## model:`AC_MODEL` > board/config.json 的 `routing.main` > unknown
-# 缺的時候印一行警告,不靜默 —— 一筆 model=unknown 的事件與一筆量過的長得一樣。
-#
-# ## 上限 10000 字元(#62)
-# Claude Code 的 hook 文件:plain stdout 上限 10,000 characters —— 單位是字元不是 bytes
-# (以前寫 16384 bytes,單位與數字都不對;一個中文字 3 bytes,量 bytes 會截在錯的地方)。
-# 超過就截掉**中間**:開頭(不可違反的那一節與角色卡)與「接下來要讀的」那一段留著
-# (那一段是這一頁的目的),最後一行說原始多長、全文怎麼看。
+# Claude Code SessionStart hook for the main session (.claude/settings.json): what waits for the
+# user (unread pages) and the open tickets, printed into the context before the first prompt.
+# Agents started by devloop carry DEVLOOP_ROLE and get nothing: their prompt is their whole brief.
+# Never fails the session: any error prints one line and exits 0.
 set -u
+[ -n "${DEVLOOP_ROLE:-}" ] && exit 0
 [ "${AC_SESSION_HOOK:-}" = "0" ] && exit 0
-[ -n "${AC_ROLE:-}" ] && [ "$AC_ROLE" != "main" ] && exit 0
-
-# 同伴腳本從這一支自己住的目錄(A 的 clone)叫。專案根不從 `$0` 來(D-071 C2,#159):
-# `AC_ROOT`,沒設就認 Claude Code 給 hook 的 `CLAUDE_PROJECT_DIR`(§1 第 3 條),再退
-# `wtbase.sh` 的 cwd 規則;都沒有 rc 2。
-AC=$(cd "$(dirname "$0")" && pwd)
-. "$AC/wtbase.sh"
-if [ -z "${AC_ROOT:-}" ] && [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
-    ROOT=$CLAUDE_PROJECT_DIR
-else
-    ROOT=$(ac_root session-hook) || exit 2
-fi
-LIMIT=10000
-
-# stdin 是 hook 的 JSON;手動在終端機跑時沒有,不要卡在讀 stdin。
-if [ -t 0 ]; then INPUT=""; else INPUT=$(cat); fi
-
-PLAN=$(python3 - "$ROOT" "$INPUT" "$PWD" "${AC_MODEL:-}" <<'PY'
-import json
-import os
-import shlex
-import sys
-
-root, raw, pwd, env_model = sys.argv[1:5]
-try:
-    hook = json.loads(raw) if raw.strip() else {}
-except ValueError:
-    hook = {}
-hook = hook if isinstance(hook, dict) else {}
-try:
-    with open(os.path.join(root, "board", "config.json"), encoding="utf-8") as handle:
-        conf = json.load(handle)
-except (OSError, ValueError):
-    conf = {}
-conf = conf if isinstance(conf, dict) else {}
-
-# 預設與 apply.sh / auto-fix.sh / land.sh 同一格:`../<repo>-wt`。比的是 basename ——
-# 副本自己的根就在那個目錄底下,以根解析出來的完整路徑在副本裡指的是另一個地方。
-worktree = conf.get("worktree_dir") or "../%s-wt" % os.path.basename(root)
-guard = os.path.basename(os.path.normpath(worktree))
-cwd = hook.get("cwd") or pwd
-if guard and guard in os.path.abspath(cwd).split(os.sep):
-    print("MODE=skip")
-    sys.exit(0)
-
-mode = "emit" if hook.get("source") in ("startup", "clear") else "quiet"
-routing = conf.get("routing") if isinstance(conf.get("routing"), dict) else {}
-model = env_model or routing.get("main") or ""
-warn = ""
-if not model:
-    warn = ("session-hook: board/config.json 沒有 routing.main、也沒有設 AC_MODEL —— "
-            "這個 session 記成 model=unknown;補 routing.main(或 export AC_MODEL=<模型>)。")
-sid = hook.get("session_id")
-# 下面 `$FLAG` 不加引號展開:只收 id 會用到的字元,別的一律當沒給。
-sid = sid if isinstance(sid, str) and all(c.isalnum() or c in "-_." for c in sid) else ""
-print("MODE=%s MODEL=%s WARN=%s SID=%s" % (mode, shlex.quote(model or "unknown"),
-                                         shlex.quote(warn), shlex.quote(sid)))
-PY
-)
-MODE=""; MODEL=unknown; WARN=""; SID=""
-eval "$PLAN"
-[ "$MODE" = "skip" ] && exit 0
-
-FLAG=""
-[ "$MODE" = "emit" ] || FLAG=--no-event
-# hook JSON 有 `session_id` 就轉給 new-session.sh(#45 B3):start 與之後的 end 用它配對。
-[ -z "$SID" ] || FLAG="$FLAG --session $SID"
-AGAIN="sh ${AC#"$ROOT"/}/new-session.sh main $MODEL --no-event"
-
-# `actl doctor` 的 row 印在那一頁之前(D-071 §2,#160):版本落後 / 超前的專案在開場就被看見,
-# 不是等到第一個 actl 指令 rc 2。沒有 finding 時一個字都不印。
-DOCTOR=$(AC_ROOT=$ROOT sh "${AC_CONTROL_DIR:-$AC}/../bin/actl" doctor 2>&1)
-[ "$DOCTOR" = "actl doctor: no findings" ] && DOCTOR=""
-
-PAGE=$(
-    [ -z "$DOCTOR" ] || printf '%s\n\n' "$DOCTOR"
-    [ -z "$WARN" ] || echo "$WARN"
-    # session.start 的 driver(#117 A1,best effort):hook 的父行程,跳過中間那一層 `sh -c`。
-    DRIVER=$(python3 "$AC/liveness.py" driver "$PPID" 2>/dev/null || true)
-    # shellcheck disable=SC2086
-    AC_ROOT=$ROOT AC_DRIVER_PID=$DRIVER sh "$AC/new-session.sh" main "$MODEL" $FLAG 2>&1
-    rc=$?
-    [ "$rc" -eq 0 ] || echo "session-hook: new-session.sh 退出碼 $rc —— 上面那一頁可能缺段;重跑:$AGAIN"
-)
-printf '%s\n' "$PAGE" | python3 -c '
-import sys
-
-limit, again = int(sys.argv[1]), sys.argv[2]
-data = sys.stdin.buffer.read().decode("utf-8", "replace")
-out = sys.stdout.buffer
-if len(data) <= limit:
-    out.write(data.encode("utf-8"))
-    sys.exit(0)
-notice = ("session-hook: 截斷 —— 原始 %d 字元超過上限 %d,中間略去;全文:%s\n"
-          % (len(data), limit, again))
-gap = "session-hook: …(中間略去,見最後一行)…\n"
-at = data.rfind("── 接下來要讀的")
-tail = data[data.rfind("\n", 0, at) + 1:] if at >= 0 else ""
-if len(tail) + len(notice) + len(gap) > limit // 2:
-    tail = ""
-head = data[:limit - len(tail) - len(notice) - len(gap)]
-head = head[:head.rfind("\n") + 1]
-out.write((head + gap + tail + notice).encode("utf-8"))
-' "$LIMIT" "$AGAIN"
+cat >/dev/null 2>&1 || true    # the hook's JSON on stdin is not needed
+AC_HOME=$(cd "$(dirname "$0")/.." && pwd -P) || exit 0
+root=${AC_ROOT:-${CLAUDE_PROJECT_DIR:-}}
+[ -n "$root" ] || root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+[ -f "$root/board/config.json" ] || exit 0
+export AC_ROOT=$root
+echo "## devloop: pages waiting for you"
+python3 "$AC_HOME/devloop/tickets.py" inbox 2>&1 | head -40 || echo "(could not read the pool)"
+echo
+echo "## devloop: tickets and groups"
+python3 "$AC_HOME/devloop/tickets.py" list 2>&1 | head -60 || echo "(could not read the pool)"
 exit 0
