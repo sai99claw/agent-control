@@ -264,6 +264,22 @@ class ReleaseFails(LoopCase):
         self.assertIn("decision", self.inbox_kinds())
 
 
+class T8Acceptance(LoopCase):
+    def test_a_release_past_release_timeout_seconds_is_stopped_and_failed(self):
+        out = os.path.join(self.tmp, "release-out.txt")
+        self.config(release="sleep 5; echo done >> %s" % out, release_timeout_seconds=1)
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+        pages = [row for row in self.snap().inbox.values()
+                 if row["kind"] == "decision" and row["ref"] == "g1"]
+        self.assertTrue(pages, "a decision page about g1")
+        self.assertTrue(any("timeout" in row["text"] for row in pages), pages)
+        self.assertFalse(os.path.exists(out), "the release's process group was not stopped")
+
+
 class Timeout(LoopCase):
     loop_extra = {"issuer_timeout_seconds": 4}
 
