@@ -62,7 +62,7 @@ def fix(cfg, pool, gid, report):
         "result_path": os.path.join(run_dir, "result.json"),
         "revise_cmd": "python3 %s --revise <ticket id> --from fixer --reason '<why>'" % (
             os.path.join(LOOP, "ticket_creator.py")),
-        "test_cmd": "python3 %s run <ids>" % os.path.join(cfg.home, "scripts", "testiface.py"),
+        "test_cmd": "python3 %s <ids>" % os.path.join(LOOP, "run_tests.py"),
     }
     hand = agents.run(cfg, "fixer", agents.render("fixer.md", values), tree, run_dir,
                       cfg.agent_timeout_seconds, extra_env={"AC_CODE_ROOT": tree, "LOOP_GROUP": gid})

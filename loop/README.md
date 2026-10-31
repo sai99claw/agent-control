@@ -29,6 +29,8 @@ group complete (= one PR, a local mark) -> regression.py (preflight + full suite
 | `python3 loop/tickets.py ready N` | after deciding on a stuck ticket |
 | `python3 loop/tickets.py cancel N --why ...` | drop a ticket |
 
+Agents run their tests with `python3 loop/run_tests.py <ids>` (output stays in their run directory).
+
 Run them from the project (or set `AC_ROOT` to it).
 
 ## Project settings (`board/config.json`, key `loop`)

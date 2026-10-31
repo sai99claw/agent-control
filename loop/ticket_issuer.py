@@ -239,7 +239,7 @@ class Issuer:
             "cases_run": " ".join((t.get("cases") or {}).get("run") or []) or "(not written yet)",
             "feedback": "\n".join(t.get("feedback") or []) or "(first round)",
             "revise_cmd": revise, "result_path": os.path.join(run_dir, "result.json"),
-            "test_cmd": "python3 %s run <ids>" % os.path.join(self.cfg.home, "scripts", "testiface.py"),
+            "test_cmd": "python3 %s <ids>" % os.path.join(LOOP, "run_tests.py"),
         }
         timeout = min(self.cfg.agent_timeout_seconds, self.left())
         p = agents.start(self.cfg, role, agents.render(template, values), cwd, run_dir, timeout,
