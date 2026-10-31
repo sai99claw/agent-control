@@ -743,5 +743,116 @@ class ProcessCount(ParallelFixture):
         self.assertNotIn("capped", tail)
 
 
+VM_STAT_REPORT = """Mach Virtual Memory Statistics: (page size of {page} bytes)
+Pages free:                               {free}.
+Pages active:                             987654.
+Pages inactive:                           {inactive}.
+Pages speculative:                        4321.
+Pages throttled:                                0.
+Pages wired down:                          123456.
+Pages purgeable:                             7777.
+"Translation faults":                   123456789.
+Pages copy-on-write:                      5555555.
+Pages zero filled:                      666666666.
+Pages reactivated:                         888888.
+Pages purged:                              999999.
+File-backed pages:                         543210.
+Anonymous pages:                           654321.
+Pages stored in compressor:                111111.
+Pages occupied by compressor:               22222.
+Decompressions:                            333333.
+Compressions:                              444444.
+Pageins:                                   555555.
+Pageouts:                                     666.
+Swapins:                                        0.
+Swapouts:                                       0.
+"""
+
+
+class T2Acceptance(ParallelFixture):
+    """Ticket #2: with no cgroup memory and no MemAvailable, `full` sizes N from fake `vm_stat`
+    (free + inactive pages, page size from its header) capped by a fake `sysctl -n hw.memsize`."""
+
+    def setUp(self):
+        super().setUp()
+        self.put("test_a.py", TWO_GREEN)
+        self.put("test_b.py", TWO_GREEN)
+        # Empty cgroup dir, meminfo without MemAvailable.
+        self.no_memory = fake_cgroup(os.path.join(self.tmp, "mac"))
+
+    def script(self, name, body):
+        path = os.path.join(self.tmp, name)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("#!/bin/sh\n" + body)
+        os.chmod(path, 0o755)
+        return path
+
+    def fake_vm_stat(self, page, free, inactive):
+        report = VM_STAT_REPORT.format(page=page, free=free, inactive=inactive)
+        return self.script("vm_stat", "cat <<'EOF'\n%sEOF\n" % report)
+
+    def fake_sysctl(self, memsize=None):
+        if memsize is None:
+            return self.script("sysctl", "echo 'sysctl: unknown oid' >&2\nexit 1\n")
+        return self.script("sysctl", '[ "$1" = "-n" ] && [ "$2" = "hw.memsize" ] && [ $# -eq 2 ]'
+                           ' || { echo "unexpected args: $*" >&2; exit 1; }\necho %d\n' % memsize)
+
+    def parallel_line(self, vm_stat, sysctl):
+        self.config()
+        env = self.env(FX_MARKS=self.marks, AC_VM_STAT=vm_stat, AC_SYSCTL=sysctl,
+                       **self.no_memory)
+        done, _ = self.full(env=env)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        lines = self.parallel_lines(done)
+        self.assertEqual(len(lines), 1, done.stdout)
+        return lines[0]
+
+    def assert_sized(self, line, mib):
+        self.assertNotIn("available memory unknown", line)
+        self.assertIn("available memory %d MiB" % mib, line)
+        found = LINE.match(line)
+        self.assertTrue(found, line)
+        self.assertEqual(int(found.group(2)), CPUS, line)
+        self.assertEqual(int(found.group(1)), expected_n(CPUS, mib), line)
+
+    def test_t2_vm_stat_16k_pages_free_plus_inactive(self):
+        """Item 1: M = (F+I)*16384 // MiB (odd page counts check the floor), sysctl larger."""
+        pages_per_mib = MIB // 16384
+        free, inactive = 5 * PEAK_MIB * pages_per_mib + 7, 5 * PEAK_MIB * pages_per_mib + 30
+        avail = (free + inactive) * 16384
+        line = self.parallel_line(self.fake_vm_stat(16384, free, inactive),
+                                  self.fake_sysctl(avail * 4 + 12345))
+        self.assert_sized(line, avail // MIB)
+        self.assertEqual(avail // MIB, 10 * PEAK_MIB)
+
+    def test_t2_vm_stat_4k_pages_read_from_header(self):
+        """Item 2: page size 4096 is read from the header, not assumed to be 16384."""
+        pages_per_mib = MIB // 4096
+        free, inactive = 2 * PEAK_MIB * pages_per_mib + 3, 1 * PEAK_MIB * pages_per_mib + 100
+        avail = (free + inactive) * 4096
+        line = self.parallel_line(self.fake_vm_stat(4096, free, inactive),
+                                  self.fake_sysctl(avail * 8))
+        self.assert_sized(line, avail // MIB)
+        self.assertEqual(avail // MIB, 3 * PEAK_MIB)
+
+    def test_t2_hw_memsize_caps_vm_stat(self):
+        """Item 3: hw.memsize smaller than (F+I)*page size → hw.memsize // MiB is reported."""
+        pages_per_mib = MIB // 16384
+        free, inactive = 20 * PEAK_MIB * pages_per_mib, 20 * PEAK_MIB * pages_per_mib
+        memsize = 2 * PEAK_MIB * MIB + 777777
+        self.assertLess(memsize, (free + inactive) * 16384)
+        line = self.parallel_line(self.fake_vm_stat(16384, free, inactive),
+                                  self.fake_sysctl(memsize))
+        self.assert_sized(line, memsize // MIB)
+
+    def test_t2_sysctl_failure_leaves_vm_stat_uncapped(self):
+        """Item 4: sysctl exits non-zero → the vm_stat value, uncapped."""
+        pages_per_mib = MIB // 16384
+        free, inactive = 4 * PEAK_MIB * pages_per_mib + 1, 3 * PEAK_MIB * pages_per_mib + 2
+        avail = (free + inactive) * 16384
+        line = self.parallel_line(self.fake_vm_stat(16384, free, inactive), self.fake_sysctl())
+        self.assert_sized(line, avail // MIB)
+
+
 if __name__ == "__main__":
     unittest.main()
