@@ -23,6 +23,7 @@ them): {project_memory}
 ## How to work
 
 1. Implement the ticket. Keep the change to what the ticket asks.
+   {tests_rule}
 2. If the verifier's branch `{cases_branch}` exists, merge it into your branch
    (`git merge {cases_branch}`) and make its cases pass. Cases to run: {cases_run}
    Run them with: {test_cmd}

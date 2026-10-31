@@ -153,6 +153,10 @@ def suspect_row(source, engine="", why="", count=None, threshold=None,
 
 
 def reports_dir(root):
+    # devloop runs tests on throwaway trees and points this outside the project (AC_REPORTS_DIR)
+    override = os.environ.get("AC_REPORTS_DIR")
+    if override:
+        return override
     return os.path.join(root, event.config(root).get("reports_dir") or DEFAULT_REPORTS)
 
 

@@ -244,6 +244,14 @@ class Issuer:
             "feedback": "\n".join(t.get("feedback") or []) or "(first round)",
             "revise_cmd": revise, "result_path": os.path.join(run_dir, "result.json"),
             "test_cmd": "python3 %s <ids>" % os.path.join(LOOP, "run_tests.py"),
+            "tests_rule": (
+                "The verifier writes the cases for the acceptance items, on its own branch. Do not add "
+                "or change tests for them yourself - the same tests written twice conflict when the "
+                "branches merge. Touch a test file only if the test_plan gives that test to you, or an "
+                "existing test must change because the ticket changes behaviour."
+                if t.get("needs_verifier", True) else
+                "This ticket has no verifier: write the tests for its acceptance items yourself, in the "
+                "project's existing test modules."),
             "memory": memory.for_prompt(self.pool.snapshot(), role, agents._model(self.cfg.agent(role))),
             "project_memory": os.path.join(self.pool.path, memory.rel("project", "project")),
         }
