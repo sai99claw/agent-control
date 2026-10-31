@@ -23,8 +23,10 @@ Code index (generated from the code; read it before searching, never edit it): {
 
 1. For each acceptance item (unless the test_plan gives it to the implementer), write a case that
    asserts it. Put cases in the project's existing test modules, next to the code they cover.
-   Name every case with **{case_mark}** (in Python unittest: put them in a class named
-   `{case_mark}`), so they never collide with the implementer's unit tests.
+   Name every case with **{case_mark}**: the mark must appear in the id of every acceptance
+   case, as the project's test interface reports that id in result.json. For a Python unittest
+   that is a class named `{case_mark}`; for other runners put it in the test's name or its file
+   name. This way the cases never collide with the implementer's unit tests.
 2. Run your cases here, on the code before the ticket: each case must fail by its assertion
    (not by an import error or a missing name - assert that a symbol exists first if needed).
    A script checks this before your cases are used, so a case that passes here, or errors,

@@ -54,7 +54,8 @@ Tests run through the project's existing test interface (`tests.*`, `scripts/tes
   consolidator fable then opus. To try `agy` for workers, put it first in the worker chain, e.g.
   `"worker": [["agy", "...", "high"], ["claude", "-p", "--model", "opus", "--effort", "medium", ...]]`.
 - A ticket may carry `effort` (low … max); it replaces the worker command's `--effort`.
-- The verifier names every acceptance case `T<id>Acceptance` (Python: a class of that name); the
+- The verifier names every acceptance case `T<id>Acceptance`: the mark must appear in each case's id as the test interface reports it in
+  result.json (Python unittest: a class of that name; other runners: the test or file name); the
   worker writes unit tests for its own code and never uses that name. Before the cases are used,
   the issuer runs them on the verifier's branch (old code + cases): every one must fail by its
   assertion.
