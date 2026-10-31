@@ -475,6 +475,90 @@ class MarkExplained(unittest.TestCase):
         self.assertIn("unittest", bullet)
 
 
+class T3Acceptance(LoopCase):
+    """Ticket #3: devloop.machine_slots bounds the heavy runs (agents, devloop-started test runs)."""
+
+    def intervals(self, slots, hold="1.5"):
+        self.config(machine_slots=slots)
+        self.log = os.path.join(self.tmp, "intervals.txt")
+        self.env.update(FAKE_INTERVALS=self.log, FAKE_HOLD=hold)
+
+    def recorded(self):
+        with open(self.log) as fh:
+            rows = [line.split() for line in fh if line.strip()]
+        return [(" ".join(r[:-2]), float(r[-2]), float(r[-1])) for r in rows]
+
+    def most_at_once(self):
+        """The most runs going at the start of any run (itself included; touching is not overlapping)."""
+        runs = self.recorded()
+        return max(1 + sum(1 for j, (_, a, b) in enumerate(runs) if j != i and a <= s < b)
+                   for i, (_, s, _) in enumerate(runs))
+
+    def hold_slot_zero(self):
+        """Another devloop process holding the only slot, played by this test process."""
+        import fcntl
+        slots = os.path.join(self.tmp, "wt", "slots")
+        os.makedirs(slots, exist_ok=True)
+        fh = open(os.path.join(slots, "slot-0"), "a")
+        self.addCleanup(fh.close)
+        fcntl.flock(fh, fcntl.LOCK_EX)
+
+    def test_one_slot_runs_everything_one_after_the_other_and_still_lands(self):
+        self.intervals(1)
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        names = [r[0] for r in self.recorded()]
+        self.assertIn("agent worker 1", names)
+        self.assertIn("agent verifier 1", names)
+        self.assertTrue(any(n.startswith("tests ") for n in names), names)
+        self.assertEqual(self.most_at_once(), 1, self.recorded())
+        self.assertEqual(os.listdir(os.path.join(self.tmp, "wt", "slots")), ["slot-0"])
+
+    def two_tickets(self, slots):
+        self.intervals(slots)
+        self.add(1)
+        self.add(2, verify="alone")
+        self.plan(worker={"2": ["slow"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual((self.state(1), self.state(2)), ("landed", "landed"))
+        names = [r[0] for r in self.recorded()]
+        self.assertIn("tests full", names)
+        self.assertIn("agent worker 2", names)
+        return self.most_at_once()
+
+    def test_two_slots_never_run_more_than_two_at_once(self):
+        self.assertLessEqual(self.two_tickets(2), 2, self.recorded())
+        self.assertTrue(set(os.listdir(os.path.join(self.tmp, "wt", "slots"))) <= {"slot-0", "slot-1"})
+
+    def test_one_slot_keeps_a_regression_apart_from_the_other_groups_agents(self):
+        self.assertEqual(self.two_tickets(1), 1, self.recorded())
+
+    def test_an_agent_without_a_slot_in_its_time_never_starts(self):
+        self.hold_slot_zero()
+        self.config(machine_slots=1, agent_timeout_seconds=3)
+        res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertFalse(os.path.exists(os.path.join(os.path.dirname(self.plan_path), "count-creator--")),
+                         "the creator ran without a slot")
+        pages = [r for r in self.snap().inbox.values() if r["kind"] == "decision"]
+        self.assertTrue(pages)
+        self.assertIn("machine slot", " ".join(r["text"] for r in pages))
+
+    def test_a_regression_without_a_slot_in_its_time_is_unmeasured(self):
+        self.hold_slot_zero()
+        self.config(machine_slots=1, regression_timeout_seconds=2)
+        out = os.path.join(self.tmp, "regression.json")
+        res = self.run_py("regression.py", "--branch", "main", "--out", out, timeout=120)
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        with open(out) as fh:
+            got = json.load(fh)
+        self.assertEqual(got["status"], "unmeasured")
+        self.assertIn("machine slot", got["summary"])
+
+
 class AgentChains(LoopCase):
     def cost_rows(self, ident, role):
         return [c for c in self.snap().ticket(str(ident)).get("cost") or [] if c["role"] == role]
