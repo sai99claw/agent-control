@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -89,6 +90,9 @@ class LoopCase(unittest.TestCase):
                         PATH=guard + os.pathsep + os.environ.get("PATH", ""),
                         GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
                         GIT_COMMITTER_EMAIL="t@t")
+        # a test's loop has its own slots: when the suite itself runs under a machine slot (an
+        # agent's run_tests.py), the inherited DEVLOOP_SLOT must not switch the test loop's slots off
+        self.env.pop("DEVLOOP_SLOT", None)
 
     # ------------------------------------------------------------ helpers
 
@@ -218,6 +222,164 @@ class RoundsAndFeedback(LoopCase):
         self.assertFalse(self.main_has("impl_1.txt"))
 
 
+class ExclusiveRegression(LoopCase):
+    """devloop.regression_exclusive: the implementer's tests (gate and whole-machine take in core/slots.py)."""
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)     # this process is not nested under a slot
+        os.environ["AC_ROOT"] = self.proj
+        self.slot_dir = os.path.join(self.tmp, "wt", "slots")
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def test_off_by_default_and_only_a_bool(self):
+        import time
+        from core import slots
+        self.config(machine_slots=1)
+        self.assertIs(self.cfg().regression_exclusive, False)
+        slot = slots.take(self.cfg(), time.time() + 1)
+        slot.release()
+        self.assertEqual(os.listdir(self.slot_dir), ["slot-0"])     # no gate file when off
+        for bad in (1, 0, "true", None, [True]):
+            self.config(machine_slots=1, regression_exclusive=bad)
+            with self.assertRaises(osx.OSFailure) as ctx:
+                self.cfg()
+            self.assertIn("devloop.regression_exclusive", str(ctx.exception))
+        self.config(machine_slots=None, regression_exclusive=False)
+        self.assertIs(self.cfg().regression_exclusive, False)
+
+    def test_exclusive_needs_slots(self):
+        self.config(machine_slots=None, regression_exclusive=True)
+        with self.assertRaises(osx.OSFailure) as ctx:
+            self.cfg()
+        self.assertIn("devloop.regression_exclusive", str(ctx.exception))
+        self.assertIn("devloop.machine_slots", str(ctx.exception))
+
+    def test_the_machine_take_holds_every_slot_and_blocks_new_takers(self):
+        import time
+        from core import slots
+        self.config(machine_slots=2, regression_exclusive=True)
+        cfg = self.cfg()
+        machine = slots.take_machine(cfg, time.time() + 2)
+        self.assertTrue(machine and machine.held)
+        self.assertEqual(sorted(os.path.basename(s.path) for s in machine.slots), ["slot-0", "slot-1"])
+        began = time.time()
+        self.assertIsNone(slots.take(cfg, time.time() + 0.6))     # gate shut: no slot although waiting
+        self.assertGreaterEqual(time.time() - began, 0.5)
+        machine.release()
+        machine.release()                                         # idempotent
+        slot = slots.take(cfg, time.time() + 1)
+        self.assertTrue(slot and slot.held)
+        slot.release()
+        self.assertEqual(sorted(os.listdir(self.slot_dir)), ["exclusive", "slot-0", "slot-1"])
+
+    def test_a_machine_take_waits_for_held_slots_and_gives_up_cleanly(self):
+        import fcntl
+        import time
+        from core import slots
+        self.config(machine_slots=2, regression_exclusive=True)
+        cfg = self.cfg()
+        held = slots.take(cfg, time.time() + 1)
+        self.assertEqual(os.path.basename(held.path), "slot-0")
+        self.assertIsNone(slots.take_machine(cfg, time.time() + 0.6))
+        # nothing left behind: the gate and slot-1 can be locked exclusively again
+        for name in ("exclusive", "slot-1"):
+            with open(os.path.join(self.slot_dir, name), "a") as fh:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        held.release()
+        machine = slots.take_machine(cfg, time.time() + 1)
+        self.assertTrue(machine and machine.held)
+        machine.release()
+
+    def test_a_shut_gate_alone_keeps_takers_off_free_slots(self):
+        import fcntl
+        import time
+        from core import slots
+        self.config(machine_slots=2, regression_exclusive=True)
+        os.makedirs(self.slot_dir, exist_ok=True)
+        fh = open(os.path.join(self.slot_dir, "exclusive"), "a")
+        self.addCleanup(fh.close)
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        began = time.time()
+        self.assertIsNone(slots.take(self.cfg(), time.time() + 0.6))
+        self.assertGreaterEqual(time.time() - began, 0.5)
+        fcntl.flock(fh, fcntl.LOCK_UN)
+        slot = slots.take(self.cfg(), time.time() + 1)
+        self.assertTrue(slot and slot.held)
+        slot.release()
+
+    def test_a_nested_run_ignores_the_gate(self):
+        import fcntl
+        import time
+        from core import slots
+        self.config(machine_slots=1, regression_exclusive=True)
+        os.makedirs(self.slot_dir, exist_ok=True)
+        fh = open(os.path.join(self.slot_dir, "exclusive"), "a")
+        self.addCleanup(fh.close)
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        os.environ["DEVLOOP_SLOT"] = os.path.join(self.slot_dir, "slot-0")
+        began = time.time()
+        self.assertFalse(slots.take(self.cfg(), time.time() + 5).held)
+        self.assertLess(time.time() - began, 0.5)
+
+    def test_a_regression_holding_the_mark_that_dies_blocks_nobody(self):
+        import time
+        from core import slots
+        self.config(machine_slots=2, regression_exclusive=True)
+        code = ("import sys, time; sys.path.insert(0, %r)\n"
+                "from core.config import Config\nfrom core import slots\n"
+                "m = slots.take_machine(Config(%r), time.time() + 10)\n"
+                "print('held' if m and m.held else 'none', flush=True)\ntime.sleep(60)\n" % (LOOP, self.proj))
+        child = subprocess.Popen(["python3", "-c", code], stdout=subprocess.PIPE, text=True,
+                                 env=os.environ.copy())
+        self.addCleanup(child.stdout.close)
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        self.assertEqual(child.stdout.readline().strip(), "held")
+        cfg = self.cfg()
+        self.assertIsNone(slots.take(cfg, time.time() + 0.6))
+        child.terminate()
+        child.wait(timeout=10)
+        began = time.time()
+        slot = slots.take(cfg, time.time() + 3)
+        self.assertTrue(slot and slot.held)
+        self.assertLess(time.time() - began, 3.0)
+        slot.release()
+
+    def test_a_regression_without_the_whole_machine_is_unmeasured_and_releases(self):
+        import fcntl
+        import time
+        from core import slots
+        self.config(machine_slots=2, regression_exclusive=True, regression_timeout_seconds=2)
+        held = slots.take(self.cfg(), time.time() + 1)
+        self.addCleanup(held.release)
+        out = os.path.join(self.tmp, "regression.json")
+        began = time.time()
+        res = self.run_py("regression.py", "--branch", "main", "--out", out, timeout=120)
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertGreaterEqual(time.time() - began, 2.0)
+        with open(out) as fh:
+            got = json.load(fh)
+        self.assertEqual(got["status"], "unmeasured")
+        self.assertIn("machine slot", got["summary"])
+        for name in ("exclusive", "slot-1"):
+            with open(os.path.join(self.slot_dir, name), "a") as fh:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_readme_describes_it(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            section = fh.read().split("## Machine slots", 1)[1].split("\n## ", 1)[0]
+        for words in ("regression_exclusive", "slots/exclusive", "needs `machine_slots`"):
+            self.assertIn(words, section)
+
+
 class Regression(LoopCase):
     def test_red_regression_is_fixed_on_the_integration_branch(self):
         self.add(1)
@@ -251,6 +413,65 @@ class Regression(LoopCase):
         self.assertEqual(self.snap().groups["g1"]["fix_round"], 1)
 
 
+class T4Acceptance(LoopCase):
+    """Ticket #4: devloop.regression_exclusive - a regression takes the whole machine."""
+
+    def recorded(self):
+        with open(self.log) as fh:
+            rows = [line.split() for line in fh if line.strip()]
+        return [(" ".join(r[:-2]), float(r[-2]), float(r[-1])) for r in rows]
+
+    def test_v1_no_regression_runs_beside_an_agent_or_an_issuer_test_run(self):
+        """Items 3-4: with the mark taken and every slot held, a regression overlaps nothing."""
+        self.config(machine_slots=2, regression_exclusive=True, max_parallel=2)
+        self.log = os.path.join(self.tmp, "intervals.txt")
+        self.env.update(FAKE_INTERVALS=self.log, FAKE_HOLD="1.5")
+        self.add(1)
+        self.add(2, verify="alone")
+        self.plan(worker={"2": ["slow"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual((self.state(1), self.state(2)), ("landed", "landed"))
+        runs = self.recorded()
+        names = [r[0] for r in runs]
+        self.assertIn("tests full", names)
+        self.assertIn("tests preflight", names)
+        self.assertIn("agent worker 2", names)
+        self.assertIn("tests run", names)
+        regressions = [r for r in runs if r[0] in ("tests preflight", "tests full")]
+        others = [r for r in runs if r[0].startswith("agent ") or r[0] == "tests run"]
+        overlaps = [(g, o) for g in regressions for o in others if g[1] < o[2] and o[1] < g[2]]
+        self.assertEqual(overlaps, [], runs)
+
+    def test_v2_a_held_mark_keeps_every_taker_waiting_until_its_own_limit(self):
+        """Item 3: while another process holds LOCK_EX on slots/exclusive, an agent takes no slot."""
+        import fcntl
+        slots = os.path.join(self.tmp, "wt", "slots")
+        os.makedirs(slots, exist_ok=True)
+        fh = open(os.path.join(slots, "exclusive"), "a")
+        self.addCleanup(fh.close)
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        self.config(machine_slots=2, regression_exclusive=True, agent_timeout_seconds=3)
+        res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
+        import glob
+        ran = glob.glob(os.path.join(os.path.dirname(self.plan_path), "count-creator-*"))
+        self.assertEqual(ran, [], "the creator ran while the exclusive mark was held")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+
+    def test_v3_exclusive_without_machine_slots_stops_every_script(self):
+        """Item 2: regression_exclusive true needs machine_slots."""
+        for absent in (True, False):
+            if absent:
+                self.config(regression_exclusive=True)
+            else:
+                self.config(regression_exclusive=True, machine_slots=None)
+            res = self.run_py("tickets.py", "list")
+            self.assertEqual(res.returncode, 2, "machine_slots %s: %s" % (
+                "absent" if absent else "null", res.stdout + res.stderr))
+            self.assertIn("devloop.regression_exclusive", res.stderr)
+            self.assertIn("devloop.machine_slots", res.stderr)
+
+
 class ReleaseFails(LoopCase):
     release = "exit 7"
 
@@ -264,6 +485,22 @@ class ReleaseFails(LoopCase):
         self.assertIn("decision", self.inbox_kinds())
 
 
+class T8Acceptance(LoopCase):
+    def test_a_release_past_release_timeout_seconds_is_stopped_and_failed(self):
+        out = os.path.join(self.tmp, "release-out.txt")
+        self.config(release="sleep 5; echo done >> %s" % out, release_timeout_seconds=1)
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+        pages = [row for row in self.snap().inbox.values()
+                 if row["kind"] == "decision" and row["ref"] == "g1"]
+        self.assertTrue(pages, "a decision page about g1")
+        self.assertTrue(any("timeout" in row["text"] for row in pages), pages)
+        self.assertFalse(os.path.exists(out), "the release's process group was not stopped")
+
+
 class Timeout(LoopCase):
     loop_extra = {"issuer_timeout_seconds": 4}
 
@@ -274,6 +511,95 @@ class Timeout(LoopCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         t = self.snap().ticket("1")
         self.assertEqual((t["state"], t["stuck"]["reason"]), ("stuck", "timeout"))
+
+
+class T9Acceptance(LoopCase):
+    """tickets.py release <group>: re-run a failed release (ticket #9)."""
+
+    def land_failed(self):
+        self.flag = os.path.join(self.tmp, "release-flag")
+        self.out = os.path.join(self.tmp, "release-out.txt")
+        self.config(release='if test -f %s; then { git rev-parse HEAD; '
+                            'echo "$DEVLOOP_RELEASE_SHA $DEVLOOP_GROUP $DEVLOOP_TICKETS"; pwd; } >> %s; '
+                            'else echo NOFLAG-MARK; exit 3; fi' % (self.flag, self.out))
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+        self.assertFalse(os.path.exists(self.out))
+
+    def out_lines(self):
+        if not os.path.exists(self.out):
+            return []
+        with open(self.out) as fh:
+            return fh.read().splitlines()
+
+    def pages(self, kind):
+        return [row for row in self.snap().inbox.values() if row["kind"] == kind and row["ref"] == "g1"]
+
+    def worktrees(self):
+        return [line for line in git(self.proj, "worktree", "list", "--porcelain").splitlines()
+                if line.startswith("worktree ")]
+
+    def test_a_failed_release_is_rerun_at_landed_sha_in_a_throwaway_worktree(self):
+        self.land_failed()
+        trees = self.worktrees()
+        history = len(self.snap().groups["g1"].get("history") or [])
+        open(self.flag, "w").close()
+        res = self.run_py("tickets.py", "release", "g1")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        lines = self.out_lines()
+        self.assertEqual(len(lines), 3, "the release ran exactly once: %r" % lines)
+        head, envline, cwd = lines
+        grp = self.snap().groups["g1"]
+        self.assertEqual(envline, "%s g1 1" % grp["landed_sha"])
+        self.assertEqual(head, grp["landed_sha"])
+        self.assertNotEqual(os.path.realpath(cwd), os.path.realpath(self.proj),
+                            "the release ran in the project checkout")
+        self.assertFalse(os.path.exists(cwd), "the release worktree was not removed")
+        self.assertEqual(self.worktrees(), trees, "the release worktree is still registered")
+        self.assertEqual(grp["release"], "ok")
+        self.assertEqual(len(grp["history"]), history + 1)
+        self.assertIn("re-run", grp["history"][-1]["event"])
+        self.assertTrue(self.pages("landed"), "a landed page about g1")
+
+    def test_a_rerun_that_fails_stays_failed_and_leaves_a_decision_with_rc_and_output(self):
+        self.land_failed()
+        decisions = len(self.pages("decision"))
+        history = len(self.snap().groups["g1"].get("history") or [])
+        time.sleep(1.1)  # page names are unique to the second
+        res = self.run_py("tickets.py", "release", "g1")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        grp = self.snap().groups["g1"]
+        self.assertEqual(grp["release"], "failed")
+        self.assertEqual(len(grp["history"]), history + 1)
+        self.assertIn("re-run", grp["history"][-1]["event"])
+        pages = sorted(self.pages("decision"), key=lambda r: r["at"])
+        self.assertEqual(len(pages), decisions + 1)
+        text = pages[-1]["text"]
+        self.assertIn("NOFLAG-MARK", text)
+        self.assertRegex(text, r"\b3\b")
+        self.assertEqual(self.out_lines(), [])
+
+    def test_an_ok_release_is_refused_unless_again(self):
+        self.land_failed()
+        open(self.flag, "w").close()
+        res = self.run_py("tickets.py", "release", "g1")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["release"], "ok")
+        before, inbox = self.out_lines(), len(self.snap().inbox)
+        self.assertEqual(len(before), 3)
+        res = self.run_py("tickets.py", "release", "g1")
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertEqual(len(res.stderr.strip().splitlines()), 1, res.stderr)
+        self.assertEqual(self.out_lines(), before, "a refused release ran")
+        self.assertEqual(len(self.snap().inbox), inbox, "a refused release left a page")
+        time.sleep(1.1)
+        res = self.run_py("tickets.py", "release", "g1", "--again")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(len(self.out_lines()), 6, "--again ran the release once more")
+        self.assertEqual(self.snap().groups["g1"]["release"], "ok")
 
 
 class Revise(LoopCase):
@@ -299,6 +625,98 @@ class Revise(LoopCase):
         res = self.run_py("ticket_creator.py", "--request", "x")
         self.assertEqual(res.returncode, 1, res.stderr)
         self.assertEqual(self.snap().tickets, {})
+
+
+class ReleaseRerun(LoopCase):
+    """tickets.py release: refusals, the timeout, the shared function and the docs (#9)."""
+    release = "exit 7"
+
+    def land_failed(self):
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+
+    def decisions(self):
+        return [r for r in self.snap().inbox.values() if r["kind"] == "decision" and r["ref"] == "g1"]
+
+    def test_unknown_or_unlanded_group_is_refused_and_nothing_runs(self):
+        out = os.path.join(self.tmp, "out")
+        self.config(release="echo ran >> %s" % out)
+        res = self.run_py("tickets.py", "release", "g9")
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertEqual(len(res.stderr.strip().splitlines()), 1, res.stderr)
+        self.assertIn("g9", res.stderr)
+        self.pool.update(lambda tx: tx.put_group({"id": "g2", "state": "pr", "members": ["1"],
+                                                  "branch": "int/g2"}), "test: open group")
+        res = self.run_py("tickets.py", "release", "g2")
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertEqual(len(res.stderr.strip().splitlines()), 1, res.stderr)
+        self.assertIn("g2", res.stderr)
+        self.assertFalse(os.path.exists(out))
+        self.assertEqual(self.snap().inbox, {})
+
+    def test_no_release_configured_gives_the_config_sentence(self):
+        from core.config import Config
+        self.land_failed()
+        self.config(release=None)
+        with self.assertRaises(osx.OSFailure) as ctx:
+            Config(self.proj).require_release()
+        pages = len(self.snap().inbox)
+        res = self.run_py("tickets.py", "release", "g1")
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertIn(str(ctx.exception), res.stderr)
+        self.assertEqual(len(self.snap().inbox), pages)
+
+    def test_the_rerun_is_limited_by_release_timeout_seconds(self):
+        self.land_failed()
+        out = os.path.join(self.tmp, "out")
+        self.config(release="sleep 5; echo done >> %s" % out, release_timeout_seconds=1)
+        before = len(self.decisions())
+        res = self.run_py("tickets.py", "release", "g1", timeout=60)
+        self.assertEqual(res.returncode, 1, res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+        new = self.decisions()
+        self.assertEqual(len(new), before + 1)
+        self.assertTrue(any("timeout" in r["text"] and "rc " in r["text"] for r in new), new)
+        self.assertIn("release re-run: failed", json.dumps(self.snap().groups["g1"]))
+        self.assertFalse(os.path.exists(out), "the release ran past its limit")
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "wt", "release-g1")), "worktree left behind")
+
+    def test_actl_tickets_release_runs_it_too(self):
+        self.land_failed()
+        self.config(release="true")
+        res = subprocess.run([os.path.join(HOME, "bin", "actl"), "tickets", "release", "g1"], cwd=self.proj,
+                             env=self.env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["release"], "ok")
+
+    def test_controller_release_is_the_shared_function(self):
+        import ticket_controller
+        from core import release
+        from core.config import Config
+        calls = []
+        orig = release.run
+        release.run = lambda cfg, g, sha: calls.append((g["id"], sha)) or (True, "x")
+        try:
+            ctl = ticket_controller.Controller(Config(self.proj), self.pool)
+            self.assertEqual(ctl.release({"id": "g5", "members": []}, "abc"), (True, "x"))
+        finally:
+            release.run = orig
+        self.assertEqual(calls, [("g5", "abc")])
+
+    def test_help_docstring_and_readme_list_the_command(self):
+        def read(*parts):
+            with open(os.path.join(HOME, *parts)) as fh:
+                return fh.read()
+        actl = [ln for ln in read("bin", "actl").splitlines() if ln.startswith("  tickets ")]
+        self.assertEqual(len(actl), 1)
+        self.assertIn("|release", actl[0])
+        doc = read("devloop", "tickets.py").split('"""')[1]
+        self.assertIn("tickets.py release", doc)
+        readme = read("devloop", "README.md").splitlines()
+        cancel = [i for i, ln in enumerate(readme) if ln.startswith("| `python3 devloop/tickets.py cancel")][0]
+        self.assertIn("tickets.py release", readme[cancel + 1])
 
 
 class WebInput(LoopCase):
@@ -456,6 +874,37 @@ class RedCheck(LoopCase):
         self._round_two("unnamed", "result.json")
 
 
+class TestLayerDocs(unittest.TestCase):
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def read(self, *p):
+        with open(os.path.join(self.ROOT, *p), encoding="utf-8") as f:
+            return f.read()
+
+    def test_readme_bullet_names_the_three_commands(self):
+        text = self.read("devloop", "README.md")
+        bullet = [b for b in text.split("\n- ") if b.startswith("devloop calls only")]
+        self.assertTrue(bullet, "README lacks the 'devloop calls only' bullet")
+        for w in ("tests.preflight", "tests.run", "tests.full", "every id", "result.json"):
+            self.assertIn(w, bullet[0])
+        self.assertIn("(`tests.preflight`, `tests.run`, `tests.full`;", text)
+
+    def test_template_script(self):
+        path = os.path.join(self.ROOT, "templates", "project-tests.example.sh")
+        text = self.read("templates", "project-tests.example.sh")
+        for w in ("verify.py", "regression)", "select)"):
+            self.assertNotIn(w, text)
+        self.assertEqual(subprocess.run(["sh", "-n", path]).returncode, 0)
+
+    def test_example_config_has_no_select_or_regression(self):
+        cfg = json.loads(self.read("templates", "project-config.example.json"))
+        self.assertNotIn("select", cfg["tests"])
+        self.assertNotIn("regression", cfg["tests"])
+
+    def test_verifier_prompt_forbids_a_file_per_ticket(self):
+        self.assertIn("new file", self.read("devloop", "prompts", "verifier.md"))
+
+
 class MarkExplained(unittest.TestCase):
     def step_one(self):
         from core import agents
@@ -473,6 +922,90 @@ class MarkExplained(unittest.TestCase):
         bullet = [b for b in text.split("\n- ") if "T<id>Acceptance" in b][0]
         self.assertIn("result.json", bullet)
         self.assertIn("unittest", bullet)
+
+
+class T3Acceptance(LoopCase):
+    """Ticket #3: devloop.machine_slots bounds the heavy runs (agents, devloop-started test runs)."""
+
+    def intervals(self, slots, hold="1.5"):
+        self.config(machine_slots=slots)
+        self.log = os.path.join(self.tmp, "intervals.txt")
+        self.env.update(FAKE_INTERVALS=self.log, FAKE_HOLD=hold)
+
+    def recorded(self):
+        with open(self.log) as fh:
+            rows = [line.split() for line in fh if line.strip()]
+        return [(" ".join(r[:-2]), float(r[-2]), float(r[-1])) for r in rows]
+
+    def most_at_once(self):
+        """The most runs going at the start of any run (itself included; touching is not overlapping)."""
+        runs = self.recorded()
+        return max(1 + sum(1 for j, (_, a, b) in enumerate(runs) if j != i and a <= s < b)
+                   for i, (_, s, _) in enumerate(runs))
+
+    def hold_slot_zero(self):
+        """Another devloop process holding the only slot, played by this test process."""
+        import fcntl
+        slots = os.path.join(self.tmp, "wt", "slots")
+        os.makedirs(slots, exist_ok=True)
+        fh = open(os.path.join(slots, "slot-0"), "a")
+        self.addCleanup(fh.close)
+        fcntl.flock(fh, fcntl.LOCK_EX)
+
+    def test_one_slot_runs_everything_one_after_the_other_and_still_lands(self):
+        self.intervals(1)
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        names = [r[0] for r in self.recorded()]
+        self.assertIn("agent worker 1", names)
+        self.assertIn("agent verifier 1", names)
+        self.assertTrue(any(n.startswith("tests ") for n in names), names)
+        self.assertEqual(self.most_at_once(), 1, self.recorded())
+        self.assertEqual(os.listdir(os.path.join(self.tmp, "wt", "slots")), ["slot-0"])
+
+    def two_tickets(self, slots):
+        self.intervals(slots)
+        self.add(1)
+        self.add(2, verify="alone")
+        self.plan(worker={"2": ["slow"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual((self.state(1), self.state(2)), ("landed", "landed"))
+        names = [r[0] for r in self.recorded()]
+        self.assertIn("tests full", names)
+        self.assertIn("agent worker 2", names)
+        return self.most_at_once()
+
+    def test_two_slots_never_run_more_than_two_at_once(self):
+        self.assertLessEqual(self.two_tickets(2), 2, self.recorded())
+        self.assertTrue(set(os.listdir(os.path.join(self.tmp, "wt", "slots"))) <= {"slot-0", "slot-1"})
+
+    def test_one_slot_keeps_a_regression_apart_from_the_other_groups_agents(self):
+        self.assertEqual(self.two_tickets(1), 1, self.recorded())
+
+    def test_an_agent_without_a_slot_in_its_time_never_starts(self):
+        self.hold_slot_zero()
+        self.config(machine_slots=1, agent_timeout_seconds=3)
+        res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertFalse(os.path.exists(os.path.join(os.path.dirname(self.plan_path), "count-creator--")),
+                         "the creator ran without a slot")
+        pages = [r for r in self.snap().inbox.values() if r["kind"] == "decision"]
+        self.assertTrue(pages)
+        self.assertIn("machine slot", " ".join(r["text"] for r in pages))
+
+    def test_a_regression_without_a_slot_in_its_time_is_unmeasured(self):
+        self.hold_slot_zero()
+        self.config(machine_slots=1, regression_timeout_seconds=2)
+        out = os.path.join(self.tmp, "regression.json")
+        res = self.run_py("regression.py", "--branch", "main", "--out", out, timeout=120)
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        with open(out) as fh:
+            got = json.load(fh)
+        self.assertEqual(got["status"], "unmeasured")
+        self.assertIn("machine slot", got["summary"])
 
 
 class AgentChains(LoopCase):
@@ -518,6 +1051,182 @@ class AgentChains(LoopCase):
             agents.with_effort(["claude"], "huge")
 
 
+class MachineSlots(LoopCase):
+    """devloop.machine_slots: the implementer's tests (core/slots.py and its call sites)."""
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)     # this process is not nested under a slot
+        os.environ["AC_ROOT"] = self.proj
+        self.slot_dir = os.path.join(self.tmp, "wt", "slots")
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def agents_cfg(self):
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            return json.load(fh)["devloop"]["agents"]
+
+    def hold_slot(self):
+        """This test process takes the only slot."""
+        import time
+        from core import slots
+        slot = slots.take(self.cfg(), time.time() + 5)
+        self.assertTrue(slot and slot.held)
+        self.addCleanup(slot.release)
+        return slot
+
+    def test_no_setting_takes_no_slot(self):
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertFalse(os.path.exists(self.slot_dir))
+        self.config(machine_slots=None)
+        self.assertIsNone(self.cfg().machine_slots)
+
+    def test_bad_values_stop_every_script(self):
+        for bad in (0, -1, True, "2", 1.5):
+            self.config(machine_slots=bad)
+            with self.assertRaises(osx.OSFailure) as ctx:
+                self.cfg()
+            self.assertIn("devloop.machine_slots", str(ctx.exception))
+        res = self.run_py("tickets.py", "list")
+        self.assertEqual(res.returncode, 2, res.stdout)
+        self.assertIn("devloop.machine_slots", res.stderr)
+        self.config(machine_slots=3)
+        self.assertEqual(self.cfg().machine_slots, 3)
+
+    def test_slot_files_are_kept_and_a_held_slot_blocks_the_next_taker(self):
+        import time
+        from core import slots
+        self.config(machine_slots=2)
+        cfg = self.cfg()
+        a = slots.take(cfg, time.time() + 1)
+        b = slots.take(cfg, time.time() + 1)
+        self.assertEqual(sorted(os.path.basename(s.path) for s in (a, b)), ["slot-0", "slot-1"])
+        began = time.time()
+        self.assertIsNone(slots.take(cfg, time.time() + 1.2))
+        self.assertGreaterEqual(time.time() - began, 1.0)
+        inode = os.stat(a.path).st_ino
+        a.release()
+        a.release()                                     # idempotent
+        c = slots.take(cfg, time.time() + 1)
+        self.assertEqual(c.path, a.path)
+        self.assertEqual(os.stat(c.path).st_ino, inode)  # never replaced
+        b.release()
+        c.release()
+        self.assertEqual(sorted(os.listdir(self.slot_dir)), ["slot-0", "slot-1"])
+
+    def test_a_nested_taker_neither_waits_nor_takes(self):
+        import time
+        from core import slots
+        self.config(machine_slots=1)
+        held = self.hold_slot()
+        os.environ["DEVLOOP_SLOT"] = held.path
+        began = time.time()
+        free = slots.take(self.cfg(), time.time() + 5)
+        self.assertLess(time.time() - began, 0.5)
+        self.assertFalse(free.held)
+        self.assertIsNone(free.path)
+
+    def test_an_agent_slot_is_free_when_it_exits_though_its_background_child_lives(self):
+        import time
+        from core import agents, slots
+        script = ('sleep 20 & echo "{\\"kind\\": \\"done\\", \\"slot\\": \\"$DEVLOOP_SLOT\\"}" '
+                  '> "$DEVLOOP_RESULT"; exit 0')
+        self.config(machine_slots=1, agents=dict(self.agents_cfg(), worker=["sh", "-c", script]))
+        cfg = self.cfg()
+        p = agents.start(cfg, "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30)
+        self.addCleanup(p.stop)          # ends the background sleep (its process group)
+        began = time.time()
+        slot = slots.take(cfg, time.time() + 3)     # the worker was never collected
+        self.assertTrue(slot and slot.held, "the agent's slot was not freed within 3 s of its exit")
+        self.assertLess(time.time() - began, 3.5)
+        slot.release()
+        hand = p.finish()
+        self.assertIsNone(hand.problem())
+        self.assertEqual(hand.result["slot"], os.path.join(self.slot_dir, "slot-0"))
+
+    def test_an_agent_with_no_slot_in_time_never_starts(self):
+        import time
+        from core import agents
+        marker = os.path.join(self.tmp, "ran")
+        self.config(machine_slots=1, agents=dict(self.agents_cfg(), worker=["touch", marker]))
+        self.hold_slot()
+        began = time.time()
+        hand = agents.run(self.cfg(), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 1.2)
+        self.assertGreaterEqual(time.time() - began, 1.0)
+        self.assertFalse(os.path.exists(marker))
+        self.assertIn("machine slot", hand.problem())
+        self.assertEqual(hand.cost["outcome"], "no slot")
+        self.assertIsNone(hand.cost["input_tokens"])
+        self.assertGreaterEqual(hand.cost["seconds"], 1.0)
+        self.assertEqual(agents.model_of(None), "unknown")
+
+    def test_a_holder_that_dies_frees_its_slot(self):
+        import time
+        from core import slots
+        self.config(machine_slots=1)
+        code = ("import sys, time; sys.path.insert(0, %r)\n"
+                "from core.config import Config\nfrom core import slots\n"
+                "s = slots.take(Config(%r), time.time() + 10)\n"
+                "print('held' if s and s.held else 'none', flush=True)\ntime.sleep(60)\n" % (LOOP, self.proj))
+        child = subprocess.Popen(["python3", "-c", code], stdout=subprocess.PIPE, text=True,
+                                 env=os.environ.copy())
+        self.addCleanup(child.stdout.close)
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        self.assertEqual(child.stdout.readline().strip(), "held")
+        cfg = self.cfg()
+        self.assertIsNone(slots.take(cfg, time.time() + 0.6))
+        child.terminate()
+        child.wait(timeout=10)
+        began = time.time()
+        slot = slots.take(cfg, time.time() + 3)
+        self.assertTrue(slot and slot.held)
+        self.assertLess(time.time() - began, 3.5)
+        slot.release()
+
+    def test_an_issuer_test_run_with_no_slot_before_the_deadline_is_stuck_timeout(self):
+        import time
+        import ticket_issuer
+        self.config(machine_slots=1)
+        self.hold_slot()
+        issuer = ticket_issuer.Issuer.__new__(ticket_issuer.Issuer)
+        issuer.cfg, issuer.id, issuer.deadline = self.cfg(), "1", time.time() + 1.2
+        with self.assertRaises(ticket_issuer.Stuck) as ctx:
+            issuer.run_cases({"cases": {"run": ["case_1"]}})
+        self.assertEqual(ctx.exception.reason, "timeout")
+        self.assertIn("machine slot", ctx.exception.text)
+
+    def test_a_worker_that_has_its_ticket_revised_lands_with_one_slot(self):
+        self.config(machine_slots=1)
+        self.add(1)
+        self.plan(worker={"1": ["revise", "ok"]}, creator={"1": ["revised"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        t = self.snap().ticket("1")
+        self.assertEqual(t["state"], "landed")
+        self.assertEqual(t["acceptance"], ["a possible thing"])
+        self.assertEqual(sorted(os.listdir(self.slot_dir)), ["slot-0"])
+
+    def test_readme_has_the_section(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            text = fh.read()
+        self.assertLess(text.index("## Project settings"), text.index("## Machine slots"))
+        self.assertLess(text.index("## Machine slots"), text.index("## Agents, models and tests"))
+        section = text.split("## Machine slots", 1)[1].split("\n## ", 1)[0]
+        for words in ("agent", "red check", "regression", "slots/slot-", "own limit", "DEVLOOP_SLOT",
+                      "parent's slot"):
+            self.assertIn(words, section)
+
+
 class Landing(LoopCase):
     def test_the_code_map_is_refreshed_on_main_and_the_cost_is_totalled(self):
         with open(os.path.join(self.proj, "app.py"), "w") as fh:
@@ -535,6 +1244,15 @@ class Landing(LoopCase):
         self.assertEqual(total["runs"], 2)
         self.assertEqual(total["unknown_runs"], 2, "fake agents report no tokens: unknown, not 0")
         self.assertIsNone(total["input_tokens"])
+
+
+class ReleaseTimeoutSetting(LoopCase):
+    def test_release_timeout_defaults_to_3600_and_can_be_set(self):
+        from core.config import Config
+        self.config(release="true")
+        self.assertEqual(Config(self.proj).release_timeout_seconds, 3600)
+        self.config(release_timeout_seconds=7)
+        self.assertEqual(Config(self.proj).release_timeout_seconds, 7)
 
 
 class RequiredFields(LoopCase):
@@ -579,6 +1297,32 @@ class Recovery(LoopCase):
         res = self.controller()
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(self.state(1), "landed")
+
+
+class LessonsHelpers(unittest.TestCase):
+    def test_bullets_parse_and_limits(self):
+        from core import memory
+        with tempfile.TemporaryDirectory() as d:
+            f = os.path.join(d, "n.md")
+            with open(f, "w") as fh:
+                fh.write("# h\n- a\n  * b\nplain\n- \n-" + "x" * 1300 + "\n")
+            got = memory.bullets(f)
+            self.assertEqual(got[:2], ["a", "b"])
+            self.assertEqual(len(got), 3)
+            self.assertEqual(len(got[2]), memory.MAX_TEXT)
+            with self.assertRaises(OSError):
+                memory.bullets(os.path.join(d, "missing"))
+
+    def test_import_keys_are_unique_per_import(self):
+        from core import memory
+
+        class Tx:
+            def __init__(self): self.rows = {}
+            def write(self, k, v): self.rows[k] = v
+        tx = Tx()
+        memory.import_lessons(tx, ["a"], "role", "worker", "/x/f.md")
+        memory.import_lessons(tx, ["b"], "role", "worker", "/x/f.md")
+        self.assertEqual(len(tx.rows), 2)
 
 
 class Memory(LoopCase):
@@ -641,6 +1385,84 @@ class Memory(LoopCase):
         self.pool.update(change, "test: one lesson")
         from core import memory
         self.assertEqual(memory.due(self.snap()), [])
+
+
+class T7Acceptance(LoopCase):
+    """Ticket #7: tickets.py lessons imports a project's own old memory as lessons."""
+
+    def write(self, name, text):
+        path = os.path.join(self.tmp, name)
+        with open(path, "w") as fh:
+            fh.write(text)
+        return path
+
+    def lessons(self, *args):
+        return self.run_py("tickets.py", "lessons", *args)
+
+    def rows(self, layer, name):
+        return [r for r in self.snap().lessons.values() if r.get("layer") == layer and r.get("name") == name]
+
+    def pool_commits(self):
+        return int(git(self.pool_path, "rev-list", "--count", "HEAD"))
+
+    def test_item1_every_bullet_line_is_queued_once_with_its_text(self):
+        self.init_without_imports()
+        path = self.write("old-worker.md", "# Old worker notes\n\nA plain line, not a bullet.\n"
+                                           "- dash lesson\n* star lesson\n  - indented lesson  \n")
+        res = self.lessons("--layer", "role", "--name", "worker", "--file", path)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("3", res.stdout)
+        self.assertIn("memory/role/worker.md", res.stdout)
+        rows = self.rows("role", "worker")
+        self.assertEqual(len(self.snap().lessons), 3, "only the three bullets are queued")
+        self.assertEqual(sorted(r["text"] for r in rows), ["dash lesson", "indented lesson", "star lesson"])
+        for r in rows:
+            self.assertIn(path, r.get("source", ""))
+            self.assertTrue(r.get("at"))
+
+    def test_item2_one_pool_commit_and_the_memory_file_is_untouched(self):
+        self.init_without_imports()
+        before = self.snap().memory["memory/role/worker.md"]
+        commits = self.pool_commits()
+        path = self.write("old.md", "- one\n- two\n")
+        res = self.lessons("--layer", "role", "--name", "worker", "--file", path)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(len(self.rows("role", "worker")), 2)
+        self.assertEqual(self.pool_commits(), commits + 1, "one pool commit")
+        self.assertEqual(self.snap().memory["memory/role/worker.md"], before)
+
+    def test_item3_two_files_for_the_same_memory_both_stay_queued(self):
+        self.init_without_imports()
+        a = self.write("a.md", "- a one\n- a two\n")
+        b = self.write("b.md", "- b one\n- b two\n- b three\n")
+        for path in (a, b):
+            res = self.lessons("--layer", "role", "--name", "worker", "--file", path)
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        rows = self.rows("role", "worker")
+        self.assertEqual(len(rows), 5)
+        self.assertEqual(sorted(r["text"] for r in rows),
+                         ["a one", "a two", "b one", "b three", "b two"])
+
+    def test_item4_five_imported_lessons_are_consolidated_by_the_keeper(self):
+        self.init_without_imports()
+        path = self.write("five.md", "".join("- lesson %d from #imp\n" % i for i in range(1, 6)))
+        res = self.lessons("--layer", "role", "--name", "worker", "--file", path)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(len(self.rows("role", "worker")), 5)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        snap = self.snap()
+        self.assertIn("merged 5 lessons", snap.memory["memory/role/worker.md"])
+        self.assertEqual(snap.lessons, {}, "the imported lessons were consumed")
+
+    def test_item5_project_layer_without_name_uses_name_project(self):
+        self.init_without_imports()
+        path = self.write("project-old.md", "- a project reason\n- another invariant\n")
+        res = self.lessons("--layer", "project", "--file", path)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        rows = list(self.snap().lessons.values())
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(r["layer"] == "project" and r["name"] == "project" for r in rows), rows)
 
 
 class Board(LoopCase):
@@ -761,6 +1583,31 @@ class AgentEnv(LoopCase):
                     os.environ[k] = v
         self.assertEqual([k for k in PARENT_SESSION if k in env], [])
         self.assertEqual(env["DEVLOOP_ROLE"], "worker")
+
+
+class ProjectRulesHome(unittest.TestCase):
+    def read(self, *parts):
+        with open(os.path.join(HOME, *parts)) as f:
+            return f.read()
+
+    def test_template_line_one_and_heading(self):
+        text = self.read("templates", "project-CLAUDE.md")
+        first = text.split("\n", 1)[0]
+        self.assertIn("DEVLOOP_ROLE", first)
+        self.assertIn("Rules for every agent", first)
+        self.assertIn("\n## Rules for every agent\n", text)
+
+    def test_template_old_sentence_and_select_gone(self):
+        text = self.read("templates", "project-CLAUDE.md")
+        self.assertNotIn("agents started by devloop read only their prompt", text)
+        self.assertNotIn("select", text)
+
+    def test_readme_section_points_to_the_home(self):
+        text = self.read("devloop", "README.md")
+        self.assertIn("\n## Project rules for agents\n", text)
+        sec = text.split("\n## Project rules for agents\n", 1)[1].split("\n## ", 1)[0]
+        for word in ("CLAUDE.md", "AGENTS.md", "project memory", "hard_block"):
+            self.assertIn(word, sec.replace("Project memory", "project memory"))
 
 
 class AgentControlRelease(unittest.TestCase):

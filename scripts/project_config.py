@@ -283,6 +283,13 @@ def doctor_rows(root):
     if not loop.get("release"):
         rows.append(("error", "devloop.release missing - actl run refuses to start without the "
                      "project's release command", "edit board/config.json"))
+    hard_block = conf.get("hard_block") if isinstance(conf.get("hard_block"), dict) else {}
+    if hard_block.get("dirs"):
+        rows.append(("warning", "hard_block.dirs is not read by devloop - a directory inside the "
+                     "repository belongs in hard_block.paths (paths already match directory "
+                     "prefixes); a directory outside the repository is not guarded by devloop: "
+                     "keep agents away from it with the project's CLAUDE.md rules for agents "
+                     "(section \"Rules for every agent\")", None))
     settings_path = os.path.join(root, ".claude", "settings.json")
     if os.path.exists(settings_path):
         try:

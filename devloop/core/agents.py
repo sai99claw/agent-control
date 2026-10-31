@@ -20,7 +20,7 @@ import re
 import string
 import time
 
-from . import osx
+from . import osx, slots
 
 PROMPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
@@ -31,9 +31,9 @@ QUOTA_SIGNS = ("usage limit", "rate limit", "quota", "credit balance", "limit re
 class Hand:
     """What came back from one agent run."""
 
-    def __init__(self, role, result, rc, timed_out, log, cost):
+    def __init__(self, role, result, rc, timed_out, log, cost, why=None):
         self.role, self.result, self.rc, self.timed_out = role, result, rc, timed_out
-        self.log, self.cost = log, cost
+        self.log, self.cost, self.why = log, cost, why
 
     @property
     def kind(self):
@@ -41,6 +41,8 @@ class Hand:
 
     def problem(self):
         """Why this hand-in cannot be used, or None."""
+        if self.why:
+            return self.why
         if self.timed_out:
             return "%s ran out of time and was stopped" % self.role
         if self.result is None:
@@ -89,6 +91,7 @@ def with_effort(argv, effort):
 
 
 def model_of(argv):
+    argv = argv or []
     if "--model" in argv:
         i = argv.index("--model")
         if i + 1 < len(argv):
@@ -97,6 +100,7 @@ def model_of(argv):
 
 
 def effort_of(argv):
+    argv = argv or []
     if "--effort" in argv:
         i = argv.index("--effort")
         if i + 1 < len(argv):
@@ -119,7 +123,7 @@ def start(cfg, role, prompt, cwd, run_dir, timeout, extra_env=None, effort=None,
     env = cfg.env(DEVLOOP_ROLE=role, DEVLOOP_RUN_DIR=run_dir, DEVLOOP_RESULT=result_path,
                   **(extra_env or {}))
     chain = [with_effort(argv, effort) for argv in cfg.agent_chain(chain_role or role)]
-    p = Pending(role, chain, prompt, cwd, env, run_dir, result_path, timeout, round_no)
+    p = Pending(role, chain, prompt, cwd, env, run_dir, result_path, timeout, round_no, cfg)
     p.launch()
     return p
 
@@ -129,16 +133,43 @@ def run(cfg, role, prompt, cwd, run_dir, timeout, extra_env=None, effort=None, r
 
 
 class Pending:
-    def __init__(self, role, chain, prompt, cwd, env, run_dir, result_path, timeout, round_no):
+    def __init__(self, role, chain, prompt, cwd, env, run_dir, result_path, timeout, round_no, cfg=None):
         self.role, self.chain, self.prompt, self.cwd, self.env = role, chain, prompt, cwd, env
         self.run_dir, self.result_path, self.timeout, self.round_no = run_dir, result_path, timeout, round_no
+        self.cfg = cfg
         self.started = time.time()
-        self.proc = self.argv = self.log = None
+        self.proc = self.argv = self.log = self.slot = None
+        self.no_slot = None      # the sentence when no machine slot came free in time
         self.tried = []
 
     def launch(self):
-        """Start the next command of the chain that exists."""
+        """Start the next command of the chain that exists, under a machine slot (the wait counts
+        against this run's timeout; the slot is freed the moment the command's process exits)."""
+        self._release()
+        if self.cfg is not None:
+            self.slot = slots.take(self.cfg, self.started + self.timeout)
+            if self.slot is None:
+                self.proc = None
+                self.no_slot = "%s was not started: %s" % (
+                    self.role, slots.busy(self.cfg, time.time() - self.started))
+                return
+        try:
+            self._spawn_next()
+        except BaseException:
+            self._release()
+            raise
+        if self.slot is not None:
+            self.slot.release_when_done(self.proc)
+
+    def _release(self):
+        if self.slot is not None:
+            self.slot.release()
+
+    def _spawn_next(self):
         last = None
+        env = self.env
+        if self.slot is not None and self.slot.held:
+            env = dict(self.env, **{slots.ENV: self.slot.path})
         while self.chain:
             argv = self.chain.pop(0)
             try:
@@ -150,7 +181,7 @@ class Pending:
             self.log = os.path.join(self.run_dir, "agent-%d.log" % (len(self.tried) + 1))
             self.attempt_started = time.time()
             try:
-                self.proc = osx.spawn(argv, cwd=self.cwd, env=self.env, log_path=self.log,
+                self.proc = osx.spawn(argv, cwd=self.cwd, env=env, log_path=self.log,
                                       stdin_text=self.prompt)
             except osx.OSFailure as exc:
                 self.tried.append({"command": argv[0], "model": model_of(argv), "outcome": "not found"})
@@ -163,9 +194,12 @@ class Pending:
     def stop(self):
         if self.proc is not None:
             osx.kill_tree(self.proc.pid)
+        self._release()
 
     def finish(self):
         while True:
+            if self.no_slot:
+                return self._unstarted()
             left = max(1.0, self.timeout - (time.time() - self.started))
             rc, timed_out = osx.wait(self.proc, left)
             try:
@@ -180,8 +214,21 @@ class Pending:
                                    "outcome": "out of quota"})
                 self.launch()
                 continue
+            self._release()
             cost = self._cost(result, rc, timed_out, out_of_quota)
             return Hand(self.role, result, rc, timed_out, self.log, cost)
+
+    def _unstarted(self):
+        """The hand of a run that never got a machine slot: nothing ran, tokens unknown."""
+        argv = self.chain[0] if self.chain else self.argv
+        cost = {"role": self.role, "model": model_of(argv), "effort": effort_of(argv),
+                "command": os.path.basename(argv[0]) if argv else None, "round": self.round_no,
+                "seconds": round(time.time() - self.started, 1), "at": osx.now(),
+                "outcome": "no slot", "run_dir": self.run_dir}
+        if self.tried:
+            cost["fell_back_from"] = self.tried
+        cost.update(EMPTY)
+        return Hand(self.role, None, None, False, self.log, cost, why=self.no_slot)
 
     def _cost(self, result, rc, timed_out, out_of_quota):
         if timed_out:

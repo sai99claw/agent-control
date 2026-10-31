@@ -23,12 +23,14 @@ group complete (= one PR, a local mark) -> regression.py (preflight + full suite
 | Command | When |
 | --- | --- |
 | `python3 devloop/tickets.py init` | once per project: create the pool |
+| `python3 devloop/tickets.py lessons --layer L --name N --file F` | queue every bullet line of F as a lesson for that memory file (a project's own older memory) |
 | `python3 devloop/ticket_creator.py --request "..."` | the user wants something |
 | `python3 devloop/ticket_controller.py` | run until nothing is left (`--forever` keeps watching) |
 | `python3 devloop/tickets.py inbox` / `ack` | pages: created, landed, decision, env |
 | `python3 devloop/tickets.py list` / `show N` | state of tickets and groups |
 | `python3 devloop/tickets.py ready N` | after deciding on a stuck ticket |
 | `python3 devloop/tickets.py cancel N --why ...` | drop a ticket |
+| `python3 devloop/tickets.py release gN [--again]` | re-run a landed group's failed release once (`--again` also when it was ok); the outcome is a page |
 | `python3 devloop/board.py serve [--port 8765] [--key-file F]` | the dashboard (or `board.py html --out F`) |
 
 Agents run their tests with `python3 devloop/run_tests.py <ids>` (output stays in their run directory).
@@ -38,13 +40,40 @@ Run them from the project (or set `AC_ROOT` to it).
 ## Project settings (`board/config.json`, key `devloop`)
 
 `release` is required (every project ships a release script; the controller only calls it, with
-`DEVLOOP_RELEASE_SHA`, `DEVLOOP_GROUP`, `DEVLOOP_TICKETS` set). Everything else has a default:
+`DEVLOOP_RELEASE_SHA`, `DEVLOOP_GROUP`, `DEVLOOP_TICKETS` set) and is stopped after `release_timeout_seconds` (default 3600). Everything else has a default:
 `pool` (default `<agent-control>/pools/<project>`), `max_parallel` 2, `max_rounds` 3,
 `issuer_timeout_seconds` 10800, `agent_timeout_seconds` 3600, `main_branch` "main",
 `remote` "origin" (null = do not push), `worktrees` (default `../<project>-devloop`),
 `agents.<role>` (the command that starts an agent; prompt on stdin).
-Tests run through the project's existing test interface (`tests.*`, `scripts/testiface.py`).
+Tests run through the project's existing test interface (`tests.preflight`, `tests.run`, `tests.full`; `scripts/testiface.py`).
 `hard_block.paths` / `patterns`: a ticket that touches them stops before merging.
+
+## Machine slots
+
+`machine_slots` (default null = no limit) caps the heavy runs on the machine at N, across every
+devloop process that shares the project's worktrees root. What takes a slot: every agent run
+(every role, every command of its chain, from just before it starts until its process exits), the
+issuer's red check and each case run, and a regression (from before preflight until `full` ends).
+A slot is a `flock` on `<worktrees>/slots/slot-<i>` (i = 0..N-1); the files are created when
+missing and never deleted. The devloop process that started the run holds the lock, so a
+background process an agent leaves behind keeps no slot, and a process that dies frees its slot.
+Waiting counts against the caller's own limit: an agent that gets no slot within its timeout is
+not started (cost outcome "no slot"), an issuer test run out of time makes the ticket stuck
+("timeout"), and a regression with no slot within `regression_timeout_seconds` is "unmeasured".
+Nested runs use their parent's slot: agents get `DEVLOOP_SLOT` (their slot file) in the
+environment, and a process with it set takes no slot (an agent's `run_tests.py`, a worker's
+`ticket_creator.py --revise`).
+
+`regression_exclusive` (default false) makes a regression take the whole machine: it runs only
+while no other slot is held, and no new slot is taken while it waits or runs. It
+needs `machine_slots` (exclusivity is counted in slots; true without a slot count stops every devloop
+script). The mark is a `flock` LOCK_EX on `<worktrees>/slots/exclusive`, held by the regression
+from the moment it starts waiting until it has released every slot; with it held, the regression
+takes every `slot-<i>`, waiting for each, then runs preflight and `full`. Every other taker needs a
+LOCK_SH on that file, only while it takes its slot; its wait for it counts against its own limit
+like a slot wait. The whole wait counts against `regression_timeout_seconds` ("unmeasured" when the
+machine is not free in time), and a regression that dies leaves nothing locked. Nested runs
+(`DEVLOOP_SLOT` set) do not touch the mark.
 
 ## Agents, models and tests (D-084)
 
@@ -61,6 +90,12 @@ Tests run through the project's existing test interface (`tests.*`, `scripts/tes
   assertion.
 - The worker runs the verifier's cases, its own unit tests and the base set (`devloop.base_tests`,
   default `tests.unittest.base`) before handing in; the full suite is the regression's.
+- devloop calls only `tests.preflight`, `tests.run` and `tests.full` (it does not use `select` or
+  `regression`). `full` is the regression and must run every layer the project has (unit tests, a
+  separate verification layer, every browser engine). `run <id>...` must accept every id that `full`
+  reports in result.json, because the issuer re-runs the verifier's cases by id (red check, case
+  runs). The verifier writes its cases into existing test modules of the layer that covers the
+  change, never one new file per ticket.
 - `index_path` (default `CODE-MAP.md`): a code index generated from the code and committed onto
   the integration branch just before main moves. Agents read it before searching.
 - `required_fields`: extra ticket fields the opener must fill (agent-control requires `vision` and
@@ -81,7 +116,8 @@ prompt (project memory by path). They never edit memory; a hand-in may carry
 most once per 24 h per file); a consolidator agent rewrites the file. What belongs in which layer
 is written once, in `prompts/consolidator.md`. `tickets.py init` seeds the files with headings
 only; agent-control's cards from before devloop (`memory/model/`, `memory/role/`) are queued as
-lessons for the consolidator, never copied in.
+lessons for the consolidator, never copied in. A project's own older memory is imported the same way with
+`tickets.py lessons --layer L --name N --file F` (every bullet line of F becomes a waiting lesson).
 
 ## Dashboard
 
@@ -95,6 +131,15 @@ which are the main session's own entry behind another screen (D-083): a new requ
 never writes the pool; only the opener's path writes tickets. Web text is cleaned and wrapped
 behind the injection check in `prompts/web-guard.md`; an opener that finds an injection hands in
 `rejected`, nothing is done, and a page says so. Unsent text stays in the viewer's browser.
+
+## Project rules for agents
+
+Rules every agent must follow live in the project's CLAUDE.md, section "Rules for every agent"
+(loaded because agents run as `claude -p` in a worktree of the project), and in AGENTS.md for codex.
+The consolidator runs in the pool, not in the project, so it does not load them. Project memory
+(`memory/project.md` in the pool) is for design reasons and invariants, not hard rules: agents get
+it only as a path and read it when their work touches it. So a rule that must never be broken goes
+in CLAUDE.md / AGENTS.md, and a file that must never change goes in `hard_block.paths`.
 
 ## Contracts
 

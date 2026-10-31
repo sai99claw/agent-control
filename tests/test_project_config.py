@@ -216,6 +216,23 @@ class A3Doctor(ConfigSandbox):
         self.assertIn("actl migrate", done.stdout)
 
 
+class DoctorHardBlockDirsSilence(ConfigSandbox):
+    """hard_block.dirs empty or absent: doctor and check stay silent about it."""
+
+    def test_empty_or_absent_dirs_no_row(self):
+        for hard_block in ({"paths": [], "dirs": [], "patterns": []}, {"paths": []}):
+            self.edit_conf(hard_block=hard_block)
+            done = self.actl("doctor")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertNotIn("hard_block.dirs", done.stdout + done.stderr)
+
+    def test_check_silent_with_dirs(self):
+        self.edit_conf(hard_block={"paths": [], "dirs": ["fixtures/prod"], "patterns": []})
+        done = self.actl("check")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("hard_block.dirs", done.stdout + done.stderr)
+
+
 class A4Keys(ConfigSandbox):
     """Known keys are typed; unknown keys show only in doctor / migrate (#185); missing keys are silent."""
 
@@ -328,6 +345,23 @@ class T184CoexistenceAndRelease(ConfigSandbox):
         hits = self.rows(done, "devloop.release")
         self.assertEqual(len(hits), 1, done.stdout)
         self.assertTrue(hits[0].startswith("error: "), hits[0])
+
+
+class T5Acceptance(ConfigSandbox):
+    """#5 items 1-3: a non-empty hard_block.dirs gives one doctor warning row, rc stays 0."""
+
+    def test_non_empty_dirs_is_one_warning_row_and_rc_0(self):
+        conf = self.conf()
+        hard_block = conf.setdefault("hard_block", {})
+        hard_block["dirs"] = ["fixtures/prod", "/srv/shared"]
+        self.set_conf(conf)
+        done = self.actl("doctor")
+        hits = [line for line in done.stdout.splitlines()
+                if all(part in line for part in ("hard_block.dirs", "hard_block.paths",
+                                                 "CLAUDE.md"))]
+        self.assertEqual(len(hits), 1, done.stdout + done.stderr)
+        self.assertTrue(hits[0].startswith("warning: "), hits[0])
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
 
 class T125RepairKeys(ConfigSandbox):
