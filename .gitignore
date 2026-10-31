@@ -22,3 +22,7 @@ board/batches.json
 verify.log
 # `memory.py consolidate` 把合併過的 inbox 搬成 `<inbox>.<run_id>.consumed` 的備份(#179):執行期殘骸,不是原始碼
 memory/**/*.consumed
+
+# dev loop v2 ticket pools: each is its own git repo (a submodule once it has a remote)
+pools/*
+!pools/README.md

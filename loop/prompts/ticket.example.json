@@ -1,0 +1,14 @@
+{
+  "key": "new-1",
+  "title": "Login page shows a clear error for a wrong password",
+  "objective": "A user who types a wrong password sees one sentence saying so, and the password field is cleared; the email stays.",
+  "acceptance": [
+    "POST /login with a known email and a wrong password returns 401 with error code WRONG_PASSWORD",
+    "The login page renders the text 'Wrong password' when the response code is WRONG_PASSWORD",
+    "After a wrong password the password input is empty and the email input keeps its value"
+  ],
+  "outline": "api/auth.py login handler returns the code; web/login.tsx maps it to the message.",
+  "test_plan": "Verifier writes cases for all three acceptance items (API test + component test).",
+  "needs_verifier": true,
+  "needs_review": false
+}

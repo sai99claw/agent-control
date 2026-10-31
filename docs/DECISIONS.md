@@ -525,3 +525,11 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - 取代 D-078 之後主線提的 `docs/design/dev-loop-v2.md`(一個 actl run + 三階段);設計文件改寫成這一版後才開重寫票。
 - 推翻:CLAUDE.md「發版永遠是人授權、主線執行」—— 改為 regression 綠 → controller 合進 main 並發版(各專案的發版指令與範圍待定,見設計文件的例外題)。
 - 主線解讀(未經使用者):ticket 分支由 issuer 的 worker 自己合進整合分支(衝突由 LLM 解;push 被拒就 pull 重來,與票庫同一條規則);controller 只做不需要判斷的事。
+
+## D-080(2026-10-31)v2 的三個答案、開題者回報範圍、這次改動直接當一般專案改
+- 原話:「開題者發現 問題跟大方向,商業邏輯 ,使用者體驗 等等相關的時候 要回報主線 / 1 一組裡有一張票卡住了 他為什麼會卡住? 流程哪裡有缺陷? 可能issuer 要有3小時timeout機制? / 2 專案中一定要有發版腳本阿,controller 只會去呼叫他 / 3 ok / 我希望這次的改動不要用A自己的規矩,讓claude code 把他當成一般專案來直接改,腳本不一樣要sh ,py 或是其他也行 高效 高相容 要有os exception 處理機制」
+- ① 開題者遇到大方向、商業邏輯、使用者體驗未定的地方,交 question 給主線,不自己猜(`loop/prompts/creator/01-role.md`)。
+- ② 卡住的來源與流程修正:案例寫錯 → worker 可經 `--revise` 讓開題者判「案例錯」並重寫;票太大 → 開題規矩「一張票 = 一次 session」;卡死 → issuer 3 小時、每次叫 agent 1 小時;要你決定 → 回報主線。一組裡卡住的票不拖住其他票(主線解讀,使用者先前未反對)。
+- ③ 每個專案必須有發版腳本(`board/config.json` loop.release,沒有 controller 不啟動);controller 只呼叫它。
+- ④ 票庫 = A 的 sub repo:`pools/<專案>`。
+- ⑤ 這次改動不走 A 的票 / land 流程:主線在分支 `claude/repo-access-check-s7faow` 直接寫 `loop/`(Python 標準函式庫,Linux / macOS,OS 例外集中處理)與 `tests_loop/`,合進 main 等使用者看過。
