@@ -1,8 +1,11 @@
 # Rules for a ticket
 
-- **One ticket = one session of work.** If an implementer cannot finish it, test it and hand it
-  in within one sitting, split it. A ticket that is too big gets stuck after three rounds.
-- `objective`: what is true when it is done, in one or two sentences.
+- **One ticket = one purpose you can state in one sentence.** If saying what the ticket is for
+  needs "and", it is two tickets. That sentence is the `objective`.
+- `objective`: the one sentence: what is true when it is done.
+- `token_estimate`: your estimate of the tokens the implementer and verifier together will spend
+  on it (a whole number, e.g. 400000). Say how you got it in `token_basis` (files to read, size of
+  the change, tests to write). It is an estimate for planning, not a limit.
 - `acceptance`: a list of checkable statements. Each one must be something a test can assert.
 - `outline`: where in the code the change goes, as far as you know it. A suggestion, not a fence.
 - `test_plan`: which acceptance items the verifier writes cases for (the verifier owns the cases

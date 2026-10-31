@@ -96,8 +96,8 @@ elif role == "creator":
     else:
         hand({"kind": "tickets",
               "tickets": [{"key": "new-1", "title": "first", "objective": "o", "acceptance": ["a"],
-                           "needs_verifier": True, "needs_review": False},
+                           "needs_verifier": True, "needs_review": False, "token_estimate": 200000},
                           {"key": "new-2", "title": "second", "objective": "o", "acceptance": ["a"],
-                           "needs_verifier": True, "needs_review": True}],
+                           "needs_verifier": True, "needs_review": True, "token_estimate": 300000}],
               "dag": {"new-1": {"depends_on": [], "verify": "together"},
                       "new-2": {"depends_on": ["new-1"], "verify": "together"}}})

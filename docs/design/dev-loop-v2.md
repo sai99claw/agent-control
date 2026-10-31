@@ -77,7 +77,7 @@ No script polls another; each records its outcome in the pool and exits.
 | controller / container dies | no state outside the pool and git; a running ticket whose issuer is dead goes back to ready |
 | two processes edit one ticket | a rejected push re-reads and re-applies; no git conflict resolution in the pool |
 | a ticket touches hard_block | the issuer stops before merging it; decision page |
-| why tickets get stuck | cases wrong → the worker can say so through `--revise` (cases are rewritten); too big → the opener's rules say one ticket = one session; hangs → 3 h per issuer, 1 h per agent call; needs a decision → main |
+| why tickets get stuck | cases wrong → the worker can say so through `--revise` (cases are rewritten); too broad → the opener's rule is one ticket = one purpose stated in one sentence, and it estimates the tokens (`token_estimate`); hangs → 3 h per issuer, 1 h per agent call; needs a decision → main |
 
 ## 7. Not done yet
 

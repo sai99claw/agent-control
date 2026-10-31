@@ -7,7 +7,8 @@ Tickets:
 ```json
 {"kind": "tickets",
  "tickets": [{"key": "new-1", "title": "...", "objective": "...", "acceptance": ["..."],
-              "outline": "...", "test_plan": "...", "needs_verifier": true, "needs_review": false}],
+              "outline": "...", "test_plan": "...", "needs_verifier": true, "needs_review": false,
+              "token_estimate": 400000, "token_basis": "..."}],
  "dag": {"new-1": {"depends_on": [], "verify": "together"}}}
 ```
 

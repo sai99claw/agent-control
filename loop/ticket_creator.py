@@ -34,7 +34,7 @@ from core.pool import event  # noqa: E402
 
 PROMPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
 TEXT_FIELDS = ("title", "objective", "outline", "test_plan", "notes")
-EDITABLE = TEXT_FIELDS + ("acceptance", "needs_verifier", "needs_review")
+EDITABLE = TEXT_FIELDS + ("acceptance", "needs_verifier", "needs_review", "token_estimate", "token_basis")
 REVISE_TIMEOUT = 540          # a worker waits for this inside one tool call (10 min cap)
 
 
@@ -84,6 +84,9 @@ def check_new(result, snap):
         acc = t.get("acceptance")
         if not isinstance(acc, list) or not acc or not all(isinstance(a, str) and a.strip() for a in acc):
             out.append(where + ": \"acceptance\" must be a non-empty list of checkable sentences")
+        est = t.get("token_estimate")
+        if not isinstance(est, int) or isinstance(est, bool) or est <= 0:
+            out.append(where + ": \"token_estimate\" must be a positive whole number of tokens")
         for f in ("needs_verifier", "needs_review"):
             if not isinstance(t.get(f), bool):
                 out.append("%s: \"%s\" must be true or false" % (where, f))

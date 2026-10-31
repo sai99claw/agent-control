@@ -533,3 +533,7 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - ③ 每個專案必須有發版腳本(`board/config.json` loop.release,沒有 controller 不啟動);controller 只呼叫它。
 - ④ 票庫 = A 的 sub repo:`pools/<專案>`。
 - ⑤ 這次改動不走 A 的票 / land 流程:主線在分支 `claude/repo-access-check-s7faow` 直接寫 `loop/`(Python 標準函式庫,Linux / macOS,OS 例外集中處理)與 `tests_loop/`,合進 main 等使用者看過。
+
+## D-081(2026-10-31)開題規矩:一票 = 一句話講得完的目的,並估 token;不暗示開發時長
+- 原話:「開題者的規矩不該(一張票要能在一次 session 內做完,做不完就拆票)我感覺意義不大: 應該是限制一票的功能要是能被一句話描述的目的,不要暗示他開發的時長,只要叫他一併評估需要消耗的token 就可以」
+- 取代 D-080 ② 的「一張票 = 一次 session」。`loop/prompts/creator/02-rules.md`:一張票一個目的,`objective` 就是那一句(要用「和」才講得完就是兩張票);每張票必填 `token_estimate`(正整數,worker + 驗證者合計)與 `token_basis`(怎麼估的),只供規劃、不是上限。`ticket_creator.py` 驗證 `token_estimate`。
