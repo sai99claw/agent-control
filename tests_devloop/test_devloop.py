@@ -413,6 +413,65 @@ class Regression(LoopCase):
         self.assertEqual(self.snap().groups["g1"]["fix_round"], 1)
 
 
+class T4Acceptance(LoopCase):
+    """Ticket #4: devloop.regression_exclusive - a regression takes the whole machine."""
+
+    def recorded(self):
+        with open(self.log) as fh:
+            rows = [line.split() for line in fh if line.strip()]
+        return [(" ".join(r[:-2]), float(r[-2]), float(r[-1])) for r in rows]
+
+    def test_v1_no_regression_runs_beside_an_agent_or_an_issuer_test_run(self):
+        """Items 3-4: with the mark taken and every slot held, a regression overlaps nothing."""
+        self.config(machine_slots=2, regression_exclusive=True, max_parallel=2)
+        self.log = os.path.join(self.tmp, "intervals.txt")
+        self.env.update(FAKE_INTERVALS=self.log, FAKE_HOLD="1.5")
+        self.add(1)
+        self.add(2, verify="alone")
+        self.plan(worker={"2": ["slow"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual((self.state(1), self.state(2)), ("landed", "landed"))
+        runs = self.recorded()
+        names = [r[0] for r in runs]
+        self.assertIn("tests full", names)
+        self.assertIn("tests preflight", names)
+        self.assertIn("agent worker 2", names)
+        self.assertIn("tests run", names)
+        regressions = [r for r in runs if r[0] in ("tests preflight", "tests full")]
+        others = [r for r in runs if r[0].startswith("agent ") or r[0] == "tests run"]
+        overlaps = [(g, o) for g in regressions for o in others if g[1] < o[2] and o[1] < g[2]]
+        self.assertEqual(overlaps, [], runs)
+
+    def test_v2_a_held_mark_keeps_every_taker_waiting_until_its_own_limit(self):
+        """Item 3: while another process holds LOCK_EX on slots/exclusive, an agent takes no slot."""
+        import fcntl
+        slots = os.path.join(self.tmp, "wt", "slots")
+        os.makedirs(slots, exist_ok=True)
+        fh = open(os.path.join(slots, "exclusive"), "a")
+        self.addCleanup(fh.close)
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        self.config(machine_slots=2, regression_exclusive=True, agent_timeout_seconds=3)
+        res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
+        import glob
+        ran = glob.glob(os.path.join(os.path.dirname(self.plan_path), "count-creator-*"))
+        self.assertEqual(ran, [], "the creator ran while the exclusive mark was held")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+
+    def test_v3_exclusive_without_machine_slots_stops_every_script(self):
+        """Item 2: regression_exclusive true needs machine_slots."""
+        for absent in (True, False):
+            if absent:
+                self.config(regression_exclusive=True)
+            else:
+                self.config(regression_exclusive=True, machine_slots=None)
+            res = self.run_py("tickets.py", "list")
+            self.assertEqual(res.returncode, 2, "machine_slots %s: %s" % (
+                "absent" if absent else "null", res.stdout + res.stderr))
+            self.assertIn("devloop.regression_exclusive", res.stderr)
+            self.assertIn("devloop.machine_slots", res.stderr)
+
+
 class ReleaseFails(LoopCase):
     release = "exit 7"
 
