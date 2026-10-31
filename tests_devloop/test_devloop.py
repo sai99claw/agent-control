@@ -654,6 +654,37 @@ class RedCheck(LoopCase):
         self._round_two("unnamed", "result.json")
 
 
+class TestLayerDocs(unittest.TestCase):
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def read(self, *p):
+        with open(os.path.join(self.ROOT, *p), encoding="utf-8") as f:
+            return f.read()
+
+    def test_readme_bullet_names_the_three_commands(self):
+        text = self.read("devloop", "README.md")
+        bullet = [b for b in text.split("\n- ") if b.startswith("devloop calls only")]
+        self.assertTrue(bullet, "README lacks the 'devloop calls only' bullet")
+        for w in ("tests.preflight", "tests.run", "tests.full", "every id", "result.json"):
+            self.assertIn(w, bullet[0])
+        self.assertIn("(`tests.preflight`, `tests.run`, `tests.full`;", text)
+
+    def test_template_script(self):
+        path = os.path.join(self.ROOT, "templates", "project-tests.example.sh")
+        text = self.read("templates", "project-tests.example.sh")
+        for w in ("verify.py", "regression)", "select)"):
+            self.assertNotIn(w, text)
+        self.assertEqual(subprocess.run(["sh", "-n", path]).returncode, 0)
+
+    def test_example_config_has_no_select_or_regression(self):
+        cfg = json.loads(self.read("templates", "project-config.example.json"))
+        self.assertNotIn("select", cfg["tests"])
+        self.assertNotIn("regression", cfg["tests"])
+
+    def test_verifier_prompt_forbids_a_file_per_ticket(self):
+        self.assertIn("new file", self.read("devloop", "prompts", "verifier.md"))
+
+
 class MarkExplained(unittest.TestCase):
     def step_one(self):
         from core import agents

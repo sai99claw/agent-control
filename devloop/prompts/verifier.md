@@ -22,7 +22,7 @@ Code index (generated from the code; read it before searching, never edit it): {
 ## How to work
 
 1. For each acceptance item (unless the test_plan gives it to the implementer), write a case that
-   asserts it. Put cases in the project's existing test modules, next to the code they cover.
+   asserts it. Put cases in the existing test modules of the test layer that covers the change, next to the code they cover - never one new file per ticket.
    Name every case with **{case_mark}**: the mark must appear in the id of every acceptance
    case, as the project's test interface reports that id in result.json. For a Python unittest
    that is a class named `{case_mark}`; for other runners put it in the test's name or its file

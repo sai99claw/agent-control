@@ -45,7 +45,7 @@ Run them from the project (or set `AC_ROOT` to it).
 `issuer_timeout_seconds` 10800, `agent_timeout_seconds` 3600, `main_branch` "main",
 `remote` "origin" (null = do not push), `worktrees` (default `../<project>-devloop`),
 `agents.<role>` (the command that starts an agent; prompt on stdin).
-Tests run through the project's existing test interface (`tests.*`, `scripts/testiface.py`).
+Tests run through the project's existing test interface (`tests.preflight`, `tests.run`, `tests.full`; `scripts/testiface.py`).
 `hard_block.paths` / `patterns`: a ticket that touches them stops before merging.
 
 ## Agents, models and tests (D-084)
@@ -63,6 +63,12 @@ Tests run through the project's existing test interface (`tests.*`, `scripts/tes
   assertion.
 - The worker runs the verifier's cases, its own unit tests and the base set (`devloop.base_tests`,
   default `tests.unittest.base`) before handing in; the full suite is the regression's.
+- devloop calls only `tests.preflight`, `tests.run` and `tests.full` (it does not use `select` or
+  `regression`). `full` is the regression and must run every layer the project has (unit tests, a
+  separate verification layer, every browser engine). `run <id>...` must accept every id that `full`
+  reports in result.json, because the issuer re-runs the verifier's cases by id (red check, case
+  runs). The verifier writes its cases into existing test modules of the layer that covers the
+  change, never one new file per ticket.
 - `index_path` (default `CODE-MAP.md`): a code index generated from the code and committed onto
   the integration branch just before main moves. Agents read it before searching.
 - `required_fields`: extra ticket fields the opener must fill (agent-control requires `vision` and
