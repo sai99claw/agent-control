@@ -96,6 +96,15 @@ never writes the pool; only the opener's path writes tickets. Web text is cleane
 behind the injection check in `prompts/web-guard.md`; an opener that finds an injection hands in
 `rejected`, nothing is done, and a page says so. Unsent text stays in the viewer's browser.
 
+## Project rules for agents
+
+Rules every agent must follow live in the project's CLAUDE.md, section "Rules for every agent"
+(loaded because agents run as `claude -p` in a worktree of the project), and in AGENTS.md for codex.
+The consolidator runs in the pool, not in the project, so it does not load them. Project memory
+(`memory/project.md` in the pool) is for design reasons and invariants, not hard rules: agents get
+it only as a path and read it when their work touches it. So a rule that must never be broken goes
+in CLAUDE.md / AGENTS.md, and a file that must never change goes in `hard_block.paths`.
+
 ## Contracts
 
 - **Pool**: every write is pull → change → commit → push; a rejected push re-reads and applies the

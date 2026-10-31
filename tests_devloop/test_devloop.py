@@ -763,6 +763,31 @@ class AgentEnv(LoopCase):
         self.assertEqual(env["DEVLOOP_ROLE"], "worker")
 
 
+class ProjectRulesHome(unittest.TestCase):
+    def read(self, *parts):
+        with open(os.path.join(HOME, *parts)) as f:
+            return f.read()
+
+    def test_template_line_one_and_heading(self):
+        text = self.read("templates", "project-CLAUDE.md")
+        first = text.split("\n", 1)[0]
+        self.assertIn("DEVLOOP_ROLE", first)
+        self.assertIn("Rules for every agent", first)
+        self.assertIn("\n## Rules for every agent\n", text)
+
+    def test_template_old_sentence_and_select_gone(self):
+        text = self.read("templates", "project-CLAUDE.md")
+        self.assertNotIn("agents started by devloop read only their prompt", text)
+        self.assertNotIn("select", text)
+
+    def test_readme_section_points_to_the_home(self):
+        text = self.read("devloop", "README.md")
+        self.assertIn("\n## Project rules for agents\n", text)
+        sec = text.split("\n## Project rules for agents\n", 1)[1].split("\n## ", 1)[0]
+        for word in ("CLAUDE.md", "AGENTS.md", "project memory", "hard_block"):
+            self.assertIn(word, sec.replace("Project memory", "project memory"))
+
+
 class AgentControlRelease(unittest.TestCase):
     """scripts/release.sh, agent-control's own devloop.release: tags the landed commit."""
 
