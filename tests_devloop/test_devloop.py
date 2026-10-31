@@ -452,6 +452,28 @@ class RedCheck(LoopCase):
     def test_cases_without_the_ticket_mark_go_back(self):
         self._round_two("unnamed", "no acceptance case named T1Acceptance")
 
+    def test_the_unnamed_message_points_at_result_json(self):
+        self._round_two("unnamed", "result.json")
+
+
+class MarkExplained(unittest.TestCase):
+    def step_one(self):
+        from core import agents
+        text = agents.render("verifier.md", {"case_mark": "T7Acceptance"})
+        return text.split("\n1. ", 1)[1].split("\n2. ", 1)[0]
+
+    def test_verifier_step_one_gives_the_general_rule(self):
+        step = self.step_one()
+        for word in ("T7Acceptance", "result.json", "id", "unittest", "class", "file"):
+            self.assertIn(word, step)
+        self.assertNotIn("in Python unittest: put them in a class named", step)
+
+    def test_readme_bullet_explains_the_mark(self):
+        text = open(os.path.join(os.path.dirname(__file__), "..", "devloop", "README.md")).read()
+        bullet = [b for b in text.split("\n- ") if "T<id>Acceptance" in b][0]
+        self.assertIn("result.json", bullet)
+        self.assertIn("unittest", bullet)
+
 
 class AgentChains(LoopCase):
     def cost_rows(self, ident, role):

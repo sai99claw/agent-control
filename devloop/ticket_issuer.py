@@ -255,7 +255,8 @@ class Issuer:
                 return ("the case modules did not load on the code before the change, so no %s case "
                         "ran: %s" % (mark, "; ".join("%s: %s" % (r.get("id"), _last_line(
                             r.get("message") or r.get("exception"))) for r in broken[:5])))
-            return ("no acceptance case named %s ran (ids %s); name every acceptance case with %s"
+            return ("no acceptance case named %s ran (ids %s); name every acceptance case with %s "
+                    "(the mark must appear in each case's id as the test interface reports it in result.json)"
                     % (mark, " ".join(ids), mark))
         passing = [r["id"] for r in mine if r.get("status") == "pass"]
         errors = [r["id"] for r in mine if r.get("status") == "error"]
