@@ -216,6 +216,23 @@ class A3Doctor(ConfigSandbox):
         self.assertIn("actl migrate", done.stdout)
 
 
+class DoctorHardBlockDirsSilence(ConfigSandbox):
+    """hard_block.dirs empty or absent: doctor and check stay silent about it."""
+
+    def test_empty_or_absent_dirs_no_row(self):
+        for hard_block in ({"paths": [], "dirs": [], "patterns": []}, {"paths": []}):
+            self.edit_conf(hard_block=hard_block)
+            done = self.actl("doctor")
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertNotIn("hard_block.dirs", done.stdout + done.stderr)
+
+    def test_check_silent_with_dirs(self):
+        self.edit_conf(hard_block={"paths": [], "dirs": ["fixtures/prod"], "patterns": []})
+        done = self.actl("check")
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertNotIn("hard_block.dirs", done.stdout + done.stderr)
+
+
 class A4Keys(ConfigSandbox):
     """Known keys are typed; unknown keys show only in doctor / migrate (#185); missing keys are silent."""
 
