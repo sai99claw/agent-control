@@ -347,6 +347,23 @@ class T184CoexistenceAndRelease(ConfigSandbox):
         self.assertTrue(hits[0].startswith("error: "), hits[0])
 
 
+class T5Acceptance(ConfigSandbox):
+    """#5 items 1-3: a non-empty hard_block.dirs gives one doctor warning row, rc stays 0."""
+
+    def test_non_empty_dirs_is_one_warning_row_and_rc_0(self):
+        conf = self.conf()
+        hard_block = conf.setdefault("hard_block", {})
+        hard_block["dirs"] = ["fixtures/prod", "/srv/shared"]
+        self.set_conf(conf)
+        done = self.actl("doctor")
+        hits = [line for line in done.stdout.splitlines()
+                if all(part in line for part in ("hard_block.dirs", "hard_block.paths",
+                                                 "CLAUDE.md"))]
+        self.assertEqual(len(hits), 1, done.stdout + done.stderr)
+        self.assertTrue(hits[0].startswith("warning: "), hits[0])
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+
+
 class T125RepairKeys(ConfigSandbox):
     """#125 A1: `repair: {max_rounds: 3, env_rerun: 1}` is a known, typed key with those defaults;
     a config without it is fine (doctor reports nothing about it)."""
