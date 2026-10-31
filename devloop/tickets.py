@@ -8,6 +8,7 @@
     python3 devloop/tickets.py cancel 203 --why "no longer needed"
     python3 devloop/tickets.py inbox [--all]        # pages for the main session
     python3 devloop/tickets.py ack <page>|--all
+    python3 devloop/tickets.py lessons --layer role --name worker --file OLD.md   # old notes -> lessons
 
 Opening tickets is ticket_creator.py; moving them is ticket_controller.py.
 """
@@ -93,6 +94,28 @@ def cmd_ack(pool, args):
     return 0
 
 
+def cmd_lessons(pool, args):
+    name = args.name
+    if args.layer == "project":
+        if name not in (None, "project"):
+            raise osx.OSFailure("--layer project takes no --name other than 'project'")
+        name = "project"
+    elif args.layer == "role" and name not in memory.ROLES:
+        raise osx.OSFailure("--name for role must be one of: %s" % ", ".join(memory.ROLES))
+    elif not name:
+        raise osx.OSFailure("--name is required for --layer %s" % args.layer)
+    try:
+        texts = memory.bullets(args.file)
+    except (OSError, UnicodeDecodeError) as exc:
+        raise osx.OSFailure("cannot read %s: %s" % (args.file, exc))
+    if not texts:
+        raise osx.OSFailure("%s has no bullet line" % args.file)
+    n = pool.update(lambda tx: memory.import_lessons(tx, texts, args.layer, name, args.file),
+                    "memory: %d lesson(s) imported from %s" % (len(texts), args.file))
+    print("queued %d lessons for %s" % (n, memory.rel(args.layer, name)))
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -112,6 +135,10 @@ def main(argv=None):
     p = sub.add_parser("ack")
     p.add_argument("page", nargs="?")
     p.add_argument("--all", action="store_true")
+    p = sub.add_parser("lessons")
+    p.add_argument("--layer", required=True, choices=memory.LAYERS)
+    p.add_argument("--name")
+    p.add_argument("--file", required=True)
     args = ap.parse_args(argv)
     try:
         cfg = Config()
@@ -122,7 +149,7 @@ def main(argv=None):
             pool.update(lambda tx: memory.seed(tx, models, cfg.home), "memory: seed")
             print("pool ready at %s" % pool.path)
             return 0
-        return {"list": cmd_list, "show": cmd_show, "inbox": cmd_inbox, "ack": cmd_ack,
+        return {"list": cmd_list, "show": cmd_show, "inbox": cmd_inbox, "ack": cmd_ack, "lessons": cmd_lessons,
                 "ready": lambda p, a: _set(p, a.id, "ready", a.why),
                 "cancel": lambda p, a: _set(p, a.id, "cancelled", a.why)}[args.cmd](pool, args)
     except osx.OSFailure as exc:

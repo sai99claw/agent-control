@@ -581,6 +581,32 @@ class Recovery(LoopCase):
         self.assertEqual(self.state(1), "landed")
 
 
+class LessonsHelpers(unittest.TestCase):
+    def test_bullets_parse_and_limits(self):
+        from core import memory
+        with tempfile.TemporaryDirectory() as d:
+            f = os.path.join(d, "n.md")
+            with open(f, "w") as fh:
+                fh.write("# h\n- a\n  * b\nplain\n- \n-" + "x" * 1300 + "\n")
+            got = memory.bullets(f)
+            self.assertEqual(got[:2], ["a", "b"])
+            self.assertEqual(len(got), 3)
+            self.assertEqual(len(got[2]), memory.MAX_TEXT)
+            with self.assertRaises(OSError):
+                memory.bullets(os.path.join(d, "missing"))
+
+    def test_import_keys_are_unique_per_import(self):
+        from core import memory
+
+        class Tx:
+            def __init__(self): self.rows = {}
+            def write(self, k, v): self.rows[k] = v
+        tx = Tx()
+        memory.import_lessons(tx, ["a"], "role", "worker", "/x/f.md")
+        memory.import_lessons(tx, ["b"], "role", "worker", "/x/f.md")
+        self.assertEqual(len(tx.rows), 2)
+
+
 class Memory(LoopCase):
     def test_init_seeds_every_role_and_starts_model_memory_from_agent_control(self):
         res = self.run_py("tickets.py", "init")

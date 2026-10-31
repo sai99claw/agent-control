@@ -23,6 +23,7 @@ group complete (= one PR, a local mark) -> regression.py (preflight + full suite
 | Command | When |
 | --- | --- |
 | `python3 devloop/tickets.py init` | once per project: create the pool |
+| `python3 devloop/tickets.py lessons --layer L --name N --file F` | queue every bullet line of F as a lesson for that memory file (a project's own older memory) |
 | `python3 devloop/ticket_creator.py --request "..."` | the user wants something |
 | `python3 devloop/ticket_controller.py` | run until nothing is left (`--forever` keeps watching) |
 | `python3 devloop/tickets.py inbox` / `ack` | pages: created, landed, decision, env |
@@ -81,7 +82,8 @@ prompt (project memory by path). They never edit memory; a hand-in may carry
 most once per 24 h per file); a consolidator agent rewrites the file. What belongs in which layer
 is written once, in `prompts/consolidator.md`. `tickets.py init` seeds the files with headings
 only; agent-control's cards from before devloop (`memory/model/`, `memory/role/`) are queued as
-lessons for the consolidator, never copied in.
+lessons for the consolidator, never copied in. A project's own older memory is imported the same way with
+`tickets.py lessons --layer L --name N --file F` (every bullet line of F becomes a waiting lesson).
 
 ## Dashboard
 
