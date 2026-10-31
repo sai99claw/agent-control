@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -290,6 +291,95 @@ class Timeout(LoopCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         t = self.snap().ticket("1")
         self.assertEqual((t["state"], t["stuck"]["reason"]), ("stuck", "timeout"))
+
+
+class T9Acceptance(LoopCase):
+    """tickets.py release <group>: re-run a failed release (ticket #9)."""
+
+    def land_failed(self):
+        self.flag = os.path.join(self.tmp, "release-flag")
+        self.out = os.path.join(self.tmp, "release-out.txt")
+        self.config(release='if test -f %s; then { git rev-parse HEAD; '
+                            'echo "$DEVLOOP_RELEASE_SHA $DEVLOOP_GROUP $DEVLOOP_TICKETS"; pwd; } >> %s; '
+                            'else echo NOFLAG-MARK; exit 3; fi' % (self.flag, self.out))
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+        self.assertFalse(os.path.exists(self.out))
+
+    def out_lines(self):
+        if not os.path.exists(self.out):
+            return []
+        with open(self.out) as fh:
+            return fh.read().splitlines()
+
+    def pages(self, kind):
+        return [row for row in self.snap().inbox.values() if row["kind"] == kind and row["ref"] == "g1"]
+
+    def worktrees(self):
+        return [line for line in git(self.proj, "worktree", "list", "--porcelain").splitlines()
+                if line.startswith("worktree ")]
+
+    def test_a_failed_release_is_rerun_at_landed_sha_in_a_throwaway_worktree(self):
+        self.land_failed()
+        trees = self.worktrees()
+        history = len(self.snap().groups["g1"].get("history") or [])
+        open(self.flag, "w").close()
+        res = self.run_py("tickets.py", "release", "g1")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        lines = self.out_lines()
+        self.assertEqual(len(lines), 3, "the release ran exactly once: %r" % lines)
+        head, envline, cwd = lines
+        grp = self.snap().groups["g1"]
+        self.assertEqual(envline, "%s g1 1" % grp["landed_sha"])
+        self.assertEqual(head, grp["landed_sha"])
+        self.assertNotEqual(os.path.realpath(cwd), os.path.realpath(self.proj),
+                            "the release ran in the project checkout")
+        self.assertFalse(os.path.exists(cwd), "the release worktree was not removed")
+        self.assertEqual(self.worktrees(), trees, "the release worktree is still registered")
+        self.assertEqual(grp["release"], "ok")
+        self.assertEqual(len(grp["history"]), history + 1)
+        self.assertIn("re-run", grp["history"][-1]["event"])
+        self.assertTrue(self.pages("landed"), "a landed page about g1")
+
+    def test_a_rerun_that_fails_stays_failed_and_leaves_a_decision_with_rc_and_output(self):
+        self.land_failed()
+        decisions = len(self.pages("decision"))
+        history = len(self.snap().groups["g1"].get("history") or [])
+        time.sleep(1.1)  # page names are unique to the second
+        res = self.run_py("tickets.py", "release", "g1")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        grp = self.snap().groups["g1"]
+        self.assertEqual(grp["release"], "failed")
+        self.assertEqual(len(grp["history"]), history + 1)
+        self.assertIn("re-run", grp["history"][-1]["event"])
+        pages = sorted(self.pages("decision"), key=lambda r: r["at"])
+        self.assertEqual(len(pages), decisions + 1)
+        text = pages[-1]["text"]
+        self.assertIn("NOFLAG-MARK", text)
+        self.assertRegex(text, r"\b3\b")
+        self.assertEqual(self.out_lines(), [])
+
+    def test_an_ok_release_is_refused_unless_again(self):
+        self.land_failed()
+        open(self.flag, "w").close()
+        res = self.run_py("tickets.py", "release", "g1")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["release"], "ok")
+        before, inbox = self.out_lines(), len(self.snap().inbox)
+        self.assertEqual(len(before), 3)
+        res = self.run_py("tickets.py", "release", "g1")
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertEqual(len(res.stderr.strip().splitlines()), 1, res.stderr)
+        self.assertEqual(self.out_lines(), before, "a refused release ran")
+        self.assertEqual(len(self.snap().inbox), inbox, "a refused release left a page")
+        time.sleep(1.1)
+        res = self.run_py("tickets.py", "release", "g1", "--again")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(len(self.out_lines()), 6, "--again ran the release once more")
+        self.assertEqual(self.snap().groups["g1"]["release"], "ok")
 
 
 class Revise(LoopCase):
