@@ -26,6 +26,8 @@ What the branch changes compared with {main}:
 Project memory (this project's design reasons and invariants; read it when your work touches
 them): {project_memory}
 
+Code index (generated from the code; never edit it): {index}
+
 ## How to work
 
 Fix the cause so every ticket still does what it asks. Commit source and test files only, never

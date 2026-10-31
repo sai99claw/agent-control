@@ -147,10 +147,15 @@ class Issuer:
                                "%s..%s" % (self.target, self.cases_branch)) == "0":
                 problems.append("verifier committed nothing on %s" % self.cases_branch)
             else:
-                cases = {"branch": self.cases_branch, "run": [str(x) for x in vh.result["run"]]}
-                self.save(lambda x: (x.__setitem__("cases", cases), event(x, "cases ready")),
-                          "cases ready")
-                t = self.ticket()
+                ids = [str(x) for x in vh.result["run"]]
+                wrong = self.red_check(ids)
+                if wrong:
+                    problems.append("verifier: " + wrong)
+                else:
+                    cases = {"branch": self.cases_branch, "run": ids}
+                    self.save(lambda x: (x.__setitem__("cases", cases), event(x, "cases ready")),
+                              "cases ready")
+                    t = self.ticket()
         if problems:
             return "\n".join(problems), costs
 
@@ -167,7 +172,7 @@ class Issuer:
 
         self.hard_block(g)
 
-        if t.get("needs_review"):
+        if complexity(t) == "complex":
             rh = self.start("reviewer", "reviewer.md", t, r, self.wt).finish()
             self.pending = []
             costs.append(rh.cost)
@@ -213,6 +218,37 @@ class Issuer:
             raise Stuck("env", out.summary())
         return "verifier cases: " + out.summary()
 
+    def red_check(self, ids):
+        """The verifier's cases must fail on the code before the ticket - by their assertions,
+        not by an error (D-020; checked by running them, D-084 Q10). The verifier's branch is
+        exactly that: the old code plus the cases. Returns what is wrong, or None."""
+        mark = case_mark(self.id)
+        tree = os.path.join(self.cfg.worktree_root, "red-t%s" % self.id)
+        self.check_time()
+        self.repo.detached(tree, self.repo.sha(self.cases_branch))
+        try:
+            out = testrun.run(self.cfg, tree, "run", ids, timeout=min(1800, self.left()),
+                              keep_dir=os.path.join(self.cfg.runs_dir(self.id), "red-check"))
+        finally:
+            self.repo.remove_worktree(tree)
+        if out.status == testrun.ENV:
+            raise Stuck("env", out.summary())
+        if out.status == testrun.UNMEASURED:
+            return "the cases could not be run on the code before the change (%s)" % out.detail
+        mine = [r for r in out.rows if mark in str(r.get("id"))]
+        if not mine:
+            return ("no acceptance case named %s ran (ids %s); name every acceptance case with %s"
+                    % (mark, " ".join(ids), mark))
+        passing = [r["id"] for r in mine if r.get("status") == "pass"]
+        errors = [r["id"] for r in mine if r.get("status") == "error"]
+        if passing:
+            return ("these cases already pass before the change, so they do not test the ticket: %s"
+                    % ", ".join(passing[:10]))
+        if errors:
+            return ("these cases fail with an error instead of their assertion (import error or "
+                    "missing name - assert the symbol exists first): %s" % ", ".join(errors[:10]))
+        return None
+
     def hard_block(self, g):
         files = g.changed_files(self.target)
         hits = [f for f in files if any(f == p or f.startswith(p.rstrip("/") + "/")
@@ -244,20 +280,27 @@ class Issuer:
             "feedback": "\n".join(t.get("feedback") or []) or "(first round)",
             "revise_cmd": revise, "result_path": os.path.join(run_dir, "result.json"),
             "test_cmd": "python3 %s <ids>" % os.path.join(LOOP, "run_tests.py"),
+            "case_mark": case_mark(self.id),
+            "base_cmd": ("python3 %s %s" % (os.path.join(LOOP, "run_tests.py"), " ".join(self.cfg.base_test_ids))
+                         if self.cfg.base_test_ids else "(this project has no base set)"),
+            "index": (os.path.join(cwd, self.cfg.index_path) if self.cfg.index_path else "(no code index)"),
             "tests_rule": (
-                "The verifier writes the cases for the acceptance items, on its own branch. Do not add "
-                "or change tests for them yourself - the same tests written twice conflict when the "
-                "branches merge. Touch a test file only if the test_plan gives that test to you, or an "
-                "existing test must change because the ticket changes behaviour."
+                "Write unit tests for the code you write (its helpers and internal pieces). The "
+                "acceptance cases - one per acceptance item - belong to the verifier: do not write or "
+                "change those, and never name a test of yours with %s, the verifier's mark."
+                % case_mark(self.id)
                 if t.get("needs_verifier", True) else
-                "This ticket has no verifier: write the tests for its acceptance items yourself, in the "
-                "project's existing test modules."),
+                "This ticket has no verifier: write unit tests for your code and the acceptance cases "
+                "yourself, in the project's existing test modules."),
             "memory": memory.for_prompt(self.pool.snapshot(), role, agents._model(self.cfg.agent(role))),
             "project_memory": os.path.join(self.pool.path, memory.rel("project", "project")),
         }
         timeout = min(self.cfg.agent_timeout_seconds, self.left())
+        simple = role == "worker" and complexity(t) == "simple"
         p = agents.start(self.cfg, role, agents.render(template, values), cwd, run_dir, timeout,
-                         extra_env={"DEVLOOP_TICKET": self.id, "AC_CODE_ROOT": cwd})
+                         extra_env={"DEVLOOP_TICKET": self.id, "AC_CODE_ROOT": cwd},
+                         effort=t.get("effort") if role == "worker" else None, round_no=r,
+                         chain_role="worker_simple" if simple else None)
         self.pending.append(p)
         return p
 
@@ -301,9 +344,23 @@ class Issuer:
         self.save(mutate, "interrupted")
 
 
+def complexity(t):
+    """simple | complex (D-075; the opener sets it). Older tickets: needs_review = complex."""
+    value = t.get("complexity")
+    if value in ("simple", "complex"):
+        return value
+    return "complex" if t.get("needs_review") else "simple"
+
+
+def case_mark(ident):
+    """The name every acceptance case of ticket N carries, so the verifier's cases and the
+    implementer's unit tests never collide (D-084 Q8) and the red check can find them."""
+    return "T%sAcceptance" % ident
+
+
 def _brief(t):
     keep = ("id", "title", "objective", "acceptance", "outline", "test_plan", "needs_verifier",
-            "needs_review", "notes")
+            "complexity", "effort", "notes")
     return {k: t[k] for k in keep if k in t}
 
 

@@ -1,6 +1,6 @@
 # Dev loop v2 (`devloop/`) — five scripts, one pool, one DAG
 
-Status: **built in `devloop/`, not yet the default** (D-078, D-079, D-080). The old loop
+Status: **built in `devloop/`, not yet the default** (D-078 … D-084; the rules in force are in `docs/DECISIONS.md`). The old loop
 (`auto-fix.sh`, `apply.sh`, `gate.sh`, `review.sh`, `schedule.py`, `land.sh`) still runs until the
 cut-over (§7). This page replaces the earlier draft (one `actl run` + three stages), which the user
 superseded with the plan below.

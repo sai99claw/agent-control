@@ -270,7 +270,7 @@ def _memory_files(root):
     base = os.path.join(root, "memory")
     if os.path.isfile(os.path.join(base, "project.md")):
         out.append("memory/project.md")
-    for layer in ("role", "model"):
+    for layer in ("role", "model", "discussions"):
         folder = os.path.join(base, layer)
         try:
             names = sorted(os.listdir(folder))

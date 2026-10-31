@@ -118,7 +118,7 @@ def main(argv=None):
         pool = pool_for(cfg)
         if args.cmd == "init":
             pool.init()
-            models = sorted({agents._model(cfg.agent(r)) for r in cfg.agents})
+            models = sorted({agents.model_of(c) for r in cfg.agents for c in cfg.agent_chain(r)})
             pool.update(lambda tx: memory.seed(tx, models, cfg.home), "memory: seed")
             print("pool ready at %s" % pool.path)
             return 0

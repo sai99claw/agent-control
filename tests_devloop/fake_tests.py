@@ -27,8 +27,21 @@ if cmd == "preflight":
         print(json.dumps([{"engine": "screen", "why": "screen locked"}]))
         sys.exit(86)
     sys.exit(0)
+def case_row(i):
+    n = i.split("_", 1)[1]
+    status = "pass" if ok(n) else "fail"
+    if os.path.exists("cases/case_%s.weak" % n):
+        status = "pass"
+    if os.path.exists("cases/case_%s.error" % n):
+        status = "error"
+    mark = "Unnamed" if os.path.exists("cases/case_%s.unnamed" % n) else "T%sAcceptance" % n
+    return {"id": "%s.%s.test_it" % (i, mark), "status": status}
+
+
 if cmd == "run":
-    write([{"id": i, "status": "pass" if ok(i.split("_", 1)[1]) else "fail"} for i in ids])
+    rows = [case_row(i) for i in ids]
+    json.dump({"schema": 1, "ids": rows, "environment_suspect": []}, open(os.path.join(out, "result.json"), "w"))
+    sys.exit(1 if any(r["status"] in ("fail", "error") for r in rows) else 0)
 if cmd == "full":
     rows = [{"id": "suite.base", "status": "pass"}]
     rows += [{"id": "impl." + os.path.basename(p), "status": "pass" if open(p).read() == "ok" else "fail"}

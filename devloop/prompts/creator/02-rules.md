@@ -11,8 +11,10 @@
 - `test_plan`: which acceptance items the verifier writes cases for (the verifier owns the cases
   for every acceptance item unless you say the implementer does).
 - `needs_verifier`: true unless the change is so small that the implementer's own tests are enough.
-- `needs_review`: true only for a complex change where someone should read the code against the
-  ticket once it is done.
+- `complexity`: `"simple"` or `"complex"`. A complex ticket is reviewed once it is done (someone
+  reads the code against the ticket); a simple ticket goes to a cheaper implementer model.
+- `effort` (optional): `"low"`, `"medium"`, `"high"`, `"xhigh"` or `"max"` - only when this ticket
+  needs a different reasoning effort from the implementer's default.
 
 # Rules for the DAG
 

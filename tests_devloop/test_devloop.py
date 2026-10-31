@@ -19,6 +19,8 @@ from core import osx  # noqa: E402
 from core.pool import Pool  # noqa: E402
 
 AGENT = ["python3", os.path.join(HERE, "fake_agent.py")]
+ROLES = ("creator", "worker", "worker_simple", "verifier", "reviewer", "fixer", "consolidator",
+         "consolidator_peer")
 TESTS = "python3 %s" % os.path.join(HERE, "fake_tests.py")
 
 
@@ -29,6 +31,14 @@ def git(cwd, *args):
 class LoopCase(unittest.TestCase):
     release = None
     loop_extra = {}
+
+    def config(self, **devloop):
+        path = os.path.join(self.proj, "board", "config.json")
+        with open(path) as fh:
+            cfg = json.load(fh)
+        cfg["devloop"].update(devloop)
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="loop-test-")
@@ -41,7 +51,7 @@ class LoopCase(unittest.TestCase):
                 "max_parallel": 2, "poll_seconds": 0.2, "issuer_timeout_seconds": 120,
                 "agent_timeout_seconds": 60, "pool_remote": None,
                 "release": self.release or "echo $DEVLOOP_GROUP $DEVLOOP_TICKETS >> %s" % self.released,
-                "agents": {r: AGENT for r in ("creator", "worker", "verifier", "reviewer", "fixer", "consolidator")}}
+                "agents": {r: AGENT for r in ROLES}}
         loop.update(self.loop_extra)
         config = {"config_version": 2,
                   "tests": {"preflight": TESTS + " preflight", "run": TESTS + " run", "full": TESTS + " full"},
@@ -59,7 +69,14 @@ class LoopCase(unittest.TestCase):
         self.pool = Pool(self.pool_path, remote=None).init()
         self.plan_path = os.path.join(self.tmp, "plan", "plan.json")
         os.makedirs(os.path.dirname(self.plan_path))
+        # a test must never reach a real model: a `claude` that fails loudly comes first on PATH
+        guard = os.path.join(self.tmp, "guard-bin")
+        os.makedirs(guard)
+        with open(os.path.join(guard, "claude"), "w") as fh:
+            fh.write("#!/bin/sh\necho 'real claude called from a test' >&2\nexit 97\n")
+        os.chmod(os.path.join(guard, "claude"), 0o755)
         self.env = dict(os.environ, AC_ROOT=self.proj, FAKE_PLAN=self.plan_path,
+                        PATH=guard + os.pathsep + os.environ.get("PATH", ""),
                         GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
                         GIT_COMMITTER_EMAIL="t@t")
 
@@ -69,10 +86,10 @@ class LoopCase(unittest.TestCase):
         with open(self.plan_path, "w") as fh:
             json.dump(roles, fh)
 
-    def add(self, ident, deps=(), verify="together", needs_verifier=True, needs_review=False, **extra):
+    def add(self, ident, deps=(), verify="together", needs_verifier=True, complexity="simple", **extra):
         def change(tx):
             t = {"id": str(ident), "title": "ticket %s" % ident, "objective": "o", "acceptance": ["a"],
-                 "needs_verifier": needs_verifier, "needs_review": needs_review, "state": "ready",
+                 "needs_verifier": needs_verifier, "complexity": complexity, "state": "ready",
                  "round": 0, "feedback": [], "cases": None}
             t.update(extra)
             tx.put_ticket(t)
@@ -166,7 +183,7 @@ class RoundsAndFeedback(LoopCase):
         self.assertEqual(self.state(2), "ready")
 
     def test_review_fail_is_feedback_like_any_other(self):
-        self.add(1, needs_review=True)
+        self.add(1, complexity="complex")
         self.plan(reviewer={"1": ["fail", "pass"]})
         res = self.controller()
         self.assertEqual(res.returncode, 0, res.stderr)
@@ -395,6 +412,120 @@ class WebInput(LoopCase):
         self.assertEqual(sorted(snap.tickets), ["1", "2", "3"], "the request opened two tickets")
         self.assertEqual(snap.ticket("1")["state"], "ready")
         self.assertTrue(snap.inbox["p1"]["acked"])
+
+
+class RedCheck(LoopCase):
+    def feedback_of(self, ident):
+        t = self.snap().ticket(str(ident))
+        return [h for h in t["history"] if h["event"] == "feedback"], t
+
+    def _round_two(self, action, words):
+        self.add(1)
+        self.plan(verifier={"1": [action, "ok"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        fed, t = self.feedback_of(1)
+        self.assertEqual((t["state"], t["round"], len(fed)), ("landed", 2, 1))
+        log = git(self.pool_path, "log", "--format=%H", "--grep", "#1: round 1 feedback")
+        old = json.loads(git(self.pool_path, "show", "%s:tickets/1.json" % log.split()[0]))
+        self.assertIn(words, old["feedback"][-1])
+
+    def test_cases_that_pass_before_the_change_go_back_to_the_verifier(self):
+        self._round_two("weak", "already pass before the change")
+
+    def test_cases_that_error_instead_of_failing_go_back(self):
+        self._round_two("error", "fail with an error instead of their assertion")
+
+    def test_cases_without_the_ticket_mark_go_back(self):
+        self._round_two("unnamed", "no acceptance case named T1Acceptance")
+
+
+class AgentChains(LoopCase):
+    def cost_rows(self, ident, role):
+        return [c for c in self.snap().ticket(str(ident)).get("cost") or [] if c["role"] == role]
+
+    def test_a_simple_ticket_uses_the_simple_worker_chain(self):
+        self.config(agents=dict(json.load(open(os.path.join(self.proj, "board", "config.json")))["devloop"]["agents"],
+                                worker_simple=AGENT + ["--model", "simple-model"]))
+        self.add(1, complexity="simple")
+        self.add(2, complexity="complex")
+        self.controller()
+        self.assertEqual({c["model"] for c in self.cost_rows(1, "worker")}, {"simple-model"})
+        self.assertEqual({c["model"] for c in self.cost_rows(2, "worker")}, {"python3"})
+
+    def test_a_missing_command_falls_through_to_the_next(self):
+        agents_cfg = json.load(open(os.path.join(self.proj, "board", "config.json")))["devloop"]["agents"]
+        chain = [["/no/such/agent"], AGENT]
+        self.config(agents=dict(agents_cfg, worker=chain, worker_simple=chain))
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        row = self.cost_rows(1, "worker")[0]
+        self.assertEqual(row["fell_back_from"][0]["outcome"], "not found")
+
+    def test_out_of_quota_tries_the_next_command(self):
+        agents_cfg = json.load(open(os.path.join(self.proj, "board", "config.json")))["devloop"]["agents"]
+        self.config(agents=dict(agents_cfg, worker=[AGENT, AGENT], worker_simple=[AGENT, AGENT]))
+        self.add(1)
+        self.plan(worker={"1": ["quota", "ok"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        t = self.snap().ticket("1")
+        self.assertEqual((t["state"], t["round"]), ("landed", 1))
+        self.assertEqual(self.cost_rows(1, "worker")[0]["fell_back_from"][0]["outcome"], "out of quota")
+
+    def test_effort_replaces_or_is_added(self):
+        from core import agents
+        self.assertEqual(agents.with_effort(["claude", "-p", "--effort", "medium"], "high")[-1], "high")
+        self.assertEqual(agents.with_effort(["claude", "-p"], "xhigh")[-2:], ["--effort", "xhigh"])
+        self.assertEqual(agents.with_effort(["agy", "run"], "high"), ["agy", "run"])
+        with self.assertRaises(osx.OSFailure):
+            agents.with_effort(["claude"], "huge")
+
+
+class Landing(LoopCase):
+    def test_the_code_map_is_refreshed_on_main_and_the_cost_is_totalled(self):
+        with open(os.path.join(self.proj, "app.py"), "w") as fh:
+            fh.write('"""The app."""\n\n\ndef hello(name):\n    """Say hello."""\n    return name\n')
+        git(self.proj, "add", "app.py")
+        git(self.proj, "commit", "-q", "-m", "app")
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        index = git(self.proj, "show", "main:CODE-MAP.md")
+        self.assertIn("## app.py - The app.", index)
+        self.assertIn("`hello(name)` Say hello.", index)
+        self.assertIn("devloop: code map for group g1", git(self.proj, "log", "--format=%s", "main"))
+        total = self.snap().ticket("1")["cost_total"]
+        self.assertEqual(total["runs"], 2)
+        self.assertEqual(total["unknown_runs"], 2, "fake agents report no tokens: unknown, not 0")
+        self.assertIsNone(total["input_tokens"])
+
+
+class RequiredFields(LoopCase):
+    def test_a_project_field_the_opener_left_out_is_rejected(self):
+        self.config(required_fields={"vision": "which VISION metric this improves"})
+        res = self.run_py("ticket_creator.py", "--request", "x")
+        self.assertEqual(res.returncode, 1, res.stdout)
+        self.assertEqual(self.snap().tickets, {})
+        page = list(self.snap().inbox.values())[0]["text"]
+        self.assertIn('"vision" is required by this project', page)
+
+
+class UnlimitedTokens(LoopCase):
+    def test_memory_is_consolidated_by_two_models_with_the_discussion_kept(self):
+        self.config(unlimited_tokens=True)
+        self.run_py("tickets.py", "init")
+        self.add(1)
+        self.plan(worker={"1": ["lessons"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        snap = self.snap()
+        talks = [k for k in snap.memory if k.startswith("memory/discussions/")]
+        self.assertEqual(len(talks), 1)
+        self.assertIn("merge lines 2 and 3", snap.memory[talks[0]])
+        state = snap.memory_state["runs"][-1]
+        self.assertEqual([c["role"] for c in state["cost"]], ["consolidator", "consolidator_peer", "consolidator"])
 
 
 class Recovery(LoopCase):

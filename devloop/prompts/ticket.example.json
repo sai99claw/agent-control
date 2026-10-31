@@ -10,7 +10,7 @@
   "outline": "api/auth.py login handler returns the code; web/login.tsx maps it to the message.",
   "test_plan": "Verifier writes cases for all three acceptance items (API test + component test).",
   "needs_verifier": true,
-  "needs_review": false,
   "token_estimate": 350000,
-  "token_basis": "two small files to change (api/auth.py, web/login.tsx), three short cases, no new dependencies"
+  "token_basis": "two small files to change (api/auth.py, web/login.tsx), three short cases, no new dependencies",
+  "complexity": "simple"
 }

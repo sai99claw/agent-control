@@ -57,6 +57,14 @@ def tokens(t):
     return fresh, cached
 
 
+def cache_written(t):
+    total = None
+    for row in t.get("cost") or []:
+        if isinstance(row.get("cache_write_tokens"), int):
+            total = (total or 0) + row["cache_write_tokens"]
+    return total
+
+
 def minutes(t):
     start = end = None
     for h in t.get("history") or []:
@@ -118,8 +126,8 @@ def render(cfg, snap, key=None):
     out.append("</div></section>")
 
     out.append('<section><h2>票</h2><div class="scroll"><table><tr><th>票</th><th>狀態</th><th>輪</th>'
-               '<th>整合分支</th><th>相依</th><th>驗證</th><th>token</th><th>快取讀</th><th>分鐘</th>'
-               '<th>估 token</th><th>說明</th><th>標題</th></tr>')
+               '<th>整合分支</th><th>相依</th><th>一起驗</th><th>驗證者</th><th>覆核</th><th>token</th>'
+               '<th>快取讀</th><th>快取寫</th><th>分鐘</th><th>估 token</th><th>說明</th><th>標題</th></tr>')
     order = dagmod.topo(snap.dag) + sorted(set(snap.tickets) - set(snap.dag))
     for ident in order:
         t = snap.tickets.get(ident)
@@ -136,14 +144,19 @@ def render(cfg, snap, key=None):
             note = "issuer 跑了 %d 分" % (osx.age(run.get("started")) / 60) if run.get("started") else "剛派出"
         elif t.get("feedback"):
             note = "上一輪:" + t["feedback"][-1][:120]
+        written = cache_written(t)
+        complex_ = t.get("complexity") == "complex" or (t.get("complexity") is None and t.get("needs_review"))
         out.append("<tr class='s-%s'><td>#%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>"
+                   "<td>%s</td><td>%s</td>"
                    "<td class='num'>%s</td><td class='num'>%s</td><td class='num'>%s</td><td class='num'>%s</td>"
-                   "<td>%s</td><td>%s</td></tr>" % (
+                   "<td class='num'>%s</td><td>%s</td><td>%s</td></tr>" % (
                        e(state), e(ident), e(STATE_TEXT.get(state, state)), e(t.get("round", 0)),
                        e(t.get("target") or ""), e(" ".join("#" + d for d in dagmod.deps(snap.dag, ident))),
-                       e(dagmod.verify(snap.dag, ident)),
+                       e({"together": "一起", "alone": "單獨"}.get(dagmod.verify(snap.dag, ident))),
+                       e("有" if t.get("needs_verifier", True) else "無"), e("有" if complex_ else "無"),
                        e(UNKNOWN if fresh is None else format(fresh, ",")),
                        e(UNKNOWN if cached is None else format(cached, ",")),
+                       e(UNKNOWN if written is None else format(written, ",")),
                        e(minutes(t) if minutes(t) is not None else ""),
                        e(format(t["token_estimate"], ",") if isinstance(t.get("token_estimate"), int) else UNKNOWN),
                        e(note), e(t.get("title"))))

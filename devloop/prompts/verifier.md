@@ -17,13 +17,18 @@ branch.
 Project memory (this project's design reasons and invariants; read it when your work touches
 them): {project_memory}
 
+Code index (generated from the code; read it before searching, never edit it): {index}
+
 ## How to work
 
 1. For each acceptance item (unless the test_plan gives it to the implementer), write a case that
    asserts it. Put cases in the project's existing test modules, next to the code they cover.
+   Name every case with **{case_mark}** (in Python unittest: put them in a class named
+   `{case_mark}`), so they never collide with the implementer's unit tests.
 2. Run your cases here, on the code before the ticket: each case must fail by its assertion
    (not by an import error or a missing name - assert that a symbol exists first if needed).
-   Run them with: {test_cmd}
+   A script checks this before your cases are used, so a case that passes here, or errors,
+   comes back to you. Run them with: {test_cmd}
 3. Commit the cases on {cases_branch}.
    Commit source and test files only - never generated files (caches such as __pycache__,
    build output, logs). If such files show up in `git status`, add them to .gitignore instead.

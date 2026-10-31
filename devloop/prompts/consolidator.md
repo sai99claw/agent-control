@@ -37,6 +37,8 @@ Merge the lessons into the file: drop duplicates and anything that belongs to an
 nowhere, merge near-duplicates into one sharper line, remove old lines a new lesson proves
 wrong, keep the file's first heading. Do not invent lessons.
 
+{peer_notes}
+
 ## Hand-in
 
 Write JSON to {result_path}, then stop. "text" is the whole new file:

@@ -15,8 +15,9 @@ GREEN, RED, ENV, UNMEASURED = "green", "red", "env", "unmeasured"
 
 
 class Outcome:
-    def __init__(self, status, failures=None, env_rows=None, detail="", log_dir=None):
+    def __init__(self, status, failures=None, env_rows=None, detail="", log_dir=None, rows=None):
         self.status, self.failures, self.env_rows = status, failures or [], env_rows or []
+        self.rows = rows or []
         self.detail, self.log_dir = detail, log_dir
 
     def summary(self, limit=30):
@@ -55,9 +56,9 @@ def run(cfg, code_root, command, ids=(), timeout=None, keep_dir=None):
     rows = (result or {}).get("ids") or []
     failures = [r for r in rows if isinstance(r, dict) and r.get("status") in ("fail", "error")]
     if res.rc == 0:
-        return Outcome(GREEN, log_dir=out)
+        return Outcome(GREEN, log_dir=out, rows=rows)
     if res.rc == 1:
-        return Outcome(RED, failures=failures, log_dir=out)
+        return Outcome(RED, failures=failures, log_dir=out, rows=rows)
     if res.rc == 86:
         env_rows = (result or {}).get("environment_suspect") or []
         if not env_rows:

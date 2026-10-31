@@ -32,7 +32,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import dag as dagmod  # noqa: E402
-from core import memory, osx  # noqa: E402
+from core import agents, codemap, memory, osx  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.pool import event  # noqa: E402
@@ -227,6 +227,7 @@ class Controller:
                 return
             self.start_fixer(gid, report, rnd + 1)
             return
+        sha = self.refresh_index(g, sha)
         where = self.repo.checked_out_at(main)
         if where:
             res = Git(where).run("merge", "--ff-only", sha, check=False)
@@ -249,6 +250,7 @@ class Controller:
             for i in ids:
                 t = tx.ticket(i)
                 t["state"], t["landed_sha"] = "landed", sha
+                t["cost_total"] = agents.total(t.get("cost"))
                 event(t, "landed", group=gid)
                 tx.put_ticket(t)
             grp = tx.data.groups[gid]
@@ -263,6 +265,42 @@ class Controller:
         else:
             self.pool.report("decision", gid, "group %s is in %s (%s) but the release failed - "
                              "not retried, not rolled back:\n%s" % (gid, main, sha[:12], rel_text))
+
+    def refresh_index(self, g, sha):
+        """Commit the regenerated code index on top of the verified sha (D-084 Q11); a change to
+        one generated file only, so the regression result still holds. Returns the sha to land."""
+        rel = self.cfg.index_path
+        if not rel:
+            return sha
+        tree = os.path.join(self.cfg.worktree_root, "index-" + g["id"])
+        try:
+            self.repo.detached(tree, sha)
+            text = codemap.build(tree, skip={rel})
+            path = os.path.join(tree, rel)
+            try:
+                with open(path, errors="replace") as fh:
+                    if fh.read() == text:
+                        return sha
+            except FileNotFoundError:
+                pass
+            osx.atomic_write(path, text)
+            t = Git(tree)
+            t.run("add", "--", rel)
+            t.run("-c", "user.name=devloop", "-c", "user.email=devloop@localhost", "commit", "-q",
+                  "-m", "devloop: code map for group %s" % g["id"])
+            new = t.sha("HEAD")
+            if not self.repo.move_ref(g["branch"], new, sha):
+                return sha
+            self.set_group(g["id"], None, "code map refreshed", verified_sha=new)
+            return new
+        except osx.OSFailure as exc:
+            print("ticket_controller: code map not refreshed: %s" % exc, file=sys.stderr)
+            return sha
+        finally:
+            try:
+                self.repo.remove_worktree(tree)
+            except osx.OSFailure:
+                pass
 
     def release(self, g, sha):
         tree = os.path.join(self.cfg.worktree_root, "release-" + g["id"])

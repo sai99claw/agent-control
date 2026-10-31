@@ -45,6 +45,30 @@ Run them from the project (or set `AC_ROOT` to it).
 Tests run through the project's existing test interface (`tests.*`, `scripts/testiface.py`).
 `hard_block.paths` / `patterns`: a ticket that touches them stops before merging.
 
+## Agents, models and tests (D-084)
+
+- `agents.<role>` is one command or a chain of commands; the next one is tried when a command is
+  not installed or its run ends saying the account is out of quota. Defaults: worker opus medium,
+  `worker_simple` (tickets with `complexity: simple`) sonnet medium, creator opus xhigh,
+  consolidator fable then opus. To try `agy` for workers, put it first in the worker chain, e.g.
+  `"worker": [["agy", "...", "high"], ["claude", "-p", "--model", "opus", "--effort", "medium", ...]]`.
+- A ticket may carry `effort` (low … max); it replaces the worker command's `--effort`.
+- The verifier names every acceptance case `T<id>Acceptance` (Python: a class of that name); the
+  worker writes unit tests for its own code and never uses that name. Before the cases are used,
+  the issuer runs them on the verifier's branch (old code + cases): every one must fail by its
+  assertion.
+- The worker runs the verifier's cases, its own unit tests and the base set (`devloop.base_tests`,
+  default `tests.unittest.base`) before handing in; the full suite is the regression's.
+- `index_path` (default `CODE-MAP.md`): a code index generated from the code and committed onto
+  the integration branch just before main moves. Agents read it before searching.
+- `required_fields`: extra ticket fields the opener must fill (agent-control requires `vision` and
+  `removes`).
+- Cost rows: role, model, effort, round, seconds, tokens (input, output, cache read and write),
+  dollars, session id, outcome; a stopped run's tokens are read from the CLI transcript; a landed
+  ticket gets `cost_total`. Unknown stays unknown.
+- `unlimited_tokens: true`: memory consolidation becomes a two-model discussion (draft, review by
+  `consolidator_peer`, one more draft if asked), kept in the pool under `memory/discussions/`.
+
 ## Memory
 
 Layered as before (D-013): `memory/role/<role>.md`, `memory/model/<model>.md`, `memory/project.md`,

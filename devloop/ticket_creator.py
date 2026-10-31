@@ -37,7 +37,13 @@ from core.pool import event  # noqa: E402
 
 PROMPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
 TEXT_FIELDS = ("title", "objective", "outline", "test_plan", "notes")
-EDITABLE = TEXT_FIELDS + ("acceptance", "needs_verifier", "needs_review", "token_estimate", "token_basis")
+EDITABLE = TEXT_FIELDS + ("acceptance", "needs_verifier", "complexity", "effort", "token_estimate",
+                          "token_basis")
+
+
+def editable(cfg):
+    """Fields the opener may set: the fixed ones plus the project's required ones."""
+    return EDITABLE + tuple(k for k in (cfg.required_fields or {}) if k not in EDITABLE)
 REVISE_TIMEOUT = 540          # a worker waits for this inside one tool call (10 min cap)
 WEB_LIMIT = 8000              # characters of web input passed on
 MARK_OPEN, MARK_CLOSE = "<<<WEB INPUT", "WEB INPUT>>>"
@@ -95,7 +101,15 @@ def example():
 
 # ---------------------------------------------------------------- opening
 
-def check_new(result, snap):
+def required_section(cfg):
+    fields = cfg.required_fields or {}
+    if not fields:
+        return "## Fields this project requires\n\nNone beyond the reference ticket."
+    return "## Fields this project requires\n\nEvery ticket must also have:\n\n" + "\n".join(
+        "- `%s`: %s" % (k, v) for k, v in sorted(fields.items()))
+
+
+def check_new(result, snap, cfg=None):
     """Problems with an opener hand-in of kind "tickets", as sentences."""
     out = []
     tickets = result.get("tickets")
@@ -121,9 +135,15 @@ def check_new(result, snap):
         est = t.get("token_estimate")
         if not isinstance(est, int) or isinstance(est, bool) or est <= 0:
             out.append(where + ": \"token_estimate\" must be a positive whole number of tokens")
-        for f in ("needs_verifier", "needs_review"):
-            if not isinstance(t.get(f), bool):
-                out.append("%s: \"%s\" must be true or false" % (where, f))
+        if not isinstance(t.get("needs_verifier"), bool):
+            out.append(where + ": \"needs_verifier\" must be true or false")
+        if t.get("complexity") not in ("simple", "complex"):
+            out.append(where + ": \"complexity\" must be \"simple\" or \"complex\"")
+        if t.get("effort") is not None and t.get("effort") not in agents.EFFORTS:
+            out.append(where + ": \"effort\" must be one of %s, or left out" % ", ".join(agents.EFFORTS))
+        for f in sorted((cfg.required_fields if cfg else None) or {}):
+            if not isinstance(t.get(f), str) or not t.get(f).strip():
+                out.append("%s: \"%s\" is required by this project" % (where, f))
         if key and key not in dag:
             out.append("dag has no entry for %s" % key)
     if out:
@@ -134,7 +154,7 @@ def check_new(result, snap):
     return dagmod.problems(merged, known_tickets=list(snap.tickets) + keys)
 
 
-def write_new(pool, result, request):
+def write_new(pool, result, request, fields=EDITABLE):
     def change(tx):
         ids, mapping = [], {}
         nxt = int(tx.data.next_ticket_id())
@@ -144,7 +164,7 @@ def write_new(pool, result, request):
         dag = tx.data.dag
         for t in result["tickets"]:
             ident = mapping[str(t["key"])]
-            row = {k: t[k] for k in EDITABLE if k in t}
+            row = {k: t[k] for k in fields if k in t}
             row.update({"id": ident, "state": "ready", "round": 0, "created": osx.now(),
                         "request": request[:4000], "feedback": [], "cases": None})
             event(row, "opened")
@@ -170,6 +190,7 @@ def open_tickets(cfg, pool, request, via="main"):
             memory.for_prompt(snap, "creator", agents._model(cfg.agent("creator"))),
             os.path.join(pool.path, memory.rel("project", "project"))),
         "## Reference ticket\n\n```json\n%s\n```" % example(),
+        required_section(cfg),
         "## Tickets still open\n\n```json\n%s\n```" % json.dumps(summary, indent=2, ensure_ascii=False),
         "## Current DAG\n\n```json\n%s\n```" % json.dumps(snap.dag, indent=2, ensure_ascii=False),
         "## The request\n\n%s" % guarded(request, via),
@@ -195,10 +216,10 @@ def open_tickets(cfg, pool, request, via="main"):
         if hand.kind != "tickets":
             errors = ["\"kind\" must be \"tickets\", \"question\" or \"rejected\""]
             continue
-        errors = check_new(hand.result, pool.snapshot())
+        errors = check_new(hand.result, pool.snapshot(), cfg)
         if errors:
             continue
-        ids = write_new(pool, hand.result, request)
+        ids = write_new(pool, hand.result, request, editable(cfg))
         titles = {i: pool.snapshot().tickets[i].get("title") for i in ids}
         pool.report("created", ",".join(ids), "opened " + "; ".join(
             "#%s %s" % (i, titles[i]) for i in ids))
@@ -261,7 +282,7 @@ def revise(cfg, pool, ident, source, reason, via="main"):
         why = "The %s working on it says the ticket is wrong:\n\n> %s" % (source, reason)
     prompt = agents.render("reviser.md", {
         "ticket_id": ident, "source": source, "reason": reason, "why": why,
-        "ticket_json": json.dumps({k: t.get(k) for k in EDITABLE + ("cases",)}, indent=2, ensure_ascii=False),
+        "ticket_json": json.dumps({k: t.get(k) for k in editable(cfg) + ("cases",)}, indent=2, ensure_ascii=False),
         "dag_json": json.dumps(snap.dag.get(ident) or {}, indent=2, ensure_ascii=False),
         "result_path": os.path.join(run_dir, "result.json"),
     })
@@ -277,7 +298,7 @@ def revise(cfg, pool, ident, source, reason, via="main"):
     if res.get("kind") == "rejected":
         return rejected(pool, ident, res.get("text"), via)
     if source == "user" and res.get("kind") in ("revised", "unchanged"):
-        changes = {k: v for k, v in (res.get("ticket") or {}).items() if k in EDITABLE} \
+        changes = {k: v for k, v in (res.get("ticket") or {}).items() if k in editable(cfg)} \
             if res.get("kind") == "revised" else {}
         user_reset(pool, ident, "ready", res.get("note") or "", changes, bool(res.get("cases_wrong")))
         print("READY AGAIN after your decision: %s" % (res.get("note") or ""))
@@ -289,7 +310,7 @@ def revise(cfg, pool, ident, source, reason, via="main"):
               "{\"kind\": \"blocked\", \"text\": \"waiting for the user's decision\"}." % res.get("text"))
         return 3
     if res.get("kind") == "revised":
-        changes = {k: v for k, v in (res.get("ticket") or {}).items() if k in EDITABLE}
+        changes = {k: v for k, v in (res.get("ticket") or {}).items() if k in editable(cfg)}
 
         def change(tx):
             row = tx.ticket(ident)

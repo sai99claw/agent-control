@@ -18,7 +18,7 @@ counter = os.path.join(os.path.dirname(plan_path), "count-%s-%s" % (role, ticket
 n = int(open(counter).read()) if os.path.exists(counter) else 0
 open(counter, "w").write(str(n + 1))
 default = {"worker": "ok", "verifier": "ok", "reviewer": "pass", "fixer": "fix", "creator": "tickets",
-           "consolidator": "merge"}[role]
+           "consolidator": "merge", "consolidator_peer": "change"}[role]
 actions = (plan.get(role) or {}).get(ticket) or (plan.get(role) or {}).get("*") or [default]
 action = actions[min(n, len(actions) - 1)]
 sys.stdin.read()
@@ -39,6 +39,9 @@ def hand(obj):
 
 if action == "sleep":
     time.sleep(60)
+if action == "quota":
+    print("Error: Claude usage limit reached. Your limit will reset at 5pm.")
+    sys.exit(1)
 if action == "nothing":
     sys.exit(1)
 
@@ -77,6 +80,12 @@ elif role == "verifier":
     if action != "nocommit":
         os.makedirs("cases", exist_ok=True)
         open("cases/case_%s.txt" % ticket, "w").write("case")
+        for kind in ("weak", "error", "unnamed"):
+            marker = "cases/case_%s.%s" % (ticket, kind)
+            if action == kind:
+                open(marker, "w").write(kind)
+            elif os.path.exists(marker):
+                os.unlink(marker)
         commit("cases %s" % ticket)
     hand({"kind": "cases", "run": ["case_%s" % ticket]})
 elif role == "reviewer":
@@ -90,6 +99,8 @@ elif role == "fixer":
         os.unlink("red.txt")
     commit("fix")
     hand({"kind": "done", "summary": "removed red"})
+elif role == "consolidator_peer":
+    hand({"kind": "review", "verdict": action, "notes": "merge lines 2 and 3" if action == "change" else ""})
 elif role == "consolidator":
     prompt_seen = os.path.join(os.path.dirname(result_path), "prompt.md")
     import re
@@ -108,8 +119,8 @@ elif role == "creator":
     else:
         hand({"kind": "tickets",
               "tickets": [{"key": "new-1", "title": "first", "objective": "o", "acceptance": ["a"],
-                           "needs_verifier": True, "needs_review": False, "token_estimate": 200000},
+                           "needs_verifier": True, "complexity": "simple", "token_estimate": 200000},
                           {"key": "new-2", "title": "second", "objective": "o", "acceptance": ["a"],
-                           "needs_verifier": True, "needs_review": True, "token_estimate": 300000}],
+                           "needs_verifier": True, "complexity": "complex", "token_estimate": 300000}],
               "dag": {"new-1": {"depends_on": [], "verify": "together"},
                       "new-2": {"depends_on": ["new-1"], "verify": "together"}}})

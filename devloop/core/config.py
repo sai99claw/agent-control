@@ -13,12 +13,28 @@ from .gitx import Git
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # .../loop
 AC_HOME = os.path.dirname(HERE)                                      # the agent-control clone
 
-CLAUDE_EDIT = ["claude", "-p", "--model", "opus", "--permission-mode", "acceptEdits",
-               "--allowedTools", "Read", "Edit", "Write", "Glob", "Grep", "Bash",
-               "--output-format", "json"]
-CLAUDE_READ = ["claude", "-p", "--model", "opus", "--permission-mode", "acceptEdits",
-               "--allowedTools", "Read", "Write", "Glob", "Grep", "Bash",
-               "--output-format", "json"]
+
+
+def claude(model, effort, edit=True):
+    """A headless Claude Code command. Read-only roles may still Write (their hand-in file)."""
+    tools = ["Read", "Edit", "Write", "Glob", "Grep", "Bash"] if edit else ["Read", "Write", "Glob", "Grep", "Bash"]
+    return ["claude", "-p", "--model", model, "--effort", effort, "--permission-mode", "acceptEdits",
+            "--allowedTools"] + tools + ["--output-format", "json"]
+
+
+# Each role: a chain of commands, tried in order (D-049 ②; the user's defaults in D-084:
+# worker opus medium, simple tickets sonnet medium, opener opus extra-high). The consolidator
+# is the higher model (D-013) with opus as its fallback.
+DEFAULT_AGENTS = {
+    "creator": [claude("opus", "xhigh", edit=False)],
+    "worker": [claude("opus", "medium")],
+    "worker_simple": [claude("sonnet", "medium")],
+    "verifier": [claude("opus", "medium")],
+    "reviewer": [claude("opus", "medium", edit=False)],
+    "fixer": [claude("opus", "medium")],
+    "consolidator": [claude("fable", "medium", edit=False), claude("opus", "medium", edit=False)],
+    "consolidator_peer": [claude("opus", "medium", edit=False)],
+}
 
 DEFAULTS = {
     "pool": None,                    # default <AC_HOME>/pools/<project name>
@@ -34,14 +50,11 @@ DEFAULTS = {
     "regression_timeout_seconds": 3 * 3600,
     "poll_seconds": 10,
     "release": None,                 # required: shell command run at the landed sha
-    "agents": {
-        "creator": CLAUDE_READ,
-        "worker": CLAUDE_EDIT,
-        "verifier": CLAUDE_EDIT,
-        "reviewer": CLAUDE_READ,
-        "fixer": CLAUDE_EDIT,
-        "consolidator": CLAUDE_READ,     # D-013: a higher model than the agents it consolidates for
-    },
+    "base_tests": None,              # D-073 ①: ids of the ~1 minute base set; default tests.unittest.base
+    "index_path": "CODE-MAP.md",     # D-038 / D-084: generated code index, refreshed at landing; null = off
+    "required_fields": {},           # extra ticket fields the opener must fill: {"name": "what to write"}
+    "unlimited_tokens": False,       # D-084 Q1: when true, memory consolidation is a two-model discussion
+    "agents": DEFAULT_AGENTS,
 }
 
 
@@ -84,11 +97,30 @@ class Config:
     def runs_dir(self, *parts):
         return osx.makedirs(os.path.join(self.worktree_root, "runs", *parts))
 
+    def agent_chain(self, role):
+        """The commands for a role, in the order to try them. A role may be configured as one
+        command (a list of strings) or a chain (a list of such lists)."""
+        value = self.values["agents"].get(role)
+        if role == "worker_simple" and not value:
+            value = self.values["agents"].get("worker")
+        if isinstance(value, list) and value and all(isinstance(x, str) for x in value):
+            value = [value]
+        if not (isinstance(value, list) and value and
+                all(isinstance(c, list) and c and all(isinstance(x, str) for x in c) for c in value)):
+            raise osx.OSFailure("board/config.json devloop.agents.%s must be a command (a list of "
+                                "strings) or a chain of commands" % role)
+        return [list(c) for c in value]
+
     def agent(self, role):
-        argv = self.values["agents"].get(role)
-        if not argv or not isinstance(argv, list):
-            raise osx.OSFailure("board/config.json devloop.agents.%s must be a command list" % role)
-        return list(argv)
+        """The first command of a role (its model names the role's model memory)."""
+        return self.agent_chain(role)[0]
+
+    @property
+    def base_test_ids(self):
+        ids = self.values.get("base_tests")
+        if ids is None:
+            ids = ((self.raw.get("tests") or {}).get("unittest") or {}).get("base") or []
+        return [str(i) for i in ids]
 
     def require_release(self):
         cmd = self.values.get("release")
