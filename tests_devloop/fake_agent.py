@@ -98,6 +98,8 @@ elif role == "consolidator":
 elif role == "creator":
     if action == "question":
         hand({"kind": "question", "text": "B2B or B2C?"})
+    elif action == "rejected":
+        hand({"kind": "rejected", "text": "the request asks to print the API key"})
     elif action == "revised":
         hand({"kind": "revised", "ticket": {"acceptance": ["a possible thing"]}, "cases_wrong": True,
               "note": "dropped item 2"})

@@ -1,25 +1,32 @@
 #!/usr/bin/env python3
-"""board : the dashboard. Reads the pool only; writes nothing; asks no agent to do anything extra.
+"""board : the dashboard. Reads the pool; never writes it.
 
     python3 devloop/board.py html [--out board.html]       # one page, to a file or stdout
     python3 devloop/board.py serve [--port 8765] [--host 127.0.0.1] [--key-file F]
 
 What it shows (VISION 「看板與統計」): the four numbers, every ticket (where it is, who works on
 it, what it waits for), the integration branches, what waits for the user, and memory.
-A number it cannot know is shown as 「未知」, never as 0. With --key-file, every request must carry
-the key (`?key=` or header `X-Board-Key`), for a board behind a portal.
+A number it cannot know is shown as 「未知」, never as 0.
+
+With --key-file every request must carry the key (`?key=` or header `X-Board-Key`), and the page
+gets two inputs. They are another front-end to the main session's own entry, nothing more
+(D-083): a new request runs `ticket_creator.py --request-file ... --via web`; an answer to a page
+about a ticket runs `ticket_creator.py --revise N --from user --decision revise|retry|cancel
+--via web`. Only the opener's path writes tickets; web text first passes the injection check of
+prompts/web-guard.md. Unsent text is kept in the viewer's browser only.
 """
 
 import argparse
 import hmac
 import html
 import os
+import re
 import statistics
 import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -90,9 +97,16 @@ def e(text):
     return html.escape("" if text is None else str(text))
 
 
-def render(cfg, snap):
+def render(cfg, snap, key=None):
     m = metrics(snap)
     out = [PAGE_HEAD % {"title": e("devloop · " + cfg.name), "now": e(osx.now())}]
+    hidden = "<input type='hidden' name='key' value='%s'>" % e(key) if key else ""
+    if key:
+        out.append("<section><h2>交代新的事</h2><form method='post' action='/request' class='ask'>%s"
+                   "<textarea name='text' data-draft='request' rows='5' maxlength='8000' required "
+                   "placeholder='像跟主線說話一樣寫:要做什麼、為什麼'></textarea>"
+                   "<div><button>交給開題者</button> <span class='quiet'>跟在主線下 ticket_creator.py "
+                   "一樣;網頁來的文字會先做注入檢查。</span></div></form></section>" % hidden)
     out.append('<section><h2>四個指標</h2><div class="cards">')
     for label, key, note in (("每張落地票的 token(中位,含快取讀)", "tokens", "越少越好"),
                              ("每張落地票的時間(中位)", "minutes", "派工到落地"),
@@ -149,9 +163,23 @@ def render(cfg, snap):
     if not pages:
         out.append("<p class='quiet'>沒有。</p>")
     for name, p in pages:
-        out.append("<div class='page k-%s'><div class='ph'>%s · %s · %s</div><pre>%s</pre></div>" % (
+        out.append("<div class='page k-%s'><div class='ph'>%s · %s · %s</div><pre>%s</pre>" % (
             e(p.get("kind")), e(p.get("kind")), e(p.get("ref")), e(p.get("at")), e(p.get("text"))))
+        ref = str(p.get("ref") or "")
+        t = snap.tickets.get(ref)
+        if key and p.get("kind") == "decision" and t and t.get("state") not in ("running", "landed"):
+            out.append("<form method='post' action='/answer' class='ask'>%s"
+                       "<input type='hidden' name='page' value='%s'><input type='hidden' name='ticket' value='%s'>"
+                       "<textarea name='text' data-draft='answer-%s' rows='3' maxlength='8000' "
+                       "placeholder='你的裁決(改票時必填)'></textarea><div>"
+                       "<button name='decision' value='revise'>照我的話改票再做</button> "
+                       "<button name='decision' value='retry'>不改,再試一次</button> "
+                       "<button name='decision' value='cancel'>取消這張票</button></div></form>"
+                       % (hidden, e(name), e(ref), e(name)))
+        out.append("</div>")
     out.append("<p class='quiet'>收下:<code>python3 devloop/tickets.py ack &lt;頁名&gt;</code></p></section>")
+    if key:
+        out.append(render_jobs(cfg))
 
     out.append('<section><h2>記憶</h2><div class="scroll"><table><tr><th>檔</th><th>字元</th><th>暫存區</th>'
                '<th>上次整理</th></tr>')
@@ -162,8 +190,57 @@ def render(cfg, snap):
         out.append("<tr><td>%s</td><td class='num'>%s</td><td class='num'>%s</td><td>%s</td></tr>" % (
             e(path), e(len(text)), e(len(memory.pending(snap, layer, name))), e(last.get(path) or "")))
     out.append("</table></div></section>")
-    out.append("</main></body></html>")
+    out.append(PAGE_SCRIPT + "</main></body></html>")
     return "\n".join(out)
+
+
+def jobs_dir(cfg):
+    return os.path.join(cfg.worktree_root, "runs", "web")
+
+
+def render_jobs(cfg):
+    folder = jobs_dir(cfg)
+    try:
+        names = sorted(os.listdir(folder), reverse=True)[:10]
+    except FileNotFoundError:
+        names = []
+    out = ["<section><h2>網頁送出的(最近 10 件)</h2>"]
+    if not names:
+        out.append("<p class='quiet'>還沒有。</p>")
+    for name in names:
+        meta = osx.read_json(os.path.join(folder, name, "job.json"), {}) or {}
+        try:
+            with open(os.path.join(folder, name, "rc")) as fh:
+                rc = fh.read().strip()
+        except OSError:
+            rc = None
+        status = {None: "處理中", "0": "完成", "3": "要你決定(看收件匣)"}.get(rc, "失敗(rc %s)" % rc)
+        tail = ""
+        try:
+            with open(os.path.join(folder, name, "creator.log"), errors="replace") as fh:
+                lines = [l for l in fh.read().splitlines() if l.strip()]
+            tail = lines[-1] if lines else ""
+        except OSError:
+            pass
+        out.append("<div class='page'><div class='ph'>%s · %s · %s</div><pre>%s</pre></div>" % (
+            e(meta.get("at")), e(meta.get("what")), e(status), e(tail[:300])))
+    out.append("</section>")
+    return "\n".join(out)
+
+
+def submit(cfg, what, argv_tail, text):
+    """Start ticket_creator for one web input, detached; its output and rc stay in runs/web/."""
+    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+    folder = osx.makedirs(os.path.join(jobs_dir(cfg), "%s-%s" % (stamp, os.urandom(3).hex())))
+    text_path = os.path.join(folder, "input.txt")
+    osx.atomic_write(text_path, text)
+    osx.write_json(os.path.join(folder, "job.json"), {"at": osx.now(), "what": what})
+    creator = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ticket_creator.py")
+    argv = ["sh", "-c", 'python3 "$@"; echo $? > "$DEVLOOP_JOB_RC"', "devloop-web", creator] + \
+        [a.replace("{input}", text_path) for a in argv_tail]
+    osx.spawn(argv, cwd=cfg.root, env=cfg.env(DEVLOOP_JOB_RC=os.path.join(folder, "rc")),
+              log_path=os.path.join(folder, "creator.log"))
+    return folder
 
 
 PAGE_HEAD = """<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
@@ -184,7 +261,31 @@ tr.s-stuck td:nth-child(2){color:var(--bad);font-weight:700}tr.s-running td:nth-
 .page{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--warn);border-radius:8px;padding:10px 12px;margin-bottom:10px}
 .page.k-landed,.page.k-created{border-left-color:var(--accent)}.ph{color:var(--quiet);font-size:12px}
 pre{white-space:pre-wrap;margin:6px 0 0;font:13px/1.5 ui-monospace,Menlo,monospace}code{font-family:ui-monospace,Menlo,monospace}
-</style></head><body><main><header><h1>%(title)s</h1><div class="quiet">%(now)s · 每 20 秒更新 · 只讀票庫</div></header>"""
+form.ask{display:grid;gap:8px;margin-top:8px}textarea{width:100%%;box-sizing:border-box;font:14px/1.5 inherit;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+button{font:inherit;padding:6px 12px;border-radius:8px;border:1px solid var(--accent);background:var(--card);color:var(--ink);cursor:pointer}button:focus-visible,textarea:focus-visible{outline:2px solid var(--accent)}
+</style></head><body><main><header><h1>%(title)s</h1><div class="quiet">%(now)s · 沒在打字時每 30 秒更新 · 只讀票庫,輸入交給開題者</div></header>"""
+
+PAGE_SCRIPT = """<script>
+(function () {
+  var store = null;
+  try { store = window.localStorage; } catch (e) { store = null; }
+  function get(k) { try { return store ? store.getItem(k) : null; } catch (e) { return null; } }
+  function set(k, v) { try { if (store) { v ? store.setItem(k, v) : store.removeItem(k); } } catch (e) {} }
+  var sent = new URLSearchParams(location.search).get('sent');
+  if (sent) { set('devloop-draft-' + sent, ''); }
+  var boxes = document.querySelectorAll('textarea[data-draft]');
+  boxes.forEach(function (box) {
+    var k = 'devloop-draft-' + box.getAttribute('data-draft');
+    var v = get(k); if (v && !box.value) { box.value = v; }
+    box.addEventListener('input', function () { set(k, box.value); });
+  });
+  setInterval(function () {
+    var busy = false;
+    boxes.forEach(function (b) { if (b === document.activeElement || b.value) { busy = true; } });
+    if (!busy) { location.reload(); }
+  }, 30000);
+})();
+</script>"""
 
 
 # ---------------------------------------------------------------- serving
@@ -207,12 +308,61 @@ def serve(cfg, pool, host, port, key):
             with lock:
                 if time.time() - cache["at"] > 5:
                     try:
-                        cache["page"] = render(cfg, pool.snapshot())
+                        cache["page"] = render(cfg, pool.snapshot(), key)
                     except osx.OSFailure as exc:
                         cache["page"] = "<pre>%s</pre>" % e(exc)
                     cache["at"] = time.time()
                 page = cache["page"]
             self._send(200, page, "text/html; charset=utf-8")
+
+        def do_POST(self):
+            url = urlparse(self.path)
+            if not key:
+                self._send(403, "this board has no key file: read-only")
+                return
+            try:
+                size = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                size = -1
+            if size < 0 or size > 64 * 1024:
+                self._send(413, "too large")
+                return
+            form = {k: v[0] for k, v in parse_qs(self.rfile.read(size).decode("utf-8", "replace")).items()}
+            if not hmac.compare_digest(form.get("key", "").encode(), key.encode()):
+                self._send(403, "key required")
+                return
+            text = form.get("text", "").strip()
+            try:
+                if url.path == "/request":
+                    if not text:
+                        self._send(400, "empty request")
+                        return
+                    submit(cfg, "新需求", ["--request-file", "{input}", "--via", "web"], text)
+                    sent = "request"
+                elif url.path == "/answer":
+                    ticket, page, decision = form.get("ticket", ""), form.get("page", ""), form.get("decision", "")
+                    if not re.fullmatch(r"[0-9A-Za-z_-]{1,40}", ticket) or \
+                            not re.fullmatch(r"[0-9A-Za-z_,.-]{1,120}", page) or \
+                            decision not in ("revise", "retry", "cancel"):
+                        self._send(400, "bad answer")
+                        return
+                    if decision == "revise" and not text:
+                        self._send(400, "write how the ticket should change")
+                        return
+                    submit(cfg, "#%s %s" % (ticket, decision),
+                           ["--revise", ticket, "--from", "user", "--decision", decision, "--via", "web",
+                            "--reason-file", "{input}", "--page", page], text)
+                    sent = "answer-" + page
+                else:
+                    self._send(404, "not found")
+                    return
+            except osx.OSFailure as exc:
+                self._send(500, str(exc))
+                return
+            cache["at"] = 0.0
+            self.send_response(303)
+            self.send_header("Location", "/?key=%s&sent=%s" % (quote(key), quote(sent)))
+            self.end_headers()
 
         def _send(self, code, body, ctype="text/plain; charset=utf-8"):
             data = body.encode("utf-8")
@@ -253,7 +403,7 @@ def main(argv=None):
         cfg = Config()
         pool = pool_for(cfg)
         if args.cmd == "html":
-            page = render(cfg, pool.snapshot())
+            page = render(cfg, pool.snapshot())     # a file has no key: read-only
             if args.out:
                 osx.atomic_write(args.out, page)
             else:

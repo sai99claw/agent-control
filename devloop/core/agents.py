@@ -36,6 +36,16 @@ class Hand:
         return None
 
 
+def raw(name):
+    """A prompt file with no placeholders, as written."""
+    path = os.path.join(PROMPTS, name)
+    try:
+        with open(path) as fh:
+            return fh.read()
+    except OSError as exc:
+        raise osx.OSFailure(osx.explain(exc, "cannot read prompt %s" % path))
+
+
 def render(name, values):
     """Fill a prompt template; unknown {names} are left as written."""
     path = os.path.join(PROMPTS, name)

@@ -543,3 +543,9 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - 資料夾 `loop/` → `devloop/`、`tests_loop/` → `tests_devloop/`、設定鍵 `loop` → `devloop`、環境變數 `LOOP_*` → `DEVLOOP_*`。
 - 看板:`devloop/board.py` 只讀票庫,畫 VISION 四個指標、票、整合分支、未讀頁、記憶;拿不到的數字顯示「未知」;`--key-file` 給 portal 用。
 - 記憶:分層照 D-013(role / model / project),改存在票庫;agent 交件附 lessons、不直接改記憶;5 條或 3 天、每檔 24 小時至多一次,由 controller 派 `memory_keeper.py`(整理者 agent)重寫該檔;分層契約唯一正文在 `devloop/prompts/consolidator.md`。主線解讀:模型記憶從 A 現有的模型卡開始;舊角色卡寫的是舊迴圈的規矩,不搬,其中仍有效的教訓在切換時當 lessons 餵給新記憶。
+
+## D-083(2026-10-31)看板可以輸入:等同主線入口、只有開題者寫票、網頁文字先過注入檢查
+- 原話:「票庫 我希望只有開題者能寫 其他人亂寫的化不知道格式 感覺容易錯? 網頁上我的輸入跟 我在claude 上直接使用主線對話 的邏輯 我感覺是一樣的 只是我多了一個介面可以用」「新的dashboard 可以開工了,網頁來的東西 先加上一段檢查injection攻擊的 prompt」
+- 看板(有 key 時)兩個輸入:新需求 → `ticket_creator.py --request-file … --via web`;回卡住的票 → `ticket_creator.py --revise N --from user --decision revise|retry|cancel --via web --page <頁>`。看板本身不寫票庫;票的內容只經開題者那條路寫(主線解讀:retry / cancel 是按鈕、不經 LLM,由開題者那支腳本直接處理)。
+- 網頁文字:去控制字元、去標記、上限 8000 字,包在 `<<<WEB INPUT … WEB INPUT>>>` 裡,前面接 `devloop/prompts/web-guard.md` 的注入檢查;開題者判斷是注入就交 `rejected`,什麼都不做、發一頁給主線。主線直接下的指令不加這段。
+- 前端只在瀏覽器記「還沒送出的草稿」;送出後以票庫為準。開題者交回不認得的結果時,你的裁決不算處理、那一頁保持未讀。

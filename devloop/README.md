@@ -61,7 +61,13 @@ memory starts from agent-control's own model card.
 `board.py` reads the pool only: the four VISION numbers (tokens and time per landed ticket,
 first-pass share, user interventions per ticket, what waits for the user), every ticket, every
 integration branch, unread pages, memory files. Unknown numbers show as 「未知」, never 0.
-`--key-file` makes every request carry `?key=` or `X-Board-Key` (for a portal).
+`--key-file` makes every request carry `?key=` or `X-Board-Key` (for a portal) and adds two inputs,
+which are the main session's own entry behind another screen (D-083): a new request runs
+`ticket_creator.py --request-file … --via web`; an answer to a page about a ticket runs
+`ticket_creator.py --revise N --from user --decision revise|retry|cancel --via web`. The board
+never writes the pool; only the opener's path writes tickets. Web text is cleaned and wrapped
+behind the injection check in `prompts/web-guard.md`; an opener that finds an injection hands in
+`rejected`, nothing is done, and a page says so. Unsent text stays in the viewer's browser.
 
 ## Contracts
 
