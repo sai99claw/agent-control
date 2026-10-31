@@ -19,6 +19,13 @@ What the branch changes compared with {main}:
 
 {diffstat}
 
+## What earlier agents learned
+
+{memory}
+
+Project memory (this project's design reasons and invariants; read it when your work touches
+them): {project_memory}
+
 ## How to work
 
 Fix the cause so every ticket still does what it asks. Commit source and test files only, never
@@ -34,3 +41,7 @@ Write JSON to {result_path}, then stop:
 
     {{"kind": "done", "summary": "what was wrong and what you changed"}}
     {{"kind": "blocked", "text": "why only the user can decide this"}}
+
+Add "lessons" to your hand-in only for something this run taught you that a future agent should
+know - one principle per entry, no story:
+`"lessons": [{{"layer": "role" | "model" | "project", "text": "..."}}]`

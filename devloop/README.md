@@ -1,4 +1,4 @@
-# loop/ — the dev loop (v2)
+# devloop/ — the dev loop (v2)
 
 Five scripts, one git-backed ticket pool, one DAG file. Design and decisions: `docs/design/dev-loop-v2.md`,
 D-078, D-079, D-080. Python 3.8+ standard library only; Linux and macOS.
@@ -21,34 +21,53 @@ group complete (= one PR, a local mark) -> regression.py (preflight + full suite
 
 | Command | When |
 | --- | --- |
-| `python3 loop/tickets.py init` | once per project: create the pool |
-| `python3 loop/ticket_creator.py --request "..."` | the user wants something |
-| `python3 loop/ticket_controller.py` | run until nothing is left (`--forever` keeps watching) |
-| `python3 loop/tickets.py inbox` / `ack` | pages: created, landed, decision, env |
-| `python3 loop/tickets.py list` / `show N` | state of tickets and groups |
-| `python3 loop/tickets.py ready N` | after deciding on a stuck ticket |
-| `python3 loop/tickets.py cancel N --why ...` | drop a ticket |
+| `python3 devloop/tickets.py init` | once per project: create the pool |
+| `python3 devloop/ticket_creator.py --request "..."` | the user wants something |
+| `python3 devloop/ticket_controller.py` | run until nothing is left (`--forever` keeps watching) |
+| `python3 devloop/tickets.py inbox` / `ack` | pages: created, landed, decision, env |
+| `python3 devloop/tickets.py list` / `show N` | state of tickets and groups |
+| `python3 devloop/tickets.py ready N` | after deciding on a stuck ticket |
+| `python3 devloop/tickets.py cancel N --why ...` | drop a ticket |
+| `python3 devloop/board.py serve [--port 8765] [--key-file F]` | the dashboard (or `board.py html --out F`) |
 
-Agents run their tests with `python3 loop/run_tests.py <ids>` (output stays in their run directory).
+Agents run their tests with `python3 devloop/run_tests.py <ids>` (output stays in their run directory).
 
 Run them from the project (or set `AC_ROOT` to it).
 
-## Project settings (`board/config.json`, key `loop`)
+## Project settings (`board/config.json`, key `devloop`)
 
 `release` is required (every project ships a release script; the controller only calls it, with
-`LOOP_RELEASE_SHA`, `LOOP_GROUP`, `LOOP_TICKETS` set). Everything else has a default:
+`DEVLOOP_RELEASE_SHA`, `DEVLOOP_GROUP`, `DEVLOOP_TICKETS` set). Everything else has a default:
 `pool` (default `<agent-control>/pools/<project>`), `max_parallel` 2, `max_rounds` 3,
 `issuer_timeout_seconds` 10800, `agent_timeout_seconds` 3600, `main_branch` "main",
-`remote` "origin" (null = do not push), `worktrees` (default `../<project>-loop`),
+`remote` "origin" (null = do not push), `worktrees` (default `../<project>-devloop`),
 `agents.<role>` (the command that starts an agent; prompt on stdin).
 Tests run through the project's existing test interface (`tests.*`, `scripts/testiface.py`).
 `hard_block.paths` / `patterns`: a ticket that touches them stops before merging.
+
+## Memory
+
+Layered as before (D-013): `memory/role/<role>.md`, `memory/model/<model>.md`, `memory/project.md`,
+kept **in the pool** next to the tickets. Agents start with their role and model memory in the
+prompt (project memory by path). They never edit memory; a hand-in may carry
+`"lessons": [{"layer", "text"}]`, which the scripts put in `memory/inbox/`. The controller starts
+`memory_keeper.py` for one file at a time once 5 lessons wait (or the oldest waited 3 days, at
+most once per 24 h per file); a consolidator agent rewrites the file. What belongs in which layer
+is written once, in `prompts/consolidator.md`. `tickets.py init` seeds the files; a model's
+memory starts from agent-control's own model card.
+
+## Dashboard
+
+`board.py` reads the pool only: the four VISION numbers (tokens and time per landed ticket,
+first-pass share, user interventions per ticket, what waits for the user), every ticket, every
+integration branch, unread pages, memory files. Unknown numbers show as 「未知」, never 0.
+`--key-file` makes every request carry `?key=` or `X-Board-Key` (for a portal).
 
 ## Contracts
 
 - **Pool**: every write is pull → change → commit → push; a rejected push re-reads and applies the
   change again. The pool is the only state; logs under `<worktrees>/runs/` are only logs.
-- **Agents** get a prompt on stdin and write their hand-in to `$LOOP_RESULT`; nothing else is read.
+- **Agents** get a prompt on stdin and write their hand-in to `$DEVLOOP_RESULT`; nothing else is read.
 - **Exit codes**: 0 done · 1 stuck/red (recorded) · 2 refused or could not start · 3 needs the user
   (a page was written) · 4 interrupted (left to be picked up again) · 86 environment (regression).
 - **OS failures** (missing program, permission, disk full, broken JSON, git errors, timeouts) are
@@ -57,5 +76,5 @@ Tests run through the project's existing test interface (`tests.*`, `scripts/tes
 
 ## Tests
 
-`python3 -m unittest tests_loop.test_loop` — a throwaway project, pool, fake agents and fake tests
+`python3 -m unittest tests_devloop.test_devloop` — a throwaway project, pool, fake agents and fake tests
 behind the real test interface; about 50 seconds.

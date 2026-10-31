@@ -1,7 +1,7 @@
 """Start one LLM agent (worker, verifier, reviewer, fixer, creator) and collect its hand-in.
 
 An agent gets a prompt on stdin, works in `cwd`, and must write its hand-in as JSON to the path
-in $LOOP_RESULT before it exits. Nothing else is read from it. Its stdout/stderr go to a log
+in $DEVLOOP_RESULT before it exits. Nothing else is read from it. Its stdout/stderr go to a log
 (never parsed for decisions); token usage is taken from that log when the CLI prints it.
 """
 
@@ -62,7 +62,7 @@ def start(cfg, role, prompt, cwd, run_dir, timeout, extra_env=None):
     except OSError as exc:
         raise osx.OSFailure(osx.explain(exc, "cannot clear %s" % result_path))
     osx.atomic_write(os.path.join(run_dir, "prompt.md"), prompt)
-    env = cfg.env(LOOP_ROLE=role, LOOP_RUN_DIR=run_dir, LOOP_RESULT=result_path,
+    env = cfg.env(DEVLOOP_ROLE=role, DEVLOOP_RUN_DIR=run_dir, DEVLOOP_RESULT=result_path,
                   **(extra_env or {}))
     log = os.path.join(run_dir, "agent.log")
     argv = cfg.agent(role)

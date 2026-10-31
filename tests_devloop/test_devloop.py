@@ -1,5 +1,5 @@
 """End-to-end tests of the loop: a throwaway project, a throwaway pool, fake agents and fake
-tests behind the real test interface. Run: python3 -m unittest discover tests_loop"""
+tests behind the real test interface. Run: python3 -m unittest discover tests_devloop"""
 
 import json
 import os
@@ -11,7 +11,7 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 HOME = os.path.dirname(HERE)
-LOOP = os.path.join(HOME, "loop")
+LOOP = os.path.join(HOME, "devloop")
 sys.path.insert(0, LOOP)
 
 from core import dag as dagmod  # noqa: E402
@@ -40,13 +40,13 @@ class LoopCase(unittest.TestCase):
         loop = {"pool": self.pool_path, "worktrees": os.path.join(self.tmp, "wt"), "remote": None,
                 "max_parallel": 2, "poll_seconds": 0.2, "issuer_timeout_seconds": 120,
                 "agent_timeout_seconds": 60, "pool_remote": None,
-                "release": self.release or "echo $LOOP_GROUP $LOOP_TICKETS >> %s" % self.released,
-                "agents": {r: AGENT for r in ("creator", "worker", "verifier", "reviewer", "fixer")}}
+                "release": self.release or "echo $DEVLOOP_GROUP $DEVLOOP_TICKETS >> %s" % self.released,
+                "agents": {r: AGENT for r in ("creator", "worker", "verifier", "reviewer", "fixer", "consolidator")}}
         loop.update(self.loop_extra)
         config = {"config_version": 2,
                   "tests": {"preflight": TESTS + " preflight", "run": TESTS + " run", "full": TESTS + " full"},
                   "hard_block": {"paths": ["docs/DECISIONS.md"], "dirs": [], "patterns": []},
-                  "loop": loop}
+                  "devloop": loop}
         with open(os.path.join(self.proj, "board", "config.json"), "w") as fh:
             json.dump(config, fh)
         with open(os.path.join(self.proj, "README.md"), "w") as fh:
@@ -290,6 +290,84 @@ class Recovery(LoopCase):
         res = self.controller()
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(self.state(1), "landed")
+
+
+class Memory(LoopCase):
+    def test_init_seeds_every_role_and_starts_model_memory_from_agent_control(self):
+        res = self.run_py("tickets.py", "init")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        mem = self.snap().memory
+        for role in ("creator", "worker", "verifier", "reviewer", "fixer", "consolidator"):
+            self.assertIn("memory/role/%s.md" % role, mem)
+        self.assertIn("memory/project.md", mem)
+        self.assertIn("memory/model/python3.md", mem)   # the fake agent's command has no --model
+
+    def test_lessons_are_collected_and_five_get_consolidated_by_the_keeper(self):
+        self.run_py("tickets.py", "init")
+        self.add(1)
+        self.plan(worker={"1": ["lessons"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        snap = self.snap()
+        self.assertEqual(snap.ticket("1")["state"], "landed")
+        self.assertEqual(snap.lessons, {}, "the five lessons were consumed")
+        self.assertIn("merged 5 lessons", snap.memory["memory/role/worker.md"])
+        self.assertIn("memory/role/worker.md", snap.memory_state["last"])
+        self.assertIsNone(snap.memory_state.get("job"))
+        with open(os.path.join(self.tmp, "wt", "runs", "1", "r1-worker", "prompt.md")) as fh:
+            self.assertIn("Role memory: worker", fh.read(), "agents start with their role memory")
+
+    def test_fewer_than_five_fresh_lessons_wait(self):
+        self.run_py("tickets.py", "init")
+
+        def change(tx):
+            tx.write("memory/inbox/a.json", {"layer": "role", "name": "worker", "text": "x", "at": osx.now()})
+        self.pool.update(change, "test: one lesson")
+        from core import memory
+        self.assertEqual(memory.due(self.snap()), [])
+
+
+class Board(LoopCase):
+    def test_the_page_shows_the_four_numbers_from_the_pool(self):
+        self.add(1)
+        self.add(2)
+        self.plan(worker={"1": ["wrong", "ok"]})
+        self.controller()
+        res = self.run_py("board.py", "html")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        page = res.stdout
+        self.assertIn("四個指標", page)
+        self.assertIn("1 / 2", page, "first pass: #2 in round 1, #1 needed round 2")
+        self.assertIn("已落地", page)
+        self.assertIn("未知", page, "fake agents report no tokens: shown as unknown, not 0")
+
+    def test_serve_needs_the_key(self):
+        import socket
+        import time
+        import urllib.error
+        import urllib.request
+        key = os.path.join(self.tmp, "key")
+        with open(key, "w") as fh:
+            fh.write("s3cret\n")
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "board.py"), "serve", "--port", str(port),
+                                 "--key-file", key], cwd=self.proj, env=self.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(proc.kill)
+        url = "http://127.0.0.1:%d/" % port
+        for _ in range(50):
+            try:
+                urllib.request.urlopen(url, timeout=2)
+            except urllib.error.HTTPError as exc:
+                self.assertEqual(exc.code, 403)
+                break
+            except OSError:
+                time.sleep(0.1)
+        with urllib.request.urlopen(url + "?key=s3cret", timeout=10) as resp:
+            self.assertIn("四個指標", resp.read().decode("utf-8"))
 
 
 class PoolRules(unittest.TestCase):

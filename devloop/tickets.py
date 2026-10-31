@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """tickets : what the main session does to the pool by hand.
 
-    python3 loop/tickets.py init                 # create the pool (a git repo) if missing
-    python3 loop/tickets.py list [--all]         # tickets and groups, open ones by default
-    python3 loop/tickets.py show 203
-    python3 loop/tickets.py ready 203            # after you decided on a stuck ticket: try again
-    python3 loop/tickets.py cancel 203 --why "no longer needed"
-    python3 loop/tickets.py inbox [--all]        # pages for the main session
-    python3 loop/tickets.py ack <page>|--all
+    python3 devloop/tickets.py init                 # create the pool (a git repo) if missing
+    python3 devloop/tickets.py list [--all]         # tickets and groups, open ones by default
+    python3 devloop/tickets.py show 203
+    python3 devloop/tickets.py ready 203            # after you decided on a stuck ticket: try again
+    python3 devloop/tickets.py cancel 203 --why "no longer needed"
+    python3 devloop/tickets.py inbox [--all]        # pages for the main session
+    python3 devloop/tickets.py ack <page>|--all
 
 Opening tickets is ticket_creator.py; moving them is ticket_controller.py.
 """
@@ -19,6 +19,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from core import agents, memory  # noqa: E402
 from core import dag as dagmod  # noqa: E402
 from core import osx  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
@@ -117,6 +118,8 @@ def main(argv=None):
         pool = pool_for(cfg)
         if args.cmd == "init":
             pool.init()
+            models = sorted({agents._model(cfg.agent(r)) for r in cfg.agents})
+            pool.update(lambda tx: memory.seed(tx, models, cfg.home), "memory: seed")
             print("pool ready at %s" % pool.path)
             return 0
         return {"list": cmd_list, "show": cmd_show, "inbox": cmd_inbox, "ack": cmd_ack,

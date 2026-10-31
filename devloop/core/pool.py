@@ -4,6 +4,8 @@
     dag.json            {"tickets": {"<id>": {"depends_on": [...], "verify": "together"|"alone"}}}
     groups/<gid>.json   one integration branch (= one PR)
     inbox/<name>.json   reports for the main session
+    memory/role/<role>.md, memory/model/<model>.md, memory/project.md   what agents learned
+    memory/inbox/<name>.json   lessons waiting to be consolidated; memory/state.json
 
 Rules (D-079): read = sync first; write = change, commit, push; a write counts only once the push
 succeeded. A rejected push throws the local commit away, re-reads, and applies the change again,
@@ -45,7 +47,7 @@ class Pool:
             self.git.run("init", "-q", "-b", self.branch)
             self.git.run("config", "user.name", "agent-control")
             self.git.run("config", "user.email", "agent-control@localhost")
-        for sub in ("tickets", "groups", "inbox"):
+        for sub in ("tickets", "groups", "inbox", "memory/inbox"):
             osx.makedirs(os.path.join(self.path, sub))
             keep = os.path.join(self.path, sub, ".keep")
             if not os.path.exists(keep):
@@ -69,7 +71,7 @@ class Pool:
     # ------------------------------------------------------------ locking
 
     def _lock(self):
-        lock_path = os.path.join(self.path, ".git", "loop-pool.lock")
+        lock_path = os.path.join(self.path, ".git", "devloop-pool.lock")
         try:
             fh = open(lock_path, "a")
             fcntl.flock(fh, fcntl.LOCK_EX)
@@ -91,7 +93,7 @@ class Pool:
     def snapshot(self):
         """Sync, then read everything once. Returns a Snapshot (plain data)."""
         if not self.exists():
-            raise PoolError("no ticket pool at %s - run `python3 loop/tickets.py init`" % self.path)
+            raise PoolError("no ticket pool at %s - run `python3 devloop/tickets.py init`" % self.path)
         fh = self._lock()
         try:
             self._sync_locked()
@@ -100,16 +102,20 @@ class Pool:
             fh.close()
 
     def _read_all(self):
-        data = {"dag": self._read("dag.json", {"tickets": {}}), "tickets": {}, "groups": {}, "inbox": {}}
-        for kind in ("tickets", "groups", "inbox"):
-            folder = os.path.join(self.path, kind)
+        data = {"dag": self._read("dag.json", {"tickets": {}}), "tickets": {}, "groups": {}, "inbox": {},
+                "lessons": {}, "memory": {}, "memory_state": self._read("memory/state.json", {})}
+        folders = {"tickets": "tickets", "groups": "groups", "inbox": "inbox", "lessons": "memory/inbox"}
+        for kind, folder_rel in folders.items():
+            folder = os.path.join(self.path, folder_rel)
             try:
                 names = sorted(os.listdir(folder))
             except FileNotFoundError:
                 names = []
             for name in names:
                 if name.endswith(".json"):
-                    data[kind][name[:-5]] = self._read(os.path.join(kind, name), {})
+                    data[kind][name[:-5]] = self._read(os.path.join(folder_rel, name), {})
+        for rel in _memory_files(self.path):
+            data["memory"][rel] = _read_text(os.path.join(self.path, rel))
         return data
 
     def _read(self, rel, default):
@@ -175,6 +181,18 @@ class Tx:
         osx.write_json(os.path.join(self.pool.path, rel), obj)
         self._refresh(rel, obj)
 
+    def write_text(self, rel, text):
+        osx.atomic_write(os.path.join(self.pool.path, rel), text)
+        self.data.raw["memory"][rel] = text
+
+    def delete(self, rel):
+        try:
+            os.unlink(os.path.join(self.pool.path, rel))
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise PoolError(osx.explain(exc, "cannot delete %s" % rel))
+
     def ticket(self, ident):
         return self.data.ticket(ident)
 
@@ -191,7 +209,11 @@ class Tx:
         if rel == "dag.json":
             self.data.raw["dag"] = obj
             return
-        kind, name = rel.split("/", 1)
+        if rel == "memory/state.json":
+            self.data.raw["memory_state"] = obj
+            return
+        folder, name = rel.rsplit("/", 1)
+        kind = {"memory/inbox": "lessons"}.get(folder, folder)
         self.data.raw.setdefault(kind, {})[name[:-5]] = obj
 
 
@@ -215,6 +237,18 @@ class Snapshot:
     def inbox(self):
         return self.raw["inbox"]
 
+    @property
+    def lessons(self):
+        return self.raw["lessons"]
+
+    @property
+    def memory(self):
+        return self.raw["memory"]
+
+    @property
+    def memory_state(self):
+        return self.raw["memory_state"]
+
     def ticket(self, ident):
         found = self.tickets.get(str(ident))
         if found is None:
@@ -229,6 +263,29 @@ class Snapshot:
     def next_group_id(self):
         nums = [int(k[1:]) for k in self.groups if re.fullmatch(r"g\d+", k)]
         return "g%d" % (max(nums) + 1 if nums else 1)
+
+
+def _memory_files(root):
+    out = []
+    base = os.path.join(root, "memory")
+    if os.path.isfile(os.path.join(base, "project.md")):
+        out.append("memory/project.md")
+    for layer in ("role", "model"):
+        folder = os.path.join(base, layer)
+        try:
+            names = sorted(os.listdir(folder))
+        except FileNotFoundError:
+            continue
+        out += ["memory/%s/%s" % (layer, n) for n in names if n.endswith(".md")]
+    return out
+
+
+def _read_text(path):
+    try:
+        with open(path, errors="replace") as fh:
+            return fh.read()
+    except OSError as exc:
+        raise PoolError(osx.explain(exc, "cannot read %s" % path))
 
 
 def event(obj, what, **detail):

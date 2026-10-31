@@ -28,7 +28,7 @@
       "full": 3600
     }
   },
-  "loop": {
+  "devloop": {
     "release": "sh scripts/release.sh",
     "max_parallel": 2,
     "max_rounds": 3,

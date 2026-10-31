@@ -17,3 +17,6 @@ A question for the user (direction, business logic, user experience):
 ```json
 {"kind": "question", "text": "the question, the options you see, and which one you would pick"}
 ```
+
+Either kind may also carry `"lessons": [{"layer": "role" | "model" | "project", "text": "..."}]`
+for something this request taught you that a future opener should know (one principle each).

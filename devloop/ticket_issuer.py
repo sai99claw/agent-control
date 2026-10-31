@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """ticket_issuer --id N --target int/gK : take one ticket from "running" to "merged".
 
-Started only by ticket_controller. Per round (at most loop.max_rounds, whole run at most
-loop.issuer_timeout_seconds):
+Started only by ticket_controller. Per round (at most devloop.max_rounds, whole run at most
+devloop.issuer_timeout_seconds):
 
   1. worker (+ verifier while the ticket has no cases yet) work in their own worktrees
   2. the verifier's branch is merged into the ticket branch
@@ -31,7 +31,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import agents, osx, testrun  # noqa: E402
+from core import agents, memory, osx, testrun  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.pool import event  # noqa: E402
@@ -127,6 +127,8 @@ class Issuer:
         ver = self.start("verifier", "verifier.md", t, r, self.cwt) if need_cases else None
         hands = [p.finish() for p in [work] + ([ver] if ver else [])]
         self.pending = []
+        for h in hands:
+            memory.collect(self.pool, h, "#%s r%d %s" % (self.id, r, h.role))
         costs.extend(h.cost for h in hands)
         whand = hands[0]
         if whand.kind == "blocked":
@@ -167,7 +169,9 @@ class Issuer:
 
         if t.get("needs_review"):
             rh = self.start("reviewer", "reviewer.md", t, r, self.wt).finish()
+            self.pending = []
             costs.append(rh.cost)
+            memory.collect(self.pool, rh, "#%s r%d reviewer" % (self.id, r))
             if rh.problem():
                 return rh.problem(), costs
             if rh.result.get("verdict") != "pass":
@@ -240,10 +244,12 @@ class Issuer:
             "feedback": "\n".join(t.get("feedback") or []) or "(first round)",
             "revise_cmd": revise, "result_path": os.path.join(run_dir, "result.json"),
             "test_cmd": "python3 %s <ids>" % os.path.join(LOOP, "run_tests.py"),
+            "memory": memory.for_prompt(self.pool.snapshot(), role, agents._model(self.cfg.agent(role))),
+            "project_memory": os.path.join(self.pool.path, memory.rel("project", "project")),
         }
         timeout = min(self.cfg.agent_timeout_seconds, self.left())
         p = agents.start(self.cfg, role, agents.render(template, values), cwd, run_dir, timeout,
-                         extra_env={"LOOP_TICKET": self.id, "AC_CODE_ROOT": cwd})
+                         extra_env={"DEVLOOP_TICKET": self.id, "AC_CODE_ROOT": cwd})
         self.pending.append(p)
         return p
 

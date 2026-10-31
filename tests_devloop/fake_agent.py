@@ -9,15 +9,16 @@ import subprocess
 import sys
 import time
 
-role = os.environ["LOOP_ROLE"]
-result_path = os.environ["LOOP_RESULT"]
-ticket = os.environ.get("LOOP_TICKET") or os.environ.get("LOOP_GROUP") or "-"
+role = os.environ["DEVLOOP_ROLE"]
+result_path = os.environ["DEVLOOP_RESULT"]
+ticket = os.environ.get("DEVLOOP_TICKET") or os.environ.get("DEVLOOP_GROUP") or "-"
 plan_path = os.environ["FAKE_PLAN"]
 plan = json.load(open(plan_path)) if os.path.exists(plan_path) else {}
 counter = os.path.join(os.path.dirname(plan_path), "count-%s-%s" % (role, ticket))
 n = int(open(counter).read()) if os.path.exists(counter) else 0
 open(counter, "w").write(str(n + 1))
-default = {"worker": "ok", "verifier": "ok", "reviewer": "pass", "fixer": "fix", "creator": "tickets"}[role]
+default = {"worker": "ok", "verifier": "ok", "reviewer": "pass", "fixer": "fix", "creator": "tickets",
+           "consolidator": "merge"}[role]
 actions = (plan.get(role) or {}).get(ticket) or (plan.get(role) or {}).get("*") or [default]
 action = actions[min(n, len(actions) - 1)]
 sys.stdin.read()
@@ -62,12 +63,16 @@ if role == "worker":
     if action == "shared":
         open("shared.txt", "w").write("from %s\n" % ticket)
     if action == "revise":
-        out = subprocess.run(["python3", os.path.join(os.environ["AC_HOME"], "loop", "ticket_creator.py"),
+        out = subprocess.run(["python3", os.path.join(os.environ["AC_HOME"], "devloop", "ticket_creator.py"),
                               "--revise", ticket, "--from", "worker", "--reason", "acceptance 2 is impossible"],
                              capture_output=True, text=True)
         open(os.path.join(os.path.dirname(result_path), "revise.out"), "w").write(out.stdout + out.stderr)
     commit("work %s" % ticket)
-    hand({"kind": "done", "summary": action})
+    done = {"kind": "done", "summary": action}
+    if action == "lessons":
+        done["lessons"] = [{"layer": "role", "text": "lesson %d from #%s" % (i, ticket)} for i in range(5)]
+        done["lessons"].append({"layer": "nonsense", "text": "dropped"})
+    hand(done)
 elif role == "verifier":
     if action != "nocommit":
         os.makedirs("cases", exist_ok=True)
@@ -85,6 +90,11 @@ elif role == "fixer":
         os.unlink("red.txt")
     commit("fix")
     hand({"kind": "done", "summary": "removed red"})
+elif role == "consolidator":
+    prompt_seen = os.path.join(os.path.dirname(result_path), "prompt.md")
+    import re
+    count = len(re.findall(r"lesson \d+ from #", open(prompt_seen).read()))
+    hand({"kind": "memory", "text": "# Role memory: worker\n\n- merged %d lessons\n" % count})
 elif role == "creator":
     if action == "question":
         hand({"kind": "question", "text": "B2B or B2C?"})

@@ -31,3 +31,7 @@ Write JSON to {result_path}, then stop:
     {{"kind": "revised", "ticket": {{"acceptance": ["..."]}}, "cases_wrong": false, "note": "what changed and why"}}
     {{"kind": "unchanged", "note": "why the ticket stands"}}
     {{"kind": "question", "text": "the question, the options, your pick"}}
+
+Add "lessons" to your hand-in only for something this run taught you that a future agent should
+know - one principle per entry, no story:
+`"lessons": [{{"layer": "role" | "model" | "project", "text": "..."}}]`

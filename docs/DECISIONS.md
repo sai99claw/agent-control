@@ -537,3 +537,9 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 ## D-081(2026-10-31)開題規矩:一票 = 一句話講得完的目的,並估 token;不暗示開發時長
 - 原話:「開題者的規矩不該(一張票要能在一次 session 內做完,做不完就拆票)我感覺意義不大: 應該是限制一票的功能要是能被一句話描述的目的,不要暗示他開發的時長,只要叫他一併評估需要消耗的token 就可以」
 - 取代 D-080 ② 的「一張票 = 一次 session」。`loop/prompts/creator/02-rules.md`:一張票一個目的,`objective` 就是那一句(要用「和」才講得完就是兩張票);每張票必填 `token_estimate`(正整數,worker + 驗證者合計)與 `token_basis`(怎麼估的),只供規劃、不是上限。`ticket_creator.py` 驗證 `token_estimate`。
+
+## D-082(2026-10-31)改名 devloop;看板、記憶整理、prompt 一起接上 v2
+- 原話:「改devloop 看板格式 記憶整理 或相關prompt 都整理好再推」(起因:使用者問 `loop/` 與 Claude Code 的 `/loop` 指令有何關係 —— 無關,只是撞名)。
+- 資料夾 `loop/` → `devloop/`、`tests_loop/` → `tests_devloop/`、設定鍵 `loop` → `devloop`、環境變數 `LOOP_*` → `DEVLOOP_*`。
+- 看板:`devloop/board.py` 只讀票庫,畫 VISION 四個指標、票、整合分支、未讀頁、記憶;拿不到的數字顯示「未知」;`--key-file` 給 portal 用。
+- 記憶:分層照 D-013(role / model / project),改存在票庫;agent 交件附 lessons、不直接改記憶;5 條或 3 天、每檔 24 小時至多一次,由 controller 派 `memory_keeper.py`(整理者 agent)重寫該檔;分層契約唯一正文在 `devloop/prompts/consolidator.md`。主線解讀:模型記憶從 A 現有的模型卡開始;舊角色卡寫的是舊迴圈的規矩,不搬,其中仍有效的教訓在切換時當 lessons 餵給新記憶。

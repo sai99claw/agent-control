@@ -1,6 +1,6 @@
-# Dev loop v2 — five scripts, one pool, one DAG
+# Dev loop v2 (`devloop/`) — five scripts, one pool, one DAG
 
-Status: **built in `loop/`, not yet the default** (D-078, D-079, D-080). The old loop
+Status: **built in `devloop/`, not yet the default** (D-078, D-079, D-080). The old loop
 (`auto-fix.sh`, `apply.sh`, `gate.sh`, `review.sh`, `schedule.py`, `land.sh`) still runs until the
 cut-over (§7). This page replaces the earlier draft (one `actl run` + three stages), which the user
 superseded with the plan below.
@@ -28,6 +28,9 @@ matter; when an exception appears, change the flow instead of adding a branch.
 | `regression.py` | none | controller | preflight + full suite on an integration branch |
 | `auto_fixer.py` | fixer | controller | fixes a red integration branch on that branch; merges a moved main |
 | `tickets.py` | none | main | init, list, show, ready, cancel, inbox, ack |
+| `memory_keeper.py` | consolidator | controller | rewrites one memory file from the lessons waiting for it |
+| `board.py` | none | main | the dashboard: reads the pool, writes nothing |
+| `run_tests.py` | none | agents | runs test ids, output kept in the agent's run directory |
 
 No script polls another; each records its outcome in the pool and exits.
 
@@ -40,6 +43,8 @@ No script polls another; each records its outcome in the pool and exits.
 - **Ticket states**: ready → running → merged → landed; stuck (reason: rounds, timeout, decision,
   hard_block, env, error); cancelled.
 - **Group states**: open → pr → (fixing) → verified → landed; stuck.
+- **Memory** (also in the pool): `memory/role|model/<name>.md`, `memory/project.md`; lessons from
+  hand-ins wait in `memory/inbox/`; one consolidation at a time (5 lessons or 3 days, once per 24 h).
 - **DAG** (`dag.json`): `depends_on`, `verify` = `together` (default) or `alone` (+ `why_alone`,
   only for a systemic change).
 
@@ -60,7 +65,7 @@ No script polls another; each records its outcome in the pool and exits.
   that changed anything, then compare-and-swap the target ref. If another ticket moved it first,
   take it in again. The controller never merges anything that can conflict.
 - Green regression → main fast-forwards to the verified sha (the checkout of main, or a ref
-  compare-and-swap), push, then the project's release script (`loop.release`, required) runs at
+  compare-and-swap), push, then the project's release script (`devloop.release`, required) runs at
   that sha. Release failure: recorded, reported, not retried, not rolled back.
 
 ## 6. Exceptions and the flow change that covers each
@@ -81,7 +86,8 @@ No script polls another; each records its outcome in the pool and exits.
 
 ## 7. Not done yet
 
-1. **Cut-over**: switch the main session to `loop/`, delete the old loop scripts and the rules that
+1. **Cut-over** (the old `board/board.py` and `scripts/memory.py` / role cards go with it; their
+   still-valid role lessons are fed to the new memory as lessons): switch the main session to `devloop/`, delete the old loop scripts and the rules that
    describe them (CLAUDE.md, role cards, DISPATCH-TEMPLATE, WORKFLOW), migrate the open tickets.
 2. **Pool remotes**: each pool becomes a submodule once a remote repository exists for it.
 3. **T**: its config gains a `loop` section with its release script; its pool moves to

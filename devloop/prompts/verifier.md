@@ -10,6 +10,13 @@ branch.
 {ticket_json}
 ```
 
+## What earlier agents learned
+
+{memory}
+
+Project memory (this project's design reasons and invariants; read it when your work touches
+them): {project_memory}
+
 ## How to work
 
 1. For each acceptance item (unless the test_plan gives it to the implementer), write a case that
@@ -27,3 +34,7 @@ Write JSON to {result_path}, then stop. "run" is the list of ids the test comman
 
     {{"kind": "cases", "run": ["tests.test_login"], "files": ["tests/test_login.py"],
       "note": "what each case asserts"}}
+
+Add "lessons" to your hand-in only for something this run taught you that a future agent should
+know - one principle per entry, no story:
+`"lessons": [{{"layer": "role" | "model" | "project", "text": "..."}}]`

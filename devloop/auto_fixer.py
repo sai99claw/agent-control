@@ -21,7 +21,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import agents, osx  # noqa: E402
+from core import agents, memory, osx  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 
@@ -63,10 +63,13 @@ def fix(cfg, pool, gid, report):
         "revise_cmd": "python3 %s --revise <ticket id> --from fixer --reason '<why>'" % (
             os.path.join(LOOP, "ticket_creator.py")),
         "test_cmd": "python3 %s <ids>" % os.path.join(LOOP, "run_tests.py"),
+        "memory": memory.for_prompt(snap, "fixer", agents._model(cfg.agent("fixer"))),
+        "project_memory": os.path.join(pool.path, memory.rel("project", "project")),
     }
     hand = agents.run(cfg, "fixer", agents.render("fixer.md", values), tree, run_dir,
-                      cfg.agent_timeout_seconds, extra_env={"AC_CODE_ROOT": tree, "LOOP_GROUP": gid})
+                      cfg.agent_timeout_seconds, extra_env={"AC_CODE_ROOT": tree, "DEVLOOP_GROUP": gid})
     _record_cost(pool, gid, hand.cost)
+    memory.collect(pool, hand, "group %s fix r%d" % (gid, rnd))
     if hand.kind == "blocked":
         pool.report("decision", gid, "group %s: the fixer needs your decision: %s" % (
             gid, (hand.result or {}).get("text")))

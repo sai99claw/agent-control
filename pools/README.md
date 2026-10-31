@@ -1,7 +1,7 @@
 # pools/
 
 One ticket pool per project, each its own git repository (D-079: the pool is a sub repo of
-agent-control). `python3 loop/tickets.py init` creates `pools/<project>` as a local repository.
+agent-control). `python3 devloop/tickets.py init` creates `pools/<project>` as a local repository.
 Once it has a remote, register it as a submodule:
 
     git submodule add <pool remote url> pools/<project>

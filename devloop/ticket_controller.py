@@ -5,18 +5,19 @@ Each tick, in this order:
 
   1. finish jobs  - an issuer, regression or fixer that ended; read what it left in the pool
   2. groups       - an open group whose tickets are all merged or stuck becomes a PR; a PR gets
-                    a regression; red -> auto_fixer (at most loop.max_rounds); green -> main
+                    a regression; red -> auto_fixer (at most devloop.max_rounds); green -> main
                     fast-forwards to the integration branch and the project's release runs
   3. dispatch     - ready tickets whose dependencies are in their starting point (landed, or
                     merged into the same integration branch) get a ticket_issuer, up to
-                    loop.max_parallel at a time; "together" tickets share one open group,
+                    devloop.max_parallel at a time; "together" tickets share one open group,
                     an "alone" ticket gets its own
+  4. memory       - one memory_keeper at a time for a memory file whose lessons are due
 
 Everything it knows is in the pool and in git, so a restart picks up where it was; issuers,
 regressions and fixers run detached and are adopted by the next controller.
 
-    python3 loop/ticket_controller.py            # run until nothing is left to do
-    python3 loop/ticket_controller.py --forever  # keep watching the pool for new tickets
+    python3 devloop/ticket_controller.py            # run until nothing is left to do
+    python3 devloop/ticket_controller.py --forever  # keep watching the pool for new tickets
 
 Exit: 0 idle · 3 stopped for the user (environment / could not measure; a page was written) ·
 2 could not start (another controller, config, pool).
@@ -31,7 +32,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import dag as dagmod  # noqa: E402
-from core import osx  # noqa: E402
+from core import memory, osx  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.pool import event  # noqa: E402
@@ -71,9 +72,10 @@ class Controller:
         snap = self.pool.snapshot()
         started = self.dispatch(snap)
         snap = self.pool.snapshot()
+        keeping = self.consolidate(snap)
         running = [t for t in snap.tickets.values() if t.get("state") == "running"]
         active = [g for g in snap.groups.values() if g.get("state") in ("open", "pr", "fixing", "verified")]
-        return bool(started or running or active or self.children)
+        return bool(started or keeping or running or active or self.children)
 
     # ------------------------------------------------------------ 1. jobs
 
@@ -267,8 +269,8 @@ class Controller:
         try:
             self.repo.detached(tree, sha)
             res = osx.run(["sh", "-c", self.release_cmd], cwd=tree, timeout=3600,
-                          env=self.cfg.env(LOOP_RELEASE_SHA=sha, LOOP_GROUP=g["id"],
-                                           LOOP_TICKETS=",".join(g.get("members") or [])),
+                          env=self.cfg.env(DEVLOOP_RELEASE_SHA=sha, DEVLOOP_GROUP=g["id"],
+                                           DEVLOOP_TICKETS=",".join(g.get("members") or [])),
                           what="release")
             text = (res.out + res.err).strip()[-2000:]
             return res.ok, text if res.ok else "rc %s%s\n%s" % (
@@ -280,6 +282,38 @@ class Controller:
                 self.repo.remove_worktree(tree)
             except osx.OSFailure:
                 pass
+
+    # ------------------------------------------------------------ 4. memory
+
+    def consolidate(self, snap):
+        """At most one memory_keeper at a time, for the memory file that waited longest."""
+        job = (snap.memory_state or {}).get("job")
+        proc = self.children.get("keeper")
+        if proc is not None and proc.poll() is None:
+            return True
+        if proc is None and job and not osx.stamp_dead(job.get("stamp"), grace_seconds=6 * 3600):
+            return True                         # adopted keeper, still alive
+        if proc is not None or job:
+            self.children.pop("keeper", None)
+            self._keeper_job(None)
+        due = memory.due(snap)
+        if not due:
+            return False
+        layer, name = due[0]
+        argv = ["python3", os.path.join(LOOP, "memory_keeper.py"), "--layer", layer, "--name", name]
+        log = os.path.join(self.cfg.runs_dir("memory"), "keeper.log")
+        proc = osx.spawn(argv, cwd=self.cfg.root, env=self.cfg.env(), log_path=log)
+        self.children["keeper"] = proc
+        self._keeper_job({"path": memory.rel(layer, name), "stamp": {
+            "pid": proc.pid, "host": osx.host(), "boot": osx.boot_id(), "started": osx.now()}})
+        return True
+
+    def _keeper_job(self, job):
+        def change(tx):
+            state = dict(tx.data.memory_state or {})
+            state["job"] = job
+            tx.write("memory/state.json", state)
+        self.pool.update(change, "memory: keeper %s" % ("started" if job else "done"))
 
     # ------------------------------------------------------------ 3. dispatch
 

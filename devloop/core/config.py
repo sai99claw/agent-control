@@ -1,6 +1,6 @@
 """Where things are and how the project wants the loop run.
 
-Project settings live in `<project>/board/config.json` under the key "loop"; everything has a
+Project settings live in `<project>/board/config.json` under the key "devloop"; everything has a
 default except `release` (D-080: a project must ship a release script; the controller only calls
 it). `hard_block` is the project's existing top-level list.
 """
@@ -40,6 +40,7 @@ DEFAULTS = {
         "verifier": CLAUDE_EDIT,
         "reviewer": CLAUDE_READ,
         "fixer": CLAUDE_EDIT,
+        "consolidator": CLAUDE_READ,     # D-013: a higher model than the agents it consolidates for
     },
 }
 
@@ -50,9 +51,9 @@ class Config:
         self.root = root or project_root()
         self.name = os.path.basename(self.root.rstrip(os.sep))
         raw = osx.read_json(os.path.join(self.root, "board", "config.json"), {}) or {}
-        loop = raw.get("loop") or {}
+        loop = raw.get("devloop") or {}
         if not isinstance(loop, dict):
-            raise osx.OSFailure("board/config.json: \"loop\" must be an object")
+            raise osx.OSFailure("board/config.json: \"devloop\" must be an object")
         self.raw = raw
         self.values = dict(DEFAULTS)
         self.values.update({k: v for k, v in loop.items() if k != "agents"})
@@ -77,7 +78,7 @@ class Config:
     @property
     def worktree_root(self):
         path = self.values.get("worktrees") or os.path.join(
-            os.path.dirname(self.root.rstrip(os.sep)), self.name + "-loop")
+            os.path.dirname(self.root.rstrip(os.sep)), self.name + "-devloop")
         return path if os.path.isabs(path) else os.path.join(self.root, path)
 
     def runs_dir(self, *parts):
@@ -86,14 +87,14 @@ class Config:
     def agent(self, role):
         argv = self.values["agents"].get(role)
         if not argv or not isinstance(argv, list):
-            raise osx.OSFailure("board/config.json loop.agents.%s must be a command list" % role)
+            raise osx.OSFailure("board/config.json devloop.agents.%s must be a command list" % role)
         return list(argv)
 
     def require_release(self):
         cmd = self.values.get("release")
         if not cmd or not isinstance(cmd, str):
             raise osx.OSFailure(
-                "board/config.json loop.release is missing: every project must have a release "
+                "board/config.json devloop.release is missing: every project must have a release "
                 "script; the controller only calls it (e.g. \"sh scripts/release.sh\")")
         return cmd
 

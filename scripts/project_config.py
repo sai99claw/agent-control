@@ -80,8 +80,8 @@ SCHEMA = [
     ("repair", "object", NO_DEFAULT),
     ("repair.max_rounds", "int", 3),
     ("repair.env_rerun", "int", 1),
-    ("loop", "object", NO_DEFAULT),                 # dev loop v2 (loop/, D-079 / D-080)
-    ("loop.release", "string", NO_DEFAULT),         # required by loop/ticket_controller.py
+    ("devloop", "object", NO_DEFAULT),                 # dev loop v2 (devloop/, D-079 / D-080)
+    ("devloop.release", "string", NO_DEFAULT),         # required by devloop/ticket_controller.py
     ("schedule", "object", NO_DEFAULT),             # scripts/schedule.py (#119); readers default 2 / 2
     ("schedule.max_workers", "int", NO_DEFAULT),
     ("schedule.reland_max", "int", NO_DEFAULT),

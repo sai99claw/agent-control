@@ -2,7 +2,7 @@
 """run_tests <ids...> : run test ids on the current tree, for agents (worker, verifier, fixer).
 
 Goes through the project's test interface like everything else, but keeps its output in the
-agent's own run directory ($LOOP_RUN_DIR), never in the project checkout. Prints a short
+agent's own run directory ($DEVLOOP_RUN_DIR), never in the project checkout. Prints a short
 summary. Exit: 0 green · 1 red · 86 environment not usable · 2 could not measure.
 """
 
@@ -25,7 +25,7 @@ def main(argv=None):
         return 2
     try:
         cfg = Config()
-        base = os.environ.get("LOOP_RUN_DIR") or tempfile.gettempdir()
+        base = os.environ.get("DEVLOOP_RUN_DIR") or tempfile.gettempdir()
         out = tempfile.mkdtemp(prefix="tests-", dir=osx.makedirs(base))
         result = testrun.run(cfg, os.getcwd(), "run", ids, keep_dir=out)
     except osx.OSFailure as exc:

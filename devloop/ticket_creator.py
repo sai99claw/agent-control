@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """ticket_creator : turn a request into tickets + DAG entries, or revise one ticket.
 
-    python3 loop/ticket_creator.py --request "what the user wants"      # from the main session
-    python3 loop/ticket_creator.py --request-file need.md
-    python3 loop/ticket_creator.py --revise 203 --from worker --reason "why the ticket is wrong"
+    python3 devloop/ticket_creator.py --request "what the user wants"      # from the main session
+    python3 devloop/ticket_creator.py --request-file need.md
+    python3 devloop/ticket_creator.py --revise 203 --from worker --reason "why the ticket is wrong"
 
-Opening: the prompt chain in loop/prompts/creator/ (read in file-name order), the reference
-ticket loop/prompts/ticket.example.json and the current DAG go to the opener agent. Its hand-in is
+Opening: the prompt chain in devloop/prompts/creator/ (read in file-name order), the reference
+ticket devloop/prompts/ticket.example.json and the current DAG go to the opener agent. Its hand-in is
 validated here (fields, DAG references, no cycles) and written to the pool in one push; one retry
 with the validation errors if it is wrong. Anything that touches direction, business logic or
 user experience the request does not settle comes back as a question for the main session.
@@ -27,7 +27,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import agents, osx  # noqa: E402
+from core import agents, memory, osx  # noqa: E402
 from core import dag as dagmod  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.pool import event  # noqa: E402
@@ -132,6 +132,9 @@ def open_tickets(cfg, pool, request):
                if v.get("state") not in ("landed", "cancelled")]
     base = "\n\n".join([
         chain(),
+        "## What earlier openers learned\n\n%s\n\nProject memory (design reasons and invariants): %s" % (
+            memory.for_prompt(snap, "creator", agents._model(cfg.agent("creator"))),
+            os.path.join(pool.path, memory.rel("project", "project"))),
         "## Reference ticket\n\n```json\n%s\n```" % example(),
         "## Tickets still open\n\n```json\n%s\n```" % json.dumps(summary, indent=2, ensure_ascii=False),
         "## Current DAG\n\n```json\n%s\n```" % json.dumps(snap.dag, indent=2, ensure_ascii=False),
@@ -144,6 +147,7 @@ def open_tickets(cfg, pool, request):
                          if errors else "")
         prompt += "\n\nWrite your hand-in as JSON to: %s\n" % os.path.join(run_dir, "result.json")
         hand = agents.run(cfg, "creator", prompt, cfg.root, run_dir, cfg.agent_timeout_seconds)
+        memory.collect(pool, hand, "request (opener)")
         if hand.problem():
             errors = [hand.problem()]
             continue
@@ -183,6 +187,7 @@ def revise(cfg, pool, ident, source, reason):
     })
     hand = agents.run(cfg, "creator", prompt, cfg.root, run_dir,
                       min(REVISE_TIMEOUT, cfg.agent_timeout_seconds))
+    memory.collect(pool, hand, "#%s revise (opener)" % ident)
     if hand.problem():
         print("REVISE FAILED: %s - continue with the ticket as it is, or hand in kind "
               "\"blocked\" if you cannot." % hand.problem())

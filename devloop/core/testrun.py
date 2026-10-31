@@ -36,7 +36,7 @@ class Outcome:
 
 def run(cfg, code_root, command, ids=(), timeout=None, keep_dir=None):
     """Run `preflight`, `run <ids>` or `full` on `code_root`."""
-    out = keep_dir or tempfile.mkdtemp(prefix="loop-test-")
+    out = keep_dir or tempfile.mkdtemp(prefix="devloop-test-")
     if keep_dir:
         shutil.rmtree(out, ignore_errors=True)
     osx.makedirs(os.path.dirname(out) if keep_dir else out)
