@@ -518,3 +518,10 @@ D-014 收掉了外部審查的三個風險(硬閘門、取消 flake 自動判綠
 - ③ 判準:邏輯乾淨、互動介面單純是最重要的指標;行數不重要;何時呼叫哪支腳本要明確;不生例外,遇到例外先改流程;可以整個重寫。
 - 主線解讀(未經使用者,寫在設計文件待確認):每票分支閘門拿掉,「驗證」只剩落地前那一次全套;D-077 的診斷輪與環境可疑重跑改由流程處理(跑之前 preflight 擋、批次紅逐票重跑歸因、歸因不到就把這批退回 `ticket` 模式)。
 - 先寫 `docs/design/dev-loop-v2.md`,使用者看過再開重寫票;#188、#189 主線建議暫緩到設計定案。
+
+## D-079(2026-10-31)開發迴圈 v2 改照使用者的五支腳本規劃;整合分支即 PR、綠了合進 main 並發版
+- 使用者規劃原話(節錄):「我說要做什麼 主線轉給開題者用: ticket_creator.sh 裡面會定義: 一串prompt 還有一個參考格式的票 跟json 還有把開題者叫起來的指令 開題者完成會回報主線。DAG 是開題 會要求去填寫的東西,DAG是一個獨立檔案,每票會標記 能不能跟前票跑完再一起驗,除非是系統性的重大變動 不然應該是都可以多個跑完再驗。票庫應該有自己的git 。要讀寫DAG 都需用git先更新檔案,local push 成功才算真的寫入完成 / ticket_controller.sh //no llm session 會去讀dag 產生 ticket_issuer.sh xxxx 並派下去,平行度在這邊決定 ticket 要提交到哪個branch 也是這邊事先決定好的 branch 或是說PR 走到要驗證的時候 由這邊觸發regression 腳本 regression 有紅的話 call auto_fixer … regression 綠了就發版 腳本重新去DAG 找事做 / ticket_issuer.sh --id 123 --taregt branch 腳本根據票派 worker · 驗證者,worker +驗證者 都done 跑 (票上需要覆核者 的話 這個階段發出去), 然後 跑驗證者寫的CASE ,有過的話提交一個PR , 沒過就自己繼續修。worker 要反駁票開錯 的話 讓他自己用prompt 啟動開題者討論 並修改票面」
+- 確認題原話:「一條整合分支 就是一個PR ticket_controller 應該不需要合PR 他是腳本 沒能力處理衝突 / 發版」是指合進 main +發布 / PR本地標記 / regression 紅了,在整合分支上修 / 兩個修補迴圈的上限先設 3 輪 / 票庫放哪裡? 這邊是控制系統 票庫預設是A的sub repo」
+- 取代 D-078 之後主線提的 `docs/design/dev-loop-v2.md`(一個 actl run + 三階段);設計文件改寫成這一版後才開重寫票。
+- 推翻:CLAUDE.md「發版永遠是人授權、主線執行」—— 改為 regression 綠 → controller 合進 main 並發版(各專案的發版指令與範圍待定,見設計文件的例外題)。
+- 主線解讀(未經使用者):ticket 分支由 issuer 的 worker 自己合進整合分支(衝突由 LLM 解;push 被拒就 pull 重來,與票庫同一條規則);controller 只做不需要判斷的事。
