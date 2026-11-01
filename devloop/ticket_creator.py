@@ -109,6 +109,34 @@ def required_section(cfg):
         "- `%s`: %s" % (k, v) for k, v in sorted(fields.items()))
 
 
+def last_full_seconds(cfg):
+    """Seconds of the newest regression full run that recorded a number, or None."""
+    found = []
+    for f in glob.glob(os.path.join(cfg.runs_dir("regression"), "*", "full", "result.json")):
+        try:
+            found.append((os.path.getmtime(f), f))
+        except OSError:
+            pass
+    for _, f in sorted(found, reverse=True):
+        try:
+            with open(f, encoding="utf-8") as fh:
+                sec = json.load(fh).get("seconds")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(sec, (int, float)) and not isinstance(sec, bool) and sec == sec \
+                and abs(sec) != float("inf"):
+            return sec
+    return None
+
+
+def limits_section(cfg):
+    sec = last_full_seconds(cfg)
+    last = ("The project's last full run took %d seconds." % round(sec) if sec is not None
+            else "No full run of this project is recorded yet.")
+    return ("## Time limits\n\nOne agent call is limited to %d seconds (devloop.agent_timeout_seconds).\n\n%s"
+            % (cfg.agent_timeout_seconds, last))
+
+
 def check_new(result, snap, cfg=None):
     """Problems with an opener hand-in of kind "tickets", as sentences."""
     out = []
@@ -191,6 +219,7 @@ def open_tickets(cfg, pool, request, via="main"):
             os.path.join(pool.path, memory.rel("project", "project"))),
         "## Reference ticket\n\n```json\n%s\n```" % example(),
         required_section(cfg),
+        limits_section(cfg),
         "## Tickets still open\n\n```json\n%s\n```" % json.dumps(summary, indent=2, ensure_ascii=False),
         "## Current DAG\n\n```json\n%s\n```" % json.dumps(snap.dag, indent=2, ensure_ascii=False),
         "## The request\n\n%s" % guarded(request, via),

@@ -1672,3 +1672,31 @@ class DagRules(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LastFullSecondsUnit(unittest.TestCase):
+    """limits_section / last_full_seconds helpers of ticket_creator."""
+
+    def test_newest_valid_wins_and_bad_files_skipped(self):
+        import ticket_creator
+        tmp = tempfile.mkdtemp(prefix="lfs-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+
+        class Cfg:
+            agent_timeout_seconds = 75
+
+            def runs_dir(self, *parts):
+                return os.path.join(tmp, *parts)
+        cfg = Cfg()
+        self.assertIn("No full run", ticket_creator.limits_section(cfg))
+        now = time.time()
+        for name, body, age in (("a", '{"seconds": 30}', 3600), ("b", "not json", 0)):
+            d = os.path.join(tmp, "regression", name, "full")
+            os.makedirs(d)
+            f = os.path.join(d, "result.json")
+            with open(f, "w") as fh:
+                fh.write(body)
+            os.utime(f, (now - age, now - age))
+        text = ticket_creator.limits_section(cfg)
+        self.assertIn("limited to 75 seconds", text)
+        self.assertIn("took 30 seconds.", text)
