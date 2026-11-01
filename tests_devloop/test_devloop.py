@@ -2888,6 +2888,28 @@ class T13Acceptance(LoopCase):
         self.assertIn("tickets.py ready g", doc)
 
 
+class CancelGroupUnit(T13Acceptance):
+    """cmd_cancel_group: ready and merged members are cancelled, others stay, branch kept."""
+
+    def test_cancels_merged_member_and_pages(self):
+        self.put_group("stuck")
+        res = self.run_py("tickets.py", "cancel", "g1", "--why", "dropped")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        snap = self.snap()
+        self.assertEqual(snap.groups["g1"]["state"], "cancelled")
+        self.assertEqual(snap.tickets["1"]["state"], "cancelled")
+        pages = [r for r in snap.inbox.values() if r.get("kind") == "cancelled"]
+        self.assertEqual(len(pages), 1)
+        self.assertIn("#1", pages[0]["text"])
+
+    def test_running_member_refused(self):
+        self.put_group("open", ticket_state="running")
+        res = self.run_py("tickets.py", "cancel", "g1")
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertIn("#1 is running", res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["state"], "open")
+
+
 class AllCancelledHelper(unittest.TestCase):
     """Controller.all_cancelled: true only for a non-empty group of cancelled members."""
 

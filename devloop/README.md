@@ -26,12 +26,13 @@ group complete (= one PR, a local mark) -> regression.py (preflight + full suite
 | `python3 devloop/tickets.py lessons --layer L --name N --file F` | queue every bullet line of F as a lesson for that memory file (a project's own older memory) |
 | `python3 devloop/ticket_creator.py --request "..."` | the user wants something |
 | `python3 devloop/ticket_controller.py` | run until nothing is left (`--forever` keeps watching) |
-| `python3 devloop/tickets.py inbox` / `ack` | pages: created, landed, decision, env |
+| `python3 devloop/tickets.py inbox` / `ack` | pages: created, landed, decision, env, cancelled |
 | `python3 devloop/tickets.py list` / `show N` | state of tickets and groups |
 | `python3 devloop/tickets.py ready N` | after deciding on a stuck ticket |
 | `python3 devloop/tickets.py ready gN` | a stuck group whose branch and merged tickets are still there: verify it again (fix rounds back to 0) |
 | `python3 devloop/tickets.py cancel N --why ...` | drop a ticket |
 | `python3 devloop/tickets.py release gN [--again]` | re-run a landed group's failed release once (`--again` also when it was ok); the outcome is a page |
+| `python3 devloop/tickets.py cancel gN --why ...` | close a stuck or open group with no running member: its ready and merged tickets are cancelled, the branch is kept; one `cancelled` page lists them |
 | `python3 devloop/board.py serve [--port 8765] [--key-file F]` | the dashboard (or `board.py html --out F`) |
 
 Agents run their tests with `python3 devloop/run_tests.py <ids>` (output stays in their run directory).
