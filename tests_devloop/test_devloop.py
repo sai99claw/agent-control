@@ -1903,6 +1903,122 @@ class T15Acceptance(LoopCase):
         self.assertFalse(os.path.exists(os.path.join(mem, "project.md")))
 
 
+class T17Acceptance(LoopCase):
+    """Ticket #17: a project's missing role or model memory starts as agent-control's file."""
+
+    ROLE_HEADING = ("# Role memory: {}\n\nPrinciples learned while doing this role. Rules for the job "
+                    "are in the prompt; this holds what experience added.\n")
+    MODEL_HEADING = "# Model memory: {}\n\nHow this model tends to go wrong, and what helps.\n"
+    PROJECT_HEADING = ("# Project memory\n\nThis project's design reasons and invariants: why things "
+                       "are the way they are, and what must stay true.\n")
+    OPUS = ["claude", "-p", "--model", "opus"]
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.F = os.path.join(self.tmp, "memfolder")   # absolute; self.tmp is not a git repository
+
+    @staticmethod
+    def read(path):
+        try:
+            with open(path, "rb") as fh:
+                return fh.read()
+        except FileNotFoundError:
+            return None
+
+    def home(self, rel):
+        return self.read(os.path.join(HOME, "memory", rel))
+
+    def opus_worker(self):
+        chains = {r: AGENT for r in ROLES}
+        chains["worker"] = self.OPUS
+        self.config(agents=chains, memory=self.F)
+
+    def init(self):
+        res = self.run_py("tickets.py", "init")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+    # ------------------------------------------------------------ item 1
+
+    def test_item1_init_copies_agent_control_files_and_heads_the_rest(self):
+        self.assertFalse(os.path.exists(self.F))
+        self.opus_worker()
+        self.init()
+        for role in ("creator", "worker", "verifier", "reviewer", "fixer", "consolidator"):
+            with self.subTest(role=role):
+                expected = self.home("role/%s.md" % role)
+                if expected is None:
+                    expected = self.ROLE_HEADING.format(role).encode()
+                self.assertEqual(self.read(os.path.join(self.F, "role", role + ".md")), expected)
+        opus = self.home("model/opus.md")
+        self.assertIsNotNone(opus, "HOME/memory/model/opus.md exists (ticket premise)")
+        self.assertEqual(self.read(os.path.join(self.F, "model", "opus.md")), opus)
+        self.assertEqual(self.read(os.path.join(self.F, "model", "python3.md")),
+                         self.MODEL_HEADING.format("python3").encode())
+        self.assertEqual(self.read(os.path.join(self.F, "project.md")), self.PROJECT_HEADING.encode())
+
+    # ------------------------------------------------------------ item 2
+
+    def test_item2_init_never_overwrites(self):
+        os.makedirs(os.path.join(self.F, "role"))
+        with open(os.path.join(self.F, "role", "worker.md"), "w") as fh:
+            fh.write("mine\n")
+        self.opus_worker()
+        self.init()
+        self.assertEqual(self.read(os.path.join(self.F, "role", "worker.md")), b"mine\n")
+        # the files init did create next to it start as agent-control's (item 1)
+        verifier = self.home("role/verifier.md")
+        self.assertIsNotNone(verifier, "HOME/memory/role/verifier.md exists (ticket premise)")
+        self.assertEqual(self.read(os.path.join(self.F, "role", "verifier.md")), verifier)
+
+    # ------------------------------------------------------------ item 3
+
+    def test_item3_init_queues_no_lessons(self):
+        self.opus_worker()
+        self.init()
+        inbox = glob.glob(os.path.join(self.pool_path, "memory", "inbox", "*.json"))
+        self.assertEqual(sorted(os.path.basename(p) for p in inbox), [])
+
+    # ------------------------------------------------------------ item 4
+
+    def test_item4_keeper_starts_an_unseeded_file_from_agent_control(self):
+        opus = self.home("model/opus.md")
+        self.assertIsNotNone(opus, "HOME/memory/model/opus.md exists (ticket premise)")
+
+        def change(tx):
+            for i in range(1, 6):
+                tx.write("memory/inbox/t17-%d.json" % i, {"layer": "model", "name": "opus",
+                                                          "text": "lesson %d from #9" % i,
+                                                          "source": "test", "at": osx.now()})
+        self.pool.update(change, "test: 5 opus lessons")
+        self.config(memory=self.F)
+        self.assertFalse(os.path.exists(os.path.join(self.F, "model", "opus.md")))
+        self.run_py("memory_keeper.py", "--layer", "model", "--name", "opus")
+        found = sorted(glob.glob(os.path.join(self.tmp, "wt", "runs", "memory", "model-opus-*", "prompt.md")))
+        self.assertTrue(found, "no consolidator prompt saved")
+        prompt = self.read(found[-1]).decode("utf-8")
+        self.assertIn(opus.decode("utf-8").strip(), prompt)
+
+    # ------------------------------------------------------------ item 5
+
+    def test_item5_reading_uses_agent_control_text_without_copying(self):
+        verifier = self.home("role/verifier.md")
+        self.assertIsNotNone(verifier, "HOME/memory/role/verifier.md exists (ticket premise)")
+        os.makedirs(self.F)
+        with open(os.path.join(self.F, "project.md"), "w") as fh:
+            fh.write(self.PROJECT_HEADING)
+        self.config(memory=self.F)
+        self.add(1, needs_verifier=True)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        prompt = self.read(os.path.join(self.tmp, "wt", "runs", "1", "r1-verifier", "prompt.md"))
+        self.assertIsNotNone(prompt, "verifier prompt saved")
+        self.assertIn(verifier.decode("utf-8").strip(), prompt.decode("utf-8"))
+        self.assertIsNone(self.read(os.path.join(self.F, "role", "verifier.md")))
+
+
 class PoolRules(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="loop-pool-")
