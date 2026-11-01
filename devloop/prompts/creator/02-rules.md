@@ -10,6 +10,9 @@
 - `outline`: where in the code the change goes, as far as you know it. A suggestion, not a fence.
 - `test_plan`: which acceptance items the verifier writes cases for (the verifier owns the cases
   for every acceptance item unless you say the implementer does).
+- Acceptance and test_plan never ask the worker or the verifier to run the full suite: the full suite is the regression's.
+  The worker runs only the verifier's cases, its own unit tests and the base set.
+  Every check you give the worker or the verifier must finish well within one agent call (see "Time limits" below).
 - `needs_verifier`: true unless the change is so small that the implementer's own tests are enough.
 - `complexity`: `"simple"` or `"complex"`. A complex ticket is reviewed once it is done (someone
   reads the code against the ticket); a simple ticket goes to a cheaper implementer model.

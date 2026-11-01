@@ -1,6 +1,7 @@
 """End-to-end tests of the loop: a throwaway project, a throwaway pool, fake agents and fake
 tests behind the real test interface. Run: python3 -m unittest discover tests_devloop"""
 
+import glob
 import json
 import os
 import shutil
@@ -1807,6 +1808,69 @@ class AgentControlRelease(unittest.TestCase):
             self.assertEqual(json.load(fh)["devloop"]["release"], "sh scripts/release.sh")
 
 
+class T12Acceptance(LoopCase):
+    """#12: the opener is told the full suite is the regression's, and is given the time limits."""
+
+    SENTENCES = (
+        "Acceptance and test_plan never ask the worker or the verifier to run the full suite: "
+        "the full suite is the regression's.",
+        "The worker runs only the verifier's cases, its own unit tests and the base set.",
+        "Every check you give the worker or the verifier must finish well within one agent call "
+        "(see \"Time limits\" below).",
+    )
+
+    def full_result(self, group, content, age):
+        d = os.path.join(self.tmp, "wt", "runs", "regression", group, "full")
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, "result.json")
+        with open(path, "w") as fh:
+            fh.write(content if isinstance(content, str) else json.dumps(content))
+        t = time.time() - age
+        os.utime(path, (t, t))
+
+    def opener_prompt(self):
+        res = self.run_py("ticket_creator.py", "--request", "x")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        root = os.path.join(self.tmp, "wt", "runs", "creator")
+        newest = sorted(os.listdir(root))[-1]
+        with open(os.path.join(root, newest, "prompt.md")) as fh:
+            return fh.read()
+
+    def test_creator_chain_forbids_full_suite_for_worker_and_verifier(self):
+        text = ""
+        for path in sorted(glob.glob(os.path.join(LOOP, "prompts", "creator", "*.md"))):
+            with open(path) as fh:
+                text += fh.read()
+        for sentence in self.SENTENCES:
+            self.assertIn(sentence, text)
+
+    def test_prompt_states_the_agent_time_limit(self):
+        self.config(agent_timeout_seconds=75)
+        lines = self.opener_prompt().splitlines()
+        self.assertIn("## Time limits", lines)
+        head = lines.index("## Time limits")
+        self.assertIn("One agent call is limited to 75 seconds (devloop.agent_timeout_seconds).",
+                      lines[head + 1:])
+
+    def test_prompt_states_the_newest_full_run(self):
+        self.full_result("int-g1", {"schema": 1, "command": "full", "seconds": 2520.4}, 0)
+        self.full_result("int-g2", {"schema": 1, "command": "full", "seconds": 30}, 3600)
+        self.assertIn("The project's last full run took 2520 seconds.", self.opener_prompt())
+
+    def test_prompt_says_no_full_run_when_none_recorded(self):
+        self.assertIn("No full run of this project is recorded yet.", self.opener_prompt())
+
+    def test_newest_without_numeric_seconds_is_skipped(self):
+        for bad in ({"schema": 1, "command": "full"},
+                    {"schema": 1, "command": "full", "seconds": "2520"},
+                    "{not json"):
+            with self.subTest(bad=bad):
+                shutil.rmtree(os.path.join(self.tmp, "wt", "runs"), ignore_errors=True)
+                self.full_result("int-g1", bad, 0)
+                self.full_result("int-g2", {"schema": 1, "command": "full", "seconds": 30}, 3600)
+                self.assertIn("The project's last full run took 30 seconds.", self.opener_prompt())
+
+
 class DagRules(unittest.TestCase):
     def test_problems(self):
         dag = {"1": {"depends_on": ["2"]}, "2": {"depends_on": ["1"]}, "3": {"depends_on": ["9"]},
@@ -1824,3 +1888,126 @@ class DagRules(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LastFullSecondsUnit(unittest.TestCase):
+    """limits_section / last_full_seconds helpers of ticket_creator."""
+
+    def test_newest_valid_wins_and_bad_files_skipped(self):
+        import ticket_creator
+        tmp = tempfile.mkdtemp(prefix="lfs-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+
+        class Cfg:
+            agent_timeout_seconds = 75
+
+            def runs_dir(self, *parts):
+                return os.path.join(tmp, *parts)
+        cfg = Cfg()
+        self.assertIn("No full run", ticket_creator.limits_section(cfg))
+        now = time.time()
+        for name, body, age in (("a", '{"seconds": 30}', 3600), ("b", "not json", 0)):
+            d = os.path.join(tmp, "regression", name, "full")
+            os.makedirs(d)
+            f = os.path.join(d, "result.json")
+            with open(f, "w") as fh:
+                fh.write(body)
+            os.utime(f, (now - age, now - age))
+        text = ticket_creator.limits_section(cfg)
+        self.assertIn("limited to 75 seconds", text)
+        self.assertIn("took 30 seconds.", text)
+
+
+class T13Acceptance(LoopCase):
+    """tickets.py ready g<N>: a stuck group goes back to the regression (#13)."""
+
+    def setUp(self):
+        super().setUp()
+        # when this suite runs under a devloop agent, its DEVLOOP_TICKET must not reach the fake
+        # fixer: the fake agent keys its plan on DEVLOOP_TICKET before DEVLOOP_GROUP
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def make_stuck(self):
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["blocked", "fix"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["state"], "stuck")
+        self.assertEqual(self.state(1), "merged")
+
+    def test_ready_group_goes_back_to_pr_and_lands(self):
+        self.make_stuck()
+        before = self.snap().ticket("1")
+        res = self.run_py("tickets.py", "ready", "g1", "--why", "main is fixed")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        g = self.snap().groups["g1"]
+        self.assertEqual(g["state"], "pr")
+        self.assertEqual(g["fix_round"], 0)
+        self.assertIsNone(g["job"])
+        last = g["history"][-1]
+        self.assertEqual(last.get("event"), "ready again by the user", last)
+        self.assertEqual(last.get("by"), "user", last)
+        self.assertEqual(last.get("why"), "main is fixed", last)
+        self.assertEqual(self.snap().ticket("1"), before)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["state"], "landed")
+        self.assertFalse(self.main_has("red.txt"))
+
+    def test_actl_tickets_ready_group(self):
+        self.make_stuck()
+        res = subprocess.run([os.path.join(HOME, "bin", "actl"), "tickets", "ready", "g1"], cwd=self.proj,
+                             env=self.env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        g = self.snap().groups["g1"]
+        self.assertEqual(g["state"], "pr")
+        self.assertEqual(g["fix_round"], 0)
+
+    def put_group(self, state, ticket_state="merged", branch=True):
+        self.add(1)
+
+        def change(tx):
+            t = tx.ticket("1")
+            t.update(state=ticket_state, group="g1")
+            tx.put_ticket(t)
+            tx.put_group({"id": "g1", "branch": "int/g1", "state": state, "members": ["1"],
+                          "fix_round": 1, "job": None, "history": []})
+        self.pool.update(change, "test: group g1")
+        if branch:
+            git(self.proj, "branch", "int/g1", "main")
+
+    def refused(self, gid, text):
+        before = self.snap().groups.get(gid)
+        res = self.run_py("tickets.py", "ready", gid)
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertTrue(any(text in ln for ln in res.stderr.splitlines()), res.stderr)
+        self.assertEqual(self.snap().groups.get(gid), before)
+
+    def test_refuses_pr_group(self):
+        self.put_group("pr")
+        self.refused("g1", "not stuck")
+
+    def test_refuses_landed_group(self):
+        self.put_group("landed")
+        self.refused("g1", "not stuck")
+
+    def test_refuses_missing_branch(self):
+        self.put_group("stuck", branch=False)
+        self.refused("g1", "no longer exists")
+
+    def test_refuses_no_merged_member(self):
+        self.put_group("stuck", ticket_state="stuck")
+        self.refused("g1", "no merged ticket")
+
+    def test_refuses_unknown_group(self):
+        self.refused("g9", "no group g9")
+
+    def test_docs(self):
+        with open(os.path.join(HOME, "devloop", "README.md")) as fh:
+            readme = fh.read().splitlines()
+        self.assertTrue(any(ln.startswith("| `python3 devloop/tickets.py ready gN`") for ln in readme))
+        with open(os.path.join(HOME, "devloop", "tickets.py")) as fh:
+            doc = fh.read().split('"""')[1]
+        self.assertIn("tickets.py ready g", doc)
