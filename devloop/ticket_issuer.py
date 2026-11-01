@@ -79,6 +79,9 @@ class Issuer:
         self.started = time.time()
         self.deadline = self.started + cfg.issuer_timeout_seconds
         self.pending = []
+        # Cost rows of the agent runs this round collected so far; written with the round's
+        # outcome (_merged/_fed_back) or, when the issuer is interrupted, by interrupted().
+        self.round_costs = []
         # The worker's hand-in of an earlier round still stands when only the verifier's cases
         # were sent back: the next round starts the verifier alone.
         self.worker_ok = False
@@ -123,9 +126,11 @@ class Issuer:
             feedback, costs = self.one_round(t, r)
             if feedback is None:
                 self.save(lambda x: self._merged(x, costs), "merged into %s" % self.target)
+                self.round_costs = []
                 self.cleanup()
                 return 0
             self.save(lambda x: self._fed_back(x, r, feedback, costs), "round %d feedback" % r)
+            self.round_costs = []
             t = self.ticket()
         raise Stuck("rounds", "%d rounds used and still not passing; last feedback:\n%s" % (
             rounds, "\n".join((t.get("feedback") or [])[-1:])))
@@ -152,17 +157,20 @@ class Issuer:
         return feedback, costs
 
     def _round(self, t, r):
-        costs = []
+        costs = self.round_costs = []
         need_cases = t.get("needs_verifier", True) and not (t.get("cases") or {}).get("run")
         if need_cases:
             self.repo.worktree(self.cwt, self.cases_branch, start=self.repo.sha(self.target))
         work = None if self.worker_ok else self.start("worker", "worker.md", t, r, self.wt)
         ver = self.start("verifier", "verifier.md", t, r, self.cwt) if need_cases else None
-        hands = [p.finish() for p in [work, ver] if p]
+        hands = []
+        for p in [work, ver]:
+            if p:
+                hands.append(p.finish())
+                costs.append(hands[-1].cost)
         self.pending = []
         for h in hands:
             memory.collect(self.pool, h, "#%s r%d %s" % (self.id, r, h.role))
-        costs.extend(h.cost for h in hands)
         whand = hands[0] if work else None
         if whand and whand.kind == "blocked":
             raise Stuck("decision", whand.result.get("text") or "worker says the ticket needs your decision")
@@ -215,8 +223,8 @@ class Issuer:
 
         if complexity(t) == "complex":
             rh = self.start("reviewer", "reviewer.md", t, r, self.wt).finish()
-            self.pending = []
             costs.append(rh.cost)
+            self.pending = []
             memory.collect(self.pool, rh, "#%s r%d reviewer" % (self.id, r))
             if rh.problem():
                 return rh.problem(), costs
@@ -403,13 +411,33 @@ class Issuer:
             self.pool.report("env" if reason == "env" else "decision", self.id,
                              "#%s is stuck (%s): %s" % (self.id, reason, text))
 
-    def release(self, why):
+    def release(self, why, costs=None):
         def mutate(t):
+            if costs:
+                t.setdefault("cost", []).extend(costs)
             if t.get("state") == "running":
                 t["state"], t["run"] = "ready", None
                 t["round"] = max(0, int(t.get("round") or 0) - 1)
                 event(t, "interrupted", why=why)
         self.save(mutate, "interrupted")
+
+    def interrupted_costs(self):
+        """Stop the running agents and return every cost row of the interrupted round: the rows
+        already collected plus one per run (stopped -> outcome "interrupted"). A run whose
+        finish() returned just before the signal, before its row reached round_costs, still
+        counts once."""
+        rows = list(self.round_costs)
+        for p in self.pending:
+            row = p.stop()
+            if row is None and p.hand is not None:
+                row = p.hand.cost
+                if any(c is row for c in rows):
+                    continue
+            if row is not None:
+                rows.append(row)
+        self.pending = []
+        self.round_costs = []
+        return rows
 
 
 def complexity(t):
@@ -462,8 +490,16 @@ def main(argv=None):
         print("ticket_issuer: #%s stuck (%s): %s" % (issuer.id, exc.reason, exc.text), file=sys.stderr)
         return 1
     except Interrupted as exc:
-        issuer.stop_agents()
-        _safe(lambda: issuer.release(str(exc)))
+        # A second signal must not break the stop and the pool write that records the costs.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        rows = []
+        try:
+            rows = issuer.interrupted_costs()
+        except Exception as err:  # still stop the rest and release the ticket
+            print("ticket_issuer: could not record every agent's cost: %s" % err, file=sys.stderr)
+            _safe(issuer.stop_agents)
+        _safe(lambda: issuer.release(str(exc), rows))
         return 4
     except osx.OSFailure as exc:
         issuer.stop_agents()

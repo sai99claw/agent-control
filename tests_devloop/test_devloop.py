@@ -1583,6 +1583,88 @@ class MachineSlots(LoopCase):
             self.assertIn(words, section)
 
 
+class StopRecordsCost(LoopCase):
+    """Pending.stop() returns the stopped run's cost row; Issuer.interrupted_costs() collects a
+    round's rows exactly once (the implementer's tests of #22)."""
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+
+    def cfg(self, worker):
+        from core.config import Config
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            agents_cfg = json.load(fh)["devloop"]["agents"]
+        self.config(agents=dict(agents_cfg, worker=worker))
+        return Config(self.proj)
+
+    def test_stop_after_finish_returns_none(self):
+        from core import agents
+        script = 'cat >/dev/null; echo \'{"kind": "done"}\' > "$DEVLOOP_RESULT"'
+        p = agents.start(self.cfg(["sh", "-c", script]), "worker", "go", self.proj,
+                         os.path.join(self.tmp, "run"), 30, round_no=2)
+        hand = p.finish()
+        self.assertEqual(hand.cost["outcome"], "done")
+        self.assertIs(p.hand, hand)
+        self.assertIsNone(p.stop())
+
+    def test_stop_of_a_running_agent_returns_an_interrupted_row(self):
+        from core import agents
+        p = agents.start(self.cfg(["sh", "-c", "cat >/dev/null; sleep 30"]), "worker", "go",
+                         self.proj, os.path.join(self.tmp, "run"), 30, round_no=3)
+        time.sleep(0.3)
+        row = p.stop()
+        self.assertEqual(p.proc.wait(5), p.proc.returncode)    # the process is gone
+        self.assertEqual((row["outcome"], row["round"], row["role"], row["command"]),
+                         ("interrupted", 3, "worker", "sh"))
+        self.assertGreater(row["seconds"], 0)
+        self.assertEqual(row["run_dir"], os.path.join(self.tmp, "run"))
+        for k in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+                  "usd", "session_id"):
+            self.assertIsNone(row[k], k)
+
+    def test_stop_of_an_agent_that_never_got_a_slot_returns_an_interrupted_row(self):
+        from core import agents, slots
+        self.config(machine_slots=1)
+        cfg = self.cfg(["true"])
+        held = slots.take(cfg, time.time() + 5)
+        self.addCleanup(held.release)
+        p = agents.start(cfg, "worker", "go", self.proj, os.path.join(self.tmp, "run"), 0.5)
+        self.assertTrue(p.no_slot)
+        row = p.stop()
+        self.assertEqual((row["outcome"], row["command"]), ("interrupted", "true"))
+        self.assertIsNone(row["input_tokens"])
+
+    def test_interrupted_costs_counts_each_run_once(self):
+        import ticket_issuer
+
+        class Fake:
+            def __init__(self, row, hand_cost=None):
+                self.row, self.stopped = row, False
+                self.hand = type("H", (), {"cost": hand_cost})() if hand_cost else None
+
+            def stop(self):
+                self.stopped = True
+                return self.row
+
+        done = {"role": "worker", "outcome": "done"}
+        late = {"role": "verifier", "outcome": "cases"}     # finished, row not yet in round_costs
+        cut = {"role": "reviewer", "outcome": "interrupted"}
+        issuer = ticket_issuer.Issuer.__new__(ticket_issuer.Issuer)
+        issuer.round_costs = [done]
+        issuer.pending = [Fake(None, done), Fake(None, late), Fake(cut)]
+        pending = list(issuer.pending)
+        rows = issuer.interrupted_costs()
+        self.assertEqual(rows, [done, late, cut])
+        self.assertTrue(all(p.stopped for p in pending))
+        self.assertEqual((issuer.pending, issuer.round_costs), ([], []))
+
+
 class Landing(LoopCase):
     def test_the_code_map_is_refreshed_on_main_and_the_cost_is_totalled(self):
         with open(os.path.join(self.proj, "app.py"), "w") as fh:

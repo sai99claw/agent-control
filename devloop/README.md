@@ -119,8 +119,9 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
 - `required_fields`: extra ticket fields the opener must fill (agent-control requires `vision` and
   `removes`).
 - Cost rows: role, model, effort, round, seconds, tokens (input, output, cache read and write),
-  dollars, session id, outcome; a stopped run's tokens are read from the CLI transcript; a landed
-  ticket gets `cost_total`. Unknown stays unknown.
+  dollars, session id, outcome; a stopped run's tokens are read from the CLI transcript; when an
+  issuer is interrupted (SIGTERM/SIGINT) every run of the interrupted round is recorded too, the
+  ones it stopped with outcome `interrupted`; a landed ticket gets `cost_total`. Unknown stays unknown.
 - `unlimited_tokens: true`: memory consolidation becomes a two-model discussion (draft, review by
   `consolidator_peer`, one more draft if asked), kept in the pool under `memory/discussions/` (not in the memory folder).
 

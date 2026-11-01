@@ -10,7 +10,8 @@ command's own `--effort`.
 
 Cost (D-045, D-084): every run records role, model, effort, seconds, tokens (input, output, cache
 read, cache write), dollars, session id, outcome and run dir. A run that was stopped (timeout)
-prints no usage; its tokens are then read from the CLI's transcript (D-076 #124).
+prints no usage; its tokens are then read from the CLI's transcript (D-076 #124). A run its
+caller stopped before collecting it (Pending.stop) gets the same row with outcome "interrupted".
 """
 
 import glob
@@ -141,6 +142,7 @@ class Pending:
         self.proc = self.argv = self.log = self.slot = None
         self.no_slot = None      # the sentence when no machine slot came free in time
         self.tried = []
+        self.hand = None         # set once finish() collected the run; its row is in the Hand
 
     def launch(self):
         """Start the next command of the chain that exists, under a machine slot (the wait counts
@@ -192,11 +194,22 @@ class Pending:
         raise osx.OSFailure("no command for %s could start (%s)" % (self.role, last))
 
     def stop(self):
+        """Stop the run. Returns its cost row with outcome "interrupted", or None when finish()
+        already collected it (that row is in its Hand)."""
         if self.proc is not None:
             osx.kill_tree(self.proc.pid)
         self._release()
+        if self.hand is not None:
+            return None
+        if self.no_slot or self.argv is None:
+            return self._unstarted_cost("interrupted")
+        return self._cost(None, None, False, False, outcome="interrupted")
 
     def finish(self):
+        self.hand = self._finish()
+        return self.hand
+
+    def _finish(self):
         while True:
             if self.no_slot:
                 return self._unstarted()
@@ -220,28 +233,39 @@ class Pending:
 
     def _unstarted(self):
         """The hand of a run that never got a machine slot: nothing ran, tokens unknown."""
+        return Hand(self.role, None, None, False, self.log, self._unstarted_cost("no slot"),
+                    why=self.no_slot)
+
+    def _unstarted_cost(self, outcome):
         argv = self.chain[0] if self.chain else self.argv
         cost = {"role": self.role, "model": model_of(argv), "effort": effort_of(argv),
                 "command": os.path.basename(argv[0]) if argv else None, "round": self.round_no,
-                "seconds": round(time.time() - self.started, 1), "at": osx.now(),
-                "outcome": "no slot", "run_dir": self.run_dir}
+                "seconds": self._seconds(), "at": osx.now(),
+                "outcome": outcome, "run_dir": self.run_dir}
         if self.tried:
             cost["fell_back_from"] = self.tried
         cost.update(EMPTY)
-        return Hand(self.role, None, None, False, self.log, cost, why=self.no_slot)
+        return cost
 
-    def _cost(self, result, rc, timed_out, out_of_quota):
-        if timed_out:
-            outcome = "timeout"
-        elif out_of_quota:
-            outcome = "out of quota"
-        elif result is None:
-            outcome = "no hand-in"
-        else:
-            outcome = result.get("kind") or "hand-in"
+    def _seconds(self):
+        """Wall time since start; a run stopped within a tenth of a second keeps more digits
+        rather than reading 0."""
+        spent = time.time() - self.started
+        return round(spent, 1) or round(spent, 4)
+
+    def _cost(self, result, rc, timed_out, out_of_quota, outcome=None):
+        if outcome is None:
+            if timed_out:
+                outcome = "timeout"
+            elif out_of_quota:
+                outcome = "out of quota"
+            elif result is None:
+                outcome = "no hand-in"
+            else:
+                outcome = result.get("kind") or "hand-in"
         cost = {"role": self.role, "model": model_of(self.argv), "effort": effort_of(self.argv),
                 "command": os.path.basename(self.argv[0]), "round": self.round_no,
-                "seconds": round(time.time() - self.started, 1), "at": osx.now(),
+                "seconds": self._seconds(), "at": osx.now(),
                 "outcome": outcome, "run_dir": self.run_dir}
         if self.tried:
             cost["fell_back_from"] = self.tried
