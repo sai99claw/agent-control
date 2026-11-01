@@ -260,6 +260,17 @@ class Snapshot:
         return "g%d" % (max(nums) + 1 if nums else 1)
 
 
+FROZEN_STATES = ("merged", "landed")
+
+
+def frozen_reason(ident, state):
+    """The one sentence that refuses to revise or reopen a merged or landed ticket (D-089), or None."""
+    if state not in FROZEN_STATES:
+        return None
+    return ("#%s is feature complete (%s) and frozen: it cannot be revised or reopened. To overturn it, "
+            "open a new ticket: actl new --request \"...\" (the new ticket may revert #%s)." % (ident, state, ident))
+
+
 def event(obj, what, **detail):
     """Append one line to an object's short history (kept on the object itself)."""
     row = {"at": osx.now(), "event": what}

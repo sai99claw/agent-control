@@ -14,9 +14,10 @@ validated here (fields, DAG references, no cycles) and written to the pool in on
 with the validation errors if it is wrong. Anything that touches direction, business logic or
 user experience the request does not settle comes back as a question for the main session.
 
-Revising (called by a worker or fixer mid-run): the opener reads the ticket and the reason and
-either fixes the ticket, keeps it (and says why), or asks the main session. What it decided is
-printed for the caller.
+Revising (called by a worker or verifier mid-run, or by the user answering a page): the opener reads
+the ticket and the reason and either fixes the ticket, keeps it (and says why), or asks the main
+session. What it decided is printed for the caller. A merged or landed ticket is frozen: every
+--revise of it is refused before anything starts (D-089).
 
 Exit: 0 done · 1 the opener's hand-in stayed unusable (reported) · 3 a question for the user
 (reported; a revising worker must stop and hand in kind "blocked") · 2 refused.
@@ -33,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core import agents, memory, osx  # noqa: E402
 from core import dag as dagmod  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
-from core.pool import event  # noqa: E402
+from core.pool import event, frozen_reason  # noqa: E402
 
 PROMPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
 TEXT_FIELDS = ("title", "objective", "outline", "test_plan", "notes")
@@ -265,7 +266,10 @@ def user_reset(pool, ident, state, note, changes=None, cases_wrong=False):
     """The user decided: the ticket goes back to ready (round 0) or is cancelled."""
     def change(tx):
         row = tx.ticket(ident)
-        if row.get("state") in ("running", "landed"):
+        frozen = frozen_reason(ident, row.get("state"))
+        if frozen:
+            raise osx.OSFailure(frozen)
+        if row.get("state") == "running":
             raise osx.OSFailure("#%s is %s; it cannot be changed now" % (ident, row.get("state")))
         row.update(changes or {})
         if cases_wrong:
@@ -306,6 +310,9 @@ def apply_revised(cfg, pool, ident, source, res, run_name, applied_by=None):
 
     def change(tx):
         row = tx.ticket(ident)
+        frozen = frozen_reason(ident, row.get("state"))
+        if frozen:
+            raise osx.OSFailure(frozen)
         row.update(changes)
         if res.get("cases_wrong"):
             row["cases"] = None
@@ -423,6 +430,11 @@ def main(argv=None):
             with open(args.reason_file) as fh:
                 reason = fh.read()
         if args.revise:
+            current = pool.snapshot().tickets.get(str(args.revise)) or {}
+            frozen = frozen_reason(str(args.revise), current.get("state"))
+            if frozen:
+                print("ticket_creator: %s" % frozen, file=sys.stderr)
+                return 2
             if args.source == "user":
                 if args.decision == "revise" and not reason.strip():
                     print("ticket_creator: a revise decision needs the user's words", file=sys.stderr)

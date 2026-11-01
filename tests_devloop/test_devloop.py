@@ -632,6 +632,59 @@ class Revise(LoopCase):
         self.assertEqual(self.snap().tickets, {})
 
 
+class FrozenWrites(LoopCase):
+    """D-089: the pool writes of a revision refuse a merged or landed ticket inside the transaction."""
+
+    def setUp(self):
+        super().setUp()
+        import ticket_creator
+        from core.config import Config
+        self.tc = ticket_creator
+        self.cfg = Config(self.proj)
+        self.add(1)
+
+    def set_state(self, state):
+        def change(tx):
+            row = tx.ticket("1")
+            row.update(state=state, group="g1", target="int/g1")
+            tx.put_ticket(row)
+        self.pool.update(change, "test: #1 %s" % state)
+        return self.snap().ticket("1")
+
+    def test_frozen_reason_names_only_merged_and_landed(self):
+        from core.pool import frozen_reason
+        self.assertEqual(
+            frozen_reason("7", "merged"),
+            "#7 is feature complete (merged) and frozen: it cannot be revised or reopened. To overturn it, "
+            "open a new ticket: actl new --request \"...\" (the new ticket may revert #7).")
+        self.assertIn("(landed)", frozen_reason("7", "landed"))
+        for state in ("ready", "running", "stuck", "cancelled", None):
+            self.assertIsNone(frozen_reason("7", state))
+
+    def test_apply_revised_refuses_merged_and_landed_without_writing(self):
+        res = {"kind": "revised", "ticket": {"acceptance": ["changed"]}}
+        for state in ("merged", "landed"):
+            before = self.set_state(state)
+            with self.assertRaises(osx.OSFailure) as ctx:
+                self.tc.apply_revised(self.cfg, self.pool, "1", "worker", res, "revise-x")
+            self.assertIn("#1 is feature complete (%s)" % state, str(ctx.exception))
+            self.assertEqual(self.snap().ticket("1"), before)
+
+    def test_user_reset_refuses_merged_and_landed_without_writing(self):
+        for state in ("merged", "landed"):
+            before = self.set_state(state)
+            for target in ("ready", "cancelled"):
+                with self.assertRaises(osx.OSFailure) as ctx:
+                    self.tc.user_reset(self.pool, "1", target, "x")
+                self.assertIn("frozen", str(ctx.exception))
+                self.assertEqual(self.snap().ticket("1"), before)
+
+    def test_user_reset_still_resets_a_stuck_ticket(self):
+        self.set_state("stuck")
+        self.tc.user_reset(self.pool, "1", "ready", "x")
+        self.assertEqual(self.snap().ticket("1")["state"], "ready")
+
+
 class CasesThrownOut(LoopCase):
     def test_a_cases_wrong_revision_after_the_last_round_start_throws_out_the_cases(self):
         import ticket_issuer

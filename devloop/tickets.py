@@ -29,7 +29,7 @@ from core import dag as dagmod  # noqa: E402
 from core import osx, release  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
-from core.pool import event  # noqa: E402
+from core.pool import event, frozen_reason  # noqa: E402
 
 
 def cmd_list(pool, args):
@@ -58,6 +58,9 @@ def cmd_show(pool, args):
 def _set(pool, ident, state, why):
     def change(tx):
         t = tx.ticket(ident)
+        frozen = frozen_reason(ident, t.get("state"))
+        if state == "ready" and frozen:
+            raise osx.OSFailure(frozen)
         if t.get("state") in ("running", "landed"):
             raise osx.OSFailure("#%s is %s; leave it alone" % (ident, t.get("state")))
         t["state"] = state

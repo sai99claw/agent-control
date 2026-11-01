@@ -180,7 +180,7 @@ def render(cfg, snap, key=None):
             e(p.get("kind")), e(p.get("kind")), e(p.get("ref")), e(p.get("at")), e(p.get("text"))))
         ref = str(p.get("ref") or "")
         t = snap.tickets.get(ref)
-        if key and p.get("kind") == "decision" and t and t.get("state") not in ("running", "landed"):
+        if key and p.get("kind") == "decision" and t and t.get("state") not in ("running", "merged", "landed"):
             out.append("<form method='post' action='/answer' class='ask'>%s"
                        "<input type='hidden' name='page' value='%s'><input type='hidden' name='ticket' value='%s'>"
                        "<textarea name='text' data-draft='answer-%s' rows='3' maxlength='8000' "
