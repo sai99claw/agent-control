@@ -1661,6 +1661,198 @@ class Board(LoopCase):
             self.assertIn("四個指標", resp.read().decode("utf-8"))
 
 
+class T15Acceptance(LoopCase):
+    """Ticket #15: memory files live in the folder devloop.memory names."""
+
+    def setUp(self):
+        super().setUp()
+        # a fake agent keys its plan on DEVLOOP_TICKET / DEVLOOP_GROUP: inherited ones must not reach it
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.F = os.path.join(self.tmp, "memfolder")
+
+    # ------------------------------------------------------------ helpers
+
+    def put(self, rel, text):
+        path = os.path.join(self.F, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write(text)
+
+    @staticmethod
+    def read(path):
+        try:
+            with open(path, "rb") as fh:
+                return fh.read().decode("utf-8")
+        except FileNotFoundError:
+            return None
+
+    def pool_put(self, rel, text):
+        self.pool.update(lambda tx: tx.write_text(rel, text), "test: %s" % rel)
+
+    def queue(self, n):
+        def change(tx):
+            for i in range(1, n + 1):
+                tx.write("memory/inbox/t15-%d.json" % i, {"layer": "role", "name": "worker",
+                                                          "text": "lesson %d from #9" % i,
+                                                          "source": "test", "at": osx.now()})
+        self.pool.update(change, "test: %d lessons" % n)
+
+    def files_under(self, root):
+        out = set()
+        for dirpath, _dirs, names in os.walk(root):
+            for name in names:
+                out.add(os.path.relpath(os.path.join(dirpath, name), root))
+        return out
+
+    def stamped_prompt(self, pattern):
+        found = sorted(glob.glob(os.path.join(self.tmp, "wt", "runs", pattern, "prompt.md")))
+        self.assertTrue(found, "no prompt saved at %s" % pattern)
+        return self.read(found[-1])
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    # ------------------------------------------------------------ item 1
+
+    def test_item1_memory_dir_resolves_absent_null_relative_and_absolute(self):
+        cfg = self.cfg()
+        self.assertEqual(getattr(cfg, "memory_dir", None), os.path.join(cfg.pool_path, "memory"))
+        self.config(memory=None)
+        cfg = self.cfg()
+        self.assertEqual(getattr(cfg, "memory_dir", None), os.path.join(cfg.pool_path, "memory"))
+        self.config(memory="m/x")
+        self.assertEqual(getattr(self.cfg(), "memory_dir", None),
+                         os.path.normpath(os.path.join(self.proj, "m/x")))
+        odd = os.path.join(self.tmp, "a", "..", "b", ".", "mem")
+        self.config(memory=odd)
+        self.assertEqual(getattr(self.cfg(), "memory_dir", None), os.path.normpath(odd))
+
+    # ------------------------------------------------------------ item 2
+
+    def test_item2_any_other_memory_value_is_refused(self):
+        for bad in (5, True, [], ""):
+            with self.subTest(value=bad):
+                self.config(memory=bad)
+                with self.assertRaises(osx.OSFailure) as ctx:
+                    self.cfg()
+                self.assertIn("devloop.memory", str(ctx.exception))
+
+    # ------------------------------------------------------------ item 3
+
+    def test_item3_worker_and_verifier_prompts_read_the_folder(self):
+        self.put("role/worker.md", "# Role memory: worker\n\n- T15-F-WORKER-MARK\n")
+        self.put("role/verifier.md", "# Role memory: verifier\n\n- T15-F-VERIFIER-MARK\n")
+        self.put("model/python3.md", "# Model memory: python3\n\n- T15-F-PYTHON3-MARK\n")
+        self.pool_put("memory/role/worker.md", "# Role memory: worker\n\n- T15-POOL-WORKER-MARK\n")
+        self.config(memory=self.F)
+        self.add(1, needs_verifier=True)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        project = os.path.join(self.F, "project.md")
+        worker = self.read(os.path.join(self.tmp, "wt", "runs", "1", "r1-worker", "prompt.md")) or ""
+        self.assertIn("T15-F-WORKER-MARK", worker)
+        self.assertIn("T15-F-PYTHON3-MARK", worker)
+        self.assertNotIn("T15-POOL-WORKER-MARK", worker)
+        self.assertIn(project, worker)
+        verifier = self.read(os.path.join(self.tmp, "wt", "runs", "1", "r1-verifier", "prompt.md")) or ""
+        self.assertIn("T15-F-VERIFIER-MARK", verifier)
+        self.assertIn(project, verifier)
+
+    # ------------------------------------------------------------ item 4
+
+    def test_item4_creator_prompt_reads_the_folder(self):
+        self.put("role/creator.md", "# Role memory: creator\n\n- T15-F-CREATOR-MARK\n")
+        self.config(memory=self.F)
+        self.run_py("ticket_creator.py", "--request", "x")
+        prompt = self.stamped_prompt(os.path.join("creator", "*-a1"))
+        self.assertIn("T15-F-CREATOR-MARK", prompt)
+        self.assertIn(os.path.join(self.F, "project.md"), prompt)
+
+    # ------------------------------------------------------------ items 5 and 6
+
+    MERGED = "# Role memory: worker\n\n- merged 5 lessons\n"
+
+    def keeper_fixture(self):
+        self.put("role/worker.md", "# Role memory: worker\n\n- T15-F-KEEPER-MARK\n")
+        self.pool_put("memory/role/worker.md", "# Role memory: worker\n\n- T15-POOL-KEEPER-MARK\n")
+        self.queue(5)
+        return self.read(os.path.join(self.pool_path, "memory", "role", "worker.md"))
+
+    def test_item5_keeper_consolidates_into_the_folder(self):
+        pool_before = self.keeper_fixture()
+        self.config(memory=self.F)
+        res = self.run_py("memory_keeper.py", "--layer", "role", "--name", "worker")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn("T15-F-KEEPER-MARK", self.stamped_prompt(os.path.join("memory", "role-worker-*")))
+        self.assertEqual(self.read(os.path.join(self.F, "role", "worker.md")), self.MERGED)
+        self.assertEqual(self.read(os.path.join(self.pool_path, "memory", "role", "worker.md")), pool_before)
+        snap = self.snap()
+        left = [r for r in snap.lessons.values() if str(r.get("text", "")).endswith("from #9")]
+        self.assertEqual(left, [], "the five lessons were consumed")
+        self.assertIn("memory/role/worker.md", (snap.memory_state or {}).get("last") or {})
+
+    def test_item6_unlimited_keeper_keeps_the_discussion_in_the_pool(self):
+        self.put("role/worker.md", "# Role memory: worker\n\n- T15-F-KEEPER-MARK\n")
+        self.queue(5)
+        self.config(memory=self.F, unlimited_tokens=True)
+        res = self.run_py("memory_keeper.py", "--layer", "role", "--name", "worker")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        talks = glob.glob(os.path.join(self.pool_path, "memory", "discussions", "*"))
+        self.assertEqual(len(talks), 1, "one discussion file under the pool's memory/discussions/")
+        self.assertEqual(self.files_under(self.F), {os.path.join("role", "worker.md")})
+        self.assertEqual(self.read(os.path.join(self.F, "role", "worker.md")), self.MERGED)
+
+    # ------------------------------------------------------------ item 7
+
+    def memory_rows(self, page):
+        import html as htmlmod
+        import re
+        start = page.find("<h2>記憶</h2>")
+        self.assertGreaterEqual(start, 0, "the page has a memory section")
+        table = page[start:page.find("</table>", start)]
+        rows = [[htmlmod.unescape(re.sub(r"<[^>]+>", "", c)).strip()
+                 for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, re.S)]
+                for tr in re.findall(r"<tr>(.*?)</tr>", table, re.S)]
+        return rows[0], {r[0]: r for r in rows[1:] if r}
+
+    def test_item7_board_lists_the_folder_files_not_the_pool_ones(self):
+        for rel in ("role/consolidator.md", "role/worker.md", "model/folder-only.md", "project.md"):
+            self.put(rel, "# %s\n\n- some text\n" % rel)
+        self.pool_put("memory/model/pool-only.md", "# Model memory: pool-only\n")
+        self.pool_put("memory/discussions/talk.md", "a talk\n")
+        self.queue(2)
+        self.config(memory=self.F)
+        res = self.run_py("board.py", "html")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        page = res.stdout
+        header, rows = self.memory_rows(page)
+        for label in ("memory/role/consolidator.md", "memory/role/worker.md", "memory/model/folder-only.md",
+                      "memory/project.md"):
+            self.assertIn(label, rows)
+        self.assertIn("暫存區", header)
+        self.assertEqual(rows["memory/role/worker.md"][header.index("暫存區")], "2")
+        self.assertNotIn("pool-only", page)
+        self.assertNotIn("discussions/talk", page)
+
+    # ------------------------------------------------------------ item 8
+
+    def test_item8_init_seeds_the_folder_not_the_pool(self):
+        self.assertFalse(os.path.exists(self.F))
+        self.config(memory=self.F)
+        res = self.run_py("tickets.py", "init")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        for role in ("creator", "worker", "verifier", "reviewer", "fixer", "consolidator"):
+            self.assertTrue(os.path.isfile(os.path.join(self.F, "role", "%s.md" % role)), role)
+        self.assertTrue(os.path.isfile(os.path.join(self.F, "model", "python3.md")))
+        self.assertTrue(os.path.isfile(os.path.join(self.F, "project.md")))
+        mem = os.path.join(self.pool_path, "memory")
+        self.assertFalse(os.path.exists(os.path.join(mem, "role")))
+        self.assertFalse(os.path.exists(os.path.join(mem, "model")))
+        self.assertFalse(os.path.exists(os.path.join(mem, "project.md")))
+
+
 class PoolRules(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="loop-pool-")
