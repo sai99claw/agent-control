@@ -52,6 +52,22 @@ class Stuck(Exception):
         self.reason, self.text = reason, text
 
 
+THROWN_OUT = ("the ticket was revised during this round and the revision threw out the "
+              "verifier's cases (cases_wrong); the verifier writes them again next round and "
+              "the worker works on the revised ticket")
+
+
+def cases_thrown_out(t):
+    """True when a 'revised' event with cases_wrong comes after the last 'round start'."""
+    thrown = False
+    for h in t.get("history") or []:
+        if h.get("event") == "round start":
+            thrown = False
+        elif h.get("event") == "revised" and h.get("cases_wrong"):
+            thrown = True
+    return thrown
+
+
 class Issuer:
     def __init__(self, cfg, pool, ident, target):
         self.cfg, self.pool, self.id, self.target = cfg, pool, str(ident), target
@@ -150,6 +166,11 @@ class Issuer:
         whand = hands[0] if work else None
         if whand and whand.kind == "blocked":
             raise Stuck("decision", whand.result.get("text") or "worker says the ticket needs your decision")
+        if cases_thrown_out(self.ticket()):
+            # This round's verifier (if any) wrote against the old ticket: do not red-check or
+            # save its cases; the next round writes them again and restarts the worker.
+            self.save(lambda x: x.__setitem__("cases", None), "cases thrown out")
+            return THROWN_OUT, costs
 
         problems = []
         if whand and whand.problem():
@@ -228,6 +249,9 @@ class Issuer:
     def run_cases(self, t):
         ids = (t.get("cases") or {}).get("run") or []
         if not ids:
+            if t.get("needs_verifier", True):
+                return ("the ticket needs a verifier and has no acceptance cases; it is not "
+                        "merged untested")
             return None
         self.check_time()
         slot = self.test_slot()
