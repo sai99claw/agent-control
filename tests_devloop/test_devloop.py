@@ -783,6 +783,73 @@ class T11Acceptance(LoopCase):
         self.assertNotIn("applied_by", events[0])
 
 
+class T20Acceptance(LoopCase):
+    """Ticket #20: a ticket that needs a verifier merges only on cases written after its latest
+    cases_wrong revision; never with an empty case list."""
+
+    def runs_dir(self):
+        return os.path.join(self.tmp, "wt", "runs", "1")
+
+    def run_loop(self):
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        return self.snap().ticket("1")
+
+    def assert_merged_on_fresh_cases(self, t, nth_start):
+        names = [h.get("event") for h in t["history"]]
+        starts = [i for i, n in enumerate(names) if n == "round start"]
+        self.assertGreaterEqual(len(starts), nth_start, names)
+        start = starts[nth_start - 1]
+        merged = [i for i, n in enumerate(names) if n == "merged"]
+        self.assertEqual(len(merged), 1, names)
+        self.assertGreater(merged[0], start, names)
+        self.assertTrue(any(n == "cases ready" for n in names[start + 1:]), names)
+
+    def test_1_a_revision_during_a_verifier_round_lands_in_round_two(self):
+        self.plan(worker={"1": ["revise", "ok"]}, creator={"1": ["revised"]})
+        t = self.run_loop()
+        self.assertEqual((t["state"], t["round"]), ("landed", 2), t["history"])
+        self.assert_merged_on_fresh_cases(t, 2)
+        self.assertTrue(os.path.isdir(os.path.join(self.runs_dir(), "r2-verifier")))
+        self.assertTrue(os.path.isdir(os.path.join(self.runs_dir(), "r2-worker")))
+
+    def test_2_a_revision_in_a_round_without_a_verifier_lands_in_round_three(self):
+        self.plan(worker={"1": ["wrong", "revise", "ok"]}, creator={"1": ["revised"]})
+        t = self.run_loop()
+        self.assertEqual((t["state"], t["round"]), ("landed", 3), t["history"])
+        self.assert_merged_on_fresh_cases(t, 3)
+        roles = [(c["role"], c["round"]) for c in t.get("cost") or []]
+        self.assertIn(("verifier", 3), roles)
+        prompt = os.path.join(self.runs_dir(), "r3-worker", "prompt.md")
+        self.assertTrue(os.path.exists(prompt), "no round-3 worker prompt")
+        with open(prompt) as fh:
+            self.assertIn("threw out the verifier's cases", fh.read())
+
+    def test_3_a_revision_in_the_last_round_goes_stuck_not_merged(self):
+        self.config(max_rounds=1)
+        self.plan(worker={"1": ["revise"]}, creator={"1": ["revised"]})
+        t = self.run_loop()
+        self.assertEqual(t["state"], "stuck", t["history"])
+        self.assertEqual(t["stuck"]["reason"], "rounds")
+        self.assertFalse(self.main_has("impl_1.txt"))
+        self.assertTrue(t["feedback"], "no feedback entry")
+        self.assertIn("threw out the verifier's cases", str(t["feedback"][-1]))
+
+    def test_4_run_cases_refuses_a_ticket_that_needs_a_verifier_and_has_no_cases(self):
+        import ticket_issuer
+        from core.config import Config
+        self.assertTrue(hasattr(ticket_issuer.Issuer, "run_cases"))
+        issuer = ticket_issuer.Issuer.__new__(ticket_issuer.Issuer)
+        issuer.cfg, issuer.id, issuer.deadline = Config(self.proj), "1", time.time() + 60
+        for t in ({"needs_verifier": True, "cases": None},
+                  {"cases": {"branch": "t/1-cases", "run": []}}):
+            out = issuer.run_cases(t)
+            self.assertIsInstance(out, str, t)
+            self.assertTrue(out, t)
+            self.assertIn("no acceptance cases", out)
+
+
 class ReleaseRerun(LoopCase):
     """tickets.py release: refusals, the timeout, the shared function and the docs (#9)."""
     release = "exit 7"
