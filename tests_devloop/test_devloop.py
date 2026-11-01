@@ -5,6 +5,7 @@ import glob
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -1073,6 +1074,151 @@ class T21Acceptance(LoopCase):
         with open(os.path.join(HOME, "templates", "project-CLAUDE.md")) as fh:
             template = fh.read()
         self.assertTrue("DEVLOOP_RELEASE_DIR" in template, "templates/project-CLAUDE.md lacks DEVLOOP_RELEASE_DIR")
+
+
+class T22Acceptance(LoopCase):
+    """Ticket #22: an interrupted ticket_issuer records one cost row for every agent run of the
+    interrupted round; Pending.stop() returns the stopped run's row."""
+
+    KEYS = ("role", "model", "effort", "command", "round", "seconds", "at", "outcome", "run_dir",
+            "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "usd",
+            "session_id")
+
+    # ------------------------------------------------------------ Pending.stop() (items 1, 2)
+
+    def start_worker(self, command):
+        from core import agents
+        from core.config import Config
+        self.config(agents=dict({r: AGENT for r in ROLES}, worker=command))
+        saved = {k: os.environ.get(k) for k in ("DEVLOOP_SLOT", "AC_ROOT")}
+
+        def restore():
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        self.addCleanup(restore)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        cfg = Config(self.proj)
+        p = agents.start(cfg, "worker", "prompt", self.proj, os.path.join(self.tmp, "run"), 60)
+        self.addCleanup(p.stop)
+        return p
+
+    def test_1_stop_returns_an_interrupted_row_with_unknown_tokens(self):
+        p = self.start_worker(["python3", "-c", "import sys, time; sys.stdin.read(); time.sleep(60)"])
+        time.sleep(0.6)
+        row = p.stop()
+        self.assertIsInstance(row, dict, "Pending.stop() returned %r, not a cost row" % (row,))
+        for k in self.KEYS:
+            self.assertIn(k, row, "cost row lacks %r: %r" % (k, row))
+        self.assertEqual(row["outcome"], "interrupted")
+        self.assertEqual(row["role"], "worker")
+        self.assertIsInstance(row["seconds"], (int, float))
+        self.assertGreater(row["seconds"], 0)
+        for k in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "usd",
+                  "session_id"):
+            self.assertIsNone(row[k], "%s should be unknown (None): %r" % (k, row))
+
+    def test_2_stop_reads_a_claude_runs_tokens_from_its_transcript(self):
+        bindir = os.path.join(self.tmp, "fake-claude-bin")
+        os.makedirs(bindir)
+        exe = os.path.join(bindir, "claude")
+        with open(exe, "w") as fh:
+            fh.write("#!/bin/sh\ncat > /dev/null\nexec sleep 60\n")
+        os.chmod(exe, 0o755)
+        home = os.path.join(self.tmp, "home")
+        os.makedirs(home)
+        old_home = os.environ.get("HOME")
+        self.addCleanup(lambda: os.environ.__setitem__("HOME", old_home) if old_home is not None
+                        else os.environ.pop("HOME", None))
+        os.environ["HOME"] = home
+        p = self.start_worker([exe])
+        import re
+        folder = os.path.join(home, ".claude", "projects", re.sub(r"[^A-Za-z0-9]", "-", os.path.abspath(self.proj)))
+        os.makedirs(folder)
+        time.sleep(0.3)
+        lines = [{"type": "assistant", "message": {"id": "msg_a", "usage": {
+                     "input_tokens": 11, "output_tokens": 5, "cache_read_input_tokens": 100,
+                     "cache_creation_input_tokens": 7}}},
+                 {"type": "assistant", "message": {"id": "msg_b", "usage": {
+                     "input_tokens": 30, "output_tokens": 9, "cache_read_input_tokens": 200,
+                     "cache_creation_input_tokens": 0}}},
+                 {"type": "assistant", "message": {"id": "msg_a", "usage": {
+                     "input_tokens": 11, "output_tokens": 5, "cache_read_input_tokens": 100,
+                     "cache_creation_input_tokens": 7}}}]
+        with open(os.path.join(folder, "sess-t22.jsonl"), "w") as fh:
+            for line in lines:
+                fh.write(json.dumps(line) + "\n")
+        time.sleep(0.3)
+        row = p.stop()
+        self.assertIsInstance(row, dict, "Pending.stop() returned %r, not a cost row" % (row,))
+        self.assertEqual(row.get("outcome"), "interrupted", row)
+        self.assertEqual(row.get("command"), "claude", row)
+        self.assertEqual(row.get("input_tokens"), 41, row)
+        self.assertIs(row.get("from_transcript"), True, row)
+        self.assertEqual(row.get("session_id"), "sess-t22", row)
+
+    # ------------------------------------------------------------ the issuer (items 4, 5, 6)
+
+    def issue(self, roles, sig, **ticket):
+        # when the suite itself runs inside a devloop agent, its ticket must not leak into the issuer
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.add(1, state="running", target="int/g1", group="g1", **ticket)
+        self.pool.update(lambda tx: tx.put_group({"id": "g1", "state": "open", "members": ["1"],
+                                                  "job": None}), "test: group g1")
+        git(self.proj, "branch", "int/g1", "main")
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "ticket_issuer.py"), "--id", "1",
+                                 "--target", "int/g1"], cwd=self.proj, env=self.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.terminate())
+        logs = [os.path.join(self.tmp, "wt", "runs", "1", "r1-%s" % r, "agent-1.log") for r in roles]
+        deadline = time.time() + 60
+        while not all(os.path.exists(f) for f in logs):
+            if proc.poll() is not None:
+                out, err = proc.communicate()
+                self.fail("issuer exited (rc %s) before %s ran: %s" % (proc.returncode, roles, out + err))
+            if time.time() > deadline:
+                proc.terminate()
+                out, err = proc.communicate(timeout=60)
+                self.fail("%s never started; runs: %s; issuer said: %s" % (
+                    roles, sorted(glob.glob(os.path.join(self.tmp, "wt", "runs", "*", "*", "*"))),
+                    out + err + json.dumps(self.snap().ticket("1").get("feedback"))))
+            time.sleep(0.1)
+        time.sleep(1)
+        proc.send_signal(sig)
+        out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 4, out + err)
+        return self.snap().ticket("1")
+
+    def test_4_sigterm_while_worker_and_verifier_run_records_both(self):
+        self.plan(worker={"1": ["sleep"]}, verifier={"1": ["sleep"]})
+        t = self.issue(["worker", "verifier"], signal.SIGTERM)
+        self.assertEqual(t["state"], "ready")
+        rows = t.get("cost") or []
+        self.assertEqual(sorted(r.get("role") for r in rows), ["verifier", "worker"], rows)
+        for r in rows:
+            self.assertEqual(r.get("outcome"), "interrupted", r)
+            self.assertEqual(r.get("round"), 1, r)
+            self.assertTrue(str(r.get("run_dir")).rstrip("/").endswith("r1-%s" % r["role"]), r)
+
+    def test_5_sigint_while_the_only_worker_runs_records_it(self):
+        self.plan(worker={"1": ["sleep"]})
+        t = self.issue(["worker"], signal.SIGINT, needs_verifier=False)
+        rows = t.get("cost") or []
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual((rows[0].get("role"), rows[0].get("outcome"), rows[0].get("round")),
+                         ("worker", "interrupted", 1), rows)
+
+    def test_6_sigterm_while_the_reviewer_runs_keeps_the_handed_in_rows(self):
+        self.plan(reviewer={"1": ["sleep"]})
+        t = self.issue(["reviewer"], signal.SIGTERM, complexity="complex")
+        rows = t.get("cost") or []
+        self.assertEqual(sorted((r.get("role"), r.get("outcome"), r.get("round")) for r in rows),
+                         [("reviewer", "interrupted", 1), ("verifier", "cases", 1), ("worker", "done", 1)],
+                         rows)
 
 
 class WebInput(LoopCase):
