@@ -875,6 +875,117 @@ class ReleaseRerun(LoopCase):
         self.assertIn("tickets.py release", readme[cancel + 1])
 
 
+class T21Acceptance(LoopCase):
+    """Nothing a release produces is thrown away: the log and DEVLOOP_RELEASE_DIR (ticket #21)."""
+
+    def wt(self, *parts):
+        return os.path.join(self.tmp, "wt", *parts)
+
+    def log_path(self):
+        return self.wt("runs", "release", "g1.log")
+
+    def log_text(self):
+        path = self.log_path()
+        self.assertTrue(os.path.isfile(path), "no release log at %s" % path)
+        with open(path) as fh:
+            return fh.read()
+
+    def pages(self, kind):
+        return sorted([r for r in self.snap().inbox.values() if r["kind"] == kind and r["ref"] == "g1"],
+                      key=lambda r: r["at"])
+
+    def assert_release_log_field(self):
+        grp = self.snap().groups["g1"]
+        self.assertIn("release_log", grp, "group g1 has no 'release_log'")
+        value = grp["release_log"]
+        self.assertTrue(os.path.isabs(value), value)
+        self.assertEqual(os.path.realpath(value), os.path.realpath(self.log_path()))
+        return value
+
+    def land(self, release, **extra):
+        self.config(release=release, **extra)
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+
+    def test_ok_release_keeps_stdout_and_stderr_in_the_log_named_on_group_and_page(self):
+        self.land("echo OUT-MARK; echo ERR-MARK >&2; exit 0")
+        self.assertEqual(self.snap().groups["g1"]["release"], "ok")
+        text = self.log_text()
+        self.assertIn("OUT-MARK", text)
+        self.assertIn("ERR-MARK", text)
+        value = self.assert_release_log_field()
+        pages = self.pages("landed")
+        self.assertTrue(pages, "a landed page about g1")
+        self.assertTrue(any(value in r["text"] for r in pages), pages)
+
+    def test_the_whole_output_is_kept_not_only_the_tail(self):
+        self.land("echo FIRST-MARK; python3 -c \"print('x' * 3500)\"")
+        self.assertIn("FIRST-MARK", self.log_text())
+
+    def test_a_failed_release_keeps_its_log_and_the_decision_page_names_it(self):
+        self.land("echo FAIL-MARK; exit 3")
+        grp = self.snap().groups["g1"]
+        self.assertEqual(grp["release"], "failed")
+        value = self.assert_release_log_field()
+        self.assertIn("FAIL-MARK", self.log_text())
+        pages = self.pages("decision")
+        self.assertTrue(pages, "a decision page about g1")
+        self.assertTrue(any(value in r["text"] for r in pages), pages)
+
+    def test_a_timed_out_release_keeps_what_it_printed(self):
+        self.land("echo EARLY-MARK; sleep 5", release_timeout_seconds=1)
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+        self.assertIn("EARLY-MARK", self.log_text())
+
+    def test_release_dir_is_set_exists_and_outlives_the_throwaway_worktree(self):
+        seen = os.path.join(self.tmp, "release-dir-seen.txt")
+        self.land('echo "$DEVLOOP_RELEASE_DIR" > %s; '
+                  'test -d "$DEVLOOP_RELEASE_DIR" && echo kept > "$DEVLOOP_RELEASE_DIR/manifest.json"' % seen)
+        with open(seen) as fh:
+            value = fh.read().strip()
+        self.assertTrue(value and os.path.isabs(value), "DEVLOOP_RELEASE_DIR not absolute: %r" % value)
+        self.assertEqual(os.path.realpath(value), os.path.realpath(self.wt("runs", "release", "g1")))
+        self.assertEqual(self.snap().groups["g1"]["release"], "ok")
+        manifest = self.wt("runs", "release", "g1", "manifest.json")
+        self.assertTrue(os.path.isfile(manifest), "manifest.json not kept")
+        with open(manifest) as fh:
+            self.assertEqual(fh.read().strip(), "kept")
+        self.assertFalse(os.path.exists(self.wt("release-g1")), "the throwaway worktree is still there")
+
+    def test_rerun_replaces_the_log_names_it_and_keeps_the_release_dir(self):
+        flag = os.path.join(self.tmp, "release-flag")
+        self.land('if test -f %s; then echo RERUN-MARK; else echo FIRSTRUN-MARK; '
+                  'test -n "$DEVLOOP_RELEASE_DIR" && echo left > "$DEVLOOP_RELEASE_DIR/left.txt"; exit 3; fi'
+                  % flag)
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+        self.assertIn("FIRSTRUN-MARK", self.log_text())
+        left = self.wt("runs", "release", "g1", "left.txt")
+        self.assertTrue(os.path.isfile(left), "the first run's file was not kept")
+        open(flag, "w").close()
+        res = self.run_py("tickets.py", "release", "g1")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["release"], "ok")
+        text = self.log_text()
+        self.assertIn("RERUN-MARK", text)
+        self.assertNotIn("FIRSTRUN-MARK", text, "the re-run did not replace the log")
+        value = self.assert_release_log_field()
+        pages = self.pages("landed")
+        self.assertTrue(pages, "a landed page about g1")
+        self.assertIn(value, pages[-1]["text"])
+        self.assertTrue(os.path.isfile(left), "devloop emptied the release dir")
+
+    def test_docs_name_the_release_dir_and_the_log(self):
+        with open(os.path.join(HOME, "devloop", "README.md")) as fh:
+            readme = fh.read()
+        self.assertTrue("DEVLOOP_RELEASE_DIR" in readme, "devloop/README.md lacks DEVLOOP_RELEASE_DIR")
+        self.assertTrue("runs/release/" in readme, "devloop/README.md lacks runs/release/")
+        with open(os.path.join(HOME, "templates", "project-CLAUDE.md")) as fh:
+            template = fh.read()
+        self.assertTrue("DEVLOOP_RELEASE_DIR" in template, "templates/project-CLAUDE.md lacks DEVLOOP_RELEASE_DIR")
+
+
 class WebInput(LoopCase):
     def stuck(self, ident):
         self.add(ident)
