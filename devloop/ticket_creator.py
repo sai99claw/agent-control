@@ -270,6 +270,56 @@ def decide(cfg, pool, ident, decision, text, via, page):
     return rc
 
 
+def apply_revised(cfg, pool, ident, source, res, run_name, applied_by=None):
+    """Write the opener's kind 'revised' hand-in `res` into the pool; returns the fields it changed.
+    `run_name` is the revise-* directory the hand-in came from (it is the event's run field)."""
+    changes = {k: v for k, v in (res.get("ticket") or {}).items() if k in editable(cfg)}
+
+    def change(tx):
+        row = tx.ticket(ident)
+        row.update(changes)
+        if res.get("cases_wrong"):
+            row["cases"] = None
+        extra = {"applied_by": applied_by} if applied_by else {}
+        event(row, "revised", source=source, fields=sorted(changes),
+              cases_wrong=bool(res.get("cases_wrong")), run=run_name, **extra)
+        tx.put_ticket(row)
+    pool.update(change, "#%s: revised (%s)" % (ident, source))
+    return changes
+
+
+def apply_unapplied(cfg, pool, ident, since):
+    """Write into the pool every kind 'revised' hand-in under runs/<ident>/revise-* that the opener
+    wrote at or after `since` and that no 'revised' event names yet. This recovers a revision whose
+    ticket_creator.py was stopped (with the worker that ran it) after the opener handed in.
+    A user revision, an older, unreadable or other-kind hand-in is skipped. Returns the names applied."""
+    base = os.path.join(cfg.worktree_root, "runs", str(ident))
+    try:
+        names = sorted(n for n in os.listdir(base) if n.startswith("revise-"))
+    except OSError:
+        return []
+    applied = []
+    for name in names:
+        d = os.path.join(base, name)
+        try:
+            meta = osx.read_json(os.path.join(d, "revise.json"))
+            res = osx.read_json(os.path.join(d, "result.json"))
+            mtime = os.path.getmtime(os.path.join(d, "result.json"))
+        except (OSError, ValueError, osx.OSFailure):
+            continue
+        if not isinstance(meta, dict) or not isinstance(res, dict):
+            continue
+        source = meta.get("source")
+        if not source or source == "user" or mtime < since or res.get("kind") != "revised":
+            continue
+        history = pool.snapshot().ticket(ident).get("history") or []
+        if any(e.get("event") == "revised" and e.get("run") == name for e in history):
+            continue
+        apply_revised(cfg, pool, ident, source, res, name, applied_by="issuer")
+        applied.append(name)
+    return applied
+
+
 def revise(cfg, pool, ident, source, reason, via="main"):
     snap = pool.snapshot()
     t = snap.ticket(ident)
@@ -286,6 +336,7 @@ def revise(cfg, pool, ident, source, reason, via="main"):
         "dag_json": json.dumps(snap.dag.get(ident) or {}, indent=2, ensure_ascii=False),
         "result_path": os.path.join(run_dir, "result.json"),
     })
+    osx.write_json(os.path.join(run_dir, "revise.json"), {"ticket": ident, "source": source})
     hand = agents.run(cfg, "creator", prompt, cfg.root, run_dir,
                       min(REVISE_TIMEOUT, cfg.agent_timeout_seconds),
                       extra_env={"DEVLOOP_TICKET": ident})
@@ -310,17 +361,7 @@ def revise(cfg, pool, ident, source, reason, via="main"):
               "{\"kind\": \"blocked\", \"text\": \"waiting for the user's decision\"}." % res.get("text"))
         return 3
     if res.get("kind") == "revised":
-        changes = {k: v for k, v in (res.get("ticket") or {}).items() if k in editable(cfg)}
-
-        def change(tx):
-            row = tx.ticket(ident)
-            row.update(changes)
-            if res.get("cases_wrong"):
-                row["cases"] = None
-            event(row, "revised", source=source, fields=sorted(changes),
-                  cases_wrong=bool(res.get("cases_wrong")))
-            tx.put_ticket(row)
-        pool.update(change, "#%s: revised (%s)" % (ident, source))
+        changes = apply_revised(cfg, pool, ident, source, res, os.path.basename(run_dir))
         print("REVISED: %s\nChanged: %s%s" % (res.get("note") or "", ", ".join(sorted(changes)) or "nothing",
               "\nThe verifier's cases were judged wrong; they are written again next round."
               if res.get("cases_wrong") else ""))

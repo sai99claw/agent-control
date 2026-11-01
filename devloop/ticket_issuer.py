@@ -13,7 +13,9 @@ devloop.issuer_timeout_seconds):
      if another ticket moved it first, take it in again)
 
 A step that fails becomes feedback for the next round. A worker that thinks the ticket is wrong
-calls ticket_creator.py --revise itself (it is in the worker's prompt). Out of rounds, out of
+calls ticket_creator.py --revise itself (it is in the worker's prompt); a revision the opener
+handed in but nobody wrote into the pool (the worker was stopped meanwhile) is written in by the
+issuer before the next round starts. Out of rounds, out of
 time, hard_block, environment, or a question only the user can answer -> the ticket is "stuck"
 and the main session gets one page.
 
@@ -35,6 +37,7 @@ from core import agents, memory, osx, slots, testrun  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.pool import event  # noqa: E402
+import ticket_creator  # noqa: E402
 
 LOOP = os.path.dirname(os.path.abspath(__file__))
 
@@ -57,7 +60,8 @@ class Issuer:
         self.cases_branch = "t/%s-cases" % self.id
         self.wt = os.path.join(cfg.worktree_root, "t%s" % self.id)
         self.cwt = os.path.join(cfg.worktree_root, "t%s-cases" % self.id)
-        self.deadline = time.time() + cfg.issuer_timeout_seconds
+        self.started = time.time()
+        self.deadline = self.started + cfg.issuer_timeout_seconds
         self.pending = []
         # The worker's hand-in of an earlier round still stands when only the verifier's cases
         # were sent back: the next round starts the verifier alone.
@@ -94,6 +98,9 @@ class Issuer:
         self.repo.worktree(self.wt, self.branch, start=self.target)
         rounds = self.cfg.max_rounds
         while int(t.get("round") or 0) < rounds:
+            # A revision the opener handed in while its ticket_creator.py was stopped (with the
+            # worker that ran it) is written into the pool before the round reads the ticket.
+            ticket_creator.apply_unapplied(self.cfg, self.pool, self.id, self.started)
             t = self.save(lambda x: (x.__setitem__("round", int(x.get("round") or 0) + 1),
                                      event(x, "round start")), "round start")
             r = t["round"]

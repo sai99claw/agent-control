@@ -627,6 +627,103 @@ class Revise(LoopCase):
         self.assertEqual(self.snap().tickets, {})
 
 
+class ApplyUnapplied(LoopCase):
+    """ticket_creator.apply_unapplied: which revise-* hand-ins the issuer writes into the pool."""
+
+    REVISED = {"kind": "revised", "ticket": {"acceptance": ["changed"]}, "cases_wrong": True}
+
+    def setUp(self):
+        super().setUp()
+        import ticket_creator
+        from core.config import Config
+        self.tc = ticket_creator
+        self.cfg = Config(self.proj)
+        self.add(1, cases=["c"])
+        self.since = time.time()
+
+    def hand_in(self, name, source="worker", result=REVISED, raw=None, age=None, meta=True):
+        d = os.path.join(self.tmp, "wt", "runs", "1", name)
+        os.makedirs(d)
+        if meta:
+            osx.write_json(os.path.join(d, "revise.json"), {"ticket": "1", "source": source})
+        path = os.path.join(d, "result.json")
+        if raw is not None:
+            with open(path, "w") as fh:
+                fh.write(raw)
+        elif result is not None:
+            osx.write_json(path, result)
+        if age is not None and os.path.exists(path):
+            os.utime(path, (self.since - age, self.since - age))
+        return name
+
+    def apply(self):
+        return self.tc.apply_unapplied(self.cfg, self.pool, "1", self.since)
+
+    def revised(self):
+        return [h for h in self.snap().ticket("1").get("history", []) if h["event"] == "revised"]
+
+    def assert_skipped(self):
+        self.assertEqual(self.apply(), [])
+        t = self.snap().ticket("1")
+        self.assertEqual(self.revised(), [])
+        self.assertEqual(t["acceptance"], ["a"])
+        self.assertEqual(t["cases"], ["c"])
+
+    def test_a_fresh_worker_revision_is_applied_once_by_the_issuer(self):
+        name = self.hand_in("revise-2026-11-01T100000")
+        self.assertEqual(self.apply(), [name])
+        t = self.snap().ticket("1")
+        self.assertEqual(t["acceptance"], ["changed"])
+        self.assertIsNone(t["cases"])
+        ev = self.revised()
+        self.assertEqual(len(ev), 1)
+        self.assertEqual((ev[0]["run"], ev[0]["applied_by"], ev[0]["source"], ev[0]["cases_wrong"]),
+                         (name, "issuer", "worker", True))
+        self.assertEqual(self.apply(), [], "a second scan applied the same hand-in again")
+        self.assertEqual(len(self.revised()), 1)
+
+    def test_several_are_applied_in_name_order(self):
+        b = self.hand_in("revise-2026-11-01T100002")
+        a = self.hand_in("revise-2026-11-01T100001")
+        self.assertEqual(self.apply(), [a, b])
+        self.assertEqual([e["run"] for e in self.revised()], [a, b])
+
+    def test_no_runs_directory_is_not_an_error(self):
+        self.assertEqual(self.apply(), [])
+
+    def test_a_user_revision_is_skipped(self):
+        self.hand_in("revise-x", source="user")
+        self.assert_skipped()
+
+    def test_a_hand_in_older_than_the_issuer_is_skipped(self):
+        self.hand_in("revise-x", age=60)
+        self.assert_skipped()
+
+    def test_another_kind_is_skipped(self):
+        for i, kind in enumerate(("unchanged", "question", "rejected")):
+            self.hand_in("revise-%d" % i, result={"kind": kind, "text": "t"})
+        self.assert_skipped()
+
+    def test_a_missing_or_broken_result_is_skipped(self):
+        self.hand_in("revise-a", result=None)
+        self.hand_in("revise-b", raw="{not json")
+        self.hand_in("revise-c", raw="[1, 2]")
+        self.assert_skipped()
+
+    def test_a_directory_without_revise_json_is_skipped(self):
+        self.hand_in("revise-x", meta=False)
+        self.assert_skipped()
+
+    def test_a_hand_in_already_written_by_its_creator_is_skipped(self):
+        name = self.hand_in("revise-x")
+        self.tc.apply_revised(self.cfg, self.pool, "1", "worker", self.REVISED, name)
+        self.assertEqual(self.apply(), [])
+        ev = self.revised()
+        self.assertEqual(len(ev), 1)
+        self.assertNotIn("applied_by", ev[0])
+        self.assertEqual(ev[0]["run"], name)
+
+
 class ReleaseRerun(LoopCase):
     """tickets.py release: refusals, the timeout, the shared function and the docs (#9)."""
     release = "exit 7"
