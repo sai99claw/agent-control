@@ -133,6 +133,10 @@ def run(cfg, role, prompt, cwd, run_dir, timeout, extra_env=None, effort=None, r
     return start(cfg, role, prompt, cwd, run_dir, timeout, extra_env, effort, round_no).finish()
 
 
+class Interrupted(Exception):
+    """Raised by a script's SIGTERM/SIGINT handler."""
+
+
 class Pending:
     def __init__(self, role, chain, prompt, cwd, env, run_dir, result_path, timeout, round_no, cfg=None):
         self.role, self.chain, self.prompt, self.cwd, self.env = role, chain, prompt, cwd, env

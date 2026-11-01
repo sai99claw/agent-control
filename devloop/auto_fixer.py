@@ -11,12 +11,14 @@ regression afterwards). Two kinds of red:
     ticket_creator.py --revise (in its prompt), like a worker would.
 
 Exit: 0 something was committed (verify again) · 1 nothing usable came back · 3 the fixer says
-only the user can decide (already reported) · 2 refused.
+only the user can decide (already reported) · 2 refused · 4 interrupted by SIGTERM/SIGINT (the
+running fixer is stopped and its cost recorded with outcome "interrupted").
 """
 
 import argparse
 import json
 import os
+import signal
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -28,7 +30,8 @@ from core.gitx import Git  # noqa: E402
 LOOP = os.path.dirname(os.path.abspath(__file__))
 
 
-def fix(cfg, pool, gid, report):
+def fix(cfg, pool, gid, report, live=None):
+    live = [] if live is None else live
     snap = pool.snapshot()
     group = snap.groups.get(gid)
     if not group:
@@ -66,8 +69,11 @@ def fix(cfg, pool, gid, report):
         "memory": memory.for_prompt(cfg, "fixer", agents._model(cfg.agent("fixer"))),
         "project_memory": memory.project_path(cfg),
     }
-    hand = agents.run(cfg, "fixer", agents.render("fixer.md", values), tree, run_dir,
-                      cfg.agent_timeout_seconds, extra_env={"AC_CODE_ROOT": tree, "DEVLOOP_GROUP": gid})
+    pending = agents.start(cfg, "fixer", agents.render("fixer.md", values), tree, run_dir,
+                           cfg.agent_timeout_seconds, extra_env={"AC_CODE_ROOT": tree, "DEVLOOP_GROUP": gid})
+    live.append(pending)
+    hand = pending.finish()
+    live.clear()
     _record_cost(pool, gid, hand.cost)
     memory.collect(pool, hand, "group %s fix r%d" % (gid, rnd))
     if hand.kind == "blocked":
@@ -96,10 +102,28 @@ def main(argv=None):
     ap.add_argument("--group", required=True)
     ap.add_argument("--report", required=True, help="regression.py --out file")
     args = ap.parse_args(argv)
+    def on_signal(signum, frame):
+        raise agents.Interrupted("signal %d" % signum)
+    signal.signal(signal.SIGTERM, on_signal)
+    signal.signal(signal.SIGINT, on_signal)
+    live = []
+    pool = None
     try:
         cfg = Config()
         report = osx.read_json(args.report, {}) or {}
-        return fix(cfg, pool_for(cfg), args.group, report)
+        pool = pool_for(cfg)
+        return fix(cfg, pool, args.group, report, live)
+    except agents.Interrupted:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        for p in list(live):
+            try:
+                row = p.stop()
+                if row is not None and pool is not None:
+                    _record_cost(pool, args.group, row)
+            except Exception as exc:
+                print("auto_fixer: could not record the fixer's cost: %s" % exc, file=sys.stderr)
+        return 4
     except osx.OSFailure as exc:
         print("auto_fixer: %s" % exc, file=sys.stderr)
         return 2

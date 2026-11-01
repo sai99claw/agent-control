@@ -1945,6 +1945,41 @@ class Memory(LoopCase):
         self.assertEqual(memory.due(self.snap()), [])
 
 
+class KeeperInterrupt(LoopCase):
+    """memory_keeper stops its running agent on SIGTERM and records the attempt (#23 unit test)."""
+
+    def test_sigterm_records_interrupted_run_and_keeps_lessons(self):
+        import glob
+        import time
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.run_py("tickets.py", "init")
+
+        def change(tx):
+            for i in range(5):
+                tx.write("memory/inbox/k%d.json" % i, {"layer": "role", "name": "worker", "text": "l%d" % i,
+                                                       "at": osx.now()})
+        self.pool.update(change, "test: five lessons")
+        self.plan(consolidator={"*": ["sleep"]})
+        proc = subprocess.Popen([sys.executable, os.path.join(LOOP, "memory_keeper.py"), "--layer", "role",
+                                 "--name", "worker"], cwd=self.proj, env=self.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        end = time.time() + 30
+        while time.time() < end and not glob.glob(os.path.join(self.tmp, "wt", "runs", "memory", "*", "agent-1.log")):
+            time.sleep(0.2)
+        time.sleep(1)
+        proc.send_signal(signal.SIGTERM)
+        proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 4)
+        snap = self.snap()
+        run = snap.memory_state["runs"][-1]
+        self.assertTrue(run["interrupted"])
+        self.assertFalse(run["ok"])
+        self.assertEqual([c["outcome"] for c in run["cost"]], ["interrupted"])
+        self.assertEqual(len(snap.lessons), 5)
+        self.assertNotIn("memory/role/worker.md", snap.memory_state.get("last", {}))
+
+
 class MemoryFolderHelpers(LoopCase):
     """core.memory's folder helpers (devloop.memory, D-088)."""
 
