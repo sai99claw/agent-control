@@ -2718,3 +2718,76 @@ class T18Acceptance(unittest.TestCase):
                if os.path.basename(p) == "README.md" or p.endswith(".inbox.md")
                or p in ("memory/role/implementer.md", "memory/role/opener.md")]
         self.assertEqual(bad, [], "old cards still tracked under memory/")
+
+
+class T19Acceptance(unittest.TestCase):
+    """#19: devloop/README.md lists every role; the memory docs follow D-088."""
+
+    ROLES = ["creator", "worker", "worker_simple", "verifier", "reviewer", "fixer",
+             "consolidator", "consolidator_peer"]
+
+    def read(self, *p):
+        with open(os.path.join(HOME, *p), encoding="utf-8") as f:
+            return f.read()
+
+    def section(self, text, heading):
+        self.assertIn("\n" + heading + "\n", text, "no section %r" % heading)
+        body = text.split("\n" + heading + "\n", 1)[1]
+        return body.split("\n## ", 1)[0]
+
+    @staticmethod
+    def cells(line):
+        return [c.strip() for c in line.strip().strip("|").split("|")]
+
+    def role_rows(self):
+        sec = self.section(self.read("devloop", "README.md"), "## Roles")
+        lines = [l for l in sec.splitlines() if l.strip().startswith("|")]
+        self.assertGreaterEqual(len(lines), 3, "the Roles section has no table")
+        rows = [l for l in lines[2:]]  # header and separator first
+        return {self.cells(r)[0]: r for r in rows}, [self.cells(r)[0] for r in rows]
+
+    def test_item1_one_row_per_role(self):
+        by_name, firsts = self.role_rows()
+        self.assertEqual(sorted(firsts), sorted("`%s`" % r for r in self.ROLES))
+        for name, row in by_name.items():
+            cells = self.cells(row)
+            self.assertGreaterEqual(len([c for c in cells if c]), 5,
+                                    "row %s lacks script, when, models, writes" % name)
+            self.assertIn(".py", row, "row %s names no script" % name)
+            self.assertTrue(any(m in row for m in ("fable", "opus", "sonnet")),
+                            "row %s names no model" % name)
+
+    def test_item2_consolidator_rows(self):
+        by_name, _ = self.role_rows()
+        self.assertIn("`consolidator`", by_name)
+        self.assertIn("`consolidator_peer`", by_name)
+        for w in ("memory_keeper.py", "ticket_controller.py", "5 lessons", "3 days", "24 h",
+                  "fable", "opus"):
+            self.assertIn(w, by_name["`consolidator`"])
+        self.assertIn("unlimited_tokens", by_name["`consolidator_peer`"])
+
+    def test_item3_memory_section(self):
+        text = self.read("devloop", "README.md")
+        mem = self.section(text, "## Memory")
+        for w in ("devloop.memory", "memory/inbox", "memory/state.json", "memory/discussions",
+                  "agent-control's memory/"):
+            self.assertIn(w, mem)
+        for w in ("kept **in the pool**", "never copied in", "`memory/project.md` in the pool"):
+            self.assertNotIn(w, text)
+        settings = self.section(text, "## Project settings (`board/config.json`, key `devloop`)")
+        self.assertIn("`memory`", settings)
+
+    def test_item4_design_memory_bullet(self):
+        text = self.read("docs", "design", "dev-loop-v2.md")
+        bullets = [b for b in text.split("\n- ") if b.startswith("**Memory**")]
+        self.assertEqual(len(bullets), 1, "section 3 has one memory bullet")
+        self.assertNotIn("(also in the pool)", bullets[0])
+        self.assertIn("devloop.memory", bullets[0])
+
+    def test_item5_root_readme_memory_row(self):
+        text = self.read("README.md")
+        rows = [self.cells(l) for l in text.splitlines() if l.strip().startswith("|")]
+        mine = [r for r in rows if r and r[0] == "`memory/`"]
+        self.assertEqual(len(mine), 1, "no table row for `memory/`")
+        self.assertTrue(len(mine[0]) > 1 and mine[0][1], "the `memory/` row has no description")
+        self.assertNotIn("舊記憶卡", text)
