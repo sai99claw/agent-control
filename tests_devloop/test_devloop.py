@@ -3116,6 +3116,267 @@ class T13Acceptance(LoopCase):
         self.assertIn("tickets.py ready g", doc)
 
 
+class CancelGroupUnit(T13Acceptance):
+    """cmd_cancel_group: ready and merged members are cancelled, others stay, branch kept."""
+
+    def test_cancels_merged_member_and_pages(self):
+        self.put_group("stuck")
+        res = self.run_py("tickets.py", "cancel", "g1", "--why", "dropped")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        snap = self.snap()
+        self.assertEqual(snap.groups["g1"]["state"], "cancelled")
+        self.assertEqual(snap.tickets["1"]["state"], "cancelled")
+        pages = [r for r in snap.inbox.values() if r.get("kind") == "cancelled"]
+        self.assertEqual(len(pages), 1)
+        self.assertIn("#1", pages[0]["text"])
+
+    def test_running_member_refused(self):
+        self.put_group("open", ticket_state="running")
+        res = self.run_py("tickets.py", "cancel", "g1")
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertIn("#1 is running", res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["state"], "open")
+
+
+class T25Acceptance(LoopCase):
+    """#25: tickets.py cancel g<N> cancels a stuck or open group by hand."""
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def put_group(self, state, member_states, branch=True):
+        for m in member_states:
+            self.add(m)
+
+        def change(tx):
+            for m, st in member_states.items():
+                t = tx.ticket(m)
+                t.update(state=st, group="g1")
+                tx.put_ticket(t)
+            tx.put_group({"id": "g1", "branch": "int/g1", "state": state, "members": list(member_states),
+                          "fix_round": 0, "job": None, "history": []})
+        self.pool.update(change, "test: group g1")
+        if branch:
+            git(self.proj, "branch", "int/g1", "main")
+
+    def actl(self, *args):
+        return subprocess.run([os.path.join(HOME, "bin", "actl")] + list(args), cwd=self.proj,
+                              env=self.env, capture_output=True, text=True, timeout=120)
+
+    def test_item1_stuck_group_is_cancelled(self):
+        self.put_group("stuck", {"1": "merged", "2": "stuck", "3": "cancelled"})
+        sha = git(self.proj, "rev-parse", "int/g1")
+        before = self.snap()
+        hist1 = len(before.ticket("1").get("history") or [])
+        t2, t3 = before.ticket("2"), before.ticket("3")
+        pages = set(before.inbox)
+        res = self.run_py("tickets.py", "cancel", "g1", "--why", "dropped")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        snap = self.snap()
+        g = snap.groups["g1"]
+        self.assertEqual(g["state"], "cancelled", g)
+        last = g["history"][-1]
+        self.assertEqual(last.get("by"), "user", last)
+        self.assertEqual(last.get("why"), "dropped", last)
+        self.assertEqual(snap.ticket("1")["state"], "cancelled")
+        self.assertEqual(len(snap.ticket("1").get("history") or []), hist1 + 1, snap.ticket("1"))
+        self.assertEqual(snap.ticket("2")["state"], "stuck")
+        self.assertEqual(snap.ticket("3")["state"], "cancelled")
+        self.assertEqual(snap.ticket("2"), t2)
+        self.assertEqual(snap.ticket("3"), t3)
+        self.assertEqual(git(self.proj, "rev-parse", "int/g1"), sha)
+        new = [snap.inbox[k] for k in set(snap.inbox) - pages]
+        self.assertEqual(len(new), 1, new)
+        self.assertEqual(new[0]["kind"], "cancelled", new[0])
+        self.assertEqual(new[0]["ref"], "g1", new[0])
+        self.assertIn("#1", new[0]["text"], new[0])
+
+    def test_item2_open_group_is_cancelled(self):
+        self.put_group("open", {"1": "ready"})
+        res = self.run_py("tickets.py", "cancel", "g1", "--why", "x")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["state"], "cancelled")
+        self.assertEqual(self.state(1), "cancelled")
+
+    def test_item3_actl_tickets_cancel_group(self):
+        self.put_group("open", {"1": "ready"})
+        res = self.actl("tickets", "cancel", "g1", "--why", "x")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["state"], "cancelled")
+        self.assertEqual(self.state(1), "cancelled")
+
+    def refused(self, gid, text):
+        before = self.snap()
+        res = self.run_py("tickets.py", "cancel", gid, "--why", "x")
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertEqual(len(res.stderr.strip().splitlines()), 1, res.stderr)
+        self.assertIn(text, res.stderr)
+        after = self.snap()
+        self.assertEqual(after.groups, before.groups)
+        self.assertEqual(after.tickets, before.tickets)
+        self.assertEqual(after.inbox, before.inbox)
+
+    def test_item4_refuses_landed_group(self):
+        self.put_group("landed", {"1": "landed"})
+        self.refused("g1", "group g1 is landed")
+
+    def test_item4_refuses_pr_group(self):
+        self.put_group("pr", {"1": "merged"})
+        self.refused("g1", "group g1 is pr")
+
+    def test_item4_refuses_cancelled_group(self):
+        self.put_group("cancelled", {"1": "cancelled"})
+        self.refused("g1", "group g1 is cancelled")
+
+    def test_item4_refuses_open_group_with_running_member(self):
+        self.put_group("open", {"1": "running"})
+        self.refused("g1", "#1 is running")
+
+    def test_item4_refuses_unknown_group(self):
+        self.put_group("open", {"1": "ready"})
+        self.refused("g9", "no group g9")
+
+    def test_item5_docs(self):
+        with open(os.path.join(HOME, "devloop", "tickets.py")) as fh:
+            doc = fh.read().split('"""')[1]
+        self.assertIn("tickets.py cancel g", doc)
+        with open(os.path.join(HOME, "devloop", "README.md")) as fh:
+            readme = fh.read().splitlines()
+        rows = [i for i, ln in enumerate(readme) if ln.startswith("| `python3 devloop/tickets.py cancel gN")]
+        self.assertEqual(len(rows), 1, "no `cancel gN` row in README")
+        release = [i for i, ln in enumerate(readme) if ln.startswith("| `python3 devloop/tickets.py release gN")]
+        self.assertTrue(release, "no `release gN` row in README")
+        self.assertGreater(rows[0], release[0])
+        inbox = [ln for ln in readme if ln.startswith("| `python3 devloop/tickets.py inbox")]
+        self.assertEqual(len(inbox), 1)
+        self.assertIn("cancelled", inbox[0])
+
+
+class AllCancelledHelper(unittest.TestCase):
+    """Controller.all_cancelled: true only for a non-empty group of cancelled members."""
+
+    def test_all_cancelled(self):
+        import ticket_controller
+        from types import SimpleNamespace
+        snap = SimpleNamespace(tickets={"1": {"state": "cancelled"}, "2": {"state": "cancelled"},
+                                        "3": {"state": "stuck"}})
+        f = ticket_controller.Controller.all_cancelled
+        self.assertTrue(f(snap, {"members": ["1", "2"]}))
+        self.assertFalse(f(snap, {"members": ["1", "3"]}))
+        self.assertFalse(f(snap, {"members": []}))
+        self.assertFalse(f(snap, {"members": ["9"]}))
+
+
+class T24Acceptance(LoopCase):
+    """#24: the controller closes a group whose tickets are all cancelled."""
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.plan()
+
+    def put_group(self, state, members=("1",), member_states=None, **fields):
+        member_states = member_states or {m: "cancelled" for m in members}
+        for m in members:
+            self.add(m)
+
+        def change(tx):
+            for m in members:
+                t = tx.ticket(m)
+                t.update(state=member_states[m], group="g1")
+                tx.put_ticket(t)
+            g = {"id": "g1", "branch": "int/g1", "state": state, "members": list(members),
+                 "fix_round": 0, "job": None, "history": []}
+            g.update(fields)
+            tx.put_group(g)
+        self.pool.update(change, "test: group g1")
+
+    def group(self):
+        return self.snap().groups["g1"]
+
+    def main_sha(self):
+        return git(self.proj, "rev-parse", "main")
+
+    def regression_dir(self):
+        return os.path.join(self.tmp, "wt", "runs", "regression", "g1")
+
+    def released_lines(self):
+        if not os.path.exists(self.released):
+            return []
+        with open(self.released) as fh:
+            return fh.read().splitlines()
+
+    def run_once(self):
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        return res
+
+    def assert_closed(self):
+        g = self.group()
+        self.assertEqual(g["state"], "cancelled", g)
+        self.assertTrue(g.get("history"), g)
+        self.assertIn("cancelled", g["history"][-1].get("event", ""), g["history"][-1])
+
+    def test_item1_open_group_all_cancelled_is_closed(self):
+        self.put_group("open")
+        git(self.proj, "branch", "int/g1", "main")
+        self.run_once()
+        self.assert_closed()
+        self.assertFalse(os.path.exists(self.regression_dir()), "a regression ran for g1")
+        pages = [r for r in self.snap().inbox.values() if r.get("ref") == "g1"]
+        self.assertEqual(pages, [])
+
+    def test_item2_stuck_group_all_cancelled_is_closed(self):
+        self.put_group("stuck", members=("1", "2"))
+        git(self.proj, "branch", "int/g1", "main")
+        self.run_once()
+        self.assert_closed()
+
+    def test_item3_pr_group_all_cancelled_is_closed_not_landed(self):
+        self.put_group("pr")
+        git(self.proj, "branch", "int/g1", "main")
+        main = self.main_sha()
+        self.run_once()
+        self.assertEqual(self.group()["state"], "cancelled", self.group())
+        self.assertFalse(os.path.exists(self.regression_dir()), "a regression ran for g1")
+        self.assertEqual(self.main_sha(), main)
+        self.assertEqual(self.released_lines(), [])
+
+    def test_item4_verified_group_all_cancelled_is_closed_not_landed(self):
+        git(self.proj, "branch", "int/g1", "main")
+        wt = os.path.join(self.tmp, "g1-wt")
+        git(self.proj, "worktree", "add", "-q", wt, "int/g1")
+        with open(os.path.join(wt, "extra.txt"), "w") as fh:
+            fh.write("extra\n")
+        git(wt, "add", "extra.txt")
+        git(wt, "commit", "-q", "-m", "extra")
+        tip = git(wt, "rev-parse", "HEAD")
+        git(self.proj, "worktree", "remove", "--force", wt)
+        main = self.main_sha()
+        self.assertNotEqual(tip, main)
+        self.put_group("verified", verified_sha=tip)
+        self.run_once()
+        self.assertEqual(self.group()["state"], "cancelled", self.group())
+        self.assertEqual(self.main_sha(), main)
+        res = subprocess.run(["git", "merge-base", "--is-ancestor", tip, "main"], cwd=self.proj,
+                             capture_output=True, text=True)
+        self.assertNotEqual(res.returncode, 0, "main contains int/g1's commit")
+        self.assertFalse(self.main_has("extra.txt"))
+        self.assertEqual(self.released_lines(), [])
+
+    def test_item5_list_hides_cancelled_group_unless_all(self):
+        self.put_group("cancelled")
+        res = self.run_py("tickets.py", "list")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertFalse([ln for ln in res.stdout.splitlines() if ln.split()[:1] == ["g1"]], res.stdout)
+        res = self.run_py("tickets.py", "list", "--all")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertTrue([ln for ln in res.stdout.splitlines() if ln.split()[:1] == ["g1"]], res.stdout)
+
+
 class T18Acceptance(unittest.TestCase):
     """#18: agent-control's memory/ is its consolidated memory, named by its config."""
 

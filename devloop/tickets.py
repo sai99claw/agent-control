@@ -7,6 +7,7 @@
     python3 devloop/tickets.py ready 203            # after you decided on a stuck ticket: try again
     python3 devloop/tickets.py ready g7             # a stuck group: verify it again (merged tickets kept)
     python3 devloop/tickets.py cancel 203 --why "no longer needed"
+    python3 devloop/tickets.py cancel g7 --why "..."   # a stuck or open group: cancel its ready and merged tickets
     python3 devloop/tickets.py inbox [--all]        # pages for the main session
     python3 devloop/tickets.py ack <page>|--all
     python3 devloop/tickets.py lessons --layer role --name worker --file OLD.md   # old notes -> lessons
@@ -41,7 +42,7 @@ def cmd_list(pool, args):
         print("#%-5s %-9s r%-2s %-12s %s" % (ident, t.get("state"), t.get("round", 0), extra or "",
                                              t.get("title", "")))
     for g in sorted(snap.groups.values(), key=lambda g: int(g["id"][1:])):
-        if args.all or g.get("state") != "landed":
+        if args.all or g.get("state") not in ("landed", "cancelled"):
             print("%-6s %-9s %-10s fix %s  #%s" % (g["id"], g.get("state"), g.get("branch"),
                                                    g.get("fix_round", 0), " #".join(g.get("members") or [])))
     return 0
@@ -92,6 +93,37 @@ def cmd_ready_group(pool, cfg, gid, why):
         tx.put_group(g)
     pool.update(change, "group %s: ready again (main)" % gid)
     print("group %s goes back to the regression (fix rounds reset to 0)" % gid)
+    return 0
+
+
+def cmd_cancel_group(pool, gid, why):
+    """Close a stuck or open group that has no running member. Its ready and merged members become
+    cancelled; other members and the integration branch are left as they are. One page lists them."""
+    def change(tx):
+        g = tx.data.groups.get(gid)
+        if not g:
+            raise osx.OSFailure("no group %s" % gid)
+        if g.get("state") not in ("stuck", "open"):
+            raise osx.OSFailure("group %s is %s; only a stuck or open group is cancelled" % (gid, g.get("state")))
+        members = [tx.data.tickets.get(m) for m in g.get("members") or []]
+        for m in members:
+            if m and m.get("state") == "running":
+                raise osx.OSFailure("#%s is running; leave it alone" % m["id"])
+        done = []
+        for t in members:
+            if t and t.get("state") in ("ready", "merged"):
+                t["state"] = "cancelled"
+                event(t, "cancelled with group %s" % gid, by="user", why=why)
+                tx.put_ticket(t)
+                done.append("#%s" % t["id"])
+        g["state"] = "cancelled"
+        event(g, "cancelled by the user", by="user", why=why)
+        tx.put_group(g)
+        return done
+    done = pool.update(change, "group %s: cancelled (main)" % gid)
+    text = "group %s cancelled by the user (%s); cancelled tickets: %s" % (gid, why, ", ".join(done) or "none")
+    pool.report("cancelled", gid, text)
+    print(text)
     return 0
 
 
@@ -214,6 +246,8 @@ def main(argv=None):
             return 0
         if args.cmd == "ready" and re.fullmatch(r"g\d+", args.id):
             return cmd_ready_group(pool, cfg, args.id, args.why)
+        if args.cmd == "cancel" and re.fullmatch(r"g\d+", args.id):
+            return cmd_cancel_group(pool, args.id, args.why)
         if args.cmd == "release":
             return cmd_release(pool, cfg, args)
         return {"list": cmd_list, "show": cmd_show, "inbox": cmd_inbox, "ack": cmd_ack, "lessons": cmd_lessons,
