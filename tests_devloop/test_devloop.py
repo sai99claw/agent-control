@@ -2686,3 +2686,35 @@ class T13Acceptance(LoopCase):
         with open(os.path.join(HOME, "devloop", "tickets.py")) as fh:
             doc = fh.read().split('"""')[1]
         self.assertIn("tickets.py ready g", doc)
+
+
+class T18Acceptance(unittest.TestCase):
+    """#18: agent-control's memory/ is its consolidated memory, named by its config."""
+
+    TRACKED = ("memory/role/consolidator.md", "memory/role/creator.md", "memory/role/fixer.md",
+               "memory/role/reviewer.md", "memory/role/verifier.md", "memory/role/worker.md",
+               "memory/model/fable.md", "memory/model/opus.md", "memory/model/sonnet.md",
+               "memory/project.md")
+
+    def tracked(self):
+        res = subprocess.run(["git", "-C", HOME, "ls-files", "memory"], capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        return res.stdout.splitlines()
+
+    def test_config_names_memory(self):
+        with open(os.path.join(HOME, "board", "config.json")) as fh:
+            devloop = json.load(fh)["devloop"]
+        self.assertIn("memory", devloop)
+        self.assertEqual(devloop["memory"], "memory")
+
+    def test_consolidated_files_are_tracked(self):
+        files = self.tracked()
+        missing = [p for p in self.TRACKED if p not in files]
+        self.assertEqual(missing, [], "not tracked under memory/")
+
+    def test_old_cards_are_not_tracked(self):
+        files = self.tracked()
+        bad = [p for p in files
+               if os.path.basename(p) == "README.md" or p.endswith(".inbox.md")
+               or p in ("memory/role/implementer.md", "memory/role/opener.md")]
+        self.assertEqual(bad, [], "old cards still tracked under memory/")
