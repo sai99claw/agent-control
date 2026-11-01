@@ -240,3 +240,12 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
 - 答案在 D-086。A 的改動 8 張票(#3–#10)一輪落地,main = dfc0e96,花費約 8.7 美元(3 張 complex 有覆核)。發版一樣卡在雲端推不了 tag。
 - **還沒解的流程缺口**:`docs/DECISIONS.md` 與 `docs/HANDOFF.md` 是主線寫的(DECISIONS 在 hard_block 裡,票不能改),但 main 只由
   controller 前進——所以主線的文件沒有路進 main,現在只在 `claude/repo-access-check-s7faow` 分支上。要使用者裁示怎麼進 main。
+
+## 2026-11-01 T 第一輪回報的 4 個 A 問題
+
+- 走 devloop 修好(#11–#14,g3),main = 0826f0e,約 3.8 美元:worker 被停掉時,開題者已交的改票結果由 issuer 在下一輪前補寫進票庫;
+  開題者 prompt 禁止要 worker / 驗證者跑全套,並帶上 agent 時限與最近一次全套秒數;`actl tickets ready g<N>` 讓卡住的組回去等
+  regression(修補輪數歸零、記一次使用者介入);doctor 的失效 hook 改成叫人手動刪。
+- T 那邊:使用者讓 T 主線「直接改」完成接上 devloop 的收尾(測試介面、main 上兩條舊紅、退掉舊迴圈),做完才走 devloop。
+  T 的 g1 卡住,A 更新後可以用 `actl tickets ready g1`,或照 T 的收尾取消 #1–#4。
+- 發版在雲端依舊推不了 tag(每組一頁 decision,已 ack)。
