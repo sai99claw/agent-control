@@ -724,6 +724,61 @@ class ApplyUnapplied(LoopCase):
         self.assertEqual(ev[0]["run"], name)
 
 
+class T11Acceptance(LoopCase):
+    """Ticket #11: a revision the opener finished reaches the pool even when the worker is stopped."""
+
+    def runs_dir(self):
+        return os.path.join(self.tmp, "wt", "runs", "1")
+
+    def revise_dirs(self):
+        return [d for d in os.listdir(self.runs_dir()) if d.startswith("revise-")]
+
+    def test_v1_a_revision_left_by_a_stopped_worker_is_applied_before_round_two(self):
+        """Items 1-3: one run with a worker that overruns its timeout while the opener hands in."""
+        self.config(agent_timeout_seconds=5)
+        self.add(1)
+        self.plan(worker={"1": ["revise_overrun", "ok"]}, creator={"1": ["revised_hold"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        # item 1
+        prompt = os.path.join(self.runs_dir(), "r2-worker", "prompt.md")
+        self.assertTrue(os.path.exists(prompt), "no round-2 worker prompt")
+        with open(prompt) as fh:
+            self.assertIn("a possible thing", fh.read())
+        # item 2
+        t = self.snap().ticket("1")
+        names = [h.get("event") for h in t["history"]]
+        self.assertEqual(names.count("revised"), 1, names)
+        starts = [i for i, n in enumerate(names) if n == "round start"]
+        self.assertGreaterEqual(len(starts), 2, names)
+        self.assertLess(names.index("revised"), starts[1], names)
+        revised = t["history"][names.index("revised")]
+        self.assertEqual(revised.get("applied_by"), "issuer", revised)
+        dirs = self.revise_dirs()
+        self.assertEqual(len(dirs), 1, dirs)
+        self.assertEqual(revised.get("run"), dirs[0], revised)
+        # item 3
+        self.assertTrue(os.path.isdir(os.path.join(self.runs_dir(), "r2-verifier")),
+                        "round 2 did not start the verifier again")
+        self.assertEqual(t["state"], "landed")
+        self.assertEqual(t["acceptance"], ["a possible thing"])
+
+    def test_v2_a_revision_on_the_normal_path_records_its_run(self):
+        """Item 4: the worker waits for the opener; the event names its run and no applied_by."""
+        self.add(1)
+        self.plan(worker={"1": ["revise", "ok"]}, creator={"1": ["revised"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        t = self.snap().ticket("1")
+        self.assertEqual(t["state"], "landed")
+        events = [h for h in t["history"] if h.get("event") == "revised"]
+        self.assertEqual(len(events), 1, t["history"])
+        dirs = self.revise_dirs()
+        self.assertEqual(len(dirs), 1, dirs)
+        self.assertEqual(events[0].get("run"), dirs[0], events[0])
+        self.assertNotIn("applied_by", events[0])
+
+
 class ReleaseRerun(LoopCase):
     """tickets.py release: refusals, the timeout, the shared function and the docs (#9)."""
     release = "exit 7"
