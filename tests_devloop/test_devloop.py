@@ -1344,6 +1344,76 @@ class T23Acceptance(LoopCase):
         self.assertEqual(self.pool_memory(self.WORKER_MD), before_md)
 
 
+class T28Acceptance(LoopCase):
+    """#28: auto_fixer fixes by the tickets as they are, lists the cases it aligned, and hands a
+    contradiction to the user as a decision page."""
+
+    DECISION_TEXT = "#1 and #2 contradict on impl output; open a new ticket that picks one"
+
+    def setUp(self):
+        super().setUp()
+        # the fake agent keys its plan on DEVLOOP_TICKET first: the suite's own must not leak in
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def run_cases(self):
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["cases"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+
+    def test_item2_done_with_cases_changed_is_recorded_and_lands(self):
+        self.run_cases()
+        self.assertEqual(self.state(1), "landed")
+        g = self.snap().groups["g1"]
+        self.assertIn("cases_changed", g, g)
+        self.assertEqual(g["cases_changed"],
+                         [{"ticket": "1", "case": "case_1", "acceptance": "a", "round": 1}])
+
+    def test_item3_decision_stops_the_group_with_one_page(self):
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["decision"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        g = self.snap().groups["g1"]
+        self.assertEqual(g["state"], "stuck", g)
+        self.assertEqual(g["fix_round"], 1, g)
+        with open(os.path.join(self.tmp, "plan", "count-fixer-g1")) as fh:
+            self.assertEqual(fh.read().strip(), "1", "the fixer ran more than once")
+        pages = [row for row in self.snap().inbox.values() if row["kind"] == "decision"]
+        self.assertEqual(len(pages), 1, pages)
+        self.assertEqual(pages[0]["ref"], "g1", pages)
+        self.assertFalse(pages[0].get("acked"), pages)
+        self.assertIn(self.DECISION_TEXT, pages[0]["text"], pages)
+        self.assertEqual(self.state(1), "merged")
+
+    def test_item1_fixer_prompt(self):
+        self.run_cases()
+        path = os.path.join(self.tmp, "wt", "runs", "fix", "g1", "r1", "prompt.md")
+        self.assertTrue(os.path.exists(path), "no fixer prompt at %s" % path)
+        with open(path, encoding="utf-8") as fh:
+            prompt = fh.read()
+        for w in ("--revise", "ticket_creator"):
+            self.assertNotIn(w, prompt)
+        for w in ("T1Acceptance", "cases_changed", '"kind": "decision"', "looser"):
+            self.assertIn(w, prompt)
+
+    def test_item4_readme_roles_rows(self):
+        # rows parsed as T19Acceptance.role_rows does
+        with open(os.path.join(HOME, "devloop", "README.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("\n## Roles\n", text)
+        sec = text.split("\n## Roles\n", 1)[1].split("\n## ", 1)[0]
+        lines = [l for l in sec.splitlines() if l.strip().startswith("|")]
+        self.assertGreaterEqual(len(lines), 3, "the Roles section has no table")
+        by_name = {[c.strip() for c in r.strip().strip("|").split("|")][0]: r for r in lines[2:]}
+        self.assertIn("`fixer`", by_name)
+        self.assertIn("`creator`", by_name)
+        self.assertIn("cases_changed", by_name["`fixer`"])
+        self.assertIn("decision", by_name["`fixer`"])
+        self.assertNotIn("fixer", by_name["`creator`"])
+
+
 class WebInput(LoopCase):
     def stuck(self, ident):
         self.add(ident)
