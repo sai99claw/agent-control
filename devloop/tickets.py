@@ -207,7 +207,7 @@ def main(argv=None):
         if args.cmd == "init":
             pool.init()
             models = sorted({agents.model_of(c) for r in cfg.agents for c in cfg.agent_chain(r)})
-            memory.seed(cfg, pool, models, cfg.home)
+            memory.seed(cfg, pool, models)
             print("pool ready at %s" % pool.path)
             return 0
         if args.cmd == "ready" and re.fullmatch(r"g\d+", args.id):
