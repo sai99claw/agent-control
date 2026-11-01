@@ -29,7 +29,7 @@ from core import dag as dagmod  # noqa: E402
 from core import osx, release  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
-from core.pool import event  # noqa: E402
+from core.pool import event, shown_state  # noqa: E402
 
 
 def cmd_list(pool, args):
@@ -39,7 +39,7 @@ def cmd_list(pool, args):
         if not t or (not args.all and t.get("state") in ("landed", "cancelled")):
             continue
         extra = t.get("stuck", {}).get("reason") if t.get("state") == "stuck" else (t.get("target") or "")
-        print("#%-5s %-9s r%-2s %-12s %s" % (ident, t.get("state"), t.get("round", 0), extra or "",
+        print("#%-5s %-9s r%-2s %-12s %s" % (ident, shown_state(t.get("state")), t.get("round", 0), extra or "",
                                              t.get("title", "")))
     for g in sorted(snap.groups.values(), key=lambda g: int(g["id"][1:])):
         if args.all or g.get("state") not in ("landed", "cancelled"):
@@ -51,7 +51,7 @@ def cmd_list(pool, args):
 def cmd_show(pool, args):
     snap = pool.snapshot()
     t = snap.ticket(args.id)
-    print(json.dumps({"ticket": t, "dag": snap.dag.get(args.id)}, indent=2, ensure_ascii=False))
+    print(json.dumps({"state_text": shown_state(t.get("state")), "ticket": t, "dag": snap.dag.get(args.id)}, indent=2, ensure_ascii=False))
     return 0
 
 

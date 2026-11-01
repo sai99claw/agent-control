@@ -27,7 +27,7 @@ group complete (= one PR, a local mark) -> regression.py (preflight + full suite
 | `python3 devloop/ticket_creator.py --request "..."` | the user wants something |
 | `python3 devloop/ticket_controller.py` | run until nothing is left (`--forever` keeps watching) |
 | `python3 devloop/tickets.py inbox` / `ack` | pages: created, landed, decision, env, cancelled |
-| `python3 devloop/tickets.py list` / `show N` | state of tickets and groups |
+| `python3 devloop/tickets.py list` / `show N` | state of tickets and groups; a merged ticket shows as 功能完成 and a landed one as 驗證完成, while the pool keeps merged / landed |
 | `python3 devloop/tickets.py ready N` | after deciding on a stuck ticket |
 | `python3 devloop/tickets.py ready gN` | a stuck group whose branch and merged tickets are still there: verify it again (fix rounds back to 0) |
 | `python3 devloop/tickets.py cancel N --why ...` | drop a ticket |

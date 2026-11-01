@@ -19,7 +19,7 @@ sys.path.insert(0, LOOP)
 
 from core import dag as dagmod  # noqa: E402
 from core import osx  # noqa: E402
-from core.pool import Pool  # noqa: E402
+from core.pool import Pool, shown_state, TICKET_STATES  # noqa: E402
 
 AGENT = ["python3", os.path.join(HERE, "fake_agent.py")]
 ROLES = ("creator", "worker", "worker_simple", "verifier", "reviewer", "fixer", "consolidator",
@@ -2957,6 +2957,18 @@ class PoolRules(unittest.TestCase):
     def test_a_write_counts_only_once_pushed(self):
         self.a.update(lambda tx: tx.write("tickets/5.json", {"id": "5"}), "a")
         self.assertIn("5", self.b.snapshot().tickets)
+
+
+class ShownState(unittest.TestCase):
+    def test_merged_and_landed_have_labels_others_pass_through(self):
+        self.assertEqual(shown_state("merged"), "功能完成")
+        self.assertEqual(shown_state("landed"), "驗證完成")
+        self.assertEqual(shown_state("ready"), "ready")
+        self.assertIsNone(shown_state(None))
+        for st in ("ready", "running", "stuck", "cancelled"):
+            self.assertEqual(shown_state(st), st)
+        self.assertIn("merged", TICKET_STATES)
+        self.assertIn("landed", TICKET_STATES)
 
 
 class GitRules(unittest.TestCase):
