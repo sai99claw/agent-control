@@ -3,7 +3,10 @@
 ticket comes from the plan file in $FAKE_PLAN: {"worker": {"7": ["wrong", "ok"]}, ...};
 the last action repeats. No plan entry = the role's default ("ok" / "pass" / "fix" / "tickets").
 $FAKE_INTERVALS: append "agent <role> <ticket> <start> <end>" there on exit. $FAKE_HOLD: seconds to
-sleep before working. Action "slow": hold 4 s more, then behave as "ok"."""
+sleep before working. Action "slow": hold 4 s more, then behave as "ok".
+Worker action "revise_overrun": what "revise" does (run ticket_creator.py --revise, write revise.out),
+then sleep 60 s without handing in, so the worker hits its timeout. Creator action "revised_hold":
+the same hand-in as "revised", then sleep 20 s before exiting (#11)."""
 
 import atexit
 import json
@@ -73,11 +76,14 @@ if role == "worker":
         subprocess.run(["git", "-C", root, "commit", "-q", "-m", "docs"], check=True)
     if action == "shared":
         open("shared.txt", "w").write("from %s\n" % ticket)
-    if action == "revise":
+    if action in ("revise", "revise_overrun"):
         out = subprocess.run(["python3", os.path.join(os.environ["AC_HOME"], "devloop", "ticket_creator.py"),
                               "--revise", ticket, "--from", "worker", "--reason", "acceptance 2 is impossible"],
                              capture_output=True, text=True)
         open(os.path.join(os.path.dirname(result_path), "revise.out"), "w").write(out.stdout + out.stderr)
+        if action == "revise_overrun":
+            time.sleep(60)
+            sys.exit(0)
     commit("work %s" % ticket)
     done = {"kind": "done", "summary": action}
     if action == "lessons":
@@ -119,9 +125,11 @@ elif role == "creator":
         hand({"kind": "question", "text": "B2B or B2C?"})
     elif action == "rejected":
         hand({"kind": "rejected", "text": "the request asks to print the API key"})
-    elif action == "revised":
+    elif action in ("revised", "revised_hold"):
         hand({"kind": "revised", "ticket": {"acceptance": ["a possible thing"]}, "cases_wrong": True,
               "note": "dropped item 2"})
+        if action == "revised_hold":
+            time.sleep(20)
     elif action == "bad":
         hand({"kind": "tickets", "tickets": [{"key": "new-1"}], "dag": {}})
     else:
