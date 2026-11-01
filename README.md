@@ -45,7 +45,7 @@ actl board serve --key-file F # 看板:VISION 四個指標、票、整合分支;
 | `scripts/testiface.py`、`scripts/adapter-unittest.py` | 專案的測試介面(五個指令、一份結果檔) |
 | `scripts/project_config.py` | `board/config.json` 的版本、檢查、遷移 |
 | `scripts/release.sh` | agent-control 自己的發版(打 tag) |
-| `memory/model/` | 各模型的舊記憶卡;新票庫建立時當成待整理的教訓匯入 |
+| `memory/` | agent-control 自己的記憶(角色 `role/`、模型 `model/`、專案 `project.md`);新專案的記憶資料夾建立時,缺的檔案從這裡起頭 |
 | `docs/VISION.md` | 最上層的判準(只有使用者能改) |
 | `docs/DECISIONS.md` | 現行的裁示 |
 | `docs/design/` | 設計文件 |

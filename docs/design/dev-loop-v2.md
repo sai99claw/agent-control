@@ -43,8 +43,8 @@ No script polls another; each records its outcome in the pool and exits.
 - **Ticket states**: ready → running → merged → landed; stuck (reason: rounds, timeout, decision,
   hard_block, env, error); cancelled.
 - **Group states**: open → pr → (fixing) → verified → landed; stuck.
-- **Memory** (also in the pool): `memory/role|model/<name>.md`, `memory/project.md`; lessons from
-  hand-ins wait in `memory/inbox/`; one consolidation at a time (5 lessons or 3 days, once per 24 h).
+- **Memory** (D-088; the folder is the project setting `devloop.memory`, default `memory/` in the pool; see `devloop.memory` in the README): `memory/role|model/<name>.md`, `memory/project.md`; lessons from
+  hand-ins wait in the pool's `memory/inbox/`; one consolidation at a time (5 lessons or 3 days, once per 24 h).
 - **DAG** (`dag.json`): `depends_on`, `verify` = `together` (default) or `alone` (+ `why_alone`,
   only for a systemic change).
 

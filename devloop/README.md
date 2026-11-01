@@ -45,7 +45,8 @@ Run them from the project (or set `AC_ROOT` to it).
 `pool` (default `<agent-control>/pools/<project>`), `max_parallel` 2, `max_rounds` 3,
 `issuer_timeout_seconds` 10800, `agent_timeout_seconds` 3600, `main_branch` "main",
 `remote` "origin" (null = do not push), `worktrees` (default `../<project>-devloop`),
-`agents.<role>` (the command that starts an agent; prompt on stdin).
+`agents.<role>` (the command that starts an agent; prompt on stdin),
+`memory` (D-088: the folder of the memory files; default `<pool>/memory`, a relative path is against the project root; see Memory).
 Tests run through the project's existing test interface (`tests.preflight`, `tests.run`, `tests.full`; `scripts/testiface.py`).
 `hard_block.paths` / `patterns`: a ticket that touches them stops before merging.
 
@@ -76,6 +77,22 @@ like a slot wait. The whole wait counts against `regression_timeout_seconds` ("u
 machine is not free in time), and a regression that dies leaves nothing locked. Nested runs
 (`DEVLOOP_SLOT` set) do not touch the mark.
 
+## Roles
+
+Every role is an agent started by a script with a prompt on stdin; it hands in one JSON file.
+Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per project in `agents.<role>`).
+
+| Role | Started by, and when | Default models | Writes |
+|---|---|---|---|
+| `creator` | `ticket_creator.py`: for the main session's request, or for a worker or fixer that runs `--revise` | opus xhigh | hand-in `tickets` (tickets and DAG entries), `revised` / `unchanged` (a ticket revision), `question` or `rejected` |
+| `worker` | `ticket_issuer.py`, for each ticket round (complex tickets) | opus medium | code and unit tests committed on the ticket branch; hand-in `done` or `blocked` |
+| `worker_simple` | `ticket_issuer.py`, instead of `worker` when the ticket has `complexity: simple` | sonnet medium | the same as `worker` |
+| `verifier` | `ticket_issuer.py`, before the worker, for tickets that need one | opus medium | the acceptance cases (marked as described below) on the branch `t/<id>-cases`; hand-in `cases` |
+| `reviewer` | `ticket_issuer.py`, after the worker, for complex tickets | opus medium | hand-in `review` (verdict pass or fail, feedback); edits nothing |
+| `fixer` | `auto_fixer.py`, when the regression on an integration branch is red | opus medium | the fix committed on the integration branch; hand-in `done` or `blocked` |
+| `consolidator` | `memory_keeper.py`, started by `ticket_controller.py` in `consolidate()` when a memory file has 5 lessons waiting, or its oldest lesson is 3 days old, at most once per 24 h per file | fable medium, then opus medium | hand-in `memory`: the new text of one memory file and the lessons it dropped; `memory_keeper.py` writes the file |
+| `consolidator_peer` | `memory_keeper.py`, only when `unlimited_tokens` is on, to review the consolidator's draft | opus medium | hand-in `review` (agree or change, notes) kept in `memory/discussions/` |
+
 ## Agents, models and tests (D-084)
 
 - `agents.<role>` is one command or a chain of commands; the next one is tried when a command is
@@ -105,20 +122,27 @@ machine is not free in time), and a regression that dies leaves nothing locked. 
   dollars, session id, outcome; a stopped run's tokens are read from the CLI transcript; a landed
   ticket gets `cost_total`. Unknown stays unknown.
 - `unlimited_tokens: true`: memory consolidation becomes a two-model discussion (draft, review by
-  `consolidator_peer`, one more draft if asked), kept in the pool under `memory/discussions/`.
+  `consolidator_peer`, one more draft if asked), kept in the pool under `memory/discussions/` (not in the memory folder).
 
 ## Memory
 
-Layered as before (D-013): `memory/role/<role>.md`, `memory/model/<model>.md`, `memory/project.md`,
-kept **in the pool** next to the tickets. Agents start with their role and model memory in the
-prompt (project memory by path). They never edit memory; a hand-in may carry
-`"lessons": [{"layer", "text"}]`, which the scripts put in `memory/inbox/`. The controller starts
-`memory_keeper.py` for one file at a time once 5 lessons wait (or the oldest waited 3 days, at
-most once per 24 h per file); a consolidator agent rewrites the file. What belongs in which layer
-is written once, in `prompts/consolidator.md`. `tickets.py init` seeds the files with headings
-only; agent-control's cards from before devloop (`memory/model/`, `memory/role/`) are queued as
-lessons for the consolidator, never copied in. A project's own older memory is imported the same way with
-`tickets.py lessons --layer L --name N --file F` (every bullet line of F becomes a waiting lesson).
+Layered as before (D-013): `memory/role/<role>.md`, `memory/model/<model>.md`, `memory/project.md`.
+Where they live is the project setting `devloop.memory` (D-088): null (default) is `memory/` in the
+pool; a folder (relative = against the project root) puts the files there, so a project can keep its
+memory in its own repository. In a git checkout `memory_keeper.py` writes a consolidated file as one
+commit on the checked-out branch, fast-forwarded and pushed to the remote when there is one; a failed
+push is a decision page. The working state stays in the pool: `memory/inbox/` (waiting lessons),
+`memory/state.json` (last consolidation, runs and tokens) and `memory/discussions/`.
+Agents start with their role and model memory in the prompt (project memory by path). They never
+edit memory; a hand-in may carry `"lessons": [{"layer", "text"}]`, which the scripts put in
+`memory/inbox/`. The controller starts `memory_keeper.py` for one file at a time once 5 lessons wait
+(or the oldest waited 3 days, at most once per 24 h per file); the consolidator agent rewrites the file. What
+belongs in which layer is written once, in `prompts/consolidator.md`. `tickets.py init` seeds the
+folder with the files it lacks, never overwriting: a role or model file starts as agent-control's memory/
+file of that name when it has one, else with a heading only; `project.md` starts with its heading. So a
+new project starts from agent-control's memory/ and grows its own. A project's own older memory is
+imported with `tickets.py lessons --layer L --name N --file F` (every bullet line of F becomes a
+waiting lesson).
 
 ## Dashboard
 
@@ -138,7 +162,7 @@ behind the injection check in `prompts/web-guard.md`; an opener that finds an in
 Rules every agent must follow live in the project's CLAUDE.md, section "Rules for every agent"
 (loaded because agents run as `claude -p` in a worktree of the project), and in AGENTS.md for codex.
 The consolidator runs in the pool, not in the project, so it does not load them. Project memory
-(`memory/project.md` in the pool) is for design reasons and invariants, not hard rules: agents get
+(`project.md` in the memory folder) is for design reasons and invariants, not hard rules: agents get
 it only as a path and read it when their work touches it. So a rule that must never be broken goes
 in CLAUDE.md / AGENTS.md, and a file that must never change goes in `hard_block.paths`.
 
