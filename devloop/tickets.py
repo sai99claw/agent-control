@@ -5,6 +5,7 @@
     python3 devloop/tickets.py list [--all]         # tickets and groups, open ones by default
     python3 devloop/tickets.py show 203
     python3 devloop/tickets.py ready 203            # after you decided on a stuck ticket: try again
+    python3 devloop/tickets.py ready g7             # a stuck group: verify it again (merged tickets kept)
     python3 devloop/tickets.py cancel 203 --why "no longer needed"
     python3 devloop/tickets.py inbox [--all]        # pages for the main session
     python3 devloop/tickets.py ack <page>|--all
@@ -17,6 +18,7 @@ Opening tickets is ticket_creator.py; moving them is ticket_controller.py.
 import argparse
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -24,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core import agents, memory  # noqa: E402
 from core import dag as dagmod  # noqa: E402
 from core import osx, release  # noqa: E402
+from core.gitx import Git  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.pool import event  # noqa: E402
 
@@ -67,6 +70,28 @@ def _set(pool, ident, state, why):
         tx.put_ticket(t)
     pool.update(change, "#%s: %s (main)" % (ident, state))
     print("#%s is %s" % (ident, state))
+    return 0
+
+
+def cmd_ready_group(pool, cfg, gid, why):
+    """Send a stuck group (branch kept, at least one merged member) back to the regression.
+    Only the group is written; its tickets stay as they are."""
+    def change(tx):
+        g = tx.data.groups.get(gid)
+        if not g:
+            raise osx.OSFailure("no group %s" % gid)
+        if g.get("state") != "stuck":
+            raise osx.OSFailure("group %s is %s, not stuck; only a stuck group goes back to the regression"
+                                % (gid, g.get("state")))
+        if not any(tx.data.tickets.get(m, {}).get("state") == "merged" for m in g.get("members") or []):
+            raise osx.OSFailure("group %s has no merged ticket; ready its tickets one by one instead" % gid)
+        if not Git(cfg.root).sha("refs/heads/" + g["branch"]):
+            raise osx.OSFailure("group %s: its integration branch %s no longer exists" % (gid, g["branch"]))
+        g["state"], g["fix_round"], g["job"] = "pr", 0, None
+        event(g, "ready again by the user", by="user", why=why)
+        tx.put_group(g)
+    pool.update(change, "group %s: ready again (main)" % gid)
+    print("group %s goes back to the regression (fix rounds reset to 0)" % gid)
     return 0
 
 
@@ -185,6 +210,8 @@ def main(argv=None):
             pool.update(lambda tx: memory.seed(tx, models, cfg.home), "memory: seed")
             print("pool ready at %s" % pool.path)
             return 0
+        if args.cmd == "ready" and re.fullmatch(r"g\d+", args.id):
+            return cmd_ready_group(pool, cfg, args.id, args.why)
         if args.cmd == "release":
             return cmd_release(pool, cfg, args)
         return {"list": cmd_list, "show": cmd_show, "inbox": cmd_inbox, "ack": cmd_ack, "lessons": cmd_lessons,

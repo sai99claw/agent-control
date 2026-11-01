@@ -29,6 +29,7 @@ group complete (= one PR, a local mark) -> regression.py (preflight + full suite
 | `python3 devloop/tickets.py inbox` / `ack` | pages: created, landed, decision, env |
 | `python3 devloop/tickets.py list` / `show N` | state of tickets and groups |
 | `python3 devloop/tickets.py ready N` | after deciding on a stuck ticket |
+| `python3 devloop/tickets.py ready gN` | a stuck group whose branch and merged tickets are still there: verify it again (fix rounds back to 0) |
 | `python3 devloop/tickets.py cancel N --why ...` | drop a ticket |
 | `python3 devloop/tickets.py release gN [--again]` | re-run a landed group's failed release once (`--again` also when it was ok); the outcome is a page |
 | `python3 devloop/board.py serve [--port 8765] [--key-file F]` | the dashboard (or `board.py html --out F`) |
