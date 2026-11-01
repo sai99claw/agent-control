@@ -41,7 +41,7 @@ def cmd_list(pool, args):
         print("#%-5s %-9s r%-2s %-12s %s" % (ident, t.get("state"), t.get("round", 0), extra or "",
                                              t.get("title", "")))
     for g in sorted(snap.groups.values(), key=lambda g: int(g["id"][1:])):
-        if args.all or g.get("state") != "landed":
+        if args.all or g.get("state") not in ("landed", "cancelled"):
             print("%-6s %-9s %-10s fix %s  #%s" % (g["id"], g.get("state"), g.get("branch"),
                                                    g.get("fix_round", 0), " #".join(g.get("members") or [])))
     return 0

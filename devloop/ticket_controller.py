@@ -130,6 +130,9 @@ class Controller:
     def advance_groups(self, snap):
         for g in sorted(snap.groups.values(), key=lambda x: int(x["id"][1:])):
             state = g.get("state")
+            if state not in ("landed", "cancelled") and not g.get("job") and self.all_cancelled(snap, g):
+                self.set_group(g["id"], "cancelled", "all tickets cancelled: group closed")
+                continue
             if state == "open":
                 members = [snap.tickets.get(i) or {} for i in g.get("members") or []]
                 states = [m.get("state") for m in members]
@@ -146,6 +149,11 @@ class Controller:
                 self.start_regression(g)
             elif state == "verified":
                 self.land(g)
+
+    @staticmethod
+    def all_cancelled(snap, g):
+        members = g.get("members") or []
+        return bool(members) and all((snap.tickets.get(i) or {}).get("state") == "cancelled" for i in members)
 
     def set_group(self, gid, state, why, **fields):
         def change(tx):
@@ -213,6 +221,9 @@ class Controller:
 
     def land(self, g):
         gid, sha, main = g["id"], g.get("verified_sha"), self.cfg.main_branch
+        if self.all_cancelled(self.pool.snapshot(), g):
+            self.set_group(gid, "cancelled", "all tickets cancelled: group closed")
+            return
         old = self.repo.sha(main)
         if self.repo.sha(g["branch"]) != sha:
             self.set_group(gid, "pr", "branch moved after verification: verify again")

@@ -2799,6 +2799,21 @@ class T13Acceptance(LoopCase):
         self.assertIn("tickets.py ready g", doc)
 
 
+class AllCancelledHelper(unittest.TestCase):
+    """Controller.all_cancelled: true only for a non-empty group of cancelled members."""
+
+    def test_all_cancelled(self):
+        import ticket_controller
+        from types import SimpleNamespace
+        snap = SimpleNamespace(tickets={"1": {"state": "cancelled"}, "2": {"state": "cancelled"},
+                                        "3": {"state": "stuck"}})
+        f = ticket_controller.Controller.all_cancelled
+        self.assertTrue(f(snap, {"members": ["1", "2"]}))
+        self.assertFalse(f(snap, {"members": ["1", "3"]}))
+        self.assertFalse(f(snap, {"members": []}))
+        self.assertFalse(f(snap, {"members": ["9"]}))
+
+
 class T18Acceptance(unittest.TestCase):
     """#18: agent-control's memory/ is its consolidated memory, named by its config."""
 

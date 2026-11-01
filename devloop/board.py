@@ -38,7 +38,7 @@ UNKNOWN = "未知"
 STATE_TEXT = {"ready": "待派", "running": "做中", "merged": "已合進整合分支", "landed": "已落地",
               "stuck": "卡住", "cancelled": "取消"}
 GROUP_TEXT = {"open": "收票中", "pr": "PR(待驗)", "fixing": "修紅中", "verified": "已驗,待落地",
-              "landed": "已落地", "stuck": "卡住"}
+              "landed": "已落地", "stuck": "卡住", "cancelled": "取消"}
 REASON_TEXT = {"rounds": "3 輪用完", "timeout": "超時", "decision": "要你決定", "hard_block": "碰到 hard_block",
                "env": "環境", "error": "程式錯誤", "target": "整合分支不見"}
 
