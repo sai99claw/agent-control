@@ -2404,6 +2404,73 @@ class Board(LoopCase):
             self.assertIn("四個指標", resp.read().decode("utf-8"))
 
 
+class T26Acceptance(LoopCase):
+    """Ticket #26: a merged ticket reads 功能完成 and a landed one 驗證完成 on the board and in
+    tickets.py list/show, while the pool keeps the names merged / landed (ruling D-089 item 1)."""
+
+    def setUp(self):
+        super().setUp()
+        self.add(1)
+        self.add(2)
+        self.add(3)
+
+        def change(tx):
+            for ident, state in (("1", "merged"), ("2", "landed")):
+                t = tx.ticket(ident)
+                t["state"] = state
+                tx.put_ticket(t)
+        self.pool.update(change, "test: #1 merged, #2 landed")
+
+    def line_of(self, out, ident):
+        for line in out.splitlines():
+            fields = line.split()
+            if fields and fields[0] == "#%s" % ident:
+                return fields
+        self.fail("no line for #%s in:\n%s" % (ident, out))
+
+    def show(self, ident):
+        res = self.run_py("tickets.py", "show", str(ident))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        return json.loads(res.stdout)
+
+    def test_item1_board_state_cells(self):
+        res = self.run_py("board.py", "html")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        page = res.stdout
+        self.assertIn("<td>#1</td><td>功能完成</td>", page)
+        self.assertIn("<td>#2</td><td>驗證完成</td>", page)
+        self.assertNotIn("已合進整合分支", page)
+
+    def test_item2_list_state_column(self):
+        res = self.run_py("tickets.py", "list")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.line_of(res.stdout, 1)[1], "功能完成")
+        res = self.run_py("tickets.py", "list", "--all")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.line_of(res.stdout, 2)[1], "驗證完成")
+
+    def test_item3_show_state_text(self):
+        for ident, text, stored in (("1", "功能完成", "merged"), ("2", "驗證完成", "landed"),
+                                    ("3", "ready", "ready")):
+            out = self.show(ident)
+            self.assertIn("state_text", out, "show %s has a top-level state_text" % ident)
+            self.assertEqual(out["state_text"], text, "show %s" % ident)
+            self.assertEqual(out["ticket"]["state"], stored, "show %s keeps the stored state" % ident)
+
+    def test_item4_readme_list_show_row(self):
+        with open(os.path.join(HOME, "devloop", "README.md")) as fh:
+            readme = fh.read()
+        section = readme.split("## What the main session runs", 1)[1].split("\n## ", 1)[0]
+        rows = [line for line in section.splitlines() if "`python3 devloop/tickets.py list`" in line]
+        self.assertEqual(len(rows), 1, "one list / show N row in 'What the main session runs'")
+        row = rows[0]
+        self.assertIn("show N", row)
+        self.assertIn("功能完成", row)
+        self.assertIn("驗證完成", row)
+        self.assertIn("merged", row)
+        self.assertIn("landed", row)
+
+
 class T15Acceptance(LoopCase):
     """Ticket #15: memory files live in the folder devloop.memory names."""
 
