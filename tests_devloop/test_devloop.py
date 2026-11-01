@@ -1603,7 +1603,7 @@ class T27Acceptance(LoopCase):
         from core.config import Config
         self.frozen("merged")
         page = board.render(Config(self.proj), self.snap(), key="k")
-        self.assertIn("p1", page, "the page is listed")
+        self.assertIn("decision · 1 · ", page, "the page is listed by its header")
         self.assertNotIn("不改,再試一次", page)
 
     # acceptance 6
