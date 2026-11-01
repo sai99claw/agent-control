@@ -1764,3 +1764,98 @@ class LastFullSecondsUnit(unittest.TestCase):
         text = ticket_creator.limits_section(cfg)
         self.assertIn("limited to 75 seconds", text)
         self.assertIn("took 30 seconds.", text)
+
+
+class T13Acceptance(LoopCase):
+    """tickets.py ready g<N>: a stuck group goes back to the regression (#13)."""
+
+    def setUp(self):
+        super().setUp()
+        # when this suite runs under a devloop agent, its DEVLOOP_TICKET must not reach the fake
+        # fixer: the fake agent keys its plan on DEVLOOP_TICKET before DEVLOOP_GROUP
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def make_stuck(self):
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["blocked", "fix"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["state"], "stuck")
+        self.assertEqual(self.state(1), "merged")
+
+    def test_ready_group_goes_back_to_pr_and_lands(self):
+        self.make_stuck()
+        before = self.snap().ticket("1")
+        res = self.run_py("tickets.py", "ready", "g1", "--why", "main is fixed")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        g = self.snap().groups["g1"]
+        self.assertEqual(g["state"], "pr")
+        self.assertEqual(g["fix_round"], 0)
+        self.assertIsNone(g["job"])
+        last = g["history"][-1]
+        self.assertEqual(last.get("event"), "ready again by the user", last)
+        self.assertEqual(last.get("by"), "user", last)
+        self.assertEqual(last.get("why"), "main is fixed", last)
+        self.assertEqual(self.snap().ticket("1"), before)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["state"], "landed")
+        self.assertFalse(self.main_has("red.txt"))
+
+    def test_actl_tickets_ready_group(self):
+        self.make_stuck()
+        res = subprocess.run([os.path.join(HOME, "bin", "actl"), "tickets", "ready", "g1"], cwd=self.proj,
+                             env=self.env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        g = self.snap().groups["g1"]
+        self.assertEqual(g["state"], "pr")
+        self.assertEqual(g["fix_round"], 0)
+
+    def put_group(self, state, ticket_state="merged", branch=True):
+        self.add(1)
+
+        def change(tx):
+            t = tx.ticket("1")
+            t.update(state=ticket_state, group="g1")
+            tx.put_ticket(t)
+            tx.put_group({"id": "g1", "branch": "int/g1", "state": state, "members": ["1"],
+                          "fix_round": 1, "job": None, "history": []})
+        self.pool.update(change, "test: group g1")
+        if branch:
+            git(self.proj, "branch", "int/g1", "main")
+
+    def refused(self, gid, text):
+        before = self.snap().groups.get(gid)
+        res = self.run_py("tickets.py", "ready", gid)
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertTrue(any(text in ln for ln in res.stderr.splitlines()), res.stderr)
+        self.assertEqual(self.snap().groups.get(gid), before)
+
+    def test_refuses_pr_group(self):
+        self.put_group("pr")
+        self.refused("g1", "not stuck")
+
+    def test_refuses_landed_group(self):
+        self.put_group("landed")
+        self.refused("g1", "not stuck")
+
+    def test_refuses_missing_branch(self):
+        self.put_group("stuck", branch=False)
+        self.refused("g1", "no longer exists")
+
+    def test_refuses_no_merged_member(self):
+        self.put_group("stuck", ticket_state="stuck")
+        self.refused("g1", "no merged ticket")
+
+    def test_refuses_unknown_group(self):
+        self.refused("g9", "no group g9")
+
+    def test_docs(self):
+        with open(os.path.join(HOME, "devloop", "README.md")) as fh:
+            readme = fh.read().splitlines()
+        self.assertTrue(any(ln.startswith("| `python3 devloop/tickets.py ready gN`") for ln in readme))
+        with open(os.path.join(HOME, "devloop", "tickets.py")) as fh:
+            doc = fh.read().split('"""')[1]
+        self.assertIn("tickets.py ready g", doc)
