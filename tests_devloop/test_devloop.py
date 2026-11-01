@@ -631,6 +631,28 @@ class Revise(LoopCase):
         self.assertEqual(self.snap().tickets, {})
 
 
+class CasesThrownOut(LoopCase):
+    def test_a_cases_wrong_revision_after_the_last_round_start_throws_out_the_cases(self):
+        import ticket_issuer
+        h = [{"event": "round start"}, {"event": "revised", "cases_wrong": True}]
+        self.assertTrue(ticket_issuer.cases_thrown_out({"history": h}))
+
+    def test_a_revision_before_the_round_or_without_cases_wrong_does_not(self):
+        import ticket_issuer
+        before = [{"event": "revised", "cases_wrong": True}, {"event": "round start"}]
+        kept = [{"event": "round start"}, {"event": "revised", "cases_wrong": False}]
+        self.assertFalse(ticket_issuer.cases_thrown_out({"history": before}))
+        self.assertFalse(ticket_issuer.cases_thrown_out({"history": kept}))
+        self.assertFalse(ticket_issuer.cases_thrown_out({}))
+
+    def test_a_ticket_without_a_verifier_and_no_cases_runs_nothing(self):
+        import ticket_issuer
+        issuer = ticket_issuer.Issuer.__new__(ticket_issuer.Issuer)
+        from core.config import Config
+        issuer.cfg, issuer.id, issuer.deadline = Config(self.proj), "1", time.time() + 60
+        self.assertIsNone(issuer.run_cases({"needs_verifier": False, "cases": None}))
+
+
 class ApplyUnapplied(LoopCase):
     """ticket_creator.apply_unapplied: which revise-* hand-ins the issuer writes into the pool."""
 
