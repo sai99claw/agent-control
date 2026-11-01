@@ -249,3 +249,10 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
 - T 那邊:使用者讓 T 主線「直接改」完成接上 devloop 的收尾(測試介面、main 上兩條舊紅、退掉舊迴圈),做完才走 devloop。
   T 的 g1 卡住,A 更新後可以用 `actl tickets ready g1`,或照 T 的收尾取消 #1–#4。
 - 發版在雲端依舊推不了 tag(每組一頁 decision,已 ack)。
+
+## 2026-11-01(續)記憶獨立成資料夾(D-088)
+
+- #15–#19(g4)落地,main = 90e806c,約 7.5 美元。A 的記憶現在在 A repo 的 `memory/`(角色 6、模型 3、專案 1,和票庫裡整理好的版本逐字相同),
+  `board/config.json` 的 `devloop.memory` = `memory`。整理者寫記憶時直接 fast-forward 推進 A 的 main(只限 `memory/`)。
+- 其他專案設自己的 `devloop.memory`;第一次缺檔時從 A 的 `memory/` 複製角色與模型記憶,專案記憶從空白開始。沒設的話照舊在票庫裡。
+- 舊卡片轉 lessons 的匯入拿掉了。`claude/repo-access-check-s7faow` 分支上的 `memory-backup/` 是落地前的備份,現在可以不管。
