@@ -82,16 +82,16 @@ machine is not free in time), and a regression that dies leaves nothing locked. 
 Every role is an agent started by a script with a prompt on stdin; it hands in one JSON file.
 Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per project in `agents.<role>`).
 
-| Role | Started by, and when | Default models | Writes |
-|---|---|---|---|
-| `creator` | `ticket_creator.py`: for the main session's request, or for a worker or fixer that runs `--revise` | opus xhigh | hand-in `tickets` (tickets and DAG entries), `revised` / `unchanged` (a ticket revision), `question` or `rejected` |
-| `worker` | `ticket_issuer.py`, for each ticket round (complex tickets) | opus medium | code and unit tests committed on the ticket branch; hand-in `done` or `blocked` |
-| `worker_simple` | `ticket_issuer.py`, instead of `worker` when the ticket has `complexity: simple` | sonnet medium | the same as `worker` |
-| `verifier` | `ticket_issuer.py`, before the worker, for tickets that need one | opus medium | the acceptance cases (marked as described below) on the branch `t/<id>-cases`; hand-in `cases` |
-| `reviewer` | `ticket_issuer.py`, after the worker, for complex tickets | opus medium | hand-in `review` (verdict pass or fail, feedback); edits nothing |
-| `fixer` | `auto_fixer.py`, when the regression on an integration branch is red | opus medium | the fix committed on the integration branch; hand-in `done` or `blocked` |
-| `consolidator` | `memory_keeper.py`, started by `ticket_controller.py` in `consolidate()` when a memory file has 5 lessons waiting, or its oldest lesson is 3 days old, at most once per 24 h per file | fable medium, then opus medium | hand-in `memory`: the new text of one memory file and the lessons it dropped; `memory_keeper.py` writes the file |
-| `consolidator_peer` | `memory_keeper.py`, only when `unlimited_tokens` is on, to review the consolidator's draft | opus medium | hand-in `review` (agree or change, notes) kept in `memory/discussions/` |
+| Role | Script | When | Default models | Writes |
+|---|---|---|---|---|
+| `creator` | `ticket_creator.py` | for the main session's request, or for a worker or fixer that runs `--revise` | opus xhigh | hand-in `tickets` (tickets and DAG entries), `revised` / `unchanged` (a ticket revision), `question` or `rejected` |
+| `worker` | `ticket_issuer.py` | for each ticket round (complex tickets) | opus medium | code and unit tests committed on the ticket branch; hand-in `done` or `blocked` |
+| `worker_simple` | `ticket_issuer.py` | instead of `worker` when the ticket has `complexity: simple` | sonnet medium | the same as `worker` |
+| `verifier` | `ticket_issuer.py` | before the worker, for tickets that need one | opus medium | the acceptance cases (marked as described below) on the branch `t/<id>-cases`; hand-in `cases` |
+| `reviewer` | `ticket_issuer.py` | after the worker, for complex tickets | opus medium | hand-in `review` (verdict pass or fail, feedback); edits nothing |
+| `fixer` | `auto_fixer.py` | when the regression on an integration branch is red | opus medium | the fix committed on the integration branch; hand-in `done` or `blocked` |
+| `consolidator` | `memory_keeper.py`, started by `ticket_controller.py` in `consolidate()` | when a memory file has 5 lessons waiting, or its oldest lesson is 3 days old, at most once per 24 h per file | fable medium, then opus medium | hand-in `memory`: the new text of one memory file and the lessons it dropped; `memory_keeper.py` writes the file |
+| `consolidator_peer` | `memory_keeper.py` | only when `unlimited_tokens` is on, to review the consolidator's draft | opus medium | hand-in `review` (agree or change, notes) kept in `memory/discussions/` |
 
 ## Agents, models and tests (D-084)
 
