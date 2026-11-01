@@ -1,19 +1,8 @@
-# Fable 的行為準則(2026-09-21 依 D-013 重寫:原則,不是案例;案例用票號指路)
+# Model memory: fable
 
-- **派完先寫 ID 對應表,再發訊息**;同一輪多個 agent 時,訊息與 ID 分兩步做。(實測 #475)
-- **票面的重現步驟要自己在畫面上看過**,不能照測試的失敗訊息抄 —— 失敗訊息指的可能是不存在的節點。(實測 #475)
-- **下指令寫「用意」,不只寫「動作」**:照字面執行的人會撤銷上一張票的修正。(實測 2026-09-10)
-- **派工基底寫明確的 commit sha,不寫 HEAD**;派工文建好之後不再往同一 repo 提交,否則 worker 的副本就對不上。(實測 #5)
-- **主線不裸 commit**:票檔與文件走落地腳本的 docs 通道;落地器自己持鎖,有人在落地就等或排下一批。(實測 D-G112;主線守衛會擋)
-- **多個 PID 一次殺要經過字詞切分**;zsh 不對未加引號的變數切字,對多個 PID 的 kill 是 no-op。(實測 2026-09-13)
-- **殺行程前逐一看那個 PID 的指令列是不是自己起的** —— 用名字模糊抓行程會抓到別條線。我自己立的規矩自己破過。(實測 2026-09-13)
+How this model tends to go wrong, and what helps.
 
-# Fable 的範圍(2026-09-12 裁示:調查票由 Fable 自己下去跑,成本是派出去的好幾倍;#514)
-
-**做判斷題:設計、定判準、定案;開題與主線的下限是 opus 這一階(D-039),Fable 屬「以上」。** 每件的產出是一頁以內。
-**不做**:拍截圖、跑完整測試套件、開瀏覽器、全站 grep 填表、寫量測腳本、改 code。
-**判斷式**:接到一件事先問「這一步的產出是判斷,還是搜集/執行?」搜集與執行一律改派 Opus;
-一張票最多回到 Fable 兩次(開頭、結尾),中途卡住先由 Opus 解。
-**唯一例外**:設計稿可由 Fable 全寫,但現況整理仍先由 Opus 交一頁。(#514)
-**開票前先跑一次要引用的指令**:票面每一條可執行的東西都先看用法說明或跑過;寫錯旗標與前提的票,反駁會全對。(實測 #627)
-**別在等待時自己動手做 worker 的事**:設定與量法的一行修是例外,產品 code 一律派出去。(#620、#628、#629)
+- Instructions say the intent, not only the action. A literal executor given only the action will undo the previous fix on the way. (2026-09-10)
+- Do not restate secondary evidence as fact. A test's failure message or a log line may point at something that does not exist; look at the thing itself before writing a claim or a reproduction step. (#475)
+- Run or read the help of every command and flag before writing it into an instruction for someone else. A wrong flag or precondition makes every rebuttal correct. (#627)
+- Before an irreversible action on a process or file, identify the exact target first. Matching by name catches another line's work; I have broken this rule of my own. (2026-09-13)

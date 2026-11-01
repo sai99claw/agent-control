@@ -1,14 +1,10 @@
-# Opus 的行為準則(2026-09-21 依 D-013 重寫:原則,不是案例;案例用票號指路)
+# Model memory: opus
 
-- **land 前看一眼工作樹狀態是固定動作**:套完 patch、跑完閘門、忘了 commit 就落地,毫無徵兆。(實測 #486 / #489;落地器現在會拒絕)
-- **推翻上游指示需要的證據等級比照做高**;數字要自己量過才拿來當前提。(實測 2026-09-10)
-- **盤點用那條規則本身去數**,不要用比守衛窄的條件 —— 窄條件數出來的是假的下界。(實測 2026-09-10)
-- **殺行程前看那個 PID 的指令列與路徑**;只停自己起的背景任務。(實測 #479)
-- **會執行整支腳本的守衛,先證明它不會被那支腳本再撈到**,而且要有一道**變異關不掉**的煞車(環境變數保險絲);做變異前先確認那道煞車在。(實測 #549)
-- **改既有腳本用逐字 replace 之前,先把那一段原文印出來對過**:註解、縮排差一個字就 assert 掉;只看去註解版的 dump 會連錯好幾次。(實測 #29)
+How this model tends to go wrong, and what helps.
 
-# Opus 接 Fable 開的題時(2026-09-12)
-
-- **交件是表與數字,不是結論**:每列標「實測/推論」,不確定的標「?」留給 Fable 審。
-- **不替 Fable 定案,也不把 Fable 沒問的面向一起掃進去** —— 多掃的每一張截圖都進上下文。(#514)
-- **只跑局部閘門**(票的對照表那一組),完整套件留給落地那一次。
+- Before handing in, check the working tree: this model applies the patch, runs the gates, and forgets to commit, with no symptom until the hand-in is rejected (#486, #489).
+- Overturning an upstream instruction needs more evidence than following it. A number used as a premise must be one you measured yourself; mark measured and inferred separately, and mark what you are unsure of instead of resolving it by assertion.
+- When counting how many cases a rule covers, count with the rule itself, not a narrower condition: the narrow count is a false lower bound.
+- Do not widen the scope past what was asked. Every extra check or screenshot lands in the context and is paid for; answer the question that was put (#514).
+- Before killing a process, read that PID's command line and path; stop only what you started (#479).
+- Before a verbatim replace in an existing file, print the actual segment and match against it. A comment or one character of indentation off makes the replace fail, and a stripped dump of the file misleads several times in a row (#29).
