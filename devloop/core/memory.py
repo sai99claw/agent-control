@@ -55,11 +55,6 @@ def _safe(name):
     return "".join(c if c.isalnum() or c in "-._" else "-" for c in str(name)) or "unknown"
 
 
-# agent-control's role cards from before devloop, by the devloop role they now inform.
-OLD_ROLE_CARDS = {"worker": "implementer", "fixer": "implementer", "creator": "opener",
-                  "verifier": "verifier", "reviewer": "reviewer", "consolidator": "consolidator"}
-
-
 def file_path(cfg, key):
     """Where the memory file with key `key` ("memory/role/worker.md") is on disk."""
     if not key.startswith("memory/"):
@@ -119,31 +114,32 @@ def write_files(cfg, pool, texts, message):
         osx.atomic_write(file_path(cfg, key), text)
 
 
-def seed(cfg, pool, models=(), home=None):
-    """Create the memory files that are missing in the folder (never overwrites), each with
-    only its heading.
+def _home_text(cfg, layer, name):
+    """agent-control's own memory file for (layer, name), or None (never for project)."""
+    if layer == "project":
+        return None
+    try:
+        with open(os.path.join(cfg.home, "memory", layer, _safe(name) + ".md"), errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return None
 
-    Older notes (agent-control's model and role cards from before devloop) are not copied in: every
-    bullet goes to memory/inbox as a lesson, so the consolidator applies the layer contract to
-    it like to any other lesson - nothing reaches an agent's prompt unfiltered."""
+
+def seed_text(cfg, layer, name):
+    """What a memory file the folder lacks starts as: agent-control's file when it has one,
+    else the heading only. project.md always starts as the heading."""
+    text = _home_text(cfg, layer, name)
+    return text if text is not None else SEED[layer].format(name=name)
+
+
+def seed(cfg, pool, models=()):
+    """Create the memory files that are missing in the folder (never overwrites)."""
     have = set(files(cfg))
     wanted = [("role", r) for r in ROLES] + [("model", m) for m in models] + [("project", "project")]
     missing = [(layer, name) for layer, name in wanted if rel(layer, name) not in have]
-    write_files(cfg, pool, {rel(layer, name): SEED[layer].format(name=name) for layer, name in missing},
+    write_files(cfg, pool, {rel(layer, name): seed_text(cfg, layer, name) for layer, name in missing},
                 "memory: seed")
-    if not home or not missing:
-        return 0
-
-    def change(tx):
-        imported = 0
-        for layer, name in missing:
-            if layer == "model":
-                imported += _import_card(tx, os.path.join(home, "memory", "model", "%s.md" % name), layer, name)
-            elif layer == "role" and name in OLD_ROLE_CARDS:
-                imported += _import_card(tx, os.path.join(home, "memory", "role", "%s.md" % OLD_ROLE_CARDS[name]),
-                                         layer, name)
-        return imported
-    return pool.update(change, "memory: import old cards as lessons")
+    return len(missing)
 
 
 def bullets(path):
@@ -163,15 +159,6 @@ def queue(tx, texts, layer, name, source, prefix):
     return len(texts)
 
 
-def _import_card(tx, card, layer, name):
-    try:
-        texts = bullets(card)
-    except OSError:
-        return 0
-    return queue(tx, texts, layer, name, "agent-control %s card before devloop" % layer,
-                 "import-%s-%s" % (layer, _safe(name)))
-
-
 def import_lessons(tx, texts, layer, name, path):
     """Queue a project's own old notes (texts from bullets(path)); every import gets its own keys."""
     stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
@@ -184,7 +171,10 @@ def for_prompt(cfg, role, model):
     """What a starting agent reads: its role memory and its model memory (from the folder)."""
     parts = []
     for layer, name in (("role", role), ("model", model)):
-        text = (read(cfg, rel(layer, name)) or "").strip()
+        text = read(cfg, rel(layer, name))
+        if text is None:
+            text = _home_text(cfg, layer, name)
+        text = (text or "").strip()
         if text:
             parts.append(text)
     return "\n\n".join(parts) or "(nothing recorded yet)"

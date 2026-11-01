@@ -34,7 +34,7 @@ def keep(cfg, pool, layer, name):
     run_dir = cfg.runs_dir("memory", "%s-%s-%s" % (layer, memory._safe(name), osx.now().replace(":", "")))
     values = {
         "layer": layer, "name": name, "path": path,
-        "current": memory.read(cfg, path) or memory.SEED[layer].format(name=name),
+        "current": memory.read(cfg, path) or memory.seed_text(cfg, layer, name),
         "lessons": json.dumps([{"text": r.get("text"), "source": r.get("source"), "at": r.get("at")}
                                for r in rows.values()], indent=2, ensure_ascii=False),
         "result_path": os.path.join(run_dir, "result.json"),

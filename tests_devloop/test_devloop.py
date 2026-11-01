@@ -34,16 +34,6 @@ class LoopCase(unittest.TestCase):
     release = None
     loop_extra = {}
 
-    def init_without_imports(self):
-        """A new pool, minus the lessons imported from agent-control's old cards."""
-        self.run_py("tickets.py", "init")
-
-        def change(tx):
-            for key in list(tx.data.lessons):
-                if key.startswith("import-"):
-                    tx.delete("memory/inbox/%s.json" % key)
-        Pool(self.pool_path, remote=None).update(change, "test: drop imported lessons")
-
     def config(self, **devloop):
         path = os.path.join(self.proj, "board", "config.json")
         with open(path) as fh:
@@ -1434,7 +1424,7 @@ class RequiredFields(LoopCase):
 class UnlimitedTokens(LoopCase):
     def test_memory_is_consolidated_by_two_models_with_the_discussion_kept(self):
         self.config(unlimited_tokens=True)
-        self.init_without_imports()
+        self.run_py("tickets.py", "init")
         self.add(1)
         self.plan(worker={"1": ["lessons"]})
         res = self.controller()
@@ -1502,35 +1492,8 @@ class Memory(LoopCase):
         self.assertIn("memory/project.md", mem)
         self.assertIn("memory/model/python3.md", mem)   # the fake agent's command has no --model
 
-    def test_an_old_model_card_is_not_copied_but_queued_as_lessons(self):
-        cards = os.path.join(HOME, "memory", "model", "opus.md")
-        if not os.path.exists(cards):
-            self.skipTest("no agent-control model card to import")
-        argv = ["claude", "-p", "--model", "opus"]
-        cfg = json.load(open(os.path.join(self.proj, "board", "config.json")))
-        cfg["devloop"]["agents"]["worker"] = argv
-        json.dump(cfg, open(os.path.join(self.proj, "board", "config.json"), "w"))
-        res = self.run_py("tickets.py", "init")
-        self.assertEqual(res.returncode, 0, res.stderr)
-        snap = self.snap()
-        self.assertEqual(self.pool_memory("memory/model/opus.md").splitlines()[0], "# Model memory: opus")
-        queued = [r for r in snap.lessons.values() if r["name"] == "opus"]
-        self.assertGreaterEqual(len(queued), 5)
-        self.assertTrue(all(r["source"] == "agent-control model card before devloop" for r in queued))
-
-    def test_an_old_role_card_is_queued_as_lessons_for_the_role_it_now_informs(self):
-        if not os.path.exists(os.path.join(HOME, "memory", "role", "implementer.md")):
-            self.skipTest("no agent-control role card to import")
-        res = self.run_py("tickets.py", "init")
-        self.assertEqual(res.returncode, 0, res.stderr)
-        snap = self.snap()
-        worker = [r for r in snap.lessons.values() if r["layer"] == "role" and r["name"] == "worker"]
-        self.assertTrue(worker)
-        self.assertTrue(all(r["source"] == "agent-control role card before devloop" for r in worker))
-        self.assertEqual(self.pool_memory("memory/role/worker.md").splitlines()[0], "# Role memory: worker")
-
     def test_lessons_are_collected_and_five_get_consolidated_by_the_keeper(self):
-        self.init_without_imports()
+        self.run_py("tickets.py", "init")
         self.add(1)
         self.plan(worker={"1": ["lessons"]})
         res = self.controller()
@@ -1545,7 +1508,7 @@ class Memory(LoopCase):
             self.assertIn("Role memory: worker", fh.read(), "agents start with their role memory")
 
     def test_fewer_than_five_fresh_lessons_wait(self):
-        self.init_without_imports()
+        self.run_py("tickets.py", "init")
 
         def change(tx):
             tx.write("memory/inbox/a.json", {"layer": "role", "name": "worker", "text": "x", "at": osx.now()})
@@ -1646,7 +1609,7 @@ class T7Acceptance(LoopCase):
         return int(git(self.pool_path, "rev-list", "--count", "HEAD"))
 
     def test_item1_every_bullet_line_is_queued_once_with_its_text(self):
-        self.init_without_imports()
+        self.run_py("tickets.py", "init")
         path = self.write("old-worker.md", "# Old worker notes\n\nA plain line, not a bullet.\n"
                                            "- dash lesson\n* star lesson\n  - indented lesson  \n")
         res = self.lessons("--layer", "role", "--name", "worker", "--file", path)
@@ -1661,7 +1624,7 @@ class T7Acceptance(LoopCase):
             self.assertTrue(r.get("at"))
 
     def test_item2_one_pool_commit_and_the_memory_file_is_untouched(self):
-        self.init_without_imports()
+        self.run_py("tickets.py", "init")
         before = self.pool_memory("memory/role/worker.md")
         commits = self.pool_commits()
         path = self.write("old.md", "- one\n- two\n")
@@ -1672,7 +1635,7 @@ class T7Acceptance(LoopCase):
         self.assertEqual(self.pool_memory("memory/role/worker.md"), before)
 
     def test_item3_two_files_for_the_same_memory_both_stay_queued(self):
-        self.init_without_imports()
+        self.run_py("tickets.py", "init")
         a = self.write("a.md", "- a one\n- a two\n")
         b = self.write("b.md", "- b one\n- b two\n- b three\n")
         for path in (a, b):
@@ -1684,7 +1647,7 @@ class T7Acceptance(LoopCase):
                          ["a one", "a two", "b one", "b three", "b two"])
 
     def test_item4_five_imported_lessons_are_consolidated_by_the_keeper(self):
-        self.init_without_imports()
+        self.run_py("tickets.py", "init")
         path = self.write("five.md", "".join("- lesson %d from #imp\n" % i for i in range(1, 6)))
         res = self.lessons("--layer", "role", "--name", "worker", "--file", path)
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
@@ -1696,7 +1659,7 @@ class T7Acceptance(LoopCase):
         self.assertEqual(snap.lessons, {}, "the imported lessons were consumed")
 
     def test_item5_project_layer_without_name_uses_name_project(self):
-        self.init_without_imports()
+        self.run_py("tickets.py", "init")
         path = self.write("project-old.md", "- a project reason\n- another invariant\n")
         res = self.lessons("--layer", "project", "--file", path)
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
