@@ -1467,6 +1467,104 @@ class WebInput(LoopCase):
         self.assertTrue(snap.inbox["p1"]["acked"])
 
 
+class T27Acceptance(LoopCase):
+    """D-089 item 2: a merged or landed ticket is frozen for every caller (#27)."""
+
+    def line(self, state):
+        return ('#1 is feature complete (%s) and frozen: it cannot be revised or reopened. To overturn it, '
+                'open a new ticket: actl new --request "..." (the new ticket may revert #1).' % state)
+
+    def frozen(self, state):
+        self.add(1)
+
+        def change(tx):
+            t = tx.ticket("1")
+            t.update(state=state, group="g1", target="int/g1")
+            tx.put_ticket(t)
+            tx.write("inbox/p1.json", {"kind": "decision", "ref": "1", "text": "x", "at": osx.now(),
+                                       "acked": False})
+        self.pool.update(change, "test: #1 %s" % state)
+        self.plan(creator={"1": ["revised"]})
+
+    def assert_refused(self, res, state, prefix, page=True):
+        self.assertEqual(res.returncode, 2, (res.stdout, res.stderr))
+        self.assertEqual(res.stdout, "")
+        lines = res.stderr.strip().splitlines()
+        self.assertEqual(len(lines), 1, res.stderr)
+        self.assertIn("#1 is feature complete", lines[0])
+        self.assertIn("actl new --request", lines[0])
+        self.assertEqual(lines[0], prefix + self.line(state))
+        self.assertFalse(os.path.exists(os.path.join(os.path.dirname(self.plan_path), "count-creator-1")),
+                         "no opener started")
+        t = self.snap().ticket("1")
+        self.assertEqual(t["state"], state)
+        self.assertEqual(t["acceptance"], ["a"])
+        self.assertFalse(any(h.get("event") == "revised" for h in t.get("history") or []))
+        if page:
+            self.assertFalse(self.snap().inbox["p1"]["acked"], "a refused answer leaves the page unread")
+
+    def revise(self, *args):
+        return self.run_py("ticket_creator.py", "--revise", "1", *args)
+
+    # acceptance 1
+    def test_agents_cannot_revise_a_merged_ticket(self):
+        for role in ("worker", "verifier", "fixer"):
+            with self.subTest(role=role):
+                self.setUp()
+                self.frozen("merged")
+                self.assert_refused(self.revise("--from", role, "--reason", "x"), "merged", "ticket_creator: ")
+
+    # acceptance 2
+    def test_a_worker_cannot_revise_a_landed_ticket(self):
+        self.frozen("landed")
+        self.assert_refused(self.revise("--from", "worker", "--reason", "x"), "landed", "ticket_creator: ")
+
+    # acceptance 3
+    def test_user_decisions_on_a_merged_ticket_are_refused(self):
+        cases = [("--decision", "retry", "--page", "p1", "--via", "web"),
+                 ("--decision", "cancel", "--page", "p1"),
+                 ("--decision", "revise", "--reason", "do it differently", "--page", "p1", "--via", "web")]
+        for args in cases:
+            with self.subTest(decision=args[1]):
+                self.setUp()
+                self.frozen("merged")
+                self.assert_refused(self.revise("--from", "user", *args), "merged", "ticket_creator: ")
+
+    def test_a_revise_decision_on_a_landed_ticket_is_refused(self):
+        self.frozen("landed")
+        res = self.revise("--from", "user", "--decision", "revise", "--reason", "do it differently",
+                          "--page", "p1", "--via", "web")
+        self.assert_refused(res, "landed", "ticket_creator: ")
+
+    # acceptance 4
+    def test_tickets_ready_refuses_a_merged_ticket_and_cancel_still_works(self):
+        self.frozen("merged")
+        self.assert_refused(self.run_py("tickets.py", "ready", "1"), "merged", "tickets: ")
+        res = self.run_py("tickets.py", "cancel", "1")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "cancelled")
+
+    # acceptance 5
+    def test_the_board_shows_no_answer_form_for_a_merged_ticket(self):
+        import board
+        from core.config import Config
+        self.frozen("merged")
+        page = board.render(Config(self.proj), self.snap(), key="k")
+        self.assertIn("p1", page, "the page is listed")
+        self.assertNotIn("不改,再試一次", page)
+
+    # acceptance 6
+    def test_the_readme_contracts_say_merged_and_landed_are_frozen(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            text = fh.read()
+        self.assertIn("## Contracts", text)
+        section = text.split("## Contracts", 1)[1].split("\n## ", 1)[0]
+        bullets = [b for b in section.split("\n- ") if "frozen" in b]
+        self.assertTrue(bullets, "a Contracts bullet says frozen")
+        self.assertTrue(any("actl new --request" in b and "merged" in b and "landed" in b for b in bullets),
+                        bullets)
+
+
 class RedCheck(LoopCase):
     def feedback_of(self, ident):
         t = self.snap().ticket(str(ident))
