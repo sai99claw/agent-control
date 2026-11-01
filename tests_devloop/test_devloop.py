@@ -2088,6 +2088,56 @@ class Landing(LoopCase):
         self.assertIsNone(total["input_tokens"])
 
 
+class T29Acceptance(LoopCase):
+    """Ticket #29: devloop.no_reverify_paths - main moved only there is merged in without a second regression."""
+
+    EVENT = "main took only no-reverify paths: merged without re-verifying"
+
+    def test_v1_a_memory_only_main_move_lands_with_one_full_regression(self):
+        """Item 3."""
+        log = os.path.join(self.tmp, "intervals.txt")
+        self.env["FAKE_INTERVALS"] = log
+        self.add(1)
+        self.plan(worker={"1": ["move_main_memory"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertTrue(self.main_has("memory/note.md"), "main lacks memory/note.md")
+        self.assertTrue(self.main_has("impl_1.txt"), "main lacks impl_1.txt")
+        g = self.snap().groups["g1"]
+        events = [h.get("event") or "" for h in g.get("history") or []]
+        self.assertEqual(g["fix_round"], 0, events)
+        self.assertIn(self.EVENT, events)
+        self.assertEqual([e for e in events if e.startswith("fix round")], [], events)
+        with open(log) as fh:
+            full = [line for line in fh if line.startswith("tests full ")]
+        self.assertEqual(len(full), 1, full)
+
+    def test_v2_the_default_list_and_a_project_list(self):
+        """Item 1."""
+        from core.config import Config
+        cfg = Config(self.proj)
+        self.assertIn("no_reverify_paths", cfg.values, "no devloop.no_reverify_paths default")
+        self.assertEqual(cfg.no_reverify_paths, ["memory/", "docs/DECISIONS.md", "docs/HANDOFF.md"])
+        self.config(no_reverify_paths=["x/"])
+        self.assertEqual(Config(self.proj).no_reverify_paths, ["x/"])
+
+    def test_v3_a_value_that_is_not_a_list_of_strings_stops_every_script(self):
+        """Item 2."""
+        for bad in ("memory/", [1]):
+            self.config(no_reverify_paths=bad)
+            res = self.run_py("tickets.py", "list")
+            self.assertEqual(res.returncode, 2, "%r: %s" % (bad, res.stdout + res.stderr))
+            self.assertIn("devloop.no_reverify_paths", res.stderr, repr(bad))
+
+    def test_v4_the_readme_documents_the_setting(self):
+        """Item 4."""
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            text = fh.read()
+        self.assertIn("no_reverify_paths", text)
+        self.assertIn("docs/HANDOFF.md", text)
+
+
 class ReleaseTimeoutSetting(LoopCase):
     def test_release_timeout_defaults_to_3600_and_can_be_set(self):
         from core.config import Config
