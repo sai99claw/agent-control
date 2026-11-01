@@ -51,6 +51,14 @@ Run them from the project (or set `AC_ROOT` to it).
 Tests run through the project's existing test interface (`tests.preflight`, `tests.run`, `tests.full`; `scripts/testiface.py`).
 `hard_block.paths` / `patterns`: a ticket that touches them stops before merging.
 
+`devloop.no_reverify_paths` (D-090; default `["memory/", "docs/DECISIONS.md", "docs/HANDOFF.md"]`,
+a project's list replaces it, `[]` turns it off): when main moved after a group was verified and
+every file main changed since (`git diff --name-only --no-renames <merge-base> <main>`) is one of
+these paths or under one of these folders, the controller merges main into the integration branch
+itself (a `--no-ff` merge commit in a throwaway worktree) and lands that merge without a second
+regression and without a fix round. A move that touches anything else, a conflict or any other
+merge failure takes the usual path: auto_fixer merges main, then the regression runs again.
+
 ## Machine slots
 
 `machine_slots` (default null = no limit) caps the heavy runs on the machine at N, across every

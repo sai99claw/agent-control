@@ -66,6 +66,16 @@ if role == "worker":
     open("impl_%s.txt" % ticket, "w").write("bad" if action == "wrong" else "ok")
     if action == "red":
         open("red.txt", "w").write("x")
+    if action == "move_main_files":   # #29: $FAKE_WORKER_FILES here, then $FAKE_MAIN_FILES committed to main
+        for rel, text in json.loads(os.environ.get("FAKE_WORKER_FILES") or "{}").items():
+            os.makedirs(os.path.dirname(rel) or ".", exist_ok=True)
+            open(rel, "w").write(text)
+        root = os.environ["AC_ROOT"]
+        for rel, text in json.loads(os.environ["FAKE_MAIN_FILES"]).items():
+            os.makedirs(os.path.dirname(os.path.join(root, rel)), exist_ok=True)
+            open(os.path.join(root, rel), "w").write(text)
+            subprocess.run(["git", "-C", root, "add", rel], check=True)
+        subprocess.run(["git", "-C", root, "commit", "-q", "-m", "main moves"], check=True)
     if action == "touch_decisions":
         os.makedirs("docs", exist_ok=True)
         open("docs/DECISIONS.md", "a").write("x\n")

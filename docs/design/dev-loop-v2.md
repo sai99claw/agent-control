@@ -74,7 +74,7 @@ No script polls another; each records its outcome in the pool and exits.
 | --- | --- |
 | tickets of one group depend on each other | issuer branches from the integration branch; dispatch waits for "merged into the same branch" |
 | several workers merge into one branch at once | compare-and-swap; the loser takes the branch in and tries again |
-| main moved during verification | treated as red: auto_fixer merges main (plain merge first, LLM only on conflict), regression again |
+| main moved during verification | only in `devloop.no_reverify_paths` (D-090): the controller merges main in itself (no conflict) and lands without re-verifying; otherwise treated as red: auto_fixer merges main (plain merge first, LLM only on conflict), regression again |
 | a ticket gets stuck | the rest of its group lands; it and its dependents go to main |
 | environment unusable at regression (preflight rc 86) | not red: one "env" page, controller stops (exit 3); run it again after fixing |
 | a fixer finds two tickets contradict | it hands in `decision` (where they contradict, which new ticket it proposes): a decision page, the group stops; merged tickets are frozen, the fixer only aligns cases to their current acceptance and lists them in `cases_changed` |

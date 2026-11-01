@@ -409,6 +409,8 @@ class Regression(LoopCase):
         self.assertEqual(self.state(1), "landed")
 
     def test_main_moving_during_verification_is_merged_in(self):
+        log = os.path.join(self.tmp, "intervals.txt")
+        self.env["FAKE_INTERVALS"] = log
         self.add(1)
         self.plan(worker={"1": ["move_main"]})
         res = self.controller()
@@ -416,6 +418,8 @@ class Regression(LoopCase):
         self.assertEqual(self.state(1), "landed")
         self.assertTrue(self.main_has("NOTES.md") and self.main_has("impl_1.txt"))
         self.assertEqual(self.snap().groups["g1"]["fix_round"], 1)
+        with open(log) as fh:
+            self.assertEqual(sum(1 for line in fh if line.startswith("tests full ")), 2)
 
 
 class T4Acceptance(LoopCase):
@@ -2140,6 +2144,160 @@ class Recovery(LoopCase):
         res = self.controller()
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(self.state(1), "landed")
+
+
+class NoReverifyPaths(LoopCase):
+    """#29 / D-090: main moved only in devloop.no_reverify_paths -> the controller merges it in."""
+
+    NRV = "main took only no-reverify paths: merged without re-verifying"
+
+    def move(self, main_files, worker_files=None):
+        self.env["FAKE_MAIN_FILES"] = json.dumps(main_files)
+        self.env["FAKE_WORKER_FILES"] = json.dumps(worker_files or {})
+        self.env["FAKE_INTERVALS"] = self.log = os.path.join(self.tmp, "intervals.txt")
+        self.add(1)
+        self.plan(worker={"1": ["move_main_files"]})
+        return self.controller()
+
+    def full_runs(self):
+        with open(self.log) as fh:
+            return sum(1 for line in fh if line.startswith("tests full "))
+
+    def events(self):
+        return [e.get("event") for e in self.snap().groups["g1"].get("history") or []]
+
+    def assert_fixer_path(self, res):
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["fix_round"], 1)
+        self.assertNotIn(self.NRV, self.events())
+        self.assertEqual(self.full_runs(), 2)
+
+    def test_shortcut_lands_with_one_regression(self):
+        res = self.move({"memory/note.md": "note\n", "docs/HANDOFF.md": "h\n"})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        g = self.snap().groups["g1"]
+        self.assertEqual(g["fix_round"], 0)
+        self.assertIn(self.NRV, self.events())
+        self.assertEqual(self.full_runs(), 1)
+        head = git(self.proj, "rev-parse", "main")
+        merge = git(self.proj, "rev-list", "--merges", "-n1", head)   # the code map may sit on top
+        self.assertTrue(merge)
+        self.assertEqual(len(git(self.proj, "rev-list", "--parents", "-n1", merge).split()), 3)
+        self.assertEqual(g["landed_sha"], head)
+        self.assertEqual(glob.glob(os.path.join(self.tmp, "wt", "nrv-*")), [])
+
+    def test_empty_list_turns_the_shortcut_off(self):
+        self.config(no_reverify_paths=[])
+        self.assert_fixer_path(self.move({"memory/note.md": "note\n"}))
+
+    def test_a_mixed_move_takes_the_fixer_path(self):
+        self.assert_fixer_path(self.move({"memory/note.md": "note\n", "NOTES.md": "notes\n"}))
+
+    def test_a_conflict_in_the_loop_takes_the_fixer_path(self):
+        res = self.move({"memory/note.md": "note\n"}, worker_files={"memory/note.md": "worker\n"})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertGreaterEqual(self.snap().groups["g1"]["fix_round"], 1)
+        self.assertNotIn(self.NRV, self.events())
+        self.assertGreaterEqual(self.full_runs(), 2)
+        self.assertEqual(glob.glob(os.path.join(self.tmp, "wt", "nrv-*")), [])
+
+    def test_a_conflict_aborts_and_leaves_the_branch(self):
+        from core.gitx import Git
+        import ticket_controller
+        seen = {}
+        real = Git.move_ref
+
+        def spy(repo, branch, new, old):
+            seen.setdefault("moves", []).append(branch)
+            return real(repo, branch, new, old)
+        git(self.proj, "branch", "int/g1", "main")
+        base = git(self.proj, "rev-parse", "main")
+        tree = os.path.join(self.tmp, "side")
+        git(self.proj, "worktree", "add", "-q", "--detach", tree, "int/g1")
+        os.makedirs(os.path.join(tree, "memory"))
+        with open(os.path.join(tree, "memory", "note.md"), "w") as fh:
+            fh.write("worker\n")
+        git(tree, "add", "-A")
+        git(tree, "commit", "-q", "-m", "w")
+        verified = git(tree, "rev-parse", "HEAD")
+        git(self.proj, "update-ref", "refs/heads/int/g1", verified)
+        git(self.proj, "worktree", "remove", "--force", tree)
+        os.makedirs(os.path.join(self.proj, "memory"))
+        with open(os.path.join(self.proj, "memory", "note.md"), "w") as fh:
+            fh.write("note\n")
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "m")
+        self.assertNotEqual(git(self.proj, "rev-parse", "main"), base)
+        from core.config import Config
+        c = ticket_controller.Controller.__new__(ticket_controller.Controller)
+        c.cfg, c.repo = Config(self.proj), Git(self.proj)
+        c.set_group = lambda *a, **k: seen.setdefault("set", []).append(a)
+        Git.move_ref = spy
+        self.addCleanup(setattr, Git, "move_ref", real)
+        out = c.merge_no_reverify({"id": "g1", "branch": "int/g1"}, verified, git(self.proj, "rev-parse", "main"))
+        self.assertIsNone(out)
+        self.assertEqual(git(self.proj, "rev-parse", "int/g1"), verified)
+        self.assertNotIn("moves", seen)
+        self.assertNotIn("set", seen)
+        self.assertEqual(glob.glob(os.path.join(self.tmp, "wt", "nrv-*")), [])
+        self.assertNotIn("nrv-g1", git(self.proj, "worktree", "list"))
+
+    def test_a_lost_compare_and_swap_is_reported(self):
+        from core.config import Config
+        from core.gitx import Git
+        import ticket_controller
+        git(self.proj, "branch", "int/g1", "main")
+        verified = git(self.proj, "rev-parse", "main")
+        os.makedirs(os.path.join(self.proj, "memory"))
+        with open(os.path.join(self.proj, "memory", "note.md"), "w") as fh:
+            fh.write("note\n")
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "m")
+        c = ticket_controller.Controller.__new__(ticket_controller.Controller)
+        c.cfg, c.repo = Config(self.proj), Git(self.proj)
+        c.set_group = lambda *a, **k: self.fail("no event on a lost swap")
+        real = Git.move_ref
+        Git.move_ref = lambda *a: False      # someone else moved the branch first
+        self.addCleanup(setattr, Git, "move_ref", real)
+        out = c.merge_no_reverify({"id": "g1", "branch": "int/g1"}, verified, git(self.proj, "rev-parse", "main"))
+        self.assertEqual(out, ticket_controller.LOST)
+        self.assertEqual(git(self.proj, "rev-parse", "int/g1"), verified)
+        self.assertEqual(glob.glob(os.path.join(self.tmp, "wt", "nrv-*")), [])
+
+
+class NoReverifyRule(unittest.TestCase):
+    def test_path_rule(self):
+        import ticket_controller as tc
+        e = ["memory/", "docs/HANDOFF.md"]
+        self.assertTrue(tc.under_paths("memory/note.md", e))
+        self.assertTrue(tc.under_paths("memory/a/b.md", e))
+        self.assertTrue(tc.under_paths("docs/HANDOFF.md", e))
+        self.assertFalse(tc.under_paths("memory", ["memory/"]))   # a file named like the folder
+        self.assertFalse(tc.under_paths("memoryx/note.md", e))
+        self.assertFalse(tc.under_paths("docs/HANDOFF.md.bak", e))
+        self.assertFalse(tc.under_paths("docs/DECISIONS.md", e))
+        self.assertTrue(tc.only_no_reverify([], e))
+        self.assertFalse(tc.only_no_reverify([], []))
+        self.assertFalse(tc.only_no_reverify(["memory/note.md"], []))
+        self.assertTrue(tc.only_no_reverify(["memory/note.md", "docs/HANDOFF.md"], e))
+        self.assertFalse(tc.only_no_reverify(["memory/note.md", "src/a.py"], e))
+
+    def test_config_values(self):
+        from core.config import Config
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "board"))
+            path = os.path.join(d, "board", "config.json")
+            for bad in ("memory/", [""], ["ok", 3], None, {"a": 1}):
+                with open(path, "w") as fh:
+                    json.dump({"devloop": {"no_reverify_paths": bad}}, fh)
+                with self.assertRaises(osx.OSFailure) as ctx:
+                    Config(d)
+                self.assertIn("devloop.no_reverify_paths", str(ctx.exception))
+            with open(path, "w") as fh:
+                json.dump({"devloop": {"no_reverify_paths": []}}, fh)
+            self.assertEqual(Config(d).no_reverify_paths, [])
 
 
 class LessonsHelpers(unittest.TestCase):

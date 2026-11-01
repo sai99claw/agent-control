@@ -38,6 +38,20 @@ from core.gitx import Git  # noqa: E402
 from core.pool import event  # noqa: E402
 
 LOOP = os.path.dirname(os.path.abspath(__file__))
+LOST = "lost"   # merge_no_reverify: the branch moved under the compare-and-swap
+
+
+def under_paths(path, entries):
+    """True when `path` equals an entry or lies under it (the hard_block.paths rule)."""
+    return any(path == e or path.startswith(e.rstrip("/") + "/") for e in entries)
+
+
+def only_no_reverify(files, entries):
+    """D-090: True when every changed file is under devloop.no_reverify_paths. An empty file
+    list counts as such; an empty `entries` ([]) turns the shortcut off."""
+    if not entries:
+        return False
+    return all(under_paths(f, entries) for f in files)
 
 
 class Stop(Exception):
@@ -229,6 +243,16 @@ class Controller:
             self.set_group(gid, "pr", "branch moved after verification: verify again")
             return
         if not self.repo.is_ancestor(old, sha):
+            merged = self.merge_no_reverify(g, sha, old)
+            if merged == LOST:
+                self.set_group(gid, "pr", "branch moved after verification: verify again")
+                return
+            if merged:
+                sha = merged
+                old = self.repo.sha(main)
+                if not self.repo.is_ancestor(old, sha):
+                    return                      # main moved again; the next tick looks again
+        if not self.repo.is_ancestor(old, sha):
             report = os.path.join(self.cfg.runs_dir("regression", gid), "main-moved.json")
             osx.write_json(report, {"status": "main_moved", "summary": "%s moved; merge it in" % main})
             rnd = int(g.get("fix_round") or 0)
@@ -279,6 +303,50 @@ class Controller:
             self.pool.report("decision", gid, "group %s is in %s (%s) but the release failed - "
                              "not retried, not rolled back (release log: %s):\n%s" % (
                                  gid, main, sha[:12], rel_log, rel_text))
+
+    def main_moved_files(self, sha, main_sha):
+        """Files main changed since it parted from the verified sha, or None if git cannot say."""
+        base = self.repo.run("merge-base", sha, main_sha, check=False)
+        if not base.ok or not base.out.strip():
+            return None
+        res = self.repo.run("diff", "--name-only", "--no-renames", base.out.strip(), main_sha,
+                            check=False)
+        if not res.ok:
+            return None
+        return [line for line in res.out.splitlines() if line]
+
+    def merge_no_reverify(self, g, sha, main_sha):
+        """D-090: when main moved only in devloop.no_reverify_paths, merge it into the verified
+        sha in a throwaway worktree and move the integration branch there; the regression result
+        still holds. Returns the merge sha, None (take the fixer path) or LOST (branch moved)."""
+        files = self.main_moved_files(sha, main_sha)
+        if files is None or not only_no_reverify(files, self.cfg.no_reverify_paths):
+            return None
+        tree = os.path.join(self.cfg.worktree_root, "nrv-" + g["id"])
+        try:
+            self.repo.detached(tree, sha)
+            t = Git(tree)
+            res = t.run("-c", "user.name=devloop", "-c", "user.email=devloop@localhost", "merge",
+                        "--no-ff", "--no-edit", main_sha, check=False)
+            if not res.ok:
+                t.run("merge", "--abort", check=False)
+                return None
+            new = t.sha("HEAD")
+            if not new or new == sha:
+                return None
+            if not self.repo.move_ref(g["branch"], new, sha):
+                return LOST
+            self.set_group(g["id"], None, "main took only no-reverify paths: merged without "
+                           "re-verifying", verified_sha=new)
+            return new
+        except osx.OSFailure as exc:
+            print("ticket_controller: no-reverify merge failed: %s" % exc, file=sys.stderr)
+            return None
+        finally:
+            try:
+                self.repo.remove_worktree(tree)
+            except osx.OSFailure:
+                pass
 
     def refresh_index(self, g, sha):
         """Commit the regenerated code index on top of the verified sha (D-084 Q11); a change to
