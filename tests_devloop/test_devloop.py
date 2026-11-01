@@ -2799,6 +2799,114 @@ class T13Acceptance(LoopCase):
         self.assertIn("tickets.py ready g", doc)
 
 
+class T24Acceptance(LoopCase):
+    """#24: the controller closes a group whose tickets are all cancelled."""
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.plan()
+
+    def put_group(self, state, members=("1",), member_states=None, **fields):
+        member_states = member_states or {m: "cancelled" for m in members}
+        for m in members:
+            self.add(m)
+
+        def change(tx):
+            for m in members:
+                t = tx.ticket(m)
+                t.update(state=member_states[m], group="g1")
+                tx.put_ticket(t)
+            g = {"id": "g1", "branch": "int/g1", "state": state, "members": list(members),
+                 "fix_round": 0, "job": None, "history": []}
+            g.update(fields)
+            tx.put_group(g)
+        self.pool.update(change, "test: group g1")
+
+    def group(self):
+        return self.snap().groups["g1"]
+
+    def main_sha(self):
+        return git(self.proj, "rev-parse", "main")
+
+    def regression_dir(self):
+        return os.path.join(self.tmp, "wt", "runs", "regression", "g1")
+
+    def released_lines(self):
+        if not os.path.exists(self.released):
+            return []
+        with open(self.released) as fh:
+            return fh.read().splitlines()
+
+    def run_once(self):
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        return res
+
+    def assert_closed(self):
+        g = self.group()
+        self.assertEqual(g["state"], "cancelled", g)
+        self.assertTrue(g.get("history"), g)
+        self.assertIn("cancelled", g["history"][-1].get("event", ""), g["history"][-1])
+
+    def test_item1_open_group_all_cancelled_is_closed(self):
+        self.put_group("open")
+        git(self.proj, "branch", "int/g1", "main")
+        self.run_once()
+        self.assert_closed()
+        self.assertFalse(os.path.exists(self.regression_dir()), "a regression ran for g1")
+        pages = [r for r in self.snap().inbox.values() if r.get("ref") == "g1"]
+        self.assertEqual(pages, [])
+
+    def test_item2_stuck_group_all_cancelled_is_closed(self):
+        self.put_group("stuck", members=("1", "2"))
+        git(self.proj, "branch", "int/g1", "main")
+        self.run_once()
+        self.assert_closed()
+
+    def test_item3_pr_group_all_cancelled_is_closed_not_landed(self):
+        self.put_group("pr")
+        git(self.proj, "branch", "int/g1", "main")
+        main = self.main_sha()
+        self.run_once()
+        self.assertEqual(self.group()["state"], "cancelled", self.group())
+        self.assertFalse(os.path.exists(self.regression_dir()), "a regression ran for g1")
+        self.assertEqual(self.main_sha(), main)
+        self.assertEqual(self.released_lines(), [])
+
+    def test_item4_verified_group_all_cancelled_is_closed_not_landed(self):
+        git(self.proj, "branch", "int/g1", "main")
+        wt = os.path.join(self.tmp, "g1-wt")
+        git(self.proj, "worktree", "add", "-q", wt, "int/g1")
+        with open(os.path.join(wt, "extra.txt"), "w") as fh:
+            fh.write("extra\n")
+        git(wt, "add", "extra.txt")
+        git(wt, "commit", "-q", "-m", "extra")
+        tip = git(wt, "rev-parse", "HEAD")
+        git(self.proj, "worktree", "remove", "--force", wt)
+        main = self.main_sha()
+        self.assertNotEqual(tip, main)
+        self.put_group("verified", verified_sha=tip)
+        self.run_once()
+        self.assertEqual(self.group()["state"], "cancelled", self.group())
+        self.assertEqual(self.main_sha(), main)
+        res = subprocess.run(["git", "merge-base", "--is-ancestor", tip, "main"], cwd=self.proj,
+                             capture_output=True, text=True)
+        self.assertNotEqual(res.returncode, 0, "main contains int/g1's commit")
+        self.assertFalse(self.main_has("extra.txt"))
+        self.assertEqual(self.released_lines(), [])
+
+    def test_item5_list_hides_cancelled_group_unless_all(self):
+        self.put_group("cancelled")
+        res = self.run_py("tickets.py", "list")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertFalse([ln for ln in res.stdout.splitlines() if ln.split()[:1] == ["g1"]], res.stdout)
+        res = self.run_py("tickets.py", "list", "--all")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertTrue([ln for ln in res.stdout.splitlines() if ln.split()[:1] == ["g1"]], res.stdout)
+
+
 class T18Acceptance(unittest.TestCase):
     """#18: agent-control's memory/ is its consolidated memory, named by its config."""
 
