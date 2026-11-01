@@ -1221,6 +1221,129 @@ class T22Acceptance(LoopCase):
                          rows)
 
 
+class T23Acceptance(LoopCase):
+    """Ticket #23: an auto_fixer or memory_keeper stopped by SIGTERM/SIGINT exits 4 after
+    recording a cost row for every agent run of its attempt."""
+
+    WORKER_MD = "memory/role/worker.md"
+
+    def setUp(self):
+        super().setUp()
+        # the fake agent keys its plan on DEVLOOP_TICKET first: the suite's own must not leak in
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def interrupt(self, argv, log_glob, sig):
+        """Start a devloop script, wait for an agent-1.log matching log_glob, send sig; return
+        (returncode, output)."""
+        proc = subprocess.Popen(["python3"] + argv, cwd=self.proj, env=self.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.terminate())
+        deadline = time.time() + 60
+        while not glob.glob(log_glob):
+            if proc.poll() is not None:
+                out, err = proc.communicate()
+                self.fail("script exited (rc %s) before %s existed: %s" % (proc.returncode, log_glob, out + err))
+            if time.time() > deadline:
+                proc.terminate()
+                out, err = proc.communicate(timeout=60)
+                self.fail("%s never appeared: %s" % (log_glob, out + err))
+            time.sleep(0.1)
+        time.sleep(1)
+        start = time.time()
+        proc.send_signal(sig)
+        out, err = proc.communicate(timeout=60)
+        return proc.returncode, out + err, time.time() - start
+
+    # ------------------------------------------------------------ item 1: auto_fixer
+
+    def test_1_sigterm_while_the_fixer_runs_records_one_interrupted_row(self):
+        git(self.proj, "branch", "int/g1", "main")
+        base = git(self.proj, "rev-parse", "main")
+        self.pool.update(lambda tx: tx.put_group({
+            "id": "g1", "branch": "int/g1", "base": base, "state": "fixing", "alone": False,
+            "members": [], "fix_round": 1, "job": None}), "test: group g1 fixing")
+        report = os.path.join(self.tmp, "report.json")
+        with open(report, "w") as fh:
+            json.dump({"status": "red", "summary": "x"}, fh)
+        self.plan(fixer={"g1": ["sleep"], "*": ["sleep"]})
+        run_dir = os.path.join(self.tmp, "wt", "runs", "fix", "g1", "r1")
+        before = list(self.snap().groups["g1"].get("cost") or [])
+        rc, out, took = self.interrupt([os.path.join(LOOP, "auto_fixer.py"), "--group", "g1", "--report", report],
+                                       os.path.join(run_dir, "agent-1.log"), signal.SIGTERM)
+        self.assertEqual(rc, 4, out)
+        self.assertLess(took, 30, "exit took %.1f s" % took)
+        rows = list(self.snap().groups["g1"].get("cost") or [])
+        self.assertEqual(len(rows), len(before) + 1, rows)
+        row = rows[-1]
+        self.assertEqual(row.get("role"), "fixer", row)
+        self.assertEqual(row.get("outcome"), "interrupted", row)
+        self.assertEqual(os.path.realpath(row.get("run_dir") or ""), os.path.realpath(run_dir), row)
+
+    # ------------------------------------------------------------ items 2, 3: memory_keeper
+
+    def queue_lessons(self, n=5):
+        res = self.run_py("tickets.py", "init")
+        self.assertEqual(res.returncode, 0, res.stderr)
+
+        def change(tx):
+            for i in range(n):
+                tx.write("memory/inbox/t23-%d.json" % i, {"layer": "role", "name": "worker",
+                                                          "text": "lesson %d from #23" % i, "at": osx.now()})
+        self.pool.update(change, "test: %d lessons" % n)
+        return sorted(k for k, v in self.snap().lessons.items()
+                      if v.get("layer") == "role" and v.get("name") == "worker")
+
+    def keeper(self, log_glob, sig):
+        return self.interrupt([os.path.join(LOOP, "memory_keeper.py"), "--layer", "role", "--name", "worker"],
+                              log_glob, sig)
+
+    def test_2_sigint_while_the_consolidator_runs_records_an_interrupted_attempt(self):
+        keys = self.queue_lessons()
+        self.assertEqual(len(keys), 5, keys)
+        self.plan(consolidator={"*": ["sleep"]})
+        state0 = self.snap().memory_state or {}
+        runs0 = list(state0.get("runs") or [])
+        last0 = dict(state0.get("last") or {})
+        self.assertNotIn(self.WORKER_MD, last0)
+        rc, out, _ = self.keeper(os.path.join(self.tmp, "wt", "runs", "memory", "role-worker-*", "agent-1.log"),
+                                 signal.SIGINT)
+        self.assertEqual(rc, 4, out)
+        snap = self.snap()
+        state = snap.memory_state or {}
+        runs = list(state.get("runs") or [])
+        self.assertEqual(len(runs), len(runs0) + 1, runs)
+        entry = runs[-1]
+        self.assertEqual(entry.get("path"), self.WORKER_MD, entry)
+        self.assertIs(entry.get("ok"), False, entry)
+        self.assertIs(entry.get("interrupted"), True, entry)
+        cost = entry.get("cost") or []
+        self.assertEqual([(c.get("role"), c.get("outcome")) for c in cost],
+                         [("consolidator", "interrupted")], cost)
+        self.assertEqual(sorted(k for k, v in snap.lessons.items()
+                                if v.get("layer") == "role" and v.get("name") == "worker"), keys)
+        self.assertNotIn(self.WORKER_MD, state.get("last") or {})
+
+    def test_3_sigterm_while_the_peer_runs_keeps_the_consolidators_row(self):
+        self.config(unlimited_tokens=True)
+        keys = self.queue_lessons()
+        self.assertEqual(len(keys), 5, keys)
+        self.plan(consolidator_peer={"*": ["sleep"]})
+        before_md = self.pool_memory(self.WORKER_MD)
+        runs0 = list((self.snap().memory_state or {}).get("runs") or [])
+        rc, out, _ = self.keeper(os.path.join(self.tmp, "wt", "runs", "memory", "role-worker-*", "peer",
+                                              "agent-1.log"), signal.SIGTERM)
+        self.assertEqual(rc, 4, out)
+        runs = list((self.snap().memory_state or {}).get("runs") or [])
+        self.assertEqual(len(runs), len(runs0) + 1, runs)
+        cost = runs[-1].get("cost") or []
+        self.assertEqual([(c.get("role"), c.get("outcome")) for c in cost],
+                         [("consolidator", "memory"), ("consolidator_peer", "interrupted")], cost)
+        self.assertEqual([k for k in self.pool_memory() if k.startswith("memory/discussions/")], [])
+        self.assertEqual(glob.glob(os.path.join(self.pool_path, "memory", "discussions", "*")), [])
+        self.assertEqual(self.pool_memory(self.WORKER_MD), before_md)
+
+
 class WebInput(LoopCase):
     def stuck(self, ident):
         self.add(ident)
