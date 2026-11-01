@@ -256,3 +256,12 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
   `board/config.json` 的 `devloop.memory` = `memory`。整理者寫記憶時直接 fast-forward 推進 A 的 main(只限 `memory/`)。
 - 其他專案設自己的 `devloop.memory`;第一次缺檔時從 A 的 `memory/` 複製角色與模型記憶,專案記憶從空白開始。沒設的話照舊在票庫裡。
 - 舊卡片轉 lessons 的匯入拿掉了。`claude/repo-access-check-s7faow` 分支上的 `memory-backup/` 是落地前的備份,現在可以不管。
+
+## 2026-11-01(續二)T 回報的第二批問題、D-089、D-090
+
+- g5(#20–#25,約 7.4 美元):改票清掉案例後不再合併(實測在 #27 第 2 輪生效);發版輸出存 `runs/release/<group>.log`,產物可寫
+  `DEVLOOP_RELEASE_DIR`;中斷時記下已花的用量(outcome interrupted);成員全取消的組自動結案、`actl tickets cancel g<N>`。
+- g6、g7(#26–#29,約 8.3 美元):merged 顯示「功能完成」、landed 顯示「驗證完成」;功能完成後票鎖住(#27,第一次卡在合併衝突,
+  用 retry 從新 main 重跑才落地);auto_fixer 照票修、記下改過的案例、矛盾時發 decision;main 只動記憶與主線文件時落地不重驗
+  (D-090,在 g7 實測生效:主線推 D-090 進 main 後,g7 只跑一次全套)。main = 6cc1406。
+- 發版在雲端依舊推不了 tag,每組一頁 decision,已 ack。
