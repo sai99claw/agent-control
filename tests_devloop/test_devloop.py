@@ -490,6 +490,71 @@ class ReleaseFails(LoopCase):
         self.assertIn("decision", self.inbox_kinds())
 
 
+
+class FixerCasesChanged(LoopCase):
+    """auto_fixer keeps the fixer's cases_changed on the group, one entry per case with its round."""
+
+    def setUp(self):
+        super().setUp()
+        import auto_fixer
+        self.fixer = auto_fixer
+        self.pool.update(lambda tx: tx.put_group({"id": "g9", "members": [], "state": "pr"}),
+                         "test: group g9")
+
+    def test_later_rounds_append_with_their_own_round(self):
+        self.fixer._record_cases(self.pool, "g9", 1, [{"ticket": "1", "case": "c1", "acceptance": "a"}])
+        self.fixer._record_cases(self.pool, "g9", 2, [{"ticket": "2", "case": "c2", "acceptance": "b"},
+                                                      {"ticket": "1", "case": "c3", "acceptance": "a"}])
+        self.assertEqual(self.snap().groups["g9"]["cases_changed"], [
+            {"ticket": "1", "case": "c1", "acceptance": "a", "round": 1},
+            {"ticket": "2", "case": "c2", "acceptance": "b", "round": 2},
+            {"ticket": "1", "case": "c3", "acceptance": "a", "round": 2}])
+
+    def test_done_without_cases_changed_adds_nothing(self):
+        self.fixer._record_cases(self.pool, "g9", 1, [{"ticket": "1", "case": "c1", "acceptance": "a"}])
+        for cases in (None, [], "not a list"):
+            self.fixer._record_cases(self.pool, "g9", 2, cases)
+        self.assertEqual(self.snap().groups["g9"]["cases_changed"],
+                         [{"ticket": "1", "case": "c1", "acceptance": "a", "round": 1}])
+        self.fixer._record_cases(self.pool, "g9", 3, None)
+        self.pool.update(lambda tx: tx.put_group({"id": "g8", "members": [], "state": "pr"}), "g8")
+        self.fixer._record_cases(self.pool, "g8", 1, None)
+        self.assertNotIn("cases_changed", self.snap().groups["g8"])
+
+    def test_case_mark_is_the_issuers(self):
+        import ticket_issuer
+        self.assertEqual(self.fixer.case_mark("7"), ticket_issuer.case_mark("7"))
+        self.assertEqual(self.fixer.case_mark("1"), "T1Acceptance")
+
+
+class FixerBlockedIsDecision(LoopCase):
+    """A fixer hand-in of kind blocked is handled exactly as decision: one fixer run, one decision
+    page carrying the fixer's text, the group stuck with its members merged."""
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def test_blocked_stops_the_group_after_one_fixer_run(self):
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["blocked", "fix"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        g = self.snap().groups["g1"]
+        self.assertEqual(g["state"], "stuck")
+        self.assertEqual(g["fix_round"], 1)
+        with open(os.path.join(self.tmp, "plan", "count-fixer-g1")) as fh:
+            self.assertEqual(fh.read(), "1")
+        rows = [r for r in self.snap().inbox.values() if r["kind"] == "decision"]
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]["ref"], "g1")
+        self.assertFalse(rows[0]["acked"])
+        self.assertIn("tickets contradict", rows[0]["text"])
+        self.assertEqual(self.state(1), "merged")
+        self.assertNotIn("cases_changed", g)
+
+
 class T8Acceptance(LoopCase):
     def test_a_release_past_release_timeout_seconds_is_stopped_and_failed(self):
         out = os.path.join(self.tmp, "release-out.txt")
