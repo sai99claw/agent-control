@@ -178,7 +178,7 @@ in CLAUDE.md / AGENTS.md, and a file that must never change goes in `hard_block.
 - **OS failures** (missing program, permission, disk full, broken JSON, git errors, timeouts) are
   caught in one place (`core/osx.py`, `core/gitx.py`) and end as a page or an exit code with one
   sentence, never a silent hang. Timed-out commands are stopped with their whole process group.
-- **Merged or landed tickets are frozen**: nobody revises or reopens them (`ticket_creator.py
+- **A merged or landed ticket is frozen**: nobody revises or reopens it (`ticket_creator.py
   --revise` from any caller and `tickets.py ready` refuse with one line, D-089); overturning one takes a
   new ticket through `actl new --request "..."`, which may revert it.
 
