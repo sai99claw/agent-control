@@ -41,7 +41,7 @@ Run them from the project (or set `AC_ROOT` to it).
 ## Project settings (`board/config.json`, key `devloop`)
 
 `release` is required (every project ships a release script; the controller only calls it, with
-`DEVLOOP_RELEASE_SHA`, `DEVLOOP_GROUP`, `DEVLOOP_TICKETS` set) and is stopped after `release_timeout_seconds` (default 3600). Everything else has a default:
+`DEVLOOP_RELEASE_SHA`, `DEVLOOP_GROUP`, `DEVLOOP_TICKETS`, `DEVLOOP_RELEASE_DIR` set; it runs in a throwaway checkout that is removed afterwards, so anything it produces goes to `$DEVLOOP_RELEASE_DIR` = `<worktrees>/runs/release/<group>/`, which devloop never empties; its whole output is kept in `<worktrees>/runs/release/<group>.log`, named on the group as `release_log` and in the page) and is stopped after `release_timeout_seconds` (default 3600). Everything else has a default:
 `pool` (default `<agent-control>/pools/<project>`), `max_parallel` 2, `max_rounds` 3,
 `issuer_timeout_seconds` 10800, `agent_timeout_seconds` 3600, `main_branch` "main",
 `remote` "origin" (null = do not push), `worktrees` (default `../<project>-devloop`),

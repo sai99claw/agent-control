@@ -156,20 +156,22 @@ def cmd_release(pool, cfg, args):
     cfg.require_release()
     sha = g["landed_sha"]
     ok, text = release.run(cfg, g, sha)
+    rel_log = release.log_path(cfg, gid)
 
     def change(tx):
         grp = tx.data.groups[gid]
         grp["release"] = "ok" if ok else "failed"
+        grp["release_log"] = rel_log
         event(grp, "release re-run: %s" % ("ok" if ok else "failed"))
         tx.put_group(grp)
     pool.update(change, "group %s: release re-run (%s)" % (gid, "ok" if ok else "failed"))
     if ok:
-        pool.report("landed", gid, "group %s released (re-run): #%s (%s)" % (
-            gid, ", #".join(g.get("members") or []), sha[:12]))
+        pool.report("landed", gid, "group %s released (re-run): #%s (%s); release log: %s" % (
+            gid, ", #".join(g.get("members") or []), sha[:12], rel_log))
         print("group %s released" % gid)
         return 0
     pool.report("decision", gid, "group %s (%s): the re-run release failed - not retried, not "
-                "rolled back:\n%s" % (gid, sha[:12], text))
+                "rolled back (release log: %s):\n%s" % (gid, sha[:12], rel_log, text))
     print("group %s: release failed\n%s" % (gid, text), file=sys.stderr)
     return 1
 

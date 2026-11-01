@@ -2791,3 +2791,31 @@ class T19Acceptance(unittest.TestCase):
         self.assertEqual(len(mine), 1, "no table row for `memory/`")
         self.assertTrue(len(mine[0]) > 1 and mine[0][1], "the `memory/` row has no description")
         self.assertNotIn("舊記憶卡", text)
+
+
+class ReleaseKeptOutput(unittest.TestCase):
+    """core.release helpers: where the kept log is and what the environment carries."""
+
+    class Cfg:
+        def __init__(self, root):
+            self.worktree_root = root
+
+        def runs_dir(self, *parts):
+            return osx.makedirs(os.path.join(self.worktree_root, "runs", *parts))
+
+        def env(self, **extra):
+            return {k: str(v) for k, v in extra.items() if v is not None}
+
+        values = {}
+
+    def test_log_path_is_absolute_under_runs_release(self):
+        from core import release
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        path = release.log_path(self.Cfg(root), "g7")
+        self.assertEqual(path, os.path.join(os.path.abspath(root), "runs", "release", "g7.log"))
+
+    def test_env_carries_release_dir(self):
+        from core import release
+        env = release.env(self.Cfg("/x"), {"id": "g1"}, "abc", "/x/runs/release/g1")
+        self.assertEqual(env["DEVLOOP_RELEASE_DIR"], "/x/runs/release/g1")

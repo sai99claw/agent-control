@@ -243,6 +243,7 @@ class Controller:
                 self.pool.report("decision", gid, "group %s merged into local %s but the push "
                                  "to %s failed: %s" % (gid, main, self.cfg.remote, res.err.strip()))
         released, rel_text = self.release(g, sha)
+        rel_log = release.log_path(self.cfg, gid)
         snap = self.pool.snapshot()
         ids = [i for i in g.get("members") or [] if (snap.tickets.get(i) or {}).get("state") == "merged"]
 
@@ -255,16 +256,18 @@ class Controller:
                 tx.put_ticket(t)
             grp = tx.data.groups[gid]
             grp["state"], grp["landed_sha"], grp["release"] = "landed", sha, "ok" if released else "failed"
+            grp["release_log"] = rel_log
             event(grp, "landed" + ("" if released else " (release failed)"))
             tx.put_group(grp)
         self.pool.update(change, "group %s landed" % gid)
         self.repo.remove_worktree(os.path.join(self.cfg.worktree_root, "fix-" + gid))
         if released:
-            self.pool.report("landed", gid, "group %s landed and released: #%s (%s)" % (
-                gid, ", #".join(ids), sha[:12]))
+            self.pool.report("landed", gid, "group %s landed and released: #%s (%s); release log: %s" % (
+                gid, ", #".join(ids), sha[:12], rel_log))
         else:
             self.pool.report("decision", gid, "group %s is in %s (%s) but the release failed - "
-                             "not retried, not rolled back:\n%s" % (gid, main, sha[:12], rel_text))
+                             "not retried, not rolled back (release log: %s):\n%s" % (
+                                 gid, main, sha[:12], rel_log, rel_text))
 
     def refresh_index(self, g, sha):
         """Commit the regenerated code index on top of the verified sha (D-084 Q11); a change to
