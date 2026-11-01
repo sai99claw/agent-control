@@ -21,9 +21,10 @@ rewrites the file; nobody deletes memory alone.
 
 import hashlib
 import os
+import sys
 import time
 
-from . import osx
+from . import gitx, osx
 
 LAYERS = ("role", "model", "project")
 DUE_COUNT = 5
@@ -105,18 +106,98 @@ def in_pool(cfg, pool):
 
 def write_files(cfg, pool, texts, message):
     """Write memory files ({key: text}). The only writer of memory files: in the pool's own
-    memory/ it is one pool.update; elsewhere atomic writes under the folder. Raises OSFailure."""
+    memory/ it is one pool.update; in a folder inside a git checkout it is one fast-forward commit
+    on that checkout's branch (commit_into); elsewhere atomic writes under the folder.
+    Raises OSFailure."""
     if not texts:
         return
+    for key in texts:
+        file_path(cfg, key)   # refuse a key that is not a memory file
     if in_pool(cfg, pool):
         def change(tx):
             for key, text in texts.items():
-                file_path(cfg, key)   # refuse a key that is not a memory file
                 tx.write_text(key, text)
         pool.update(change, message)
         return
+    folder = osx.makedirs(cfg.memory_dir)
+    if gitx.Git(folder).toplevel_or_none():
+        commit_into(cfg, pool, folder, texts, message)
+        return
     for key, text in texts.items():
         osx.atomic_write(file_path(cfg, key), text)
+
+
+TRIES = 8
+
+
+def _move(repo, branch, new, old):
+    """Move `branch` from `old` to `new` the way landing moves main: a fast-forward merge in the
+    checkout that has it, else a compare-and-swap. Returns "moved", "lost" (the branch is no longer
+    at `old`) or "refused" (still at `old`: the checkout's local changes would be overwritten)."""
+    where = repo.checked_out_at(branch)
+    if where:
+        res = gitx.Git(where).run("merge", "--ff-only", "-q", new, check=False)
+        ok, why = res.ok, (res.err or res.out).strip()
+    else:
+        ok, why = repo.move_ref(branch, new, old), "update-ref refused"
+    if ok:
+        return "moved", ""
+    return ("lost" if repo.sha("refs/heads/" + branch) != old else "refused"), why
+
+
+def commit_into(cfg, pool, folder, texts, message):
+    """One commit holding only `texts` on the branch checked out at `folder`, fast-forwarded like
+    landing moves main and pushed to devloop.remote when the repository has it. A behind branch is
+    first fast-forwarded to the remote; a lost move is re-read and written again, at most TRIES
+    times. A failed push is a decision page, not a failure (the commit is on the branch). Anything
+    else (detached HEAD, diverged, refused, tries used up) writes nothing and raises GitError."""
+    git = gitx.Git(folder)
+    prefix = git.prefix()
+    branch = git.current_branch()
+    if not branch:
+        raise gitx.GitError("memory folder %s is on a detached HEAD: no branch to commit to" % folder)
+    repo = gitx.Git(git.toplevel())
+    paths = {prefix + key[len("memory/"):]: text for key, text in texts.items()}
+    remote = cfg.remote if cfg.remote and repo.has_remote(cfg.remote) else None
+    tracking = "refs/remotes/%s/%s" % (remote, branch)
+    for _ in range(TRIES):
+        old = repo.sha("refs/heads/" + branch)
+        if not old:
+            raise gitx.GitError("branch %s of %s has no commit" % (branch, repo.cwd))
+        if remote:
+            got = repo.run("fetch", "-q", remote, "+refs/heads/%s:%s" % (branch, tracking), check=False)
+            tip = repo.sha(tracking) if got.ok else None
+            if tip and tip != old and not repo.is_ancestor(tip, old):
+                if not repo.is_ancestor(old, tip):
+                    raise gitx.GitError("%s and %s/%s have diverged in %s" % (branch, remote, branch, repo.cwd))
+                state, why = _move(repo, branch, tip, old)
+                if state == "refused":
+                    raise gitx.GitError("cannot fast-forward %s to %s/%s in %s: %s" % (
+                        branch, remote, branch, repo.cwd, why))
+                continue
+        index = os.path.join(osx.makedirs(cfg.worktree_root), ".memory-index-%d-%d" % (os.getpid(), time.time_ns()))
+        new = repo.commit_files(old, paths, message, index)
+        if new is None:
+            return None
+        state, why = _move(repo, branch, new, old)
+        if state == "lost":
+            continue
+        if state == "refused":
+            raise gitx.GitError("%s at %s will not fast-forward to the memory commit (local changes?): %s" % (
+                branch, repo.checked_out_at(branch) or repo.cwd, why))
+        if remote:
+            res = repo.run("push", "-q", remote, "%s:refs/heads/%s" % (branch, branch), check=False)
+            if not res.ok:
+                lines = (res.err or res.out).strip().splitlines()
+                text = "memory %s committed to local %s in %s (%s) but the push to %s failed: %s" % (
+                    ", ".join(sorted(texts)), branch, repo.cwd, new[:12], remote,
+                    lines[-1] if lines else "rc %s" % res.rc)
+                try:
+                    pool.report("decision", "memory", text)
+                except osx.OSFailure as exc:   # the write itself stands; say so where it can be seen
+                    print("memory: %s (and no page: %s)" % (text, exc), file=sys.stderr)
+        return new
+    raise gitx.GitError("memory commit on %s in %s: branch kept moving (%d tries)" % (branch, repo.cwd, TRIES))
 
 
 def seed(cfg, pool, models=(), home=None):

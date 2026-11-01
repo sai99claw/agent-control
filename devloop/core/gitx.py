@@ -14,9 +14,10 @@ class Git:
         self.cwd = cwd
         self.timeout = timeout
 
-    def run(self, *args, check=True, timeout=None):
-        env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_EDITOR="true", LC_ALL="C")
-        res = run(["git"] + list(args), cwd=self.cwd, env=env,
+    def run(self, *args, check=True, timeout=None, stdin_text=None, env=None):
+        full = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_EDITOR="true", LC_ALL="C")
+        full.update(env or {})
+        res = run(["git"] + list(args), cwd=self.cwd, env=full, stdin_text=stdin_text,
                   timeout=timeout or self.timeout, what="git " + args[0])
         if check and not res.ok:
             lines = (res.err or res.out).strip().splitlines()
@@ -50,6 +51,20 @@ class Git:
 
     def toplevel(self):
         return self.out("rev-parse", "--show-toplevel")
+
+    def toplevel_or_none(self):
+        """The worktree root that holds `cwd`, or None when `cwd` is not in a git checkout."""
+        res = self.run("rev-parse", "--show-toplevel", check=False)
+        return res.out.strip() if res.ok and res.out.strip() else None
+
+    def prefix(self):
+        """`cwd`'s path inside its worktree, '' or ending in '/'."""
+        return self.out("rev-parse", "--show-prefix")
+
+    def current_branch(self):
+        """The branch checked out at `cwd`, or None for a detached HEAD."""
+        res = self.run("symbolic-ref", "--short", "-q", "HEAD", check=False)
+        return res.out.strip() if res.ok and res.out.strip() else None
 
     def common_root(self):
         """The main repository's root, also when `cwd` is a linked worktree."""
@@ -89,6 +104,29 @@ class Git:
     def move_ref(self, branch, new, old):
         """Compare-and-swap a branch: succeeds only if it still points at `old`."""
         return self.run("update-ref", "refs/heads/" + branch, new, old, check=False).ok
+
+    def commit_files(self, parent, files, message, index_file, identity=("devloop", "devloop@localhost")):
+        """A commit on top of `parent` whose tree is parent's tree with `files` ({repo path: text})
+        replaced, built in the temporary index `index_file` without touching any checkout.
+        Returns its sha, or None when the tree would not change."""
+        env = {"GIT_INDEX_FILE": index_file}
+        try:
+            self.run("read-tree", parent, env=env)
+            for path, text in sorted(files.items()):
+                blob = self.run("hash-object", "-w", "--stdin", stdin_text=text).out.strip()
+                self.run("update-index", "--add", "--cacheinfo", "100644,%s,%s" % (blob, path), env=env)
+            tree = self.run("write-tree", env=env).out.strip()
+        finally:
+            try:
+                os.unlink(index_file)
+            except FileNotFoundError:
+                pass
+        if tree == self.out("rev-parse", parent + "^{tree}"):
+            return None
+        name, email = identity
+        who = {"GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email,
+               "GIT_COMMITTER_NAME": name, "GIT_COMMITTER_EMAIL": email}
+        return self.run("commit-tree", tree, "-p", parent, "-m", message, env=who).out.strip()
 
     def worktree(self, path, branch, start=None):
         """Make sure `path` is a worktree on `branch` (created from `start` if new)."""

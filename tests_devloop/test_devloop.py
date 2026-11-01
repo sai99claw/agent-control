@@ -1627,6 +1627,113 @@ class MemoryFolderHelpers(LoopCase):
                 self.cfg()
 
 
+class MemoryGitWriter(LoopCase):
+    """core.memory.commit_into: memory written into a git checkout is one fast-forward commit (#16)."""
+
+    def setUp(self):
+        super().setUp()
+        self.config(memory="memory")
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "config")
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def text(self, rel):
+        try:
+            with open(os.path.join(self.proj, rel)) as fh:
+                return fh.read()
+        except FileNotFoundError:
+            return None
+
+    def test_commit_holds_only_the_files_and_leaves_other_edits(self):
+        from core import memory
+        with open(os.path.join(self.proj, "README.md"), "a") as fh:
+            fh.write("local\n")
+        before = git(self.proj, "rev-parse", "main")
+        new = memory.write_files(self.cfg(), self.pool, {"memory/role/a.md": "A\n"}, "memory: test")
+        self.assertIsNone(new)   # write_files returns nothing; the commit is on main
+        self.assertEqual(git(self.proj, "rev-parse", "main^"), before)
+        self.assertEqual(git(self.proj, "show", "--name-only", "--format=", "main"), "memory/role/a.md")
+        self.assertEqual(git(self.proj, "log", "-1", "--format=%an <%ae>", "main"), "devloop <devloop@localhost>")
+        self.assertEqual(self.text("memory/role/a.md"), "A\n")
+        self.assertEqual(git(self.proj, "status", "--porcelain"), "M README.md")
+        # the same text again changes nothing: no commit
+        memory.write_files(self.cfg(), self.pool, {"memory/role/a.md": "A\n"}, "memory: test")
+        self.assertEqual(git(self.proj, "rev-parse", "main^"), before)
+
+    def test_lost_move_is_read_again_and_written_on_the_new_tip(self):
+        from core import memory
+        real, calls = memory._move, []
+
+        def racing(repo, branch, new, old):
+            calls.append(old)
+            if len(calls) == 1:   # someone commits on main between reading it and moving it
+                with open(os.path.join(self.proj, "other.txt"), "w") as fh:
+                    fh.write("x\n")
+                git(self.proj, "add", "other.txt")
+                git(self.proj, "commit", "-q", "-m", "other")
+            return real(repo, branch, new, old)
+        memory._move = racing
+        self.addCleanup(setattr, memory, "_move", real)
+        memory.write_files(self.cfg(), self.pool, {"memory/role/a.md": "A\n"}, "memory: test")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(git(self.proj, "log", "-1", "--format=%s", "main^"), "other")
+        self.assertEqual(git(self.proj, "show", "--name-only", "--format=", "main"), "memory/role/a.md")
+        self.assertEqual(self.text("memory/role/a.md"), "A\n")
+        self.assertEqual(self.text("other.txt"), "x\n")
+
+    def test_a_move_lost_every_time_gives_up_after_eight_tries(self):
+        from core import memory, gitx
+        real, calls = memory._move, []
+        memory._move = lambda *a: (calls.append(1), ("lost", "moved"))[1]
+        self.addCleanup(setattr, memory, "_move", real)
+        before = git(self.proj, "rev-parse", "main")
+        with self.assertRaises(gitx.GitError):
+            memory.write_files(self.cfg(), self.pool, {"memory/role/a.md": "A\n"}, "memory: test")
+        self.assertEqual(len(calls), 8)
+        self.assertEqual(git(self.proj, "rev-parse", "main"), before)
+        self.assertIsNone(self.text("memory/role/a.md"))
+
+    def test_detached_head_fails_and_writes_nothing(self):
+        from core import memory, osx as core_osx
+        git(self.proj, "checkout", "-q", "--detach")
+        before = git(self.proj, "rev-parse", "main")
+        with self.assertRaises(core_osx.OSFailure):
+            memory.write_files(self.cfg(), self.pool, {"memory/role/a.md": "A\n"}, "memory: test")
+        self.assertEqual(git(self.proj, "rev-parse", "main"), before)
+        self.assertEqual(git(self.proj, "rev-parse", "HEAD"), before)
+        self.assertIsNone(self.text("memory/role/a.md"))
+
+    def test_local_edit_of_the_memory_file_refuses_and_keeps_it(self):
+        from core import memory, gitx
+        memory.write_files(self.cfg(), self.pool, {"memory/role/a.md": "A\n"}, "memory: test")
+        with open(os.path.join(self.proj, "memory", "role", "a.md"), "w") as fh:
+            fh.write("MINE\n")
+        before = git(self.proj, "rev-parse", "main")
+        with self.assertRaises(gitx.GitError):
+            memory.write_files(self.cfg(), self.pool, {"memory/role/a.md": "B\n"}, "memory: test")
+        self.assertEqual(git(self.proj, "rev-parse", "main"), before)
+        self.assertEqual(self.text("memory/role/a.md"), "MINE\n")
+
+    def test_diverged_remote_fails(self):
+        from core import memory, gitx
+        bare = os.path.join(self.tmp, "bare.git")
+        git(self.tmp, "clone", "-q", "--bare", self.proj, bare)
+        git(self.proj, "remote", "add", "origin", bare)
+        other = os.path.join(self.tmp, "other")
+        git(self.tmp, "clone", "-q", bare, other)
+        git(other, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "theirs")
+        git(other, "push", "-q", "origin", "main")
+        git(self.proj, "commit", "-q", "--allow-empty", "-m", "ours")
+        self.config(remote="origin")
+        before = git(self.proj, "rev-parse", "main")
+        with self.assertRaises(gitx.GitError):
+            memory.write_files(self.cfg(), self.pool, {"memory/role/a.md": "A\n"}, "memory: test")
+        self.assertEqual(git(self.proj, "rev-parse", "main"), before)
+
+
 class T7Acceptance(LoopCase):
     """Ticket #7: tickets.py lessons imports a project's own old memory as lessons."""
 
