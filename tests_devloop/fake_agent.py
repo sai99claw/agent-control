@@ -84,6 +84,12 @@ if role == "worker":
         open(os.path.join(root, "NOTES.md"), "w").write("notes\n")
         subprocess.run(["git", "-C", root, "add", "NOTES.md"], check=True)
         subprocess.run(["git", "-C", root, "commit", "-q", "-m", "docs"], check=True)
+    if action == "move_main_memory":   # main takes only a no-reverify path (memory/note.md) meanwhile (#29)
+        root = os.environ["AC_ROOT"]
+        os.makedirs(os.path.join(root, "memory"), exist_ok=True)
+        open(os.path.join(root, "memory", "note.md"), "w").write("note\n")
+        subprocess.run(["git", "-C", root, "add", "memory/note.md"], check=True)
+        subprocess.run(["git", "-C", root, "commit", "-q", "-m", "memory note"], check=True)
     if action == "shared":
         open("shared.txt", "w").write("from %s\n" % ticket)
     if action in ("revise", "revise_overrun"):
