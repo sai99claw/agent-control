@@ -63,8 +63,8 @@ def fix(cfg, pool, gid, report):
         "revise_cmd": "python3 %s --revise <ticket id> --from fixer --reason '<why>'" % (
             os.path.join(LOOP, "ticket_creator.py")),
         "test_cmd": "python3 %s <ids>" % os.path.join(LOOP, "run_tests.py"),
-        "memory": memory.for_prompt(snap, "fixer", agents._model(cfg.agent("fixer"))),
-        "project_memory": os.path.join(pool.path, memory.rel("project", "project")),
+        "memory": memory.for_prompt(cfg, "fixer", agents._model(cfg.agent("fixer"))),
+        "project_memory": memory.project_path(cfg),
     }
     hand = agents.run(cfg, "fixer", agents.render("fixer.md", values), tree, run_dir,
                       cfg.agent_timeout_seconds, extra_env={"AC_CODE_ROOT": tree, "DEVLOOP_GROUP": gid})

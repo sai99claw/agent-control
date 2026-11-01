@@ -328,8 +328,8 @@ class Issuer:
                 if t.get("needs_verifier", True) else
                 "This ticket has no verifier: write unit tests for your code and the acceptance cases "
                 "yourself, in the project's existing test modules."),
-            "memory": memory.for_prompt(self.pool.snapshot(), role, agents.model_of(self.cfg.agent(chain))),
-            "project_memory": os.path.join(self.pool.path, memory.rel("project", "project")),
+            "memory": memory.for_prompt(self.cfg, role, agents.model_of(self.cfg.agent(chain))),
+            "project_memory": memory.project_path(self.cfg),
         }
         timeout = min(self.cfg.agent_timeout_seconds, self.left())
         p = agents.start(self.cfg, role, agents.render(template, values), cwd, run_dir, timeout,

@@ -4,8 +4,10 @@
     dag.json            {"tickets": {"<id>": {"depends_on": [...], "verify": "together"|"alone"}}}
     groups/<gid>.json   one integration branch (= one PR)
     inbox/<name>.json   reports for the main session
-    memory/role/<role>.md, memory/model/<model>.md, memory/project.md   what agents learned
     memory/inbox/<name>.json   lessons waiting to be consolidated; memory/state.json
+    memory/discussions/<name>.md   records of two-model consolidations
+The memory files themselves (role/model/project) are not pool data: they live in the folder
+devloop.memory names (by default this pool's memory/) and core/memory.py reads and writes them.
 
 Rules (D-079): read = sync first; write = change, commit, push; a write counts only once the push
 succeeded. A rejected push throws the local commit away, re-reads, and applies the change again,
@@ -103,7 +105,7 @@ class Pool:
 
     def _read_all(self):
         data = {"dag": self._read("dag.json", {"tickets": {}}), "tickets": {}, "groups": {}, "inbox": {},
-                "lessons": {}, "memory": {}, "memory_state": self._read("memory/state.json", {})}
+                "lessons": {}, "memory_state": self._read("memory/state.json", {})}
         folders = {"tickets": "tickets", "groups": "groups", "inbox": "inbox", "lessons": "memory/inbox"}
         for kind, folder_rel in folders.items():
             folder = os.path.join(self.path, folder_rel)
@@ -114,8 +116,6 @@ class Pool:
             for name in names:
                 if name.endswith(".json"):
                     data[kind][name[:-5]] = self._read(os.path.join(folder_rel, name), {})
-        for rel in _memory_files(self.path):
-            data["memory"][rel] = _read_text(os.path.join(self.path, rel))
         return data
 
     def _read(self, rel, default):
@@ -183,7 +183,6 @@ class Tx:
 
     def write_text(self, rel, text):
         osx.atomic_write(os.path.join(self.pool.path, rel), text)
-        self.data.raw["memory"][rel] = text
 
     def delete(self, rel):
         try:
@@ -242,10 +241,6 @@ class Snapshot:
         return self.raw["lessons"]
 
     @property
-    def memory(self):
-        return self.raw["memory"]
-
-    @property
     def memory_state(self):
         return self.raw["memory_state"]
 
@@ -263,29 +258,6 @@ class Snapshot:
     def next_group_id(self):
         nums = [int(k[1:]) for k in self.groups if re.fullmatch(r"g\d+", k)]
         return "g%d" % (max(nums) + 1 if nums else 1)
-
-
-def _memory_files(root):
-    out = []
-    base = os.path.join(root, "memory")
-    if os.path.isfile(os.path.join(base, "project.md")):
-        out.append("memory/project.md")
-    for layer in ("role", "model", "discussions"):
-        folder = os.path.join(base, layer)
-        try:
-            names = sorted(os.listdir(folder))
-        except FileNotFoundError:
-            continue
-        out += ["memory/%s/%s" % (layer, n) for n in names if n.endswith(".md")]
-    return out
-
-
-def _read_text(path):
-    try:
-        with open(path, errors="replace") as fh:
-            return fh.read()
-    except OSError as exc:
-        raise PoolError(osx.explain(exc, "cannot read %s" % path))
 
 
 def event(obj, what, **detail):

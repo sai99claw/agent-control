@@ -57,6 +57,8 @@ DEFAULTS = {
     "unlimited_tokens": False,       # D-084 Q1: when true, memory consolidation is a two-model discussion
     "machine_slots": None,           # at most N agent / test runs at once on the machine; null = no limit
     "regression_exclusive": False,   # true: a regression runs alone on the machine (needs machine_slots)
+    "memory": None,                  # D-088: folder of the role/model/project memory files; null = <pool>/memory,
+                                     # relative = against the project root
     "agents": DEFAULT_AGENTS,
 }
 
@@ -80,6 +82,10 @@ class Config:
         if slots is not None and (isinstance(slots, bool) or not isinstance(slots, int) or slots < 1):
             raise osx.OSFailure("board/config.json devloop.machine_slots must be null or a whole number "
                                 ">= 1, not %r" % (slots,))
+        mem = self.values.get("memory")
+        if mem is not None and not (isinstance(mem, str) and mem):
+            raise osx.OSFailure("board/config.json devloop.memory must be null or a folder path (a "
+                                "non-empty string), not %r" % (mem,))
         exclusive = self.values.get("regression_exclusive")
         if not isinstance(exclusive, bool):
             raise osx.OSFailure("board/config.json devloop.regression_exclusive must be true or false, "
@@ -102,6 +108,14 @@ class Config:
     def pool_path(self):
         path = self.values.get("pool") or os.path.join(self.home, "pools", self.name)
         return path if os.path.isabs(path) else os.path.join(self.home, path)
+
+    @property
+    def memory_dir(self):
+        """The folder holding memory/role, memory/model and project.md, as an absolute path."""
+        path = self.values.get("memory")
+        if path is None:
+            return os.path.join(self.pool_path, "memory")
+        return os.path.normpath(path if os.path.isabs(path) else os.path.join(self.root, path))
 
     @property
     def worktree_root(self):

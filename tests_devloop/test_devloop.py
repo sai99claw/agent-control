@@ -127,6 +127,19 @@ class LoopCase(unittest.TestCase):
     def snap(self):
         return self.pool.snapshot()
 
+    def pool_memory(self, rel=None):
+        """Memory texts in the pool's memory/ folder on disk: {rel: text}, or one text (None if
+        missing). rel is the key form, "memory/role/worker.md"."""
+        out = {}
+        base = os.path.join(self.pool_path, "memory")
+        for folder, _, names in os.walk(base):
+            for n in names:
+                if n.endswith(".md"):
+                    full = os.path.join(folder, n)
+                    with open(full) as fh:
+                        out["memory/" + os.path.relpath(full, base).replace(os.sep, "/")] = fh.read()
+        return out if rel is None else out.get(rel)
+
     def state(self, ident):
         return self.snap().ticket(str(ident)).get("state")
 
@@ -1427,9 +1440,10 @@ class UnlimitedTokens(LoopCase):
         res = self.controller()
         self.assertEqual(res.returncode, 0, res.stderr)
         snap = self.snap()
-        talks = [k for k in snap.memory if k.startswith("memory/discussions/")]
+        mem = self.pool_memory()
+        talks = [k for k in mem if k.startswith("memory/discussions/")]
         self.assertEqual(len(talks), 1)
-        self.assertIn("merge lines 2 and 3", snap.memory[talks[0]])
+        self.assertIn("merge lines 2 and 3", mem[talks[0]])
         state = snap.memory_state["runs"][-1]
         self.assertEqual([c["role"] for c in state["cost"]], ["consolidator", "consolidator_peer", "consolidator"])
 
@@ -1482,7 +1496,7 @@ class Memory(LoopCase):
     def test_init_seeds_every_role_and_starts_model_memory_from_agent_control(self):
         res = self.run_py("tickets.py", "init")
         self.assertEqual(res.returncode, 0, res.stderr)
-        mem = self.snap().memory
+        mem = self.pool_memory()
         for role in ("creator", "worker", "verifier", "reviewer", "fixer", "consolidator"):
             self.assertIn("memory/role/%s.md" % role, mem)
         self.assertIn("memory/project.md", mem)
@@ -1499,7 +1513,7 @@ class Memory(LoopCase):
         res = self.run_py("tickets.py", "init")
         self.assertEqual(res.returncode, 0, res.stderr)
         snap = self.snap()
-        self.assertEqual(snap.memory["memory/model/opus.md"].splitlines()[0], "# Model memory: opus")
+        self.assertEqual(self.pool_memory("memory/model/opus.md").splitlines()[0], "# Model memory: opus")
         queued = [r for r in snap.lessons.values() if r["name"] == "opus"]
         self.assertGreaterEqual(len(queued), 5)
         self.assertTrue(all(r["source"] == "agent-control model card before devloop" for r in queued))
@@ -1513,7 +1527,7 @@ class Memory(LoopCase):
         worker = [r for r in snap.lessons.values() if r["layer"] == "role" and r["name"] == "worker"]
         self.assertTrue(worker)
         self.assertTrue(all(r["source"] == "agent-control role card before devloop" for r in worker))
-        self.assertEqual(snap.memory["memory/role/worker.md"].splitlines()[0], "# Role memory: worker")
+        self.assertEqual(self.pool_memory("memory/role/worker.md").splitlines()[0], "# Role memory: worker")
 
     def test_lessons_are_collected_and_five_get_consolidated_by_the_keeper(self):
         self.init_without_imports()
@@ -1524,7 +1538,7 @@ class Memory(LoopCase):
         snap = self.snap()
         self.assertEqual(snap.ticket("1")["state"], "landed")
         self.assertEqual(snap.lessons, {}, "the five lessons were consumed")
-        self.assertIn("merged 5 lessons", snap.memory["memory/role/worker.md"])
+        self.assertIn("merged 5 lessons", self.pool_memory("memory/role/worker.md"))
         self.assertIn("memory/role/worker.md", snap.memory_state["last"])
         self.assertIsNone(snap.memory_state.get("job"))
         with open(os.path.join(self.tmp, "wt", "runs", "1", "r1-worker", "prompt.md")) as fh:
@@ -1538,6 +1552,79 @@ class Memory(LoopCase):
         self.pool.update(change, "test: one lesson")
         from core import memory
         self.assertEqual(memory.due(self.snap()), [])
+
+
+class MemoryFolderHelpers(LoopCase):
+    """core.memory's folder helpers (devloop.memory, D-088)."""
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def test_file_path_maps_keys_into_the_folder(self):
+        from core import memory
+        f = os.path.join(self.tmp, "mem")
+        self.config(memory=f)
+        cfg = self.cfg()
+        self.assertEqual(memory.file_path(cfg, "memory/role/worker.md"), os.path.join(f, "role", "worker.md"))
+        self.assertEqual(memory.project_path(cfg), os.path.join(f, "project.md"))
+        with self.assertRaises(ValueError):
+            memory.file_path(cfg, "tickets/1.json")
+
+    def test_files_lists_role_model_and_project_but_not_other_folders(self):
+        from core import memory
+        f = os.path.join(self.tmp, "mem")
+        for rel in ("role/a.md", "model/b.md", "project.md", "discussions/c.md", "role/notes.txt"):
+            os.makedirs(os.path.dirname(os.path.join(f, rel)), exist_ok=True)
+            with open(os.path.join(f, rel), "w") as fh:
+                fh.write("x")
+        self.config(memory=f)
+        self.assertEqual(sorted(memory.files(self.cfg())),
+                         ["memory/model/b.md", "memory/project.md", "memory/role/a.md"])
+        self.assertIsNone(memory.read(self.cfg(), "memory/role/none.md"))
+
+    def test_write_files_outside_the_pool_makes_no_pool_commit(self):
+        from core import memory
+        self.run_py("tickets.py", "init")
+        f = os.path.join(self.tmp, "mem")
+        self.config(memory=f)
+        cfg = self.cfg()
+        self.assertFalse(memory.in_pool(cfg, self.pool))
+        commits = git(self.pool_path, "rev-list", "--count", "HEAD")
+        memory.write_files(cfg, self.pool, {"memory/role/x.md": "hello\n"}, "test")
+        self.assertEqual(memory.read(cfg, "memory/role/x.md"), "hello\n")
+        self.assertEqual(git(self.pool_path, "rev-list", "--count", "HEAD"), commits)
+
+    def test_write_files_in_the_pool_is_one_commit(self):
+        from core import memory
+        self.run_py("tickets.py", "init")
+        cfg = self.cfg()
+        self.assertTrue(memory.in_pool(cfg, self.pool))
+        commits = int(git(self.pool_path, "rev-list", "--count", "HEAD"))
+        memory.write_files(cfg, self.pool, {"memory/role/x.md": "a\n", "memory/model/y.md": "b\n"}, "test")
+        self.assertEqual(int(git(self.pool_path, "rev-list", "--count", "HEAD")), commits + 1)
+        self.assertEqual(self.pool_memory("memory/model/y.md"), "b\n")
+
+    def test_seed_never_overwrites_a_file_in_the_folder(self):
+        from core import memory
+        self.run_py("tickets.py", "init")
+        f = os.path.join(self.tmp, "mem")
+        os.makedirs(os.path.join(f, "role"))
+        with open(os.path.join(f, "role", "worker.md"), "w") as fh:
+            fh.write("mine\n")
+        self.config(memory=f)
+        memory.seed(self.cfg(), self.pool, ["python3"])
+        self.assertEqual(memory.read(self.cfg(), "memory/role/worker.md"), "mine\n")
+        self.assertIsNotNone(memory.read(self.cfg(), "memory/role/fixer.md"))
+
+    def test_config_memory_dir_forms(self):
+        self.assertEqual(self.cfg().memory_dir, os.path.join(self.pool_path, "memory"))
+        self.config(memory="a/../m")
+        self.assertEqual(self.cfg().memory_dir, os.path.join(self.proj, "m"))
+        for bad in (5, True, [], ""):
+            self.config(memory=bad)
+            with self.assertRaises(osx.OSFailure):
+                self.cfg()
 
 
 class T7Acceptance(LoopCase):
@@ -1575,14 +1662,14 @@ class T7Acceptance(LoopCase):
 
     def test_item2_one_pool_commit_and_the_memory_file_is_untouched(self):
         self.init_without_imports()
-        before = self.snap().memory["memory/role/worker.md"]
+        before = self.pool_memory("memory/role/worker.md")
         commits = self.pool_commits()
         path = self.write("old.md", "- one\n- two\n")
         res = self.lessons("--layer", "role", "--name", "worker", "--file", path)
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         self.assertEqual(len(self.rows("role", "worker")), 2)
         self.assertEqual(self.pool_commits(), commits + 1, "one pool commit")
-        self.assertEqual(self.snap().memory["memory/role/worker.md"], before)
+        self.assertEqual(self.pool_memory("memory/role/worker.md"), before)
 
     def test_item3_two_files_for_the_same_memory_both_stay_queued(self):
         self.init_without_imports()
@@ -1605,7 +1692,7 @@ class T7Acceptance(LoopCase):
         res = self.controller()
         self.assertEqual(res.returncode, 0, res.stderr)
         snap = self.snap()
-        self.assertIn("merged 5 lessons", snap.memory["memory/role/worker.md"])
+        self.assertIn("merged 5 lessons", self.pool_memory("memory/role/worker.md"))
         self.assertEqual(snap.lessons, {}, "the imported lessons were consumed")
 
     def test_item5_project_layer_without_name_uses_name_project(self):

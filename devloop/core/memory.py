@@ -1,9 +1,15 @@
-"""Layered memory, kept in the pool next to the tickets (D-013, D-053 ⑥, D-055 ①).
+"""Layered memory (D-013, D-053 ⑥, D-055 ①, D-088).
 
 Layers (what belongs where is in prompts/consolidator.md, the one text of the contract):
     role     memory/role/<role>.md     principles for doing this role well, any project
     model    memory/model/<model>.md   how this model tends to go wrong, any project
     project  memory/project.md         this project's design reasons and invariants
+
+The names above (rel()) are the keys of memory files everywhere (memory/state.json, the board,
+the keeper job). The files themselves live in the folder devloop.memory names (Config.memory_dir,
+default the pool's own memory/): key "memory/role/worker.md" is <memory_dir>/role/worker.md.
+write_files() is the only place that writes them. Lessons (memory/inbox/), memory/state.json and
+memory/discussions/ are records and always stay in the pool.
 
 Agents never edit memory. A hand-in may carry lessons:
     "lessons": [{"layer": "role" | "model" | "project", "text": "one principle"}]
@@ -54,28 +60,90 @@ OLD_ROLE_CARDS = {"worker": "implementer", "fixer": "implementer", "creator": "o
                   "verifier": "verifier", "reviewer": "reviewer", "consolidator": "consolidator"}
 
 
-def seed(tx, models=(), home=None):
-    """Create the memory files that are missing (never overwrites), each with only its heading.
+def file_path(cfg, key):
+    """Where the memory file with key `key` ("memory/role/worker.md") is on disk."""
+    if not key.startswith("memory/"):
+        raise ValueError("not a memory file key: %r" % (key,))
+    return os.path.join(cfg.memory_dir, *key[len("memory/"):].split("/"))
+
+
+def project_path(cfg):
+    return file_path(cfg, rel("project", "project"))
+
+
+def read(cfg, key):
+    """The text of one memory file, or None when there is none."""
+    try:
+        with open(file_path(cfg, key), errors="replace") as fh:
+            return fh.read()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise osx.OSFailure(osx.explain(exc, "cannot read %s" % file_path(cfg, key)))
+
+
+def files(cfg):
+    """Keys of the memory files in the folder: role/*.md, model/*.md and project.md."""
+    out = []
+    base = cfg.memory_dir
+    if os.path.isfile(os.path.join(base, "project.md")):
+        out.append(rel("project", "project"))
+    for layer in ("role", "model"):
+        try:
+            names = sorted(os.listdir(os.path.join(base, layer)))
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        out += ["memory/%s/%s" % (layer, n) for n in names
+                if n.endswith(".md") and os.path.isfile(os.path.join(base, layer, n))]
+    return out
+
+
+def in_pool(cfg, pool):
+    """True when the memory folder is the pool's own memory/ (devloop.memory unset)."""
+    return os.path.realpath(cfg.memory_dir) == os.path.realpath(os.path.join(pool.path, "memory"))
+
+
+def write_files(cfg, pool, texts, message):
+    """Write memory files ({key: text}). The only writer of memory files: in the pool's own
+    memory/ it is one pool.update; elsewhere atomic writes under the folder. Raises OSFailure."""
+    if not texts:
+        return
+    if in_pool(cfg, pool):
+        def change(tx):
+            for key, text in texts.items():
+                file_path(cfg, key)   # refuse a key that is not a memory file
+                tx.write_text(key, text)
+        pool.update(change, message)
+        return
+    for key, text in texts.items():
+        osx.atomic_write(file_path(cfg, key), text)
+
+
+def seed(cfg, pool, models=(), home=None):
+    """Create the memory files that are missing in the folder (never overwrites), each with
+    only its heading.
 
     Older notes (agent-control's model and role cards from before devloop) are not copied in: every
     bullet goes to memory/inbox as a lesson, so the consolidator applies the layer contract to
     it like to any other lesson - nothing reaches an agent's prompt unfiltered."""
-    have = tx.data.memory
+    have = set(files(cfg))
     wanted = [("role", r) for r in ROLES] + [("model", m) for m in models] + [("project", "project")]
-    imported = 0
-    for layer, name in wanted:
-        path = rel(layer, name)
-        if path in have:
-            continue
-        tx.write_text(path, SEED[layer].format(name=name))
-        if not home:
-            continue
-        if layer == "model":
-            imported += _import_card(tx, os.path.join(home, "memory", "model", "%s.md" % name), layer, name)
-        elif layer == "role" and name in OLD_ROLE_CARDS:
-            imported += _import_card(tx, os.path.join(home, "memory", "role", "%s.md" % OLD_ROLE_CARDS[name]),
-                                     layer, name)
-    return imported
+    missing = [(layer, name) for layer, name in wanted if rel(layer, name) not in have]
+    write_files(cfg, pool, {rel(layer, name): SEED[layer].format(name=name) for layer, name in missing},
+                "memory: seed")
+    if not home or not missing:
+        return 0
+
+    def change(tx):
+        imported = 0
+        for layer, name in missing:
+            if layer == "model":
+                imported += _import_card(tx, os.path.join(home, "memory", "model", "%s.md" % name), layer, name)
+            elif layer == "role" and name in OLD_ROLE_CARDS:
+                imported += _import_card(tx, os.path.join(home, "memory", "role", "%s.md" % OLD_ROLE_CARDS[name]),
+                                         layer, name)
+        return imported
+    return pool.update(change, "memory: import old cards as lessons")
 
 
 def bullets(path):
@@ -112,11 +180,11 @@ def import_lessons(tx, texts, layer, name, path):
     return queue(tx, texts, layer, name, "lessons import from %s" % path, prefix)
 
 
-def for_prompt(snap, role, model):
-    """What a starting agent reads: its role memory and its model memory."""
+def for_prompt(cfg, role, model):
+    """What a starting agent reads: its role memory and its model memory (from the folder)."""
     parts = []
     for layer, name in (("role", role), ("model", model)):
-        text = (snap.memory.get(rel(layer, name)) or "").strip()
+        text = (read(cfg, rel(layer, name)) or "").strip()
         if text:
             parts.append(text)
     return "\n\n".join(parts) or "(nothing recorded yet)"

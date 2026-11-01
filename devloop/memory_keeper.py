@@ -7,7 +7,10 @@ the consolidator is the configured higher model). The lessons it was shown are r
 that arrived meanwhile stay for next time. The attempt is recorded either way, so a failing
 consolidation is retried after 24 hours, not in a loop.
 
-Exit: 0 consolidated · 1 the consolidator's hand-in was unusable (nothing changed) · 2 refused.
+The file is written in the memory folder (devloop.memory, through memory.write_files); the
+record of the run (memory/state.json, memory/discussions/) and the lessons stay in the pool.
+
+Exit: 0 consolidated · 1 the consolidator's hand-in was unusable or the file could not be written (lessons kept) · 2 refused.
 """
 
 import argparse
@@ -31,7 +34,7 @@ def keep(cfg, pool, layer, name):
     run_dir = cfg.runs_dir("memory", "%s-%s-%s" % (layer, memory._safe(name), osx.now().replace(":", "")))
     values = {
         "layer": layer, "name": name, "path": path,
-        "current": snap.memory.get(path) or memory.SEED[layer].format(name=name),
+        "current": memory.read(cfg, path) or memory.SEED[layer].format(name=name),
         "lessons": json.dumps([{"text": r.get("text"), "source": r.get("source"), "at": r.get("at")}
                                for r in rows.values()], indent=2, ensure_ascii=False),
         "result_path": os.path.join(run_dir, "result.json"),
@@ -48,6 +51,13 @@ def keep(cfg, pool, layer, name):
         text, discussion, more = discuss(cfg, pool, values, text, run_dir)
         costs += more
     ok = isinstance(text, str) and text.strip()
+    problem = None
+    if ok:
+        try:
+            memory.write_files(cfg, pool, {path: text.rstrip() + "\n"},
+                               "memory: consolidate %s (%d lessons)" % (path, len(rows)))
+        except osx.OSFailure as exc:
+            ok, problem = False, "cannot write %s: %s" % (path, exc)
 
     def change(tx):
         state = dict(tx.data.memory_state or {})
@@ -60,12 +70,11 @@ def keep(cfg, pool, layer, name):
             tx.write_text("memory/discussions/%s-%s-%s.md" % (
                 osx.now().replace(":", ""), layer, memory._safe(name)), discussion)
         if ok:
-            tx.write_text(path, text.rstrip() + "\n")
             for key in rows:
                 tx.delete("memory/inbox/%s.json" % key)
-    pool.update(change, "memory: consolidate %s (%d lessons)%s" % (path, len(rows), "" if ok else " - failed"))
+    pool.update(change, "memory: consolidated %s (%d lessons)%s" % (path, len(rows), "" if ok else " - failed"))
     if not ok:
-        print("memory_keeper: %s" % (hand.problem() or "hand-in has no \"text\""), file=sys.stderr)
+        print("memory_keeper: %s" % (problem or hand.problem() or "hand-in has no \"text\""), file=sys.stderr)
         return 1
     return 0
 

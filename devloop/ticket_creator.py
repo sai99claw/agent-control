@@ -215,8 +215,8 @@ def open_tickets(cfg, pool, request, via="main"):
     base = "\n\n".join([
         chain(),
         "## What earlier openers learned\n\n%s\n\nProject memory (design reasons and invariants): %s" % (
-            memory.for_prompt(snap, "creator", agents._model(cfg.agent("creator"))),
-            os.path.join(pool.path, memory.rel("project", "project"))),
+            memory.for_prompt(cfg, "creator", agents._model(cfg.agent("creator"))),
+            memory.project_path(cfg)),
         "## Reference ticket\n\n```json\n%s\n```" % example(),
         required_section(cfg),
         limits_section(cfg),

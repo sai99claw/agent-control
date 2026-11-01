@@ -197,9 +197,10 @@ def render(cfg, snap, key=None):
     out.append('<section><h2>記憶</h2><div class="scroll"><table><tr><th>檔</th><th>字元</th><th>暫存區</th>'
                '<th>上次整理</th></tr>')
     last = (snap.memory_state or {}).get("last") or {}
-    for path, text in sorted(snap.memory.items()):
+    for path in sorted(memory.files(cfg)):
         layer = path.split("/")[1] if path.count("/") == 2 else "project"
         name = os.path.basename(path)[:-3] if layer != "project" else "project"
+        text = memory.read(cfg, path) or ""
         out.append("<tr><td>%s</td><td class='num'>%s</td><td class='num'>%s</td><td>%s</td></tr>" % (
             e(path), e(len(text)), e(len(memory.pending(snap, layer, name))), e(last.get(path) or "")))
     out.append("</table></div></section>")
