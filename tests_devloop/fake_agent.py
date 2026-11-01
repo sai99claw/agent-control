@@ -66,6 +66,16 @@ if role == "worker":
     open("impl_%s.txt" % ticket, "w").write("bad" if action == "wrong" else "ok")
     if action == "red":
         open("red.txt", "w").write("x")
+    if action == "move_main_files":   # #29: $FAKE_WORKER_FILES here, then $FAKE_MAIN_FILES committed to main
+        for rel, text in json.loads(os.environ.get("FAKE_WORKER_FILES") or "{}").items():
+            os.makedirs(os.path.dirname(rel) or ".", exist_ok=True)
+            open(rel, "w").write(text)
+        root = os.environ["AC_ROOT"]
+        for rel, text in json.loads(os.environ["FAKE_MAIN_FILES"]).items():
+            os.makedirs(os.path.dirname(os.path.join(root, rel)), exist_ok=True)
+            open(os.path.join(root, rel), "w").write(text)
+            subprocess.run(["git", "-C", root, "add", rel], check=True)
+        subprocess.run(["git", "-C", root, "commit", "-q", "-m", "main moves"], check=True)
     if action == "touch_decisions":
         os.makedirs("docs", exist_ok=True)
         open("docs/DECISIONS.md", "a").write("x\n")
@@ -74,6 +84,12 @@ if role == "worker":
         open(os.path.join(root, "NOTES.md"), "w").write("notes\n")
         subprocess.run(["git", "-C", root, "add", "NOTES.md"], check=True)
         subprocess.run(["git", "-C", root, "commit", "-q", "-m", "docs"], check=True)
+    if action == "move_main_memory":   # main takes only a no-reverify path (memory/note.md) meanwhile (#29)
+        root = os.environ["AC_ROOT"]
+        os.makedirs(os.path.join(root, "memory"), exist_ok=True)
+        open(os.path.join(root, "memory", "note.md"), "w").write("note\n")
+        subprocess.run(["git", "-C", root, "add", "memory/note.md"], check=True)
+        subprocess.run(["git", "-C", root, "commit", "-q", "-m", "memory note"], check=True)
     if action == "shared":
         open("shared.txt", "w").write("from %s\n" % ticket)
     if action in ("revise", "revise_overrun"):
@@ -106,6 +122,16 @@ elif role == "reviewer":
     hand({"kind": "review", "verdict": action, "feedback": "" if action == "pass" else "missing part"})
 elif role == "fixer":
     git("merge", "--no-edit", "main", check=False)
+    if action == "decision":   # #28: a contradiction handed to the user, no commit
+        hand({"kind": "decision", "text": "#1 and #2 contradict on impl output; open a new ticket that picks one"})
+        sys.exit(0)
+    if action == "cases":   # #28: what "fix" does, and lists one aligned case
+        if os.path.exists("red.txt"):
+            os.unlink("red.txt")
+        commit("fix")
+        hand({"kind": "done", "summary": "removed red",
+              "cases_changed": [{"ticket": "1", "case": "case_1", "acceptance": "a"}]})
+        sys.exit(0)
     if action == "blocked":
         hand({"kind": "blocked", "text": "tickets contradict"})
         sys.exit(0)

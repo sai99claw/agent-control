@@ -22,7 +22,7 @@ matter; when an exception appears, change the flow instead of adding a branch.
 
 | Script | LLM | Called by | Does |
 | --- | --- | --- | --- |
-| `ticket_creator.py` | opener | main; a worker or fixer (`--revise`) | request → tickets + DAG entries, validated, one push; or revise one ticket; questions on direction, business logic, UX go to main |
+| `ticket_creator.py` | opener | main; a worker (`--revise`) | request → tickets + DAG entries, validated, one push; or revise one ticket; questions on direction, business logic, UX go to main |
 | `ticket_controller.py` | none | main, once | the only driver: jobs, groups, dispatch, landing, release |
 | `ticket_issuer.py` | worker, verifier, reviewer | controller | one ticket from running to merged into its integration branch |
 | `regression.py` | none | controller | preflight + full suite on an integration branch |
@@ -74,10 +74,10 @@ No script polls another; each records its outcome in the pool and exits.
 | --- | --- |
 | tickets of one group depend on each other | issuer branches from the integration branch; dispatch waits for "merged into the same branch" |
 | several workers merge into one branch at once | compare-and-swap; the loser takes the branch in and tries again |
-| main moved during verification | treated as red: auto_fixer merges main (plain merge first, LLM only on conflict), regression again |
+| main moved during verification | only in `devloop.no_reverify_paths` (D-090): the controller merges main in itself (no conflict) and lands without re-verifying; otherwise treated as red: auto_fixer merges main (plain merge first, LLM only on conflict), regression again |
 | a ticket gets stuck | the rest of its group lands; it and its dependents go to main |
 | environment unusable at regression (preflight rc 86) | not red: one "env" page, controller stops (exit 3); run it again after fixing |
-| a fixer finds two tickets contradict | it runs `ticket_creator.py --revise`, like a worker |
+| a fixer finds two tickets contradict | it hands in `decision` (where they contradict, which new ticket it proposes): a decision page, the group stops; merged tickets are frozen, the fixer only aligns cases to their current acceptance and lists them in `cases_changed` |
 | release fails after main moved | one decision page; no retry, no rollback |
 | controller / container dies | no state outside the pool and git; a running ticket whose issuer is dead goes back to ready |
 | two processes edit one ticket | a rejected push re-reads and re-applies; no git conflict resolution in the pool |

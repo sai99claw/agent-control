@@ -27,7 +27,7 @@ group complete (= one PR, a local mark) -> regression.py (preflight + full suite
 | `python3 devloop/ticket_creator.py --request "..."` | the user wants something |
 | `python3 devloop/ticket_controller.py` | run until nothing is left (`--forever` keeps watching) |
 | `python3 devloop/tickets.py inbox` / `ack` | pages: created, landed, decision, env, cancelled |
-| `python3 devloop/tickets.py list` / `show N` | state of tickets and groups |
+| `python3 devloop/tickets.py list` / `show N` | state of tickets and groups; a merged ticket shows as 功能完成 and a landed one as 驗證完成, while the pool keeps merged / landed |
 | `python3 devloop/tickets.py ready N` | after deciding on a stuck ticket |
 | `python3 devloop/tickets.py ready gN` | a stuck group whose branch and merged tickets are still there: verify it again (fix rounds back to 0) |
 | `python3 devloop/tickets.py cancel N --why ...` | drop a ticket |
@@ -50,6 +50,14 @@ Run them from the project (or set `AC_ROOT` to it).
 `memory` (D-088: the folder of the memory files; default `<pool>/memory`, a relative path is against the project root; see Memory).
 Tests run through the project's existing test interface (`tests.preflight`, `tests.run`, `tests.full`; `scripts/testiface.py`).
 `hard_block.paths` / `patterns`: a ticket that touches them stops before merging.
+
+`devloop.no_reverify_paths` (D-090; default `["memory/", "docs/DECISIONS.md", "docs/HANDOFF.md"]`,
+a project's list replaces it, `[]` turns it off): when main moved after a group was verified and
+every file main changed since (`git diff --name-only --no-renames <merge-base> <main>`) is one of
+these paths or under one of these folders, the controller merges main into the integration branch
+itself (a `--no-ff` merge commit in a throwaway worktree) and lands that merge without a second
+regression and without a fix round. A move that touches anything else, a conflict or any other
+merge failure takes the usual path: auto_fixer merges main, then the regression runs again.
 
 ## Machine slots
 
@@ -85,12 +93,12 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
 
 | Role | Script | When | Default models | Writes |
 |---|---|---|---|---|
-| `creator` | `ticket_creator.py` | for the main session's request, or for a worker or fixer that runs `--revise` | opus xhigh | hand-in `tickets` (tickets and DAG entries), `revised` / `unchanged` (a ticket revision), `question` or `rejected` |
+| `creator` | `ticket_creator.py` | for the main session's request, or for a worker that runs `--revise` | opus xhigh | hand-in `tickets` (tickets and DAG entries), `revised` / `unchanged` (a ticket revision), `question` or `rejected` |
 | `worker` | `ticket_issuer.py` | for each ticket round (complex tickets) | opus medium | code and unit tests committed on the ticket branch; hand-in `done` or `blocked` |
 | `worker_simple` | `ticket_issuer.py` | instead of `worker` when the ticket has `complexity: simple` | sonnet medium | the same as `worker` |
 | `verifier` | `ticket_issuer.py` | before the worker, for tickets that need one | opus medium | the acceptance cases (marked as described below) on the branch `t/<id>-cases`; hand-in `cases` |
 | `reviewer` | `ticket_issuer.py` | after the worker, for complex tickets | opus medium | hand-in `review` (verdict pass or fail, feedback); edits nothing |
-| `fixer` | `auto_fixer.py` | when the regression on an integration branch is red | opus medium | the fix committed on the integration branch; hand-in `done` or `blocked` |
+| `fixer` | `auto_fixer.py` | when the regression on an integration branch is red | opus medium | the fix committed on the integration branch, by the tickets' current content; hand-in `done` (with `cases_changed`: each acceptance case it aligned to its ticket, added to the group with the fix round) or `decision` (two tickets contradict: a decision page, the group stops; `blocked` is the same) |
 | `consolidator` | `memory_keeper.py`, started by `ticket_controller.py` in `consolidate()` | when a memory file has 5 lessons waiting, or its oldest lesson is 3 days old, at most once per 24 h per file | fable medium, then opus medium | hand-in `memory`: the new text of one memory file and the lessons it dropped; `memory_keeper.py` writes the file |
 | `consolidator_peer` | `memory_keeper.py` | only when `unlimited_tokens` is on, to review the consolidator's draft | opus medium | hand-in `review` (agree or change, notes) kept in `memory/discussions/` |
 

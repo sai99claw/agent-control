@@ -24,7 +24,13 @@ from . import osx
 from .gitx import Git, GitError
 
 TICKET_STATES = ("ready", "running", "merged", "landed", "stuck", "cancelled")
+STATE_SHOWN = {"merged": "功能完成", "landed": "驗證完成"}
 GROUP_STATES = ("open", "pr", "fixing", "landed", "stuck")
+
+
+def shown_state(state):
+    """The label people see for a stored ticket state; the state itself when it has none."""
+    return STATE_SHOWN.get(state, state)
 
 
 class PoolError(osx.OSFailure):

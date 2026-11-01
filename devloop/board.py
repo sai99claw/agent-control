@@ -33,9 +33,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core import dag as dagmod  # noqa: E402
 from core import memory, osx  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
+from core.pool import shown_state  # noqa: E402
 
 UNKNOWN = "未知"
-STATE_TEXT = {"ready": "待派", "running": "做中", "merged": "已合進整合分支", "landed": "已落地",
+STATE_TEXT = {"ready": "待派", "running": "做中", "merged": shown_state("merged"), "landed": shown_state("landed"),
               "stuck": "卡住", "cancelled": "取消"}
 GROUP_TEXT = {"open": "收票中", "pr": "PR(待驗)", "fixing": "修紅中", "verified": "已驗,待落地",
               "landed": "已落地", "stuck": "卡住", "cancelled": "取消"}

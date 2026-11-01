@@ -19,7 +19,7 @@ sys.path.insert(0, LOOP)
 
 from core import dag as dagmod  # noqa: E402
 from core import osx  # noqa: E402
-from core.pool import Pool  # noqa: E402
+from core.pool import Pool, shown_state, TICKET_STATES  # noqa: E402
 
 AGENT = ["python3", os.path.join(HERE, "fake_agent.py")]
 ROLES = ("creator", "worker", "worker_simple", "verifier", "reviewer", "fixer", "consolidator",
@@ -409,6 +409,8 @@ class Regression(LoopCase):
         self.assertEqual(self.state(1), "landed")
 
     def test_main_moving_during_verification_is_merged_in(self):
+        log = os.path.join(self.tmp, "intervals.txt")
+        self.env["FAKE_INTERVALS"] = log
         self.add(1)
         self.plan(worker={"1": ["move_main"]})
         res = self.controller()
@@ -416,6 +418,8 @@ class Regression(LoopCase):
         self.assertEqual(self.state(1), "landed")
         self.assertTrue(self.main_has("NOTES.md") and self.main_has("impl_1.txt"))
         self.assertEqual(self.snap().groups["g1"]["fix_round"], 1)
+        with open(log) as fh:
+            self.assertEqual(sum(1 for line in fh if line.startswith("tests full ")), 2)
 
 
 class T4Acceptance(LoopCase):
@@ -488,6 +492,71 @@ class ReleaseFails(LoopCase):
         self.assertEqual(self.snap().groups["g1"]["release"], "failed")
         self.assertTrue(self.main_has("impl_1.txt"))
         self.assertIn("decision", self.inbox_kinds())
+
+
+
+class FixerCasesChanged(LoopCase):
+    """auto_fixer keeps the fixer's cases_changed on the group, one entry per case with its round."""
+
+    def setUp(self):
+        super().setUp()
+        import auto_fixer
+        self.fixer = auto_fixer
+        self.pool.update(lambda tx: tx.put_group({"id": "g9", "members": [], "state": "pr"}),
+                         "test: group g9")
+
+    def test_later_rounds_append_with_their_own_round(self):
+        self.fixer._record_cases(self.pool, "g9", 1, [{"ticket": "1", "case": "c1", "acceptance": "a"}])
+        self.fixer._record_cases(self.pool, "g9", 2, [{"ticket": "2", "case": "c2", "acceptance": "b"},
+                                                      {"ticket": "1", "case": "c3", "acceptance": "a"}])
+        self.assertEqual(self.snap().groups["g9"]["cases_changed"], [
+            {"ticket": "1", "case": "c1", "acceptance": "a", "round": 1},
+            {"ticket": "2", "case": "c2", "acceptance": "b", "round": 2},
+            {"ticket": "1", "case": "c3", "acceptance": "a", "round": 2}])
+
+    def test_done_without_cases_changed_adds_nothing(self):
+        self.fixer._record_cases(self.pool, "g9", 1, [{"ticket": "1", "case": "c1", "acceptance": "a"}])
+        for cases in (None, [], "not a list"):
+            self.fixer._record_cases(self.pool, "g9", 2, cases)
+        self.assertEqual(self.snap().groups["g9"]["cases_changed"],
+                         [{"ticket": "1", "case": "c1", "acceptance": "a", "round": 1}])
+        self.fixer._record_cases(self.pool, "g9", 3, None)
+        self.pool.update(lambda tx: tx.put_group({"id": "g8", "members": [], "state": "pr"}), "g8")
+        self.fixer._record_cases(self.pool, "g8", 1, None)
+        self.assertNotIn("cases_changed", self.snap().groups["g8"])
+
+    def test_case_mark_is_the_issuers(self):
+        import ticket_issuer
+        self.assertEqual(self.fixer.case_mark("7"), ticket_issuer.case_mark("7"))
+        self.assertEqual(self.fixer.case_mark("1"), "T1Acceptance")
+
+
+class FixerBlockedIsDecision(LoopCase):
+    """A fixer hand-in of kind blocked is handled exactly as decision: one fixer run, one decision
+    page carrying the fixer's text, the group stuck with its members merged."""
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def test_blocked_stops_the_group_after_one_fixer_run(self):
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["blocked", "fix"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        g = self.snap().groups["g1"]
+        self.assertEqual(g["state"], "stuck")
+        self.assertEqual(g["fix_round"], 1)
+        with open(os.path.join(self.tmp, "plan", "count-fixer-g1")) as fh:
+            self.assertEqual(fh.read(), "1")
+        rows = [r for r in self.snap().inbox.values() if r["kind"] == "decision"]
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0]["ref"], "g1")
+        self.assertFalse(rows[0]["acked"])
+        self.assertIn("tickets contradict", rows[0]["text"])
+        self.assertEqual(self.state(1), "merged")
+        self.assertNotIn("cases_changed", g)
 
 
 class T8Acceptance(LoopCase):
@@ -1397,6 +1466,76 @@ class T23Acceptance(LoopCase):
         self.assertEqual(self.pool_memory(self.WORKER_MD), before_md)
 
 
+class T28Acceptance(LoopCase):
+    """#28: auto_fixer fixes by the tickets as they are, lists the cases it aligned, and hands a
+    contradiction to the user as a decision page."""
+
+    DECISION_TEXT = "#1 and #2 contradict on impl output; open a new ticket that picks one"
+
+    def setUp(self):
+        super().setUp()
+        # the fake agent keys its plan on DEVLOOP_TICKET first: the suite's own must not leak in
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def run_cases(self):
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["cases"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+
+    def test_item2_done_with_cases_changed_is_recorded_and_lands(self):
+        self.run_cases()
+        self.assertEqual(self.state(1), "landed")
+        g = self.snap().groups["g1"]
+        self.assertIn("cases_changed", g, g)
+        self.assertEqual(g["cases_changed"],
+                         [{"ticket": "1", "case": "case_1", "acceptance": "a", "round": 1}])
+
+    def test_item3_decision_stops_the_group_with_one_page(self):
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["decision"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        g = self.snap().groups["g1"]
+        self.assertEqual(g["state"], "stuck", g)
+        self.assertEqual(g["fix_round"], 1, g)
+        with open(os.path.join(self.tmp, "plan", "count-fixer-g1")) as fh:
+            self.assertEqual(fh.read().strip(), "1", "the fixer ran more than once")
+        pages = [row for row in self.snap().inbox.values() if row["kind"] == "decision"]
+        self.assertEqual(len(pages), 1, pages)
+        self.assertEqual(pages[0]["ref"], "g1", pages)
+        self.assertFalse(pages[0].get("acked"), pages)
+        self.assertIn(self.DECISION_TEXT, pages[0]["text"], pages)
+        self.assertEqual(self.state(1), "merged")
+
+    def test_item1_fixer_prompt(self):
+        self.run_cases()
+        path = os.path.join(self.tmp, "wt", "runs", "fix", "g1", "r1", "prompt.md")
+        self.assertTrue(os.path.exists(path), "no fixer prompt at %s" % path)
+        with open(path, encoding="utf-8") as fh:
+            prompt = fh.read()
+        for w in ("--revise", "ticket_creator"):
+            self.assertNotIn(w, prompt)
+        for w in ("T1Acceptance", "cases_changed", '"kind": "decision"', "looser"):
+            self.assertIn(w, prompt)
+
+    def test_item4_readme_roles_rows(self):
+        # rows parsed as T19Acceptance.role_rows does
+        with open(os.path.join(HOME, "devloop", "README.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("\n## Roles\n", text)
+        sec = text.split("\n## Roles\n", 1)[1].split("\n## ", 1)[0]
+        lines = [l for l in sec.splitlines() if l.strip().startswith("|")]
+        self.assertGreaterEqual(len(lines), 3, "the Roles section has no table")
+        by_name = {[c.strip() for c in r.strip().strip("|").split("|")][0]: r for r in lines[2:]}
+        self.assertIn("`fixer`", by_name)
+        self.assertIn("`creator`", by_name)
+        self.assertIn("cases_changed", by_name["`fixer`"])
+        self.assertIn("decision", by_name["`fixer`"])
+        self.assertNotIn("fixer", by_name["`creator`"])
+
+
 class WebInput(LoopCase):
     def stuck(self, ident):
         self.add(ident)
@@ -2104,6 +2243,56 @@ class Landing(LoopCase):
         self.assertIsNone(total["input_tokens"])
 
 
+class T29Acceptance(LoopCase):
+    """Ticket #29: devloop.no_reverify_paths - main moved only there is merged in without a second regression."""
+
+    EVENT = "main took only no-reverify paths: merged without re-verifying"
+
+    def test_v1_a_memory_only_main_move_lands_with_one_full_regression(self):
+        """Item 3."""
+        log = os.path.join(self.tmp, "intervals.txt")
+        self.env["FAKE_INTERVALS"] = log
+        self.add(1)
+        self.plan(worker={"1": ["move_main_memory"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertTrue(self.main_has("memory/note.md"), "main lacks memory/note.md")
+        self.assertTrue(self.main_has("impl_1.txt"), "main lacks impl_1.txt")
+        g = self.snap().groups["g1"]
+        events = [h.get("event") or "" for h in g.get("history") or []]
+        self.assertEqual(g["fix_round"], 0, events)
+        self.assertIn(self.EVENT, events)
+        self.assertEqual([e for e in events if e.startswith("fix round")], [], events)
+        with open(log) as fh:
+            full = [line for line in fh if line.startswith("tests full ")]
+        self.assertEqual(len(full), 1, full)
+
+    def test_v2_the_default_list_and_a_project_list(self):
+        """Item 1."""
+        from core.config import Config
+        cfg = Config(self.proj)
+        self.assertIn("no_reverify_paths", cfg.values, "no devloop.no_reverify_paths default")
+        self.assertEqual(cfg.no_reverify_paths, ["memory/", "docs/DECISIONS.md", "docs/HANDOFF.md"])
+        self.config(no_reverify_paths=["x/"])
+        self.assertEqual(Config(self.proj).no_reverify_paths, ["x/"])
+
+    def test_v3_a_value_that_is_not_a_list_of_strings_stops_every_script(self):
+        """Item 2."""
+        for bad in ("memory/", [1]):
+            self.config(no_reverify_paths=bad)
+            res = self.run_py("tickets.py", "list")
+            self.assertEqual(res.returncode, 2, "%r: %s" % (bad, res.stdout + res.stderr))
+            self.assertIn("devloop.no_reverify_paths", res.stderr, repr(bad))
+
+    def test_v4_the_readme_documents_the_setting(self):
+        """Item 4."""
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            text = fh.read()
+        self.assertIn("no_reverify_paths", text)
+        self.assertIn("docs/HANDOFF.md", text)
+
+
 class ReleaseTimeoutSetting(LoopCase):
     def test_release_timeout_defaults_to_3600_and_can_be_set(self):
         from core.config import Config
@@ -2156,6 +2345,160 @@ class Recovery(LoopCase):
         res = self.controller()
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(self.state(1), "landed")
+
+
+class NoReverifyPaths(LoopCase):
+    """#29 / D-090: main moved only in devloop.no_reverify_paths -> the controller merges it in."""
+
+    NRV = "main took only no-reverify paths: merged without re-verifying"
+
+    def move(self, main_files, worker_files=None):
+        self.env["FAKE_MAIN_FILES"] = json.dumps(main_files)
+        self.env["FAKE_WORKER_FILES"] = json.dumps(worker_files or {})
+        self.env["FAKE_INTERVALS"] = self.log = os.path.join(self.tmp, "intervals.txt")
+        self.add(1)
+        self.plan(worker={"1": ["move_main_files"]})
+        return self.controller()
+
+    def full_runs(self):
+        with open(self.log) as fh:
+            return sum(1 for line in fh if line.startswith("tests full "))
+
+    def events(self):
+        return [e.get("event") for e in self.snap().groups["g1"].get("history") or []]
+
+    def assert_fixer_path(self, res):
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["fix_round"], 1)
+        self.assertNotIn(self.NRV, self.events())
+        self.assertEqual(self.full_runs(), 2)
+
+    def test_shortcut_lands_with_one_regression(self):
+        res = self.move({"memory/note.md": "note\n", "docs/HANDOFF.md": "h\n"})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        g = self.snap().groups["g1"]
+        self.assertEqual(g["fix_round"], 0)
+        self.assertIn(self.NRV, self.events())
+        self.assertEqual(self.full_runs(), 1)
+        head = git(self.proj, "rev-parse", "main")
+        merge = git(self.proj, "rev-list", "--merges", "-n1", head)   # the code map may sit on top
+        self.assertTrue(merge)
+        self.assertEqual(len(git(self.proj, "rev-list", "--parents", "-n1", merge).split()), 3)
+        self.assertEqual(g["landed_sha"], head)
+        self.assertEqual(glob.glob(os.path.join(self.tmp, "wt", "nrv-*")), [])
+
+    def test_empty_list_turns_the_shortcut_off(self):
+        self.config(no_reverify_paths=[])
+        self.assert_fixer_path(self.move({"memory/note.md": "note\n"}))
+
+    def test_a_mixed_move_takes_the_fixer_path(self):
+        self.assert_fixer_path(self.move({"memory/note.md": "note\n", "NOTES.md": "notes\n"}))
+
+    def test_a_conflict_in_the_loop_takes_the_fixer_path(self):
+        res = self.move({"memory/note.md": "note\n"}, worker_files={"memory/note.md": "worker\n"})
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertGreaterEqual(self.snap().groups["g1"]["fix_round"], 1)
+        self.assertNotIn(self.NRV, self.events())
+        self.assertGreaterEqual(self.full_runs(), 2)
+        self.assertEqual(glob.glob(os.path.join(self.tmp, "wt", "nrv-*")), [])
+
+    def test_a_conflict_aborts_and_leaves_the_branch(self):
+        from core.gitx import Git
+        import ticket_controller
+        seen = {}
+        real = Git.move_ref
+
+        def spy(repo, branch, new, old):
+            seen.setdefault("moves", []).append(branch)
+            return real(repo, branch, new, old)
+        git(self.proj, "branch", "int/g1", "main")
+        base = git(self.proj, "rev-parse", "main")
+        tree = os.path.join(self.tmp, "side")
+        git(self.proj, "worktree", "add", "-q", "--detach", tree, "int/g1")
+        os.makedirs(os.path.join(tree, "memory"))
+        with open(os.path.join(tree, "memory", "note.md"), "w") as fh:
+            fh.write("worker\n")
+        git(tree, "add", "-A")
+        git(tree, "commit", "-q", "-m", "w")
+        verified = git(tree, "rev-parse", "HEAD")
+        git(self.proj, "update-ref", "refs/heads/int/g1", verified)
+        git(self.proj, "worktree", "remove", "--force", tree)
+        os.makedirs(os.path.join(self.proj, "memory"))
+        with open(os.path.join(self.proj, "memory", "note.md"), "w") as fh:
+            fh.write("note\n")
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "m")
+        self.assertNotEqual(git(self.proj, "rev-parse", "main"), base)
+        from core.config import Config
+        c = ticket_controller.Controller.__new__(ticket_controller.Controller)
+        c.cfg, c.repo = Config(self.proj), Git(self.proj)
+        c.set_group = lambda *a, **k: seen.setdefault("set", []).append(a)
+        Git.move_ref = spy
+        self.addCleanup(setattr, Git, "move_ref", real)
+        out = c.merge_no_reverify({"id": "g1", "branch": "int/g1"}, verified, git(self.proj, "rev-parse", "main"))
+        self.assertIsNone(out)
+        self.assertEqual(git(self.proj, "rev-parse", "int/g1"), verified)
+        self.assertNotIn("moves", seen)
+        self.assertNotIn("set", seen)
+        self.assertEqual(glob.glob(os.path.join(self.tmp, "wt", "nrv-*")), [])
+        self.assertNotIn("nrv-g1", git(self.proj, "worktree", "list"))
+
+    def test_a_lost_compare_and_swap_is_reported(self):
+        from core.config import Config
+        from core.gitx import Git
+        import ticket_controller
+        git(self.proj, "branch", "int/g1", "main")
+        verified = git(self.proj, "rev-parse", "main")
+        os.makedirs(os.path.join(self.proj, "memory"))
+        with open(os.path.join(self.proj, "memory", "note.md"), "w") as fh:
+            fh.write("note\n")
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "m")
+        c = ticket_controller.Controller.__new__(ticket_controller.Controller)
+        c.cfg, c.repo = Config(self.proj), Git(self.proj)
+        c.set_group = lambda *a, **k: self.fail("no event on a lost swap")
+        real = Git.move_ref
+        Git.move_ref = lambda *a: False      # someone else moved the branch first
+        self.addCleanup(setattr, Git, "move_ref", real)
+        out = c.merge_no_reverify({"id": "g1", "branch": "int/g1"}, verified, git(self.proj, "rev-parse", "main"))
+        self.assertEqual(out, ticket_controller.LOST)
+        self.assertEqual(git(self.proj, "rev-parse", "int/g1"), verified)
+        self.assertEqual(glob.glob(os.path.join(self.tmp, "wt", "nrv-*")), [])
+
+
+class NoReverifyRule(unittest.TestCase):
+    def test_path_rule(self):
+        import ticket_controller as tc
+        e = ["memory/", "docs/HANDOFF.md"]
+        self.assertTrue(tc.under_paths("memory/note.md", e))
+        self.assertTrue(tc.under_paths("memory/a/b.md", e))
+        self.assertTrue(tc.under_paths("docs/HANDOFF.md", e))
+        self.assertFalse(tc.under_paths("memory", ["memory/"]))   # a file named like the folder
+        self.assertFalse(tc.under_paths("memoryx/note.md", e))
+        self.assertFalse(tc.under_paths("docs/HANDOFF.md.bak", e))
+        self.assertFalse(tc.under_paths("docs/DECISIONS.md", e))
+        self.assertTrue(tc.only_no_reverify([], e))
+        self.assertFalse(tc.only_no_reverify([], []))
+        self.assertFalse(tc.only_no_reverify(["memory/note.md"], []))
+        self.assertTrue(tc.only_no_reverify(["memory/note.md", "docs/HANDOFF.md"], e))
+        self.assertFalse(tc.only_no_reverify(["memory/note.md", "src/a.py"], e))
+
+    def test_config_values(self):
+        from core.config import Config
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "board"))
+            path = os.path.join(d, "board", "config.json")
+            for bad in ("memory/", [""], ["ok", 3], None, {"a": 1}):
+                with open(path, "w") as fh:
+                    json.dump({"devloop": {"no_reverify_paths": bad}}, fh)
+                with self.assertRaises(osx.OSFailure) as ctx:
+                    Config(d)
+                self.assertIn("devloop.no_reverify_paths", str(ctx.exception))
+            with open(path, "w") as fh:
+                json.dump({"devloop": {"no_reverify_paths": []}}, fh)
+            self.assertEqual(Config(d).no_reverify_paths, [])
 
 
 class LessonsHelpers(unittest.TestCase):
@@ -2553,6 +2896,73 @@ class Board(LoopCase):
                 time.sleep(0.1)
         with urllib.request.urlopen(url + "?key=s3cret", timeout=10) as resp:
             self.assertIn("四個指標", resp.read().decode("utf-8"))
+
+
+class T26Acceptance(LoopCase):
+    """Ticket #26: a merged ticket reads 功能完成 and a landed one 驗證完成 on the board and in
+    tickets.py list/show, while the pool keeps the names merged / landed (ruling D-089 item 1)."""
+
+    def setUp(self):
+        super().setUp()
+        self.add(1)
+        self.add(2)
+        self.add(3)
+
+        def change(tx):
+            for ident, state in (("1", "merged"), ("2", "landed")):
+                t = tx.ticket(ident)
+                t["state"] = state
+                tx.put_ticket(t)
+        self.pool.update(change, "test: #1 merged, #2 landed")
+
+    def line_of(self, out, ident):
+        for line in out.splitlines():
+            fields = line.split()
+            if fields and fields[0] == "#%s" % ident:
+                return fields
+        self.fail("no line for #%s in:\n%s" % (ident, out))
+
+    def show(self, ident):
+        res = self.run_py("tickets.py", "show", str(ident))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        return json.loads(res.stdout)
+
+    def test_item1_board_state_cells(self):
+        res = self.run_py("board.py", "html")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        page = res.stdout
+        self.assertIn("<td>#1</td><td>功能完成</td>", page)
+        self.assertIn("<td>#2</td><td>驗證完成</td>", page)
+        self.assertNotIn("已合進整合分支", page)
+
+    def test_item2_list_state_column(self):
+        res = self.run_py("tickets.py", "list")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.line_of(res.stdout, 1)[1], "功能完成")
+        res = self.run_py("tickets.py", "list", "--all")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.line_of(res.stdout, 2)[1], "驗證完成")
+
+    def test_item3_show_state_text(self):
+        for ident, text, stored in (("1", "功能完成", "merged"), ("2", "驗證完成", "landed"),
+                                    ("3", "ready", "ready")):
+            out = self.show(ident)
+            self.assertIn("state_text", out, "show %s has a top-level state_text" % ident)
+            self.assertEqual(out["state_text"], text, "show %s" % ident)
+            self.assertEqual(out["ticket"]["state"], stored, "show %s keeps the stored state" % ident)
+
+    def test_item4_readme_list_show_row(self):
+        with open(os.path.join(HOME, "devloop", "README.md")) as fh:
+            readme = fh.read()
+        section = readme.split("## What the main session runs", 1)[1].split("\n## ", 1)[0]
+        rows = [line for line in section.splitlines() if "`python3 devloop/tickets.py list`" in line]
+        self.assertEqual(len(rows), 1, "one list / show N row in 'What the main session runs'")
+        row = rows[0]
+        self.assertIn("show N", row)
+        self.assertIn("功能完成", row)
+        self.assertIn("驗證完成", row)
+        self.assertIn("merged", row)
+        self.assertIn("landed", row)
 
 
 class T15Acceptance(LoopCase):
@@ -3108,6 +3518,18 @@ class PoolRules(unittest.TestCase):
     def test_a_write_counts_only_once_pushed(self):
         self.a.update(lambda tx: tx.write("tickets/5.json", {"id": "5"}), "a")
         self.assertIn("5", self.b.snapshot().tickets)
+
+
+class ShownState(unittest.TestCase):
+    def test_merged_and_landed_have_labels_others_pass_through(self):
+        self.assertEqual(shown_state("merged"), "功能完成")
+        self.assertEqual(shown_state("landed"), "驗證完成")
+        self.assertEqual(shown_state("ready"), "ready")
+        self.assertIsNone(shown_state(None))
+        for st in ("ready", "running", "stuck", "cancelled"):
+            self.assertEqual(shown_state(st), st)
+        self.assertIn("merged", TICKET_STATES)
+        self.assertIn("landed", TICKET_STATES)
 
 
 class GitRules(unittest.TestCase):

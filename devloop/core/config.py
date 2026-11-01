@@ -59,6 +59,9 @@ DEFAULTS = {
     "regression_exclusive": False,   # true: a regression runs alone on the machine (needs machine_slots)
     "memory": None,                  # D-088: folder of the role/model/project memory files; null = <pool>/memory,
                                      # relative = against the project root
+    "no_reverify_paths": ["memory/", "docs/DECISIONS.md", "docs/HANDOFF.md"],
+                                     # D-090: when main moved after verification only in these paths,
+                                     # the controller merges main in and lands without a second regression
     "agents": DEFAULT_AGENTS,
 }
 
@@ -86,6 +89,11 @@ class Config:
         if mem is not None and not (isinstance(mem, str) and mem):
             raise osx.OSFailure("board/config.json devloop.memory must be null or a folder path (a "
                                 "non-empty string), not %r" % (mem,))
+        nrv = self.values.get("no_reverify_paths")
+        if not (isinstance(nrv, list) and all(isinstance(p, str) and p for p in nrv)):
+            raise osx.OSFailure("board/config.json devloop.no_reverify_paths must be a list of "
+                                "non-empty path strings ([] turns it off), not %r" % (nrv,))
+        self.values["no_reverify_paths"] = list(nrv)
         exclusive = self.values.get("regression_exclusive")
         if not isinstance(exclusive, bool):
             raise osx.OSFailure("board/config.json devloop.regression_exclusive must be true or false, "
