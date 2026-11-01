@@ -1940,6 +1940,216 @@ class T15Acceptance(LoopCase):
         self.assertFalse(os.path.exists(os.path.join(mem, "project.md")))
 
 
+class T16Acceptance(LoopCase):
+    """Ticket #16: memory written into a git repository is one fast-forward commit on its branch."""
+
+    MERGED = "# Role memory: worker\n\n- merged 5 lessons\n"
+    OLD = "# Role memory: worker\n\n- before t16\n"
+    REL = "memory/role/worker.md"
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    # ------------------------------------------------------------ helpers
+
+    @staticmethod
+    def read(path):
+        try:
+            with open(path, "rb") as fh:
+                return fh.read().decode("utf-8")
+        except FileNotFoundError:
+            return None
+
+    @staticmethod
+    def write(path, text):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write(text)
+
+    @staticmethod
+    def raw(cwd, *args):
+        """git's stdout unstripped, or None when git fails."""
+        res = subprocess.run(["git"] + list(args), cwd=cwd, capture_output=True, text=True)
+        return res.stdout if res.returncode == 0 else None
+
+    def rev(self, cwd, ref):
+        out = self.raw(cwd, "rev-parse", "--verify", "-q", ref)
+        return out.strip() if out else None
+
+    def queue(self):
+        def change(tx):
+            for i in range(1, 6):
+                tx.write("memory/inbox/t16-%d.json" % i, {"layer": "role", "name": "worker",
+                                                          "text": "lesson %d from #9" % i,
+                                                          "source": "test", "at": osx.now()})
+        self.pool.update(change, "test: five lessons")
+
+    def left(self):
+        return [r for r in self.snap().lessons.values() if str(r.get("text", "")).endswith("from #9")]
+
+    def commit_memory_file(self, text=None):
+        self.write(os.path.join(self.proj, self.REL), text or self.OLD)
+        git(self.proj, "add", self.REL)
+        git(self.proj, "commit", "-q", "-m", "seed worker memory")
+
+    def keeper(self):
+        return self.run_py("memory_keeper.py", "--layer", "role", "--name", "worker")
+
+    def with_origin(self):
+        bare = os.path.join(self.tmp, "origin.git")
+        git(self.tmp, "clone", "-q", "--bare", self.proj, bare)
+        git(self.proj, "remote", "add", "origin", bare)
+        git(self.proj, "fetch", "-q", "origin")
+        self.config(memory="memory", remote="origin")
+        return bare
+
+    def assert_one_memory_commit(self, cwd, branch, parent):
+        tip = self.rev(cwd, branch)
+        self.assertNotEqual(tip, parent, "%s did not move" % branch)
+        self.assertEqual(self.raw(cwd, "rev-list", "--count", "%s..%s" % (parent, branch)), "1\n")
+        self.assertEqual(self.rev(cwd, branch + "^"), parent)
+        return tip
+
+    # ------------------------------------------------------------ item 1
+
+    def test_item1_one_commit_on_main_and_the_rest_of_the_checkout_untouched(self):
+        self.commit_memory_file()
+        self.config(memory="memory")
+        with open(os.path.join(self.proj, "README.md"), "a") as fh:
+            fh.write("local edit\n")
+        self.queue()
+        before = self.rev(self.proj, "main")
+        status_before = self.raw(self.proj, "status", "--porcelain")
+        self.assertIn("README.md", status_before)
+        self.assertIn("board/config.json", status_before)
+        res = self.keeper()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assert_one_memory_commit(self.proj, "main", before)
+        self.assertEqual(self.raw(self.proj, "show", "--name-only", "--format=", "main").strip(), self.REL)
+        self.assertTrue((self.raw(self.proj, "log", "-1", "--format=%B", "main") or "").startswith(
+            "memory: consolidate"))
+        self.assertEqual(self.raw(self.proj, "show", "main:" + self.REL), self.MERGED)
+        self.assertEqual(self.read(os.path.join(self.proj, self.REL)), self.MERGED)
+        self.assertEqual(self.raw(self.proj, "status", "--porcelain"), status_before)
+
+    # ------------------------------------------------------------ item 2
+
+    def test_item2_linked_worktree_on_another_branch_gets_the_commit(self):
+        memwt = os.path.join(self.tmp, "memwt")
+        git(self.proj, "worktree", "add", "-q", memwt, "-b", "mem", "main")
+        self.config(memory=os.path.join(memwt, "memory"))
+        self.queue()
+        main_before = self.rev(self.proj, "main")
+        mem_before = self.rev(self.proj, "mem")
+        res = self.keeper()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assert_one_memory_commit(self.proj, "mem", mem_before)
+        self.assertEqual(self.rev(self.proj, "main"), main_before)
+        self.assertEqual(self.read(os.path.join(memwt, "memory", "role", "worker.md")), self.MERGED)
+
+    # ------------------------------------------------------------ item 3
+
+    def test_item3_the_commit_is_pushed_to_devloop_remote(self):
+        self.commit_memory_file()
+        bare = self.with_origin()
+        self.queue()
+        before = self.rev(self.proj, "main")
+        self.assertEqual(self.rev(bare, "main"), before)
+        res = self.keeper()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        tip = self.assert_one_memory_commit(self.proj, "main", before)
+        self.assertEqual(self.rev(bare, "main"), tip)
+        self.assertEqual(self.raw(bare, "show", "main:" + self.REL), self.MERGED)
+
+    # ------------------------------------------------------------ item 4
+
+    def test_item4_remote_ahead_is_fast_forwarded_first(self):
+        self.commit_memory_file()
+        bare = self.with_origin()
+        other = os.path.join(self.tmp, "other")
+        git(self.tmp, "clone", "-q", bare, other)
+        git(other, "config", "user.name", "o")
+        git(other, "config", "user.email", "o@o")
+        self.write(os.path.join(other, "Z.txt"), "z\n")
+        git(other, "add", "Z.txt")
+        git(other, "commit", "-q", "-m", "add Z")
+        git(other, "push", "-q", "origin", "main")
+        z = self.rev(other, "main")
+        with open(os.path.join(self.proj, "README.md"), "a") as fh:
+            fh.write("local edit\n")
+        readme = self.read(os.path.join(self.proj, "README.md"))
+        self.queue()
+        self.assertNotEqual(self.rev(self.proj, "main"), z)
+        res = self.keeper()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.rev(self.proj, "main"), self.rev(bare, "main"))
+        self.assert_one_memory_commit(self.proj, "main", z)
+        self.assertEqual(self.read(os.path.join(self.proj, "Z.txt")), "z\n")
+        self.assertEqual(self.read(os.path.join(self.proj, "README.md")), readme)
+
+    # ------------------------------------------------------------ item 5
+
+    def test_item5_refused_push_keeps_the_local_commit_and_pages_a_decision(self):
+        self.commit_memory_file()
+        bare = self.with_origin()
+        hook = os.path.join(bare, "hooks", "pre-receive")
+        self.write(hook, "#!/bin/sh\nexit 1\n")
+        os.chmod(hook, 0o755)
+        self.queue()
+        before = self.rev(self.proj, "main")
+        origin_before = self.rev(bare, "main")
+        pages_before = set(self.snap().inbox)
+        res = self.keeper()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assert_one_memory_commit(self.proj, "main", before)
+        self.assertEqual(self.raw(self.proj, "show", "main:" + self.REL), self.MERGED)
+        self.assertEqual(self.rev(bare, "main"), origin_before)
+        inbox = self.snap().inbox
+        new = [inbox[k] for k in set(inbox) - pages_before]
+        self.assertEqual(len(new), 1, new)
+        self.assertEqual(new[0].get("kind"), "decision")
+        self.assertIn("role/worker.md", new[0].get("text", ""))
+        self.assertEqual(self.left(), [], "the five lessons were consumed")
+
+    # ------------------------------------------------------------ item 6
+
+    def test_item6_a_refused_checkout_writes_nothing_and_keeps_the_lessons(self):
+        self.commit_memory_file()
+        self.config(memory="memory")
+        path = os.path.join(self.proj, self.REL)
+        self.write(path, "MINE\n")
+        self.queue()
+        before = self.rev(self.proj, "main")
+        res = self.keeper()
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertEqual(self.rev(self.proj, "main"), before)
+        self.assertEqual(self.read(path), "MINE\n")
+        self.assertEqual(len(self.left()), 5)
+        with open(os.path.join(self.pool_path, "memory", "state.json")) as fh:
+            runs = json.load(fh).get("runs") or []
+        self.assertTrue(runs)
+        self.assertIs(runs[-1].get("ok"), False)
+
+    # ------------------------------------------------------------ item 7
+
+    def test_item7_init_seeds_the_folder_in_one_commit(self):
+        self.config(memory="memory")
+        git(self.proj, "commit", "-q", "-am", "config: memory folder")
+        self.assertEqual(self.raw(self.proj, "status", "--porcelain"), "")
+        self.assertFalse(os.path.exists(os.path.join(self.proj, "memory")))
+        before = self.rev(self.proj, "main")
+        res = self.run_py("tickets.py", "init")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assert_one_memory_commit(self.proj, "main", before)
+        changed = (self.raw(self.proj, "show", "--name-only", "--format=", "main") or "").split()
+        self.assertTrue(changed)
+        self.assertTrue(all(p.startswith("memory/") for p in changed), changed)
+        self.assertIn("memory/project.md", changed)
+        self.assertEqual(self.raw(self.proj, "status", "--porcelain"), "")
+
+
 class PoolRules(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="loop-pool-")
