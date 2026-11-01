@@ -155,7 +155,11 @@ class ProjectConfigCases(Sandbox):
         gone = self.actl("doctor")
         self.assertEqual(gone.returncode, 1, self.say(gone))
         rows = [line for line in gone.stdout.splitlines() if "foreign-hook.sh" in line]
-        self.assertTrue(rows and "actl hooks install" in rows[0], self.say(gone))
+        self.assertEqual(len(rows), 1, self.say(gone))
+        self.assertIn("remove this hook entry from .claude/settings.json by hand", rows[0])
+        self.assertIn("SessionStart -> sh %s/scripts/session-hook.sh"
+                      % os.path.realpath(self.ac_home), rows[0], self.say(gone))
+        self.assertNotIn("actl hooks", gone.stdout, self.say(gone))
 
 
 if __name__ == "__main__":

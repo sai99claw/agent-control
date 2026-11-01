@@ -302,7 +302,10 @@ def doctor_rows(root):
             path = first_path(command, root)
             if path is not None and not os.path.exists(path):
                 rows.append(("error", ".claude/settings.json hook names a missing file: %s"
-                             % path, "actl hooks install"))
+                             % path,
+                             "remove this hook entry from .claude/settings.json by hand "
+                             "(actl has no hooks command; the only hook agent-control ships "
+                             "is SessionStart -> sh %s/scripts/session-hook.sh)" % AC_HOME))
     return rows
 
 

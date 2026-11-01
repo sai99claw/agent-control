@@ -198,9 +198,12 @@ class A3Doctor(ConfigSandbox):
         lines = done.stdout.splitlines()
         for parts in (("acked.jsonl", "actl inbox migrate"),
                       (RETIRED_DIR, "retired"),
-                      ("guard-main.sh", "actl hooks install")):
+                      ("guard-main.sh", "remove this hook entry from .claude/settings.json by hand",
+                       "SessionStart -> sh %s/scripts/session-hook.sh"
+                       % os.path.realpath(self.ac_home))):
             hits = [line for line in lines if all(part in line for part in parts)]
             self.assertEqual(len(hits), 1, "%s in\n%s" % (parts, done.stdout))
+        self.assertNotIn("actl hooks", done.stdout)
 
     def test_a3_clean_version_2_has_no_rows(self):
         done = self.actl("doctor")
