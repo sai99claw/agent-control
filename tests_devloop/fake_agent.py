@@ -106,6 +106,16 @@ elif role == "reviewer":
     hand({"kind": "review", "verdict": action, "feedback": "" if action == "pass" else "missing part"})
 elif role == "fixer":
     git("merge", "--no-edit", "main", check=False)
+    if action == "decision":   # #28: a contradiction handed to the user, no commit
+        hand({"kind": "decision", "text": "#1 and #2 contradict on impl output; open a new ticket that picks one"})
+        sys.exit(0)
+    if action == "cases":   # #28: what "fix" does, and lists one aligned case
+        if os.path.exists("red.txt"):
+            os.unlink("red.txt")
+        commit("fix")
+        hand({"kind": "done", "summary": "removed red",
+              "cases_changed": [{"ticket": "1", "case": "case_1", "acceptance": "a"}]})
+        sys.exit(0)
     if action == "blocked":
         hand({"kind": "blocked", "text": "tickets contradict"})
         sys.exit(0)
