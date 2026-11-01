@@ -1,6 +1,7 @@
 """End-to-end tests of the loop: a throwaway project, a throwaway pool, fake agents and fake
 tests behind the real test interface. Run: python3 -m unittest discover tests_devloop"""
 
+import glob
 import json
 import os
 import shutil
@@ -1653,6 +1654,69 @@ class AgentControlRelease(unittest.TestCase):
     def test_agent_control_config_names_it(self):
         with open(os.path.join(HOME, "board", "config.json")) as fh:
             self.assertEqual(json.load(fh)["devloop"]["release"], "sh scripts/release.sh")
+
+
+class T12Acceptance(LoopCase):
+    """#12: the opener is told the full suite is the regression's, and is given the time limits."""
+
+    SENTENCES = (
+        "Acceptance and test_plan never ask the worker or the verifier to run the full suite: "
+        "the full suite is the regression's.",
+        "The worker runs only the verifier's cases, its own unit tests and the base set.",
+        "Every check you give the worker or the verifier must finish well within one agent call "
+        "(see \"Time limits\" below).",
+    )
+
+    def full_result(self, group, content, age):
+        d = os.path.join(self.tmp, "wt", "runs", "regression", group, "full")
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, "result.json")
+        with open(path, "w") as fh:
+            fh.write(content if isinstance(content, str) else json.dumps(content))
+        t = time.time() - age
+        os.utime(path, (t, t))
+
+    def opener_prompt(self):
+        res = self.run_py("ticket_creator.py", "--request", "x")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        root = os.path.join(self.tmp, "wt", "runs", "creator")
+        newest = sorted(os.listdir(root))[-1]
+        with open(os.path.join(root, newest, "prompt.md")) as fh:
+            return fh.read()
+
+    def test_creator_chain_forbids_full_suite_for_worker_and_verifier(self):
+        text = ""
+        for path in sorted(glob.glob(os.path.join(LOOP, "prompts", "creator", "*.md"))):
+            with open(path) as fh:
+                text += fh.read()
+        for sentence in self.SENTENCES:
+            self.assertIn(sentence, text)
+
+    def test_prompt_states_the_agent_time_limit(self):
+        self.config(agent_timeout_seconds=75)
+        lines = self.opener_prompt().splitlines()
+        self.assertIn("## Time limits", lines)
+        head = lines.index("## Time limits")
+        self.assertIn("One agent call is limited to 75 seconds (devloop.agent_timeout_seconds).",
+                      lines[head + 1:])
+
+    def test_prompt_states_the_newest_full_run(self):
+        self.full_result("int-g1", {"schema": 1, "command": "full", "seconds": 2520.4}, 0)
+        self.full_result("int-g2", {"schema": 1, "command": "full", "seconds": 30}, 3600)
+        self.assertIn("The project's last full run took 2520 seconds.", self.opener_prompt())
+
+    def test_prompt_says_no_full_run_when_none_recorded(self):
+        self.assertIn("No full run of this project is recorded yet.", self.opener_prompt())
+
+    def test_newest_without_numeric_seconds_is_skipped(self):
+        for bad in ({"schema": 1, "command": "full"},
+                    {"schema": 1, "command": "full", "seconds": "2520"},
+                    "{not json"):
+            with self.subTest(bad=bad):
+                shutil.rmtree(os.path.join(self.tmp, "wt", "runs"), ignore_errors=True)
+                self.full_result("int-g1", bad, 0)
+                self.full_result("int-g2", {"schema": 1, "command": "full", "seconds": 30}, 3600)
+                self.assertIn("The project's last full run took 30 seconds.", self.opener_prompt())
 
 
 class DagRules(unittest.TestCase):
