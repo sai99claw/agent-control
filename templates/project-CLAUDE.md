@@ -16,5 +16,5 @@ The main session follows `../agent-control/CLAUDE.md`.
 
 ### Project specifics (main session)
 - Tests: `board/config.json` `tests` declares `preflight` / `run` / `full`; `actl test <command>` runs them.
-- Release: `board/config.json` `devloop.release` (the controller runs it after main moves).
+- Release: `board/config.json` `devloop.release` (the controller runs it after main moves, in a throwaway checkout: put anything it produces in `$DEVLOOP_RELEASE_DIR`; its output is kept in `runs/release/<group>.log`).
 - Off limits: `hard_block` stops tickets that touch the production data, ports and secret directories named above.
