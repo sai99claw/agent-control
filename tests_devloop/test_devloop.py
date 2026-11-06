@@ -2339,6 +2339,190 @@ class AgentChains(LoopCase):
             agents.with_effort(["claude"], "huge")
 
 
+class T31Acceptance(LoopCase):
+    """#31: a quota hit at the end of the command chain makes the issuer wait for the reset.
+    Expected values come from the ticket's acceptance items, not from the code."""
+
+    AT = time.mktime((2026, 11, 6, 14, 0, 0, 0, 0, -1))
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    @staticmethod
+    def local(y, mo, d, h, mi):
+        return time.mktime((y, mo, d, h, mi, 0, 0, 0, -1))
+
+    def agents(self):
+        from core import agents
+        self.assertTrue(hasattr(agents, "quota_reset"), "agents.quota_reset is missing")
+        self.assertTrue(hasattr(agents, "quota_wait"), "agents.quota_wait is missing")
+        return agents
+
+    def agents_cfg(self):
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            return json.load(fh)["devloop"]["agents"]
+
+    def cost_rows(self, ident, role):
+        return [c for c in self.snap().ticket(str(ident)).get("cost") or [] if c["role"] == role]
+
+    # 1
+    def test_quota_reset_reads_a_time_of_day(self):
+        agents = self.agents()
+        at = self.AT
+        cases = [
+            ("You've hit your limit · resets 3pm (Asia/Taipei)", self.local(2026, 11, 6, 15, 0)),
+            ("5-hour limit reached ∙ resets 3:30pm", self.local(2026, 11, 6, 15, 30)),
+            ("Your limit resets at 15:00", self.local(2026, 11, 6, 15, 0)),
+            ("Claude usage limit reached. Your limit will reset at 5pm.", self.local(2026, 11, 6, 17, 0)),
+            ("resets 1pm", self.local(2026, 11, 7, 13, 0)),
+            ("resets 1:55pm", self.local(2026, 11, 6, 13, 55)),
+            ("resets 12am", self.local(2026, 11, 7, 0, 0)),
+            ("resets 3pm, later resets 4pm", self.local(2026, 11, 6, 16, 0)),
+            ("RESETS 3PM", self.local(2026, 11, 6, 15, 0)),
+        ]
+        for text, want in cases:
+            with self.subTest(text=text):
+                self.assertEqual(agents.quota_reset(text, at), want)
+
+    # 2
+    def test_quota_reset_reads_durations_and_an_epoch(self):
+        agents = self.agents()
+        at = self.AT
+        cases = [("resets in 2h", at + 7200), ("resets in 2h 30m", at + 9000), ("resets in 45m", at + 2700),
+                 ("resets in 1 hour", at + 3600), ("Claude AI usage limit reached|1762473600", 1762473600),
+                 ("usage limit reached", None), ("resets 3", None)]
+        for text, want in cases:
+            with self.subTest(text=text):
+                self.assertEqual(agents.quota_reset(text, at), want)
+
+    # 3
+    def test_quota_wait(self):
+        agents = self.agents()
+        x = self.AT
+        self.assertEqual(agents.quota_wait("resets in 2h", x, x, 1800), 7260)
+        self.assertEqual(agents.quota_wait("resets in 2h", x, x + 3600, 1800), 3660)
+        self.assertEqual(agents.quota_wait("resets 1:59pm", x, x, 1800), 60)
+        self.assertEqual(agents.quota_wait("usage limit reached", x, x, 1800), 1800)
+
+    # 4
+    def test_quota_retry_seconds_default_and_bad_values(self):
+        from core.config import Config
+        self.assertEqual(getattr(Config(self.proj), "quota_retry_seconds", None), 1800)
+        for bad in (0, -5, 1.5, "30", True, None):
+            with self.subTest(bad=bad):
+                self.config(quota_retry_seconds=bad)
+                res = self.run_py("tickets.py", "list")
+                self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+                self.assertIn("devloop.quota_retry_seconds", res.stderr)
+
+    # 5 and 6
+    def test_a_quota_hit_at_the_chain_end_waits_without_a_round(self):
+        import calendar
+        import fcntl
+        self.config(quota_retry_seconds=8, issuer_timeout_seconds=6, machine_slots=1)
+        self.env["FAKE_QUOTA_TEXT"] = "Error: usage limit reached"
+        self.add(1)
+        self.plan(worker={"1": ["quota", "ok"]})
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "ticket_controller.py")], cwd=self.proj,
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.send_signal(signal.SIGTERM))
+        seen = None
+        end = time.time() + 20
+        while time.time() < end and proc.poll() is None:
+            t = self.snap().ticket("1")
+            if t.get("waiting"):
+                seen = t
+                break
+            time.sleep(0.2)
+        self.assertIsNotNone(seen, "the ticket never had a 'waiting' mark: %s" % self.snap().ticket("1"))
+        # item 6: during the wait
+        self.assertEqual((seen["state"], seen["round"]), ("running", 1))
+        w = seen["waiting"]
+        self.assertEqual(sorted(w), ["reason", "since", "text", "until"])
+        self.assertEqual(w["reason"], "quota")
+        since = calendar.timegm(time.strptime(w["since"], "%Y-%m-%dT%H:%M:%SZ"))
+        until = calendar.timegm(time.strptime(w["until"], "%Y-%m-%dT%H:%M:%SZ"))
+        self.assertLessEqual(abs((until - since) - 8), 2, w)
+        self.assertLessEqual(len(w["text"]), 200)
+        self.assertIn("usage limit", w["text"])
+        self.assertEqual([c.get("outcome") for c in seen.get("cost") or [] if c["role"] == "worker"], ["quota"])
+        fd = os.open(os.path.join(self.tmp, "wt", "slots", "slot-0"), os.O_RDWR | os.O_CREAT)
+        got = False
+        try:
+            end = time.time() + 3
+            while time.time() < end:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    got = True
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    break
+                except OSError:
+                    time.sleep(0.1)
+        finally:
+            os.close(fd)
+        self.assertTrue(got, "slot-0 stayed held during the quota wait")
+        # item 5: after
+        out, err = proc.communicate(timeout=120)
+        self.assertEqual(proc.returncode, 0, err)
+        t = self.snap().ticket("1")
+        self.assertEqual((t["state"], t["round"]), ("landed", 1))
+        self.assertEqual([c.get("outcome") for c in self.cost_rows(1, "worker")], ["quota", "done"])
+        events = [h["event"] for h in t.get("history") or []]
+        self.assertIn("waiting for quota", events)
+        self.assertIn("quota wait over", events)
+        self.assertLess(events.index("waiting for quota"), events.index("quota wait over"))
+        self.assertNotIn("feedback", events)
+        self.assertNotIn("waiting", t)
+
+    # 7
+    def test_after_a_wait_the_chain_starts_again_from_its_first_command(self):
+        chain = [AGENT + ["--model", "first"], AGENT + ["--model", "second"]]
+        self.config(quota_retry_seconds=2, agents=dict(self.agents_cfg(), worker=chain, worker_simple=chain))
+        self.env["FAKE_QUOTA_TEXT"] = "Error: usage limit reached"
+        self.add(1)
+        self.plan(worker={"1": ["quota", "quota", "ok"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        t = self.snap().ticket("1")
+        self.assertEqual((t["state"], t["round"]), ("landed", 1))
+        rows = self.cost_rows(1, "worker")
+        self.assertEqual([(r.get("outcome"), r.get("model")) for r in rows], [("quota", "second"), ("done", "first")])
+        self.assertEqual(rows[0]["fell_back_from"][0]["model"], "first")
+        self.assertEqual(rows[0]["fell_back_from"][0]["outcome"], "out of quota")
+
+    # 8
+    def test_a_readable_reset_phrase_alone_marks_out_of_quota(self):
+        self.config(agents=dict(self.agents_cfg(), worker=[AGENT, AGENT], worker_simple=[AGENT, AGENT]))
+        self.env["FAKE_QUOTA_TEXT"] = "You've hit your limit · resets 3pm"
+        self.add(1)
+        self.plan(worker={"1": ["quota", "ok"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        t = self.snap().ticket("1")
+        self.assertEqual((t["state"], t["round"]), ("landed", 1))
+        row = self.cost_rows(1, "worker")[0]
+        self.assertTrue(row.get("fell_back_from"), row)
+        self.assertEqual(row["fell_back_from"][0]["outcome"], "out of quota")
+
+    # 9
+    def test_the_board_shows_a_quota_wait(self):
+        import board
+        self.assertEqual(board.REASON_TEXT.get("quota"), "額度用完")
+        self.add(1, state="running", target="int/g1",
+                 waiting={"reason": "quota", "since": osx.now(), "until": osx.now(), "text": "usage limit reached"})
+        res = self.run_py("board.py", "html")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("額度用完", res.stdout)
+
+
 class MachineSlots(LoopCase):
     """devloop.machine_slots: the implementer's tests (core/slots.py and its call sites)."""
 
