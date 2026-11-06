@@ -2164,6 +2164,168 @@ class TestLayerDocs(unittest.TestCase):
         self.assertIn("new file", self.read("devloop", "prompts", "verifier.md"))
 
 
+class T37Acceptance(LoopCase):
+    """Ticket #37: the board key is traded once for an HttpOnly cookie and never appears in a URL or page."""
+
+    KEY = "K3y-test-1"
+
+    def cookie(self):
+        import hashlib
+        import hmac
+        return hmac.new(self.KEY.encode(), b"devloop-board", hashlib.sha256).hexdigest()
+
+    def start(self):
+        import http.client
+        import socket
+        key = os.path.join(self.tmp, "key")
+        with open(key, "w") as fh:
+            fh.write(self.KEY + "\n")
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        self.port = sock.getsockname()[1]
+        sock.close()
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "board.py"), "serve", "--port", str(self.port),
+                                 "--key-file", key], cwd=self.proj, env=self.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(proc.kill)
+        deadline = time.time() + 5
+        while True:
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=2)
+                conn.request("GET", "/")
+                conn.getresponse().read()
+                conn.close()
+                return
+            except OSError:
+                if time.time() > deadline:
+                    raise
+                time.sleep(0.1)
+
+    def req(self, method, path, headers=None, body=None):
+        """One request, redirects not followed: (status, headers list, body text)."""
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        self.addCleanup(conn.close)
+        conn.request(method, path, body=body, headers=headers or {})
+        resp = conn.getresponse()
+        return resp.status, resp.getheaders(), resp.read().decode("utf-8", "replace")
+
+    def header(self, headers, name):
+        return [v for k, v in headers if k.lower() == name.lower()]
+
+    def post(self, path, form, headers):
+        import urllib.parse
+        h = dict(headers, **{"Content-Type": "application/x-www-form-urlencoded"})
+        return self.req("POST", path, h, urllib.parse.urlencode(form))
+
+    # acceptance 1
+    def test_the_key_in_the_url_is_traded_for_an_httponly_cookie(self):
+        from http.cookies import SimpleCookie
+        self.start()
+        status, headers, _ = self.req("GET", "/?key=" + self.KEY)
+        self.assertEqual(status, 303)
+        self.assertEqual(self.header(headers, "Location"), ["./"])
+        sets = self.header(headers, "Set-Cookie")
+        self.assertEqual(len(sets), 1, sets)
+        jar = SimpleCookie()
+        jar.load(sets[0])
+        self.assertIn("board_key", jar)
+        morsel = jar["board_key"]
+        self.assertEqual(morsel.value, self.cookie())
+        self.assertTrue(morsel["httponly"])
+        self.assertEqual(morsel["samesite"], "Strict")
+        self.assertEqual(morsel["max-age"], "2592000")
+        self.assertEqual(morsel["path"], "")
+        self.assertNotIn("path=", sets[0].lower())
+        status, headers, _ = self.req("GET", "/?key=WRONG")
+        self.assertEqual(status, 403)
+        self.assertEqual(self.header(headers, "Set-Cookie"), [])
+
+    # acceptance 2
+    def test_the_redirect_keeps_other_parameters_and_the_last_segment(self):
+        self.start()
+        for path, want in (("/?tab=dag&key=%s&x=1" % self.KEY, "./?tab=dag&x=1"),
+                           ("/index.html?key=%s" % self.KEY, "./index.html")):
+            with self.subTest(path=path):
+                status, headers, _ = self.req("GET", path)
+                self.assertEqual(status, 303)
+                locs = self.header(headers, "Location")
+                self.assertEqual(locs, [want])
+                self.assertNotIn(self.KEY, locs[0])
+
+    # acceptance 3
+    def test_get_is_allowed_by_the_cookie_or_the_header_only(self):
+        self.start()
+        status, _, body = self.req("GET", "/", {"Cookie": "board_key=" + self.cookie()})
+        self.assertEqual(status, 200)
+        self.assertIn("四個指標", body)
+        self.assertEqual(self.req("GET", "/", {"Cookie": "board_key=other"})[0], 403)
+        status, _, body = self.req("GET", "/", {"X-Board-Key": self.KEY})
+        self.assertEqual(status, 200)
+        self.assertIn("四個指標", body)
+        self.assertEqual(self.req("GET", "/")[0], 403)
+
+    # acceptance 4
+    def test_posts_redirect_without_the_key_and_ignore_the_form_key(self):
+        self.stuck(1)
+        self.start()
+        runs = os.path.join(self.tmp, "wt", "runs", "web")
+
+        def folders():
+            return sorted(os.listdir(runs)) if os.path.isdir(runs) else []
+        self.addCleanup(self.wait_jobs, runs)
+        cookie = {"Cookie": "board_key=" + self.cookie()}
+        self.assertEqual(self.post("/request", {"key": self.KEY, "text": "x"}, {})[0], 403)
+        self.assertEqual(folders(), [], "a form key alone hands nothing to the opener")
+        status, headers, _ = self.post("/request", {"text": "x"}, cookie)
+        self.assertEqual(status, 303)
+        self.assertEqual(self.header(headers, "Location"), ["./?sent=request"])
+        self.assertEqual(len(folders()), 1, "the text went to the opener")
+        status, headers, _ = self.post("/request", {"text": "x"}, {"X-Board-Key": self.KEY})
+        self.assertEqual(status, 303)
+        self.assertEqual(self.header(headers, "Location"), ["./?sent=request"])
+        self.assertEqual(len(folders()), 2)
+        status, headers, _ = self.post("/answer", {"ticket": "1", "page": "p1", "decision": "retry",
+                                                   "text": ""}, cookie)
+        self.assertEqual(status, 303)
+        self.assertEqual(self.header(headers, "Location"), ["./?sent=answer-p1"])
+        self.assertEqual(len(folders()), 3)
+
+    def stuck(self, ident):
+        WebInput.stuck(self, ident)
+
+    def wait_jobs(self, runs):
+        """Let the detached openers finish before the temp folder goes."""
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            names = os.listdir(runs) if os.path.isdir(runs) else []
+            if all(os.path.exists(os.path.join(runs, n, "rc")) for n in names):
+                return
+            time.sleep(0.2)
+
+    # acceptance 5
+    def test_the_page_has_the_forms_but_never_the_key(self):
+        import re
+        import board
+        from core.config import Config
+        self.stuck(1)
+        self.start()
+        status, _, page = self.req("GET", "/", {"Cookie": "board_key=" + self.cookie()})
+        self.assertEqual(status, 200)
+        self.assertIn("交給開題者", page)
+        self.assertIn("不改,再試一次", page)
+        actions = re.findall(r"""action\s*=\s*['"]([^'"]*)['"]""", page)
+        self.assertIn("request", actions)
+        self.assertIn("answer", actions)
+        self.assertTrue(set(actions) <= {"request", "answer"}, actions)
+        self.assertNotIn("name='key'", page)
+        self.assertNotIn('name="key"', page)
+        self.assertNotIn(self.KEY, page)
+        page = board.render(Config(self.proj), self.snap(), key="KEY-7f3a")
+        self.assertIn("交給開題者", page)
+        self.assertNotIn("KEY-7f3a", page)
+
+
 class MarkExplained(unittest.TestCase):
     def step_one(self):
         from core import agents
