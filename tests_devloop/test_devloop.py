@@ -5523,7 +5523,7 @@ class BoardTabs(LoopCase):
     def test_stub_tabs_get_their_query_and_now(self):
         import board
         from core.config import Config
-        for name, label in (("dag", "DAG"), ("tokens", "Token"), ("host", "主機")):
+        for name, label in (("tokens", "Token"), ("host", "主機")):
             page = board.render(Config(self.proj), self.snap(), query={"tab": name}, now=0)
             self.assertIn('<div id="tab-%s" class="tab">' % name, page)
             self.assertIn("<h2>%s</h2>" % label, page)
@@ -6014,6 +6014,98 @@ class DagRules(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DagTabUnit(LoopCase):
+    """Helpers of the board's DAG tab (#42): blockers, blocked chains, shown set, layers, lanes, speed."""
+
+    def fake(self, tickets, dag, groups=None):
+        from types import SimpleNamespace
+        return SimpleNamespace(tickets=dict((str(k), dict(v, id=str(k))) for k, v in tickets.items()),
+                               dag=dict((str(k), {"depends_on": [str(d) for d in v]}) for k, v in dag.items()),
+                               groups=groups or {})
+
+    def test_blockers_and_blocked(self):
+        import board
+        snap = self.fake({1: {"state": "stuck"}, 2: {"state": "ready"}, 3: {"state": "landed"},
+                          4: {"state": "ready"}, 5: {"state": "merged", "group": "g2"},
+                          6: {"state": "merged", "group": "g3"}, 7: {"state": "ready"},
+                          8: {"state": "cancelled"}, 9: {"state": "running"}, 10: {"state": "ready"}},
+                         {2: [1], 4: [3], 7: [5, 6, 8, 2], 9: [1], 10: [11]},
+                         {"g2": {"id": "g2", "state": "stuck"}, "g3": {"id": "g3", "state": "open"}})
+        blockers = board.dag_blockers(snap)
+        self.assertEqual(blockers, {"1", "5", "8"})
+        blocked = board.dag_blocked(snap, blockers)
+        # 4 waits on a landed ticket, 9 is running, 10 waits on a ticket missing from the pool
+        self.assertEqual(blocked, {"2": ["1"], "7": ["1", "5", "8"]})
+
+    def test_blocked_stops_at_landed_and_at_blockers(self):
+        import board
+        snap = self.fake({1: {"state": "stuck"}, 2: {"state": "landed"}, 3: {"state": "cancelled"},
+                          4: {"state": "ready"}, 5: {"state": "ready"}},
+                         {2: [1], 3: [1], 4: [2], 5: [3]})
+        blocked = board.dag_blocked(snap, board.dag_blockers(snap))
+        self.assertEqual(blocked, {"5": ["3"]})
+
+    def test_blocked_by_sorts_numerically_and_survives_cycles(self):
+        import board
+        snap = self.fake({2: {"state": "stuck"}, 10: {"state": "stuck"}, 3: {"state": "ready"},
+                          4: {"state": "ready"}}, {3: [10, 4], 4: [3, 2]})
+        self.assertEqual(board.dag_blocked(snap, board.dag_blockers(snap))["3"], ["2", "10"])
+
+    def test_shown_and_layers(self):
+        import board
+        snap = self.fake({1: {"state": "landed"}, 2: {"state": "ready"}, 3: {"state": "ready"},
+                          4: {"state": "cancelled"}, 5: {"state": "cancelled"}, 6: {"state": "ready"}},
+                         {2: [1], 3: [2, 1], 6: [4]})
+        blocked = board.dag_blocked(snap, board.dag_blockers(snap))
+        shown = board.dag_shown(snap, blocked, False)
+        self.assertEqual(shown, {"2", "3", "4", "6"})
+        self.assertEqual(board.dag_layers(snap, shown), {"2": 0, "3": 1, "4": 0, "6": 1})
+        everything = board.dag_shown(snap, blocked, True)
+        self.assertEqual(everything, {"1", "2", "3", "4", "5", "6"})
+        self.assertEqual(board.dag_layers(snap, everything)["3"], 2)
+
+    def test_lanes_in_group_number_order_ungrouped_last(self):
+        import board
+        snap = self.fake({1: {"state": "ready", "group": "g10"}, 2: {"state": "ready", "group": "g9"},
+                          3: {"state": "ready"}, 4: {"state": "ready", "group": "g7"}}, {},
+                         {"g9": {"id": "g9", "state": "open"}, "g10": {"id": "g10", "state": "stuck"}})
+        lanes = board.dag_lanes(snap, {"1", "2", "3"})
+        self.assertEqual(lanes, [("g9", "收票中"), ("g10", "卡住"), ("", "未分組")])
+        self.assertEqual(board.dag_lanes(snap, {"4"}), [("g7", board.UNKNOWN)])
+
+    def test_svg_escapes_titles(self):
+        import board
+        import xml.etree.ElementTree as ET
+        snap = self.fake({1: {"state": "ready", "title": "a <b> & 'c' \"d\""}}, {})
+        svg = board.dag_svg(snap, {"1"}, {"1": 0}, {}, set())
+        root = ET.fromstring(svg)
+        ns = "{http://www.w3.org/2000/svg}"
+        self.assertEqual(root.find(".//%stitle" % ns).text, "#1 a <b> & 'c' \"d\"")
+
+    def test_forty_tickets_in_eight_groups_under_a_second(self):
+        import board
+        from core.config import Config
+
+        def change(tx):
+            dag = tx.data.dag
+            for n in range(1, 41):
+                state = ("ready", "running", "merged", "stuck", "cancelled", "landed")[n % 6]
+                tx.put_ticket({"id": str(n), "title": "ticket %d" % n, "state": state,
+                               "group": "g%d" % (1 + n % 8), "round": 0, "feedback": []})
+                dag[str(n)] = {"depends_on": [str(d) for d in (n - 1, n - 3, n - 7) if d > 0], "verify": "together"}
+            tx.put_dag({"tickets": dag})
+            for g in range(1, 9):
+                tx.put_group({"id": "g%d" % g, "members": [], "state": ("open", "stuck", "pr", "landed")[g % 4]})
+        self.pool.update(change, "test: forty")
+        cfg, snap = Config(self.proj), self.snap()
+        start = time.monotonic()
+        page = board.render(cfg, snap, query={"tab": "dag", "done": "1"})
+        took = time.monotonic() - start
+        self.assertEqual(page.count('class="lane"'), 8)
+        self.assertEqual(page.count('<g class="node '), 40)
+        self.assertLess(took, 1.0)
 
 
 class LastFullSecondsUnit(unittest.TestCase):

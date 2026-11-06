@@ -272,8 +272,208 @@ def stub_tab(heading):
 
 # ---------------------------------------------------------------- tab: DAG
 
+DAG_NODE_W, DAG_NODE_H, DAG_COL_W, DAG_ROW_H = 150, 38, 200, 50
+DAG_LANE_HEAD, DAG_LANE_GAP, DAG_PAD = 26, 12, 12
+NO_GROUP = "未分組"
+BLOCKED_TEXT, BLOCKER_TEXT = "被卡住", "卡住的源頭"
+
+DAG_STYLE = """<style>
+#tab-dag{--s-ready:#5c6670;--s-running:#1f6f8b;--s-merged:#3d7a46;--s-landed:#2f5d3a;--s-stuck:#a23b2a;--s-cancelled:#8b8f94;--chain:#c0392b}
+@media (prefers-color-scheme:dark){#tab-dag{--s-ready:#98a4ad;--s-running:#6fb7d0;--s-merged:#7fc28a;--s-landed:#5f9e6c;--s-stuck:#e08a7a;--s-cancelled:#6c7378;--chain:#ff7a6b}}
+#tab-dag .dagbox{padding:8px}#tab-dag svg{display:block}
+#tab-dag .lane rect.band{fill:var(--bg);stroke:var(--line)}#tab-dag .lane text.lh{fill:var(--quiet);font-size:12px}
+#tab-dag .node rect{fill:var(--card);stroke:var(--sc,var(--line));stroke-width:1.5}#tab-dag .node text{fill:var(--ink);font-size:12px}
+#tab-dag .node text.st{fill:var(--sc,var(--quiet));font-size:11px}
+#tab-dag .s-ready{--sc:var(--s-ready)}#tab-dag .s-running{--sc:var(--s-running)}#tab-dag .s-merged{--sc:var(--s-merged)}
+#tab-dag .s-landed{--sc:var(--s-landed)}#tab-dag .s-stuck{--sc:var(--s-stuck)}#tab-dag .s-cancelled{--sc:var(--s-cancelled)}
+#tab-dag .node.blocked rect{stroke:var(--chain);stroke-dasharray:5 3;stroke-width:2}
+#tab-dag .node.blocker rect{stroke:var(--chain);stroke-width:3.5}
+#tab-dag path.edge{fill:none;stroke:var(--quiet);stroke-width:1.3}#tab-dag path.edge.chain{stroke:var(--chain);stroke-width:3}
+#tab-dag .legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;align-items:center}
+#tab-dag .legend span{display:inline-flex;gap:6px;align-items:center}
+#tab-dag .legend i{display:inline-block;width:14px;height:10px;border-radius:3px;border:2px solid var(--sc,var(--line));background:var(--card)}
+#tab-dag .legend i.blocked{border:2px dashed var(--chain)}#tab-dag .legend i.blocker{border:3px solid var(--chain)}
+</style>"""
+
+
+def _num_key(ident):
+    ident = str(ident)
+    return (0, int(ident), "") if ident.isdigit() else (1, 0, ident)
+
+
+def _group_key(gid):
+    rest = gid[1:]
+    return (0, int(rest), gid) if rest.isdigit() else (1, 0, gid)
+
+
+def dag_blockers(snap):
+    """Ids of tickets that keep their dependents waiting for good: stuck, cancelled, or merged into a
+    stuck group (ticket_controller.joinable/group_for only start a ticket on landed or same-open-group
+    merged dependencies)."""
+    out = set()
+    for ident, t in snap.tickets.items():
+        state = t.get("state")
+        if state in ("stuck", "cancelled"):
+            out.add(ident)
+        elif state == "merged" and (snap.groups.get(t.get("group") or "") or {}).get("state") == "stuck":
+            out.add(ident)
+    return out
+
+
+def dag_blocked(snap, blockers):
+    """{ready ticket id: sorted ids of the blockers its depends_on chain reaches}, stopping at landed
+    tickets and at blockers; ready tickets that reach none are left out."""
+    out = {}
+    for ident, t in snap.tickets.items():
+        if t.get("state") != "ready":
+            continue
+        found, seen, todo = set(), {ident}, list(dagmod.deps(snap.dag, ident))
+        while todo:
+            d = todo.pop()
+            if d in seen:
+                continue
+            seen.add(d)
+            if d in blockers:
+                found.add(d)
+                continue
+            if (snap.tickets.get(d) or {}).get("state") == "landed":
+                continue
+            todo.extend(dagmod.deps(snap.dag, d))
+        if found:
+            out[ident] = sorted(found, key=_num_key)
+    return out
+
+
+def dag_shown(snap, blocked, done):
+    """Ids the DAG tab draws: everything with done, else all but landed and cancelled tickets, plus
+    the cancelled blockers a shown ticket waits on."""
+    if done:
+        return set(snap.tickets)
+    shown = set(i for i, t in snap.tickets.items() if t.get("state") not in ("landed", "cancelled"))
+    for ident in list(shown):
+        shown.update(b for b in blocked.get(ident, ()) if b in snap.tickets)
+    return shown
+
+
+def dag_layers(snap, shown):
+    """{id: layer}: 0 without shown dependencies, else 1 + the largest layer among them."""
+    layers = {}
+
+    def layer(ident, path):
+        if ident in layers:
+            return layers[ident]
+        path = path | {ident}
+        below = [layer(d, path) for d in dagmod.deps(snap.dag, ident) if d in shown and d not in path]
+        layers[ident] = 1 + max(below) if below else 0
+        return layers[ident]
+
+    for ident in sorted(shown, key=_num_key):
+        layer(ident, frozenset())
+    return layers
+
+
+def dag_lanes(snap, shown):
+    """[(group id, label)] for the lanes that hold a shown ticket: groups by number, 未分組 ('') last."""
+    gids = set((snap.tickets[i].get("group") or "") for i in shown)
+    out = []
+    for gid in sorted((g for g in gids if g), key=_group_key):
+        g = snap.groups.get(gid)
+        out.append((gid, group_state_text(g) if g else UNKNOWN))
+    if "" in gids:
+        out.append(("", NO_GROUP))
+    return out
+
+
+def _clip(text, n):
+    text = "" if text is None else str(text)
+    return text if len(text) <= n else text[:n - 1] + "…"
+
+
+def dag_svg(snap, shown, layers, blocked, blockers):
+    """The <svg id="dag">: lanes as bands top to bottom, layers as columns left to right."""
+    lanes = dag_lanes(snap, shown)
+    cells = {}
+    for ident in shown:
+        cells.setdefault(((snap.tickets[ident].get("group") or ""), layers[ident]), []).append(ident)
+    for v in cells.values():
+        v.sort(key=_num_key)
+    ncols = 1 + max(layers.values())
+    width = DAG_PAD * 2 + 90 + ncols * DAG_COL_W
+    pos, lane_out, y = {}, [], DAG_PAD
+    for gid, label in lanes:
+        rows = max(len(v) for (g, _), v in cells.items() if g == gid)
+        height = DAG_LANE_HEAD + rows * DAG_ROW_H
+        part = ['<g class="lane" data-group="%s">' % e(gid),
+                '<rect class="band" x="%d" y="%d" width="%d" height="%d" rx="8"/>'
+                % (DAG_PAD, y, width - 2 * DAG_PAD, height),
+                '<text class="lh" x="%d" y="%d">%s</text>' % (DAG_PAD + 8, y + 17, e(gid + " · " + label if gid else label))]
+        for (g, col), idents in sorted(cells.items(), key=lambda kv: kv[0][1]):
+            if g != gid:
+                continue
+            for row, ident in enumerate(idents):
+                t = snap.tickets[ident]
+                x = DAG_PAD + 90 + col * DAG_COL_W
+                ny = y + DAG_LANE_HEAD + row * DAG_ROW_H
+                pos[ident] = (x, ny)
+                state = str(t.get("state") or "")
+                cls = ["node", "s-" + state]
+                extra = ""
+                if ident in blocked:
+                    cls.append("blocked")
+                    extra = ' data-blocked-by="%s"' % e(" ".join(blocked[ident]))
+                if ident in blockers:
+                    cls.append("blocker")
+                part.append('<a href="?ticket=%s"><g class="%s" data-id="%s" data-state="%s" data-group="%s" '
+                            'data-layer="%d"%s><title>#%s %s</title>'
+                            '<rect x="%d" y="%d" width="%d" height="%d" rx="6"/>'
+                            '<text x="%d" y="%d">#%s %s</text><text class="st" x="%d" y="%d">%s</text></g></a>' % (
+                                e(ident), e(" ".join(cls)), e(ident), e(state), e(t.get("group") or ""),
+                                layers[ident], extra, e(ident), e(t.get("title")),
+                                x, ny, DAG_NODE_W, DAG_NODE_H,
+                                x + 8, ny + 16, e(ident), e(_clip(t.get("title"), 12)),
+                                x + 8, ny + 31, e(STATE_TEXT.get(state, state))))
+        part.append("</g>")
+        lane_out.append("\n".join(part))
+        y += height + DAG_LANE_GAP
+    edges = []
+    for a in sorted(shown, key=_num_key):
+        for b in dagmod.deps(snap.dag, a):
+            if b not in shown:
+                continue
+            chain = a in blocked and (b in blocked or b in blockers)
+            (bx, by), (ax, ay) = pos[b], pos[a]
+            x1, y1, x2, y2 = bx + DAG_NODE_W, by + DAG_NODE_H / 2, ax, ay + DAG_NODE_H / 2
+            mid = (x1 + x2) / 2
+            edges.append('<path class="edge%s" data-from="%s" data-to="%s" d="M%g %g C%g %g %g %g %g %g"/>' % (
+                " chain" if chain else "", e(b), e(a), x1, y1, mid, y1, mid, y2, x2, y2))
+    height = y - DAG_LANE_GAP + DAG_PAD
+    return ('<svg id="dag" xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d" '
+            'role="img" aria-label="票的相依圖">\n%s\n<g class="edges">%s</g>\n</svg>'
+            % (width, height, width, height, "\n".join(lane_out), "".join(edges)))
+
+
+def render_dag_legend():
+    items = ['<span class="s-%s"><i></i>%s</span>' % (e(s), e(text)) for s, text in STATE_TEXT.items()]
+    items.append('<span><i class="blocked"></i>%s</span>' % e(BLOCKED_TEXT))
+    items.append('<span><i class="blocker"></i>%s</span>' % e(BLOCKER_TEXT))
+    return '<div class="legend">%s</div>' % "".join(items)
+
+
 def render_dag_tab(cfg, snap, query, now):
-    return stub_tab("DAG")
+    done = (query or {}).get("done") == "1"
+    blockers = dag_blockers(snap)
+    blocked = dag_blocked(snap, blockers)
+    shown = dag_shown(snap, blocked, done)
+    toggle = ('<a href="?tab=dag">收起已落地與已取消</a>' if done
+              else '<a href="%s">顯示已落地與已取消</a>' % e("?tab=dag&done=1"))
+    out = [DAG_STYLE, '<section><h2>DAG</h2><p class="quiet">一欄 = 一層相依,一條帶 = 一個整合分支;紅線是卡住的鏈。 %s</p>'
+           % toggle, render_dag_legend()]
+    if not shown:
+        out.append("<p class='quiet'>沒有要顯示的票</p></section>")
+        return "\n".join(out)
+    layers = dag_layers(snap, shown)
+    out.append('<div class="scroll dagbox">%s</div></section>' % dag_svg(snap, shown, layers, blocked, blockers))
+    return "\n".join(out)
 
 
 # ---------------------------------------------------------------- tab: Token
