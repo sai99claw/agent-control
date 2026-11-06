@@ -32,7 +32,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import dag as dagmod  # noqa: E402
-from core import agents, codemap, memory, osx, release  # noqa: E402
+from core import agents, codemap, host, memory, osx, release  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.pool import event  # noqa: E402
@@ -550,6 +550,7 @@ def main(argv=None):
         print("ticket_controller: %s" % exc, file=sys.stderr)
         return 2
     ctl = Controller(cfg, pool)
+    sampler = host.Sampler(cfg).start()      # #44: one line per devloop.host_sample_seconds
 
     def on_signal(signum, frame):
         ctl.stopping = True
@@ -568,6 +569,7 @@ def main(argv=None):
             pass
         return 2
     finally:
+        sampler.stop()
         lock.release()
 
 

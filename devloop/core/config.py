@@ -66,6 +66,8 @@ DEFAULTS = {
     "no_reverify_paths": ["memory/", "docs/DECISIONS.md", "docs/HANDOFF.md"],
                                      # D-090: when main moved after verification only in these paths,
                                      # the controller merges main in and lands without a second regression
+    "host_sample_seconds": 60,       # #44: the controller samples the machine into <worktrees>/runs/host/
+                                     # <hostname>.jsonl every N seconds; null = off
     "agents": DEFAULT_AGENTS,
 }
 
@@ -106,6 +108,10 @@ class Config:
             raise osx.OSFailure("board/config.json devloop.no_reverify_paths must be a list of "
                                 "non-empty path strings ([] turns it off), not %r" % (nrv,))
         self.values["no_reverify_paths"] = list(nrv)
+        every = self.values.get("host_sample_seconds")
+        if every is not None and (isinstance(every, bool) or not isinstance(every, int) or every < 1):
+            raise osx.OSFailure("board/config.json devloop.host_sample_seconds must be null or a whole "
+                                "number >= 1, not %r" % (every,))
         exclusive = self.values.get("regression_exclusive")
         if not isinstance(exclusive, bool):
             raise osx.OSFailure("board/config.json devloop.regression_exclusive must be true or false, "

@@ -186,6 +186,25 @@ new project starts from agent-control's memory/ and grows its own. A project's o
 imported with `tickets.py lessons --layer L --name N --file F` (every bullet line of F becomes a
 waiting lesson).
 
+## Host samples
+
+While `ticket_controller.py` runs, a background thread appends one JSON line to
+`<worktrees>/runs/host/<hostname>.jsonl` (the hostname with path separators as `_`) when it starts and
+then every `devloop.host_sample_seconds` (default 60; null = off; anything else must be a whole number
+>= 1). Each line has exactly: `at` (UTC, the pool's time format), `host`, `load1` / `load5` (load
+average, null when unavailable), `cpus`, `mem_available` (bytes: cgroup limit minus use, else
+`MemAvailable`, else macOS `vm_stat` - the unittest adapter's function in `scripts/hostinfo.py`, with
+its `AC_CGROUP_ROOT` / `AC_MEMINFO` / `AC_VM_STAT` / `AC_SYSCTL` overrides; null when unknown),
+`disk_free` (bytes free on the worktree root's filesystem), `agents`, `slots_used` and `slots`
+(`devloop.machine_slots`; both null when that is null). `agents` is the number of distinct
+`DEVLOOP_RUN_DIR` values among processes whose environment has `DEVLOOP_ROLE` (from
+`/proc/<pid>/environ`, or `ps -A -E -ww -o command=` where there is no `/proc`; null when `ps` fails).
+`slots_used` probes each slot file with a non-blocking `LOCK_EX` on a fresh fd closed at once: a slot
+whose lock is refused is in use. Pruning keeps 7 days: when the file's first line is more than 8 days
+old (or unreadable) the file is rewritten with only the lines from the last 7 days before the new
+line goes in, so it is rewritten at most about once a day. A failed sample prints one line to the
+controller's stderr and sampling carries on; the thread stops with the controller.
+
 ## Dashboard
 
 `board.py` reads the pool only: the four VISION numbers (tokens and time per landed ticket,

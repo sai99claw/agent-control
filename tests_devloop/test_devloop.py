@@ -2133,6 +2133,104 @@ class RedCheck(LoopCase):
         self._round_two("unnamed", "result.json")
 
 
+class TestHostSampler(LoopCase):
+    """#44, implementer's own: the sampler thread's failure handling and stop, and the README section."""
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_ROLE", None)
+        self.env.pop("DEVLOOP_RUN_DIR", None)
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def test_sampler_writes_at_start_and_stops_its_thread(self):
+        import io
+        from core import host
+        self.config(host_sample_seconds=1)
+        err = io.StringIO()
+        sampler = host.Sampler(self.cfg(), out=err).start()
+        thread = sampler._thread
+        time.sleep(1.5)
+        sampler.stop()
+        self.assertFalse(thread.is_alive())
+        path = os.path.join(self.tmp, "wt", "runs", "host",
+                            __import__("socket").gethostname().replace(os.sep, "_") + ".jsonl")
+        with open(path) as fh:
+            rows = [json.loads(line) for line in fh.read().splitlines()]
+        self.assertGreaterEqual(len(rows), 2)
+        self.assertEqual(sorted(rows[0]), sorted(host.KEYS))
+        self.assertEqual(err.getvalue(), "")
+        count = len(rows)
+        time.sleep(1.3)
+        with open(path) as fh:
+            self.assertEqual(len(fh.read().splitlines()), count, "a stopped sampler wrote on")
+
+    def test_null_never_starts_a_thread(self):
+        from core import host
+        self.config(host_sample_seconds=None)
+        sampler = host.Sampler(self.cfg()).start()
+        self.assertIsNone(sampler._thread)
+        sampler.stop()
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "wt", "runs", "host")))
+
+    def test_failed_samples_print_one_line_each_and_sampling_goes_on(self):
+        import io
+        from core import host
+        self.config(host_sample_seconds=1)
+        os.makedirs(os.path.join(self.tmp, "wt", "runs"))
+        with open(os.path.join(self.tmp, "wt", "runs", "host"), "w") as fh:
+            fh.write("a file where the folder belongs\n")
+        err = io.StringIO()
+        sampler = host.Sampler(self.cfg(), out=err).start()
+        time.sleep(1.5)
+        sampler.stop()
+        lines = err.getvalue().splitlines()
+        self.assertGreaterEqual(len(lines), 2, err.getvalue())
+        for line in lines:
+            self.assertTrue(line.startswith("ticket_controller: host sample failed: "), line)
+
+    def test_controller_lands_although_every_sample_fails(self):
+        self.config(host_sample_seconds=1)
+        os.makedirs(os.path.join(self.tmp, "wt", "runs"))
+        with open(os.path.join(self.tmp, "wt", "runs", "host"), "w") as fh:
+            fh.write("x\n")
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.snap().ticket("1")["state"], "landed")
+        failed = [l for l in res.stderr.splitlines() if "host sample failed" in l]
+        self.assertGreaterEqual(len(failed), 1, res.stderr)
+
+    def test_sample_before_the_worktree_root_exists_measures_its_parent(self):
+        import shutil
+        from core import host
+        self.config()
+        root = os.path.join(self.tmp, "wt")
+        self.assertFalse(os.path.exists(root))
+        self.assertEqual(host.disk_free(os.path.join(root, "a", "b")) > 0, True)
+        row = host.sample(self.cfg())
+        self.assertIsInstance(row["disk_free"], int)
+        self.assertFalse(os.path.exists(root), "sampling must not create the root")
+        os.makedirs(root)
+        self.assertGreater(host.disk_free(root), 0)
+        self.assertLessEqual(abs(host.disk_free(root) - shutil.disk_usage(root).free), 1 << 24)
+
+    def test_readme_section_sits_before_dashboard_and_names_the_rules(self):
+        with open(os.path.join(LOOP, "README.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        heads = [line for line in text.splitlines() if line.startswith("## ")]
+        self.assertIn("## Host samples", heads)
+        self.assertEqual(heads[heads.index("## Host samples") + 1], "## Dashboard")
+        section = text.split("## Host samples", 1)[1].split("## Dashboard", 1)[0]
+        flat = " ".join(section.split())
+        for words in ("runs/host/<hostname>.jsonl", "devloop.host_sample_seconds", "default 60",
+                      "null = off", "7 days", "8 days", "DEVLOOP_RUN_DIR", "DEVLOOP_ROLE",
+                      "non-blocking", "mem_available", "disk_free", "slots_used", "load1"):
+            self.assertIn(words, flat)
+
+
 class TestLayerDocs(unittest.TestCase):
     ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -2343,6 +2441,329 @@ class MarkExplained(unittest.TestCase):
         bullet = [b for b in text.split("\n- ") if "T<id>Acceptance" in b][0]
         self.assertIn("result.json", bullet)
         self.assertIn("unittest", bullet)
+
+
+class T44Acceptance(LoopCase):
+    """Ticket #44: while it runs, the controller samples the machine into
+    <worktrees>/runs/host/<hostname>.jsonl."""
+
+    KEYS = {"at", "host", "load1", "load5", "cpus", "mem_available", "disk_free", "agents",
+            "slots_used", "slots"}
+    X = 1767225600            # 2026-01-01T00:00:00Z
+    DAY = 86400
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        for name in ("DEVLOOP_ROLE", "DEVLOOP_RUN_DIR", "AC_PROC_ROOT", "AC_PS", "AC_CGROUP_ROOT",
+                     "AC_MEMINFO", "AC_VM_STAT", "AC_SYSCTL"):
+            self.env.pop(name, None)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for name in ("DEVLOOP_SLOT", "AC_PROC_ROOT", "AC_PS", "AC_CGROUP_ROOT", "AC_MEMINFO",
+                     "AC_VM_STAT", "AC_SYSCTL"):
+            os.environ.pop(name, None)
+        os.environ["AC_ROOT"] = self.proj
+
+    # ------------------------------------------------------------ helpers
+
+    def host(self):
+        self.assertTrue(os.path.isfile(os.path.join(LOOP, "core", "host.py")), "no devloop/core/host.py")
+        from core import host
+        return host
+
+    def has(self, mod, name, *params):
+        self.assertTrue(hasattr(mod, name), "no %s" % name)
+        import inspect
+        got = inspect.signature(getattr(mod, name)).parameters
+        for p in params:
+            self.assertIn(p, got, "%s has no parameter %s" % (name, p))
+        return getattr(mod, name)
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    @staticmethod
+    def ts(epoch):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+    def script(self, name, body):
+        path = os.path.join(self.tmp, name)
+        with open(path, "w") as fh:
+            fh.write("#!/bin/sh\n" + body)
+        os.chmod(path, 0o755)
+        return path
+
+    def host_file(self):
+        import socket
+        return os.path.join(self.tmp, "wt", "runs", "host",
+                            socket.gethostname().replace(os.sep, "_") + ".jsonl")
+
+    def check_row(self, row):
+        self.assertEqual(set(row), self.KEYS, row)
+        import socket
+        self.assertEqual(row["host"], socket.gethostname())
+        self.assertEqual(row["cpus"], os.cpu_count())
+        for key in ("load1", "load5"):
+            self.assertTrue(row[key] is None or isinstance(row[key], (int, float)), row)
+            self.assertNotIsInstance(row[key], bool)
+        for key in ("mem_available", "disk_free", "agents", "slots_used"):
+            self.assertTrue(row[key] is None or (isinstance(row[key], int)
+                                                 and not isinstance(row[key], bool)), (key, row))
+        self.assertIsInstance(row["disk_free"], int)
+
+    def proc_tree(self):
+        root = os.path.join(self.tmp, "proc")
+
+        def env(name, pairs):
+            os.makedirs(os.path.join(root, name))
+            with open(os.path.join(root, name, "environ"), "wb") as fh:
+                fh.write(b"".join(("%s=%s" % kv).encode() + b"\0" for kv in pairs))
+        env("10", [("HOME", "/h"), ("DEVLOOP_ROLE", "worker"), ("DEVLOOP_RUN_DIR", "/r/1")])
+        env("11", [("DEVLOOP_ROLE", "worker"), ("DEVLOOP_RUN_DIR", "/r/1"), ("PATH", "/bin")])
+        env("12", [("DEVLOOP_RUN_DIR", "/r/2"), ("DEVLOOP_ROLE", "verifier")])
+        env("13", [("DEVLOOP_RUN_DIR", "/r/3"), ("HOME", "/h")])
+        os.makedirs(os.path.join(root, "14"))
+        env("self", [("DEVLOOP_ROLE", "worker"), ("DEVLOOP_RUN_DIR", "/r/9")])
+        return root
+
+    def fake_ps(self, code=0):
+        log = os.path.join(self.tmp, "ps-args.txt")
+        body = ('printf "%%s\\n" "$@" > %s\n' % log
+                + "printf '%s\\n' 'python3 a.py DEVLOOP_ROLE=worker DEVLOOP_RUN_DIR=/r/1 HOME=/h'\n"
+                + "printf '%s\\n' 'claude -p DEVLOOP_RUN_DIR=/r/1 DEVLOOP_ROLE=worker'\n"
+                + "printf '%s\\n' 'claude -p DEVLOOP_ROLE=verifier DEVLOOP_RUN_DIR=/r/2 PATH=/bin'\n"
+                + "printf '%s\\n' 'bash DEVLOOP_RUN_DIR=/r/3 HOME=/h'\n"
+                + "exit %d\n" % code)
+        return self.script("ps-%d" % code, body), log
+
+    def write_lines(self, rows):
+        path = self.host_file()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            for r in rows:
+                fh.write((r if isinstance(r, str) else json.dumps(r)) + "\n")
+        return path
+
+    def read_ats(self, path):
+        with open(path) as fh:
+            return [json.loads(line)["at"] for line in fh if line.strip()]
+
+    # ------------------------------------------------------------ items 1 and 2
+
+    def test_sample_has_exactly_the_keys_and_at_is_now(self):
+        host = self.host()
+        sample = self.has(host, "sample", "cfg", "now")
+        self.config(machine_slots=None)
+        row = sample(self.cfg(), now=self.X)
+        self.check_row(row)
+        self.assertEqual(row["at"], self.ts(self.X))
+        self.assertEqual(row["at"], "2026-01-01T00:00:00Z")
+        self.assertIsNone(row["slots"])
+        self.assertIsNone(row["slots_used"])
+        try:
+            load = os.getloadavg()
+        except OSError:
+            load = None
+        if load is None:
+            self.assertIsNone(row["load1"])
+            self.assertIsNone(row["load5"])
+        else:
+            self.assertAlmostEqual(row["load1"], load[0], delta=2.0)
+            self.assertAlmostEqual(row["load5"], load[1], delta=2.0)
+        self.assertAlmostEqual(row["disk_free"], shutil.disk_usage(self.tmp).free, delta=512 * 2 ** 20)
+        self.assertEqual(json.loads(json.dumps(row)), row)
+        self.config(machine_slots=3)
+        row = sample(self.cfg(), now=self.X + 61)
+        self.check_row(row)
+        self.assertEqual(row["at"], "2026-01-01T00:01:01Z")
+        self.assertEqual(row["slots"], 3)
+        self.assertEqual(row["slots_used"], 0)
+
+    # ------------------------------------------------------------ item 3
+
+    def test_mem_available_from_meminfo(self):
+        host = self.host()
+        sample = self.has(host, "sample", "cfg", "now")
+        cg = os.path.join(self.tmp, "cgroup")
+        os.makedirs(cg)
+        meminfo = os.path.join(self.tmp, "meminfo")
+        with open(meminfo, "w") as fh:
+            fh.write("MemTotal:       8192 kB\nMemAvailable:    2048 kB\n")
+        os.environ["AC_CGROUP_ROOT"] = cg
+        os.environ["AC_MEMINFO"] = meminfo
+        self.assertEqual(sample(self.cfg(), now=self.X)["mem_available"], 2097152)
+
+    def test_mem_available_from_vm_stat(self):
+        host = self.host()
+        sample = self.has(host, "sample", "cfg", "now")
+        cg = os.path.join(self.tmp, "cgroup")
+        os.makedirs(cg)
+        os.environ["AC_CGROUP_ROOT"] = cg
+        os.environ["AC_MEMINFO"] = os.path.join(self.tmp, "no-meminfo")
+        os.environ["AC_VM_STAT"] = self.script(
+            "vm_stat", "printf '%s\\n' 'Mach Virtual Memory Statistics: (page size of 4096 bytes)' "
+            "'Pages free: 10.' 'Pages inactive: 5.'\n")
+        os.environ["AC_SYSCTL"] = self.script("sysctl", "printf '%s\\n' 99999999\n")
+        self.assertEqual(sample(self.cfg(), now=self.X)["mem_available"], 61440)
+
+    # ------------------------------------------------------------ item 4
+
+    def test_memory_helpers_moved_to_hostinfo(self):
+        import ast
+        scripts = os.path.join(HOME, "scripts")
+        hostinfo = os.path.join(scripts, "hostinfo.py")
+        self.assertTrue(os.path.isfile(hostinfo), "no scripts/hostinfo.py")
+        names = ("read_text", "run_tool", "vm_stat_bytes", "available_bytes")
+        with open(hostinfo) as fh:
+            tree = ast.parse(fh.read())
+        defined = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
+        for name in names:
+            self.assertIn(name, defined)
+        with open(os.path.join(scripts, "adapter-unittest.py")) as fh:
+            text = fh.read()
+        for line in text.splitlines():
+            for name in names:
+                self.assertFalse(line.startswith("def %s(" % name) or line.startswith("def %s " % name),
+                                 line)
+        imported = set()
+        for node in ast.walk(ast.parse(text)):
+            if isinstance(node, ast.ImportFrom) and node.module == "hostinfo":
+                imported.update(a.name for a in node.names)
+        for name in names:
+            self.assertIn(name, imported, "adapter-unittest.py does not import %s from hostinfo" % name)
+
+    # ------------------------------------------------------------ item 5
+
+    def test_agents_running_from_proc(self):
+        host = self.host()
+        agents_running = self.has(host, "agents_running", "proc_root", "ps")
+        root = self.proc_tree()
+        self.assertEqual(agents_running(proc_root=root), 2)
+        os.environ["AC_PROC_ROOT"] = root
+        self.assertEqual(agents_running(), 2)
+
+    def test_agents_running_from_ps(self):
+        host = self.host()
+        agents_running = self.has(host, "agents_running", "proc_root", "ps")
+        missing = os.path.join(self.tmp, "no-proc")
+        ps, log = self.fake_ps(0)
+        self.assertEqual(agents_running(proc_root=missing, ps=ps), 2)
+        with open(log) as fh:
+            self.assertEqual(fh.read().split("\n")[:5], ["-A", "-E", "-ww", "-o", "command="])
+        bad, _ = self.fake_ps(1)
+        self.assertIsNone(agents_running(proc_root=missing, ps=bad))
+        os.environ["AC_PROC_ROOT"] = missing
+        os.environ["AC_PS"] = ps
+        self.assertEqual(agents_running(), 2)
+        os.environ["AC_PS"] = bad
+        self.assertIsNone(agents_running())
+
+    # ------------------------------------------------------------ item 6
+
+    def test_slots_in_use_probes_without_holding(self):
+        import fcntl
+        host = self.host()
+        slots_in_use = self.has(host, "slots_in_use", "cfg")
+        self.config(machine_slots=3)
+        folder = os.path.join(self.tmp, "wt", "slots")
+        os.makedirs(folder, exist_ok=True)
+        paths = [os.path.join(folder, "slot-%d" % i) for i in range(3)]
+        for p in paths:
+            open(p, "a").close()
+        self.assertEqual(slots_in_use(self.cfg()), 0)
+        fd = os.open(paths[1], os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            self.assertEqual(slots_in_use(self.cfg()), 1)
+        finally:
+            os.close(fd)
+        self.assertEqual(slots_in_use(self.cfg()), 0)
+        fds = []
+        try:
+            for p in paths:
+                fds.append(os.open(p, os.O_RDWR | os.O_CREAT, 0o644))
+                fcntl.flock(fds[-1], fcntl.LOCK_EX | fcntl.LOCK_NB)   # raises if the probe left one locked
+        finally:
+            for f in fds:
+                os.close(f)
+        self.config(machine_slots=None)
+        self.assertIsNone(slots_in_use(self.cfg()))
+
+    # ------------------------------------------------------------ item 7
+
+    def test_append_prunes_an_old_file(self):
+        host = self.host()
+        append = self.has(host, "append", "cfg", "row", "now")
+        X, D = self.X, self.DAY
+        path = self.write_lines([{"at": self.ts(X - 9 * D), "host": "h"},
+                                 {"at": self.ts(X - 7.5 * D), "host": "h"},
+                                 {"at": self.ts(X - 6 * D), "host": "h"},
+                                 {"at": self.ts(X - 1 * D), "host": "h"}])
+        row = {"at": self.ts(X), "host": "h", "load1": 0.5}
+        append(self.cfg(), row, now=X)
+        self.assertEqual(self.read_ats(path), [self.ts(X - 6 * D), self.ts(X - D), self.ts(X)])
+        with open(path) as fh:
+            self.assertEqual(json.loads(fh.read().splitlines()[-1]), row)
+
+    def test_append_rewrites_when_the_first_line_is_unreadable(self):
+        host = self.host()
+        append = self.has(host, "append", "cfg", "row", "now")
+        X, D = self.X, self.DAY
+        path = self.write_lines(["not json {", {"at": self.ts(X - 7.5 * D)}, {"at": self.ts(X - D)}])
+        append(self.cfg(), {"at": self.ts(X)}, now=X)
+        self.assertEqual(self.read_ats(path), [self.ts(X - D), self.ts(X)])
+
+    def test_append_without_rewrite_when_the_first_line_is_recent_enough(self):
+        host = self.host()
+        append = self.has(host, "append", "cfg", "row", "now")
+        X, D = self.X, self.DAY
+        path = self.write_lines([{"at": self.ts(X - 7.5 * D)}, {"at": self.ts(X - 6 * D)}])
+        inode = os.stat(path).st_ino
+        append(self.cfg(), {"at": self.ts(X)}, now=X)
+        self.assertEqual(self.read_ats(path), [self.ts(X - 7.5 * D), self.ts(X - 6 * D), self.ts(X)])
+        self.assertEqual(os.stat(path).st_ino, inode, "the file was rewritten")
+
+    # ------------------------------------------------------------ item 8
+
+    def test_controller_samples_while_it_runs(self):
+        self.config(host_sample_seconds=1, machine_slots=2)
+        self.add(1)
+        self.plan(worker={"1": ["slow"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        path = self.host_file()
+        self.assertTrue(os.path.isfile(path), "no %s" % path)
+        with open(path) as fh:
+            rows = [json.loads(line) for line in fh if line.strip()]
+        self.assertGreaterEqual(len(rows), 3, rows)
+        for row in rows:
+            self.check_row(row)
+            self.assertEqual(row["slots"], 2)
+        self.assertTrue(any((r["slots_used"] or 0) >= 1 and (r["agents"] or 0) >= 1 for r in rows), rows)
+
+    # ------------------------------------------------------------ item 9
+
+    def test_setting_defaults_to_60_and_null_is_off(self):
+        self.assertEqual(getattr(self.cfg(), "host_sample_seconds", "unset"), 60)
+        self.config(host_sample_seconds=None, machine_slots=2)
+        self.assertIsNone(self.cfg().host_sample_seconds)
+        self.add(1)
+        self.plan(worker={"1": ["slow"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertFalse(os.path.exists(self.host_file()))
+
+    def test_bad_setting_stops_the_scripts(self):
+        for bad in (0, -1, 1.5, "60", True):
+            self.config(host_sample_seconds=bad)
+            res = self.run_py("tickets.py", "list")
+            self.assertEqual(res.returncode, 2, (bad, res.stdout, res.stderr))
+            self.assertIn("devloop.host_sample_seconds", res.stderr, bad)
 
 
 class T3Acceptance(LoopCase):
