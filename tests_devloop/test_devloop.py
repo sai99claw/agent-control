@@ -5997,6 +5997,225 @@ class T12Acceptance(LoopCase):
                 self.assertIn("The project's last full run took 30 seconds.", self.opener_prompt())
 
 
+class T42Acceptance(LoopCase):
+    """#42: the DAG tab draws the ticket DAG and highlights the chains stuck behind a blocker.
+    Expected values come from the ticket and the fixture below, never from the code."""
+
+    NS = "{http://www.w3.org/2000/svg}"
+
+    def fixture(self):
+        self.add(1, state="stuck", group="g1")
+        self.add(2, deps=[1])
+        self.add(3, deps=[2])
+        self.add(4, state="cancelled")
+        self.add(5, deps=[4])
+        self.add(6, state="landed", group="g1")
+        self.add(7, deps=[6])
+        self.add(8, state="merged", group="g2")
+        self.add(9, deps=[8])
+        self.add(10, deps=[6], state="running", group="g3")
+
+        def groups(tx):
+            tx.put_group({"id": "g1", "state": "landed", "members": ["1", "6"], "branch": "int/g1"})
+            tx.put_group({"id": "g2", "state": "stuck", "members": ["8"], "branch": "int/g2"})
+            tx.put_group({"id": "g3", "state": "open", "members": ["10"], "branch": "int/g3"})
+        self.pool.update(groups, "test: groups")
+
+    def page(self, done=False):
+        import board
+        from core.config import Config
+        query = {"tab": "dag"}
+        if done:
+            query["done"] = "1"
+        return board.render(Config(self.proj), self.snap(), query=query)
+
+    def tab_body(self, page):
+        import board
+        start = page.index('<div id="tab-dag" class="tab">')
+        end = page.index(board.PAGE_SCRIPT, start)
+        return page[start:end]
+
+    def svg(self, page):
+        import re
+        import xml.etree.ElementTree as ET
+        prefix = '<svg id="dag" xmlns="http://www.w3.org/2000/svg"'
+        self.assertEqual(page.count(prefix), 1, "one <svg id=\"dag\" xmlns=...> expected")
+        m = re.search(r'<svg id="dag".*?</svg>', page, re.S)
+        self.assertIsNotNone(m)
+        try:
+            return ET.fromstring(m.group(0))
+        except ET.ParseError as exc:
+            self.fail("the DAG svg does not parse: %s" % exc)
+
+    @staticmethod
+    def classes(el):
+        return (el.get("class") or "").split()
+
+    def nodes(self, root):
+        return {el.get("data-id"): el for el in root.iter(self.NS + "g") if "node" in self.classes(el)}
+
+    def edges(self, root):
+        return [el for el in root.iter() if "edge" in self.classes(el)]
+
+    def lanes(self, root):
+        return [el for el in root.iter(self.NS + "g") if "lane" in self.classes(el)]
+
+    # ---- item 1
+    def test_tab_has_one_parsable_svg(self):
+        self.fixture()
+        root = self.svg(self.page())
+        self.assertEqual(root.tag, self.NS + "svg")
+        self.assertEqual(root.get("id"), "dag")
+
+    # ---- item 2
+    def test_shown_tickets_and_node_markup(self):
+        self.fixture()
+        import board
+        snap = self.snap()
+        for done, want in ((False, {"1", "2", "3", "4", "5", "7", "8", "9", "10"}),
+                           (True, {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"})):
+            with self.subTest(done=done):
+                root = self.svg(self.page(done))
+                count = sum(1 for el in root.iter(self.NS + "g") if "node" in self.classes(el))
+                nodes = self.nodes(root)
+                self.assertEqual(count, len(want))
+                self.assertEqual(set(nodes), want)
+                parent = {c: p for p in root.iter() for c in p}
+                for ident, node in nodes.items():
+                    t = snap.tickets[ident]
+                    self.assertIn("s-" + t["state"], self.classes(node), ident)
+                    self.assertEqual(node.get("data-state"), t["state"], ident)
+                    self.assertEqual(node.get("data-group"), t.get("group") or "", ident)
+                    self.assertIsNotNone(node.get("data-layer"), ident)
+                    titles = list(node.iter(self.NS + "title"))
+                    self.assertTrue(titles, ident)
+                    self.assertTrue(("".join(titles[0].itertext())).startswith("#%s ticket %s" % (ident, ident)),
+                                    ident)
+                    up = parent.get(node)
+                    self.assertIsNotNone(up, ident)
+                    self.assertEqual(up.tag, self.NS + "a", ident)
+                    self.assertEqual(up.get("href"), "?ticket=%s" % ident, ident)
+
+    def test_ticket_outside_dag_is_shown(self):
+        def change(tx):
+            tx.put_ticket({"id": "11", "title": "ticket 11", "objective": "o", "acceptance": ["a"],
+                           "state": "ready", "round": 0, "feedback": [], "cases": None})
+        self.pool.update(change, "test: #11 outside dag")
+        root = self.svg(self.page())
+        self.assertEqual(set(self.nodes(root)), {"11"})
+        self.assertEqual(self.nodes(root)["11"].get("data-layer"), "0")
+
+    # ---- item 3
+    def test_layers(self):
+        self.fixture()
+        for done, want in ((False, {"1": 0, "2": 1, "3": 2, "4": 0, "5": 1, "7": 0, "8": 0, "9": 1, "10": 0}),
+                           (True, {"1": 0, "2": 1, "3": 2, "4": 0, "5": 1, "6": 0, "7": 1, "8": 0, "9": 1,
+                                   "10": 1})):
+            with self.subTest(done=done):
+                nodes = self.nodes(self.svg(self.page(done)))
+                self.assertEqual({i: n.get("data-layer") for i, n in nodes.items()},
+                                 {i: str(v) for i, v in want.items()})
+
+    # ---- item 4 (and the chain part of item 6)
+    def test_edges_and_chains(self):
+        self.fixture()
+        for done, want, chain in (
+                (False, {("1", "2"), ("2", "3"), ("4", "5"), ("8", "9")},
+                 {("1", "2"), ("2", "3"), ("4", "5"), ("8", "9")}),
+                (True, {("1", "2"), ("2", "3"), ("4", "5"), ("8", "9"), ("6", "7"), ("6", "10")},
+                 {("1", "2"), ("2", "3"), ("4", "5"), ("8", "9")})):
+            with self.subTest(done=done):
+                edges = self.edges(self.svg(self.page(done)))
+                pairs = [(el.get("data-from"), el.get("data-to")) for el in edges]
+                self.assertEqual(sorted(pairs), sorted(want))
+                self.assertEqual({(el.get("data-from"), el.get("data-to")) for el in edges
+                                  if "chain" in self.classes(el)}, chain)
+
+    # ---- item 5
+    def test_lanes(self):
+        import board
+        self.fixture()
+        snap = self.snap()
+        for done in (False, True):
+            with self.subTest(done=done):
+                root = self.svg(self.page(done))
+                lanes = self.lanes(root)
+                self.assertEqual([el.get("data-group") for el in lanes], ["g1", "g2", "g3", ""])
+                for lane in lanes:
+                    gid = lane.get("data-group")
+                    texts = ["".join(t.itertext()) for t in lane.iter(self.NS + "text")]
+                    if gid:
+                        label = board.group_state_text(snap.groups[gid])
+                        self.assertTrue(any(gid in s and label in s for s in texts), (gid, label, texts))
+                    else:
+                        self.assertTrue(any("未分組" in s for s in texts), texts)
+                labels = {el.get("data-group"): " ".join("".join(t.itertext()) for t in el.iter(self.NS + "text"))
+                          for el in lanes}
+                self.assertIn("已落地", labels["g1"])
+                self.assertIn("卡住", labels["g2"])
+                self.assertIn("收票中", labels["g3"])
+                for ident, node in self.nodes(root).items():
+                    lane = [el for el in lanes if el.get("data-group") == node.get("data-group")]
+                    self.assertEqual(len(lane), 1, ident)
+                    self.assertIn(node, list(lane[0].iter()), ident)
+                members = {el.get("data-group"): sorted(n.get("data-id") for n in el.iter(self.NS + "g")
+                                                        if "node" in self.classes(n)) for el in lanes}
+                want = {"g1": ["1", "6"] if done else ["1"], "g2": ["8"], "g3": ["10"],
+                        "": sorted(["2", "3", "4", "5", "7", "9"])}
+                self.assertEqual(members, want)
+
+    def test_no_ungrouped_lane_when_all_grouped(self):
+        self.add(1, group="g1", state="merged")
+        self.pool.update(lambda tx: tx.put_group({"id": "g1", "state": "open", "members": ["1"],
+                                                  "branch": "int/g1"}), "test: g1")
+        lanes = self.lanes(self.svg(self.page()))
+        self.assertEqual([el.get("data-group") for el in lanes], ["g1"])
+
+    # ---- item 6
+    def test_blocked_and_blockers(self):
+        self.fixture()
+        for done in (False, True):
+            with self.subTest(done=done):
+                nodes = self.nodes(self.svg(self.page(done)))
+                blocked = {i: n.get("data-blocked-by") for i, n in nodes.items() if "blocked" in self.classes(n)}
+                self.assertEqual(blocked, {"2": "1", "3": "1", "5": "4", "9": "8"})
+                self.assertEqual({i for i, n in nodes.items() if "blocker" in self.classes(n)}, {"1", "4", "8"})
+
+    def test_blocked_by_lists_every_blocker_sorted(self):
+        self.add(10, state="stuck")
+        self.add(9, state="cancelled")
+        self.add(3, deps=[10, 9])
+        nodes = self.nodes(self.svg(self.page()))
+        self.assertEqual(nodes["3"].get("data-blocked-by"), "9 10")
+
+    # ---- item 7
+    def test_legend(self):
+        import board
+        self.add(1)
+        body = self.tab_body(self.page())
+        for label in sorted(set(board.STATE_TEXT.values())) + ["被卡住", "卡住的源頭"]:
+            self.assertIn(label, body, label)
+
+    # ---- item 8
+    def test_done_toggle_link(self):
+        import html
+        import re
+        self.fixture()
+        for done, href, text in ((False, "?tab=dag&done=1", "顯示已落地與已取消"),
+                                 (True, "?tab=dag", "收起已落地與已取消")):
+            with self.subTest(done=done):
+                body = self.tab_body(self.page(done))
+                links = [(html.unescape(m.group(1)), re.sub(r"<[^>]*>", "", m.group(2)).strip())
+                         for m in re.finditer(r'<a\b[^>]*?\bhref=["\']([^"\']*)["\'][^>]*>(.*?)</a>', body, re.S)]
+                self.assertIn((href, text), links)
+
+    # ---- item 9
+    def test_nothing_to_show(self):
+        body = self.tab_body(self.page())
+        self.assertIn("沒有要顯示的票", body)
+        self.assertNotIn("<svg", body)
+
+
 class DagRules(unittest.TestCase):
     def test_problems(self):
         dag = {"1": {"depends_on": ["2"]}, "2": {"depends_on": ["1"]}, "3": {"depends_on": ["9"]},
