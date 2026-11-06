@@ -8165,6 +8165,8 @@ class T46Acceptance(LoopCase):
     def test_item2_unlisted_user_is_refused(self):
         self.board_settings({"trusted_user_header": self.HEADER, "allowed_users": ["a@x.com"]})
         port = self.start("--host", "127.0.0.1", "--key-file", self.key_file())
+        # the listed user must get in first, so the 403s below are the allow list, not a board that reads no header
+        self.assertEqual(self.call(port, "GET", "/", {self.HEADER: "a@x.com"})[0], 200)
         self.assertEqual(self.call(port, "GET", "/", {self.HEADER: "b@x.com"})[0], 403)
         self.assertEqual(self.call(port, "POST", "/request", {self.HEADER: "b@x.com"}, "text=x")[0], 403)
         self.assertEqual(self.web_jobs(), [])
