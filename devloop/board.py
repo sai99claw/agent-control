@@ -43,9 +43,7 @@ STATE_TEXT = {"ready": "待派", "running": "做中", "merged": shown_state("mer
               "stuck": "卡住", "cancelled": "取消"}
 GROUP_TEXT = {"open": "收票中", "pr": "PR(待驗)", "fixing": "修紅中", "verified": "已驗,待落地",
               "landed": "已落地", "stuck": "卡住", "cancelled": "取消"}
-REASON_TEXT = {"rounds": "3 輪用完", "timeout": "超時", "decision": "要你決定", "hard_block": "碰到 hard_block",
-               "env": "環境", "error": "程式錯誤", "target": "整合分支不見",
-               "quota": "額度用完"}
+REASON_TEXT = {"quota": "額度用完"}
 
 
 def group_state_text(g):
@@ -111,6 +109,76 @@ def metrics(snap):
         "asks": "%.2f" % (len(asks) / float(len(finished))) if finished else UNKNOWN,
         "waiting": "%d 頁 + %d 張卡住" % (len(waiting), len(stuck)),
     }
+
+
+# ---------------------------------------------------------------- stuck categories
+
+CATEGORY_TEXT = {"quota": "額度用完", "slot": "等機器名額", "timeout": "逾時", "red": "紅燈",
+                 "decision": "要你決定", "env": "環境", "conflict": "合併衝突", "other": "其他"}
+
+
+def merge_failed(text):
+    """True when a stuck text says a merge of a branch failed (conflict)."""
+    for lead in ("merging the latest ", "merging the verifier's branch "):
+        i = text.find(lead)
+        if i >= 0 and " failed (" in text[i + len(lead):]:
+            return True
+    return False
+
+
+def ticket_category(t):
+    """Why a stuck or quota-waiting ticket is held, as a CATEGORY_TEXT key; None when it is neither."""
+    if (t.get("waiting") or {}).get("reason") == "quota":
+        return "quota"
+    if t.get("state") != "stuck":
+        return None
+    st = t.get("stuck") or {}
+    reason = st.get("reason")
+    text = st.get("text") or ""
+    if t.get("feedback"):
+        text = "%s\n%s" % (text, t["feedback"][-1])
+    if reason in ("quota", "env", "decision"):
+        return reason
+    if reason == "hard_block":
+        return "decision"
+    if reason == "timeout":
+        return "slot" if "machine slot" in text else "timeout"
+    if reason == "rounds":
+        if merge_failed(text):
+            return "conflict"
+        for row in t.get("cost") or []:
+            if row.get("round") == t.get("round") and row.get("outcome") in ("out of quota", "quota"):
+                return "quota"
+        return "slot" if "no machine slot came free" in text else "red"
+    return "other"
+
+
+GROUP_EVENT_CATEGORY = (("red after", "red"), ("fixer needs a decision", "decision"),
+                        ("main kept moving", "conflict"), ("no ticket of the group got merged", "member"))
+
+
+def group_category(snap, g):
+    """Why a group is held, as a CATEGORY_TEXT key; None when nothing holds it."""
+    if (g.get("waiting") or {}).get("reason") == "quota":
+        return "quota"
+    if g.get("state") != "stuck":
+        pages = [p for p in snap.inbox.values() if not p.get("acked") and str(p.get("ref")) == str(g.get("id"))]
+        for kind in ("env", "decision"):
+            if any(p.get("kind") == kind for p in pages):
+                return kind
+        return None
+    for h in reversed(g.get("history") or []):
+        text = str(h.get("event") or h.get("text") or "")
+        for prefix, cat in GROUP_EVENT_CATEGORY:
+            if text.startswith(prefix):
+                if cat != "member":
+                    return cat
+                for ident in sorted(g.get("members") or [], key=lambda i: int(i)):
+                    t = snap.tickets.get(str(ident))
+                    if t and t.get("state") == "stuck":
+                        return ticket_category(t)
+                return "other"
+    return "other"
 
 
 # ---------------------------------------------------------------- page
@@ -194,15 +262,18 @@ def render_tickets_tab(cfg, snap, key, query, now):
         state = t.get("state")
         note = ""
         if state == "stuck":
-            st = t.get("stuck") or {}
-            note = "%s:%s" % (REASON_TEXT.get(st.get("reason"), st.get("reason")), (st.get("text") or "")[:120])
+            note = (t.get("stuck") or {}).get("text") or ""
+            note = note[:120]
         elif state == "running" and (t.get("waiting") or {}).get("reason") == "quota":
-            note = "%s,等到 %s 再跑" % (REASON_TEXT["quota"], t["waiting"].get("until") or "?")
+            note = "%s,等到 %s 再跑" % (CATEGORY_TEXT["quota"], t["waiting"].get("until") or "?")
         elif state == "running":
             run = t.get("run") or {}
             note = "issuer 跑了 %d 分" % (osx.age(run.get("started")) / 60) if run.get("started") else "剛派出"
         elif t.get("feedback"):
             note = "上一輪:" + t["feedback"][-1][:120]
+        category = ticket_category(t)
+        if category:
+            note = "%s:%s" % (CATEGORY_TEXT[category], note)
         written = cache_written(t)
         complex_ = t.get("complexity") == "complex" or (t.get("complexity") is None and t.get("needs_review"))
         out.append("<tr class='s-%s'><td>#%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td>"
@@ -221,11 +292,11 @@ def render_tickets_tab(cfg, snap, key, query, now):
                        e(note), e(t.get("title"))))
     out.append("</table></div></section>")
 
-    out.append('<section><h2>整合分支(一條 = 一個 PR)</h2><div class="scroll"><table><tr><th>組</th><th>狀態</th>'
+    out.append('<section><h2>整合分支(一條 = 一個 PR)</h2><div class="scroll"><table><tr><th>組</th><th>狀態</th><th>原因</th>'
                '<th>分支</th><th>票</th><th>修補輪</th><th>最後一次 regression</th><th>發版</th></tr>')
     for g in sorted(snap.groups.values(), key=lambda g: int(g["id"][1:]), reverse=True):
-        out.append("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td class='num'>%s</td><td>%s</td><td>%s</td></tr>" % (
-            e(g["id"]), e(group_state_text(g)), e(g.get("branch")),
+        out.append("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td class='num'>%s</td><td>%s</td><td>%s</td></tr>" % (
+            e(g["id"]), e(group_state_text(g)), e(CATEGORY_TEXT.get(group_category(snap, g), "")), e(g.get("branch")),
             e(" ".join("#" + i for i in g.get("members") or [])), e(g.get("fix_round", 0)),
             e((g.get("last_regression") or "")[:160]), e({"ok": "成功", "failed": "失敗"}.get(g.get("release"), ""))))
     out.append("</table></div></section>")
