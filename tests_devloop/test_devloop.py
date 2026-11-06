@@ -6484,6 +6484,228 @@ class AgentControlRelease(unittest.TestCase):
             self.assertEqual(json.load(fh)["devloop"]["release"], "sh scripts/release.sh")
 
 
+class T47Acceptance(LoopCase):
+    """Ticket #47: what a trusted user submits from the board carries that user's name, on the web
+    job and on the ticket history the opener's path writes (D-091 item 4)."""
+
+    HEADER = "X-Auth-Request-Email"
+    NAME = "a@x.com"
+
+    # ------------------------------------------------------------ helpers
+
+    def stuck(self, ident):
+        """A stuck ticket with a decision page p<ident>, as WebInput.stuck() builds."""
+        self.add(ident)
+
+        def change(tx):
+            t = tx.ticket(str(ident))
+            t.update(state="stuck", round=3, stuck={"reason": "rounds", "text": "x"})
+            tx.put_ticket(t)
+            tx.write("inbox/p%s.json" % ident, {"kind": "decision", "ref": str(ident), "text": "stuck",
+                                               "at": osx.now(), "acked": False})
+        self.pool.update(change, "test: stuck")
+
+    @staticmethod
+    def events(ticket, name):
+        return [e for e in ticket.get("history") or [] if e.get("event") == name]
+
+    def board_settings(self, board):
+        path = os.path.join(self.proj, "board", "config.json")
+        with open(path) as fh:
+            cfg = json.load(fh)
+        cfg["board"] = board
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
+
+    def start(self, *extra):
+        import socket
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "board.py"), "serve", "--port", str(port)]
+                                + list(extra), cwd=self.proj, env=self.env, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True)
+        self.addCleanup(proc.kill)
+        return port
+
+    def call(self, port, method, path, headers=None, body=None):
+        """(status, body text); retries connecting for up to 5 s; a 303 is not followed."""
+        import http.client
+        deadline = time.time() + 5
+        while True:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            try:
+                h = {"Content-Type": "application/x-www-form-urlencoded"}
+                h.update(headers or {})
+                conn.request(method, path, body=body, headers=h)
+                resp = conn.getresponse()
+                return resp.status, resp.read().decode("utf-8", "replace")
+            except OSError:
+                if time.time() > deadline:
+                    raise
+                time.sleep(0.1)
+            finally:
+                conn.close()
+
+    def web_root(self):
+        return os.path.join(self.tmp, "wt", "runs", "web")
+
+    def web_jobs(self):
+        try:
+            return set(os.listdir(self.web_root()))
+        except FileNotFoundError:
+            return set()
+
+    def submit(self, port, path, headers, body):
+        """POST one form; returns the job folder it made, after its ticket_creator run finished."""
+        before = self.web_jobs()
+        status, text = self.call(port, "POST", path, headers, body)
+        self.assertIn(status, (200, 303), text[:300])
+        deadline = time.time() + 30
+        new = []
+        while time.time() < deadline:
+            new = sorted(self.web_jobs() - before)
+            if new and os.path.isfile(os.path.join(self.web_root(), new[0], "rc")):
+                break
+            time.sleep(0.2)
+        self.assertEqual(len(new), 1, "one new folder under <worktrees>/runs/web/ for %s" % path)
+        folder = os.path.join(self.web_root(), new[0])
+        self.assertTrue(os.path.isfile(os.path.join(folder, "rc")), "the job's ticket_creator run finished")
+        return folder
+
+    @staticmethod
+    def job(folder):
+        with open(os.path.join(folder, "job.json")) as fh:
+            return json.load(fh)
+
+    def key_file(self):
+        key = os.path.join(self.tmp, "key")
+        with open(key, "w") as fh:
+            fh.write("s3cret\n")
+        return key
+
+    # ------------------------------------------------------------ item 1
+
+    def test_item1_request_by_name_marks_every_opened_event(self):
+        res = self.run_py("ticket_creator.py", "--request", "build two things", "--by", self.NAME)
+        self.assertEqual(res.returncode, 0, "ticket_creator.py --request ... --by NAME: " + res.stderr[-500:])
+        snap = self.snap()
+        self.assertEqual(len(snap.tickets), 2, "the fake opener opens two tickets")
+        for ident, t in snap.tickets.items():
+            opened = self.events(t, "opened")
+            self.assertEqual(len(opened), 1, "#%s has one 'opened' event" % ident)
+            self.assertEqual(opened[0].get("by"), self.NAME, "#%s 'opened' event" % ident)
+
+    def test_item1_request_without_by_writes_no_by(self):
+        # guarded: --by must be accepted first, so the check below is not the old code passing by default
+        res = self.run_py("ticket_creator.py", "--request", "first", "--by", self.NAME)
+        self.assertEqual(res.returncode, 0, "ticket_creator.py accepts --by: " + res.stderr[-500:])
+        first = set(self.snap().tickets)
+        res = self.run_py("ticket_creator.py", "--request", "build two things")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        snap = self.snap()
+        later = [i for i in snap.tickets if i not in first]
+        self.assertEqual(len(later), 2)
+        for ident in later:
+            opened = self.events(snap.ticket(ident), "opened")
+            self.assertEqual(len(opened), 1)
+            self.assertNotIn("by", opened[0], "#%s: no --by, no 'by' key" % ident)
+
+    # ------------------------------------------------------------ item 2
+
+    def decide(self, ident, decision, *extra):
+        return self.run_py("ticket_creator.py", "--revise", str(ident), "--from", "user", "--decision", decision,
+                           "--page", "p%s" % ident, "--by", self.NAME, *extra)
+
+    def test_item2_retry_by_name(self):
+        self.stuck(1)
+        res = self.decide(1, "retry")
+        self.assertEqual(res.returncode, 0, "--decision retry --by NAME: " + res.stderr[-500:])
+        t = self.snap().ticket("1")
+        self.assertEqual(t["state"], "ready")
+        ev = self.events(t, "user decision: ready")
+        self.assertTrue(ev, "a 'user decision: ready' event")
+        self.assertEqual(ev[-1].get("by"), self.NAME)
+
+    def test_item2_cancel_by_name(self):
+        self.stuck(1)
+        res = self.decide(1, "cancel")
+        self.assertEqual(res.returncode, 0, "--decision cancel --by NAME: " + res.stderr[-500:])
+        t = self.snap().ticket("1")
+        self.assertEqual(t["state"], "cancelled")
+        ev = self.events(t, "user decision: cancelled")
+        self.assertTrue(ev, "a 'user decision: cancelled' event")
+        self.assertEqual(ev[-1].get("by"), self.NAME)
+
+    def test_item2_revise_by_name(self):
+        self.stuck(1)
+        self.plan(creator={"1": ["revised"]})
+        res = self.decide(1, "revise", "--reason", "drop the second item")
+        self.assertEqual(res.returncode, 0, "--decision revise --by NAME: " + res.stderr[-500:])
+        t = self.snap().ticket("1")
+        self.assertEqual(t["state"], "ready")
+        ev = self.events(t, "user decision: ready")
+        self.assertTrue(ev, "a 'user decision: ready' event")
+        self.assertEqual(ev[-1].get("by"), self.NAME)
+
+    # ------------------------------------------------------------ items 3 and 4
+
+    def test_item3_trusted_request_and_answer_carry_the_name(self):
+        self.stuck(1)
+        # the entry as listed is what is recorded, not the header's spelling
+        self.board_settings({"trusted_user_header": self.HEADER, "allowed_users": [self.NAME]})
+        port = self.start("--host", "127.0.0.1")
+        trusted = {self.HEADER: " A@X.com "}
+        folder = self.submit(port, "/request", trusted, "text=build+two+things")
+        self.assertEqual(self.job(folder).get("by"), self.NAME, "job.json of a trusted /request")
+        snap = self.snap()
+        opened = [i for i in snap.tickets if i != "1"]
+        self.assertEqual(len(opened), 2, "the request opened two tickets")
+        for ident in opened:
+            ev = self.events(snap.ticket(ident), "opened")
+            self.assertEqual([e.get("by") for e in ev], [self.NAME],
+                             "#%s: --by <entry> reached ticket_creator" % ident)
+        folder = self.submit(port, "/answer", trusted, "ticket=1&page=p1&decision=retry&text=")
+        self.assertEqual(self.job(folder).get("by"), self.NAME, "job.json of a trusted /answer")
+        ev = self.events(self.snap().ticket("1"), "user decision: ready")
+        self.assertTrue(ev, "the answer was handled")
+        self.assertEqual(ev[-1].get("by"), self.NAME, "--by <entry> reached ticket_creator")
+
+    def test_item3_key_and_cookie_submissions_carry_no_name(self):
+        import hashlib
+        import hmac
+        # guard: on this same config a trusted submission must carry the name, so the checks below
+        # are not the old code passing by default
+        self.board_settings({"trusted_user_header": self.HEADER, "allowed_users": [self.NAME]})
+        port = self.start("--host", "127.0.0.1")
+        folder = self.submit(port, "/request", {self.HEADER: self.NAME}, "text=x")
+        self.assertEqual(self.job(folder).get("by"), self.NAME, "guard: a trusted job carries 'by'")
+        port = self.start("--host", "127.0.0.1", "--key-file", self.key_file())
+        cookie = hmac.new(b"s3cret", b"devloop-board", hashlib.sha256).hexdigest()
+        for how, headers in (("key", {"X-Board-Key": "s3cret"}), ("cookie", {"Cookie": "board_key=" + cookie})):
+            with self.subTest(how=how):
+                known = set(self.snap().tickets)
+                folder = self.submit(port, "/request", headers, "text=build+two+things")
+                self.assertNotIn("by", self.job(folder), "a %s submission writes no 'by'" % how)
+                snap = self.snap()
+                for ident in set(snap.tickets) - known:
+                    for ev in self.events(snap.ticket(ident), "opened"):
+                        self.assertNotIn("by", ev, "#%s: no --by passed for a %s submission" % (ident, how))
+
+    def test_item4_jobs_list_shows_the_name(self):
+        self.board_settings({"trusted_user_header": self.HEADER, "allowed_users": [self.NAME]})
+        port = self.start("--host", "127.0.0.1")
+        self.submit(port, "/request", {self.HEADER: self.NAME}, "text=x")
+        status, page = self.call(port, "GET", "/", {self.HEADER: self.NAME})
+        self.assertEqual(status, 200)
+        start = page.find("網頁送出的")
+        self.assertGreaterEqual(start, 0, "the 網頁送出的 section is on the page")
+        end = page.find("</section>", start)
+        section = page[start:end if end >= 0 else len(page)]
+        self.assertIn(self.NAME, section, "the job's name in 網頁送出的")
+
+
 class T12Acceptance(LoopCase):
     """#12: the opener is told the full suite is the regression's, and is given the time limits."""
 
