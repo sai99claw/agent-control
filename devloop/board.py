@@ -774,7 +774,8 @@ HOST_STYLE = """<style>
 #tab-host g.series[data-series=load1],#tab-host g.series[data-series=mem_available],#tab-host g.series[data-series=disk_free],#tab-host g.series[data-series=agents]{stroke:var(--ink);fill:var(--ink)}
 #tab-host g.series[data-series=load5],#tab-host g.series[data-series=slots_used]{stroke:var(--quiet);fill:var(--quiet)}
 #tab-host line.limit{stroke:var(--quiet);stroke-dasharray:4 3}
-#tab-host td.n{text-align:right;font-variant-numeric:tabular-nums}
+#tab-host dl.newest{display:flex;flex-wrap:wrap;gap:4px 18px;margin:6px 0}
+#tab-host dl.newest dt{font-size:12px;color:var(--quiet)}#tab-host dl.newest dd{margin:0;font-variant-numeric:tabular-nums}
 </style>"""
 HOST_W, HOST_H, HOST_PAD = 300, 90, 4
 
@@ -885,14 +886,16 @@ def host_text(sample, field, gib=False):
 
 def host_newest(sample):
     """The newest sample's row: at, load1 / load5 / cpus, memory and disk in GiB, agents, slots."""
-    cells = ((sample.get("at") or UNKNOWN),
-             " / ".join(host_text(sample, f) for f in ("load1", "load5", "cpus")),
-             host_text(sample, "mem_available", gib=True), host_text(sample, "disk_free", gib=True),
-             host_text(sample, "agents"),
-             "%s / %s" % (host_text(sample, "slots_used"), host_text(sample, "slots")))
-    return ('<table class="newest"><tr><th>最新一筆</th><th>load1 / load5 / cpus</th><th>可用記憶體</th>'
-            '<th>磁碟剩餘</th><th>agents</th><th>slots_used / slots</th></tr><tr>%s</tr></table>'
-            % "".join('<td class="n">%s</td>' % e(c) for c in cells))
+    # Label/value pairs, not one table row: each value sits after its own label, so adjacent
+    # numbers (agents, then slots_used / slots) never run together in the page text.
+    pairs = (("最新一筆", sample.get("at") or UNKNOWN),
+             ("load1 / load5 / cpus", " / ".join(host_text(sample, f) for f in ("load1", "load5", "cpus"))),
+             ("可用記憶體", host_text(sample, "mem_available", gib=True)),
+             ("磁碟剩餘", host_text(sample, "disk_free", gib=True)),
+             ("agents", host_text(sample, "agents")),
+             ("slots_used / slots", "%s / %s" % (host_text(sample, "slots_used"), host_text(sample, "slots"))))
+    return ('<dl class="newest">%s</dl>'
+            % "".join('<div><dt>%s</dt><dd class="n">%s</dd></div>' % (e(k), e(v)) for k, v in pairs))
 
 
 def render_host(name, samples, now):
