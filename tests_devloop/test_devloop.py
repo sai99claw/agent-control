@@ -4013,6 +4013,138 @@ class KeeperInterrupt(LoopCase):
         self.assertNotIn("memory/role/worker.md", snap.memory_state.get("last", {}))
 
 
+class QuotaWaitFixerKeeper(LoopCase):
+    """#32 unit tests: the fixer's and the keeper's quota hooks, SIGTERM during the wait, the board
+    cell and the docs (acceptance items 6 and 7; items 1-5 are the verifier's)."""
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.env["FAKE_QUOTA_TEXT"] = "Error: usage limit reached"
+
+    def wait_for(self, proc, probe, seconds=30):
+        end = time.time() + seconds
+        while time.time() < end and proc.poll() is None:
+            got = probe()
+            if got:
+                return got
+            time.sleep(0.2)
+        return None
+
+    def popen(self, script, *args):
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, script)] + list(args), cwd=self.proj,
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.send_signal(signal.SIGTERM))
+        return proc
+
+    # ---------------------------------------------------------------- helpers, in process
+
+    def test_group_state_text_names_the_quota_wait(self):
+        import board
+        g = {"state": "fixing", "waiting": {"reason": "quota", "until": "2026-11-06T17:01:00Z"}}
+        self.assertEqual(board.group_state_text(g), "修紅中(額度用完,等到 2026-11-06T17:01:00Z)")
+        self.assertEqual(board.group_state_text({"state": "fixing"}), "修紅中")
+        self.assertEqual(board.group_state_text({"state": "fixing", "waiting": {"reason": "other"}}), "修紅中")
+
+    def test_fixer_quota_hook_writes_and_clears_the_group(self):
+        import auto_fixer
+        self.pool.update(lambda tx: tx.put_group({"id": "g1", "branch": "int/g1", "state": "fixing",
+                                                  "members": [], "fix_round": 1}), "test: g1")
+        hook = auto_fixer.quota_hook(self.pool, "g1")
+        row = {"role": "fixer", "outcome": "quota", "run_dir": "x/r1"}
+        now = time.time()
+        hook("wait", row=row, until=now + 60, text="usage limit reached")
+        g = self.snap().groups["g1"]
+        self.assertEqual(g["cost"], [row])
+        self.assertEqual(sorted(g["waiting"]), ["reason", "since", "text", "until"])
+        self.assertEqual(g["waiting"]["until"], time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + 60)))
+        self.assertEqual(g["history"][-1]["event"], "waiting for quota")
+        hook("over")
+        g = self.snap().groups["g1"]
+        self.assertNotIn("waiting", g)
+        self.assertEqual(g["history"][-1]["event"], "quota wait over")
+        self.assertEqual(g["cost"], [row], "the over phase must not add a row")
+
+    def test_keeper_quota_hook_writes_state_and_costs(self):
+        import memory_keeper
+        costs = []
+        hook = memory_keeper.quota_hook(self.pool, "memory/role/worker.md", costs)
+        row = {"role": "consolidator", "outcome": "quota"}
+        hook("wait", row=row, until=time.time() + 60, text="t" * 500)
+        state = self.snap().memory_state
+        self.assertEqual(costs, [row])
+        self.assertEqual(state["waiting"]["path"], "memory/role/worker.md")
+        self.assertEqual(state["waiting"]["reason"], "quota")
+        self.assertEqual(len(state["waiting"]["text"]), 200)
+        hook("over")
+        self.assertNotIn("waiting", self.snap().memory_state)
+        self.assertEqual(costs, [row])
+
+    # ---------------------------------------------------------------- 6: SIGTERM during the wait
+
+    def test_fixer_sigterm_during_quota_wait(self):
+        self.config(quota_retry_seconds=120)
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["quota", "fix"]})
+        ctl = self.popen("ticket_controller.py")
+        g = self.wait_for(ctl, lambda: (lambda g: g if g and g.get("waiting") else None)(
+            self.snap().groups.get("g1")))
+        self.assertIsNotNone(g, "g1 never waited: %s" % self.snap().groups.get("g1"))
+        pid = g["job"]["stamp"]["pid"]
+        osx.kill_tree(pid)           # SIGTERM to the auto_fixer's own session
+        out, err = ctl.communicate(timeout=180)
+        self.assertEqual(ctl.returncode, 0, err)
+        g = self.snap().groups["g1"]
+        events = [h["event"] for h in g.get("history") or []]
+        self.assertIn("fixer done (rc 4): verify again", events)
+        r1 = [c for c in g.get("cost") or [] if c.get("role") == "fixer"
+              and os.path.basename(c.get("run_dir") or "") == "r1"]
+        self.assertEqual([c["outcome"] for c in r1], ["quota"], g.get("cost"))
+        self.assertNotIn("waiting", g)
+
+    def test_keeper_sigterm_during_quota_wait(self):
+        self.config(quota_retry_seconds=120)
+        self.run_py("tickets.py", "init")
+
+        def change(tx):
+            for i in range(5):
+                tx.write("memory/inbox/k%d.json" % i, {"layer": "role", "name": "worker", "text": "l%d" % i,
+                                                       "at": osx.now()})
+        self.pool.update(change, "test: five lessons")
+        self.plan(consolidator={"*": ["quota", "merge"]})
+        proc = self.popen("memory_keeper.py", "--layer", "role", "--name", "worker")
+        seen = self.wait_for(proc, lambda: (self.snap().memory_state or {}).get("waiting"))
+        self.assertIsNotNone(seen, "memory/state.json never had 'waiting'")
+        proc.send_signal(signal.SIGTERM)
+        out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 4, err)
+        snap = self.snap()
+        run = snap.memory_state["runs"][-1]
+        self.assertTrue(run["interrupted"])
+        self.assertEqual([c["outcome"] for c in run["cost"]], ["quota"])
+        self.assertNotIn("waiting", snap.memory_state)
+        self.assertEqual(len(snap.lessons), 5)
+
+    # ---------------------------------------------------------------- 7: docs
+
+    def test_docs_name_fixer_and_keeper_quota_waits(self):
+        with open(os.path.join(HOME, "devloop", "README.md")) as fh:
+            readme = fh.read()
+        start = readme.index("- `agents.<role>` is one command")
+        nxt = readme.find("\n- ", start + 1)
+        bullet = readme[start:nxt if nxt > 0 else None]
+        for word in ("auto_fixer", "memory_keeper", "consolidator_peer"):
+            self.assertIn(word, bullet)
+        with open(os.path.join(HOME, "docs", "design", "dev-loop-v2.md")) as fh:
+            design = fh.read()
+        sec = design[design.index("## 6."):design.index("## 7.")]
+        rows = [line for line in sec.splitlines() if "usage limit" in line]
+        self.assertEqual(len(rows), 1, rows)
+        for word in ("auto_fixer", "memory_keeper"):
+            self.assertIn(word, rows[0])
+
+
 class MemoryFolderHelpers(LoopCase):
     """core.memory's folder helpers (devloop.memory, D-088)."""
 
