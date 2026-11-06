@@ -1890,26 +1890,27 @@ class WebInput(LoopCase):
         self.addCleanup(proc.kill)
         base = "http://127.0.0.1:%d" % port
 
-        def post(path, **form):
+        def post(path, key, **form):
             data = urllib.parse.urlencode(form).encode()
-            req = urllib.request.Request(base + path, data=data, method="POST")
+            req = urllib.request.Request(base + path, data=data, method="POST", headers={"X-Board-Key": key})
             try:
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     return resp.status, resp.read().decode()
             except urllib.error.HTTPError as exc:
                 return exc.code, ""
+        get = urllib.request.Request(base + "/", headers={"X-Board-Key": "k3y"})
         for _ in range(50):
             try:
-                urllib.request.urlopen(base + "/?key=k3y", timeout=2).read()
+                urllib.request.urlopen(get, timeout=2).read()
                 break
             except OSError:
                 time.sleep(0.1)
-        page = urllib.request.urlopen(base + "/?key=k3y", timeout=10).read().decode()
+        page = urllib.request.urlopen(get, timeout=10).read().decode()
         self.assertIn("交給開題者", page)
         self.assertIn("不改,再試一次", page)
-        self.assertEqual(post("/request", key="wrong", text="x")[0], 403)
-        self.assertEqual(post("/request", key="k3y", text="build two things")[0], 200)
-        self.assertEqual(post("/answer", key="k3y", ticket="1", page="p1", decision="retry", text="")[0], 200)
+        self.assertEqual(post("/request", "wrong", text="x")[0], 403)
+        self.assertEqual(post("/request", "k3y", text="build two things")[0], 200)
+        self.assertEqual(post("/answer", "k3y", ticket="1", page="p1", decision="retry", text="")[0], 200)
         deadline = time.time() + 60
         while time.time() < deadline:
             snap = self.snap()
@@ -2018,6 +2019,86 @@ class T27Acceptance(LoopCase):
         self.assertTrue(bullets, "a Contracts bullet says frozen")
         self.assertTrue(any("actl new --request" in b and "merged" in b and "landed" in b for b in bullets),
                         bullets)
+
+
+class BoardKeyCookie(LoopCase):
+    """#37: the board key is traded once for a cookie; helpers, the keyless board and the README."""
+
+    def test_cookie_value_is_the_hmac_of_the_key(self):
+        import hashlib
+        import hmac
+        import board
+        self.assertEqual(board.cookie_value("K"), hmac.new(b"K", b"devloop-board", hashlib.sha256).hexdigest())
+        self.assertNotIn("K", board.cookie_value("K"))
+        self.assertNotEqual(board.cookie_value("K"), board.cookie_value("L"))
+
+    def test_key_redirect_drops_only_the_key(self):
+        from urllib.parse import urlparse
+        import board
+        for path, want in (("/?key=K", "./"), ("/?tab=dag&key=K&x=1", "./?tab=dag&x=1"),
+                           ("/index.html?key=K", "./index.html"), ("/?key=K&empty=", "./?empty="),
+                           ("/board/index.html?a=1&key=K", "./index.html?a=1")):
+            with self.subTest(path=path):
+                self.assertEqual(board.key_redirect(urlparse(path)), want)
+
+    def test_authorized_takes_the_header_or_the_cookie(self):
+        import board
+        c = board.cookie_value("K")
+        cases = [({"X-Board-Key": "K"}, True), ({"X-Board-Key": "k"}, False),
+                 ({"Cookie": "board_key=" + c}, True), ({"Cookie": "a=1; board_key=" + c}, True),
+                 ({"Cookie": "board_key=K"}, False), ({"Cookie": "board_key=other"}, False),
+                 ({"Cookie": "a=\"unterminated"}, False), ({}, False)]
+        for headers, want in cases:
+            with self.subTest(headers=headers):
+                self.assertEqual(board.authorized("K", headers), want)
+
+    def test_without_a_key_file_the_board_is_read_only_and_ignores_key(self):
+        import http.client
+        import socket
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "board.py"), "serve", "--port", str(port)],
+                                cwd=self.proj, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True)
+        self.addCleanup(proc.kill)
+
+        def call(method, path, body=None):
+            deadline = time.time() + 5
+            while True:
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                try:
+                    conn.request(method, path, body=body,
+                                 headers={"Content-Type": "application/x-www-form-urlencoded"})
+                    resp = conn.getresponse()
+                    return resp.status, resp.getheader("Set-Cookie"), resp.read().decode("utf-8")
+                except OSError:
+                    if time.time() > deadline:
+                        raise
+                    time.sleep(0.1)
+                finally:
+                    conn.close()
+        status, cookie, page = call("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn("四個指標", page)
+        status, cookie, page = call("GET", "/?key=anything")
+        self.assertEqual((status, cookie), (200, None))
+        self.assertIn("四個指標", page)
+        self.assertNotIn("<form", page, "read-only: no inputs")
+        for path in ("/request", "/answer"):
+            with self.subTest(path=path):
+                self.assertEqual(call("POST", path, "key=anything&text=x")[0], 403)
+
+    def test_the_readme_says_the_key_is_traded_for_a_cookie(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            text = fh.read()
+        section = text.split("## Dashboard", 1)[1].split("\n## ", 1)[0]
+        flat = " ".join(section.split())
+        for words in ("once as `?key=`", "HttpOnly, SameSite=Strict cookie", "redirect to the page without it",
+                      "`X-Board-Key`", "never appears in a URL"):
+            self.assertIn(words, flat)
+        self.assertNotIn("every request carry", flat)
 
 
 class RedCheck(LoopCase):
@@ -3572,8 +3653,24 @@ class Board(LoopCase):
                 break
             except OSError:
                 time.sleep(0.1)
-        with urllib.request.urlopen(url + "?key=s3cret", timeout=10) as resp:
-            self.assertIn("四個指標", resp.read().decode("utf-8"))
+        import hashlib
+        import hmac
+        import http.client
+        from http.cookies import SimpleCookie
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        self.addCleanup(conn.close)
+        conn.request("GET", "/?key=s3cret")
+        resp = conn.getresponse()
+        resp.read()
+        self.assertEqual(resp.status, 303)
+        self.assertEqual(resp.getheader("Location"), "./")
+        jar = SimpleCookie(resp.getheader("Set-Cookie"))
+        want = hmac.new(b"s3cret", b"devloop-board", hashlib.sha256).hexdigest()
+        self.assertEqual(jar["board_key"].value, want)
+        conn.request("GET", "/", headers={"Cookie": "board_key=" + want})
+        resp = conn.getresponse()
+        self.assertEqual(resp.status, 200)
+        self.assertIn("四個指標", resp.read().decode("utf-8"))
 
 
 class T26Acceptance(LoopCase):

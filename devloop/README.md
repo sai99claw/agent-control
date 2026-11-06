@@ -175,7 +175,9 @@ waiting lesson).
 `board.py` reads the pool only: the four VISION numbers (tokens and time per landed ticket,
 first-pass share, user interventions per ticket, what waits for the user), every ticket, every
 integration branch, unread pages, memory files. Unknown numbers show as 「未知」, never 0.
-`--key-file` makes every request carry `?key=` or `X-Board-Key` (for a portal) and adds two inputs,
+`--key-file` accepts the key once as `?key=` and trades it for an HttpOnly, SameSite=Strict cookie
+with a redirect to the page without it; scripts send header `X-Board-Key`; the key never appears
+in a URL (or a page). It also adds two inputs,
 which are the main session's own entry behind another screen (D-083): a new request runs
 `ticket_creator.py --request-file … --via web`; an answer to a page about a ticket runs
 `ticket_creator.py --revise N --from user --decision revise|retry|cancel --via web`. The board
