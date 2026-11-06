@@ -8090,6 +8090,83 @@ class T18Acceptance(unittest.TestCase):
         self.assertEqual(bad, [], "old cards still tracked under memory/")
 
 
+class BoardTrustedUserUnits(unittest.TestCase):
+    """#46: helpers behind board.trusted_user_header / board.allowed_users, the schema rows, the README."""
+
+    S = {"trusted_user_header": "X-Auth-Request-Email", "allowed_users": ["a@x.com", "B@Y.org"]}
+
+    def test_trusted_user_needs_loopback_on_both_ends(self):
+        import board
+        for bind in ("127.0.0.1", "::1", "localhost"):
+            for peer in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+                with self.subTest(bind=bind, peer=peer):
+                    self.assertEqual(board.trusted_user(self.S, bind, peer, "a@x.com"), "a@x.com")
+        for bind, peer in (("0.0.0.0", "127.0.0.1"), ("", "127.0.0.1"), ("192.168.1.2", "127.0.0.1"),
+                           ("127.0.0.1", "127.0.0.2"), ("127.0.0.1", "10.0.0.5"), ("127.0.0.1", "")):
+            with self.subTest(bind=bind, peer=peer):
+                self.assertIsNone(board.trusted_user(self.S, bind, peer, "a@x.com"))
+
+    def test_trusted_user_returns_the_entry_as_listed(self):
+        import board
+        self.assertEqual(board.trusted_user(self.S, "127.0.0.1", "127.0.0.1", "  b@y.ORG\t"), "B@Y.org")
+        for value in (None, "", "   ", "a@x.co", "a@x.com.evil", 5):
+            with self.subTest(value=value):
+                self.assertIsNone(board.trusted_user(self.S, "127.0.0.1", "127.0.0.1", value))
+
+    def test_trusted_user_off_unless_both_settings_are_usable(self):
+        import board
+        for settings in (None, {}, {"allowed_users": ["a@x.com"]}, {"trusted_user_header": "X-A"},
+                         {"trusted_user_header": "", "allowed_users": ["a@x.com"]},
+                         {"trusted_user_header": " ", "allowed_users": ["a@x.com"]},
+                         {"trusted_user_header": 7, "allowed_users": ["a@x.com"]},
+                         {"trusted_user_header": "X-A", "allowed_users": []},
+                         {"trusted_user_header": "X-A", "allowed_users": "a@x.com"},
+                         {"trusted_user_header": "X-A", "allowed_users": [None, 3, ""]}):
+            with self.subTest(settings=settings):
+                self.assertIsNone(board.trusted_user(settings, "127.0.0.1", "127.0.0.1", "a@x.com"))
+
+    def test_settings_errors_name_the_key(self):
+        import board
+        self.assertEqual(board.board_settings_errors({}), [])
+        self.assertEqual(board.board_settings_errors({"key_file": "k"}), [])
+        self.assertEqual(board.board_settings_errors(self.S), [])
+        self.assertEqual(board.board_settings_errors({"allowed_users": []}), [])
+        for settings, name in (({"trusted_user_header": ""}, "board.trusted_user_header"),
+                               ({"trusted_user_header": None}, "board.trusted_user_header"),
+                               ({"trusted_user_header": ["X"]}, "board.trusted_user_header"),
+                               ({"allowed_users": "a@x.com"}, "board.allowed_users"),
+                               ({"allowed_users": ["a@x.com", ""]}, "board.allowed_users"),
+                               ({"allowed_users": [1]}, "board.allowed_users")):
+            with self.subTest(settings=settings):
+                errors = board.board_settings_errors(settings)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn(name, errors[0])
+
+    def test_schema_types_the_two_settings(self):
+        sys.path.insert(0, os.path.join(HOME, "scripts"))
+        import project_config
+        rows = [(k, kind) for k, kind, _ in project_config.SCHEMA]
+        self.assertIn(("board.trusted_user_header", "string"), rows)
+        self.assertIn(("board.allowed_users", "list"), rows)
+        at = rows.index(("board.key_file", "string"))
+        self.assertEqual(rows[at + 1:at + 3], [("board.trusted_user_header", "string"),
+                                               ("board.allowed_users", "list")])
+        bad = project_config.type_errors({"board": {"trusted_user_header": 1, "allowed_users": "a@x.com"}})
+        self.assertEqual(len(bad), 2, bad)
+        self.assertTrue(any("board.trusted_user_header" in b for b in bad), bad)
+        self.assertTrue(any("board.allowed_users" in b for b in bad), bad)
+        self.assertEqual(project_config.type_errors({"board": dict(self.S)}), [])
+
+    def test_readme_dashboard_describes_the_settings(self):
+        with open(os.path.join(LOOP, "README.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        section = text.split("## Dashboard", 1)[1].split("\n## ", 1)[0]
+        for words in ("board.trusted_user_header", "board.allowed_users", "loopback listen address",
+                      "loopback peer", "set (overwrite) the header", "without the key"):
+            with self.subTest(words=words):
+                self.assertIn(words, section)
+
+
 class T19Acceptance(unittest.TestCase):
     """#19: devloop/README.md lists every role; the memory docs follow D-088."""
 

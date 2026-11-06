@@ -15,6 +15,10 @@ a URL or a page. Scripts send header `X-Board-Key` instead. The page then gets t
 about a ticket runs `ticket_creator.py --revise N --from user --decision revise|retry|cancel
 --via web`. Only the opener's path writes tickets; web text first passes the injection check of
 prompts/web-guard.md. Unsent text is kept in the viewer's browser only.
+
+Behind a local reverse proxy (board.trusted_user_header + board.allowed_users, D-091 item 4), a request
+from a loopback peer to a board listening on loopback whose header names a listed user gets the
+inputs without the key.
 """
 
 import argparse
@@ -1124,6 +1128,48 @@ PAGE_SCRIPT = """<script>
 </script>"""
 
 
+LOOPBACK_BINDS = ("127.0.0.1", "::1", "localhost")
+LOOPBACK_PEERS = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+
+
+def trusted_user(settings, bind_host, peer_host, header_value):
+    """The board.allowed_users entry a local reverse proxy vouches for, or None (D-091 item 4).
+
+    Trust needs all of: board.trusted_user_header set, board.allowed_users non-empty, the board
+    listening on a loopback address and the request coming from a loopback peer. The header value
+    is compared with each entry ignoring case and surrounding spaces; the entry itself is returned."""
+    settings = settings or {}
+    name = settings.get("trusted_user_header")
+    users = settings.get("allowed_users")
+    if not isinstance(name, str) or not name.strip() or not isinstance(users, list) or not users:
+        return None
+    if bind_host not in LOOPBACK_BINDS or peer_host not in LOOPBACK_PEERS:
+        return None
+    if not isinstance(header_value, str) or not header_value.strip():
+        return None
+    wanted = header_value.strip().lower()
+    for user in users:
+        if isinstance(user, str) and user.strip() and user.strip().lower() == wanted:
+            return user
+    return None
+
+
+def board_settings_errors(settings):
+    """Why board.trusted_user_header / board.allowed_users cannot be used, one line each; [] when fine."""
+    out = []
+    if not isinstance(settings, dict):
+        return out
+    if "trusted_user_header" in settings:
+        v = settings["trusted_user_header"]
+        if not isinstance(v, str) or not v.strip():
+            out.append("board.trusted_user_header must be a non-empty string, got %r" % (v,))
+    if "allowed_users" in settings:
+        v = settings["allowed_users"]
+        if not isinstance(v, list) or not all(isinstance(u, str) and u.strip() for u in v):
+            out.append("board.allowed_users must be a list of non-empty strings, got %r" % (v,))
+    return out
+
+
 # ---------------------------------------------------------------- serving
 
 COOKIE = "board_key"
@@ -1163,11 +1209,23 @@ def last_segment(url):
 def serve(cfg, pool, host, port, key):
     cache = {"at": 0.0, "snap": None}
     lock = threading.Lock()
+    settings = cfg.raw.get("board") or {}
+    if not isinstance(settings, dict):
+        settings = {}
+    header = settings.get("trusted_user_header")
 
     class Handler(BaseHTTPRequestHandler):
+        user = None     # the allowed_users entry a local proxy vouched for (who submits: next ticket)
+
+        def _trust(self):
+            value = self.headers.get(header) if isinstance(header, str) and header.strip() else None
+            self.user = trusted_user(settings, host, self.client_address[0], value)
+            return self.user is not None
+
         def do_GET(self):
             url = urlparse(self.path)
-            if key:
+            trusted = self._trust()
+            if key and not trusted:
                 given = parse_qs(url.query, keep_blank_values=True).get("key")
                 if given is not None:
                     if not hmac.compare_digest(given[0].encode(), key.encode()):
@@ -1193,17 +1251,18 @@ def serve(cfg, pool, host, port, key):
                         cache["snap"] = pool.snapshot()
                         cache["at"] = time.time()
                     snap = cache["snap"]
-                page = render(cfg, snap, key, query)
+                page = render(cfg, snap, key or (trusted or None), query)
             except osx.OSFailure as exc:
                 page = "<pre>%s</pre>" % e(exc)
             self._send(200, page, "text/html; charset=utf-8")
 
         def do_POST(self):
             url = urlparse(self.path)
-            if not key:
+            trusted = self._trust()
+            if not key and not trusted:
                 self._send(403, "this board has no key file: read-only")
                 return
-            if not authorized(key, self.headers):
+            if not trusted and not authorized(key, self.headers):
                 self._send(403, "key required")
                 return
             try:
@@ -1295,6 +1354,11 @@ def main(argv=None):
             else:
                 sys.stdout.write(page)
             return 0
+        problems = board_settings_errors(cfg.raw.get("board"))
+        if problems:
+            for line in problems:
+                print("board: %s" % line, file=sys.stderr)
+            return 2
         key = None
         if args.key_file:
             with open(args.key_file) as fh:

@@ -98,6 +98,8 @@ SCHEMA = [
     ("hard_block.patterns", "list", NO_DEFAULT),
     ("board", "object", NO_DEFAULT),
     ("board.key_file", "string", NO_DEFAULT),
+    ("board.trusted_user_header", "string", NO_DEFAULT),   # D-091 item 4 (#46)
+    ("board.allowed_users", "list", NO_DEFAULT),
     ("tests", "object", {"adapter": "unittest"}),
     ("tests.adapter", "string", NO_DEFAULT),
     ("tests.parallel", "int", NO_DEFAULT),            # cap on the run-time process count (#169)
