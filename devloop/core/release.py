@@ -11,7 +11,7 @@ stderr interleaved, also what was printed before a timeout) is kept in
 
 import os
 
-from . import osx
+from . import osx, worktrees
 from .gitx import Git
 
 
@@ -55,7 +55,7 @@ def run(cfg, group, sha):
     _write(log, "")
     try:
         out_dir = os.path.abspath(cfg.runs_dir("release", gid))
-        repo.detached(tree, sha)
+        worktrees.detached_tree(cfg, repo, tree, sha)
         proc = osx.spawn(["sh", "-c", cmd], cwd=tree, env=env(cfg, group, sha, out_dir), log_path=log)
         rc, timed_out = osx.wait(proc, cfg.release_timeout_seconds)
         text = _read(log).strip()[-2000:]

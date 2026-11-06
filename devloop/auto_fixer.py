@@ -17,7 +17,8 @@ regression afterwards). Two kinds of red:
     Kind `blocked` is handled the same way.
 
 Exit: 0 something was committed (verify again) · 1 nothing usable came back · 3 the fixer handed
-in `decision` / `blocked`: only the user can decide (already reported as a decision page) · 2 refused · 4 interrupted by SIGTERM/SIGINT (the
+in `decision` / `blocked`: only the user can decide (already reported as a decision page) · 2 refused ·
+86 devloop.worktree_setup failed for the fixer's worktree (env page written) · 4 interrupted by SIGTERM/SIGINT (the
 running fixer is stopped and its cost recorded with outcome "interrupted").
 """
 
@@ -29,7 +30,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import agents, memory, osx  # noqa: E402
+from core import agents, memory, osx, worktrees  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 
@@ -45,7 +46,11 @@ def fix(cfg, pool, gid, report, live=None):
     branch = group["branch"]
     repo = Git(cfg.root)
     tree = os.path.join(cfg.worktree_root, "fix-" + gid)
-    repo.worktree(tree, branch)
+    try:
+        worktrees.branch_tree(cfg, repo, tree, branch)
+    except worktrees.SetupFailed as exc:
+        pool.report("env", gid, str(exc))
+        return 86
     g = Git(tree)
     before = g.sha("HEAD")
     main = cfg.main_branch

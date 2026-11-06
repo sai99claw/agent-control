@@ -226,6 +226,11 @@ class Controller:
         self.start_fixer(gid, job["out"], rnd + 1)
 
     def after_fixer(self, gid, rc):
+        if rc == 86:
+            g = self.pool.snapshot().groups.get(gid) or {}
+            self.set_group(gid, "pr", "fixer worktree setup failed (env)", job=None,
+                           fix_round=max(0, int(g.get("fix_round") or 0) - 1))
+            raise Stop(3, "devloop.worktree_setup failed for the fixer of %s" % gid)
         if rc == 3:
             self.set_group(gid, "stuck", "fixer needs a decision", job=None)
             return

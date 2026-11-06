@@ -2302,6 +2302,137 @@ class ReleaseTimeoutSetting(LoopCase):
         self.assertEqual(Config(self.proj).release_timeout_seconds, 7)
 
 
+class WorktreeSetup(LoopCase):
+    """devloop.worktree_setup: the implementer's tests (core/worktrees.py and what it leaves)."""
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ["AC_ROOT"] = self.proj
+        self.wt = os.path.join(self.tmp, "wt")
+        self.count = os.path.join(self.tmp, "setup-count")
+
+    def cfg(self, cmd):
+        self.config(worktree_setup=cmd)
+        from core.config import Config
+        return Config(self.proj)
+
+    def repo(self):
+        from core.gitx import Git
+        return Git(self.proj)
+
+    def runs(self):
+        try:
+            with open(self.count) as fh:
+                return fh.read().splitlines()
+        except FileNotFoundError:
+            return []
+
+    def test_null_runs_nothing_and_writes_no_log(self):
+        from core import worktrees
+        cfg = self.cfg(None)
+        worktrees.branch_tree(cfg, self.repo(), os.path.join(self.wt, "t1"), "t/1", start="main")
+        self.assertFalse(os.path.exists(os.path.join(self.wt, "runs", "setup", "t1.log")))
+
+    def test_output_is_kept_in_the_log_named_after_the_folder(self):
+        from core import worktrees
+        cfg = self.cfg('echo "hello from $PWD"; echo "root=$AC_ROOT"')
+        path = os.path.join(self.wt, "t1-cases")
+        worktrees.branch_tree(cfg, self.repo(), path, "t/1-cases", start="main")
+        with open(os.path.join(self.wt, "runs", "setup", "t1-cases.log")) as fh:
+            log = fh.read()
+        self.assertIn("hello from %s" % os.path.realpath(path), log.replace(path, os.path.realpath(path)))
+        self.assertIn("root=%s" % self.proj, log)
+
+    def test_a_reused_worktree_is_not_set_up_again(self):
+        from core import worktrees
+        cfg = self.cfg("echo run >> %s" % self.count)
+        path = os.path.join(self.wt, "t1")
+        worktrees.branch_tree(cfg, self.repo(), path, "t/1", start="main")
+        worktrees.branch_tree(cfg, self.repo(), path, "t/1", start="main")
+        self.assertEqual(self.runs(), ["run"])
+
+    def test_a_failed_setup_removes_the_worktree_and_keeps_the_branch(self):
+        from core import worktrees
+        cfg = self.cfg("echo run >> %s; echo broken-tool-missing; exit 3" % self.count)
+        path = os.path.join(self.wt, "t1")
+        with self.assertRaises(worktrees.SetupFailed) as ctx:
+            worktrees.branch_tree(cfg, self.repo(), path, "t/1", start="main")
+        text = str(ctx.exception)
+        self.assertIn("devloop.worktree_setup failed in %s (rc 3)" % path, text)
+        self.assertIn("broken-tool-missing", text)
+        self.assertFalse(os.path.exists(path))
+        self.assertTrue(self.repo().sha("refs/heads/t/1"))
+        with self.assertRaises(worktrees.SetupFailed):   # the next run creates and sets it up again
+            worktrees.branch_tree(cfg, self.repo(), path, "t/1", start="main")
+        self.assertEqual(self.runs(), ["run", "run"])
+
+    def test_a_failed_setup_removes_a_detached_tree(self):
+        from core import worktrees
+        cfg = self.cfg("exit 5")
+        path = os.path.join(self.wt, "release-g1")
+        with self.assertRaises(worktrees.SetupFailed) as ctx:
+            worktrees.detached_tree(cfg, self.repo(), path, self.repo().sha("main"))
+        self.assertIn("(rc 5)", str(ctx.exception))
+        self.assertFalse(os.path.exists(path))
+
+    def test_a_setup_past_its_limit_is_stopped_with_its_group_and_fails(self):
+        from core import worktrees
+        from unittest import mock
+        pidfile = os.path.join(self.tmp, "child.pid")
+        # the shell starts a background child in the same process group; both must be stopped
+        cfg = self.cfg("sleep 60 & echo $! > %s; wait" % pidfile)
+        path = os.path.join(self.wt, "fix-g1")
+        began = time.time()
+        with mock.patch.object(worktrees, "SETUP_TIMEOUT", 1):
+            with self.assertRaises(worktrees.SetupFailed) as ctx:
+                worktrees.detached_tree(cfg, self.repo(), path, self.repo().sha("main"))
+        self.assertLess(time.time() - began, 30)
+        self.assertIn("timeout", str(ctx.exception))
+        with open(pidfile) as fh:
+            child = int(fh.read().strip())
+        deadline = time.time() + 10
+        while osx.alive(child) and time.time() < deadline:
+            time.sleep(0.1)
+        self.assertFalse(osx.alive(child), "the setup's background child is still running")
+        self.assertFalse(os.path.exists(path))
+
+    def test_the_default_limit_is_600_seconds(self):
+        from core import worktrees
+        self.assertEqual(worktrees.SETUP_TIMEOUT, 600)
+
+    def test_the_controllers_own_trees_are_not_set_up(self):
+        log = os.path.join(self.tmp, "setup.log")
+        self.config(worktree_setup='basename "$PWD" >> %s' % log)
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertFalse(os.path.exists(os.path.join(self.wt, "runs", "setup", "index-g1.log")))
+        with open(log) as fh:
+            names = set(fh.read().split())
+        self.assertIn("t1", names)                  # the setup did run in devloop's other trees
+        self.assertIn("release-g1", names)
+        self.assertFalse([n for n in names if n.startswith(("nrv-", "index-"))], names)
+        # the index tree was really made this run (refresh_index ran), so its absence above counts
+        self.assertTrue(self.main_has("CODE-MAP.md"))
+
+    def test_readme_project_settings_documents_worktree_setup(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            text = fh.read()
+        start = text.index("## Project settings")
+        section = text[start:text.index("\n## ", start + 1)]
+        self.assertIn("devloop.worktree_setup", section)
+        for words in ("cwd", "AC_ROOT", "600 s", "runs/setup/", "issuer", "regression", "fixer",
+                      "release", "not set up again"):
+            self.assertIn(words, section)
+
+
 class RequiredFields(LoopCase):
     def test_a_project_field_the_opener_left_out_is_rejected(self):
         self.config(required_fields={"vision": "which VISION metric this improves"})

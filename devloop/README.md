@@ -59,6 +59,21 @@ itself (a `--no-ff` merge commit in a throwaway worktree) and lands that merge w
 regression and without a fix round. A move that touches anything else, a conflict or any other
 merge failure takes the usual path: auto_fixer merges main, then the regression runs again.
 
+`devloop.worktree_setup` (D-091 item 10; default null = nothing runs; otherwise a non-empty shell
+command): run with `sh -c` right after devloop creates a worktree for a ticket (`t<id>`), its cases
+(`t<id>-cases`), a red check (`red-t<id>`), a regression (`regression-<branch>`), a fixer
+(`fix-<group>`) or a release (`release-<group>`), with cwd = that worktree and `AC_ROOT` = the
+project root. A worktree devloop reuses (it already existed) is not set up again; the controller's
+own throwaway trees (`nrv-<group>`, `index-<group>`) are never set up. The output is kept in
+`<worktrees>/runs/setup/<folder name>.log`; a setup still running after 600 s is stopped with its
+process group and counts as failed. A failed setup is an environment problem, never a red: the
+worktree is removed again (a branch it was on stays, so the next run creates and sets it up again),
+and then for an issuer the ticket is stuck with reason `env` (an "env" page); for a regression the
+result is status `env`, exit 86 (an "env" page, the controller stops with exit 3); for a fixer an
+"env" page for the group, the group goes back to "pr" with its fix round not counted and the
+controller stops with exit 3; for a release the release failed (a decision page; not retried, not
+rolled back). Every such text contains `devloop.worktree_setup`.
+
 ## Machine slots
 
 `machine_slots` (default null = no limit) caps the heavy runs on the machine at N, across every

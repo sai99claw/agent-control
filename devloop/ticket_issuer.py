@@ -33,7 +33,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import agents, memory, osx, slots, testrun  # noqa: E402
+from core import agents, memory, osx, slots, testrun, worktrees  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.pool import event  # noqa: E402
@@ -114,7 +114,10 @@ class Issuer:
         t = self.claim()
         if not self.repo.sha(self.target):
             raise Stuck("target", "integration branch %s does not exist" % self.target)
-        self.repo.worktree(self.wt, self.branch, start=self.target)
+        try:
+            worktrees.branch_tree(self.cfg, self.repo, self.wt, self.branch, start=self.target)
+        except worktrees.SetupFailed as exc:
+            raise Stuck("env", str(exc))
         rounds = self.cfg.max_rounds
         while int(t.get("round") or 0) < rounds:
             # A revision the opener handed in while its ticket_creator.py was stopped (with the
@@ -160,7 +163,11 @@ class Issuer:
         costs = self.round_costs = []
         need_cases = t.get("needs_verifier", True) and not (t.get("cases") or {}).get("run")
         if need_cases:
-            self.repo.worktree(self.cwt, self.cases_branch, start=self.repo.sha(self.target))
+            try:
+                worktrees.branch_tree(self.cfg, self.repo, self.cwt, self.cases_branch,
+                                      start=self.repo.sha(self.target))
+            except worktrees.SetupFailed as exc:
+                raise Stuck("env", str(exc))
         work = None if self.worker_ok else self.start("worker", "worker.md", t, r, self.wt)
         ver = self.start("verifier", "verifier.md", t, r, self.cwt) if need_cases else None
         hands = []
@@ -281,7 +288,10 @@ class Issuer:
         mark = case_mark(self.id)
         tree = os.path.join(self.cfg.worktree_root, "red-t%s" % self.id)
         self.check_time()
-        self.repo.detached(tree, self.repo.sha(self.cases_branch))
+        try:
+            worktrees.detached_tree(self.cfg, self.repo, tree, self.repo.sha(self.cases_branch))
+        except worktrees.SetupFailed as exc:
+            raise Stuck("env", str(exc))
         try:
             slot = self.test_slot()
             try:

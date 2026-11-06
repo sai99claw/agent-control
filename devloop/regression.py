@@ -20,7 +20,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import osx, slots, testrun  # noqa: E402
+from core import osx, slots, testrun, worktrees  # noqa: E402
 from core.config import Config  # noqa: E402
 from core.gitx import Git  # noqa: E402
 
@@ -49,7 +49,12 @@ def verify(cfg, branch, out_path):
 
 def _verify(cfg, repo, branch, sha, out_path, full_timeout):
     tree = os.path.join(cfg.worktree_root, "regression-" + branch.replace("/", "-"))
-    repo.detached(tree, sha)
+    try:
+        worktrees.detached_tree(cfg, repo, tree, sha)
+    except worktrees.SetupFailed as exc:
+        osx.write_json(out_path, {"status": testrun.ENV, "sha": sha, "summary": str(exc),
+                                  "failures": [], "at": osx.now()})
+        return CODES[testrun.ENV]
     logs = cfg.runs_dir("regression", branch.replace("/", "-"))
     try:
         result = testrun.run(cfg, tree, "preflight", timeout=600,
