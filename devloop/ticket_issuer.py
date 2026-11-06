@@ -2,7 +2,8 @@
 """ticket_issuer --id N --target int/gK : take one ticket from "running" to "merged".
 
 Started only by ticket_controller. Per round (at most devloop.max_rounds, whole run at most
-devloop.issuer_timeout_seconds (time waiting for a machine slot not counted)):
+devloop.issuer_timeout_seconds (time waiting for a machine slot or for a usage limit to reset
+not counted)):
 
   1. worker (+ verifier while the ticket has no cases yet) work in their own worktrees
   2. the verifier's branch is merged into the ticket branch
@@ -18,6 +19,10 @@ handed in but nobody wrote into the pool (the worker was stopped meanwhile) is w
 issuer before the next round starts. Out of rounds, out of
 time, hard_block, environment, or a question only the user can answer -> the ticket is "stuck"
 and the main session gets one page.
+
+An agent whose last command hits the account's usage limit does not lose the round: the issuer
+waits for the reset (agents.quota_wait), its ticket stays "running" with a "waiting" mark and the
+run's cost row (outcome "quota"), and the agent runs again (D-091).
 
 Exit: 0 merged · 1 stuck (reported) · 2 refused (wrong state / usage) · 4 interrupted (left
 "ready" so the controller dispatches it again).
@@ -373,10 +378,28 @@ class Issuer:
         p = agents.start(self.cfg, role, agents.render(template, values), cwd, run_dir, timeout,
                          extra_env={"DEVLOOP_TICKET": self.id, "AC_CODE_ROOT": cwd},
                          effort=t.get("effort") if role == "worker" else None, round_no=r,
-                         chain_role=chain)
+                         chain_role=chain, on_quota=self.on_quota)
         self.pending.append(p)
         self.started_agents.append(p)
         return p
+
+    def on_quota(self, phase, row=None, until=None, text=None):
+        """An agent's last command hit the usage limit (phase "wait") or its wait is over
+        ("over"). The run's row goes straight into the ticket's cost - not into round_costs, so
+        a merge or an interrupt does not count it again."""
+        if phase == "wait":
+            mark = {"reason": "quota", "since": osx.now(),
+                    "until": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(until)),
+                    "text": (text or "")[:200]}
+
+            def mutate(t):
+                t.setdefault("cost", []).append(row)
+                t["waiting"] = mark
+                event(t, "waiting for quota", role=row.get("role"), until=mark["until"])
+            self.save(mutate, "waiting for quota")
+        else:
+            self.save(lambda t: (t.pop("waiting", None), event(t, "quota wait over")),
+                      "quota wait over")
 
     @property
     def deadline(self):
@@ -420,6 +443,7 @@ class Issuer:
     def stuck(self, reason, text):
         def mutate(t):
             t["state"], t["run"] = "stuck", None
+            t.pop("waiting", None)
             t["stuck"] = {"reason": reason, "text": text, "at": osx.now()}
             event(t, "stuck", reason=reason)
         self.save(mutate, "stuck (%s)" % reason)
@@ -431,6 +455,7 @@ class Issuer:
         def mutate(t):
             if costs:
                 t.setdefault("cost", []).extend(costs)
+            t.pop("waiting", None)
             if t.get("state") == "running":
                 t["state"], t["run"] = "ready", None
                 t["round"] = max(0, int(t.get("round") or 0) - 1)

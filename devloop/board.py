@@ -41,7 +41,8 @@ STATE_TEXT = {"ready": "待派", "running": "做中", "merged": shown_state("mer
 GROUP_TEXT = {"open": "收票中", "pr": "PR(待驗)", "fixing": "修紅中", "verified": "已驗,待落地",
               "landed": "已落地", "stuck": "卡住", "cancelled": "取消"}
 REASON_TEXT = {"rounds": "3 輪用完", "timeout": "超時", "decision": "要你決定", "hard_block": "碰到 hard_block",
-               "env": "環境", "error": "程式錯誤", "target": "整合分支不見"}
+               "env": "環境", "error": "程式錯誤", "target": "整合分支不見",
+               "quota": "額度用完"}
 
 
 # ---------------------------------------------------------------- numbers
@@ -140,6 +141,8 @@ def render(cfg, snap, key=None):
         if state == "stuck":
             st = t.get("stuck") or {}
             note = "%s:%s" % (REASON_TEXT.get(st.get("reason"), st.get("reason")), (st.get("text") or "")[:120])
+        elif state == "running" and (t.get("waiting") or {}).get("reason") == "quota":
+            note = "%s,等到 %s 再跑" % (REASON_TEXT["quota"], t["waiting"].get("until") or "?")
         elif state == "running":
             run = t.get("run") or {}
             note = "issuer 跑了 %d 分" % (osx.age(run.get("started")) / 60) if run.get("started") else "剛派出"

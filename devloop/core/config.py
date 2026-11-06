@@ -48,6 +48,7 @@ DEFAULTS = {
     "max_group_size": 10,            # a together ticket opens a new integration branch once the open one has this many members
     "issuer_timeout_seconds": 3 * 3600,
     "agent_timeout_seconds": 3600,
+    "quota_retry_seconds": 1800,     # wait after an agent hit its usage limit when its message names no reset
     "regression_timeout_seconds": 3 * 3600,
     "poll_seconds": 10,
     "release": None,                 # required: shell command run at the landed sha
@@ -107,6 +108,10 @@ class Config:
             raise osx.OSFailure("board/config.json devloop.regression_exclusive is true but "
                                 "devloop.machine_slots is not set: exclusivity is counted in slots, "
                                 "so it needs a slot count")
+        retry = self.values.get("quota_retry_seconds")
+        if isinstance(retry, bool) or not isinstance(retry, int) or retry < 1:
+            raise osx.OSFailure("board/config.json devloop.quota_retry_seconds must be a whole number "
+                                ">= 1, not %r" % (retry,))
         hb = raw.get("hard_block") or {}
         self.hard_paths = list(hb.get("paths") or [])
         self.hard_patterns = list(hb.get("patterns") or [])

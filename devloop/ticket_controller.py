@@ -140,6 +140,7 @@ class Controller:
             t = tx.ticket(ident)
             if t.get("state") == "running":
                 t["state"], t["run"] = "ready", None
+                t.pop("waiting", None)
                 event(t, "issuer ended without an outcome; dispatch again")
                 tx.put_ticket(t)
         self.pool.update(change, "#%s: issuer gone, back to ready" % ident)

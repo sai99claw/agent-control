@@ -106,7 +106,16 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
 ## Agents, models and tests (D-084)
 
 - `agents.<role>` is one command or a chain of commands; the next one is tried when a command is
-  not installed or its run ends saying the account is out of quota. Defaults: worker opus medium,
+  not installed or its run ends saying the account is out of quota (a quota phrase or a readable
+  reset in its log, without a hand-in). When the last command of the chain says quota, the issuer
+  waits for the reset read from the CLI's message ("resets 3pm", "resets 3:30pm", "resets at
+  15:00", "will reset at 5pm" as local time; "resets in 2h 30m" / "in 45m" / "in 1 hour";
+  "... limit reached|<epoch>"; the last one in the message wins; a minute is added) or, when none
+  is readable, `devloop.quota_retry_seconds` (default 1800), then runs the chain again from its
+  first command. The wait costs no round, no feedback entry and no issuer time
+  (`issuer_timeout_seconds` moves by it) and holds no machine slot; the ticket stays running with
+  a `waiting` mark and the board shows 額度用完. The opener (ticket_creator) does not wait: its run
+  ends as before. Defaults: worker opus medium,
   `worker_simple` (tickets with `complexity: simple`) sonnet medium, creator opus xhigh,
   consolidator fable then opus. To try `agy` for workers, put it first in the worker chain, e.g.
   `"worker": [["agy", "...", "high"], ["claude", "-p", "--model", "opus", "--effort", "medium", ...]]`.
@@ -131,7 +140,9 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
 - Cost rows: role, model, effort, round, seconds, tokens (input, output, cache read and write),
   dollars, session id, outcome; a stopped run's tokens are read from the CLI transcript; when an
   issuer is interrupted (SIGTERM/SIGINT) every run of the interrupted round is recorded too, the
-  ones it stopped with outcome `interrupted`; a landed ticket gets `cost_total`. Unknown stays unknown.
+  ones it stopped with outcome `interrupted`; a run whose last command hit the usage limit gets
+  its row with outcome `quota` when the wait starts (the commands before it in its chain are in
+  `fell_back_from` with outcome `out of quota`); a landed ticket gets `cost_total`. Unknown stays unknown.
 - `unlimited_tokens: true`: memory consolidation becomes a two-model discussion (draft, review by
   `consolidator_peer`, one more draft if asked), kept in the pool under `memory/discussions/` (not in the memory folder).
 

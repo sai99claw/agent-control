@@ -2744,6 +2744,187 @@ class UnlimitedTokens(LoopCase):
         self.assertEqual([c["role"] for c in state["cost"]], ["consolidator", "consolidator_peer", "consolidator"])
 
 
+class QuotaWaitUnits(LoopCase):
+    """The quota wait of agents.Pending and the issuer's waiting mark (implementer's tests of #31)."""
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        # the fake agent keys its plan on DEVLOOP_TICKET first; a suite run inside an agent has one
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def cfg(self, worker, **devloop):
+        from core.config import Config
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            agents_cfg = json.load(fh)["devloop"]["agents"]
+        self.config(agents=dict(agents_cfg, worker=worker), **devloop)
+        return Config(self.proj)
+
+    def counted(self, quota_runs, text="Error: usage limit reached"):
+        """A command that prints `text` and exits 1 for its first `quota_runs` runs, then hands in."""
+        count = os.path.join(self.tmp, "count")
+        return ["sh", "-c", 'cat >/dev/null; n=$(cat %s 2>/dev/null || echo 0); echo $((n+1)) > %s; '
+                'if [ "$n" -lt %d ]; then echo "%s"; exit 1; fi; '
+                'echo \'{"kind": "done"}\' > "$DEVLOOP_RESULT"' % (count, count, quota_runs, text)]
+
+    def test_without_the_hook_a_quota_run_ends_as_before(self):
+        from core import agents
+        p = agents.start(self.cfg(self.counted(1), quota_retry_seconds=30), "worker", "go", self.proj,
+                         os.path.join(self.tmp, "run"), 30)
+        began = time.time()
+        hand = p.finish()
+        self.assertLess(time.time() - began, 10)
+        self.assertEqual(hand.cost["outcome"], "out of quota")
+        self.assertIsNone(hand.result)
+
+    def test_the_hook_waits_then_runs_again_with_its_own_clock(self):
+        from core import agents
+        calls = []
+
+        def hook(phase, row=None, until=None, text=None):
+            calls.append((phase, row, until, text, time.time()))
+        p = agents.start(self.cfg(self.counted(1), quota_retry_seconds=1), "worker", "go", self.proj,
+                         os.path.join(self.tmp, "run"), 30, round_no=1, on_quota=hook)
+        hand = p.finish()
+        self.assertEqual([c[0] for c in calls], ["wait", "over"])
+        _, row, until, text, at = calls[0]
+        self.assertEqual((row["outcome"], row["round"], row["role"]), ("quota", 1, "worker"))
+        self.assertAlmostEqual(until, at + 1, delta=0.5)
+        self.assertIn("usage limit", text)
+        self.assertLessEqual(len(text), 200)
+        self.assertEqual(hand.cost["outcome"], "done")
+        self.assertNotIn("fell_back_from", hand.cost)
+        self.assertGreaterEqual(p.waited, 0.9)
+        self.assertLess(hand.cost["seconds"], 1.0)        # counted from the restart
+        run_dir = os.path.join(self.tmp, "run")
+        self.assertTrue(os.path.exists(os.path.join(run_dir, "agent-1.log")))
+        self.assertEqual(hand.log, os.path.join(run_dir, "agent-2.log"))
+        self.assertTrue(p.slot is None or not p.slot.held)
+
+    def test_the_chain_starts_again_from_its_first_command(self):
+        from core import agents
+        rows = []
+        first = self.counted(2)
+        second = list(first)
+        second[-1] = second[-1].replace("cat >/dev/null", "cat >/dev/null; : second")
+        hook = lambda phase, row=None, **kw: rows.append(row) if row else None   # noqa: E731
+        p = agents.start(self.cfg([first, second], quota_retry_seconds=1), "worker", "go", self.proj,
+                         os.path.join(self.tmp, "run"), 30, on_quota=hook)
+        hand = p.finish()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["fell_back_from"][0]["outcome"], "out of quota")
+        self.assertIn(": second", p.full_chain[1][-1])
+        self.assertEqual(hand.cost["outcome"], "done")
+        self.assertNotIn(": second", p.argv[-1])               # the first command handed in
+        self.assertEqual(hand.log, os.path.join(self.tmp, "run", "agent-3.log"))
+
+    def test_stop_while_waiting_returns_none(self):
+        import threading
+        from core import agents
+        seen = threading.Event()
+        p = agents.start(self.cfg(self.counted(1), quota_retry_seconds=2), "worker", "go", self.proj,
+                         os.path.join(self.tmp, "run"), 30,
+                         on_quota=lambda phase, **kw: seen.set() if phase == "wait" else None)
+        th = threading.Thread(target=p.finish)
+        th.start()
+        self.addCleanup(th.join, 30)
+        self.assertTrue(seen.wait(10))
+        time.sleep(0.2)
+        self.assertTrue(p.sleeping)
+        self.assertIsNone(p.stop())
+
+    def test_a_readable_reset_alone_says_quota(self):
+        from core import agents
+        log = os.path.join(self.tmp, "a.log")
+        for text, want in (("You've hit your limit · resets 3pm", True), ("all fine", False),
+                           ("Error: usage limit reached", True)):
+            with open(log, "w") as fh:
+                fh.write("x\n" * 10 + text + "\n")
+            self.assertEqual(agents._says_quota(log), want, text)
+
+    def test_excerpt_is_the_quota_line_at_most_200_chars(self):
+        from core import agents
+        self.assertEqual(agents._excerpt("noise\nError: usage limit reached\nbye\n"),
+                         "Error: usage limit reached")
+        self.assertEqual(len(agents._excerpt("usage limit " + "x" * 500)), 200)
+
+    def test_the_opener_does_not_wait(self):
+        self.config(quota_retry_seconds=600)
+        self.plan(creator={"*": ["nothing"]})
+        base = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
+        self.plan(creator={"*": ["quota"]})
+        began = time.time()
+        res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
+        self.assertLess(time.time() - began, 60)
+        self.assertEqual(res.returncode, base.returncode, res.stdout + res.stderr)
+        self.assertNotEqual(res.returncode, 0)
+
+    def running_ticket(self):
+        self.add(1, state="running", target="int/g1", group="g1", needs_verifier=False)
+
+        def change(tx):
+            tx.put_group({"id": "g1", "branch": "int/g1", "base": git(self.proj, "rev-parse", "main"),
+                          "state": "open", "alone": False, "members": ["1"], "fix_round": 0, "job": None})
+        self.pool.update(change, "test: group")
+        git(self.proj, "branch", "int/g1", "main")
+
+    def test_sigterm_during_the_wait_releases_the_ticket_with_one_quota_row(self):
+        self.config(quota_retry_seconds=600)
+        self.running_ticket()
+        self.plan(worker={"1": ["quota"]})
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "ticket_issuer.py"), "--id", "1",
+                                 "--target", "int/g1"], cwd=self.proj, env=self.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.send_signal(signal.SIGTERM))
+        t = {}
+        for _ in range(150):
+            t = self.snap().ticket("1")
+            if t.get("waiting") or proc.poll() is not None:
+                break
+            time.sleep(0.2)
+        self.assertEqual((t.get("waiting") or {}).get("reason"), "quota", t)
+        self.assertEqual(t["state"], "running")
+        proc.send_signal(signal.SIGTERM)
+        out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 4, err)
+        t = self.snap().ticket("1")
+        self.assertEqual(t["state"], "ready")
+        self.assertNotIn("waiting", t)
+        self.assertEqual([c["outcome"] for c in t["cost"] if c["role"] == "worker"], ["quota"])
+        self.assertIn("waiting for quota", [h["event"] for h in t["history"]])
+
+    def test_stuck_and_orphan_release_drop_waiting(self):
+        import ticket_controller
+        import ticket_issuer
+        from core.config import Config
+        mark = {"reason": "quota", "since": osx.now(), "until": osx.now(), "text": "usage limit"}
+        self.add(1, state="running", target="int/g1", waiting=mark)
+        self.add(2, state="running", target="int/g1", waiting=mark)
+        issuer = ticket_issuer.Issuer(Config(self.proj), self.pool, "1", "int/g1")
+        issuer.stuck("timeout", "x")
+        self.assertNotIn("waiting", self.snap().ticket("1"))
+        ctl = ticket_controller.Controller.__new__(ticket_controller.Controller)
+        ctl.pool = self.pool
+        ctl._release_orphan("2")
+        t = self.snap().ticket("2")
+        self.assertEqual(t["state"], "ready")
+        self.assertNotIn("waiting", t)
+
+    def test_readme_describes_the_wait(self):
+        with open(os.path.join(HOME, "devloop", "README.md")) as fh:
+            text = fh.read()
+        section = text.split("## Agents, models and tests")[1].split("\n## ")[0]
+        for phrase in ("quota_retry_seconds", "1800", "額度用完", "outcome `quota`", "does not wait",
+                       "no machine slot", "no round"):
+            self.assertIn(phrase, section)
+
+
 class Recovery(LoopCase):
     def test_a_running_ticket_whose_issuer_died_is_dispatched_again(self):
         self.add(1)
