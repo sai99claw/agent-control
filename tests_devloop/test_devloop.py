@@ -6657,13 +6657,37 @@ class T41Acceptance(LoopCase):
 
     # ------------------------------------------------------------ 7: links
 
-    def test_item7_table_links(self):
+    def group_rows(self, page):
+        """{first cell: 分支 cell} of the integration-branch table (the table whose header has <th>分支</th>)."""
         import re
+        tables = [t for t in re.findall(r'<table\b[^>]*>(.*?)</table>', page, re.S) if "<th>分支</th>" in t]
+        self.assertEqual(len(tables), 1, "one integration-branch table with a 分支 column")
+        trs = re.findall(r'<tr\b[^>]*>(.*?)</tr>', tables[0], re.S)
+        heads = re.findall(r'<th\b[^>]*>(.*?)</th>', trs[0], re.S)
+        col = heads.index("分支")
+        out = {}
+        for tr in trs[1:]:
+            cells = re.findall(r'<td\b[^>]*>.*?</td>', tr, re.S)
+            if len(cells) > col:
+                out[cells[0]] = cells[col]
+        return out
+
+    def test_item7_table_links(self):
         page = self.page({"tab": "tickets"})
         self.assertIn("<td>#1</td><td>卡住</td>", page, "the first two cells stay as they are")
         self.assertRegex(page, r'<a\b[^>]*href="\?ticket=1"[^>]*>\s*ticket 1\s*</a>', "title links ?ticket=1")
-        self.assertRegex(page, r'<td><a\b[^>]*href="\?group=g1"[^>]*>\s*g1\s*</a></td>', "group id links ?group=g1")
-        self.assertFalse(re.search(r'<td>\s*g1\s*</td>', page), "the group id cell is a link, not plain text")
+
+    def test_item7_group_branch_cell_links(self):
+        self.pool.update(lambda tx: tx.put_group({
+            "id": "g2", "state": "fixing", "members": [], "fix_round": 0,
+            "history": [{"at": "2026-11-01T00:00:00Z", "event": "regression started"}]}), "test: g2 without branch")
+        rows = self.group_rows(self.page({"tab": "tickets"}))
+        self.assertIn("<td>g1</td>", rows, "the row's first cell stays exactly <td>g1</td>")
+        self.assertIn("<td>g2</td>", rows, "the row's first cell stays exactly <td>g2</td>")
+        self.assertRegex(rows["<td>g1</td>"], r'^<td>\s*<a\b[^>]*href="\?group=g1"[^>]*>\s*int/g1\s*</a>\s*</td>$',
+                         "g1's 分支 cell links ?group=g1 with the branch as text")
+        self.assertRegex(rows["<td>g2</td>"], r'^<td>\s*<a\b[^>]*href="\?group=g2"[^>]*>\s*g2\s*</a>\s*</td>$',
+                         "a group without branch: the 分支 cell links ?group=g2 with the group id as text")
 
     def test_item7_detail_hrefs_relative(self):
         for query in ({"ticket": "1"}, {"group": "g1"}):
