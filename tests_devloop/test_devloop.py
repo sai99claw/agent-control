@@ -539,6 +539,61 @@ class FixerCasesChanged(LoopCase):
         self.assertEqual(self.fixer.case_mark("1"), "T1Acceptance")
 
 
+class T35Acceptance(LoopCase):
+    """#35: the fixer changes a non-acceptance test only on a ticket's explicit basis and the group
+    keeps each such change in tests_changed."""
+
+    SENTENCE = ("You may change a test that is not an acceptance case only when a ticket of this group "
+                "explicitly changes the behaviour that test asserts")
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def run_tests_action(self):
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["tests"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+
+    def test_item1_done_with_tests_changed_is_recorded_and_lands(self):
+        self.run_tests_action()
+        self.assertEqual(self.state(1), "landed")
+        g = self.snap().groups["g1"]
+        self.assertIn("tests_changed", g, g)
+        self.assertEqual(g["tests_changed"],
+                         [{"test": "suite.red", "ticket": "1", "acceptance": "a", "round": 1}])
+
+    def test_item2_fixer_prompt(self):
+        self.run_tests_action()
+        path = os.path.join(self.tmp, "wt", "runs", "fix", "g1", "r1", "prompt.md")
+        self.assertTrue(os.path.exists(path), "no fixer prompt at %s" % path)
+        with open(path, encoding="utf-8") as fh:
+            prompt = fh.read()
+        # the template wraps its lines: the sentence is compared with whitespace runs as one space
+        self.assertIn(self.SENTENCE, " ".join(prompt.split()))
+        self.assertIn('"kind": "done"', prompt)
+        self.assertIn('"kind": "decision"', prompt)
+        # the done example runs from its "kind" to the decision example that follows it
+        start = prompt.index('"kind": "done"')
+        example = prompt[start:prompt.index('"kind": "decision"', start)]
+        self.assertIn("tests_changed", example)
+
+    def test_item3_readme_fixer_row(self):
+        # rows parsed as T28Acceptance.test_item4_readme_roles_rows does
+        with open(os.path.join(HOME, "devloop", "README.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("\n## Roles\n", text)
+        sec = text.split("\n## Roles\n", 1)[1].split("\n## ", 1)[0]
+        lines = [l for l in sec.splitlines() if l.strip().startswith("|")]
+        self.assertGreaterEqual(len(lines), 3, "the Roles section has no table")
+        by_name = {[c.strip() for c in r.strip().strip("|").split("|")][0]: r for r in lines[2:]}
+        self.assertIn("`fixer`", by_name)
+        for w in ("tests_changed", "cases_changed", "decision"):
+            self.assertIn(w, by_name["`fixer`"])
+
+
 class FixerBlockedIsDecision(LoopCase):
     """A fixer hand-in of kind blocked is handled exactly as decision: one fixer run, one decision
     page carrying the fixer's text, the group stuck with its members merged."""
@@ -565,6 +620,105 @@ class FixerBlockedIsDecision(LoopCase):
         self.assertIn("tickets contradict", rows[0]["text"])
         self.assertEqual(self.state(1), "merged")
         self.assertNotIn("cases_changed", g)
+
+
+class T34Acceptance(LoopCase):
+    """#34: tickets.py ready g<N> --note stores the user's ruling on the group for later fixers."""
+
+    HEADER = "## The user's ruling for this group"
+    SENTENCE = "This ruling is the only thing that allows you to go beyond the tickets' text"
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def make_stuck(self):
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["blocked", "blocked", "fix"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["state"], "stuck")
+        self.assertEqual(self.state(1), "merged")
+
+    def fixer_prompt(self):
+        path = os.path.join(self.tmp, "wt", "runs", "fix", "g1", "r1", "prompt.md")
+        self.assertTrue(os.path.exists(path), "no fixer prompt at %s" % path)
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def check_noted(self, res, text, earlier, t0, t1):
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        g = self.snap().groups["g1"]
+        self.assertEqual(g["state"], "pr", g)
+        self.assertEqual(g["fix_round"], 0, g)
+        self.assertIsNone(g["job"], g)
+        notes = g.get("notes")
+        self.assertIsInstance(notes, list, g)
+        self.assertEqual(len(notes), len(earlier) + 1, notes)
+        self.assertEqual(notes[:-1], earlier, "earlier notes were not kept in order")
+        last = notes[-1]
+        self.assertEqual(set(last), {"text", "by", "at"}, last)
+        self.assertEqual(last["text"], text)
+        self.assertEqual(last["by"], "user")
+        # osx.now() format: %Y-%m-%dT%H:%M:%SZ in UTC, between the times taken around the call
+        self.assertRegex(last["at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertTrue(t0 <= last["at"] <= t1, (t0, last["at"], t1))
+        ev = g["history"][-1]
+        self.assertEqual(ev.get("event"), "ready again by the user", ev)
+        self.assertEqual(ev.get("by"), "user", ev)
+        self.assertEqual(ev.get("note"), text, ev)
+        return notes
+
+    def test_item1_and_4_note_stored_and_reaches_fixer(self):
+        self.make_stuck()
+        t0 = osx.now()
+        res = self.run_py("tickets.py", "ready", "g1", "--note", "keep the newer output")
+        t1 = osx.now()
+        notes = self.check_noted(res, "keep the newer output", [], t0, t1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["state"], "stuck")
+        prompt = self.fixer_prompt()
+        self.assertIn(self.HEADER, prompt.splitlines())
+        self.assertIn("keep the newer output", prompt)
+        self.assertIn(self.SENTENCE, prompt)
+        t0 = osx.now()
+        res = self.run_py("tickets.py", "ready", "g1", "--note", "drop case 2")
+        t1 = osx.now()
+        notes = self.check_noted(res, "drop case 2", notes, t0, t1)
+        self.assertEqual([n["text"] for n in notes], ["keep the newer output", "drop case 2"])
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        prompt = self.fixer_prompt()
+        self.assertIn(self.HEADER, prompt.splitlines())
+        self.assertIn("drop case 2", prompt)
+        self.assertIn(self.SENTENCE, prompt)
+        self.assertNotIn("keep the newer output", prompt)
+        notes = self.snap().groups["g1"].get("notes")
+        self.assertEqual([n["text"] for n in notes], ["keep the newer output", "drop case 2"])
+
+    def test_item2_actl_tickets_ready_group_note(self):
+        self.make_stuck()
+        t0 = osx.now()
+        res = subprocess.run([os.path.join(HOME, "bin", "actl"), "tickets", "ready", "g1", "--note",
+                              "keep the newer output"], cwd=self.proj, env=self.env,
+                             capture_output=True, text=True, timeout=120)
+        t1 = osx.now()
+        self.check_noted(res, "keep the newer output", [], t0, t1)
+
+    def test_item3_note_with_ticket_id_refused(self):
+        self.add(1)
+        self.plan(worker={"1": ["blocked"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "stuck")
+        before = self.snap().ticket("1")
+        res = self.run_py("tickets.py", "ready", "1", "--note", "x")
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertTrue(any("--note" in ln and "g<N>" in ln for ln in res.stderr.splitlines()), res.stderr)
+        self.assertEqual(self.snap().ticket("1"), before)
 
 
 class T8Acceptance(LoopCase):
@@ -682,6 +836,57 @@ class T9Acceptance(LoopCase):
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         self.assertEqual(len(self.out_lines()), 6, "--again ran the release once more")
         self.assertEqual(self.snap().groups["g1"]["release"], "ok")
+
+
+class T33Acceptance(LoopCase):
+    """#33: devloop.max_group_size caps how many tickets one integration branch takes."""
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def groups(self):
+        return {g["id"]: g["members"] for g in self.snap().groups.values()}
+
+    def test_max_group_size_defaults_to_10_and_takes_a_setting(self):
+        self.assertEqual(getattr(self.cfg(), "max_group_size", None), 10)
+        self.config(max_group_size=3)
+        self.assertEqual(getattr(self.cfg(), "max_group_size", None), 3)
+
+    def test_bad_max_group_size_stops_tickets_list(self):
+        for bad in (0, -1, 2.5, "10", True, None):
+            with self.subTest(bad=bad):
+                self.config(max_group_size=bad)
+                res = self.run_py("tickets.py", "list")
+                self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+                self.assertIn("devloop.max_group_size", res.stderr)
+
+    def test_three_together_tickets_with_size_2_take_two_groups(self):
+        self.config(max_group_size=2)
+        self.add(1)
+        self.add(2)
+        self.add(3)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        for i in (1, 2, 3):
+            self.assertEqual(self.state(i), "landed", i)
+        self.assertEqual(self.groups(), {"g1": ["1", "2"], "g2": ["3"]})
+
+    def test_size_1_dependent_ticket_opens_its_group_after_g1_lands(self):
+        self.config(max_group_size=1)
+        self.add(1)
+        self.add(2, deps=[1])
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.state(2), "landed")
+        self.assertEqual(self.groups(), {"g1": ["1"], "g2": ["2"]})
+        groups = self.snap().groups
+        landed, base = groups["g1"].get("landed_sha"), groups["g2"].get("base")
+        self.assertTrue(landed and base, groups)
+        res = subprocess.run(["git", "merge-base", "--is-ancestor", landed, base], cwd=self.proj,
+                             capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, "g2 was not opened from a main holding g1's landing")
 
 
 class Revise(LoopCase):
@@ -1003,6 +1208,27 @@ class T20Acceptance(LoopCase):
             self.assertIn("no acceptance cases", out)
 
 
+class RulingSection(unittest.TestCase):
+    """auto_fixer.ruling_section: the latest user note of a group, or nothing (#34)."""
+
+    def setUp(self):
+        import auto_fixer
+        self.fn = auto_fixer.ruling_section
+
+    def test_no_notes_is_empty(self):
+        self.assertEqual(self.fn({}), "")
+        self.assertEqual(self.fn({"notes": []}), "")
+
+    def test_latest_note_only(self):
+        out = self.fn({"notes": [{"text": "first note"}, {"text": "second note"}]})
+        self.assertIn("## The user's ruling for this group", out)
+        self.assertIn("second note", out)
+        self.assertNotIn("first note", out)
+        self.assertIn("This ruling is the only thing that allows you to go beyond the tickets' text", out)
+        self.assertNotIn("--revise", out)
+        self.assertNotIn("ticket_creator", out)
+
+
 class ReleaseRerun(LoopCase):
     """tickets.py release: refusals, the timeout, the shared function and the docs (#9)."""
     release = "exit 7"
@@ -1093,6 +1319,35 @@ class ReleaseRerun(LoopCase):
         readme = read("devloop", "README.md").splitlines()
         cancel = [i for i, ln in enumerate(readme) if ln.startswith("| `python3 devloop/tickets.py cancel")][0]
         self.assertIn("tickets.py release", readme[cancel + 1])
+
+
+class FixerTestsChangedUnit(LoopCase):
+    """auto_fixer._record_tests keeps tests_changed on the group by the rules of _record_cases."""
+
+    def setUp(self):
+        super().setUp()
+        import auto_fixer
+        self.fixer = auto_fixer
+        self.pool.update(lambda tx: tx.put_group({"id": "g9", "members": [], "state": "pr"}),
+                         "test: group g9")
+
+    def test_rounds_append_and_non_objects_drop(self):
+        e1 = {"test": "s.a", "ticket": "1", "acceptance": "a"}
+        self.fixer._record_tests(self.pool, "g9", 1, [e1, "junk", 3])
+        self.fixer._record_tests(self.pool, "g9", 2, [{"test": "s.b", "ticket": "2", "acceptance": "b"}])
+        self.assertEqual(self.snap().groups["g9"]["tests_changed"], [
+            dict(e1, round=1), {"test": "s.b", "ticket": "2", "acceptance": "b", "round": 2}])
+        self.assertNotIn("cases_changed", self.snap().groups["g9"])
+
+    def test_empty_or_non_list_adds_no_key(self):
+        for tests in (None, [], "not a list", ["x"]):
+            self.fixer._record_tests(self.pool, "g9", 1, tests)
+        self.assertNotIn("tests_changed", self.snap().groups["g9"])
+
+    def test_docstring_and_prompt_name_tests_changed(self):
+        self.assertIn("tests_changed", self.fixer.__doc__)
+        with open(os.path.join(os.path.dirname(self.fixer.__file__), "prompts", "fixer.md")) as f:
+            self.assertIn("tests_changed", f.read())
 
 
 class T21Acceptance(LoopCase):
@@ -2505,6 +2760,30 @@ class Recovery(LoopCase):
         res = self.controller()
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(self.state(1), "landed")
+
+
+class GroupSizeUnits(LoopCase):
+    """devloop.max_group_size: joinable() and group_for() (implementer's unit tests)."""
+
+    def ctl(self, size):
+        from unittest import mock
+        import ticket_controller
+        c = ticket_controller.Controller.__new__(ticket_controller.Controller)
+        c.cfg = mock.Mock(max_group_size=size)
+        return c
+
+    def snap(self, members):
+        from unittest import mock
+        return mock.Mock(dag={}, tickets={"9": {}}, groups={"g1": {"id": "g1", "members": members}})
+
+    def test_full_group_not_joinable(self):
+        from unittest import mock
+        with mock.patch("ticket_controller.dagmod.verify", return_value="together"), \
+                mock.patch("ticket_controller.dagmod.deps", return_value=[]):
+            c = self.ctl(2)
+            self.assertFalse(c.joinable(self.snap(["1", "2"]), "9", {"id": "g1", "members": ["1", "2"]}))
+            self.assertTrue(c.joinable(self.snap(["1"]), "9", {"id": "g1", "members": ["1"]}))
+            self.assertTrue(c.joinable(self.snap(["1", "9"]), "9", {"id": "g1", "members": ["1", "9"]}))
 
 
 class NoReverifyPaths(LoopCase):
