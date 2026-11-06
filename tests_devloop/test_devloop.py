@@ -6075,6 +6075,235 @@ class ShownState(unittest.TestCase):
         self.assertIn("landed", TICKET_STATES)
 
 
+class T40Acceptance(LoopCase):
+    """#40: the 票 tab filters tickets and integration branches by the URL's state, group, cat, q
+    and done. Expected values come from the ticket and this fixture, not from board.py."""
+
+    STATE_OPTIONS = [("", "全部"), ("ready", "待派"), ("running", "做中"), ("merged", "功能完成"),
+                     ("landed", "驗證完成"), ("stuck", "卡住"), ("cancelled", "取消")]
+    CATEGORY_KEYS = ["quota", "slot", "timeout", "red", "decision", "env", "conflict", "other"]
+
+    def setUp(self):
+        super().setUp()
+        self.add(1, state="landed", group="g1", title="Landed work")
+        self.add(2, state="cancelled", title="Dropped idea")
+        self.add(3, state="ready", title="Queued item")
+        self.add(4, state="running", group="g2", title="Running item")
+        self.add(5, state="stuck", group="g2", title="Merge trouble",
+                 stuck={"reason": "rounds", "text": "merging the latest main into t/5 failed (conflict in a.py)"})
+        self.add(6, state="stuck", title="Broken host", stuck={"reason": "env", "text": "python3 is missing"})
+        self.add(7, state="merged", group="g2", title="Fix Board Filters")
+
+        def groups(tx):
+            tx.put_group({"id": "g1", "branch": "int/g1", "state": "landed", "members": ["1", "8"],
+                          "fix_round": 0, "history": []})
+            tx.put_group({"id": "g2", "branch": "int/g2", "state": "open", "members": ["4", "5", "7"],
+                          "fix_round": 0, "history": []})
+            tx.put_group({"id": "g3", "branch": "int/g3", "state": "stuck", "members": [], "fix_round": 3,
+                          "history": [{"at": "2026-11-01T00:00:00Z", "event": "red after 3 fix rounds"}]})
+        self.pool.update(groups, "test: groups g1 landed, g2 open, g3 stuck")
+
+    # ------------------------------------------------------------ helpers
+
+    def page(self, **query):
+        import inspect
+        import board
+        from core.config import Config
+        self.assertTrue(hasattr(board, "render"), "board.render is missing")
+        self.assertIn("query", inspect.signature(board.render).parameters, "board.render takes query")
+        q = {"tab": "tickets"}
+        q.update(query)
+        return board.render(Config(self.proj), self.snap(), query=q)
+
+    def table(self, page, header):
+        i = page.find(header)
+        self.assertGreaterEqual(i, 0, "no table with %s" % header)
+        start = page.rfind("<table", 0, i)
+        return page[start:page.find("</table>", i)]
+
+    def tickets(self, page):
+        part = self.table(page, "<th>票</th>")
+        return {str(n) for n in range(1, 8) if "<td>#%d</td>" % n in part}
+
+    def groups(self, page):
+        part = self.table(page, "<th>組</th>")
+        return {g for g in ("g1", "g2", "g3") if "<td>%s</td>" % g in part}
+
+    def form(self, page):
+        from html.parser import HTMLParser
+
+        class Collect(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.forms, self.cur, self.select, self.option = [], None, None, None
+
+            def handle_starttag(self, tag, attrs):
+                a = dict(attrs)
+                if tag == "form":
+                    self.cur = {"attrs": a, "inputs": [], "selects": {}, "text": ""}
+                    self.forms.append(self.cur)
+                elif self.cur is None:
+                    return
+                elif tag == "input":
+                    self.cur["inputs"].append(a)
+                elif tag == "select":
+                    self.select = self.cur["selects"].setdefault(a.get("name"), [])
+                elif tag == "option" and self.select is not None:
+                    self.option = {"value": a.get("value"), "selected": "selected" in a, "label": ""}
+                    self.select.append(self.option)
+
+            def handle_endtag(self, tag):
+                if tag == "form":
+                    self.cur = None
+                elif tag == "select":
+                    self.select = None
+                elif tag == "option":
+                    self.option = None
+
+            def handle_data(self, data):
+                if self.option is not None:
+                    self.option["label"] += data
+                if self.cur is not None:
+                    self.cur["text"] += data
+
+        c = Collect()
+        c.feed(page)
+        found = [f for f in c.forms if "filters" in (f["attrs"].get("class") or "").split()]
+        self.assertEqual(len(found), 1, "one <form class=\"filters\"> on the 票 tab")
+        f = found[0]
+        for o in [o for opts in f["selects"].values() for o in opts]:
+            o["label"] = o["label"].strip()
+            if o["value"] is None:
+                o["value"] = o["label"]
+        return f
+
+    def options(self, form, name):
+        self.assertIn(name, form["selects"], "<select name=%r> in the filter form" % name)
+        return form["selects"][name]
+
+    def selected(self, form, name):
+        return [o["value"] for o in self.options(form, name) if o["selected"]]
+
+    def input_named(self, form, name, type_):
+        rows = [i for i in form["inputs"] if i.get("name") == name]
+        self.assertEqual(len(rows), 1, "one input name=%r" % name)
+        self.assertEqual((rows[0].get("type") or "").lower(), type_)
+        return rows[0]
+
+    # ------------------------------------------------------------ item 1
+
+    def test_item1_form_controls(self):
+        import board
+        self.assertTrue(hasattr(board, "CATEGORY_TEXT"), "board.CATEGORY_TEXT is missing")
+        f = self.form(self.page())
+        self.assertEqual((f["attrs"].get("method") or "").lower(), "get")
+        self.assertNotIn("action", f["attrs"], "the filter form has no action attribute")
+        tab = self.input_named(f, "tab", "hidden")
+        self.assertEqual(tab.get("value"), "tickets")
+        self.assertEqual([(o["value"], o["label"]) for o in self.options(f, "state")], self.STATE_OPTIONS)
+        self.assertEqual([(o["value"], o["label"]) for o in self.options(f, "group")],
+                         [("", "全部"), ("g1", "g1"), ("g2", "g2"), ("g3", "g3"), ("none", "未分組")])
+        self.assertEqual(list(board.CATEGORY_TEXT), self.CATEGORY_KEYS)
+        self.assertEqual([(o["value"], o["label"]) for o in self.options(f, "cat")],
+                         [("", "全部")] + [(k, board.CATEGORY_TEXT[k]) for k in self.CATEGORY_KEYS])
+        self.input_named(f, "q", "search")
+        done = self.input_named(f, "done", "checkbox")
+        self.assertEqual(done.get("value"), "1")
+        self.assertIn("顯示已落地與已取消", f["text"])
+
+    def test_item1_controls_show_no_filter(self):
+        f = self.form(self.page())
+        for name in ("state", "group", "cat"):
+            self.assertIn(self.selected(f, name), ([], [""]), "%s: nothing but 全部 selected" % name)
+        self.assertIn(self.input_named(f, "q", "search").get("value"), (None, ""))
+        self.assertNotIn("checked", self.input_named(f, "done", "checkbox"))
+
+    def test_item1_controls_show_the_current_query(self):
+        f = self.form(self.page(state="stuck", group="g2", cat="conflict", q="Board", done="1"))
+        self.assertEqual(self.selected(f, "state"), ["stuck"])
+        self.assertEqual(self.selected(f, "group"), ["g2"])
+        self.assertEqual(self.selected(f, "cat"), ["conflict"])
+        self.assertEqual(self.input_named(f, "q", "search").get("value"), "Board")
+        self.assertIn("checked", self.input_named(f, "done", "checkbox"))
+        f = self.form(self.page(group="none"))
+        self.assertEqual(self.selected(f, "group"), ["none"])
+
+    # ------------------------------------------------------------ item 2
+
+    def test_item2_default_leaves_out_landed_and_cancelled_done_shows_all(self):
+        self.assertEqual(self.tickets(self.page()), {"3", "4", "5", "6", "7"})
+        self.assertEqual(self.tickets(self.page(done="1")), {"1", "2", "3", "4", "5", "6", "7"})
+
+    def test_item2_state_landed_or_cancelled_without_done(self):
+        self.assertEqual(self.tickets(self.page(state="landed")), {"1"})
+        self.assertEqual(self.tickets(self.page(state="cancelled")), {"2"})
+
+    # ------------------------------------------------------------ item 3
+
+    def test_item3_state(self):
+        self.assertEqual(self.tickets(self.page(state="stuck")), {"5", "6"})
+        self.assertEqual(self.tickets(self.page(state="merged")), {"7"})
+
+    def test_item3_group(self):
+        self.assertEqual(self.tickets(self.page(group="g2")), {"4", "5", "7"})
+        self.assertEqual(self.tickets(self.page(group="g1", done="1")), {"1"})
+
+    def test_item3_group_none(self):
+        self.assertEqual(self.tickets(self.page(group="none")), {"3", "6"})
+        self.assertEqual(self.tickets(self.page(group="none", done="1")), {"2", "3", "6"})
+
+    def test_item3_cat(self):
+        self.assertEqual(self.tickets(self.page(cat="conflict")), {"5"})
+        self.assertEqual(self.tickets(self.page(cat="env")), {"6"})
+
+    def test_item3_q_title_ignores_case(self):
+        self.assertEqual(self.tickets(self.page(q="board")), {"7"})
+        self.assertEqual(self.tickets(self.page(q="FIX BOARD")), {"7"})
+
+    def test_item3_q_id(self):
+        self.assertEqual(self.tickets(self.page(q="#5")), {"5"})
+        self.assertEqual(self.tickets(self.page(q="5")), {"5"})
+        self.assertEqual(self.tickets(self.page(q="##5")), set(), "only one leading # is removed")
+
+    def test_item3_filters_combine_with_and(self):
+        self.assertEqual(self.tickets(self.page(state="stuck", group="g2")), {"5"})
+        self.assertEqual(self.tickets(self.page(state="stuck", cat="env", group="g2")), set())
+
+    # ------------------------------------------------------------ item 4
+
+    def test_item4_count_line(self):
+        self.assertIn("顯示 5 / 共 7 張票", self.page())
+        self.assertIn("顯示 2 / 共 7 張票", self.page(state="stuck"))
+        self.assertIn("顯示 7 / 共 7 張票", self.page(done="1"))
+        page = self.page()
+        self.assertLess(page.find("顯示 5 / 共 7 張票"), page.find("<th>票</th>"), "the count is above the table")
+
+    # ------------------------------------------------------------ item 5
+
+    def test_item5_groups_default_and_done(self):
+        self.assertEqual(self.groups(self.page()), {"g2", "g3"})
+        self.assertEqual(self.groups(self.page(done="1")), {"g1", "g2", "g3"})
+
+    def test_item5_groups_by_group_and_cat(self):
+        self.assertEqual(self.groups(self.page(group="g2")), {"g2"})
+        self.assertEqual(self.groups(self.page(group="g1", done="1")), {"g1"})
+        self.assertEqual(self.groups(self.page(cat="red")), {"g3"})
+        self.assertEqual(self.groups(self.page(cat="conflict")), set())
+
+    def test_item5_state_and_q_do_not_filter_groups(self):
+        self.assertEqual(self.groups(self.page(state="ready")), {"g2", "g3"})
+        self.assertEqual(self.groups(self.page(q="board")), {"g2", "g3"})
+        self.assertEqual(self.groups(self.page(state="landed", done="1")), {"g1", "g2", "g3"})
+
+    # ------------------------------------------------------------ item 6
+
+    def test_item6_no_meta_refresh(self):
+        import re
+        for tab in ("tickets", "dag", "tokens", "host"):
+            page = self.page(tab=tab)
+            self.assertIsNone(re.search(r"http-equiv\s*=\s*[\"']?refresh", page, re.I), "tab=%s" % tab)
+
+
 class GitRules(unittest.TestCase):
     def test_a_merge_blocked_by_an_untracked_file_is_reported_not_raised(self):
         tmp = tempfile.mkdtemp(prefix="loop-git-")
