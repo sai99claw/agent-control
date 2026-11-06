@@ -3848,6 +3848,136 @@ class Memory(LoopCase):
         self.assertEqual(memory.due(self.snap()), [])
 
 
+class T32Acceptance(LoopCase):
+    """#32: auto_fixer and memory_keeper wait for the quota reset instead of failing the run.
+    Expected values come from the ticket's acceptance items (D-091 item 5), not from the code."""
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.env["FAKE_QUOTA_TEXT"] = "Error: usage limit reached"
+
+    @staticmethod
+    def epoch(stamp):
+        import calendar
+        return calendar.timegm(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))
+
+    def fixer_outcomes(self, g):
+        return [c.get("outcome") for c in g.get("cost") or [] if c.get("role") == "fixer"]
+
+    def five_lessons(self):
+        self.run_py("tickets.py", "init")
+
+        def change(tx):
+            for i in range(5):
+                tx.write("memory/inbox/k%d.json" % i, {"layer": "role", "name": "worker", "text": "l%d" % i,
+                                                       "at": osx.now()})
+        self.pool.update(change, "test: five lessons")
+        self.plan(consolidator={"*": ["quota", "merge"]})
+
+    def check_fixer_end(self, rc, err):
+        self.assertEqual(rc, 0, err)
+        snap = self.snap()
+        self.assertEqual(snap.ticket("1")["state"], "landed")
+        g = snap.groups["g1"]
+        self.assertEqual(g["fix_round"], 1, g)
+        self.assertEqual(self.fixer_outcomes(g), ["quota", "done"], g.get("cost"))
+        with open(os.path.join(self.tmp, "plan", "count-fixer-g1")) as fh:
+            self.assertEqual(fh.read().strip(), "2", "the fixer was not started twice")
+        events = [h["event"] for h in g.get("history") or []]
+        self.assertIn("waiting for quota", events)
+        self.assertIn("quota wait over", events)
+        self.assertLess(events.index("waiting for quota"), events.index("quota wait over"))
+        self.assertNotIn("waiting", g)
+
+    def check_keeper_end(self, rc, err):
+        self.assertEqual(rc, 0, err)
+        snap = self.snap()
+        run = snap.memory_state["runs"][-1]
+        self.assertTrue(run["ok"], run)
+        self.assertEqual([c.get("outcome") for c in run.get("cost") or []], ["quota", "memory"], run)
+        self.assertEqual(len(snap.lessons), 0, "lessons are left waiting")
+        self.assertIn("merged", self.pool_memory("memory/role/worker.md") or "")
+        self.assertNotIn("waiting", snap.memory_state)
+
+    def popen(self, script, *args):
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, script)] + list(args), cwd=self.proj,
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.send_signal(signal.SIGTERM))
+        return proc
+
+    # 1
+    def test_item1_fixer_quota_waits_and_reruns_without_a_round(self):
+        self.config(quota_retry_seconds=3)
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["quota", "fix"]})
+        res = self.controller()
+        self.check_fixer_end(res.returncode, res.stderr)
+
+    # 2
+    def test_item2_group_during_the_fixer_wait(self):
+        self.config(quota_retry_seconds=8)
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["quota", "fix"]})
+        proc = self.popen("ticket_controller.py")
+        seen = None
+        end = time.time() + 30
+        while time.time() < end and proc.poll() is None:
+            g = self.snap().groups.get("g1")
+            if g and g.get("waiting"):
+                seen = g
+                break
+            time.sleep(0.2)
+        self.assertIsNotNone(seen, "group g1 never had a 'waiting' mark: %s" % self.snap().groups.get("g1"))
+        self.assertEqual((seen["state"], seen["fix_round"]), ("fixing", 1), seen)
+        w = seen["waiting"]
+        self.assertEqual(sorted(w), ["reason", "since", "text", "until"], w)
+        self.assertEqual(w["reason"], "quota")
+        self.assertLessEqual(abs((self.epoch(w["until"]) - self.epoch(w["since"])) - 8), 2, w)
+        self.assertEqual(self.fixer_outcomes(seen), ["quota"], seen.get("cost"))
+        out, err = proc.communicate(timeout=180)
+        self.assertEqual(proc.returncode, 0, err)
+
+    # 3
+    def test_item3_keeper_quota_waits_and_consolidates(self):
+        self.config(quota_retry_seconds=3)
+        self.five_lessons()
+        res = self.run_py("memory_keeper.py", "--layer", "role", "--name", "worker")
+        self.check_keeper_end(res.returncode, res.stderr)
+
+    # 4
+    def test_item4_memory_state_during_the_keeper_wait(self):
+        self.config(quota_retry_seconds=8)
+        self.five_lessons()
+        proc = self.popen("memory_keeper.py", "--layer", "role", "--name", "worker")
+        seen = None
+        end = time.time() + 30
+        while time.time() < end and proc.poll() is None:
+            state = self.snap().memory_state or {}
+            if state.get("waiting"):
+                seen = state["waiting"]
+                break
+            time.sleep(0.2)
+        self.assertIsNotNone(seen, "memory/state.json never had 'waiting': %s" % self.snap().memory_state)
+        self.assertEqual(sorted(seen), ["path", "reason", "since", "text", "until"], seen)
+        self.assertEqual(seen["reason"], "quota")
+        self.assertEqual(seen["path"], "memory/role/worker.md")
+        out, err = proc.communicate(timeout=120)
+        self.assertEqual(proc.returncode, 0, err)
+
+    # 5
+    def test_item5_board_shows_a_group_quota_wait(self):
+        g = {"id": "g1", "branch": "int/g1", "state": "fixing", "members": [], "fix_round": 1,
+             "waiting": {"reason": "quota", "since": osx.now(), "until": osx.now(), "text": "usage limit reached"}}
+        self.pool.update(lambda tx: tx.put_group(g), "test: group g1 waiting for quota")
+        res = self.run_py("board.py", "html")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        rows = [r for r in res.stdout.split("<tr") if "g1" in r]
+        self.assertTrue(rows, "no table row holds g1")
+        self.assertTrue(any("額度用完" in r for r in rows), rows)
+
+
 class KeeperInterrupt(LoopCase):
     """memory_keeper stops its running agent on SIGTERM and records the attempt (#23 unit test)."""
 
