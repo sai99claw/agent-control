@@ -33,6 +33,8 @@ if os.environ.get("FAKE_INTERVALS"):
     atexit.register(lambda: open(os.environ["FAKE_INTERVALS"], "a").write(
         "agent %s %s %.3f %.3f\n" % (role, ticket, STARTED, time.time())))
 time.sleep(float(os.environ.get("FAKE_HOLD") or 0) + (4 if action == "slow" else 0))
+if os.environ.get("FAKE_NEED_SETUP") and role in ("worker", "verifier", "reviewer", "fixer") and not os.path.exists(".setup-done"):  # #36: needs worktree_setup
+    sys.exit(1)
 
 
 def git(*args, check=True):

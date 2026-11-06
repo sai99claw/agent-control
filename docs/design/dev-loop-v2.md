@@ -77,6 +77,7 @@ No script polls another; each records its outcome in the pool and exits.
 | main moved during verification | only in `devloop.no_reverify_paths` (D-090): the controller merges main in itself (no conflict) and lands without re-verifying; otherwise treated as red: auto_fixer merges main (plain merge first, LLM only on conflict), regression again |
 | a ticket gets stuck | the rest of its group lands; it and its dependents go to main |
 | environment unusable at regression (preflight rc 86) | not red: one "env" page, controller stops (exit 3); run it again after fixing |
+| `devloop.worktree_setup` fails in a new worktree (rc != 0 or past 600 s) | not red: the worktree is removed (its branch stays); issuer: ticket stuck "env"; regression: status env, exit 86; fixer: "env" page, group back to "pr" without using a fix round, controller exit 3; release: release failed, decision page |
 | a fixer finds two tickets contradict | it hands in `decision` (where they contradict, which new ticket it proposes): a decision page, the group stops; merged tickets are frozen, the fixer only aligns cases to their current acceptance and lists them in `cases_changed` |
 | release fails after main moved | one decision page; no retry, no rollback |
 | controller / container dies | no state outside the pool and git; a running ticket whose issuer is dead goes back to ready |

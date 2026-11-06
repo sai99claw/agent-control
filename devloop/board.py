@@ -8,8 +8,9 @@ What it shows (VISION 「看板與統計」): the four numbers, every ticket (wh
 it, what it waits for), the integration branches, what waits for the user, and memory.
 A number it cannot know is shown as 「未知」, never as 0.
 
-With --key-file every request must carry the key (`?key=` or header `X-Board-Key`), and the page
-gets two inputs. They are another front-end to the main session's own entry, nothing more
+With --key-file a browser opens the board once with `?key=`; the board trades it for an HttpOnly,
+SameSite=Strict cookie and redirects to the same page without the key, so the key never appears in
+a URL or a page. Scripts send header `X-Board-Key` instead. The page then gets two inputs. They are another front-end to the main session's own entry, nothing more
 (D-083): a new request runs `ticket_creator.py --request-file ... --via web`; an answer to a page
 about a ticket runs `ticket_creator.py --revise N --from user --decision revise|retry|cancel
 --via web`. Only the opener's path writes tickets; web text first passes the injection check of
@@ -17,6 +18,7 @@ prompts/web-guard.md. Unsent text is kept in the viewer's browser only.
 """
 
 import argparse
+import hashlib
 import hmac
 import html
 import os
@@ -25,8 +27,9 @@ import statistics
 import sys
 import threading
 import time
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -110,13 +113,12 @@ def e(text):
 def render(cfg, snap, key=None):
     m = metrics(snap)
     out = [PAGE_HEAD % {"title": e("devloop · " + cfg.name), "now": e(osx.now())}]
-    hidden = "<input type='hidden' name='key' value='%s'>" % e(key) if key else ""
     if key:
-        out.append("<section><h2>交代新的事</h2><form method='post' action='/request' class='ask'>%s"
+        out.append("<section><h2>交代新的事</h2><form method='post' action='request' class='ask'>"
                    "<textarea name='text' data-draft='request' rows='5' maxlength='8000' required "
                    "placeholder='像跟主線說話一樣寫:要做什麼、為什麼'></textarea>"
                    "<div><button>交給開題者</button> <span class='quiet'>跟在主線下 ticket_creator.py "
-                   "一樣;網頁來的文字會先做注入檢查。</span></div></form></section>" % hidden)
+                   "一樣;網頁來的文字會先做注入檢查。</span></div></form></section>")
     out.append('<section><h2>四個指標</h2><div class="cards">')
     for label, key, note in (("每張落地票的 token(中位,含快取讀)", "tokens", "越少越好"),
                              ("每張落地票的時間(中位)", "minutes", "派工到落地"),
@@ -185,14 +187,14 @@ def render(cfg, snap, key=None):
         ref = str(p.get("ref") or "")
         t = snap.tickets.get(ref)
         if key and p.get("kind") == "decision" and t and t.get("state") not in ("running", "merged", "landed"):
-            out.append("<form method='post' action='/answer' class='ask'>%s"
+            out.append("<form method='post' action='answer' class='ask'>"
                        "<input type='hidden' name='page' value='%s'><input type='hidden' name='ticket' value='%s'>"
                        "<textarea name='text' data-draft='answer-%s' rows='3' maxlength='8000' "
                        "placeholder='你的裁決(改票時必填)'></textarea><div>"
                        "<button name='decision' value='revise'>照我的話改票再做</button> "
                        "<button name='decision' value='retry'>不改,再試一次</button> "
                        "<button name='decision' value='cancel'>取消這張票</button></div></form>"
-                       % (hidden, e(name), e(ref), e(name)))
+                       % (e(name), e(ref), e(name)))
         out.append("</div>")
     out.append("<p class='quiet'>收下:<code>python3 devloop/tickets.py ack &lt;頁名&gt;</code></p></section>")
     if key:
@@ -308,6 +310,35 @@ PAGE_SCRIPT = """<script>
 
 # ---------------------------------------------------------------- serving
 
+COOKIE = "board_key"
+COOKIE_AGE = 30 * 24 * 3600
+
+
+def cookie_value(key):
+    """What the browser keeps instead of the key itself."""
+    return hmac.new(key.encode(), b"devloop-board", hashlib.sha256).hexdigest()
+
+
+def authorized(key, headers):
+    """True when the request carries header X-Board-Key or cookie board_key for this key."""
+    given = headers.get("X-Board-Key")
+    if given is not None:
+        return hmac.compare_digest(given.encode(), key.encode())
+    jar = SimpleCookie()
+    try:
+        jar.load(headers.get("Cookie") or "")
+    except CookieError:
+        return False
+    morsel = jar.get(COOKIE)
+    return morsel is not None and hmac.compare_digest(morsel.value.encode(), cookie_value(key).encode())
+
+
+def key_redirect(url):
+    """Where ?key= goes: the same last path segment and the other query pairs, relative, keyless."""
+    rest = [(k, v) for k, v in parse_qsl(url.query, keep_blank_values=True) if k != "key"]
+    return "./" + url.path.rsplit("/", 1)[-1] + ("?" + urlencode(rest) if rest else "")
+
+
 def serve(cfg, pool, host, port, key):
     cache = {"at": 0.0, "page": ""}
     lock = threading.Lock()
@@ -316,8 +347,19 @@ def serve(cfg, pool, host, port, key):
         def do_GET(self):
             url = urlparse(self.path)
             if key:
-                given = (parse_qs(url.query).get("key") or [""])[0] or self.headers.get("X-Board-Key", "")
-                if not hmac.compare_digest(given.encode(), key.encode()):
+                given = parse_qs(url.query, keep_blank_values=True).get("key")
+                if given is not None:
+                    if not hmac.compare_digest(given[0].encode(), key.encode()):
+                        self._send(403, "wrong key")
+                        return
+                    self.send_response(303)
+                    self.send_header("Set-Cookie", "%s=%s; HttpOnly; SameSite=Strict; Max-Age=%d"
+                                     % (COOKIE, cookie_value(key), COOKIE_AGE))
+                    self.send_header("Location", key_redirect(url))
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                if not authorized(key, self.headers):
                     self._send(403, "key required")
                     return
             if url.path not in ("/", "/index.html"):
@@ -338,6 +380,9 @@ def serve(cfg, pool, host, port, key):
             if not key:
                 self._send(403, "this board has no key file: read-only")
                 return
+            if not authorized(key, self.headers):
+                self._send(403, "key required")
+                return
             try:
                 size = int(self.headers.get("Content-Length") or 0)
             except ValueError:
@@ -346,9 +391,6 @@ def serve(cfg, pool, host, port, key):
                 self._send(413, "too large")
                 return
             form = {k: v[0] for k, v in parse_qs(self.rfile.read(size).decode("utf-8", "replace")).items()}
-            if not hmac.compare_digest(form.get("key", "").encode(), key.encode()):
-                self._send(403, "key required")
-                return
             text = form.get("text", "").strip()
             try:
                 if url.path == "/request":
@@ -379,7 +421,8 @@ def serve(cfg, pool, host, port, key):
                 return
             cache["at"] = 0.0
             self.send_response(303)
-            self.send_header("Location", "/?key=%s&sent=%s" % (quote(key), quote(sent)))
+            self.send_header("Location", "./?sent=" + quote(sent))
+            self.send_header("Content-Length", "0")
             self.end_headers()
 
         def _send(self, code, body, ctype="text/plain; charset=utf-8"):

@@ -1890,26 +1890,27 @@ class WebInput(LoopCase):
         self.addCleanup(proc.kill)
         base = "http://127.0.0.1:%d" % port
 
-        def post(path, **form):
+        def post(path, key, **form):
             data = urllib.parse.urlencode(form).encode()
-            req = urllib.request.Request(base + path, data=data, method="POST")
+            req = urllib.request.Request(base + path, data=data, method="POST", headers={"X-Board-Key": key})
             try:
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     return resp.status, resp.read().decode()
             except urllib.error.HTTPError as exc:
                 return exc.code, ""
+        get = urllib.request.Request(base + "/", headers={"X-Board-Key": "k3y"})
         for _ in range(50):
             try:
-                urllib.request.urlopen(base + "/?key=k3y", timeout=2).read()
+                urllib.request.urlopen(get, timeout=2).read()
                 break
             except OSError:
                 time.sleep(0.1)
-        page = urllib.request.urlopen(base + "/?key=k3y", timeout=10).read().decode()
+        page = urllib.request.urlopen(get, timeout=10).read().decode()
         self.assertIn("交給開題者", page)
         self.assertIn("不改,再試一次", page)
-        self.assertEqual(post("/request", key="wrong", text="x")[0], 403)
-        self.assertEqual(post("/request", key="k3y", text="build two things")[0], 200)
-        self.assertEqual(post("/answer", key="k3y", ticket="1", page="p1", decision="retry", text="")[0], 200)
+        self.assertEqual(post("/request", "wrong", text="x")[0], 403)
+        self.assertEqual(post("/request", "k3y", text="build two things")[0], 200)
+        self.assertEqual(post("/answer", "k3y", ticket="1", page="p1", decision="retry", text="")[0], 200)
         deadline = time.time() + 60
         while time.time() < deadline:
             snap = self.snap()
@@ -2020,6 +2021,86 @@ class T27Acceptance(LoopCase):
                         bullets)
 
 
+class BoardKeyCookie(LoopCase):
+    """#37: the board key is traded once for a cookie; helpers, the keyless board and the README."""
+
+    def test_cookie_value_is_the_hmac_of_the_key(self):
+        import hashlib
+        import hmac
+        import board
+        self.assertEqual(board.cookie_value("K"), hmac.new(b"K", b"devloop-board", hashlib.sha256).hexdigest())
+        self.assertNotIn("K", board.cookie_value("K"))
+        self.assertNotEqual(board.cookie_value("K"), board.cookie_value("L"))
+
+    def test_key_redirect_drops_only_the_key(self):
+        from urllib.parse import urlparse
+        import board
+        for path, want in (("/?key=K", "./"), ("/?tab=dag&key=K&x=1", "./?tab=dag&x=1"),
+                           ("/index.html?key=K", "./index.html"), ("/?key=K&empty=", "./?empty="),
+                           ("/board/index.html?a=1&key=K", "./index.html?a=1")):
+            with self.subTest(path=path):
+                self.assertEqual(board.key_redirect(urlparse(path)), want)
+
+    def test_authorized_takes_the_header_or_the_cookie(self):
+        import board
+        c = board.cookie_value("K")
+        cases = [({"X-Board-Key": "K"}, True), ({"X-Board-Key": "k"}, False),
+                 ({"Cookie": "board_key=" + c}, True), ({"Cookie": "a=1; board_key=" + c}, True),
+                 ({"Cookie": "board_key=K"}, False), ({"Cookie": "board_key=other"}, False),
+                 ({"Cookie": "a=\"unterminated"}, False), ({}, False)]
+        for headers, want in cases:
+            with self.subTest(headers=headers):
+                self.assertEqual(board.authorized("K", headers), want)
+
+    def test_without_a_key_file_the_board_is_read_only_and_ignores_key(self):
+        import http.client
+        import socket
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "board.py"), "serve", "--port", str(port)],
+                                cwd=self.proj, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True)
+        self.addCleanup(proc.kill)
+
+        def call(method, path, body=None):
+            deadline = time.time() + 5
+            while True:
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                try:
+                    conn.request(method, path, body=body,
+                                 headers={"Content-Type": "application/x-www-form-urlencoded"})
+                    resp = conn.getresponse()
+                    return resp.status, resp.getheader("Set-Cookie"), resp.read().decode("utf-8")
+                except OSError:
+                    if time.time() > deadline:
+                        raise
+                    time.sleep(0.1)
+                finally:
+                    conn.close()
+        status, cookie, page = call("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn("四個指標", page)
+        status, cookie, page = call("GET", "/?key=anything")
+        self.assertEqual((status, cookie), (200, None))
+        self.assertIn("四個指標", page)
+        self.assertNotIn("<form", page, "read-only: no inputs")
+        for path in ("/request", "/answer"):
+            with self.subTest(path=path):
+                self.assertEqual(call("POST", path, "key=anything&text=x")[0], 403)
+
+    def test_the_readme_says_the_key_is_traded_for_a_cookie(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            text = fh.read()
+        section = text.split("## Dashboard", 1)[1].split("\n## ", 1)[0]
+        flat = " ".join(section.split())
+        for words in ("once as `?key=`", "HttpOnly, SameSite=Strict cookie", "redirect to the page without it",
+                      "`X-Board-Key`", "never appears in a URL"):
+            self.assertIn(words, flat)
+        self.assertNotIn("every request carry", flat)
+
+
 class RedCheck(LoopCase):
     def feedback_of(self, ident):
         t = self.snap().ticket(str(ident))
@@ -2081,6 +2162,168 @@ class TestLayerDocs(unittest.TestCase):
 
     def test_verifier_prompt_forbids_a_file_per_ticket(self):
         self.assertIn("new file", self.read("devloop", "prompts", "verifier.md"))
+
+
+class T37Acceptance(LoopCase):
+    """Ticket #37: the board key is traded once for an HttpOnly cookie and never appears in a URL or page."""
+
+    KEY = "K3y-test-1"
+
+    def cookie(self):
+        import hashlib
+        import hmac
+        return hmac.new(self.KEY.encode(), b"devloop-board", hashlib.sha256).hexdigest()
+
+    def start(self):
+        import http.client
+        import socket
+        key = os.path.join(self.tmp, "key")
+        with open(key, "w") as fh:
+            fh.write(self.KEY + "\n")
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        self.port = sock.getsockname()[1]
+        sock.close()
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "board.py"), "serve", "--port", str(self.port),
+                                 "--key-file", key], cwd=self.proj, env=self.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(proc.kill)
+        deadline = time.time() + 5
+        while True:
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=2)
+                conn.request("GET", "/")
+                conn.getresponse().read()
+                conn.close()
+                return
+            except OSError:
+                if time.time() > deadline:
+                    raise
+                time.sleep(0.1)
+
+    def req(self, method, path, headers=None, body=None):
+        """One request, redirects not followed: (status, headers list, body text)."""
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        self.addCleanup(conn.close)
+        conn.request(method, path, body=body, headers=headers or {})
+        resp = conn.getresponse()
+        return resp.status, resp.getheaders(), resp.read().decode("utf-8", "replace")
+
+    def header(self, headers, name):
+        return [v for k, v in headers if k.lower() == name.lower()]
+
+    def post(self, path, form, headers):
+        import urllib.parse
+        h = dict(headers, **{"Content-Type": "application/x-www-form-urlencoded"})
+        return self.req("POST", path, h, urllib.parse.urlencode(form))
+
+    # acceptance 1
+    def test_the_key_in_the_url_is_traded_for_an_httponly_cookie(self):
+        from http.cookies import SimpleCookie
+        self.start()
+        status, headers, _ = self.req("GET", "/?key=" + self.KEY)
+        self.assertEqual(status, 303)
+        self.assertEqual(self.header(headers, "Location"), ["./"])
+        sets = self.header(headers, "Set-Cookie")
+        self.assertEqual(len(sets), 1, sets)
+        jar = SimpleCookie()
+        jar.load(sets[0])
+        self.assertIn("board_key", jar)
+        morsel = jar["board_key"]
+        self.assertEqual(morsel.value, self.cookie())
+        self.assertTrue(morsel["httponly"])
+        self.assertEqual(morsel["samesite"], "Strict")
+        self.assertEqual(morsel["max-age"], "2592000")
+        self.assertEqual(morsel["path"], "")
+        self.assertNotIn("path=", sets[0].lower())
+        status, headers, _ = self.req("GET", "/?key=WRONG")
+        self.assertEqual(status, 403)
+        self.assertEqual(self.header(headers, "Set-Cookie"), [])
+
+    # acceptance 2
+    def test_the_redirect_keeps_other_parameters_and_the_last_segment(self):
+        self.start()
+        for path, want in (("/?tab=dag&key=%s&x=1" % self.KEY, "./?tab=dag&x=1"),
+                           ("/index.html?key=%s" % self.KEY, "./index.html")):
+            with self.subTest(path=path):
+                status, headers, _ = self.req("GET", path)
+                self.assertEqual(status, 303)
+                locs = self.header(headers, "Location")
+                self.assertEqual(locs, [want])
+                self.assertNotIn(self.KEY, locs[0])
+
+    # acceptance 3
+    def test_get_is_allowed_by_the_cookie_or_the_header_only(self):
+        self.start()
+        status, _, body = self.req("GET", "/", {"Cookie": "board_key=" + self.cookie()})
+        self.assertEqual(status, 200)
+        self.assertIn("四個指標", body)
+        self.assertEqual(self.req("GET", "/", {"Cookie": "board_key=other"})[0], 403)
+        status, _, body = self.req("GET", "/", {"X-Board-Key": self.KEY})
+        self.assertEqual(status, 200)
+        self.assertIn("四個指標", body)
+        self.assertEqual(self.req("GET", "/")[0], 403)
+
+    # acceptance 4
+    def test_posts_redirect_without_the_key_and_ignore_the_form_key(self):
+        self.stuck(1)
+        self.start()
+        runs = os.path.join(self.tmp, "wt", "runs", "web")
+
+        def folders():
+            return sorted(os.listdir(runs)) if os.path.isdir(runs) else []
+        self.addCleanup(self.wait_jobs, runs)
+        cookie = {"Cookie": "board_key=" + self.cookie()}
+        self.assertEqual(self.post("/request", {"key": self.KEY, "text": "x"}, {})[0], 403)
+        self.assertEqual(folders(), [], "a form key alone hands nothing to the opener")
+        status, headers, _ = self.post("/request", {"text": "x"}, cookie)
+        self.assertEqual(status, 303)
+        self.assertEqual(self.header(headers, "Location"), ["./?sent=request"])
+        self.assertEqual(len(folders()), 1, "the text went to the opener")
+        status, headers, _ = self.post("/request", {"text": "x"}, {"X-Board-Key": self.KEY})
+        self.assertEqual(status, 303)
+        self.assertEqual(self.header(headers, "Location"), ["./?sent=request"])
+        self.assertEqual(len(folders()), 2)
+        status, headers, _ = self.post("/answer", {"ticket": "1", "page": "p1", "decision": "retry",
+                                                   "text": ""}, cookie)
+        self.assertEqual(status, 303)
+        self.assertEqual(self.header(headers, "Location"), ["./?sent=answer-p1"])
+        self.assertEqual(len(folders()), 3)
+
+    def stuck(self, ident):
+        WebInput.stuck(self, ident)
+
+    def wait_jobs(self, runs):
+        """Let the detached openers finish before the temp folder goes."""
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            names = os.listdir(runs) if os.path.isdir(runs) else []
+            if all(os.path.exists(os.path.join(runs, n, "rc")) for n in names):
+                return
+            time.sleep(0.2)
+
+    # acceptance 5
+    def test_the_page_has_the_forms_but_never_the_key(self):
+        import re
+        import board
+        from core.config import Config
+        self.stuck(1)
+        self.start()
+        status, _, page = self.req("GET", "/", {"Cookie": "board_key=" + self.cookie()})
+        self.assertEqual(status, 200)
+        self.assertIn("交給開題者", page)
+        self.assertIn("不改,再試一次", page)
+        actions = re.findall(r"""action\s*=\s*['"]([^'"]*)['"]""", page)
+        self.assertIn("request", actions)
+        self.assertIn("answer", actions)
+        self.assertTrue(set(actions) <= {"request", "answer"}, actions)
+        self.assertNotIn("name='key'", page)
+        self.assertNotIn('name="key"', page)
+        self.assertNotIn(self.KEY, page)
+        page = board.render(Config(self.proj), self.snap(), key="KEY-7f3a")
+        self.assertIn("交給開題者", page)
+        self.assertNotIn("KEY-7f3a", page)
 
 
 class MarkExplained(unittest.TestCase):
@@ -2823,6 +3066,114 @@ class StopRecordsCost(LoopCase):
         self.assertEqual((issuer.pending, issuer.round_costs), ([], []))
 
 
+class T36Acceptance(LoopCase):
+    """Ticket #36: devloop.worktree_setup runs in every worktree devloop creates, right after it is
+    created; a failure is an environment problem, not a red. Expected values from D-091 item 10."""
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        with open(os.path.join(self.proj, ".gitignore"), "w") as fh:
+            fh.write(".setup-done\n")
+        git(self.proj, "add", ".gitignore")
+        git(self.proj, "commit", "-q", "-m", "ignore the setup marker")
+        self.env["FAKE_NEED_SETUP"] = "1"
+        self.log = os.path.join(self.tmp, "setup.log")
+
+    def only_fails_in(self, pattern):
+        return 'case "$PWD" in %s) exit 3;; esac; touch .setup-done' % pattern
+
+    def pages(self, kind, ref=None):
+        return [row for row in self.snap().inbox.values()
+                if row["kind"] == kind and (ref is None or row["ref"] == ref)]
+
+    def ran(self, role, ref):
+        return os.path.exists(os.path.join(self.tmp, "plan", "count-%s-%s" % (role, ref)))
+
+    def test_1_default_null_string_accepted_other_values_exit_2(self):
+        from core.config import Config
+        cfg = Config(self.proj)
+        self.assertTrue(hasattr(cfg, "worktree_setup"), "Config has no worktree_setup")
+        self.assertIsNone(cfg.worktree_setup)
+        self.config(worktree_setup="true")
+        res = self.run_py("tickets.py", "list")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        for bad in ("", 3, ["a"]):
+            self.config(worktree_setup=bad)
+            res = self.run_py("tickets.py", "list")
+            self.assertEqual(res.returncode, 2, "%r: %s" % (bad, res.stdout + res.stderr))
+            self.assertIn("devloop.worktree_setup", res.stderr, repr(bad))
+
+    def test_2_every_created_worktree_is_set_up_with_cwd_and_ac_root(self):
+        self.config(worktree_setup='touch .setup-done && echo "$PWD $AC_ROOT" >> %s' % self.log)
+        self.add(1)
+        self.plan(worker={"1": ["red"]})
+        res = self.controller()
+        self.assertTrue(os.path.exists(self.log), "worktree_setup never ran: no setup.log")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["release"], "ok")
+        with open(self.log) as fh:
+            rows = [line.split() for line in fh if line.strip()]
+        names = {os.path.basename(r[0]) for r in rows}
+        for name in ("t1", "t1-cases", "red-t1", "regression-int-g1", "fix-g1", "release-g1"):
+            self.assertIn(name, names, rows)
+        root = os.path.realpath(self.proj)
+        for r in rows:
+            self.assertEqual(len(r), 2, r)
+            self.assertEqual(os.path.realpath(r[1]), root, r)
+
+    def test_3_a_failed_setup_leaves_the_ticket_stuck_env_and_removes_the_tree(self):
+        self.config(worktree_setup="exit 3")
+        self.add(1)
+        self.controller()
+        t = self.snap().ticket("1")
+        self.assertEqual(t["state"], "stuck", t.get("history"))
+        self.assertEqual(t["stuck"]["reason"], "env", t["stuck"])
+        self.assertTrue([p for p in self.pages("env") if "worktree_setup" in p["text"]], self.pages("env"))
+        self.assertFalse(self.ran("worker", "1"), "the worker ran")
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "wt", "t1")), "the failed tree was kept")
+
+    def test_4_a_failed_setup_in_the_regression_tree_is_env_86(self):
+        self.env.pop("FAKE_NEED_SETUP")   # today the regression is green: 86 can come only from the setup
+        self.config(worktree_setup=self.only_fails_in("*/regression-*"))
+        out = os.path.join(self.tmp, "regression.json")
+        res = self.run_py("regression.py", "--branch", "main", "--out", out)
+        self.assertEqual(res.returncode, 86, res.stdout + res.stderr)
+        with open(out) as fh:
+            data = json.load(fh)
+        self.assertEqual(data["status"], "env", data)
+        self.assertIn("worktree_setup", data["summary"])
+
+    def test_5_a_failed_setup_in_the_fixer_tree_stops_and_the_next_run_fixes(self):
+        self.config(worktree_setup=self.only_fails_in("*/fix-*"))
+        self.add(1)
+        self.plan(worker={"1": ["red"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        self.assertTrue([p for p in self.pages("env", "g1") if "worktree_setup" in p["text"]],
+                        self.pages("env"))
+        self.assertFalse(self.ran("fixer", "g1"), "the fixer ran")
+        g = self.snap().groups["g1"]
+        self.assertEqual((g["state"], g["fix_round"], g.get("job", "absent")), ("pr", 0, None), g)
+        self.config(worktree_setup="touch .setup-done")
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["fix_round"], 1)
+
+    def test_6_a_failed_setup_in_the_release_tree_is_a_failed_release_decision(self):
+        self.config(worktree_setup=self.only_fails_in("*/release-*"))
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+        self.assertTrue([p for p in self.pages("decision", "g1") if "worktree_setup" in p["text"]],
+                        self.pages("decision"))
+
+
 class Landing(LoopCase):
     def test_the_code_map_is_refreshed_on_main_and_the_cost_is_totalled(self):
         with open(os.path.join(self.proj, "app.py"), "w") as fh:
@@ -2899,6 +3250,137 @@ class ReleaseTimeoutSetting(LoopCase):
         self.assertEqual(Config(self.proj).release_timeout_seconds, 3600)
         self.config(release_timeout_seconds=7)
         self.assertEqual(Config(self.proj).release_timeout_seconds, 7)
+
+
+class WorktreeSetup(LoopCase):
+    """devloop.worktree_setup: the implementer's tests (core/worktrees.py and what it leaves)."""
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ["AC_ROOT"] = self.proj
+        self.wt = os.path.join(self.tmp, "wt")
+        self.count = os.path.join(self.tmp, "setup-count")
+
+    def cfg(self, cmd):
+        self.config(worktree_setup=cmd)
+        from core.config import Config
+        return Config(self.proj)
+
+    def repo(self):
+        from core.gitx import Git
+        return Git(self.proj)
+
+    def runs(self):
+        try:
+            with open(self.count) as fh:
+                return fh.read().splitlines()
+        except FileNotFoundError:
+            return []
+
+    def test_null_runs_nothing_and_writes_no_log(self):
+        from core import worktrees
+        cfg = self.cfg(None)
+        worktrees.branch_tree(cfg, self.repo(), os.path.join(self.wt, "t1"), "t/1", start="main")
+        self.assertFalse(os.path.exists(os.path.join(self.wt, "runs", "setup", "t1.log")))
+
+    def test_output_is_kept_in_the_log_named_after_the_folder(self):
+        from core import worktrees
+        cfg = self.cfg('echo "hello from $PWD"; echo "root=$AC_ROOT"')
+        path = os.path.join(self.wt, "t1-cases")
+        worktrees.branch_tree(cfg, self.repo(), path, "t/1-cases", start="main")
+        with open(os.path.join(self.wt, "runs", "setup", "t1-cases.log")) as fh:
+            log = fh.read()
+        self.assertIn("hello from %s" % os.path.realpath(path), log.replace(path, os.path.realpath(path)))
+        self.assertIn("root=%s" % self.proj, log)
+
+    def test_a_reused_worktree_is_not_set_up_again(self):
+        from core import worktrees
+        cfg = self.cfg("echo run >> %s" % self.count)
+        path = os.path.join(self.wt, "t1")
+        worktrees.branch_tree(cfg, self.repo(), path, "t/1", start="main")
+        worktrees.branch_tree(cfg, self.repo(), path, "t/1", start="main")
+        self.assertEqual(self.runs(), ["run"])
+
+    def test_a_failed_setup_removes_the_worktree_and_keeps_the_branch(self):
+        from core import worktrees
+        cfg = self.cfg("echo run >> %s; echo broken-tool-missing; exit 3" % self.count)
+        path = os.path.join(self.wt, "t1")
+        with self.assertRaises(worktrees.SetupFailed) as ctx:
+            worktrees.branch_tree(cfg, self.repo(), path, "t/1", start="main")
+        text = str(ctx.exception)
+        self.assertIn("devloop.worktree_setup failed in %s (rc 3)" % path, text)
+        self.assertIn("broken-tool-missing", text)
+        self.assertFalse(os.path.exists(path))
+        self.assertTrue(self.repo().sha("refs/heads/t/1"))
+        with self.assertRaises(worktrees.SetupFailed):   # the next run creates and sets it up again
+            worktrees.branch_tree(cfg, self.repo(), path, "t/1", start="main")
+        self.assertEqual(self.runs(), ["run", "run"])
+
+    def test_a_failed_setup_removes_a_detached_tree(self):
+        from core import worktrees
+        cfg = self.cfg("exit 5")
+        path = os.path.join(self.wt, "release-g1")
+        with self.assertRaises(worktrees.SetupFailed) as ctx:
+            worktrees.detached_tree(cfg, self.repo(), path, self.repo().sha("main"))
+        self.assertIn("(rc 5)", str(ctx.exception))
+        self.assertFalse(os.path.exists(path))
+
+    def test_a_setup_past_its_limit_is_stopped_with_its_group_and_fails(self):
+        from core import worktrees
+        from unittest import mock
+        pidfile = os.path.join(self.tmp, "child.pid")
+        # the shell starts a background child in the same process group; both must be stopped
+        cfg = self.cfg("sleep 60 & echo $! > %s; wait" % pidfile)
+        path = os.path.join(self.wt, "fix-g1")
+        began = time.time()
+        with mock.patch.object(worktrees, "SETUP_TIMEOUT", 1):
+            with self.assertRaises(worktrees.SetupFailed) as ctx:
+                worktrees.detached_tree(cfg, self.repo(), path, self.repo().sha("main"))
+        self.assertLess(time.time() - began, 30)
+        self.assertIn("timeout", str(ctx.exception))
+        with open(pidfile) as fh:
+            child = int(fh.read().strip())
+        deadline = time.time() + 10
+        while osx.alive(child) and time.time() < deadline:
+            time.sleep(0.1)
+        self.assertFalse(osx.alive(child), "the setup's background child is still running")
+        self.assertFalse(os.path.exists(path))
+
+    def test_the_default_limit_is_600_seconds(self):
+        from core import worktrees
+        self.assertEqual(worktrees.SETUP_TIMEOUT, 600)
+
+    def test_the_controllers_own_trees_are_not_set_up(self):
+        log = os.path.join(self.tmp, "setup.log")
+        self.config(worktree_setup='basename "$PWD" >> %s' % log)
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertFalse(os.path.exists(os.path.join(self.wt, "runs", "setup", "index-g1.log")))
+        with open(log) as fh:
+            names = set(fh.read().split())
+        self.assertIn("t1", names)                  # the setup did run in devloop's other trees
+        self.assertIn("release-g1", names)
+        self.assertFalse([n for n in names if n.startswith(("nrv-", "index-"))], names)
+        # the index tree was really made this run (refresh_index ran), so its absence above counts
+        self.assertTrue(self.main_has("CODE-MAP.md"))
+
+    def test_readme_project_settings_documents_worktree_setup(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            text = fh.read()
+        start = text.index("## Project settings")
+        section = text[start:text.index("\n## ", start + 1)]
+        self.assertIn("devloop.worktree_setup", section)
+        for words in ("cwd", "AC_ROOT", "600 s", "runs/setup/", "issuer", "regression", "fixer",
+                      "release", "not set up again"):
+            self.assertIn(words, section)
 
 
 class RequiredFields(LoopCase):
@@ -3698,8 +4180,24 @@ class Board(LoopCase):
                 break
             except OSError:
                 time.sleep(0.1)
-        with urllib.request.urlopen(url + "?key=s3cret", timeout=10) as resp:
-            self.assertIn("四個指標", resp.read().decode("utf-8"))
+        import hashlib
+        import hmac
+        import http.client
+        from http.cookies import SimpleCookie
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        self.addCleanup(conn.close)
+        conn.request("GET", "/?key=s3cret")
+        resp = conn.getresponse()
+        resp.read()
+        self.assertEqual(resp.status, 303)
+        self.assertEqual(resp.getheader("Location"), "./")
+        jar = SimpleCookie(resp.getheader("Set-Cookie"))
+        want = hmac.new(b"s3cret", b"devloop-board", hashlib.sha256).hexdigest()
+        self.assertEqual(jar["board_key"].value, want)
+        conn.request("GET", "/", headers={"Cookie": "board_key=" + want})
+        resp = conn.getresponse()
+        self.assertEqual(resp.status, 200)
+        self.assertIn("四個指標", resp.read().decode("utf-8"))
 
 
 class T26Acceptance(LoopCase):

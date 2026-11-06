@@ -53,6 +53,8 @@ DEFAULTS = {
     "poll_seconds": 10,
     "release": None,                 # required: shell command run at the landed sha
     "release_timeout_seconds": 3600, # time limit of the release command at landing
+    "worktree_setup": None,          # D-091 item 10: shell command run in every new worktree devloop
+                                     # makes (cwd = the worktree, AC_ROOT = the project); null = nothing
     "base_tests": None,              # D-073 ①: ids of the ~1 minute base set; default tests.unittest.base
     "index_path": "CODE-MAP.md",     # D-038 / D-084: generated code index, refreshed at landing; null = off
     "required_fields": {},           # extra ticket fields the opener must fill: {"name": "what to write"}
@@ -95,6 +97,10 @@ class Config:
         if mem is not None and not (isinstance(mem, str) and mem):
             raise osx.OSFailure("board/config.json devloop.memory must be null or a folder path (a "
                                 "non-empty string), not %r" % (mem,))
+        setup = self.values.get("worktree_setup")
+        if setup is not None and not (isinstance(setup, str) and setup):
+            raise osx.OSFailure("board/config.json devloop.worktree_setup must be null or a shell "
+                                "command (a non-empty string), not %r" % (setup,))
         nrv = self.values.get("no_reverify_paths")
         if not (isinstance(nrv, list) and all(isinstance(p, str) and p for p in nrv)):
             raise osx.OSFailure("board/config.json devloop.no_reverify_paths must be a list of "
