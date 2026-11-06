@@ -4837,6 +4837,80 @@ class T17Acceptance(LoopCase):
         self.assertIsNone(self.read(os.path.join(self.F, "role", "verifier.md")))
 
 
+class BoardTabs(LoopCase):
+    """Helpers of the board's tabs (#38): the tab a query picks, the nav, the clock, routing."""
+
+    def test_shown_tab_falls_back_to_the_first_tab(self):
+        import board
+        self.assertEqual([t[0] for t in board.TABS], ["tickets", "dag", "tokens", "host"])
+        for query in (None, {}, {"tab": ""}, {"tab": "nope"}, {"other": "dag"}):
+            self.assertEqual(board.shown_tab(query), "tickets", query)
+        self.assertEqual(board.shown_tab({"tab": "host"}), "host")
+
+    def test_render_nav_marks_only_the_shown_tab(self):
+        import board
+        nav = board.render_nav("tokens")
+        self.assertEqual(nav.count("aria-current"), 1)
+        self.assertIn('<a href="?tab=tokens" aria-current="page">Token</a>', nav)
+        self.assertIn('<a href="?tab=host">主機</a>', nav)
+
+    def test_clock_is_the_pool_format(self):
+        import board
+        self.assertEqual(board.clock(0), "1970-01-01T00:00:00Z")
+        self.assertEqual(board.clock(86400 + 61), "1970-01-02T00:01:01Z")
+
+    def test_last_segment(self):
+        import board
+        from urllib.parse import urlparse
+        for path, want in (("/", ""), ("/index.html", "index.html"), ("/board/", ""), ("/a/b/request", "request"),
+                           ("/board/other", "other")):
+            self.assertEqual(board.last_segment(urlparse(path + "?tab=x")), want, path)
+
+    def test_stub_tabs_get_their_query_and_now(self):
+        import board
+        from core.config import Config
+        for name, label in (("dag", "DAG"), ("tokens", "Token"), ("host", "主機")):
+            page = board.render(Config(self.proj), self.snap(), query={"tab": name}, now=0)
+            self.assertIn('<div id="tab-%s" class="tab">' % name, page)
+            self.assertIn("<h2>%s</h2>" % label, page)
+            self.assertIn("還沒有內容", page)
+            self.assertNotIn("<h2>記憶</h2>", page)
+
+    def test_served_tabs_within_five_seconds_each_show_their_own(self):
+        import http.client
+        import socket
+        import time
+        key = os.path.join(self.tmp, "key")
+        with open(key, "w") as fh:
+            fh.write("k1\n")
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "board.py"), "serve", "--port", str(port),
+                                 "--key-file", key], cwd=self.proj, env=self.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(proc.kill)
+
+        def get(path):
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            try:
+                conn.request("GET", path, headers={"X-Board-Key": "k1"})
+                resp = conn.getresponse()
+                return resp.status, resp.read().decode("utf-8")
+            finally:
+                conn.close()
+        for _ in range(50):
+            try:
+                get("/")
+                break
+            except OSError:
+                time.sleep(0.1)
+        self.assertIn('id="tab-dag"', get("/x/?tab=dag")[1])
+        self.assertIn('id="tab-host"', get("/x/index.html?tab=host")[1])
+        self.assertEqual(get("/x/nothing")[0], 404)
+
+
 class T16Acceptance(LoopCase):
     """Ticket #16: memory written into a git repository is one fast-forward commit on its branch."""
 

@@ -33,7 +33,7 @@ group complete (= one PR, a local mark) -> regression.py (preflight + full suite
 | `python3 devloop/tickets.py cancel N --why ...` | drop a ticket |
 | `python3 devloop/tickets.py release gN [--again]` | re-run a landed group's failed release once (`--again` also when it was ok); the outcome is a page |
 | `python3 devloop/tickets.py cancel gN --why ...` | close a stuck or open group with no running member: its ready and merged tickets are cancelled, the branch is kept; one `cancelled` page lists them |
-| `python3 devloop/board.py serve [--port 8765] [--key-file F]` | the dashboard (or `board.py html --out F`) |
+| `python3 devloop/board.py serve [--port 8765] [--key-file F]` | the dashboard (or `board.py html --out F [--query Q]`) |
 
 Agents run their tests with `python3 devloop/run_tests.py <ids>` (output stays in their run directory).
 
@@ -191,6 +191,11 @@ waiting lesson).
 `board.py` reads the pool only: the four VISION numbers (tokens and time per landed ticket,
 first-pass share, user interventions per ticket, what waits for the user), every ticket, every
 integration branch, unread pages, memory files. Unknown numbers show as 「未知」, never 0.
+The page has four tabs, chosen by `?tab=`: 票 (`?tab=tickets`, the default; everything above but
+the four numbers, which every tab shows), DAG (`?tab=dag`), Token (`?tab=tokens`) and 主機
+(`?tab=host`); `board.py html --query tab=dag` writes one tab. Every link and form action is
+relative and the server routes by the last path segment only, so the board works under a path
+prefix (for example behind a reverse proxy at `/board/`).
 `--key-file` accepts the key once as `?key=` and trades it for an HttpOnly, SameSite=Strict cookie
 with a redirect to the page without it; scripts send header `X-Board-Key`; the key never appears
 in a URL (or a page). It also adds two inputs,

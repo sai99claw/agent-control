@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """board : the dashboard. Reads the pool; never writes it.
 
-    python3 devloop/board.py html [--out board.html]       # one page, to a file or stdout
+    python3 devloop/board.py html [--out board.html] [--query tab=dag]   # one page, to a file or stdout
     python3 devloop/board.py serve [--port 8765] [--host 127.0.0.1] [--key-file F]
 
 What it shows (VISION 「看板與統計」): the four numbers, every ticket (where it is, who works on
@@ -119,24 +119,68 @@ def e(text):
     return html.escape("" if text is None else str(text))
 
 
-def render(cfg, snap, key=None):
+TABS = (
+    ("tickets", "票", lambda cfg, snap, key, query, now: render_tickets_tab(cfg, snap, key, query, now)),
+    ("dag", "DAG", lambda cfg, snap, key, query, now: render_dag_tab(cfg, snap, query, now)),
+    ("tokens", "Token", lambda cfg, snap, key, query, now: render_tokens_tab(cfg, snap, query, now)),
+    ("host", "主機", lambda cfg, snap, key, query, now: render_host_tab(cfg, snap, query, now)),
+)
+
+
+def clock(now):
+    """`now` (seconds since the epoch) in the pool's timestamp format."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+
+
+def shown_tab(query):
+    """The name of the tab a query asks for; anything unknown is the first tab."""
+    wanted = (query or {}).get("tab")
+    return wanted if wanted in [name for name, _, _ in TABS] else TABS[0][0]
+
+
+def render_nav(shown):
+    links = []
+    for name, label, _ in TABS:
+        current = ' aria-current="page"' if name == shown else ""
+        links.append('<a href="?tab=%s"%s>%s</a>' % (e(name), current, e(label)))
+    return '<nav class="tabs">%s</nav>' % "".join(links)
+
+
+def render_metrics(snap):
     m = metrics(snap)
-    out = [PAGE_HEAD % {"title": e("devloop · " + cfg.name), "now": e(osx.now())}]
+    out = ['<section><h2>四個指標</h2><div class="cards">']
+    for label, name, note in (("每張落地票的 token(中位,含快取讀)", "tokens", "越少越好"),
+                              ("每張落地票的時間(中位)", "minutes", "派工到落地"),
+                              ("一次就過", "first_pass", "第 1 輪就合進、沒改過票"),
+                              ("每張票要你介入幾次", "asks", "決定頁與環境頁 ÷ 落地或卡住的票"),
+                              ("等你處理的", "waiting", "未讀頁 + 卡住的票")):
+        out.append('<div class="card"><div class="k">%s</div><div class="v">%s</div><div class="n">%s</div></div>'
+                   % (e(label), e(m[name]), e(note)))
+    out.append("</div></section>")
+    return "\n".join(out)
+
+
+def render(cfg, snap, key=None, query=None, now=None):
+    """The page: header and the four numbers on every tab, then the tab `query` asks for (?tab=)."""
+    now = time.time() if now is None else now
+    shown = shown_tab(query)
+    body = dict((name, fn) for name, _, fn in TABS)[shown](cfg, snap, key, query, now)
+    return "\n".join([PAGE_HEAD % {"title": e("devloop · " + cfg.name), "now": e(clock(now))},
+                      render_metrics(snap), render_nav(shown),
+                      '<div id="tab-%s" class="tab">' % e(shown), body, "</div>",
+                      PAGE_SCRIPT + "</main></body></html>"])
+
+
+# ---------------------------------------------------------------- tab: 票
+
+def render_tickets_tab(cfg, snap, key, query, now):
+    out = []
     if key:
         out.append("<section><h2>交代新的事</h2><form method='post' action='request' class='ask'>"
                    "<textarea name='text' data-draft='request' rows='5' maxlength='8000' required "
                    "placeholder='像跟主線說話一樣寫:要做什麼、為什麼'></textarea>"
                    "<div><button>交給開題者</button> <span class='quiet'>跟在主線下 ticket_creator.py "
                    "一樣;網頁來的文字會先做注入檢查。</span></div></form></section>")
-    out.append('<section><h2>四個指標</h2><div class="cards">')
-    for label, key, note in (("每張落地票的 token(中位,含快取讀)", "tokens", "越少越好"),
-                             ("每張落地票的時間(中位)", "minutes", "派工到落地"),
-                             ("一次就過", "first_pass", "第 1 輪就合進、沒改過票"),
-                             ("每張票要你介入幾次", "asks", "決定頁與環境頁 ÷ 落地或卡住的票"),
-                             ("等你處理的", "waiting", "未讀頁 + 卡住的票")):
-        out.append('<div class="card"><div class="k">%s</div><div class="v">%s</div><div class="n">%s</div></div>'
-                   % (e(label), e(m[key]), e(note)))
-    out.append("</div></section>")
 
     out.append('<section><h2>票</h2><div class="scroll"><table><tr><th>票</th><th>狀態</th><th>輪</th>'
                '<th>整合分支</th><th>相依</th><th>一起驗</th><th>驗證者</th><th>覆核</th><th>token</th>'
@@ -219,9 +263,32 @@ def render(cfg, snap, key=None):
         out.append("<tr><td>%s</td><td class='num'>%s</td><td class='num'>%s</td><td>%s</td></tr>" % (
             e(path), e(len(text)), e(len(memory.pending(snap, layer, name))), e(last.get(path) or "")))
     out.append("</table></div></section>")
-    out.append(PAGE_SCRIPT + "</main></body></html>")
     return "\n".join(out)
 
+
+def stub_tab(heading):
+    return "<section><h2>%s</h2><p class='quiet'>還沒有內容。</p></section>" % e(heading)
+
+
+# ---------------------------------------------------------------- tab: DAG
+
+def render_dag_tab(cfg, snap, query, now):
+    return stub_tab("DAG")
+
+
+# ---------------------------------------------------------------- tab: Token
+
+def render_tokens_tab(cfg, snap, query, now):
+    return stub_tab("Token")
+
+
+# ---------------------------------------------------------------- tab: 主機
+
+def render_host_tab(cfg, snap, query, now):
+    return stub_tab("主機")
+
+
+# ---------------------------------------------------------------- web input
 
 def jobs_dir(cfg):
     return os.path.join(cfg.worktree_root, "runs", "web")
@@ -291,6 +358,9 @@ tr.s-stuck td:nth-child(2){color:var(--bad);font-weight:700}tr.s-running td:nth-
 .page.k-landed,.page.k-created{border-left-color:var(--accent)}.ph{color:var(--quiet);font-size:12px}
 pre{white-space:pre-wrap;margin:6px 0 0;font:13px/1.5 ui-monospace,Menlo,monospace}code{font-family:ui-monospace,Menlo,monospace}
 form.ask{display:grid;gap:8px;margin-top:8px}textarea{width:100%%;box-sizing:border-box;font:14px/1.5 inherit;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+nav.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line)}nav.tabs a{padding:6px 14px;color:var(--quiet);text-decoration:none;border-radius:8px 8px 0 0}
+nav.tabs a[aria-current=page]{color:var(--ink);font-weight:700;background:var(--card);border:1px solid var(--line);border-bottom-color:var(--card);margin-bottom:-1px}
+.tab{display:grid;gap:28px}
 button{font:inherit;padding:6px 12px;border-radius:8px;border:1px solid var(--accent);background:var(--card);color:var(--ink);cursor:pointer}button:focus-visible,textarea:focus-visible{outline:2px solid var(--accent)}
 </style></head><body><main><header><h1>%(title)s</h1><div class="quiet">%(now)s · 沒在打字時每 30 秒更新 · 只讀票庫,輸入交給開題者</div></header>"""
 
@@ -345,11 +415,16 @@ def authorized(key, headers):
 def key_redirect(url):
     """Where ?key= goes: the same last path segment and the other query pairs, relative, keyless."""
     rest = [(k, v) for k, v in parse_qsl(url.query, keep_blank_values=True) if k != "key"]
-    return "./" + url.path.rsplit("/", 1)[-1] + ("?" + urlencode(rest) if rest else "")
+    return "./" + last_segment(url) + ("?" + urlencode(rest) if rest else "")
+
+
+def last_segment(url):
+    """Routing looks only at the last path segment, so the board works under any path prefix."""
+    return url.path.rsplit("/", 1)[-1]
 
 
 def serve(cfg, pool, host, port, key):
-    cache = {"at": 0.0, "page": ""}
+    cache = {"at": 0.0, "snap": None}
     lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -371,17 +446,19 @@ def serve(cfg, pool, host, port, key):
                 if not authorized(key, self.headers):
                     self._send(403, "key required")
                     return
-            if url.path not in ("/", "/index.html"):
+            if last_segment(url) not in ("", "index.html"):
                 self._send(404, "not found")
                 return
-            with lock:
-                if time.time() - cache["at"] > 5:
-                    try:
-                        cache["page"] = render(cfg, pool.snapshot(), key)
-                    except osx.OSFailure as exc:
-                        cache["page"] = "<pre>%s</pre>" % e(exc)
-                    cache["at"] = time.time()
-                page = cache["page"]
+            query = {k: v[0] for k, v in parse_qs(url.query).items()}
+            try:
+                with lock:
+                    if cache["snap"] is None or time.time() - cache["at"] > 5:
+                        cache["snap"] = pool.snapshot()
+                        cache["at"] = time.time()
+                    snap = cache["snap"]
+                page = render(cfg, snap, key, query)
+            except osx.OSFailure as exc:
+                page = "<pre>%s</pre>" % e(exc)
             self._send(200, page, "text/html; charset=utf-8")
 
         def do_POST(self):
@@ -402,13 +479,13 @@ def serve(cfg, pool, host, port, key):
             form = {k: v[0] for k, v in parse_qs(self.rfile.read(size).decode("utf-8", "replace")).items()}
             text = form.get("text", "").strip()
             try:
-                if url.path == "/request":
+                if last_segment(url) == "request":
                     if not text:
                         self._send(400, "empty request")
                         return
                     submit(cfg, "新需求", ["--request-file", "{input}", "--via", "web"], text)
                     sent = "request"
-                elif url.path == "/answer":
+                elif last_segment(url) == "answer":
                     ticket, page, decision = form.get("ticket", ""), form.get("page", ""), form.get("decision", "")
                     if not re.fullmatch(r"[0-9A-Za-z_-]{1,40}", ticket) or \
                             not re.fullmatch(r"[0-9A-Za-z_,.-]{1,120}", page) or \
@@ -428,7 +505,7 @@ def serve(cfg, pool, host, port, key):
             except osx.OSFailure as exc:
                 self._send(500, str(exc))
                 return
-            cache["at"] = 0.0
+            cache["snap"] = None
             self.send_response(303)
             self.send_header("Location", "./?sent=" + quote(sent))
             self.send_header("Content-Length", "0")
@@ -464,6 +541,7 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("html")
     p.add_argument("--out")
+    p.add_argument("--query", default="", help="the page's query, e.g. tab=dag")
     p = sub.add_parser("serve")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8765)
@@ -473,7 +551,8 @@ def main(argv=None):
         cfg = Config()
         pool = pool_for(cfg)
         if args.cmd == "html":
-            page = render(cfg, pool.snapshot())     # a file has no key: read-only
+            query = {k: v[0] for k, v in parse_qs(args.query).items()}
+            page = render(cfg, pool.snapshot(), query=query)     # a file has no key: read-only
             if args.out:
                 osx.atomic_write(args.out, page)
             else:
