@@ -8058,6 +8058,168 @@ class T24Acceptance(LoopCase):
         self.assertTrue([ln for ln in res.stdout.splitlines() if ln.split()[:1] == ["g1"]], res.stdout)
 
 
+class T46Acceptance(LoopCase):
+    """Ticket #46: behind a local reverse proxy, a user named in board.trusted_user_header and
+    listed in board.allowed_users gets in without the key (D-091 item 4)."""
+
+    HEADER = "X-Auth-Request-Email"
+    # the page head mentions 交給開題者 on a read-only board too: look for the form itself
+    FORM = r"<form[^>]*action=['\"]?(\./)?request['\"\s>]"
+
+    def board_settings(self, board):
+        path = os.path.join(self.proj, "board", "config.json")
+        with open(path) as fh:
+            cfg = json.load(fh)
+        cfg["board"] = board
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
+
+    def free_port(self):
+        import socket
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        return port
+
+    def start(self, *extra):
+        port = self.free_port()
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "board.py"), "serve", "--port", str(port)]
+                                + list(extra), cwd=self.proj, env=self.env, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True)
+        self.addCleanup(proc.kill)
+        return port
+
+    def call(self, port, method, path, headers=None, body=None):
+        """(status, Location, body text); retries connecting for up to 5 s; a 303 is not followed."""
+        import http.client
+        deadline = time.time() + 5
+        while True:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            try:
+                h = {"Content-Type": "application/x-www-form-urlencoded"}
+                h.update(headers or {})
+                conn.request(method, path, body=body, headers=h)
+                resp = conn.getresponse()
+                return resp.status, resp.getheader("Location"), resp.read().decode("utf-8", "replace")
+            except OSError:
+                if time.time() > deadline:
+                    raise
+                time.sleep(0.1)
+            finally:
+                conn.close()
+
+    def web_jobs(self):
+        try:
+            return sorted(os.listdir(os.path.join(self.tmp, "wt", "runs", "web")))
+        except FileNotFoundError:
+            return []
+
+    def key_file(self):
+        key = os.path.join(self.tmp, "key")
+        with open(key, "w") as fh:
+            fh.write("s3cret\n")
+        return key
+
+    # ------------------------------------------------------------ item 1
+
+    def test_item1_trusted_user_rule(self):
+        import inspect
+        import board
+        self.assertTrue(hasattr(board, "trusted_user"), "board.trusted_user is missing")
+        self.assertEqual(list(inspect.signature(board.trusted_user).parameters),
+                         ["settings", "bind_host", "peer_host", "header_value"])
+        s = {"trusted_user_header": "X-Auth-Request-Email", "allowed_users": ["a@x.com"]}
+        cases = [
+            (s, "127.0.0.1", "127.0.0.1", " A@X.com ", "a@x.com"),
+            (s, "127.0.0.1", "127.0.0.1", "a@x.com", "a@x.com"),
+            (s, "::1", "::1", "a@x.com", "a@x.com"),
+            (s, "localhost", "::ffff:127.0.0.1", "a@x.com", "a@x.com"),
+            (s, "127.0.0.1", "127.0.0.1", "b@x.com", None),
+            (s, "127.0.0.1", "10.0.0.5", "a@x.com", None),
+            (s, "0.0.0.0", "127.0.0.1", "a@x.com", None),
+            (s, "127.0.0.1", "127.0.0.1", None, None),
+            ({"trusted_user_header": "X-Auth-Request-Email", "allowed_users": []},
+             "127.0.0.1", "127.0.0.1", "a@x.com", None),
+            ({"allowed_users": ["a@x.com"]}, "127.0.0.1", "127.0.0.1", "a@x.com", None),
+            ({"trusted_user_header": "", "allowed_users": ["a@x.com"]}, "127.0.0.1", "127.0.0.1", "a@x.com", None),
+        ]
+        for settings, bind, peer, value, want in cases:
+            with self.subTest(settings=settings, bind=bind, peer=peer, value=value):
+                self.assertEqual(board.trusted_user(settings, bind, peer, value), want)
+
+    # ------------------------------------------------------------ item 2
+
+    def test_item2_listed_user_gets_in_without_the_key(self):
+        import re
+        self.board_settings({"trusted_user_header": self.HEADER, "allowed_users": ["a@x.com"]})
+        port = self.start("--host", "127.0.0.1", "--key-file", self.key_file())
+        status, _, page = self.call(port, "GET", "/", {self.HEADER: "a@x.com"})
+        self.assertEqual(status, 200, page[:300])
+        self.assertTrue(re.search(self.FORM, page), "the request form (交給開題者)")
+        before = self.web_jobs()
+        status, location, body = self.call(port, "POST", "/request", {self.HEADER: "a@x.com"}, "text=x")
+        self.assertEqual((status, location), (303, "./?sent=request"), body[:300])
+        self.assertGreater(len(self.web_jobs()), len(before), "a new folder under <worktrees>/runs/web/")
+
+    def test_item2_unlisted_user_is_refused(self):
+        self.board_settings({"trusted_user_header": self.HEADER, "allowed_users": ["a@x.com"]})
+        port = self.start("--host", "127.0.0.1", "--key-file", self.key_file())
+        # the listed user must get in first, so the 403s below are the allow list, not a board that reads no header
+        self.assertEqual(self.call(port, "GET", "/", {self.HEADER: "a@x.com"})[0], 200)
+        self.assertEqual(self.call(port, "GET", "/", {self.HEADER: "b@x.com"})[0], 403)
+        self.assertEqual(self.call(port, "POST", "/request", {self.HEADER: "b@x.com"}, "text=x")[0], 403)
+        self.assertEqual(self.web_jobs(), [])
+
+    def test_item2_listed_user_on_0000_is_refused(self):
+        self.board_settings({"trusted_user_header": self.HEADER, "allowed_users": ["a@x.com"]})
+        # a trusted request on 127.0.0.1 must succeed first, so a 403 below is the rule, not a dead board
+        port = self.start("--host", "127.0.0.1", "--key-file", self.key_file())
+        self.assertEqual(self.call(port, "GET", "/", {self.HEADER: "a@x.com"})[0], 200)
+        port = self.start("--host", "0.0.0.0", "--key-file", self.key_file())
+        self.assertEqual(self.call(port, "GET", "/", {self.HEADER: "a@x.com"})[0], 403)
+
+    # ------------------------------------------------------------ item 3
+
+    def test_item3_without_key_file_listed_user_may_submit(self):
+        import re
+        self.board_settings({"trusted_user_header": self.HEADER, "allowed_users": ["a@x.com"]})
+        port = self.start()
+        status, _, page = self.call(port, "GET", "/", {self.HEADER: "a@x.com"})
+        self.assertEqual(status, 200)
+        self.assertTrue(re.search(self.FORM, page), "the listed user gets the forms")
+        status, location, body = self.call(port, "POST", "/request", {self.HEADER: "a@x.com"}, "text=x")
+        self.assertEqual(status, 303, body[:300])
+        status, _, page = self.call(port, "GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn("四個指標", page)
+        self.assertFalse(re.search(self.FORM, page), "no header: no request form, as today")
+        self.assertEqual(self.call(port, "POST", "/request", None, "text=x")[0], 403)
+
+    # ------------------------------------------------------------ item 4
+
+    def assert_refused_at_start(self, board, name):
+        self.board_settings(board)
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "board.py"), "serve", "--port", "0"],
+                                cwd=self.proj, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True)
+        self.addCleanup(proc.kill)
+        try:
+            out, err = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            out, err = None, None
+        self.assertIsNotNone(out, "board.py serve kept running under %r instead of exiting 2" % (board,))
+        self.assertEqual(proc.returncode, 2, err)
+        self.assertNotIn("board: http://", out, "exits before listening")
+        self.assertIn(name, err)
+
+    def test_item4_bad_trusted_user_header_exits_2(self):
+        self.assert_refused_at_start({"trusted_user_header": ""}, "board.trusted_user_header")
+
+    def test_item4_bad_allowed_users_exits_2(self):
+        self.assert_refused_at_start({"allowed_users": "a@x.com"}, "board.allowed_users")
+
+
 class T18Acceptance(unittest.TestCase):
     """#18: agent-control's memory/ is its consolidated memory, named by its config."""
 
