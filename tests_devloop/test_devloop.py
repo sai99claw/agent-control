@@ -5523,7 +5523,7 @@ class BoardTabs(LoopCase):
     def test_stub_tabs_get_their_query_and_now(self):
         import board
         from core.config import Config
-        for name, label in (("dag", "DAG"), ("tokens", "Token"), ("host", "主機")):
+        for name, label in (("tokens", "Token"), ("host", "主機")):
             page = board.render(Config(self.proj), self.snap(), query={"tab": name}, now=0)
             self.assertIn('<div id="tab-%s" class="tab">' % name, page)
             self.assertIn("<h2>%s</h2>" % label, page)
@@ -6547,6 +6547,225 @@ class T12Acceptance(LoopCase):
                 self.assertIn("The project's last full run took 30 seconds.", self.opener_prompt())
 
 
+class T42Acceptance(LoopCase):
+    """#42: the DAG tab draws the ticket DAG and highlights the chains stuck behind a blocker.
+    Expected values come from the ticket and the fixture below, never from the code."""
+
+    NS = "{http://www.w3.org/2000/svg}"
+
+    def fixture(self):
+        self.add(1, state="stuck", group="g1")
+        self.add(2, deps=[1])
+        self.add(3, deps=[2])
+        self.add(4, state="cancelled")
+        self.add(5, deps=[4])
+        self.add(6, state="landed", group="g1")
+        self.add(7, deps=[6])
+        self.add(8, state="merged", group="g2")
+        self.add(9, deps=[8])
+        self.add(10, deps=[6], state="running", group="g3")
+
+        def groups(tx):
+            tx.put_group({"id": "g1", "state": "landed", "members": ["1", "6"], "branch": "int/g1"})
+            tx.put_group({"id": "g2", "state": "stuck", "members": ["8"], "branch": "int/g2"})
+            tx.put_group({"id": "g3", "state": "open", "members": ["10"], "branch": "int/g3"})
+        self.pool.update(groups, "test: groups")
+
+    def page(self, done=False):
+        import board
+        from core.config import Config
+        query = {"tab": "dag"}
+        if done:
+            query["done"] = "1"
+        return board.render(Config(self.proj), self.snap(), query=query)
+
+    def tab_body(self, page):
+        import board
+        start = page.index('<div id="tab-dag" class="tab">')
+        end = page.index(board.PAGE_SCRIPT, start)
+        return page[start:end]
+
+    def svg(self, page):
+        import re
+        import xml.etree.ElementTree as ET
+        prefix = '<svg id="dag" xmlns="http://www.w3.org/2000/svg"'
+        self.assertEqual(page.count(prefix), 1, "one <svg id=\"dag\" xmlns=...> expected")
+        m = re.search(r'<svg id="dag".*?</svg>', page, re.S)
+        self.assertIsNotNone(m)
+        try:
+            return ET.fromstring(m.group(0))
+        except ET.ParseError as exc:
+            self.fail("the DAG svg does not parse: %s" % exc)
+
+    @staticmethod
+    def classes(el):
+        return (el.get("class") or "").split()
+
+    def nodes(self, root):
+        return {el.get("data-id"): el for el in root.iter(self.NS + "g") if "node" in self.classes(el)}
+
+    def edges(self, root):
+        return [el for el in root.iter() if "edge" in self.classes(el)]
+
+    def lanes(self, root):
+        return [el for el in root.iter(self.NS + "g") if "lane" in self.classes(el)]
+
+    # ---- item 1
+    def test_tab_has_one_parsable_svg(self):
+        self.fixture()
+        root = self.svg(self.page())
+        self.assertEqual(root.tag, self.NS + "svg")
+        self.assertEqual(root.get("id"), "dag")
+
+    # ---- item 2
+    def test_shown_tickets_and_node_markup(self):
+        self.fixture()
+        import board
+        snap = self.snap()
+        for done, want in ((False, {"1", "2", "3", "4", "5", "7", "8", "9", "10"}),
+                           (True, {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"})):
+            with self.subTest(done=done):
+                root = self.svg(self.page(done))
+                count = sum(1 for el in root.iter(self.NS + "g") if "node" in self.classes(el))
+                nodes = self.nodes(root)
+                self.assertEqual(count, len(want))
+                self.assertEqual(set(nodes), want)
+                parent = {c: p for p in root.iter() for c in p}
+                for ident, node in nodes.items():
+                    t = snap.tickets[ident]
+                    self.assertIn("s-" + t["state"], self.classes(node), ident)
+                    self.assertEqual(node.get("data-state"), t["state"], ident)
+                    self.assertEqual(node.get("data-group"), t.get("group") or "", ident)
+                    self.assertIsNotNone(node.get("data-layer"), ident)
+                    titles = list(node.iter(self.NS + "title"))
+                    self.assertTrue(titles, ident)
+                    self.assertTrue(("".join(titles[0].itertext())).startswith("#%s ticket %s" % (ident, ident)),
+                                    ident)
+                    up = parent.get(node)
+                    self.assertIsNotNone(up, ident)
+                    self.assertEqual(up.tag, self.NS + "a", ident)
+                    self.assertEqual(up.get("href"), "?ticket=%s" % ident, ident)
+
+    def test_ticket_outside_dag_is_shown(self):
+        def change(tx):
+            tx.put_ticket({"id": "11", "title": "ticket 11", "objective": "o", "acceptance": ["a"],
+                           "state": "ready", "round": 0, "feedback": [], "cases": None})
+        self.pool.update(change, "test: #11 outside dag")
+        root = self.svg(self.page())
+        self.assertEqual(set(self.nodes(root)), {"11"})
+        self.assertEqual(self.nodes(root)["11"].get("data-layer"), "0")
+
+    # ---- item 3
+    def test_layers(self):
+        self.fixture()
+        for done, want in ((False, {"1": 0, "2": 1, "3": 2, "4": 0, "5": 1, "7": 0, "8": 0, "9": 1, "10": 0}),
+                           (True, {"1": 0, "2": 1, "3": 2, "4": 0, "5": 1, "6": 0, "7": 1, "8": 0, "9": 1,
+                                   "10": 1})):
+            with self.subTest(done=done):
+                nodes = self.nodes(self.svg(self.page(done)))
+                self.assertEqual({i: n.get("data-layer") for i, n in nodes.items()},
+                                 {i: str(v) for i, v in want.items()})
+
+    # ---- item 4 (and the chain part of item 6)
+    def test_edges_and_chains(self):
+        self.fixture()
+        for done, want, chain in (
+                (False, {("1", "2"), ("2", "3"), ("4", "5"), ("8", "9")},
+                 {("1", "2"), ("2", "3"), ("4", "5"), ("8", "9")}),
+                (True, {("1", "2"), ("2", "3"), ("4", "5"), ("8", "9"), ("6", "7"), ("6", "10")},
+                 {("1", "2"), ("2", "3"), ("4", "5"), ("8", "9")})):
+            with self.subTest(done=done):
+                edges = self.edges(self.svg(self.page(done)))
+                pairs = [(el.get("data-from"), el.get("data-to")) for el in edges]
+                self.assertEqual(sorted(pairs), sorted(want))
+                self.assertEqual({(el.get("data-from"), el.get("data-to")) for el in edges
+                                  if "chain" in self.classes(el)}, chain)
+
+    # ---- item 5
+    def test_lanes(self):
+        import board
+        self.fixture()
+        snap = self.snap()
+        for done in (False, True):
+            with self.subTest(done=done):
+                root = self.svg(self.page(done))
+                lanes = self.lanes(root)
+                self.assertEqual([el.get("data-group") for el in lanes], ["g1", "g2", "g3", ""])
+                for lane in lanes:
+                    gid = lane.get("data-group")
+                    texts = ["".join(t.itertext()) for t in lane.iter(self.NS + "text")]
+                    if gid:
+                        label = board.group_state_text(snap.groups[gid])
+                        self.assertTrue(any(gid in s and label in s for s in texts), (gid, label, texts))
+                    else:
+                        self.assertTrue(any("未分組" in s for s in texts), texts)
+                labels = {el.get("data-group"): " ".join("".join(t.itertext()) for t in el.iter(self.NS + "text"))
+                          for el in lanes}
+                self.assertIn("已落地", labels["g1"])
+                self.assertIn("卡住", labels["g2"])
+                self.assertIn("收票中", labels["g3"])
+                for ident, node in self.nodes(root).items():
+                    lane = [el for el in lanes if el.get("data-group") == node.get("data-group")]
+                    self.assertEqual(len(lane), 1, ident)
+                    self.assertIn(node, list(lane[0].iter()), ident)
+                members = {el.get("data-group"): sorted(n.get("data-id") for n in el.iter(self.NS + "g")
+                                                        if "node" in self.classes(n)) for el in lanes}
+                want = {"g1": ["1", "6"] if done else ["1"], "g2": ["8"], "g3": ["10"],
+                        "": sorted(["2", "3", "4", "5", "7", "9"])}
+                self.assertEqual(members, want)
+
+    def test_no_ungrouped_lane_when_all_grouped(self):
+        self.add(1, group="g1", state="merged")
+        self.pool.update(lambda tx: tx.put_group({"id": "g1", "state": "open", "members": ["1"],
+                                                  "branch": "int/g1"}), "test: g1")
+        lanes = self.lanes(self.svg(self.page()))
+        self.assertEqual([el.get("data-group") for el in lanes], ["g1"])
+
+    # ---- item 6
+    def test_blocked_and_blockers(self):
+        self.fixture()
+        for done in (False, True):
+            with self.subTest(done=done):
+                nodes = self.nodes(self.svg(self.page(done)))
+                blocked = {i: n.get("data-blocked-by") for i, n in nodes.items() if "blocked" in self.classes(n)}
+                self.assertEqual(blocked, {"2": "1", "3": "1", "5": "4", "9": "8"})
+                self.assertEqual({i for i, n in nodes.items() if "blocker" in self.classes(n)}, {"1", "4", "8"})
+
+    def test_blocked_by_lists_every_blocker_sorted(self):
+        self.add(10, state="stuck")
+        self.add(9, state="cancelled")
+        self.add(3, deps=[10, 9])
+        nodes = self.nodes(self.svg(self.page()))
+        self.assertEqual(nodes["3"].get("data-blocked-by"), "9 10")
+
+    # ---- item 7
+    def test_legend(self):
+        import board
+        self.add(1)
+        body = self.tab_body(self.page())
+        for label in sorted(set(board.STATE_TEXT.values())) + ["被卡住", "卡住的源頭"]:
+            self.assertIn(label, body, label)
+
+    # ---- item 8
+    def test_done_toggle_link(self):
+        import html
+        import re
+        self.fixture()
+        for done, href, text in ((False, "?tab=dag&done=1", "顯示已落地與已取消"),
+                                 (True, "?tab=dag", "收起已落地與已取消")):
+            with self.subTest(done=done):
+                body = self.tab_body(self.page(done))
+                links = [(html.unescape(m.group(1)), re.sub(r"<[^>]*>", "", m.group(2)).strip())
+                         for m in re.finditer(r'<a\b[^>]*?\bhref=["\']([^"\']*)["\'][^>]*>(.*?)</a>', body, re.S)]
+                self.assertIn((href, text), links)
+
+    # ---- item 9
+    def test_nothing_to_show(self):
+        body = self.tab_body(self.page())
+        self.assertIn("沒有要顯示的票", body)
+        self.assertNotIn("<svg", body)
+
+
 class DagRules(unittest.TestCase):
     def test_problems(self):
         dag = {"1": {"depends_on": ["2"]}, "2": {"depends_on": ["1"]}, "3": {"depends_on": ["9"]},
@@ -6564,6 +6783,98 @@ class DagRules(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DagTabUnit(LoopCase):
+    """Helpers of the board's DAG tab (#42): blockers, blocked chains, shown set, layers, lanes, speed."""
+
+    def fake(self, tickets, dag, groups=None):
+        from types import SimpleNamespace
+        return SimpleNamespace(tickets=dict((str(k), dict(v, id=str(k))) for k, v in tickets.items()),
+                               dag=dict((str(k), {"depends_on": [str(d) for d in v]}) for k, v in dag.items()),
+                               groups=groups or {})
+
+    def test_blockers_and_blocked(self):
+        import board
+        snap = self.fake({1: {"state": "stuck"}, 2: {"state": "ready"}, 3: {"state": "landed"},
+                          4: {"state": "ready"}, 5: {"state": "merged", "group": "g2"},
+                          6: {"state": "merged", "group": "g3"}, 7: {"state": "ready"},
+                          8: {"state": "cancelled"}, 9: {"state": "running"}, 10: {"state": "ready"}},
+                         {2: [1], 4: [3], 7: [5, 6, 8, 2], 9: [1], 10: [11]},
+                         {"g2": {"id": "g2", "state": "stuck"}, "g3": {"id": "g3", "state": "open"}})
+        blockers = board.dag_blockers(snap)
+        self.assertEqual(blockers, {"1", "5", "8"})
+        blocked = board.dag_blocked(snap, blockers)
+        # 4 waits on a landed ticket, 9 is running, 10 waits on a ticket missing from the pool
+        self.assertEqual(blocked, {"2": ["1"], "7": ["1", "5", "8"]})
+
+    def test_blocked_stops_at_landed_and_at_blockers(self):
+        import board
+        snap = self.fake({1: {"state": "stuck"}, 2: {"state": "landed"}, 3: {"state": "cancelled"},
+                          4: {"state": "ready"}, 5: {"state": "ready"}},
+                         {2: [1], 3: [1], 4: [2], 5: [3]})
+        blocked = board.dag_blocked(snap, board.dag_blockers(snap))
+        self.assertEqual(blocked, {"5": ["3"]})
+
+    def test_blocked_by_sorts_numerically_and_survives_cycles(self):
+        import board
+        snap = self.fake({2: {"state": "stuck"}, 10: {"state": "stuck"}, 3: {"state": "ready"},
+                          4: {"state": "ready"}}, {3: [10, 4], 4: [3, 2]})
+        self.assertEqual(board.dag_blocked(snap, board.dag_blockers(snap))["3"], ["2", "10"])
+
+    def test_shown_and_layers(self):
+        import board
+        snap = self.fake({1: {"state": "landed"}, 2: {"state": "ready"}, 3: {"state": "ready"},
+                          4: {"state": "cancelled"}, 5: {"state": "cancelled"}, 6: {"state": "ready"}},
+                         {2: [1], 3: [2, 1], 6: [4]})
+        blocked = board.dag_blocked(snap, board.dag_blockers(snap))
+        shown = board.dag_shown(snap, blocked, False)
+        self.assertEqual(shown, {"2", "3", "4", "6"})
+        self.assertEqual(board.dag_layers(snap, shown), {"2": 0, "3": 1, "4": 0, "6": 1})
+        everything = board.dag_shown(snap, blocked, True)
+        self.assertEqual(everything, {"1", "2", "3", "4", "5", "6"})
+        self.assertEqual(board.dag_layers(snap, everything)["3"], 2)
+
+    def test_lanes_in_group_number_order_ungrouped_last(self):
+        import board
+        snap = self.fake({1: {"state": "ready", "group": "g10"}, 2: {"state": "ready", "group": "g9"},
+                          3: {"state": "ready"}, 4: {"state": "ready", "group": "g7"}}, {},
+                         {"g9": {"id": "g9", "state": "open"}, "g10": {"id": "g10", "state": "stuck"}})
+        lanes = board.dag_lanes(snap, {"1", "2", "3"})
+        self.assertEqual(lanes, [("g9", "收票中"), ("g10", "卡住"), ("", "未分組")])
+        self.assertEqual(board.dag_lanes(snap, {"4"}), [("g7", board.UNKNOWN)])
+
+    def test_svg_escapes_titles(self):
+        import board
+        import xml.etree.ElementTree as ET
+        snap = self.fake({1: {"state": "ready", "title": "a <b> & 'c' \"d\""}}, {})
+        svg = board.dag_svg(snap, {"1"}, {"1": 0}, {}, set())
+        root = ET.fromstring(svg)
+        ns = "{http://www.w3.org/2000/svg}"
+        self.assertEqual(root.find(".//%stitle" % ns).text, "#1 a <b> & 'c' \"d\"")
+
+    def test_forty_tickets_in_eight_groups_under_a_second(self):
+        import board
+        from core.config import Config
+
+        def change(tx):
+            dag = tx.data.dag
+            for n in range(1, 41):
+                state = ("ready", "running", "merged", "stuck", "cancelled", "landed")[n % 6]
+                tx.put_ticket({"id": str(n), "title": "ticket %d" % n, "state": state,
+                               "group": "g%d" % (1 + n % 8), "round": 0, "feedback": []})
+                dag[str(n)] = {"depends_on": [str(d) for d in (n - 1, n - 3, n - 7) if d > 0], "verify": "together"}
+            tx.put_dag({"tickets": dag})
+            for g in range(1, 9):
+                tx.put_group({"id": "g%d" % g, "members": [], "state": ("open", "stuck", "pr", "landed")[g % 4]})
+        self.pool.update(change, "test: forty")
+        cfg, snap = Config(self.proj), self.snap()
+        start = time.monotonic()
+        page = board.render(cfg, snap, query={"tab": "dag", "done": "1"})
+        took = time.monotonic() - start
+        self.assertEqual(page.count('class="lane"'), 8)
+        self.assertEqual(page.count('<g class="node '), 40)
+        self.assertLess(took, 1.0)
 
 
 class LastFullSecondsUnit(unittest.TestCase):
@@ -6592,6 +6903,317 @@ class LastFullSecondsUnit(unittest.TestCase):
         text = ticket_creator.limits_section(cfg)
         self.assertIn("limited to 75 seconds", text)
         self.assertIn("took 30 seconds.", text)
+
+
+class T43Acceptance(LoopCase):
+    """Ticket #43: the Token tab shows where tokens and dollars went, from every cost row in the
+    pool (tickets, integration branches, memory runs). Expected values are worked out by hand from
+    the ticket's fixture."""
+
+    MEASURES = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "usd")
+    TITLES = ("近 30 天", "每天", "依角色", "依模型", "每張落地票", "最貴的十張", "估計與實際")
+
+    def setUp(self):
+        super().setUp()
+        old_tz = os.environ.get("TZ")
+
+        def restore():
+            if old_tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = old_tz
+            time.tzset()
+        self.addCleanup(restore)
+        os.environ["TZ"] = "UTC"
+        time.tzset()
+        import calendar
+        self.now = calendar.timegm((2026, 11, 6, 12, 0, 0))
+
+        def row(role, model, at, i, o, cr, cw, usd):
+            return {"role": role, "model": model, "at": at, "input_tokens": i, "output_tokens": o,
+                    "cache_read_tokens": cr, "cache_write_tokens": cw, "usd": usd}
+        self.add(1, state="landed", complexity="simple", token_estimate=100000,
+                 cost=[row("worker", "sonnet", "2026-11-06T10:00:00Z", 10, 1000, 50000, 2000, 0.50),
+                       row("verifier", "opus", "2026-11-05T09:00:00Z", 20, 2000, 100000, 3000, 1.00)])
+        self.add(2, state="landed", complexity="complex", token_estimate=50000,
+                 cost=[row("worker", "opus", "2026-11-03T11:00:00Z", None, None, None, None, None)])
+        self.add(3, state="stuck", cost=[row("worker", "opus", "2026-10-01T00:00:00Z", 5, 5, 0, 0, 3.00)])
+        self.pool.update(lambda tx: tx.put_group({
+            "id": "g1", "state": "landed", "members": ["1"],
+            "cost": [row("fixer", "opus", "2026-11-06T08:00:00Z", 1, 100, 1000, 10, 0.10)]}), "test: g1")
+        self.pool.update(lambda tx: tx.write("memory/state.json", {"runs": [{"cost": [
+            row("consolidator", "fable", "2026-11-04T00:00:00Z", 2, 200, 0, 0, 0.02)]}]}), "test: memory")
+
+    # ------------------------------------------------------------ helpers
+
+    def page(self):
+        import inspect
+        import board
+        self.assertTrue(hasattr(board, "render_tokens_tab"), "no render_tokens_tab")
+        params = inspect.signature(board.render).parameters
+        for name in ("query", "now"):
+            self.assertIn(name, params, "render() takes %s" % name)
+        from core.config import Config
+        page = board.render(Config(self.proj), self.snap(), query={"tab": "tokens"}, now=self.now)
+        at = page.find('id="tab-tokens"')
+        self.assertGreaterEqual(at, 0, "no Token tab element")
+        return page[page.find(">", at) + 1:]
+
+    @staticmethod
+    def squash(text):
+        return "".join(text.split())
+
+    def parse(self, body):
+        """Walk the tab: a stream of ('text', block text) and ('table', table) items in page order,
+        and the svg charts. A table: {'caption', 'rows': [{'kind': 'th'|'td', 'cells', 'hrefs'}]}.
+        A chart: {'measure', 'bars': [rect attrs]}."""
+        from html.parser import HTMLParser
+        blocks = {"p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "section", "br", "table",
+                  "caption", "header", "footer", "ul", "ol", "dl", "dt", "dd", "svg", "details",
+                  "summary", "figcaption", "figure"}
+
+        class P(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.stream, self.charts = [], []
+                self.buf = []
+                self.table = None
+                self.row = None
+                self.cell = None
+                self.caption = False
+                self.skip = 0
+                self.svg = None
+
+            def flush(self):
+                text = " ".join("".join(self.buf).split())
+                self.buf = []
+                if text:
+                    self.stream.append(("text", text))
+
+            def handle_starttag(self, tag, attrs):
+                a = dict(attrs)
+                if tag in ("style", "script"):
+                    self.skip += 1
+                    return
+                if tag == "svg":
+                    self.svg = {"measure": a.get("data-measure"),
+                                "chart": "chart" in (a.get("class") or "").split(), "bars": []}
+                    self.charts.append(self.svg)
+                if tag == "rect" and self.svg is not None and "bar" in (a.get("class") or "").split():
+                    self.svg["bars"].append(a)
+                if self.table is None and tag in blocks:
+                    self.flush()
+                if tag == "table":
+                    self.table = {"caption": "", "rows": []}
+                    self.stream.append(("table", self.table))
+                elif self.table is not None:
+                    if tag == "caption":
+                        self.caption = True
+                    elif tag == "tr":
+                        self.row = {"kind": "th", "cells": [], "hrefs": []}
+                        self.table["rows"].append(self.row)
+                    elif tag in ("td", "th") and self.row is not None:
+                        if tag == "td":
+                            self.row["kind"] = "td"
+                        self.cell = []
+                        self.row["cells"].append(self.cell)
+                    elif tag == "a" and self.row is not None:
+                        self.row["hrefs"].append(a.get("href") or "")
+
+            def handle_startendtag(self, tag, attrs):
+                self.handle_starttag(tag, attrs)
+                if tag in ("svg",):
+                    self.svg = None
+
+            def handle_endtag(self, tag):
+                if tag in ("style", "script"):
+                    self.skip = max(0, self.skip - 1)
+                    return
+                if tag == "svg":
+                    self.svg = None
+                if tag == "table" and self.table is not None:
+                    for r in self.table["rows"]:
+                        r["cells"] = [" ".join("".join(c).split()) for c in r["cells"]]
+                    self.table = self.row = self.cell = None
+                    return
+                if self.table is not None:
+                    if tag == "caption":
+                        self.caption = False
+                    elif tag in ("td", "th"):
+                        self.cell = None
+                    return
+                if tag in blocks:
+                    self.flush()
+
+            def handle_data(self, data):
+                if self.skip or self.svg is not None:
+                    return
+                if self.table is not None:
+                    if self.caption:
+                        self.table["caption"] += data
+                    elif self.cell is not None:
+                        self.cell.append(data)
+                    return
+                self.buf.append(data)
+
+        p = P()
+        p.feed(body)
+        p.close()
+        p.flush()
+        return p.stream, p.charts
+
+    def find_table(self, stream, title):
+        """The first table whose caption, or the last text block before it, holds the title."""
+        want = self.squash(title)
+        last = ""
+        for kind, item in stream:
+            if kind == "text":
+                last = item
+            else:
+                if want in self.squash(item["caption"]) or want in self.squash(last):
+                    return item
+                last = ""
+        self.fail("no table titled %s" % title)
+
+    def head_body(self, table):
+        heads = [r["cells"] for r in table["rows"] if r["kind"] == "th"]
+        self.assertTrue(heads, "table has no header row: %r" % table)
+        body = [r for r in table["rows"] if r["kind"] == "td" and r["cells"]]
+        return heads[0], body
+
+    def col(self, head, name):
+        names = [self.squash(h) for h in head]
+        self.assertIn(self.squash(name), names, "no column %s in %r" % (name, head))
+        return names.index(self.squash(name))
+
+    def window(self, stream, start, n):
+        """Squashed text of n stream items from index start on (tables as their cell text)."""
+        out = []
+        for kind, item in stream[start:start + n]:
+            if kind == "text":
+                out.append(item)
+            else:
+                out.append(item["caption"])
+                for r in item["rows"]:
+                    out.extend(r["cells"])
+        return self.squash(" ".join(out))
+
+    def days(self):
+        import datetime
+        last = datetime.date(2026, 11, 6)
+        return [(last - datetime.timedelta(days=29 - i)).isoformat() for i in range(30)]
+
+    # ------------------------------------------------------------ cases
+
+    def test_last_30_days_table(self):
+        stream, _ = self.parse(self.page())
+        head, body = self.head_body(self.find_table(stream, "近 30 天"))
+        self.assertEqual(len(body), 1, body)
+        cells = body[0]["cells"]
+        self.assertEqual(cells[self.col(head, "次數")], "5")
+        for want in ("33(1 筆未知)", "3,300(1 筆未知)", "151,000(1 筆未知)", "5,010(1 筆未知)",
+                     "$1.62(1 筆未知)"):
+            self.assertIn(want, cells)
+
+    def test_daily_table(self):
+        stream, _ = self.parse(self.page())
+        head, body = self.head_body(self.find_table(stream, "每天"))
+        date, count = self.col(head, "日期"), self.col(head, "次數")
+        self.assertEqual([r["cells"][date] for r in body], self.days())
+        by_day = dict((r["cells"][date], r["cells"]) for r in body)
+
+        def measures(day):
+            return [c for i, c in enumerate(by_day[day]) if i not in (date, count)]
+        self.assertEqual(measures("2026-11-03"), ["未知"] * 5)
+        self.assertEqual(by_day["2026-11-03"][count], "1")
+        self.assertEqual(measures("2026-11-02"), ["—"] * 5)
+        self.assertEqual(by_day["2026-11-06"][count], "2")
+        for want in ("11", "1,100", "51,000", "2,010", "$0.60"):
+            self.assertIn(want, measures("2026-11-06"))
+        self.assertEqual(by_day["2026-11-05"][count], "1")
+        for want in ("20", "2,000", "100,000", "3,000", "$1.00"):
+            self.assertIn(want, measures("2026-11-05"))
+
+    def test_daily_bars(self):
+        _, charts = self.parse(self.page())
+        charts = [c for c in charts if c["chart"] and c["measure"]]
+        self.assertEqual(sorted(c["measure"] for c in charts), sorted(self.MEASURES))
+        values = {}
+        for c in charts:
+            self.assertEqual([b.get("data-day") for b in c["bars"]], self.days(), c["measure"])
+            values[c["measure"]] = dict((b.get("data-day"), b.get("data-value")) for b in c["bars"])
+        self.assertEqual(values["input_tokens"]["2026-11-06"], "11")
+        self.assertEqual(values["input_tokens"]["2026-11-05"], "20")
+        self.assertEqual(values["input_tokens"]["2026-11-03"], "")
+        self.assertEqual(values["input_tokens"]["2026-11-02"], "")
+        self.assertEqual(values["cache_read_tokens"]["2026-11-06"], "51000")
+        self.assertEqual(values["usd"]["2026-11-05"], "1.00")
+        self.assertEqual(values["usd"]["2026-11-06"], "0.60")
+        self.assertEqual(values["usd"]["2026-11-03"], "")
+
+    def test_by_role_and_by_model(self):
+        stream, _ = self.parse(self.page())
+        head, body = self.head_body(self.find_table(stream, "依角色"))
+        count = self.col(head, "次數")
+        self.assertEqual([r["cells"][0] for r in body], ["consolidator", "fixer", "verifier", "worker"])
+        rows = dict((r["cells"][0], r["cells"]) for r in body)
+        self.assertEqual(rows["worker"][count], "2")
+        self.assertIn("10(1 筆未知)", rows["worker"])
+        self.assertIn("$0.50(1 筆未知)", rows["worker"])
+        self.assertIn("$1.00", rows["verifier"])
+        head, body = self.head_body(self.find_table(stream, "依模型"))
+        count = self.col(head, "次數")
+        self.assertEqual([r["cells"][0] for r in body], ["fable", "opus", "sonnet"])
+        rows = dict((r["cells"][0], r["cells"]) for r in body)
+        self.assertEqual(rows["opus"][count], "3")
+        self.assertIn("21(1 筆未知)", rows["opus"])
+        self.assertIn("$1.10(1 筆未知)", rows["opus"])
+        self.assertEqual(rows["sonnet"][count], "1")
+
+    def test_per_landed_ticket_median(self):
+        stream, _ = self.parse(self.page())
+        at = [i for i, (k, item) in enumerate(stream)
+              if k == "text" and self.squash("每張落地票") in self.squash(item)]
+        at += [i for i, (k, item) in enumerate(stream)
+               if k == "table" and self.squash("每張落地票") in self.squash(item["caption"])]
+        self.assertTrue(at, "no 每張落地票")
+        text = self.window(stream, min(at), 4)
+        self.assertIn("153,030(1張)", text)
+        self.assertIn("$1.50(1張)", text)
+
+    def test_ten_most_expensive(self):
+        stream, _ = self.parse(self.page())
+        head, body = self.head_body(self.find_table(stream, "最貴的十張"))
+        cols = dict((n, self.col(head, n)) for n in ("票", "標題", "狀態", "token", "快取寫", "美元", "次數"))
+        self.assertEqual(len(body), 2, body)
+        self.assertTrue(any(h.endswith("?ticket=3") for h in body[0]["hrefs"]), body[0])
+        self.assertTrue(any(h.endswith("?ticket=1") for h in body[1]["hrefs"]), body[1])
+        got = [[r["cells"][cols[n]] for n in ("標題", "token", "快取寫", "美元", "次數")] for r in body]
+        self.assertEqual(got, [["ticket 3", "10", "0", "$3.00", "1"],
+                               ["ticket 1", "153,030", "5,000", "$1.50", "2"]])
+
+    def test_estimate_against_actual(self):
+        stream, _ = self.parse(self.page())
+        table = self.find_table(stream, "估計與實際")
+        head, body = self.head_body(table)
+        ticket, est = self.col(head, "票"), self.col(head, "估計")
+        actual, ratio = self.col(head, "實際"), self.col(head, "比")
+        self.assertEqual([r["cells"][ticket].lstrip("#") for r in body], ["1", "2"])
+        self.assertEqual(body[0]["cells"][actual], "153,030")
+        self.assertEqual(body[0]["cells"][ratio], "1.53")
+        self.assertIn(body[0]["cells"][est].replace(",", ""), ("100000",))
+        self.assertEqual(body[1]["cells"][actual], "未知")
+        self.assertEqual(body[1]["cells"][ratio], "未知")
+        after = [i for i, (k, item) in enumerate(stream) if item is table][0] + 1
+        text = self.window(stream, after, 6)
+        self.assertGreaterEqual(text.count("1.53(1張)"), 2, text)
+        self.assertIn("未知", text)
+
+    def test_opener_and_reviser_not_counted(self):
+        stream, _ = self.parse(self.page())
+        lines = [item for k, item in stream if k == "text"]
+        self.assertTrue(any("開題者" in t and ("修" in t or "改" in t or "revis" in t) for t in lines),
+                        "no line about the opener's and reviser's runs: %r" % lines)
 
 
 class T13Acceptance(LoopCase):
@@ -6709,6 +7331,96 @@ class CancelGroupUnit(T13Acceptance):
         self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
         self.assertIn("#1 is running", res.stderr)
         self.assertEqual(self.snap().groups["g1"]["state"], "open")
+
+
+class TokenTabUnit(LoopCase):
+    """Helpers of board.py's Token tab: cost rows, local days, the cell rule, medians."""
+
+    def setUp(self):
+        super().setUp()
+        old = os.environ.get("TZ")
+
+        def restore():
+            if old is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = old
+            time.tzset()
+        self.addCleanup(restore)
+        os.environ["TZ"] = "UTC"
+        time.tzset()
+
+    @staticmethod
+    def row(role, model, at, i, o, cr, cw, usd):
+        return {"role": role, "model": model, "at": at, "input_tokens": i, "output_tokens": o,
+                "cache_read_tokens": cr, "cache_write_tokens": cw, "usd": usd}
+
+    def fixture(self):
+        self.add(1, state="landed", token_estimate=100000, cost=[
+            self.row("worker", "sonnet", "2026-11-06T10:00:00Z", 10, 1000, 50000, 2000, 0.50),
+            self.row("verifier", "opus", "2026-11-05T09:00:00Z", 20, 2000, 100000, 3000, 1.00)])
+        self.add(2, state="landed", complexity="complex", token_estimate=50000, cost=[
+            self.row("worker", "opus", "2026-11-03T11:00:00Z", None, None, None, None, None)])
+        self.add(3, state="stuck", cost=[self.row("worker", "opus", "2026-10-01T00:00:00Z", 5, 5, 0, 0, 3.00)])
+
+        def change(tx):
+            tx.write("groups/g1.json", {"id": "g1", "state": "open", "tickets": [], "cost": [
+                self.row("fixer", "opus", "2026-11-06T08:00:00Z", 1, 100, 1000, 10, 0.10)]})
+            tx.write("memory/state.json", {"runs": [{"cost": [
+                self.row("consolidator", "fable", "2026-11-04T00:00:00Z", 2, 200, 0, 0, 0.02)]}]})
+        self.pool.update(change, "test: token fixture")
+
+    def test_cost_rows_reads_tickets_groups_and_memory_runs(self):
+        import board
+        self.fixture()
+        roles = sorted(r["role"] for r in board.cost_rows(self.snap()))
+        self.assertEqual(roles, ["consolidator", "fixer", "verifier", "worker", "worker", "worker"])
+
+    def test_row_day_and_token_days(self):
+        import calendar
+        import board
+        self.assertEqual(board.row_day({"at": "2026-11-05T23:59:59Z"}), "2026-11-05")
+        self.assertIsNone(board.row_day({"at": "yesterday"}))
+        self.assertIsNone(board.row_day({}))
+        days = board.token_days(calendar.timegm((2026, 11, 6, 12, 0, 0)))
+        self.assertEqual((len(days), days[0], days[-1]), (30, "2026-10-08", "2026-11-06"))
+        os.environ["TZ"] = "Asia/Taipei"
+        time.tzset()
+        self.assertEqual(board.row_day({"at": "2026-11-05T20:00:00Z"}), "2026-11-06")
+
+    def test_cell_rule(self):
+        import board
+        self.assertEqual(board.cell([], "usd"), "—")
+        self.assertEqual(board.cell([{"usd": None}], "usd"), "未知")
+        self.assertEqual(board.cell([{"usd": 1.5}, {"usd": 0.25}], "usd"), "$1.75")
+        self.assertEqual(board.cell([{"input_tokens": 1500}, {}], "input_tokens"), "1,500(1 筆未知)")
+        self.assertEqual(board.cell([{"input_tokens": True}], "input_tokens"), "未知")
+
+    def test_ticket_values_and_complexity(self):
+        import board
+        self.assertIsNone(board.ticket_tokens({"cost": [{"usd": 1}]}))
+        self.assertEqual(board.ticket_tokens({"cost": [{"input_tokens": 1, "cache_read_tokens": 4,
+                                                        "cache_write_tokens": 100}]}), 5)
+        self.assertIsNone(board.ticket_dollars({"cost": [{"input_tokens": 1}]}))
+        self.assertEqual(board.ticket_complexity({"complexity": "complex"}), "complex")
+        self.assertEqual(board.ticket_complexity({"needs_review": True}), "complex")
+        self.assertEqual(board.ticket_complexity({}), "simple")
+        self.assertEqual(board.median_text([], str), "未知")
+        self.assertEqual(board.median_text([1.0, 2.0], lambda m: "%.2f" % m), "1.50(2 張)")
+
+    def test_tab_renders_fixture(self):
+        import calendar
+        import board
+        from core.config import Config
+        self.fixture()
+        page = board.render(Config(self.proj), self.snap(), query={"tab": "tokens"},
+                            now=calendar.timegm((2026, 11, 6, 12, 0, 0)))
+        self.assertIn("$1.62(1 筆未知)", page)
+        self.assertIn("153,030(1 張)", page)
+        self.assertEqual(page.count('<rect class="bar"'), 150)
+        self.assertIn('data-day="2026-11-06" data-value="11"', page)
+        self.assertIn('data-day="2026-11-03" data-value=""', page)
+        self.assertLess(page.index('href="?ticket=3"'), page.index('href="?ticket=1"'))
 
 
 class T25Acceptance(LoopCase):
