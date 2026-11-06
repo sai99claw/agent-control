@@ -1923,6 +1923,104 @@ class T3Acceptance(LoopCase):
         self.assertIn("machine slot", got["summary"])
 
 
+class T30Acceptance(LoopCase):
+    """Ticket #30: waiting for a machine slot does not count against an agent's or an issuer's
+    time limit; the clocks start when the slot is taken (D-091 item 6)."""
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)     # this process is not nested under a slot
+        os.environ["AC_ROOT"] = self.proj
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def done_worker(self, **devloop):
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            agents_cfg = json.load(fh)["devloop"]["agents"]
+        script = "cat >/dev/null; echo '{\"kind\": \"done\"}' > \"$DEVLOOP_RESULT\""
+        self.config(agents=dict(agents_cfg, worker=["sh", "-c", script]), **devloop)
+
+    def hold_slot_for(self, seconds):
+        """Another holder (this test process) takes the only slot and frees it after `seconds`."""
+        import threading
+        from core import slots
+        slot = slots.take(self.cfg(), time.time() + 5)
+        self.assertTrue(slot and slot.held)
+        self.addCleanup(slot.release)
+        timer = threading.Timer(seconds, slot.release)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        return slot
+
+    def assert_ran(self, hand, began):
+        self.assertGreaterEqual(time.time() - began, 2.5)
+        self.assertEqual(hand.cost["outcome"], "done", hand.cost)
+        self.assertIsNone(hand.problem())
+        self.assertFalse(hand.timed_out)
+
+    def test_an_agent_waits_for_a_slot_past_its_timeout_and_then_runs(self):
+        from core import agents
+        self.done_worker(machine_slots=1)
+        self.hold_slot_for(3)
+        began = time.time()
+        hand = agents.run(self.cfg(), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 2)
+        self.assert_ran(hand, began)
+
+    def test_an_agent_waits_for_the_exclusive_mark_past_its_timeout_and_then_runs(self):
+        import fcntl
+        import threading
+        from core import agents
+        self.done_worker(machine_slots=2, regression_exclusive=True)
+        slot_dir = os.path.join(self.tmp, "wt", "slots")
+        os.makedirs(slot_dir, exist_ok=True)
+        fh = open(os.path.join(slot_dir, "exclusive"), "a")
+        self.addCleanup(fh.close)
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        timer = threading.Timer(3, fh.close)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        began = time.time()
+        hand = agents.run(self.cfg(), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 2)
+        self.assert_ran(hand, began)
+
+    def test_an_issuer_test_run_waits_for_its_slot_past_the_issuer_timeout(self):
+        import ticket_issuer
+        self.config(machine_slots=1, issuer_timeout_seconds=5)
+        issuer = ticket_issuer.Issuer(self.cfg(), self.pool, "1", "int/g1")
+        issuer.wt = self.proj           # the fake tests run here; case_1 fails (no impl_1.txt)
+        self.hold_slot_for(7)
+        try:
+            out = issuer.run_cases({"cases": {"run": ["case_1"]}})
+        except ticket_issuer.Stuck as e:
+            self.fail("issuer stuck while waiting for a test slot: %s %s" % (e.reason, e.text))
+        self.assertIsInstance(out, str)
+        self.assertTrue(out.startswith("verifier cases:"), out)
+
+    def test_end_to_end_a_ticket_lands_though_the_only_slot_is_held_past_the_issuer_timeout(self):
+        import fcntl
+        import threading
+        self.config(machine_slots=1, issuer_timeout_seconds=6)
+        self.add(1)
+        slot_dir = os.path.join(self.tmp, "wt", "slots")
+        os.makedirs(slot_dir, exist_ok=True)
+        fh = open(os.path.join(slot_dir, "slot-0"), "a")
+        self.addCleanup(fh.close)
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        timer = threading.Timer(8, fh.close)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        t = self.snap().ticket("1")
+        self.assertEqual((t["state"], t["round"]), ("landed", 1), t.get("stuck") or t.get("history"))
+
+
 class AgentChains(LoopCase):
     def cost_rows(self, ident, role):
         return [c for c in self.snap().ticket(str(ident)).get("cost") or [] if c["role"] == role]
