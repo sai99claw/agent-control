@@ -6414,6 +6414,265 @@ class AgentEnv(LoopCase):
         self.assertEqual(env["DEVLOOP_ROLE"], "worker")
 
 
+class T41Acceptance(LoopCase):
+    """#41: ?ticket=N and ?group=gN open a detail view (timeline + cost table) inside the 票 tab.
+    Expected values come from the ticket and this fixture, never from board.py."""
+
+    COLUMNS = ["角色", "模型", "強度", "輪", "秒", "結果", "input", "output", "快取讀", "快取寫", "美元", "時間"]
+
+    def setUp(self):
+        super().setUp()
+        self.add(1, state="stuck", round=2, group="g1", objective="Show one ticket in detail",
+                 acceptance=["first acceptance item", "second acceptance item"],
+                 stuck={"reason": "rounds", "text": "2 rounds used"},
+                 feedback=["round 1: verifier cases: 1 failed"],
+                 history=[{"at": "2026-11-01T10:00:00Z", "event": "opened"},
+                          {"at": "2026-11-01T10:00:05Z", "event": "dispatched", "target": "int/g1"},
+                          {"at": "2026-11-01T10:00:06Z", "event": "round start"},
+                          {"at": "2026-11-01T10:05:00Z", "event": "cases ready"},
+                          {"at": "2026-11-01T10:06:00Z", "event": "feedback", "round": 1}],
+                 cost=[{"role": "worker", "model": "sonnet", "round": 1, "seconds": 290.4,
+                        "at": "2026-11-01T10:04:56Z", "outcome": "done", "input_tokens": 10,
+                        "output_tokens": 20, "cache_read_tokens": 30, "cache_write_tokens": 40, "usd": 0.5},
+                       {"role": "verifier", "model": "opus", "round": 1, "seconds": 250,
+                        "at": "2026-11-01T10:04:20Z", "outcome": "cases", "input_tokens": None,
+                        "output_tokens": None, "cache_read_tokens": None, "cache_write_tokens": None,
+                        "usd": None}])
+        self.pool.update(lambda tx: tx.put_group({
+            "id": "g1", "state": "fixing", "branch": "int/g1", "members": ["1"], "fix_round": 1,
+            "last_regression": "regression said xyz-red", "release": "failed",
+            "history": [{"at": "2026-11-01T10:30:00Z", "event": "regression started"},
+                        {"at": "2026-11-01T10:40:00Z", "event": "fix round 1"}],
+            "cost": [{"role": "fixer", "model": "opus", "round": 1, "seconds": 120.7,
+                      "at": "2026-11-01T10:35:00Z", "outcome": "green", "input_tokens": 5,
+                      "output_tokens": 6, "cache_read_tokens": 7, "cache_write_tokens": 8, "usd": 0.25}],
+            "notes": [{"text": "use the new main", "by": "user", "at": "2026-11-01T11:00:00Z"}]}),
+            "test: group g1 fixing")
+
+    # ------------------------------------------------------------ helpers
+
+    def page(self, query):
+        import inspect
+        import board
+        from core.config import Config
+        self.assertTrue(hasattr(board, "render"), "board.render is missing")
+        self.assertIn("query", inspect.signature(board.render).parameters, "board.render takes query")
+        return board.render(Config(self.proj), self.snap(), query=query)
+
+    def section(self, page, attr, value):
+        import re
+        starts = [m for m in re.finditer(r'<section\b[^>]*>', page)
+                  if re.search(r'\bclass="detail"', m.group(0))
+                  and re.search(r'\b%s="%s"' % (attr, re.escape(value)), m.group(0))]
+        self.assertEqual(len(starts), 1, 'one <section class="detail" %s="%s">' % (attr, value))
+        start = starts[0].start()
+        depth, pos = 0, start
+        for m in re.finditer(r'<(/?)section\b', page[start:]):
+            depth += -1 if m.group(1) else 1
+            if depth == 0:
+                pos = start + m.end()
+                break
+        self.assertGreater(pos, start, "the detail section is closed")
+        return page[start:pos]
+
+    def text(self, fragment):
+        import html
+        import re
+        return html.unescape(re.sub(r"<[^>]+>", " ", fragment))
+
+    def timeline(self, sec):
+        """[(kind, at, text)] of the one <ol class="timeline">."""
+        import re
+        ols = re.findall(r'<ol\b[^>]*\bclass="timeline"[^>]*>(.*?)</ol>', sec, re.S)
+        self.assertEqual(len(ols), 1, 'one <ol class="timeline">')
+        out = []
+        for attrs, body in re.findall(r'<li\b([^>]*)>(.*?)</li>', ols[0], re.S):
+            kind = re.search(r'\bdata-kind="([^"]*)"', attrs)
+            at = re.search(r'\bdata-at="([^"]*)"', attrs)
+            self.assertTrue(kind and at, "every <li> has data-kind and data-at: %s" % attrs)
+            out.append((kind.group(1), at.group(1), self.text(body)))
+        return out
+
+    def cost_table(self, sec):
+        """Rows of the one <table class="cost">, each a list of cell texts (th and td)."""
+        import re
+        tables = re.findall(r'<table\b[^>]*\bclass="cost"[^>]*>(.*?)</table>', sec, re.S)
+        self.assertEqual(len(tables), 1, 'one <table class="cost">')
+        rows = []
+        for tr in re.findall(r'<tr\b[^>]*>(.*?)</tr>', tables[0], re.S):
+            rows.append([self.text(c).strip() for c in re.findall(r'<t[hd]\b[^>]*>(.*?)</t[hd]>', tr, re.S)])
+        return rows
+
+    def cells(self, rows):
+        """Header row checked, then the other rows as {column: text}."""
+        self.assertGreaterEqual(len(rows), 1, "the cost table has a header row")
+        self.assertEqual(rows[0], self.COLUMNS, "cost table columns")
+        return [dict(zip(self.COLUMNS, r)) for r in rows[1:]]
+
+    def hrefs(self, page):
+        import re
+        return re.findall(r'''\bhref\s*=\s*["']([^"']*)["']''', page)
+
+    # ------------------------------------------------------------ 1: the ticket's detail
+
+    def test_item1_ticket_detail_in_tickets_tab(self):
+        import re
+        page = self.page({"ticket": "1"})
+        tab = page.find('<div id="tab-tickets"')
+        self.assertGreaterEqual(tab, 0, "the page shows the tab-tickets element")
+        self.assertRegex(page, r'<a [^>]*aria-current="page"[^>]*>票</a>', "the nav marks 票 as current")
+        sec = self.section(page, "data-ticket", "1")
+        self.assertGreater(page.find(sec), tab, "the detail section is inside tab-tickets")
+        self.assertEqual(len(re.findall(r'<section\b[^>]*\bclass="detail"', page)), 1, "one detail section")
+        text = self.text(sec)
+        for want in ("#1", "ticket 1", "卡住", "紅燈", "g1", "Show one ticket in detail",
+                     "first acceptance item", "second acceptance item"):
+            self.assertIn(want, text)
+        rest = self.text(re.sub(r'<ol\b.*?</ol>|<table\b.*?</table>', "", sec, flags=re.S))
+        self.assertRegex(rest, r"(?<![\d:-])2(?![\d:-])", "the round (2) is shown outside the timeline and table")
+
+    # ------------------------------------------------------------ 2: timeline entries and order
+
+    def test_item2_ticket_timeline_order(self):
+        tl = self.timeline(self.section(self.page({"ticket": "1"}), "data-ticket", "1"))
+        self.assertEqual([(k, a) for k, a, _ in tl], [
+            ("event", "2026-11-01T10:00:00Z"), ("event", "2026-11-01T10:00:05Z"),
+            ("run", "2026-11-01T10:00:05Z"), ("event", "2026-11-01T10:00:06Z"),
+            ("run", "2026-11-01T10:00:10Z"), ("event", "2026-11-01T10:05:00Z"),
+            ("event", "2026-11-01T10:06:00Z")])
+        self.assertIn("dispatched", tl[1][2])
+        self.assertIn("worker", tl[2][2])
+        self.assertIn("verifier", tl[4][2])
+
+    def test_item2_no_seconds_and_stored_order(self):
+        self.add(2, history=[{"at": "2026-11-02T09:00:00Z", "event": "opened"},
+                             {"at": "2026-11-02T09:00:00Z", "event": "dispatched"}],
+                 cost=[{"role": "worker", "model": "sonnet", "round": 1, "at": "2026-11-02T09:00:00Z",
+                        "outcome": "done"},
+                       {"role": "reviewer", "model": "opus", "round": 1, "seconds": 30,
+                        "at": "2026-11-02T09:00:30Z", "outcome": "ok"}])
+        tl = self.timeline(self.section(self.page({"ticket": "2"}), "data-ticket", "2"))
+        self.assertEqual([(k, a) for k, a, _ in tl], [("event", "2026-11-02T09:00:00Z")] * 2
+                         + [("run", "2026-11-02T09:00:00Z")] * 2)
+        self.assertIn("opened", tl[0][2])
+        self.assertIn("dispatched", tl[1][2])
+        self.assertIn("worker", tl[2][2])
+        self.assertIn("reviewer", tl[3][2])
+
+    # ------------------------------------------------------------ 3: what each entry shows
+
+    def test_item3_entry_text(self):
+        import re
+        tl = self.timeline(self.section(self.page({"ticket": "1"}), "data-ticket", "1"))
+        self.assertEqual(len(tl), 7)
+        self.assertIn("int/g1", tl[1][2], "dispatched shows its target")
+        self.assertIn("feedback", tl[6][2])
+        self.assertIn("verifier cases: 1 failed", tl[6][2], "feedback round 1 shows the kept entry")
+        worker = tl[2][2]
+        for want in ("worker", "sonnet", "done"):
+            self.assertIn(want, worker)
+        self.assertRegex(worker, r"(?<![\d.])290 ?秒")
+        self.assertNotIn("290.4", worker)
+        verifier = tl[4][2]
+        for want in ("verifier", "opus", "cases"):
+            self.assertIn(want, verifier)
+        self.assertTrue(re.search(r"(?<![\d.])250 ?秒", verifier), verifier)
+
+    def test_item3_event_fields_and_feedback_round(self):
+        self.add(3, feedback=["round 1: older-text-aaa", "round 2: newer-text-bbb"],
+                 history=[{"at": "2026-11-03T08:00:00Z", "event": "revised", "round": 7,
+                           "reason": "reason-qq", "target": "int/g7", "group": "g7", "note": "note-zz",
+                           "source": "source-ww"},
+                          {"at": "2026-11-03T08:01:00Z", "event": "feedback", "round": 2}])
+        tl = self.timeline(self.section(self.page({"ticket": "3"}), "data-ticket", "3"))
+        self.assertEqual(len(tl), 2)
+        for want in ("revised", "7", "reason-qq", "int/g7", "g7", "note-zz", "source-ww"):
+            self.assertIn(want, tl[0][2])
+        self.assertIn("newer-text-bbb", tl[1][2])
+        self.assertNotIn("older-text-aaa", tl[1][2], "only the entry of the event's own round")
+
+    # ------------------------------------------------------------ 4: cost table
+
+    def test_item4_ticket_cost_table(self):
+        rows = self.cells(self.cost_table(self.section(self.page({"ticket": "1"}), "data-ticket", "1")))
+        self.assertEqual(len(rows), 3, "two cost rows and 合計")
+        w, v, total = rows
+        self.assertEqual((w["角色"], w["模型"], w["結果"]), ("worker", "sonnet", "done"))
+        self.assertEqual((v["角色"], v["模型"], v["結果"]), ("verifier", "opus", "cases"))
+        self.assertEqual(w["強度"], "未知", "effort nobody recorded")
+        self.assertEqual(w["輪"], "1")
+        self.assertIn("290", w["秒"])
+        for col, want in (("input", "10"), ("output", "20"), ("快取讀", "30"), ("快取寫", "40")):
+            self.assertEqual(w[col], want, col)
+        self.assertIn("0.5", w["美元"])
+        self.assertIn("2026-11-01T10:04:56Z", w["時間"])
+        for col in ("input", "output", "快取讀", "快取寫", "美元"):
+            self.assertEqual(v[col], "未知", "verifier %s" % col)
+        self.assertEqual(total["角色"], "合計")
+        for col, want in (("input", "10"), ("output", "20"), ("快取讀", "30"), ("快取寫", "40")):
+            self.assertEqual(total[col], want, "合計 %s" % col)
+        self.assertIn("0.5", total["美元"])
+        self.assertIn("540", total["秒"])
+
+    # ------------------------------------------------------------ 5: the group's detail
+
+    def test_item5_group_detail(self):
+        import re
+        page = self.page({"group": "g1"})
+        self.assertGreaterEqual(page.find('<div id="tab-tickets"'), 0)
+        sec = self.section(page, "data-group", "g1")
+        text = self.text(sec)
+        for want in ("g1", "修紅中", "int/g1", "regression said xyz-red", "use the new main"):
+            self.assertIn(want, text)
+        self.assertTrue("失敗" in text or "failed" in text, "the release is shown")
+        member = re.search(r'<a\b[^>]*href="\?ticket=1"[^>]*>.*?</a>', sec, re.S)
+        self.assertTrue(member, "member #1 is a link ?ticket=1")
+        self.assertIn("卡住", text, "member's state label")
+        tl = self.timeline(sec)
+        self.assertEqual([(k, a) for k, a, _ in tl], [("event", "2026-11-01T10:30:00Z"),
+                                                      ("run", "2026-11-01T10:32:59Z"),
+                                                      ("event", "2026-11-01T10:40:00Z")])
+        self.assertIn("fixer", tl[1][2])
+        self.assertRegex(tl[1][2], r"(?<![\d.])121 ?秒")
+        rows = self.cells(self.cost_table(sec))
+        self.assertEqual(len(rows), 2, "one fixer row and 合計")
+        self.assertEqual((rows[0]["角色"], rows[0]["輪"], rows[0]["input"]), ("fixer", "1", "5"))
+        self.assertEqual((rows[1]["角色"], rows[1]["input"], rows[1]["快取寫"]), ("合計", "5", "8"))
+
+    def test_item5_group_category_label(self):
+        self.pool.update(lambda tx: tx.put_group({
+            "id": "g2", "state": "stuck", "branch": "int/g2", "members": [], "fix_round": 3,
+            "history": [{"at": "2026-11-01T00:00:00Z", "event": "red after 3 fix rounds"}]}), "test: g2")
+        text = self.text(self.section(self.page({"group": "g2"}), "data-group", "g2"))
+        self.assertIn("卡住", text)
+        self.assertIn("紅燈", text)
+
+    # ------------------------------------------------------------ 6: unknown ids
+
+    def test_item6_unknown_ids(self):
+        for query, msg in (({"ticket": "99"}, "沒有 #99 這張票"), ({"group": "g99"}, "沒有 g99 這個整合分支")):
+            page = self.page(query)
+            self.assertIn(msg, page)
+            self.assertNotIn('class="detail"', page)
+
+    # ------------------------------------------------------------ 7: links
+
+    def test_item7_table_links(self):
+        import re
+        page = self.page({"tab": "tickets"})
+        self.assertIn("<td>#1</td><td>卡住</td>", page, "the first two cells stay as they are")
+        self.assertRegex(page, r'<a\b[^>]*href="\?ticket=1"[^>]*>\s*ticket 1\s*</a>', "title links ?ticket=1")
+        self.assertRegex(page, r'<td><a\b[^>]*href="\?group=g1"[^>]*>\s*g1\s*</a></td>', "group id links ?group=g1")
+        self.assertFalse(re.search(r'<td>\s*g1\s*</td>', page), "the group id cell is a link, not plain text")
+
+    def test_item7_detail_hrefs_relative(self):
+        for query in ({"ticket": "1"}, {"group": "g1"}):
+            page = self.page(query)
+            self.assertIn('class="detail"', page, "a detail page for %s" % query)
+            for href in self.hrefs(page):
+                self.assertFalse(href.startswith("/") or "://" in href, "%s: href %r" % (query, href))
+
+
 class ProjectRulesHome(unittest.TestCase):
     def read(self, *parts):
         with open(os.path.join(HOME, *parts)) as f:
