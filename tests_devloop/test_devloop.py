@@ -2085,7 +2085,7 @@ class BoardKeyCookie(LoopCase):
         status, cookie, page = call("GET", "/?key=anything")
         self.assertEqual((status, cookie), (200, None))
         self.assertIn("四個指標", page)
-        self.assertNotIn("<form", page, "read-only: no inputs")
+        self.assertNotIn("<form method='post'", page, "read-only: no write forms")
         for path in ("/request", "/answer"):
             with self.subTest(path=path):
                 self.assertEqual(call("POST", path, "key=anything&text=x")[0], 403)
@@ -4830,7 +4830,7 @@ class Board(LoopCase):
         self.add(2)
         self.plan(worker={"1": ["wrong", "ok"]})
         self.controller()
-        res = self.run_py("board.py", "html")
+        res = self.run_py("board.py", "html", "--query", "done=1")
         self.assertEqual(res.returncode, 0, res.stderr)
         page = res.stdout
         self.assertIn("四個指標", page)
@@ -4913,7 +4913,7 @@ class T26Acceptance(LoopCase):
         return json.loads(res.stdout)
 
     def test_item1_board_state_cells(self):
-        res = self.run_py("board.py", "html")
+        res = self.run_py("board.py", "html", "--query", "done=1")
         self.assertEqual(res.returncode, 0, res.stderr)
         page = res.stdout
         self.assertIn("<td>#1</td><td>功能完成</td>", page)
@@ -6096,6 +6096,76 @@ class GitRules(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("overwritten", why)
         self.assertEqual(git(tmp, "status", "--porcelain"), "?? cache.pyc")
+
+
+class BoardTicketFilters(LoopCase):
+    """The 票 tab's filter helpers (ticket #40): ticket_filters, ticket_shown, group_shown, render_filters."""
+
+    def setUp(self):
+        super().setUp()
+        import board
+        self.board = board
+
+    def f(self, **query):
+        return self.board.ticket_filters(query)
+
+    def test_ticket_filters_reads_the_query(self):
+        self.assertEqual(self.f(), {"state": "", "group": "", "cat": "", "q": "", "done": False})
+        self.assertEqual(self.f(state="stuck", group="g2", cat="env", q="  Fix ", done="1"),
+                         {"state": "stuck", "group": "g2", "cat": "env", "q": "Fix", "done": True})
+        self.assertFalse(self.f(done="yes")["done"])
+        self.assertEqual(self.board.ticket_filters(None)["state"], "")
+
+    def test_ticket_shown(self):
+        shown = self.board.ticket_shown
+        landed = {"id": "1", "state": "landed", "title": "A"}
+        ready = {"id": "12", "state": "ready", "title": "Board Filters", "group": "g3"}
+        env = {"id": "6", "state": "stuck", "title": "x", "stuck": {"reason": "env", "text": "t"}}
+        self.assertFalse(shown(landed, self.f()))
+        self.assertTrue(shown(landed, self.f(done="1")))
+        self.assertTrue(shown(landed, self.f(state="landed")))
+        self.assertFalse(shown(ready, self.f(state="landed")))
+        self.assertTrue(shown(ready, self.f(group="g3")))
+        self.assertFalse(shown(ready, self.f(group="g1")))
+        self.assertFalse(shown(ready, self.f(group="none")))
+        self.assertTrue(shown(env, self.f(group="none")))
+        self.assertTrue(shown(env, self.f(cat="env")))
+        self.assertFalse(shown(ready, self.f(cat="env")))
+        self.assertTrue(shown(ready, self.f(q="board")))
+        self.assertTrue(shown(ready, self.f(q="#12")))
+        self.assertTrue(shown(ready, self.f(q="12")))
+        self.assertFalse(shown(ready, self.f(q="1")), "an id matches whole, not as a prefix")
+        self.assertFalse(shown(ready, self.f(q="##12")), "only one leading # is removed")
+        self.assertFalse(shown(ready, self.f(q="board", group="g1")), "filters combine with AND")
+
+    def test_group_shown_ignores_state_and_q(self):
+        snap = self.snap()
+        shown = self.board.group_shown
+        landed = {"id": "g1", "state": "landed"}
+        stuck = {"id": "g3", "state": "stuck", "history": [{"event": "red after 3 fix rounds"}]}
+        self.assertFalse(shown(snap, landed, self.f()))
+        self.assertFalse(shown(snap, landed, self.f(state="landed")))
+        self.assertTrue(shown(snap, landed, self.f(done="1")))
+        self.assertTrue(shown(snap, stuck, self.f(state="ready", q="nothing")))
+        self.assertTrue(shown(snap, stuck, self.f(group="g3", cat="red")))
+        self.assertFalse(shown(snap, stuck, self.f(group="g2")))
+        self.assertFalse(shown(snap, stuck, self.f(cat="env")))
+
+    def test_render_filters_marks_the_current_query(self):
+        from unittest import mock
+        snap = mock.Mock(groups={"g10": {}, "g2": {}, "g1": {}})
+        page = self.board.render_filters(snap, self.f(state="stuck", group="g10", cat="env", q='a"b', done="1"))
+        self.assertIn('<option value="stuck" selected>卡住</option>', page)
+        self.assertIn('<option value="g10" selected>', page)
+        self.assertIn('<option value="env" selected>環境</option>', page)
+        self.assertIn('value="a&quot;b"', page)
+        self.assertIn('name="done" value="1" checked', page)
+        self.assertLess(page.index('value="g1"'), page.index('value="g2"'))
+        self.assertLess(page.index('value="g2"'), page.index('value="g10"'))
+        self.assertLess(page.index('value="g10"'), page.index('value="none"'))
+        plain = self.board.render_filters(snap, self.f())
+        self.assertNotIn(" checked", plain)
+        self.assertEqual(plain.count(" selected"), 3, "the '' option of each select")
 
 
 class AgentEnv(LoopCase):
