@@ -4721,6 +4721,239 @@ class T15Acceptance(LoopCase):
         self.assertFalse(os.path.exists(os.path.join(mem, "project.md")))
 
 
+class T38Acceptance(LoopCase):
+    """Ticket #38: the board is four tabs (票 DAG Token 主機), each at its own relative ?tab= URL."""
+
+    TABS = ("tickets", "dag", "tokens", "host")
+    NAV = [("票", "?tab=tickets"), ("DAG", "?tab=dag"), ("Token", "?tab=tokens"), ("主機", "?tab=host")]
+
+    def setUp(self):
+        super().setUp()
+        self.add(1)
+        self.add(2, deps=[1])
+
+    def board(self):
+        import inspect
+        import board
+        params = inspect.signature(board.render).parameters
+        for name in ("key", "query", "now"):
+            self.assertIn(name, params, "render() takes %s" % name)
+        return board
+
+    def page(self, query=None, key=None, now=None):
+        from core.config import Config
+        return self.board().render(Config(self.proj), self.snap(), key=key, query=query, now=now)
+
+    @staticmethod
+    def ids(page):
+        import re
+        return re.findall(r"""\bid=["']([^"']+)["']""", page)
+
+    @staticmethod
+    def parse(page, tab_id):
+        """Walk the page: inside/outside text of the element with id tab_id, card count outside it,
+        the <a> links of every <nav class="tabs">, every href/action attribute value."""
+        from html.parser import HTMLParser
+
+        class P(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.depth = 0          # >0 while inside the tab element
+                self.inside, self.outside = [], []
+                self.cards_out = self.cards_in = 0
+                self.navs = []          # list of link lists
+                self.in_nav = 0
+                self.link = None
+                self.urls = []
+
+            def handle_starttag(self, tag, attrs):
+                a = dict(attrs)
+                for k, v in attrs:
+                    if k in ("href", "action"):
+                        self.urls.append(v or "")
+                if self.depth:
+                    self.depth += 1
+                elif a.get("id") == tab_id:
+                    self.depth = 1
+                if "card" in (a.get("class") or "").split():
+                    if self.depth:
+                        self.cards_in += 1
+                    else:
+                        self.cards_out += 1
+                if tag == "nav":
+                    if "tabs" in (a.get("class") or "").split():
+                        self.navs.append([])
+                        self.in_nav = 1
+                    elif self.in_nav:
+                        self.in_nav += 1
+                if tag == "a" and self.in_nav:
+                    self.link = [a.get("href"), a.get("aria-current"), ""]
+                    self.navs[-1].append(self.link)
+
+            def handle_startendtag(self, tag, attrs):
+                self.handle_starttag(tag, attrs)
+                self.handle_endtag(tag)
+
+            def handle_endtag(self, tag):
+                if self.depth:
+                    self.depth -= 1
+                if tag == "nav" and self.in_nav:
+                    self.in_nav -= 1
+                if tag == "a":
+                    self.link = None
+
+            def handle_data(self, data):
+                (self.inside if self.depth else self.outside).append(data)
+                if self.link is not None:
+                    self.link[2] += data
+
+        p = P()
+        p.feed(page)
+        p.close()
+        return p
+
+    def test_item1_query_picks_exactly_one_tab(self):
+        for t in self.TABS:
+            with self.subTest(tab=t):
+                ids = self.ids(self.page(query={"tab": t}))
+                self.assertEqual(ids.count("tab-" + t), 1, ids)
+                for other in self.TABS:
+                    if other != t:
+                        self.assertNotIn("tab-" + other, ids)
+        for q in (None, {}, {"tab": ""}, {"tab": "nope"}):
+            with self.subTest(query=q):
+                ids = self.ids(self.page(query=q))
+                self.assertEqual(ids.count("tab-tickets"), 1, ids)
+                for other in ("dag", "tokens", "host"):
+                    self.assertNotIn("tab-" + other, ids)
+
+    def test_item2_one_nav_with_four_links_and_the_current_one_marked(self):
+        import re
+        for t in self.TABS:
+            for key in (None, "k"):
+                with self.subTest(tab=t, key=key):
+                    page = self.page(query={"tab": t}, key=key)
+                    self.assertEqual(len(re.findall(r'<nav class="tabs">', page)), 1, "one <nav class=\"tabs\">")
+                    self.assertEqual(len(re.findall(r"<nav\b", page)), 1)
+                    p = self.parse(page, "tab-" + t)
+                    self.assertEqual(len(p.navs), 1)
+                    links = p.navs[0]
+                    self.assertEqual([(text.strip(), href) for href, _, text in links], self.NAV)
+                    current = [href for href, aria, _ in links if aria is not None]
+                    self.assertEqual(current, ["?tab=" + t])
+                    self.assertEqual([aria for _, aria, _ in links if aria is not None], ["page"])
+
+    def test_item3_the_four_numbers_are_on_every_tab_outside_the_tab(self):
+        for t in self.TABS:
+            with self.subTest(tab=t):
+                page = self.page(query={"tab": t})
+                p = self.parse(page, "tab-" + t)
+                self.assertIn("tab-" + t, self.ids(page))
+                self.assertIn("四個指標", "".join(p.outside))
+                self.assertNotIn("四個指標", "".join(p.inside))
+                self.assertEqual((p.cards_out, p.cards_in), (5, 0), "five cards, none inside tab-" + t)
+                for label in ("每張落地票的 token", "每張落地票的時間", "一次就過", "每張票要你介入幾次", "等你處理的"):
+                    self.assertIn(label, "".join(p.outside))
+
+    def test_item5_every_link_and_action_is_relative(self):
+        for t in self.TABS:
+            for key in (None, "k"):
+                with self.subTest(tab=t, key=key):
+                    page = self.page(query={"tab": t}, key=key)
+                    for _, href in self.NAV:
+                        self.assertIn('href="%s"' % href, page.replace("'", '"'))
+                    p = self.parse(page, "tab-" + t)
+                    self.assertEqual(len(p.navs), 1, "the tab nav is there")
+                    for v in p.urls:
+                        self.assertFalse(v.startswith("/") or "://" in v, v)
+
+    def test_item6_now_is_the_page_clock(self):
+        import re
+        for t in self.TABS:
+            with self.subTest(tab=t):
+                page = self.page(query={"tab": t}, now=0)
+                header = re.search(r"<header\b.*?</header>", page, re.S)
+                self.assertIsNotNone(header)
+                self.assertIn("1970-01-01T00:00:00Z", header.group(0))
+                page = self.page(query={"tab": t}, now=86400 * 365)
+                self.assertIn("1971-01-01T00:00:00Z", re.search(r"<header\b.*?</header>", page, re.S).group(0))
+        before = time.strftime("%Y-%m-%d", time.gmtime())
+        page = self.page()
+        self.assertTrue(before in page or time.strftime("%Y-%m-%d", time.gmtime()) in page,
+                        "now=None is the current time")
+        self.assertNotIn("1970-01-01T00:00:00Z", page)
+
+    def test_item7_html_takes_a_query(self):
+        res = self.run_py("board.py", "html", "--query", "tab=dag")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        ids = self.ids(res.stdout)
+        self.assertIn("tab-dag", ids)
+        self.assertNotIn("tab-tickets", ids)
+        out = os.path.join(self.tmp, "host.html")
+        res = self.run_py("board.py", "html", "--out", out, "--query", "tab=host")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertTrue(os.path.isfile(out))
+        with open(out) as fh:
+            ids = self.ids(fh.read())
+        self.assertIn("tab-host", ids)
+        self.assertNotIn("tab-tickets", ids)
+        res = self.run_py("board.py", "html")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        ids = self.ids(res.stdout)
+        self.assertIn("tab-tickets", ids)
+        self.assertNotIn("tab-dag", ids)
+
+    def test_item8_served_tabs_under_any_prefix(self):
+        import http.client
+        import socket
+        key = os.path.join(self.tmp, "key")
+        with open(key, "w") as fh:
+            fh.write("s3cret\n")
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "board.py"), "serve", "--port", str(port),
+                                 "--key-file", key], cwd=self.proj, env=self.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(proc.kill)
+
+        def call(method, path, body=None, retry=False):
+            deadline = time.time() + 5
+            while True:
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                try:
+                    headers = {"X-Board-Key": "s3cret"}
+                    if body is not None:
+                        headers["Content-Type"] = "application/x-www-form-urlencoded"
+                    conn.request(method, path, body=body, headers=headers)
+                    resp = conn.getresponse()
+                    return resp.status, resp.read().decode("utf-8")
+                except OSError:
+                    if not retry or time.time() > deadline:
+                        raise
+                    time.sleep(0.1)
+                finally:
+                    conn.close()
+        call("GET", "/", retry=True)
+        for path in ("/?tab=tokens", "/index.html?tab=tokens", "/board/?tab=tokens", "/a/b/?tab=tokens"):
+            with self.subTest(path=path):
+                status, page = call("GET", path)
+                self.assertEqual(status, 200, path)
+                ids = self.ids(page)
+                self.assertIn("tab-tokens", ids)
+                self.assertNotIn("tab-tickets", ids)
+        self.assertEqual(call("GET", "/board/other")[0], 404)
+        web = os.path.join(self.tmp, "wt", "runs", "web")
+
+        def folders():
+            return set(os.listdir(web)) if os.path.isdir(web) else set()
+        self.assertEqual(call("POST", "/request", "text=x")[0], 303)
+        before = folders()
+        self.assertEqual(call("POST", "/board/request", "text=x")[0], 303)
+        self.assertTrue(folders() - before, "a new job folder under runs/web/")
+
+
 class T17Acceptance(LoopCase):
     """Ticket #17: a project's missing role or model memory starts as agent-control's file."""
 
