@@ -2203,6 +2203,20 @@ class TestHostSampler(LoopCase):
         failed = [l for l in res.stderr.splitlines() if "host sample failed" in l]
         self.assertGreaterEqual(len(failed), 1, res.stderr)
 
+    def test_sample_before_the_worktree_root_exists_measures_its_parent(self):
+        import shutil
+        from core import host
+        self.config()
+        root = os.path.join(self.tmp, "wt")
+        self.assertFalse(os.path.exists(root))
+        self.assertEqual(host.disk_free(os.path.join(root, "a", "b")) > 0, True)
+        row = host.sample(self.cfg())
+        self.assertIsInstance(row["disk_free"], int)
+        self.assertFalse(os.path.exists(root), "sampling must not create the root")
+        os.makedirs(root)
+        self.assertGreater(host.disk_free(root), 0)
+        self.assertLessEqual(abs(host.disk_free(root) - shutil.disk_usage(root).free), 1 << 24)
+
     def test_readme_section_sits_before_dashboard_and_names_the_rules(self):
         with open(os.path.join(LOOP, "README.md"), encoding="utf-8") as fh:
             text = fh.read()

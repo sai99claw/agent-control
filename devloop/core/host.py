@@ -136,6 +136,18 @@ def slots_in_use(cfg):
     return used
 
 
+def disk_free(path):
+    """Bytes free on the filesystem that holds `path`. A path not created yet (a fresh worktree root)
+    is measured at its nearest existing ancestor: the filesystem it will be created on."""
+    path = os.path.abspath(path)
+    while not os.path.exists(path):
+        parent = os.path.dirname(path)
+        if parent == path:
+            break
+        path = parent
+    return shutil.disk_usage(path).free
+
+
 def sample(cfg, now=None):
     """One host sample: the object with exactly KEYS."""
     try:
@@ -150,7 +162,7 @@ def sample(cfg, now=None):
         "load5": load5,
         "cpus": os.cpu_count(),
         "mem_available": memory_available(),
-        "disk_free": shutil.disk_usage(cfg.worktree_root).free,
+        "disk_free": disk_free(cfg.worktree_root),
         "agents": agents_running(),
         "slots_used": slots_in_use(cfg) if slot_count is not None else None,
         "slots": slot_count,
