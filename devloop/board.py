@@ -549,8 +549,213 @@ def render_dag_tab(cfg, snap, query, now):
 
 # ---------------------------------------------------------------- tab: Token
 
+TOKEN_DAYS = 30
+TOKEN_MEASURES = (("input_tokens", "輸入"), ("output_tokens", "輸出"), ("cache_read_tokens", "快取讀"),
+                  ("cache_write_tokens", "快取寫"), ("usd", "美元"))
+NO_ROWS = "—"
+TOKEN_STYLE = """<style>
+#tab-tokens td.n{text-align:right;font-variant-numeric:tabular-nums}
+#tab-tokens .charts{display:flex;flex-wrap:wrap;gap:12px}
+#tab-tokens figure{margin:0}#tab-tokens figcaption{font-size:12px;color:var(--quiet)}
+#tab-tokens svg.chart{display:block;background:var(--card);border:1px solid var(--line);border-radius:4px}
+#tab-tokens rect.bar{fill:var(--ink);opacity:.7}
+</style>"""
+
+
+def _number(value, measure):
+    """The row's value for `measure` when it is a number, else None (bools are not numbers)."""
+    if isinstance(value, bool):
+        return None
+    if measure == "usd":
+        return value if isinstance(value, (int, float)) else None
+    return value if isinstance(value, int) else None
+
+
+def cost_rows(snap):
+    """Every cost row the pool holds: tickets', integration branches' and memory runs'."""
+    rows = []
+    for t in snap.tickets.values():
+        rows += [r for r in t.get("cost") or [] if isinstance(r, dict)]
+    for g in snap.groups.values():
+        rows += [r for r in g.get("cost") or [] if isinstance(r, dict)]
+    state = snap.memory_state if isinstance(snap.memory_state, dict) else {}
+    for run in state.get("runs") or []:
+        if isinstance(run, dict):
+            rows += [r for r in run.get("cost") or [] if isinstance(r, dict)]
+    return rows
+
+
+def row_day(row):
+    """The local date (YYYY-MM-DD) of a row's UTC 'at', or None when it cannot be read."""
+    import calendar
+    try:
+        return time.strftime("%Y-%m-%d", time.localtime(
+            calendar.timegm(time.strptime(row.get("at"), "%Y-%m-%dT%H:%M:%SZ"))))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def token_days(now):
+    """The TOKEN_DAYS local dates ending on the local date of `now`, oldest first."""
+    import datetime
+    last = datetime.date(*time.localtime(now)[:3])
+    return [(last - datetime.timedelta(days=i)).isoformat() for i in range(TOKEN_DAYS - 1, -1, -1)]
+
+
+def measure_sum(rows, measure):
+    """(sum, rows without a number); the sum is None when no row has one."""
+    total, missing = None, 0
+    for row in rows:
+        v = _number(row.get(measure), measure)
+        if v is None:
+            missing += 1
+        else:
+            total = (total or 0) + v
+    return total, missing
+
+
+def money(value):
+    return "$%.2f" % value
+
+
+def measure_text(value, measure):
+    return money(value) if measure == "usd" else format(value, ",")
+
+
+def cell(rows, measure):
+    """The cell rule: '—' for no rows, 未知 when no row has a number, else the sum and '(k 筆未知)'."""
+    if not rows:
+        return NO_ROWS
+    total, missing = measure_sum(rows, measure)
+    if total is None:
+        return UNKNOWN
+    return measure_text(total, measure) + ("(%d 筆未知)" % missing if missing else "")
+
+
+def ticket_tokens(t):
+    """input + output + cache read over the ticket's rows; None when none of them has any."""
+    known = [x for x in tokens(t) if x is not None]
+    return sum(known) if known else None
+
+
+def ticket_dollars(t):
+    return measure_sum(t.get("cost") or [], "usd")[0]
+
+
+def ticket_complexity(t):
+    if t.get("complexity"):
+        return t["complexity"]
+    return "complex" if t.get("needs_review") is True else "simple"
+
+
+def median_text(values, fmt):
+    if not values:
+        return UNKNOWN
+    return "%s(%d 張)" % (fmt(statistics.median(values)), len(values))
+
+
+def _measure_cells(rows):
+    return "".join('<td class="n">%s</td>' % e(cell(rows, m)) for m, _ in TOKEN_MEASURES)
+
+
+def _measure_heads():
+    return "".join("<th>%s</th>" % e(label) for _, label in TOKEN_MEASURES)
+
+
+def token_chart(measure, label, days, by_day):
+    """One bar per day; data-value is the day's sum, '' when the day's cell is 未知 or '—'."""
+    sums = [measure_sum(by_day[d], measure)[0] for d in days]
+    top = max([v for v in sums if v] or [1])
+    w, h, bw = 4 + 10 * len(days), 84, 8
+    bars = []
+    for i, (day, v) in enumerate(zip(days, sums)):
+        value = "" if v is None else ("%.2f" % v if measure == "usd" else str(v))
+        height = 0 if not v else max(1, round(80.0 * v / top))
+        bars.append('<rect class="bar" data-day="%s" data-value="%s" x="%d" y="%d" width="%d" height="%d">'
+                    '<title>%s %s</title></rect>' % (e(day), e(value), 2 + 10 * i, 82 - height, bw, height,
+                                                     e(day), e(value or UNKNOWN)))
+    return ('<figure><figcaption>%s</figcaption><svg class="chart" data-measure="%s" width="%d" height="%d" '
+            'viewBox="0 0 %d %d">%s</svg></figure>' % (e(label), e(measure), w, h, w, h, "".join(bars)))
+
+
+def render_split(heading, rows, key):
+    groups = {}
+    for row in rows:
+        groups.setdefault(row.get(key) or UNKNOWN, []).append(row)
+    out = ['<section><h2>%s</h2><div class="scroll"><table><tr><th>%s</th><th>次數</th>%s</tr>'
+           % (e(heading), e("角色" if key == "role" else "模型"), _measure_heads())]
+    for name in sorted(groups, key=str):
+        out.append('<tr><td>%s</td><td class="n">%d</td>%s</tr>' % (e(name), len(groups[name]),
+                                                                   _measure_cells(groups[name])))
+    out.append("</table></div></section>")
+    return "".join(out)
+
+
 def render_tokens_tab(cfg, snap, query, now):
-    return stub_tab("Token")
+    days = token_days(now)
+    by_day = dict((d, []) for d in days)
+    for row in cost_rows(snap):
+        day = row_day(row)
+        if day in by_day:
+            by_day[day].append(row)
+    recent = [row for d in days for row in by_day[d]]
+    out = [TOKEN_STYLE, "<p class='quiet'>開題者與改票者的執行在 pool 裡不記 cost 列,所以不在這些數字裡。</p>"]
+
+    out.append('<section><h2>近 30 天</h2><div class="scroll"><table><tr><th>次數</th>%s</tr>'
+               '<tr><td class="n">%d</td>%s</tr></table></div></section>'
+               % (_measure_heads(), len(recent), _measure_cells(recent)))
+
+    out.append('<section><h2>每天</h2><div class="charts">%s</div>'
+               % "".join(token_chart(m, label, days, by_day) for m, label in TOKEN_MEASURES))
+    out.append('<div class="scroll"><table><tr><th>日期</th><th>次數</th>%s</tr>' % _measure_heads())
+    for d in days:
+        out.append('<tr><td>%s</td><td class="n">%d</td>%s</tr>' % (e(d), len(by_day[d]), _measure_cells(by_day[d])))
+    out.append("</table></div></section>")
+
+    out.append(render_split("依角色", recent, "role"))
+    out.append(render_split("依模型", recent, "model"))
+
+    landed = [t for t in snap.tickets.values() if t.get("state") == "landed"]
+    tok = [v for v in (ticket_tokens(t) for t in landed) if v is not None]
+    usd = [v for v in (ticket_dollars(t) for t in landed) if v is not None]
+    out.append('<section><h2>每張落地票</h2><table><tr><th>token(中位)</th><th>美元(中位)</th></tr>'
+               '<tr><td class="n">%s</td><td class="n">%s</td></tr></table></section>'
+               % (e(median_text(tok, lambda m: format(int(m), ","))), e(median_text(usd, money))))
+
+    priced = [t for t in snap.tickets.values() if ticket_dollars(t) is not None]
+    priced.sort(key=lambda t: (-ticket_dollars(t), _num_key(t.get("id"))))
+    out.append('<section><h2>最貴的十張</h2><div class="scroll"><table><tr><th>票</th><th>標題</th><th>狀態</th>'
+               '<th>token</th><th>快取寫</th><th>美元</th><th>次數</th></tr>')
+    for t in priced[:10]:
+        tk, cw = ticket_tokens(t), cache_written(t)
+        out.append('<tr><td><a href="?ticket=%s">#%s</a></td><td>%s</td><td>%s</td><td class="n">%s</td>'
+                   '<td class="n">%s</td><td class="n">%s</td><td class="n">%d</td></tr>'
+                   % (quote(str(t.get("id")), safe=""), e(t.get("id")), e(t.get("title")),
+                      e(STATE_TEXT.get(t.get("state"), t.get("state"))),
+                      e(UNKNOWN if tk is None else format(tk, ",")), e(UNKNOWN if cw is None else format(cw, ",")),
+                      e(money(ticket_dollars(t))), len(t.get("cost") or [])))
+    out.append("</table></div></section>")
+
+    estimated = [t for t in landed if _number(t.get("token_estimate"), "tokens") is not None]
+    estimated.sort(key=lambda t: _num_key(t.get("id")))
+    out.append('<section><h2>估計與實際</h2><div class="scroll"><table><tr><th>票</th><th>估計</th><th>實際</th>'
+               '<th>比</th></tr>')
+    ratios = {"all": [], "simple": [], "complex": []}
+    for t in estimated:
+        tk, est = ticket_tokens(t), t["token_estimate"]
+        ratio = tk / float(est) if tk is not None and est else None
+        if ratio is not None:
+            ratios["all"].append(ratio)
+            ratios.setdefault(ticket_complexity(t), []).append(ratio)
+        out.append('<tr><td>#%s</td><td class="n">%s</td><td class="n">%s</td><td class="n">%s</td></tr>'
+                   % (e(t.get("id")), e(format(est, ",")), e(UNKNOWN if tk is None else format(tk, ",")),
+                      e(UNKNOWN if ratio is None else "%.2f" % ratio)))
+    out.append("</table></div>")
+    ratio_fmt = lambda m: "%.2f" % m  # noqa: E731
+    out.append('<table><tr><th>比的中位</th><th></th></tr>%s</table></section>' % "".join(
+        '<tr><td>%s</td><td class="n">%s</td></tr>' % (e(label), e(median_text(ratios[k], ratio_fmt)))
+        for k, label in (("all", "全部"), ("simple", "simple"), ("complex", "complex"))))
+    return "\n".join(out)
 
 
 # ---------------------------------------------------------------- tab: 主機

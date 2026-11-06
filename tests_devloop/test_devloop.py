@@ -6723,6 +6723,96 @@ class CancelGroupUnit(T13Acceptance):
         self.assertEqual(self.snap().groups["g1"]["state"], "open")
 
 
+class TokenTabUnit(LoopCase):
+    """Helpers of board.py's Token tab: cost rows, local days, the cell rule, medians."""
+
+    def setUp(self):
+        super().setUp()
+        old = os.environ.get("TZ")
+
+        def restore():
+            if old is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = old
+            time.tzset()
+        self.addCleanup(restore)
+        os.environ["TZ"] = "UTC"
+        time.tzset()
+
+    @staticmethod
+    def row(role, model, at, i, o, cr, cw, usd):
+        return {"role": role, "model": model, "at": at, "input_tokens": i, "output_tokens": o,
+                "cache_read_tokens": cr, "cache_write_tokens": cw, "usd": usd}
+
+    def fixture(self):
+        self.add(1, state="landed", token_estimate=100000, cost=[
+            self.row("worker", "sonnet", "2026-11-06T10:00:00Z", 10, 1000, 50000, 2000, 0.50),
+            self.row("verifier", "opus", "2026-11-05T09:00:00Z", 20, 2000, 100000, 3000, 1.00)])
+        self.add(2, state="landed", complexity="complex", token_estimate=50000, cost=[
+            self.row("worker", "opus", "2026-11-03T11:00:00Z", None, None, None, None, None)])
+        self.add(3, state="stuck", cost=[self.row("worker", "opus", "2026-10-01T00:00:00Z", 5, 5, 0, 0, 3.00)])
+
+        def change(tx):
+            tx.write("groups/g1.json", {"id": "g1", "state": "open", "tickets": [], "cost": [
+                self.row("fixer", "opus", "2026-11-06T08:00:00Z", 1, 100, 1000, 10, 0.10)]})
+            tx.write("memory/state.json", {"runs": [{"cost": [
+                self.row("consolidator", "fable", "2026-11-04T00:00:00Z", 2, 200, 0, 0, 0.02)]}]})
+        self.pool.update(change, "test: token fixture")
+
+    def test_cost_rows_reads_tickets_groups_and_memory_runs(self):
+        import board
+        self.fixture()
+        roles = sorted(r["role"] for r in board.cost_rows(self.snap()))
+        self.assertEqual(roles, ["consolidator", "fixer", "verifier", "worker", "worker", "worker"])
+
+    def test_row_day_and_token_days(self):
+        import calendar
+        import board
+        self.assertEqual(board.row_day({"at": "2026-11-05T23:59:59Z"}), "2026-11-05")
+        self.assertIsNone(board.row_day({"at": "yesterday"}))
+        self.assertIsNone(board.row_day({}))
+        days = board.token_days(calendar.timegm((2026, 11, 6, 12, 0, 0)))
+        self.assertEqual((len(days), days[0], days[-1]), (30, "2026-10-08", "2026-11-06"))
+        os.environ["TZ"] = "Asia/Taipei"
+        time.tzset()
+        self.assertEqual(board.row_day({"at": "2026-11-05T20:00:00Z"}), "2026-11-06")
+
+    def test_cell_rule(self):
+        import board
+        self.assertEqual(board.cell([], "usd"), "—")
+        self.assertEqual(board.cell([{"usd": None}], "usd"), "未知")
+        self.assertEqual(board.cell([{"usd": 1.5}, {"usd": 0.25}], "usd"), "$1.75")
+        self.assertEqual(board.cell([{"input_tokens": 1500}, {}], "input_tokens"), "1,500(1 筆未知)")
+        self.assertEqual(board.cell([{"input_tokens": True}], "input_tokens"), "未知")
+
+    def test_ticket_values_and_complexity(self):
+        import board
+        self.assertIsNone(board.ticket_tokens({"cost": [{"usd": 1}]}))
+        self.assertEqual(board.ticket_tokens({"cost": [{"input_tokens": 1, "cache_read_tokens": 4,
+                                                        "cache_write_tokens": 100}]}), 5)
+        self.assertIsNone(board.ticket_dollars({"cost": [{"input_tokens": 1}]}))
+        self.assertEqual(board.ticket_complexity({"complexity": "complex"}), "complex")
+        self.assertEqual(board.ticket_complexity({"needs_review": True}), "complex")
+        self.assertEqual(board.ticket_complexity({}), "simple")
+        self.assertEqual(board.median_text([], str), "未知")
+        self.assertEqual(board.median_text([1.0, 2.0], lambda m: "%.2f" % m), "1.50(2 張)")
+
+    def test_tab_renders_fixture(self):
+        import calendar
+        import board
+        from core.config import Config
+        self.fixture()
+        page = board.render(Config(self.proj), self.snap(), query={"tab": "tokens"},
+                            now=calendar.timegm((2026, 11, 6, 12, 0, 0)))
+        self.assertIn("$1.62(1 筆未知)", page)
+        self.assertIn("153,030(1 張)", page)
+        self.assertEqual(page.count('<rect class="bar"'), 150)
+        self.assertIn('data-day="2026-11-06" data-value="11"', page)
+        self.assertIn('data-day="2026-11-03" data-value=""', page)
+        self.assertLess(page.index('href="?ticket=3"'), page.index('href="?ticket=1"'))
+
+
 class T25Acceptance(LoopCase):
     """#25: tickets.py cancel g<N> cancels a stuck or open group by hand."""
 
