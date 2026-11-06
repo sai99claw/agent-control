@@ -707,7 +707,7 @@ def render_tokens_tab(cfg, snap, query, now):
 
     out.append('<section><h2>每天</h2><div class="charts">%s</div>'
                % "".join(token_chart(m, label, days, by_day) for m, label in TOKEN_MEASURES))
-    out.append('<div class="scroll"><table><tr><th>日期</th><th>次數</th>%s</tr>' % _measure_heads())
+    out.append('<div class="scroll"><table><caption>每天</caption><tr><th>日期</th><th>次數</th>%s</tr>' % _measure_heads())
     for d in days:
         out.append('<tr><td>%s</td><td class="n">%d</td>%s</tr>' % (e(d), len(by_day[d]), _measure_cells(by_day[d])))
     out.append("</table></div></section>")
