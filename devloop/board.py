@@ -241,8 +241,86 @@ def render(cfg, snap, key=None, query=None, now=None):
 
 # ---------------------------------------------------------------- tab: 票
 
+FILTER_STATES = ("ready", "running", "merged", "landed", "stuck", "cancelled")
+DONE_STATES = ("landed", "cancelled")
+FILTER_STYLE = ("<style>form.filters{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}"
+                "form.filters label{display:flex;gap:6px;align-items:center}"
+                "form.filters select,form.filters input[type=search]{font:inherit;padding:4px 8px;"
+                "border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink)}"
+                "</style>")
+
+
+def ticket_filters(query):
+    """The 票 tab's filters from the page query: state, group, cat, q (stripped) and done (bool)."""
+    query = query or {}
+    return {"state": query.get("state") or "", "group": query.get("group") or "", "cat": query.get("cat") or "",
+            "q": (query.get("q") or "").strip(), "done": query.get("done") == "1"}
+
+
+def ticket_shown(t, f):
+    """True when ticket t passes filters f (from ticket_filters); all given filters must hold."""
+    state = t.get("state")
+    if f["state"]:
+        if state != f["state"]:
+            return False
+    elif state in DONE_STATES and not f["done"]:
+        return False
+    if f["group"] == "none":
+        if t.get("group"):
+            return False
+    elif f["group"] and t.get("group") != f["group"]:
+        return False
+    if f["cat"] and ticket_category(t) != f["cat"]:
+        return False
+    if f["q"]:
+        q = f["q"]
+        ident = q[1:] if q.startswith("#") else q
+        if q.lower() not in str(t.get("title") or "").lower() and str(t.get("id")) != ident:
+            return False
+    return True
+
+
+def group_shown(snap, g, f):
+    """True when group g passes filters f; state and q do not apply to groups."""
+    if g.get("state") in DONE_STATES and not f["done"]:
+        return False
+    if f["group"] and g.get("id") != f["group"]:
+        return False
+    if f["cat"] and group_category(snap, g) != f["cat"]:
+        return False
+    return True
+
+
+def group_order(ident):
+    digits = str(ident)[1:]
+    return (0, int(digits), "") if digits.isdigit() else (1, 0, str(ident))
+
+
+def render_filters(snap, f):
+    """The filter form; its controls show the filters f."""
+    def select(name, label, options):
+        out = ['<label>%s <select name="%s">' % (e(label), e(name))]
+        for value, text in options:
+            chosen = " selected" if f[name] == value else ""
+            out.append('<option value="%s"%s>%s</option>' % (e(value), chosen, e(text)))
+        out.append("</select></label>")
+        return "".join(out)
+
+    groups = sorted(snap.groups, key=group_order)
+    parts = ['<form method="get" class="filters"><input type="hidden" name="tab" value="tickets">',
+             select("state", "狀態", [("", "全部")] + [(s, STATE_TEXT.get(s, s)) for s in FILTER_STATES]),
+             select("group", "整合分支", [("", "全部")] + [(g, g) for g in groups] + [("none", "未分組")]),
+             select("cat", "原因", [("", "全部")] + list(CATEGORY_TEXT.items())),
+             '<label>找 <input type="search" name="q" value="%s" placeholder="標題或 #票號"></label>' % e(f["q"]),
+             '<label><input type="checkbox" name="done" value="1"%s> 顯示已落地與已取消</label>'
+             % (" checked" if f["done"] else ""),
+             "<noscript><button>套用</button></noscript></form>"]
+    return "".join(parts)
+
+
 def render_tickets_tab(cfg, snap, key, query, now):
-    out = []
+    out = [FILTER_STYLE]
+    f = ticket_filters(query)
     if key:
         out.append("<section><h2>交代新的事</h2><form method='post' action='request' class='ask'>"
                    "<textarea name='text' data-draft='request' rows='5' maxlength='8000' required "
@@ -250,14 +328,15 @@ def render_tickets_tab(cfg, snap, key, query, now):
                    "<div><button>交給開題者</button> <span class='quiet'>跟在主線下 ticket_creator.py "
                    "一樣;網頁來的文字會先做注入檢查。</span></div></form></section>")
 
-    out.append('<section><h2>票</h2><div class="scroll"><table><tr><th>票</th><th>狀態</th><th>輪</th>'
+    order = [i for i in dagmod.topo(snap.dag) + sorted(set(snap.tickets) - set(snap.dag)) if i in snap.tickets]
+    order = [i for i in order if ticket_shown(snap.tickets[i], f)]
+    out.append('<section><h2>票</h2>%s<p class="quiet">顯示 %d / 共 %d 張票</p>' % (
+        render_filters(snap, f), len(order), len(snap.tickets)))
+    out.append('<div class="scroll"><table><tr><th>票</th><th>狀態</th><th>輪</th>'
                '<th>整合分支</th><th>相依</th><th>一起驗</th><th>驗證者</th><th>覆核</th><th>token</th>'
                '<th>快取讀</th><th>快取寫</th><th>分鐘</th><th>估 token</th><th>說明</th><th>標題</th></tr>')
-    order = dagmod.topo(snap.dag) + sorted(set(snap.tickets) - set(snap.dag))
     for ident in order:
-        t = snap.tickets.get(ident)
-        if not t:
-            continue
+        t = snap.tickets[ident]
         fresh, cached = tokens(t)
         state = t.get("state")
         note = ""
@@ -295,6 +374,8 @@ def render_tickets_tab(cfg, snap, key, query, now):
     out.append('<section><h2>整合分支(一條 = 一個 PR)</h2><div class="scroll"><table><tr><th>組</th><th>狀態</th><th>原因</th>'
                '<th>分支</th><th>票</th><th>修補輪</th><th>最後一次 regression</th><th>發版</th></tr>')
     for g in sorted(snap.groups.values(), key=lambda g: int(g["id"][1:]), reverse=True):
+        if not group_shown(snap, g, f):
+            continue
         out.append("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td class='num'>%s</td><td>%s</td><td>%s</td></tr>" % (
             e(g["id"]), e(group_state_text(g)), e(CATEGORY_TEXT.get(group_category(snap, g), "")), e(g.get("branch")),
             e(" ".join("#" + i for i in g.get("members") or [])), e(g.get("fix_round", 0)),
@@ -981,7 +1062,7 @@ def submit(cfg, what, argv_tail, text):
 
 
 PAGE_HEAD = """<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="refresh" content="20">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>%(title)s</title><style>
 :root{--bg:#f5f6f7;--card:#fff;--ink:#1d2329;--quiet:#5c6670;--line:#d3d9de;--accent:#1f6f8b;--bad:#a23b2a;--warn:#8a5a12}
 @media (prefers-color-scheme:dark){:root{--bg:#121619;--card:#1a2025;--ink:#e3e8eb;--quiet:#98a4ad;--line:#36424b;--accent:#6fb7d0;--bad:#e08a7a;--warn:#e0b06c}}
@@ -1019,8 +1100,23 @@ PAGE_SCRIPT = """<script>
     var v = get(k); if (v && !box.value) { box.value = v; }
     box.addEventListener('input', function () { set(k, box.value); });
   });
+  var filters = document.querySelector('form.filters');
+  var search = filters ? filters.querySelector('input[name=q]') : null;
+  if (filters) {
+    filters.querySelectorAll('select, input[type=checkbox]').forEach(function (c) {
+      c.addEventListener('change', function () { filters.submit(); });
+    });
+  }
+  if (search) {
+    var pending = null;
+    search.addEventListener('input', function () {
+      if (pending) { clearTimeout(pending); }
+      pending = setTimeout(function () { filters.submit(); }, 500);
+    });
+  }
   setInterval(function () {
-    var busy = false;
+    var busy = search !== null && search === document.activeElement;
+    if (document.activeElement && document.activeElement.tagName === 'TEXTAREA') { busy = true; }
     boxes.forEach(function (b) { if (b === document.activeElement || b.value) { busy = true; } });
     if (!busy) { location.reload(); }
   }, 30000);
