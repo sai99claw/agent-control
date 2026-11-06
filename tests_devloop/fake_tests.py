@@ -17,6 +17,9 @@ if os.environ.get("FAKE_INTERVALS"):
     atexit.register(lambda: open(os.environ["FAKE_INTERVALS"], "a").write(
         "tests %s %.3f %.3f\n" % (cmd, STARTED, time.time())))
 out = os.environ.get("AC_TEST_OUT", ".")
+if os.environ.get("FAKE_NEED_SETUP") and not os.path.exists(".setup-done"):  # #36: needs worktree_setup
+    print("no .setup-done in this folder")
+    sys.exit(86)
 
 
 def write(rows):

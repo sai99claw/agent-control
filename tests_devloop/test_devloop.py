@@ -2224,6 +2224,114 @@ class StopRecordsCost(LoopCase):
         self.assertEqual((issuer.pending, issuer.round_costs), ([], []))
 
 
+class T36Acceptance(LoopCase):
+    """Ticket #36: devloop.worktree_setup runs in every worktree devloop creates, right after it is
+    created; a failure is an environment problem, not a red. Expected values from D-091 item 10."""
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        with open(os.path.join(self.proj, ".gitignore"), "w") as fh:
+            fh.write(".setup-done\n")
+        git(self.proj, "add", ".gitignore")
+        git(self.proj, "commit", "-q", "-m", "ignore the setup marker")
+        self.env["FAKE_NEED_SETUP"] = "1"
+        self.log = os.path.join(self.tmp, "setup.log")
+
+    def only_fails_in(self, pattern):
+        return 'case "$PWD" in %s) exit 3;; esac; touch .setup-done' % pattern
+
+    def pages(self, kind, ref=None):
+        return [row for row in self.snap().inbox.values()
+                if row["kind"] == kind and (ref is None or row["ref"] == ref)]
+
+    def ran(self, role, ref):
+        return os.path.exists(os.path.join(self.tmp, "plan", "count-%s-%s" % (role, ref)))
+
+    def test_1_default_null_string_accepted_other_values_exit_2(self):
+        from core.config import Config
+        cfg = Config(self.proj)
+        self.assertTrue(hasattr(cfg, "worktree_setup"), "Config has no worktree_setup")
+        self.assertIsNone(cfg.worktree_setup)
+        self.config(worktree_setup="true")
+        res = self.run_py("tickets.py", "list")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        for bad in ("", 3, ["a"]):
+            self.config(worktree_setup=bad)
+            res = self.run_py("tickets.py", "list")
+            self.assertEqual(res.returncode, 2, "%r: %s" % (bad, res.stdout + res.stderr))
+            self.assertIn("devloop.worktree_setup", res.stderr, repr(bad))
+
+    def test_2_every_created_worktree_is_set_up_with_cwd_and_ac_root(self):
+        self.config(worktree_setup='touch .setup-done && echo "$PWD $AC_ROOT" >> %s' % self.log)
+        self.add(1)
+        self.plan(worker={"1": ["red"]})
+        res = self.controller()
+        self.assertTrue(os.path.exists(self.log), "worktree_setup never ran: no setup.log")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["release"], "ok")
+        with open(self.log) as fh:
+            rows = [line.split() for line in fh if line.strip()]
+        names = {os.path.basename(r[0]) for r in rows}
+        for name in ("t1", "t1-cases", "red-t1", "regression-int-g1", "fix-g1", "release-g1"):
+            self.assertIn(name, names, rows)
+        root = os.path.realpath(self.proj)
+        for r in rows:
+            self.assertEqual(len(r), 2, r)
+            self.assertEqual(os.path.realpath(r[1]), root, r)
+
+    def test_3_a_failed_setup_leaves_the_ticket_stuck_env_and_removes_the_tree(self):
+        self.config(worktree_setup="exit 3")
+        self.add(1)
+        self.controller()
+        t = self.snap().ticket("1")
+        self.assertEqual(t["state"], "stuck", t.get("history"))
+        self.assertEqual(t["stuck"]["reason"], "env", t["stuck"])
+        self.assertTrue([p for p in self.pages("env") if "worktree_setup" in p["text"]], self.pages("env"))
+        self.assertFalse(self.ran("worker", "1"), "the worker ran")
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "wt", "t1")), "the failed tree was kept")
+
+    def test_4_a_failed_setup_in_the_regression_tree_is_env_86(self):
+        self.env.pop("FAKE_NEED_SETUP")   # today the regression is green: 86 can come only from the setup
+        self.config(worktree_setup=self.only_fails_in("*/regression-*"))
+        out = os.path.join(self.tmp, "regression.json")
+        res = self.run_py("regression.py", "--branch", "main", "--out", out)
+        self.assertEqual(res.returncode, 86, res.stdout + res.stderr)
+        with open(out) as fh:
+            data = json.load(fh)
+        self.assertEqual(data["status"], "env", data)
+        self.assertIn("worktree_setup", data["summary"])
+
+    def test_5_a_failed_setup_in_the_fixer_tree_stops_and_the_next_run_fixes(self):
+        self.config(worktree_setup=self.only_fails_in("*/fix-*"))
+        self.add(1)
+        self.plan(worker={"1": ["red"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        self.assertTrue([p for p in self.pages("env", "g1") if "worktree_setup" in p["text"]],
+                        self.pages("env"))
+        self.assertFalse(self.ran("fixer", "g1"), "the fixer ran")
+        g = self.snap().groups["g1"]
+        self.assertEqual((g["state"], g["fix_round"], g.get("job", "absent")), ("pr", 0, None), g)
+        self.config(worktree_setup="touch .setup-done")
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["fix_round"], 1)
+
+    def test_6_a_failed_setup_in_the_release_tree_is_a_failed_release_decision(self):
+        self.config(worktree_setup=self.only_fails_in("*/release-*"))
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+        self.assertTrue([p for p in self.pages("decision", "g1") if "worktree_setup" in p["text"]],
+                        self.pages("decision"))
+
+
 class Landing(LoopCase):
     def test_the_code_map_is_refreshed_on_main_and_the_cost_is_totalled(self):
         with open(os.path.join(self.proj, "app.py"), "w") as fh:
