@@ -51,7 +51,8 @@ def hand(obj):
 if action == "sleep":
     time.sleep(60)
 if action == "quota":
-    print("Error: Claude usage limit reached. Your limit will reset at 5pm.")
+    # $FAKE_QUOTA_TEXT: the CLI's quota message instead of the default one (#31)
+    print(os.environ.get("FAKE_QUOTA_TEXT") or "Error: Claude usage limit reached. Your limit will reset at 5pm.")
     sys.exit(1)
 if action == "nothing":
     sys.exit(1)
