@@ -2359,6 +2359,29 @@ class StopRecordsCost(LoopCase):
                   "usd", "session_id"):
             self.assertIsNone(row[k], k)
 
+    def test_interrupted_costs_counts_each_run_once(self):
+        import ticket_issuer
+
+        class Fake:
+            def __init__(self, row, hand_cost=None):
+                self.row, self.stopped = row, False
+                self.hand = type("H", (), {"cost": hand_cost})() if hand_cost else None
+
+            def stop(self):
+                self.stopped = True
+                return self.row
+
+        done = {"role": "worker", "outcome": "done"}
+        late = {"role": "verifier", "outcome": "cases"}     # finished, row not yet in round_costs
+        cut = {"role": "reviewer", "outcome": "interrupted"}
+        issuer = ticket_issuer.Issuer.__new__(ticket_issuer.Issuer)
+        issuer.round_costs = [done]
+        issuer.pending = [Fake(None, done), Fake(None, late), Fake(cut)]
+        pending = list(issuer.pending)
+        rows = issuer.interrupted_costs()
+        self.assertEqual(rows, [done, late, cut])
+        self.assertTrue(all(p.stopped for p in pending))
+        self.assertEqual((issuer.pending, issuer.round_costs), ([], []))
 
 
 class Landing(LoopCase):
