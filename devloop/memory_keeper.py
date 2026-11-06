@@ -19,6 +19,7 @@ import json
 import os
 import signal
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -27,11 +28,42 @@ from core import memory  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 
 
-def _run(cfg, cur, role, prompt, cwd, run_dir):
-    """agents.run, but the Pending stays in `cur` while the agent runs so a signal can stop it."""
-    p = agents.start(cfg, role, prompt, cwd, run_dir, cfg.agent_timeout_seconds)
+def _run(cfg, cur, role, prompt, cwd, run_dir, on_quota=None):
+    """agents.run, but the Pending stays in `cur` while the agent runs so a signal can stop it.
+    `on_quota` (quota_hook) makes a run whose last command hit the usage limit wait for the reset."""
+    p = agents.start(cfg, role, prompt, cwd, run_dir, cfg.agent_timeout_seconds, on_quota=on_quota)
     cur[:] = [p]
     return p.finish()
+
+
+def quota_hook(pool, path, costs):
+    """agents.start's on_quota for every agent of a consolidation: before the wait the run's row
+    (outcome "quota") goes into `costs`, so it lands in the run's entry before the next row, and
+    memory/state.json gets "waiting" (with `path`); after the wait "waiting" goes."""
+    def on_quota(phase, row=None, until=None, text=None):
+        if phase == "wait":
+            costs.append(row)
+            mark = {"reason": "quota", "path": path, "since": osx.now(),
+                    "until": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(until)),
+                    "text": (text or "")[:200]}
+
+            def change(tx):
+                state = dict(tx.data.memory_state or {})
+                state["waiting"] = mark
+                tx.write("memory/state.json", state)
+            pool.update(change, "memory: consolidating %s waits for quota" % path)
+        else:
+            _drop_waiting(pool, "memory: consolidating %s - quota wait over" % path)
+    return on_quota
+
+
+def _drop_waiting(pool, message):
+    def change(tx):
+        state = dict(tx.data.memory_state or {})
+        if "waiting" in state:
+            state.pop("waiting")
+            tx.write("memory/state.json", state)
+    pool.update(change, message)
 
 
 def keep(cfg, pool, layer, name, cur=None):
@@ -54,6 +86,7 @@ def keep(cfg, pool, layer, name, cur=None):
 
         def change(tx):
             state = dict(tx.data.memory_state or {})
+            state.pop("waiting", None)
             state.setdefault("runs", []).append({"path": path, "at": osx.now(), "ok": False, "interrupted": True,
                                                  "lessons": len(rows), "cost": costs})
             del state["runs"][:-50]
@@ -82,7 +115,8 @@ def _keep(cfg, pool, layer, name, cur, costs):
         "contract_path": os.path.join(cfg.home, "devloop", "prompts", "consolidator.md"),
         "peer_notes": "",
     }
-    hand = _run(cfg, cur, "consolidator", agents.render("consolidator.md", values), pool.path, run_dir)
+    hook = quota_hook(pool, path, costs)
+    hand = _run(cfg, cur, "consolidator", agents.render("consolidator.md", values), pool.path, run_dir, hook)
     costs.append(hand.cost)
     cur.clear()
     text = (hand.result or {}).get("text") if hand.kind == "memory" else None
@@ -100,6 +134,7 @@ def _keep(cfg, pool, layer, name, cur, costs):
 
     def change(tx):
         state = dict(tx.data.memory_state or {})
+        state.pop("waiting", None)
         state.setdefault("last", {})[path] = osx.now()
         state.setdefault("runs", []).append({"path": path, "at": osx.now(), "ok": bool(ok),
                                              "lessons": len(rows), "cost": costs})
@@ -127,8 +162,9 @@ def discuss(cfg, pool, values, draft, run_dir, costs=None, cur=None):
     cur = [] if cur is None else cur
     peer_dir = os.path.join(run_dir, "peer")
     peer_values = dict(values, draft=draft, result_path=os.path.join(peer_dir, "result.json"))
+    hook = quota_hook(pool, values["path"], costs)
     review = _run(cfg, cur, "consolidator_peer", agents.render("consolidator_peer.md", peer_values),
-                  pool.path, peer_dir)
+                  pool.path, peer_dir, hook)
     costs.append(review.cost)
     cur.clear()
     verdict = (review.result or {}).get("verdict") if review.kind == "review" else None
@@ -140,7 +176,8 @@ def discuss(cfg, pool, values, draft, run_dir, costs=None, cur=None):
                      peer_notes="## A second model reviewed your first draft\n\nYour draft:\n\n%s\n\n"
                                 "Its notes:\n\n%s\n\nWrite the file again, taking the notes into account "
                                 "where they are right." % (draft, notes))
-        hand = _run(cfg, cur, "consolidator", agents.render("consolidator.md", again), pool.path, again_dir)
+        hand = _run(cfg, cur, "consolidator", agents.render("consolidator.md", again), pool.path, again_dir,
+                    hook)
         costs.append(hand.cost)
         cur.clear()
         text = (hand.result or {}).get("text") if hand.kind == "memory" else None

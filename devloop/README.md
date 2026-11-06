@@ -129,8 +129,13 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
   is readable, `devloop.quota_retry_seconds` (default 1800), then runs the chain again from its
   first command. The wait costs no round, no feedback entry and no issuer time
   (`issuer_timeout_seconds` moves by it) and holds no machine slot; the ticket stays running with
-  a `waiting` mark and the board shows 額度用完. The opener (ticket_creator) does not wait: its run
-  ends as before. Defaults: worker opus medium,
+  a `waiting` mark and the board shows 額度用完. auto_fixer and memory_keeper wait the same way:
+  auto_fixer's fixer keeps the group `fixing` in the same fix round (cost row `quota` and a
+  `waiting` mark on the group, events "waiting for quota" / "quota wait over"; the board's
+  integration-branch row shows 額度用完), and every agent of memory_keeper (consolidator and
+  consolidator_peer) puts `waiting` (with `path`) in memory/state.json and its `quota` row in the
+  run's cost; a SIGTERM during the wait keeps that row once and drops `waiting`. The opener
+  (ticket_creator) does not wait: its run ends as before. Defaults: worker opus medium,
   `worker_simple` (tickets with `complexity: simple`) sonnet medium, creator opus xhigh,
   consolidator fable then opus. To try `agy` for workers, put it first in the worker chain, e.g.
   `"worker": [["agy", "...", "high"], ["claude", "-p", "--model", "opus", "--effort", "medium", ...]]`.

@@ -48,6 +48,15 @@ REASON_TEXT = {"rounds": "3 輪用完", "timeout": "超時", "decision": "要你
                "quota": "額度用完"}
 
 
+def group_state_text(g):
+    """The state cell of a group's row; a fixer waiting for a quota reset says so and until when."""
+    text = GROUP_TEXT.get(g.get("state"), g.get("state"))
+    waiting = g.get("waiting") or {}
+    if waiting.get("reason") == "quota":
+        text = "%s(%s,等到 %s)" % (text, REASON_TEXT["quota"], waiting.get("until") or "?")
+    return text
+
+
 # ---------------------------------------------------------------- numbers
 
 def tokens(t):
@@ -172,7 +181,7 @@ def render(cfg, snap, key=None):
                '<th>分支</th><th>票</th><th>修補輪</th><th>最後一次 regression</th><th>發版</th></tr>')
     for g in sorted(snap.groups.values(), key=lambda g: int(g["id"][1:]), reverse=True):
         out.append("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td class='num'>%s</td><td>%s</td><td>%s</td></tr>" % (
-            e(g["id"]), e(GROUP_TEXT.get(g.get("state"), g.get("state"))), e(g.get("branch")),
+            e(g["id"]), e(group_state_text(g)), e(g.get("branch")),
             e(" ".join("#" + i for i in g.get("members") or [])), e(g.get("fix_round", 0)),
             e((g.get("last_regression") or "")[:160]), e({"ok": "成功", "failed": "失敗"}.get(g.get("release"), ""))))
     out.append("</table></div></section>")
