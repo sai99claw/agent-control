@@ -2347,6 +2347,30 @@ class Recovery(LoopCase):
         self.assertEqual(self.state(1), "landed")
 
 
+class GroupSizeUnits(LoopCase):
+    """devloop.max_group_size: joinable() and group_for() (implementer's unit tests)."""
+
+    def ctl(self, size):
+        from unittest import mock
+        import ticket_controller
+        c = ticket_controller.Controller.__new__(ticket_controller.Controller)
+        c.cfg = mock.Mock(max_group_size=size)
+        return c
+
+    def snap(self, members):
+        from unittest import mock
+        return mock.Mock(dag={}, tickets={"9": {}}, groups={"g1": {"id": "g1", "members": members}})
+
+    def test_full_group_not_joinable(self):
+        from unittest import mock
+        with mock.patch("ticket_controller.dagmod.verify", return_value="together"), \
+                mock.patch("ticket_controller.dagmod.deps", return_value=[]):
+            c = self.ctl(2)
+            self.assertFalse(c.joinable(self.snap(["1", "2"]), "9", {"id": "g1", "members": ["1", "2"]}))
+            self.assertTrue(c.joinable(self.snap(["1"]), "9", {"id": "g1", "members": ["1"]}))
+            self.assertTrue(c.joinable(self.snap(["1", "9"]), "9", {"id": "g1", "members": ["1", "9"]}))
+
+
 class NoReverifyPaths(LoopCase):
     """#29 / D-090: main moved only in devloop.no_reverify_paths -> the controller merges it in."""
 
