@@ -5952,9 +5952,10 @@ class T39Acceptance(LoopCase):
         return board.render(Config(self.proj), self.snap())
 
     @staticmethod
-    def cells(page, row_start):
+    def cells(page, needle):
+        # needle is a '<td>' cell; rfind('<tr', 0, at) then finds this row's own '<tr'
         import re
-        at = page.find(row_start)
+        at = page.find(needle)
         if at < 0:
             return None
         row = page[page.rfind("<tr", 0, at):page.find("</tr>", at)]
@@ -6004,7 +6005,7 @@ class T39Acceptance(LoopCase):
         heads = ["組", "狀態", "原因"]
         for gid, want in (("g1", "紅燈"), ("g2", "合併衝突"), ("g3", "額度用完"), ("g4", "")):
             with self.subTest(group=gid):
-                cells = self.cells(part, "<tr><td>%s</td>" % gid)
+                cells = self.cells(part, "<td>%s</td>" % gid)
                 self.assertIsNotNone(cells)
                 self.assertEqual(html.unescape(cells[heads.index("原因")]).strip(), want)
 
