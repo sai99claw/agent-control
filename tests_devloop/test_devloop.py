@@ -6606,6 +6606,317 @@ class LastFullSecondsUnit(unittest.TestCase):
         self.assertIn("took 30 seconds.", text)
 
 
+class T43Acceptance(LoopCase):
+    """Ticket #43: the Token tab shows where tokens and dollars went, from every cost row in the
+    pool (tickets, integration branches, memory runs). Expected values are worked out by hand from
+    the ticket's fixture."""
+
+    MEASURES = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "usd")
+    TITLES = ("近 30 天", "每天", "依角色", "依模型", "每張落地票", "最貴的十張", "估計與實際")
+
+    def setUp(self):
+        super().setUp()
+        old_tz = os.environ.get("TZ")
+
+        def restore():
+            if old_tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = old_tz
+            time.tzset()
+        self.addCleanup(restore)
+        os.environ["TZ"] = "UTC"
+        time.tzset()
+        import calendar
+        self.now = calendar.timegm((2026, 11, 6, 12, 0, 0))
+
+        def row(role, model, at, i, o, cr, cw, usd):
+            return {"role": role, "model": model, "at": at, "input_tokens": i, "output_tokens": o,
+                    "cache_read_tokens": cr, "cache_write_tokens": cw, "usd": usd}
+        self.add(1, state="landed", complexity="simple", token_estimate=100000,
+                 cost=[row("worker", "sonnet", "2026-11-06T10:00:00Z", 10, 1000, 50000, 2000, 0.50),
+                       row("verifier", "opus", "2026-11-05T09:00:00Z", 20, 2000, 100000, 3000, 1.00)])
+        self.add(2, state="landed", complexity="complex", token_estimate=50000,
+                 cost=[row("worker", "opus", "2026-11-03T11:00:00Z", None, None, None, None, None)])
+        self.add(3, state="stuck", cost=[row("worker", "opus", "2026-10-01T00:00:00Z", 5, 5, 0, 0, 3.00)])
+        self.pool.update(lambda tx: tx.put_group({
+            "id": "g1", "state": "landed", "members": ["1"],
+            "cost": [row("fixer", "opus", "2026-11-06T08:00:00Z", 1, 100, 1000, 10, 0.10)]}), "test: g1")
+        self.pool.update(lambda tx: tx.write("memory/state.json", {"runs": [{"cost": [
+            row("consolidator", "fable", "2026-11-04T00:00:00Z", 2, 200, 0, 0, 0.02)]}]}), "test: memory")
+
+    # ------------------------------------------------------------ helpers
+
+    def page(self):
+        import inspect
+        import board
+        self.assertTrue(hasattr(board, "render_tokens_tab"), "no render_tokens_tab")
+        params = inspect.signature(board.render).parameters
+        for name in ("query", "now"):
+            self.assertIn(name, params, "render() takes %s" % name)
+        from core.config import Config
+        page = board.render(Config(self.proj), self.snap(), query={"tab": "tokens"}, now=self.now)
+        at = page.find('id="tab-tokens"')
+        self.assertGreaterEqual(at, 0, "no Token tab element")
+        return page[page.find(">", at) + 1:]
+
+    @staticmethod
+    def squash(text):
+        return "".join(text.split())
+
+    def parse(self, body):
+        """Walk the tab: a stream of ('text', block text) and ('table', table) items in page order,
+        and the svg charts. A table: {'caption', 'rows': [{'kind': 'th'|'td', 'cells', 'hrefs'}]}.
+        A chart: {'measure', 'bars': [rect attrs]}."""
+        from html.parser import HTMLParser
+        blocks = {"p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "section", "br", "table",
+                  "caption", "header", "footer", "ul", "ol", "dl", "dt", "dd", "svg", "details",
+                  "summary", "figcaption", "figure"}
+
+        class P(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.stream, self.charts = [], []
+                self.buf = []
+                self.table = None
+                self.row = None
+                self.cell = None
+                self.caption = False
+                self.skip = 0
+                self.svg = None
+
+            def flush(self):
+                text = " ".join("".join(self.buf).split())
+                self.buf = []
+                if text:
+                    self.stream.append(("text", text))
+
+            def handle_starttag(self, tag, attrs):
+                a = dict(attrs)
+                if tag in ("style", "script"):
+                    self.skip += 1
+                    return
+                if tag == "svg":
+                    self.svg = {"measure": a.get("data-measure"),
+                                "chart": "chart" in (a.get("class") or "").split(), "bars": []}
+                    self.charts.append(self.svg)
+                if tag == "rect" and self.svg is not None and "bar" in (a.get("class") or "").split():
+                    self.svg["bars"].append(a)
+                if self.table is None and tag in blocks:
+                    self.flush()
+                if tag == "table":
+                    self.table = {"caption": "", "rows": []}
+                    self.stream.append(("table", self.table))
+                elif self.table is not None:
+                    if tag == "caption":
+                        self.caption = True
+                    elif tag == "tr":
+                        self.row = {"kind": "th", "cells": [], "hrefs": []}
+                        self.table["rows"].append(self.row)
+                    elif tag in ("td", "th") and self.row is not None:
+                        if tag == "td":
+                            self.row["kind"] = "td"
+                        self.cell = []
+                        self.row["cells"].append(self.cell)
+                    elif tag == "a" and self.row is not None:
+                        self.row["hrefs"].append(a.get("href") or "")
+
+            def handle_startendtag(self, tag, attrs):
+                self.handle_starttag(tag, attrs)
+                if tag in ("svg",):
+                    self.svg = None
+
+            def handle_endtag(self, tag):
+                if tag in ("style", "script"):
+                    self.skip = max(0, self.skip - 1)
+                    return
+                if tag == "svg":
+                    self.svg = None
+                if tag == "table" and self.table is not None:
+                    for r in self.table["rows"]:
+                        r["cells"] = [" ".join("".join(c).split()) for c in r["cells"]]
+                    self.table = self.row = self.cell = None
+                    return
+                if self.table is not None:
+                    if tag == "caption":
+                        self.caption = False
+                    elif tag in ("td", "th"):
+                        self.cell = None
+                    return
+                if tag in blocks:
+                    self.flush()
+
+            def handle_data(self, data):
+                if self.skip or self.svg is not None:
+                    return
+                if self.table is not None:
+                    if self.caption:
+                        self.table["caption"] += data
+                    elif self.cell is not None:
+                        self.cell.append(data)
+                    return
+                self.buf.append(data)
+
+        p = P()
+        p.feed(body)
+        p.close()
+        p.flush()
+        return p.stream, p.charts
+
+    def find_table(self, stream, title):
+        """The first table whose caption, or the last text block before it, holds the title."""
+        want = self.squash(title)
+        last = ""
+        for kind, item in stream:
+            if kind == "text":
+                last = item
+            else:
+                if want in self.squash(item["caption"]) or want in self.squash(last):
+                    return item
+                last = ""
+        self.fail("no table titled %s" % title)
+
+    def head_body(self, table):
+        heads = [r["cells"] for r in table["rows"] if r["kind"] == "th"]
+        self.assertTrue(heads, "table has no header row: %r" % table)
+        body = [r for r in table["rows"] if r["kind"] == "td" and r["cells"]]
+        return heads[0], body
+
+    def col(self, head, name):
+        names = [self.squash(h) for h in head]
+        self.assertIn(self.squash(name), names, "no column %s in %r" % (name, head))
+        return names.index(self.squash(name))
+
+    def window(self, stream, start, n):
+        """Squashed text of n stream items from index start on (tables as their cell text)."""
+        out = []
+        for kind, item in stream[start:start + n]:
+            if kind == "text":
+                out.append(item)
+            else:
+                out.append(item["caption"])
+                for r in item["rows"]:
+                    out.extend(r["cells"])
+        return self.squash(" ".join(out))
+
+    def days(self):
+        import datetime
+        last = datetime.date(2026, 11, 6)
+        return [(last - datetime.timedelta(days=29 - i)).isoformat() for i in range(30)]
+
+    # ------------------------------------------------------------ cases
+
+    def test_last_30_days_table(self):
+        stream, _ = self.parse(self.page())
+        head, body = self.head_body(self.find_table(stream, "近 30 天"))
+        self.assertEqual(len(body), 1, body)
+        cells = body[0]["cells"]
+        self.assertEqual(cells[self.col(head, "次數")], "5")
+        for want in ("33(1 筆未知)", "3,300(1 筆未知)", "151,000(1 筆未知)", "5,010(1 筆未知)",
+                     "$1.62(1 筆未知)"):
+            self.assertIn(want, cells)
+
+    def test_daily_table(self):
+        stream, _ = self.parse(self.page())
+        head, body = self.head_body(self.find_table(stream, "每天"))
+        date, count = self.col(head, "日期"), self.col(head, "次數")
+        self.assertEqual([r["cells"][date] for r in body], self.days())
+        by_day = dict((r["cells"][date], r["cells"]) for r in body)
+
+        def measures(day):
+            return [c for i, c in enumerate(by_day[day]) if i not in (date, count)]
+        self.assertEqual(measures("2026-11-03"), ["未知"] * 5)
+        self.assertEqual(by_day["2026-11-03"][count], "1")
+        self.assertEqual(measures("2026-11-02"), ["—"] * 5)
+        self.assertEqual(by_day["2026-11-06"][count], "2")
+        for want in ("11", "1,100", "51,000", "2,010", "$0.60"):
+            self.assertIn(want, measures("2026-11-06"))
+        self.assertEqual(by_day["2026-11-05"][count], "1")
+        for want in ("20", "2,000", "100,000", "3,000", "$1.00"):
+            self.assertIn(want, measures("2026-11-05"))
+
+    def test_daily_bars(self):
+        _, charts = self.parse(self.page())
+        charts = [c for c in charts if c["chart"] and c["measure"]]
+        self.assertEqual(sorted(c["measure"] for c in charts), sorted(self.MEASURES))
+        values = {}
+        for c in charts:
+            self.assertEqual([b.get("data-day") for b in c["bars"]], self.days(), c["measure"])
+            values[c["measure"]] = dict((b.get("data-day"), b.get("data-value")) for b in c["bars"])
+        self.assertEqual(values["input_tokens"]["2026-11-06"], "11")
+        self.assertEqual(values["input_tokens"]["2026-11-05"], "20")
+        self.assertEqual(values["input_tokens"]["2026-11-03"], "")
+        self.assertEqual(values["input_tokens"]["2026-11-02"], "")
+        self.assertEqual(values["cache_read_tokens"]["2026-11-06"], "51000")
+        self.assertEqual(values["usd"]["2026-11-05"], "1.00")
+        self.assertEqual(values["usd"]["2026-11-06"], "0.60")
+        self.assertEqual(values["usd"]["2026-11-03"], "")
+
+    def test_by_role_and_by_model(self):
+        stream, _ = self.parse(self.page())
+        head, body = self.head_body(self.find_table(stream, "依角色"))
+        count = self.col(head, "次數")
+        self.assertEqual([r["cells"][0] for r in body], ["consolidator", "fixer", "verifier", "worker"])
+        rows = dict((r["cells"][0], r["cells"]) for r in body)
+        self.assertEqual(rows["worker"][count], "2")
+        self.assertIn("10(1 筆未知)", rows["worker"])
+        self.assertIn("$0.50(1 筆未知)", rows["worker"])
+        self.assertIn("$1.00", rows["verifier"])
+        head, body = self.head_body(self.find_table(stream, "依模型"))
+        count = self.col(head, "次數")
+        self.assertEqual([r["cells"][0] for r in body], ["fable", "opus", "sonnet"])
+        rows = dict((r["cells"][0], r["cells"]) for r in body)
+        self.assertEqual(rows["opus"][count], "3")
+        self.assertIn("21(1 筆未知)", rows["opus"])
+        self.assertIn("$1.10(1 筆未知)", rows["opus"])
+        self.assertEqual(rows["sonnet"][count], "1")
+
+    def test_per_landed_ticket_median(self):
+        stream, _ = self.parse(self.page())
+        at = [i for i, (k, item) in enumerate(stream)
+              if k == "text" and self.squash("每張落地票") in self.squash(item)]
+        at += [i for i, (k, item) in enumerate(stream)
+               if k == "table" and self.squash("每張落地票") in self.squash(item["caption"])]
+        self.assertTrue(at, "no 每張落地票")
+        text = self.window(stream, min(at), 4)
+        self.assertIn("153,030(1張)", text)
+        self.assertIn("$1.50(1張)", text)
+
+    def test_ten_most_expensive(self):
+        stream, _ = self.parse(self.page())
+        head, body = self.head_body(self.find_table(stream, "最貴的十張"))
+        cols = dict((n, self.col(head, n)) for n in ("票", "標題", "狀態", "token", "快取寫", "美元", "次數"))
+        self.assertEqual(len(body), 2, body)
+        self.assertTrue(any(h.endswith("?ticket=3") for h in body[0]["hrefs"]), body[0])
+        self.assertTrue(any(h.endswith("?ticket=1") for h in body[1]["hrefs"]), body[1])
+        got = [[r["cells"][cols[n]] for n in ("標題", "token", "快取寫", "美元", "次數")] for r in body]
+        self.assertEqual(got, [["ticket 3", "10", "0", "$3.00", "1"],
+                               ["ticket 1", "153,030", "5,000", "$1.50", "2"]])
+
+    def test_estimate_against_actual(self):
+        stream, _ = self.parse(self.page())
+        table = self.find_table(stream, "估計與實際")
+        head, body = self.head_body(table)
+        ticket, est = self.col(head, "票"), self.col(head, "估計")
+        actual, ratio = self.col(head, "實際"), self.col(head, "比")
+        self.assertEqual([r["cells"][ticket].lstrip("#") for r in body], ["1", "2"])
+        self.assertEqual(body[0]["cells"][actual], "153,030")
+        self.assertEqual(body[0]["cells"][ratio], "1.53")
+        self.assertIn(body[0]["cells"][est].replace(",", ""), ("100000",))
+        self.assertEqual(body[1]["cells"][actual], "未知")
+        self.assertEqual(body[1]["cells"][ratio], "未知")
+        after = [i for i, (k, item) in enumerate(stream) if item is table][0] + 1
+        text = self.window(stream, after, 6)
+        self.assertGreaterEqual(text.count("1.53(1張)"), 2, text)
+        self.assertIn("未知", text)
+
+    def test_opener_and_reviser_not_counted(self):
+        stream, _ = self.parse(self.page())
+        lines = [item for k, item in stream if k == "text"]
+        self.assertTrue(any("開題者" in t and ("修" in t or "改" in t or "revis" in t) for t in lines),
+                        "no line about the opener's and reviser's runs: %r" % lines)
+
+
 class T13Acceptance(LoopCase):
     """tickets.py ready g<N>: a stuck group goes back to the regression (#13)."""
 
