@@ -531,6 +531,61 @@ class FixerCasesChanged(LoopCase):
         self.assertEqual(self.fixer.case_mark("1"), "T1Acceptance")
 
 
+class T35Acceptance(LoopCase):
+    """#35: the fixer changes a non-acceptance test only on a ticket's explicit basis and the group
+    keeps each such change in tests_changed."""
+
+    SENTENCE = ("You may change a test that is not an acceptance case only when a ticket of this group "
+                "explicitly changes the behaviour that test asserts")
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def run_tests_action(self):
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["tests"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+
+    def test_item1_done_with_tests_changed_is_recorded_and_lands(self):
+        self.run_tests_action()
+        self.assertEqual(self.state(1), "landed")
+        g = self.snap().groups["g1"]
+        self.assertIn("tests_changed", g, g)
+        self.assertEqual(g["tests_changed"],
+                         [{"test": "suite.red", "ticket": "1", "acceptance": "a", "round": 1}])
+
+    def test_item2_fixer_prompt(self):
+        self.run_tests_action()
+        path = os.path.join(self.tmp, "wt", "runs", "fix", "g1", "r1", "prompt.md")
+        self.assertTrue(os.path.exists(path), "no fixer prompt at %s" % path)
+        with open(path, encoding="utf-8") as fh:
+            prompt = fh.read()
+        # the template wraps its lines: the sentence is compared with whitespace runs as one space
+        self.assertIn(self.SENTENCE, " ".join(prompt.split()))
+        self.assertIn('"kind": "done"', prompt)
+        self.assertIn('"kind": "decision"', prompt)
+        # the done example runs from its "kind" to the decision example that follows it
+        start = prompt.index('"kind": "done"')
+        example = prompt[start:prompt.index('"kind": "decision"', start)]
+        self.assertIn("tests_changed", example)
+
+    def test_item3_readme_fixer_row(self):
+        # rows parsed as T28Acceptance.test_item4_readme_roles_rows does
+        with open(os.path.join(HOME, "devloop", "README.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("\n## Roles\n", text)
+        sec = text.split("\n## Roles\n", 1)[1].split("\n## ", 1)[0]
+        lines = [l for l in sec.splitlines() if l.strip().startswith("|")]
+        self.assertGreaterEqual(len(lines), 3, "the Roles section has no table")
+        by_name = {[c.strip() for c in r.strip().strip("|").split("|")][0]: r for r in lines[2:]}
+        self.assertIn("`fixer`", by_name)
+        for w in ("tests_changed", "cases_changed", "decision"):
+            self.assertIn(w, by_name["`fixer`"])
+
+
 class FixerBlockedIsDecision(LoopCase):
     """A fixer hand-in of kind blocked is handled exactly as decision: one fixer run, one decision
     page carrying the fixer's text, the group stuck with its members merged."""

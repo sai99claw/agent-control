@@ -135,6 +135,13 @@ elif role == "fixer":
     if action == "blocked":
         hand({"kind": "blocked", "text": "tickets contradict"})
         sys.exit(0)
+    if action == "tests":   # #35: what "fix" does, and lists one changed non-acceptance test
+        if os.path.exists("red.txt"):
+            os.unlink("red.txt")
+        commit("fix")
+        hand({"kind": "done", "summary": "removed red",
+              "tests_changed": [{"test": "suite.red", "ticket": "1", "acceptance": "a"}]})
+        sys.exit(0)
     if os.path.exists("red.txt"):
         os.unlink("red.txt")
     commit("fix")
