@@ -2133,6 +2133,90 @@ class RedCheck(LoopCase):
         self._round_two("unnamed", "result.json")
 
 
+class TestHostSampler(LoopCase):
+    """#44, implementer's own: the sampler thread's failure handling and stop, and the README section."""
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_ROLE", None)
+        self.env.pop("DEVLOOP_RUN_DIR", None)
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def test_sampler_writes_at_start_and_stops_its_thread(self):
+        import io
+        from core import host
+        self.config(host_sample_seconds=1)
+        err = io.StringIO()
+        sampler = host.Sampler(self.cfg(), out=err).start()
+        thread = sampler._thread
+        time.sleep(1.5)
+        sampler.stop()
+        self.assertFalse(thread.is_alive())
+        path = os.path.join(self.tmp, "wt", "runs", "host",
+                            __import__("socket").gethostname().replace(os.sep, "_") + ".jsonl")
+        with open(path) as fh:
+            rows = [json.loads(line) for line in fh.read().splitlines()]
+        self.assertGreaterEqual(len(rows), 2)
+        self.assertEqual(sorted(rows[0]), sorted(host.KEYS))
+        self.assertEqual(err.getvalue(), "")
+        count = len(rows)
+        time.sleep(1.3)
+        with open(path) as fh:
+            self.assertEqual(len(fh.read().splitlines()), count, "a stopped sampler wrote on")
+
+    def test_null_never_starts_a_thread(self):
+        from core import host
+        self.config(host_sample_seconds=None)
+        sampler = host.Sampler(self.cfg()).start()
+        self.assertIsNone(sampler._thread)
+        sampler.stop()
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "wt", "runs", "host")))
+
+    def test_failed_samples_print_one_line_each_and_sampling_goes_on(self):
+        import io
+        from core import host
+        self.config(host_sample_seconds=1)
+        os.makedirs(os.path.join(self.tmp, "wt", "runs"))
+        with open(os.path.join(self.tmp, "wt", "runs", "host"), "w") as fh:
+            fh.write("a file where the folder belongs\n")
+        err = io.StringIO()
+        sampler = host.Sampler(self.cfg(), out=err).start()
+        time.sleep(1.5)
+        sampler.stop()
+        lines = err.getvalue().splitlines()
+        self.assertGreaterEqual(len(lines), 2, err.getvalue())
+        for line in lines:
+            self.assertTrue(line.startswith("ticket_controller: host sample failed: "), line)
+
+    def test_controller_lands_although_every_sample_fails(self):
+        self.config(host_sample_seconds=1)
+        os.makedirs(os.path.join(self.tmp, "wt", "runs"))
+        with open(os.path.join(self.tmp, "wt", "runs", "host"), "w") as fh:
+            fh.write("x\n")
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.snap().ticket("1")["state"], "landed")
+        failed = [l for l in res.stderr.splitlines() if "host sample failed" in l]
+        self.assertGreaterEqual(len(failed), 1, res.stderr)
+
+    def test_readme_section_sits_before_dashboard_and_names_the_rules(self):
+        with open(os.path.join(LOOP, "README.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        heads = [line for line in text.splitlines() if line.startswith("## ")]
+        self.assertIn("## Host samples", heads)
+        self.assertEqual(heads[heads.index("## Host samples") + 1], "## Dashboard")
+        section = text.split("## Host samples", 1)[1].split("## Dashboard", 1)[0]
+        flat = " ".join(section.split())
+        for words in ("runs/host/<hostname>.jsonl", "devloop.host_sample_seconds", "default 60",
+                      "null = off", "7 days", "8 days", "DEVLOOP_RUN_DIR", "DEVLOOP_ROLE",
+                      "non-blocking", "mem_available", "disk_free", "slots_used", "load1"):
+            self.assertIn(words, flat)
+
+
 class TestLayerDocs(unittest.TestCase):
     ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
