@@ -676,6 +676,57 @@ class T9Acceptance(LoopCase):
         self.assertEqual(self.snap().groups["g1"]["release"], "ok")
 
 
+class T33Acceptance(LoopCase):
+    """#33: devloop.max_group_size caps how many tickets one integration branch takes."""
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def groups(self):
+        return {g["id"]: g["members"] for g in self.snap().groups.values()}
+
+    def test_max_group_size_defaults_to_10_and_takes_a_setting(self):
+        self.assertEqual(getattr(self.cfg(), "max_group_size", None), 10)
+        self.config(max_group_size=3)
+        self.assertEqual(getattr(self.cfg(), "max_group_size", None), 3)
+
+    def test_bad_max_group_size_stops_tickets_list(self):
+        for bad in (0, -1, 2.5, "10", True, None):
+            with self.subTest(bad=bad):
+                self.config(max_group_size=bad)
+                res = self.run_py("tickets.py", "list")
+                self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+                self.assertIn("devloop.max_group_size", res.stderr)
+
+    def test_three_together_tickets_with_size_2_take_two_groups(self):
+        self.config(max_group_size=2)
+        self.add(1)
+        self.add(2)
+        self.add(3)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        for i in (1, 2, 3):
+            self.assertEqual(self.state(i), "landed", i)
+        self.assertEqual(self.groups(), {"g1": ["1", "2"], "g2": ["3"]})
+
+    def test_size_1_dependent_ticket_opens_its_group_after_g1_lands(self):
+        self.config(max_group_size=1)
+        self.add(1)
+        self.add(2, deps=[1])
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.state(2), "landed")
+        self.assertEqual(self.groups(), {"g1": ["1"], "g2": ["2"]})
+        groups = self.snap().groups
+        landed, base = groups["g1"].get("landed_sha"), groups["g2"].get("base")
+        self.assertTrue(landed and base, groups)
+        res = subprocess.run(["git", "merge-base", "--is-ancestor", landed, base], cwd=self.proj,
+                             capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, "g2 was not opened from a main holding g1's landing")
+
+
 class Revise(LoopCase):
     def test_a_worker_can_have_the_ticket_revised_and_cases_rewritten(self):
         self.add(1)
