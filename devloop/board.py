@@ -44,7 +44,17 @@ STATE_TEXT = {"ready": "待派", "running": "做中", "merged": shown_state("mer
 GROUP_TEXT = {"open": "收票中", "pr": "PR(待驗)", "fixing": "修紅中", "verified": "已驗,待落地",
               "landed": "已落地", "stuck": "卡住", "cancelled": "取消"}
 REASON_TEXT = {"rounds": "3 輪用完", "timeout": "超時", "decision": "要你決定", "hard_block": "碰到 hard_block",
-               "env": "環境", "error": "程式錯誤", "target": "整合分支不見"}
+               "env": "環境", "error": "程式錯誤", "target": "整合分支不見",
+               "quota": "額度用完"}
+
+
+def group_state_text(g):
+    """The state cell of a group's row; a fixer waiting for a quota reset says so and until when."""
+    text = GROUP_TEXT.get(g.get("state"), g.get("state"))
+    waiting = g.get("waiting") or {}
+    if waiting.get("reason") == "quota":
+        text = "%s(%s,等到 %s)" % (text, REASON_TEXT["quota"], waiting.get("until") or "?")
+    return text
 
 
 # ---------------------------------------------------------------- numbers
@@ -142,6 +152,8 @@ def render(cfg, snap, key=None):
         if state == "stuck":
             st = t.get("stuck") or {}
             note = "%s:%s" % (REASON_TEXT.get(st.get("reason"), st.get("reason")), (st.get("text") or "")[:120])
+        elif state == "running" and (t.get("waiting") or {}).get("reason") == "quota":
+            note = "%s,等到 %s 再跑" % (REASON_TEXT["quota"], t["waiting"].get("until") or "?")
         elif state == "running":
             run = t.get("run") or {}
             note = "issuer 跑了 %d 分" % (osx.age(run.get("started")) / 60) if run.get("started") else "剛派出"
@@ -169,7 +181,7 @@ def render(cfg, snap, key=None):
                '<th>分支</th><th>票</th><th>修補輪</th><th>最後一次 regression</th><th>發版</th></tr>')
     for g in sorted(snap.groups.values(), key=lambda g: int(g["id"][1:]), reverse=True):
         out.append("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td class='num'>%s</td><td>%s</td><td>%s</td></tr>" % (
-            e(g["id"]), e(GROUP_TEXT.get(g.get("state"), g.get("state"))), e(g.get("branch")),
+            e(g["id"]), e(group_state_text(g)), e(g.get("branch")),
             e(" ".join("#" + i for i in g.get("members") or [])), e(g.get("fix_round", 0)),
             e((g.get("last_regression") or "")[:160]), e({"ok": "成功", "failed": "失敗"}.get(g.get("release"), ""))))
     out.append("</table></div></section>")

@@ -30,10 +30,12 @@ import json
 import os
 import signal
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import agents, memory, osx, worktrees  # noqa: E402
+from core.pool import event  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 
@@ -84,7 +86,8 @@ def fix(cfg, pool, gid, report, live=None):
         "project_memory": memory.project_path(cfg),
     }
     pending = agents.start(cfg, "fixer", agents.render("fixer.md", values), tree, run_dir,
-                           cfg.agent_timeout_seconds, extra_env={"AC_CODE_ROOT": tree, "DEVLOOP_GROUP": gid})
+                           cfg.agent_timeout_seconds, extra_env={"AC_CODE_ROOT": tree, "DEVLOOP_GROUP": gid},
+                           on_quota=quota_hook(pool, gid))
     live.append(pending)
     hand = pending.finish()
     live.clear()
@@ -170,6 +173,44 @@ def _record_cost(pool, gid, cost):
         pass
 
 
+def quota_mark(until, text):
+    """The group's "waiting" mark while its fixer waits for a quota reset (the issuer's shape)."""
+    return {"reason": "quota", "since": osx.now(),
+            "until": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(until)), "text": (text or "")[:200]}
+
+
+def quota_hook(pool, gid):
+    """agents.start's on_quota for the fixer: before the wait the run's row goes into the group's
+    cost with the "waiting" mark and an event; after it the mark goes and an event says so."""
+    def on_quota(phase, row=None, until=None, text=None):
+        if phase == "wait":
+            mark = quota_mark(until, text)
+
+            def change(tx):
+                group = tx.data.groups.get(gid)
+                if group is not None:
+                    group.setdefault("cost", []).append(row)
+                    group["waiting"] = mark
+                    event(group, "waiting for quota", role=(row or {}).get("role"), until=mark["until"])
+                    tx.put_group(group)
+            pool.update(change, "group %s: fixer waiting for quota" % gid)
+        else:
+            _drop_waiting(pool, gid, "quota wait over")
+    return on_quota
+
+
+def _drop_waiting(pool, gid, what=None):
+    """Remove the group's "waiting" mark (with event `what` when given); no-op without one."""
+    def change(tx):
+        group = tx.data.groups.get(gid)
+        if group is not None and ("waiting" in group or what):
+            group.pop("waiting", None)
+            if what:
+                event(group, what)
+            tx.put_group(group)
+    pool.update(change, "group %s: %s" % (gid, what or "quota wait dropped"))
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--group", required=True)
@@ -196,6 +237,11 @@ def main(argv=None):
                     _record_cost(pool, args.group, row)
             except Exception as exc:
                 print("auto_fixer: could not record the fixer's cost: %s" % exc, file=sys.stderr)
+        if pool is not None:
+            try:
+                _drop_waiting(pool, args.group)
+            except Exception as exc:
+                print("auto_fixer: could not clear the group's quota wait: %s" % exc, file=sys.stderr)
         return 4
     except osx.OSFailure as exc:
         print("auto_fixer: %s" % exc, file=sys.stderr)

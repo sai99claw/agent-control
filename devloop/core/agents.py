@@ -5,7 +5,10 @@ in $DEVLOOP_RESULT before it exits. Nothing else is read from it.
 
 Each role has a chain of commands (D-049 ②, D-084): the first one that exists is started; when a
 run ends without a hand-in and its log says the account is out of quota, the next command is
-tried with the same prompt. A ticket may ask for a reasoning effort (D-047); it replaces the
+tried with the same prompt. When the last command of the chain says quota and the caller
+passed `on_quota` (the issuer does, the opener does not), the run waits for the reset its message
+names (quota_reset) or devloop.quota_retry_seconds, then starts the chain again from its first
+command (D-091). A ticket may ask for a reasoning effort (D-047); it replaces the
 command's own `--effort`.
 
 Cost (D-045, D-084): every run records role, model, effort, seconds, tokens (input, output, cache
@@ -115,22 +118,30 @@ _model = model_of   # older name, still imported in places
 # ---------------------------------------------------------------- running
 
 def start(cfg, role, prompt, cwd, run_dir, timeout, extra_env=None, effort=None, round_no=None,
-          chain_role=None):
+          chain_role=None, on_quota=None):
     """Start an agent without waiting. Returns a Pending. `chain_role` picks the commands when
-    they differ from the role's (a simple ticket's worker uses "worker_simple")."""
+    they differ from the role's (a simple ticket's worker uses "worker_simple").
+
+    `on_quota(phase, row=None, until=None, text=None)`: when given, a run whose last command is
+    out of quota waits for the reset instead of ending. Before the wait it is called with phase
+    "wait", the run's cost row (outcome "quota"), the epoch the wait ends and an excerpt of the
+    CLI's message; after the wait with phase "over". Without it the run ends as before."""
     osx.makedirs(run_dir)
     result_path = os.path.join(run_dir, "result.json")
     osx.atomic_write(os.path.join(run_dir, "prompt.md"), prompt)
     env = cfg.env(DEVLOOP_ROLE=role, DEVLOOP_RUN_DIR=run_dir, DEVLOOP_RESULT=result_path,
                   **(extra_env or {}))
     chain = [with_effort(argv, effort) for argv in cfg.agent_chain(chain_role or role)]
-    p = Pending(role, chain, prompt, cwd, env, run_dir, result_path, timeout, round_no, cfg)
+    p = Pending(role, chain, prompt, cwd, env, run_dir, result_path, timeout, round_no, cfg,
+                on_quota=on_quota)
     p.launch()
     return p
 
 
-def run(cfg, role, prompt, cwd, run_dir, timeout, extra_env=None, effort=None, round_no=None):
-    return start(cfg, role, prompt, cwd, run_dir, timeout, extra_env, effort, round_no).finish()
+def run(cfg, role, prompt, cwd, run_dir, timeout, extra_env=None, effort=None, round_no=None,
+        on_quota=None):
+    return start(cfg, role, prompt, cwd, run_dir, timeout, extra_env, effort, round_no,
+                 on_quota=on_quota).finish()
 
 
 class Interrupted(Exception):
@@ -138,14 +149,21 @@ class Interrupted(Exception):
 
 
 class Pending:
-    def __init__(self, role, chain, prompt, cwd, env, run_dir, result_path, timeout, round_no, cfg=None):
+    def __init__(self, role, chain, prompt, cwd, env, run_dir, result_path, timeout, round_no, cfg=None,
+                 on_quota=None):
         self.role, self.chain, self.prompt, self.cwd, self.env = role, chain, prompt, cwd, env
         self.run_dir, self.result_path, self.timeout, self.round_no = run_dir, result_path, timeout, round_no
         self.cfg = cfg
+        self.on_quota = on_quota
+        self.full_chain = list(chain)
         self.started = time.time()
         self.proc = self.argv = self.log = self.slot = None
-        self.waited = 0.0        # seconds spent waiting for a machine slot (every launch adds)
+        # seconds spent waiting for a machine slot (every launch adds) or for a quota reset
+        self.waited = 0.0
+        self.waited_before = 0.0  # self.waited when this run's own clock (self.started) last started
+        self.logs = 0            # agent-<n>.log files used so far (they keep counting across quota waits)
         self.tried = []
+        self.sleeping = False    # waiting for a quota reset: the row is already with the caller
         self.hand = None         # set once finish() collected the run; its row is in the Hand
 
     def launch(self):
@@ -182,7 +200,8 @@ class Pending:
                 pass
             except OSError as exc:
                 raise osx.OSFailure(osx.explain(exc, "cannot clear %s" % self.result_path))
-            self.log = os.path.join(self.run_dir, "agent-%d.log" % (len(self.tried) + 1))
+            self.logs += 1
+            self.log = os.path.join(self.run_dir, "agent-%d.log" % self.logs)
             self.attempt_started = time.time()
             try:
                 self.proc = osx.spawn(argv, cwd=self.cwd, env=env, log_path=self.log,
@@ -197,11 +216,12 @@ class Pending:
 
     def stop(self):
         """Stop the run. Returns its cost row with outcome "interrupted", or None when finish()
-        already collected it (that row is in its Hand)."""
+        already collected it (that row is in its Hand) or it is waiting for a quota reset (that
+        row went to on_quota)."""
         if self.proc is not None:
             osx.kill_tree(self.proc.pid)
         self._release()
-        if self.hand is not None:
+        if self.hand is not None or self.sleeping:
             return None
         return self._cost(None, None, False, False, outcome="interrupted")
 
@@ -212,7 +232,7 @@ class Pending:
     def _finish(self):
         while True:
             # only the time under a slot counts
-            left = max(1.0, self.timeout - (time.time() - self.started - self.waited))
+            left = max(1.0, self.timeout - (time.time() - self.started - (self.waited - self.waited_before)))
             rc, timed_out = osx.wait(self.proc, left)
             try:
                 result = osx.read_json(self.result_path, None)
@@ -226,9 +246,35 @@ class Pending:
                                    "outcome": "out of quota"})
                 self.launch()
                 continue
+            if out_of_quota and self.on_quota is not None:
+                self._wait_for_quota()
+                continue
             self._release()
             cost = self._cost(result, rc, timed_out, out_of_quota)
             return Hand(self.role, result, rc, timed_out, self.log, cost)
+
+    def _wait_for_quota(self):
+        """The last command said quota: hand the row to the caller, sleep until the reset with no
+        slot held, then start the whole chain again with a fresh clock (D-091)."""
+        self._release()
+        row = self._cost(None, None, False, True, outcome="quota")
+        text, at = _log_tail(self.log)
+        now = time.time()
+        retry = getattr(self.cfg, "quota_retry_seconds", None) or 1800
+        wait = quota_wait(text, at, now, retry)
+        self.proc = None
+        self.on_quota("wait", row=row, until=now + wait, text=_excerpt(text))
+        self.sleeping = True     # from here on the row is the caller's: stop() returns None
+        began = time.time()
+        time.sleep(max(0.0, now + wait - began))
+        self.waited += time.time() - began
+        self.on_quota("over")
+        self.chain = list(self.full_chain)
+        self.tried = []
+        self.started = time.time()
+        self.waited_before = self.waited
+        self.launch()
+        self.sleeping = False
 
     def _seconds(self):
         """Wall time since start; a run stopped within a tenth of a second keeps more digits
@@ -259,13 +305,89 @@ class Pending:
         return cost
 
 
-def _says_quota(log):
+def _log_tail(log):
+    """(the log's last 8000 characters, the log's mtime); ("", now) when it cannot be read."""
     try:
         with open(log, errors="replace") as fh:
-            text = fh.read()[-8000:].lower()
+            text = fh.read()[-8000:]
+        return text, os.path.getmtime(log)
     except OSError:
-        return False
-    return any(sign in text for sign in QUOTA_SIGNS)
+        return "", time.time()
+
+
+def _says_quota(log):
+    text, at = _log_tail(log)
+    low = text.lower()
+    return any(sign in low for sign in QUOTA_SIGNS) or quota_reset(text, at) is not None
+
+
+def _excerpt(text, limit=200):
+    """The part of the CLI's message that says quota, at most `limit` characters."""
+    low = text.lower()
+    hits = [low.rfind(sign) for sign in QUOTA_SIGNS + ("reset",)]
+    hits = [h for h in hits if h >= 0]
+    if not hits:
+        return text.strip()[-limit:]
+    i = max(hits)
+    begin = text.rfind("\n", 0, i) + 1
+    end = text.find("\n", i)
+    line = text[begin:end if end >= 0 else len(text)].strip()
+    return line[:limit]
+
+
+# ---------------------------------------------------------------- quota reset
+
+_UNITS = {"h": 3600, "hr": 3600, "hrs": 3600, "hour": 3600, "hours": 3600,
+          "m": 60, "min": 60, "mins": 60, "minute": 60, "minutes": 60}
+_CLOCK = re.compile(r"\breset(?:s)?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?(?:\s*(am|pm)\b)?", re.I)
+_SPAN = re.compile(r"\breset(?:s)?\s+in\s+((?:\d+\s*(?:hours?|hrs?|h|minutes?|mins?|m)\b[\s,]*(?:and\s+)?)+)",
+                   re.I)
+_SPAN_PART = re.compile(r"(\d+)\s*(hours?|hrs?|h|minutes?|mins?|m)\b", re.I)
+_EPOCH = re.compile(r"limit reached\s*\|\s*(\d{9,11})\b", re.I)
+GRACE = 600   # a time of day at most this many seconds before `at` is today's (the CLI's clock may run ahead)
+
+
+def quota_reset(text, at):
+    """The epoch a CLI's usage-limit message says the limit resets, or None (D-091 item 5).
+
+    Read: a time of day ("resets 3pm", "resets 3:30pm", "resets at 15:00", "will reset at 5pm"),
+    local time, the next one after `at` (one at most GRACE s before `at` is today's); a duration
+    ("resets in 2h 30m", "resets in 1 hour"); or an epoch ("... limit reached|1762473600"). The
+    last match in the text wins."""
+    found = []
+    for m in _CLOCK.finditer(text or ""):
+        hour, minute, half = int(m.group(1)), m.group(2), (m.group(3) or "").lower()
+        minute = int(minute) if minute is not None else None
+        if half:
+            if not 1 <= hour <= 12:
+                continue
+            hour = hour % 12 + (12 if half == "pm" else 0)
+        elif minute is None or hour > 23:
+            continue
+        if minute is not None and minute > 59:
+            continue
+        day = time.localtime(at)
+        when = time.mktime((day.tm_year, day.tm_mon, day.tm_mday, hour, minute or 0, 0, 0, 0, -1))
+        if when < at - GRACE:
+            when = time.mktime((day.tm_year, day.tm_mon, day.tm_mday + 1, hour, minute or 0, 0, 0, 0, -1))
+        found.append((m.start(), when))
+    for m in _SPAN.finditer(text or ""):
+        seconds = sum(int(n) * _UNITS[u.lower()] for n, u in _SPAN_PART.findall(m.group(1)))
+        found.append((m.start(), at + seconds))
+    for m in _EPOCH.finditer(text or ""):
+        found.append((m.start(), float(m.group(1))))
+    if not found:
+        return None
+    return max(found, key=lambda f: f[0])[1]
+
+
+def quota_wait(text, at, now, retry_seconds):
+    """Seconds to wait before running again: until a minute after the reset the text names (at
+    least 60), else retry_seconds."""
+    reset = quota_reset(text, at)
+    if reset is None:
+        return retry_seconds
+    return max(60, reset + 60 - now)
 
 
 # ---------------------------------------------------------------- usage

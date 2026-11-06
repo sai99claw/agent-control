@@ -3003,6 +3003,190 @@ class AgentChains(LoopCase):
             agents.with_effort(["claude"], "huge")
 
 
+class T31Acceptance(LoopCase):
+    """#31: a quota hit at the end of the command chain makes the issuer wait for the reset.
+    Expected values come from the ticket's acceptance items, not from the code."""
+
+    AT = time.mktime((2026, 11, 6, 14, 0, 0, 0, 0, -1))
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    @staticmethod
+    def local(y, mo, d, h, mi):
+        return time.mktime((y, mo, d, h, mi, 0, 0, 0, -1))
+
+    def agents(self):
+        from core import agents
+        self.assertTrue(hasattr(agents, "quota_reset"), "agents.quota_reset is missing")
+        self.assertTrue(hasattr(agents, "quota_wait"), "agents.quota_wait is missing")
+        return agents
+
+    def agents_cfg(self):
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            return json.load(fh)["devloop"]["agents"]
+
+    def cost_rows(self, ident, role):
+        return [c for c in self.snap().ticket(str(ident)).get("cost") or [] if c["role"] == role]
+
+    # 1
+    def test_quota_reset_reads_a_time_of_day(self):
+        agents = self.agents()
+        at = self.AT
+        cases = [
+            ("You've hit your limit · resets 3pm (Asia/Taipei)", self.local(2026, 11, 6, 15, 0)),
+            ("5-hour limit reached ∙ resets 3:30pm", self.local(2026, 11, 6, 15, 30)),
+            ("Your limit resets at 15:00", self.local(2026, 11, 6, 15, 0)),
+            ("Claude usage limit reached. Your limit will reset at 5pm.", self.local(2026, 11, 6, 17, 0)),
+            ("resets 1pm", self.local(2026, 11, 7, 13, 0)),
+            ("resets 1:55pm", self.local(2026, 11, 6, 13, 55)),
+            ("resets 12am", self.local(2026, 11, 7, 0, 0)),
+            ("resets 3pm, later resets 4pm", self.local(2026, 11, 6, 16, 0)),
+            ("RESETS 3PM", self.local(2026, 11, 6, 15, 0)),
+        ]
+        for text, want in cases:
+            with self.subTest(text=text):
+                self.assertEqual(agents.quota_reset(text, at), want)
+
+    # 2
+    def test_quota_reset_reads_durations_and_an_epoch(self):
+        agents = self.agents()
+        at = self.AT
+        cases = [("resets in 2h", at + 7200), ("resets in 2h 30m", at + 9000), ("resets in 45m", at + 2700),
+                 ("resets in 1 hour", at + 3600), ("Claude AI usage limit reached|1762473600", 1762473600),
+                 ("usage limit reached", None), ("resets 3", None)]
+        for text, want in cases:
+            with self.subTest(text=text):
+                self.assertEqual(agents.quota_reset(text, at), want)
+
+    # 3
+    def test_quota_wait(self):
+        agents = self.agents()
+        x = self.AT
+        self.assertEqual(agents.quota_wait("resets in 2h", x, x, 1800), 7260)
+        self.assertEqual(agents.quota_wait("resets in 2h", x, x + 3600, 1800), 3660)
+        self.assertEqual(agents.quota_wait("resets 1:59pm", x, x, 1800), 60)
+        self.assertEqual(agents.quota_wait("usage limit reached", x, x, 1800), 1800)
+
+    # 4
+    def test_quota_retry_seconds_default_and_bad_values(self):
+        from core.config import Config
+        self.assertEqual(getattr(Config(self.proj), "quota_retry_seconds", None), 1800)
+        for bad in (0, -5, 1.5, "30", True, None):
+            with self.subTest(bad=bad):
+                self.config(quota_retry_seconds=bad)
+                res = self.run_py("tickets.py", "list")
+                self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+                self.assertIn("devloop.quota_retry_seconds", res.stderr)
+
+    # 5 and 6
+    def test_a_quota_hit_at_the_chain_end_waits_without_a_round(self):
+        import calendar
+        import fcntl
+        self.config(quota_retry_seconds=8, issuer_timeout_seconds=6, machine_slots=1)
+        self.env["FAKE_QUOTA_TEXT"] = "Error: usage limit reached"
+        self.add(1)
+        self.plan(worker={"1": ["quota", "ok"]})
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "ticket_controller.py")], cwd=self.proj,
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.send_signal(signal.SIGTERM))
+        seen = None
+        end = time.time() + 20
+        while time.time() < end and proc.poll() is None:
+            t = self.snap().ticket("1")
+            if t.get("waiting"):
+                seen = t
+                break
+            time.sleep(0.2)
+        self.assertIsNotNone(seen, "the ticket never had a 'waiting' mark: %s" % self.snap().ticket("1"))
+        # item 6: during the wait
+        self.assertEqual((seen["state"], seen["round"]), ("running", 1))
+        w = seen["waiting"]
+        self.assertEqual(sorted(w), ["reason", "since", "text", "until"])
+        self.assertEqual(w["reason"], "quota")
+        since = calendar.timegm(time.strptime(w["since"], "%Y-%m-%dT%H:%M:%SZ"))
+        until = calendar.timegm(time.strptime(w["until"], "%Y-%m-%dT%H:%M:%SZ"))
+        self.assertLessEqual(abs((until - since) - 8), 2, w)
+        self.assertLessEqual(len(w["text"]), 200)
+        self.assertIn("usage limit", w["text"])
+        self.assertEqual([c.get("outcome") for c in seen.get("cost") or [] if c["role"] == "worker"], ["quota"])
+        fd = os.open(os.path.join(self.tmp, "wt", "slots", "slot-0"), os.O_RDWR | os.O_CREAT)
+        got = False
+        try:
+            end = time.time() + 3
+            while time.time() < end:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    got = True
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    break
+                except OSError:
+                    time.sleep(0.1)
+        finally:
+            os.close(fd)
+        self.assertTrue(got, "slot-0 stayed held during the quota wait")
+        # item 5: after
+        out, err = proc.communicate(timeout=120)
+        self.assertEqual(proc.returncode, 0, err)
+        t = self.snap().ticket("1")
+        self.assertEqual((t["state"], t["round"]), ("landed", 1))
+        self.assertEqual([c.get("outcome") for c in self.cost_rows(1, "worker")], ["quota", "done"])
+        events = [h["event"] for h in t.get("history") or []]
+        self.assertIn("waiting for quota", events)
+        self.assertIn("quota wait over", events)
+        self.assertLess(events.index("waiting for quota"), events.index("quota wait over"))
+        self.assertNotIn("feedback", events)
+        self.assertNotIn("waiting", t)
+
+    # 7
+    def test_after_a_wait_the_chain_starts_again_from_its_first_command(self):
+        chain = [AGENT + ["--model", "first"], AGENT + ["--model", "second"]]
+        self.config(quota_retry_seconds=2, agents=dict(self.agents_cfg(), worker=chain, worker_simple=chain))
+        self.env["FAKE_QUOTA_TEXT"] = "Error: usage limit reached"
+        self.add(1)
+        self.plan(worker={"1": ["quota", "quota", "ok"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        t = self.snap().ticket("1")
+        self.assertEqual((t["state"], t["round"]), ("landed", 1))
+        rows = self.cost_rows(1, "worker")
+        self.assertEqual([(r.get("outcome"), r.get("model")) for r in rows], [("quota", "second"), ("done", "first")])
+        self.assertEqual(rows[0]["fell_back_from"][0]["model"], "first")
+        self.assertEqual(rows[0]["fell_back_from"][0]["outcome"], "out of quota")
+
+    # 8
+    def test_a_readable_reset_phrase_alone_marks_out_of_quota(self):
+        self.config(agents=dict(self.agents_cfg(), worker=[AGENT, AGENT], worker_simple=[AGENT, AGENT]))
+        self.env["FAKE_QUOTA_TEXT"] = "You've hit your limit · resets 3pm"
+        self.add(1)
+        self.plan(worker={"1": ["quota", "ok"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        t = self.snap().ticket("1")
+        self.assertEqual((t["state"], t["round"]), ("landed", 1))
+        row = self.cost_rows(1, "worker")[0]
+        self.assertTrue(row.get("fell_back_from"), row)
+        self.assertEqual(row["fell_back_from"][0]["outcome"], "out of quota")
+
+    # 9
+    def test_the_board_shows_a_quota_wait(self):
+        import board
+        self.assertEqual(board.REASON_TEXT.get("quota"), "額度用完")
+        self.add(1, state="running", target="int/g1",
+                 waiting={"reason": "quota", "since": osx.now(), "until": osx.now(), "text": "usage limit reached"})
+        res = self.run_py("board.py", "html")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("額度用完", res.stdout)
+
+
 class MachineSlots(LoopCase):
     """devloop.machine_slots: the implementer's tests (core/slots.py and its call sites)."""
 
@@ -3647,6 +3831,187 @@ class UnlimitedTokens(LoopCase):
         self.assertEqual([c["role"] for c in state["cost"]], ["consolidator", "consolidator_peer", "consolidator"])
 
 
+class QuotaWaitUnits(LoopCase):
+    """The quota wait of agents.Pending and the issuer's waiting mark (implementer's tests of #31)."""
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        # the fake agent keys its plan on DEVLOOP_TICKET first; a suite run inside an agent has one
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def cfg(self, worker, **devloop):
+        from core.config import Config
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            agents_cfg = json.load(fh)["devloop"]["agents"]
+        self.config(agents=dict(agents_cfg, worker=worker), **devloop)
+        return Config(self.proj)
+
+    def counted(self, quota_runs, text="Error: usage limit reached"):
+        """A command that prints `text` and exits 1 for its first `quota_runs` runs, then hands in."""
+        count = os.path.join(self.tmp, "count")
+        return ["sh", "-c", 'cat >/dev/null; n=$(cat %s 2>/dev/null || echo 0); echo $((n+1)) > %s; '
+                'if [ "$n" -lt %d ]; then echo "%s"; exit 1; fi; '
+                'echo \'{"kind": "done"}\' > "$DEVLOOP_RESULT"' % (count, count, quota_runs, text)]
+
+    def test_without_the_hook_a_quota_run_ends_as_before(self):
+        from core import agents
+        p = agents.start(self.cfg(self.counted(1), quota_retry_seconds=30), "worker", "go", self.proj,
+                         os.path.join(self.tmp, "run"), 30)
+        began = time.time()
+        hand = p.finish()
+        self.assertLess(time.time() - began, 10)
+        self.assertEqual(hand.cost["outcome"], "out of quota")
+        self.assertIsNone(hand.result)
+
+    def test_the_hook_waits_then_runs_again_with_its_own_clock(self):
+        from core import agents
+        calls = []
+
+        def hook(phase, row=None, until=None, text=None):
+            calls.append((phase, row, until, text, time.time()))
+        p = agents.start(self.cfg(self.counted(1), quota_retry_seconds=1), "worker", "go", self.proj,
+                         os.path.join(self.tmp, "run"), 30, round_no=1, on_quota=hook)
+        hand = p.finish()
+        self.assertEqual([c[0] for c in calls], ["wait", "over"])
+        _, row, until, text, at = calls[0]
+        self.assertEqual((row["outcome"], row["round"], row["role"]), ("quota", 1, "worker"))
+        self.assertAlmostEqual(until, at + 1, delta=0.5)
+        self.assertIn("usage limit", text)
+        self.assertLessEqual(len(text), 200)
+        self.assertEqual(hand.cost["outcome"], "done")
+        self.assertNotIn("fell_back_from", hand.cost)
+        self.assertGreaterEqual(p.waited, 0.9)
+        self.assertLess(hand.cost["seconds"], 1.0)        # counted from the restart
+        run_dir = os.path.join(self.tmp, "run")
+        self.assertTrue(os.path.exists(os.path.join(run_dir, "agent-1.log")))
+        self.assertEqual(hand.log, os.path.join(run_dir, "agent-2.log"))
+        self.assertTrue(p.slot is None or not p.slot.held)
+
+    def test_the_chain_starts_again_from_its_first_command(self):
+        from core import agents
+        rows = []
+        first = self.counted(2)
+        second = list(first)
+        second[-1] = second[-1].replace("cat >/dev/null", "cat >/dev/null; : second")
+        hook = lambda phase, row=None, **kw: rows.append(row) if row else None   # noqa: E731
+        p = agents.start(self.cfg([first, second], quota_retry_seconds=1), "worker", "go", self.proj,
+                         os.path.join(self.tmp, "run"), 30, on_quota=hook)
+        hand = p.finish()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["fell_back_from"][0]["outcome"], "out of quota")
+        self.assertIn(": second", p.full_chain[1][-1])
+        self.assertEqual(hand.cost["outcome"], "done")
+        self.assertNotIn(": second", p.argv[-1])               # the first command handed in
+        self.assertEqual(hand.log, os.path.join(self.tmp, "run", "agent-3.log"))
+
+    def test_stop_while_waiting_returns_none(self):
+        import threading
+        from core import agents
+        seen = threading.Event()
+        p = agents.start(self.cfg(self.counted(1), quota_retry_seconds=2), "worker", "go", self.proj,
+                         os.path.join(self.tmp, "run"), 30,
+                         on_quota=lambda phase, **kw: seen.set() if phase == "wait" else None)
+        th = threading.Thread(target=p.finish)
+        th.start()
+        self.addCleanup(th.join, 30)
+        self.assertTrue(seen.wait(10))
+        time.sleep(0.2)
+        self.assertTrue(p.sleeping)
+        self.assertIsNone(p.stop())
+
+    def test_a_readable_reset_alone_says_quota(self):
+        from core import agents
+        log = os.path.join(self.tmp, "a.log")
+        for text, want in (("You've hit your limit · resets 3pm", True), ("all fine", False),
+                           ("Error: usage limit reached", True)):
+            with open(log, "w") as fh:
+                fh.write("x\n" * 10 + text + "\n")
+            self.assertEqual(agents._says_quota(log), want, text)
+
+    def test_excerpt_is_the_quota_line_at_most_200_chars(self):
+        from core import agents
+        self.assertEqual(agents._excerpt("noise\nError: usage limit reached\nbye\n"),
+                         "Error: usage limit reached")
+        self.assertEqual(len(agents._excerpt("usage limit " + "x" * 500)), 200)
+
+    def test_the_opener_does_not_wait(self):
+        self.config(quota_retry_seconds=600)
+        self.plan(creator={"*": ["nothing"]})
+        base = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
+        self.plan(creator={"*": ["quota"]})
+        began = time.time()
+        res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
+        self.assertLess(time.time() - began, 60)
+        self.assertEqual(res.returncode, base.returncode, res.stdout + res.stderr)
+        self.assertNotEqual(res.returncode, 0)
+
+    def running_ticket(self):
+        self.add(1, state="running", target="int/g1", group="g1", needs_verifier=False)
+
+        def change(tx):
+            tx.put_group({"id": "g1", "branch": "int/g1", "base": git(self.proj, "rev-parse", "main"),
+                          "state": "open", "alone": False, "members": ["1"], "fix_round": 0, "job": None})
+        self.pool.update(change, "test: group")
+        git(self.proj, "branch", "int/g1", "main")
+
+    def test_sigterm_during_the_wait_releases_the_ticket_with_one_quota_row(self):
+        self.config(quota_retry_seconds=600)
+        self.running_ticket()
+        self.plan(worker={"1": ["quota"]})
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "ticket_issuer.py"), "--id", "1",
+                                 "--target", "int/g1"], cwd=self.proj, env=self.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.send_signal(signal.SIGTERM))
+        t = {}
+        for _ in range(150):
+            t = self.snap().ticket("1")
+            if t.get("waiting") or proc.poll() is not None:
+                break
+            time.sleep(0.2)
+        self.assertEqual((t.get("waiting") or {}).get("reason"), "quota", t)
+        self.assertEqual(t["state"], "running")
+        proc.send_signal(signal.SIGTERM)
+        out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 4, err)
+        t = self.snap().ticket("1")
+        self.assertEqual(t["state"], "ready")
+        self.assertNotIn("waiting", t)
+        self.assertEqual([c["outcome"] for c in t["cost"] if c["role"] == "worker"], ["quota"])
+        self.assertIn("waiting for quota", [h["event"] for h in t["history"]])
+
+    def test_stuck_and_orphan_release_drop_waiting(self):
+        import ticket_controller
+        import ticket_issuer
+        from core.config import Config
+        mark = {"reason": "quota", "since": osx.now(), "until": osx.now(), "text": "usage limit"}
+        self.add(1, state="running", target="int/g1", waiting=mark)
+        self.add(2, state="running", target="int/g1", waiting=mark)
+        issuer = ticket_issuer.Issuer(Config(self.proj), self.pool, "1", "int/g1")
+        issuer.stuck("timeout", "x")
+        self.assertNotIn("waiting", self.snap().ticket("1"))
+        ctl = ticket_controller.Controller.__new__(ticket_controller.Controller)
+        ctl.pool = self.pool
+        ctl._release_orphan("2")
+        t = self.snap().ticket("2")
+        self.assertEqual(t["state"], "ready")
+        self.assertNotIn("waiting", t)
+
+    def test_readme_describes_the_wait(self):
+        with open(os.path.join(HOME, "devloop", "README.md")) as fh:
+            text = fh.read()
+        section = text.split("## Agents, models and tests")[1].split("\n## ")[0]
+        for phrase in ("quota_retry_seconds", "1800", "額度用完", "outcome `quota`", "does not wait",
+                       "no machine slot", "no round"):
+            self.assertIn(phrase, section)
+
+
 class Recovery(LoopCase):
     def test_a_running_ticket_whose_issuer_died_is_dispatched_again(self):
         self.add(1)
@@ -3904,6 +4269,136 @@ class Memory(LoopCase):
         self.assertEqual(memory.due(self.snap()), [])
 
 
+class T32Acceptance(LoopCase):
+    """#32: auto_fixer and memory_keeper wait for the quota reset instead of failing the run.
+    Expected values come from the ticket's acceptance items (D-091 item 5), not from the code."""
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.env["FAKE_QUOTA_TEXT"] = "Error: usage limit reached"
+
+    @staticmethod
+    def epoch(stamp):
+        import calendar
+        return calendar.timegm(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))
+
+    def fixer_outcomes(self, g):
+        return [c.get("outcome") for c in g.get("cost") or [] if c.get("role") == "fixer"]
+
+    def five_lessons(self):
+        self.run_py("tickets.py", "init")
+
+        def change(tx):
+            for i in range(5):
+                tx.write("memory/inbox/k%d.json" % i, {"layer": "role", "name": "worker", "text": "l%d" % i,
+                                                       "at": osx.now()})
+        self.pool.update(change, "test: five lessons")
+        self.plan(consolidator={"*": ["quota", "merge"]})
+
+    def check_fixer_end(self, rc, err):
+        self.assertEqual(rc, 0, err)
+        snap = self.snap()
+        self.assertEqual(snap.ticket("1")["state"], "landed")
+        g = snap.groups["g1"]
+        self.assertEqual(g["fix_round"], 1, g)
+        self.assertEqual(self.fixer_outcomes(g), ["quota", "done"], g.get("cost"))
+        with open(os.path.join(self.tmp, "plan", "count-fixer-g1")) as fh:
+            self.assertEqual(fh.read().strip(), "2", "the fixer was not started twice")
+        events = [h["event"] for h in g.get("history") or []]
+        self.assertIn("waiting for quota", events)
+        self.assertIn("quota wait over", events)
+        self.assertLess(events.index("waiting for quota"), events.index("quota wait over"))
+        self.assertNotIn("waiting", g)
+
+    def check_keeper_end(self, rc, err):
+        self.assertEqual(rc, 0, err)
+        snap = self.snap()
+        run = snap.memory_state["runs"][-1]
+        self.assertTrue(run["ok"], run)
+        self.assertEqual([c.get("outcome") for c in run.get("cost") or []], ["quota", "memory"], run)
+        self.assertEqual(len(snap.lessons), 0, "lessons are left waiting")
+        self.assertIn("merged", self.pool_memory("memory/role/worker.md") or "")
+        self.assertNotIn("waiting", snap.memory_state)
+
+    def popen(self, script, *args):
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, script)] + list(args), cwd=self.proj,
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.send_signal(signal.SIGTERM))
+        return proc
+
+    # 1
+    def test_item1_fixer_quota_waits_and_reruns_without_a_round(self):
+        self.config(quota_retry_seconds=3)
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["quota", "fix"]})
+        res = self.controller()
+        self.check_fixer_end(res.returncode, res.stderr)
+
+    # 2
+    def test_item2_group_during_the_fixer_wait(self):
+        self.config(quota_retry_seconds=8)
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["quota", "fix"]})
+        proc = self.popen("ticket_controller.py")
+        seen = None
+        end = time.time() + 30
+        while time.time() < end and proc.poll() is None:
+            g = self.snap().groups.get("g1")
+            if g and g.get("waiting"):
+                seen = g
+                break
+            time.sleep(0.2)
+        self.assertIsNotNone(seen, "group g1 never had a 'waiting' mark: %s" % self.snap().groups.get("g1"))
+        self.assertEqual((seen["state"], seen["fix_round"]), ("fixing", 1), seen)
+        w = seen["waiting"]
+        self.assertEqual(sorted(w), ["reason", "since", "text", "until"], w)
+        self.assertEqual(w["reason"], "quota")
+        self.assertLessEqual(abs((self.epoch(w["until"]) - self.epoch(w["since"])) - 8), 2, w)
+        self.assertEqual(self.fixer_outcomes(seen), ["quota"], seen.get("cost"))
+        out, err = proc.communicate(timeout=180)
+        self.assertEqual(proc.returncode, 0, err)
+
+    # 3
+    def test_item3_keeper_quota_waits_and_consolidates(self):
+        self.config(quota_retry_seconds=3)
+        self.five_lessons()
+        res = self.run_py("memory_keeper.py", "--layer", "role", "--name", "worker")
+        self.check_keeper_end(res.returncode, res.stderr)
+
+    # 4
+    def test_item4_memory_state_during_the_keeper_wait(self):
+        self.config(quota_retry_seconds=8)
+        self.five_lessons()
+        proc = self.popen("memory_keeper.py", "--layer", "role", "--name", "worker")
+        seen = None
+        end = time.time() + 30
+        while time.time() < end and proc.poll() is None:
+            state = self.snap().memory_state or {}
+            if state.get("waiting"):
+                seen = state["waiting"]
+                break
+            time.sleep(0.2)
+        self.assertIsNotNone(seen, "memory/state.json never had 'waiting': %s" % self.snap().memory_state)
+        self.assertEqual(sorted(seen), ["path", "reason", "since", "text", "until"], seen)
+        self.assertEqual(seen["reason"], "quota")
+        self.assertEqual(seen["path"], "memory/role/worker.md")
+        out, err = proc.communicate(timeout=120)
+        self.assertEqual(proc.returncode, 0, err)
+
+    # 5
+    def test_item5_board_shows_a_group_quota_wait(self):
+        g = {"id": "g1", "branch": "int/g1", "state": "fixing", "members": [], "fix_round": 1,
+             "waiting": {"reason": "quota", "since": osx.now(), "until": osx.now(), "text": "usage limit reached"}}
+        self.pool.update(lambda tx: tx.put_group(g), "test: group g1 waiting for quota")
+        res = self.run_py("board.py", "html")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        rows = [r for r in res.stdout.split("<tr") if "g1" in r]
+        self.assertTrue(rows, "no table row holds g1")
+        self.assertTrue(any("額度用完" in r for r in rows), rows)
+
+
 class KeeperInterrupt(LoopCase):
     """memory_keeper stops its running agent on SIGTERM and records the attempt (#23 unit test)."""
 
@@ -3937,6 +4432,138 @@ class KeeperInterrupt(LoopCase):
         self.assertEqual([c["outcome"] for c in run["cost"]], ["interrupted"])
         self.assertEqual(len(snap.lessons), 5)
         self.assertNotIn("memory/role/worker.md", snap.memory_state.get("last", {}))
+
+
+class QuotaWaitFixerKeeper(LoopCase):
+    """#32 unit tests: the fixer's and the keeper's quota hooks, SIGTERM during the wait, the board
+    cell and the docs (acceptance items 6 and 7; items 1-5 are the verifier's)."""
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.env["FAKE_QUOTA_TEXT"] = "Error: usage limit reached"
+
+    def wait_for(self, proc, probe, seconds=30):
+        end = time.time() + seconds
+        while time.time() < end and proc.poll() is None:
+            got = probe()
+            if got:
+                return got
+            time.sleep(0.2)
+        return None
+
+    def popen(self, script, *args):
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, script)] + list(args), cwd=self.proj,
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: proc.poll() is None and proc.send_signal(signal.SIGTERM))
+        return proc
+
+    # ---------------------------------------------------------------- helpers, in process
+
+    def test_group_state_text_names_the_quota_wait(self):
+        import board
+        g = {"state": "fixing", "waiting": {"reason": "quota", "until": "2026-11-06T17:01:00Z"}}
+        self.assertEqual(board.group_state_text(g), "修紅中(額度用完,等到 2026-11-06T17:01:00Z)")
+        self.assertEqual(board.group_state_text({"state": "fixing"}), "修紅中")
+        self.assertEqual(board.group_state_text({"state": "fixing", "waiting": {"reason": "other"}}), "修紅中")
+
+    def test_fixer_quota_hook_writes_and_clears_the_group(self):
+        import auto_fixer
+        self.pool.update(lambda tx: tx.put_group({"id": "g1", "branch": "int/g1", "state": "fixing",
+                                                  "members": [], "fix_round": 1}), "test: g1")
+        hook = auto_fixer.quota_hook(self.pool, "g1")
+        row = {"role": "fixer", "outcome": "quota", "run_dir": "x/r1"}
+        now = time.time()
+        hook("wait", row=row, until=now + 60, text="usage limit reached")
+        g = self.snap().groups["g1"]
+        self.assertEqual(g["cost"], [row])
+        self.assertEqual(sorted(g["waiting"]), ["reason", "since", "text", "until"])
+        self.assertEqual(g["waiting"]["until"], time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + 60)))
+        self.assertEqual(g["history"][-1]["event"], "waiting for quota")
+        hook("over")
+        g = self.snap().groups["g1"]
+        self.assertNotIn("waiting", g)
+        self.assertEqual(g["history"][-1]["event"], "quota wait over")
+        self.assertEqual(g["cost"], [row], "the over phase must not add a row")
+
+    def test_keeper_quota_hook_writes_state_and_costs(self):
+        import memory_keeper
+        costs = []
+        hook = memory_keeper.quota_hook(self.pool, "memory/role/worker.md", costs)
+        row = {"role": "consolidator", "outcome": "quota"}
+        hook("wait", row=row, until=time.time() + 60, text="t" * 500)
+        state = self.snap().memory_state
+        self.assertEqual(costs, [row])
+        self.assertEqual(state["waiting"]["path"], "memory/role/worker.md")
+        self.assertEqual(state["waiting"]["reason"], "quota")
+        self.assertEqual(len(state["waiting"]["text"]), 200)
+        hook("over")
+        self.assertNotIn("waiting", self.snap().memory_state)
+        self.assertEqual(costs, [row])
+
+    # ---------------------------------------------------------------- 6: SIGTERM during the wait
+
+    def test_fixer_sigterm_during_quota_wait(self):
+        self.config(quota_retry_seconds=120)
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["quota", "fix"]})
+        ctl = self.popen("ticket_controller.py")
+        g = self.wait_for(ctl, lambda: (lambda g: g if g and g.get("waiting") else None)(
+            self.snap().groups.get("g1")))
+        self.assertIsNotNone(g, "g1 never waited: %s" % self.snap().groups.get("g1"))
+        pid = g["job"]["stamp"]["pid"]
+        osx.kill_tree(pid)           # SIGTERM to the auto_fixer's own session
+        out, err = ctl.communicate(timeout=180)
+        self.assertEqual(ctl.returncode, 0, err)
+        g = self.snap().groups["g1"]
+        events = [h["event"] for h in g.get("history") or []]
+        self.assertIn("fixer done (rc 4): verify again", events)
+        r1 = [c for c in g.get("cost") or [] if c.get("role") == "fixer"
+              and os.path.basename(c.get("run_dir") or "") == "r1"]
+        self.assertEqual([c["outcome"] for c in r1], ["quota"], g.get("cost"))
+        self.assertNotIn("waiting", g)
+
+    def test_keeper_sigterm_during_quota_wait(self):
+        self.config(quota_retry_seconds=120)
+        self.run_py("tickets.py", "init")
+
+        def change(tx):
+            for i in range(5):
+                tx.write("memory/inbox/k%d.json" % i, {"layer": "role", "name": "worker", "text": "l%d" % i,
+                                                       "at": osx.now()})
+        self.pool.update(change, "test: five lessons")
+        self.plan(consolidator={"*": ["quota", "merge"]})
+        proc = self.popen("memory_keeper.py", "--layer", "role", "--name", "worker")
+        seen = self.wait_for(proc, lambda: (self.snap().memory_state or {}).get("waiting"))
+        self.assertIsNotNone(seen, "memory/state.json never had 'waiting'")
+        proc.send_signal(signal.SIGTERM)
+        out, err = proc.communicate(timeout=60)
+        self.assertEqual(proc.returncode, 4, err)
+        snap = self.snap()
+        run = snap.memory_state["runs"][-1]
+        self.assertTrue(run["interrupted"])
+        self.assertEqual([c["outcome"] for c in run["cost"]], ["quota"])
+        self.assertNotIn("waiting", snap.memory_state)
+        self.assertEqual(len(snap.lessons), 5)
+
+    # ---------------------------------------------------------------- 7: docs
+
+    def test_docs_name_fixer_and_keeper_quota_waits(self):
+        with open(os.path.join(HOME, "devloop", "README.md")) as fh:
+            readme = fh.read()
+        start = readme.index("- `agents.<role>` is one command")
+        nxt = readme.find("\n- ", start + 1)
+        bullet = readme[start:nxt if nxt > 0 else None]
+        for word in ("auto_fixer", "memory_keeper", "consolidator_peer"):
+            self.assertIn(word, bullet)
+        with open(os.path.join(HOME, "docs", "design", "dev-loop-v2.md")) as fh:
+            design = fh.read()
+        sec = design[design.index("## 6."):design.index("## 7.")]
+        rows = [line for line in sec.splitlines() if "usage limit" in line]
+        self.assertEqual(len(rows), 1, rows)
+        for word in ("auto_fixer", "memory_keeper"):
+            self.assertIn(word, rows[0])
 
 
 class MemoryFolderHelpers(LoopCase):
