@@ -6439,6 +6439,58 @@ class ProjectRulesHome(unittest.TestCase):
             self.assertIn(word, sec.replace("Project memory", "project memory"))
 
 
+class BoardDetailHelpers(LoopCase):
+    """board.py detail views: their helpers (run_start, timeline, cost cells, which query is a detail)."""
+
+    def test_run_start_floors_at_minus_seconds(self):
+        import board
+        self.assertEqual(board.run_start({"at": "2026-11-01T10:04:56Z", "seconds": 290.4}), "2026-11-01T10:00:05Z")
+        self.assertEqual(board.run_start({"at": "2026-11-01T10:04:56Z", "seconds": 0.9}), "2026-11-01T10:04:55Z")
+        self.assertEqual(board.run_start({"at": "2026-11-01T10:04:56Z"}), "2026-11-01T10:04:56Z")
+        self.assertEqual(board.run_start({"at": "bad", "seconds": 3}), "bad")
+
+    def test_timeline_events_before_runs_at_equal_times_and_stored_order(self):
+        import board
+        history = [{"at": "2026-01-01T00:00:05Z", "event": "b"}, {"at": "2026-01-01T00:00:00Z", "event": "a"},
+                   {"at": "2026-01-01T00:00:05Z", "event": "c"}]
+        rows = [{"role": "r1", "at": "2026-01-01T00:00:06Z", "seconds": 1},
+                {"role": "r2", "at": "2026-01-01T00:00:05Z"}]
+        got = [(k, at, x.get("event") or x.get("role")) for k, at, x in board.timeline(history, rows)]
+        self.assertEqual(got, [("event", "2026-01-01T00:00:00Z", "a"), ("event", "2026-01-01T00:00:05Z", "b"),
+                               ("event", "2026-01-01T00:00:05Z", "c"), ("run", "2026-01-01T00:00:05Z", "r1"),
+                               ("run", "2026-01-01T00:00:05Z", "r2")])
+
+    def test_detail_wanted_leaves_the_group_filter_alone(self):
+        import board
+        self.assertEqual(board.detail_wanted({"ticket": "3"}), ("ticket", "3"))
+        self.assertEqual(board.detail_wanted({"group": "g2"}), ("group", "g2"))
+        self.assertIsNone(board.detail_wanted({"tab": "tickets", "group": "g2"}))
+        self.assertIsNone(board.detail_wanted(None))
+
+    def test_cost_cells_unknown_never_zero(self):
+        import board
+        self.assertEqual(board.cost_value({"input_tokens": None}, "input_tokens"), "未知")
+        self.assertEqual(board.cost_value({"input_tokens": 0}, "input_tokens"), "0")
+        self.assertEqual(board.cost_value({"usd": 1.234}, "usd"), "$1.23")
+        self.assertEqual(board.cost_value({"seconds": 2.6}, "seconds"), "3")
+        self.assertEqual(board.feedback_text({"feedback": ["round 1: x", "round 2: y"]}, 2), "y")
+        self.assertIsNone(board.feedback_text({"feedback": []}, 1))
+
+    def test_detail_page_hrefs_are_relative(self):
+        import re
+        import board
+        from core.config import Config
+        self.add(1, group="g1", history=[{"at": "2026-01-01T00:00:00Z", "event": "opened"}])
+        self.pool.update(lambda tx: tx.put_group({"id": "g1", "state": "open", "branch": "int/g1",
+                                                  "members": ["1"], "history": [], "cost": []}), "test: g1")
+        for query in ({"ticket": "1"}, {"group": "g1"}):
+            page = board.render(Config(self.proj), self.snap(), query=query, now=0)
+            tab = page.split('<div id="tab-tickets" class="tab">', 1)[1]
+            self.assertIn('class="detail"', tab)
+            for href in re.findall(r'href="([^"]*)"', tab):
+                self.assertFalse(href.startswith("/") or "://" in href, href)
+
+
 class AgentControlRelease(unittest.TestCase):
     """scripts/release.sh, agent-control's own devloop.release: tags the landed commit."""
 

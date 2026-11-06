@@ -231,8 +231,12 @@ def render_metrics(snap):
 def render(cfg, snap, key=None, query=None, now=None):
     """The page: header and the four numbers on every tab, then the tab `query` asks for (?tab=)."""
     now = time.time() if now is None else now
-    shown = shown_tab(query)
-    body = dict((name, fn) for name, _, fn in TABS)[shown](cfg, snap, key, query, now)
+    wanted = detail_wanted(query)
+    if wanted:
+        shown, body = "tickets", render_detail(snap, wanted)
+    else:
+        shown = shown_tab(query)
+        body = dict((name, fn) for name, _, fn in TABS)[shown](cfg, snap, key, query, now)
     return "\n".join([PAGE_HEAD % {"title": e("devloop · " + cfg.name), "now": e(clock(now))},
                       render_metrics(snap), render_nav(shown),
                       '<div id="tab-%s" class="tab">' % e(shown), body, "</div>",
@@ -368,7 +372,7 @@ def render_tickets_tab(cfg, snap, key, query, now):
                        e(UNKNOWN if written is None else format(written, ",")),
                        e(minutes(t) if minutes(t) is not None else ""),
                        e(format(t["token_estimate"], ",") if isinstance(t.get("token_estimate"), int) else UNKNOWN),
-                       e(note), e(t.get("title"))))
+                       e(note), '<a href="?ticket=%s">%s</a>' % (quote(str(ident)), e(t.get("title")))))
     out.append("</table></div></section>")
 
     out.append('<section><h2>整合分支(一條 = 一個 PR)</h2><div class="scroll"><table><tr><th>組</th><th>狀態</th><th>原因</th>'
@@ -377,7 +381,8 @@ def render_tickets_tab(cfg, snap, key, query, now):
         if not group_shown(snap, g, f):
             continue
         out.append("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td class='num'>%s</td><td>%s</td><td>%s</td></tr>" % (
-            e(g["id"]), e(group_state_text(g)), e(CATEGORY_TEXT.get(group_category(snap, g), "")), e(g.get("branch")),
+            e(g["id"]), e(group_state_text(g)), e(CATEGORY_TEXT.get(group_category(snap, g), "")),
+            '<a href="?group=%s">%s</a>' % (quote(str(g["id"])), e(g.get("branch") or g["id"])),
             e(" ".join("#" + i for i in g.get("members") or [])), e(g.get("fix_round", 0)),
             e((g.get("last_regression") or "")[:160]), e({"ok": "成功", "failed": "失敗"}.get(g.get("release"), ""))))
     out.append("</table></div></section>")
@@ -420,6 +425,178 @@ def render_tickets_tab(cfg, snap, key, query, now):
 
 def stub_tab(heading):
     return "<section><h2>%s</h2><p class='quiet'>還沒有內容。</p></section>" % e(heading)
+
+
+# ---------------------------------------------------------------- detail views
+
+DETAIL_STYLE = ("<style>section.detail dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px}"
+                "section.detail dt{color:var(--quiet)}section.detail dd{margin:0}"
+                "ol.timeline{padding-left:20px}ol.timeline li{margin:2px 0}"
+                "ol.timeline li[data-kind=run]{color:var(--quiet)}"
+                "table.cost td.n{text-align:right;font-variant-numeric:tabular-nums}</style>")
+EVENT_FIELDS = ("round", "reason", "target", "group", "note", "source")
+COST_COLUMNS = (("role", "角色"), ("model", "模型"), ("effort", "強度"), ("round", "輪"), ("seconds", "秒"),
+                ("outcome", "結果"), ("input_tokens", "input"), ("output_tokens", "output"),
+                ("cache_read_tokens", "快取讀"), ("cache_write_tokens", "快取寫"), ("usd", "美元"), ("at", "時間"))
+TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def detail_wanted(query):
+    """('ticket', N), ('group', gN) or None. A group alone (no tab=) is a detail page; with tab= it is
+    the 票 tab's filter, which the filter form always sends with tab=tickets."""
+    query = query or {}
+    if query.get("ticket"):
+        return "ticket", str(query["ticket"])
+    if query.get("group") and not query.get("tab"):
+        return "group", str(query["group"])
+    return None
+
+
+def run_start(row):
+    """A cost row's start in the pool's time format: 'at' minus 'seconds', rounded down to the
+    whole second; 'at' itself when it has no seconds or cannot be read."""
+    import calendar
+    import math
+    at = row.get("at")
+    seconds = row.get("seconds")
+    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool):
+        return at
+    try:
+        end = calendar.timegm(time.strptime(at, TIME_FORMAT))
+    except (TypeError, ValueError, OverflowError):
+        return at
+    return clock(math.floor(end - seconds))
+
+
+def timeline(history, rows):
+    """[(kind, at, item)] of history events and cost rows in time order; at equal times events
+    before runs; otherwise the stored order (the sort is stable)."""
+    entries = [("event", h.get("at"), h) for h in history or [] if isinstance(h, dict)]
+    entries += [("run", run_start(r), r) for r in rows or [] if isinstance(r, dict)]
+    return sorted(entries, key=lambda x: (str(x[1] or ""), 0 if x[0] == "event" else 1))
+
+
+def feedback_text(t, round_no):
+    """The kept feedback entry of round `round_no` without its 'round R:' lead, or None."""
+    lead = "round %s:" % round_no
+    for entry in (t or {}).get("feedback") or []:
+        if isinstance(entry, str) and entry.startswith(lead):
+            return entry[len(lead):].strip()
+    return None
+
+
+def seconds_text(value):
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return UNKNOWN
+    return "%d 秒" % round(value)
+
+
+def render_timeline(history, rows, t=None):
+    out = ['<ol class="timeline">']
+    for kind, at, item in timeline(history, rows):
+        if kind == "event":
+            parts = ["<b>%s</b>" % e(item.get("event"))]
+            parts += ["%s=%s" % (e(k), e(item[k])) for k in EVENT_FIELDS if item.get(k) not in (None, "")]
+            if item.get("event") == "feedback" and item.get("round") is not None:
+                text = feedback_text(t, item["round"])
+                if text:
+                    parts.append("<q>%s</q>" % e(text))
+        else:
+            parts = ["<b>%s</b>" % e(item.get("role") or UNKNOWN), e(item.get("model") or UNKNOWN),
+                     e(seconds_text(item.get("seconds"))), e(item.get("outcome") or UNKNOWN)]
+        out.append('<li data-kind="%s" data-at="%s"><time>%s</time> %s</li>' % (
+            e(kind), e(at or ""), e(at or UNKNOWN), " · ".join(parts)))
+    out.append("</ol>")
+    return "".join(out)
+
+
+def cost_value(row, key):
+    """One cell of the cost table; 未知 for a value nobody recorded, never 0."""
+    v = row.get(key)
+    if v is None or v == "":
+        return UNKNOWN
+    if key in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"):
+        return format(v, ",") if isinstance(v, int) and not isinstance(v, bool) else UNKNOWN
+    if key == "usd":
+        return money(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else UNKNOWN
+    if key == "seconds":
+        return "%d" % round(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else UNKNOWN
+    return str(v)
+
+
+def render_cost_table(rows):
+    from core import agents
+    rows = [r for r in rows or [] if isinstance(r, dict)]
+    out = ['<div class="scroll"><table class="cost"><tr>%s</tr>' % "".join(
+        "<th>%s</th>" % e(label) for _, label in COST_COLUMNS)]
+    for row in rows:
+        out.append("<tr>%s</tr>" % "".join('<td class="n">%s</td>' % e(cost_value(row, k)) for k, _ in COST_COLUMNS))
+    sums = agents.total(rows)
+    cells = []
+    for k, _ in COST_COLUMNS:
+        if k == "role":
+            cells.append("<td>合計</td>")
+        elif k in sums:
+            cells.append('<td class="n">%s</td>' % e(cost_value(sums, k)))
+        elif k == "outcome":
+            cells.append("<td>%s</td>" % e("%d 次" % sums["runs"]))
+        else:
+            cells.append("<td></td>")
+    out.append('<tr class="total">%s</tr></table></div>' % "".join(cells))
+    return "".join(out)
+
+
+def _dl(pairs):
+    return "<dl>%s</dl>" % "".join("<dt>%s</dt><dd>%s</dd>" % (e(k), v) for k, v in pairs)
+
+
+def render_ticket_detail(snap, ident):
+    t = snap.tickets.get(ident)
+    if not isinstance(t, dict):
+        return "<section><p>%s</p></section>" % e("沒有 #%s 這張票" % ident)
+    state = t.get("state")
+    category = ticket_category(t)
+    acceptance = "".join("<li>%s</li>" % e(a) for a in t.get("acceptance") or [])
+    pairs = [("狀態", e(STATE_TEXT.get(state, state)))]
+    if category:
+        pairs.append(("原因", e(CATEGORY_TEXT.get(category, category))))
+    group = t.get("group")
+    pairs += [("整合分支", '<a href="?group=%s">%s</a>' % (quote(str(group)), e(group)) if group else ""),
+              ("輪", e(t.get("round", 0))), ("目標", e(t.get("objective"))),
+              ("驗收", "<ol>%s</ol>" % acceptance)]
+    return "".join(['<section class="detail" data-ticket="%s"><h2>#%s %s</h2>' % (e(ident), e(ident), e(t.get("title"))),
+                    _dl(pairs), "<h3>時間線</h3>", render_timeline(t.get("history"), t.get("cost"), t),
+                    "<h3>花費</h3>", render_cost_table(t.get("cost")), "</section>"])
+
+
+def render_group_detail(snap, gid):
+    g = snap.groups.get(gid)
+    if not isinstance(g, dict):
+        return "<section><p>%s</p></section>" % e("沒有 %s 這個整合分支" % gid)
+    members = []
+    for i in g.get("members") or []:
+        t = snap.tickets.get(str(i)) or {}
+        state = t.get("state")
+        members.append('<li><a href="?ticket=%s">#%s</a> %s</li>' % (
+            quote(str(i)), e(i), e(STATE_TEXT.get(state, state) if state else UNKNOWN)))
+    notes = "".join("<li>%s</li>" % e(n.get("text") if isinstance(n, dict) else n) for n in g.get("notes") or [])
+    pairs = [("狀態", e(group_state_text(g))),
+             ("原因", e(CATEGORY_TEXT.get(group_category(snap, g), ""))),
+             ("分支", e(g.get("branch"))), ("修補輪", e(g.get("fix_round", 0))),
+             ("最後一次 regression", e(g.get("last_regression") or "")),
+             ("發版", e({"ok": "成功", "failed": "失敗"}.get(g.get("release"), g.get("release") or ""))),
+             ("票", "<ul>%s</ul>" % "".join(members))]
+    if notes:
+        pairs.append(("備註", "<ul>%s</ul>" % notes))
+    return "".join(['<section class="detail" data-group="%s"><h2>%s</h2>' % (e(gid), e(gid)), _dl(pairs),
+                    "<h3>時間線</h3>", render_timeline(g.get("history"), g.get("cost")),
+                    "<h3>花費</h3>", render_cost_table(g.get("cost")), "</section>"])
+
+
+def render_detail(snap, wanted):
+    kind, ident = wanted
+    body = render_ticket_detail(snap, ident) if kind == "ticket" else render_group_detail(snap, ident)
+    return "\n".join([DETAIL_STYLE, '<p><a href="?tab=tickets">← 所有票</a></p>', body])
 
 
 # ---------------------------------------------------------------- tab: DAG
