@@ -559,6 +559,105 @@ class FixerBlockedIsDecision(LoopCase):
         self.assertNotIn("cases_changed", g)
 
 
+class T34Acceptance(LoopCase):
+    """#34: tickets.py ready g<N> --note stores the user's ruling on the group for later fixers."""
+
+    HEADER = "## The user's ruling for this group"
+    SENTENCE = "This ruling is the only thing that allows you to go beyond the tickets' text"
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def make_stuck(self):
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["blocked", "blocked", "fix"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["state"], "stuck")
+        self.assertEqual(self.state(1), "merged")
+
+    def fixer_prompt(self):
+        path = os.path.join(self.tmp, "wt", "runs", "fix", "g1", "r1", "prompt.md")
+        self.assertTrue(os.path.exists(path), "no fixer prompt at %s" % path)
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def check_noted(self, res, text, earlier, t0, t1):
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        g = self.snap().groups["g1"]
+        self.assertEqual(g["state"], "pr", g)
+        self.assertEqual(g["fix_round"], 0, g)
+        self.assertIsNone(g["job"], g)
+        notes = g.get("notes")
+        self.assertIsInstance(notes, list, g)
+        self.assertEqual(len(notes), len(earlier) + 1, notes)
+        self.assertEqual(notes[:-1], earlier, "earlier notes were not kept in order")
+        last = notes[-1]
+        self.assertEqual(set(last), {"text", "by", "at"}, last)
+        self.assertEqual(last["text"], text)
+        self.assertEqual(last["by"], "user")
+        # osx.now() format: %Y-%m-%dT%H:%M:%SZ in UTC, between the times taken around the call
+        self.assertRegex(last["at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertTrue(t0 <= last["at"] <= t1, (t0, last["at"], t1))
+        ev = g["history"][-1]
+        self.assertEqual(ev.get("event"), "ready again by the user", ev)
+        self.assertEqual(ev.get("by"), "user", ev)
+        self.assertEqual(ev.get("note"), text, ev)
+        return notes
+
+    def test_item1_and_4_note_stored_and_reaches_fixer(self):
+        self.make_stuck()
+        t0 = osx.now()
+        res = self.run_py("tickets.py", "ready", "g1", "--note", "keep the newer output")
+        t1 = osx.now()
+        notes = self.check_noted(res, "keep the newer output", [], t0, t1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["state"], "stuck")
+        prompt = self.fixer_prompt()
+        self.assertIn(self.HEADER, prompt.splitlines())
+        self.assertIn("keep the newer output", prompt)
+        self.assertIn(self.SENTENCE, prompt)
+        t0 = osx.now()
+        res = self.run_py("tickets.py", "ready", "g1", "--note", "drop case 2")
+        t1 = osx.now()
+        notes = self.check_noted(res, "drop case 2", notes, t0, t1)
+        self.assertEqual([n["text"] for n in notes], ["keep the newer output", "drop case 2"])
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        prompt = self.fixer_prompt()
+        self.assertIn(self.HEADER, prompt.splitlines())
+        self.assertIn("drop case 2", prompt)
+        self.assertIn(self.SENTENCE, prompt)
+        self.assertNotIn("keep the newer output", prompt)
+        notes = self.snap().groups["g1"].get("notes")
+        self.assertEqual([n["text"] for n in notes], ["keep the newer output", "drop case 2"])
+
+    def test_item2_actl_tickets_ready_group_note(self):
+        self.make_stuck()
+        t0 = osx.now()
+        res = subprocess.run([os.path.join(HOME, "bin", "actl"), "tickets", "ready", "g1", "--note",
+                              "keep the newer output"], cwd=self.proj, env=self.env,
+                             capture_output=True, text=True, timeout=120)
+        t1 = osx.now()
+        self.check_noted(res, "keep the newer output", [], t0, t1)
+
+    def test_item3_note_with_ticket_id_refused(self):
+        self.add(1)
+        self.plan(worker={"1": ["blocked"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "stuck")
+        before = self.snap().ticket("1")
+        res = self.run_py("tickets.py", "ready", "1", "--note", "x")
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertTrue(any("--note" in ln and "g<N>" in ln for ln in res.stderr.splitlines()), res.stderr)
+        self.assertEqual(self.snap().ticket("1"), before)
+
+
 class T8Acceptance(LoopCase):
     def test_a_release_past_release_timeout_seconds_is_stopped_and_failed(self):
         out = os.path.join(self.tmp, "release-out.txt")
