@@ -68,9 +68,10 @@ issuer's red check and each case run, and a regression (from before preflight un
 A slot is a `flock` on `<worktrees>/slots/slot-<i>` (i = 0..N-1); the files are created when
 missing and never deleted. The devloop process that started the run holds the lock, so a
 background process an agent leaves behind keeps no slot, and a process that dies frees its slot.
-Waiting counts against the caller's own limit: an agent that gets no slot within its timeout is
-not started (cost outcome "no slot"), an issuer test run out of time makes the ticket stuck
-("timeout"), and a regression with no slot within `regression_timeout_seconds` is "unmeasured".
+An agent and an issuer wait for a slot without a limit: the wait does not count against their
+own limit (the agent's timeout, `issuer_timeout_seconds`), whose time counts from when the slot
+is taken. A regression's wait still counts against `regression_timeout_seconds`
+("unmeasured" when no slot comes free in time).
 Nested runs use their parent's slot: agents get `DEVLOOP_SLOT` (their slot file) in the
 environment, and a process with it set takes no slot (an agent's `run_tests.py`, a worker's
 `ticket_creator.py --revise`).
@@ -81,8 +82,8 @@ needs `machine_slots` (exclusivity is counted in slots; true without a slot coun
 script). The mark is a `flock` LOCK_EX on `<worktrees>/slots/exclusive`, held by the regression
 from the moment it starts waiting until it has released every slot; with it held, the regression
 takes every `slot-<i>`, waiting for each, then runs preflight and `full`. Every other taker needs a
-LOCK_SH on that file, only while it takes its slot; its wait for it counts against its own limit
-like a slot wait. The whole wait counts against `regression_timeout_seconds` ("unmeasured" when the
+LOCK_SH on that file, only while it takes its slot; its wait for it is a slot wait (no limit for
+an agent or an issuer, its time limits count from when the slot is taken). The whole wait counts against `regression_timeout_seconds` ("unmeasured" when the
 machine is not free in time), and a regression that dies leaves nothing locked. Nested runs
 (`DEVLOOP_SLOT` set) do not touch the mark.
 

@@ -144,21 +144,19 @@ class Pending:
         self.cfg = cfg
         self.started = time.time()
         self.proc = self.argv = self.log = self.slot = None
-        self.no_slot = None      # the sentence when no machine slot came free in time
+        self.waited = 0.0        # seconds spent waiting for a machine slot (every launch adds)
         self.tried = []
         self.hand = None         # set once finish() collected the run; its row is in the Hand
 
     def launch(self):
-        """Start the next command of the chain that exists, under a machine slot (the wait counts
-        against this run's timeout; the slot is freed the moment the command's process exits)."""
+        """Start the next command of the chain that exists, under a machine slot. The wait has no
+        limit and does not count against this run's timeout (added to self.waited); the slot is
+        freed the moment the command's process exits."""
         self._release()
         if self.cfg is not None:
-            self.slot = slots.take(self.cfg, self.started + self.timeout)
-            if self.slot is None:
-                self.proc = None
-                self.no_slot = "%s was not started: %s" % (
-                    self.role, slots.busy(self.cfg, time.time() - self.started))
-                return
+            began = time.time()
+            self.slot = slots.take(self.cfg, None)
+            self.waited += time.time() - began
         try:
             self._spawn_next()
         except BaseException:
@@ -205,8 +203,6 @@ class Pending:
         self._release()
         if self.hand is not None:
             return None
-        if self.no_slot or self.argv is None:
-            return self._unstarted_cost("interrupted")
         return self._cost(None, None, False, False, outcome="interrupted")
 
     def finish(self):
@@ -215,9 +211,8 @@ class Pending:
 
     def _finish(self):
         while True:
-            if self.no_slot:
-                return self._unstarted()
-            left = max(1.0, self.timeout - (time.time() - self.started))
+            # only the time under a slot counts
+            left = max(1.0, self.timeout - (time.time() - self.started - self.waited))
             rc, timed_out = osx.wait(self.proc, left)
             try:
                 result = osx.read_json(self.result_path, None)
@@ -234,22 +229,6 @@ class Pending:
             self._release()
             cost = self._cost(result, rc, timed_out, out_of_quota)
             return Hand(self.role, result, rc, timed_out, self.log, cost)
-
-    def _unstarted(self):
-        """The hand of a run that never got a machine slot: nothing ran, tokens unknown."""
-        return Hand(self.role, None, None, False, self.log, self._unstarted_cost("no slot"),
-                    why=self.no_slot)
-
-    def _unstarted_cost(self, outcome):
-        argv = self.chain[0] if self.chain else self.argv
-        cost = {"role": self.role, "model": model_of(argv), "effort": effort_of(argv),
-                "command": os.path.basename(argv[0]) if argv else None, "round": self.round_no,
-                "seconds": self._seconds(), "at": osx.now(),
-                "outcome": outcome, "run_dir": self.run_dir}
-        if self.tried:
-            cost["fell_back_from"] = self.tried
-        cost.update(EMPTY)
-        return cost
 
     def _seconds(self):
         """Wall time since start; a run stopped within a tenth of a second keeps more digits

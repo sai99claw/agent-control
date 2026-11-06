@@ -2,7 +2,7 @@
 """ticket_issuer --id N --target int/gK : take one ticket from "running" to "merged".
 
 Started only by ticket_controller. Per round (at most devloop.max_rounds, whole run at most
-devloop.issuer_timeout_seconds):
+devloop.issuer_timeout_seconds (time waiting for a machine slot not counted)):
 
   1. worker (+ verifier while the ticket has no cases yet) work in their own worktrees
   2. the verifier's branch is merged into the ticket branch
@@ -69,6 +69,11 @@ def cases_thrown_out(t):
 
 
 class Issuer:
+    # Every Pending this issuer started (never cleared, unlike self.pending) and the seconds its
+    # own test runs waited for a machine slot: neither counts against issuer_timeout_seconds.
+    started_agents = ()
+    test_waited = 0.0
+
     def __init__(self, cfg, pool, ident, target):
         self.cfg, self.pool, self.id, self.target = cfg, pool, str(ident), target
         self.repo = Git(cfg.root)
@@ -77,8 +82,9 @@ class Issuer:
         self.wt = os.path.join(cfg.worktree_root, "t%s" % self.id)
         self.cwt = os.path.join(cfg.worktree_root, "t%s-cases" % self.id)
         self.started = time.time()
-        self.deadline = self.started + cfg.issuer_timeout_seconds
+        self.deadline = self.started + cfg.issuer_timeout_seconds   # before any slot wait
         self.pending = []
+        self.started_agents = []
         # Cost rows of the agent runs this round collected so far; written with the round's
         # outcome (_merged/_fed_back) or, when the issuer is interrupted, by interrupted().
         self.round_costs = []
@@ -369,18 +375,28 @@ class Issuer:
                          effort=t.get("effort") if role == "worker" else None, round_no=r,
                          chain_role=chain)
         self.pending.append(p)
+        self.started_agents.append(p)
         return p
+
+    @property
+    def deadline(self):
+        """The deadline set (started + issuer_timeout_seconds) plus every second this issuer's
+        agents and test runs spent waiting for a machine slot."""
+        return self._deadline + self.test_waited + sum(p.waited for p in self.started_agents)
+
+    @deadline.setter
+    def deadline(self, value):
+        self._deadline = value
 
     def left(self):
         return max(1.0, self.deadline - time.time())
 
     def test_slot(self):
-        """A machine slot for one test run, waiting at most until the issuer's deadline."""
+        """A machine slot for one test run, waiting as long as it takes; the wait is added to the
+        issuer's deadline."""
         began = time.time()
-        slot = slots.take(self.cfg, self.deadline)
-        if slot is None:
-            raise Stuck("timeout", "issuer ran longer than %d s waiting for a test run: %s" % (
-                self.cfg.issuer_timeout_seconds, slots.busy(self.cfg, time.time() - began)))
+        slot = slots.take(self.cfg, None)
+        self.test_waited += time.time() - began
         return slot
 
     def check_time(self):
