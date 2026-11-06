@@ -5775,6 +5775,240 @@ class T16Acceptance(LoopCase):
         self.assertEqual(self.raw(self.proj, "status", "--porcelain"), "")
 
 
+class T39Acceptance(LoopCase):
+    """#39: a stuck or quota-waiting ticket or group shows why as one of eight categories.
+    Expected values come from the ticket's acceptance items and the texts it quotes, not from board.py."""
+
+    LABELS = {"quota": "額度用完", "slot": "等機器名額", "timeout": "逾時", "red": "紅燈",
+              "decision": "要你決定", "env": "環境", "conflict": "合併衝突", "other": "其他"}
+    SLOT_WHY = "no machine slot came free within 120 s (devloop.machine_slots 1, all busy)"
+
+    def board(self, *names):
+        import board
+        for name in names:
+            self.assertTrue(hasattr(board, name), "board.%s is missing" % name)
+        return board
+
+    def ticket_category(self):
+        import inspect
+        board = self.board("ticket_category")
+        self.assertEqual(len(inspect.signature(board.ticket_category).parameters), 1)
+        return board.ticket_category
+
+    def group_category(self):
+        import inspect
+        board = self.board("group_category")
+        self.assertEqual(len(inspect.signature(board.group_category).parameters), 2)
+        return board.group_category
+
+    @staticmethod
+    def stuck(reason, text, ident="1", round_=3, feedback=(), cost=None):
+        t = {"id": ident, "state": "stuck", "round": round_, "feedback": list(feedback),
+             "stuck": {"reason": reason, "text": text}}
+        if cost is not None:
+            t["cost"] = cost
+        return t
+
+    @staticmethod
+    def snapshot(tickets=None, groups=None, inbox=None):
+        from core.pool import Snapshot
+        return Snapshot({"dag": {"tickets": {}}, "tickets": tickets or {}, "groups": groups or {},
+                         "inbox": inbox or {}, "lessons": {}, "memory_state": {}})
+
+    @staticmethod
+    def group(gid, state, events=(), members=(), **extra):
+        g = {"id": gid, "state": state, "branch": "int/" + gid, "members": list(members), "fix_round": 0,
+             "history": [{"at": "2026-11-06T10:%02d:00" % i, "event": ev} for i, ev in enumerate(events)]}
+        g.update(extra)
+        return g
+
+    # 1
+    def test_category_text_in_order(self):
+        board = self.board("CATEGORY_TEXT")
+        self.assertEqual(board.CATEGORY_TEXT, self.LABELS)
+        self.assertEqual(list(board.CATEGORY_TEXT), list(self.LABELS))
+
+    # 2
+    def test_quota_wait_and_not_stuck(self):
+        cat = self.ticket_category()
+        waiting = {"reason": "quota", "since": "2026-11-06T10:00:00", "until": "2026-11-06T15:00:00",
+                   "text": "resets 3pm"}
+        self.assertEqual(cat({"id": "1", "state": "running", "round": 1, "feedback": [], "waiting": waiting}), "quota")
+        for state in ("ready", "running", "merged", "landed", "cancelled"):
+            with self.subTest(state=state):
+                self.assertIsNone(cat({"id": "1", "state": state, "round": 1, "feedback": []}))
+
+    # 3
+    def test_stuck_reasons(self):
+        cat = self.ticket_category()
+        cases = [
+            (self.stuck("quota", "out of quota"), "quota"),
+            (self.stuck("env", "git worktree add failed"), "env"),
+            (self.stuck("decision", "the fixer asks"), "decision"),
+            (self.stuck("hard_block", "touches docs/DECISIONS.md"), "decision"),
+            (self.stuck("timeout", "issuer ran longer than 120 s waiting for a test run: " + self.SLOT_WHY), "slot"),
+            (self.stuck("timeout", "issuer ran longer than 10800 s"), "timeout"),
+            (self.stuck("timeout", "issuer ran longer than 10800 s",
+                        feedback=["round 3: " + self.SLOT_WHY]), "slot"),
+            (self.stuck("error", "worker crashed"), "other"),
+            (self.stuck("target", "no target"), "other"),
+            (self.stuck("missing", "branch missing"), "other"),
+        ]
+        for t, want in cases:
+            with self.subTest(reason=t["stuck"]["reason"], text=t["stuck"]["text"], feedback=t["feedback"]):
+                self.assertEqual(cat(t), want)
+
+    # 4
+    def test_rounds(self):
+        cat = self.ticket_category()
+        rounds = "3 rounds used and still not passing; last feedback:\n%s"
+        latest = ("merging the latest int/g6 into t/27 failed (conflict) - another ticket of this group changed "
+                  "the same files; merge int/g6 yourself and resolve")
+        verifier = "merging the verifier's branch t/5-cases into t/5 failed (conflict); merge it yourself and resolve"
+        cases = [
+            ("latest conflict", self.stuck("rounds", rounds % latest), "conflict"),
+            ("verifier conflict", self.stuck("rounds", rounds % verifier), "conflict"),
+            ("conflict in feedback", self.stuck("rounds", rounds % "x", feedback=["round 3: " + latest]), "conflict"),
+            ("conflict beats quota", self.stuck("rounds", rounds % latest,
+                                                cost=[{"round": 3, "outcome": "out of quota"}]), "conflict"),
+            ("merging without failed", self.stuck("rounds", rounds % "merging the latest int/g6 into t/27 went fine"),
+             "red"),
+            ("quota this round", self.stuck("rounds", rounds % "verifier cases: 2 failed",
+                                            cost=[{"round": 3, "outcome": "out of quota"}]), "quota"),
+            ("quota outcome", self.stuck("rounds", rounds % "verifier cases: 2 failed",
+                                         cost=[{"round": 3, "outcome": "quota"}]), "quota"),
+            ("quota earlier round", self.stuck("rounds", rounds % "verifier cases: 2 failed",
+                                               cost=[{"round": 2, "outcome": "out of quota"},
+                                                     {"round": 3, "outcome": "done"}]), "red"),
+            ("quota beats slot", self.stuck("rounds", rounds % self.SLOT_WHY,
+                                            cost=[{"round": 3, "outcome": "out of quota"}]), "quota"),
+            ("slot in feedback", self.stuck("rounds", rounds % "verifier cases: 2 failed", feedback=[
+                "round 3: no machine slot came free within 60 s (devloop.machine_slots 1, all busy)"]), "slot"),
+            ("red", self.stuck("rounds", rounds % "verifier cases: 2 failed"), "red"),
+        ]
+        for name, t, want in cases:
+            with self.subTest(name):
+                self.assertEqual(cat(t), want)
+
+    # 5
+    def test_group_quota_and_stuck_events(self):
+        cat = self.group_category()
+        waiting = {"reason": "quota", "since": "2026-11-06T10:00:00", "until": "2026-11-06T15:00:00", "text": "t"}
+        g = self.group("g2", "fixing", ["fix round 1"], waiting=waiting)
+        self.assertEqual(cat(self.snapshot(groups={"g2": g}), g), "quota")
+        cases = [
+            (["fix round 3", "red after 3 fix rounds"], "red"),
+            (["fix round 1", "fixer needs a decision"], "decision"),
+            (["opened from main abc", "main kept moving"], "conflict"),
+            (["main kept moving", "red after 3 fix rounds"], "red"),
+            (["red after 3 fix rounds", "main kept moving", "resumed by you"], "conflict"),
+            (["opened from main abc"], "other"),
+            ([], "other"),
+        ]
+        for events, want in cases:
+            with self.subTest(events=events):
+                g = self.group("g2", "stuck", events)
+                self.assertEqual(cat(self.snapshot(groups={"g2": g}), g), want)
+
+    def test_group_no_ticket_merged_takes_first_stuck_member(self):
+        cat = self.group_category()
+        red = self.stuck("rounds", "3 rounds used and still not passing; last feedback:\nverifier cases: 2 failed",
+                         ident="4")
+        env = self.stuck("env", "git worktree add failed", ident="5")
+        g = self.group("g3", "stuck", ["no ticket of the group got merged"], members=["5", "10", "4"])
+        tickets = {"4": red, "5": env, "10": {"id": "10", "state": "cancelled", "round": 1, "feedback": []}}
+        self.assertEqual(cat(self.snapshot(tickets=tickets, groups={"g3": g}), g), "red")
+        # numeric order: 9 before 10
+        t9 = self.stuck("timeout", "issuer ran longer than 10800 s", ident="9")
+        t10 = self.stuck("env", "git worktree add failed", ident="10")
+        g = self.group("g3", "stuck", ["no ticket of the group got merged"], members=["10", "9"])
+        self.assertEqual(cat(self.snapshot(tickets={"9": t9, "10": t10}, groups={"g3": g}), g), "timeout")
+        g = self.group("g3", "stuck", ["no ticket of the group got merged"], members=["4"])
+        merged = {"4": {"id": "4", "state": "cancelled", "round": 1, "feedback": []}}
+        self.assertEqual(cat(self.snapshot(tickets=merged, groups={"g3": g}), g), "other")
+
+    def test_group_pages(self):
+        cat = self.group_category()
+        g = self.group("g2", "pr", ["opened from main abc"])
+        page = lambda kind, acked=False, ref="g2": {"kind": kind, "ref": ref, "at": "2026-11-06T10:00:00",
+                                                    "text": "x", "acked": acked}
+        cases = [
+            ({"p1": page("env")}, "env"),
+            ({"p1": page("env", acked=True)}, None),
+            ({"p1": page("decision")}, "decision"),
+            ({"p1": page("decision"), "p2": page("env")}, "env"),
+            ({"p1": page("env", ref="g7")}, None),
+            ({"p1": page("landed")}, None),
+            ({}, None),
+        ]
+        for inbox, want in cases:
+            with self.subTest(inbox=inbox):
+                self.assertEqual(cat(self.snapshot(groups={"g2": g}, inbox=inbox), g), want)
+
+    # 6, 7
+    def render(self):
+        from core.config import Config
+        board = self.board("CATEGORY_TEXT", "ticket_category", "group_category")
+        return board.render(Config(self.proj), self.snap())
+
+    @staticmethod
+    def cells(page, row_start):
+        import re
+        at = page.find(row_start)
+        if at < 0:
+            return None
+        row = page[page.rfind("<tr", 0, at):page.find("</tr>", at)]
+        return re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)
+
+    def test_ticket_note_starts_with_category(self):
+        import html
+        text = "3 rounds used and still not passing; last feedback:\nverifier cases: 2 failed"
+        self.add(1, state="stuck", round=3, stuck={"reason": "rounds", "text": text})
+        self.add(2, state="stuck", round=1, stuck={"reason": "hard_block", "text": "touches docs/DECISIONS.md"})
+        self.add(3, state="running", round=1, run={"started": "2026-11-06T10:00:00"},
+                 waiting={"reason": "quota", "since": "2026-11-06T10:00:00", "until": "2026-11-06T15:00:00",
+                          "text": "resets 3pm"})
+        page = self.render()
+        heads = ["票", "狀態", "輪", "整合分支", "相依", "一起驗", "驗證者", "覆核", "token", "快取讀", "快取寫",
+                 "分鐘", "估 token", "說明", "標題"]
+        note = heads.index("說明")
+        state = heads.index("狀態")
+        for ident, label, stored in (("1", "紅燈", text), ("2", "要你決定", "touches docs/DECISIONS.md"),
+                                     ("3", "額度用完", "")):
+            with self.subTest(ticket=ident):
+                cells = self.cells(page, "<td>#%s</td>" % ident)
+                self.assertIsNotNone(cells)
+                cell = html.unescape(cells[note])
+                self.assertTrue(cell.startswith(label + ":" + stored), cell)
+        self.assertEqual(html.unescape(self.cells(page, "<td>#1</td>")[state]), "卡住")
+
+    def test_group_table_reason_column(self):
+        import html
+        page = self.render()
+        start = page.find("<h2>整合分支")
+        self.assertGreaterEqual(start, 0)
+        self.assertIn("<th>狀態</th><th>原因</th>", page[start:page.find("</tr>", start)])
+
+        def group(gid, state, events, **extra):
+            def change(tx):
+                tx.put_group(self.group(gid, state, events, **extra))
+            self.pool.update(change, "test: group %s" % gid)
+        group("g1", "stuck", ["fix round 3", "red after 3 fix rounds"])
+        group("g2", "stuck", ["main kept moving"])
+        group("g3", "fixing", ["fix round 1"], waiting={"reason": "quota", "since": "2026-11-06T10:00:00",
+                                                        "until": "2026-11-06T15:00:00", "text": "t"})
+        group("g4", "pr", ["opened from main abc"])
+        page = self.render()
+        start = page.find("<h2>整合分支")
+        part = page[start:]
+        heads = ["組", "狀態", "原因"]
+        for gid, want in (("g1", "紅燈"), ("g2", "合併衝突"), ("g3", "額度用完"), ("g4", "")):
+            with self.subTest(group=gid):
+                cells = self.cells(part, "<tr><td>%s</td>" % gid)
+                self.assertIsNotNone(cells)
+                self.assertEqual(html.unescape(cells[heads.index("原因")]).strip(), want)
+
+
 class PoolRules(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="loop-pool-")
