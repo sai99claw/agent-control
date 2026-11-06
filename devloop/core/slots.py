@@ -94,7 +94,8 @@ def slot_dir(cfg):
 
 def take(cfg, deadline):
     """A held Slot, a free pass when none is needed, or None when no slot came free before
-    `deadline` (a time.time() value). Polls about every POLL seconds."""
+    `deadline` (a time.time() value; None = wait until one is free, never None). Polls about
+    every POLL seconds."""
     if not needed(cfg):
         return Slot()
     folder = osx.makedirs(slot_dir(cfg))
@@ -111,10 +112,14 @@ def take(cfg, deadline):
             finally:
                 if gate is not None:
                     gate.release()
+        poll = POLL if not gated or gate is not None else GATE_POLL
+        if deadline is None:
+            time.sleep(poll)
+            continue
         left = deadline - time.time()
         if left <= 0:
             return None
-        time.sleep(min(POLL if not gated or gate is not None else GATE_POLL, left))
+        time.sleep(min(poll, left))
 
 
 def take_machine(cfg, deadline):

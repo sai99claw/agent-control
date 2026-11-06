@@ -452,20 +452,28 @@ class T4Acceptance(LoopCase):
         overlaps = [(g, o) for g in regressions for o in others if g[1] < o[2] and o[1] < g[2]]
         self.assertEqual(overlaps, [], runs)
 
-    def test_v2_a_held_mark_keeps_every_taker_waiting_until_its_own_limit(self):
-        """Item 3: while another process holds LOCK_EX on slots/exclusive, an agent takes no slot."""
+    def test_v2_a_held_mark_keeps_every_taker_waiting_until_it_is_released(self):
+        """Item 3 with D-091 item 6: while another process holds LOCK_EX on slots/exclusive, an
+        agent takes no slot; it waits past its own timeout and runs once the mark is released."""
         import fcntl
+        import threading
         slots = os.path.join(self.tmp, "wt", "slots")
         os.makedirs(slots, exist_ok=True)
         fh = open(os.path.join(slots, "exclusive"), "a")
         self.addCleanup(fh.close)
         fcntl.flock(fh, fcntl.LOCK_EX)
-        self.config(machine_slots=2, regression_exclusive=True, agent_timeout_seconds=3)
+        released = []
+        timer = threading.Timer(3, lambda: (released.append(time.time()), fh.close()))
+        self.addCleanup(timer.cancel)
+        self.config(machine_slots=2, regression_exclusive=True, agent_timeout_seconds=2)
+        timer.start()
         res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
-        import glob
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         ran = glob.glob(os.path.join(os.path.dirname(self.plan_path), "count-creator-*"))
-        self.assertEqual(ran, [], "the creator ran while the exclusive mark was held")
-        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertTrue(ran, "the creator never ran")
+        self.assertTrue(released)
+        self.assertGreaterEqual(min(os.path.getmtime(p) for p in ran), released[0] - 0.05,
+                                "the creator ran while the exclusive mark was held")
 
     def test_v3_exclusive_without_machine_slots_stops_every_script(self):
         """Item 2: regression_exclusive true needs machine_slots."""
@@ -531,6 +539,61 @@ class FixerCasesChanged(LoopCase):
         self.assertEqual(self.fixer.case_mark("1"), "T1Acceptance")
 
 
+class T35Acceptance(LoopCase):
+    """#35: the fixer changes a non-acceptance test only on a ticket's explicit basis and the group
+    keeps each such change in tests_changed."""
+
+    SENTENCE = ("You may change a test that is not an acceptance case only when a ticket of this group "
+                "explicitly changes the behaviour that test asserts")
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def run_tests_action(self):
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["tests"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+
+    def test_item1_done_with_tests_changed_is_recorded_and_lands(self):
+        self.run_tests_action()
+        self.assertEqual(self.state(1), "landed")
+        g = self.snap().groups["g1"]
+        self.assertIn("tests_changed", g, g)
+        self.assertEqual(g["tests_changed"],
+                         [{"test": "suite.red", "ticket": "1", "acceptance": "a", "round": 1}])
+
+    def test_item2_fixer_prompt(self):
+        self.run_tests_action()
+        path = os.path.join(self.tmp, "wt", "runs", "fix", "g1", "r1", "prompt.md")
+        self.assertTrue(os.path.exists(path), "no fixer prompt at %s" % path)
+        with open(path, encoding="utf-8") as fh:
+            prompt = fh.read()
+        # the template wraps its lines: the sentence is compared with whitespace runs as one space
+        self.assertIn(self.SENTENCE, " ".join(prompt.split()))
+        self.assertIn('"kind": "done"', prompt)
+        self.assertIn('"kind": "decision"', prompt)
+        # the done example runs from its "kind" to the decision example that follows it
+        start = prompt.index('"kind": "done"')
+        example = prompt[start:prompt.index('"kind": "decision"', start)]
+        self.assertIn("tests_changed", example)
+
+    def test_item3_readme_fixer_row(self):
+        # rows parsed as T28Acceptance.test_item4_readme_roles_rows does
+        with open(os.path.join(HOME, "devloop", "README.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("\n## Roles\n", text)
+        sec = text.split("\n## Roles\n", 1)[1].split("\n## ", 1)[0]
+        lines = [l for l in sec.splitlines() if l.strip().startswith("|")]
+        self.assertGreaterEqual(len(lines), 3, "the Roles section has no table")
+        by_name = {[c.strip() for c in r.strip().strip("|").split("|")][0]: r for r in lines[2:]}
+        self.assertIn("`fixer`", by_name)
+        for w in ("tests_changed", "cases_changed", "decision"):
+            self.assertIn(w, by_name["`fixer`"])
+
+
 class FixerBlockedIsDecision(LoopCase):
     """A fixer hand-in of kind blocked is handled exactly as decision: one fixer run, one decision
     page carrying the fixer's text, the group stuck with its members merged."""
@@ -557,6 +620,105 @@ class FixerBlockedIsDecision(LoopCase):
         self.assertIn("tickets contradict", rows[0]["text"])
         self.assertEqual(self.state(1), "merged")
         self.assertNotIn("cases_changed", g)
+
+
+class T34Acceptance(LoopCase):
+    """#34: tickets.py ready g<N> --note stores the user's ruling on the group for later fixers."""
+
+    HEADER = "## The user's ruling for this group"
+    SENTENCE = "This ruling is the only thing that allows you to go beyond the tickets' text"
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def make_stuck(self):
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["blocked", "blocked", "fix"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["state"], "stuck")
+        self.assertEqual(self.state(1), "merged")
+
+    def fixer_prompt(self):
+        path = os.path.join(self.tmp, "wt", "runs", "fix", "g1", "r1", "prompt.md")
+        self.assertTrue(os.path.exists(path), "no fixer prompt at %s" % path)
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def check_noted(self, res, text, earlier, t0, t1):
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        g = self.snap().groups["g1"]
+        self.assertEqual(g["state"], "pr", g)
+        self.assertEqual(g["fix_round"], 0, g)
+        self.assertIsNone(g["job"], g)
+        notes = g.get("notes")
+        self.assertIsInstance(notes, list, g)
+        self.assertEqual(len(notes), len(earlier) + 1, notes)
+        self.assertEqual(notes[:-1], earlier, "earlier notes were not kept in order")
+        last = notes[-1]
+        self.assertEqual(set(last), {"text", "by", "at"}, last)
+        self.assertEqual(last["text"], text)
+        self.assertEqual(last["by"], "user")
+        # osx.now() format: %Y-%m-%dT%H:%M:%SZ in UTC, between the times taken around the call
+        self.assertRegex(last["at"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertTrue(t0 <= last["at"] <= t1, (t0, last["at"], t1))
+        ev = g["history"][-1]
+        self.assertEqual(ev.get("event"), "ready again by the user", ev)
+        self.assertEqual(ev.get("by"), "user", ev)
+        self.assertEqual(ev.get("note"), text, ev)
+        return notes
+
+    def test_item1_and_4_note_stored_and_reaches_fixer(self):
+        self.make_stuck()
+        t0 = osx.now()
+        res = self.run_py("tickets.py", "ready", "g1", "--note", "keep the newer output")
+        t1 = osx.now()
+        notes = self.check_noted(res, "keep the newer output", [], t0, t1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["state"], "stuck")
+        prompt = self.fixer_prompt()
+        self.assertIn(self.HEADER, prompt.splitlines())
+        self.assertIn("keep the newer output", prompt)
+        self.assertIn(self.SENTENCE, prompt)
+        t0 = osx.now()
+        res = self.run_py("tickets.py", "ready", "g1", "--note", "drop case 2")
+        t1 = osx.now()
+        notes = self.check_noted(res, "drop case 2", notes, t0, t1)
+        self.assertEqual([n["text"] for n in notes], ["keep the newer output", "drop case 2"])
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        prompt = self.fixer_prompt()
+        self.assertIn(self.HEADER, prompt.splitlines())
+        self.assertIn("drop case 2", prompt)
+        self.assertIn(self.SENTENCE, prompt)
+        self.assertNotIn("keep the newer output", prompt)
+        notes = self.snap().groups["g1"].get("notes")
+        self.assertEqual([n["text"] for n in notes], ["keep the newer output", "drop case 2"])
+
+    def test_item2_actl_tickets_ready_group_note(self):
+        self.make_stuck()
+        t0 = osx.now()
+        res = subprocess.run([os.path.join(HOME, "bin", "actl"), "tickets", "ready", "g1", "--note",
+                              "keep the newer output"], cwd=self.proj, env=self.env,
+                             capture_output=True, text=True, timeout=120)
+        t1 = osx.now()
+        self.check_noted(res, "keep the newer output", [], t0, t1)
+
+    def test_item3_note_with_ticket_id_refused(self):
+        self.add(1)
+        self.plan(worker={"1": ["blocked"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "stuck")
+        before = self.snap().ticket("1")
+        res = self.run_py("tickets.py", "ready", "1", "--note", "x")
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertTrue(any("--note" in ln and "g<N>" in ln for ln in res.stderr.splitlines()), res.stderr)
+        self.assertEqual(self.snap().ticket("1"), before)
 
 
 class T8Acceptance(LoopCase):
@@ -674,6 +836,57 @@ class T9Acceptance(LoopCase):
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         self.assertEqual(len(self.out_lines()), 6, "--again ran the release once more")
         self.assertEqual(self.snap().groups["g1"]["release"], "ok")
+
+
+class T33Acceptance(LoopCase):
+    """#33: devloop.max_group_size caps how many tickets one integration branch takes."""
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def groups(self):
+        return {g["id"]: g["members"] for g in self.snap().groups.values()}
+
+    def test_max_group_size_defaults_to_10_and_takes_a_setting(self):
+        self.assertEqual(getattr(self.cfg(), "max_group_size", None), 10)
+        self.config(max_group_size=3)
+        self.assertEqual(getattr(self.cfg(), "max_group_size", None), 3)
+
+    def test_bad_max_group_size_stops_tickets_list(self):
+        for bad in (0, -1, 2.5, "10", True, None):
+            with self.subTest(bad=bad):
+                self.config(max_group_size=bad)
+                res = self.run_py("tickets.py", "list")
+                self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+                self.assertIn("devloop.max_group_size", res.stderr)
+
+    def test_three_together_tickets_with_size_2_take_two_groups(self):
+        self.config(max_group_size=2)
+        self.add(1)
+        self.add(2)
+        self.add(3)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        for i in (1, 2, 3):
+            self.assertEqual(self.state(i), "landed", i)
+        self.assertEqual(self.groups(), {"g1": ["1", "2"], "g2": ["3"]})
+
+    def test_size_1_dependent_ticket_opens_its_group_after_g1_lands(self):
+        self.config(max_group_size=1)
+        self.add(1)
+        self.add(2, deps=[1])
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.state(2), "landed")
+        self.assertEqual(self.groups(), {"g1": ["1"], "g2": ["2"]})
+        groups = self.snap().groups
+        landed, base = groups["g1"].get("landed_sha"), groups["g2"].get("base")
+        self.assertTrue(landed and base, groups)
+        res = subprocess.run(["git", "merge-base", "--is-ancestor", landed, base], cwd=self.proj,
+                             capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, "g2 was not opened from a main holding g1's landing")
 
 
 class Revise(LoopCase):
@@ -995,6 +1208,27 @@ class T20Acceptance(LoopCase):
             self.assertIn("no acceptance cases", out)
 
 
+class RulingSection(unittest.TestCase):
+    """auto_fixer.ruling_section: the latest user note of a group, or nothing (#34)."""
+
+    def setUp(self):
+        import auto_fixer
+        self.fn = auto_fixer.ruling_section
+
+    def test_no_notes_is_empty(self):
+        self.assertEqual(self.fn({}), "")
+        self.assertEqual(self.fn({"notes": []}), "")
+
+    def test_latest_note_only(self):
+        out = self.fn({"notes": [{"text": "first note"}, {"text": "second note"}]})
+        self.assertIn("## The user's ruling for this group", out)
+        self.assertIn("second note", out)
+        self.assertNotIn("first note", out)
+        self.assertIn("This ruling is the only thing that allows you to go beyond the tickets' text", out)
+        self.assertNotIn("--revise", out)
+        self.assertNotIn("ticket_creator", out)
+
+
 class ReleaseRerun(LoopCase):
     """tickets.py release: refusals, the timeout, the shared function and the docs (#9)."""
     release = "exit 7"
@@ -1085,6 +1319,35 @@ class ReleaseRerun(LoopCase):
         readme = read("devloop", "README.md").splitlines()
         cancel = [i for i, ln in enumerate(readme) if ln.startswith("| `python3 devloop/tickets.py cancel")][0]
         self.assertIn("tickets.py release", readme[cancel + 1])
+
+
+class FixerTestsChangedUnit(LoopCase):
+    """auto_fixer._record_tests keeps tests_changed on the group by the rules of _record_cases."""
+
+    def setUp(self):
+        super().setUp()
+        import auto_fixer
+        self.fixer = auto_fixer
+        self.pool.update(lambda tx: tx.put_group({"id": "g9", "members": [], "state": "pr"}),
+                         "test: group g9")
+
+    def test_rounds_append_and_non_objects_drop(self):
+        e1 = {"test": "s.a", "ticket": "1", "acceptance": "a"}
+        self.fixer._record_tests(self.pool, "g9", 1, [e1, "junk", 3])
+        self.fixer._record_tests(self.pool, "g9", 2, [{"test": "s.b", "ticket": "2", "acceptance": "b"}])
+        self.assertEqual(self.snap().groups["g9"]["tests_changed"], [
+            dict(e1, round=1), {"test": "s.b", "ticket": "2", "acceptance": "b", "round": 2}])
+        self.assertNotIn("cases_changed", self.snap().groups["g9"])
+
+    def test_empty_or_non_list_adds_no_key(self):
+        for tests in (None, [], "not a list", ["x"]):
+            self.fixer._record_tests(self.pool, "g9", 1, tests)
+        self.assertNotIn("tests_changed", self.snap().groups["g9"])
+
+    def test_docstring_and_prompt_name_tests_changed(self):
+        self.assertIn("tests_changed", self.fixer.__doc__)
+        with open(os.path.join(os.path.dirname(self.fixer.__file__), "prompts", "fixer.md")) as f:
+            self.assertIn("tests_changed", f.read())
 
 
 class T21Acceptance(LoopCase):
@@ -1900,16 +2163,28 @@ class T3Acceptance(LoopCase):
     def test_one_slot_keeps_a_regression_apart_from_the_other_groups_agents(self):
         self.assertEqual(self.two_tickets(1), 1, self.recorded())
 
-    def test_an_agent_without_a_slot_in_its_time_never_starts(self):
-        self.hold_slot_zero()
-        self.config(machine_slots=1, agent_timeout_seconds=3)
+    def test_an_agent_waits_for_the_slot_and_runs_once_it_is_freed(self):
+        """D-091 item 6 (was: never starts): the creator waits past its own timeout for the held
+        slot, starts only after it is freed and exits 0."""
+        import fcntl
+        import threading
+        slot_dir = os.path.join(self.tmp, "wt", "slots")
+        os.makedirs(slot_dir, exist_ok=True)
+        fh = open(os.path.join(slot_dir, "slot-0"), "a")
+        self.addCleanup(fh.close)
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        released = []
+        timer = threading.Timer(3, lambda: (released.append(time.time()), fh.close()))
+        self.addCleanup(timer.cancel)
+        self.config(machine_slots=1, agent_timeout_seconds=2)
+        timer.start()
         res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
-        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
-        self.assertFalse(os.path.exists(os.path.join(os.path.dirname(self.plan_path), "count-creator--")),
-                         "the creator ran without a slot")
-        pages = [r for r in self.snap().inbox.values() if r["kind"] == "decision"]
-        self.assertTrue(pages)
-        self.assertIn("machine slot", " ".join(r["text"] for r in pages))
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        ran = glob.glob(os.path.join(os.path.dirname(self.plan_path), "count-creator-*"))
+        self.assertTrue(ran, "the creator never ran")
+        self.assertTrue(released)
+        self.assertGreaterEqual(min(os.path.getmtime(p) for p in ran), released[0] - 0.05,
+                                "the creator ran while the slot was held")
 
     def test_a_regression_without_a_slot_in_its_time_is_unmeasured(self):
         self.hold_slot_zero()
@@ -1921,6 +2196,104 @@ class T3Acceptance(LoopCase):
             got = json.load(fh)
         self.assertEqual(got["status"], "unmeasured")
         self.assertIn("machine slot", got["summary"])
+
+
+class T30Acceptance(LoopCase):
+    """Ticket #30: waiting for a machine slot does not count against an agent's or an issuer's
+    time limit; the clocks start when the slot is taken (D-091 item 6)."""
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)     # this process is not nested under a slot
+        os.environ["AC_ROOT"] = self.proj
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def done_worker(self, **devloop):
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            agents_cfg = json.load(fh)["devloop"]["agents"]
+        script = "cat >/dev/null; echo '{\"kind\": \"done\"}' > \"$DEVLOOP_RESULT\""
+        self.config(agents=dict(agents_cfg, worker=["sh", "-c", script]), **devloop)
+
+    def hold_slot_for(self, seconds):
+        """Another holder (this test process) takes the only slot and frees it after `seconds`."""
+        import threading
+        from core import slots
+        slot = slots.take(self.cfg(), time.time() + 5)
+        self.assertTrue(slot and slot.held)
+        self.addCleanup(slot.release)
+        timer = threading.Timer(seconds, slot.release)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        return slot
+
+    def assert_ran(self, hand, began):
+        self.assertGreaterEqual(time.time() - began, 2.5)
+        self.assertEqual(hand.cost["outcome"], "done", hand.cost)
+        self.assertIsNone(hand.problem())
+        self.assertFalse(hand.timed_out)
+
+    def test_an_agent_waits_for_a_slot_past_its_timeout_and_then_runs(self):
+        from core import agents
+        self.done_worker(machine_slots=1)
+        self.hold_slot_for(3)
+        began = time.time()
+        hand = agents.run(self.cfg(), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 2)
+        self.assert_ran(hand, began)
+
+    def test_an_agent_waits_for_the_exclusive_mark_past_its_timeout_and_then_runs(self):
+        import fcntl
+        import threading
+        from core import agents
+        self.done_worker(machine_slots=2, regression_exclusive=True)
+        slot_dir = os.path.join(self.tmp, "wt", "slots")
+        os.makedirs(slot_dir, exist_ok=True)
+        fh = open(os.path.join(slot_dir, "exclusive"), "a")
+        self.addCleanup(fh.close)
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        timer = threading.Timer(3, fh.close)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        began = time.time()
+        hand = agents.run(self.cfg(), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 2)
+        self.assert_ran(hand, began)
+
+    def test_an_issuer_test_run_waits_for_its_slot_past_the_issuer_timeout(self):
+        import ticket_issuer
+        self.config(machine_slots=1, issuer_timeout_seconds=5)
+        issuer = ticket_issuer.Issuer(self.cfg(), self.pool, "1", "int/g1")
+        issuer.wt = self.proj           # the fake tests run here; case_1 fails (no impl_1.txt)
+        self.hold_slot_for(7)
+        try:
+            out = issuer.run_cases({"cases": {"run": ["case_1"]}})
+        except ticket_issuer.Stuck as e:
+            self.fail("issuer stuck while waiting for a test slot: %s %s" % (e.reason, e.text))
+        self.assertIsInstance(out, str)
+        self.assertTrue(out.startswith("verifier cases:"), out)
+
+    def test_end_to_end_a_ticket_lands_though_the_only_slot_is_held_past_the_issuer_timeout(self):
+        import fcntl
+        import threading
+        self.config(machine_slots=1, issuer_timeout_seconds=6)
+        self.add(1)
+        slot_dir = os.path.join(self.tmp, "wt", "slots")
+        os.makedirs(slot_dir, exist_ok=True)
+        fh = open(os.path.join(slot_dir, "slot-0"), "a")
+        self.addCleanup(fh.close)
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        timer = threading.Timer(8, fh.close)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        t = self.snap().ticket("1")
+        self.assertEqual((t["state"], t["round"]), ("landed", 1), t.get("stuck") or t.get("history"))
 
 
 class AgentChains(LoopCase):
@@ -2068,22 +2441,6 @@ class MachineSlots(LoopCase):
         self.assertIsNone(hand.problem())
         self.assertEqual(hand.result["slot"], os.path.join(self.slot_dir, "slot-0"))
 
-    def test_an_agent_with_no_slot_in_time_never_starts(self):
-        import time
-        from core import agents
-        marker = os.path.join(self.tmp, "ran")
-        self.config(machine_slots=1, agents=dict(self.agents_cfg(), worker=["touch", marker]))
-        self.hold_slot()
-        began = time.time()
-        hand = agents.run(self.cfg(), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 1.2)
-        self.assertGreaterEqual(time.time() - began, 1.0)
-        self.assertFalse(os.path.exists(marker))
-        self.assertIn("machine slot", hand.problem())
-        self.assertEqual(hand.cost["outcome"], "no slot")
-        self.assertIsNone(hand.cost["input_tokens"])
-        self.assertGreaterEqual(hand.cost["seconds"], 1.0)
-        self.assertEqual(agents.model_of(None), "unknown")
-
     def test_a_holder_that_dies_frees_its_slot(self):
         import time
         from core import slots
@@ -2108,18 +2465,6 @@ class MachineSlots(LoopCase):
         self.assertLess(time.time() - began, 3.5)
         slot.release()
 
-    def test_an_issuer_test_run_with_no_slot_before_the_deadline_is_stuck_timeout(self):
-        import time
-        import ticket_issuer
-        self.config(machine_slots=1)
-        self.hold_slot()
-        issuer = ticket_issuer.Issuer.__new__(ticket_issuer.Issuer)
-        issuer.cfg, issuer.id, issuer.deadline = self.cfg(), "1", time.time() + 1.2
-        with self.assertRaises(ticket_issuer.Stuck) as ctx:
-            issuer.run_cases({"cases": {"run": ["case_1"]}})
-        self.assertEqual(ctx.exception.reason, "timeout")
-        self.assertIn("machine slot", ctx.exception.text)
-
     def test_a_worker_that_has_its_ticket_revised_lands_with_one_slot(self):
         self.config(machine_slots=1)
         self.add(1)
@@ -2140,6 +2485,88 @@ class MachineSlots(LoopCase):
         for words in ("agent", "red check", "regression", "slots/slot-", "own limit", "DEVLOOP_SLOT",
                       "parent's slot"):
             self.assertIn(words, section)
+
+    def test_the_slot_section_has_no_no_slot_outcome_and_says_the_clocks_start_at_the_slot(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            section = fh.read().split("## Machine slots", 1)[1].split("\n## ", 1)[0]
+        flat = " ".join(section.split())
+        self.assertNotIn('"no slot"', flat)
+        self.assertIn("wait for a slot without a limit", flat)
+        self.assertIn("from when the slot is taken", flat)
+        self.assertIn("still counts against `regression_timeout_seconds`", flat)
+
+    def test_take_without_a_deadline_waits_until_the_slot_is_freed(self):
+        import threading
+        from core import slots
+        self.config(machine_slots=1)
+        held = self.hold_slot()
+        timer = threading.Timer(1.5, held.release)
+        self.addCleanup(timer.cancel)
+        timer.start()
+        began = time.time()
+        slot = slots.take(self.cfg(), None)
+        self.addCleanup(slot.release)
+        self.assertTrue(slot.held)
+        self.assertGreaterEqual(time.time() - began, 1.3)
+
+    def test_an_agent_has_no_no_slot_state_and_counts_its_wait(self):
+        import threading
+        from core import agents
+        self.config(machine_slots=1, agents=dict(self.agents_cfg(), worker=["true"]))
+        held = self.hold_slot()
+        timer = threading.Timer(1.5, held.release)
+        self.addCleanup(timer.cancel)
+        timer.start()
+        p = agents.start(self.cfg(), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30)
+        self.addCleanup(p.stop)
+        self.assertFalse(hasattr(p, "no_slot"))
+        self.assertFalse(hasattr(agents.Pending, "_unstarted"))
+        self.assertGreaterEqual(p.waited, 1.3)
+        with open(agents.__file__) as fh:
+            self.assertNotIn('"no slot"', fh.read())
+
+    def test_an_agent_past_its_timeout_after_taking_a_free_slot_is_timed_out(self):
+        from core import agents
+        self.config(machine_slots=1, agents=dict(self.agents_cfg(), worker=["sleep", "30"]))
+        began = time.time()
+        hand = agents.run(self.cfg(), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 1.5)
+        self.assertTrue(hand.timed_out)
+        self.assertEqual(hand.cost["outcome"], "timeout")
+        self.assertLess(time.time() - began, 15)
+
+    def test_the_agent_timeout_counts_only_time_under_a_slot(self):
+        """A relaunch after an 'out of quota' fallback adds its wait too; _finish subtracts the
+        sum. Simulated: waited set by hand makes the wait for the process longer."""
+        from core import agents
+        from unittest import mock
+        self.config(machine_slots=1, agents=dict(self.agents_cfg(), worker=["sleep", "30"]))
+        p = agents.start(self.cfg(), "worker", "go", self.proj, os.path.join(self.tmp, "run"), 5)
+        self.addCleanup(p.stop)
+        p.started -= 100            # as if it had waited 100 s for its slot
+        p.waited += 100
+        with mock.patch.object(agents.osx, "wait", return_value=(None, True)) as wait:
+            p.finish()
+        self.assertGreater(wait.call_args[0][1], 4)
+
+    def test_the_issuer_deadline_adds_every_slot_wait(self):
+        import threading
+        import ticket_issuer
+        self.config(machine_slots=1, issuer_timeout_seconds=100)
+        issuer = ticket_issuer.Issuer(self.cfg(), None, "1", "int/g1")
+        base = issuer.deadline
+        self.assertAlmostEqual(base, issuer.started + 100, places=3)
+        held = self.hold_slot()
+        timer = threading.Timer(1.2, held.release)
+        self.addCleanup(timer.cancel)
+        timer.start()
+        issuer.test_slot().release()
+        self.assertGreaterEqual(issuer.deadline - base, 1.0)
+
+        class P:
+            waited = 7.0
+        issuer.started_agents.append(P())
+        issuer.pending = []         # cleared each round; the waits stay counted
+        self.assertGreaterEqual(issuer.deadline - base, 8.0)
 
 
 class StopRecordsCost(LoopCase):
@@ -2186,18 +2613,6 @@ class StopRecordsCost(LoopCase):
         for k in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
                   "usd", "session_id"):
             self.assertIsNone(row[k], k)
-
-    def test_stop_of_an_agent_that_never_got_a_slot_returns_an_interrupted_row(self):
-        from core import agents, slots
-        self.config(machine_slots=1)
-        cfg = self.cfg(["true"])
-        held = slots.take(cfg, time.time() + 5)
-        self.addCleanup(held.release)
-        p = agents.start(cfg, "worker", "go", self.proj, os.path.join(self.tmp, "run"), 0.5)
-        self.assertTrue(p.no_slot)
-        row = p.stop()
-        self.assertEqual((row["outcome"], row["command"]), ("interrupted", "true"))
-        self.assertIsNone(row["input_tokens"])
 
     def test_interrupted_costs_counts_each_run_once(self):
         import ticket_issuer
@@ -2584,6 +2999,30 @@ class Recovery(LoopCase):
         res = self.controller()
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(self.state(1), "landed")
+
+
+class GroupSizeUnits(LoopCase):
+    """devloop.max_group_size: joinable() and group_for() (implementer's unit tests)."""
+
+    def ctl(self, size):
+        from unittest import mock
+        import ticket_controller
+        c = ticket_controller.Controller.__new__(ticket_controller.Controller)
+        c.cfg = mock.Mock(max_group_size=size)
+        return c
+
+    def snap(self, members):
+        from unittest import mock
+        return mock.Mock(dag={}, tickets={"9": {}}, groups={"g1": {"id": "g1", "members": members}})
+
+    def test_full_group_not_joinable(self):
+        from unittest import mock
+        with mock.patch("ticket_controller.dagmod.verify", return_value="together"), \
+                mock.patch("ticket_controller.dagmod.deps", return_value=[]):
+            c = self.ctl(2)
+            self.assertFalse(c.joinable(self.snap(["1", "2"]), "9", {"id": "g1", "members": ["1", "2"]}))
+            self.assertTrue(c.joinable(self.snap(["1"]), "9", {"id": "g1", "members": ["1"]}))
+            self.assertTrue(c.joinable(self.snap(["1", "9"]), "9", {"id": "g1", "members": ["1", "9"]}))
 
 
 class NoReverifyPaths(LoopCase):

@@ -29,7 +29,7 @@ group complete (= one PR, a local mark) -> regression.py (preflight + full suite
 | `python3 devloop/tickets.py inbox` / `ack` | pages: created, landed, decision, env, cancelled |
 | `python3 devloop/tickets.py list` / `show N` | state of tickets and groups; a merged ticket shows as 功能完成 and a landed one as 驗證完成, while the pool keeps merged / landed |
 | `python3 devloop/tickets.py ready N` | after deciding on a stuck ticket |
-| `python3 devloop/tickets.py ready gN` | a stuck group whose branch and merged tickets are still there: verify it again (fix rounds back to 0) |
+| `python3 devloop/tickets.py ready gN [--note "..."]` | a stuck group whose branch and merged tickets are still there: verify it again (fix rounds back to 0); the `--note` is stored on the group and every later fixer of it gets it as the user's ruling |
 | `python3 devloop/tickets.py cancel N --why ...` | drop a ticket |
 | `python3 devloop/tickets.py release gN [--again]` | re-run a landed group's failed release once (`--again` also when it was ok); the outcome is a page |
 | `python3 devloop/tickets.py cancel gN --why ...` | close a stuck or open group with no running member: its ready and merged tickets are cancelled, the branch is kept; one `cancelled` page lists them |
@@ -43,7 +43,7 @@ Run them from the project (or set `AC_ROOT` to it).
 
 `release` is required (every project ships a release script; the controller only calls it, with
 `DEVLOOP_RELEASE_SHA`, `DEVLOOP_GROUP`, `DEVLOOP_TICKETS`, `DEVLOOP_RELEASE_DIR` set; it runs in a throwaway checkout that is removed afterwards, so anything it produces goes to `$DEVLOOP_RELEASE_DIR` = `<worktrees>/runs/release/<group>/`, which devloop never empties; its whole output is kept in `<worktrees>/runs/release/<group>.log`, named on the group as `release_log` and in the page) and is stopped after `release_timeout_seconds` (default 3600). Everything else has a default:
-`pool` (default `<agent-control>/pools/<project>`), `max_parallel` 2, `max_rounds` 3,
+`pool` (default `<agent-control>/pools/<project>`), `max_parallel` 2, `max_group_size` 10 (a `together` ticket opens a new integration branch once the open one has this many members), `max_rounds` 3,
 `issuer_timeout_seconds` 10800, `agent_timeout_seconds` 3600, `main_branch` "main",
 `remote` "origin" (null = do not push), `worktrees` (default `../<project>-devloop`),
 `agents.<role>` (the command that starts an agent; prompt on stdin),
@@ -83,9 +83,10 @@ issuer's red check and each case run, and a regression (from before preflight un
 A slot is a `flock` on `<worktrees>/slots/slot-<i>` (i = 0..N-1); the files are created when
 missing and never deleted. The devloop process that started the run holds the lock, so a
 background process an agent leaves behind keeps no slot, and a process that dies frees its slot.
-Waiting counts against the caller's own limit: an agent that gets no slot within its timeout is
-not started (cost outcome "no slot"), an issuer test run out of time makes the ticket stuck
-("timeout"), and a regression with no slot within `regression_timeout_seconds` is "unmeasured".
+An agent and an issuer wait for a slot without a limit: the wait does not count against their
+own limit (the agent's timeout, `issuer_timeout_seconds`), whose time counts from when the slot
+is taken. A regression's wait still counts against `regression_timeout_seconds`
+("unmeasured" when no slot comes free in time).
 Nested runs use their parent's slot: agents get `DEVLOOP_SLOT` (their slot file) in the
 environment, and a process with it set takes no slot (an agent's `run_tests.py`, a worker's
 `ticket_creator.py --revise`).
@@ -96,8 +97,8 @@ needs `machine_slots` (exclusivity is counted in slots; true without a slot coun
 script). The mark is a `flock` LOCK_EX on `<worktrees>/slots/exclusive`, held by the regression
 from the moment it starts waiting until it has released every slot; with it held, the regression
 takes every `slot-<i>`, waiting for each, then runs preflight and `full`. Every other taker needs a
-LOCK_SH on that file, only while it takes its slot; its wait for it counts against its own limit
-like a slot wait. The whole wait counts against `regression_timeout_seconds` ("unmeasured" when the
+LOCK_SH on that file, only while it takes its slot; its wait for it is a slot wait (no limit for
+an agent or an issuer, its time limits count from when the slot is taken). The whole wait counts against `regression_timeout_seconds` ("unmeasured" when the
 machine is not free in time), and a regression that dies leaves nothing locked. Nested runs
 (`DEVLOOP_SLOT` set) do not touch the mark.
 
@@ -113,7 +114,7 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
 | `worker_simple` | `ticket_issuer.py` | instead of `worker` when the ticket has `complexity: simple` | sonnet medium | the same as `worker` |
 | `verifier` | `ticket_issuer.py` | before the worker, for tickets that need one | opus medium | the acceptance cases (marked as described below) on the branch `t/<id>-cases`; hand-in `cases` |
 | `reviewer` | `ticket_issuer.py` | after the worker, for complex tickets | opus medium | hand-in `review` (verdict pass or fail, feedback); edits nothing |
-| `fixer` | `auto_fixer.py` | when the regression on an integration branch is red | opus medium | the fix committed on the integration branch, by the tickets' current content; hand-in `done` (with `cases_changed`: each acceptance case it aligned to its ticket, added to the group with the fix round) or `decision` (two tickets contradict: a decision page, the group stops; `blocked` is the same) |
+| `fixer` | `auto_fixer.py` | when the regression on an integration branch is red | opus medium | the fix committed on the integration branch, by the tickets' current content (plus the group's latest user note as the user's ruling, the only thing that lets it go beyond D-089); hand-in `done` (with `cases_changed`: each acceptance case it aligned to its ticket, added to the group with the fix round; `tests_changed`: each other test it changed on a ticket's explicit basis, with the ticket and acceptance item) or `decision` (two tickets contradict: a decision page, the group stops; `blocked` is the same) |
 | `consolidator` | `memory_keeper.py`, started by `ticket_controller.py` in `consolidate()` | when a memory file has 5 lessons waiting, or its oldest lesson is 3 days old, at most once per 24 h per file | fable medium, then opus medium | hand-in `memory`: the new text of one memory file and the lessons it dropped; `memory_keeper.py` writes the file |
 | `consolidator_peer` | `memory_keeper.py` | only when `unlimited_tokens` is on, to review the consolidator's draft | opus medium | hand-in `review` (agree or change, notes) kept in `memory/discussions/` |
 

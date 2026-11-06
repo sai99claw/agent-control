@@ -45,6 +45,7 @@ DEFAULTS = {
     "worktrees": None,               # default <project>/../<project name>-loop
     "max_parallel": 2,
     "max_rounds": 3,
+    "max_group_size": 10,            # a together ticket opens a new integration branch once the open one has this many members
     "issuer_timeout_seconds": 3 * 3600,
     "agent_timeout_seconds": 3600,
     "regression_timeout_seconds": 3 * 3600,
@@ -87,6 +88,10 @@ class Config:
         if slots is not None and (isinstance(slots, bool) or not isinstance(slots, int) or slots < 1):
             raise osx.OSFailure("board/config.json devloop.machine_slots must be null or a whole number "
                                 ">= 1, not %r" % (slots,))
+        size = self.values.get("max_group_size")
+        if isinstance(size, bool) or not isinstance(size, int) or size < 1:
+            raise osx.OSFailure("board/config.json devloop.max_group_size must be a whole number "
+                                ">= 1, not %r" % (size,))
         mem = self.values.get("memory")
         if mem is not None and not (isinstance(mem, str) and mem):
             raise osx.OSFailure("board/config.json devloop.memory must be null or a folder path (a "

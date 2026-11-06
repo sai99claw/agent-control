@@ -53,7 +53,7 @@ No script polls another; each records its outcome in the pool and exits.
 - A ready ticket may start when every dependency is in its starting point: landed, or merged into
   the same open integration branch. Issuers branch from the integration branch head, so a ticket
   sees the merged work of the tickets it depends on.
-- `together` tickets share the one open group; a group stays open while a ready ticket could still
+- `together` tickets share the open group until it has `max_group_size` members (default 10), then the next one opens another group; a group stays open while a ready ticket could still
   join it. `alone` tickets get their own group.
 - An open group whose tickets are all merged or stuck becomes the PR. A stuck ticket does not hold
   its group; its dependents wait.

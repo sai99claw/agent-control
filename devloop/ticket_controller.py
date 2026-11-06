@@ -60,6 +60,11 @@ class Stop(Exception):
         self.code = code
 
 
+def _gnum(gid):
+    digits = "".join(c for c in str(gid) if c.isdigit())
+    return (int(digits) if digits else 0, str(gid))
+
+
 class Controller:
     def __init__(self, cfg, pool):
         self.cfg, self.pool = cfg, pool
@@ -449,6 +454,9 @@ class Controller:
         """Could ready ticket `ident` start on `group`'s branch right now?"""
         if group.get("alone") or dagmod.verify(snap.dag, ident) == "alone":
             return False
+        members = group.get("members") or []
+        if ident not in members and len(members) >= self.cfg.max_group_size:
+            return False
         for d in dagmod.deps(snap.dag, ident):
             dt = snap.tickets.get(d) or {}
             if dt.get("state") == "landed":
@@ -468,8 +476,10 @@ class Controller:
         elif alone:
             open_group = None
         else:
-            open_group = next((g for g in snap.groups.values()
-                               if g.get("state") == "open" and not g.get("alone")), None)
+            limit = self.cfg.max_group_size
+            open_group = next((g for _, g in sorted(snap.groups.items(), key=lambda kv: _gnum(kv[0]))
+                               if g.get("state") == "open" and not g.get("alone")
+                               and len(g.get("members") or []) < limit), None)
         for d in dagmod.deps(dag, ident):
             dt = snap.tickets.get(d) or {}
             if dt.get("state") == "landed":
