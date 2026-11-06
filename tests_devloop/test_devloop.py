@@ -5812,6 +5812,22 @@ class PoolRules(unittest.TestCase):
         self.assertIn("5", self.b.snapshot().tickets)
 
 
+class StuckCategoryHelpers(LoopCase):
+    def test_merge_failed_needs_lead_then_failed(self):
+        import board
+        self.assertTrue(board.merge_failed("merging the latest a into b failed (conflict) x"))
+        self.assertTrue(board.merge_failed("merging the verifier's branch a into b failed (x)"))
+        self.assertFalse(board.merge_failed("failed ( then merging the latest a"))
+        self.assertFalse(board.merge_failed("2 failed"))
+
+    def test_ticket_category_uses_last_feedback(self):
+        import board
+        t = {"state": "stuck", "stuck": {"reason": "rounds", "text": "3 rounds"},
+             "feedback": ["round 3: no machine slot came free within 60 s"]}
+        self.assertEqual(board.ticket_category(t), "slot")
+        self.assertIsNone(board.ticket_category({"state": "ready"}))
+
+
 class ShownState(unittest.TestCase):
     def test_merged_and_landed_have_labels_others_pass_through(self):
         self.assertEqual(shown_state("merged"), "功能完成")
