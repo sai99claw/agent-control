@@ -77,7 +77,7 @@ def _set(pool, ident, state, why):
     return 0
 
 
-def cmd_ready_group(pool, cfg, gid, why):
+def cmd_ready_group(pool, cfg, gid, why, note=None):
     """Send a stuck group (branch kept, at least one merged member) back to the regression.
     Only the group is written; its tickets stay as they are."""
     def change(tx):
@@ -92,7 +92,11 @@ def cmd_ready_group(pool, cfg, gid, why):
         if not Git(cfg.root).sha("refs/heads/" + g["branch"]):
             raise osx.OSFailure("group %s: its integration branch %s no longer exists" % (gid, g["branch"]))
         g["state"], g["fix_round"], g["job"] = "pr", 0, None
-        event(g, "ready again by the user", by="user", why=why)
+        detail = {"why": why}
+        if note is not None:
+            g.setdefault("notes", []).append({"text": note, "by": "user", "at": osx.now()})
+            detail["note"] = note
+        event(g, "ready again by the user", by="user", **detail)
         tx.put_group(g)
     pool.update(change, "group %s: ready again (main)" % gid)
     print("group %s goes back to the regression (fix rounds reset to 0)" % gid)
@@ -222,6 +226,7 @@ def main(argv=None):
     p = sub.add_parser("ready")
     p.add_argument("id")
     p.add_argument("--why", default="")
+    p.add_argument("--note", default=None)
     p = sub.add_parser("cancel")
     p.add_argument("id")
     p.add_argument("--why", default="")
@@ -247,8 +252,12 @@ def main(argv=None):
             memory.seed(cfg, pool, models)
             print("pool ready at %s" % pool.path)
             return 0
+        if args.cmd == "ready" and args.note is not None and not re.fullmatch(r"g\d+", args.id):
+            print("tickets: --note is for a group (ready g<N> --note ...), not for ticket %s" % args.id,
+                  file=sys.stderr)
+            return 2
         if args.cmd == "ready" and re.fullmatch(r"g\d+", args.id):
-            return cmd_ready_group(pool, cfg, args.id, args.why)
+            return cmd_ready_group(pool, cfg, args.id, args.why, args.note)
         if args.cmd == "cancel" and re.fullmatch(r"g\d+", args.id):
             return cmd_cancel_group(pool, args.id, args.why)
         if args.cmd == "release":

@@ -28,6 +28,7 @@ them): {project_memory}
 
 Code index (generated from the code; never edit it): {index}
 
+{ruling}
 ## How to work
 
 Fix by the tickets' current content, shown above: a merged ticket is frozen and cannot be

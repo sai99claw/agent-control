@@ -66,6 +66,7 @@ def fix(cfg, pool, gid, report, live=None):
         "main_moved": "yes - merge %s into this branch and resolve the conflicts" % main
                       if main_moved and not g.is_ancestor(main, "HEAD") else "no",
         "red": report.get("summary") or "(no red list)",
+        "ruling": ruling_section(group),
         "tickets_json": json.dumps(members, indent=2, ensure_ascii=False),
         "diffstat": g.out("diff", "--stat", "%s...HEAD" % main) or "(none)",
         "result_path": os.path.join(run_dir, "result.json"),
@@ -95,6 +96,18 @@ def fix(cfg, pool, gid, report, live=None):
 def case_mark(ident):
     """The verifier's case mark of ticket `ident` (ticket_issuer.case_mark's convention)."""
     return "T%sAcceptance" % ident
+
+
+def ruling_section(group):
+    """The prompt section for the group's latest user note ("" without one)."""
+    notes = group.get("notes") or []
+    if not notes:
+        return ""
+    return ("## The user's ruling for this group\n\n%s\n\n"
+            "This ruling is the only thing that allows you to go beyond the tickets' text: where it says so, "
+            "you may change code or an acceptance case of a frozen ticket in a way its ticket does not say. "
+            "List every case you change on its strength in `cases_changed`, with the part of the ruling it "
+            "follows as its `acceptance`.\n" % notes[-1]["text"])
 
 
 def cases_entries(cases, rnd):

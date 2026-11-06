@@ -29,7 +29,7 @@ group complete (= one PR, a local mark) -> regression.py (preflight + full suite
 | `python3 devloop/tickets.py inbox` / `ack` | pages: created, landed, decision, env, cancelled |
 | `python3 devloop/tickets.py list` / `show N` | state of tickets and groups; a merged ticket shows as 功能完成 and a landed one as 驗證完成, while the pool keeps merged / landed |
 | `python3 devloop/tickets.py ready N` | after deciding on a stuck ticket |
-| `python3 devloop/tickets.py ready gN` | a stuck group whose branch and merged tickets are still there: verify it again (fix rounds back to 0) |
+| `python3 devloop/tickets.py ready gN [--note "..."]` | a stuck group whose branch and merged tickets are still there: verify it again (fix rounds back to 0); the `--note` is stored on the group and every later fixer of it gets it as the user's ruling |
 | `python3 devloop/tickets.py cancel N --why ...` | drop a ticket |
 | `python3 devloop/tickets.py release gN [--again]` | re-run a landed group's failed release once (`--again` also when it was ok); the outcome is a page |
 | `python3 devloop/tickets.py cancel gN --why ...` | close a stuck or open group with no running member: its ready and merged tickets are cancelled, the branch is kept; one `cancelled` page lists them |
@@ -98,7 +98,7 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
 | `worker_simple` | `ticket_issuer.py` | instead of `worker` when the ticket has `complexity: simple` | sonnet medium | the same as `worker` |
 | `verifier` | `ticket_issuer.py` | before the worker, for tickets that need one | opus medium | the acceptance cases (marked as described below) on the branch `t/<id>-cases`; hand-in `cases` |
 | `reviewer` | `ticket_issuer.py` | after the worker, for complex tickets | opus medium | hand-in `review` (verdict pass or fail, feedback); edits nothing |
-| `fixer` | `auto_fixer.py` | when the regression on an integration branch is red | opus medium | the fix committed on the integration branch, by the tickets' current content; hand-in `done` (with `cases_changed`: each acceptance case it aligned to its ticket, added to the group with the fix round) or `decision` (two tickets contradict: a decision page, the group stops; `blocked` is the same) |
+| `fixer` | `auto_fixer.py` | when the regression on an integration branch is red | opus medium | the fix committed on the integration branch, by the tickets' current content (plus the group's latest user note as the user's ruling, the only thing that lets it go beyond D-089); hand-in `done` (with `cases_changed`: each acceptance case it aligned to its ticket, added to the group with the fix round) or `decision` (two tickets contradict: a decision page, the group stops; `blocked` is the same) |
 | `consolidator` | `memory_keeper.py`, started by `ticket_controller.py` in `consolidate()` | when a memory file has 5 lessons waiting, or its oldest lesson is 3 days old, at most once per 24 h per file | fable medium, then opus medium | hand-in `memory`: the new text of one memory file and the lessons it dropped; `memory_keeper.py` writes the file |
 | `consolidator_peer` | `memory_keeper.py` | only when `unlimited_tokens` is on, to review the consolidator's draft | opus medium | hand-in `review` (agree or change, notes) kept in `memory/discussions/` |
 

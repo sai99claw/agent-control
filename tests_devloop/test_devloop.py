@@ -995,6 +995,27 @@ class T20Acceptance(LoopCase):
             self.assertIn("no acceptance cases", out)
 
 
+class RulingSection(unittest.TestCase):
+    """auto_fixer.ruling_section: the latest user note of a group, or nothing (#34)."""
+
+    def setUp(self):
+        import auto_fixer
+        self.fn = auto_fixer.ruling_section
+
+    def test_no_notes_is_empty(self):
+        self.assertEqual(self.fn({}), "")
+        self.assertEqual(self.fn({"notes": []}), "")
+
+    def test_latest_note_only(self):
+        out = self.fn({"notes": [{"text": "first note"}, {"text": "second note"}]})
+        self.assertIn("## The user's ruling for this group", out)
+        self.assertIn("second note", out)
+        self.assertNotIn("first note", out)
+        self.assertIn("This ruling is the only thing that allows you to go beyond the tickets' text", out)
+        self.assertNotIn("--revise", out)
+        self.assertNotIn("ticket_creator", out)
+
+
 class ReleaseRerun(LoopCase):
     """tickets.py release: refusals, the timeout, the shared function and the docs (#9)."""
     release = "exit 7"
