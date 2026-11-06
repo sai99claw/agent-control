@@ -1044,22 +1044,23 @@ def render_jobs(cfg):
             tail = lines[-1] if lines else ""
         except OSError:
             pass
-        out.append("<div class='page'><div class='ph'>%s · %s · %s</div><pre>%s</pre></div>" % (
-            e(meta.get("at")), e(meta.get("what")), e(status), e(tail[:300])))
+        who = " · %s" % e(meta["by"]) if meta.get("by") else ""
+        out.append("<div class='page'><div class='ph'>%s · %s%s · %s</div><pre>%s</pre></div>" % (
+            e(meta.get("at")), e(meta.get("what")), who, e(status), e(tail[:300])))
     out.append("</section>")
     return "\n".join(out)
 
 
-def submit(cfg, what, argv_tail, text):
+def submit(cfg, what, argv_tail, text, by=None):
     """Start ticket_creator for one web input, detached; its output and rc stay in runs/web/."""
     stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
     folder = osx.makedirs(os.path.join(jobs_dir(cfg), "%s-%s" % (stamp, os.urandom(3).hex())))
     text_path = os.path.join(folder, "input.txt")
     osx.atomic_write(text_path, text)
-    osx.write_json(os.path.join(folder, "job.json"), {"at": osx.now(), "what": what})
+    osx.write_json(os.path.join(folder, "job.json"), dict({"at": osx.now(), "what": what}, **({"by": by} if by else {})))
     creator = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ticket_creator.py")
     argv = ["sh", "-c", 'python3 "$@"; echo $? > "$DEVLOOP_JOB_RC"', "devloop-web", creator] + \
-        [a.replace("{input}", text_path) for a in argv_tail]
+        [a.replace("{input}", text_path) for a in argv_tail] + (["--by", by] if by else [])
     osx.spawn(argv, cwd=cfg.root, env=cfg.env(DEVLOOP_JOB_RC=os.path.join(folder, "rc")),
               log_path=os.path.join(folder, "creator.log"))
     return folder
@@ -1279,7 +1280,7 @@ def serve(cfg, pool, host, port, key):
                     if not text:
                         self._send(400, "empty request")
                         return
-                    submit(cfg, "新需求", ["--request-file", "{input}", "--via", "web"], text)
+                    submit(cfg, "新需求", ["--request-file", "{input}", "--via", "web"], text, by=self.user)
                     sent = "request"
                 elif last_segment(url) == "answer":
                     ticket, page, decision = form.get("ticket", ""), form.get("page", ""), form.get("decision", "")
@@ -1293,7 +1294,7 @@ def serve(cfg, pool, host, port, key):
                         return
                     submit(cfg, "#%s %s" % (ticket, decision),
                            ["--revise", ticket, "--from", "user", "--decision", decision, "--via", "web",
-                            "--reason-file", "{input}", "--page", page], text)
+                            "--reason-file", "{input}", "--page", page], text, by=self.user)
                     sent = "answer-" + page
                 else:
                     self._send(404, "not found")

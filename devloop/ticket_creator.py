@@ -183,7 +183,7 @@ def check_new(result, snap, cfg=None):
     return dagmod.problems(merged, known_tickets=list(snap.tickets) + keys)
 
 
-def write_new(pool, result, request, fields=EDITABLE):
+def write_new(pool, result, request, fields=EDITABLE, by=None):
     def change(tx):
         ids, mapping = [], {}
         nxt = int(tx.data.next_ticket_id())
@@ -196,7 +196,7 @@ def write_new(pool, result, request, fields=EDITABLE):
             row = {k: t[k] for k in fields if k in t}
             row.update({"id": ident, "state": "ready", "round": 0, "created": osx.now(),
                         "request": request[:4000], "feedback": [], "cases": None})
-            event(row, "opened")
+            event(row, "opened", **({"by": by} if by else {}))
             tx.put_ticket(row)
             node = dict(result["dag"][str(t["key"])])
             node["depends_on"] = [mapping.get(str(d), str(d)) for d in node.get("depends_on") or []]
@@ -208,7 +208,7 @@ def write_new(pool, result, request, fields=EDITABLE):
     return pool.update(change, "tickets: open from a request")
 
 
-def open_tickets(cfg, pool, request, via="main"):
+def open_tickets(cfg, pool, request, via="main", by=None):
     snap = pool.snapshot()
     summary = [{"id": k, "title": v.get("title"), "state": v.get("state")}
                for k, v in sorted(snap.tickets.items(), key=lambda kv: dagmod._order_key(kv[0]))
@@ -249,7 +249,7 @@ def open_tickets(cfg, pool, request, via="main"):
         errors = check_new(hand.result, pool.snapshot(), cfg)
         if errors:
             continue
-        ids = write_new(pool, hand.result, request, editable(cfg))
+        ids = write_new(pool, hand.result, request, editable(cfg), by=by)
         titles = {i: pool.snapshot().tickets[i].get("title") for i in ids}
         pool.report("created", ",".join(ids), "opened " + "; ".join(
             "#%s %s" % (i, titles[i]) for i in ids))
@@ -262,7 +262,7 @@ def open_tickets(cfg, pool, request, via="main"):
 
 # ---------------------------------------------------------------- revising
 
-def user_reset(pool, ident, state, note, changes=None, cases_wrong=False):
+def user_reset(pool, ident, state, note, changes=None, cases_wrong=False, by=None):
     """The user decided: the ticket goes back to ready (round 0) or is cancelled."""
     def change(tx):
         row = tx.ticket(ident)
@@ -280,24 +280,25 @@ def user_reset(pool, ident, state, note, changes=None, cases_wrong=False):
             group = tx.data.groups.get(row.get("group") or "")
             if not group or group.get("state") != "open":
                 row["group"], row["target"] = None, None
-        event(row, "user decision: %s" % state, note=note[:500], fields=sorted(changes or {}))
+        event(row, "user decision: %s" % state, note=note[:500], fields=sorted(changes or {}),
+              **({"by": by} if by else {}))
         tx.put_ticket(row)
     pool.update(change, "#%s: %s (user decision)" % (ident, state))
 
 
-def decide(cfg, pool, ident, decision, text, via, page):
+def decide(cfg, pool, ident, decision, text, via, page, by=None):
     """A user's answer to a page about one ticket: revise | retry | cancel."""
     if decision == "cancel":
-        user_reset(pool, ident, "cancelled", text or "cancelled by the user")
+        user_reset(pool, ident, "cancelled", text or "cancelled by the user", by=by)
         ack(pool, page)
         print("CANCELLED #%s" % ident)
         return 0
     if decision == "retry":
-        user_reset(pool, ident, "ready", text or "try again unchanged")
+        user_reset(pool, ident, "ready", text or "try again unchanged", by=by)
         ack(pool, page)
         print("READY AGAIN #%s" % ident)
         return 0
-    rc = revise(cfg, pool, ident, "user", text, via=via)
+    rc = revise(cfg, pool, ident, "user", text, via=via, by=by)
     if rc in (0, 3):
         ack(pool, page)
     return rc
@@ -356,7 +357,7 @@ def apply_unapplied(cfg, pool, ident, since):
     return applied
 
 
-def revise(cfg, pool, ident, source, reason, via="main"):
+def revise(cfg, pool, ident, source, reason, via="main", by=None):
     snap = pool.snapshot()
     t = snap.ticket(ident)
     run_dir = cfg.runs_dir(ident, "revise-%s" % osx.now().replace(":", ""))
@@ -387,7 +388,7 @@ def revise(cfg, pool, ident, source, reason, via="main"):
     if source == "user" and res.get("kind") in ("revised", "unchanged"):
         changes = {k: v for k, v in (res.get("ticket") or {}).items() if k in editable(cfg)} \
             if res.get("kind") == "revised" else {}
-        user_reset(pool, ident, "ready", res.get("note") or "", changes, bool(res.get("cases_wrong")))
+        user_reset(pool, ident, "ready", res.get("note") or "", changes, bool(res.get("cases_wrong")), by=by)
         print("READY AGAIN after your decision: %s" % (res.get("note") or ""))
         return 0
     if res.get("kind") == "question":
@@ -420,6 +421,7 @@ def main(argv=None):
     ap.add_argument("--via", choices=("main", "web"), default="main")
     ap.add_argument("--decision", choices=("revise", "retry", "cancel"), default="revise",
                     help="with --from user: what to do with the ticket")
+    ap.add_argument("--by", default=None, help="the name of the trusted user who submitted this")
     ap.add_argument("--page", help="the inbox page this answers; marked read when handled")
     args = ap.parse_args(argv)
     try:
@@ -439,7 +441,7 @@ def main(argv=None):
                 if args.decision == "revise" and not reason.strip():
                     print("ticket_creator: a revise decision needs the user's words", file=sys.stderr)
                     return 2
-                return decide(cfg, pool, str(args.revise), args.decision, reason, args.via, args.page)
+                return decide(cfg, pool, str(args.revise), args.decision, reason, args.via, args.page, by=args.by)
             if not reason.strip():
                 print("ticket_creator: --revise needs --reason", file=sys.stderr)
                 return 2
@@ -451,7 +453,7 @@ def main(argv=None):
         if not request or not request.strip():
             print("ticket_creator: give --request or --request-file", file=sys.stderr)
             return 2
-        return open_tickets(cfg, pool, request, via=args.via)
+        return open_tickets(cfg, pool, request, via=args.via, by=args.by)
     except OSError as exc:
         print("ticket_creator: %s" % osx.explain(exc, "cannot read the request"), file=sys.stderr)
         return 2

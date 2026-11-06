@@ -8402,6 +8402,34 @@ class T19Acceptance(unittest.TestCase):
         self.assertNotIn("舊記憶卡", text)
 
 
+class ByNameHelpers(unittest.TestCase):
+    """#47: the helpers that carry a trusted user's name."""
+
+    def test_render_jobs_shows_the_name_only_when_given(self):
+        import json as _json
+        import tempfile
+        import types
+        import board
+        root = tempfile.mkdtemp(prefix="by-jobs-")
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        for name, meta in (("20260101T000000-a", {"at": "T1", "what": "W1", "by": "a@x.com"}),
+                           ("20260101T000001-b", {"at": "T2", "what": "W2"})):
+            os.makedirs(os.path.join(root, "runs", "web", name))
+            with open(os.path.join(root, "runs", "web", name, "job.json"), "w") as fh:
+                _json.dump(meta, fh)
+        html = board.render_jobs(types.SimpleNamespace(worktree_root=root))
+        self.assertIn("W1 · a@x.com", html)
+        self.assertIn("W2 · ", html.replace("W2 · a@x.com", ""))
+        self.assertEqual(html.count("a@x.com"), 1)
+
+    def test_creator_helpers_take_by_default_none(self):
+        import inspect
+        import ticket_creator
+        for fn in ("write_new", "open_tickets", "user_reset", "decide", "revise"):
+            self.assertIn("by", inspect.signature(getattr(ticket_creator, fn)).parameters, fn)
+            self.assertIsNone(inspect.signature(getattr(ticket_creator, fn)).parameters["by"].default)
+
+
 class ReleaseKeptOutput(unittest.TestCase):
     """core.release helpers: where the kept log is and what the environment carries."""
 
