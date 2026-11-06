@@ -1258,6 +1258,35 @@ class ReleaseRerun(LoopCase):
         self.assertIn("tickets.py release", readme[cancel + 1])
 
 
+class FixerTestsChangedUnit(LoopCase):
+    """auto_fixer._record_tests keeps tests_changed on the group by the rules of _record_cases."""
+
+    def setUp(self):
+        super().setUp()
+        import auto_fixer
+        self.fixer = auto_fixer
+        self.pool.update(lambda tx: tx.put_group({"id": "g9", "members": [], "state": "pr"}),
+                         "test: group g9")
+
+    def test_rounds_append_and_non_objects_drop(self):
+        e1 = {"test": "s.a", "ticket": "1", "acceptance": "a"}
+        self.fixer._record_tests(self.pool, "g9", 1, [e1, "junk", 3])
+        self.fixer._record_tests(self.pool, "g9", 2, [{"test": "s.b", "ticket": "2", "acceptance": "b"}])
+        self.assertEqual(self.snap().groups["g9"]["tests_changed"], [
+            dict(e1, round=1), {"test": "s.b", "ticket": "2", "acceptance": "b", "round": 2}])
+        self.assertNotIn("cases_changed", self.snap().groups["g9"])
+
+    def test_empty_or_non_list_adds_no_key(self):
+        for tests in (None, [], "not a list", ["x"]):
+            self.fixer._record_tests(self.pool, "g9", 1, tests)
+        self.assertNotIn("tests_changed", self.snap().groups["g9"])
+
+    def test_docstring_and_prompt_name_tests_changed(self):
+        self.assertIn("tests_changed", self.fixer.__doc__)
+        with open(os.path.join(os.path.dirname(self.fixer.__file__), "prompts", "fixer.md")) as f:
+            self.assertIn("tests_changed", f.read())
+
+
 class T21Acceptance(LoopCase):
     """Nothing a release produces is thrown away: the log and DEVLOOP_RELEASE_DIR (ticket #21)."""
 

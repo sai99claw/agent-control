@@ -11,7 +11,10 @@ regression afterwards). Two kinds of red:
     ticket is frozen and cannot be revised. A verifier's case T<id>Acceptance may be changed only
     to match that ticket's current acceptance text, never looser than the ticket; every changed
     case is listed in the hand-in's `cases_changed` (ticket, case, the acceptance item it now
-    matches) and appended, with the fix round, to the group's `cases_changed`. When two tickets of
+    matches) and appended, with the fix round, to the group's `cases_changed`. A test that is not
+    an acceptance case may be changed only when a ticket of the group explicitly changes the
+    behaviour it asserts; each is listed in `tests_changed` (test, ticket, acceptance item) and
+    appended, with the fix round, to the group's `tests_changed`. When two tickets of
     the group contradict each other the fixer hands in kind `decision` (where they contradict,
     which new ticket it proposes); that becomes a decision page and the group stops (exit 3).
     Kind `blocked` is handled the same way.
@@ -88,6 +91,7 @@ def fix(cfg, pool, gid, report, live=None):
         return 3
     if hand.kind == "done":
         _record_cases(pool, gid, rnd, (hand.result or {}).get("cases_changed"))
+        _record_tests(pool, gid, rnd, (hand.result or {}).get("tests_changed"))
     if g.dirty():
         return 1
     return 0 if g.sha("HEAD") != before else 1
@@ -131,6 +135,22 @@ def _record_cases(pool, gid, rnd, cases):
         pool.update(change, "group %s: fixer changed %d case(s) in fix round %d" % (gid, len(entries), rnd))
     except osx.OSFailure as exc:
         print("auto_fixer: could not record cases_changed: %s" % exc, file=sys.stderr)
+
+
+def _record_tests(pool, gid, rnd, tests):
+    entries = cases_entries(tests, rnd)
+    if not entries:
+        return
+
+    def change(tx):
+        group = tx.data.groups.get(gid)
+        if group is not None:
+            group.setdefault("tests_changed", []).extend(entries)
+            tx.put_group(group)
+    try:
+        pool.update(change, "group %s: fixer changed %d test(s) in fix round %d" % (gid, len(entries), rnd))
+    except osx.OSFailure as exc:
+        print("auto_fixer: could not record tests_changed: %s" % exc, file=sys.stderr)
 
 
 def _record_cost(pool, gid, cost):
