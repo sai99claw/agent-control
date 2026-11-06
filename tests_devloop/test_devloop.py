@@ -7255,6 +7255,75 @@ class AllCancelledHelper(unittest.TestCase):
         self.assertFalse(f(snap, {"members": ["9"]}))
 
 
+class HostTabHelpers(LoopCase):
+    """#45 implementer's checks of the 主機 tab's helpers (bucketing, runs, file reading, rendering)."""
+
+    def setUp(self):
+        super().setUp()
+        import calendar
+        self.now = calendar.timegm((2026, 11, 6, 12, 0, 0))
+        self.dir = os.path.join(self.tmp, "wt", "runs", "host")
+
+    def write(self, name, lines):
+        os.makedirs(self.dir, exist_ok=True)
+        with open(os.path.join(self.dir, name), "w") as fh:
+            for ln in lines:
+                fh.write((ln if isinstance(ln, str) else json.dumps(ln)) + "\n")
+
+    def at(self, t):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+
+    def test_buckets_edges(self):
+        import board
+        n = self.now
+        samples = [(n - 300, {"load1": 1.0}), (n - 301, {"load1": 3.0}), (n, {"load1": 9.0}),
+                   (n - 1, {"load1": 5.0}), (n - 3000, {"load1": None}), (n - 3001, {"load1": True})]
+        vals = board.host_buckets(samples, "load1", n, 10, 300)
+        self.assertEqual(vals[9], 3.0)        # n-300 and n-1 share the last bucket; n itself is outside
+        self.assertEqual(vals[8], 3.0)        # n-301
+        self.assertIsNone(vals[0])            # null and bool are not values
+        self.assertEqual(board.host_buckets([(n - 1, {"disk_free": 2 ** 31})], "disk_free", n, 1, 300), [2.0])
+
+    def test_runs(self):
+        import board
+        self.assertEqual(board.host_runs([None, 1, 2, None, 3, None]), [(1, [1, 2]), (4, [3])])
+        self.assertEqual(board.host_runs([None, None]), [])
+
+    def test_samples_skip_bad_lines(self):
+        import board
+        self.write("a.jsonl", ["not json", "[1]", {"at": "yesterday"}, {"load1": 1},
+                               {"at": self.at(self.now - 5), "load1": 2}])
+        got = board.host_samples(os.path.join(self.dir, "a.jsonl"))
+        self.assertEqual([s["load1"] for _, s in got], [2])
+        self.assertEqual(board.host_samples(os.path.join(self.dir, "missing.jsonl")), [])
+
+    def test_polyline_breaks_and_limit(self):
+        import board
+        from core.config import Config
+        n = self.now
+        self.write("h.jsonl", [{"at": self.at(n - 100), "load1": 1.0, "cpus": 8, "slots": None, "agents": 1},
+                               {"at": self.at(n - 1000), "load1": 2.0, "cpus": 4, "agents": 1}])
+        html = board.render_host_tab(Config(self.proj), None, {}, n)
+        svg = html.split('data-window="24h" data-chart="load"')[1].split("</svg>")[0]
+        load1 = svg.split('data-series="load1"')[1].split("</g>")[0]
+        self.assertEqual(load1.count("<polyline"), 2)                    # buckets 284 and 287, gap between
+        self.assertIn('class="limit" data-value="8.00"', svg)           # the newest sample's cpus
+        agents = html.split('data-window="24h" data-chart="agents"')[1].split("</svg>")[0]
+        self.assertNotIn('class="limit"', agents)                        # slots null: no limit line
+
+    def test_order_and_empty(self):
+        import board
+        from core.config import Config
+        self.assertIn("還沒有主機紀錄", board.render_host_tab(Config(self.proj), None, {}, self.now))
+        self.write("zeta.jsonl", [{"at": self.at(self.now - 10)}])
+        self.write("alpha.jsonl", [{"at": self.at(self.now - 10)}])
+        self.write("notes.txt", ["x"])
+        html = board.render_host_tab(Config(self.proj), None, {}, self.now)
+        self.assertLess(html.index('data-host="alpha"'), html.index('data-host="zeta"'))
+        self.assertEqual(html.count('<section class="host"'), 2)
+        self.assertIn(board.UNKNOWN, html)
+
+
 class T24Acceptance(LoopCase):
     """#24: the controller closes a group whose tickets are all cancelled."""
 

@@ -760,8 +760,170 @@ def render_tokens_tab(cfg, snap, query, now):
 
 # ---------------------------------------------------------------- tab: 主機
 
+HOST_WINDOWS = (("24h", "近 24 小時", 288, 300), ("7d", "近 7 天", 168, 3600))   # name, label, buckets, seconds
+HOST_CHARTS = (("load", "負載", ("load1", "load5"), "cpus"),
+               ("memory", "可用記憶體(GiB)", ("mem_available",), None),
+               ("disk", "磁碟剩餘(GiB)", ("disk_free",), None),
+               ("agents", "agent 與 slot", ("agents", "slots_used"), "slots"))
+HOST_GIB_FIELDS = ("mem_available", "disk_free")
+HOST_STYLE = """<style>
+#tab-host section.host .charts{display:flex;flex-wrap:wrap;gap:12px}
+#tab-host figure{margin:0}#tab-host figcaption{font-size:12px;color:var(--quiet)}
+#tab-host svg.chart{display:block;background:var(--card);border:1px solid var(--line);border-radius:4px}
+#tab-host polyline{fill:none;stroke-width:1.5}#tab-host circle{stroke:none}
+#tab-host g.series[data-series=load1],#tab-host g.series[data-series=mem_available],#tab-host g.series[data-series=disk_free],#tab-host g.series[data-series=agents]{stroke:var(--ink);fill:var(--ink)}
+#tab-host g.series[data-series=load5],#tab-host g.series[data-series=slots_used]{stroke:var(--quiet);fill:var(--quiet)}
+#tab-host line.limit{stroke:var(--quiet);stroke-dasharray:4 3}
+#tab-host td.n{text-align:right;font-variant-numeric:tabular-nums}
+</style>"""
+HOST_W, HOST_H, HOST_PAD = 300, 90, 4
+
+
+def host_samples(path):
+    """[(epoch, sample)] of one host file, read once; lines that are not JSON objects with a
+    parseable 'at' are skipped."""
+    import calendar
+    import json
+    out = []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    sample = json.loads(line)
+                    at = calendar.timegm(time.strptime(sample["at"], "%Y-%m-%dT%H:%M:%SZ"))
+                except (ValueError, TypeError, KeyError, OverflowError):
+                    continue
+                if isinstance(sample, dict):
+                    out.append((at, sample))
+    except OSError:
+        return []
+    return out
+
+
+def host_files(cfg):
+    """{NAME: path} for every NAME.jsonl in <worktrees>/runs/host/."""
+    from core import host as hostmod
+    folder = hostmod.host_dir(cfg)
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return {}
+    return dict((n[:-len(".jsonl")], os.path.join(folder, n)) for n in names
+                if n.endswith(".jsonl") and len(n) > len(".jsonl") and os.path.isfile(os.path.join(folder, n)))
+
+
+def host_value(sample, field):
+    """The field as a float (GiB for memory and disk), None when it is not a number."""
+    v = sample.get(field)
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return v / float(2 ** 30) if field in HOST_GIB_FIELDS else float(v)
+
+
+def host_buckets(samples, field, now, count, width):
+    """The mean of each bucket's non-null values (None = none); bucket k covers
+    [now - W + k*w, now - W + (k+1)*w) with W = count * width."""
+    start = now - count * width
+    sums, ns = [0.0] * count, [0] * count
+    for at, sample in samples:
+        k = int((at - start) // width)
+        if 0 <= k < count:
+            v = host_value(sample, field)
+            if v is not None:
+                sums[k] += v
+                ns[k] += 1
+    return [sums[k] / ns[k] if ns[k] else None for k in range(count)]
+
+
+def host_runs(values):
+    """[(first index, [values])] of the runs of consecutive non-None values."""
+    runs, current = [], None
+    for i, v in enumerate(values):
+        if v is None:
+            current = None
+        else:
+            if current is None:
+                current = (i, [])
+                runs.append(current)
+            current[1].append(v)
+    return runs
+
+
+def host_chart(chart, label, fields, limit_field, window, samples, newest, now, count, width):
+    series = [(f, [None if v is None else round(v, 2) for v in host_buckets(samples, f, now, count, width)])
+              for f in fields]
+    limit = host_value(newest, limit_field) if limit_field else None
+    top = max([v for _, vals in series for v in vals if v is not None] + ([limit] if limit is not None else []) + [0])
+    top = top or 1.0
+    x = lambda i: HOST_PAD + (HOST_W - 2 * HOST_PAD) * (i + 0.5) / count  # noqa: E731
+    y = lambda v: HOST_H - HOST_PAD - (HOST_H - 2 * HOST_PAD) * v / top  # noqa: E731
+    parts = []
+    if limit is not None:
+        parts.append('<line class="limit" data-value="%s" x1="0" x2="%d" y1="%.1f" y2="%.1f"><title>%s %s</title></line>'
+                     % (e("%.2f" % limit), HOST_W, y(limit), y(limit), e(limit_field), e("%g" % limit)))
+    for field, vals in series:
+        shapes = []
+        for first, run in host_runs(vals):
+            points = " ".join("%.1f,%.1f" % (x(first + j), y(v)) for j, v in enumerate(run))
+            shapes.append('<polyline points="%s"/>' % points)
+            if len(run) == 1:
+                shapes.append('<circle cx="%.1f" cy="%.1f" r="1.5"/>' % (x(first), y(run[0])))
+        data = ",".join("" if v is None else "%.2f" % v for v in vals)
+        parts.append('<g class="series" data-series="%s" data-values="%s"><title>%s</title>%s</g>'
+                     % (e(field), e(data), e(field), "".join(shapes)))
+    return ('<figure><figcaption>%s(%s)</figcaption><svg class="chart" data-window="%s" data-chart="%s" '
+            'width="%d" height="%d" viewBox="0 0 %d %d">%s</svg></figure>'
+            % (e(label), e(" / ".join(fields)), e(window), e(chart), HOST_W, HOST_H, HOST_W, HOST_H, "".join(parts)))
+
+
+def host_text(sample, field, gib=False):
+    v = sample.get(field)
+    if v is None or isinstance(v, bool) or not isinstance(v, (int, float)):
+        return UNKNOWN if v is None or isinstance(v, bool) else str(v)
+    return "%.1f GiB" % (v / float(2 ** 30)) if gib else str(v)
+
+
+def host_newest(sample):
+    """The newest sample's row: at, load1 / load5 / cpus, memory and disk in GiB, agents, slots."""
+    cells = ((sample.get("at") or UNKNOWN),
+             " / ".join(host_text(sample, f) for f in ("load1", "load5", "cpus")),
+             host_text(sample, "mem_available", gib=True), host_text(sample, "disk_free", gib=True),
+             host_text(sample, "agents"),
+             "%s / %s" % (host_text(sample, "slots_used"), host_text(sample, "slots")))
+    return ('<table class="newest"><tr><th>最新一筆</th><th>load1 / load5 / cpus</th><th>可用記憶體</th>'
+            '<th>磁碟剩餘</th><th>agents</th><th>slots_used / slots</th></tr><tr>%s</tr></table>'
+            % "".join('<td class="n">%s</td>' % e(c) for c in cells))
+
+
+def render_host(name, samples, now):
+    out = ['<section class="host" data-host="%s"><h2>%s</h2>' % (e(name), e(name))]
+    if samples:
+        out.append(host_newest(max(samples, key=lambda s: s[0])[1]))
+    recent = [s for s in samples if now - 7 * 86400 <= s[0] < now]
+    if not recent:
+        out.append("<p class='quiet'>近 7 天沒有紀錄</p></section>")
+        return "".join(out)
+    newest = max(samples, key=lambda s: s[0])[1]
+    for window, label, count, width in HOST_WINDOWS:
+        out.append('<h3>%s</h3><div class="charts">' % e(label))
+        for chart, clabel, fields, limit_field in HOST_CHARTS:
+            out.append(host_chart(chart, clabel, fields, limit_field, window, recent, newest, now, count, width))
+        out.append("</div>")
+    out.append("</section>")
+    return "".join(out)
+
+
 def render_host_tab(cfg, snap, query, now):
-    return stub_tab("主機")
+    files = host_files(cfg)
+    out = [HOST_STYLE]
+    if not files:
+        out.append("<section><h2>主機</h2><p class='quiet'>還沒有主機紀錄。controller 執行時每 "
+                   "<code>devloop.host_sample_seconds</code> 秒寫一行到 <code>&lt;worktrees&gt;/runs/host/</code>。"
+                   "</p></section>")
+        return "\n".join(out)
+    for name in sorted(files):
+        out.append(render_host(name, host_samples(files[name]), now))
+    return "\n".join(out)
 
 
 # ---------------------------------------------------------------- web input
