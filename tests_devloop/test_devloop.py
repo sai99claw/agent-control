@@ -227,6 +227,279 @@ class RoundsAndFeedback(LoopCase):
         self.assertFalse(self.main_has("impl_1.txt"))
 
 
+class T51Acceptance(LoopCase):
+    """Ticket #51: under --forever an env or unmeasured regression (or a fixer whose worktree setup
+    failed) pauses the group and the controller goes on; `tickets.py rerun g<N>` lifts the pause.
+    Expected values from the ticket text and D-092 (環境頁:環境修好了、重跑), not from the code."""
+
+    STAMP = r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$"
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    # ------------------------------------------------------------ helpers
+
+    def env_bad(self, on=True):
+        path = os.path.join(self.proj, ".env-bad")
+        if on:
+            open(path, "w").close()
+        elif os.path.exists(path):
+            os.unlink(path)
+
+    def forever(self):
+        log = open(os.path.join(self.tmp, "forever.log"), "w")
+        self.addCleanup(log.close)
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "ticket_controller.py"), "--forever"],
+                                cwd=self.proj, env=self.env, stdout=log, stderr=subprocess.STDOUT)
+        self.addCleanup(proc.wait, 30)
+        self.addCleanup(proc.terminate)
+        self.proc = proc
+        return proc
+
+    def proc_log(self):
+        with open(os.path.join(self.tmp, "forever.log")) as fh:
+            return fh.read()[-3000:]
+
+    def wait(self, what, pred, timeout=60):
+        end = time.time() + timeout
+        while time.time() < end:
+            snap = self.snap()
+            if pred(snap):
+                return snap
+            proc = getattr(self, "proc", None)
+            if proc is not None and proc.poll() is not None:
+                self.fail("the --forever controller exited (rc %s) before %s:\n%s" % (
+                    proc.returncode, what, self.proc_log()))
+            time.sleep(0.3)
+        self.fail("timed out after %ss waiting for %s" % (timeout, what))
+
+    @staticmethod
+    def paused(snap, gid, reason):
+        g = snap.groups.get(gid) or {}
+        return isinstance(g.get("paused"), dict) and g["paused"].get("reason") == reason
+
+    @staticmethod
+    def events(g, what):
+        return [h for h in g.get("history") or [] if h.get("event") == what]
+
+    def pages(self, kind, ref):
+        return {name: row for name, row in self.snap().inbox.items()
+                if row["kind"] == kind and row["ref"] == ref}
+
+    def pool_writes(self):
+        return int(git(self.pool_path, "rev-list", "--count", "HEAD"))
+
+    def assert_rerun_exists(self):
+        res = self.run_py("tickets.py", "--help")
+        self.assertIn("rerun", res.stdout + res.stderr, "tickets.py has no rerun command")
+
+    def put_group(self, gid, state, **extra):
+        g = {"id": gid, "branch": "int/%s" % gid, "state": state, "members": [], "fix_round": 0,
+             "job": None}
+        g.update(extra)
+        self.pool.update(lambda tx: tx.put_group(g), "test: put %s" % gid)
+
+    # ------------------------------------------------------------ item 1
+
+    def test_1_without_forever_exit_3_marks_paused_and_the_next_run_clears_it(self):
+        self.add(1)
+        self.env_bad()
+        res = self.controller()
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        self.assertEqual(self.inbox_kinds(), ["env"])
+        g = self.snap().groups["g1"]
+        self.assertIn("paused", g, "group g1 has no paused mark: %s" % g)
+        p = g["paused"]
+        self.assertEqual(p.get("reason"), "env", p)
+        self.assertRegex(str(p.get("at")), self.STAMP)
+        self.assertIsInstance(p.get("text"), str)
+        self.assertTrue(p["text"], p)
+        self.assertLessEqual(len(p["text"]), 2000)
+        self.assertEqual(p["text"], str(g.get("last_regression"))[:2000])
+        self.assertEqual(len(self.events(g, "paused: env")), 1, g.get("history"))
+        started = len(self.events(g, "regression started"))
+        self.env_bad(False)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        g = self.snap().groups["g1"]
+        self.assertGreater(len(self.events(g, "regression started")), started, g.get("history"))
+        self.assertNotIn("paused", g)
+
+    # ------------------------------------------------------------ items 2, 3, 4
+
+    def test_2_3_4_forever_pauses_goes_on_and_rerun_lands(self):
+        self.add(1)
+        self.env_bad()
+        self.forever()
+        # item 2
+        snap = self.wait("g1 paused env", lambda s: self.paused(s, "g1", "env"))
+        g = snap.groups["g1"]
+        self.assertEqual((g["state"], g.get("job", "absent")), ("pr", None), g)
+        envs = self.pages("env", "g1")
+        self.assertEqual(len(envs), 1, self.snap().inbox)
+        self.assertIsNone(self.proc.poll(), "the --forever controller stopped")
+        started = len(self.events(g, "regression started"))
+        time.sleep(3)
+        g = self.snap().groups["g1"]
+        self.assertEqual(len(self.events(g, "regression started")), started, g.get("history"))
+        self.assertIsNone(self.proc.poll(), "the --forever controller stopped")
+        # item 3
+        self.env_bad(False)
+        self.add(2)
+        snap = self.wait("#2 landed", lambda s: s.ticket("2").get("state") == "landed")
+        g2 = [x for x in snap.groups.values() if "2" in (x.get("members") or [])]
+        self.assertEqual(len(g2), 1, snap.groups)
+        self.assertNotEqual(g2[0]["id"], "g1")
+        g = snap.groups["g1"]
+        self.assertEqual(g["state"], "pr", g)
+        self.assertTrue(self.paused(snap, "g1", "env"), g)
+        self.assertEqual(len(self.events(g, "regression started")), started, g.get("history"))
+        # item 4
+        page = list(envs)[0]
+        res = self.run_py("tickets.py", "rerun", "g1", "--why", "fixed", "--by", "a@x.com", "--page", page)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(len(res.stdout.strip().splitlines()), 1, res.stdout)
+        snap = self.snap()
+        g = snap.groups["g1"]
+        fixed = self.events(g, "environment fixed: verify again")
+        self.assertEqual(len(fixed), 1, g.get("history"))
+        self.assertEqual((fixed[0].get("by"), fixed[0].get("why")), ("a@x.com", "fixed"), fixed)
+        row = snap.inbox[page]
+        self.assertTrue(row.get("acked"), row)
+        self.assertEqual(row.get("acked_by"), "a@x.com", row)
+        snap = self.wait("g1 landed", lambda s: s.groups["g1"].get("state") == "landed", timeout=90)
+        self.assertNotIn("paused", snap.groups["g1"])
+        self.assertEqual(self.state(1), "landed")
+
+    # ------------------------------------------------------------ item 4: one write, actl, default by
+
+    def test_4_rerun_is_one_write_and_actl_runs_it_with_by_user(self):
+        self.assert_rerun_exists()
+        mark = {"reason": "env", "at": "2026-01-01T00:00:00Z", "text": "broken"}
+        for gid in ("g1", "g2"):
+            self.put_group(gid, "pr", paused=dict(mark))
+        p1 = self.pool.report("env", "g1", "group g1: env")
+        p2 = self.pool.report("env", "g2", "group g2: env")
+        before = self.pool_writes()
+        res = self.run_py("tickets.py", "rerun", "g1", "--why", "fixed", "--by", "a@x.com", "--page", p1)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(len(res.stdout.strip().splitlines()), 1, res.stdout)
+        self.assertEqual(self.pool_writes(), before + 1)
+        changed = git(self.pool_path, "show", "--name-only", "--format=", "HEAD").split()
+        self.assertIn("groups/g1.json", changed)
+        self.assertIn("inbox/%s.json" % p1, changed)
+        snap = self.snap()
+        self.assertNotIn("paused", snap.groups["g1"])
+        ev = self.events(snap.groups["g1"], "environment fixed: verify again")
+        self.assertEqual([(e.get("by"), e.get("why")) for e in ev], [("a@x.com", "fixed")])
+        self.assertEqual((snap.inbox[p1].get("acked"), snap.inbox[p1].get("acked_by")), (True, "a@x.com"))
+        res = subprocess.run([os.path.join(HOME, "bin", "actl"), "tickets", "rerun", "g2", "--page", p2],
+                             cwd=self.proj, env=self.env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        snap = self.snap()
+        self.assertNotIn("paused", snap.groups["g2"])
+        ev = self.events(snap.groups["g2"], "environment fixed: verify again")
+        self.assertEqual([e.get("by") for e in ev], ["user"], ev)
+        self.assertEqual((snap.inbox[p2].get("acked"), snap.inbox[p2].get("acked_by")), (True, "user"))
+
+    # ------------------------------------------------------------ item 5
+
+    def assert_refused(self, gid, page, needle=None):
+        before = self.pool_writes()
+        res = self.run_py("tickets.py", "rerun", gid, "--why", "w", "--by", "a@x.com", "--page", page)
+        self.assertEqual(res.returncode, 2, "%s: %s" % (gid, res.stdout + res.stderr))
+        lines = res.stderr.strip().splitlines()
+        self.assertEqual(len(lines), 1, "%s: %r" % (gid, res.stderr))
+        if needle:
+            self.assertIn(needle, lines[0])
+        self.assertEqual(self.pool_writes(), before, gid)
+        self.assertFalse(self.snap().inbox[page].get("acked"), gid)
+
+    def test_5_rerun_refuses_what_is_not_a_waiting_group_and_accepts_pr_and_fixing(self):
+        self.assert_rerun_exists()
+        self.add(1)
+        mark = {"reason": "env", "at": "2026-01-01T00:00:00Z", "text": "broken"}
+        for i, state in enumerate(("open", "stuck", "verified", "landed", "cancelled"), start=1):
+            self.put_group("g%d" % i, state, paused=dict(mark))
+        self.put_group("g6", "pr", paused=dict(mark), job={"kind": "regression", "pid": 1})
+        self.put_group("g7", "pr")
+        self.put_group("g8", "fixing")
+        page = self.pool.report("env", "g1", "env page")
+        for gid in ("g9", "g1", "g2", "g3", "g4", "g5", "g6"):
+            self.assert_refused(gid, page)
+        self.assert_refused("1", page, needle="g<N>")
+        for gid in ("g7", "g8"):
+            p = self.pool.report("env", gid, "env page %s" % gid)
+            res = self.run_py("tickets.py", "rerun", gid, "--why", "w", "--by", "a@x.com", "--page", p)
+            self.assertEqual(res.returncode, 0, "%s: %s" % (gid, res.stdout + res.stderr))
+            snap = self.snap()
+            self.assertEqual(len(self.events(snap.groups[gid], "environment fixed: verify again")), 1,
+                             snap.groups[gid].get("history"))
+            self.assertTrue(snap.inbox[p].get("acked"), gid)
+
+    # ------------------------------------------------------------ item 6
+
+    def test_6_in_process_forever_flag_and_after_regression(self):
+        import ticket_controller
+        from core.config import Config
+        ctl = ticket_controller.Controller(Config(self.proj), self.pool)
+        self.assertTrue(hasattr(ctl, "forever"), "Controller has no forever attribute")
+        self.assertIs(ctl.forever, False)
+        seen = []
+
+        def tick():
+            seen.append(ctl.forever)
+            ctl.stopping = True
+            return False
+        ctl.tick = tick
+        ctl.run(True)
+        self.assertEqual(seen, [True])
+        ctl.stopping = False
+        seen.clear()
+        ctl.run(False)
+        self.assertEqual(seen, [False])
+
+        out = os.path.join(self.tmp, "report.json")
+        with open(out, "w") as fh:
+            json.dump({"status": "unmeasured", "summary": "no slot"}, fh)
+        self.put_group("g1", "pr")
+        ctl.forever = True
+        ctl.after_regression("g1", {"out": out}, 1)
+        snap = self.snap()
+        self.assertEqual(len(self.pages("decision", "g1")), 1, snap.inbox)
+        p = snap.groups["g1"].get("paused") or {}
+        self.assertEqual((p.get("reason"), p.get("text")), ("unmeasured", "no slot"), snap.groups["g1"])
+
+        self.put_group("g1", "pr")
+        ctl.forever = False
+        with self.assertRaises(ticket_controller.Stop) as cm:
+            ctl.after_regression("g1", {"out": out}, 1)
+        self.assertEqual(cm.exception.code, 3)
+        p = self.snap().groups["g1"].get("paused") or {}
+        self.assertEqual((p.get("reason"), p.get("text")), ("unmeasured", "no slot"))
+
+    # ------------------------------------------------------------ item 7
+
+    def test_7_forever_fixer_setup_failure_pauses_the_group(self):
+        with open(os.path.join(self.proj, ".gitignore"), "w") as fh:
+            fh.write(".setup-done\n")
+        git(self.proj, "add", ".gitignore")
+        git(self.proj, "commit", "-q", "-m", "ignore the setup marker")
+        self.config(worktree_setup='case "$PWD" in */fix-*) exit 3;; esac; touch .setup-done')
+        self.add(1)
+        self.plan(worker={"1": ["red"]})
+        self.forever()
+        snap = self.wait("g1 paused env", lambda s: self.paused(s, "g1", "env"))
+        g = snap.groups["g1"]
+        self.assertEqual((g["state"], g["fix_round"], g.get("job", "absent")), ("pr", 0, None), g)
+        envs = [r for r in self.pages("env", "g1").values() if "worktree_setup" in r["text"]]
+        self.assertTrue(envs, self.snap().inbox)
+        self.assertIsNone(self.proc.poll(), "the --forever controller stopped")
+
+
 class ExclusiveRegression(LoopCase):
     """devloop.regression_exclusive: the implementer's tests (gate and whole-machine take in core/slots.py)."""
 
