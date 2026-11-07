@@ -20,7 +20,8 @@ in a copy that has no adapter next to it.
 `AC_RUN_ID`, `AC_TEST_TIMEOUT` (A enforces it from outside; the adapter only reads its config).
 
 ## Exit codes (one meaning each)
-0 every id pass/skip · 1 any fail/error · 86 `environment_suspect` non-empty (rows in the file) ·
+0 every id pass/skip · 1 any fail/error · 86 `environment_suspect` non-empty (rows in the file; sources: statistical, declared, and
+`machine` = a fail/error row whose message or traceback names `MACHINE_MARKERS`) ·
 2 could not run (no `AC_TEST_OUT`, zero ids, no code root, nothing discovered) · 3 `select` had
 nothing to select (stderr says why).
 
@@ -353,6 +354,32 @@ class RecordingResult(EnvironmentResult):
         return rows
 
 
+MACHINE_MARKERS = ("too many open files", "failed to write commit object")
+
+
+def machine_suspects(rows, log_path):
+    """Environment suspects of source `machine`: a fail/error row whose message or traceback holds
+    a `MACHINE_MARKERS` phrase (case ignored). One suspect row per such test row."""
+    out = []
+    for row in rows:
+        if row.get("status") not in ("fail", "error"):
+            continue
+        message = row.get("message") or ""
+        trace = row.get("traceback") or ""
+        text = (message + "\n" + trace).casefold()
+        marker = next((m for m in MACHINE_MARKERS if m in text), None)
+        if marker is None:
+            continue
+        line = ""
+        for part in (message, trace):
+            line = next((x.strip() for x in part.splitlines() if marker in x.casefold()), "")
+            if line:
+                break
+        out.append(status.suspect_row("machine", engine="", why="%s: %s" % (row["id"], marker),
+                                      count=1, threshold=None, log=log_path, line=line))
+    return out
+
+
 def run_suite(suite, log_path, threshold, code_root, test_dirs, pattern=DEFAULT_PATTERN,
               aliases=None, wanted=()):
     """Run `suite` in-process into `log_path`; return `(result, rows, suspects)`.
@@ -360,7 +387,8 @@ def run_suite(suite, log_path, threshold, code_root, test_dirs, pattern=DEFAULT_
     The log is written the way `status.py run-tests` always wrote it: runner output and the cases'
     own `print` through one `LogStream`, so a case's `ENVIRONMENT-SUSPECT:` line lands at the start
     of a line in the log (D-019). `suspects` = statistical rows (each `log` = `log_path`) then the
-    declared rows parsed back from that log.
+    declared rows parsed back from that log, then the machine rows (a fail/error row whose
+    message or traceback names a `MACHINE_MARKERS` phrase).
     """
     with open(log_path, "w", encoding="utf-8") as handle:
         shared = LogStream(handle)
@@ -374,8 +402,10 @@ def run_suite(suite, log_path, threshold, code_root, test_dirs, pattern=DEFAULT_
     for row in result.environment_suspect:
         # `log` 只有這裡知道:嫌疑是在跑的時候量到的,而檔名是呼叫者給的。
         row["log"] = log_path
-    suspects = list(result.environment_suspect) + status.parse_environment_suspects(log_path)
-    return result, result.finished_rows(wanted), suspects
+    rows = result.finished_rows(wanted)
+    suspects = (list(result.environment_suspect) + status.parse_environment_suspects(log_path)
+                + machine_suspects(rows, log_path))
+    return result, rows, suspects
 
 
 def load_names(loader, names):
