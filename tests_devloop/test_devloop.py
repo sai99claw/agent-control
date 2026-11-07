@@ -826,6 +826,144 @@ class PausedGroupPieces(LoopCase):
         self.assertIn("環境修好了,重跑", src)
 
 
+class IdleEndPieces(LoopCase):
+    """#63 internals: idle_lines() of a snapshot, and when report_idle() writes the idle page."""
+
+    def setUp(self):
+        super().setUp()
+        for key in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(key, None)
+
+    def ctl(self):
+        import ticket_controller
+        from core.config import Config
+        return ticket_controller.Controller(Config(self.proj), self.pool)
+
+    def snapshot(self, tickets, groups=(), dag=None):
+        from core.pool import Snapshot
+        dag = dag if dag is not None else {t["id"]: {"depends_on": list(t.pop("deps", ()))} for t in tickets}
+        return Snapshot({"dag": {"tickets": dag}, "tickets": {t["id"]: t for t in tickets},
+                         "groups": {g["id"]: g for g in groups}, "inbox": {}})
+
+    def idle_pages(self):
+        return [p for p in self.snap().inbox.values() if p.get("kind") == "idle"]
+
+    def test_lines_cover_every_format_in_order(self):
+        import ticket_controller
+        snap = self.snapshot(
+            [{"id": "10", "state": "ready", "deps": ["2", "9", "5"]},
+             {"id": "2", "state": "stuck", "stuck": {"reason": "hard_block", "text": "first\nsecond"}},
+             {"id": "5", "state": "merged", "group": "g3"},
+             {"id": "6", "state": "landed"}, {"id": "7", "state": "cancelled"},
+             {"id": "8", "state": "ready", "deps": ["6"]}],
+            [{"id": "g10", "state": "pr", "paused": {"reason": "env", "text": "disk full\nmore"}},
+             {"id": "g3", "state": "stuck", "history": [{"event": "a"}, {"event": "red after 3 rounds"}]},
+             {"id": "g4", "state": "landed", "paused": {"reason": "env", "text": "x"}},
+             {"id": "g5", "state": "landed"}])
+        self.assertEqual(ticket_controller.idle_lines(snap), [
+            "#2 stuck (hard_block): first",
+            "#8 ready, waits for: nothing found",
+            "#10 ready, waits for: #2 stuck, #9 missing, #5 merged in g3 (stuck)",
+            "g3 stuck: red after 3 rounds",
+            "g10 paused (env): disk full"])
+
+    def test_nothing_left_gives_no_lines(self):
+        import ticket_controller
+        snap = self.snapshot([{"id": "1", "state": "landed"}, {"id": "2", "state": "cancelled", "deps": ["1"]}],
+                             [{"id": "g1", "state": "landed", "history": [{"event": "landed"}]}])
+        self.assertEqual(ticket_controller.idle_lines(snap), [])
+
+    def test_report_idle_writes_one_page_and_stderr(self):
+        import contextlib
+        import io
+        self.add(1, state="stuck", stuck={"reason": "decision", "text": "ask"})
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertTrue(self.ctl().report_idle())
+        pages = self.idle_pages()
+        self.assertEqual(len(pages), 1)
+        self.assertEqual(pages[0]["ref"], "controller")
+        self.assertIn("#1 stuck (decision): ask", pages[0]["text"].splitlines())
+        self.assertEqual(err.getvalue().strip(), pages[0]["text"])
+
+    def test_report_idle_silent_when_nothing_left_or_stopping(self):
+        import contextlib
+        import io
+        self.add(1, state="landed")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertIsNone(self.ctl().report_idle())
+            self.add(2, state="stuck", stuck={"reason": "decision", "text": "ask"})
+            ctl = self.ctl()
+            ctl.stopping = True
+            self.assertIsNone(ctl.report_idle())
+        self.assertEqual(err.getvalue(), "")
+        self.assertEqual(self.idle_pages(), [])
+
+    def test_run_reports_only_on_an_idle_end(self):
+        import contextlib
+        import io
+        import ticket_controller
+        self.add(1, state="stuck", stuck={"reason": "decision", "text": "ask"})
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            # a signal sets stopping while a tick runs: the loop ends without a page
+            ctl = self.ctl()
+            def tick_then_signal():
+                ctl.stopping = True
+                return False
+            ctl.tick = tick_then_signal
+            self.assertEqual(ctl.run(), 0)
+            # --forever never takes the idle exit
+            ctl = self.ctl()
+            ticks = []
+            def idle_tick():
+                ticks.append(1)
+                if len(ticks) == 2:
+                    ctl.stopping = True
+                return False
+            ctl.tick = idle_tick
+            ctl.cfg.poll_seconds = 0
+            self.assertEqual(ctl.run(forever=True), 0)
+            self.assertEqual(len(ticks), 2)
+            # a Stop (exit 3 or 2) leaves before the idle exit
+            ctl = self.ctl()
+            def stop_tick():
+                raise ticket_controller.Stop(3, "env")
+            ctl.tick = stop_tick
+            with self.assertRaises(ticket_controller.Stop):
+                ctl.run()
+        self.assertEqual(err.getvalue(), "")
+        self.assertEqual(self.idle_pages(), [])
+        # the idle end itself: one page, exit 0, one tick
+        ctl = self.ctl()
+        ticks.clear()
+        ctl.tick = lambda: ticks.append(1) or False
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(ctl.run(), 0)
+        self.assertEqual(len(ticks), 1)
+        self.assertEqual(len(self.idle_pages()), 1)
+
+    def test_docs_name_the_idle_page(self):
+        import ticket_controller
+        from core.pool import Pool
+        with open(os.path.join(HOME, "devloop", "README.md")) as fh:
+            readme = fh.read()
+        rows = [line for line in readme.splitlines()
+                if line.startswith("| `python3 devloop/ticket_controller.py` |")
+                or line.startswith("| `python3 devloop/tickets.py inbox`")]
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all("idle" in r for r in rows), rows)
+        self.assertIn("created, landed, cancelled and idle pages", " ".join(readme.split()))
+        self.assertIn("idle", Pool.report.__doc__)
+        exit_line = [line for line in ticket_controller.__doc__.split("Exit:", 1)[1].split("\n\n")[0].splitlines()]
+        self.assertIn("idle page", " ".join(exit_line))
+        with open(os.path.join(HOME, "CLAUDE.md")) as fh:
+            kinds = [line for line in fh if "頁的種類" in line]
+        self.assertEqual(len(kinds), 1)
+        self.assertIn("`idle`", kinds[0])
+
+
 class T4Acceptance(LoopCase):
     """Ticket #4: devloop.regression_exclusive - a regression takes the whole machine."""
 

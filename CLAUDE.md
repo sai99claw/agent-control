@@ -14,7 +14,7 @@
   只是先過 injection 檢查。
 - `actl run`(`--forever` 一直看著)把票做到落地:worker 與驗證者 → 整合分支 → regression → 紅了 auto_fixer 修 → 綠了
   main 前進並發版。**不輪詢**:跑完的事變成頁,`actl tickets inbox` 讀。
-- 頁的種類:`created`、`landed`、`decision`(要你決定)、`env`(環境壞了,修好再跑)。回答 decision:
+- 頁的種類:`created`、`landed`、`decision`(要你決定)、`env`(環境壞了,修好再跑)、`idle`(沒有 `--forever` 的 run 停下時還有事沒做完,逐項寫它在等什麼)。回答 decision:
   `actl new --revise N --from user --decision revise|retry|cancel --reason "…"`,或 `actl tickets ready N` / `cancel N --why …`。
 - agent-control 自己也是一個專案:它的改動一樣開票、走 devloop(票要填 `vision` 與 `removes`)。使用者明說「直接改」才例外。
 

@@ -19,7 +19,8 @@ regressions and fixers run detached and are adopted by the next controller.
     python3 devloop/ticket_controller.py            # run until nothing is left to do
     python3 devloop/ticket_controller.py --forever  # keep watching the pool for new tickets
 
-Exit: 0 idle · 3 stopped for the user (environment / could not measure; a page was written) ·
+Exit: 0 idle (when tickets or groups are left undone, one idle page and the same lines on stderr
+say what each waits for) · 3 stopped for the user (environment / could not measure; a page was written) ·
 2 could not start (another controller, config, pool).
 """
 
@@ -65,6 +66,48 @@ def _gnum(gid):
     return (int(digits) if digits else 0, str(gid))
 
 
+def _first_line(text):
+    lines = str(text or "").strip().splitlines()
+    return lines[0].strip() if lines else ""
+
+
+def idle_lines(snap):
+    """What each ticket or group left undone waits for, one line each (empty = nothing left).
+    Tickets in numeric id order, then groups in number order; landed, cancelled and merged
+    tickets and landed or cancelled groups get no line."""
+    out = []
+    for ident in sorted(snap.tickets, key=_gnum):
+        t = snap.tickets[ident]
+        state = t.get("state")
+        if state == "stuck":
+            stuck = t.get("stuck") or {}
+            out.append("#%s stuck (%s): %s" % (ident, stuck.get("reason") or "?", _first_line(stuck.get("text"))))
+        elif state == "ready":
+            waits = []
+            for d in dagmod.deps(snap.dag, ident):
+                dt = snap.tickets.get(d)
+                if dt is None:
+                    waits.append("#%s missing" % d)
+                elif dt.get("state") == "landed":
+                    continue
+                elif dt.get("state") == "merged":
+                    g = snap.groups.get(dt.get("group") or "") or {}
+                    waits.append("#%s merged in %s (%s)" % (d, dt.get("group") or "?", g.get("state") or "missing"))
+                else:
+                    waits.append("#%s %s" % (d, dt.get("state")))
+            out.append("#%s ready, waits for: %s" % (ident, ", ".join(waits) or "nothing found"))
+    for gid in sorted(snap.groups, key=_gnum):
+        g = snap.groups[gid]
+        state = g.get("state")
+        if state == "stuck":
+            history = g.get("history") or []
+            out.append("%s stuck: %s" % (gid, history[-1].get("event", "") if history else ""))
+        elif g.get("paused") and state not in ("landed", "cancelled"):
+            mark = g["paused"]
+            out.append("%s paused (%s): %s" % (gid, mark.get("reason") or "?", _first_line(mark.get("text"))))
+    return out
+
+
 class Controller:
     def __init__(self, cfg, pool):
         self.cfg, self.pool = cfg, pool
@@ -81,9 +124,23 @@ class Controller:
         while not self.stopping:
             busy = self.tick()
             if not busy and not forever:
+                self.report_idle()
                 return 0
             time.sleep(self.cfg.poll_seconds)
         return 0
+
+    def report_idle(self):
+        """A run without --forever that ends with work left: one idle page (and the same text on
+        stderr) saying what each ticket or group waits for. Nothing when nothing is left or when
+        the controller is stopping."""
+        if self.stopping:
+            return None
+        lines = idle_lines(self.pool.snapshot())
+        if not lines:
+            return None
+        text = "\n".join(["nothing more can move; left undone:"] + lines)
+        print(text, file=sys.stderr)
+        return self.pool.report("idle", "controller", text)
 
     def tick(self):
         snap = self.pool.snapshot()

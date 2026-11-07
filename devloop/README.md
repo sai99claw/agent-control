@@ -25,8 +25,8 @@ group complete (= one PR, a local mark) -> regression.py (preflight + full suite
 | `python3 devloop/tickets.py init` | once per project: create the pool |
 | `python3 devloop/tickets.py lessons --layer L --name N --file F` | queue every bullet line of F as a lesson for that memory file (a project's own older memory) |
 | `python3 devloop/ticket_creator.py --request "..."` | the user wants something; `--revise N --from user --decision D [--page P] [--by NAME]` is the user's answer, recorded first as a 'user answer' event (decision, text, by, page) and refused for a running ticket |
-| `python3 devloop/ticket_controller.py` | run until nothing is left (`--forever` keeps watching) |
-| `python3 devloop/tickets.py inbox` / `ack P [--by NAME]` | pages: created, landed, decision, env, cancelled; `--by` sets acked_by and, for a page whose ref is a ticket or group, writes a 'page acknowledged' event on it (`ack --all --by NAME` only sets acked_by) |
+| `python3 devloop/ticket_controller.py` | run until nothing is left (`--forever` keeps watching); a run that ends idle with tickets or groups left undone writes one idle page (ref `controller`, the same lines on stderr) saying what each waits for |
+| `python3 devloop/tickets.py inbox` / `ack P [--by NAME]` | pages: created, landed, decision, env, cancelled, idle; `--by` sets acked_by and, for a page whose ref is a ticket or group, writes a 'page acknowledged' event on it (`ack --all --by NAME` only sets acked_by) |
 | `python3 devloop/tickets.py list` / `show N` | state of tickets and groups; a merged ticket shows as 功能完成 and a landed one as 驗證完成, while the pool keeps merged / landed |
 | `python3 devloop/tickets.py ready N [--by NAME] [--page P]` | after deciding on a stuck ticket |
 | `python3 devloop/tickets.py ready gN` `[--note "..."] [--by NAME] [--page P] [--via main|web]` | a stuck group whose branch and merged tickets are still there: verify it again (fix rounds back to 0); the `--note` is stored on the group and every later fixer of it gets it as the user's ruling (`--via web` marks a note sent from the board: the fixer gets it cleaned and wrapped behind the injection check, like web text for the opener); `--by` names who gave the answer on the events and `--page` acks that page in the same write |
@@ -238,7 +238,7 @@ and in front of the browser's title ("(3) devloop · …"), never in the page he
 even when its ticket is also stuck); each stuck ticket and each stuck or paused group (the
 env-pause mark `paused`) that no such page is about; and each running ticket or fixing group whose
 quota wait (`waiting.reason` `quota`) is more than 300 s past its `waiting.until`. A page is about
-the ticket or group its `ref` names; created, landed and cancelled pages, acked pages and younger
+the ticket or group its `ref` names; created, landed, cancelled and idle pages, acked pages and younger
 quota waits make no card. Cards run newest first by when the wait began (the page's `at`,
 `stuck.at`, `paused.at`, a stuck group's last history event, the quota `until`; no time sorts last)
 and carry one line saying what is asked, the stuck category, the last feedback or regression

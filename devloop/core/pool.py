@@ -165,7 +165,8 @@ class Pool:
     # ------------------------------------------------------------ helpers
 
     def report(self, kind, ref, text, **extra):
-        """Leave a page for the main session (kinds: created, landed, decision, env, cancelled)."""
+        """Leave a page for the main session (kinds: created, landed, decision, env, cancelled,
+        idle - a run without --forever ended with work left)."""
         name = "%s-%s-%s" % (osx.now().replace(":", "").replace("-", ""), kind, ref)
 
         def change(tx):
