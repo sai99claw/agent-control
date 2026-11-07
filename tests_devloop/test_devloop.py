@@ -2758,10 +2758,12 @@ class WebInput(LoopCase):
         page = urllib.request.urlopen(urllib.request.Request(base + "/?tab=tickets", headers={"X-Board-Key": "k3y"}),
                                       timeout=10).read().decode()
         self.assertIn("交給開題者", page)
-        self.assertIn("不改,再試一次", page)
+        page = urllib.request.urlopen(urllib.request.Request(base + "/?tab=decide", headers={"X-Board-Key": "k3y"}),
+                                      timeout=10).read().decode()
+        self.assertIn("再試一次", page)
         self.assertEqual(post("/request", "wrong", text="x")[0], 403)
         self.assertEqual(post("/request", "k3y", text="build two things")[0], 200)
-        self.assertEqual(post("/answer", "k3y", ticket="1", page="p1", decision="retry", text="")[0], 200)
+        self.assertEqual(post("/act", "k3y", subject="1", page="p1", action="retry", text="")[0], 200)
         deadline = time.time() + 60
         while time.time() < deadline:
             snap = self.snap()
@@ -3234,10 +3236,10 @@ class T37Acceptance(LoopCase):
         self.assertEqual(status, 303)
         self.assertEqual(self.header(headers, "Location"), ["./?sent=request"])
         self.assertEqual(len(folders()), 2)
-        status, headers, _ = self.post("/answer", {"ticket": "1", "page": "p1", "decision": "retry",
-                                                   "text": ""}, cookie)
+        status, headers, _ = self.post("/act", {"subject": "1", "page": "p1", "action": "retry",
+                                                "text": ""}, cookie)
         self.assertEqual(status, 303)
-        self.assertEqual(self.header(headers, "Location"), ["./?sent=answer-p1"])
+        self.assertEqual(self.header(headers, "Location"), ["./?tab=decide&sent=act-1-p1"])
         self.assertEqual(len(folders()), 3)
 
     def stuck(self, ident):
@@ -3259,17 +3261,16 @@ class T37Acceptance(LoopCase):
         from core.config import Config
         self.stuck(1)
         self.start()
-        status, _, page = self.req("GET", "/?tab=tickets", {"Cookie": "board_key=" + self.cookie()})
-        self.assertEqual(status, 200)
-        self.assertIn("交給開題者", page)
-        self.assertIn("不改,再試一次", page)
-        actions = re.findall(r"""action\s*=\s*['"]([^'"]*)['"]""", page)
-        self.assertIn("request", actions)
-        self.assertIn("answer", actions)
-        self.assertTrue(set(actions) <= {"request", "answer"}, actions)
-        self.assertNotIn("name='key'", page)
-        self.assertNotIn('name="key"', page)
-        self.assertNotIn(self.KEY, page)
+        for tab, text, form in (("tickets", "交給開題者", "request"), ("decide", "再試一次", "act")):
+            status, _, page = self.req("GET", "/?tab=" + tab, {"Cookie": "board_key=" + self.cookie()})
+            self.assertEqual(status, 200)
+            self.assertIn(text, page)
+            actions = re.findall(r"""action\s*=\s*['"]([^'"]*)['"]""", page)
+            self.assertIn(form, actions)
+            self.assertTrue(set(actions) <= {"request", "act"}, actions)
+            self.assertNotIn("name='key'", page)
+            self.assertNotIn('name="key"', page)
+            self.assertNotIn(self.KEY, page)
         page = board.render(Config(self.proj), self.snap(), key="KEY-7f3a", query={"tab": "tickets"})
         self.assertIn("交給開題者", page)
         self.assertNotIn("KEY-7f3a", page)
@@ -5792,6 +5793,121 @@ class MemoryFolderHelpers(LoopCase):
                 self.cfg()
 
 
+class BoardActButtons(LoopCase):
+    """#57, the implementer's pieces: the shape check, the argv each 要你判 button runs, the buttons a
+    card gets, its last-act line, and the guard that the board has no sign-in route (D-093)."""
+
+    def test_act_problem_names_each_bad_shape(self):
+        import board
+        bad = [("drop", "1", "p1", "x"), ("revise", "g1", "p1", "x"), ("retry", "1a", "", ""),
+               ("cancel", "g2", "", ""), ("group-ready", "1", "", ""), ("group-cancel", "x1", "", ""),
+               ("rerun", "g", "", ""), ("ack", "3", "", ""), ("ack", "3", "p 1", ""), ("retry", "", "", ""),
+               ("retry", "1" * 121, "", ""), ("ack", "3", "p" * 121, ""), ("revise", "1", "p1", "")]
+        for args in bad:
+            with self.subTest(args=args):
+                problem = board.act_problem(*args)
+                self.assertIsInstance(problem, str)
+                self.assertEqual(len(problem.splitlines()), 1)
+        good = [("revise", "1", "p1", "x"), ("retry", "1", "", ""), ("cancel", "12", "p.2,x-y_z", ""),
+                ("group-ready", "g1", "", ""), ("group-cancel", "g4", "", ""), ("rerun", "g2", "pg2", ""),
+                ("ack", "3", "p3", ""), ("ack", "request", "preq", "")]
+        for args in good:
+            with self.subTest(args=args):
+                self.assertIsNone(board.act_problem(*args))
+
+    def test_act_command_carries_by_and_page_and_keeps_text_as_values(self):
+        import board
+        self.assertEqual(board.act_command("retry", "1", "p1", "", "user"),
+                         ("ticket_creator.py", ["--revise", "1", "--from", "user", "--decision", "retry", "--via",
+                                                "web", "--reason-file", "{input}", "--by", "user", "--page", "p1"]))
+        self.assertEqual(board.act_command("revise", "2", "", "-x", "a@x.com")[1][-2:], ["--by", "a@x.com"])
+        self.assertEqual(board.act_command("group-ready", "g1", "pg1", "-n note", "a@x.com"),
+                         ("tickets.py", ["ready", "g1", "--note=-n note", "--via", "web", "--by", "a@x.com",
+                                         "--page", "pg1"]))
+        self.assertEqual(board.act_command("group-ready", "g1", "", "", "user"),
+                         ("tickets.py", ["ready", "g1", "--by", "user"]))
+        self.assertEqual(board.act_command("group-cancel", "g4", "", "--all", "user"),
+                         ("tickets.py", ["cancel", "g4", "--why=--all", "--by", "user"]))
+        self.assertEqual(board.act_command("rerun", "g2", "pg2", "fixed", "user"),
+                         ("tickets.py", ["rerun", "g2", "--why=fixed", "--by", "user", "--page", "pg2"]))
+        self.assertEqual(board.act_command("ack", "3", "-p3", "ignored", "user"),
+                         ("tickets.py", ["ack", "--by", "user", "--", "-p3"]))
+
+    def test_the_argv_parses_as_the_scripts_read_it(self):
+        """The tickets.py argv goes through tickets.py's own parser: text stays text, --by and --page land."""
+        import board
+        res = self.run_py("tickets.py", *board.act_command("group-cancel", "g9", "", "--by=evil", "user")[1])
+        self.assertNotIn("unrecognized arguments", res.stderr)
+        self.assertNotIn("expected one argument", res.stderr)
+
+    def test_act_draft(self):
+        import board
+        self.assertEqual(board.act_draft("1", "p1"), "act-1-p1")
+        self.assertEqual(board.act_draft("g4", ""), "act-g4")
+
+    def test_card_actions_by_kind_and_state(self):
+        import types
+        import board
+        snap = types.SimpleNamespace(
+            tickets={"1": {"state": "stuck"}, "3": {"state": "merged"}},
+            groups={"g1": {"state": "stuck"}, "g2": {"state": "pr", "paused": {"reason": "env"}},
+                    "g9": {"state": "pr"}, "g5": {"state": "stuck", "paused": {"reason": "env"}}})
+
+        def card(kind, subject, page=""):
+            return {"kind": kind, "subject": subject, "page": page}
+        self.assertEqual(board.card_actions(snap, card("ticket", "1", "p1")), ["revise", "retry", "cancel", "ack"])
+        self.assertEqual(board.card_actions(snap, card("ticket", "1")), ["revise", "retry", "cancel"])
+        self.assertEqual(board.card_actions(snap, card("ticket", "3", "p3")), ["ack"])
+        self.assertEqual(board.card_actions(snap, card("group", "g1")), ["group-ready", "group-cancel"])
+        self.assertEqual(board.card_actions(snap, card("group", "g5", "x")), ["group-ready", "group-cancel", "ack"])
+        self.assertEqual(board.card_actions(snap, card("group", "g2", "pg2")), ["rerun", "ack"])
+        self.assertEqual(board.card_actions(snap, card("group", "g9", "p")), ["ack"])
+        self.assertEqual(board.card_actions(snap, card("other", "request", "preq")), ["ack"])
+        self.assertEqual(board.card_actions(snap, card("quota", "1", "p")), [])
+        form = board.render_act_form(card("group", "g4"), ["group-ready", "group-cancel"])
+        self.assertIn('data-draft="act-g4"', form)
+        self.assertIn('<input type="hidden" name="page" value="">', form)
+        self.assertEqual(board.render_act_form(card("quota", "1"), []), "")
+
+    def test_last_act_text_and_job_logs(self):
+        import board
+        meta = {"what": "#3 再試一次", "by": "user"}
+        self.assertEqual(board.last_act_text(meta, None, ""), "上次的動作:#3 再試一次 · user · 處理中")
+        self.assertEqual(board.last_act_text(meta, "0", ""), "上次的動作:#3 再試一次 · user · 完成")
+        self.assertEqual(board.last_act_text({"what": "x"}, "3", ""), "上次的動作:x · 要你決定(看收件匣)")
+        self.assertEqual(board.last_act_text(meta, "2", "frozen"), "上次的動作:#3 再試一次 · user · 沒有執行(rc 2):frozen")
+        for log in ("job.log", "creator.log"):
+            with self.subTest(log=log):
+                folder = os.path.join(self.tmp, "job-" + log)
+                os.makedirs(folder)
+                osx.write_json(os.path.join(folder, "job.json"), {"what": "w", "subject": "3"})
+                with open(os.path.join(folder, log), "w") as fh:
+                    fh.write("first\nlast line\n\n")
+                with open(os.path.join(folder, "rc"), "w") as fh:
+                    fh.write("2\n")
+                self.assertEqual(board.job_state(folder), ({"what": "w", "subject": "3"}, "2", "last line"))
+
+    def test_no_sign_in_route(self):
+        """D-093: no /login, /logout, /auth or /auth/callback, whichever way the board is served."""
+        paths = ("/login", "/logout", "/auth", "/auth/callback")
+        key = os.path.join(self.tmp, "key")
+        with open(key, "w") as fh:
+            fh.write("s3cret\n")
+        T47Acceptance.board_settings(self, {"trusted_user_header": "X-Auth-Request-Email",
+                                            "allowed_users": ["a@x.com"]})
+        modes = [("key", ("--host", "127.0.0.1", "--key-file", key), {"X-Board-Key": "s3cret"}, ("GET", "POST")),
+                 ("trusted", ("--host", "127.0.0.1"), {"X-Auth-Request-Email": "a@x.com"}, ("GET", "POST")),
+                 ("read-only", ("--host", "127.0.0.1"), {}, ("GET",))]
+        for mode, args, headers, methods in modes:
+            port = T47Acceptance.start(self, *args)
+            # guard: the viewer is let in, so a 404 below is the route missing and not a refusal
+            self.assertEqual(T47Acceptance.call(self, port, "GET", "/", headers)[0], 200, mode)
+            for method in methods:
+                for path in paths:
+                    with self.subTest(mode=mode, method=method, path=path):
+                        body = "text=x" if method == "POST" else None
+                        self.assertEqual(T47Acceptance.call(self, port, method, path, headers, body)[0], 404)
+
 class MemoryGitWriter(LoopCase):
     """core.memory.commit_into: memory written into a git checkout is one fast-forward commit (#16)."""
 
@@ -8162,8 +8278,8 @@ class T47Acceptance(LoopCase):
             ev = self.events(snap.ticket(ident), "opened")
             self.assertEqual([e.get("by") for e in ev], [self.NAME],
                              "#%s: --by <entry> reached ticket_creator" % ident)
-        folder = self.submit(port, "/answer", trusted, "ticket=1&page=p1&decision=retry&text=")
-        self.assertEqual(self.job(folder).get("by"), self.NAME, "job.json of a trusted /answer")
+        folder = self.submit(port, "/act", trusted, "subject=1&page=p1&action=retry&text=")
+        self.assertEqual(self.job(folder).get("by"), self.NAME, "job.json of a trusted /act")
         ev = self.events(self.snap().ticket("1"), "user decision: ready")
         self.assertTrue(ev, "the answer was handled")
         self.assertEqual(ev[-1].get("by"), self.NAME, "--by <entry> reached ticket_creator")

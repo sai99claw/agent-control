@@ -232,22 +232,42 @@ relative and the server routes by the last path segment only, so the board works
 prefix (for example behind a reverse proxy at `/board/`).
 `--key-file` accepts the key once as `?key=` and trades it for an HttpOnly, SameSite=Strict cookie
 with a redirect to the page without it; scripts send header `X-Board-Key`; the key never appears
-in a URL (or a page). It also adds two inputs,
-which are the main session's own entry behind another screen (D-083): a new request runs
-`ticket_creator.py --request-file … --via web`; an answer to a page about a ticket runs
-`ticket_creator.py --revise N --from user --decision revise|retry|cancel --via web`. The board
-never writes the pool; only the opener's path writes tickets. Web text is cleaned and wrapped
-behind the injection check in `prompts/web-guard.md`; an opener that finds an injection hands in
+in a URL (or a page). It also adds inputs,
+which are the main session's own entry behind another screen (D-083): a new request on 票 runs
+`ticket_creator.py --request-file … --via web`, and every 要你判 card except quota cards gets a text
+box and buttons (POST `act` with the card's subject and page) that run what the main session would:
+
+| card | button | runs |
+|---|---|---|
+| stuck ticket N | 照我的話改 / 再試一次 / 取消 | `ticket_creator.py --revise N --from user --decision revise\|retry\|cancel --via web --reason-file <text>` |
+| stuck group gN | 帶著我的話重驗 | `tickets.py ready gN` (with `--note <text> --via web` when there is text) |
+| stuck group gN | 取消這組 | `tickets.py cancel gN --why <text>` |
+| paused group gN (not stuck) | 環境修好了,重跑 | `tickets.py rerun gN --why <text>` |
+| any card with a page | 知道了 (last) | `tickets.py ack <page>` |
+
+A ticket or group card that is neither stuck nor paused, and a card about anything else, have only
+知道了. Every command runs with `--by <name>` (the trusted user's `board.allowed_users` entry; `user`
+for the key or its cookie), so it lands in the subject's history as one user intervention, and with
+`--page <page>` when the card has one, so handling it acknowledges the card's page. The server
+checks only the form's shape (400 otherwise) and replies 303 to
+`./?tab=decide&sent=act-<subject>[-<page>]`, which drops that card's draft; the scripts judge the
+subject's state. Each job sits under `<worktrees>/runs/web/` (`job.json` with `subject`, `page`,
+`action`, `by`), and the card shows how its newest one ended on its 「上次的動作」 line: 處理中, 完成,
+要你決定(看收件匣), or 沒有執行(rc N) with the script's last line (a refusal, such as a frozen
+ticket, leaves the card and its page as they were). The 票 tab's unread pages only point to 要你判.
+The board never writes the pool; only the opener's path writes tickets. Web text is cleaned and
+wrapped behind the injection check in `prompts/web-guard.md`: a request and the revise text by the
+opener, a group note (`via` `web`) by the fixer. An opener that finds an injection hands in
 `rejected`, nothing is done, and a page says so. Unsent text stays in the viewer's browser.
 
-Behind a local reverse proxy that signs users in (D-091 item 4), two settings in `board/config.json`
+Behind a local reverse proxy that vouches for its users (D-091 item 4), two settings in `board/config.json`
 let a listed user in without the key: `board.trusted_user_header` (string: the header the proxy
 sends, e.g. `X-Auth-Request-Email`) and `board.allowed_users` (list of strings: who may come in,
 compared ignoring case and surrounding spaces). Trust needs both a loopback listen address
 (`--host` 127.0.0.1, ::1 or localhost) and a loopback peer (the proxy on the same machine); on
 `--host 0.0.0.0` the header is ignored. The proxy must set (overwrite) the header itself on every
 request, never pass on one the browser sent, or anyone could name a listed user. A listed user gets
-in without the key: the page with both inputs, and its POSTs are accepted, with or without
+in without the key: the page with its inputs, and its POSTs are accepted, with or without
 `--key-file`. Another header value gets what a request without it gets (403 under `--key-file`).
 `board.py serve` exits 2 before listening when either setting has the wrong type.
 

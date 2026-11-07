@@ -10,11 +10,13 @@ A number it cannot know is shown as 「未知」, never as 0.
 
 With --key-file a browser opens the board once with `?key=`; the board trades it for an HttpOnly,
 SameSite=Strict cookie and redirects to the same page without the key, so the key never appears in
-a URL or a page. Scripts send header `X-Board-Key` instead. The page then gets two inputs. They are another front-end to the main session's own entry, nothing more
-(D-083): a new request runs `ticket_creator.py --request-file ... --via web`; an answer to a page
-about a ticket runs `ticket_creator.py --revise N --from user --decision revise|retry|cancel
---via web`. Only the opener's path writes tickets; web text first passes the injection check of
-prompts/web-guard.md. Unsent text is kept in the viewer's browser only.
+a URL or a page. Scripts send header `X-Board-Key` instead. The page then gets inputs. They are another front-end to the main session's own entry, nothing more
+(D-083): a new request runs `ticket_creator.py --request-file ... --via web`; each 要你判 card's buttons
+(POST act) run the command the main session would (ticket_creator.py --revise N --from user --decision ...,
+tickets.py ready|cancel|rerun gN, tickets.py ack PAGE) with --by (the trusted user's name, else 'user'),
+acknowledge the card's page, and the card shows how its last action ended. Only the opener's path writes
+tickets; web text first passes the injection check of prompts/web-guard.md. Unsent text is kept in the
+viewer's browser only.
 
 Behind a local reverse proxy (board.trusted_user_header + board.allowed_users, D-091 item 4), a request
 from a loopback peer to a board listening on loopback whose header names a listed user gets the
@@ -259,7 +261,8 @@ def render(cfg, snap, key=None, query=None, now=None):
 
 DECIDE_STYLE = ("<style>section.wait{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--warn);"
                 "border-radius:8px;padding:10px 12px}section.wait p.want{margin:0;font-weight:700}"
-                "section.wait span.cat{color:var(--quiet);font-size:12px}</style>")
+                "section.wait span.cat{color:var(--quiet);font-size:12px}section.wait p.last-act{margin:6px 0 0;font-size:12.5px}"
+                "form.act{display:grid;gap:6px;margin-top:8px}</style>")
 QUOTA_GRACE = 300
 TICKET_PARAMS = ("ticket", "group", "state", "cat", "q", "done")
 
@@ -376,7 +379,63 @@ def decide_default(snap, query, now):
     return "decide"
 
 
-def render_card(c):
+ACT_LABELS = {"revise": "照我的話改", "retry": "再試一次", "cancel": "取消", "group-ready": "帶著我的話重驗",
+              "group-cancel": "取消這組", "rerun": "環境修好了,重跑", "ack": "知道了"}
+
+
+def card_actions(snap, c):
+    """The button values a card offers, in order: by the card's kind and its subject's state, then ack
+    when the card has a page. A quota card has none."""
+    if c["kind"] == "quota":
+        return []
+    out = []
+    if c["kind"] == "ticket" and (snap.tickets.get(c["subject"]) or {}).get("state") == "stuck":
+        out = ["revise", "retry", "cancel"]
+    elif c["kind"] == "group":
+        g = snap.groups.get(c["subject"]) or {}
+        if g.get("state") == "stuck":
+            out = ["group-ready", "group-cancel"]
+        elif g.get("paused"):
+            out = ["rerun"]
+    if c["page"]:
+        out.append("ack")
+    return out
+
+
+def render_act_form(c, actions):
+    """One card's form: POST act with its subject and page, a text box kept as a draft, and its buttons."""
+    if not actions:
+        return ""
+    buttons = " ".join('<button name="action" value="%s">%s</button>' % (e(a), e(ACT_LABELS[a])) for a in actions)
+    return ('<form method="post" action="act" class="act">'
+            '<input type="hidden" name="subject" value="%s"><input type="hidden" name="page" value="%s">'
+            '<textarea name="text" maxlength="8000" rows="2" data-draft="%s" '
+            'placeholder="你的話(照我的話改時必填;重驗時當作備註)"></textarea><div>%s</div></form>'
+            % (e(c["subject"]), e(c["page"]), e(act_draft(c["subject"], c["page"])), buttons))
+
+
+def last_act_text(meta, rc, tail):
+    """The last-act line of a card: what was pressed, by whom, and how it ended."""
+    status = {None: "處理中", "0": "完成", "3": "要你決定(看收件匣)"}.get(rc)
+    if status is None:
+        status = "沒有執行(rc %s):%s" % (rc, tail)
+    who = " · %s" % meta["by"] if meta.get("by") else ""
+    return "上次的動作:%s%s · %s" % (meta.get("what") or "", who, status)
+
+
+def last_acts(cfg):
+    """{subject: last-act text} for the newest runs/web job of each subject a card's button started."""
+    out = {}
+    for name in job_names(cfg):
+        meta, rc, tail = job_state(os.path.join(jobs_dir(cfg), name))
+        subject = meta.get("subject")
+        if subject is None or str(subject) in out:
+            continue
+        out[str(subject)] = last_act_text(meta, rc, tail)
+    return out
+
+
+def render_card(c, actions=(), last=None):
     parts = ['<section class="wait" data-kind="%s" data-subject="%s" data-page="%s">'
              % (e(c["kind"]), e(c["subject"]), e(c["page"])),
              '<p class="want">%s</p>' % e(c["want"])]
@@ -388,16 +447,21 @@ def render_card(c):
         parts.append('<pre class="page-text">%s</pre>' % e(c["text"]))
     if c["timeline"]:
         parts.append('<a class="timeline" href="%s">時間軸</a>' % e(c["timeline"]))
+    if last:
+        parts.append('<p class="last-act">%s</p>' % e(last))
+    parts.append(render_act_form(c, actions))
     parts.append("</section>")
     return "".join(parts)
 
 
 def render_decide_tab(cfg, snap, key, query, now):
+    """`key` true means the viewer may submit (as for the request form): each card then gets its buttons."""
     cards = waiting_cards(snap, now)
     out = [DECIDE_STYLE, "<section><h2>要你判</h2>"]
     if not cards:
         out.append('<p class="quiet">沒有要你判的事。</p>')
-    out.extend(render_card(c) for c in cards)
+    last = last_acts(cfg) if cards else {}
+    out.extend(render_card(c, card_actions(snap, c) if key else (), last.get(str(c["subject"]))) for c in cards)
     out.append("</section>")
     return "\n".join(out)
 
@@ -553,19 +617,9 @@ def render_tickets_tab(cfg, snap, key, query, now):
     for name, p in pages:
         out.append("<div class='page k-%s'><div class='ph'>%s · %s · %s</div><pre>%s</pre>" % (
             e(p.get("kind")), e(p.get("kind")), e(p.get("ref")), e(p.get("at")), e(p.get("text"))))
-        ref = str(p.get("ref") or "")
-        t = snap.tickets.get(ref)
-        if key and p.get("kind") == "decision" and t and t.get("state") not in ("running", "merged", "landed"):
-            out.append("<form method='post' action='answer' class='ask'>"
-                       "<input type='hidden' name='page' value='%s'><input type='hidden' name='ticket' value='%s'>"
-                       "<textarea name='text' data-draft='answer-%s' rows='3' maxlength='8000' "
-                       "placeholder='你的裁決(改票時必填)'></textarea><div>"
-                       "<button name='decision' value='revise'>照我的話改票再做</button> "
-                       "<button name='decision' value='retry'>不改,再試一次</button> "
-                       "<button name='decision' value='cancel'>取消這張票</button></div></form>"
-                       % (e(name), e(ref), e(name)))
         out.append("</div>")
-    out.append("<p class='quiet'>收下:<code>python3 devloop/tickets.py ack &lt;頁名&gt;</code></p></section>")
+    out.append("<p class='quiet'>要你決定的事在「要你判」分頁。收下:<code>python3 devloop/tickets.py ack &lt;頁名&gt;</code></p>"
+               "</section>")
     if key:
         out.append(render_jobs(cfg))
 
@@ -1352,30 +1406,46 @@ def jobs_dir(cfg):
     return os.path.join(cfg.worktree_root, "runs", "web")
 
 
+JOB_LOGS = ("job.log", "creator.log")     # tickets.py jobs write job.log; ticket_creator jobs (and older jobs) creator.log
+
+
+def job_state(folder):
+    """(job.json dict, rc text or None while it runs, last non-empty line of its log) of one web job."""
+    meta = osx.read_json(os.path.join(folder, "job.json"), {}) or {}
+    try:
+        with open(os.path.join(folder, "rc")) as fh:
+            rc = fh.read().strip()
+    except OSError:
+        rc = None
+    tail = ""
+    for name in JOB_LOGS:
+        try:
+            with open(os.path.join(folder, name), errors="replace") as fh:
+                lines = [l for l in fh.read().splitlines() if l.strip()]
+        except OSError:
+            continue
+        tail = lines[-1] if lines else ""
+        break
+    return (meta if isinstance(meta, dict) else {}), rc, tail
+
+
+def job_names(cfg):
+    """The web job folders, newest first (their names start with the time they were made)."""
+    try:
+        return sorted(os.listdir(jobs_dir(cfg)), reverse=True)
+    except FileNotFoundError:
+        return []
+
+
 def render_jobs(cfg):
     folder = jobs_dir(cfg)
-    try:
-        names = sorted(os.listdir(folder), reverse=True)[:10]
-    except FileNotFoundError:
-        names = []
+    names = job_names(cfg)[:10]
     out = ["<section><h2>網頁送出的(最近 10 件)</h2>"]
     if not names:
         out.append("<p class='quiet'>還沒有。</p>")
     for name in names:
-        meta = osx.read_json(os.path.join(folder, name, "job.json"), {}) or {}
-        try:
-            with open(os.path.join(folder, name, "rc")) as fh:
-                rc = fh.read().strip()
-        except OSError:
-            rc = None
+        meta, rc, tail = job_state(os.path.join(folder, name))
         status = {None: "處理中", "0": "完成", "3": "要你決定(看收件匣)"}.get(rc, "失敗(rc %s)" % rc)
-        tail = ""
-        try:
-            with open(os.path.join(folder, name, "creator.log"), errors="replace") as fh:
-                lines = [l for l in fh.read().splitlines() if l.strip()]
-            tail = lines[-1] if lines else ""
-        except OSError:
-            pass
         who = " · %s" % e(meta["by"]) if meta.get("by") else ""
         out.append("<div class='page'><div class='ph'>%s · %s%s · %s</div><pre>%s</pre></div>" % (
             e(meta.get("at")), e(meta.get("what")), who, e(status), e(tail[:300])))
@@ -1383,18 +1453,73 @@ def render_jobs(cfg):
     return "\n".join(out)
 
 
-def submit(cfg, what, argv_tail, text, by=None):
-    """Start ticket_creator for one web input, detached; its output and rc stay in runs/web/."""
-    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+ACTIONS = ("revise", "retry", "cancel", "group-ready", "group-cancel", "rerun", "ack")
+TICKET_ACTIONS = ("revise", "retry", "cancel")
+GROUP_ACTIONS = ("group-ready", "group-cancel", "rerun")
+
+
+def act_problem(action, subject, page, text):
+    """Why a POST act cannot be run, one line; None when its shape is fine (the scripts judge the state)."""
+    if action not in ACTIONS:
+        return "unknown action"
+    if not re.fullmatch(r"[0-9A-Za-z_,.-]{1,120}", subject) or not re.fullmatch(r"[0-9A-Za-z_,.-]{0,120}", page):
+        return "bad subject or page"
+    if action in TICKET_ACTIONS and not re.fullmatch(r"[0-9]+", subject):
+        return "%s is for a ticket id" % action
+    if action in GROUP_ACTIONS and not re.fullmatch(r"g[0-9]+", subject):
+        return "%s is for a group g<N>" % action
+    if action == "ack" and not page:
+        return "ack needs a page"
+    if action == "revise" and not text:
+        return "write how the ticket should change"
+    return None
+
+
+def act_draft(subject, page):
+    """The draft key of a card's textarea, also what ?sent= names after its form was sent."""
+    return "act-%s" % subject + ("-%s" % page if page else "")
+
+
+def act_command(action, subject, page, text, by):
+    """(script, argv after the script) one card button runs; '{input}' stands for the job's input.txt.
+    Every command carries --by; text values ride in one element ('--why=<text>') so a leading '-' stays text."""
+    who = ["--by", by]
+    on_page = ["--page", page] if page else []
+    if action in TICKET_ACTIONS:
+        return "ticket_creator.py", ["--revise", subject, "--from", "user", "--decision", action, "--via", "web",
+                                     "--reason-file", "{input}"] + who + on_page
+    if action == "group-ready":
+        note = ["--note=" + text, "--via", "web"] if text else []
+        return "tickets.py", ["ready", subject] + note + who + on_page
+    if action == "group-cancel":
+        return "tickets.py", ["cancel", subject, "--why=" + text] + who + on_page
+    if action == "rerun":
+        return "tickets.py", ["rerun", subject, "--why=" + text] + who + on_page
+    if action == "ack":
+        return "tickets.py", ["ack"] + who + ["--", page]
+    raise ValueError("unknown action %r" % action)
+
+
+def submit(cfg, what, argv_tail, text, by=None, script="ticket_creator.py", act=None, add_by=True):
+    """Start one devloop script (ticket_creator.py or tickets.py) for one web input, detached; its
+    output and rc stay in runs/web/. `act` (subject, page, action) goes into job.json for a card's
+    button; `add_by` False when argv_tail already carries --by."""
+    t = time.time()
+    stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime(t)) + ".%06d" % int(t % 1 * 1e6)
     folder = osx.makedirs(os.path.join(jobs_dir(cfg), "%s-%s" % (stamp, os.urandom(3).hex())))
     text_path = os.path.join(folder, "input.txt")
     osx.atomic_write(text_path, text)
-    osx.write_json(os.path.join(folder, "job.json"), dict({"at": osx.now(), "what": what}, **({"by": by} if by else {})))
-    creator = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ticket_creator.py")
-    argv = ["sh", "-c", 'python3 "$@"; echo $? > "$DEVLOOP_JOB_RC"', "devloop-web", creator] + \
-        [a.replace("{input}", text_path) for a in argv_tail] + (["--by", by] if by else [])
+    meta = {"at": osx.now(), "what": what}
+    if act:
+        meta.update(zip(("subject", "page", "action"), act))
+    if by:
+        meta["by"] = by
+    osx.write_json(os.path.join(folder, "job.json"), meta)
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), script)
+    argv = ["sh", "-c", 'python3 "$@"; echo $? > "$DEVLOOP_JOB_RC"', "devloop-web", path] + \
+        [text_path if a == "{input}" else a for a in argv_tail] + (["--by", by] if by and add_by else [])
     osx.spawn(argv, cwd=cfg.root, env=cfg.env(DEVLOOP_JOB_RC=os.path.join(folder, "rc")),
-              log_path=os.path.join(folder, "creator.log"))
+              log_path=os.path.join(folder, "creator.log" if script == "ticket_creator.py" else "job.log"))
     return folder
 
 
@@ -1613,21 +1738,20 @@ def serve(cfg, pool, host, port, key):
                         self._send(400, "empty request")
                         return
                     submit(cfg, "新需求", ["--request-file", "{input}", "--via", "web"], text, by=self.user)
-                    sent = "request"
-                elif last_segment(url) == "answer":
-                    ticket, page, decision = form.get("ticket", ""), form.get("page", ""), form.get("decision", "")
-                    if not re.fullmatch(r"[0-9A-Za-z_-]{1,40}", ticket) or \
-                            not re.fullmatch(r"[0-9A-Za-z_,.-]{1,120}", page) or \
-                            decision not in ("revise", "retry", "cancel"):
-                        self._send(400, "bad answer")
+                    sent, where = "request", "./?sent="
+                elif last_segment(url) == "act":
+                    subject, page = form.get("subject", ""), form.get("page", "")
+                    action = form.get("action", "")
+                    problem = act_problem(action, subject, page, text)
+                    if problem:
+                        self._send(400, problem)
                         return
-                    if decision == "revise" and not text:
-                        self._send(400, "write how the ticket should change")
-                        return
-                    submit(cfg, "#%s %s" % (ticket, decision),
-                           ["--revise", ticket, "--from", "user", "--decision", decision, "--via", "web",
-                            "--reason-file", "{input}", "--page", page], text, by=self.user)
-                    sent = "answer-" + page
+                    by = self.user or "user"     # D-093 item 3: the trusted user's entry, else 'user'
+                    script, argv = act_command(action, subject, page, text, by)
+                    label = "#" + subject if re.fullmatch(r"[0-9]+", subject) else subject
+                    submit(cfg, "%s %s" % (label, ACT_LABELS[action]), argv, text, by=by, script=script,
+                           act=(subject, page, action), add_by=False)
+                    sent, where = act_draft(subject, page), "./?tab=decide&sent="
                 else:
                     self._send(404, "not found")
                     return
@@ -1636,7 +1760,7 @@ def serve(cfg, pool, host, port, key):
                 return
             cache["snap"] = None
             self.send_response(303)
-            self.send_header("Location", "./?sent=" + quote(sent))
+            self.send_header("Location", where + quote(sent))
             self.send_header("Content-Length", "0")
             self.end_headers()
 
