@@ -8396,6 +8396,58 @@ class AgentEnv(LoopCase):
         self.assertEqual(env["DEVLOOP_ROLE"], "worker")
 
 
+class CodexUsageUnits(LoopCase):
+    EVENTS = [{"type": "thread.started", "thread_id": "t-9"}, {"type": "turn.started"},
+              {"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tokens": 40,
+                                                   "output_tokens": 5}},
+              {"type": "turn.completed", "usage": {"input_tokens": 10}}]
+
+    def log(self, lines):
+        path = os.path.join(self.tmp, "codex.log")
+        with open(path, "w") as fh:
+            fh.write("\n".join(lines) + "\n")
+        return path
+
+    def test_missing_fields_count_zero_and_no_price_leaves_usd_none(self):
+        from core import agents
+        got = agents.usage_from_log(self.log([json.dumps(e) for e in self.EVENTS]))
+        self.assertEqual((got["input_tokens"], got["cache_read_tokens"], got["output_tokens"]), (70, 40, 5))
+        self.assertIsNone(got["usd"])
+        self.assertIsNone(got["cache_write_tokens"])
+        self.assertEqual(got["session_id"], "t-9")
+
+    def test_price_is_per_million(self):
+        from core import agents
+        got = agents.usage_from_log(self.log([json.dumps(e) for e in self.EVENTS]),
+                                    price={"input": 1, "cached_input": 0, "output": 2})
+        self.assertAlmostEqual(got["usd"], (70 + 10) / 1e6, places=12)
+
+    def test_price_does_not_touch_a_claude_row(self):
+        from core import agents
+        line = json.dumps({"usage": {"input_tokens": 3, "output_tokens": 4}, "total_cost_usd": 0.5})
+        got = agents.usage_from_log(self.log([line]), price={"input": 9, "cached_input": 9, "output": 9})
+        self.assertEqual((got["input_tokens"], got["usd"]), (3, 0.5))
+
+    def test_plain_text_log_is_all_none(self):
+        from core import agents
+        got = agents.usage_from_log(self.log(["hello"]), price={"input": 1, "cached_input": 1, "output": 1})
+        self.assertEqual(got, agents.EMPTY)
+
+    def test_prices_validation(self):
+        from core.config import Config
+        good = {"m": {"input": 1, "cached_input": 0, "output": 2.5}}
+        for bad in ([], {"m": 1}, {"m": {"input": 1, "output": 1}},
+                    {"m": dict(good["m"], output=-1)}, {"m": dict(good["m"], input="1")},
+                    {"m": dict(good["m"], input=True)}):
+            self.config(prices=bad)
+            with self.assertRaises(osx.OSFailure) as ctx:
+                Config(self.proj)
+            self.assertIn("devloop.prices", str(ctx.exception))
+        for ok in (None, {}, good):
+            self.config(prices=ok)
+            Config(self.proj)
+
+
 class T41Acceptance(LoopCase):
     """#41: ?ticket=N and ?group=gN open a detail view (timeline + cost table) inside the 票 tab.
     Expected values come from the ticket and this fixture, never from board.py."""

@@ -13,7 +13,9 @@ command's own `--effort`.
 
 Cost (D-045, D-084): every run records role, model, effort, seconds, tokens (input, output, cache
 read, cache write), dollars, session id, outcome and run dir. A run that was stopped (timeout)
-prints no usage; its tokens are then read from the CLI's transcript (D-076 #124). A run its
+prints no usage; its tokens are then read from the CLI's transcript (D-076 #124). A codex log
+(`exec --json` turn.completed events) is summed, and its dollars come from devloop.prices[model]
+or stay unknown; a claude row keeps the CLI's own total_cost_usd. A run its
 caller stopped before collecting it (Pending.stop) gets the same row with outcome "interrupted".
 """
 
@@ -311,7 +313,8 @@ class Pending:
                 "outcome": outcome, "run_dir": self.run_dir}
         if self.tried:
             cost["fell_back_from"] = self.tried
-        usage = usage_from_log(self.log)
+        prices = getattr(self.cfg, "prices", None) if self.cfg is not None else None
+        usage = usage_from_log(self.log, (prices or {}).get(cost["model"]))
         if usage.get("input_tokens") is None and os.path.basename(self.argv[0]) == "claude":
             usage = usage_from_transcript(self.cwd, self.attempt_started) or usage
         cost.update(usage)
@@ -451,14 +454,61 @@ EMPTY = {"input_tokens": None, "output_tokens": None, "cache_read_tokens": None,
          "cache_write_tokens": None, "usd": None, "session_id": None}
 
 
-def usage_from_log(log):
-    """Token counts from a `claude -p --output-format json` log; unknown stays None."""
+def _codex_usage(text, price):
+    """Usage summed from codex `exec --json` turn.completed events, or None when the log has none.
+
+    codex counts cached input inside input_tokens, so input is the sum of input_tokens minus the
+    sum of cached_input_tokens. A field missing from a turn counts 0. Dollars come from `price`
+    ({"input", "cached_input", "output"}, US dollars per million tokens) or stay None."""
+    sums = {"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0}
+    found = False
+    session = None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            data = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        if data.get("type") == "thread.started" and session is None:
+            session = data.get("thread_id")
+        elif data.get("type") == "turn.completed" and isinstance(data.get("usage"), dict):
+            found = True
+            for key in sums:
+                value = data["usage"].get(key)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    sums[key] += value
+    if not found:
+        return None
+    fresh = sums["input_tokens"] - sums["cached_input_tokens"]
+    out = dict(EMPTY)
+    out.update(input_tokens=fresh, cache_read_tokens=sums["cached_input_tokens"],
+               output_tokens=sums["output_tokens"], session_id=session)
+    if price:
+        out["usd"] = (fresh * price["input"] + sums["cached_input_tokens"] * price["cached_input"]
+                      + sums["output_tokens"] * price["output"]) / 1e6
+    return out
+
+
+def usage_from_log(log, price=None):
+    """Token counts from an agent log; unknown stays None, never 0.
+
+    A log with a codex `turn.completed` event (with a dict `usage`) is read as codex: the events
+    are summed, and dollars are computed from `price` ({"input", "cached_input", "output"} per
+    million tokens) or None. Any other log is read as a `claude -p --output-format json` log, whose
+    usage and total_cost_usd are taken as they are (`price` does not apply)."""
     out = dict(EMPTY)
     try:
         with open(log, errors="replace") as fh:
             text = fh.read()
     except OSError:
         return out
+    codex = _codex_usage(text, price)
+    if codex is not None:
+        return codex
     for line in reversed(text.strip().splitlines()):
         line = line.strip()
         if not line.startswith("{"):

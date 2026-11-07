@@ -76,6 +76,15 @@ back to "pr" with its fix round not counted, is paused, and the controller stops
 `--forever` it keeps running); for a release the release failed (a decision page; not retried, not
 rolled back). Every such text contains `devloop.worktree_setup`.
 
+`devloop.prices` (default null; `{}` is the same): maps a model name (the row's `model`: the value
+after `--model`, else the command's file name) to `{"input": n, "cached_input": n, "output": n}`,
+US dollars per million tokens, each a number >= 0. A codex agent run's cost row sums the
+`turn.completed` usage of its `exec --json` events: `input_tokens` is the sum of input minus the sum
+of cached input (codex counts cached input inside input), `cache_read_tokens` the cached sum,
+`output_tokens` the output sum, and `usd` is computed from the model's prices, or stays unknown
+(null) when there is no table or no entry for the model. A claude row keeps the CLI's own
+`total_cost_usd`. A malformed table makes the config fail with a text containing `devloop.prices`.
+
 ## Machine slots
 
 `machine_slots` (default null = no limit) caps the heavy runs on the machine at N, across every
