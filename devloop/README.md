@@ -288,6 +288,15 @@ agent's row stands for it). A release command may print lines `devloop-stage: <t
 shows the text of the last such line as its step. The tab has a 重新整理 link; the page reloads
 every 30 s anyway when nobody types.
 
+Every row that waits for a machine slot (state `slot`; a regression waiting for the whole machine
+is not one) shows its place in the queue, `等機器名額:第 k 個(共 n 個在等)` (`data-queue="k/n"`, ordered by
+the `since` of the record that waits, oldest first, ties by record name). While a regression with
+`exclusive` runs, those rows also say whom they give way to: `,讓位給 <group> 的獨占 regression`
+(`data-yield`). After the process rows come the ticket rows, one per ready ticket (`data-kind="ticket"`):
+`待派`, or `等 #<id>(<state>)、… 落地` naming every dependency that is neither landed nor merged into an
+open group; then the decision rows, one per 要你判 card (`data-kind="decision"`), showing what the card
+asks and a link to that tab; the 結束了 rows stay last. Ticket and decision rows have no pid and no start.
+
 要你判 shows one card per thing that waits: each unread `decision` or `env` page (one card per page,
 even when its ticket is also stuck); each stuck ticket and each stuck or paused group (the
 env-pause mark `paused`) that no such page is about; and each running ticket or fixing group whose

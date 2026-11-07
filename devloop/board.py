@@ -513,7 +513,11 @@ def live_rows(cfg, snap):
     def newest(kids):
         if not kids:
             return None
-        return max(kids, key=lambda na: (pool_seconds((na[1].get("stamp") or {}).get("started")) or 0, na[0]))[1]
+        best = max(kids, key=lambda na: (pool_seconds((na[1].get("stamp") or {}).get("started")) or 0, na[0]))
+        waiters[id(best[1])] = best[0]
+        return best[1]
+
+    waiters = {}
 
     owned = set()
     for _, r in running:
@@ -565,6 +569,7 @@ def live_rows(cfg, snap):
         else:
             row.update(state="running", text=LIVE_AGENT_STATE["running"])
         agent = row.pop("agent", None)
+        row["waiter"] = (waiters.get(id(agent), name), agent) if agent is not None else (name, rec)
         if agent is not None:
             row.update(model=live_model(agent), run_dir=agent.get("run_dir"), log=agent.get("log"), tail=True)
             for attr in ("model", "command"):
@@ -574,18 +579,78 @@ def live_rows(cfg, snap):
     for row in rows:
         row["started"] = pool_seconds((row["rec"].get("stamp") or {}).get("started"))
     rows.sort(key=lambda r: (r["state"] == "ended", r["started"] is None, r["started"] or 0, r["name"]))
+    exclusive = sorted(str(r.get("group")) for _, r in running if r.get("kind") == "regression" and r.get("exclusive"))
+    live_queue(rows, exclusive[0] if exclusive else None)
+    return rows
+
+
+def live_queue(rows, exclusive_group):
+    """Number the rows that wait for a machine slot (a regression waiting for the whole machine is not one):
+    data-queue k/n by the waiting record's `since`, oldest first, and name the exclusive regression they give way to."""
+    queued = [r for r in rows if r["state"] == "slot" and not (r["kind"] == "regression"
+                                                              and r["rec"].get("stage") == "machine")]
+
+    def order(r):
+        name, rec = r["waiter"]
+        since = pool_seconds(rec.get("since"))
+        return (since is None, since or 0, name)
+    for k, r in enumerate(sorted(queued, key=order), 1):
+        r["text"] = "等機器名額:第 %d 個(共 %d 個在等)" % (k, len(queued))
+        r["attrs"]["data-queue"] = "%d/%d" % (k, len(queued))
+        if exclusive_group is not None:
+            r["text"] += ",讓位給 %s 的獨占 regression" % exclusive_group
+            r["attrs"]["data-yield"] = exclusive_group
+
+
+def live_ticket_rows(snap):
+    """One row per ready ticket: 待派, or 等 <unsatisfied dependencies> 落地."""
+    def satisfied(d):
+        t = snap.tickets.get(d)
+        if t is None:
+            return False
+        if t.get("state") == "landed":
+            return True
+        return t.get("state") == "merged" and (snap.groups.get(str(t.get("group"))) or {}).get("state") == "open"
+    rows = []
+    for ident in sorted((i for i, t in snap.tickets.items() if t.get("state") == "ready"), key=_num_key):
+        waits = []
+        for d in dagmod.deps(snap.dag, ident):
+            if not satisfied(d):
+                t = snap.tickets.get(d)
+                label = "不存在" if t is None else STATE_TEXT.get(t.get("state"), t.get("state"))
+                waits.append("#%s(%s)" % (d, label))
+        rows.append({"name": "ticket-" + ident, "kind": "ticket", "state": "deps" if waits else "ready",
+                     "text": "等 %s 落地" % "、".join(waits) if waits else STATE_TEXT["ready"],
+                     "what": live_ticket_text(snap, ident), "model": "", "attrs": {"data-ticket": ident},
+                     "run_dir": None, "log": None, "tail": False, "rec": {}, "started": None, "bare": True})
+    return rows
+
+
+def live_decision_rows(snap, now):
+    """One row per card that waits for the user, with a link to the 要你判 tab."""
+    rows = []
+    for c in waiting_cards(snap, now):
+        what = live_ticket_text(snap, c["subject"]) if c["kind"] == "ticket" else str(c["subject"])
+        rows.append({"name": "decision-" + str(c["subject"]), "kind": "decision", "state": "decision",
+                     "text": c["want"], "what": what, "model": "", "attrs": {"data-subject": str(c["subject"])},
+                     "run_dir": None, "log": None, "tail": False, "rec": {}, "started": None, "bare": True,
+                     "link": True})
     return rows
 
 
 def render_live_row(row, now, slots_text):
-    attrs = [("data-kind", row["kind"]), ("data-state", row["state"]), ("data-pid", live_pid(row["rec"])),
-             ("data-started", row["started"])] + sorted(row["attrs"].items())
+    attrs = [("data-kind", row["kind"]), ("data-state", row["state"])]
+    if not row.get("bare"):
+        attrs += [("data-pid", live_pid(row["rec"])), ("data-started", row["started"])]
+    attrs += sorted(row["attrs"].items())
     if slots_text is not None:
         attrs.append(("data-slots", slots_text))
     started = row["started"]
     detail = []
     if row["run_dir"]:
         detail.append('<code class="run-dir">%s</code>' % e(row["run_dir"]))
+    if row.get("link"):
+        detail.append('<a href="?tab=decide">去判</a>')
     if row["tail"]:
         detail.append("<details><summary>log</summary><pre>%s</pre></details>" % e(live_tail(row["log"])))
     cells = [("what", e(row["what"])), ("state", e(row["text"])), ("model", e(row["model"])),
@@ -603,6 +668,8 @@ def render_live_tab(cfg, snap, key, query, now):
     record whose process ended without handing in), oldest first. Writes and creates nothing."""
     from core import host as hostmod
     rows = live_rows(cfg, snap)
+    ended = [r for r in rows if r["state"] == "ended"]
+    rows = [r for r in rows if r["state"] != "ended"] + live_ticket_rows(snap) + live_decision_rows(snap, now) + ended
     used = hostmod.slots_in_use(cfg)
     slots_text = None if used is None else "%d/%d" % (used, cfg.machine_slots)
     out = [LIVE_STYLE, '<section><a class="refresh" href="?tab=live">重新整理</a><h2>進行中</h2>']

@@ -8486,6 +8486,54 @@ class BoardLiveTab(LoopCase):
         self.assertFalse(os.path.exists(slots_dir))
 
 
+class LiveQueueUnits(BoardLiveTab):
+    """#67's helpers: live_queue numbering, live_ticket_rows and live_decision_rows."""
+
+    def test_queue_numbers_by_since_and_names_the_exclusive_regression(self):
+        import board
+        for name, since in (("agent-b", "2026-11-06T10:00:05Z"), ("agent-c", "2026-11-06T10:00:00Z"),
+                            ("agent-a", "2026-11-06T10:00:00Z")):
+            self.put(name, kind="agent", stamp=self.alive(since), parent=None, role="worker", ticket=None, group="g1",
+                     round=1, run_dir=None, log=None, command="c", model=None, effort=None, state="slot",
+                     since=since, until=None)
+        self.put("regression-m", kind="regression", stamp=self.alive("2026-11-06T09:00:00Z"), group="g2",
+                 branch="b", sha="a" * 40, exclusive=False, stage="machine", since="2026-11-06T09:00:00Z")
+        got = {r["name"]: r["attrs"].get("data-queue") for r in self.rows()}
+        self.assertEqual(got, {"agent-a": "1/3", "agent-c": "2/3", "agent-b": "3/3", "regression-m": None})
+        self.put("regression-x", kind="regression", stamp=self.alive("2026-11-06T09:30:00Z"), group="g7",
+                 branch="b", sha="a" * 40, exclusive=True, stage="full", since="2026-11-06T09:30:00Z")
+        rows = [r for r in self.rows() if "data-queue" in r["attrs"]]
+        self.assertEqual(len(rows), 3)
+        for r in rows:
+            self.assertEqual(r["attrs"]["data-yield"], "g7")
+            self.assertTrue(r["text"].endswith(",讓位給 g7 的獨占 regression"), r["text"])
+        self.assertTrue(board.live_clock)
+
+    def test_ticket_rows_name_unsatisfied_dependencies(self):
+        import board
+        self.add(1, state="landed")
+        self.add(2, state="merged", group="g1")
+        self.add(3, state="merged", group="g2")
+        self.add(4, deps=[1, 2])
+        self.add(5, deps=[3, 9])
+        self.pool.update(lambda tx: (tx.put_group({"id": "g1", "branch": "int/g1", "state": "open", "members": ["2"]}),
+                                     tx.put_group({"id": "g2", "branch": "int/g2", "state": "pr", "members": ["3"]})),
+                         "test: groups")
+        rows = board.live_ticket_rows(self.snap())
+        self.assertEqual([(r["name"], r["state"], r["text"], r["what"]) for r in rows], [
+            ("ticket-4", "ready", "待派", "#4 ticket 4"),
+            ("ticket-5", "deps", "等 #3(%s)、#9(不存在) 落地" % board.STATE_TEXT["merged"], "#5 ticket 5")])
+        self.assertTrue(all(r["rec"] == {} and r["started"] is None for r in rows))
+
+    def test_decision_rows_follow_the_cards(self):
+        import board
+        snap = self.snap()
+        rows = board.live_decision_rows(snap, self.NOW)
+        cards = board.waiting_cards(snap, self.NOW)
+        self.assertEqual([r["text"] for r in rows], [c["want"] for c in cards])
+        self.assertEqual([r["attrs"]["data-subject"] for r in rows], [str(c["subject"]) for c in cards])
+
+
 class T16Acceptance(LoopCase):
     """Ticket #16: memory written into a git repository is one fast-forward commit on its branch."""
 
