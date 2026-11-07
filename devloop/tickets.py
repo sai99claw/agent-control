@@ -167,10 +167,11 @@ def cmd_rerun_group(pool, gid, why, by=None, page=None):
                                 % (gid, g.get("state")))
         if g.get("job"):
             raise osx.OSFailure("group %s has a %s job running; leave it alone" % (gid, g["job"].get("kind")))
+        who = by or "user"
         g.pop("paused", None)
-        event(g, "environment fixed: verify again", by=by or "user", why=why)
+        event(g, "environment fixed: verify again", by=who, why=why)
         tx.put_group(g)
-        ack_in(tx, page, by)
+        ack_in(tx, page, who)
     pool.update(change, "group %s: environment fixed (main)" % gid)
     print("group %s: environment fixed; the controller verifies it again (a --forever controller at its next "
           "tick, otherwise run the controller)" % gid)
