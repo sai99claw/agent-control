@@ -349,6 +349,39 @@ class EnvironmentSuspect(Fixture):
                              "fail-fast stops at the threshold (8), not after all 12")
 
 
+class MachineSuspects(unittest.TestCase):
+    """Unit tests for `machine_suspects` (markers are held in constants, never in assertions)."""
+
+    A, B = "too many open files", "failed to write commit object"
+
+    def row(self, status="error", message=None, traceback=None, id="m.T.t"):
+        return {"id": id, "status": status, "message": message, "traceback": traceback}
+
+    def run_it(self, *rows):
+        return load_adapter().machine_suspects(list(rows), "/x/run.log")
+
+    def test_first_marker_of_the_constant_wins(self):
+        out = self.run_it(self.row(message="%s and %s" % (self.B, self.A)))
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["why"], "m.T.t: " + load_adapter().MACHINE_MARKERS[0])
+        self.assertEqual((out[0]["source"], out[0]["count"], out[0]["log"]), ("machine", 1, "/x/run.log"))
+
+    def test_letter_case_is_ignored_and_line_is_stripped(self):
+        out = self.run_it(self.row(message="  OSError: " + self.A.upper() + " "))
+        self.assertEqual(out[0]["line"], "OSError: " + self.A.upper())
+
+    def test_pass_and_skip_rows_are_ignored(self):
+        self.assertEqual(self.run_it(self.row("pass", self.A), self.row("skip", self.A)), [])
+
+    def test_message_none_with_marker_in_traceback(self):
+        out = self.run_it(self.row(traceback="Traceback:\n  x\n  OSError: %s\nmore" % self.A))
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["line"], "OSError: " + self.A)
+
+    def test_no_marker_gives_nothing(self):
+        self.assertEqual(self.run_it(self.row(message="boom", traceback=None)), [])
+
+
 def load_adapter():
     """The adapter module, read only for `PER_PROCESS_PEAK_MIB` (an input that sizes the fixture
     numbers — the expected N is still computed here)."""

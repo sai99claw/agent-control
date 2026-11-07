@@ -64,7 +64,8 @@ patch 路徑與雜湊、第幾輪、上一輪排除過什麼、怎麼重現,它�
 ## 環境可疑的兩條來源收成同一格(`environment_suspect`,D-019)
 **形狀的唯一真實來源是 `docs/DESIGN-ENV-SUSPECT.md`**,這一份只實作它:那一格永遠是
 一個 list、空值只有 `[]` 一種寫法,每一筆七個鍵(`source` / `engine` / `why` /
-`count` / `threshold` / `log` / `line`)一個都不缺、缺料填 `None`。兩條來源各標
+`count` / `threshold` / `log` / `line`)一個都不缺、缺料填 `None`。兩條來源(adapter-unittest 另有第三條 `machine`:fail/error 列的訊息或 traceback 含
+「too many open files」等機器壞掉的字樣)各標
 `source`:`statistical` 是上面那條連紅統計,`declared` 是跑在裡面的案例自己印的
 `ENVIRONMENT-SUSPECT: <引擎> <為什麼>` 那一行。**`state` 與 `rc` 不因這一格而變。**
 

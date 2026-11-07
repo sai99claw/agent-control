@@ -286,7 +286,7 @@ A **reads decisions only from exit codes, `select`'s stdout and `result.json`**,
 | `ids[].exception`, `file`, `line` | string / null | the innermost frame **inside the test file**; what verify-case classifies on (C7) |
 | `ids[].seconds` | number / null | per id |
 | `ids[].traceback` | string / null | full text when available; the adapter always fills it |
-| `environment_suspect` | list (never null, `[]` when none) | D-019 rows; `source` `statistical` or `declared`; non-empty ⇔ rc 86 |
+| `environment_suspect` | list (never null, `[]` when none) | D-019 rows; `source` `statistical`, `declared` or `machine` (a fail/error row naming a machine marker such as "too many open files"); non-empty ⇔ rc 86 |
 | `log` | string / null | path relative to `AC_TEST_OUT` |
 
 **Minimal command adapter** (`templates/project-tests.example.sh`, the shape T writes; project knowledge only):
