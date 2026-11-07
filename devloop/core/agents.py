@@ -17,6 +17,7 @@ prints no usage; its tokens are then read from the CLI's transcript (D-076 #124)
 caller stopped before collecting it (Pending.stop) gets the same row with outcome "interrupted".
 """
 
+import calendar
 import glob
 import json
 import os
@@ -349,14 +350,29 @@ def _excerpt(text, limit=200):
 
 # ---------------------------------------------------------------- quota reset
 
-_UNITS = {"h": 3600, "hr": 3600, "hrs": 3600, "hour": 3600, "hours": 3600,
+_UNITS = {"d": 86400, "day": 86400, "days": 86400, "h": 3600, "hr": 3600, "hrs": 3600, "hour": 3600, "hours": 3600,
           "m": 60, "min": 60, "mins": 60, "minute": 60, "minutes": 60}
 _CLOCK = re.compile(r"\breset(?:s)?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?(?:\s*(am|pm)\b)?", re.I)
 _SPAN = re.compile(r"\breset(?:s)?\s+in\s+((?:\d+\s*(?:hours?|hrs?|h|minutes?|mins?|m)\b[\s,]*(?:and\s+)?)+)",
                    re.I)
-_SPAN_PART = re.compile(r"(\d+)\s*(hours?|hrs?|h|minutes?|mins?|m)\b", re.I)
+_SPAN_PART = re.compile(r"(\d+)\s*(days?|d|hours?|hrs?|h|minutes?|mins?|m)\b", re.I)
+_TRY_SPAN = re.compile(r"\btry again in\s+((?:\d+\s*(?:days?|d|hours?|hrs?|h|minutes?|mins?|m)\b[\s,]*(?:and\s+)?)+)",
+                       re.I)
+_MONTHS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+_TRY_DATE = re.compile(
+    r"\btry again at\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|"
+    r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?\s+(\d{1,2})(?:st|nd|rd|th)?"
+    r"(?:\s*,?\s*(\d{4}))?\s*,?\s+(\d{1,2}):(\d{2})\s*(am|pm)\b", re.I)
+_TRY_CLOCK = re.compile(r"\btry again at\s+(\d{1,2}):(\d{2})\s*(am|pm)\b", re.I)
 _EPOCH = re.compile(r"limit reached\s*\|\s*(\d{9,11})\b", re.I)
 GRACE = 600   # a time of day at most this many seconds before `at` is today's (the CLI's clock may run ahead)
+
+
+def _twelve(hour, half):
+    """A 12-hour clock hour as 0-23, or None when it is not 1-12."""
+    if not 1 <= hour <= 12:
+        return None
+    return hour % 12 + (12 if half.lower() == "pm" else 0)
 
 
 def quota_reset(text, at):
@@ -364,7 +380,9 @@ def quota_reset(text, at):
 
     Read: a time of day ("resets 3pm", "resets 3:30pm", "resets at 15:00", "will reset at 5pm"),
     local time, the next one after `at` (one at most GRACE s before `at` is today's); a duration
-    ("resets in 2h 30m", "resets in 1 hour"); or an epoch ("... limit reached|1762473600"). The
+    ("resets in 2h 30m", "resets in 1 hour"); codex's "try again at Nov 11th, 2026 2:23 AM" (the
+    year is optional: without it the next such moment, by the same GRACE rule), "try again at
+    2:23 AM" (a time of day) and "try again in 2 days 3 hours 5 minutes"; or an epoch ("... limit reached|1762473600"). The
     last match in the text wins."""
     found = []
     for m in _CLOCK.finditer(text or ""):
@@ -383,7 +401,32 @@ def quota_reset(text, at):
         if when < at - GRACE:
             when = time.mktime((day.tm_year, day.tm_mon, day.tm_mday + 1, hour, minute or 0, 0, 0, 0, -1))
         found.append((m.start(), when))
-    for m in _SPAN.finditer(text or ""):
+    for m in _TRY_CLOCK.finditer(text or ""):
+        hour, minute = _twelve(int(m.group(1)), m.group(3)), int(m.group(2))
+        if hour is None or minute > 59:
+            continue
+        day = time.localtime(at)
+        when = time.mktime((day.tm_year, day.tm_mon, day.tm_mday, hour, minute, 0, 0, 0, -1))
+        if when < at - GRACE:
+            when = time.mktime((day.tm_year, day.tm_mon, day.tm_mday + 1, hour, minute, 0, 0, 0, -1))
+        found.append((m.start(), when))
+    for m in _TRY_DATE.finditer(text or ""):
+        month = _MONTHS.index(m.group(1)[:3].lower()) + 1
+        dom, hour, minute = int(m.group(2)), _twelve(int(m.group(4)), m.group(6)), int(m.group(5))
+        if hour is None or minute > 59:
+            continue
+        if m.group(3):
+            years = [int(m.group(3))]
+        else:
+            years = [time.localtime(at).tm_year, time.localtime(at).tm_year + 1]
+        for year in years:
+            if not 1 <= dom <= calendar.monthrange(year, month)[1]:
+                continue
+            when = time.mktime((year, month, dom, hour, minute, 0, 0, 0, -1))
+            if m.group(3) or when >= at - GRACE:
+                found.append((m.start(), when))
+                break
+    for m in list(_SPAN.finditer(text or "")) + list(_TRY_SPAN.finditer(text or "")):
         seconds = sum(int(n) * _UNITS[u.lower()] for n, u in _SPAN_PART.findall(m.group(1)))
         found.append((m.start(), at + seconds))
     for m in _EPOCH.finditer(text or ""):

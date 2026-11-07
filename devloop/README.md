@@ -127,7 +127,8 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
   reset in its log, without a hand-in). When the last command of the chain says quota, the issuer
   waits for the reset read from the CLI's message ("resets 3pm", "resets 3:30pm", "resets at
   15:00", "will reset at 5pm" as local time; "resets in 2h 30m" / "in 45m" / "in 1 hour";
-  "... limit reached|<epoch>"; the last one in the message wins; a minute is added) or, when none
+  codex's "try again at Nov 11th, 2026 2:23 AM" (year optional), "try again at 2:23 AM" and
+  "try again in 2 days 3 hours 5 minutes"; "... limit reached|<epoch>"; the last one in the message wins; a minute is added) or, when none
   is readable, `devloop.quota_retry_seconds` (default 1800), then runs the chain again from its
   first command. The wait costs no round, no feedback entry and no issuer time
   (`issuer_timeout_seconds` moves by it) and holds no machine slot; the ticket stays running with
