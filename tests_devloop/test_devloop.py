@@ -6347,15 +6347,21 @@ class BoardTabs(LoopCase):
                            ("/board/other", "other")):
             self.assertEqual(board.last_segment(urlparse(path + "?tab=x")), want, path)
 
-    def test_stub_tabs_get_their_query_and_now(self):
+    def test_tabs_get_their_query_and_now(self):
+        # #43 and #45 replaced the stub Token and 主機 tabs; each still gets render's now.
         import board
+        import time
         from core.config import Config
-        for name, label in (("tokens", "Token"), ("host", "主機")):
-            page = board.render(Config(self.proj), self.snap(), query={"tab": name}, now=0)
-            self.assertIn('<div id="tab-%s" class="tab">' % name, page)
-            self.assertIn("<h2>%s</h2>" % label, page)
-            self.assertIn("還沒有內容", page)
-            self.assertNotIn("<h2>記憶</h2>", page)
+        page = board.render(Config(self.proj), self.snap(), query={"tab": "tokens"}, now=0)
+        self.assertIn('<div id="tab-tokens" class="tab">', page)
+        self.assertIn("<h2>近 30 天</h2>", page)
+        self.assertIn("<tr><td>%s</td>" % time.strftime("%Y-%m-%d", time.localtime(0)), page)
+        self.assertNotIn("<h2>記憶</h2>", page)
+        page = board.render(Config(self.proj), self.snap(), query={"tab": "host"}, now=0)
+        self.assertIn('<div id="tab-host" class="tab">', page)
+        self.assertIn("<h2>主機</h2>", page)
+        self.assertIn("還沒有主機紀錄", page)
+        self.assertNotIn("<h2>記憶</h2>", page)
 
     def test_served_tabs_within_five_seconds_each_show_their_own(self):
         import http.client
