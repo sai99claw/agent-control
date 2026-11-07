@@ -24,15 +24,15 @@ group complete (= one PR, a local mark) -> regression.py (preflight + full suite
 | --- | --- |
 | `python3 devloop/tickets.py init` | once per project: create the pool |
 | `python3 devloop/tickets.py lessons --layer L --name N --file F` | queue every bullet line of F as a lesson for that memory file (a project's own older memory) |
-| `python3 devloop/ticket_creator.py --request "..."` | the user wants something |
+| `python3 devloop/ticket_creator.py --request "..."` | the user wants something; `--revise N --from user --decision D [--page P] [--by NAME]` is the user's answer, recorded first as a 'user answer' event (decision, text, by, page) and refused for a running ticket |
 | `python3 devloop/ticket_controller.py` | run until nothing is left (`--forever` keeps watching) |
-| `python3 devloop/tickets.py inbox` / `ack` | pages: created, landed, decision, env, cancelled |
+| `python3 devloop/tickets.py inbox` / `ack P [--by NAME]` | pages: created, landed, decision, env, cancelled; `--by` sets acked_by and, for a page whose ref is a ticket or group, writes a 'page acknowledged' event on it (`ack --all --by NAME` only sets acked_by) |
 | `python3 devloop/tickets.py list` / `show N` | state of tickets and groups; a merged ticket shows as 功能完成 and a landed one as 驗證完成, while the pool keeps merged / landed |
-| `python3 devloop/tickets.py ready N` | after deciding on a stuck ticket |
-| `python3 devloop/tickets.py ready gN [--note "..."]` | a stuck group whose branch and merged tickets are still there: verify it again (fix rounds back to 0); the `--note` is stored on the group and every later fixer of it gets it as the user's ruling |
-| `python3 devloop/tickets.py cancel N --why ...` | drop a ticket |
+| `python3 devloop/tickets.py ready N [--by NAME] [--page P]` | after deciding on a stuck ticket |
+| `python3 devloop/tickets.py ready gN [--note "..."] [--by NAME] [--page P]` | a stuck group whose branch and merged tickets are still there: verify it again (fix rounds back to 0); the `--note` is stored on the group and every later fixer of it gets it as the user's ruling; `--by` names who gave the answer on the events and `--page` acks that page in the same write |
+| `python3 devloop/tickets.py cancel N --why ... [--by NAME] [--page P]` | drop a ticket |
 | `python3 devloop/tickets.py release gN [--again]` | re-run a landed group's failed release once (`--again` also when it was ok); the outcome is a page |
-| `python3 devloop/tickets.py cancel gN --why ...` | close a stuck or open group with no running member: its ready and merged tickets are cancelled, the branch is kept; one `cancelled` page lists them |
+| `python3 devloop/tickets.py cancel gN --why ... [--by NAME] [--page P]` | close a stuck or open group with no running member: its ready and merged tickets are cancelled, the branch is kept; one `cancelled` page lists them (it names `--by`); `--page` acks that page in the same write |
 | `python3 devloop/board.py serve [--port 8765] [--key-file F]` | the dashboard (or `board.py html --out F [--query Q]`) |
 
 Agents run their tests with `python3 devloop/run_tests.py <ids>` (output stays in their run directory).

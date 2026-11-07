@@ -967,6 +967,52 @@ class FrozenWrites(LoopCase):
         self.assertEqual(self.snap().ticket("1")["state"], "ready")
 
 
+class AnswerNaming(LoopCase):
+    """ack_in, ack --by and the user answer event (the implementer's unit cases)."""
+
+    def page(self, name, ref):
+        self.pool.update(lambda tx: tx.write("inbox/%s.json" % name, {
+            "kind": "decision", "ref": ref, "text": "t", "at": osx.now(), "acked": False}), "test: page")
+
+    def test_ack_in_marks_a_page_and_returns_none_for_a_missing_one(self):
+        import tickets
+        self.page("p1", "1")
+        got = []
+
+        def change(tx):
+            got.append(tickets.ack_in(tx, "p1", "a@x.com"))
+            got.append(tickets.ack_in(tx, "nope", "a@x.com"))
+        self.pool.update(change, "test")
+        self.assertIsNone(got[1])
+        row = self.snap().inbox["p1"]
+        self.assertTrue(row["acked"])
+        self.assertEqual(row["acked_by"], "a@x.com")
+
+    def test_ack_by_writes_an_event_on_the_subject_and_all_writes_none(self):
+        self.add(1)
+        self.page("p1", "1")
+        self.page("p2", "1")
+        res = self.run_py("tickets.py", "ack", "p1", "--by", "a@x.com")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        hist = self.snap().tickets["1"]["history"]
+        self.assertEqual([(h["event"], h["page"], h["by"]) for h in hist if h["event"] == "page acknowledged"],
+                         [("page acknowledged", "p1", "a@x.com")])
+        res = self.run_py("tickets.py", "ack", "--all", "--by", "b@x.com")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        snap = self.snap()
+        self.assertEqual(snap.inbox["p2"]["acked_by"], "b@x.com")
+        self.assertEqual(len([h for h in snap.tickets["1"]["history"] if h["event"] == "page acknowledged"]), 1)
+
+    def test_cancel_ticket_by_name_acks_its_page(self):
+        self.add(1)
+        self.page("p1", "1")
+        res = self.run_py("tickets.py", "cancel", "1", "--why", "w", "--by", "a@x.com", "--page", "p1")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        snap = self.snap()
+        self.assertEqual(snap.tickets["1"]["history"][-1]["by"], "a@x.com")
+        self.assertEqual(snap.inbox["p1"]["acked_by"], "a@x.com")
+
+
 class CasesThrownOut(LoopCase):
     def test_a_cases_wrong_revision_after_the_last_round_start_throws_out_the_cases(self):
         import ticket_issuer

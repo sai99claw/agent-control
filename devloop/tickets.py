@@ -55,7 +55,23 @@ def cmd_show(pool, args):
     return 0
 
 
-def _set(pool, ident, state, why):
+def ack_in(tx, page, by=None):
+    """Mark one inbox page acked inside the caller's change(tx); returns the row, or None when the
+    page is missing."""
+    row = tx.data.inbox.get(page) if page else None
+    if row is None:
+        return None
+    if not row.get("acked"):
+        row["acked"], row["acked_at"] = True, osx.now()
+        if by:
+            row["acked_by"] = by
+        elif not row.get("acked_by"):
+            row["acked_by"] = "answer"
+        tx.write("inbox/%s.json" % page, row)
+    return row
+
+
+def _set(pool, ident, state, why, by=None, page=None):
     def change(tx):
         t = tx.ticket(ident)
         frozen = frozen_reason(ident, t.get("state"))
@@ -70,14 +86,15 @@ def _set(pool, ident, state, why):
                 g = tx.data.groups.get(t["group"])
                 if not g or g.get("state") != "open":
                     t["group"], t["target"] = None, None
-        event(t, "set %s by main" % state, why=why)
+        event(t, "set %s by main" % state, why=why, **({"by": by} if by else {}))
         tx.put_ticket(t)
+        ack_in(tx, page, by)
     pool.update(change, "#%s: %s (main)" % (ident, state))
     print("#%s is %s" % (ident, state))
     return 0
 
 
-def cmd_ready_group(pool, cfg, gid, why, note=None):
+def cmd_ready_group(pool, cfg, gid, why, note=None, by=None, page=None):
     """Send a stuck group (branch kept, at least one merged member) back to the regression.
     Only the group is written; its tickets stay as they are."""
     def change(tx):
@@ -94,16 +111,17 @@ def cmd_ready_group(pool, cfg, gid, why, note=None):
         g["state"], g["fix_round"], g["job"] = "pr", 0, None
         detail = {"why": why}
         if note is not None:
-            g.setdefault("notes", []).append({"text": note, "by": "user", "at": osx.now()})
+            g.setdefault("notes", []).append({"text": note, "by": by or "user", "at": osx.now()})
             detail["note"] = note
-        event(g, "ready again by the user", by="user", **detail)
+        event(g, "ready again by the user", by=by or "user", **detail)
         tx.put_group(g)
+        ack_in(tx, page, by)
     pool.update(change, "group %s: ready again (main)" % gid)
     print("group %s goes back to the regression (fix rounds reset to 0)" % gid)
     return 0
 
 
-def cmd_cancel_group(pool, gid, why):
+def cmd_cancel_group(pool, gid, why, by=None, page=None):
     """Close a stuck or open group that has no running member. Its ready and merged members become
     cancelled; other members and the integration branch are left as they are. One page lists them."""
     def change(tx):
@@ -120,15 +138,17 @@ def cmd_cancel_group(pool, gid, why):
         for t in members:
             if t and t.get("state") in ("ready", "merged"):
                 t["state"] = "cancelled"
-                event(t, "cancelled with group %s" % gid, by="user", why=why)
+                event(t, "cancelled with group %s" % gid, by=by or "user", why=why)
                 tx.put_ticket(t)
                 done.append("#%s" % t["id"])
         g["state"] = "cancelled"
-        event(g, "cancelled by the user", by="user", why=why)
+        event(g, "cancelled by the user", by=by or "user", why=why)
         tx.put_group(g)
+        ack_in(tx, page, by)
         return done
     done = pool.update(change, "group %s: cancelled (main)" % gid)
-    text = "group %s cancelled by the user (%s); cancelled tickets: %s" % (gid, why, ", ".join(done) or "none")
+    text = "group %s cancelled by %s (%s); cancelled tickets: %s" % (
+        gid, by or "the user", why, ", ".join(done) or "none")
     pool.report("cancelled", gid, text)
     print(text)
     return 0
@@ -147,13 +167,23 @@ def cmd_inbox(pool, args):
 
 
 def cmd_ack(pool, args):
+    by = getattr(args, "by", None)
+
     def change(tx):
         n = 0
-        for name, row in tx.data.inbox.items():
+        for name, row in list(tx.data.inbox.items()):
             if (args.all or name == args.page) and not row.get("acked"):
+                if by:
+                    row["acked_by"] = by
                 row["acked"], row["acked_at"] = True, osx.now()
                 tx.write("inbox/%s.json" % name, row)
                 n += 1
+                ref = str(row.get("ref") or "")
+                if by and not args.all:
+                    subject = tx.data.tickets.get(ref) or tx.data.groups.get(ref)
+                    if subject is not None:
+                        event(subject, "page acknowledged", page=name, by=by)
+                        (tx.put_ticket if ref in tx.data.tickets else tx.put_group)(subject)
         return n
     print("acked %d" % pool.update(change, "inbox: ack"))
     return 0
@@ -227,14 +257,19 @@ def main(argv=None):
     p.add_argument("id")
     p.add_argument("--why", default="")
     p.add_argument("--note", default=None)
+    p.add_argument("--by", default=None)
+    p.add_argument("--page", default=None)
     p = sub.add_parser("cancel")
     p.add_argument("id")
     p.add_argument("--why", default="")
+    p.add_argument("--by", default=None)
+    p.add_argument("--page", default=None)
     p = sub.add_parser("inbox")
     p.add_argument("--all", action="store_true")
     p = sub.add_parser("ack")
     p.add_argument("page", nargs="?")
     p.add_argument("--all", action="store_true")
+    p.add_argument("--by", default=None)
     p = sub.add_parser("lessons")
     p.add_argument("--layer", required=True, choices=memory.LAYERS)
     p.add_argument("--name")
@@ -257,14 +292,14 @@ def main(argv=None):
                   file=sys.stderr)
             return 2
         if args.cmd == "ready" and re.fullmatch(r"g\d+", args.id):
-            return cmd_ready_group(pool, cfg, args.id, args.why, args.note)
+            return cmd_ready_group(pool, cfg, args.id, args.why, args.note, args.by, args.page)
         if args.cmd == "cancel" and re.fullmatch(r"g\d+", args.id):
-            return cmd_cancel_group(pool, args.id, args.why)
+            return cmd_cancel_group(pool, args.id, args.why, args.by, args.page)
         if args.cmd == "release":
             return cmd_release(pool, cfg, args)
         return {"list": cmd_list, "show": cmd_show, "inbox": cmd_inbox, "ack": cmd_ack, "lessons": cmd_lessons,
-                "ready": lambda p, a: _set(p, a.id, "ready", a.why),
-                "cancel": lambda p, a: _set(p, a.id, "cancelled", a.why)}[args.cmd](pool, args)
+                "ready": lambda p, a: _set(p, a.id, "ready", a.why, a.by, a.page),
+                "cancel": lambda p, a: _set(p, a.id, "cancelled", a.why, a.by, a.page)}[args.cmd](pool, args)
     except osx.OSFailure as exc:
         print("tickets: %s" % exc, file=sys.stderr)
         return 2

@@ -60,14 +60,14 @@ def guarded(text, via):
     return "%s\n\n%s\n%s\n%s" % (agents.raw("web-guard.md"), MARK_OPEN, clean, MARK_CLOSE)
 
 
-def ack(pool, page):
+def ack(pool, page, by=None):
     if not page:
         return
 
     def change(tx):
         row = tx.data.inbox.get(page)
         if row is not None and not row.get("acked"):
-            row["acked"], row["acked_at"], row["acked_by"] = True, osx.now(), "answer"
+            row["acked"], row["acked_at"], row["acked_by"] = True, osx.now(), by or "answer"
             tx.write("inbox/%s.json" % page, row)
     pool.update(change, "inbox: answered %s" % page)
 
@@ -288,19 +288,29 @@ def user_reset(pool, ident, state, note, changes=None, cases_wrong=False, by=Non
 
 def decide(cfg, pool, ident, decision, text, via, page, by=None):
     """A user's answer to a page about one ticket: revise | retry | cancel."""
+    def record(tx):
+        row = tx.ticket(ident)
+        if row.get("state") == "running":
+            raise osx.OSFailure("#%s is running; it cannot be changed now" % ident)
+        detail = {"decision": decision, "text": (text or "")[:2000], "by": by or "user"}
+        if page:
+            detail["page"] = page
+        event(row, "user answer", **detail)
+        tx.put_ticket(row)
+    pool.update(record, "#%s: user answer (%s)" % (ident, decision))
     if decision == "cancel":
         user_reset(pool, ident, "cancelled", text or "cancelled by the user", by=by)
-        ack(pool, page)
+        ack(pool, page, by)
         print("CANCELLED #%s" % ident)
         return 0
     if decision == "retry":
         user_reset(pool, ident, "ready", text or "try again unchanged", by=by)
-        ack(pool, page)
+        ack(pool, page, by)
         print("READY AGAIN #%s" % ident)
         return 0
     rc = revise(cfg, pool, ident, "user", text, via=via, by=by)
     if rc in (0, 3):
-        ack(pool, page)
+        ack(pool, page, by)
     return rc
 
 
