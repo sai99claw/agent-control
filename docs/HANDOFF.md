@@ -265,3 +265,17 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
   用 retry 從新 main 重跑才落地);auto_fixer 照票修、記下改過的案例、矛盾時發 decision;main 只動記憶與主線文件時落地不重驗
   (D-090,在 g7 實測生效:主線推 D-090 進 main 後,g7 只跑一次全套)。main = 6cc1406。
 - 發版在雲端依舊推不了 tag,每組一頁 decision,已 ack。
+
+## 2026-11-07 看板改版、流程修正、取消 Google 登入(D-091–D-093)
+
+- g9(22 張:#30–#47、#50–#52)落地,main = e076e44:額度用完時暫停到重置、不扣輪;等機器名額不計逾時;一組最多 10 張;
+  `ready g<N> --note` 把使用者的話交給 fixer(先過注入檢查);fixer 改舊測試要寫依據;`devloop.worktree_setup`;env 壞的組暫停、
+  `tickets.py rerun g<N>`;答覆署名並收掉那一頁。看板:票 / DAG / Token / 主機分頁、篩選、時間軸、卡住原因 8 類、key 不進網址、
+  portal 信任標頭(`board.trusted_user_header` + `board.allowed_users`)。
+- g9 第一次 regression 全紅,原因是雲端容器的全域 git 簽章在大量 commit 下失敗(環境問題)→ g10(#54、#55)讓測試用隔離的 git 設定,
+  adapter 把這類錯誤算成環境問題;g10 落地 c9e923c,g9 之後才綠。
+- D-093:使用者不要看板有任何使用者登入。g11(#48 Google 登入、#49、#53)在落地前整組取消(先停 controller、中斷 #53 那一輪);
+  「要你判」改成 #56(分頁)、#57(卡片按鈕,署名 = 信任標頭的使用者或 `user`)重開,g12 落地 d499d34。main 上沒有 login/Google 的 code
+  (實測 git grep)。portal 信任標頭是主線判斷保留的,已請使用者確認。
+- 發版在雲端依舊推不了 tag(g9、g10、g12 各一頁,已 ack)。
+- 下一步:把更新說明交給 T(不含 Google OAuth);等使用者確認要不要留 portal 信任標頭。
