@@ -12030,3 +12030,508 @@ class T54Acceptance(unittest.TestCase):
 
     def test_item5_hostile_system_config(self):
         self.hostile_run("GIT_CONFIG_SYSTEM")
+
+
+class T64Acceptance(LoopCase):
+    """Acceptance of #64: live records under <worktrees>/runs/live/ (core/inflight.py, the opener,
+    the issuer and every agent devloop starts)."""
+
+    FMT = "%Y-%m-%dT%H:%M:%SZ"
+    STAMP_RE = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in list(os.environ):
+            if key.startswith("DEVLOOP_"):
+                del os.environ[key]
+        for key in list(self.env):
+            if key.startswith("DEVLOOP_"):
+                del self.env[key]
+        os.environ["AC_ROOT"] = self.proj
+        self.live_dir = os.path.join(self.tmp, "wt", "runs", "live")
+
+    # ------------------------------------------------------------ helpers
+
+    def mod(self):
+        import importlib.util
+        self.assertIsNotNone(importlib.util.find_spec("core.inflight"), "devloop/core/inflight.py is missing")
+        from core import inflight
+        return inflight
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def epoch(self, ts):
+        return calendar.timegm(time.strptime(ts, self.FMT))
+
+    def sleeper(self):
+        p = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(lambda: (p.poll() is None and p.terminate(), p.wait()))
+        return p
+
+    def live_stamp(self, started=None):
+        p = self.sleeper()
+        return {"pid": p.pid, "host": osx.host(), "boot": osx.boot_id(), "started": started or osx.now()}
+
+    def dead_stamp(self, started=None):
+        return dict(self.live_stamp(started), boot="other-boot")
+
+    def ago(self, seconds):
+        return time.strftime(self.FMT, time.gmtime(time.time() - seconds))
+
+    def live(self):
+        """[(file name without .json, record)] of every JSON object in the live folder."""
+        out = []
+        for path in sorted(glob.glob(os.path.join(self.live_dir, "*.json"))):
+            try:
+                with open(path) as fh:
+                    rec = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            if isinstance(rec, dict):
+                out.append((os.path.basename(path)[:-len(".json")], rec))
+        return out
+
+    def find(self, pred):
+        for name, rec in self.live():
+            if pred(rec):
+                return name, rec
+        return None
+
+    def wait_for(self, pred, timeout=20, proc=None):
+        """(name, record) of the first record matching pred, polled every 0.2 s; None on timeout
+        or when proc exited first."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            hit = self.find(pred)
+            if hit:
+                return hit
+            if proc is not None and proc.poll() is not None:
+                return self.find(pred)
+            time.sleep(0.2)
+        return None
+
+    def popen(self, script, *args, hold=8):
+        env = dict(self.env, FAKE_HOLD=str(hold))
+        out = open(os.path.join(self.tmp, "%s-%d.out" % (script, time.time() * 1000)), "w")
+        self.addCleanup(out.close)
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, script)] + list(args), cwd=self.proj,
+                                env=env, stdout=out, stderr=subprocess.STDOUT, text=True)
+
+        def reap():
+            if proc.poll() is None:
+                proc.terminate()
+            proc.wait(60)
+        self.addCleanup(reap)
+        return proc
+
+    def kill_agent_later(self, rec):
+        pid = (rec.get("stamp") or {}).get("pid")
+        if pid:
+            self.addCleanup(lambda: osx.alive(pid) and osx.kill_tree(pid))
+
+    def pid_is(self, kind, pid):
+        return lambda r: r.get("kind") == kind and (r.get("stamp") or {}).get("pid") == pid
+
+    def proc_started(self, pid):
+        with open("/proc/%d/stat" % pid) as fh:
+            data = fh.read()
+        ticks = int(data[data.rindex(")") + 2:].split()[19])
+        with open("/proc/stat") as fh:
+            btime = int([ln.split()[1] for ln in fh if ln.startswith("btime ")][0])
+        return btime + ticks / os.sysconf("SC_CLK_TCK")
+
+    def assert_here(self, st):
+        self.assertEqual(st.get("host"), osx.host(), st)
+        self.assertEqual(st.get("boot"), osx.boot_id(), st)
+
+    def running_ticket(self):
+        """Ticket 1 claimed for int/g1, ready for ticket_issuer.py started directly."""
+        self.add(1, state="running", group="g1", target="int/g1", claimed_at=osx.now(), needs_verifier=False)
+        git(self.proj, "branch", "int/g1", "main")
+
+    def set_agent(self, role, argv):
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            agents_cfg = json.load(fh)["devloop"]["agents"]
+        self.config(agents=dict(agents_cfg, **{role: argv}))
+
+    # ------------------------------------------------------------ items 1-5: core/inflight.py
+
+    def test_item1_module_and_folder(self):
+        inflight = self.mod()
+        for fn in ("folder", "put", "drop", "records", "status", "title_of"):
+            self.assertTrue(callable(getattr(inflight, fn, None)), fn)
+        cfg = self.cfg()
+        self.assertEqual(inflight.folder(cfg), os.path.join(cfg.worktree_root, "runs", "live"))
+        self.assertEqual(inflight.folder(cfg), self.live_dir)
+        self.assertFalse(os.path.exists(self.live_dir))
+        self.assertEqual(inflight.records(cfg), [])
+        self.assertFalse(os.path.exists(self.live_dir))
+
+    def test_item2_put_records_drop(self):
+        inflight = self.mod()
+        cfg = self.cfg()
+        rb = {"kind": "agent", "stamp": self.live_stamp(), "n": [1, 2], "x": None}
+        ra = {"kind": "opener", "stamp": self.live_stamp(), "title": "t"}
+        inflight.put(cfg, "b-rec", rb)
+        with open(os.path.join(self.live_dir, "b-rec.json")) as fh:
+            self.assertEqual(json.load(fh), rb)
+        inflight.put(cfg, "a-rec", ra)
+        with open(os.path.join(self.live_dir, "a-rec.json")) as fh:
+            self.assertEqual(json.load(fh), ra)
+        with open(os.path.join(self.live_dir, "broken.json"), "w") as fh:
+            fh.write("{not json")
+        with open(os.path.join(self.live_dir, "list.json"), "w") as fh:
+            json.dump([1, 2], fh)
+        with open(os.path.join(self.live_dir, "other.txt"), "w") as fh:
+            json.dump({"kind": "agent"}, fh)
+        self.assertEqual(inflight.records(cfg), [("a-rec", ra), ("b-rec", rb)])
+        inflight.drop(cfg, "a-rec")
+        self.assertFalse(os.path.exists(os.path.join(self.live_dir, "a-rec.json")))
+        inflight.drop(cfg, "a-rec")             # missing: no exception
+        inflight.drop(cfg, "never-there")
+        self.assertEqual(inflight.records(cfg), [("b-rec", rb)])
+
+    def test_item3_status(self):
+        inflight = self.mod()
+        handed = os.path.join(self.tmp, "result.json")
+        with open(handed, "w") as fh:
+            fh.write("{}")
+        missing = os.path.join(self.tmp, "nothing.json")
+        live, dead = self.live_stamp(), self.dead_stamp()
+        self.assertEqual(inflight.status({"stamp": live}), "running")
+        self.assertEqual(inflight.status({"stamp": live, "result": handed}), "running")
+        self.assertEqual(inflight.status({"stamp": dead, "result": handed}), "handed_in")
+        self.assertEqual(inflight.status({"stamp": dead, "result": missing}), "ended")
+        self.assertEqual(inflight.status({"stamp": dead, "result": None}), "ended")
+        self.assertEqual(inflight.status({"stamp": dead}), "ended")
+        self.assertEqual(inflight.status({}), "ended")
+        self.assertEqual(inflight.status({"kind": "agent", "result": None}), "ended")
+
+    def test_item4_put_sweeps_old_dead_records(self):
+        inflight = self.mod()
+        cfg = self.cfg()
+        handed = os.path.join(self.tmp, "result.json")
+        with open(handed, "w") as fh:
+            fh.write("{}")
+        os.makedirs(self.live_dir)
+        files = {
+            "old-dead": {"stamp": self.dead_stamp(self.ago(25 * 3600))},
+            "old-handed": {"stamp": self.dead_stamp(self.ago(25 * 3600)), "result": handed},
+            "recent-dead": {"stamp": self.dead_stamp(self.ago(3600))},
+            "old-running": {"stamp": self.live_stamp(self.ago(2 * 86400))},
+        }
+        for name, rec in files.items():
+            with open(os.path.join(self.live_dir, name + ".json"), "w") as fh:
+                json.dump(rec, fh)
+        new = {"kind": "agent", "stamp": self.live_stamp()}
+        inflight.put(cfg, "new", new)
+        left = sorted(os.path.basename(p)[:-5] for p in glob.glob(os.path.join(self.live_dir, "*.json")))
+        self.assertEqual(left, ["new", "old-running", "recent-dead"])
+
+    def test_item5_title_of(self):
+        inflight = self.mod()
+        cases = [("intro\n## Board: tab\nbody", "Board: tab"), ("first line\nsecond", "first line"),
+                 ("#\n\nplain", "plain"), ("x" * 200, "x" * 120), ("", None),
+                 ("\n   \n\t\n", None), ("  ###  Spaced title  \nx", "Spaced title"),
+                 ("\n\n  lead  \n# Head", "Head"), ("# " + "y" * 300, "y" * 120)]
+        for text, want in cases:
+            self.assertEqual(inflight.title_of(text), want, repr(text))
+
+    # ------------------------------------------------------------ items 6, 7: the opener
+
+    def check_opener(self, args, text, via):
+        inflight = self.mod()
+        from core import agents
+        cfg = self.cfg()
+        t0 = time.time()
+        proc = self.popen("ticket_creator.py", *args, hold=8)
+        hit = self.wait_for(self.pid_is("opener", proc.pid), proc=proc)
+        self.assertIsNotNone(hit, "no opener record for pid %d; folder: %s" % (proc.pid, self.live()))
+        _, rec = hit
+        self.assertEqual(len([r for _, r in self.live() if r.get("kind") == "opener"]), 1, self.live())
+        st = rec["stamp"]
+        self.assert_here(st)
+        self.assertRegex(st.get("started") or "", "^%s$" % self.STAMP_RE)
+        started = self.epoch(st["started"])
+        self.assertGreaterEqual(started, int(t0) - 1, st)
+        self.assertLessEqual(started, t0 + 3, st)
+        self.assertEqual(rec.get("title"), inflight.title_of(text))
+        self.assertIsNone(rec.get("revise"), rec)
+        self.assertEqual(rec.get("via"), via, rec)
+        self.assertEqual(rec.get("model"), agents.model_of(cfg.agent("creator")), rec)
+        self.assertEqual(rec.get("effort"), agents.effort_of(cfg.agent("creator")), rec)
+        self.assertIsNone(rec.get("result"), rec)
+        proc.wait(60)
+        self.assertIsNone(self.find(self.pid_is("opener", proc.pid)), self.live())
+
+    def test_item6_opener_record_while_a_request_runs(self):
+        text = "intro\n# My title\nbody"
+        self.check_opener(["--request", text], text, "main")
+        self.assertEqual(self.mod().title_of(text), "My title")
+
+    def test_item6_opener_record_from_a_request_file_via_web(self):
+        text = "## Web asked title\nplease add a page\n"
+        path = os.path.join(self.tmp, "request.md")
+        with open(path, "w") as fh:
+            fh.write(text)
+        self.check_opener(["--request-file", path, "--via", "web"], text, "web")
+
+    def test_item7_opener_record_while_a_revise_runs(self):
+        self.mod()
+        self.add(1)
+        proc = self.popen("ticket_creator.py", "--revise", "1", "--from", "worker", "--reason", "r", hold=8)
+        hit = self.wait_for(self.pid_is("opener", proc.pid), proc=proc)
+        self.assertIsNotNone(hit, "no opener record for pid %d; folder: %s" % (proc.pid, self.live()))
+        rec = hit[1]
+        self.assertEqual(rec.get("revise"), "1", rec)
+        self.assertIsNone(rec.get("title"), rec)
+        self.assert_here(rec["stamp"])
+        proc.wait(60)
+        self.assertIsNone(self.find(self.pid_is("opener", proc.pid)), self.live())
+
+    # ------------------------------------------------------------ items 8, 11: agent and issuer under the controller
+
+    def test_item8_and_11_agent_and_issuer_records_under_the_controller(self):
+        self.mod()
+        from core import agents
+        self.add(1, complexity="simple", needs_verifier=False)
+        proc = self.popen("ticket_controller.py", hold=8)
+        hit = self.wait_for(lambda r: r.get("kind") == "agent" and r.get("role") == "worker_simple", proc=proc)
+        self.assertIsNotNone(hit, "no worker_simple agent record; folder: %s" % self.live())
+        issuer = self.find(lambda r: r.get("kind") == "issuer")
+        t = self.snap().ticket("1")
+        rec = hit[1]
+        st = rec["stamp"]
+        parent = (t.get("run") or {}).get("pid")
+        self.assertTrue(parent, t)
+        self.assertEqual(rec.get("state"), "running", rec)
+        self.assertEqual(rec.get("parent"), parent, rec)
+        self.assertNotEqual(st.get("pid"), parent, rec)
+        self.assertTrue(osx.alive(st.get("pid")), rec)
+        self.assert_here(st)
+        self.assertLessEqual(abs(self.epoch(st["started"]) - self.proc_started(st["pid"])), 3, rec)
+        self.assertEqual(rec.get("ticket"), "1", rec)
+        self.assertIsNone(rec.get("group"), rec)        # the issuer's extra_env has no DEVLOOP_GROUP
+        self.assertEqual(rec.get("round"), 1, rec)
+        run_dir = os.path.join(self.tmp, "wt", "runs", "1", "r1-worker")
+        self.assertEqual(rec.get("run_dir"), run_dir, rec)
+        log = rec.get("log") or ""
+        self.assertEqual(os.path.dirname(log), run_dir, rec)
+        self.assertRegex(os.path.basename(log), r"^agent-\d+\.log$")
+        self.assertTrue(os.path.exists(log), rec)
+        self.assertEqual(rec.get("result"), os.path.join(run_dir, "result.json"), rec)
+        self.assertEqual(rec.get("command"), "python3", rec)
+        self.assertEqual(rec.get("model"), agents.model_of(AGENT), rec)
+        self.assertIsNone(rec.get("effort"), rec)
+        self.assertRegex(rec.get("since") or "", "^%s$" % self.STAMP_RE)
+        self.assertIsNone(rec.get("until"), rec)
+        # item 11: the issuer's record at the same moment
+        self.assertIsNotNone(issuer, "no issuer record; folder: %s" % self.live())
+        irec = issuer[1]
+        self.assertEqual(irec.get("ticket"), "1", irec)
+        self.assertEqual(irec.get("target"), t.get("target"), irec)
+        self.assertTrue(t.get("target"), t)
+        self.assertEqual(irec.get("round"), t.get("round"), (irec, t.get("round")))
+        self.assertEqual(irec.get("round"), 1, irec)
+        self.assertEqual(irec["stamp"].get("pid"), parent, irec)
+        proc.wait(120)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual([r for _, r in self.live() if r.get("kind") in ("agent", "issuer")], [])
+
+    def test_item8_in_process_record_follows_extra_env_and_goes_with_stop(self):
+        self.mod()
+        from core import agents
+        argv = ["sh", "-c", "cat >/dev/null; sleep 30"]
+        self.set_agent("worker_simple", argv)
+        os.environ["DEVLOOP_TICKET"] = "999"   # inherited: never read for the record
+        os.environ["DEVLOOP_GROUP"] = "g999"
+        cfg = self.cfg()
+        run_dir = os.path.join(self.tmp, "run-a")
+        p = agents.start(cfg, "worker", "go", self.proj, run_dir, 60,
+                         extra_env={"DEVLOOP_TICKET": "7", "DEVLOOP_GROUP": "g7"}, round_no=2,
+                         chain_role="worker_simple")
+        self.addCleanup(lambda: p.proc is not None and osx.alive(p.proc.pid) and osx.kill_tree(p.proc.pid))
+        hit = self.wait_for(lambda r: r.get("kind") == "agent", timeout=5)
+        self.assertIsNotNone(hit, "no agent record; folder: %s" % self.live())
+        rec = hit[1]
+        self.assertEqual(rec.get("state"), "running", rec)
+        self.assertEqual(rec["stamp"].get("pid"), p.proc.pid, rec)
+        self.assertEqual(rec.get("parent"), os.getpid(), rec)
+        self.assertEqual((rec.get("role"), rec.get("ticket"), rec.get("group"), rec.get("round")),
+                         ("worker_simple", "7", "g7", 2), rec)
+        self.assertEqual(rec.get("run_dir"), run_dir, rec)
+        self.assertEqual(rec.get("log"), p.log, rec)
+        self.assertEqual(rec.get("command"), "sh", rec)
+        self.assertEqual(rec.get("model"), agents.model_of(argv), rec)
+        self.assertEqual(rec.get("effort"), agents.effort_of(argv), rec)
+        self.assertEqual(rec.get("result"), os.path.join(run_dir, "result.json"), rec)
+        p.stop()
+        self.assertEqual([r for _, r in self.live() if r.get("kind") == "agent"], [])
+
+    def test_item8_in_process_record_without_extra_env_goes_with_finish(self):
+        self.mod()
+        from core import agents
+        self.set_agent("worker", ["sh", "-c", 'cat >/dev/null; sleep 2; echo \'{"kind": "done"}\' > "$DEVLOOP_RESULT"'])
+        os.environ["DEVLOOP_TICKET"] = "999"
+        os.environ["DEVLOOP_GROUP"] = "g999"
+        cfg = self.cfg()
+        run_dir = os.path.join(self.tmp, "run-b")
+        p = agents.start(cfg, "worker", "go", self.proj, run_dir, 60, round_no=1)
+        hit = self.wait_for(lambda r: r.get("kind") == "agent", timeout=5)
+        self.assertIsNotNone(hit, "no agent record; folder: %s" % self.live())
+        rec = hit[1]
+        self.assertEqual((rec.get("role"), rec.get("ticket"), rec.get("group")), ("worker", None, None), rec)
+        hand = p.finish()
+        self.assertEqual(hand.kind, "done")
+        self.assertEqual([r for _, r in self.live() if r.get("kind") == "agent"], [])
+
+    # ------------------------------------------------------------ item 9: waiting for a machine slot
+
+    def test_item9_slot_wait_then_running_in_the_same_record(self):
+        self.mod()
+        from core import slots
+        self.config(machine_slots=1)
+        slot = slots.take(self.cfg(), None)
+        self.assertTrue(slot and slot.held)
+        self.addCleanup(slot.release)
+        self.add(1, complexity="simple", needs_verifier=False)
+        t0 = time.time()
+        proc = self.popen("ticket_controller.py", hold=2)
+        hit = self.wait_for(lambda r: r.get("kind") == "agent" and r.get("state") == "slot", proc=proc)
+        seen = time.time()
+        self.assertIsNotNone(hit, "no agent record waiting for a slot; folder: %s" % self.live())
+        name, rec = hit
+        starter = (self.snap().ticket("1").get("run") or {}).get("pid")
+        self.assertTrue(starter)
+        self.assertEqual(rec["stamp"].get("pid"), starter, rec)
+        self.assertRegex(rec.get("since") or "", "^%s$" % self.STAMP_RE)
+        since = self.epoch(rec["since"])
+        self.assertGreaterEqual(since, int(t0) - 1, rec)
+        self.assertLessEqual(since, seen + 1, rec)
+        slot.release()
+        hit = self.wait_for(lambda r: r.get("kind") == "agent" and r.get("state") == "running", proc=proc)
+        self.assertIsNotNone(hit, "the waiting record never turned running; folder: %s" % self.live())
+        self.assertEqual(hit[0], name)
+        self.assertNotEqual(hit[1]["stamp"].get("pid"), starter, hit[1])
+        proc.wait(120)
+
+    # ------------------------------------------------------------ item 10: waiting for a quota reset
+
+    def test_item10_quota_wait_record(self):
+        self.mod()
+        import threading
+        from core import agents
+        count = os.path.join(self.tmp, "count")
+        self.set_agent("worker", ["sh", "-c", 'cat >/dev/null; n=$(cat %s 2>/dev/null || echo 0); '
+                                  'echo $((n+1)) > %s; if [ "$n" -lt 1 ]; then echo "Error: usage limit reached"; '
+                                  'exit 1; fi; sleep 4; echo \'{"kind": "done"}\' > "$DEVLOOP_RESULT"'
+                                  % (count, count)])
+        self.config(quota_retry_seconds=3)
+        cfg = self.cfg()
+        phases, untils = [], []
+
+        def hook(phase, row=None, until=None, text=None):
+            phases.append(phase)
+            if phase == "wait":
+                untils.append(until)
+        p = agents.start(cfg, "worker", "go", self.proj, os.path.join(self.tmp, "run"), 60, on_quota=hook)
+        done = {}
+        th = threading.Thread(target=lambda: done.setdefault("hand", p.finish()))
+        th.start()
+        self.addCleanup(th.join, 60)
+        deadline = time.time() + 15
+        while "wait" not in phases and time.time() < deadline:
+            time.sleep(0.05)
+        self.assertIn("wait", phases)
+        rec = self.find(lambda r: r.get("kind") == "agent")
+        self.assertNotIn("over", phases, "the quota wait ended before the record was read")
+        self.assertIsNotNone(rec, "no agent record during the quota wait; folder: %s" % self.live())
+        name, rec = rec
+        self.assertEqual(rec.get("state"), "quota", rec)
+        self.assertEqual(rec["stamp"].get("pid"), os.getpid(), rec)
+        self.assertEqual(rec.get("until"), time.strftime(self.FMT, time.gmtime(untils[0])), rec)
+        hit = self.wait_for(lambda r: r.get("kind") == "agent" and r.get("state") == "running", timeout=10)
+        self.assertIsNotNone(hit, "no running record after the wait; folder: %s" % self.live())
+        self.assertEqual(hit[0], name)
+        self.assertNotEqual(hit[1]["stamp"].get("pid"), os.getpid(), hit[1])
+        self.assertEqual(hit[1]["stamp"].get("pid"), p.proc.pid, hit[1])
+        th.join(30)
+        self.assertEqual(done["hand"].kind, "done")
+        self.assertEqual([r for _, r in self.live() if r.get("kind") == "agent"], [])
+
+    # ------------------------------------------------------------ item 11: the issuer started directly
+
+    def test_item11_round_is_rewritten_at_each_round_start(self):
+        self.mod()
+        self.add(1)
+        self.plan(worker={"1": ["wrong", "ok"]})
+        proc = self.popen("ticket_controller.py", hold=3)
+        hit = self.wait_for(lambda r: r.get("kind") == "issuer" and r.get("round") == 1, timeout=30, proc=proc)
+        self.assertIsNotNone(hit, "no issuer record in round 1; folder: %s" % self.live())
+        hit = self.wait_for(lambda r: r.get("kind") == "issuer" and r.get("round") == 2, timeout=60, proc=proc)
+        self.assertIsNotNone(hit, "the issuer record never said round 2; folder: %s" % self.live())
+        self.assertEqual(hit[1].get("ticket"), "1")
+        proc.wait(120)
+        self.assertEqual(self.snap().ticket("1").get("round"), 2)
+        self.assertEqual([r for _, r in self.live() if r.get("kind") == "issuer"], [])
+
+    def test_item11_issuer_record_goes_on_sigterm(self):
+        self.mod()
+        self.running_ticket()
+        proc = self.popen("ticket_issuer.py", "--id", "1", "--target", "int/g1", hold=30)
+        hit = self.wait_for(self.pid_is("issuer", proc.pid), proc=proc)
+        self.assertIsNotNone(hit, "no issuer record; folder: %s" % self.live())
+        self.assertEqual((hit[1].get("ticket"), hit[1].get("target")), ("1", "int/g1"), hit[1])
+        agent = self.wait_for(lambda r: r.get("kind") == "agent" and r.get("parent") == proc.pid, proc=proc)
+        if agent:
+            self.kill_agent_later(agent[1])
+        proc.terminate()
+        proc.wait(60)
+        self.assertIsNone(self.find(self.pid_is("issuer", proc.pid)), self.live())
+
+    def test_item11_issuer_record_goes_when_stuck(self):
+        self.mod()
+        self.running_ticket()
+        self.plan(worker={"1": ["blocked"]})
+        proc = self.popen("ticket_issuer.py", "--id", "1", "--target", "int/g1", hold=4)
+        hit = self.wait_for(self.pid_is("issuer", proc.pid), proc=proc)
+        self.assertIsNotNone(hit, "no issuer record; folder: %s" % self.live())
+        proc.wait(60)
+        self.assertEqual(self.state(1), "stuck")
+        self.assertIsNone(self.find(self.pid_is("issuer", proc.pid)), self.live())
+
+    # ------------------------------------------------------------ item 12: killed processes leave an 'ended' record
+
+    def test_item12_killed_opener_leaves_an_ended_record(self):
+        inflight = self.mod()
+        proc = self.popen("ticket_creator.py", "--request", "add a page", hold=30)
+        hit = self.wait_for(self.pid_is("opener", proc.pid), proc=proc)
+        self.assertIsNotNone(hit, "no opener record; folder: %s" % self.live())
+        agent = self.wait_for(lambda r: r.get("kind") == "agent" and r.get("parent") == proc.pid, proc=proc)
+        self.assertIsNotNone(agent, "no creator agent record; folder: %s" % self.live())
+        self.kill_agent_later(agent[1])
+        proc.kill()
+        proc.wait(30)
+        left = self.find(self.pid_is("opener", proc.pid))
+        self.assertIsNotNone(left, self.live())
+        self.assertEqual(inflight.status(left[1]), "ended")
+
+    def test_item12_killed_issuer_leaves_an_ended_record(self):
+        inflight = self.mod()
+        self.running_ticket()
+        proc = self.popen("ticket_issuer.py", "--id", "1", "--target", "int/g1", hold=30)
+        hit = self.wait_for(self.pid_is("issuer", proc.pid), proc=proc)
+        self.assertIsNotNone(hit, "no issuer record; folder: %s" % self.live())
+        agent = self.wait_for(lambda r: r.get("kind") == "agent" and r.get("parent") == proc.pid, proc=proc)
+        self.assertIsNotNone(agent, "no worker agent record; folder: %s" % self.live())
+        self.kill_agent_later(agent[1])
+        proc.kill()
+        proc.wait(30)
+        left = self.find(self.pid_is("issuer", proc.pid))
+        self.assertIsNotNone(left, self.live())
+        self.assertEqual(inflight.status(left[1]), "ended")
