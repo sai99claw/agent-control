@@ -714,6 +714,10 @@ def render_live_tab(cfg, snap, key, query, now):
     out.append('<div class="scroll"><table class="live">')
     out.extend(render_live_row(r, now, slots_text) for r in rows)
     out.append("</table></div></section>")
+    if key:
+        # the page / opens when nothing waits, so it keeps the request form and the web jobs (#46, #47)
+        out.append(REQUEST_FORM)
+        out.append(render_jobs(cfg))
     return "\n".join(out)
 
 
@@ -883,15 +887,18 @@ def render_filters(snap, f):
     return "".join(parts)
 
 
+REQUEST_FORM = ("<section><h2>交代新的事</h2><form method='post' action='request' class='ask'>"
+                "<textarea name='text' data-draft='request' rows='5' maxlength='8000' required "
+                "placeholder='像跟主線說話一樣寫:要做什麼、為什麼'></textarea>"
+                "<div><button>交給開題者</button> <span class='quiet'>跟在主線下 ticket_creator.py "
+                "一樣;網頁來的文字會先做注入檢查。</span></div></form></section>")
+
+
 def render_tickets_tab(cfg, snap, key, query, now):
     out = [FILTER_STYLE]
     f = ticket_filters(query)
     if key:
-        out.append("<section><h2>交代新的事</h2><form method='post' action='request' class='ask'>"
-                   "<textarea name='text' data-draft='request' rows='5' maxlength='8000' required "
-                   "placeholder='像跟主線說話一樣寫:要做什麼、為什麼'></textarea>"
-                   "<div><button>交給開題者</button> <span class='quiet'>跟在主線下 ticket_creator.py "
-                   "一樣;網頁來的文字會先做注入檢查。</span></div></form></section>")
+        out.append(REQUEST_FORM)
 
     order = [i for i in dagmod.topo(snap.dag) + sorted(set(snap.tickets) - set(snap.dag)) if i in snap.tickets]
     order = [i for i in order if ticket_shown(snap.tickets[i], f)]
