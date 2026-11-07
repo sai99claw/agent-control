@@ -76,6 +76,15 @@ back to "pr" with its fix round not counted, is paused, and the controller stops
 `--forever` it keeps running); for a release the release failed (a decision page; not retried, not
 rolled back). Every such text contains `devloop.worktree_setup`.
 
+`devloop.prices` (default null; `{}` is the same): maps a model name (the row's `model`: the value
+after `--model`, else the command's file name) to `{"input": n, "cached_input": n, "output": n}`,
+US dollars per million tokens, each a number >= 0. A codex agent run's cost row sums the
+`turn.completed` usage of its `exec --json` events: `input_tokens` is the sum of input minus the sum
+of cached input (codex counts cached input inside input), `cache_read_tokens` the cached sum,
+`output_tokens` the output sum, and `usd` is computed from the model's prices, or stays unknown
+(null) when there is no table or no entry for the model. A claude row keeps the CLI's own
+`total_cost_usd`. A malformed table makes the config fail with a text containing `devloop.prices`.
+
 ## Machine slots
 
 `machine_slots` (default null = no limit) caps the heavy runs on the machine at N, across every
@@ -127,7 +136,8 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
   reset in its log, without a hand-in). When the last command of the chain says quota, the issuer
   waits for the reset read from the CLI's message ("resets 3pm", "resets 3:30pm", "resets at
   15:00", "will reset at 5pm" as local time; "resets in 2h 30m" / "in 45m" / "in 1 hour";
-  "... limit reached|<epoch>"; the last one in the message wins; a minute is added) or, when none
+  codex's "try again at Nov 11th, 2026 2:23 AM" (year optional), "try again at 2:23 AM" and
+  "try again in 2 days 3 hours 5 minutes"; "... limit reached|<epoch>"; the last one in the message wins; a minute is added) or, when none
   is readable, `devloop.quota_retry_seconds` (default 1800), then runs the chain again from its
   first command. The wait costs no round, no feedback entry and no issuer time
   (`issuer_timeout_seconds` moves by it) and holds no machine slot; the ticket stays running with

@@ -4303,6 +4303,105 @@ class T31Acceptance(LoopCase):
         self.assertIn("額度用完", res.stdout)
 
 
+class T60Acceptance(unittest.TestCase):
+    """#60: quota_reset reads codex's 'try again at <date> <time>' and 'try again in <duration>'."""
+
+    AT = time.mktime((2026, 11, 7, 14, 0, 0, 0, 0, -1))
+    CODEX = "You've hit your usage limit ... try again at Nov 11th, 2026 2:23 AM"
+
+    @staticmethod
+    def local(y, mo, d, h, mi):
+        return time.mktime((y, mo, d, h, mi, 0, 0, 0, -1))
+
+    def agents(self):
+        from core import agents
+        self.assertTrue(hasattr(agents, "quota_reset"), "agents.quota_reset is missing")
+        self.assertTrue(hasattr(agents, "quota_wait"), "agents.quota_wait is missing")
+        return agents
+
+    # 1
+    def test_a_dated_codex_message_gives_its_moment(self):
+        agents = self.agents()
+        self.assertEqual(agents.quota_reset(self.CODEX, self.AT), self.local(2026, 11, 11, 2, 23))
+
+    # 2
+    def test_quota_wait_ends_at_the_dated_reset(self):
+        agents = self.agents()
+        want = self.local(2026, 11, 11, 2, 23) + 60 - self.AT
+        got = agents.quota_wait(self.CODEX, self.AT, self.AT, 1800)
+        self.assertNotEqual(got, 1800)
+        self.assertEqual(got, want)
+
+    # 3
+    def test_a_date_without_a_year_is_the_next_such_moment(self):
+        agents = self.agents()
+        cases = [
+            (self.AT, self.local(2026, 11, 11, 2, 23)),
+            (self.local(2026, 11, 12, 0, 0), self.local(2027, 11, 11, 2, 23)),
+            (self.local(2026, 11, 11, 2, 30), self.local(2026, 11, 11, 2, 23)),
+        ]
+        for text in ("try again at Nov 11th 2:23 AM", "try again at Nov 11th, 2:23 AM"):
+            for at, want in cases:
+                with self.subTest(text=text, at=at):
+                    self.assertEqual(agents.quota_reset(text, at), want)
+
+    # 4
+    def test_month_suffix_and_am_pm_forms(self):
+        agents = self.agents()
+        at = self.AT
+        cases = [
+            ("TRY AGAIN AT nov 1st, 2027 12:05 pm", self.local(2027, 11, 1, 12, 5)),
+            ("try again at December 2, 2026 12:00 AM", self.local(2026, 12, 2, 0, 0)),
+            ("try again at Nov. 11, 2026 2:23 am", self.local(2026, 11, 11, 2, 23)),
+            ("try again at NOVEMBER 11th, 2026 2:23 Am", self.local(2026, 11, 11, 2, 23)),
+            ("try again at dec 3rd, 2026 12:30 PM", self.local(2026, 12, 3, 12, 30)),
+            ("try again at Dec 22nd, 2026 12:59 am", self.local(2026, 12, 22, 0, 59)),
+            ("try again at january 5, 2027 11:15 PM", self.local(2027, 1, 5, 23, 15)),
+        ]
+        for text, want in cases:
+            with self.subTest(text=text):
+                self.assertEqual(agents.quota_reset(text, at), want)
+
+    # 5
+    def test_a_time_of_day_alone_is_the_next_such_time(self):
+        agents = self.agents()
+        cases = [
+            ("try again at 2:23 AM", self.local(2026, 11, 8, 2, 23)),
+            ("try again at 3:30 PM", self.local(2026, 11, 7, 15, 30)),
+        ]
+        for text, want in cases:
+            with self.subTest(text=text):
+                self.assertEqual(agents.quota_reset(text, self.AT), want)
+
+    # 6
+    def test_try_again_in_a_duration(self):
+        agents = self.agents()
+        at = self.AT
+        cases = [
+            ("try again in 2 days 3 hours 5 minutes", at + 183900),
+            ("Try again in 45 minutes", at + 2700),
+            ("try again in 1 hour", at + 3600),
+            ("try again in 2h 30m", at + 9000),
+            ("TRY AGAIN IN 1 day", at + 86400),
+            ("try again in 1d 2h", at + 93600),
+        ]
+        for text, want in cases:
+            with self.subTest(text=text):
+                self.assertEqual(agents.quota_reset(text, at), want)
+
+    # 7
+    def test_the_last_match_wins_across_forms(self):
+        agents = self.agents()
+        at = self.AT
+        cases = [
+            ("resets 3pm ... try again at Nov 11th, 2026 2:23 AM", self.local(2026, 11, 11, 2, 23)),
+            ("try again at Nov 11th, 2026 2:23 AM ... resets in 2h", at + 7200),
+        ]
+        for text, want in cases:
+            with self.subTest(text=text):
+                self.assertEqual(agents.quota_reset(text, at), want)
+
+
 class MachineSlots(LoopCase):
     """devloop.machine_slots: the implementer's tests (core/slots.py and its call sites)."""
 
@@ -4601,6 +4700,131 @@ class StopRecordsCost(LoopCase):
         self.assertEqual(rows, [done, late, cut])
         self.assertTrue(all(p.stopped for p in pending))
         self.assertEqual((issuer.pending, issuer.round_costs), ([], []))
+
+
+class T61Acceptance(LoopCase):
+    """Ticket #61: cost rows read codex's turn.completed usage; dollars from devloop.prices, else
+    unknown. Expected numbers are the arithmetic in the acceptance text."""
+
+    EVENTS = [
+        {"type": "thread.started", "thread_id": "t-123"},
+        {"type": "turn.started"},
+        {"type": "item.completed", "item": {"id": "item_0", "type": "agent_message", "text": "done"}},
+        {"type": "turn.completed", "usage": {"input_tokens": 1000, "cached_input_tokens": 400,
+                                             "output_tokens": 50}},
+        {"type": "turn.started"},
+        {"type": "turn.completed", "usage": {"input_tokens": 2000, "cached_input_tokens": 1500,
+                                             "output_tokens": 70}},
+    ]
+    PRICE = {"input": 1.25, "cached_input": 0.125, "output": 10}
+    USD = (1100 * 1.25 + 1900 * 0.125 + 120 * 10) / 1e6
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for k in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            os.environ.pop(k, None)
+            self.env.pop(k, None)
+        os.environ["AC_ROOT"] = self.proj
+
+    def log(self):
+        path = os.path.join(self.tmp, "codex.log")
+        with open(path, "w") as fh:
+            for e in self.EVENTS:
+                fh.write(json.dumps(e) + "\n")
+        return path
+
+    def assert_tokens(self, row):
+        self.assertEqual((row["input_tokens"], row["cache_read_tokens"], row["output_tokens"]),
+                         (1100, 1900, 120))
+
+    # ---- acceptance 1 and 2: the unit layer
+
+    def test_usage_from_log_sums_codex_turns(self):
+        from core import agents
+        out = agents.usage_from_log(self.log())
+        self.assert_tokens(out)
+        self.assertIsNone(out["cache_write_tokens"])
+        self.assertIsNone(out["usd"])
+        self.assertEqual(out["session_id"], "t-123")
+
+    def test_usage_from_log_prices_codex_turns(self):
+        import inspect
+        from core import agents
+        self.assertIn("price", inspect.signature(agents.usage_from_log).parameters)
+        out = agents.usage_from_log(self.log(), price=dict(self.PRICE))
+        self.assert_tokens(out)
+        self.assertIsNone(out["cache_write_tokens"])
+        self.assertEqual(out["session_id"], "t-123")
+        self.assertIsNotNone(out["usd"])
+        self.assertAlmostEqual(out["usd"], 0.0028125, delta=1e-12)
+        self.assertAlmostEqual(out["usd"], self.USD, delta=1e-12)
+
+    # ---- acceptance 4: the rejections
+
+    def assert_rejected(self, prices):
+        from core.config import Config
+        self.config(prices=prices)
+        with self.assertRaises(osx.OSFailure) as ctx:
+            Config(self.proj)
+        self.assertIn("devloop.prices", str(ctx.exception))
+
+    def test_prices_not_an_object_is_rejected(self):
+        for bad in (["sh"], "sh", 3, True):
+            with self.subTest(prices=bad):
+                self.assert_rejected(bad)
+
+    def test_price_entry_not_an_object_is_rejected(self):
+        for bad in (1.25, "cheap", [1.25, 0.125, 10], None):
+            with self.subTest(entry=bad):
+                self.assert_rejected({"sh": bad})
+
+    def test_price_entry_missing_a_key_is_rejected(self):
+        for key in ("input", "cached_input", "output"):
+            entry = dict(self.PRICE)
+            del entry[key]
+            with self.subTest(missing=key):
+                self.assert_rejected({"sh": entry})
+
+    def test_price_negative_string_or_bool_is_rejected(self):
+        for key in ("input", "cached_input", "output"):
+            for bad in (-1, -0.5, "1.25", True, False):
+                with self.subTest(key=key, value=bad):
+                    self.assert_rejected({"sh": dict(self.PRICE, **{key: bad})})
+
+    # ---- acceptance 5: end to end
+
+    def run_codex_worker(self, **devloop):
+        from core import agents
+        from core.config import Config
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            agents_cfg = json.load(fh)["devloop"]["agents"]
+        lines = " ".join("'%s'" % json.dumps(e) for e in self.EVENTS)
+        script = ('cat >/dev/null; for l in %s; do printf "%%s\\n" "$l"; done; '
+                  'echo \'{"kind": "done"}\' > "$DEVLOOP_RESULT"' % lines)
+        self.config(agents=dict(agents_cfg, worker=["sh", "-c", script]), **devloop)
+        hand = agents.run(Config(self.proj), "worker", "go", self.proj,
+                          os.path.join(self.tmp, "run"), 30)
+        self.assertEqual(hand.cost["outcome"], "done")
+        return hand.cost
+
+    def test_end_to_end_priced_row(self):
+        row = self.run_codex_worker(prices={"sh": dict(self.PRICE)})
+        self.assert_tokens(row)
+        self.assertIsNotNone(row["usd"])
+        self.assertAlmostEqual(row["usd"], 0.0028125, delta=1e-12)
+
+    def test_end_to_end_without_prices_usd_unknown(self):
+        row = self.run_codex_worker()
+        self.assert_tokens(row)
+        self.assertIsNone(row["usd"])
+
+    def test_end_to_end_no_entry_for_sh_usd_unknown(self):
+        row = self.run_codex_worker(prices={"codex": dict(self.PRICE)})
+        self.assert_tokens(row)
+        self.assertIsNone(row["usd"])
 
 
 class T36Acceptance(LoopCase):
@@ -5451,6 +5675,40 @@ class QuotaWaitUnits(LoopCase):
         for phrase in ("quota_retry_seconds", "1800", "額度用完", "outcome `quota`", "does not wait",
                        "no machine slot", "no round"):
             self.assertIn(phrase, section)
+
+
+class QuotaResetCodexUnits(unittest.TestCase):
+    """Helpers of agents.quota_reset for codex's "try again" forms (implementer's tests of #60)."""
+
+    AT = time.mktime((2026, 11, 7, 14, 0, 0, 0, 0, -1))
+
+    def local(self, *t):
+        return time.mktime(t + (0, 0, -1))
+
+    def test_twelve_hour_clock(self):
+        from core import agents
+        self.assertEqual(agents._twelve(12, "AM"), 0)
+        self.assertEqual(agents._twelve(12, "pm"), 12)
+        self.assertEqual(agents._twelve(1, "PM"), 13)
+        self.assertIsNone(agents._twelve(13, "pm"))
+        self.assertIsNone(agents._twelve(0, "am"))
+
+    def test_impossible_dates_and_times_are_ignored(self):
+        from core import agents
+        for text in ("try again at Nov 31st, 2026 2:23 AM", "try again at Nov 11th, 2026 13:23 AM",
+                     "try again at Nov 11th, 2026 2:73 AM", "try again at 2:73 AM"):
+            self.assertIsNone(agents.quota_reset(text, self.AT), text)
+
+    def test_leap_day_without_a_year_waits_for_a_leap_year(self):
+        from core import agents
+        self.assertEqual(agents.quota_reset("try again at Feb 29th 1:00 AM", self.AT),
+                         self.local(2028, 2, 29, 1, 0, 0))
+
+    def test_day_units_and_mixed_spans(self):
+        from core import agents
+        self.assertEqual(agents.quota_reset("try again in 1 day, 2 hours and 3 minutes", self.AT),
+                         self.AT + 86400 + 7200 + 180)
+        self.assertEqual(agents.quota_reset("try again in 3d", self.AT), self.AT + 3 * 86400)
 
 
 class Recovery(LoopCase):
@@ -8525,6 +8783,58 @@ class AgentEnv(LoopCase):
                     os.environ[k] = v
         self.assertEqual([k for k in PARENT_SESSION if k in env], [])
         self.assertEqual(env["DEVLOOP_ROLE"], "worker")
+
+
+class CodexUsageUnits(LoopCase):
+    EVENTS = [{"type": "thread.started", "thread_id": "t-9"}, {"type": "turn.started"},
+              {"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tokens": 40,
+                                                   "output_tokens": 5}},
+              {"type": "turn.completed", "usage": {"input_tokens": 10}}]
+
+    def log(self, lines):
+        path = os.path.join(self.tmp, "codex.log")
+        with open(path, "w") as fh:
+            fh.write("\n".join(lines) + "\n")
+        return path
+
+    def test_missing_fields_count_zero_and_no_price_leaves_usd_none(self):
+        from core import agents
+        got = agents.usage_from_log(self.log([json.dumps(e) for e in self.EVENTS]))
+        self.assertEqual((got["input_tokens"], got["cache_read_tokens"], got["output_tokens"]), (70, 40, 5))
+        self.assertIsNone(got["usd"])
+        self.assertIsNone(got["cache_write_tokens"])
+        self.assertEqual(got["session_id"], "t-9")
+
+    def test_price_is_per_million(self):
+        from core import agents
+        got = agents.usage_from_log(self.log([json.dumps(e) for e in self.EVENTS]),
+                                    price={"input": 1, "cached_input": 0, "output": 2})
+        self.assertAlmostEqual(got["usd"], (70 + 10) / 1e6, places=12)
+
+    def test_price_does_not_touch_a_claude_row(self):
+        from core import agents
+        line = json.dumps({"usage": {"input_tokens": 3, "output_tokens": 4}, "total_cost_usd": 0.5})
+        got = agents.usage_from_log(self.log([line]), price={"input": 9, "cached_input": 9, "output": 9})
+        self.assertEqual((got["input_tokens"], got["usd"]), (3, 0.5))
+
+    def test_plain_text_log_is_all_none(self):
+        from core import agents
+        got = agents.usage_from_log(self.log(["hello"]), price={"input": 1, "cached_input": 1, "output": 1})
+        self.assertEqual(got, agents.EMPTY)
+
+    def test_prices_validation(self):
+        from core.config import Config
+        good = {"m": {"input": 1, "cached_input": 0, "output": 2.5}}
+        for bad in ([], {"m": 1}, {"m": {"input": 1, "output": 1}},
+                    {"m": dict(good["m"], output=-1)}, {"m": dict(good["m"], input="1")},
+                    {"m": dict(good["m"], input=True)}):
+            self.config(prices=bad)
+            with self.assertRaises(osx.OSFailure) as ctx:
+                Config(self.proj)
+            self.assertIn("devloop.prices", str(ctx.exception))
+        for ok in (None, {}, good):
+            self.config(prices=ok)
+            Config(self.proj)
 
 
 class T41Acceptance(LoopCase):

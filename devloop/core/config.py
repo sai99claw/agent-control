@@ -68,6 +68,8 @@ DEFAULTS = {
                                      # the controller merges main in and lands without a second regression
     "host_sample_seconds": 60,       # #44: the controller samples the machine into <worktrees>/runs/host/
                                      # <hostname>.jsonl every N seconds; null = off
+    "prices": None,                  # model name -> {"input", "cached_input", "output"} US dollars per
+                                     # million tokens, for codex cost rows; null/{} = dollars unknown
     "agents": DEFAULT_AGENTS,
 }
 
@@ -103,6 +105,22 @@ class Config:
         if setup is not None and not (isinstance(setup, str) and setup):
             raise osx.OSFailure("board/config.json devloop.worktree_setup must be null or a shell "
                                 "command (a non-empty string), not %r" % (setup,))
+        prices = self.values.get("prices")
+        if prices is not None:
+            if not isinstance(prices, dict):
+                raise osx.OSFailure("board/config.json devloop.prices must be null or an object of "
+                                    "model name -> prices, not %r" % (prices,))
+            for model, entry in prices.items():
+                if not isinstance(entry, dict):
+                    raise osx.OSFailure("board/config.json devloop.prices[%r] must be an object with "
+                                        "input, cached_input and output, not %r" % (model, entry))
+                for key in ("input", "cached_input", "output"):
+                    price = entry.get(key)
+                    if key not in entry or isinstance(price, bool) or not isinstance(price, (int, float)) \
+                            or not price >= 0:
+                        raise osx.OSFailure("board/config.json devloop.prices[%r].%s must be a number "
+                                            ">= 0 (US dollars per million tokens), not %r"
+                                            % (model, key, entry.get(key)))
         nrv = self.values.get("no_reverify_paths")
         if not (isinstance(nrv, list) and all(isinstance(p, str) and p for p in nrv)):
             raise osx.OSFailure("board/config.json devloop.no_reverify_paths must be a list of "
