@@ -418,7 +418,7 @@ def quota_reset(text, at):
         if m.group(3):
             years = [int(m.group(3))]
         else:
-            years = [time.localtime(at).tm_year, time.localtime(at).tm_year + 1]
+            years = range(time.localtime(at).tm_year, time.localtime(at).tm_year + 9)
         for year in years:
             if not 1 <= dom <= calendar.monthrange(year, month)[1]:
                 continue

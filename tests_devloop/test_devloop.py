@@ -5189,6 +5189,40 @@ class QuotaWaitUnits(LoopCase):
             self.assertIn(phrase, section)
 
 
+class QuotaResetCodexUnits(unittest.TestCase):
+    """Helpers of agents.quota_reset for codex's "try again" forms (implementer's tests of #60)."""
+
+    AT = time.mktime((2026, 11, 7, 14, 0, 0, 0, 0, -1))
+
+    def local(self, *t):
+        return time.mktime(t + (0, 0, -1))
+
+    def test_twelve_hour_clock(self):
+        from core import agents
+        self.assertEqual(agents._twelve(12, "AM"), 0)
+        self.assertEqual(agents._twelve(12, "pm"), 12)
+        self.assertEqual(agents._twelve(1, "PM"), 13)
+        self.assertIsNone(agents._twelve(13, "pm"))
+        self.assertIsNone(agents._twelve(0, "am"))
+
+    def test_impossible_dates_and_times_are_ignored(self):
+        from core import agents
+        for text in ("try again at Nov 31st, 2026 2:23 AM", "try again at Nov 11th, 2026 13:23 AM",
+                     "try again at Nov 11th, 2026 2:73 AM", "try again at 2:73 AM"):
+            self.assertIsNone(agents.quota_reset(text, self.AT), text)
+
+    def test_leap_day_without_a_year_waits_for_a_leap_year(self):
+        from core import agents
+        self.assertEqual(agents.quota_reset("try again at Feb 29th 1:00 AM", self.AT),
+                         self.local(2028, 2, 29, 1, 0, 0))
+
+    def test_day_units_and_mixed_spans(self):
+        from core import agents
+        self.assertEqual(agents.quota_reset("try again in 1 day, 2 hours and 3 minutes", self.AT),
+                         self.AT + 86400 + 7200 + 180)
+        self.assertEqual(agents.quota_reset("try again in 3d", self.AT), self.AT + 3 * 86400)
+
+
 class Recovery(LoopCase):
     def test_a_running_ticket_whose_issuer_died_is_dispatched_again(self):
         self.add(1)
