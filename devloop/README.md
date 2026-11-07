@@ -205,7 +205,7 @@ waiting lesson).
 
 ## Live records
 
-While an opener, an issuer or an agent runs, one JSON file under `<worktrees>/runs/live/` describes
+While an opener, an issuer, an agent, a regression, a fixer or a release runs, one JSON file under `<worktrees>/runs/live/` describes
 it (`core/inflight.py`). Every record has `kind` and `stamp` (devloop's liveness stamp: `pid`, `host`,
 `boot`, `started`).
 
@@ -223,6 +223,19 @@ it (`core/inflight.py`). Every record has `kind` and `stamp` (devloop's liveness
   `model`, `effort`, `result` (the run's result.json), `since` (when this state began), `until` (the
   end of a quota wait, else null). A second command in the same run dir replaces it. Removed when
   `Pending.finish()` returns or `Pending.stop()` runs.
+- `regression-<branch with / as ->.json` (`regression.py`, kind `regression`): `group` (the branch
+  without its leading `int/`), `branch`, `sha` (of the branch when it started), `exclusive`
+  (`devloop.regression_exclusive`), `stage` (`slot` waiting for a machine slot, `machine` an exclusive
+  regression waiting for the whole machine, `preflight`, `full`; without `machine_slots` it starts at
+  `preflight`), `since` (when the stage began), `result` (the `--out` file). The stamp is the regression
+  process. Removed when regression.py exits, whatever the code.
+- `fixer-<group>.json` (`auto_fixer.py`, kind `fixer`): `group`, `round` (the group's `fix_round` when it
+  started, 0 when missing), `max_rounds` (`devloop.max_rounds`), `result` (null). The stamp is the
+  auto_fixer process; its agent has its own agent record. Removed when auto_fixer exits.
+- `release-<group>.json` (`core/release.py`, kind `release`): `group`, `sha`, `log` (the release output
+  file), `result` (null). The stamp is the release command itself (the `sh -c` process). Written right
+  after the spawn, removed when `release.run` returns; the controller's landing and
+  `tickets.py release` both go through it.
 
 A process stopped hard leaves its record behind. `inflight.status(record)` answers `running` (the
 stamp's process lives), `handed_in` (it is gone and its `result` file exists) or `ended`. Writing a

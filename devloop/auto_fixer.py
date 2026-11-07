@@ -34,7 +34,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import agents, memory, osx, worktrees  # noqa: E402
+from core import agents, inflight, memory, osx, worktrees  # noqa: E402
 from core.pool import event  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
@@ -228,10 +228,16 @@ def main(argv=None):
     signal.signal(signal.SIGINT, on_signal)
     live = []
     pool = None
+    cfg = fixer_name = None
     try:
         cfg = Config()
         report = osx.read_json(args.report, {}) or {}
         pool = pool_for(cfg)
+        fixer_name = "fixer-" + args.group
+        grp = pool.snapshot().groups.get(args.group) or {}
+        inflight.put(cfg, fixer_name, {
+            "kind": "fixer", "stamp": osx.stamp(), "group": args.group,
+            "round": grp.get("fix_round") or 0, "max_rounds": cfg.max_rounds, "result": None})
         return fix(cfg, pool, args.group, report, live)
     except agents.Interrupted:
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -252,6 +258,9 @@ def main(argv=None):
     except osx.OSFailure as exc:
         print("auto_fixer: %s" % exc, file=sys.stderr)
         return 2
+    finally:
+        if fixer_name is not None:
+            inflight.drop(cfg, fixer_name)
 
 
 if __name__ == "__main__":

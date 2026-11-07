@@ -11923,6 +11923,57 @@ class ReleaseKeptOutput(unittest.TestCase):
         self.assertEqual(env["DEVLOOP_RELEASE_DIR"], "/x/runs/release/g1")
 
 
+class LiveRecordUnits(unittest.TestCase):
+    """The pieces behind the regression and release live records."""
+
+    class Cfg(ReleaseKeptOutput.Cfg):
+        regression_exclusive = True
+
+    def test_regression_put_live_shape(self):
+        import regression
+        from core import inflight
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        cfg = self.Cfg(root)
+        regression.put_live(cfg, "int/g4", "abc", "/o.json", "slot")
+        regression.put_live(cfg, "int/g4", "abc", "/o.json", "full")
+        recs = inflight.records(cfg)
+        self.assertEqual([n for n, _ in recs], ["regression-int-g4"])
+        rec = recs[0][1]
+        self.assertEqual((rec["kind"], rec["group"], rec["stage"], rec["exclusive"]),
+                         ("regression", "g4", "full", True))
+        self.assertEqual(rec["stamp"]["pid"], os.getpid())
+        regression.put_live(cfg, "feature", "abc", "/o.json", "full")
+        self.assertEqual(dict(inflight.records(cfg))["regression-feature"]["group"], "feature")
+
+    def test_release_record_is_gone_after_run(self):
+        from unittest import mock
+        from core import release, inflight
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        cfg = self.Cfg(root)
+        cfg.require_release = lambda: "true"
+        cfg.release_timeout_seconds = 5
+        cfg.root = root
+        seen = []
+        real_wait = release.osx.wait
+
+        def wait(proc, timeout):
+            seen.append(inflight.records(cfg))
+            return real_wait(proc, timeout)
+
+        def detached(cfg_, repo, tree, sha):
+            os.makedirs(tree)
+
+        with mock.patch.object(release, "Git"), mock.patch.object(release.worktrees, "detached_tree", detached), \
+                mock.patch.object(release.osx, "wait", wait):
+            ok, _ = release.run(cfg, {"id": "g9"}, "abc")
+        self.assertTrue(ok)
+        self.assertEqual([n for n, _ in seen[0]], ["release-g9"])
+        self.assertEqual(seen[0][0][1]["kind"], "release")
+        self.assertEqual(inflight.records(cfg), [])
+
+
 class T54Acceptance(unittest.TestCase):
     """#54: git-using test classes run git with an isolated configuration (empty global, no
     system, identity t / t@t), so a machine's global or system git settings never reach them."""

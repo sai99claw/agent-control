@@ -20,11 +20,24 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import osx, slots, testrun, worktrees  # noqa: E402
+from core import inflight, osx, slots, testrun, worktrees  # noqa: E402
 from core.config import Config  # noqa: E402
 from core.gitx import Git  # noqa: E402
 
 CODES = {testrun.GREEN: 0, testrun.RED: 1, testrun.ENV: 86, testrun.UNMEASURED: 2}
+
+
+def live_name(branch):
+    return "regression-" + branch.replace("/", "-")
+
+
+def put_live(cfg, branch, sha, out_path, stage, stamp=None):
+    """Write (or rewrite) this regression's live record; `since` is when `stage` began."""
+    inflight.put(cfg, live_name(branch), {
+        "kind": "regression", "stamp": stamp or osx.stamp(),
+        "group": branch[len("int/"):] if branch.startswith("int/") else branch,
+        "branch": branch, "sha": sha, "exclusive": bool(cfg.regression_exclusive),
+        "result": out_path, "stage": stage, "since": osx.now()})
 
 
 def verify(cfg, branch, out_path):
@@ -33,6 +46,11 @@ def verify(cfg, branch, out_path):
     if not sha:
         raise osx.OSFailure("branch %s does not exist" % branch)
     began = time.time()
+    if slots.needed(cfg):
+        stage = "machine" if cfg.regression_exclusive else "slot"
+    else:
+        stage = "preflight"
+    put_live(cfg, branch, sha, out_path, stage)
     take, busy = ((slots.take_machine, slots.machine_busy) if cfg.regression_exclusive
                   else (slots.take, slots.busy))
     slot = take(cfg, began + cfg.regression_timeout_seconds)
@@ -57,9 +75,11 @@ def _verify(cfg, repo, branch, sha, out_path, full_timeout):
         return CODES[testrun.ENV]
     logs = cfg.runs_dir("regression", branch.replace("/", "-"))
     try:
+        put_live(cfg, branch, sha, out_path, "preflight")
         result = testrun.run(cfg, tree, "preflight", timeout=600,
                              keep_dir=os.path.join(logs, "preflight"))
         if result.status == testrun.GREEN:
+            put_live(cfg, branch, sha, out_path, "full")
             result = testrun.run(cfg, tree, "full", timeout=max(1, full_timeout),
                                  keep_dir=os.path.join(logs, "full"))
         elif result.status == testrun.RED:   # preflight has no "red": treat as environment
@@ -77,8 +97,10 @@ def main(argv=None):
     ap.add_argument("--branch", required=True)
     ap.add_argument("--out", required=True)
     args = ap.parse_args(argv)
+    cfg = None
     try:
-        return verify(Config(), args.branch, args.out)
+        cfg = Config()
+        return verify(cfg, args.branch, args.out)
     except osx.OSFailure as exc:
         print("regression: %s" % exc, file=sys.stderr)
         try:
@@ -86,6 +108,9 @@ def main(argv=None):
         except osx.OSFailure:
             pass
         return 2
+    finally:
+        if cfg is not None:
+            inflight.drop(cfg, live_name(args.branch))
 
 
 if __name__ == "__main__":
