@@ -13052,3 +13052,756 @@ class T65Acceptance(LoopCase):
         self.assertEqual(self.state(1), "landed")
         self.assertEqual(rec.get("sha"), self.snap().groups["g1"].get("landed_sha"), rec)
         self.assertIsNone(self.find(self.is_release()), self.live())
+
+
+class T66Acceptance(LoopCase):
+    """Acceptance of #66: the board's 進行中 tab, one row per running opener, agent, agent-less
+    issuer, regression, fixer and release, read from the live records under <worktrees>/runs/live/.
+    Expected texts are the ticket's own; times come from time.localtime of the chosen epochs."""
+
+    FMT = "%Y-%m-%dT%H:%M:%SZ"
+    CELLS = ("what", "state", "model", "start", "elapsed", "detail")
+    VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param",
+            "source", "track", "wbr"}
+    REFRESH = '<a class="refresh" href="?tab=live">重新整理</a>'
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in list(os.environ):
+            if key.startswith("DEVLOOP_"):
+                del os.environ[key]
+        for key in list(self.env):
+            if key.startswith("DEVLOOP_"):
+                del self.env[key]
+        os.environ["AC_ROOT"] = self.proj
+        self.live_dir = os.path.join(self.tmp, "wt", "runs", "live")
+        self.NOW = int(time.time())
+
+    cfg = T64Acceptance.cfg
+    live = T64Acceptance.live
+    find = T64Acceptance.find
+    wait_for = T64Acceptance.wait_for
+    popen = T64Acceptance.popen
+    kill_agent_later = T64Acceptance.kill_agent_later
+
+    # ------------------------------------------------------------ helpers
+
+    def need(self, *names):
+        import board
+        self.assertTrue(hasattr(board, "TABS"), "board.TABS is missing")
+        self.assertIn("live", [t[0] for t in board.TABS], "board.TABS has no 'live' entry")
+        for name in ("render_live_tab",) + names:
+            self.assertTrue(callable(getattr(board, name, None)), "board.%s is missing" % name)
+        return board
+
+    def ts(self, epoch):
+        return time.strftime(self.FMT, time.gmtime(epoch))
+
+    def clock(self, epoch):
+        return time.strftime("%m-%d %H:%M:%S", time.localtime(epoch))
+
+    def stamp(self, started, alive=True):
+        p = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (p.poll() is None and p.terminate(), p.wait()))
+        return {"pid": p.pid, "host": osx.host(), "boot": osx.boot_id() if alive else "other-boot",
+                "started": self.ts(started)}
+
+    def put(self, name, kind, started, alive=True, **fields):
+        from core import inflight
+        rec = {"kind": kind, "stamp": self.stamp(started, alive), "result": None}
+        rec.update(fields)
+        inflight.put(self.cfg(), name, rec)
+        return rec
+
+    def agent(self, name, parent, started, alive=True, **fields):
+        rec = {"parent": parent, "role": "worker", "ticket": None, "group": None, "round": None,
+               "run_dir": None, "log": None, "command": "python3", "model": "m", "effort": None,
+               "state": "running", "since": self.ts(started), "until": None}
+        rec.update(fields)
+        return self.put(name, "agent", started, alive, **rec)
+
+    def log_file(self, name, lines=30, extra=None):
+        path = os.path.join(self.tmp, "%s.log" % name)
+        body = ["L%02d %s" % (i, name) for i in range(1, lines + 1)]
+        if extra:
+            body[-1] = body[-1] + " " + extra
+        with open(path, "w") as fh:
+            fh.write("\n".join(body) + "\n")
+        return path, body
+
+    def page(self, query=None, now="fixed"):
+        import board
+        from core.config import Config
+        when = self.NOW if now == "fixed" else now
+        return board.render(Config(self.proj), self.snap(), query={"tab": "live"} if query is None else query,
+                            now=when)
+
+    def parse(self, page):
+        """{'tabs': count of id=tab-live, 'tables': table.live inside it, 'rows': [row], 'urls':
+        href/action values inside it, 'links': [(attrs, text)] of <a> inside it}; a row is a <tr>
+        with at least one <td> inside table.live: {'attrs', 'cells': {class: text}, 'pres': {class: [text]}}."""
+        from html.parser import HTMLParser
+        void = self.VOID
+
+        class P(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.stack, self.out = [], {"tabs": 0, "tables": 0, "rows": [], "urls": [], "links": []}
+                self.row = self.cell = self.pre = self.link = None
+
+            def marks(self):
+                return [m for _, m in self.stack]
+
+            def handle_starttag(self, tag, attrs):
+                a = dict(attrs)
+                cls = (a.get("class") or "").split()
+                marks = self.marks()
+                mark = None
+                if "tab" not in marks:
+                    if a.get("id") == "tab-live":
+                        mark = "tab"
+                        self.out["tabs"] += 1
+                else:
+                    for k, v in attrs:
+                        if k in ("href", "action"):
+                            self.out["urls"].append(v or "")
+                    if tag == "table" and "live" in cls and "table" not in marks:
+                        mark = "table"
+                        self.out["tables"] += 1
+                    elif tag == "tr" and "table" in marks:
+                        mark = "tr"
+                        self.row = {"attrs": a, "cells": {}, "pres": {}, "tds": 0}
+                    elif tag == "td" and self.row is not None:
+                        mark = "td"
+                        self.cell = (cls, [])
+                        self.row["tds"] += 1
+                    elif tag == "pre" and self.cell is not None:
+                        mark = "pre"
+                        self.pre = []
+                    elif tag == "a":
+                        mark = "a"
+                        self.link = (a, [])
+                if tag not in void:
+                    self.stack.append((tag, mark))
+
+            def handle_startendtag(self, tag, attrs):
+                self.handle_starttag(tag, attrs)
+                if tag not in void:
+                    self.handle_endtag(tag)
+
+            def handle_endtag(self, tag):
+                if tag in void or tag not in [t for t, _ in self.stack]:
+                    return
+                while self.stack:
+                    t, mark = self.stack.pop()
+                    if mark == "pre" and self.cell is not None:
+                        for c in self.cell[0] or [""]:
+                            self.row["pres"].setdefault(c, []).append("".join(self.pre))
+                        self.pre = None
+                    elif mark == "td" and self.row is not None:
+                        for c in self.cell[0] or [""]:
+                            self.row["cells"].setdefault(c, "".join(self.cell[1]))
+                        self.cell = None
+                    elif mark == "tr":
+                        if self.row["tds"]:
+                            self.out["rows"].append(self.row)
+                        self.row = None
+                    elif mark == "a":
+                        self.out["links"].append((self.link[0], "".join(self.link[1])))
+                        self.link = None
+                    if t == tag:
+                        break
+
+            def handle_data(self, data):
+                if self.cell is not None:
+                    self.cell[1].append(data)
+                if self.pre is not None:
+                    self.pre.append(data)
+                if self.link is not None:
+                    self.link[1].append(data)
+
+        p = P()
+        p.feed(page)
+        p.close()
+        return p.out
+
+    def rows(self, page=None):
+        out = self.parse(self.page() if page is None else page)
+        self.assertEqual(out["tabs"], 1, "exactly one id=tab-live element")
+        return out["rows"]
+
+    def by_pid(self, rows, pid):
+        return [r for r in rows if r["attrs"].get("data-pid") == str(pid)]
+
+    def one(self, rows, pid):
+        hit = self.by_pid(rows, pid)
+        self.assertEqual(len(hit), 1, "exactly one row with data-pid %s; rows: %r" % (pid, [r["attrs"] for r in rows]))
+        return hit[0]
+
+    def cell(self, row, name):
+        self.assertIn(name, row["cells"], "row %r has no td.%s" % (row["attrs"], name))
+        return row["cells"][name].strip()
+
+    def pre_lines(self, row, name="detail"):
+        pres = row["pres"].get(name) or []
+        self.assertEqual(len(pres), 1, "one <pre> in td.%s of %r" % (name, row["attrs"]))
+        text = pres[0].strip("\n")
+        return text.split("\n") if text else []
+
+    def assert_tail(self, row, body, page, escaped=None):
+        self.assertEqual(self.pre_lines(row), body[-20:], "last 20 log lines in td.detail's <pre>")
+        self.assertNotIn(body[-21], self.cell(row, "detail"), "line %d is not in the tail" % (len(body) - 20))
+        if escaped:
+            self.assertIn(html.escape(escaped), page)
+            self.assertNotIn(escaped, page)
+
+    # ------------------------------------------------------------ item 1: TABS and nav
+
+    def test_item1_tabs_and_nav(self):
+        import board
+        self.assertTrue(hasattr(board, "TABS"), "board.TABS is missing")
+        self.assertEqual([t[0] for t in board.TABS], ["decide", "live", "tickets", "dag", "tokens", "host"])
+        self.assertEqual(board.TABS[1][1], "進行中")
+        self.assertTrue(callable(board.TABS[1][2]))
+        self.add(1, state="stuck", stuck={"reason": "env", "text": "screen locked", "at": osx.now()})
+        self.assertEqual(len(board.waiting_cards(self.snap(), self.NOW)), 1, "the fixture makes one card")
+        hrefs = ["?tab=decide", "?tab=live", "?tab=tickets", "?tab=dag", "?tab=tokens", "?tab=host"]
+        for query in ({}, {"tab": "live"}, {"tab": "tickets"}, {"tab": "decide"}):
+            page = self.page(query)
+            m = re.search(r'<nav class="tabs">(.*?)</nav>', page, re.S)
+            self.assertIsNotNone(m, "no <nav class=\"tabs\">")
+            links = re.findall(r'<a href="([^"]*)"[^>]*>(.*?)</a>', m.group(1), re.S)
+            self.assertEqual([h for h, _ in links], hrefs, "nav hrefs for %r" % (query,))
+            self.assertEqual([t for _, t in links], ["要你判 (1)", "進行中", "票", "DAG", "Token", "主機"],
+                             "nav texts for %r" % (query,))
+
+    # ------------------------------------------------------------ item 2: the default tab
+
+    def shown(self, page):
+        return re.findall(r'id="tab-([a-z]+)"', page)
+
+    def test_item2_live_is_the_default_when_nothing_waits(self):
+        board = self.need()
+        for query in (None, {}, {"tab": ""}, {"tab": "nope"}):
+            page = board.render(self.cfg(), self.snap(), query=query, now=self.NOW)
+            self.assertEqual(self.shown(page), ["live"], "query %r shows 進行中" % (query,))
+            self.assertIn('<div id="tab-live" class="tab">', page)
+        self.assertEqual(board.decide_default(self.snap(), {}, self.NOW), "live")
+        self.assertEqual(board.decide_default(self.snap(), None, self.NOW), "live")
+        for name, value in (("ticket", "1"), ("group", "g1"), ("state", "ready"), ("cat", "red"), ("q", "x"),
+                            ("done", "1")):
+            for query in ({name: value}, {"tab": "nope", name: value}):
+                page = board.render(self.cfg(), self.snap(), query=query, now=self.NOW)
+                self.assertEqual(self.shown(page), ["tickets"], "query %r shows 票" % (query,))
+            self.assertEqual(board.decide_default(self.snap(), {name: value}, self.NOW), "tickets")
+        self.add(1, state="stuck", stuck={"reason": "env", "text": "screen locked", "at": osx.now()})
+        self.assertTrue(board.waiting_cards(self.snap(), self.NOW))
+        for query in (None, {}, {"tab": "nope"}):
+            page = board.render(self.cfg(), self.snap(), query=query, now=self.NOW)
+            self.assertEqual(self.shown(page), ["decide"], "query %r with a card shows 要你判" % (query,))
+        self.assertEqual(board.decide_default(self.snap(), {}, self.NOW), "decide")
+
+    def test_item2_html_without_query_writes_tab_live(self):
+        self.need()
+        res = self.run_py("board.py", "html")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn('id="tab-live"', res.stdout)
+        self.assertNotIn('id="tab-tickets"', res.stdout)
+
+    # ------------------------------------------------------------ item 3: refresh link, relative links, served
+
+    def every_kind(self):
+        """One record of every kind (and the agents that hang under them); returns the opener's pid."""
+        n = self.NOW
+        self.add(1, title="Alpha title")
+        log, _ = self.log_file("a")
+        op = self.put("opener-x", "opener", n - 100, title="t", revise=None, via="main", model="m", effort=None)
+        self.agent("agent-op", op["stamp"]["pid"], n - 90, run_dir="/r/op", log=log, role="creator")
+        self.agent("agent-orphan", 1, n - 80, ticket="1", round=1, run_dir="/r/w", log=log)
+        self.put("issuer-1", "issuer", n - 70, ticket="1", target="int/g1", round=1)
+        self.put("regression-int-g1", "regression", n - 60, group="g1", branch="int/g1", sha="a" * 40,
+                 exclusive=False, stage="full", since=self.ts(n - 50))
+        fx = self.put("fixer-g1", "fixer", n - 40, group="g1", round=1, max_rounds=3)
+        self.agent("agent-fx", fx["stamp"]["pid"], n - 30, role="fixer", group="g1", run_dir="/r/fx", log=log)
+        self.put("release-g1", "release", n - 20, group="g1", sha="b" * 40, log=log)
+        self.put("opener-dead", "opener", n - 10, alive=False, title="d", revise=None, via="main", model="m",
+                 effort=None)
+        return op["stamp"]["pid"]
+
+    def test_item3_refresh_link_and_relative_urls(self):
+        self.need()
+        self.every_kind()
+        page = self.page()
+        out = self.parse(page)
+        self.assertEqual(out["tabs"], 1)
+        self.assertIn(self.REFRESH, page)
+        refresh = [(a, t) for a, t in out["links"] if "refresh" in (a.get("class") or "").split()]
+        self.assertEqual([(a.get("href"), t.strip()) for a, t in refresh], [("?tab=live", "重新整理")],
+                         "the refresh link sits inside tab-live")
+        self.assertTrue(out["rows"], "the fixture gives rows")
+        for url in out["urls"]:
+            self.assertFalse(url.startswith("/"), url)
+            self.assertNotIn("://", url)
+
+    def test_item3_served_under_a_prefix(self):
+        import http.client
+        import socket
+        self.need()
+        key = os.path.join(self.tmp, "key")
+        with open(key, "w") as fh:
+            fh.write("s3cret\n")
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "board.py"), "serve", "--port", str(port),
+                                 "--key-file", key], cwd=self.proj, env=self.env,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: (proc.poll() is None and proc.terminate(), proc.wait()))
+        deadline = time.time() + 10
+        while True:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            try:
+                conn.request("GET", "/board/?tab=live", headers={"X-Board-Key": "s3cret"})
+                resp = conn.getresponse()
+                status, body = resp.status, resp.read().decode("utf-8")
+                break
+            except OSError:
+                if time.time() > deadline:
+                    raise
+                time.sleep(0.1)
+            finally:
+                conn.close()
+        self.assertEqual(status, 200)
+        self.assertIn('id="tab-live"', body)
+
+    # ------------------------------------------------------------ item 4: row shape and order
+
+    def test_item4_row_attributes_cells_and_order(self):
+        board = self.need("live_clock", "live_elapsed")
+        n = self.NOW
+        self.pool.update(lambda tx: tx.put_group({"id": "g1", "branch": "int/g1", "state": "testing",
+                                                  "members": [], "fix_round": 0}), "g1")
+        ended = self.put("a-ended", "opener", n - 9000, alive=False, title="old", revise=None, via="main",
+                         model="m", effort=None)
+        r1 = self.put("m-reg", "regression", n - 5400, group="g1", branch="int/g1", sha="c" * 40,
+                      exclusive=False, stage="full", since=self.ts(n - 5000))
+        r2 = self.put("z-open", "opener", n - 600, title="later", revise=None, via="main", model="m", effort=None)
+        r3 = self.put("b-open", "opener", n - 600, title="tie", revise=None, via="main", model="m", effort=None)
+        r4 = self.put("c-orphan", "agent", n - 59, parent=1, role="worker", ticket=None, group="g1", round=None,
+                      run_dir="/r", log=None, command="python3", model="m", effort=None, state="running",
+                      since=self.ts(n - 59), until=None)
+        rows = self.rows()
+        want = [r1, r3, r2, r4, ended]
+        self.assertEqual([r["attrs"].get("data-pid") for r in rows], [str(x["stamp"]["pid"]) for x in want],
+                         "oldest first, ties by record name, ended last")
+        starts = {str(x["stamp"]["pid"]): calendar.timegm(time.strptime(x["stamp"]["started"], self.FMT))
+                  for x in want}
+        for row in rows:
+            a = row["attrs"]
+            for attr in ("data-kind", "data-state", "data-pid", "data-started"):
+                self.assertIn(attr, a, a)
+            self.assertEqual(a["data-started"], str(starts[a["data-pid"]]), a)
+            for name in self.CELLS:
+                self.assertIn(name, row["cells"], "td.%s of %r" % (name, a))
+            st = int(a["data-started"])
+            self.assertEqual(self.cell(row, "start"), board.live_clock(st))
+            self.assertEqual(self.cell(row, "start"), self.clock(st))
+            self.assertEqual(self.cell(row, "elapsed"), board.live_elapsed(n - st))
+        self.assertEqual([r["attrs"]["data-state"] for r in rows][-1], "ended")
+        self.assertEqual([self.cell(r, "elapsed") for r in rows[:4]], ["1 小時 30 分", "10 分", "10 分", "0 分"])
+
+    # ------------------------------------------------------------ item 5: clock and elapsed helpers
+
+    def test_item5_live_clock_and_live_elapsed(self):
+        board = self.need("live_clock", "live_elapsed")
+        for epoch in (0, 1700000000, self.NOW, 1782000000):
+            self.assertEqual(board.live_clock(epoch), time.strftime("%m-%d %H:%M:%S", time.localtime(epoch)))
+        for seconds, text in ((0, "0 分"), (59, "0 分"), (61, "1 分"), (3599, "59 分"), (3600, "1 小時 0 分"),
+                              (5400, "1 小時 30 分"), (-5, "0 分"), (7325, "2 小時 2 分")):
+            self.assertEqual(board.live_elapsed(seconds), text, seconds)
+
+    # ------------------------------------------------------------ item 6: handed in, ended
+
+    def test_item6_handed_in_has_no_row_and_ended_says_so(self):
+        self.need()
+        n = self.NOW
+        result = os.path.join(self.tmp, "result.json")
+        with open(result, "w") as fh:
+            fh.write("{}")
+        handed = self.put("opener-h", "opener", n - 50, alive=False, title="h", revise=None, via="main",
+                          model="m", effort=None, result=result)
+        eo = self.put("opener-e", "opener", n - 40, alive=False, title="e", revise=None, via="main", model="m",
+                      effort=None, result=os.path.join(self.tmp, "missing.json"))
+        ea = self.agent("agent-e", 1, n - 30, alive=False, state="slot", run_dir="/r")
+        eq = self.agent("agent-q", 1, n - 25, alive=False, state="quota", until=self.ts(n + 600), run_dir="/r")
+        er = self.put("regression-e", "regression", n - 20, alive=False, group="g1", branch="int/g1",
+                      sha="d" * 40, exclusive=False, stage="full", since=self.ts(n - 20))
+        rows = self.rows()
+        self.assertEqual(self.by_pid(rows, handed["stamp"]["pid"]), [], "a handed-in record has no row")
+        self.assertEqual(len(rows), 4, [r["attrs"] for r in rows])
+        for rec in (eo, ea, eq, er):
+            row = self.one(rows, rec["stamp"]["pid"])
+            self.assertEqual(row["attrs"].get("data-state"), "ended", row["attrs"])
+            self.assertEqual(self.cell(row, "state"), "結束了,沒有交件")
+        for row in rows:
+            self.assertNotIn(row["attrs"].get("data-state"), ("running", "slot", "quota"))
+
+    # ------------------------------------------------------------ item 7: opener rows
+
+    def test_item7_opener_titles_and_own_model(self):
+        self.need()
+        n = self.NOW
+        a = self.put("opener-a", "opener", n - 30, title="Plain title", revise=None, via="main", model="mA",
+                     effort="high")
+        b = self.put("opener-b", "opener", n - 20, title=None, revise="3", via="main", model="mB", effort=None)
+        c = self.put("opener-c", "opener", n - 10, title=None, revise=None, via="main", model="mC", effort=None)
+        rows = self.rows()
+        self.assertEqual(len(rows), 3)
+        for rec, what in ((a, "開題:Plain title"), (b, "改票 #3"), (c, "開題")):
+            row = self.one(rows, rec["stamp"]["pid"])
+            self.assertEqual(row["attrs"].get("data-kind"), "opener")
+            self.assertEqual(row["attrs"].get("data-state"), "running")
+            self.assertEqual(self.cell(row, "what"), what)
+        model = self.cell(self.one(rows, a["stamp"]["pid"]), "model")
+        self.assertIn("mA", model)
+        self.assertIn("high", model)
+        self.assertIn("mB", self.cell(self.one(rows, b["stamp"]["pid"]), "model"))
+
+    def test_item7_opener_row_carries_its_newest_agent(self):
+        self.need()
+        n = self.NOW
+        log, body = self.log_file("op", extra="<i>z</i> & co")
+        op = self.put("opener-a", "opener", n - 100, title="T", revise=None, via="main", model="mO", effort=None)
+        pid = op["stamp"]["pid"]
+        old = self.agent("agent-old", pid, n - 90, role="creator", command="python3", model="mOld", run_dir="/r/old")
+        new = self.agent("agent-new", pid, n - 50, role="creator", command="claude", model="mNew", effort="max",
+                         state="slot", run_dir="/r/new-run", log=log)
+        page = self.page()
+        rows = self.rows(page)
+        self.assertEqual(len(rows), 1, "only the opener's row: %r" % [r["attrs"] for r in rows])
+        row = self.one(rows, pid)
+        self.assertEqual(self.by_pid(rows, old["stamp"]["pid"]) + self.by_pid(rows, new["stamp"]["pid"]), [])
+        a = row["attrs"]
+        self.assertEqual((a.get("data-kind"), a.get("data-model"), a.get("data-command"), a.get("data-state")),
+                         ("opener", "mNew", "claude", "slot"))
+        self.assertEqual(self.cell(row, "model"), "claude · mNew · max")
+        self.assertIn("/r/new-run", self.cell(row, "detail"))
+        self.assert_tail(row, body, page, escaped="<i>z</i> & co")
+
+    def test_item7_opener_agent_without_effort_running(self):
+        self.need()
+        n = self.NOW
+        op = self.put("opener-a", "opener", n - 100, title="T", revise=None, via="main", model="mO", effort="low")
+        self.agent("agent-1", op["stamp"]["pid"], n - 90, role="creator", command="python3", model="mX",
+                   effort=None, state="running", run_dir="/r/x")
+        rows = self.rows()
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["attrs"].get("data-state"), "running")
+        self.assertEqual(row["attrs"].get("data-model"), "mX")
+        self.assertEqual(self.cell(row, "model"), "python3 · mX")
+
+    # ------------------------------------------------------------ item 8: agent rows
+
+    def test_item8_agent_rows(self):
+        board = self.need("live_clock")
+        n = self.NOW
+        self.add(1, title="Alpha title")
+        log, body = self.log_file("w", extra="<i>z</i> & co")
+        until = n + 3000
+        iss = self.put("issuer-1", "issuer", n - 200, ticket="1", target="int/g1", round=2)
+        w = self.agent("agent-w", iss["stamp"]["pid"], n - 100, role="worker", ticket="1", group="g1", round=2,
+                       command="claude", model="opus", effort="high", state="running", run_dir="/r/w1", log=log)
+        s = self.agent("agent-s", 1, n - 90, role="fixer", group="g7", command="codex", model="gpt",
+                       state="slot", run_dir="/r/s1", log=os.path.join(self.tmp, "nope.log"))
+        q = self.agent("agent-q", 1, n - 80, role="verifier", ticket="1", command="claude", model="sonnet",
+                       state="quota", until=self.ts(until), run_dir="/r/q1")
+        page = self.page()
+        rows = self.rows(page)
+        self.assertEqual(len(rows), 3, [r["attrs"] for r in rows])
+        rw = self.one(rows, w["stamp"]["pid"])
+        a = rw["attrs"]
+        self.assertEqual((a.get("data-kind"), a.get("data-state"), a.get("data-model"), a.get("data-command")),
+                         ("agent", "running", "opus", "claude"))
+        what = self.cell(rw, "what")
+        for part in ("worker", "#1 Alpha title", "第 2 輪"):
+            self.assertIn(part, what)
+        self.assertEqual(self.cell(rw, "model"), "claude · opus · high")
+        self.assertEqual(self.cell(rw, "state"), "執行中")
+        self.assertIn("/r/w1", self.cell(rw, "detail"))
+        self.assert_tail(rw, body, page, escaped="<i>z</i> & co")
+        rs = self.one(rows, s["stamp"]["pid"])
+        self.assertEqual((rs["attrs"].get("data-kind"), rs["attrs"].get("data-state")), ("agent", "slot"))
+        self.assertIn("fixer", self.cell(rs, "what"))
+        self.assertIn("g7", self.cell(rs, "what"))
+        self.assertNotIn("輪", self.cell(rs, "what"))
+        self.assertEqual(self.cell(rs, "model"), "codex · gpt")
+        self.assertEqual(self.cell(rs, "state"), "等機器名額")
+        self.assertIn("/r/s1", self.cell(rs, "detail"))
+        self.assertEqual(self.pre_lines(rs), [], "unreadable log: empty <pre>")
+        rq = self.one(rows, q["stamp"]["pid"])
+        self.assertEqual(rq["attrs"].get("data-state"), "quota")
+        self.assertIn("#1 Alpha title", self.cell(rq, "what"))
+        self.assertEqual(self.cell(rq, "state"), "額度用完,到 " + self.clock(until))
+        self.assertEqual(self.cell(rq, "state"), "額度用完,到 " + board.live_clock(until))
+        self.assertEqual(self.pre_lines(rq), [], "no log: empty <pre>")
+
+    # ------------------------------------------------------------ item 9: issuer rows
+
+    def test_item9_issuer_row_only_without_agent(self):
+        self.need()
+        n = self.NOW
+        self.add(2, title="Beta title")
+        lone = self.put("issuer-2", "issuer", n - 100, ticket="2", target="int/g1", round=3)
+        busy = self.put("issuer-3", "issuer", n - 90, ticket="2", target="int/g1", round=1)
+        ag = self.agent("agent-3", busy["stamp"]["pid"], n - 80, ticket="2", round=1, run_dir="/r")
+        dead = self.agent("agent-dead", lone["stamp"]["pid"], n - 70, alive=False, ticket="2", round=3)
+        rows = self.rows()
+        row = self.one(rows, lone["stamp"]["pid"])
+        self.assertEqual((row["attrs"].get("data-kind"), row["attrs"].get("data-state")), ("issuer", "running"))
+        self.assertEqual(self.cell(row, "what"), "#2 Beta title 第 3 輪")
+        self.assertEqual(self.cell(row, "state"), "沒有 agent 在跑")
+        self.assertEqual(self.by_pid(rows, busy["stamp"]["pid"]), [], "an issuer with a running agent has no row")
+        self.assertEqual([r["attrs"].get("data-kind") for r in rows if r["attrs"].get("data-kind") == "issuer"],
+                         ["issuer"])
+        self.assertEqual(self.one(rows, ag["stamp"]["pid"])["attrs"].get("data-kind"), "agent")
+        self.assertEqual(self.one(rows, dead["stamp"]["pid"])["attrs"].get("data-state"), "ended")
+
+    # ------------------------------------------------------------ item 10: regression rows
+
+    def test_item10_regression_rows(self):
+        self.need()
+        n = self.NOW
+
+        def groups(tx):
+            tx.put_group({"id": "g1", "branch": "int/g1", "state": "testing", "members": [], "fix_round": 0})
+            tx.put_group({"id": "g2", "branch": "int/g2", "state": "testing", "members": []})
+            tx.put_group({"id": "g3", "branch": "int/g3", "state": "testing", "members": [], "fix_round": 2})
+        self.pool.update(groups, "groups")
+        cases = [("g1", "slot", "第一次", "等機器名額", "slot"),
+                 ("g2", "machine", "第一次", "等整台機器", "slot"),
+                 ("g3", "preflight", "修第 2 輪後", "preflight", "running"),
+                 ("g9", "full", "未知", "full", "running")]
+        recs = []
+        for i, (g, stage, _, _, _) in enumerate(cases):
+            recs.append(self.put("regression-int-%s" % g, "regression", n - 100 + i, group=g, branch="int/" + g,
+                                 sha="e" * 40, exclusive=stage == "machine", stage=stage, since=self.ts(n - 50)))
+        rows = self.rows()
+        self.assertEqual(len(rows), 4)
+        for rec, (g, _, when, state, dstate) in zip(recs, cases):
+            row = self.one(rows, rec["stamp"]["pid"])
+            self.assertEqual((row["attrs"].get("data-kind"), row["attrs"].get("data-state")),
+                             ("regression", dstate), g)
+            self.assertIn(g, self.cell(row, "what"))
+            self.assertIn(when, self.cell(row, "what"), g)
+            self.assertEqual(self.cell(row, "state"), state, g)
+
+    # ------------------------------------------------------------ item 11: fixer rows
+
+    def test_item11_fixer_rows(self):
+        board = self.need("live_clock")
+        n = self.NOW
+        until = n + 1800
+        fixers, agents = [], []
+        for i, (g, state) in enumerate((("g1", "running"), ("g2", "slot"), ("g3", "quota"), ("g4", None))):
+            fx = self.put("fixer-%s" % g, "fixer", n - 100 + i, group=g, round=2, max_rounds=3)
+            fixers.append(fx)
+            if state:
+                agents.append(self.agent("agent-%s" % g, fx["stamp"]["pid"], n - 50 + i, role="fixer", group=g,
+                                         round=2, command="claude", model="m%s" % g, state=state,
+                                         until=self.ts(until) if state == "quota" else None,
+                                         run_dir="/r/fix-%s" % g))
+        rows = self.rows()
+        self.assertEqual(len(rows), 4, [r["attrs"] for r in rows])
+        for ag in agents:
+            self.assertEqual(self.by_pid(rows, ag["stamp"]["pid"]), [], "the fixer's agent has no row of its own")
+        texts = {"running": "agent 執行中", "slot": "agent 等機器名額",
+                 "quota": "額度用完,到 " + self.clock(until)}
+        for fx, (g, state) in zip(fixers, (("g1", "running"), ("g2", "slot"), ("g3", "quota"), ("g4", None))):
+            row = self.one(rows, fx["stamp"]["pid"])
+            a = row["attrs"]
+            self.assertEqual(a.get("data-kind"), "fixer")
+            self.assertIn(g, self.cell(row, "what"))
+            self.assertIn("第 2/3 輪", self.cell(row, "what"))
+            if state:
+                self.assertEqual(self.cell(row, "state"), texts[state], g)
+                self.assertEqual(a.get("data-state"), state, g)
+                self.assertEqual(a.get("data-model"), "m%s" % g)
+                self.assertEqual(self.cell(row, "model"), "claude · m%s" % g)
+                self.assertIn("/r/fix-%s" % g, self.cell(row, "detail"))
+            else:
+                self.assertEqual(self.cell(row, "state"), "沒有 agent 在跑")
+                self.assertEqual(a.get("data-state"), "running")
+        self.assertEqual(texts["quota"], "額度用完,到 " + board.live_clock(until))
+
+    # ------------------------------------------------------------ item 12: release rows
+
+    def test_item12_release_rows(self):
+        self.need()
+        n = self.NOW
+        path = os.path.join(self.tmp, "rel.log")
+        body = ["devloop-stage: build", "x", "devloop-stage:   upload docs  ", "y <b>&</b>"] + \
+               ["R%02d" % i for i in range(5, 31)]
+        with open(path, "w") as fh:
+            fh.write("\n".join(body) + "\n")
+        plain, plain_body = self.log_file("plain")
+        sha = "0123456789abcdef0123456789abcdef01234567"
+        r1 = self.put("release-g1", "release", n - 60, group="g1", sha=sha, log=path)
+        r2 = self.put("release-g2", "release", n - 50, group="g2", sha="f" * 40, log=plain)
+        page = self.page()
+        rows = self.rows(page)
+        self.assertEqual(len(rows), 2)
+        row = self.one(rows, r1["stamp"]["pid"])
+        self.assertEqual(row["attrs"].get("data-kind"), "release")
+        self.assertIn("g1", self.cell(row, "what"))
+        self.assertIn(sha[:12], self.cell(row, "what"))
+        self.assertNotIn(sha[:13], self.cell(row, "what"))
+        self.assertEqual(self.cell(row, "state"), "upload docs")
+        self.assertEqual(self.pre_lines(row), body[-20:])
+        other = self.one(rows, r2["stamp"]["pid"])
+        self.assertEqual(self.cell(other, "state"), "執行中")
+        self.assert_tail(other, plain_body, page)
+
+    # ------------------------------------------------------------ item 13: machine slots
+
+    def test_item13_slots_on_every_row(self):
+        from core import slots
+        self.need()
+        n = self.NOW
+        self.put("opener-a", "opener", n - 30, title="T", revise=None, via="main", model="m", effort=None)
+        self.put("regression-int-g1", "regression", n - 20, group="g1", branch="int/g1", sha="a" * 40,
+                 exclusive=False, stage="full", since=self.ts(n - 20))
+        self.put("opener-d", "opener", n - 10, alive=False, title="d", revise=None, via="main", model="m",
+                 effort=None)
+        rows = self.rows()
+        self.assertEqual(len(rows), 3)
+        for row in rows:
+            self.assertNotIn("data-slots", row["attrs"])
+            self.assertNotIn("slots", row["cells"])
+        self.config(machine_slots=2)
+        slot = slots.take(self.cfg(), None)
+        self.assertTrue(slot and slot.held)
+        self.addCleanup(slot.release)
+        rows = self.rows()
+        self.assertEqual(len(rows), 3)
+        for row in rows:
+            self.assertEqual(row["attrs"].get("data-slots"), "1/2", row["attrs"])
+            self.assertEqual(self.cell(row, "slots"), "名額 1/2")
+
+    # ------------------------------------------------------------ item 14: escaping
+
+    def test_item14_record_text_is_escaped(self):
+        self.need()
+        self.put("opener-a", "opener", self.NOW - 30, title="<b>x</b>", revise=None, via="main", model="m",
+                 effort=None)
+        page = self.page()
+        rows = self.rows(page)
+        self.assertEqual(len(rows), 1)
+        self.assertIn("&lt;b&gt;x&lt;/b&gt;", page)
+        self.assertNotIn("<b>x</b>", page)
+
+    # ------------------------------------------------------------ item 15: render creates nothing
+
+    def test_item15_render_creates_nothing(self):
+        from core import inflight, slots
+        board = self.need()
+        self.config(machine_slots=2)
+        cfg = self.cfg()
+        live, slot_dir = inflight.folder(cfg), slots.slot_dir(cfg)
+        self.assertFalse(os.path.exists(live))
+        self.assertFalse(os.path.exists(slot_dir))
+        page = board.render(cfg, self.snap(), query={"tab": "live"}, now=self.NOW)
+        self.assertIn('id="tab-live"', page)
+        self.assertFalse(os.path.exists(live), "render created %s" % live)
+        self.assertFalse(os.path.exists(slot_dir), "render created %s" % slot_dir)
+
+    # ------------------------------------------------------------ item 16: three real processes
+
+    def test_item16_opener_issuer_and_regression_at_once(self):
+        self.need()
+        self.add(1, needs_verifier=False, complexity="simple", state="running", group="g1", target="int/g1",
+                 claimed_at=osx.now())
+        path = os.path.join(self.proj, "board", "config.json")
+        with open(path) as fh:
+            conf = json.load(fh)
+        conf["tests"]["full"] = "sh -c 'sleep 20; %s full'" % TESTS
+        with open(path, "w") as fh:
+            json.dump(conf, fh)
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "full held")
+        git(self.proj, "branch", "int/g1", "main")
+        git(self.proj, "branch", "int/g2", "main")
+        t_op = time.time()
+        op = self.popen("ticket_creator.py", "--request", "# live tab case\nbody", hold=20)
+        t_is = time.time()
+        iss = self.popen("ticket_issuer.py", "--id", "1", "--target", "int/g1", hold=20)
+        t_rg = time.time()
+        rg = self.popen("regression.py", "--branch", "int/g2", "--out", os.path.join(self.tmp, "r.json"), hold=0)
+        procs = (op, iss, rg)
+        deadline = time.time() + 30
+        agent_seen = None
+        kinds = set()
+        while time.time() < deadline:
+            rows = self.rows(self.page(now=None))
+            kinds = {r["attrs"].get("data-kind") for r in rows}
+            if "agent" in kinds and agent_seen is None:
+                agent_seen = time.time()
+            if {"opener", "agent", "regression"} <= kinds:
+                break
+            time.sleep(0.5)
+        for _, rec in self.live():
+            if rec.get("kind") == "agent" and rec.get("parent") in (op.pid, iss.pid):
+                self.kill_agent_later(rec)
+        self.assertTrue({"opener", "agent", "regression"} <= kinds, "rows seen: %r" % kinds)
+        time.sleep(max(0.0, agent_seen + 6 - time.time()))
+        rows = self.rows(self.page(now=None))
+        self.assertEqual(sorted(r["attrs"].get("data-kind") for r in rows), ["agent", "opener", "regression"],
+                         [r["attrs"] for r in rows])
+        for row in rows:
+            self.assertEqual(row["attrs"].get("data-state"), "running", row["attrs"])
+        by_kind = {r["attrs"]["data-kind"]: r for r in rows}
+        self.assertEqual(by_kind["opener"]["attrs"].get("data-pid"), str(op.pid))
+        self.assertEqual(by_kind["regression"]["attrs"].get("data-pid"), str(rg.pid))
+        for kind, t0 in (("opener", t_op), ("regression", t_rg)):
+            started = int(by_kind[kind]["attrs"]["data-started"])
+            self.assertGreaterEqual(started, t0 - 1, kind)
+            self.assertLessEqual(started, t0 + 5, kind)
+        started = int(by_kind["agent"]["attrs"]["data-started"])
+        self.assertGreaterEqual(started, t_is - 1, "agent")
+        self.assertLessEqual(started, agent_seen + 2, "agent")
+        self.assertIn("#1", self.cell(by_kind["agent"], "what"))
+        end = time.time() + 90
+        for p in procs:
+            p.wait(max(1, end - time.time()))
+        rows = self.rows(self.page(now=None))
+        self.assertEqual([r["attrs"] for r in rows if r["attrs"].get("data-state") == "running"], [])
+
+    # ------------------------------------------------------------ item 17: a killed opener
+
+    def test_item17_killed_opener_shows_as_ended(self):
+        self.need()
+        proc = self.popen("ticket_creator.py", "--request", "# killed case\nbody", hold=30)
+        deadline = time.time() + 30
+        seen = []
+        while time.time() < deadline and not seen:
+            seen = [r for r in self.by_pid(self.rows(self.page(now=None)), proc.pid)
+                    if r["attrs"].get("data-kind") == "opener"]
+            if not seen:
+                time.sleep(0.5)
+        self.assertTrue(seen, "no opener row for pid %d" % proc.pid)
+        agent = self.wait_for(lambda r: r.get("kind") == "agent" and r.get("parent") == proc.pid, proc=proc)
+        self.assertIsNotNone(agent, "no creator agent record; folder: %s" % self.live())
+        self.kill_agent_later(agent[1])
+        proc.kill()
+        proc.wait(30)
+        rows = self.rows(self.page(now=None))
+        openers = [r for r in rows if r["attrs"].get("data-kind") == "opener"]
+        self.assertEqual(len(openers), 1, [r["attrs"] for r in rows])
+        self.assertEqual(openers[0]["attrs"].get("data-pid"), str(proc.pid))
+        self.assertEqual(openers[0]["attrs"].get("data-state"), "ended")
+        self.assertEqual(self.cell(openers[0], "state"), "結束了,沒有交件")
+        self.assertEqual([r for r in self.by_pid(rows, proc.pid) if r["attrs"].get("data-state") == "running"], [])
