@@ -2,6 +2,7 @@
 tests behind the real test interface. Run: python3 -m unittest discover tests_devloop"""
 
 import glob
+import io
 import json
 import os
 import shutil
@@ -4260,3 +4261,112 @@ class ReleaseKeptOutput(unittest.TestCase):
         from core import release
         env = release.env(self.Cfg("/x"), {"id": "g1"}, "abc", "/x/runs/release/g1")
         self.assertEqual(env["DEVLOOP_RELEASE_DIR"], "/x/runs/release/g1")
+
+
+class T54Acceptance(unittest.TestCase):
+    """#54: git-using test classes run git with an isolated configuration (empty global, no
+    system, identity t / t@t), so a machine's global or system git settings never reach them."""
+
+    NESTED = ("TheHappyPath", "PoolRules", "GitRules", "AgentControlRelease")
+
+    def base(self):
+        cls = globals().get("GitIsolatedCase")
+        self.assertIsNotNone(cls, "tests_devloop/test_devloop.py defines no class GitIsolatedCase")
+        return cls
+
+    def tmpdir(self):
+        tmp = tempfile.mkdtemp(prefix="t54-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        return tmp
+
+    @staticmethod
+    def summary(result):
+        rows = []
+        for kind, items in (("error", result.errors), ("failure", result.failures)):
+            for test, tb in items:
+                last = [ln for ln in tb.strip().splitlines() if ln.strip()][-1:] or [""]
+                name = last[0].split(":", 1)[0].strip()
+                rows.append("%s %s (%s)" % (kind, test.id(), name))
+        return "; ".join(rows)
+
+    def test_item1_base_class_and_subclasses(self):
+        cls = self.base()
+        self.assertTrue(issubclass(cls, unittest.TestCase), "GitIsolatedCase is not a unittest.TestCase")
+        for name in ("LoopCase", "PoolRules", "GitRules", "AgentControlRelease"):
+            self.assertTrue(issubclass(globals()[name], cls), "%s is not a subclass of GitIsolatedCase" % name)
+
+    def test_items2_3_environment_inside_and_restored_after(self):
+        cls = self.base()
+        from unittest import mock
+        own = self.tmpdir()
+        other = os.path.join(own, "other-gitconfig")
+        with open(other, "w") as fh:
+            fh.write("[user]\n\tname = someone\n")
+        seen = {}
+
+        class Probe(cls):
+            def test_probe(self):
+                env = dict(os.environ)
+                seen["env"] = env
+                path = env.get("GIT_CONFIG_GLOBAL", "")
+                seen["isfile"] = bool(path) and os.path.isfile(path)
+                seen["size"] = os.path.getsize(path) if seen["isfile"] else None
+
+        with mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": other}):
+            before = dict(os.environ)
+            result = unittest.TextTestRunner(stream=io.StringIO()).run(
+                unittest.defaultTestLoader.loadTestsFromTestCase(Probe))
+            after = dict(os.environ)
+        self.assertTrue(result.wasSuccessful() and result.testsRun == 1,
+                        "probe run failed: %s" % self.summary(result))
+        env = seen["env"]
+        path = env.get("GIT_CONFIG_GLOBAL")
+        # item 2
+        self.assertNotEqual(path, other, "GIT_CONFIG_GLOBAL kept the file named before the test")
+        self.assertTrue(seen["isfile"], "GIT_CONFIG_GLOBAL does not name an existing file")
+        self.assertEqual(seen["size"], 0, "GIT_CONFIG_GLOBAL file is not empty")
+        self.assertNotEqual(os.path.realpath(os.path.dirname(path)), os.path.realpath(own))
+        self.assertFalse(os.path.realpath(path).startswith(os.path.realpath(own) + os.sep))
+        self.assertEqual(env.get("GIT_CONFIG_NOSYSTEM"), "1")
+        self.assertEqual(env.get("GIT_AUTHOR_NAME"), "t")
+        self.assertEqual(env.get("GIT_COMMITTER_NAME"), "t")
+        self.assertEqual(env.get("GIT_AUTHOR_EMAIL"), "t@t")
+        self.assertEqual(env.get("GIT_COMMITTER_EMAIL"), "t@t")
+        # item 3
+        self.assertEqual(after, before, "os.environ differs after the test from before it")
+        self.assertFalse(os.path.exists(path), "the test's GIT_CONFIG_GLOBAL file still exists")
+
+    def hostile_run(self, var):
+        from unittest import mock
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in list(os.environ):
+            if (key in ("GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_NOSYSTEM",
+                        "DEVLOOP_SLOT", "DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_ROLE")
+                    or key.startswith("GIT_CONFIG_KEY_") or key.startswith("GIT_CONFIG_VALUE_")):
+                del os.environ[key]
+        tmp = self.tmpdir()
+        signer = os.path.join(tmp, "signer.sh")
+        with open(signer, "w") as fh:
+            fh.write("#!/bin/sh\necho 'signer refused' >&2\nexit 1\n")
+        os.chmod(signer, 0o755)
+        hostile = os.path.join(tmp, "hostile-gitconfig")
+        with open(hostile, "w") as fh:
+            fh.write("[commit]\n\tgpgsign = true\n[gpg]\n\tformat = openpgp\n\tprogram = %s\n" % signer)
+        if var == "GIT_CONFIG_SYSTEM":
+            empty = os.path.join(tmp, "empty-gitconfig")
+            open(empty, "w").close()
+            os.environ["GIT_CONFIG_GLOBAL"] = empty
+        os.environ[var] = hostile
+        loader = unittest.defaultTestLoader
+        suite = unittest.TestSuite(loader.loadTestsFromTestCase(globals()[n]) for n in self.NESTED)
+        result = unittest.TextTestRunner(stream=io.StringIO()).run(suite)
+        self.assertGreater(result.testsRun, 0)
+        self.assertTrue(result.wasSuccessful(), "nested run not green: %s" % self.summary(result))
+
+    def test_item4_hostile_global_config(self):
+        self.hostile_run("GIT_CONFIG_GLOBAL")
+
+    def test_item5_hostile_system_config(self):
+        self.hostile_run("GIT_CONFIG_SYSTEM")
