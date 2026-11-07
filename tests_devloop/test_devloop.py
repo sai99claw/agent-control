@@ -4869,7 +4869,30 @@ class WorktreeSetup(LoopCase):
         worktrees.branch_tree(cfg, self.repo(), path, "t/1-cases", start="main")
         with open(os.path.join(self.wt, "runs", "setup", "t1-cases.log")) as fh:
             log = fh.read()
-        self.assertIn("hello from %s" % os.path.realpath(path), log.replace(path, os.path.realpath(path)))
+        self.assert_set_up_in(log, path)
+        self.assertIn("root=%s" % self.proj, log)
+
+    def assert_set_up_in(self, log, path):
+        m = re.search(r"^hello from (.*)$", log, re.M)
+        self.assertIsNotNone(m, log)
+        self.assertEqual(os.path.realpath(m.group(1)), os.path.realpath(path))
+
+    def test_log_check_survives_a_link_whose_real_path_contains_the_link_path(self):
+        from core import worktrees
+        T = os.path.realpath(self.tmp)
+        real = os.path.join(T, "private") + os.path.join(T, "var")
+        os.makedirs(real)
+        link = os.path.join(T, "var")
+        os.symlink(real, link)
+        self.assertIn(link, os.path.realpath(link))
+        self.assertNotEqual(link, os.path.realpath(link))
+        self.config(worktrees=os.path.join(link, "wt"))
+        cfg = self.cfg('echo "hello from $PWD"; echo "root=$AC_ROOT"')
+        path = os.path.join(link, "wt", "t1-cases")
+        worktrees.branch_tree(cfg, self.repo(), path, "t/1-cases", start="main")
+        with open(os.path.join(link, "wt", "runs", "setup", "t1-cases.log")) as fh:
+            log = fh.read()
+        self.assert_set_up_in(log, path)
         self.assertIn("root=%s" % self.proj, log)
 
     def test_a_reused_worktree_is_not_set_up_again(self):
