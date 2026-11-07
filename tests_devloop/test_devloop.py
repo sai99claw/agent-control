@@ -250,6 +250,93 @@ class RoundsAndFeedback(LoopCase):
         self.assertFalse(self.main_has("impl_1.txt"))
 
 
+class T62Acceptance(LoopCase):
+    """hard_block counts only the ticket's own change, not what was merged in from main."""
+
+    def layout(self, main_change, patterns=None, branch_from="int/g1"):
+        """int/g1 at the first commit; main one commit ahead (main_change writes it); a checkout
+        of t/1 created from branch_from. Returns the checkout path."""
+        if patterns is not None:
+            path = os.path.join(self.proj, "board", "config.json")
+            with open(path) as fh:
+                cfg = json.load(fh)
+            cfg["hard_block"]["patterns"] = patterns
+            with open(path, "w") as fh:
+                json.dump(cfg, fh)
+        os.makedirs(os.path.join(self.proj, "docs"), exist_ok=True)
+        with open(os.path.join(self.proj, "docs", "DECISIONS.md"), "w") as fh:
+            fh.write("# decisions\n")
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "--amend", "-m", "init")
+        git(self.proj, "branch", "int/g1", "main")
+        main_change(self.proj)
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "main moves on")
+        wt = os.path.join(self.tmp, "t1")
+        git(self.proj, "worktree", "add", "-q", wt, "-b", "t/1", branch_from)
+        return wt
+
+    def commit(self, wt, rel, line, msg):
+        with open(os.path.join(wt, rel), "a") as fh:
+            fh.write(line + "\n")
+        git(wt, "add", "-A")
+        git(wt, "commit", "-q", "-m", msg)
+
+    def hard_block(self, wt):
+        import ticket_issuer
+        from core.config import Config
+        from core.gitx import Git
+        issuer = ticket_issuer.Issuer(Config(self.proj), self.pool, "1", "int/g1")
+        issuer.hard_block(Git(wt))
+
+    def no_stuck(self, wt):
+        import ticket_issuer
+        try:
+            self.hard_block(wt)
+        except ticket_issuer.Stuck as e:
+            self.fail("hard_block stopped a ticket whose own change is clean: %s %s" % (e.reason, e.text))
+
+    @staticmethod
+    def edit_decisions(root):
+        with open(os.path.join(root, "docs", "DECISIONS.md"), "a") as fh:
+            fh.write("a ruling made on main\n")
+
+    def test_decisions_edit_merged_from_main_does_not_stop(self):
+        import ticket_issuer
+        wt = self.layout(self.edit_decisions)
+        git(wt, "merge", "-q", "--no-edit", "main")
+        self.commit(wt, "impl.py", "x = 1", "own work")
+        self.no_stuck(wt)
+        # the ticket's own edit of the same path still stops it
+        self.commit(wt, "docs/DECISIONS.md", "a line from the ticket", "own decisions edit")
+        with self.assertRaises(ticket_issuer.Stuck) as cm:
+            self.hard_block(wt)
+        self.assertEqual(cm.exception.reason, "hard_block")
+        self.assertIn("docs/DECISIONS.md", cm.exception.text)
+
+    def test_pattern_line_merged_from_main_does_not_stop(self):
+        import ticket_issuer
+
+        def add_mark(root):
+            with open(os.path.join(root, "main_code.py"), "a") as fh:
+                fh.write("y = 'FORBIDDEN_MARK'\n")
+        wt = self.layout(add_mark, patterns=["FORBIDDEN_MARK"])
+        git(wt, "merge", "-q", "--no-edit", "main")
+        self.commit(wt, "impl.py", "x = 1", "own work")
+        self.no_stuck(wt)
+        # the ticket's own line with the pattern still stops it
+        self.commit(wt, "impl.py", "z = 'FORBIDDEN_MARK'", "own pattern line")
+        with self.assertRaises(ticket_issuer.Stuck) as cm:
+            self.hard_block(wt)
+        self.assertEqual(cm.exception.reason, "hard_block")
+        self.assertIn("FORBIDDEN_MARK", cm.exception.text)
+
+    def test_branch_started_from_newer_main_does_not_stop(self):
+        wt = self.layout(self.edit_decisions, branch_from="main")
+        self.commit(wt, "impl.py", "x = 1", "own work")
+        self.no_stuck(wt)
+
+
 class T51Acceptance(LoopCase):
     """Ticket #51: under --forever an env or unmeasured regression (or a fixer whose worktree setup
     failed) pauses the group and the controller goes on; `tickets.py rerun g<N>` lifts the pause.
@@ -8905,6 +8992,69 @@ class GitRules(GitIsolatedCase):
         self.assertFalse(ok)
         self.assertIn("overwritten", why)
         self.assertEqual(git(tmp, "status", "--porcelain"), "?? cache.pyc")
+
+
+class HardBlockOwnChange(LoopCase):
+    def _issuer_for(self, from_main, own_file, own_text, patterns=None):
+        import ticket_issuer
+        from core.config import Config
+        from core.gitx import Git
+        if patterns is not None:
+            path = os.path.join(self.proj, "board", "config.json")
+            with open(path) as fh:
+                cfg = json.load(fh)
+            cfg["hard_block"]["patterns"] = patterns
+            with open(path, "w") as fh:
+                json.dump(cfg, fh)
+        os.makedirs(os.path.join(self.proj, "docs"), exist_ok=True)
+        with open(os.path.join(self.proj, "docs", "DECISIONS.md"), "w") as fh:
+            fh.write("d\n")
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "first")
+        git(self.proj, "branch", "int/g1", "main")
+        with open(os.path.join(self.proj, "docs", "DECISIONS.md"), "a") as fh:
+            fh.write("main edit\n")
+        with open(os.path.join(self.proj, "main_code.py"), "w") as fh:
+            fh.write("x = 1  # FORBIDDEN_MARK\n")
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "main change")
+        wt = os.path.join(self.tmp, "t1")
+        git(self.proj, "worktree", "add", "-q", wt, "-b", "t/1", "main" if from_main else "int/g1")
+        if not from_main:
+            git(wt, "merge", "-q", "--no-edit", "main")
+        with open(os.path.join(wt, own_file), "a") as fh:
+            fh.write(own_text)
+        git(wt, "add", "-A")
+        git(wt, "commit", "-q", "-m", "own")
+        issuer = ticket_issuer.Issuer(Config(self.proj), self.pool, "1", "int/g1")
+        return issuer, Git(wt)
+
+    def test_merged_in_main_change_does_not_count_but_own_change_does(self):
+        import ticket_issuer
+        issuer, g = self._issuer_for(False, "impl.py", "y = 2\n")
+        issuer.hard_block(g)
+        with open(os.path.join(g.cwd, "docs", "DECISIONS.md"), "a") as fh:
+            fh.write("own\n")
+        git(g.cwd, "commit", "-q", "-am", "own decisions")
+        with self.assertRaises(ticket_issuer.Stuck) as cm:
+            issuer.hard_block(g)
+        self.assertEqual(cm.exception.reason, "hard_block")
+        self.assertIn("docs/DECISIONS.md", str(cm.exception))
+
+    def test_pattern_from_main_does_not_count_but_own_line_does(self):
+        import ticket_issuer
+        issuer, g = self._issuer_for(False, "impl.py", "y = 2\n", patterns=["FORBIDDEN_MARK"])
+        issuer.hard_block(g)
+        with open(os.path.join(g.cwd, "impl.py"), "a") as fh:
+            fh.write("z = 3  # FORBIDDEN_MARK\n")
+        git(g.cwd, "commit", "-q", "-am", "own mark")
+        with self.assertRaises(ticket_issuer.Stuck) as cm:
+            issuer.hard_block(g)
+        self.assertIn("FORBIDDEN_MARK", str(cm.exception))
+
+    def test_branch_started_from_newer_main_does_not_count_main(self):
+        issuer, g = self._issuer_for(True, "impl.py", "y = 2\n", patterns=["FORBIDDEN_MARK"])
+        issuer.hard_block(g)
 
 
 class BoardTicketFilters(LoopCase):
