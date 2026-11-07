@@ -1817,6 +1817,78 @@ class AnswerNaming(LoopCase):
         self.assertEqual(snap.inbox["p1"]["acked_by"], "a@x.com")
 
 
+
+class OpenerCostRows(LoopCase):
+    """ticket_creator.split, board.run_count / cost_rows and the opener's cost rows (implementer's unit cases)."""
+
+    ROW = {"role": "creator", "model": "m", "run_dir": "/r/a1", "input_tokens": 1001, "output_tokens": 300,
+           "cache_read_tokens": 5000, "cache_write_tokens": None, "usd": 0.9, "seconds": 3, "session_id": "s1"}
+
+    def setUp(self):
+        super().setUp()
+        for k in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(k, None)
+
+    def test_split_gives_the_remainder_to_the_lowest_id_and_keeps_nulls(self):
+        import ticket_creator
+        a, b, c = ticket_creator.split(self.ROW, ["10", "9", "11"])
+        self.assertEqual([r["input_tokens"] for r in (a, b, c)], [335, 333, 333])
+        self.assertEqual([r["output_tokens"] for r in (a, b, c)], [100, 100, 100])
+        self.assertEqual([r["cache_write_tokens"] for r in (a, b, c)], [None] * 3)
+        self.assertAlmostEqual(a["usd"], 0.3, delta=1e-9)
+        self.assertAlmostEqual(c["seconds"], 1.0, delta=1e-9)
+        self.assertEqual(a["split_over"], ["9", "10", "11"])
+        self.assertEqual(a["session_id"], "s1")
+        self.assertNotIn("split_over", self.ROW)
+
+    def test_run_count_counts_a_split_run_once(self):
+        import board
+        import ticket_creator
+        shares = ticket_creator.split(self.ROW, ["1", "2"])
+        other = dict(self.ROW, run_dir="/r/a2")
+        self.assertEqual(board.run_count(shares + ticket_creator.split(other, ["1", "2"]) + [self.ROW, self.ROW]), 4)
+        self.assertEqual(board.run_count([]), 0)
+
+    def test_cost_rows_reads_inbox_pages(self):
+        import board
+        self.pool.report("decision", "request", "q", cost=[self.ROW, "junk"])
+        self.assertEqual([r["input_tokens"] for r in board.cost_rows(self.snap())], [1001])
+
+    def test_request_rows_go_on_the_opened_tickets_and_question_page(self):
+        self.plan(creator={"-": ["tickets"]})
+        res = self.run_py("ticket_creator.py", "--request", "two things")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        snap = self.snap()
+        rows = [snap.ticket(i)["cost"] for i in ("1", "2")]
+        self.assertEqual([len(r) for r in rows], [1, 1])
+        self.assertEqual(rows[0][0]["split_over"], ["1", "2"])
+        self.assertEqual(rows[0][0]["run_dir"], rows[1][0]["run_dir"])
+        self.plan(creator={"-": ["question"]})
+        res = self.run_py("ticket_creator.py", "--request", "which")
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        page = [p for p in self.snap().inbox.values() if p.get("kind") == "decision"][0]
+        self.assertEqual([(r["role"], "split_over" in r) for r in page["cost"]], [("creator", False)])
+
+    def test_revise_appends_one_row_even_without_a_hand_in(self):
+        self.add(1)
+        self.plan(creator={"1": ["nothing"]})
+        res = self.run_py("ticket_creator.py", "--revise", "1", "--from", "worker", "--reason", "x")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        cost = self.snap().ticket("1")["cost"]
+        self.assertEqual([(r["role"], r["outcome"]) for r in cost], [("creator", "no hand-in")])
+        self.assertFalse(any(p.get("cost") for p in self.snap().inbox.values()))
+
+    def test_refused_revise_and_retry_add_no_row(self):
+        self.add(1, state="merged")
+        self.add(2, state="stuck")
+        res = self.run_py("ticket_creator.py", "--revise", "1", "--from", "worker", "--reason", "x")
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        res = self.run_py("ticket_creator.py", "--revise", "2", "--from", "user", "--decision", "retry",
+                          "--reason", "again")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        snap = self.snap()
+        self.assertEqual([snap.ticket(i).get("cost") for i in ("1", "2")], [None, None])
+
 class CasesThrownOut(LoopCase):
     def test_a_cases_wrong_revision_after_the_last_round_start_throws_out_the_cases(self):
         import ticket_issuer

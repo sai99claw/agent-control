@@ -1043,7 +1043,8 @@ def _number(value, measure):
 
 
 def cost_rows(snap):
-    """Every cost row the pool holds: tickets', integration branches' and memory runs'."""
+    """Every cost row the pool holds: tickets', integration branches', memory runs' and inbox pages'
+    (an opener run that opened no ticket keeps its row on the decision page it wrote)."""
     rows = []
     for t in snap.tickets.values():
         rows += [r for r in t.get("cost") or [] if isinstance(r, dict)]
@@ -1053,7 +1054,17 @@ def cost_rows(snap):
     for run in state.get("runs") or []:
         if isinstance(run, dict):
             rows += [r for r in run.get("cost") or [] if isinstance(r, dict)]
+    for page in (snap.inbox or {}).values():
+        if isinstance(page, dict):
+            rows += [r for r in page.get("cost") or [] if isinstance(r, dict)]
     return rows
+
+
+def run_count(rows):
+    """How many agent runs the rows stand for: the shares of one split opener run (rows that carry
+    split_over) count once per distinct run_dir; every other row counts once."""
+    split = set(r.get("run_dir") for r in rows if r.get("split_over"))
+    return len(split) + sum(1 for r in rows if not r.get("split_over"))
 
 
 def row_day(row):
@@ -1156,7 +1167,7 @@ def render_split(heading, rows, key):
     out = ['<section><h2>%s</h2><div class="scroll"><table><tr><th>%s</th><th>次數</th>%s</tr>'
            % (e(heading), e("角色" if key == "role" else "模型"), _measure_heads())]
     for name in sorted(groups, key=str):
-        out.append('<tr><td>%s</td><td class="n">%d</td>%s</tr>' % (e(name), len(groups[name]),
+        out.append('<tr><td>%s</td><td class="n">%d</td>%s</tr>' % (e(name), run_count(groups[name]),
                                                                    _measure_cells(groups[name])))
     out.append("</table></div></section>")
     return "".join(out)
@@ -1170,17 +1181,17 @@ def render_tokens_tab(cfg, snap, query, now):
         if day in by_day:
             by_day[day].append(row)
     recent = [row for d in days for row in by_day[d]]
-    out = [TOKEN_STYLE, "<p class='quiet'>開題者與改票者的執行在 pool 裡不記 cost 列,所以不在這些數字裡。</p>"]
+    out = [TOKEN_STYLE]
 
     out.append('<section><h2>近 30 天</h2><div class="scroll"><table><tr><th>次數</th>%s</tr>'
                '<tr><td class="n">%d</td>%s</tr></table></div></section>'
-               % (_measure_heads(), len(recent), _measure_cells(recent)))
+               % (_measure_heads(), run_count(recent), _measure_cells(recent)))
 
     out.append('<section><h2>每天</h2><div class="charts">%s</div>'
                % "".join(token_chart(m, label, days, by_day) for m, label in TOKEN_MEASURES))
     out.append('<div class="scroll"><table><caption>每天</caption><tr><th>日期</th><th>次數</th>%s</tr>' % _measure_heads())
     for d in days:
-        out.append('<tr><td>%s</td><td class="n">%d</td>%s</tr>' % (e(d), len(by_day[d]), _measure_cells(by_day[d])))
+        out.append('<tr><td>%s</td><td class="n">%d</td>%s</tr>' % (e(d), run_count(by_day[d]), _measure_cells(by_day[d])))
     out.append("</table></div></section>")
 
     out.append(render_split("依角色", recent, "role"))
