@@ -8534,6 +8534,41 @@ class LiveQueueUnits(BoardLiveTab):
         self.assertEqual([r["attrs"]["data-subject"] for r in rows], [str(c["subject"]) for c in cards])
 
 
+class LiveIdleReasonUnits(BoardLiveTab):
+    """#68's helper: live_idle_reason picks the first reason that holds."""
+
+    def lock(self, content):
+        path = os.path.join(self.cfg().worktree_root, "controller.lock")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write(content)
+
+    def reason(self):
+        import board
+        return board.live_idle_reason(self.cfg(), self.snap(), self.NOW)
+
+    def test_empty_pool_is_none(self):
+        self.assertEqual(self.reason(), ("none", "沒有在跑的,也沒有待做的事。"))
+
+    def test_ready_ticket_needs_a_live_controller(self):
+        self.add(1)
+        self.assertEqual(self.reason()[0], "controller")
+        self.lock("not json")
+        self.assertEqual(self.reason()[0], "controller")
+        self.lock(json.dumps(self.dead("2026-11-06T10:00:00Z")))
+        self.assertEqual(self.reason()[0], "controller")
+        self.lock(json.dumps(osx.stamp()))
+        self.assertEqual(self.reason()[0], "dispatch")
+
+    def test_deps_names_first_ticket_and_dependency(self):
+        self.lock(json.dumps(osx.stamp()))
+        self.add(1, state="merged", group="g1")
+        self.add(2, deps=[1])
+        self.pool.update(lambda tx: tx.put_group({"id": "g1", "branch": "int/g1", "state": "pr", "members": ["1"]}),
+                         "test: group")
+        self.assertEqual(self.reason(), ("deps", "沒有可派的票;下一張 #2 在等 #1 落地。"))
+
+
 class T16Acceptance(LoopCase):
     """Ticket #16: memory written into a git repository is one fast-forward commit on its branch."""
 

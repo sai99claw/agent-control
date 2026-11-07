@@ -663,6 +663,38 @@ def render_live_row(row, now, slots_text):
                                "".join('<td class="%s">%s</td>' % c for c in cells))
 
 
+def live_idle_reason(cfg, snap, now):
+    """(reason, sentence): why nothing runs, the first of none, decision, controller, deps, dispatch."""
+    ready = [i for i, t in snap.tickets.items() if t.get("state") == "ready"]
+    work = bool(ready) or any(t.get("state") == "running" for t in snap.tickets.values()) or any(
+        g.get("state") in ("open", "pr", "fixing", "verified") and not g.get("paused")
+        for g in (v or {} for v in snap.groups.values()))
+    cards = waiting_cards(snap, now)
+    if not work:
+        if not cards:
+            return "none", "沒有在跑的,也沒有待做的事。"
+        return "decision", "沒有在跑的;剩下的都在等你判(要你判 %d 件)。" % len(cards)
+    try:
+        lock = osx.read_json(os.path.join(cfg.worktree_root, "controller.lock"))
+    except osx.OSFailure:
+        lock = None
+    if not isinstance(lock, dict) or osx.stamp_dead(lock):
+        return "controller", "controller 沒在跑:actl run(或 actl run --forever)才會派工與驗證。"
+    if ready:
+        def satisfied(d):
+            t = snap.tickets.get(d)
+            if t is None:
+                return False
+            if t.get("state") == "landed":
+                return True
+            return t.get("state") == "merged" and (snap.groups.get(str(t.get("group"))) or {}).get("state") == "open"
+        blocked = {i: [d for d in dagmod.deps(snap.dag, i) if not satisfied(d)] for i in ready}
+        if all(blocked.values()):
+            first = next(i for i in dagmod.topo(snap.dag) if i in blocked)
+            return "deps", "沒有可派的票;下一張 #%s 在等 #%s 落地。" % (first, blocked[first][0])
+    return "dispatch", "沒有在跑的;controller 下一輪就會接手。"
+
+
 def render_live_tab(cfg, snap, key, query, now):
     """One row per running opener, agent, agent-less issuer, regression, fixer and release (and per
     record whose process ended without handing in), oldest first. Writes and creates nothing."""
@@ -673,6 +705,10 @@ def render_live_tab(cfg, snap, key, query, now):
     used = hostmod.slots_in_use(cfg)
     slots_text = None if used is None else "%d/%d" % (used, cfg.machine_slots)
     out = [LIVE_STYLE, '<section><a class="refresh" href="?tab=live">重新整理</a><h2>進行中</h2>']
+    from core import inflight
+    if not any(inflight.status(rec) == "running" for _, rec in inflight.records(cfg)):
+        reason, sentence = live_idle_reason(cfg, snap, now)
+        out.append('<p class="why" data-why="%s">%s</p>' % (e(reason), e(sentence)))
     if not rows:
         out.append('<p class="quiet">沒有在跑的。</p>')
     out.append('<div class="scroll"><table class="live">')

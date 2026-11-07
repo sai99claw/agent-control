@@ -286,7 +286,10 @@ log lines, and with `machine_slots` set the slots in use (`名額 1/2`). An open
 agent is shown on that row, not as a row of its own; an issuer whose agent runs has no row (the
 agent's row stands for it). A release command may print lines `devloop-stage: <text>`; the row
 shows the text of the last such line as its step. The tab has a 重新整理 link; the page reloads
-every 30 s anyway when nobody types.
+every 30 s anyway when nobody types. When no record is running the tab says in one sentence
+(`p.why`, `data-why`) why, the first that holds of: `none` (no work left, nothing waits for the user),
+`decision` (only cards for the user are left), `controller` (no live `controller.lock`), `deps` (every
+ready ticket waits for an unfinished dependency), `dispatch` (the controller picks it up next round).
 
 Every row that waits for a machine slot (state `slot`; a regression waiting for the whole machine
 is not one) shows its place in the queue, `等機器名額:第 k 個(共 n 個在等)` (`data-queue="k/n"`, ordered by
