@@ -1181,7 +1181,8 @@ def render_tokens_tab(cfg, snap, query, now):
         if day in by_day:
             by_day[day].append(row)
     recent = [row for d in days for row in by_day[d]]
-    out = [TOKEN_STYLE]
+    out = [TOKEN_STYLE, "<p class='quiet'>開題者開票與改票的執行都算在這些數字裡:開票那次分攤在它開的票上,"
+           "改票記在被改的票上,沒開出票的記在它寫的決定頁上。</p>"]
 
     out.append('<section><h2>近 30 天</h2><div class="scroll"><table><tr><th>次數</th>%s</tr>'
                '<tr><td class="n">%d</td>%s</tr></table></div></section>'
