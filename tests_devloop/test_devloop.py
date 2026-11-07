@@ -13805,3 +13805,270 @@ class T66Acceptance(LoopCase):
         self.assertEqual(openers[0]["attrs"].get("data-state"), "ended")
         self.assertEqual(self.cell(openers[0], "state"), "結束了,沒有交件")
         self.assertEqual([r for r in self.by_pid(rows, proc.pid) if r["attrs"].get("data-state") == "running"], [])
+
+
+class T67Acceptance(LoopCase):
+    """Acceptance of #67: on the 進行中 tab every slot wait shows its queue position (and whom it gives
+    way to), and every ready ticket and every decision waiting for the user has a row. Expected texts
+    are the ticket's own."""
+
+    FMT = T66Acceptance.FMT
+    VOID = T66Acceptance.VOID
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in list(os.environ):
+            if key.startswith("DEVLOOP_"):
+                del os.environ[key]
+        for key in list(self.env):
+            if key.startswith("DEVLOOP_"):
+                del self.env[key]
+        os.environ["AC_ROOT"] = self.proj
+        self.NOW = int(time.time())
+
+    cfg = T64Acceptance.cfg
+    ts = T66Acceptance.ts
+    stamp = T66Acceptance.stamp
+    put = T66Acceptance.put
+    agent = T66Acceptance.agent
+    page = T66Acceptance.page
+    parse = T66Acceptance.parse
+    rows = T66Acceptance.rows
+    by_pid = T66Acceptance.by_pid
+    one = T66Acceptance.one
+    cell = T66Acceptance.cell
+
+    # ------------------------------------------------------------ helpers
+
+    def need(self):
+        import board
+        self.assertTrue(hasattr(board, "TABS"), "board.TABS is missing")
+        self.assertIn("live", [t[0] for t in board.TABS], "board.TABS has no 'live' entry")
+        return board
+
+    def queue_text(self, k, n):
+        return "等機器名額:第 %d 個(共 %d 個在等)" % (k, n)
+
+    def queued(self, rows):
+        return [r for r in rows if "data-queue" in r["attrs"]]
+
+    def kinds(self, rows):
+        return [r["attrs"].get("data-kind") for r in rows]
+
+    def set_group(self, gid, state):
+        def change(tx):
+            tx.put_group({"id": gid, "branch": "int/" + gid, "state": state, "members": []})
+        self.pool.update(change, "test: group %s" % gid)
+
+    def reput(self, name, rec):
+        from core import inflight
+        inflight.put(self.cfg(), name, rec)
+
+    def slot_fixture(self):
+        """Item 1's fixture: three standalone slot agents and a regression in stage 'machine'. The
+        stamps' start order differs from the 'since' order, so ordering by start gives other ranks."""
+        n = self.NOW
+        base = n - 600
+        recs = {}
+        # (name, since, stamp started): started order is a, b, c; since order is a/c (tie), b
+        for name, since, started in (("agent-b", base + 5, n - 50), ("agent-c", base, n - 40),
+                                     ("agent-a", base, n - 60)):
+            recs[name] = self.agent(name, 999999, started, state="slot", since=self.ts(since))
+        recs["regression-int-g2"] = self.put("regression-int-g2", "regression", n - 70, group="g2",
+                                             branch="int/g2", sha="b" * 40, exclusive=False, stage="machine",
+                                             since=self.ts(base - 100))
+        # neither a quota agent nor an ended slot agent is in the queue
+        recs["agent-q"] = self.agent("agent-q", 999999, n - 30, state="quota", since=self.ts(base - 50),
+                                     until=self.ts(n + 600))
+        recs["agent-z"] = self.agent("agent-z", 999999, n - 20, alive=False, state="slot",
+                                     since=self.ts(base - 50))
+        return recs
+
+    # ------------------------------------------------------------ item 1: queue position
+
+    def test_item1_slot_rows_are_numbered_by_since(self):
+        self.need()
+        recs = self.slot_fixture()
+        rows = self.rows()
+        self.assertTrue(self.queued(rows), "no row carries data-queue: %r" % [r["attrs"] for r in rows])
+        want = {"agent-a": (1, 3), "agent-c": (2, 3), "agent-b": (3, 3)}
+        for name, (k, total) in want.items():
+            row = self.one(rows, recs[name]["stamp"]["pid"])
+            self.assertEqual(row["attrs"].get("data-state"), "slot", name)
+            self.assertEqual(row["attrs"].get("data-queue"), "%d/%d" % (k, total), name)
+            self.assertEqual(self.cell(row, "state"), self.queue_text(k, total), name)
+        machine = self.one(rows, recs["regression-int-g2"]["stamp"]["pid"])
+        self.assertEqual(machine["attrs"].get("data-state"), "slot")
+        self.assertNotIn("data-queue", machine["attrs"], "a regression in stage 'machine' is not queued")
+        for name in ("agent-q", "agent-z"):
+            self.assertNotIn("data-queue", self.one(rows, recs[name]["stamp"]["pid"])["attrs"], name)
+        slot_rows = [r for r in rows if r["attrs"].get("data-state") == "slot"]
+        self.assertEqual(len(self.queued(rows)), len(slot_rows) - 1, "every slot row but the machine one")
+
+    def test_item1_waiting_record_since_for_every_kind(self):
+        """Opener and fixer rows rank by their agent's since, a regression row by its own since; the
+        stamps start in the opposite order."""
+        self.need()
+        n = self.NOW
+        base = n - 900
+        op = self.put("opener-a", "opener", n - 100, title="T", revise=None, via="main", model="m", effort=None)
+        self.agent("agent-op", op["stamp"]["pid"], n - 95, role="creator", state="slot", since=self.ts(base + 30))
+        fx = self.put("fixer-g3", "fixer", n - 90, group="g3", round=1, max_rounds=3)
+        self.agent("agent-fx", fx["stamp"]["pid"], n - 85, role="fixer", group="g3", round=1, state="slot",
+                   since=self.ts(base + 20))
+        rg = self.put("regression-int-g4", "regression", n - 80, group="g4", branch="int/g4", sha="c" * 40,
+                      exclusive=False, stage="slot", since=self.ts(base + 10))
+        ag = self.agent("agent-solo", 999999, n - 75, state="slot", since=self.ts(base))
+        rows = self.rows()
+        self.assertTrue(self.queued(rows), "no row carries data-queue: %r" % [r["attrs"] for r in rows])
+        expect = [(ag, 1), (rg, 2), (fx, 3), (op, 4)]
+        for rec, k in expect:
+            row = self.one(rows, rec["stamp"]["pid"])
+            self.assertEqual(row["attrs"].get("data-queue"), "%d/4" % k, row["attrs"])
+            self.assertEqual(self.cell(row, "state"), self.queue_text(k, 4), row["attrs"])
+        self.assertEqual(len(self.queued(rows)), 4)
+
+    # ------------------------------------------------------------ item 2: giving way
+
+    def test_item2_queued_rows_yield_to_running_exclusive_regression(self):
+        self.need()
+        recs = self.slot_fixture()
+        n = self.NOW
+        name = "regression-int-g7"
+        excl = self.put(name, "regression", n - 10, group="g7", branch="int/g7", sha="d" * 40, exclusive=True,
+                        stage="full", since=self.ts(n - 10))
+        rows = self.rows()
+        queued = self.queued(rows)
+        self.assertEqual(len(queued), 3, [r["attrs"] for r in rows])
+        self.assertTrue([r for r in rows if "data-yield" in r["attrs"]],
+                        "no row carries data-yield: %r" % [r["attrs"] for r in rows])
+        for row in queued:
+            k, total = (int(x) for x in row["attrs"]["data-queue"].split("/"))
+            self.assertEqual(row["attrs"].get("data-yield"), "g7", row["attrs"])
+            self.assertTrue(self.cell(row, "state").endswith(",讓位給 g7 的獨占 regression"), row["cells"])
+            self.assertEqual(self.cell(row, "state"), self.queue_text(k, total) + ",讓位給 g7 的獨占 regression")
+        self.assertEqual([r["attrs"] for r in rows if "data-yield" in r["attrs"] and "data-queue" not in r["attrs"]],
+                         [], "only queued rows give way")
+        self.assertEqual(self.one(rows, recs["agent-a"]["stamp"]["pid"])["attrs"].get("data-queue"), "1/3")
+        # the same record, no longer exclusive: nobody gives way
+        excl["exclusive"] = False
+        self.reput(name, excl)
+        rows = self.rows()
+        self.assertEqual(len(self.queued(rows)), 3)
+        self.assertEqual([r["attrs"] for r in rows if "data-yield" in r["attrs"]], [])
+        for row in self.queued(rows):
+            k, total = (int(x) for x in row["attrs"]["data-queue"].split("/"))
+            self.assertEqual(self.cell(row, "state"), self.queue_text(k, total))
+
+    # ------------------------------------------------------------ item 3: ticket rows
+
+    def ticket_fixture(self):
+        self.set_group("g1", "open")
+        self.set_group("g2", "pr")
+        self.add(1, state="landed", group="g1")
+        self.add(2, state="merged", group="g1")
+        self.add(3, state="merged", group="g2")
+        self.add(4, deps=[1, 2])
+        self.add(5, deps=[3, 9])
+        self.add(6, deps=[4])
+        self.add(10, deps=[1])
+        self.add(11, state="running", group="g1", deps=[1])
+
+    def ticket_rows(self, rows):
+        return [r for r in rows if r["attrs"].get("data-kind") == "ticket"]
+
+    def test_item3_ready_ticket_rows(self):
+        board = self.need()
+        n = self.NOW
+        self.ticket_fixture()
+        self.put("opener-a", "opener", n - 30, title="T", revise=None, via="main", model="m", effort=None)
+        self.put("opener-d", "opener", n - 20, alive=False, title="d", revise=None, via="main", model="m",
+                 effort=None)
+        rows = self.rows()
+        tickets = self.ticket_rows(rows)
+        self.assertTrue(tickets, "no row with data-kind=ticket: %r" % [r["attrs"] for r in rows])
+        self.assertEqual([r["attrs"].get("data-ticket") for r in tickets], ["4", "5", "6", "10"],
+                         "one row per ready ticket, numeric order")
+        merged = board.STATE_TEXT["merged"]
+        ready = board.STATE_TEXT["ready"]
+        want = {"4": ("ready", "待派"),
+                "5": ("deps", "等 #3(%s)、#9(不存在) 落地" % merged),
+                "6": ("deps", "等 #4(%s) 落地" % ready),
+                "10": ("ready", "待派")}
+        for row in tickets:
+            ident = row["attrs"]["data-ticket"]
+            self.assertEqual(row["attrs"].get("data-state"), want[ident][0], ident)
+            self.assertEqual(self.cell(row, "state"), want[ident][1], ident)
+            self.assertEqual(self.cell(row, "what"), "#%s ticket %s" % (ident, ident))
+        self.assertEqual(self.kinds(rows), ["opener", "ticket", "ticket", "ticket", "ticket", "opener"],
+                         [r["attrs"] for r in rows])
+        self.assertEqual(rows[0]["attrs"].get("data-state"), "running")
+        self.assertEqual(rows[-1]["attrs"].get("data-state"), "ended")
+
+    # ------------------------------------------------------------ item 4: decision rows
+
+    def decision_fixture(self):
+        self.set_group("g1", "open")
+        self.add(1, state="stuck", stuck={"reason": "env", "text": "screen locked", "at": osx.now()})
+        self.add(2)
+        self.pool.report("decision", "g1", "pick one")
+
+    def tr_html(self, page, kind):
+        return re.findall(r'<tr\b[^>]*data-kind="%s"[^>]*>.*?</tr>' % kind, page, re.S)
+
+    def test_item4_decision_rows(self):
+        board = self.need()
+        n = self.NOW
+        self.decision_fixture()
+        self.put("opener-a", "opener", n - 30, title="T", revise=None, via="main", model="m", effort=None)
+        self.put("opener-d", "opener", n - 20, alive=False, title="d", revise=None, via="main", model="m",
+                 effort=None)
+        cards = board.waiting_cards(self.snap(), n)
+        self.assertEqual(len(cards), 2, "the fixture makes two cards: %r" % cards)
+        page = self.page()
+        rows = self.rows(page)
+        decisions = [r for r in rows if r["attrs"].get("data-kind") == "decision"]
+        self.assertTrue(decisions, "no row with data-kind=decision: %r" % [r["attrs"] for r in rows])
+        self.assertEqual([r["attrs"].get("data-subject") for r in decisions], [str(c["subject"]) for c in cards])
+        for row, card in zip(decisions, cards):
+            self.assertEqual(row["attrs"].get("data-state"), "decision")
+            self.assertEqual(self.cell(row, "state"), card["want"])
+        html_rows = self.tr_html(page, "decision")
+        self.assertEqual(len(html_rows), len(cards))
+        for tr in html_rows:
+            self.assertIn('<a href="?tab=decide"', tr)
+        self.assertEqual(self.kinds(rows), ["opener", "ticket", "decision", "decision", "opener"],
+                         [r["attrs"] for r in rows])
+        self.assertEqual(rows[-1]["attrs"].get("data-state"), "ended")
+
+    # ------------------------------------------------------------ item 5: no process cells, slots
+
+    def test_item5_ticket_and_decision_rows_have_no_process_cells(self):
+        from core import slots
+        self.need()
+        n = self.NOW
+        self.decision_fixture()
+        self.put("opener-a", "opener", n - 30, title="T", revise=None, via="main", model="m", effort=None)
+        self.config(machine_slots=2)
+        slot = slots.take(self.cfg(), None)
+        self.assertTrue(slot and slot.held)
+        self.addCleanup(slot.release)
+        rows = self.rows()
+        extra = [r for r in rows if r["attrs"].get("data-kind") in ("ticket", "decision")]
+        self.assertEqual(sorted(self.kinds(extra)), ["decision", "decision", "ticket"],
+                         [r["attrs"] for r in rows])
+        opener = [r for r in rows if r["attrs"].get("data-kind") == "opener"]
+        self.assertEqual(len(opener), 1)
+        slots_attr = opener[0]["attrs"].get("data-slots")
+        self.assertEqual(slots_attr, "1/2")
+        for row in extra:
+            a = row["attrs"]
+            self.assertNotIn("data-pid", a, a)
+            self.assertNotIn("data-started", a, a)
+            self.assertEqual(self.cell(row, "start"), "", a)
+            self.assertEqual(self.cell(row, "elapsed"), "", a)
+            self.assertEqual(a.get("data-slots"), slots_attr, a)
+            self.assertEqual(self.cell(row, "slots"), "名額 " + slots_attr, a)
