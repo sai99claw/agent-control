@@ -6015,6 +6015,556 @@ class MemoryGitWriter(LoopCase):
         self.assertEqual(git(self.proj, "rev-parse", "main"), before)
 
 
+class T57Acceptance(LoopCase):
+    """Ticket #57: every 要你判 card carries the buttons its subject allows; pressing one (POST act)
+    runs the matching script under the viewer's name (the trusted user's entry, else 'user'),
+    acknowledges the card's page and leaves the outcome on the card. Each case runs on a real board
+    subprocess, as a trusted user (B = 'a@x.com') or with the key (B = 'user'). Expected values come
+    from the ticket text, never from board.py."""
+
+    HEADER = "X-Auth-Request-Email"
+    NAME = "a@x.com"
+    KEY = "s3cret"
+    TICKET_BUTTONS = [("revise", "照我的話改"), ("retry", "再試一次"), ("cancel", "取消")]
+    GROUP_BUTTONS = [("group-ready", "帶著我的話重驗"), ("group-cancel", "取消這組")]
+    RERUN_BUTTONS = [("rerun", "環境修好了,重跑")]
+    ACK = ("ack", "知道了")
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.fixture()
+        self.port = None
+        self.by = None
+        self.auth = {}
+
+    # ------------------------------------------------------------ fixture
+
+    def fixture(self):
+        self.plan(creator={"2": ["revised"]})
+        for ident in (1, 2, 5):
+            self.add(ident)
+        self.add(7, state="merged", group="g1")
+        self.add(8, state="merged", group="g4")
+        self.add(3, state="merged", group="g9")
+        self.add(4, state="running", waiting={"reason": "quota", "until": "2026-01-01T00:00:00Z", "text": "limit"})
+        git(self.proj, "branch", "int/g1")
+        git(self.proj, "branch", "int/g4")
+
+        def page(tx, name, kind, ref):
+            tx.write("inbox/%s.json" % name, {"kind": kind, "ref": ref, "text": "page " + name,
+                                              "at": osx.now(), "acked": False})
+
+        def change(tx):
+            for ident in ("1", "2", "5"):
+                t = tx.ticket(ident)
+                t.update(state="stuck", round=3, stuck={"reason": "rounds", "text": "x"})
+                tx.put_ticket(t)
+                page(tx, "p" + ident, "decision", ident)
+            for gid, member in (("g1", "7"), ("g4", "8")):
+                tx.put_group({"id": gid, "branch": "int/" + gid, "state": "stuck", "members": [member],
+                              "fix_round": 3, "job": None})
+            tx.put_group({"id": "g2", "branch": "int/g2", "state": "pr", "members": [], "fix_round": 0,
+                          "history": [], "job": None,
+                          "paused": {"reason": "env", "at": osx.now(), "text": "screen locked"}})
+            tx.put_group({"id": "g9", "branch": "int/g9", "state": "pr", "members": ["3"], "fix_round": 0,
+                          "history": [], "job": None})
+            page(tx, "pg1", "decision", "g1")
+            page(tx, "pg2", "env", "g2")
+            page(tx, "preq", "decision", "request")
+            page(tx, "p3", "decision", "3")
+        self.pool.update(change, "test: #57 fixture")
+
+    # ------------------------------------------------------------ server
+
+    def serve(self, mode):
+        """Start a board in mode 'trusted' or 'key' (the whole fixture is already written) and set
+        self.auth (the headers every request carries) and self.by (B)."""
+        extra = ["--host", "127.0.0.1"]
+        if mode == "trusted":
+            path = os.path.join(self.proj, "board", "config.json")
+            with open(path) as fh:
+                cfg = json.load(fh)
+            cfg["board"] = {"trusted_user_header": self.HEADER, "allowed_users": [self.NAME]}
+            with open(path, "w") as fh:
+                json.dump(cfg, fh)
+            self.auth, self.by = {self.HEADER: self.NAME}, self.NAME
+        else:
+            key = os.path.join(self.tmp, "key")
+            with open(key, "w") as fh:
+                fh.write(self.KEY + "\n")
+            extra += ["--key-file", key]
+            self.auth, self.by = {"X-Board-Key": self.KEY}, "user"
+        import socket
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        self.port = sock.getsockname()[1]
+        sock.close()
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "board.py"), "serve", "--port", str(self.port)]
+                                + extra, cwd=self.proj, env=self.env,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(proc.kill)
+        deadline = time.time() + 5
+        while True:
+            try:
+                self.call("GET", "/", auth=False)
+                return
+            except OSError:
+                if time.time() > deadline:
+                    raise
+                time.sleep(0.1)
+
+    def call(self, method, path, auth=True, body=None, headers=None):
+        """(status, headers dict, body text); a 303 is not followed."""
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        try:
+            h = {"Content-Type": "application/x-www-form-urlencoded"}
+            if auth:
+                h.update(self.auth)
+            h.update(headers or {})
+            conn.request(method, path, body=body, headers=h)
+            resp = conn.getresponse()
+            return resp.status, dict(resp.getheaders()), resp.read().decode("utf-8", "replace")
+        finally:
+            conn.close()
+
+    def get(self, query, auth=True):
+        status, _, text = self.call("GET", "/" + query, auth=auth)
+        self.assertEqual(status, 200, text[:300])
+        return text
+
+    def act(self, auth=True, path="/act", headers=None, **form):
+        import urllib.parse
+        return self.call("POST", path, auth=auth, headers=headers, body=urllib.parse.urlencode(form))
+
+    def web_root(self):
+        return os.path.join(self.tmp, "wt", "runs", "web")
+
+    def web_jobs(self):
+        try:
+            return set(os.listdir(self.web_root()))
+        except FileNotFoundError:
+            return set()
+
+    def press(self, subject, page, action, text=""):
+        """POST act; asserts the 303 and its Location and returns (job folder, job.json)."""
+        import urllib.parse
+        before = self.web_jobs()
+        status, headers, body = self.act(subject=subject, page=page, action=action, text=text)
+        self.assertEqual(status, 303, "POST act %s %s %s: %s" % (action, subject, page, body[:300]))
+        draft = "act-" + subject + ("-" + page if page else "")
+        self.assertEqual(headers.get("Location"), "./?tab=decide&sent=" + urllib.parse.quote(draft))
+        new = sorted(self.web_jobs() - before)
+        deadline = time.time() + 5
+        while not new and time.time() < deadline:
+            time.sleep(0.1)
+            new = sorted(self.web_jobs() - before)
+        self.assertEqual(len(new), 1, "one new job folder under <worktrees>/runs/web/")
+        folder = os.path.join(self.web_root(), new[0])
+        path = os.path.join(folder, "job.json")
+        deadline = time.time() + 5
+        while not os.path.isfile(path) and time.time() < deadline:
+            time.sleep(0.1)
+        with open(path) as fh:
+            job = json.load(fh)
+        for k in ("at", "what", "subject", "page", "action", "by"):
+            self.assertIn(k, job, "job.json has %s" % k)
+        self.assertEqual((job["subject"], job["page"], job["action"], job["by"]), (subject, page, action, self.by))
+        return folder, job
+
+    def wait_for(self, check, what):
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            snap = self.snap()
+            if check(snap):
+                return snap
+            time.sleep(0.3)
+        self.fail("within 30 s: " + what)
+
+    def wait_rc(self, folder):
+        deadline = time.time() + 30
+        while time.time() < deadline and not os.path.isfile(os.path.join(folder, "rc")):
+            time.sleep(0.2)
+        self.assertTrue(os.path.isfile(os.path.join(folder, "rc")), "the job finished within 30 s")
+        with open(os.path.join(folder, "rc")) as fh:
+            return fh.read().strip()
+
+    @staticmethod
+    def events(row, name):
+        return [e for e in row.get("history") or [] if e.get("event") == name]
+
+    # ------------------------------------------------------------ page parsing
+
+    @staticmethod
+    def cards(page):
+        """{subject: card} for every <section class="wait">: forms (attrs, hidden inputs, textareas,
+        buttons as (value, name, label)) and last-act texts."""
+        from html.parser import HTMLParser
+
+        class P(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.out, self.card, self.depth, self.form, self.button, self.last = {}, None, 0, None, None, None
+
+            def handle_starttag(self, tag, attrs):
+                a = dict(attrs)
+                if tag == "section":
+                    if self.card is None and "wait" in (a.get("class") or "").split():
+                        self.card = {"subject": a.get("data-subject"), "page": a.get("data-page"),
+                                     "kind": a.get("data-kind"), "forms": [], "last_act": []}
+                        self.depth = 0
+                    elif self.card is not None:
+                        self.depth += 1
+                if self.card is None:
+                    return
+                if tag == "form":
+                    self.form = {"attrs": a, "hidden": [], "textareas": [], "buttons": []}
+                    self.card["forms"].append(self.form)
+                elif tag == "input" and self.form is not None and a.get("type") == "hidden":
+                    self.form["hidden"].append((a.get("name"), a.get("value")))
+                elif tag == "textarea" and self.form is not None:
+                    self.form["textareas"].append(a)
+                elif tag == "button" and self.form is not None:
+                    self.button = [a.get("value"), a.get("name"), ""]
+                elif tag == "p" and "last-act" in (a.get("class") or "").split():
+                    self.last = []
+
+            def handle_endtag(self, tag):
+                if self.card is None:
+                    return
+                if tag == "button" and self.button is not None:
+                    self.button[2] = self.button[2].strip()
+                    self.form["buttons"].append(tuple(self.button))
+                    self.button = None
+                elif tag == "p" and self.last is not None:
+                    self.card["last_act"].append("".join(self.last).strip())
+                    self.last = None
+                elif tag == "form":
+                    self.form = None
+                elif tag == "section":
+                    if self.depth:
+                        self.depth -= 1
+                    else:
+                        self.out[self.card["subject"]] = self.card
+                        self.card = None
+
+            def handle_data(self, data):
+                if self.button is not None:
+                    self.button[2] += data
+                if self.last is not None:
+                    self.last.append(data)
+
+        p = P()
+        p.feed(page)
+        return p.out
+
+    # ------------------------------------------------------------ item 1
+
+    def check_forms(self):
+        cards = self.cards(self.get("?tab=decide"))
+        expected = {
+            "1": ("p1", self.TICKET_BUTTONS + [self.ACK]),
+            "2": ("p2", self.TICKET_BUTTONS + [self.ACK]),
+            "5": ("p5", self.TICKET_BUTTONS + [self.ACK]),
+            "g1": ("pg1", self.GROUP_BUTTONS + [self.ACK]),
+            "g4": ("", self.GROUP_BUTTONS),
+            "g2": ("pg2", self.RERUN_BUTTONS + [self.ACK]),
+            "3": ("p3", [self.ACK]),
+            "request": ("preq", [self.ACK]),
+        }
+        self.assertEqual(sorted(s for s, c in cards.items() if c["kind"] != "quota"), sorted(expected),
+                         "the fixture's cards")
+        for subject, (page_name, buttons) in expected.items():
+            card = cards[subject]
+            self.assertEqual(card["page"], page_name, subject)
+            forms = [f for f in card["forms"] if f["attrs"].get("action") == "act"]
+            self.assertEqual(len(forms), 1, "card %s holds one act form" % subject)
+            self.assertEqual(len(card["forms"]), 1, "card %s holds only that form" % subject)
+            form = forms[0]
+            self.assertEqual((form["attrs"].get("method") or "").lower(), "post", subject)
+            self.assertIn("act", (form["attrs"].get("class") or "").split(), subject)
+            self.assertEqual(sorted(form["hidden"]), sorted([("subject", subject), ("page", page_name)]),
+                             "hidden inputs of %s" % subject)
+            self.assertEqual(len(form["textareas"]), 1, "one textarea on %s" % subject)
+            box = form["textareas"][0]
+            self.assertEqual(box.get("name"), "text", subject)
+            self.assertEqual(box.get("maxlength"), "8000", subject)
+            self.assertEqual(box.get("data-draft"), "act-" + subject + ("-" + page_name if page_name else ""), subject)
+            self.assertEqual([(v, l) for v, _, l in form["buttons"]], buttons, "buttons of %s" % subject)
+            self.assertEqual({n for _, n, _ in form["buttons"]}, {"action"}, "button names of %s" % subject)
+        quota = [c for c in cards.values() if c["kind"] == "quota"]
+        self.assertEqual([c["subject"] for c in quota], ["4"], "the quota card of #4 is shown")
+        self.assertEqual(quota[0]["forms"], [], "a quota card has no form")
+
+    def test_item1_trusted_each_card_has_its_buttons_in_order(self):
+        self.serve("trusted")
+        self.check_forms()
+
+    def test_item1_key_each_card_has_its_buttons_in_order(self):
+        self.serve("key")
+        self.check_forms()
+
+    def test_item1_a_read_only_viewer_gets_the_cards_without_forms(self):
+        self.serve("trusted")
+        cards = self.cards(self.get("?tab=decide"))
+        self.assertIn("1", cards)
+        self.assertEqual(len([f for f in cards["1"]["forms"] if f["attrs"].get("action") == "act"]), 1,
+                         "a trusted viewer gets the act form on #1")
+        plain = self.get("?tab=decide", auth=False)
+        plain_cards = self.cards(plain)
+        self.assertEqual(sorted(plain_cards), sorted(cards), "the read-only viewer gets the same cards")
+        self.assertEqual(sum(len(c["forms"]) for c in plain_cards.values()), 0, "no form for a read-only viewer")
+        self.assertNotRegex(plain, r"""action=["']?act["' >]""")
+
+    # ------------------------------------------------------------ item 2
+
+    def check_bad_posts(self):
+        long_ = "a" * 121
+        bad = [
+            dict(subject="1", page="p1", action="bogus", text=""),
+            dict(subject="1", page="p1", text=""),                       # no action
+            dict(subject="1", page="p1", action="answer", text=""),
+            dict(subject="g1", page="pg1", action="revise", text="x"),
+            dict(subject="g1", page="pg1", action="retry", text=""),
+            dict(subject="abc", page="p1", action="cancel", text=""),
+            dict(subject="1", page="p1", action="group-ready", text="x"),
+            dict(subject="5", page="p5", action="group-cancel", text=""),
+            dict(subject="x2", page="pg2", action="rerun", text=""),
+            dict(subject="g", page="pg2", action="rerun", text=""),
+            dict(subject="request", page="", action="ack", text=""),
+            dict(subject="request", action="ack", text=""),                # no page field
+            dict(subject="a b", page="preq", action="ack", text=""),
+            dict(subject="", page="preq", action="ack", text=""),
+            dict(subject=long_, page="preq", action="ack", text=""),
+            dict(subject="request", page="p/q", action="ack", text=""),
+            dict(subject="1", page="p 1", action="retry", text=""),
+            dict(subject="1", page=long_, action="retry", text=""),
+            dict(subject="1", page="p1", action="revise", text=""),
+            dict(subject="1", page="p1", action="revise", text="  \n "),
+        ]
+        for form in bad:
+            before = self.web_jobs()
+            status, _, body = self.act(**form)
+            self.assertEqual(status, 400, "POST act %r: %s" % (form, body[:200]))
+            self.assertTrue(body.strip(), "a 400 says why: %r" % (form,))
+            self.assertNotIn("\n", body.strip(), "one line for %r" % (form,))
+            self.assertEqual(self.web_jobs(), before, "nothing started for %r" % (form,))
+
+    def test_item2_trusted_bad_posts_are_400_and_no_header_is_403(self):
+        self.serve("trusted")
+        self.check_bad_posts()
+        before = self.web_jobs()
+        status, _, _ = self.act(auth=False, subject="1", page="p1", action="retry", text="")
+        self.assertEqual(status, 403, "POST act without the trusted header")
+        self.assertEqual(self.web_jobs(), before)
+        snap = self.snap()
+        self.assertEqual(snap.ticket("1")["state"], "stuck")
+        self.assertFalse(snap.inbox["p1"].get("acked"))
+
+    def test_item2_key_bad_posts_are_400_and_a_wrong_key_is_403(self):
+        self.serve("key")
+        self.check_bad_posts()
+        before = self.web_jobs()
+        status, _, _ = self.act(auth=False, headers={"X-Board-Key": "wrong"},
+                                subject="1", page="p1", action="retry", text="")
+        self.assertEqual(status, 403, "POST act with a wrong key")
+        self.assertEqual(self.web_jobs(), before)
+        snap = self.snap()
+        self.assertEqual(snap.ticket("1")["state"], "stuck")
+        self.assertFalse(snap.inbox["p1"].get("acked"))
+
+    # ------------------------------------------------------------ items 2-4: each action end to end
+
+    def check_retry(self):
+        self.press("1", "p1", "retry")
+        snap = self.wait_for(lambda s: s.ticket("1")["state"] == "ready" and s.inbox["p1"].get("acked"),
+                             "#1 ready and p1 acked")
+        self.assertEqual(snap.ticket("1")["round"], 0)
+        self.assertEqual(snap.inbox["p1"].get("acked_by"), self.by)
+        ev = self.events(snap.ticket("1"), "user answer")
+        self.assertTrue(ev, "#1 has a 'user answer' event")
+        self.assertEqual((ev[-1].get("by"), ev[-1].get("decision")), (self.by, "retry"), ev[-1])
+
+    def check_revise(self):
+        text = "drop the second item please"
+        self.press("2", "p2", "revise", text)
+        snap = self.wait_for(lambda s: s.ticket("2")["state"] == "ready" and s.inbox["p2"].get("acked"),
+                             "#2 ready and p2 acked")
+        prompts = glob.glob(os.path.join(self.tmp, "wt", "runs", "2", "revise-*", "prompt.md"))
+        self.assertEqual(len(prompts), 1, prompts)
+        with open(prompts[0], encoding="utf-8") as fh:
+            prompt = fh.read()
+        inside = re.findall(r"<<<WEB INPUT(.*?)WEB INPUT>>>", prompt, re.S)
+        self.assertTrue(any(text in part for part in inside), "the text sits between the web-input markers")
+        self.assertEqual(snap.inbox["p2"].get("acked_by"), self.by)
+        ev = self.events(snap.ticket("2"), "user answer")
+        self.assertTrue(ev, "#2 has a 'user answer' event")
+        self.assertEqual((ev[-1].get("by"), ev[-1].get("decision")), (self.by, "revise"), ev[-1])
+
+    def check_cancel(self):
+        self.press("5", "p5", "cancel", "not needed")
+        snap = self.wait_for(lambda s: s.ticket("5")["state"] == "cancelled" and s.inbox["p5"].get("acked"),
+                             "#5 cancelled and p5 acked")
+        self.assertEqual(snap.inbox["p5"].get("acked_by"), self.by)
+        ev = self.events(snap.ticket("5"), "user answer")
+        self.assertTrue(ev, "#5 has a 'user answer' event")
+        self.assertEqual((ev[-1].get("by"), ev[-1].get("decision")), (self.by, "cancel"), ev[-1])
+
+    def check_group_ready(self):
+        text = "use the newer output"
+        self.press("g1", "pg1", "group-ready", text)
+        snap = self.wait_for(lambda s: s.groups["g1"]["state"] == "pr" and s.inbox["pg1"].get("acked"),
+                             "g1 state pr and pg1 acked")
+        note = (snap.groups["g1"].get("notes") or [{}])[-1]
+        self.assertEqual((note.get("text"), note.get("by"), note.get("via")), (text, self.by, "web"), note)
+        ev = self.events(snap.groups["g1"], "ready again by the user")
+        self.assertTrue(ev, "g1 has 'ready again by the user'")
+        self.assertEqual(ev[-1].get("by"), self.by)
+        self.assertEqual(snap.inbox["pg1"].get("acked_by"), self.by)
+
+    def check_group_cancel(self):
+        text = "not worth it"
+        self.press("g4", "", "group-cancel", text)
+        snap = self.wait_for(lambda s: s.groups["g4"]["state"] == "cancelled", "g4 cancelled")
+        ev = self.events(snap.groups["g4"], "cancelled by the user")
+        self.assertTrue(ev, "g4 has 'cancelled by the user'")
+        self.assertEqual((ev[-1].get("by"), ev[-1].get("why")), (self.by, text), ev[-1])
+
+    def check_rerun(self):
+        text = "screen unlocked"
+        self.press("g2", "pg2", "rerun", text)
+        snap = self.wait_for(lambda s: not s.groups["g2"].get("paused") and s.inbox["pg2"].get("acked"),
+                             "g2 not paused and pg2 acked")
+        ev = self.events(snap.groups["g2"], "environment fixed: verify again")
+        self.assertTrue(ev, "g2 has 'environment fixed: verify again'")
+        self.assertEqual(ev[-1].get("by"), self.by)
+        self.assertEqual(snap.inbox["pg2"].get("acked_by"), self.by)
+
+    def check_ack(self):
+        self.press("3", "p3", "ack", "ignored text")
+        snap = self.wait_for(lambda s: s.inbox["p3"].get("acked"), "p3 acked")
+        self.assertEqual(snap.inbox["p3"].get("acked_by"), self.by)
+        ev = [e for e in self.events(snap.ticket("3"), "page acknowledged") if e.get("page") == "p3"]
+        self.assertTrue(ev, "#3 has 'page acknowledged' for p3")
+        self.assertEqual(ev[-1].get("by"), self.by)
+        self.press("request", "preq", "ack")
+        snap = self.wait_for(lambda s: s.inbox["preq"].get("acked"), "preq acked")
+        self.assertEqual(snap.inbox["preq"].get("acked_by"), self.by)
+
+    def test_item4_trusted_retry(self):
+        self.serve("trusted")
+        self.check_retry()
+
+    def test_item4_key_retry(self):
+        self.serve("key")
+        self.check_retry()
+
+    def test_item4_trusted_revise(self):
+        self.serve("trusted")
+        self.check_revise()
+
+    def test_item4_key_revise(self):
+        self.serve("key")
+        self.check_revise()
+
+    def test_item4_trusted_cancel(self):
+        self.serve("trusted")
+        self.check_cancel()
+
+    def test_item4_key_cancel(self):
+        self.serve("key")
+        self.check_cancel()
+
+    def test_item4_trusted_group_ready(self):
+        self.serve("trusted")
+        self.check_group_ready()
+
+    def test_item4_key_group_ready(self):
+        self.serve("key")
+        self.check_group_ready()
+
+    def test_item4_trusted_group_cancel(self):
+        self.serve("trusted")
+        self.check_group_cancel()
+
+    def test_item4_key_group_cancel(self):
+        self.serve("key")
+        self.check_group_cancel()
+
+    def test_item4_trusted_rerun(self):
+        self.serve("trusted")
+        self.check_rerun()
+
+    def test_item4_key_rerun(self):
+        self.serve("key")
+        self.check_rerun()
+
+    def test_item4_trusted_ack(self):
+        self.serve("trusted")
+        self.check_ack()
+
+    def test_item4_key_ack(self):
+        self.serve("key")
+        self.check_ack()
+
+    # ------------------------------------------------------------ item 5
+
+    def check_refused(self):
+        folder, job = self.press("3", "p3", "retry")
+        self.assertEqual(self.wait_rc(folder), "2", "ticket_creator refuses a merged ticket")
+        self.assertFalse(self.snap().inbox["p3"].get("acked"), "the refused answer leaves p3 unread")
+        cards = self.cards(self.get("?tab=decide"))
+        self.assertIn("3", cards, "the card of #3 is still shown")
+        lines = cards["3"]["last_act"]
+        self.assertEqual(len(lines), 1, lines)
+        self.assertTrue(lines[0].startswith("上次的動作:" + job["what"] + " · " + self.by + " · "), lines[0])
+        self.assertIn("沒有執行(rc 2)", lines[0])
+        self.assertIn("frozen", lines[0])
+
+    def test_item5_trusted_a_refused_retry_shows_on_the_card(self):
+        self.serve("trusted")
+        self.check_refused()
+
+    def test_item5_key_a_refused_retry_shows_on_the_card(self):
+        self.serve("key")
+        self.check_refused()
+
+    def test_item5_a_finished_action_shows_done_and_leaves_only_ack(self):
+        self.serve("key")
+        folder, job = self.press("g1", "", "group-ready", "go again")
+        self.assertEqual(self.wait_rc(folder), "0")
+        cards = self.cards(self.get("?tab=decide"))
+        self.assertIn("g1", cards, "pg1 is unread: g1 still has a card")
+        self.assertEqual(cards["g1"]["last_act"], ["上次的動作:%s · %s · 完成" % (job["what"], self.by)])
+        forms = cards["g1"]["forms"]
+        self.assertEqual(len(forms), 1)
+        self.assertEqual([(v, l) for v, _, l in forms[0]["buttons"]], [self.ACK],
+                         "a group neither stuck nor paused has only 知道了")
+        self.assertEqual(cards["1"]["last_act"], [], "no job for #1: no last-act line")
+
+    # ------------------------------------------------------------ item 6 (first sentence)
+
+    def check_tickets_tab(self):
+        page = self.get("?tab=tickets")
+        self.assertTrue("要你決定的事在「要你判」分頁" in page, "the 票 tab points to 要你判")
+        self.assertIsNone(re.search(r"""action=["']?answer""", page), "no answer form on the 票 tab")
+        self.assertFalse("不改,再試一次" in page, "no 不改,再試一次 on the 票 tab")
+        before = self.web_jobs()
+        status, _, _ = self.act(path="/answer", ticket="1", page="p1", decision="retry", text="")
+        self.assertEqual(status, 404, "POST answer")
+        self.assertEqual(self.web_jobs(), before)
+
+    def test_item6_trusted_tickets_tab_has_no_answer_form_and_answer_is_gone(self):
+        self.serve("trusted")
+        self.check_tickets_tab()
+
+    def test_item6_key_tickets_tab_has_no_answer_form_and_answer_is_gone(self):
+        self.serve("key")
+        self.check_tickets_tab()
+
+
 class T7Acceptance(LoopCase):
     """Ticket #7: tickets.py lessons imports a project's own old memory as lessons."""
 
