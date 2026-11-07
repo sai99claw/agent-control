@@ -12586,3 +12586,339 @@ class T64Acceptance(LoopCase):
         left = self.find(self.pid_is("issuer", proc.pid))
         self.assertIsNotNone(left, self.live())
         self.assertEqual(inflight.status(left[1]), "ended")
+
+
+class T65Acceptance(LoopCase):
+    """Acceptance of #65: live records of regression.py, auto_fixer.py and release.run under
+    <worktrees>/runs/live/, with the stage a regression is in."""
+
+    FMT = T64Acceptance.FMT
+    STAMP_RE = T64Acceptance.STAMP_RE
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in list(os.environ):
+            if key.startswith("DEVLOOP_"):
+                del os.environ[key]
+        for key in list(self.env):
+            if key.startswith("DEVLOOP_"):
+                del self.env[key]
+        os.environ["AC_ROOT"] = self.proj
+        self.live_dir = os.path.join(self.tmp, "wt", "runs", "live")
+
+    mod = T64Acceptance.mod
+    cfg = T64Acceptance.cfg
+    epoch = T64Acceptance.epoch
+    live = T64Acceptance.live
+    find = T64Acceptance.find
+    wait_for = T64Acceptance.wait_for
+    popen = T64Acceptance.popen
+    kill_agent_later = T64Acceptance.kill_agent_later
+    proc_started = T64Acceptance.proc_started
+    assert_here = T64Acceptance.assert_here
+
+    # ------------------------------------------------------------ helpers
+
+    def hold_tests(self, preflight=0, full=0, preflight_cmd=None):
+        """board/config.json tests: preflight / full held S seconds before the fake tests run."""
+        path = os.path.join(self.proj, "board", "config.json")
+        with open(path) as fh:
+            cfg = json.load(fh)
+        if preflight_cmd is not None:
+            cfg["tests"]["preflight"] = preflight_cmd
+        elif preflight:
+            cfg["tests"]["preflight"] = "sh -c 'sleep %d; %s preflight'" % (preflight, TESTS)
+        if full:
+            cfg["tests"]["full"] = "sh -c 'sleep %d; %s full'" % (full, TESTS)
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "tests held")
+
+    def int_branch(self):
+        git(self.proj, "branch", "int/g1", "main")
+        return git(self.proj, "rev-parse", "int/g1")
+
+    def regression(self, out=None, branch="int/g1"):
+        out = out or os.path.join(self.tmp, "r.json")
+        t0 = time.time()
+        proc = self.popen("regression.py", "--branch", branch, "--out", out, hold=0)
+        return proc, out, t0
+
+    def is_reg(self, pid, stage=None):
+        return lambda r: (r.get("kind") == "regression" and (r.get("stamp") or {}).get("pid") == pid
+                          and (stage is None or r.get("stage") == stage))
+
+    def hold_slot(self):
+        from core import slots
+        os.environ.pop("DEVLOOP_SLOT", None)
+        slot = slots.take(self.cfg(), None)
+        self.assertTrue(slot and slot.held)
+        self.addCleanup(slot.release)
+        return slot
+
+    # ------------------------------------------------------------ items 1, 2: fields and stages
+
+    def test_item1_2_regression_record_fields_and_stages(self):
+        self.mod()
+        self.hold_tests(preflight=6, full=6)
+        sha = self.int_branch()
+        proc, out, t0 = self.regression()
+        first = self.wait_for(self.is_reg(proc.pid), proc=proc)
+        self.assertIsNotNone(first, "no regression record for pid %d; folder: %s" % (proc.pid, self.live()))
+        self.assertEqual(first[1].get("stage"), "preflight", first[1])   # no machine_slots: first stage
+        pre = self.wait_for(self.is_reg(proc.pid, "preflight"), proc=proc)
+        seen_pre = time.time()
+        self.assertIsNotNone(pre, self.live())
+        name, rec = pre
+        self.assertEqual(name, "regression-int-g1")
+        self.assertEqual(len([r for _, r in self.live() if r.get("kind") == "regression"]), 1, self.live())
+        self.assertEqual(rec.get("group"), "g1", rec)
+        self.assertEqual(rec.get("branch"), "int/g1", rec)
+        self.assertEqual(rec.get("sha"), sha, rec)
+        self.assertIs(rec.get("exclusive"), False, rec)
+        self.assertEqual(rec.get("result"), out, rec)
+        st = rec.get("stamp") or {}
+        self.assertEqual(st.get("pid"), proc.pid, rec)
+        self.assert_here(st)
+        self.assertRegex(st.get("started") or "", "^%s$" % self.STAMP_RE)
+        self.assertLessEqual(abs(self.epoch(st["started"]) - self.proc_started(proc.pid)), 3, rec)
+        self.assertRegex(rec.get("since") or "", "^%s$" % self.STAMP_RE)
+        since_pre = self.epoch(rec["since"])
+        self.assertGreaterEqual(since_pre, int(t0) - 1, rec)
+        self.assertLessEqual(since_pre, seen_pre + 1, rec)
+        full = self.wait_for(self.is_reg(proc.pid, "full"), timeout=25, proc=proc)
+        seen_full = time.time()
+        self.assertIsNotNone(full, "the record never showed stage 'full'; folder: %s" % self.live())
+        self.assertEqual(full[0], name)
+        since_full = self.epoch(full[1].get("since") or "")
+        self.assertGreaterEqual(since_full, since_pre + 5, full[1])   # preflight held 6 s
+        self.assertLessEqual(since_full, seen_full + 1, full[1])
+        self.assertEqual(proc.wait(60), 0)
+        self.assertEqual(self.find(self.is_reg(proc.pid)), None, self.live())
+
+    def test_item1_group_is_the_branch_without_int_prefix(self):
+        inflight = self.mod()
+        self.hold_tests(preflight=4)
+        git(self.proj, "branch", "feature/x", "main")
+        sha = git(self.proj, "rev-parse", "feature/x")
+        proc, out, _ = self.regression(branch="feature/x")
+        hit = self.wait_for(self.is_reg(proc.pid), proc=proc)
+        self.assertIsNotNone(hit, self.live())
+        self.assertEqual(hit[0], "regression-feature-x")
+        self.assertEqual((hit[1].get("group"), hit[1].get("branch"), hit[1].get("sha")),
+                         ("feature/x", "feature/x", sha), hit[1])
+        self.assertIn(hit, inflight.records(self.cfg()))
+        proc.wait(60)
+        self.assertIsNone(self.find(self.is_reg(proc.pid)), self.live())
+
+    def test_item2_slot_stage_then_preflight(self):
+        self.mod()
+        self.config(machine_slots=1)
+        self.hold_tests(preflight=6)
+        self.int_branch()
+        slot = self.hold_slot()
+        proc, _, t0 = self.regression()
+        hit = self.wait_for(self.is_reg(proc.pid), proc=proc)
+        seen = time.time()
+        self.assertIsNotNone(hit, self.live())
+        rec = hit[1]
+        self.assertEqual(rec.get("stage"), "slot", rec)
+        self.assertIs(rec.get("exclusive"), False, rec)
+        since = self.epoch(rec.get("since") or "")
+        self.assertGreaterEqual(since, int(t0) - 1, rec)
+        self.assertLessEqual(since, seen + 1, rec)
+        time.sleep(1.5)
+        self.assertEqual(self.find(self.is_reg(proc.pid))[1].get("stage"), "slot", self.live())
+        slot.release()
+        pre = self.wait_for(self.is_reg(proc.pid, "preflight"), proc=proc)
+        self.assertIsNotNone(pre, "never left 'slot' for 'preflight'; folder: %s" % self.live())
+        self.assertEqual(proc.wait(60), 0)
+        self.assertIsNone(self.find(self.is_reg(proc.pid)), self.live())
+
+    def test_item2_machine_stage_for_an_exclusive_regression(self):
+        self.mod()
+        self.config(machine_slots=1, regression_exclusive=True)
+        self.hold_tests(preflight=4)
+        self.int_branch()
+        slot = self.hold_slot()
+        proc, _, _ = self.regression()
+        hit = self.wait_for(self.is_reg(proc.pid), proc=proc)
+        self.assertIsNotNone(hit, self.live())
+        self.assertEqual(hit[1].get("stage"), "machine", hit[1])
+        self.assertIs(hit[1].get("exclusive"), True, hit[1])
+        slot.release()
+        pre = self.wait_for(self.is_reg(proc.pid, "preflight"), proc=proc)
+        self.assertIsNotNone(pre, "never left 'machine' for 'preflight'; folder: %s" % self.live())
+        self.assertEqual(proc.wait(60), 0)
+        self.assertIsNone(self.find(self.is_reg(proc.pid)), self.live())
+
+    # ------------------------------------------------------------ item 3: the record goes on exit, stays on kill
+
+    def test_item3_record_gone_after_a_failed_preflight(self):
+        self.mod()
+        self.hold_tests(preflight_cmd="sh -c 'sleep 4; exit 3'")
+        self.int_branch()
+        proc, _, _ = self.regression()
+        self.assertIsNotNone(self.wait_for(self.is_reg(proc.pid), proc=proc), self.live())
+        rc = proc.wait(60)
+        self.assertNotEqual(rc, 0)
+        self.assertIsNone(self.find(self.is_reg(proc.pid)), self.live())
+
+    def test_item3_record_gone_after_an_osfailure(self):
+        self.mod()
+        self.hold_tests(preflight=4)
+        self.int_branch()
+        od = os.path.join(self.tmp, "od")
+        os.makedirs(od)
+        proc, _, _ = self.regression(out=os.path.join(od, "r.json"))
+        self.assertIsNotNone(self.wait_for(self.is_reg(proc.pid, "preflight"), proc=proc), self.live())
+        shutil.rmtree(od)
+        with open(od, "w") as fh:          # --out's folder is now a file: writing it fails
+            fh.write("x")
+        self.assertEqual(proc.wait(60), 2)
+        self.assertIsNone(self.find(self.is_reg(proc.pid)), self.live())
+
+    def test_item3_killed_regression_leaves_an_ended_record(self):
+        inflight = self.mod()
+        self.hold_tests(preflight=6)
+        self.int_branch()
+        proc, _, _ = self.regression()
+        hit = self.wait_for(self.is_reg(proc.pid, "preflight"), proc=proc)
+        self.assertIsNotNone(hit, self.live())
+        proc.kill()
+        proc.wait(30)
+        left = self.find(self.is_reg(proc.pid))
+        self.assertIsNotNone(left, self.live())
+        self.assertEqual(inflight.status(left[1]), "ended")
+
+    # ------------------------------------------------------------ item 4: auto_fixer
+
+    def fixing_group(self, fix_round=2):
+        self.add(1, state="merged", group="g1")
+        branch = self.int_branch()
+        group = {"id": "g1", "state": "fixing", "branch": "int/g1", "members": ["1"]}
+        if fix_round is not None:
+            group["fix_round"] = fix_round
+        self.pool.update(lambda tx: tx.put_group(group), "test: fixing group")
+        report = os.path.join(self.tmp, "report.json")
+        with open(report, "w") as fh:
+            json.dump({"status": "red", "summary": "x"}, fh)
+        return report, branch
+
+    def is_fixer(self, pid):
+        return lambda r: r.get("kind") == "fixer" and (r.get("stamp") or {}).get("pid") == pid
+
+    def check_fixer(self, fix_round, want_round, hold=8):
+        self.mod()
+        report, _ = self.fixing_group(fix_round)
+        proc = self.popen("auto_fixer.py", "--group", "g1", "--report", report, hold=hold)
+        hit = self.wait_for(self.is_fixer(proc.pid), proc=proc)
+        self.assertIsNotNone(hit, "no fixer record for pid %d; folder: %s" % (proc.pid, self.live()))
+        name, rec = hit
+        self.assertEqual(name, "fixer-g1")
+        self.assertEqual(rec.get("group"), "g1", rec)
+        self.assertEqual(rec.get("round"), want_round, rec)
+        self.assertEqual(rec.get("max_rounds"), self.cfg().max_rounds, rec)
+        self.assertIsNone(rec.get("result"), rec)
+        self.assert_here(rec.get("stamp") or {})
+        agent = self.wait_for(lambda r: r.get("kind") == "agent" and r.get("parent") == proc.pid, proc=proc)
+        self.assertIsNotNone(agent, "no fixer agent record; folder: %s" % self.live())
+        self.kill_agent_later(agent[1])
+        self.assertEqual((agent[1].get("role"), agent[1].get("group")), ("fixer", "g1"), agent[1])
+        return proc
+
+    def test_item4_fixer_record_and_its_agent_then_gone(self):
+        proc = self.check_fixer(2, 2)
+        self.assertIn(proc.wait(60), (0, 1))
+        self.assertIsNone(self.find(self.is_fixer(proc.pid)), self.live())
+        self.assertEqual([r for _, r in self.live() if r.get("kind") == "agent"], [])
+
+    def test_item4_round_zero_when_fix_round_missing_and_gone_after_exit_3(self):
+        self.plan(fixer={"g1": ["decision"]})
+        proc = self.check_fixer(None, 0, hold=4)
+        self.assertEqual(proc.wait(60), 3)
+        self.assertIsNone(self.find(self.is_fixer(proc.pid)), self.live())
+
+    def test_item4_fixer_record_gone_after_sigterm(self):
+        proc = self.check_fixer(2, 2, hold=30)
+        proc.terminate()
+        self.assertEqual(proc.wait(60), 4)
+        self.assertIsNone(self.find(self.is_fixer(proc.pid)), self.live())
+
+    # ------------------------------------------------------------ item 5: release
+
+    def landed_group(self):
+        sha = git(self.proj, "rev-parse", "main")
+        self.add(1, state="landed", group="g1")
+        self.pool.update(lambda tx: tx.put_group({"id": "g1", "state": "landed", "landed_sha": sha,
+                                                  "branch": "int/g1", "members": ["1"]}),
+                         "test: landed group")
+        return sha
+
+    def is_release(self):
+        return lambda r: r.get("kind") == "release"
+
+    def check_release(self, caller, sha):
+        from core import release
+        hit = self.wait_for(self.is_release(), timeout=25, proc=caller)
+        self.assertIsNotNone(hit, "no release record; folder: %s" % self.live())
+        name, rec = hit
+        st = rec.get("stamp") or {}
+        self.assertEqual(name, "release-g1")
+        self.assertEqual(rec.get("group"), "g1", rec)
+        self.assertEqual(rec.get("sha"), sha, rec)
+        self.assertEqual(rec.get("log"), release.log_path(self.cfg(), "g1"), rec)
+        self.assertIsNone(rec.get("result"), rec)
+        self.assertNotEqual(st.get("pid"), caller.pid, rec)
+        self.assertTrue(osx.alive(st.get("pid")), rec)
+        with open("/proc/%d/cmdline" % st["pid"]) as fh:
+            argv = fh.read().split("\0")
+        self.assertEqual(argv[:2], ["sh", "-c"], argv)
+        self.assert_here(st)
+        self.assertLessEqual(abs(self.epoch(st.get("started") or "") - self.proc_started(st["pid"])), 3, rec)
+        return rec
+
+    def test_item5_release_record_from_tickets_release(self):
+        self.mod()
+        sha = self.landed_group()
+        self.config(release="echo devloop-stage: build; sleep 4")
+        proc = self.popen("tickets.py", "release", "g1", hold=0)
+        self.check_release(proc, sha)
+        self.assertEqual(proc.wait(60), 0)
+        self.assertIsNone(self.find(self.is_release()), self.live())
+
+    def test_item5_release_record_gone_after_failure_and_timeout(self):
+        self.mod()
+        sha = self.landed_group()
+        self.config(release="sleep 3; exit 7")
+        proc = self.popen("tickets.py", "release", "g1", hold=0)
+        self.check_release(proc, sha)
+        self.assertNotEqual(proc.wait(60), 0)
+        self.assertIsNone(self.find(self.is_release()), self.live())
+        self.config(release="sleep 30", release_timeout_seconds=3)
+        proc = self.popen("tickets.py", "release", "g1", hold=0)
+        self.check_release(proc, sha)
+        self.assertNotEqual(proc.wait(60), 0)
+        self.assertIsNone(self.find(self.is_release()), self.live())
+
+    def test_item5_release_record_at_the_controllers_landing(self):
+        self.mod()
+        self.config(release="sleep 4; echo done >> %s" % self.released)
+        self.add(1, complexity="simple", needs_verifier=False)
+        proc = self.popen("ticket_controller.py", hold=0)
+        from core import release
+        hit = self.wait_for(self.is_release(), timeout=60, proc=proc)
+        self.assertIsNotNone(hit, "no release record at landing; folder: %s" % self.live())
+        rec = hit[1]
+        st = rec.get("stamp") or {}
+        self.assertEqual(hit[0], "release-g1")
+        self.assertNotEqual(st.get("pid"), proc.pid, rec)
+        self.assertTrue(osx.alive(st.get("pid")), rec)
+        self.assertEqual(rec.get("log"), release.log_path(self.cfg(), "g1"), rec)
+        proc.wait(120)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(rec.get("sha"), self.snap().groups["g1"].get("landed_sha"), rec)
+        self.assertIsNone(self.find(self.is_release()), self.live())
