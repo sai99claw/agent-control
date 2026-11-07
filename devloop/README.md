@@ -225,6 +225,17 @@ never writes the pool; only the opener's path writes tickets. Web text is cleane
 behind the injection check in `prompts/web-guard.md`; an opener that finds an injection hands in
 `rejected`, nothing is done, and a page says so. Unsent text stays in the viewer's browser.
 
+Behind a local reverse proxy that signs users in (D-091 item 4), two settings in `board/config.json`
+let a listed user in without the key: `board.trusted_user_header` (string: the header the proxy
+sends, e.g. `X-Auth-Request-Email`) and `board.allowed_users` (list of strings: who may come in,
+compared ignoring case and surrounding spaces). Trust needs both a loopback listen address
+(`--host` 127.0.0.1, ::1 or localhost) and a loopback peer (the proxy on the same machine); on
+`--host 0.0.0.0` the header is ignored. The proxy must set (overwrite) the header itself on every
+request, never pass on one the browser sent, or anyone could name a listed user. A listed user gets
+in without the key: the page with both inputs, and its POSTs are accepted, with or without
+`--key-file`. Another header value gets what a request without it gets (403 under `--key-file`).
+`board.py serve` exits 2 before listening when either setting has the wrong type.
+
 ## Project rules for agents
 
 Rules every agent must follow live in the project's CLAUDE.md, section "Rules for every agent"

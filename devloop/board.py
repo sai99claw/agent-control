@@ -15,6 +15,10 @@ a URL or a page. Scripts send header `X-Board-Key` instead. The page then gets t
 about a ticket runs `ticket_creator.py --revise N --from user --decision revise|retry|cancel
 --via web`. Only the opener's path writes tickets; web text first passes the injection check of
 prompts/web-guard.md. Unsent text is kept in the viewer's browser only.
+
+Behind a local reverse proxy (board.trusted_user_header + board.allowed_users, D-091 item 4), a request
+from a loopback peer to a board listening on loopback whose header names a listed user gets the
+inputs without the key.
 """
 
 import argparse
@@ -1018,8 +1022,173 @@ def render_tokens_tab(cfg, snap, query, now):
 
 # ---------------------------------------------------------------- tab: 主機
 
+HOST_WINDOWS = (("24h", "近 24 小時", 288, 300), ("7d", "近 7 天", 168, 3600))   # name, label, buckets, seconds
+HOST_CHARTS = (("load", "負載", ("load1", "load5"), "cpus"),
+               ("memory", "可用記憶體(GiB)", ("mem_available",), None),
+               ("disk", "磁碟剩餘(GiB)", ("disk_free",), None),
+               ("agents", "agent 與 slot", ("agents", "slots_used"), "slots"))
+HOST_GIB_FIELDS = ("mem_available", "disk_free")
+HOST_STYLE = """<style>
+#tab-host section.host .charts{display:flex;flex-wrap:wrap;gap:12px}
+#tab-host figure{margin:0}#tab-host figcaption{font-size:12px;color:var(--quiet)}
+#tab-host svg.chart{display:block;background:var(--card);border:1px solid var(--line);border-radius:4px}
+#tab-host polyline{fill:none;stroke-width:1.5}#tab-host circle{stroke:none}
+#tab-host g.series[data-series=load1],#tab-host g.series[data-series=mem_available],#tab-host g.series[data-series=disk_free],#tab-host g.series[data-series=agents]{stroke:var(--ink);fill:var(--ink)}
+#tab-host g.series[data-series=load5],#tab-host g.series[data-series=slots_used]{stroke:var(--quiet);fill:var(--quiet)}
+#tab-host line.limit{stroke:var(--quiet);stroke-dasharray:4 3}
+#tab-host dl.newest{display:flex;flex-wrap:wrap;gap:4px 18px;margin:6px 0}
+#tab-host dl.newest dt{font-size:12px;color:var(--quiet)}#tab-host dl.newest dd{margin:0;font-variant-numeric:tabular-nums}
+</style>"""
+HOST_W, HOST_H, HOST_PAD = 300, 90, 4
+
+
+def host_samples(path):
+    """[(epoch, sample)] of one host file, read once; lines that are not JSON objects with a
+    parseable 'at' are skipped."""
+    import calendar
+    import json
+    out = []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                try:
+                    sample = json.loads(line)
+                    at = calendar.timegm(time.strptime(sample["at"], "%Y-%m-%dT%H:%M:%SZ"))
+                except (ValueError, TypeError, KeyError, OverflowError):
+                    continue
+                if isinstance(sample, dict):
+                    out.append((at, sample))
+    except OSError:
+        return []
+    return out
+
+
+def host_files(cfg):
+    """{NAME: path} for every NAME.jsonl in <worktrees>/runs/host/."""
+    from core import host as hostmod
+    folder = hostmod.host_dir(cfg)
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return {}
+    return dict((n[:-len(".jsonl")], os.path.join(folder, n)) for n in names
+                if n.endswith(".jsonl") and len(n) > len(".jsonl") and os.path.isfile(os.path.join(folder, n)))
+
+
+def host_value(sample, field):
+    """The field as a float (GiB for memory and disk), None when it is not a number."""
+    v = sample.get(field)
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return v / float(2 ** 30) if field in HOST_GIB_FIELDS else float(v)
+
+
+def host_buckets(samples, field, now, count, width):
+    """The mean of each bucket's non-null values (None = none); bucket k covers
+    [now - W + k*w, now - W + (k+1)*w) with W = count * width."""
+    start = now - count * width
+    sums, ns = [0.0] * count, [0] * count
+    for at, sample in samples:
+        k = int((at - start) // width)
+        if 0 <= k < count:
+            v = host_value(sample, field)
+            if v is not None:
+                sums[k] += v
+                ns[k] += 1
+    return [sums[k] / ns[k] if ns[k] else None for k in range(count)]
+
+
+def host_runs(values):
+    """[(first index, [values])] of the runs of consecutive non-None values."""
+    runs, current = [], None
+    for i, v in enumerate(values):
+        if v is None:
+            current = None
+        else:
+            if current is None:
+                current = (i, [])
+                runs.append(current)
+            current[1].append(v)
+    return runs
+
+
+def host_chart(chart, label, fields, limit_field, window, samples, newest, now, count, width):
+    series = [(f, [None if v is None else round(v, 2) for v in host_buckets(samples, f, now, count, width)])
+              for f in fields]
+    limit = host_value(newest, limit_field) if limit_field else None
+    top = max([v for _, vals in series for v in vals if v is not None] + ([limit] if limit is not None else []) + [0])
+    top = top or 1.0
+    x = lambda i: HOST_PAD + (HOST_W - 2 * HOST_PAD) * (i + 0.5) / count  # noqa: E731
+    y = lambda v: HOST_H - HOST_PAD - (HOST_H - 2 * HOST_PAD) * v / top  # noqa: E731
+    parts = []
+    if limit is not None:
+        parts.append('<line class="limit" data-value="%s" x1="0" x2="%d" y1="%.1f" y2="%.1f"><title>%s %s</title></line>'
+                     % (e("%.2f" % limit), HOST_W, y(limit), y(limit), e(limit_field), e("%g" % limit)))
+    for field, vals in series:
+        shapes = []
+        for first, run in host_runs(vals):
+            points = " ".join("%.1f,%.1f" % (x(first + j), y(v)) for j, v in enumerate(run))
+            shapes.append('<polyline points="%s"/>' % points)
+            if len(run) == 1:
+                shapes.append('<circle cx="%.1f" cy="%.1f" r="1.5"/>' % (x(first), y(run[0])))
+        data = ",".join("" if v is None else "%.2f" % v for v in vals)
+        parts.append('<g class="series" data-series="%s" data-values="%s"><title>%s</title>%s</g>'
+                     % (e(field), e(data), e(field), "".join(shapes)))
+    return ('<figure><figcaption>%s(%s)</figcaption><svg class="chart" data-window="%s" data-chart="%s" '
+            'width="%d" height="%d" viewBox="0 0 %d %d">%s</svg></figure>'
+            % (e(label), e(" / ".join(fields)), e(window), e(chart), HOST_W, HOST_H, HOST_W, HOST_H, "".join(parts)))
+
+
+def host_text(sample, field, gib=False):
+    v = sample.get(field)
+    if v is None or isinstance(v, bool) or not isinstance(v, (int, float)):
+        return UNKNOWN if v is None or isinstance(v, bool) else str(v)
+    return "%.1f GiB" % (v / float(2 ** 30)) if gib else str(v)
+
+
+def host_newest(sample):
+    """The newest sample's row: at, load1 / load5 / cpus, memory and disk in GiB, agents, slots."""
+    # Label/value pairs, not one table row: each value sits after its own label, so adjacent
+    # numbers (agents, then slots_used / slots) never run together in the page text.
+    pairs = (("最新一筆", sample.get("at") or UNKNOWN),
+             ("load1 / load5 / cpus", " / ".join(host_text(sample, f) for f in ("load1", "load5", "cpus"))),
+             ("可用記憶體", host_text(sample, "mem_available", gib=True)),
+             ("磁碟剩餘", host_text(sample, "disk_free", gib=True)),
+             ("agents", host_text(sample, "agents")),
+             ("slots_used / slots", "%s / %s" % (host_text(sample, "slots_used"), host_text(sample, "slots"))))
+    return ('<dl class="newest">%s</dl>'
+            % "".join('<div><dt>%s</dt><dd class="n">%s</dd></div>' % (e(k), e(v)) for k, v in pairs))
+
+
+def render_host(name, samples, now):
+    out = ['<section class="host" data-host="%s"><h2>%s</h2>' % (e(name), e(name))]
+    if samples:
+        out.append(host_newest(max(samples, key=lambda s: s[0])[1]))
+    recent = [s for s in samples if now - 7 * 86400 <= s[0] < now]
+    if not recent:
+        out.append("<p class='quiet'>近 7 天沒有紀錄</p></section>")
+        return "".join(out)
+    newest = max(samples, key=lambda s: s[0])[1]
+    for window, label, count, width in HOST_WINDOWS:
+        out.append('<h3>%s</h3><div class="charts">' % e(label))
+        for chart, clabel, fields, limit_field in HOST_CHARTS:
+            out.append(host_chart(chart, clabel, fields, limit_field, window, recent, newest, now, count, width))
+        out.append("</div>")
+    out.append("</section>")
+    return "".join(out)
+
+
 def render_host_tab(cfg, snap, query, now):
-    return stub_tab("主機")
+    files = host_files(cfg)
+    out = [HOST_STYLE]
+    if not files:
+        out.append("<section><h2>主機</h2><p class='quiet'>還沒有主機紀錄。controller 執行時每 "
+                   "<code>devloop.host_sample_seconds</code> 秒寫一行到 <code>&lt;worktrees&gt;/runs/host/</code>。"
+                   "</p></section>")
+        return "\n".join(out)
+    for name in sorted(files):
+        out.append(render_host(name, host_samples(files[name]), now))
+    return "\n".join(out)
 
 
 # ---------------------------------------------------------------- web input
@@ -1052,22 +1221,23 @@ def render_jobs(cfg):
             tail = lines[-1] if lines else ""
         except OSError:
             pass
-        out.append("<div class='page'><div class='ph'>%s · %s · %s</div><pre>%s</pre></div>" % (
-            e(meta.get("at")), e(meta.get("what")), e(status), e(tail[:300])))
+        who = " · %s" % e(meta["by"]) if meta.get("by") else ""
+        out.append("<div class='page'><div class='ph'>%s · %s%s · %s</div><pre>%s</pre></div>" % (
+            e(meta.get("at")), e(meta.get("what")), who, e(status), e(tail[:300])))
     out.append("</section>")
     return "\n".join(out)
 
 
-def submit(cfg, what, argv_tail, text):
+def submit(cfg, what, argv_tail, text, by=None):
     """Start ticket_creator for one web input, detached; its output and rc stay in runs/web/."""
     stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
     folder = osx.makedirs(os.path.join(jobs_dir(cfg), "%s-%s" % (stamp, os.urandom(3).hex())))
     text_path = os.path.join(folder, "input.txt")
     osx.atomic_write(text_path, text)
-    osx.write_json(os.path.join(folder, "job.json"), {"at": osx.now(), "what": what})
+    osx.write_json(os.path.join(folder, "job.json"), dict({"at": osx.now(), "what": what}, **({"by": by} if by else {})))
     creator = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ticket_creator.py")
     argv = ["sh", "-c", 'python3 "$@"; echo $? > "$DEVLOOP_JOB_RC"', "devloop-web", creator] + \
-        [a.replace("{input}", text_path) for a in argv_tail]
+        [a.replace("{input}", text_path) for a in argv_tail] + (["--by", by] if by else [])
     osx.spawn(argv, cwd=cfg.root, env=cfg.env(DEVLOOP_JOB_RC=os.path.join(folder, "rc")),
               log_path=os.path.join(folder, "creator.log"))
     return folder
@@ -1136,6 +1306,48 @@ PAGE_SCRIPT = """<script>
 </script>"""
 
 
+LOOPBACK_BINDS = ("127.0.0.1", "::1", "localhost")
+LOOPBACK_PEERS = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+
+
+def trusted_user(settings, bind_host, peer_host, header_value):
+    """The board.allowed_users entry a local reverse proxy vouches for, or None (D-091 item 4).
+
+    Trust needs all of: board.trusted_user_header set, board.allowed_users non-empty, the board
+    listening on a loopback address and the request coming from a loopback peer. The header value
+    is compared with each entry ignoring case and surrounding spaces; the entry itself is returned."""
+    settings = settings or {}
+    name = settings.get("trusted_user_header")
+    users = settings.get("allowed_users")
+    if not isinstance(name, str) or not name.strip() or not isinstance(users, list) or not users:
+        return None
+    if bind_host not in LOOPBACK_BINDS or peer_host not in LOOPBACK_PEERS:
+        return None
+    if not isinstance(header_value, str) or not header_value.strip():
+        return None
+    wanted = header_value.strip().lower()
+    for user in users:
+        if isinstance(user, str) and user.strip() and user.strip().lower() == wanted:
+            return user
+    return None
+
+
+def board_settings_errors(settings):
+    """Why board.trusted_user_header / board.allowed_users cannot be used, one line each; [] when fine."""
+    out = []
+    if not isinstance(settings, dict):
+        return out
+    if "trusted_user_header" in settings:
+        v = settings["trusted_user_header"]
+        if not isinstance(v, str) or not v.strip():
+            out.append("board.trusted_user_header must be a non-empty string, got %r" % (v,))
+    if "allowed_users" in settings:
+        v = settings["allowed_users"]
+        if not isinstance(v, list) or not all(isinstance(u, str) and u.strip() for u in v):
+            out.append("board.allowed_users must be a list of non-empty strings, got %r" % (v,))
+    return out
+
+
 # ---------------------------------------------------------------- serving
 
 COOKIE = "board_key"
@@ -1175,11 +1387,23 @@ def last_segment(url):
 def serve(cfg, pool, host, port, key):
     cache = {"at": 0.0, "snap": None}
     lock = threading.Lock()
+    settings = cfg.raw.get("board") or {}
+    if not isinstance(settings, dict):
+        settings = {}
+    header = settings.get("trusted_user_header")
 
     class Handler(BaseHTTPRequestHandler):
+        user = None     # the allowed_users entry a local proxy vouched for (who submits: next ticket)
+
+        def _trust(self):
+            value = self.headers.get(header) if isinstance(header, str) and header.strip() else None
+            self.user = trusted_user(settings, host, self.client_address[0], value)
+            return self.user is not None
+
         def do_GET(self):
             url = urlparse(self.path)
-            if key:
+            trusted = self._trust()
+            if key and not trusted:
                 given = parse_qs(url.query, keep_blank_values=True).get("key")
                 if given is not None:
                     if not hmac.compare_digest(given[0].encode(), key.encode()):
@@ -1205,17 +1429,18 @@ def serve(cfg, pool, host, port, key):
                         cache["snap"] = pool.snapshot()
                         cache["at"] = time.time()
                     snap = cache["snap"]
-                page = render(cfg, snap, key, query)
+                page = render(cfg, snap, key or (trusted or None), query)
             except osx.OSFailure as exc:
                 page = "<pre>%s</pre>" % e(exc)
             self._send(200, page, "text/html; charset=utf-8")
 
         def do_POST(self):
             url = urlparse(self.path)
-            if not key:
+            trusted = self._trust()
+            if not key and not trusted:
                 self._send(403, "this board has no key file: read-only")
                 return
-            if not authorized(key, self.headers):
+            if not trusted and not authorized(key, self.headers):
                 self._send(403, "key required")
                 return
             try:
@@ -1232,7 +1457,7 @@ def serve(cfg, pool, host, port, key):
                     if not text:
                         self._send(400, "empty request")
                         return
-                    submit(cfg, "新需求", ["--request-file", "{input}", "--via", "web"], text)
+                    submit(cfg, "新需求", ["--request-file", "{input}", "--via", "web"], text, by=self.user)
                     sent = "request"
                 elif last_segment(url) == "answer":
                     ticket, page, decision = form.get("ticket", ""), form.get("page", ""), form.get("decision", "")
@@ -1246,7 +1471,7 @@ def serve(cfg, pool, host, port, key):
                         return
                     submit(cfg, "#%s %s" % (ticket, decision),
                            ["--revise", ticket, "--from", "user", "--decision", decision, "--via", "web",
-                            "--reason-file", "{input}", "--page", page], text)
+                            "--reason-file", "{input}", "--page", page], text, by=self.user)
                     sent = "answer-" + page
                 else:
                     self._send(404, "not found")
@@ -1307,6 +1532,11 @@ def main(argv=None):
             else:
                 sys.stdout.write(page)
             return 0
+        problems = board_settings_errors(cfg.raw.get("board"))
+        if problems:
+            for line in problems:
+                print("board: %s" % line, file=sys.stderr)
+            return 2
         key = None
         if args.key_file:
             with open(args.key_file) as fh:

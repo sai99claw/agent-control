@@ -6819,6 +6819,228 @@ class AgentControlRelease(unittest.TestCase):
             self.assertEqual(json.load(fh)["devloop"]["release"], "sh scripts/release.sh")
 
 
+class T47Acceptance(LoopCase):
+    """Ticket #47: what a trusted user submits from the board carries that user's name, on the web
+    job and on the ticket history the opener's path writes (D-091 item 4)."""
+
+    HEADER = "X-Auth-Request-Email"
+    NAME = "a@x.com"
+
+    # ------------------------------------------------------------ helpers
+
+    def stuck(self, ident):
+        """A stuck ticket with a decision page p<ident>, as WebInput.stuck() builds."""
+        self.add(ident)
+
+        def change(tx):
+            t = tx.ticket(str(ident))
+            t.update(state="stuck", round=3, stuck={"reason": "rounds", "text": "x"})
+            tx.put_ticket(t)
+            tx.write("inbox/p%s.json" % ident, {"kind": "decision", "ref": str(ident), "text": "stuck",
+                                               "at": osx.now(), "acked": False})
+        self.pool.update(change, "test: stuck")
+
+    @staticmethod
+    def events(ticket, name):
+        return [e for e in ticket.get("history") or [] if e.get("event") == name]
+
+    def board_settings(self, board):
+        path = os.path.join(self.proj, "board", "config.json")
+        with open(path) as fh:
+            cfg = json.load(fh)
+        cfg["board"] = board
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
+
+    def start(self, *extra):
+        import socket
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "board.py"), "serve", "--port", str(port)]
+                                + list(extra), cwd=self.proj, env=self.env, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True)
+        self.addCleanup(proc.kill)
+        return port
+
+    def call(self, port, method, path, headers=None, body=None):
+        """(status, body text); retries connecting for up to 5 s; a 303 is not followed."""
+        import http.client
+        deadline = time.time() + 5
+        while True:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            try:
+                h = {"Content-Type": "application/x-www-form-urlencoded"}
+                h.update(headers or {})
+                conn.request(method, path, body=body, headers=h)
+                resp = conn.getresponse()
+                return resp.status, resp.read().decode("utf-8", "replace")
+            except OSError:
+                if time.time() > deadline:
+                    raise
+                time.sleep(0.1)
+            finally:
+                conn.close()
+
+    def web_root(self):
+        return os.path.join(self.tmp, "wt", "runs", "web")
+
+    def web_jobs(self):
+        try:
+            return set(os.listdir(self.web_root()))
+        except FileNotFoundError:
+            return set()
+
+    def submit(self, port, path, headers, body):
+        """POST one form; returns the job folder it made, after its ticket_creator run finished."""
+        before = self.web_jobs()
+        status, text = self.call(port, "POST", path, headers, body)
+        self.assertIn(status, (200, 303), text[:300])
+        deadline = time.time() + 30
+        new = []
+        while time.time() < deadline:
+            new = sorted(self.web_jobs() - before)
+            if new and os.path.isfile(os.path.join(self.web_root(), new[0], "rc")):
+                break
+            time.sleep(0.2)
+        self.assertEqual(len(new), 1, "one new folder under <worktrees>/runs/web/ for %s" % path)
+        folder = os.path.join(self.web_root(), new[0])
+        self.assertTrue(os.path.isfile(os.path.join(folder, "rc")), "the job's ticket_creator run finished")
+        return folder
+
+    @staticmethod
+    def job(folder):
+        with open(os.path.join(folder, "job.json")) as fh:
+            return json.load(fh)
+
+    def key_file(self):
+        key = os.path.join(self.tmp, "key")
+        with open(key, "w") as fh:
+            fh.write("s3cret\n")
+        return key
+
+    # ------------------------------------------------------------ item 1
+
+    def test_item1_request_by_name_marks_every_opened_event(self):
+        res = self.run_py("ticket_creator.py", "--request", "build two things", "--by", self.NAME)
+        self.assertEqual(res.returncode, 0, "ticket_creator.py --request ... --by NAME: " + res.stderr[-500:])
+        snap = self.snap()
+        self.assertEqual(len(snap.tickets), 2, "the fake opener opens two tickets")
+        for ident, t in snap.tickets.items():
+            opened = self.events(t, "opened")
+            self.assertEqual(len(opened), 1, "#%s has one 'opened' event" % ident)
+            self.assertEqual(opened[0].get("by"), self.NAME, "#%s 'opened' event" % ident)
+
+    def test_item1_request_without_by_writes_no_by(self):
+        # guarded: --by must be accepted first, so the check below is not the old code passing by default
+        res = self.run_py("ticket_creator.py", "--request", "first", "--by", self.NAME)
+        self.assertEqual(res.returncode, 0, "ticket_creator.py accepts --by: " + res.stderr[-500:])
+        first = set(self.snap().tickets)
+        res = self.run_py("ticket_creator.py", "--request", "build two things")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        snap = self.snap()
+        later = [i for i in snap.tickets if i not in first]
+        self.assertEqual(len(later), 2)
+        for ident in later:
+            opened = self.events(snap.ticket(ident), "opened")
+            self.assertEqual(len(opened), 1)
+            self.assertNotIn("by", opened[0], "#%s: no --by, no 'by' key" % ident)
+
+    # ------------------------------------------------------------ item 2
+
+    def decide(self, ident, decision, *extra):
+        return self.run_py("ticket_creator.py", "--revise", str(ident), "--from", "user", "--decision", decision,
+                           "--page", "p%s" % ident, "--by", self.NAME, *extra)
+
+    def test_item2_retry_by_name(self):
+        self.stuck(1)
+        res = self.decide(1, "retry")
+        self.assertEqual(res.returncode, 0, "--decision retry --by NAME: " + res.stderr[-500:])
+        t = self.snap().ticket("1")
+        self.assertEqual(t["state"], "ready")
+        ev = self.events(t, "user decision: ready")
+        self.assertTrue(ev, "a 'user decision: ready' event")
+        self.assertEqual(ev[-1].get("by"), self.NAME)
+
+    def test_item2_cancel_by_name(self):
+        self.stuck(1)
+        res = self.decide(1, "cancel")
+        self.assertEqual(res.returncode, 0, "--decision cancel --by NAME: " + res.stderr[-500:])
+        t = self.snap().ticket("1")
+        self.assertEqual(t["state"], "cancelled")
+        ev = self.events(t, "user decision: cancelled")
+        self.assertTrue(ev, "a 'user decision: cancelled' event")
+        self.assertEqual(ev[-1].get("by"), self.NAME)
+
+    def test_item2_revise_by_name(self):
+        self.stuck(1)
+        self.plan(creator={"1": ["revised"]})
+        res = self.decide(1, "revise", "--reason", "drop the second item")
+        self.assertEqual(res.returncode, 0, "--decision revise --by NAME: " + res.stderr[-500:])
+        t = self.snap().ticket("1")
+        self.assertEqual(t["state"], "ready")
+        ev = self.events(t, "user decision: ready")
+        self.assertTrue(ev, "a 'user decision: ready' event")
+        self.assertEqual(ev[-1].get("by"), self.NAME)
+
+    # ------------------------------------------------------------ items 3 and 4
+
+    def test_item3_trusted_request_and_answer_carry_the_name(self):
+        self.stuck(1)
+        # the entry as listed is what is recorded, not the header's spelling
+        self.board_settings({"trusted_user_header": self.HEADER, "allowed_users": [self.NAME]})
+        port = self.start("--host", "127.0.0.1")
+        trusted = {self.HEADER: " A@X.com "}
+        folder = self.submit(port, "/request", trusted, "text=build+two+things")
+        self.assertEqual(self.job(folder).get("by"), self.NAME, "job.json of a trusted /request")
+        snap = self.snap()
+        opened = [i for i in snap.tickets if i != "1"]
+        self.assertEqual(len(opened), 2, "the request opened two tickets")
+        for ident in opened:
+            ev = self.events(snap.ticket(ident), "opened")
+            self.assertEqual([e.get("by") for e in ev], [self.NAME],
+                             "#%s: --by <entry> reached ticket_creator" % ident)
+        folder = self.submit(port, "/answer", trusted, "ticket=1&page=p1&decision=retry&text=")
+        self.assertEqual(self.job(folder).get("by"), self.NAME, "job.json of a trusted /answer")
+        ev = self.events(self.snap().ticket("1"), "user decision: ready")
+        self.assertTrue(ev, "the answer was handled")
+        self.assertEqual(ev[-1].get("by"), self.NAME, "--by <entry> reached ticket_creator")
+
+    def test_item3_key_and_cookie_submissions_carry_no_name(self):
+        import hashlib
+        import hmac
+        # guard: on this same config a trusted submission must carry the name, so the checks below
+        # are not the old code passing by default
+        self.board_settings({"trusted_user_header": self.HEADER, "allowed_users": [self.NAME]})
+        port = self.start("--host", "127.0.0.1")
+        folder = self.submit(port, "/request", {self.HEADER: self.NAME}, "text=x")
+        self.assertEqual(self.job(folder).get("by"), self.NAME, "guard: a trusted job carries 'by'")
+        port = self.start("--host", "127.0.0.1", "--key-file", self.key_file())
+        cookie = hmac.new(b"s3cret", b"devloop-board", hashlib.sha256).hexdigest()
+        for how, headers in (("key", {"X-Board-Key": "s3cret"}), ("cookie", {"Cookie": "board_key=" + cookie})):
+            with self.subTest(how=how):
+                known = set(self.snap().tickets)
+                folder = self.submit(port, "/request", headers, "text=build+two+things")
+                self.assertNotIn("by", self.job(folder), "a %s submission writes no 'by'" % how)
+                snap = self.snap()
+                for ident in set(snap.tickets) - known:
+                    for ev in self.events(snap.ticket(ident), "opened"):
+                        self.assertNotIn("by", ev, "#%s: no --by passed for a %s submission" % (ident, how))
+
+    def test_item4_jobs_list_shows_the_name(self):
+        self.board_settings({"trusted_user_header": self.HEADER, "allowed_users": [self.NAME]})
+        port = self.start("--host", "127.0.0.1")
+        self.submit(port, "/request", {self.HEADER: self.NAME}, "text=x")
+        status, page = self.call(port, "GET", "/", {self.HEADER: self.NAME})
+        self.assertEqual(status, 200)
+        start = page.find("網頁送出的")
+        self.assertGreaterEqual(start, 0, "the 網頁送出的 section is on the page")
+        end = page.find("</section>", start)
+        section = page[start:end if end >= 0 else len(page)]
+        self.assertIn(self.NAME, section, "the job's name in 網頁送出的")
+
+
 class T12Acceptance(LoopCase):
     """#12: the opener is told the full suite is the regression's, and is given the time limits."""
 
@@ -7874,6 +8096,333 @@ class T25Acceptance(LoopCase):
         self.assertIn("cancelled", inbox[0])
 
 
+class T45Acceptance(LoopCase):
+    """Ticket #45: the 主機 tab draws each host file in <worktrees>/runs/host/ as SVG line charts over
+    the last 24 hours and 7 days. Expected values are worked out by hand from the ticket and the
+    fixture, never from the code."""
+
+    GIB = 2 ** 30
+    CHARTS = (("load", ("load1", "load5")), ("memory", ("mem_available",)), ("disk", ("disk_free",)),
+              ("agents", ("agents", "slots_used")))
+
+    def setUp(self):
+        super().setUp()
+        import calendar
+        self.now = calendar.timegm((2026, 11, 6, 12, 0, 0))
+        self.host_dir = os.path.join(self.tmp, "wt", "runs", "host")
+
+    # ------------------------------------------------------------ helpers
+
+    @staticmethod
+    def at(t):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+
+    def sample(self, t, **values):
+        row = {"at": self.at(t), "host": "h", "load1": 1.0, "load5": 0.5, "cpus": 4,
+               "mem_available": 2 * self.GIB, "disk_free": 10 * self.GIB, "agents": 1, "slots_used": 1,
+               "slots": 2}
+        row.update(values)
+        return json.dumps(row)
+
+    def write_host(self, name, lines):
+        os.makedirs(self.host_dir, exist_ok=True)
+        with open(os.path.join(self.host_dir, name), "w") as fh:
+            fh.write("".join(line + "\n" for line in lines))
+
+    def fixture(self):
+        N = self.now
+        # written out of name order, so the page's order is its own sorting
+        self.write_host("gamma.jsonl", [self.sample(N - 50, load1=0.5, load5=None, cpus=2, mem_available=None,
+                                                    disk_free=None, agents=0, slots_used=None, slots=None)])
+        self.write_host("beta.jsonl", [self.sample(N - 700000)])
+        self.write_host("alpha.jsonl", [
+            self.sample(N - 100, load1=1.0, load5=0.5, cpus=4, mem_available=2147483648,
+                        disk_free=10737418240, agents=1, slots_used=1, slots=2),
+            self.sample(N - 200, load1=3.0, load5=1.5, cpus=4, mem_available=1073741824,
+                        disk_free=10737418240, agents=3, slots_used=2, slots=2),
+            self.sample(N - 400, load1=2.0, mem_available=None),
+            self.sample(N - 90100, load1=4.0),
+            self.sample(N - 700000, load1=9.0),
+            "not json",
+            "[1, 2]",
+            json.dumps({"load1": 50.0}),
+            json.dumps({"at": "yesterday", "load1": 99.0}),
+        ])
+        with open(os.path.join(self.host_dir, "notes.txt"), "w") as fh:
+            fh.write(self.sample(N - 100) + "\n")
+
+    def tab(self):
+        """The 主機 tab element as a tree: {'tag', 'attrs', 'children', 'text'} nodes."""
+        import inspect
+        import board
+        self.assertTrue(hasattr(board, "render_host_tab"), "no render_host_tab")
+        params = inspect.signature(board.render).parameters
+        for name in ("query", "now"):
+            self.assertIn(name, params, "render() takes %s" % name)
+        from core.config import Config
+        page = board.render(Config(self.proj), self.snap(), query={"tab": "host"}, now=self.now)
+        root = self.tree(page)
+        tabs = [n for n in self.walk(root) if n["attrs"].get("id") == "tab-host"]
+        self.assertEqual(len(tabs), 1, "no 主機 tab element")
+        return tabs[0]
+
+    @staticmethod
+    def tree(page):
+        from html.parser import HTMLParser
+        void = {"br", "hr", "img", "input", "meta", "link", "wbr", "col", "area", "base", "source"}
+        root = {"tag": "#root", "attrs": {}, "children": [], "text": []}
+
+        class P(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.stack = [root]
+
+            def handle_starttag(self, tag, attrs):
+                node = {"tag": tag, "attrs": dict((k, "" if v is None else v) for k, v in attrs),
+                        "children": [], "text": []}
+                self.stack[-1]["children"].append(node)
+                if tag not in void:
+                    self.stack.append(node)
+
+            def handle_startendtag(self, tag, attrs):
+                self.handle_starttag(tag, attrs)
+                if tag not in void:
+                    self.stack.pop()
+
+            def handle_endtag(self, tag):
+                for i in range(len(self.stack) - 1, 0, -1):
+                    if self.stack[i]["tag"] == tag:
+                        del self.stack[i:]
+                        return
+
+            def handle_data(self, data):
+                node = {"tag": "#text", "attrs": {}, "children": [], "text": [data]}
+                self.stack[-1]["children"].append(node)
+
+        p = P()
+        p.feed(page)
+        p.close()
+        return root
+
+    def walk(self, node, skip=()):
+        for child in node["children"]:
+            yield child
+            if child["tag"] not in skip:
+                yield from self.walk(child, skip)
+
+    def text(self, node, skip=()):
+        return "".join("".join(n["text"]) for n in self.walk(node, skip) if n["tag"] == "#text")
+
+    @staticmethod
+    def squash(text):
+        return "".join(text.split())
+
+    @staticmethod
+    def classes(node):
+        return node["attrs"].get("class", "").split()
+
+    def sections(self, tab):
+        return [n for n in self.walk(tab) if n["tag"] == "section" and "host" in self.classes(n)]
+
+    def section(self, tab, name):
+        found = [s for s in self.sections(tab) if s["attrs"].get("data-host") == name]
+        self.assertEqual(len(found), 1, "one section for host %s" % name)
+        return found[0]
+
+    def chart(self, section, window, chart):
+        found = [n for n in self.walk(section) if n["tag"] == "svg" and "chart" in self.classes(n)
+                 and n["attrs"].get("data-window") == window and n["attrs"].get("data-chart") == chart]
+        self.assertEqual(len(found), 1, "one %s %s chart" % (window, chart))
+        return found[0]
+
+    def series(self, svg, field):
+        found = [n for n in self.walk(svg) if n["tag"] == "g" and "series" in self.classes(n)
+                 and n["attrs"].get("data-series") == field]
+        self.assertEqual(len(found), 1, "one %s series" % field)
+        return found[0]
+
+    def values(self, section, window, chart, field):
+        g = self.series(self.chart(section, window, chart), field)
+        self.assertIn("data-values", g["attrs"])
+        return g["attrs"]["data-values"].split(",")
+
+    @staticmethod
+    def expect(size, filled):
+        out = [""] * size
+        for k, v in filled.items():
+            out[k] = v
+        return out
+
+    def polyline_points(self, g):
+        import re
+        out = []
+        for n in self.walk(g):
+            if n["tag"] == "polyline":
+                nums = re.findall(r"-?\d+(?:\.\d+)?(?:e-?\d+)?", n["attrs"].get("points", ""))
+                out.append(len(nums) // 2)
+        return out
+
+    # ------------------------------------------------------------ item 1
+
+    def test_item1_one_section_per_jsonl_file_sorted(self):
+        self.fixture()
+        tab = self.tab()
+        self.assertEqual([s["attrs"].get("data-host") for s in self.sections(tab)], ["alpha", "beta", "gamma"])
+        for s in self.sections(tab):
+            self.assertEqual(s["attrs"].get("class"), "host")
+
+    def test_item1_lines_without_object_or_parseable_at_are_skipped(self):
+        self.fixture()
+        alpha = self.section(self.tab(), "alpha")
+        # the 'not json', '[1, 2]', no-'at' (50.0) and unparseable-'at' (99.0) lines add nothing
+        self.assertEqual(self.values(alpha, "24h", "load", "load1"), self.expect(288, {286: "2.00", 287: "2.00"}))
+        self.assertEqual(self.values(alpha, "7d", "load", "load1"), self.expect(168, {142: "4.00", 167: "2.00"}))
+
+    # ------------------------------------------------------------ item 2
+
+    def test_item2_bucket_edges(self):
+        N = self.now
+        self.write_host("edge.jsonl", [
+            self.sample(N - 604801, load1=70.0),     # before the 7 d window
+            self.sample(N - 604800, load1=8.0),      # 7d bucket 0
+            self.sample(N - 86401, load1=60.0),      # before the 24 h window; 7d bucket 143
+            self.sample(N - 86400, load1=7.0),       # 24h bucket 0; 7d bucket 144
+            self.sample(N - 301, load1=6.0),         # 24h bucket 286; 7d bucket 167
+            self.sample(N - 300, load1=5.0),         # 24h bucket 287; 7d bucket 167
+        ])
+        edge = self.section(self.tab(), "edge")
+        self.assertEqual(self.values(edge, "24h", "load", "load1"),
+                         self.expect(288, {0: "7.00", 286: "6.00", 287: "5.00"}))
+        self.assertEqual(self.values(edge, "7d", "load", "load1"),
+                         self.expect(168, {0: "8.00", 143: "60.00", 144: "7.00", 167: "5.50"}))
+
+    # ------------------------------------------------------------ item 3
+
+    def test_item3_four_charts_per_window_with_their_series(self):
+        self.fixture()
+        alpha = self.section(self.tab(), "alpha")
+        for window, size in (("24h", 288), ("7d", 168)):
+            charts = [n for n in self.walk(alpha) if n["tag"] == "svg" and "chart" in self.classes(n)
+                      and n["attrs"].get("data-window") == window]
+            self.assertEqual(sorted(n["attrs"].get("data-chart") for n in charts),
+                             sorted(c for c, _ in self.CHARTS), window)
+            for chart, fields in self.CHARTS:
+                svg = self.chart(alpha, window, chart)
+                got = sorted(n["attrs"].get("data-series") for n in self.walk(svg)
+                             if n["tag"] == "g" and "series" in self.classes(n))
+                self.assertEqual(got, sorted(fields), "%s %s" % (window, chart))
+                for field in fields:
+                    self.assertEqual(len(self.values(alpha, window, chart, field)), size,
+                                     "%s %s %s" % (window, chart, field))
+
+    def test_item3_24h_means(self):
+        self.fixture()
+        alpha = self.section(self.tab(), "alpha")
+        want = {
+            ("load", "load1"): {287: "2.00", 286: "2.00"},
+            ("load", "load5"): {287: "1.00", 286: "0.50"},
+            ("memory", "mem_available"): {287: "1.50"},
+            ("disk", "disk_free"): {287: "10.00", 286: "10.00"},
+            ("agents", "agents"): {287: "2.00", 286: "1.00"},
+            ("agents", "slots_used"): {287: "1.50", 286: "1.00"},
+        }
+        for (chart, field), filled in want.items():
+            self.assertEqual(self.values(alpha, "24h", chart, field), self.expect(288, filled),
+                             "%s %s" % (chart, field))
+
+    def test_item3_7d_means(self):
+        self.fixture()
+        alpha = self.section(self.tab(), "alpha")
+        want = {
+            ("load", "load1"): {167: "2.00", 142: "4.00"},
+            ("load", "load5"): {167: "0.83", 142: "0.50"},
+            ("memory", "mem_available"): {167: "1.50", 142: "2.00"},
+            ("disk", "disk_free"): {167: "10.00", 142: "10.00"},
+            ("agents", "agents"): {167: "1.67", 142: "1.00"},
+            ("agents", "slots_used"): {167: "1.33", 142: "1.00"},
+        }
+        for (chart, field), filled in want.items():
+            self.assertEqual(self.values(alpha, "7d", chart, field), self.expect(168, filled),
+                             "%s %s" % (chart, field))
+
+    def test_item3_polylines_break_at_empty_buckets(self):
+        self.fixture()
+        alpha = self.section(self.tab(), "alpha")
+        # 24h load1: buckets 286 and 287 are one run of two -> one polyline of two points, no longer one
+        points = self.polyline_points(self.series(self.chart(alpha, "24h", "load"), "load1"))
+        self.assertIn(2, points, "the run 286-287 is one polyline")
+        self.assertLessEqual(max(points), 2, points)
+        # 7d load1: buckets 142 and 167 are runs of one -> no polyline joins them
+        points = self.polyline_points(self.series(self.chart(alpha, "7d", "load"), "load1"))
+        self.assertLessEqual(max(points or [0]), 1, points)
+
+    # ------------------------------------------------------------ item 4
+
+    def limits(self, svg):
+        return [n for n in self.walk(svg) if "limit" in self.classes(n)]
+
+    def test_item4_limit_lines(self):
+        self.fixture()
+        tab = self.tab()
+        alpha, gamma = self.section(tab, "alpha"), self.section(tab, "gamma")
+        for window in ("24h", "7d"):
+            self.assertTrue(self.limits(self.chart(alpha, window, "load")), "alpha %s cpus line" % window)
+            self.assertTrue(self.limits(self.chart(alpha, window, "agents")), "alpha %s slots line" % window)
+            self.assertTrue(self.limits(self.chart(gamma, window, "load")), "gamma %s cpus line" % window)
+            self.assertEqual(self.limits(self.chart(gamma, window, "agents")), [], "gamma slots is null")
+
+    # ------------------------------------------------------------ item 5
+
+    def test_item5_newest_sample(self):
+        import re
+        self.fixture()
+        alpha = self.section(self.tab(), "alpha")
+        shown = self.squash(self.text(alpha, skip=("svg", "style")))
+        self.assertIn(self.at(self.now - 100), shown)
+        self.assertRegex(shown, r"1(\.0+)?/0\.50*/4")          # load1 / load5 / cpus
+        self.assertIn("2.0", shown)                            # mem_available in GiB
+        self.assertIn("10.0", shown)                           # disk_free in GiB
+        self.assertNotIn("2.00", shown)
+        self.assertNotIn("10.00", shown)
+        self.assertRegex(shown, r"(?<![\d.])1/2(?![\d.])")     # slots_used / slots
+        self.assertNotIn("未知", shown)
+        self.assertTrue(re.search(r"(?<![\d.])1(?![\d.])", shown.replace("1/2", "")), "agents 1")
+
+    def test_item5_null_reads_unknown(self):
+        self.fixture()
+        gamma = self.section(self.tab(), "gamma")
+        shown = self.squash(self.text(gamma, skip=("svg", "style")))
+        self.assertIn(self.at(self.now - 50), shown)
+        # load5, mem_available, disk_free, slots_used and slots are null
+        self.assertGreaterEqual(shown.count("未知"), 5, shown)
+
+    # ------------------------------------------------------------ item 6
+
+    def test_item6_host_without_recent_lines(self):
+        self.fixture()
+        beta = self.section(self.tab(), "beta")
+        self.assertIn("近7天沒有紀錄", self.squash(self.text(beta, skip=("style",))))
+        self.assertEqual([n for n in self.walk(beta) if n["tag"] == "svg"], [])
+        alpha = self.section(self.tab(), "alpha")
+        self.assertNotIn("近7天沒有紀錄", self.squash(self.text(alpha, skip=("style",))))
+
+    def test_item6_empty_folder(self):
+        os.makedirs(self.host_dir)
+        tab = self.tab()
+        shown = self.squash(self.text(tab, skip=("style",)))
+        self.assertIn("還沒有主機紀錄", shown)
+        self.assertIn("devloop.host_sample_seconds", shown)
+        self.assertEqual(self.sections(tab), [])
+        self.assertEqual([n for n in self.walk(tab) if n["tag"] == "svg"], [])
+
+    def test_item6_no_folder(self):
+        tab = self.tab()
+        shown = self.squash(self.text(tab, skip=("style",)))
+        self.assertIn("還沒有主機紀錄", shown)
+        self.assertIn("devloop.host_sample_seconds", shown)
+        self.assertEqual(self.sections(tab), [])
+
+
 class AllCancelledHelper(unittest.TestCase):
     """Controller.all_cancelled: true only for a non-empty group of cancelled members."""
 
@@ -7887,6 +8436,75 @@ class AllCancelledHelper(unittest.TestCase):
         self.assertFalse(f(snap, {"members": ["1", "3"]}))
         self.assertFalse(f(snap, {"members": []}))
         self.assertFalse(f(snap, {"members": ["9"]}))
+
+
+class HostTabHelpers(LoopCase):
+    """#45 implementer's checks of the 主機 tab's helpers (bucketing, runs, file reading, rendering)."""
+
+    def setUp(self):
+        super().setUp()
+        import calendar
+        self.now = calendar.timegm((2026, 11, 6, 12, 0, 0))
+        self.dir = os.path.join(self.tmp, "wt", "runs", "host")
+
+    def write(self, name, lines):
+        os.makedirs(self.dir, exist_ok=True)
+        with open(os.path.join(self.dir, name), "w") as fh:
+            for ln in lines:
+                fh.write((ln if isinstance(ln, str) else json.dumps(ln)) + "\n")
+
+    def at(self, t):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+
+    def test_buckets_edges(self):
+        import board
+        n = self.now
+        samples = [(n - 300, {"load1": 1.0}), (n - 301, {"load1": 3.0}), (n, {"load1": 9.0}),
+                   (n - 1, {"load1": 5.0}), (n - 3000, {"load1": None}), (n - 3001, {"load1": True})]
+        vals = board.host_buckets(samples, "load1", n, 10, 300)
+        self.assertEqual(vals[9], 3.0)        # n-300 and n-1 share the last bucket; n itself is outside
+        self.assertEqual(vals[8], 3.0)        # n-301
+        self.assertIsNone(vals[0])            # null and bool are not values
+        self.assertEqual(board.host_buckets([(n - 1, {"disk_free": 2 ** 31})], "disk_free", n, 1, 300), [2.0])
+
+    def test_runs(self):
+        import board
+        self.assertEqual(board.host_runs([None, 1, 2, None, 3, None]), [(1, [1, 2]), (4, [3])])
+        self.assertEqual(board.host_runs([None, None]), [])
+
+    def test_samples_skip_bad_lines(self):
+        import board
+        self.write("a.jsonl", ["not json", "[1]", {"at": "yesterday"}, {"load1": 1},
+                               {"at": self.at(self.now - 5), "load1": 2}])
+        got = board.host_samples(os.path.join(self.dir, "a.jsonl"))
+        self.assertEqual([s["load1"] for _, s in got], [2])
+        self.assertEqual(board.host_samples(os.path.join(self.dir, "missing.jsonl")), [])
+
+    def test_polyline_breaks_and_limit(self):
+        import board
+        from core.config import Config
+        n = self.now
+        self.write("h.jsonl", [{"at": self.at(n - 100), "load1": 1.0, "cpus": 8, "slots": None, "agents": 1},
+                               {"at": self.at(n - 1000), "load1": 2.0, "cpus": 4, "agents": 1}])
+        html = board.render_host_tab(Config(self.proj), None, {}, n)
+        svg = html.split('data-window="24h" data-chart="load"')[1].split("</svg>")[0]
+        load1 = svg.split('data-series="load1"')[1].split("</g>")[0]
+        self.assertEqual(load1.count("<polyline"), 2)                    # buckets 284 and 287, gap between
+        self.assertIn('class="limit" data-value="8.00"', svg)           # the newest sample's cpus
+        agents = html.split('data-window="24h" data-chart="agents"')[1].split("</svg>")[0]
+        self.assertNotIn('class="limit"', agents)                        # slots null: no limit line
+
+    def test_order_and_empty(self):
+        import board
+        from core.config import Config
+        self.assertIn("還沒有主機紀錄", board.render_host_tab(Config(self.proj), None, {}, self.now))
+        self.write("zeta.jsonl", [{"at": self.at(self.now - 10)}])
+        self.write("alpha.jsonl", [{"at": self.at(self.now - 10)}])
+        self.write("notes.txt", ["x"])
+        html = board.render_host_tab(Config(self.proj), None, {}, self.now)
+        self.assertLess(html.index('data-host="alpha"'), html.index('data-host="zeta"'))
+        self.assertEqual(html.count('<section class="host"'), 2)
+        self.assertIn(board.UNKNOWN, html)
 
 
 class T24Acceptance(LoopCase):
@@ -7997,6 +8615,168 @@ class T24Acceptance(LoopCase):
         self.assertTrue([ln for ln in res.stdout.splitlines() if ln.split()[:1] == ["g1"]], res.stdout)
 
 
+class T46Acceptance(LoopCase):
+    """Ticket #46: behind a local reverse proxy, a user named in board.trusted_user_header and
+    listed in board.allowed_users gets in without the key (D-091 item 4)."""
+
+    HEADER = "X-Auth-Request-Email"
+    # the page head mentions 交給開題者 on a read-only board too: look for the form itself
+    FORM = r"<form[^>]*action=['\"]?(\./)?request['\"\s>]"
+
+    def board_settings(self, board):
+        path = os.path.join(self.proj, "board", "config.json")
+        with open(path) as fh:
+            cfg = json.load(fh)
+        cfg["board"] = board
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
+
+    def free_port(self):
+        import socket
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        return port
+
+    def start(self, *extra):
+        port = self.free_port()
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "board.py"), "serve", "--port", str(port)]
+                                + list(extra), cwd=self.proj, env=self.env, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True)
+        self.addCleanup(proc.kill)
+        return port
+
+    def call(self, port, method, path, headers=None, body=None):
+        """(status, Location, body text); retries connecting for up to 5 s; a 303 is not followed."""
+        import http.client
+        deadline = time.time() + 5
+        while True:
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            try:
+                h = {"Content-Type": "application/x-www-form-urlencoded"}
+                h.update(headers or {})
+                conn.request(method, path, body=body, headers=h)
+                resp = conn.getresponse()
+                return resp.status, resp.getheader("Location"), resp.read().decode("utf-8", "replace")
+            except OSError:
+                if time.time() > deadline:
+                    raise
+                time.sleep(0.1)
+            finally:
+                conn.close()
+
+    def web_jobs(self):
+        try:
+            return sorted(os.listdir(os.path.join(self.tmp, "wt", "runs", "web")))
+        except FileNotFoundError:
+            return []
+
+    def key_file(self):
+        key = os.path.join(self.tmp, "key")
+        with open(key, "w") as fh:
+            fh.write("s3cret\n")
+        return key
+
+    # ------------------------------------------------------------ item 1
+
+    def test_item1_trusted_user_rule(self):
+        import inspect
+        import board
+        self.assertTrue(hasattr(board, "trusted_user"), "board.trusted_user is missing")
+        self.assertEqual(list(inspect.signature(board.trusted_user).parameters),
+                         ["settings", "bind_host", "peer_host", "header_value"])
+        s = {"trusted_user_header": "X-Auth-Request-Email", "allowed_users": ["a@x.com"]}
+        cases = [
+            (s, "127.0.0.1", "127.0.0.1", " A@X.com ", "a@x.com"),
+            (s, "127.0.0.1", "127.0.0.1", "a@x.com", "a@x.com"),
+            (s, "::1", "::1", "a@x.com", "a@x.com"),
+            (s, "localhost", "::ffff:127.0.0.1", "a@x.com", "a@x.com"),
+            (s, "127.0.0.1", "127.0.0.1", "b@x.com", None),
+            (s, "127.0.0.1", "10.0.0.5", "a@x.com", None),
+            (s, "0.0.0.0", "127.0.0.1", "a@x.com", None),
+            (s, "127.0.0.1", "127.0.0.1", None, None),
+            ({"trusted_user_header": "X-Auth-Request-Email", "allowed_users": []},
+             "127.0.0.1", "127.0.0.1", "a@x.com", None),
+            ({"allowed_users": ["a@x.com"]}, "127.0.0.1", "127.0.0.1", "a@x.com", None),
+            ({"trusted_user_header": "", "allowed_users": ["a@x.com"]}, "127.0.0.1", "127.0.0.1", "a@x.com", None),
+        ]
+        for settings, bind, peer, value, want in cases:
+            with self.subTest(settings=settings, bind=bind, peer=peer, value=value):
+                self.assertEqual(board.trusted_user(settings, bind, peer, value), want)
+
+    # ------------------------------------------------------------ item 2
+
+    def test_item2_listed_user_gets_in_without_the_key(self):
+        import re
+        self.board_settings({"trusted_user_header": self.HEADER, "allowed_users": ["a@x.com"]})
+        port = self.start("--host", "127.0.0.1", "--key-file", self.key_file())
+        status, _, page = self.call(port, "GET", "/", {self.HEADER: "a@x.com"})
+        self.assertEqual(status, 200, page[:300])
+        self.assertTrue(re.search(self.FORM, page), "the request form (交給開題者)")
+        before = self.web_jobs()
+        status, location, body = self.call(port, "POST", "/request", {self.HEADER: "a@x.com"}, "text=x")
+        self.assertEqual((status, location), (303, "./?sent=request"), body[:300])
+        self.assertGreater(len(self.web_jobs()), len(before), "a new folder under <worktrees>/runs/web/")
+
+    def test_item2_unlisted_user_is_refused(self):
+        self.board_settings({"trusted_user_header": self.HEADER, "allowed_users": ["a@x.com"]})
+        port = self.start("--host", "127.0.0.1", "--key-file", self.key_file())
+        # the listed user must get in first, so the 403s below are the allow list, not a board that reads no header
+        self.assertEqual(self.call(port, "GET", "/", {self.HEADER: "a@x.com"})[0], 200)
+        self.assertEqual(self.call(port, "GET", "/", {self.HEADER: "b@x.com"})[0], 403)
+        self.assertEqual(self.call(port, "POST", "/request", {self.HEADER: "b@x.com"}, "text=x")[0], 403)
+        self.assertEqual(self.web_jobs(), [])
+
+    def test_item2_listed_user_on_0000_is_refused(self):
+        self.board_settings({"trusted_user_header": self.HEADER, "allowed_users": ["a@x.com"]})
+        # a trusted request on 127.0.0.1 must succeed first, so a 403 below is the rule, not a dead board
+        port = self.start("--host", "127.0.0.1", "--key-file", self.key_file())
+        self.assertEqual(self.call(port, "GET", "/", {self.HEADER: "a@x.com"})[0], 200)
+        port = self.start("--host", "0.0.0.0", "--key-file", self.key_file())
+        self.assertEqual(self.call(port, "GET", "/", {self.HEADER: "a@x.com"})[0], 403)
+
+    # ------------------------------------------------------------ item 3
+
+    def test_item3_without_key_file_listed_user_may_submit(self):
+        import re
+        self.board_settings({"trusted_user_header": self.HEADER, "allowed_users": ["a@x.com"]})
+        port = self.start()
+        status, _, page = self.call(port, "GET", "/", {self.HEADER: "a@x.com"})
+        self.assertEqual(status, 200)
+        self.assertTrue(re.search(self.FORM, page), "the listed user gets the forms")
+        status, location, body = self.call(port, "POST", "/request", {self.HEADER: "a@x.com"}, "text=x")
+        self.assertEqual(status, 303, body[:300])
+        status, _, page = self.call(port, "GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn("四個指標", page)
+        self.assertFalse(re.search(self.FORM, page), "no header: no request form, as today")
+        self.assertEqual(self.call(port, "POST", "/request", None, "text=x")[0], 403)
+
+    # ------------------------------------------------------------ item 4
+
+    def assert_refused_at_start(self, board, name):
+        self.board_settings(board)
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "board.py"), "serve", "--port", "0"],
+                                cwd=self.proj, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True)
+        self.addCleanup(proc.kill)
+        try:
+            out, err = proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            out, err = None, None
+        self.assertIsNotNone(out, "board.py serve kept running under %r instead of exiting 2" % (board,))
+        self.assertEqual(proc.returncode, 2, err)
+        self.assertNotIn("board: http://", out, "exits before listening")
+        self.assertIn(name, err)
+
+    def test_item4_bad_trusted_user_header_exits_2(self):
+        self.assert_refused_at_start({"trusted_user_header": ""}, "board.trusted_user_header")
+
+    def test_item4_bad_allowed_users_exits_2(self):
+        self.assert_refused_at_start({"allowed_users": "a@x.com"}, "board.allowed_users")
+
+
 class T18Acceptance(unittest.TestCase):
     """#18: agent-control's memory/ is its consolidated memory, named by its config."""
 
@@ -8027,6 +8807,83 @@ class T18Acceptance(unittest.TestCase):
                if os.path.basename(p) == "README.md" or p.endswith(".inbox.md")
                or p in ("memory/role/implementer.md", "memory/role/opener.md")]
         self.assertEqual(bad, [], "old cards still tracked under memory/")
+
+
+class BoardTrustedUserUnits(unittest.TestCase):
+    """#46: helpers behind board.trusted_user_header / board.allowed_users, the schema rows, the README."""
+
+    S = {"trusted_user_header": "X-Auth-Request-Email", "allowed_users": ["a@x.com", "B@Y.org"]}
+
+    def test_trusted_user_needs_loopback_on_both_ends(self):
+        import board
+        for bind in ("127.0.0.1", "::1", "localhost"):
+            for peer in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+                with self.subTest(bind=bind, peer=peer):
+                    self.assertEqual(board.trusted_user(self.S, bind, peer, "a@x.com"), "a@x.com")
+        for bind, peer in (("0.0.0.0", "127.0.0.1"), ("", "127.0.0.1"), ("192.168.1.2", "127.0.0.1"),
+                           ("127.0.0.1", "127.0.0.2"), ("127.0.0.1", "10.0.0.5"), ("127.0.0.1", "")):
+            with self.subTest(bind=bind, peer=peer):
+                self.assertIsNone(board.trusted_user(self.S, bind, peer, "a@x.com"))
+
+    def test_trusted_user_returns_the_entry_as_listed(self):
+        import board
+        self.assertEqual(board.trusted_user(self.S, "127.0.0.1", "127.0.0.1", "  b@y.ORG\t"), "B@Y.org")
+        for value in (None, "", "   ", "a@x.co", "a@x.com.evil", 5):
+            with self.subTest(value=value):
+                self.assertIsNone(board.trusted_user(self.S, "127.0.0.1", "127.0.0.1", value))
+
+    def test_trusted_user_off_unless_both_settings_are_usable(self):
+        import board
+        for settings in (None, {}, {"allowed_users": ["a@x.com"]}, {"trusted_user_header": "X-A"},
+                         {"trusted_user_header": "", "allowed_users": ["a@x.com"]},
+                         {"trusted_user_header": " ", "allowed_users": ["a@x.com"]},
+                         {"trusted_user_header": 7, "allowed_users": ["a@x.com"]},
+                         {"trusted_user_header": "X-A", "allowed_users": []},
+                         {"trusted_user_header": "X-A", "allowed_users": "a@x.com"},
+                         {"trusted_user_header": "X-A", "allowed_users": [None, 3, ""]}):
+            with self.subTest(settings=settings):
+                self.assertIsNone(board.trusted_user(settings, "127.0.0.1", "127.0.0.1", "a@x.com"))
+
+    def test_settings_errors_name_the_key(self):
+        import board
+        self.assertEqual(board.board_settings_errors({}), [])
+        self.assertEqual(board.board_settings_errors({"key_file": "k"}), [])
+        self.assertEqual(board.board_settings_errors(self.S), [])
+        self.assertEqual(board.board_settings_errors({"allowed_users": []}), [])
+        for settings, name in (({"trusted_user_header": ""}, "board.trusted_user_header"),
+                               ({"trusted_user_header": None}, "board.trusted_user_header"),
+                               ({"trusted_user_header": ["X"]}, "board.trusted_user_header"),
+                               ({"allowed_users": "a@x.com"}, "board.allowed_users"),
+                               ({"allowed_users": ["a@x.com", ""]}, "board.allowed_users"),
+                               ({"allowed_users": [1]}, "board.allowed_users")):
+            with self.subTest(settings=settings):
+                errors = board.board_settings_errors(settings)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn(name, errors[0])
+
+    def test_schema_types_the_two_settings(self):
+        sys.path.insert(0, os.path.join(HOME, "scripts"))
+        import project_config
+        rows = [(k, kind) for k, kind, _ in project_config.SCHEMA]
+        self.assertIn(("board.trusted_user_header", "string"), rows)
+        self.assertIn(("board.allowed_users", "list"), rows)
+        at = rows.index(("board.key_file", "string"))
+        self.assertEqual(rows[at + 1:at + 3], [("board.trusted_user_header", "string"),
+                                               ("board.allowed_users", "list")])
+        bad = project_config.type_errors({"board": {"trusted_user_header": 1, "allowed_users": "a@x.com"}})
+        self.assertEqual(len(bad), 2, bad)
+        self.assertTrue(any("board.trusted_user_header" in b for b in bad), bad)
+        self.assertTrue(any("board.allowed_users" in b for b in bad), bad)
+        self.assertEqual(project_config.type_errors({"board": dict(self.S)}), [])
+
+    def test_readme_dashboard_describes_the_settings(self):
+        with open(os.path.join(LOOP, "README.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        section = text.split("## Dashboard", 1)[1].split("\n## ", 1)[0]
+        for words in ("board.trusted_user_header", "board.allowed_users", "loopback listen address",
+                      "loopback peer", "set (overwrite) the header", "without the key"):
+            with self.subTest(words=words):
+                self.assertIn(words, section)
 
 
 class T19Acceptance(unittest.TestCase):
@@ -8100,6 +8957,34 @@ class T19Acceptance(unittest.TestCase):
         self.assertEqual(len(mine), 1, "no table row for `memory/`")
         self.assertTrue(len(mine[0]) > 1 and mine[0][1], "the `memory/` row has no description")
         self.assertNotIn("舊記憶卡", text)
+
+
+class ByNameHelpers(unittest.TestCase):
+    """#47: the helpers that carry a trusted user's name."""
+
+    def test_render_jobs_shows_the_name_only_when_given(self):
+        import json as _json
+        import tempfile
+        import types
+        import board
+        root = tempfile.mkdtemp(prefix="by-jobs-")
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        for name, meta in (("20260101T000000-a", {"at": "T1", "what": "W1", "by": "a@x.com"}),
+                           ("20260101T000001-b", {"at": "T2", "what": "W2"})):
+            os.makedirs(os.path.join(root, "runs", "web", name))
+            with open(os.path.join(root, "runs", "web", name, "job.json"), "w") as fh:
+                _json.dump(meta, fh)
+        html = board.render_jobs(types.SimpleNamespace(worktree_root=root))
+        self.assertIn("W1 · a@x.com", html)
+        self.assertIn("W2 · ", html.replace("W2 · a@x.com", ""))
+        self.assertEqual(html.count("a@x.com"), 1)
+
+    def test_creator_helpers_take_by_default_none(self):
+        import inspect
+        import ticket_creator
+        for fn in ("write_new", "open_tickets", "user_reset", "decide", "revise"):
+            self.assertIn("by", inspect.signature(getattr(ticket_creator, fn)).parameters, fn)
+            self.assertIsNone(inspect.signature(getattr(ticket_creator, fn)).parameters["by"].default)
 
 
 class ReleaseKeptOutput(unittest.TestCase):
