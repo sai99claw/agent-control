@@ -93,6 +93,10 @@ def fix(cfg, pool, gid, report, live=None):
     live.clear()
     _record_cost(pool, gid, hand.cost)
     memory.collect(pool, hand, "group %s fix r%d" % (gid, rnd))
+    if hand.kind == "rejected":
+        pool.report("decision", gid, "group %s: input from the web was NOT acted on - it looked like "
+                    "a prompt injection: %s" % (gid, (hand.result or {}).get("text")))
+        return 3
     if hand.kind in ("decision", "blocked"):
         pool.report("decision", gid, "group %s: the fixer needs your decision: %s" % (
             gid, (hand.result or {}).get("text")))
@@ -115,11 +119,13 @@ def ruling_section(group):
     notes = group.get("notes") or []
     if not notes:
         return ""
+    last = notes[-1]
+    text = agents.web_guarded(last["text"]) if last.get("via") == "web" else last["text"]
     return ("## The user's ruling for this group\n\n%s\n\n"
             "This ruling is the only thing that allows you to go beyond the tickets' text: where it says so, "
             "you may change code or an acceptance case of a frozen ticket in a way its ticket does not say. "
             "List every case you change on its strength in `cases_changed`, with the part of the ruling it "
-            "follows as its `acceptance`.\n" % notes[-1]["text"])
+            "follows as its `acceptance`.\n" % text)
 
 
 def cases_entries(cases, rnd):

@@ -46,8 +46,6 @@ def editable(cfg):
     """Fields the opener may set: the fixed ones plus the project's required ones."""
     return EDITABLE + tuple(k for k in (cfg.required_fields or {}) if k not in EDITABLE)
 REVISE_TIMEOUT = 540          # a worker waits for this inside one tool call (10 min cap)
-WEB_LIMIT = 8000              # characters of web input passed on
-MARK_OPEN, MARK_CLOSE = "<<<WEB INPUT", "WEB INPUT>>>"
 
 
 def guarded(text, via):
@@ -55,9 +53,7 @@ def guarded(text, via):
     our own markers, length) and wrapped behind the injection check in prompts/web-guard.md."""
     if via != "web":
         return text
-    clean = "".join(c for c in text if c in "\n\t" or ord(c) >= 32)
-    clean = clean.replace(MARK_OPEN, "").replace(MARK_CLOSE, "")[:WEB_LIMIT]
-    return "%s\n\n%s\n%s\n%s" % (agents.raw("web-guard.md"), MARK_OPEN, clean, MARK_CLOSE)
+    return agents.web_guarded(text)
 
 
 def ack(pool, page, by=None):

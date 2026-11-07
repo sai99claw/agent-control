@@ -67,6 +67,18 @@ def raw(name):
         raise osx.OSFailure(osx.explain(exc, "cannot read prompt %s" % path))
 
 
+WEB_LIMIT = 8000              # characters of web input passed on
+MARK_OPEN, MARK_CLOSE = "<<<WEB INPUT", "WEB INPUT>>>"
+
+
+def web_guarded(text):
+    """Web text cleaned (control characters, our own markers, length) and wrapped behind the
+    injection check in prompts/web-guard.md."""
+    clean = "".join(c for c in text if c in "\n\t" or ord(c) >= 32)
+    clean = clean.replace(MARK_OPEN, "").replace(MARK_CLOSE, "")[:WEB_LIMIT]
+    return "%s\n\n%s\n%s\n%s" % (raw("web-guard.md"), MARK_OPEN, clean, MARK_CLOSE)
+
+
 def render(name, values):
     """Fill a prompt template; unknown {names} are left as written."""
     class Keep(dict):

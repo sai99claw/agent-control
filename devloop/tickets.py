@@ -94,7 +94,7 @@ def _set(pool, ident, state, why, by=None, page=None):
     return 0
 
 
-def cmd_ready_group(pool, cfg, gid, why, note=None, by=None, page=None):
+def cmd_ready_group(pool, cfg, gid, why, note=None, by=None, page=None, via=None):
     """Send a stuck group (branch kept, at least one merged member) back to the regression.
     Only the group is written; its tickets stay as they are."""
     def change(tx):
@@ -111,7 +111,10 @@ def cmd_ready_group(pool, cfg, gid, why, note=None, by=None, page=None):
         g["state"], g["fix_round"], g["job"] = "pr", 0, None
         detail = {"why": why}
         if note is not None:
-            g.setdefault("notes", []).append({"text": note, "by": by or "user", "at": osx.now()})
+            entry = {"text": note, "by": by or "user", "at": osx.now()}
+            if via == "web":
+                entry["via"] = "web"
+            g.setdefault("notes", []).append(entry)
             detail["note"] = note
         event(g, "ready again by the user", by=by or "user", **detail)
         tx.put_group(g)
@@ -259,6 +262,7 @@ def main(argv=None):
     p.add_argument("--note", default=None)
     p.add_argument("--by", default=None)
     p.add_argument("--page", default=None)
+    p.add_argument("--via", choices=("main", "web"), default="main")
     p = sub.add_parser("cancel")
     p.add_argument("id")
     p.add_argument("--why", default="")
@@ -292,7 +296,7 @@ def main(argv=None):
                   file=sys.stderr)
             return 2
         if args.cmd == "ready" and re.fullmatch(r"g\d+", args.id):
-            return cmd_ready_group(pool, cfg, args.id, args.why, args.note, args.by, args.page)
+            return cmd_ready_group(pool, cfg, args.id, args.why, args.note, args.by, args.page, args.via)
         if args.cmd == "cancel" and re.fullmatch(r"g\d+", args.id):
             return cmd_cancel_group(pool, args.id, args.why, args.by, args.page)
         if args.cmd == "release":
