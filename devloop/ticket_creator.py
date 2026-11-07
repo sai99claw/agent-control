@@ -16,7 +16,13 @@ user experience the request does not settle comes back as a question for the mai
 
 Revising (called by a worker or verifier mid-run, or by the user answering a page): the opener reads
 the ticket and the reason and either fixes the ticket, keeps it (and says why), or asks the main
-session. What it decided is printed for the caller. A merged or landed ticket is frozen: every
+session. What it decided is printed for the caller.
+
+Cost: every opener run leaves its cost row in the pool. An opening run's row is split over the tickets
+it opened (integer token fields value // N, the lowest id also gets the remainder; usd and seconds
+value / N; each share carries split_over, the opened ids); a request whose runs opened no ticket keeps
+the rows unsplit on the decision page it writes; a revising run appends one row to the revised ticket,
+whatever its outcome. A merged or landed ticket is frozen: every
 --revise of it is refused before anything starts (D-089).
 
 Exit: 0 done · 1 the opener's hand-in stayed unusable (reported) · 3 a question for the user
@@ -68,9 +74,9 @@ def ack(pool, page, by=None):
     pool.update(change, "inbox: answered %s" % page)
 
 
-def rejected(pool, ref, text, via):
+def rejected(pool, ref, text, via, cost=None):
     pool.report("decision", ref, "input from the %s was NOT acted on - it looked like a prompt "
-                "injection: %s" % (via, text))
+                "injection: %s" % (via, text), **({"cost": cost} if cost else {}))
     print("REJECTED: %s" % text)
     return 3
 
@@ -179,7 +185,33 @@ def check_new(result, snap, cfg=None):
     return dagmod.problems(merged, known_tickets=list(snap.tickets) + keys)
 
 
-def write_new(pool, result, request, fields=EDITABLE, by=None):
+SPLIT_INTS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
+SPLIT_FLOATS = ("usd", "seconds")
+
+
+def split(row, ids):
+    """One opener run's cost row as len(ids) shares, one per ticket it opened (in ascending id order):
+    integer token fields give value // N each and the lowest id the remainder too, usd and seconds
+    value / N, a null stays null, everything else is copied; every share carries split_over."""
+    ids = sorted((str(i) for i in ids), key=dagmod._order_key)
+    n = len(ids)
+    shares = []
+    for k in range(n):
+        share = dict(row)
+        for f in SPLIT_INTS:
+            v = row.get(f)
+            if isinstance(v, int) and not isinstance(v, bool):
+                share[f] = v // n + (v % n if k == 0 else 0)
+        for f in SPLIT_FLOATS:
+            v = row.get(f)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                share[f] = v / n
+        share["split_over"] = list(ids)
+        shares.append(share)
+    return shares
+
+
+def write_new(pool, result, request, fields=EDITABLE, by=None, cost=None):
     def change(tx):
         ids, mapping = [], {}
         nxt = int(tx.data.next_ticket_id())
@@ -199,6 +231,12 @@ def write_new(pool, result, request, fields=EDITABLE, by=None):
             node.setdefault("verify", "together")
             dag[ident] = node
             ids.append(ident)
+        if cost:
+            shares = [split(r, ids) for r in cost]
+            for k, ident in enumerate(sorted(ids, key=dagmod._order_key)):
+                row = tx.data.tickets[ident]
+                row["cost"] = list(row.get("cost") or []) + [s[k] for s in shares]
+                tx.put_ticket(row)
         tx.put_dag({"tickets": dag})
         return ids
     return pool.update(change, "tickets: open from a request")
@@ -221,22 +259,24 @@ def open_tickets(cfg, pool, request, via="main", by=None):
         "## Current DAG\n\n```json\n%s\n```" % json.dumps(snap.dag, indent=2, ensure_ascii=False),
         "## The request\n\n%s" % guarded(request, via),
     ])
-    errors = []
+    errors, rows = [], []
     for attempt in (1, 2):
         run_dir = cfg.runs_dir("creator", "%s-a%d" % (osx.now().replace(":", ""), attempt))
         prompt = base + ("\n\n## Your previous hand-in was rejected\n\n- " + "\n- ".join(errors)
                          if errors else "")
         prompt += "\n\nWrite your hand-in as JSON to: %s\n" % os.path.join(run_dir, "result.json")
         hand = agents.run(cfg, "creator", prompt, cfg.root, run_dir, cfg.agent_timeout_seconds)
+        if hand.cost:
+            rows.append(hand.cost)
         memory.collect(pool, hand, "request (opener)")
         if hand.problem():
             errors = [hand.problem()]
             continue
         if hand.kind == "rejected":
-            return rejected(pool, "request", hand.result.get("text"), via)
+            return rejected(pool, "request", hand.result.get("text"), via, cost=rows)
         if hand.kind == "question":
             pool.report("decision", "request", "the opener needs your decision before opening "
-                        "tickets:\n%s" % hand.result.get("text"), request=request[:2000])
+                        "tickets:\n%s" % hand.result.get("text"), request=request[:2000], cost=rows)
             print(hand.result.get("text"))
             return 3
         if hand.kind != "tickets":
@@ -245,14 +285,14 @@ def open_tickets(cfg, pool, request, via="main", by=None):
         errors = check_new(hand.result, pool.snapshot(), cfg)
         if errors:
             continue
-        ids = write_new(pool, hand.result, request, editable(cfg), by=by)
+        ids = write_new(pool, hand.result, request, editable(cfg), by=by, cost=rows)
         titles = {i: pool.snapshot().tickets[i].get("title") for i in ids}
         pool.report("created", ",".join(ids), "opened " + "; ".join(
             "#%s %s" % (i, titles[i]) for i in ids))
         print("opened: " + " ".join("#" + i for i in ids))
         return 0
     pool.report("decision", "request", "the opener could not produce valid tickets:\n- %s" % (
-        "\n- ".join(errors)), request=request[:2000])
+        "\n- ".join(errors)), request=request[:2000], cost=rows)
     return 1
 
 
@@ -383,6 +423,13 @@ def revise(cfg, pool, ident, source, reason, via="main", by=None):
     hand = agents.run(cfg, "creator", prompt, cfg.root, run_dir,
                       min(REVISE_TIMEOUT, cfg.agent_timeout_seconds),
                       extra_env={"DEVLOOP_TICKET": ident})
+    if hand.cost:
+        def record(tx):
+            row = tx.data.tickets.get(ident)
+            if row is not None:
+                row["cost"] = list(row.get("cost") or []) + [hand.cost]
+                tx.put_ticket(row)
+        pool.update(record, "tickets: #%s revise cost" % ident)
     memory.collect(pool, hand, "#%s revise (opener)" % ident)
     if hand.problem():
         print("REVISE FAILED: %s - continue with the ticket as it is, or hand in kind "

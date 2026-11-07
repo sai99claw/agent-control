@@ -175,6 +175,11 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
   ones it stopped with outcome `interrupted`; a run whose last command hit the usage limit gets
   its row with outcome `quota` when the wait starts (the commands before it in its chain are in
   `fell_back_from` with outcome `out of quota`); a landed ticket gets `cost_total`. Unknown stays unknown.
+  The opener's runs (role `creator`) are recorded too: an opening run's row is split over the tickets
+  it opened (`split_over` lists their ids; token counts `// N`, the lowest id gets the remainder; usd and
+  seconds `/ N`), a revising run's row goes on the revised ticket whatever its outcome, and a request
+  whose runs opened no ticket keeps its rows unsplit on the decision page it wrote. The Token tab counts
+  the shares of one split run as one run.
 - `unlimited_tokens: true`: memory consolidation becomes a two-model discussion (draft, review by
   `consolidator_peer`, one more draft if asked), kept in the pool under `memory/discussions/` (not in the memory folder).
 
