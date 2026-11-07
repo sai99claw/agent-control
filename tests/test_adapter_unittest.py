@@ -975,5 +975,152 @@ class T2Acceptance(ParallelFixture):
         self.assert_sized(line, avail // MIB)
 
 
+# Ticket #55 fixtures. The marker phrases live only in these strings and constants: a failing
+# assertion of the cases below must never quote one (its own row would become a machine suspect).
+T55_EMFILE_MARKER = "too many open files"
+T55_COMMIT_MARKER = "failed to write commit object"
+T55_EMFILE_MESSAGE = "OSError: [Errno 24] Too many open files"
+T55_EMFILE_LOWER_LINE = "OSError: [Errno 24] too many open files"
+T55_COMMIT_LINE = "AssertionError: git commit failed: fatal: failed to write commit object"
+T55_EMFILE = """import unittest
+
+
+class T(unittest.TestCase):
+    def test_pass(self):
+        pass
+
+    def test_emfile(self):
+        raise OSError(24, 'Too many open files')
+"""
+T55_EMFILE_ONLY = """import unittest
+
+
+class T(unittest.TestCase):
+    def test_emfile(self):
+        raise OSError(24, 'Too many open files')
+"""
+T55_COMMIT = """import unittest
+
+
+class T(unittest.TestCase):
+    def test_commit(self):
+        self.fail('git commit failed: fatal: failed to write commit object')
+"""
+T55_CHAINED = """import unittest
+
+MARK = 'too many open files'
+
+
+class T(unittest.TestCase):
+    def test_chained(self):
+        try:
+            raise OSError(24, MARK)
+        except OSError as exc:
+            raise RuntimeError('commit step broke') from exc
+"""
+T55_MIXED = """import unittest
+
+
+class T(unittest.TestCase):
+    def test_emfile(self):
+        raise OSError(24, 'Too many open files')
+
+    def test_ordinary(self):
+        self.assertEqual(1, 2)
+"""
+
+
+class T55Acceptance(ParallelFixture):
+    """Ticket #55: fail/error rows whose message or traceback carries 'too many open files' (any
+    case) or 'failed to write commit object' are listed as `machine` environment suspects → rc 86.
+    Assertion messages carry only rc, ids and source values (never row text)."""
+
+    def same(self, actual, expected, label):
+        # assertTrue, not assertEqual: the default diff would print the row text.
+        self.assertTrue(actual == expected, label)
+
+    def run_rc(self, *ids):
+        done = self.run_adapter("run", *ids)
+        self.assertEqual(done.returncode, 86, "rc of run %s" % (ids,))
+        return self.result()
+
+    def suspects(self, data, count):
+        rows = data["environment_suspect"]
+        self.assertEqual(len(rows), count, "suspect sources %s" % [r.get("source") for r in rows])
+        for row in rows:
+            self.assertEqual(sorted(row), sorted(SUSPECT_KEYS), "keys of a suspect row")
+        return rows
+
+    def statuses(self, data):
+        return {row["id"]: row["status"] for row in data["ids"]}
+
+    def test_t55_item1_too_many_open_files_error_is_one_machine_row(self):
+        self.put("test_emfile.py", T55_EMFILE)
+        data = self.run_rc("test_emfile")
+        tid = "test_emfile.T.test_emfile"
+        row = self.suspects(data, 1)[0]
+        self.assertEqual(row["source"], "machine")
+        self.assertEqual(row["engine"], "")
+        self.same(row["why"], "%s: %s" % (tid, T55_EMFILE_MARKER), "why of %s" % tid)
+        self.assertEqual(row["count"], 1)
+        self.assertIsNone(row["threshold"])
+        self.same(row["log"], os.path.join(self.out, "run.log"), "log is AC_TEST_OUT/run.log")
+        self.same(row["line"], T55_EMFILE_MESSAGE, "line of %s" % tid)
+        self.assertEqual(self.statuses(data), {tid: "error", "test_emfile.T.test_pass": "pass"})
+        rows = {r["id"]: r for r in data["ids"]}
+        self.same(rows[tid]["message"], T55_EMFILE_MESSAGE, "message of %s unchanged" % tid)
+
+    def test_t55_item2_failed_to_write_commit_object_fail_is_one_machine_row(self):
+        self.put("test_commit.py", T55_COMMIT)
+        data = self.run_rc("test_commit")
+        tid = "test_commit.T.test_commit"
+        row = self.suspects(data, 1)[0]
+        self.assertEqual(row["source"], "machine")
+        self.same(row["why"], "%s: %s" % (tid, T55_COMMIT_MARKER), "why of %s" % tid)
+        self.same(row["line"], T55_COMMIT_LINE, "line of %s" % tid)
+        self.assertEqual(self.statuses(data), {tid: "fail"})
+
+    def test_t55_item3_marker_only_in_the_traceback_is_found(self):
+        self.put("test_chained.py", T55_CHAINED)
+        data = self.run_rc("test_chained")
+        tid = "test_chained.T.test_chained"
+        row = self.suspects(data, 1)[0]
+        self.assertEqual(row["source"], "machine")
+        self.same(row["why"], "%s: %s" % (tid, T55_EMFILE_MARKER), "why of %s" % tid)
+        self.same(row["line"], T55_EMFILE_LOWER_LINE, "line of %s" % tid)
+
+    def test_t55_item4_ordinary_failure_beside_a_marker_stays_in_ids_only(self):
+        self.put("test_mixed.py", T55_MIXED)
+        data = self.run_rc("test_mixed")
+        tid = "test_mixed.T.test_emfile"
+        row = self.suspects(data, 1)[0]
+        self.assertEqual(row["source"], "machine")
+        self.same(row["why"], "%s: %s" % (tid, T55_EMFILE_MARKER), "why of %s" % tid)
+        self.assertEqual(self.statuses(data)["test_mixed.T.test_ordinary"], "fail")
+
+    def test_t55_item5_declared_row_comes_before_the_machine_row(self):
+        self.put("test_declared.py", DECLARES_THEN_SKIPS)
+        self.put("test_emfile.py", T55_EMFILE_ONLY)
+        data = self.run_rc("test_declared", "test_emfile")
+        rows = self.suspects(data, 2)
+        self.assertEqual([r["source"] for r in rows], ["declared", "machine"])
+        self.same(rows[1]["why"], "%s: %s" % ("test_emfile.T.test_emfile", T55_EMFILE_MARKER),
+                  "why of test_emfile.T.test_emfile")
+
+    @unittest.skipIf(CPUS < 3, "sharding needs os.cpu_count() >= 3 (it is %d)" % CPUS)
+    def test_t55_item6_sharded_full_merges_the_machine_row(self):
+        self.put("test_a.py", TWO_GREEN)
+        self.put("test_emfile.py", T55_EMFILE_ONLY)
+        self.config(parallel=2)
+        done, _ = self.full()
+        self.assertEqual(done.returncode, 86, "rc of sharded full")
+        self.assertEqual(len(self.shards()), 2, "this arm must have run sharded")
+        data = self.result()
+        row = self.suspects(data, 1)[0]
+        self.assertEqual(row["source"], "machine")
+        self.same(row["why"], "%s: %s" % ("test_emfile.T.test_emfile", T55_EMFILE_MARKER),
+                  "why of test_emfile.T.test_emfile")
+
+
 if __name__ == "__main__":
     unittest.main()
