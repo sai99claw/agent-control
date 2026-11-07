@@ -4438,6 +4438,131 @@ class StopRecordsCost(LoopCase):
         self.assertEqual((issuer.pending, issuer.round_costs), ([], []))
 
 
+class T61Acceptance(LoopCase):
+    """Ticket #61: cost rows read codex's turn.completed usage; dollars from devloop.prices, else
+    unknown. Expected numbers are the arithmetic in the acceptance text."""
+
+    EVENTS = [
+        {"type": "thread.started", "thread_id": "t-123"},
+        {"type": "turn.started"},
+        {"type": "item.completed", "item": {"id": "item_0", "type": "agent_message", "text": "done"}},
+        {"type": "turn.completed", "usage": {"input_tokens": 1000, "cached_input_tokens": 400,
+                                             "output_tokens": 50}},
+        {"type": "turn.started"},
+        {"type": "turn.completed", "usage": {"input_tokens": 2000, "cached_input_tokens": 1500,
+                                             "output_tokens": 70}},
+    ]
+    PRICE = {"input": 1.25, "cached_input": 0.125, "output": 10}
+    USD = (1100 * 1.25 + 1900 * 0.125 + 120 * 10) / 1e6
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for k in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            os.environ.pop(k, None)
+            self.env.pop(k, None)
+        os.environ["AC_ROOT"] = self.proj
+
+    def log(self):
+        path = os.path.join(self.tmp, "codex.log")
+        with open(path, "w") as fh:
+            for e in self.EVENTS:
+                fh.write(json.dumps(e) + "\n")
+        return path
+
+    def assert_tokens(self, row):
+        self.assertEqual((row["input_tokens"], row["cache_read_tokens"], row["output_tokens"]),
+                         (1100, 1900, 120))
+
+    # ---- acceptance 1 and 2: the unit layer
+
+    def test_usage_from_log_sums_codex_turns(self):
+        from core import agents
+        out = agents.usage_from_log(self.log())
+        self.assert_tokens(out)
+        self.assertIsNone(out["cache_write_tokens"])
+        self.assertIsNone(out["usd"])
+        self.assertEqual(out["session_id"], "t-123")
+
+    def test_usage_from_log_prices_codex_turns(self):
+        import inspect
+        from core import agents
+        self.assertIn("price", inspect.signature(agents.usage_from_log).parameters)
+        out = agents.usage_from_log(self.log(), price=dict(self.PRICE))
+        self.assert_tokens(out)
+        self.assertIsNone(out["cache_write_tokens"])
+        self.assertEqual(out["session_id"], "t-123")
+        self.assertIsNotNone(out["usd"])
+        self.assertAlmostEqual(out["usd"], 0.0028125, delta=1e-12)
+        self.assertAlmostEqual(out["usd"], self.USD, delta=1e-12)
+
+    # ---- acceptance 4: the rejections
+
+    def assert_rejected(self, prices):
+        from core.config import Config
+        self.config(prices=prices)
+        with self.assertRaises(osx.OSFailure) as ctx:
+            Config(self.proj)
+        self.assertIn("devloop.prices", str(ctx.exception))
+
+    def test_prices_not_an_object_is_rejected(self):
+        for bad in (["sh"], "sh", 3, True):
+            with self.subTest(prices=bad):
+                self.assert_rejected(bad)
+
+    def test_price_entry_not_an_object_is_rejected(self):
+        for bad in (1.25, "cheap", [1.25, 0.125, 10], None):
+            with self.subTest(entry=bad):
+                self.assert_rejected({"sh": bad})
+
+    def test_price_entry_missing_a_key_is_rejected(self):
+        for key in ("input", "cached_input", "output"):
+            entry = dict(self.PRICE)
+            del entry[key]
+            with self.subTest(missing=key):
+                self.assert_rejected({"sh": entry})
+
+    def test_price_negative_string_or_bool_is_rejected(self):
+        for key in ("input", "cached_input", "output"):
+            for bad in (-1, -0.5, "1.25", True, False):
+                with self.subTest(key=key, value=bad):
+                    self.assert_rejected({"sh": dict(self.PRICE, **{key: bad})})
+
+    # ---- acceptance 5: end to end
+
+    def run_codex_worker(self, **devloop):
+        from core import agents
+        from core.config import Config
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            agents_cfg = json.load(fh)["devloop"]["agents"]
+        lines = " ".join("'%s'" % json.dumps(e) for e in self.EVENTS)
+        script = ('cat >/dev/null; for l in %s; do printf "%%s\\n" "$l"; done; '
+                  'echo \'{"kind": "done"}\' > "$DEVLOOP_RESULT"' % lines)
+        self.config(agents=dict(agents_cfg, worker=["sh", "-c", script]), **devloop)
+        hand = agents.run(Config(self.proj), "worker", "go", self.proj,
+                          os.path.join(self.tmp, "run"), 30)
+        self.assertEqual(hand.cost["outcome"], "done")
+        return hand.cost
+
+    def test_end_to_end_priced_row(self):
+        row = self.run_codex_worker(prices={"sh": dict(self.PRICE)})
+        self.assert_tokens(row)
+        self.assertIsNotNone(row["usd"])
+        self.assertAlmostEqual(row["usd"], 0.0028125, delta=1e-12)
+
+    def test_end_to_end_without_prices_usd_unknown(self):
+        row = self.run_codex_worker()
+        self.assert_tokens(row)
+        self.assertIsNone(row["usd"])
+
+    def test_end_to_end_no_entry_for_sh_usd_unknown(self):
+        row = self.run_codex_worker(prices={"codex": dict(self.PRICE)})
+        self.assert_tokens(row)
+        self.assertIsNone(row["usd"])
+
+
 class T36Acceptance(LoopCase):
     """Ticket #36: devloop.worktree_setup runs in every worktree devloop creates, right after it is
     created; a failure is an environment problem, not a red. Expected values from D-091 item 10."""
