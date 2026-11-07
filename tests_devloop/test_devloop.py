@@ -1,10 +1,13 @@
 """End-to-end tests of the loop: a throwaway project, a throwaway pool, fake agents and fake
 tests behind the real test interface. Run: python3 -m unittest discover tests_devloop"""
 
+import calendar
 import glob
+import html
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -4459,6 +4462,240 @@ class Landing(LoopCase):
         self.assertEqual(total["runs"], 2)
         self.assertEqual(total["unknown_runs"], 2, "fake agents report no tokens: unknown, not 0")
         self.assertIsNone(total["input_tokens"])
+
+
+class T56Acceptance(LoopCase):
+    """#56: the board's first tab 要你判 - one card per thing waiting for the user, shown by default
+    when something waits, counted on its label and in the <title>. Expected values come from the
+    ticket and this fixture (worked out by hand), never from board.py."""
+
+    NOW = calendar.timegm((2026, 11, 6, 12, 0, 0, 0, 0, 0))
+    QUOTA = {"reason": "quota", "since": "2026-11-06T10:00:00Z", "until": "2026-11-06T11:50:00Z",
+             "text": "usage limit reached"}
+    PAGES = {
+        "p1": {"kind": "decision", "ref": "1", "text": "ticket 1 needs you", "at": "2026-11-06T09:00:01Z", "acked": False},
+        "p3": {"kind": "decision", "ref": "3", "text": "ticket 3 question", "at": "2026-11-06T07:00:00Z", "acked": False},
+        "p6": {"kind": "decision", "ref": "6", "text": "old answered page", "at": "2026-11-06T11:59:00Z", "acked": True},
+        "pg1": {"kind": "decision", "ref": "g1", "text": "g1 red after 3 rounds", "at": "2026-11-06T10:30:01Z", "acked": False},
+        "pg2": {"kind": "env", "ref": "g2", "text": "g2 preflight failed", "at": "2026-11-06T11:00:01Z", "acked": False},
+        "preq": {"kind": "decision", "ref": "request", "text": "Which <one> & why?", "at": "2026-11-06T06:00:00Z", "acked": False},
+        "pc": {"kind": "created", "ref": "1,2", "text": "opened 1, 2", "at": "2026-11-06T11:59:30Z", "acked": False},
+        "pl": {"kind": "landed", "ref": "g1", "text": "g1 landed", "at": "2026-11-06T11:59:40Z", "acked": False},
+    }
+    CARD_RE = (r'<section class="wait" data-kind="([^"]*)" data-subject="([^"]*)" data-page="([^"]*)">'
+               r'(.*?)</section>')
+    TICKET_PARAMS = ("ticket", "group", "state", "cat", "q", "done")
+
+    def fill(self):
+        self.add(1, state="stuck", feedback=["round 3: verifier cases: 1 failed"],
+                 stuck={"reason": "rounds", "text": "verifier cases: 1 failed", "at": "2026-11-06T09:00:00Z"})
+        self.add(2, state="stuck", feedback=[],
+                 stuck={"reason": "env", "text": "screen locked", "at": "2026-11-06T08:00:00Z"})
+        self.add(3, state="ready")
+        self.add(4, state="running", waiting=dict(self.QUOTA))
+        self.add(5, state="running", waiting=dict(self.QUOTA, until="2026-11-06T11:58:20Z"))
+        self.add(6, state="landed")
+
+        def rest(tx):
+            tx.put_group({"id": "g1", "branch": "int/g1", "state": "stuck", "members": ["1"], "fix_round": 3,
+                          "history": [{"at": "2026-11-06T10:30:00Z", "event": "red after 3 fix rounds"}],
+                          "last_regression": "1 failing"})
+            tx.put_group({"id": "g2", "branch": "int/g2", "state": "pr", "members": [], "fix_round": 0,
+                          "history": [], "job": None, "last_regression": "preflight: screen locked",
+                          "paused": {"reason": "env", "at": "2026-11-06T11:00:00Z", "text": "screen locked"}})
+            tx.put_group({"id": "g3", "branch": "int/g3", "state": "fixing", "members": [], "fix_round": 1,
+                          "history": [], "job": None,
+                          "paused": {"reason": "unmeasured", "at": "2026-11-06T11:10:00Z", "text": "no slot"}})
+            for name, row in self.PAGES.items():
+                tx.write("inbox/%s.json" % name, dict(row))
+        self.pool.update(rest, "test: #56 fixture")
+
+    def page(self, query=None):
+        import inspect
+        import board
+        from core.config import Config
+        self.assertTrue(hasattr(board, "render"), "board.render is missing")
+        params = inspect.signature(board.render).parameters
+        self.assertIn("query", params)
+        self.assertIn("now", params)
+        return board.render(Config(self.proj), self.snap(), query=query, now=self.NOW)
+
+    def cards(self, page):
+        out = []
+        for m in re.finditer(self.CARD_RE, page, re.S):
+            inner = m.group(4)
+            want = re.findall(r'<p class="want">(.*?)</p>', inner, re.S)
+            cat = re.findall(r'<span class="cat">(.*?)</span>', inner, re.S)
+            fb = re.findall(r'<pre class="feedback">(.*?)</pre>', inner, re.S)
+            text = re.findall(r'<pre class="page-text">(.*?)</pre>', inner, re.S)
+            tl = re.findall(r'<a class="timeline" href="([^"]*)">時間軸</a>', inner)
+            out.append({"key": m.groups()[:3], "want": want, "cat": cat, "feedback": fb, "text": text, "timeline": tl})
+        return out
+
+    def shown(self, page):
+        ids = re.findall(r'id="tab-([a-z]+)"', page)
+        return ids
+
+    def nav(self, page):
+        m = re.search(r'<nav class="tabs">(.*?)</nav>', page, re.S)
+        self.assertIsNotNone(m, "no <nav class=\"tabs\">")
+        return re.findall(r'<a href="([^"]*)"[^>]*>(.*?)</a>', m.group(1), re.S)
+
+    def doc_title(self, page):
+        m = re.search(r"<title>(.*?)</title>", page, re.S)
+        self.assertIsNotNone(m, "no <title>")
+        return m.group(1)
+
+    def h1(self, page):
+        m = re.search(r"<h1>(.*?)</h1>", page, re.S)
+        self.assertIsNotNone(m, "no <h1>")
+        return m.group(1)
+
+    # ------------------------------------------------------------ item 1
+
+    def test_item1_decide_is_the_first_tab_with_five_links_and_a_counted_label(self):
+        import board
+        self.assertTrue(hasattr(board, "TABS"), "board.TABS is missing")
+        self.assertGreaterEqual(len(board.TABS), 1)
+        self.assertEqual(tuple(board.TABS[0][:2]), ("decide", "要你判"), "TABS' first entry is decide / 要你判")
+        self.assertTrue(callable(board.TABS[0][2]), "the decide entry carries its renderer")
+        self.fill()
+        for query in (None, {"tab": "decide"}, {"tab": "tickets"}, {"tab": "dag"}):
+            links = self.nav(self.page(query))
+            self.assertEqual([h for h, _ in links], ["?tab=decide", "?tab=tickets", "?tab=dag", "?tab=tokens", "?tab=host"],
+                             "nav links for %r" % (query,))
+            self.assertEqual([t for _, t in links], ["要你判 (8)", "票", "DAG", "Token", "主機"], "nav texts for %r" % (query,))
+        page = self.page({"tab": "decide"})
+        self.assertEqual(page.count('id="tab-decide"'), 1, "exactly one tab-decide element")
+        for other in ("tickets", "dag", "tokens", "host"):
+            self.assertNotIn('id="tab-%s"' % other, page)
+
+    def test_item1_label_has_no_count_without_cards(self):
+        links = self.nav(self.page(None))
+        self.assertEqual([h for h, _ in links][:1], ["?tab=decide"], "要你判 is the first link")
+        self.assertEqual(len(links), 5, "five links")
+        self.assertEqual(links[0][1], "要你判", "no count without cards")
+
+    # ------------------------------------------------------------ item 2
+
+    def test_item2_decide_is_shown_by_default_when_something_waits(self):
+        self.fill()
+        for query in (None, {}, {"tab": ""}, {"tab": "nope"}):
+            self.assertEqual(self.shown(self.page(query)), ["decide"], "query %r shows 要你判" % (query,))
+        for name in self.TICKET_PARAMS:
+            value = "1" if name in ("ticket", "done") else ("g1" if name == "group" else
+                                                             ("stuck" if name == "state" else
+                                                              ("red" if name == "cat" else "ticket")))
+            for query in ({name: value}, {"tab": "nope", name: value}):
+                self.assertEqual(self.shown(self.page(query)), ["tickets"], "query %r shows 票" % (query,))
+        self.assertEqual(self.shown(self.page({"state": "stuck"})), ["tickets"])
+        self.assertEqual(self.shown(self.page({"ticket": "1"})), ["tickets"])
+
+    def test_item2_tickets_is_the_default_when_nothing_waits(self):
+        for query in (None, {}, {"tab": ""}, {"tab": "nope"}):
+            self.assertEqual(self.shown(self.page(query)), ["tickets"], "empty pool, query %r shows 票" % (query,))
+        self.assertEqual(self.shown(self.page({"tab": "decide"})), ["decide"], "an asked-for 要你判 is shown")
+
+    def test_item2_html_command_without_query_shows_decide(self):
+        self.fill()
+        res = self.run_py("board.py", "html")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn('id="tab-decide"', res.stdout)
+        self.assertNotIn('id="tab-tickets"', res.stdout)
+
+    # ------------------------------------------------------------ item 3
+
+    def test_item3_title_carries_the_count_and_h1_does_not(self):
+        self.fill()
+        for query in (None, {"tab": "tickets"}, {"tab": "decide"}):
+            page = self.page(query)
+            head = self.h1(page)
+            self.assertNotIn("(", head, "the <h1> never carries the count")
+            self.assertTrue(head, "the <h1> keeps today's title")
+            self.assertEqual(self.doc_title(page), "(8) " + head, "<title> is '(8) ' + today's title")
+
+    def test_item3_title_without_cards_has_no_count(self):
+        page = self.page(None)
+        self.assertNotIn("(", self.doc_title(page))
+        self.assertEqual(self.doc_title(page), self.h1(page))
+        links = self.nav(page)
+        self.assertEqual(links[0], ("?tab=decide", "要你判"), "要你判 first, no count")
+
+    # ------------------------------------------------------------ items 4 and 5
+
+    def test_items4_5_cards_which_and_in_what_order(self):
+        self.fill()
+        cards = self.cards(self.page({"tab": "decide"}))
+        self.assertEqual([c["key"] for c in cards], [
+            ("quota", "4", ""), ("group", "g3", ""), ("group", "g2", "pg2"), ("group", "g1", "pg1"),
+            ("ticket", "1", "p1"), ("ticket", "2", ""), ("ticket", "3", "p3"), ("other", "request", "preq")])
+
+    def test_item4_no_card_for_a_short_quota_wait_or_read_and_info_pages(self):
+        self.fill()
+        page = self.page({"tab": "decide"})
+        keys = [c["key"] for c in self.cards(page)]
+        self.assertEqual(len(keys), 8, keys)
+        self.assertNotIn("5", [k[1] for k in keys], "a quota wait 100 s past its until is no card")
+        for name in ("p6", "pc", "pl"):
+            self.assertNotIn(name, [k[2] for k in keys], "%s is no card" % name)
+            self.assertNotIn('data-page="%s"' % name, page)
+
+    # ------------------------------------------------------------ item 6
+
+    def test_item6_card_contents(self):
+        self.fill()
+        cards = self.cards(self.page({"tab": "decide"}))
+        self.assertEqual(len(cards), 8, [c["key"] for c in cards])
+        want = ["#4 等額度重置,已過了 2026-11-06T11:50:00Z 還在等",
+                "g3 的 regression 沒跑成:環境修好後重跑",
+                "g2 的 regression 沒跑成:環境修好後重跑",
+                "g1 卡住了:帶著你的話重驗,或取消這組",
+                "#1 卡住了:照你的話改、再試一次或取消",
+                "#2 卡住了:照你的話改、再試一次或取消",
+                "#3 有一頁要你看",
+                "開題者開票前要你決定:到「票」分頁交代新的事時一起回答"]
+        cat = [["額度用完"], [], ["環境"], ["紅燈"], ["紅燈"], ["環境"], [], []]
+        feedback = [["usage limit reached"], [], ["preflight: screen locked"], ["1 failing"],
+                    ["round 3: verifier cases: 1 failed"], ["screen locked"], [], []]
+        timeline = [["?ticket=4"], ["?group=g3"], ["?group=g2"], ["?group=g1"], ["?ticket=1"], ["?ticket=2"],
+                    ["?ticket=3"], []]
+        for i, c in enumerate(cards):
+            self.assertEqual(c["want"], [html.escape(want[i])], "want line of %r" % (c["key"],))
+            self.assertNotIn("\n", c["want"][0].strip(), "one line")
+            self.assertEqual(c["cat"], [html.escape(x) for x in cat[i]], "cat of %r" % (c["key"],))
+            self.assertEqual(c["feedback"], [html.escape(x) for x in feedback[i]], "feedback of %r" % (c["key"],))
+            self.assertEqual(c["timeline"], timeline[i], "timeline of %r" % (c["key"],))
+            page_name = c["key"][2]
+            expected_text = [html.escape(self.PAGES[page_name]["text"])] if page_name else []
+            self.assertEqual(c["text"], expected_text, "page-text of %r" % (c["key"],))
+        self.assertEqual(sum(1 for c in cards if c["text"]), 5, "page-text on exactly the five cards with a page")
+
+    def test_item6_text_is_escaped(self):
+        self.fill()
+        page = self.page({"tab": "decide"})
+        cards = [c for c in self.cards(page) if c["key"] == ("other", "request", "preq")]
+        self.assertEqual(len(cards), 1, "one card for preq")
+        self.assertEqual(cards[0]["text"], ["Which &lt;one&gt; &amp; why?"])
+        self.assertNotIn("Which <one>", page)
+
+    def test_item6_other_page_line_names_its_ref(self):
+        self.add(1, state="ready")
+        self.pool.update(lambda tx: tx.write("inbox/px.json", {"kind": "env", "ref": "host", "text": "disk <full>",
+                                                               "at": "2026-11-06T11:00:00Z", "acked": False}), "px")
+        cards = self.cards(self.page({"tab": "decide"}))
+        self.assertEqual([c["key"] for c in cards], [("other", "host", "px")])
+        self.assertEqual(cards[0]["want"], [html.escape("有一頁要你看(host)")])
+        self.assertEqual(cards[0]["cat"], [])
+        self.assertEqual(cards[0]["timeline"], [])
+        self.assertEqual(cards[0]["text"], ["disk &lt;full&gt;"])
+
+    # ------------------------------------------------------------ item 7
+
+    def test_item7_no_card_says_quiet(self):
+        page = self.page({"tab": "decide"})
+        self.assertEqual(self.shown(page), ["decide"])
+        self.assertIn('<p class="quiet">沒有要你判的事。</p>', page)
+        self.assertEqual(self.cards(page), [])
 
 
 class T29Acceptance(LoopCase):
