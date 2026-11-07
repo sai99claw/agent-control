@@ -914,6 +914,298 @@ class Revise(LoopCase):
         self.assertEqual(self.snap().tickets, {})
 
 
+class T50Acceptance(LoopCase):
+    """#50: a user's answer names who gave it (--by) and closes the page it answered (--page)."""
+
+    NAME = "a@x.com"
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def page(self, name, ref, kind="decision"):
+        def change(tx):
+            tx.write("inbox/%s.json" % name, {"kind": kind, "ref": str(ref), "text": "stuck",
+                                              "at": osx.now(), "acked": False})
+        self.pool.update(change, "test: page %s" % name)
+
+    def stuck(self, ident, page=None):
+        self.add(ident)
+
+        def change(tx):
+            t = tx.ticket(str(ident))
+            t.update(state="stuck", round=3, stuck={"reason": "rounds", "text": "x"})
+            tx.put_ticket(t)
+        self.pool.update(change, "test: stuck")
+        if page:
+            self.page(page, ident)
+
+    def stuck_group(self, gid="g1", members=("7",)):
+        for m in members:
+            self.add(m, state="merged", group=gid)
+        git(self.proj, "branch", "int/%s" % gid)
+        self.pool.update(lambda tx: tx.put_group({"id": gid, "branch": "int/%s" % gid, "state": "stuck",
+                                                  "members": list(members), "fix_round": 3, "job": None}),
+                         "test: stuck group")
+
+    def commits(self):
+        return int(git(self.pool_path, "rev-list", "--count", "HEAD"))
+
+    def new_events(self, before, row):
+        hist = row.get("history") or []
+        self.assertEqual(hist[:len(before)], before, "earlier history was changed")
+        return hist[len(before):]
+
+    def answer_event(self, events, decision, text, by, page=None):
+        names = [e.get("event") for e in events]
+        self.assertIn("user answer", names, events)
+        self.assertEqual(names.count("user answer"), 1, events)
+        ev = events[names.index("user answer")]
+        self.assertEqual(ev.get("decision"), decision, ev)
+        self.assertEqual(ev.get("text"), text, ev)
+        self.assertEqual(ev.get("by"), by, ev)
+        if page is None:
+            self.assertNotIn("page", ev)
+        else:
+            self.assertEqual(ev.get("page"), page, ev)
+        return names.index("user answer")
+
+    def assert_acked(self, row, by, t0, t1):
+        self.assertTrue(row.get("acked"), row)
+        self.assertEqual(row.get("acked_by"), by, row)
+        self.assertRegex(row.get("acked_at") or "", r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertTrue(t0 <= row["acked_at"] <= t1, (t0, row["acked_at"], t1))
+
+    # ------------------------------------------------ item 1 and 3: ticket_creator --from user
+
+    def test_item1_3_retry_and_cancel_record_a_user_answer(self):
+        self.stuck(1, page="p1")
+        self.stuck(2, page="p2")
+        self.stuck(3)
+        reason = "r" * 1500 + "s" * 1000
+        rfile = os.path.join(self.tmp, "reason.txt")
+        with open(rfile, "w") as fh:
+            fh.write(reason)
+        before = [self.snap().ticket(i).get("history") or [] for i in ("1", "2", "3")]
+        t0 = osx.now()
+        res = self.run_py("ticket_creator.py", "--revise", "1", "--from", "user", "--decision", "retry",
+                          "--reason-file", rfile, "--page", "p1", "--by", self.NAME)
+        t1 = osx.now()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        res = self.run_py("ticket_creator.py", "--revise", "2", "--from", "user", "--decision", "cancel",
+                          "--reason", "not needed", "--page", "p2")
+        t2 = osx.now()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        res = self.run_py("ticket_creator.py", "--revise", "3", "--from", "user", "--decision", "cancel",
+                          "--by", self.NAME)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        snap = self.snap()
+        self.assertFalse(os.path.isdir(os.path.join(self.tmp, "wt", "runs", "1")), "no agent ran")
+        # ticket 1: retry, reason cut to 2000 characters, by NAME, page p1
+        t = snap.ticket("1")
+        self.assertEqual(t["state"], "ready")
+        ev = self.new_events(before[0], t)
+        i = self.answer_event(ev, "retry", reason[:2000], self.NAME, "p1")
+        names = [e.get("event") for e in ev]
+        self.assertIn("user decision: ready", names)
+        self.assertLess(i, names.index("user decision: ready"), names)
+        self.assertEqual(ev[names.index("user decision: ready")].get("by"), self.NAME)
+        self.assert_acked(snap.inbox["p1"], self.NAME, t0, t1)
+        # ticket 2: cancel without --by: by 'user', acked_by 'answer'
+        t = snap.ticket("2")
+        self.assertEqual(t["state"], "cancelled")
+        ev = self.new_events(before[1], t)
+        i = self.answer_event(ev, "cancel", "not needed", "user", "p2")
+        names = [e.get("event") for e in ev]
+        self.assertLess(i, names.index("user decision: cancelled"), names)
+        self.assert_acked(snap.inbox["p2"], "answer", t1, t2)
+        # ticket 3: cancel without reason and without --page: text '', no page field
+        t = snap.ticket("3")
+        self.assertEqual(t["state"], "cancelled")
+        ev = self.new_events(before[2], t)
+        i = self.answer_event(ev, "cancel", "", self.NAME)
+        names = [e.get("event") for e in ev]
+        self.assertLess(i, names.index("user decision: cancelled"), names)
+
+    def test_item1_3_revise_records_a_user_answer_before_the_opener(self):
+        self.stuck(1, page="p1")
+        self.plan(creator={"1": ["revised"]})
+        before = self.snap().ticket("1").get("history") or []
+        t0 = osx.now()
+        res = self.run_py("ticket_creator.py", "--revise", "1", "--from", "user", "--decision", "revise",
+                          "--reason", "drop the second item", "--page", "p1", "--by", self.NAME)
+        t1 = osx.now()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        snap = self.snap()
+        t = snap.ticket("1")
+        self.assertEqual(t["state"], "ready")
+        ev = self.new_events(before, t)
+        i = self.answer_event(ev, "revise", "drop the second item", self.NAME, "p1")
+        names = [e.get("event") for e in ev]
+        self.assertIn("revised", names)
+        self.assertLess(i, names.index("revised"), names)
+        self.assert_acked(snap.inbox["p1"], self.NAME, t0, t1)
+
+    def test_item1_unusable_opener_answer_still_leaves_the_user_answer(self):
+        self.stuck(1, page="p1")
+        self.plan(creator={"1": ["tickets"]})       # not a revise outcome
+        before = self.snap().ticket("1").get("history") or []
+        res = self.run_py("ticket_creator.py", "--revise", "1", "--from", "user", "--decision", "revise",
+                          "--reason", "do it differently", "--page", "p1", "--by", self.NAME)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        snap = self.snap()
+        t = snap.ticket("1")
+        self.assertEqual(t["state"], "stuck")
+        self.answer_event(self.new_events(before, t), "revise", "do it differently", self.NAME, "p1")
+        self.assertFalse(snap.inbox["p1"]["acked"], "the decision was not handled: the page stays")
+
+    # ------------------------------------------------ item 2: a running ticket
+
+    def test_item2_running_ticket_refused_before_anything(self):
+        self.add(1, state="running")
+        self.page("p1", 1)
+        self.plan(creator={"1": ["revised"]})
+        before = self.snap().ticket("1")
+        n = self.commits()
+        res = self.run_py("ticket_creator.py", "--revise", "1", "--from", "user", "--decision", "revise",
+                          "--reason", "x", "--page", "p1", "--by", self.NAME)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "wt", "runs", "1")),
+                         "the opener ran for a running ticket")
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        lines = [ln for ln in res.stderr.splitlines() if ln.strip()]
+        self.assertEqual(len(lines), 1, res.stderr)
+        self.assertIn("#1", lines[0])
+        self.assertIn("running", lines[0])
+        snap = self.snap()
+        self.assertEqual(snap.ticket("1"), before)
+        self.assertFalse(snap.inbox["p1"]["acked"])
+        self.assertEqual(self.commits(), n, "a refused answer wrote to the pool")
+
+    # ------------------------------------------------ item 4: ready gN --by --page
+
+    def test_item4_ready_group_by_and_page_in_one_commit(self):
+        self.stuck_group()
+        self.page("p1", "g1")
+        self.page("p2", "g1")
+        n = self.commits()
+        t0 = osx.now()
+        res = self.run_py("tickets.py", "ready", "g1", "--note", "keep the newer output",
+                          "--by", self.NAME, "--page", "p1")
+        t1 = osx.now()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.commits(), n + 1, "the group change and the page are not one pool commit")
+        snap = self.snap()
+        g = snap.groups["g1"]
+        self.assertEqual(g["state"], "pr", g)
+        ev = g["history"][-1]
+        self.assertEqual(ev.get("event"), "ready again by the user", ev)
+        self.assertEqual(ev.get("by"), self.NAME, ev)
+        self.assertEqual(g["notes"][-1]["by"], self.NAME, g["notes"])
+        self.assertEqual(g["notes"][-1]["text"], "keep the newer output")
+        self.assert_acked(snap.inbox["p1"], self.NAME, t0, t1)
+        self.assertFalse(snap.inbox["p2"]["acked"])
+        # without --by and --page: by 'user', no page touched
+        self.pool.update(lambda tx: tx.put_group(dict(tx.data.groups["g1"], state="stuck", fix_round=3)),
+                         "test: stuck again")
+        res = self.run_py("tickets.py", "ready", "g1", "--note", "again")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        snap = self.snap()
+        g = snap.groups["g1"]
+        self.assertEqual(g["history"][-1].get("by"), "user", g["history"][-1])
+        self.assertEqual(g["notes"][-1]["by"], "user", g["notes"])
+        self.assertFalse(snap.inbox["p2"]["acked"])
+
+    # ------------------------------------------------ item 5: cancel gN --by --page
+
+    def test_item5_cancel_group_by_and_page(self):
+        self.stuck_group("g1", ("7", "8"))
+        self.page("p1", "g1")
+        t0 = osx.now()
+        res = self.run_py("tickets.py", "cancel", "g1", "--why", "obsolete", "--by", self.NAME, "--page", "p1")
+        t1 = osx.now()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        snap = self.snap()
+        g = snap.groups["g1"]
+        self.assertEqual(g["state"], "cancelled")
+        ev = g["history"][-1]
+        self.assertEqual((ev.get("event"), ev.get("by"), ev.get("why")),
+                         ("cancelled by the user", self.NAME, "obsolete"), ev)
+        for m in ("7", "8"):
+            t = snap.ticket(m)
+            self.assertEqual(t["state"], "cancelled")
+            ev = t["history"][-1]
+            self.assertEqual((ev.get("event"), ev.get("by"), ev.get("why")),
+                             ("cancelled with group g1", self.NAME, "obsolete"), ev)
+        texts = [r["text"] for r in snap.inbox.values() if r.get("kind") == "cancelled" and r.get("ref") == "g1"]
+        self.assertEqual(texts, ["group g1 cancelled by %s (obsolete); cancelled tickets: #7, #8" % self.NAME])
+        self.assert_acked(snap.inbox["p1"], self.NAME, t0, t1)
+        # p1 is acked in the commit that cancels the group
+        last = git(self.pool_path, "log", "-1", "--format=%H", "--", "inbox/p1.json")
+        changed = git(self.pool_path, "show", "--name-only", "--format=", last).split()
+        self.assertIn("groups/g1.json", changed)
+        self.assertIn("tickets/7.json", changed)
+        # without --by: today's text
+        self.stuck_group("g2", ("9",))
+        res = self.run_py("tickets.py", "cancel", "g2", "--why", "w")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        snap = self.snap()
+        texts = [r["text"] for r in snap.inbox.values() if r.get("kind") == "cancelled" and r.get("ref") == "g2"]
+        self.assertEqual(texts, ["group g2 cancelled by the user (w); cancelled tickets: #9"])
+        self.assertEqual(snap.groups["g2"]["history"][-1].get("by"), "user")
+
+    # ------------------------------------------------ item 7: ack --by
+
+    def test_item7_ack_by_writes_on_the_subject(self):
+        self.add(1, state="stuck")
+        self.stuck_group()
+        self.page("p1", "1")
+        self.page("p2", "g1")
+        self.page("p3", "request", kind="created")
+        before_t = self.snap().ticket("1").get("history") or []
+        before_g = self.snap().groups["g1"].get("history") or []
+        before_7 = self.snap().ticket("7").get("history") or []
+        for page, subject in (("p1", "ticket"), ("p2", "group"), ("p3", None)):
+            n = self.commits()
+            t0 = osx.now()
+            res = self.run_py("tickets.py", "ack", page, "--by", self.NAME)
+            t1 = osx.now()
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+            self.assertEqual(self.commits(), n + 1, "ack %s is not one pool commit" % page)
+            self.assert_acked(self.snap().inbox[page], self.NAME, t0, t1)
+        snap = self.snap()
+        ev = self.new_events(before_t, snap.ticket("1"))
+        self.assertEqual([(e.get("event"), e.get("page"), e.get("by")) for e in ev],
+                         [("page acknowledged", "p1", self.NAME)])
+        ev = self.new_events(before_g, snap.groups["g1"])
+        self.assertEqual([(e.get("event"), e.get("page"), e.get("by")) for e in ev],
+                         [("page acknowledged", "p2", self.NAME)])
+        self.assertEqual(snap.ticket("7").get("history") or [], before_7)
+
+    def test_item7_ack_all_by_and_ack_without_by(self):
+        self.add(1, state="stuck")
+        self.page("p1", "1")
+        self.page("p2", "1")
+        self.page("p3", "1")
+        res = self.run_py("tickets.py", "ack", "p3")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        snap = self.snap()
+        self.assertTrue(snap.inbox["p3"]["acked"])
+        self.assertNotIn("acked_by", snap.inbox["p3"])
+        before = snap.ticket("1").get("history") or []
+        self.assertEqual(before, [e for e in before if e.get("event") != "page acknowledged"])
+        p3 = dict(snap.inbox["p3"])
+        t0 = osx.now()
+        res = self.run_py("tickets.py", "ack", "--all", "--by", self.NAME)
+        t1 = osx.now()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        snap = self.snap()
+        for page in ("p1", "p2"):
+            self.assert_acked(snap.inbox[page], self.NAME, t0, t1)
+        self.assertEqual(snap.inbox["p3"], p3, "an already acked page was changed")
+        self.assertEqual(snap.ticket("1").get("history") or [], before, "ack --all wrote an event")
+
+
 class FrozenWrites(LoopCase):
     """D-089: the pool writes of a revision refuse a merged or landed ticket inside the transaction."""
 
