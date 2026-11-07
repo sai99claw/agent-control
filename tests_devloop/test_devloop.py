@@ -5140,12 +5140,14 @@ class T63Acceptance(LoopCase):
 
     def test_a_dependency_merged_in_a_stuck_group_is_named_with_its_group(self):
         self.add(1)
-        self.add(2, deps=(1,))
+        # verify="alone": #2 cannot join g1 beside the merged #1, so it stays ready (ticket test_plan)
+        self.add(2, deps=(1,), verify="alone")
         self.plan(worker={"1": ["red"]}, fixer={"g1": ["blocked"]})
         res = self.controller()
         self.assertEqual(res.returncode, 0, res.stderr)
         snap = self.snap()
         self.assertEqual(snap.ticket("1").get("state"), "merged")     # fixture premise
+        self.assertEqual(snap.ticket("2").get("state"), "ready")      # fixture premise
         g1 = snap.groups["g1"]
         self.assertEqual(g1["state"], "stuck")                         # fixture premise
         last_event = (g1.get("history") or [{}])[-1].get("event")
