@@ -8,6 +8,7 @@
     python3 devloop/tickets.py ready g7             # a stuck group: verify it again (merged tickets kept)
     python3 devloop/tickets.py cancel 203 --why "no longer needed"
     python3 devloop/tickets.py cancel g7 --why "..."   # a stuck or open group: cancel its ready and merged tickets
+    python3 devloop/tickets.py rerun g7 --why "disk freed"   # environment fixed: verify a paused group again
     python3 devloop/tickets.py inbox [--all]        # pages for the main session
     python3 devloop/tickets.py ack <page>|--all
     python3 devloop/tickets.py lessons --layer role --name worker --file OLD.md   # old notes -> lessons
@@ -157,6 +158,29 @@ def cmd_cancel_group(pool, gid, why, by=None, page=None):
     return 0
 
 
+def cmd_rerun_group(pool, gid, why, by=None, page=None):
+    """The environment is fixed: drop a group's paused mark so the controller verifies it again.
+    Accepts a group in state pr or fixing without a job; one pool write (mark, event, page ack)."""
+    def change(tx):
+        g = tx.data.groups.get(gid)
+        if not g:
+            raise osx.OSFailure("no group %s" % gid)
+        if g.get("state") not in ("pr", "fixing"):
+            raise osx.OSFailure("group %s is %s; rerun is for a group waiting on its environment (pr or fixing)"
+                                % (gid, g.get("state")))
+        if g.get("job"):
+            raise osx.OSFailure("group %s has a %s job running; leave it alone" % (gid, g["job"].get("kind")))
+        who = by or "user"
+        g.pop("paused", None)
+        event(g, "environment fixed: verify again", by=who, why=why)
+        tx.put_group(g)
+        ack_in(tx, page, who)
+    pool.update(change, "group %s: environment fixed (main)" % gid)
+    print("group %s: environment fixed; the controller verifies it again (a --forever controller at its next "
+          "tick, otherwise run the controller)" % gid)
+    return 0
+
+
 def cmd_inbox(pool, args):
     snap = pool.snapshot()
     rows = [(k, v) for k, v in sorted(snap.inbox.items()) if args.all or not v.get("acked")]
@@ -268,6 +292,11 @@ def main(argv=None):
     p.add_argument("--why", default="")
     p.add_argument("--by", default=None)
     p.add_argument("--page", default=None)
+    p = sub.add_parser("rerun")
+    p.add_argument("id")
+    p.add_argument("--why", default="")
+    p.add_argument("--by", default=None)
+    p.add_argument("--page", default=None)
     p = sub.add_parser("inbox")
     p.add_argument("--all", action="store_true")
     p = sub.add_parser("ack")
@@ -299,6 +328,11 @@ def main(argv=None):
             return cmd_ready_group(pool, cfg, args.id, args.why, args.note, args.by, args.page, args.via)
         if args.cmd == "cancel" and re.fullmatch(r"g\d+", args.id):
             return cmd_cancel_group(pool, args.id, args.why, args.by, args.page)
+        if args.cmd == "rerun":
+            if not re.fullmatch(r"g\d+", args.id):
+                print("tickets: rerun is for a group g<N>, not for ticket %s" % args.id, file=sys.stderr)
+                return 2
+            return cmd_rerun_group(pool, args.id, args.why, args.by, args.page)
         if args.cmd == "release":
             return cmd_release(pool, cfg, args)
         return {"list": cmd_list, "show": cmd_show, "inbox": cmd_inbox, "ack": cmd_ack, "lessons": cmd_lessons,
