@@ -50,7 +50,7 @@ Run them from the project (or set `AC_ROOT` to it).
 `agents.<role>` (the command that starts an agent; prompt on stdin),
 `memory` (D-088: the folder of the memory files; default `<pool>/memory`, a relative path is against the project root; see Memory).
 Tests run through the project's existing test interface (`tests.preflight`, `tests.run`, `tests.full`; `scripts/testiface.py`).
-`hard_block.paths` / `patterns`: a ticket that touches them stops before merging.
+`hard_block.paths` / `patterns`: a ticket whose own change touches them stops before merging (what it merged in from main does not count).
 
 `devloop.no_reverify_paths` (D-090; default `["memory/", "docs/DECISIONS.md", "docs/HANDOFF.md"]`,
 a project's list replaces it, `[]` turns it off): when main moved after a group was verified and

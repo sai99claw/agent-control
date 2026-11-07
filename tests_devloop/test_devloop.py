@@ -8434,6 +8434,69 @@ class GitRules(GitIsolatedCase):
         self.assertEqual(git(tmp, "status", "--porcelain"), "?? cache.pyc")
 
 
+class HardBlockOwnChange(LoopCase):
+    def _issuer_for(self, from_main, own_file, own_text, patterns=None):
+        import ticket_issuer
+        from core.config import Config
+        from core.gitx import Git
+        if patterns is not None:
+            path = os.path.join(self.proj, "board", "config.json")
+            with open(path) as fh:
+                cfg = json.load(fh)
+            cfg["hard_block"]["patterns"] = patterns
+            with open(path, "w") as fh:
+                json.dump(cfg, fh)
+        os.makedirs(os.path.join(self.proj, "docs"), exist_ok=True)
+        with open(os.path.join(self.proj, "docs", "DECISIONS.md"), "w") as fh:
+            fh.write("d\n")
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "first")
+        git(self.proj, "branch", "int/g1", "main")
+        with open(os.path.join(self.proj, "docs", "DECISIONS.md"), "a") as fh:
+            fh.write("main edit\n")
+        with open(os.path.join(self.proj, "main_code.py"), "w") as fh:
+            fh.write("x = 1  # FORBIDDEN_MARK\n")
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "main change")
+        wt = os.path.join(self.tmp, "t1")
+        git(self.proj, "worktree", "add", "-q", wt, "-b", "t/1", "main" if from_main else "int/g1")
+        if not from_main:
+            git(wt, "merge", "-q", "--no-edit", "main")
+        with open(os.path.join(wt, own_file), "a") as fh:
+            fh.write(own_text)
+        git(wt, "add", "-A")
+        git(wt, "commit", "-q", "-m", "own")
+        issuer = ticket_issuer.Issuer(Config(self.proj), self.pool, "1", "int/g1")
+        return issuer, Git(wt)
+
+    def test_merged_in_main_change_does_not_count_but_own_change_does(self):
+        import ticket_issuer
+        issuer, g = self._issuer_for(False, "impl.py", "y = 2\n")
+        issuer.hard_block(g)
+        with open(os.path.join(g.cwd, "docs", "DECISIONS.md"), "a") as fh:
+            fh.write("own\n")
+        git(g.cwd, "commit", "-q", "-am", "own decisions")
+        with self.assertRaises(ticket_issuer.Stuck) as cm:
+            issuer.hard_block(g)
+        self.assertEqual(cm.exception.reason, "hard_block")
+        self.assertIn("docs/DECISIONS.md", str(cm.exception))
+
+    def test_pattern_from_main_does_not_count_but_own_line_does(self):
+        import ticket_issuer
+        issuer, g = self._issuer_for(False, "impl.py", "y = 2\n", patterns=["FORBIDDEN_MARK"])
+        issuer.hard_block(g)
+        with open(os.path.join(g.cwd, "impl.py"), "a") as fh:
+            fh.write("z = 3  # FORBIDDEN_MARK\n")
+        git(g.cwd, "commit", "-q", "-am", "own mark")
+        with self.assertRaises(ticket_issuer.Stuck) as cm:
+            issuer.hard_block(g)
+        self.assertIn("FORBIDDEN_MARK", str(cm.exception))
+
+    def test_branch_started_from_newer_main_does_not_count_main(self):
+        issuer, g = self._issuer_for(True, "impl.py", "y = 2\n", patterns=["FORBIDDEN_MARK"])
+        issuer.hard_block(g)
+
+
 class BoardTicketFilters(LoopCase):
     """The 票 tab's filter helpers (ticket #40): ticket_filters, ticket_shown, group_shown, render_filters."""
 

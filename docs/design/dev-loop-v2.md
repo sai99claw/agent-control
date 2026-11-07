@@ -83,7 +83,7 @@ No script polls another; each records its outcome in the pool and exits.
 | controller / container dies | no state outside the pool and git; a running ticket whose issuer is dead goes back to ready |
 | an agent's last command hits the usage limit | the issuer waits for the reset named in the CLI's message (else `devloop.quota_retry_seconds`) holding no machine slot, then runs the chain again; no round, no feedback, no issuer time; the ticket stays running with `waiting` (board: 額度用完), cost outcome `quota`; auto_fixer (fixer) and memory_keeper (consolidator, consolidator_peer) wait the same way: the group stays `fixing` in the same fix round with `waiting` (board's integration-branch row: 額度用完), memory/state.json gets `waiting` with `path`, the `quota` row goes into the group's / run's cost; the opener does not wait |
 | two processes edit one ticket | a rejected push re-reads and re-applies; no git conflict resolution in the pool |
-| a ticket touches hard_block | the issuer stops before merging it; decision page |
+| a ticket touches hard_block | the issuer stops before merging it; decision page; only the ticket's own change counts (a file or added line in both the target diff and the main diff), not what it merged in from main |
 | why tickets get stuck | cases wrong → the worker can say so through `--revise` (cases are rewritten); too broad → the opener's rule is one ticket = one purpose stated in one sentence, and it estimates the tokens (`token_estimate`); hangs → 3 h per issuer, 1 h per agent call; needs a decision → main |
 
 ## 7. Not done yet

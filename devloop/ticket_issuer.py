@@ -337,11 +337,19 @@ class Issuer:
         return None
 
     def hard_block(self, g):
+        main = self.cfg.main_branch
+        own = g.sha(main) is not None
         files = g.changed_files(self.target)
+        if own:
+            from_main = set(g.changed_files(main))
+            files = [f for f in files if f in from_main]
         hits = [f for f in files if any(f == p or f.startswith(p.rstrip("/") + "/")
                                         for p in self.cfg.hard_paths)]
         if self.cfg.hard_patterns:
             added = g.added_lines(self.target)
+            if own:
+                from_main = set(g.added_lines(main))
+                added = [line for line in added if line in from_main]
             for pat in self.cfg.hard_patterns:
                 try:
                     rx = re.compile(pat)
