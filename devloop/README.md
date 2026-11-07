@@ -31,6 +31,7 @@ group complete (= one PR, a local mark) -> regression.py (preflight + full suite
 | `python3 devloop/tickets.py ready N [--by NAME] [--page P]` | after deciding on a stuck ticket |
 | `python3 devloop/tickets.py ready gN [--note "..."] [--by NAME] [--page P]` | a stuck group whose branch and merged tickets are still there: verify it again (fix rounds back to 0); the `--note` is stored on the group and every later fixer of it gets it as the user's ruling; `--by` names who gave the answer on the events and `--page` acks that page in the same write |
 | `python3 devloop/tickets.py cancel N --why ... [--by NAME] [--page P]` | drop a ticket |
+| `python3 devloop/tickets.py rerun gN [--why …] [--by NAME] [--page P]` | the environment of a paused group (regression env or unmeasured, or its fixer's worktree setup failed) is fixed: the paused mark is removed, an 'environment fixed: verify again' event is written and `--page` is acked, in one write; a `--forever` controller picks the group up at its next tick; without `--forever`, run the controller again. Refused (exit 2, nothing written) unless the group is pr or fixing without a job |
 | `python3 devloop/tickets.py release gN [--again]` | re-run a landed group's failed release once (`--again` also when it was ok); the outcome is a page |
 | `python3 devloop/tickets.py cancel gN --why ... [--by NAME] [--page P]` | close a stuck or open group with no running member: its ready and merged tickets are cancelled, the branch is kept; one `cancelled` page lists them (it names `--by`); `--page` acks that page in the same write |
 | `python3 devloop/board.py serve [--port 8765] [--key-file F]` | the dashboard (or `board.py html --out F [--query Q]`) |
@@ -69,9 +70,10 @@ own throwaway trees (`nrv-<group>`, `index-<group>`) are never set up. The outpu
 process group and counts as failed. A failed setup is an environment problem, never a red: the
 worktree is removed again (a branch it was on stays, so the next run creates and sets it up again),
 and then for an issuer the ticket is stuck with reason `env` (an "env" page); for a regression the
-result is status `env`, exit 86 (an "env" page, the controller stops with exit 3); for a fixer an
-"env" page for the group, the group goes back to "pr" with its fix round not counted and the
-controller stops with exit 3; for a release the release failed (a decision page; not retried, not
+result is status `env`, exit 86 (an "env" page, the group is paused and the controller stops with
+exit 3, or under `--forever` keeps running); for a fixer an "env" page for the group, the group goes
+back to "pr" with its fix round not counted, is paused, and the controller stops with exit 3 (under
+`--forever` it keeps running); for a release the release failed (a decision page; not retried, not
 rolled back). Every such text contains `devloop.worktree_setup`.
 
 ## Machine slots
@@ -251,7 +253,8 @@ in CLAUDE.md / AGENTS.md, and a file that must never change goes in `hard_block.
   change again. The pool is the only state; logs under `<worktrees>/runs/` are only logs.
 - **Agents** get a prompt on stdin and write their hand-in to `$DEVLOOP_RESULT`; nothing else is read.
 - **Exit codes**: 0 done · 1 stuck/red (recorded) · 2 refused or could not start · 3 needs the user
-  (a page was written) · 4 interrupted (left to be picked up again) · 86 environment (regression).
+  (a page was written; under `--forever` an env or unmeasured result pauses the group instead of
+  exit 3 and the controller keeps running other groups until `tickets.py rerun gN`) · 4 interrupted (left to be picked up again) · 86 environment (regression).
 - **OS failures** (missing program, permission, disk full, broken JSON, git errors, timeouts) are
   caught in one place (`core/osx.py`, `core/gitx.py`) and end as a page or an exit code with one
   sentence, never a silent hang. Timed-out commands are stopped with their whole process group.

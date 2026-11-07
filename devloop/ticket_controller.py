@@ -72,10 +72,12 @@ class Controller:
         self.children = {}          # key -> Popen, for jobs this process started
         self.release_cmd = cfg.require_release()
         self.stopping = False
+        self.forever = False        # run(forever) sets it: an env result pauses the group instead of Stop(3)
 
     # ------------------------------------------------------------ loop
 
     def run(self, forever=False):
+        self.forever = bool(forever)
         while not self.stopping:
             busy = self.tick()
             if not busy and not forever:
@@ -166,6 +168,8 @@ class Controller:
                 elif members:
                     self.set_group(g["id"], "stuck", "no ticket of the group got merged")
             elif state in ("pr", "fixing") and not g.get("job"):
+                if g.get("paused") and self.forever:
+                    continue                   # waits for `tickets.py rerun gN`
                 self.start_regression(g)
             elif state == "verified":
                 self.land(g)
@@ -175,12 +179,14 @@ class Controller:
         members = g.get("members") or []
         return bool(members) and all((snap.tickets.get(i) or {}).get("state") == "cancelled" for i in members)
 
-    def set_group(self, gid, state, why, **fields):
+    def set_group(self, gid, state, why, drop=(), **fields):
         def change(tx):
             g = tx.data.groups[gid]
             if state is not None:
                 g["state"] = state
             g.update(fields)
+            for key in drop:
+                g.pop(key, None)
             event(g, why)
             tx.put_group(g)
             return g
@@ -201,7 +207,19 @@ class Controller:
         proc = osx.spawn(argv, cwd=self.cfg.root, env=self.cfg.env(), log_path=log)
         self.children["%s:%s" % (kind, gid)] = proc
         stamp = {"pid": proc.pid, "host": osx.host(), "boot": osx.boot_id(), "started": osx.now()}
-        self.set_group(gid, None, "%s started" % kind, job={"kind": kind, "stamp": stamp, "out": out})
+        self.set_group(gid, None, "%s started" % kind, job={"kind": kind, "stamp": stamp, "out": out},
+                       drop=("paused",) if kind == "regression" else ())
+
+    def pause(self, gid, reason, text):
+        """Mark a group whose environment broke; a --forever controller leaves it alone until
+        `tickets.py rerun gN` removes the mark."""
+        mark = {"reason": reason, "at": osx.now(), "text": str(text or "")[:2000]}
+        return self.set_group(gid, None, "paused: %s" % reason, paused=mark)
+
+    def _env_page_text(self, gid):
+        rows = [(name, row) for name, row in self.pool.snapshot().inbox.items()
+                if row.get("kind") == "env" and row.get("ref") == gid]
+        return sorted(rows)[-1][1].get("text") if rows else ""
 
     def after_regression(self, gid, job, rc):
         report = {}
@@ -220,9 +238,13 @@ class Controller:
             return
         if status in ("env", "unmeasured"):
             kind = "env" if status == "env" else "decision"
-            self.pool.report(kind, gid, "group %s: regression %s - %s. Fix it, then run the "
-                             "controller again." % (gid, status, report.get("summary")))
-            raise Stop(3, "regression %s" % status)
+            self.pool.report(kind, gid, "group %s: regression %s - %s. Fix the environment, then run "
+                             "`actl tickets rerun %s` (on the board: 環境修好了,重跑); a controller "
+                             "without --forever: run it again." % (gid, status, report.get("summary"), gid))
+            self.pause(gid, status, report.get("summary"))
+            if not self.forever:
+                raise Stop(3, "regression %s" % status)
+            return
         rnd = int(g.get("fix_round") or 0)
         if rnd >= self.cfg.max_rounds:
             self.set_group(gid, "stuck", "red after %d fix rounds" % rnd)
@@ -236,7 +258,11 @@ class Controller:
             g = self.pool.snapshot().groups.get(gid) or {}
             self.set_group(gid, "pr", "fixer worktree setup failed (env)", job=None,
                            fix_round=max(0, int(g.get("fix_round") or 0) - 1))
-            raise Stop(3, "devloop.worktree_setup failed for the fixer of %s" % gid)
+            why = "devloop.worktree_setup failed for the fixer of %s" % gid
+            self.pause(gid, "env", self._env_page_text(gid) or why)
+            if not self.forever:
+                raise Stop(3, why)
+            return
         if rc == 3:
             self.set_group(gid, "stuck", "fixer needs a decision", job=None)
             return

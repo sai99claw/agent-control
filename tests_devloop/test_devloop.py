@@ -422,6 +422,114 @@ class Regression(LoopCase):
             self.assertEqual(sum(1 for line in fh if line.startswith("tests full ")), 2)
 
 
+class PausedGroupPieces(LoopCase):
+    """#51 internals: the pause helper, the --forever skip in advance_groups, `tickets.py rerun`
+    and the docs that name it."""
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def ctl(self):
+        import ticket_controller
+        from core.config import Config
+        return ticket_controller.Controller(Config(self.proj), self.pool)
+
+    def put(self, gid, **fields):
+        g = {"id": gid, "branch": "int/" + gid, "state": "pr", "members": [], "fix_round": 0, "job": None}
+        g.update(fields)
+        self.pool.update(lambda tx: tx.put_group(g), "test: group %s" % gid)
+
+    def test_pause_caps_text_and_writes_one_event(self):
+        self.put("g1")
+        self.ctl().pause("g1", "env", "x" * 5000)
+        g = self.snap().groups["g1"]
+        self.assertEqual(g["paused"]["reason"], "env")
+        self.assertEqual(len(g["paused"]["text"]), 2000)
+        self.assertTrue(g["paused"]["at"])
+        self.assertEqual(g["history"][-1]["event"], "paused: env")
+
+    def test_set_group_drop_removes_the_key(self):
+        self.put("g1", paused={"reason": "env", "at": "t", "text": ""})
+        self.ctl().set_group("g1", None, "x", drop=("paused",), job={"kind": "regression"})
+        self.assertNotIn("paused", self.snap().groups["g1"])
+
+    def test_forever_skips_a_paused_group_only(self):
+        self.put("g1", paused={"reason": "env", "at": "t", "text": ""})
+        self.put("g2")
+        ctl = self.ctl()
+        started = []
+        ctl.start_regression = lambda g: started.append(g["id"])
+        ctl.forever = True
+        ctl.advance_groups(self.snap())
+        self.assertEqual(started, ["g2"])
+        ctl.forever = False
+        started.clear()
+        ctl.advance_groups(self.snap())
+        self.assertEqual(started, ["g1", "g2"])
+
+    def test_after_fixer_env_pauses_with_the_page_text(self):
+        import ticket_controller
+        self.put("g1", state="fixing", fix_round=1, job={"kind": "fixer"})
+        self.pool.report("env", "g1", "devloop.worktree_setup failed: boom")
+        ctl = self.ctl()
+        ctl.forever = True
+        ctl.after_fixer("g1", 86)
+        g = self.snap().groups["g1"]
+        self.assertEqual((g["state"], g["fix_round"], g["job"]), ("pr", 0, None))
+        self.assertEqual(g["paused"]["reason"], "env")
+        self.assertIn("worktree_setup", g["paused"]["text"])
+        ctl.forever = False
+        with self.assertRaises(ticket_controller.Stop) as cm:
+            ctl.after_fixer("g1", 86)
+        self.assertEqual(cm.exception.code, 3)
+
+    def test_rerun_through_actl_accepts_an_unpaused_pr_group(self):
+        self.put("g1")
+        page = self.pool.report("env", "g1", "t")
+        res = subprocess.run([os.path.join(HOME, "bin", "actl"), "tickets", "rerun", "g1", "--page", page],
+                             cwd=self.proj, env=self.env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(len(res.stdout.strip().splitlines()), 1)
+        snap = self.snap()
+        last = snap.groups["g1"]["history"][-1]
+        self.assertEqual((last["event"], last["by"], last["why"]), ("environment fixed: verify again", "user", ""))
+        self.assertTrue(snap.inbox[page]["acked"])
+
+    def test_rerun_refuses_without_writing(self):
+        self.put("g1", state="stuck")
+        self.put("g2", job={"kind": "regression"})
+        self.add(3)
+        page = self.pool.report("env", "g1", "t")
+        before = git(self.pool_path, "rev-parse", "HEAD")
+        for ident in ("g1", "g2", "g7", "3"):
+            res = self.run_py("tickets.py", "rerun", ident, "--page", page)
+            self.assertEqual(res.returncode, 2, ident)
+            self.assertEqual(len(res.stderr.strip().splitlines()), 1, res.stderr)
+        self.assertIn("g<N>", res.stderr)
+        self.assertEqual(git(self.pool_path, "rev-parse", "HEAD"), before)
+        self.assertFalse(self.snap().inbox[page]["acked"])
+
+    def test_docs_name_rerun(self):
+        with open(os.path.join(HOME, "devloop", "README.md")) as fh:
+            readme = fh.read()
+        runs = readme.split("## What the main session runs", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("`python3 devloop/tickets.py rerun gN [--why …] [--by NAME] [--page P]`", runs)
+        exits = [line for line in readme.split("- **Exit codes**", 1)[1].split("\n- ", 1)[0].splitlines()]
+        self.assertIn("--forever", " ".join(exits))
+        with open(os.path.join(HOME, "docs", "design", "dev-loop-v2.md")) as fh:
+            row = [line for line in fh if line.startswith("| environment unusable at regression")]
+        self.assertEqual(len(row), 1)
+        self.assertIn("--forever", row[0])
+        self.assertIn("actl tickets rerun gN", row[0])
+        import inspect
+        import ticket_controller
+        src = inspect.getsource(ticket_controller.Controller.after_regression)
+        self.assertIn("actl tickets rerun", src)
+        self.assertIn("環境修好了,重跑", src)
+
+
 class T4Acceptance(LoopCase):
     """Ticket #4: devloop.regression_exclusive - a regression takes the whole machine."""
 
