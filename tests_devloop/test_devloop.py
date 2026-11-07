@@ -4039,6 +4039,105 @@ class T31Acceptance(LoopCase):
         self.assertIn("額度用完", res.stdout)
 
 
+class T60Acceptance(unittest.TestCase):
+    """#60: quota_reset reads codex's 'try again at <date> <time>' and 'try again in <duration>'."""
+
+    AT = time.mktime((2026, 11, 7, 14, 0, 0, 0, 0, -1))
+    CODEX = "You've hit your usage limit ... try again at Nov 11th, 2026 2:23 AM"
+
+    @staticmethod
+    def local(y, mo, d, h, mi):
+        return time.mktime((y, mo, d, h, mi, 0, 0, 0, -1))
+
+    def agents(self):
+        from core import agents
+        self.assertTrue(hasattr(agents, "quota_reset"), "agents.quota_reset is missing")
+        self.assertTrue(hasattr(agents, "quota_wait"), "agents.quota_wait is missing")
+        return agents
+
+    # 1
+    def test_a_dated_codex_message_gives_its_moment(self):
+        agents = self.agents()
+        self.assertEqual(agents.quota_reset(self.CODEX, self.AT), self.local(2026, 11, 11, 2, 23))
+
+    # 2
+    def test_quota_wait_ends_at_the_dated_reset(self):
+        agents = self.agents()
+        want = self.local(2026, 11, 11, 2, 23) + 60 - self.AT
+        got = agents.quota_wait(self.CODEX, self.AT, self.AT, 1800)
+        self.assertNotEqual(got, 1800)
+        self.assertEqual(got, want)
+
+    # 3
+    def test_a_date_without_a_year_is_the_next_such_moment(self):
+        agents = self.agents()
+        cases = [
+            (self.AT, self.local(2026, 11, 11, 2, 23)),
+            (self.local(2026, 11, 12, 0, 0), self.local(2027, 11, 11, 2, 23)),
+            (self.local(2026, 11, 11, 2, 30), self.local(2026, 11, 11, 2, 23)),
+        ]
+        for text in ("try again at Nov 11th 2:23 AM", "try again at Nov 11th, 2:23 AM"):
+            for at, want in cases:
+                with self.subTest(text=text, at=at):
+                    self.assertEqual(agents.quota_reset(text, at), want)
+
+    # 4
+    def test_month_suffix_and_am_pm_forms(self):
+        agents = self.agents()
+        at = self.AT
+        cases = [
+            ("TRY AGAIN AT nov 1st, 2027 12:05 pm", self.local(2027, 11, 1, 12, 5)),
+            ("try again at December 2, 2026 12:00 AM", self.local(2026, 12, 2, 0, 0)),
+            ("try again at Nov. 11, 2026 2:23 am", self.local(2026, 11, 11, 2, 23)),
+            ("try again at NOVEMBER 11th, 2026 2:23 Am", self.local(2026, 11, 11, 2, 23)),
+            ("try again at dec 3rd, 2026 12:30 PM", self.local(2026, 12, 3, 12, 30)),
+            ("try again at Dec 22nd, 2026 12:59 am", self.local(2026, 12, 22, 0, 59)),
+            ("try again at january 5, 2027 11:15 PM", self.local(2027, 1, 5, 23, 15)),
+        ]
+        for text, want in cases:
+            with self.subTest(text=text):
+                self.assertEqual(agents.quota_reset(text, at), want)
+
+    # 5
+    def test_a_time_of_day_alone_is_the_next_such_time(self):
+        agents = self.agents()
+        cases = [
+            ("try again at 2:23 AM", self.local(2026, 11, 8, 2, 23)),
+            ("try again at 3:30 PM", self.local(2026, 11, 7, 15, 30)),
+        ]
+        for text, want in cases:
+            with self.subTest(text=text):
+                self.assertEqual(agents.quota_reset(text, self.AT), want)
+
+    # 6
+    def test_try_again_in_a_duration(self):
+        agents = self.agents()
+        at = self.AT
+        cases = [
+            ("try again in 2 days 3 hours 5 minutes", at + 183900),
+            ("Try again in 45 minutes", at + 2700),
+            ("try again in 1 hour", at + 3600),
+            ("try again in 2h 30m", at + 9000),
+            ("TRY AGAIN IN 1 day", at + 86400),
+            ("try again in 1d 2h", at + 93600),
+        ]
+        for text, want in cases:
+            with self.subTest(text=text):
+                self.assertEqual(agents.quota_reset(text, at), want)
+
+    # 7
+    def test_the_last_match_wins_across_forms(self):
+        agents = self.agents()
+        at = self.AT
+        cases = [
+            ("resets 3pm ... try again at Nov 11th, 2026 2:23 AM", self.local(2026, 11, 11, 2, 23)),
+            ("try again at Nov 11th, 2026 2:23 AM ... resets in 2h", at + 7200),
+        ]
+        for text, want in cases:
+            with self.subTest(text=text):
+                self.assertEqual(agents.quota_reset(text, at), want)
+
+
 class MachineSlots(LoopCase):
     """devloop.machine_slots: the implementer's tests (core/slots.py and its call sites)."""
 
