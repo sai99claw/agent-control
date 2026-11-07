@@ -13604,7 +13604,8 @@ class T66Acceptance(LoopCase):
         q = self.agent("agent-q", 1, n - 80, role="verifier", ticket="1", command="claude", model="sonnet",
                        state="quota", until=self.ts(until), run_dir="/r/q1")
         page = self.page()
-        rows = self.rows(page)
+        # ruling g15: count only process rows (#67 item 3 adds a ticket row for the ready ticket)
+        rows = [r for r in self.rows(page) if r["attrs"].get("data-kind") not in ("ticket", "decision")]
         self.assertEqual(len(rows), 3, [r["attrs"] for r in rows])
         rw = self.one(rows, w["stamp"]["pid"])
         a = rw["attrs"]
@@ -13623,7 +13624,8 @@ class T66Acceptance(LoopCase):
         self.assertIn("g7", self.cell(rs, "what"))
         self.assertNotIn("輪", self.cell(rs, "what"))
         self.assertEqual(self.cell(rs, "model"), "codex · gpt")
-        self.assertEqual(self.cell(rs, "state"), "等機器名額")
+        # ruling g15 / #67 item 1: the slot row names its queue place
+        self.assertEqual(self.cell(rs, "state"), "等機器名額:第 1 個(共 1 個在等)")
         self.assertIn("/r/s1", self.cell(rs, "detail"))
         self.assertEqual(self.pre_lines(rs), [], "unreadable log: empty <pre>")
         rq = self.one(rows, q["stamp"]["pid"])
@@ -13665,7 +13667,8 @@ class T66Acceptance(LoopCase):
             tx.put_group({"id": "g2", "branch": "int/g2", "state": "testing", "members": []})
             tx.put_group({"id": "g3", "branch": "int/g3", "state": "testing", "members": [], "fix_round": 2})
         self.pool.update(groups, "groups")
-        cases = [("g1", "slot", "第一次", "等機器名額", "slot"),
+        # ruling g15 / #67 items 1-2: g1 waits first of one in the queue and gives way to g2's exclusive run
+        cases = [("g1", "slot", "第一次", "等機器名額:第 1 個(共 1 個在等),讓位給 g2 的獨占 regression", "slot"),
                  ("g2", "machine", "第一次", "等整台機器", "slot"),
                  ("g3", "preflight", "修第 2 輪後", "preflight", "running"),
                  ("g9", "full", "未知", "full", "running")]
@@ -13702,7 +13705,8 @@ class T66Acceptance(LoopCase):
         self.assertEqual(len(rows), 4, [r["attrs"] for r in rows])
         for ag in agents:
             self.assertEqual(self.by_pid(rows, ag["stamp"]["pid"]), [], "the fixer's agent has no row of its own")
-        texts = {"running": "agent 執行中", "slot": "agent 等機器名額",
+        # ruling g15 / #67 item 1: the slot row names its queue place
+        texts = {"running": "agent 執行中", "slot": "等機器名額:第 1 個(共 1 個在等)",
                  "quota": "額度用完,到 " + self.clock(until)}
         for fx, (g, state) in zip(fixers, (("g1", "running"), ("g2", "slot"), ("g3", "quota"), ("g4", None))):
             row = self.one(rows, fx["stamp"]["pid"])
