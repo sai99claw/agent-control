@@ -14155,3 +14155,294 @@ class T67Acceptance(LoopCase):
             self.assertEqual(self.cell(row, "elapsed"), "", a)
             self.assertEqual(a.get("data-slots"), slots_attr, a)
             self.assertEqual(self.cell(row, "slots"), "名額 " + slots_attr, a)
+
+
+class T68Acceptance(LoopCase):
+    """Acceptance of #68: when no live record is running, the 進行中 tab says in one sentence why
+    (p.why with data-why). Expected sentences are the ticket's own."""
+
+    FMT = T66Acceptance.FMT
+    VOID = T66Acceptance.VOID
+    SENTENCES = {
+        "none": "沒有在跑的,也沒有待做的事。",
+        "controller": "controller 沒在跑:actl run(或 actl run --forever)才會派工與驗證。",
+        "dispatch": "沒有在跑的;controller 下一輪就會接手。",
+    }
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in list(os.environ):
+            if key.startswith("DEVLOOP_"):
+                del os.environ[key]
+        for key in list(self.env):
+            if key.startswith("DEVLOOP_"):
+                del self.env[key]
+        os.environ["AC_ROOT"] = self.proj
+        self.NOW = int(time.time())
+
+    cfg = T64Acceptance.cfg
+    ts = T66Acceptance.ts
+    stamp = T66Acceptance.stamp
+    put = T66Acceptance.put
+    page = T66Acceptance.page
+    set_group = T67Acceptance.set_group
+
+    # ------------------------------------------------------------ helpers
+
+    def decision_text(self, k):
+        return "沒有在跑的;剩下的都在等你判(要你判 %d 件)。" % k
+
+    def deps_text(self, n, m):
+        return "沒有可派的票;下一張 #%s 在等 #%s 落地。" % (n, m)
+
+    def lock_path(self):
+        return os.path.join(self.cfg().worktree_root, "controller.lock")
+
+    def write_lock(self, kind):
+        """'live': this test process's own stamp; 'dead': the same with another boot; 'broken': not
+        JSON; 'list': JSON that is not an object; 'dir': a folder where the file should be."""
+        path = self.lock_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if os.path.isdir(path):
+            os.rmdir(path)
+        elif os.path.exists(path):
+            os.unlink(path)
+        if kind is None:
+            return
+        if kind == "dir":
+            os.makedirs(path)
+            return
+        with open(path, "w") as fh:
+            if kind == "live":
+                json.dump(osx.stamp(), fh)
+            elif kind == "dead":
+                st = osx.stamp()
+                st["boot"] = "other-boot"
+                json.dump(st, fh)
+            elif kind == "broken":
+                fh.write("not json")
+            elif kind == "list":
+                json.dump([osx.stamp()], fh)
+        if kind == "live":
+            self.assertFalse(osx.stamp_dead(osx.read_json(path)), "the live lock fixture reads as alive")
+        if kind == "dead":
+            self.assertTrue(osx.stamp_dead(osx.read_json(path)), "the dead lock fixture reads as dead")
+
+    def whys(self, page=None):
+        """[(attrs, text)] of every <p> with class 'why' inside id=tab-live; also asserts one tab-live."""
+        from html.parser import HTMLParser
+        void = self.VOID
+
+        class P(HTMLParser):
+            def __init__(self):
+                super().__init__(convert_charrefs=True)
+                self.stack, self.tabs, self.out, self.cur = [], 0, [], None
+
+            def handle_starttag(self, tag, attrs):
+                a = dict(attrs)
+                inside = "tab" in [m for _, m in self.stack]
+                mark = None
+                if not inside and a.get("id") == "tab-live":
+                    mark = "tab"
+                    self.tabs += 1
+                elif inside and tag == "p" and "why" in (a.get("class") or "").split():
+                    mark = "why"
+                    self.cur = (a, [])
+                if tag not in void:
+                    self.stack.append((tag, mark))
+
+            def handle_endtag(self, tag):
+                if tag in void or tag not in [t for t, _ in self.stack]:
+                    return
+                while self.stack:
+                    t, mark = self.stack.pop()
+                    if mark == "why" and self.cur is not None:
+                        self.out.append((self.cur[0], "".join(self.cur[1]).strip()))
+                        self.cur = None
+                    if t == tag:
+                        break
+
+            def handle_data(self, data):
+                if self.cur is not None:
+                    self.cur[1].append(data)
+
+        p = P()
+        p.feed(self.page() if page is None else page)
+        p.close()
+        self.assertEqual(p.tabs, 1, "exactly one id=tab-live element")
+        return p.out
+
+    def why(self, page=None):
+        """The one p.why's (data-why, text); fails by assertion when there is none or more than one."""
+        found = self.whys(page)
+        self.assertEqual(len(found), 1, "exactly one p.why inside tab-live: %r" % (found,))
+        attrs, text = found[0]
+        self.assertIn("data-why", attrs, "p.why has no data-why: %r" % (attrs,))
+        return attrs["data-why"], text
+
+    def assert_why(self, reason, sentence, msg=None):
+        got = self.why()
+        self.assertEqual(got, (reason, sentence), msg)
+
+    def running_rows(self, page):
+        return [r for r in T66Acceptance.parse(self, page)["rows"] if r["attrs"].get("data-state") == "running"]
+
+    # ------------------------------------------------------------ item 1: one p.why unless running
+
+    def test_item1_one_why_when_nothing_runs_none_when_running(self):
+        from core import inflight
+        self.add(1)
+        # an ended record (dead stamp) is not running: the sentence is there
+        self.put("opener-d", "opener", self.NOW - 30, alive=False, title="d", revise=None, via="main",
+                 model="m", effort=None)
+        self.assertNotIn("running", [inflight.status(r) for _, r in inflight.records(self.cfg())])
+        reason, text = self.why()
+        self.assertEqual(reason, "controller")
+        self.assertEqual(text, self.SENTENCES["controller"])
+        # a running record (live subprocess stamp): no p.why at all
+        self.put("opener-a", "opener", self.NOW - 20, title="T", revise=None, via="main", model="m",
+                 effort=None)
+        self.assertIn("running", [inflight.status(r) for _, r in inflight.records(self.cfg())],
+                      "the fixture has a running record")
+        self.assertEqual(self.whys(), [], "a running record leaves the tab without p.why")
+        # an empty pool with a running record: still no p.why
+        self.write_lock("live")
+        self.assertEqual(self.whys(), [])
+
+    # ------------------------------------------------------------ item 2: none
+
+    def test_item2_none_on_empty_pool(self):
+        self.assert_why("none", self.SENTENCES["none"], "empty pool, no lock")
+        self.write_lock("live")
+        self.assert_why("none", self.SENTENCES["none"], "empty pool, live lock")
+
+    def test_item2_finished_work_is_not_work_left(self):
+        """Landed / cancelled / merged tickets and landed groups are not work left."""
+        self.set_group("g1", "landed")
+        self.add(1, state="landed", group="g1")
+        self.add(2, state="cancelled")
+        self.assert_why("none", self.SENTENCES["none"])
+
+    # ------------------------------------------------------------ item 3: decision
+
+    def test_item3_decision_stuck_ticket_only(self):
+        import board
+        self.add(1, state="stuck", stuck={"reason": "env", "text": "screen locked", "at": osx.now()})
+        k = len(board.waiting_cards(self.snap(), self.NOW))
+        self.assertEqual(k, 1, "the fixture makes one card")
+        self.assert_why("decision", self.decision_text(k))
+
+    def test_item3_decision_paused_group_is_not_work_left(self):
+        import board
+
+        def change(tx):
+            tx.put_group({"id": "g1", "branch": "int/g1", "state": "pr", "members": [],
+                          "paused": {"reason": "env", "text": "disk full", "at": osx.now()}})
+        self.pool.update(change, "test: paused g1")
+        k = len(board.waiting_cards(self.snap(), self.NOW))
+        self.assertEqual(k, 1, "the paused group makes one card")
+        self.assert_why("decision", self.decision_text(k))
+
+    def test_item3_decision_counts_every_card(self):
+        import board
+
+        def change(tx):
+            tx.put_group({"id": "g1", "branch": "int/g1", "state": "pr", "members": [],
+                          "paused": {"reason": "env", "text": "disk full", "at": osx.now()}})
+        self.pool.update(change, "test: paused g1")
+        self.add(1, state="stuck", stuck={"reason": "env", "text": "screen locked", "at": osx.now()})
+        self.add(2, state="stuck", stuck={"reason": "env", "text": "screen locked", "at": osx.now()})
+        self.write_lock("live")
+        k = len(board.waiting_cards(self.snap(), self.NOW))
+        self.assertEqual(k, 3, "the fixture makes three cards")
+        self.assert_why("decision", self.decision_text(3))
+
+    # ------------------------------------------------------------ item 4: controller
+
+    def test_item4_controller_lock_missing_dead_broken(self):
+        self.add(1)
+        for kind in (None, "dead", "broken", "list", "dir"):
+            self.write_lock(kind)
+            self.assert_why("controller", self.SENTENCES["controller"], "lock fixture %r" % kind)
+        # the same pool with a live lock is not 'controller'
+        self.write_lock("live")
+        self.assertNotEqual(self.why()[0], "controller")
+
+    def test_item4_controller_for_each_kind_of_work(self):
+        """Each kind of work left, with no lock, gives 'controller' (not 'none')."""
+        cases = [("running ticket", lambda: self.add(1, state="running")),
+                 ("open group", lambda: self.set_group("g1", "open")),
+                 ("pr group", lambda: self.set_group("g1", "pr")),
+                 ("fixing group", lambda: self.set_group("g1", "fixing")),
+                 ("verified group", lambda: self.set_group("g1", "verified"))]
+        for label, make in cases:
+            with self.subTest(label):
+                make()
+                self.assert_why("controller", self.SENTENCES["controller"], label)
+                # undo: cancel the ticket / land the group
+                if label == "running ticket":
+                    self.add(1, state="cancelled")
+                else:
+                    self.set_group("g1", "landed")
+
+    # ------------------------------------------------------------ item 5: deps
+
+    def test_item5_deps_names_first_ready_in_topo_order(self):
+        self.write_lock("live")
+        self.set_group("g1", "pr")
+        self.add(1, state="merged", group="g1")
+        self.add(2, deps=[1])
+        self.assert_why("deps", self.deps_text(2, 1))
+        # the same with g1 open: #2's dependency is satisfied, so 'dispatch'
+        self.set_group("g1", "open")
+        self.assert_why("dispatch", self.SENTENCES["dispatch"], "a merged dependency in an open group")
+
+    def test_item5_deps_topo_and_depends_on_order(self):
+        """#3 needs #5; #5 needs #7 then #6 (both merged in a 'pr' group). topo order of the ready
+        tickets is 5, 3, so N is 5 (not the lower number 3), and M is #5's first unsatisfied
+        dependency in depends_on order: 7."""
+        self.write_lock("live")
+        self.set_group("g1", "pr")
+        self.add(6, state="merged", group="g1")
+        self.add(7, state="merged", group="g1")
+        self.add(5, deps=[7, 6])
+        self.add(3, deps=[5])
+        snap = self.snap()
+        ready = [i for i in dagmod.topo(snap.dag) if snap.tickets[i]["state"] == "ready"]
+        self.assertEqual(ready, ["5", "3"], "fixture: topo order of the ready tickets")
+        self.assert_why("deps", self.deps_text(5, 7))
+
+    def test_item5_deps_landed_and_missing(self):
+        """A landed dependency is satisfied; a missing one is not. One dispatchable ready ticket is
+        enough to make it 'dispatch'."""
+        self.write_lock("live")
+        self.add(1, state="landed")
+        self.add(2, deps=[1, 9])
+        self.assert_why("deps", self.deps_text(2, 9))
+        self.add(4, deps=[1])
+        self.assert_why("dispatch", self.SENTENCES["dispatch"], "#4 can be dispatched")
+
+    # ------------------------------------------------------------ item 6: dispatch
+
+    def test_item6_dispatch(self):
+        self.write_lock("live")
+        self.set_group("g1", "pr")
+        self.assert_why("dispatch", self.SENTENCES["dispatch"], "live lock, g1 in pr, nothing ready")
+
+    # ------------------------------------------------------------ item 7: after a real creator run
+
+    def test_item7_after_creator_run_controller(self):
+        for key in list(self.env):
+            self.assertFalse(key.startswith("DEVLOOP_"), key)
+        res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        snap = self.snap()
+        self.assertTrue(snap.tickets, "the fake creator opened tickets")
+        self.assertTrue([t for t in snap.tickets.values() if t.get("state") == "ready"], "ready tickets")
+        self.assertFalse(os.path.exists(self.lock_path()), "no controller.lock")
+        page = self.page()
+        self.assertEqual(self.running_rows(page), [], "no running row once the creator has ended")
+        self.assertEqual(self.why(page), ("controller", self.SENTENCES["controller"]))
