@@ -38,7 +38,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import agents, memory, osx, slots, testrun, worktrees  # noqa: E402
+from core import agents, inflight, memory, osx, slots, testrun, worktrees  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.pool import event  # noqa: E402
@@ -121,8 +121,16 @@ class Issuer:
 
     # ------------------------------------------------------------ main
 
+    def live(self, t):
+        """Write this issuer's record (core/inflight.py) for the ticket's current round."""
+        self.live_stamp = getattr(self, "live_stamp", None) or osx.stamp()
+        inflight.put(self.cfg, "issuer-%s" % self.id, {
+            "kind": "issuer", "stamp": self.live_stamp, "ticket": self.id, "target": self.target,
+            "round": t.get("round")})
+
     def go(self):
         t = self.claim()
+        self.live(t)
         if not self.repo.sha(self.target):
             raise Stuck("target", "integration branch %s does not exist" % self.target)
         try:
@@ -137,6 +145,7 @@ class Issuer:
             t = self.save(lambda x: (x.__setitem__("round", int(x.get("round") or 0) + 1),
                                      event(x, "round start")), "round start")
             r = t["round"]
+            self.live(t)
             feedback, costs = self.one_round(t, r)
             if feedback is None:
                 self.save(lambda x: self._merged(x, costs), "merged into %s" % self.target)
@@ -541,6 +550,13 @@ def main(argv=None):
     except osx.OSFailure as exc:
         print("ticket_issuer: %s" % exc, file=sys.stderr)
         return 2
+    try:
+        return _go(issuer)
+    finally:
+        inflight.drop(cfg, "issuer-%s" % issuer.id)
+
+
+def _go(issuer):
     try:
         return issuer.go()
     except Stuck as exc:

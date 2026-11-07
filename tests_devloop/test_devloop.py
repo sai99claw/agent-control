@@ -4926,6 +4926,131 @@ class StopRecordsCost(LoopCase):
         self.assertTrue(all(p.stopped for p in pending))
         self.assertEqual((issuer.pending, issuer.round_costs), ([], []))
 
+class LiveRecordUnits(StopRecordsCost):
+    """core/inflight.py and the agent record Pending writes (the implementer's tests of #64)."""
+
+    def live(self):
+        return os.path.join(self.tmp, "wt", "runs", "live")
+
+    def test_folder_records_drop_and_put(self):
+        from core import inflight
+        from core.config import Config
+        cfg = Config(self.proj)
+        self.assertEqual(inflight.folder(cfg), self.live())
+        self.assertEqual(inflight.records(cfg), [])
+        self.assertFalse(os.path.exists(self.live()))
+        inflight.drop(cfg, "nothing")
+        st = {"stamp": osx.stamp()}     # this process: running, so put() keeps it
+        inflight.put(cfg, "b", dict(st, x=1))
+        inflight.put(cfg, "a", dict(st, y=[2]))
+        with open(os.path.join(self.live(), "bad.json"), "w") as fh:
+            fh.write("{not json")
+        with open(os.path.join(self.live(), "list.json"), "w") as fh:
+            fh.write("[1]")
+        self.assertEqual(inflight.records(cfg), [("a", dict(st, y=[2])), ("b", dict(st, x=1))])
+        inflight.drop(cfg, "a")
+        self.assertEqual([n for n, _ in inflight.records(cfg)], ["b"])
+
+    def test_status_and_stale_cleanup(self):
+        from core import inflight
+        from core.config import Config
+        cfg = Config(self.proj)
+        proc = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.terminate)
+        old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 25 * 3600))
+        hour = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600))
+        live = {"pid": proc.pid, "host": osx.host(), "boot": osx.boot_id(), "started": old}
+        dead = dict(live, boot="other-boot")
+        result = os.path.join(self.tmp, "result.json")
+        with open(result, "w") as fh:
+            fh.write("{}")
+        self.assertEqual(inflight.status({"stamp": live}), "running")
+        self.assertEqual(inflight.status({"stamp": dead, "result": result}), "handed_in")
+        self.assertEqual(inflight.status({"stamp": dead, "result": result + ".no"}), "ended")
+        self.assertEqual(inflight.status({}), "ended")
+        inflight.put(cfg, "old-running", {"stamp": live})
+        inflight.put(cfg, "old-dead", {"stamp": dead})
+        inflight.put(cfg, "hour-dead", {"stamp": dict(dead, started=hour)})
+        inflight.put(cfg, "new", {"stamp": None})
+        self.assertEqual([n for n, _ in inflight.records(cfg)], ["hour-dead", "new", "old-running"])
+
+    def test_title_of(self):
+        from core import inflight
+        for text, want in (("intro\n## Board: tab\nbody", "Board: tab"), ("first line\nsecond", "first line"),
+                           ("#\n\nplain", "plain"), ("##\n# \n", "##"), ("x" * 200, "x" * 120), ("", None), ("  \n\n", None)):
+            self.assertEqual(inflight.title_of(text), want, text)
+
+    def test_agent_record_while_running_and_gone_after_finish(self):
+        from core import agents, inflight
+        cfg = self.cfg(["sh", "-c", 'cat >/dev/null; sleep 1; echo \'{"kind": "done"}\' > "$DEVLOOP_RESULT"'])
+        run_dir = os.path.join(self.tmp, "run")
+        p = agents.start(cfg, "worker", "go", self.proj, run_dir, 30, round_no=2, chain_role="worker_simple",
+                         extra_env={"DEVLOOP_TICKET": "7"})
+        recs = inflight.records(cfg)
+        self.assertEqual(len(recs), 1)
+        name, rec = recs[0]
+        self.assertTrue(name.startswith("agent-") and len(name) == len("agent-") + 16, name)
+        self.assertEqual((rec["kind"], rec["state"], rec["role"], rec["ticket"], rec["group"], rec["round"]),
+                         ("agent", "running", "worker_simple", "7", None, 2))
+        self.assertEqual((rec["stamp"]["pid"], rec["parent"], rec["command"]), (p.proc.pid, os.getpid(), os.path.basename(p.argv[0])))
+        self.assertEqual((rec["log"], rec["result"], rec["until"]),
+                         (p.log, os.path.join(run_dir, "result.json"), None))
+        self.assertEqual(inflight.status(rec), "running")
+        p.finish()
+        self.assertEqual(inflight.records(cfg), [])
+
+    def test_agent_record_gone_after_stop_and_none_without_cfg(self):
+        from core import agents, inflight
+        cfg = self.cfg(["sh", "-c", "cat >/dev/null; sleep 30"])
+        p = agents.start(cfg, "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30)
+        self.assertEqual(len(inflight.records(cfg)), 1)
+        p.stop()
+        self.assertEqual(inflight.records(cfg), [])
+        bare = agents.Pending("worker", [["sh", "-c", "cat >/dev/null"]], "go", self.proj, dict(os.environ),
+                              os.path.join(self.tmp, "run2"), os.path.join(self.tmp, "run2", "result.json"), 30, None)
+        os.makedirs(os.path.join(self.tmp, "run2"))
+        bare.launch()
+        bare.finish()
+        self.assertEqual(inflight.records(cfg), [])
+
+    def test_agent_record_while_waiting_for_a_slot(self):
+        import threading
+        from core import agents, inflight, slots
+        self.cfg(["sh", "-c", 'cat >/dev/null; echo \'{"kind": "done"}\' > "$DEVLOOP_RESULT"'])
+        self.config(machine_slots=1)
+        from core.config import Config
+        cfg = Config(self.proj)
+        held = slots.take(cfg, None)
+        got = {}
+        th = threading.Thread(target=lambda: got.setdefault("p", agents.start(
+            cfg, "worker", "go", self.proj, os.path.join(self.tmp, "run"), 30)))
+        th.start()
+        try:
+            deadline = time.time() + 10
+            while not inflight.records(cfg) and time.time() < deadline:
+                time.sleep(0.05)
+            (name, rec), = inflight.records(cfg)
+            self.assertEqual((rec["state"], rec["stamp"]["pid"], rec["log"], rec["command"]),
+                             ("slot", os.getpid(), None, "sh"))
+        finally:
+            held.release()
+            th.join(20)
+        (name2, rec), = inflight.records(cfg)
+        self.assertEqual((name2, rec["state"], rec["stamp"]["pid"]), (name, "running", got["p"].proc.pid))
+        got["p"].finish()
+        self.assertEqual(inflight.records(cfg), [])
+
+    def test_readme_has_live_records_before_host_samples(self):
+        with open(os.path.join(LOOP, "README.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn("## Live records", text)
+        section = text.split("## Live records", 1)[1].split("\n## ", 1)
+        self.assertTrue(section[1].startswith("Host samples"))
+        for word in ("runs/live/", "opener", "issuer", "agent", "stamp", "running", "handed_in", "ended",
+                     "Pending.finish()", "Pending.stop()", "SIGTERM"):
+            self.assertIn(word, section[0], word)
+
 
 class T61Acceptance(LoopCase):
     """Ticket #61: cost rows read codex's turn.completed usage; dollars from devloop.prices, else

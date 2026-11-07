@@ -37,7 +37,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import agents, memory, osx  # noqa: E402
+from core import agents, inflight, memory, osx  # noqa: E402
 from core import dag as dagmod  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.pool import event, frozen_reason  # noqa: E402
@@ -242,7 +242,25 @@ def write_new(pool, result, request, fields=EDITABLE, by=None, cost=None):
     return pool.update(change, "tickets: open from a request")
 
 
+def opener_live(cfg, title=None, revise=None, via="main"):
+    """Put this process's opener record (core/inflight.py); returns its name for inflight.drop."""
+    name = "opener-%d" % os.getpid()
+    creator = cfg.agent("creator")
+    inflight.put(cfg, name, {
+        "kind": "opener", "stamp": osx.stamp(), "title": title, "revise": revise, "via": via,
+        "model": agents.model_of(creator), "effort": agents.effort_of(creator), "result": None})
+    return name
+
+
 def open_tickets(cfg, pool, request, via="main", by=None):
+    name = opener_live(cfg, title=inflight.title_of(request), via=via)
+    try:
+        return _open_tickets(cfg, pool, request, via, by)
+    finally:
+        inflight.drop(cfg, name)
+
+
+def _open_tickets(cfg, pool, request, via, by):
     snap = pool.snapshot()
     summary = [{"id": k, "title": v.get("title"), "state": v.get("state")}
                for k, v in sorted(snap.tickets.items(), key=lambda kv: dagmod._order_key(kv[0]))
@@ -404,6 +422,14 @@ def apply_unapplied(cfg, pool, ident, since):
 
 
 def revise(cfg, pool, ident, source, reason, via="main", by=None):
+    name = opener_live(cfg, revise=str(ident), via=via)
+    try:
+        return _revise(cfg, pool, ident, source, reason, via, by)
+    finally:
+        inflight.drop(cfg, name)
+
+
+def _revise(cfg, pool, ident, source, reason, via, by):
     snap = pool.snapshot()
     t = snap.ticket(ident)
     run_dir = cfg.runs_dir(ident, "revise-%s" % osx.now().replace(":", ""))

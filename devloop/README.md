@@ -203,6 +203,32 @@ new project starts from agent-control's memory/ and grows its own. A project's o
 imported with `tickets.py lessons --layer L --name N --file F` (every bullet line of F becomes a
 waiting lesson).
 
+## Live records
+
+While an opener, an issuer or an agent runs, one JSON file under `<worktrees>/runs/live/` describes
+it (`core/inflight.py`). Every record has `kind` and `stamp` (devloop's liveness stamp: `pid`, `host`,
+`boot`, `started`).
+
+- `opener-<pid>.json` (`ticket_creator.py`, kind `opener`): `title` (the request's first heading or
+  first line, at most 120 characters; null for a revision), `revise` (the ticket id, or null), `via`
+  (`main` or `web`), `model`, `effort` (the creator command's), `result` (null). Removed when
+  ticket_creator returns, whatever its exit code.
+- `issuer-<id>.json` (`ticket_issuer.py`, kind `issuer`): `ticket`, `target`, `round` (rewritten at every
+  round start). Written right after the claim; removed when the issuer exits (merged, stuck or
+  stopped by SIGTERM).
+- `agent-<16 hex digits of sha1 of the run dir>.json` (every `agents.start`, kind `agent`): `state`
+  (`slot` while waiting for a machine slot and `quota` while waiting for a quota reset, both with the
+  starter's pid in the stamp; `running` with the command's pid), `parent` (the starter's pid), `role`
+  (the chain role, e.g. `worker_simple`), `ticket`, `group`, `round`, `run_dir`, `log`, `command`,
+  `model`, `effort`, `result` (the run's result.json), `since` (when this state began), `until` (the
+  end of a quota wait, else null). A second command in the same run dir replaces it. Removed when
+  `Pending.finish()` returns or `Pending.stop()` runs.
+
+A process stopped hard leaves its record behind. `inflight.status(record)` answers `running` (the
+stamp's process lives), `handed_in` (it is gone and its `result` file exists) or `ended`. Writing a
+record deletes any other that is not running and started more than a day ago. These records are for
+readers only; the pool's ticket `run` and group `job` stamps are what the controller acts on.
+
 ## Host samples
 
 While `ticket_controller.py` runs, a background thread appends one JSON line to

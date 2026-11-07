@@ -21,13 +21,14 @@ caller stopped before collecting it (Pending.stop) gets the same row with outcom
 
 import calendar
 import glob
+import hashlib
 import json
 import os
 import re
 import string
 import time
 
-from . import osx, slots
+from . import inflight, osx, slots
 
 PROMPTS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "prompts")
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
@@ -147,8 +148,10 @@ def start(cfg, role, prompt, cwd, run_dir, timeout, extra_env=None, effort=None,
     env = cfg.env(DEVLOOP_ROLE=role, DEVLOOP_RUN_DIR=run_dir, DEVLOOP_RESULT=result_path,
                   **(extra_env or {}))
     chain = [with_effort(argv, effort) for argv in cfg.agent_chain(chain_role or role)]
+    extra = extra_env or {}
     p = Pending(role, chain, prompt, cwd, env, run_dir, result_path, timeout, round_no, cfg,
-                on_quota=on_quota)
+                on_quota=on_quota, chain_role=chain_role, ticket=extra.get("DEVLOOP_TICKET"),
+                group=extra.get("DEVLOOP_GROUP"))
     p.launch()
     return p
 
@@ -165,7 +168,7 @@ class Interrupted(Exception):
 
 class Pending:
     def __init__(self, role, chain, prompt, cwd, env, run_dir, result_path, timeout, round_no, cfg=None,
-                 on_quota=None):
+                 on_quota=None, chain_role=None, ticket=None, group=None):
         self.role, self.chain, self.prompt, self.cwd, self.env = role, chain, prompt, cwd, env
         self.run_dir, self.result_path, self.timeout, self.round_no = run_dir, result_path, timeout, round_no
         self.cfg = cfg
@@ -180,6 +183,11 @@ class Pending:
         self.tried = []
         self.sleeping = False    # waiting for a quota reset: the row is already with the caller
         self.hand = None         # set once finish() collected the run; its row is in the Hand
+        # the live record (core/inflight.py) readers see while this run is waiting or running
+        self.chain_role, self.ticket, self.group = chain_role, ticket, group
+        self.live_name = "agent-" + hashlib.sha1(
+            os.path.abspath(run_dir).encode("utf-8", "surrogateescape")).hexdigest()[:16]
+        self.parent = os.getpid()
 
     def launch(self):
         """Start the next command of the chain that exists, under a machine slot. The wait has no
@@ -187,6 +195,8 @@ class Pending:
         freed the moment the command's process exits."""
         self._release()
         if self.cfg is not None:
+            if slots.needed(self.cfg):
+                self._live("slot", osx.stamp(), self.chain[0] if self.chain else None)
             began = time.time()
             self.slot = slots.take(self.cfg, None)
             self.waited += time.time() - began
@@ -195,12 +205,34 @@ class Pending:
         except BaseException:
             self._release()
             raise
+        self._live("running", {"pid": self.proc.pid, "host": osx.host(), "boot": osx.boot_id(),
+                               "started": osx.now()}, self.argv)
         if self.slot is not None:
             self.slot.release_when_done(self.proc)
 
     def _release(self):
         if self.slot is not None:
             self.slot.release()
+
+    def _live(self, state, st, argv, until=None):
+        """Write this run's live record (nothing without a cfg)."""
+        if self.cfg is None:
+            return
+        inflight.put(self.cfg, self.live_name, {
+            "kind": "agent", "state": state, "stamp": st, "parent": self.parent,
+            "role": self.chain_role or self.role, "ticket": self.ticket, "group": self.group,
+            "round": self.round_no, "run_dir": self.run_dir,
+            "log": self.log if state == "running" else None,
+            "command": os.path.basename(argv[0]) if argv else None,
+            "model": model_of(argv) if argv else None,
+            "effort": effort_of(argv) if argv else None,
+            "result": self.result_path, "since": osx.now(),
+            "until": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(until)) if until is not None else None,
+        })
+
+    def _unlive(self):
+        if self.cfg is not None:
+            inflight.drop(self.cfg, self.live_name)
 
     def _spawn_next(self):
         last = None
@@ -236,12 +268,16 @@ class Pending:
         if self.proc is not None:
             osx.kill_tree(self.proc.pid)
         self._release()
+        self._unlive()
         if self.hand is not None or self.sleeping:
             return None
         return self._cost(None, None, False, False, outcome="interrupted")
 
     def finish(self):
-        self.hand = self._finish()
+        try:
+            self.hand = self._finish()
+        finally:
+            self._unlive()
         return self.hand
 
     def _finish(self):
@@ -278,6 +314,7 @@ class Pending:
         retry = getattr(self.cfg, "quota_retry_seconds", None) or 1800
         wait = quota_wait(text, at, now, retry)
         self.proc = None
+        self._live("quota", osx.stamp(), self.argv, until=now + wait)
         self.on_quota("wait", row=row, until=now + wait, text=_excerpt(text))
         self.sleeping = True     # from here on the row is the caller's: stop() returns None
         began = time.time()
