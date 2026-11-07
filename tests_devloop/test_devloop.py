@@ -1,6 +1,7 @@
 """End-to-end tests of the loop: a throwaway project, a throwaway pool, fake agents and fake
 tests behind the real test interface. Run: python3 -m unittest discover tests_devloop"""
 
+import calendar
 import glob
 import io
 import json
@@ -2752,7 +2753,8 @@ class WebInput(LoopCase):
                 break
             except OSError:
                 time.sleep(0.1)
-        page = urllib.request.urlopen(get, timeout=10).read().decode()
+        page = urllib.request.urlopen(urllib.request.Request(base + "/?tab=tickets", headers={"X-Board-Key": "k3y"}),
+                                      timeout=10).read().decode()
         self.assertIn("交給開題者", page)
         self.assertIn("不改,再試一次", page)
         self.assertEqual(post("/request", "wrong", text="x")[0], 403)
@@ -2852,7 +2854,7 @@ class T27Acceptance(LoopCase):
         import board
         from core.config import Config
         self.frozen("merged")
-        page = board.render(Config(self.proj), self.snap(), key="k")
+        page = board.render(Config(self.proj), self.snap(), key="k", query={"tab": "tickets"})
         self.assertIn("decision · 1 · ", page, "the page is listed by its header")
         self.assertNotIn("不改,再試一次", page)
 
@@ -3255,7 +3257,7 @@ class T37Acceptance(LoopCase):
         from core.config import Config
         self.stuck(1)
         self.start()
-        status, _, page = self.req("GET", "/", {"Cookie": "board_key=" + self.cookie()})
+        status, _, page = self.req("GET", "/?tab=tickets", {"Cookie": "board_key=" + self.cookie()})
         self.assertEqual(status, 200)
         self.assertIn("交給開題者", page)
         self.assertIn("不改,再試一次", page)
@@ -3266,7 +3268,7 @@ class T37Acceptance(LoopCase):
         self.assertNotIn("name='key'", page)
         self.assertNotIn('name="key"', page)
         self.assertNotIn(self.KEY, page)
-        page = board.render(Config(self.proj), self.snap(), key="KEY-7f3a")
+        page = board.render(Config(self.proj), self.snap(), key="KEY-7f3a", query={"tab": "tickets"})
         self.assertIn("交給開題者", page)
         self.assertNotIn("KEY-7f3a", page)
 
@@ -4509,6 +4511,74 @@ class T29Acceptance(LoopCase):
             text = fh.read()
         self.assertIn("no_reverify_paths", text)
         self.assertIn("docs/HANDOFF.md", text)
+
+
+class DecideTabCards(LoopCase):
+    """#49's helpers: waiting_cards, decide_default, pool_seconds, render_nav's count."""
+
+    NOW = calendar.timegm((2026, 11, 6, 12, 0, 0, 0, 0, 0))
+
+    def page(self, name, kind, ref, at, acked=False):
+        self.pool.update(lambda tx: tx.write("inbox/%s.json" % name, {"kind": kind, "ref": ref, "text": "text " + name,
+                                                                     "at": at, "acked": acked}), "test: page")
+
+    def test_pool_seconds_reads_the_pool_format_and_gives_none_otherwise(self):
+        import board
+        self.assertEqual(board.pool_seconds("2026-11-06T12:00:00Z"), self.NOW)
+        for bad in (None, "", "yesterday", 5):
+            self.assertIsNone(board.pool_seconds(bad), bad)
+
+    def test_a_quota_wait_is_a_card_only_past_300_seconds(self):
+        import board
+        for until, expected in (("2026-11-06T11:55:00Z", []), ("2026-11-06T11:54:59Z", ["4"])):
+            self.add(4, state="running", waiting={"reason": "quota", "until": until, "text": "limit"})
+            cards = board.waiting_cards(self.snap(), self.NOW)
+            self.assertEqual([c["subject"] for c in cards], expected, until)
+        self.assertEqual(cards[0]["kind"], "quota")
+        self.assertEqual(cards[0]["timeline"], "?ticket=4")
+        self.assertEqual(cards[0]["feedback"], "limit")
+
+    def test_a_page_about_a_stuck_ticket_is_its_only_card_and_acked_or_landed_pages_are_none(self):
+        import board
+        self.add(1, state="stuck", stuck={"reason": "env", "text": "locked", "at": "2026-11-06T08:00:00Z"})
+        self.page("p1", "decision", "1", "2026-11-06T09:00:00Z")
+        self.page("p2", "decision", "1", "2026-11-06T09:30:00Z", acked=True)
+        self.page("p3", "landed", "1", "2026-11-06T09:40:00Z")
+        cards = board.waiting_cards(self.snap(), self.NOW)
+        self.assertEqual([(c["kind"], c["subject"], c["page"]) for c in cards], [("ticket", "1", "p1")])
+        self.assertEqual(cards[0]["text"], "text p1")
+
+    def test_newest_first_missing_time_last_ties_by_subject(self):
+        import board
+        for ident, at in ((1, None), (2, "2026-11-06T08:00:00Z"), (3, "2026-11-06T08:00:00Z"),
+                          (4, "2026-11-06T09:00:00Z")):
+            self.add(ident, state="stuck", stuck={"reason": "env", "text": "x", "at": at})
+        cards = board.waiting_cards(self.snap(), self.NOW)
+        self.assertEqual([c["subject"] for c in cards], ["4", "2", "3", "1"])
+
+    def test_default_tab_needs_a_card_and_no_ticket_parameter(self):
+        import board
+        self.assertEqual(board.decide_default(self.snap(), None, self.NOW), "tickets")
+        self.add(1, state="stuck", stuck={"reason": "env", "text": "x", "at": "2026-11-06T08:00:00Z"})
+        snap = self.snap()
+        self.assertEqual(board.decide_default(snap, {}, self.NOW), "decide")
+        for name in ("ticket", "group", "state", "cat", "q", "done"):
+            self.assertEqual(board.decide_default(snap, {name: "1"}, self.NOW), "tickets", name)
+
+    def test_nav_label_carries_the_count(self):
+        import board
+        self.assertIn(">要你判</a>", board.render_nav("decide"))
+        self.assertIn(">要你判 (3)</a>", board.render_nav("decide", 3))
+
+    def test_no_sign_in_code_comes_back(self):
+        """D-093: render keeps main's parameters and board.py names no sign-in piece."""
+        import inspect
+        import board
+        self.assertEqual(list(inspect.signature(board.render).parameters), ["cfg", "snap", "key", "query", "now"])
+        with open(board.__file__, encoding="utf-8") as f:
+            source = f.read().lower()
+        for word in ("goo" + "gle", "log" + "in", "log" + "out", "board_" + "session", "render_" + "user", "oa" + "uth"):
+            self.assertNotIn(word, source, word)
 
 
 class ReleaseTimeoutSetting(LoopCase):
@@ -5993,7 +6063,7 @@ class T38Acceptance(LoopCase):
     """Ticket #38: the board is four tabs (票 DAG Token 主機), each at its own relative ?tab= URL."""
 
     TABS = ("tickets", "dag", "tokens", "host")
-    NAV = [("票", "?tab=tickets"), ("DAG", "?tab=dag"), ("Token", "?tab=tokens"), ("主機", "?tab=host")]
+    NAV = [("要你判", "?tab=decide"), ("票", "?tab=tickets"), ("DAG", "?tab=dag"), ("Token", "?tab=tokens"), ("主機", "?tab=host")]
 
     def setUp(self):
         super().setUp()
@@ -6343,7 +6413,7 @@ class BoardTabs(LoopCase):
 
     def test_shown_tab_falls_back_to_the_first_tab(self):
         import board
-        self.assertEqual([t[0] for t in board.TABS], ["tickets", "dag", "tokens", "host"])
+        self.assertEqual([t[0] for t in board.TABS], ["decide", "tickets", "dag", "tokens", "host"])
         for query in (None, {}, {"tab": ""}, {"tab": "nope"}, {"other": "dag"}):
             self.assertEqual(board.shown_tab(query), "tickets", query)
         self.assertEqual(board.shown_tab({"tab": "host"}), "host")
@@ -6802,7 +6872,7 @@ class T39Acceptance(LoopCase):
     def render(self):
         from core.config import Config
         board = self.board("CATEGORY_TEXT", "ticket_category", "group_category")
-        return board.render(Config(self.proj), self.snap())
+        return board.render(Config(self.proj), self.snap(), query={"tab": "tickets"})
 
     @staticmethod
     def cells(page, needle):

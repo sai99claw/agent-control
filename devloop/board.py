@@ -22,6 +22,7 @@ inputs without the key.
 """
 
 import argparse
+import calendar
 import hashlib
 import hmac
 import html
@@ -192,6 +193,7 @@ def e(text):
 
 
 TABS = (
+    ("decide", "要你判", lambda cfg, snap, key, query, now: render_decide_tab(cfg, snap, key, query, now)),
     ("tickets", "票", lambda cfg, snap, key, query, now: render_tickets_tab(cfg, snap, key, query, now)),
     ("dag", "DAG", lambda cfg, snap, key, query, now: render_dag_tab(cfg, snap, query, now)),
     ("tokens", "Token", lambda cfg, snap, key, query, now: render_tokens_tab(cfg, snap, query, now)),
@@ -204,16 +206,19 @@ def clock(now):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
 
 
-def shown_tab(query):
-    """The name of the tab a query asks for; anything unknown is the first tab."""
+def shown_tab(query, default="tickets"):
+    """The name of the tab a query asks for; anything unknown is `default`."""
     wanted = (query or {}).get("tab")
-    return wanted if wanted in [name for name, _, _ in TABS] else TABS[0][0]
+    return wanted if wanted in [name for name, _, _ in TABS] else default
 
 
-def render_nav(shown):
+def render_nav(shown, waiting=0):
+    """The tab links; 要你判 carries the number of cards when there is any."""
     links = []
     for name, label, _ in TABS:
         current = ' aria-current="page"' if name == shown else ""
+        if name == "decide" and waiting:
+            label = "%s (%d)" % (label, waiting)
         links.append('<a href="?tab=%s"%s>%s</a>' % (e(name), current, e(label)))
     return '<nav class="tabs">%s</nav>' % "".join(links)
 
@@ -239,12 +244,162 @@ def render(cfg, snap, key=None, query=None, now=None):
     if wanted:
         shown, body = "tickets", render_detail(snap, wanted)
     else:
-        shown = shown_tab(query)
+        shown = shown_tab(query, decide_default(snap, query, now))
         body = dict((name, fn) for name, _, fn in TABS)[shown](cfg, snap, key, query, now)
-    return "\n".join([PAGE_HEAD % {"title": e("devloop · " + cfg.name), "now": e(clock(now))},
-                      render_metrics(snap), render_nav(shown),
+    waiting = len(waiting_cards(snap, now))
+    title = "devloop · " + cfg.name
+    doc_title = ("(%d) " % waiting if waiting else "") + title
+    return "\n".join([PAGE_HEAD % {"title": e(title), "doc_title": e(doc_title), "now": e(clock(now))},
+                      render_metrics(snap), render_nav(shown, waiting),
                       '<div id="tab-%s" class="tab">' % e(shown), body, "</div>",
                       PAGE_SCRIPT + "</main></body></html>"])
+
+
+# ---------------------------------------------------------------- tab: 要你判
+
+DECIDE_STYLE = ("<style>section.wait{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--warn);"
+                "border-radius:8px;padding:10px 12px}section.wait p.want{margin:0;font-weight:700}"
+                "section.wait span.cat{color:var(--quiet);font-size:12px}</style>")
+QUOTA_GRACE = 300
+TICKET_PARAMS = ("ticket", "group", "state", "cat", "q", "done")
+
+
+def pool_seconds(stamp):
+    """A pool timestamp ('YYYY-MM-DDTHH:MM:SSZ') as seconds since the epoch; None when missing or malformed."""
+    try:
+        return calendar.timegm(time.strptime(str(stamp), "%Y-%m-%dT%H:%M:%SZ"))
+    except (TypeError, ValueError):
+        return None
+
+
+def page_subject(snap, p):
+    """('ticket', id), ('group', id) or ('other', ref): what an inbox page is about."""
+    ref = "" if p.get("ref") is None else str(p.get("ref"))
+    if ref in snap.tickets:
+        return "ticket", ref
+    if ref in snap.groups:
+        return "group", ref
+    return "other", ref
+
+
+def card_want(snap, kind, subject, ref=None):
+    """The one line a card asks of the user."""
+    if kind == "ticket":
+        if (snap.tickets[subject] or {}).get("state") == "stuck":
+            return "#%s 卡住了:照你的話改、再試一次或取消" % subject
+        return "#%s 有一頁要你看" % subject
+    if kind == "group":
+        g = snap.groups[subject] or {}
+        if g.get("state") == "stuck":
+            return "%s 卡住了:帶著你的話重驗,或取消這組" % subject
+        if g.get("paused"):
+            return "%s 的 regression 沒跑成:環境修好後重跑" % subject
+        return "%s 有一頁要你看" % subject
+    if ref == "request":
+        return "開題者開票前要你決定:到「票」分頁交代新的事時一起回答"
+    return "有一頁要你看(%s)" % ref
+
+
+def card_details(snap, kind, subject):
+    """(category text or None, feedback text or None) of a card about a ticket or group."""
+    if kind == "ticket":
+        t = snap.tickets[subject] or {}
+        cat = ticket_category(t)
+        feedback = (t.get("feedback") or [None])[-1]
+        if feedback is None and t.get("state") == "stuck":
+            feedback = (t.get("stuck") or {}).get("text")
+        return (CATEGORY_TEXT.get(cat) if cat else None), feedback
+    if kind == "group":
+        g = snap.groups[subject] or {}
+        cat = group_category(snap, g)
+        return (CATEGORY_TEXT.get(cat) if cat else None), (g.get("last_regression") or None)
+    return None, None
+
+
+def waiting_cards(snap, now):
+    """One dict per thing that waits for the user, newest first: kind, subject, page ('' when none),
+    at (when it began to wait), want, cat, feedback, text (the page's text or None), timeline (href or None)."""
+    cards = []
+    about = set()
+    for name, p in snap.inbox.items():
+        if p.get("acked") is True or p.get("kind") not in ("decision", "env"):
+            continue
+        kind, subject = page_subject(snap, p)
+        about.add((kind, subject))
+        cat, feedback = card_details(snap, kind, subject)
+        cards.append({"kind": kind, "subject": subject, "page": name, "at": p.get("at"),
+                      "want": card_want(snap, kind, subject, subject), "cat": cat, "feedback": feedback,
+                      "text": "" if p.get("text") is None else str(p.get("text"))})
+    for ident, t in snap.tickets.items():
+        if t.get("state") == "stuck" and ("ticket", ident) not in about:
+            cat, feedback = card_details(snap, "ticket", ident)
+            cards.append({"kind": "ticket", "subject": ident, "page": "", "at": (t.get("stuck") or {}).get("at"),
+                          "want": card_want(snap, "ticket", ident), "cat": cat, "feedback": feedback, "text": None})
+    for gid, g in snap.groups.items():
+        if (g.get("state") == "stuck" or g.get("paused")) and ("group", gid) not in about:
+            if g.get("paused"):
+                at = (g.get("paused") or {}).get("at")
+            else:
+                at = ((g.get("history") or [{}])[-1] or {}).get("at")
+            cat, feedback = card_details(snap, "group", gid)
+            cards.append({"kind": "group", "subject": gid, "page": "", "at": at,
+                          "want": card_want(snap, "group", gid), "cat": cat, "feedback": feedback, "text": None})
+    held = [("ticket", i, t) for i, t in snap.tickets.items() if t.get("state") == "running"]
+    held += [("group", i, g) for i, g in snap.groups.items() if g.get("state") == "fixing"]
+    for kind, ident, row in held:
+        waiting = row.get("waiting") or {}
+        until = pool_seconds(waiting.get("until"))
+        if waiting.get("reason") != "quota" or until is None or now - until <= QUOTA_GRACE:
+            continue
+        cat = ticket_category(row) if kind == "ticket" else group_category(snap, row)
+        cards.append({"kind": "quota", "subject": ident, "page": "", "at": waiting.get("until"),
+                      "want": "%s 等額度重置,已過了 %s 還在等" % ("#" + ident if kind == "ticket" else ident,
+                                                             waiting.get("until")),
+                      "cat": CATEGORY_TEXT.get(cat) if cat else None, "feedback": waiting.get("text"), "text": None,
+                      "of": kind})
+    for c in cards:
+        of = c.get("of", c["kind"])
+        c["timeline"] = None if of == "other" else "?%s=%s" % ("ticket" if of == "ticket" else "group",
+                                                             quote(str(c["subject"])))
+
+    def order(c):
+        at = pool_seconds(c["at"])
+        return (at is None, -(at or 0), str(c["subject"]))
+    return sorted(cards, key=order)
+
+
+def decide_default(snap, query, now):
+    """The tab a page shows when its query names no known tab: 要你判 when something waits and no 票 filter is asked."""
+    query = query or {}
+    if any(query.get(k) is not None for k in TICKET_PARAMS) or not waiting_cards(snap, now):
+        return "tickets"
+    return "decide"
+
+
+def render_card(c):
+    parts = ['<section class="wait" data-kind="%s" data-subject="%s" data-page="%s">'
+             % (e(c["kind"]), e(c["subject"]), e(c["page"])),
+             '<p class="want">%s</p>' % e(c["want"])]
+    if c["cat"]:
+        parts.append('<span class="cat">%s</span>' % e(c["cat"]))
+    if c["feedback"]:
+        parts.append('<pre class="feedback">%s</pre>' % e(c["feedback"]))
+    if c["text"] is not None:
+        parts.append('<pre class="page-text">%s</pre>' % e(c["text"]))
+    if c["timeline"]:
+        parts.append('<a class="timeline" href="%s">時間軸</a>' % e(c["timeline"]))
+    parts.append("</section>")
+    return "".join(parts)
+
+
+def render_decide_tab(cfg, snap, key, query, now):
+    cards = waiting_cards(snap, now)
+    out = [DECIDE_STYLE, "<section><h2>要你判</h2>"]
+    if not cards:
+        out.append('<p class="quiet">沒有要你判的事。</p>')
+    out.extend(render_card(c) for c in cards)
+    out.append("</section>")
+    return "\n".join(out)
 
 
 # ---------------------------------------------------------------- tab: 票
@@ -1245,7 +1400,7 @@ def submit(cfg, what, argv_tail, text, by=None):
 
 PAGE_HEAD = """<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>%(title)s</title><style>
+<title>%(doc_title)s</title><style>
 :root{--bg:#f5f6f7;--card:#fff;--ink:#1d2329;--quiet:#5c6670;--line:#d3d9de;--accent:#1f6f8b;--bad:#a23b2a;--warn:#8a5a12}
 @media (prefers-color-scheme:dark){:root{--bg:#121619;--card:#1a2025;--ink:#e3e8eb;--quiet:#98a4ad;--line:#36424b;--accent:#6fb7d0;--bad:#e08a7a;--warn:#e0b06c}}
 body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.6 "Noto Sans TC","PingFang TC",system-ui,sans-serif}

@@ -212,9 +212,22 @@ controller's stderr and sampling carries on; the thread stops with the controlle
 `board.py` reads the pool only: the four VISION numbers (tokens and time per landed ticket,
 first-pass share, user interventions per ticket, what waits for the user), every ticket, every
 integration branch, unread pages, memory files. Unknown numbers show as 「未知」, never 0.
-The page has four tabs, chosen by `?tab=`: 票 (`?tab=tickets`, the default; everything above but
-the four numbers, which every tab shows), DAG (`?tab=dag`), Token (`?tab=tokens`) and 主機
-(`?tab=host`); `board.py html --query tab=dag` writes one tab. Every link and form action is
+The page has five tabs, chosen by `?tab=`: 要你判 (`?tab=decide`), 票 (`?tab=tickets`; everything
+above but the four numbers, which every tab shows), DAG (`?tab=dag`), Token (`?tab=tokens`) and 主機
+(`?tab=host`); `board.py html --query tab=dag` writes one tab. A page with no known tab opens
+要你判 whenever something waits for the user and the query has none of 票's filters (`ticket`,
+`group`, `state`, `cat`, `q`, `done`), else 票; the number of cards is on the 要你判 tab ("要你判 (3)")
+and in front of the browser's title ("(3) devloop · …"), never in the page heading.
+
+要你判 shows one card per thing that waits: each unread `decision` or `env` page (one card per page,
+even when its ticket is also stuck); each stuck ticket and each stuck or paused group (the
+env-pause mark `paused`) that no such page is about; and each running ticket or fixing group whose
+quota wait (`waiting.reason` `quota`) is more than 300 s past its `waiting.until`. A page is about
+the ticket or group its `ref` names; created, landed and cancelled pages, acked pages and younger
+quota waits make no card. Cards run newest first by when the wait began (the page's `at`,
+`stuck.at`, `paused.at`, a stuck group's last history event, the quota `until`; no time sorts last)
+and carry one line saying what is asked, the stuck category, the last feedback or regression
+text, the page's text and a link to the ticket's or group's timeline. Every link and form action is
 relative and the server routes by the last path segment only, so the board works under a path
 prefix (for example behind a reverse proxy at `/board/`).
 `--key-file` accepts the key once as `?key=` and trades it for an HttpOnly, SameSite=Strict cookie
