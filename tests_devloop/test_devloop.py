@@ -5092,6 +5092,75 @@ class Landing(LoopCase):
         self.assertIsNone(total["input_tokens"])
 
 
+class T63Acceptance(LoopCase):
+    """#63: a controller run without --forever that ends with work left writes one idle page (ref
+    controller) and the same lines on stderr, one per item, saying what it waits for. Expected lines
+    come from the ticket's line formats and the fake agent's texts, never from ticket_controller.py."""
+
+    def setUp(self):
+        super().setUp()
+        for k in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(k, None)
+
+    def idle_pages(self):
+        return [r for r in self.snap().inbox.values() if r.get("kind") == "idle"]
+
+    @staticmethod
+    def item_lines(text):
+        return [ln for ln in text.splitlines() if ln.startswith("#") or ln.startswith("g")]
+
+    def test_stuck_and_waiting_tickets_and_the_stuck_group_get_one_idle_page(self):
+        self.add(1)
+        self.add(2, deps=(1,))
+        self.add(4, state="cancelled")
+        self.add(3, deps=(4,))
+        self.plan(worker={"1": ["blocked"]})
+        res = self.controller()
+        # acceptance 1 and 6: exit 0, the run ends (no loop) within the timeout
+        self.assertEqual(res.returncode, 0, res.stderr)
+        pages = self.idle_pages()
+        self.assertEqual(len(pages), 1, "exactly one idle page: %r" % pages)
+        self.assertEqual(pages[0]["ref"], "controller")
+        expected = ["#1 stuck (decision): need the user",
+                    "#2 ready, waits for: #1 stuck",
+                    "#3 ready, waits for: #4 cancelled",
+                    "g1 stuck: no ticket of the group got merged"]
+        # acceptance 2: those whole lines, in that order, optionally after one header line
+        lines = pages[0]["text"].splitlines()
+        if lines and not (lines[0].startswith("#") or lines[0].startswith("g")):
+            lines = lines[1:]
+        lines = [ln for ln in lines if ln.strip()]
+        self.assertEqual(lines, expected, pages[0]["text"])
+        # acceptance 4: landed / cancelled tickets get no line of their own
+        self.assertFalse(any(ln.startswith("#4 ") for ln in lines))
+        # acceptance 3: stderr has each line as a whole line
+        err = res.stderr.splitlines()
+        for want in expected:
+            self.assertIn(want, err, res.stderr)
+
+    def test_a_dependency_merged_in_a_stuck_group_is_named_with_its_group(self):
+        self.add(1)
+        self.add(2, deps=(1,))
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["blocked"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        snap = self.snap()
+        self.assertEqual(snap.ticket("1").get("state"), "merged")     # fixture premise
+        g1 = snap.groups["g1"]
+        self.assertEqual(g1["state"], "stuck")                         # fixture premise
+        last_event = (g1.get("history") or [{}])[-1].get("event")
+        pages = self.idle_pages()
+        self.assertEqual(len(pages), 1, "exactly one idle page: %r" % pages)
+        self.assertEqual(pages[0]["ref"], "controller")
+        expected = ["#2 ready, waits for: #1 merged in g1 (stuck)",
+                    "g1 stuck: %s" % last_event]
+        lines = self.item_lines(pages[0]["text"])
+        self.assertEqual(lines, expected, pages[0]["text"])
+        err = res.stderr.splitlines()
+        for want in expected:
+            self.assertIn(want, err, res.stderr)
+
+
 class T56Acceptance(LoopCase):
     """#56: the board's first tab 要你判 - one card per thing waiting for the user, shown by default
     when something waits, counted on its label and in the <title>. Expected values come from the
