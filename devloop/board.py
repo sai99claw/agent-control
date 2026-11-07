@@ -196,6 +196,7 @@ def e(text):
 
 TABS = (
     ("decide", "要你判", lambda cfg, snap, key, query, now: render_decide_tab(cfg, snap, key, query, now)),
+    ("live", "進行中", lambda cfg, snap, key, query, now: render_live_tab(cfg, snap, key, query, now)),
     ("tickets", "票", lambda cfg, snap, key, query, now: render_tickets_tab(cfg, snap, key, query, now)),
     ("dag", "DAG", lambda cfg, snap, key, query, now: render_dag_tab(cfg, snap, query, now)),
     ("tokens", "Token", lambda cfg, snap, key, query, now: render_tokens_tab(cfg, snap, query, now)),
@@ -372,11 +373,245 @@ def waiting_cards(snap, now):
 
 
 def decide_default(snap, query, now):
-    """The tab a page shows when its query names no known tab: 要你判 when something waits and no 票 filter is asked."""
+    """The tab a page shows when its query names no known tab: 票 when a 票 filter is asked, else 要你判 when
+    something waits, else 進行中."""
     query = query or {}
-    if any(query.get(k) is not None for k in TICKET_PARAMS) or not waiting_cards(snap, now):
+    if any(query.get(k) is not None for k in TICKET_PARAMS):
         return "tickets"
+    if not waiting_cards(snap, now):
+        return "live"
     return "decide"
+
+
+# ---------------------------------------------------------------- tab: 進行中
+
+LIVE_STYLE = ("<style>#tab-live table.live td{vertical-align:top}#tab-live td.detail pre{max-height:20em;overflow:auto;"
+              "font-size:12px;margin:4px 0 0}#tab-live tr[data-state=ended]{color:var(--quiet)}"
+              "#tab-live a.refresh{float:right;font-size:13px}</style>")
+LIVE_TAIL_LINES = 20
+LIVE_TAIL_BYTES = 1 << 20       # a log is read from at most this far before its end
+LIVE_AGENT_STATE = {"running": "執行中", "slot": "等機器名額"}
+LIVE_STAGE_TEXT = {"slot": "等機器名額", "machine": "等整台機器", "preflight": "preflight", "full": "full"}
+LIVE_ENDED = "結束了,沒有交件"
+LIVE_NO_AGENT = "沒有 agent 在跑"
+LIVE_STAGE_MARK = "devloop-stage:"
+
+
+def live_clock(epoch):
+    """A row's start time in local time: 'MM-DD HH:MM:SS'."""
+    return time.strftime("%m-%d %H:%M:%S", time.localtime(epoch))
+
+
+def live_elapsed(seconds):
+    """'<m> 分' below an hour (negative counts as 0), '<h> 小時 <m> 分' from an hour on."""
+    s = max(0, int(seconds))
+    if s < 3600:
+        return "%d 分" % (s // 60)
+    return "%d 小時 %d 分" % (s // 3600, s % 3600 // 60)
+
+
+def live_log_lines(path):
+    """The lines of a log's last LIVE_TAIL_BYTES; None when it cannot be read."""
+    if not isinstance(path, str) or not path:
+        return None
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - LIVE_TAIL_BYTES))
+            data = fh.read()
+    except OSError:
+        return None
+    lines = data.decode("utf-8", "replace").splitlines()
+    return lines[1:] if size > LIVE_TAIL_BYTES and lines else lines
+
+
+def live_tail(path):
+    """The last LIVE_TAIL_LINES lines of a log as one text; '' when it cannot be read."""
+    lines = live_log_lines(path)
+    return "\n".join(lines[-LIVE_TAIL_LINES:]) if lines else ""
+
+
+def live_release_step(path):
+    """The text after 'devloop-stage:' on the log's last line that starts with it; None when there is none."""
+    for line in reversed(live_log_lines(path) or []):
+        if line.startswith(LIVE_STAGE_MARK):
+            return line[len(LIVE_STAGE_MARK):].strip()
+    return None
+
+
+def live_pid(rec):
+    return (rec.get("stamp") or {}).get("pid")
+
+
+def live_model(rec, command=True):
+    """'<command> · <model> · <effort>' of a record, leaving out what it does not have."""
+    parts = [rec.get("command")] if command else []
+    parts += [rec.get("model"), rec.get("effort")]
+    return " · ".join(str(p) for p in parts if p not in (None, ""))
+
+
+def live_agent_state_text(agent):
+    if agent.get("state") == "quota":
+        until = pool_seconds(agent.get("until"))
+        return "額度用完,到 %s" % (live_clock(until) if until is not None else "?")
+    return LIVE_AGENT_STATE.get(agent.get("state"), str(agent.get("state")))
+
+
+def live_ticket_text(snap, ticket):
+    title = (snap.tickets.get(str(ticket)) or {}).get("title")
+    return "#%s %s" % (ticket, title or "")
+
+
+def live_round(rec):
+    return "第 %s 輪" % rec.get("round") if rec.get("round") is not None else ""
+
+
+def live_what(snap, kind, rec):
+    """The td.what text of a record's row."""
+    if kind == "opener":
+        if rec.get("revise") is not None:
+            return "改票 #%s" % rec.get("revise")
+        return "開題:%s" % rec.get("title") if rec.get("title") is not None else "開題"
+    if kind == "agent":
+        parts = [rec.get("role")]
+        if rec.get("ticket") is not None:
+            parts.append(live_ticket_text(snap, rec.get("ticket")))
+        elif rec.get("group") is not None:
+            parts.append(rec.get("group"))
+        parts.append(live_round(rec))
+        return " ".join(str(p) for p in parts if p not in (None, ""))
+    if kind == "issuer":
+        return " ".join(p for p in (live_ticket_text(snap, rec.get("ticket")), live_round(rec)) if p)
+    if kind == "regression":
+        g = snap.groups.get(str(rec.get("group")))
+        if g is None:
+            which = UNKNOWN
+        else:
+            n = g.get("fix_round") or 0
+            which = "修第 %s 輪後" % n if n >= 1 else "第一次"
+        return "%s %s" % (rec.get("group"), which)
+    if kind == "fixer":
+        return "%s 第 %s/%s 輪" % (rec.get("group"), rec.get("round"), rec.get("max_rounds"))
+    if kind == "release":
+        return "%s %s" % (rec.get("group"), str(rec.get("sha") or "")[:12])
+    return str(kind)
+
+
+def live_rows(cfg, snap):
+    """One dict per row of the tab (read only: records, their status and their logs)."""
+    from core import inflight
+    recs = [(name, rec, inflight.status(rec)) for name, rec in inflight.records(cfg)]
+    recs = [(n, r, s) for n, r, s in recs if s != "handed_in"]
+    running = [(n, r) for n, r, s in recs if s == "running"]
+    agents = [(n, r) for n, r in running if r.get("kind") == "agent"]
+
+    def children(rec):
+        pid = live_pid(rec)
+        return [(n, a) for n, a in agents if pid is not None and a.get("parent") == pid]
+
+    def newest(kids):
+        if not kids:
+            return None
+        return max(kids, key=lambda na: (pool_seconds((na[1].get("stamp") or {}).get("started")) or 0, na[0]))[1]
+
+    owned = set()
+    for _, r in running:
+        if r.get("kind") in ("opener", "fixer"):
+            owned.update(n for n, _ in children(r))
+    rows = []
+    for name, rec, status in recs:
+        kind = rec.get("kind")
+        row = {"name": name, "kind": kind, "rec": rec, "what": live_what(snap, kind, rec),
+               "model": "", "attrs": {}, "run_dir": None, "log": None, "tail": False}
+        if status == "ended":
+            row.update(state="ended", text=LIVE_ENDED)
+            if kind == "agent":
+                row.update(model=live_model(rec), run_dir=rec.get("run_dir"), log=rec.get("log"), tail=True)
+            rows.append(row)
+            continue
+        if kind == "agent":
+            if name in owned:
+                continue
+            row.update(state=rec.get("state"), text=live_agent_state_text(rec), agent=rec)
+        elif kind == "opener":
+            agent = newest(children(rec))
+            if agent is None:
+                row.update(state="running", text=LIVE_AGENT_STATE["running"], model=live_model(rec, command=False))
+                if rec.get("model"):
+                    row["attrs"]["data-model"] = rec.get("model")
+            else:
+                row.update(state="slot" if agent.get("state") == "slot" else "running",
+                           text=live_agent_state_text(agent), agent=agent)
+        elif kind == "issuer":
+            if children(rec):
+                continue
+            row.update(state="running", text=LIVE_NO_AGENT)
+        elif kind == "regression":
+            stage = rec.get("stage")
+            row.update(state="slot" if stage in ("slot", "machine") else "running",
+                       text=LIVE_STAGE_TEXT.get(stage, str(stage)))
+        elif kind == "fixer":
+            agent = newest(children(rec))
+            if agent is None:
+                row.update(state="running", text=LIVE_NO_AGENT)
+            else:
+                text = live_agent_state_text(agent)
+                row.update(state=agent.get("state"), agent=agent,
+                           text=text if agent.get("state") == "quota" else "agent " + text)
+        elif kind == "release":
+            row.update(state="running", text=live_release_step(rec.get("log")) or LIVE_AGENT_STATE["running"],
+                       log=rec.get("log"), tail=True)
+        else:
+            row.update(state="running", text=LIVE_AGENT_STATE["running"])
+        agent = row.pop("agent", None)
+        if agent is not None:
+            row.update(model=live_model(agent), run_dir=agent.get("run_dir"), log=agent.get("log"), tail=True)
+            for attr in ("model", "command"):
+                if agent.get(attr):
+                    row["attrs"]["data-" + attr] = agent.get(attr)
+        rows.append(row)
+    for row in rows:
+        row["started"] = pool_seconds((row["rec"].get("stamp") or {}).get("started"))
+    rows.sort(key=lambda r: (r["state"] == "ended", r["started"] is None, r["started"] or 0, r["name"]))
+    return rows
+
+
+def render_live_row(row, now, slots_text):
+    attrs = [("data-kind", row["kind"]), ("data-state", row["state"]), ("data-pid", live_pid(row["rec"])),
+             ("data-started", row["started"])] + sorted(row["attrs"].items())
+    if slots_text is not None:
+        attrs.append(("data-slots", slots_text))
+    started = row["started"]
+    detail = []
+    if row["run_dir"]:
+        detail.append('<code class="run-dir">%s</code>' % e(row["run_dir"]))
+    if row["tail"]:
+        detail.append("<details><summary>log</summary><pre>%s</pre></details>" % e(live_tail(row["log"])))
+    cells = [("what", e(row["what"])), ("state", e(row["text"])), ("model", e(row["model"])),
+             ("start", e(live_clock(started)) if started is not None else ""),
+             ("elapsed", e(live_elapsed(now - started)) if started is not None else ""),
+             ("detail", "".join(detail))]
+    if slots_text is not None:
+        cells.append(("slots", e("名額 " + slots_text)))
+    return "<tr %s>%s</tr>" % (" ".join('%s="%s"' % (k, e("" if v is None else v)) for k, v in attrs),
+                               "".join('<td class="%s">%s</td>' % c for c in cells))
+
+
+def render_live_tab(cfg, snap, key, query, now):
+    """One row per running opener, agent, agent-less issuer, regression, fixer and release (and per
+    record whose process ended without handing in), oldest first. Writes and creates nothing."""
+    from core import host as hostmod
+    rows = live_rows(cfg, snap)
+    used = hostmod.slots_in_use(cfg)
+    slots_text = None if used is None else "%d/%d" % (used, cfg.machine_slots)
+    out = [LIVE_STYLE, '<section><a class="refresh" href="?tab=live">重新整理</a><h2>進行中</h2>']
+    if not rows:
+        out.append('<p class="quiet">沒有在跑的。</p>')
+    out.append('<div class="scroll"><table class="live">')
+    out.extend(render_live_row(r, now, slots_text) for r in rows)
+    out.append("</table></div></section>")
+    return "\n".join(out)
 
 
 ACT_LABELS = {"revise": "照我的話改", "retry": "再試一次", "cancel": "取消", "group-ready": "帶著我的話重驗",

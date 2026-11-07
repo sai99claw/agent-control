@@ -4523,7 +4523,7 @@ class T31Acceptance(LoopCase):
         self.assertEqual(board.REASON_TEXT.get("quota"), "額度用完")
         self.add(1, state="running", target="int/g1",
                  waiting={"reason": "quota", "since": osx.now(), "until": osx.now(), "text": "usage limit reached"})
-        res = self.run_py("board.py", "html")
+        res = self.run_py("board.py", "html", "--query", "tab=tickets")
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertIn("額度用完", res.stdout)
 
@@ -5464,7 +5464,7 @@ class T56Acceptance(LoopCase):
 
     # ------------------------------------------------------------ item 1
 
-    def test_item1_decide_is_the_first_tab_with_five_links_and_a_counted_label(self):
+    def test_item1_decide_is_the_first_tab_with_six_links_and_a_counted_label(self):
         import board
         self.assertTrue(hasattr(board, "TABS"), "board.TABS is missing")
         self.assertGreaterEqual(len(board.TABS), 1)
@@ -5473,18 +5473,19 @@ class T56Acceptance(LoopCase):
         self.fill()
         for query in (None, {"tab": "decide"}, {"tab": "tickets"}, {"tab": "dag"}):
             links = self.nav(self.page(query))
-            self.assertEqual([h for h, _ in links], ["?tab=decide", "?tab=tickets", "?tab=dag", "?tab=tokens", "?tab=host"],
-                             "nav links for %r" % (query,))
-            self.assertEqual([t for _, t in links], ["要你判 (8)", "票", "DAG", "Token", "主機"], "nav texts for %r" % (query,))
+            self.assertEqual([h for h, _ in links], ["?tab=decide", "?tab=live", "?tab=tickets", "?tab=dag", "?tab=tokens",
+                                                     "?tab=host"], "nav links for %r" % (query,))
+            self.assertEqual([t for _, t in links], ["要你判 (8)", "進行中", "票", "DAG", "Token", "主機"],
+                             "nav texts for %r" % (query,))
         page = self.page({"tab": "decide"})
         self.assertEqual(page.count('id="tab-decide"'), 1, "exactly one tab-decide element")
-        for other in ("tickets", "dag", "tokens", "host"):
+        for other in ("live", "tickets", "dag", "tokens", "host"):
             self.assertNotIn('id="tab-%s"' % other, page)
 
     def test_item1_label_has_no_count_without_cards(self):
         links = self.nav(self.page(None))
-        self.assertEqual([h for h, _ in links][:1], ["?tab=decide"], "要你判 is the first link")
-        self.assertEqual(len(links), 5, "five links")
+        self.assertEqual([h for h, _ in links][:2], ["?tab=decide", "?tab=live"], "要你判 is the first link, 進行中 second")
+        self.assertEqual(len(links), 6, "six links")
         self.assertEqual(links[0][1], "要你判", "no count without cards")
 
     # ------------------------------------------------------------ item 2
@@ -5502,9 +5503,9 @@ class T56Acceptance(LoopCase):
         self.assertEqual(self.shown(self.page({"state": "stuck"})), ["tickets"])
         self.assertEqual(self.shown(self.page({"ticket": "1"})), ["tickets"])
 
-    def test_item2_tickets_is_the_default_when_nothing_waits(self):
+    def test_item2_live_is_the_default_when_nothing_waits(self):
         for query in (None, {}, {"tab": ""}, {"tab": "nope"}):
-            self.assertEqual(self.shown(self.page(query)), ["tickets"], "empty pool, query %r shows 票" % (query,))
+            self.assertEqual(self.shown(self.page(query)), ["live"], "empty pool, query %r shows 進行中" % (query,))
         self.assertEqual(self.shown(self.page({"tab": "decide"})), ["decide"], "an asked-for 要你判 is shown")
 
     def test_item2_html_command_without_query_shows_decide(self):
@@ -5704,7 +5705,7 @@ class DecideTabCards(LoopCase):
 
     def test_default_tab_needs_a_card_and_no_ticket_parameter(self):
         import board
-        self.assertEqual(board.decide_default(self.snap(), None, self.NOW), "tickets")
+        self.assertEqual(board.decide_default(self.snap(), None, self.NOW), "live")
         self.add(1, state="stuck", stuck={"reason": "env", "text": "x", "at": "2026-11-06T08:00:00Z"})
         snap = self.snap()
         self.assertEqual(board.decide_default(snap, {}, self.NOW), "decide")
@@ -6512,7 +6513,7 @@ class T32Acceptance(LoopCase):
         g = {"id": "g1", "branch": "int/g1", "state": "fixing", "members": [], "fix_round": 1,
              "waiting": {"reason": "quota", "since": osx.now(), "until": osx.now(), "text": "usage limit reached"}}
         self.pool.update(lambda tx: tx.put_group(g), "test: group g1 waiting for quota")
-        res = self.run_py("board.py", "html")
+        res = self.run_py("board.py", "html", "--query", "tab=tickets")
         self.assertEqual(res.returncode, 0, res.stderr)
         rows = [r for r in res.stdout.split("<tr") if "g1" in r]
         self.assertTrue(rows, "no table row holds g1")
@@ -7898,7 +7899,7 @@ class T15Acceptance(LoopCase):
         self.pool_put("memory/discussions/talk.md", "a talk\n")
         self.queue(2)
         self.config(memory=self.F)
-        res = self.run_py("board.py", "html")
+        res = self.run_py("board.py", "html", "--query", "tab=tickets")
         self.assertEqual(res.returncode, 0, res.stderr)
         page = res.stdout
         header, rows = self.memory_rows(page)
@@ -7931,7 +7932,7 @@ class T38Acceptance(LoopCase):
     """Ticket #38: the board is four tabs (票 DAG Token 主機), each at its own relative ?tab= URL."""
 
     TABS = ("tickets", "dag", "tokens", "host")
-    NAV = [("要你判", "?tab=decide"), ("票", "?tab=tickets"), ("DAG", "?tab=dag"), ("Token", "?tab=tokens"), ("主機", "?tab=host")]
+    NAV = [("要你判", "?tab=decide"), ("進行中", "?tab=live"), ("票", "?tab=tickets"), ("DAG", "?tab=dag"), ("Token", "?tab=tokens"), ("主機", "?tab=host")]
 
     def setUp(self):
         super().setUp()
@@ -8029,8 +8030,8 @@ class T38Acceptance(LoopCase):
         for q in (None, {}, {"tab": ""}, {"tab": "nope"}):
             with self.subTest(query=q):
                 ids = self.ids(self.page(query=q))
-                self.assertEqual(ids.count("tab-tickets"), 1, ids)
-                for other in ("dag", "tokens", "host"):
+                self.assertEqual(ids.count("tab-live"), 1, ids)
+                for other in ("tickets", "dag", "tokens", "host"):
                     self.assertNotIn("tab-" + other, ids)
 
     def test_item2_one_nav_with_four_links_and_the_current_one_marked(self):
@@ -8106,7 +8107,8 @@ class T38Acceptance(LoopCase):
         res = self.run_py("board.py", "html")
         self.assertEqual(res.returncode, 0, res.stderr)
         ids = self.ids(res.stdout)
-        self.assertIn("tab-tickets", ids)
+        self.assertIn("tab-live", ids)
+        self.assertNotIn("tab-tickets", ids)
         self.assertNotIn("tab-dag", ids)
 
     def test_item8_served_tabs_under_any_prefix(self):
@@ -8281,7 +8283,7 @@ class BoardTabs(LoopCase):
 
     def test_shown_tab_falls_back_to_the_first_tab(self):
         import board
-        self.assertEqual([t[0] for t in board.TABS], ["decide", "tickets", "dag", "tokens", "host"])
+        self.assertEqual([t[0] for t in board.TABS], ["decide", "live", "tickets", "dag", "tokens", "host"])
         for query in (None, {}, {"tab": ""}, {"tab": "nope"}, {"other": "dag"}):
             self.assertEqual(board.shown_tab(query), "tickets", query)
         self.assertEqual(board.shown_tab({"tab": "host"}), "host")
@@ -8354,6 +8356,134 @@ class BoardTabs(LoopCase):
         self.assertIn('id="tab-dag"', get("/x/?tab=dag")[1])
         self.assertIn('id="tab-host"', get("/x/index.html?tab=host")[1])
         self.assertEqual(get("/x/nothing")[0], 404)
+
+
+class BoardLiveTab(LoopCase):
+    """#66's helpers: live_clock, live_elapsed, the log tail and step, and the rows live_rows builds."""
+
+    NOW = calendar.timegm((2026, 11, 6, 12, 0, 0, 0, 0, 0))
+
+    def setUp(self):
+        super().setUp()
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(k)
+
+    def alive(self, started):
+        p = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(p.wait)
+        self.addCleanup(p.terminate)
+        return {"pid": p.pid, "host": osx.host(), "boot": osx.boot_id(), "started": started}
+
+    def dead(self, started, pid=999999):
+        """A stamp of a gone process; `started` recent, or the next inflight.put prunes the record."""
+        return {"pid": pid, "host": osx.host(), "boot": "other-boot", "started": started}
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def put(self, name, **rec):
+        from core import inflight
+        rec.setdefault("result", None)
+        inflight.put(self.cfg(), name, rec)
+
+    def rows(self):
+        import board
+        return board.live_rows(self.cfg(), self.snap())
+
+    def log(self, name, lines):
+        path = os.path.join(self.tmp, name)
+        with open(path, "w") as fh:
+            fh.write("".join(line + "\n" for line in lines))
+        return path
+
+    def test_live_clock_and_elapsed(self):
+        import board
+        self.assertEqual(board.live_clock(self.NOW), time.strftime("%m-%d %H:%M:%S", time.localtime(self.NOW)))
+        for seconds, text in ((0, "0 分"), (59, "0 分"), (61, "1 分"), (3599, "59 分"), (3600, "1 小時 0 分"),
+                              (5400, "1 小時 30 分"), (-5, "0 分"), (90061, "25 小時 1 分")):
+            self.assertEqual(board.live_elapsed(seconds), text, seconds)
+
+    def test_tail_keeps_the_last_twenty_lines_and_step_reads_the_last_mark(self):
+        import board
+        path = self.log("a.log", ["line %d" % i for i in range(1, 31)])
+        self.assertEqual(board.live_tail(path).splitlines(), ["line %d" % i for i in range(11, 31)])
+        self.assertEqual(board.live_tail(os.path.join(self.tmp, "missing.log")), "")
+        self.assertEqual(board.live_tail(None), "")
+        path = self.log("r.log", ["devloop-stage: build", "x", "devloop-stage:  upload  ", " devloop-stage: no"])
+        self.assertEqual(board.live_release_step(path), "upload")
+        self.assertIsNone(board.live_release_step(self.log("n.log", ["plain"])))
+
+    def test_opener_takes_its_newest_agent_and_the_others_have_no_row(self):
+        op = self.alive("2026-11-06T10:00:00Z")
+        self.put("opener-1", kind="opener", stamp=op, title="a title", revise=None, via="main", model="m0", effort=None)
+        for name, started, model in (("agent-a", "2026-11-06T10:01:00Z", "old"), ("agent-b", "2026-11-06T10:02:00Z", "new")):
+            self.put(name, kind="agent", stamp=self.alive(started), parent=op["pid"], role="creator", ticket=None,
+                     group=None, round=None, run_dir="/r/" + name, log=None, command="claude", model=model,
+                     effort="high", state="slot", since=started, until=None)
+        rows = self.rows()
+        self.assertEqual([(r["kind"], r["state"]) for r in rows], [("opener", "slot")])
+        self.assertEqual(rows[0]["what"], "開題:a title")
+        self.assertEqual(rows[0]["model"], "claude · new · high")
+        self.assertEqual(rows[0]["run_dir"], "/r/agent-b")
+
+    def test_issuer_without_agent_regression_fixer_release_and_order(self):
+        self.add(1, title="first")
+        self.pool.update(lambda tx: tx.put_group({"id": "g2", "branch": "int/g2", "state": "fixing", "members": [],
+                                                  "fix_round": 2}), "test: group")
+        iss = self.alive("2026-11-06T09:00:00Z")
+        self.put("issuer-1", kind="issuer", stamp=iss, ticket="1", target="int/g1", round=2)
+        self.put("regression-int-g2", kind="regression", stamp=self.alive("2026-11-06T08:00:00Z"), group="g2",
+                 branch="int/g2", sha="a" * 40, exclusive=False, stage="machine", since="2026-11-06T08:00:00Z")
+        self.put("regression-int-g9", kind="regression", stamp=self.alive("2026-11-06T08:00:00Z"), group="g9",
+                 branch="int/g9", sha="b" * 40, exclusive=False, stage="full", since="2026-11-06T08:00:00Z")
+        fx = self.alive("2026-11-06T11:00:00Z")
+        self.put("fixer-g2", kind="fixer", stamp=fx, group="g2", round=2, max_rounds=3)
+        self.put("agent-f", kind="agent", stamp=self.alive("2026-11-06T11:01:00Z"), parent=fx["pid"], role="fixer",
+                 ticket=None, group="g2", round=2, run_dir="/r/f", log=None, command="claude", model="m",
+                 effort=None, state="quota", since="x", until="2026-11-06T13:00:00Z")
+        log = self.log("rel.log", ["start", "devloop-stage: tagging"])
+        self.put("release-g2", kind="release", stamp=self.alive("2026-11-06T11:30:00Z"), group="g2", sha="c" * 40,
+                 log=log)
+        self.put("opener-dead", kind="opener", stamp=self.dead(osx.now()), title=None, revise=7,
+                 via="main", model=None, effort=None)
+        handed = self.log("result.json", ["{}"])
+        self.put("opener-done", kind="opener", stamp=self.dead(osx.now()), title="t", revise=None,
+                 via="main", model=None, effort=None, result=handed)
+        import board
+        rows = self.rows()
+        got = [(r["name"], r["kind"], r["state"], r["what"], r["text"]) for r in rows]
+        self.assertEqual(got, [
+            ("regression-int-g2", "regression", "slot", "g2 修第 2 輪後", "等整台機器"),
+            ("regression-int-g9", "regression", "running", "g9 未知", "full"),
+            ("issuer-1", "issuer", "running", "#1 first 第 2 輪", "沒有 agent 在跑"),
+            ("fixer-g2", "fixer", "quota", "g2 第 2/3 輪",
+             "額度用完,到 " + board.live_clock(board.pool_seconds("2026-11-06T13:00:00Z"))),
+            ("release-g2", "release", "running", "g2 " + "c" * 12, "tagging"),
+            ("opener-dead", "opener", "ended", "改票 #7", "結束了,沒有交件"),
+        ])
+
+    def test_render_escapes_marks_slots_and_creates_nothing(self):
+        import board
+        self.config(machine_slots=2)
+        live = os.path.join(self.tmp, "wt", "runs", "live")
+        slots_dir = os.path.join(self.tmp, "wt", "slots")
+        page = board.render(self.cfg(), self.snap(), query={"tab": "live"}, now=self.NOW)
+        self.assertFalse(os.path.exists(live))
+        self.assertFalse(os.path.exists(slots_dir))
+        self.assertIn('<a class="refresh" href="?tab=live">重新整理</a>', page)
+        self.assertIn('<table class="live">', page)
+        self.put("opener-x", kind="opener", stamp=self.alive("2026-11-06T11:00:00Z"), title="<b>x</b>",
+                 revise=None, via="web", model="m", effort="low")
+        page = board.render(self.cfg(), self.snap(), query={"tab": "live"}, now=self.NOW)
+        self.assertIn("開題:&lt;b&gt;x&lt;/b&gt;", page)
+        self.assertNotIn("<b>x</b>", page)
+        self.assertIn('data-slots="0/2"', page)
+        self.assertIn('<td class="slots">名額 0/2</td>', page)
+        self.assertIn('<td class="model">m · low</td>', page)
+        self.assertIn('data-started="%d"' % (self.NOW - 3600), page)
+        self.assertIn('<td class="elapsed">1 小時 0 分</td>', page)
+        self.assertFalse(os.path.exists(slots_dir))
 
 
 class T16Acceptance(LoopCase):

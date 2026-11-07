@@ -266,12 +266,27 @@ controller's stderr and sampling carries on; the thread stops with the controlle
 `board.py` reads the pool only: the four VISION numbers (tokens and time per landed ticket,
 first-pass share, user interventions per ticket, what waits for the user), every ticket, every
 integration branch, unread pages, memory files. Unknown numbers show as 「未知」, never 0.
-The page has five tabs, chosen by `?tab=`: 要你判 (`?tab=decide`), 票 (`?tab=tickets`; everything
-above but the four numbers, which every tab shows), DAG (`?tab=dag`), Token (`?tab=tokens`) and 主機
-(`?tab=host`); `board.py html --query tab=dag` writes one tab. A page with no known tab opens
-要你判 whenever something waits for the user and the query has none of 票's filters (`ticket`,
-`group`, `state`, `cat`, `q`, `done`), else 票; the number of cards is on the 要你判 tab ("要你判 (3)")
+The page has six tabs, chosen by `?tab=`: 要你判 (`?tab=decide`), 進行中 (`?tab=live`), 票
+(`?tab=tickets`; everything above but the four numbers, which every tab shows), DAG (`?tab=dag`),
+Token (`?tab=tokens`) and 主機 (`?tab=host`); `board.py html --query tab=dag` writes one tab. A page
+with no known tab opens 票 when the query has one of 票's filters (`ticket`, `group`, `state`, `cat`,
+`q`, `done`), else 要你判 whenever something waits for the user, else 進行中; the number of cards is on the 要你判 tab ("要你判 (3)")
 and in front of the browser's title ("(3) devloop · …"), never in the page heading.
+
+進行中 reads the live records (`<worktrees>/runs/live/`, read only; it creates nothing) and shows
+one row per running opener, agent, agent-less issuer, regression, fixer and release, oldest start
+first, plus a 結束了,沒有交件 row (after all others) for a record whose process ended without handing
+in; a handed-in record has no row. Each row shows what runs (開題 and its title or 改票 #N; an
+agent's role, ticket and title or group, and round; an issuer's ticket and round; a regression's
+group and whether it is the first run or the one after fix round N; a fixer's group and round of
+max; a release's group and short sha), its state (執行中, 等機器名額, 等整台機器, 額度用完 until when,
+the regression's stage, 沒有 agent 在跑), the command, model and effort, the local start time
+(`MM-DD HH:MM:SS`), how long it has run (`<m> 分`, `<h> 小時 <m> 分`), the run dir and the last 20
+log lines, and with `machine_slots` set the slots in use (`名額 1/2`). An opener's or fixer's own
+agent is shown on that row, not as a row of its own; an issuer whose agent runs has no row (the
+agent's row stands for it). A release command may print lines `devloop-stage: <text>`; the row
+shows the text of the last such line as its step. The tab has a 重新整理 link; the page reloads
+every 30 s anyway when nobody types.
 
 要你判 shows one card per thing that waits: each unread `decision` or `env` page (one card per page,
 even when its ticket is also stuck); each stuck ticket and each stuck or paused group (the
