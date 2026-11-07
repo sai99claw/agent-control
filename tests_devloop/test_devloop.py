@@ -2776,6 +2776,198 @@ class WebInput(LoopCase):
         self.assertTrue(snap.inbox["p1"]["acked"])
 
 
+class T59Acceptance(LoopCase):
+    """#59: every opener run leaves a cost row - split over the tickets it opened, on the revised
+    ticket, or unsplit on the decision page of a request that opened none. Expected numbers come
+    from the usage line of acceptance 2 (input 1001, output 300, cache read 5000, cache write 7,
+    usd 0.9), not from the code."""
+
+    USAGE = ('{"type": "result", "usage": {"input_tokens": 1001, "output_tokens": 300, '
+             '"cache_read_input_tokens": 5000, "cache_creation_input_tokens": 7}, '
+             '"total_cost_usd": 0.9, "session_id": "s1"}')
+    FIELDS = ("role", "model", "effort", "command", "round", "seconds", "at", "outcome", "run_dir",
+              "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "usd", "session_id")
+
+    def setUp(self):
+        super().setUp()
+        for name in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(name, None)
+            os.environ.pop(name, None)     # restored by GitIsolatedCase's patch.dict
+        self.creator("exec python3 %s" % os.path.join(HERE, "fake_agent.py"))
+
+    # ------------------------------------------------------------ helpers
+
+    def creator(self, then):
+        """The creator command: print the usage line into the run's log, then `then`."""
+        self.config(agents=dict({r: AGENT for r in ROLES},
+                                creator=["sh", "-c", "echo '%s'; %s" % (self.USAGE, then)]))
+
+    def request(self, want_rc):
+        res = self.run_py("ticket_creator.py", "--request", "build two things")
+        self.assertEqual(res.returncode, want_rc, res.stdout + res.stderr)
+        return res
+
+    def creator_rows(self, ident):
+        t = self.snap().tickets.get(str(ident)) or {}
+        return [r for r in t.get("cost") or [] if isinstance(r, dict) and r.get("role") == "creator"]
+
+    def request_page(self):
+        pages = [p for p in self.snap().inbox.values() if p.get("ref") == "request" and p.get("kind") == "decision"]
+        self.assertEqual(len(pages), 1, pages)
+        return pages[0]
+
+    def tokens_tab(self):
+        import board
+        from core.config import Config
+        return board.render(Config(self.proj), self.snap(), query={"tab": "tokens"}, now=time.time())
+
+    def section(self, page, heading):
+        start = page.find("<h2>%s</h2>" % heading)
+        self.assertNotEqual(start, -1, heading)
+        return page[start:page.find("</section>", start)]
+
+    def assert_share(self, row, inp, out, read, write):
+        self.assertEqual((row.get("input_tokens"), row.get("output_tokens"), row.get("cache_read_tokens"),
+                          row.get("cache_write_tokens")), (inp, out, read, write), row)
+        self.assertIsInstance(row.get("usd"), (int, float), row)
+        self.assertAlmostEqual(row.get("usd"), 0.45, delta=1e-9)
+
+    # ------------------------------------------------------------ acceptance 1 and 2
+
+    def test_an_opening_run_leaves_one_row_with_the_agent_fields_and_split_over_on_each_ticket(self):
+        self.request(0)
+        self.assertEqual(sorted(self.snap().tickets), ["1", "2"])
+        for ident in ("1", "2"):
+            rows = self.creator_rows(ident)
+            self.assertEqual(len(rows), 1, "#%s: one creator row per opener run" % ident)
+            missing = [f for f in self.FIELDS + ("split_over",) if f not in rows[0]]
+            self.assertEqual(missing, [], rows[0])
+            self.assertEqual(rows[0]["split_over"], ["1", "2"])
+
+    def test_an_opening_run_is_split_over_the_tickets_it_opened(self):
+        self.request(0)
+        one, two = self.creator_rows(1), self.creator_rows(2)
+        self.assertEqual((len(one), len(two)), (1, 1))
+        one, two = one[0], two[0]
+        self.assert_share(one, 501, 150, 2500, 4)
+        self.assert_share(two, 500, 150, 2500, 3)
+        self.assertEqual((one.get("split_over"), two.get("split_over")), (["1", "2"], ["1", "2"]))
+        self.assertEqual((one.get("model"), one.get("session_id")), ("sh", "s1"))
+        self.assertIsInstance(one.get("seconds"), (int, float))
+        self.assertAlmostEqual(one["seconds"], two.get("seconds"), delta=1e-9)   # value / N on both
+        for f in ("role", "model", "effort", "command", "round", "at", "outcome", "run_dir", "session_id"):
+            self.assertEqual(one.get(f), two.get(f), "%s is copied" % f)
+
+    # ------------------------------------------------------------ acceptance 3
+
+    def test_a_failed_first_attempt_is_split_too(self):
+        self.plan(creator={"-": ["bad", "tickets"]})
+        self.request(0)
+        self.assertEqual(sorted(self.snap().tickets), ["1", "2"])
+        for ident, share in (("1", (501, 150, 2500, 4)), ("2", (500, 150, 2500, 3))):
+            rows = self.creator_rows(ident)
+            self.assertEqual(len(rows), 2, "#%s: one row per opener run" % ident)
+            self.assertEqual(len({r.get("run_dir") for r in rows}), 2, rows)
+            for r in rows:
+                self.assertEqual(r.get("split_over"), ["1", "2"])
+                self.assert_share(r, *share)
+
+    # ------------------------------------------------------------ acceptance 4
+
+    def no_ticket_request(self, action, rc, runs):
+        self.plan(creator={"-": [action]})
+        self.request(rc)
+        self.assertEqual(self.snap().tickets, {})
+        page = self.request_page()
+        rows = [r for r in page.get("cost") or [] if isinstance(r, dict)]
+        self.assertEqual(len(rows), runs, page)
+        self.assertEqual(len({r.get("run_dir") for r in rows}), runs, "one row per opener run")
+        for r in rows:
+            self.assertEqual(r.get("role"), "creator")
+            self.assertNotIn("split_over", r)
+            self.assertEqual((r.get("input_tokens"), r.get("output_tokens"), r.get("cache_read_tokens"),
+                              r.get("cache_write_tokens"), r.get("usd")), (1001, 300, 5000, 7, 0.9))
+
+    def test_a_question_request_keeps_its_row_on_the_decision_page(self):
+        self.no_ticket_request("question", 3, 1)
+
+    def test_a_rejected_request_keeps_its_row_on_the_decision_page(self):
+        self.no_ticket_request("rejected", 3, 1)
+
+    def test_a_request_invalid_twice_keeps_both_rows_on_the_decision_page(self):
+        self.no_ticket_request("bad", 1, 2)
+
+    # ------------------------------------------------------------ acceptance 5
+
+    UNCHANGED = "cat >/dev/null; printf '{\"kind\": \"unchanged\", \"note\": \"n\"}' > \"$DEVLOOP_RESULT\""
+
+    def revise_once(self, source, action, command=None):
+        """One --revise of #1 that starts the opener; #1 must then hold exactly one unsplit creator row."""
+        self.add(1, state="stuck" if source == "user" else "ready")
+        self.plan(creator={"1": [action]})
+        if command:
+            self.creator(command)
+        args = ["--revise", "1", "--from", source, "--reason", "x"]
+        if source == "user":
+            args += ["--decision", "revise"]
+        res = self.run_py("ticket_creator.py", *args)
+        rows = self.creator_rows(1)
+        self.assertEqual(len(rows), 1, res.stdout + res.stderr)
+        self.assertNotIn("split_over", rows[0])
+        self.assertEqual(rows[0].get("input_tokens"), 1001)
+        return rows[0]
+
+    def test_a_worker_revise_that_revises_leaves_one_row(self):
+        self.revise_once("worker", "revised")
+
+    def test_a_user_revise_that_revises_leaves_one_row(self):
+        self.revise_once("user", "revised")
+
+    def test_a_worker_revise_that_leaves_the_ticket_unchanged_leaves_one_row(self):
+        self.revise_once("worker", "unchanged", self.UNCHANGED)
+
+    def test_a_user_revise_that_leaves_the_ticket_unchanged_leaves_one_row(self):
+        self.revise_once("user", "unchanged", self.UNCHANGED)
+
+    def test_a_revise_that_asks_a_question_leaves_one_row(self):
+        self.revise_once("worker", "question")
+
+    def test_a_revise_that_is_rejected_leaves_one_row(self):
+        self.revise_once("worker", "rejected")
+
+    def test_a_worker_revise_without_a_hand_in_leaves_one_no_hand_in_row(self):
+        self.assertEqual(self.revise_once("worker", "nothing").get("outcome"), "no hand-in")
+
+    def test_a_user_revise_without_a_hand_in_leaves_one_no_hand_in_row(self):
+        self.assertEqual(self.revise_once("user", "nothing").get("outcome"), "no hand-in")
+
+    # ------------------------------------------------------------ acceptance 7, 8, 9
+
+    def test_a_question_runs_row_on_its_page_reaches_the_token_tab(self):
+        import board
+        self.plan(creator={"-": ["question"]})
+        self.request(3)
+        rows = [r for r in board.cost_rows(self.snap()) if r.get("role") == "creator"]
+        self.assertEqual(len(rows), 1, "cost_rows returns the page's row")
+        self.assertIn("<td>creator</td>", self.section(self.tokens_tab(), "依角色"))
+
+    def test_the_token_tab_counts_one_split_opening_run_once(self):
+        self.request(0)
+        now = osx.now()
+        self.add(9, cost=[{"role": "worker", "model": "m", "at": now, "run_dir": "same", "input_tokens": 1},
+                          {"role": "worker", "model": "m", "at": now, "run_dir": "same", "input_tokens": 1}])
+        page = self.tokens_tab()
+        self.assertIn('<tr><td>creator</td><td class="n">1</td>', page)
+        self.assertIn('<tr><td>sh</td><td class="n">1</td>', self.section(page, "依模型"))
+        self.assertIn('<tr><td>worker</td><td class="n">2</td>', page, "rows without split_over count as before")
+        self.assertIn('<tr><td class="n">3</td>', self.section(page, "近 30 天"))
+        today = time.strftime("%Y-%m-%d", time.localtime())
+        self.assertIn('<tr><td>%s</td><td class="n">3</td>' % today, self.section(page, "每天"))
+
+    def test_the_token_tab_drops_the_no_cost_rows_caveat(self):
+        self.assertNotIn("不記 cost 列", self.tokens_tab())
+
+
 class T27Acceptance(LoopCase):
     """D-089 item 2: a merged or landed ticket is frozen for every caller (#27)."""
 
