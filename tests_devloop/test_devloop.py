@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 HOME = os.path.dirname(HERE)
@@ -31,7 +32,24 @@ def git(cwd, *args):
     return subprocess.run(["git"] + list(args), cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
 
-class LoopCase(unittest.TestCase):
+class GitIsolatedCase(unittest.TestCase):
+    """Runs every git command of the test against an empty global config, no system config and a fixed identity."""
+
+    def setUp(self):
+        super().setUp()
+        tmp = tempfile.mkdtemp(prefix="git-config-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        cfg = os.path.join(tmp, "gitconfig")
+        open(cfg, "w").close()
+        patch = mock.patch.dict(os.environ, {
+            "GIT_CONFIG_GLOBAL": cfg, "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+
+class LoopCase(GitIsolatedCase):
     release = None
     loop_extra = {}
 
@@ -44,6 +62,7 @@ class LoopCase(unittest.TestCase):
             json.dump(cfg, fh)
 
     def setUp(self):
+        super().setUp()
         self.tmp = tempfile.mkdtemp(prefix="loop-test-")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.proj = os.path.join(self.tmp, "proj")
@@ -3483,8 +3502,9 @@ class T16Acceptance(LoopCase):
         self.assertEqual(self.raw(self.proj, "status", "--porcelain"), "")
 
 
-class PoolRules(unittest.TestCase):
+class PoolRules(GitIsolatedCase):
     def setUp(self):
+        super().setUp()
         self.tmp = tempfile.mkdtemp(prefix="loop-pool-")
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         seed = Pool(os.path.join(self.tmp, "seed"), remote=None).init()
@@ -3532,7 +3552,7 @@ class ShownState(unittest.TestCase):
         self.assertIn("landed", TICKET_STATES)
 
 
-class GitRules(unittest.TestCase):
+class GitRules(GitIsolatedCase):
     def test_a_merge_blocked_by_an_untracked_file_is_reported_not_raised(self):
         tmp = tempfile.mkdtemp(prefix="loop-git-")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
@@ -3597,10 +3617,11 @@ class ProjectRulesHome(unittest.TestCase):
             self.assertIn(word, sec.replace("Project memory", "project memory"))
 
 
-class AgentControlRelease(unittest.TestCase):
+class AgentControlRelease(GitIsolatedCase):
     """scripts/release.sh, agent-control's own devloop.release: tags the landed commit."""
 
     def setUp(self):
+        super().setUp()
         self.tmp = tempfile.mkdtemp(prefix="ac-release-")
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.git("init", "-q", "-b", "main")
