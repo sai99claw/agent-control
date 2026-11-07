@@ -1043,8 +1043,11 @@ class T50Acceptance(LoopCase):
         ev = self.new_events(before, t)
         i = self.answer_event(ev, "revise", "drop the second item", self.NAME, "p1")
         names = [e.get("event") for e in ev]
-        self.assertIn("revised", names)
-        self.assertLess(i, names.index("revised"), names)
+        # a user revise goes through user_reset: 'user decision: ready' (by NAME), never 'revised'
+        self.assertIn("user decision: ready", names, ev)
+        self.assertNotIn("revised", names, ev)
+        self.assertLess(i, names.index("user decision: ready"), names)
+        self.assertEqual(ev[names.index("user decision: ready")].get("by"), self.NAME, ev)
         self.assert_acked(snap.inbox["p1"], self.NAME, t0, t1)
 
     def test_item1_unusable_opener_answer_still_leaves_the_user_answer(self):
