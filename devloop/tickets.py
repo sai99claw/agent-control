@@ -110,6 +110,7 @@ def cmd_ready_group(pool, cfg, gid, why, note=None, by=None, page=None, via=None
         if not Git(cfg.root).sha("refs/heads/" + g["branch"]):
             raise osx.OSFailure("group %s: its integration branch %s no longer exists" % (gid, g["branch"]))
         g["state"], g["fix_round"], g["job"] = "pr", 0, None
+        g.pop("fix_end_sha", None)   # the user's re-verify is not the regression after a fix round
         detail = {"why": why}
         if note is not None:
             entry = {"text": note, "by": by or "user", "at": osx.now()}

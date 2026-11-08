@@ -6840,6 +6840,199 @@ class QuotaWaitUnits(LoopCase):
             self.assertIn(phrase, section)
 
 
+class DroppedFixRoundUnits(LoopCase):
+    """#74 internals at the Controller layer: when the regression after a fix round drops that
+    round (compare-and-swap back to fix_start_sha), and every case that leaves the branch alone."""
+
+    def setUp(self):
+        super().setUp()
+        for key in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(key, None)
+        clean = {k: v for k, v in os.environ.items()
+                 if k not in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT")}
+        patch = mock.patch.dict(os.environ, clean, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.start = git(self.proj, "rev-parse", "main")
+        git(self.proj, "branch", "int/g1", "main")
+        self.end = self.commit_on("int/g1", "impl_1.txt", "bad\n", "worse")
+        self.base = self.write_report("base.json", "red", self.start, ["suite.red"])
+
+    def commit_on(self, branch, name, text, subject):
+        tree = os.path.join(self.tmp, "c-" + subject)
+        git(self.proj, "worktree", "add", "-q", tree, branch)
+        with open(os.path.join(tree, name), "w") as fh:
+            fh.write(text)
+        git(tree, "add", "-A")
+        git(tree, "commit", "-q", "-m", subject)
+        sha = git(tree, "rev-parse", "HEAD")
+        git(self.proj, "worktree", "remove", "--force", tree)
+        return sha
+
+    def write_report(self, name, status, sha, failing):
+        path = os.path.join(self.tmp, name)
+        with open(path, "w") as fh:
+            json.dump({"status": status, "sha": sha, "summary": "%d failing" % len(failing),
+                       "failures": [{"id": i, "status": "fail"} for i in failing]}, fh)
+        return path
+
+    def put(self, **fields):
+        g = {"id": "g1", "branch": "int/g1", "state": "fixing", "members": [], "fix_round": 1,
+             "fix_agent_round": 1, "job": {"kind": "regression"}, "fix_report": self.base,
+             "fix_start_sha": self.start, "fix_end_sha": self.end}
+        g.update(fields)
+        for key in [k for k, v in g.items() if v is None]:
+            g.pop(key)
+        self.pool.update(lambda tx: tx.put_group(g), "test: group g1")
+
+    def ctl(self):
+        import ticket_controller
+        from core.config import Config
+        ctl = ticket_controller.Controller(Config(self.proj), self.pool)
+        self.started = []
+        ctl.start_fixer = lambda gid, path, rnd: self.started.append((gid, path, rnd))
+        ctl.start_regression = lambda g: self.started.append(("regression", g["id"]))
+        return ctl
+
+    def regression(self, status="red", sha=None, failing=("suite.red", "impl.impl_1.txt")):
+        out = self.write_report("after.json", status, sha or self.end, list(failing))
+        self.ctl().after_regression("g1", {"kind": "regression", "out": out}, 1)
+        return out
+
+    def branch(self):
+        return git(self.proj, "rev-parse", "int/g1")
+
+    def dropped_ref(self):
+        return subprocess.run(["git", "rev-parse", "--verify", "--quiet", "refs/devloop/dropped/g1-r1"],
+                              cwd=self.proj, capture_output=True, text=True).stdout.strip()
+
+    def assert_untouched(self, out):
+        self.assertEqual(self.branch(), self.end)
+        self.assertEqual(self.dropped_ref(), "")
+        self.assertEqual(self.started, [("g1", out, 2)])
+        self.assertFalse([h for h in self.snap().groups["g1"]["history"] if "ref" in h])
+
+    def test_redder_round_is_dropped_and_the_next_starts_from_the_old_report(self):
+        self.put()
+        self.regression()
+        self.assertEqual(self.branch(), self.start)
+        self.assertEqual(self.dropped_ref(), self.end)
+        self.assertEqual(self.started, [("g1", self.base, 2)])
+        rows = [h for h in self.snap().groups["g1"]["history"] if h.get("ref")]
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual((row["ref"], row["dropped"], row["failing_before"], row["failing_after"]),
+                         ("refs/devloop/dropped/g1-r1", [self.end], 1, 2))
+        self.assertIn("round 1", row["event"])
+        self.assertIn("2 failing", row["event"])
+        self.assertIn("1 before", row["event"])
+
+    def test_dropped_lists_every_commit_of_the_round_oldest_first(self):
+        second = self.commit_on("int/g1", "impl_2.txt", "bad\n", "worse2")
+        self.put(fix_end_sha=second)
+        self.regression(sha=second)
+        row = [h for h in self.snap().groups["g1"]["history"] if h.get("ref")][0]
+        self.assertEqual(row["dropped"], [self.end, second])
+        self.assertEqual(self.branch(), self.start)
+
+    def test_at_max_rounds_the_group_is_stuck_and_the_page_names_the_ref(self):
+        self.config(max_rounds=1)
+        self.put()
+        self.regression()
+        g = self.snap().groups["g1"]
+        self.assertEqual(g["state"], "stuck")
+        self.assertEqual(self.started, [])
+        self.assertEqual(self.branch(), self.start)
+        pages = [p for p in self.snap().inbox.values() if p.get("kind") == "decision" and p.get("ref") == "g1"]
+        self.assertEqual(len(pages), 1)
+        self.assertIn("refs/devloop/dropped/g1-r1", pages[0]["text"])
+        self.assertIn("1 -> 2 failing", pages[0]["text"])
+
+    def test_same_or_fewer_failing_cases_reset_nothing(self):
+        for failing in (("impl.impl_1.txt",), ()):
+            with self.subTest(failing=failing):
+                self.put()
+                out = self.regression(failing=failing)
+                self.assert_untouched(out)
+
+    def test_a_report_that_is_not_red_resets_nothing(self):
+        self.put()
+        g = self.snap().groups["g1"]
+        ctl = self.ctl()
+        for status in ("green", "env", "unmeasured", "main_moved"):
+            report = {"status": status, "sha": self.end, "failures": [{"id": "a"}, {"id": "b"}]}
+            self.assertFalse(ctl.drop_redder_round(g, report), status)
+        self.assertEqual(self.branch(), self.end)
+
+    def test_a_round_from_a_main_moved_report_resets_nothing(self):
+        moved = os.path.join(self.tmp, "main-moved.json")
+        with open(moved, "w") as fh:
+            json.dump({"status": "main_moved", "summary": "main moved; merge it in"}, fh)
+        self.put(fix_report=moved)
+        self.assert_untouched(self.regression())
+
+    def test_a_regression_of_another_sha_resets_nothing(self):
+        merged = self.commit_on("int/g1", "other.txt", "x\n", "merge main")
+        self.put()
+        out = self.regression(sha=merged)
+        self.assertEqual(self.branch(), merged)
+        self.assertEqual(self.dropped_ref(), "")
+        self.assertEqual(self.started, [("g1", out, 2)])
+
+    def test_missing_fix_start_sha_resets_nothing(self):
+        self.put(fix_start_sha=None)
+        self.assert_untouched(self.regression())
+
+    def test_a_lost_swap_resets_nothing_and_keeps_no_ref(self):
+        self.put()
+        later = self.commit_on("int/g1", "later.txt", "x\n", "later")
+        out = self.regression()
+        self.assertEqual(self.branch(), later)
+        self.assertEqual(self.dropped_ref(), "")
+        self.assertEqual(self.started, [("g1", out, 2)])
+
+    def test_ready_group_drops_fix_end_sha_so_its_regression_resets_nothing(self):
+        import tickets
+        from core.config import Config
+        self.put(state="stuck", job=None, members=["1"])
+        self.add(1, state="merged")
+        with mock.patch("sys.stdout"):
+            tickets.cmd_ready_group(self.pool, Config(self.proj), "g1", "again")
+        g = self.snap().groups["g1"]
+        self.assertNotIn("fix_end_sha", g)
+        self.assertEqual(g["fix_start_sha"], self.start)
+        self.assertFalse(self.ctl().drop_redder_round(
+            g, {"status": "red", "sha": self.end, "failures": [{"id": "a"}, {"id": "b"}]}))
+
+    def test_after_fixer_records_the_branch_head_only_when_the_agent_ran(self):
+        self.put(job={"kind": "fixer"}, fix_end_sha=None)
+        self.ctl().after_fixer("g1", 0)
+        self.assertEqual(self.snap().groups["g1"]["fix_end_sha"], self.end)
+        self.put(job={"kind": "fixer"}, fix_end_sha=None, state="fixing")
+        self.ctl().after_fixer("g1", 3)
+        self.assertEqual(self.snap().groups["g1"]["fix_end_sha"], self.end)
+        self.put(job={"kind": "fixer"}, fix_end_sha=None, fix_agent_round=0)
+        ctl = self.ctl()
+        ctl.forever = True
+        with mock.patch.object(ctl, "pause"):
+            ctl.after_fixer("g1", 1)
+        self.assertNotIn("fix_end_sha", self.snap().groups["g1"])
+
+    def test_mark_agent_round_sets_the_start_and_clears_the_end(self):
+        import auto_fixer
+        self.put()
+        auto_fixer.mark_agent_round(self.pool, "g1", 2, "abc")
+        g = self.snap().groups["g1"]
+        self.assertEqual((g["fix_agent_round"], g["fix_start_sha"]), (2, "abc"))
+        self.assertNotIn("fix_end_sha", g)
+
+    def test_nothing_under_refs_devloop_or_the_branch_is_pushed(self):
+        import inspect
+        import ticket_controller
+        src = inspect.getsource(ticket_controller.Controller.drop_redder_round)
+        self.assertNotIn("push", src)
+
+
 class QuotaResetCodexUnits(unittest.TestCase):
     """Helpers of agents.quota_reset for codex's "try again" forms (implementer's tests of #60)."""
 

@@ -385,6 +385,8 @@ class Controller:
                 raise Stop(3, "regression %s" % status)
             return
         rnd = int(g.get("fix_round") or 0)
+        if self.drop_redder_round(g, report):
+            return
         if rnd >= self.cfg.max_rounds:
             self.set_group(gid, "stuck", "red after %d fix rounds" % rnd)
             self.pool.report("decision", gid, "group %s is still red after %d fix rounds:\n%s" % (
@@ -392,16 +394,61 @@ class Controller:
             return
         self.start_fixer(gid, job["out"], rnd + 1)
 
+    def drop_redder_round(self, g, report):
+        """The red regression `report` measured the branch right after a fix round (its sha is the
+        round's fix_end_sha) and fails more cases than the red report the round started from: keep
+        the round's head under refs/devloop/dropped/<gid>-r<N>, compare-and-swap the branch back to
+        fix_start_sha, and start the next round from the old report (no regression: the branch is
+        back at the head that report measured), or at devloop.max_rounds a stuck group and a
+        decision page. Returns True when the round was dropped; a lost swap resets nothing."""
+        gid, rnd = g["id"], int(g.get("fix_round") or 0)
+        start, end, base_path = g.get("fix_start_sha"), g.get("fix_end_sha"), g.get("fix_report")
+        if not (start and end and base_path) or report.get("status") != "red" or report.get("sha") != end:
+            return False
+        try:
+            base = osx.read_json(base_path, {}) or {}
+        except osx.OSFailure:
+            return False
+        if base.get("status") != "red":
+            return False
+        before, after = len(base.get("failures") or []), len(report.get("failures") or [])
+        if after <= before:
+            return False
+        head = report["sha"]
+        ref = "refs/devloop/dropped/%s-r%d" % (gid, rnd)
+        if not self.repo.run("update-ref", ref, head, check=False).ok:
+            return False
+        dropped = self.repo.out("rev-list", "--reverse", "%s..%s" % (start, head)).split()
+        if not self.repo.move_ref(g["branch"], start, head):
+            self.repo.run("update-ref", "-d", ref, head, check=False)
+            return False                        # the branch moved: the next round starts from this report
+
+        def change(tx):
+            group = tx.data.groups[gid]
+            event(group, "fix round %d dropped: %d failing after it, %d before" % (rnd, after, before),
+                  dropped=dropped, ref=ref, failing_before=before, failing_after=after)
+            tx.put_group(group)
+        self.pool.update(change, "group %s: fix round %d dropped" % (gid, rnd))
+        if rnd < self.cfg.max_rounds:
+            self.start_fixer(gid, base_path, rnd + 1)
+            return True
+        self.set_group(gid, "stuck", "red after %d fix rounds" % rnd)
+        self.pool.report("decision", gid, "group %s is still red after %d fix rounds; the last round made it "
+                         "redder (%d -> %d failing) and was dropped (%s):\n%s" % (
+                             gid, rnd, before, after, ref, base.get("summary")))
+        return True
+
     def after_fixer(self, gid, rc):
         g = self.pool.snapshot().groups.get(gid) or {}
         rnd = int(g.get("fix_round") or 0)
         if g.get("fix_agent_round") != g.get("fix_round"):
             self.fixer_did_not_run(gid, rc, rnd)
             return
+        end = {"fix_end_sha": self.repo.sha(g["branch"])} if g.get("branch") else {}
         if rc == 3:
-            self.set_group(gid, "stuck", "fixer needs a decision", job=None)
+            self.set_group(gid, "stuck", "fixer needs a decision", job=None, **end)
             return
-        self.set_group(gid, "pr", "fixer done (rc %s): verify again" % rc, job=None)
+        self.set_group(gid, "pr", "fixer done (rc %s): verify again" % rc, job=None, **end)
 
     def fixer_did_not_run(self, gid, rc, rnd):
         """auto_fixer ended (any rc, None for an adopted job) without starting the fixer agent:

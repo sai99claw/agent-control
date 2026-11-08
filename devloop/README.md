@@ -71,6 +71,19 @@ nothing until the group is due for its regression (pr or fixing, no job, not pau
 `--forever`): then auto_fixer runs with a main-moved report instead of the regression, counted as a
 fix round (at `devloop.max_rounds`: stuck "main kept moving" and a decision page).
 
+A fix round that leaves the branch redder is dropped (#74). auto_fixer records `fix_start_sha` (the
+branch head the fixer agent starts from, after its own clean merge of main) in the same pool write
+as `fix_agent_round`; the controller records `fix_end_sha` (the branch head) when it reads the
+fixer's outcome. When the next regression is red, tested exactly `fix_end_sha` and fails more cases
+than the red report the round started from, the round's head is kept under
+`refs/devloop/dropped/<gid>-r<round>`, the branch is compare-and-swapped back to `fix_start_sha`
+(a lost swap resets nothing) and one group event names the round, both failure counts, the ref and
+the dropped commits. The round still counts: the next round starts right away from the old report,
+without another regression; at `devloop.max_rounds` the group is stuck and the decision page names
+the ref. A main-moved report, the same or fewer failing cases, or a group sent back by
+`tickets.py ready gN` (which drops `fix_end_sha`) never resets. Neither `int/<gid>` nor
+`refs/devloop/*` is pushed.
+
 `devloop.worktree_setup` (D-091 item 10; default null = nothing runs; otherwise a non-empty shell
 command): run with `sh -c` right after devloop creates a worktree for a ticket (`t<id>`), its cases
 (`t<id>-cases`), a red check (`red-t<id>`), a regression (`regression-<branch>`), a fixer

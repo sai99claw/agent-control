@@ -25,9 +25,11 @@ regression afterwards). Two kinds of red:
     Every round starts with the fix worktree put back on the integration branch at its current
     head (unfinished merges aborted, tracked edits dropped).
 
-Right before the fixer agent starts, the group's `fix_agent_round` is set to the round (one pool
-write); an exit without that mark means no agent ran, and the controller neither counts the round
-nor verifies again: it pauses the group and the rerun starts the fixer again.
+Right before the fixer agent starts, the group's `fix_agent_round` is set to the round and its
+`fix_start_sha` to the branch head the agent starts from (one pool write); an exit without that
+mark means no agent ran, and the controller neither counts the round nor verifies again: it pauses
+the group and the rerun starts the fixer again. A round after which the regression fails more cases
+than before is dropped by the controller back to fix_start_sha.
 
 Exit: 0 something was committed (verify again) · 1 nothing usable came back · 3 the fixer handed
 in `decision` / `blocked`: only the user can decide (already reported as a decision page) · 2 refused ·
@@ -81,15 +83,23 @@ def round_start(cfg, pool, gid, repo, tree, branch):
     return tree
 
 
-def mark_agent_round(pool, gid, rnd):
+def mark_agent_round(pool, gid, rnd, start_sha=None):
     """One pool write right before the fixer agent starts: the group's fix_agent_round is this
-    round. The controller counts a fix round (and verifies again) only when this mark equals the
-    group's fix_round; a failed write is a failure before the agent (OSFailure, exit 2)."""
+    round and its fix_start_sha the integration branch's head the agent starts from (after
+    auto_fixer's own clean merge of main, if any). The controller counts a fix round (and verifies
+    again) only when this mark equals the group's fix_round, and drops a round that left the
+    branch redder back to fix_start_sha; a failed write is a failure before the agent
+    (OSFailure, exit 2)."""
     def change(tx):
         group = tx.data.groups.get(gid)
         if group is None:
             raise osx.OSFailure("no group %s" % gid)
         group["fix_agent_round"] = rnd
+        if start_sha:
+            group["fix_start_sha"] = start_sha
+        else:
+            group.pop("fix_start_sha", None)
+        group.pop("fix_end_sha", None)       # set again by the controller when this round ends
         event(group, "fixer agent started (round %d)" % rnd)
         tx.put_group(group)
     pool.update(change, "group %s: fixer agent started (round %d)" % (gid, rnd))
@@ -139,7 +149,7 @@ def fix(cfg, pool, gid, report, live=None):
         "project_memory": memory.project_path(cfg),
     }
     start, known = g.sha("HEAD"), g.all_ref_shas()
-    mark_agent_round(pool, gid, rnd)
+    mark_agent_round(pool, gid, rnd, start)
     pending = agents.start(cfg, "fixer", agents.render("fixer.md", values), tree, run_dir,
                            cfg.agent_timeout_seconds, extra_env={"AC_CODE_ROOT": tree, "DEVLOOP_GROUP": gid},
                            on_quota=quota_hook(pool, gid))
