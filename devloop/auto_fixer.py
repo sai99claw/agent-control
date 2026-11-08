@@ -18,8 +18,12 @@ regression afterwards). Two kinds of red:
     appended, with the fix round, to the group's `tests_changed`. When two tickets of
     the group contradict each other the fixer hands in kind `decision` (where they contradict,
     which new ticket it proposes); that becomes a decision page and the group stops (exit 3).
-    Kind `blocked` is handled the same way. Every round starts with the fix worktree put back on
-    the integration branch at its current head (unfinished merges aborted, tracked edits dropped).
+    Kind `blocked` is handled the same way.
+    A fixer that ends off the branch (detached or on another branch) has its commits brought onto
+    it by fast-forward or cherry-pick; when that fails or they include a merge commit, its HEAD is
+    kept under refs/devloop/dropped/<gid>-r<round> and the round ends as a decision page (exit 3).
+    Every round starts with the fix worktree put back on the integration branch at its current
+    head (unfinished merges aborted, tracked edits dropped).
 
 Exit: 0 something was committed (verify again) · 1 nothing usable came back · 3 the fixer handed
 in `decision` / `blocked`: only the user can decide (already reported as a decision page) · 2 refused ·
@@ -116,6 +120,7 @@ def fix(cfg, pool, gid, report, live=None):
         "memory": memory.for_prompt(cfg, "fixer", agents._model(cfg.agent("fixer"))),
         "project_memory": memory.project_path(cfg),
     }
+    start, known = g.sha("HEAD"), g.all_ref_shas()
     pending = agents.start(cfg, "fixer", agents.render("fixer.md", values), tree, run_dir,
                            cfg.agent_timeout_seconds, extra_env={"AC_CODE_ROOT": tree, "DEVLOOP_GROUP": gid},
                            on_quota=quota_hook(pool, gid))
@@ -124,6 +129,8 @@ def fix(cfg, pool, gid, report, live=None):
     live.clear()
     _record_cost(pool, gid, hand.cost)
     memory.collect(pool, hand, "group %s fix r%d" % (gid, rnd))
+    if g.current_branch() != branch and bring_back(pool, repo, g, gid, branch, rnd, start, known):
+        return 3
     if hand.kind == "rejected":
         pool.report("decision", gid, "group %s: input from the web was NOT acted on - it looked like "
                     "a prompt injection: %s" % (gid, (hand.result or {}).get("text")))
@@ -137,7 +144,65 @@ def fix(cfg, pool, gid, report, live=None):
         _record_tests(pool, gid, rnd, (hand.result or {}).get("tests_changed"))
     if g.dirty():
         return 1
-    return 0 if g.sha("HEAD") != before else 1
+    return 0 if g.sha(branch) != before else 1
+
+
+def bring_back(pool, repo, g, gid, branch, rnd, start, known):
+    """The fixer's worktree is off `branch` (detached or on another branch): put the commits it
+    made onto `branch` - fast-forward when `branch` still points at `start` and HEAD descends from
+    it, else cherry-pick the commits no ref known before the run (`known`) reaches - and check
+    `branch` out again. Returns True when they could not be brought back: HEAD is kept under
+    refs/devloop/dropped/<gid>-r<rnd>, a decision page names it, the worktree is back on `branch`."""
+    head = g.sha("HEAD")
+    if head is not None and head != start and g.is_ancestor(start, head) and repo.sha(branch) == start:
+        count = len(g.commits_not_in(head, [start]))
+        if repo.move_ref(branch, head, start):
+            _switch(g, branch)
+            _brought_back(pool, gid, rnd, "fast-forward", count)
+            return False
+    new = g.commits_not_in(head, known) if head is not None else []
+    if not new:
+        _switch(g, branch)
+        return False
+    merges = [c for c in new if g.is_merge_commit(c)]
+    g.run("checkout", "-q", "--force", branch)
+    if merges:
+        why = "its new commits include merge commit %s" % merges[0][:12]
+    else:
+        res = g.run("cherry-pick", *new, check=False)
+        if res.ok:
+            _brought_back(pool, gid, rnd, "cherry-pick", len(new))
+            return False
+        g.run("cherry-pick", "--abort", check=False)
+        g.run("checkout", "-q", "--force", branch)
+        lines = [l.strip() for l in (res.out + "\n" + res.err).splitlines() if l.strip()]
+        why = "cherry-picking its %d new commit(s) onto %s failed: %s" % (
+            len(new), branch, "; ".join([l for l in lines if "CONFLICT" in l or "error:" in l][:4])
+            or (lines[-1] if lines else "rc %s" % res.rc))
+    ref = "refs/devloop/dropped/%s-r%d" % (gid, rnd)
+    g.run("update-ref", ref, head)
+    pool.report("decision", gid, "group %s: the fixer left %s and its commits could not be brought back "
+                "onto it (%s); its HEAD %s is kept under %s" % (gid, branch, why, head[:12], ref))
+    return True
+
+
+def _switch(g, branch):
+    """Check `branch` out again, keeping uncommitted changes when git can (the dirty check after
+    sees them), dropping them when it cannot."""
+    if not g.run("checkout", "-q", branch, check=False).ok:
+        g.run("checkout", "-q", "--force", branch)
+
+
+def _brought_back(pool, gid, rnd, how, count):
+    def change(tx):
+        group = tx.data.groups.get(gid)
+        if group is not None:
+            event(group, "fixer commits brought back onto the branch", how=how, commits=count, round=rnd)
+            tx.put_group(group)
+    try:
+        pool.update(change, "group %s: fixer's %d commit(s) brought back by %s" % (gid, count, how))
+    except osx.OSFailure as exc:
+        print("auto_fixer: could not record the brought-back commits: %s" % exc, file=sys.stderr)
 
 
 def case_mark(ident):

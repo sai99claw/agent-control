@@ -105,6 +105,18 @@ class Git:
         """Compare-and-swap a branch: succeeds only if it still points at `old`."""
         return self.run("update-ref", "refs/heads/" + branch, new, old, check=False).ok
 
+    def all_ref_shas(self):
+        """The sha of every ref (branches, tags, remotes, devloop refs), deduplicated."""
+        return sorted(set(self.out("for-each-ref", "--format=%(objectname)").split()))
+
+    def commits_not_in(self, head, shas):
+        """Commits reachable from `head` but from none of `shas`, oldest first."""
+        return self.out("rev-list", "--reverse", head, "--not", *shas).split()
+
+    def is_merge_commit(self, sha):
+        """True when commit `sha` has more than one parent."""
+        return len(self.out("rev-list", "--parents", "-n", "1", sha).split()) > 2
+
     def commit_files(self, parent, files, message, index_file, identity=("devloop", "devloop@localhost")):
         """A commit on top of `parent` whose tree is parent's tree with `files` ({repo path: text})
         replaced, built in the temporary index `index_file` without touching any checkout.

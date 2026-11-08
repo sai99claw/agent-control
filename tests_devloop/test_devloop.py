@@ -1527,6 +1527,111 @@ class FixerBlockedIsDecision(LoopCase):
         self.assertNotIn("cases_changed", g)
 
 
+class T70Acceptance(LoopCase):
+    """#70: auto_fixer brings the fixer's commits onto int/<gid> when the agent left the branch."""
+
+    REPORT = {"status": "red", "summary": "1 failing", "failures": [{"id": "suite.red"}]}
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        self.fix_wt = os.path.join(self.tmp, "wt", "fix-g1")
+
+    def make_stuck(self):
+        """The opener's recipe: g1 stuck with fix_round 1 and fix-g1 checked out on int/g1."""
+        self.config(max_rounds=1)
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["nothing"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        g = self.snap().groups["g1"]
+        self.assertEqual(g["state"], "stuck", g)
+        self.assertEqual(g["fix_round"], 1, g)
+        self.assert_on_branch_clean()
+        before = git(self.proj, "rev-parse", "refs/heads/int/g1")
+        self.assertEqual(git(self.proj, "ls-tree", "--name-only", before, "red.txt"), "red.txt")
+        return before
+
+    def run_fixer(self, action):
+        self.plan(worker={"1": ["red"]}, fixer={"g1": [action]})
+        report = os.path.join(self.tmp, "report.json")
+        with open(report, "w") as fh:
+            json.dump(self.REPORT, fh)
+        return self.run_py("auto_fixer.py", "--group", "g1", "--report", report)
+
+    def assert_on_branch_clean(self):
+        head = subprocess.run(["git", "symbolic-ref", "-q", "HEAD"], cwd=self.fix_wt,
+                              capture_output=True, text=True)
+        self.assertEqual(head.stdout.strip(), "refs/heads/int/g1", "fix-g1 is not on int/g1")
+        self.assertEqual(git(self.fix_wt, "status", "--porcelain", "--untracked-files=no"), "")
+
+    def head(self):
+        return git(self.proj, "rev-parse", "refs/heads/int/g1")
+
+    def check_fix_landed(self, action):
+        before = self.make_stuck()
+        res = self.run_fixer(action)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        head = self.head()
+        self.assertNotEqual(head, before, "int/g1 did not move")
+        self.assertEqual(git(self.proj, "log", "-1", "--format=%s", head), "fix")
+        self.assertEqual(git(self.proj, "rev-parse", head + "^1"), before)
+        self.assertEqual(git(self.proj, "ls-tree", "--name-only", head, "red.txt"), "")
+        self.assert_on_branch_clean()
+
+    def test_item1_detach_fix(self):
+        self.check_fix_landed("detach_fix")
+
+    def test_item2_branch_fix(self):
+        self.check_fix_landed("branch_fix")
+
+    def test_item3_detach_main_note(self):
+        before = self.make_stuck()
+        res = self.run_fixer("detach_main_note")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(git(self.proj, "ls-tree", "--name-only", "refs/heads/int/g1", "fixer_note.txt"),
+                         "fixer_note.txt")
+        new = git(self.proj, "rev-list", "%s..refs/heads/int/g1" % before).split()
+        self.assertEqual(len(new), 1, new)
+        self.assertEqual(git(self.proj, "log", "-1", "--format=%s", new[0]), "note")
+        anc = subprocess.run(["git", "merge-base", "--is-ancestor", before, "refs/heads/int/g1"], cwd=self.proj)
+        self.assertEqual(anc.returncode, 0, "int/g1's head from before is not an ancestor of int/g1")
+
+    def test_item4_detach_main_conflict(self):
+        before = self.make_stuck()
+        self.assertNotEqual(git(self.proj, "show", "%s:impl_1.txt" % before), "fixed")
+        n = self.snap().groups["g1"]["fix_round"]
+        pages_before = set(self.snap().inbox)
+        res = self.run_fixer("detach_main_conflict")
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        self.assertEqual(self.head(), before, "int/g1 changed")
+        ref = "refs/devloop/dropped/g1-r%d" % n
+        got = subprocess.run(["git", "rev-parse", "-q", "--verify", ref], cwd=self.proj,
+                             capture_output=True, text=True)
+        self.assertEqual(got.returncode, 0, "no ref %s" % ref)
+        sha = got.stdout.strip()
+        self.assertEqual(git(self.proj, "log", "-1", "--format=%s", sha), "conflict")
+        self.assertEqual(git(self.proj, "show", "%s:impl_1.txt" % sha), "fixed")
+        inbox = self.snap().inbox
+        new = [inbox[k] for k in inbox if k not in pages_before
+               and inbox[k]["kind"] == "decision" and inbox[k]["ref"] == "g1"]
+        self.assertEqual(len(new), 1, new)
+        self.assertIn(ref, new[0]["text"])
+        self.assert_on_branch_clean()
+        cp = subprocess.run(["git", "rev-parse", "-q", "--verify", "CHERRY_PICK_HEAD"], cwd=self.fix_wt,
+                            capture_output=True, text=True)
+        self.assertNotEqual(cp.returncode, 0, "a cherry-pick is in progress in fix-g1")
+
+    def test_item5_end_to_end_detach_fix_lands(self):
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["detach_fix"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["fix_round"], 1)
+
+
 class T34Acceptance(LoopCase):
     """#34: tickets.py ready g<N> --note stores the user's ruling on the group for later fixers."""
 
@@ -1624,6 +1729,184 @@ class T34Acceptance(LoopCase):
         self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
         self.assertTrue(any("--note" in ln and "g<N>" in ln for ln in res.stderr.splitlines()), res.stderr)
         self.assertEqual(self.snap().ticket("1"), before)
+
+
+class FixerOffBranchUnit(unittest.TestCase):
+    """gitx helpers auto_fixer uses to find the commits a fixer made off its branch (#70)."""
+
+    def setUp(self):
+        self.repo = tempfile.mkdtemp(prefix="gitx-off-")
+        self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
+        git(self.repo, "init", "-q", "-b", "main")
+        git(self.repo, "config", "user.name", "t")
+        git(self.repo, "config", "user.email", "t@t")
+        self.c0 = self.commit("a.txt", "a", "c0")
+
+    def commit(self, name, text, msg):
+        with open(os.path.join(self.repo, name), "w") as fh:
+            fh.write(text)
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", msg)
+        return git(self.repo, "rev-parse", "HEAD")
+
+    def test_commits_not_in_lists_oldest_first_and_skips_known(self):
+        from core.gitx import Git
+        c1 = self.commit("b.txt", "b", "c1")
+        c2 = self.commit("c.txt", "c", "c2")
+        g = Git(self.repo)
+        self.assertEqual(g.commits_not_in(c2, [self.c0]), [c1, c2])
+        self.assertEqual(g.commits_not_in(c2, [self.c0, c1]), [c2])
+        self.assertEqual(g.commits_not_in(c2, [c2]), [])
+
+    def test_is_merge_commit(self):
+        from core.gitx import Git
+        git(self.repo, "checkout", "-q", "-b", "side")
+        s = self.commit("s.txt", "s", "side")
+        git(self.repo, "checkout", "-q", "main")
+        m1 = self.commit("m.txt", "m", "main")
+        git(self.repo, "merge", "-q", "--no-edit", "--no-ff", "side")
+        merge = git(self.repo, "rev-parse", "HEAD")
+        g = Git(self.repo)
+        self.assertTrue(g.is_merge_commit(merge))
+        self.assertFalse(g.is_merge_commit(s))
+        self.assertFalse(g.is_merge_commit(m1))
+        self.assertFalse(g.is_merge_commit(self.c0))
+
+    def test_all_ref_shas_covers_branches_tags_and_other_refs(self):
+        from core.gitx import Git
+        c1 = self.commit("b.txt", "b", "c1")
+        git(self.repo, "branch", "old", self.c0)
+        git(self.repo, "update-ref", "refs/devloop/x", self.c0)
+        self.assertEqual(Git(self.repo).all_ref_shas(), sorted({self.c0, c1}))
+
+
+class ReportNameUnit(unittest.TestCase):
+    def test_two_pages_of_one_kind_and_ref_in_one_second_both_stay(self):
+        path = tempfile.mkdtemp(prefix="pool-report-")
+        self.addCleanup(shutil.rmtree, path, ignore_errors=True)
+        pool = Pool(os.path.join(path, "pool"), remote=None).init()
+        with mock.patch("core.osx.now", return_value="2026-01-01T00:00:00Z"):
+            first = pool.report("decision", "g1", "one")
+            second = pool.report("decision", "g1", "two")
+        self.assertNotEqual(first, second)
+        inbox = pool.snapshot().inbox
+        self.assertEqual(sorted(r["text"] for r in inbox.values()), ["one", "two"])
+        self.assertEqual(inbox[second]["text"], "two")
+
+
+class FixerOffBranchLoop(LoopCase):
+    """#70 items 6-8: a fixer that ends off int/g1 - merge commits among its new commits, staying
+    on the branch, and the group event for brought-back commits. The fixer is a test-local script
+    (agents.fixer), the other roles stay on the fake agent."""
+
+    REPORT = {"status": "red", "summary": "1 failing", "failures": [{"id": "suite.red"}]}
+
+    def setUp(self):
+        super().setUp()
+        for key in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_ROLE", "DEVLOOP_RESULT"):
+            self.env.pop(key, None)
+        self.config(max_rounds=1)
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["nothing"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.tree = os.path.join(self.tmp, "wt", "fix-g1")
+        self.assertEqual(git(self.tree, "symbolic-ref", "--short", "HEAD"), "int/g1")
+        self.round = self.snap().groups["g1"].get("fix_round")
+        self.int_before = git(self.proj, "rev-parse", "int/g1")
+
+    def fixer(self, body):
+        """Make agents.fixer a shell script running `body` in the fix worktree, then handing in done."""
+        path = os.path.join(self.tmp, "fixer.sh")
+        with open(path, "w") as fh:
+            fh.write("#!/bin/sh\ncat >/dev/null\nset -e\n%s\n"
+                     "printf '{\"kind\": \"done\", \"summary\": \"s\"}' > \"$DEVLOOP_RESULT\"\n" % body)
+        os.chmod(path, 0o755)
+        agents = {r: AGENT for r in ROLES}
+        agents["fixer"] = ["sh", path]
+        self.config(agents=agents)
+
+    def run_fixer(self):
+        report = os.path.join(self.tmp, "report.json")
+        with open(report, "w") as fh:
+            json.dump(self.REPORT, fh)
+        return self.run_py("auto_fixer.py", "--group", "g1", "--report", report)
+
+    def events(self, what="fixer commits brought back onto the branch"):
+        return [e for e in self.snap().groups["g1"].get("history") or [] if e.get("event") == what]
+
+    def decisions(self):
+        return [r for r in self.snap().inbox.values() if r["kind"] == "decision" and r["ref"] == "g1"]
+
+    def assert_on_branch_clean(self):
+        self.assertEqual(git(self.tree, "symbolic-ref", "--short", "HEAD"), "int/g1")
+        self.assertEqual(git(self.tree, "status", "--porcelain", "--untracked-files=no"), "")
+        self.assertFalse(os.path.exists(os.path.join(git(self.tree, "rev-parse", "--git-dir"),
+                                                     "CHERRY_PICK_HEAD")))
+
+    def test_item6_merge_commit_off_the_branch_is_kept_under_a_ref(self):
+        self.fixer("git checkout -q -b s1 main\necho s > s.txt\ngit add s.txt\ngit commit -q -m s\n"
+                   "git checkout -q --detach main\necho m > m.txt\ngit add m.txt\ngit commit -q -m m\n"
+                   "git merge -q --no-ff --no-edit s1")
+        pages = len(self.decisions())
+        res = self.run_fixer()
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        self.assertEqual(git(self.proj, "rev-parse", "int/g1"), self.int_before)
+        ref = "refs/devloop/dropped/g1-r%d" % self.round
+        head = git(self.proj, "rev-parse", ref)
+        self.assertEqual(len(git(self.proj, "rev-list", "--parents", "-n", "1", head).split()), 3)
+        after = self.decisions()
+        self.assertEqual(len(after) - pages, 1, after)
+        self.assertTrue(any(ref in r["text"] for r in after))
+        self.assert_on_branch_clean()
+        self.assertEqual(self.events(), [])
+
+    def test_item7_fixer_on_the_branch_is_handled_as_before(self):
+        self.fixer("rm -f red.txt\ngit commit -q -am fix")
+        res = self.run_fixer()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(git(self.proj, "rev-parse", "int/g1^"), self.int_before)
+        self.assertEqual(self.events(), [])
+        self.assertFalse(git(self.proj, "for-each-ref", "refs/devloop/dropped/"))
+
+    def test_item7_fixer_on_the_branch_with_no_commit_exits_1(self):
+        self.fixer("true")
+        res = self.run_fixer()
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertEqual(git(self.proj, "rev-parse", "int/g1"), self.int_before)
+        self.assertEqual(self.events(), [])
+
+    def test_item8_fast_forward_event_counts_the_commits(self):
+        self.fixer("git checkout -q --detach\nrm -f red.txt\ngit commit -q -am fix\n"
+                   "echo x > extra.txt\ngit add extra.txt\ngit commit -q -m extra")
+        res = self.run_fixer()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(git(self.proj, "rev-parse", "int/g1~2"), self.int_before)
+        ev = self.events()
+        self.assertEqual([(e["how"], e["commits"]) for e in ev], [("fast-forward", 2)])
+        self.assert_on_branch_clean()
+
+    def test_item8_cherry_pick_event_counts_the_commits(self):
+        self.fixer("git checkout -q --detach main\necho n > fixer_note.txt\ngit add fixer_note.txt\n"
+                   "git commit -q -m note")
+        res = self.run_fixer()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(git(self.proj, "rev-list", "%s..int/g1" % self.int_before),
+                         git(self.proj, "rev-parse", "int/g1"))
+        ev = self.events()
+        self.assertEqual([(e["how"], e["commits"]) for e in ev], [("cherry-pick", 1)])
+        self.assert_on_branch_clean()
+
+    def test_conflicting_cherry_pick_aborts_and_keeps_the_ref(self):
+        self.fixer("git checkout -q --detach main\necho fixed > impl_1.txt\ngit add impl_1.txt\n"
+                   "git commit -q -m conflict")
+        res = self.run_fixer()
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        self.assertEqual(git(self.proj, "rev-parse", "int/g1"), self.int_before)
+        head = git(self.proj, "rev-parse", "refs/devloop/dropped/g1-r%d" % self.round)
+        self.assertEqual(git(self.proj, "log", "-1", "--format=%s", head), "conflict")
+        self.assert_on_branch_clean()
+        self.assertEqual(self.events(), [])
 
 
 class T8Acceptance(LoopCase):

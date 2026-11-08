@@ -129,6 +129,20 @@ elif role == "reviewer":
     hand({"kind": "review", "verdict": action, "feedback": "" if action == "pass" else "missing part"})
 elif role == "fixer":
     git("merge", "--no-edit", "main", check=False)
+    if action == "detach_fix":   # #70: leave the branch on a detached HEAD, then the default fix
+        git("checkout", "-q", "--detach")
+    if action == "branch_fix":   # #70: leave the branch for another local branch, then the default fix
+        git("checkout", "-q", "-b", "fixer-side")
+    if action in ("detach_main_note", "detach_main_conflict"):   # #70: commit on a detached main
+        git("checkout", "-q", "--detach", "main")
+        if action == "detach_main_note":
+            open("fixer_note.txt", "w").write("note")
+            commit("note")
+        else:   # impl_1.txt exists on int/g1 with other content: applying this conflicts
+            open("impl_1.txt", "w").write("fixed")
+            commit("conflict")
+        hand({"kind": "done", "summary": action})
+        sys.exit(0)
     if action == "decision":   # #28: a contradiction handed to the user, no commit
         hand({"kind": "decision", "text": "#1 and #2 contradict on impl output; open a new ticket that picks one"})
         sys.exit(0)

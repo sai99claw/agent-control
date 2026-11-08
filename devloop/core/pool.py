@@ -167,14 +167,21 @@ class Pool:
     def report(self, kind, ref, text, **extra):
         """Leave a page for the main session (kinds: created, landed, decision, env, cancelled,
         idle - a run without --forever ended with work left)."""
-        name = "%s-%s-%s" % (osx.now().replace(":", "").replace("-", ""), kind, ref)
+        base = "%s-%s-%s" % (osx.now().replace(":", "").replace("-", ""), kind, ref)
+        names = [base]
 
         def change(tx):
+            # two pages of one kind and ref in the same second must not overwrite each other
+            name, n = base, 1
+            while name in tx.data.inbox:
+                n += 1
+                name = "%s-%d" % (base, n)
+            names[0] = name
             row = {"kind": kind, "ref": ref, "text": text, "at": osx.now(), "acked": False}
             row.update(extra)
             tx.write("inbox/%s.json" % name, row)
         self.update(change, "inbox: %s %s" % (kind, ref))
-        return name
+        return names[0]
 
 
 class Tx:
