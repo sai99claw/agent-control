@@ -23,7 +23,7 @@ LOOP = os.path.join(HOME, "devloop")
 sys.path.insert(0, LOOP)
 
 from core import dag as dagmod  # noqa: E402
-from core import osx  # noqa: E402
+from core import osx, pages  # noqa: E402
 from core.pool import Pool, shown_state, TICKET_STATES  # noqa: E402
 
 AGENT = ["python3", os.path.join(HERE, "fake_agent.py")]
@@ -1130,6 +1130,39 @@ class ReleaseFails(LoopCase):
         self.assertEqual(self.snap().groups["g1"]["release"], "failed")
         self.assertTrue(self.main_has("impl_1.txt"))
         self.assertIn("decision", self.inbox_kinds())
+
+    def test_release_failed_page_offers_ack_then_release(self):
+        self.add(1)
+        self.controller()
+        row = [r for r in self.snap().inbox.values() if r["kind"] == "decision"][0]
+        self.assertEqual([o["action"] for o in row["options"]], ["ack", "release"])
+        self.assertEqual(pages.problems(row["ref"], row), [])
+        self.assertIn(self.snap().groups["g1"]["landed_sha"][:12], row["options"][1]["consequence"])
+
+
+class PageSetsOfIssuerAndWriters(LoopCase):
+    """Unit tests of the question sets the issuer, creator and memory writers attach."""
+
+    def test_issuer_stuck_sets_are_valid_and_ordered(self):
+        import ticket_issuer
+        from core.config import Config
+        issuer = ticket_issuer.Issuer(Config(self.proj), self.pool, "5", "int/g1")
+        for reason in ("rounds", "timeout", "target", "env", "error"):
+            row = issuer.stuck_ask(reason)
+            self.assertEqual(pages.problems("5", row), [], reason)
+            self.assertEqual([o["action"] for o in row["options"]], ["retry", "revise", "cancel"])
+            self.assertIn("#5", row["question"])
+        row = issuer.stuck_ask("hard_block")
+        self.assertEqual(pages.problems("5", row), [])
+        self.assertEqual([o["action"] for o in row["options"]], ["revise", "cancel", "retry"])
+
+    def test_rejected_page_carries_one_ack(self):
+        import ticket_creator
+        ticket_creator.rejected(self.pool, "request", "bad text", "web")
+        row = list(self.snap().inbox.values())[0]
+        self.assertEqual([o["action"] for o in row["options"]], ["ack"])
+        self.assertIn("web", row["question"])
+        self.assertEqual(pages.problems("request", row), [])
 
 
 class T52Acceptance(LoopCase):

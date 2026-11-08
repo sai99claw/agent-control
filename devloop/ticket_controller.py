@@ -36,7 +36,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import dag as dagmod  # noqa: E402
-from core import agents, codemap, host, memory, osx, release  # noqa: E402
+from core import agents, codemap, host, memory, osx, pages, release  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.pool import event  # noqa: E402
@@ -111,6 +111,14 @@ def idle_lines(snap):
     return out
 
 
+def release_ask(gid, main, sha12):
+    return pages.ask(
+        "%s is in %s (%s) but its release failed: leave it for now, or run the release again?" % (gid, main, sha12),
+        [pages.option("ack", "nothing is run now; %s stays landed with its release failed until `actl tickets release %s`" % (gid, gid)),
+         pages.option("release", "runs the release once more on %s; its outcome is a new page" % sha12)],
+        "the release log says why it failed, and a re-run before that cause is fixed fails the same way")
+
+
 class Controller:
     def __init__(self, cfg, pool):
         self.cfg, self.pool = cfg, pool
@@ -143,7 +151,10 @@ class Controller:
             return None
         text = "\n".join(["nothing more can move; left undone:"] + lines)
         print(text, file=sys.stderr)
-        return self.pool.report("idle", "controller", text)
+        return self.pool.report("idle", "controller", text, **pages.ask(
+            "the controller ended with work left: answer what waits for you, then run it again?",
+            [pages.option("ack", "nothing runs until the next `actl run`; each line above says what it waits for")],
+            "items that wait for you have pages of their own"))
 
     def tick(self):
         snap = self.pool.snapshot()
@@ -308,7 +319,11 @@ class Controller:
         rnd = int(g.get("fix_round") or 0)
         if rnd >= self.cfg.max_rounds:
             self.set_group(gid, "stuck", "main kept moving")
-            self.pool.report("decision", gid, "group %s cannot catch up with %s" % (gid, main))
+            self.pool.report("decision", gid, "group %s cannot catch up with %s" % (gid, main), **pages.ask(
+                "%s could not catch up with %s: verify it again, or cancel it?" % (gid, main),
+                [pages.option("group-ready", "fix rounds go back to 0 and the fixer merges %s into %s again" % (main, gid)),
+                 pages.option("group-cancel", self.cancel_consequence(gid), note="")],
+                "%s moving says nothing about %s's tickets" % (main, gid)))
             return
         self.start_fixer(gid, report, rnd + 1)
 
@@ -388,7 +403,12 @@ class Controller:
             kind = "env" if status == "env" else "decision"
             self.pool.report(kind, gid, "group %s: regression %s - %s. Fix the environment, then run "
                              "`actl tickets rerun %s` (on the board: 環境修好了,重跑); a controller "
-                             "without --forever: run it again." % (gid, status, report.get("summary"), gid))
+                             "without --forever: run it again." % (gid, status, report.get("summary"), gid),
+                             **pages.ask(
+                                 "%s: the regression did not run (%s): verify it again once the environment is fixed?" % (gid, status),
+                                 [pages.option("rerun", "the controller verifies %s again (a --forever controller at its next tick); fix the environment first" % gid),
+                                  pages.option("ack", "the page goes away; %s stays paused until `actl tickets rerun %s`" % (gid, gid))],
+                                 "the regression measured nothing, so nothing is known to be wrong with %s's tickets" % gid))
             self.pause(gid, status, report.get("summary"))
             if not self.forever:
                 raise Stop(3, "regression %s" % status)
@@ -399,9 +419,21 @@ class Controller:
         if rnd >= self.cfg.max_rounds:
             self.set_group(gid, "stuck", "red after %d fix rounds" % rnd)
             self.pool.report("decision", gid, "group %s is still red after %d fix rounds:\n%s" % (
-                gid, rnd, report.get("summary")))
+                gid, rnd, report.get("summary")), **self.red_ask(gid, rnd))
             return
         self.start_fixer(gid, job["out"], rnd + 1)
+
+    @staticmethod
+    def cancel_consequence(gid):
+        return ("%s's ready and merged tickets are cancelled (bringing them back takes new tickets); "
+                "the branch is kept" % gid)
+
+    def red_ask(self, gid, rnd):
+        return pages.ask(
+            "%s is still red after %d fix rounds: verify it again with your note, or cancel it?" % (gid, rnd),
+            [pages.option("group-ready", "fix rounds go back to 0 and every later fixer of %s gets your note as the user's ruling" % gid),
+             pages.option("group-cancel", self.cancel_consequence(gid))],
+            "the merged tickets and the branch are kept, and your note is the one thing the next rounds have that the last %d did not" % rnd)
 
     def drop_redder_round(self, g, report):
         """The red regression `report` measured the branch right after a fix round (its sha is the
@@ -444,7 +476,7 @@ class Controller:
         self.set_group(gid, "stuck", "red after %d fix rounds" % rnd)
         self.pool.report("decision", gid, "group %s is still red after %d fix rounds; the last round made it "
                          "redder (%d -> %d failing) and was dropped (%s):\n%s" % (
-                             gid, rnd, before, after, ref, base.get("summary")))
+                             gid, rnd, before, after, ref, base.get("summary")), **self.red_ask(gid, rnd))
         return True
 
     def after_fixer(self, gid, rc):
@@ -528,7 +560,11 @@ class Controller:
             res = Git(where).run("merge", "--ff-only", sha, check=False)
             if not res.ok:
                 self.pool.report("decision", gid, "group %s is verified but %s at %s will not "
-                                 "fast-forward (local changes?): %s" % (gid, main, where, res.err.strip()))
+                                 "fast-forward (local changes?): %s" % (gid, main, where, res.err.strip()),
+                                 **pages.ask(
+                                     "%s is verified but %s at %s will not fast-forward: clean that checkout and run the controller again?" % (gid, main, where),
+                                     [pages.option("ack", "nothing is run: commit or stash the changes at %s, then run `actl run`; %s stays verified" % (where, gid))],
+                                     "only the checkout at %s stands between %s and landing" % (where, gid)))
                 raise Stop(3, "main checkout blocks fast-forward")
         elif not self.repo.move_ref(main, sha, old):
             return                              # main moved under us; next tick handles it
@@ -536,7 +572,11 @@ class Controller:
             res = self.repo.run("push", "-q", self.cfg.remote, "%s:refs/heads/%s" % (main, main), check=False)
             if not res.ok:
                 self.pool.report("decision", gid, "group %s merged into local %s but the push "
-                                 "to %s failed: %s" % (gid, main, self.cfg.remote, res.err.strip()))
+                                 "to %s failed: %s" % (gid, main, self.cfg.remote, res.err.strip()),
+                                 **pages.ask(
+                                     "%s is in local %s but the push to %s failed: push it by hand?" % (gid, main, self.cfg.remote),
+                                     [pages.option("ack", "nothing is run: push %s to %s by hand; %s stays landed" % (main, self.cfg.remote, gid))],
+                                     "the landing itself succeeded; only the push is missing"))
         released, rel_text = self.release(g, sha)
         rel_log = release.log_path(self.cfg, gid)
         snap = self.pool.snapshot()
@@ -562,7 +602,7 @@ class Controller:
         else:
             self.pool.report("decision", gid, "group %s is in %s (%s) but the release failed - "
                              "not retried, not rolled back (release log: %s):\n%s" % (
-                                 gid, main, sha[:12], rel_log, rel_text))
+                                 gid, main, sha[:12], rel_log, rel_text), **release_ask(gid, main, sha[:12]))
 
     def main_moved_files(self, sha, main_sha):
         """Files main changed since it parted from the verified sha, or None if git cannot say."""
@@ -818,7 +858,10 @@ def main(argv=None):
     except osx.OSFailure as exc:
         print("ticket_controller: %s" % exc, file=sys.stderr)
         try:
-            pool.report("decision", "controller", "the controller stopped: %s" % exc)
+            pool.report("decision", "controller", "the controller stopped: %s" % exc, **pages.ask(
+                "the controller stopped on an error: start it again once the cause is fixed?",
+                [pages.option("ack", "nothing runs until `actl run` is started again")],
+                "the error is outside every ticket and group"))
         except osx.OSFailure:
             pass
         return 2

@@ -24,7 +24,7 @@ import os
 import sys
 import time
 
-from . import gitx, osx
+from . import gitx, osx, pages
 
 LAYERS = ("role", "model", "project")
 DUE_COUNT = 5
@@ -188,7 +188,10 @@ def commit_into(cfg, pool, folder, texts, message):
                     ", ".join(sorted(texts)), branch, repo.cwd, new[:12], remote,
                     lines[-1] if lines else "rc %s" % res.rc)
                 try:
-                    pool.report("decision", "memory", text)
+                    pool.report("decision", "memory", text, **pages.ask(
+                        "a memory commit is on local %s but its push to %s failed: push it by hand?" % (branch, remote),
+                        [pages.option("ack", "nothing is run: push %s to %s by hand" % (branch, remote))],
+                        "the memory commit itself is kept"))
                 except osx.OSFailure as exc:   # the write itself stands; say so where it can be seen
                     print("memory: %s (and no page: %s)" % (text, exc), file=sys.stderr)
         return new

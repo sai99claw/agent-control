@@ -309,7 +309,13 @@ def cmd_release(pool, cfg, args):
         print("group %s released" % gid)
         return 0
     pool.report("decision", gid, "group %s (%s): the re-run release failed - not retried, not "
-                "rolled back (release log: %s):\n%s" % (gid, sha[:12], rel_log, text))
+                "rolled back (release log: %s):\n%s" % (gid, sha[:12], rel_log, text),
+                **pages.ask(
+                    "%s is in %s (%s) but its release failed: leave it for now, or run the release again?" % (
+                        gid, cfg.main_branch, sha[:12]),
+                    [pages.option("ack", "nothing is run now; %s stays landed with its release failed until `actl tickets release %s`" % (gid, gid)),
+                     pages.option("release", "runs the release once more on %s; its outcome is a new page" % sha[:12])],
+                    "the release log says why it failed, and a re-run before that cause is fixed fails the same way"))
     print("group %s: release failed\n%s" % (gid, text), file=sys.stderr)
     return 1
 

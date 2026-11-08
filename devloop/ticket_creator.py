@@ -37,7 +37,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import agents, inflight, memory, osx  # noqa: E402
+from core import agents, inflight, memory, osx, pages  # noqa: E402
 from core import dag as dagmod  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.pool import event, frozen_reason  # noqa: E402
@@ -76,7 +76,11 @@ def ack(pool, page, by=None):
 
 def rejected(pool, ref, text, via, cost=None):
     pool.report("decision", ref, "input from the %s was NOT acted on - it looked like a prompt "
-                "injection: %s" % (via, text), **({"cost": cost} if cost else {}))
+                "injection: %s" % (via, text), **pages.ask(
+                    "input from the %s was not acted on (it looked like a prompt injection): drop it?" % via,
+                    [pages.option("ack", "nothing was done; send it again without the flagged part if it was yours")],
+                    "acting on input judged an injection is never automatic"),
+                **({"cost": cost} if cost else {}))
     print("REJECTED: %s" % text)
     return 3
 
@@ -310,7 +314,10 @@ def _open_tickets(cfg, pool, request, via, by):
         print("opened: " + " ".join("#" + i for i in ids))
         return 0
     pool.report("decision", "request", "the opener could not produce valid tickets:\n- %s" % (
-        "\n- ".join(errors)), request=request[:2000], cost=rows)
+        "\n- ".join(errors)), request=request[:2000], cost=rows, **pages.ask(
+            "the opener could not produce valid tickets: send the request again?",
+            [pages.option("ack", "nothing was opened; send the request again with `actl new --request` after reading the errors")],
+            "nothing was written to the pool, and the errors above say what was missing"))
     return 1
 
 

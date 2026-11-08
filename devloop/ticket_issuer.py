@@ -38,7 +38,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import agents, inflight, memory, osx, slots, testrun, worktrees  # noqa: E402
+from core import agents, inflight, memory, osx, pages, slots, testrun, worktrees  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.pool import event  # noqa: E402
@@ -476,7 +476,29 @@ class Issuer:
         self.save(mutate, "stuck (%s)" % reason)
         if reason != "decision":   # a revise that escalated already wrote its page
             self.pool.report("env" if reason == "env" else "decision", self.id,
-                             "#%s is stuck (%s): %s" % (self.id, reason, text))
+                             "#%s is stuck (%s): %s" % (self.id, reason, text), **self.stuck_ask(reason))
+
+    def stuck_ask(self, reason):
+        i = self.id
+        cancel = pages.option("cancel", "#%s is cancelled; tickets that depend on it keep waiting" % i)
+        if reason == "hard_block":
+            return pages.ask(
+                "#%s's change touches hard_block: change the ticket, or cancel it?" % i,
+                [pages.option("revise", "the opener changes #%s per your words so its change avoids hard_block; it goes back to ready at round 0" % i),
+                 cancel,
+                 pages.option("retry", "#%s runs again as written and stops at the same place unless hard_block changed" % i)],
+                "the change the ticket asks for touches hard_block, so a retry stops at the same place")
+        why = {"rounds": "a retry keeps the ticket as written; change it only when the last feedback shows the ticket itself is wrong",
+               "timeout": "running out of time says nothing about the ticket's text",
+               "target": "a retry puts #%s into a new integration branch" % i,
+               "env": "an environment failure says nothing about the ticket; fix the environment first"}.get(
+                   reason, "an unexpected failure says nothing about the ticket's text")
+        return pages.ask(
+            "#%s is stuck (%s): try again, change the ticket, or cancel it?" % (i, reason),
+            [pages.option("retry", "#%s goes back to ready at round 0 as written" % i),
+             pages.option("revise", "the opener changes #%s per your words; it goes back to ready at round 0" % i),
+             cancel],
+            why)
 
     def release(self, why, costs=None):
         def mutate(t):
