@@ -13215,6 +13215,13 @@ class T84Acceptance(BoardLiveTab):
     NS = "{http://www.w3.org/2000/svg}"
     WAIT_KINDS = ("deps", "controller", "parallel", "next")
 
+    # BoardLiveTab's own cases are not #84's acceptance: inherit only its helpers, not its tests.
+    test_live_clock_and_elapsed = None
+    test_tail_keeps_the_last_twenty_lines_and_step_reads_the_last_mark = None
+    test_opener_takes_its_newest_agent_and_the_others_have_no_row = None
+    test_issuer_without_agent_regression_fixer_release_and_order = None
+    test_render_escapes_marks_slots_and_creates_nothing = None
+
     # ------------------------------------------------------------ fixture F
     def lock(self, content):
         path = os.path.join(self.cfg().worktree_root, "controller.lock")
