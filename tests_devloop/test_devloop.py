@@ -1313,6 +1313,66 @@ class T35Acceptance(LoopCase):
             self.assertIn(w, by_name["`fixer`"])
 
 
+class FixRoundStartUnits(LoopCase):
+    """auto_fixer.round_start: the fix worktree is reused, left alone when it is no worktree, and
+    created again when git refuses to put it back on the branch."""
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.setup_log = os.path.join(self.tmp, "setup.log")
+        self.config(max_rounds=1, worktree_setup="echo ran >> %s" % self.setup_log)
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["nothing"]})
+        self.controller()
+        self.tree = os.path.join(self.tmp, "wt", "fix-g1")
+        self.assertEqual(git(self.tree, "symbolic-ref", "--short", "HEAD").strip(), "int/g1")
+        self.setups = self.setup_count()
+
+    def setup_count(self):
+        with open(self.setup_log) as fh:
+            return len(fh.read().splitlines())
+
+    def round_start(self):
+        import auto_fixer
+        from core.config import Config
+        with mock.patch.dict(os.environ, {"AC_ROOT": self.proj}):
+            os.environ.pop("DEVLOOP_TICKET", None)
+            os.environ.pop("DEVLOOP_GROUP", None)
+            cfg = Config(self.proj)
+            return auto_fixer, cfg, auto_fixer.Git(cfg.root)
+
+    def test_existing_tree_on_branch_is_reused(self):
+        mod, cfg, repo = self.round_start()
+        mod.round_start(cfg, self.pool, "g1", repo, self.tree, "int/g1")
+        self.assertEqual(self.setup_count(), self.setups)
+
+    def test_regular_file_is_left_alone(self):
+        subprocess.run(["git", "worktree", "remove", "--force", self.tree], cwd=self.proj, check=True)
+        with open(self.tree, "w") as fh:
+            fh.write("not a worktree")
+        mod, cfg, repo = self.round_start()
+        with self.assertRaises(mod.osx.OSFailure):
+            mod.round_start(cfg, self.pool, "g1", repo, self.tree, "int/g1")
+        with open(self.tree) as fh:
+            self.assertEqual(fh.read(), "not a worktree")
+
+    def test_refused_checkout_creates_the_tree_again(self):
+        mod, cfg, repo = self.round_start()
+        git(self.tree, "checkout", "-q", "--detach")
+        real = mod.Git.run
+
+        def refuse(inst, *args, **kw):
+            if args[:2] == ("checkout", "--force") and inst.cwd == self.tree:
+                return real(inst, "checkout", "--force", "no-such-branch-xyz", check=False)
+            return real(inst, *args, **kw)
+        with mock.patch.object(mod.Git, "run", refuse):
+            mod.round_start(cfg, self.pool, "g1", repo, self.tree, "int/g1")
+        self.assertEqual(git(self.tree, "symbolic-ref", "--short", "HEAD").strip(), "int/g1")
+        self.assertEqual(self.setup_count(), self.setups + 1)
+
+
 class FixerBlockedIsDecision(LoopCase):
     """A fixer hand-in of kind blocked is handled exactly as decision: one fixer run, one decision
     page carrying the fixer's text, the group stuck with its members merged."""
