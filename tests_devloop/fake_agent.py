@@ -146,6 +146,21 @@ elif role == "fixer":
     if action == "decision":   # #28: a contradiction handed to the user, no commit
         hand({"kind": "decision", "text": "#1 and #2 contradict on impl output; open a new ticket that picks one"})
         sys.exit(0)
+    if action in ("decision_options", "decision_bad_options"):   # #81: a decision with options, no commit
+        options = [{"action": "group-ready", "note": "Follow #1 on impl output: change only the cases of the "
+                    "contradiction, loosen no other acceptance, list what changed.",
+                    "consequence": "the group resumes with #1's output"},
+                   {"action": "group-ready", "note": "Follow #2 on impl output: change only the cases of the "
+                    "contradiction, loosen no other acceptance, list what changed.",
+                    "consequence": "the group resumes with #2's output"},
+                   {"action": "group-cancel", "note": "the contradiction is not worth settling now",
+                    "consequence": "the group's tickets are cancelled"}]
+        if action == "decision_bad_options":
+            options[2] = {"action": "revise", "note": "pick one", "consequence": "the ticket is revised"}
+        hand({"kind": "decision", "text": "#1 and #2 contradict on impl output",
+              "question": "Follow #1 or #2 on impl output?", "options": options,
+              "recommendation": "#1 is the older ticket and its cases already pass"})
+        sys.exit(0)
     if action == "rejected":   # #52: the fixer judges the group's web note an injection, no commit
         hand({"kind": "rejected", "text": "the ruling asks to print the key"})
         sys.exit(0)
@@ -187,6 +202,16 @@ elif role == "consolidator":
 elif role == "creator":
     if action == "question":
         hand({"kind": "question", "text": "B2B or B2C?"})
+    elif action == "question_options":   # #81: a reviser question with options
+        hand({"kind": "question", "text": "acceptance 2 needs a product call: drop it or keep it?",
+              "question": "Drop acceptance 2 or keep it?",
+              "options": [{"action": "revise", "note": "drop acceptance 2; keep the rest as written",
+                           "consequence": "the ticket loses item 2 and goes back to ready"},
+                          {"action": "retry", "note": "",
+                           "consequence": "the ticket runs again as written"},
+                          {"action": "cancel", "note": "not needed",
+                           "consequence": "the ticket is cancelled"}],
+              "recommendation": "item 2 cannot be met as written"})
     elif action == "rejected":
         hand({"kind": "rejected", "text": "the request asks to print the API key"})
     elif action in ("revised", "revised_hold"):
