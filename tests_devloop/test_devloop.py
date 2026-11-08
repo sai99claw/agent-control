@@ -2092,6 +2092,87 @@ class T33Acceptance(LoopCase):
         self.assertEqual(res.returncode, 0, "g2 was not opened from a main holding g1's landing")
 
 
+class T75Acceptance(LoopCase):
+    """#75: a ticket that is not a member never joins an open group that already holds
+    devloop.max_group_size members, whichever path chose the group. Expected values come from
+    the cap rule in the ticket's acceptance items, not from the code."""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key, None)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key, None)
+        self.config(max_group_size=2)
+
+    def full_g1(self, first_state="running", deps3=()):
+        """g1 open with members ['1', '2']; ticket 3 ready, `group` g1, not a member."""
+        import ticket_controller
+        from core.config import Config
+        ctl = ticket_controller.Controller(Config(self.proj), self.pool)
+        self.add(1, group="g1", state=first_state)
+        self.add(2, group="g1", state="running")
+        self.add(3, deps=deps3, group="g1")
+        gid = ctl.new_group(False)
+        self.assertEqual(gid, "g1")
+
+        def change(tx):
+            g = tx.data.groups["g1"]
+            g["members"] = ["1", "2"]
+            tx.put_group(g)
+        self.pool.update(change, "test: fill g1")
+        snap = self.snap()
+        self.assertEqual(snap.groups["g1"]["members"], ["1", "2"])
+        self.assertEqual(snap.groups["g1"]["state"], "open")
+        self.assertEqual(snap.ticket("3")["state"], "ready")
+        return ctl, ticket_controller
+
+    def test_group_for_skips_a_full_group_named_by_the_ticket(self):
+        ctl, _ = self.full_g1()
+        got = ctl.group_for(self.snap(), "3")
+        self.assertIsNotNone(got, "ticket 3 has no dependencies: it must get a group")
+        self.assertNotEqual(got, "g1", "g1 already holds max_group_size members")
+        self.assertEqual(self.snap().groups["g1"]["members"], ["1", "2"])
+
+    def test_group_for_waits_when_the_dependency_is_merged_in_a_full_group(self):
+        ctl, _ = self.full_g1(first_state="merged", deps3=[1])
+        before = set(self.snap().groups)
+        got = ctl.group_for(self.snap(), "3")
+        self.assertIsNone(got, "ticket 3 cannot join full g1 and its dependency is not landed")
+        self.assertEqual(set(self.snap().groups), before, "group_for opened a group")
+        self.assertEqual(self.snap().groups["g1"]["members"], ["1", "2"])
+
+    def test_start_issuer_refuses_a_full_group(self):
+        ctl, tc = self.full_g1()
+        calls = []
+
+        def spawn(*a, **k):
+            calls.append((a, k))
+            return mock.Mock()
+        with mock.patch.object(tc.osx, "spawn", spawn):
+            ctl.start_issuer("3", "g1")
+        snap = self.snap()
+        self.assertEqual(snap.ticket("3")["state"], "ready")
+        self.assertEqual(snap.groups["g1"]["members"], ["1", "2"])
+        self.assertEqual(calls, [], "spawn was called for a ticket refused by a full group")
+        # positive control on the same setup: with room in g1, ticket 3 is dispatched to it
+
+        def free(tx):
+            g = tx.data.groups["g1"]
+            g["members"] = ["1"]
+            tx.put_group(g)
+        self.pool.update(free, "test: room in g1")
+        with mock.patch.object(tc.osx, "spawn", spawn):
+            ctl.start_issuer("3", "g1")
+        snap = self.snap()
+        self.assertEqual(snap.ticket("3")["state"], "running")
+        self.assertEqual(snap.groups["g1"]["members"], ["1", "3"])
+        self.assertEqual(len(calls), 1)
+
+
 class Revise(LoopCase):
     def test_a_worker_can_have_the_ticket_revised_and_cases_rewritten(self):
         self.add(1)
@@ -7118,6 +7199,31 @@ class GroupSizeUnits(LoopCase):
             self.assertFalse(c.joinable(self.snap(["1", "2"]), "9", {"id": "g1", "members": ["1", "2"]}))
             self.assertTrue(c.joinable(self.snap(["1"]), "9", {"id": "g1", "members": ["1"]}))
             self.assertTrue(c.joinable(self.snap(["1", "9"]), "9", {"id": "g1", "members": ["1", "9"]}))
+
+    def test_member_of_an_overfull_group_goes_back_to_it(self):
+        """A group filled before the cap existed keeps its members: a ready member returns to it."""
+        from unittest import mock
+        members = ["1", "2", "3"]
+        snap = mock.Mock(dag={}, tickets={"3": {"group": "g1"}},
+                         groups={"g1": {"id": "g1", "state": "open", "members": members}})
+        with mock.patch("ticket_controller.dagmod.verify", return_value="together"), \
+                mock.patch("ticket_controller.dagmod.deps", return_value=[]):
+            self.assertEqual(self.ctl(2).group_for(snap, "3"), "g1")
+
+    def test_loop_with_cap_2_keeps_every_group_at_two(self):
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.config(max_group_size=2, max_parallel=4, max_rounds=4)
+        for i in range(1, 9):
+            self.add(i, deps=[1] if i == 5 else [2] if i == 6 else [])
+        self.plan(worker={"4": ["nothing", "nothing", "ok"], "7": ["slow"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        groups = self.pool.snapshot().groups
+        self.assertTrue(groups)
+        for g in groups.values():
+            self.assertLessEqual(len(g["members"]), 2, g)
+        self.assertEqual(sum(len(g["members"]) for g in groups.values()), 8)
 
 
 class NoReverifyPaths(LoopCase):
