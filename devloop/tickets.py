@@ -10,9 +10,10 @@
     python3 devloop/tickets.py cancel g7 --why "..."   # a stuck or open group: cancel its ready and merged tickets
     python3 devloop/tickets.py rerun g7 --why "disk freed"   # environment fixed: verify a paused group again
     python3 devloop/tickets.py inbox [--all]        # pages for the main session
+    python3 devloop/tickets.py wait [--timeout S] [--kind K,...]   # block until a new page arrives
     python3 devloop/tickets.py ack <page>|--all
     python3 devloop/tickets.py lessons --layer role --name worker --file OLD.md   # old notes -> lessons
-    python3 devloop/tickets.py release g1 [--again]  # re-run a landed group's failed release
+    python3 devloop/tickets.py release g1 [--again] [--by NAME] [--page P]  # re-run a landed group's failed release
 
 Opening tickets is ticket_creator.py; moving them is ticket_controller.py.
 """
@@ -22,12 +23,13 @@ import json
 import os
 import re
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import agents, memory  # noqa: E402
 from core import dag as dagmod  # noqa: E402
-from core import osx, release  # noqa: E402
+from core import osx, pages, release  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.pool import event, frozen_reason, shown_state  # noqa: E402
@@ -182,16 +184,54 @@ def cmd_rerun_group(pool, gid, why, by=None, page=None):
     return 0
 
 
+PAGE_KINDS = ("created", "landed", "decision", "env", "cancelled", "idle")
+
+
+def page_lines(name, row):
+    """The lines inbox prints for one page: a header, up to 8 text lines and, when the page carries
+    a valid question (core/pages.py), the question, each option with its command and the recommendation."""
+    out = ["%s %-8s %-10s %s" % ("." if row.get("acked") else "*", row.get("kind"), row.get("ref"), name)]
+    for line in str(row.get("text") or "").splitlines()[:8]:
+        out.append("    " + line)
+    return out + pages.lines(name, row)
+
+
 def cmd_inbox(pool, args):
     snap = pool.snapshot()
     rows = [(k, v) for k, v in sorted(snap.inbox.items()) if args.all or not v.get("acked")]
     if not rows:
         print("inbox: nothing waiting for you")
     for name, row in rows:
-        print("%s %-8s %-10s %s" % ("." if row.get("acked") else "*", row.get("kind"), row.get("ref"), name))
-        for line in str(row.get("text") or "").splitlines()[:8]:
-            print("    " + line)
+        print("\n".join(page_lines(name, row)))
     return 0
+
+
+def cmd_wait(pool, args, poll):
+    kinds = None
+    if args.kind is not None:
+        kinds = {k.strip() for k in args.kind.split(",") if k.strip()}
+        if not kinds:
+            raise osx.OSFailure("--kind lists no page kind")
+        bad = sorted(kinds - set(PAGE_KINDS))
+        if bad:
+            raise osx.OSFailure("unknown page kind %s; kinds are %s" % (", ".join(bad), ", ".join(PAGE_KINDS)))
+    if args.timeout is not None and not args.timeout > 0:
+        raise osx.OSFailure("--timeout must be greater than 0")
+    seen = set(pool.snapshot().inbox)
+    end = None if args.timeout is None else time.monotonic() + args.timeout
+    while True:
+        left = None if end is None else end - time.monotonic()
+        if left is not None and left <= 0:
+            print("wait: no new page after %gs" % args.timeout)
+            return 1
+        time.sleep(poll if left is None else max(0.0, min(poll, left)))
+        inbox = pool.snapshot().inbox
+        rows = [(k, v) for k, v in sorted(inbox.items())
+                if k not in seen and not v.get("acked") and (kinds is None or v.get("kind") in kinds)]
+        if rows:
+            for name, row in rows:
+                print("\n".join(page_lines(name, row)))
+            return 0
 
 
 def cmd_ack(pool, args):
@@ -259,8 +299,9 @@ def cmd_release(pool, cfg, args):
         grp = tx.data.groups[gid]
         grp["release"] = "ok" if ok else "failed"
         grp["release_log"] = rel_log
-        event(grp, "release re-run: %s" % ("ok" if ok else "failed"))
+        event(grp, "release re-run: %s" % ("ok" if ok else "failed"), **({"by": args.by} if args.by else {}))
         tx.put_group(grp)
+        ack_in(tx, args.page, args.by)
     pool.update(change, "group %s: release re-run (%s)" % (gid, "ok" if ok else "failed"))
     if ok:
         pool.report("landed", gid, "group %s released (re-run): #%s (%s); release log: %s" % (
@@ -300,6 +341,9 @@ def main(argv=None):
     p.add_argument("--page", default=None)
     p = sub.add_parser("inbox")
     p.add_argument("--all", action="store_true")
+    p = sub.add_parser("wait")
+    p.add_argument("--timeout", type=float, default=None)
+    p.add_argument("--kind", default=None)
     p = sub.add_parser("ack")
     p.add_argument("page", nargs="?")
     p.add_argument("--all", action="store_true")
@@ -311,6 +355,8 @@ def main(argv=None):
     p = sub.add_parser("release")
     p.add_argument("group")
     p.add_argument("--again", action="store_true")
+    p.add_argument("--by", default=None)
+    p.add_argument("--page", default=None)
     args = ap.parse_args(argv)
     try:
         cfg = Config()
@@ -336,6 +382,8 @@ def main(argv=None):
             return cmd_rerun_group(pool, args.id, args.why, args.by, args.page)
         if args.cmd == "release":
             return cmd_release(pool, cfg, args)
+        if args.cmd == "wait":
+            return cmd_wait(pool, args, cfg.poll_seconds)
         return {"list": cmd_list, "show": cmd_show, "inbox": cmd_inbox, "ack": cmd_ack, "lessons": cmd_lessons,
                 "ready": lambda p, a: _set(p, a.id, "ready", a.why, a.by, a.page),
                 "cancel": lambda p, a: _set(p, a.id, "cancelled", a.why, a.by, a.page)}[args.cmd](pool, args)

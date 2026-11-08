@@ -2198,6 +2198,40 @@ class Revise(LoopCase):
         self.assertEqual(self.snap().tickets, {})
 
 
+class PageLinesAndWait(LoopCase):
+    def _tickets(self):
+        sys.path.insert(0, LOOP)
+        import tickets
+        return tickets
+
+    def test_page_lines_is_the_header_and_at_most_eight_text_lines(self):
+        t = self._tickets()
+        row = {"kind": "decision", "ref": "4", "text": "\n".join("l%d" % i for i in range(12))}
+        lines = t.page_lines("p1", row)
+        self.assertEqual(lines[0], "* decision 4          p1")
+        self.assertEqual(lines[1:], ["    l%d" % i for i in range(8)])
+        row["acked"] = True
+        self.assertTrue(t.page_lines("p1", row)[0].startswith(". "))
+
+    def test_inbox_prints_what_page_lines_returns(self):
+        t = self._tickets()
+        row = {"kind": "env", "ref": "g1", "text": "a\nb"}
+        self.pool.update(lambda tx: tx.write("inbox/pw1.json", row), "test")
+        res = self.run_py("tickets.py", "inbox")
+        self.assertEqual(res.stdout, "\n".join(t.page_lines("pw1", row)) + "\n")
+
+    def test_wait_rejects_a_bad_kind_and_times_out_quietly(self):
+        res = self.run_py("tickets.py", "wait", "--kind", "nosuch")
+        self.assertEqual((res.returncode, res.stdout), (2, ""))
+        self.assertTrue(res.stderr.startswith("tickets:"))
+        res = self.run_py("tickets.py", "wait", "--timeout", "0")
+        self.assertEqual((res.returncode, res.stdout), (2, ""))
+        res = self.run_py("tickets.py", "wait", "--timeout", "0.5")
+        self.assertEqual(res.returncode, 1)
+        self.assertEqual(res.stderr, "")
+        self.assertTrue(res.stdout.startswith("wait: no new page"))
+
+
 class T50Acceptance(LoopCase):
     """#50: a user's answer names who gave it (--by) and closes the page it answered (--page)."""
 
@@ -2593,6 +2627,137 @@ class AnswerNaming(LoopCase):
 
 
 
+class PageQuestionPieces(LoopCase):
+    """core/pages.py, Pool.report with a question, inbox lines and release --by/--page (#78, the
+    implementer's unit cases)."""
+
+    def setUp(self):
+        super().setUp()
+        for key in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(key, None)
+
+    def opts3(self):
+        from core import pages
+        return [pages.option("retry", "try again"), pages.option("revise", "rewrite"),
+                pages.option("cancel", "drop it")]
+
+    def test_one_line_and_ask(self):
+        from core import pages
+        got = pages.ask(" q\nx ", [], "r" * 300)
+        self.assertEqual(got["question"], "q x")
+        self.assertEqual(len(got["recommendation"]), 200)
+        self.assertEqual(pages.option("ack", "a\nb"), {"action": "ack", "note": "", "consequence": "a b"})
+
+    def test_problems_accepts_the_valid_sets_and_no_keys(self):
+        from core import pages
+        self.assertEqual(pages.problems("7", {"text": "x"}), [])
+        self.assertEqual(pages.problems("7", pages.ask("q", self.opts3(), "r")), [])
+        self.assertEqual(pages.problems("controller", pages.ask("q", [pages.option("ack", "ok")], "r")), [])
+
+    def test_problems_each_rule(self):
+        from core import pages
+        good = pages.ask("q", self.opts3(), "r")
+        bad = {
+            "missing": {"question": "q"},
+            "question newline": dict(good, question="a\nb"),
+            "empty recommendation": dict(good, recommendation="  "),
+            "long question": dict(good, question="q" * 201),
+            "one non-ack": dict(good, options=[pages.option("retry", "c")]),
+            "five": dict(good, options=self.opts3() + self.opts3()[:2]),
+            "not dicts": dict(good, options=["retry", "cancel"]),
+            "unknown action": dict(good, options=[pages.option("push", "c"), pages.option("ack", "c")]),
+            "consequence newline": dict(good, options=[{"action": "retry", "consequence": "a\nb"},
+                                                       pages.option("ack", "c")]),
+            "note type": dict(good, options=[pages.option("retry", "c", note=3), pages.option("ack", "c")]),
+            "note long": dict(good, options=[pages.option("retry", "c", note="n" * 8001),
+                                             pages.option("ack", "c")]),
+        }
+        for name, row in bad.items():
+            with self.subTest(name):
+                self.assertTrue(pages.problems("7", row))
+        with self.subTest("group action on a ticket"):
+            self.assertTrue(pages.problems("7", dict(good, options=[pages.option("release", "c"),
+                                                                    pages.option("ack", "c")])))
+        with self.subTest("ticket action on a group"):
+            self.assertTrue(pages.problems("g3", good))
+        self.assertEqual(pages.problems("7", dict(good, options=[pages.option("retry", "c", note="a\nb"),
+                                                                 pages.option("ack", "c")])), [])
+
+    def test_command_strings(self):
+        from core import pages
+        self.assertEqual(pages.command("group-ready", "g15", "p1", "follow #67"),
+                         "actl tickets ready g15 --note 'follow #67' --page p1")
+        self.assertEqual(pages.command("retry", "7", "p2", ""), "actl new --revise 7 --from user --decision retry --page p2")
+        self.assertEqual(pages.command("revise", "7", "p2", ""),
+                         "actl new --revise 7 --from user --decision revise --reason '<your words>' --page p2")
+        self.assertEqual(pages.command("group-cancel", "g3", "p3", ""), "actl tickets cancel g3 --why '' --page p3")
+        self.assertEqual(pages.command("ack", "g3", "p3", "x"), "actl tickets ack p3")
+        self.assertEqual(pages.command("release", "g3", "p3", "x"), "actl tickets release g3 --page p3")
+
+    def test_pages_does_not_import_pool(self):
+        with open(os.path.join(LOOP, "core", "pages.py")) as fh:
+            self.assertNotIn("pool", "".join(l for l in fh if l.startswith(("import", "from"))))
+
+    def test_report_stores_a_valid_set_and_drops_a_bad_one(self):
+        from core import pages
+        name = self.pool.report("decision", "7", "stuck", **pages.ask("q?", self.opts3()[:2], "because"))
+        row = self.snap().inbox[name]
+        self.assertEqual(row["options"][0], {"action": "retry", "note": "", "consequence": "try again"})
+        self.assertEqual((row["question"], row["recommendation"]), ("q?", "because"))
+        name = self.pool.report("decision", "8", "stuck", question="q?")
+        row = self.snap().inbox[name]
+        self.assertFalse(set(pages.KEYS) & set(row))
+        self.assertTrue(row["text"].startswith("stuck\n(options dropped: "), row["text"])
+        name = self.pool.report("decision", "9", "plain")
+        self.assertEqual(self.snap().inbox[name]["text"], "plain")
+
+    def test_inbox_prints_options_and_old_pages_unchanged(self):
+        import tickets
+        from core import pages
+        row = {"kind": "decision", "ref": "7", "text": "t1\nt2", "at": osx.now(), "acked": False}
+        old = tickets.page_lines("p0", row)
+        self.assertEqual(old, ["* decision 7          p0", "    t1", "    t2"])
+        with_q = dict(row, **pages.ask("q?", self.opts3()[:2], "because"))
+        self.assertEqual(tickets.page_lines("p0", with_q), old + [
+            "    question: q?",
+            "    1. retry (recommended): try again",
+            "       $ actl new --revise 7 --from user --decision retry --page p0",
+            "    2. revise: rewrite",
+            "       $ actl new --revise 7 --from user --decision revise --reason '<your words>' --page p0",
+            "    recommendation: because"])
+        # stored keys that fail problems() (ticket actions on a group) print as a page without them
+        self.assertEqual(tickets.page_lines("p0", dict(with_q, ref="g1")), tickets.page_lines("p0", dict(row, ref="g1")))
+        self.pool.update(lambda tx: tx.write("inbox/p0.json", with_q), "test: page")
+        res = self.run_py("tickets.py", "inbox")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.splitlines(), tickets.page_lines("p0", with_q))
+
+    def test_release_by_and_page(self):
+        self.config(release="exit 7")
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.pool.update(lambda tx: tx.write("inbox/pp.json", {"kind": "decision", "ref": "g1", "text": "t",
+                                                               "at": osx.now(), "acked": False}), "test")
+        res = self.run_py("tickets.py", "release", "g1", "--by", "a@x.com", "--page", "pp")
+        self.assertEqual(res.returncode, 1, res.stderr)
+        snap = self.snap()
+        self.assertEqual(snap.inbox["pp"]["acked_by"], "a@x.com")
+        ev = [h for h in snap.groups["g1"]["history"] if h["event"].startswith("release re-run")]
+        self.assertEqual(ev[-1].get("by"), "a@x.com")
+        self.pool.update(lambda tx: tx.write("inbox/pq.json", {"kind": "decision", "ref": "g1", "text": "t",
+                                                               "at": osx.now(), "acked": False}), "test")
+        self.config(release="true")
+        res = self.run_py("tickets.py", "release", "g1", "--page", "pq")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.snap().inbox["pq"]["acked_by"], "answer")
+        self.pool.update(lambda tx: tx.write("inbox/pr.json", {"kind": "decision", "ref": "g1", "text": "t",
+                                                               "at": osx.now(), "acked": False}), "test")
+        res = self.run_py("tickets.py", "release", "g1", "--page", "pr")
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertFalse(self.snap().inbox["pr"]["acked"])
+
+
 class OpenerCostRows(LoopCase):
     """ticket_creator.split, board.run_count / cost_rows and the opener's cost rows (implementer's unit cases)."""
 
@@ -2926,6 +3091,344 @@ class RulingSection(unittest.TestCase):
         self.assertNotIn("ticket_creator", out)
 
 
+class T78Acceptance(LoopCase):
+    """#78: pages.py (ACTIONS, option, ask, problems, command), Pool.report storing or dropping the
+    question/options/recommendation, inbox/wait printing them, release --by/--page, and the docs."""
+    release = "exit 7"
+
+    def setUp(self):
+        super().setUp()
+        for key in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(key, None)
+
+    def pages(self):
+        path = os.path.join(LOOP, "core", "pages.py")
+        self.assertTrue(os.path.isfile(path), "devloop/core/pages.py does not exist")
+        import importlib
+        return importlib.import_module("core.pages")
+
+    @staticmethod
+    def opt(action, consequence="c", **more):
+        o = {"action": action, "consequence": consequence}
+        o.update(more)
+        return o
+
+    def valid(self):
+        return {"question": "what now?", "recommendation": "retry first",
+                "options": [self.opt("retry"), self.opt("revise"), self.opt("cancel")]}
+
+    # ------------------------------------------------------------ item 1
+
+    def test_module_is_stdlib_only_and_does_not_import_pool(self):
+        import ast
+        self.pages()
+        with open(os.path.join(LOOP, "core", "pages.py")) as fh:
+            tree = ast.parse(fh.read())
+        names = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names += [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                self.assertEqual(node.level, 0, "relative import in pages.py")
+                names.append(node.module or "")
+        for n in names:
+            self.assertNotIn("pool", n)
+            self.assertIn(n.split(".")[0], sys.stdlib_module_names, "non-stdlib import %r" % n)
+
+    def test_actions_option_and_ask(self):
+        pages = self.pages()
+        self.assertEqual(pages.ACTIONS, ('revise', 'retry', 'cancel', 'group-ready', 'group-cancel', 'rerun',
+                                         'release', 'ack'))
+        self.assertEqual(pages.option("retry", "runs again"),
+                         {"action": "retry", "note": "", "consequence": "runs again"})
+        self.assertEqual(pages.option("group-ready", "back to regression", note="follow #67"),
+                         {"action": "group-ready", "note": "follow #67", "consequence": "back to regression"})
+        opts = [pages.option("retry", "  one\ntwo  "), pages.option("cancel", "y" * 300)]
+        got = pages.ask("  is it\nok?  ", opts, "x" * 300)
+        self.assertEqual(set(got), {"question", "options", "recommendation"})
+        self.assertEqual(got["question"], "is it ok?")
+        self.assertEqual(got["recommendation"], "x" * 200)
+        self.assertEqual([o["consequence"] for o in got["options"]], ["one two", "y" * 200])
+        self.assertEqual([o["action"] for o in got["options"]], ["retry", "cancel"])
+        got = pages.ask("q" * 250, [pages.option("ack", "fine")], "r")
+        self.assertEqual(got["question"], "q" * 200)
+
+    # ------------------------------------------------------------ item 2
+
+    def test_problems_rules(self):
+        pages = self.pages()
+        ok = self.valid()
+        self.assertEqual(pages.problems("7", ok), [])
+        self.assertEqual(pages.problems("7", {}), [])
+        self.assertEqual(pages.problems("7", {"kind": "decision", "text": "t"}), [])
+        self.assertEqual(pages.problems("g3", {"question": "q", "recommendation": "r", "options": [
+            self.opt("group-ready", note="x"), self.opt("group-cancel"), self.opt("ack")]}), [])
+        self.assertEqual(pages.problems("controller", {"question": "q", "recommendation": "r",
+                                                       "options": [self.opt("ack")]}), [])
+        # a note may have newlines; 8000 is allowed
+        self.assertEqual(pages.problems("7", dict(ok, options=[self.opt("retry", note="a\nb"),
+                                                               self.opt("cancel", note="n" * 8000)])), [])
+
+        def with_options(*opts):
+            return dict(ok, options=list(opts))
+
+        broken = {
+            "a: question alone": ("7", {"question": "q"}),
+            "a: options alone": ("7", {"options": ok["options"]}),
+            "a: recommendation alone": ("7", {"recommendation": "r"}),
+            "a: no recommendation": ("7", {"question": "q", "options": ok["options"]}),
+            "a: no question": ("7", {"recommendation": "r", "options": ok["options"]}),
+            "a: no options": ("7", {"question": "q", "recommendation": "r"}),
+            "b: question not str": ("7", dict(ok, question=5)),
+            "b: question empty": ("7", dict(ok, question="   ")),
+            "b: question newline": ("7", dict(ok, question="a\nb")),
+            "b: question 201": ("7", dict(ok, question="q" * 201)),
+            "b: recommendation not str": ("7", dict(ok, recommendation=["r"])),
+            "b: recommendation empty": ("7", dict(ok, recommendation="")),
+            "b: recommendation newline": ("7", dict(ok, recommendation="a\nb")),
+            "b: recommendation 201": ("7", dict(ok, recommendation="r" * 201)),
+            "c: options not list": ("7", dict(ok, options={"action": "retry", "consequence": "c"})),
+            "c: options empty": ("7", with_options()),
+            "c: one non-ack": ("7", with_options(self.opt("retry"))),
+            "c: five": ("7", with_options(*[self.opt("retry")] * 5)),
+            "c: not a dict": ("7", with_options(self.opt("retry"), "cancel")),
+            "d: unknown action": ("7", with_options(self.opt("retry"), self.opt("nosuch"))),
+            "d: consequence not str": ("7", with_options(self.opt("retry"), self.opt("cancel", 5))),
+            "d: consequence empty": ("7", with_options(self.opt("retry"), self.opt("cancel", ""))),
+            "d: consequence newline": ("7", with_options(self.opt("retry"), self.opt("cancel", "a\nb"))),
+            "d: consequence 201": ("7", with_options(self.opt("retry"), self.opt("cancel", "c" * 201))),
+            "d: note not str": ("7", with_options(self.opt("retry"), self.opt("cancel", note=3))),
+            "d: note 8001": ("7", with_options(self.opt("retry"), self.opt("cancel", note="n" * 8001))),
+            "e: retry on g3": ("g3", with_options(self.opt("retry"), self.opt("ack"))),
+            "e: revise on 7a": ("7a", with_options(self.opt("revise"), self.opt("ack"))),
+            "e: cancel on controller": ("controller", with_options(self.opt("cancel"), self.opt("ack"))),
+            "e: group-ready on 7": ("7", with_options(self.opt("group-ready"), self.opt("ack"))),
+            "e: group-cancel on controller": ("controller", with_options(self.opt("group-cancel"), self.opt("ack"))),
+            "e: rerun on g": ("g", with_options(self.opt("rerun"), self.opt("ack"))),
+            "e: release on 7": ("7", with_options(self.opt("release"), self.opt("ack"))),
+        }
+        for label, (ref, row) in broken.items():
+            with self.subTest(label):
+                got = pages.problems(ref, row)
+                self.assertIsInstance(got, list)
+                self.assertTrue(got, "%s gave no problem" % label)
+                self.assertTrue(all(isinstance(p, str) for p in got), got)
+
+    # ------------------------------------------------------------ item 4
+
+    def test_command_strings(self):
+        pages = self.pages()
+        c = pages.command
+        self.assertEqual(c('group-ready', 'g15', 'p1', 'follow #67'), "actl tickets ready g15 --note 'follow #67' --page p1")
+        self.assertEqual(c('group-ready', 'g15', 'p1', ''), "actl tickets ready g15 --page p1")
+        self.assertEqual(c('retry', '7', 'p2', ''), 'actl new --revise 7 --from user --decision retry --page p2')
+        self.assertEqual(c('retry', '7', 'p2', 'go on'),
+                         "actl new --revise 7 --from user --decision retry --reason 'go on' --page p2")
+        self.assertEqual(c('cancel', '7', 'p2', ''), 'actl new --revise 7 --from user --decision cancel --page p2')
+        self.assertEqual(c('cancel', '7', 'p2', 'not needed'),
+                         "actl new --revise 7 --from user --decision cancel --reason 'not needed' --page p2")
+        self.assertEqual(c('revise', '7', 'p2', ''),
+                         "actl new --revise 7 --from user --decision revise --reason '<your words>' --page p2")
+        self.assertEqual(c('revise', '7', 'p2', 'split it'),
+                         "actl new --revise 7 --from user --decision revise --reason 'split it' --page p2")
+        self.assertEqual(c('group-cancel', 'g3', 'p3', ''), "actl tickets cancel g3 --why '' --page p3")
+        self.assertEqual(c('group-cancel', 'g3', 'p3', 'drop it'), "actl tickets cancel g3 --why 'drop it' --page p3")
+        self.assertEqual(c('rerun', 'g3', 'p3', 'env ok'), "actl tickets rerun g3 --why 'env ok' --page p3")
+        self.assertEqual(c('release', 'g3', 'p3', ''), 'actl tickets release g3 --page p3')
+        self.assertEqual(c('ack', 'g3', 'p3', 'x'), 'actl tickets ack p3')
+
+    # ------------------------------------------------------------ item 3
+
+    def test_report_stores_valid_options_and_drops_bad_ones(self):
+        self.pages()
+        self.assertIn("idle", Pool.report.__doc__)
+        for key in ("question", "options", "recommendation"):
+            self.assertIn(key, Pool.report.__doc__)
+        name = self.pool.report("decision", "7", "line one\nline two", question="what now?",
+                                recommendation="retry first",
+                                options=[{"action": "retry", "consequence": "runs again"},
+                                         {"action": "revise", "note": "split it", "consequence": "rewrites"}])
+        row = self.snap().inbox[name]
+        self.assertEqual(row["question"], "what now?")
+        self.assertEqual(row["recommendation"], "retry first")
+        self.assertEqual(row["options"], [{"action": "retry", "note": "", "consequence": "runs again"},
+                                          {"action": "revise", "note": "split it", "consequence": "rewrites"}])
+        self.assertEqual(row["text"], "line one\nline two")
+
+        from core import pages
+        bad = {"question": "q", "recommendation": "r", "options": [{"action": "retry", "consequence": "c"}]}
+        first = pages.problems("8", bad)[0]
+        name = self.pool.report("decision", "8", "line one\nline two", **bad)
+        row = self.snap().inbox[name]
+        for key in ("question", "options", "recommendation"):
+            self.assertNotIn(key, row)
+        self.assertEqual(row["text"].splitlines(), ["line one", "line two", "(options dropped: %s)" % first])
+
+        alone = {"question": "q"}
+        first = pages.problems("9", alone)[0]
+        name = self.pool.report("env", "9", "env text", **alone)
+        row = self.snap().inbox[name]
+        self.assertNotIn("question", row)
+        self.assertEqual(row["text"].splitlines(), ["env text", "(options dropped: %s)" % first])
+
+        name = self.pool.report("decision", "10", "plain")
+        row = self.snap().inbox[name]
+        self.assertEqual(set(row), {"kind", "ref", "text", "at", "acked"})
+        self.assertEqual((row["kind"], row["ref"], row["text"], row["acked"]), ("decision", "10", "plain", False))
+
+    # ------------------------------------------------------------ item 5
+
+    PAGE = "20261108T100000-decision-g3"
+
+    def write_page(self, name, ref, text, **extra):
+        row = {"kind": "decision", "ref": ref, "text": text, "at": "2026-11-08T00:00:00Z", "acked": False}
+        row.update(extra)
+        self.pool.update(lambda tx: tx.write("inbox/%s.json" % name, row), "test: page %s" % name)
+
+    def options_page(self):
+        return {"question": "what to do with g3?", "recommendation": "the fix follows #67",
+                "options": [{"action": "group-ready", "note": "follow #67", "consequence": "back to the regression"},
+                            {"action": "group-cancel", "note": "", "consequence": "its tickets are cancelled"},
+                            {"action": "ack", "note": "", "consequence": "nothing changes"}]}
+
+    def expected_lines(self, name):
+        return ["* decision g3         " + name,
+                "    first line",
+                "    second line",
+                "    question: what to do with g3?",
+                "    1. group-ready (recommended): back to the regression",
+                "       $ actl tickets ready g3 --note 'follow #67' --page " + name,
+                "    2. group-cancel: its tickets are cancelled",
+                "       $ actl tickets cancel g3 --why '' --page " + name,
+                "    3. ack: nothing changes",
+                "       $ actl tickets ack " + name,
+                "    recommendation: the fix follows #67"]
+
+    def test_inbox_prints_question_options_commands_and_recommendation(self):
+        self.write_page(self.PAGE, "g3", "first line\nsecond line", **self.options_page())
+        plain = "20261108T100001-decision-g4"
+        self.write_page(plain, "g4", "plain text")
+        badname = "20261108T100002-decision-g5"
+        bad = self.options_page()
+        bad["options"] = bad["options"][:1]  # one option that is not ack: fails problems()
+        self.write_page(badname, "g5", "bad text", **bad)
+        res = self.run_py("tickets.py", "inbox", timeout=60)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.splitlines(),
+                         self.expected_lines(self.PAGE)
+                         + ["* decision g4         " + plain, "    plain text",
+                            "* decision g5         " + badname, "    bad text"])
+
+    def test_wait_prints_the_same_lines(self):
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "tickets.py"), "wait", "--timeout", "20"],
+                                cwd=self.proj, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True)
+        self.addCleanup(T77Acceptance.stop, proc)
+        time.sleep(1.5)
+        self.write_page(self.PAGE, "g3", "first line\nsecond line", **self.options_page())
+        out, err = proc.communicate(timeout=30)
+        self.assertEqual(proc.returncode, 0, out + err)
+        self.assertEqual(out.splitlines(), self.expected_lines(self.PAGE))
+
+    # ------------------------------------------------------------ item 6
+
+    def land_failed(self):
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+        pages = sorted(n for n, r in self.snap().inbox.items() if r["kind"] == "decision" and r["ref"] == "g1")
+        self.assertTrue(pages)
+        return pages[-1]
+
+    def outcome_commit_files(self):
+        sha = git(self.pool_path, "log", "-1", "--format=%H", "--", "groups/g1.json")
+        return git(self.pool_path, "show", "--name-only", "--format=", sha).splitlines()
+
+    def test_release_ok_with_by_and_page(self):
+        page = self.land_failed()
+        self.config(release="true")
+        res = self.run_py("tickets.py", "release", "g1", "--by", "alice", "--page", page)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        snap = self.snap()
+        self.assertEqual(snap.groups["g1"]["release"], "ok")
+        self.assertTrue(snap.inbox[page]["acked"])
+        self.assertEqual(snap.inbox[page]["acked_by"], "alice")
+        ev = [h for h in snap.groups["g1"]["history"] if h["event"] == "release re-run: ok"]
+        self.assertEqual(len(ev), 1, ev)
+        self.assertEqual(ev[0].get("by"), "alice")
+        self.assertIn("inbox/%s.json" % page, self.outcome_commit_files())
+
+    def test_release_failed_with_page_acks_as_answer(self):
+        page = self.land_failed()
+        res = self.run_py("tickets.py", "release", "g1", "--page", page)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        snap = self.snap()
+        self.assertTrue(snap.inbox[page]["acked"])
+        self.assertEqual(snap.inbox[page]["acked_by"], "answer")
+        self.assertIn("release re-run: failed", [h["event"] for h in snap.groups["g1"]["history"]])
+        self.assertIn("inbox/%s.json" % page, self.outcome_commit_files())
+
+    def test_refused_release_leaves_the_page_unread(self):
+        page = self.land_failed()
+        # not landed: an open group g2, page on it
+        self.pool.update(lambda tx: tx.put_group({"id": "g2", "state": "pr", "members": ["1"],
+                                                  "branch": "int/g2"}), "test: open group")
+        self.write_page("20261108T100000-decision-g2", "g2", "about g2")
+        head = git(self.pool_path, "rev-parse", "HEAD")
+        res = self.run_py("tickets.py", "release", "g2", "--by", "alice", "--page", "20261108T100000-decision-g2")
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertNotIn("unrecognized arguments", res.stderr)
+        self.assertEqual(git(self.pool_path, "rev-parse", "HEAD"), head)
+        self.assertFalse(self.snap().inbox["20261108T100000-decision-g2"]["acked"])
+        # the same flags are accepted when the release may run
+        self.config(release="true")
+        res = self.run_py("tickets.py", "release", "g1", "--page", page)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertTrue(self.snap().inbox[page]["acked"])
+        # already released, no --again: refused, page left unread
+        self.write_page("20261108T100001-decision-g1", "g1", "again?")
+        head = git(self.pool_path, "rev-parse", "HEAD")
+        res = self.run_py("tickets.py", "release", "g1", "--by", "bob", "--page", "20261108T100001-decision-g1")
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertNotIn("unrecognized arguments", res.stderr)
+        self.assertEqual(git(self.pool_path, "rev-parse", "HEAD"), head)
+        self.assertFalse(self.snap().inbox["20261108T100001-decision-g1"]["acked"])
+
+    # ------------------------------------------------------------ item 7
+
+    def test_readme_words(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            readme = fh.read().splitlines()
+        inbox = [ln for ln in readme if ln.startswith("| `python3 devloop/tickets.py inbox")]
+        self.assertEqual(len(inbox), 1)
+        for word in ("idle", "cancelled", "question", "option", "command", "recommendation"):
+            self.assertIn(word, inbox[0])
+        rel = [i for i, ln in enumerate(readme) if ln.startswith("| `python3 devloop/tickets.py release gN")]
+        self.assertEqual(len(rel), 1)
+        self.assertIn("[--by NAME] [--page P]", readme[rel[0]])
+        self.assertTrue(readme[rel[0] - 1].startswith("| `python3 devloop/tickets.py cancel N"))
+        self.assertTrue(readme[rel[0] + 1].startswith("| `python3 devloop/tickets.py cancel gN"))
+        start = readme.index("## Contracts")
+        end = next(i for i in range(start + 1, len(readme)) if readme[i].startswith("## "))
+        section = readme[start:end]
+        heads = [i for i, ln in enumerate(section) if ln.startswith("- **Pages**")]
+        self.assertEqual(len(heads), 1, "no '**Pages**' bullet in ## Contracts")
+        body = [section[heads[0]]]
+        for ln in section[heads[0] + 1:]:
+            if not ln.startswith(" ") or not ln.strip():
+                break
+            body.append(ln)
+        bullet = " ".join(body)
+        for word in ("question", "options", "recommendation", "action", "note", "consequence", "ack",
+                     "first", "(options dropped:") + ACTIONS78:
+            self.assertIn(word, bullet)
+        self.assertRegex(bullet, r"2\s*-\s*4|2\s*–\s*4|2 to 4|two to four")
+
+
+ACTIONS78 = ('revise', 'retry', 'cancel', 'group-ready', 'group-cancel', 'rerun', 'release')
+
+
 class ReleaseRerun(LoopCase):
     """tickets.py release: refusals, the timeout, the shared function and the docs (#9)."""
     release = "exit 7"
@@ -3016,6 +3519,191 @@ class ReleaseRerun(LoopCase):
         readme = read("devloop", "README.md").splitlines()
         cancel = [i for i, ln in enumerate(readme) if ln.startswith("| `python3 devloop/tickets.py cancel")][0]
         self.assertIn("tickets.py release", readme[cancel + 1])
+
+
+class T77Acceptance(LoopCase):
+    """#77: tickets.py wait blocks until a page that was not in the inbox at its start arrives;
+    `tickets.py inbox` (run after the wait) is the oracle for what it prints."""
+
+    def setUp(self):
+        super().setUp()
+        for key in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(key, None)
+
+    def start_wait(self, *args):
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "tickets.py"), "wait"] + list(args),
+                                cwd=self.proj, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True)
+        self.addCleanup(self.stop, proc)
+        return proc
+
+    @staticmethod
+    def stop(proc):
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+
+    def finish(self, proc, timeout=30):
+        out, err = proc.communicate(timeout=timeout)
+        return proc.returncode, out, err
+
+    def write_pages(self, *pages):
+        """pages: (name, kind, ref, text[, acked]) - all in one pool change."""
+        def change(tx):
+            for p in pages:
+                name, kind, ref, text = p[:4]
+                tx.write("inbox/%s.json" % name, {"kind": kind, "ref": ref, "text": text,
+                                                  "at": "2026-11-08T00:00:00Z",
+                                                  "acked": bool(p[4]) if len(p) > 4 else False})
+        self.pool.update(change, "test: pages %s" % ",".join(p[0] for p in pages))
+
+    def inbox_blocks(self):
+        """{page name: its lines in `tickets.py inbox` output}, the oracle."""
+        res = self.run_py("tickets.py", "inbox", timeout=60)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        blocks, cur = {}, None
+        for line in res.stdout.splitlines():
+            if line.startswith("    ") and cur is not None:
+                blocks[cur].append(line)
+            elif line[:2] in ("* ", ". "):
+                cur = line.split()[-1]
+                blocks[cur] = [line]
+            else:
+                cur = None
+        return blocks
+
+    def test_one_new_page_ends_the_wait_and_prints_its_inbox_block(self):
+        t0 = time.monotonic()
+        proc = self.start_wait("--timeout", "20")
+        time.sleep(1.5)
+        self.write_pages(("20261108T100000-decision-g1", "decision", "g1", "first line\nsecond line\nthird"))
+        rc, out, err = self.finish(proc)
+        elapsed = time.monotonic() - t0
+        self.assertEqual(rc, 0, out + err)
+        self.assertLess(elapsed, 10)
+        block = self.inbox_blocks()["20261108T100000-decision-g1"]
+        self.assertEqual(len(block), 4, block)
+        self.assertEqual(out.splitlines(), block)
+
+    def test_pages_in_the_inbox_at_start_are_never_printed(self):
+        self.write_pages(("20261108T090000-landed-g1", "landed", "g1", "old unread"),
+                         ("20261108T090001-env-g2", "env", "g2", "old read", True))
+        proc = self.start_wait("--timeout", "20")
+        time.sleep(1.5)
+        self.write_pages(("20261108T100000-decision-g3", "decision", "g3", "new one"))
+        rc, out, err = self.finish(proc)
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("20261108T100000-decision-g3", out)
+        self.assertNotIn("20261108T090000-landed-g1", out)
+        self.assertNotIn("20261108T090001-env-g2", out)
+        self.assertEqual(out.splitlines(), self.inbox_blocks()["20261108T100000-decision-g3"])
+
+    def check_kind_filter(self, kinds):
+        proc = self.start_wait("--timeout", "20", "--kind", kinds)
+        time.sleep(1.5)
+        self.write_pages(("20261108T100000-landed-g1", "landed", "g1", "landed text"))
+        time.sleep(1.5)
+        if proc.poll() is not None:
+            out, err = proc.communicate()
+            self.fail("the wait ended on a landed page with --kind %r: rc %s %s%s"
+                      % (kinds, proc.returncode, out, err))
+        self.write_pages(("20261108T100001-decision-g2", "decision", "g2", "decide this"))
+        rc, out, err = self.finish(proc)
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("20261108T100001-decision-g2", out)
+        self.assertNotIn("20261108T100000-landed-g1", out)
+        self.assertEqual(out.splitlines(), self.inbox_blocks()["20261108T100001-decision-g2"])
+
+    def test_kind_filter_skips_other_kinds(self):
+        self.check_kind_filter("decision,env")
+
+    def test_kind_names_are_trimmed(self):
+        self.check_kind_filter(" decision , env")
+
+    def test_two_pages_in_one_change_are_both_printed_in_name_order(self):
+        proc = self.start_wait("--timeout", "20")
+        time.sleep(1.5)
+        # written in reverse order; printed in name order
+        self.write_pages(("20261108T100002-landed-g2", "landed", "g2", "b text"),
+                         ("20261108T100001-env-g1", "env", "g1", "a text\nmore"))
+        rc, out, err = self.finish(proc)
+        self.assertEqual(rc, 0, out + err)
+        blocks = self.inbox_blocks()
+        self.assertEqual(out.splitlines(),
+                         blocks["20261108T100001-env-g1"] + blocks["20261108T100002-landed-g2"])
+
+    def test_timeout_without_new_page_exits_one(self):
+        self.write_pages(("20261108T090000-decision-g1", "decision", "g1", "already here"))
+        t0 = time.monotonic()
+        proc = self.start_wait("--timeout", "1")
+        rc, out, err = self.finish(proc, timeout=30)
+        elapsed = time.monotonic() - t0
+        self.assertEqual(rc, 1, out + err)
+        self.assertLess(elapsed, 6)
+        self.assertGreaterEqual(elapsed, 0.9, "exited before the timeout")
+        self.assertEqual(len(out.splitlines()), 1, out)
+        self.assertTrue(out.startswith("wait: no new page"), out)
+        self.assertEqual(err, "")
+
+    def assert_refused(self, *args):
+        res = self.run_py("tickets.py", "wait", *args, timeout=30)
+        self.assertEqual(res.returncode, 2, (args, res.stdout, res.stderr))
+        self.assertEqual(res.stdout, "", args)
+        lines = res.stderr.strip().splitlines()
+        self.assertEqual(len(lines), 1, (args, res.stderr))
+        self.assertTrue(lines[0].startswith("tickets:"), (args, res.stderr))
+
+    def test_bad_arguments_and_missing_pool_exit_two(self):
+        # each refused call carries a short timeout so a wrong implementation ends instead of blocking
+        self.assert_refused("--timeout", "3", "--kind", "nosuch")
+        self.assert_refused("--timeout", "3", "--kind", ",")
+        self.assert_refused("--timeout", "0")
+        self.assert_refused("--timeout", "-3")
+        res = self.run_py("tickets.py", "wait", "--timeout", "abc", timeout=30)
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.config(pool=os.path.join(self.tmp, "no-such-pool"))
+        self.assert_refused("--timeout", "3")
+
+    def test_every_known_kind_is_accepted(self):
+        # pairs the refusal above: a valid kind list is not refused (ends by timeout instead)
+        proc = self.start_wait("--timeout", "1", "--kind", "created,landed,decision,env,cancelled,idle")
+        rc, out, err = self.finish(proc)
+        self.assertEqual(rc, 1, out + err)
+        self.assertEqual(err, "")
+
+    def test_docs_list_the_command(self):
+        def read(*parts):
+            with open(os.path.join(HOME, *parts)) as fh:
+                return fh.read()
+        readme = read("devloop", "README.md").splitlines()
+        inbox = [i for i, ln in enumerate(readme) if ln.startswith("| `python3 devloop/tickets.py inbox")]
+        self.assertEqual(len(inbox), 1)
+        self.assertIn("idle", readme[inbox[0]])
+        self.assertIn("cancelled", readme[inbox[0]])
+        row = readme[inbox[0] + 1]
+        self.assertTrue(row.startswith("| `python3 devloop/tickets.py wait"), row)
+        self.assertIn("--kind", row)
+        self.assertIn("start", row)
+        for code in ("0", "1", "2"):
+            self.assertRegex(row, r"(?<![0-9.])%s(?![0-9.])" % code)
+        cancel = [i for i, ln in enumerate(readme) if ln.startswith("| `python3 devloop/tickets.py cancel")][0]
+        self.assertIn("tickets.py release", readme[cancel + 1])
+        doc = read("devloop", "tickets.py").split('"""')[1]
+        self.assertIn("tickets.py wait", doc)
+        actl = [ln for ln in read("bin", "actl").splitlines() if ln.startswith("  tickets ")]
+        self.assertEqual(len(actl), 1)
+        self.assertIn("|release", actl[0])
+        self.assertIn("wait", re.split(r"[\s|]+", actl[0]))
+        claude = read("CLAUDE.md").splitlines()
+        poll = [ln for ln in claude if "不輪詢" in ln]
+        self.assertEqual(len(poll), 1, poll)
+        self.assertIn("`actl tickets wait", poll[0])
+        self.assertIn("背景", poll[0])
+        self.assertEqual(len([ln for ln in claude if "頁的種類" in ln]), 1)
 
 
 class FixerTestsChangedUnit(LoopCase):
@@ -3913,6 +4601,15 @@ class T27Acceptance(LoopCase):
                         bullets)
 
 
+def own_origin(port, headers):
+    """A served board's POST headers as a browser on the board sends them: its own Origin (#76),
+    unless the case passes its own Origin or Referer."""
+    h = dict(headers or {})
+    if not any(k.lower() in ("origin", "referer") for k in h):
+        h["Origin"] = "http://127.0.0.1:%d" % port
+    return h
+
+
 class BoardKeyCookie(LoopCase):
     """#37: the board key is traded once for a cookie; helpers, the keyless board and the README."""
 
@@ -4235,7 +4932,7 @@ class T37Acceptance(LoopCase):
 
     def post(self, path, form, headers):
         import urllib.parse
-        h = dict(headers, **{"Content-Type": "application/x-www-form-urlencoded"})
+        h = dict(own_origin(self.port, headers), **{"Content-Type": "application/x-www-form-urlencoded"})
         return self.req("POST", path, h, urllib.parse.urlencode(form))
 
     # acceptance 1
@@ -8625,6 +9322,8 @@ class T57Acceptance(LoopCase):
             if auth:
                 h.update(self.auth)
             h.update(headers or {})
+            if method == "POST":
+                h = own_origin(self.port, h)
             conn.request(method, path, body=body, headers=h)
             resp = conn.getresponse()
             return resp.status, dict(resp.getheaders()), resp.read().decode("utf-8", "replace")
@@ -11528,6 +12227,8 @@ class T47Acceptance(LoopCase):
             try:
                 h = {"Content-Type": "application/x-www-form-urlencoded"}
                 h.update(headers or {})
+                if method == "POST":
+                    h = own_origin(port, h)
                 conn.request(method, path, body=body, headers=h)
                 resp = conn.getresponse()
                 return resp.status, resp.read().decode("utf-8", "replace")
@@ -13370,7 +14071,7 @@ class T46Acceptance(LoopCase):
         self.assertEqual(status, 200, page[:300])
         self.assertTrue(re.search(self.FORM, page), "the request form (交給開題者)")
         before = self.web_jobs()
-        status, location, body = self.call(port, "POST", "/request", {self.HEADER: "a@x.com"}, "text=x")
+        status, location, body = self.call(port, "POST", "/request", own_origin(port, {self.HEADER: "a@x.com"}), "text=x")
         self.assertEqual((status, location), (303, "./?sent=request"), body[:300])
         self.assertGreater(len(self.web_jobs()), len(before), "a new folder under <worktrees>/runs/web/")
 
@@ -13380,7 +14081,7 @@ class T46Acceptance(LoopCase):
         # the listed user must get in first, so the 403s below are the allow list, not a board that reads no header
         self.assertEqual(self.call(port, "GET", "/", {self.HEADER: "a@x.com"})[0], 200)
         self.assertEqual(self.call(port, "GET", "/", {self.HEADER: "b@x.com"})[0], 403)
-        self.assertEqual(self.call(port, "POST", "/request", {self.HEADER: "b@x.com"}, "text=x")[0], 403)
+        self.assertEqual(self.call(port, "POST", "/request", own_origin(port, {self.HEADER: "b@x.com"}), "text=x")[0], 403)
         self.assertEqual(self.web_jobs(), [])
 
     def test_item2_listed_user_on_0000_is_refused(self):
@@ -13400,13 +14101,13 @@ class T46Acceptance(LoopCase):
         status, _, page = self.call(port, "GET", "/", {self.HEADER: "a@x.com"})
         self.assertEqual(status, 200)
         self.assertTrue(re.search(self.FORM, page), "the listed user gets the forms")
-        status, location, body = self.call(port, "POST", "/request", {self.HEADER: "a@x.com"}, "text=x")
+        status, location, body = self.call(port, "POST", "/request", own_origin(port, {self.HEADER: "a@x.com"}), "text=x")
         self.assertEqual(status, 303, body[:300])
         status, _, page = self.call(port, "GET", "/")
         self.assertEqual(status, 200)
         self.assertIn("四個指標", page)
         self.assertFalse(re.search(self.FORM, page), "no header: no request form, as today")
-        self.assertEqual(self.call(port, "POST", "/request", None, "text=x")[0], 403)
+        self.assertEqual(self.call(port, "POST", "/request", own_origin(port, None), "text=x")[0], 403)
 
     # ------------------------------------------------------------ item 4
 
@@ -13430,6 +14131,81 @@ class T46Acceptance(LoopCase):
 
     def test_item4_bad_allowed_users_exits_2(self):
         self.assert_refused_at_start({"allowed_users": "a@x.com"}, "board.allowed_users")
+
+
+class BoardAddressedUnits(unittest.TestCase):
+    """#76: the helpers behind the Host and Origin checks of the served board."""
+
+    SERVED = {"127.0.0.1:8765", "localhost:8765", "[::1]:8765", "portal.example"}
+
+    def test_url_host_drops_only_the_scheme_default_port(self):
+        import board
+        cases = {"http://H.example": "h.example", "http://h.example:80/x": "h.example",
+                 "https://h.example:443": "h.example", "http://h.example:443": "h.example:443",
+                 "https://h.example:80": "h.example:80", "HTTPS://h.example:8443/?q": "h.example:8443",
+                 "http://[::1]:8765": "[::1]:8765", "http://u:p@h.example:81": "h.example:81"}
+        for value, want in cases.items():
+            with self.subTest(value=value):
+                self.assertEqual(board.url_host(value), want)
+        for value in (None, 7, "", "null", "not a url", "ftp://x.example", "http://", "http://h:99999",
+                      "/relative/path"):
+            with self.subTest(value=value):
+                self.assertIsNone(board.url_host(value))
+
+    def test_served_hosts_brackets_an_ipv6_bind_and_ignores_bad_settings(self):
+        import board
+        base = {"127.0.0.1:9", "localhost:9", "[::1]:9"}
+        self.assertEqual(board.served_hosts(None, "::1", 9), base)
+        self.assertEqual(board.served_hosts({}, "FE80::2", 9), base | {"[fe80::2]:9"})
+        self.assertEqual(board.served_hosts({"public_url": 7, "allowed_hosts": "a.example"}, "127.0.0.1", 9),
+                         base)
+        self.assertEqual(board.served_hosts({"allowed_hosts": ["", 3, " X:1 "]}, "127.0.0.1", 9),
+                         base | {"x:1"})
+
+    def test_host_allowed_strips_and_lowercases(self):
+        import board
+        self.assertTrue(board.host_allowed(self.SERVED, {"Host": " LocalHost:8765 "}))
+        for headers in ({}, {"Host": ""}, {"Host": "127.0.0.1:8766"}, {"Host": "evil.example:8765"}):
+            with self.subTest(headers=headers):
+                self.assertFalse(board.host_allowed(self.SERVED, headers))
+
+    def test_origin_allowed_order_origin_then_referer_then_key(self):
+        import board
+        yes = ({"Origin": "http://127.0.0.1:8765"}, {"Origin": "https://portal.example:443"},
+               {"Referer": "http://localhost:8765/?tab=decide"}, {"X-Board-Key": "anything"},
+               {"Origin": "http://127.0.0.1:8765", "Referer": "http://evil.example/"})
+        no = ({}, {"Origin": "null"}, {"Origin": ""}, {"Origin": "http://evil.example"},
+              {"Origin": "https://portal.example:444"}, {"Referer": "http://evil.example/x"},
+              {"Origin": "http://evil.example", "X-Board-Key": "k"},
+              {"Referer": "http://evil.example/", "X-Board-Key": "k"},
+              {"Origin": "http://evil.example", "Referer": "http://127.0.0.1:8765/"})
+        for headers in yes:
+            with self.subTest(headers=headers):
+                self.assertTrue(board.origin_allowed(self.SERVED, headers))
+        for headers in no:
+            with self.subTest(headers=headers):
+                self.assertFalse(board.origin_allowed(self.SERVED, headers))
+
+    def test_settings_errors_for_public_url_and_allowed_hosts(self):
+        import board
+        self.assertEqual(board.board_settings_errors({"public_url": "https://p.example/b/",
+                                                      "allowed_hosts": ["a.example:1"]}), [])
+        for bad in (7, "ftp://x.example", "not a url"):
+            with self.subTest(public_url=bad):
+                lines = board.board_settings_errors({"public_url": bad})
+                self.assertEqual(len(lines), 1)
+                self.assertIn("board.public_url", lines[0])
+        for bad in ("a.example", [""], [3]):
+            with self.subTest(allowed_hosts=bad):
+                lines = board.board_settings_errors({"allowed_hosts": bad})
+                self.assertEqual(len(lines), 1)
+                self.assertIn("board.allowed_hosts", lines[0])
+        self.assertEqual(len(board.board_settings_errors({"public_url": 7, "allowed_hosts": 7})), 2)
+
+    def test_own_origin_helper_keeps_a_case_s_own_header(self):
+        self.assertEqual(own_origin(5, None), {"Origin": "http://127.0.0.1:5"})
+        self.assertEqual(own_origin(5, {"origin": "null"}), {"origin": "null"})
+        self.assertEqual(own_origin(5, {"Referer": "http://x/"}), {"Referer": "http://x/"})
 
 
 class T18Acceptance(unittest.TestCase):
@@ -13537,6 +14313,230 @@ class BoardTrustedUserUnits(unittest.TestCase):
         section = text.split("## Dashboard", 1)[1].split("\n## ", 1)[0]
         for words in ("board.trusted_user_header", "board.allowed_users", "loopback listen address",
                       "loopback peer", "set (overwrite) the header", "without the key"):
+            with self.subTest(words=words):
+                self.assertIn(words, section)
+
+
+class T76Acceptance(LoopCase):
+    """#76: the served board answers only requests addressed to it (Host) and POSTs from its own
+    pages (Origin / Referer), unless a script sends X-Board-Key without either header."""
+
+    HEADER = T46Acceptance.HEADER
+    TRUSTED = {"trusted_user_header": T46Acceptance.HEADER, "allowed_users": ["a@x.com"]}
+
+    def board_settings(self, board):
+        T46Acceptance.board_settings(self, board)
+
+    def free_port(self):
+        return T46Acceptance.free_port(self)
+
+    def start(self, *extra):
+        return T46Acceptance.start(self, *extra)
+
+    def call(self, port, method, path, headers=None, body=None):
+        return T46Acceptance.call(self, port, method, path, headers, body)
+
+    def web_jobs(self):
+        return T46Acceptance.web_jobs(self)
+
+    def key_file(self):
+        return T46Acceptance.key_file(self)
+
+    def call_without_host(self, port, method, path, headers=None):
+        """(status, body) of a request that carries no Host header at all."""
+        import http.client
+        self.call(port, "GET", "/", {self.HEADER: "a@x.com"})      # waits until the board listens
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        try:
+            conn.putrequest(method, path, skip_host=True)
+            for k, v in (headers or {}).items():
+                conn.putheader(k, v)
+            conn.endheaders()
+            resp = conn.getresponse()
+            return resp.status, resp.read().decode("utf-8", "replace")
+        finally:
+            conn.close()
+
+    def own(self, port):
+        return "http://127.0.0.1:%d" % port
+
+    def trusted_board(self, extra=None):
+        board = dict(self.TRUSTED)
+        board.update(extra or {})
+        self.board_settings(board)
+        return self.start("--host", "127.0.0.1")
+
+    def assert_refused(self, result, prefix):
+        status, _, body = result
+        self.assertEqual(status, 403, body[:300])
+        self.assertTrue(body.startswith(prefix), "body %r does not start with %r" % (body[:200], prefix))
+
+    def assert_submitted(self, result):
+        before = len(self.web_jobs())
+        status, location, body = result()
+        self.assertEqual((status, location), (303, "./?sent=request"), body[:300])
+        self.assertEqual(len(self.web_jobs()), before + 1, "one new folder under <worktrees>/runs/web/")
+
+    # ------------------------------------------------------------ item 1
+
+    def test_item1_served_hosts(self):
+        import board
+        self.assertTrue(hasattr(board, "served_hosts"), "board.served_hosts is missing")
+        base = {"127.0.0.1:8765", "localhost:8765", "[::1]:8765"}
+        cases = [
+            ({}, "127.0.0.1", base),
+            ({}, "::1", base),
+            ({}, "0.0.0.0", base | {"0.0.0.0:8765"}),
+            ({}, "::", base | {"[::]:8765"}),
+            ({"public_url": "https://Portal.Example:443/board/"}, "127.0.0.1", base | {"portal.example"}),
+            ({"public_url": "http://h.example:8080/x"}, "127.0.0.1", base | {"h.example:8080"}),
+            ({"allowed_hosts": [" B.Example:8443 "]}, "127.0.0.1", base | {"b.example:8443"}),
+        ]
+        for settings, bind, want in cases:
+            with self.subTest(settings=settings, bind=bind):
+                got = board.served_hosts(settings, bind, 8765)
+                self.assertIsInstance(got, set)
+                self.assertEqual(got, want)
+
+    # ------------------------------------------------------------ item 2
+
+    def test_item2_foreign_host_get_is_refused(self):
+        port = self.trusted_board()
+        user = {self.HEADER: "a@x.com"}
+        self.assertEqual(self.call(port, "GET", "/", dict(user, Host="127.0.0.1:%d" % port))[0], 200)
+        self.assert_refused(self.call(port, "GET", "/", dict(user, Host="evil.example:%d" % port)), "unknown host")
+        for host in ("localhost:%d", "[::1]:%d", "LOCALHOST:%d"):
+            with self.subTest(host=host):
+                self.assertEqual(self.call(port, "GET", "/", dict(user, Host=host % port))[0], 200)
+        self.assert_refused(self.call(port, "GET", "/", dict(user, Host="127.0.0.1:%d" % (port + 1))), "unknown host")
+
+    def test_item2_foreign_host_post_starts_nothing(self):
+        port = self.trusted_board()
+        user = {self.HEADER: "a@x.com"}
+        before = self.web_jobs()
+        self.assert_refused(self.call(port, "POST", "/request",
+                                      dict(user, Host="evil.example:%d" % port,
+                                           Origin="http://evil.example:%d" % port), "text=x"), "unknown host")
+        self.assertEqual(self.web_jobs(), before, "no new folder under <worktrees>/runs/web/")
+        # the same POST addressed to the board goes through: the 403 above is the Host check
+        self.assert_submitted(lambda: self.call(port, "POST", "/request",
+                                                dict(user, Host="127.0.0.1:%d" % port, Origin=self.own(port)),
+                                                "text=x"))
+
+    def test_item2_missing_host_is_refused(self):
+        port = self.trusted_board()
+        status, body = self.call_without_host(port, "GET", "/", {self.HEADER: "a@x.com"})
+        self.assertEqual(status, 403, body[:300])
+        self.assertTrue(body.startswith("unknown host"), body[:200])
+
+    def test_item2_key_does_not_pass_a_foreign_host(self):
+        self.board_settings({})
+        port = self.start("--host", "127.0.0.1", "--key-file", self.key_file())
+        self.assertEqual(self.call(port, "GET", "/", {"X-Board-Key": "s3cret"})[0], 200)
+        self.assert_refused(self.call(port, "GET", "/", {"X-Board-Key": "s3cret", "Host": "evil.example:%d" % port}),
+                            "unknown host")
+
+    # ------------------------------------------------------------ item 3
+
+    def test_item3_origin_rules(self):
+        port = self.trusted_board()
+        user = {self.HEADER: "a@x.com"}
+        post = lambda h: self.call(port, "POST", "/request", dict(user, **h), "text=x")
+        self.assert_submitted(lambda: post({"Origin": self.own(port)}))
+        self.assert_submitted(lambda: post({"Referer": self.own(port) + "/?tab=decide"}))
+        before = self.web_jobs()
+        for h in ({"Origin": "http://evil.example"}, {"Origin": "null"}, {"Referer": "http://evil.example/x"}, {}):
+            with self.subTest(headers=h):
+                self.assert_refused(post(h), "cross-site request")
+        self.assertEqual(self.web_jobs(), before, "no job folder for a cross-site POST")
+
+    # ------------------------------------------------------------ item 4
+
+    def test_item4_scripts_with_the_key(self):
+        self.board_settings({})
+        port = self.start("--host", "127.0.0.1", "--key-file", self.key_file())
+        self.assert_submitted(lambda: self.call(port, "POST", "/request", {"X-Board-Key": "s3cret"}, "text=x"))
+        before = self.web_jobs()
+        self.assert_refused(self.call(port, "POST", "/request",
+                                      {"X-Board-Key": "s3cret", "Origin": "http://evil.example"}, "text=x"),
+                            "cross-site request")
+        self.assertEqual(self.call(port, "POST", "/request", {"X-Board-Key": "wrong"}, "text=x")[0], 403)
+        self.assertEqual(self.web_jobs(), before)
+
+    # ------------------------------------------------------------ item 5
+
+    def test_item5_allowed_hosts(self):
+        port = self.trusted_board({"allowed_hosts": ["board.example:8443"]})
+        user = {self.HEADER: "a@x.com"}
+        self.assertEqual(self.call(port, "GET", "/", dict(user, Host="board.example:8443"))[0], 200)
+        self.assert_refused(self.call(port, "GET", "/", dict(user, Host="other.example:8443")), "unknown host")
+        self.assert_submitted(lambda: self.call(port, "POST", "/request",
+                                                dict(user, Host="board.example:8443",
+                                                     Origin="https://board.example:8443"), "text=x"))
+
+    def test_item5_public_url(self):
+        port = self.trusted_board({"public_url": "https://portal.example/board/"})
+        user = {self.HEADER: "a@x.com"}
+        self.assertEqual(self.call(port, "GET", "/", dict(user, Host="portal.example"))[0], 200)
+        self.assert_submitted(lambda: self.call(port, "POST", "/request",
+                                                dict(user, Origin="https://portal.example"), "text=x"))
+        before = self.web_jobs()
+        self.assert_refused(self.call(port, "POST", "/request", dict(user, Origin="https://portal.example:444"),
+                                      "text=x"), "cross-site request")
+        self.assertEqual(self.web_jobs(), before)
+
+    # ------------------------------------------------------------ item 6
+
+    def test_item6_bad_settings_exit_2(self):
+        for board, name in (({"public_url": 7}, "board.public_url"),
+                            ({"public_url": "ftp://x.example"}, "board.public_url"),
+                            ({"public_url": "not a url"}, "board.public_url"),
+                            ({"allowed_hosts": "a.example"}, "board.allowed_hosts"),
+                            ({"allowed_hosts": [""]}, "board.allowed_hosts"),
+                            ({"allowed_hosts": [3]}, "board.allowed_hosts")):
+            with self.subTest(board=board):
+                T46Acceptance.assert_refused_at_start(self, board, name)
+
+    def test_item6_settings_errors(self):
+        import board
+        for settings in ({"public_url": "https://portal.example/board/"}, {"public_url": "http://h.example:8080/x"},
+                         {"allowed_hosts": []}, {"allowed_hosts": ["b.example:8443", "c.example"]}):
+            with self.subTest(settings=settings):
+                self.assertEqual(board.board_settings_errors(settings), [])
+        for settings, name in (({"public_url": 7}, "board.public_url"),
+                               ({"public_url": "ftp://x.example"}, "board.public_url"),
+                               ({"public_url": "not a url"}, "board.public_url"),
+                               ({"allowed_hosts": "a.example"}, "board.allowed_hosts"),
+                               ({"allowed_hosts": [""]}, "board.allowed_hosts"),
+                               ({"allowed_hosts": [3]}, "board.allowed_hosts")):
+            with self.subTest(settings=settings):
+                errors = board.board_settings_errors(settings)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn(name, errors[0])
+        errors = board.board_settings_errors({"public_url": 7, "allowed_hosts": [3]})
+        self.assertEqual(len(errors), 2, errors)
+
+    # ------------------------------------------------------------ item 7
+
+    def test_item7_schema_rows(self):
+        sys.path.insert(0, os.path.join(HOME, "scripts"))
+        import project_config
+        rows = [(k, kind) for k, kind, _ in project_config.SCHEMA]
+        at = rows.index(("board.key_file", "string"))
+        self.assertEqual(rows[at + 1:at + 5], [("board.trusted_user_header", "string"), ("board.allowed_users", "list"),
+                                               ("board.public_url", "string"), ("board.allowed_hosts", "list")])
+        bad = project_config.type_errors({"board": {"public_url": 7, "allowed_hosts": "a.example"}})
+        self.assertEqual(len(bad), 2, bad)
+        self.assertTrue(any("board.public_url" in b for b in bad), bad)
+        self.assertTrue(any("board.allowed_hosts" in b for b in bad), bad)
+
+    # ------------------------------------------------------------ item 8
+
+    def test_item8_readme_dashboard(self):
+        with open(os.path.join(LOOP, "README.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        section = text.split("## Dashboard", 1)[1].split("\n## ", 1)[0]
+        for words in ("board.public_url", "board.allowed_hosts", "Origin", "Referer", "Host", "X-Board-Key"):
             with self.subTest(words=words):
                 self.assertIn(words, section)
 

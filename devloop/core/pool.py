@@ -20,7 +20,7 @@ import json
 import os
 import re
 
-from . import osx
+from . import osx, pages
 from .gitx import Git, GitError
 
 TICKET_STATES = ("ready", "running", "merged", "landed", "stuck", "cancelled")
@@ -166,7 +166,19 @@ class Pool:
 
     def report(self, kind, ref, text, **extra):
         """Leave a page for the main session (kinds: created, landed, decision, env, cancelled,
-        idle - a run without --forever ended with work left)."""
+        idle - a run without --forever ended with work left). A decision or env page may pass
+        question, options and recommendation (core/pages.py, built with pages.ask); a set that
+        fails pages.problems() is dropped and the text gets '(options dropped: <problem>)'."""
+        extra = dict(extra)
+        if any(k in extra for k in pages.KEYS):
+            bad = pages.problems(ref, extra)
+            if bad:
+                for k in pages.KEYS:
+                    extra.pop(k, None)
+                text = "%s%s(options dropped: %s)" % (text, "" if str(text).endswith("\n") else "\n", bad[0])
+            else:
+                extra["options"] = [{"action": o["action"], "note": o.get("note", ""),
+                                     "consequence": o["consequence"]} for o in extra["options"]]
         base = "%s-%s-%s" % (osx.now().replace(":", "").replace("-", ""), kind, ref)
         names = [base]
 

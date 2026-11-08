@@ -26,12 +26,13 @@ group complete (= one PR, a local mark) -> regression.py (preflight + full suite
 | `python3 devloop/tickets.py lessons --layer L --name N --file F` | queue every bullet line of F as a lesson for that memory file (a project's own older memory) |
 | `python3 devloop/ticket_creator.py --request "..."` | the user wants something; `--revise N --from user --decision D [--page P] [--by NAME]` is the user's answer, recorded first as a 'user answer' event (decision, text, by, page) and refused for a running ticket |
 | `python3 devloop/ticket_controller.py` | run until nothing is left (`--forever` keeps watching); a run that ends idle with tickets or groups left undone writes one idle page (ref `controller`, the same lines on stderr) saying what each waits for |
-| `python3 devloop/tickets.py inbox` / `ack P [--by NAME]` | pages: created, landed, decision, env, cancelled, idle; `--by` sets acked_by and, for a page whose ref is a ticket or group, writes a 'page acknowledged' event on it (`ack --all --by NAME` only sets acked_by) |
+| `python3 devloop/tickets.py inbox` / `ack P [--by NAME]` | pages: created, landed, decision, env, cancelled, idle; `--by` sets acked_by and, for a page whose ref is a ticket or group, writes a 'page acknowledged' event on it (`ack --all --by NAME` only sets acked_by); a page with options also prints its question, each option with the command it runs, and the recommendation |
+| `python3 devloop/tickets.py wait [--timeout S] [--kind K,...]` | block until a page arrives that was not in the inbox at its start (new = not there then, not acked, kind listed in `--kind`), print it as inbox does, exit 0; exit 1 after `--timeout S` with no new page; exit 2 for a bad kind, a timeout <= 0 or no pool |
 | `python3 devloop/tickets.py list` / `show N` | state of tickets and groups; a merged ticket shows as 功能完成 and a landed one as 驗證完成, while the pool keeps merged / landed |
 | `python3 devloop/tickets.py ready N [--by NAME] [--page P]` | after deciding on a stuck ticket |
 | `python3 devloop/tickets.py ready gN` `[--note "..."] [--by NAME] [--page P] [--via main|web]` | a stuck group whose branch and merged tickets are still there: verify it again (fix rounds back to 0); the `--note` is stored on the group and every later fixer of it gets it as the user's ruling (`--via web` marks a note sent from the board: the fixer gets it cleaned and wrapped behind the injection check, like web text for the opener); `--by` names who gave the answer on the events and `--page` acks that page in the same write |
 | `python3 devloop/tickets.py cancel N --why ... [--by NAME] [--page P]` | drop a ticket |
-| `python3 devloop/tickets.py release gN [--again]` | re-run a landed group's failed release once (`--again` also when it was ok); the outcome is a page |
+| `python3 devloop/tickets.py release gN [--again] [--by NAME] [--page P]` | re-run a landed group's failed release once (`--again` also when it was ok); the outcome is a page; `--by` is stored on the 'release re-run' event and `--page` acks that page in the same write (a refused re-run writes nothing) |
 | `python3 devloop/tickets.py cancel gN --why ... [--by NAME] [--page P]` | close a stuck or open group with no running member: its ready and merged tickets are cancelled, the branch is kept; one `cancelled` page lists them (it names `--by`); `--page` acks that page in the same write |
 | `python3 devloop/tickets.py rerun gN [--why …] [--by NAME] [--page P]` | the environment of a paused group (regression env or unmeasured, or its fixer's worktree setup failed) is fixed: the paused mark is removed, an 'environment fixed: verify again' event is written and `--page` is acked, in one write; a `--forever` controller picks the group up at its next tick; without `--forever`, run the controller again. Refused (exit 2, nothing written) unless the group is pr or fixing without a job |
 | `python3 devloop/board.py serve [--port 8765] [--key-file F]` | the dashboard (or `board.py html --out F [--query Q]`) |
@@ -381,6 +382,19 @@ in without the key: the page with its inputs, and its POSTs are accepted, with o
 `--key-file`. Another header value gets what a request without it gets (403 under `--key-file`).
 `board.py serve` exits 2 before listening when either setting has the wrong type.
 
+The board answers only requests addressed to it, so a web page cannot act through it by DNS
+rebinding or a cross-site form. Every request's `Host` header must be one the board serves: the
+listen address and port, `localhost` / `127.0.0.1` / `[::1]` with that port, the host of
+`board.public_url` (string: the http/https URL people open through a proxy, e.g.
+`https://portal.example/board/`) and the entries of `board.allowed_hosts` (list of `host[:port]`
+strings); any other `Host` gets 403 `unknown host` before the key is looked at. Every POST also needs
+an `Origin` (or, without one, a `Referer`) whose host[:port] is one of those, else 403
+`cross-site request`; a POST with `X-Board-Key` and neither header is accepted (scripts). GET never
+writes. On `--host 0.0.0.0` the names people open (a LAN name or address with its port) must be
+listed in `board.allowed_hosts`, or the board answers them 403. `board.py serve` exits 2 before
+listening when `board.public_url` is not an http/https URL with a host or `board.allowed_hosts` is not a
+list of non-empty strings.
+
 ## Project rules for agents
 
 Rules every agent must follow live in the project's CLAUDE.md, section "Rules for every agent"
@@ -404,6 +418,13 @@ in CLAUDE.md / AGENTS.md, and a file that must never change goes in `hard_block.
 - **A merged or landed ticket is frozen**: nobody revises or reopens it (`ticket_creator.py
   --revise` from any caller and `tickets.py ready` refuse with one line, D-089); overturning one takes a
   new ticket through `actl new --request "..."`, which may revert it.
+- **Pages**: a decision or env page may carry `question` (one line, at most 200 characters),
+  `options` and `recommendation` (one line, the reason for the recommendation), all three or none
+  (`core/pages.py`). Each option is `{action, note, consequence}`; there are 2-4 of them, or exactly
+  one when it is `ack`, and the recommended one is first. Actions: revise, retry, cancel (a ticket),
+  group-ready, group-cancel, rerun, release (a group), ack (any page); each maps to one answer
+  command that inbox prints. `Pool.report` checks the set when the page is written: a bad set is
+  dropped and the text gets a last line `(options dropped: <the first problem>)`.
 
 ## Tests
 
