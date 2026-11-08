@@ -4889,6 +4889,314 @@ def own_origin(port, headers):
     return h
 
 
+class T85Acceptance(LoopCase):
+    """#85: the DAG tab's top lane 待開 lists running openers and the opener's unanswered pages.
+    Expected strings come from the ticket text, never from the implementation. BoardLiveTab is defined
+    later in this module, so its helpers are called through it at run time instead of inherited (inheriting
+    would also re-run its cases)."""
+
+    NS = "{http://www.w3.org/2000/svg}"
+    S_TEXT = "2026-11-06T11:45:00Z"
+    S = calendar.timegm((2026, 11, 6, 11, 45, 0, 0, 0, 0))
+
+    def setUp(self):
+        super().setUp()
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(k)
+
+    def alive(self, started):
+        return BoardLiveTab.alive(self, started)
+
+    def dead(self, started, pid=999999):
+        return BoardLiveTab.dead(self, started, pid)
+
+    def cfg(self):
+        return BoardLiveTab.cfg(self)
+
+    def put(self, name, **rec):
+        return BoardLiveTab.put(self, name, **rec)
+
+    @staticmethod
+    def stamp_text(epoch):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+    def opener(self, name, started=None, title="Board DAG tab", revise=None, stamp=None):
+        stamp = stamp or self.alive(self.S_TEXT if started is None else started)
+        self.put(name, kind="opener", stamp=stamp, title=title, revise=revise, via="main", model="m", effort=None)
+        return stamp
+
+    def write_page(self, name, **row):
+        row.setdefault("acked", False)
+        self.pool.update(lambda tx: tx.write("inbox/%s.json" % name, row), "test: page " + name)
+
+    # ------------------------------------------------------------ svg readers
+    def root(self, now=None):
+        import board
+        page = board.render(self.cfg(), self.snap(), query={"tab": "dag"}, now=self.S + 860 if now is None else now)
+        return self.svg_of(page)
+
+    def svg_of(self, page):
+        import xml.etree.ElementTree as ET
+        m = re.search(r'<svg id="dag".*?</svg>', page, re.S)
+        self.assertIsNotNone(m, "no <svg id=\"dag\"> on the DAG tab")
+        try:
+            return ET.fromstring(m.group(0))
+        except ET.ParseError as exc:
+            self.fail("the DAG svg does not parse: %s" % exc)
+
+    @staticmethod
+    def cls(el):
+        return (el.get("class") or "").split()
+
+    def with_class(self, root, name, tag=None):
+        return [el for el in root.iter() if name in self.cls(el) and (tag is None or el.tag == self.NS + tag)]
+
+    def opening(self, root):
+        found = self.with_class(root, "opening", "g")
+        self.assertEqual(len(found), 1, "one <g class=\"opening\"> in the svg")
+        return found[0]
+
+    def text_of(self, item):
+        return "".join("".join(t.itertext()) for t in item.iter(self.NS + "text"))
+
+    def items(self, root, kind):
+        return [el for el in self.with_class(self.opening(root), "open-item", "g") if el.get("data-kind") == kind]
+
+    def opener_texts(self, root):
+        return [(el.get("data-name"), self.text_of(el)) for el in self.items(root, "opener")]
+
+    def page_items(self, root):
+        """[(data-page, text, href of the <a> wrapping it)]."""
+        out = []
+        for a in self.opening(root).iter(self.NS + "a"):
+            for g in a:
+                if g.tag == self.NS + "g" and "open-item" in self.cls(g) and g.get("data-kind") == "page":
+                    out.append((g.get("data-page"), self.text_of(g), a.get("href")))
+        unwrapped = [el for el in self.items(root, "page") if el.get("data-page") not in [p for p, _, _ in out]]
+        self.assertEqual(unwrapped, [], "every page item is wrapped in an <a>")
+        return out
+
+    # ------------------------------------------------------------ item 1
+    def test_item1_running_opener_lane_first_with_its_item(self):
+        self.add(1)
+        self.add(2, state="merged", group="g9")
+        self.pool.update(lambda tx: tx.put_group({"id": "g9", "state": "open", "branch": "int/g9",
+                                                  "members": ["2"]}), "test: g9")
+        self.opener("opener-1")
+        root = self.root()
+        first = [el for el in root if el.tag == self.NS + "g"]
+        self.assertTrue(first, "the svg has child <g> elements")
+        first = first[0]
+        self.assertIn("opening", self.cls(first), "the first child <g> of the svg is the 待開 lane")
+        self.assertEqual(first.get("data-lane"), "待開")
+        bands = [el for el in first.iter(self.NS + "rect") if "band" in self.cls(el)]
+        self.assertTrue(bands, "the 待開 lane has a <rect class=\"band\">")
+        lane_bands = [r for lane in self.with_class(root, "lane", "g") for r in lane.iter(self.NS + "rect")
+                      if "band" in self.cls(r)]
+        self.assertTrue(lane_bands, "the fixture draws group lanes")
+        for r in lane_bands:
+            self.assertLess(float(bands[0].get("y")), float(r.get("y")))
+        heads = ["".join(t.itertext()) for t in first.iter(self.NS + "text") if "lh" in self.cls(t)]
+        self.assertEqual(heads, ["待開"])
+        self.assertEqual(self.opener_texts(root), [("opener-1", "開題:Board DAG tab · 14 分")])
+
+    # ------------------------------------------------------------ item 2
+    def test_item2_revise_untitled_clipped_and_order(self):
+        import board
+        self.add(1)
+        self.opener("op-a", started="2026-11-06T11:40:00Z", title=None, revise="5")
+        self.opener("op-b", started="2026-11-06T11:42:00Z", title=None)
+        self.opener("op-c", started="2026-11-06T11:44:00Z", title="x" * 50)
+        root = self.root()
+        now = self.S + 860
+        self.assertEqual(self.opener_texts(root), [
+            ("op-a", "改票 #5 · " + board.live_elapsed(now - board.pool_seconds("2026-11-06T11:40:00Z"))),
+            ("op-b", "開題 · " + board.live_elapsed(now - board.pool_seconds("2026-11-06T11:42:00Z"))),
+            ("op-c", "開題:" + "x" * 36 + "… · " + board.live_elapsed(now - board.pool_seconds("2026-11-06T11:44:00Z"))),
+        ])
+
+    def test_item2_waiting_opener_appends_its_state_and_ended_is_not_listed(self):
+        self.add(1)
+        op = self.opener("op-wait", title="Waiting one")
+        self.put("agent-w", kind="agent", stamp=self.alive("2026-11-06T11:46:00Z"), parent=op["pid"], role="creator",
+                 ticket=None, group=None, round=None, run_dir="/r/w", log=None, command="claude", model="m",
+                 effort=None, state="slot", since="2026-11-06T11:46:00Z", until=None)
+        self.opener("op-gone", stamp=self.dead(osx.now()), title="Gone one")
+        root = self.root()
+        self.assertEqual(self.opener_texts(root), [
+            ("op-wait", "開題:Waiting one · 14 分 · 等機器名額:第 1 個(共 1 個在等)")])
+
+    # ------------------------------------------------------------ items 3 and 4
+    def test_item3_and_4_opener_pages_listed_newest_first_others_not(self):
+        import board
+        self.add(1)
+        self.add(5)
+        self.pool.update(lambda tx: tx.put_group({"id": "g21", "state": "fixing", "branch": "int/g21",
+                                                  "members": []}), "test: g21")
+        # listed
+        self.write_page("pa", kind="decision", ref="request", text="the opener needs your decision\nmore",
+                        question="Which tab gets the lane?", at="2026-11-06T11:00:00Z")
+        self.write_page("pb", kind="decision", ref="5", at="2026-11-06T11:10:00Z",
+                        text="#5 needs your decision (raised by the worker): which file?")
+        self.write_page("pc", kind="decision", ref="web", at="2026-11-06T11:20:00Z",
+                        text="input from the web was NOT acted on - it looked like a prompt injection: x")
+        self.write_page("pd", kind="decision", ref="request", at="2026-11-06T11:30:00Z", question="",
+                        text="the opener could not produce valid tickets:\n- bad")
+        # not listed
+        self.write_page("n1", kind="decision", ref="request", text="old", question="q?", acked=True,
+                        at="2026-11-06T11:31:00Z")
+        for i, kind in enumerate(("env", "created", "landed", "idle", "cancelled")):
+            self.write_page("k%d" % i, kind=kind, ref="request", text="input from the web x",
+                            at="2026-11-06T11:3%d:00Z" % (2 + i))
+        self.write_page("o1", kind="decision", ref="g21", at="2026-11-06T11:40:00Z",
+                        text="group g21 is still red after 3 fix rounds: ...")
+        self.write_page("o2", kind="decision", ref="5", at="2026-11-06T11:41:00Z", text="#5 is stuck (rounds): ...")
+        self.write_page("o3", kind="decision", ref="g21", at="2026-11-06T11:42:00Z",
+                        text="group g21: input from the web was NOT acted on - it looked like a prompt injection: y")
+        inbox = self.snap().inbox
+        for name in ("pa", "pb", "pc", "pd"):
+            self.assertIn(name, inbox, "the fixture's page names are the inbox keys")
+        root = self.root()
+        self.assertEqual(self.page_items(root), [
+            ("pd", "要你判:the opener could not produce valid tick…", "?tab=decide"),
+            ("pc", "要你判:" + "input from the web was NOT acted on - it looked like a prompt injection: x"[:39] + "…",
+             "?tab=decide"),
+            ("pb", "要你判:" + "#5 needs your decision (raised by the worker): which file?"[:39] + "…", "?tab=decide"),
+            ("pa", "要你判:Which tab gets the lane?", "?tab=decide"),
+        ])
+        self.assertEqual(board._clip("the opener could not produce valid tickets:", 40),
+                         "the opener could not produce valid tickets:"[:39] + "…")
+
+    # ------------------------------------------------------------ item 5
+    def lanes_and_nodes(self, root):
+        return ({el.get("data-group"): el for el in self.with_class(root, "lane", "g")},
+                {el.get("data-id"): el for el in self.with_class(root, "node", "g")})
+
+    def shape(self, el):
+        """Every element below `el` in order: (tag, attributes without y, text, y or None)."""
+        return [(d.tag, sorted((k, v) for k, v in d.attrib.items() if k != "y"), d.text, d.get("y"))
+                for d in el.iter()]
+
+    def test_item5_nothing_to_list_then_lanes_only_move_down(self):
+        self.add(1, state="merged", group="g9")
+        self.add(2, deps=[1])
+        self.add(3, group="g9")
+        self.pool.update(lambda tx: tx.put_group({"id": "g9", "state": "open", "branch": "int/g9",
+                                                  "members": ["1", "3"]}), "test: g9")
+        self.write_page("other", kind="decision", ref="g9", at="2026-11-06T11:00:00Z",
+                        text="group g9 is still red after 3 fix rounds: ...")
+        self.write_page("acked", kind="decision", ref="request", at="2026-11-06T11:01:00Z", text="q", acked=True)
+        self.opener("op-gone", stamp=self.dead(osx.now()))
+        before = self.root()
+        self.assertEqual(self.with_class(before, "opening"), [], "nothing to list: no 'opening' element")
+        lanes0, nodes0 = self.lanes_and_nodes(before)
+        self.assertEqual(set(nodes0), {"1", "2", "3"})
+        self.opener("op-live")
+        after = self.root()
+        self.opening(after)
+        for el in self.with_class(after, "opening") + self.with_class(after, "open-item"):
+            self.assertFalse({"lane", "node"} & set(self.cls(el)), "an opening/open-item element is no lane or node")
+        lanes1, nodes1 = self.lanes_and_nodes(after)
+        self.assertEqual(set(lanes1), set(lanes0))
+        self.assertEqual(set(nodes1), set(nodes0))
+        deltas = set()
+        for key, a, b in ([("lane " + k, lanes0[k], lanes1[k]) for k in lanes0]
+                          + [("node " + k, nodes0[k], nodes1[k]) for k in nodes0]):
+            s0, s1 = self.shape(a), self.shape(b)
+            self.assertEqual([x[:3] for x in s0], [x[:3] for x in s1], "%s keeps its markup" % key)
+            for (_, _, _, y0), (_, _, _, y1) in zip(s0, s1):
+                self.assertEqual(y0 is None, y1 is None, key)
+                if y0 is not None:
+                    deltas.add(round(float(y1) - float(y0), 6))
+        self.assertEqual(len(deltas), 1, "every lane and node moves down by the same amount: %s" % deltas)
+        self.assertGreater(deltas.pop(), 0)
+        height = float(after.get("height"))
+        for el in after.iter():
+            if el.tag == self.NS + "rect":
+                self.assertLessEqual(float(el.get("y")) + float(el.get("height")), height, "svg height holds rects")
+            elif el.tag == self.NS + "text":
+                self.assertLessEqual(float(el.get("y")), height, "svg height holds texts")
+
+    # ------------------------------------------------------------ item 6
+    def test_item6_served_board_end_to_end(self):
+        import http.client
+        import socket
+        lock = os.path.join(self.cfg().worktree_root, "controller.lock")
+        os.makedirs(os.path.dirname(lock), exist_ok=True)
+        with open(lock, "w") as fh:
+            fh.write(json.dumps(osx.stamp()))
+        self.pool.update(lambda tx: (
+            tx.put_group({"id": "g21", "state": "pr", "branch": "int/g21", "members": ["1"]}),
+            tx.put_group({"id": "g22", "state": "open", "branch": "int/g22", "members": ["3"]})), "test: groups")
+        self.add(1, state="merged", group="g21")
+        self.add(2, deps=[1])
+        self.add(3, group="g22")
+        started = int(time.time()) - 860
+        self.put("regression-int-g21", kind="regression", stamp=self.alive(self.stamp_text(started)), group="g21",
+                 branch="int/g21", sha="a" * 40, exclusive=False, stage="full", since=self.stamp_text(started))
+        self.opener("opener-web", started=self.stamp_text(int(time.time()) - 60))
+        key = os.path.join(self.tmp, "key")
+        with open(key, "w") as fh:
+            fh.write("k1\n")
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "board.py"), "serve", "--port", str(port),
+                                 "--key-file", key], cwd=self.proj, env=self.env,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.terminate)
+
+        def get(path):
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            try:
+                conn.request("GET", path, headers={"X-Board-Key": "k1"})
+                resp = conn.getresponse()
+                return resp.status, resp.read().decode("utf-8")
+            finally:
+                conn.close()
+        for _ in range(100):
+            try:
+                get("/")
+                break
+            except OSError:
+                time.sleep(0.1)
+        status, page = get("/?tab=dag")
+        self.assertLess(time.time() - started, 899, "the GET came too late for the 14 分 oracle")
+        self.assertEqual(status, 200)
+        root = self.svg_of(page)
+        lanes = {el.get("data-group"): el for el in self.with_class(root, "lane", "g")}
+        nodes = {el.get("data-id"): el for el in self.with_class(root, "node", "g")}
+        # (a)
+        self.assertIn("g21", lanes)
+        lh = ["".join(t.itertext()) for t in lanes["g21"].iter(self.NS + "text") if "lh" in self.cls(t)]
+        self.assertEqual(len(lh), 1)
+        self.assertIn("regression full", lh[0])
+        self.assertIn("14 分", lh[0])
+        # (b)
+        self.assertIn("2", nodes)
+        waits2 = ["".join(t.itertext()) for t in nodes["2"].iter(self.NS + "text") if "wait" in self.cls(t)]
+        self.assertEqual(waits2, ["等 g21 落地 — regression 跑中"])
+        self.assertTrue([el for el in root.iter(self.NS + "path") if "lanewait" in self.cls(el)
+                         and el.get("data-from") == "lane:g21" and el.get("data-to") == "2"])
+        # (c)
+        texts = [self.text_of(el) for el in self.items(root, "opener")]
+        self.assertTrue(any(t.startswith("開題:Board DAG tab") for t in texts), texts)
+        # (d)
+        for ident, n in nodes.items():
+            if n.get("data-state") == "ready":
+                w = ["".join(t.itertext()) for t in n.iter(self.NS + "text") if "wait" in self.cls(t)]
+                self.assertTrue(w and w[0].strip(), "#%s has a non-empty wait line" % ident)
+        self.assertTrue([el for el in root.iter() if el.get("data-to") == "2"
+                         and set(self.cls(el)) & {"wait", "chain", "lanewait"}])
+        # (e)
+        self.assertIn("g22", lanes)
+        self.assertIn("3", [el.get("data-id") for el in self.with_class(lanes["g22"], "node", "g")])
+        st = ["".join(t.itertext()) for t in nodes["3"].iter(self.NS + "text") if "st" in self.cls(t)]
+        self.assertEqual(st, ["組內待做"])
+
+
 class BoardKeyCookie(LoopCase):
     """#37: the board key is traded once for a cookie; helpers, the keyless board and the README."""
 
