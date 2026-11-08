@@ -3052,6 +3052,191 @@ class ReleaseRerun(LoopCase):
         self.assertIn("tickets.py release", readme[cancel + 1])
 
 
+class T77Acceptance(LoopCase):
+    """#77: tickets.py wait blocks until a page that was not in the inbox at its start arrives;
+    `tickets.py inbox` (run after the wait) is the oracle for what it prints."""
+
+    def setUp(self):
+        super().setUp()
+        for key in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(key, None)
+
+    def start_wait(self, *args):
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "tickets.py"), "wait"] + list(args),
+                                cwd=self.proj, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True)
+        self.addCleanup(self.stop, proc)
+        return proc
+
+    @staticmethod
+    def stop(proc):
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+
+    def finish(self, proc, timeout=30):
+        out, err = proc.communicate(timeout=timeout)
+        return proc.returncode, out, err
+
+    def write_pages(self, *pages):
+        """pages: (name, kind, ref, text[, acked]) - all in one pool change."""
+        def change(tx):
+            for p in pages:
+                name, kind, ref, text = p[:4]
+                tx.write("inbox/%s.json" % name, {"kind": kind, "ref": ref, "text": text,
+                                                  "at": "2026-11-08T00:00:00Z",
+                                                  "acked": bool(p[4]) if len(p) > 4 else False})
+        self.pool.update(change, "test: pages %s" % ",".join(p[0] for p in pages))
+
+    def inbox_blocks(self):
+        """{page name: its lines in `tickets.py inbox` output}, the oracle."""
+        res = self.run_py("tickets.py", "inbox", timeout=60)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        blocks, cur = {}, None
+        for line in res.stdout.splitlines():
+            if line.startswith("    ") and cur is not None:
+                blocks[cur].append(line)
+            elif line[:2] in ("* ", ". "):
+                cur = line.split()[-1]
+                blocks[cur] = [line]
+            else:
+                cur = None
+        return blocks
+
+    def test_one_new_page_ends_the_wait_and_prints_its_inbox_block(self):
+        t0 = time.monotonic()
+        proc = self.start_wait("--timeout", "20")
+        time.sleep(1.5)
+        self.write_pages(("20261108T100000-decision-g1", "decision", "g1", "first line\nsecond line\nthird"))
+        rc, out, err = self.finish(proc)
+        elapsed = time.monotonic() - t0
+        self.assertEqual(rc, 0, out + err)
+        self.assertLess(elapsed, 10)
+        block = self.inbox_blocks()["20261108T100000-decision-g1"]
+        self.assertEqual(len(block), 4, block)
+        self.assertEqual(out.splitlines(), block)
+
+    def test_pages_in_the_inbox_at_start_are_never_printed(self):
+        self.write_pages(("20261108T090000-landed-g1", "landed", "g1", "old unread"),
+                         ("20261108T090001-env-g2", "env", "g2", "old read", True))
+        proc = self.start_wait("--timeout", "20")
+        time.sleep(1.5)
+        self.write_pages(("20261108T100000-decision-g3", "decision", "g3", "new one"))
+        rc, out, err = self.finish(proc)
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("20261108T100000-decision-g3", out)
+        self.assertNotIn("20261108T090000-landed-g1", out)
+        self.assertNotIn("20261108T090001-env-g2", out)
+        self.assertEqual(out.splitlines(), self.inbox_blocks()["20261108T100000-decision-g3"])
+
+    def check_kind_filter(self, kinds):
+        proc = self.start_wait("--timeout", "20", "--kind", kinds)
+        time.sleep(1.5)
+        self.write_pages(("20261108T100000-landed-g1", "landed", "g1", "landed text"))
+        time.sleep(1.5)
+        if proc.poll() is not None:
+            out, err = proc.communicate()
+            self.fail("the wait ended on a landed page with --kind %r: rc %s %s%s"
+                      % (kinds, proc.returncode, out, err))
+        self.write_pages(("20261108T100001-decision-g2", "decision", "g2", "decide this"))
+        rc, out, err = self.finish(proc)
+        self.assertEqual(rc, 0, out + err)
+        self.assertIn("20261108T100001-decision-g2", out)
+        self.assertNotIn("20261108T100000-landed-g1", out)
+        self.assertEqual(out.splitlines(), self.inbox_blocks()["20261108T100001-decision-g2"])
+
+    def test_kind_filter_skips_other_kinds(self):
+        self.check_kind_filter("decision,env")
+
+    def test_kind_names_are_trimmed(self):
+        self.check_kind_filter(" decision , env")
+
+    def test_two_pages_in_one_change_are_both_printed_in_name_order(self):
+        proc = self.start_wait("--timeout", "20")
+        time.sleep(1.5)
+        # written in reverse order; printed in name order
+        self.write_pages(("20261108T100002-landed-g2", "landed", "g2", "b text"),
+                         ("20261108T100001-env-g1", "env", "g1", "a text\nmore"))
+        rc, out, err = self.finish(proc)
+        self.assertEqual(rc, 0, out + err)
+        blocks = self.inbox_blocks()
+        self.assertEqual(out.splitlines(),
+                         blocks["20261108T100001-env-g1"] + blocks["20261108T100002-landed-g2"])
+
+    def test_timeout_without_new_page_exits_one(self):
+        self.write_pages(("20261108T090000-decision-g1", "decision", "g1", "already here"))
+        t0 = time.monotonic()
+        proc = self.start_wait("--timeout", "1")
+        rc, out, err = self.finish(proc, timeout=30)
+        elapsed = time.monotonic() - t0
+        self.assertEqual(rc, 1, out + err)
+        self.assertLess(elapsed, 6)
+        self.assertGreaterEqual(elapsed, 0.9, "exited before the timeout")
+        self.assertEqual(len(out.splitlines()), 1, out)
+        self.assertTrue(out.startswith("wait: no new page"), out)
+        self.assertEqual(err, "")
+
+    def assert_refused(self, *args):
+        res = self.run_py("tickets.py", "wait", *args, timeout=30)
+        self.assertEqual(res.returncode, 2, (args, res.stdout, res.stderr))
+        self.assertEqual(res.stdout, "", args)
+        lines = res.stderr.strip().splitlines()
+        self.assertEqual(len(lines), 1, (args, res.stderr))
+        self.assertTrue(lines[0].startswith("tickets:"), (args, res.stderr))
+
+    def test_bad_arguments_and_missing_pool_exit_two(self):
+        # each refused call carries a short timeout so a wrong implementation ends instead of blocking
+        self.assert_refused("--timeout", "3", "--kind", "nosuch")
+        self.assert_refused("--timeout", "3", "--kind", ",")
+        self.assert_refused("--timeout", "0")
+        self.assert_refused("--timeout", "-3")
+        res = self.run_py("tickets.py", "wait", "--timeout", "abc", timeout=30)
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.config(pool=os.path.join(self.tmp, "no-such-pool"))
+        self.assert_refused("--timeout", "3")
+
+    def test_every_known_kind_is_accepted(self):
+        # pairs the refusal above: a valid kind list is not refused (ends by timeout instead)
+        proc = self.start_wait("--timeout", "1", "--kind", "created,landed,decision,env,cancelled,idle")
+        rc, out, err = self.finish(proc)
+        self.assertEqual(rc, 1, out + err)
+        self.assertEqual(err, "")
+
+    def test_docs_list_the_command(self):
+        def read(*parts):
+            with open(os.path.join(HOME, *parts)) as fh:
+                return fh.read()
+        readme = read("devloop", "README.md").splitlines()
+        inbox = [i for i, ln in enumerate(readme) if ln.startswith("| `python3 devloop/tickets.py inbox")]
+        self.assertEqual(len(inbox), 1)
+        self.assertIn("idle", readme[inbox[0]])
+        self.assertIn("cancelled", readme[inbox[0]])
+        row = readme[inbox[0] + 1]
+        self.assertTrue(row.startswith("| `python3 devloop/tickets.py wait"), row)
+        self.assertIn("--kind", row)
+        self.assertIn("start", row)
+        for code in ("0", "1", "2"):
+            self.assertRegex(row, r"(?<![0-9.])%s(?![0-9.])" % code)
+        cancel = [i for i, ln in enumerate(readme) if ln.startswith("| `python3 devloop/tickets.py cancel")][0]
+        self.assertIn("tickets.py release", readme[cancel + 1])
+        doc = read("devloop", "tickets.py").split('"""')[1]
+        self.assertIn("tickets.py wait", doc)
+        actl = [ln for ln in read("bin", "actl").splitlines() if ln.startswith("  tickets ")]
+        self.assertEqual(len(actl), 1)
+        self.assertIn("|release", actl[0])
+        self.assertIn("wait", re.split(r"[\s|]+", actl[0]))
+        claude = read("CLAUDE.md").splitlines()
+        poll = [ln for ln in claude if "不輪詢" in ln]
+        self.assertEqual(len(poll), 1, poll)
+        self.assertIn("`actl tickets wait", poll[0])
+        self.assertIn("背景", poll[0])
+        self.assertEqual(len([ln for ln in claude if "頁的種類" in ln]), 1)
+
+
 class FixerTestsChangedUnit(LoopCase):
     """auto_fixer._record_tests keeps tests_changed on the group by the rules of _record_cases."""
 
