@@ -279,3 +279,11 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
   (實測 git grep)。portal 信任標頭是主線判斷保留的,已請使用者確認。
 - 發版在雲端依舊推不了 tag(g9、g10、g12 各一頁,已 ack)。
 - 下一步:把更新說明交給 T(不含 Google OAuth);等使用者確認要不要留 portal 信任標頭。
+
+## 2026-11-07〜08 T 的回饋、進行中分頁、D-094
+
+- g13(#58):WorktreeSetup 測試在 macOS(/var → /private/var)誤紅,只改測試。g14(#59–#63,約 7.5 美元):開題者記花費、
+  codex 額度訊息的重置時間、codex 用量(`devloop.prices`)、hard_block 只看票自己的 commit、`actl run` 停下時有事沒做完就發 `idle` 頁。
+- g15(#64–#68,約 18.9 美元):看板「進行中」分頁,程序在 `<worktrees>/runs/live/` 留紀錄;發版腳本可印 `devloop-stage: <文字>`。
+  #66/#67 矛盾由主線代答(照 #67),使用者事後同意並定成 D-094。main = 0be812b。
+- 給 T 的更新說明已交給使用者(pull、重啟看板與 controller、發版腳本加 stage 行)。
