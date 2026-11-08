@@ -234,6 +234,9 @@ class Controller:
                 if behind:
                     self.fix_main_moved(g)     # main conflicts with the branch: the fixer merges it
                     continue
+                if g.get("fix_retry") and g.get("fix_report") and os.path.isfile(g["fix_report"]):
+                    self.start_fixer(g["id"], g["fix_report"], int(g.get("fix_round") or 0) + 1)
+                    continue                   # the last round never reached the fixer agent
                 self.start_regression(g)
             elif state == "verified":
                 self.land(g)
@@ -334,7 +337,8 @@ class Controller:
 
     def start_fixer(self, gid, report_path, rnd):
         argv = ["python3", os.path.join(LOOP, "auto_fixer.py"), "--group", gid, "--report", report_path]
-        self.set_group(gid, "fixing", "fix round %d" % rnd, fix_round=rnd)
+        self.set_group(gid, "fixing", "fix round %d" % rnd, drop=("fix_retry", "paused"),
+                       fix_round=rnd, fix_report=report_path)
         self._start_job(gid, "fixer", argv, report_path)
 
     def _start_job(self, gid, kind, argv, out):
@@ -389,19 +393,45 @@ class Controller:
         self.start_fixer(gid, job["out"], rnd + 1)
 
     def after_fixer(self, gid, rc):
-        if rc == 86:
-            g = self.pool.snapshot().groups.get(gid) or {}
-            self.set_group(gid, "pr", "fixer worktree setup failed (env)", job=None,
-                           fix_round=max(0, int(g.get("fix_round") or 0) - 1))
-            why = "devloop.worktree_setup failed for the fixer of %s" % gid
-            self.pause(gid, "env", self._env_page_text(gid) or why)
-            if not self.forever:
-                raise Stop(3, why)
+        g = self.pool.snapshot().groups.get(gid) or {}
+        rnd = int(g.get("fix_round") or 0)
+        if g.get("fix_agent_round") != g.get("fix_round"):
+            self.fixer_did_not_run(gid, rc, rnd)
             return
         if rc == 3:
             self.set_group(gid, "stuck", "fixer needs a decision", job=None)
             return
         self.set_group(gid, "pr", "fixer done (rc %s): verify again" % rc, job=None)
+
+    def fixer_did_not_run(self, gid, rc, rnd):
+        """auto_fixer ended (any rc, None for an adopted job) without starting the fixer agent:
+        the round is not counted, no regression starts, the group is paused with one page and
+        `fix_retry` makes the next start a fixer again. For rc 86 auto_fixer's env page is the page."""
+        self.set_group(gid, "pr", "fix round %d did not run (rc %s)" % (rnd, rc), job=None,
+                       fix_round=max(0, rnd - 1), fix_retry=True)
+        if rc == 86:
+            why = "devloop.worktree_setup failed for the fixer of %s" % gid
+            self.pause(gid, "env", self._env_page_text(gid) or why)
+        else:
+            why = ("group %s: fix round %d did not run: auto_fixer ended (rc %s) before starting the fixer "
+                   "agent: %s. The round was not counted and no regression was started. Fix the cause, "
+                   "then `actl tickets rerun %s` (on the board: 環境修好了,重跑); a controller without "
+                   "--forever: run it again." % (gid, rnd, "unknown" if rc is None else rc,
+                                                 self._fixer_log_tail(gid), gid))
+            self.pool.report("env", gid, why)
+            self.pause(gid, "fixer", why)
+        if not self.forever:
+            raise Stop(3, "fix round %d of %s did not run" % (rnd, gid))
+
+    def _fixer_log_tail(self, gid):
+        """The last non-empty line of runs/fixer/<gid>/fixer.log, or 'no fixer log'."""
+        path = os.path.join(self.cfg.worktree_root, "runs", "fixer", gid, "fixer.log")
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                lines = [ln.strip() for ln in fh.read().splitlines() if ln.strip()]
+        except OSError:
+            lines = []
+        return lines[-1] if lines else "no fixer log"
 
     # ------------------------------------------------------------ landing
 

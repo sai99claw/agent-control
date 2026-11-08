@@ -6811,6 +6811,128 @@ class Recovery(LoopCase):
         self.assertEqual(self.state(1), "landed")
 
 
+class FixAgentRoundUnits(LoopCase):
+    """#73 implementer's unit tests: after_fixer when the fixer agent ran (fix_agent_round ==
+    fix_round), start_fixer's fields, the fix_retry branch of advance_groups, the log tail and
+    auto_fixer's mark."""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key, None)
+        from unittest import mock
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key, None)
+
+    def ctl(self, forever=True):
+        import ticket_controller
+        from core.config import Config
+        c = ticket_controller.Controller(Config(self.proj), self.pool)
+        c.forever = forever
+        return c
+
+    def put(self, gid, **fields):
+        g = {"id": gid, "branch": "int/" + gid, "state": "fixing", "members": [], "fix_round": 2,
+             "fix_agent_round": 2, "job": {"kind": "fixer"}}
+        g.update(fields)
+        self.pool.update(lambda tx: tx.put_group(g), "test: group %s" % gid)
+
+    def env_pages(self, gid):
+        return [r for r in self.snap().inbox.values() if r.get("ref") == gid and r.get("kind") == "env"]
+
+    def test_ran_and_exit_0_1_or_adopted_verifies_again(self):
+        for rc in (0, 1, None):
+            self.put("g1")
+            self.ctl(forever=False).after_fixer("g1", rc)
+            g = self.snap().groups["g1"]
+            self.assertEqual((g["state"], g["fix_round"], g["job"]), ("pr", 2, None), rc)
+            self.assertNotIn("paused", g)
+            self.assertFalse(g.get("fix_retry"))
+        self.assertEqual(self.env_pages("g1"), [])
+
+    def test_ran_and_exit_3_is_stuck(self):
+        self.put("g1")
+        self.ctl(forever=False).after_fixer("g1", 3)
+        g = self.snap().groups["g1"]
+        self.assertEqual((g["state"], g["fix_round"], g["job"]), ("stuck", 2, None))
+
+    def test_not_ran_pauses_with_one_page_and_stops_without_forever(self):
+        import ticket_controller
+        from core.config import Config
+        log = os.path.join(Config(self.proj).runs_dir("fixer", "g1"), "fixer.log")
+        with open(log, "w") as fh:
+            fh.write("first\nauto_fixer: the last words\n\n  \n")
+        self.put("g1", fix_agent_round=1)
+        with self.assertRaises(ticket_controller.Stop) as cm:
+            self.ctl(forever=False).after_fixer("g1", 2)
+        self.assertEqual(cm.exception.code, 3)
+        g = self.snap().groups["g1"]
+        self.assertEqual((g["state"], g["fix_round"], g["job"], g["fix_retry"]), ("pr", 1, None, True))
+        self.assertEqual(g["paused"]["reason"], "fixer")
+        pages = self.env_pages("g1")
+        self.assertEqual(len(pages), 1)
+        for part in ("fix round 2", "rc 2", "auto_fixer: the last words", "actl tickets rerun g1"):
+            self.assertIn(part, pages[0]["text"])
+
+    def test_log_tail_without_a_log(self):
+        self.assertEqual(self.ctl()._fixer_log_tail("g9"), "no fixer log")
+
+    def test_start_fixer_stores_the_report_and_drops_retry_and_pause(self):
+        self.put("g1", state="pr", job=None, fix_round=0, fix_retry=True,
+                 paused={"reason": "fixer", "at": "t", "text": ""})
+        ctl = self.ctl()
+        jobs = []
+        ctl._start_job = lambda gid, kind, argv, out: jobs.append((gid, kind, out))
+        ctl.start_fixer("g1", "/r.json", 1)
+        g = self.snap().groups["g1"]
+        self.assertEqual((g["state"], g["fix_round"], g["fix_report"]), ("fixing", 1, "/r.json"))
+        self.assertNotIn("fix_retry", g)
+        self.assertNotIn("paused", g)
+        self.assertEqual(jobs, [("g1", "fixer", "/r.json")])
+
+    def advance(self, **fields):
+        self.put("g1", state="pr", job=None, fix_round=1, **fields)
+        ctl = self.ctl(forever=False)
+        ctl.follow_main = lambda g: False
+        calls = []
+        ctl.start_regression = lambda g: calls.append(("regression", g["id"]))
+        ctl.start_fixer = lambda gid, report, rnd: calls.append(("fixer", gid, report, rnd))
+        ctl.advance_groups(self.snap())
+        return calls
+
+    def test_retry_with_an_existing_report_starts_the_fixer(self):
+        report = os.path.join(self.tmp, "red.json")
+        with open(report, "w") as fh:
+            fh.write("{}")
+        self.assertEqual(self.advance(fix_retry=True, fix_report=report), [("fixer", "g1", report, 2)])
+
+    def test_retry_whose_report_is_gone_gets_a_regression(self):
+        gone = os.path.join(self.tmp, "gone.json")
+        self.assertEqual(self.advance(fix_retry=True, fix_report=gone), [("regression", "g1")])
+
+    def test_no_retry_gets_a_regression(self):
+        report = os.path.join(self.tmp, "red.json")
+        with open(report, "w") as fh:
+            fh.write("{}")
+        self.assertEqual(self.advance(fix_report=report), [("regression", "g1")])
+
+    def test_mark_agent_round_is_one_write_with_an_event(self):
+        import auto_fixer
+        self.put("g1")
+        auto_fixer.mark_agent_round(self.pool, "g1", 4)
+        g = self.snap().groups["g1"]
+        self.assertEqual(g["fix_agent_round"], 4)
+        self.assertEqual(g["history"][-1]["event"], "fixer agent started (round 4)")
+
+    def test_mark_agent_round_on_a_missing_group_fails(self):
+        import auto_fixer
+        with self.assertRaises(osx.OSFailure):
+            auto_fixer.mark_agent_round(self.pool, "g7", 1)
+
+
 class GroupSizeUnits(LoopCase):
     """devloop.max_group_size: joinable() and group_for() (implementer's unit tests)."""
 

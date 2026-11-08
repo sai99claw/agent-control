@@ -84,8 +84,13 @@ and then for an issuer the ticket is stuck with reason `env` (an "env" page); fo
 result is status `env`, exit 86 (an "env" page, the group is paused and the controller stops with
 exit 3, or under `--forever` keeps running); for a fixer an "env" page for the group, the group goes
 back to "pr" with its fix round not counted, is paused, and the controller stops with exit 3 (under
-`--forever` it keeps running); for a release the release failed (a decision page; not retried, not
+`--forever` it keeps running), and the rerun (or the next controller run) starts the fixer again
+instead of a regression; for a release the release failed (a decision page; not retried, not
 rolled back). Every such text contains `devloop.worktree_setup`.
+The same holds for any fix round in which auto_fixer ended before starting the fixer agent (the
+group's `fix_agent_round`, set right before the agent starts, is not its `fix_round`): no round is
+counted, no regression starts, the group is paused with one "env" page saying why, and the rerun
+starts the fixer again.
 
 `devloop.prices` (default null; `{}` is the same): maps a model name (the row's `model`: the value
 after `--model`, else the command's file name) to `{"input": n, "cached_input": n, "output": n}`,

@@ -25,6 +25,10 @@ regression afterwards). Two kinds of red:
     Every round starts with the fix worktree put back on the integration branch at its current
     head (unfinished merges aborted, tracked edits dropped).
 
+Right before the fixer agent starts, the group's `fix_agent_round` is set to the round (one pool
+write); an exit without that mark means no agent ran, and the controller neither counts the round
+nor verifies again: it pauses the group and the rerun starts the fixer again.
+
 Exit: 0 something was committed (verify again) · 1 nothing usable came back · 3 the fixer handed
 in `decision` / `blocked`: only the user can decide (already reported as a decision page) · 2 refused ·
 86 devloop.worktree_setup failed for the fixer's worktree (env page written) · 4 interrupted by SIGTERM/SIGINT (the
@@ -77,6 +81,20 @@ def round_start(cfg, pool, gid, repo, tree, branch):
     return tree
 
 
+def mark_agent_round(pool, gid, rnd):
+    """One pool write right before the fixer agent starts: the group's fix_agent_round is this
+    round. The controller counts a fix round (and verifies again) only when this mark equals the
+    group's fix_round; a failed write is a failure before the agent (OSFailure, exit 2)."""
+    def change(tx):
+        group = tx.data.groups.get(gid)
+        if group is None:
+            raise osx.OSFailure("no group %s" % gid)
+        group["fix_agent_round"] = rnd
+        event(group, "fixer agent started (round %d)" % rnd)
+        tx.put_group(group)
+    pool.update(change, "group %s: fixer agent started (round %d)" % (gid, rnd))
+
+
 def fix(cfg, pool, gid, report, live=None):
     live = [] if live is None else live
     snap = pool.snapshot()
@@ -121,6 +139,7 @@ def fix(cfg, pool, gid, report, live=None):
         "project_memory": memory.project_path(cfg),
     }
     start, known = g.sha("HEAD"), g.all_ref_shas()
+    mark_agent_round(pool, gid, rnd)
     pending = agents.start(cfg, "fixer", agents.render("fixer.md", values), tree, run_dir,
                            cfg.agent_timeout_seconds, extra_env={"AC_CODE_ROOT": tree, "DEVLOOP_GROUP": gid},
                            on_quota=quota_hook(pool, gid))
