@@ -296,3 +296,10 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
 - 看板檢查 Host 與 Origin(擋 DNS rebinding 與跨站送出);放在 proxy 後面要設 `board.public_url` 或 `board.allowed_hosts`。
 - 決定頁附問題、選項與推薦,看板上是按鈕;`actl tickets wait` 取代自己寫的等待迴圈(CLAUDE.md 已改)。
 - 「答覆自動回到對話裡」(UserPromptSubmit hook)使用者問了好處,主線建議先不做,未定。
+
+## 2026-11-08(續二)DAG 即時狀態、D-095
+
+- g18(#82、#83、#86)、g19(#84、#85)落地,main = 70c5757,約 18.6 美元(#84 先用滿 3 輪卡住:第 3 輪 worker 改了驗收,
+  主線照頁上推薦 retry,第二次一輪過)。DAG:組的標題是即時狀態列、節點標角色 / 輪 / 模型 / 已跑多久、每個待派寫等什麼並畫到源頭、
+  組內待做畫在組裡(#86:票離開組時從名單移除)、最上面的「待開」帶、30 秒自動更新。
+- D-095:看板畫面只由程式讀票庫與腳本寫的紀錄畫出來,不花 LLM。
