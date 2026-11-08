@@ -9106,6 +9106,125 @@ class BoardActButtons(LoopCase):
                         body = "text=x" if method == "POST" else None
                         self.assertEqual(T47Acceptance.call(self, port, method, path, headers, body)[0], 404)
 
+class BoardPageOptions(LoopCase):
+    """#79, the implementer's pieces: a page's question keys reach its card only when valid, the option
+    forms and their read-only twin, the option field and the release button's shape, the draft script."""
+
+    ASK = {"question": "Which way?",
+           "options": [{"action": "group-ready", "note": "n <b>&", "consequence": "c1 <i>"},
+                       {"action": "release", "consequence": "c2"},
+                       {"action": "ack", "consequence": "c3"}],
+           "recommendation": "r <u>"}
+
+    def snap(self, row):
+        import types
+        page = dict({"kind": "decision", "ref": "g1", "at": "2026-01-01T00:00:00Z", "text": "t"}, **row)
+        return types.SimpleNamespace(tickets={}, groups={"g1": {"state": "stuck", "id": "g1"}},
+                                     inbox={"p1": page})
+
+    def card(self, row):
+        import board
+        cards = board.waiting_cards(self.snap(row), 0)
+        self.assertEqual(len(cards), 1)
+        return cards[0]
+
+    def test_waiting_cards_copy_valid_question_keys_only(self):
+        import board
+        c = self.card(self.ASK)
+        self.assertEqual((c["question"], c["options"], c["recommendation"]),
+                         (self.ASK["question"], self.ASK["options"], self.ASK["recommendation"]))
+        broken = [{}, {"question": "q"}, dict(self.ASK, options=[]), dict(self.ASK, question="a\nb"),
+                  dict(self.ASK, options=[{"action": "retry", "consequence": "x"}, {"action": "ack", "consequence": "y"}])]
+        for row in broken:
+            with self.subTest(row=row):
+                c = self.card(row)
+                self.assertNotIn("options", c)
+                html_ = board.render_card(c, ["group-ready", "group-cancel", "ack"], None, True)
+                self.assertNotIn('class="option"', html_)
+                self.assertNotIn('class="question"', html_)
+                self.assertIn('class="act"', html_)
+
+    def test_option_forms_for_a_viewer_who_may_submit(self):
+        import board
+        c = self.card(self.ASK)
+        out = board.render_card(c, ["group-ready", "group-cancel", "ack"], None, True)
+        self.assertLess(out.index('class="page-text"'), out.index('<p class="question">Which way?</p>'))
+        self.assertLess(out.index('class="question"'), out.index('class="recommendation"'))
+        self.assertLess(out.index('class="recommendation"'), out.index('class="act"'))
+        forms = re.findall(r'<form method="post" action="act" class="option"(.*?)</form>', out)
+        self.assertEqual(len(forms), 3)
+        self.assertIn(' data-action="group-ready" data-recommended="1">', forms[0])
+        self.assertIn('<input type="hidden" name="option" value="1">', forms[0])
+        self.assertIn('<textarea name="text" maxlength="8000" rows="2" data-draft="act-g1-p1-o1">'
+                      'n &lt;b&gt;&amp;</textarea>', forms[0])
+        self.assertIn("帶著我的話重驗(建議)</button>", forms[0])
+        self.assertIn('<p class="consequence">c1 &lt;i&gt;</p>', forms[0])
+        self.assertIn(' data-action="release">', forms[1])
+        self.assertIn('<input type="hidden" name="action" value="release">', forms[1])
+        self.assertIn('<input type="hidden" name="option" value="2">', forms[1])
+        for f in forms[1:]:
+            self.assertNotIn("textarea", f)
+            self.assertNotIn("建議", f)
+            self.assertNotIn("data-recommended", f)
+        self.assertIn("重跑發版</button>", forms[1])
+        self.assertIn("知道了</button>", forms[2])
+        self.assertIn('<p class="recommendation">r &lt;u&gt;</p>', out)
+
+    def test_read_only_viewer_sees_options_without_forms(self):
+        import board
+        out = board.render_card(self.card(self.ASK), (), None, False)
+        self.assertNotIn("<form", out)
+        self.assertNotIn("<textarea", out)
+        divs = re.findall(r'<div class="option"(.*?)</div>', out)
+        self.assertEqual(len(divs), 3)
+        self.assertIn('data-action="group-ready" data-recommended="1"', divs[0])
+        self.assertIn("建議", divs[0])
+        self.assertIn('data-action="ack">', divs[2])
+        self.assertIn('<p class="question">Which way?</p>', out)
+        self.assertIn('<p class="recommendation">r &lt;u&gt;</p>', out)
+
+    def test_every_page_action_has_a_label_and_the_board_takes_it(self):
+        import board
+        from core import pages
+        self.assertEqual(set(board.ACT_LABELS), set(pages.ACTIONS))
+        self.assertEqual(set(board.ACTIONS), set(pages.ACTIONS))
+        self.assertEqual(board.ACT_LABELS["release"], "重跑發版")
+
+    def test_act_problem_option_and_release(self):
+        import board
+        for option in ("", "1", "2", "3", "4"):
+            with self.subTest(option=option):
+                self.assertIsNone(board.act_problem("ack", "g1", "p1", "", option))
+        for option in ("0", "5", "01", "1 ", "a", "-1"):
+            with self.subTest(option=option):
+                self.assertIsInstance(board.act_problem("ack", "g1", "p1", "", option), str)
+        self.assertIsNone(board.act_problem("release", "g3", "p1", ""))
+        self.assertIsInstance(board.act_problem("release", "3", "p1", ""), str)
+
+    def test_act_command_release(self):
+        import board
+        self.assertEqual(board.act_command("release", "g3", "p1", "ignored", "a@x.com"),
+                         ("tickets.py", ["release", "g3", "--by", "a@x.com", "--page", "p1"]))
+        self.assertEqual(board.act_command("release", "g3", "", "", "user"),
+                         ("tickets.py", ["release", "g3", "--by", "user"]))
+
+    def test_page_script_keeps_prefilled_boxes_out_of_busy(self):
+        """Static only (no browser here): restore over a prefilled box, busy only when edited."""
+        import board
+        self.assertIn("box.value === box.defaultValue", board.PAGE_SCRIPT)
+        self.assertIn("b.value !== b.defaultValue", board.PAGE_SCRIPT)
+        self.assertNotIn("!box.value", board.PAGE_SCRIPT)
+
+    def test_readme_dashboard_names_release_and_options(self):
+        with open(os.path.join(LOOP, "README.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        section = text[text.index("## Dashboard"):]
+        section = section[:section.index("\n## ", 1)]
+        self.assertIn("| 重跑發版 | `tickets.py release gN` |", section)
+        for word in ("question", "建議", "recommendation", "Read-only viewers", "free-text box"):
+            self.assertIn(word, section)
+
+
 class MemoryGitWriter(LoopCase):
     """core.memory.commit_into: memory written into a git checkout is one fast-forward commit (#16)."""
 

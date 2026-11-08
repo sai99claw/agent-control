@@ -355,6 +355,16 @@ box and buttons (POST `act` with the card's subject and page) that run what the 
 | stuck group gN | 取消這組 | `tickets.py cancel gN --why <text>` |
 | paused group gN (not stuck) | 環境修好了,重跑 | `tickets.py rerun gN --why <text>` |
 | any card with a page | 知道了 (last) | `tickets.py ack <page>` |
+| a page option on landed group gN | 重跑發版 | `tickets.py release gN` |
+
+A decision or env page that carries a question (`question`, `options`, `recommendation`, valid by
+`core/pages.problems()`) shows them on its card after the page text: the question, then one button
+per option in the page's order, the recommended one first and marked 建議, each with its prepared
+note in an editable box (kept as a draft like the free-text box; no box for 重跑發版 and 知道了) and its
+consequence under it, then the recommendation. An option posts `act` with its action and
+`option=<1-4>` and is redirected to `…&sent=act-<subject>-<page>-o<option>`; a box still holding its
+prepared note does not hold the 30 s reload. Read-only viewers see the same text without buttons.
+The free-text box and its buttons stay below.
 
 A ticket or group card that is neither stuck nor paused, and a card about anything else, have only
 知道了. Every command runs with `--by <name>` (the trusted user's `board.allowed_users` entry; `user`

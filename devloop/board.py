@@ -47,6 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import dag as dagmod  # noqa: E402
 from core import memory, osx  # noqa: E402
+from core import pages as pagemod  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.pool import shown_state  # noqa: E402
 
@@ -268,7 +269,10 @@ def render(cfg, snap, key=None, query=None, now=None):
 DECIDE_STYLE = ("<style>section.wait{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--warn);"
                 "border-radius:8px;padding:10px 12px}section.wait p.want{margin:0;font-weight:700}"
                 "section.wait span.cat{color:var(--quiet);font-size:12px}section.wait p.last-act{margin:6px 0 0;font-size:12.5px}"
-                "form.act{display:grid;gap:6px;margin-top:8px}</style>")
+                "form.act{display:grid;gap:6px;margin-top:8px}section.wait p.question{margin:8px 0 0;font-weight:700}"
+                ".option{display:grid;gap:4px;margin-top:6px;padding:6px 8px;border:1px solid var(--line);border-radius:8px}"
+                ".option[data-recommended]{border-color:var(--accent)}.option p.consequence{margin:0;font-size:12.5px;"
+                "color:var(--quiet)}section.wait p.recommendation{margin:6px 0 0;font-size:12.5px}</style>")
 QUOTA_GRACE = 300
 TICKET_PARAMS = ("ticket", "group", "state", "cat", "q", "done")
 
@@ -327,7 +331,9 @@ def card_details(snap, kind, subject):
 
 def waiting_cards(snap, now):
     """One dict per thing that waits for the user, newest first: kind, subject, page ('' when none),
-    at (when it began to wait), want, cat, feedback, text (the page's text or None), timeline (href or None)."""
+    at (when it began to wait), want, cat, feedback, text (the page's text or None), timeline (href or None);
+    a page card whose row carries valid question keys (core/pages.problems() == []) also has question,
+    options and recommendation."""
     cards = []
     about = set()
     for name, p in snap.inbox.items():
@@ -336,9 +342,12 @@ def waiting_cards(snap, now):
         kind, subject = page_subject(snap, p)
         about.add((kind, subject))
         cat, feedback = card_details(snap, kind, subject)
-        cards.append({"kind": kind, "subject": subject, "page": name, "at": p.get("at"),
-                      "want": card_want(snap, kind, subject, subject), "cat": cat, "feedback": feedback,
-                      "text": "" if p.get("text") is None else str(p.get("text"))})
+        card = {"kind": kind, "subject": subject, "page": name, "at": p.get("at"),
+                "want": card_want(snap, kind, subject, subject), "cat": cat, "feedback": feedback,
+                "text": "" if p.get("text") is None else str(p.get("text"))}
+        if p.get("options") and not pagemod.problems(p.get("ref"), p):
+            card.update((k, p[k]) for k in pagemod.KEYS)
+        cards.append(card)
     for ident, t in snap.tickets.items():
         if t.get("state") == "stuck" and ("ticket", ident) not in about:
             cat, feedback = card_details(snap, "ticket", ident)
@@ -727,7 +736,8 @@ def render_live_tab(cfg, snap, key, query, now):
 
 
 ACT_LABELS = {"revise": "照我的話改", "retry": "再試一次", "cancel": "取消", "group-ready": "帶著我的話重驗",
-              "group-cancel": "取消這組", "rerun": "環境修好了,重跑", "ack": "知道了"}
+              "group-cancel": "取消這組", "rerun": "環境修好了,重跑", "release": "重跑發版", "ack": "知道了"}
+NOTE_ACTIONS = ("revise", "retry", "cancel", "group-ready", "group-cancel", "rerun")   # options with a note box
 
 
 def card_actions(snap, c):
@@ -761,6 +771,35 @@ def render_act_form(c, actions):
             % (e(c["subject"]), e(c["page"]), e(act_draft(c["subject"], c["page"])), buttons))
 
 
+def render_options(c, may_submit):
+    """A page card's question, one element per option (the recommended first, marked 建議) and the
+    recommendation; '' when the card has no options. A viewer who may submit gets one form per option
+    (POST act with option=<1-based index>, the note in an editable box kept as a draft); a read-only
+    viewer gets the same text in div.option without a form."""
+    if not c.get("options"):
+        return ""
+    out = ['<p class="question">%s</p>' % e(c["question"])]
+    for i, o in enumerate(c["options"], 1):
+        action = o["action"]
+        attrs = 'class="option" data-action="%s"%s' % (e(action), ' data-recommended="1"' if i == 1 else "")
+        label = ACT_LABELS[action] + ("(建議)" if i == 1 else "")
+        consequence = '<p class="consequence">%s</p>' % e(o["consequence"])
+        if not may_submit:
+            out.append('<div %s><span class="label">%s</span>%s</div>' % (attrs, e(label), consequence))
+            continue
+        box = ""
+        if action in NOTE_ACTIONS:
+            box = ('<textarea name="text" maxlength="8000" rows="2" data-draft="%s">%s</textarea>'
+                   % (e(act_draft(c["subject"], c["page"]) + "-o%d" % i), e(o.get("note") or "")))
+        out.append('<form method="post" action="act" %s>'
+                   '<input type="hidden" name="subject" value="%s"><input type="hidden" name="page" value="%s">'
+                   '<input type="hidden" name="action" value="%s"><input type="hidden" name="option" value="%d">'
+                   '%s<button>%s</button>%s</form>'
+                   % (attrs, e(c["subject"]), e(c["page"]), e(action), i, box, e(label), consequence))
+    out.append('<p class="recommendation">%s</p>' % e(c["recommendation"]))
+    return "".join(out)
+
+
 def last_act_text(meta, rc, tail):
     """The last-act line of a card: what was pressed, by whom, and how it ended."""
     status = {None: "處理中", "0": "完成", "3": "要你決定(看收件匣)"}.get(rc)
@@ -782,7 +821,7 @@ def last_acts(cfg):
     return out
 
 
-def render_card(c, actions=(), last=None):
+def render_card(c, actions=(), last=None, may_submit=False):
     parts = ['<section class="wait" data-kind="%s" data-subject="%s" data-page="%s">'
              % (e(c["kind"]), e(c["subject"]), e(c["page"])),
              '<p class="want">%s</p>' % e(c["want"])]
@@ -792,6 +831,7 @@ def render_card(c, actions=(), last=None):
         parts.append('<pre class="feedback">%s</pre>' % e(c["feedback"]))
     if c["text"] is not None:
         parts.append('<pre class="page-text">%s</pre>' % e(c["text"]))
+        parts.append(render_options(c, may_submit))
     if c["timeline"]:
         parts.append('<a class="timeline" href="%s">時間軸</a>' % e(c["timeline"]))
     if last:
@@ -808,7 +848,8 @@ def render_decide_tab(cfg, snap, key, query, now):
     if not cards:
         out.append('<p class="quiet">沒有要你判的事。</p>')
     last = last_acts(cfg) if cards else {}
-    out.extend(render_card(c, card_actions(snap, c) if key else (), last.get(str(c["subject"]))) for c in cards)
+    out.extend(render_card(c, card_actions(snap, c) if key else (), last.get(str(c["subject"])), bool(key))
+               for c in cards)
     out.append("</section>")
     return "\n".join(out)
 
@@ -1815,15 +1856,19 @@ def render_jobs(cfg):
     return "\n".join(out)
 
 
-ACTIONS = ("revise", "retry", "cancel", "group-ready", "group-cancel", "rerun", "ack")
+ACTIONS = ("revise", "retry", "cancel", "group-ready", "group-cancel", "rerun", "release", "ack")
 TICKET_ACTIONS = ("revise", "retry", "cancel")
-GROUP_ACTIONS = ("group-ready", "group-cancel", "rerun")
+GROUP_ACTIONS = ("group-ready", "group-cancel", "rerun", "release")
+OPTION_VALUES = ("1", "2", "3", "4")
 
 
-def act_problem(action, subject, page, text):
-    """Why a POST act cannot be run, one line; None when its shape is fine (the scripts judge the state)."""
+def act_problem(action, subject, page, text, option=""):
+    """Why a POST act cannot be run, one line; None when its shape is fine (the scripts judge the state).
+    `option` is the 1-based index of the page option the form belongs to, '' for the free-text form."""
     if action not in ACTIONS:
         return "unknown action"
+    if option and option not in OPTION_VALUES:
+        return "option must be 1 to 4"
     if not re.fullmatch(r"[0-9A-Za-z_,.-]{1,120}", subject) or not re.fullmatch(r"[0-9A-Za-z_,.-]{0,120}", page):
         return "bad subject or page"
     if action in TICKET_ACTIONS and not re.fullmatch(r"[0-9]+", subject):
@@ -1857,6 +1902,8 @@ def act_command(action, subject, page, text, by):
         return "tickets.py", ["cancel", subject, "--why=" + text] + who + on_page
     if action == "rerun":
         return "tickets.py", ["rerun", subject, "--why=" + text] + who + on_page
+    if action == "release":
+        return "tickets.py", ["release", subject] + who + on_page
     if action == "ack":
         return "tickets.py", ["ack"] + who + ["--", page]
     raise ValueError("unknown action %r" % action)
@@ -1921,7 +1968,7 @@ PAGE_SCRIPT = """<script>
   var boxes = document.querySelectorAll('textarea[data-draft]');
   boxes.forEach(function (box) {
     var k = 'devloop-draft-' + box.getAttribute('data-draft');
-    var v = get(k); if (v && !box.value) { box.value = v; }
+    var v = get(k); if (v && box.value === box.defaultValue) { box.value = v; }
     box.addEventListener('input', function () { set(k, box.value); });
   });
   var filters = document.querySelector('form.filters');
@@ -1941,7 +1988,7 @@ PAGE_SCRIPT = """<script>
   setInterval(function () {
     var busy = search !== null && search === document.activeElement;
     if (document.activeElement && document.activeElement.tagName === 'TEXTAREA') { busy = true; }
-    boxes.forEach(function (b) { if (b === document.activeElement || b.value) { busy = true; } });
+    boxes.forEach(function (b) { if (b === document.activeElement || b.value !== b.defaultValue) { busy = true; } });
     if (!busy) { location.reload(); }
   }, 30000);
 })();
@@ -2183,8 +2230,8 @@ def serve(cfg, pool, host, port, key):
                     sent, where = "request", "./?sent="
                 elif last_segment(url) == "act":
                     subject, page = form.get("subject", ""), form.get("page", "")
-                    action = form.get("action", "")
-                    problem = act_problem(action, subject, page, text)
+                    action, option = form.get("action", ""), form.get("option", "")
+                    problem = act_problem(action, subject, page, text, option)
                     if problem:
                         self._send(400, problem)
                         return
@@ -2193,7 +2240,8 @@ def serve(cfg, pool, host, port, key):
                     label = "#" + subject if re.fullmatch(r"[0-9]+", subject) else subject
                     submit(cfg, "%s %s" % (label, ACT_LABELS[action]), argv, text, by=by, script=script,
                            act=(subject, page, action), add_by=False)
-                    sent, where = act_draft(subject, page), "./?tab=decide&sent="
+                    sent = act_draft(subject, page) + ("-o" + option if option else "")
+                    where = "./?tab=decide&sent="
                 else:
                     self._send(404, "not found")
                     return
