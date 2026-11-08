@@ -13525,6 +13525,271 @@ class T42Acceptance(LoopCase):
         self.assertNotIn("<svg", body)
 
 
+class T82Acceptance(BoardLiveTab):
+    """#82: each integration-branch lane title on the DAG tab is its group's live status line.
+    Expected strings come from the ticket and the fixture below, never from the code."""
+
+    NS = "{http://www.w3.org/2000/svg}"
+    S = BoardLiveTab.NOW - 7200
+
+    @staticmethod
+    def pool_stamp(epoch):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+    @staticmethod
+    def hhmm(epoch):
+        return time.strftime("%H:%M", time.localtime(epoch))
+
+    def fixture(self, last_regression="3 failing:\n- a\n- b\n- c"):
+        self.add(1, state="merged", group="g21")
+        self.add(2, state="merged", group="g21")
+        self.group(last_regression)
+
+    def group(self, last_regression):
+        g = {"id": "g21", "state": "pr", "branch": "int/g21", "members": ["1", "2"]}
+        if last_regression is not None:
+            g["last_regression"] = last_regression
+        self.pool.update(lambda tx: tx.put_group(g), "test: g21")
+
+    def regression(self, stage="full", started=None, group="g21", name=None):
+        started = self.S if started is None else started
+        self.put(name or "regression-int-" + group, kind="regression", stamp=self.alive(self.pool_stamp(started)),
+                 group=group, branch="int/" + group, sha="a" * 40, exclusive=False, stage=stage,
+                 since=self.pool_stamp(started))
+
+    def page(self, now=None, done=False):
+        import board
+        query = {"tab": "dag"}
+        if done:
+            query["done"] = "1"
+        return board.render(self.cfg(), self.snap(), query=query, now=self.S + 860 if now is None else now)
+
+    def svg(self, page):
+        import xml.etree.ElementTree as ET
+        m = re.search(r'<svg id="dag".*?</svg>', page, re.S)
+        self.assertIsNotNone(m, "no <svg id=\"dag\"> on the DAG tab")
+        try:
+            return ET.fromstring(m.group(0))
+        except ET.ParseError as exc:
+            self.fail("the DAG svg does not parse: %s" % exc)
+
+    def lane(self, page, gid="g21"):
+        root = self.svg(page)
+        lanes = [el for el in root.iter(self.NS + "g") if "lane" in (el.get("class") or "").split()
+                 and el.get("data-group") == gid]
+        self.assertEqual(len(lanes), 1, "one lane for %s" % gid)
+        return lanes[0]
+
+    def lh(self, lane):
+        heads = [el for el in lane.iter(self.NS + "text") if "lh" in (el.get("class") or "").split()]
+        self.assertEqual(len(heads), 1, "one <text class=\"lh\"> per lane")
+        return heads[0]
+
+    def title(self, lane):
+        return "".join(self.lh(lane).itertext())
+
+    # ---- items 1 and 2
+    def test_regression_running_title_and_attrs(self):
+        self.fixture()
+        self.regression("full")
+        lane = self.lane(self.page())
+        self.assertEqual(self.title(lane), "g21 · PR(待驗) · regression full · %s 起 · 14 分 · 上次 regression:紅 3 條 · 2/10 張"
+                         % self.hhmm(self.S))
+        self.assertEqual(lane.get("data-now"), "regression")
+        self.assertEqual(lane.get("data-red"), "3")
+        self.assertEqual(lane.get("data-members"), "2/10")
+
+    def test_members_use_max_group_size(self):
+        self.config(max_group_size=4)
+        self.fixture()
+        lane = self.lane(self.page())
+        self.assertEqual(lane.get("data-members"), "2/4")
+        self.assertTrue(self.title(lane).endswith(" · 2/4 張"), self.title(lane))
+
+    def test_first_running_kind_in_live_rows_order_is_data_now(self):
+        self.fixture()
+        fx = self.alive(self.pool_stamp(self.S - 600))
+        self.put("fixer-g21", kind="fixer", stamp=fx, group="g21", round=2, max_rounds=3)
+        self.regression("full")
+        import board
+        kinds = [r["kind"] for r in board.live_rows(self.cfg(), self.snap())]
+        self.assertEqual(kinds, ["fixer", "regression"])
+        self.assertEqual(self.lane(self.page()).get("data-now"), "fixer")
+
+    # ---- item 3
+    def test_regression_stage_texts(self):
+        self.fixture()
+        for stage, text in (("preflight", "regression preflight"), ("machine", "regression 等整台機器"),
+                            ("slot", "regression 等機器名額:第 1 個(共 1 個在等)")):
+            with self.subTest(stage=stage):
+                self.regression(stage)
+                self.assertEqual(self.title(self.lane(self.page())),
+                                 "g21 · PR(待驗) · %s · %s 起 · 14 分 · 上次 regression:紅 3 條 · 2/10 張"
+                                 % (text, self.hhmm(self.S)))
+
+    def test_elapsed_counts_from_the_stamp(self):
+        self.fixture()
+        self.regression("full")
+        title = self.title(self.lane(self.page(now=self.S + 5400)))
+        self.assertIn(" · regression full · %s 起 · 1 小時 30 分 · " % self.hhmm(self.S), title)
+
+    # ---- item 4
+    def test_fixer_without_agent(self):
+        self.fixture()
+        self.put("fixer-g21", kind="fixer", stamp=self.alive(self.pool_stamp(self.S)), group="g21", round=2,
+                 max_rounds=3)
+        lane = self.lane(self.page())
+        self.assertEqual(self.title(lane), "g21 · PR(待驗) · 修補第 2/3 輪 · 沒有 agent 在跑 · %s 起 · 14 分 · "
+                         "上次 regression:紅 3 條 · 2/10 張" % self.hhmm(self.S))
+        self.assertEqual(lane.get("data-now"), "fixer")
+
+    def test_fixer_with_agent_in_quota(self):
+        import board
+        self.fixture()
+        fx = self.alive(self.pool_stamp(self.S))
+        self.put("fixer-g21", kind="fixer", stamp=fx, group="g21", round=2, max_rounds=3)
+        until = "2026-11-06T13:00:00Z"
+        self.put("agent-f", kind="agent", stamp=self.alive(self.pool_stamp(self.S + 60)), parent=fx["pid"],
+                 role="fixer", ticket=None, group="g21", round=2, run_dir="/r/f", log=None, command="claude",
+                 model="m", effort=None, state="quota", since=self.pool_stamp(self.S + 60), until=until)
+        lane = self.lane(self.page())
+        self.assertEqual(self.title(lane), "g21 · PR(待驗) · 修補第 2/3 輪 · 額度用完,到 %s · %s 起 · 14 分 · "
+                         "上次 regression:紅 3 條 · 2/10 張"
+                         % (board.live_clock(board.pool_seconds(until)), self.hhmm(self.S)))
+        self.assertEqual(lane.get("data-now"), "fixer")
+
+    # ---- item 5
+    def test_release_step_and_without_step(self):
+        self.fixture()
+        for lines, text in ((["start", "devloop-stage: build", "x", "devloop-stage: tagging", "y"], "發版 tagging"),
+                            (["start", "plain"], "發版 執行中")):
+            with self.subTest(text=text):
+                log = self.log("release.log", lines)
+                self.put("release-g21", kind="release", stamp=self.alive(self.pool_stamp(self.S)), group="g21",
+                         sha="c" * 40, log=log)
+                lane = self.lane(self.page())
+                self.assertEqual(self.title(lane), "g21 · PR(待驗) · %s · %s 起 · 14 分 · 上次 regression:紅 3 條 · 2/10 張"
+                                 % (text, self.hhmm(self.S)))
+                self.assertEqual(lane.get("data-now"), "release")
+
+    # ---- item 6
+    def test_last_regression_parts_and_group_link(self):
+        import board
+        self.fixture(None)
+        other = "flaky runner said something went wrong here\nsecond line"
+        for summary, part, red in (
+                ("green", "上次 regression:綠", None),
+                ("3 failing:\n- a\n- b\n- c", "上次 regression:紅 3 條", "3"),
+                ("12 failing:\n- x", "上次 regression:紅 12 條", "12"),
+                ("environment not usable: no disk", "上次 regression:環境不能用", None),
+                ("could not measure: timeout", "上次 regression:沒量到", None),
+                (other, "上次 regression:" + board._clip(other.splitlines()[0], 30), None),
+                (None, None, None),
+                ("", None, None)):
+            with self.subTest(summary=summary):
+                self.group(summary)
+                lane = self.lane(self.page())
+                links = [a for a in self.lh(lane).iter(self.NS + "a")]
+                all_links = [a for a in lane.iter(self.NS + "a") if (a.get("href") or "").startswith("?group=")]
+                self.assertEqual(lane.get("data-red"), red)
+                if part is None:
+                    self.assertEqual(self.title(lane), "g21 · PR(待驗) · 2/10 張")
+                    self.assertEqual(all_links, [])
+                else:
+                    self.assertEqual(self.title(lane), "g21 · PR(待驗) · %s · 2/10 張" % part)
+                    self.assertEqual([(a.get("href"), "".join(a.itertext())) for a in links],
+                                     [("?group=g21", part)])
+
+    # ---- item 7
+    def test_nothing_runs_no_now_parts(self):
+        self.fixture()
+        self.add(3, state="merged", group="g22")
+        self.pool.update(lambda tx: tx.put_group({"id": "g22", "state": "open", "branch": "int/g22",
+                                                  "members": ["3"]}), "test: g22")
+        self.regression("full", group="g22")
+        self.put("fixer-g21", kind="fixer", stamp=self.dead(osx.now()), group="g21", round=2, max_rounds=3)
+        self.put("release-g21", kind="release", stamp=self.dead(osx.now()), group="g21", sha="c" * 40,
+                 log=self.log("r.log", ["devloop-stage: tagging"]))
+        import board
+        states = {r["name"]: r["state"] for r in board.live_rows(self.cfg(), self.snap())}
+        self.assertEqual(states.get("fixer-g21"), "ended")
+        self.assertEqual(states.get("release-g21"), "ended")
+        page = self.page()
+        lane = self.lane(page)
+        self.assertEqual(self.title(lane), "g21 · PR(待驗) · 上次 regression:紅 3 條 · 2/10 張")
+        self.assertIsNone(lane.get("data-now"))
+        other = self.lane(page, "g22")
+        self.assertEqual(other.get("data-now"), "regression")
+        self.assertIn(" · regression full · ", self.title(other))
+
+    # ---- item 8
+    def test_refresh_link_toggle_and_legend(self):
+        import board
+        self.fixture()
+        for done, link, toggle in (
+                (False, '<a class="refresh" href="?tab=dag">重新整理</a>', "顯示已落地與已取消"),
+                (True, '<a class="refresh" href="?tab=dag&amp;done=1">重新整理</a>', "收起已落地與已取消")):
+            with self.subTest(done=done):
+                page = self.page(done=done)
+                start = page.index('<div id="tab-dag" class="tab">')
+                body = page[start:page.index(board.PAGE_SCRIPT, start)]
+                self.assertIn(link, body)
+                self.assertIn(toggle, body)
+                for label in sorted(set(board.STATE_TEXT.values())):
+                    self.assertIn(label, body, label)
+
+    # ---- items 1 and 2 on a served board
+    def test_served_board_lane_title(self):
+        import http.client
+        import socket
+        self.fixture()
+        started = int(time.time()) - 860
+        self.regression("full", started=started)
+        key = os.path.join(self.tmp, "key")
+        with open(key, "w") as fh:
+            fh.write("k1\n")
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "board.py"), "serve", "--port", str(port),
+                                 "--key-file", key], cwd=self.proj, env=self.env,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.terminate)
+
+        def get(path):
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            try:
+                conn.request("GET", path, headers={"X-Board-Key": "k1"})
+                resp = conn.getresponse()
+                return resp.status, resp.read().decode("utf-8")
+            finally:
+                conn.close()
+        for _ in range(100):
+            try:
+                get("/")
+                break
+            except OSError:
+                time.sleep(0.1)
+        status, page = get("/?tab=dag")
+        self.assertLess(time.time() - started, 899, "the GET came too late for the 14 分 oracle")
+        self.assertEqual(status, 200)
+        lane = self.lane(page)
+        self.assertEqual(self.title(lane), "g21 · PR(待驗) · regression full · %s 起 · 14 分 · 上次 regression:紅 3 條 · 2/10 張"
+                         % self.hhmm(started))
+        self.assertEqual(lane.get("data-now"), "regression")
+        self.assertEqual(lane.get("data-red"), "3")
+        self.assertEqual(lane.get("data-members"), "2/10")
+
+
+# T82Acceptance borrows BoardLiveTab's helpers only; its inherited cases are not #82's.
+for _name in [n for n in dir(BoardLiveTab) if n.startswith("test_")]:
+    if _name not in T82Acceptance.__dict__:
+        setattr(T82Acceptance, _name, None)
+del _name
+
+
 class DagRules(unittest.TestCase):
     def test_problems(self):
         dag = {"1": {"depends_on": ["2"]}, "2": {"depends_on": ["1"]}, "3": {"depends_on": ["9"]},
