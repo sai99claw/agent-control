@@ -4,8 +4,9 @@
 Started only by ticket_controller, once per fix round (the controller counts rounds and re-runs
 regression afterwards). Two kinds of red:
 
-  * main moved: the branch cannot fast-forward main any more. First a plain `git merge main`;
-    only a conflict needs an agent.
+  * main moved: the branch cannot fast-forward main any more (the controller merges clean moves
+    itself, so this is a conflict). First a plain `git merge main`; the agent runs either way,
+    told whether main still needs merging.
   * tests red: a fixer agent gets the red list, the group's tickets and what each changed, and
     commits fixes on the integration branch. It fixes by the tickets' current content: a merged
     ticket is frozen and cannot be revised. A verifier's case T<id>Acceptance may be changed only
@@ -90,8 +91,8 @@ def fix(cfg, pool, gid, report, live=None):
     before = g.sha("HEAD")
     main = cfg.main_branch
     main_moved = not g.is_ancestor(main, "HEAD")
-    if main_moved and g.merge(main)[0] and report.get("status") != "red":
-        return 0                       # main taken in cleanly; regression decides the rest
+    if main_moved:
+        g.merge(main)                  # a clean merge goes in here; the agent still runs
 
     rnd = int(group.get("fix_round") or 0)
     run_dir = cfg.runs_dir("fix", gid, "r%d" % rnd)

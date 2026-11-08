@@ -801,7 +801,7 @@ class Regression(LoopCase):
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(self.state(1), "landed")
         self.assertTrue(self.main_has("NOTES.md") and self.main_has("impl_1.txt"))
-        self.assertEqual(self.snap().groups["g1"]["fix_round"], 1)
+        self.assertEqual(self.snap().groups["g1"]["fix_round"], 0)   # #72: a clean main move costs no round
         with open(log) as fh:
             self.assertEqual(sum(1 for line in fh if line.startswith("tests full ")), 2)
 
@@ -6418,7 +6418,7 @@ class NoReverifyPaths(LoopCase):
     def assert_fixer_path(self, res):
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(self.state(1), "landed")
-        self.assertEqual(self.snap().groups["g1"]["fix_round"], 1)
+        self.assertEqual(self.snap().groups["g1"]["fix_round"], 0)   # #72: a clean merge, no fix round
         self.assertNotIn(self.NRV, self.events())
         self.assertEqual(self.full_runs(), 2)
 
@@ -6514,6 +6514,181 @@ class NoReverifyPaths(LoopCase):
         self.assertEqual(out, ticket_controller.LOST)
         self.assertEqual(git(self.proj, "rev-parse", "int/g1"), verified)
         self.assertEqual(glob.glob(os.path.join(self.tmp, "wt", "nrv-*")), [])
+
+
+class FollowMainUnits(LoopCase):
+    """#72 acceptance 7-9 (the implementer's): which groups the merge step touches, and what a
+    conflict does when the group is due for its regression."""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+
+    def commit_on(self, branch, files):
+        if branch == "main":                 # main is checked out in the project; keep its config edits
+            for rel, text in files.items():
+                with open(os.path.join(self.proj, rel), "w") as fh:
+                    fh.write(text)
+            git(self.proj, "add", "--", *files)
+            git(self.proj, "commit", "-q", "-m", "m")
+            return git(self.proj, "rev-parse", "HEAD")
+        tree = os.path.join(self.tmp, "side")
+        git(self.proj, "worktree", "add", "-q", "--detach", tree, branch)
+        for rel, text in files.items():
+            with open(os.path.join(tree, rel), "w") as fh:
+                fh.write(text)
+        git(tree, "add", "-A")
+        git(tree, "commit", "-q", "-m", "c")
+        sha = git(tree, "rev-parse", "HEAD")
+        git(self.proj, "worktree", "remove", "--force", tree)
+        git(self.proj, "update-ref", "refs/heads/" + branch, sha)
+        return sha
+
+    def group(self, gid="g1", branch=True, **fields):
+        g = {"id": gid, "branch": "int/" + gid, "state": "open", "alone": False, "members": ["1"],
+             "fix_round": 0, "job": None}
+        g.update(fields)
+        if branch:
+            git(self.proj, "branch", "int/" + gid, "main")
+
+        def change(tx):
+            tx.put_group(g)
+        self.pool.update(change, "test: group %s" % gid)
+
+    def ctl(self, forever=False):
+        from core.config import Config
+        import ticket_controller
+        c = ticket_controller.Controller(Config(self.proj), self.pool)
+        c.forever = forever
+        c.started = []
+        c._start_job = lambda gid, kind, argv, out: c.started.append((gid, kind))
+        return c
+
+    def history(self, gid="g1"):
+        return [h.get("event") or "" for h in self.snap().groups[gid].get("history") or []]
+
+    def test_untouched_groups(self):
+        """Item 8: landed, cancelled, with a job, no branch."""
+        self.add(1)
+        self.group("g1", state="landed")
+        self.group("g2", state="cancelled")
+        self.group("g3", state="pr", job={"kind": "regression", "stamp": {}, "out": "x"})
+        self.group("g4", branch=False)
+        before = {g: git(self.proj, "rev-parse", "int/" + g) for g in ("g1", "g2", "g3")}
+        events = {g: self.history(g) for g in ("g1", "g2", "g3", "g4")}
+        main = self.commit_on("main", {"NOTES.md": "n\n"})
+        c = self.ctl()
+        c.advance_groups(self.snap())
+        for g, sha in before.items():
+            self.assertEqual(git(self.proj, "rev-parse", "int/" + g), sha, g)
+        for g, ev in events.items():
+            self.assertEqual(self.history(g), ev, g)
+            self.assertNotIn(main[:12], " ".join(self.history(g)), g)
+        self.assertEqual(c.started, [])
+
+    def test_stuck_group_takes_a_clean_merge(self):
+        """Item 9: a stuck group with its own commit merges main, stays stuck."""
+        self.add(1)
+        self.group(state="stuck")
+        own = self.commit_on("int/g1", {"own.txt": "o\n"})
+        main = self.commit_on("main", {"NOTES.md": "n\n"})
+        c = self.ctl()
+        c.advance_groups(self.snap())
+        head = git(self.proj, "rev-parse", "int/g1")
+        self.assertEqual(git(self.proj, "rev-list", "--parents", "-n1", head).split()[1:], [own, main])
+        g = self.snap().groups["g1"]
+        self.assertEqual((g["state"], g["fix_round"], g.get("job")), ("stuck", 0, None))
+        self.assertEqual(c.started, [])
+
+    def test_conflict_on_stuck_and_paused_groups_starts_nothing(self):
+        """Item 9: a conflict waits until the group is due for its regression."""
+        self.add(1)
+        self.group("g1", state="stuck")
+        self.group("g2", state="pr", paused={"reason": "env", "at": "x", "text": ""})
+        olds = {g: self.commit_on("int/" + g, {"shared.txt": "group\n"}) for g in ("g1", "g2")}
+        main = self.commit_on("main", {"shared.txt": "main\n"})
+        c = self.ctl(forever=True)
+        for _ in range(2):
+            c.advance_groups(self.snap())
+        self.assertEqual(c.started, [])
+        for gid, old in olds.items():
+            self.assertEqual(git(self.proj, "rev-parse", "int/" + gid), old)
+            g = self.snap().groups[gid]
+            self.assertEqual(g["fix_round"], 0)
+            self.assertEqual(sum(main[:12] in e for e in self.history(gid)), 1, gid)
+        self.assertEqual(self.snap().groups["g1"]["state"], "stuck")
+        self.assertEqual(self.snap().groups["g2"]["state"], "pr")
+
+    def test_conflict_on_a_due_pr_group_goes_to_the_fixer(self):
+        """Item 9: counted as a fix round with a main-moved report; not a regression."""
+        self.add(1)
+        self.group(state="pr")
+        self.commit_on("int/g1", {"shared.txt": "group\n"})
+        self.commit_on("main", {"shared.txt": "main\n"})
+        c = self.ctl()
+        c.advance_groups(self.snap())
+        self.assertEqual(c.started, [("g1", "fixer")])
+        g = self.snap().groups["g1"]
+        self.assertEqual((g["state"], g["fix_round"]), ("fixing", 1))
+        report = os.path.join(c.cfg.runs_dir("regression", "g1"), "main-moved.json")
+        with open(report) as fh:
+            self.assertEqual(json.load(fh)["status"], "main_moved")
+
+    def test_conflict_at_max_rounds_is_stuck_with_a_decision(self):
+        """Item 9: at devloop.max_rounds, the existing 'main kept moving'."""
+        self.config(max_rounds=1)
+        self.add(1)
+        self.group(state="pr", fix_round=1)
+        self.commit_on("int/g1", {"shared.txt": "group\n"})
+        self.commit_on("main", {"shared.txt": "main\n"})
+        c = self.ctl()
+        c.advance_groups(self.snap())
+        self.assertEqual(c.started, [])
+        g = self.snap().groups["g1"]
+        self.assertEqual((g["state"], g["fix_round"]), ("stuck", 1))
+        self.assertIn("main kept moving", self.history())
+        self.assertEqual(self.inbox_kinds(), ["decision"])
+
+    def test_a_pr_group_with_a_clean_merge_gets_its_regression(self):
+        self.add(1)
+        self.group(state="pr")
+        self.commit_on("int/g1", {"own.txt": "o\n"})
+        main = self.commit_on("main", {"NOTES.md": "n\n"})
+        c = self.ctl()
+        c.advance_groups(self.snap())
+        self.assertEqual(c.started, [("g1", "regression")])
+        self.assertTrue(c.repo.is_ancestor(main, "int/g1"))
+        self.assertEqual(self.snap().groups["g1"]["fix_round"], 0)
+
+    def test_a_lost_swap_is_not_tried(self):
+        from core.gitx import Git
+        self.add(1)
+        self.group()
+        old = git(self.proj, "rev-parse", "int/g1")
+        self.commit_on("main", {"NOTES.md": "n\n"})
+        c = self.ctl()
+        with mock.patch.object(Git, "move_ref", lambda *a: False):
+            c.advance_groups(self.snap())
+        self.assertEqual(git(self.proj, "rev-parse", "int/g1"), old)
+        self.assertNotIn("main_tried", self.snap().groups["g1"])
+        c.advance_groups(self.snap())
+        self.assertEqual(git(self.proj, "rev-parse", "int/g1"), git(self.proj, "rev-parse", "main"))
+
+    def test_conflict_when_due_for_regression_end_to_end(self):
+        """Item 7."""
+        self.env["FAKE_MAIN_DURING_FULL"] = json.dumps({"shared.txt": "main\n"})
+        self.add(1)
+        self.plan(worker={"1": ["shared"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["fix_round"], 1)
 
 
 class NoReverifyRule(unittest.TestCase):
