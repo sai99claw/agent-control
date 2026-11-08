@@ -3913,6 +3913,15 @@ class T27Acceptance(LoopCase):
                         bullets)
 
 
+def own_origin(port, headers):
+    """A served board's POST headers as a browser on the board sends them: its own Origin (#76),
+    unless the case passes its own Origin or Referer."""
+    h = dict(headers or {})
+    if not any(k.lower() in ("origin", "referer") for k in h):
+        h["Origin"] = "http://127.0.0.1:%d" % port
+    return h
+
+
 class BoardKeyCookie(LoopCase):
     """#37: the board key is traded once for a cookie; helpers, the keyless board and the README."""
 
@@ -4235,7 +4244,7 @@ class T37Acceptance(LoopCase):
 
     def post(self, path, form, headers):
         import urllib.parse
-        h = dict(headers, **{"Content-Type": "application/x-www-form-urlencoded"})
+        h = dict(own_origin(self.port, headers), **{"Content-Type": "application/x-www-form-urlencoded"})
         return self.req("POST", path, h, urllib.parse.urlencode(form))
 
     # acceptance 1
@@ -8035,6 +8044,8 @@ class T57Acceptance(LoopCase):
             if auth:
                 h.update(self.auth)
             h.update(headers or {})
+            if method == "POST":
+                h = own_origin(self.port, h)
             conn.request(method, path, body=body, headers=h)
             resp = conn.getresponse()
             return resp.status, dict(resp.getheaders()), resp.read().decode("utf-8", "replace")
@@ -10938,6 +10949,8 @@ class T47Acceptance(LoopCase):
             try:
                 h = {"Content-Type": "application/x-www-form-urlencoded"}
                 h.update(headers or {})
+                if method == "POST":
+                    h = own_origin(port, h)
                 conn.request(method, path, body=body, headers=h)
                 resp = conn.getresponse()
                 return resp.status, resp.read().decode("utf-8", "replace")
@@ -12721,6 +12734,8 @@ class T46Acceptance(LoopCase):
             try:
                 h = {"Content-Type": "application/x-www-form-urlencoded"}
                 h.update(headers or {})
+                if method == "POST":
+                    h = own_origin(port, h)
                 conn.request(method, path, body=body, headers=h)
                 resp = conn.getresponse()
                 return resp.status, resp.getheader("Location"), resp.read().decode("utf-8", "replace")
@@ -12840,6 +12855,81 @@ class T46Acceptance(LoopCase):
 
     def test_item4_bad_allowed_users_exits_2(self):
         self.assert_refused_at_start({"allowed_users": "a@x.com"}, "board.allowed_users")
+
+
+class BoardAddressedUnits(unittest.TestCase):
+    """#76: the helpers behind the Host and Origin checks of the served board."""
+
+    SERVED = {"127.0.0.1:8765", "localhost:8765", "[::1]:8765", "portal.example"}
+
+    def test_url_host_drops_only_the_scheme_default_port(self):
+        import board
+        cases = {"http://H.example": "h.example", "http://h.example:80/x": "h.example",
+                 "https://h.example:443": "h.example", "http://h.example:443": "h.example:443",
+                 "https://h.example:80": "h.example:80", "HTTPS://h.example:8443/?q": "h.example:8443",
+                 "http://[::1]:8765": "[::1]:8765", "http://u:p@h.example:81": "h.example:81"}
+        for value, want in cases.items():
+            with self.subTest(value=value):
+                self.assertEqual(board.url_host(value), want)
+        for value in (None, 7, "", "null", "not a url", "ftp://x.example", "http://", "http://h:99999",
+                      "/relative/path"):
+            with self.subTest(value=value):
+                self.assertIsNone(board.url_host(value))
+
+    def test_served_hosts_brackets_an_ipv6_bind_and_ignores_bad_settings(self):
+        import board
+        base = {"127.0.0.1:9", "localhost:9", "[::1]:9"}
+        self.assertEqual(board.served_hosts(None, "::1", 9), base)
+        self.assertEqual(board.served_hosts({}, "FE80::2", 9), base | {"[fe80::2]:9"})
+        self.assertEqual(board.served_hosts({"public_url": 7, "allowed_hosts": "a.example"}, "127.0.0.1", 9),
+                         base)
+        self.assertEqual(board.served_hosts({"allowed_hosts": ["", 3, " X:1 "]}, "127.0.0.1", 9),
+                         base | {"x:1"})
+
+    def test_host_allowed_strips_and_lowercases(self):
+        import board
+        self.assertTrue(board.host_allowed(self.SERVED, {"Host": " LocalHost:8765 "}))
+        for headers in ({}, {"Host": ""}, {"Host": "127.0.0.1:8766"}, {"Host": "evil.example:8765"}):
+            with self.subTest(headers=headers):
+                self.assertFalse(board.host_allowed(self.SERVED, headers))
+
+    def test_origin_allowed_order_origin_then_referer_then_key(self):
+        import board
+        yes = ({"Origin": "http://127.0.0.1:8765"}, {"Origin": "https://portal.example:443"},
+               {"Referer": "http://localhost:8765/?tab=decide"}, {"X-Board-Key": "anything"},
+               {"Origin": "http://127.0.0.1:8765", "Referer": "http://evil.example/"})
+        no = ({}, {"Origin": "null"}, {"Origin": ""}, {"Origin": "http://evil.example"},
+              {"Origin": "https://portal.example:444"}, {"Referer": "http://evil.example/x"},
+              {"Origin": "http://evil.example", "X-Board-Key": "k"},
+              {"Referer": "http://evil.example/", "X-Board-Key": "k"},
+              {"Origin": "http://evil.example", "Referer": "http://127.0.0.1:8765/"})
+        for headers in yes:
+            with self.subTest(headers=headers):
+                self.assertTrue(board.origin_allowed(self.SERVED, headers))
+        for headers in no:
+            with self.subTest(headers=headers):
+                self.assertFalse(board.origin_allowed(self.SERVED, headers))
+
+    def test_settings_errors_for_public_url_and_allowed_hosts(self):
+        import board
+        self.assertEqual(board.board_settings_errors({"public_url": "https://p.example/b/",
+                                                      "allowed_hosts": ["a.example:1"]}), [])
+        for bad in (7, "ftp://x.example", "not a url"):
+            with self.subTest(public_url=bad):
+                lines = board.board_settings_errors({"public_url": bad})
+                self.assertEqual(len(lines), 1)
+                self.assertIn("board.public_url", lines[0])
+        for bad in ("a.example", [""], [3]):
+            with self.subTest(allowed_hosts=bad):
+                lines = board.board_settings_errors({"allowed_hosts": bad})
+                self.assertEqual(len(lines), 1)
+                self.assertIn("board.allowed_hosts", lines[0])
+        self.assertEqual(len(board.board_settings_errors({"public_url": 7, "allowed_hosts": 7})), 2)
+
+    def test_own_origin_helper_keeps_a_case_s_own_header(self):
+        self.assertEqual(own_origin(5, None), {"Origin": "http://127.0.0.1:5"})
+        self.assertEqual(own_origin(5, {"origin": "null"}), {"origin": "null"})
+        self.assertEqual(own_origin(5, {"Referer": "http://x/"}), {"Referer": "http://x/"})
 
 
 class T18Acceptance(unittest.TestCase):
