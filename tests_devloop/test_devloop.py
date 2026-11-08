@@ -13041,6 +13041,230 @@ class BoardTrustedUserUnits(unittest.TestCase):
                 self.assertIn(words, section)
 
 
+class T76Acceptance(LoopCase):
+    """#76: the served board answers only requests addressed to it (Host) and POSTs from its own
+    pages (Origin / Referer), unless a script sends X-Board-Key without either header."""
+
+    HEADER = T46Acceptance.HEADER
+    TRUSTED = {"trusted_user_header": T46Acceptance.HEADER, "allowed_users": ["a@x.com"]}
+
+    def board_settings(self, board):
+        T46Acceptance.board_settings(self, board)
+
+    def free_port(self):
+        return T46Acceptance.free_port(self)
+
+    def start(self, *extra):
+        return T46Acceptance.start(self, *extra)
+
+    def call(self, port, method, path, headers=None, body=None):
+        return T46Acceptance.call(self, port, method, path, headers, body)
+
+    def web_jobs(self):
+        return T46Acceptance.web_jobs(self)
+
+    def key_file(self):
+        return T46Acceptance.key_file(self)
+
+    def call_without_host(self, port, method, path, headers=None):
+        """(status, body) of a request that carries no Host header at all."""
+        import http.client
+        self.call(port, "GET", "/", {self.HEADER: "a@x.com"})      # waits until the board listens
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        try:
+            conn.putrequest(method, path, skip_host=True)
+            for k, v in (headers or {}).items():
+                conn.putheader(k, v)
+            conn.endheaders()
+            resp = conn.getresponse()
+            return resp.status, resp.read().decode("utf-8", "replace")
+        finally:
+            conn.close()
+
+    def own(self, port):
+        return "http://127.0.0.1:%d" % port
+
+    def trusted_board(self, extra=None):
+        board = dict(self.TRUSTED)
+        board.update(extra or {})
+        self.board_settings(board)
+        return self.start("--host", "127.0.0.1")
+
+    def assert_refused(self, result, prefix):
+        status, _, body = result
+        self.assertEqual(status, 403, body[:300])
+        self.assertTrue(body.startswith(prefix), "body %r does not start with %r" % (body[:200], prefix))
+
+    def assert_submitted(self, result):
+        before = len(self.web_jobs())
+        status, location, body = result()
+        self.assertEqual((status, location), (303, "./?sent=request"), body[:300])
+        self.assertEqual(len(self.web_jobs()), before + 1, "one new folder under <worktrees>/runs/web/")
+
+    # ------------------------------------------------------------ item 1
+
+    def test_item1_served_hosts(self):
+        import board
+        self.assertTrue(hasattr(board, "served_hosts"), "board.served_hosts is missing")
+        base = {"127.0.0.1:8765", "localhost:8765", "[::1]:8765"}
+        cases = [
+            ({}, "127.0.0.1", base),
+            ({}, "::1", base),
+            ({}, "0.0.0.0", base | {"0.0.0.0:8765"}),
+            ({}, "::", base | {"[::]:8765"}),
+            ({"public_url": "https://Portal.Example:443/board/"}, "127.0.0.1", base | {"portal.example"}),
+            ({"public_url": "http://h.example:8080/x"}, "127.0.0.1", base | {"h.example:8080"}),
+            ({"allowed_hosts": [" B.Example:8443 "]}, "127.0.0.1", base | {"b.example:8443"}),
+        ]
+        for settings, bind, want in cases:
+            with self.subTest(settings=settings, bind=bind):
+                got = board.served_hosts(settings, bind, 8765)
+                self.assertIsInstance(got, set)
+                self.assertEqual(got, want)
+
+    # ------------------------------------------------------------ item 2
+
+    def test_item2_foreign_host_get_is_refused(self):
+        port = self.trusted_board()
+        user = {self.HEADER: "a@x.com"}
+        self.assertEqual(self.call(port, "GET", "/", dict(user, Host="127.0.0.1:%d" % port))[0], 200)
+        self.assert_refused(self.call(port, "GET", "/", dict(user, Host="evil.example:%d" % port)), "unknown host")
+        for host in ("localhost:%d", "[::1]:%d", "LOCALHOST:%d"):
+            with self.subTest(host=host):
+                self.assertEqual(self.call(port, "GET", "/", dict(user, Host=host % port))[0], 200)
+        self.assert_refused(self.call(port, "GET", "/", dict(user, Host="127.0.0.1:%d" % (port + 1))), "unknown host")
+
+    def test_item2_foreign_host_post_starts_nothing(self):
+        port = self.trusted_board()
+        user = {self.HEADER: "a@x.com"}
+        before = self.web_jobs()
+        self.assert_refused(self.call(port, "POST", "/request",
+                                      dict(user, Host="evil.example:%d" % port,
+                                           Origin="http://evil.example:%d" % port), "text=x"), "unknown host")
+        self.assertEqual(self.web_jobs(), before, "no new folder under <worktrees>/runs/web/")
+        # the same POST addressed to the board goes through: the 403 above is the Host check
+        self.assert_submitted(lambda: self.call(port, "POST", "/request",
+                                                dict(user, Host="127.0.0.1:%d" % port, Origin=self.own(port)),
+                                                "text=x"))
+
+    def test_item2_missing_host_is_refused(self):
+        port = self.trusted_board()
+        status, body = self.call_without_host(port, "GET", "/", {self.HEADER: "a@x.com"})
+        self.assertEqual(status, 403, body[:300])
+        self.assertTrue(body.startswith("unknown host"), body[:200])
+
+    def test_item2_key_does_not_pass_a_foreign_host(self):
+        self.board_settings({})
+        port = self.start("--host", "127.0.0.1", "--key-file", self.key_file())
+        self.assertEqual(self.call(port, "GET", "/", {"X-Board-Key": "s3cret"})[0], 200)
+        self.assert_refused(self.call(port, "GET", "/", {"X-Board-Key": "s3cret", "Host": "evil.example:%d" % port}),
+                            "unknown host")
+
+    # ------------------------------------------------------------ item 3
+
+    def test_item3_origin_rules(self):
+        port = self.trusted_board()
+        user = {self.HEADER: "a@x.com"}
+        post = lambda h: self.call(port, "POST", "/request", dict(user, **h), "text=x")
+        self.assert_submitted(lambda: post({"Origin": self.own(port)}))
+        self.assert_submitted(lambda: post({"Referer": self.own(port) + "/?tab=decide"}))
+        before = self.web_jobs()
+        for h in ({"Origin": "http://evil.example"}, {"Origin": "null"}, {"Referer": "http://evil.example/x"}, {}):
+            with self.subTest(headers=h):
+                self.assert_refused(post(h), "cross-site request")
+        self.assertEqual(self.web_jobs(), before, "no job folder for a cross-site POST")
+
+    # ------------------------------------------------------------ item 4
+
+    def test_item4_scripts_with_the_key(self):
+        self.board_settings({})
+        port = self.start("--host", "127.0.0.1", "--key-file", self.key_file())
+        self.assert_submitted(lambda: self.call(port, "POST", "/request", {"X-Board-Key": "s3cret"}, "text=x"))
+        before = self.web_jobs()
+        self.assert_refused(self.call(port, "POST", "/request",
+                                      {"X-Board-Key": "s3cret", "Origin": "http://evil.example"}, "text=x"),
+                            "cross-site request")
+        self.assertEqual(self.call(port, "POST", "/request", {"X-Board-Key": "wrong"}, "text=x")[0], 403)
+        self.assertEqual(self.web_jobs(), before)
+
+    # ------------------------------------------------------------ item 5
+
+    def test_item5_allowed_hosts(self):
+        port = self.trusted_board({"allowed_hosts": ["board.example:8443"]})
+        user = {self.HEADER: "a@x.com"}
+        self.assertEqual(self.call(port, "GET", "/", dict(user, Host="board.example:8443"))[0], 200)
+        self.assert_refused(self.call(port, "GET", "/", dict(user, Host="other.example:8443")), "unknown host")
+        self.assert_submitted(lambda: self.call(port, "POST", "/request",
+                                                dict(user, Host="board.example:8443",
+                                                     Origin="https://board.example:8443"), "text=x"))
+
+    def test_item5_public_url(self):
+        port = self.trusted_board({"public_url": "https://portal.example/board/"})
+        user = {self.HEADER: "a@x.com"}
+        self.assertEqual(self.call(port, "GET", "/", dict(user, Host="portal.example"))[0], 200)
+        self.assert_submitted(lambda: self.call(port, "POST", "/request",
+                                                dict(user, Origin="https://portal.example"), "text=x"))
+        before = self.web_jobs()
+        self.assert_refused(self.call(port, "POST", "/request", dict(user, Origin="https://portal.example:444"),
+                                      "text=x"), "cross-site request")
+        self.assertEqual(self.web_jobs(), before)
+
+    # ------------------------------------------------------------ item 6
+
+    def test_item6_bad_settings_exit_2(self):
+        for board, name in (({"public_url": 7}, "board.public_url"),
+                            ({"public_url": "ftp://x.example"}, "board.public_url"),
+                            ({"public_url": "not a url"}, "board.public_url"),
+                            ({"allowed_hosts": "a.example"}, "board.allowed_hosts"),
+                            ({"allowed_hosts": [""]}, "board.allowed_hosts"),
+                            ({"allowed_hosts": [3]}, "board.allowed_hosts")):
+            with self.subTest(board=board):
+                T46Acceptance.assert_refused_at_start(self, board, name)
+
+    def test_item6_settings_errors(self):
+        import board
+        for settings in ({"public_url": "https://portal.example/board/"}, {"public_url": "http://h.example:8080/x"},
+                         {"allowed_hosts": []}, {"allowed_hosts": ["b.example:8443", "c.example"]}):
+            with self.subTest(settings=settings):
+                self.assertEqual(board.board_settings_errors(settings), [])
+        for settings, name in (({"public_url": 7}, "board.public_url"),
+                               ({"public_url": "ftp://x.example"}, "board.public_url"),
+                               ({"public_url": "not a url"}, "board.public_url"),
+                               ({"allowed_hosts": "a.example"}, "board.allowed_hosts"),
+                               ({"allowed_hosts": [""]}, "board.allowed_hosts"),
+                               ({"allowed_hosts": [3]}, "board.allowed_hosts")):
+            with self.subTest(settings=settings):
+                errors = board.board_settings_errors(settings)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn(name, errors[0])
+        errors = board.board_settings_errors({"public_url": 7, "allowed_hosts": [3]})
+        self.assertEqual(len(errors), 2, errors)
+
+    # ------------------------------------------------------------ item 7
+
+    def test_item7_schema_rows(self):
+        sys.path.insert(0, os.path.join(HOME, "scripts"))
+        import project_config
+        rows = [(k, kind) for k, kind, _ in project_config.SCHEMA]
+        at = rows.index(("board.key_file", "string"))
+        self.assertEqual(rows[at + 1:at + 5], [("board.trusted_user_header", "string"), ("board.allowed_users", "list"),
+                                               ("board.public_url", "string"), ("board.allowed_hosts", "list")])
+        bad = project_config.type_errors({"board": {"public_url": 7, "allowed_hosts": "a.example"}})
+        self.assertEqual(len(bad), 2, bad)
+        self.assertTrue(any("board.public_url" in b for b in bad), bad)
+        self.assertTrue(any("board.allowed_hosts" in b for b in bad), bad)
+
+    # ------------------------------------------------------------ item 8
+
+    def test_item8_readme_dashboard(self):
+        with open(os.path.join(LOOP, "README.md"), encoding="utf-8") as fh:
+            text = fh.read()
+        section = text.split("## Dashboard", 1)[1].split("\n## ", 1)[0]
+        for words in ("board.public_url", "board.allowed_hosts", "Origin", "Referer", "Host", "X-Board-Key"):
+            with self.subTest(words=words):
+                self.assertIn(words, section)
+
+
 class T19Acceptance(unittest.TestCase):
     """#19: devloop/README.md lists every role; the memory docs follow D-088."""
 
