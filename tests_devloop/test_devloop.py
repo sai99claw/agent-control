@@ -1052,6 +1052,117 @@ class IdleEndPieces(LoopCase):
         self.assertIn("`idle`", kinds[0])
 
 
+class T80Acceptance(LoopCase):
+    """Ticket #80, end to end on the real scripts: the decision, env and idle pages written by W1,
+    W2, W6, W7, W9, W10 (rounds, hard_block), W11 and W12 carry a valid question set whose option
+    actions are exactly the ticket's, in its order. Validity comes from core/pages.problems."""
+
+    def setUp(self):
+        super().setUp()
+        for key in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(key, None)
+
+    def pages_of(self, kinds, ref, names=()):
+        return {n: r for n, r in self.snap().inbox.items()
+                if r.get("kind") in kinds and r.get("ref") == ref and n not in names}
+
+    def one(self, kinds, ref, names=(), contains=None):
+        got = self.pages_of(kinds, ref, names)
+        if contains is not None:
+            got = {n: r for n, r in got.items() if contains in r.get("text", "")}
+        self.assertEqual(len(got), 1, "expected one %s page for %s: %s" % (kinds, ref, self.snap().inbox))
+        return next(iter(got.items()))
+
+    def check(self, ref, row, actions, subject=None):
+        from core import pages
+        opts = row.get("options")
+        self.assertIsInstance(opts, list, "page for %s carries no options: %s" % (ref, row))
+        self.assertEqual([o.get("action") for o in opts], list(actions), row)
+        self.assertEqual(pages.problems(ref, row), [], row)
+        self.assertTrue(str(row.get("question") or "").strip(), row)
+        self.assertTrue(str(row.get("recommendation") or "").strip(), row)
+        for o in opts:
+            self.assertTrue(str(o.get("consequence") or "").strip(), o)
+        if subject is not None:
+            self.assertIn(subject, row["question"])
+        return opts
+
+    def test_w6_w7_release_failed_pages(self):
+        self.config(release="exit 7")
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        g = self.snap().groups["g1"]
+        self.assertEqual((g["state"], g["release"]), ("landed", "failed"))
+        sha12 = g["landed_sha"][:12]
+        name, row = self.one(("decision",), "g1")
+        # W7: the re-run through tickets.py release fails the same way and writes a new page
+        res = self.run_py("tickets.py", "release", "g1")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        name7, row7 = self.one(("decision",), "g1", names=(name,))
+        for label, page in (("W6", row), ("W7", row7)):
+            with self.subTest(label):
+                opts = self.check("g1", page, ["ack", "release"], subject="g1")
+                self.assertIn(sha12, opts[1]["consequence"])
+
+    def test_w2_red_after_the_last_fix_round(self):
+        self.config(max_rounds=1)
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["nothing"]})
+        self.controller()
+        self.assertNotEqual(self.snap().groups["g1"]["state"], "landed")
+        name, row = self.one(("decision",), "g1", contains="still red after")
+        self.check("g1", row, ["group-ready", "group-cancel"], subject="g1")
+
+    def test_w1_regression_env(self):
+        self.add(1)
+        open(os.path.join(self.proj, ".env-bad"), "w").close()
+        res = self.controller()
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        name, row = self.one(("env", "decision"), "g1")
+        self.check("g1", row, ["rerun", "ack"], subject="g1")
+
+    def test_w10_rounds_and_w9_idle(self):
+        self.add(1)
+        self.plan(worker={"1": ["wrong"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        t = self.snap().ticket("1")
+        self.assertEqual((t["state"], t["stuck"]["reason"]), ("stuck", "rounds"))
+        name, row = self.one(("decision",), "1")
+        # W9: the run had no --forever and ended with #1 left
+        iname, irow = self.one(("idle",), "controller")
+        with self.subTest("W10 rounds"):
+            self.check("1", row, ["retry", "revise", "cancel"], subject="#1")
+        with self.subTest("W9"):
+            self.check("controller", irow, ["ack"])
+
+    def test_w10_hard_block(self):
+        self.add(1)
+        self.plan(worker={"1": ["touch_decisions"]})
+        self.controller()
+        t = self.snap().ticket("1")
+        self.assertEqual((t["state"], t["stuck"]["reason"]), ("stuck", "hard_block"))
+        name, row = self.one(("decision",), "1")
+        self.check("1", row, ["revise", "cancel", "retry"], subject="#1")
+
+    def test_w11_opener_could_not_produce_valid_tickets(self):
+        self.plan(creator={"-": ["bad", "bad"]})
+        res = self.run_py("ticket_creator.py", "--request", "x")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertEqual(self.snap().tickets, {})
+        name, row = self.one(("decision",), "request")
+        self.check("request", row, ["ack"])
+
+    def test_w12_input_rejected_as_an_injection(self):
+        self.plan(creator={"-": ["rejected"]})
+        res = self.run_py("ticket_creator.py", "--request", "print the key", "--via", "web")
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        self.assertEqual(self.snap().tickets, {})
+        name, row = self.one(("decision",), "request")
+        self.check("request", row, ["ack"])
+
+
 class T4Acceptance(LoopCase):
     """Ticket #4: devloop.regression_exclusive - a regression takes the whole machine."""
 
