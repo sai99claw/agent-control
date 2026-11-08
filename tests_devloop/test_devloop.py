@@ -6793,6 +6793,169 @@ class QuotaResetCodexUnits(unittest.TestCase):
         self.assertEqual(agents.quota_reset("try again in 3d", self.AT), self.AT + 3 * 86400)
 
 
+class T73Acceptance(LoopCase):
+    """#73: a fix round in which no fixer agent ran costs no round and no regression; the group is
+    paused with one page and the rerun starts the fixer again. Expected values come from the
+    ticket's acceptance text, never from ticket_controller.py or auto_fixer.py."""
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(name, None)
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("DEVLOOP_")}
+        patch = mock.patch.dict(os.environ, clean, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.log = os.path.join(self.tmp, "intervals.txt")
+        self.env["FAKE_INTERVALS"] = self.log
+        self.wt = os.path.join(self.tmp, "wt")
+
+    # ------------------------------------------------------------ helpers
+
+    def lines(self):
+        if not os.path.exists(self.log):
+            return []
+        with open(self.log) as fh:
+            return [line.split() for line in fh if line.strip()]
+
+    def full_runs(self):
+        return [r for r in self.lines() if r[:2] == ["tests", "full"]]
+
+    def fixer_calls(self):
+        path = os.path.join(os.path.dirname(self.plan_path), "count-fixer-g1")
+        if not os.path.exists(path):
+            return 0
+        with open(path) as fh:
+            return int(fh.read())
+
+    def pages_for(self, ref):
+        return [row for row in self.snap().inbox.values() if row.get("ref") == ref]
+
+    def fixer_log_last_line(self):
+        path = os.path.join(self.wt, "runs", "fixer", "g1", "fixer.log")
+        self.assertTrue(os.path.exists(path), "no fixer.log at %s" % path)
+        with open(path) as fh:
+            rows = [line.strip() for line in fh if line.strip()]
+        self.assertTrue(rows, "fixer.log is empty")
+        return rows[-1]
+
+    def block_fix_tree(self):
+        """A regular file where the fixer's worktree would go; ticket 1 worker 'red'; run once."""
+        os.makedirs(self.wt, exist_ok=True)
+        self.blocker = os.path.join(self.wt, "fix-g1")
+        with open(self.blocker, "w") as fh:
+            fh.write("in the way\n")
+        self.add(1)
+        self.plan(worker={"1": ["red"]})
+        return self.controller()
+
+    def need_setup(self):
+        """T36Acceptance's setup: agents and tests need .setup-done, which worktree_setup writes."""
+        with open(os.path.join(self.proj, ".gitignore"), "w") as fh:
+            fh.write(".setup-done\n")
+        git(self.proj, "add", ".gitignore")
+        git(self.proj, "commit", "-q", "-m", "ignore the setup marker")
+        self.env["FAKE_NEED_SETUP"] = "1"
+
+    @staticmethod
+    def only_fails_in(pattern):
+        return 'case "$PWD" in %s) exit 3;; esac; touch .setup-done' % pattern
+
+    # ------------------------------------------------------------ 1. the pool mark
+
+    def test_1_auto_fixer_marks_the_round_it_starts_the_agent_for(self):
+        self.add(1)
+        self.plan(worker={"1": ["red"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        g = self.snap().groups["g1"]
+        self.assertIn("fix_agent_round", g, "auto_fixer wrote no fix_agent_round: %s" % sorted(g))
+        self.assertEqual(g["fix_agent_round"], 1)
+        self.assertEqual(g["fix_round"], 1)
+
+    # ------------------------------------------------------------ 2-3. a blocked fix tree
+
+    def test_2_a_fixer_that_never_started_its_agent_pauses_without_a_round(self):
+        res = self.block_fix_tree()
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        g = self.snap().groups["g1"]
+        self.assertEqual((g.get("state"), g.get("fix_round"), g.get("job", "absent")), ("pr", 0, None), g)
+        self.assertTrue(g.get("paused"), "no paused mark: %s" % g)
+        self.assertIs(g.get("fix_retry"), True, g)
+        self.assertEqual(len(self.full_runs()), 1, self.lines())
+        self.assertEqual(self.fixer_calls(), 0, "the fake fixer was called")
+        pages = self.pages_for("g1")
+        self.assertEqual(len(pages), 1, pages)
+        self.assertEqual(pages[0]["kind"], "env", pages)
+        text = pages[0]["text"]
+        self.assertIn("fix round 1", text)
+        self.assertIn(self.fixer_log_last_line(), text)
+        self.assertIn("actl tickets rerun g1", text)
+
+    def test_3_after_the_rerun_the_fixer_runs_before_any_regression(self):
+        self.block_fix_tree()
+        before = len(self.full_runs())
+        os.unlink(self.blocker)
+        rerun_at = time.time()
+        res = self.run_py("tickets.py", "rerun", "g1")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["fix_round"], 1)
+        self.assertEqual(self.fixer_calls(), 1)
+        self.assertEqual(before, 1, self.lines())
+        self.assertEqual(len(self.full_runs()), 2, self.lines())
+        fixers = [float(r[3]) for r in self.lines() if r[:3] == ["agent", "fixer", "g1"]]
+        self.assertTrue(fixers, self.lines())
+        between = [r for r in self.full_runs() if rerun_at <= float(r[2]) < min(fixers)]
+        self.assertEqual(between, [], "a full regression ran between the rerun and the fixer")
+
+    # ------------------------------------------------------------ 4. worktree_setup fails in fix-*
+
+    def test_4_a_failed_fixer_setup_writes_one_page_and_the_next_run_fixes_first(self):
+        self.need_setup()
+        self.config(worktree_setup=self.only_fails_in("*/fix-*"))
+        self.add(1)
+        self.plan(worker={"1": ["red"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        pages = self.pages_for("g1")
+        self.assertEqual(len(pages), 1, pages)
+        self.assertEqual(pages[0]["kind"], "env", pages)
+        self.assertIn("worktree_setup", pages[0]["text"])
+        self.config(worktree_setup="touch .setup-done")
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(len(self.full_runs()), 2, self.lines())
+
+    # ------------------------------------------------------------ 5. an adopted job without its agent
+
+    def test_5_an_adopted_fixer_job_that_ended_without_its_agent_is_paused(self):
+        import ticket_controller
+        from core.config import Config
+        self.add(1, state="merged")
+        git(self.proj, "branch", "int/g1", "main")
+        report = os.path.join(self.tmp, "red-report.json")
+        with open(report, "w") as fh:
+            json.dump({"status": "red", "summary": "1 failing", "failures": [{"id": "suite.red"}]}, fh)
+        g = {"id": "g1", "branch": "int/g1", "state": "fixing", "alone": False, "members": ["1"],
+             "fix_round": 2, "fix_agent_round": 1, "fix_report": report,
+             "job": {"kind": "fixer", "stamp": dict(osx.stamp(), boot="not-this-boot"), "out": report}}
+        self.pool.update(lambda tx: tx.put_group(g), "test: group g1")
+        ctl = ticket_controller.Controller(Config(self.proj), self.pool)
+        ctl.forever = True
+        ctl.tick()
+        g = self.snap().groups["g1"]
+        self.assertEqual((g.get("state"), g.get("fix_round"), g.get("job", "absent")), ("pr", 1, None), g)
+        self.assertTrue(g.get("paused"), "no paused mark: %s" % g)
+        self.assertIs(g.get("fix_retry"), True, g)
+        pages = self.pages_for("g1")
+        self.assertEqual([p["kind"] for p in pages], ["env"], pages)
+
+
 class Recovery(LoopCase):
     def test_a_running_ticket_whose_issuer_died_is_dispatched_again(self):
         self.add(1)
