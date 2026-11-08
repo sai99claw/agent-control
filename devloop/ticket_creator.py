@@ -37,7 +37,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import agents, inflight, memory, osx  # noqa: E402
+from core import agents, inflight, memory, osx, pages  # noqa: E402
 from core import dag as dagmod  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.pool import event, frozen_reason  # noqa: E402
@@ -472,7 +472,7 @@ def _revise(cfg, pool, ident, source, reason, via, by):
         return 0
     if res.get("kind") == "question":
         pool.report("decision", ident, "#%s needs your decision (raised by the %s): %s" % (
-            ident, source, res.get("text")))
+            ident, source, res.get("text")), **{k: res[k] for k in pages.KEYS if k in res})
         print("ESCALATED to the main session: %s\nStop now and hand in "
               "{\"kind\": \"blocked\", \"text\": \"waiting for the user's decision\"}." % res.get("text"))
         return 3

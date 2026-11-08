@@ -45,7 +45,11 @@ You may change a test that is not an acceptance case only when a ticket of this 
 
 If two tickets of this group contradict each other, do not pick a winner yourself and do not
 change either ticket's cases to make them agree: hand in kind `decision` with where they
-contradict and which new ticket you propose.
+contradict and which new ticket you propose. The decision hand-in also carries `question` (one
+line), `options` (2-4, the recommended one first; each {{"action", "note", "consequence"}}, the
+consequence one line; actions: `group-ready` - its note is the complete ruling for the next fixer:
+which ticket to follow, change only the cases of the contradiction, loosen no other acceptance,
+list what changed - `group-cancel` and `ack`) and `recommendation` (one line: why the first).
 
 ## Hand-in
 
@@ -54,7 +58,10 @@ Write JSON to {result_path}, then stop:
     {{"kind": "done", "summary": "what was wrong and what you changed",
      "cases_changed": [{{"ticket": "<id>", "case": "<case>", "acceptance": "<the acceptance item it now matches>"}}],
      "tests_changed": [{{"test": "<test id>", "ticket": "<id>", "acceptance": "<the acceptance item>"}}]}}
-    {{"kind": "decision", "text": "where the tickets contradict and which new ticket you propose"}}
+    {{"kind": "decision", "text": "where the tickets contradict and which new ticket you propose",
+     "question": "one line", "recommendation": "one line: why the first option",
+     "options": [{{"action": "group-ready", "note": "the complete ruling for the next fixer", "consequence": "one line"}},
+                 {{"action": "group-cancel", "note": "", "consequence": "one line"}}]}}
 
 Add "lessons" to your hand-in only for something this run taught you that a future agent should
 know - one principle per entry, no story:

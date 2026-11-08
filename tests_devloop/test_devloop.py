@@ -1940,6 +1940,23 @@ class WebGuardedHelper(LoopCase):
         self.assertNotIn("a" * (agents.WEB_LIMIT + 1), out)
 
 
+class PageKeysHelper(LoopCase):
+    def test_only_present_keys(self):
+        import auto_fixer
+        self.assertEqual(auto_fixer._page_keys({"text": "t", "question": "q"}), {"question": "q"})
+        self.assertEqual(auto_fixer._page_keys(None), {})
+
+    def test_prompts_mention_the_keys(self):
+        import string
+        root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "devloop", "prompts")
+        for name, word in (("fixer.md", "group-ready"), ("reviser.md", "revise")):
+            text = open(os.path.join(root, name)).read()
+            # every {field} left after un-doubling braces must be a plain name; doubled ones are literal
+            list(string.Formatter().parse(text))
+            for key in ('"question"', '"options"', '"recommendation"', word):
+                self.assertIn(key, text.replace("{{", "{").replace("}}", "}"))
+
+
 class Timeout(LoopCase):
     loop_extra = {"issuer_timeout_seconds": 4}
 
