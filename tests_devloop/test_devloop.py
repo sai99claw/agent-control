@@ -14342,6 +14342,21 @@ class DagTabUnit(LoopCase):
         edges, _ = board.dag_wait_marks(snap, shown, board.dag_waits(cfg, snap, shown, rows))
         self.assertEqual(edges, set())
 
+    def test_dag_wait_marks_walk_through_ready_and_skip_missing_only(self):
+        import board
+        cfg, snap, rows = self.wait_fixture()
+        for ident, deps in (("20", []), ("21", ["20"]), ("22", ["2"]), ("23", ["12"])):
+            snap.tickets[ident] = {"id": ident, "state": "ready"}
+            snap.dag[ident] = {"depends_on": deps}
+        shown = set(snap.tickets)
+        waits = board.dag_waits(cfg, snap, shown, rows)
+        self.assertEqual(waits["23"][:3], ("deps", "等 #12(待派)", ["12"]))
+        edges, lanes = board.dag_wait_marks(snap, shown, waits)
+        self.assertIn(("20", "21"), edges)  # a ready ticket with nothing unsatisfied goes next
+        self.assertIn(("2", "22"), edges)  # through #2 to #1 merged in a pr group
+        self.assertNotIn(("12", "23"), edges)  # only a missing ticket at the end: neither
+        self.assertEqual(lanes, [("g21", "2", False)])
+
     def test_dag_svg_draws_wait_lines_marks_and_lane_lines(self):
         import board
         import xml.etree.ElementTree as ET
