@@ -794,8 +794,9 @@ class Regression(LoopCase):
     def test_main_moving_during_verification_is_merged_in(self):
         log = os.path.join(self.tmp, "intervals.txt")
         self.env["FAKE_INTERVALS"] = log
+        self.env["FAKE_MAIN_DURING_FULL"] = json.dumps({"NOTES.md": "notes\n"})
         self.add(1)
-        self.plan(worker={"1": ["move_main"]})
+        self.plan()
         res = self.controller()
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(self.state(1), "landed")
@@ -3758,6 +3759,36 @@ class TestHostSampler(LoopCase):
             self.assertIn(words, flat)
 
 
+class FakeTestsMainDuringFull(unittest.TestCase):
+    """#71: the `full` hook of fake_tests.py commits once, and is a no-op with the marker or without the variable."""
+
+    def run_full(self, tmp, proj, moves):
+        env = dict(os.environ, AC_ROOT=proj, FAKE_PLAN=os.path.join(tmp, "plan.json"), AC_TEST_OUT=tmp)
+        env.pop("FAKE_MAIN_DURING_FULL", None)
+        if moves is not None:
+            env["FAKE_MAIN_DURING_FULL"] = json.dumps(moves)
+        subprocess.run(["python3", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_tests.py"), "full"],
+                       cwd=tmp, env=env, capture_output=True, text=True)
+
+    def test_hook_commits_once_and_noops(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proj = os.path.join(tmp, "proj")
+            os.makedirs(proj)
+            for args in (["init", "-q"], ["config", "user.email", "a@b"], ["config", "user.name", "a"],
+                         ["commit", "-q", "--allow-empty", "-m", "init"]):
+                subprocess.run(["git", "-C", proj] + args, check=True)
+            count = lambda: int(subprocess.run(["git", "-C", proj, "rev-list", "--count", "HEAD"],
+                                               capture_output=True, text=True).stdout)
+            self.run_full(tmp, proj, None)
+            self.assertEqual(count(), 1)
+            self.run_full(tmp, proj, {"memory/n.md": "n\n"})
+            self.assertEqual(count(), 2)
+            self.assertTrue(os.path.exists(os.path.join(tmp, "main-moved-during-full")))
+            self.run_full(tmp, proj, {"memory/m.md": "m\n"})
+            self.assertEqual(count(), 2)
+            self.assertFalse(os.path.exists(os.path.join(proj, "memory", "m.md")))
+
+
 class TestLayerDocs(unittest.TestCase):
     ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -5804,8 +5835,9 @@ class T29Acceptance(LoopCase):
         """Item 3."""
         log = os.path.join(self.tmp, "intervals.txt")
         self.env["FAKE_INTERVALS"] = log
+        self.env["FAKE_MAIN_DURING_FULL"] = json.dumps({"memory/note.md": "note\n"})
         self.add(1)
-        self.plan(worker={"1": ["move_main_memory"]})
+        self.plan()
         res = self.controller()
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         self.assertEqual(self.state(1), "landed")
@@ -6366,11 +6398,14 @@ class NoReverifyPaths(LoopCase):
     NRV = "main took only no-reverify paths: merged without re-verifying"
 
     def move(self, main_files, worker_files=None):
-        self.env["FAKE_MAIN_FILES"] = json.dumps(main_files)
-        self.env["FAKE_WORKER_FILES"] = json.dumps(worker_files or {})
+        self.env["FAKE_MAIN_DURING_FULL"] = json.dumps(main_files)
         self.env["FAKE_INTERVALS"] = self.log = os.path.join(self.tmp, "intervals.txt")
         self.add(1)
-        self.plan(worker={"1": ["move_main_files"]})
+        if worker_files:
+            self.env["FAKE_WORKER_FILES"] = json.dumps(worker_files)
+            self.plan(worker={"1": ["write_files"]})
+        else:
+            self.plan()
         return self.controller()
 
     def full_runs(self):

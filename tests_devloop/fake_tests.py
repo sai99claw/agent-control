@@ -53,6 +53,19 @@ if cmd == "run":
     json.dump({"schema": 1, "ids": rows, "environment_suspect": []}, open(os.path.join(out, "result.json"), "w"))
     sys.exit(1 if any(r["status"] in ("fail", "error") for r in rows) else 0)
 if cmd == "full":
+    moves = os.environ.get("FAKE_MAIN_DURING_FULL")   # #71: main moves while the full run is in progress
+    marker = os.path.join(os.path.dirname(os.environ.get("FAKE_PLAN") or "."), "main-moved-during-full")
+    if moves and not os.path.exists(marker):
+        import subprocess
+        root = os.environ["AC_ROOT"]
+        paths = []
+        for rel, text in json.loads(moves).items():
+            os.makedirs(os.path.dirname(os.path.join(root, rel)), exist_ok=True)
+            open(os.path.join(root, rel), "w").write(text)
+            paths.append(rel)
+        subprocess.run(["git", "-C", root, "add", "--"] + paths, check=True)
+        subprocess.run(["git", "-C", root, "commit", "-q", "-m", "main moves during full", "--"] + paths, check=True)
+        open(marker, "w").write("x")
     rows = [{"id": "suite.base", "status": "pass"}]
     rows += [{"id": "impl." + os.path.basename(p), "status": "pass" if open(p).read() == "ok" else "fail"}
              for p in sorted(glob.glob("impl_*.txt"))]

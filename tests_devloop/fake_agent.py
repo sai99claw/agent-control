@@ -79,6 +79,10 @@ if role == "worker":
             open(os.path.join(root, rel), "w").write(text)
             subprocess.run(["git", "-C", root, "add", rel], check=True)
         subprocess.run(["git", "-C", root, "commit", "-q", "-m", "main moves"], check=True)
+    if action == "write_files":   # #71: $FAKE_WORKER_FILES here, committed with the work; main untouched
+        for rel, text in json.loads(os.environ.get("FAKE_WORKER_FILES") or "{}").items():
+            os.makedirs(os.path.dirname(rel) or ".", exist_ok=True)
+            open(rel, "w").write(text)
     if action == "touch_decisions":
         os.makedirs("docs", exist_ok=True)
         open("docs/DECISIONS.md", "a").write("x\n")
