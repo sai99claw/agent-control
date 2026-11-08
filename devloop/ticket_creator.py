@@ -479,7 +479,7 @@ def _revise(cfg, pool, ident, source, reason, via, by):
         return 0
     if res.get("kind") == "question":
         pool.report("decision", ident, "#%s needs your decision (raised by the %s): %s" % (
-            ident, source, res.get("text")))
+            ident, source, res.get("text")), **{k: res[k] for k in pages.KEYS if k in res})
         print("ESCALATED to the main session: %s\nStop now and hand in "
               "{\"kind\": \"blocked\", \"text\": \"waiting for the user's decision\"}." % res.get("text"))
         return 3

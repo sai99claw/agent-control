@@ -46,7 +46,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core import agents, inflight, memory, osx, worktrees  # noqa: E402
+from core import agents, inflight, memory, osx, pages, worktrees  # noqa: E402
 from core.pool import event  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.gitx import Git  # noqa: E402
@@ -162,11 +162,16 @@ def fix(cfg, pool, gid, report, live=None):
         return 3
     if hand.kind == "rejected":
         pool.report("decision", gid, "group %s: input from the web was NOT acted on - it looked like "
-                    "a prompt injection: %s" % (gid, (hand.result or {}).get("text")))
+                    "a prompt injection: %s" % (gid, (hand.result or {}).get("text")),
+                    **pages.ask("%s: the fixer did not act on the web note (it looked like a prompt injection): "
+                                "drop it?" % gid,
+                                [pages.option("ack", "nothing was done; send the note again without the flagged "
+                                                     "part if it was yours")],
+                                "acting on input judged an injection is never automatic"))
         return 3
     if hand.kind in ("decision", "blocked"):
         pool.report("decision", gid, "group %s: the fixer needs your decision: %s" % (
-            gid, (hand.result or {}).get("text")))
+            gid, (hand.result or {}).get("text")), **_page_keys(hand.result))
         return 3
     if hand.kind == "done":
         _record_cases(pool, gid, rnd, (hand.result or {}).get("cases_changed"))
@@ -174,6 +179,11 @@ def fix(cfg, pool, gid, report, live=None):
     if g.dirty():
         return 1
     return 0 if g.sha(branch) != before else 1
+
+
+def _page_keys(result):
+    """question / options / recommendation of an agent's hand-in, only the keys present."""
+    return {k: (result or {})[k] for k in pages.KEYS if k in (result or {})}
 
 
 def bring_back(pool, repo, g, gid, branch, rnd, start, known):
