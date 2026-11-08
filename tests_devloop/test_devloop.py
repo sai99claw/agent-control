@@ -5520,6 +5520,166 @@ class Landing(LoopCase):
         self.assertIsNone(total["input_tokens"])
 
 
+class T72Acceptance(LoopCase):
+    """#72: when main moves, the controller merges it into every waiting integration branch before
+    that branch's next regression; only a merge conflict costs a fix round. Expected values come
+    from the ticket's acceptance text, never from ticket_controller.py or auto_fixer.py."""
+
+    NRV = "main took only no-reverify paths: merged without re-verifying"
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(name, None)
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("DEVLOOP_")}
+        patch = mock.patch.dict(os.environ, clean, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.log = os.path.join(self.tmp, "intervals.txt")
+
+    # ------------------------------------------------------------ helpers
+
+    def full_runs(self):
+        if not os.path.exists(self.log):
+            return 0
+        with open(self.log) as fh:
+            return sum(1 for line in fh if line.startswith("tests full "))
+
+    def fixer_calls(self):
+        path = os.path.join(os.path.dirname(self.plan_path), "count-fixer-g1")
+        if not os.path.exists(path):
+            return 0
+        with open(path) as fh:
+            return int(fh.read())
+
+    def history(self):
+        return list(self.snap().groups["g1"].get("history") or [])
+
+    def commit_file(self, ref, name, text, msg):
+        """One commit writing name=text on top of ref (a branch), made in a throwaway worktree."""
+        side = os.path.join(self.tmp, "side-%s" % ref.replace("/", "-"))
+        if ref == "main":
+            with open(os.path.join(self.proj, name), "w") as fh:
+                fh.write(text)
+            git(self.proj, "add", name)
+            git(self.proj, "commit", "-q", "-m", msg)
+            return git(self.proj, "rev-parse", "main")
+        git(self.proj, "worktree", "add", "-q", side, ref)
+        with open(os.path.join(side, name), "w") as fh:
+            fh.write(text)
+        git(side, "add", name)
+        git(side, "commit", "-q", "-m", msg)
+        sha = git(side, "rev-parse", "HEAD")
+        git(self.proj, "worktree", "remove", "--force", side)
+        return sha
+
+    def open_group(self):
+        self.add(1)
+        git(self.proj, "branch", "int/g1", "main")
+        g = {"id": "g1", "branch": "int/g1", "state": "open", "alone": False, "members": ["1"],
+             "fix_round": 0, "job": None}
+        self.pool.update(lambda tx: tx.put_group(g), "test: group g1")
+
+    def advance(self):
+        import ticket_controller
+        from core.config import Config
+        ctl = ticket_controller.Controller(Config(self.proj), self.pool)
+        ctl.advance_groups(self.pool.snapshot())
+
+    def assert_open_untouched_state(self):
+        g = self.snap().groups["g1"]
+        self.assertEqual(g.get("state"), "open")
+        self.assertEqual(g.get("fix_round"), 0)
+        self.assertIsNone(g.get("job"))
+        self.assertEqual(self.state(1), "ready")
+
+    def events_naming(self, before, sha):
+        return [h for h in self.history()[len(before):] if sha[:12] in json.dumps(h)]
+
+    # ------------------------------------------------------------ items 1-2: end to end
+
+    def test_1_worker_moves_main(self):
+        self.env["FAKE_INTERVALS"] = self.log
+        self.add(1)
+        self.plan(worker={"1": ["move_main"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertTrue(self.main_has("NOTES.md") and self.main_has("impl_1.txt"))
+        self.assertEqual(self.fixer_calls(), 0, "the fake fixer is never called")
+        self.assertEqual(self.snap().groups["g1"]["fix_round"], 0)
+        self.assertEqual(self.full_runs(), 1)
+
+    def test_2_main_moves_during_the_first_regression(self):
+        self.env["FAKE_INTERVALS"] = self.log
+        self.env["FAKE_MAIN_DURING_FULL"] = json.dumps({"NOTES.md": "notes\n"})
+        self.add(1)
+        self.plan()
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertTrue(self.main_has("NOTES.md") and self.main_has("impl_1.txt"))
+        self.assertEqual(self.full_runs(), 2)
+        events = [h.get("event") for h in self.history()]
+        self.assertNotIn(self.NRV, events)
+        self.assertEqual(self.fixer_calls(), 0, "the fake fixer is never called")
+        self.assertEqual(self.snap().groups["g1"]["fix_round"], 0)
+
+    # ------------------------------------------------------------ items 3-5: in process
+
+    def test_3_open_group_without_own_commits_moves_to_main(self):
+        self.open_group()
+        before = self.history()
+        main = self.commit_file("main", "NOTES.md", "notes\n", "docs")
+        self.advance()
+        self.assert_open_untouched_state()
+        self.assertEqual(git(self.proj, "rev-parse", "int/g1"), main)
+        self.assertEqual(len(self.events_naming(before, main)), 1, self.history())
+
+    def test_4_open_group_with_own_commits_gets_a_merge(self):
+        self.open_group()
+        own = self.commit_file("int/g1", "group.txt", "group\n", "group work")
+        main = self.commit_file("main", "NOTES.md", "notes\n", "docs")
+        self.advance()
+        self.assert_open_untouched_state()
+        parents = git(self.proj, "rev-list", "--parents", "-n1", "int/g1").split()[1:]
+        self.assertEqual(parents, [own, main])
+
+    def test_5_open_group_with_a_conflict_is_left_alone(self):
+        self.open_group()
+        own = self.commit_file("int/g1", "shared.txt", "group\n", "group shared")
+        main = self.commit_file("main", "shared.txt", "main\n", "main shared")
+        trees = git(self.proj, "worktree", "list", "--porcelain")
+        before = self.history()
+        self.advance()
+        self.advance()
+        self.assert_open_untouched_state()
+        self.assertEqual(git(self.proj, "rev-parse", "int/g1"), own)
+        self.assertEqual(self.fixer_calls(), 0, "no fixer started")
+        self.assertEqual(git(self.proj, "worktree", "list", "--porcelain"), trees)
+        self.assertEqual(len(self.events_naming(before, main)), 1, self.history())
+
+    # ------------------------------------------------------------ item 6: auto_fixer CLI
+
+    def test_6_auto_fixer_runs_the_agent_after_a_clean_main_merge(self):
+        self.config(max_rounds=1)
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["nothing"]})
+        self.controller()
+        tree = os.path.join(self.tmp, "wt", "fix-g1")
+        self.assertEqual(git(tree, "symbolic-ref", "--short", "HEAD"), "int/g1",
+                         "fixture: fix-g1 is on int/g1 after the first round")
+        self.commit_file("main", "NOTES.md", "notes\n", "docs")
+        report = os.path.join(self.tmp, "main-moved.json")
+        with open(report, "w") as fh:
+            json.dump({"status": "main_moved", "summary": "main moved"}, fh)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["nothing", "fix"]})
+        before = self.fixer_calls()
+        res = self.run_py("auto_fixer.py", "--group", "g1", "--report", report)
+        self.assertEqual(self.fixer_calls() - before, 1,
+                         "the fake fixer is called once: %s" % (res.stdout + res.stderr))
+
+
 class T63Acceptance(LoopCase):
     """#63: a controller run without --forever that ends with work left writes one idle page (ref
     controller) and the same lines on stderr, one per item, saying what it waits for. Expected lines
