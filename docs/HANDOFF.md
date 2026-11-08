@@ -287,3 +287,12 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
 - g15(#64–#68,約 18.9 美元):看板「進行中」分頁,程序在 `<worktrees>/runs/live/` 留紀錄;發版腳本可印 `devloop-stage: <文字>`。
   #66/#67 矛盾由主線代答(照 #67),使用者事後同意並定成 D-094。main = 0be812b。
 - 給 T 的更新說明已交給使用者(pull、重啟看板與 controller、發版腳本加 stage 行)。
+
+## 2026-11-08(續)T 的 13–15、看板安全、決定頁選項、tickets wait
+
+- g16(10 張,#69–#78)、g17(3 張,#79–#81)都一輪落地,合計約 37 美元,main = 8e0b05e。g16 剛好 10 張:組上限現在擋得住。
+- T 的 13–15:main 前進時 controller 直接把 main 合進還在等的整合分支(只有衝突才算一輪);修完更紅的那輪會被退掉
+  (commit 留在 refs/devloop/dropped/…);fixer 離開分支時由 auto_fixer 把 commit 接回;沒跑到 agent 的修復輪不算輪、不跑 regression。
+- 看板檢查 Host 與 Origin(擋 DNS rebinding 與跨站送出);放在 proxy 後面要設 `board.public_url` 或 `board.allowed_hosts`。
+- 決定頁附問題、選項與推薦,看板上是按鈕;`actl tickets wait` 取代自己寫的等待迴圈(CLAUDE.md 已改)。
+- 「答覆自動回到對話裡」(UserPromptSubmit hook)使用者問了好處,主線建議先不做,未定。
