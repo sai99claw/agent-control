@@ -13232,6 +13232,356 @@ class ProjectRulesHome(unittest.TestCase):
             self.assertIn(word, sec.replace("Project memory", "project memory"))
 
 
+class T84Acceptance(BoardLiveTab):
+    """#84: every ready DAG node says what it waits for; the dependency it waits on is highlighted up to
+    the moving or stuck source. Expected strings come from the ticket and fixture F, never from the code."""
+
+    NS = "{http://www.w3.org/2000/svg}"
+    WAIT_KINDS = ("deps", "controller", "parallel", "next")
+
+    # BoardLiveTab's own cases are not #84's acceptance: inherit only its helpers, not its tests.
+    test_live_clock_and_elapsed = None
+    test_tail_keeps_the_last_twenty_lines_and_step_reads_the_last_mark = None
+    test_opener_takes_its_newest_agent_and_the_others_have_no_row = None
+    test_issuer_without_agent_regression_fixer_release_and_order = None
+    test_render_escapes_marks_slots_and_creates_nothing = None
+
+    # ------------------------------------------------------------ fixture F
+    def lock(self, content):
+        path = os.path.join(self.cfg().worktree_root, "controller.lock")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write(content)
+
+    def fixture_f(self, lock=True):
+        if lock:
+            self.lock(json.dumps(osx.stamp()))
+        self.pool.update(lambda tx: (
+            tx.put_group({"id": "g21", "state": "pr", "branch": "int/g21", "members": ["1", "7"]}),
+            tx.put_group({"id": "g22", "state": "open", "branch": "int/g22", "members": ["3", "4", "8"]})),
+            "test: groups")
+        self.put("regression-int-g21", kind="regression", stamp=self.alive("2026-11-06T11:00:00Z"), group="g21",
+                 branch="int/g21", sha="a" * 40, exclusive=False, stage="full", since="2026-11-06T11:00:00Z")
+        self.add(1, state="merged", group="g21")
+        self.add(2, deps=[1])
+        self.add(3, state="running", group="g22")
+        self.add(4, group="g22")
+        self.add(5, deps=[3])
+        self.add(6, deps=[5])
+        self.add(7)
+        self.add(8, state="stuck", group="g22")
+        self.add(9, deps=[8])
+        self.add(10, state="cancelled")
+        self.add(11, deps=[10])
+        self.add(12, deps=["99"])
+
+    # ------------------------------------------------------------ svg readers
+    def root(self):
+        import board
+        import xml.etree.ElementTree as ET
+        page = board.render(self.cfg(), self.snap(), query={"tab": "dag"}, now=self.NOW)
+        m = re.search(r'<svg id="dag".*?</svg>', page, re.S)
+        self.assertIsNotNone(m, "no <svg id=\"dag\"> on the DAG tab")
+        try:
+            return ET.fromstring(m.group(0))
+        except ET.ParseError as exc:
+            self.fail("the DAG svg does not parse: %s" % exc)
+
+    @staticmethod
+    def cls(el):
+        return (el.get("class") or "").split()
+
+    def nodes(self, root):
+        return {el.get("data-id"): el for el in root.iter(self.NS + "g") if "node" in self.cls(el)}
+
+    def waits(self, node):
+        return [el for el in node.iter(self.NS + "text") if "wait" in self.cls(el)]
+
+    def wait_text(self, node):
+        lines = self.waits(node)
+        self.assertEqual(len(lines), 1, "#%s: one <text class=\"wait\"> line, got %d"
+                         % (node.get("data-id"), len(lines)))
+        return "".join(lines[0].itertext())
+
+    def st(self, node):
+        found = [el for el in node.iter(self.NS + "text") if "st" in self.cls(el)]
+        self.assertEqual(len(found), 1, "#%s: one <text class=\"st\">" % node.get("data-id"))
+        return "".join(found[0].itertext())
+
+    def edges(self, root):
+        return {(el.get("data-from"), el.get("data-to")): el for el in root.iter(self.NS + "path")
+                if "edge" in self.cls(el)}
+
+    def lanewaits(self, root):
+        return [el for el in root.iter() if "lanewait" in self.cls(el)]
+
+    def lane_of(self, root, ident):
+        for lane in root.iter(self.NS + "g"):
+            if "lane" in self.cls(lane):
+                if any(n.get("data-id") == ident and "node" in self.cls(n) for n in lane.iter(self.NS + "g")):
+                    return lane.get("data-group")
+        self.fail("#%s is in no lane" % ident)
+
+    def expect_waits(self, root, expected):
+        nodes = self.nodes(root)
+        for ident, (kind, text, on) in expected.items():
+            with self.subTest(ticket=ident):
+                self.assertIn(ident, nodes, "no node for #%s" % ident)
+                n = nodes[ident]
+                self.assertEqual(n.get("data-state"), "ready")
+                self.assertEqual(self.wait_text(n), text)
+                self.assertEqual(n.get("data-wait"), kind)
+                if on is not None:
+                    self.assertEqual(n.get("data-wait-on"), on)
+
+    def invariant(self, root, exempt=()):
+        """Item 8 on one render. exempt: the (d, R) pairs of drawn dependencies whose walk reaches no moving or
+        stuck source (only missing tickets); the caller names them from its fixture and checks them itself."""
+        nodes = self.nodes(root)
+        ready = [i for i, n in nodes.items() if n.get("data-state") == "ready"]
+        self.assertTrue(ready, "the render has ready nodes")
+        edges = self.edges(root)
+        lanes = self.lanewaits(root)
+        for ident in ready:
+            n = nodes[ident]
+            lines = self.waits(n)
+            self.assertTrue(lines and "".join(lines[0].itertext()).strip(), "#%s: empty or no wait line" % ident)
+            self.assertIn(n.get("data-wait"), self.WAIT_KINDS, "#%s: data-wait" % ident)
+            if n.get("data-wait") != "deps":
+                continue
+            on = (n.get("data-wait-on") or "").split()
+            drawn = [d for d in on if (d, ident) in edges and (d, ident) not in exempt]
+            lane = [el for el in lanes if el.get("data-to") == ident]
+            if not drawn and not lane:
+                continue
+            marked = [el for el in root.iter() if el.get("data-to") == ident
+                      and set(self.cls(el)) & {"wait", "chain", "lanewait"}]
+            self.assertTrue(marked, "#%s waits on drawn %s / lane %s but nothing to it is highlighted"
+                            % (ident, drawn, lane))
+
+    F_WAITS = {
+        "2": ("deps", "等 g21 落地 — regression 跑中", "1"),
+        "5": ("deps", "等 #3(做中)", "3"),
+        "6": ("deps", "等 #5(待派)", "5"),
+        "9": ("deps", "等你判 #8", "8"),
+        "11": ("deps", "#10 已取消,不會落地", "10"),
+        "12": ("deps", "#99 不存在", "99"),
+    }
+
+    # ---- items 1, 2, 4 (F)
+    def test_f_every_ready_node_has_its_wait(self):
+        self.fixture_f()
+        root = self.root()
+        expected = dict(self.F_WAITS)
+        expected.update({"4": ("next", "下一輪派出", None), "7": ("next", "下一輪派出", None)})
+        self.expect_waits(root, expected)
+        self.invariant(root)
+
+    # ---- item 4 (controller variants)
+    def test_f_without_controller_lock(self):
+        self.fixture_f(lock=False)
+        root = self.root()
+        expected = dict(self.F_WAITS)
+        expected.update({"4": ("controller", "controller 沒在跑", None),
+                         "7": ("controller", "controller 沒在跑", None)})
+        self.expect_waits(root, expected)
+        self.invariant(root)
+
+    def test_bad_or_dead_controller_lock_is_not_alive(self):
+        self.fixture_f(lock=False)
+        for label, content in (("not json", "not json"), ("not an object", "[1, 2]"),
+                               ("dead stamp", json.dumps(self.dead("2026-11-06T10:00:00Z")))):
+            with self.subTest(lock=label):
+                self.lock(content)
+                self.expect_waits(self.root(), {"4": ("controller", "controller 沒在跑", None),
+                                                "7": ("controller", "controller 沒在跑", None)})
+        self.lock(json.dumps(osx.stamp()))
+        self.expect_waits(self.root(), {"4": ("next", "下一輪派出", None)})
+
+    def test_f_with_max_parallel_one(self):
+        self.config(max_parallel=1)
+        self.fixture_f()
+        root = self.root()
+        expected = dict(self.F_WAITS)
+        expected.update({"4": ("parallel", "等空位(同時最多 1 張在做)", None),
+                         "7": ("parallel", "等空位(同時最多 1 張在做)", None)})
+        self.expect_waits(root, expected)
+        self.invariant(root)
+
+    # ---- item 2: join, collapse, numeric order of data-wait-on
+    def test_parts_join_collapse_and_numeric_order(self):
+        self.fixture_f()
+        self.add(13, state="merged", group="g21")
+        self.add(14, deps=[1, 13])
+        self.add(15, deps=[3, 5])
+        self.add(16, deps=[10, 9])
+        root = self.root()
+        self.expect_waits(root, {"14": ("deps", "等 g21 落地 — regression 跑中", "1 13"),
+                                 "15": ("deps", "等 #3(做中)、等 #5(待派)", "3 5")})
+        n = self.nodes(root)["16"]
+        self.assertEqual(n.get("data-wait"), "deps")
+        self.assertEqual(n.get("data-wait-on"), "9 10")
+        self.assertEqual(sorted(self.wait_text(n).split("、")), sorted(["等 #9(待派)", "#10 已取消,不會落地"]))
+        self.invariant(root)
+
+    # ---- item 3: <G now>
+    def test_group_now_texts(self):
+        self.lock(json.dumps(osx.stamp()))
+        groups = (("g31", "pr"), ("g32", "pr"), ("g33", "fixing"), ("g34", "verified"), ("g35", "stuck"),
+                  ("g36", "verified"), ("g37", "pr"))
+        self.pool.update(lambda tx: [tx.put_group({"id": g, "state": s, "branch": "int/" + g, "members": []})
+                                     for g, s in groups], "test: groups")
+        started = "2026-11-06T11:00:00Z"
+        for g, stage in (("g31", "machine"), ("g32", "slot")):
+            self.put("regression-int-" + g, kind="regression", stamp=self.alive(started), group=g,
+                     branch="int/" + g, sha="b" * 40, exclusive=False, stage=stage, since=started)
+        self.put("fixer-g33", kind="fixer", stamp=self.alive(started), group="g33", round=2, max_rounds=3)
+        self.put("release-g34", kind="release", stamp=self.alive(started), group="g34", sha="c" * 40,
+                 log=self.log("rel.log", ["devloop-stage: tagging"]))
+        self.put("regression-int-g37", kind="regression", stamp=self.dead(osx.now()), group="g37",
+                 branch="int/g37", sha="d" * 40, exclusive=False, stage="full", since=started)
+        for k, (g, _) in enumerate(groups):
+            self.add(31 + k, state="merged", group=g)
+            self.add(41 + k, deps=[31 + k])
+        self.add(38, state="merged", group="g31")
+        self.add(48, deps=[31, 38])
+        root = self.root()
+        self.expect_waits(root, {
+            "41": ("deps", "等 g31 落地 — regression 等機器名額", "31"),
+            "42": ("deps", "等 g32 落地 — regression 等機器名額", "32"),
+            "43": ("deps", "等 g33 落地 — 修補第 2/3 輪", "33"),
+            "44": ("deps", "等 g34 落地 — 發版中", "34"),
+            "45": ("deps", "等 g35 落地 — 卡住", "35"),
+            "46": ("deps", "等 g36 落地 — 已驗,待落地", "36"),
+            "47": ("deps", "等 g37 落地 — PR(待驗)", "37"),
+            "48": ("deps", "等 g31 落地 — regression 等機器名額", "31 38"),
+        })
+        # item 7 on the same render: one lane line per (G, R), chain only for the stuck group
+        got = sorted((el.get("data-from"), el.get("data-to"), "chain" in self.cls(el), "edge" in self.cls(el))
+                     for el in self.lanewaits(root))
+        want = sorted([("lane:g3%d" % (k + 1), str(41 + k), g == "g35", False) for k, (g, _) in enumerate(groups)]
+                      + [("lane:g31", "48", False, False)])
+        self.assertEqual(got, want)
+        edges = self.edges(root)
+        for k in range(7):
+            self.assertNotIn("wait", self.cls(edges[(str(31 + k), str(41 + k))]), "merged-in-not-open edge")
+        self.invariant(root)
+
+    # ---- item 5
+    def test_group_member_and_ungrouped_state_texts(self):
+        self.fixture_f()
+        root = self.root()
+        nodes = self.nodes(root)
+        self.assertEqual(self.lane_of(root, "4"), "g22")
+        self.assertEqual(self.st(nodes["4"]), "組內待做")
+        self.assertEqual(nodes["4"].get("data-member"), "g22")
+        self.assertEqual(self.lane_of(root, "7"), "")
+        self.assertIsNone(nodes["7"].get("data-member"))
+        self.assertEqual(self.st(nodes["7"]), "待派")
+        for ident in ("2", "5", "6", "7", "9", "11", "12"):
+            with self.subTest(ticket=ident):
+                self.assertEqual(self.st(nodes[ident]), "待派")
+                self.assertTrue(self.wait_text(nodes[ident]).strip())
+
+    # ---- item 6
+    def test_f_edge_highlights(self):
+        self.fixture_f()
+        edges = self.edges(self.root())
+        for pair in (("3", "5"), ("5", "6")):
+            self.assertIn(pair, edges)
+            self.assertIn("wait", self.cls(edges[pair]), pair)
+        for pair in (("8", "9"), ("10", "11")):
+            self.assertIn(pair, edges)
+            self.assertIn("chain", self.cls(edges[pair]), pair)
+            self.assertNotIn("wait", self.cls(edges[pair]), pair)
+        self.assertIn(("1", "2"), edges)
+        self.assertFalse({"wait", "chain"} & set(self.cls(edges[("1", "2")])))
+
+    def test_edge_sources(self):
+        self.lock(json.dumps(osx.stamp()))
+        self.pool.update(lambda tx: (
+            tx.put_group({"id": "g21", "state": "pr", "branch": "int/g21", "members": ["1"]}),
+            tx.put_group({"id": "g5", "state": "stuck", "branch": "int/g5", "members": ["5"]})), "test: groups")
+        self.add(20)
+        self.add(21, deps=[20])
+        self.add(1, state="merged", group="g21")
+        self.add(2, deps=[1])
+        self.add(22, deps=[2])
+        self.add(12, deps=["99"])
+        self.add(23, deps=[12])
+        self.add(5, state="merged", group="g5")
+        self.add(6, deps=[5])
+        self.add(24, deps=[6])
+        root = self.root()
+        edges = self.edges(root)
+        self.assertIn("wait", self.cls(edges[("20", "21")]), "a ready ticket with nothing unsatisfied moves")
+        self.assertIn("wait", self.cls(edges[("2", "22")]), "merged in a pr group moves through its lane line")
+        self.assertNotIn("wait", self.cls(edges[("1", "2")]))
+        self.assertFalse({"wait", "chain"} & set(self.cls(edges[("12", "23")])), "a missing source is neither")
+        for pair in (("5", "6"), ("6", "24")):
+            self.assertIn("chain", self.cls(edges[pair]), pair)
+            self.assertNotIn("wait", self.cls(edges[pair]), pair)
+        self.expect_waits(root, {"21": ("deps", "等 #20(待派)", "20"), "22": ("deps", "等 #2(待派)", "2")})
+        got = sorted((el.get("data-from"), el.get("data-to"), "chain" in self.cls(el)) for el in self.lanewaits(root))
+        self.assertEqual(got, [("lane:g21", "2", False), ("lane:g5", "6", True)])
+        # item 8's exemption: 12->23 reaches only missing #99, so it stays unhighlighted and the wait lines say it all
+        self.expect_waits(root, {"23": ("deps", "等 #12(待派)", "12"), "12": ("deps", "#99 不存在", "99")})
+        self.assertFalse([el for el in self.lanewaits(root) if el.get("data-to") == "23"], "#23 has no lane line")
+        self.invariant(root, exempt={("12", "23")})
+
+    # ---- item 7 (F)
+    def test_f_one_lane_line(self):
+        self.fixture_f()
+        lines = self.lanewaits(self.root())
+        self.assertEqual(len(lines), 1, "exactly one lane line in F")
+        el = lines[0]
+        self.assertEqual(el.tag, self.NS + "path")
+        self.assertEqual((el.get("data-from"), el.get("data-to")), ("lane:g21", "2"))
+        self.assertNotIn("edge", self.cls(el))
+        self.assertNotIn("chain", self.cls(el))
+
+    # ---- item 9
+    def test_legend_wait_entry_and_colour(self):
+        import board
+        self.fixture_f()
+        page = board.render(self.cfg(), self.snap(), query={"tab": "dag"}, now=self.NOW)
+        m = re.search(r'<div class="legend">(.*?)</div>', page, re.S)
+        self.assertIsNotNone(m, "no legend")
+        legend = m.group(1)
+        for text in list(board.STATE_TEXT.values()) + ["被卡住", "卡住的源頭"]:
+            self.assertIn(">%s</span>" % text, legend, "legend lost %s" % text)
+        entry = [s for s in re.findall(r"<span[^>]*>.*?</span>", legend, re.S) if "等待路徑" in s]
+        self.assertEqual(len(entry), 1, "one legend entry 等待路徑")
+        style = board.DAG_STYLE
+        blocks = [b for b in re.findall(r"\{([^{}]*--chain:[^{}]*)\}", style)]
+        self.assertEqual(len(blocks), 2, "light and dark variable blocks with --chain")
+        light, dark = [dict(re.findall(r"(--[\w-]+):([^;}]+)", b)) for b in blocks]
+        known = {"--chain"} | {k for k in light if k.startswith("--s-")}
+        new = sorted(set(light) - known)
+        self.assertTrue(new, "a new colour variable next to --chain")
+        ok = []
+        for var in new:
+            if var not in dark:
+                continue
+            if any(light[var].strip() == light[k].strip() for k in known):
+                continue
+            if any(dark[var].strip() == dark[k].strip() for k in known if k in dark):
+                continue
+            span = entry[0]
+            classes = re.findall(r'class="([^"]*)"', span)
+            inline = "var(%s)" % var in span
+            styled = False
+            for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", style):
+                if "var(%s)" % var not in body or ".legend" not in sel:
+                    continue
+                if any(c and ("." + c) in sel for cs in classes for c in cs.split()):
+                    styled = True
+            if inline or styled:
+                ok.append(var)
+        self.assertTrue(ok, "the 等待路徑 entry is drawn in a new variable defined light and dark, distinct from "
+                            "--chain and the state colours (new: %s)" % new)
+
+
 class BoardDetailHelpers(LoopCase):
     """board.py detail views: their helpers (run_start, timeline, cost cells, which query is a detail)."""
 
