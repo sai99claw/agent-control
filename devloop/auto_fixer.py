@@ -21,6 +21,8 @@ regression afterwards). Two kinds of red:
     A fixer that ends off the branch (detached or on another branch) has its commits brought onto
     it by fast-forward or cherry-pick; when that fails or they include a merge commit, its HEAD is
     kept under refs/devloop/dropped/<gid>-r<round> and the round ends as a decision page (exit 3).
+    Every round starts with the fix worktree put back on the integration branch at its current
+    head (unfinished merges aborted, tracked edits dropped).
 
 Exit: 0 something was committed (verify again) · 1 nothing usable came back · 3 the fixer handed
 in `decision` / `blocked`: only the user can decide (already reported as a decision page) · 2 refused ·
@@ -45,6 +47,35 @@ from core.gitx import Git  # noqa: E402
 LOOP = os.path.dirname(os.path.abspath(__file__))
 
 
+def round_start(cfg, pool, gid, repo, tree, branch):
+    """Put `tree` on `branch` at its current head with no tracked changes, whatever an earlier
+    round or a ref move left behind. A missing worktree is created; a path that is not a git
+    worktree stays untouched (GitError)."""
+    if not worktrees._exists(tree):
+        return worktrees.branch_tree(cfg, repo, tree, branch)
+    g = Git(tree)
+    for op in ("merge", "rebase", "cherry-pick", "revert"):
+        g.run(op, "--abort", check=False)
+    if g.current_branch() != branch:
+        old = g.sha("HEAD")
+        was = g.current_branch()
+        if g.run("checkout", "--force", branch, check=False).ok:
+            text = "fix worktree moved back to %s from %s at %s" % (
+                branch, ("branch " + was) if was else "a detached HEAD", (old or "?")[:12])
+
+            def change(tx):
+                group = tx.data.groups.get(gid)
+                if group is not None:
+                    event(group, text)
+                    tx.put_group(group)
+            pool.update(change, "group %s: fix worktree back on %s" % (gid, branch))
+        else:
+            repo.remove_worktree(tree)
+            return worktrees.branch_tree(cfg, repo, tree, branch)
+    g.run("reset", "--hard")
+    return tree
+
+
 def fix(cfg, pool, gid, report, live=None):
     live = [] if live is None else live
     snap = pool.snapshot()
@@ -55,7 +86,7 @@ def fix(cfg, pool, gid, report, live=None):
     repo = Git(cfg.root)
     tree = os.path.join(cfg.worktree_root, "fix-" + gid)
     try:
-        worktrees.branch_tree(cfg, repo, tree, branch)
+        round_start(cfg, pool, gid, repo, tree, branch)
     except worktrees.SetupFailed as exc:
         pool.report("env", gid, str(exc))
         return 86

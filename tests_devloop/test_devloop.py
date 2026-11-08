@@ -794,8 +794,9 @@ class Regression(LoopCase):
     def test_main_moving_during_verification_is_merged_in(self):
         log = os.path.join(self.tmp, "intervals.txt")
         self.env["FAKE_INTERVALS"] = log
+        self.env["FAKE_MAIN_DURING_FULL"] = json.dumps({"NOTES.md": "notes\n"})
         self.add(1)
-        self.plan(worker={"1": ["move_main"]})
+        self.plan()
         res = self.controller()
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(self.state(1), "landed")
@@ -1222,6 +1223,131 @@ class T52Acceptance(LoopCase):
         self.assertIn("the ruling asks to print the key", rows[0]["text"])
 
 
+class T69Acceptance(LoopCase):
+    """Ticket #69: every fix round's fixer starts in <worktrees>/fix-<gid> on int/<gid> at that
+    branch's head with no tracked changes, whatever state the worktree was left in. Expected values
+    from the acceptance text and fake_agent.py's default fixer action (merge main, remove red.txt,
+    commit 'fix'), not from auto_fixer's code."""
+
+    RED = {"status": "red", "summary": "1 failing", "failures": [{"id": "suite.red"}]}
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(name, None)
+        self.config(max_rounds=1)
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["nothing"]})
+        self.controller()
+        self.tree = os.path.join(self.tmp, "wt", "fix-g1")
+        self.assertEqual(git(self.tree, "symbolic-ref", "--short", "HEAD"), "int/g1",
+                         "fixture: fix-g1 is on int/g1 after the first round")
+        self.report = os.path.join(self.tmp, "red-report.json")
+        with open(self.report, "w") as fh:
+            json.dump(self.RED, fh)
+
+    # ------------------------------------------------------------ helpers
+
+    def counter(self):
+        path = os.path.join(os.path.dirname(self.plan_path), "count-fixer-g1")
+        if not os.path.exists(path):
+            return 0
+        with open(path) as fh:
+            return int(fh.read())
+
+    def history(self):
+        return list(self.snap().groups["g1"].get("history") or [])
+
+    def round(self):
+        """One auto_fixer round with the fake fixer's default action; returns (result, calls)."""
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["nothing", "fix"]})
+        before = self.counter()
+        res = self.run_py("auto_fixer.py", "--group", "g1", "--report", self.report)
+        return res, self.counter() - before
+
+    def assert_back_on_int(self, res, calls):
+        out = res.stdout + res.stderr
+        self.assertEqual(calls, 1, "the fake fixer is called once: %s" % out)
+        self.assertEqual(res.returncode, 0, out)
+        self.assertEqual(git(self.proj, "log", "-1", "--format=%s", "int/g1"), "fix")
+        self.assertEqual(git(self.tree, "symbolic-ref", "--short", "HEAD"), "int/g1")
+
+    def assert_one_event_naming(self, before, sha):
+        new = self.history()[len(before):]
+        hits = [h for h in new if sha[:12] in json.dumps(h)]
+        self.assertEqual(len(hits), 1, "events naming %s: %s" % (sha[:12], new))
+
+    # ------------------------------------------------------------ items
+
+    def test_1_detached_head(self):
+        git(self.tree, "checkout", "-q", "--detach", "int/g1")
+        res, calls = self.round()
+        self.assert_back_on_int(res, calls)
+
+    def test_2_another_local_branch(self):
+        git(self.tree, "checkout", "-q", "-b", "side")
+        res, calls = self.round()
+        self.assert_back_on_int(res, calls)
+
+    def test_3_ref_moved_by_update_ref(self):
+        side = os.path.join(self.tmp, "throwaway")
+        git(self.proj, "worktree", "add", "-q", "--detach", side, "int/g1")
+        with open(os.path.join(side, "moved.txt"), "w") as fh:
+            fh.write("moved\n")
+        git(side, "add", "moved.txt")
+        git(side, "commit", "-q", "-m", "moved")
+        moved = git(side, "rev-parse", "HEAD")
+        git(self.proj, "worktree", "remove", "--force", side)
+        git(self.proj, "update-ref", "refs/heads/int/g1", moved)
+        res, calls = self.round()
+        self.assertEqual(calls, 1, res.stdout + res.stderr)
+        files = git(self.proj, "ls-tree", "-r", "--name-only", "int/g1").split("\n")
+        self.assertIn("moved.txt", files, "int/g1's head tree lost the update-ref move")
+        ok = subprocess.run(["git", "merge-base", "--is-ancestor", moved, "int/g1"], cwd=self.proj)
+        self.assertEqual(ok.returncode, 0, "the moved-to commit is not an ancestor of int/g1")
+
+    def test_4_unfinished_merge_is_aborted(self):
+        git(self.tree, "checkout", "-q", "-b", "clash")
+        with open(os.path.join(self.tree, "impl_1.txt"), "w") as fh:
+            fh.write("clash")
+        git(self.tree, "commit", "-q", "-am", "clash")
+        clash = git(self.tree, "rev-parse", "HEAD")
+        git(self.tree, "checkout", "-q", "int/g1")
+        with open(os.path.join(self.tree, "impl_1.txt"), "w") as fh:
+            fh.write("other")
+        git(self.tree, "commit", "-q", "-am", "other")
+        merge = subprocess.run(["git", "merge", "clash"], cwd=self.tree, capture_output=True, text=True)
+        self.assertNotEqual(merge.returncode, 0, "fixture: the merge conflicts")
+        merge_head = subprocess.run(["git", "rev-parse", "--verify", "--quiet", "MERGE_HEAD"], cwd=self.tree)
+        self.assertEqual(merge_head.returncode, 0, "fixture: MERGE_HEAD present")
+        res, calls = self.round()
+        self.assertEqual(calls, 1, res.stdout + res.stderr)
+        parents = [line.split()[1:] for line in
+                   git(self.proj, "rev-list", "--parents", "int/g1").split("\n") if line]
+        concluded = [p for p in parents if clash in p]
+        self.assertEqual(concluded, [], "the unfinished merge of clash was concluded on int/g1")
+
+    def test_5_event_names_old_sha_detached(self):
+        git(self.tree, "checkout", "-q", "--detach", "int/g1")
+        old = git(self.tree, "rev-parse", "HEAD")
+        before = self.history()
+        res, calls = self.round()
+        self.assertEqual(calls, 1, res.stdout + res.stderr)
+        self.assert_one_event_naming(before, old)
+
+    def test_5_event_names_old_sha_other_branch(self):
+        git(self.tree, "checkout", "-q", "-b", "side")
+        with open(os.path.join(self.tree, "side.txt"), "w") as fh:
+            fh.write("side\n")
+        git(self.tree, "add", "side.txt")
+        git(self.tree, "commit", "-q", "-m", "side")
+        old = git(self.tree, "rev-parse", "HEAD")
+        before = self.history()
+        res, calls = self.round()
+        self.assertEqual(calls, 1, res.stdout + res.stderr)
+        self.assert_one_event_naming(before, old)
+
+
 class FixerCasesChanged(LoopCase):
     """auto_fixer keeps the fixer's cases_changed on the group, one entry per case with its round."""
 
@@ -1311,6 +1437,66 @@ class T35Acceptance(LoopCase):
         self.assertIn("`fixer`", by_name)
         for w in ("tests_changed", "cases_changed", "decision"):
             self.assertIn(w, by_name["`fixer`"])
+
+
+class FixRoundStartUnits(LoopCase):
+    """auto_fixer.round_start: the fix worktree is reused, left alone when it is no worktree, and
+    created again when git refuses to put it back on the branch."""
+
+    def setUp(self):
+        super().setUp()
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.setup_log = os.path.join(self.tmp, "setup.log")
+        self.config(max_rounds=1, worktree_setup="echo ran >> %s" % self.setup_log)
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["nothing"]})
+        self.controller()
+        self.tree = os.path.join(self.tmp, "wt", "fix-g1")
+        self.assertEqual(git(self.tree, "symbolic-ref", "--short", "HEAD").strip(), "int/g1")
+        self.setups = self.setup_count()
+
+    def setup_count(self):
+        with open(self.setup_log) as fh:
+            return len(fh.read().splitlines())
+
+    def round_start(self):
+        import auto_fixer
+        from core.config import Config
+        with mock.patch.dict(os.environ, {"AC_ROOT": self.proj}):
+            os.environ.pop("DEVLOOP_TICKET", None)
+            os.environ.pop("DEVLOOP_GROUP", None)
+            cfg = Config(self.proj)
+            return auto_fixer, cfg, auto_fixer.Git(cfg.root)
+
+    def test_existing_tree_on_branch_is_reused(self):
+        mod, cfg, repo = self.round_start()
+        mod.round_start(cfg, self.pool, "g1", repo, self.tree, "int/g1")
+        self.assertEqual(self.setup_count(), self.setups)
+
+    def test_regular_file_is_left_alone(self):
+        subprocess.run(["git", "worktree", "remove", "--force", self.tree], cwd=self.proj, check=True)
+        with open(self.tree, "w") as fh:
+            fh.write("not a worktree")
+        mod, cfg, repo = self.round_start()
+        with self.assertRaises(mod.osx.OSFailure):
+            mod.round_start(cfg, self.pool, "g1", repo, self.tree, "int/g1")
+        with open(self.tree) as fh:
+            self.assertEqual(fh.read(), "not a worktree")
+
+    def test_refused_checkout_creates_the_tree_again(self):
+        mod, cfg, repo = self.round_start()
+        git(self.tree, "checkout", "-q", "--detach")
+        real = mod.Git.run
+
+        def refuse(inst, *args, **kw):
+            if args[:2] == ("checkout", "--force") and inst.cwd == self.tree:
+                return real(inst, "checkout", "--force", "no-such-branch-xyz", check=False)
+            return real(inst, *args, **kw)
+        with mock.patch.object(mod.Git, "run", refuse):
+            mod.round_start(cfg, self.pool, "g1", repo, self.tree, "int/g1")
+        self.assertEqual(git(self.tree, "symbolic-ref", "--short", "HEAD").strip(), "int/g1")
+        self.assertEqual(self.setup_count(), self.setups + 1)
 
 
 class FixerBlockedIsDecision(LoopCase):
@@ -3856,6 +4042,36 @@ class TestHostSampler(LoopCase):
             self.assertIn(words, flat)
 
 
+class FakeTestsMainDuringFull(unittest.TestCase):
+    """#71: the `full` hook of fake_tests.py commits once, and is a no-op with the marker or without the variable."""
+
+    def run_full(self, tmp, proj, moves):
+        env = dict(os.environ, AC_ROOT=proj, FAKE_PLAN=os.path.join(tmp, "plan.json"), AC_TEST_OUT=tmp)
+        env.pop("FAKE_MAIN_DURING_FULL", None)
+        if moves is not None:
+            env["FAKE_MAIN_DURING_FULL"] = json.dumps(moves)
+        subprocess.run(["python3", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_tests.py"), "full"],
+                       cwd=tmp, env=env, capture_output=True, text=True)
+
+    def test_hook_commits_once_and_noops(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            proj = os.path.join(tmp, "proj")
+            os.makedirs(proj)
+            for args in (["init", "-q"], ["config", "user.email", "a@b"], ["config", "user.name", "a"],
+                         ["commit", "-q", "--allow-empty", "-m", "init"]):
+                subprocess.run(["git", "-C", proj] + args, check=True)
+            count = lambda: int(subprocess.run(["git", "-C", proj, "rev-list", "--count", "HEAD"],
+                                               capture_output=True, text=True).stdout)
+            self.run_full(tmp, proj, None)
+            self.assertEqual(count(), 1)
+            self.run_full(tmp, proj, {"memory/n.md": "n\n"})
+            self.assertEqual(count(), 2)
+            self.assertTrue(os.path.exists(os.path.join(tmp, "main-moved-during-full")))
+            self.run_full(tmp, proj, {"memory/m.md": "m\n"})
+            self.assertEqual(count(), 2)
+            self.assertFalse(os.path.exists(os.path.join(proj, "memory", "m.md")))
+
+
 class TestLayerDocs(unittest.TestCase):
     ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -5902,8 +6118,9 @@ class T29Acceptance(LoopCase):
         """Item 3."""
         log = os.path.join(self.tmp, "intervals.txt")
         self.env["FAKE_INTERVALS"] = log
+        self.env["FAKE_MAIN_DURING_FULL"] = json.dumps({"memory/note.md": "note\n"})
         self.add(1)
-        self.plan(worker={"1": ["move_main_memory"]})
+        self.plan()
         res = self.controller()
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         self.assertEqual(self.state(1), "landed")
@@ -6464,11 +6681,14 @@ class NoReverifyPaths(LoopCase):
     NRV = "main took only no-reverify paths: merged without re-verifying"
 
     def move(self, main_files, worker_files=None):
-        self.env["FAKE_MAIN_FILES"] = json.dumps(main_files)
-        self.env["FAKE_WORKER_FILES"] = json.dumps(worker_files or {})
+        self.env["FAKE_MAIN_DURING_FULL"] = json.dumps(main_files)
         self.env["FAKE_INTERVALS"] = self.log = os.path.join(self.tmp, "intervals.txt")
         self.add(1)
-        self.plan(worker={"1": ["move_main_files"]})
+        if worker_files:
+            self.env["FAKE_WORKER_FILES"] = json.dumps(worker_files)
+            self.plan(worker={"1": ["write_files"]})
+        else:
+            self.plan()
         return self.controller()
 
     def full_runs(self):
