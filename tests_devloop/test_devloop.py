@@ -6674,6 +6674,31 @@ class GroupSizeUnits(LoopCase):
             self.assertTrue(c.joinable(self.snap(["1"]), "9", {"id": "g1", "members": ["1"]}))
             self.assertTrue(c.joinable(self.snap(["1", "9"]), "9", {"id": "g1", "members": ["1", "9"]}))
 
+    def test_member_of_an_overfull_group_goes_back_to_it(self):
+        """A group filled before the cap existed keeps its members: a ready member returns to it."""
+        from unittest import mock
+        members = ["1", "2", "3"]
+        snap = mock.Mock(dag={}, tickets={"3": {"group": "g1"}},
+                         groups={"g1": {"id": "g1", "state": "open", "members": members}})
+        with mock.patch("ticket_controller.dagmod.verify", return_value="together"), \
+                mock.patch("ticket_controller.dagmod.deps", return_value=[]):
+            self.assertEqual(self.ctl(2).group_for(snap, "3"), "g1")
+
+    def test_loop_with_cap_2_keeps_every_group_at_two(self):
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+        self.config(max_group_size=2, max_parallel=4, max_rounds=4)
+        for i in range(1, 9):
+            self.add(i, deps=[1] if i == 5 else [2] if i == 6 else [])
+        self.plan(worker={"4": ["nothing", "nothing", "ok"], "7": ["slow"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        groups = self.pool.snapshot().groups
+        self.assertTrue(groups)
+        for g in groups.values():
+            self.assertLessEqual(len(g["members"]), 2, g)
+        self.assertEqual(sum(len(g["members"]) for g in groups.values()), 8)
+
 
 class NoReverifyPaths(LoopCase):
     """#29 / D-090: main moved only in devloop.no_reverify_paths -> the controller merges it in."""

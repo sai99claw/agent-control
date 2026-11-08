@@ -555,7 +555,9 @@ class Controller:
         t, dag = snap.tickets[ident], snap.dag
         alone = dagmod.verify(dag, ident) == "alone"
         current = snap.groups.get(t.get("group") or "")
-        if current and current.get("state") == "open":
+        cur_members = (current or {}).get("members") or []
+        if (current and current.get("state") == "open"
+                and (ident in cur_members or len(cur_members) < self.cfg.max_group_size)):
             open_group = current
         elif alone:
             open_group = None
@@ -599,6 +601,9 @@ class Controller:
         def change(tx):
             t = tx.ticket(ident)
             if t.get("state") != "ready":
+                return False
+            members = tx.data.groups[gid]["members"]
+            if ident not in members and len(members) >= self.cfg.max_group_size:
                 return False
             t["state"], t["group"], t["target"], t["run"] = "running", gid, branch, None
             t["claimed_at"] = osx.now()
