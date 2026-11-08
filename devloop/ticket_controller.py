@@ -577,10 +577,12 @@ class Controller:
                                      "%s is in local %s but the push to %s failed: push it by hand?" % (gid, main, self.cfg.remote),
                                      [pages.option("ack", "nothing is run: push %s to %s by hand; %s stays landed" % (main, self.cfg.remote, gid))],
                                      "the landing itself succeeded; only the push is missing"))
-        released, rel_text = self.release(g, sha)
-        rel_log = release.log_path(self.cfg, gid)
         snap = self.pool.snapshot()
-        ids = [i for i in g.get("members") or [] if (snap.tickets.get(i) or {}).get("state") == "merged"]
+        ids = [i for i in g.get("members") or []
+               if (snap.tickets.get(i) or {}).get("state") == "merged"
+               and (snap.tickets.get(i) or {}).get("group") == gid]
+        released, rel_text = self.release(dict(g, members=ids), sha)
+        rel_log = release.log_path(self.cfg, gid)
 
         def change(tx):
             for i in ids:

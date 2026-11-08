@@ -308,3 +308,19 @@ def event(obj, what, **detail):
 
 def dumps(obj):
     return json.dumps(obj, ensure_ascii=False, sort_keys=True)
+
+
+def leave_group(tx, t):
+    """A ticket going back to ready whose group is not open leaves that group: its group and target are
+    cleared and it is removed from the group's members (one group event)."""
+    gid = t.get("group")
+    if not gid:
+        return
+    g = tx.data.groups.get(gid)
+    if g and g.get("state") == "open":
+        return
+    t["group"] = t["target"] = None
+    if g:
+        g["members"] = [m for m in g.get("members") or [] if m != t["id"]]
+        event(g, "member #%s left: back to ready" % t["id"])
+        tx.put_group(g)
