@@ -166,6 +166,13 @@ elif role == "fixer":
         hand({"kind": "done", "summary": "removed red",
               "tests_changed": [{"test": "suite.red", "ticket": "1", "acceptance": "a"}]})
         sys.exit(0)
+    if action == "worse":   # #74: every impl_*.txt says 'bad', red.txt stays: more failing cases
+        import glob
+        for path in glob.glob("impl_*.txt"):
+            open(path, "w").write("bad")
+        commit("worse")
+        hand({"kind": "done", "summary": "worse"})
+        sys.exit(0)
     if os.path.exists("red.txt"):
         os.unlink("red.txt")
     commit("fix")

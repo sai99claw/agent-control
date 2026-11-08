@@ -6659,6 +6659,105 @@ class UnlimitedTokens(LoopCase):
         self.assertEqual([c["role"] for c in state["cost"]], ["consolidator", "consolidator_peer", "consolidator"])
 
 
+class T74Acceptance(LoopCase):
+    """#74: a fix round that leaves the branch redder is dropped from it. Expected failure counts
+    come from fake_tests.py's documented behaviour (`full` fails suite.red while red.txt exists
+    and case/impl for every impl_*.txt that does not say 'ok'), never from the controller."""
+
+    REF = "refs/devloop/dropped/g1-r1"
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(name, None)
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("DEVLOOP_")}
+        patch = mock.patch.dict(os.environ, clean, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.log = os.path.join(self.tmp, "intervals.txt")
+        self.env["FAKE_INTERVALS"] = self.log
+
+    def full_runs(self):
+        if not os.path.exists(self.log):
+            return []
+        with open(self.log) as fh:
+            rows = [line.split() for line in fh if line.strip()]
+        return [r for r in rows if r[:2] == ["tests", "full"]]
+
+    def git_out(self, *args, check=True):
+        res = subprocess.run(["git"] + list(args), cwd=self.proj, capture_output=True, text=True)
+        if check:
+            self.assertEqual(res.returncode, 0, "git %s: %s" % (" ".join(args), res.stderr))
+        return res
+
+    def ref_sha(self, ref):
+        res = self.git_out("rev-parse", "--verify", "-q", ref + "^{commit}", check=False)
+        self.assertEqual(res.returncode, 0, "%s does not exist" % ref)
+        return res.stdout.strip()
+
+    def is_ancestor(self, a, b):
+        return self.git_out("merge-base", "--is-ancestor", a, b, check=False).returncode == 0
+
+    def subject(self, sha):
+        return self.git_out("log", "-1", "--format=%s", sha).stdout.strip()
+
+    def worse_then_fix(self):
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["worse", "fix"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        return res
+
+    # ------------------------------------------------------------ 2. dropped, then fixed
+
+    def test_2_a_redder_round_is_dropped_and_the_next_round_fixes(self):
+        self.worse_then_fix()
+        self.assertEqual(self.state(1), "landed")
+        g = self.snap().groups["g1"]
+        self.assertEqual(g.get("fix_round"), 2, g)
+        self.assertEqual(len(self.full_runs()), 3, self.full_runs())
+        self.assertEqual(self.git_out("show", "main:impl_1.txt").stdout, "ok")
+        dropped = self.ref_sha(self.REF)
+        self.assertEqual(self.subject(dropped), "worse")
+        self.assertFalse(self.is_ancestor(dropped, "main"), "the dropped round is on main")
+        events = [h for h in g.get("history") or [] if h.get("ref") == self.REF]
+        self.assertEqual(len(events), 1, g.get("history"))
+        ev = events[0]
+        self.assertEqual(ev.get("dropped"), [dropped], ev)
+        self.assertEqual(ev.get("failing_before"), 1, ev)
+        self.assertEqual(ev.get("failing_after"), 2, ev)
+
+    # ------------------------------------------------------------ 1. start and end shas
+
+    def test_1_the_round_keeps_its_start_and_end_sha(self):
+        self.worse_then_fix()
+        self.assertEqual(self.state(1), "landed")
+        g = self.snap().groups["g1"]
+        self.assertIn("fix_start_sha", g, "no fix_start_sha on the landed group: %s" % sorted(g))
+        self.assertIn("fix_end_sha", g, "no fix_end_sha on the landed group: %s" % sorted(g))
+        dropped = self.ref_sha(self.REF)
+        parent = self.ref_sha(dropped + "^1")
+        self.assertEqual(g["fix_start_sha"], parent)
+        self.assertTrue(self.is_ancestor(g["fix_end_sha"], "main"), g["fix_end_sha"])
+        self.assertEqual(self.subject(g["fix_end_sha"]), "fix")
+
+    # ------------------------------------------------------------ 3. dropped at max_rounds
+
+    def test_3_a_redder_last_round_is_dropped_and_the_group_is_stuck(self):
+        self.config(max_rounds=1)
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["worse"]})
+        self.controller()
+        g = self.snap().groups["g1"]
+        self.assertEqual(g.get("state"), "stuck", g)
+        dropped = self.ref_sha(self.REF)
+        self.assertEqual(self.ref_sha("int/g1"), self.ref_sha(dropped + "^1"))
+        self.assertEqual(len(self.full_runs()), 2, self.full_runs())
+        pages = [r for r in self.snap().inbox.values() if r.get("kind") == "decision" and r.get("ref") == "g1"]
+        self.assertEqual(len(pages), 1, pages)
+        self.assertIn(self.REF, pages[0]["text"])
+
+
 class QuotaWaitUnits(LoopCase):
     """The quota wait of agents.Pending and the issuer's waiting mark (implementer's tests of #31)."""
 
