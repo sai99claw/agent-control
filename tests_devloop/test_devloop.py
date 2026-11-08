@@ -3091,6 +3091,344 @@ class RulingSection(unittest.TestCase):
         self.assertNotIn("ticket_creator", out)
 
 
+class T78Acceptance(LoopCase):
+    """#78: pages.py (ACTIONS, option, ask, problems, command), Pool.report storing or dropping the
+    question/options/recommendation, inbox/wait printing them, release --by/--page, and the docs."""
+    release = "exit 7"
+
+    def setUp(self):
+        super().setUp()
+        for key in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(key, None)
+
+    def pages(self):
+        path = os.path.join(LOOP, "core", "pages.py")
+        self.assertTrue(os.path.isfile(path), "devloop/core/pages.py does not exist")
+        import importlib
+        return importlib.import_module("core.pages")
+
+    @staticmethod
+    def opt(action, consequence="c", **more):
+        o = {"action": action, "consequence": consequence}
+        o.update(more)
+        return o
+
+    def valid(self):
+        return {"question": "what now?", "recommendation": "retry first",
+                "options": [self.opt("retry"), self.opt("revise"), self.opt("cancel")]}
+
+    # ------------------------------------------------------------ item 1
+
+    def test_module_is_stdlib_only_and_does_not_import_pool(self):
+        import ast
+        self.pages()
+        with open(os.path.join(LOOP, "core", "pages.py")) as fh:
+            tree = ast.parse(fh.read())
+        names = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names += [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                self.assertEqual(node.level, 0, "relative import in pages.py")
+                names.append(node.module or "")
+        for n in names:
+            self.assertNotIn("pool", n)
+            self.assertIn(n.split(".")[0], sys.stdlib_module_names, "non-stdlib import %r" % n)
+
+    def test_actions_option_and_ask(self):
+        pages = self.pages()
+        self.assertEqual(pages.ACTIONS, ('revise', 'retry', 'cancel', 'group-ready', 'group-cancel', 'rerun',
+                                         'release', 'ack'))
+        self.assertEqual(pages.option("retry", "runs again"),
+                         {"action": "retry", "note": "", "consequence": "runs again"})
+        self.assertEqual(pages.option("group-ready", "back to regression", note="follow #67"),
+                         {"action": "group-ready", "note": "follow #67", "consequence": "back to regression"})
+        opts = [pages.option("retry", "  one\ntwo  "), pages.option("cancel", "y" * 300)]
+        got = pages.ask("  is it\nok?  ", opts, "x" * 300)
+        self.assertEqual(set(got), {"question", "options", "recommendation"})
+        self.assertEqual(got["question"], "is it ok?")
+        self.assertEqual(got["recommendation"], "x" * 200)
+        self.assertEqual([o["consequence"] for o in got["options"]], ["one two", "y" * 200])
+        self.assertEqual([o["action"] for o in got["options"]], ["retry", "cancel"])
+        got = pages.ask("q" * 250, [pages.option("ack", "fine")], "r")
+        self.assertEqual(got["question"], "q" * 200)
+
+    # ------------------------------------------------------------ item 2
+
+    def test_problems_rules(self):
+        pages = self.pages()
+        ok = self.valid()
+        self.assertEqual(pages.problems("7", ok), [])
+        self.assertEqual(pages.problems("7", {}), [])
+        self.assertEqual(pages.problems("7", {"kind": "decision", "text": "t"}), [])
+        self.assertEqual(pages.problems("g3", {"question": "q", "recommendation": "r", "options": [
+            self.opt("group-ready", note="x"), self.opt("group-cancel"), self.opt("ack")]}), [])
+        self.assertEqual(pages.problems("controller", {"question": "q", "recommendation": "r",
+                                                       "options": [self.opt("ack")]}), [])
+        # a note may have newlines; 8000 is allowed
+        self.assertEqual(pages.problems("7", dict(ok, options=[self.opt("retry", note="a\nb"),
+                                                               self.opt("cancel", note="n" * 8000)])), [])
+
+        def with_options(*opts):
+            return dict(ok, options=list(opts))
+
+        broken = {
+            "a: question alone": ("7", {"question": "q"}),
+            "a: options alone": ("7", {"options": ok["options"]}),
+            "a: recommendation alone": ("7", {"recommendation": "r"}),
+            "a: no recommendation": ("7", {"question": "q", "options": ok["options"]}),
+            "a: no question": ("7", {"recommendation": "r", "options": ok["options"]}),
+            "a: no options": ("7", {"question": "q", "recommendation": "r"}),
+            "b: question not str": ("7", dict(ok, question=5)),
+            "b: question empty": ("7", dict(ok, question="   ")),
+            "b: question newline": ("7", dict(ok, question="a\nb")),
+            "b: question 201": ("7", dict(ok, question="q" * 201)),
+            "b: recommendation not str": ("7", dict(ok, recommendation=["r"])),
+            "b: recommendation empty": ("7", dict(ok, recommendation="")),
+            "b: recommendation newline": ("7", dict(ok, recommendation="a\nb")),
+            "b: recommendation 201": ("7", dict(ok, recommendation="r" * 201)),
+            "c: options not list": ("7", dict(ok, options={"action": "retry", "consequence": "c"})),
+            "c: options empty": ("7", with_options()),
+            "c: one non-ack": ("7", with_options(self.opt("retry"))),
+            "c: five": ("7", with_options(*[self.opt("retry")] * 5)),
+            "c: not a dict": ("7", with_options(self.opt("retry"), "cancel")),
+            "d: unknown action": ("7", with_options(self.opt("retry"), self.opt("nosuch"))),
+            "d: consequence not str": ("7", with_options(self.opt("retry"), self.opt("cancel", 5))),
+            "d: consequence empty": ("7", with_options(self.opt("retry"), self.opt("cancel", ""))),
+            "d: consequence newline": ("7", with_options(self.opt("retry"), self.opt("cancel", "a\nb"))),
+            "d: consequence 201": ("7", with_options(self.opt("retry"), self.opt("cancel", "c" * 201))),
+            "d: note not str": ("7", with_options(self.opt("retry"), self.opt("cancel", note=3))),
+            "d: note 8001": ("7", with_options(self.opt("retry"), self.opt("cancel", note="n" * 8001))),
+            "e: retry on g3": ("g3", with_options(self.opt("retry"), self.opt("ack"))),
+            "e: revise on 7a": ("7a", with_options(self.opt("revise"), self.opt("ack"))),
+            "e: cancel on controller": ("controller", with_options(self.opt("cancel"), self.opt("ack"))),
+            "e: group-ready on 7": ("7", with_options(self.opt("group-ready"), self.opt("ack"))),
+            "e: group-cancel on controller": ("controller", with_options(self.opt("group-cancel"), self.opt("ack"))),
+            "e: rerun on g": ("g", with_options(self.opt("rerun"), self.opt("ack"))),
+            "e: release on 7": ("7", with_options(self.opt("release"), self.opt("ack"))),
+        }
+        for label, (ref, row) in broken.items():
+            with self.subTest(label):
+                got = pages.problems(ref, row)
+                self.assertIsInstance(got, list)
+                self.assertTrue(got, "%s gave no problem" % label)
+                self.assertTrue(all(isinstance(p, str) for p in got), got)
+
+    # ------------------------------------------------------------ item 4
+
+    def test_command_strings(self):
+        pages = self.pages()
+        c = pages.command
+        self.assertEqual(c('group-ready', 'g15', 'p1', 'follow #67'), "actl tickets ready g15 --note 'follow #67' --page p1")
+        self.assertEqual(c('group-ready', 'g15', 'p1', ''), "actl tickets ready g15 --page p1")
+        self.assertEqual(c('retry', '7', 'p2', ''), 'actl new --revise 7 --from user --decision retry --page p2')
+        self.assertEqual(c('retry', '7', 'p2', 'go on'),
+                         "actl new --revise 7 --from user --decision retry --reason 'go on' --page p2")
+        self.assertEqual(c('cancel', '7', 'p2', ''), 'actl new --revise 7 --from user --decision cancel --page p2')
+        self.assertEqual(c('cancel', '7', 'p2', 'not needed'),
+                         "actl new --revise 7 --from user --decision cancel --reason 'not needed' --page p2")
+        self.assertEqual(c('revise', '7', 'p2', ''),
+                         "actl new --revise 7 --from user --decision revise --reason '<your words>' --page p2")
+        self.assertEqual(c('revise', '7', 'p2', 'split it'),
+                         "actl new --revise 7 --from user --decision revise --reason 'split it' --page p2")
+        self.assertEqual(c('group-cancel', 'g3', 'p3', ''), "actl tickets cancel g3 --why '' --page p3")
+        self.assertEqual(c('group-cancel', 'g3', 'p3', 'drop it'), "actl tickets cancel g3 --why 'drop it' --page p3")
+        self.assertEqual(c('rerun', 'g3', 'p3', 'env ok'), "actl tickets rerun g3 --why 'env ok' --page p3")
+        self.assertEqual(c('release', 'g3', 'p3', ''), 'actl tickets release g3 --page p3')
+        self.assertEqual(c('ack', 'g3', 'p3', 'x'), 'actl tickets ack p3')
+
+    # ------------------------------------------------------------ item 3
+
+    def test_report_stores_valid_options_and_drops_bad_ones(self):
+        self.pages()
+        self.assertIn("idle", Pool.report.__doc__)
+        for key in ("question", "options", "recommendation"):
+            self.assertIn(key, Pool.report.__doc__)
+        name = self.pool.report("decision", "7", "line one\nline two", question="what now?",
+                                recommendation="retry first",
+                                options=[{"action": "retry", "consequence": "runs again"},
+                                         {"action": "revise", "note": "split it", "consequence": "rewrites"}])
+        row = self.snap().inbox[name]
+        self.assertEqual(row["question"], "what now?")
+        self.assertEqual(row["recommendation"], "retry first")
+        self.assertEqual(row["options"], [{"action": "retry", "note": "", "consequence": "runs again"},
+                                          {"action": "revise", "note": "split it", "consequence": "rewrites"}])
+        self.assertEqual(row["text"], "line one\nline two")
+
+        from core import pages
+        bad = {"question": "q", "recommendation": "r", "options": [{"action": "retry", "consequence": "c"}]}
+        first = pages.problems("8", bad)[0]
+        name = self.pool.report("decision", "8", "line one\nline two", **bad)
+        row = self.snap().inbox[name]
+        for key in ("question", "options", "recommendation"):
+            self.assertNotIn(key, row)
+        self.assertEqual(row["text"].splitlines(), ["line one", "line two", "(options dropped: %s)" % first])
+
+        alone = {"question": "q"}
+        first = pages.problems("9", alone)[0]
+        name = self.pool.report("env", "9", "env text", **alone)
+        row = self.snap().inbox[name]
+        self.assertNotIn("question", row)
+        self.assertEqual(row["text"].splitlines(), ["env text", "(options dropped: %s)" % first])
+
+        name = self.pool.report("decision", "10", "plain")
+        row = self.snap().inbox[name]
+        self.assertEqual(set(row), {"kind", "ref", "text", "at", "acked"})
+        self.assertEqual((row["kind"], row["ref"], row["text"], row["acked"]), ("decision", "10", "plain", False))
+
+    # ------------------------------------------------------------ item 5
+
+    PAGE = "20261108T100000-decision-g3"
+
+    def write_page(self, name, ref, text, **extra):
+        row = {"kind": "decision", "ref": ref, "text": text, "at": "2026-11-08T00:00:00Z", "acked": False}
+        row.update(extra)
+        self.pool.update(lambda tx: tx.write("inbox/%s.json" % name, row), "test: page %s" % name)
+
+    def options_page(self):
+        return {"question": "what to do with g3?", "recommendation": "the fix follows #67",
+                "options": [{"action": "group-ready", "note": "follow #67", "consequence": "back to the regression"},
+                            {"action": "group-cancel", "note": "", "consequence": "its tickets are cancelled"},
+                            {"action": "ack", "note": "", "consequence": "nothing changes"}]}
+
+    def expected_lines(self, name):
+        return ["* decision g3         " + name,
+                "    first line",
+                "    second line",
+                "    question: what to do with g3?",
+                "    1. group-ready (recommended): back to the regression",
+                "       $ actl tickets ready g3 --note 'follow #67' --page " + name,
+                "    2. group-cancel: its tickets are cancelled",
+                "       $ actl tickets cancel g3 --why '' --page " + name,
+                "    3. ack: nothing changes",
+                "       $ actl tickets ack " + name,
+                "    recommendation: the fix follows #67"]
+
+    def test_inbox_prints_question_options_commands_and_recommendation(self):
+        self.write_page(self.PAGE, "g3", "first line\nsecond line", **self.options_page())
+        plain = "20261108T100001-decision-g4"
+        self.write_page(plain, "g4", "plain text")
+        badname = "20261108T100002-decision-g5"
+        bad = self.options_page()
+        bad["options"] = bad["options"][:1]  # one option that is not ack: fails problems()
+        self.write_page(badname, "g5", "bad text", **bad)
+        res = self.run_py("tickets.py", "inbox", timeout=60)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.splitlines(),
+                         self.expected_lines(self.PAGE)
+                         + ["* decision g4         " + plain, "    plain text",
+                            "* decision g5         " + badname, "    bad text"])
+
+    def test_wait_prints_the_same_lines(self):
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "tickets.py"), "wait", "--timeout", "20"],
+                                cwd=self.proj, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True)
+        self.addCleanup(T77Acceptance.stop, proc)
+        time.sleep(1.5)
+        self.write_page(self.PAGE, "g3", "first line\nsecond line", **self.options_page())
+        out, err = proc.communicate(timeout=30)
+        self.assertEqual(proc.returncode, 0, out + err)
+        self.assertEqual(out.splitlines(), self.expected_lines(self.PAGE))
+
+    # ------------------------------------------------------------ item 6
+
+    def land_failed(self):
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+        pages = sorted(n for n, r in self.snap().inbox.items() if r["kind"] == "decision" and r["ref"] == "g1")
+        self.assertTrue(pages)
+        return pages[-1]
+
+    def outcome_commit_files(self):
+        sha = git(self.pool_path, "log", "-1", "--format=%H", "--", "groups/g1.json")
+        return git(self.pool_path, "show", "--name-only", "--format=", sha).splitlines()
+
+    def test_release_ok_with_by_and_page(self):
+        page = self.land_failed()
+        self.config(release="true")
+        res = self.run_py("tickets.py", "release", "g1", "--by", "alice", "--page", page)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        snap = self.snap()
+        self.assertEqual(snap.groups["g1"]["release"], "ok")
+        self.assertTrue(snap.inbox[page]["acked"])
+        self.assertEqual(snap.inbox[page]["acked_by"], "alice")
+        ev = [h for h in snap.groups["g1"]["history"] if h["event"] == "release re-run: ok"]
+        self.assertEqual(len(ev), 1, ev)
+        self.assertEqual(ev[0].get("by"), "alice")
+        self.assertIn("inbox/%s.json" % page, self.outcome_commit_files())
+
+    def test_release_failed_with_page_acks_as_answer(self):
+        page = self.land_failed()
+        res = self.run_py("tickets.py", "release", "g1", "--page", page)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        snap = self.snap()
+        self.assertTrue(snap.inbox[page]["acked"])
+        self.assertEqual(snap.inbox[page]["acked_by"], "answer")
+        self.assertIn("release re-run: failed", [h["event"] for h in snap.groups["g1"]["history"]])
+        self.assertIn("inbox/%s.json" % page, self.outcome_commit_files())
+
+    def test_refused_release_leaves_the_page_unread(self):
+        page = self.land_failed()
+        # not landed: an open group g2, page on it
+        self.pool.update(lambda tx: tx.put_group({"id": "g2", "state": "pr", "members": ["1"],
+                                                  "branch": "int/g2"}), "test: open group")
+        self.write_page("20261108T100000-decision-g2", "g2", "about g2")
+        head = git(self.pool_path, "rev-parse", "HEAD")
+        res = self.run_py("tickets.py", "release", "g2", "--by", "alice", "--page", "20261108T100000-decision-g2")
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertNotIn("unrecognized arguments", res.stderr)
+        self.assertEqual(git(self.pool_path, "rev-parse", "HEAD"), head)
+        self.assertFalse(self.snap().inbox["20261108T100000-decision-g2"]["acked"])
+        # the same flags are accepted when the release may run
+        self.config(release="true")
+        res = self.run_py("tickets.py", "release", "g1", "--page", page)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertTrue(self.snap().inbox[page]["acked"])
+        # already released, no --again: refused, page left unread
+        self.write_page("20261108T100001-decision-g1", "g1", "again?")
+        head = git(self.pool_path, "rev-parse", "HEAD")
+        res = self.run_py("tickets.py", "release", "g1", "--by", "bob", "--page", "20261108T100001-decision-g1")
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertNotIn("unrecognized arguments", res.stderr)
+        self.assertEqual(git(self.pool_path, "rev-parse", "HEAD"), head)
+        self.assertFalse(self.snap().inbox["20261108T100001-decision-g1"]["acked"])
+
+    # ------------------------------------------------------------ item 7
+
+    def test_readme_words(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            readme = fh.read().splitlines()
+        inbox = [ln for ln in readme if ln.startswith("| `python3 devloop/tickets.py inbox")]
+        self.assertEqual(len(inbox), 1)
+        for word in ("idle", "cancelled", "question", "option", "command", "recommendation"):
+            self.assertIn(word, inbox[0])
+        rel = [i for i, ln in enumerate(readme) if ln.startswith("| `python3 devloop/tickets.py release gN")]
+        self.assertEqual(len(rel), 1)
+        self.assertIn("[--by NAME] [--page P]", readme[rel[0]])
+        self.assertTrue(readme[rel[0] - 1].startswith("| `python3 devloop/tickets.py cancel N"))
+        self.assertTrue(readme[rel[0] + 1].startswith("| `python3 devloop/tickets.py cancel gN"))
+        start = readme.index("## Contracts")
+        end = next(i for i in range(start + 1, len(readme)) if readme[i].startswith("## "))
+        section = readme[start:end]
+        heads = [i for i, ln in enumerate(section) if ln.startswith("- **Pages**")]
+        self.assertEqual(len(heads), 1, "no '**Pages**' bullet in ## Contracts")
+        body = [section[heads[0]]]
+        for ln in section[heads[0] + 1:]:
+            if not ln.startswith(" ") or not ln.strip():
+                break
+            body.append(ln)
+        bullet = " ".join(body)
+        for word in ("question", "options", "recommendation", "action", "note", "consequence", "ack",
+                     "first", "(options dropped:") + ACTIONS78:
+            self.assertIn(word, bullet)
+        self.assertRegex(bullet, r"2\s*-\s*4|2\s*–\s*4|2 to 4|two to four")
+
+
+ACTIONS78 = ('revise', 'retry', 'cancel', 'group-ready', 'group-cancel', 'rerun', 'release')
+
+
 class ReleaseRerun(LoopCase):
     """tickets.py release: refusals, the timeout, the shared function and the docs (#9)."""
     release = "exit 7"
