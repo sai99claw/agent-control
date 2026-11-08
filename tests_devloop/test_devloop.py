@@ -2198,6 +2198,40 @@ class Revise(LoopCase):
         self.assertEqual(self.snap().tickets, {})
 
 
+class PageLinesAndWait(LoopCase):
+    def _tickets(self):
+        sys.path.insert(0, LOOP)
+        import tickets
+        return tickets
+
+    def test_page_lines_is_the_header_and_at_most_eight_text_lines(self):
+        t = self._tickets()
+        row = {"kind": "decision", "ref": "4", "text": "\n".join("l%d" % i for i in range(12))}
+        lines = t.page_lines("p1", row)
+        self.assertEqual(lines[0], "* decision 4          p1")
+        self.assertEqual(lines[1:], ["    l%d" % i for i in range(8)])
+        row["acked"] = True
+        self.assertTrue(t.page_lines("p1", row)[0].startswith(". "))
+
+    def test_inbox_prints_what_page_lines_returns(self):
+        t = self._tickets()
+        row = {"kind": "env", "ref": "g1", "text": "a\nb"}
+        self.pool.update(lambda tx: tx.write("inbox/pw1.json", row), "test")
+        res = self.run_py("tickets.py", "inbox")
+        self.assertEqual(res.stdout, "\n".join(t.page_lines("pw1", row)) + "\n")
+
+    def test_wait_rejects_a_bad_kind_and_times_out_quietly(self):
+        res = self.run_py("tickets.py", "wait", "--kind", "nosuch")
+        self.assertEqual((res.returncode, res.stdout), (2, ""))
+        self.assertTrue(res.stderr.startswith("tickets:"))
+        res = self.run_py("tickets.py", "wait", "--timeout", "0")
+        self.assertEqual((res.returncode, res.stdout), (2, ""))
+        res = self.run_py("tickets.py", "wait", "--timeout", "0.5")
+        self.assertEqual(res.returncode, 1)
+        self.assertEqual(res.stderr, "")
+        self.assertTrue(res.stdout.startswith("wait: no new page"))
+
+
 class T50Acceptance(LoopCase):
     """#50: a user's answer names who gave it (--by) and closes the page it answered (--page)."""
 
