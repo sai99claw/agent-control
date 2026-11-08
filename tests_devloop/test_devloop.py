@@ -7125,6 +7125,19 @@ class DroppedFixRoundUnits(LoopCase):
         self.assertEqual((g["fix_agent_round"], g["fix_start_sha"]), (2, "abc"))
         self.assertNotIn("fix_end_sha", g)
 
+    def test_a_regression_in_the_same_second_keeps_the_earlier_report(self):
+        ctl = self.ctl()
+        with mock.patch("time.time", return_value=1000.5):
+            first = ctl._regression_out("g1")
+            with open(first, "w") as fh:
+                fh.write("{}")
+            second = ctl._regression_out("g1")
+            with open(second, "w") as fh:
+                fh.write("{}")
+            third = ctl._regression_out("g1")
+        self.assertEqual([os.path.basename(p) for p in (first, second, third)],
+                         ["result-1000.json", "result-1000-1.json", "result-1000-2.json"])
+
     def test_nothing_under_refs_devloop_or_the_branch_is_pushed(self):
         import inspect
         import ticket_controller

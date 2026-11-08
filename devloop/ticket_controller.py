@@ -331,9 +331,18 @@ class Controller:
         return self.pool.update(change, "group %s: %s" % (gid, state or why))
 
     def start_regression(self, g):
-        out = os.path.join(self.cfg.runs_dir("regression", g["id"]), "result-%d.json" % int(time.time()))
+        out = self._regression_out(g["id"])
         argv = ["python3", os.path.join(LOOP, "regression.py"), "--branch", g["branch"], "--out", out]
         self._start_job(g["id"], "regression", argv, out)
+
+    def _regression_out(self, gid):
+        """A fresh report path result-<seconds>[-<n>].json: a fix round's base report (fix_report)
+        must survive the next regression even when both start within the same second (#74)."""
+        folder, stamp = self.cfg.runs_dir("regression", gid), int(time.time())
+        out, n = os.path.join(folder, "result-%d.json" % stamp), 1
+        while os.path.exists(out):
+            out, n = os.path.join(folder, "result-%d-%d.json" % (stamp, n)), n + 1
+        return out
 
     def start_fixer(self, gid, report_path, rnd):
         argv = ["python3", os.path.join(LOOP, "auto_fixer.py"), "--group", gid, "--report", report_path]
