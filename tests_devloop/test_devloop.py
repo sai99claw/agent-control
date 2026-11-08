@@ -13310,8 +13310,9 @@ class T84Acceptance(BoardLiveTab):
                 if on is not None:
                     self.assertEqual(n.get("data-wait-on"), on)
 
-    def invariant(self, root):
-        """Item 8 on one render."""
+    def invariant(self, root, exempt=()):
+        """Item 8 on one render. exempt: the (d, R) pairs of drawn dependencies whose walk reaches no moving or
+        stuck source (only missing tickets); the caller names them from its fixture and checks them itself."""
         nodes = self.nodes(root)
         ready = [i for i, n in nodes.items() if n.get("data-state") == "ready"]
         self.assertTrue(ready, "the render has ready nodes")
@@ -13325,7 +13326,7 @@ class T84Acceptance(BoardLiveTab):
             if n.get("data-wait") != "deps":
                 continue
             on = (n.get("data-wait-on") or "").split()
-            drawn = [d for d in on if (d, ident) in edges]
+            drawn = [d for d in on if (d, ident) in edges and (d, ident) not in exempt]
             lane = [el for el in lanes if el.get("data-to") == ident]
             if not drawn and not lane:
                 continue
@@ -13499,7 +13500,10 @@ class T84Acceptance(BoardLiveTab):
         self.expect_waits(root, {"21": ("deps", "等 #20(待派)", "20"), "22": ("deps", "等 #2(待派)", "2")})
         got = sorted((el.get("data-from"), el.get("data-to"), "chain" in self.cls(el)) for el in self.lanewaits(root))
         self.assertEqual(got, [("lane:g21", "2", False), ("lane:g5", "6", True)])
-        self.invariant(root)
+        # item 8's exemption: 12->23 reaches only missing #99, so it stays unhighlighted and the wait lines say it all
+        self.expect_waits(root, {"23": ("deps", "等 #12(待派)", "12"), "12": ("deps", "#99 不存在", "99")})
+        self.assertFalse([el for el in self.lanewaits(root) if el.get("data-to") == "23"], "#23 has no lane line")
+        self.invariant(root, exempt={("12", "23")})
 
     # ---- item 7 (F)
     def test_f_one_lane_line(self):
