@@ -14818,6 +14818,127 @@ class T24Acceptance(LoopCase):
         self.assertTrue([ln for ln in res.stdout.splitlines() if ln.split()[:1] == ["g1"]], res.stdout)
 
 
+class T86Acceptance(LoopCase):
+    """#86: a ticket that leaves a group is no longer that group's member; landing, releasing and
+    cancelling the group count only tickets whose own group is that group."""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        self.plan()
+
+    def setup_pool(self, tickets, groups):
+        """tickets: {id: {state, group, ...}}; groups: {gid: {state, members, ...}}."""
+        for ident in tickets:
+            self.add(ident)
+
+        def change(tx):
+            for ident, fields in tickets.items():
+                t = tx.ticket(ident)
+                t.update(fields)
+                tx.put_ticket(t)
+            for gid, fields in groups.items():
+                g = {"id": gid, "branch": "int/" + gid, "fix_round": 0, "job": None, "history": []}
+                g.update(fields)
+                tx.put_group(g)
+        self.pool.update(change, "test: #86 fixture")
+
+    def left_group_fixture(self):
+        self.setup_pool({"1": {"state": "merged", "group": "g1"},
+                         "2": {"state": "stuck", "group": "g1"}},
+                        {"g1": {"state": "pr", "members": ["1", "2"]}})
+
+    def assert_left(self, ticket_event):
+        snap = self.snap()
+        t2, g1 = snap.ticket("2"), snap.groups["g1"]
+        self.assertEqual(t2.get("state"), "ready", t2)
+        self.assertIsNone(t2.get("group"), t2)
+        self.assertEqual(g1.get("members"), ["1"], g1)
+        self.assertTrue(g1.get("history"), g1)
+        self.assertEqual(g1["history"][-1].get("event"), "member #2 left: back to ready", g1["history"])
+        self.assertIn(ticket_event, [h.get("event") for h in t2.get("history") or []], t2.get("history"))
+
+    def test_item1_tickets_ready_removes_the_ticket_from_its_closed_group(self):
+        self.left_group_fixture()
+        res = self.run_py("tickets.py", "ready", "2", "--why", "x")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assert_left("set ready by main")
+
+    def test_item2_user_retry_removes_the_ticket_from_its_closed_group(self):
+        self.left_group_fixture()
+        res = self.run_py("ticket_creator.py", "--revise", "2", "--from", "user", "--decision", "retry")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assert_left("user decision: ready")
+
+    def released_lines(self):
+        if not os.path.exists(self.released):
+            return []
+        with open(self.released) as fh:
+            return fh.read().splitlines()
+
+    def test_item3_landing_counts_only_members_whose_group_is_this_group(self):
+        git(self.proj, "branch", "int/g1", "main")
+        git(self.proj, "branch", "int/g2", "main")
+        wt = os.path.join(self.tmp, "g1-wt")
+        git(self.proj, "worktree", "add", "-q", wt, "int/g1")
+        with open(os.path.join(wt, "g1.txt"), "w") as fh:
+            fh.write("g1\n")
+        git(wt, "add", "g1.txt")
+        git(wt, "commit", "-q", "-m", "g1 work")
+        tip = git(wt, "rev-parse", "HEAD")
+        git(self.proj, "worktree", "remove", "--force", wt)
+        self.assertNotEqual(tip, git(self.proj, "rev-parse", "main"))
+        self.setup_pool({"1": {"state": "merged", "group": "g1"},
+                         "2": {"state": "merged", "group": "g2"}},
+                        {"g1": {"state": "verified", "verified_sha": tip, "members": ["1", "2"]},
+                         "g2": {"state": "stuck", "members": ["2"]}})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        snap = self.snap()
+        self.assertEqual(snap.groups["g1"].get("state"), "landed", snap.groups["g1"])
+        t1, t2 = snap.ticket("1"), snap.ticket("2")
+        self.assertEqual(t1.get("state"), "landed", t1)
+        self.assertTrue(t1.get("landed_sha"), t1)
+        self.assertEqual(t2.get("state"), "merged", t2)
+        self.assertEqual(t2.get("group"), "g2", t2)
+        self.assertFalse(t2.get("landed_sha"), t2)
+        self.assertEqual(self.released_lines(), ["g1 1"])
+        pages = [r for r in snap.inbox.values() if r.get("kind") == "landed" and r.get("ref") == "g1"]
+        self.assertEqual(len(pages), 1, pages)
+        text = pages[0].get("text") or ""
+        self.assertRegex(text, r"#1\b", text)
+        self.assertNotRegex(text, r"#2\b", text)
+
+    def cancel_fixture(self, t2):
+        git(self.proj, "branch", "int/g1", "main")
+        groups = {"g1": {"state": "stuck", "members": ["1", "2"]}}
+        if t2.get("group") == "g2":
+            git(self.proj, "branch", "int/g2", "main")
+            groups["g2"] = {"state": "open", "members": ["2"]}
+        self.setup_pool({"1": {"state": "stuck", "group": "g1"}, "2": t2}, groups)
+
+    def test_item4_cancel_leaves_a_ticket_that_left_the_group(self):
+        self.cancel_fixture({"state": "ready", "group": None})
+        res = self.run_py("tickets.py", "cancel", "g1", "--why", "x")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        snap = self.snap()
+        self.assertEqual(snap.groups["g1"].get("state"), "cancelled", snap.groups["g1"])
+        self.assertEqual(snap.ticket("2").get("state"), "ready", snap.ticket("2"))
+        self.assertIn("cancelled tickets: none", res.stdout)
+        pages = [r for r in snap.inbox.values() if r.get("kind") == "cancelled" and r.get("ref") == "g1"]
+        self.assertEqual(len(pages), 1, pages)
+        self.assertIn("cancelled tickets: none", pages[0].get("text") or "", pages[0])
+
+    def test_item4_cancel_ignores_a_running_ticket_of_another_group(self):
+        self.cancel_fixture({"state": "running", "group": "g2"})
+        res = self.run_py("tickets.py", "cancel", "g1", "--why", "x")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        snap = self.snap()
+        self.assertEqual(snap.groups["g1"].get("state"), "cancelled", snap.groups["g1"])
+        self.assertEqual(snap.ticket("2").get("state"), "running", snap.ticket("2"))
+
+
 class T46Acceptance(LoopCase):
     """Ticket #46: behind a local reverse proxy, a user named in board.trusted_user_header and
     listed in board.allowed_users gets in without the key (D-091 item 4)."""
