@@ -2627,6 +2627,137 @@ class AnswerNaming(LoopCase):
 
 
 
+class PageQuestionPieces(LoopCase):
+    """core/pages.py, Pool.report with a question, inbox lines and release --by/--page (#78, the
+    implementer's unit cases)."""
+
+    def setUp(self):
+        super().setUp()
+        for key in ("DEVLOOP_TICKET", "DEVLOOP_GROUP", "DEVLOOP_SLOT"):
+            self.env.pop(key, None)
+
+    def opts3(self):
+        from core import pages
+        return [pages.option("retry", "try again"), pages.option("revise", "rewrite"),
+                pages.option("cancel", "drop it")]
+
+    def test_one_line_and_ask(self):
+        from core import pages
+        got = pages.ask(" q\nx ", [], "r" * 300)
+        self.assertEqual(got["question"], "q x")
+        self.assertEqual(len(got["recommendation"]), 200)
+        self.assertEqual(pages.option("ack", "a\nb"), {"action": "ack", "note": "", "consequence": "a b"})
+
+    def test_problems_accepts_the_valid_sets_and_no_keys(self):
+        from core import pages
+        self.assertEqual(pages.problems("7", {"text": "x"}), [])
+        self.assertEqual(pages.problems("7", pages.ask("q", self.opts3(), "r")), [])
+        self.assertEqual(pages.problems("controller", pages.ask("q", [pages.option("ack", "ok")], "r")), [])
+
+    def test_problems_each_rule(self):
+        from core import pages
+        good = pages.ask("q", self.opts3(), "r")
+        bad = {
+            "missing": {"question": "q"},
+            "question newline": dict(good, question="a\nb"),
+            "empty recommendation": dict(good, recommendation="  "),
+            "long question": dict(good, question="q" * 201),
+            "one non-ack": dict(good, options=[pages.option("retry", "c")]),
+            "five": dict(good, options=self.opts3() + self.opts3()[:2]),
+            "not dicts": dict(good, options=["retry", "cancel"]),
+            "unknown action": dict(good, options=[pages.option("push", "c"), pages.option("ack", "c")]),
+            "consequence newline": dict(good, options=[{"action": "retry", "consequence": "a\nb"},
+                                                       pages.option("ack", "c")]),
+            "note type": dict(good, options=[pages.option("retry", "c", note=3), pages.option("ack", "c")]),
+            "note long": dict(good, options=[pages.option("retry", "c", note="n" * 8001),
+                                             pages.option("ack", "c")]),
+        }
+        for name, row in bad.items():
+            with self.subTest(name):
+                self.assertTrue(pages.problems("7", row))
+        with self.subTest("group action on a ticket"):
+            self.assertTrue(pages.problems("7", dict(good, options=[pages.option("release", "c"),
+                                                                    pages.option("ack", "c")])))
+        with self.subTest("ticket action on a group"):
+            self.assertTrue(pages.problems("g3", good))
+        self.assertEqual(pages.problems("7", dict(good, options=[pages.option("retry", "c", note="a\nb"),
+                                                                 pages.option("ack", "c")])), [])
+
+    def test_command_strings(self):
+        from core import pages
+        self.assertEqual(pages.command("group-ready", "g15", "p1", "follow #67"),
+                         "actl tickets ready g15 --note 'follow #67' --page p1")
+        self.assertEqual(pages.command("retry", "7", "p2", ""), "actl new --revise 7 --from user --decision retry --page p2")
+        self.assertEqual(pages.command("revise", "7", "p2", ""),
+                         "actl new --revise 7 --from user --decision revise --reason '<your words>' --page p2")
+        self.assertEqual(pages.command("group-cancel", "g3", "p3", ""), "actl tickets cancel g3 --why '' --page p3")
+        self.assertEqual(pages.command("ack", "g3", "p3", "x"), "actl tickets ack p3")
+        self.assertEqual(pages.command("release", "g3", "p3", "x"), "actl tickets release g3 --page p3")
+
+    def test_pages_does_not_import_pool(self):
+        with open(os.path.join(LOOP, "core", "pages.py")) as fh:
+            self.assertNotIn("pool", "".join(l for l in fh if l.startswith(("import", "from"))))
+
+    def test_report_stores_a_valid_set_and_drops_a_bad_one(self):
+        from core import pages
+        name = self.pool.report("decision", "7", "stuck", **pages.ask("q?", self.opts3()[:2], "because"))
+        row = self.snap().inbox[name]
+        self.assertEqual(row["options"][0], {"action": "retry", "note": "", "consequence": "try again"})
+        self.assertEqual((row["question"], row["recommendation"]), ("q?", "because"))
+        name = self.pool.report("decision", "8", "stuck", question="q?")
+        row = self.snap().inbox[name]
+        self.assertFalse(set(pages.KEYS) & set(row))
+        self.assertTrue(row["text"].startswith("stuck\n(options dropped: "), row["text"])
+        name = self.pool.report("decision", "9", "plain")
+        self.assertEqual(self.snap().inbox[name]["text"], "plain")
+
+    def test_inbox_prints_options_and_old_pages_unchanged(self):
+        import tickets
+        from core import pages
+        row = {"kind": "decision", "ref": "7", "text": "t1\nt2", "at": osx.now(), "acked": False}
+        old = tickets.page_lines("p0", row)
+        self.assertEqual(old, ["* decision 7          p0", "    t1", "    t2"])
+        with_q = dict(row, **pages.ask("q?", self.opts3()[:2], "because"))
+        self.assertEqual(tickets.page_lines("p0", with_q), old + [
+            "    question: q?",
+            "    1. retry (recommended): try again",
+            "       $ actl new --revise 7 --from user --decision retry --page p0",
+            "    2. revise: rewrite",
+            "       $ actl new --revise 7 --from user --decision revise --reason '<your words>' --page p0",
+            "    recommendation: because"])
+        # stored keys that fail problems() (ticket actions on a group) print as a page without them
+        self.assertEqual(tickets.page_lines("p0", dict(with_q, ref="g1")), tickets.page_lines("p0", dict(row, ref="g1")))
+        self.pool.update(lambda tx: tx.write("inbox/p0.json", with_q), "test: page")
+        res = self.run_py("tickets.py", "inbox")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.splitlines(), tickets.page_lines("p0", with_q))
+
+    def test_release_by_and_page(self):
+        self.config(release="exit 7")
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.pool.update(lambda tx: tx.write("inbox/pp.json", {"kind": "decision", "ref": "g1", "text": "t",
+                                                               "at": osx.now(), "acked": False}), "test")
+        res = self.run_py("tickets.py", "release", "g1", "--by", "a@x.com", "--page", "pp")
+        self.assertEqual(res.returncode, 1, res.stderr)
+        snap = self.snap()
+        self.assertEqual(snap.inbox["pp"]["acked_by"], "a@x.com")
+        ev = [h for h in snap.groups["g1"]["history"] if h["event"].startswith("release re-run")]
+        self.assertEqual(ev[-1].get("by"), "a@x.com")
+        self.pool.update(lambda tx: tx.write("inbox/pq.json", {"kind": "decision", "ref": "g1", "text": "t",
+                                                               "at": osx.now(), "acked": False}), "test")
+        self.config(release="true")
+        res = self.run_py("tickets.py", "release", "g1", "--page", "pq")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.snap().inbox["pq"]["acked_by"], "answer")
+        self.pool.update(lambda tx: tx.write("inbox/pr.json", {"kind": "decision", "ref": "g1", "text": "t",
+                                                               "at": osx.now(), "acked": False}), "test")
+        res = self.run_py("tickets.py", "release", "g1", "--page", "pr")
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertFalse(self.snap().inbox["pr"]["acked"])
+
+
 class OpenerCostRows(LoopCase):
     """ticket_creator.split, board.run_count / cost_rows and the opener's cost rows (implementer's unit cases)."""
 

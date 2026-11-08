@@ -13,7 +13,7 @@
     python3 devloop/tickets.py wait [--timeout S] [--kind K,...]   # block until a new page arrives
     python3 devloop/tickets.py ack <page>|--all
     python3 devloop/tickets.py lessons --layer role --name worker --file OLD.md   # old notes -> lessons
-    python3 devloop/tickets.py release g1 [--again]  # re-run a landed group's failed release
+    python3 devloop/tickets.py release g1 [--again] [--by NAME] [--page P]  # re-run a landed group's failed release
 
 Opening tickets is ticket_creator.py; moving them is ticket_controller.py.
 """
@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import agents, memory  # noqa: E402
 from core import dag as dagmod  # noqa: E402
-from core import osx, release  # noqa: E402
+from core import osx, pages, release  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.pool import event, frozen_reason, shown_state  # noqa: E402
@@ -187,11 +187,12 @@ PAGE_KINDS = ("created", "landed", "decision", "env", "cancelled", "idle")
 
 
 def page_lines(name, row):
-    """The lines inbox prints for one page: a header and up to 8 text lines."""
+    """The lines inbox prints for one page: a header, up to 8 text lines and, when the page carries
+    a valid question (core/pages.py), the question, each option with its command and the recommendation."""
     out = ["%s %-8s %-10s %s" % ("." if row.get("acked") else "*", row.get("kind"), row.get("ref"), name)]
     for line in str(row.get("text") or "").splitlines()[:8]:
         out.append("    " + line)
-    return out
+    return out + pages.lines(name, row)
 
 
 def cmd_inbox(pool, args):
@@ -297,8 +298,9 @@ def cmd_release(pool, cfg, args):
         grp = tx.data.groups[gid]
         grp["release"] = "ok" if ok else "failed"
         grp["release_log"] = rel_log
-        event(grp, "release re-run: %s" % ("ok" if ok else "failed"))
+        event(grp, "release re-run: %s" % ("ok" if ok else "failed"), **({"by": args.by} if args.by else {}))
         tx.put_group(grp)
+        ack_in(tx, args.page, args.by)
     pool.update(change, "group %s: release re-run (%s)" % (gid, "ok" if ok else "failed"))
     if ok:
         pool.report("landed", gid, "group %s released (re-run): #%s (%s); release log: %s" % (
@@ -352,6 +354,8 @@ def main(argv=None):
     p = sub.add_parser("release")
     p.add_argument("group")
     p.add_argument("--again", action="store_true")
+    p.add_argument("--by", default=None)
+    p.add_argument("--page", default=None)
     args = ap.parse_args(argv)
     try:
         cfg = Config()
