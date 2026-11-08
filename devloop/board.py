@@ -1213,6 +1213,7 @@ BLOCKED_TEXT, BLOCKER_TEXT = "被卡住", "卡住的源頭"
 DAG_STYLE = """<style>
 #tab-dag{--s-ready:#5c6670;--s-running:#1f6f8b;--s-merged:#3d7a46;--s-landed:#2f5d3a;--s-stuck:#a23b2a;--s-cancelled:#8b8f94;--chain:#c0392b}
 @media (prefers-color-scheme:dark){#tab-dag{--s-ready:#98a4ad;--s-running:#6fb7d0;--s-merged:#7fc28a;--s-landed:#5f9e6c;--s-stuck:#e08a7a;--s-cancelled:#6c7378;--chain:#ff7a6b}}
+#tab-dag a.refresh{float:right;font-size:13px}
 #tab-dag .dagbox{padding:8px}#tab-dag svg{display:block}
 #tab-dag .lane rect.band{fill:var(--bg);stroke:var(--line)}#tab-dag .lane text.lh{fill:var(--quiet);font-size:12px}
 #tab-dag .node rect{fill:var(--card);stroke:var(--sc,var(--line));stroke-width:1.5}#tab-dag .node text{fill:var(--ink);font-size:12px}
@@ -1322,7 +1323,69 @@ def _clip(text, n):
     return text if len(text) <= n else text[:n - 1] + "…"
 
 
-def dag_svg(snap, shown, layers, blocked, blockers):
+DAG_NOW_KINDS = ("regression", "fixer", "release")
+
+
+def dag_group_rows(gid, rows):
+    """The live rows of one group's regression / fixer / release, in live_rows order."""
+    return [r for r in (rows or []) if r.get("kind") in DAG_NOW_KINDS and str(r["rec"].get("group")) == gid]
+
+
+def dag_now_parts(row):
+    """The title parts of one running row: what runs, then '<HH:MM> 起' and the elapsed text (added by the caller)."""
+    kind, rec = row["kind"], row["rec"]
+    if kind == "regression":
+        return ["regression " + row["text"]]
+    if kind == "fixer":
+        return ["修補第 %s/%s 輪" % (rec.get("round"), rec.get("max_rounds")), row["text"]]
+    return ["發版 " + row["text"]]
+
+
+def dag_last_regression(summary):
+    """(part text, red count or None) of a group's last regression summary; ('', None) when unknown."""
+    text = "" if summary is None else str(summary).strip()
+    if not text:
+        return "", None
+    first = text.splitlines()[0]
+    prefix = "上次 regression:"
+    m = re.match(r"^(\d+) failing:", first)
+    if text == "green":
+        return prefix + "綠", None
+    if m:
+        return prefix + "紅 %s 條" % m.group(1), m.group(1)
+    if text.startswith("environment not usable"):
+        return prefix + "環境不能用", None
+    if text.startswith("could not measure"):
+        return prefix + "沒量到", None
+    return prefix + _clip(first, 30), None
+
+
+def dag_lane_title(cfg, g, gid, label, rows, now):
+    """(markup inside the lane's <text class="lh">, extra attributes of the lane <g>)."""
+    if g is None or cfg is None or rows is None:
+        return e(gid + " · " + label if gid else label), ""
+    parts, attrs = [e(gid), e(group_state_text(g))], []
+    mine = dag_group_rows(gid, rows)
+    for row in mine:
+        parts.extend(e(x) for x in dag_now_parts(row))
+        if row["started"] is not None:
+            parts.append(e(time.strftime("%H:%M", time.localtime(row["started"])) + " 起"))
+            if now is not None:
+                parts.append(e(live_elapsed(now - row["started"])))
+    if mine:
+        attrs.append(' data-now="%s"' % e(mine[0]["kind"]))
+    last, red = dag_last_regression(g.get("last_regression"))
+    if last:
+        parts.append('<a href="?group=%s">%s</a>' % (e(quote(gid)), e(last)))
+    if red is not None:
+        attrs.append(' data-red="%s"' % e(red))
+    members = "%d/%d" % (len(g.get("members") or []), cfg.max_group_size)
+    parts.append(e(members + " 張"))
+    attrs.insert(0, ' data-members="%s"' % e(members))
+    return " · ".join(parts), "".join(attrs)
+
+
+def dag_svg(snap, shown, layers, blocked, blockers, cfg=None, live=None, now=None):
     """The <svg id="dag">: lanes as bands top to bottom, layers as columns left to right."""
     lanes = dag_lanes(snap, shown)
     cells = {}
@@ -1336,10 +1399,11 @@ def dag_svg(snap, shown, layers, blocked, blockers):
     for gid, label in lanes:
         rows = max(len(v) for (g, _), v in cells.items() if g == gid)
         height = DAG_LANE_HEAD + rows * DAG_ROW_H
-        part = ['<g class="lane" data-group="%s">' % e(gid),
+        title, lane_attrs = dag_lane_title(cfg, snap.groups.get(gid), gid, label, live, now)
+        part = ['<g class="lane" data-group="%s"%s>' % (e(gid), lane_attrs),
                 '<rect class="band" x="%d" y="%d" width="%d" height="%d" rx="8"/>'
                 % (DAG_PAD, y, width - 2 * DAG_PAD, height),
-                '<text class="lh" x="%d" y="%d">%s</text>' % (DAG_PAD + 8, y + 17, e(gid + " · " + label if gid else label))]
+                '<text class="lh" x="%d" y="%d">%s</text>' % (DAG_PAD + 8, y + 17, title)]
         for (g, col), idents in sorted(cells.items(), key=lambda kv: kv[0][1]):
             if g != gid:
                 continue
@@ -1399,13 +1463,15 @@ def render_dag_tab(cfg, snap, query, now):
     shown = dag_shown(snap, blocked, done)
     toggle = ('<a href="?tab=dag">收起已落地與已取消</a>' if done
               else '<a href="%s">顯示已落地與已取消</a>' % e("?tab=dag&done=1"))
-    out = [DAG_STYLE, '<section><h2>DAG</h2><p class="quiet">一欄 = 一層相依,一條帶 = 一個整合分支;紅線是卡住的鏈。 %s</p>'
-           % toggle, render_dag_legend()]
+    refresh = '<a class="refresh" href="%s">重新整理</a>' % e("?tab=dag&done=1" if done else "?tab=dag")
+    out = [DAG_STYLE, '<section><h2>DAG</h2>%s<p class="quiet">一欄 = 一層相依,一條帶 = 一個整合分支;紅線是卡住的鏈。 %s</p>'
+           % (refresh, toggle), render_dag_legend()]
     if not shown:
         out.append("<p class='quiet'>沒有要顯示的票</p></section>")
         return "\n".join(out)
     layers = dag_layers(snap, shown)
-    out.append('<div class="scroll dagbox">%s</div></section>' % dag_svg(snap, shown, layers, blocked, blockers))
+    out.append('<div class="scroll dagbox">%s</div></section>' % dag_svg(
+        snap, shown, layers, blocked, blockers, cfg, [r for r in live_rows(cfg, snap) if r["state"] != "ended"], now))
     return "\n".join(out)
 
 

@@ -13636,6 +13636,25 @@ class DagTabUnit(LoopCase):
         self.assertLess(took, 1.0)
 
 
+    def test_dag_last_regression_parts(self):
+        import board
+        f = board.dag_last_regression
+        self.assertEqual(f("green"), ("上次 regression:綠", None))
+        self.assertEqual(f("3 failing:\n- a"), ("上次 regression:紅 3 條", "3"))
+        self.assertEqual(f("environment not usable: x")[0], "上次 regression:環境不能用")
+        self.assertEqual(f("could not measure y")[0], "上次 regression:沒量到")
+        self.assertEqual(f("")[0], "")
+        self.assertEqual(f(None)[0], "")
+        self.assertTrue(f("x" * 50)[0].endswith("…"))
+
+    def test_dag_group_rows_filters_by_group_and_kind(self):
+        import board
+        rows = [{"kind": "regression", "rec": {"group": "g21"}}, {"kind": "agent", "rec": {"group": "g21"}},
+                {"kind": "fixer", "rec": {"group": "g22"}}, {"kind": "release", "rec": {"group": "g21"}}]
+        self.assertEqual([r["kind"] for r in board.dag_group_rows("g21", rows)], ["regression", "release"])
+        self.assertEqual(board.dag_group_rows("g21", None), [])
+
+
 class LastFullSecondsUnit(unittest.TestCase):
     """limits_section / last_full_seconds helpers of ticket_creator."""
 
