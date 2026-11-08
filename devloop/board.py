@@ -1205,7 +1205,9 @@ def render_detail(snap, wanted):
 
 # ---------------------------------------------------------------- tab: DAG
 
-DAG_NODE_W, DAG_NODE_H, DAG_COL_W, DAG_ROW_H = 150, 38, 200, 50
+DAG_NODE_W, DAG_NODE_H, DAG_COL_W, DAG_ROW_H = 260, 38, 310, 50
+DAG_LIVE_H, DAG_NODE_GAP = 15, 12
+DAG_ROLE_TEXT = {"worker": "worker", "worker_simple": "worker", "verifier": "驗證者寫案例", "reviewer": "覆核"}
 DAG_LANE_HEAD, DAG_LANE_GAP, DAG_PAD = 26, 12, 12
 NO_GROUP = "未分組"
 BLOCKED_TEXT, BLOCKER_TEXT = "被卡住", "卡住的源頭"
@@ -1218,6 +1220,7 @@ DAG_STYLE = """<style>
 #tab-dag .lane rect.band{fill:var(--bg);stroke:var(--line)}#tab-dag .lane text.lh{fill:var(--quiet);font-size:12px}
 #tab-dag .node rect{fill:var(--card);stroke:var(--sc,var(--line));stroke-width:1.5}#tab-dag .node text{fill:var(--ink);font-size:12px}
 #tab-dag .node text.st{fill:var(--sc,var(--quiet));font-size:11px}
+#tab-dag .node text.live{fill:var(--ink);font-size:11px}
 #tab-dag .s-ready{--sc:var(--s-ready)}#tab-dag .s-running{--sc:var(--s-running)}#tab-dag .s-merged{--sc:var(--s-merged)}
 #tab-dag .s-landed{--sc:var(--s-landed)}#tab-dag .s-stuck{--sc:var(--s-stuck)}#tab-dag .s-cancelled{--sc:var(--s-cancelled)}
 #tab-dag .node.blocked rect{stroke:var(--chain);stroke-dasharray:5 3;stroke-width:2}
@@ -1385,6 +1388,52 @@ def dag_lane_title(cfg, g, gid, label, rows, now):
     return " · ".join(parts), "".join(attrs)
 
 
+def dag_node_live(ident, rows, cfg, now):
+    """[(text, attrs)] one per live run of ticket `ident` (agent, issuer, revising opener), in live_rows order."""
+    out = []
+    mx = getattr(cfg, "max_rounds", None)
+    for row in rows or []:
+        rec, kind = row["rec"], row["kind"]
+        if kind == "agent":
+            mine = rec.get("ticket") is not None and str(rec.get("ticket")) == ident
+        elif kind == "issuer":
+            mine = rec.get("ticket") is not None and str(rec.get("ticket")) == ident
+        elif kind == "opener":
+            mine = rec.get("revise") is not None and str(rec.get("revise")) == ident
+        else:
+            mine = False
+        if not mine or row["state"] == "ended":
+            continue
+        attrs = {}
+        if kind == "agent":
+            role = rec.get("role")
+            attrs["data-role"] = str(role)
+            head = DAG_ROLE_TEXT.get(role, str(role))
+        elif kind == "issuer":
+            attrs["data-role"] = "issuer"
+            head = "issuer"
+        else:
+            attrs["data-role"] = "opener"
+            head = "改題中"
+        if kind != "opener" and rec.get("round") is not None:
+            head += " 第 %s/%s 輪" % (rec.get("round"), mx)
+        parts = [head]
+        model = row["attrs"].get("data-model")
+        if model:
+            parts.append(str(model))
+        if kind == "issuer":
+            parts.append(row["text"])
+        if row["started"] is not None and now is not None:
+            parts.append(live_elapsed(now - row["started"]))
+        if row["state"] in ("slot", "quota") and kind != "issuer":
+            parts.append(row["text"])
+            attrs["data-wait"] = row["state"]
+            if row["attrs"].get("data-queue"):
+                attrs["data-queue"] = row["attrs"]["data-queue"]
+        out.append((" · ".join(parts), attrs))
+    return out
+
+
 def dag_svg(snap, shown, layers, blocked, blockers, cfg=None, live=None, now=None):
     """The <svg id="dag">: lanes as bands top to bottom, layers as columns left to right."""
     lanes = dag_lanes(snap, shown)
@@ -1396,9 +1445,12 @@ def dag_svg(snap, shown, layers, blocked, blockers, cfg=None, live=None, now=Non
     ncols = 1 + max(layers.values())
     width = DAG_PAD * 2 + 90 + ncols * DAG_COL_W
     pos, lane_out, y = {}, [], DAG_PAD
+    lines = dict((i, dag_node_live(i, live, cfg, now)) for i in shown)
+    node_h = dict((i, DAG_NODE_H + DAG_LIVE_H * len(lines[i])) for i in shown)
     for gid, label in lanes:
-        rows = max(len(v) for (g, _), v in cells.items() if g == gid)
-        height = DAG_LANE_HEAD + rows * DAG_ROW_H
+        height = DAG_LANE_HEAD + max(
+            sum(node_h[i] + DAG_NODE_GAP for i in v)
+            for (g, _), v in cells.items() if g == gid)
         title, lane_attrs = dag_lane_title(cfg, snap.groups.get(gid), gid, label, live, now)
         part = ['<g class="lane" data-group="%s"%s>' % (e(gid), lane_attrs),
                 '<rect class="band" x="%d" y="%d" width="%d" height="%d" rx="8"/>'
@@ -1407,10 +1459,12 @@ def dag_svg(snap, shown, layers, blocked, blockers, cfg=None, live=None, now=Non
         for (g, col), idents in sorted(cells.items(), key=lambda kv: kv[0][1]):
             if g != gid:
                 continue
-            for row, ident in enumerate(idents):
+            cur = y + DAG_LANE_HEAD
+            for ident in idents:
                 t = snap.tickets[ident]
                 x = DAG_PAD + 90 + col * DAG_COL_W
-                ny = y + DAG_LANE_HEAD + row * DAG_ROW_H
+                ny = cur
+                cur += node_h[ident] + DAG_NODE_GAP
                 pos[ident] = (x, ny)
                 state = str(t.get("state") or "")
                 cls = ["node", "s-" + state]
@@ -1420,15 +1474,20 @@ def dag_svg(snap, shown, layers, blocked, blockers, cfg=None, live=None, now=Non
                     extra = ' data-blocked-by="%s"' % e(" ".join(blocked[ident]))
                 if ident in blockers:
                     cls.append("blocker")
+                live_text = "".join(
+                    '<text class="live" x="%d" y="%d"%s>%s</text>' % (
+                        x + 8, ny + 31 + DAG_LIVE_H * (k + 1),
+                        "".join(' %s="%s"' % (a, e(v)) for a, v in attrs.items()), e(text))
+                    for k, (text, attrs) in enumerate(lines[ident]))
                 part.append('<a href="?ticket=%s"><g class="%s" data-id="%s" data-state="%s" data-group="%s" '
                             'data-layer="%d"%s><title>#%s %s</title>'
                             '<rect x="%d" y="%d" width="%d" height="%d" rx="6"/>'
-                            '<text x="%d" y="%d">#%s %s</text><text class="st" x="%d" y="%d">%s</text></g></a>' % (
+                            '<text x="%d" y="%d">#%s %s</text><text class="st" x="%d" y="%d">%s</text>%s</g></a>' % (
                                 e(ident), e(" ".join(cls)), e(ident), e(state), e(t.get("group") or ""),
                                 layers[ident], extra, e(ident), e(t.get("title")),
-                                x, ny, DAG_NODE_W, DAG_NODE_H,
+                                x, ny, DAG_NODE_W, node_h[ident],
                                 x + 8, ny + 16, e(ident), e(_clip(t.get("title"), 12)),
-                                x + 8, ny + 31, e(STATE_TEXT.get(state, state))))
+                                x + 8, ny + 31, e(STATE_TEXT.get(state, state)), live_text))
         part.append("</g>")
         lane_out.append("\n".join(part))
         y += height + DAG_LANE_GAP

@@ -13869,6 +13869,37 @@ class DagTabUnit(LoopCase):
         self.assertEqual(lanes, [("g9", "收票中"), ("g10", "卡住"), ("", "未分組")])
         self.assertEqual(board.dag_lanes(snap, {"4"}), [("g7", board.UNKNOWN)])
 
+    def test_node_live_lines_grow_the_node(self):
+        import board
+        import xml.etree.ElementTree as ET
+        from types import SimpleNamespace
+        snap = self.fake({5: {"state": "running", "group": "g3"}, 6: {"state": "ready", "group": "g3"}}, {},
+                         {"g3": {"id": "g3", "state": "open", "members": ["5", "6"]}})
+        rows = [{"kind": "agent", "state": "running", "started": 100, "attrs": {"data-model": "m-v"},
+                 "rec": {"ticket": "5", "role": "verifier", "round": 2}, "text": "執行中"},
+                {"kind": "agent", "state": "quota", "started": 160, "attrs": {},
+                 "rec": {"ticket": "5", "role": "worker_simple"}, "text": "額度用完,到 X"},
+                {"kind": "agent", "state": "running", "started": 100, "attrs": {},
+                 "rec": {"ticket": None, "role": "fixer"}, "text": "執行中"}]
+        cfg = SimpleNamespace(max_rounds=3, max_group_size=10)
+        got = board.dag_node_live("5", rows, cfg, 960)
+        self.assertEqual(got[0][0], "驗證者寫案例 第 2/3 輪 · m-v · 14 分")
+        self.assertEqual(got[1][0], "worker · 13 分 · 額度用完,到 X")
+        self.assertEqual(got[1][1], {"data-role": "worker_simple", "data-wait": "quota"})
+        self.assertEqual(board.dag_node_live("6", rows, cfg, 960), [])
+        svg = board.dag_svg(snap, {"5", "6"}, {"5": 0, "6": 0}, {}, set(), cfg, rows, 960)
+        root = ET.fromstring(svg)
+        ns = "{http://www.w3.org/2000/svg}"
+        rects = {}
+        for g in root.iter(ns + "g"):
+            if g.get("data-id"):
+                r = g.find(ns + "rect")
+                rects[g.get("data-id")] = (float(r.get("y")), float(r.get("height")))
+                for t in g.iter(ns + "text"):
+                    self.assertTrue(rects[g.get("data-id")][0] <= float(t.get("y")) <= sum(rects[g.get("data-id")]))
+        self.assertEqual(rects["5"][1], 38 + 15 * 2)
+        self.assertGreaterEqual(rects["6"][0], sum(rects["5"]))
+
     def test_svg_escapes_titles(self):
         import board
         import xml.etree.ElementTree as ET
