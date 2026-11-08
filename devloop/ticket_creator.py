@@ -40,7 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core import agents, inflight, memory, osx, pages  # noqa: E402
 from core import dag as dagmod  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
-from core.pool import event, frozen_reason  # noqa: E402
+from core.pool import event, frozen_reason, leave_group  # noqa: E402
 
 PROMPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
 TEXT_FIELDS = ("title", "objective", "outline", "test_plan", "notes")
@@ -338,9 +338,7 @@ def user_reset(pool, ident, state, note, changes=None, cases_wrong=False, by=Non
         row["state"] = state
         if state == "ready":
             row["round"], row["stuck"], row["run"] = 0, None, None
-            group = tx.data.groups.get(row.get("group") or "")
-            if not group or group.get("state") != "open":
-                row["group"], row["target"] = None, None
+            leave_group(tx, row)
         event(row, "user decision: %s" % state, note=note[:500], fields=sorted(changes or {}),
               **({"by": by} if by else {}))
         tx.put_ticket(row)

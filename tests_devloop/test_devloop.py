@@ -24,6 +24,7 @@ sys.path.insert(0, LOOP)
 
 from core import dag as dagmod  # noqa: E402
 from core import osx, pages  # noqa: E402
+from core import pool as pool_mod  # noqa: E402
 from core.pool import Pool, shown_state, TICKET_STATES  # noqa: E402
 
 AGENT = ["python3", os.path.join(HERE, "fake_agent.py")]
@@ -17830,3 +17831,44 @@ class T68Acceptance(LoopCase):
         page = self.page()
         self.assertEqual(self.running_rows(page), [], "no running row once the creator has ended")
         self.assertEqual(self.why(page), ("controller", self.SENTENCES["controller"]))
+
+
+class MemberLeavesUnit(LoopCase):
+    """core.pool.leave_group: a ticket back to ready leaves a group that is not open."""
+
+    def setUp(self):
+        super().setUp()
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(k)
+        self.plan()
+
+    def leave(self, gstate):
+        self.add("1")
+
+        def prep(tx):
+            t = tx.ticket("1")
+            t.update(group="g1", target="int/g1")
+            tx.put_ticket(t)
+            tx.put_group({"id": "g1", "branch": "int/g1", "state": gstate, "members": ["1", "2"],
+                          "history": []})
+        self.pool.update(prep, "test: prep")
+
+        def go(tx):
+            t = tx.ticket("1")
+            pool_mod.leave_group(tx, t)
+            tx.put_ticket(t)
+        self.pool.update(go, "test: leave")
+        return self.snap()
+
+    def test_stuck_group_is_left(self):
+        s = self.leave("stuck")
+        self.assertIsNone(s.tickets["1"]["group"])
+        self.assertIsNone(s.tickets["1"]["target"])
+        self.assertEqual(s.groups["g1"]["members"], ["2"])
+        self.assertEqual(s.groups["g1"]["history"][-1]["event"], "member #1 left: back to ready")
+
+    def test_open_group_is_kept(self):
+        s = self.leave("open")
+        self.assertEqual(s.tickets["1"]["group"], "g1")
+        self.assertEqual(s.groups["g1"]["members"], ["1", "2"])
+        self.assertEqual(s.groups["g1"]["history"], [])

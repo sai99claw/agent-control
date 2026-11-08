@@ -32,7 +32,7 @@ from core import dag as dagmod  # noqa: E402
 from core import osx, pages, release  # noqa: E402
 from core.gitx import Git  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
-from core.pool import event, frozen_reason, shown_state  # noqa: E402
+from core.pool import event, frozen_reason, leave_group, shown_state  # noqa: E402
 
 
 def cmd_list(pool, args):
@@ -85,10 +85,7 @@ def _set(pool, ident, state, why, by=None, page=None):
         t["state"] = state
         if state == "ready":
             t["round"], t["stuck"], t["run"] = 0, None, None
-            if t.get("group"):
-                g = tx.data.groups.get(t["group"])
-                if not g or g.get("state") != "open":
-                    t["group"], t["target"] = None, None
+            leave_group(tx, t)
         event(t, "set %s by main" % state, why=why, **({"by": by} if by else {}))
         tx.put_ticket(t)
         ack_in(tx, page, by)
@@ -138,6 +135,7 @@ def cmd_cancel_group(pool, gid, why, by=None, page=None):
         if g.get("state") not in ("stuck", "open"):
             raise osx.OSFailure("group %s is %s; only a stuck or open group is cancelled" % (gid, g.get("state")))
         members = [tx.data.tickets.get(m) for m in g.get("members") or []]
+        members = [m for m in members if m and m.get("group") == gid]
         for m in members:
             if m and m.get("state") == "running":
                 raise osx.OSFailure("#%s is running; leave it alone" % m["id"])
