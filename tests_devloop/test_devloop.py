@@ -12734,8 +12734,6 @@ class T46Acceptance(LoopCase):
             try:
                 h = {"Content-Type": "application/x-www-form-urlencoded"}
                 h.update(headers or {})
-                if method == "POST":
-                    h = own_origin(port, h)
                 conn.request(method, path, body=body, headers=h)
                 resp = conn.getresponse()
                 return resp.status, resp.getheader("Location"), resp.read().decode("utf-8", "replace")
@@ -12795,7 +12793,7 @@ class T46Acceptance(LoopCase):
         self.assertEqual(status, 200, page[:300])
         self.assertTrue(re.search(self.FORM, page), "the request form (交給開題者)")
         before = self.web_jobs()
-        status, location, body = self.call(port, "POST", "/request", {self.HEADER: "a@x.com"}, "text=x")
+        status, location, body = self.call(port, "POST", "/request", own_origin(port, {self.HEADER: "a@x.com"}), "text=x")
         self.assertEqual((status, location), (303, "./?sent=request"), body[:300])
         self.assertGreater(len(self.web_jobs()), len(before), "a new folder under <worktrees>/runs/web/")
 
@@ -12805,7 +12803,7 @@ class T46Acceptance(LoopCase):
         # the listed user must get in first, so the 403s below are the allow list, not a board that reads no header
         self.assertEqual(self.call(port, "GET", "/", {self.HEADER: "a@x.com"})[0], 200)
         self.assertEqual(self.call(port, "GET", "/", {self.HEADER: "b@x.com"})[0], 403)
-        self.assertEqual(self.call(port, "POST", "/request", {self.HEADER: "b@x.com"}, "text=x")[0], 403)
+        self.assertEqual(self.call(port, "POST", "/request", own_origin(port, {self.HEADER: "b@x.com"}), "text=x")[0], 403)
         self.assertEqual(self.web_jobs(), [])
 
     def test_item2_listed_user_on_0000_is_refused(self):
@@ -12825,13 +12823,13 @@ class T46Acceptance(LoopCase):
         status, _, page = self.call(port, "GET", "/", {self.HEADER: "a@x.com"})
         self.assertEqual(status, 200)
         self.assertTrue(re.search(self.FORM, page), "the listed user gets the forms")
-        status, location, body = self.call(port, "POST", "/request", {self.HEADER: "a@x.com"}, "text=x")
+        status, location, body = self.call(port, "POST", "/request", own_origin(port, {self.HEADER: "a@x.com"}), "text=x")
         self.assertEqual(status, 303, body[:300])
         status, _, page = self.call(port, "GET", "/")
         self.assertEqual(status, 200)
         self.assertIn("四個指標", page)
         self.assertFalse(re.search(self.FORM, page), "no header: no request form, as today")
-        self.assertEqual(self.call(port, "POST", "/request", None, "text=x")[0], 403)
+        self.assertEqual(self.call(port, "POST", "/request", own_origin(port, None), "text=x")[0], 403)
 
     # ------------------------------------------------------------ item 4
 
