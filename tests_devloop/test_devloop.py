@@ -14741,6 +14741,28 @@ class DagTabUnit(LoopCase):
         self.assertEqual(len([k for k in paths if k[0].startswith("lane:")]), 1)
         self.assertIn("等待路徑", board.render_dag_legend())
 
+    def test_opener_pages_rules_and_order(self):
+        import board
+        from types import SimpleNamespace
+
+        def pg(kind, ref, text, at, **kw):
+            return dict(kind=kind, ref=ref, text=text, at=at, **kw)
+        snap = SimpleNamespace(inbox={
+            "a": pg("decision", "request", "line one\nline two", "2026-11-08T10:00:00Z"),
+            "b": pg("decision", "5", "#5 needs your decision (raised by the worker): which file?", "2026-11-08T11:00:00Z"),
+            "c": pg("decision", "x", "input from the web was NOT acted on: x", "2026-11-08T12:00:00Z"),
+            "d": pg("decision", "g21", "group g21 is still red after 3 fix rounds", "2026-11-08T13:00:00Z"),
+            "e": pg("decision", "5", "#5 is stuck (rounds): x", "2026-11-08T13:00:00Z"),
+            "f": pg("env", "request", "x", "2026-11-08T13:00:00Z"),
+            "g": pg("decision", "request", "x", "2026-11-08T13:00:00Z", acked=True),
+        })
+        self.assertEqual([n for n, _ in board.opener_pages(snap)], ["c", "b", "a"])
+        items = board.dag_opening(snap, [], 0)
+        self.assertEqual([t for _, t, _ in items],
+                         ["要你判:input from the web was NOT acted on: x",
+                          "要你判:" + board._clip("#5 needs your decision (raised by the worker): which file?", 40),
+                          "要你判:line one"])
+        self.assertTrue(all(h == "?tab=decide" for _, _, h in items))
 
 class LastFullSecondsUnit(unittest.TestCase):
     """limits_section / last_full_seconds helpers of ticket_creator."""

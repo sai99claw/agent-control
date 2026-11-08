@@ -1215,6 +1215,7 @@ DAG_NODE_W, DAG_NODE_H, DAG_COL_W, DAG_ROW_H = 260, 38, 310, 50
 DAG_LIVE_H, DAG_NODE_GAP = 15, 12
 DAG_ROLE_TEXT = {"worker": "worker", "worker_simple": "worker", "verifier": "驗證者寫案例", "reviewer": "覆核"}
 DAG_LANE_HEAD, DAG_LANE_GAP, DAG_PAD = 26, 12, 12
+DAG_OPEN_H = 22
 NO_GROUP = "未分組"
 BLOCKED_TEXT, BLOCKER_TEXT = "被卡住", "卡住的源頭"
 WAIT_PATH_TEXT, MEMBER_TEXT = "等待路徑", "組內待做"
@@ -1225,6 +1226,8 @@ DAG_STYLE = """<style>
 #tab-dag a.refresh{float:right;font-size:13px}
 #tab-dag .dagbox{padding:8px}#tab-dag svg{display:block}
 #tab-dag .lane rect.band{fill:var(--bg);stroke:var(--line)}#tab-dag .lane text.lh{fill:var(--quiet);font-size:12px}
+#tab-dag .opening rect.band{fill:var(--bg);stroke:var(--wait)}#tab-dag .opening text.lh{fill:var(--quiet);font-size:12px}
+#tab-dag .open-item rect{fill:var(--card);stroke:var(--wait)}#tab-dag .open-item text{fill:var(--ink);font-size:12px}
 #tab-dag .node rect{fill:var(--card);stroke:var(--sc,var(--line));stroke-width:1.5}#tab-dag .node text{fill:var(--ink);font-size:12px}
 #tab-dag .node text.st{fill:var(--sc,var(--quiet));font-size:11px}
 #tab-dag .node text.live{fill:var(--ink);font-size:11px}
@@ -1571,6 +1574,40 @@ def dag_wait_marks(snap, shown, waits):
     return edges, lanes
 
 
+def opener_pages(snap):
+    """[(name, page)] of the unanswered decision pages an opener raised, newest first."""
+    out = []
+    for name, p in (getattr(snap, "inbox", None) or {}).items():
+        if p.get("kind") != "decision" or p.get("acked") is True:
+            continue
+        text = str(p.get("text") or "")
+        if (str(p.get("ref")) == "request" or text.startswith("input from the ")
+                or (text.startswith("#%s needs your decision (raised by the " % p.get("ref")))):
+            out.append((name, p))
+    out.sort(key=lambda np: (pool_seconds(np[1].get("at")) or 0, np[0]), reverse=True)
+    return out
+
+
+def dag_opening(snap, live, now):
+    """The 待開 lane's items: [(attrs, text, href)] for running openers, then their unanswered pages."""
+    items = []
+    for row in live or []:
+        if row.get("kind") != "opener" or row.get("state") == "ended":
+            continue
+        started = row.get("started")
+        text = "%s · %s" % (_clip(live_what(snap, "opener", row["rec"]), 40),
+                            live_elapsed((now or 0) - started if started is not None and now is not None else 0))
+        if row.get("state") in ("slot", "quota"):
+            text += " · " + str(row.get("text"))
+        items.append(({"data-kind": "opener", "data-name": row["name"]}, text, None))
+    for name, p in opener_pages(snap):
+        q = p.get("question")
+        first = (str(p.get("text") or "").splitlines() or [""])[0]
+        items.append(({"data-kind": "page", "data-page": name},
+                      "要你判:" + _clip(q if isinstance(q, str) and q else first, 40), "?tab=decide"))
+    return items
+
+
 def dag_svg(snap, shown, layers, blocked, blockers, cfg=None, live=None, now=None):
     """The <svg id="dag">: lanes as bands top to bottom, layers as columns left to right."""
     lanes = dag_lanes(snap, shown)
@@ -1582,6 +1619,24 @@ def dag_svg(snap, shown, layers, blocked, blockers, cfg=None, live=None, now=Non
     ncols = 1 + max(layers.values())
     width = DAG_PAD * 2 + 90 + ncols * DAG_COL_W
     pos, lane_out, y = {}, [], DAG_PAD
+    opening = dag_opening(snap, live, now)
+    if opening:
+        oh = DAG_LANE_HEAD + len(opening) * (DAG_OPEN_H + 4)
+        part = ['<g class="opening" data-lane="待開">',
+                '<rect class="band" x="%d" y="%d" width="%d" height="%d" rx="8"/>'
+                % (DAG_PAD, y, width - 2 * DAG_PAD, oh),
+                '<text class="lh" x="%d" y="%d">待開</text>' % (DAG_PAD + 8, y + 17)]
+        iy = y + DAG_LANE_HEAD
+        for attrs, text, href in opening:
+            box = ('<g class="open-item"%s><rect x="%d" y="%d" width="%d" height="%d" rx="5"/>'
+                   '<text x="%d" y="%d">%s</text></g>' % (
+                       "".join(' %s="%s"' % (a, e(v)) for a, v in attrs.items()),
+                       DAG_PAD + 8, iy, width - 2 * DAG_PAD - 16, DAG_OPEN_H, DAG_PAD + 16, iy + 15, e(text)))
+            part.append('<a href="%s">%s</a>' % (e(href), box) if href else box)
+            iy += DAG_OPEN_H + 4
+        part.append("</g>")
+        lane_out.append("\n".join(part))
+        y += oh + DAG_LANE_GAP
     lines = dict((i, dag_node_live(i, live, cfg, now)) for i in shown)
     waits = dag_waits(cfg, snap, shown, live) if cfg is not None else {}
     for ident, (kind, text, on, _) in waits.items():
