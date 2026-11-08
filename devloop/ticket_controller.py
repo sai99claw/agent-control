@@ -4,9 +4,12 @@
 Each tick, in this order:
 
   1. finish jobs  - an issuer, regression or fixer that ended; read what it left in the pool
-  2. groups       - an open group whose tickets are all merged or stuck becomes a PR; a PR gets
-                    a regression; red -> auto_fixer (at most devloop.max_rounds); green -> main
-                    fast-forwards to the integration branch and the project's release runs
+  2. groups       - main is merged into every waiting integration branch first (#72: clean ->
+                    no state change; a conflict -> the fixer once the group is due for its
+                    regression); an open group whose tickets are all merged or stuck becomes a
+                    PR; a PR gets a regression; red -> auto_fixer (at most devloop.max_rounds);
+                    green -> main fast-forwards to the integration branch (a main that moved
+                    meanwhile is merged in and verified again) and the project's release runs
   3. dispatch     - ready tickets whose dependencies are in their starting point (landed, or
                     merged into the same integration branch) get a ticket_issuer, up to
                     devloop.max_parallel at a time; "together" tickets share one open group,
@@ -212,6 +215,7 @@ class Controller:
             if state not in ("landed", "cancelled") and not g.get("job") and self.all_cancelled(snap, g):
                 self.set_group(g["id"], "cancelled", "all tickets cancelled: group closed")
                 continue
+            behind = self.follow_main(g)
             if state == "open":
                 members = [snap.tickets.get(i) or {} for i in g.get("members") or []]
                 states = [m.get("state") for m in members]
@@ -227,9 +231,83 @@ class Controller:
             elif state in ("pr", "fixing") and not g.get("job"):
                 if g.get("paused") and self.forever:
                     continue                   # waits for `tickets.py rerun gN`
+                if behind:
+                    self.fix_main_moved(g)     # main conflicts with the branch: the fixer merges it
+                    continue
                 self.start_regression(g)
             elif state == "verified":
                 self.land(g)
+
+    def follow_main(self, g):
+        """Merge main into a waiting integration branch (any state but landed, cancelled or
+        verified, no job, branch exists): a fast-forward when the branch has nothing of its own,
+        else a merge commit; one event naming main's sha. A clean merge changes no state and no
+        fix round. A main sha already tried on this group (`main_tried`) is not tried again.
+        Returns True when the branch still lacks main because of a conflict."""
+        if g.get("state") in ("landed", "cancelled", "verified") or g.get("job") or not g.get("branch"):
+            return False
+        head, main_sha = self.repo.sha("refs/heads/" + g["branch"]), self.repo.sha(self.cfg.main_branch)
+        if not head or not main_sha or self.repo.is_ancestor(main_sha, head):
+            return False
+        if g.get("main_tried") == main_sha:
+            return True                         # this main conflicted before
+        kind, _ = self.merge_main(g, head, main_sha)
+        if kind == LOST:
+            return False                        # the branch moved: not tried; the next tick looks again
+        self.set_group(g["id"], None, self.main_event(kind, main_sha, g["branch"]), main_tried=main_sha)
+        return kind == "conflict"
+
+    @staticmethod
+    def main_event(kind, main_sha, branch):
+        what = {"ff": "fast-forwarded %s to it" % branch, "merged": "merged it into %s" % branch,
+                "conflict": "it conflicts with %s; not merged" % branch}[kind]
+        return "main moved to %s: %s" % (main_sha[:12], what)
+
+    def merge_main(self, g, head, main_sha):
+        """Bring main_sha into g's branch at `head`. Returns ("ff", main_sha) when head is an
+        ancestor of main, ("merged", sha) for a clean merge commit (made as devloop in the
+        throwaway detached worktree <worktrees>/main-<gid>, never set up, always removed),
+        ("conflict", None), or (LOST, None) when the branch moved under the compare-and-swap.
+        Only the branch ref changes; the caller records the event."""
+        if self.repo.is_ancestor(head, main_sha):
+            return ("ff", main_sha) if self.repo.move_ref(g["branch"], main_sha, head) else (LOST, None)
+        tree = os.path.join(self.cfg.worktree_root, "main-" + g["id"])
+        try:
+            self.repo.detached(tree, head)
+            t = Git(tree)
+            res = t.run("-c", "user.name=devloop", "-c", "user.email=devloop@localhost", "merge",
+                        "--no-ff", "--no-edit", main_sha, check=False)
+            if not res.ok:
+                t.run("merge", "--abort", check=False)
+                return "conflict", None
+            new = t.sha("HEAD")
+            if not new or new == head:
+                return "conflict", None
+            if not self.repo.move_ref(g["branch"], new, head):
+                return LOST, None
+            return "merged", new
+        except osx.OSFailure as exc:
+            print("ticket_controller: merging main into %s failed: %s" % (g.get("branch"), exc),
+                  file=sys.stderr)
+            return "conflict", None
+        finally:
+            try:
+                self.repo.remove_worktree(tree)
+            except osx.OSFailure:
+                pass
+
+    def fix_main_moved(self, g):
+        """main conflicts with the branch: a fix round with a main-moved report, or at
+        devloop.max_rounds a stuck group and a decision page."""
+        gid, main = g["id"], self.cfg.main_branch
+        report = os.path.join(self.cfg.runs_dir("regression", gid), "main-moved.json")
+        osx.write_json(report, {"status": "main_moved", "summary": "%s moved; merge it in" % main})
+        rnd = int(g.get("fix_round") or 0)
+        if rnd >= self.cfg.max_rounds:
+            self.set_group(gid, "stuck", "main kept moving")
+            self.pool.report("decision", gid, "group %s cannot catch up with %s" % (gid, main))
+            return
+        self.start_fixer(gid, report, rnd + 1)
 
     @staticmethod
     def all_cancelled(snap, g):
@@ -347,14 +425,16 @@ class Controller:
                 if not self.repo.is_ancestor(old, sha):
                     return                      # main moved again; the next tick looks again
         if not self.repo.is_ancestor(old, sha):
-            report = os.path.join(self.cfg.runs_dir("regression", gid), "main-moved.json")
-            osx.write_json(report, {"status": "main_moved", "summary": "%s moved; merge it in" % main})
-            rnd = int(g.get("fix_round") or 0)
-            if rnd >= self.cfg.max_rounds:
-                self.set_group(gid, "stuck", "main kept moving")
-                self.pool.report("decision", gid, "group %s cannot catch up with %s" % (gid, main))
+            kind, _ = self.merge_main(g, sha, old)
+            if kind == LOST:
+                self.set_group(gid, "pr", "branch moved after verification: verify again")
                 return
-            self.start_fixer(gid, report, rnd + 1)
+            why = self.main_event(kind, old, g["branch"])
+            if kind != "conflict":              # clean: verify the merged branch, no fix round
+                self.set_group(gid, "pr", why + "; verify again", drop=("verified_sha",), main_tried=old)
+                return
+            self.set_group(gid, None, why, main_tried=old)
+            self.fix_main_moved(self.pool.snapshot().groups[gid])
             return
         sha = self.refresh_index(g, sha)
         where = self.repo.checked_out_at(main)

@@ -57,15 +57,26 @@ a project's list replaces it, `[]` turns it off): when main moved after a group 
 every file main changed since (`git diff --name-only --no-renames <merge-base> <main>`) is one of
 these paths or under one of these folders, the controller merges main into the integration branch
 itself (a `--no-ff` merge commit in a throwaway worktree) and lands that merge without a second
-regression and without a fix round. A move that touches anything else, a conflict or any other
-merge failure takes the usual path: auto_fixer merges main, then the regression runs again.
+regression and without a fix round. A move that touches anything else is merged the same way
+(#72, below) and the merged branch is verified again without a fix round; only a conflict or any
+other merge failure costs a fix round: auto_fixer merges main, then the regression runs again.
+
+The controller follows main itself (#72): before a group's next regression, every integration
+branch whose group is not landed, cancelled or verified, has no job running and exists gets main
+merged in - moved straight to main when it has no commits of its own, otherwise a `--no-ff` merge
+commit made in the throwaway tree `main-<group>` and compare-and-swapped onto the branch. One group
+event names main's sha; a clean merge changes neither state nor fix round. A conflict leaves the
+branch as it was, is not retried for the same main sha (`main_tried` on the group), and starts
+nothing until the group is due for its regression (pr or fixing, no job, not paused under
+`--forever`): then auto_fixer runs with a main-moved report instead of the regression, counted as a
+fix round (at `devloop.max_rounds`: stuck "main kept moving" and a decision page).
 
 `devloop.worktree_setup` (D-091 item 10; default null = nothing runs; otherwise a non-empty shell
 command): run with `sh -c` right after devloop creates a worktree for a ticket (`t<id>`), its cases
 (`t<id>-cases`), a red check (`red-t<id>`), a regression (`regression-<branch>`), a fixer
 (`fix-<group>`) or a release (`release-<group>`), with cwd = that worktree and `AC_ROOT` = the
 project root. A worktree devloop reuses (it already existed) is not set up again; the controller's
-own throwaway trees (`nrv-<group>`, `index-<group>`) are never set up. The output is kept in
+own throwaway trees (`nrv-<group>`, `index-<group>`, `main-<group>`) are never set up. The output is kept in
 `<worktrees>/runs/setup/<folder name>.log`; a setup still running after 600 s is stopped with its
 process group and counts as failed. A failed setup is an environment problem, never a red: the
 worktree is removed again (a branch it was on stays, so the next run creates and sets it up again),
