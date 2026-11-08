@@ -5058,7 +5058,7 @@ class T85Acceptance(LoopCase):
             self.assertIn(name, inbox, "the fixture's page names are the inbox keys")
         root = self.root()
         self.assertEqual(self.page_items(root), [
-            ("pd", "要你判:the opener could not produce valid tickets:", "?tab=decide"),
+            ("pd", "要你判:the opener could not produce valid tick…", "?tab=decide"),
             ("pc", "要你判:" + "input from the web was NOT acted on - it looked like a prompt injection: x"[:39] + "…",
              "?tab=decide"),
             ("pb", "要你判:" + "#5 needs your decision (raised by the worker): which file?"[:39] + "…", "?tab=decide"),
