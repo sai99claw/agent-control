@@ -21,6 +21,11 @@ viewer's browser only.
 Behind a local reverse proxy (board.trusted_user_header + board.allowed_users, D-091 item 4), a request
 from a loopback peer to a board listening on loopback whose header names a listed user gets the
 inputs without the key.
+
+Every request's Host must be one the board serves (served_hosts: the listen address and loopback names
+with the bound port, the host of board.public_url, board.allowed_hosts), and every POST needs an Origin
+(or Referer) of one of those, or with neither header an X-Board-Key (scripts); else 403 before any other
+check. That stops a web page acting through the board by DNS rebinding or a cross-site form.
 """
 
 import argparse
@@ -1982,7 +1987,72 @@ def board_settings_errors(settings):
         v = settings["allowed_users"]
         if not isinstance(v, list) or not all(isinstance(u, str) and u.strip() for u in v):
             out.append("board.allowed_users must be a list of non-empty strings, got %r" % (v,))
+    if "public_url" in settings:
+        v = settings["public_url"]
+        if not isinstance(v, str) or url_host(v) is None:
+            out.append("board.public_url must be an http or https URL with a host, got %r" % (v,))
+    if "allowed_hosts" in settings:
+        v = settings["allowed_hosts"]
+        if not isinstance(v, list) or not all(isinstance(h, str) and h.strip() for h in v):
+            out.append("board.allowed_hosts must be a list of non-empty strings, got %r" % (v,))
     return out
+
+
+DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def url_host(value):
+    """The lowercase host[:port] of an http or https URL (':80' / ':443' dropped for its scheme), or None."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parts = urlparse(value.strip())
+        port = parts.port
+    except ValueError:
+        return None
+    scheme = parts.scheme.lower()
+    name = parts.hostname
+    if scheme not in DEFAULT_PORTS or not name:
+        return None
+    if ":" in name:
+        name = "[%s]" % name
+    if port is None or port == DEFAULT_PORTS[scheme]:
+        return name
+    return "%s:%d" % (name, port)
+
+
+def served_hosts(settings, bind_host, port):
+    """Every Host header value the board answers (lowercase): loopback names and the listen address with
+    the port, the host of board.public_url and each board.allowed_hosts entry. Blocks DNS rebinding."""
+    settings = settings if isinstance(settings, dict) else {}
+    bind = str(bind_host).strip().lower()
+    out = {"127.0.0.1:%d" % port, "localhost:%d" % port, "[::1]:%d" % port,
+           ("[%s]:%d" if ":" in bind else "%s:%d") % (bind, port)}
+    public = url_host(settings.get("public_url"))
+    if public:
+        out.add(public)
+    extra = settings.get("allowed_hosts")
+    if isinstance(extra, list):
+        out.update(h.strip().lower() for h in extra if isinstance(h, str) and h.strip())
+    return out
+
+
+def host_allowed(served, headers):
+    """True when the request's Host header (stripped, lowercased) is one the board serves."""
+    value = headers.get("Host")
+    return isinstance(value, str) and value.strip().lower() in served
+
+
+def origin_allowed(served, headers):
+    """True when a POST comes from the board's own pages: its Origin (or, without one, its Referer) is an
+    http(s) URL whose host[:port] is served; with neither header only a script's X-Board-Key passes."""
+    origin = headers.get("Origin")
+    if origin is not None:
+        return url_host(origin) in served
+    referer = headers.get("Referer")
+    if referer is not None:
+        return url_host(referer) in served
+    return headers.get("X-Board-Key") is not None
 
 
 # ---------------------------------------------------------------- serving
@@ -2028,9 +2098,20 @@ def serve(cfg, pool, host, port, key):
     if not isinstance(settings, dict):
         settings = {}
     header = settings.get("trusted_user_header")
+    served = set()      # filled once the server has bound its port (--port 0 picks one)
 
     class Handler(BaseHTTPRequestHandler):
         user = None     # the allowed_users entry a local proxy vouched for (who submits: next ticket)
+
+        def _addressed(self, post):
+            """Host (and for a POST, Origin/Referer) checks before anything else; False when refused."""
+            if not host_allowed(served, self.headers):
+                self._send(403, "unknown host: this board does not serve that Host header")
+                return False
+            if post and not origin_allowed(served, self.headers):
+                self._send(403, "cross-site request: Origin or Referer is not this board")
+                return False
+            return True
 
         def _trust(self):
             value = self.headers.get(header) if isinstance(header, str) and header.strip() else None
@@ -2038,6 +2119,8 @@ def serve(cfg, pool, host, port, key):
             return self.user is not None
 
         def do_GET(self):
+            if not self._addressed(post=False):
+                return
             url = urlparse(self.path)
             trusted = self._trust()
             if key and not trusted:
@@ -2072,6 +2155,8 @@ def serve(cfg, pool, host, port, key):
             self._send(200, page, "text/html; charset=utf-8")
 
         def do_POST(self):
+            if not self._addressed(post=True):
+                return
             url = urlparse(self.path)
             trusted = self._trust()
             if not key and not trusted:
@@ -2136,6 +2221,7 @@ def serve(cfg, pool, host, port, key):
         server = ThreadingHTTPServer((host, port), Handler)
     except OSError as exc:
         raise osx.OSFailure(osx.explain(exc, "cannot listen on %s:%s" % (host, port)))
+    served.update(served_hosts(settings, host, server.server_address[1]))
     print("board: http://%s:%d/" % (host, server.server_address[1]), flush=True)
     try:
         server.serve_forever()

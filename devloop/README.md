@@ -363,6 +363,19 @@ in without the key: the page with its inputs, and its POSTs are accepted, with o
 `--key-file`. Another header value gets what a request without it gets (403 under `--key-file`).
 `board.py serve` exits 2 before listening when either setting has the wrong type.
 
+The board answers only requests addressed to it, so a web page cannot act through it by DNS
+rebinding or a cross-site form. Every request's `Host` header must be one the board serves: the
+listen address and port, `localhost` / `127.0.0.1` / `[::1]` with that port, the host of
+`board.public_url` (string: the http/https URL people open through a proxy, e.g.
+`https://portal.example/board/`) and the entries of `board.allowed_hosts` (list of `host[:port]`
+strings); any other `Host` gets 403 `unknown host` before the key is looked at. Every POST also needs
+an `Origin` (or, without one, a `Referer`) whose host[:port] is one of those, else 403
+`cross-site request`; a POST with `X-Board-Key` and neither header is accepted (scripts). GET never
+writes. On `--host 0.0.0.0` the names people open (a LAN name or address with its port) must be
+listed in `board.allowed_hosts`, or the board answers them 403. `board.py serve` exits 2 before
+listening when `board.public_url` is not an http/https URL with a host or `board.allowed_hosts` is not a
+list of non-empty strings.
+
 ## Project rules for agents
 
 Rules every agent must follow live in the project's CLAUDE.md, section "Rules for every agent"
