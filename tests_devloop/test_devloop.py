@@ -11614,6 +11614,30 @@ class LiveQueueUnits(BoardLiveTab):
         self.assertEqual([r["attrs"]["data-subject"] for r in rows], [str(c["subject"]) for c in cards])
 
 
+    def test_dep_satisfied_and_controller_alive(self):
+        import board
+        self.add(1, state="landed")
+        self.add(2, state="merged", group="g1")
+        self.add(3, state="merged", group="g2")
+        self.add(4, state="merged")
+        self.add(5, state="running")
+        self.pool.update(lambda tx: (tx.put_group({"id": "g1", "branch": "int/g1", "state": "open", "members": ["2"]}),
+                                     tx.put_group({"id": "g2", "branch": "int/g2", "state": "pr", "members": ["3"]})),
+                         "test: groups")
+        snap = self.snap()
+        self.assertEqual([board.dep_satisfied(snap, d) for d in ("1", "2", "3", "4", "5", "99")],
+                         [True, True, False, False, False, False])
+        cfg = self.cfg()
+        lock = os.path.join(cfg.worktree_root, "controller.lock")
+        self.assertFalse(board.controller_alive(cfg))
+        os.makedirs(os.path.dirname(lock), exist_ok=True)
+        for content, alive in (("not json", False), ("[1]", False), (json.dumps(self.dead(osx.now())), False),
+                               (json.dumps(osx.stamp()), True)):
+            with open(lock, "w") as fh:
+                fh.write(content)
+            self.assertEqual(board.controller_alive(cfg), alive, content)
+
+
 class LiveIdleReasonUnits(BoardLiveTab):
     """#68's helper: live_idle_reason picks the first reason that holds."""
 
@@ -14236,6 +14260,121 @@ class DagTabUnit(LoopCase):
                 {"kind": "fixer", "rec": {"group": "g22"}}, {"kind": "release", "rec": {"group": "g21"}}]
         self.assertEqual([r["kind"] for r in board.dag_group_rows("g21", rows)], ["regression", "release"])
         self.assertEqual(board.dag_group_rows("g21", None), [])
+
+    def wait_fixture(self, lock=True, max_parallel=2):
+        """#84's fixture F as a fake snapshot, its live regression row, and a config stub."""
+        from types import SimpleNamespace
+        root = os.path.join(self.tmp, "wt-%s-%s" % (lock, max_parallel))
+        os.makedirs(root, exist_ok=True)
+        if lock:
+            with open(os.path.join(root, "controller.lock"), "w") as fh:
+                fh.write(json.dumps(osx.stamp()))
+        snap = self.fake({1: {"state": "merged", "group": "g21"}, 2: {"state": "ready"},
+                          3: {"state": "running", "group": "g22"}, 4: {"state": "ready", "group": "g22"},
+                          5: {"state": "ready"}, 6: {"state": "ready"}, 7: {"state": "ready"},
+                          8: {"state": "stuck", "group": "g22"}, 9: {"state": "ready"},
+                          10: {"state": "cancelled"}, 11: {"state": "ready"}, 12: {"state": "ready"}},
+                         {2: [1], 5: [3], 6: [5], 9: [8], 11: [10], 12: [99]},
+                         {"g21": {"id": "g21", "state": "pr", "members": ["1", "7"]},
+                          "g22": {"id": "g22", "state": "open", "members": ["3", "4", "8"]}})
+        rows = [{"kind": "regression", "state": "running", "started": None, "attrs": {}, "text": "full",
+                 "rec": {"group": "g21", "stage": "full"}}]
+        cfg = SimpleNamespace(worktree_root=root, max_parallel=max_parallel, max_rounds=3, max_group_size=10)
+        return cfg, snap, rows
+
+    def test_dag_waits_name_what_each_ready_ticket_waits_for(self):
+        import board
+        cfg, snap, rows = self.wait_fixture()
+        waits = board.dag_waits(cfg, snap, set(snap.tickets), rows)
+        self.assertEqual(waits, {
+            "2": ("deps", "等 g21 落地 — regression 跑中", ["1"], ""),
+            "4": ("next", "下一輪派出", [], "g22"),
+            "5": ("deps", "等 #3(做中)", ["3"], ""),
+            "6": ("deps", "等 #5(待派)", ["5"], ""),
+            "7": ("next", "下一輪派出", [], ""),
+            "9": ("deps", "等你判 #8", ["8"], ""),
+            "11": ("deps", "#10 已取消,不會落地", ["10"], ""),
+            "12": ("deps", "#99 不存在", ["99"], "")})
+        cfg, snap, rows = self.wait_fixture(lock=False)
+        waits = board.dag_waits(cfg, snap, set(snap.tickets), rows)
+        self.assertEqual(waits["4"][:2], ("controller", "controller 沒在跑"))
+        self.assertEqual(waits["7"][:2], ("controller", "controller 沒在跑"))
+        self.assertEqual(waits["5"][1], "等 #3(做中)")
+        cfg, snap, rows = self.wait_fixture(max_parallel=1)
+        waits = board.dag_waits(cfg, snap, set(snap.tickets), rows)
+        self.assertEqual(waits["4"][:2], ("parallel", "等空位(同時最多 1 張在做)"))
+        self.assertEqual(waits["7"][:2], ("parallel", "等空位(同時最多 1 張在做)"))
+
+    def test_dag_group_now_and_one_part_per_group(self):
+        import board
+        cfg, snap, rows = self.wait_fixture()
+        g = snap.groups["g21"]
+        now = board.dag_group_now
+        self.assertEqual(now(cfg, g, "g21", rows), "regression 跑中")
+        slot = [dict(rows[0], state="slot", rec={"group": "g21", "stage": "machine"})]
+        self.assertEqual(now(cfg, g, "g21", slot), "regression 等機器名額")
+        fixer = [{"kind": "fixer", "state": "running", "rec": {"group": "g21", "round": 2, "max_rounds": 3}}]
+        self.assertEqual(now(cfg, g, "g21", fixer), "修補第 2/3 輪")
+        release = [{"kind": "release", "state": "running", "rec": {"group": "g21"}}]
+        self.assertEqual(now(cfg, g, "g21", release), "發版中")
+        self.assertEqual(now(cfg, {"state": "stuck"}, "g21", []), "卡住")
+        self.assertEqual(now(cfg, {"state": "verified"}, "g21", rows[:0]), "已驗,待落地")
+        snap.tickets["13"] = {"id": "13", "state": "merged", "group": "g21"}
+        snap.tickets["14"] = {"id": "14", "state": "ready"}
+        snap.tickets["15"] = {"id": "15", "state": "merged"}
+        snap.dag["14"] = {"depends_on": ["13", "1", "15", "3"]}
+        waits = board.dag_waits(cfg, snap, set(snap.tickets), rows)
+        self.assertEqual(waits["14"], ("deps", "等 g21 落地 — regression 跑中、等 #3(做中)、等 #15 落地",
+                                       ["1", "3", "13", "15"], ""))
+
+    def test_dag_wait_marks_follow_to_a_moving_source(self):
+        import board
+        cfg, snap, rows = self.wait_fixture()
+        shown = set(snap.tickets)
+        edges, lanes = board.dag_wait_marks(snap, shown, board.dag_waits(cfg, snap, shown, rows))
+        self.assertEqual(edges, {("3", "5"), ("5", "6")})
+        self.assertEqual(lanes, [("g21", "2", False)])
+        snap.groups["g21"]["state"] = "stuck"
+        edges, lanes = board.dag_wait_marks(snap, shown, board.dag_waits(cfg, snap, shown, rows))
+        self.assertEqual(lanes, [("g21", "2", True)])
+        # a cycle of ready tickets reaches no source and does not loop
+        snap.dag["5"] = {"depends_on": ["6"]}
+        edges, _ = board.dag_wait_marks(snap, shown, board.dag_waits(cfg, snap, shown, rows))
+        self.assertEqual(edges, set())
+
+    def test_dag_svg_draws_wait_lines_marks_and_lane_lines(self):
+        import board
+        import xml.etree.ElementTree as ET
+        cfg, snap, rows = self.wait_fixture()
+        shown = set(snap.tickets)
+        blockers = board.dag_blockers(snap)
+        blocked = board.dag_blocked(snap, blockers)
+        svg = board.dag_svg(snap, shown, board.dag_layers(snap, shown), blocked, blockers, cfg, rows, 0)
+        ns = "{http://www.w3.org/2000/svg}"
+        root = ET.fromstring(svg)
+        nodes = dict((g.get("data-id"), g) for g in root.iter(ns + "g") if g.get("data-id"))
+        for ident, g in nodes.items():
+            waits = [t for t in g.iter(ns + "text") if t.get("class") == "wait"]
+            if g.get("data-state") == "ready":
+                self.assertEqual(len(waits), 1, ident)
+                self.assertTrue(waits[0].text, ident)
+            else:
+                self.assertEqual(waits, [], ident)
+        st = dict((i, g.find(ns + "text[@class='st']").text) for i, g in nodes.items())
+        self.assertEqual((st["4"], nodes["4"].get("data-member"), nodes["4"].get("data-group")),
+                         ("組內待做", "g22", "g22"))
+        self.assertEqual((st["7"], nodes["7"].get("data-member"), nodes["7"].get("data-group")), ("待派", None, ""))
+        self.assertEqual(nodes["2"].get("data-wait-on"), "1")
+        self.assertEqual(nodes["4"].get("data-wait"), "next")
+        paths = dict(((p.get("data-from"), p.get("data-to")), p.get("class").split()) for p in root.iter(ns + "path"))
+        self.assertIn("wait", paths[("3", "5")])
+        self.assertIn("wait", paths[("5", "6")])
+        self.assertEqual(paths[("8", "9")], ["edge", "chain"])
+        self.assertEqual(paths[("10", "11")], ["edge", "chain"])
+        self.assertEqual(paths[("1", "2")], ["edge"])
+        self.assertEqual(paths[("lane:g21", "2")], ["lanewait"])
+        self.assertEqual(len([k for k in paths if k[0].startswith("lane:")]), 1)
+        self.assertIn("等待路徑", board.render_dag_legend())
 
 
 class LastFullSecondsUnit(unittest.TestCase):

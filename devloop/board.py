@@ -616,20 +616,37 @@ def live_queue(rows, exclusive_group):
             r["attrs"]["data-yield"] = exclusive_group
 
 
+def dep_satisfied(snap, ident):
+    """True when dependency `ident` no longer holds its dependents back: landed, or merged in a group
+    that is still open (the dependent joins that group)."""
+    t = snap.tickets.get(ident)
+    if t is None:
+        return False
+    if t.get("state") == "landed":
+        return True
+    return t.get("state") == "merged" and (snap.groups.get(str(t.get("group"))) or {}).get("state") == "open"
+
+
+def controller_alive(cfg):
+    """True when <worktree_root>/controller.lock holds a JSON object whose stamp is not dead
+    (a config without a worktree root has no lock)."""
+    root = getattr(cfg, "worktree_root", None)
+    if not root:
+        return False
+    try:
+        lock = osx.read_json(os.path.join(root, "controller.lock"))
+    except osx.OSFailure:
+        lock = None
+    return isinstance(lock, dict) and not osx.stamp_dead(lock)
+
+
 def live_ticket_rows(snap):
     """One row per ready ticket: 待派, or 等 <unsatisfied dependencies> 落地."""
-    def satisfied(d):
-        t = snap.tickets.get(d)
-        if t is None:
-            return False
-        if t.get("state") == "landed":
-            return True
-        return t.get("state") == "merged" and (snap.groups.get(str(t.get("group"))) or {}).get("state") == "open"
     rows = []
     for ident in sorted((i for i, t in snap.tickets.items() if t.get("state") == "ready"), key=_num_key):
         waits = []
         for d in dagmod.deps(snap.dag, ident):
-            if not satisfied(d):
+            if not dep_satisfied(snap, d):
                 t = snap.tickets.get(d)
                 label = "不存在" if t is None else STATE_TEXT.get(t.get("state"), t.get("state"))
                 waits.append("#%s(%s)" % (d, label))
@@ -688,21 +705,10 @@ def live_idle_reason(cfg, snap, now):
         if not cards:
             return "none", "沒有在跑的,也沒有待做的事。"
         return "decision", "沒有在跑的;剩下的都在等你判(要你判 %d 件)。" % len(cards)
-    try:
-        lock = osx.read_json(os.path.join(cfg.worktree_root, "controller.lock"))
-    except osx.OSFailure:
-        lock = None
-    if not isinstance(lock, dict) or osx.stamp_dead(lock):
+    if not controller_alive(cfg):
         return "controller", "controller 沒在跑:actl run(或 actl run --forever)才會派工與驗證。"
     if ready:
-        def satisfied(d):
-            t = snap.tickets.get(d)
-            if t is None:
-                return False
-            if t.get("state") == "landed":
-                return True
-            return t.get("state") == "merged" and (snap.groups.get(str(t.get("group"))) or {}).get("state") == "open"
-        blocked = {i: [d for d in dagmod.deps(snap.dag, i) if not satisfied(d)] for i in ready}
+        blocked = {i: [d for d in dagmod.deps(snap.dag, i) if not dep_satisfied(snap, d)] for i in ready}
         if all(blocked.values()):
             first = next(i for i in dagmod.topo(snap.dag) if i in blocked)
             return "deps", "沒有可派的票;下一張 #%s 在等 #%s 落地。" % (first, blocked[first][0])
@@ -1211,25 +1217,30 @@ DAG_ROLE_TEXT = {"worker": "worker", "worker_simple": "worker", "verifier": "驗
 DAG_LANE_HEAD, DAG_LANE_GAP, DAG_PAD = 26, 12, 12
 NO_GROUP = "未分組"
 BLOCKED_TEXT, BLOCKER_TEXT = "被卡住", "卡住的源頭"
+WAIT_PATH_TEXT, MEMBER_TEXT = "等待路徑", "組內待做"
 
 DAG_STYLE = """<style>
-#tab-dag{--s-ready:#5c6670;--s-running:#1f6f8b;--s-merged:#3d7a46;--s-landed:#2f5d3a;--s-stuck:#a23b2a;--s-cancelled:#8b8f94;--chain:#c0392b}
-@media (prefers-color-scheme:dark){#tab-dag{--s-ready:#98a4ad;--s-running:#6fb7d0;--s-merged:#7fc28a;--s-landed:#5f9e6c;--s-stuck:#e08a7a;--s-cancelled:#6c7378;--chain:#ff7a6b}}
+#tab-dag{--s-ready:#5c6670;--s-running:#1f6f8b;--s-merged:#3d7a46;--s-landed:#2f5d3a;--s-stuck:#a23b2a;--s-cancelled:#8b8f94;--chain:#c0392b;--wait:#c27c0e}
+@media (prefers-color-scheme:dark){#tab-dag{--s-ready:#98a4ad;--s-running:#6fb7d0;--s-merged:#7fc28a;--s-landed:#5f9e6c;--s-stuck:#e08a7a;--s-cancelled:#6c7378;--chain:#ff7a6b;--wait:#f2b84b}}
 #tab-dag a.refresh{float:right;font-size:13px}
 #tab-dag .dagbox{padding:8px}#tab-dag svg{display:block}
 #tab-dag .lane rect.band{fill:var(--bg);stroke:var(--line)}#tab-dag .lane text.lh{fill:var(--quiet);font-size:12px}
 #tab-dag .node rect{fill:var(--card);stroke:var(--sc,var(--line));stroke-width:1.5}#tab-dag .node text{fill:var(--ink);font-size:12px}
 #tab-dag .node text.st{fill:var(--sc,var(--quiet));font-size:11px}
 #tab-dag .node text.live{fill:var(--ink);font-size:11px}
+#tab-dag .node text.wait{fill:var(--wait);font-size:11px}
 #tab-dag .s-ready{--sc:var(--s-ready)}#tab-dag .s-running{--sc:var(--s-running)}#tab-dag .s-merged{--sc:var(--s-merged)}
 #tab-dag .s-landed{--sc:var(--s-landed)}#tab-dag .s-stuck{--sc:var(--s-stuck)}#tab-dag .s-cancelled{--sc:var(--s-cancelled)}
 #tab-dag .node.blocked rect{stroke:var(--chain);stroke-dasharray:5 3;stroke-width:2}
 #tab-dag .node.blocker rect{stroke:var(--chain);stroke-width:3.5}
-#tab-dag path.edge{fill:none;stroke:var(--quiet);stroke-width:1.3}#tab-dag path.edge.chain{stroke:var(--chain);stroke-width:3}
+#tab-dag path.edge{fill:none;stroke:var(--quiet);stroke-width:1.3}#tab-dag path.edge.wait{stroke:var(--wait);stroke-width:2.5}
+#tab-dag path.edge.chain{stroke:var(--chain);stroke-width:3}
+#tab-dag path.lanewait{fill:none;stroke:var(--wait);stroke-width:2;stroke-dasharray:6 3}#tab-dag path.lanewait.chain{stroke:var(--chain)}
 #tab-dag .legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;align-items:center}
 #tab-dag .legend span{display:inline-flex;gap:6px;align-items:center}
 #tab-dag .legend i{display:inline-block;width:14px;height:10px;border-radius:3px;border:2px solid var(--sc,var(--line));background:var(--card)}
 #tab-dag .legend i.blocked{border:2px dashed var(--chain)}#tab-dag .legend i.blocker{border:3px solid var(--chain)}
+#tab-dag .legend i.wait{border:2px solid var(--wait)}
 </style>"""
 
 
@@ -1434,6 +1445,132 @@ def dag_node_live(ident, rows, cfg, now):
     return out
 
 
+def dag_group_now(cfg, g, gid, rows):
+    """What group `gid` does right now, from its first live row (dag_group_rows); its state text when nothing runs."""
+    for row in dag_group_rows(gid, rows):
+        kind, rec = row["kind"], row["rec"]
+        if kind == "regression":
+            return "regression 等機器名額" if row["state"] == "slot" else "regression 跑中"
+        if kind == "fixer":
+            mx = rec.get("max_rounds")
+            if mx is None:
+                mx = getattr(cfg, "max_rounds", None)
+            return "修補第 %s/%s 輪" % (rec.get("round"), mx)
+        return "發版中"
+    return group_state_text(g)
+
+
+def dag_dep_group(snap, ident):
+    """(group id, group) when dependency `ident` is merged in a group of the pool that is not open, else None."""
+    t = snap.tickets.get(ident) or {}
+    gid = str(t.get("group") or "")
+    g = snap.groups.get(gid) if gid else None
+    if t.get("state") == "merged" and g is not None and g.get("state") != "open":
+        return gid, g
+    return None
+
+
+def dag_unsatisfied(snap, ident):
+    """The dependencies of `ident` that are not satisfied (dep_satisfied), in numeric order, once each."""
+    return sorted(set(d for d in dagmod.deps(snap.dag, ident) if not dep_satisfied(snap, d)), key=_num_key)
+
+
+def dag_dep_wait_text(cfg, snap, d, rows):
+    """The wait part for one unsatisfied dependency `d` of a ready ticket."""
+    t = snap.tickets.get(d)
+    if t is None:
+        return "#%s 不存在" % d
+    state = t.get("state")
+    if state == "stuck":
+        return "等你判 #%s" % d
+    if state == "cancelled":
+        return "#%s 已取消,不會落地" % d
+    if state == "merged":
+        merged_in = dag_dep_group(snap, d)
+        if merged_in is not None:
+            gid, g = merged_in
+            return "等 %s 落地 — %s" % (gid, dag_group_now(cfg, g, gid, rows))
+        return "等 #%s 落地" % d
+    return "等 #%s(%s)" % (d, STATE_TEXT.get(state, state))
+
+
+def dag_waits(cfg, snap, shown, rows):
+    """{shown ready id: (kind, text, unsatisfied dependency ids, member group or '')}; kind is deps, controller,
+    parallel or next, in the order ticket_controller.dispatch waits for them."""
+    ready = sorted((i for i in shown if (snap.tickets.get(i) or {}).get("state") == "ready"), key=_num_key)
+    if not ready:
+        return {}
+    alive = controller_alive(cfg)
+    running = sum(1 for t in snap.tickets.values() if t.get("state") == "running")
+    mx = getattr(cfg, "max_parallel", None)
+    out = {}
+    for ident in ready:
+        member = str(snap.tickets[ident].get("group") or "")
+        on = dag_unsatisfied(snap, ident)
+        if on:
+            parts = []
+            for d in on:
+                part = dag_dep_wait_text(cfg, snap, d, rows)
+                if part not in parts:
+                    parts.append(part)
+            out[ident] = ("deps", "、".join(parts), on, member)
+        elif not alive:
+            out[ident] = ("controller", "controller 沒在跑", [], member)
+        elif mx is not None and running >= mx:
+            out[ident] = ("parallel", "等空位(同時最多 %s 張在做)" % mx, [], member)
+        else:
+            out[ident] = ("next", "下一輪派出", [], member)
+    return out
+
+
+def dag_wait_marks(snap, shown, waits):
+    """(set of (dependency, ready id) edges that get class 'wait', [(group id, ready id, stuck)] lane lines).
+    An edge d->R gets 'wait' when the walk over unsatisfied dependencies from d reaches a moving source:
+    a running ticket, a ready ticket without unsatisfied dependencies, or a ticket merged in a group
+    that is neither open nor stuck. Dependencies merged in a not-open group get a lane line instead."""
+    memo = {}
+
+    def moving(x, path):
+        if x in memo:
+            return memo[x]
+        t = snap.tickets.get(x)
+        state = (t or {}).get("state")
+        if t is None or state in ("stuck", "cancelled"):
+            res = False
+        elif state == "running":
+            res = True
+        elif state == "merged":
+            merged_in = dag_dep_group(snap, x)
+            res = merged_in is not None and merged_in[1].get("state") != "stuck"
+        elif state == "ready":
+            deps = dag_unsatisfied(snap, x)
+            on = [d for d in deps if d not in path]
+            res = not deps or any(moving(d, path | {x}) for d in on)
+            if len(on) < len(deps) and not res:
+                return False  # cut by a cycle: not final, do not memoize
+        else:
+            res = False
+        memo[x] = res
+        return res
+
+    edges, lanes = set(), []
+    for ident in sorted(waits, key=_num_key):
+        kind, _, on, _ = waits[ident]
+        if kind != "deps":
+            continue
+        for d in on:
+            merged_in = dag_dep_group(snap, d)
+            if merged_in is not None:
+                gid, g = merged_in
+                line = (gid, ident, g.get("state") == "stuck")
+                if line not in lanes:
+                    lanes.append(line)
+                continue
+            if d in shown and moving(d, frozenset([ident])):
+                edges.add((d, ident))
+    return edges, lanes
+
+
 def dag_svg(snap, shown, layers, blocked, blockers, cfg=None, live=None, now=None):
     """The <svg id="dag">: lanes as bands top to bottom, layers as columns left to right."""
     lanes = dag_lanes(snap, shown)
@@ -1446,12 +1583,21 @@ def dag_svg(snap, shown, layers, blocked, blockers, cfg=None, live=None, now=Non
     width = DAG_PAD * 2 + 90 + ncols * DAG_COL_W
     pos, lane_out, y = {}, [], DAG_PAD
     lines = dict((i, dag_node_live(i, live, cfg, now)) for i in shown)
+    waits = dag_waits(cfg, snap, shown, live) if cfg is not None else {}
+    for ident, (kind, text, on, _) in waits.items():
+        attrs = {"data-wait": kind}
+        if kind == "deps":
+            attrs["data-wait-on"] = " ".join(on)
+        lines[ident] = lines[ident] + [(text, attrs)]
+    wait_edges, lane_lines = dag_wait_marks(snap, shown, waits)
+    lane_y = {}
     node_h = dict((i, DAG_NODE_H + DAG_LIVE_H * len(lines[i])) for i in shown)
     for gid, label in lanes:
         height = DAG_LANE_HEAD + max(
             sum(node_h[i] + DAG_NODE_GAP for i in v)
             for (g, _), v in cells.items() if g == gid)
         title, lane_attrs = dag_lane_title(cfg, snap.groups.get(gid), gid, label, live, now)
+        lane_y[gid] = y
         part = ['<g class="lane" data-group="%s"%s>' % (e(gid), lane_attrs),
                 '<rect class="band" x="%d" y="%d" width="%d" height="%d" rx="8"/>'
                 % (DAG_PAD, y, width - 2 * DAG_PAD, height),
@@ -1474,9 +1620,19 @@ def dag_svg(snap, shown, layers, blocked, blockers, cfg=None, live=None, now=Non
                     extra = ' data-blocked-by="%s"' % e(" ".join(blocked[ident]))
                 if ident in blockers:
                     cls.append("blocker")
+                state_text = STATE_TEXT.get(state, state)
+                if ident in waits:
+                    kind, _, on, member = waits[ident]
+                    extra += ' data-wait="%s"' % e(kind)
+                    if kind == "deps":
+                        extra += ' data-wait-on="%s"' % e(" ".join(on))
+                    if member:
+                        extra += ' data-member="%s"' % e(member)
+                        state_text = MEMBER_TEXT
+                nlive = len(lines[ident]) - (1 if ident in waits else 0)
                 live_text = "".join(
-                    '<text class="live" x="%d" y="%d"%s>%s</text>' % (
-                        x + 8, ny + 31 + DAG_LIVE_H * (k + 1),
+                    '<text class="%s" x="%d" y="%d"%s>%s</text>' % (
+                        "live" if k < nlive else "wait", x + 8, ny + 31 + DAG_LIVE_H * (k + 1),
                         "".join(' %s="%s"' % (a, e(v)) for a, v in attrs.items()), e(text))
                     for k, (text, attrs) in enumerate(lines[ident]))
                 part.append('<a href="?ticket=%s"><g class="%s" data-id="%s" data-state="%s" data-group="%s" '
@@ -1487,7 +1643,7 @@ def dag_svg(snap, shown, layers, blocked, blockers, cfg=None, live=None, now=Non
                                 layers[ident], extra, e(ident), e(t.get("title")),
                                 x, ny, DAG_NODE_W, node_h[ident],
                                 x + 8, ny + 16, e(ident), e(_clip(t.get("title"), 12)),
-                                x + 8, ny + 31, e(STATE_TEXT.get(state, state)), live_text))
+                                x + 8, ny + 31, e(state_text), live_text))
         part.append("</g>")
         lane_out.append("\n".join(part))
         y += height + DAG_LANE_GAP
@@ -1500,8 +1656,17 @@ def dag_svg(snap, shown, layers, blocked, blockers, cfg=None, live=None, now=Non
             (bx, by), (ax, ay) = pos[b], pos[a]
             x1, y1, x2, y2 = bx + DAG_NODE_W, by + DAG_NODE_H / 2, ax, ay + DAG_NODE_H / 2
             mid = (x1 + x2) / 2
-            edges.append('<path class="edge%s" data-from="%s" data-to="%s" d="M%g %g C%g %g %g %g %g %g"/>' % (
-                " chain" if chain else "", e(b), e(a), x1, y1, mid, y1, mid, y2, x2, y2))
+            edges.append('<path class="edge%s%s" data-from="%s" data-to="%s" d="M%g %g C%g %g %g %g %g %g"/>' % (
+                " wait" if (b, a) in wait_edges else "", " chain" if chain else "",
+                e(b), e(a), x1, y1, mid, y1, mid, y2, x2, y2))
+    for gid, a, stuck in lane_lines:
+        if gid not in lane_y or a not in pos:
+            continue
+        (ax, ay), x1, y1 = pos[a], DAG_PAD + 8, lane_y[gid] + DAG_LANE_HEAD - 4
+        x2, y2 = ax, ay + DAG_NODE_H / 2
+        mid = (x1 + x2) / 2
+        edges.append('<path class="lanewait%s" data-from="lane:%s" data-to="%s" d="M%g %g C%g %g %g %g %g %g"/>' % (
+            " chain" if stuck else "", e(gid), e(a), x1, y1, mid, y1, mid, y2, x2, y2))
     height = y - DAG_LANE_GAP + DAG_PAD
     return ('<svg id="dag" xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d" '
             'role="img" aria-label="票的相依圖">\n%s\n<g class="edges">%s</g>\n</svg>'
@@ -1512,6 +1677,7 @@ def render_dag_legend():
     items = ['<span class="s-%s"><i></i>%s</span>' % (e(s), e(text)) for s, text in STATE_TEXT.items()]
     items.append('<span><i class="blocked"></i>%s</span>' % e(BLOCKED_TEXT))
     items.append('<span><i class="blocker"></i>%s</span>' % e(BLOCKER_TEXT))
+    items.append('<span><i class="wait"></i>%s</span>' % e(WAIT_PATH_TEXT))
     return '<div class="legend">%s</div>' % "".join(items)
 
 
