@@ -12475,6 +12475,292 @@ class HardBlockOwnChange(LoopCase):
         issuer.hard_block(g)
 
 
+# a model key left out of an agent record (T83Acceptance)
+T83_MISSING = object()
+
+
+class T83Acceptance(BoardLiveTab):
+    """#83: a DAG node of a ticket with a live agent, issuer or revising opener shows one line per run.
+    Expected strings come from the ticket and the fixture below, never from the code."""
+
+    NS = "{http://www.w3.org/2000/svg}"
+    S = BoardLiveTab.NOW - 7200
+    UNTIL = "2026-11-06T13:00:00Z"
+
+    @staticmethod
+    def pool_stamp(epoch):
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+    def fixture(self, state="running", second=False):
+        self.add(5, state=state, group="g3")
+        members = ["5"]
+        if second:
+            self.add(6, state="ready", group="g3")
+            members.append("6")
+        self.pool.update(lambda tx: tx.put_group({"id": "g3", "state": "open", "branch": "int/g3",
+                                                  "members": members}), "test: g3")
+
+    def agent(self, name, role="verifier", started=None, ticket="5", round=2, model="m-v", state="running",
+              parent=None, since=None, until=None, **extra):
+        started = self.S if started is None else started
+        stamp = self.alive(self.pool_stamp(started))
+        rec = dict(kind="agent", stamp=stamp, parent=parent, role=role, ticket=ticket, group="g3", round=round,
+                   run_dir="/r/" + name, log=None, command="claude", effort=None, state=state,
+                   since=self.pool_stamp(started if since is None else since), until=until)
+        if model is not T83_MISSING:
+            rec["model"] = model
+        rec.update(extra)
+        self.put(name, **rec)
+        return stamp
+
+    def page(self, now=None):
+        import board
+        return board.render(self.cfg(), self.snap(), query={"tab": "dag"}, now=self.S + 860 if now is None else now)
+
+    def svg(self, page):
+        import xml.etree.ElementTree as ET
+        m = re.search(r'<svg id="dag".*?</svg>', page, re.S)
+        self.assertIsNotNone(m, "no <svg id=\"dag\"> on the DAG tab")
+        try:
+            return ET.fromstring(m.group(0))
+        except ET.ParseError as exc:
+            self.fail("the DAG svg does not parse: %s" % exc)
+
+    def nodes(self, root):
+        return {el.get("data-id"): el for el in root.iter(self.NS + "g")
+                if "node" in (el.get("class") or "").split()}
+
+    def node(self, page, ident="5"):
+        nodes = self.nodes(self.svg(page))
+        self.assertIn(ident, nodes, "no node <g> for #%s" % ident)
+        return nodes[ident]
+
+    def live(self, node):
+        """The node's direct <text class="live"> children, in document order."""
+        return [el for el in node if el.tag == self.NS + "text" and "live" in (el.get("class") or "").split()]
+
+    def lines(self, node):
+        return ["".join(el.itertext()) for el in self.live(node)]
+
+    # ---- item 1
+    def test_agent_line(self):
+        self.fixture()
+        self.agent("agent-v")
+        lines = self.live(self.node(self.page()))
+        self.assertEqual(len(lines), 1, "one live line for one live agent")
+        self.assertEqual(lines[0].get("data-role"), "verifier")
+        self.assertEqual("".join(lines[0].itertext()), "驗證者寫案例 第 2/3 輪 · m-v · 14 分")
+        self.assertIsNone(lines[0].get("data-wait"))
+
+    # ---- item 2
+    def test_role_texts(self):
+        for role, text in (("worker", "worker"), ("worker_simple", "worker"), ("verifier", "驗證者寫案例"),
+                           ("reviewer", "覆核"), ("tester", "tester")):
+            with self.subTest(role=role):
+                self.fixture()
+                self.agent("agent-x", role=role, model="m")
+                lines = self.live(self.node(self.page()))
+                self.assertEqual([(el.get("data-role"), "".join(el.itertext())) for el in lines],
+                                 [(role, "%s 第 2/3 輪 · m · 14 分" % text)])
+
+    def test_two_agents_oldest_first(self):
+        self.fixture()
+        self.agent("agent-z-worker", role="worker", started=self.S, model="m-w")
+        self.agent("agent-a-verifier", role="verifier", started=self.S + 60, model="m-v")
+        lines = self.live(self.node(self.page()))
+        self.assertEqual([(el.get("data-role"), "".join(el.itertext())) for el in lines],
+                         [("worker", "worker 第 2/3 輪 · m-w · 14 分"),
+                          ("verifier", "驗證者寫案例 第 2/3 輪 · m-v · 13 分")])
+
+    def test_model_empty_or_missing_and_round_none(self):
+        for model, rnd, text in (("", 2, "驗證者寫案例 第 2/3 輪 · 14 分"),
+                                 (T83_MISSING, 2, "驗證者寫案例 第 2/3 輪 · 14 分"),
+                                 (None, 2, "驗證者寫案例 第 2/3 輪 · 14 分"),
+                                 ("m-v", None, "驗證者寫案例 · m-v · 14 分"),
+                                 ("", None, "驗證者寫案例 · 14 分")):
+            with self.subTest(model=model, round=rnd):
+                self.fixture()
+                self.agent("agent-v", model=model, round=rnd)
+                self.assertEqual(self.lines(self.node(self.page())), [text])
+
+    # ---- item 3
+    def test_revising_opener(self):
+        for state in ("running", "stuck"):
+            with self.subTest(state=state):
+                self.fixture(state=state)
+                self.put("opener-r", kind="opener", stamp=self.alive(self.pool_stamp(self.S)), title=None,
+                         revise="5", via="main", model="m-o", effort=None)
+                lines = self.live(self.node(self.page()))
+                self.assertEqual([(el.get("data-role"), "".join(el.itertext())) for el in lines],
+                                 [("opener", "改題中 · m-o · 14 分")])
+
+    def test_revising_opener_uses_its_agent_model(self):
+        for state in ("running", "stuck"):
+            with self.subTest(state=state):
+                self.fixture(state=state)
+                op = self.alive(self.pool_stamp(self.S))
+                self.put("opener-r", kind="opener", stamp=op, title=None, revise="5", via="main", model="m-o",
+                         effort=None)
+                self.agent("agent-c", role="creator", started=self.S + 10, ticket=None, round=None, model="m-c",
+                           parent=op["pid"])
+                lines = self.live(self.node(self.page()))
+                self.assertEqual([(el.get("data-role"), "".join(el.itertext())) for el in lines],
+                                 [("opener", "改題中 · m-c · 14 分")])
+
+    # ---- item 4
+    def test_issuer_without_agent(self):
+        self.fixture()
+        self.put("issuer-5", kind="issuer", stamp=self.alive(self.pool_stamp(self.S)), ticket="5", target="int/g3",
+                 round=2)
+        lines = self.live(self.node(self.page()))
+        self.assertEqual([(el.get("data-role"), "".join(el.itertext())) for el in lines],
+                         [("issuer", "issuer 第 2/3 輪 · 沒有 agent 在跑 · 14 分")])
+
+    def test_issuer_with_agent_shows_only_the_agent(self):
+        self.fixture()
+        iss = self.alive(self.pool_stamp(self.S))
+        self.put("issuer-5", kind="issuer", stamp=iss, ticket="5", target="int/g3", round=2)
+        self.agent("agent-w", role="worker", started=self.S + 60, model="m-w", parent=iss["pid"])
+        lines = self.live(self.node(self.page()))
+        self.assertEqual([(el.get("data-role"), "".join(el.itertext())) for el in lines],
+                         [("worker", "worker 第 2/3 輪 · m-w · 13 分")])
+
+    # ---- item 5
+    def test_slot_waits_numbered_oldest_since_first(self):
+        self.fixture()
+        self.agent("agent-w", role="worker", started=self.S, model="m-w", state="slot", since=self.S + 200)
+        self.agent("agent-v", role="verifier", started=self.S + 60, model="m-v", state="slot", since=self.S + 100)
+        lines = self.live(self.node(self.page()))
+        self.assertEqual([("".join(el.itertext()), el.get("data-wait"), el.get("data-queue")) for el in lines], [
+            ("worker 第 2/3 輪 · m-w · 14 分 · 等機器名額:第 2 個(共 2 個在等)", "slot", "2/2"),
+            ("驗證者寫案例 第 2/3 輪 · m-v · 13 分 · 等機器名額:第 1 個(共 2 個在等)", "slot", "1/2")])
+
+    def test_slot_wait_gives_way_to_exclusive_regression(self):
+        self.fixture()
+        self.put("regression-int-g7", kind="regression", stamp=self.alive(self.pool_stamp(self.S - 600)),
+                 group="g7", branch="int/g7", sha="a" * 40, exclusive=True, stage="full",
+                 since=self.pool_stamp(self.S - 600))
+        self.agent("agent-v", state="slot", since=self.S + 100)
+        lines = self.live(self.node(self.page()))
+        self.assertEqual([("".join(el.itertext()), el.get("data-wait"), el.get("data-queue")) for el in lines], [
+            ("驗證者寫案例 第 2/3 輪 · m-v · 14 分 · 等機器名額:第 1 個(共 1 個在等),讓位給 g7 的獨占 regression",
+             "slot", "1/1")])
+
+    def test_quota_wait(self):
+        import board
+        self.fixture()
+        self.agent("agent-v", state="quota", since=self.S + 100, until=self.UNTIL)
+        lines = self.live(self.node(self.page()))
+        self.assertEqual([("".join(el.itertext()), el.get("data-wait")) for el in lines], [
+            ("驗證者寫案例 第 2/3 輪 · m-v · 14 分 · 額度用完,到 "
+             + board.live_clock(board.pool_seconds(self.UNTIL)), "quota")])
+
+    # ---- item 6
+    def test_ended_other_tickets_and_ticketless_agents_add_no_line(self):
+        self.fixture()
+        self.agent("agent-v")
+        self.put("agent-ended", kind="agent", stamp=self.dead(osx.now()), parent=None, role="worker", ticket="5",
+                 group="g3", round=1, run_dir="/r/e", log=None, command="claude", model="m-e", effort=None,
+                 state="running", since=osx.now(), until=None)
+        self.put("issuer-ended", kind="issuer", stamp=self.dead(osx.now()), ticket="5", target="int/g3", round=1)
+        self.put("opener-ended", kind="opener", stamp=self.dead(osx.now()), title=None, revise="5", via="main",
+                 model="m-e", effort=None)
+        self.agent("agent-other", role="worker", ticket="9", model="m-9")
+        self.put("issuer-9", kind="issuer", stamp=self.alive(self.pool_stamp(self.S)), ticket="9",
+                 target="int/g3", round=1)
+        self.put("opener-9", kind="opener", stamp=self.alive(self.pool_stamp(self.S)), title=None, revise="9",
+                 via="main", model="m-9", effort=None)
+        fx = self.alive(self.pool_stamp(self.S))
+        self.put("fixer-g3", kind="fixer", stamp=fx, group="g3", round=1, max_rounds=3)
+        self.agent("agent-fix", role="fixer", ticket=None, round=1, model="m-f", parent=fx["pid"])
+        self.agent("agent-loose", role="fixer", ticket=None, round=1, model="m-l")
+        import board
+        states = {r["name"]: r["state"] for r in board.live_rows(self.cfg(), self.snap())}
+        for name in ("agent-ended", "issuer-ended", "opener-ended"):
+            self.assertEqual(states.get(name), "ended", name)
+        self.assertEqual(self.lines(self.node(self.page())), ["驗證者寫案例 第 2/3 輪 · m-v · 14 分"])
+
+    # ---- item 7
+    def test_geometry(self):
+        self.fixture(second=True)
+        self.agent("agent-1", role="worker", started=self.S, model="m-w")
+        self.agent("agent-2", role="verifier", started=self.S + 60, model="m-v")
+        self.agent("agent-3", role="reviewer", started=self.S + 120, model="m-r")
+        root = self.svg(self.page())
+        nodes = self.nodes(root)
+        self.assertEqual(sorted(nodes), ["5", "6"])
+        self.assertEqual(len(self.live(nodes["5"])), 3, "one live line per live agent")
+        self.assertEqual(nodes["5"].get("data-layer"), nodes["6"].get("data-layer"))
+        rects = {}
+        for ident, node in nodes.items():
+            rs = [el for el in node if el.tag == self.NS + "rect"]
+            self.assertEqual(len(rs), 1, "one <rect> in node #%s" % ident)
+            r = rs[0]
+            x, y, w, h = (float(r.get(k)) for k in ("x", "y", "width", "height"))
+            rects[ident] = (x, y, w, h)
+            for t in node.iter(self.NS + "text"):
+                ty = float(t.get("y"))
+                self.assertTrue(y <= ty <= y + h, "#%s text %r at y=%s outside rect %s..%s"
+                                % (ident, "".join(t.itertext()), ty, y, y + h))
+        (x5, y5, w5, h5), (x6, y6, w6, h6) = rects["5"], rects["6"]
+        overlap = x5 < x6 + w6 and x6 < x5 + w5 and y5 < y6 + h6 and y6 < y5 + h5
+        self.assertFalse(overlap, "node rects overlap: %s %s" % (rects["5"], rects["6"]))
+        self.assertEqual(x5, x6, "#5 and #6 in one column")
+        self.assertGreaterEqual(y6, y5 + h5, "#6 sits below #5")
+        width, height = float(root.get("width")), float(root.get("height"))
+        for ident, (x, y, w, h) in rects.items():
+            self.assertTrue(x + w <= width and y + h <= height, "svg %sx%s does not contain #%s rect %s"
+                            % (width, height, ident, rects[ident]))
+
+    # ---- item 1 on a served board
+    def test_served_board_agent_line(self):
+        import http.client
+        import socket
+        self.fixture()
+        started = int(time.time()) - 860
+        self.agent("agent-v", started=started)
+        key = os.path.join(self.tmp, "key")
+        with open(key, "w") as fh:
+            fh.write("k1\n")
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "board.py"), "serve", "--port", str(port),
+                                 "--key-file", key], cwd=self.proj, env=self.env,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(proc.wait)
+        self.addCleanup(proc.terminate)
+
+        def get(path):
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            try:
+                conn.request("GET", path, headers={"X-Board-Key": "k1"})
+                resp = conn.getresponse()
+                return resp.status, resp.read().decode("utf-8")
+            finally:
+                conn.close()
+        for _ in range(100):
+            try:
+                get("/")
+                break
+            except OSError:
+                time.sleep(0.1)
+        status, page = get("/?tab=dag")
+        self.assertLess(time.time() - started, 899, "the GET came too late for the 14 分 oracle")
+        self.assertEqual(status, 200)
+        lines = self.live(self.node(page))
+        self.assertEqual([(el.get("data-role"), "".join(el.itertext())) for el in lines],
+                         [("verifier", "驗證者寫案例 第 2/3 輪 · m-v · 14 分")])
+
+
+# T83Acceptance borrows BoardLiveTab's helpers only; its inherited cases are not #83's.
+for _name in [n for n in dir(BoardLiveTab) if n.startswith("test_")]:
+    if _name not in T83Acceptance.__dict__:
+        setattr(T83Acceptance, _name, None)
+del _name
+
+
 class BoardTicketFilters(LoopCase):
     """The 票 tab's filter helpers (ticket #40): ticket_filters, ticket_shown, group_shown, render_filters."""
 
