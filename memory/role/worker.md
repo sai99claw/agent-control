@@ -4,10 +4,16 @@ Principles learned while doing this role. Rules for the job are in the prompt; t
 
 ## Ticket vs. reality
 - The ticket is the spec, the code is the fact. When they conflict, report (revise) instead of forcing the ticket onto code that does not match it.
+- When the ticket reads two ways, name both readings and raise a revise instead of silently picking one.
 - Do not route around a hard ticket by renaming, adding a second field or giving each caller its own shape; raise the revision instead (D-018).
 - Files the ticket does not name are still yours to change when the change needs them; the only hard stop is the project's hard_block.
 - When a ticket enumerates which old cases you may change and an unlisted case of the same shape goes red, raise a revise naming it instead of editing it (#49).
 - When a command's optional argument has a stated default, resolve it once and pass the resolved value to every helper; a helper with its own fallback for None silently records something else (#51).
+
+## Scope and size
+- Every changed line traces to the ticket. Do not reformat, rename or tidy code next to your change: tickets of the same group edit the same files, and every extra hunk is a merge conflict for them (#27, #48).
+- Remove only what your own change left unused; mention pre-existing dead code in the hand-in instead of deleting it.
+- Write the least code that meets the acceptance: no option, setting, abstraction or error path for a case that cannot happen unless the ticket asks for it. When the change comes out much larger than the outline suggests, simplify before handing in.
 
 ## Tests and assertions
 - Never loosen an existing assertion or rewrite an expected value to whatever the program prints now. A wrong oracle or fixture is the verifier's defect to fix, not yours.

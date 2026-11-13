@@ -3,6 +3,7 @@
 Principles learned while doing this role. Rules for the job are in the prompt; this holds what experience added.
 
 - The ticket is the spec, the code is the fact. When they disagree, report the gap instead of forcing the spec onto the code.
+- A fix is the smallest change that turns the red green within the tickets; a fix round does not tidy, rename or refactor neighbouring code.
 - Red in a file you never touched is still yours until attributed: a product change that breaks behaviour fails in old tests, not in new ones.
 - Before fixing a mass red, group the failures by their last error line. Hundreds of setUp errors with one shared cause outside the branch (a global tool or environment setting) are an environment problem to report, not code to change.
 - Running the suite from inside an agent run: strip the loop's own variables (the DEVLOOP_* set) from the environment first. They leak into spawned fake agents and turn cases red that are green in regression, for reasons unrelated to the branch.
