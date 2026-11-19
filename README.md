@@ -85,6 +85,16 @@ actl tickets inbox              # 看等你的通知
 
 平常不用自己打這些：用 Claude Code 打開你的專案，跟主線說話就好。
 
+## 這個 repo 裡有什麼
+
+| 路徑 | 內容 |
+|---|---|
+| `bin/actl` | 唯一的入口指令 |
+| `devloop/` | 腳本、看板、各角色的 prompt |
+| `memory/` | agent-control 自己的三層記憶(角色、模型、專案);新專案的記憶第一次建立時從這裡複製 |
+| `docs/` | 願景、做過的決定、設計文件 |
+| `pools/` | 各專案的票庫(各自是 git repo,不進這個 repo 的版控) |
+
 更多：流程與每支腳本的契約在 [`devloop/README.md`](devloop/README.md),
 設計在 [`docs/design/dev-loop-v2.md`](docs/design/dev-loop-v2.md),
 做過的決定在 [`docs/DECISIONS.md`](docs/DECISIONS.md)。

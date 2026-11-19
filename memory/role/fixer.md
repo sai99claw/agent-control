@@ -14,6 +14,7 @@ Principles learned while doing this role. Rules for the job are in the prompt; t
 - A test change is proven only by a failure: run the same mutation on the base code's old case, and only "old green, new red" shows the rewrite has a target (#72). A docstring claiming "mutation -> red" is re-run before it is copied; if it does not go red, replace it with one that does (#73). Before trusting any mutation's result, confirm the replacement took effect (count the occurrences).
 - Tests that spawn the project's own scripts must pin them to the tree under test; otherwise they read another tree and pass for the wrong reason (#71). A guard that runs a whole script needs a brake a mutation cannot disable, and it measures the one section it is about, not the whole output (#29).
 - Proving "two things run at once" needs a two-way rendezvous: each side writes its own marker and waits for the other's; a one-way marker only rules out one serial order (#51).
+- A flaky test is never fixed by skipping it, adding a sleep or retrying until green. Find what makes it nondeterministic; if you cannot, say so in the hand-in with what you ruled out.
 - Destructive test actions touch only state the test owns; never tear down a shared fixture (#642).
 - Merging or porting a patch onto a moved base: do not trust the automatic merge. Apply per file, resolve rejects by hand, and check the result against the upstream delta, or lines vanish silently (#13).
 - Do not read secrets outside the project and do not kill processes you did not start.

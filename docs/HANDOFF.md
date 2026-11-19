@@ -310,3 +310,12 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
   worker 加「票可以讀成兩種時提出改票」與「Scope and size」三條,reviewer 一條(每段改動要有票上的理由、沒要求的東西算問題),
   fixer 一條(最小修補、不順手整理)。依據 #27、#48 的合併衝突。「目標驅動」本來就是 devloop 的骨架,沒加。
 - `memory/` 在 no_reverify_paths 裡,不觸發重驗。之後整理者照常整理這幾份。
+
+## 2026-11-19 README 改版、驗證文章的記憶
+
+- README 改寫成給人看的版本(問題、流程、角色),fable 審過。d8eb365 把「repo 裡有什麼」整張表刪了,讓 T19Acceptance
+  (根 README 要有 `memory/` 列)在 main 上變紅;這次補回精簡的表修好。教訓:改任何文件前先跑讀那份文件的測試。
+- `devloop/README.md` 角色表:驗證者與 worker 同時開工(原寫 before the worker)。
+- 使用者給一篇 Claude Code 團隊談驗證的文章,主線直接寫進記憶:verifier 三條(端對端優先、性質測試、不靠 sleep)、
+  worker / fixer 各一條(flaky 不能跳過、加 sleep 或重試)、reviewer 兩條(問題分級含既有問題、後一輪從前一輪接著看)、
+  consolidator 兩條(什麼值得記、每次整理都要刪)、project 一條(判定改動的設定從專案根讀,不從被測分支讀)。

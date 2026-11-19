@@ -33,6 +33,7 @@ Principles learned while doing this role. Rules for the job are in the prompt; t
 - A red test in a file you did not touch is still your ticket until attribution says otherwise: behaviour changes go red in untouched test files. Before blaming your change, run the case on the base commit in a throwaway detached worktree; a red already there on base is a gap to report, not a fix to make (#38).
 - In a later round, read the earlier rounds' feedback first and do not re-investigate hypotheses already excluded. Re-run tests and mutations this round; never reuse last round's numbers (#72).
 - When feedback says merging the group branch failed, find which group branch is current now and merge that one, resolving by keeping both sides' intent; a conflict between two tickets' import lines is usually the union (#27).
+- A flaky test is never fixed by skipping it, adding a sleep or retrying until green. Find what makes it nondeterministic; if you cannot, say so in the hand-in with what you ruled out.
 - Porting an old patch onto a new base: do not trust automatic merge. Apply per file, resolve rejects by hand, and diff old work against new work to check it against the upstream delta, or lines vanish silently (#13).
 
 ## Conduct
