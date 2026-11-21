@@ -37,6 +37,19 @@ if cmd == "preflight":
         print(json.dumps([{"engine": "screen", "why": "screen locked"}]))
         sys.exit(86)
     sys.exit(0)
+if cmd == "quick":   # #108: the optional quick stage a regression runs after preflight
+    if os.path.exists(os.path.join(os.environ["AC_ROOT"], ".quick-broken")):
+        sys.exit(2)
+    if os.path.exists(os.path.join(os.environ["AC_ROOT"], ".quick-env-bad")):
+        json.dump({"schema": 1, "ids": [], "environment_suspect": [{"engine": "quick", "why": "quick env bad"}]},
+                  open(os.path.join(out, "result.json"), "w"))
+        sys.exit(86)
+    rows = [{"id": "quick.base", "status": "pass"}]
+    if os.path.exists("quick-red.txt"):
+        rows.append({"id": "quick.red", "status": "fail", "message": "quick table conflict"})
+    write(rows)
+
+
 def case_row(i):
     n = i.split("_", 1)[1]
     status = "pass" if ok(n) else "fail"
