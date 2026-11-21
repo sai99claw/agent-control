@@ -1,0 +1,21 @@
+{
+  "kind": "decision",
+  "ref": "g3",
+  "text": "group g3 is in main (44e44b77f869) but the release failed - not retried, not rolled back (release log: /home/user/agent-control-devloop/runs/release/g3.log):\nrc 1\nlast step: (none printed)\nlast 15 lines of the release log:\nerror: RPC failed; HTTP 403 curl 22 The requested URL returned error: 403\nsend-pack: unexpected disconnect while reading sideband packet\nfatal: the remote end hung up unexpectedly\nrelease: tag a-20261121-g3-44e44b7 made here but not pushed to origin",
+  "at": "2026-11-21T19:41:49Z",
+  "acked": false,
+  "question": "g3 is in main (44e44b77f869) but its release failed: leave it for now, or run the release again?",
+  "options": [
+    {
+      "action": "ack",
+      "note": "",
+      "consequence": "nothing is run now; g3 stays landed with its release failed until `actl tickets release g3`"
+    },
+    {
+      "action": "release",
+      "note": "",
+      "consequence": "runs the release once more on 44e44b77f869; its outcome is a new page"
+    }
+  ],
+  "recommendation": "the release log says why it failed, and a re-run before that cause is fixed fails the same way"
+}
