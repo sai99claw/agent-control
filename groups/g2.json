@@ -2,12 +2,12 @@
   "id": "g2",
   "branch": "int/g2",
   "base": "261eb162bd567621d600b7211148a39f460bd8b9",
-  "state": "pr",
+  "state": "fixing",
   "alone": true,
   "members": [
     "107"
   ],
-  "fix_round": 0,
+  "fix_round": 1,
   "job": null,
   "created": "2026-11-21T02:25:37Z",
   "history": [
@@ -26,7 +26,12 @@
     {
       "at": "2026-11-21T02:36:01Z",
       "event": "regression red"
+    },
+    {
+      "at": "2026-11-21T02:36:03Z",
+      "event": "fix round 1"
     }
   ],
-  "last_regression": "1 failing:\n- test_groups.GroupSizeUnits.test_loop_with_cap_2_keeps_every_group_at_two AssertionError "
+  "last_regression": "1 failing:\n- test_groups.GroupSizeUnits.test_loop_with_cap_2_keeps_every_group_at_two AssertionError ",
+  "fix_report": "/home/user/agent-control-devloop/runs/regression/g2/result-1795228240.json"
 }
