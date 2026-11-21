@@ -2,7 +2,7 @@
   "id": "g1",
   "branch": "int/g1",
   "base": "f50b5782e57a34ed2c86915ccaed050855dae074",
-  "state": "verified",
+  "state": "landed",
   "alone": false,
   "members": [
     "100",
@@ -68,6 +68,10 @@
     {
       "at": "2026-11-21T02:25:27Z",
       "event": "code map refreshed"
+    },
+    {
+      "at": "2026-11-21T02:25:32Z",
+      "event": "landed (release failed)"
     }
   ],
   "main_tried": "4d5f51f0e7d3b134f359233df396b9f2eafd102b",
@@ -103,5 +107,8 @@
     }
   ],
   "fix_end_sha": "ab11df65d5b7072b44599a20f81d37811cf66c37",
-  "verified_sha": "261eb162bd567621d600b7211148a39f460bd8b9"
+  "verified_sha": "261eb162bd567621d600b7211148a39f460bd8b9",
+  "landed_sha": "261eb162bd567621d600b7211148a39f460bd8b9",
+  "release": "failed",
+  "release_log": "/home/user/agent-control-devloop/runs/release/g1.log"
 }
