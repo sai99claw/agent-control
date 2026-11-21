@@ -72,5 +72,13 @@
       "usd": 0.5282174000000001,
       "session_id": "3077a0de-3c85-4cd3-b1ff-9c0e2d072b55"
     }
+  ],
+  "tests_changed": [
+    {
+      "test": "test_regression_fixer.QuickStageUnits.test_undeclared_quick_leaves_the_regression_as_before",
+      "ticket": "109",
+      "acceptance": "7. Every result file that `_verify` writes (green, red, env, unmeasured) has the key `flaky` - a list, [] when no case passed on a rerun",
+      "round": 1
+    }
   ]
 }
