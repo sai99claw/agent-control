@@ -251,6 +251,109 @@ class RoundsAndFeedback(LoopCase):
         self.assertFalse(self.main_has("impl_1.txt"))
 
 
+class T100Acceptance(LoopCase):
+    """Ticket #100: a round that ended on a merge conflict with the group's target or on a
+    cases_wrong revision is free; the issuer stops for rounds after devloop.max_rounds rounds that
+    were not free or 2 x max_rounds rounds in all, and the stuck page tallies real and free rounds."""
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[name]
+
+    # ------------------------------------------------------------ acceptance 5: free_rounds
+
+    @staticmethod
+    def rs(n):
+        return {"event": "round start", "round": n}
+
+    @staticmethod
+    def fb(n, free):
+        h = {"event": "feedback", "round": n}
+        if free is not None:
+            h["free"] = free
+        return h
+
+    def free_rounds(self, t):
+        import ticket_issuer
+        self.assertTrue(hasattr(ticket_issuer, "free_rounds"), "ticket_issuer.free_rounds is missing")
+        return ticket_issuer.free_rounds(t)
+
+    def test_5_free_rounds_counts_free_feedback_events_since_the_last_round_one(self):
+        rs, fb = self.rs, self.fb
+        cases = [
+            ({"round": 3, "history": [rs(1), fb(1, "merge"), rs(2), fb(2, "revision"), rs(3), fb(3, None)]},
+             {"merge": 1, "revision": 1}),
+            ({"round": 1, "history": [rs(1), fb(1, "merge"), rs(2), fb(2, "merge"),
+                                      {"event": "user decision: ready"}, rs(1), fb(1, "revision")]},
+             {"merge": 0, "revision": 1}),
+            ({"round": 0, "history": [rs(1), fb(1, "merge"), rs(2), fb(2, "merge"),
+                                      {"event": "user decision: ready"}]},
+             {"merge": 0, "revision": 0}),
+            ({"round": 1, "history": [{"event": "round start"}, {"event": "feedback", "round": 1}]},
+             {"merge": 0, "revision": 0}),
+            ({}, {"merge": 0, "revision": 0}),
+        ]
+        for t, want in cases:
+            with self.subTest(t=t):
+                self.assertEqual(self.free_rounds(t), want)
+
+    # ------------------------------------------------------------ end to end (acceptance 1, 2, 8-10)
+
+    def run_loop(self):
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        return self.snap()
+
+    def decision_texts(self, snap, ident):
+        return [row.get("text") or "" for row in snap.inbox.values()
+                if row["kind"] == "decision" and row["ref"] == str(ident)]
+
+    @staticmethod
+    def feedback_events(t):
+        return [h for h in t.get("history") or [] if h.get("event") == "feedback"]
+
+    def test_8_two_tickets_of_a_group_on_the_same_file_one_lands_the_other_gets_free_merge_rounds(self):
+        self.config(max_rounds=1)
+        self.add(1)
+        self.add(2)
+        self.plan(worker={"1": ["shared"], "2": ["shared"]})
+        snap = self.run_loop()
+        states = {i: snap.ticket(i)["state"] for i in ("1", "2")}
+        landed = [i for i, s in states.items() if s == "landed"]
+        stuck = [i for i, s in states.items() if s == "stuck"]
+        self.assertEqual((len(landed), len(stuck)), (1, 1), states)
+        t = snap.ticket(stuck[0])
+        self.assertEqual((t["stuck"]["reason"], t["round"]), ("rounds", 2), t.get("history"))
+        fed = self.feedback_events(t)
+        self.assertEqual([h.get("free") for h in fed], ["merge", "merge"], fed)
+        texts = self.decision_texts(snap, stuck[0])
+        want = "2 rounds used and still not passing (0 real red, 2 free: 2 merge conflict, 0 revision)"
+        self.assertTrue(any(want in x for x in texts), texts)
+
+    def test_9_a_cases_wrong_revision_round_is_free_and_the_ticket_lands_in_round_two(self):
+        self.config(max_rounds=1)
+        self.add(1)
+        self.plan(worker={"1": ["revise", "ok"]}, creator={"1": ["revised"]})
+        t = self.run_loop().ticket("1")
+        self.assertEqual((t["state"], t["round"]), ("landed", 2), t.get("history"))
+        r1 = [h for h in self.feedback_events(t) if h.get("round") == 1]
+        self.assertEqual(len(r1), 1, t.get("history"))
+        self.assertEqual(r1[0].get("free"), "revision", r1)
+
+    def test_10_a_free_revision_round_then_a_real_red_is_stuck_at_round_two(self):
+        self.config(max_rounds=1)
+        self.add(1)
+        self.plan(worker={"1": ["revise", "wrong"]}, creator={"1": ["revised"]})
+        snap = self.run_loop()
+        t = snap.ticket("1")
+        self.assertEqual(t["state"], "stuck", t.get("history"))
+        self.assertEqual((t["stuck"]["reason"], t["round"]), ("rounds", 2), t.get("history"))
+        texts = self.decision_texts(snap, 1)
+        want = "2 rounds used and still not passing (1 real red, 1 free: 0 merge conflict, 1 revision)"
+        self.assertTrue(any(want in x for x in texts), texts)
+
+
 class T62Acceptance(LoopCase):
     """hard_block counts only the ticket's own change, not what was merged in from main."""
 
