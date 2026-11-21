@@ -1,0 +1,17 @@
+{
+  "id": "g3",
+  "branch": "int/g3",
+  "base": "7250ebb46371ae290af58883d418f0e84f507e51",
+  "state": "open",
+  "alone": false,
+  "members": [],
+  "fix_round": 0,
+  "job": null,
+  "created": "2026-11-21T19:06:08Z",
+  "history": [
+    {
+      "at": "2026-11-21T19:06:08Z",
+      "event": "opened from main 7250ebb46371"
+    }
+  ]
+}
