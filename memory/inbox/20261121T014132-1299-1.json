@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "Dispatch places a ticket through Controller.group_for, which repeats the dependency rule of Controller.joinable; advance_groups uses joinable only. A rule about who may join a group must hold in both.",
+  "source": "request (opener)",
+  "at": "2026-11-21T01:41:31Z"
+}

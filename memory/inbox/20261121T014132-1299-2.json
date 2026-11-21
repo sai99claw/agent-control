@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "Pool has no Config: anything Pool.report should do with project settings must be handed in by core.config.pool_for, the only place devloop builds a pool.",
+  "source": "request (opener)",
+  "at": "2026-11-21T01:41:31Z"
+}
