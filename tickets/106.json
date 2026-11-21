@@ -1,0 +1,62 @@
+{
+  "title": "The release-failed page names the last stage and the last 15 lines of the release log",
+  "objective": "A failed release's page shows the last 'devloop-stage:' step the release printed and the last 15 lines of its log, read through one shared core module that the board uses too.",
+  "outline": "New devloop/core/logtail.py (code moved out of board.py, not new logic). board.py: import it; keep live_log_lines, live_tail (= the last LIVE_TAIL_LINES = 20 lines) and live_release_step as thin aliases so its callers and tests stay as they are; touch board.py only around lines 405-455 (another ticket of this hand-in edits act_problem near line 2211). devloop/core/release.py: one function that builds the block from the log path and the failure text's first line (for example failure_text(log, first)), used by ticket_controller.Controller.land's release-failed page (where rel_text goes today) and by tickets.py cmd_release's failed page. In ticket_controller.py touch only that page text (another ticket edits joinable/group_for). The stderr line of tickets.py release may stay as is. No README change (README line 317 already describes devloop-stage lines).",
+  "test_plan": "Verifier: acceptance 2-6 in one new class T<id>Acceptance in tests_devloop/test_devloop.py placed directly after class T21Acceptance (before class T22Acceptance). Land one ticket with a failing release set by self.config(release=...) (see T21Acceptance.land) and read the decision page about g1; for 4 use a release printing lines without any stage line (e.g. echo A; echo B; exit 2); for 5 land with a failing release, then run self.run_py('tickets.py', 'release', 'g1') with the release still failing and read the newest decision page about g1; expected lines come from the fixture's own script. For 2: assert devloop/core/logtail.py exists, then scan devloop/*.py and devloop/core/*.py for the literal (spell it in pieces in the test, e.g. 'devloop-' + 'stage:') and assert only core/logtail.py has it. Strip every DEVLOOP_* variable from self.env in setUp. Implementer's own unit tests (placed directly after class ReleaseKeptOutput, before the unittest.TestCase class LiveRecordUnits near line 17092): logtail.lines / tail / stage on a missing, an empty, a short and a >1 MiB log, and the board aliases.",
+  "notes": "Measured on f50b578 with the release of acceptance 6: the landing page is the header, 'rc 3', then the whole log (devloop-stage: build, L01 ... L30, devloop-stage: upload, U1, U2), and the tickets.py re-run page carries the same tail. Existing cases that read these pages or helpers and keep passing unchanged: T21Acceptance (the page names the release_log path), ReleaseRerun (a re-run page contains 'timeout' and 'rc '), ReleaseFails (options ack then release), BoardLiveTab.test_tail_keeps_the_last_twenty_lines_and_step_reads_the_last_mark (board.live_tail and board.live_release_step). The page claims nothing about production or deployment (request): a project's release script prints that itself.",
+  "acceptance": [
+    "A new module devloop/core/logtail.py holds what board.py has today as LIVE_TAIL_BYTES, LIVE_STAGE_MARK, live_log_lines and live_release_step, plus a tail with a line count: lines(path), tail(path, count) (the last `count` lines joined with '\\n'; '' when the path is None or unreadable) and stage(path) (the stripped text after 'devloop-stage:' on the last line that starts with it; None when there is none).",
+    "board.py reads logs only through it: live_log_lines, live_tail (still the last 20 lines) and live_release_step keep their names and results, and the literal 'devloop-stage:' appears in no file devloop/*.py or devloop/core/*.py other than devloop/core/logtail.py.",
+    "The controller's release-failed page text is the header as today ('group <gid> is in <main> (<sha12>) but the release failed - not retried, not rolled back (release log: <path>):') followed by exactly these lines and nothing else: the first line of release.run's failure text ('rc <N>', 'rc <N> (timeout)' or the error sentence), 'last step: <stage>', 'last 15 lines of the release log:', then the log's last 15 lines.",
+    "When the log has no 'devloop-stage:' line, the step line is 'last step: (none printed)'.",
+    "A failed `tickets.py release <gid>` writes its page with its header as today ('group <gid> (<sha12>): the re-run release failed - not retried, not rolled back (release log: <path>):') followed by the same block; both pages build the block with one function.",
+    "With the release command `echo 'devloop-stage: build'; i=1; while [ $i -le 30 ]; do printf 'L%02d\\n' $i; i=$((i+1)); done; echo 'devloop-stage: upload'; echo U1; echo U2 >&2; exit 3`, the landing page's lines after the header are 'rc 3', 'last step: upload', 'last 15 lines of the release log:', 'L19' ... 'L30', 'devloop-stage: upload', 'U1', 'U2', and the text contains no 'L18'."
+  ],
+  "needs_verifier": true,
+  "complexity": "simple",
+  "token_estimate": 2000000,
+  "token_basis": "move ~30 lines into a new core module, one block builder, two page texts; verifier: 4 end-to-end cases of ~1.5 s (measured the same fixture at 1.5 s) and one source scan. Includes cache reads. No per-ticket token rows survive (the pool restarted at #100), so this is inferred from docs/HANDOFF.md dollar totals (g16+g17: 13 tickets ~37 USD; g18+g19: 3 tickets ~18.6 USD), i.e. roughly 3-6 USD per ticket; every agent that opens tests_devloop/test_devloop.py (19k lines) pays for the part it reads.",
+  "vision": "VISION metrics 等我處理的事積了多少 (down) and 每張票需要我介入幾次 (down): the page says where the release stopped, so the user can act without opening the log (inferred).",
+  "removes": "the second copy of the log tail / stage reading (board and release pages) and the 2000-character raw log dump in the release-failed page",
+  "id": "106",
+  "state": "ready",
+  "round": 0,
+  "created": "2026-11-21T01:41:34Z",
+  "request": "# Rounds count only real reds; pages that reach the user; quota words; small board fixes\n\nReported by T (the tabby project) after weeks on devloop; the main session checked each against the code at f50b578 and asked a second model to judge the designs for simplicity. No new role, no new state; one optional config key (devloop.notify). Read docs/DECISIONS.md (do not edit it).\n\n1. A round counts only when the code was red (T measured: #137, #282, #286, #287 stuck ~20 h; read here). Today a round that ends because merging the latest int/gN into t/N conflicts (ticket_issuer.integrate, the \"merge it yourself\" feedback) or because a cases_wrong revision threw out the verifier's cases (THROWN_OUT) costs one of max_rounds. Rule: those two exits mark their feedback event free (e.g. free=true on the event); the round loop counts rounds minus free rounds against max_rounds, with a hard cap of 2 x max_rounds rounds in total; t.round keeps counting every round (logs and prompts use it). A red after taking in the target (cases fail) still counts. The next round's worker resolves the conflict as today (no merge agent). The stuck page says how many of its rounds were real reds and how many were free (merge conflict / revision), counted from those events.\n\n2. devloop.notify (optional string, default null): a shell command run from pool.report (one place) for each new decision, env or idle page, detached, output appended to <worktrees>/runs/notify.log, failure ignored, never blocking the caller; the page's kind, subject and first line in env vars (DEVLOOP_PAGE_KIND, DEVLOOP_PAGE_SUBJECT, DEVLOOP_PAGE_TEXT) and its file path in DEVLOOP_PAGE. Documented with a macOS notification example and a phone push example. actl doctor checks its type. Purpose: pages waited 11-20 h because no main session was open.\n\n3. Quota words (measured here: _says_quota returns False for '429 ... usage_limit_reached' and 'rate_limit_error'). Normalise '_' to ' ' in the text before matching QUOTA_SIGNS, and use the same normalised text in _excerpt. Do not add '429' as a sign (logs hold many 429s). Test with those two strings.\n\n4. Opener out of quota (T measured twice: the page said no valid tickets). The opener runs in the foreground of `actl new`, so it must not wait hours for a reset. When its run's cost row says out of quota, do not try a second attempt; the page and stdout say: out of quota, the excerpt and the reset time if readable, send the request again after it.\n\n5. joinable(): a ticket with a landed dependency may join an open group only when main is an ancestor of the group's branch (one git call); otherwise it waits (follow_main leaves a branch without main when merging main conflicted). Test with a group whose main merge conflicted.\n\n6. Board: the 知道了 (ack) action with text in the box is refused by act_problem with a line telling to use 照我的話改 / 帶著我的話重驗 instead (today the text is silently dropped).\n\n7. Release-failed page: name the last 'devloop-stage:' step the release printed and the last ~15 lines of its log. Move the board's live_release_step / live_tail helpers to a shared core module used by the board, ticket_controller's release page and tickets.py release, instead of writing them twice. The page claims nothing about production; a project's release script prints that itself.\n",
+  "feedback": [],
+  "cases": null,
+  "history": [
+    {
+      "at": "2026-11-21T01:41:34Z",
+      "event": "opened"
+    }
+  ],
+  "cost": [
+    {
+      "role": "creator",
+      "model": "opus",
+      "effort": "xhigh",
+      "command": "claude",
+      "round": null,
+      "seconds": 155.15714285714284,
+      "at": "2026-11-21T01:41:31Z",
+      "outcome": "tickets",
+      "run_dir": "/home/user/agent-control-devloop/runs/creator/2026-11-21T012325Z-a1",
+      "input_tokens": 25,
+      "output_tokens": 16367,
+      "cache_read_tokens": 2291535,
+      "cache_write_tokens": 44872,
+      "usd": 1.1447368285714281,
+      "session_id": "13cc0e36-0d5c-44ed-9bbb-d6b77728a1b5",
+      "split_over": [
+        "100",
+        "101",
+        "102",
+        "103",
+        "104",
+        "105",
+        "106"
+      ]
+    }
+  ]
+}

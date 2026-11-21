@@ -1,4 +1,32 @@
 {
-  "tickets": {},
-  "first_ticket_id": 100
+  "tickets": {
+    "100": {
+      "depends_on": [],
+      "verify": "together"
+    },
+    "101": {
+      "depends_on": [],
+      "verify": "together"
+    },
+    "102": {
+      "depends_on": [],
+      "verify": "together"
+    },
+    "103": {
+      "depends_on": [],
+      "verify": "together"
+    },
+    "104": {
+      "depends_on": [],
+      "verify": "together"
+    },
+    "105": {
+      "depends_on": [],
+      "verify": "together"
+    },
+    "106": {
+      "depends_on": [],
+      "verify": "together"
+    }
+  }
 }

@@ -1,0 +1,65 @@
+{
+  "title": "devloop.notify runs a command for every new decision, env or idle page",
+  "objective": "When devloop.notify is set, every new decision, env or idle page starts that shell command once, detached, with the page's kind, subject, first line and file path in its environment.",
+  "outline": "devloop/core/config.py: DEFAULTS 'notify': None and its type check next to worktree_setup's; pool_for passes the command, cfg.root and the log path to Pool (for example Pool(..., notify=(command, root, log_path))). devloop/core/pool.py: Pool.__init__ keeps it (default None, so the tests' direct Pool(...) stay silent); report() starts it after self.update(...) returned, inside try/except (osx.OSFailure, OSError): pass, and never waits for it. Every pool in devloop is built by pool_for (controller, issuer, auto_fixer, ticket_creator, tickets.py, memory_keeper), so that one place reaches all of them. scripts/project_config.py doctor_rows: one row next to the devloop.release check, not a SCHEMA row (SCHEMA types have no null, and type_errors also runs for `actl check`). devloop/README.md: a new paragraph after the devloop.no_reverify_paths paragraph; do not edit the long settings line (line 48).",
+  "test_plan": "Verifier: acceptance 1-7 and 9 in one new class T<id>Acceptance in tests_devloop/test_devloop.py placed directly after class PoolRules (before class StuckCategoryHelpers); acceptance 8 (the value 5 -> error row) in tests/test_project_config.py in a new class placed directly after class A3Doctor (before class DoctorHardBlockDirsSilence), using ConfigSandbox (self.edit_conf(devloop={'release': 'sh x', 'notify': 5}), self.actl('doctor')). For 2-4: set the key with LoopCase.config(notify=...), build pool_for(Config(self.proj)) in the test process and patch core.osx.spawn with a mock whose side effect records argv, cwd, env, log_path and whether env['DEVLOOP_PAGE'] exists at call time; report a text 'first line\\nsecond line' with ref '5'. For 5 and 6 use the real spawn and wait on a condition (the log holds the text) in a loop bounded to 10 s, never a bare sleep; the 'sleep 30' child is left to exit by itself. For 7 use LoopCase.controller(); strip every DEVLOOP_* variable from self.env and os.environ in setUp (as FollowMainUnits.setUp does). For 9 read devloop/README.md for the four variable names, 'notify.log', 'osascript' and 'ntfy'. Implementer's own unit tests (placed directly after class GitRules, before class HardBlockOwnChange): the absent case of 4 and the null / string cases of 8.",
+  "notes": "Measured on f50b578: doctor_rows gives no row for {'devloop': {'release': 'x', 'notify': 5}} and Config(root) accepts that value silently. This repo's hard_block patterns ('os\\.kill', 'killpg', 'pkill', 'kill -') match every added line of the branch, tests and comments included: do not write them anywhere. So no test stops the 'sleep 30' child: it exits on its own. tests/test_no_project_names.py scans every tracked file, .md included: no absolute home path in the README examples or tests. The first line of a stuck page may change with another ticket of this hand-in (a round tally is added), so acceptance 7 matches only the prefix. Purpose (from the request): pages waited 11-20 h because no main session was open.",
+  "acceptance": [
+    "devloop/core/config.py: DEFAULTS gains 'notify': None; Config(root) raises osx.OSFailure whose message contains 'devloop.notify' when the value is present and neither null nor a non-empty string (5, '', ['x']).",
+    "pool_for(cfg).report(kind, ref, text, ...) with kind 'decision', 'env' or 'idle' and devloop.notify set calls core.osx.spawn exactly once, after the page file is written, as osx.spawn(['sh', '-c', <notify>], cwd=<cfg.root>, env=<dict>, log_path=<cfg.worktree_root>/runs/notify.log); the runs folder is created when missing.",
+    "That env is os.environ plus DEVLOOP_PAGE_KIND=<kind>, DEVLOOP_PAGE_SUBJECT=<ref as text>, DEVLOOP_PAGE_TEXT=<first line of the page text as stored>, DEVLOOP_PAGE=<absolute path of <pool>/inbox/<name>.json, name = what report returns>; that file exists when spawn is called.",
+    "report() of kind 'created', 'landed' or 'cancelled', and any report when devloop.notify is null or absent, calls no spawn.",
+    "A notify that fails never fails the caller: report returns the page name when osx.spawn raises osx.OSFailure and when the command exits non-zero; with notify 'sleep 30' report returns within 15 s.",
+    "The command's stdout and stderr are appended to <worktrees>/runs/notify.log: after two pages with commands printing 'one' and 'two' (the second on stderr, exit 3) the log holds both.",
+    "End to end: with devloop.notify appending \"$DEVLOOP_PAGE_KIND|$DEVLOOP_PAGE_SUBJECT|$DEVLOOP_PAGE_TEXT\" as one line to a file, a controller run with max_rounds 1 and worker plan ['wrong'] for ticket 1 leaves in that file a line starting 'decision|1|#1 is stuck (rounds)' (written from the issuer's process) and a line starting 'idle|controller|'.",
+    "`actl doctor` (scripts/project_config.py doctor_rows) gives an error row containing 'devloop.notify' when devloop.notify is present and neither null nor a non-empty string, and no row about it for null, absent or a string.",
+    "devloop/README.md documents devloop.notify (default null): which pages run it, the variables DEVLOOP_PAGE_KIND, DEVLOOP_PAGE_SUBJECT, DEVLOOP_PAGE_TEXT and DEVLOOP_PAGE, that it runs detached with its output in <worktrees>/runs/notify.log and failures ignored, a macOS notification example with osascript and a phone push example with ntfy.sh, both reading the variables quoted."
+  ],
+  "needs_verifier": true,
+  "complexity": "simple",
+  "token_estimate": 2500000,
+  "token_basis": "four small product edits (config.py, pool.py, project_config.py, README paragraph); verifier: about 8 cases in two test modules, one end to end (~2 s). Includes cache reads. No per-ticket token rows survive (the pool restarted at #100), so this is inferred from docs/HANDOFF.md dollar totals (g16+g17: 13 tickets ~37 USD; g18+g19: 3 tickets ~18.6 USD), i.e. roughly 3-6 USD per ticket; every agent that opens tests_devloop/test_devloop.py (19k lines) pays for the part it reads.",
+  "vision": "VISION metric 等我處理的事積了多少 (down): at T pages waited 11-20 h because no main session was open; a push brings that to minutes for a user who sets it (inferred). It also serves 看板與統計: the page reaches the user without extra agent work.",
+  "removes": "the manual step of keeping a main session open just to see new pages; no gate is added (the key is optional and off by default)",
+  "id": "101",
+  "state": "ready",
+  "round": 0,
+  "created": "2026-11-21T01:41:34Z",
+  "request": "# Rounds count only real reds; pages that reach the user; quota words; small board fixes\n\nReported by T (the tabby project) after weeks on devloop; the main session checked each against the code at f50b578 and asked a second model to judge the designs for simplicity. No new role, no new state; one optional config key (devloop.notify). Read docs/DECISIONS.md (do not edit it).\n\n1. A round counts only when the code was red (T measured: #137, #282, #286, #287 stuck ~20 h; read here). Today a round that ends because merging the latest int/gN into t/N conflicts (ticket_issuer.integrate, the \"merge it yourself\" feedback) or because a cases_wrong revision threw out the verifier's cases (THROWN_OUT) costs one of max_rounds. Rule: those two exits mark their feedback event free (e.g. free=true on the event); the round loop counts rounds minus free rounds against max_rounds, with a hard cap of 2 x max_rounds rounds in total; t.round keeps counting every round (logs and prompts use it). A red after taking in the target (cases fail) still counts. The next round's worker resolves the conflict as today (no merge agent). The stuck page says how many of its rounds were real reds and how many were free (merge conflict / revision), counted from those events.\n\n2. devloop.notify (optional string, default null): a shell command run from pool.report (one place) for each new decision, env or idle page, detached, output appended to <worktrees>/runs/notify.log, failure ignored, never blocking the caller; the page's kind, subject and first line in env vars (DEVLOOP_PAGE_KIND, DEVLOOP_PAGE_SUBJECT, DEVLOOP_PAGE_TEXT) and its file path in DEVLOOP_PAGE. Documented with a macOS notification example and a phone push example. actl doctor checks its type. Purpose: pages waited 11-20 h because no main session was open.\n\n3. Quota words (measured here: _says_quota returns False for '429 ... usage_limit_reached' and 'rate_limit_error'). Normalise '_' to ' ' in the text before matching QUOTA_SIGNS, and use the same normalised text in _excerpt. Do not add '429' as a sign (logs hold many 429s). Test with those two strings.\n\n4. Opener out of quota (T measured twice: the page said no valid tickets). The opener runs in the foreground of `actl new`, so it must not wait hours for a reset. When its run's cost row says out of quota, do not try a second attempt; the page and stdout say: out of quota, the excerpt and the reset time if readable, send the request again after it.\n\n5. joinable(): a ticket with a landed dependency may join an open group only when main is an ancestor of the group's branch (one git call); otherwise it waits (follow_main leaves a branch without main when merging main conflicted). Test with a group whose main merge conflicted.\n\n6. Board: the 知道了 (ack) action with text in the box is refused by act_problem with a line telling to use 照我的話改 / 帶著我的話重驗 instead (today the text is silently dropped).\n\n7. Release-failed page: name the last 'devloop-stage:' step the release printed and the last ~15 lines of its log. Move the board's live_release_step / live_tail helpers to a shared core module used by the board, ticket_controller's release page and tickets.py release, instead of writing them twice. The page claims nothing about production; a project's release script prints that itself.\n",
+  "feedback": [],
+  "cases": null,
+  "history": [
+    {
+      "at": "2026-11-21T01:41:34Z",
+      "event": "opened"
+    }
+  ],
+  "cost": [
+    {
+      "role": "creator",
+      "model": "opus",
+      "effort": "xhigh",
+      "command": "claude",
+      "round": null,
+      "seconds": 155.15714285714284,
+      "at": "2026-11-21T01:41:31Z",
+      "outcome": "tickets",
+      "run_dir": "/home/user/agent-control-devloop/runs/creator/2026-11-21T012325Z-a1",
+      "input_tokens": 25,
+      "output_tokens": 16367,
+      "cache_read_tokens": 2291535,
+      "cache_write_tokens": 44872,
+      "usd": 1.1447368285714281,
+      "session_id": "13cc0e36-0d5c-44ed-9bbb-d6b77728a1b5",
+      "split_over": [
+        "100",
+        "101",
+        "102",
+        "103",
+        "104",
+        "105",
+        "106"
+      ]
+    }
+  ]
+}

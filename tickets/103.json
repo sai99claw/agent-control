@@ -1,0 +1,62 @@
+{
+  "title": "An out-of-quota opener says so and stops after one attempt",
+  "objective": "When the opener's run is out of quota, `actl new` makes no second attempt and its page and stdout say out of quota, the CLI's excerpt, the reset time when readable, and to send the request again after it.",
+  "outline": "devloop/ticket_creator.py _open_tickets only: right after hand = agents.run(...) and rows.append, when (hand.cost or {}).get('outcome') == 'out of quota': text, at = agents._log_tail(hand.log); excerpt = agents._excerpt(text); reset = agents.quota_reset(text, at) formatted with time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(reset)); pool.report('decision', 'request', <text>, request=request[:2000], cost=rows, **pages.ask(<question>, [pages.option('ack', ...)], ...)); print the text; return 1. The opener passes no on_quota, so it never waits for a reset; keep it that way (it runs in the foreground of `actl new`). _revise is out of scope.",
+  "test_plan": "Verifier: acceptance 1-5 in one new class T<id>Acceptance in tests_devloop/test_devloop.py placed directly after class OpenerCostRows (before class CasesThrownOut). Drive it like QuotaWaitUnits.test_the_opener_does_not_wait: self.plan(creator={'*': ['quota']}), self.env['FAKE_QUOTA_TEXT'] = <text>, res = self.run_py('ticket_creator.py', '--request', 'x'). Count creator runs from the fake agent's counter file os.path.join(os.path.dirname(self.plan_path), 'count-creator--') or from the run folders <self.tmp>/wt/runs/creator/*; the expected reset text comes from time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(1900000000)) in the test, not from agents.quota_reset. Strip every DEVLOOP_* variable from self.env in setUp. Implementer's own unit test (placed directly after class AgentChains, before class T31Acceptance): acceptance 6.",
+  "notes": "Measured on f50b578 (fake creator 'quota', FAKE_QUOTA_TEXT 'Claude AI usage limit reached|1900000000'): rc 1, stdout empty, the counter file holds 2, run folders ...-a1 and ...-a2, one decision page 'the opener could not produce valid tickets:\\n- creator exited (rc 1) without writing result.json; log: ...' with two cost rows of outcome 'out of quota'. QuotaWaitUnits.test_the_opener_does_not_wait must keep passing unchanged (same rc as a run without a hand-in, under 60 s). Another ticket of this hand-in teaches _says_quota / _excerpt underscored words in core/agents.py; this ticket only calls them, and both fixtures above are read as quota by today's code.",
+  "acceptance": [
+    "ticket_creator.py --request: when an attempt's agent cost row has outcome 'out of quota', no further attempt starts (the creator agent runs once in total) and the script exits 1.",
+    "It writes exactly one page: kind 'decision', ref 'request', with request (first 2000 characters) and cost (the attempt rows) like today's invalid-tickets page, one 'ack' option, and the text 'the opener is out of quota; nothing was opened:\\n<excerpt>\\n<when>' where <excerpt> is agents._excerpt of the run's log tail and <when> is 'the limit resets at <YYYY-MM-DDTHH:MM:SSZ in UTC>: send the request again after that time with `actl new --request`' when agents.quota_reset reads a reset, else 'the reset time could not be read from the message: send the request again once the limit has reset, with `actl new --request`'.",
+    "The same text is printed on stdout.",
+    "With FAKE_QUOTA_TEXT 'Claude AI usage limit reached|1900000000', the page text and stdout contain 'out of quota', 'Claude AI usage limit reached|1900000000' and '2030-03-17T17:46:40Z'.",
+    "With FAKE_QUOTA_TEXT 'Error: usage limit reached', the page text and stdout contain 'out of quota' and 'the reset time could not be read'.",
+    "An attempt that fails for any other reason still gets the second attempt and today's 'the opener could not produce valid tickets' page (unchanged)."
+  ],
+  "needs_verifier": true,
+  "complexity": "simple",
+  "token_estimate": 1800000,
+  "token_basis": "one branch in _open_tickets (~20 lines); verifier: 2 end-to-end cases of under 1 s each. Includes cache reads. No per-ticket token rows survive (the pool restarted at #100), so this is inferred from docs/HANDOFF.md dollar totals (g16+g17: 13 tickets ~37 USD; g18+g19: 3 tickets ~18.6 USD), i.e. roughly 3-6 USD per ticket; every agent that opens tests_devloop/test_devloop.py (19k lines) pays for the part it reads.",
+  "vision": "VISION metric 每張票需要我介入幾次 (down): T got 'no valid tickets' twice when the opener was out of quota and had to find the cause; the page now says what happened and when to send it again.",
+  "removes": "the second opener attempt after an attempt that is out of quota",
+  "id": "103",
+  "state": "ready",
+  "round": 0,
+  "created": "2026-11-21T01:41:34Z",
+  "request": "# Rounds count only real reds; pages that reach the user; quota words; small board fixes\n\nReported by T (the tabby project) after weeks on devloop; the main session checked each against the code at f50b578 and asked a second model to judge the designs for simplicity. No new role, no new state; one optional config key (devloop.notify). Read docs/DECISIONS.md (do not edit it).\n\n1. A round counts only when the code was red (T measured: #137, #282, #286, #287 stuck ~20 h; read here). Today a round that ends because merging the latest int/gN into t/N conflicts (ticket_issuer.integrate, the \"merge it yourself\" feedback) or because a cases_wrong revision threw out the verifier's cases (THROWN_OUT) costs one of max_rounds. Rule: those two exits mark their feedback event free (e.g. free=true on the event); the round loop counts rounds minus free rounds against max_rounds, with a hard cap of 2 x max_rounds rounds in total; t.round keeps counting every round (logs and prompts use it). A red after taking in the target (cases fail) still counts. The next round's worker resolves the conflict as today (no merge agent). The stuck page says how many of its rounds were real reds and how many were free (merge conflict / revision), counted from those events.\n\n2. devloop.notify (optional string, default null): a shell command run from pool.report (one place) for each new decision, env or idle page, detached, output appended to <worktrees>/runs/notify.log, failure ignored, never blocking the caller; the page's kind, subject and first line in env vars (DEVLOOP_PAGE_KIND, DEVLOOP_PAGE_SUBJECT, DEVLOOP_PAGE_TEXT) and its file path in DEVLOOP_PAGE. Documented with a macOS notification example and a phone push example. actl doctor checks its type. Purpose: pages waited 11-20 h because no main session was open.\n\n3. Quota words (measured here: _says_quota returns False for '429 ... usage_limit_reached' and 'rate_limit_error'). Normalise '_' to ' ' in the text before matching QUOTA_SIGNS, and use the same normalised text in _excerpt. Do not add '429' as a sign (logs hold many 429s). Test with those two strings.\n\n4. Opener out of quota (T measured twice: the page said no valid tickets). The opener runs in the foreground of `actl new`, so it must not wait hours for a reset. When its run's cost row says out of quota, do not try a second attempt; the page and stdout say: out of quota, the excerpt and the reset time if readable, send the request again after it.\n\n5. joinable(): a ticket with a landed dependency may join an open group only when main is an ancestor of the group's branch (one git call); otherwise it waits (follow_main leaves a branch without main when merging main conflicted). Test with a group whose main merge conflicted.\n\n6. Board: the 知道了 (ack) action with text in the box is refused by act_problem with a line telling to use 照我的話改 / 帶著我的話重驗 instead (today the text is silently dropped).\n\n7. Release-failed page: name the last 'devloop-stage:' step the release printed and the last ~15 lines of its log. Move the board's live_release_step / live_tail helpers to a shared core module used by the board, ticket_controller's release page and tickets.py release, instead of writing them twice. The page claims nothing about production; a project's release script prints that itself.\n",
+  "feedback": [],
+  "cases": null,
+  "history": [
+    {
+      "at": "2026-11-21T01:41:34Z",
+      "event": "opened"
+    }
+  ],
+  "cost": [
+    {
+      "role": "creator",
+      "model": "opus",
+      "effort": "xhigh",
+      "command": "claude",
+      "round": null,
+      "seconds": 155.15714285714284,
+      "at": "2026-11-21T01:41:31Z",
+      "outcome": "tickets",
+      "run_dir": "/home/user/agent-control-devloop/runs/creator/2026-11-21T012325Z-a1",
+      "input_tokens": 25,
+      "output_tokens": 16367,
+      "cache_read_tokens": 2291535,
+      "cache_write_tokens": 44872,
+      "usd": 1.1447368285714281,
+      "session_id": "13cc0e36-0d5c-44ed-9bbb-d6b77728a1b5",
+      "split_over": [
+        "100",
+        "101",
+        "102",
+        "103",
+        "104",
+        "105",
+        "106"
+      ]
+    }
+  ]
+}

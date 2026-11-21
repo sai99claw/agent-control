@@ -1,0 +1,60 @@
+{
+  "title": "Underscored usage-limit messages count as quota",
+  "objective": "An agent log that says usage_limit_reached or rate_limit_error is read as out of quota, and its quota excerpt is that line.",
+  "outline": "devloop/core/agents.py only: _says_quota uses low = text.lower().replace('_', ' '); _excerpt finds its hits in the same normalised text and cuts the line out of the original text at the same positions (the replacement keeps the length), so the excerpt keeps the CLI's own words. quota_reset and QUOTA_SIGNS stay as they are.",
+  "test_plan": "No verifier (a two-line change; the red-before values are measured below). The implementer writes the cases for acceptance 1-4 in tests_devloop/test_devloop.py in a new class placed directly after class QuotaResetCodexUnits (before class T73Acceptance). For 4: the fake agent's 'quota' action prints $FAKE_QUOTA_TEXT and exits 1 (tests_devloop/fake_agent.py); QuotaWaitUnits shows how one agent is run (copy its helpers, do not subclass it - that re-runs its cases). Keep the quota strings in fixture constants, never in assertion messages or printed output: an agent's log that carries its own test output would otherwise read as out of quota. Mutations to run once by hand: drop the replacement in _says_quota -> 1 and 4 red; drop it in _excerpt only -> 2 red.",
+  "notes": "Measured on f50b578: _says_quota is False for both strings of acceptance 1; _excerpt returns 'noise\\nAPI Error: 429 usage_limit_reached\\nbye' and 'noise\\n{\"type\":\"rate_limit_error\"}\\nbye' for the inputs of acceptance 2 (no sign found, so the tail comes back). Why not '429' as a sign: logs hold many 429s that are not quota (request). Why the excerpt keeps the original text: it is what the user reads on the page and the waiting mark. Existing cases that keep passing unchanged: QuotaWaitUnits.test_a_readable_reset_alone_says_quota and test_excerpt_is_the_quota_line_at_most_200_chars.",
+  "acceptance": [
+    "core/agents.py _says_quota(log) is True for a log whose only quota-like line is 'API Error: 429 {\"type\":\"error\",\"error\":{\"type\":\"usage_limit_reached\",\"message\":\"x\"}}', and for a log whose only quota-like line is '{\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"x\"}}'.",
+    "_excerpt('noise\\nAPI Error: 429 usage_limit_reached\\nbye\\n') == 'API Error: 429 usage_limit_reached' and _excerpt('noise\\n{\"type\":\"rate_limit_error\"}\\nbye\\n') == '{\"type\":\"rate_limit_error\"}' (the line as the CLI wrote it, underscores kept).",
+    "Both functions match QUOTA_SIGNS against the lower-cased text with every '_' replaced by ' '; QUOTA_SIGNS is unchanged and has no '429': a log whose only suspicious text is 'HTTP 429' or 'status 429, retrying' is not quota.",
+    "An agent run (agents.run) whose last command prints the usage_limit_reached line of acceptance 1 and exits 1 without a hand-in gets cost outcome 'out of quota'."
+  ],
+  "needs_verifier": false,
+  "complexity": "simple",
+  "token_estimate": 1000000,
+  "token_basis": "one function pair in agents.py (2-4 lines), 4 short cases, no verifier. Includes cache reads. No per-ticket token rows survive (the pool restarted at #100), so this is inferred from docs/HANDOFF.md dollar totals (g16+g17: 13 tickets ~37 USD; g18+g19: 3 tickets ~18.6 USD), i.e. roughly 3-6 USD per ticket; every agent that opens tests_devloop/test_devloop.py (19k lines) pays for the part it reads.",
+  "vision": "VISION metrics 每張落地票的 token 與時間 (down) and 每張票需要我介入幾次 (down): a quota hit that is not recognised ends the run as 'no hand-in', costing a round or a stuck ticket instead of a wait for the reset (inferred from agents.Pending._finish).",
+  "removes": "none: it fixes what an existing check reads; no gate or rule is added and QUOTA_SIGNS stays the same list",
+  "id": "102",
+  "state": "ready",
+  "round": 0,
+  "created": "2026-11-21T01:41:34Z",
+  "request": "# Rounds count only real reds; pages that reach the user; quota words; small board fixes\n\nReported by T (the tabby project) after weeks on devloop; the main session checked each against the code at f50b578 and asked a second model to judge the designs for simplicity. No new role, no new state; one optional config key (devloop.notify). Read docs/DECISIONS.md (do not edit it).\n\n1. A round counts only when the code was red (T measured: #137, #282, #286, #287 stuck ~20 h; read here). Today a round that ends because merging the latest int/gN into t/N conflicts (ticket_issuer.integrate, the \"merge it yourself\" feedback) or because a cases_wrong revision threw out the verifier's cases (THROWN_OUT) costs one of max_rounds. Rule: those two exits mark their feedback event free (e.g. free=true on the event); the round loop counts rounds minus free rounds against max_rounds, with a hard cap of 2 x max_rounds rounds in total; t.round keeps counting every round (logs and prompts use it). A red after taking in the target (cases fail) still counts. The next round's worker resolves the conflict as today (no merge agent). The stuck page says how many of its rounds were real reds and how many were free (merge conflict / revision), counted from those events.\n\n2. devloop.notify (optional string, default null): a shell command run from pool.report (one place) for each new decision, env or idle page, detached, output appended to <worktrees>/runs/notify.log, failure ignored, never blocking the caller; the page's kind, subject and first line in env vars (DEVLOOP_PAGE_KIND, DEVLOOP_PAGE_SUBJECT, DEVLOOP_PAGE_TEXT) and its file path in DEVLOOP_PAGE. Documented with a macOS notification example and a phone push example. actl doctor checks its type. Purpose: pages waited 11-20 h because no main session was open.\n\n3. Quota words (measured here: _says_quota returns False for '429 ... usage_limit_reached' and 'rate_limit_error'). Normalise '_' to ' ' in the text before matching QUOTA_SIGNS, and use the same normalised text in _excerpt. Do not add '429' as a sign (logs hold many 429s). Test with those two strings.\n\n4. Opener out of quota (T measured twice: the page said no valid tickets). The opener runs in the foreground of `actl new`, so it must not wait hours for a reset. When its run's cost row says out of quota, do not try a second attempt; the page and stdout say: out of quota, the excerpt and the reset time if readable, send the request again after it.\n\n5. joinable(): a ticket with a landed dependency may join an open group only when main is an ancestor of the group's branch (one git call); otherwise it waits (follow_main leaves a branch without main when merging main conflicted). Test with a group whose main merge conflicted.\n\n6. Board: the 知道了 (ack) action with text in the box is refused by act_problem with a line telling to use 照我的話改 / 帶著我的話重驗 instead (today the text is silently dropped).\n\n7. Release-failed page: name the last 'devloop-stage:' step the release printed and the last ~15 lines of its log. Move the board's live_release_step / live_tail helpers to a shared core module used by the board, ticket_controller's release page and tickets.py release, instead of writing them twice. The page claims nothing about production; a project's release script prints that itself.\n",
+  "feedback": [],
+  "cases": null,
+  "history": [
+    {
+      "at": "2026-11-21T01:41:34Z",
+      "event": "opened"
+    }
+  ],
+  "cost": [
+    {
+      "role": "creator",
+      "model": "opus",
+      "effort": "xhigh",
+      "command": "claude",
+      "round": null,
+      "seconds": 155.15714285714284,
+      "at": "2026-11-21T01:41:31Z",
+      "outcome": "tickets",
+      "run_dir": "/home/user/agent-control-devloop/runs/creator/2026-11-21T012325Z-a1",
+      "input_tokens": 25,
+      "output_tokens": 16367,
+      "cache_read_tokens": 2291535,
+      "cache_write_tokens": 44872,
+      "usd": 1.1447368285714281,
+      "session_id": "13cc0e36-0d5c-44ed-9bbb-d6b77728a1b5",
+      "split_over": [
+        "100",
+        "101",
+        "102",
+        "103",
+        "104",
+        "105",
+        "106"
+      ]
+    }
+  ]
+}
