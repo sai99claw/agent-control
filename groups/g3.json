@@ -53,5 +53,24 @@
   "last_regression": "1 failing:\n- test_regression_fixer.QuickStageUnits.test_undeclared_quick_leaves_the_regression_as_before AssertionError ",
   "fix_report": "/home/user/agent-control-devloop/runs/regression/g3/result-1795288619.json",
   "fix_agent_round": 1,
-  "fix_start_sha": "404bef57fbbf395b3834cbba7918b089d7f62320"
+  "fix_start_sha": "404bef57fbbf395b3834cbba7918b089d7f62320",
+  "cost": [
+    {
+      "role": "fixer",
+      "model": "opus",
+      "effort": "medium",
+      "command": "claude",
+      "round": null,
+      "seconds": 784.3,
+      "at": "2026-11-21T19:35:50Z",
+      "outcome": "done",
+      "run_dir": "/home/user/agent-control-devloop/runs/fix/g3/r1",
+      "input_tokens": 18,
+      "output_tokens": 2773,
+      "cache_read_tokens": 471162,
+      "cache_write_tokens": 10125,
+      "usd": 0.5282174000000001,
+      "session_id": "3077a0de-3c85-4cd3-b1ff-9c0e2d072b55"
+    }
+  ]
 }
