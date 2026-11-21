@@ -3211,6 +3211,83 @@ class OpenerCostRows(LoopCase):
         snap = self.snap()
         self.assertEqual([snap.ticket(i).get("cost") for i in ("1", "2")], [None, None])
 
+class T103Acceptance(LoopCase):
+    """#103: an out-of-quota opener makes one attempt, exits 1, and its one page and stdout say out of
+    quota, the CLI's excerpt and the reset time (verifier's acceptance cases 1-5)."""
+
+    HEAD = "the opener is out of quota; nothing was opened:\n"
+    LATER = ("the reset time could not be read from the message: send the request again once the limit "
+             "has reset, with `actl new --request`")
+
+    def setUp(self):
+        super().setUp()
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(k)
+
+    def open_out_of_quota(self, quota_text):
+        self.plan(creator={"*": ["quota"]})
+        self.env["FAKE_QUOTA_TEXT"] = quota_text
+        res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
+        counter = os.path.join(os.path.dirname(self.plan_path), "count-creator--")
+        with open(counter) as fh:
+            runs = int(fh.read())
+        folders = sorted(glob.glob(os.path.join(self.tmp, "wt", "runs", "creator", "*")))
+        pages_ = [row for row in self.snap().inbox.values()]
+        return res, runs, folders, pages_
+
+    def excerpt(self, folders):
+        from core import agents
+        self.assertTrue(hasattr(agents, "_excerpt") and hasattr(agents, "_log_tail"))
+        text, _ = agents._log_tail(os.path.join(folders[0], "agent-1.log"))
+        return agents._excerpt(text)
+
+    def check(self, quota_text, when, must_contain):
+        res, runs, folders, pages_ = self.open_out_of_quota(quota_text)
+        out = res.stdout + res.stderr
+        # acceptance 1: one attempt in total, exit 1
+        self.assertEqual(runs, 1, out)
+        self.assertEqual(len(folders), 1, folders)
+        self.assertEqual(res.returncode, 1, out)
+        # acceptance 2: exactly one page, decision/request, request + cost rows, one 'ack' option
+        self.assertEqual(len(pages_), 1, pages_)
+        page = pages_[0]
+        self.assertEqual((page.get("kind"), page.get("ref")), ("decision", "request"))
+        self.assertEqual(page.get("request"), "x")
+        self.assertEqual([(r.get("role"), r.get("outcome")) for r in page.get("cost") or []],
+                         [("creator", "out of quota")])
+        self.assertEqual([o.get("action") for o in page.get("options") or []], ["ack"])
+        expected = self.HEAD + self.excerpt(folders) + "\n" + when
+        self.assertEqual(page.get("text"), expected)
+        for piece in must_contain:
+            self.assertIn(piece, page.get("text"))
+        # acceptance 3: the same text on stdout
+        self.assertIn(expected, res.stdout)
+        for piece in must_contain:
+            self.assertIn(piece, res.stdout)
+
+    def test_epoch_message_gives_one_attempt_and_the_reset_time(self):
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(1900000000))
+        self.assertEqual(stamp, "2030-03-17T17:46:40Z")
+        when = ("the limit resets at %s: send the request again after that time with `actl new --request`"
+                % stamp)
+        self.check("Claude AI usage limit reached|1900000000", when,
+                   ["out of quota", "Claude AI usage limit reached|1900000000", stamp])
+
+    def test_unreadable_reset_says_it_could_not_be_read(self):
+        self.check("Error: usage limit reached", self.LATER,
+                   ["out of quota", "the reset time could not be read"])
+
+    def test_long_request_is_cut_to_2000_characters(self):
+        self.plan(creator={"*": ["quota"]})
+        self.env["FAKE_QUOTA_TEXT"] = "Error: usage limit reached"
+        request = "".join(chr(97 + i % 26) for i in range(2500))
+        res = self.run_py("ticket_creator.py", "--request", request, timeout=120)
+        pages_ = list(self.snap().inbox.values())
+        self.assertEqual(len(pages_), 1, pages_)
+        self.assertIn("out of quota", pages_[0].get("text", ""), res.stdout + res.stderr)
+        self.assertEqual(pages_[0].get("request"), request[:2000])
+
+
 class CasesThrownOut(LoopCase):
     def test_a_cases_wrong_revision_after_the_last_round_start_throws_out_the_cases(self):
         import ticket_issuer
