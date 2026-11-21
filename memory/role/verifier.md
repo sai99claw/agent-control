@@ -11,6 +11,9 @@ Principles learned while doing this role. Rules for the job are in the prompt; t
 - Never make a timing-dependent case pass with a sleep, a retry loop or a longer timeout alone; wait on a condition that is false while the thing is broken.
 - In a polling loop, build the failure message only after deciding to fail; computing it eagerly from a blocking read of the child's output evaluates the read every iteration and hangs until the child exits (#22).
 - Subclassing another acceptance class to borrow its helpers also inherits and re-runs its cases; share helpers without inheriting the class (#65).
+- Put the cases where the feature's own tests live, or in a new file for the feature; never append to a catch-all file that every ticket extends. Tickets of one group that all add to the end of the same file conflict on every merge, and a huge file makes every agent that opens it pay to read it. Shared setup goes in a helper module the cases import.
+- Each case stands alone: it makes its own data, server and port, leaves nothing behind, and passes or fails the same when run alone by its id or in any order.
+- Each case is quick. Start what it needs once per class, not per assertion; drive the slow end-to-end path once per behaviour and check the rest at the cheapest layer that still fails when the thing is broken. A slow case means fewer runs per round and a slower regression for every group.
 - You own the oracle. A wrong oracle or fixture is yours to fix; the worker must not weaken assertions to pass. You do not touch product code, do not delete existing cases and do not build a reference implementation to test against.
 - Green is the gate's job, not yours. Run only your own cases; running the whole suite is the same green bought twice.
 - When re-dispatched after a ticket revision, change only the cases the revision affects and leave the rest as they are (D-041).

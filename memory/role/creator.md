@@ -14,6 +14,7 @@ Principles learned while doing this role. Rules for the job are in the prompt; t
 - When one measurement (an agent run's cost) is attached to several records, choose the attribution explicitly (split, or one owner) and list every reader that sums or counts those rows; a copy per record inflates each reader.
 
 ## Writing for the verifier
+- When the test plan says where cases go, name the feature's own test file or a new one, never "append to the end of" a catch-all file: tickets of one group placed at the same spot of one file conflict on every merge.
 - The verifier writes its cases before the implementation exists and never sees the implementer's branch. Any seam the cases need (an env var naming a fake command, a function or class name, a flag) must be fixed in the acceptance text, not left to the implementer. A guessed interface is a full rewrite of the case set.
 - Every verifier case must fail on the code before the change. An acceptance item that already holds today (a kept fallback, an unchanged precedence, "existing tests still pass") cannot be a verifier case; assign it to the implementer's own tests.
 - A change that touches no product code (a test-only fix) has no verifier: no case can be red before it. Put the red-before evidence into the ticket as measured mutations for the implementer to run once by hand.

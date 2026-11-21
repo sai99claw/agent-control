@@ -279,7 +279,9 @@ class Snapshot:
     def next_ticket_id(self):
         nums = [int(k) for k in self.tickets if re.fullmatch(r"\d+", k)]
         nums += [int(k) for k in self.dag if re.fullmatch(r"\d+", k)]
-        return str(max(nums) + 1 if nums else 1)
+        floor = self.raw["dag"].get("first_ticket_id")   # a pool restarted after a loss skips the old numbers
+        floor = floor if isinstance(floor, int) and not isinstance(floor, bool) and floor > 0 else 1
+        return str(max(max(nums) + 1 if nums else 1, floor))
 
     def next_group_id(self):
         nums = [int(k[1:]) for k in self.groups if re.fullmatch(r"g\d+", k)]

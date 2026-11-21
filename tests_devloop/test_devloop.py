@@ -12426,6 +12426,22 @@ class T39Acceptance(LoopCase):
                 self.assertEqual(html.unescape(cells[heads.index("原因")]).strip(), want)
 
 
+class FirstTicketId(unittest.TestCase):
+    """dag.json's first_ticket_id: a pool restarted after a loss starts its numbers there."""
+
+    def test_floor_applies_until_higher_numbers_exist(self):
+        from core.pool import Snapshot
+
+        def snap(dag, tickets=()):
+            return Snapshot({"dag": dag, "tickets": {i: {} for i in tickets}, "groups": {}})
+        self.assertEqual(snap({"tickets": {}}).next_ticket_id(), "1")
+        self.assertEqual(snap({"tickets": {}, "first_ticket_id": 100}).next_ticket_id(), "100")
+        self.assertEqual(snap({"tickets": {}, "first_ticket_id": 100}, ["100", "101"]).next_ticket_id(), "102")
+        self.assertEqual(snap({"tickets": {}, "first_ticket_id": 100}, ["150"]).next_ticket_id(), "151")
+        for bad in (0, -5, "100", True, None):
+            self.assertEqual(snap({"tickets": {}, "first_ticket_id": bad}).next_ticket_id(), "1")
+
+
 class PoolRules(GitIsolatedCase):
     def setUp(self):
         super().setUp()

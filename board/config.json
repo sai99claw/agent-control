@@ -125,6 +125,7 @@
   },
   "devloop": {
     "memory": "memory",
+    "pool_branch": "pool/agent-control",
     "release": "sh scripts/release.sh",
     "required_fields": {
       "vision": "which item of docs/VISION.md and which of its four metrics this ticket improves, and roughly by how much",
