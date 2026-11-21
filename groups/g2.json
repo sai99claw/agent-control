@@ -2,7 +2,7 @@
   "id": "g2",
   "branch": "int/g2",
   "base": "261eb162bd567621d600b7211148a39f460bd8b9",
-  "state": "pr",
+  "state": "verified",
   "alone": true,
   "members": [
     "107"
@@ -50,6 +50,10 @@
     {
       "at": "2026-11-21T03:30:56Z",
       "event": "regression green"
+    },
+    {
+      "at": "2026-11-21T03:30:58Z",
+      "event": "regression green"
     }
   ],
   "last_regression": "green",
@@ -75,5 +79,6 @@
       "session_id": "254416e1-b74c-4c1f-b485-a8c8a9046bdd"
     }
   ],
-  "fix_end_sha": "0b5330f3f9784afa7bc17fc80b674a773d34c519"
+  "fix_end_sha": "0b5330f3f9784afa7bc17fc80b674a773d34c519",
+  "verified_sha": "0b5330f3f9784afa7bc17fc80b674a773d34c519"
 }
