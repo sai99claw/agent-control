@@ -111,6 +111,27 @@ def idle_lines(snap):
     return out
 
 
+def flaky_line(g):
+    """The page line naming every id of the group's flaky events once (first appearance first),
+    or "" when its history holds none."""
+    seen = {}
+    for row in g.get("history") or []:
+        if str(row.get("event") or "").startswith("flaky:"):
+            for item in row.get("flaky") or []:
+                if isinstance(item, dict) and item.get("id") not in seen:
+                    seen[item.get("id")] = item.get("message")
+    if not seen:
+        return ""
+    return "flaky (passed when run again): " + "; ".join(
+        str(ident) + ("" if msg is None else " (%s)" % _first_line(str(msg)))
+        for ident, msg in seen.items())
+
+
+def with_flaky(text, g):
+    line = flaky_line(g)
+    return text + "\n" + line if line else text
+
+
 def release_ask(gid, main, sha12):
     return pages.ask(
         "%s is in %s (%s) but its release failed: leave it for now, or run the release again?" % (gid, main, sha12),
@@ -391,6 +412,14 @@ class Controller:
         except osx.OSFailure:
             report = {}
         status = report.get("status") or "unmeasured"
+        flaky = report.get("flaky") if isinstance(report.get("flaky"), list) else []
+        if flaky:
+            def note(tx):
+                grp = tx.data.groups[gid]
+                event(grp, "flaky: %s passed when run again" % ", ".join(
+                    str(f.get("id") if isinstance(f, dict) else f) for f in flaky), flaky=flaky)
+                tx.put_group(grp)
+            self.pool.update(note, "group %s: flaky" % gid)
         g = self.set_group(gid, None, "regression %s" % status, job=None,
                            last_regression=report.get("summary"))
         if status == "green":
@@ -418,8 +447,8 @@ class Controller:
             return
         if rnd >= self.cfg.max_rounds:
             self.set_group(gid, "stuck", "red after %d fix rounds" % rnd)
-            self.pool.report("decision", gid, "group %s is still red after %d fix rounds:\n%s" % (
-                gid, rnd, report.get("summary")), **self.red_ask(gid, rnd))
+            self.pool.report("decision", gid, with_flaky("group %s is still red after %d fix rounds:\n%s" % (
+                gid, rnd, report.get("summary")), g), **self.red_ask(gid, rnd))
             return
         self.start_fixer(gid, job["out"], rnd + 1)
 
@@ -474,9 +503,9 @@ class Controller:
             self.start_fixer(gid, base_path, rnd + 1)
             return True
         self.set_group(gid, "stuck", "red after %d fix rounds" % rnd)
-        self.pool.report("decision", gid, "group %s is still red after %d fix rounds; the last round made it "
+        self.pool.report("decision", gid, with_flaky("group %s is still red after %d fix rounds; the last round made it "
                          "redder (%d -> %d failing) and was dropped (%s):\n%s" % (
-                             gid, rnd, before, after, ref, base.get("summary")), **self.red_ask(gid, rnd))
+                             gid, rnd, before, after, ref, base.get("summary")), g), **self.red_ask(gid, rnd))
         return True
 
     def after_fixer(self, gid, rc):
@@ -599,12 +628,13 @@ class Controller:
         self.pool.update(change, "group %s landed" % gid)
         self.repo.remove_worktree(os.path.join(self.cfg.worktree_root, "fix-" + gid))
         if released:
-            self.pool.report("landed", gid, "group %s landed and released: #%s (%s); release log: %s" % (
-                gid, ", #".join(ids), sha[:12], rel_log))
+            self.pool.report("landed", gid, with_flaky("group %s landed and released: #%s (%s); release log: %s" % (
+                gid, ", #".join(ids), sha[:12], rel_log), snap.groups.get(gid) or g))
         else:
-            self.pool.report("decision", gid, "group %s is in %s (%s) but the release failed - "
+            self.pool.report("decision", gid, with_flaky("group %s is in %s (%s) but the release failed - "
                              "not retried, not rolled back (release log: %s):\n%s" % (
-                                 gid, main, sha[:12], rel_log, release.failure_text(rel_log, rel_text)), **release_ask(gid, main, sha[:12]))
+                                 gid, main, sha[:12], rel_log, release.failure_text(rel_log, rel_text)),
+                             snap.groups.get(gid) or g), **release_ask(gid, main, sha[:12]))
 
     def main_moved_files(self, sha, main_sha):
         """Files main changed since it parted from the verified sha, or None if git cannot say."""

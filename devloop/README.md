@@ -16,6 +16,8 @@ ticket_issuer.py
   2 x max_rounds rounds in all)
   worker thinks the ticket is wrong -> it runs ticket_creator.py --revise itself
 group complete (= one PR, a local mark) -> regression.py (preflight + quick, if declared + full suite)
+  quick or full red with 1-5 failing cases -> those ids run once more (`run <ids>`); the ones that
+    pass are flaky: not red, named in the report's `flaky` and on the group's pages
   red -> auto_fixer.py on the integration branch (max 3 rounds) -> regression again
   green -> main fast-forwards to the branch, the project's release script runs
 ```
@@ -208,7 +210,18 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
   unmeasured) quick ends the regression with a summary starting `quick: ` and full does not run;
   undeclared it is a built-in no-op. `run <id>...` must accept every id that `full` or `quick`
   reports in result.json, because the issuer re-runs the verifier's cases by id (red check, case
-  runs). The verifier writes its cases into existing test modules of the layer that covers the
+  runs) and the regression reruns a red stage's failing ids.
+- Flaky cases (#109): when quick or full ends red with 1 to 5 failing rows, the regression runs exactly
+  those ids once more (one `run <ids>`, same worktree and slot, within the time left; logs in
+  `runs/regression/<branch>/<stage>-rerun`). An id is flaky when that rerun answered (rc 0 or 1) and
+  every row of it or nested under it passed. All flaky: the stage is green (a flaky quick goes on to
+  full); some still red: red with only those in failures and summary, so the fixer sees only them.
+  6 or more failing rows, or a rerun that cannot answer (rc 86 / 2): no rerun effect. Every report
+  has `flaky` ([{"id", "message"}], [] when none); the controller writes a `flaky:` group event for
+  a non-empty one, and the landed page, the release-failed page and both "still red after N fix
+  rounds" pages end with `flaky (passed when run again): <id> (<message>); ...`. The rerun is the
+  gate's one second look, not a fix: agents still must not hide a flaky test with sleeps or
+  retries in the test. The verifier writes its cases into existing test modules of the layer that covers the
   change, never one new file per ticket.
 - `index_path` (default `CODE-MAP.md`): a code index generated from the code and committed onto
   the integration branch just before main moves. Agents read it before searching.

@@ -1892,6 +1892,117 @@ class T73Acceptance(LoopCase):
         self.assertEqual([p["kind"] for p in pages], ["env"], pages)
 
 
+class FlakyRerunUnits(LoopCase):
+    """#109 implementer's unit tests: the rerun classification rule (regression.passed_again and
+    second_look with a stubbed testrun.run), flaky_line, and the drop_redder_round page."""
+
+    def setUp(self):
+        super().setUp()
+        keys = [k for k in os.environ if k.startswith("DEVLOOP_")]
+        for key in keys + [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key, None)
+        patch = mock.patch.dict(os.environ, {k: v for k, v in os.environ.items() if k not in keys}, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_a_nested_id_is_flaky_only_when_every_nested_row_passes(self):
+        import regression
+        self.assertTrue(regression.passed_again("m.C", [{"id": "m.C.t1", "status": "pass"},
+                                                        {"id": "m.Cx", "status": "fail"}]))
+        self.assertFalse(regression.passed_again("m.C", [{"id": "m.C.t1", "status": "pass"},
+                                                         {"id": "m.C.t2", "status": "fail"}]))
+        self.assertFalse(regression.passed_again("m.C", [{"id": "m.C", "status": "skip"}]))
+        self.assertFalse(regression.passed_again("m.C", [{"id": "m.Cx", "status": "pass"}]))
+        self.assertFalse(regression.passed_again("m.C", []))
+
+    def second_look(self, failures, again):
+        import regression
+        from core import testrun
+        calls = []
+
+        def fake_run(cfg, tree, command, ids=(), timeout=None, keep_dir=None):
+            calls.append((command, list(ids), timeout, keep_dir))
+            return again
+        first = testrun.Outcome(testrun.RED, failures=failures, log_dir="/l/full", rows=failures)
+        with mock.patch.object(testrun, "run", fake_run):
+            out, flaky = regression.second_look(None, "/tree", "/l", "full", first, time.time() + 100)
+        return calls, out, flaky
+
+    def test_second_look_keeps_only_the_still_red_rows(self):
+        from core import testrun
+        rows = [{"id": "a", "status": "fail", "message": "boom\nmore"}, {"id": "b", "status": "error"}]
+        again = testrun.Outcome(testrun.RED, rows=[{"id": "a", "status": "pass"}, {"id": "b", "status": "skip"}])
+        calls, out, flaky = self.second_look(rows, again)
+        self.assertEqual([c[:2] for c in calls], [("run", ["a", "b"])])
+        self.assertEqual(calls[0][3], "/l/full-rerun")
+        self.assertTrue(0 < calls[0][2] <= 100)
+        self.assertEqual((out.status, out.failures, out.log_dir), (testrun.RED, [rows[1]], "/l/full"))
+        self.assertEqual(flaky, [{"id": "a", "message": "boom\nmore"}])
+
+    def test_second_look_all_flaky_is_green(self):
+        from core import testrun
+        rows = [{"id": "a", "status": "fail"}]
+        _, out, flaky = self.second_look(rows, testrun.Outcome(testrun.GREEN, rows=[{"id": "a", "status": "pass"}]))
+        self.assertEqual((out.status, out.failures), (testrun.GREEN, []))
+        self.assertEqual(flaky, [{"id": "a", "message": None}])
+
+    def test_second_look_changes_nothing_without_an_answer_or_past_the_limit(self):
+        from core import testrun
+        one = [{"id": "a", "status": "fail"}]
+        for status in (testrun.ENV, testrun.UNMEASURED):
+            calls, out, flaky = self.second_look(one, testrun.Outcome(status, rows=[{"id": "a", "status": "pass"}]))
+            self.assertEqual((len(calls), out.status, out.failures, flaky), (1, testrun.RED, one, []), status)
+        six = [{"id": c, "status": "fail"} for c in "abcdef"]
+        calls, out, flaky = self.second_look(six, testrun.Outcome(testrun.GREEN))
+        self.assertEqual((calls, out.failures, flaky), ([], six, []))
+
+    def test_flaky_line_lists_each_id_once_in_order_of_first_appearance(self):
+        import ticket_controller
+        g = {"history": [
+            {"event": "flaky: b", "flaky": [{"id": "b", "message": "x\ny"}, {"id": "a", "message": None}]},
+            {"event": "regression red"},
+            {"event": "flaky: a", "flaky": [{"id": "a", "message": "later"}, {"id": "c", "message": "m"}]}]}
+        self.assertEqual(ticket_controller.flaky_line(g), "flaky (passed when run again): b (x); a; c (m)")
+        self.assertEqual(ticket_controller.flaky_line({"history": [{"event": "regression red"}]}), "")
+        self.assertEqual(ticket_controller.with_flaky("text", {}), "text")
+
+    def test_the_dropped_round_page_ends_with_the_flaky_line(self):
+        import ticket_controller
+        from core.config import Config
+        self.config(max_rounds=1)
+        start = git(self.proj, "rev-parse", "main")
+        git(self.proj, "branch", "int/g1", "main")
+        tree = os.path.join(self.tmp, "c-worse")
+        git(self.proj, "worktree", "add", "-q", tree, "int/g1")
+        with open(os.path.join(tree, "impl_1.txt"), "w") as fh:
+            fh.write("bad\n")
+        git(tree, "add", "-A")
+        git(tree, "commit", "-q", "-m", "worse")
+        end = git(tree, "rev-parse", "HEAD")
+        git(self.proj, "worktree", "remove", "--force", tree)
+        paths = {}
+        for name, sha, failing, flaky in (("base", start, ["suite.red"], []),
+                                          ("after", end, ["suite.red", "impl.impl_1.txt"],
+                                           [{"id": "m.slow", "message": "first\nsecond"}])):
+            paths[name] = os.path.join(self.tmp, name + ".json")
+            with open(paths[name], "w") as fh:
+                json.dump({"status": "red", "sha": sha, "summary": "%d failing" % len(failing),
+                           "failures": [{"id": i, "status": "fail"} for i in failing], "flaky": flaky}, fh)
+        g = {"id": "g1", "branch": "int/g1", "state": "fixing", "members": [], "fix_round": 1,
+             "fix_agent_round": 1, "job": {"kind": "regression"}, "fix_report": paths["base"],
+             "fix_start_sha": start, "fix_end_sha": end}
+        self.pool.update(lambda tx: tx.put_group(g), "test: group g1")
+        ctl = ticket_controller.Controller(Config(self.proj), self.pool)
+        ctl.start_fixer = lambda *a: self.fail("no fixer at max_rounds")
+        ctl.after_regression("g1", {"kind": "regression", "out": paths["after"]}, 1)
+        pages_ = [p for p in self.snap().inbox.values() if p.get("kind") == "decision" and p.get("ref") == "g1"]
+        self.assertEqual(len(pages_), 1)
+        self.assertIn("refs/devloop/dropped/g1-r1", pages_[0]["text"])
+        self.assertEqual(pages_[0]["text"].splitlines()[-1], "flaky (passed when run again): m.slow (first)")
+        events = [h for h in self.snap().groups["g1"]["history"] if h["event"].startswith("flaky:")]
+        self.assertEqual([e["flaky"] for e in events], [[{"id": "m.slow", "message": "first\nsecond"}]])
+
+
 class FixAgentRoundUnits(LoopCase):
     """#73 implementer's unit tests: after_fixer when the fixer agent ran (fix_agent_round ==
     fix_round), start_fixer's fields, the fix_retry branch of advance_groups, the log tail and
