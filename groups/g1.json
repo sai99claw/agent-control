@@ -63,5 +63,24 @@
   "last_regression": "2 failing:\n- test_devloop.T57Acceptance.test_item4_key_ack AssertionError \n- test_devloop.T57Acceptance.test_item4_trusted_ack AssertionError ",
   "fix_report": "/home/user/agent-control-devloop/runs/regression/g1/result-1795226253.json",
   "fix_agent_round": 1,
-  "fix_start_sha": "5b6a3f01f228ced195bb8ae1297ddbd0c080f118"
+  "fix_start_sha": "5b6a3f01f228ced195bb8ae1297ddbd0c080f118",
+  "cost": [
+    {
+      "role": "fixer",
+      "model": "opus",
+      "effort": "medium",
+      "command": "claude",
+      "round": null,
+      "seconds": 102.9,
+      "at": "2026-11-21T02:12:22Z",
+      "outcome": "done",
+      "run_dir": "/home/user/agent-control-devloop/runs/fix/g1/r1",
+      "input_tokens": 38,
+      "output_tokens": 5562,
+      "cache_read_tokens": 1087912,
+      "cache_write_tokens": 35171,
+      "usd": 0.6103424000000001,
+      "session_id": "8f171ae0-5bab-4600-8862-5f94f11b350f"
+    }
+  ]
 }
