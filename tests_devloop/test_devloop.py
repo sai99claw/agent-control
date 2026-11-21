@@ -10630,6 +10630,7 @@ class BoardAckWithWords(LoopCase):
     """#105: an ack that carries text is refused with a line naming the two buttons that take words."""
 
     def test_ack_with_text_refused(self):
+        import board
         for subject, page, text in (("3", "p3", "please change acceptance 2"), ("g2", "p3", "x")):
             with self.subTest(subject=subject):
                 line = board.act_problem("ack", subject, page, text)
@@ -10639,6 +10640,7 @@ class BoardAckWithWords(LoopCase):
                 self.assertIn("帶著我的話重驗", line)
 
     def test_ack_without_text_still_fine(self):
+        import board
         self.assertIsNone(board.act_problem("ack", "3", "p3", ""))
         self.assertIsNone(board.act_problem("ack", "request", "preq", ""))
 
