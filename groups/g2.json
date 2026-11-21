@@ -2,7 +2,7 @@
   "id": "g2",
   "branch": "int/g2",
   "base": "261eb162bd567621d600b7211148a39f460bd8b9",
-  "state": "verified",
+  "state": "landed",
   "alone": true,
   "members": [
     "107"
@@ -58,6 +58,10 @@
     {
       "at": "2026-11-21T03:31:02Z",
       "event": "code map refreshed"
+    },
+    {
+      "at": "2026-11-21T03:31:07Z",
+      "event": "landed (release failed)"
     }
   ],
   "last_regression": "green",
@@ -84,5 +88,8 @@
     }
   ],
   "fix_end_sha": "0b5330f3f9784afa7bc17fc80b674a773d34c519",
-  "verified_sha": "5e3d09b52185086cde2f6c8a1f760b535ed683e8"
+  "verified_sha": "5e3d09b52185086cde2f6c8a1f760b535ed683e8",
+  "landed_sha": "5e3d09b52185086cde2f6c8a1f760b535ed683e8",
+  "release": "failed",
+  "release_log": "/home/user/agent-control-devloop/runs/release/g2.log"
 }
