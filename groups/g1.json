@@ -20,6 +20,11 @@
     {
       "at": "2026-11-21T01:41:41Z",
       "event": "opened from main f50b5782e57a"
+    },
+    {
+      "at": "2026-11-21T01:50:52Z",
+      "event": "main moved to 4d5f51f0e7d3: merged it into int/g1"
     }
-  ]
+  ],
+  "main_tried": "4d5f51f0e7d3b134f359233df396b9f2eafd102b"
 }
