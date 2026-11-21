@@ -1133,6 +1133,58 @@ class FakeTestsMainDuringFull(unittest.TestCase):
             self.assertFalse(os.path.exists(os.path.join(proj, "memory", "m.md")))
 
 
+class QuickStageUnits(LoopCase):
+    """#108 implementer units: the optional quick stage of the test interface and the regression."""
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(name, None)
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("DEVLOOP_")}
+        patch = mock.patch.dict(os.environ, clean, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.log = os.path.join(self.tmp, "intervals.txt")
+        self.env["FAKE_INTERVALS"] = self.log
+
+    def iface(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "testiface_quick_unit", os.path.join(HOME, "scripts", "testiface.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_quick_is_listed_with_the_other_commands(self):
+        mod = self.iface()
+        self.assertEqual(mod.COMMANDS.index("quick"), mod.COMMANDS.index("preflight") + 1)
+        self.assertIn("quick", mod.USAGE)
+        self.assertEqual(mod.DEFAULT_TIMEOUTS["quick"], 600)
+        self.assertEqual(mod.timeout_of({"timeout_seconds": {"quick": 42}}, "quick"), 42)
+        self.assertIsNone(mod.BUILTIN["quick"])
+        self.assertEqual(mod.command_string({}, "quick"), (None, False))
+        self.assertEqual(mod.command_string({"quick": "  "}, "quick"), (None, False))
+        self.assertEqual(mod.command_string({"quick": "x"}, "quick"), ("x", True))
+        os.environ.pop("AC_TEST_MODE", None)
+        self.assertEqual(mod.mode_of("quick", []), "quick")
+        self.assertEqual(mod.mode_of("full", []), "full")
+        self.assertEqual(mod.mode_of("run", ["a"]), "branch")
+
+    def test_undeclared_quick_leaves_the_regression_as_before(self):
+        git(self.proj, "branch", "int/g1", "main")
+        out = os.path.join(self.tmp, "r.json")
+        res = self.run_py("regression.py", "--branch", "int/g1", "--out", out)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        with open(self.log) as fh:
+            stages = [line.split()[1] for line in sorted(fh, key=lambda l: float(l.split()[2]))]
+        self.assertEqual(stages, ["preflight", "full"])
+        with open(out) as fh:
+            r = json.load(fh)
+        self.assertEqual(sorted(r), ["at", "failures", "logs", "sha", "status", "summary"])
+        self.assertEqual((r["status"], r["summary"], r["failures"]), ("green", "green", []))
+        self.assertTrue(r["logs"].endswith(os.sep + "full"), r["logs"])
+
+
 class TestLayerDocs(unittest.TestCase):
     ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -1146,7 +1198,7 @@ class TestLayerDocs(unittest.TestCase):
         self.assertTrue(bullet, "README lacks the 'devloop calls only' bullet")
         for w in ("tests.preflight", "tests.run", "tests.full", "every id", "result.json"):
             self.assertIn(w, bullet[0])
-        self.assertIn("(`tests.preflight`, `tests.run`, `tests.full`;", text)
+        self.assertIn("(`tests.preflight`, optional `tests.quick`, `tests.run`, `tests.full`;", text)
 
     def test_template_script(self):
         path = os.path.join(self.ROOT, "templates", "project-tests.example.sh")

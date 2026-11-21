@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""The project test interface: five commands, one result file (D-071 C6, `docs/design/
+"""The project test interface: six commands, one result file (D-071 C6, `docs/design/
 project-runnable-entries.md` §4 "How A invokes a command").
 
     python3 scripts/testiface.py [--suspect-file F] preflight
+    python3 scripts/testiface.py quick
     printf '%s\\n' scripts/event.py | python3 scripts/testiface.py select --mode branch
     python3 scripts/testiface.py select --mode base
     python3 scripts/testiface.py run test_event browser:safari:test_login
@@ -16,6 +17,8 @@ and nothing else; A knows *when* to test and *what to do with the result*, the p
 `AC_ROOT/board/config.json` — a shell string — or, when that key is null or absent, the built-in:
 
     preflight   rc 0 (nothing to check)
+    quick       rc 0 (nothing to check; optional: a fast subset regression runs between
+                preflight and full, so a red ends the regression before the full suite)
     select      python3 "$AC_HOME/scripts/adapter-unittest.py" select
     run / full  python3 "$AC_HOME/scripts/adapter-unittest.py" run / full
     regression  python3 "$AC_HOME/scripts/verify.py" --result "$AC_TEST_OUT/result.json"
@@ -38,10 +41,10 @@ stderr (the caller shows it). A reads decisions only from exit codes, `select`'s
 reason on stderr · 3 `select` / `regression` had nothing to select (the command's own rc 3).
 
 **Every "could not answer" is rc 2, never 0 and never 1** (§5.5): a timeout
-(`tests.timeout_seconds.<command>`, defaults 60/60/1800/3600/2700; a caller's `AC_TEST_TIMEOUT`
+(`tests.timeout_seconds.<command>`, defaults 60/600/60/1800/3600/2700; a caller's `AC_TEST_TIMEOUT`
 that is a smaller positive integer wins — verify-case passes `verify_case.timeout_seconds` that
 way, #163) is `unmeasured: timeout`;
-`select` rc 0 with empty stdout; `run`/`full`/`regression` whose `result.json` is missing,
+`select` rc 0 with empty stdout; `quick`/`run`/`full`/`regression` whose `result.json` is missing,
 invalid, `schema != 1`, has zero ids, ids other than the ones passed (`run`; a row id covers a
 passed id it equals or is nested under, as the adapter reports methods for a module id), a
 fail/error row under rc 0, no fail/error row under rc 1, rows under rc 0/1, or rc 86 with
@@ -65,10 +68,11 @@ import status  # noqa: E402  reports_dir, the D-019 row shape, ENV_SUSPECT_RC
 
 event = status.event
 
-COMMANDS = ("preflight", "select", "run", "full", "regression")
-DEFAULT_TIMEOUTS = {"preflight": 60, "select": 60, "run": 1800, "full": 3600, "regression": 2700}
+COMMANDS = ("preflight", "quick", "select", "run", "full", "regression")
+DEFAULT_TIMEOUTS = {"preflight": 60, "quick": 600, "select": 60, "run": 1800, "full": 3600, "regression": 2700}
 BUILTIN = {
     "preflight": None,
+    "quick": None,
     "select": 'python3 "$AC_HOME/scripts/adapter-unittest.py" select',
     "run": 'python3 "$AC_HOME/scripts/adapter-unittest.py" run',
     "full": 'python3 "$AC_HOME/scripts/adapter-unittest.py" full',
@@ -94,7 +98,7 @@ def tests_conf(root):
 
 
 def command_string(conf, command):
-    """`(shell string or None, declared?)` — `None` only for the built-in preflight."""
+    """`(shell string or None, declared?)` — `None` only for the built-in preflight / quick."""
     value = conf.get(command)
     if isinstance(value, str) and value.strip():
         return value, True
@@ -153,7 +157,7 @@ def mode_of(command, args):
         return os.environ["AC_TEST_MODE"]
     if command == "select" and "--mode" in args[:-1]:
         return args[args.index("--mode") + 1]
-    return "full" if command == "full" else "branch"
+    return command if command in ("full", "quick") else "branch"
 
 
 # ------------------------------------------------------------ running it
@@ -340,8 +344,8 @@ def main(argv):
         "AC_TEST_TIMEOUT": str(timeout),
     })
     if cmd is None:
-        with open(os.path.join(out, "preflight.log"), "w", encoding="utf-8") as handle:
-            handle.write("built-in preflight: nothing to check\n")
+        with open(os.path.join(out, "%s.log" % command), "w", encoding="utf-8") as handle:
+            handle.write("built-in %s: nothing to check\n" % command)
         return GREEN
     stdin_text = sys.stdin.read() if command == "select" else ""
     started = time.monotonic()

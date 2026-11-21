@@ -15,7 +15,7 @@ ticket_issuer.py
   merge conflict with the group or on a revision that threw out the cases does not count, at most
   2 x max_rounds rounds in all)
   worker thinks the ticket is wrong -> it runs ticket_creator.py --revise itself
-group complete (= one PR, a local mark) -> regression.py (preflight + full suite)
+group complete (= one PR, a local mark) -> regression.py (preflight + quick, if declared + full suite)
   red -> auto_fixer.py on the integration branch (max 3 rounds) -> regression again
   green -> main fast-forwards to the branch, the project's release script runs
 ```
@@ -52,7 +52,7 @@ Run them from the project (or set `AC_ROOT` to it).
 `remote` "origin" (null = do not push), `worktrees` (default `../<project>-devloop`),
 `agents.<role>` (the command that starts an agent; prompt on stdin),
 `memory` (D-088: the folder of the memory files; default `<pool>/memory`, a relative path is against the project root; see Memory).
-Tests run through the project's existing test interface (`tests.preflight`, `tests.run`, `tests.full`; `scripts/testiface.py`).
+Tests run through the project's existing test interface (`tests.preflight`, optional `tests.quick`, `tests.run`, `tests.full`; `scripts/testiface.py`).
 `hard_block.paths` / `patterns`: a ticket whose own change touches them stops before merging (what it merged in from main does not count).
 
 `devloop.no_reverify_paths` (D-090; default `["memory/", "docs/DECISIONS.md", "docs/HANDOFF.md"]`,
@@ -201,9 +201,12 @@ Defaults come from `DEFAULT_AGENTS` in `devloop/core/config.py` (override per pr
   assertion.
 - The worker runs the verifier's cases, its own unit tests and the base set (`devloop.base_tests`,
   default `tests.unittest.base`) before handing in; the full suite is the regression's.
-- devloop calls only `tests.preflight`, `tests.run` and `tests.full` (it does not use `select` or
-  `regression`). `full` is the regression and must run every layer the project has (unit tests, a
-  separate verification layer, every browser engine). `run <id>...` must accept every id that `full`
+- devloop calls only `tests.preflight`, the optional `tests.quick`, `tests.run` and `tests.full` (it
+  does not use `select` or `regression`). `full` is the regression and must run every layer the
+  project has (unit tests, a separate verification layer, every browser engine). `tests.quick`, when
+  declared, is a fast subset the regression runs between preflight and full: a red (or env /
+  unmeasured) quick ends the regression with a summary starting `quick: ` and full does not run;
+  undeclared it is a built-in no-op. `run <id>...` must accept every id that `full` or `quick`
   reports in result.json, because the issuer re-runs the verifier's cases by id (red check, case
   runs). The verifier writes its cases into existing test modules of the layer that covers the
   change, never one new file per ticket.
@@ -268,7 +271,7 @@ it (`core/inflight.py`). Every record has `kind` and `stamp` (devloop's liveness
 - `regression-<branch with / as ->.json` (`regression.py`, kind `regression`): `group` (the branch
   without its leading `int/`), `branch`, `sha` (of the branch when it started), `exclusive`
   (`devloop.regression_exclusive`), `stage` (`slot` waiting for a machine slot, `machine` an exclusive
-  regression waiting for the whole machine, `preflight`, `full`; without `machine_slots` it starts at
+  regression waiting for the whole machine, `preflight`, `quick`, `full`; without `machine_slots` it starts at
   `preflight`), `since` (when the stage began), `result` (the `--out` file). The stamp is the regression
   process. Removed when regression.py exits, whatever the code.
 - `fixer-<group>.json` (`auto_fixer.py`, kind `fixer`): `group`, `round` (the group's `fix_round` when it

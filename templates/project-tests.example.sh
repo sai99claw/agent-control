@@ -1,7 +1,9 @@
 #!/bin/sh
 # <project>/scripts/ac-tests.sh — every tests.* key in board/config.json points here.
-# devloop calls three commands: preflight, run and full. `full` is the regression and runs every
-# layer; `run` accepts every id `full` reports.
+# devloop calls three commands: preflight, run and full, plus the optional quick. `full` is the
+# regression and runs every layer; `quick` (optional tests.quick) is a fast subset the regression
+# runs between preflight and full, and a red quick ends it before full; `run` accepts every id
+# `full` or `quick` reports.
 # Template of the minimal command adapter (D-071 §4, docs/design/project-runnable-entries.md):
 # copy it into the project, replace the project knowledge (preflight probe, browser runner), keep the
 # contract. A runs each command as `sh -c "$cmd \"\$@\"" ac-test <args…>`
@@ -21,6 +23,9 @@ print(json.dumps([{"source": "declared", "engine": "host", "why": why, "count": 
                    "threshold": None, "log": None, "line": None}]))
 PY
     exit 86 ;;
+  quick)
+    # optional: a fast subset (seconds, not the full suite's minutes) so a red regression shows early
+    python3 "$AC_HOME/scripts/adapter-unittest.py" run test_core_fast ;;
   run)
     # unittest ids → A's adapter (reuse, do not rewrite); browser ids → the project's engine runner
     unit=""; browser=""

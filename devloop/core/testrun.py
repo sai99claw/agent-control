@@ -36,7 +36,7 @@ class Outcome:
 
 
 def run(cfg, code_root, command, ids=(), timeout=None, keep_dir=None):
-    """Run `preflight`, `run <ids>` or `full` on `code_root`."""
+    """Run `preflight`, `quick`, `run <ids>` or `full` on `code_root` (quick maps rc 0/1/86/2 as full does)."""
     out = keep_dir or tempfile.mkdtemp(prefix="devloop-test-")
     if keep_dir:
         shutil.rmtree(out, ignore_errors=True)

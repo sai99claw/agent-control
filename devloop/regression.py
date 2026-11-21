@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """regression --branch int/gK --out result.json : the one big verification of an integration branch.
 
-Started only by ticket_controller. Runs the project's `preflight`, then `full`, on a throwaway
-worktree at the branch head. An unusable environment is not red: it is reported as "env" and
-nobody is sent to fix code for it.
+Started only by ticket_controller. Runs the project's `preflight`, then `quick` (optional
+`tests.quick`; undeclared it is a built-in no-op), then `full`, on a throwaway worktree at the
+branch head. A red, env or unmeasured quick ends the regression there (summary "quick: …") and
+full does not run. An unusable environment is not red: it is reported as "env" and nobody is sent
+to fix code for it.
 
 Holds one machine slot (devloop.machine_slots) from before preflight until full has ended, or with
-devloop.regression_exclusive the whole machine (the gate and every slot); the wait counts against
-regression_timeout_seconds.
+devloop.regression_exclusive the whole machine (the gate and every slot); the wait, quick and full
+all count against regression_timeout_seconds.
 
 Exit: 0 green · 1 red · 86 environment not usable · 2 could not measure. The same outcome is
 written to --out as {"status", "sha", "summary", "failures"}.
@@ -60,12 +62,12 @@ def verify(cfg, branch, out_path):
                                   "failures": [], "at": osx.now()})
         return CODES[testrun.UNMEASURED]
     try:
-        return _verify(cfg, repo, branch, sha, out_path, cfg.regression_timeout_seconds - (time.time() - began))
+        return _verify(cfg, repo, branch, sha, out_path, began + cfg.regression_timeout_seconds)
     finally:
         slot.release()
 
 
-def _verify(cfg, repo, branch, sha, out_path, full_timeout):
+def _verify(cfg, repo, branch, sha, out_path, deadline):
     tree = os.path.join(cfg.worktree_root, "regression-" + branch.replace("/", "-"))
     try:
         worktrees.detached_tree(cfg, repo, tree, sha)
@@ -74,19 +76,27 @@ def _verify(cfg, repo, branch, sha, out_path, full_timeout):
                                   "failures": [], "at": osx.now()})
         return CODES[testrun.ENV]
     logs = cfg.runs_dir("regression", branch.replace("/", "-"))
+    summary = None
     try:
         put_live(cfg, branch, sha, out_path, "preflight")
         result = testrun.run(cfg, tree, "preflight", timeout=600,
                              keep_dir=os.path.join(logs, "preflight"))
-        if result.status == testrun.GREEN:
-            put_live(cfg, branch, sha, out_path, "full")
-            result = testrun.run(cfg, tree, "full", timeout=max(1, full_timeout),
-                                 keep_dir=os.path.join(logs, "full"))
-        elif result.status == testrun.RED:   # preflight has no "red": treat as environment
+        if result.status == testrun.RED:   # preflight has no "red": treat as environment
             result = testrun.Outcome(testrun.ENV, detail="preflight failed", log_dir=result.log_dir)
+        if result.status == testrun.GREEN:
+            put_live(cfg, branch, sha, out_path, "quick")
+            result = testrun.run(cfg, tree, "quick", timeout=max(1, deadline - time.time()),
+                                 keep_dir=os.path.join(logs, "quick"))
+            if result.status != testrun.GREEN:   # a red quick ends it before the full suite
+                summary = "quick: " + result.summary()
+            else:
+                put_live(cfg, branch, sha, out_path, "full")
+                result = testrun.run(cfg, tree, "full", timeout=max(1, deadline - time.time()),
+                                     keep_dir=os.path.join(logs, "full"))
     finally:
         repo.remove_worktree(tree)
-    osx.write_json(out_path, {"status": result.status, "sha": sha, "summary": result.summary(),
+    osx.write_json(out_path, {"status": result.status, "sha": sha,
+                              "summary": result.summary() if summary is None else summary,
                               "failures": result.failures, "logs": result.log_dir,
                               "at": osx.now()})
     return CODES[result.status]

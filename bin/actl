@@ -38,7 +38,7 @@ TABLE='actl [-C <project dir>] <command> [args…]
   check                              board/config.json is usable by this A: prints "ok <project root>"
   doctor migrate init                scripts/project_config.py (board/config.json version, schema, rows)
   version                            AC_HOME, ac_sha, AC_ROOT, AC_CODE_ROOT (works outside a project)
-  test <preflight|select|run|full|regression> [args…]
+  test <preflight|quick|select|run|full|regression> [args…]
                                      scripts/testiface.py (the declared tests.* command, or the built-in)'
 
 C_DIR=""
