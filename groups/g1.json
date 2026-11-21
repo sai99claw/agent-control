@@ -82,5 +82,13 @@
       "usd": 0.6103424000000001,
       "session_id": "8f171ae0-5bab-4600-8862-5f94f11b350f"
     }
+  ],
+  "tests_changed": [
+    {
+      "test": "test_devloop.T57Acceptance.test_item4_trusted_ack / test_item4_key_ack (check_ack)",
+      "ticket": "105",
+      "acceptance": "The served board answers such a POST act with status 400 and that line and starts no job (what the handler already does with every act_problem line).",
+      "round": 1
+    }
   ]
 }
