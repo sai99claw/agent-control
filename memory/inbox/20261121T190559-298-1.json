@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "tests/test_no_project_names.py forbids the earlier project's name in every non-.md file, code, tests, fixtures and comments included; a ticket built from that project's report must tell the implementer and verifier to refer to it generically.",
+  "source": "request (opener)",
+  "at": "2026-11-21T19:05:59Z"
+}
