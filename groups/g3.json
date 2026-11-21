@@ -2,13 +2,13 @@
   "id": "g3",
   "branch": "int/g3",
   "base": "7250ebb46371ae290af58883d418f0e84f507e51",
-  "state": "pr",
+  "state": "fixing",
   "alone": false,
   "members": [
     "108",
     "109"
   ],
-  "fix_round": 0,
+  "fix_round": 1,
   "job": null,
   "created": "2026-11-21T19:06:08Z",
   "history": [
@@ -27,7 +27,12 @@
     {
       "at": "2026-11-21T19:22:37Z",
       "event": "regression red"
+    },
+    {
+      "at": "2026-11-21T19:22:39Z",
+      "event": "fix round 1"
     }
   ],
-  "last_regression": "1 failing:\n- test_regression_fixer.QuickStageUnits.test_undeclared_quick_leaves_the_regression_as_before AssertionError "
+  "last_regression": "1 failing:\n- test_regression_fixer.QuickStageUnits.test_undeclared_quick_leaves_the_regression_as_before AssertionError ",
+  "fix_report": "/home/user/agent-control-devloop/runs/regression/g3/result-1795288619.json"
 }
