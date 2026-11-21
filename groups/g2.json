@@ -8,16 +8,7 @@
     "107"
   ],
   "fix_round": 0,
-  "job": {
-    "kind": "regression",
-    "stamp": {
-      "pid": 21249,
-      "host": "vm",
-      "boot": "1b727631-675c-43fe-989d-a56c8e17cec9",
-      "started": "2026-11-21T02:30:40Z"
-    },
-    "out": "/home/user/agent-control-devloop/runs/regression/g2/result-1795228240.json"
-  },
+  "job": null,
   "created": "2026-11-21T02:25:37Z",
   "history": [
     {
@@ -31,6 +22,11 @@
     {
       "at": "2026-11-21T02:30:40Z",
       "event": "regression started"
+    },
+    {
+      "at": "2026-11-21T02:36:01Z",
+      "event": "regression red"
     }
-  ]
+  ],
+  "last_regression": "1 failing:\n- test_groups.GroupSizeUnits.test_loop_with_cap_2_keeps_every_group_at_two AssertionError "
 }
