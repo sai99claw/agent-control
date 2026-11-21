@@ -2,7 +2,7 @@
 
 This project's design reasons and invariants: why things are the way they are, and what must stay true.
 
-- Test ids given to the test runner are module ids relative to the unittest roots configured in the board config (e.g. `test_devloop.Class`), never package-qualified (`tests_devloop.test_devloop.Class` fails with ImportError). (#2, #4, #5, #7, #8, #12, #101, #106 verifiers)
+- Test ids given to the test runner are module ids relative to the unittest roots configured in the board config (e.g. `test_issuer.Class`), never package-qualified (`tests_devloop.test_issuer.Class` fails with ImportError). (#2, #4, #5, #7, #8, #12, #101, #106 verifiers)
 - Devloop runs nest: a worker or fixer opens a revision through the ticket creator, and every agent runs the test runner, inside its own run. Any machine-wide limit (a slot, a lock) must exempt runs nested in a holder, or the first nested call deadlocks at a limit of 1.
 - The loop test base copies the agent's environment into the loop under test. Every DEVLOOP_* variable that switches behaviour (slot, ticket, group) must be stripped there, or a suite run from inside an agent exercises the nested or inherited path (the fake agent keys its plan and counter files on the inherited ticket) instead of the one under test. Before calling a red yours, rerun with those variables unset. (#3, #4, #11, #13, g14 fix)
 - Tests and the pool inherit the machine's global git config, including commit signing through an external program; when that signer fails under load every git commit exits 128, which is an environment failure, not the branch's. (g9 fix)

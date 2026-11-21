@@ -450,5 +450,10 @@ in CLAUDE.md / AGENTS.md, and a file that must never change goes in `hard_block.
 
 ## Tests
 
-`python3 -m unittest tests_devloop.test_devloop` — a throwaway project, pool, fake agents and fake tests
-behind the real test interface; about 50 seconds.
+All loop tests run with `python3 -m unittest discover -s tests_devloop -t tests_devloop`; one area
+runs with `python3 -m unittest tests_devloop.test_<area>` from the repo root — a throwaway project,
+pool, fake agents and fake tests behind the real test interface; about 730 seconds in one process
+(measured 2026-11-21); `full` runs one process per file. Shared fixtures live in
+`tests_devloop/loop_harness.py`. A ticket's cases go in its area's file or a new
+`tests_devloop/test_<area>.py`; a test file never imports another test file and never subclasses a test
+class from another file (inheriting a test class re-runs its cases).

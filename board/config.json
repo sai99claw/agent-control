@@ -30,19 +30,67 @@
         {
           "match": "devloop/*",
           "ids": [
-            "test_devloop"
+            "test_agents_quota",
+            "test_board_dag",
+            "test_board_decide",
+            "test_board_server",
+            "test_board_stats",
+            "test_board_tickets",
+            "test_controller",
+            "test_groups",
+            "test_issuer",
+            "test_live",
+            "test_machine",
+            "test_memory",
+            "test_opener",
+            "test_pages",
+            "test_pool_git",
+            "test_regression_fixer",
+            "test_release"
           ]
         },
         {
           "match": "tests_devloop/*",
           "ids": [
-            "test_devloop"
+            "test_agents_quota",
+            "test_board_dag",
+            "test_board_decide",
+            "test_board_server",
+            "test_board_stats",
+            "test_board_tickets",
+            "test_controller",
+            "test_groups",
+            "test_issuer",
+            "test_live",
+            "test_machine",
+            "test_memory",
+            "test_opener",
+            "test_pages",
+            "test_pool_git",
+            "test_regression_fixer",
+            "test_release"
           ]
         },
         {
           "match": "scripts/release.sh",
           "ids": [
-            "test_devloop"
+            "test_agents_quota",
+            "test_board_dag",
+            "test_board_decide",
+            "test_board_server",
+            "test_board_stats",
+            "test_board_tickets",
+            "test_controller",
+            "test_groups",
+            "test_issuer",
+            "test_live",
+            "test_machine",
+            "test_memory",
+            "test_opener",
+            "test_pages",
+            "test_pool_git",
+            "test_regression_fixer",
+            "test_release"
           ]
         },
         {
@@ -63,7 +111,23 @@
           "match": "scripts/testiface.py",
           "ids": [
             "test_testiface",
-            "test_devloop"
+            "test_agents_quota",
+            "test_board_dag",
+            "test_board_decide",
+            "test_board_server",
+            "test_board_stats",
+            "test_board_tickets",
+            "test_controller",
+            "test_groups",
+            "test_issuer",
+            "test_live",
+            "test_machine",
+            "test_memory",
+            "test_opener",
+            "test_pages",
+            "test_pool_git",
+            "test_regression_fixer",
+            "test_release"
           ]
         },
         {
