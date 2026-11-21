@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "run_tests.py takes unittest ids without the tests_devloop. prefix (e.g. test_regression_fixer.T109Acceptance); the prefixed form errors with ImportError.",
+  "source": "#109 r1 verifier",
+  "at": "2026-11-21T19:15:13Z"
+}
