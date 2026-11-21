@@ -23,7 +23,7 @@
   "vision": "目的與成功指標 - 每張落地票的 token 與時間 (down) and 每張票需要我介入幾次 (down). An intermittent failure no longer starts a fixer agent (agent-control's fix rounds on 2026-11-21 took 2 and 50 min) plus another full suite (about 1.2 h for the reporting project, 280 s here); a flake that fails again in every round no longer ends as a 'still red after 3 fix rounds' decision page for the user.",
   "removes": "Removes the fix round (a fixer agent run plus another full suite) spent on a case that passes when run again. Adds no config key, no new stage and no new page: the flaky list rides on the existing result file, one group event and the pages that are written anyway.",
   "id": "109",
-  "state": "ready",
+  "state": "running",
   "round": 0,
   "created": "2026-11-21T19:06:02Z",
   "request": "# Regression: catch cheap errors before the full suite, and rerun a few red cases once before calling the fixer\n\nReported by tabby_pool (T), whose full suite takes about 1.2 hours; the user agreed to both items (2026-11-21). Two tickets; both change devloop/regression.py `_verify`, so the second depends on the first (no parallel edits of one function).\n\n## Item 1: a quick stage before `full`\nT's measured symptom: cross-ticket conflicts in a group (a classification table, an allow-list, an escaping check) are caught by checks that run in seconds, but only inside `full`, so the group waits about 1.2 hours to learn it, and each fix round waits the same again.\n\nWanted:\n- A new optional test command `quick` in board/config.json `tests`, declared like the other commands (scripts/testiface.py COMMANDS, DEFAULT_TIMEOUTS, `actl test quick` rehearses it, docs). The project decides what it runs (its fast static and table checks). It reports rows like `run`/`full` (result.json rows with status fail/error). Not declared: the stage is skipped and nothing else changes (agent-control's own config may declare it or not; say which and why).\n- Regression runs preflight, then quick, then full. Quick red: the regression ends red at once with quick's failures (the same result.json shape: status red, failures, summary naming the quick stage), full does not run, and the controller starts the fixer as for any red. Quick environment/unmeasured outcomes are handled like the same outcomes of full. The live record shows the stage (`quick`), and the board's stage label shows it.\n- Opener: check when the controller starts a group's regression relative to when its tickets are merged onto the integration branch. If regression starts as soon as the last member merges, the quick stage at regression start is the earliest point where tickets of one group meet, and that is enough. If tickets sit merged on the branch long before regression starts, say so in the ticket and decide whether quick should also run at each merge; prefer the simpler design and write the reason.\n- removes: waiting for the full suite to learn about an error a seconds-long check finds.\n\n## Item 2: rerun a few red cases once before the fixer\nT's measured symptom: an intermittent failure (a browser connection timeout) turns the whole regression red and burns a fix round: a fixer agent is started for a case that passes when run again.\n\nWanted:\n- When full (or quick) is red with at most 5 failing cases, regression reruns exactly those cases once with the project's `run <ids>` on the same tree, inside the same regression time limit and machine slot. A case red again stays red. A case that passes on the rerun is \"flaky\".\n- All failing cases pass on the rerun: the regression is green, and its result names the flaky cases (a new `flaky` list in result.json: id, first failure's message). Some still red: the regression is red with only the still-red cases in `failures`, plus the `flaky` list; the fixer gets only the still-red cases. More than 5 failures: no rerun (that is not a flake).\n- Flaky cases are never silent: the group keeps the list (group event), and the landed page (or the red/decision page) names them so someone can make the test robust. The memory rule stands that agents must not hide a flaky test with sleeps or retries in the test itself; this rerun is the gate's one second look, not a fix.\n- removes: a fix round (an agent run plus another full suite) spent on a case that passes when run again.\n\n## Both\n- Out of scope: rerunning only the failed cases after a fix round instead of the full suite (the fixer already runs the failing tests itself before handing back; the user did not ask for it), parallelising full, any change to what T's tests assert.\n- Tests go in the regression area's own test file (tests_devloop/test_regression_fixer.py) or a new file, using the shared helpers in tests_devloop/loop_harness.py and the fake test commands; never in a catch-all file. Each case should run in se",
@@ -33,6 +33,11 @@
     {
       "at": "2026-11-21T19:06:02Z",
       "event": "opened"
+    },
+    {
+      "at": "2026-11-21T19:09:08Z",
+      "event": "dispatched",
+      "target": "int/g3"
     }
   ],
   "cost": [
@@ -57,5 +62,9 @@
         "109"
       ]
     }
-  ]
+  ],
+  "group": "g3",
+  "target": "int/g3",
+  "run": null,
+  "claimed_at": "2026-11-21T19:09:08Z"
 }
