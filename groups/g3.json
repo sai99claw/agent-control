@@ -55,6 +55,10 @@
     {
       "at": "2026-11-21T19:41:40Z",
       "event": "regression green"
+    },
+    {
+      "at": "2026-11-21T19:41:43Z",
+      "event": "code map refreshed"
     }
   ],
   "last_regression": "green",
@@ -89,5 +93,5 @@
     }
   ],
   "fix_end_sha": "b0376c7c143a3867f923b4ceeb076c859a9900ec",
-  "verified_sha": "b0376c7c143a3867f923b4ceeb076c859a9900ec"
+  "verified_sha": "44e44b77f869a29f6601e5e3c4b52ac669ae52c5"
 }
