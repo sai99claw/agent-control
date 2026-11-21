@@ -46,7 +46,7 @@ from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core import dag as dagmod  # noqa: E402
-from core import memory, osx  # noqa: E402
+from core import logtail, memory, osx  # noqa: E402
 from core import pages as pagemod  # noqa: E402
 from core.config import Config, pool_for  # noqa: E402
 from core.pool import shown_state  # noqa: E402
@@ -403,12 +403,12 @@ LIVE_STYLE = ("<style>#tab-live table.live td{vertical-align:top}#tab-live td.de
               "font-size:12px;margin:4px 0 0}#tab-live tr[data-state=ended]{color:var(--quiet)}"
               "#tab-live a.refresh{float:right;font-size:13px}</style>")
 LIVE_TAIL_LINES = 20
-LIVE_TAIL_BYTES = 1 << 20       # a log is read from at most this far before its end
+LIVE_TAIL_BYTES = logtail.TAIL_BYTES
 LIVE_AGENT_STATE = {"running": "執行中", "slot": "等機器名額"}
 LIVE_STAGE_TEXT = {"slot": "等機器名額", "machine": "等整台機器", "preflight": "preflight", "full": "full"}
 LIVE_ENDED = "結束了,沒有交件"
 LIVE_NO_AGENT = "沒有 agent 在跑"
-LIVE_STAGE_MARK = "devloop-stage:"
+LIVE_STAGE_MARK = logtail.STAGE_MARK
 
 
 def live_clock(epoch):
@@ -426,32 +426,17 @@ def live_elapsed(seconds):
 
 def live_log_lines(path):
     """The lines of a log's last LIVE_TAIL_BYTES; None when it cannot be read."""
-    if not isinstance(path, str) or not path:
-        return None
-    try:
-        with open(path, "rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            size = fh.tell()
-            fh.seek(max(0, size - LIVE_TAIL_BYTES))
-            data = fh.read()
-    except OSError:
-        return None
-    lines = data.decode("utf-8", "replace").splitlines()
-    return lines[1:] if size > LIVE_TAIL_BYTES and lines else lines
+    return logtail.lines(path)
 
 
 def live_tail(path):
     """The last LIVE_TAIL_LINES lines of a log as one text; '' when it cannot be read."""
-    lines = live_log_lines(path)
-    return "\n".join(lines[-LIVE_TAIL_LINES:]) if lines else ""
+    return logtail.tail(path, LIVE_TAIL_LINES)
 
 
 def live_release_step(path):
-    """The text after 'devloop-stage:' on the log's last line that starts with it; None when there is none."""
-    for line in reversed(live_log_lines(path) or []):
-        if line.startswith(LIVE_STAGE_MARK):
-            return line[len(LIVE_STAGE_MARK):].strip()
-    return None
+    """The text after the stage mark on the log's last line that starts with it; None when there is none."""
+    return logtail.stage(path)
 
 
 def live_pid(rec):
@@ -2223,6 +2208,8 @@ def act_problem(action, subject, page, text, option=""):
         return "%s is for a group g<N>" % action
     if action == "ack" and not page:
         return "ack needs a page"
+    if action == "ack" and text:
+        return "知道了 does not take words: use 照我的話改 or 帶著我的話重驗 to send them"
     if action == "revise" and not text:
         return "write how the ticket should change"
     return None

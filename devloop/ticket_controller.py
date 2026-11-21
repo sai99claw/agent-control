@@ -604,7 +604,7 @@ class Controller:
         else:
             self.pool.report("decision", gid, "group %s is in %s (%s) but the release failed - "
                              "not retried, not rolled back (release log: %s):\n%s" % (
-                                 gid, main, sha[:12], rel_log, rel_text), **release_ask(gid, main, sha[:12]))
+                                 gid, main, sha[:12], rel_log, release.failure_text(rel_log, rel_text)), **release_ask(gid, main, sha[:12]))
 
     def main_moved_files(self, sha, main_sha):
         """Files main changed since it parted from the verified sha, or None if git cannot say."""
@@ -749,14 +749,22 @@ class Controller:
         members = group.get("members") or []
         if ident not in members and len(members) >= self.cfg.max_group_size:
             return False
+        landed = False
         for d in dagmod.deps(snap.dag, ident):
             dt = snap.tickets.get(d) or {}
             if dt.get("state") == "landed":
+                landed = True
                 continue
             if dt.get("group") == group["id"] and dt.get("state") == "merged":
                 continue
             return False
+        if landed and ident not in members and not self.has_main(group):
+            return False
         return True
+
+    def has_main(self, group):
+        """Is main an ancestor of the group's branch?"""
+        return self.repo.is_ancestor(self.cfg.main_branch, "refs/heads/" + group["branch"])
 
     def group_for(self, snap, ident):
         """The group this ticket would join now, creating it if needed; None = must wait."""
@@ -774,14 +782,18 @@ class Controller:
             open_group = next((g for _, g in sorted(snap.groups.items(), key=lambda kv: _gnum(kv[0]))
                                if g.get("state") == "open" and not g.get("alone")
                                and len(g.get("members") or []) < limit), None)
+        landed = False
         for d in dagmod.deps(dag, ident):
             dt = snap.tickets.get(d) or {}
             if dt.get("state") == "landed":
+                landed = True
                 continue
             if open_group and dt.get("group") == open_group["id"] and dt.get("state") == "merged":
                 continue
             return None
         if open_group:
+            if landed and ident not in (open_group.get("members") or []) and not self.has_main(open_group):
+                return None
             return open_group["id"]
         return self.new_group(alone)
 

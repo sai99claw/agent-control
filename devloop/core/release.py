@@ -11,7 +11,7 @@ stderr interleaved, also what was printed before a timeout) is kept in
 
 import os
 
-from . import inflight, osx, worktrees
+from . import inflight, logtail, osx, worktrees
 from .gitx import Git
 
 
@@ -42,6 +42,19 @@ def _read(path):
             return f.read()
     except OSError:
         return ""
+
+
+FAILURE_TAIL_LINES = 15
+
+
+def failure_text(log, first):
+    """The block of a release-failed page: the first line of run()'s failure text, the last
+    stage the release printed and the last lines of its log."""
+    stage = logtail.stage(log)
+    return "\n".join([first.split("\n")[0],
+                      "last step: %s" % (stage if stage is not None else "(none printed)"),
+                      "last %d lines of the release log:" % FAILURE_TAIL_LINES,
+                      logtail.tail(log, FAILURE_TAIL_LINES)])
 
 
 def run(cfg, group, sha):

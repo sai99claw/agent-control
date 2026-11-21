@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """ticket_issuer --id N --target int/gK : take one ticket from "running" to "merged".
 
-Started only by ticket_controller. Per round (at most devloop.max_rounds, whole run at most
+Started only by ticket_controller. Per round (at most devloop.max_rounds rounds that were not
+free - a round that ended on a merge conflict with the group or on a revision that threw out the
+verifier's cases is free - and at most 2 x max_rounds rounds in all; whole run at most
 devloop.issuer_timeout_seconds (time waiting for a machine slot or for a usage limit to reset
 not counted)):
 
@@ -73,6 +75,21 @@ def cases_thrown_out(t):
     return thrown
 
 
+def free_rounds(t):
+    """{"merge": M, "revision": V}: the free 'feedback' events of the ticket's current run (after
+    the last 'round start' with round 1) whose round is <= t['round']."""
+    hist = t.get("history") or []
+    starts = [i for i, h in enumerate(hist) if h.get("event") == "round start" and h.get("round") == 1]
+    hist = hist[starts[-1]:] if starts else hist
+    r = int(t.get("round") or 0)
+    out = {"merge": 0, "revision": 0}
+    for h in hist:
+        if (h.get("event") == "feedback" and h.get("free") in out
+                and int(h.get("round") or 0) <= r):
+            out[h["free"]] += 1
+    return out
+
+
 class Issuer:
     # Every Pending this issuer started (never cleared, unlike self.pending) and the seconds its
     # own test runs waited for a machine slot: neither counts against issuer_timeout_seconds.
@@ -138,13 +155,20 @@ class Issuer:
         except worktrees.SetupFailed as exc:
             raise Stuck("env", str(exc))
         rounds = self.cfg.max_rounds
-        while int(t.get("round") or 0) < rounds:
+        while True:
+            free = free_rounds(t)
+            used = int(t.get("round") or 0)
+            if not (used - free["merge"] - free["revision"] < rounds and used < 2 * rounds):
+                break
             # A revision the opener handed in while its ticket_creator.py was stopped (with the
             # worker that ran it) is written into the pool before the round reads the ticket.
             ticket_creator.apply_unapplied(self.cfg, self.pool, self.id, self.started)
-            t = self.save(lambda x: (x.__setitem__("round", int(x.get("round") or 0) + 1),
-                                     event(x, "round start")), "round start")
+            def start_round(x):
+                x["round"] = int(x.get("round") or 0) + 1
+                event(x, "round start", round=x["round"])
+            t = self.save(start_round, "round start")
             r = t["round"]
+            self._free = None
             self.live(t)
             feedback, costs = self.one_round(t, r)
             if feedback is None:
@@ -155,8 +179,7 @@ class Issuer:
             self.save(lambda x: self._fed_back(x, r, feedback, costs), "round %d feedback" % r)
             self.round_costs = []
             t = self.ticket()
-        raise Stuck("rounds", "%d rounds used and still not passing; last feedback:\n%s" % (
-            rounds, "\n".join((t.get("feedback") or [])[-1:])))
+        raise Stuck("rounds", rounds_text(t))
 
     def _merged(self, t, costs):
         t["state"], t["run"], t["feedback"] = "merged", None, []
@@ -167,7 +190,8 @@ class Issuer:
         t.setdefault("feedback", []).append("round %d: %s" % (r, feedback))
         del t["feedback"][:-5]
         t.setdefault("cost", []).extend(costs)
-        event(t, "feedback", round=r)
+        free = getattr(self, "_free", None)
+        event(t, "feedback", round=r, **({"free": free} if free else {}))
 
     # ------------------------------------------------------------ one round
 
@@ -205,6 +229,7 @@ class Issuer:
             # This round's verifier (if any) wrote against the old ticket: do not red-check or
             # save its cases; the next round writes them again and restarts the worker.
             self.save(lambda x: x.__setitem__("cases", None), "cases thrown out")
+            self._free = "revision"
             return THROWN_OUT, costs
 
         problems = []
@@ -270,6 +295,7 @@ class Issuer:
             if not g.is_ancestor(old, "HEAD"):
                 ok, why = g.merge(self.target)
                 if not ok:
+                    self._free = "merge"
                     return ("merging the latest %s into %s failed (%s) - another ticket of "
                             "this group changed the same files; merge %s yourself and resolve" % (
                                 self.target, self.branch, why, self.target))
@@ -528,6 +554,15 @@ class Issuer:
         self.pending = []
         self.round_costs = []
         return rows
+
+
+def rounds_text(t):
+    """The 'rounds' stuck text: rounds used, split into real reds and free rounds, last feedback."""
+    r, free = int(t.get("round") or 0), free_rounds(t)
+    m, v = free["merge"], free["revision"]
+    return ("%d rounds used and still not passing (%d real red, %d free: %d merge conflict, "
+            "%d revision); last feedback:\n%s" % (
+                r, r - m - v, m + v, m, v, "\n".join((t.get("feedback") or [])[-1:])))
 
 
 def complexity(t):

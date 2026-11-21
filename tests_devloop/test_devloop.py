@@ -251,6 +251,109 @@ class RoundsAndFeedback(LoopCase):
         self.assertFalse(self.main_has("impl_1.txt"))
 
 
+class T100Acceptance(LoopCase):
+    """Ticket #100: a round that ended on a merge conflict with the group's target or on a
+    cases_wrong revision is free; the issuer stops for rounds after devloop.max_rounds rounds that
+    were not free or 2 x max_rounds rounds in all, and the stuck page tallies real and free rounds."""
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[name]
+
+    # ------------------------------------------------------------ acceptance 5: free_rounds
+
+    @staticmethod
+    def rs(n):
+        return {"event": "round start", "round": n}
+
+    @staticmethod
+    def fb(n, free):
+        h = {"event": "feedback", "round": n}
+        if free is not None:
+            h["free"] = free
+        return h
+
+    def free_rounds(self, t):
+        import ticket_issuer
+        self.assertTrue(hasattr(ticket_issuer, "free_rounds"), "ticket_issuer.free_rounds is missing")
+        return ticket_issuer.free_rounds(t)
+
+    def test_5_free_rounds_counts_free_feedback_events_since_the_last_round_one(self):
+        rs, fb = self.rs, self.fb
+        cases = [
+            ({"round": 3, "history": [rs(1), fb(1, "merge"), rs(2), fb(2, "revision"), rs(3), fb(3, None)]},
+             {"merge": 1, "revision": 1}),
+            ({"round": 1, "history": [rs(1), fb(1, "merge"), rs(2), fb(2, "merge"),
+                                      {"event": "user decision: ready"}, rs(1), fb(1, "revision")]},
+             {"merge": 0, "revision": 1}),
+            ({"round": 0, "history": [rs(1), fb(1, "merge"), rs(2), fb(2, "merge"),
+                                      {"event": "user decision: ready"}]},
+             {"merge": 0, "revision": 0}),
+            ({"round": 1, "history": [{"event": "round start"}, {"event": "feedback", "round": 1}]},
+             {"merge": 0, "revision": 0}),
+            ({}, {"merge": 0, "revision": 0}),
+        ]
+        for t, want in cases:
+            with self.subTest(t=t):
+                self.assertEqual(self.free_rounds(t), want)
+
+    # ------------------------------------------------------------ end to end (acceptance 1, 2, 8-10)
+
+    def run_loop(self):
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        return self.snap()
+
+    def decision_texts(self, snap, ident):
+        return [row.get("text") or "" for row in snap.inbox.values()
+                if row["kind"] == "decision" and row["ref"] == str(ident)]
+
+    @staticmethod
+    def feedback_events(t):
+        return [h for h in t.get("history") or [] if h.get("event") == "feedback"]
+
+    def test_8_two_tickets_of_a_group_on_the_same_file_one_lands_the_other_gets_free_merge_rounds(self):
+        self.config(max_rounds=1)
+        self.add(1)
+        self.add(2)
+        self.plan(worker={"1": ["shared"], "2": ["shared"]})
+        snap = self.run_loop()
+        states = {i: snap.ticket(i)["state"] for i in ("1", "2")}
+        landed = [i for i, s in states.items() if s == "landed"]
+        stuck = [i for i, s in states.items() if s == "stuck"]
+        self.assertEqual((len(landed), len(stuck)), (1, 1), states)
+        t = snap.ticket(stuck[0])
+        self.assertEqual((t["stuck"]["reason"], t["round"]), ("rounds", 2), t.get("history"))
+        fed = self.feedback_events(t)
+        self.assertEqual([h.get("free") for h in fed], ["merge", "merge"], fed)
+        texts = self.decision_texts(snap, stuck[0])
+        want = "2 rounds used and still not passing (0 real red, 2 free: 2 merge conflict, 0 revision)"
+        self.assertTrue(any(want in x for x in texts), texts)
+
+    def test_9_a_cases_wrong_revision_round_is_free_and_the_ticket_lands_in_round_two(self):
+        self.config(max_rounds=1)
+        self.add(1)
+        self.plan(worker={"1": ["revise", "ok"]}, creator={"1": ["revised"]})
+        t = self.run_loop().ticket("1")
+        self.assertEqual((t["state"], t["round"]), ("landed", 2), t.get("history"))
+        r1 = [h for h in self.feedback_events(t) if h.get("round") == 1]
+        self.assertEqual(len(r1), 1, t.get("history"))
+        self.assertEqual(r1[0].get("free"), "revision", r1)
+
+    def test_10_a_free_revision_round_then_a_real_red_is_stuck_at_round_two(self):
+        self.config(max_rounds=1)
+        self.add(1)
+        self.plan(worker={"1": ["revise", "wrong"]}, creator={"1": ["revised"]})
+        snap = self.run_loop()
+        t = snap.ticket("1")
+        self.assertEqual(t["state"], "stuck", t.get("history"))
+        self.assertEqual((t["stuck"]["reason"], t["round"]), ("rounds", 2), t.get("history"))
+        texts = self.decision_texts(snap, 1)
+        want = "2 rounds used and still not passing (1 real red, 1 free: 0 merge conflict, 1 revision)"
+        self.assertTrue(any(want in x for x in texts), texts)
+
+
 class T62Acceptance(LoopCase):
     """hard_block counts only the ticket's own change, not what was merged in from main."""
 
@@ -3108,6 +3211,83 @@ class OpenerCostRows(LoopCase):
         snap = self.snap()
         self.assertEqual([snap.ticket(i).get("cost") for i in ("1", "2")], [None, None])
 
+class T103Acceptance(LoopCase):
+    """#103: an out-of-quota opener makes one attempt, exits 1, and its one page and stdout say out of
+    quota, the CLI's excerpt and the reset time (verifier's acceptance cases 1-5)."""
+
+    HEAD = "the opener is out of quota; nothing was opened:\n"
+    LATER = ("the reset time could not be read from the message: send the request again once the limit "
+             "has reset, with `actl new --request`")
+
+    def setUp(self):
+        super().setUp()
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(k)
+
+    def open_out_of_quota(self, quota_text):
+        self.plan(creator={"*": ["quota"]})
+        self.env["FAKE_QUOTA_TEXT"] = quota_text
+        res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
+        counter = os.path.join(os.path.dirname(self.plan_path), "count-creator--")
+        with open(counter) as fh:
+            runs = int(fh.read())
+        folders = sorted(glob.glob(os.path.join(self.tmp, "wt", "runs", "creator", "*")))
+        pages_ = [row for row in self.snap().inbox.values()]
+        return res, runs, folders, pages_
+
+    def excerpt(self, folders):
+        from core import agents
+        self.assertTrue(hasattr(agents, "_excerpt") and hasattr(agents, "_log_tail"))
+        text, _ = agents._log_tail(os.path.join(folders[0], "agent-1.log"))
+        return agents._excerpt(text)
+
+    def check(self, quota_text, when, must_contain):
+        res, runs, folders, pages_ = self.open_out_of_quota(quota_text)
+        out = res.stdout + res.stderr
+        # acceptance 1: one attempt in total, exit 1
+        self.assertEqual(runs, 1, out)
+        self.assertEqual(len(folders), 1, folders)
+        self.assertEqual(res.returncode, 1, out)
+        # acceptance 2: exactly one page, decision/request, request + cost rows, one 'ack' option
+        self.assertEqual(len(pages_), 1, pages_)
+        page = pages_[0]
+        self.assertEqual((page.get("kind"), page.get("ref")), ("decision", "request"))
+        self.assertEqual(page.get("request"), "x")
+        self.assertEqual([(r.get("role"), r.get("outcome")) for r in page.get("cost") or []],
+                         [("creator", "out of quota")])
+        self.assertEqual([o.get("action") for o in page.get("options") or []], ["ack"])
+        expected = self.HEAD + self.excerpt(folders) + "\n" + when
+        self.assertEqual(page.get("text"), expected)
+        for piece in must_contain:
+            self.assertIn(piece, page.get("text"))
+        # acceptance 3: the same text on stdout
+        self.assertIn(expected, res.stdout)
+        for piece in must_contain:
+            self.assertIn(piece, res.stdout)
+
+    def test_epoch_message_gives_one_attempt_and_the_reset_time(self):
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(1900000000))
+        self.assertEqual(stamp, "2030-03-17T17:46:40Z")
+        when = ("the limit resets at %s: send the request again after that time with `actl new --request`"
+                % stamp)
+        self.check("Claude AI usage limit reached|1900000000", when,
+                   ["out of quota", "Claude AI usage limit reached|1900000000", stamp])
+
+    def test_unreadable_reset_says_it_could_not_be_read(self):
+        self.check("Error: usage limit reached", self.LATER,
+                   ["out of quota", "the reset time could not be read"])
+
+    def test_long_request_is_cut_to_2000_characters(self):
+        self.plan(creator={"*": ["quota"]})
+        self.env["FAKE_QUOTA_TEXT"] = "Error: usage limit reached"
+        request = "".join(chr(97 + i % 26) for i in range(2500))
+        res = self.run_py("ticket_creator.py", "--request", request, timeout=120)
+        pages_ = list(self.snap().inbox.values())
+        self.assertEqual(len(pages_), 1, pages_)
+        self.assertIn("out of quota", pages_[0].get("text", ""), res.stdout + res.stderr)
+        self.assertEqual(pages_[0].get("request"), request[:2000])
+
+
 class CasesThrownOut(LoopCase):
     def test_a_cases_wrong_revision_after_the_last_round_start_throws_out_the_cases(self):
         import ticket_issuer
@@ -3225,6 +3405,59 @@ class ApplyUnapplied(LoopCase):
         self.assertEqual(len(ev), 1)
         self.assertNotIn("applied_by", ev[0])
         self.assertEqual(ev[0]["run"], name)
+
+
+class FreeRounds(LoopCase):
+    """Rounds that ended on a merge conflict with the group or a cases_wrong revision are free."""
+
+    def setUp(self):
+        super().setUp()
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[k]
+
+    def run_one(self, **plan):
+        self.add(1, **plan.pop("extra", {}))
+        self.plan(**plan)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        return self.snap().ticket("1")
+
+    @staticmethod
+    def of(t, name):
+        return [h for h in t["history"] if h["event"] == name]
+
+    def test_a_red_of_the_cases_is_not_free_and_round_starts_carry_their_number(self):
+        t = self.run_one(worker={"1": ["wrong", "ok"]})
+        self.assertEqual((t["state"], t["round"]), ("landed", 2))
+        self.assertEqual([h.get("round") for h in self.of(t, "round start")], [1, 2])
+        fed = self.of(t, "feedback")
+        self.assertEqual(len(fed), 1)
+        self.assertNotIn("free", fed[0])
+
+    def test_a_review_failure_is_not_free(self):
+        t = self.run_one(extra={"complexity": "complex"}, reviewer={"1": ["fail", "pass"]})
+        self.assertEqual((t["state"], t["round"]), ("landed", 2))
+        self.assertNotIn("free", self.of(t, "feedback")[0])
+
+    def test_only_free_rounds_stop_at_twice_max_rounds(self):
+        self.config(max_rounds=1)
+        t = self.run_one(worker={"1": ["revise"]}, creator={"1": ["revised"]})
+        self.assertEqual((t["state"], t["stuck"]["reason"], t["round"]), ("stuck", "rounds", 2))
+        self.assertEqual([h.get("free") for h in self.of(t, "feedback")], ["revision", "revision"])
+        self.assertIn("2 rounds used and still not passing (0 real red, 2 free: 0 merge conflict, "
+                      "2 revision); last feedback:\nround 2: the ticket was revised", t["stuck"]["text"])
+
+    def test_the_rounds_text_splits_real_and_free(self):
+        import ticket_issuer
+        t = {"round": 4, "feedback": ["round 3: x", "round 4: last"],
+             "history": [{"event": "round start", "round": 1},
+                         {"event": "feedback", "round": 1, "free": "merge"},
+                         {"event": "feedback", "round": 2},
+                         {"event": "feedback", "round": 3, "free": "revision"},
+                         {"event": "feedback", "round": 4, "free": "merge"}]}
+        self.assertEqual(ticket_issuer.rounds_text(t),
+                         "4 rounds used and still not passing (1 real red, 3 free: 2 merge "
+                         "conflict, 1 revision); last feedback:\nround 4: last")
 
 
 class T11Acceptance(LoopCase):
@@ -4123,6 +4356,90 @@ class T21Acceptance(LoopCase):
         with open(os.path.join(HOME, "templates", "project-CLAUDE.md")) as fh:
             template = fh.read()
         self.assertTrue("DEVLOOP_RELEASE_DIR" in template, "templates/project-CLAUDE.md lacks DEVLOOP_RELEASE_DIR")
+
+
+class T106Acceptance(LoopCase):
+    """Ticket #106: a release-failed page names the last stage and the last 15 lines of the release log."""
+    MARK = "devloop-" + "stage:"
+    STAGED = ("echo '" + "devloop-" + "stage: build'; i=1; while [ $i -le 30 ]; do printf 'L%02d\\n' $i; i=$((i+1)); done; "
+              "echo '" + "devloop-" + "stage: upload'; echo U1; echo U2 >&2; exit 3")
+    STAGED_BLOCK = (["rc 3", "last step: upload", "last 15 lines of the release log:"]
+                    + ["L%02d" % i for i in range(19, 31)] + ["devloop-" + "stage: upload", "U1", "U2"])
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[key]
+
+    def land(self, release):
+        self.config(release=release)
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+
+    def newest_decision(self):
+        pages = sorted([r for r in self.snap().inbox.values() if r["kind"] == "decision" and r["ref"] == "g1"],
+                       key=lambda r: r["at"])
+        self.assertTrue(pages, "no decision page about g1")
+        return pages[-1]["text"]
+
+    def sha12(self):
+        return git(self.proj, "rev-parse", "main").strip()[:12]
+
+    def split(self, text, header):
+        lines = text.rstrip("\n").split("\n")
+        self.assertEqual(lines[0], header, text)
+        return lines[1:]
+
+    def landing_header(self):
+        rel_log = self.snap().groups["g1"]["release_log"]
+        return ("group g1 is in main (%s) but the release failed - not retried, not rolled back "
+                "(release log: %s):" % (self.sha12(), rel_log))
+
+    def test_landing_page_is_header_rc_step_and_last_fifteen_lines(self):
+        self.land(self.STAGED)
+        text = self.newest_decision()
+        self.assertEqual(self.split(text, self.landing_header()), self.STAGED_BLOCK, text)
+        self.assertNotIn("L18", text)
+
+    def test_no_stage_line_gives_none_printed(self):
+        self.land("echo A; echo B; exit 2")
+        text = self.newest_decision()
+        self.assertEqual(self.split(text, self.landing_header()),
+                         ["rc 2", "last step: (none printed)", "last 15 lines of the release log:", "A", "B"], text)
+
+    def test_rerun_page_has_its_header_and_the_same_block(self):
+        self.land(self.STAGED)
+        before = set(self.snap().inbox)
+        res = self.run_py("tickets.py", "release", "g1")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        new = [r["text"] for k, r in self.snap().inbox.items()
+               if k not in before and r["kind"] == "decision" and r["ref"] == "g1"]
+        self.assertEqual(len(new), 1, new)
+        text = new[0]
+        rel_log = self.snap().groups["g1"]["release_log"]
+        header = ("group g1 (%s): the re-run release failed - not retried, not rolled back "
+                  "(release log: %s):" % (self.sha12(), rel_log))
+        self.assertEqual(self.split(text, header), self.STAGED_BLOCK, text)
+        self.assertNotIn("L18", text)
+
+    def test_the_stage_literal_lives_only_in_core_logtail(self):
+        dev = os.path.join(HOME, "devloop")
+        self.assertTrue(os.path.isfile(os.path.join(dev, "core", "logtail.py")), "devloop/core/logtail.py missing")
+        found = []
+        for sub in ("", "core"):
+            for name in sorted(os.listdir(os.path.join(dev, sub))):
+                if not name.endswith(".py"):
+                    continue
+                with open(os.path.join(dev, sub, name), encoding="utf-8") as fh:
+                    if self.MARK in fh.read():
+                        found.append(os.path.join(sub, name) if sub else name)
+        self.assertEqual(found, [os.path.join("core", "logtail.py")])
+        import board
+        for name in ("live_log_lines", "live_tail", "live_release_step"):
+            self.assertTrue(callable(getattr(board, name, None)), "board.%s is gone" % name)
 
 
 class T22Acceptance(LoopCase):
@@ -6206,6 +6523,28 @@ class AgentChains(LoopCase):
         self.assertEqual(agents.with_effort(["agy", "run"], "high"), ["agy", "run"])
         with self.assertRaises(osx.OSFailure):
             agents.with_effort(["claude"], "huge")
+
+
+class OpenerOtherFailureRetries(LoopCase):
+    def test_a_non_quota_failure_still_gets_the_second_attempt(self):
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[k]
+        self.plan(creator={"*": ["nothing"]})
+        res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertEqual(len(glob.glob(os.path.join(self.tmp, "wt", "runs", "creator", "*"))), 2)
+        self.assertNotIn("out of quota", res.stdout)
+
+    def test_quota_stops_after_one_attempt(self):
+        for k in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[k]
+        self.plan(creator={"*": ["quota"]})
+        self.env["FAKE_QUOTA_TEXT"] = "Claude AI usage limit reached|1900000000"
+        res = self.run_py("ticket_creator.py", "--request", "x", timeout=120)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertEqual(len(glob.glob(os.path.join(self.tmp, "wt", "runs", "creator", "*"))), 1)
+        for want in ("out of quota", "Claude AI usage limit reached|1900000000", "2030-03-17T17:46:40Z"):
+            self.assertIn(want, res.stdout)
 
 
 class T31Acceptance(LoopCase):
@@ -8912,6 +9251,61 @@ class QuotaResetCodexUnits(unittest.TestCase):
         self.assertEqual(agents.quota_reset("try again in 3d", self.AT), self.AT + 3 * 86400)
 
 
+class UnderscoredQuotaUnits(LoopCase):
+    """#102: usage_limit_reached and rate_limit_error read as out of quota; the excerpt keeps the CLI's words."""
+
+    USAGE = 'API Error: 429 {"type":"error","error":{"type":"usage_limit_reached","message":"x"}}'
+    RATE = '{"type":"error","error":{"type":"rate_limit_error","message":"x"}}'
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        os.environ.pop("DEVLOOP_SLOT", None)
+        os.environ["AC_ROOT"] = self.proj
+        self.env.pop("DEVLOOP_TICKET", None)
+        self.env.pop("DEVLOOP_GROUP", None)
+
+    def logged(self, text):
+        path = os.path.join(self.tmp, "x.log")
+        with open(path, "w") as fh:
+            fh.write("noise\n" + text + "\nbye\n")
+        return path
+
+    def test_underscored_signs_say_quota(self):
+        from core import agents
+        self.assertTrue(agents._says_quota(self.logged(self.USAGE)))
+        self.assertTrue(agents._says_quota(self.logged(self.RATE)))
+
+    def test_excerpt_keeps_the_line_as_written(self):
+        from core import agents
+        self.assertEqual(agents._excerpt("noise\nAPI Error: 429 usage_limit_reached\nbye\n"),
+                         "API Error: 429 usage_limit_reached")
+        self.assertEqual(agents._excerpt('noise\n{"type":"rate_limit_error"}\nbye\n'),
+                         '{"type":"rate_limit_error"}')
+
+    def test_a_bare_429_is_not_quota(self):
+        from core import agents
+        self.assertFalse(agents._says_quota(self.logged("HTTP 429")))
+        self.assertFalse(agents._says_quota(self.logged("status 429, retrying")))
+
+    def test_a_run_printing_the_line_is_out_of_quota(self):
+        from core import agents
+        from core.config import Config
+        said = os.path.join(self.tmp, "said.txt")
+        with open(said, "w") as fh:
+            fh.write(self.USAGE + "\n")
+        with open(os.path.join(self.proj, "board", "config.json")) as fh:
+            agents_cfg = json.load(fh)["devloop"]["agents"]
+        argv = ["sh", "-c", "cat >/dev/null; cat %s; exit 1" % said]
+        self.config(agents=dict(agents_cfg, worker=argv))
+        hand = agents.start(Config(self.proj), "worker", "go", self.proj,
+                            os.path.join(self.tmp, "run"), 30).finish()
+        self.assertEqual(hand.cost["outcome"], "out of quota")
+
+
 class T73Acceptance(LoopCase):
     """#73: a fix round in which no fixer agent ran costs no round and no regression; the group is
     paused with one page and the rerun starts the fixer again. Expected values come from the
@@ -9264,6 +9658,89 @@ class GroupSizeUnits(LoopCase):
         self.assertEqual(sum(len(g["members"]) for g in groups.values()), 8)
 
 
+class T104Acceptance(LoopCase):
+    """#104 acceptance 4-5: a ready ticket with a landed dependency does not join an open group
+    whose branch lacks main. Helpers copied from FollowMainUnits (not subclassed)."""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+
+    def commit_on(self, branch, files):
+        if branch == "main":
+            for rel, text in files.items():
+                with open(os.path.join(self.proj, rel), "w") as fh:
+                    fh.write(text)
+            git(self.proj, "add", "--", *files)
+            git(self.proj, "commit", "-q", "-m", "m")
+            return git(self.proj, "rev-parse", "HEAD")
+        tree = os.path.join(self.tmp, "side")
+        git(self.proj, "worktree", "add", "-q", "--detach", tree, branch)
+        for rel, text in files.items():
+            with open(os.path.join(tree, rel), "w") as fh:
+                fh.write(text)
+        git(tree, "add", "-A")
+        git(tree, "commit", "-q", "-m", "c")
+        sha = git(tree, "rev-parse", "HEAD")
+        git(self.proj, "worktree", "remove", "--force", tree)
+        git(self.proj, "update-ref", "refs/heads/" + branch, sha)
+        return sha
+
+    def ctl(self):
+        from core.config import Config
+        import ticket_controller
+        c = ticket_controller.Controller(Config(self.proj), self.pool)
+        c.forever = False
+        c.started = []
+        c._start_job = lambda gid, kind, argv, out: c.started.append((gid, kind))
+        return c
+
+    def layout(self, third_state):
+        self.add(1, state="landed")
+        self.add(2, deps=[1])
+        self.add(3, state=third_state, group="g1", target="int/g1")
+        git(self.proj, "branch", "int/g1", "main")
+        g = {"id": "g1", "branch": "int/g1", "state": "open", "alone": False, "members": ["3"],
+             "fix_round": 0, "job": None}
+        self.pool.update(lambda tx: tx.put_group(g), "test: group g1")
+        self.commit_on("int/g1", {"shared.txt": "group\n"})
+        self.commit_on("main", {"shared.txt": "main\n"})
+        c = self.ctl()
+        c.advance_groups(self.snap())
+        return c
+
+    def test_landed_dep_does_not_join_a_group_lacking_main(self):
+        """Item 4."""
+        c = self.layout("running")
+        snap = self.snap()
+        g1 = snap.groups["g1"]
+        # the layout is the one the ticket describes: main's merge conflicted, g1 still open
+        self.assertEqual(g1["state"], "open")
+        self.assertTrue(g1.get("main_tried"), g1)
+        self.assertFalse(c.repo.is_ancestor("main", "refs/heads/int/g1"))
+        self.assertIs(c.joinable(snap, "2", g1), False)
+
+    def test_group_for_picks_no_group_lacking_main(self):
+        """Item 4 (group_for half): joins none, opens none."""
+        c = self.layout("running")
+        snap = self.snap()
+        self.assertEqual(snap.groups["g1"]["state"], "open")
+        self.assertFalse(c.repo.is_ancestor("main", "refs/heads/int/g1"))
+        self.assertIsNone(c.group_for(snap, "2"))
+        self.assertEqual(sorted(self.snap().groups), ["g1"])
+
+    def test_merged_member_lets_the_group_move_to_pr(self):
+        """Item 5."""
+        c = self.layout("merged")
+        self.assertEqual(self.snap().groups["g1"]["state"], "pr")
+
+
 class NoReverifyPaths(LoopCase):
     """#29 / D-090: main moved only in devloop.no_reverify_paths -> the controller merges it in."""
 
@@ -9561,6 +10038,96 @@ class FollowMainUnits(LoopCase):
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
         self.assertEqual(self.state(1), "landed")
         self.assertEqual(self.snap().groups["g1"]["fix_round"], 1)
+
+
+class MainAncestorJoinUnits(LoopCase):
+    """#104: a ticket with a landed dependency joins only a group whose branch has main."""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+
+    def commit_on(self, branch, files):
+        if branch == "main":                 # main is checked out in the project; keep its config edits
+            for rel, text in files.items():
+                with open(os.path.join(self.proj, rel), "w") as fh:
+                    fh.write(text)
+            git(self.proj, "add", "--", *files)
+            git(self.proj, "commit", "-q", "-m", "m")
+            return git(self.proj, "rev-parse", "HEAD")
+        tree = os.path.join(self.tmp, "side")
+        git(self.proj, "worktree", "add", "-q", "--detach", tree, branch)
+        for rel, text in files.items():
+            with open(os.path.join(tree, rel), "w") as fh:
+                fh.write(text)
+        git(tree, "add", "-A")
+        git(tree, "commit", "-q", "-m", "c")
+        sha = git(tree, "rev-parse", "HEAD")
+        git(self.proj, "worktree", "remove", "--force", tree)
+        git(self.proj, "update-ref", "refs/heads/" + branch, sha)
+        return sha
+
+    def group(self, gid="g1", branch=True, **fields):
+        g = {"id": gid, "branch": "int/" + gid, "state": "open", "alone": False, "members": ["1"],
+             "fix_round": 0, "job": None}
+        g.update(fields)
+        if branch:
+            git(self.proj, "branch", "int/" + gid, "main")
+
+        def change(tx):
+            tx.put_group(g)
+        self.pool.update(change, "test: group %s" % gid)
+
+    def ctl(self, forever=False):
+        from core.config import Config
+        import ticket_controller
+        c = ticket_controller.Controller(Config(self.proj), self.pool)
+        c.forever = forever
+        c.started = []
+        c._start_job = lambda gid, kind, argv, out: c.started.append((gid, kind))
+        return c
+
+    def build(self, main_files):
+        self.add(1, state="landed")
+        self.add(2, deps=[1])
+        self.add(3, state="running", group="g1", target="int/g1")
+        self.group("g1", members=["3"])
+        self.commit_on("int/g1", {"shared.txt": "group\n"})
+        self.commit_on("main", main_files)
+        c = self.ctl()
+        c.advance_groups(self.snap())
+        return c
+
+    def test_main_not_ancestor_waits(self):
+        c = self.build({"shared.txt": "main\n"})
+        snap = self.snap()
+        self.assertFalse(c.has_main(snap.groups["g1"]))
+        self.assertFalse(c.joinable(snap, "2", snap.groups["g1"]))
+        self.assertIsNone(c.group_for(snap, "2"))
+
+    def test_member_and_no_landed_dep_make_no_git_call(self):
+        c = self.build({"shared.txt": "main\n"})
+        snap = self.snap()
+        calls = []
+        c.repo.is_ancestor = lambda *a: calls.append(a) or False
+        self.assertTrue(c.joinable(snap, "3", snap.groups["g1"]))
+        self.add(4)
+        snap = self.snap()
+        self.assertTrue(c.joinable(snap, "4", snap.groups["g1"]))
+        self.assertEqual(calls, [])
+
+    def test_clean_merge_joins(self):
+        c = self.build({"NOTES.md": "n\n"})
+        snap = self.snap()
+        self.assertTrue(c.has_main(snap.groups["g1"]))
+        self.assertTrue(c.joinable(snap, "2", snap.groups["g1"]))
+        self.assertEqual(c.group_for(snap, "2"), "g1")
 
 
 class NoReverifyRule(unittest.TestCase):
@@ -10141,6 +10708,26 @@ class BoardActButtons(LoopCase):
                     with self.subTest(mode=mode, method=method, path=path):
                         body = "text=x" if method == "POST" else None
                         self.assertEqual(T47Acceptance.call(self, port, method, path, headers, body)[0], 404)
+
+
+class BoardAckWithWords(LoopCase):
+    """#105: an ack that carries text is refused with a line naming the two buttons that take words."""
+
+    def test_ack_with_text_refused(self):
+        import board
+        for subject, page, text in (("3", "p3", "please change acceptance 2"), ("g2", "p3", "x")):
+            with self.subTest(subject=subject):
+                line = board.act_problem("ack", subject, page, text)
+                self.assertIsInstance(line, str)
+                self.assertNotIn("\n", line)
+                self.assertIn("照我的話改", line)
+                self.assertIn("帶著我的話重驗", line)
+
+    def test_ack_without_text_still_fine(self):
+        import board
+        self.assertIsNone(board.act_problem("ack", "3", "p3", ""))
+        self.assertIsNone(board.act_problem("ack", "request", "preq", ""))
+
 
 class BoardPageOptions(LoopCase):
     """#79, the implementer's pieces: a page's question keys reach its card only when valid, the option
@@ -17301,6 +17888,69 @@ class ReleaseKeptOutput(unittest.TestCase):
         from core import release
         env = release.env(self.Cfg("/x"), {"id": "g1"}, "abc", "/x/runs/release/g1")
         self.assertEqual(env["DEVLOOP_RELEASE_DIR"], "/x/runs/release/g1")
+
+
+class LogtailUnits(unittest.TestCase):
+    """core.logtail: lines / tail / stage, and the board aliases on top of them."""
+
+    def log(self, text):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        path = os.path.join(d, "x.log")
+        with open(path, "w") as f:
+            f.write(text)
+        return path
+
+    def test_missing_and_none_paths(self):
+        from core import logtail
+        for path in (None, "", "/nonexistent/none.log"):
+            self.assertIsNone(logtail.lines(path))
+            self.assertEqual(logtail.tail(path, 5), "")
+            self.assertIsNone(logtail.stage(path))
+
+    def test_empty_and_short_log(self):
+        from core import logtail
+        self.assertEqual(logtail.tail(self.log(""), 3), "")
+        self.assertIsNone(logtail.stage(self.log("")))
+        path = self.log("a\nb\nc\n")
+        self.assertEqual(logtail.tail(path, 2), "b\nc")
+        self.assertEqual(logtail.tail(path, 10), "a\nb\nc")
+
+    def test_stage_is_the_last_marked_line(self):
+        from core import logtail
+        mark = "devloop-" + "stage:"
+        path = self.log("%s build\nx\n  %s no\n%s  upload \ny\n" % (mark, mark, mark))
+        self.assertEqual(logtail.stage(path), "upload")
+
+    def test_big_log_reads_only_the_end(self):
+        from core import logtail
+        body = "".join("line%07d\n" % i for i in range(150000))
+        self.assertGreater(len(body), 1 << 20)
+        path = self.log(body)
+        got = logtail.lines(path)
+        self.assertLess(len(got), 150000)
+        self.assertEqual(got[-1], "line0149999")
+        self.assertTrue(got[0].startswith("line"))
+        self.assertEqual(len(got[0]), 11)           # the cut first line is dropped
+        self.assertEqual(logtail.tail(path, 2), "line0149998\nline0149999")
+
+    def test_board_aliases(self):
+        import board
+        mark = "devloop-" + "stage:"
+        path = self.log("".join("r%d\n" % i for i in range(30)) + mark + " go\n")
+        self.assertEqual(board.live_log_lines(path)[-1], mark + " go")
+        self.assertEqual(board.live_tail(path).split("\n")[0], "r11")
+        self.assertEqual(len(board.live_tail(path).split("\n")), 20)
+        self.assertEqual(board.live_release_step(path), "go")
+        self.assertEqual(board.live_tail(None), "")
+
+    def test_failure_text_block(self):
+        from core import release
+        path = self.log("".join("L%02d\n" % i for i in range(1, 31)))
+        out = release.failure_text(path, "rc 3\nmore")
+        lines = out.split("\n")
+        self.assertEqual(lines[:3], ["rc 3", "last step: (none printed)", "last 15 lines of the release log:"])
+        self.assertEqual(lines[3:], ["L%02d" % i for i in range(16, 31)])
 
 
 class LiveRecordUnits(unittest.TestCase):

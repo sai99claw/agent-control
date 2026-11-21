@@ -370,13 +370,13 @@ def _log_tail(log):
 
 def _says_quota(log):
     text, at = _log_tail(log)
-    low = text.lower()
+    low = text.lower().replace("_", " ")
     return any(sign in low for sign in QUOTA_SIGNS) or quota_reset(text, at) is not None
 
 
 def _excerpt(text, limit=200):
     """The part of the CLI's message that says quota, at most `limit` characters."""
-    low = text.lower()
+    low = text.lower().replace("_", " ")
     hits = [low.rfind(sign) for sign in QUOTA_SIGNS + ("reset",)]
     hits = [h for h in hits if h >= 0]
     if not hits:
