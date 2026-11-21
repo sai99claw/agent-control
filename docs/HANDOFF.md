@@ -335,3 +335,15 @@ Source: `sai99claw/tabby_pool` default branch, commit 7a5c0cfb (read 2026-10-21 
   實測:17 個檔各自單獨跑都 OK,共約 13 分鐘;最慢 test_live 158s、test_regression_fixer 109s、test_machine 106s。
 - 雲端發版照舊卡在推 tag 403,g1、g2 的頁都已 ack。
 - 未定:UserPromptSubmit hook(答覆自動回到對話裡);驗證文章衍生的票(觀察模式閘門、覆核者評估、依 diff 觸發的清單)。
+
+## 2026-11-21(續)regression 的 quick 與偶發重跑
+
+- T 回報 regression 三個浪費:便宜的錯要等整套才抓到、修完只錯一個也重跑整套、偶發失敗燒掉一輪。使用者同意 1、3,2 不清楚。
+  主線建議 2 不做:fixer 交回前本來就跑過它修的那幾個;第 2、3 輪剩的那一個多半是別處被弄壞(只有整套抓得到)或偶發(#109 處理)。
+  這是從程式推的,沒看到 T 的 g48 紀錄;已請 T 比對 g48 各輪失敗清單確認。
+- g3(#108、#109,fix 一輪,main = 44e44b7):
+  - #108 `tests.quick`(可選):regression 依序跑 preflight → quick → full,quick 紅就停,不跑 full。開題者實測 regression
+    在最後一張票合入後約 20 秒開始,所以 quick 只在 regression 開頭跑、不在每次合入跑。A 自己不宣告 quick(full 只 280 秒)。
+  - #109 quick 或 full 紅 1–5 個時,同一個 worktree 把那幾個重跑一次;重跑過的記為 flaky,不算紅,列在 result.json、
+    group 事件與落地 / 發版失敗 / 修不好的頁上。6 個以上不重跑。
+- 給 T 的說明重寫成一份(scratchpad 的 T-update-2026-11-21.md),之前那版沒交出去。
