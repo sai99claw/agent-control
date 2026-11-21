@@ -70,6 +70,7 @@ of the page file) added to the environment. Nothing waits for it: its output is 
 `<worktrees>/runs/notify.log` and a failure is ignored. macOS notification:
 `"notify": "osascript -e 'display notification (system attribute \"DEVLOOP_PAGE_TEXT\") with title (system attribute \"DEVLOOP_PAGE_KIND\")'"`;
 phone push with ntfy.sh: `"notify": "curl -s -H \"Title: $DEVLOOP_PAGE_KIND $DEVLOOP_PAGE_SUBJECT\" -d \"$DEVLOOP_PAGE_TEXT\" ntfy.sh/my-topic"`.
+In the shell command itself (before JSON escaping) read the variables quoted, as in `curl -s -d "$DEVLOOP_PAGE_TEXT" ntfy.sh/my-topic`.
 
 The controller follows main itself (#72): before a group's next regression, every integration
 branch whose group is not landed, cancelled or verified, has no job running and exists gets main
