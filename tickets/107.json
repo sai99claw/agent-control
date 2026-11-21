@@ -40,6 +40,11 @@
       "at": "2026-11-21T02:25:38Z",
       "event": "dispatched",
       "target": "int/g2"
+    },
+    {
+      "at": "2026-11-21T02:25:41Z",
+      "event": "issuer started",
+      "target": "int/g2"
     }
   ],
   "cost": [
@@ -66,6 +71,11 @@
   ],
   "group": "g2",
   "target": "int/g2",
-  "run": null,
+  "run": {
+    "pid": 11870,
+    "host": "vm",
+    "boot": "1b727631-675c-43fe-989d-a56c8e17cec9",
+    "started": "2026-11-21T02:25:41Z"
+  },
   "claimed_at": "2026-11-21T02:25:38Z"
 }
