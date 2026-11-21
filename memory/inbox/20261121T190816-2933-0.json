@@ -1,0 +1,7 @@
+{
+  "layer": "project",
+  "name": "project",
+  "text": "Test ids for run_tests.py in tests_devloop are module-relative (test_regression_fixer.TNAcceptance); a tests_devloop.-prefixed id reports one ImportError row, not the cases.",
+  "source": "#108 r1 verifier",
+  "at": "2026-11-21T19:08:15Z"
+}
