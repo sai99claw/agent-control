@@ -9,16 +9,7 @@
     "109"
   ],
   "fix_round": 1,
-  "job": {
-    "kind": "regression",
-    "stamp": {
-      "pid": 12626,
-      "host": "vm",
-      "boot": "a22658bd-dca2-4f49-a981-a148c352d3e7",
-      "started": "2026-11-21T19:35:58Z"
-    },
-    "out": "/home/user/agent-control-devloop/runs/regression/g3/result-1795289758.json"
-  },
+  "job": null,
   "created": "2026-11-21T19:06:08Z",
   "history": [
     {
@@ -56,9 +47,13 @@
     {
       "at": "2026-11-21T19:35:59Z",
       "event": "regression started"
+    },
+    {
+      "at": "2026-11-21T19:41:38Z",
+      "event": "regression green"
     }
   ],
-  "last_regression": "1 failing:\n- test_regression_fixer.QuickStageUnits.test_undeclared_quick_leaves_the_regression_as_before AssertionError ",
+  "last_regression": "green",
   "fix_report": "/home/user/agent-control-devloop/runs/regression/g3/result-1795288619.json",
   "fix_agent_round": 1,
   "fix_start_sha": "404bef57fbbf395b3834cbba7918b089d7f62320",
