@@ -44,8 +44,14 @@
     {
       "at": "2026-11-21T19:22:41Z",
       "event": "fixer started"
+    },
+    {
+      "at": "2026-11-21T19:22:44Z",
+      "event": "fixer agent started (round 1)"
     }
   ],
   "last_regression": "1 failing:\n- test_regression_fixer.QuickStageUnits.test_undeclared_quick_leaves_the_regression_as_before AssertionError ",
-  "fix_report": "/home/user/agent-control-devloop/runs/regression/g3/result-1795288619.json"
+  "fix_report": "/home/user/agent-control-devloop/runs/regression/g3/result-1795288619.json",
+  "fix_agent_round": 1,
+  "fix_start_sha": "404bef57fbbf395b3834cbba7918b089d7f62320"
 }
