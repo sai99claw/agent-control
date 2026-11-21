@@ -219,6 +219,22 @@ class A3Doctor(ConfigSandbox):
         self.assertIn("actl migrate", done.stdout)
 
 
+class T101Acceptance(ConfigSandbox):
+    """#101 acceptance 8: doctor names a devloop.notify that is neither null nor a non-empty string."""
+
+    def test_notify_5_is_an_error_row(self):
+        self.edit_conf(devloop={"release": "sh x", "notify": 5})
+        done = self.actl("doctor")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        rows = [line for line in done.stdout.splitlines() if "devloop.notify" in line]
+        self.assertEqual(len(rows), 1, done.stdout)
+        self.assertTrue(rows[0].startswith("error:"), rows[0])
+        # control on the same setup: a valid command gives no row about it
+        self.edit_conf(devloop={"release": "sh x", "notify": "echo hi"})
+        done = self.actl("doctor")
+        self.assertNotIn("devloop.notify", done.stdout + done.stderr)
+
+
 class DoctorHardBlockDirsSilence(ConfigSandbox):
     """hard_block.dirs empty or absent: doctor and check stay silent about it."""
 

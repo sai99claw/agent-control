@@ -12480,6 +12480,198 @@ class PoolRules(GitIsolatedCase):
         self.assertIn("5", self.b.snapshot().tickets)
 
 
+class T101Acceptance(LoopCase):
+    """#101: devloop.notify runs a shell command, detached, for every new decision, env or idle page."""
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(key)
+        patch = mock.patch.dict(os.environ)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for key in [k for k in os.environ if k.startswith("DEVLOOP_")]:
+            os.environ.pop(key)
+
+    # ------------------------------------------------------------ helpers
+
+    def cfg(self):
+        from core.config import Config
+        return Config(self.proj)
+
+    def notify_pool(self):
+        from core.config import pool_for
+        return pool_for(self.cfg())
+
+    def log_path(self):
+        return os.path.join(self.tmp, "wt", "runs", "notify.log")
+
+    def recording_spawn(self, calls):
+        def fake(argv, cwd=None, env=None, log_path=None, stdin_text=None):
+            page = (env or {}).get("DEVLOOP_PAGE")
+            calls.append({"argv": argv, "cwd": cwd, "env": dict(env or {}), "log_path": log_path,
+                          "page_exists": bool(page) and os.path.isfile(page)})
+            return mock.Mock(pid=0)
+        return fake
+
+    def report_with_spy(self, kind, ref="5", text="first line\nsecond line"):
+        calls = []
+        pool = self.notify_pool()
+        with mock.patch.object(osx, "spawn", side_effect=self.recording_spawn(calls)):
+            name = pool.report(kind, ref, text)
+        return name, calls
+
+    def wait_for(self, cond, seconds=10.0):
+        end = time.time() + seconds
+        while time.time() < end:
+            if cond():
+                return True
+            time.sleep(0.05)
+        return cond()
+
+    def log_text(self):
+        try:
+            with open(self.log_path()) as fh:
+                return fh.read()
+        except OSError:
+            return ""
+
+    # ------------------------------------------------------------ 1: config
+
+    def test_1_default_and_type_check(self):
+        from core import config as config_mod
+        self.assertIn("notify", config_mod.DEFAULTS)
+        self.assertIsNone(config_mod.DEFAULTS["notify"])
+        for bad in (5, "", ["x"]):
+            self.config(notify=bad)
+            with self.assertRaises(osx.OSFailure, msg="notify=%r accepted" % (bad,)) as ctx:
+                config_mod.Config(self.proj)
+            self.assertIn("devloop.notify", str(ctx.exception))
+        for good in (None, "echo hi"):
+            self.config(notify=good)
+            self.assertEqual(config_mod.Config(self.proj).values["notify"], good)
+
+    # ------------------------------------------------------------ 2, 3: the spawn call
+
+    def test_2_3_each_asking_kind_spawns_once_with_page_env(self):
+        self.config(notify="echo notified")
+        runs = os.path.join(self.tmp, "wt", "runs")
+        self.assertFalse(os.path.exists(runs))
+        for kind in ("decision", "env", "idle"):
+            name, calls = self.report_with_spy(kind)
+            self.assertEqual(len(calls), 1, "%s: spawn calls %r" % (kind, calls))
+            call = calls[0]
+            self.assertEqual(call["argv"], ["sh", "-c", "echo notified"])
+            self.assertEqual(os.path.realpath(call["cwd"]), os.path.realpath(self.proj))
+            self.assertEqual(call["log_path"], self.log_path())
+            self.assertTrue(os.path.isdir(runs), "runs folder not created")
+            env = call["env"]
+            for key, value in os.environ.items():
+                self.assertEqual(env.get(key), value, "os.environ %s not passed" % key)
+            self.assertEqual(env["DEVLOOP_PAGE_KIND"], kind)
+            self.assertEqual(env["DEVLOOP_PAGE_SUBJECT"], "5")
+            self.assertEqual(env["DEVLOOP_PAGE_TEXT"], "first line")
+            page = os.path.join(self.pool_path, "inbox", name + ".json")
+            self.assertTrue(os.path.isabs(env["DEVLOOP_PAGE"]))
+            self.assertEqual(os.path.realpath(env["DEVLOOP_PAGE"]), os.path.realpath(page))
+            self.assertTrue(call["page_exists"], "page file missing when spawn was called")
+
+    def test_3_subject_is_ref_as_text(self):
+        self.config(notify="true")
+        _, calls = self.report_with_spy("decision", ref=7)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["env"]["DEVLOOP_PAGE_SUBJECT"], "7")
+
+    # ------------------------------------------------------------ 4: no spawn
+
+    def test_4_quiet_kinds_and_unset_notify_spawn_nothing(self):
+        self.config(notify="echo notified")
+        for kind in ("created", "landed", "cancelled"):
+            _, calls = self.report_with_spy(kind)
+            self.assertEqual(calls, [], kind)
+        self.config(notify=None)
+        for kind in ("decision", "env", "idle"):
+            _, calls = self.report_with_spy(kind)
+            self.assertEqual(calls, [], kind)
+        # positive control on the same setup: the asking kinds do spawn once notify is set
+        self.config(notify="echo notified")
+        _, calls = self.report_with_spy("decision")
+        self.assertEqual(len(calls), 1)
+
+    # ------------------------------------------------------------ 5: failures never fail the caller
+
+    def test_5_spawn_failure_is_ignored(self):
+        self.config(notify="echo notified")
+        pool = self.notify_pool()
+        with mock.patch.object(osx, "spawn", side_effect=osx.OSFailure("boom")) as spy:
+            name = pool.report("decision", "5", "first line\nsecond line")
+        self.assertEqual(spy.call_count, 1)
+        self.assertIn(name, self.snap().inbox)
+
+    def test_5_slow_or_failing_command_does_not_hold_report(self):
+        marker = os.path.join(self.tmp, "slow-started")
+        self.config(notify="touch '%s'; sleep 30" % marker)
+        pool = self.notify_pool()
+        start = time.time()
+        name = pool.report("env", "5", "first line")
+        self.assertLess(time.time() - start, 15)
+        self.assertIn(name, self.snap().inbox)
+        self.assertTrue(self.wait_for(lambda: os.path.exists(marker)), "notify command never ran")
+        self.config(notify="echo failing; exit 4")
+        name = self.notify_pool().report("idle", "controller", "first line")
+        self.assertIn(name, self.snap().inbox)
+        self.assertTrue(self.wait_for(lambda: "failing" in self.log_text()), self.log_text())
+
+    # ------------------------------------------------------------ 6: the log
+
+    def test_6_output_of_both_pages_appended_to_notify_log(self):
+        self.config(notify="echo one")
+        self.notify_pool().report("decision", "5", "first line")
+        self.assertTrue(self.wait_for(lambda: "one" in self.log_text()), "log: %r" % self.log_text())
+        self.config(notify="echo two >&2; exit 3")
+        self.notify_pool().report("env", "5", "first line")
+        self.assertTrue(self.wait_for(lambda: "two" in self.log_text()), "log: %r" % self.log_text())
+        text = self.log_text()
+        self.assertIn("one", text)
+        self.assertIn("two", text)
+
+    # ------------------------------------------------------------ 7: end to end
+
+    def test_7_controller_stuck_ticket_notifies_decision_and_idle(self):
+        out = os.path.join(self.tmp, "notified.txt")
+        self.config(max_rounds=1, notify='printf "%%s\\n" "$DEVLOOP_PAGE_KIND|$DEVLOOP_PAGE_SUBJECT|'
+                                          '$DEVLOOP_PAGE_TEXT" >> \'%s\'' % out)
+        self.add(1)
+        self.plan(worker={"1": ["wrong"]})
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "stuck")
+
+        def lines():
+            try:
+                with open(out) as fh:
+                    return fh.read().splitlines()
+            except OSError:
+                return []
+
+        def both():
+            got = lines()
+            return (any(l.startswith("decision|1|#1 is stuck (rounds)") for l in got)
+                    and any(l.startswith("idle|controller|") for l in got))
+        if not self.wait_for(both):
+            self.fail("notify lines: %r; inbox kinds %r" % (lines(), self.inbox_kinds()))
+
+    # ------------------------------------------------------------ 9: README
+
+    def test_9_readme_documents_notify(self):
+        with open(os.path.join(LOOP, "README.md")) as fh:
+            text = fh.read()
+        for part in ("devloop.notify", "DEVLOOP_PAGE_KIND", "DEVLOOP_PAGE_SUBJECT", "DEVLOOP_PAGE_TEXT",
+                     "DEVLOOP_PAGE", "notify.log", "osascript", "ntfy"):
+            self.assertIn(part, text)
+        self.assertRegex(text, r'"\$DEVLOOP_PAGE(_\w+)?"|"\$\{DEVLOOP_PAGE')
+
+
 class StuckCategoryHelpers(LoopCase):
     def test_merge_failed_needs_lead_then_failed(self):
         import board
