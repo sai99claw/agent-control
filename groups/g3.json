@@ -2,7 +2,7 @@
   "id": "g3",
   "branch": "int/g3",
   "base": "7250ebb46371ae290af58883d418f0e84f507e51",
-  "state": "pr",
+  "state": "verified",
   "alone": false,
   "members": [
     "108",
@@ -51,6 +51,10 @@
     {
       "at": "2026-11-21T19:41:38Z",
       "event": "regression green"
+    },
+    {
+      "at": "2026-11-21T19:41:40Z",
+      "event": "regression green"
     }
   ],
   "last_regression": "green",
@@ -84,5 +88,6 @@
       "round": 1
     }
   ],
-  "fix_end_sha": "b0376c7c143a3867f923b4ceeb076c859a9900ec"
+  "fix_end_sha": "b0376c7c143a3867f923b4ceeb076c859a9900ec",
+  "verified_sha": "b0376c7c143a3867f923b4ceeb076c859a9900ec"
 }
