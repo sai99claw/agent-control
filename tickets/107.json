@@ -26,7 +26,7 @@
   "removes": "Removes the per-ticket step of picking a distinct insertion point inside one 19,446-line file: every open ticket's test_plan (#100-#106) carries a 'placed directly after class X (before class Y), not at the end' clause only to dodge merge conflicts in tests_devloop/test_devloop.py; after this a ticket names its area's file. Adds no gate: checks A-D are one-time hand-in checks, not permanent tests or rules.",
   "id": "107",
   "state": "running",
-  "round": 0,
+  "round": 1,
   "created": "2026-11-21T01:57:59Z",
   "request": "# Split tests_devloop/test_devloop.py into files by area\n\nThe user asked for it (2026-11-21). tests_devloop/test_devloop.py is 19,446 lines with 168 classes, and every ticket adds its acceptance class to it: tickets of one group conflict at the same spots, and every agent that opens the file pays to read it. The new verifier and creator memory lines (memory/role/verifier.md, memory/role/creator.md) say cases go in the feature's own file or a new one; this makes that possible for agent-control itself.\n\nOrder: this work depends on every ticket now open (#100-#106) and must start only after they have landed, and verify alone (its own group): it moves code those tickets are adding to.\n\nWanted:\n- Shared helpers (LoopCase, GitIsolatedCase, the fake agent plumbing, LOOP/HOME paths, git helpers and any other module-level helper several classes use) move to one helper module in tests_devloop/ that the test files import; no test file imports another test file, and no class inherits from a class in another test file (inheriting an acceptance class re-runs its cases).\n- The classes move, unchanged in body, into files grouped by the area they test (for example issuer, controller and groups, regression and fixer, release, pool and tickets, board, memory, agents and quota, config and docs). Pick the areas from what the classes test; aim for files of a few thousand lines at most. Acceptance classes (T<id>Acceptance) go with their area.\n- Nothing is lost: the total number of test methods and their names are the same before and after (prove it with a listing diff of class.method names before and after, ignoring the module part), every file runs alone (python3 -m unittest <module>) and the whole suite runs green, in about the same time as before.\n- Everything that names the old module is updated in the same change: board/config.json tests map (the ids for devloop/* etc. become the new modules), base tests if any, documentation (devloop/README.md, project memory's test-id line, prompts or templates that mention test_devloop) and any test that reads test file names. Test ids stay module ids relative to the unittest roots.\n- Out of scope: changing what any test asserts, speeding tests up, renaming classes.\n",
   "feedback": [],
@@ -45,6 +45,11 @@
       "at": "2026-11-21T02:25:41Z",
       "event": "issuer started",
       "target": "int/g2"
+    },
+    {
+      "at": "2026-11-21T02:25:42Z",
+      "event": "round start",
+      "round": 1
     }
   ],
   "cost": [
