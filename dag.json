@@ -40,6 +40,16 @@
       ],
       "verify": "alone",
       "why_alone": "It deletes tests_devloop/test_devloop.py and moves every loop test class into new files: any ticket verified in the same integration branch would add its cases to the deleted file and conflict. The user asked that it verify alone, after #100-#106 land (2026-11-21)."
+    },
+    "108": {
+      "depends_on": [],
+      "verify": "together"
+    },
+    "109": {
+      "depends_on": [
+        "108"
+      ],
+      "verify": "together"
     }
   }
 }
