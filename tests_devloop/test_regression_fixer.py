@@ -1388,8 +1388,9 @@ class QuickStageUnits(LoopCase):
         self.assertEqual(stages, ["preflight", "full"])
         with open(out) as fh:
             r = json.load(fh)
-        self.assertEqual(sorted(r), ["at", "failures", "logs", "sha", "status", "summary"])
-        self.assertEqual((r["status"], r["summary"], r["failures"]), ("green", "green", []))
+        # #109 AC7 adds `flaky` to every result file; otherwise the fields are as before.
+        self.assertEqual(sorted(r), ["at", "failures", "flaky", "logs", "sha", "status", "summary"])
+        self.assertEqual((r["status"], r["summary"], r["failures"], r["flaky"]), ("green", "green", [], []))
         self.assertTrue(r["logs"].endswith(os.sep + "full"), r["logs"])
 
 
