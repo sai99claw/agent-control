@@ -64,6 +64,10 @@
     {
       "at": "2026-11-21T02:25:24Z",
       "event": "regression green"
+    },
+    {
+      "at": "2026-11-21T02:25:27Z",
+      "event": "code map refreshed"
     }
   ],
   "main_tried": "4d5f51f0e7d3b134f359233df396b9f2eafd102b",
@@ -99,5 +103,5 @@
     }
   ],
   "fix_end_sha": "ab11df65d5b7072b44599a20f81d37811cf66c37",
-  "verified_sha": "ab11df65d5b7072b44599a20f81d37811cf66c37"
+  "verified_sha": "261eb162bd567621d600b7211148a39f460bd8b9"
 }
