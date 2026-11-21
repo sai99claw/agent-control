@@ -1,0 +1,17 @@
+{
+  "id": "g1",
+  "branch": "int/g1",
+  "base": "f50b5782e57a34ed2c86915ccaed050855dae074",
+  "state": "open",
+  "alone": false,
+  "members": [],
+  "fix_round": 0,
+  "job": null,
+  "created": "2026-11-21T01:41:41Z",
+  "history": [
+    {
+      "at": "2026-11-21T01:41:41Z",
+      "event": "opened from main f50b5782e57a"
+    }
+  ]
+}
