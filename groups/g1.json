@@ -4,7 +4,9 @@
   "base": "f50b5782e57a34ed2c86915ccaed050855dae074",
   "state": "open",
   "alone": false,
-  "members": [],
+  "members": [
+    "100"
+  ],
   "fix_round": 0,
   "job": null,
   "created": "2026-11-21T01:41:41Z",
