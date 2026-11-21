@@ -1523,6 +1523,220 @@ class T74Acceptance(LoopCase):
         self.assertIn(self.REF, pages[0]["text"])
 
 
+class T109Acceptance(LoopCase):
+    """#109: a red regression with 1-5 failing rows reruns exactly those ids once; the ones that pass
+    are reported as flaky instead of starting a fixer. Expected values come from the ticket's
+    acceptance text and fake_tests.py (flaky_row: "first run of <id>"), never from regression.py."""
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(name, None)
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("DEVLOOP_")}
+        patch = mock.patch.dict(os.environ, clean, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for name in ("AC_TEST_TIMEOUT", "AC_TEST_MODE", "AC_TEST_OUT", "AC_CODE_ROOT"):
+            self.env.pop(name, None)
+        self.log = os.path.join(self.tmp, "intervals.txt")
+        self.env["FAKE_INTERVALS"] = self.log
+        self.run_ids = os.path.join(self.tmp, "run-ids.txt")
+        self.env["FAKE_RUN_IDS"] = self.run_ids
+        self.out = os.path.join(self.tmp, "r.json")
+
+    # ------------------------------------------------------------ helpers
+
+    def entry(self, i):
+        return {"id": i, "message": "first run of " + i}
+
+    def commit_files(self, *names):
+        for name in names:
+            with open(os.path.join(self.proj, name), "w") as fh:
+                fh.write("x\n")
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "add " + " ".join(names))
+
+    def declare_quick(self):
+        path = os.path.join(self.proj, "board", "config.json")
+        with open(path) as fh:
+            cfg = json.load(fh)
+        cfg["tests"]["quick"] = TESTS + " quick"
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "tests.quick declared")
+
+    def rerun_lines(self):
+        if not os.path.exists(self.run_ids):
+            return []
+        with open(self.run_ids) as fh:
+            return [line.rstrip("\n") for line in fh if line.strip()]
+
+    def full_ran(self):
+        if not os.path.exists(self.log):
+            return False
+        with open(self.log) as fh:
+            return any(line.startswith("tests full ") for line in fh)
+
+    def regression(self):
+        git(self.proj, "branch", "int/g1", "main")
+        res = self.run_py("regression.py", "--branch", "int/g1", "--out", self.out, timeout=120)
+        r = {}
+        if os.path.exists(self.out):
+            with open(self.out) as fh:
+                r = json.load(fh)
+        return res, r
+
+    def ids(self, r):
+        return [f.get("id") if isinstance(f, dict) else f for f in (r.get("failures") or [])]
+
+    def assert_flaky_line(self, text, ident):
+        lines = [x for x in (text or "").split("\n") if x.startswith("flaky (passed when run again): ")]
+        self.assertEqual(len(lines), 1, text)
+        self.assertIn(ident, lines[0])
+
+    def group_page(self, kind, needle=None):
+        rows = [r for r in self.snap().inbox.values() if r.get("kind") == kind and r.get("ref") == "g1"
+                and (needle is None or needle in (r.get("text") or ""))]
+        self.assertEqual(len(rows), 1, self.snap().inbox)
+        return rows[0].get("text") or ""
+
+    # ------------------------------------------------------------ regression.py
+
+    def test_b1_one_flaky_full_case_is_green(self):
+        self.commit_files("flaky_a.txt")
+        res, r = self.regression()
+        self.assertEqual(r.get("flaky"), [self.entry("flaky.a")], r)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(r.get("status"), "green", r)
+        self.assertEqual(r.get("failures"), [], r)
+        self.assertEqual(self.rerun_lines(), ["flaky.a"])
+        self.assertTrue(os.path.isdir(os.path.join(self.tmp, "wt", "runs", "regression", "int-g1", "full-rerun")))
+
+    def test_b2_still_red_case_stays_and_the_flaky_one_is_named(self):
+        self.commit_files("flaky_a.txt", "red.txt")
+        res, r = self.regression()
+        self.assertEqual(r.get("flaky"), [self.entry("flaky.a")], r)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertEqual(r.get("status"), "red", r)
+        self.assertEqual(self.ids(r), ["suite.red"], r)
+        summary = r.get("summary") or ""
+        self.assertIn("suite.red", summary)
+        self.assertNotIn("flaky.a", summary)
+        lines = self.rerun_lines()
+        self.assertEqual(len(lines), 1, lines)
+        self.assertEqual(sorted(lines[0].split()), ["flaky.a", "suite.red"])
+
+    def test_b3_five_failing_cases_are_rerun_in_one_call(self):
+        names = ["flaky_%s.txt" % c for c in "abcde"]
+        self.commit_files(*names)
+        res, r = self.regression()
+        want = ["flaky.%s" % c for c in "abcde"]
+        self.assertEqual([f.get("id") for f in (r.get("flaky") or [])], want, r)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(r.get("status"), "green", r)
+        self.assertEqual(self.rerun_lines(), [" ".join(want)])
+
+    def test_b4_six_failing_cases_get_no_rerun(self):
+        self.commit_files(*["flaky_%s.txt" % c for c in "abcdef"])
+        res, r = self.regression()
+        self.assertEqual(r.get("flaky"), [], r)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertEqual(r.get("status"), "red", r)
+        self.assertEqual(len(r.get("failures") or []), 6, r)
+        self.assertEqual(self.rerun_lines(), [])
+
+    def test_b5_a_rerun_that_cannot_answer_changes_nothing(self):
+        self.commit_files("flaky_a.txt")
+        open(os.path.join(self.proj, ".rerun-broken"), "w").close()
+        res, r = self.regression()
+        self.assertEqual(self.rerun_lines(), ["flaky.a"])
+        self.assertEqual(r.get("flaky"), [], r)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertEqual(r.get("status"), "red", r)
+        self.assertEqual(self.ids(r), ["flaky.a"], r)
+
+    def test_b6_green_result_has_an_empty_flaky_list(self):
+        res, r = self.regression()
+        self.assertEqual(r.get("flaky"), [], r)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.rerun_lines(), [])
+
+    def test_b7_all_flaky_quick_goes_on_to_full(self):
+        self.declare_quick()
+        self.commit_files("quickflaky_q.txt")
+        res, r = self.regression()
+        self.assertEqual(r.get("flaky"), [self.entry("quickflaky.q")], r)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(r.get("status"), "green", r)
+        self.assertTrue(self.full_ran(), "no 'tests full' line")
+        self.assertEqual(self.rerun_lines(), ["quickflaky.q"])
+
+    def test_b8_quick_with_a_still_red_case_ends_red_before_full(self):
+        self.declare_quick()
+        self.commit_files("quickflaky_q.txt", "quick-red.txt")
+        res, r = self.regression()
+        self.assertEqual(r.get("flaky"), [self.entry("quickflaky.q")], r)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertEqual(r.get("status"), "red", r)
+        self.assertEqual(self.ids(r), ["quick.red"], r)
+        summary = r.get("summary") or ""
+        self.assertTrue(summary.startswith("quick: "), summary)
+        self.assertNotIn("quickflaky.q", summary)
+        self.assertFalse(self.full_ran(), "full ran after a red quick")
+
+    # ------------------------------------------------------------ controller
+
+    def test_b9_flaky_group_lands_with_one_event_and_a_landed_line(self):
+        self.commit_files("flaky_a.txt")
+        self.config(max_rounds=1)
+        self.add(1)
+        self.plan()
+        res = self.controller()
+        self.assertEqual(self.state(1), "landed", res.stdout + res.stderr)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertFalse(os.path.exists(os.path.join(os.path.dirname(self.plan_path), "count-fixer-g1")),
+                         "a fixer ran")
+        history = self.snap().groups["g1"].get("history") or []
+        events = [h for h in history if str(h.get("event") or "").startswith("flaky:")]
+        self.assertEqual(len(events), 1, history)
+        self.assertEqual(events[0].get("flaky"), [self.entry("flaky.a")], events[0])
+        self.assert_flaky_line(self.group_page("landed"), "flaky.a")
+
+    def test_b10_still_red_page_names_flaky_and_the_fixer_prompt_does_not(self):
+        self.commit_files("flaky_a.txt")
+        self.config(max_rounds=1)
+        self.add(1)
+        self.plan(worker={"1": ["red"]}, fixer={"g1": ["nothing"]})
+        self.controller()
+        self.assertEqual(self.snap().groups["g1"].get("state"), "stuck")
+        self.assert_flaky_line(self.group_page("decision", "still red after"), "flaky.a")
+        prompt = os.path.join(self.tmp, "wt", "runs", "fix", "g1", "r1", "prompt.md")
+        self.assertTrue(os.path.exists(prompt), prompt)
+        with open(prompt) as fh:
+            text = fh.read()
+        self.assertIn("suite.red", text)
+        self.assertNotIn("flaky.a", text)
+
+    def test_b11_release_failed_page_names_flaky(self):
+        self.commit_files("flaky_a.txt")
+        self.config(release="exit 3")
+        self.add(1)
+        self.controller()
+        self.assert_flaky_line(self.group_page("decision", "but the release failed"), "flaky.a")
+
+    # ------------------------------------------------------------ docs
+
+    def test_b12_docs_name_flaky_and_the_limit(self):
+        sys.path.insert(0, LOOP)
+        import regression
+        doc = regression.__doc__ or ""
+        self.assertIn("flaky", doc)
+        self.assertIn("5", doc)
+        with open(os.path.join(HOME, "devloop", "README.md"), encoding="utf-8") as fh:
+            self.assertIn("flaky", fh.read())
+
+
 class DroppedFixRoundUnits(LoopCase):
     """#74 internals at the Controller layer: when the regression after a fix round drops that
     round (compare-and-swap back to fix_start_sha), and every case that leaves the branch alone."""

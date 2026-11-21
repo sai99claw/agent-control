@@ -32,6 +32,19 @@ def ok(n):
     return os.path.exists(path) and open(path).read() == "ok"
 
 
+def flaky_row(i):   # #109: fails on its first run in this folder, passes on every later run
+    mark = ".ran-" + i
+    if not os.path.exists(mark):
+        open(mark, "w").close()
+        return {"id": i, "status": "fail", "message": "first run of " + i}
+    return {"id": i, "status": "pass"}
+
+
+def flaky_rows(prefix):   # #109: one flaky_row per <prefix>_<name>.txt in the cwd, sorted by name
+    names = sorted(os.path.basename(p)[len(prefix) + 1:-4] for p in glob.glob(prefix + "_*.txt"))
+    return [flaky_row(prefix + "." + n) for n in names]
+
+
 if cmd == "preflight":
     if os.path.exists(os.path.join(os.environ["AC_ROOT"], ".env-bad")):
         print(json.dumps([{"engine": "screen", "why": "screen locked"}]))
@@ -47,6 +60,7 @@ if cmd == "quick":   # #108: the optional quick stage a regression runs after pr
     rows = [{"id": "quick.base", "status": "pass"}]
     if os.path.exists("quick-red.txt"):
         rows.append({"id": "quick.red", "status": "fail", "message": "quick table conflict"})
+    rows += flaky_rows("quickflaky")   # #109
     write(rows)
 
 
@@ -61,6 +75,30 @@ def case_row(i):
     return {"id": "%s.%s.test_it" % (i, mark), "status": status}
 
 
+if cmd == "run" and not any(i.startswith("case_") for i in ids):   # #109: a regression's rerun of failed ids
+    if os.environ.get("FAKE_RUN_IDS"):
+        with open(os.environ["FAKE_RUN_IDS"], "a") as fh:
+            fh.write(" ".join(ids) + "\n")
+    if os.path.exists(os.path.join(os.environ["AC_ROOT"], ".rerun-broken")):
+        sys.exit(2)
+
+    def rerun_row(i):
+        if i == "suite.base" or i == "quick.base":
+            return {"id": i, "status": "pass"}
+        if i == "suite.red":
+            return {"id": i, "status": "fail" if os.path.exists("red.txt") else "pass"}
+        if i == "quick.red":
+            return {"id": i, "status": "fail" if os.path.exists("quick-red.txt") else "pass"}
+        if i.startswith("impl."):
+            f = i[len("impl."):]
+            return {"id": i, "status": "pass" if os.path.exists(f) and open(f).read() == "ok" else "fail"}
+        if i.startswith("flaky.") or i.startswith("quickflaky."):
+            return flaky_row(i)
+        return {"id": i, "status": "error", "message": "unknown id"}
+
+    rows = [rerun_row(i) for i in ids]
+    json.dump({"schema": 1, "ids": rows, "environment_suspect": []}, open(os.path.join(out, "result.json"), "w"))
+    sys.exit(1 if any(r["status"] in ("fail", "error") for r in rows) else 0)
 if cmd == "run":
     rows = [case_row(i) for i in ids]
     json.dump({"schema": 1, "ids": rows, "environment_suspect": []}, open(os.path.join(out, "result.json"), "w"))
@@ -84,5 +122,6 @@ if cmd == "full":
              for p in sorted(glob.glob("impl_*.txt"))]
     if os.path.exists("red.txt"):
         rows.append({"id": "suite.red", "status": "fail"})
+    rows += flaky_rows("flaky")   # #109
     write(rows)
 sys.exit(2)
