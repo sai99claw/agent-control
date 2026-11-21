@@ -1,0 +1,7 @@
+{
+  "kind": "created",
+  "ref": "107",
+  "text": "opened #107 The loop tests are split by area into tests_devloop/test_<area>.py files sharing loop_harness.py",
+  "at": "2026-11-21T01:58:02Z",
+  "acked": false
+}
