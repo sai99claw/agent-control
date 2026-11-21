@@ -2,7 +2,7 @@
   "id": "g1",
   "branch": "int/g1",
   "base": "f50b5782e57a34ed2c86915ccaed050855dae074",
-  "state": "fixing",
+  "state": "pr",
   "alone": false,
   "members": [
     "100",
@@ -14,16 +14,7 @@
     "106"
   ],
   "fix_round": 1,
-  "job": {
-    "kind": "fixer",
-    "stamp": {
-      "pid": 24686,
-      "host": "vm",
-      "boot": "1b727631-675c-43fe-989d-a56c8e17cec9",
-      "started": "2026-11-21T02:10:34Z"
-    },
-    "out": "/home/user/agent-control-devloop/runs/regression/g1/result-1795226253.json"
-  },
+  "job": null,
   "created": "2026-11-21T01:41:41Z",
   "history": [
     {
@@ -57,6 +48,10 @@
     {
       "at": "2026-11-21T02:10:38Z",
       "event": "fixer agent started (round 1)"
+    },
+    {
+      "at": "2026-11-21T02:12:31Z",
+      "event": "fixer done (rc 0): verify again"
     }
   ],
   "main_tried": "4d5f51f0e7d3b134f359233df396b9f2eafd102b",
@@ -90,5 +85,6 @@
       "acceptance": "The served board answers such a POST act with status 400 and that line and starts no job (what the handler already does with every act_problem line).",
       "round": 1
     }
-  ]
+  ],
+  "fix_end_sha": "ab11df65d5b7072b44599a20f81d37811cf66c37"
 }
