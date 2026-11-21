@@ -62,6 +62,214 @@ class Regression(LoopCase):
             self.assertEqual(sum(1 for line in fh if line.startswith("tests full ")), 2)
 
 
+class T108Acceptance(LoopCase):
+    """#108: a project's optional tests.quick runs after preflight; a quick red (or env /
+    unmeasured) ends the regression before full. Expected values come from the ticket's
+    acceptance text, never from regression.py or testiface.py."""
+
+    def setUp(self):
+        super().setUp()
+        for name in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            self.env.pop(name, None)
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("DEVLOOP_")}
+        patch = mock.patch.dict(os.environ, clean, clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+        for name in ("AC_TEST_TIMEOUT", "AC_TEST_MODE", "AC_TEST_OUT", "AC_CODE_ROOT"):
+            self.env.pop(name, None)
+        self.log = os.path.join(self.tmp, "intervals.txt")
+        self.env["FAKE_INTERVALS"] = self.log
+        self.out = os.path.join(self.tmp, "r.json")
+
+    # ------------------------------------------------------------ helpers
+
+    def declare_quick(self, cmd=None):
+        path = os.path.join(self.proj, "board", "config.json")
+        with open(path) as fh:
+            cfg = json.load(fh)
+        cfg["tests"]["quick"] = cmd if cmd is not None else TESTS + " quick"
+        with open(path, "w") as fh:
+            json.dump(cfg, fh)
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "tests.quick declared")
+
+    def commit_file(self, name):
+        with open(os.path.join(self.proj, name), "w") as fh:
+            fh.write("x\n")
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "add " + name)
+
+    def stages(self):
+        """Fake test commands in order of start time."""
+        if not os.path.exists(self.log):
+            return []
+        with open(self.log) as fh:
+            rows = [line.split() for line in fh if line.startswith("tests ")]
+        return [r[1] for r in sorted(rows, key=lambda r: float(r[2]))]
+
+    def regression(self):
+        git(self.proj, "branch", "int/g1", "main")
+        res = self.run_py("regression.py", "--branch", "int/g1", "--out", self.out, timeout=120)
+        r = {}
+        if os.path.exists(self.out):
+            with open(self.out) as fh:
+                r = json.load(fh)
+        return res, r
+
+    def ids(self, r):
+        return [f.get("id") if isinstance(f, dict) else f for f in (r.get("failures") or [])]
+
+    def iface(self):
+        out = tempfile.mkdtemp(prefix="t108-out-", dir=self.tmp)
+        env = dict(self.env, AC_CODE_ROOT=self.proj, AC_TEST_OUT=out)
+        res = subprocess.run(["python3", os.path.join(HOME, "scripts", "testiface.py"), "quick"],
+                             cwd=self.proj, env=env, capture_output=True, text=True, timeout=120)
+        return res, out
+
+    # ------------------------------------------------------------ cases
+
+    def test_a1_testiface_quick_runs_the_declared_command(self):
+        self.declare_quick()
+        open(os.path.join(self.proj, "quick-red.txt"), "w").close()
+        res, out = self.iface()
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        path = os.path.join(out, "result.json")
+        self.assertTrue(os.path.exists(path), os.listdir(out))
+        with open(path) as fh:
+            rows = json.load(fh).get("ids") or []
+        self.assertIn(("quick.red", "fail"), [(x.get("id"), x.get("status")) for x in rows], rows)
+        os.unlink(os.path.join(self.proj, "quick-red.txt"))
+        res, out = self.iface()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+    def test_a2_undeclared_quick_is_the_builtin_noop(self):
+        for value in ("absent", None, "  "):
+            with self.subTest(quick=value):
+                path = os.path.join(self.proj, "board", "config.json")
+                with open(path) as fh:
+                    cfg = json.load(fh)
+                cfg["tests"].pop("quick", None)
+                if value != "absent":
+                    cfg["tests"]["quick"] = value
+                with open(path, "w") as fh:
+                    json.dump(cfg, fh)
+                if os.path.exists(self.log):
+                    os.unlink(self.log)
+                res, out = self.iface()
+                self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+                log = os.path.join(out, "quick.log")
+                self.assertTrue(os.path.exists(log), os.listdir(out))
+                with open(log) as fh:
+                    self.assertIn("nothing to check", fh.read())
+                self.assertNotIn("quick", self.stages())
+
+    def test_a3_green_runs_preflight_quick_full_once_each(self):
+        self.declare_quick()
+        res, r = self.regression()
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertEqual(self.stages(), ["preflight", "quick", "full"])
+
+    def test_a4_quick_red_ends_the_regression_before_full(self):
+        self.declare_quick()
+        self.commit_file("quick-red.txt")
+        res, r = self.regression()
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertEqual(r.get("status"), "red", r)
+        self.assertEqual(self.ids(r), ["quick.red"], r)
+        summary = r.get("summary") or ""
+        self.assertTrue(summary.startswith("quick: "), summary)
+        self.assertIn("quick.red", summary)
+        self.assertTrue(str(r.get("logs") or "").endswith(os.sep + "quick"), r)
+        self.assertNotIn("full", self.stages())
+
+    def test_a5_quick_env_ends_with_86(self):
+        self.declare_quick()
+        open(os.path.join(self.proj, ".quick-env-bad"), "w").close()
+        res, r = self.regression()
+        self.assertEqual(res.returncode, 86, res.stdout + res.stderr)
+        self.assertEqual(r.get("status"), "env", r)
+        self.assertTrue((r.get("summary") or "").startswith("quick: "), r)
+        self.assertIn("quick", self.stages())
+        self.assertNotIn("full", self.stages())
+
+    def test_a5_quick_unmeasured_ends_with_2(self):
+        self.declare_quick()
+        open(os.path.join(self.proj, ".quick-broken"), "w").close()
+        res, r = self.regression()
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        self.assertEqual(r.get("status"), "unmeasured", r)
+        self.assertTrue((r.get("summary") or "").startswith("quick: "), r)
+        self.assertIn("quick", self.stages())
+        self.assertNotIn("full", self.stages())
+
+    def test_a6_full_red_after_green_quick_is_reported_as_today(self):
+        self.declare_quick()
+        self.commit_file("red.txt")
+        res, r = self.regression()
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertEqual(self.ids(r), ["suite.red"], r)
+        self.assertTrue((r.get("summary") or "").startswith("1 failing:"), r)
+        st = self.stages()
+        self.assertIn("quick", st)
+        self.assertIn("full", st)
+        self.assertLess(st.index("quick"), st.index("full"), st)
+
+    def test_a7_live_record_shows_stage_quick(self):
+        self.declare_quick("sh -c 'sleep 4; %s quick'" % TESTS)
+        git(self.proj, "branch", "int/g1", "main")
+        live = os.path.join(self.tmp, "wt", "runs", "live", "regression-int-g1.json")
+        proc = subprocess.Popen(["python3", os.path.join(LOOP, "regression.py"), "--branch", "int/g1",
+                                 "--out", self.out], cwd=self.proj, env=self.env,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(lambda: proc.poll() is None and proc.terminate())
+        seen = []
+        end = time.time() + 20
+        while time.time() < end and proc.poll() is None:
+            try:
+                with open(live) as fh:
+                    stage = json.load(fh).get("stage")
+            except (OSError, ValueError):
+                stage = None
+            if stage and (not seen or seen[-1] != stage):
+                seen.append(stage)
+            time.sleep(0.2)
+        rc = proc.wait(30)
+        self.assertIn("quick", seen, seen)
+        self.assertIn("full", seen[seen.index("quick"):], seen)
+        self.assertEqual(rc, 0)
+
+    def test_a8_controller_fix_round_and_decision_carry_the_quick_red(self):
+        self.declare_quick()
+        self.commit_file("quick-red.txt")
+        self.config(max_rounds=1)
+        git(self.proj, "add", "-A")
+        git(self.proj, "commit", "-q", "-m", "max_rounds 1")
+        self.add(1)
+        self.plan(fixer={"g1": ["nothing"]})
+        self.controller()
+        self.assertEqual(self.snap().groups["g1"].get("state"), "stuck")
+        pages_ = [r for r in self.snap().inbox.values()
+                  if r.get("kind") == "decision" and r.get("ref") == "g1"
+                  and "still red after" in (r.get("text") or "")]
+        self.assertEqual(len(pages_), 1, self.snap().inbox)
+        self.assertIn("quick.red", pages_[0].get("text") or "")
+        prompt = os.path.join(self.tmp, "wt", "runs", "fix", "g1", "r1", "prompt.md")
+        self.assertTrue(os.path.exists(prompt), prompt)
+        with open(prompt) as fh:
+            self.assertIn("quick.red", fh.read())
+        self.assertNotIn("full", self.stages())
+
+    def test_a9_readme_names_the_quick_stage(self):
+        with open(os.path.join(HOME, "devloop", "README.md"), encoding="utf-8") as fh:
+            parts = fh.read().split("\n- ")
+        calls = [p for p in parts if p.startswith("devloop calls only")]
+        self.assertTrue(calls, "README lacks the 'devloop calls only' bullet")
+        self.assertIn("tests.quick", calls[0])
+        live = [p for p in parts if p.startswith("`regression-<branch")]
+        self.assertTrue(live, "README lacks the regression live-record bullet")
+        self.assertIn("`quick`", live[0])
+
+
 class T52Acceptance(LoopCase):
     """#52: a group note sent from the board (--via web) reaches the fixer only behind the injection
     check, and a fixer that rejects it stops the group with a decision page."""
