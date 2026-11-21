@@ -4358,6 +4358,90 @@ class T21Acceptance(LoopCase):
         self.assertTrue("DEVLOOP_RELEASE_DIR" in template, "templates/project-CLAUDE.md lacks DEVLOOP_RELEASE_DIR")
 
 
+class T106Acceptance(LoopCase):
+    """Ticket #106: a release-failed page names the last stage and the last 15 lines of the release log."""
+    MARK = "devloop-" + "stage:"
+    STAGED = ("echo '" + "devloop-" + "stage: build'; i=1; while [ $i -le 30 ]; do printf 'L%02d\\n' $i; i=$((i+1)); done; "
+              "echo '" + "devloop-" + "stage: upload'; echo U1; echo U2 >&2; exit 3")
+    STAGED_BLOCK = (["rc 3", "last step: upload", "last 15 lines of the release log:"]
+                    + ["L%02d" % i for i in range(19, 31)] + ["devloop-" + "stage: upload", "U1", "U2"])
+
+    def setUp(self):
+        super().setUp()
+        for key in [k for k in self.env if k.startswith("DEVLOOP_")]:
+            del self.env[key]
+
+    def land(self, release):
+        self.config(release=release)
+        self.add(1)
+        res = self.controller()
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self.state(1), "landed")
+        self.assertEqual(self.snap().groups["g1"]["release"], "failed")
+
+    def newest_decision(self):
+        pages = sorted([r for r in self.snap().inbox.values() if r["kind"] == "decision" and r["ref"] == "g1"],
+                       key=lambda r: r["at"])
+        self.assertTrue(pages, "no decision page about g1")
+        return pages[-1]["text"]
+
+    def sha12(self):
+        return git(self.proj, "rev-parse", "main").strip()[:12]
+
+    def split(self, text, header):
+        lines = text.rstrip("\n").split("\n")
+        self.assertEqual(lines[0], header, text)
+        return lines[1:]
+
+    def landing_header(self):
+        rel_log = self.snap().groups["g1"]["release_log"]
+        return ("group g1 is in main (%s) but the release failed - not retried, not rolled back "
+                "(release log: %s):" % (self.sha12(), rel_log))
+
+    def test_landing_page_is_header_rc_step_and_last_fifteen_lines(self):
+        self.land(self.STAGED)
+        text = self.newest_decision()
+        self.assertEqual(self.split(text, self.landing_header()), self.STAGED_BLOCK, text)
+        self.assertNotIn("L18", text)
+
+    def test_no_stage_line_gives_none_printed(self):
+        self.land("echo A; echo B; exit 2")
+        text = self.newest_decision()
+        self.assertEqual(self.split(text, self.landing_header()),
+                         ["rc 2", "last step: (none printed)", "last 15 lines of the release log:", "A", "B"], text)
+
+    def test_rerun_page_has_its_header_and_the_same_block(self):
+        self.land(self.STAGED)
+        before = set(self.snap().inbox)
+        res = self.run_py("tickets.py", "release", "g1")
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        new = [r["text"] for k, r in self.snap().inbox.items()
+               if k not in before and r["kind"] == "decision" and r["ref"] == "g1"]
+        self.assertEqual(len(new), 1, new)
+        text = new[0]
+        rel_log = self.snap().groups["g1"]["release_log"]
+        header = ("group g1 (%s): the re-run release failed - not retried, not rolled back "
+                  "(release log: %s):" % (self.sha12(), rel_log))
+        self.assertEqual(self.split(text, header), self.STAGED_BLOCK, text)
+        self.assertNotIn("L18", text)
+
+    def test_the_stage_literal_lives_only_in_core_logtail(self):
+        dev = os.path.join(HOME, "devloop")
+        self.assertTrue(os.path.isfile(os.path.join(dev, "core", "logtail.py")), "devloop/core/logtail.py missing")
+        found = []
+        for sub in ("", "core"):
+            for name in sorted(os.listdir(os.path.join(dev, sub))):
+                if not name.endswith(".py"):
+                    continue
+                with open(os.path.join(dev, sub, name), encoding="utf-8") as fh:
+                    if self.MARK in fh.read():
+                        found.append(os.path.join(sub, name) if sub else name)
+        self.assertEqual(found, [os.path.join("core", "logtail.py")])
+        import board
+        for name in ("live_log_lines", "live_tail", "live_release_step"):
+            self.assertTrue(callable(getattr(board, name, None)), "board.%s is gone" % name)
+
+
 class T22Acceptance(LoopCase):
     """Ticket #22: an interrupted ticket_issuer records one cost row for every agent run of the
     interrupted round; Pending.stop() returns the stopped run's row."""
