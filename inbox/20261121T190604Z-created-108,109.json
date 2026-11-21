@@ -1,0 +1,7 @@
+{
+  "kind": "created",
+  "ref": "108,109",
+  "text": "opened #108 Regression runs the project's optional quick tests after preflight and stops at a quick red; #109 Regression reruns up to 5 red cases once and reports the ones that pass as flaky",
+  "at": "2026-11-21T19:06:04Z",
+  "acked": false
+}
