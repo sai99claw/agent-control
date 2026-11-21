@@ -60,6 +60,12 @@
       "at": "2026-11-21T03:31:07Z",
       "event": "landed",
       "group": "g2"
+    },
+    {
+      "at": "2026-11-21T19:42:03Z",
+      "event": "page acknowledged",
+      "page": "20261121T015801Z-created-107",
+      "by": "main-session"
     }
   ],
   "cost": [
