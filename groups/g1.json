@@ -53,9 +53,15 @@
     {
       "at": "2026-11-21T02:10:34Z",
       "event": "fixer started"
+    },
+    {
+      "at": "2026-11-21T02:10:38Z",
+      "event": "fixer agent started (round 1)"
     }
   ],
   "main_tried": "4d5f51f0e7d3b134f359233df396b9f2eafd102b",
   "last_regression": "2 failing:\n- test_devloop.T57Acceptance.test_item4_key_ack AssertionError \n- test_devloop.T57Acceptance.test_item4_trusted_ack AssertionError ",
-  "fix_report": "/home/user/agent-control-devloop/runs/regression/g1/result-1795226253.json"
+  "fix_report": "/home/user/agent-control-devloop/runs/regression/g1/result-1795226253.json",
+  "fix_agent_round": 1,
+  "fix_start_sha": "5b6a3f01f228ced195bb8ae1297ddbd0c080f118"
 }
