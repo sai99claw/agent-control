@@ -2,23 +2,14 @@
   "id": "g3",
   "branch": "int/g3",
   "base": "7250ebb46371ae290af58883d418f0e84f507e51",
-  "state": "fixing",
+  "state": "pr",
   "alone": false,
   "members": [
     "108",
     "109"
   ],
   "fix_round": 1,
-  "job": {
-    "kind": "fixer",
-    "stamp": {
-      "pid": 19933,
-      "host": "vm",
-      "boot": "a22658bd-dca2-4f49-a981-a148c352d3e7",
-      "started": "2026-11-21T19:22:40Z"
-    },
-    "out": "/home/user/agent-control-devloop/runs/regression/g3/result-1795288619.json"
-  },
+  "job": null,
   "created": "2026-11-21T19:06:08Z",
   "history": [
     {
@@ -48,6 +39,10 @@
     {
       "at": "2026-11-21T19:22:44Z",
       "event": "fixer agent started (round 1)"
+    },
+    {
+      "at": "2026-11-21T19:35:56Z",
+      "event": "fixer done (rc 0): verify again"
     }
   ],
   "last_regression": "1 failing:\n- test_regression_fixer.QuickStageUnits.test_undeclared_quick_leaves_the_regression_as_before AssertionError ",
@@ -80,5 +75,6 @@
       "acceptance": "7. Every result file that `_verify` writes (green, red, env, unmeasured) has the key `flaky` - a list, [] when no case passed on a rerun",
       "round": 1
     }
-  ]
+  ],
+  "fix_end_sha": "b0376c7c143a3867f923b4ceeb076c859a9900ec"
 }
