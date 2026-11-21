@@ -2,7 +2,7 @@
   "id": "g1",
   "branch": "int/g1",
   "base": "f50b5782e57a34ed2c86915ccaed050855dae074",
-  "state": "open",
+  "state": "pr",
   "alone": false,
   "members": [
     "100",
@@ -24,6 +24,10 @@
     {
       "at": "2026-11-21T01:50:52Z",
       "event": "main moved to 4d5f51f0e7d3: merged it into int/g1"
+    },
+    {
+      "at": "2026-11-21T01:57:21Z",
+      "event": "all tickets merged or stuck: PR ready"
     }
   ],
   "main_tried": "4d5f51f0e7d3b134f359233df396b9f2eafd102b"
