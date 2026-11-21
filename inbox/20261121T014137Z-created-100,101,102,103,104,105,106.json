@@ -1,0 +1,7 @@
+{
+  "kind": "created",
+  "ref": "100,101,102,103,104,105,106",
+  "text": "opened #100 A merge conflict with the group or a cases_wrong revision does not use up a round; #101 devloop.notify runs a command for every new decision, env or idle page; #102 Underscored usage-limit messages count as quota; #103 An out-of-quota opener says so and stops after one attempt; #104 A ticket with a landed dependency does not join a group whose branch lacks main; #105 知道了 with words in the box is refused, not silently dropped; #106 The release-failed page names the last stage and the last 15 lines of the release log",
+  "at": "2026-11-21T01:41:38Z",
+  "acked": false
+}
