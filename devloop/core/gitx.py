@@ -1,5 +1,7 @@
 """Git, through one wrapper: every failure becomes GitError with git's own last line."""
 
+import contextlib
+import fcntl
 import os
 
 from .osx import OSFailure, run
@@ -147,20 +149,42 @@ class Git:
             if here != branch:
                 raise GitError("%s is on %s, expected %s" % (path, here, branch))
             return path
-        self.run("worktree", "prune", check=False)
-        if self.sha("refs/heads/" + branch):
-            self.run("worktree", "add", path, branch)
-        else:
-            self.run("worktree", "add", "-b", branch, path, start or "HEAD")
+        with self._worktree_lock():
+            self.run("worktree", "prune", check=False)
+            if self.sha("refs/heads/" + branch):
+                self.run("worktree", "add", path, branch)
+            else:
+                self.run("worktree", "add", "-b", branch, path, start or "HEAD")
         return path
 
     def detached(self, path, ref):
         """A throwaway worktree at `ref` (replaced if it exists)."""
-        self.remove_worktree(path)
-        self.run("worktree", "add", "--detach", path, ref)
+        with self._worktree_lock():
+            self._remove_worktree(path)
+            self.run("worktree", "add", "--detach", path, ref)
         return path
 
     def remove_worktree(self, path):
+        with self._worktree_lock():
+            self._remove_worktree(path)
+
+    def _remove_worktree(self, path):
         if os.path.exists(path):
             self.run("worktree", "remove", "--force", path, check=False)
         self.run("worktree", "prune", check=False)
+
+    @contextlib.contextmanager
+    def _worktree_lock(self):
+        """Serialize worktree add / remove / prune on one repository across processes: git does
+        not, so a prune can delete another process's half-made .git/worktrees/<name> entry and an
+        add can read one ("failed to read .../commondir"), failing that add at random."""
+        common = self.out("rev-parse", "--path-format=absolute", "--git-common-dir")
+        try:
+            fh = open(os.path.join(common, "devloop-worktree.lock"), "a")
+            fcntl.flock(fh, fcntl.LOCK_EX)
+        except OSError as exc:
+            raise GitError("cannot lock worktrees of %s: %s" % (common, exc))
+        try:
+            yield
+        finally:
+            fh.close()
